@@ -7,6 +7,8 @@ fn zr() -> i64 ! alloc {
   let a: [i64] = alloc(0, 1);
   let b: [i64] = copy(a);
   let n: i64 = len(e0());
-  let c: [i64] = alloc(2, 4);
+  // a variable length keeps c on the heap (P3-S1), so the alloc-balance count stays above zero
+  let k: i64 = 2;
+  let c: [i64] = alloc(k, 4);
   return len(a) + len(b) * 10 + n * 100 + c[1] * 1000 + len(c) * 10000;
 }
