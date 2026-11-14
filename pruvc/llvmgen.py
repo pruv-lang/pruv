@@ -344,6 +344,7 @@ class Mod:
         s.need_eq = set()
         s.stack = None          # P3-S1: StackPlan (set by gen_llvm)
         s.fill = False          # P3-S1: some stack array calls @pruv_fill_v2
+        s.memset = False        # P3: some stack array is filled by @llvm.memset
         s.explicit = False      # G4 A3: explicit visibility mode (set by gen_llvm); Pruv calls use the Rust-backend routing
 
     def string(s, text):
@@ -1041,13 +1042,14 @@ class FnGen:
                 s.term("unreachable")
 
     def stack_let(s, st):
-        """P3-S1: `let x: [E] = alloc(C, v)` on the stack: an entry-block alloca of C elements, filled here by
-        pruv_fill_v2 every time the declaration runs; the slot is not owned, so nothing is ever freed."""
+        """P3-S1: `let x: [E] = alloc(C, v)` on the stack: an entry-block alloca of C elements,
+        filled every time the declaration runs: @llvm.memset for byte elements (size 1) and literal-zero fills,
+        pruv_fill_v2 otherwise, and nothing for length 0; the slot is not owned, so nothing is ever freed."""
         n = s.m.stack.length(st)
         s.begin_temps()
         v = s.ev(st.value.args[1])      # n is a literal (no code); the fill value is evaluated here, once
         if st.type.name == "array_bool":
-            val = s.op("zext i1 %s to i64" % v.a)
+            val = v.a                   # i1; widened to the fill byte below (no code at all when n == 0)
             layout, size, ety = "i64", 1, "i8"
         elif st.type.name == "array_u8":
             if not s.verified:
@@ -1062,8 +1064,21 @@ class FnGen:
         sl = s.new_slot(st.name, st.type)
         buf = sl.a[:-2] + ".stk"
         s.allocas.append("%s = alloca [%d x %s], align %d" % (buf, n, ety, size))
-        s.m.fill = True
-        s.ins("call void @pruv_fill_v2(ptr %s, i64 %d, i64 %s, i64 %d)" % (buf, n, val, size))
+        if n == 0:
+            pass                        # nothing to fill
+        elif size == 1:
+            if st.type.name == "array_bool":
+                byte = s.op("zext i1 %s to i8" % val)
+            else:
+                byte = s.op("trunc i64 %s to i8" % val)
+            s.m.memset = True
+            s.ins("call void @llvm.memset.p0.i64(ptr align 1 %s, i8 %s, i64 %d, i1 false)" % (buf, byte, n))
+        elif val == "0":
+            s.m.memset = True
+            s.ins("call void @llvm.memset.p0.i64(ptr align %d %s, i8 0, i64 %d, i1 false)" % (size, buf, n * size))
+        else:
+            s.m.fill = True
+            s.ins("call void @pruv_fill_v2(ptr %s, i64 %d, i64 %s, i64 %d)" % (buf, n, val, size))
         s.store(sl, V("arr", buf, str(n), elem_ty(st.type), layout=layout))
         s.scopes[-1]["names"][st.name] = ("slot", sl)
         s.end_temps()
@@ -3677,6 +3692,7 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
         "declare i%d @llvm.bswap.i%d(i%d)\n" % (w, w, w) for w in (16, 32, 64) if w in m.bswap) + (
         "declare ptr @pruv_shrink_v2(ptr, i64, i64, i64, i64) nounwind\n" if m.shrink else "") + (
         "declare void @pruv_fill_v2(ptr nocapture, i64, i64, i64) nounwind\n" if m.fill else "") + (
+        "declare void @llvm.memset.p0.i64(ptr nocapture writeonly, i8, i64, i1)\n" if m.memset else "") + (
         g6decls + "\n" + "\n".join(chunks))  # G2 A5/B2, G3, G6 A3, G9 A3; P2 batch 4: llvm.bswap when used
     if m.par_trampolines:
         ir = "%pruv_g7_job = type { ptr, ptr }\n" + "\n".join(m.par_types) + "\n" + ir

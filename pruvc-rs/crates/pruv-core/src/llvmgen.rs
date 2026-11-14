@@ -555,6 +555,8 @@ pub struct Mod {
     pub stack: crate::stack::StackPlan,
     /// P3-S1: some stack array calls @pruv_fill_v2
     pub fill: bool,
+    /// P3: some stack array is filled by @llvm.memset
+    pub memset: bool,
     /// G4 A3: explicit visibility mode (Pruv calls use the Rust-backend routing)
     pub explicit: bool,
     /// G4 A3: function name (stem) -> source-qualified identity (Python `f.disp`), explicit mode only
@@ -579,6 +581,7 @@ impl Mod {
             shrink: false,
             stack: crate::stack::StackPlan::default(),
             fill: false,
+            memset: false,
             explicit: false,
             fn_disp: HashMap::new(),
         }
@@ -1844,8 +1847,9 @@ impl<'a> FnGen<'a> {
         Ok(())
     }
 
-    /// P3-S1: `let x: [E] = alloc(C, v)` on the stack: an entry-block alloca of C elements, filled here by
-    /// pruv_fill_v2 every time the declaration runs; the slot is not owned, so nothing is ever freed.
+    /// P3-S1: `let x: [E] = alloc(C, v)` on the stack: an entry-block alloca of C elements,
+    /// filled every time the declaration runs: @llvm.memset for byte elements (size 1) and literal-zero fills,
+    /// pruv_fill_v2 otherwise, and nothing for length 0; the slot is not owned, so nothing is ever freed.
     fn stack_let(&mut self, x: &Let) -> R<()> {
         let n = self.m.stack.length(x);
         self.begin_temps();
@@ -1860,7 +1864,7 @@ impl<'a> FnGen<'a> {
         let size: usize;
         let ety: String;
         if x.ty == "array_bool" {
-            val = self.op(format!("zext i1 {} to i64", v.a))?;
+            val = v.a.clone(); // i1; widened to the fill byte below (no code at all when n == 0)
             layout = "i64"; size = 1; ety = "i8".to_string();
         } else if x.ty == "array_u8" {
             if !self.verified {
@@ -1878,8 +1882,23 @@ impl<'a> FnGen<'a> {
         let sl = self.new_slot(&x.name, &x.ty);
         let buf = format!("{}.stk", &sl.a[..sl.a.len() - 2]);
         self.allocas.push(format!("{} = alloca [{} x {}], align {}", buf, n, ety, size));
-        self.m.fill = true;
-        self.ins(format!("call void @pruv_fill_v2(ptr {}, i64 {}, i64 {}, i64 {})", buf, n, val, size))?;
+        if n == 0 {
+            // nothing to fill
+        } else if size == 1 {
+            let byte = if x.ty == "array_bool" {
+                self.op(format!("zext i1 {} to i8", val))?
+            } else {
+                self.op(format!("trunc i64 {} to i8", val))?
+            };
+            self.m.memset = true;
+            self.ins(format!("call void @llvm.memset.p0.i64(ptr align 1 {}, i8 {}, i64 {}, i1 false)", buf, byte, n))?;
+        } else if val == "0" {
+            self.m.memset = true;
+            self.ins(format!("call void @llvm.memset.p0.i64(ptr align {} {}, i8 0, i64 {}, i1 false)", size, buf, n * size))?;
+        } else {
+            self.m.fill = true;
+            self.ins(format!("call void @pruv_fill_v2(ptr {}, i64 {}, i64 {}, i64 {})", buf, n, val, size))?;
+        }
         let mut av = V::with_b(Kind::Arr, buf, n.to_string());
         av.ty = elem_ty(&x.ty);
         av.layout = layout;
@@ -4735,7 +4754,7 @@ fn gen_llvm_body(
         }
     }
     let mut ir = format!(
-        "{}{}\n{}{}{}{}{}{}{}{}{}{}{}{}{}\n{}",
+        "{}{}\n{}{}{}{}{}{}{}{}{}{}{}{}{}{}\n{}",
         if target == AbiTarget::WinX64 { WIN_X64_HEADER } else { "" },
         m.render_strings(),
         type_defs(&tt),
@@ -4759,6 +4778,7 @@ fn gen_llvm_body(
         m.bswap.iter().map(|w| format!("declare i{w} @llvm.bswap.i{w}(i{w})\n", w = w)).collect::<String>(),
         if m.shrink { "declare ptr @pruv_shrink_v2(ptr, i64, i64, i64, i64) nounwind\n" } else { "" },
         if m.fill { "declare void @pruv_fill_v2(ptr nocapture, i64, i64, i64) nounwind\n" } else { "" },
+        if m.memset { "declare void @llvm.memset.p0.i64(ptr nocapture writeonly, i8, i64, i1)\n" } else { "" },
         g6decls,
         chunks.join("\n")
     );

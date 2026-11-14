@@ -1921,3 +1921,22 @@ Peak resident set size as the Pruv/Rust ratio:
 
 - **Pass rule:** time and memory pass on all cells. sudoku memory now passes (1.071–1.082 in section 119, 1.010 now), which closes the last memory failure of the suite.
 - **sudoku py/llvm time** moved from 0.964 to 1.007. It still passes, but it is slower than the rust backend (0.958) on the same stack arrays. The likely cause (not measured separately): the LLVM backend refills the small per-iteration arrays through the `pruv_fill_v2` call, which the Rust source gets as an inline array initializer. Lowering the fill to an inline store loop or `llvm.memset` for byte elements is a later P3 item.
+
+## 121. P3: inline fills of LLVM stack arrays (2026-11-15)
+
+The LLVM backend of both compilers now lowers the fill of a stack array (section 120) inline where it can (`stack_let` in `pruvc/llvmgen.py` and `pruv-core/src/llvmgen.rs`). A length-0 array emits no fill. One-byte elements (`u8`, `bool`, and refined `i64` arrays narrowed to `u8`/`i8`) emit `call void @llvm.memset.p0.i64(ptr align 1 BUF, i8 BYTE, i64 C, i1 false)`, where the byte is the fill value truncated to 8 bits (`zext i1` for `bool`). A literal-zero fill of wider elements emits `llvm.memset` of `C * size` zero bytes. Only wider nonzero fills, such as fannkuch's `alloc(16, 1)`, still call `pruv_fill_v2`. Evaluation order and the unverified `u8` range guard are unchanged. Python and Rust emit byte-identical output for the runtime rows (1474) and the bench programs (20); `p3_s1_stack` passes on both backends with both compilers.
+
+The five programs with stack arrays were measured again (30 interleaved rounds after 3 warm-ups, same machine as section 120):
+
+| Program | Rust ms | rs/llvm | py/llvm |
+|---|---|---|---|
+| sudoku (4000 puzzles) | 1263 | 0.959 [0.956, 0.962] faster | 0.960 [0.956, 0.963] faster |
+| fannkuch-redux (n=12) | 14877 | 0.947 [0.944, 0.950] faster | 0.945 [0.943, 0.948] faster |
+| base64 | 475 | 1.002 [0.990, 1.014] equal | 0.998 [0.994, 1.002] equal |
+| reverse-complement | 151 | 0.883 [0.868, 0.898] faster | 0.879 [0.870, 0.888] faster |
+| bedcov (1M intervals, 1M queries) | 646 | 0.959 [0.956, 0.961] faster | 0.959 [0.956, 0.961] faster |
+
+Peak RSS ratios are unchanged within noise (sudoku 1.010, fannkuch 0.990, base64 0.993, revcomp 1.000, bedcov 0.707).
+
+- **sudoku py/llvm time** goes from 1.007 to 0.960, level with the Rust-source backend (0.958 in section 120). This confirms that the per-iteration `pruv_fill_v2` calls were the cost named in section 120.
+- The other four programs move within noise.

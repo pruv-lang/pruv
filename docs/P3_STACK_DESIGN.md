@@ -43,7 +43,9 @@ Paths: `core/` means `pruvc-rs/crates/pruv-core/src/`.
 5. **LLVM backend.** A qualifying declaration becomes `alloca [C x <storage type>], align <alignment(layout)>` in the
    function entry block (one per declaration, entry order = source order), filled at the declaration point by a new
    runtime helper `void pruv_fill_v2(ptr, i64 len, i64 value, i64 size)` (`pruvc/runtime.c`, all variants; it
-   truncates `value` to `size` bytes, like `pruv_alloc_narrow`). The slot gets the array pointer and length `C` and
+   truncates `value` to `size` bytes, like `pruv_alloc_narrow`). Since section 121 of `RESULTS.md` the fill is
+   lowered inline where possible: `C == 0` emits no fill, one-byte elements and a literal-zero value emit
+   `llvm.memset`, and only wider nonzero fills still call `pruv_fill_v2`. The slot gets the array pointer and length `C` and
    is not registered in the scope's owned arrays, so no `pruv_free`/`pruv_free_v2` is emitted on any exit path
    (normal end, `return`, panic paths). Allocation counting is unchanged for the other arrays;
    `alloc_balance` still holds because stack arrays neither allocate nor free.
