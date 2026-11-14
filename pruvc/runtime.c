@@ -78,6 +78,7 @@ _Noreturn void pruv_panic_requires(const char *fn, const char *expr);
 _Noreturn void pruv_panic_undefined(const char *detail);
 void *pruv_alloc_u8(int64_t len, int64_t value);
 void *pruv_copy_v2(const void *src, int64_t len, int64_t size, int64_t align);
+void pruv_fill_v2(void *p, int64_t len, int64_t value, int64_t size);
 void pruv_free_v2(void *data, int64_t len, int64_t size, int64_t align);
 _Noreturn void pruv_panic_elem(int64_t v, const char *range);
 _Noreturn void pruv_panic_repr(int64_t v, const char *what);
@@ -257,6 +258,21 @@ void *pruv_alloc_narrow(int64_t len, int64_t value, int64_t size, int64_t align)
         for (int64_t i = 0; i < len; i++) ((uint32_t *)p)[i] = (uint32_t)value;
     }
     return p;
+}
+
+/* P3-S1: fill a stack array of len elements of `size` bytes (1, 2, 4 or 8) with the low `size` bytes of value.
+ * No allocation, so it is never counted by pruv-alloc-balance. */
+void pruv_fill_v2(void *p, int64_t len, int64_t value, int64_t size) {
+    if (size != 1 && size != 2 && size != 4 && size != 8) pruv_panic_arith("invalid element layout");
+    if (len <= 0) return;
+    if (size == 1) memset(p, (int)(uint8_t)value, (size_t)len);
+    else if (size == 2) {
+        for (int64_t i = 0; i < len; i++) ((uint16_t *)p)[i] = (uint16_t)value;
+    } else if (size == 4) {
+        for (int64_t i = 0; i < len; i++) ((uint32_t *)p)[i] = (uint32_t)value;
+    } else {
+        for (int64_t i = 0; i < len; i++) ((int64_t *)p)[i] = value;
+    }
 }
 
 void *pruv_copy_v2(const void *src, int64_t len, int64_t size, int64_t align) {

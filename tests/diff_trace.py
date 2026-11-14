@@ -308,8 +308,11 @@ def solver_wall_timeout(case):
 
 
 def inference_wall_timeout(case):
-    """Did either side stop a function's invariant inference at the wall-clock limit (status "timeout")?"""
-    return any(isinstance(e, dict) and e.get("status") == "timeout"
+    """Did either side stop a function's invariant inference at the wall-clock limit (status "timeout"), or drop a
+    candidate because its query hit the per-query wall-clock timeout (dropped status "timeout"; the other side may
+    report resource_unknown for the same candidate, seen on p2_rt_kernels in CI runs of 36f73c9 and 6f0b835)?"""
+    return any(isinstance(e, dict) and (e.get("status") == "timeout" or any(
+                   isinstance(d, dict) and d.get("status") == "timeout" for d in (e.get("dropped") or [])))
                for o in (case.py_obj, case.rs_obj) if o for e in (o.get("inference") or []))
 
 

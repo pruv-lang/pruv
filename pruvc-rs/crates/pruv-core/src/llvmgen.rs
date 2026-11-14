@@ -551,6 +551,10 @@ pub struct Mod {
     pub bswap: BTreeSet<u32>,
     /// P2 batch 4: some in-place `return truncate` calls @pruv_shrink_v2
     pub shrink: bool,
+    /// P3-S1: the stack plan (set by gen_llvm; empty = every array on the heap)
+    pub stack: crate::stack::StackPlan,
+    /// P3-S1: some stack array calls @pruv_fill_v2
+    pub fill: bool,
     /// G4 A3: explicit visibility mode (Pruv calls use the Rust-backend routing)
     pub explicit: bool,
     /// G4 A3: function name (stem) -> source-qualified identity (Python `f.disp`), explicit mode only
@@ -573,6 +577,8 @@ impl Mod {
             need_eq: BTreeSet::new(),
             bswap: BTreeSet::new(),
             shrink: false,
+            stack: crate::stack::StackPlan::default(),
+            fill: false,
             explicit: false,
             fn_disp: HashMap::new(),
         }
@@ -1838,8 +1844,54 @@ impl<'a> FnGen<'a> {
         Ok(())
     }
 
+    /// P3-S1: `let x: [E] = alloc(C, v)` on the stack: an entry-block alloca of C elements, filled here by
+    /// pruv_fill_v2 every time the declaration runs; the slot is not owned, so nothing is ever freed.
+    fn stack_let(&mut self, x: &Let) -> R<()> {
+        let n = self.m.stack.length(x);
+        self.begin_temps();
+        // n is a literal (no code); the fill value is evaluated here, once
+        let fill = match &x.value {
+            Expr::Call(c) => &c.args[1],
+            _ => return Err("llvmgen: stack array without alloc".to_string()),
+        };
+        let v = self.ev(fill, false)?;
+        let val: String;
+        let layout: &'static str;
+        let size: usize;
+        let ety: String;
+        if x.ty == "array_bool" {
+            val = self.op(format!("zext i1 {} to i64", v.a))?;
+            layout = "i64"; size = 1; ety = "i8".to_string();
+        } else if x.ty == "array_u8" {
+            if !self.verified {
+                let ok = self.op(format!("icmp ule i64 {}, 255", v.a))?;
+                self.guard(&ok, Fail::Elem(v.a.clone(), "u8 0..=255"), false)?;
+            }
+            val = v.a.clone();
+            layout = "i64"; size = 1; ety = "i8".to_string();
+        } else {
+            layout = self.m.storage.layout_of(x);
+            size = elem_size(layout);
+            val = v.a.clone();
+            ety = format!("i{}", size * 8);
+        }
+        let sl = self.new_slot(&x.name, &x.ty);
+        let buf = format!("{}.stk", &sl.a[..sl.a.len() - 2]);
+        self.allocas.push(format!("{} = alloca [{} x {}], align {}", buf, n, ety, size));
+        self.m.fill = true;
+        self.ins(format!("call void @pruv_fill_v2(ptr {}, i64 {}, i64 {}, i64 {})", buf, n, val, size))?;
+        let mut av = V::with_b(Kind::Arr, buf, n.to_string());
+        av.ty = elem_ty(&x.ty);
+        av.layout = layout;
+        self.store(&sl, &av)?;
+        let sc = self.scopes.last_mut().ok_or_else(|| IDX_ERR.to_string())?;
+        sc.names.insert(x.name.clone(), Bind::Slot(sl));
+        self.end_temps()
+    }
+
     pub fn stmt(&mut self, st: &Stmt) -> R<()> {
         match st {
+            Stmt::Let(x) if self.m.stack.contains(x) => self.stack_let(x),
             Stmt::Let(x) => {
                 self.begin_temps();
                 let v = self.ev(&x.value, true)?;
@@ -4565,6 +4617,7 @@ fn gen_llvm_body(
     let tt = new_tt(prog);
     let mut m = Mod::new();
     m.storage = plan_storage(prog, verified);
+    m.stack = crate::stack::plan_stack(prog, &m.storage, verified);
     let narrowed = m.storage.entries.iter().any(|(_, w)| *w != "i64");
     let explicit = prog.explicit.is_some();
     m.explicit = explicit;
@@ -4682,7 +4735,7 @@ fn gen_llvm_body(
         }
     }
     let mut ir = format!(
-        "{}{}\n{}{}{}{}{}{}{}{}{}{}{}{}\n{}",
+        "{}{}\n{}{}{}{}{}{}{}{}{}{}{}{}{}\n{}",
         if target == AbiTarget::WinX64 { WIN_X64_HEADER } else { "" },
         m.render_strings(),
         type_defs(&tt),
@@ -4705,6 +4758,7 @@ fn gen_llvm_body(
         // P2 batch 4: llvm.bswap declarations of the widths used, ascending
         m.bswap.iter().map(|w| format!("declare i{w} @llvm.bswap.i{w}(i{w})\n", w = w)).collect::<String>(),
         if m.shrink { "declare ptr @pruv_shrink_v2(ptr, i64, i64, i64, i64) nounwind\n" } else { "" },
+        if m.fill { "declare void @pruv_fill_v2(ptr nocapture, i64, i64, i64) nounwind\n" } else { "" },
         g6decls,
         chunks.join("\n")
     );

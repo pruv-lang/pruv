@@ -479,6 +479,8 @@ fn join_map<T>(xs: &[T], sep: &str, f: impl Fn(&T) -> String) -> String {
 struct Gen<'a> {
     prog: &'a Program,
     storage: crate::storage::StoragePlan,
+    /// P3-S1: local arrays that live on the stack
+    stack: crate::stack::StackPlan,
     function_name: String,
     budget: u64,
     verified: bool,
@@ -590,8 +592,11 @@ impl<'a> Gen<'a> {
             && prog.functions.iter().any(|f| {
                 !f.requires.is_empty() && f.foreign.is_none() && (!verified || (is_host(f) && !trust_callers))
             });
+        let storage = crate::storage::plan_storage(prog, verified);
+        let stack = crate::stack::plan_stack(prog, &storage, verified);
         Gen {
-            storage: crate::storage::plan_storage(prog, verified),
+            storage,
+            stack,
             function_name: String::new(),
             prog,
             explicit,
@@ -2275,8 +2280,44 @@ impl<'a> Gen<'a> {
         Ok(())
     }
 
+    /// P3-S1: Rust element type of a stack array declaration
+    fn stack_elem(&self, x: &Let) -> String {
+        match x.ty.as_str() {
+            "array_bool" => "bool".to_string(),
+            "array_u8" => "u8".to_string(),
+            _ => self.storage.layout_of(x).to_string(),
+        }
+    }
+
+    fn stack_type(&self, x: &Let) -> String {
+        format!("[{}; {}]", self.stack_elem(x), self.stack.length(x))
+    }
+
+    /// P3-S1: fixed-size array initializer; the fill value is evaluated first, once (n is a literal)
+    fn stack_init(&mut self, x: &Let) -> R<String> {
+        let n = self.stack.length(x);
+        let elem = self.stack_elem(x);
+        let v = match &x.value {
+            Expr::Call(c) => self.e(&c.args[1])?,
+            _ => return Err("stack array without alloc".to_string()),
+        };
+        if elem == "bool" {
+            return Ok(format!("{{ let pruv_v: bool = {}; [pruv_v; {}] }}", v, n));
+        }
+        let chk = if elem == "u8" && !self.verified { "if pruv_v < 0 || pruv_v > 255 { pruv_elem_oor(pruv_v) } " } else { "" };
+        let cast = if elem == "i64" { String::new() } else { format!(" as {}", elem) };
+        Ok(format!("{{ let pruv_v: i64 = {}; {}[pruv_v{}; {}] }}", v, chk, cast, n))
+    }
+
     fn stmt(&mut self, st: &Stmt, ind: usize) -> R<()> {
         match st {
+            Stmt::Let(x) if self.stack.contains(x) => {
+                let init = self.stack_init(x)?;
+                let line = format!("let {}{}: {} = {};", if x.mutable { "mut " } else { "" }, x.name, self.stack_type(x), init);
+                self.emit(ind, &line);
+                self.vars.insert(x.name.clone(), x.ty.clone());
+                self.refs.remove(&x.name);
+            }
             Stmt::Let(x) => {
                 self.moving = self.last_copy(&x.name, &x.value);
                 let v = self.own_e(&x.value);

@@ -342,6 +342,8 @@ class Mod:
         s.shrink = False        # P2 batch 4: some in-place `return truncate` calls @pruv_shrink_v2
         s.need_size = set()     # G9 A3: types whose runtime-contract size / equality helpers are needed
         s.need_eq = set()
+        s.stack = None          # P3-S1: StackPlan (set by gen_llvm)
+        s.fill = False          # P3-S1: some stack array calls @pruv_fill_v2
         s.explicit = False      # G4 A3: explicit visibility mode (set by gen_llvm); Pruv calls use the Rust-backend routing
 
     def string(s, text):
@@ -1038,8 +1040,38 @@ class FnGen:
             else:
                 s.term("unreachable")
 
+    def stack_let(s, st):
+        """P3-S1: `let x: [E] = alloc(C, v)` on the stack: an entry-block alloca of C elements, filled here by
+        pruv_fill_v2 every time the declaration runs; the slot is not owned, so nothing is ever freed."""
+        n = s.m.stack.length(st)
+        s.begin_temps()
+        v = s.ev(st.value.args[1])      # n is a literal (no code); the fill value is evaluated here, once
+        if st.type.name == "array_bool":
+            val = s.op("zext i1 %s to i64" % v.a)
+            layout, size, ety = "i64", 1, "i8"
+        elif st.type.name == "array_u8":
+            if not s.verified:
+                ok = s.op("icmp ule i64 %s, 255" % v.a)
+                s.guard(ok, s.panic_elem(v.a), False)
+            val = v.a
+            layout, size, ety = "i64", 1, "i8"
+        else:
+            layout = s.m.storage.layout_of(st)
+            size = elem_size(layout)
+            val, ety = v.a, "i%d" % (size * 8)
+        sl = s.new_slot(st.name, st.type)
+        buf = sl.a[:-2] + ".stk"
+        s.allocas.append("%s = alloca [%d x %s], align %d" % (buf, n, ety, size))
+        s.m.fill = True
+        s.ins("call void @pruv_fill_v2(ptr %s, i64 %d, i64 %s, i64 %d)" % (buf, n, val, size))
+        s.store(sl, V("arr", buf, str(n), elem_ty(st.type), layout=layout))
+        s.scopes[-1]["names"][st.name] = ("slot", sl)
+        s.end_temps()
+
     def stmt(s, st):
-        if isinstance(st, Let):
+        if isinstance(st, Let) and s.m.stack is not None and s.m.stack.contains(st):
+            s.stack_let(st)
+        elif isinstance(st, Let):
             s.begin_temps()
             v = s.ev(st.value, True)
             sl = s.new_slot(st.name, st.type)
@@ -3574,6 +3606,8 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
     tt = new_tt(prog)   # G9: SCC-condensed order and the extended / boxed metadata (identical to TypeTable otherwise)
     m = Mod(tt)
     m.storage = plan_storage(prog, verified)
+    from stack import plan_stack
+    m.stack = plan_stack(prog, m.storage, verified)
     narrowed = any(w != "i64" for _, w in m.storage.entries)
     m.explicit = explicit
     cost_used = not verified and any(f.cost is not None for f in prog.functions)
@@ -3642,6 +3676,7 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
         DECLS_NODE if tt.g9_boxed else "") + "".join(
         "declare i%d @llvm.bswap.i%d(i%d)\n" % (w, w, w) for w in (16, 32, 64) if w in m.bswap) + (
         "declare ptr @pruv_shrink_v2(ptr, i64, i64, i64, i64) nounwind\n" if m.shrink else "") + (
+        "declare void @pruv_fill_v2(ptr nocapture, i64, i64, i64) nounwind\n" if m.fill else "") + (
         g6decls + "\n" + "\n".join(chunks))  # G2 A5/B2, G3, G6 A3, G9 A3; P2 batch 4: llvm.bswap when used
     if m.par_trampolines:
         ir = "%pruv_g7_job = type { ptr, ptr }\n" + "\n".join(m.par_types) + "\n" + ir

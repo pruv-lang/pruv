@@ -1085,7 +1085,10 @@ def runtime_job(j, t, spec, flags, name, suffix, llvm):
                     problems.append("no pruv-alloc-balance line in stderr %r" % p.stderr[-150:])
                 else:
                     a, fr = int(m.group(1)), int(m.group(2))
-                    if a != fr or a <= 0:
+                    # P3-S1: a program whose arrays all live on the stack has no heap call, so 0 / 0 is the
+                    # expected balance there; any heap allocator call in the module still requires a > 0
+                    heap = re.search(r"^\s*(?!declare)[^\n]*@pruv_(?:node_)?alloc\w*\(", open(ll).read(), re.M)
+                    if a != fr or (a <= 0 and heap):
                         problems.append("alloc balance %d allocs / %d frees" % (a, fr))
             ll_text = open(ll).read()
             if proj:   # G4 A3: the exported-symbol check; spec.json "llvm_exports" lists the expected defined externals

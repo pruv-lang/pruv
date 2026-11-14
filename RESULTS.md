@@ -1894,3 +1894,30 @@ Peak resident set size as the Pruv/Rust ratio:
 
 - **Pass rule:** time passes on all 16 cells (worst py/rust brainfuck 1.015). n-queens moved from about 0.94 to 0.89–0.92 with its narrowed board tables. Build time is unchanged within noise (sudoku 2.3–3.2 s including verification).
 - **sudoku memory still fails** (1.071–1.082, about 96–128 KiB over 1.5 MiB). Width is no longer the cause: a Rust program with the same `Vec` allocations as Pruv (two 2916-element `u16` tables, a 324-element `u8` table and the per-iteration small vectors) measures 1632 KiB against 1536 KiB with stack arrays, the same gap. The rest is heap placement: the first heap allocations of a small process map allocator zone pages. The next P3 batch moves fixed-size, non-escaping arrays to the stack.
+
+## 120. P3-S1: fixed-size local arrays on the stack (2026-11-15)
+
+Both compilers now place small, non-escaping local arrays with a constant length on the stack (`docs/P3_STACK_DESIGN.md`; `pruvc/stack.py`, `pruv-core/src/stack.rs`). A `let [mut] x: [E] = alloc(C, v)` with an integer literal `C`, a scalar element (`i64` refined or not, `u8`, `bool`), at most 16384 bytes and at most 65536 bytes per function qualifies when every use of `x` is an index read or store, `len(x)`, a contract reading it, or a direct array argument to a user Pruv function. Foreign functions, recursive functions and, in `--no-verify` builds only, functions with a `cost` clause keep the heap (verified builds erase `cost`, so their output must not depend on it). On LLVM, the alloc-balance check of the runtime rows now accepts 0 allocations and 0 frees when the module calls no heap allocator, since stack arrays neither allocate nor free. The Rust-source backend emits `[E; C]` instead of a `Vec`; the LLVM backend emits an entry-block `alloca`, fills it at the declaration through the new runtime entry `pruv_fill_v2(ptr, len, value, size)` and never frees it. Python and Rust emit byte-identical `.rs` and `.ll` for the new fixture `tests/runtime/p3_s1_stack`, `p3_n1_storage` and the nine bench programs, with and without `--no-verify` (22/22). Stack arrays now appear in sudoku (`sr`, `sc`, `cr`, `cc`, `grid`, `rows`, `cols`, `nr`), bedcov, base64, fannkuch and revcomp; nqueen, brainfuck, binary-trees and primes have none.
+
+The five affected programs were measured with the Python compiler (30 interleaved rounds after 3 warm-ups, same machine as section 119; the Rust compiler emits the same code):
+
+| Program | Rust ms | py/rust | py/llvm |
+|---|---|---|---|
+| sudoku (4000 puzzles) | 1281 | 0.958 [0.956, 0.959] faster | 1.007 [1.006, 1.008] equal |
+| fannkuch-redux (n=12) | 15009 | 0.943 [0.941, 0.945] faster | 0.965 [0.962, 0.968] faster |
+| base64 | 475 | 1.004 [1.002, 1.006] equal | 1.000 [0.997, 1.003] equal |
+| reverse-complement | 152 | 0.896 [0.889, 0.903] faster | 0.872 [0.864, 0.879] faster |
+| bedcov (1M intervals, 1M queries) | 651 | 0.965 [0.962, 0.968] faster | 0.957 [0.956, 0.959] faster |
+
+Peak resident set size as the Pruv/Rust ratio:
+
+| Program | Rust MiB | py/rust | py/llvm |
+|---|---|---|---|
+| sudoku | 1.5 | 1.010 | 1.010 |
+| fannkuch-redux | 1.5 | 1.000 | 1.000 |
+| base64 | 2.3 | 1.000 | 0.987 |
+| reverse-complement | 486.4 | 1.000 | 1.000 |
+| bedcov | 78.0 | 0.707 | 0.707 |
+
+- **Pass rule:** time and memory pass on all cells. sudoku memory now passes (1.071–1.082 in section 119, 1.010 now), which closes the last memory failure of the suite.
+- **sudoku py/llvm time** moved from 0.964 to 1.007. It still passes, but it is slower than the rust backend (0.958) on the same stack arrays. The likely cause (not measured separately): the LLVM backend refills the small per-iteration arrays through the `pruv_fill_v2` call, which the Rust source gets as an inline array initializer. Lowering the fill to an inline store loop or `llvm.memset` for byte elements is a later P3 item.

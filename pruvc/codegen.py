@@ -655,8 +655,9 @@ def rstr(text):
 
 
 class Gen:
-    def __init__(s, prog, verified=True, trust_callers=False, budget=1 << 30, foreign_checks="requires", storage=None):
+    def __init__(s, prog, verified=True, trust_callers=False, budget=1 << 30, foreign_checks="requires", storage=None, stack=None):
         s.storage = storage
+        s.stack = stack     # P3-S1 stack plan (None: every array on the heap)
         s.function_name = ""
         s.budget = budget
         s.prog = prog
@@ -1597,8 +1598,36 @@ class Gen:
             return {x.base.name}
         return set()
 
+    def stack_elem(s, st):
+        """P3-S1: Rust element type of a stack array declaration"""
+        if is_bool_array(st.type):
+            return "bool"
+        if is_u8_array(st.type):
+            return "u8"
+        return s.layout(st)
+
+    def stack_type(s, st):
+        return "[%s; %d]" % (s.stack_elem(st), s.stack.length(st))
+
+    def stack_init(s, st):
+        """P3-S1: fixed-size array initializer; the fill value is evaluated first, once (n is a literal)"""
+        n = s.stack.length(st)
+        v = st.value.args[1]
+        elem = s.stack_elem(st)
+        if elem == "bool":
+            return "{ let pruv_v: bool = %s; [pruv_v; %d] }" % (s.e(v), n)
+        chk = ""
+        if elem == "u8" and not s.verified:
+            chk = "if pruv_v < 0 || pruv_v > 255 { pruv_elem_oor(pruv_v) } "
+        cast = "" if elem == "i64" else " as " + elem
+        return "{ let pruv_v: i64 = %s; %s[pruv_v%s; %d] }" % (s.e(v), chk, cast, n)
+
     def stmt(s, st, ind):
-        if isinstance(st, Let):
+        if isinstance(st, Let) and s.stack is not None and s.stack.contains(st):
+            s.emit(ind, "let %s%s: %s = %s;" % ("mut " if st.mutable else "", st.name, s.stack_type(st), s.stack_init(st)))
+            s.vt[st.name] = st.type
+            s.refs.discard(st.name)
+        elif isinstance(st, Let):
             s.moving = s.last_copy(st)
             s.emit(ind, "let %s%s: %s = %s;" % ("mut " if st.mutable else "", st.name, s.rt(st.type, site=st), s.own_e(st.value)))
             s.moving = set()
@@ -2061,7 +2090,9 @@ def gen_rust_ex(prog, verified=True, trust_callers=False, budget=1 << 30, plan=N
     if g2err is not None:  # same as the Rust generator's Err(String); drivers reject earlier with the diagnostic
         raise RuntimeError("unsupported_type: %s" % g2err.message)
     from storage import plan_storage
-    g = Gen(prog, verified, trust_callers, budget, foreign_checks, plan_storage(prog, verified))
+    from stack import plan_stack
+    storage = plan_storage(prog, verified)
+    g = Gen(prog, verified, trust_callers, budget, foreign_checks, storage, plan_stack(prog, storage, verified))
     g.prelude()
     mark = len(g.out)
     for f in prog.functions:
