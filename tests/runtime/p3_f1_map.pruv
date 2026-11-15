@@ -1,0 +1,38 @@
+// P3-F1: element-wise maps whose trailing requires are prefilterable foralls get a fused check in the verified entry
+// (one pass: check each element and write the result); a violated element still reports the requires of the slow path.
+
+fn add(a: [i64], b: [i64]) -> [i64] ! alloc
+  requires len(a) == len(b)
+  requires forall t in 0..len(a): 0 <= a[t] && a[t] <= 1000
+  requires forall t in 0..len(b): 0 <= b[t] && b[t] <= 1000
+{
+  let mut c: [i64] = alloc(len(a), 0);
+  let mut i: i64 = 0;
+  while i < len(a)
+    invariant 0 <= i && i <= len(a)
+    invariant len(c) == len(a)
+    decreases len(a) - i
+  {
+    c[i] = a[i] + b[i];
+    i = i + 1;
+  }
+  return c;
+}
+
+fn mix(a: [i64], b: [i64]) -> [i64] ! alloc
+  requires len(a) == len(b)
+  requires forall t in 0..len(a): 0 <= a[t] && a[t] <= 1000
+  requires forall t in 0..len(b): 0 <= b[t] && b[t] <= 1000
+{
+  let mut c: [i64] = alloc(len(a), 7);
+  let mut i: i64 = 0;
+  while i < len(a)
+    invariant 0 <= i && i <= len(a)
+    invariant len(c) == len(a)
+    decreases len(a) - i
+  {
+    c[i] = a[i] * 3 - b[i];
+    i = i + 1;
+  }
+  return c;
+}

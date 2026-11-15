@@ -2353,8 +2353,9 @@ class FnGen:
         s.br(el)
         s.place(slow)
 
-    def cfast(s, e, var, kv, jv):
-        """P3: a fast_forall body as straight-line IR (i1 and/or instead of short circuits, unchecked reads)"""
+    def cfast(s, e, var, kv, jv, xs=None):
+        """P3: a fast_forall body as straight-line IR (i1 and/or instead of short circuits, unchecked reads).
+        P3-F1: xs (array name -> already loaded i64 SSA value) makes x[t] reuse that value instead of loading"""
         if isinstance(e, BoolLit):
             return "true" if e.value else "false"
         if isinstance(e, IntLit):
@@ -2362,17 +2363,19 @@ class FnGen:
         if isinstance(e, Var) and e.name == var:
             return kv
         if isinstance(e, Unary):
-            return s.op("xor i1 %s, true" % s.cfast(e.operand, var, kv, jv))
+            return s.op("xor i1 %s, true" % s.cfast(e.operand, var, kv, jv, xs))
         if isinstance(e, Binary) and e.op in ("&&", "||", "==>"):
-            l = s.cfast(e.left, var, kv, jv)
+            l = s.cfast(e.left, var, kv, jv, xs)
             if e.op == "==>":
                 l = s.op("xor i1 %s, true" % l)
-            r = s.cfast(e.right, var, kv, jv)
+            r = s.cfast(e.right, var, kv, jv, xs)
             return s.op("%s i1 %s, %s" % ("and" if e.op == "&&" else "or", l, r))
         if isinstance(e, Binary):
             cmp = {"==": "eq", "!=": "ne", "<": "slt", "<=": "sle", ">": "sgt", ">=": "sge"}[e.op]
-            l = s.cfast(e.left, var, kv, jv)
-            return s.op("icmp %s i128 %s, %s" % (cmp, l, s.cfast(e.right, var, kv, jv)))
+            l = s.cfast(e.left, var, kv, jv, xs)
+            return s.op("icmp %s i128 %s, %s" % (cmp, l, s.cfast(e.right, var, kv, jv, xs)))
+        if isinstance(e, Index) and xs is not None:
+            return s.op("sext i64 %s to i128" % xs[e.array.name])
         if isinstance(e, Index):
             a = s.cenv[e.array.name]
             ix = e.index
@@ -2467,7 +2470,84 @@ class FnGen:
         return V(rty, res)
 
 
-def entry_of(m, funcs, f, trust, budget=1 << 30, cost=False):
+def fuse_plan_ll(m, f):
+    """P3-F1: codegen.fuse_map(f) when the result and the fused parameter arrays are plain i64 heap arrays, else None"""
+    plan = codegen.fuse_map(f)
+    if plan is None:
+        return None
+    if m.stack is not None and m.stack.contains(f.body[0]):
+        return None
+    if m.storage.layout_of(f) != "i64" or m.storage.layout_of(f.body[0].value) != "i64":
+        return None
+    if any(m.storage.layout_of(p) != "i64" for p in f.params if p.name in plan.arrs):
+        return None
+    return plan
+
+
+def fuse_elem_ll(g, e, xs):
+    """P3-F1: the map element expression of a fused loop with wrapping i64 arithmetic (no nsw)"""
+    if isinstance(e, IntLit):
+        return str(e.value)
+    if isinstance(e, Index):
+        return xs[e.array.name]
+    l = fuse_elem_ll(g, e.left, xs)
+    r = fuse_elem_ll(g, e.right, xs)
+    return g.op("%s i64 %s, %s" % ({"+": "add", "-": "sub", "*": "mul"}[e.op], l, r))
+
+
+def fuse_ll(g, f, plan):
+    """P3-F1 (docs/P3_FUSE_DESIGN.md decision 5): the fused requires path of an element-wise map, emitted after the
+    prefix requires.  A failed guard or a set flag continues at the slow path (the trailing requires) in block fzs."""
+    n = g.cenv[plan.n_arr].b
+    conds = [g.op("icmp eq i64 %s, %s" % (g.cenv[x].b, n)) for x in plan.arrs if x != plan.n_arr]
+    need = g.op("mul i128 %s, %d" % (g.op("zext i64 %s to i128" % n), len(plan.arrs)))
+    bw = g.op("sext i64 %s to i128" % g.op("load i64, ptr %s" % g.budget))
+    conds.append(g.op("icmp sle i128 %s, %s" % (need, bw)))
+    ok = conds[0]
+    for c in conds[1:]:
+        ok = g.op("and i1 %s, %s" % (ok, c))
+    pre, slow = g.label("fzp"), g.label("fzs")
+    g.condbr(ok, pre, slow)
+    g.place(pre)
+    p = g.op("call ptr @pruv_alloc(i64 %s, i64 0)" % n)
+    q = g.nq
+    g.nq += 1
+    j, bad = "%%q%d.j" % q, "%%q%d.f" % q
+    g.allocas.append("%s = alloca i64" % j)
+    g.allocas.append("%s = alloca i1" % bad)
+    g.ins("store i64 0, ptr %s" % j)
+    g.ins("store i1 false, ptr %s" % bad)
+    fc, fb, fe, fr, ff = g.label("fzc"), g.label("fzb"), g.label("fze"), g.label("fzr"), g.label("fzf")
+    g.br(fc)
+    g.place(fc)
+    jv = g.op("load i64, ptr %s" % j)
+    g.condbr(g.op("icmp slt i64 %s, %s" % (jv, n)), fb, fe)
+    g.place(fb)
+    xs = {}
+    for x in plan.arrs:
+        xs[x] = g.op("load i64, ptr %s" % g.op("getelementptr inbounds i64, ptr %s, i64 %s" % (g.cenv[x].a, jv)))
+    kv = g.op("sext i64 %s to i128" % jv)
+    acc = g.op("load i1, ptr %s" % bad)
+    for r in f.requires[plan.start:]:
+        pv = g.cfast(r.body, r.var, kv, jv, xs)
+        acc = g.op("or i1 %s, %s" % (acc, g.op("xor i1 %s, true" % pv)))
+    g.ins("store i1 %s, ptr %s" % (acc, bad))
+    ev = fuse_elem_ll(g, plan.elem, xs)
+    g.ins("store i64 %s, ptr %s" % (ev, g.op("getelementptr inbounds i64, ptr %s, i64 %s" % (p, jv))))
+    g.ins("store i64 %s, ptr %s" % (g.op("add i64 %s, 1" % jv), j))
+    g.br(fc)
+    g.place(fe)
+    g.condbr(g.op("load i1, ptr %s" % bad), ff, fr)
+    g.place(fr)
+    a = g.op("insertvalue %s undef, ptr %s, 0" % (ARR, p))
+    g.term("ret %s %s" % (ARR, g.op("insertvalue %s %s, i64 %s, 1" % (ARR, a, n))))
+    g.place(ff)
+    g.ins("call void @pruv_free(ptr %s, i64 %s)" % (p, n))
+    g.br(slow)
+    g.place(slow)
+
+
+def entry_of(m, funcs, f, trust, budget=1 << 30, cost=False, verified=False):
     g = FnGen(m, funcs, f, True)
     params = ir_params(f, m.tt)
     rt = ir_ret(m.tt, f)    # G9 A3: "void" for an extended result (output storage is the leading `ptr %out`)
@@ -2478,7 +2558,10 @@ def entry_of(m, funcs, f, trust, budget=1 << 30, cost=False):
         g.budget = "%req.budget"
         g.allocas.append("%s = alloca i64" % g.budget)
         g.ins("store i64 %d, ptr %s" % (budget, g.budget))
-        for r in ([] if trust else f.requires):
+        plan = fuse_plan_ll(m, f) if verified and not trust and not cost else None   # P3-F1: verified checked entries
+        for k, r in enumerate(([] if trust else f.requires)):
+            if plan is not None and k == plan.start:
+                fuse_ll(g, f, plan)
             c = g.cregion(lambda r=r: g.cev(r))
             msg_fn = m.string(getattr(f, "disp", f.name))   # G4: the source-qualified identity, not the stem
             msg_ex = m.string(show(r))
@@ -3774,13 +3857,14 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
             # G4 A3: bodies and checked wrappers are internal; only a host entry gets pruv_abi_* (and its typed variant).
             # The host boundary calls the checked wrapper unless trust_callers skips the check (or there is no requires).
             if checked_entry(f):
-                chunks.append(entry_of(m, funcs, f, False, budget))
+                chunks.append(entry_of(m, funcs, f, False, budget, verified=verified))
             if is_host_abi_fn(f, tt, True):
                 chunks.append(abi_of(f, tt, m, "entry" if (checked_entry(f) and not trust_callers) else "body"))
             continue
         if not (coll and verified):   # verified callers call the body; the entry only serves safe-mode callers
             # G5 A3: the entry of an inout function is internal and always checked (trust_callers does not waive it)
-            chunks.append(entry_of(m, funcs, f, (trust_callers and not has_inout(f)) or not f.requires, budget))
+            chunks.append(entry_of(m, funcs, f, (trust_callers and not has_inout(f)) or not f.requires, budget,
+                                   verified=verified))
         if not getattr(f, "private", False) and not coll:  # G3: a generic specialization has no ABI symbol
             chunks.append(abi_of(f, tt, m))
     if tt.g9_ext or m.need_size or m.need_eq:   # G9 A3: clone / drop / node helpers, then the contract helpers above

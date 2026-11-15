@@ -78,6 +78,7 @@ mode emits a checked wrapper only for host entries with a requires (none under t
 `<stem>__pruv_body`; safe mode emits a private checked wrapper `<stem>` for EVERY function with a requires (and Pruv calls
 go through it), under trust_callers the pub entry is unchecked and `<entry>__pruv_chk` is the checked one Pruv callers use.
 """
+from collections import namedtuple
 from vast import *
 from typeinfo import TypeTable, is_user_type, is_array, uses_array_type, uses_str, is_collection, dependencies
 from foreign import CATALOG
@@ -697,6 +698,81 @@ def fast_forall(e, arr_ok):
     return reads if pred(e.body) else None
 
 
+FusePlan = namedtuple("FusePlan", "start arrs n_arr elem idx")
+
+
+def fuse_map(f):
+    """P3-F1 (docs/P3_FUSE_DESIGN.md decision 1): the plan of a fused requires check for an element-wise map, or None.
+    Purely syntactic.  f returns [i64], has requires, no cost clause, no inout parameter, no refinement; its maximal
+    trailing run of requires f.requires[start:] are all `forall t in 0..len(x): P` over distinct [i64] parameters x that
+    fast_forall accepts reading exactly x[t]; its body is exactly
+        let c: [i64] = alloc(len(X), v); let i: i64 = 0;
+        while i < len(X) { c[i] = E; i = i + 1; }  return c;
+    with X one of those arrays and E built from + - *, integer literals and x[i] for x among them."""
+    if not f.requires or f.cost is not None or f.ret != ARRAY or f.ret_refine is not None:
+        return None
+    if any(p.mode == "inout" or p.refine is not None for p in f.params):
+        return None
+    arrp = {p.name for p in f.params if p.type == ARRAY and p.type.owner is None and not p.type.args}
+    start, arrs = len(f.requires), []
+    for q in reversed(f.requires):
+        if not (isinstance(q, Quant) and q.kind == "forall" and isinstance(q.lo, IntLit) and q.lo.value == 0 and
+                isinstance(q.hi, Call) and q.hi.name == "len" and len(q.hi.args) == 1 and isinstance(q.hi.args[0], Var)):
+            break
+        x = q.hi.args[0].name
+        if x not in arrp or fast_forall(q, lambda v: v.name in arrp) != [(x, 0)]:
+            break
+        start -= 1
+        arrs.insert(0, x)
+    if start == len(f.requires) or len(set(arrs)) != len(arrs):
+        return None
+    b = f.body
+    if len(b) != 4:
+        return None
+    s1, s2, s3, s4 = b
+    if not (isinstance(s1, Let) and s1.type == ARRAY and s1.refine is None and isinstance(s1.value, Call) and
+            s1.value.name == "alloc" and len(s1.value.args) == 2 and isinstance(s1.value.args[1], IntLit)):
+        return None
+    c = s1.name
+    n = s1.value.args[0]
+    if not (isinstance(n, Call) and n.name == "len" and len(n.args) == 1 and isinstance(n.args[0], Var)):
+        return None
+    X = n.args[0].name
+    if not (isinstance(s2, Let) and s2.type == I64 and s2.refine is None and isinstance(s2.value, IntLit) and
+            s2.value.value == 0):
+        return None
+    i = s2.name
+    if X not in arrs or i == c or c in arrp or i in arrp or c in {p.name for p in f.params} or \
+            i in {p.name for p in f.params}:
+        return None
+    if not (isinstance(s3, While) and isinstance(s3.cond, Binary) and s3.cond.op == "<" and
+            isinstance(s3.cond.left, Var) and s3.cond.left.name == i and isinstance(s3.cond.right, Call) and
+            s3.cond.right.name == "len" and len(s3.cond.right.args) == 1 and isinstance(s3.cond.right.args[0], Var) and
+            s3.cond.right.args[0].name == X and len(s3.body) == 2):
+        return None
+    st, inc = s3.body
+    if not (isinstance(st, IndexAssign) and st.name == c and isinstance(st.index, Var) and st.index.name == i and
+            st.elem_refine is None):
+        return None
+    if not (isinstance(inc, Assign) and inc.name == i and isinstance(inc.value, Binary) and inc.value.op == "+" and
+            isinstance(inc.value.left, Var) and inc.value.left.name == i and isinstance(inc.value.right, IntLit) and
+            inc.value.right.value == 1):
+        return None
+    if not (isinstance(s4, Return) and isinstance(s4.value, Var) and s4.value.name == c):
+        return None
+
+    def elem_ok(e):
+        if isinstance(e, IntLit):
+            return True
+        if isinstance(e, Binary):
+            return e.op in ("+", "-", "*") and elem_ok(e.left) and elem_ok(e.right)
+        return isinstance(e, Index) and isinstance(e.array, Var) and e.array.name in arrs and \
+            isinstance(e.index, Var) and e.index.name == i
+    if not elem_ok(st.value):
+        return None
+    return FusePlan(start, arrs, X, st.value, i)
+
+
 def rstr(text):
     """Rust string literal (ASCII-safe)"""
     out = []
@@ -1013,8 +1089,17 @@ class Gen:
                 s.emit(1, line)
             if checks:
                 s.emit(1, "let mut pruv_budget: i64 = %s;" % format(s.budget, "_"))
-            for line in checks:
-                s.emit(1, line)
+            plan = s.fuse_plan(f)
+            if plan is None:
+                for line in checks:
+                    s.emit(1, line)
+            else:
+                # P3-F1: prefix requires, fused path, then the unchanged trailing requires (the slow path)
+                for line in checks[:plan.start]:
+                    s.emit(1, line)
+                s.emit(1, s.fuse_text(f, plan))
+                for line in checks[plan.start:]:
+                    s.emit(1, line)
         if s.inouts:
             s.emit(1, "%s(%s)" % (body_name, ", ".join(("&mut *" + p.name) if p.mode == "inout" else p.name
                                                         for p in f.params)))
@@ -1022,6 +1107,61 @@ class Gen:
             s.emit(1, "%s(%s)" % (body_name, ", ".join(p.name for p in f.params)))
         s.emit(0, "}")
         s.emit(0, "")
+
+    def fuse_plan(s, f):
+        """P3-F1: fuse_map(f) of a verified build whose result and parameter arrays are plain i64 heap arrays, else None"""
+        if not s.verified:
+            return None
+        plan = fuse_map(f)
+        if plan is None:
+            return None
+        if s.stack is not None and s.stack.contains(f.body[0]):
+            return None
+        if s.layout(f) != "i64" or s.layout(f.body[0].value) != "i64":
+            return None
+        if s.storage and any(s.storage.parameter(f.name, x) != "i64" for x in plan.arrs):
+            return None
+        return plan
+
+    def cfuse(s, e, var, plan):
+        """P3-F1: the branch-free forall body of a fused path (like cfast); x[t] reads pruv_fxK, t (var) is pruv_fj"""
+        if isinstance(e, Unary):
+            return "(!%s)" % s.cfuse(e.operand, var, plan)
+        if isinstance(e, Binary) and e.op in ("&&", "||", "==>"):
+            l, r = s.cfuse(e.left, var, plan), s.cfuse(e.right, var, plan)
+            if e.op == "==>":
+                return "((!%s) | %s)" % (l, r)
+            return "(%s %s %s)" % (l, "&" if e.op == "&&" else "|", r)
+        if isinstance(e, Binary):
+            return "(%s %s %s)" % (s.cfuse(e.left, var, plan), e.op, s.cfuse(e.right, var, plan))
+        if isinstance(e, Index):
+            return "(pruv_fx%d as i128)" % plan.arrs.index(e.array.name)
+        if isinstance(e, Var) and e.name == var:
+            return "(pruv_fj as i128)"
+        return s.c(e)
+
+    def fuse_elem(s, e, plan):
+        """P3-F1: the map element expression with wrapping i64 arithmetic"""
+        if isinstance(e, IntLit):
+            return "(%di64)" % e.value if e.value < 0 else "%di64" % e.value
+        if isinstance(e, Index):
+            return "pruv_fx%d" % plan.arrs.index(e.array.name)
+        name = {"+": "wrapping_add", "-": "wrapping_sub", "*": "wrapping_mul"}[e.op]
+        return "(%s).%s(%s)" % (s.fuse_elem(e.left, plan), name, s.fuse_elem(e.right, plan))
+
+    def fuse_text(s, f, plan):
+        """P3-F1: the one-line fused path (docs/P3_FUSE_DESIGN.md decision 4)"""
+        preds = [s.cfuse(q.body, q.var, plan) for q in f.requires[plan.start:]]
+        guards = ["%s.len() == pruv_fn" % x for x in plan.arrs if x != plan.n_arr]
+        guards.append("(%di128 * (pruv_fn as i128)) <= (pruv_budget as i128)" % len(plan.arrs))
+        loads = "".join("let pruv_fx%d: i64 = unsafe { *%s.get_unchecked(pruv_fj) }; " % (k, x)
+                        for k, x in enumerate(plan.arrs))
+        ors = "".join("pruv_fbad |= !(%s); " % p for p in preds)
+        return ("{ let pruv_fn: usize = %s.len(); if %s { let mut pruv_fc: ::std::vec::Vec<i64> = vec![0i64; pruv_fn]; "
+                "let mut pruv_fbad = false; let mut pruv_fj: usize = 0; while pruv_fj < pruv_fn { %s%s"
+                "unsafe { *pruv_fc.get_unchecked_mut(pruv_fj) = %s; } pruv_fj += 1; } "
+                "if !pruv_fbad { return pruv_fc; } } }") % (
+                    plan.n_arr, " && ".join(guards), loads, ors, s.fuse_elem(plan.elem, plan))
 
     # ---------- contract evaluation (requires), i128 ----------
     def carr(s, e):

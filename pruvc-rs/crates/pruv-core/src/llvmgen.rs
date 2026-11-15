@@ -3743,7 +3743,7 @@ impl<'a> FnGen<'a> {
         self.condbr(&more, &fb, &fe)?;
         self.place(&fb);
         let kv = self.op(format!("sext i64 {} to i128", jv))?;
-        let b = self.cfast(&e.body, &e.var, &kv, &jv)?;
+        let b = self.cfast(&e.body, &e.var, &kv, &jv, None)?;
         let av = self.op(format!("load i1, ptr {}", acc))?;
         let na = self.op(format!("and i1 {}, {}", av, b))?;
         self.ins(format!("store i1 {}, ptr {}", na, acc))?;
@@ -3761,22 +3761,23 @@ impl<'a> FnGen<'a> {
         Ok(())
     }
 
-    /// P3: a fast_forall body as straight-line IR (i1 and/or instead of short circuits, unchecked reads)
-    fn cfast(&mut self, e: &Expr, var: &str, kv: &str, jv: &str) -> R<String> {
+    /// P3: a fast_forall body as straight-line IR (i1 and/or instead of short circuits, unchecked reads).
+    /// P3-F1: xs (array name -> already loaded i64 SSA value) makes x[t] reuse that value instead of loading
+    fn cfast(&mut self, e: &Expr, var: &str, kv: &str, jv: &str, xs: Option<&HashMap<String, String>>) -> R<String> {
         match e {
             Expr::BoolLit(b) => Ok(if b.value { "true" } else { "false" }.to_string()),
             Expr::IntLit(l) => Ok(l.value.parse::<i128>().map_err(|x| x.to_string())?.to_string()),
             Expr::Var(v) if v.name == var => Ok(kv.to_string()),
             Expr::Unary(u) => {
-                let x = self.cfast(&u.operand, var, kv, jv)?;
+                let x = self.cfast(&u.operand, var, kv, jv, xs)?;
                 self.op(format!("xor i1 {}, true", x))
             }
             Expr::Binary(b) if b.op == "&&" || b.op == "||" || b.op == "==>" => {
-                let mut l = self.cfast(&b.left, var, kv, jv)?;
+                let mut l = self.cfast(&b.left, var, kv, jv, xs)?;
                 if b.op == "==>" {
                     l = self.op(format!("xor i1 {}, true", l))?;
                 }
-                let r = self.cfast(&b.right, var, kv, jv)?;
+                let r = self.cfast(&b.right, var, kv, jv, xs)?;
                 self.op(format!("{} i1 {}, {}", if b.op == "&&" { "and" } else { "or" }, l, r))
             }
             Expr::Binary(b) => {
@@ -3788,9 +3789,17 @@ impl<'a> FnGen<'a> {
                     ">" => "sgt",
                     _ => "sge",
                 };
-                let l = self.cfast(&b.left, var, kv, jv)?;
-                let r = self.cfast(&b.right, var, kv, jv)?;
+                let l = self.cfast(&b.left, var, kv, jv, xs)?;
+                let r = self.cfast(&b.right, var, kv, jv, xs)?;
                 self.op(format!("icmp {} i128 {}, {}", cmp, l, r))
+            }
+            Expr::Index(ix) if xs.is_some() => {
+                let name = match &*ix.array {
+                    Expr::Var(v) => v.name.clone(),
+                    _ => return Err("llvmgen: internal error: fast_forall array".to_string()),
+                };
+                let x = xs.and_then(|m| m.get(&name)).cloned().ok_or_else(|| format!("'{}'", name))?;
+                self.op(format!("sext i64 {} to i128", x))
             }
             Expr::Index(ix) => {
                 let (name, u8a) = match &*ix.array {
@@ -3954,6 +3963,138 @@ fn cmp_name(op: &str) -> R<&'static str> {
     }
 }
 
+/// P3-F1: emit_common::fuse_map(f) when the result and the fused parameter arrays are plain i64 heap arrays, else None
+fn fuse_plan_ll(m: &Mod, f: &Function) -> Option<crate::emit_common::FusePlan> {
+    let plan = crate::emit_common::fuse_map(f)?;
+    let l = match f.body.first() {
+        Some(Stmt::Let(l)) => l,
+        _ => return None,
+    };
+    if m.stack.contains(l) {
+        return None;
+    }
+    if m.storage.layout_of(f) != "i64" || m.storage.layout_of(&l.value) != "i64" {
+        return None;
+    }
+    if f.params.iter().any(|p| plan.arrs.contains(&p.name) && m.storage.layout_of(p) != "i64") {
+        return None;
+    }
+    Some(plan)
+}
+
+/// P3-F1: the map element expression of a fused loop with wrapping i64 arithmetic (no nsw)
+fn fuse_elem_ll(g: &mut FnGen, e: &Expr, xs: &HashMap<String, String>) -> R<String> {
+    match e {
+        Expr::IntLit(l) => Ok(l.value.clone()),
+        Expr::Index(ix) => {
+            let name = match &*ix.array {
+                Expr::Var(v) => v.name.clone(),
+                _ => return Err("llvmgen: internal error: fuse array".to_string()),
+            };
+            xs.get(&name).cloned().ok_or_else(|| format!("'{}'", name))
+        }
+        Expr::Binary(b) => {
+            let l = fuse_elem_ll(g, &b.left, xs)?;
+            let r = fuse_elem_ll(g, &b.right, xs)?;
+            let op = match b.op.as_str() {
+                "+" => "add",
+                "-" => "sub",
+                "*" => "mul",
+                other => return Err(format!("'{}'", other)),
+            };
+            g.op(format!("{} i64 {}, {}", op, l, r))
+        }
+        other => Err(format!("llvmgen: internal error: fuse element {:?}", other)),
+    }
+}
+
+/// P3-F1 (docs/P3_FUSE_DESIGN.md decision 5): the fused requires path of an element-wise map, emitted after the prefix
+/// requires. A failed guard or a set flag continues at the slow path (the trailing requires) in block fzs.
+fn fuse_ll(g: &mut FnGen, f: &Function, plan: &crate::emit_common::FusePlan) -> R<()> {
+    let arr = |g: &FnGen, x: &str| -> R<V> { g.cenv.get(x).cloned().ok_or_else(|| format!("'{}'", x)) };
+    let n = arr(g, &plan.n_arr)?.b;
+    let mut conds: Vec<String> = Vec::new();
+    for x in plan.arrs.iter().filter(|x| **x != plan.n_arr) {
+        let xb = arr(g, x)?.b;
+        conds.push(g.op(format!("icmp eq i64 {}, {}", xb, n))?);
+    }
+    let zx = g.op(format!("zext i64 {} to i128", n))?;
+    let need = g.op(format!("mul i128 {}, {}", zx, plan.arrs.len()))?;
+    let budget = match &g.budget {
+        Some(b) => b.clone(),
+        None => return Err("llvmgen: internal error: no iteration budget slot".to_string()),
+    };
+    let bl = g.op(format!("load i64, ptr {}", budget))?;
+    let bw = g.op(format!("sext i64 {} to i128", bl))?;
+    conds.push(g.op(format!("icmp sle i128 {}, {}", need, bw))?);
+    let mut ok = conds[0].clone();
+    for c in &conds[1..] {
+        ok = g.op(format!("and i1 {}, {}", ok, c))?;
+    }
+    let pre = g.label("fzp");
+    let slow = g.label("fzs");
+    g.condbr(&ok, &pre, &slow)?;
+    g.place(&pre);
+    let p = g.op(format!("call ptr @pruv_alloc(i64 {}, i64 0)", n))?;
+    let q = g.nq;
+    g.nq += 1;
+    let j = format!("%q{}.j", q);
+    let bad = format!("%q{}.f", q);
+    g.allocas.push(format!("{} = alloca i64", j));
+    g.allocas.push(format!("{} = alloca i1", bad));
+    g.ins(format!("store i64 0, ptr {}", j))?;
+    g.ins(format!("store i1 false, ptr {}", bad))?;
+    let fc = g.label("fzc");
+    let fb = g.label("fzb");
+    let fe = g.label("fze");
+    let fr = g.label("fzr");
+    let ff = g.label("fzf");
+    g.br(&fc)?;
+    g.place(&fc);
+    let jv = g.op(format!("load i64, ptr {}", j))?;
+    let lt = g.op(format!("icmp slt i64 {}, {}", jv, n))?;
+    g.condbr(&lt, &fb, &fe)?;
+    g.place(&fb);
+    let mut xs: HashMap<String, String> = HashMap::new();
+    for x in &plan.arrs {
+        let xa = arr(g, x)?.a;
+        let gp = g.op(format!("getelementptr inbounds i64, ptr {}, i64 {}", xa, jv))?;
+        let v = g.op(format!("load i64, ptr {}", gp))?;
+        xs.insert(x.clone(), v);
+    }
+    let kv = g.op(format!("sext i64 {} to i128", jv))?;
+    let mut acc = g.op(format!("load i1, ptr {}", bad))?;
+    for r in &f.requires[plan.start..] {
+        let qn = match r {
+            Expr::Quant(qn) => qn,
+            _ => return Err("llvmgen: internal error: fuse requires".to_string()),
+        };
+        let pv = g.cfast(&qn.body, &qn.var, &kv, &jv, Some(&xs))?;
+        let nv = g.op(format!("xor i1 {}, true", pv))?;
+        acc = g.op(format!("or i1 {}, {}", acc, nv))?;
+    }
+    g.ins(format!("store i1 {}, ptr {}", acc, bad))?;
+    let ev = fuse_elem_ll(g, &plan.elem, &xs)?;
+    let gp = g.op(format!("getelementptr inbounds i64, ptr {}, i64 {}", p, jv))?;
+    g.ins(format!("store i64 {}, ptr {}", ev, gp))?;
+    let j1 = g.op(format!("add i64 {}, 1", jv))?;
+    g.ins(format!("store i64 {}, ptr {}", j1, j))?;
+    g.br(&fc)?;
+    g.place(&fe);
+    let bv = g.op(format!("load i1, ptr {}", bad))?;
+    g.condbr(&bv, &ff, &fr)?;
+    g.place(&fr);
+    let a = g.op(format!("insertvalue {} undef, ptr {}, 0", ARR, p))?;
+    let r1 = g.op(format!("insertvalue {} {}, i64 {}, 1", ARR, a, n))?;
+    g.term(format!("ret {} {}", ARR, r1))?;
+    g.place(&ff);
+    g.ins(format!("call void @pruv_free(ptr {}, i64 {})", p, n))?;
+    g.br(&slow)?;
+    g.place(&slow);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn entry_of(
     m: &mut Mod,
     tt: &TypeTable,
@@ -3962,6 +4103,7 @@ pub fn entry_of(
     trust: bool,
     budget: u64,
     cost: bool,
+    verified: bool,
 ) -> R<String> {
     let mut g = FnGen::new(m, tt, funcs, f, true);
     let mut params = ir_params(f, tt);
@@ -3974,7 +4116,14 @@ pub fn entry_of(
         g.budget = Some(bname.clone());
         g.allocas.push(format!("{} = alloca i64", bname));
         g.ins(format!("store i64 {}, ptr {}", budget, bname))?;
-        for r in f.requires.iter().filter(|_| !trust) {
+        // P3-F1: verified checked entries
+        let plan = if verified && !trust && !cost { fuse_plan_ll(&*g.m, f) } else { None };
+        for (k, r) in f.requires.iter().enumerate().filter(|_| !trust) {
+            if let Some(p) = &plan {
+                if k == p.start {
+                    fuse_ll(&mut g, f, p)?;
+                }
+            }
             let c = g.cregion(&|g2| g2.cev(r))?;
             // G4: the source-qualified identity, not the stem
             let disp = g.m.fn_disp.get(&f.name).cloned().unwrap_or_else(|| f.name.clone());
@@ -4900,10 +5049,10 @@ fn gen_llvm_body(
             mangle(&f.name),
             sig_text(&params, Some(f))
         ));
-        if cost { chunks.push(entry_of(&mut m, &tt, &funcs, f, trust_callers, budget, true)?); }
+        if cost { chunks.push(entry_of(&mut m, &tt, &funcs, f, trust_callers, budget, true, false)?); }
         chunks.push(body);
         if !verified && !f.requires.is_empty() && par_targets.contains(&f.name) {
-            chunks.push(entry_of(&mut m, &tt, &funcs, f, false, budget, false)?.replace(
+            chunks.push(entry_of(&mut m, &tt, &funcs, f, false, budget, false, false)?.replace(
                 &format!("@{}__pruv_entry(", mangle(&f.name)),
                 &format!("@{}__pruv_par_chk(", mangle(&f.name))));
         }
@@ -4913,7 +5062,7 @@ fn gen_llvm_body(
             let host = hosts.get(fi).copied().unwrap_or(false);
             let checked = checked_entry(f, host);
             if checked {
-                chunks.push(entry_of(&mut m, &tt, &funcs, f, false, budget, false)?);
+                chunks.push(entry_of(&mut m, &tt, &funcs, f, false, budget, false, verified)?);
             }
             if is_host_abi_fn(f, &tt, true, host) {
                 chunks.push(crate::abi::abi_of_target(
@@ -4937,6 +5086,7 @@ fn gen_llvm_body(
                 (trust_callers && !has_inout(f)) || f.requires.is_empty(),
                 budget,
                 false,
+                verified,
             )?);
         }
         if !crate::emit_common::is_spec_fn(&f.name) && !coll {

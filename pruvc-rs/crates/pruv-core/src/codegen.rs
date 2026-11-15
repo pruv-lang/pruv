@@ -7,7 +7,7 @@
 use crate::ast::*;
 use crate::diagnostic::PruvError;
 use crate::emit_common::{
-    emit_public_types_with, fast_forall, is_spec_fn, is_user_key, key_name, make_type_table, match_sorted_requires, rstr, rty, rty_g,
+    emit_public_types_with, fast_forall, fuse_map, is_spec_fn, is_user_key, key_name, make_type_table, match_sorted_requires, rstr, rty, rty_g,
     show, src_name, try_conv, try_conv_g, try_cty, try_cty_g,
 };
 use crate::foreign::{catalog_fn, is_catalog};
@@ -1100,8 +1100,23 @@ impl<'a> Gen<'a> {
                 let line = format!("let mut pruv_budget: i64 = {};", fmt_underscore(self.budget));
                 self.emit(1, &line);
             }
-            for line in &checks {
-                self.emit(1, line);
+            match self.fuse_plan(f) {
+                None => {
+                    for line in &checks {
+                        self.emit(1, line);
+                    }
+                }
+                Some(plan) => {
+                    // P3-F1: prefix requires, fused path, then the unchanged trailing requires (the slow path)
+                    for line in &checks[..plan.start] {
+                        self.emit(1, line);
+                    }
+                    let text = self.fuse_text(f, &plan)?;
+                    self.emit(1, &text);
+                    for line in &checks[plan.start..] {
+                        self.emit(1, line);
+                    }
+                }
             }
         }
         let args = join_map(&f.params, ", ", |p| {
@@ -1111,6 +1126,126 @@ impl<'a> Gen<'a> {
         self.emit(0, "}");
         self.emit(0, "");
         Ok(())
+    }
+
+    /// P3-F1: fuse_map(f) of a verified build whose result and parameter arrays are plain i64 heap arrays, else None
+    fn fuse_plan(&self, f: &Function) -> Option<crate::emit_common::FusePlan> {
+        if !self.verified {
+            return None;
+        }
+        let plan = fuse_map(f)?;
+        let l = match f.body.first() {
+            Some(Stmt::Let(l)) => l,
+            _ => return None,
+        };
+        if self.stack.contains(l) {
+            return None;
+        }
+        if self.layout_node(f) != "i64" || self.layout(&l.value) != "i64" {
+            return None;
+        }
+        if plan.arrs.iter().any(|x| self.storage.parameter(&f.name, x) != "i64") {
+            return None;
+        }
+        Some(plan)
+    }
+
+    /// width of a Function node (Python `s.layout(f)`: a non-Var node is its storage layout)
+    fn layout_node(&self, f: &Function) -> &'static str {
+        self.storage.layout_of(f)
+    }
+
+    /// P3-F1: the branch-free forall body of a fused path (like cfast); x[t] reads pruv_fxK, t (var) is pruv_fj
+    fn cfuse(&mut self, e: &Expr, var: &str, plan: &crate::emit_common::FusePlan) -> R<String> {
+        match e {
+            Expr::Unary(u) => Ok(format!("(!{})", self.cfuse(&u.operand, var, plan)?)),
+            Expr::Binary(b) if b.op == "&&" || b.op == "||" || b.op == "==>" => {
+                let l = self.cfuse(&b.left, var, plan)?;
+                let r = self.cfuse(&b.right, var, plan)?;
+                if b.op == "==>" {
+                    return Ok(format!("((!{}) | {})", l, r));
+                }
+                Ok(format!("({} {} {})", l, if b.op == "&&" { "&" } else { "|" }, r))
+            }
+            Expr::Binary(b) => {
+                let l = self.cfuse(&b.left, var, plan)?;
+                let r = self.cfuse(&b.right, var, plan)?;
+                Ok(format!("({} {} {})", l, b.op, r))
+            }
+            Expr::Index(ix) => {
+                let name = match &*ix.array {
+                    Expr::Var(v) => v.name.as_str(),
+                    _ => return Err("codegen: internal error: fuse array".to_string()),
+                };
+                match plan.arrs.iter().position(|a| a == name) {
+                    Some(k) => Ok(format!("(pruv_fx{} as i128)", k)),
+                    None => Err("codegen: internal error: fuse array".to_string()),
+                }
+            }
+            Expr::Var(v) if v.name == var => Ok("(pruv_fj as i128)".to_string()),
+            _ => self.c(e),
+        }
+    }
+
+    /// P3-F1: the map element expression with wrapping i64 arithmetic
+    fn fuse_elem(&self, e: &Expr, plan: &crate::emit_common::FusePlan) -> R<String> {
+        match e {
+            Expr::IntLit(l) => Ok(if l.value.starts_with('-') { format!("({}i64)", l.value) } else { format!("{}i64", l.value) }),
+            Expr::Index(ix) => {
+                let name = match &*ix.array {
+                    Expr::Var(v) => v.name.as_str(),
+                    _ => return Err("codegen: internal error: fuse array".to_string()),
+                };
+                match plan.arrs.iter().position(|a| a == name) {
+                    Some(k) => Ok(format!("pruv_fx{}", k)),
+                    None => Err("codegen: internal error: fuse array".to_string()),
+                }
+            }
+            Expr::Binary(b) => {
+                let name = match b.op.as_str() {
+                    "+" => "wrapping_add",
+                    "-" => "wrapping_sub",
+                    "*" => "wrapping_mul",
+                    other => return Err(format!("'{}'", other)),
+                };
+                Ok(format!("({}).{}({})", self.fuse_elem(&b.left, plan)?, name, self.fuse_elem(&b.right, plan)?))
+            }
+            other => Err(format!("codegen: internal error: fuse element {:?}", other)),
+        }
+    }
+
+    /// P3-F1: the one-line fused path (docs/P3_FUSE_DESIGN.md decision 4)
+    fn fuse_text(&mut self, f: &Function, plan: &crate::emit_common::FusePlan) -> R<String> {
+        let mut preds: Vec<String> = Vec::new();
+        for r in &f.requires[plan.start..] {
+            match r {
+                Expr::Quant(q) => preds.push(self.cfuse(&q.body, &q.var, plan)?),
+                _ => return Err("codegen: internal error: fuse requires".to_string()),
+            }
+        }
+        let mut guards: Vec<String> =
+            plan.arrs.iter().filter(|x| **x != plan.n_arr).map(|x| format!("{}.len() == pruv_fn", x)).collect();
+        guards.push(format!("({}i128 * (pruv_fn as i128)) <= (pruv_budget as i128)", plan.arrs.len()));
+        let mut loads = String::new();
+        for (k, x) in plan.arrs.iter().enumerate() {
+            loads.push_str(&format!("let pruv_fx{}: i64 = unsafe {{ *{}.get_unchecked(pruv_fj) }}; ", k, x));
+        }
+        let mut ors = String::new();
+        for p in &preds {
+            ors.push_str(&format!("pruv_fbad |= !({}); ", p));
+        }
+        let elem = self.fuse_elem(&plan.elem, plan)?;
+        Ok(format!(
+            "{{ let pruv_fn: usize = {}.len(); if {} {{ let mut pruv_fc: ::std::vec::Vec<i64> = vec![0i64; pruv_fn]; \
+             let mut pruv_fbad = false; let mut pruv_fj: usize = 0; while pruv_fj < pruv_fn {{ {}{}\
+             unsafe {{ *pruv_fc.get_unchecked_mut(pruv_fj) = {}; }} pruv_fj += 1; }} \
+             if !pruv_fbad {{ return pruv_fc; }} }} }}",
+            plan.n_arr,
+            guards.join(" && "),
+            loads,
+            ors,
+            elem
+        ))
     }
 
     // ---------- contract (requires) evaluation, i128 ----------

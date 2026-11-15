@@ -645,3 +645,165 @@ pub fn fast_forall(e: &Quant, arr_ok: &dyn Fn(&Expr) -> bool) -> Option<Vec<(Str
     let mut reads = Vec::new();
     if pred(&e.body, e, arr_ok, &mut reads) { Some(reads) } else { None }
 }
+
+/// P3-F1 (codegen.py FusePlan): `start` = index of the first requires of the trailing run, `arrs` = the arrays of that run
+/// in order, `n_arr` = X (the array whose length is the result length), `elem` = the map element expression E,
+/// `idx` = the loop variable name.
+#[derive(Debug, Clone)]
+pub struct FusePlan {
+    pub start: usize,
+    pub arrs: Vec<String>,
+    pub n_arr: String,
+    pub elem: Expr,
+    pub idx: String,
+}
+
+/// P3-F1 (codegen.py fuse_map, docs/P3_FUSE_DESIGN.md decision 1): the plan of a fused requires check for an element-wise
+/// map, or None. Purely syntactic. f returns [i64], has requires, no cost clause, no inout parameter, no refinement; its
+/// maximal trailing run of requires f.requires[start..] are all `forall t in 0..len(x): P` over distinct [i64] parameters x
+/// that fast_forall accepts reading exactly x[t]; its body is exactly
+///     let c: [i64] = alloc(len(X), v); let i: i64 = 0;
+///     while i < len(X) { c[i] = E; i = i + 1; }  return c;
+/// with X one of those arrays and E built from + - *, integer literals and x[i] for x among them.
+pub fn fuse_map(f: &Function) -> Option<FusePlan> {
+    if f.requires.is_empty() || f.cost.is_some() || f.ret != "array" || f.ret_refine.is_some() {
+        return None;
+    }
+    if f.params.iter().any(|p| p.mode_pos.is_some() || p.refine.is_some()) {
+        return None;
+    }
+    let arrp: Vec<&str> = f.params.iter().filter(|p| p.ty == "array").map(|p| p.name.as_str()).collect();
+    let mut start = f.requires.len();
+    let mut arrs: Vec<String> = Vec::new();
+    for r in f.requires.iter().rev() {
+        let q = match r {
+            Expr::Quant(q) => q,
+            _ => break,
+        };
+        if q.kind != "forall" {
+            break;
+        }
+        match &*q.lo {
+            Expr::IntLit(l) if l.value == "0" => {}
+            _ => break,
+        }
+        let x = match &*q.hi {
+            Expr::Call(c) if c.name == "len" && c.args.len() == 1 => match &c.args[0] {
+                Expr::Var(v) => v.name.clone(),
+                _ => break,
+            },
+            _ => break,
+        };
+        let ok = |a: &Expr| matches!(a, Expr::Var(v) if arrp.contains(&v.name.as_str()));
+        if !arrp.contains(&x.as_str()) || fast_forall(q, &ok) != Some(vec![(x.clone(), 0)]) {
+            break;
+        }
+        start -= 1;
+        arrs.insert(0, x);
+    }
+    if start == f.requires.len() {
+        return None;
+    }
+    for (k, a) in arrs.iter().enumerate() {
+        if arrs[..k].contains(a) {
+            return None;
+        }
+    }
+    if f.body.len() != 4 {
+        return None;
+    }
+    let (s1, s2, s3, s4) = (&f.body[0], &f.body[1], &f.body[2], &f.body[3]);
+    let s1 = match s1 {
+        Stmt::Let(l) => l,
+        _ => return None,
+    };
+    if !(s1.ty == "array" && s1.refine.is_none()) {
+        return None;
+    }
+    let n = match &s1.value {
+        Expr::Call(c) if c.name == "alloc" && c.args.len() == 2 && matches!(c.args[1], Expr::IntLit(_)) => &c.args[0],
+        _ => return None,
+    };
+    let c = s1.name.as_str();
+    let xn = match n {
+        Expr::Call(l) if l.name == "len" && l.args.len() == 1 => match &l.args[0] {
+            Expr::Var(v) => v.name.clone(),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let s2 = match s2 {
+        Stmt::Let(l) if l.ty == "i64" && l.refine.is_none() && matches!(&l.value, Expr::IntLit(v) if v.value == "0") => l,
+        _ => return None,
+    };
+    let i = s2.name.as_str();
+    if !arrs.contains(&xn)
+        || i == c
+        || arrp.contains(&c)
+        || arrp.contains(&i)
+        || f.params.iter().any(|p| p.name == c)
+        || f.params.iter().any(|p| p.name == i)
+    {
+        return None;
+    }
+    let w = match s3 {
+        Stmt::While(w) => w,
+        _ => return None,
+    };
+    let cond_ok = match &w.cond {
+        Expr::Binary(b) if b.op == "<" => {
+            matches!(&*b.left, Expr::Var(v) if v.name == i)
+                && match &*b.right {
+                    Expr::Call(l) if l.name == "len" && l.args.len() == 1 => {
+                        matches!(&l.args[0], Expr::Var(v) if v.name == xn)
+                    }
+                    _ => false,
+                }
+        }
+        _ => false,
+    };
+    if !cond_ok || w.body.len() != 2 {
+        return None;
+    }
+    let st = match &w.body[0] {
+        Stmt::IndexAssign(st)
+            if st.name == c && matches!(&st.index, Expr::Var(v) if v.name == i) && st.elem_refine.is_none() =>
+        {
+            st
+        }
+        _ => return None,
+    };
+    let inc_ok = match &w.body[1] {
+        Stmt::Assign(a) if a.name == i => match &a.value {
+            Expr::Binary(b) if b.op == "+" => {
+                matches!(&*b.left, Expr::Var(v) if v.name == i) && matches!(&*b.right, Expr::IntLit(l) if l.value == "1")
+            }
+            _ => false,
+        },
+        _ => false,
+    };
+    if !inc_ok {
+        return None;
+    }
+    match s4 {
+        Stmt::Return(r) if matches!(&r.value, Some(Expr::Var(v)) if v.name == c) => {}
+        _ => return None,
+    }
+    fn elem_ok(e: &Expr, arrs: &[String], i: &str) -> bool {
+        match e {
+            Expr::IntLit(_) => true,
+            Expr::Binary(b) => {
+                (b.op == "+" || b.op == "-" || b.op == "*") && elem_ok(&b.left, arrs, i) && elem_ok(&b.right, arrs, i)
+            }
+            Expr::Index(ix) => {
+                matches!(&*ix.array, Expr::Var(v) if arrs.contains(&v.name))
+                    && matches!(&*ix.index, Expr::Var(v) if v.name == i)
+            }
+            _ => false,
+        }
+    }
+    if !elem_ok(&st.value, &arrs, i) {
+        return None;
+    }
+    Some(FusePlan { start, arrs, n_arr: xn, elem: st.value.clone(), idx: i.to_string() })
+}
