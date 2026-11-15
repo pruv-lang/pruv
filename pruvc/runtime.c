@@ -185,6 +185,58 @@ static int64_t *pruv_raw_alloc(int64_t len, int zeroed) {
     return p;
 }
 
+/* P3: a small per-thread cache of freed blocks. pruv_free / pruv_free_v2 park a block of at most
+ * PRUV_FC_MAX_BYTES bytes here (up to PRUV_FC_SLOTS per 8-byte size class, PRUV_FC_BUDGET bytes per thread)
+ * instead of releasing it, and pruv_raw_alloc_v3 / pruv_raw_alloc_zeroed_v3 hand back a parked block with the
+ * same byte count and alignment (zeroed for the _zeroed entry). A block keeps the layout it was allocated with,
+ * so a reused block may still be adopted by Rust (Vec::from_raw_parts) or freed by the host with that layout.
+ * Under -DPRUV_COUNT_ALLOCS a reuse counts as an allocation and a parked free as a free, so the balance line
+ * is unchanged. Parked blocks are not released at thread exit (at most PRUV_FC_BUDGET bytes per thread). */
+#define PRUV_FC_MAX_BYTES 1024
+#define PRUV_FC_SLOTS 4
+#define PRUV_FC_BUDGET 65536
+typedef struct {
+    void *p[PRUV_FC_SLOTS];
+    uint32_t bytes[PRUV_FC_SLOTS];
+    uint32_t align[PRUV_FC_SLOTS];
+    int n;
+} pruv_fc_class;
+static _Thread_local pruv_fc_class pruv_fc[PRUV_FC_MAX_BYTES / 8];
+static _Thread_local uint64_t pruv_fc_parked;
+
+static inline void *pruv_fc_take(uint64_t bytes, int64_t align) {
+    if (bytes == 0 || bytes > PRUV_FC_MAX_BYTES) return NULL;
+    pruv_fc_class *c = &pruv_fc[(bytes - 1) >> 3];
+    for (int i = c->n - 1; i >= 0; i--) {
+        if (c->bytes[i] == (uint32_t)bytes && c->align[i] == (uint32_t)align) {
+            void *p = c->p[i];
+            c->n--;
+            c->p[i] = c->p[c->n];
+            c->bytes[i] = c->bytes[c->n];
+            c->align[i] = c->align[c->n];
+            pruv_fc_parked -= bytes;
+#ifdef PRUV_COUNT_ALLOCS
+            pruv_n_allocs++;
+#endif
+            return p;
+        }
+    }
+    return NULL;
+}
+
+/* returns 1 if the block was parked (the caller must not release it) */
+static inline int pruv_fc_park(void *p, uint64_t bytes, int64_t align) {
+    if (bytes == 0 || bytes > PRUV_FC_MAX_BYTES || pruv_fc_parked + bytes > PRUV_FC_BUDGET) return 0;
+    pruv_fc_class *c = &pruv_fc[(bytes - 1) >> 3];
+    if (c->n >= PRUV_FC_SLOTS) return 0;
+    c->p[c->n] = p;
+    c->bytes[c->n] = (uint32_t)bytes;
+    c->align[c->n] = (uint32_t)align;
+    c->n++;
+    pruv_fc_parked += bytes;
+    return 1;
+}
+
 int64_t *pruv_alloc(int64_t len, int64_t value) {
     if (len <= 0) return NULL;
     if (value == 0) return pruv_raw_alloc(len, 1);
@@ -205,6 +257,7 @@ void pruv_free(int64_t *data, int64_t len) {
     if (data) pruv_n_frees++;
 #endif
     if (!data || len <= 0) return;
+    if ((uint64_t)len <= PRUV_FC_MAX_BYTES && pruv_fc_park(data, (uint64_t)len * 8u, 8)) return;
 #ifdef PRUV_RUST_ALLOCATOR
     pruv_host_free(data, len);
 #else
@@ -251,10 +304,18 @@ static void *pruv_raw_alloc_v2(int64_t len, int64_t size, int64_t align, int zer
  * (llvmgen DECLS). The caller has already returned NULL for len <= 0 and panicked for a len above the runtime's
  * bound (INT64_MAX / 8 for 8-byte elements, PRUV_MAX_LEN otherwise), and passes a constant valid layout. */
 void *pruv_raw_alloc_v3(int64_t len, int64_t size, int64_t align) {
+    if ((uint64_t)len <= PRUV_FC_MAX_BYTES) {
+        void *c = pruv_fc_take((uint64_t)len * (uint64_t)size, align);
+        if (c) return c;
+    }
     return pruv_sys_alloc_v2(len, size, align, 0);
 }
 
 void *pruv_raw_alloc_zeroed_v3(int64_t len, int64_t size, int64_t align) {
+    if ((uint64_t)len <= PRUV_FC_MAX_BYTES) {
+        void *c = pruv_fc_take((uint64_t)len * (uint64_t)size, align);
+        if (c) return memset(c, 0, (size_t)len * (size_t)size);
+    }
     return pruv_sys_alloc_v2(len, size, align, 1);
 }
 
@@ -309,6 +370,7 @@ void pruv_free_v2(void *data, int64_t len, int64_t size, int64_t align) {
     if (data) pruv_n_frees++;
 #endif
     if (!data || len <= 0) return;
+    if ((uint64_t)len <= PRUV_FC_MAX_BYTES && (uint64_t)size <= 8 && pruv_fc_park(data, (uint64_t)len * (uint64_t)size, align)) return;
 #ifdef PRUV_RUST_ALLOCATOR
     pruv_host_free_v2(data, len, size, align);
 #else
