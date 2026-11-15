@@ -1,8 +1,12 @@
-// A0 checks signatures and effects before the staging guard.
-fn updates(take l: Loop, data: [u8]) -> Result<i64> ! async, net, proc, alloc {
+// Catalog updates require live slots of the matching kind.
+fn updates(take l: Loop, data: [u8]) -> Result<i64> ! async, net, proc, alloc
+  requires ev_ok(l) && ev_cap(l) > 1
+  requires ev_kind(l, 0) == 1 && ev_write_open(l, 0)
+  requires ev_kind(l, 1) == 3 && ev_write_open(l, 1)
+{
   let mut q: Loop = move l;
   q = ev_shutdown_write(move q, 0);
   q = ev_proc_write(move q, 1, data);
-  q = ev_proc_close_stdin(move q, 1);
+  if ev_write_open(q, 1) { q = ev_proc_close_stdin(move q, 1); }
   return ev_close(move q);
 }

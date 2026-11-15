@@ -1,0 +1,7 @@
+fn bad(take l: Loop) -> Result<i64> ! async, net, proc, alloc
+  requires ev_ok(l)
+{
+  let r: Result<i64> = ev_close(move l);
+  assert is_ok(r);
+  return r;
+}

@@ -1,0 +1,7 @@
+fn bad(take l: Loop) -> Loop ! async, proc, alloc
+  requires ev_ok(l) && ev_kind(l, 0) == 3
+{
+  let q: Loop = ev_proc_read(move l, 0, 1, 16);
+  if ev_size(q) > 0 { assert ev_byte(q, 0) == 65; }
+  return move q;
+}

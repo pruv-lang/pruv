@@ -1,0 +1,14 @@
+fn bad(take l: Loop) -> Result<i64> ! async, net, proc, alloc
+  requires ev_cap(l) == 4 && ev_size(l) == 0
+  requires ev_ok(l)
+  requires ev_kind(l, 0) == 2
+  requires ev_count(l) < ev_cap(l)
+{
+  let a: Loop = ev_accept(move l, 0);
+  let first: i64 = ev_last(a);
+  if !ev_ok(a) { return ev_close(move a); }
+  if ev_count(a) == ev_cap(a) { return ev_close(move a); }
+  let b: Loop = ev_accept(move a, 0);
+  assert first == ev_last(b);
+  return ev_close(move b);
+}

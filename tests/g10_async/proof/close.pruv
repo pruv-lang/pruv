@@ -1,0 +1,9 @@
+fn close(take l: Loop) -> Result<i64> ! async, net, proc, alloc
+  ensures is_ok(result) ==> ok_val(result) == ev_count(l)
+  ensures !is_ok(result) ==> 1 <= err_val(result) && err_val(result) <= 8
+  ensures ev_ok(l) && !is_ok(result) ==> 3 <= err_val(result)
+{ return ev_close(move l); }
+fn failed(take l: Loop) -> Result<i64> ! async, net, proc, alloc
+  requires !ev_ok(l)
+  ensures !is_ok(result)
+{ return ev_close(move l); }

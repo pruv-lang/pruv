@@ -483,6 +483,14 @@ impl<'a> FnVerifier<'a> {
                     ("size".into(), Json::Num(m.eval(&s.buf.n)?.numeral_string()?)),
                 ]))
             }
+            Val::Loop(p) => {
+                let mut fields = Vec::new();
+                for (k, a) in [("error", &p.error), ("cap", &p.cap), ("count", &p.count), ("last", &p.last), ("ev_slot", &p.ev_slot), ("ev_kind_", &p.ev_kind_), ("exit", &p.exit), ("size", &p.buf.n)] {
+                    fields.push((k.into(), Json::Num(m.eval(a)?.numeral_string()?)));
+                }
+                fields.push(("ok".into(), Json::Bool(m.eval(&p.error)?.numeral_string()? == "0")));
+                Some(Json::Obj(fields))
+            }
             Val::Lis(l) => {
                 let err = m.eval(&l.error)?.numeral_string()?;
                 Some(Json::Obj(vec![

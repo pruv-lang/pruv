@@ -1,0 +1,4 @@
+fn snapshot(l: Loop) -> [u8] ! alloc
+  ensures len(result) == ev_size(l)
+  ensures forall i in 0..len(result): result[i] == ev_byte(l, i)
+{ return ev_bytes(l); }

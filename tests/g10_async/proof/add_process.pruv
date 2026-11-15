@@ -1,0 +1,7 @@
+fn check(take l: Loop, take h: Process) -> Loop ! async, net, proc, alloc
+  requires ev_ok(l)
+  requires ev_count(l) < ev_cap(l)
+  requires proc_ok(h)
+  ensures ev_ok(result) ==> ev_count(result) == ev_count(l) + 1
+  ensures ev_ok(result) ==> ev_kind(result, ev_last(result)) == 3
+{ return ev_add_process(move l, move h); }

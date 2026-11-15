@@ -45,6 +45,11 @@ fn line_for(path: &std::ffi::OsStr, o: &Opts) -> String {
     // G9 A2: the Rust backend lowers G9 programs; no guard here (a runtime requires it cannot lower is a Diag below)
     // like Python gen_rust (default foreign checks, no externs; a G6 program is lowered, the manifest is not part of the
     // dump): a generic (or explicit-mode) program is specialized first (a specialization limit is a diagnostic)
+    // G10 async A1: the async staging guard sits at the codegen entry of the driver until A2 lowers Loop
+    if let Some((line, col)) = pruv_core::foreign::first_async_use(&prog) {
+        return obj1("error", pruv_core::diagnostic::PruvError::new("codegen", line, col, "unsupported_type",
+            "Loop and ev_* operations are not implemented in this batch", "wait for G10 async A1-A3").to_json_value());
+    }
     match pruv_core::codegen::gen_rust_any_g4(&prog, g4.as_ref(), o.verified, o.trust_callers, o.budget) {
         Ok(rs) => obj1("rs", Json::Str(rs)),
         Err(pruv_core::codegen::GenError::Diag(e)) => obj1("error", e.to_json_value()),

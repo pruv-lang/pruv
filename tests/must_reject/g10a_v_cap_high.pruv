@@ -1,0 +1,5 @@
+fn bad() -> Result<i64> ! async, net, proc, alloc
+{
+  let q: Loop = ev_new(4097);
+  return ev_close(move q);
+}

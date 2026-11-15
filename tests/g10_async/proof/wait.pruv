@@ -1,0 +1,9 @@
+fn check(take l: Loop) -> Loop ! async, net, proc, alloc
+  requires ev_ok(l)
+  ensures ev_ok(result)
+  ensures -1 <= ev_event_slot(result) && ev_event_slot(result) < ev_cap(result)
+  ensures 1 <= ev_event_kind(result) && ev_event_kind(result) <= 5
+  ensures ev_event_kind(result) == 4 ==> ev_kind(result, ev_event_slot(result)) == 0
+  ensures ev_event_kind(result) == 4 ==> ev_count(result) == ev_count(l) - 1
+  ensures ev_event_kind(result) != 0 ==> ev_kind(l, ev_event_slot(result)) != 0
+{ return ev_wait(move l, -1); }

@@ -1,0 +1,8 @@
+fn bad(take l: Loop) -> Result<i64> ! async, net, proc, alloc
+  requires ev_ok(l)
+  requires ev_kind(l, 0) != 0
+{
+  let q: Loop = ev_remove(move l, 0);
+  let r: Loop = ev_remove(move q, 0);
+  return ev_close(move r);
+}

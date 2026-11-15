@@ -4,7 +4,7 @@ import z3
 from vast import *
 from typeinfo import (TypeTable, is_array, array_elem, array_of, bind_args, substitute, decl_owner, format_type,
                       is_collection)
-from foreign import CATALOG, CATALOG_NAMES, FILE, FILE_OBSERVERS, PROCESS, PROCESS_ARGS, SOCKET, LISTENER
+from foreign import CATALOG, CATALOG_NAMES, FILE, FILE_OBSERVERS, PROCESS, PROCESS_ARGS, SOCKET, LISTENER, LOOP
 
 I64_MIN, I64_MAX = -2 ** 63, 2 ** 63 - 1
 MAX_LEN = 2 ** 40
@@ -558,6 +558,8 @@ class Model:
             return PROCESS_ARGS
         if isinstance(v, Socket):
             return SOCKET
+        if isinstance(v, Loop):
+            return LOOP
         if isinstance(v, Listener):
             return LISTENER
         if isinstance(v, Map):      # G6 A1
@@ -599,7 +601,7 @@ def _partial_here(e, kind):
     if isinstance(e, Call):
         return (e.name in _TAG_FNS or e.name == "file_byte" or e.name in BIT_Z3 or e.name == "load_be"
                 or e.name in _PROC_DOM    # G10 proc A1: the stream / index domains of the Process observers
-                or e.name in _NET_DOM)    # G10 net A1: the index domain of net_byte
+                or e.name in _NET_DOM or e.name in _ASYNC_DOM)    # G10 net A1: the index domain of net_byte
     if isinstance(e, Quant):
         return e.kind in ("max", "min")
     return False
@@ -693,6 +695,34 @@ class Socket:
         s.error, s.write_open, s.eof, s.buf = error, write_open, eof, buf
 
 
+def _wf_loop(p):
+    i = z3.Int("ev.wf.slot")
+    return z3.And(p.error >= 0,
+                  p.error <= 2,
+                  p.cap >= 1,
+                  p.cap <= 4096,
+                  p.count >= 0,
+                  p.count <= p.cap,
+                  p.last >= -1,
+                  p.last < p.cap,
+                  p.ev_slot >= -1,
+                  p.ev_slot < p.cap,
+                  p.ev_kind_ >= 0,
+                  p.ev_kind_ <= 5,
+                  (p.ev_slot == -1) == (p.ev_kind_ == 0),
+                  p.buf.n >= 0,
+                  p.buf.n <= MAX_LEN,
+                  z3.Implies(p.last != -1, z3.Select(p.kind, p.last) != 0),
+                  z3.Implies(p.error != 0, z3.And(p.last == -1, p.ev_slot == -1, p.buf.n == 0)), u8_dom(p.buf),
+                  z3.ForAll([i], z3.Implies(z3.And(i >= 0, i < p.cap), z3.And(z3.Select(p.kind, i) >= 0, z3.Select(p.kind, i) <= 4, z3.Implies(z3.Or(z3.Select(p.eof, i), z3.Select(p.write_open, i)), z3.Or(z3.Select(p.kind, i) == 1, z3.Select(p.kind, i) == 3))))))
+
+
+class Loop:
+    """G10 async public snapshot. Slot arrays are not a count sum."""
+    def __init__(self, **fields):
+        self.__dict__.update(fields)
+
+
 class Listener:
     """G10 net A1 (G10_NET_SPEC 4.1): {error: Int, port: Int}."""
     __slots__ = ("error", "port")
@@ -725,6 +755,7 @@ def _net_keep_buf(r, p):
 _COLL = ("vec", "hashmap", "string", "file")
 _STRING = Type("string")
 # G10 net A1: the observer with an index domain (net_byte), checked like the File byte observer
+_ASYNC_DOM = ("ev_kind", "ev_eof", "ev_write_open", "ev_byte")
 _NET_DOM = ("net_byte",)
 # G10 proc A1: observers with a stream (and index) domain, checked like the File byte observer
 _PROC_DOM = ("proc_eof", "proc_size", "proc_byte")
@@ -794,6 +825,8 @@ def _wf_of(m, ty, v):
         return _wf_proc(v)
     if ty.owner is None and ty.name == "socket":        # G10 net A1 (4.2)
         return _wf_socket(v)
+    if ty.owner is None and ty.name == "loop":
+        return _wf_loop(v)
     if ty.owner is None and ty.name == "listener":      # G10 net A1 (4.2)
         return _wf_listener(v)
     if ty.owner is None and ty.name == "process_args":  # G10 proc A1 (4.3): 0 <= argc <= M
@@ -1021,6 +1054,18 @@ class FnVerifier:
         if ty.owner is None and ty.name == "socket":        # G10 net A1 (4.1): the public state record
             buf = mk_arr(z3.Array(n + ".buf", z3.IntSort(), z3.IntSort()), z3.Int(n + ".buf.len"), base, U8)
             return Socket(z3.Int(n + ".error"), z3.Bool(n + ".write_open"), z3.Bool(n + ".eof"), buf)
+        if ty.owner is None and ty.name == "loop":
+            return Loop(buf=mk_arr(z3.Array(n + ".buf", z3.IntSort(), z3.IntSort()), z3.Int(n + ".buf.len"), base, U8),
+                        error=z3.Int(n + ".error"),
+                        cap=z3.Int(n + ".cap"),
+                        count=z3.Int(n + ".count"),
+                        last=z3.Int(n + ".last"),
+                        ev_slot=z3.Int(n + ".ev_slot"),
+                        ev_kind_=z3.Int(n + ".ev_kind_"),
+                        exit=z3.Int(n + ".exit"),
+                        kind=z3.Array(n + ".kind", z3.IntSort(), z3.IntSort()),
+                        eof=z3.Array(n + ".eof", z3.IntSort(), z3.BoolSort()),
+                        write_open=z3.Array(n + ".write_open", z3.IntSort(), z3.BoolSort()))
         if ty.owner is None and ty.name == "listener":      # G10 net A1 (4.1)
             return Listener(z3.Int(n + ".error"), z3.Int(n + ".port"))
         if ty.owner is None and ty.name in _COLL:   # G6 A1: Vec = [T] array, String = u8 array, HashMap = (d, a, n)
@@ -1221,6 +1266,11 @@ class FnVerifier:
                                  "write_open": z3.is_true(m.eval(v.write_open, model_completion=True)),
                                  "eof": z3.is_true(m.eval(v.eof, model_completion=True)),
                                  "size": m.eval(v.buf.n, model_completion=True).as_long()}
+                elif isinstance(v, Loop):
+                    out[name] = {k: m.eval(getattr(v, k), model_completion=True).as_long()
+                                 for k in ("error", "cap", "count", "last", "ev_slot", "ev_kind_", "exit")}
+                    out[name]["ok"] = out[name]["error"] == 0
+                    out[name]["size"] = m.eval(v.buf.n, model_completion=True).as_long()
                 elif isinstance(v, Listener):
                     err = m.eval(v.error, model_completion=True).as_long()
                     out[name] = {"ok": err == 0, "error": err, "port": m.eval(v.port, model_completion=True).as_long()}
@@ -1551,6 +1601,10 @@ class FnVerifier:
                 if e.name == "proc_byte":
                     i = s.ev(e.args[2], st, g, False, env)
                     parts.append(z3.And(i >= 0, i < _proc_size(pv, sm)))
+            if wo and e.name in _ASYNC_DOM:
+                lv = s.ev(e.args[0], st, g, False, env)
+                i = s.ev(e.args[1], st, g, False, env)
+                parts.append(z3.And(i >= 0, i < (lv.buf.n if e.name == "ev_byte" else lv.cap)))
             if wo and e.name in _NET_DOM:       # G10 net A1 (4.9): net_byte needs a valid index
                 sv = s.ev(e.args[0], st, g, False, env)
                 i = s.ev(e.args[1], st, g, False, env)
@@ -1992,6 +2046,8 @@ class FnVerifier:
 
         if n.startswith("proc_"):
             return s.proc_call(n, e, args, st, g, code, rty)
+        if n.startswith("ev_"):
+            return s.async_call(n, e, args, st, g, code, rty)
         if n.startswith("net_"):
             return s.net_call(n, e, args, st, g, code, rty)
         if n in FILE_OBSERVERS:
@@ -2156,6 +2212,149 @@ class FnVerifier:
         else:
             raise Exception("catalog: " + n)
         return res
+
+    def async_call(s, n, e, args, st, g, code, rty):
+        """G10 async section 4: requires, fresh snapshot, well-formedness, transitions."""
+        def need(ob):
+            if code:
+                s.prove(st, g, ob, e, "call_requires", "precondition of %s (catalog)" % n)
+        if n != "ev_new": p = args[0]
+        if n in ('ev_ok',):
+            return p.error == 0
+        if n in ('ev_error',):
+            return p.error
+        if n in ('ev_cap',):
+            return p.cap
+        if n in ('ev_count',):
+            return p.count
+        if n in ('ev_last',):
+            return p.last
+        if n in ('ev_event_slot',):
+            return p.ev_slot
+        if n in ('ev_event_kind',):
+            return p.ev_kind_
+        if n in ('ev_exit',):
+            return p.exit
+        if n in ('ev_size',):
+            return p.buf.n
+        if n in ('ev_kind', 'ev_eof', 'ev_write_open', 'ev_byte'):
+            i = args[1]
+            need(z3.And(i >= 0, i < (p.buf.n if n == "ev_byte" else p.cap)))
+            return z3.Select({"ev_kind": p.kind, "ev_eof": p.eof, "ev_write_open": p.write_open, "ev_byte": p.buf.a}[n], i)
+        if n in ('ev_bytes',):
+            return mk_arr(p.buf.a, p.buf.n, n, U8)
+        if n == "ev_new":
+            cap = args[0]
+            need(z3.And(cap >= 1, cap <= 4096))
+            r = s.fresh(n, rty)
+            s.assume(st, g, _wf_loop(r))
+            s.assume(st, g, r.error == 0)
+            s.assume(st, g, r.cap == cap)
+            s.assume(st, g, r.count == 0)
+            s.assume(st, g, r.last == -1)
+            s.assume(st, g, r.ev_slot == -1)
+            s.assume(st, g, r.ev_kind_ == 0)
+            s.assume(st, g, r.exit == 0)
+            s.assume(st, g, r.buf.n == 0)
+            s.assume(st, g, r.kind == z3.K(z3.IntSort(), 0))
+            s.assume(st, g, r.eof == z3.K(z3.IntSort(), False))
+            s.assume(st, g, r.write_open == z3.K(z3.IntSort(), False))
+            return r
+        if n in ('ev_close',):
+            res = s.fresh(n, rty)
+            o = s.model.res(None)
+            s.assume(st, g, z3.Implies(p.error != 0, o.is_err(res)))
+            s.assume(st, g, z3.Implies(o.is_ok(res), z3.And(p.error == 0, o.oval(res) == p.count)))
+            s.assume(st, g, z3.Implies(o.is_err(res), z3.And(o.eval(res) >= z3.If(p.error == 0, 3, 1), o.eval(res) <= 8)))
+            return res
+        need(p.error == 0)
+        if n in ('ev_add_socket', 'ev_add_listener', 'ev_add_process', 'ev_add_timer', 'ev_accept'):
+            need(p.count < p.cap)
+        if n in ('ev_add_socket',):
+            h = args[1]
+            need(h.error == 0)
+        if n in ('ev_add_listener',):
+            h = args[1]
+            need(h.error == 0)
+        if n in ('ev_add_process',):
+            h = args[1]
+            need(h.error == 0)
+        if n in ('ev_add_timer', 'ev_wait'):
+            ms = args[1]
+            need(z3.And(ms >= (-1 if n == "ev_wait" else 0), ms <= 86400000))
+        if n in ('ev_read', 'ev_write', 'ev_shutdown_write', 'ev_accept', 'ev_proc_read', 'ev_proc_write', 'ev_proc_close_stdin', 'ev_proc_wait', 'ev_remove'):
+            i = args[1]
+            need(z3.And(i >= 0, i < p.cap))
+            k = z3.Select(p.kind, i)
+            expected = 2 if n == "ev_accept" else 3 if n.startswith("ev_proc_") else 1
+            need(k != 0 if n == "ev_remove" else k == expected)
+        if n in ('ev_write', 'ev_shutdown_write', 'ev_proc_write', 'ev_proc_close_stdin'):
+            i = args[1]
+            need(z3.Select(p.write_open, i))
+        if n in ('ev_read', 'ev_proc_read'):
+            mx = args[-1]
+            need(z3.And(mx > 0, mx <= MAX_LEN))
+        if n in ('ev_proc_read',):
+            stream = args[2]
+            need(z3.Or(stream == 1, stream == 2))
+        r = s.fresh(n, rty)
+        s.assume(st, g, _wf_loop(r))
+        s.assume(st, g, r.cap == p.cap)
+        if n in ('ev_add_socket', 'ev_add_listener', 'ev_add_process', 'ev_add_timer', 'ev_accept'):
+            a = r.last
+            ok = r.error == 0
+            added = z3.And(ok, a != -1)
+            k = 4 if n == "ev_add_timer" else 3 if n == "ev_add_process" else 2 if n == "ev_add_listener" else 1
+            s.assume(st, g, z3.Implies(added, z3.And(a >= 0, a < p.cap, z3.Select(p.kind, a) == 0, r.count == p.count + 1, r.kind == z3.Store(p.kind, a, k), r.eof == z3.Store(p.eof, a, False))))
+            s.assume(st, g, z3.Implies(z3.Not(added), z3.And(r.last == -1, r.count == p.count, r.kind == p.kind, r.eof == p.eof, r.write_open == p.write_open)))
+            opened = args[1].write_open if n == "ev_add_socket" else args[1].stdin_open if n == "ev_add_process" else z3.BoolVal(n == "ev_accept")
+            s.assume(st, g, z3.Implies(added, r.write_open == z3.Store(p.write_open, a, opened)))
+            if n != "ev_accept": s.assume(st, g, z3.Implies(ok, a != -1))
+            if n == "ev_add_timer": s.assume(st, g, ok)
+        else:
+            s.assume(st, g, r.error == 0)
+            s.assume(st, g, r.last == -1)
+        if n in ('ev_wait',):
+            i, k = r.ev_slot, r.ev_kind_
+            ms = args[1]
+            s.assume(st, g, z3.Implies(ms == -1, k != 0))
+            s.assume(st, g, z3.Implies(z3.Or(k == 1, k == 3), z3.Or(z3.Select(p.kind, i) == 1, z3.Select(p.kind, i) == 3)))
+            s.assume(st, g, z3.Implies(k == 2, z3.Select(p.kind, i) == 2))
+            s.assume(st, g, z3.Implies(k == 4, z3.Select(p.kind, i) == 4))
+            s.assume(st, g, z3.Implies(k == 5, z3.And(z3.Select(p.kind, i) >= 1, z3.Select(p.kind, i) <= 3)))
+            s.assume(st, g, z3.Implies(k == 4, z3.And(r.kind == z3.Store(p.kind, i, 0), r.eof == z3.Store(p.eof, i, False), r.write_open == z3.Store(p.write_open, i, False), r.count == p.count - 1)))
+            s.assume(st, g, z3.Implies(k != 4, z3.And(r.kind == p.kind, r.count == p.count)))
+            s.assume(st, g, z3.Implies(k == 5, z3.And(r.eof == z3.Store(p.eof, i, False), r.write_open == z3.Store(p.write_open, i, False))))
+            s.assume(st, g, z3.Implies(z3.And(k != 4, k != 5), z3.And(r.eof == p.eof, r.write_open == p.write_open)))
+        if n in ('ev_read', 'ev_write', 'ev_shutdown_write', 'ev_proc_read', 'ev_proc_write', 'ev_proc_close_stdin', 'ev_proc_wait', 'ev_remove'):
+            i = args[1]
+            freed = n in ("ev_remove", "ev_proc_wait")
+            k = z3.IntVal(0) if freed else z3.Select(p.kind, i)
+            s.assume(st, g, r.kind == z3.Store(p.kind, i, k))
+            s.assume(st, g, r.eof == z3.Store(p.eof, i, z3.Select(r.eof, i)))
+            s.assume(st, g, r.write_open == z3.Store(p.write_open, i, z3.Select(r.write_open, i)))
+            s.assume(st, g, r.count == (p.count - 1 if freed else p.count))
+            if freed:
+                s.assume(st, g, z3.Not(z3.Select(r.eof, i)))
+                s.assume(st, g, z3.Not(z3.Select(r.write_open, i)))
+            elif n in ("ev_read", "ev_proc_read"):
+                mx = args[-1]
+                s.assume(st, g, r.buf.n <= mx)
+                s.assume(st, g, z3.Implies(z3.Select(p.eof, i), z3.Select(r.eof, i)))
+                s.assume(st, g, z3.Implies(z3.Select(r.eof, i), r.buf.n == 0))
+                s.assume(st, g, z3.Implies(z3.Select(r.write_open, i), z3.Select(p.write_open, i)))
+            else:
+                s.assume(st, g, z3.Select(r.eof, i) == z3.Select(p.eof, i))
+            if n in ("ev_shutdown_write", "ev_proc_close_stdin"): s.assume(st, g, z3.Not(z3.Select(r.write_open, i)))
+        if n != "ev_wait":
+            s.assume(st, g, z3.Implies(r.error == 0, r.ev_slot == p.ev_slot))
+            s.assume(st, g, z3.Implies(r.error == 0, r.ev_kind_ == p.ev_kind_))
+        if n != "ev_proc_wait":
+            s.assume(st, g, r.exit == p.exit)
+        if n not in ("ev_read", "ev_proc_read"):
+            s.assume(st, g, z3.Implies(r.error == 0, r.buf.n == p.buf.n))
+            s.assume(st, g, z3.Implies(r.error == 0, r.buf.a == p.buf.a))
+        return r
 
     def net_call(s, n, e, args, st, g, code, rty):
         """G10 net A1 (G10_NET_SPEC 2.3, 2.4, 4): the catalog contracts of the net operations. The requires of an
@@ -2366,8 +2565,8 @@ class FnVerifier:
                 nv = s.fresh(n, pty)
                 h.pc.append(s.wf(pty, nv))
                 h.env[n] = nv
-            elif isinstance(old, (Socket, Listener)):   # G10 net A1 (4.8): only well-formedness survives
-                nty = SOCKET if isinstance(old, Socket) else LISTENER
+            elif isinstance(old, (Socket, Listener, Loop)):   # G10 net A1 (4.8): only well-formedness survives
+                nty = LOOP if isinstance(old, Loop) else SOCKET if isinstance(old, Socket) else LISTENER
                 nv = s.fresh(n, nty)
                 h.pc.append(s.wf(nty, nv))
                 h.env[n] = nv

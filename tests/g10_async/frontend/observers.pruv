@@ -1,5 +1,7 @@
 fn inspect(l: Loop, i: i64) -> i64
   requires ev_ok(l) && ev_cap(l) > 0 && ev_count(l) >= 0
+  requires 0 <= i && i < ev_cap(l) && i < ev_size(l)
+  requires ev_exit(l) == 0 && ev_size(l) <= 1024
   requires ev_kind(l, i) >= 0 && !ev_eof(l, i) && ev_write_open(l, i)
   ensures result == ev_last(l) + ev_event_slot(l) + ev_event_kind(l) + ev_error(l) + ev_size(l) + ev_byte(l, i) + ev_exit(l)
 { return ev_last(l) + ev_event_slot(l) + ev_event_kind(l) + ev_error(l) + ev_size(l) + ev_byte(l, i) + ev_exit(l); }

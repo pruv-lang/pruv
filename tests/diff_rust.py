@@ -43,6 +43,7 @@ from vast import PruvError  # noqa: E402
 from check import check  # noqa: E402
 from modules import load_program  # noqa: E402
 from codegen import gen_rust  # noqa: E402
+from foreign import first_async_use  # noqa: E402
 from typeinfo import g9_unimplemented_error  # noqa: E402
 
 BATCH = 200
@@ -281,6 +282,11 @@ def eval_python(c):
         check(prog)
         # G5 A2: the Rust source backend lowers inout programs (no guard; only the llvm backend keeps it until A3)
         # G9 A2: the Rust source backend lowers G9 programs (no guard)
+        # G10 async A1: the async staging guard sits at the codegen entry of the driver until A2 lowers Loop
+        use = first_async_use(prog)
+        if use:
+            raise PruvError("codegen", use[1], use[2], "unsupported_type",
+                            "Loop and ev_* operations are not implemented in this batch", "wait for G10 async A1-A3")
         rs_src = gen_rust(prog, verified=c.verified, trust_callers=c.trust, budget=c.budget)
         obj = {"rs": rs_src}
     except UnicodeDecodeError:

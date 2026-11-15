@@ -1,0 +1,6 @@
+fn create() -> Loop ! async, alloc
+  ensures ev_ok(result) && ev_cap(result) == 4 && ev_count(result) == 0
+  ensures ev_last(result) == -1 && ev_event_slot(result) == -1 && ev_event_kind(result) == 0
+  ensures ev_size(result) == 0 && ev_exit(result) == 0
+  ensures forall i in 0..4: ev_kind(result, i) == 0 && !ev_eof(result, i) && !ev_write_open(result, i)
+{ return ev_new(4); }

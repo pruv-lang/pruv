@@ -1,0 +1,14 @@
+fn bad(take input: Loop) -> Loop ! async, alloc
+  requires ev_ok(input)
+{
+  let mut l: Loop = move input;
+  let mut n: i64 = 1;
+  while n > 0 && ev_ok(l)
+    invariant 0 <= n && n <= 1
+    decreases n
+  {
+    l = ev_wait(move l, 0);
+    if ev_event_kind(l) == 3 { n = 0; }
+  }
+  return move l;
+}

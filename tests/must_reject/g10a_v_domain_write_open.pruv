@@ -1,0 +1,3 @@
+fn bad(l: Loop) -> i64
+  ensures ev_write_open(l, -1) == false
+{ return 0; }

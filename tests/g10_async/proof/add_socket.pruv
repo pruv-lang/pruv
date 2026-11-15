@@ -1,0 +1,7 @@
+fn check(take l: Loop, take h: Socket) -> Loop ! async, net, proc, alloc
+  requires ev_ok(l)
+  requires ev_count(l) < ev_cap(l)
+  requires net_ok(h)
+  ensures ev_ok(result) ==> ev_count(result) == ev_count(l) + 1
+  ensures ev_ok(result) ==> ev_kind(result, ev_last(result)) == 1
+{ return ev_add_socket(move l, move h); }

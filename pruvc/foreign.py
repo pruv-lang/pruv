@@ -125,7 +125,7 @@ _add("net_listener_ok", [], lambda: ([_p("l", LISTENER)], BOOL))
 _add("net_listener_error", [], lambda: ([_p("l", LISTENER)], I64))
 _add("net_listener_port", [], lambda: ([_p("l", LISTENER)], I64))
 
-# G10 async A0: placeholders are protected by the pre-verification staging guard.
+# G10 async A1: full catalog contracts are encoded in the symbolic verifier.
 _add('ev_new', [], lambda: ([_p('cap', I64)], LOOP), ['async', 'alloc'])
 _add('ev_close', [], lambda: ([_p('l', LOOP, True)], RESULT), ['async', 'net', 'proc', 'alloc'])
 _add('ev_add_socket', [], lambda: ([_p('l', LOOP, True), _p('s', SOCKET, True)], LOOP), ['async', 'net', 'alloc'])

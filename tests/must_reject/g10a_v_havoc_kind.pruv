@@ -1,0 +1,18 @@
+fn check(take input: Loop) -> Loop ! async, alloc
+  requires ev_cap(input) == 4 && ev_ok(input) && ev_kind(input, 0) == 1 && ev_count(input) == 1 && ev_size(input) == 1 && ev_eof(input, 0) && ev_event_kind(input) == 1
+{
+  let mut l: Loop = move input;
+  let mut n: i64 = 1;
+  while n > 0
+    invariant ev_cap(l) == 4
+    invariant 0 <= n && n <= 1
+    decreases n
+  { l = pass(move l); n = n - 1; }
+  assert ev_kind(l, 0) == 1;
+  return move l;
+}
+fn pass(take l: Loop) -> Loop
+  ensures ev_cap(result) == ev_cap(l)
+  ensures ev_kind(result, 0) == 1
+  requires ev_kind(l, 0) == 1
+{ return move l; }

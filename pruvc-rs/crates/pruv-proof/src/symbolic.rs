@@ -227,6 +227,8 @@ fn is_proc_dom(n: &str) -> bool {
 }
 
 /// G10 net A1 (verify.py `_NET_DOM`): the Socket observer with an index domain.
+fn is_async_dom(n: &str) -> bool { matches!(n, "ev_kind" | "ev_eof" | "ev_write_open" | "ev_byte") }
+
 fn is_net_dom(n: &str) -> bool {
     n == "net_byte"
 }
@@ -249,7 +251,7 @@ fn partial_here(e: &Expr, kind: PKind) -> bool {
         Expr::Binary(b) => b.op == "/" || b.op == "%",
         Expr::Call(c) => {
             is_tag_fn(&c.name) || c.name == "file_byte" || is_bit_z3(&c.name) || c.name == "load_be" || is_proc_dom(&c.name)
-                || is_net_dom(&c.name)
+                || is_net_dom(&c.name) || is_async_dom(&c.name)
         }
         Expr::Quant(q) => q.kind == "max" || q.kind == "min",
         _ => false,
@@ -533,6 +535,21 @@ pub struct LisV {
     pub port: Ast,
 }
 
+#[derive(Clone)]
+pub struct LoopV {
+    pub error: Ast,
+    pub cap: Ast,
+    pub count: Ast,
+    pub last: Ast,
+    pub ev_slot: Ast,
+    pub ev_kind_: Ast,
+    pub exit: Ast,
+    pub kind: Ast,
+    pub eof: Ast,
+    pub write_open: Ast,
+    pub buf: Arr,
+}
+
 /// Environment value. verify.py distinguishes Int/Bool/Datatype by the z3 expression's sort, but here they are carried as tags.
 #[derive(Clone)]
 pub enum Val {
@@ -543,6 +560,7 @@ pub enum Val {
     Sock(SockV),
     /// G10 net A1: a Listener record.
     Lis(LisV),
+    Loop(LoopV),
     /// G10 proc A1: a ProcessArgs value is its argument count only.
     PArgs(Ast),
     Int(Ast),
@@ -560,7 +578,7 @@ impl Val {
     pub fn ast(&self) -> &Ast {
         match self {
             Val::Int(a) | Val::Bool(a) | Val::Dt(a, _) => a,
-            Val::Arr(_) | Val::Map(_) | Val::File(_) | Val::Proc(_) | Val::Sock(_) | Val::Lis(_) | Val::PArgs(_) | Val::Unit => {
+            Val::Arr(_) | Val::Map(_) | Val::File(_) | Val::Proc(_) | Val::Sock(_) | Val::Lis(_) | Val::Loop(_) | Val::PArgs(_) | Val::Unit => {
                 panic!("value has no single ast")
             }
         }
@@ -578,6 +596,7 @@ impl Val {
             Val::File(_) => Err("expected a z3 value, got a file".to_string()),
             Val::Proc(_) => Err("expected a z3 value, got a process".to_string()),
             Val::Sock(_) => Err("expected a z3 value, got a socket".to_string()),
+            Val::Loop(_) => Err("expected a z3 value, got a loop".into()),
             Val::Lis(_) => Err("expected a z3 value, got a listener".to_string()),
             Val::PArgs(_) => Err("expected a z3 value, got process args".to_string()),
             Val::Map(_) => Err("expected a z3 value, got a map".to_string()),
@@ -589,6 +608,9 @@ impl Val {
     }
     pub fn try_sock(&self) -> R<&SockV> {
         match self { Val::Sock(p) => Ok(p), _ => Err("expected a socket".into()) }
+    }
+    pub fn try_loop(&self) -> R<&LoopV> {
+        match self { Val::Loop(p) => Ok(p), _ => Err("expected a loop".into()) }
     }
     pub fn try_lis(&self) -> R<&LisV> {
         match self { Val::Lis(p) => Ok(p), _ => Err("expected a listener".into()) }
@@ -930,6 +952,21 @@ impl<'a> FnVerifier<'a> {
                 write_open: z.bool_const(&format!("{}.write_open", n)),
                 eof: z.bool_const(&format!("{}.eof", n)), buf }));
         }
+        if *ty == Ty::User("loop".into()) {
+            return Ok(Val::Loop(LoopV {
+                error: z.int_const(&format!("{}.error", n)),
+                cap: z.int_const(&format!("{}.cap", n)),
+                count: z.int_const(&format!("{}.count", n)),
+                last: z.int_const(&format!("{}.last", n)),
+                ev_slot: z.int_const(&format!("{}.ev_slot", n)),
+                ev_kind_: z.int_const(&format!("{}.ev_kind_", n)),
+                exit: z.int_const(&format!("{}.exit", n)),
+                kind: z.constant(&format!("{}.kind", n), &z.array_sort(&z.int_sort(), &z.int_sort())),
+                eof: z.constant(&format!("{}.eof", n), &z.array_sort(&z.int_sort(), &z.bool_sort())),
+                write_open: z.constant(&format!("{}.write_open", n), &z.array_sort(&z.int_sort(), &z.bool_sort())),
+                buf: Arr::new(z.constant(&format!("{}.buf", n), &z.array_sort(&z.int_sort(), &z.int_sort())), z.int_const(&format!("{}.buf.len", n)), base.into(), Elem::U8),
+            }));
+        }
         if *ty == Ty::User("listener".into()) {
             return Ok(Val::Lis(LisV { error: z.int_const(&format!("{}.error", n)),
                 port: z.int_const(&format!("{}.port", n)) }));
@@ -1226,6 +1263,7 @@ impl<'a> FnVerifier<'a> {
         if let Val::File(f) = v { return Ok(Some(self.wf_file(f))); }
         if let Val::Proc(p) = v { return Ok(Some(self.wf_proc(p))); }
         if let Val::Sock(p) = v { return Ok(Some(self.wf_sock(p))); }
+        if let Val::Loop(p) = v { return Ok(Some(self.wf_loop(p))); }
         if let Val::Lis(l) = v { return Ok(Some(self.wf_lis(l))); }
         if let Val::PArgs(a) = v { return Ok(Some(self.wf_pargs(a))); }
         if let Val::Arr(a) = v {
@@ -1367,6 +1405,7 @@ impl<'a> FnVerifier<'a> {
                 Val::File(f) => pc.push(self.wf_file(f)),
                 Val::Proc(p) => pc.push(self.wf_proc(p)),
                 Val::Sock(p) => pc.push(self.wf_sock(p)),
+                Val::Loop(p) => pc.push(self.wf_loop(p)),
                 Val::Lis(l) => pc.push(self.wf_lis(l)),
                 Val::PArgs(a) => pc.push(self.wf_pargs(a)),
                 Val::Map(m) => pc.push(self.z.and(&[m.n.ge_i(0), m.n.le_i(MAX_LEN)])),
@@ -1504,6 +1543,11 @@ impl<'a> FnVerifier<'a> {
                 Val::Sock(_) => {
                     let nv = self.try_fresh(n, &Ty::User("socket".into()))?;
                     h.pc.push(self.wf_sock(nv.try_sock()?));
+                    h.env.set(n, nv);
+                }
+                Val::Loop(_) => {
+                    let nv = self.try_fresh(n, &Ty::User("loop".into()))?;
+                    h.pc.push(self.wf_loop(nv.try_loop()?));
                     h.env.set(n, nv);
                 }
                 Val::Lis(_) => {
@@ -2426,6 +2470,8 @@ impl<'a> FnVerifier<'a> {
             self.assume(st, g, self.wf_proc(p));
         } else if let Val::Sock(p) = &res {
             self.assume(st, g, self.wf_sock(p));
+        } else if let Val::Loop(p) = &res {
+            self.assume(st, g, self.wf_loop(p));
         } else if let Val::Lis(l) = &res {
             self.assume(st, g, self.wf_lis(l));
         } else if let Val::PArgs(a) = &res {
@@ -2847,11 +2893,206 @@ impl<'a> FnVerifier<'a> {
         Ok(res)
     }
 
-    /// verify.py `FnVerifier.net_call` (G10_NET_SPEC 2.3, 2.4, 4): the catalog contracts of the net operations. The requires of
-    /// an operation are call_requires obligations in order (code only); an effect operation then gets a fresh result with its
-    /// well-formedness and the ensures facts. The observers and net_bytes are exact terms. Parameter observers in the ensures
-    /// denote the values at call entry (the actuals in args). Every effect result is a fresh symbol: two identical connects or
-    /// accepts are never equated. net_accept borrows its listener: the listener value is not touched.
+    /// G10 async section 4: only public snapshots are constrained.
+    fn wf_loop(&self, p: &LoopV) -> Ast {
+        let z = &self.z;
+        let i = z.int_const("ev.wf.slot");
+        z.and(&[(p.error.clone()).ge(&z.int(0)),
+            (p.error.clone()).le(&z.int(2)),
+            (p.cap.clone()).ge(&z.int(1)),
+            (p.cap.clone()).le(&z.int(4096)),
+            (p.count.clone()).ge(&z.int(0)),
+            (p.count.clone()).le(&p.cap.clone()),
+            (p.last.clone()).ge(&z.int(-1)),
+            (p.last.clone()).lt(&p.cap.clone()),
+            (p.ev_slot.clone()).ge(&z.int(-1)),
+            (p.ev_slot.clone()).lt(&p.cap.clone()),
+            (p.ev_kind_.clone()).ge(&z.int(0)),
+            (p.ev_kind_.clone()).le(&z.int(5)),
+            ((p.ev_slot.clone()).eq(&z.int(-1))).eq(&(p.ev_kind_.clone()).eq(&z.int(0))),
+            (p.buf.n.clone()).ge(&z.int(0)),
+            (p.buf.n.clone()).le(&z.int(MAX_LEN)),
+            ((p.last.clone()).eq(&z.int(-1)).not()).implies(&((p.kind.clone()).select(&p.last.clone())).eq(&z.int(0)).not()),
+            ((p.error.clone()).eq(&z.int(0)).not()).implies(&z.and(&[(p.last.clone()).eq(&z.int(-1)), (p.ev_slot.clone()).eq(&z.int(-1)), (p.buf.n.clone()).eq(&z.int(0))])), self.u8_dom(&p.buf), self.forall_q(&i, &z.int(0), &p.cap, &z.and(&[((p.kind.clone()).select(&i.clone())).ge(&z.int(0)), ((p.kind.clone()).select(&i.clone())).le(&z.int(4)), (z.or(&[(p.eof.clone()).select(&i.clone()), (p.write_open.clone()).select(&i.clone())])).implies(&z.or(&[((p.kind.clone()).select(&i.clone())).eq(&z.int(1)), ((p.kind.clone()).select(&i.clone())).eq(&z.int(3))]))]))])
+    }
+
+    fn async_call(&mut self, e: &Expr, n: &str, args: &[Val], st: &mut State, g: &[Ast], code: bool, rty: Option<Ty>) -> R<Val> {
+        let z = self.z.clone();
+        let what = format!("precondition of {} (catalog)", n);
+        let p = if n != "ev_new" { Some(args[0].try_loop()?.clone()) } else { None };
+        if matches!(n, "ev_ok") {
+            return Ok(Val::Bool(p.as_ref().unwrap().error.eq(&z.int(0))));
+        }
+        if matches!(n, "ev_error") {
+            return Ok(Val::Int(p.as_ref().unwrap().error.clone()));
+        }
+        if matches!(n, "ev_cap") {
+            return Ok(Val::Int(p.as_ref().unwrap().cap.clone()));
+        }
+        if matches!(n, "ev_count") {
+            return Ok(Val::Int(p.as_ref().unwrap().count.clone()));
+        }
+        if matches!(n, "ev_last") {
+            return Ok(Val::Int(p.as_ref().unwrap().last.clone()));
+        }
+        if matches!(n, "ev_event_slot") {
+            return Ok(Val::Int(p.as_ref().unwrap().ev_slot.clone()));
+        }
+        if matches!(n, "ev_event_kind") {
+            return Ok(Val::Int(p.as_ref().unwrap().ev_kind_.clone()));
+        }
+        if matches!(n, "ev_exit") {
+            return Ok(Val::Int(p.as_ref().unwrap().exit.clone()));
+        }
+        if matches!(n, "ev_size") {
+            return Ok(Val::Int(p.as_ref().unwrap().buf.n.clone()));
+        }
+        if matches!(n, "ev_kind" | "ev_eof" | "ev_write_open" | "ev_byte") {
+            let p = p.as_ref().unwrap(); let i = args[1].try_ast()?.clone();
+            self.proc_need(st, g, e, code, &what, z.and(&[i.ge_i(0), i.lt(if n == "ev_byte" { &p.buf.n } else { &p.cap })]));
+            let a = match n { "ev_kind" => &p.kind, "ev_eof" => &p.eof, "ev_write_open" => &p.write_open, _ => &p.buf.a };
+            return Ok(if n == "ev_eof" || n == "ev_write_open" { Val::Bool(a.select(&i)) } else { Val::Int(a.select(&i)) });
+        }
+        if matches!(n, "ev_bytes") {
+            let p = p.as_ref().unwrap(); return Ok(Val::Arr(Arr::new(p.buf.a.clone(), p.buf.n.clone(), n.into(), Elem::U8)));
+        }
+        if n == "ev_new" {
+            let cap = args[0].try_ast()?.clone();
+            self.proc_need(st, g, e, code, &what, z.and(&[(cap.clone()).ge(&z.int(1)), (cap.clone()).le(&z.int(4096))]));
+            let res = self.try_fresh(n, &rty.unwrap())?; let r = res.try_loop()?.clone();
+            self.assume(st, g, self.wf_loop(&r));
+            self.assume(st, g, (r.error.clone()).eq(&z.int(0)));
+            self.assume(st, g, (r.cap.clone()).eq(&cap.clone()));
+            self.assume(st, g, (r.count.clone()).eq(&z.int(0)));
+            self.assume(st, g, (r.last.clone()).eq(&z.int(-1)));
+            self.assume(st, g, (r.ev_slot.clone()).eq(&z.int(-1)));
+            self.assume(st, g, (r.ev_kind_.clone()).eq(&z.int(0)));
+            self.assume(st, g, (r.exit.clone()).eq(&z.int(0)));
+            self.assume(st, g, (r.buf.n.clone()).eq(&z.int(0)));
+            self.assume(st, g, r.kind.eq(&z.const_array(&z.int_sort(), &z.int(0))));
+            self.assume(st, g, r.eof.eq(&z.const_array(&z.int_sort(), &z.bool_val(false))));
+            self.assume(st, g, r.write_open.eq(&z.const_array(&z.int_sort(), &z.bool_val(false))));
+            return Ok(res);
+        }
+        let p = p.unwrap();
+        if matches!(n, "ev_close") {
+            let res = self.try_fresh(n, &rty.unwrap())?; let rv = res.try_ast()?.clone();
+        
+            self.assume(st, g, p.error.ne_i(0).implies(&self.prelude.is_err(&rv)));
+            self.assume(st, g, self.prelude.is_ok(&rv).implies(&z.and(&[p.error.eq(&z.int(0)), self.prelude.oval(&rv).eq(&p.count)])));
+            self.assume(st, g, self.prelude.is_err(&rv).implies(&z.and(&[self.prelude.eval(&rv).ge(&z.ite(&p.error.eq(&z.int(0)), &z.int(3), &z.int(1))), self.prelude.eval(&rv).le_i(8)])));
+            return Ok(res);
+        }
+        self.proc_need(st, g, e, code, &what, (p.error.clone()).eq(&z.int(0)));
+        if matches!(n, "ev_add_socket" | "ev_add_listener" | "ev_add_process" | "ev_add_timer" | "ev_accept") {
+            self.proc_need(st, g, e, code, &what, (p.count.clone()).lt(&p.cap.clone()));
+        }
+        if matches!(n, "ev_add_socket") {
+            let h = args[1].try_sock()?;
+            self.proc_need(st, g, e, code, &what, (h.error.clone()).eq(&z.int(0)));
+        }
+        if matches!(n, "ev_add_listener") {
+            let h = args[1].try_lis()?;
+            self.proc_need(st, g, e, code, &what, (h.error.clone()).eq(&z.int(0)));
+        }
+        if matches!(n, "ev_add_process") {
+            let h = args[1].try_proc()?;
+            self.proc_need(st, g, e, code, &what, (h.error.clone()).eq(&z.int(0)));
+        }
+        if matches!(n, "ev_add_timer" | "ev_wait") {
+            let ms = args[1].try_ast()?.clone();
+            self.proc_need(st,g,e,code,&what,z.and(&[ms.ge_i(if n == "ev_wait" { -1 } else { 0 }),ms.le_i(86400000)]));
+        }
+        if matches!(n, "ev_read" | "ev_write" | "ev_shutdown_write" | "ev_accept" | "ev_proc_read" | "ev_proc_write" | "ev_proc_close_stdin" | "ev_proc_wait" | "ev_remove") {
+            let i = args[1].try_ast()?.clone();
+            self.proc_need(st, g, e, code, &what, z.and(&[(i.clone()).ge(&z.int(0)), (i.clone()).lt(&p.cap.clone())]));
+            let k = p.kind.select(&i);
+            let expected = if n == "ev_accept" { 2 } else if n.starts_with("ev_proc_") { 3 } else { 1 };
+            self.proc_need(st,g,e,code,&what,if n == "ev_remove" { k.ne_i(0) } else { k.eq(&z.int(expected)) });
+        }
+        if matches!(n, "ev_write" | "ev_shutdown_write" | "ev_proc_write" | "ev_proc_close_stdin") {
+            let i = args[1].try_ast()?.clone();
+            self.proc_need(st, g, e, code, &what, (p.write_open.clone()).select(&i.clone()));
+        }
+        if matches!(n, "ev_read" | "ev_proc_read") {
+            let mx = args.last().unwrap().try_ast()?.clone();
+            self.proc_need(st, g, e, code, &what, z.and(&[(mx.clone()).gt(&z.int(0)), (mx.clone()).le(&z.int(MAX_LEN))]));
+        }
+        if matches!(n, "ev_proc_read") {
+            let stream = args[2].try_ast()?.clone();
+            self.proc_need(st, g, e, code, &what, z.or(&[(stream.clone()).eq(&z.int(1)), (stream.clone()).eq(&z.int(2))]));
+        }
+        let res = self.try_fresh(n, &rty.unwrap())?; let r = res.try_loop()?.clone();
+        self.assume(st, g, self.wf_loop(&r));
+        self.assume(st, g, (r.cap.clone()).eq(&p.cap.clone()));
+        if matches!(n, "ev_add_socket" | "ev_add_listener" | "ev_add_process" | "ev_add_timer" | "ev_accept") {
+            let a = r.last.clone();
+            let ok = r.error.eq(&z.int(0));
+            let added = z.and(&[ok.clone(), a.ne_i(-1)]);
+            let k = z.int(if n == "ev_add_timer" { 4 } else if n == "ev_add_process" { 3 } else if n == "ev_add_listener" { 2 } else { 1 });
+            self.assume(st, g, (added.clone()).implies(&z.and(&[(a.clone()).ge(&z.int(0)), (a.clone()).lt(&p.cap.clone()), ((p.kind.clone()).select(&a.clone())).eq(&z.int(0)), (r.count.clone()).eq(&(p.count.clone()).add(&z.int(1))), (r.kind.clone()).eq(&(p.kind.clone()).store(&a.clone(), &k.clone())), (r.eof.clone()).eq(&(p.eof.clone()).store(&a.clone(), &z.bool_val(false)))])));
+            self.assume(st, g, ((added.clone()).not()).implies(&z.and(&[(r.last.clone()).eq(&z.int(-1)), (r.count.clone()).eq(&p.count.clone()), (r.kind.clone()).eq(&p.kind.clone()), (r.eof.clone()).eq(&p.eof.clone()), (r.write_open.clone()).eq(&p.write_open.clone())])));
+            let opened = if n == "ev_add_socket" { args[1].try_sock()?.write_open.clone() } else if n == "ev_add_process" { args[1].try_proc()?.stdin_open.clone() } else { z.bool_val(n == "ev_accept") };
+            self.assume(st, g, (added.clone()).implies(&(r.write_open.clone()).eq(&(p.write_open.clone()).store(&a.clone(), &opened.clone()))));
+            if n != "ev_accept" { self.assume(st,g,ok.implies(&a.ne_i(-1))); }
+            if n == "ev_add_timer" { self.assume(st,g,ok); }
+        }
+        else {
+            self.assume(st, g, (r.error.clone()).eq(&z.int(0)));
+            self.assume(st, g, (r.last.clone()).eq(&z.int(-1)));
+        }
+        if matches!(n, "ev_wait") {
+            let i = r.ev_slot.clone(); let k = r.ev_kind_.clone();
+            let ms = args[1].try_ast()?.clone();
+            self.assume(st, g, ((ms.clone()).eq(&z.int(-1))).implies(&(k.clone()).eq(&z.int(0)).not()));
+            self.assume(st, g, (z.or(&[(k.clone()).eq(&z.int(1)), (k.clone()).eq(&z.int(3))])).implies(&z.or(&[((p.kind.clone()).select(&i.clone())).eq(&z.int(1)), ((p.kind.clone()).select(&i.clone())).eq(&z.int(3))])));
+            self.assume(st, g, ((k.clone()).eq(&z.int(2))).implies(&((p.kind.clone()).select(&i.clone())).eq(&z.int(2))));
+            self.assume(st, g, ((k.clone()).eq(&z.int(4))).implies(&((p.kind.clone()).select(&i.clone())).eq(&z.int(4))));
+            self.assume(st, g, ((k.clone()).eq(&z.int(5))).implies(&z.and(&[((p.kind.clone()).select(&i.clone())).ge(&z.int(1)), ((p.kind.clone()).select(&i.clone())).le(&z.int(3))])));
+            self.assume(st, g, ((k.clone()).eq(&z.int(4))).implies(&z.and(&[(r.kind.clone()).eq(&(p.kind.clone()).store(&i.clone(), &z.int(0))), (r.eof.clone()).eq(&(p.eof.clone()).store(&i.clone(), &z.bool_val(false))), (r.write_open.clone()).eq(&(p.write_open.clone()).store(&i.clone(), &z.bool_val(false))), (r.count.clone()).eq(&(p.count.clone()).sub(&z.int(1)))])));
+            self.assume(st, g, ((k.clone()).eq(&z.int(4)).not()).implies(&z.and(&[(r.kind.clone()).eq(&p.kind.clone()), (r.count.clone()).eq(&p.count.clone())])));
+            self.assume(st, g, ((k.clone()).eq(&z.int(5))).implies(&z.and(&[(r.eof.clone()).eq(&(p.eof.clone()).store(&i.clone(), &z.bool_val(false))), (r.write_open.clone()).eq(&(p.write_open.clone()).store(&i.clone(), &z.bool_val(false)))])));
+            self.assume(st, g, (z.and(&[(k.clone()).eq(&z.int(4)).not(), (k.clone()).eq(&z.int(5)).not()])).implies(&z.and(&[(r.eof.clone()).eq(&p.eof.clone()), (r.write_open.clone()).eq(&p.write_open.clone())])));
+        }
+        if matches!(n, "ev_read" | "ev_write" | "ev_shutdown_write" | "ev_proc_read" | "ev_proc_write" | "ev_proc_close_stdin" | "ev_proc_wait" | "ev_remove") {
+            let i = args[1].try_ast()?.clone();
+            let freed = matches!(n,"ev_remove" | "ev_proc_wait");
+            let k = if freed { z.int(0) } else { p.kind.select(&i) };
+            self.assume(st, g, (r.kind.clone()).eq(&(p.kind.clone()).store(&i.clone(), &k.clone())));
+            self.assume(st, g, (r.eof.clone()).eq(&(p.eof.clone()).store(&i.clone(), &(r.eof.clone()).select(&i.clone()))));
+            self.assume(st, g, (r.write_open.clone()).eq(&(p.write_open.clone()).store(&i.clone(), &(r.write_open.clone()).select(&i.clone()))));
+            self.assume(st,g,r.count.eq(&if freed { p.count.sub(&z.int(1)) } else { p.count.clone() }));
+            if freed {
+                self.assume(st, g, ((r.eof.clone()).select(&i.clone())).not());
+                self.assume(st, g, ((r.write_open.clone()).select(&i.clone())).not());
+            }
+            else if matches!(n,"ev_read" | "ev_proc_read") {
+                let mx = args.last().unwrap().try_ast()?.clone();
+                self.assume(st, g, (r.buf.n.clone()).le(&mx.clone()));
+                self.assume(st, g, ((p.eof.clone()).select(&i.clone())).implies(&(r.eof.clone()).select(&i.clone())));
+                self.assume(st, g, ((r.eof.clone()).select(&i.clone())).implies(&(r.buf.n.clone()).eq(&z.int(0))));
+                self.assume(st, g, ((r.write_open.clone()).select(&i.clone())).implies(&(p.write_open.clone()).select(&i.clone())));
+            }
+            else {
+                self.assume(st, g, ((r.eof.clone()).select(&i.clone())).eq(&(p.eof.clone()).select(&i.clone())));
+            }
+            if matches!(n,"ev_shutdown_write" | "ev_proc_close_stdin") { self.assume(st,g,r.write_open.select(&i).not()); }
+        }
+        if n != "ev_wait" {
+            self.assume(st, g, r.error.eq(&z.int(0)).implies(&(r.ev_slot.clone()).eq(&p.ev_slot.clone())));
+            self.assume(st, g, r.error.eq(&z.int(0)).implies(&(r.ev_kind_.clone()).eq(&p.ev_kind_.clone())));
+        }
+        if n != "ev_proc_wait" {
+            self.assume(st, g, (r.exit.clone()).eq(&p.exit.clone()));
+        }
+        if !matches!(n,"ev_read" | "ev_proc_read") {
+            self.assume(st, g, r.error.eq(&z.int(0)).implies(&(r.buf.n.clone()).eq(&p.buf.n.clone())));
+            self.assume(st, g, r.error.eq(&z.int(0)).implies(&(r.buf.a.clone()).eq(&p.buf.a.clone())));
+        }
+        Ok(res)
+    }
+
+    /// G10 net catalog contracts, using call-entry snapshots.
     #[allow(clippy::too_many_arguments)]
     fn net_call(&mut self, e: &Expr, n: &str, args: &[Val], st: &mut State, g: &[Ast], code: bool, rty: Option<Ty>) -> R<Val> {
         let z = self.z.clone();
@@ -3015,6 +3256,9 @@ impl<'a> FnVerifier<'a> {
         let what = format!("precondition of {} (catalog)", n);
         if n.starts_with("proc_") {
             return self.proc_call(e, n, args, st, g, code, rty);
+        }
+        if n.starts_with("ev_") {
+            return self.async_call(e, n, args, st, g, code, rty);
         }
         if n.starts_with("net_") {
             return self.net_call(e, n, args, st, g, code, rty);
@@ -3237,6 +3481,12 @@ impl<'a> FnVerifier<'a> {
                         let size = self.proc_size_t(pv.try_proc()?, &sm);
                         parts.push(Some(self.z.and(&[i.ge_i(0), i.lt(&size)])));
                     }
+                }
+                if wo && is_async_dom(&x.name) {
+                    let lv = self.ev(&x.args[0], st, g, false, env)?;
+                    let i = self.ev_ast(&x.args[1], st, g, false, env)?;
+                    let p = lv.try_loop()?;
+                    parts.push(Some(self.z.and(&[i.ge_i(0), i.lt(if x.name == "ev_byte" { &p.buf.n } else { &p.cap })])));
                 }
                 if wo && is_net_dom(&x.name) {
                     // G10 net A1 (4.9): net_byte needs a valid index
@@ -3803,6 +4053,7 @@ impl<'a> FnVerifier<'a> {
                 Val::File(f) => st.pc.push(self.wf_file(f)),
                 Val::Proc(p) => st.pc.push(self.wf_proc(p)),
                 Val::Sock(p) => st.pc.push(self.wf_sock(p)),
+                Val::Loop(p) => st.pc.push(self.wf_loop(p)),
                 Val::Lis(l) => st.pc.push(self.wf_lis(l)),
                 Val::PArgs(a) => st.pc.push(self.wf_pargs(a)),
                 Val::Map(m) => st.pc.push(self.z.and(&[m.n.ge_i(0), m.n.le_i(MAX_LEN)])),
@@ -3846,6 +4097,7 @@ impl<'a> FnVerifier<'a> {
                 Val::File(f) => pc.push(self.wf_file(f)),
                 Val::Proc(p) => pc.push(self.wf_proc(p)),
                 Val::Sock(p) => pc.push(self.wf_sock(p)),
+                Val::Loop(p) => pc.push(self.wf_loop(p)),
                 Val::Lis(l) => pc.push(self.wf_lis(l)),
                 Val::PArgs(a) => pc.push(self.wf_pargs(a)),
                 Val::Map(m) => pc.push(self.z.and(&[m.n.ge_i(0), m.n.le_i(MAX_LEN)])), // G6 A1

@@ -21,6 +21,10 @@ pub fn echo_two(port: i64) -> i64 ! async, net, proc, alloc
 
   while rounds > 0 && ev_ok(l) && ev_count(l) > 0
     invariant 0 <= rounds && rounds <= 100000
+    invariant ev_cap(l) == 3
+    invariant 0 <= listening && listening <= 1
+    invariant accepted == 2 ==> listening == 0
+    invariant forall i in 0..ev_cap(l): ev_kind(l, i) == 2 ==> listening == 1 && i == lslot
     invariant 0 <= accepted && accepted <= 2
     invariant 0 <= echoed && echoed <= 4096 * (100000 - rounds)
     invariant 0 <= lslot && lslot < ev_cap(l)

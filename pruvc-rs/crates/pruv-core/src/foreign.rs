@@ -409,7 +409,7 @@ pub fn catalog_fn(name: &str) -> Option<CatFn> {
         // encoded for every net_* operation by symbolic.rs `net_call` (pruv-proof). Both backends lower Socket / Listener
         // (A2 Rust source backend, codegen.rs NET_PRELUDE; A3 LLVM backend through the Rust shim).
 
-        // G10 async A0: placeholders cannot pass the staging guard.
+        // G10 async A1: catalog contracts are encoded in pruv-proof symbolic.rs.
         "ev_new" => CatFn { requires: vec![], ensures: vec![], params: vec![p("cap", GType::i64(), false)], ret: loop_t(), effects: vec!["async".to_string(), "alloc".to_string()], tparams: vec![] },
         "ev_close" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true)], ret: GType::new("result", vec![]), effects: vec!["async".to_string(), "net".to_string(), "proc".to_string(), "alloc".to_string()], tparams: vec![] },
         "ev_add_socket" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("s", socket_t(), true)], ret: loop_t(), effects: vec!["async".to_string(), "net".to_string(), "alloc".to_string()], tparams: vec![] },

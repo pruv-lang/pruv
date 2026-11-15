@@ -1,0 +1,8 @@
+fn bad(take l: Loop, data: [u8]) -> Result<i64> ! async, net, proc, alloc
+  requires ev_ok(l)
+  requires ev_kind(l, 0) == 1
+  requires !ev_write_open(l, 0)
+{
+  let q: Loop = ev_write(move l, 0, data);
+  return ev_close(move q);
+}
