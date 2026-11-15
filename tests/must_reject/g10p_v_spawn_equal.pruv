@@ -1,0 +1,10 @@
+fn bad(program: str, cwd: str) -> bool ! proc, alloc {
+  let args: ProcessArgs = proc_args_new();
+  let a: Process = proc_spawn(program, args, cwd);
+  let b: Process = proc_spawn(program, args, cwd);
+  let same: bool = proc_ok(a) == proc_ok(b);
+  assert same;
+  let r1: Result<i64> = proc_wait(move a);
+  let r2: Result<i64> = proc_wait(move b);
+  return same;
+}

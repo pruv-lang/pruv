@@ -1,0 +1,14 @@
+fn bad(take input: Process, rounds: i64) -> Process ! proc, alloc
+  requires proc_ok(input) && 0 <= rounds && rounds <= 100
+{
+  let mut p: Process = move input;
+  let mut i: i64 = 0;
+  while i < rounds
+    invariant 0 <= i && i <= rounds
+    decreases rounds - i
+  {
+    p = proc_read(move p, 1, 4096);
+    i = i + 1;
+  }
+  return move p;
+}

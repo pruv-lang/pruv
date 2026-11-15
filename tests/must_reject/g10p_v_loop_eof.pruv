@@ -1,0 +1,16 @@
+fn bad(take input: Process) -> Process ! proc, alloc
+  requires proc_ok(input)
+{
+  let mut p: Process = move input;
+  let mut open_flag: i64 = 1;
+  while open_flag > 0 && proc_ok(p)
+    invariant 0 <= open_flag && open_flag <= 1
+    decreases open_flag
+  {
+    p = proc_read(move p, 1, 4096);
+    if proc_ok(p) && proc_eof(p, 1) {
+      open_flag = 0;
+    }
+  }
+  return move p;
+}

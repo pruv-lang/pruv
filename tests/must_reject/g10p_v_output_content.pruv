@@ -1,0 +1,9 @@
+fn bad(take input: Process) -> Process ! proc, alloc
+  requires proc_ok(input)
+{
+  let p: Process = proc_read(move input, 1, 16);
+  if proc_ok(p) && proc_size(p, 1) > 0 {
+    assert proc_byte(p, 1, 0) == 65;
+  }
+  return move p;
+}

@@ -1,0 +1,29 @@
+// G10 proc A1 (4.4, 4.8): a user function returning a Process carries its ensures to the caller; a fresh result of
+// an unknown callee only has well-formedness.
+fn start(program: str, cwd: str) -> Process ! proc, alloc
+  ensures proc_ok(result) == proc_stdin_open(result)
+  ensures proc_size(result, 1) == 0 && proc_size(result, 2) == 0 && !proc_eof(result, 1) && !proc_eof(result, 2)
+{
+  let args: ProcessArgs = proc_args_new();
+  return proc_spawn(program, args, cwd);
+}
+
+fn run(program: str, cwd: str) -> Result<i64> ! proc, alloc {
+  let p: Process = start(program, cwd);
+  assert !proc_eof(p, 1) && proc_size(p, 2) == 0;
+  assert proc_ok(p) == proc_stdin_open(p);
+  return proc_wait(move p);
+}
+
+fn healthy(p: Process) -> bool
+  ensures result == (proc_ok(p) && proc_stdin_open(p))
+{
+  return proc_ok(p) && proc_stdin_open(p);
+}
+
+fn check_health(program: str, cwd: str) -> Result<i64> ! proc, alloc {
+  let p: Process = start(program, cwd);
+  let h: bool = healthy(p);
+  assert h ==> proc_ok(p);
+  return proc_wait(move p);
+}

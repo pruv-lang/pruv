@@ -1,0 +1,13 @@
+fn bad(program: str, cwd: str) -> Result<i64> ! proc, alloc {
+  let args: ProcessArgs = proc_args_new();
+  let mut p: Process = proc_spawn(program, args, cwd);
+  if !proc_ok(p) {
+    return proc_wait(move p);
+  }
+  p = proc_close_stdin(move p);
+  if !proc_ok(p) {
+    return proc_kill(move p);
+  }
+  p = proc_write_str(move p, "late");
+  return proc_wait(move p);
+}

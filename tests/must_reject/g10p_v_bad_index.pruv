@@ -1,0 +1,3 @@
+fn bad(p: Process) -> i64 {
+  return proc_byte(p, 1, proc_size(p, 1));
+}

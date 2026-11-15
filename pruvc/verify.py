@@ -4,7 +4,7 @@ import z3
 from vast import *
 from typeinfo import (TypeTable, is_array, array_elem, array_of, bind_args, substitute, decl_owner, format_type,
                       is_collection)
-from foreign import CATALOG, CATALOG_NAMES, FILE, FILE_OBSERVERS
+from foreign import CATALOG, CATALOG_NAMES, FILE, FILE_OBSERVERS, PROCESS, PROCESS_ARGS
 
 I64_MIN, I64_MAX = -2 ** 63, 2 ** 63 - 1
 MAX_LEN = 2 ** 40
@@ -552,6 +552,10 @@ class Model:
         """Pruv Type of a z3 datatype value (Opt/Res/user), or None"""
         if isinstance(v, File):
             return FILE
+        if isinstance(v, Process):
+            return PROCESS
+        if isinstance(v, PArgs):
+            return PROCESS_ARGS
         if isinstance(v, Map):      # G6 A1
             return Type("hashmap", (v.kty, v.vty))
         try:
@@ -589,7 +593,8 @@ def _partial_here(e, kind):
     if isinstance(e, Binary):
         return e.op in ("/", "%")
     if isinstance(e, Call):
-        return e.name in _TAG_FNS or e.name == "file_byte" or e.name in BIT_Z3 or e.name == "load_be"
+        return (e.name in _TAG_FNS or e.name == "file_byte" or e.name in BIT_Z3 or e.name == "load_be"
+                or e.name in _PROC_DOM)   # G10 proc A1: the stream / index domains of the Process observers
     if isinstance(e, Quant):
         return e.kind in ("max", "min")
     return False
@@ -656,8 +661,66 @@ class File:
         s.ok, s.readable, s.writable, s.buf = ok, readable, writable, buf
 
 
+class Process:
+    """G10 proc A1 (G10_PROC_SPEC 4.1): the public state of a Process only. error: Int, stdin_open / stdout_eof /
+    stderr_eof: Bool, out / err: the public stdout / stderr buffers as U8 Arr (size, byte map). The child, PID,
+    descriptors, queues and reader timing are not modeled."""
+    __slots__ = ("error", "stdin_open", "stdout_eof", "stderr_eof", "out", "err")
+
+    def __init__(s, error, stdin_open, stdout_eof, stderr_eof, out, err):
+        s.error, s.stdin_open, s.stdout_eof, s.stderr_eof, s.out, s.err = error, stdin_open, stdout_eof, stderr_eof, out, err
+
+
+class PArgs:
+    """G10 proc A1 (G10_PROC_SPEC 4.3): a ProcessArgs value is its argument count only."""
+    __slots__ = ("argc",)
+
+    def __init__(s, argc):
+        s.argc = argc
+
+
 _COLL = ("vec", "hashmap", "string", "file")
 _STRING = Type("string")
+# G10 proc A1: observers with a stream (and index) domain, checked like the File byte observer
+_PROC_DOM = ("proc_eof", "proc_size", "proc_byte")
+
+
+def _proc_stream_ok(sm):
+    return z3.Or(sm == 1, sm == 2)
+
+
+def _proc_size(p, sm):
+    """proc_size(p, sm): stream 1 is stdout, any other (domain-checked) stream is stderr"""
+    return z3.If(sm == 1, p.out.n, p.err.n)
+
+
+def _proc_eof(p, sm):
+    return z3.If(sm == 1, p.stdout_eof, p.stderr_eof)
+
+
+def _proc_byte(p, sm, i):
+    return z3.If(sm == 1, z3.Select(p.out.a, i), z3.Select(p.err.a, i))
+
+
+def _proc_keep_out(r, p):
+    """the stdout snapshot (size, byte map, EOF) of r equals that of p"""
+    return z3.And(r.out.n == p.out.n, r.out.a == p.out.a, r.stdout_eof == p.stdout_eof)
+
+
+def _proc_keep_err(r, p):
+    return z3.And(r.err.n == p.err.n, r.err.a == p.err.a, r.stderr_eof == p.stderr_eof)
+
+
+def _wf_proc(p):
+    """G10 proc A1 (G10_PROC_SPEC 4.2): 0 <= error <= 6; buffer sizes in 0..M with bytes in 0..255; an open stdin implies
+    no error; an error means stdin closed, both buffers empty, both EOFs false. EOF and an empty buffer are not
+    made equivalent."""
+    return z3.And(p.error >= 0, p.error <= 6,
+                  p.out.n >= 0, p.out.n <= MAX_LEN, p.err.n >= 0, p.err.n <= MAX_LEN,
+                  u8_dom(p.out), u8_dom(p.err),
+                  z3.Implies(p.stdin_open, p.error == 0),
+                  z3.Implies(p.error != 0, z3.And(z3.Not(p.stdin_open), p.out.n == 0, p.err.n == 0,
+                                                  z3.Not(p.stdout_eof), z3.Not(p.stderr_eof))))
 
 
 class State:
@@ -682,6 +745,10 @@ def _wf_of(m, ty, v):
         return z3.And(ln, u8_dom(v)) if v.elem == U8 else ln
     if ty == FILE:
         return z3.And(v.buf.n >= 0, u8_dom(v.buf))
+    if ty.owner is None and ty.name == "process":       # G10 proc A1 (4.2)
+        return _wf_proc(v)
+    if ty.owner is None and ty.name == "process_args":  # G10 proc A1 (4.3): 0 <= argc <= M
+        return z3.And(v.argc >= 0, v.argc <= MAX_LEN)
     if ty.owner is None and ty.name in _COLL:     # G6 A1: 0 <= n <= MAX_LEN (and the u8 domain of a String)
         ln = z3.And(v.n >= 0, v.n <= MAX_LEN)
         return z3.And(ln, u8_dom(v)) if ty.name == "string" else ln
@@ -895,6 +962,13 @@ class FnVerifier:
             else:
                 esort = z3.BoolSort() if elem == BOOL else z3.IntSort()
             return mk_arr(z3.Array(n, z3.IntSort(), esort), z3.Int(n + ".len"), base, elem)
+        if ty.owner is None and ty.name == "process":       # G10 proc A1 (4.1): the public state record
+            out = mk_arr(z3.Array(n + ".stdout", z3.IntSort(), z3.IntSort()), z3.Int(n + ".stdout.size"), base, U8)
+            err = mk_arr(z3.Array(n + ".stderr", z3.IntSort(), z3.IntSort()), z3.Int(n + ".stderr.size"), base, U8)
+            return Process(z3.Int(n + ".error"), z3.Bool(n + ".stdin_open"), z3.Bool(n + ".stdout_eof"),
+                           z3.Bool(n + ".stderr_eof"), out, err)
+        if ty.owner is None and ty.name == "process_args":  # G10 proc A1 (4.3)
+            return PArgs(z3.Int(n + ".argc"))
         if ty.owner is None and ty.name in _COLL:   # G6 A1: Vec = [T] array, String = u8 array, HashMap = (d, a, n)
             if ty.name == "file":
                 buf = mk_arr(z3.Array(n, z3.IntSort(), z3.IntSort()), z3.Int(n + ".size"), base, U8)
@@ -1077,6 +1151,16 @@ class FnVerifier:
                     out[name] = {field: z3.is_true(m.eval(getattr(v, field), model_completion=True))
                                  for field in ("ok", "readable", "writable")}
                     out[name]["size"] = m.eval(v.buf.n, model_completion=True).as_long()
+                elif isinstance(v, Process):     # G10 proc A1: the public state; ok is error == 0
+                    err = m.eval(v.error, model_completion=True).as_long()
+                    out[name] = {"ok": err == 0, "error": err,
+                                 "stdin_open": z3.is_true(m.eval(v.stdin_open, model_completion=True)),
+                                 "stdout_eof": z3.is_true(m.eval(v.stdout_eof, model_completion=True)),
+                                 "stderr_eof": z3.is_true(m.eval(v.stderr_eof, model_completion=True)),
+                                 "stdout_size": m.eval(v.out.n, model_completion=True).as_long(),
+                                 "stderr_size": m.eval(v.err.n, model_completion=True).as_long()}
+                elif isinstance(v, PArgs):
+                    out[name] = {"argc": m.eval(v.argc, model_completion=True).as_long()}
                 elif isinstance(v, Arr):
                     n = m.eval(v.n, model_completion=True).as_long()
                     if v.elem == BOOL:   # G2 A5: bool elements print as true/false
@@ -1397,6 +1481,13 @@ class FnVerifier:
                 f = s.ev(e.args[0], st, g, False, env)
                 i = s.ev(e.args[1], st, g, False, env)
                 parts.append(z3.And(i >= 0, i < f.buf.n))
+            if wo and e.name in _PROC_DOM:      # G10 proc A1 (4.9): a valid stream, and for proc_byte a valid index
+                pv = s.ev(e.args[0], st, g, False, env)
+                sm = s.ev(e.args[1], st, g, False, env)
+                parts.append(_proc_stream_ok(sm))
+                if e.name == "proc_byte":
+                    i = s.ev(e.args[2], st, g, False, env)
+                    parts.append(z3.And(i >= 0, i < _proc_size(pv, sm)))
             if wo and e.name == "load_be":      # P2 batch 4: the word lies inside the array
                 arr = s.ev(e.args[0], st, g, False, env)
                 i = s.ev(e.args[1], st, g, False, env)
@@ -1832,6 +1923,8 @@ class FnVerifier:
             if code:
                 s.prove(st, g, ob, e, "call_requires", "precondition of %s (catalog)" % n)
 
+        if n.startswith("proc_"):
+            return s.proc_call(n, e, args, st, g, code, rty)
         if n in FILE_OBSERVERS:
             f = args[0]
             if n == "file_size":
@@ -1905,6 +1998,95 @@ class FnVerifier:
         if n == "string_to_str":
             return mk_arr(args[0].a, args[0].n, n, U8)
         raise Exception("catalog: " + n)
+
+    def proc_call(s, n, e, args, st, g, code, rty):
+        """G10 proc A1 (G10_PROC_SPEC 2.3, 2.4, 4): the catalog contracts of the proc operations. The requires of an
+        operation are call_requires obligations in order (code only); an effect operation then gets a fresh result with
+        its well-formedness and the ensures facts below. The argument builder and the observers are exact terms.
+        Parameter observers in the ensures denote the values at call entry (the actuals in args). Two identical calls
+        are never equated: every effect result is a fresh symbol."""
+        def need(ob):
+            if code:
+                s.prove(st, g, ob, e, "call_requires", "precondition of %s (catalog)" % n)
+
+        # ProcessArgs: argc only
+        if n == "proc_args_new":
+            return PArgs(z3.IntVal(0))
+        if n == "proc_args_push":
+            a = args[0]
+            need(a.argc < MAX_LEN)
+            return PArgs(a.argc + 1)
+        if n == "proc_args_len":
+            return args[0].argc
+        # observers: field reads and array selects
+        if n == "proc_ok":
+            return args[0].error == 0
+        if n == "proc_error":
+            return args[0].error
+        if n == "proc_stdin_open":
+            return args[0].stdin_open
+        if n in _PROC_DOM:
+            p, sm = args[0], args[1]
+            need(_proc_stream_ok(sm))
+            if n == "proc_eof":
+                return _proc_eof(p, sm)
+            if n == "proc_size":
+                return _proc_size(p, sm)
+            i = args[2]
+            need(z3.And(i >= 0, i < _proc_size(p, sm)))
+            r = _proc_byte(p, sm, i)
+            if code:
+                s.assume(st, g, z3.And(r >= 0, r <= 255))
+            return r
+        if n == "proc_bytes":       # 4.6: a new array with the snapshot's size and byte map
+            p, sm = args
+            need(_proc_stream_ok(sm))
+            return mk_arr(z3.If(sm == 1, p.out.a, p.err.a), _proc_size(p, sm), n, U8)
+        # effect operations: requires -> fresh result -> well-formedness -> ensures
+        p = args[0]
+        if n == "proc_spawn":
+            pass
+        elif n in ("proc_write_str", "proc_write_bytes", "proc_close_stdin"):
+            need(z3.And(p.error == 0, p.stdin_open))
+        elif n == "proc_read":
+            need(p.error == 0)
+            need(_proc_stream_ok(args[1]))
+            need(z3.And(args[2] > 0, args[2] <= MAX_LEN))
+        elif n == "proc_read_all":
+            need(z3.And(p.error == 0, z3.Not(p.stdin_open)))
+        res = s.fresh(n, rty)
+        s.assume(st, g, s.wf(rty, res))
+        if n in ("proc_wait", "proc_kill"):     # 4.7: the existing Result<i64> encoding; Ok(0) is never assumed
+            o = s.model.res(None)
+            s.assume(st, g, z3.Implies(p.error != 0, res == o.err(p.error)))
+            s.assume(st, g, z3.Implies(o.is_err(res), z3.And(o.eval(res) >= 1, o.eval(res) <= 6)))
+            return res
+        ok = res.error == 0
+        if n == "proc_spawn":
+            s.assume(st, g, z3.Implies(ok, res.stdin_open))
+            s.assume(st, g, z3.Implies(z3.Not(ok), z3.And(z3.Not(res.stdin_open), z3.Or(res.error == 1, res.error == 2))))
+            s.assume(st, g, z3.And(res.out.n == 0, res.err.n == 0, z3.Not(res.stdout_eof), z3.Not(res.stderr_eof)))
+        elif n in ("proc_write_str", "proc_write_bytes"):
+            s.assume(st, g, z3.Implies(ok, z3.And(res.stdin_open == p.stdin_open, _proc_keep_out(res, p),
+                                                  _proc_keep_err(res, p))))
+        elif n == "proc_close_stdin":
+            s.assume(st, g, z3.Not(res.stdin_open))
+            s.assume(st, g, z3.Implies(ok, z3.And(_proc_keep_out(res, p), _proc_keep_err(res, p))))
+        elif n == "proc_read":
+            sm, mx = args[1], args[2]
+            sz = _proc_size(res, sm)
+            s.assume(st, g, z3.Implies(ok, z3.And(sz >= 0, sz <= mx)))
+            s.assume(st, g, z3.Implies(ok, _proc_eof(res, sm) == (sz == 0)))
+            s.assume(st, g, z3.Implies(z3.And(ok, _proc_eof(p, sm)), sz == 0))
+            s.assume(st, g, z3.Implies(z3.And(ok, sm == 1), _proc_keep_err(res, p)))
+            s.assume(st, g, z3.Implies(z3.And(ok, sm == 2), _proc_keep_out(res, p)))
+            s.assume(st, g, z3.Implies(ok, res.stdin_open == p.stdin_open))
+        elif n == "proc_read_all":
+            s.assume(st, g, z3.Not(res.stdin_open))
+            s.assume(st, g, z3.Implies(ok, z3.And(res.stdout_eof, res.stderr_eof)))
+        else:
+            raise Exception("catalog: " + n)
+        return res
 
     def map_lookup(s, m, k, rty):
         """If(m.d[k], Some(m.a[k]), None) as an Option<V> of the call's own result type"""
@@ -2010,6 +2192,11 @@ class FnVerifier:
             if isinstance(old, File):
                 nv = s.fresh(n, FILE)
                 h.pc.append(s.wf(FILE, nv))
+                h.env[n] = nv
+            elif isinstance(old, (Process, PArgs)):     # G10 proc A1 (4.8): only well-formedness survives
+                pty = PROCESS if isinstance(old, Process) else PROCESS_ARGS
+                nv = s.fresh(n, pty)
+                h.pc.append(s.wf(pty, nv))
                 h.env[n] = nv
             elif isinstance(old, Arr):
                 # G6 A1: an element type without a legacy array type (a Vec<X>) is re-created as a Vec

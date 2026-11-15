@@ -1,0 +1,42 @@
+// G10 proc A1 gate 4: a single-stream read keeps the other stream's snapshot, and proc_bytes is an exact copy.
+fn bytes_of(p: Process, stream: i64) -> [u8] ! alloc
+  requires stream == 1 || stream == 2
+  ensures len(result) == proc_size(p, stream)
+  ensures forall k in 0..len(result): result[k] == proc_byte(p, stream, k)
+{
+  return proc_bytes(p, stream);
+}
+
+fn snapshot_sizes(p: Process) -> bool ! alloc {
+  let a: [u8] = proc_bytes(p, 1);
+  let b: [u8] = proc_bytes(p, 2);
+  assert len(a) == proc_size(p, 1) && len(b) == proc_size(p, 2);
+  return len(a) + len(b) >= 0;
+}
+
+fn read_out(take input: Process) -> Process ! proc, alloc
+  requires proc_ok(input)
+  ensures proc_ok(result) ==> proc_stdin_open(result) == proc_stdin_open(input)
+  ensures proc_ok(result) ==> proc_size(result, 2) == proc_size(input, 2) && proc_eof(result, 2) == proc_eof(input, 2)
+  ensures proc_ok(result) ==> forall k in 0..proc_size(input, 2): proc_byte(result, 2, k) == proc_byte(input, 2, k)
+{
+  return proc_read(move input, 1, 4096);
+}
+
+fn read_err(take input: Process) -> Process ! proc, alloc
+  requires proc_ok(input)
+  ensures proc_ok(result) ==> proc_size(result, 1) == proc_size(input, 1) && proc_eof(result, 1) == proc_eof(input, 1)
+{
+  return proc_read(move input, 2, 4096);
+}
+
+fn chunk_facts(take input: Process) -> Process ! proc, alloc
+  requires proc_ok(input)
+{
+  let p: Process = proc_read(move input, 1, 64);
+  if proc_ok(p) {
+    assert 0 <= proc_size(p, 1) && proc_size(p, 1) <= 64;
+    assert proc_eof(p, 1) == (proc_size(p, 1) == 0);
+  }
+  return move p;
+}

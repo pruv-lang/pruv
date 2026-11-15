@@ -459,6 +459,20 @@ impl<'a> FnVerifier<'a> {
                 ("writable".into(), Json::Bool(m.eval(&f.writable)?.is_true())),
                 ("size".into(), Json::Num(m.eval(&f.buf.n)?.numeral_string()?)),
             ])),
+            // G10 proc A1 (verify.py cex): the public state; ok is error == 0
+            Val::Proc(p) => {
+                let err = m.eval(&p.error)?.numeral_string()?;
+                Some(Json::Obj(vec![
+                    ("ok".into(), Json::Bool(err == "0")),
+                    ("error".into(), Json::Num(err)),
+                    ("stdin_open".into(), Json::Bool(m.eval(&p.stdin_open)?.is_true())),
+                    ("stdout_eof".into(), Json::Bool(m.eval(&p.stdout_eof)?.is_true())),
+                    ("stderr_eof".into(), Json::Bool(m.eval(&p.stderr_eof)?.is_true())),
+                    ("stdout_size".into(), Json::Num(m.eval(&p.out.n)?.numeral_string()?)),
+                    ("stderr_size".into(), Json::Num(m.eval(&p.err.n)?.numeral_string()?)),
+                ]))
+            }
+            Val::PArgs(a) => Some(Json::Obj(vec![("argc".into(), Json::Num(m.eval(a)?.numeral_string()?))])),
             Val::Arr(a) => {
                 let n = m.eval(&a.n)?.numeral_string()?;
                 let cnt = clamp8(&n);

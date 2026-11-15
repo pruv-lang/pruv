@@ -226,10 +226,6 @@ fn compile(a: &Args) -> Result<(), Fail> {
         None => pruv_core::check::check_with_externs(&mut prog, &a.rust_extern),
     };
     let tt = checked.map_err(|e| Fail::Lang(vec![e]))?;
-    // G10 proc A0 staging guard: after type checking (type diagnostics win), before verification, in every mode.
-    if let Some(e) = pruv_core::foreign::proc_unimplemented_error(&prog, "codegen") {
-        return Err(Fail::Lang(vec![e]));
-    }
     // G4 A1: the staging guard of explicit visibility mode now comes after the proof (below), like Python compile_file.
     // G9 A3: both back ends lower G9 programs; the G9 staging guard is gone from the driver.
     // G6: the Rust source backend lowers foreign calls and collections (A2); the LLVM backend (and --also-llvm) lowers
@@ -261,7 +257,19 @@ fn compile(a: &Args) -> Result<(), Fail> {
         if !errs.is_empty() {
             return Err(Fail::Lang(errs));
         }
+        // G10 proc staging guard (A1: moved here): the codegen entry, after verification (verification errors win).
+        if let Some(e) = pruv_core::foreign::proc_unimplemented_error(&prog, "codegen") {
+            return Err(Fail::Lang(vec![e]));
+        }
     } else {
+        // G10 proc staging guard: --no-verify still stops at the guard, before every other target check. Python prints
+        // the skipped_no_verify notice first, then the guard error.
+        if let Some(e) = pruv_core::foreign::proc_unimplemented_error(&prog, "codegen") {
+            if a.infer && a.show_inferred {
+                eprintln!("{{\"status\": \"skipped_no_verify\"}}");
+            }
+            return Err(Fail::Lang(vec![e]));
+        }
         // Pre-G10 order for File-free native programs: with --no-verify, foreign_target fires before the notice.
         if g6_native && pruv_core::foreign::g7_target_error(&prog).is_none() && !pruv_core::foreign::uses_files(&prog) {
             if let Some(e) = foreign_target_error(&prog) {

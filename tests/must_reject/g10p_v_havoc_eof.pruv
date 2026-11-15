@@ -1,0 +1,19 @@
+fn bad(program: str, cwd: str, rounds: i64) -> Result<i64> ! proc, alloc
+  requires 0 <= rounds && rounds <= 100
+{
+  let args: ProcessArgs = proc_args_new();
+  let mut p: Process = proc_spawn(program, args, cwd);
+  assert proc_size(p, 1) == 0 && !proc_eof(p, 1);
+  let mut i: i64 = 0;
+  while i < rounds
+    invariant 0 <= i && i <= rounds
+    decreases rounds - i
+  {
+    if proc_ok(p) {
+      p = proc_read(move p, 1, 4096);
+    }
+    i = i + 1;
+  }
+  assert !proc_eof(p, 1);
+  return proc_wait(move p);
+}

@@ -1,7 +1,11 @@
-// G10 proc A0: a Process moves through updates and ends with proc_wait (stops at the staging guard).
+// G10 proc A0: a Process moves through updates and ends with proc_wait (verifies, then stops at the staging guard).
 fn run(program: str, cwd: str) -> i64 ! proc, alloc {
   let args: ProcessArgs = proc_args_new();
   let p: Process = proc_spawn(program, args, cwd);
+  if !proc_ok(p) {
+    let failed: Result<i64> = proc_wait(move p);
+    return 1;
+  }
   let q: Process = proc_close_stdin(move p);
   let r: Result<i64> = proc_wait(move q);
   return 0;

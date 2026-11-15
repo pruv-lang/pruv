@@ -1,0 +1,33 @@
+// G10 proc A1 (4.7): wait and kill return the existing Result<i64> encoding; an entry error is returned as Err and
+// Ok(0) is never assumed. The ProcessArgs builder is exact (argc only).
+fn finish(take p: Process) -> i64 ! proc, alloc {
+  let code: i64 = proc_error(p);
+  let failed: bool = !proc_ok(p);
+  let r: Result<i64> = proc_wait(move p);
+  assert failed ==> (!is_ok(r) && err_val(r) == code);
+  assert !is_ok(r) ==> 1 <= err_val(r) && err_val(r) <= 6;
+  return 0;
+}
+
+fn kill_failed(take p: Process) -> Result<i64> ! proc, alloc
+  requires !proc_ok(p)
+  ensures !is_ok(result) && err_val(result) == proc_error(p)
+{
+  return proc_kill(move p);
+}
+
+fn two_args(first: str, second: str) -> i64 ! alloc {
+  let mut a: ProcessArgs = proc_args_new();
+  assert proc_args_len(a) == 0;
+  a = proc_args_push(move a, first);
+  a = proc_args_push(move a, second);
+  assert proc_args_len(a) == 2;
+  return proc_args_len(a);
+}
+
+fn extend(take a: ProcessArgs, x: str) -> ProcessArgs ! alloc
+  requires proc_args_len(a) < 1000
+  ensures proc_args_len(result) == proc_args_len(a) + 1
+{
+  return proc_args_push(move a, x);
+}

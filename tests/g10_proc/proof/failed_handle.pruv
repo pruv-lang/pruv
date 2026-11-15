@@ -1,0 +1,20 @@
+// G10 proc A1 gate 2: a failed handle is still owned; waiting or killing it verifies in every state.
+fn spawn_or_stop(program: str, cwd: str) -> Result<i64> ! proc, alloc {
+  let args: ProcessArgs = proc_args_new();
+  let p: Process = proc_spawn(program, args, cwd);
+  if !proc_ok(p) {
+    assert !proc_stdin_open(p);
+    assert proc_size(p, 1) == 0 && proc_size(p, 2) == 0;
+    assert !proc_eof(p, 1) && !proc_eof(p, 2);
+    assert 1 <= proc_error(p) && proc_error(p) <= 2;
+    return proc_wait(move p);
+  }
+  return proc_kill(move p);
+}
+
+fn stop_any(take p: Process, hard: bool) -> Result<i64> ! proc, alloc {
+  if hard {
+    return proc_kill(move p);
+  }
+  return proc_wait(move p);
+}

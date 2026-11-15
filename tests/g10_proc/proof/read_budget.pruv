@@ -1,0 +1,39 @@
+// G10 proc A1 gate 9: a finite read budget is a valid termination measure; EOF alone is not (g10p_v_loop_eof).
+fn read_window(take input: Process, rounds: i64) -> Process ! proc, alloc
+  requires proc_ok(input)
+  requires 0 <= rounds && rounds <= 1000000
+{
+  let mut p: Process = move input;
+  let mut remaining: i64 = rounds;
+
+  while remaining > 0 && proc_ok(p) && !proc_eof(p, 1)
+    invariant 0 <= remaining && remaining <= rounds
+    decreases remaining
+  {
+    p = proc_read(move p, 1, 4096);
+    if proc_ok(p) {
+      let chunk: [u8] = proc_bytes(p, 1);
+    }
+    remaining = remaining - 1;
+  }
+
+  return move p;
+}
+
+fn read_both(take input: Process, rounds: i64) -> Result<i64> ! proc, alloc
+  requires proc_ok(input)
+  requires 0 <= rounds && rounds <= 1000
+{
+  let mut p: Process = move input;
+  let mut i: i64 = 0;
+  while i < rounds
+    invariant 0 <= i && i <= rounds
+    decreases rounds - i
+  {
+    if proc_ok(p) {
+      p = proc_read(move p, 2, 256);
+    }
+    i = i + 1;
+  }
+  return proc_wait(move p);
+}

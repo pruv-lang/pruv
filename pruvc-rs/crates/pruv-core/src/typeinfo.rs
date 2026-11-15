@@ -981,7 +981,7 @@ mod tests {
         assert_eq!(type_name("array_bool"), "[bool]");
         assert!(!is_user_type("array_u8"));
         assert!(!is_user_type("array_bool"));
-        assert_eq!(BUILTIN_TYPE_NAMES.len(), 13);
+        assert_eq!(BUILTIN_TYPE_NAMES.len(), 15);
         assert_eq!(type_name("string"), "String");
     }
 }

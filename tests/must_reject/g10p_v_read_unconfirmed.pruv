@@ -1,0 +1,6 @@
+fn bad(program: str, cwd: str) -> Result<i64> ! proc, alloc {
+  let args: ProcessArgs = proc_args_new();
+  let p: Process = proc_spawn(program, args, cwd);
+  let q: Process = proc_read(move p, 1, 16);
+  return proc_wait(move q);
+}

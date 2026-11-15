@@ -1,0 +1,9 @@
+fn bad(take input: Process) -> Process ! proc, alloc
+  requires proc_ok(input) && !proc_stdin_open(input)
+{
+  let p: Process = proc_read_all(move input);
+  if proc_ok(p) {
+    assert proc_eof(p, 1) ==> proc_size(p, 1) == 0;
+  }
+  return move p;
+}

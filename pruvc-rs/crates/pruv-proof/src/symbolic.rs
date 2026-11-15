@@ -221,6 +221,11 @@ fn is_bit_z3(n: &str) -> bool {
     matches!(n, "band" | "bor" | "bxor" | "wrapping_shl" | "ushr" | "wrapping_add" | "wrapping_mul")
 }
 
+/// G10 proc A1 (verify.py `_PROC_DOM`): the Process observers with a stream (and index) domain.
+fn is_proc_dom(n: &str) -> bool {
+    matches!(n, "proc_eof" | "proc_size" | "proc_byte")
+}
+
 /// verify.py `_partial_here` (line 86).
 /// P2 batch 4: the integer literal width argument of load_be / store_be (the checker guarantees 1..=8).
 fn lit_width(e: &Expr) -> i64 {
@@ -237,7 +242,9 @@ fn partial_here(e: &Expr, kind: PKind) -> bool {
         _ if kind == PKind::Variant => false,
         Expr::Index(_) => true,
         Expr::Binary(b) => b.op == "/" || b.op == "%",
-        Expr::Call(c) => is_tag_fn(&c.name) || c.name == "file_byte" || is_bit_z3(&c.name) || c.name == "load_be",
+        Expr::Call(c) => {
+            is_tag_fn(&c.name) || c.name == "file_byte" || is_bit_z3(&c.name) || c.name == "load_be" || is_proc_dom(&c.name)
+        }
         Expr::Quant(q) => q.kind == "max" || q.kind == "min",
         _ => false,
     }
@@ -491,10 +498,26 @@ pub struct FileV {
     pub buf: Arr,
 }
 
+/// G10 proc A1 (verify.py `Process`, G10_PROC_SPEC 4.1): the public state of a Process only. `out` / `err` are the public
+/// stdout / stderr buffers as U8 arrays (size, byte map). The child, PID, descriptors, queues and reader timing are not modeled.
+#[derive(Clone)]
+pub struct ProcV {
+    pub error: Ast,
+    pub stdin_open: Ast,
+    pub stdout_eof: Ast,
+    pub stderr_eof: Ast,
+    pub out: Arr,
+    pub err: Arr,
+}
+
 /// Environment value. verify.py distinguishes Int/Bool/Datatype by the z3 expression's sort, but here they are carried as tags.
 #[derive(Clone)]
 pub enum Val {
     File(FileV),
+    /// G10 proc A1: a Process record.
+    Proc(ProcV),
+    /// G10 proc A1: a ProcessArgs value is its argument count only.
+    PArgs(Ast),
     Int(Ast),
     Bool(Ast),
     /// An Opt/Res/user struct/enum value and its Pruv type (= `Model.type_of`).
@@ -510,7 +533,7 @@ impl Val {
     pub fn ast(&self) -> &Ast {
         match self {
             Val::Int(a) | Val::Bool(a) | Val::Dt(a, _) => a,
-            Val::Arr(_) | Val::Map(_) | Val::File(_) | Val::Unit => panic!("value has no single ast"),
+            Val::Arr(_) | Val::Map(_) | Val::File(_) | Val::Proc(_) | Val::PArgs(_) | Val::Unit => panic!("value has no single ast"),
         }
     }
     pub fn arr(&self) -> &Arr {
@@ -524,9 +547,17 @@ impl Val {
             Val::Int(a) | Val::Bool(a) | Val::Dt(a, _) => Ok(a),
             Val::Arr(_) => Err("expected a z3 value, got an array".to_string()),
             Val::File(_) => Err("expected a z3 value, got a file".to_string()),
+            Val::Proc(_) => Err("expected a z3 value, got a process".to_string()),
+            Val::PArgs(_) => Err("expected a z3 value, got process args".to_string()),
             Val::Map(_) => Err("expected a z3 value, got a map".to_string()),
             Val::Unit => Err("expected a z3 value, got None".to_string()),
         }
+    }
+    pub fn try_proc(&self) -> R<&ProcV> {
+        match self { Val::Proc(p) => Ok(p), _ => Err("expected a process".into()) }
+    }
+    pub fn try_pargs(&self) -> R<&Ast> {
+        match self { Val::PArgs(a) => Ok(a), _ => Err("expected process args".into()) }
     }
     pub fn try_file(&self) -> R<&FileV> {
         match self { Val::File(f) => Ok(f), _ => Err("expected a file".into()) }
@@ -839,6 +870,21 @@ impl<'a> FnVerifier<'a> {
                 readable: z.bool_const(&format!("{}.readable", n)),
                 writable: z.bool_const(&format!("{}.writable", n)), buf }));
         }
+        // G10 proc A1 (4.1): the public state record, same constant names as verify.py fresh
+        if *ty == Ty::User("process".into()) {
+            let arr_sort = z.array_sort(&z.int_sort(), &z.int_sort());
+            let out = Arr::new(z.constant(&format!("{}.stdout", n), &arr_sort),
+                z.int_const(&format!("{}.stdout.size", n)), base.into(), Elem::U8);
+            let err = Arr::new(z.constant(&format!("{}.stderr", n), &arr_sort),
+                z.int_const(&format!("{}.stderr.size", n)), base.into(), Elem::U8);
+            return Ok(Val::Proc(ProcV { error: z.int_const(&format!("{}.error", n)),
+                stdin_open: z.bool_const(&format!("{}.stdin_open", n)),
+                stdout_eof: z.bool_const(&format!("{}.stdout_eof", n)),
+                stderr_eof: z.bool_const(&format!("{}.stderr_eof", n)), out, err }));
+        }
+        if *ty == Ty::User("process_args".into()) {
+            return Ok(Val::PArgs(z.int_const(&format!("{}.argc", n))));
+        }
         // G6 A1: Vec = [T] array, String = u8 array, HashMap = (d, a, n). Python checks this after the legacy array
         // cases, but a collection type is never one of them, so the order is not observable.
         if let Some(c) = ty.coll() {
@@ -946,6 +992,43 @@ impl<'a> FnVerifier<'a> {
 
     // ---------- value domain (line 219) ----------
     fn wf_file(&self, f: &FileV) -> Ast { self.z.and(&[f.buf.n.ge_i(0), self.u8_dom(&f.buf)]) }
+
+    /// G10 proc A1 (verify.py `_wf_proc`, 4.2): 0 <= error <= 6; buffer sizes in 0..M with bytes in 0..255; an open stdin
+    /// implies no error; an error means stdin closed, both buffers empty, both EOFs false.
+    fn wf_proc(&self, p: &ProcV) -> Ast {
+        let z = &self.z;
+        z.and(&[
+            p.error.ge_i(0), p.error.le_i(6),
+            p.out.n.ge_i(0), p.out.n.le_i(MAX_LEN), p.err.n.ge_i(0), p.err.n.le_i(MAX_LEN),
+            self.u8_dom(&p.out), self.u8_dom(&p.err),
+            p.stdin_open.implies(&p.error.raw_eq(&z.int(0))),
+            p.error.ne_i(0).implies(&z.and(&[
+                p.stdin_open.not(), p.out.n.raw_eq(&z.int(0)), p.err.n.raw_eq(&z.int(0)),
+                p.stdout_eof.not(), p.stderr_eof.not(),
+            ])),
+        ])
+    }
+
+    /// G10 proc A1 (4.3): 0 <= argc <= M
+    fn wf_pargs(&self, argc: &Ast) -> Ast { self.z.and(&[argc.ge_i(0), argc.le_i(MAX_LEN)]) }
+
+    /// proc_size(p, sm): stream 1 is stdout, any other (domain-checked) stream is stderr
+    fn proc_size_t(&self, p: &ProcV, sm: &Ast) -> Ast {
+        self.z.ite(&sm.raw_eq(&self.z.int(1)), &p.out.n, &p.err.n)
+    }
+    fn proc_eof_t(&self, p: &ProcV, sm: &Ast) -> Ast {
+        self.z.ite(&sm.raw_eq(&self.z.int(1)), &p.stdout_eof, &p.stderr_eof)
+    }
+    fn proc_stream_ok(&self, sm: &Ast) -> Ast {
+        self.z.or(&[sm.raw_eq(&self.z.int(1)), sm.raw_eq(&self.z.int(2))])
+    }
+    /// the stdout snapshot (size, byte map, EOF) of r equals that of p
+    fn proc_keep_out(&self, r: &ProcV, p: &ProcV) -> Ast {
+        self.z.and(&[r.out.n.eq(&p.out.n), r.out.a.eq(&p.out.a), r.stdout_eof.eq(&p.stdout_eof)])
+    }
+    fn proc_keep_err(&self, r: &ProcV, p: &ProcV) -> Ast {
+        self.z.and(&[r.err.n.eq(&p.err.n), r.err.a.eq(&p.err.a), r.stderr_eof.eq(&p.stderr_eof)])
+    }
 
     /// `wf(ty, v)`: all active leaves are i64. None if trivial.
     pub fn wf(&self, ty: &Ty, v: &Ast) -> Option<Ast> {
@@ -1065,6 +1148,8 @@ impl<'a> FnVerifier<'a> {
     /// `wf(ty, v)` of an environment value: an Arr view of a buffer field (G9) uses the buffer branch, anything else `try_wf`.
     fn wf_of_val(&self, ty: &Ty, v: &Val) -> R<Option<Ast>> {
         if let Val::File(f) = v { return Ok(Some(self.wf_file(f))); }
+        if let Val::Proc(p) = v { return Ok(Some(self.wf_proc(p))); }
+        if let Val::PArgs(a) = v { return Ok(Some(self.wf_pargs(a))); }
         if let Val::Arr(a) = v {
             if Model::is_buf(ty) {
                 return Ok(Some(self.wf_buf(ty, &a.n, &a.a)));
@@ -1202,6 +1287,8 @@ impl<'a> FnVerifier<'a> {
             match &v {
                 Val::Arr(a) => pc.push(self.z.and(&[a.n.ge_i(0), a.n.le_i(MAX_LEN)])),
                 Val::File(f) => pc.push(self.wf_file(f)),
+                Val::Proc(p) => pc.push(self.wf_proc(p)),
+                Val::PArgs(a) => pc.push(self.wf_pargs(a)),
                 Val::Map(m) => pc.push(self.z.and(&[m.n.ge_i(0), m.n.le_i(MAX_LEN)])),
                 Val::Unit => {}
                 other => {
@@ -1325,6 +1412,17 @@ impl<'a> FnVerifier<'a> {
                 Val::File(_) => {
                     let nv = self.try_fresh(n, &Ty::User("file".into()))?;
                     h.pc.push(self.wf_file(nv.try_file()?));
+                    h.env.set(n, nv);
+                }
+                // G10 proc A1 (4.8): only well-formedness survives a havoc
+                Val::Proc(_) => {
+                    let nv = self.try_fresh(n, &Ty::User("process".into()))?;
+                    h.pc.push(self.wf_proc(nv.try_proc()?));
+                    h.env.set(n, nv);
+                }
+                Val::PArgs(_) => {
+                    let nv = self.try_fresh(n, &Ty::User("process_args".into()))?;
+                    h.pc.push(self.wf_pargs(nv.try_pargs()?));
                     h.env.set(n, nv);
                 }
                 Val::Arr(old_arr) => {
@@ -2233,6 +2331,10 @@ impl<'a> FnVerifier<'a> {
             }
         } else if let Val::File(f) = &res {
             self.assume(st, g, self.wf_file(f));
+        } else if let Val::Proc(p) = &res {
+            self.assume(st, g, self.wf_proc(p));
+        } else if let Val::PArgs(a) = &res {
+            self.assume(st, g, self.wf_pargs(a));
         } else if let Val::Map(rm) = &res {
             // G6 A1
             let w = self.z.and(&[rm.n.ge_i(0), rm.n.le_i(MAX_LEN)]);
@@ -2501,6 +2603,155 @@ impl<'a> FnVerifier<'a> {
         Ok(())
     }
 
+    /// One `call_requires` obligation of a catalog operation (verify.py proc_call `need`): in code only.
+    fn proc_need(&mut self, st: &State, g: &[Ast], e: &Expr, code: bool, what: &str, ob: Ast) {
+        if code {
+            self.prove_core(&st.env, &st.pc, g, &ob, pos(e), "call_requires", what, None);
+        }
+    }
+
+    /// verify.py `FnVerifier.proc_call` (G10_PROC_SPEC 2.3, 2.4, 4): the catalog contracts of the proc operations. The requires
+    /// of an operation are call_requires obligations in order (code only); an effect operation then gets a fresh result with its
+    /// well-formedness and the ensures facts. The argument builder and the observers are exact terms. Parameter observers in the
+    /// ensures denote the values at call entry (the actuals in args). Every effect result is a fresh symbol: two identical calls
+    /// are never equated.
+    #[allow(clippy::too_many_arguments)]
+    fn proc_call(&mut self, e: &Expr, n: &str, args: &[Val], st: &mut State, g: &[Ast], code: bool, rty: Option<Ty>) -> R<Val> {
+        let z = self.z.clone();
+        let what = format!("precondition of {} (catalog)", n);
+        let arg = |i: usize| -> R<&Val> { args.get(i).ok_or_else(|| "not enough values to unpack".to_string()) };
+        // ProcessArgs: argc only
+        match n {
+            "proc_args_new" => return Ok(Val::PArgs(z.int(0))),
+            "proc_args_push" => {
+                let a = arg(0)?.try_pargs()?.clone();
+                self.proc_need(st, g, e, code, &what, a.lt_i(MAX_LEN));
+                return Ok(Val::PArgs(a.add_i(1)));
+            }
+            "proc_args_len" => return Ok(Val::Int(arg(0)?.try_pargs()?.clone())),
+            // observers: field reads and array selects
+            "proc_ok" => return Ok(Val::Bool(arg(0)?.try_proc()?.error.raw_eq(&z.int(0)))),
+            "proc_error" => return Ok(Val::Int(arg(0)?.try_proc()?.error.clone())),
+            "proc_stdin_open" => return Ok(Val::Bool(arg(0)?.try_proc()?.stdin_open.clone())),
+            "proc_eof" | "proc_size" | "proc_byte" => {
+                let p = arg(0)?.try_proc()?.clone();
+                let sm = arg(1)?.try_ast()?.clone();
+                let sok = self.proc_stream_ok(&sm);
+                self.proc_need(st, g, e, code, &what, sok);
+                if n == "proc_eof" {
+                    return Ok(Val::Bool(self.proc_eof_t(&p, &sm)));
+                }
+                if n == "proc_size" {
+                    return Ok(Val::Int(self.proc_size_t(&p, &sm)));
+                }
+                let i = arg(2)?.try_ast()?.clone();
+                let size = self.proc_size_t(&p, &sm);
+                self.proc_need(st, g, e, code, &what, z.and(&[i.ge_i(0), i.lt(&size)]));
+                let r = z.ite(&sm.raw_eq(&z.int(1)), &p.out.a.select(&i), &p.err.a.select(&i));
+                if code {
+                    self.assume(st, g, z.and(&[r.ge_i(0), r.le_i(255)]));
+                }
+                return Ok(Val::Int(r));
+            }
+            "proc_bytes" => {
+                // 4.6: a new array with the snapshot's size and byte map
+                let p = arg(0)?.try_proc()?.clone();
+                let sm = arg(1)?.try_ast()?.clone();
+                let sok = self.proc_stream_ok(&sm);
+                self.proc_need(st, g, e, code, &what, sok);
+                let a = z.ite(&sm.raw_eq(&z.int(1)), &p.out.a, &p.err.a);
+                let size = self.proc_size_t(&p, &sm);
+                return Ok(Val::Arr(Arr::new(a, size, n.to_string(), Elem::U8)));
+            }
+            _ => {}
+        }
+        // effect operations: requires -> fresh result -> well-formedness -> ensures
+        let pr: Option<ProcV> = if n == "proc_spawn" { None } else { Some(arg(0)?.try_proc()?.clone()) };
+        let no_p = || "not enough values to unpack".to_string();
+        match n {
+            "proc_spawn" => {}
+            "proc_write_str" | "proc_write_bytes" | "proc_close_stdin" => {
+                let p = pr.as_ref().ok_or_else(no_p)?;
+                self.proc_need(st, g, e, code, &what, z.and(&[p.error.raw_eq(&z.int(0)), p.stdin_open.clone()]));
+            }
+            "proc_read" => {
+                let p = pr.as_ref().ok_or_else(no_p)?;
+                self.proc_need(st, g, e, code, &what, p.error.raw_eq(&z.int(0)));
+                let sok = self.proc_stream_ok(arg(1)?.try_ast()?);
+                self.proc_need(st, g, e, code, &what, sok);
+                let mx = arg(2)?.try_ast()?.clone();
+                self.proc_need(st, g, e, code, &what, z.and(&[mx.gt_i(0), mx.le_i(MAX_LEN)]));
+            }
+            "proc_read_all" => {
+                let p = pr.as_ref().ok_or_else(no_p)?;
+                self.proc_need(st, g, e, code, &what, z.and(&[p.error.raw_eq(&z.int(0)), p.stdin_open.not()]));
+            }
+            _ => {}
+        }
+        let rt = rty.ok_or_else(|| "fresh: None".to_string())?;
+        let res = self.try_fresh(n, &rt)?;
+        if let Some(w) = self.wf_of_val(&rt, &res)? {
+            self.assume(st, g, w);
+        }
+        if n == "proc_wait" || n == "proc_kill" {
+            // 4.7: the existing Result<i64> encoding; Ok(0) is never assumed
+            let p = pr.as_ref().ok_or_else(no_p)?;
+            let r = res.try_ast()?.clone();
+            let f1 = p.error.ne_i(0).implies(&r.eq(&self.prelude.err(&p.error)));
+            let f2 = self.prelude.is_err(&r).implies(&z.and(&[self.prelude.eval(&r).ge_i(1), self.prelude.eval(&r).le_i(6)]));
+            self.assume(st, g, f1);
+            self.assume(st, g, f2);
+            return Ok(res);
+        }
+        let rp = res.try_proc()?.clone();
+        let ok = rp.error.raw_eq(&z.int(0));
+        let mut facts: Vec<Ast> = Vec::new();
+        match n {
+            "proc_spawn" => {
+                facts.push(ok.implies(&rp.stdin_open));
+                facts.push(ok.not().implies(&z.and(&[
+                    rp.stdin_open.not(),
+                    z.or(&[rp.error.raw_eq(&z.int(1)), rp.error.raw_eq(&z.int(2))]),
+                ])));
+                facts.push(z.and(&[
+                    rp.out.n.raw_eq(&z.int(0)), rp.err.n.raw_eq(&z.int(0)), rp.stdout_eof.not(), rp.stderr_eof.not(),
+                ]));
+            }
+            "proc_write_str" | "proc_write_bytes" => {
+                let p = pr.as_ref().ok_or_else(no_p)?;
+                facts.push(ok.implies(&z.and(&[
+                    rp.stdin_open.eq(&p.stdin_open), self.proc_keep_out(&rp, p), self.proc_keep_err(&rp, p),
+                ])));
+            }
+            "proc_close_stdin" => {
+                let p = pr.as_ref().ok_or_else(no_p)?;
+                facts.push(rp.stdin_open.not());
+                facts.push(ok.implies(&z.and(&[self.proc_keep_out(&rp, p), self.proc_keep_err(&rp, p)])));
+            }
+            "proc_read" => {
+                let p = pr.as_ref().ok_or_else(no_p)?;
+                let sm = arg(1)?.try_ast()?.clone();
+                let mx = arg(2)?.try_ast()?.clone();
+                let sz = self.proc_size_t(&rp, &sm);
+                facts.push(ok.implies(&z.and(&[sz.ge_i(0), sz.le(&mx)])));
+                facts.push(ok.implies(&self.proc_eof_t(&rp, &sm).eq(&sz.raw_eq(&z.int(0)))));
+                facts.push(z.and(&[ok.clone(), self.proc_eof_t(p, &sm)]).implies(&sz.raw_eq(&z.int(0))));
+                facts.push(z.and(&[ok.clone(), sm.raw_eq(&z.int(1))]).implies(&self.proc_keep_err(&rp, p)));
+                facts.push(z.and(&[ok.clone(), sm.raw_eq(&z.int(2))]).implies(&self.proc_keep_out(&rp, p)));
+                facts.push(ok.implies(&rp.stdin_open.eq(&p.stdin_open)));
+            }
+            "proc_read_all" => {
+                facts.push(rp.stdin_open.not());
+                facts.push(ok.implies(&z.and(&[rp.stdout_eof.clone(), rp.stderr_eof.clone()])));
+            }
+            _ => return Err(format!("catalog: {}", n)),
+        }
+        for f in facts {
+            self.assume(st, g, f);
+        }
+        Ok(res)
+    }
+
     /// verify.py `catalog_call` (G6_SPEC 11.3): the standard catalog; every requires is a `call_requires` obligation
     /// (only in code), then an exact term is the result (a fresh symbol only for new_* and string_push_str).
     fn catalog_call(&mut self, e: &Expr, x: &ast::Call, args: &[Val], st: &mut State, g: &[Ast], code: bool) -> R<Val> {
@@ -2513,6 +2764,9 @@ impl<'a> FnVerifier<'a> {
         let argv = move |i: usize| av(args, i);
         // need(ob): `precondition of NAME (catalog)`, in code only
         let what = format!("precondition of {} (catalog)", n);
+        if n.starts_with("proc_") {
+            return self.proc_call(e, n, args, st, g, code, rty);
+        }
         if pruv_core::foreign::is_file_observer(n) {
             let f = argv(0)?.try_file()?;
             return Ok(match n {
@@ -2720,6 +2974,17 @@ impl<'a> FnVerifier<'a> {
                     let f = self.ev(&x.args[0], st, g, false, env)?;
                     let i = self.ev_ast(&x.args[1], st, g, false, env)?;
                     parts.push(Some(self.z.and(&[i.ge_i(0), i.lt(&f.try_file()?.buf.n)])));
+                }
+                if wo && is_proc_dom(&x.name) {
+                    // G10 proc A1 (4.9): a valid stream, and for proc_byte a valid index
+                    let pv = self.ev(&x.args[0], st, g, false, env)?;
+                    let sm = self.ev_ast(&x.args[1], st, g, false, env)?;
+                    parts.push(Some(self.proc_stream_ok(&sm)));
+                    if x.name == "proc_byte" {
+                        let i = self.ev_ast(&x.args[2], st, g, false, env)?;
+                        let size = self.proc_size_t(pv.try_proc()?, &sm);
+                        parts.push(Some(self.z.and(&[i.ge_i(0), i.lt(&size)])));
+                    }
                 }
                 if wo && x.name == "load_be" {
                     // P2 batch 4: the word lies inside the array
@@ -3278,6 +3543,8 @@ impl<'a> FnVerifier<'a> {
                     }
                 }
                 Val::File(f) => st.pc.push(self.wf_file(f)),
+                Val::Proc(p) => st.pc.push(self.wf_proc(p)),
+                Val::PArgs(a) => st.pc.push(self.wf_pargs(a)),
                 Val::Map(m) => st.pc.push(self.z.and(&[m.n.ge_i(0), m.n.le_i(MAX_LEN)])),
                 other => {
                     if let Some(w) = self.try_wf(&rty, other.try_ast()?)? {
@@ -3317,6 +3584,8 @@ impl<'a> FnVerifier<'a> {
                     }
                 }
                 Val::File(f) => pc.push(self.wf_file(f)),
+                Val::Proc(p) => pc.push(self.wf_proc(p)),
+                Val::PArgs(a) => pc.push(self.wf_pargs(a)),
                 Val::Map(m) => pc.push(self.z.and(&[m.n.ge_i(0), m.n.le_i(MAX_LEN)])), // G6 A1
                 other => {
                     if let Some(w) = self.try_wf(&pty, other.try_ast()?)? {

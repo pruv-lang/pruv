@@ -1,0 +1,5 @@
+fn bad(p: Process) -> i64
+  ensures proc_size(p, 3) >= 0
+{
+  return 0;
+}

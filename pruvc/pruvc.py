@@ -71,10 +71,6 @@ def compile_file(path, out, verify=True, trust_callers=False, backend="rust", ru
         raise ValueError("also_llvm requires backend='rust'")
     prog = load_program(path)   # G4: the root file plus its declared module files; a legacy root is plain parse(src)
     check(prog, externs=externs)
-    # G10 proc A0 staging guard: after type checking (type diagnostics win), before verification, in every mode.
-    procerr = proc_unimplemented_error(prog)
-    if procerr is not None:
-        return [procerr]
     # G9 A3: both back ends lower G9 programs; the G9 staging guard is gone from the driver.
     # G6: the Rust source backend lowers foreign calls and collections (A2); the LLVM backend (and --also-llvm)
     # lowers the G6_SPEC 13.1 subset (A3) and rejects everything else with codegen/unsupported_type: that decision
@@ -92,6 +88,11 @@ def compile_file(path, out, verify=True, trust_callers=False, backend="rust", ru
             return errs
     elif infer and show_inferred:
         print(json.dumps({"status": "skipped_no_verify"}, sort_keys=True, ensure_ascii=False), file=sys.stderr)
+    # G10 proc staging guard (A1: moved here): the codegen entry, after verification (verification errors win), in
+    # every mode; --no-verify still stops here.
+    procerr = proc_unimplemented_error(prog)
+    if procerr is not None:
+        return [procerr]
     g7err = g7_target_error(prog) if emit in ("exe", "obj") else None
     if g7err is not None:
         return [g7err]

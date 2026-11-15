@@ -1,8 +1,12 @@
-// G10 proc A0: p = proc_read(move p, 1, 4096) restores the owner, also inside a loop.
-fn pump(take input: Process) -> Process ! proc, alloc {
+// G10 proc A0: p = proc_read(move p, 1, 4096) restores the owner, also inside a loop (verifies, then stops at the guard).
+fn pump(take input: Process) -> Process ! proc, alloc
+  requires proc_ok(input) && !proc_stdin_open(input)
+{
   let mut p: Process = move input;
   p = proc_read(move p, 1, 4096);
-  p = proc_read_all(move p);
+  if proc_ok(p) {
+    p = proc_read_all(move p);
+  }
   return move p;
 }
 

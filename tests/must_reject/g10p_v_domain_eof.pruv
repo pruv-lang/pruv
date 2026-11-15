@@ -1,0 +1,5 @@
+fn bad(p: Process) -> i64
+  requires proc_eof(p, 0)
+{
+  return 0;
+}

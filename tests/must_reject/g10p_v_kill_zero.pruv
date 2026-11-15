@@ -1,0 +1,5 @@
+fn bad(take p: Process) -> i64 ! proc, alloc {
+  let r: Result<i64> = proc_kill(move p);
+  assert is_ok(r) ==> ok_val(r) == 0;
+  return 0;
+}

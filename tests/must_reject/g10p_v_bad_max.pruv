@@ -1,0 +1,5 @@
+fn bad(take input: Process) -> Process ! proc, alloc
+  requires proc_ok(input)
+{
+  return proc_read(move input, 1, 0);
+}
