@@ -1,0 +1,4 @@
+fn f(program: str, cwd: str) -> bool ! proc, alloc {
+  let args: ProcessArgs = proc_args_new();
+  return proc_ok(proc_spawn(program, args, cwd));
+}

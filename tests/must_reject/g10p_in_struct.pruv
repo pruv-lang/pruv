@@ -1,0 +1,2 @@
+struct Holder { p: Process }
+fn f() -> i64 { return 0; }

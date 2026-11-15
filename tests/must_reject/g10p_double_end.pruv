@@ -1,0 +1,6 @@
+fn f(program: str, cwd: str) -> Result<i64> ! proc, alloc {
+  let args: ProcessArgs = proc_args_new();
+  let p: Process = proc_spawn(program, args, cwd);
+  let r: Result<i64> = proc_wait(move p);
+  return proc_kill(move p);
+}

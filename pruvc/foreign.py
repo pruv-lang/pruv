@@ -34,6 +34,8 @@ def _map(k, v):
 
 STRING = Type("string")
 FILE = Type("file")
+PROCESS = Type("process")
+PROCESS_ARGS = Type("process_args")
 CATALOG = {}
 
 
@@ -70,6 +72,29 @@ _add("file_readable", [], lambda: ([_p("f", FILE)], BOOL))
 _add("file_writable", [], lambda: ([_p("f", FILE)], BOOL))
 _add("file_size", [], lambda: ([_p("f", FILE)], I64))
 _add("file_byte", [], lambda: ([_p("f", FILE), _p("i", I64)], I64))
+# G10 proc A0 (docs/G10_PROC_SPEC.md 2.3): signatures and effects only. The section 2.3 contracts are installed by
+# the verification batch (A1); until then the staging guard (proc_unimplemented_error) stops every program that
+# reaches these operations before verification, so a placeholder contract can never be reported as proven.
+_add("proc_args_new", [], lambda: ([], PROCESS_ARGS), ["alloc"])
+_add("proc_args_push", [], lambda: ([_p("a", PROCESS_ARGS, True), _p("arg", STR)], PROCESS_ARGS), ["alloc"])
+_add("proc_args_len", [], lambda: ([_p("a", PROCESS_ARGS)], I64))
+_add("proc_spawn", [], lambda: ([_p("program", STR), _p("args", PROCESS_ARGS), _p("cwd", STR)], PROCESS),
+     ["proc", "alloc"])
+_add("proc_write_str", [], lambda: ([_p("p", PROCESS, True), _p("text", STR)], PROCESS), ["proc", "alloc"])
+_add("proc_write_bytes", [], lambda: ([_p("p", PROCESS, True), _p("data", ARRAY_U8)], PROCESS), ["proc", "alloc"])
+_add("proc_close_stdin", [], lambda: ([_p("p", PROCESS, True)], PROCESS), ["proc", "alloc"])
+_add("proc_read", [], lambda: ([_p("p", PROCESS, True), _p("stream", I64), _p("max", I64)], PROCESS),
+     ["proc", "alloc"])
+_add("proc_read_all", [], lambda: ([_p("p", PROCESS, True)], PROCESS), ["proc", "alloc"])
+_add("proc_bytes", [], lambda: ([_p("p", PROCESS), _p("stream", I64)], ARRAY_U8), ["alloc"])
+_add("proc_wait", [], lambda: ([_p("p", PROCESS, True)], RESULT), ["proc", "alloc"])
+_add("proc_kill", [], lambda: ([_p("p", PROCESS, True)], RESULT), ["proc", "alloc"])
+_add("proc_ok", [], lambda: ([_p("p", PROCESS)], BOOL))
+_add("proc_error", [], lambda: ([_p("p", PROCESS)], I64))
+_add("proc_stdin_open", [], lambda: ([_p("p", PROCESS)], BOOL))
+_add("proc_eof", [], lambda: ([_p("p", PROCESS), _p("stream", I64)], BOOL))
+_add("proc_size", [], lambda: ([_p("p", PROCESS), _p("stream", I64)], I64))
+_add("proc_byte", [], lambda: ([_p("p", PROCESS), _p("stream", I64), _p("i", I64)], I64))
 # contract-only observers
 _add("map_lookup", _KV, lambda K, V: ([_p("m", _map(K, V)), _p("k", K)], mk_option(V)))
 _add("map_updated", _KV, lambda K, V: ([_p("after", _map(K, V)), _p("before", _map(K, V)), _p("k", K), _p("v", V)],
@@ -77,6 +102,10 @@ _add("map_updated", _KV, lambda K, V: ([_p("after", _map(K, V)), _p("before", _m
 CATALOG_NAMES = tuple(CATALOG)
 CATALOG_CONTRACT_ONLY = ("map_lookup", "map_updated")
 FILE_OBSERVERS = ("file_ok", "file_readable", "file_writable", "file_size", "file_byte")
+# G10 proc A0: the observers allowed in contracts; every other proc_* operation (effects, allocating proc_bytes)
+# is type/foreign_contract there.
+PROC_OBSERVERS = ("proc_args_len", "proc_ok", "proc_error", "proc_stdin_open", "proc_eof", "proc_size", "proc_byte")
+PROC_OPS = tuple(n for n in CATALOG if n.startswith("proc_"))
 
 
 # G10 A1: typed contract ASTs, evaluated by the catalog-call verifier.
@@ -206,15 +235,28 @@ def _join(a, b):
     return dict((n, v if b[n] == v else "maybe") for n, v in a.items() if n in b)
 
 
+def _proc_lost(node, msg):
+    """G10 proc A0 (G10_PROC_SPEC 3.3 / 7.1): a Process duty is left at `node`"""
+    _err(node, "proc_unconsumed", msg,
+         "consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership")
+
+
 class _Ownership:
     def __init__(s, funcs):
         s.funcs = funcs
         s.bor = set()
         s.track = None   # name -> "move" | "borrow" of the outermost call being checked (shared by nested calls)
+        s.proc = set()   # G10 proc A0: names of Process bindings (must-consume); never File, String or ProcessArgs
+        s.decl = {}      # name -> the Let that declared it (location of a scope-end proc_unconsumed)
 
     def run(s, f):
         s.bor = set(p.name for p in f.params if is_collection(p.type) and not p.take)
-        s.block(f.body, dict((p.name, "live") for p in f.params if p.take))
+        s.proc = set(p.name for p in f.params if p.take and p.type == PROCESS)
+        st = s.block(f.body, dict((p.name, "live") for p in f.params if p.take))
+        if st is not None:     # fallthrough: a live take Process parameter is a lost duty
+            for n in st:
+                if n in s.proc and st[n] != "dead":
+                    _proc_lost(f, "Process %s is not consumed before the end of the function" % n)
 
     def block(s, stmts, st):
         declared = []
@@ -224,6 +266,8 @@ class _Ownership:
             st = s.stmt(x, st, declared)
         if st is not None:
             for n in declared:
+                if n in s.proc and st.get(n) in ("live", "maybe"):
+                    _proc_lost(s.decl[n], "Process %s is not consumed before the end of its scope" % n)
                 st.pop(n, None)
         return st
 
@@ -233,9 +277,16 @@ class _Ownership:
             if is_collection(x.type):
                 st[x.name] = "live"
                 declared.append(x.name)
+                if x.type == PROCESS:
+                    s.proc.add(x.name)
+                    s.decl[x.name] = x
+                else:
+                    s.proc.discard(x.name)
             return st
         if isinstance(x, Assign):
-            s.consume(x.value, st, "assign")
+            s.consume(x.value, st, "assign")       # the right-hand side is consumed first
+            if x.name in s.proc and st.get(x.name) in ("live", "maybe"):
+                _proc_lost(x, "Process %s is overwritten while it is not consumed" % x.name)
             if x.name in st:
                 st[x.name] = "live"
             return st
@@ -263,6 +314,9 @@ class _Ownership:
         if isinstance(x, Return):
             if x.value is not None:
                 s.consume(x.value, st, "return")
+            for n in st:       # every owned Process leaving the function must be dead (the value was consumed first)
+                if n in s.proc and st[n] != "dead":
+                    _proc_lost(x, "Process %s is not consumed before return" % n)
             return None
         if isinstance(x, ExprStmt):
             s.expr(x.expr, st)
@@ -308,7 +362,7 @@ class _Ownership:
                  "use move for a take argument, a let initializer, an assignment or return")
         if n in s.bor:
             # G10 specifies foreign_borrow; preserve the established G6 diagnostic for other types.
-            _err(e, "foreign_borrow" if e.ty == FILE else "foreign_move", "moving a borrowed parameter",
+            _err(e, "foreign_borrow" if e.ty in (FILE, PROCESS) else "foreign_move", "moving a borrowed parameter",
                  "%s is a read parameter; declare it `take %s: ...` to consume it" % (n, n))
         st[n] = "dead"
         if track is not None:
@@ -328,16 +382,20 @@ class _Ownership:
                 _err(e, "foreign_move", "returning an owned binding without move", "write return move %s;" % e.name)
             _err(e, "foreign_move", "alias of an owned binding without move", "write move %s" % e.name)
         else:
-            s.expr(e, st)
+            s.expr(e, st, True)
 
     # ---- expressions ----
-    def expr(s, e, st):
+    def expr(s, e, st, owned=False):
+        """owned: the value is taken at once by a binding, a return or a take argument (not a dropped temporary)"""
         if isinstance(e, Var):
             if is_collection(e.ty):
                 s.use(e, st)
         elif isinstance(e, Move):
             s.move(e, st, False, None)
         elif isinstance(e, Call):
+            if not owned and e.ty == PROCESS:     # a Process temporary that is borrowed or dropped keeps its duty
+                s.call(e, st)
+                _proc_lost(e, "temporary Process is not consumed")
             s.call(e, st)
         elif isinstance(e, Binary) and e.op in ("&&", "||"):
             s.expr(e.left, st)
@@ -374,7 +432,7 @@ class _Ownership:
                     _err(arg, "foreign_move", "missing move in a consuming argument",
                          "write move %s" % arg.name)
                 else:
-                    s.expr(arg, st)
+                    s.expr(arg, st, True)
             elif isinstance(arg, Move):
                 s.move(arg, st, False, track)
             elif isinstance(arg, Var) and is_collection(arg.ty):
@@ -439,6 +497,54 @@ def g6_unimplemented_error(prog, stage="codegen"):
     return PruvError(stage, line, col, "unsupported_type",
                      "G6 foreign calls and collections are not implemented by the llvm codegen layer yet",
                      "avoid trusted rust fn, Vec, HashMap, String, take and move for now")
+
+
+def _is_proc_type(t):
+    return t.owner is None and (t.name in ("process", "process_args") or any(_is_proc_type(a) for a in t.args))
+
+
+def _proc_candidates(node, out):
+    if isinstance(node, (list, tuple)):
+        for x in node:
+            _proc_candidates(x, out)
+        return
+    if not hasattr(node, "__dataclass_fields__") or isinstance(node, Type):
+        return
+    if isinstance(node, Let) and _is_proc_type(node.type):
+        out.append((node.line, node.col))
+    elif isinstance(node, Call) and node.name in PROC_OPS:
+        out.append((node.line, node.col))
+    for fname in node.__dataclass_fields__:
+        _proc_candidates(getattr(node, fname), out)
+
+
+def first_proc_use(prog):
+    """G10 proc A0: the first use of Process, ProcessArgs or a proc_* operation of a checked program ->
+    (node, line, col) or None. Functions in order; the signature (a Process / ProcessArgs parameter or result) comes
+    before the body, whose first use is the smallest source position. A function that only declares `! proc` is
+    not a use."""
+    for f in prog.functions:
+        if any(_is_proc_type(p.type) for p in f.params) or _is_proc_type(f.ret):
+            return (f, f.line, f.col)
+        cands = []
+        _proc_candidates(f.body, cands)
+        if cands:
+            line, col = min(cands)
+            return (f, line, col)
+    return None
+
+
+def proc_unimplemented_error(prog, stage="codegen"):
+    """G10 proc A0 staging guard: PruvError (unsupported_type) for the first Process use, or None. Run right after
+    type checking, so type diagnostics win; it applies in every mode, including verify."""
+    hit = first_proc_use(prog)
+    if hit is None:
+        return None
+    f, line, col = hit
+    return PruvError(stage, line, col, "unsupported_type",
+                     "the G10 proc slice (Process, ProcessArgs and proc_* operations) is not implemented yet",
+                     "avoid Process, ProcessArgs and proc_* operations for now; a function that only declares "
+                     "`! proc` still compiles", file=getattr(f, "file", None))
 
 
 def _par_nodes(node, out):

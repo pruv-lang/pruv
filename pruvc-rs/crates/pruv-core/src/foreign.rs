@@ -40,7 +40,7 @@ pub struct CatFn {
 }
 
 /// CATALOG_NAMES of foreign.py (insertion order).
-pub const CATALOG_NAMES: [&str; 23] = [
+pub const CATALOG_NAMES: [&str; 41] = [
     "vec_new",
     "vec_push",
     "vec_get",
@@ -62,6 +62,24 @@ pub const CATALOG_NAMES: [&str; 23] = [
     "file_writable",
     "file_size",
     "file_byte",
+    "proc_args_new",
+    "proc_args_push",
+    "proc_args_len",
+    "proc_spawn",
+    "proc_write_str",
+    "proc_write_bytes",
+    "proc_close_stdin",
+    "proc_read",
+    "proc_read_all",
+    "proc_bytes",
+    "proc_wait",
+    "proc_kill",
+    "proc_ok",
+    "proc_error",
+    "proc_stdin_open",
+    "proc_eof",
+    "proc_size",
+    "proc_byte",
     "map_lookup",
     "map_updated",
 ];
@@ -74,6 +92,19 @@ pub const FILE_OBSERVERS: [&str; 5] = ["file_ok", "file_readable", "file_writabl
 
 pub fn is_file_observer(name: &str) -> bool {
     FILE_OBSERVERS.contains(&name)
+}
+
+/// PROC_OBSERVERS of foreign.py (G10 proc A0): proc catalog reads allowed in contracts; every other proc_* operation
+/// (effects, the allocating proc_bytes) is type/foreign_contract there.
+pub const PROC_OBSERVERS: [&str; 7] =
+    ["proc_args_len", "proc_ok", "proc_error", "proc_stdin_open", "proc_eof", "proc_size", "proc_byte"];
+
+pub fn is_proc_observer(name: &str) -> bool {
+    PROC_OBSERVERS.contains(&name)
+}
+
+pub fn is_proc_op(name: &str) -> bool {
+    name.starts_with("proc_") && CATALOG_NAMES.contains(&name)
 }
 
 pub fn is_catalog(name: &str) -> bool {
@@ -104,6 +135,14 @@ fn file_t() -> GType {
     GType::new("file", Vec::new())
 }
 
+fn process_t() -> GType {
+    GType::new("process", Vec::new())
+}
+
+fn process_args_t() -> GType {
+    GType::new("process_args", Vec::new())
+}
+
 fn tp(name: &str, bound: Option<&str>) -> TParam {
     TParam { line: 0, col: 0, name: name.to_string(), bound: bound.map(|b| b.to_string()) }
 }
@@ -117,6 +156,7 @@ pub fn catalog_fn(name: &str) -> Option<CatFn> {
     let v = || mk_param(&owner, 1, "V");
     let alloc = || vec!["alloc".to_string()];
     let fs = || vec!["fs".to_string()];
+    let proc_alloc = || vec!["proc".to_string(), "alloc".to_string()];
     let tp_t = || vec![tp("T", None)];
     let tp_kv = || vec![tp("K", Some("Element")), tp("V", None)];
     let mut f = match name {
@@ -197,6 +237,78 @@ pub fn catalog_fn(name: &str) -> Option<CatFn> {
         "file_size" => CatFn { requires: vec![], ensures: vec![], params: vec![p("f", file_t(), false)], ret: GType::i64(), effects: vec![], tparams: vec![] },
         "file_byte" => CatFn { requires: vec![], ensures: vec![],
             params: vec![p("f", file_t(), false), p("i", GType::i64(), false)],
+            ret: GType::i64(),
+            effects: vec![],
+            tparams: vec![],
+        },
+        // G10 proc A0: signatures and effects only; the section 2.3 contracts arrive with A1 and the staging guard
+        // (proc_unimplemented_error) stops every program that uses these operations before verification.
+        "proc_args_new" => CatFn { requires: vec![], ensures: vec![], params: vec![], ret: process_args_t(), effects: alloc(), tparams: vec![] },
+        "proc_args_push" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("a", process_args_t(), true), p("arg", GType::str(), false)],
+            ret: process_args_t(),
+            effects: alloc(),
+            tparams: vec![],
+        },
+        "proc_args_len" => CatFn { requires: vec![], ensures: vec![], params: vec![p("a", process_args_t(), false)], ret: GType::i64(), effects: vec![], tparams: vec![] },
+        "proc_spawn" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("program", GType::str(), false), p("args", process_args_t(), false), p("cwd", GType::str(), false)],
+            ret: process_t(),
+            effects: proc_alloc(),
+            tparams: vec![],
+        },
+        "proc_write_str" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("p", process_t(), true), p("text", GType::str(), false)],
+            ret: process_t(),
+            effects: proc_alloc(),
+            tparams: vec![],
+        },
+        "proc_write_bytes" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("p", process_t(), true), p("data", GType::array_u8(), false)],
+            ret: process_t(),
+            effects: proc_alloc(),
+            tparams: vec![],
+        },
+        "proc_close_stdin" | "proc_read_all" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("p", process_t(), true)],
+            ret: process_t(),
+            effects: proc_alloc(),
+            tparams: vec![],
+        },
+        "proc_read" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("p", process_t(), true), p("stream", GType::i64(), false), p("max", GType::i64(), false)],
+            ret: process_t(),
+            effects: proc_alloc(),
+            tparams: vec![],
+        },
+        "proc_bytes" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("p", process_t(), false), p("stream", GType::i64(), false)],
+            ret: GType::array_u8(),
+            effects: alloc(),
+            tparams: vec![],
+        },
+        "proc_wait" | "proc_kill" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("p", process_t(), true)],
+            ret: GType::result(),
+            effects: proc_alloc(),
+            tparams: vec![],
+        },
+        "proc_ok" | "proc_stdin_open" => CatFn { requires: vec![], ensures: vec![], params: vec![p("p", process_t(), false)], ret: GType::bool(), effects: vec![], tparams: vec![] },
+        "proc_error" => CatFn { requires: vec![], ensures: vec![], params: vec![p("p", process_t(), false)], ret: GType::i64(), effects: vec![], tparams: vec![] },
+        "proc_eof" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("p", process_t(), false), p("stream", GType::i64(), false)],
+            ret: GType::bool(),
+            effects: vec![],
+            tparams: vec![],
+        },
+        "proc_size" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("p", process_t(), false), p("stream", GType::i64(), false)],
+            ret: GType::i64(),
+            effects: vec![],
+            tparams: vec![],
+        },
+        "proc_byte" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("p", process_t(), false), p("stream", GType::i64(), false), p("i", GType::i64(), false)],
             ret: GType::i64(),
             effects: vec![],
             tparams: vec![],
@@ -494,18 +606,36 @@ struct Ownership<'a> {
     bor: HashSet<String>,
     /// name -> "move" | "borrow" of the outermost call being checked (shared by nested calls)
     track: Option<Track>,
+    /// G10 proc A0: names of Process bindings (must-consume); never File, String or ProcessArgs
+    proc: HashSet<String>,
+    /// name -> (line, col) of the Let that declared it (location of a scope-end proc_unconsumed)
+    decl: HashMap<String, (i64, i64)>,
 }
 
 type Track = HashMap<String, &'static str>;
 
+/// G10 proc A0 (G10_PROC_SPEC 3.3 / 7.1): a Process duty is left at (line, col)
+fn proc_lost(line: i64, col: i64, msg: String) -> PruvError {
+    err(line, col, "proc_unconsumed", msg, "consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership")
+}
+
 impl<'a> Ownership<'a> {
     fn run(&mut self, f: &Function) -> Res<()> {
         self.bor = f.params.iter().filter(|p| key_is_collection(&p.ty) && !p.take).map(|p| p.name.clone()).collect();
+        self.proc = f.params.iter().filter(|p| p.take && p.ty == "process").map(|p| p.name.clone()).collect();
         let mut st = St::default();
         for p in f.params.iter().filter(|p| p.take) {
             st.set(&p.name, V::Live);
         }
-        self.block(&f.body, st)?;
+        let end = self.block(&f.body, st)?;
+        if let Some(end) = &end {
+            // fallthrough: a live take Process parameter is a lost duty
+            for (n, v) in end.iter() {
+                if self.proc.contains(n) && *v != V::Dead {
+                    return Err(proc_lost(f.line, f.col, format!("Process {} is not consumed before the end of the function", n)));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -521,6 +651,10 @@ impl<'a> Ownership<'a> {
         }
         if let Some(s) = cur.as_mut() {
             for n in &declared {
+                if self.proc.contains(n) && matches!(s.get(n), Some(V::Live) | Some(V::Maybe)) {
+                    let (l, c) = self.decl.get(n).copied().unwrap_or((0, 0));
+                    return Err(proc_lost(l, c, format!("Process {} is not consumed before the end of its scope", n)));
+                }
                 s.pop(n);
             }
         }
@@ -534,11 +668,20 @@ impl<'a> Ownership<'a> {
                 if key_is_collection(&l.ty) {
                     st.set(&l.name, V::Live);
                     declared.push(l.name.clone());
+                    if l.ty == "process" {
+                        self.proc.insert(l.name.clone());
+                        self.decl.insert(l.name.clone(), (l.line, l.col));
+                    } else {
+                        self.proc.remove(&l.name);
+                    }
                 }
                 Ok(Some(st))
             }
             Stmt::Assign(a) => {
-                self.consume(&a.value, &mut st, "assign")?;
+                self.consume(&a.value, &mut st, "assign")?; // the right-hand side is consumed first
+                if self.proc.contains(&a.name) && matches!(st.get(&a.name), Some(V::Live) | Some(V::Maybe)) {
+                    return Err(proc_lost(a.line, a.col, format!("Process {} is overwritten while it is not consumed", a.name)));
+                }
                 if st.contains(&a.name) {
                     st.set(&a.name, V::Live);
                 }
@@ -585,6 +728,12 @@ impl<'a> Ownership<'a> {
             Stmt::Return(r) => {
                 if let Some(v) = &r.value {
                     self.consume(v, &mut st, "return")?;
+                }
+                // every owned Process leaving the function must be dead (the value was consumed first)
+                for (n, v) in st.iter() {
+                    if self.proc.contains(n) && *v != V::Dead {
+                        return Err(proc_lost(r.line, r.col, format!("Process {} is not consumed before return", n)));
+                    }
                 }
                 Ok(None)
             }
@@ -674,7 +823,7 @@ impl<'a> Ownership<'a> {
         }
         if self.bor.contains(n) {
             // G10 specifies foreign_borrow; the established G6 diagnostic stays for the other types.
-            let code = if e.ty.as_deref() == Some("file") { "foreign_borrow" } else { "foreign_move" };
+            let code = if matches!(e.ty.as_deref(), Some("file") | Some("process")) { "foreign_borrow" } else { "foreign_move" };
             return Err(err(
                 line,
                 col,
@@ -731,12 +880,17 @@ impl<'a> Ownership<'a> {
                     format!("write move {}", v.name),
                 ))
             }
-            _ => self.expr(e, st),
+            _ => self.expr_o(e, st, true),
         }
     }
 
     // ---- expressions ----
     fn expr(&mut self, e: &Expr, st: &mut St) -> Res<()> {
+        self.expr_o(e, st, false)
+    }
+
+    /// owned: the value is taken at once by a binding, a return or a take argument (not a dropped temporary)
+    fn expr_o(&mut self, e: &Expr, st: &mut St, owned: bool) -> Res<()> {
         match e {
             Expr::Spent(_) => Ok(()),
             Expr::Var(v) => {
@@ -746,7 +900,14 @@ impl<'a> Ownership<'a> {
                 Ok(())
             }
             Expr::Move(m) => self.mv(m, st, false, false),
-            Expr::Call(c) => self.call(c, st),
+            Expr::Call(c) => {
+                self.call(c, st)?;
+                if !owned && c.ty.as_deref() == Some("process") {
+                    // a Process temporary that is borrowed or dropped keeps its duty
+                    return Err(proc_lost(c.line, c.col, "temporary Process is not consumed".to_string()));
+                }
+                Ok(())
+            }
             Expr::Binary(b) if b.op == "&&" || b.op == "||" => {
                 self.expr(&b.left, st)?;
                 let before = st.clone();
@@ -811,7 +972,7 @@ impl<'a> Ownership<'a> {
                             format!("write move {}", v.name),
                         ));
                     }
-                    _ => self.expr(arg, st)?,
+                    _ => self.expr_o(arg, st, true)?,
                 }
             } else {
                 match arg {
@@ -841,7 +1002,7 @@ impl<'a> Ownership<'a> {
 
 /// ownership/liveness of one typed, non-foreign function; funcs: name -> `take` flags of the program's functions
 pub fn check_ownership(f: &Function, funcs: &Takes) -> Res<()> {
-    Ownership { funcs, bor: HashSet::new(), track: None }.run(f)
+    Ownership { funcs, bor: HashSet::new(), track: None, proc: HashSet::new(), decl: HashMap::new() }.run(f)
 }
 
 // ---------------------------------------------------------------------------
@@ -1002,6 +1163,147 @@ pub fn g6_unimplemented_error(prog: &Program, stage: &str) -> Option<PruvError> 
 }
 
 // ---------------------------------------------------------------------------
+// G10 proc A0 staging guard (counterpart of foreign.py proc_unimplemented_error)
+// ---------------------------------------------------------------------------
+
+fn key_has_proc(key: &str) -> bool {
+    fn has(t: &GType) -> bool {
+        (t.owner.is_none() && (t.name == "process" || t.name == "process_args")) || t.args.iter().any(has)
+    }
+    match GType::try_from_key(key) {
+        Ok(t) => has(&t),
+        Err(_) => false,
+    }
+}
+
+fn proc_expr(e: &Expr, out: &mut Cands) {
+    match e {
+        Expr::Call(c) => {
+            if is_proc_op(&c.name) {
+                out.push((c.line, c.col));
+            }
+            for a in &c.args {
+                proc_expr(a, out);
+            }
+        }
+        Expr::Unary(x) => proc_expr(&x.operand, out),
+        Expr::Binary(x) => {
+            proc_expr(&x.left, out);
+            proc_expr(&x.right, out);
+        }
+        Expr::Index(x) => {
+            proc_expr(&x.array, out);
+            proc_expr(&x.index, out);
+        }
+        Expr::Ctor(x) => {
+            if let Some(a) = &x.arg {
+                proc_expr(a, out);
+            }
+        }
+        Expr::Quant(x) => {
+            proc_expr(&x.lo, out);
+            proc_expr(&x.hi, out);
+            proc_expr(&x.body, out);
+        }
+        Expr::StructLit(x) => {
+            for f in &x.fields {
+                proc_expr(&f.value, out);
+            }
+        }
+        Expr::EnumCtor(x) => {
+            for a in &x.args {
+                proc_expr(a, out);
+            }
+        }
+        Expr::FieldAccess(x) => proc_expr(&x.base, out),
+        Expr::IsVariant(x) => proc_expr(&x.value, out),
+        Expr::VariantField(x) => proc_expr(&x.value, out),
+        Expr::InoutArg(x) => proc_expr(&x.expr, out),
+        Expr::Move(_) | Expr::Spent(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StrLit(_) | Expr::Var(_) => {}
+    }
+}
+
+fn proc_stmts(stmts: &[Stmt], out: &mut Cands) {
+    for s in stmts {
+        match s {
+            Stmt::Let(l) => {
+                if key_has_proc(&l.ty) {
+                    out.push((l.line, l.col));
+                }
+                proc_expr(&l.value, out);
+            }
+            Stmt::Assign(a) => proc_expr(&a.value, out),
+            Stmt::IndexAssign(a) => {
+                proc_expr(&a.index, out);
+                proc_expr(&a.value, out);
+            }
+            Stmt::If(i) => {
+                proc_expr(&i.cond, out);
+                proc_stmts(&i.then, out);
+                proc_stmts(&i.els, out);
+            }
+            Stmt::While(w) => {
+                proc_expr(&w.cond, out);
+                for inv in &w.invariants {
+                    proc_expr(inv, out);
+                }
+                proc_expr(&w.decreases, out);
+                proc_stmts(&w.body, out);
+            }
+            Stmt::Return(r) => {
+                if let Some(v) = &r.value {
+                    proc_expr(v, out);
+                }
+            }
+            Stmt::Assert(a) => proc_expr(&a.cond, out),
+            Stmt::Par(e) => {
+                for c in &e.calls {
+                    proc_expr(c, out);
+                }
+            }
+            Stmt::ExprStmt(e) => proc_expr(&e.expr, out),
+            Stmt::FieldAssign(f) => proc_expr(&f.value, out),
+            Stmt::Match(m) => {
+                proc_expr(&m.scrutinee, out);
+                for a in &m.arms {
+                    proc_stmts(&a.body, out);
+                }
+            }
+        }
+    }
+}
+
+/// The first use of Process, ProcessArgs or a proc_* operation -> (line, col): functions in order; the signature (a
+/// Process / ProcessArgs parameter or result) before the body, whose first use is the smallest source position.
+/// A function that only declares `! proc` is not a use.
+pub fn first_proc_use(prog: &Program) -> Option<(i64, i64)> {
+    for f in &prog.functions {
+        if f.params.iter().any(|p| key_has_proc(&p.ty)) || key_has_proc(&f.ret) {
+            return Some((f.line, f.col));
+        }
+        let mut cands: Cands = Vec::new();
+        proc_stmts(&f.body, &mut cands);
+        if let Some(best) = cands.into_iter().min() {
+            return Some(best);
+        }
+    }
+    None
+}
+
+/// PruvError (unsupported_type) for the first Process use, or None. Run right after type checking, in every mode.
+pub fn proc_unimplemented_error(prog: &Program, stage: &str) -> Option<PruvError> {
+    let (line, col) = first_proc_use(prog)?;
+    Some(PruvError::new(
+        stage,
+        line,
+        col,
+        "unsupported_type",
+        "the G10 proc slice (Process, ProcessArgs and proc_* operations) is not implemented yet",
+        "avoid Process, ProcessArgs and proc_* operations for now; a function that only declares `! proc` still compiles",
+    ))
+}
+
+// ---------------------------------------------------------------------------
 // G10 File runtime detection (counterpart of foreign.py uses_files)
 // ---------------------------------------------------------------------------
 
@@ -1079,7 +1381,7 @@ mod tests {
 
     #[test]
     fn catalog_shapes() {
-        assert_eq!(CATALOG_NAMES.len(), 23);
+        assert_eq!(CATALOG_NAMES.len(), 41);
         for n in CATALOG_NAMES.iter() {
             assert!(catalog_fn(n).is_some());
         }

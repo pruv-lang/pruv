@@ -1,0 +1,1 @@
+fn main(p: Process) -> bool { return proc_ok(p); }

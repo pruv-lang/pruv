@@ -1,0 +1,21 @@
+// G10 proc A0: consumed in both branches (one returns, the other falls through to a join).
+fn pick(program: str, cwd: str, kill: bool) -> Result<i64> ! proc, alloc {
+  let args: ProcessArgs = proc_args_new();
+  let p: Process = proc_spawn(program, args, cwd);
+  if kill {
+    return proc_kill(move p);
+  } else {
+    return proc_wait(move p);
+  }
+}
+
+fn both(program: str, cwd: str, kill: bool) -> i64 ! proc, alloc {
+  let args: ProcessArgs = proc_args_new();
+  let p: Process = proc_spawn(program, args, cwd);
+  if kill {
+    let r: Result<i64> = proc_kill(move p);
+  } else {
+    let r: Result<i64> = proc_wait(move p);
+  }
+  return 0;
+}

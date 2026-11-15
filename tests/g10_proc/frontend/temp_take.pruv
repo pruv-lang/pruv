@@ -1,0 +1,5 @@
+// G10 proc A0: an unnamed Process result taken at once by a take argument.
+fn run(program: str, cwd: str) -> Result<i64> ! proc, alloc {
+  let args: ProcessArgs = proc_args_new();
+  return proc_wait(proc_spawn(program, args, cwd));
+}

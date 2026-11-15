@@ -1,0 +1,4 @@
+// G10 proc A0: an update result dropped as an expression statement still carries the duty.
+fn f(take p: Process) -> () ! proc, alloc {
+  proc_close_stdin(move p);
+}

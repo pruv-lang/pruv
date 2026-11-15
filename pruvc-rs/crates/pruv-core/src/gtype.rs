@@ -157,6 +157,7 @@ pub fn collection_arity(name: &str) -> Option<usize> {
         "hashmap" => Some(2),
         "string" => Some(0),
         "file" => Some(0), // G10 A0
+        "process" | "process_args" => Some(0), // G10 proc A0
         _ => None,
     }
 }
@@ -168,6 +169,8 @@ pub fn collection_spelling(name: &str) -> Option<&'static str> {
         "hashmap" => Some("HashMap"),
         "string" => Some("String"),
         "file" => Some("File"), // G10 A0
+        "process" => Some("Process"), // G10 proc A0
+        "process_args" => Some("ProcessArgs"),
         _ => None,
     }
 }
@@ -371,6 +374,8 @@ fn builtin_print(name: &str) -> &str {
         "str" => "str",
         "string" => "String", // G6 A0
         "file" => "File",     // G10 A0
+        "process" => "Process", // G10 proc A0
+        "process_args" => "ProcessArgs",
         other => other,
     }
 }

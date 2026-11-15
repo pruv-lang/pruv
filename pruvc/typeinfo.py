@@ -6,15 +6,16 @@ from typing import Dict, List, Optional
 from vast import *
 
 BUILTIN_TYPE_NAMES = frozenset(["i64", "bool", "unit", "array", "option", "result", "array_u8", "array_bool", "str",
-                                "vec", "hashmap", "string", "file"])
+                                "vec", "hashmap", "string", "file", "process", "process_args"])
 _BUILTIN_PRINT = {"i64": "i64", "bool": "bool", "unit": "()", "array": "[i64]", "option": "Option<i64>",
                   "result": "Result<i64>", "array_u8": "[u8]", "array_bool": "[bool]", "str": "str",
-                  "string": "String", "file": "File"}
+                  "string": "String", "file": "File", "process": "Process", "process_args": "ProcessArgs"}
 
 # G6 A0: the fixed owned collection types (G6_SPEC 10.1): internal name -> number of type arguments / source spelling.
-# They are never G3 values or elements.
-COLLECTION_ARITY = {"vec": 1, "hashmap": 2, "string": 0, "file": 0}
-COLLECTION_SPELLING = {"vec": "Vec", "hashmap": "HashMap", "string": "String", "file": "File"}
+# They are never G3 values or elements. G10 proc A0: Process and ProcessArgs are registered like File.
+COLLECTION_ARITY = {"vec": 1, "hashmap": 2, "string": 0, "file": 0, "process": 0, "process_args": 0}
+COLLECTION_SPELLING = {"vec": "Vec", "hashmap": "HashMap", "string": "String", "file": "File",
+                       "process": "Process", "process_args": "ProcessArgs"}
 
 
 def is_collection(ty: Type) -> bool:

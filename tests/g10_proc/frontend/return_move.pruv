@@ -1,0 +1,7 @@
+// G10 proc A0: return move p transfers the duty to the caller.
+fn hand_back(take p: Process) -> Process { return move p; }
+
+fn relay(take p: Process) -> Process {
+  let q: Process = hand_back(move p);
+  return move q;
+}

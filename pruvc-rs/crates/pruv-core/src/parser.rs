@@ -993,8 +993,8 @@ impl Parser {
             self.bump();
             loop {
                 let e = self.ident()?;
-                if e.val != "io" && e.val != "alloc" && e.val != "fs" {
-                    return Err(self.err(format!("unknown effect {}", repr_str(&e.val)), "effects are io, alloc, fs", Some(&e)));
+                if e.val != "io" && e.val != "alloc" && e.val != "fs" && e.val != "proc" {
+                    return Err(self.err(format!("unknown effect {}", repr_str(&e.val)), "effects are io, alloc, fs, proc", Some(&e)));
                 }
                 effects.push(e.val);
                 if !self.at(",", 0) {

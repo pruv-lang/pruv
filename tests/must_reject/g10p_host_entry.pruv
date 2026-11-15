@@ -1,0 +1,1 @@
+pub fn inspect(p: Process) -> bool { return proc_ok(p); }

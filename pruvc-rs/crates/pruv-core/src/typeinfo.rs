@@ -6,8 +6,9 @@ use crate::gtype::{dependencies, format_type, is_g3_key, GType};
 use std::collections::{HashMap, HashSet};
 
 /// G6 A0: also the internal names of the owned collection types (vec / hashmap / string).
-pub const BUILTIN_TYPE_NAMES: [&str; 13] = [
+pub const BUILTIN_TYPE_NAMES: [&str; 15] = [
     "i64", "bool", "unit", "array", "option", "result", "array_u8", "array_bool", "str", "vec", "hashmap", "string", "file",
+    "process", "process_args",
 ];
 
 /// A name that is not built in is a user type (whether or not it is declared).
@@ -54,6 +55,8 @@ pub fn type_name(ty: &str) -> String {
         "result" => "Result<i64>".to_string(),
         "string" => "String".to_string(), // G6 A0
         "file" => "File".to_string(),     // G10 A0
+        "process" => "Process".to_string(), // G10 proc A0
+        "process_args" => "ProcessArgs".to_string(),
         other => other.to_string(),
     }
 }

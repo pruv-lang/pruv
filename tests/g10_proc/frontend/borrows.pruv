@@ -1,0 +1,12 @@
+// G10 proc A0: read-only borrowed Process parameters and observers.
+fn healthy(p: Process) -> bool { return proc_ok(p) && proc_stdin_open(p); }
+fn sizes(p: Process) -> i64 { return proc_size(p, 1) + proc_size(p, 2); }
+
+fn run(program: str, cwd: str) -> Result<i64> ! proc, alloc {
+  let args: ProcessArgs = proc_args_new();
+  let p: Process = proc_spawn(program, args, cwd);
+  let ok: bool = healthy(p);
+  let n: i64 = sizes(p);
+  let bytes: [u8] = proc_bytes(p, 1);
+  return proc_wait(move p);
+}

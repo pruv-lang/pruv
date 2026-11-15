@@ -1,0 +1,12 @@
+// G10 proc A0: a helper returns a Process; a take helper terminates it.
+fn start(program: str, cwd: str) -> Process ! proc, alloc {
+  let args: ProcessArgs = proc_args_new();
+  return proc_spawn(program, args, cwd);
+}
+
+fn finish(take p: Process) -> Result<i64> ! proc, alloc { return proc_wait(move p); }
+
+fn run(program: str, cwd: str) -> Result<i64> ! proc, alloc {
+  let p: Process = start(program, cwd);
+  return finish(move p);
+}

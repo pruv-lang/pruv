@@ -8,7 +8,7 @@
 use crate::ast::*;
 use crate::diagnostic::PruvError;
 use crate::foreign::{
-    catalog_fn, check_foreign_decl, check_ownership, is_catalog, is_catalog_contract_only, is_file_observer, CatFn,
+    catalog_fn, check_foreign_decl, check_ownership, is_catalog, is_catalog_contract_only, is_file_observer, is_proc_observer, CatFn,
     Takes,
 };
 use crate::gtype::{
@@ -702,6 +702,8 @@ impl Checker {
                 "HashMap" => "hashmap".to_string(),
                 "String" => "string".to_string(),
                 "File" => "file".to_string(), // G10 A0
+                "Process" => "process".to_string(), // G10 proc A0
+                "ProcessArgs" => "process_args".to_string(),
                 _ => name.clone(),
             };
         }
@@ -724,7 +726,7 @@ impl Checker {
 
     /// `norm_type` on an AST type key; a key without any of the three spellings is returned unchanged.
     fn norm_key(&self, key: &str) -> String {
-        if !(key.contains("Vec") || key.contains("HashMap") || key.contains("String") || key.contains("File")) {
+        if !(key.contains("Vec") || key.contains("HashMap") || key.contains("String") || key.contains("File") || key.contains("Process")) {
             return key.to_string();
         }
         self.norm_type(&GType::from_key(key)).to_key()
@@ -2046,6 +2048,16 @@ impl Checker {
                 }
                 self.boundary = boundary_of(&s.expr);
                 let t = self.expr(&mut s.expr, scope, false)?;
+                if t.owner.is_none() && t.name == "process" {
+                    // G10 proc: a discarded Process result keeps its duty
+                    return Err(terr(
+                        s.line,
+                        s.col,
+                        "proc_unconsumed",
+                        "temporary Process is not consumed",
+                        "consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership",
+                    ));
+                }
                 if t != unitt() {
                     return Err(terr(
                         s.line,
@@ -2212,7 +2224,7 @@ impl Checker {
                                     ("effect", "parallel_effect",
                                         format!("par branch {} reaches {}, which declares the `{}` effect ({})",
                                             c.name, last, eff, path.join(" -> ")),
-                                        format!("move the {} work outside the par group", if eff == "io" { "I/O" } else { "file" }))
+                                        format!("move the {} work outside the par group", if eff == "io" { "I/O" } else if eff == "fs" { "file" } else { "process" }))
                                 }
                                 1 => {
                                     let leaf = info.foreign.as_ref().unwrap();
@@ -3494,7 +3506,7 @@ impl Checker {
                         if n == "map_lookup" { "use map_get in code" } else { "state the update in ensures" },
                     ));
                 }
-            } else if c && !is_file_observer(&n) {
+            } else if c && !is_file_observer(&n) && !is_proc_observer(&n) {
                 return Err(terr(
                     line,
                     col,
@@ -3650,7 +3662,7 @@ struct ParInfo {
 
 fn par_info(f: &Function, funcs: &HashMap<String, Rc<FuncInfo>>) -> ParInfo {
     let mut info = ParInfo {
-        effects: ["io", "fs"].iter().filter(|e| f.effects.iter().any(|x| x == **e)).map(|e| e.to_string()).collect(),
+        effects: ["io", "fs", "proc"].iter().filter(|e| f.effects.iter().any(|x| x == **e)).map(|e| e.to_string()).collect(),
         foreign: f.foreign.as_ref().map(|_| f.name.clone()),
         par: false,
         callees: Vec::new(),

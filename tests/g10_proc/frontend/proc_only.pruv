@@ -1,0 +1,4 @@
+// G10 proc A0: a function that only declares `! proc` uses no Process type or operation; it compiles normally.
+pub fn declares(n: i64) -> i64 ! proc { return n; }
+
+fn caller(n: i64) -> i64 ! proc { return declares(n); }

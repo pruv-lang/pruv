@@ -1,0 +1,1 @@
+fn f(p: Process) -> Result<i64> ! proc, alloc { return proc_wait(move p); }

@@ -1,0 +1,3 @@
+fn f(take p: Process) -> bool ! proc, alloc {
+  return proc_ok(proc_close_stdin(move p));
+}

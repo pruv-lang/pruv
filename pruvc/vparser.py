@@ -685,8 +685,8 @@ class Parser:
             s.next()
             while True:
                 e = s.ident()
-                if e.val not in ("io", "alloc", "fs"):
-                    s.err("unknown effect %r" % e.val, "effects are io, alloc, fs", e)
+                if e.val not in ("io", "alloc", "fs", "proc"):
+                    s.err("unknown effect %r" % e.val, "effects are io, alloc, fs, proc", e)
                 effects.append(e.val)
                 if not s.at(","):
                     break

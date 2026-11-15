@@ -1,0 +1,12 @@
+// G10 proc A0: the argument builder; ProcessArgs auto-drops like String and is not must-consume.
+fn args2(first: str, second: str) -> ProcessArgs ! alloc {
+  let mut a: ProcessArgs = proc_args_new();
+  a = proc_args_push(move a, first);
+  a = proc_args_push(move a, second);
+  return move a;
+}
+
+fn count(first: str, second: str) -> i64 ! alloc {
+  let a: ProcessArgs = args2(first, second);
+  return proc_args_len(a);
+}
