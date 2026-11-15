@@ -1569,11 +1569,29 @@ impl<'a> FnGen<'a> {
             return None;
         }
         let tn = crate::emit_common::key_name(&x.ty);
-        if (tn != "array" && tn != "array_u8") || nxt.len() != 2 {
+        if tn != "array" && tn != "array_u8" {
             return None;
         }
         let Expr::Call(c) = &x.value else { return None };
         if c.name != "alloc" || self.funcs.contains_key(&c.name) || c.args.len() != 2 || !is0(&c.args[1], 0) {
+            return None;
+        }
+        // P3: statements x[0] = e0; x[1] = e1; ... (constant indices in order, each e call-free and not naming x)
+        // overwrite x[0..j) before any read; the run's length is the bound
+        let mut j = 0usize;
+        while j < nxt.len() {
+            match &nxt[j] {
+                Stmt::IndexAssign(sa) if sa.name == x.name && is0(&sa.index, j as i128) && tail_pure(&sa.value, &x.name) => j += 1,
+                _ => break,
+            }
+        }
+        if j > 0 {
+            let Expr::IntLit(z) = &c.args[1] else { return None };
+            let mut kl = z.clone();
+            kl.value = j.to_string();
+            return Some((c as *const Call as usize, Expr::IntLit(kl)));
+        }
+        if nxt.len() < 2 {
             return None;
         }
         let Stmt::Let(li) = &nxt[0] else { return None };
@@ -2426,7 +2444,7 @@ impl<'a> FnGen<'a> {
             }
             self.unbox_next = matches!(s, Stmt::Let(l) if self.unbox_let(l, &stmts[i + 1..]));
             self.tail = match s {
-                Stmt::Let(l) => self.tail_fill(l, &stmts[i + 1..stmts.len().min(i + 3)]),
+                Stmt::Let(l) => self.tail_fill(l, &stmts[i + 1..]),
                 _ => None,
             };
             self.stmt(s)?;

@@ -39,6 +39,7 @@ results are owned).  Block-scoped locals are freed (pruv_free) in reverse declar
 block ends or at `return`; `a = f(..)` frees the old value after evaluating the right side; call-result
 temporaries are freed at the end of the statement/condition (only on the executed path).
 """
+import dataclasses
 import re
 from vast import *
 import codegen
@@ -1081,13 +1082,23 @@ class FnGen:
         the loop overwrites x[0..min(k, n)) before any read, so the alloc zeroes only the rest.  Returns the k node or None"""
         if not s.verified or s.cost or not st.mutable or st.type is None:
             return None
-        if st.type.name not in ("array", "array_u8") or len(nxt) != 2:
+        if st.type.name not in ("array", "array_u8"):
             return None
         e = st.value
         if not (isinstance(e, Call) and e.name == "alloc" and e.name not in s.funcs and len(e.args) == 2
                 and isinstance(e.args[1], IntLit) and e.args[1].value == 0):
             return None
-        li, w = nxt
+        # P3: statements x[0] = e0; x[1] = e1; ... (constant indices in order, each e call-free and not naming x)
+        # overwrite x[0..j) before any read; the run's length is the bound
+        j = 0
+        while j < len(nxt) and isinstance(nxt[j], IndexAssign) and nxt[j].name == st.name \
+                and isinstance(nxt[j].index, IntLit) and nxt[j].index.value == j and s.tail_pure(nxt[j].value, st.name):
+            j += 1
+        if j > 0:
+            return dataclasses.replace(e.args[1], value=j)
+        if len(nxt) < 2:
+            return None
+        li, w = nxt[:2]
         if not (isinstance(li, Let) and li.type is not None and li.type.name == "i64" and isinstance(li.value, IntLit)
                 and li.value.value == 0 and li.name != st.name):
             return None
@@ -1484,7 +1495,7 @@ class FnGen:
         for i, st in enumerate(stmts):
             frame[1] = later[i + 1]
             s.unbox_st = st if isinstance(st, Let) and s.unbox_let(st, stmts[i + 1:]) else None
-            s.tail_k = s.tail_fill(st, stmts[i + 1:i + 3]) if isinstance(st, Let) else None
+            s.tail_k = s.tail_fill(st, stmts[i + 1:]) if isinstance(st, Let) else None
             s.tail_st = st if s.tail_k is not None else None
             s.stmt(st)
             if isinstance(st, Let):
