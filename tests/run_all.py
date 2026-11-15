@@ -1087,7 +1087,8 @@ def runtime_job(j, t, spec, flags, name, suffix, llvm):
                     a, fr = int(m.group(1)), int(m.group(2))
                     # P3-S1: a program whose arrays all live on the stack has no heap call, so 0 / 0 is the
                     # expected balance there; any heap allocator call in the module still requires a > 0
-                    heap = re.search(r"^\s*(?!declare)[^\n]*@pruv_(?:node_)?alloc\w*\(", open(ll).read(), re.M)
+                    # (the module's own inline pruv_alloc / pruv_alloc_u8 definitions are not calls)
+                    heap = re.search(r"^\s*(?!declare|define)[^\n]*@pruv_(?:node_)?alloc\w*\(", open(ll).read(), re.M)
                     if a != fr or (a <= 0 and heap):
                         problems.append("alloc balance %d allocs / %d frees" % (a, fr))
             ll_text = open(ll).read()

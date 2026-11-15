@@ -68,9 +68,65 @@ pub const OPT: &str = "{ i1, i64 }";
 pub const COPT: &str = "{ i1, i128 }";
 pub const ARR: &str = "{ ptr, i64, i64 }"; // P3: owned buffer inside the module: { data, len, cap }; cap = allocated element count
 
+// P3: pruv_alloc / pruv_copy (and pruv_alloc_u8 / pruv_copy_v2 in DECLS_U8) are inline module copies of the
+// runtime functions of the same name: len <= 0 gives NULL, a len above the runtime's bound panics with the same
+// message, and the block comes from pruv_raw_alloc_v3 / pruv_raw_alloc_zeroed_v3 (runtime.c), so the constant
+// layout and length checks fold away and only the allocator call is left.
 pub const DECLS: &str = concat!(
-    "declare noalias ptr @pruv_alloc(i64, i64) nounwind\n",
-    "declare noalias ptr @pruv_copy(ptr nocapture readonly, i64) nounwind\n",
+    "declare noalias nonnull ptr @pruv_raw_alloc_v3(i64, i64, i64) nounwind\n",
+    "declare noalias nonnull ptr @pruv_raw_alloc_zeroed_v3(i64, i64, i64) nounwind\n",
+    "@pruv_alloc_failed_msg = private unnamed_addr constant [18 x i8] c\"allocation failed\\00\"\n",
+    "define internal noalias ptr @pruv_alloc(i64 %n, i64 %v) alwaysinline nounwind {\n",
+    "entry:\n",
+    "  %e = icmp sle i64 %n, 0\n",
+    "  br i1 %e, label %none, label %chk\n",
+    "none:\n",
+    "  ret ptr null\n",
+    "chk:\n",
+    "  %big = icmp ugt i64 %n, 1152921504606846975\n",
+    "  br i1 %big, label %fail, label %ok\n",
+    "fail:\n",
+    "  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)\n",
+    "  unreachable\n",
+    "ok:\n",
+    "  %z = icmp eq i64 %v, 0\n",
+    "  br i1 %z, label %zero, label %fill\n",
+    "zero:\n",
+    "  %p = call ptr @pruv_raw_alloc_zeroed_v3(i64 %n, i64 8, i64 8)\n",
+    "  ret ptr %p\n",
+    "fill:\n",
+    "  %q = call ptr @pruv_raw_alloc_v3(i64 %n, i64 8, i64 8)\n",
+    "  br label %loop\n",
+    "loop:\n",
+    "  %i = phi i64 [ 0, %fill ], [ %i1, %loop ]\n",
+    "  %g = getelementptr inbounds i64, ptr %q, i64 %i\n",
+    "  store i64 %v, ptr %g\n",
+    "  %i1 = add nuw nsw i64 %i, 1\n",
+    "  %d = icmp eq i64 %i1, %n\n",
+    "  br i1 %d, label %done, label %loop\n",
+    "done:\n",
+    "  ret ptr %q\n",
+    "}\n",
+    "define internal noalias ptr @pruv_copy(ptr nocapture readonly %s, i64 %n) alwaysinline nounwind {\n",
+    "entry:\n",
+    "  %e = icmp sle i64 %n, 0\n",
+    "  br i1 %e, label %none, label %chk\n",
+    "none:\n",
+    "  ret ptr null\n",
+    "chk:\n",
+    "  %big = icmp ugt i64 %n, 1152921504606846975\n",
+    "  br i1 %big, label %fail, label %ok\n",
+    "fail:\n",
+    "  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)\n",
+    "  unreachable\n",
+    "ok:\n",
+    "  %q = call ptr @pruv_raw_alloc_v3(i64 %n, i64 8, i64 8)\n",
+    "  %b = shl nuw nsw i64 %n, 3\n",
+    "  call void @llvm.memcpy.p0.p0.i64(ptr %q, ptr %s, i64 %b, i1 false)\n",
+    "  ret ptr %q\n",
+    "}\n",
+    "declare void @llvm.memcpy.p0.p0.i64(ptr noalias nocapture writeonly, ptr noalias nocapture readonly, i64, i1 immarg)\n",
+    "declare void @llvm.memset.p0.i64(ptr nocapture writeonly, i8, i64, i1)\n",
     "declare void @pruv_free(ptr nocapture, i64) nounwind\n",
     "declare void @pruv_print_i64(i64) nounwind\n",
     "declare void @pruv_print_bool(i64) nounwind\n",
@@ -98,8 +154,48 @@ pub const DECLS: &str = concat!(
 
 /// Declarations appended right after DECLS only for `[u8]` programs (G2 A4 §2.9).
 pub const DECLS_U8: &str = concat!(
-    "declare noalias ptr @pruv_alloc_u8(i64, i64) nounwind\n",
-    "declare noalias ptr @pruv_copy_v2(ptr nocapture readonly, i64, i64, i64) nounwind\n",
+    "define internal noalias ptr @pruv_alloc_u8(i64 %n, i64 %v) alwaysinline nounwind {\n",
+    "entry:\n",
+    "  %e = icmp sle i64 %n, 0\n",
+    "  br i1 %e, label %none, label %chk\n",
+    "none:\n",
+    "  ret ptr null\n",
+    "chk:\n",
+    "  %big = icmp ugt i64 %n, 1099511627776\n",
+    "  br i1 %big, label %fail, label %ok\n",
+    "fail:\n",
+    "  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)\n",
+    "  unreachable\n",
+    "ok:\n",
+    "  %z = icmp eq i64 %v, 0\n",
+    "  br i1 %z, label %zero, label %fill\n",
+    "zero:\n",
+    "  %p = call ptr @pruv_raw_alloc_zeroed_v3(i64 %n, i64 1, i64 1)\n",
+    "  ret ptr %p\n",
+    "fill:\n",
+    "  %q = call ptr @pruv_raw_alloc_v3(i64 %n, i64 1, i64 1)\n",
+    "  %b = trunc i64 %v to i8\n",
+    "  call void @llvm.memset.p0.i64(ptr %q, i8 %b, i64 %n, i1 false)\n",
+    "  ret ptr %q\n",
+    "}\n",
+    "define internal noalias ptr @pruv_copy_v2(ptr nocapture readonly %s, i64 %n, i64 %sz, i64 %al) alwaysinline nounwind {\n",
+    "entry:\n",
+    "  %e = icmp sle i64 %n, 0\n",
+    "  br i1 %e, label %none, label %chk\n",
+    "none:\n",
+    "  ret ptr null\n",
+    "chk:\n",
+    "  %big = icmp ugt i64 %n, 1099511627776\n",
+    "  br i1 %big, label %fail, label %ok\n",
+    "fail:\n",
+    "  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)\n",
+    "  unreachable\n",
+    "ok:\n",
+    "  %q = call ptr @pruv_raw_alloc_v3(i64 %n, i64 %sz, i64 %al)\n",
+    "  %b = mul nuw nsw i64 %n, %sz\n",
+    "  call void @llvm.memcpy.p0.p0.i64(ptr %q, ptr %s, i64 %b, i1 false)\n",
+    "  ret ptr %q\n",
+    "}\n",
     "declare void @pruv_free_v2(ptr nocapture, i64, i64, i64) nounwind\n",
     "declare void @pruv_panic_elem(i64, ptr) noreturn cold nounwind\n",
     "define internal void @pruv_free_v2_nn(ptr %p, i64 %n, i64 %s, i64 %a) alwaysinline nounwind {\n",
@@ -590,8 +686,6 @@ pub struct Mod {
     pub stack: crate::stack::StackPlan,
     /// P3-S1: some stack array calls @pruv_fill_v2
     pub fill: bool,
-    /// P3: some stack array is filled by @llvm.memset
-    pub memset: bool,
     /// P3 batch 2: `!range` node bodies in first-use order (index = metadata number)
     pub range_nodes: Vec<String>,
     /// G4 A3: explicit visibility mode (Pruv calls use the Rust-backend routing)
@@ -620,7 +714,6 @@ impl Mod {
             shrink: false,
             stack: crate::stack::StackPlan::default(),
             fill: false,
-            memset: false,
             range_nodes: Vec::new(),
             explicit: false,
             fn_disp: HashMap::new(),
@@ -2379,10 +2472,8 @@ impl<'a> FnGen<'a> {
             } else {
                 self.op(format!("trunc i64 {} to i8", val))?
             };
-            self.m.memset = true;
             self.ins(format!("call void @llvm.memset.p0.i64(ptr align 1 {}, i8 {}, i64 {}, i1 false)", buf, byte, n))?;
         } else if val == "0" {
-            self.m.memset = true;
             self.ins(format!("call void @llvm.memset.p0.i64(ptr align {} {}, i8 0, i64 {}, i1 false)", size, buf, n * size))?;
         } else {
             self.m.fill = true;
@@ -5766,7 +5857,7 @@ fn gen_llvm_body(
         }
     }
     let mut ir = format!(
-        "{}{}\n{}{}{}{}{}{}{}{}{}{}{}{}{}{}\n{}",
+        "{}{}\n{}{}{}{}{}{}{}{}{}{}{}{}{}\n{}",
         if target == AbiTarget::WinX64 { WIN_X64_HEADER } else { "" },
         m.render_strings(),
         type_defs(&tt),
@@ -5790,7 +5881,6 @@ fn gen_llvm_body(
         m.bswap.iter().map(|w| format!("declare i{w} @llvm.bswap.i{w}(i{w})\n", w = w)).collect::<String>(),
         if m.shrink { "declare ptr @pruv_shrink_v2(ptr, i64, i64, i64, i64) nounwind\n" } else { "" },
         if m.fill { "declare void @pruv_fill_v2(ptr nocapture, i64, i64, i64) nounwind\n" } else { "" },
-        if m.memset { "declare void @llvm.memset.p0.i64(ptr nocapture writeonly, i8, i64, i1)\n" } else { "" },
         g6decls,
         chunks.join("\n")
     );

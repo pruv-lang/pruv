@@ -13,8 +13,60 @@ target triple = "x86_64-pc-windows-msvc"
 @.str.9 = private unnamed_addr constant [36 x i8] c"((d >= -1000000) && (d <= 1000000))\00"
 @.str.10 = private unnamed_addr constant [36 x i8] c"((e >= -1000000) && (e <= 1000000))\00"
 
-declare noalias ptr @pruv_alloc(i64, i64) nounwind
-declare noalias ptr @pruv_copy(ptr nocapture readonly, i64) nounwind
+declare noalias nonnull ptr @pruv_raw_alloc_v3(i64, i64, i64) nounwind
+declare noalias nonnull ptr @pruv_raw_alloc_zeroed_v3(i64, i64, i64) nounwind
+@pruv_alloc_failed_msg = private unnamed_addr constant [18 x i8] c"allocation failed\00"
+define internal noalias ptr @pruv_alloc(i64 %n, i64 %v) alwaysinline nounwind {
+entry:
+  %e = icmp sle i64 %n, 0
+  br i1 %e, label %none, label %chk
+none:
+  ret ptr null
+chk:
+  %big = icmp ugt i64 %n, 1152921504606846975
+  br i1 %big, label %fail, label %ok
+fail:
+  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)
+  unreachable
+ok:
+  %z = icmp eq i64 %v, 0
+  br i1 %z, label %zero, label %fill
+zero:
+  %p = call ptr @pruv_raw_alloc_zeroed_v3(i64 %n, i64 8, i64 8)
+  ret ptr %p
+fill:
+  %q = call ptr @pruv_raw_alloc_v3(i64 %n, i64 8, i64 8)
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %fill ], [ %i1, %loop ]
+  %g = getelementptr inbounds i64, ptr %q, i64 %i
+  store i64 %v, ptr %g
+  %i1 = add nuw nsw i64 %i, 1
+  %d = icmp eq i64 %i1, %n
+  br i1 %d, label %done, label %loop
+done:
+  ret ptr %q
+}
+define internal noalias ptr @pruv_copy(ptr nocapture readonly %s, i64 %n) alwaysinline nounwind {
+entry:
+  %e = icmp sle i64 %n, 0
+  br i1 %e, label %none, label %chk
+none:
+  ret ptr null
+chk:
+  %big = icmp ugt i64 %n, 1152921504606846975
+  br i1 %big, label %fail, label %ok
+fail:
+  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)
+  unreachable
+ok:
+  %q = call ptr @pruv_raw_alloc_v3(i64 %n, i64 8, i64 8)
+  %b = shl nuw nsw i64 %n, 3
+  call void @llvm.memcpy.p0.p0.i64(ptr %q, ptr %s, i64 %b, i1 false)
+  ret ptr %q
+}
+declare void @llvm.memcpy.p0.p0.i64(ptr noalias nocapture writeonly, ptr noalias nocapture readonly, i64, i1 immarg)
+declare void @llvm.memset.p0.i64(ptr nocapture writeonly, i8, i64, i1)
 declare void @pruv_free(ptr nocapture, i64) nounwind
 declare void @pruv_print_i64(i64) nounwind
 declare void @pruv_print_bool(i64) nounwind

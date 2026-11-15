@@ -219,21 +219,43 @@ static int pruv_layout_ok(int64_t size, int64_t align) {
     return (size == 1 && align == 1) || (size == 2 && align == 2) || (size == 4 && align == 4) || (size == 8 && align == 8);
 }
 
-static void *pruv_raw_alloc_v2(int64_t len, int64_t size, int64_t align, int zeroed) {
-    /* len > 0 here; every check comes before the multiplication */
-    if (!pruv_layout_ok(size, align)) pruv_panic_arith("invalid element layout");
-    if ((uint64_t)len > PRUV_MAX_LEN) pruv_panic_arith("allocation failed");
+/* The allocator call shared by pruv_raw_alloc_v2 and the _v3 entry points: len > 0, len <= PRUV_MAX_LEN and
+ * (size, align) is a valid layout here; never returns NULL. On a 64-bit target len * size cannot overflow, so the
+ * SIZE_MAX check is compiled only for narrower targets. */
+static inline void *pruv_sys_alloc_v2(int64_t len, int64_t size, int64_t align, int zeroed) {
+#if SIZE_MAX < UINT64_MAX
     if ((uint64_t)len > (uint64_t)SIZE_MAX / (uint64_t)size) pruv_panic_arith("allocation failed");
+#endif
 #ifdef PRUV_RUST_ALLOCATOR
+    /* the host helpers call handle_alloc_error instead of returning NULL */
     void *p = zeroed ? pruv_host_alloc_zeroed_v2(len, size, align) : pruv_host_alloc_v2(len, size, align);
 #else
+    (void)align;
     void *p = zeroed ? calloc((size_t)len, (size_t)size) : malloc((size_t)len * (size_t)size);
-#endif
     if (!p) pruv_panic_arith("allocation failed");
+#endif
 #ifdef PRUV_COUNT_ALLOCS
     pruv_n_allocs++;
 #endif
     return p;
+}
+
+static void *pruv_raw_alloc_v2(int64_t len, int64_t size, int64_t align, int zeroed) {
+    /* len > 0 here; every check comes before the multiplication */
+    if (!pruv_layout_ok(size, align)) pruv_panic_arith("invalid element layout");
+    if ((uint64_t)len > PRUV_MAX_LEN) pruv_panic_arith("allocation failed");
+    return pruv_sys_alloc_v2(len, size, align, zeroed);
+}
+
+/* P3: the allocator entry points of the module's inline pruv_alloc / pruv_copy / pruv_alloc_u8 / pruv_copy_v2
+ * (llvmgen DECLS). The caller has already returned NULL for len <= 0 and panicked for a len above the runtime's
+ * bound (INT64_MAX / 8 for 8-byte elements, PRUV_MAX_LEN otherwise), and passes a constant valid layout. */
+void *pruv_raw_alloc_v3(int64_t len, int64_t size, int64_t align) {
+    return pruv_sys_alloc_v2(len, size, align, 0);
+}
+
+void *pruv_raw_alloc_zeroed_v3(int64_t len, int64_t size, int64_t align) {
+    return pruv_sys_alloc_v2(len, size, align, 1);
 }
 
 void *pruv_alloc_u8(int64_t len, int64_t value) {

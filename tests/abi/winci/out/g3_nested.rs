@@ -23,22 +23,16 @@ pub struct Pruv__Array { pub data: *mut i64, pub len: i64 }
 pub struct Pruv__Tagged { pub tag: i64, pub value: i64 }
 #[allow(dead_code, non_snake_case, unused)]
 #[no_mangle]
-pub extern "C" fn pruv_host_alloc(len: i64) -> *mut i64 {
-    let layout = match ::std::alloc::Layout::array::<i64>(len as usize) {
-        Ok(l) => l,
-        Err(_) => ::std::alloc::handle_alloc_error(::std::alloc::Layout::new::<i64>()),
-    };
+pub unsafe extern "C" fn pruv_host_alloc(len: i64) -> *mut i64 {
+    let layout = unsafe { ::std::alloc::Layout::from_size_align_unchecked((len as usize) * 8, 8) };
     let p = unsafe { ::std::alloc::alloc(layout) } as *mut i64;
     if p.is_null() { ::std::alloc::handle_alloc_error(layout); }
     p
 }
 #[allow(dead_code, non_snake_case, unused)]
 #[no_mangle]
-pub extern "C" fn pruv_host_alloc_zeroed(len: i64) -> *mut i64 {
-    let layout = match ::std::alloc::Layout::array::<i64>(len as usize) {
-        Ok(l) => l,
-        Err(_) => ::std::alloc::handle_alloc_error(::std::alloc::Layout::new::<i64>()),
-    };
+pub unsafe extern "C" fn pruv_host_alloc_zeroed(len: i64) -> *mut i64 {
+    let layout = unsafe { ::std::alloc::Layout::from_size_align_unchecked((len as usize) * 8, 8) };
     let p = unsafe { ::std::alloc::alloc_zeroed(layout) } as *mut i64;
     if p.is_null() { ::std::alloc::handle_alloc_error(layout); }
     p
@@ -50,49 +44,34 @@ pub extern "C" fn pruv_host_flush() {
 }
 #[allow(dead_code, non_snake_case, unused)]
 #[no_mangle]
-pub extern "C" fn pruv_host_free(data: *mut i64, len: i64) {
-    if data.is_null() || len <= 0 { return; }
-    if let Ok(layout) = ::std::alloc::Layout::array::<i64>(len as usize) {
-        unsafe { ::std::alloc::dealloc(data as *mut u8, layout) };
-    }
+pub unsafe extern "C" fn pruv_host_free(data: *mut i64, len: i64) {
+    unsafe { ::std::alloc::dealloc(data as *mut u8, ::std::alloc::Layout::from_size_align_unchecked((len as usize) * 8, 8)) };
 }
 #[allow(dead_code, non_snake_case, unused)]
 #[no_mangle]
-pub extern "C" fn pruv_host_alloc_v2(len: i64, size: i64, align: i64) -> *mut u8 {
-    let layout = match (len as usize).checked_mul(size as usize).and_then(|b| ::std::alloc::Layout::from_size_align(b, align as usize).ok()) {
-        Some(l) => l,
-        None => ::std::alloc::handle_alloc_error(::std::alloc::Layout::new::<u8>()),
-    };
+pub unsafe extern "C" fn pruv_host_alloc_v2(len: i64, size: i64, align: i64) -> *mut u8 {
+    let layout = unsafe { ::std::alloc::Layout::from_size_align_unchecked((len as usize) * (size as usize), align as usize) };
     let p = unsafe { ::std::alloc::alloc(layout) };
     if p.is_null() { ::std::alloc::handle_alloc_error(layout); }
     p
 }
 #[allow(dead_code, non_snake_case, unused)]
 #[no_mangle]
-pub extern "C" fn pruv_host_alloc_zeroed_v2(len: i64, size: i64, align: i64) -> *mut u8 {
-    let layout = match (len as usize).checked_mul(size as usize).and_then(|b| ::std::alloc::Layout::from_size_align(b, align as usize).ok()) {
-        Some(l) => l,
-        None => ::std::alloc::handle_alloc_error(::std::alloc::Layout::new::<u8>()),
-    };
+pub unsafe extern "C" fn pruv_host_alloc_zeroed_v2(len: i64, size: i64, align: i64) -> *mut u8 {
+    let layout = unsafe { ::std::alloc::Layout::from_size_align_unchecked((len as usize) * (size as usize), align as usize) };
     let p = unsafe { ::std::alloc::alloc_zeroed(layout) };
     if p.is_null() { ::std::alloc::handle_alloc_error(layout); }
     p
 }
 #[allow(dead_code, non_snake_case, unused)]
 #[no_mangle]
-pub extern "C" fn pruv_host_free_v2(data: *mut u8, len: i64, size: i64, align: i64) {
-    if data.is_null() || len <= 0 { return; }
-    if let Some(layout) = (len as usize).checked_mul(size as usize).and_then(|b| ::std::alloc::Layout::from_size_align(b, align as usize).ok()) {
-        unsafe { ::std::alloc::dealloc(data, layout) };
-    }
+pub unsafe extern "C" fn pruv_host_free_v2(data: *mut u8, len: i64, size: i64, align: i64) {
+    unsafe { ::std::alloc::dealloc(data, ::std::alloc::Layout::from_size_align_unchecked((len as usize) * (size as usize), align as usize)) };
 }
 #[allow(dead_code, non_snake_case, unused)]
 #[no_mangle]
-pub extern "C" fn pruv_host_realloc_v2(data: *mut u8, len: i64, m: i64, size: i64, align: i64) -> *mut u8 {
-    let layout = match (len as usize).checked_mul(size as usize).and_then(|b| ::std::alloc::Layout::from_size_align(b, align as usize).ok()) {
-        Some(l) => l,
-        None => ::std::alloc::handle_alloc_error(::std::alloc::Layout::new::<u8>()),
-    };
+pub unsafe extern "C" fn pruv_host_realloc_v2(data: *mut u8, len: i64, m: i64, size: i64, align: i64) -> *mut u8 {
+    let layout = unsafe { ::std::alloc::Layout::from_size_align_unchecked((len as usize) * (size as usize), align as usize) };
     let p = unsafe { ::std::alloc::realloc(data, layout, (m as usize) * (size as usize)) };
     if p.is_null() { ::std::alloc::handle_alloc_error(layout); }
     p

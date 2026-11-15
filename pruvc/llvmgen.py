@@ -67,9 +67,65 @@ ARR = "{ ptr, i64, i64 }"   # P3: owned buffer inside the module: { data, len, c
 #                variant order then field order }.  Inactive payload is always zeroinitializer-derived.
 #   %pruv_c_Name  same shape for requires evaluation: integer leaves are i128, Option/Result are { i1, i128 }.
 
+# P3: pruv_alloc / pruv_copy (and pruv_alloc_u8 / pruv_copy_v2 in DECLS_U8) are inline module copies of the
+# runtime functions of the same name: len <= 0 gives NULL, a len above the runtime's bound panics with the same
+# message, and the block comes from pruv_raw_alloc_v3 / pruv_raw_alloc_zeroed_v3 (runtime.c), so the constant
+# layout and length checks fold away and only the allocator call is left.
 DECLS = """\
-declare noalias ptr @pruv_alloc(i64, i64) nounwind
-declare noalias ptr @pruv_copy(ptr nocapture readonly, i64) nounwind
+declare noalias nonnull ptr @pruv_raw_alloc_v3(i64, i64, i64) nounwind
+declare noalias nonnull ptr @pruv_raw_alloc_zeroed_v3(i64, i64, i64) nounwind
+@pruv_alloc_failed_msg = private unnamed_addr constant [18 x i8] c"allocation failed\\00"
+define internal noalias ptr @pruv_alloc(i64 %n, i64 %v) alwaysinline nounwind {
+entry:
+  %e = icmp sle i64 %n, 0
+  br i1 %e, label %none, label %chk
+none:
+  ret ptr null
+chk:
+  %big = icmp ugt i64 %n, 1152921504606846975
+  br i1 %big, label %fail, label %ok
+fail:
+  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)
+  unreachable
+ok:
+  %z = icmp eq i64 %v, 0
+  br i1 %z, label %zero, label %fill
+zero:
+  %p = call ptr @pruv_raw_alloc_zeroed_v3(i64 %n, i64 8, i64 8)
+  ret ptr %p
+fill:
+  %q = call ptr @pruv_raw_alloc_v3(i64 %n, i64 8, i64 8)
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %fill ], [ %i1, %loop ]
+  %g = getelementptr inbounds i64, ptr %q, i64 %i
+  store i64 %v, ptr %g
+  %i1 = add nuw nsw i64 %i, 1
+  %d = icmp eq i64 %i1, %n
+  br i1 %d, label %done, label %loop
+done:
+  ret ptr %q
+}
+define internal noalias ptr @pruv_copy(ptr nocapture readonly %s, i64 %n) alwaysinline nounwind {
+entry:
+  %e = icmp sle i64 %n, 0
+  br i1 %e, label %none, label %chk
+none:
+  ret ptr null
+chk:
+  %big = icmp ugt i64 %n, 1152921504606846975
+  br i1 %big, label %fail, label %ok
+fail:
+  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)
+  unreachable
+ok:
+  %q = call ptr @pruv_raw_alloc_v3(i64 %n, i64 8, i64 8)
+  %b = shl nuw nsw i64 %n, 3
+  call void @llvm.memcpy.p0.p0.i64(ptr %q, ptr %s, i64 %b, i1 false)
+  ret ptr %q
+}
+declare void @llvm.memcpy.p0.p0.i64(ptr noalias nocapture writeonly, ptr noalias nocapture readonly, i64, i1 immarg)
+declare void @llvm.memset.p0.i64(ptr nocapture writeonly, i8, i64, i1)
 declare void @pruv_free(ptr nocapture, i64) nounwind
 declare void @pruv_print_i64(i64) nounwind
 declare void @pruv_print_bool(i64) nounwind
@@ -97,8 +153,48 @@ done:
 
 # G2 A4 (docs/G2_A4_IMPL.md 2.9): only emitted when the program uses [u8]
 DECLS_U8 = """\
-declare noalias ptr @pruv_alloc_u8(i64, i64) nounwind
-declare noalias ptr @pruv_copy_v2(ptr nocapture readonly, i64, i64, i64) nounwind
+define internal noalias ptr @pruv_alloc_u8(i64 %n, i64 %v) alwaysinline nounwind {
+entry:
+  %e = icmp sle i64 %n, 0
+  br i1 %e, label %none, label %chk
+none:
+  ret ptr null
+chk:
+  %big = icmp ugt i64 %n, 1099511627776
+  br i1 %big, label %fail, label %ok
+fail:
+  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)
+  unreachable
+ok:
+  %z = icmp eq i64 %v, 0
+  br i1 %z, label %zero, label %fill
+zero:
+  %p = call ptr @pruv_raw_alloc_zeroed_v3(i64 %n, i64 1, i64 1)
+  ret ptr %p
+fill:
+  %q = call ptr @pruv_raw_alloc_v3(i64 %n, i64 1, i64 1)
+  %b = trunc i64 %v to i8
+  call void @llvm.memset.p0.i64(ptr %q, i8 %b, i64 %n, i1 false)
+  ret ptr %q
+}
+define internal noalias ptr @pruv_copy_v2(ptr nocapture readonly %s, i64 %n, i64 %sz, i64 %al) alwaysinline nounwind {
+entry:
+  %e = icmp sle i64 %n, 0
+  br i1 %e, label %none, label %chk
+none:
+  ret ptr null
+chk:
+  %big = icmp ugt i64 %n, 1099511627776
+  br i1 %big, label %fail, label %ok
+fail:
+  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)
+  unreachable
+ok:
+  %q = call ptr @pruv_raw_alloc_v3(i64 %n, i64 %sz, i64 %al)
+  %b = mul nuw nsw i64 %n, %sz
+  call void @llvm.memcpy.p0.p0.i64(ptr %q, ptr %s, i64 %b, i1 false)
+  ret ptr %q
+}
 declare void @pruv_free_v2(ptr nocapture, i64, i64, i64) nounwind
 declare void @pruv_panic_elem(i64, ptr) noreturn cold nounwind
 define internal void @pruv_free_v2_nn(ptr %p, i64 %n, i64 %s, i64 %a) alwaysinline nounwind {
@@ -376,7 +472,6 @@ class Mod:
         s.need_eq = set()
         s.stack = None          # P3-S1: StackPlan (set by gen_llvm)
         s.fill = False          # P3-S1: some stack array calls @pruv_fill_v2
-        s.memset = False        # P3: some stack array is filled by @llvm.memset
         s.range_nodes = {}      # P3 batch 2: `iW a, iW b` body -> !N number (first-use order)
         s.explicit = False      # G4 A3: explicit visibility mode (set by gen_llvm); Pruv calls use the Rust-backend routing
 
@@ -1378,10 +1473,8 @@ class FnGen:
                 byte = s.op("zext i1 %s to i8" % val)
             else:
                 byte = s.op("trunc i64 %s to i8" % val)
-            s.m.memset = True
             s.ins("call void @llvm.memset.p0.i64(ptr align 1 %s, i8 %s, i64 %d, i1 false)" % (buf, byte, n))
         elif val == "0":
-            s.m.memset = True
             s.ins("call void @llvm.memset.p0.i64(ptr align %d %s, i8 0, i64 %d, i1 false)" % (size, buf, n * size))
         else:
             s.m.fill = True
@@ -3944,14 +4037,15 @@ def gen_bindings(prog, shim=None, verified=True):
         o.append("#[repr(C)]\npub struct Pruv__Str { pub data: *mut u8, pub len: i64 }")
     o.append(ALLOW)
     o.append("#[repr(C)]\npub struct Pruv__Tagged { pub tag: i64, pub value: i64 }")
+    # P3: the host helpers are called only by runtime.c, which has already checked every argument: alloc gets
+    # len > 0 within the runtime's bound and a valid layout, free / realloc get a non-null block with its own layout
+    # (pruv_free / pruv_free_v2 / pruv_node_free_v1 / pruv_shrink_v2 skip NULL and len <= 0). So the layout is built
+    # unchecked; a null result still goes to handle_alloc_error.
     o.append(ALLOW)
     o.append("""\
 #[no_mangle]
-pub extern "C" fn pruv_host_alloc(len: i64) -> *mut i64 {
-    let layout = match ::std::alloc::Layout::array::<i64>(len as usize) {
-        Ok(l) => l,
-        Err(_) => ::std::alloc::handle_alloc_error(::std::alloc::Layout::new::<i64>()),
-    };
+pub unsafe extern "C" fn pruv_host_alloc(len: i64) -> *mut i64 {
+    let layout = unsafe { ::std::alloc::Layout::from_size_align_unchecked((len as usize) * 8, 8) };
     let p = unsafe { ::std::alloc::alloc(layout) } as *mut i64;
     if p.is_null() { ::std::alloc::handle_alloc_error(layout); }
     p
@@ -3959,11 +4053,8 @@ pub extern "C" fn pruv_host_alloc(len: i64) -> *mut i64 {
     o.append(ALLOW)
     o.append("""\
 #[no_mangle]
-pub extern "C" fn pruv_host_alloc_zeroed(len: i64) -> *mut i64 {
-    let layout = match ::std::alloc::Layout::array::<i64>(len as usize) {
-        Ok(l) => l,
-        Err(_) => ::std::alloc::handle_alloc_error(::std::alloc::Layout::new::<i64>()),
-    };
+pub unsafe extern "C" fn pruv_host_alloc_zeroed(len: i64) -> *mut i64 {
+    let layout = unsafe { ::std::alloc::Layout::from_size_align_unchecked((len as usize) * 8, 8) };
     let p = unsafe { ::std::alloc::alloc_zeroed(layout) } as *mut i64;
     if p.is_null() { ::std::alloc::handle_alloc_error(layout); }
     p
@@ -3977,20 +4068,14 @@ pub extern "C" fn pruv_host_flush() {
     o.append(ALLOW)
     o.append("""\
 #[no_mangle]
-pub extern "C" fn pruv_host_free(data: *mut i64, len: i64) {
-    if data.is_null() || len <= 0 { return; }
-    if let Ok(layout) = ::std::alloc::Layout::array::<i64>(len as usize) {
-        unsafe { ::std::alloc::dealloc(data as *mut u8, layout) };
-    }
+pub unsafe extern "C" fn pruv_host_free(data: *mut i64, len: i64) {
+    unsafe { ::std::alloc::dealloc(data as *mut u8, ::std::alloc::Layout::from_size_align_unchecked((len as usize) * 8, 8)) };
 }""")
     o.append(ALLOW)
     o.append("""\
 #[no_mangle]
-pub extern "C" fn pruv_host_alloc_v2(len: i64, size: i64, align: i64) -> *mut u8 {
-    let layout = match (len as usize).checked_mul(size as usize).and_then(|b| ::std::alloc::Layout::from_size_align(b, align as usize).ok()) {
-        Some(l) => l,
-        None => ::std::alloc::handle_alloc_error(::std::alloc::Layout::new::<u8>()),
-    };
+pub unsafe extern "C" fn pruv_host_alloc_v2(len: i64, size: i64, align: i64) -> *mut u8 {
+    let layout = unsafe { ::std::alloc::Layout::from_size_align_unchecked((len as usize) * (size as usize), align as usize) };
     let p = unsafe { ::std::alloc::alloc(layout) };
     if p.is_null() { ::std::alloc::handle_alloc_error(layout); }
     p
@@ -3998,11 +4083,8 @@ pub extern "C" fn pruv_host_alloc_v2(len: i64, size: i64, align: i64) -> *mut u8
     o.append(ALLOW)
     o.append("""\
 #[no_mangle]
-pub extern "C" fn pruv_host_alloc_zeroed_v2(len: i64, size: i64, align: i64) -> *mut u8 {
-    let layout = match (len as usize).checked_mul(size as usize).and_then(|b| ::std::alloc::Layout::from_size_align(b, align as usize).ok()) {
-        Some(l) => l,
-        None => ::std::alloc::handle_alloc_error(::std::alloc::Layout::new::<u8>()),
-    };
+pub unsafe extern "C" fn pruv_host_alloc_zeroed_v2(len: i64, size: i64, align: i64) -> *mut u8 {
+    let layout = unsafe { ::std::alloc::Layout::from_size_align_unchecked((len as usize) * (size as usize), align as usize) };
     let p = unsafe { ::std::alloc::alloc_zeroed(layout) };
     if p.is_null() { ::std::alloc::handle_alloc_error(layout); }
     p
@@ -4010,20 +4092,14 @@ pub extern "C" fn pruv_host_alloc_zeroed_v2(len: i64, size: i64, align: i64) -> 
     o.append(ALLOW)
     o.append("""\
 #[no_mangle]
-pub extern "C" fn pruv_host_free_v2(data: *mut u8, len: i64, size: i64, align: i64) {
-    if data.is_null() || len <= 0 { return; }
-    if let Some(layout) = (len as usize).checked_mul(size as usize).and_then(|b| ::std::alloc::Layout::from_size_align(b, align as usize).ok()) {
-        unsafe { ::std::alloc::dealloc(data, layout) };
-    }
+pub unsafe extern "C" fn pruv_host_free_v2(data: *mut u8, len: i64, size: i64, align: i64) {
+    unsafe { ::std::alloc::dealloc(data, ::std::alloc::Layout::from_size_align_unchecked((len as usize) * (size as usize), align as usize)) };
 }""")
     o.append(ALLOW)
     o.append("""\
 #[no_mangle]
-pub extern "C" fn pruv_host_realloc_v2(data: *mut u8, len: i64, m: i64, size: i64, align: i64) -> *mut u8 {
-    let layout = match (len as usize).checked_mul(size as usize).and_then(|b| ::std::alloc::Layout::from_size_align(b, align as usize).ok()) {
-        Some(l) => l,
-        None => ::std::alloc::handle_alloc_error(::std::alloc::Layout::new::<u8>()),
-    };
+pub unsafe extern "C" fn pruv_host_realloc_v2(data: *mut u8, len: i64, m: i64, size: i64, align: i64) -> *mut u8 {
+    let layout = unsafe { ::std::alloc::Layout::from_size_align_unchecked((len as usize) * (size as usize), align as usize) };
     let p = unsafe { ::std::alloc::realloc(data, layout, (m as usize) * (size as usize)) };
     if p.is_null() { ::std::alloc::handle_alloc_error(layout); }
     p
@@ -4315,7 +4391,6 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
         "declare i%d @llvm.bswap.i%d(i%d)\n" % (w, w, w) for w in (16, 32, 64) if w in m.bswap) + (
         "declare ptr @pruv_shrink_v2(ptr, i64, i64, i64, i64) nounwind\n" if m.shrink else "") + (
         "declare void @pruv_fill_v2(ptr nocapture, i64, i64, i64) nounwind\n" if m.fill else "") + (
-        "declare void @llvm.memset.p0.i64(ptr nocapture writeonly, i8, i64, i1)\n" if m.memset else "") + (
         g6decls + "\n" + "\n".join(chunks))  # G2 A5/B2, G3, G6 A3, G9 A3; P2 batch 4: llvm.bswap when used
     if m.par_trampolines:
         ir = "%pruv_g7_job = type { ptr, ptr }\n" + "\n".join(m.par_types) + "\n" + ir
