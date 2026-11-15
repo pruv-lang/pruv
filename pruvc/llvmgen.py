@@ -432,6 +432,8 @@ class FnGen:
         s.temps = []
         s.ret_cand = {}     # P3: return-movable names -> owner slot (see ret_movable)
         s.ret_moved = {}    # P3: owner slot address -> None (whole value moved) or {storage index of a moved field}
+        s.frames = []       # P3: enclosing blocks being lowered: [names declared so far, names named later, loop body]
+        s.moving = set()    # P3: names the copy of the let / assignment being lowered moves (move_src)
         s.cenv = {}
         s.cregions = []     # G9: constructor temporaries of the contract expression being evaluated, per region
         s.tt = m.tt
@@ -738,6 +740,8 @@ class FnGen:
             elif isinstance(x, (Ctor, StructLit, EnumCtor)):
                 for k in codegen.expr_kids(x):
                     place(k)
+            elif isinstance(x, Call) and x.name == "copy" and len(x.args) == 1 and isinstance(x.args[0], Var):
+                res.add(x.args[0].name)     # copy(x) of an owned local array / array binder moves x instead
         place(e)
         roots = {}
         for n in counts:
@@ -746,16 +750,20 @@ class FnGen:
             except Exception:
                 continue
             if kind == "slot":
-                if x.k == "agg" and s.is_ext(x.ty) and s.owned_slot(x):
-                    roots.setdefault(x.a, []).append((n, x))
+                if (x.k == "agg" and s.is_ext(x.ty) or x.k == "arr") and s.owned_slot(x):
+                    roots.setdefault(x.a, []).append((n, x, True))
                 elif x.k in ("agg", "coll", "arr"):
-                    roots.setdefault(x.a, []).append((n, None))
+                    roots.setdefault(x.a, []).append((n, None, True))
             elif kind == "ssa" and x.mv is not None:
-                roots.setdefault(x.mv[0].a, []).append((n, x))
+                roots.setdefault(x.mv[0].a, []).append((n, x, False))
         out = {}
         for _a, ns in roots.items():
-            if len(ns) == 1 and counts[ns[0][0]] == 1 and ns[0][1] is not None and ns[0][0] in res:
-                out[ns[0][0]] = ns[0][1]
+            # the owner named itself moves only alone; distinct payload binders of one owner are distinct fields
+            if any(whole for _n, _x, whole in ns) and len(ns) > 1:
+                continue
+            for n, x, _whole in ns:
+                if counts[n] == 1 and x is not None and n in res:
+                    out[n] = x
         return out
 
     def hold(s, v):
@@ -1093,17 +1101,78 @@ class FnGen:
             s.term("ret %s %s" % (lty(rt), g))
 
     # ---------- statements ----------
-    def run_block(s, stmts, bind=None):
+    def run_block(s, stmts, bind=None, loop=False):
         """lower a block in its own scope; returns True if control can fall through"""
         s.push_scope()
         if bind:
             s.scopes[-1]["names"].update(bind)
-        for st in stmts:
+        later = [set() for _ in range(len(stmts) + 1)]
+        for i in range(len(stmts) - 1, -1, -1):
+            later[i] = set(later[i + 1])
+            codegen._stmt_names([stmts[i]], later[i])
+        frame = [set(bind or ()), set(), loop]
+        s.frames.append(frame)
+        for i, st in enumerate(stmts):
+            frame[1] = later[i + 1]
             s.stmt(st)
+            if isinstance(st, Let):
+                frame[0].add(st.name)
             if s.dead:
                 break
+        s.frames.pop()
         s.pop_scope()
         return not s.dead
+
+    def dead_after(s, name):
+        """P3 (the Rust backend's dead_after): the statement being lowered is the last use of local `name`: no later
+        statement of any enclosing block up to the one declaring it (or binding it, for a match arm) names it, and no
+        loop body lies between; a parameter is never dead here"""
+        for decls, later, loop in reversed(s.frames):
+            if name in later:
+                return False
+            if name in decls:
+                return True
+            if loop:
+                return False
+        return False
+
+    def move_src(s, st):
+        """P3 (the Rust backend's last_copy): a let / assignment `y = copy(x)` at the last use of x moves x when x is an
+        owned local array, or an array payload binder of a match on an owned extended local that is dead after the
+        match; returns {x} (the copy lowering then takes the value and empties its owner), else an empty set"""
+        e = st.value
+        if s.cost or not (isinstance(e, Call) and e.name == "copy" and len(e.args) == 1):
+            return set()
+        x = e.args[0]
+        if not isinstance(x, Var) or x.name == st.name or not s.dead_after(x.name):
+            return set()
+        kind, v = s.lookup(x.name)
+        if kind == "slot" and v.k == "arr" and s.owned_slot(v):
+            return {x.name}
+        if kind == "ssa" and v.k == "arr" and v.mv is not None and v.mv[3]:
+            return {x.name}
+        return set()
+
+    def copy_move(s, e):
+        """P3: the value of copy(x) when x moves instead (a return candidate or a move_src name), else None"""
+        if not isinstance(e, Var) or (e.name not in s.ret_cand and e.name not in s.moving):
+            return None
+        kind, x = s.lookup(e.name)
+        if kind == "slot":
+            v = s.load(x)
+            if e.name in s.ret_cand:
+                s.ret_moved[x.a] = None     # the return's cleanup skips the slot
+            else:
+                s.ins("store ptr null, ptr %s" % x.a)
+                s.ins("store i64 0, ptr %s" % x.b)
+            return v
+        sl, vn, k, _dead = x.mv
+        if e.name in s.ret_cand:
+            prev = s.ret_moved.get(sl.a)
+            s.ret_moved[sl.a] = (vn, (prev[1] if prev else set()) | {k})
+        else:
+            s.ins("store %s zeroinitializer, ptr %s" % (ARR, g9_gep(s, lty(sl.ty), sl.a, k)))
+        return x
 
     def body(s):
         s.bind_params()
@@ -1168,7 +1237,9 @@ class FnGen:
             s.stack_let(st)
         elif isinstance(st, Let):
             s.begin_temps()
+            s.moving = s.move_src(st)
             v = s.ev(st.value, True)
+            s.moving = set()
             sl = s.new_slot(st.name, st.type)
             s.store(sl, v)
             sc = s.scopes[-1]
@@ -1179,7 +1250,9 @@ class FnGen:
         elif isinstance(st, Assign):
             s.begin_temps()
             sl = s.lookup(st.name)[1]
+            s.moving = s.move_src(st)
             v = s.ev(st.value, True)        # the right side is complete and owned before the old value is destroyed
+            s.moving = set()
             if sl.k == "arr":
                 s.free_val(s.load(sl))
             elif sl.k == "coll":   # G6 A3: drop the old value (null when moved out) after the right side
@@ -1259,7 +1332,7 @@ class FnGen:
             s.place(bl)
             if s.cost:
                 s.cost_add("1")
-            if s.run_block(st.body):
+            if s.run_block(st.body, loop=True):
                 s.br(cl)
             s.place(el)
         elif isinstance(st, Return):
@@ -1436,6 +1509,8 @@ class FnGen:
                 codegen._stmt_names(a.body, named)
             if kind == "slot" and x.k == "agg" and s.owned_slot(x) and sc.name not in named:
                 own = x
+        # an array binder moved by a let / assignment empties its field of the owner, so the owner must be dead too
+        own_dead = own is not None and s.dead_after(sc.name)
         s.term("switch i64 %s, label %%%s [ %s ]" % (tag, dflt, " ".join(
             "i64 %d, label %%%s" % (s.tt.variant_index(ty, a.ctor), l) for a, l in arms)))
         s.place(dflt)
@@ -1447,8 +1522,8 @@ class FnGen:
             for i, (name, fd) in enumerate(zip(a.binders, s.tt.fields(ty, a.ctor))):
                 k = payload_index(s.tt, ty, a.ctor, i)
                 bv = s.getf(sv, ty, k, fd, a.ctor, False)
-                if own is not None and s.is_ext(fd.type) and not s.fb(ty, a.ctor, fd.name):
-                    bv.mv = (own, a.ctor, k)
+                if own is not None and (s.is_ext(fd.type) or is_arr(fd.type)) and not s.fb(ty, a.ctor, fd.name):
+                    bv.mv = (own, a.ctor, k, own_dead)
                 bind[name] = ("ssa", bv)
             if s.run_block(a.body, bind):
                 s.br(end)
@@ -1607,7 +1682,7 @@ class FnGen:
                     if kind == "slot":
                         s.ret_moved[x.a] = None
                     else:
-                        sl, vn, k = x.mv
+                        sl, vn, k, _dead = x.mv
                         prev = s.ret_moved.get(sl.a)
                         s.ret_moved[sl.a] = (vn, (prev[1] if prev else set()) | {k})
                     return v
@@ -1748,6 +1823,9 @@ class FnGen:
             p = s.op("call ptr @pruv_alloc(i64 %s, i64 %s)" % (cnt.a, v.a))
             return s.temp_arr(V("arr", p, cnt.a, rng=rng), owned)
         if n == "copy":
+            mv = s.copy_move(a[0])
+            if mv is not None:
+                return s.temp_arr(mv, owned)
             src = s.ev(a[0])
             if not s.verified:
                 pass    # spec: same checks as proof mode (none)

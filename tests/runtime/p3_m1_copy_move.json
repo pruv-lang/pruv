@@ -1,0 +1,1 @@
+{"flags_matrix": [["--no-verify"]], "exit": 0, "stdout_lines": ["115345133", "1973"], "alloc_balance": true, "llvm_fn_absent": {"ret_slot": ["@pruv_copy"], "ret_binders": ["@pruv_copy"], "let_slot": ["@pruv_copy"], "assign_binder": ["@pruv_copy"]}, "llvm_fn_contains": {"kept": ["@pruv_copy"]}}

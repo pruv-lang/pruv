@@ -1,0 +1,83 @@
+// P3: copy(x) at the last use of an owned local array x, or of an array payload binder of a match on an owned
+// extended local, moves x instead of copying it: in a result position of a return, and as the whole right side of
+// a let / assignment (the owner must then be dead after the match too). Every other copy stays a copy.
+enum E { P(a: [i64], b: [i64]) }
+struct W { x: [i64], y: [i64] }
+
+fn mk(i: i64) -> E ! alloc {
+  return E::P(alloc(2, i), alloc(3, i + 1));
+}
+
+fn ret_slot() -> [i64] ! alloc {
+  let mut x: [i64] = alloc(3, 5);
+  x[0] = 1;
+  return copy(x);
+}
+
+fn ret_binders() -> W ! alloc {
+  let e: E = mk(4);
+  match e {
+    E::P(a, b) => {
+      return W { x: copy(a), y: copy(b) };
+    }
+  }
+}
+
+fn let_slot(c: bool) -> i64 ! alloc {
+  let mut x: [i64] = alloc(2, 3);
+  x[1] = 8;
+  let mut y: [i64] = alloc(1, 0);
+  if c {
+    y = copy(x);
+  }
+  let z: [i64] = copy(y);
+  return z[0] + z[len(z) - 1];
+}
+
+fn assign_binder() -> i64 ! alloc {
+  let mut best: [i64] = alloc(0, 0);
+  let mut i: i64 = 0;
+  while i < 3 decreases 3 - i {
+    let e: E = mk(i);
+    match e {
+      E::P(a, b) => {
+        best = copy(b);
+      }
+    }
+    i = i + 1;
+  }
+  return best[0] * 10 + len(best);
+}
+
+fn kept() -> i64 ! alloc {
+  let mut x: [i64] = alloc(2, 1);
+  let y: [i64] = copy(x);
+  x[0] = 9;
+  let e: E = mk(6);
+  let mut k: [i64] = alloc(0, 0);
+  match e {
+    E::P(a, b) => {
+      k = copy(a);
+    }
+  }
+  let mut n: i64 = 0;
+  match e {
+    E::P(a, b) => { n = a[0] + len(b); }
+  }
+  let mut w: [i64] = alloc(1, 2);
+  let mut j: i64 = 0;
+  while j < 2 decreases 2 - j {
+    let v: [i64] = copy(w);
+    w[0] = v[0] + 1;
+    j = j + 1;
+  }
+  return y[0] * 1000 + x[0] * 100 + k[0] * 10 + n + w[0];
+}
+
+fn run() -> i64 ! alloc {
+  let r: [i64] = ret_slot();
+  let w: W = ret_binders();
+  let mut n: i64 = r[0] + r[2] * 10 + w.x[1] * 100 + len(w.y) * 1000 + w.y[0] * 10000;
+  n = n + let_slot(true) * 100000 + let_slot(false) * 10000000;
+  return n * 100 + assign_binder();
+}

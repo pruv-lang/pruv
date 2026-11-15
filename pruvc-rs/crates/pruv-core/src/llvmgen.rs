@@ -489,7 +489,7 @@ pub struct V {
     /// a call-result slot); lets a read argument pass the pointer instead of spilling a copy.
     pub p: Option<String>,
     /// P3: (owner slot, variant, storage index) of a payload binder of a match on an owned local
-    pub mv: Option<Box<(Slot, String, usize)>>,
+    pub mv: Option<Box<(Slot, String, usize, bool)>>,
 }
 
 pub type Slot = V;
@@ -769,6 +769,10 @@ pub struct FnGen<'a> {
     ret_cand: HashSet<String>,
     /// P3: owner slot address -> None (whole value moved) or (variant, {storage index of a moved field})
     ret_moved: HashMap<String, Option<(String, HashSet<usize>)>>,
+    /// P3: enclosing blocks being lowered: (names declared so far, names named later, loop body)
+    frames: Vec<(HashSet<String>, HashSet<String>, bool)>,
+    /// P3: names the copy of the let / assignment being lowered moves (move_src)
+    moving: HashSet<String>,
 }
 
 impl<'a> FnGen<'a> {
@@ -806,6 +810,8 @@ impl<'a> FnGen<'a> {
             cregions: Vec::new(),
             ret_cand: HashSet::new(),
             ret_moved: HashMap::new(),
+            frames: Vec::new(),
+            moving: HashSet::new(),
         }
     }
 
@@ -1228,37 +1234,49 @@ impl<'a> FnGen<'a> {
                         place(k, res);
                     }
                 }
+                Expr::Call(c) if c.name == "copy" && c.args.len() == 1 => {
+                    // copy(x) of an owned local array / array binder moves x instead
+                    if let Expr::Var(v) = &c.args[0] {
+                        res.insert(v.name.clone());
+                    }
+                }
                 _ => {}
             }
         }
         let mut res = HashSet::new();
         place(e, &mut res);
-        // root owner address -> [(name, candidate)]
-        let mut roots: Vec<(String, Vec<(String, bool)>)> = Vec::new();
-        let mut add = |a: &str, n: &str, c: bool| match roots.iter_mut().find(|(r, _)| r == a) {
-            Some(r) => r.1.push((n.to_string(), c)),
-            None => roots.push((a.to_string(), vec![(n.to_string(), c)])),
+        // root owner address -> [(name, candidate, the owner itself)]
+        let mut roots: Vec<(String, Vec<(String, bool, bool)>)> = Vec::new();
+        let mut add = |a: &str, n: &str, c: bool, whole: bool| match roots.iter_mut().find(|(r, _)| r == a) {
+            Some(r) => r.1.push((n.to_string(), c, whole)),
+            None => roots.push((a.to_string(), vec![(n.to_string(), c, whole)])),
         };
         for (n, _) in &counts {
             match self.lookup(n) {
                 Ok(Bind::Slot(x)) => {
-                    if x.k == Kind::Agg && self.is_ext_opt(&x.ty) && self.owned_slot(&x) {
-                        add(&x.a, n, true);
+                    if (x.k == Kind::Agg && self.is_ext_opt(&x.ty) || x.k == Kind::Arr) && self.owned_slot(&x) {
+                        add(&x.a, n, true, true);
                     } else if matches!(x.k, Kind::Agg | Kind::Coll | Kind::Arr) {
-                        add(&x.a, n, false);
+                        add(&x.a, n, false, true);
                     }
                 }
                 Ok(Bind::Ssa(x)) => {
                     if let Some(mv) = &x.mv {
-                        add(&mv.0.a, n, true);
+                        add(&mv.0.a, n, true, false);
                     }
                 }
                 Err(_) => {}
             }
         }
         for (_a, ns) in &roots {
-            if ns.len() == 1 && ns[0].1 && res.contains(&ns[0].0) && counts.iter().any(|(m, c)| *m == ns[0].0 && *c == 1) {
-                out.insert(ns[0].0.clone());
+            // the owner named itself moves only alone; distinct payload binders of one owner are distinct fields
+            if ns.len() > 1 && ns.iter().any(|x| x.2) {
+                continue;
+            }
+            for (n, c, _) in ns {
+                if *c && res.contains(n) && counts.iter().any(|(m, k)| m == n && *k == 1) {
+                    out.insert(n.clone());
+                }
             }
         }
         out
@@ -1946,21 +1964,126 @@ impl<'a> FnGen<'a> {
     // ---------- statements ----------
     /// Lowers a block into its own scope; true if control can fall out of it
     pub fn run_block(&mut self, stmts: &[Stmt], bind: Vec<(String, Bind)>) -> R<bool> {
+        self.run_block_in(stmts, bind, false)
+    }
+
+    pub fn run_block_in(&mut self, stmts: &[Stmt], bind: Vec<(String, Bind)>, lp: bool) -> R<bool> {
         self.push_scope();
+        let decls: HashSet<String> = bind.iter().map(|(k, _)| k.clone()).collect();
         if !bind.is_empty() {
             let sc = self.scopes.last_mut().ok_or_else(|| IDX_ERR.to_string())?;
             for (k, v) in bind {
                 sc.names.insert(k, v);
             }
         }
-        for s in stmts {
+        // later[i]: names any statement from i on names
+        let mut later: Vec<HashSet<String>> = vec![HashSet::new(); stmts.len() + 1];
+        for i in (0..stmts.len()).rev() {
+            let mut n = later[i + 1].clone();
+            crate::refine::stmt_names(std::slice::from_ref(&stmts[i]), &mut n);
+            later[i] = n;
+        }
+        self.frames.push((decls, HashSet::new(), lp));
+        for (i, s) in stmts.iter().enumerate() {
+            if let Some(fr) = self.frames.last_mut() {
+                fr.1 = std::mem::take(&mut later[i + 1]);
+            }
             self.stmt(s)?;
+            if let Stmt::Let(l) = s {
+                if let Some(fr) = self.frames.last_mut() {
+                    fr.0.insert(l.name.clone());
+                }
+            }
             if self.dead {
                 break;
             }
         }
+        self.frames.pop();
         self.pop_scope()?;
         Ok(!self.dead)
+    }
+
+    /// P3 (the Rust backend's dead_after): the statement being lowered is the last use of local `name`: no later
+    /// statement of any enclosing block up to the one declaring it (or binding it, for a match arm) names it, and no
+    /// loop body lies between; a parameter is never dead here
+    pub fn dead_after(&self, name: &str) -> bool {
+        for (decls, later, lp) in self.frames.iter().rev() {
+            if later.contains(name) {
+                return false;
+            }
+            if decls.contains(name) {
+                return true;
+            }
+            if *lp {
+                return false;
+            }
+        }
+        false
+    }
+
+    /// P3 (the Rust backend's last_copy): a let / assignment `y = copy(x)` at the last use of x moves x when x is an
+    /// owned local array, or an array payload binder of a match on an owned extended local that is dead after the
+    /// match; returns {x} (the copy lowering then takes the value and empties its owner), else an empty set
+    pub fn move_src(&self, name: &str, e: &Expr) -> HashSet<String> {
+        let mut out = HashSet::new();
+        if self.cost {
+            return out;
+        }
+        let Expr::Call(c) = e else { return out };
+        if c.name != "copy" || c.args.len() != 1 {
+            return out;
+        }
+        let Expr::Var(x) = &c.args[0] else { return out };
+        if x.name == name || !self.dead_after(&x.name) {
+            return out;
+        }
+        match self.lookup(&x.name) {
+            Ok(Bind::Slot(v)) if v.k == Kind::Arr && self.owned_slot(&v) => {
+                out.insert(x.name.clone());
+            }
+            Ok(Bind::Ssa(v)) if v.k == Kind::Arr && v.mv.as_ref().is_some_and(|m| m.3) => {
+                out.insert(x.name.clone());
+            }
+            _ => {}
+        }
+        out
+    }
+
+    /// P3: the value of copy(x) when x moves instead (a return candidate or a move_src name), else None
+    pub fn copy_move(&mut self, e: &Expr) -> R<Option<V>> {
+        let Expr::Var(n) = e else { return Ok(None) };
+        let rc = self.ret_cand.contains(&n.name);
+        if !rc && !self.moving.contains(&n.name) {
+            return Ok(None);
+        }
+        match self.lookup(&n.name)? {
+            Bind::Slot(x) => {
+                let v = self.load(&x)?;
+                if rc {
+                    self.ret_moved.insert(x.a.clone(), None); // the return's cleanup skips the slot
+                } else {
+                    self.ins(format!("store ptr null, ptr {}", x.a))?;
+                    self.ins(format!("store i64 0, ptr {}", x.b))?;
+                }
+                Ok(Some(v))
+            }
+            Bind::Ssa(x) => {
+                let (sl, vn, k, _) = (*x.mv.clone().ok_or_else(|| IDX_ERR.to_string())?).clone();
+                if rc {
+                    let mut ks = match self.ret_moved.get(&sl.a) {
+                        Some(Some((_, p))) => p.clone(),
+                        _ => HashSet::new(),
+                    };
+                    ks.insert(k);
+                    self.ret_moved.insert(sl.a.clone(), Some((vn, ks)));
+                } else {
+                    let lt = lty(need_ty(&sl.ty)?);
+                    let g = g9_gep(self, &lt, &sl.a, k)?;
+                    self.ins(format!("store {} zeroinitializer, ptr {}", ARR, g))?;
+                }
+                Ok(Some(x))
+            }
+        }
     }
 
     pub fn body(&mut self) -> R<()> {
@@ -2056,7 +2179,10 @@ impl<'a> FnGen<'a> {
             Stmt::Let(x) if self.m.stack.contains(x) => self.stack_let(x),
             Stmt::Let(x) => {
                 self.begin_temps();
-                let v = self.ev(&x.value, true)?;
+                self.moving = self.move_src(&x.name, &x.value);
+                let v = self.ev(&x.value, true);
+                self.moving.clear();
+                let v = v?;
                 let sl = self.new_slot(&x.name, &x.ty);
                 self.store(&sl, &v)?;
                 // an owner released when the scope ends (G9 A3: also an extended local)
@@ -2072,7 +2198,10 @@ impl<'a> FnGen<'a> {
                 self.begin_temps();
                 let sl = self.lookup(&x.name)?.val().clone();
                 // the right side is complete and owned before the old value is destroyed
-                let v = self.ev(&x.value, true)?;
+                self.moving = self.move_src(&x.name, &x.value);
+                let v = self.ev(&x.value, true);
+                self.moving.clear();
+                let v = v?;
                 if sl.k == Kind::Arr {
                     let old = self.load(&sl)?;
                     self.free_val(&old)?;
@@ -2180,7 +2309,7 @@ impl<'a> FnGen<'a> {
                 self.condbr(&c.a, &bl, &el)?;
                 self.place(&bl);
                 if self.cost { self.cost_add("1")?; }
-                if self.run_block(&x.body, Vec::new())? {
+                if self.run_block_in(&x.body, Vec::new(), true)? {
                     self.br(&cl)?;
                 }
                 self.place(&el);
@@ -2334,6 +2463,11 @@ impl<'a> FnGen<'a> {
                 }
             }
         }
+        // an array binder moved by a let / assignment empties its field of the owner, so the owner must be dead too
+        let own_dead = match (&own, &st.scrutinee) {
+            (Some(_), Expr::Var(scv)) => self.dead_after(&scv.name),
+            _ => false,
+        };
         let mut cases: Vec<String> = Vec::new();
         for (a, l) in &arms {
             cases.push(format!("i64 {}, label %{}", t_variant_index(tt, &ty, &a.ctor)?, l));
@@ -2350,8 +2484,8 @@ impl<'a> FnGen<'a> {
                 let pi = payload_index(tt, &ty, &a.ctor, i)?;
                 let mut v = self.getf(sv, &ty, pi, fd, Some(&a.ctor), false)?;
                 if let Some(o) = &own {
-                    if self.is_ext(&fd.ty) && !self.fb(&ty, Some(&a.ctor), &fd.name) {
-                        v.mv = Some(Box::new((o.clone(), a.ctor.clone(), pi)));
+                    if (self.is_ext(&fd.ty) || is_arr_name(&fd.ty)) && !self.fb(&ty, Some(&a.ctor), &fd.name) {
+                        v.mv = Some(Box::new((o.clone(), a.ctor.clone(), pi, own_dead)));
                     }
                 }
                 bind.push((name.clone(), Bind::Ssa(v)));
@@ -2812,6 +2946,9 @@ impl<'a> FnGen<'a> {
             return self.temp_arr(rv, owned);
         }
         if n == "copy" {
+            if let Some(mv) = self.copy_move(arg(a, 0)?)? {
+                return self.temp_arr(mv, owned);
+            }
             let src = self.ev(arg(a, 0)?, false)?;
             if src.layout != "i64" {
                 let p = self.op(format!("call ptr @pruv_copy_v2(ptr {}, i64 {}, i64 {}, i64 {})", src.a, src.b, elem_size(src.layout), alignment(src.layout)))?;
