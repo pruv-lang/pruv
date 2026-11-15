@@ -142,13 +142,13 @@ def run_case(ctx, case):
         return "stdout %r != %r" % (p.stdout.strip(), want_out)
     if name == "ok_u8":
         # The returned array (one) is released by the Rust Vec, so it is not counted in the runtime's free count: allocs = frees + 1.
-        # g2a_u8_ret releases one intermediate copy inside the runtime, so frees >= 1 (pruv_host_free_v2 path)
+        # Since P3 the last-use copy(t) in g2a_u8_ret moves t, so the runtime may free no intermediate copy (frees >= 0)
         m = re.search(r"pruv-alloc-balance: (\d+) (\d+)", p.stderr)
         if not m:
             return "no pruv-alloc-balance line in stderr: %r" % p.stderr[-150:]
         al, fr = int(m.group(1)), int(m.group(2))
-        if fr < 1 or al != fr + 1:
-            return "alloc balance %d allocs / %d frees (expected: frees >= 1, allocs == frees + 1)" % (al, fr)
+        if al != fr + 1:
+            return "alloc balance %d allocs / %d frees (expected: allocs == frees + 1)" % (al, fr)
     return None
 
 

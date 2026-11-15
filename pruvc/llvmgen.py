@@ -1235,6 +1235,14 @@ class FnGen:
     def stmt(s, st):
         if isinstance(st, Let) and s.m.stack is not None and s.m.stack.contains(st):
             s.stack_let(st)
+        elif isinstance(st, Let) and s.m.stack is not None and s.m.stack.lit(st) and not s.cost:
+            # P3: a borrowed literal local binds the read-only global directly: no copy, never freed
+            s.begin_temps()
+            v = s.ev(st.value, False)
+            sl = s.new_slot(st.name, st.type)
+            s.store(sl, v)
+            s.scopes[-1]["names"][st.name] = ("slot", sl)
+            s.end_temps()
         elif isinstance(st, Let):
             s.begin_temps()
             s.moving = s.move_src(st)

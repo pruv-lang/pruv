@@ -31,12 +31,16 @@ class StackPlan:
     def __init__(self):
         self.entries = ()
         self.ids = {}
+        self.lits = set()
 
     def contains(self, node):
         return id(node) in self.ids
 
     def length(self, node):
         return self.ids[id(node)]
+
+    def lit(self, node):
+        return id(node) in self.lits
 
 
 def _collect_calls(x, out):
@@ -97,6 +101,11 @@ def eligible_decl(let, storage):
     if eb is None or n.value * eb > MAX_ARRAY_BYTES:
         return None
     return n.value, eb
+
+
+def eligible_lit(let):
+    """true for `let x: str = "literal"`; such a binding may alias the read-only global when only read"""
+    return let.type == STR and isinstance(let.value, StrLit)
 
 
 class Uses:
@@ -170,12 +179,15 @@ class Uses:
             if (not deny and callee is not None and callee.foreign is None and j < len(callee.params)
                     and e.name not in ("len", "alloc", "copy", "truncate", "print")):
                 p = callee.params[j]
-                array = p.type in (ARRAY, ARRAY_U8, ARRAY_BOOL)
+                array = p.type in (ARRAY, ARRAY_U8, ARRAY_BOOL, STR)
                 if array and not p.take:
                     if isinstance(a, Var) and p.mode != "inout":
                         ok = True
                     elif isinstance(a, InoutArg) and isinstance(a.expr, Var) and p.mode == "inout":
                         ok = True
+                        d = scope.get(a.expr.name)
+                        if d is not None and isinstance(d.value, StrLit):
+                            self.bad.add(id(d))     # a literal candidate must not be mutated through inout
             if ok:
                 continue
             self.expr(a, scope, deny)
@@ -195,10 +207,16 @@ class Uses:
             if e is not None:
                 ctx.decls.append((number, st, e))
                 scope[st.name] = st
+            elif eligible_lit(st):
+                ctx.lits.append(st)
+                scope[st.name] = st
         elif isinstance(st, Assign):
             self.kill(scope, st.name)
             self.expr(st.value, scope)
         elif isinstance(st, IndexAssign):
+            d = scope.get(st.name)
+            if d is not None and isinstance(d.value, StrLit):
+                self.bad.add(id(d))
             self.expr(st.index, scope)
             self.expr(st.value, scope)
         elif isinstance(st, FieldAssign):
@@ -240,6 +258,7 @@ class _Ctx:
         self.storage = storage
         self.ordinal = 0
         self.decls = []
+        self.lits = []
 
 
 def plan_stack(prog, storage_plan, verified):
@@ -248,12 +267,17 @@ def plan_stack(prog, storage_plan, verified):
     rec = recursive_functions(prog)
     entries = []
     for f in prog.functions:
-        if f.foreign is not None or f.name in rec or (not verified and getattr(f, "cost", None) is not None):
+        if f.foreign is not None or (not verified and getattr(f, "cost", None) is not None):
             continue
         bad = set()
         ctx = _Ctx(storage_plan)
         walker = Uses(fmap, bad)
         walker.block(f.body, {p.name: None for p in f.params}, ctx)
+        for st in ctx.lits:
+            if id(st) not in bad:
+                out.lits.add(id(st))
+        if f.name in rec:
+            continue            # only literals are planned in recursive functions
         total = 0
         for number, st, (length, eb) in ctx.decls:
             if id(st) in bad:

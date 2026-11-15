@@ -2177,6 +2177,16 @@ impl<'a> FnGen<'a> {
     pub fn stmt(&mut self, st: &Stmt) -> R<()> {
         match st {
             Stmt::Let(x) if self.m.stack.contains(x) => self.stack_let(x),
+            Stmt::Let(x) if self.m.stack.lit(x) && !self.cost => {
+                // P3: a borrowed literal local binds the read-only global directly: no copy, never freed
+                self.begin_temps();
+                let v = self.ev(&x.value, false)?;
+                let sl = self.new_slot(&x.name, &x.ty);
+                self.store(&sl, &v)?;
+                let sc = self.scopes.last_mut().ok_or_else(|| IDX_ERR.to_string())?;
+                sc.names.insert(x.name.clone(), Bind::Slot(sl));
+                self.end_temps()
+            }
             Stmt::Let(x) => {
                 self.begin_temps();
                 self.moving = self.move_src(&x.name, &x.value);

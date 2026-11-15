@@ -14,9 +14,13 @@ pub struct StackPlan {
     /// (function, statement ordinal, name, length, element bytes)
     pub entries: Vec<(String, usize, String, usize, usize)>,
     ids: HashMap<usize, usize>,
+    lits: HashSet<usize>,
 }
 
 impl StackPlan {
+    pub fn lit(&self, node: &Let) -> bool {
+        self.lits.contains(&(node as *const Let as usize))
+    }
     pub fn contains(&self, node: &Let) -> bool {
         self.ids.contains_key(&(node as *const Let as usize))
     }
@@ -116,6 +120,11 @@ fn eligible_decl(x: &Let, storage: &StoragePlan) -> Option<(usize, usize)> {
     Some((len, eb))
 }
 
+/// true for `let x: str = "literal"`; such a binding may alias the read-only global when only read
+fn eligible_lit(x: &Let) -> bool {
+    x.ty == "str" && matches!(&x.value, Expr::StrLit(_))
+}
+
 // ---------- uses ----------
 /// binding name -> address of the candidate `Let` (None: not a candidate, or shadowed)
 type Scope = HashMap<String, Option<usize>>;
@@ -126,9 +135,15 @@ struct Uses<'a> {
     bad: HashSet<usize>,
     ordinal: usize,
     decls: Vec<(usize, &'a Let, usize, usize)>,
+    lits: HashSet<usize>,
 }
 
 impl<'a> Uses<'a> {
+    /// true when the scope entry is a literal candidate (Python: isinstance(d.value, StrLit))
+    fn is_lit(&self, d: usize) -> bool {
+        self.lits.contains(&d)
+    }
+
     fn kill(&mut self, scope: &Scope, name: &str) {
         if let Some(Some(d)) = scope.get(name) { self.bad.insert(*d); }
     }
@@ -170,11 +185,19 @@ impl<'a> Uses<'a> {
                     if c.foreign.is_none() && j < c.params.len()
                         && !matches!(e.name.as_str(), "len" | "alloc" | "copy" | "truncate" | "print") {
                         let p = &c.params[j];
-                        let array = matches!(p.ty.as_str(), "array" | "array_u8" | "array_bool");
+                        let array = matches!(p.ty.as_str(), "array" | "array_u8" | "array_bool" | "str");
                         if array && !p.take {
                             match a {
                                 Expr::Var(_) if p.mode_pos.is_none() => ok = true,
-                                Expr::InoutArg(ia) if matches!(&*ia.expr, Expr::Var(_)) && p.mode_pos.is_some() => ok = true,
+                                Expr::InoutArg(ia) if matches!(&*ia.expr, Expr::Var(_)) && p.mode_pos.is_some() => {
+                                    ok = true;
+                                    // a literal candidate must not be mutated through inout
+                                    if let Expr::Var(v) = &*ia.expr {
+                                        if let Some(Some(d)) = scope.get(&v.name) {
+                                            if self.is_lit(*d) { self.bad.insert(*d); }
+                                        }
+                                    }
+                                }
                                 _ => {}
                             }
                         }
@@ -201,6 +224,9 @@ impl<'a> Uses<'a> {
                 if let Some((len, eb)) = eligible_decl(x, self.storage) {
                     self.decls.push((number, x, len, eb));
                     scope.insert(x.name.clone(), Some(x as *const Let as usize));
+                } else if eligible_lit(x) {
+                    self.lits.insert(x as *const Let as usize);
+                    scope.insert(x.name.clone(), Some(x as *const Let as usize));
                 }
             }
             Stmt::Assign(x) => {
@@ -208,6 +234,9 @@ impl<'a> Uses<'a> {
                 self.expr(&x.value, scope, false);
             }
             Stmt::IndexAssign(x) => {
+                if let Some(Some(d)) = scope.get(&x.name) {
+                    if self.is_lit(*d) { self.bad.insert(*d); }
+                }
                 self.expr(&x.index, scope, false);
                 self.expr(&x.value, scope, false);
             }
@@ -249,10 +278,14 @@ pub fn plan_stack(prog: &Program, storage: &StoragePlan, verified: bool) -> Stac
     for f in &prog.functions { fmap.insert(f.name.as_str(), f); }
     let rec = recursive_functions(prog);
     for f in &prog.functions {
-        if f.foreign.is_some() || rec.contains(&f.name) || (!verified && f.cost.is_some()) { continue; }
-        let mut w = Uses { fmap: fmap.clone(), storage, bad: HashSet::new(), ordinal: 0, decls: Vec::new() };
+        if f.foreign.is_some() || (!verified && f.cost.is_some()) { continue; }
+        let mut w = Uses { fmap: fmap.clone(), storage, bad: HashSet::new(), ordinal: 0, decls: Vec::new(), lits: HashSet::new() };
         let scope: Scope = f.params.iter().map(|p| (p.name.clone(), None)).collect();
         w.block(&f.body, &scope);
+        for &id in &w.lits {
+            if !w.bad.contains(&id) { out.lits.insert(id); }
+        }
+        if rec.contains(&f.name) { continue; } // only literals are planned in recursive functions
         let mut total = 0usize;
         for &(number, st, length, eb) in &w.decls {
             if w.bad.contains(&(st as *const Let as usize)) { continue; }

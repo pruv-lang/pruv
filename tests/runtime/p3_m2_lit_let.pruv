@@ -1,0 +1,38 @@
+// P3: `let x: str = "literal"` whose binding is only read (len(x), x[i], a direct argument of a non-take, non-inout
+// str parameter) binds the read-only global directly: no @pruv_copy_v2 and no free. A literal local that is
+// reassigned keeps the owned path (copy at the let, free at the assignment and at scope end).
+fn eq_at(a: str, b: str, i: i64) -> i64 ! alloc {
+  if a[i] == b[i] {
+    return 1;
+  }
+  return 0;
+}
+
+fn score(k: i64) -> i64 ! alloc {
+  let a: str = "abcd";
+  let b: str = "abxd";
+  let c: str = "héllo";
+  let mut n: i64 = 0;
+  let mut i: i64 = 0;
+  while i < len(a) decreases len(a) - i {
+    n = n + eq_at(a, b, i);
+    i = i + 1;
+  }
+  return n * 1000 + len(c) * 10 + a[k] - 97;
+}
+
+fn reassigned() -> i64 ! alloc {
+  let mut t: str = "ab";
+  t = "héllo";
+  return len(t) * 10 + t[0] - 100;
+}
+
+fn run() -> i64 ! alloc {
+  let mut s: i64 = 0;
+  let mut k: i64 = 0;
+  while k < 3 decreases 3 - k {
+    s = s + score(k);
+    k = k + 1;
+  }
+  return s;
+}
