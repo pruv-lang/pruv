@@ -88,15 +88,13 @@ def compile_file(path, out, verify=True, trust_callers=False, backend="rust", ru
             return errs
     elif infer and show_inferred:
         print(json.dumps({"status": "skipped_no_verify"}, sort_keys=True, ensure_ascii=False), file=sys.stderr)
-    use = first_async_use(prog)
-    if use and (backend == "llvm" or also_llvm):
-        f, line, col = use
-        raise PruvError("codegen", line, col, "unsupported_type",
-                        "Loop and ev_* operations are not implemented in this batch",
-                        "wait for G10 async A1-A3", file=getattr(f, "file", None))
     g7err = g7_target_error(prog) if emit in ("exe", "obj") else None
     if g7err is not None:
         return [g7err]
+    if emit in ("exe", "obj") and first_async_use(prog) is not None:
+        return [PruvError("codegen", 0, 0, "foreign_target",
+                          "a G6 program on the LLVM backend needs the Rust host build (generated bindings compiled by rustc)",
+                          "emit LLVM IR and Rust bindings (--backend llvm --rust-bindings PATH) and compile the bindings with rustc")]
     if emit is not None:
         raise NativeEmitUnavailable()
     # G3 A3/A4: both back ends (the Rust source backend, the LLVM backend, also --also-llvm) consume the same

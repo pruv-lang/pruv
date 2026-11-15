@@ -700,12 +700,8 @@ def g10_proc_proof_jobs():
 G10_NET_COMPILES = ("net_only",)   # the only frontend roots that use no Socket / Listener type or net_* operation
 
 
-G10_ASYNC_COMPILES = ("async_only", "user_names")  # no async catalog use
-
-
 def g10_async_frontend_jobs(group="g10_async_frontend", subdir="frontend", modes=None):
-    """G10 async A2: Rust lowers every root; LLVM retains the staging guard for Loop / ev_*.
-    The roots without async catalog use generate code on both backends."""
+    """G10 async A3: both backends lower every accepted root; native shim targets are rejected."""
     if modes is None:
         modes = (("default", []), ("no-verify", ["--no-verify"]), ("trust-callers", ["--trust-callers"]),
                  ("foreign-checks-off", ["--foreign-checks", "off"]))
@@ -720,22 +716,13 @@ def g10_async_frontend_jobs(group="g10_async_frontend", subdir="frontend", modes
                 for backend in ("rust", "llvm"):
                     c = (pruvc(f, out + ".rs", flags) if backend == "rust" else
                          pruvc_llvm(f, out + ".ll", out + "_llvm.rs", flags))
-                    if stem in G10_ASYNC_COMPILES or backend == "rust":
-                        if c.returncode != 0:
-                            return False, "%s: exit %d (expected 0) %s" % (backend, c.returncode,
-                                                                           (c.stdout + c.stderr)[-600:])
-                        continue
-                    diags = []
-                    for line in c.stdout.splitlines():
-                        try:
-                            d = json.loads(line)
-                        except ValueError:
-                            continue
-                        if isinstance(d, dict):
-                            diags.append((d.get("stage"), d.get("code")))
-                    if c.returncode != 1 or ("codegen", "unsupported_type") not in diags:
-                        return False, "%s: exit %d (expected 1), diagnostics %s (expected codegen/unsupported_type) %s" % (
-                            backend, c.returncode, diags, (c.stdout + c.stderr)[-400:])
+                    if c.returncode != 0:
+                        return False, "%s: exit %d (expected 0) %s" % (backend, c.returncode, (c.stdout + c.stderr)[-600:])
+                if stem == "both_branch" and mode in ("default", "no-verify"):
+                    for target in ("exe", "obj"):
+                        c = pruvc(f, out + "." + target, flags + ["--emit", target], "llvm")
+                        if c.returncode != 1 or '"code": "foreign_target"' not in c.stdout:
+                            return False, "native target rejection: " + c.stdout + c.stderr
                 return True, ""
             jobs.append(safe(name, fn, {"sample": rel_sample(f), "backend": None,
                                        "flags": list(flags), "mode": mode, "group": group}))
@@ -778,7 +765,7 @@ def g10_net_frontend_jobs(group="g10_net_frontend", subdir="frontend", modes=Non
 
 
 def g10_async_proof_jobs():
-    """A1 proof roots verify before the codegen staging guard, on both backends."""
+    """A1 proof roots verify and generate code on both backends."""
     return g10_async_frontend_jobs("g10_async_proof", "proof", (("default", []), ("no-verify", ["--no-verify"])))
 
 

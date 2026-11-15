@@ -22,8 +22,8 @@ pointer (File updates consume the old box and return a fresh box).  The helper-n
 from vast import *
 from typeinfo import encode, is_collection, uses_array_type, uses_str
 from codegen import (Gen, rty, CONTRACT_PRELUDE_G6, CONTRACT_PRELUDE_U8, CONTRACT_PRELUDE_BOOL,
-                     CONTRACT_PRELUDE_STR, G6_PRELUDE, FILE_PRELUDE, proc_prelude, net_prelude)
-from foreign import CATALOG, CATALOG_CONTRACT_ONLY, FILE_OBSERVERS, PROC_OBSERVERS, NET_OBSERVERS
+                     CONTRACT_PRELUDE_STR, G6_PRELUDE, FILE_PRELUDE, proc_prelude, net_prelude, async_prelude, async_proc_prelude)
+from foreign import CATALOG, CATALOG_CONTRACT_ONLY, FILE_OBSERVERS, PROC_OBSERVERS, NET_OBSERVERS, ASYNC_OBSERVERS
 
 PREFIX = "pruv_g6_v1_"
 BRIDGE_SYM = "pruv_g6_bridge_v1"
@@ -53,7 +53,7 @@ def cname(t):
     if t.name == "hashmap":
         return "hashmap__%s__%s" % (encode(t.args[0]), encode(t.args[1]))
     return {"file": "File", "process": "Process", "process_args": "ProcessArgs",
-            "socket": "Socket", "listener": "Listener"}.get(t.name, "string")
+            "socket": "Socket", "listener": "Listener", "loop": "Loop"}.get(t.name, "string")
 
 
 def drop_sym(t):
@@ -114,6 +114,10 @@ def collect(prog):
                     cats.setdefault(helper_name("file_size", ()), ("file_size", ()))
                 if n.name == "proc_byte":   # G10 proc A3: the contract bounds guard of proc_byte reads proc_size
                     cats.setdefault(helper_name("proc_size", ()), ("proc_size", ()))
+                if n.name in ("ev_kind", "ev_eof", "ev_write_open"):
+                    cats.setdefault(helper_name("ev_cap", ()), ("ev_cap", ()))
+                if n.name == "ev_byte":
+                    cats.setdefault(helper_name("ev_size", ()), ("ev_size", ()))
                 if n.name == "net_byte":    # G10 net A3: the contract bounds guard of net_byte reads net_size
                     cats.setdefault(helper_name("net_size", ()), ("net_size", ()))
             else:
@@ -129,7 +133,7 @@ def collect(prog):
         add(f.ret)
         _walk(f.body, visit)
         def contract_visit(n):
-            if isinstance(n, Call) and (n.name in FILE_OBSERVERS or n.name in PROC_OBSERVERS or n.name in NET_OBSERVERS):
+            if isinstance(n, Call) and (n.name in FILE_OBSERVERS or n.name in PROC_OBSERVERS or n.name in NET_OBSERVERS or n.name in ASYNC_OBSERVERS):
                 visit(n)
         _walk(f.requires, contract_visit)
         _walk(f.ensures, contract_visit)
@@ -253,6 +257,8 @@ def _cat_adapter(helper, op, low):
         return _file_adapter(S, helper, op)
     if op.startswith("proc_"):
         return _proc_adapter(S, helper, op)
+    if op.startswith("ev_"):
+        return _async_adapter(S, helper, op)
     if op.startswith("net_"):
         return _net_adapter(S, helper, op)
     if op in ("vec_new", "vec_push", "vec_get"):
@@ -486,7 +492,7 @@ def _trusted_adapter(f):
 
 def _coll_adapters(t):
     C = rty(t)
-    if t.name in ("file", "process", "process_args", "socket", "listener"):   # G10: a handle has no len adapter
+    if t.name in ("file", "process", "process_args", "socket", "listener", "loop"):   # G10: a handle has no len adapter
         return _fn(drop_sym(t), "h: PruvH", None, "pruv_g6_guard(|| pruv_g6_free::<pruv_%s>(h))" % cname(t))
     return (_fn(len_sym(t), "h: PruvH", "i64", "pruv_g6_guard(|| pruv_g6_ref::<%s>(h).len() as i64)" % C) +
             _fn(drop_sym(t), "h: PruvH", None, "pruv_g6_guard(|| pruv_g6_free::<%s>(h))" % C))
@@ -533,16 +539,18 @@ def build_shim(prog, verified=True, trust_callers=False, budget=1 << 30, foreign
     for f in prog.functions:
         g.fn(f)
     for op, low in cats.values():
-        if op in FILE_OBSERVERS or op in PROC_OBSERVERS or op in NET_OBSERVERS:
+        if op in FILE_OBSERVERS or op in PROC_OBSERVERS or op in NET_OBSERVERS or op in ASYNC_OBSERVERS:
             g.fg.catalog_helper(op, low, low)
     items = g.fg.items
     out = [MOD_ALLOW, "mod pruv_g6_shim {"]
     if g.g10:
         out.append(FILE_PRELUDE)
-    if g.proc:
-        out.append(proc_prelude(g.proc_hook))
-    if g.net:
+    if g.proc or g.ev:
+        out.append(async_proc_prelude(g.proc_hook, g.async_hook) if g.ev else proc_prelude(g.proc_hook))
+    if g.net or g.ev:
         out.append(net_prelude(g.net_hook))
+    if g.ev:
+        out.append(async_prelude(g.async_hook))
     out.append(CONTRACT_PRELUDE_G6)
     if uses_array_type(prog, "array_u8") or g.g10:
         out.append(CONTRACT_PRELUDE_U8)
@@ -578,4 +586,43 @@ def build_shim(prog, verified=True, trust_callers=False, budget=1 << 30, foreign
         adapters.append(_coll_adapters(colls[key]))
     out.extend(adapters)
     out.append("}")
+    if g.ev:
+        out.append("pub use self::pruv_g6_shim::PRUV_ASYNC_THREADS;")
     return "\n".join(out) + "\n"
+
+
+def _async_adapter(sym, helper, op):
+    adapters = {
+        'ev_new': ('a0: i64', 'PruvH', 'pruv_g6_guard(|| { pruv_g6_new({helper}(a0)) })'),
+        'ev_close': ('a0: PruvH, tag: *mut i64, val: *mut i64', None, 'pruv_g6_guard(|| { let pruv_t = pruv_g6_out(tag); let pruv_v = pruv_g6_out(val); if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); let pruv_r = {helper}(pruv_o0); unsafe { match pruv_r { ::std::result::Result::Ok(x) => { *pruv_t = 1; *pruv_v = x; } ::std::result::Result::Err(e) => { *pruv_t = 0; *pruv_v = e; } } } })'),
+        'ev_add_socket': ('a0: PruvH, a1: PruvH', 'PruvH', 'pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); if a1.is_null() { pruv_g6_repr("null handle") } let pruv_o1: pruv_Socket = unsafe { *::std::boxed::Box::from_raw(a1 as *mut pruv_Socket) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, pruv_o1)) })'),
+        'ev_add_listener': ('a0: PruvH, a1: PruvH', 'PruvH', 'pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); if a1.is_null() { pruv_g6_repr("null handle") } let pruv_o1: pruv_Listener = unsafe { *::std::boxed::Box::from_raw(a1 as *mut pruv_Listener) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, pruv_o1)) })'),
+        'ev_add_process': ('a0: PruvH, a1: PruvH', 'PruvH', 'pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); if a1.is_null() { pruv_g6_repr("null handle") } let pruv_o1: pruv_Process = unsafe { *::std::boxed::Box::from_raw(a1 as *mut pruv_Process) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, pruv_o1)) })'),
+        'ev_add_timer': ('a0: PruvH, a1: i64', 'PruvH', 'pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, a1)) })'),
+        'ev_wait': ('a0: PruvH, a1: i64', 'PruvH', 'pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, a1)) })'),
+        'ev_read': ('a0: PruvH, a1: i64, a2: i64', 'PruvH', 'pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, a1, a2)) })'),
+        'ev_write': ('a0: PruvH, a1: i64, a2: *const u8, n2: i64', 'PruvH', 'pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, a1, pruv_g6_slice::<u8>(a2, n2))) })'),
+        'ev_shutdown_write': ('a0: PruvH, a1: i64', 'PruvH', 'pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, a1)) })'),
+        'ev_accept': ('a0: PruvH, a1: i64', 'PruvH', 'pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, a1)) })'),
+        'ev_proc_read': ('a0: PruvH, a1: i64, a2: i64, a3: i64', 'PruvH', 'pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, a1, a2, a3)) })'),
+        'ev_proc_write': ('a0: PruvH, a1: i64, a2: *const u8, n2: i64', 'PruvH', 'pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, a1, pruv_g6_slice::<u8>(a2, n2))) })'),
+        'ev_proc_close_stdin': ('a0: PruvH, a1: i64', 'PruvH', 'pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, a1)) })'),
+        'ev_proc_wait': ('a0: PruvH, a1: i64', 'PruvH', 'pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, a1)) })'),
+        'ev_remove': ('a0: PruvH, a1: i64', 'PruvH', 'pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, a1)) })'),
+        'ev_bytes': ('a0: PruvH, data: *mut *const u8, len: *mut i64', None, 'pruv_g6_guard(|| { if data.is_null() || len.is_null() { pruv_g6_repr("null output") } let pruv_l: &pruv_Loop = pruv_g6_ref::<pruv_Loop>(a0); unsafe { *data = pruv_l.buf.as_ptr(); *len = pruv_l.buf.len() as i64; } })'),
+        'ev_ok': ('a0: PruvH', 'i64', 'pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0)) as i64 })'),
+        'ev_error': ('a0: PruvH', 'i64', 'pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0)) as i64 })'),
+        'ev_cap': ('a0: PruvH', 'i64', 'pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0)) as i64 })'),
+        'ev_count': ('a0: PruvH', 'i64', 'pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0)) as i64 })'),
+        'ev_last': ('a0: PruvH', 'i64', 'pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0)) as i64 })'),
+        'ev_kind': ('a0: PruvH, a1: i64', 'i64', 'pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0), a1) as i64 })'),
+        'ev_eof': ('a0: PruvH, a1: i64', 'i64', 'pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0), a1) as i64 })'),
+        'ev_write_open': ('a0: PruvH, a1: i64', 'i64', 'pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0), a1) as i64 })'),
+        'ev_event_slot': ('a0: PruvH', 'i64', 'pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0)) as i64 })'),
+        'ev_event_kind': ('a0: PruvH', 'i64', 'pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0)) as i64 })'),
+        'ev_size': ('a0: PruvH', 'i64', 'pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0)) as i64 })'),
+        'ev_byte': ('a0: PruvH, a1: i64', 'i64', 'pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0), a1) as i64 })'),
+        'ev_exit': ('a0: PruvH', 'i64', 'pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0)) as i64 })'),
+    }
+    params, ret, body = adapters[op]
+    return _fn(sym, params, ret, body.replace("{helper}", helper))

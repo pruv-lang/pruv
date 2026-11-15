@@ -14,7 +14,7 @@ use crate::codegen::{
     contract_prelude_g6, shim_helpers, CONTRACT_PRELUDE_BOOL, CONTRACT_PRELUDE_STR, CONTRACT_PRELUDE_U8, FILE_PRELUDE, G6_PRELUDE,
 };
 use crate::emit_common::rty_g;
-use crate::foreign::{is_catalog, is_catalog_contract_only, FILE_OBSERVERS, NET_OBSERVERS, PROC_OBSERVERS};
+use crate::foreign::{is_catalog, is_catalog_contract_only, FILE_OBSERVERS, NET_OBSERVERS, PROC_OBSERVERS, ASYNC_OBSERVERS};
 use crate::gtype::{encode, GType};
 use crate::llvmgen::{expr_ty, is_collection};
 use crate::typeinfo::{uses_array_type, uses_str};
@@ -65,6 +65,7 @@ pub fn cname(t: &GType) -> R<String> {
         "process_args" => Ok("ProcessArgs".to_string()),
         "socket" => Ok("Socket".to_string()),
         "listener" => Ok("Listener".to_string()),
+        "loop" => Ok("Loop".to_string()),
         _ => Ok("string".to_string()),
     }
 }
@@ -259,7 +260,7 @@ fn collect<'a>(prog: &'a Program) -> R<(Cats, Colls, HashMap<String, &'a Functio
                                 if !cats.contains_key(&h)
                                     && (FILE_OBSERVERS.contains(&c.name.as_str())
                                         || PROC_OBSERVERS.contains(&c.name.as_str())
-                                        || NET_OBSERVERS.contains(&c.name.as_str()))
+                                        || ASYNC_OBSERVERS.contains(&c.name.as_str()) || NET_OBSERVERS.contains(&c.name.as_str()))
                                 {
                                     observers.push((c.name.clone(), low.clone()));
                                 }
@@ -278,6 +279,16 @@ fn collect<'a>(prog: &'a Program) -> R<(Cats, Colls, HashMap<String, &'a Functio
                                         observers.push(("proc_size".to_string(), vec![]));
                                     }
                                     cats.entry(size).or_insert(("proc_size".to_string(), vec![]));
+                                }
+                                if matches!(c.name.as_str(), "ev_kind" | "ev_eof" | "ev_write_open") {
+                                    let cap = "pruv_g6_ev_cap".to_string();
+                                    if !cats.contains_key(&cap) { observers.push(("ev_cap".to_string(), vec![])); }
+                                    cats.entry(cap).or_insert(("ev_cap".to_string(), vec![]));
+                                }
+                                if c.name == "ev_byte" {
+                                    let size = "pruv_g6_ev_size".to_string();
+                                    if !cats.contains_key(&size) { observers.push(("ev_size".to_string(), vec![])); }
+                                    cats.entry(size).or_insert(("ev_size".to_string(), vec![]));
                                 }
                                 if c.name == "net_byte" {
                                     // G10 net A3: the contract bounds guard of net_byte reads net_size
@@ -308,7 +319,7 @@ fn collect<'a>(prog: &'a Program) -> R<(Cats, Colls, HashMap<String, &'a Functio
                 if let Node::Expr(Expr::Call(c)) = &n {
                     if FILE_OBSERVERS.contains(&c.name.as_str())
                         || PROC_OBSERVERS.contains(&c.name.as_str())
-                        || NET_OBSERVERS.contains(&c.name.as_str())
+                        || ASYNC_OBSERVERS.contains(&c.name.as_str()) || NET_OBSERVERS.contains(&c.name.as_str())
                     {
                         visit(n);
                     }
@@ -454,6 +465,7 @@ fn cat_adapter(helper: &str, op: &str, low: &[GType]) -> R<String> {
     if op.starts_with("proc_") {
         return proc_adapter(&s, helper, op);
     }
+    if op.starts_with("ev_") { return async_adapter(&s, helper, op); }
     if op.starts_with("net_") {
         return net_adapter(&s, helper, op);
     }
@@ -830,7 +842,7 @@ fn trusted_adapter(f: &Function) -> R<String> {
 
 fn coll_adapters(t: &GType) -> R<String> {
     let c = rty_t(t);
-    if matches!(t.name.as_str(), "file" | "process" | "process_args" | "socket" | "listener") {
+    if matches!(t.name.as_str(), "file" | "process" | "process_args" | "socket" | "listener" | "loop") {
         // G10: a handle has no len adapter
         return Ok(fn_text(&format!("{}drop__{}", PREFIX, cname(t)?), "h: PruvH", None,
             &format!("pruv_g6_guard(|| pruv_g6_free::<pruv_{}>(h))", cname(t)?)));
@@ -911,11 +923,16 @@ pub fn build_shim(
     if g10 {
         out.push(FILE_PRELUDE.to_string());
     }
-    if crate::foreign::first_proc_use(prog).is_some() {
+    if crate::foreign::first_async_use(prog).is_some() {
+        out.push(crate::codegen::async_proc_prelude(&std::env::var("PRUV_PROC_TEST_HOOK").unwrap_or_default(), &std::env::var("PRUV_ASYNC_TEST_HOOK").unwrap_or_default()));
+    } else if crate::foreign::first_proc_use(prog).is_some() {
         out.push(crate::codegen::proc_prelude(&std::env::var("PRUV_PROC_TEST_HOOK").unwrap_or_default()));
     }
-    if crate::foreign::first_net_use(prog).is_some() {
+    if crate::foreign::first_net_use(prog).is_some() || crate::foreign::first_async_use(prog).is_some() {
         out.push(crate::codegen::net_prelude(&std::env::var("PRUV_NET_TEST_HOOK").unwrap_or_default()));
+    }
+    if crate::foreign::first_async_use(prog).is_some() {
+        out.push(crate::codegen::async_prelude(&std::env::var("PRUV_ASYNC_TEST_HOOK").unwrap_or_default()));
     }
     out.push(contract_prelude_g6());
     if uses_array_type(prog, "array_u8") || g10 {
@@ -966,7 +983,45 @@ pub fn build_shim(
     }
     out.extend(adapters);
     out.push("}".to_string());
+    if crate::foreign::first_async_use(prog).is_some() { out.push("pub use self::pruv_g6_shim::PRUV_ASYNC_THREADS;".to_string()); }
     let mut s = out.join("\n");
     s.push('\n');
     Ok(s)
+}
+
+fn async_adapter(sym: &str, helper: &str, op: &str) -> R<String> {
+    let (params, ret, body) = match op {
+        "ev_new" => (r#"a0: i64"#, Some("PruvH"), r#"pruv_g6_guard(|| { pruv_g6_new({helper}(a0)) })"#),
+        "ev_close" => (r#"a0: PruvH, tag: *mut i64, val: *mut i64"#, None, r#"pruv_g6_guard(|| { let pruv_t = pruv_g6_out(tag); let pruv_v = pruv_g6_out(val); if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); let pruv_r = {helper}(pruv_o0); unsafe { match pruv_r { ::std::result::Result::Ok(x) => { *pruv_t = 1; *pruv_v = x; } ::std::result::Result::Err(e) => { *pruv_t = 0; *pruv_v = e; } } } })"#),
+        "ev_add_socket" => (r#"a0: PruvH, a1: PruvH"#, Some("PruvH"), r#"pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); if a1.is_null() { pruv_g6_repr("null handle") } let pruv_o1: pruv_Socket = unsafe { *::std::boxed::Box::from_raw(a1 as *mut pruv_Socket) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, pruv_o1)) })"#),
+        "ev_add_listener" => (r#"a0: PruvH, a1: PruvH"#, Some("PruvH"), r#"pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); if a1.is_null() { pruv_g6_repr("null handle") } let pruv_o1: pruv_Listener = unsafe { *::std::boxed::Box::from_raw(a1 as *mut pruv_Listener) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, pruv_o1)) })"#),
+        "ev_add_process" => (r#"a0: PruvH, a1: PruvH"#, Some("PruvH"), r#"pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); if a1.is_null() { pruv_g6_repr("null handle") } let pruv_o1: pruv_Process = unsafe { *::std::boxed::Box::from_raw(a1 as *mut pruv_Process) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, pruv_o1)) })"#),
+        "ev_add_timer" => (r#"a0: PruvH, a1: i64"#, Some("PruvH"), r#"pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, a1)) })"#),
+        "ev_wait" => (r#"a0: PruvH, a1: i64"#, Some("PruvH"), r#"pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, a1)) })"#),
+        "ev_read" => (r#"a0: PruvH, a1: i64, a2: i64"#, Some("PruvH"), r#"pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, a1, a2)) })"#),
+        "ev_write" => (r#"a0: PruvH, a1: i64, a2: *const u8, n2: i64"#, Some("PruvH"), r#"pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, a1, pruv_g6_slice::<u8>(a2, n2))) })"#),
+        "ev_shutdown_write" => (r#"a0: PruvH, a1: i64"#, Some("PruvH"), r#"pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, a1)) })"#),
+        "ev_accept" => (r#"a0: PruvH, a1: i64"#, Some("PruvH"), r#"pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, a1)) })"#),
+        "ev_proc_read" => (r#"a0: PruvH, a1: i64, a2: i64, a3: i64"#, Some("PruvH"), r#"pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, a1, a2, a3)) })"#),
+        "ev_proc_write" => (r#"a0: PruvH, a1: i64, a2: *const u8, n2: i64"#, Some("PruvH"), r#"pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, a1, pruv_g6_slice::<u8>(a2, n2))) })"#),
+        "ev_proc_close_stdin" => (r#"a0: PruvH, a1: i64"#, Some("PruvH"), r#"pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, a1)) })"#),
+        "ev_proc_wait" => (r#"a0: PruvH, a1: i64"#, Some("PruvH"), r#"pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, a1)) })"#),
+        "ev_remove" => (r#"a0: PruvH, a1: i64"#, Some("PruvH"), r#"pruv_g6_guard(|| { if a0.is_null() { pruv_g6_repr("null handle") } let pruv_o0: pruv_Loop = unsafe { *::std::boxed::Box::from_raw(a0 as *mut pruv_Loop) }; PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); pruv_g6_new({helper}(pruv_o0, a1)) })"#),
+        "ev_bytes" => (r#"a0: PruvH, data: *mut *const u8, len: *mut i64"#, None, r#"pruv_g6_guard(|| { if data.is_null() || len.is_null() { pruv_g6_repr("null output") } let pruv_l: &pruv_Loop = pruv_g6_ref::<pruv_Loop>(a0); unsafe { *data = pruv_l.buf.as_ptr(); *len = pruv_l.buf.len() as i64; } })"#),
+        "ev_ok" => (r#"a0: PruvH"#, Some("i64"), r#"pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0)) as i64 })"#),
+        "ev_error" => (r#"a0: PruvH"#, Some("i64"), r#"pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0)) as i64 })"#),
+        "ev_cap" => (r#"a0: PruvH"#, Some("i64"), r#"pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0)) as i64 })"#),
+        "ev_count" => (r#"a0: PruvH"#, Some("i64"), r#"pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0)) as i64 })"#),
+        "ev_last" => (r#"a0: PruvH"#, Some("i64"), r#"pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0)) as i64 })"#),
+        "ev_kind" => (r#"a0: PruvH, a1: i64"#, Some("i64"), r#"pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0), a1) as i64 })"#),
+        "ev_eof" => (r#"a0: PruvH, a1: i64"#, Some("i64"), r#"pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0), a1) as i64 })"#),
+        "ev_write_open" => (r#"a0: PruvH, a1: i64"#, Some("i64"), r#"pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0), a1) as i64 })"#),
+        "ev_event_slot" => (r#"a0: PruvH"#, Some("i64"), r#"pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0)) as i64 })"#),
+        "ev_event_kind" => (r#"a0: PruvH"#, Some("i64"), r#"pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0)) as i64 })"#),
+        "ev_size" => (r#"a0: PruvH"#, Some("i64"), r#"pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0)) as i64 })"#),
+        "ev_byte" => (r#"a0: PruvH, a1: i64"#, Some("i64"), r#"pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0), a1) as i64 })"#),
+        "ev_exit" => (r#"a0: PruvH"#, Some("i64"), r#"pruv_g6_guard(|| { {helper}(pruv_g6_ref::<pruv_Loop>(a0)) as i64 })"#),
+        _ => return Err(format!("unknown async adapter {}", op)),
+    };
+    Ok(fn_text(sym, params, ret, &body.replace("{helper}", helper)))
 }

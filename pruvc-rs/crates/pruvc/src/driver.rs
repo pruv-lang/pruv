@@ -260,9 +260,7 @@ fn compile(a: &Args) -> Result<(), Fail> {
         }
     } else {
         // Pre-G10 order for File-free native programs: with --no-verify, foreign_target fires before the notice.
-        // G10 async: Loop programs reach the async staging guard first, as in Python.
-        if g6_native && pruv_core::foreign::g7_target_error(&prog).is_none() && !pruv_core::foreign::uses_files(&prog)
-            && pruv_core::foreign::first_async_use(&prog).is_none() {
+        if g6_native && pruv_core::foreign::g7_target_error(&prog).is_none() && !pruv_core::foreign::uses_files(&prog) {
             if let Some(e) = foreign_target_error(&prog) {
                 return Err(Fail::Lang(vec![e]));
             }
@@ -272,13 +270,6 @@ fn compile(a: &Args) -> Result<(), Fail> {
         }
     }
     // G7 A3: native targets cannot link the scoped-thread bridge.
-    // G10 async A2: the Rust backend lowers Loop; LLVM and native targets keep the staging guard until A3.
-    if !matches!(a.kind, Kind::Rs) || a.also_llvm.is_some() {
-        if let Some((line, col)) = pruv_core::foreign::first_async_use(&prog) {
-            return Err(Fail::Lang(vec![PruvError::new("codegen", line, col, "unsupported_type",
-                "Loop and ev_* operations are not implemented in this batch", "wait for G10 async A1-A3")]));
-        }
-    }
     if g6_native {
         if let Some(e) = pruv_core::foreign::g7_target_error(&prog) { return Err(Fail::Lang(vec![e])); }
     }

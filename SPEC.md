@@ -792,6 +792,53 @@ the §6d shim emitted with `--rust-bindings`. `--emit exe|obj` rejects net progr
 are proved, never checked at run time. Run on macOS and Linux (CI) and on Windows (`tests/g10_net/windows.py`,
 manual), over the loopback.
 
+## 6n. Readiness loops: async (G10)
+
+`Loop` is an owned, fixed-capacity readiness multiplexer for sockets, listeners, child processes and one-shot
+timers. Declare `! async` for loop operations; `alloc` is also required. Socket operations additionally need
+`net`, process operations need `proc`, and `ev_remove` / `ev_close` require both. `async` is forbidden in `par`.
+
+| Operations | Meaning |
+|---|---|
+| `ev_new(cap)` | Create 1..4096 slots; no worker starts until a resource is added |
+| `ev_add_socket`, `ev_add_listener`, `ev_add_process` | Consume the loop and resource, returning a loop; `ev_last` is the lowest free slot |
+| `ev_add_timer(l, ms)` | Add a one-shot timer, 0..86400000 ms |
+| `ev_wait(l, timeout_ms)` | One event; -1 waits indefinitely, 0 polls, otherwise at most 86400000 ms |
+| `ev_read(l, slot, max)`, `ev_proc_read(l, slot, stream, max)` | Nonblocking read into the shared public buffer; stream is 1 (stdout) or 2 (stderr); max is 1..2^40 |
+| `ev_write`, `ev_proc_write` | Write all bytes to a write-open slot; may block |
+| `ev_shutdown_write`, `ev_proc_close_stdin` | End writes while keeping reads available |
+| `ev_accept(l, slot)` | Nonblocking accept; `ev_last == -1` if nothing is pending |
+| `ev_proc_wait(l, slot)` | Wait and reap (kill a failed slot), free the slot, publish `ev_exit` |
+| `ev_remove(l, slot)` | Cancel, join workers and free a non-free slot |
+| `ev_close(l)` | Consume the loop and end all slots; `Ok(number ended)` or `Err(code)` |
+| `ev_ok`, `ev_error`, `ev_cap`, `ev_count`, `ev_last`, `ev_exit` | Observe the last published state |
+| `ev_kind`, `ev_eof`, `ev_write_open` | Observe an in-range slot: kind 0 free, 1 socket, 2 listener, 3 process, 4 timer |
+| `ev_event_slot`, `ev_event_kind` | Last event: 0 timeout, 1 data, 2 accept, 3 end, 4 timer, 5 slot error |
+| `ev_size`, `ev_byte`, `ev_bytes` | Buffer size, in-range byte, and independent owned byte copy |
+
+All updates take `move l` and return the next loop. Except `ev_new` and `ev_close`, operations require `ev_ok(l)`.
+Check the slot kind, range, capacity and write-open state before the relevant operation. An add consumes its resource
+even on failure. `Loop` cannot be copied, stored in a container or exposed in a host entry; every normal path must
+consume it with `ev_close` or transfer it to another owner. Observers read snapshots, never the OS. A byte copy survives
+later updates and close. Reads publish EOF only after queued bytes are drained; size zero alone means nothing yet.
+Wait scans round-robin, reports one event, and frees fired timers. End and error events are reported once.
+
+Error codes: 1 internal, 2 worker spawn, 3 read, 4 write, 5 write timeout, 6 accept, 7 process I/O, 8 reap.
+Slot failures leave the loop usable and require removing that slot; spawn failure makes the loop failed, so close it.
+Close preserves the first published failure, even after its slot is removed. Runtime contract violations exit 101.
+Writes may block (accepted sockets have no write timeout); this is readiness multiplexing, without `async fn` / `await`.
+LLVM uses the Rust shim; native `--emit exe|obj` requires the Rust host build and reports `codegen/foreign_target`.
+
+```pruv
+fn timer() -> i64 ! async, net, proc, alloc {
+  let mut l: Loop = ev_new(1);
+  l = ev_add_timer(move l, 50);
+  l = ev_wait(move l, -1);
+  let r: Result<i64> = ev_close(move l);
+  match r { Ok(n) => { return n; } Err(e) => { return -e; } }
+}
+```
+
 ## 7. What the compiler proves (all must succeed)
 1. Every `a[i]` (read or write): `0 <= i < len(a)`.
 2. Every `+ - * unary-` in code: result within i64 range.

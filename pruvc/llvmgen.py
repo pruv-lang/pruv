@@ -46,7 +46,7 @@ import codegen
 from codegen import show
 from typeinfo import TypeTable, is_user_type, is_array, uses_array_type, uses_str  # G2 B2: uses_str
 from typeinfo import is_collection, contains_collection, encode  # G6 A3
-from foreign import CATALOG, CATALOG_CONTRACT_ONLY, first_g6_use, _owned_result, NET_OBSERVERS  # G6 A3, G6b, G10 net A3
+from foreign import CATALOG, CATALOG_CONTRACT_ONLY, first_g6_use, _owned_result, NET_OBSERVERS, ASYNC_OBSERVERS  # G6 A3, G6b, G10 net A3
 import foreign_shim  # G6 A3
 import parallel_shim
 from foreign import first_par
@@ -2453,14 +2453,14 @@ class FnGen:
                  "proc_args_new", "proc_args_push", "proc_spawn", "proc_write_str", "proc_write_bytes",
                  "proc_close_stdin", "proc_read", "proc_read_all",
                  "net_connect", "net_listen", "net_accept", "net_write_str", "net_write_bytes",
-                 "net_shutdown_write", "net_set_timeout", "net_read", "net_read_all"):
+                 "net_shutdown_write", "net_set_timeout", "net_read", "net_read_all", 'ev_new', 'ev_add_socket', 'ev_add_listener', 'ev_add_process', 'ev_add_timer', 'ev_wait', 'ev_read', 'ev_write', 'ev_shutdown_write', 'ev_accept', 'ev_proc_read', 'ev_proc_write', 'ev_proc_close_stdin', 'ev_proc_wait', 'ev_remove'):
             r = s.g6_call(sym, "ptr", args)     # a fresh box, or the very same box pointer of a consuming update
             return s.temp_arr(V("coll", r, None, e.ty), owned)
         if n in ("vec_get", "string_byte", "file_close", "file_ok", "file_readable",
                  "file_writable", "file_size", "file_byte", "proc_args_len", "proc_ok", "proc_error",
                  "proc_stdin_open", "proc_eof", "proc_size", "proc_byte",
                  "net_ok", "net_error", "net_write_open", "net_eof", "net_size", "net_byte",
-                 "net_listener_ok", "net_listener_error", "net_listener_port"):
+                 "net_listener_ok", "net_listener_error", "net_listener_port", 'ev_ok', 'ev_error', 'ev_cap', 'ev_count', 'ev_last', 'ev_kind', 'ev_eof', 'ev_write_open', 'ev_event_slot', 'ev_event_kind', 'ev_size', 'ev_byte', 'ev_exit'):
             r = s.g6_call(sym, "i64", args)
             if e.ty == BOOL:
                 return V("i1", s.op("icmp ne i64 %s, 0" % r))
@@ -2477,13 +2477,13 @@ class FnGen:
             T = st(e.ty)
             a0 = s.op("insertvalue %s zeroinitializer, i1 %s, 0" % (T, t1))
             return V("agg", s.op("insertvalue %s %s, i1 %s, 1" % (T, a0, x1)), None, e.ty)
-        if n in ("proc_wait", "proc_kill", "net_close", "net_listener_close"):   # G10 proc / net A3: consume the box; (tag 1 = Ok, value) -> Result<i64>
+        if n in ("proc_wait", "proc_kill", "net_close", "net_listener_close", "ev_close"):   # G10 proc / net A3: consume the box; (tag 1 = Ok, value) -> Result<i64>
             tag, val = s.g6_out("i64"), s.g6_out("i64")
             s.g6_call(sym, "void", args + [("ptr", tag), ("ptr", val)])
             t = s.op("load i64, ptr %s" % tag)
             x = s.op("load i64, ptr %s" % val)
             return V("opt", s.op("icmp ne i64 %s, 0" % t), x)
-        if n in ("proc_bytes", "net_bytes"):   # G10 proc / net A3: a borrowed view of the public buffer, copied at once into a fresh [u8]
+        if n in ("proc_bytes", "net_bytes", "ev_bytes"):   # G10 proc / net A3: a borrowed view of the public buffer, copied at once into a fresh [u8]
             s.m.g6_v2 = True
             d, l = s.g6_out("ptr"), s.g6_out("i64")
             s.g6_call(sym, "void", args + [("ptr", d), ("ptr", l)])
@@ -2883,6 +2883,21 @@ class FnGen:
                 if n == "proc_error":   # the error code is 0..6, never negative
                     return V("i128", s.op("sext i64 %s to i128" % r))
                 return V("i128", s.op("zext i64 %s to i128" % r))
+            if n in ASYNC_OBSERVERS:
+                x = s.cev(a[0])
+                args = [("ptr", x.a)]
+                if n in ("ev_kind", "ev_eof", "ev_write_open", "ev_byte"):
+                    i = s.cev(a[1])
+                    bound = "ev_size" if n == "ev_byte" else "ev_cap"
+                    size = s.g6_call(foreign_shim.adapter_sym("pruv_g6_" + bound), "i64", args)
+                    size = s.op("zext i64 %s to i128" % size)
+                    msg = "array index out of range" if n == "ev_byte" else "loop slot out of range"
+                    s.guard(s.op("icmp ult i128 %s, %s" % (i.a, size)), und(msg), False)
+                    args += [("i64", s.op("trunc i128 %s to i64" % i.a))]
+                r = s.g6_call(foreign_shim.adapter_sym("pruv_g6_" + n), "i64", args)
+                if e.ty == BOOL:
+                    return V("i1", s.op("icmp ne i64 %s, 0" % r))
+                return V("i128", s.op("sext i64 %s to i128" % r))
             if n in NET_OBSERVERS:
                 # G10 net A3: observers over the public state of the handle; the index guard carries the
                 # undefined-contract message of the Rust source backend
@@ -4458,7 +4473,7 @@ def _g6_coll_ok(t):
         return _g6_scalar(t.args[0])
     if t.name == "hashmap":
         return _g6_scalar(t.args[0]) and _g6_scalar(t.args[1])
-    return t.name in ("string", "file", "process", "process_args", "socket", "listener")
+    return t.name in ("string", "file", "process", "process_args", "socket", "listener", "loop")
 
 
 def _g6_type_ok(t):

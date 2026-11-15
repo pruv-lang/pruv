@@ -1,6 +1,7 @@
 {
   "backends": [
-    "rust"
+    "rust",
+    "llvm"
   ],
   "flags_matrix": [
     [
@@ -14,5 +15,6 @@
   ],
   "exit": 0,
   "stdout_contains": "async runtime ok",
-  "async_hook": "write_timeout"
+  "async_hook": "write_timeout",
+  "g6_drop_balance": true
 }

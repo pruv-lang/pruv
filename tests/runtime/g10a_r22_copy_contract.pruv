@@ -1,0 +1,26 @@
+fn observed(l: Loop) -> i64
+ requires ev_ok(l) && ev_kind(l, 0) == 1 && ev_write_open(l, 0) && !ev_eof(l, 0)
+ ensures result >= 0
+{ return ev_size(l); }
+
+fn copy_after(port: i64, expected: [u8]) -> i64 ! async, net, proc, alloc {
+ let s: Socket = net_connect("127.0.0.1", port);
+ let mut l: Loop = ev_new(1);
+ l = ev_add_socket(move l, move s);
+ if !ev_ok(l) { let r: Result<i64> = ev_close(move l); return 10; }
+ l = ev_wait(move l, -1);
+ l = ev_read(move l, 0, 3);
+ let copy: [u8] = ev_bytes(l);
+ let n: i64 = observed(l);
+ l = ev_wait(move l, -1);
+ l = ev_read(move l, 0, 3);
+ let r: Result<i64> = ev_close(move l);
+ if n < 1 || n > 3 || len(copy) != n { return 20; }
+ if len(expected) != 3 { return 25; }
+ let mut i: i64 = 0;
+ while i < len(copy) decreases len(copy) - i {
+  if copy[i] != expected[i] { return 30; }
+  i = i + 1;
+ }
+ match r { Ok(v) => { return v; } Err(e) => { return -e; } }
+}

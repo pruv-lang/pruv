@@ -1,6 +1,7 @@
 {
   "backends": [
-    "rust"
+    "rust",
+    "llvm"
   ],
   "flags_matrix": [
     [
