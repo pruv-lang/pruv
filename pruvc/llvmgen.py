@@ -1396,6 +1396,17 @@ class FnGen:
         if s.cost or not (isinstance(e, Call) and e.name == "copy" and len(e.args) == 1):
             return set()
         x = e.args[0]
+        if (isinstance(x, FieldAccess) and isinstance(x.base, Var) and x.base.name != st.name
+                and s.dead_after(x.base.name)):
+            # copy(v.f) of an unboxed array field of an owned extended struct local v at its last use moves the
+            # field out of v (the Rust backend's last_copy); v's cleanup then frees the emptied field as null
+            kind, v = s.lookup(x.base.name)
+            if (kind == "slot" and v.k == "agg" and s.is_ext(v.ty) and s.owned_slot(v)
+                    and isinstance(s.tt.decl(v.ty), StructDecl)):
+                fd = s.tt.fields(v.ty)[s.tt.field_index(v.ty, x.field)]
+                if is_arr(fd.type) and not s.fb(v.ty, None, fd.name):
+                    return {x.base.name}
+            return set()
         if not isinstance(x, Var) or x.name == st.name or not s.dead_after(x.name):
             return set()
         kind, v = s.lookup(x.name)
@@ -1407,6 +1418,13 @@ class FnGen:
 
     def copy_move(s, e):
         """P3: the value of copy(x) when x moves instead (a return candidate or a move_src name), else None"""
+        if isinstance(e, FieldAccess) and isinstance(e.base, Var) and e.base.name in s.moving:
+            sl = s.lookup(e.base.name)[1]    # move_src: an owned struct slot; the field moves out and is emptied
+            i = s.tt.field_index(sl.ty, e.field)
+            gp = g9_gep(s, lty(sl.ty), sl.a, i)
+            x = s.op("load %s, ptr %s" % (ARR, gp))
+            s.ins("store %s zeroinitializer, ptr %s" % (ARR, gp))
+            return s.unpack(x, s.tt.fields(sl.ty)[i].type, False)
         if not isinstance(e, Var) or (e.name not in s.ret_cand and e.name not in s.moving):
             return None
         kind, x = s.lookup(e.name)

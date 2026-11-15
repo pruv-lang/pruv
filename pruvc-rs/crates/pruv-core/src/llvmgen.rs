@@ -2349,6 +2349,29 @@ impl<'a> FnGen<'a> {
         if c.name != "copy" || c.args.len() != 1 {
             return out;
         }
+        if let Expr::FieldAccess(fa) = &c.args[0] {
+            // copy(v.f) of an unboxed array field of an owned extended struct local v at its last use moves the
+            // field out of v (the Rust backend's last_copy); v's cleanup then frees the emptied field as null
+            let Expr::Var(b) = &*fa.base else { return out };
+            if b.name == name || !self.dead_after(&b.name) {
+                return out;
+            }
+            if let Ok(Bind::Slot(v)) = self.lookup(&b.name) {
+                let Some(ty) = v.ty.as_deref() else { return out };
+                if v.k == Kind::Agg && self.is_ext(ty) && self.owned_slot(&v)
+                    && matches!(t_decl(self.tt, ty), Ok(TypeDecl::Struct(_)))
+                {
+                    let fd = t_field_index(self.tt, ty, &fa.field, None)
+                        .and_then(|i| t_fields(self.tt, ty, None).map(|fs| fs.get(i).cloned()));
+                    if let Ok(Some(fd)) = fd {
+                        if is_arr_name(&fd.ty) && !self.fb(ty, None, &fd.name) {
+                            out.insert(b.name.clone());
+                        }
+                    }
+                }
+            }
+            return out;
+        }
         let Expr::Var(x) = &c.args[0] else { return out };
         if x.name == name || !self.dead_after(&x.name) {
             return out;
@@ -2367,6 +2390,22 @@ impl<'a> FnGen<'a> {
 
     /// P3: the value of copy(x) when x moves instead (a return candidate or a move_src name), else None
     pub fn copy_move(&mut self, e: &Expr) -> R<Option<V>> {
+        if let Expr::FieldAccess(fa) = e {
+            if let Expr::Var(b) = &*fa.base {
+                if self.moving.contains(&b.name) {
+                    // move_src: an owned struct slot; the field moves out and is emptied
+                    let Bind::Slot(sl) = self.lookup(&b.name)? else { return Err(IDX_ERR.to_string()) };
+                    let ty = need_ty(&sl.ty)?.to_string();
+                    let tt = self.tt;
+                    let i = t_field_index(tt, &ty, &fa.field, None)?;
+                    let ft = t_fields(tt, &ty, None)?.get(i).ok_or_else(|| IDX_ERR.to_string())?.ty.clone();
+                    let gp = g9_gep(self, &lty(&ty), &sl.a, i)?;
+                    let x = self.op(format!("load {}, ptr {}", ARR, gp))?;
+                    self.ins(format!("store {} zeroinitializer, ptr {}", ARR, gp))?;
+                    return Ok(Some(self.unpack(&x, &ft, false)?));
+                }
+            }
+        }
         let Expr::Var(n) = e else { return Ok(None) };
         let rc = self.ret_cand.contains(&n.name);
         if !rc && !self.moving.contains(&n.name) {
