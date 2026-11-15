@@ -488,23 +488,25 @@ pub struct V {
     /// G9 (agg only): address of storage that holds this value when known (a parameter, a local slot, a boxed node,
     /// a call-result slot); lets a read argument pass the pointer instead of spilling a copy.
     pub p: Option<String>,
+    /// P3: (owner slot, variant, storage index) of a payload binder of a match on an owned local
+    pub mv: Option<Box<(Slot, String, usize)>>,
 }
 
 pub type Slot = V;
 
 impl V {
     pub fn new(k: Kind, a: impl Into<String>) -> V {
-        V { layout: "i64", rng: None, k, a: a.into(), b: "None".to_string(), ty: None, p: None }
+        V { layout: "i64", rng: None, k, a: a.into(), b: "None".to_string(), ty: None, p: None, mv: None }
     }
     pub fn with_b(k: Kind, a: impl Into<String>, b: impl Into<String>) -> V {
-        V { layout: "i64", rng: None, k, a: a.into(), b: b.into(), ty: None, p: None }
+        V { layout: "i64", rng: None, k, a: a.into(), b: b.into(), ty: None, p: None, mv: None }
     }
     pub fn agg(a: impl Into<String>, ty: &str) -> V {
-        V { layout: "i64", rng: None, k: Kind::Agg, a: a.into(), b: "None".to_string(), ty: Some(ty.to_string()), p: None }
+        V { layout: "i64", rng: None, k: Kind::Agg, a: a.into(), b: "None".to_string(), ty: Some(ty.to_string()), p: None, mv: None }
     }
     /// an aggregate value with a known storage address
     pub fn agg_p(a: impl Into<String>, ty: &str, p: impl Into<String>) -> V {
-        V { layout: "i64", rng: None, k: Kind::Agg, a: a.into(), b: "None".to_string(), ty: Some(ty.to_string()), p: Some(p.into()) }
+        V { layout: "i64", rng: None, k: Kind::Agg, a: a.into(), b: "None".to_string(), ty: Some(ty.to_string()), p: Some(p.into()), mv: None }
     }
     pub fn unit() -> V {
         V::new(Kind::Unit, "None")
@@ -763,6 +765,10 @@ pub struct FnGen<'a> {
     cparams: HashSet<String>,
     /// G9: constructor temporaries (type, storage) of the contract expression being evaluated, per region
     cregions: Vec<Vec<(String, String)>>,
+    /// P3: return-movable names (see ret_movable)
+    ret_cand: HashSet<String>,
+    /// P3: owner slot address -> None (whole value moved) or (variant, {storage index of a moved field})
+    ret_moved: HashMap<String, Option<(String, HashSet<usize>)>>,
 }
 
 impl<'a> FnGen<'a> {
@@ -798,6 +804,8 @@ impl<'a> FnGen<'a> {
             bridge: false,
             cparams: HashSet::new(),
             cregions: Vec::new(),
+            ret_cand: HashSet::new(),
+            ret_moved: HashMap::new(),
         }
     }
 
@@ -1015,7 +1023,7 @@ impl<'a> FnGen<'a> {
                 // G6 A3: owner slot, null-initialized
                 self.allocas.push(format!("{} = alloca ptr", a));
                 self.allocas.push(format!("store ptr null, ptr {}", a));
-                V { layout: "i64", rng: None, k: Kind::Coll, a, b: "None".to_string(), ty: Some(ty.to_string()), p: None }
+                V { layout: "i64", rng: None, k: Kind::Coll, a, b: "None".to_string(), ty: Some(ty.to_string()), p: None, mv: None }
             }
             Kind::Arr => {
                 self.allocas.push(format!("{} = alloca ptr", a));
@@ -1049,7 +1057,7 @@ impl<'a> FnGen<'a> {
             }
             Kind::Coll => {
                 let r = self.op(format!("load ptr, ptr {}", sl.a))?;
-                Ok(V { layout: "i64", rng: None, k: Kind::Coll, a: r, b: "None".to_string(), ty: sl.ty.clone(), p: None })
+                Ok(V { layout: "i64", rng: None, k: Kind::Coll, a: r, b: "None".to_string(), ty: sl.ty.clone(), p: None, mv: None })
             }
             Kind::Arr => {
                 let p = self.op(format!("load ptr, ptr {}", sl.a))?;
@@ -1122,7 +1130,9 @@ impl<'a> FnGen<'a> {
 
     fn free_scope(&mut self, arrays: &[Slot]) -> R<()> {
         for sl in arrays.iter().rev() {
-            if sl.k == Kind::Coll {
+            if let Some(mv) = self.ret_moved.get(&sl.a).cloned() {
+                self.drop_rest(sl, &mv)?;
+            } else if sl.k == Kind::Coll {
                 self.drop_slot(sl)?;
             } else if sl.k == Kind::Agg {
                 // G9 A3: an owned extended local
@@ -1134,6 +1144,124 @@ impl<'a> FnGen<'a> {
             }
         }
         Ok(())
+    }
+
+    /// P3: release an owned extended slot whose value (moved is None) or some unboxed payload fields of its
+    /// current variant (moved = {storage index}) a return moved out: only the parts that were not moved
+    fn drop_rest(&mut self, sl: &Slot, moved: &Option<(String, HashSet<usize>)>) -> R<()> {
+        let (vn, idxs) = match moved {
+            None => return Ok(()),
+            Some(m) => m,
+        };
+        let tt = self.tt;
+        let ty = need_ty(&sl.ty)?.to_string();
+        let fds = t_fields(tt, &ty, Some(vn))?;
+        for (i, fd) in fds.iter().enumerate() {
+            let ft = fd.ty.as_str();
+            let k = payload_index(tt, &ty, vn, i)?;
+            if idxs.contains(&k) || !(is_arr_name(ft) || self.is_ext(ft)) {
+                continue;
+            }
+            let lt = lty(&ty);
+            let gp = g9_gep(self, &lt, &sl.a, k)?;
+            if self.fb(&ty, Some(vn), &fd.name) {
+                let p = self.op(format!("load ptr, ptr {}", gp))?;
+                self.ins(format!("call void @pruv_dropnode__{}(ptr {})", ft, p))?;
+            } else if is_arr_name(ft) {
+                let x = self.op(format!("load {}, ptr {}", ARR, gp))?;
+                let a = self.op(format!("extractvalue {} {}, 0", ARR, x))?;
+                let b = self.op(format!("extractvalue {} {}, 1", ARR, x))?;
+                let mut v = V::with_b(Kind::Arr, a, b);
+                v.ty = elem_ty(ft);
+                self.free_val(&v)?;
+            } else {
+                self.ins(format!("call void @pruv_drop__{}(ptr {})", ft, gp))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn owned_slot(&self, sl: &Slot) -> bool {
+        self.scopes.iter().any(|sc| sc.arrays.iter().any(|x| x.a == sl.a))
+    }
+
+    /// P3 (the LLVM form of the Rust backend's return_movable / consuming match): a return is the last use of every
+    /// local, so an owned extended local, or an unboxed extended payload binder of a match on one, that the returned
+    /// expression names exactly once (counting every name rooted at the same owner) moves out in an owning position
+    /// instead of being cloned; the cleanup of that return then releases only what was not moved (drop_rest).
+    fn ret_movable(&self, e: &Expr) -> HashSet<String> {
+        let mut out = HashSet::new();
+        if self.cost {
+            return out;
+        }
+        fn walk(x: &Expr, counts: &mut Vec<(String, usize)>) {
+            let n = match x {
+                Expr::Var(v) => Some(&v.name),
+                Expr::Move(v) => Some(&v.name),
+                _ => None,
+            };
+            if let Some(n) = n {
+                match counts.iter_mut().find(|(m, _)| m == n) {
+                    Some(c) => c.1 += 1,
+                    None => counts.push((n.clone(), 1)),
+                }
+            }
+            for k in crate::refine::kids(x) {
+                walk(k, counts);
+            }
+        }
+        let mut counts = Vec::new();
+        walk(e, &mut counts);
+        // only a name in a result position (the returned expression itself, or a constructor / struct literal field
+        // of one) moves: its value then lands in the returned value on every path, never in a temporary that a
+        // nested short-circuit or call releases before the return ends
+        fn place(x: &Expr, res: &mut HashSet<String>) {
+            match x {
+                Expr::Var(v) => {
+                    res.insert(v.name.clone());
+                }
+                Expr::Move(v) => {
+                    res.insert(v.name.clone());
+                }
+                Expr::Ctor(_) | Expr::StructLit(_) | Expr::EnumCtor(_) => {
+                    for k in crate::refine::kids(x) {
+                        place(k, res);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut res = HashSet::new();
+        place(e, &mut res);
+        // root owner address -> [(name, candidate)]
+        let mut roots: Vec<(String, Vec<(String, bool)>)> = Vec::new();
+        let mut add = |a: &str, n: &str, c: bool| match roots.iter_mut().find(|(r, _)| r == a) {
+            Some(r) => r.1.push((n.to_string(), c)),
+            None => roots.push((a.to_string(), vec![(n.to_string(), c)])),
+        };
+        for (n, _) in &counts {
+            match self.lookup(n) {
+                Ok(Bind::Slot(x)) => {
+                    if x.k == Kind::Agg && self.is_ext_opt(&x.ty) && self.owned_slot(&x) {
+                        add(&x.a, n, true);
+                    } else if matches!(x.k, Kind::Agg | Kind::Coll | Kind::Arr) {
+                        add(&x.a, n, false);
+                    }
+                }
+                Ok(Bind::Ssa(x)) => {
+                    if let Some(mv) = &x.mv {
+                        add(&mv.0.a, n, true);
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+        for (_a, ns) in &roots {
+            if ns.len() == 1 && ns[0].1 && res.contains(&ns[0].0) && counts.iter().any(|(m, c)| *m == ns[0].0 && *c == 1) {
+                out.insert(ns[0].0.clone());
+            }
+        }
+        out
     }
 
     // ---------- G9 A3: extended values (ownership helpers) ----------
@@ -1328,7 +1456,7 @@ impl<'a> FnGen<'a> {
         let el = self.label("gdone");
         self.condbr(&nn, &dl, &el)?;
         self.place(&dl);
-        let v = V { layout: "i64", rng: None, k: Kind::Coll, a: p, b: "None".to_string(), ty: sl.ty.clone(), p: None };
+        let v = V { layout: "i64", rng: None, k: Kind::Coll, a: p, b: "None".to_string(), ty: sl.ty.clone(), p: None, mv: None };
         self.g6_drop(&v)?;
         self.br(&el)?;
         self.place(&el);
@@ -1777,6 +1905,7 @@ impl<'a> FnGen<'a> {
                             b: "None".to_string(),
                             ty: Some(p.ty.clone()),
                             p: None,
+                            mv: None,
                         }),
                     );
                 }
@@ -2087,7 +2216,9 @@ impl<'a> FnGen<'a> {
                     self.ins(format!("store ptr null, ptr {}", sl.a))?;
                     self.ins(format!("store i64 0, ptr {}", sl.b))?;
                 } else if let Some(val) = &x.value {
+                    self.ret_cand = self.ret_movable(val);
                     v = self.ev(val, true)?;
+                    self.ret_cand.clear();
                     if v.k == Kind::Arr {
                         if let Expr::Var(var) = val {
                             // When returning a local array out: empty the slot so the cleanup below does not free it
@@ -2102,6 +2233,7 @@ impl<'a> FnGen<'a> {
                     let arrays = self.scopes[i].arrays.clone();
                     self.free_scope(&arrays)?;
                 }
+                self.ret_moved.clear();
                 self.emit_ret(&v)
             }
             Stmt::Assert(_) => Ok(()),
@@ -2187,6 +2319,21 @@ impl<'a> FnGen<'a> {
         }
         let dflt = self.label("matchdef");
         let end = self.label("endmatch");
+        // P3: payload binders of a match on an owned extended local that no arm names again may move out on a return
+        let mut own: Option<Slot> = None;
+        if let (Expr::Var(scv), false) = (&st.scrutinee, self.cost) {
+            let bd = self.lookup(&scv.name)?;
+            let mut named = HashSet::new();
+            for a in &st.arms {
+                named.extend(a.binders.iter().cloned());
+                crate::refine::stmt_names(&a.body, &mut named);
+            }
+            if let Bind::Slot(x) = bd {
+                if x.k == Kind::Agg && self.owned_slot(&x) && !named.contains(&scv.name) {
+                    own = Some(x);
+                }
+            }
+        }
         let mut cases: Vec<String> = Vec::new();
         for (a, l) in &arms {
             cases.push(format!("i64 {}, label %{}", t_variant_index(tt, &ty, &a.ctor)?, l));
@@ -2201,7 +2348,12 @@ impl<'a> FnGen<'a> {
             let fds = t_fields(tt, &ty, Some(&a.ctor))?;
             for (i, (name, fd)) in a.binders.iter().zip(fds.iter()).enumerate() {
                 let pi = payload_index(tt, &ty, &a.ctor, i)?;
-                let v = self.getf(sv, &ty, pi, fd, Some(&a.ctor), false)?;
+                let mut v = self.getf(sv, &ty, pi, fd, Some(&a.ctor), false)?;
+                if let Some(o) = &own {
+                    if self.is_ext(&fd.ty) && !self.fb(&ty, Some(&a.ctor), &fd.name) {
+                        v.mv = Some(Box::new((o.clone(), a.ctor.clone(), pi)));
+                    }
+                }
                 bind.push((name.clone(), Bind::Ssa(v)));
             }
             if self.run_block(&a.body, bind)? {
@@ -2422,11 +2574,31 @@ impl<'a> FnGen<'a> {
                 self.temp_arr(rv, owned)
             }
             Expr::Var(x) => {
-                let v = match self.lookup(&x.name)? {
-                    Bind::Ssa(v) => v,
-                    Bind::Slot(s) => self.load(&s)?,
+                let bd = self.lookup(&x.name)?;
+                let v = match &bd {
+                    Bind::Ssa(v) => v.clone(),
+                    Bind::Slot(s) => self.load(s)?,
                 };
                 if owned && v.k == Kind::Agg && self.is_ext_opt(&v.ty) {
+                    if self.ret_cand.contains(&x.name) {
+                        // P3: moved out by the return (ret_movable)
+                        match &bd {
+                            Bind::Slot(s) => {
+                                self.ret_moved.insert(s.a.clone(), None);
+                            }
+                            Bind::Ssa(b) => {
+                                let mv = b.mv.as_ref().ok_or_else(|| IDX_ERR.to_string())?;
+                                let (sl, vn, k) = (&mv.0, &mv.1, mv.2);
+                                let mut set = match self.ret_moved.get(&sl.a) {
+                                    Some(Some((_, s))) => s.clone(),
+                                    _ => HashSet::new(),
+                                };
+                                set.insert(k);
+                                self.ret_moved.insert(sl.a.clone(), Some((vn.clone(), set)));
+                            }
+                        }
+                        return Ok(v);
+                    }
                     // G9 A3: a named extended value in an owning position
                     return self.clone_val(&v);
                 }
@@ -2838,7 +3010,7 @@ impl<'a> FnGen<'a> {
         }
         if is_collection(&f.ret) {
             // G6 A3: fresh owned handle; a temporary unless the caller takes it
-            let rv = V { layout: "i64", rng: None, k: Kind::Coll, a: r, b: "None".to_string(), ty: Some(f.ret.clone()), p: None };
+            let rv = V { layout: "i64", rng: None, k: Kind::Coll, a: r, b: "None".to_string(), ty: Some(f.ret.clone()), p: None, mv: None };
             return self.temp_arr(rv, owned);
         }
         if is_agg(&f.ret) {
@@ -2900,7 +3072,7 @@ impl<'a> FnGen<'a> {
         ) {
             // a fresh box, or the very same box pointer of a consuming update
             let r = self.g6_call(&sym, "ptr", &args)?;
-            let rv = V { layout: "i64", rng: None, k: Kind::Coll, a: r, b: "None".to_string(), ty: e.ty.clone(), p: None };
+            let rv = V { layout: "i64", rng: None, k: Kind::Coll, a: r, b: "None".to_string(), ty: e.ty.clone(), p: None, mv: None };
             return self.temp_arr(rv, owned);
         }
         if matches!(
@@ -2962,7 +3134,7 @@ impl<'a> FnGen<'a> {
         if is_collection(&f.ret) {
             // G6b: a fresh boxed result; a temporary unless the caller takes it
             let r = self.g6_call(&sym, "ptr", &args)?;
-            let rv = V { layout: "i64", rng: None, k: Kind::Coll, a: r, b: "None".to_string(), ty: Some(f.ret.clone()), p: None };
+            let rv = V { layout: "i64", rng: None, k: Kind::Coll, a: r, b: "None".to_string(), ty: Some(f.ret.clone()), p: None, mv: None };
             return self.temp_arr(rv, owned);
         }
         if f.ret == "unit" {
@@ -3001,13 +3173,13 @@ impl<'a> FnGen<'a> {
                 // G6 A3: only len(c) is evaluable in a requires on LLVM
                 self.cenv.insert(
                     p.name.clone(),
-                    V { layout: "i64", rng: None, k: Kind::Coll, a: format!("%p.{}.h", n), b: "None".to_string(), ty: Some(p.ty.clone()), p: None },
+                    V { layout: "i64", rng: None, k: Kind::Coll, a: format!("%p.{}.h", n), b: "None".to_string(), ty: Some(p.ty.clone()), p: None, mv: None },
                 );
             } else if self.is_ext(&p.ty) {
                 // G9 A3: no i128 mirror; contracts read the REAL storage lazily (see cx)
                 self.cenv.insert(
                     p.name.clone(),
-                    V { layout: "i64", rng: None, k: Kind::Ref, a: format!("%p.{}", n), b: "None".to_string(), ty: Some(p.ty.clone()), p: None },
+                    V { layout: "i64", rng: None, k: Kind::Ref, a: format!("%p.{}", n), b: "None".to_string(), ty: Some(p.ty.clone()), p: None, mv: None },
                 );
             } else if is_agg(&p.ty) {
                 let c = self.to_c(&V::agg(format!("%p.{}", n), &p.ty), &p.ty)?;
@@ -3264,7 +3436,7 @@ impl<'a> FnGen<'a> {
             return Ok(v);
         }
         if self.is_ext(&t) {
-            return Ok(V { layout: "i64", rng: None, k: Kind::Ref, a: p, b: "None".to_string(), ty: Some(t), p: None });
+            return Ok(V { layout: "i64", rng: None, k: Kind::Ref, a: p, b: "None".to_string(), ty: Some(t), p: None, mv: None });
         }
         // a whole nominal value is converted whole: charge its weight to the budget first
         self.g9_charge_weight(&t, &p)?;
@@ -3283,7 +3455,7 @@ impl<'a> FnGen<'a> {
             Expr::StrLit(x) => {
                 // G2 B2: point at the global string directly, without copying
                 let g = self.str_global(&x.value);
-                Ok(V { layout: "i64", rng: None, k: Kind::Arr, a: g, b: x.value.len().to_string(), ty: Some(STR.to_string()), p: None })
+                Ok(V { layout: "i64", rng: None, k: Kind::Arr, a: g, b: x.value.len().to_string(), ty: Some(STR.to_string()), p: None, mv: None })
             }
             Expr::Var(x) => match self.cenv.get(&x.name) {
                 Some(v) => Ok(v.clone()),

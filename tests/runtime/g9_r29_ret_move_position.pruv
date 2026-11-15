@@ -1,0 +1,41 @@
+// P3 audit fix: a returned extended local or payload binder moves only from a result position (the returned
+// expression or a constructor / struct literal field of it); a name under a short-circuit or a call argument is
+// cloned, so the unevaluated branch does not leak it and a temporary released mid-expression does not free it
+// under a live binder view
+enum E { V(a: [i64]) }
+struct W { e: E }
+
+fn ok(w: W) -> bool {
+  return true;
+}
+
+fn leak(c: bool) -> bool ! alloc {
+  let x: E = E::V(alloc(1, 7));
+  return c && ok(W { e: x });
+}
+
+fn uaf() -> bool ! alloc {
+  let x: E = E::V(alloc(1, 7));
+  match x {
+    E::V(a) => {
+      return (true && ok(W { e: x })) && a[0] == 7;
+    }
+  }
+}
+
+fn moved() -> W ! alloc {
+  let x: E = E::V(alloc(1, 7));
+  return W { e: x };
+}
+
+fn run() -> i64 ! alloc {
+  let mut n: i64 = 0;
+  if leak(false) { n = n + 1; }
+  if leak(true) { n = n + 10; }
+  if uaf() { n = n + 100; }
+  let w: W = moved();
+  match w.e {
+    E::V(a) => { n = n + a[0] * 1000; }
+  }
+  return n;
+}

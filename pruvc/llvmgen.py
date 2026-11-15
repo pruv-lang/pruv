@@ -312,12 +312,13 @@ class V:
     ref (G9 contract evaluation: a=ptr to the REAL storage of an extended value, ty=its Type).
     p (G9, agg only): address of storage that holds this value when known (a parameter, a local slot, a boxed
     node, a call-result slot); lets a read argument pass the pointer instead of spilling a copy."""
-    __slots__ = ("k", "a", "b", "ty", "p", "layout", "rng")
+    __slots__ = ("k", "a", "b", "ty", "p", "layout", "rng", "mv")
 
     def __init__(s, k, a=None, b=None, ty=None, p=None, layout="i64", rng=None):
         s.k, s.a, s.b, s.ty, s.p = k, a, b, ty, p
         s.layout = layout
         s.rng = rng
+        s.mv = None     # P3: (owner slot, variant, storage index) of a payload binder of a match on an owned local
 
 
 class Slot:
@@ -429,6 +430,8 @@ class FnGen:
         s.dead = False
         s.scopes = []
         s.temps = []
+        s.ret_cand = {}     # P3: return-movable names -> owner slot (see ret_movable)
+        s.ret_moved = {}    # P3: owner slot address -> None (whole value moved) or {storage index of a moved field}
         s.cenv = {}
         s.cregions = []     # G9: constructor temporaries of the contract expression being evaluated, per region
         s.tt = m.tt
@@ -676,12 +679,84 @@ class FnGen:
 
     def free_scope(s, sc):
         for sl in reversed(sc["arrays"]):
-            if sl.k == "coll":
+            if sl.a in s.ret_moved:
+                s.drop_rest(sl, s.ret_moved[sl.a])
+            elif sl.k == "coll":
                 s.drop_slot(sl)
             elif sl.k == "agg":     # G9 A3: an owned extended local
                 s.ins("call void @pruv_drop__%s(ptr %s)" % (sl.ty.name, sl.a))
             else:
                 s.free_val(s.load(sl))
+
+    def drop_rest(s, sl, moved):
+        """P3: release an owned extended slot whose value (moved is None) or some unboxed payload fields of its
+        current variant (moved = {storage index}) a return moved out: only the parts that were not moved"""
+        if moved is None:
+            return
+        vn, idxs = moved
+        for i, fd in enumerate(s.tt.fields(sl.ty, vn)):
+            ft = fd.type
+            k = payload_index(s.tt, sl.ty, vn, i)
+            if k in idxs or not (is_arr(ft) or s.is_ext(ft)):
+                continue
+            gp = g9_gep(s, lty(sl.ty), sl.a, k)
+            if s.fb(sl.ty, vn, fd.name):
+                s.ins("call void @pruv_dropnode__%s(ptr %s)" % (ft.name, s.op("load ptr, ptr %s" % gp)))
+            elif is_arr(ft):
+                x = s.op("load %s, ptr %s" % (ARR, gp))
+                s.free_val(V("arr", s.op("extractvalue %s %s, 0" % (ARR, x)), s.op("extractvalue %s %s, 1" % (ARR, x)),
+                             elem_ty(ft)))
+            else:
+                s.ins("call void @pruv_drop__%s(ptr %s)" % (ft.name, gp))
+
+    def owned_slot(s, sl):
+        return any(sl is x for sc in s.scopes for x in sc["arrays"])
+
+    def ret_movable(s, e):
+        """P3 (the LLVM form of the Rust backend's return_movable / consuming match): a return is the last use of every
+        local, so an owned extended local, or an unboxed extended payload binder of a match on one, that the returned
+        expression names exactly once (counting every name rooted at the same owner) moves out in an owning position
+        instead of being cloned; the cleanup of that return then releases only what was not moved (drop_rest)."""
+        if s.cost or e is None:
+            return {}
+        counts = {}
+
+        def walk(x):
+            if isinstance(x, (Var, Move)):
+                counts[x.name] = counts.get(x.name, 0) + 1
+            for k in codegen.expr_kids(x):
+                walk(k)
+        walk(e)
+        # only a name in a result position (the returned expression itself, or a constructor / struct literal field
+        # of one) moves: its value then lands in the returned value on every path, never in a temporary that a
+        # nested short-circuit or call releases before the return ends
+        res = set()
+
+        def place(x):
+            if isinstance(x, (Var, Move)):
+                res.add(x.name)
+            elif isinstance(x, (Ctor, StructLit, EnumCtor)):
+                for k in codegen.expr_kids(x):
+                    place(k)
+        place(e)
+        roots = {}
+        for n in counts:
+            try:
+                kind, x = s.lookup(n)
+            except Exception:
+                continue
+            if kind == "slot":
+                if x.k == "agg" and s.is_ext(x.ty) and s.owned_slot(x):
+                    roots.setdefault(x.a, []).append((n, x))
+                elif x.k in ("agg", "coll", "arr"):
+                    roots.setdefault(x.a, []).append((n, None))
+            elif kind == "ssa" and x.mv is not None:
+                roots.setdefault(x.mv[0].a, []).append((n, x))
+        out = {}
+        for _a, ns in roots.items():
+            if len(ns) == 1 and counts[ns[0][0]] == 1 and ns[0][1] is not None and ns[0][0] in res:
+                out[ns[0][0]] = ns[0][1]
+        return out
 
     def hold(s, v):
         """move a temporary into a fresh owner slot (returned); the caller registers it in a scope"""
@@ -1206,7 +1281,9 @@ class FnGen:
                 s.ins("store ptr null, ptr %s" % sl.a)
                 s.ins("store i64 0, ptr %s" % sl.b)
             elif st.value is not None:
+                s.ret_cand = s.ret_movable(st.value)
                 v = s.ev(st.value, True)
+                s.ret_cand = {}
                 if v.k == "arr" and isinstance(st.value, Var):
                     # moving a local array out: empty its slot so the cleanup below does not free it
                     sl = s.lookup(st.value.name)[1]
@@ -1215,6 +1292,7 @@ class FnGen:
             s.end_temps()
             for sc in reversed(s.scopes):
                 s.free_scope(sc)
+            s.ret_moved = {}
             s.emit_ret(v)
         elif isinstance(st, Assert):
             pass
@@ -1347,6 +1425,17 @@ class FnGen:
         tag = s.tag_of(sv, False)
         arms = [(a, s.label("arm" + a.ctor)) for a in st.arms]
         dflt, end = s.label("matchdef"), s.label("endmatch")
+        # P3: payload binders of a match on an owned extended local that no arm names again may move out on a return
+        own = None
+        sc = st.scrutinee
+        if isinstance(sc, Var) and not s.cost:
+            kind, x = s.lookup(sc.name)
+            named = set()
+            for a in st.arms:
+                named.update(a.binders)
+                codegen._stmt_names(a.body, named)
+            if kind == "slot" and x.k == "agg" and s.owned_slot(x) and sc.name not in named:
+                own = x
         s.term("switch i64 %s, label %%%s [ %s ]" % (tag, dflt, " ".join(
             "i64 %d, label %%%s" % (s.tt.variant_index(ty, a.ctor), l) for a, l in arms)))
         s.place(dflt)
@@ -1356,7 +1445,11 @@ class FnGen:
             s.place(l)
             bind = {}
             for i, (name, fd) in enumerate(zip(a.binders, s.tt.fields(ty, a.ctor))):
-                bind[name] = ("ssa", s.getf(sv, ty, payload_index(s.tt, ty, a.ctor, i), fd, a.ctor, False))
+                k = payload_index(s.tt, ty, a.ctor, i)
+                bv = s.getf(sv, ty, k, fd, a.ctor, False)
+                if own is not None and s.is_ext(fd.type) and not s.fb(ty, a.ctor, fd.name):
+                    bv.mv = (own, a.ctor, k)
+                bind[name] = ("ssa", bv)
             if s.run_block(a.body, bind):
                 s.br(end)
                 reach = True
@@ -1510,6 +1603,14 @@ class FnGen:
             kind, x = s.lookup(e.name)
             v = x if kind == "ssa" else s.load(x)
             if owned and v.k == "agg" and s.is_ext(v.ty):   # G9 A3: a named extended value in an owning position
+                if e.name in s.ret_cand:    # P3: moved out by the return (ret_movable)
+                    if kind == "slot":
+                        s.ret_moved[x.a] = None
+                    else:
+                        sl, vn, k = x.mv
+                        prev = s.ret_moved.get(sl.a)
+                        s.ret_moved[sl.a] = (vn, (prev[1] if prev else set()) | {k})
+                    return v
                 return s.clone_val(v)
             return v
         if isinstance(e, Move):   # G6 A3: load the owner slot, then null it
