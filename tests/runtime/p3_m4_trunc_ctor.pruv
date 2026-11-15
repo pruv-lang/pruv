@@ -1,0 +1,66 @@
+// P3: truncate(x, m) in a result position of a return (a constructor / struct literal field of the returned
+// expression) of an owned local array x that the return names once shrinks x's block in place instead of copying
+// the first m elements; any other truncate stays a copy.
+enum T { Tape(t: [i64]), Bytes(b: [u8], n: i64), Nothing }
+struct S { a: [i64], k: i64 }
+
+fn tape(n: i64) -> T ! alloc {
+  let mut t: [i64] = alloc(8, 0);
+  let mut i: i64 = 0;
+  while i < 8 decreases 8 - i {
+    t[i] = i * 3;
+    i = i + 1;
+  }
+  if n > 8 {
+    return T::Nothing;
+  }
+  return T::Tape(truncate(t, n));
+}
+
+fn bytes(n: i64) -> T ! alloc {
+  let mut b: [u8] = alloc(6, 0);
+  b[0] = 7;
+  b[1] = 9;
+  return T::Bytes(truncate(b, n), n + 1);
+}
+
+fn pair(n: i64) -> S ! alloc {
+  let mut a: [i64] = alloc(5, 4);
+  a[0] = 2;
+  return S { a: truncate(a, n), k: n };
+}
+
+fn kept(n: i64) -> S ! alloc {
+  let a: [i64] = alloc(5, 6);
+  return S { a: truncate(a, n), k: len(a) };
+}
+
+fn total(v: T) -> i64 {
+  match v {
+    T::Tape(t) => {
+      let mut s: i64 = len(t) * 1000;
+      let mut i: i64 = 0;
+      while i < len(t) decreases len(t) - i {
+        s = s + t[i];
+        i = i + 1;
+      }
+      return s;
+    }
+    T::Bytes(b, n) => {
+      if len(b) == 0 {
+        return n * 100;
+      }
+      return n * 100 + len(b) * 10 + b[0];
+    }
+    T::Nothing => { return -1; }
+  }
+}
+
+fn run() -> i64 ! alloc {
+  let mut r: i64 = total(tape(3)) + total(tape(0)) * 7 + total(tape(8)) + total(tape(9));
+  r = r * 10000 + total(bytes(2)) + total(bytes(0));
+  let p: S = pair(2);
+  let q: S = pair(0);
+  let k: S = kept(3);
+  return r * 1000000 + p.a[0] * 100000 + len(p.a) * 10000 + p.k * 1000 + len(q.a) * 100 + len(k.a) * 10 + k.k;
+}

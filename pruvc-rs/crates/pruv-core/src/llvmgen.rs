@@ -1334,6 +1334,12 @@ impl<'a> FnGen<'a> {
                         res.insert(v.name.clone());
                     }
                 }
+                Expr::Call(c) if c.name == "truncate" && c.args.len() == 2 => {
+                    // truncate(x, m) of an owned local array shrinks x in place instead
+                    if let Expr::Var(v) = &c.args[0] {
+                        res.insert(v.name.clone());
+                    }
+                }
                 _ => {}
             }
         }
@@ -3094,6 +3100,28 @@ impl<'a> FnGen<'a> {
             if !self.verified {
                 let ok = self.op(format!("icmp ule i64 {}, {}", m.a, src.b))?;
                 self.guard(&ok, Fail::Panic1("pruv_panic_arith", "truncate length outside 0..len".to_string()), false)?;
+            }
+            if let Expr::Var(xv) = arg(a, 0)? {
+                if self.ret_cand.contains(&xv.name) {
+                    if let Bind::Slot(sl) = self.lookup(&xv.name)? {
+                        if sl.k == Kind::Arr {
+                            // P3: an owned local array the return moves (ret_movable): shrink its block to m elements
+                            // in place, as `return truncate(x, m)` does; the return's cleanup skips the slot
+                            self.ret_moved.insert(sl.a.clone(), None);
+                            let sz = if is_bytes_ty(&src.ty) { 1 } else { elem_size(src.layout) };
+                            self.m.shrink = true;
+                            let p = self.op(format!(
+                                "call ptr @pruv_shrink_v2(ptr {}, i64 {}, i64 {}, i64 {}, i64 {})",
+                                src.a, src.b, m.a, sz, sz
+                            ))?;
+                            let mut rv = V::with_b(Kind::Arr, p, m.a.clone());
+                            rv.ty = src.ty.clone();
+                            rv.layout = src.layout;
+                            rv.rng = src.rng;
+                            return self.temp_arr(rv, owned);
+                        }
+                    }
+                }
             }
             if src.layout != "i64" {
                 let p = self.op(format!("call ptr @pruv_copy_v2(ptr {}, i64 {}, i64 {}, i64 {})", src.a, m.a, elem_size(src.layout), alignment(src.layout)))?;

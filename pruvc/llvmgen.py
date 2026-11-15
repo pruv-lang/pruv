@@ -745,6 +745,8 @@ class FnGen:
                     place(k)
             elif isinstance(x, Call) and x.name == "copy" and len(x.args) == 1 and isinstance(x.args[0], Var):
                 res.add(x.args[0].name)     # copy(x) of an owned local array / array binder moves x instead
+            elif isinstance(x, Call) and x.name == "truncate" and len(x.args) == 2 and isinstance(x.args[0], Var):
+                res.add(x.args[0].name)     # truncate(x, m) of an owned local array shrinks x in place instead
         place(e)
         roots = {}
         for n in counts:
@@ -1910,6 +1912,15 @@ class FnGen:
             if not s.verified:
                 ok = s.op("icmp ule i64 %s, %s" % (m.a, src.b))
                 s.guard(ok, s.panic1("pruv_panic_arith", "truncate length outside 0..len"), False)
+            if (isinstance(a[0], Var) and a[0].name in s.ret_cand and s.lookup(a[0].name)[0] == "slot"
+                    and s.lookup(a[0].name)[1].k == "arr"):
+                # P3: an owned local array the return moves (ret_movable): shrink its block to m elements in place,
+                # as `return truncate(x, m)` does; the return's cleanup skips the slot
+                s.ret_moved[s.lookup(a[0].name)[1].a] = None
+                sz = 1 if is_bytes(src) else elem_size(src.layout)
+                s.m.shrink = True
+                p = s.op("call ptr @pruv_shrink_v2(ptr %s, i64 %s, i64 %s, i64 %d, i64 %d)" % (src.a, src.b, m.a, sz, sz))
+                return s.temp_arr(V("arr", p, m.a, src.ty, layout=src.layout, rng=src.rng), owned)
             if src.layout != "i64":
                 p = s.op("call ptr @pruv_copy_v2(ptr %s, i64 %s, i64 %d, i64 %d)" %
                          (src.a, m.a, elem_size(src.layout), alignment(src.layout)))
