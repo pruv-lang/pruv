@@ -50,6 +50,10 @@ class StoragePlan:
         key = node if isinstance(node, tuple) else self.objects.get(id(node))
         return self.layouts.get(key, 'i64')
 
+    def range_of(self, node):
+        key = node if isinstance(node, tuple) else self.objects.get(id(node))
+        return getattr(self, 'ranges', {}).get(key)
+
     def parameter(self, function, name):
         return self.layouts.get(self.params.get((function, name)), 'i64')
 
@@ -203,4 +207,5 @@ def plan_storage(program_after_mono, verified=True):
     out.entries = tuple((key, 'i64' if pins[root(i)] or root(i) not in ranges else range_layout(*ranges[root(i)]))
                         for i, key in enumerate(keys))
     out.layouts = dict(out.entries)
+    out.ranges = {key: ranges[root(i)] for i, key in enumerate(keys) if not pins[root(i)] and root(i) in ranges}
     return out

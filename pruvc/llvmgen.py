@@ -312,19 +312,21 @@ class V:
     ref (G9 contract evaluation: a=ptr to the REAL storage of an extended value, ty=its Type).
     p (G9, agg only): address of storage that holds this value when known (a parameter, a local slot, a boxed
     node, a call-result slot); lets a read argument pass the pointer instead of spilling a copy."""
-    __slots__ = ("k", "a", "b", "ty", "p", "layout")
+    __slots__ = ("k", "a", "b", "ty", "p", "layout", "rng")
 
-    def __init__(s, k, a=None, b=None, ty=None, p=None, layout="i64"):
+    def __init__(s, k, a=None, b=None, ty=None, p=None, layout="i64", rng=None):
         s.k, s.a, s.b, s.ty, s.p = k, a, b, ty, p
         s.layout = layout
+        s.rng = rng
 
 
 class Slot:
-    __slots__ = ("k", "a", "b", "ty", "layout")
+    __slots__ = ("k", "a", "b", "ty", "layout", "rng")
 
     def __init__(s, k, a, b=None, ty=None):
         s.k, s.a, s.b, s.ty = k, a, b, ty
         s.layout = "i64"
+        s.rng = None
 
 
 class Mod:
@@ -345,6 +347,7 @@ class Mod:
         s.stack = None          # P3-S1: StackPlan (set by gen_llvm)
         s.fill = False          # P3-S1: some stack array calls @pruv_fill_v2
         s.memset = False        # P3: some stack array is filled by @llvm.memset
+        s.range_nodes = {}      # P3 batch 2: `iW a, iW b` body -> !N number (first-use order)
         s.explicit = False      # G4 A3: explicit visibility mode (set by gen_llvm); Pruv calls use the Rust-backend routing
 
     def string(s, text):
@@ -532,7 +535,7 @@ class FnGen:
         if sl.k == "arr":
             p = s.op("load ptr, ptr %s" % sl.a)
             n = s.op("load i64, ptr %s" % sl.b)
-            return V("arr", p, n, sl.ty, layout=sl.layout)
+            return V("arr", p, n, sl.ty, layout=sl.layout, rng=sl.rng)
         t = s.op("load i1, ptr %s" % sl.a)
         v = s.op("load i64, ptr %s" % sl.b)
         return V("opt", t, v)
@@ -546,6 +549,7 @@ class FnGen:
             s.ins("store ptr %s, ptr %s" % (v.a, sl.a))
         elif sl.k == "arr":
             sl.layout = v.layout
+            sl.rng = v.rng
             s.ins("store ptr %s, ptr %s" % (v.a, sl.a))
             s.ins("store i64 %s, ptr %s" % (v.b, sl.b))
         else:
@@ -973,7 +977,7 @@ class FnGen:
         for p in s.f.params:
             n = mangle(p.name)
             if is_arr(p.type):
-                names[p.name] = ("ssa", V("arr", "%%p.%s.a" % n, "%%p.%s.n" % n, elem_ty(p.type), layout=s.m.storage.layout_of(p)))
+                names[p.name] = ("ssa", V("arr", "%%p.%s.a" % n, "%%p.%s.n" % n, elem_ty(p.type), layout=s.m.storage.layout_of(p), rng=s.m.storage.range_of(p)))
             elif p.type == BOOL:
                 names[p.name] = ("ssa", V("i1", "%%p.%s" % n))
             elif p.type == I64:
@@ -1050,15 +1054,16 @@ class FnGen:
         v = s.ev(st.value.args[1])      # n is a literal (no code); the fill value is evaluated here, once
         if st.type.name == "array_bool":
             val = v.a                   # i1; widened to the fill byte below (no code at all when n == 0)
-            layout, size, ety = "i64", 1, "i8"
+            layout, size, ety, rng = "i64", 1, "i8", None
         elif st.type.name == "array_u8":
             if not s.verified:
                 ok = s.op("icmp ule i64 %s, 255" % v.a)
                 s.guard(ok, s.panic_elem(v.a), False)
             val = v.a
-            layout, size, ety = "i64", 1, "i8"
+            layout, size, ety, rng = "i64", 1, "i8", None
         else:
             layout = s.m.storage.layout_of(st)
+            rng = s.m.storage.range_of(st)
             size = elem_size(layout)
             val, ety = v.a, "i%d" % (size * 8)
         sl = s.new_slot(st.name, st.type)
@@ -1079,7 +1084,7 @@ class FnGen:
         else:
             s.m.fill = True
             s.ins("call void @pruv_fill_v2(ptr %s, i64 %d, i64 %s, i64 %d)" % (buf, n, val, size))
-        s.store(sl, V("arr", buf, str(n), elem_ty(st.type), layout=layout))
+        s.store(sl, V("arr", buf, str(n), elem_ty(st.type), layout=layout, rng=rng))
         s.scopes[-1]["names"][st.name] = ("slot", sl)
         s.end_temps()
 
@@ -1197,7 +1202,7 @@ class FnGen:
                 sz = 1 if is_bytes(src) else elem_size(src.layout)
                 s.m.shrink = True
                 p = s.op("call ptr @pruv_shrink_v2(ptr %s, i64 %s, i64 %s, i64 %d, i64 %d)" % (src.a, src.b, m.a, sz, sz))
-                v = V("arr", p, m.a, src.ty, layout=src.layout)
+                v = V("arr", p, m.a, src.ty, layout=src.layout, rng=src.rng)
                 s.ins("store ptr null, ptr %s" % sl.a)
                 s.ins("store i64 0, ptr %s" % sl.b)
             elif st.value is not None:
@@ -1361,9 +1366,32 @@ class FnGen:
             s.dead = True
 
     # ---------- code expressions ----------
+    def range_md(s, a):
+        """P3 batch 2: ", !range !N" for a load of an element of the array value a (verified builds only), else "" """
+        if not s.verified or a.rng is None:
+            return ""
+        lo, hi = a.rng
+        w = int(a.layout[1:])
+        if a.layout[0] == "u":
+            if not (0 <= lo and hi <= (1 << w) - 1):
+                return ""
+        elif not (-(1 << (w - 1)) <= lo and hi <= (1 << (w - 1)) - 1):
+            return ""
+        if lo > hi or hi - lo + 1 >= (1 << w):
+            return ""
+
+        def sg(x):
+            x %= 1 << w
+            return x - (1 << w) if x >= 1 << (w - 1) else x
+        body = "i%d %d, i%d %d" % (w, sg(lo), w, sg(hi + 1))
+        nodes = s.m.range_nodes
+        if body not in nodes:
+            nodes[body] = len(nodes)
+        return ", !range !%d" % nodes[body]
+
     def narrow_load(s, a, ptr, target="i64"):
         ty = storage_ty(a)
-        x = s.op("load %s, ptr %s" % (ty, ptr))
+        x = s.op("load %s, ptr %s%s" % (ty, ptr, s.range_md(a)))
         return s.op("%s %s %s to %s" % ("sext" if a.layout.startswith("i") else "zext", ty, x, target))
 
     def index_ptr(s, a, i):
@@ -1510,7 +1538,7 @@ class FnGen:
                 return V("i64", s.op("zext i8 %s to i64" % x))
             if a.layout != "i64":
                 return V("i64", s.narrow_load(a, g))
-            return V("i64", s.op("load i64, ptr %s" % g))
+            return V("i64", s.op("load i64, ptr %s%s" % (g, s.range_md(a))))
         if isinstance(e, StrLit):  # G2 B2
             nm = s.m.string(e.value.decode("utf-8"))
             ln = str(len(e.value))
@@ -1581,6 +1609,7 @@ class FnGen:
             plain = copy.copy(e)
             plain.pruv_cost_wrapped = True
             plain.pruv_storage_layout = s.m.storage.layout_of(e)
+            plain.pruv_storage_range = s.m.storage.range_of(e)
             result = s.ev_call(plain, owned)
             length = s.op("zext i64 %s to i128" % result.b)
             units = s.op("add i128 %s, 1" % length)
@@ -1610,12 +1639,13 @@ class FnGen:
                 p = s.op("call ptr @pruv_alloc_u8(i64 %s, i64 %s)" % (cnt.a, v.a))
                 return s.temp_arr(V("arr", p, cnt.a, ARRAY_U8), owned)
             layout = getattr(e, "pruv_storage_layout", s.m.storage.layout_of(e))
+            rng = getattr(e, "pruv_storage_range", s.m.storage.range_of(e))
             if layout != "i64":
                 p = s.op("call ptr @pruv_alloc_narrow(i64 %s, i64 %s, i64 %d, i64 %d)" %
                          (cnt.a, v.a, elem_size(layout), alignment(layout)))
-                return s.temp_arr(V("arr", p, cnt.a, layout=layout), owned)
+                return s.temp_arr(V("arr", p, cnt.a, layout=layout, rng=rng), owned)
             p = s.op("call ptr @pruv_alloc(i64 %s, i64 %s)" % (cnt.a, v.a))
-            return s.temp_arr(V("arr", p, cnt.a), owned)
+            return s.temp_arr(V("arr", p, cnt.a, rng=rng), owned)
         if n == "copy":
             src = s.ev(a[0])
             if not s.verified:
@@ -1623,12 +1653,12 @@ class FnGen:
             if src.layout != "i64":
                 p = s.op("call ptr @pruv_copy_v2(ptr %s, i64 %s, i64 %d, i64 %d)" %
                          (src.a, src.b, elem_size(src.layout), alignment(src.layout)))
-                return s.temp_arr(V("arr", p, src.b, src.ty, layout=src.layout), owned)
+                return s.temp_arr(V("arr", p, src.b, src.ty, layout=src.layout, rng=src.rng), owned)
             if is_bytes(src):  # G2 A5
                 p = s.op("call ptr @pruv_copy_v2(ptr %s, i64 %s, i64 1, i64 1)" % (src.a, src.b))
-                return s.temp_arr(V("arr", p, src.b, src.ty, layout=src.layout), owned)
+                return s.temp_arr(V("arr", p, src.b, src.ty, layout=src.layout, rng=src.rng), owned)
             p = s.op("call ptr @pruv_copy(ptr %s, i64 %s)" % (src.a, src.b))
-            return s.temp_arr(V("arr", p, src.b), owned)
+            return s.temp_arr(V("arr", p, src.b, rng=src.rng), owned)
         if n == "truncate":     # the first m elements of the array as a new array
             src = s.ev(a[0])
             m = s.ev(a[1])
@@ -1638,12 +1668,12 @@ class FnGen:
             if src.layout != "i64":
                 p = s.op("call ptr @pruv_copy_v2(ptr %s, i64 %s, i64 %d, i64 %d)" %
                          (src.a, m.a, elem_size(src.layout), alignment(src.layout)))
-                return s.temp_arr(V("arr", p, m.a, src.ty, layout=src.layout), owned)
+                return s.temp_arr(V("arr", p, m.a, src.ty, layout=src.layout, rng=src.rng), owned)
             if is_bytes(src):
                 p = s.op("call ptr @pruv_copy_v2(ptr %s, i64 %s, i64 1, i64 1)" % (src.a, m.a))
-                return s.temp_arr(V("arr", p, m.a, src.ty, layout=src.layout), owned)
+                return s.temp_arr(V("arr", p, m.a, src.ty, layout=src.layout, rng=src.rng), owned)
             p = s.op("call ptr @pruv_copy(ptr %s, i64 %s)" % (src.a, m.a))
-            return s.temp_arr(V("arr", p, m.a), owned)
+            return s.temp_arr(V("arr", p, m.a, rng=src.rng), owned)
         if n == "is_char_boundary":  # G2 B2: s then i
             sv = s.ev(a[0])
             iv = s.ev(a[1])
@@ -1741,7 +1771,7 @@ class FnGen:
         x0 = s.op("extractvalue %s %s, 0" % (lty(f.ret), r))
         x1 = s.op("extractvalue %s %s, 1" % (lty(f.ret), r))
         if is_arr(f.ret):
-            return s.temp_arr(V("arr", x0, x1, elem_ty(f.ret), layout=s.m.storage.layout_of(f)), owned)
+            return s.temp_arr(V("arr", x0, x1, elem_ty(f.ret), layout=s.m.storage.layout_of(f), rng=s.m.storage.range_of(f)), owned)
         return V("opt", x0, x1)
 
     # ---------- G6 A3: catalog operations and trusted rust fn through the bridge ----------
@@ -1825,7 +1855,7 @@ class FnGen:
         for p in s.f.params:
             n = mangle(p.name)
             if is_arr(p.type):
-                s.cenv[p.name] = V("arr", "%%p.%s.a" % n, "%%p.%s.n" % n, elem_ty(p.type), layout=s.m.storage.layout_of(p))
+                s.cenv[p.name] = V("arr", "%%p.%s.a" % n, "%%p.%s.n" % n, elem_ty(p.type), layout=s.m.storage.layout_of(p), rng=s.m.storage.range_of(p))
             elif p.type == BOOL:
                 s.cenv[p.name] = V("i1", "%%p.%s" % n)
             elif p.type == I64:
@@ -3713,4 +3743,6 @@ pub extern "C" fn pruv_panic_cost() -> ! {
     ::std::process::exit(101);
 }
 """
+    if m.range_nodes:   # P3 batch 2: !range metadata nodes, in number order, last change to the IR text
+        ir += "\n" + "".join("!%d = !{%s}\n" % (n, body) for body, n in sorted(m.range_nodes.items(), key=lambda kv: kv[1]))
     return ir, gen_bindings(prog, shim, verified)

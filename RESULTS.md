@@ -1940,3 +1940,22 @@ Peak RSS ratios are unchanged within noise (sudoku 1.010, fannkuch 0.990, base64
 
 - **sudoku py/llvm time** goes from 1.007 to 0.960, level with the Rust-source backend (0.958 in section 120). This confirms that the per-iteration `pruv_fill_v2` calls were the cost named in section 120.
 - The other four programs move within noise.
+
+## 122. P3: `!range` metadata on narrowed array element loads (2026-11-15)
+
+In verified builds both compilers now attach `!range` metadata to array element loads whose declared range is known. The storage plan (`pruvc/storage.py`, `pruv-core/src/storage.rs`) exposes the component range it already used to choose a width (`range_of`; absent for pinned components). The range travels with the array value through slots, calls, `alloc`, `copy` and `truncate`. It is emitted on the narrow element load (`narrow_load`) and on the plain `i64` element load, as `!{iW a, iW b}` with `a = lo` and `b = hi + 1` reduced to signed W-bit form. It is skipped when the range does not fit the storage type or covers it entirely. Nodes are numbered in first-use order and appended at the end of the module. Unverified builds and programs without such loads produce unchanged IR.
+
+- **Soundness:** the range is the union over the whole storage component, and every store into the component is proved to stay inside the declared refinement. A load therefore never sees a value outside the range, and the metadata cannot introduce poison.
+- **Agreement:** Python and Rust emit byte-identical output for the runtime rows (1474) and the bench programs (20). All 3389 rows of `tests/run_all.py --backend both --compiler py` pass.
+
+Loads with `!range`: sudoku 20, bedcov 7, nqueen 2, the other bench programs 0. Those three were measured (30 interleaved rounds after 3 warm-ups, same machine as section 121):
+
+| Program | Rust ms | rs/llvm | py/llvm |
+|---|---|---|---|
+| sudoku (4000 puzzles) | 1302 | 0.957 [0.953, 0.962] faster | 0.957 [0.950, 0.964] faster |
+| n-queens (n=15) | 2017 | 0.924 [0.920, 0.928] faster | 0.928 [0.922, 0.933] faster |
+| bedcov (1M intervals, 1M queries) | 664 | 0.963 [0.955, 0.971] faster | 0.960 [0.957, 0.963] faster |
+
+Peak RSS ratios: sudoku 1.000, nqueen 1.000–1.010, bedcov 0.707.
+
+- **Effect:** sudoku and bedcov move within noise of section 121 (0.959 and 0.959). The metadata is correct but does not, by itself, unlock a measurable optimization on these programs. It is kept because it is free and gives later passes the element bounds.

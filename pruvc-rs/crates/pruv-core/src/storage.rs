@@ -14,12 +14,16 @@ pub enum StorageKey {
 pub struct StoragePlan {
     pub entries: Vec<(StorageKey, &'static str)>,
     layouts: HashMap<StorageKey, &'static str>,
+    ranges: HashMap<StorageKey, (i128, i128)>,
     objects: HashMap<(&'static str, usize), StorageKey>,
     params: HashMap<(String, String), StorageKey>,
 }
 impl StoragePlan {
     pub fn layout_of<T>(&self, node: &T) -> &'static str {
         self.objects.get(&(std::any::type_name::<T>(), node as *const T as usize)).map_or("i64", |k| self.layout_key(k))
+    }
+    pub fn range_of<T>(&self, node: &T) -> Option<(i128, i128)> {
+        self.objects.get(&(std::any::type_name::<T>(), node as *const T as usize)).and_then(|k| self.ranges.get(k).copied())
     }
     pub fn contains_node<T>(&self, node: &T) -> bool {
         self.objects.contains_key(&(std::any::type_name::<T>(), node as *const T as usize))
@@ -160,6 +164,7 @@ pub fn plan_storage(prog: &Program, verified: bool) -> StoragePlan {
     for i in 0..a.keys.len() {
         let r = a.root(i); let width = if pins.contains(&r) { "i64" } else { ranges.get(&r).map_or("i64", |&(lo,hi)| range_layout(lo,hi)) };
         a.out.entries.push((a.keys[i].clone(), width)); a.out.layouts.insert(a.keys[i].clone(), width);
+        if !pins.contains(&r) { if let Some(&rg) = ranges.get(&r) { a.out.ranges.insert(a.keys[i].clone(), rg); } }
     }
     a.out
 }
