@@ -22,8 +22,8 @@ pointer (File updates consume the old box and return a fresh box).  The helper-n
 from vast import *
 from typeinfo import encode, is_collection, uses_array_type, uses_str
 from codegen import (Gen, rty, CONTRACT_PRELUDE_G6, CONTRACT_PRELUDE_U8, CONTRACT_PRELUDE_BOOL,
-                     CONTRACT_PRELUDE_STR, G6_PRELUDE, FILE_PRELUDE)
-from foreign import CATALOG, CATALOG_CONTRACT_ONLY, FILE_OBSERVERS
+                     CONTRACT_PRELUDE_STR, G6_PRELUDE, FILE_PRELUDE, proc_prelude)
+from foreign import CATALOG, CATALOG_CONTRACT_ONLY, FILE_OBSERVERS, PROC_OBSERVERS
 
 PREFIX = "pruv_g6_v1_"
 BRIDGE_SYM = "pruv_g6_bridge_v1"
@@ -52,7 +52,7 @@ def cname(t):
         return "vec__" + encode(t.args[0])
     if t.name == "hashmap":
         return "hashmap__%s__%s" % (encode(t.args[0]), encode(t.args[1]))
-    return "File" if t.name == "file" else "string"
+    return {"file": "File", "process": "Process", "process_args": "ProcessArgs"}.get(t.name, "string")
 
 
 def drop_sym(t):
@@ -111,6 +111,8 @@ def collect(prog):
                 cats.setdefault(helper_name(n.name, src), (n.name, low))
                 if n.name == "file_byte":
                     cats.setdefault(helper_name("file_size", ()), ("file_size", ()))
+                if n.name == "proc_byte":   # G10 proc A3: the contract bounds guard of proc_byte reads proc_size
+                    cats.setdefault(helper_name("proc_size", ()), ("proc_size", ()))
             else:
                 f = fmap.get(n.name)
                 if f is not None and f.foreign is not None:
@@ -124,10 +126,11 @@ def collect(prog):
         add(f.ret)
         _walk(f.body, visit)
         def contract_visit(n):
-            if isinstance(n, Call) and n.name in FILE_OBSERVERS:
+            if isinstance(n, Call) and (n.name in FILE_OBSERVERS or n.name in PROC_OBSERVERS):
                 visit(n)
         _walk(f.requires, contract_visit)
         _walk(f.ensures, contract_visit)
+        _walk(getattr(f, "cost", None), contract_visit)
     return cats, colls, trusted
 
 
@@ -245,6 +248,8 @@ def _cat_adapter(helper, op, low):
     S = adapter_sym(helper)
     if op.startswith("file_"):
         return _file_adapter(S, helper, op)
+    if op.startswith("proc_"):
+        return _proc_adapter(S, helper, op)
     if op in ("vec_new", "vec_push", "vec_get"):
         T = low[0]
         C = rty(Type("vec", (T,)))
@@ -310,6 +315,65 @@ def _file_adapter(sym, helper, op):
     return _fn(sym, params, "i64" if op == "file_close" else "PruvH", "pruv_g6_guard(|| { %s })" % body)
 
 
+def _proc_consume(var, ty):
+    """G10 proc A3: take a Process / ProcessArgs box out of its handle (no Default placeholder; the handle is dead)"""
+    return ('if %s.is_null() { pruv_g6_repr("null handle") } '
+            "let pruv_o: %s = unsafe { *::std::boxed::Box::from_raw(%s as *mut %s) }; "
+            "PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); " % (var, ty, var, ty))
+
+
+def _proc_adapter(sym, helper, op):
+    """G10 proc A3 (G10_PROC_SPEC 6): adapters of the A2 helpers. Updates consume the box and return a new one; the
+    observers borrow it and return i64 (bool as 0/1); wait / kill consume it and write (tag 1 = Ok, value); proc_bytes
+    hands out a borrowed (data, len) view of the public buffer, which the LLVM caller copies at once."""
+    P, A = "pruv_Process", "pruv_ProcessArgs"
+    if op == "proc_args_new":
+        return _fn(sym, "", "PruvH", "pruv_g6_guard(|| pruv_g6_new(%s()))" % helper)
+    if op == "proc_args_push":
+        return _fn(sym, "a: PruvH, p: *const u8, n: i64", "PruvH",
+                   "pruv_g6_guard(|| { let pruv_t: &str = pruv_g6_str(p, n); %spruv_g6_new(%s(pruv_o, pruv_t)) })" % (
+                       _proc_consume("a", A), helper))
+    if op == "proc_args_len":
+        return _fn(sym, "a: PruvH", "i64", "pruv_g6_guard(|| %s(pruv_g6_ref::<%s>(a)))" % (helper, A))
+    if op == "proc_spawn":
+        return _fn(sym, "p: *const u8, n: i64, a: PruvH, q: *const u8, m: i64", "PruvH",
+                   "pruv_g6_guard(|| { let pruv_prog: &str = pruv_g6_str(p, n); let pruv_cwd: &str = pruv_g6_str(q, m); "
+                   "pruv_g6_new(%s(pruv_prog, pruv_g6_ref::<%s>(a), pruv_cwd)) })" % (helper, A))
+    if op in ("proc_write_str", "proc_write_bytes", "proc_close_stdin", "proc_read", "proc_read_all"):
+        params, pre, arg = "h: PruvH", "", ""
+        if op == "proc_write_str":
+            params, pre, arg = params + ", p: *const u8, n: i64", "let pruv_d: &str = pruv_g6_str(p, n); ", ", pruv_d"
+        elif op == "proc_write_bytes":
+            params, pre, arg = params + ", p: *const u8, n: i64", "let pruv_d: &[u8] = pruv_g6_slice::<u8>(p, n); ", ", pruv_d"
+        elif op == "proc_read":
+            params, arg = params + ", stream: i64, max: i64", ", stream, max"
+        return _fn(sym, params, "PruvH", "pruv_g6_guard(|| { %s%spruv_g6_new(%s(pruv_o%s)) })" % (
+            pre, _proc_consume("h", P), helper, arg))
+    if op in ("proc_wait", "proc_kill"):
+        return _fn(sym, "h: PruvH, tag: *mut i64, val: *mut i64", None,
+                   "pruv_g6_guard(|| { let pruv_t: *mut i64 = pruv_g6_out(tag); let pruv_v: *mut i64 = pruv_g6_out(val); "
+                   "%slet pruv_r: ::std::result::Result<i64, i64> = %s(pruv_o); "
+                   "unsafe { match pruv_r { ::std::result::Result::Ok(pruv_x) => { *pruv_t = 1; *pruv_v = pruv_x; } "
+                   "::std::result::Result::Err(pruv_e) => { *pruv_t = 0; *pruv_v = pruv_e; } } } })" % (
+                       _proc_consume("h", P), helper))
+    if op == "proc_bytes":
+        # the helper's requires (stream 1 or 2, by --foreign-checks) runs on the borrowed handle; the view itself is
+        # the public buffer (pruv_proc_buf rejects any other stream as an invalid representation)
+        return _fn(sym, "h: PruvH, stream: i64, data: *mut *const u8, len: *mut i64", None,
+                   "pruv_g6_guard(|| { if data.is_null() || len.is_null() { pruv_g6_repr(\"null output\") } "
+                   "let pruv_p: &%s = pruv_g6_ref::<%s>(h); let _ = %s(pruv_p, stream); "
+                   "let pruv_b: &::std::vec::Vec<u8> = pruv_proc_buf(pruv_p, stream); "
+                   "unsafe { *data = pruv_b.as_ptr(); *len = pruv_b.len() as i64; } })" % (P, P, helper))
+    params, arg = "h: PruvH", ""
+    if op in ("proc_eof", "proc_size"):
+        params, arg = params + ", stream: i64", ", stream"
+    elif op == "proc_byte":
+        params, arg = params + ", stream: i64, i: i64", ", stream, i"
+    if op in ("proc_ok", "proc_error", "proc_stdin_open", "proc_eof", "proc_size", "proc_byte"):
+        return _fn(sym, params, "i64", "pruv_g6_guard(|| %s(pruv_g6_ref::<%s>(h)%s) as i64)" % (helper, P, arg))
+    raise Exception("foreign_shim: no adapter for catalog operation %s" % op)
+
+
 def _trusted_params(f):
     params, args = [], []
     for i, p in enumerate(f.params):
@@ -368,8 +432,8 @@ def _trusted_adapter(f):
 
 def _coll_adapters(t):
     C = rty(t)
-    if t.name == "file":
-        return _fn(drop_sym(t), "h: PruvH", None, "pruv_g6_guard(|| pruv_g6_free::<pruv_File>(h))")
+    if t.name in ("file", "process", "process_args"):   # G10: a handle has no len adapter
+        return _fn(drop_sym(t), "h: PruvH", None, "pruv_g6_guard(|| pruv_g6_free::<pruv_%s>(h))" % cname(t))
     return (_fn(len_sym(t), "h: PruvH", "i64", "pruv_g6_guard(|| pruv_g6_ref::<%s>(h).len() as i64)" % C) +
             _fn(drop_sym(t), "h: PruvH", None, "pruv_g6_guard(|| pruv_g6_free::<%s>(h))" % C))
 
@@ -415,12 +479,14 @@ def build_shim(prog, verified=True, trust_callers=False, budget=1 << 30, foreign
     for f in prog.functions:
         g.fn(f)
     for op, low in cats.values():
-        if op in FILE_OBSERVERS:
+        if op in FILE_OBSERVERS or op in PROC_OBSERVERS:
             g.fg.catalog_helper(op, low, low)
     items = g.fg.items
     out = [MOD_ALLOW, "mod pruv_g6_shim {"]
     if g.g10:
         out.append(FILE_PRELUDE)
+    if g.proc:
+        out.append(proc_prelude(g.proc_hook))
     out.append(CONTRACT_PRELUDE_G6)
     if uses_array_type(prog, "array_u8") or g.g10:
         out.append(CONTRACT_PRELUDE_U8)

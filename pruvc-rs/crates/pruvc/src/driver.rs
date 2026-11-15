@@ -232,11 +232,9 @@ fn compile(a: &Args) -> Result<(), Fail> {
     // the G6_SPEC 13.1 subset (A3) and rejects everything else with codegen/unsupported_type inside the LLVM generator
     // (after verification, so verification errors win; same as Python compile_file). The native paths (--emit obj|exe),
     // which Python does not have, cannot link the Rust shim: codegen/foreign_target (G6_SPEC 13.1). That check fires
-    // after verification and after the G10 guard; with --no-verify a File-free program gets it before the notice.
+    // after verification; with --no-verify a File-free program gets it before the notice.
     let g6_native = matches!(a.kind, Kind::Obj | Kind::Exe);
-    // G10 proc A2: the Rust source backend lowers Process and ProcessArgs; every path that generates LLVM (the llvm backend,
-    // --also-llvm, native emit) keeps the staging guard until A3 lifts it (Python compile_file: backend llvm / also_llvm / emit).
-    let proc_guard = !matches!(a.kind, Kind::Rs) || a.also_llvm.is_some();
+    // G10 proc A3: both back ends lower Process and ProcessArgs; the proc staging guard is gone from the driver.
     if a.verify {
         let errs = if a.infer {
             let opts = pruv_proof::VerifyOptions { infer: true };
@@ -260,23 +258,7 @@ fn compile(a: &Args) -> Result<(), Fail> {
         if !errs.is_empty() {
             return Err(Fail::Lang(errs));
         }
-        // G10 proc staging guard (A1: moved here): the codegen entry, after verification (verification errors win).
-        if proc_guard {
-            if let Some(e) = pruv_core::foreign::proc_unimplemented_error(&prog, "codegen") {
-                return Err(Fail::Lang(vec![e]));
-            }
-        }
     } else {
-        // G10 proc staging guard: --no-verify still stops at the guard, before every other target check. Python prints
-        // the skipped_no_verify notice first, then the guard error.
-        if proc_guard {
-            if let Some(e) = pruv_core::foreign::proc_unimplemented_error(&prog, "codegen") {
-                if a.infer && a.show_inferred {
-                    eprintln!("{{\"status\": \"skipped_no_verify\"}}");
-                }
-                return Err(Fail::Lang(vec![e]));
-            }
-        }
         // Pre-G10 order for File-free native programs: with --no-verify, foreign_target fires before the notice.
         if g6_native && pruv_core::foreign::g7_target_error(&prog).is_none() && !pruv_core::foreign::uses_files(&prog) {
             if let Some(e) = foreign_target_error(&prog) {

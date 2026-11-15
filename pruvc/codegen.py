@@ -392,7 +392,8 @@ fn pruv_proc_sigpipe() {}
 #[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
 #[cfg(windows)]
 fn pruv_proc_batch(program: &str) -> bool {
-    let l = program.to_ascii_lowercase();
+    // Windows drops trailing dots and spaces from a file name, so x.bat. and x.bat followed by a space name it too
+    let l = program.trim_end_matches(|c: char| c == '.' || c == ' ').to_ascii_lowercase();
     l.ends_with(".bat") || l.ends_with(".cmd")
 }
 #[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]

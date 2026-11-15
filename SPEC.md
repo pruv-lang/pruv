@@ -691,6 +691,56 @@ pub fn bounded(x: i64) -> i64
   working directory or an environment path, so copy or install both directories together. The Rust compiler embeds
   the same file at build time; its binary needs no file next to it.
 
+## 6l. Child processes: proc (G10)
+
+Full contract: `docs/G10_PROC_SPEC.md`. Tests: `tests/g10_proc/`, `tests/runtime/g10p_r*`.
+
+`proc` is the effect for running child programs, independent of `io`, `fs` and `alloc`. `Process` is an owned
+type with the `File` placement rules, and it is **must-consume**: every handle, including the one a failed spawn
+returns, must end in `proc_wait` or `proc_kill`; scope exit cannot drop it. `ProcessArgs` is an ordered list of
+UTF-8 arguments with the same placement rules, affine with auto-drop; an argument is never split or parsed.
+
+| Operation | Effects | Meaning / contract |
+|---|---|---|
+| `proc_args_new() -> ProcessArgs`, `proc_args_push(take a, arg: str) -> ProcessArgs` | alloc | build the list; `proc_args_len` counts it |
+| `proc_spawn(program: str, args: ProcessArgs, cwd: str) -> Process` | proc, alloc | no requires; ok and stdin open, or not ok with error 1 or 2. `cwd == ""` inherits |
+| `proc_write_str/write_bytes(take p, ...) -> Process` | proc, alloc | requires ok and stdin open; writes everything |
+| `proc_close_stdin(take p) -> Process` | proc, alloc | requires ok and stdin open; ensures stdin closed |
+| `proc_read(take p, stream: i64, max: i64) -> Process` | proc, alloc | requires ok, stream 1 or 2, `0 < max`; next chunk of at most `max` bytes; EOF iff the chunk is empty |
+| `proc_read_all(take p) -> Process` | proc, alloc | requires ok and stdin closed; the rest of both streams (bytes not delivered by earlier reads) |
+| `proc_bytes(p, stream: i64) -> [u8]` | alloc | independent copy of a public buffer |
+| `proc_wait(take p) -> Result<i64>`, `proc_kill(take p) -> Result<i64>` | proc, alloc | no requires; reap (kill first) and consume; `Ok(code)` or `Err(error)` |
+| `proc_ok/error/stdin_open/eof/size/byte(p, ...)` | none | observers, usable in code and contracts |
+
+`proc_error` is `0..6`: 0 none, 1 bad input (empty program, NUL, a Windows `.bat`/`.cmd` file, which is never
+run), 2 spawn failed, 3 read, 4 write, 5 reap, 6 kill request. The first error is kept; a failed update closes
+stdin and empties both buffers, so only `wait`/`kill` remain allowed. `Ok(7)` is exit code 7, not a failure; a
+Unix signal exit is the negative signal number, a Windows code its unsigned 32-bit value. Both output pipes are
+drained internally whichever stream is read, so a full stderr cannot hang a stdout reader. Observers never
+query the OS: the same value always answers the same, and new output becomes visible only at the next effect
+operation. Protocol deadlocks, timeouts and process trees are not handled.
+
+```
+pub fn version(program: str, cwd: str) -> Result<i64> ! proc, alloc
+{
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "--version");
+  let mut p: Process = proc_spawn(program, args, cwd);
+  if !proc_ok(p) { return proc_wait(move p); }
+  p = proc_close_stdin(move p);
+  if !proc_ok(p) { return proc_kill(move p); }
+  p = proc_read_all(move p);
+  if !proc_ok(p) { return proc_kill(move p); }
+  let out: [u8] = proc_bytes(p, 1);
+  return proc_wait(move p);
+}
+```
+
+Rust uses `pruv_Process`/`pruv_ProcessArgs` and reader threads; LLVM uses opaque pointers and the same Rust
+runtime in the §6d shim emitted with `--rust-bindings`. `--emit exe|obj` rejects proc programs with
+`codegen/foreign_target`. Functions with `Process` parameters are internal only, so their contracts are proved,
+never checked at run time. Run on macOS and Linux (CI) and on Windows (`tests/g10_proc/windows.py`, manual).
+
 ## 7. What the compiler proves (all must succeed)
 1. Every `a[i]` (read or write): `0 <= i < len(a)`.
 2. Every `+ - * unary-` in code: result within i64 range.

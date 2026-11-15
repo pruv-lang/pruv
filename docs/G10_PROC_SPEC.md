@@ -1,7 +1,7 @@
 # G10: the `proc` effect and the owned `Process` handle
 
-Status: **design for implementation, 2026-11-16. Nothing in this document is implemented or run yet.**
-Batch status is recorded in `RESULTS.md` as each batch lands.
+Status: **A0–A3 implemented, 2026-11-16 (frontend, verification, Rust runtime, LLVM shim, Windows run). Q is next.**
+Batch status is recorded per batch below and in `RESULTS.md` with Q.
 
 This document defines the process slice that `docs/G10_SPEC.md` §9 deferred. A Pruv program can start a
 child from a program and an argument list, write and close its stdin, read its stdout and stderr, and end
@@ -682,6 +682,14 @@ Gates:
 
 Building a Windows artifact does not count as passing the Windows run gate. Without a run environment, that
 part stays pending and is recorded as such.
+
+Record (2026-11-16): gate 1, all g10p runtime cases on LLVM with both compilers; gates 2 and 10, `g10p_r10`
+(Unix signal exits are negative); gate 3, the G6 drop balance check; gate 4, `g10p_r21_copy_contract`; gate 5,
+the same case, whose `proc_stdin_open` and `proc_eof` appear only in a contract and are defined in the
+bindings; gate 6, `diff_compilers.py --backend llvm`; gate 7, `foreign_target`. Gates 8 and 9 ran for real on
+Windows 11 (MSVC rustc 1.93.0) with `tests/g10_proc/windows.py`, 11/11 with either compiler, Rust backend; the
+LLVM shim links the same runtime text. The run found that `x.bat.` and `x.bat ` (Windows drops trailing dots and
+spaces) escaped the batch check and were then not found; the check now trims them first.
 
 ### Q. Quality
 

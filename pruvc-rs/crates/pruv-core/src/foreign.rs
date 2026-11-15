@@ -244,8 +244,8 @@ pub fn catalog_fn(name: &str) -> Option<CatFn> {
         // G10 proc: signatures and effects. Since A1 the section 2.3 / 2.4 / 4 contracts (requires, fresh result,
         // well-formedness, ensures, preservation facts) of every proc_* operation are encoded by the verifier
         // (pruv-proof symbolic.rs proc_call, twin of verify.py FnVerifier.proc_call): the Process record and its
-        // byte-map equalities are not expressible as typed contract ASTs. The staging guard
-        // (proc_unimplemented_error) runs at the codegen entry, after verification, until A2/A3 land.
+        // byte-map equalities are not expressible as typed contract ASTs. Both backends lower Process
+        // programs (A2 Rust, A3 LLVM).
         "proc_args_new" => CatFn { requires: vec![], ensures: vec![], params: vec![], ret: process_args_t(), effects: alloc(), tparams: vec![] },
         "proc_args_push" => CatFn { requires: vec![], ensures: vec![],
             params: vec![p("a", process_args_t(), true), p("arg", GType::str(), false)],
@@ -1166,7 +1166,7 @@ pub fn g6_unimplemented_error(prog: &Program, stage: &str) -> Option<PruvError> 
 }
 
 // ---------------------------------------------------------------------------
-// G10 proc A0 staging guard (counterpart of foreign.py proc_unimplemented_error)
+// G10 proc: first Process use (counterpart of foreign.py first_proc_use)
 // ---------------------------------------------------------------------------
 
 fn key_has_proc(key: &str) -> bool {
@@ -1291,20 +1291,6 @@ pub fn first_proc_use(prog: &Program) -> Option<(i64, i64)> {
         }
     }
     None
-}
-
-/// PruvError (unsupported_type) for the first Process use, or None. Since A1 it runs at the codegen entry, after
-/// verification (verification errors win; with --no-verify right after type checking), in every mode.
-pub fn proc_unimplemented_error(prog: &Program, stage: &str) -> Option<PruvError> {
-    let (line, col) = first_proc_use(prog)?;
-    Some(PruvError::new(
-        stage,
-        line,
-        col,
-        "unsupported_type",
-        "the G10 proc slice (Process, ProcessArgs and proc_* operations) is not implemented yet",
-        "avoid Process, ProcessArgs and proc_* operations for now; a function that only declares `! proc` still compiles",
-    ))
 }
 
 // ---------------------------------------------------------------------------

@@ -18,18 +18,16 @@ The g10_v_* roots are ordinary must_reject rows in default mode.
 
 group g10_proc_frontend (G10 proc A0; backend null rows): tests/g10_proc/frontend/*.pruv runs on both backends in
 default, no-verify, trust-callers and foreign-checks-off modes. Since A2 the Rust backend generates every program
-(exit 0) and the generated Rust must compile (rustc --emit=metadata); the LLVM backend still stops every program that
-uses Process, ProcessArgs or a proc_* operation with codegen/unsupported_type (the staging guard, until A3) in every
-mode; proc_only.pruv (a function that only declares `! proc`) must compile on both backends. The g10p_* roots are
-ordinary must_reject rows in default mode.
+(exit 0) and the generated Rust must compile (rustc --emit=metadata); since A3 (no staging guard) the LLVM backend
+generates every program too (exit 0) in every mode. The g10p_* roots are ordinary must_reject rows in default mode.
 
 group g10_proc_proof (G10 proc A1; backend null rows): tests/g10_proc/proof/*.pruv runs on both backends in default and
 no-verify modes. Every program must verify completely (default mode); then the Rust backend generates (and the Rust must
-compile, A2) and the LLVM backend exits 1 with codegen/unsupported_type for the proc slice at the codegen entry after
-verification (a verification error would be a different diagnostic and fails the row). The g10p_v_* roots are ordinary
-must_reject rows (verify stage).
+compile, A2) and, since A3, the LLVM backend generates it too. The g10p_v_* roots are ordinary must_reject rows
+(verify stage).
 
-group runtime, G10 proc A2: tests/runtime/g10p_r*.pruv (+ .rs driver, .json; "backends": ["rust"]). The runner compiles the
+group runtime, G10 proc A2/A3: tests/runtime/g10p_r*.pruv (+ .rs driver, .json; both backends since A3, except
+g10p_r17_requires_catch, whose catch_unwind driver stays "backends": ["rust"]; every exit-0 spec sets g6_drop_balance). The runner compiles the
 fixture child tests/g10_proc/child.rs once into the work directory and passes its absolute path to the drivers in the
 environment variable PRUV_PROC_CHILD; a g10p_ driver runs in a fresh temporary directory (like g10_). The spec field
 "proc_hook" (string) sets the compile-time PRUV_PROC_TEST_HOOK (setup, setup_late, read1, read2, close, wait, kill: test-only fault
@@ -642,9 +640,8 @@ G10_PROC_COMPILES = ("proc_only",)   # the only frontend roots that use no Proce
 
 
 def g10_proc_frontend_jobs(group="g10_proc_frontend", subdir="frontend", modes=None):
-    """G10 proc A0/A2: on the Rust backend every root generates code and the generated Rust compiles (A2); the staging
-    guard still stops every Process program on the LLVM backend (codegen/unsupported_type) in every mode (until A3);
-    the roots in G10_PROC_COMPILES generate code on both backends."""
+    """G10 proc A0/A2/A3: every root generates code on both backends in every mode; the generated Rust of a Process
+    program compiles (A2, rustc --emit=metadata). A3 removed the LLVM staging guard."""
     if modes is None:
         modes = (("default", []), ("no-verify", ["--no-verify"]), ("trust-callers", ["--trust-callers"]),
                  ("foreign-checks-off", ["--foreign-checks", "off"]))
@@ -659,30 +656,15 @@ def g10_proc_frontend_jobs(group="g10_proc_frontend", subdir="frontend", modes=N
                 for backend in ("rust", "llvm"):
                     c = (pruvc(f, out + ".rs", flags) if backend == "rust" else
                          pruvc_llvm(f, out + ".ll", out + "_llvm.rs", flags))
-                    if stem in G10_PROC_COMPILES or backend == "rust":
-                        if c.returncode != 0:
-                            return False, "%s: exit %d (expected 0) %s" % (backend, c.returncode, (c.stdout + c.stderr)[-600:])
-                        if backend == "rust" and stem not in G10_PROC_COMPILES:
-                            # A2: the generated Rust must compile (type and borrow check only; no code generation)
-                            r = subprocess.run([RUSTC, "--crate-type=lib", "--emit=metadata", "--edition", "2021",
-                                                "--crate-name", "g10proc_gen", out + ".rs", "-o", out + ".rmeta"],
-                                               capture_output=True, text=True, timeout=300)
-                            if r.returncode != 0:
-                                return False, "rustc: " + r.stderr[-600:]
-                        continue
-                    diags = []
-                    for line in c.stdout.splitlines():
-                        try:
-                            d = json.loads(line)
-                        except ValueError:
-                            continue
-                        if isinstance(d, dict):
-                            diags.append(d)
-                    guarded = any(d.get("stage") == "codegen" and d.get("code") == "unsupported_type"
-                                  and "proc slice" in (d.get("message") or "") for d in diags)
-                    if c.returncode != 1 or not guarded:
-                        return False, "%s: exit %d (expected 1 with codegen/unsupported_type for the proc slice) %s" % (
-                            backend, c.returncode, (c.stdout + c.stderr)[-600:])
+                    if c.returncode != 0:
+                        return False, "%s: exit %d (expected 0) %s" % (backend, c.returncode, (c.stdout + c.stderr)[-600:])
+                    if backend == "rust" and stem not in G10_PROC_COMPILES:
+                        # A2: the generated Rust must compile (type and borrow check only; no code generation)
+                        r = subprocess.run([RUSTC, "--crate-type=lib", "--emit=metadata", "--edition", "2021",
+                                            "--crate-name", "g10proc_gen", out + ".rs", "-o", out + ".rmeta"],
+                                           capture_output=True, text=True, timeout=300)
+                        if r.returncode != 0:
+                            return False, "rustc: " + r.stderr[-600:]
                 return True, ""
             jobs.append(safe(name, fn, {"sample": rel_sample(f), "backend": None,
                                        "flags": list(flags), "mode": mode, "group": group}))
@@ -690,9 +672,8 @@ def g10_proc_frontend_jobs(group="g10_proc_frontend", subdir="frontend", modes=N
 
 
 def g10_proc_proof_jobs():
-    """G10 proc A1/A2: every tests/g10_proc/proof root verifies completely (default mode); then the Rust backend
-    generates compilable Rust (A2) and the LLVM backend stops at the staging guard (it runs after verification);
-    --no-verify: Rust generates, LLVM stops at the guard."""
+    """G10 proc A1/A2/A3: every tests/g10_proc/proof root verifies completely (default mode); then both backends
+    generate code (the Rust must compile); --no-verify: both backends generate."""
     return g10_proc_frontend_jobs("g10_proc_proof", "proof", (("default", []), ("no-verify", ["--no-verify"])))
 
 

@@ -14,7 +14,7 @@ use crate::codegen::{
     contract_prelude_g6, shim_helpers, CONTRACT_PRELUDE_BOOL, CONTRACT_PRELUDE_STR, CONTRACT_PRELUDE_U8, FILE_PRELUDE, G6_PRELUDE,
 };
 use crate::emit_common::rty_g;
-use crate::foreign::{is_catalog, is_catalog_contract_only, FILE_OBSERVERS};
+use crate::foreign::{is_catalog, is_catalog_contract_only, FILE_OBSERVERS, PROC_OBSERVERS};
 use crate::gtype::{encode, GType};
 use crate::llvmgen::{expr_ty, is_collection};
 use crate::typeinfo::{uses_array_type, uses_str};
@@ -61,6 +61,8 @@ pub fn cname(t: &GType) -> R<String> {
             Ok(format!("hashmap__{}__{}", encode(&t.args[0])?, encode(&t.args[1])?))
         }
         "file" => Ok("File".to_string()),
+        "process" => Ok("Process".to_string()),
+        "process_args" => Ok("ProcessArgs".to_string()),
         _ => Ok("string".to_string()),
     }
 }
@@ -252,7 +254,9 @@ fn collect<'a>(prog: &'a Program) -> R<(Cats, Colls, HashMap<String, &'a Functio
                         let (low, src) = inst_types(c);
                         match helper_name(&c.name, &src) {
                             Ok(h) => {
-                                if !cats.contains_key(&h) && FILE_OBSERVERS.contains(&c.name.as_str()) {
+                                if !cats.contains_key(&h)
+                                    && (FILE_OBSERVERS.contains(&c.name.as_str()) || PROC_OBSERVERS.contains(&c.name.as_str()))
+                                {
                                     observers.push((c.name.clone(), low.clone()));
                                 }
                                 cats.entry(h).or_insert((c.name.clone(), low));
@@ -262,6 +266,14 @@ fn collect<'a>(prog: &'a Program) -> R<(Cats, Colls, HashMap<String, &'a Functio
                                         observers.push(("file_size".to_string(), vec![]));
                                     }
                                     cats.entry(size).or_insert(("file_size".to_string(), vec![]));
+                                }
+                                if c.name == "proc_byte" {
+                                    // G10 proc A3: the contract bounds guard of proc_byte reads proc_size
+                                    let size = "pruv_g6_proc_size".to_string();
+                                    if !cats.contains_key(&size) {
+                                        observers.push(("proc_size".to_string(), vec![]));
+                                    }
+                                    cats.entry(size).or_insert(("proc_size".to_string(), vec![]));
                                 }
                             }
                             Err(e2) => {
@@ -282,7 +294,7 @@ fn collect<'a>(prog: &'a Program) -> R<(Cats, Colls, HashMap<String, &'a Functio
         for e in f.requires.iter().chain(f.ensures.iter()).chain(f.cost.iter()) {
             walk_expr(e, &mut |n| {
                 if let Node::Expr(Expr::Call(c)) = &n {
-                    if FILE_OBSERVERS.contains(&c.name.as_str()) {
+                    if FILE_OBSERVERS.contains(&c.name.as_str()) || PROC_OBSERVERS.contains(&c.name.as_str()) {
                         visit(n);
                     }
                 }
@@ -423,6 +435,9 @@ fn cat_adapter(helper: &str, op: &str, low: &[GType]) -> R<String> {
     let s = adapter_sym(helper);
     if op.starts_with("file_") {
         return Ok(file_adapter(&s, helper, op));
+    }
+    if op.starts_with("proc_") {
+        return proc_adapter(&s, helper, op);
     }
     let mut t: Option<&GType> = None;
     let mut k: Option<&GType> = None;
@@ -568,6 +583,81 @@ fn file_adapter(sym: &str, helper: &str, op: &str) -> String {
         &format!("pruv_g6_guard(|| {{ {} }})", body))
 }
 
+/// G10 proc A3: take a Process / ProcessArgs box out of its handle (no Default placeholder; the handle is dead)
+fn proc_consume(var: &str, ty: &str) -> String {
+    format!(
+        "if {v}.is_null() {{ pruv_g6_repr(\"null handle\") }} \
+         let pruv_o: {t} = unsafe {{ *::std::boxed::Box::from_raw({v} as *mut {t}) }}; \
+         PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); ",
+        v = var,
+        t = ty
+    )
+}
+
+/// G10 proc A3 (G10_PROC_SPEC 6): adapters of the A2 helpers (_proc_adapter of foreign_shim.py).
+fn proc_adapter(sym: &str, helper: &str, op: &str) -> R<String> {
+    let (p_ty, a_ty) = ("pruv_Process", "pruv_ProcessArgs");
+    match op {
+        "proc_args_new" => {
+            return Ok(fn_text(sym, "", Some("PruvH"), &format!("pruv_g6_guard(|| pruv_g6_new({}()))", helper)));
+        }
+        "proc_args_push" => {
+            return Ok(fn_text(sym, "a: PruvH, p: *const u8, n: i64", Some("PruvH"), &format!(
+                "pruv_g6_guard(|| {{ let pruv_t: &str = pruv_g6_str(p, n); {}pruv_g6_new({}(pruv_o, pruv_t)) }})",
+                proc_consume("a", a_ty), helper)));
+        }
+        "proc_args_len" => {
+            return Ok(fn_text(sym, "a: PruvH", Some("i64"),
+                &format!("pruv_g6_guard(|| {}(pruv_g6_ref::<{}>(a)))", helper, a_ty)));
+        }
+        "proc_spawn" => {
+            return Ok(fn_text(sym, "p: *const u8, n: i64, a: PruvH, q: *const u8, m: i64", Some("PruvH"), &format!(
+                "pruv_g6_guard(|| {{ let pruv_prog: &str = pruv_g6_str(p, n); let pruv_cwd: &str = pruv_g6_str(q, m); \
+                 pruv_g6_new({}(pruv_prog, pruv_g6_ref::<{}>(a), pruv_cwd)) }})", helper, a_ty)));
+        }
+        "proc_write_str" | "proc_write_bytes" | "proc_close_stdin" | "proc_read" | "proc_read_all" => {
+            let (params, pre, arg) = match op {
+                "proc_write_str" => ("h: PruvH, p: *const u8, n: i64", "let pruv_d: &str = pruv_g6_str(p, n); ", ", pruv_d"),
+                "proc_write_bytes" => (
+                    "h: PruvH, p: *const u8, n: i64",
+                    "let pruv_d: &[u8] = pruv_g6_slice::<u8>(p, n); ",
+                    ", pruv_d",
+                ),
+                "proc_read" => ("h: PruvH, stream: i64, max: i64", "", ", stream, max"),
+                _ => ("h: PruvH", "", ""),
+            };
+            return Ok(fn_text(sym, params, Some("PruvH"), &format!(
+                "pruv_g6_guard(|| {{ {}{}pruv_g6_new({}(pruv_o{})) }})", pre, proc_consume("h", p_ty), helper, arg)));
+        }
+        "proc_wait" | "proc_kill" => {
+            return Ok(fn_text(sym, "h: PruvH, tag: *mut i64, val: *mut i64", None, &format!(
+                "pruv_g6_guard(|| {{ let pruv_t: *mut i64 = pruv_g6_out(tag); let pruv_v: *mut i64 = pruv_g6_out(val); \
+                 {}let pruv_r: ::std::result::Result<i64, i64> = {}(pruv_o); \
+                 unsafe {{ match pruv_r {{ ::std::result::Result::Ok(pruv_x) => {{ *pruv_t = 1; *pruv_v = pruv_x; }} \
+                 ::std::result::Result::Err(pruv_e) => {{ *pruv_t = 0; *pruv_v = pruv_e; }} }} }} }})",
+                proc_consume("h", p_ty), helper)));
+        }
+        "proc_bytes" => {
+            return Ok(fn_text(sym, "h: PruvH, stream: i64, data: *mut *const u8, len: *mut i64", None, &format!(
+                "pruv_g6_guard(|| {{ if data.is_null() || len.is_null() {{ pruv_g6_repr(\"null output\") }} \
+                 let pruv_p: &{p} = pruv_g6_ref::<{p}>(h); let _ = {h}(pruv_p, stream); \
+                 let pruv_b: &::std::vec::Vec<u8> = pruv_proc_buf(pruv_p, stream); \
+                 unsafe {{ *data = pruv_b.as_ptr(); *len = pruv_b.len() as i64; }} }})", p = p_ty, h = helper)));
+        }
+        _ => {}
+    }
+    let (params, arg) = match op {
+        "proc_eof" | "proc_size" => ("h: PruvH, stream: i64", ", stream"),
+        "proc_byte" => ("h: PruvH, stream: i64, i: i64", ", stream, i"),
+        _ => ("h: PruvH", ""),
+    };
+    if matches!(op, "proc_ok" | "proc_error" | "proc_stdin_open" | "proc_eof" | "proc_size" | "proc_byte") {
+        return Ok(fn_text(sym, params, Some("i64"),
+            &format!("pruv_g6_guard(|| {}(pruv_g6_ref::<{}>(h){}) as i64)", helper, p_ty, arg)));
+    }
+    Err(format!("foreign_shim: no adapter for catalog operation {}", op))
+}
+
 fn trusted_params(f: &Function) -> R<(Vec<String>, Vec<String>)> {
     let mut params: Vec<String> = Vec::new();
     let mut args: Vec<String> = Vec::new();
@@ -657,9 +747,10 @@ fn trusted_adapter(f: &Function) -> R<String> {
 
 fn coll_adapters(t: &GType) -> R<String> {
     let c = rty_t(t);
-    if t.name == "file" {
+    if matches!(t.name.as_str(), "file" | "process" | "process_args") {
+        // G10: a handle has no len adapter
         return Ok(fn_text(&format!("{}drop__{}", PREFIX, cname(t)?), "h: PruvH", None,
-            "pruv_g6_guard(|| pruv_g6_free::<pruv_File>(h))"));
+            &format!("pruv_g6_guard(|| pruv_g6_free::<pruv_{}>(h))", cname(t)?)));
     }
     let mut out = fn_text(
         &format!("{}len__{}", PREFIX, cname(t)?),
@@ -736,6 +827,9 @@ pub fn build_shim(
     let g10 = crate::foreign::uses_files(prog);
     if g10 {
         out.push(FILE_PRELUDE.to_string());
+    }
+    if crate::foreign::first_proc_use(prog).is_some() {
+        out.push(crate::codegen::proc_prelude(&std::env::var("PRUV_PROC_TEST_HOOK").unwrap_or_default()));
     }
     out.push(contract_prelude_g6());
     if uses_array_type(prog, "array_u8") || g10 {

@@ -49,7 +49,7 @@ from check import check  # noqa: E402
 from codegen import gen_rust, gen_rust_ex  # noqa: E402
 from typeinfo import g2_unimplemented_error, first_g3_use  # noqa: E402
 from mono import specialize  # noqa: E402
-from foreign import g6_unimplemented_error, g7_target_error, proc_unimplemented_error  # noqa: E402
+from foreign import g6_unimplemented_error, g7_target_error  # noqa: E402
 
 USAGE = ("usage: pruvc.py in.pruv -o OUT [--no-verify] [--trust-callers] "
          "[--backend rust|llvm] [--rust-bindings PATH] [--infer [--show-inferred]] "
@@ -88,13 +88,6 @@ def compile_file(path, out, verify=True, trust_callers=False, backend="rust", ru
             return errs
     elif infer and show_inferred:
         print(json.dumps({"status": "skipped_no_verify"}, sort_keys=True, ensure_ascii=False), file=sys.stderr)
-    # G10 proc staging guard (A1: moved here): the codegen entry, after verification (verification errors win);
-    # --no-verify still stops here. A2: the Rust source backend lowers Process and ProcessArgs, so only the paths that
-    # generate LLVM (backend llvm, --also-llvm, native emit) keep the guard until A3 lifts it.
-    if backend == "llvm" or also_llvm or emit is not None:
-        procerr = proc_unimplemented_error(prog)
-        if procerr is not None:
-            return [procerr]
     g7err = g7_target_error(prog) if emit in ("exe", "obj") else None
     if g7err is not None:
         return [g7err]

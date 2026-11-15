@@ -1,0 +1,53 @@
+// G10 proc A3 gate 4: a proc_bytes copy of the first chunk keeps its bytes after the handle is updated (close_stdin,
+// read_all, which delivers nothing new) and consumed (wait). proc_stdin_open and proc_eof appear only in the contract of
+// closed_len (an internal function, so the contract is proved, not checked at run time); the program still builds on both backends.
+fn closed_len(p: Process) -> i64
+  requires !proc_stdin_open(p) && proc_eof(p, 1)
+  ensures result >= 0
+{
+  return proc_size(p, 1);
+}
+
+fn copy_after(child: str, expected: [u8]) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "args");
+  args = proc_args_push(move args, "x");
+  args = proc_args_push(move args, "yz");
+  let mut p: Process = proc_spawn(child, args, "");
+  if !proc_ok(p) {
+    let r0: Result<i64> = proc_wait(move p);
+    return 100;
+  }
+  p = proc_read(move p, 1, 64);
+  if !proc_ok(p) {
+    let r1: Result<i64> = proc_kill(move p);
+    return 200;
+  }
+  let copy: [u8] = proc_bytes(p, 1);
+  p = proc_close_stdin(move p);
+  if !proc_ok(p) {
+    let r2: Result<i64> = proc_wait(move p);
+    return 300;
+  }
+  p = proc_read_all(move p);
+  if !proc_ok(p) {
+    let r3: Result<i64> = proc_kill(move p);
+    return 310;
+  }
+  let n: i64 = closed_len(p);
+  let r: Result<i64> = proc_wait(move p);
+  if n != 0 { return 1; }
+  if len(copy) != len(expected) { return 2; }
+  let mut i: i64 = 0;
+  while i < len(copy)
+    invariant 0 <= i && i <= len(copy)
+    decreases len(copy) - i
+  {
+    if copy[i] != expected[i] { return 3; }
+    i = i + 1;
+  }
+  match r {
+    Ok(v) => { return v; }
+    Err(code) => { return 400 + code; }
+  }
+}

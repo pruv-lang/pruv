@@ -1,5 +1,5 @@
 {
-  "backends": ["rust"],
+  "g6_drop_balance": true,
   "proc_hook": "wait",
   "flags_matrix": [
     [],

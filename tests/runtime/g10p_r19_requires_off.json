@@ -1,5 +1,4 @@
 {
-  "backends": ["rust"],
   "flags_matrix": [
     ["--trust-callers", "--foreign-checks", "off"]
   ],

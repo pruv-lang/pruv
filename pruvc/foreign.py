@@ -75,8 +75,7 @@ _add("file_byte", [], lambda: ([_p("f", FILE), _p("i", I64)], I64))
 # G10 proc (docs/G10_PROC_SPEC.md 2.3): signatures and effects. Since A1 the section 2.3 / 2.4 / 4 contracts (requires,
 # fresh result, well-formedness, ensures, preservation facts) are encoded for every proc_* operation by
 # verify.py FnVerifier.proc_call (and its Rust twin in pruv-proof symbolic.rs), because the Process record and its
-# byte-map equalities are not expressible as typed contract ASTs. The staging guard (proc_unimplemented_error) runs
-# at the codegen entry, after verification: a verified Process program still stops there until A2/A3 land.
+# byte-map equalities are not expressible as typed contract ASTs. Both backends lower Process programs (A2 Rust, A3 LLVM).
 _add("proc_args_new", [], lambda: ([], PROCESS_ARGS), ["alloc"])
 _add("proc_args_push", [], lambda: ([_p("a", PROCESS_ARGS, True), _p("arg", STR)], PROCESS_ARGS), ["alloc"])
 _add("proc_args_len", [], lambda: ([_p("a", PROCESS_ARGS)], I64))
@@ -534,21 +533,6 @@ def first_proc_use(prog):
             line, col = min(cands)
             return (f, line, col)
     return None
-
-
-def proc_unimplemented_error(prog, stage="codegen"):
-    """G10 proc staging guard: PruvError (unsupported_type) for the first Process use, or None. Since A1 it runs at the
-    codegen entry, after verification (verification errors win; type diagnostics win as before); with --no-verify it
-    runs right after type checking. G10 proc A2: the Rust source backend no longer calls it (it lowers Process); the LLVM
-    paths (backend llvm, --also-llvm, native emit) still do until A3."""
-    hit = first_proc_use(prog)
-    if hit is None:
-        return None
-    f, line, col = hit
-    return PruvError(stage, line, col, "unsupported_type",
-                     "the G10 proc slice (Process, ProcessArgs and proc_* operations) is not implemented yet",
-                     "avoid Process, ProcessArgs and proc_* operations for now; a function that only declares "
-                     "`! proc` still compiles", file=getattr(f, "file", None))
 
 
 def _par_nodes(node, out):
