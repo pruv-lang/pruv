@@ -64,7 +64,7 @@ def strip_v2_helpers(text):
     """Remove the three pruv_host_*_v2 blocks (including the preceding #[allow..] and #[no_mangle] lines) from the new bindings. Returns (text, number removed)."""
     removed = 0
     for name in V2_HELPERS:
-        pat = re.compile(r'#\[allow\([^\n]*\)\]\n#\[no_mangle\]\npub extern "C" fn ' + name + r'\(.*?\n\}\n', re.S)
+        pat = re.compile(r'#\[allow\([^\n]*\)\]\n#\[no_mangle\]\npub (?:unsafe )?extern "C" fn ' + name + r'\(.*?\n\}\n', re.S)
         text, n = pat.subn("", text, count=1)
         removed += n
     return text, removed
