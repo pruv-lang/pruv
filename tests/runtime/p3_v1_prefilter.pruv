@@ -1,0 +1,39 @@
+// P3: a forall made of comparisons of integer atoms is first checked by a branch-free loop (vectorizable) when every
+// read is in bounds and the range fits the budget; otherwise, or when it is false somewhere, the scalar loop decides.
+
+// fast: in-bounds i64 reads
+fn small(a: [i64]) -> () ! io
+  requires forall k in 0..len(a): 0 <= a[k] && a[k] <= 100
+{ print(len(a)); }
+
+// fast: u8 reads at k-1 and k+1, implication, negation
+fn wave(a: [u8]) -> () ! io
+  requires len(a) >= 2
+  requires forall k in 1..len(a) - 1: a[k - 1] != a[k] ==> !(a[k + 1] == a[k - 1] && a[k] == 0)
+{ print(len(a)); }
+
+// a forall under ! (false somewhere, so the scalar loop finds it and the requires holds)
+fn has_neg(a: [i64]) -> () ! io
+  requires len(a) > 0 && !(forall k in 0..len(a): a[k] >= 0)
+{ print(true); }
+
+// a forall under || (false, the other side holds)
+fn sevens_or(a: [i64], x: i64) -> () ! io
+  requires (forall k in 0..len(a): a[k] == 7) || x == 1
+{ print(x); }
+
+// fallback: the range passes len(a), so the guard fails and the short-circuit scalar loop runs
+fn past_end(a: [i64], n: i64) -> () ! io
+  requires len(a) <= n && n <= 1000
+  requires forall k in 0..n: k >= len(a) || a[k] >= 0
+{ print(n); }
+
+// fast with a plain i64 variable and len() atoms
+fn bounded(a: [i64], m: i64) -> () ! io
+  requires forall k in 0..len(a): a[k] <= m && k < len(a)
+{ print(m); }
+
+// empty range
+fn none(a: [i64]) -> () ! io
+  requires forall k in 3..1: a[k] == 0
+{ print(0); }

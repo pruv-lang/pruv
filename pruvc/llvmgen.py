@@ -2307,6 +2307,83 @@ class FnGen:
         s.place(el)
         return V("i1", s.op("load i1, ptr %s" % r))
 
+    def cfastpre(s, e, reads, lo, hi, q, el):
+        """P3: branch-free prefilter of a fast_forall quantifier (codegen.fast_forall).  An empty range and a range
+        whose every read is in bounds, that fits the remaining budget and whose body holds everywhere go to el with the
+        result true (already stored) and the range length spent; everything else falls through to the scalar loop."""
+        g = s.label("qfg")
+        s.condbr(s.op("icmp sge i128 %s, %s" % (lo, hi)), el, g)
+        s.place(g)
+        n = s.op("sub i128 %s, %s" % (hi, lo))
+        bw = s.op("sext i64 %s to i128" % s.op("load i64, ptr %s" % s.budget))
+        conds = [s.op("icmp sge i128 %s, -9223372036854775808" % lo), s.op("icmp sle i128 %s, 9223372036854775807" % hi),
+                 s.op("icmp sle i128 %s, %s" % (n, bw))]
+        for a, c in reads:
+            ln = s.op("zext i64 %s to i128" % s.cenv[a].b)
+            lc = lo if c == 0 else s.op("add i128 %s, %d" % (lo, c))
+            hc = hi if c == 0 else s.op("add i128 %s, %d" % (hi, c))
+            conds.append(s.op("icmp sge i128 %s, 0" % lc))
+            conds.append(s.op("icmp sle i128 %s, %s" % (hc, ln)))
+        ok = conds[0]
+        for c in conds[1:]:
+            ok = s.op("and i1 %s, %s" % (ok, c))
+        pre, slow = s.label("qfp"), s.label("qfs")
+        s.condbr(ok, pre, slow)
+        s.place(pre)
+        j, acc = "%%q%d.j" % q, "%%q%d.a" % q
+        s.allocas.append("%s = alloca i64" % j)
+        s.allocas.append("%s = alloca i1" % acc)
+        hi64 = s.op("trunc i128 %s to i64" % hi)
+        s.ins("store i64 %s, ptr %s" % (s.op("trunc i128 %s to i64" % lo), j))
+        s.ins("store i1 true, ptr %s" % acc)
+        fc, fb, fe, ft = s.label("qfc"), s.label("qfb"), s.label("qfe"), s.label("qft")
+        s.br(fc)
+        s.place(fc)
+        jv = s.op("load i64, ptr %s" % j)
+        s.condbr(s.op("icmp slt i64 %s, %s" % (jv, hi64)), fb, fe)
+        s.place(fb)
+        b = s.cfast(e.body, e.var, s.op("sext i64 %s to i128" % jv), jv)
+        s.ins("store i1 %s, ptr %s" % (s.op("and i1 %s, %s" % (s.op("load i1, ptr %s" % acc), b)), acc))
+        s.ins("store i64 %s, ptr %s" % (s.op("add i64 %s, 1" % jv), j))
+        s.br(fc)
+        s.place(fe)
+        s.condbr(s.op("load i1, ptr %s" % acc), ft, slow)
+        s.place(ft)
+        s.spend(s.op("trunc i128 %s to i64" % n))
+        s.br(el)
+        s.place(slow)
+
+    def cfast(s, e, var, kv, jv):
+        """P3: a fast_forall body as straight-line IR (i1 and/or instead of short circuits, unchecked reads)"""
+        if isinstance(e, BoolLit):
+            return "true" if e.value else "false"
+        if isinstance(e, IntLit):
+            return str(e.value)
+        if isinstance(e, Var) and e.name == var:
+            return kv
+        if isinstance(e, Unary):
+            return s.op("xor i1 %s, true" % s.cfast(e.operand, var, kv, jv))
+        if isinstance(e, Binary) and e.op in ("&&", "||", "==>"):
+            l = s.cfast(e.left, var, kv, jv)
+            if e.op == "==>":
+                l = s.op("xor i1 %s, true" % l)
+            r = s.cfast(e.right, var, kv, jv)
+            return s.op("%s i1 %s, %s" % ("and" if e.op == "&&" else "or", l, r))
+        if isinstance(e, Binary):
+            cmp = {"==": "eq", "!=": "ne", "<": "slt", "<=": "sle", ">": "sgt", ">=": "sge"}[e.op]
+            l = s.cfast(e.left, var, kv, jv)
+            return s.op("icmp %s i128 %s, %s" % (cmp, l, s.cfast(e.right, var, kv, jv)))
+        if isinstance(e, Index):
+            a = s.cenv[e.array.name]
+            ix = e.index
+            i = jv if isinstance(ix, Var) else s.op("%s i64 %s, %d" % ("add" if ix.op == "+" else "sub", jv, ix.right.value))
+            if e.array.ty.name == "array_u8":
+                x = s.op("load i8, ptr %s" % s.op("getelementptr inbounds i8, ptr %s, i64 %s" % (a.a, i)))
+                return s.op("zext i8 %s to i128" % x)
+            x = s.op("load i64, ptr %s" % s.op("getelementptr inbounds i64, ptr %s, i64 %s" % (a.a, i)))
+            return s.op("sext i64 %s to i128" % x)
+        return s.cev(e).a
+
     def cquant(s, e):
         if e.kind == "forall":
             sorted_arr = codegen.match_sorted_requires(e)
@@ -2335,6 +2412,10 @@ class FnGen:
         if kind in ("max", "min"):
             s.ins("store i1 false, ptr %s" % h)
         cl, bl, nl_, el = s.label("qc"), s.label("qb"), s.label("qn"), s.label("qe")
+        reads = codegen.fast_forall(e, lambda v: v.name in s.cenv and s.cenv[v.name].k == "arr" and (
+            v.ty.name == "array_u8" or s.cenv[v.name].layout == "i64"))
+        if reads is not None:
+            s.cfastpre(e, reads, lo.a, hi.a, q, el)
         s.br(cl)
         s.place(cl)
         kv = s.op("load i128, ptr %s" % k)

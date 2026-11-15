@@ -1,0 +1,1 @@
+{"flags_matrix": [[], ["--no-verify"]], "exit": 101, "stdout_lines": ["500"], "stderr_contains": "requires violated: small: forall k in 0..len(a)"}

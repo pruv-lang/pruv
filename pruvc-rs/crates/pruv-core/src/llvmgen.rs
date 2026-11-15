@@ -3688,6 +3688,139 @@ impl<'a> FnGen<'a> {
         Ok(V::new(Kind::I1, res))
     }
 
+    /// P3: branch-free prefilter of a fast_forall quantifier (emit_common::fast_forall). An empty range and a range
+    /// whose every read is in bounds, that fits the remaining budget and whose body holds everywhere go to el with the
+    /// result true (already stored) and the range length spent; everything else falls through to the scalar loop.
+    pub fn cfastpre(&mut self, e: &Quant, reads: &[(String, i128)], lo: &str, hi: &str, q: usize, el: &str) -> R<()> {
+        let g = self.label("qfg");
+        let empty = self.op(format!("icmp sge i128 {}, {}", lo, hi))?;
+        self.condbr(&empty, el, &g)?;
+        self.place(&g);
+        let n = self.op(format!("sub i128 {}, {}", hi, lo))?;
+        let budget = match &self.budget {
+            Some(b) => b.clone(),
+            None => return Err("llvmgen: internal error: no iteration budget slot".to_string()),
+        };
+        let bl = self.op(format!("load i64, ptr {}", budget))?;
+        let bw = self.op(format!("sext i64 {} to i128", bl))?;
+        let mut conds = vec![
+            self.op(format!("icmp sge i128 {}, -9223372036854775808", lo))?,
+            self.op(format!("icmp sle i128 {}, 9223372036854775807", hi))?,
+            self.op(format!("icmp sle i128 {}, {}", n, bw))?,
+        ];
+        for (a, c) in reads {
+            let len = self.cenv.get(a).map(|v| v.b.clone()).ok_or_else(|| format!("'{}'", a))?;
+            let ln = self.op(format!("zext i64 {} to i128", len))?;
+            let lc = if *c == 0 { lo.to_string() } else { self.op(format!("add i128 {}, {}", lo, c))? };
+            let hc = if *c == 0 { hi.to_string() } else { self.op(format!("add i128 {}, {}", hi, c))? };
+            conds.push(self.op(format!("icmp sge i128 {}, 0", lc))?);
+            conds.push(self.op(format!("icmp sle i128 {}, {}", hc, ln))?);
+        }
+        let mut ok = conds[0].clone();
+        for c in &conds[1..] {
+            ok = self.op(format!("and i1 {}, {}", ok, c))?;
+        }
+        let pre = self.label("qfp");
+        let slow = self.label("qfs");
+        self.condbr(&ok, &pre, &slow)?;
+        self.place(&pre);
+        let j = format!("%q{}.j", q);
+        let acc = format!("%q{}.a", q);
+        self.allocas.push(format!("{} = alloca i64", j));
+        self.allocas.push(format!("{} = alloca i1", acc));
+        let hi64 = self.op(format!("trunc i128 {} to i64", hi))?;
+        let lo64 = self.op(format!("trunc i128 {} to i64", lo))?;
+        self.ins(format!("store i64 {}, ptr {}", lo64, j))?;
+        self.ins(format!("store i1 true, ptr {}", acc))?;
+        let fc = self.label("qfc");
+        let fb = self.label("qfb");
+        let fe = self.label("qfe");
+        let ft = self.label("qft");
+        self.br(&fc)?;
+        self.place(&fc);
+        let jv = self.op(format!("load i64, ptr {}", j))?;
+        let more = self.op(format!("icmp slt i64 {}, {}", jv, hi64))?;
+        self.condbr(&more, &fb, &fe)?;
+        self.place(&fb);
+        let kv = self.op(format!("sext i64 {} to i128", jv))?;
+        let b = self.cfast(&e.body, &e.var, &kv, &jv)?;
+        let av = self.op(format!("load i1, ptr {}", acc))?;
+        let na = self.op(format!("and i1 {}, {}", av, b))?;
+        self.ins(format!("store i1 {}, ptr {}", na, acc))?;
+        let j2 = self.op(format!("add i64 {}, 1", jv))?;
+        self.ins(format!("store i64 {}, ptr {}", j2, j))?;
+        self.br(&fc)?;
+        self.place(&fe);
+        let all = self.op(format!("load i1, ptr {}", acc))?;
+        self.condbr(&all, &ft, &slow)?;
+        self.place(&ft);
+        let n64 = self.op(format!("trunc i128 {} to i64", n))?;
+        self.spend_n(&n64)?;
+        self.br(el)?;
+        self.place(&slow);
+        Ok(())
+    }
+
+    /// P3: a fast_forall body as straight-line IR (i1 and/or instead of short circuits, unchecked reads)
+    fn cfast(&mut self, e: &Expr, var: &str, kv: &str, jv: &str) -> R<String> {
+        match e {
+            Expr::BoolLit(b) => Ok(if b.value { "true" } else { "false" }.to_string()),
+            Expr::IntLit(l) => Ok(l.value.parse::<i128>().map_err(|x| x.to_string())?.to_string()),
+            Expr::Var(v) if v.name == var => Ok(kv.to_string()),
+            Expr::Unary(u) => {
+                let x = self.cfast(&u.operand, var, kv, jv)?;
+                self.op(format!("xor i1 {}, true", x))
+            }
+            Expr::Binary(b) if b.op == "&&" || b.op == "||" || b.op == "==>" => {
+                let mut l = self.cfast(&b.left, var, kv, jv)?;
+                if b.op == "==>" {
+                    l = self.op(format!("xor i1 {}, true", l))?;
+                }
+                let r = self.cfast(&b.right, var, kv, jv)?;
+                self.op(format!("{} i1 {}, {}", if b.op == "&&" { "and" } else { "or" }, l, r))
+            }
+            Expr::Binary(b) => {
+                let cmp = match b.op.as_str() {
+                    "==" => "eq",
+                    "!=" => "ne",
+                    "<" => "slt",
+                    "<=" => "sle",
+                    ">" => "sgt",
+                    _ => "sge",
+                };
+                let l = self.cfast(&b.left, var, kv, jv)?;
+                let r = self.cfast(&b.right, var, kv, jv)?;
+                self.op(format!("icmp {} i128 {}, {}", cmp, l, r))
+            }
+            Expr::Index(ix) => {
+                let (name, u8a) = match &*ix.array {
+                    Expr::Var(v) => (v.name.clone(), v.ty.as_deref() == Some("array_u8")),
+                    _ => return Err("llvmgen: internal error: fast_forall array".to_string()),
+                };
+                let base = self.cenv.get(&name).map(|v| v.a.clone()).ok_or_else(|| format!("'{}'", name))?;
+                let i = match &*ix.index {
+                    Expr::Binary(b) => match &*b.right {
+                        Expr::IntLit(l) => {
+                            let c = l.value.parse::<i128>().map_err(|x| x.to_string())?;
+                            self.op(format!("{} i64 {}, {}", if b.op == "+" { "add" } else { "sub" }, jv, c))?
+                        }
+                        _ => return Err("llvmgen: internal error: fast_forall index".to_string()),
+                    },
+                    _ => jv.to_string(),
+                };
+                if u8a {
+                    let g = self.op(format!("getelementptr inbounds i8, ptr {}, i64 {}", base, i))?;
+                    let x = self.op(format!("load i8, ptr {}", g))?;
+                    return self.op(format!("zext i8 {} to i128", x));
+                }
+                let g = self.op(format!("getelementptr inbounds i64, ptr {}, i64 {}", base, i))?;
+                let x = self.op(format!("load i64, ptr {}", g))?;
+                self.op(format!("sext i64 {} to i128", x))
+            }
+            _ => Ok(self.cev(e)?.a),
+        }
+    }
+
     pub fn cquant(&mut self, e: &Expr) -> R<V> {
         let x = match e {
             Expr::Quant(q) => q,
@@ -3734,6 +3867,19 @@ impl<'a> FnGen<'a> {
         let bl = self.label("qb");
         let nl = self.label("qn");
         let el = self.label("qe");
+        let reads = {
+            let me = &*self;
+            let ok = |x: &Expr| match x {
+                Expr::Var(v) => me.cenv.get(&v.name).map_or(false, |c| {
+                    c.k == Kind::Arr && (v.ty.as_deref() == Some("array_u8") || c.layout == "i64")
+                }),
+                _ => false,
+            };
+            crate::emit_common::fast_forall(x, &ok)
+        };
+        if let Some(reads) = reads {
+            self.cfastpre(x, &reads, &lo.a, &hi.a, q, &el)?;
+        }
         self.br(&cl)?;
         self.place(&cl);
         let kv = self.op(format!("load i128, ptr {}", k))?;

@@ -641,6 +641,62 @@ def match_sorted_requires(e):
     return a
 
 
+FAST_CMP = ("==", "!=", "<", "<=", ">", ">=")
+
+
+def fast_forall(e, arr_ok):
+    """P3 vectorization: the array reads (name, offset), first occurrence order without repeats, when the forall e can
+    be prefiltered by a branch-free loop, else None.  The body may use only comparisons of integer atoms joined by
+    !, &&, || and ==>; an atom is an integer literal, the quantified variable, a plain i64 variable, len(a) or a[k + c]
+    (k the quantified variable, c a literal of at most 2^31).  None of these can panic once every read is in bounds, so
+    the prefilter reads the whole range when a guard before it shows that every read is in bounds and the range fits
+    the remaining iteration budget.  arr_ok(var) says whether the backend can read the array variable directly."""
+    if e.kind != "forall":
+        return None
+    reads = []
+
+    def arr(x):
+        return isinstance(x, Var) and x.ty is not None and x.ty.owner is None and not x.ty.args and \
+            x.ty.name in ("array", "array_u8") and x.name != e.var and arr_ok(x)
+
+    def atom(x):
+        if isinstance(x, IntLit):
+            return True
+        if isinstance(x, Var):
+            return x.name == e.var or (x.ty is not None and x.ty.owner is None and x.ty.name == "i64" and not x.ty.args)
+        if isinstance(x, Call):
+            return x.name == "len" and len(x.args) == 1 and arr(x.args[0])
+        if isinstance(x, Index):
+            if not arr(x.array):
+                return False
+            ix = x.index
+            if isinstance(ix, Var) and ix.name == e.var:
+                c = 0
+            elif isinstance(ix, Binary) and ix.op in ("+", "-") and isinstance(ix.left, Var) and \
+                    ix.left.name == e.var and isinstance(ix.right, IntLit) and 0 <= ix.right.value <= 1 << 31:
+                c = ix.right.value if ix.op == "+" else -ix.right.value
+            else:
+                return False
+            if (x.array.name, c) not in reads:
+                reads.append((x.array.name, c))
+            return True
+        return False
+
+    def pred(x):
+        if isinstance(x, BoolLit):
+            return True
+        if isinstance(x, Unary):
+            return x.op == "!" and pred(x.operand)
+        if isinstance(x, Binary):
+            if x.op in ("&&", "||", "==>"):
+                return pred(x.left) and pred(x.right)
+            if x.op in FAST_CMP:
+                return atom(x.left) and atom(x.right)
+        return False
+
+    return reads if pred(e.body) else None
+
+
 def rstr(text):
     """Rust string literal (ASCII-safe)"""
     out = []
@@ -1306,6 +1362,27 @@ class Gen:
                 return '%s.err().unwrap_or_else(|| pruv_ud("err_val of Ok"))' % s.c(a[0])
         raise Exception("codegen: unsupported expression in requires: %r" % e)
 
+    def cfast(s, e, var, j):
+        """P3: a fast_forall body without branches (& and | instead of && and ||); array reads are unchecked because
+        the prefilter guard has shown every read in bounds; j is the i64 loop counter holding var"""
+        if isinstance(e, Unary):
+            return "(!%s)" % s.cfast(e.operand, var, j)
+        if isinstance(e, Binary) and e.op in ("&&", "||", "==>"):
+            l, r = s.cfast(e.left, var, j), s.cfast(e.right, var, j)
+            if e.op == "==>":
+                return "((!%s) | %s)" % (l, r)
+            return "(%s %s %s)" % (l, "&" if e.op == "&&" else "|", r)
+        if isinstance(e, Binary):
+            return "(%s %s %s)" % (s.cfast(e.left, var, j), e.op, s.cfast(e.right, var, j))
+        if isinstance(e, Index):
+            ix = e.index
+            if isinstance(ix, Var):
+                i = "%s as usize" % j
+            else:
+                i = "(%s %s %d) as usize" % (j, ix.op, ix.right.value)
+            return "((unsafe { *%s.get_unchecked(%s) }) as i128)" % (e.array.name, i)
+        return s.c(e)
+
     def cquant(s, e):
         arr = match_sorted_requires(e)
         if arr is not None and is_str(e.hi.args[0].ty):  # G2 B2: no sorted fast path for str
@@ -1333,6 +1410,25 @@ class Gen:
                 "let %s: i128 = %s; ") % (k, h, e.var, k)
         tail = "%s += 1; } " % k
         kind = e.kind
+        reads = fast_forall(e, lambda v: s.layout(v) == "i64" or is_u8_array(v.ty)) if s.verified else None
+        if reads is not None:
+            # P3: branch-free prefilter over the whole range (fast_forall); the scalar loop runs only when it fails
+            s.bound.append(e.var)
+            fb = s.cfast(e.body, e.var, "pruv_j%d" % n)
+            s.bound.pop()
+            lo_, hi_ = "pruv_lo%d" % n, h
+            off = lambda x, c: x if c == 0 else "%s %s %di128" % (x, "+" if c > 0 else "-", abs(c))
+            guards = ["%s >= -9223372036854775808i128" % lo_, "%s <= 9223372036854775807i128" % hi_,
+                      "%s - %s <= (pruv_budget as i128)" % (hi_, lo_)]
+            for a, c in reads:
+                guards.append("%s >= 0i128" % off(lo_, c))
+                guards.append("%s <= (%s.len() as i128)" % (off(hi_, c), a))
+            fast = ("{ let mut pruv_a%d = true; let mut pruv_j%d: i64 = %s as i64; let pruv_e%d: i64 = %s as i64; "
+                    "while pruv_j%d < pruv_e%d { let %s: i128 = pruv_j%d as i128; pruv_a%d &= %s; pruv_j%d += 1; } pruv_a%d }") % (
+                        n, n, lo_, n, hi_, n, n, e.var, n, n, fb, n, n)
+            return (head + "let mut %s = true; " % r + "if !(%s >= %s || (%s && %s)) { " % (lo_, hi_, " && ".join(guards), fast) +
+                    loop + "if !(%s) { %s = false; break; } " % (body, r) + tail +
+                    "} else if %s > %s { let pruv_b = &mut pruv_budget; *pruv_b -= (%s - %s) as i64; } " % (hi_, lo_, hi_, lo_) + r + " }")
         if kind == "forall":
             return head + "let mut %s = true; " % r + loop + "if !(%s) { %s = false; break; } " % (body, r) + tail + r + " }"
         if kind == "exists":

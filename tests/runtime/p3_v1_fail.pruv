@@ -1,0 +1,4 @@
+// P3: a forall whose prefilter fails still reports the requires violation of the scalar loop.
+fn small(a: [i64]) -> () ! io
+  requires forall k in 0..len(a): 0 <= a[k] && a[k] <= 100
+{ print(len(a)); }

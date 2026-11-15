@@ -575,3 +575,73 @@ mod tests {
         assert!(try_cty("unit").is_err());
     }
 }
+
+/// P3 vectorization (codegen.py fast_forall): the array reads (name, offset), first occurrence order without repeats,
+/// when the forall e can be prefiltered by a branch-free loop, else None. The body may use only comparisons of integer
+/// atoms joined by !, &&, || and ==>; an atom is an integer literal, the quantified variable, a plain i64 variable,
+/// len(a) or a[k + c] (k the quantified variable, c a literal of at most 2^31). arr_ok says whether the backend can
+/// read the array variable directly.
+pub fn fast_forall(e: &Quant, arr_ok: &dyn Fn(&Expr) -> bool) -> Option<Vec<(String, i128)>> {
+    if e.kind != "forall" {
+        return None;
+    }
+    fn arr(x: &Expr, q: &Quant, arr_ok: &dyn Fn(&Expr) -> bool) -> bool {
+        match x {
+            Expr::Var(v) => {
+                matches!(v.ty.as_deref(), Some("array") | Some("array_u8")) && v.name != q.var && arr_ok(x)
+            }
+            _ => false,
+        }
+    }
+    fn atom(x: &Expr, q: &Quant, arr_ok: &dyn Fn(&Expr) -> bool, reads: &mut Vec<(String, i128)>) -> bool {
+        match x {
+            Expr::IntLit(_) => true,
+            Expr::Var(v) => v.name == q.var || v.ty.as_deref() == Some("i64"),
+            Expr::Call(c) => c.name == "len" && c.args.len() == 1 && arr(&c.args[0], q, arr_ok),
+            Expr::Index(ix) => {
+                if !arr(&ix.array, q, arr_ok) {
+                    return false;
+                }
+                let c: i128 = match &*ix.index {
+                    Expr::Var(v) if v.name == q.var => 0,
+                    Expr::Binary(b) if b.op == "+" || b.op == "-" => {
+                        let lv = matches!(&*b.left, Expr::Var(v) if v.name == q.var);
+                        let rv = match &*b.right {
+                            Expr::IntLit(l) => l.value.parse::<i128>().ok().filter(|n| *n >= 0 && *n <= 1i128 << 31),
+                            _ => None,
+                        };
+                        match (lv, rv) {
+                            (true, Some(n)) => if b.op == "+" { n } else { -n },
+                            _ => return false,
+                        }
+                    }
+                    _ => return false,
+                };
+                let name = match &*ix.array { Expr::Var(v) => v.name.clone(), _ => unreachable!() };
+                if !reads.iter().any(|(a, o)| *a == name && *o == c) {
+                    reads.push((name, c));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+    fn pred(x: &Expr, q: &Quant, arr_ok: &dyn Fn(&Expr) -> bool, reads: &mut Vec<(String, i128)>) -> bool {
+        match x {
+            Expr::BoolLit(_) => true,
+            Expr::Unary(u) => u.op == "!" && pred(&u.operand, q, arr_ok, reads),
+            Expr::Binary(b) => {
+                if b.op == "&&" || b.op == "||" || b.op == "==>" {
+                    pred(&b.left, q, arr_ok, reads) && pred(&b.right, q, arr_ok, reads)
+                } else if ["==", "!=", "<", "<=", ">", ">="].contains(&b.op.as_str()) {
+                    atom(&b.left, q, arr_ok, reads) && atom(&b.right, q, arr_ok, reads)
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+    let mut reads = Vec::new();
+    if pred(&e.body, e, arr_ok, &mut reads) { Some(reads) } else { None }
+}

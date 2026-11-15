@@ -7,7 +7,7 @@
 use crate::ast::*;
 use crate::diagnostic::PruvError;
 use crate::emit_common::{
-    emit_public_types_with, is_spec_fn, is_user_key, key_name, make_type_table, match_sorted_requires, rstr, rty, rty_g,
+    emit_public_types_with, fast_forall, is_spec_fn, is_user_key, key_name, make_type_table, match_sorted_requires, rstr, rty, rty_g,
     show, src_name, try_conv, try_conv_g, try_cty, try_cty_g,
 };
 use crate::foreign::{catalog_fn, is_catalog};
@@ -1676,6 +1676,42 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// P3: a fast_forall body without branches (& and | instead of && and ||); array reads are unchecked because the
+    /// prefilter guard has shown every read in bounds; j is the i64 loop counter holding var
+    fn cfast(&mut self, e: &Expr, var: &str, j: &str) -> R<String> {
+        match e {
+            Expr::Unary(u) => Ok(format!("(!{})", self.cfast(&u.operand, var, j)?)),
+            Expr::Binary(b) if b.op == "&&" || b.op == "||" || b.op == "==>" => {
+                let l = self.cfast(&b.left, var, j)?;
+                let r = self.cfast(&b.right, var, j)?;
+                if b.op == "==>" {
+                    return Ok(format!("((!{}) | {})", l, r));
+                }
+                Ok(format!("({} {} {})", l, if b.op == "&&" { "&" } else { "|" }, r))
+            }
+            Expr::Binary(b) => {
+                let l = self.cfast(&b.left, var, j)?;
+                let r = self.cfast(&b.right, var, j)?;
+                Ok(format!("({} {} {})", l, b.op, r))
+            }
+            Expr::Index(ix) => {
+                let i = match &*ix.index {
+                    Expr::Binary(b) => match &*b.right {
+                        Expr::IntLit(l) => format!("({} {} {}) as usize", j, b.op, l.value.parse::<i128>().map_err(|x| x.to_string())?),
+                        _ => return Err("codegen: internal error: fast_forall index".to_string()),
+                    },
+                    _ => format!("{} as usize", j),
+                };
+                let name = match &*ix.array {
+                    Expr::Var(v) => v.name.clone(),
+                    _ => return Err("codegen: internal error: fast_forall array".to_string()),
+                };
+                Ok(format!("((unsafe {{ *{}.get_unchecked({}) }}) as i128)", name, i))
+            }
+            _ => self.c(e),
+        }
+    }
+
     fn cquant(&mut self, e: &Expr) -> R<String> {
         let q0 = match e {
             Expr::Quant(q) => q,
@@ -1763,6 +1799,43 @@ impl<'a> Gen<'a> {
         );
         let tail = format!("{} += 1; }} ", k);
         let kind = q.kind.as_str();
+        let reads = if self.verified {
+            let me = &*self;
+            let ok = |x: &Expr| me.layout(x) == "i64" || expr_ty(x).as_deref() == Some("array_u8");
+            fast_forall(q, &ok)
+        } else {
+            None
+        };
+        if let Some(reads) = reads {
+            // P3: branch-free prefilter over the whole range (fast_forall); the scalar loop runs only when it fails
+            self.bound.push(q.var.clone());
+            let fb = self.cfast(&q.body, &q.var, &format!("pruv_j{}", n))?;
+            self.bound.pop();
+            let lo_ = format!("pruv_lo{}", n);
+            let hi_ = h.clone();
+            let off = |x: &str, c: i128| {
+                if c == 0 { x.to_string() } else { format!("{} {} {}i128", x, if c > 0 { "+" } else { "-" }, c.abs()) }
+            };
+            let mut guards = vec![
+                format!("{} >= -9223372036854775808i128", lo_),
+                format!("{} <= 9223372036854775807i128", hi_),
+                format!("{} - {} <= (pruv_budget as i128)", hi_, lo_),
+            ];
+            for (a, c) in &reads {
+                guards.push(format!("{} >= 0i128", off(&lo_, *c)));
+                guards.push(format!("{} <= ({}.len() as i128)", off(&hi_, *c), a));
+            }
+            let fast = format!(
+                "{{ let mut pruv_a{n} = true; let mut pruv_j{n}: i64 = {lo} as i64; let pruv_e{n}: i64 = {hi} as i64; \
+                 while pruv_j{n} < pruv_e{n} {{ let {v}: i128 = pruv_j{n} as i128; pruv_a{n} &= {fb}; pruv_j{n} += 1; }} pruv_a{n} }}",
+                n = n, lo = lo_, hi = hi_, v = q.var, fb = fb
+            );
+            return Ok(format!(
+                "{head}let mut {r} = true; if !({lo} >= {hi} || ({g} && {fast})) {{ {lp}if !({body}) {{ {r} = false; break; }} {tail}\
+                 }} else if {hi} > {lo} {{ let pruv_b = &mut pruv_budget; *pruv_b -= ({hi} - {lo}) as i64; }} {r} }}",
+                head = head, r = r, lo = lo_, hi = hi_, g = guards.join(" && "), fast = fast, lp = lp, body = body, tail = tail
+            ));
+        }
         if kind == "forall" {
             return Ok(format!(
                 "{}let mut {} = true; {}if !({}) {{ {} = false; break; }} {}{} }}",
