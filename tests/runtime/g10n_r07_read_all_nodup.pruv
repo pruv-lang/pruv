@@ -1,0 +1,58 @@
+// G10 net A2 gate 5 (--no-verify only: the byte arithmetic is not proved): net_read_all does not repeat what earlier reads
+// already delivered. After two chunk reads the buffer of net_read_all holds exactly the not yet delivered rest of the stream
+// (the pattern bytes from the delivered offset on), earlier buffers are not prepended, and EOF is true.
+fn close_with(take s: Socket, base: i64) -> i64 ! net, alloc
+  requires base >= 0 && base <= 1000000
+{
+  let e: i64 = net_error(s);
+  let r: Result<i64> = net_close(move s);
+  return base + e;
+}
+
+// the public buffer holds the pattern bytes starting at stream offset `offset`
+fn chunk_ok(s: Socket, offset: i64) -> bool {
+  let n: i64 = net_size(s);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n
+    decreases n - i
+  {
+    if net_byte(s, i) != ((offset + i) * 31 + 5) % 251 { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+fn no_repeat(host: str, port: i64, want: i64) -> i64 ! net, alloc
+  requires 1 <= port && port <= 65535
+{
+  let mut s: Socket = net_connect(host, port);
+  if !net_ok(s) { return close_with(move s, 100); }
+  s = net_set_timeout(move s, 20000);
+  if !net_ok(s) { return close_with(move s, 110); }
+
+  // two reads with small limits
+  s = net_read(move s, 100);
+  if !net_ok(s) { return close_with(move s, 300); }
+  let a1: i64 = net_size(s);
+  if !chunk_ok(s, 0) { return close_with(move s, 310); }
+  s = net_read(move s, 150);
+  if !net_ok(s) { return close_with(move s, 320); }
+  let a2: i64 = net_size(s);
+  if !chunk_ok(s, a1) { return close_with(move s, 330); }
+
+  // the rest: the buffer of net_read_all is the part not delivered yet
+  s = net_read_all(move s);
+  if !net_ok(s) { return close_with(move s, 400); }
+  let rest: i64 = net_size(s);
+  let good: bool = chunk_ok(s, a1 + a2) && net_eof(s);
+  let r: Result<i64> = net_close(move s);
+  if a1 < 1 || a1 > 100 { return 1; }
+  if a2 < 1 || a2 > 150 { return 2; }
+  if a1 + a2 + rest != want { return 3; }
+  if !good { return 4; }
+  match r {
+    Ok(v) => { return v; }
+    Err(code) => { return 600 + code; }
+  }
+}

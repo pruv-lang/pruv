@@ -132,6 +132,13 @@ fn rty_name(t: &str, param: bool) -> String {
         "process_args" => {
             if param { "&pruv_ProcessArgs".to_string() } else { "pruv_ProcessArgs".to_string() }
         }
+        // G10 net A2: Socket and Listener are owned; a borrowed parameter is a reference
+        "socket" => {
+            if param { "&pruv_Socket".to_string() } else { "pruv_Socket".to_string() }
+        }
+        "listener" => {
+            if param { "&pruv_Listener".to_string() } else { "pruv_Listener".to_string() }
+        }
         // G6: String is owned; a borrowed parameter is a reference
         "string" => {
             if param { "&::std::string::String".to_string() } else { "::std::string::String".to_string() }

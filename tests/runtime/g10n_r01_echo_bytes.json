@@ -1,0 +1,16 @@
+{
+  "backends": ["rust"],
+  "g6_drop_balance": true,
+  "flags_matrix": [
+    [],
+    ["--foreign-checks", "all"],
+    ["--foreign-checks", "off"],
+    ["--no-verify"],
+    ["--no-verify", "--foreign-checks", "all"],
+    ["--trust-callers"]
+  ],
+  "exit": 0,
+  "stdout_contains": "echoed",
+  "gen_contains": ["fn pruv_net_connect(", "std::net::TcpStream"],
+  "gen_absent": ["//@hook", "forced = true;"]
+}

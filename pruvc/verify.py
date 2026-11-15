@@ -2240,6 +2240,7 @@ class FnVerifier:
             s.assume(st, g, z3.Implies(z3.Not(ok), res.error == 4))
         elif n == "net_set_timeout":
             s.assume(st, g, z3.Implies(ok, z3.And(res.write_open == p.write_open, _net_keep_buf(res, p))))
+            s.assume(st, g, z3.Implies(z3.Not(ok), res.error == 4))     # the OS refused the timeout (A2 audit)
         elif n == "net_read":
             mx = args[1]
             sz = res.buf.n

@@ -1,1 +1,1 @@
-{"stage": "codegen", "code": "unsupported_type", "flags": ["--no-verify"]}
+{"stage": "codegen", "code": "unsupported_type", "flags": ["--no-verify"], "backend": "llvm"}

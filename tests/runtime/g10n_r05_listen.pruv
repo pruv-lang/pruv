@@ -1,0 +1,91 @@
+// G10 net A2 gate 4: listening on a port that is already in use is listener error 2, an empty host or a NUL in the host is
+// listener error 1, a failed listener has port 0 and its close returns the same error as Err. Port 0 binds an ephemeral
+// port that is reported (1..65535) and usable: the listener accepts a connection made to that very port.
+fn listen_error(host: str, port: i64) -> i64 ! net, alloc
+  requires 0 <= port && port <= 65535
+{
+  let l: Listener = net_listen(host, port);
+  let e: i64 = net_listener_error(l);
+  let p: i64 = net_listener_port(l);
+  let good: bool = net_listener_ok(l);
+  let r: Result<i64> = net_listener_close(move l);
+  if good { return 0; }
+  if p != 0 { return 100 + e; }
+  match r {
+    Ok(v) => { return 300; }
+    Err(code) => {
+      if code != e { return 400 + code; }
+      return e;
+    }
+  }
+}
+
+fn bytes_eq(s: Socket, expected: [u8]) -> bool ! alloc {
+  let got: [u8] = net_bytes(s);
+  if len(got) != len(expected) { return false; }
+  let mut i: i64 = 0;
+  while i < len(got)
+    invariant 0 <= i && i <= len(got)
+    decreases len(got) - i
+  {
+    if got[i] != expected[i] { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+fn finish_all(take c: Socket, take a: Socket, take l: Listener, base: i64) -> i64 ! net, alloc
+  requires base >= 0 && base <= 1000000
+  ensures result == base
+{
+  let r1: Result<i64> = net_close(move c);
+  let r2: Result<i64> = net_close(move a);
+  let r3: Result<i64> = net_listener_close(move l);
+  return base;
+}
+
+// listen on port 0, connect to the reported port, accept, send `expected` from the client, half-close, and read it on the
+// accepted side; returns the ephemeral port, or a negative code
+fn self_connect(host: str, expected: [u8]) -> i64 ! net, alloc {
+  let l: Listener = net_listen(host, 0);
+  if !net_listener_ok(l) {
+    let r0: Result<i64> = net_listener_close(move l);
+    return -1;
+  }
+  let port: i64 = net_listener_port(l);
+  let mut c: Socket = net_connect(host, port);
+  if !net_ok(c) {
+    let r1: Result<i64> = net_close(move c);
+    let r2: Result<i64> = net_listener_close(move l);
+    return -2;
+  }
+  let mut a: Socket = net_accept(l);
+  if !net_ok(a) {
+    let f3: i64 = finish_all(move c, move a, move l, 3);
+    return 0 - f3;
+  }
+  a = net_set_timeout(move a, 20000);
+  if !net_ok(a) {
+    let f4: i64 = finish_all(move c, move a, move l, 4);
+    return 0 - f4;
+  }
+  c = net_write_bytes(move c, expected);
+  if !net_ok(c) {
+    let f5: i64 = finish_all(move c, move a, move l, 5);
+    return 0 - f5;
+  }
+  c = net_shutdown_write(move c);
+  if !net_ok(c) {
+    let f6: i64 = finish_all(move c, move a, move l, 6);
+    return 0 - f6;
+  }
+  a = net_read_all(move a);
+  if !net_ok(a) {
+    let f7: i64 = finish_all(move c, move a, move l, 7);
+    return 0 - f7;
+  }
+  let same: bool = bytes_eq(a, expected);
+  let done: i64 = finish_all(move c, move a, move l, 0);
+  if !same { return -8; }
+  return port;
+}

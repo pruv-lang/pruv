@@ -1,0 +1,46 @@
+// G10 net A2 gate 7: a write to a peer that has closed the connection is error 4 (a partial write is possible, nothing is
+// retried) and the Pruv process is not killed by SIGPIPE. The failed socket has its write side closed, no bytes and no
+// EOF; net_close still has to be called and returns Err(4). The socket has a timeout so that a missing failure ends the
+// loop with error 6 (which the driver reports) instead of hanging.
+fn broken_write(host: str, port: i64, data: [u8], rounds: i64) -> i64 ! net, alloc
+  requires 1 <= port && port <= 65535
+  requires 0 <= rounds && rounds <= 1000000
+{
+  let mut s: Socket = net_connect(host, port);
+  if !net_ok(s) {
+    let r0: Result<i64> = net_close(move s);
+    return 100;
+  }
+  s = net_set_timeout(move s, 10000);
+  if !net_ok(s) {
+    let r1: Result<i64> = net_close(move s);
+    return 110;
+  }
+
+  // the peer closed without reading: a write soon fails
+  let mut remaining: i64 = rounds;
+  while remaining > 0 && net_ok(s) && net_write_open(s)
+    invariant 0 <= remaining && remaining <= rounds
+    decreases remaining
+  {
+    s = net_write_bytes(move s, data);
+    remaining = remaining - 1;
+  }
+
+  let alive: bool = net_ok(s);
+  let e: i64 = net_error(s);
+  let open: bool = net_write_open(s);
+  let clean: bool = net_size(s) == 0 && !net_eof(s);
+  let r: Result<i64> = net_close(move s);
+  if alive { return 1; }
+  if e != 4 { return 20 + e; }
+  if open { return 2; }
+  if !clean { return 3; }
+  match r {
+    Ok(v) => { return 4; }
+    Err(code) => {
+      if code == 4 { return 0; }
+      return 5;
+    }
+  }
+}

@@ -1,0 +1,127 @@
+// G10 net A2 gate 10: descriptors are released. Many more sockets than a default descriptor limit allows are opened one
+// after the other and closed (connected, refused, accepted), so a leak would end in connect or accept errors; a listener
+// port can be reused at once after net_listener_close, also after connections were made through it.
+fn connect_churn(host: str, port: i64, rounds: i64) -> i64 ! net, alloc
+  requires 1 <= port && port <= 65535
+  requires 0 <= rounds && rounds <= 1000000
+{
+  let mut remaining: i64 = rounds;
+  while remaining > 0
+    invariant 0 <= remaining && remaining <= rounds
+    decreases remaining
+  {
+    let s: Socket = net_connect(host, port);
+    if !net_ok(s) {
+      let r0: Result<i64> = net_close(move s);
+      return 100;
+    }
+    let r: Result<i64> = net_close(move s);
+    remaining = remaining - 1;
+  }
+  return 0;
+}
+
+// every connect to a closed port fails (a failed handle must still be closed, and holds no descriptor)
+fn refused_churn(host: str, port: i64, rounds: i64) -> i64 ! net, alloc
+  requires 1 <= port && port <= 65535
+  requires 0 <= rounds && rounds <= 1000000
+{
+  let mut remaining: i64 = rounds;
+  while remaining > 0
+    invariant 0 <= remaining && remaining <= rounds
+    decreases remaining
+  {
+    let s: Socket = net_connect(host, port);
+    if net_ok(s) {
+      let r0: Result<i64> = net_close(move s);
+      return 100;
+    }
+    let e: i64 = net_error(s);
+    let r: Result<i64> = net_close(move s);
+    if e != 2 { return 200 + e; }
+    remaining = remaining - 1;
+  }
+  return 0;
+}
+
+// accept `rounds` clients one after the other (read to the client's half-close, no reply), closing each accepted socket
+fn serve(take input: Listener, rounds: i64) -> Listener ! net, alloc
+  requires net_listener_ok(input)
+  requires 0 <= rounds && rounds <= 1000000
+{
+  let mut l: Listener = move input;
+  let mut remaining: i64 = rounds;
+
+  while remaining > 0 && net_listener_ok(l)
+    invariant 0 <= remaining && remaining <= rounds
+    invariant net_listener_ok(l)
+    decreases remaining
+  {
+    let mut s: Socket = net_accept(l);
+    if net_ok(s) {
+      s = net_set_timeout(move s, 20000);
+      if net_ok(s) {
+        s = net_read_all(move s);
+      }
+    }
+    let r: Result<i64> = net_close(move s);
+    remaining = remaining - 1;
+  }
+
+  return move l;
+}
+
+fn accept_churn(host: str, port: i64, rounds: i64) -> i64 ! net, alloc
+  requires 0 <= port && port <= 65535
+  requires 0 <= rounds && rounds <= 1000000
+{
+  let l: Listener = net_listen(host, port);
+  if !net_listener_ok(l) {
+    let r0: Result<i64> = net_listener_close(move l);
+    return 100;
+  }
+  let served: Listener = serve(move l, rounds);
+  let r: Result<i64> = net_listener_close(move served);
+  match r {
+    Ok(v) => { return v; }
+    Err(code) => { return 200 + code; }
+  }
+}
+
+// listen on a fixed port, make a connection through it and close everything, again and again: the port is free to bind
+// again right after net_listener_close
+fn reuse(host: str, port: i64, rounds: i64) -> i64 ! net, alloc
+  requires 1 <= port && port <= 65535
+  requires 0 <= rounds && rounds <= 1000000
+{
+  let mut remaining: i64 = rounds;
+  while remaining > 0
+    invariant 0 <= remaining && remaining <= rounds
+    decreases remaining
+  {
+    let l: Listener = net_listen(host, port);
+    if !net_listener_ok(l) {
+      let r0: Result<i64> = net_listener_close(move l);
+      return 100;
+    }
+    let c: Socket = net_connect(host, port);
+    if !net_ok(c) {
+      let r1: Result<i64> = net_close(move c);
+      let r2: Result<i64> = net_listener_close(move l);
+      return 200;
+    }
+    let a: Socket = net_accept(l);
+    if !net_ok(a) {
+      let r3: Result<i64> = net_close(move c);
+      let r4: Result<i64> = net_close(move a);
+      let r5: Result<i64> = net_listener_close(move l);
+      return 300;
+    }
+    // the accepted side closes first, so its port stays in TIME_WAIT
+    let r6: Result<i64> = net_close(move a);
+    let r7: Result<i64> = net_close(move c);
+    let r8: Result<i64> = net_listener_close(move l);
+    remaining = remaining - 1;
+  }
+  return 0;
+}

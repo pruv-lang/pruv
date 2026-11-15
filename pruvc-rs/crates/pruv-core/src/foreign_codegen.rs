@@ -226,6 +226,9 @@ impl ForeignGen {
         if op.starts_with("proc_") {
             return self.proc_text(op, name);
         }
+        if op.starts_with("net_") {
+            return self.net_text(op, name);
+        }
         const STRING: &str = "::std::string::String";
         let g = |i: usize| low.get(i).ok_or_else(idx_err);
         match op {
@@ -606,6 +609,194 @@ impl ForeignGen {
                 body.push("let pruv_r: i64 = pruv_b[pruv_k] as i64;".to_string());
                 body.extend(self.ens_line("0 <= pruv_r && pruv_r <= 255", "0 <= result && result <= 255"));
                 Ok(self.fn_text(name, &format!("p: &{}, stream: i64, i: i64", P), Some("i64"), &with(body, "pruv_r")))
+            }
+            other => Err(format!("codegen: unknown catalog operation {}", other)),
+        }
+    }
+
+    /// G10 net A2: thin helpers over the Socket / Listener runtime (codegen.rs NET_PRELUDE). Failure stays in the owned
+    /// handle; runtime requires follow --foreign-checks, the ensures (mode all) re-check the public state of the result.
+    fn net_text(&self, op: &str, name: &str) -> R<String> {
+        const S: &str = "pruv_Socket";
+        const L: &str = "pruv_Listener";
+        const RES: &str = "::std::result::Result<i64, i64>";
+        const VEC: &str = "::std::vec::Vec<u8>";
+        let with = |mut body: Vec<String>, last: &str| -> Vec<String> {
+            body.push(last.to_string());
+            body
+        };
+        // mode all: the entry state the preservation ensures compare against
+        let snap: Vec<String> = if self.ens {
+            vec![
+                "pruv_g6_charge(&mut pruv_budget, s.buf.len());".to_string(),
+                "let pruv_sb: ::std::vec::Vec<u8> = s.buf.clone();".to_string(),
+                "let pruv_se: bool = s.eof;".to_string(),
+                "let pruv_sw: bool = s.write_open;".to_string(),
+            ]
+        } else {
+            Vec::new()
+        };
+        let keep = "pruv_r.eof == pruv_se && pruv_r.buf == pruv_sb";
+        // the reads replace the buffer: only the flags are compared, no buffer copy is charged
+        let snap_flags: Vec<String> = snap.iter().skip(2).cloned().collect();
+        match op {
+            "net_listen" => {
+                let mut body = self.req_line("port >= 0 && port <= 65535", "0 <= port && port <= 65535");
+                body.push(format!("let pruv_r: {} = pruv_net_listen(host, port);", L));
+                body.extend(self.ens_line(
+                    "pruv_net_lwf(&pruv_r)",
+                    "lok(result) && 1 <= port(result) && port(result) <= 65535 || !lok(result) && port(result) == 0",
+                ));
+                Ok(self.fn_text(name, "host: &str, port: i64", Some(L), &with(body, "pruv_r")))
+            }
+            "net_accept" => {
+                let mut body = self.req_line("l.error == 0", "lok(l)");
+                body.push(format!("let pruv_r: {} = pruv_net_accept(l);", S));
+                body.extend(self.ens_line(
+                    "(if pruv_r.error == 0 { pruv_r.write_open } else { pruv_r.error == 5 }) && pruv_net_wf(&pruv_r) && pruv_r.buf.is_empty() && !pruv_r.eof",
+                    "ok(result) && open(result) || err(result) == 5, empty buffer, EOF false",
+                ));
+                Ok(self.fn_text(name, &format!("l: &{}", L), Some(S), &with(body, "pruv_r")))
+            }
+            "net_listener_close" => {
+                let mut body = vec![format!("let pruv_r: {} = pruv_net_lclose(l);", RES)];
+                body.extend(self.ens_line(
+                    "match pruv_r { Ok(pruv_v) => pruv_v == 0, Err(pruv_e) => pruv_e >= 1 && pruv_e <= 2 }",
+                    "Ok(0) or Err carries a listener error code 1..2",
+                ));
+                Ok(self.fn_text(name, &format!("l: {}", L), Some(RES), &with(body, "pruv_r")))
+            }
+            "net_connect" => {
+                let mut body = self.req_line("port >= 1 && port <= 65535", "1 <= port && port <= 65535");
+                body.push(format!("let pruv_r: {} = pruv_net_connect(host, port);", S));
+                body.extend(self.ens_line(
+                    "(if pruv_r.error == 0 { pruv_r.write_open } else { pruv_r.error == 1 || pruv_r.error == 2 }) && pruv_net_wf(&pruv_r) && pruv_r.buf.is_empty() && !pruv_r.eof",
+                    "ok(result) && open(result) || err(result) == 1 || err(result) == 2, empty buffer, EOF false",
+                ));
+                Ok(self.fn_text(name, "host: &str, port: i64", Some(S), &with(body, "pruv_r")))
+            }
+            "net_write_str" | "net_write_bytes" => {
+                let text = op == "net_write_str";
+                let mut body = self.req_line("s.error == 0 && s.write_open", "ok(s) && open(s)");
+                body.extend(snap.iter().cloned());
+                body.push(format!(
+                    "let pruv_r: {} = pruv_net_write(s, {});",
+                    S,
+                    if text { "text.as_bytes()" } else { "data" }
+                ));
+                body.extend(self.ens_line(
+                    "(pruv_r.error == 0 || pruv_r.error == 4 || pruv_r.error == 6) && pruv_net_wf(&pruv_r)",
+                    "ok(result) || err(result) == 4 || err(result) == 6",
+                ));
+                body.extend(self.ens_line(
+                    &format!("pruv_r.error != 0 || (pruv_r.write_open == pruv_sw && {})", keep),
+                    "write-open, buffer and EOF preserved",
+                ));
+                Ok(self.fn_text(
+                    name,
+                    &format!("s: {}, {}", S, if text { "text: &str" } else { "data: &[u8]" }),
+                    Some(S),
+                    &with(body, "pruv_r"),
+                ))
+            }
+            "net_shutdown_write" => {
+                let mut body = self.req_line("s.error == 0 && s.write_open", "ok(s) && open(s)");
+                body.extend(snap.iter().cloned());
+                body.push(format!("let pruv_r: {} = pruv_net_shutdown(s);", S));
+                body.extend(self.ens_line(
+                    "!pruv_r.write_open && (pruv_r.error == 0 || (pruv_r.error == 4 && pruv_net_wf(&pruv_r)))",
+                    "!open(result) && (ok(result) || err(result) == 4)",
+                ));
+                body.extend(self.ens_line(&format!("pruv_r.error != 0 || ({})", keep), "buffer and EOF preserved"));
+                Ok(self.fn_text(name, &format!("s: {}", S), Some(S), &with(body, "pruv_r")))
+            }
+            "net_set_timeout" => {
+                let mut body = self.req_line("s.error == 0", "ok(s)");
+                body.extend(self.req_line("ms >= 0 && ms <= 86400000", "0 <= ms && ms <= 86400000"));
+                body.extend(snap.iter().cloned());
+                body.push(format!("let pruv_r: {} = pruv_net_set_timeout(s, ms);", S));
+                body.extend(self.ens_line(
+                    "pruv_r.error == 0 || (pruv_r.error == 4 && pruv_net_wf(&pruv_r))",
+                    "ok(result) || err(result) == 4",
+                ));
+                body.extend(self.ens_line(
+                    &format!("pruv_r.error != 0 || (pruv_r.write_open == pruv_sw && {})", keep),
+                    "write-open, buffer and EOF preserved",
+                ));
+                Ok(self.fn_text(name, &format!("s: {}, ms: i64", S), Some(S), &with(body, "pruv_r")))
+            }
+            "net_read" => {
+                let mut body = self.req_line("s.error == 0", "ok(s)");
+                body.extend(self.req_line("0 < max && max <= (1i64 << 40)", "0 < max && max <= 2^40"));
+                body.extend(snap_flags.iter().cloned());
+                body.push(format!("let pruv_r: {} = pruv_net_read(s, max);", S));
+                body.extend(self.ens_line(
+                    "(pruv_r.error == 0 || pruv_r.error == 3 || pruv_r.error == 6) && pruv_net_wf(&pruv_r)",
+                    "ok(result) || err(result) == 3 || err(result) == 6",
+                ));
+                body.extend(self.ens_line(
+                    "pruv_r.error != 0 || ((pruv_r.buf.len() as u64) <= (max as u64) && pruv_r.eof == pruv_r.buf.is_empty() && pruv_r.write_open == pruv_sw && (!pruv_se || pruv_r.buf.is_empty()))",
+                    "size(result) <= max && eof(result) == (size(result) == 0), write-open preserved",
+                ));
+                Ok(self.fn_text(name, &format!("s: {}, max: i64", S), Some(S), &with(body, "pruv_r")))
+            }
+            "net_read_all" => {
+                let mut body = self.req_line("s.error == 0", "ok(s)");
+                body.extend(snap_flags.iter().cloned());
+                body.push(format!("let pruv_r: {} = pruv_net_read_all(s);", S));
+                body.extend(self.ens_line(
+                    "(pruv_r.error == 0 && pruv_r.eof && pruv_r.write_open == pruv_sw) || ((pruv_r.error == 3 || pruv_r.error == 6) && pruv_net_wf(&pruv_r))",
+                    "ok(result) && eof(result) || err(result) == 3 || err(result) == 6",
+                ));
+                Ok(self.fn_text(name, &format!("s: {}", S), Some(S), &with(body, "pruv_r")))
+            }
+            "net_bytes" => {
+                let mut body = vec![format!("let pruv_r: {} = s.buf.clone();", VEC)];
+                body.extend(self.ens_line("pruv_r[..] == s.buf[..]", "result is the public buffer"));
+                Ok(self.fn_text(name, &format!("s: &{}", S), Some(VEC), &with(body, "pruv_r")))
+            }
+            "net_close" => {
+                let mut body = vec![format!("let pruv_r: {} = pruv_net_close(s);", RES)];
+                body.extend(self.ens_line(
+                    "match pruv_r { Ok(pruv_v) => pruv_v == 0, Err(pruv_e) => pruv_e >= 1 && pruv_e <= 6 }",
+                    "Ok(0) or Err carries an error code 1..6",
+                ));
+                Ok(self.fn_text(name, &format!("s: {}", S), Some(RES), &with(body, "pruv_r")))
+            }
+            "net_ok" => Ok(self.fn_text(name, &format!("s: &{}", S), Some("bool"), &["s.error == 0".to_string()])),
+            "net_write_open" => Ok(self.fn_text(name, &format!("s: &{}", S), Some("bool"), &["s.write_open".to_string()])),
+            "net_eof" => Ok(self.fn_text(name, &format!("s: &{}", S), Some("bool"), &["s.eof".to_string()])),
+            "net_error" => {
+                let mut body = vec!["let pruv_r: i64 = s.error;".to_string()];
+                body.extend(self.ens_line("0 <= pruv_r && pruv_r <= 6", "0 <= result && result <= 6"));
+                Ok(self.fn_text(name, &format!("s: &{}", S), Some("i64"), &with(body, "pruv_r")))
+            }
+            "net_size" => {
+                let mut body = vec!["let pruv_r: i64 = s.buf.len() as i64;".to_string()];
+                body.extend(self.ens_line("0 <= pruv_r && (pruv_r as u64) <= (1u64 << 40)", "0 <= result && result <= 2^40"));
+                Ok(self.fn_text(name, &format!("s: &{}", S), Some("i64"), &with(body, "pruv_r")))
+            }
+            "net_byte" => {
+                let cond = "i >= 0 && (i as u64) < (s.buf.len() as u64)";
+                let mut body = self.req_line(cond, "0 <= i && i < net_size(s)");
+                body.push(format!("let pruv_k: usize = if {} {{ i as usize }} else {{ pruv_g6_repr(\"index\") }};", cond));
+                body.push("let pruv_r: i64 = s.buf[pruv_k] as i64;".to_string());
+                body.extend(self.ens_line("0 <= pruv_r && pruv_r <= 255", "0 <= result && result <= 255"));
+                Ok(self.fn_text(name, &format!("s: &{}, i: i64", S), Some("i64"), &with(body, "pruv_r")))
+            }
+            "net_listener_ok" => Ok(self.fn_text(name, &format!("l: &{}", L), Some("bool"), &["l.error == 0".to_string()])),
+            "net_listener_error" => {
+                let mut body = vec!["let pruv_r: i64 = l.error;".to_string()];
+                body.extend(self.ens_line("0 <= pruv_r && pruv_r <= 2", "0 <= result && result <= 2"));
+                Ok(self.fn_text(name, &format!("l: &{}", L), Some("i64"), &with(body, "pruv_r")))
+            }
+            "net_listener_port" => {
+                let mut body = vec!["let pruv_r: i64 = l.port;".to_string()];
+                body.extend(self.ens_line(
+                    "(l.error == 0 && pruv_r >= 1 && pruv_r <= 65535) || (l.error != 0 && pruv_r == 0)",
+                    "ok implies 1 <= result && result <= 65535; failed implies result == 0",
+                ));
+                Ok(self.fn_text(name, &format!("l: &{}", L), Some("i64"), &with(body, "pruv_r")))
             }
             other => Err(format!("codegen: unknown catalog operation {}", other)),
         }

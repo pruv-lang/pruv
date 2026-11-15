@@ -1,0 +1,21 @@
+{
+  "backends": ["rust"],
+  "g6_drop_balance": true,
+  "net_hook": "write",
+  "flags_matrix": [
+    [],
+    ["--foreign-checks", "all"],
+    ["--no-verify"]
+  ],
+  "exit": 0,
+  "stdout_contains": "write faults are values",
+  "gen_contains": [
+    "forced = true;\n    let mut code: i64 = if forced { 4 } else { 0 };"
+  ],
+  "gen_absent": [
+    "//@hook",
+    "forced = true;\n    if forced { return pruv_net_failed(5); }",
+    "forced = true;\n    if forced { return Err(3); }",
+    "forced = true;\n    let ok: bool = !forced"
+  ]
+}

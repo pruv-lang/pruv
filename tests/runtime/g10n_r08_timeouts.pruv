@@ -1,0 +1,77 @@
+// G10 net A2 gate 6: against a peer that accepts and then neither reads nor writes, a read (net_read and net_read_all) and,
+// once the socket buffers are full, a write end with error 6 after the timeout set by net_set_timeout. The failed socket
+// is empty (write closed, no bytes, no EOF), still has to be closed, and its close returns Err(6).
+fn silent_read(host: str, port: i64, ms: i64, all: bool) -> i64 ! net, alloc
+  requires 1 <= port && port <= 65535
+  requires 0 <= ms && ms <= 86400000
+{
+  let mut s: Socket = net_connect(host, port);
+  if !net_ok(s) {
+    let r0: Result<i64> = net_close(move s);
+    return 100;
+  }
+  s = net_set_timeout(move s, ms);
+  if !net_ok(s) {
+    let r1: Result<i64> = net_close(move s);
+    return 110;
+  }
+  if all {
+    s = net_read_all(move s);
+  } else {
+    s = net_read(move s, 16);
+  }
+  let alive: bool = net_ok(s);
+  let e: i64 = net_error(s);
+  let clean: bool = !net_write_open(s) && net_size(s) == 0 && !net_eof(s);
+  let r: Result<i64> = net_close(move s);
+  if alive { return 1; }
+  if e != 6 { return 2; }
+  if !clean { return 3; }
+  match r {
+    Ok(v) => { return 4; }
+    Err(code) => {
+      if code == 6 { return 0; }
+      return 5;
+    }
+  }
+}
+
+// write `data` again and again; the peer never reads, so the buffers fill up and a write times out
+fn silent_write(host: str, port: i64, ms: i64, data: [u8], rounds: i64) -> i64 ! net, alloc
+  requires 1 <= port && port <= 65535
+  requires 0 <= ms && ms <= 86400000
+  requires 0 <= rounds && rounds <= 1000000
+{
+  let mut s: Socket = net_connect(host, port);
+  if !net_ok(s) {
+    let r0: Result<i64> = net_close(move s);
+    return 100;
+  }
+  s = net_set_timeout(move s, ms);
+  if !net_ok(s) {
+    let r1: Result<i64> = net_close(move s);
+    return 110;
+  }
+  let mut remaining: i64 = rounds;
+  while remaining > 0 && net_ok(s) && net_write_open(s)
+    invariant 0 <= remaining && remaining <= rounds
+    decreases remaining
+  {
+    s = net_write_bytes(move s, data);
+    remaining = remaining - 1;
+  }
+  let alive: bool = net_ok(s);
+  let e: i64 = net_error(s);
+  let clean: bool = !net_write_open(s) && net_size(s) == 0 && !net_eof(s);
+  let r: Result<i64> = net_close(move s);
+  if alive { return 1; }
+  if e != 6 { return 2; }
+  if !clean { return 3; }
+  match r {
+    Ok(v) => { return 4; }
+    Err(code) => {
+      if code == 6 { return 0; }
+      return 5;
+    }
+  }
+}

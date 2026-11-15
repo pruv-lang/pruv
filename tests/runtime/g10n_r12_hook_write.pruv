@@ -1,0 +1,54 @@
+// G10 net A2 gate 9 (fault path, spec "net_hook": "write"): a failing write (net_write_str and net_write_bytes) publishes
+// error 4: the write side is closed, the public buffer is empty and EOF is false; the socket still has to be closed and
+// net_close returns Err(4). Nothing is retried and nothing aborts.
+
+// 0 for Ok(0), the error code of Err
+fn close_code(take s: Socket) -> i64 ! net, alloc {
+  let r: Result<i64> = net_close(move s);
+  match r {
+    Ok(v) => { return 0; }
+    Err(code) => { return code; }
+  }
+}
+
+fn write_str_fault(host: str, port: i64) -> i64 ! net, alloc
+  requires 1 <= port && port <= 65535
+{
+  let mut s: Socket = net_connect(host, port);
+  if !net_ok(s) {
+    let c0: i64 = close_code(move s);
+    return 100;
+  }
+  s = net_write_str(move s, "hello");
+  let alive: bool = net_ok(s);
+  let e: i64 = net_error(s);
+  let open: bool = net_write_open(s);
+  let clean: bool = net_size(s) == 0 && !net_eof(s);
+  let c: i64 = close_code(move s);
+  if alive { return 1; }
+  if e != 4 { return 2; }
+  if open || !clean { return 3; }
+  if c != 4 { return 4; }
+  return 0;
+}
+
+fn write_bytes_fault(host: str, port: i64, data: [u8]) -> i64 ! net, alloc
+  requires 1 <= port && port <= 65535
+{
+  let mut s: Socket = net_connect(host, port);
+  if !net_ok(s) {
+    let c0: i64 = close_code(move s);
+    return 100;
+  }
+  s = net_write_bytes(move s, data);
+  let alive: bool = net_ok(s);
+  let e: i64 = net_error(s);
+  let open: bool = net_write_open(s);
+  let clean: bool = net_size(s) == 0 && !net_eof(s);
+  let c: i64 = close_code(move s);
+  if alive { return 1; }
+  if e != 4 { return 2; }
+  if open || !clean { return 3; }
+  if c != 4 { return 4; }
+  return 0;
+}

@@ -2975,6 +2975,7 @@ impl<'a> FnVerifier<'a> {
                 "net_set_timeout" => {
                     let p = arg(0)?.try_sock()?.clone();
                     facts.push(ok.implies(&z.and(&[rp.write_open.eq(&p.write_open), self.net_keep_buf(&rp, &p)])));
+                    facts.push(fail.implies(&rp.error.raw_eq(&z.int(4)))); // the OS refused the timeout (A2 audit)
                 }
                 "net_read" => {
                     let p = arg(0)?.try_sock()?.clone();

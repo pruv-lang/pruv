@@ -436,6 +436,274 @@ pub fn proc_prelude(hook: &str) -> String {
     out.join("\n")
 }
 
+/// G10 net A2 (docs/G10_NET_SPEC.md section 5): the Socket / Listener runtime (Python NET_PRELUDE, same text). std::net
+/// only; no threads and no queues. Lines of the form `//@hook NAME code` are test-only fault paths, dropped unless
+/// PRUV_NET_TEST_HOOK equals NAME.
+pub const NET_PRELUDE: &str = r##"#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+struct pruv_Socket {
+    stream: ::std::option::Option<::std::net::TcpStream>,
+    error: i64,
+    write_open: bool,
+    eof: bool,
+    buf: ::std::vec::Vec<u8>,
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+struct pruv_Listener {
+    listener: ::std::option::Option<::std::net::TcpListener>,
+    error: i64,
+    port: i64,
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_net_failed(code: i64) -> pruv_Socket {
+    pruv_Socket { stream: None, error: code, write_open: false, eof: false, buf: ::std::vec::Vec::new() }
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_net_lfailed(code: i64) -> pruv_Listener {
+    pruv_Listener { listener: None, error: code, port: 0 }
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_net_fail(s: &mut pruv_Socket, code: i64) {
+    // the first published error is kept; an update failure closes the write side and empties the public state
+    if s.error == 0 { s.error = code; }
+    s.write_open = false;
+    s.buf = ::std::vec::Vec::new();
+    s.eof = false;
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_net_bad_host(host: &str) -> bool {
+    host.is_empty() || host.contains('\0')
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_net_timed_out(e: &::std::io::Error) -> bool {
+    e.kind() == ::std::io::ErrorKind::WouldBlock || e.kind() == ::std::io::ErrorKind::TimedOut
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_net_connect(host: &str, port: i64) -> pruv_Socket {
+    if port < 1 || port > 65535 { pruv_g6_repr("port"); }
+    if pruv_net_bad_host(host) { return pruv_net_failed(1); }
+    let addrs = match ::std::net::ToSocketAddrs::to_socket_addrs(&(host, port as u16)) {
+        Ok(a) => a,
+        Err(_) => return pruv_net_failed(2),
+    };
+    for a in addrs {
+        if let Ok(st) = ::std::net::TcpStream::connect(a) {
+            let _ = st.set_nodelay(true);
+            return pruv_Socket { stream: Some(st), error: 0, write_open: true, eof: false, buf: ::std::vec::Vec::new() };
+        }
+    }
+    pruv_net_failed(2)
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_net_listen(host: &str, port: i64) -> pruv_Listener {
+    if port < 0 || port > 65535 { pruv_g6_repr("port"); }
+    if pruv_net_bad_host(host) { return pruv_net_lfailed(1); }
+    let addrs = match ::std::net::ToSocketAddrs::to_socket_addrs(&(host, port as u16)) {
+        Ok(a) => a,
+        Err(_) => return pruv_net_lfailed(2),
+    };
+    for a in addrs {
+        if let Ok(l) = ::std::net::TcpListener::bind(a) {
+            // the port is read back, so port 0 reports the real one
+            let p: i64 = match l.local_addr() { Ok(x) => x.port() as i64, Err(_) => 0 };
+            if p >= 1 && p <= 65535 {
+                return pruv_Listener { listener: Some(l), error: 0, port: p };
+            }
+        }
+    }
+    pruv_net_lfailed(2)
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_net_accept(l: &pruv_Listener) -> pruv_Socket {
+    let mut forced: bool = false;
+    //@hook accept forced = true;
+    if forced { return pruv_net_failed(5); }
+    let lis = match l.listener.as_ref() {
+        Some(x) => x,
+        None => return pruv_net_failed(5),
+    };
+    loop {
+        match lis.accept() {
+            Ok((st, _)) => {
+                let _ = st.set_nodelay(true);
+                return pruv_Socket { stream: Some(st), error: 0, write_open: true, eof: false, buf: ::std::vec::Vec::new() };
+            }
+            Err(e) => {
+                if e.kind() == ::std::io::ErrorKind::Interrupted { continue; }
+                return pruv_net_failed(5);
+            }
+        }
+    }
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_net_write(mut s: pruv_Socket, data: &[u8]) -> pruv_Socket {
+    if s.error != 0 { return s; }
+    let mut forced: bool = false;
+    //@hook write forced = true;
+    let mut code: i64 = if forced { 4 } else { 0 };
+    if code == 0 {
+        code = match s.stream.as_mut() {
+            Some(st) => match ::std::io::Write::write_all(&mut *st, data) {
+                Ok(()) => 0,
+                Err(e) => if pruv_net_timed_out(&e) { 6 } else { 4 },
+            },
+            None => 4,
+        };
+    }
+    if code != 0 { pruv_net_fail(&mut s, code); }
+    s
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_net_shutdown(mut s: pruv_Socket) -> pruv_Socket {
+    if s.error != 0 { return s; }
+    let mut forced: bool = false;
+    //@hook shutdown forced = true;
+    let ok: bool = !forced && match s.stream.as_ref() {
+        Some(st) => st.shutdown(::std::net::Shutdown::Write).is_ok(),
+        None => false,
+    };
+    s.write_open = false;
+    if !ok { pruv_net_fail(&mut s, 4); }
+    s
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_net_set_timeout(mut s: pruv_Socket, ms: i64) -> pruv_Socket {
+    if ms < 0 || ms > 86400000 { pruv_g6_repr("timeout"); }
+    if s.error != 0 { return s; }
+    let t: ::std::option::Option<::std::time::Duration> = if ms == 0 { None } else { Some(::std::time::Duration::from_millis(ms as u64)) };
+    let ok: bool = match s.stream.as_ref() {
+        Some(st) => st.set_read_timeout(t).is_ok() && st.set_write_timeout(t).is_ok(),
+        None => false,
+    };
+    if !ok { pruv_net_fail(&mut s, 4); }
+    s
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_net_read_chunk(s: &mut pruv_Socket, lim: usize) -> ::std::result::Result<::std::vec::Vec<u8>, i64> {
+    // one read call into a buffer of lim bytes (retried on Interrupted); zero bytes read is EOF
+    let mut forced: bool = false;
+    //@hook read forced = true;
+    if forced { return Err(3); }
+    let st = match s.stream.as_mut() {
+        Some(x) => x,
+        None => return Err(3),
+    };
+    let mut b: ::std::vec::Vec<u8> = vec![0u8; lim];
+    loop {
+        match ::std::io::Read::read(&mut *st, &mut b[..]) {
+            Ok(n) => {
+                b.truncate(n);
+                return Ok(b);
+            }
+            Err(e) => {
+                if e.kind() == ::std::io::ErrorKind::Interrupted { continue; }
+                return Err(if pruv_net_timed_out(&e) { 6 } else { 3 });
+            }
+        }
+    }
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_net_read(mut s: pruv_Socket, max: i64) -> pruv_Socket {
+    if max <= 0 || max > (1i64 << 40) { pruv_g6_repr("max"); }
+    if s.error != 0 { return s; }
+    // a read may return fewer bytes than max, so one call never allocates more than 1 MiB
+    let lim: usize = ::std::cmp::min(max as u64, 1u64 << 20) as usize;
+    match pruv_net_read_chunk(&mut s, lim) {
+        Ok(chunk) => {
+            s.eof = chunk.is_empty();
+            s.buf = chunk;
+        }
+        Err(code) => { pruv_net_fail(&mut s, code); }
+    }
+    s
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_net_read_all(mut s: pruv_Socket) -> pruv_Socket {
+    if s.error != 0 { return s; }
+    let mut forced: bool = false;
+    //@hook read forced = true;
+    let mut code: i64 = if forced { 3 } else { 0 };
+    let mut out: ::std::vec::Vec<u8> = ::std::vec::Vec::new();
+    if code == 0 {
+        match s.stream.as_mut() {
+            Some(st) => {
+                let mut b: ::std::vec::Vec<u8> = vec![0u8; 65536];
+                loop {
+                    match ::std::io::Read::read(&mut *st, &mut b[..]) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            // the buffer cap: more than 2^40 bytes is a read failure
+                            if (out.len() as u64) + (n as u64) > (1u64 << 40) { code = 3; break; }
+                            out.extend_from_slice(&b[..n]);
+                        }
+                        Err(e) => {
+                            if e.kind() == ::std::io::ErrorKind::Interrupted { continue; }
+                            code = if pruv_net_timed_out(&e) { 6 } else { 3 };
+                            break;
+                        }
+                    }
+                }
+            }
+            None => { code = 3; }
+        }
+    }
+    // a failed read publishes none of this call's data
+    if code == 0 {
+        s.buf = out;
+        s.eof = true;
+    } else {
+        pruv_net_fail(&mut s, code);
+    }
+    s
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_net_close(mut s: pruv_Socket) -> ::std::result::Result<i64, i64> {
+    // both directions are shut down (errors ignored), then the descriptor is released
+    if let Some(st) = s.stream.take() {
+        let _ = st.shutdown(::std::net::Shutdown::Both);
+        drop(st);
+    }
+    if s.error != 0 { Err(s.error) } else { Ok(0) }
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_net_lclose(mut l: pruv_Listener) -> ::std::result::Result<i64, i64> {
+    drop(l.listener.take());
+    if l.error != 0 { Err(l.error) } else { Ok(0) }
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_net_wf(s: &pruv_Socket) -> bool {
+    s.error >= 0 && s.error <= 6 && (s.buf.len() as u64) <= (1u64 << 40) && (s.error == 0 || (!s.write_open && s.buf.is_empty() && !s.eof))
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_net_lwf(l: &pruv_Listener) -> bool {
+    l.error >= 0 && l.error <= 2 && (if l.error == 0 { l.port >= 1 && l.port <= 65535 } else { l.port == 0 })
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_cnet_byte(s: &pruv_Socket, i: i128) -> i128 {
+    if i >= 0 && i < (s.buf.len() as i128) { s.buf[i as usize] as i128 } else { pruv_ud("socket byte index out of range") }
+}
+"##;
+
+/// NET_PRELUDE with the test-only fault line of `hook` switched on (Python net_prelude); every other `//@hook` line is
+/// dropped, so an empty or unknown hook leaves no fault path at all.
+pub fn net_prelude(hook: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for line in NET_PRELUDE.split('\n') {
+        let t = line.trim_start();
+        if let Some(rest) = t.strip_prefix("//@hook ") {
+            let (name, code) = match rest.find(' ') {
+                Some(i) => (&rest[..i], &rest[i + 1..]),
+                None => (rest, ""),
+            };
+            if name == hook {
+                out.push(format!("{}{}", &line[..line.len() - t.len()], code));
+            }
+            continue;
+        }
+        out.push(line.to_string());
+    }
+    out.join("\n")
+}
+
 pub const G6_PRELUDE: &str = r##"#[allow(dead_code)]
 #[cold]
 #[inline(never)]
@@ -892,6 +1160,10 @@ struct Gen<'a> {
     proc: bool,
     /// G10 proc A2: compile-time PRUV_PROC_TEST_HOOK (test-only fault line of the Process runtime)
     proc_hook: String,
+    /// G10 net A2: the program uses Socket / Listener / net_* (the Socket / Listener runtime is emitted)
+    net: bool,
+    /// G10 net A2: compile-time PRUV_NET_TEST_HOOK (test-only fault line of the Socket / Listener runtime)
+    net_hook: String,
     /// the attribute of every emitted function (ALLOW, or ALLOW_G6 for a G6 program)
     allow: &'static str,
     /// function name -> declaration (first one wins)
@@ -1016,6 +1288,8 @@ impl<'a> Gen<'a> {
             g10: crate::foreign::uses_files(prog),
             proc: crate::foreign::first_proc_use(prog).is_some(),
             proc_hook: std::env::var("PRUV_PROC_TEST_HOOK").unwrap_or_default(),
+            net: crate::foreign::first_net_use(prog).is_some(),
+            net_hook: std::env::var("PRUV_NET_TEST_HOOK").unwrap_or_default(),
             allow: if g6 { ALLOW_G6 } else { ALLOW },
             fmap,
             borrowed: HashSet::new(),
@@ -1141,6 +1415,9 @@ impl<'a> Gen<'a> {
         }
         if self.proc {
             self.out.push(proc_prelude(&self.proc_hook));
+        }
+        if self.net {
+            self.out.push(net_prelude(&self.net_hook));
         }
         let types = emit_public_types_with(self.prog, &self.table);
         if !types.is_empty() {
@@ -2157,6 +2434,28 @@ impl<'a> Gen<'a> {
                         self.c(arg(a, 1)?)?,
                         self.c(arg(a, 2)?)?
                     ));
+                }
+                // G10 net A2: observers over the public state of the handle (never the OS)
+                if n == "net_ok" || n == "net_listener_ok" {
+                    return Ok(format!("(({}).error == 0)", self.c(arg(a, 0)?)?));
+                }
+                if n == "net_error" || n == "net_listener_error" {
+                    return Ok(format!("(({}).error as i128)", self.c(arg(a, 0)?)?));
+                }
+                if n == "net_write_open" {
+                    return Ok(format!("({}).write_open", self.c(arg(a, 0)?)?));
+                }
+                if n == "net_eof" {
+                    return Ok(format!("({}).eof", self.c(arg(a, 0)?)?));
+                }
+                if n == "net_size" {
+                    return Ok(format!("(({}).buf.len() as i128)", self.c(arg(a, 0)?)?));
+                }
+                if n == "net_byte" {
+                    return Ok(format!("pruv_cnet_byte(&({}), {})", self.c(arg(a, 0)?)?, self.c(arg(a, 1)?)?));
+                }
+                if n == "net_listener_port" {
+                    return Ok(format!("(({}).port as i128)", self.c(arg(a, 0)?)?));
                 }
                 if n == "map_lookup" {
                     // G6: finite-map lookup, Option mirror of the stored value
@@ -3243,7 +3542,7 @@ impl<'a> Gen<'a> {
                 } else {
                     args.push(self.cref(xa)?);
                 }
-            } else if p.ty == GType::str() || ((x.name == "file_write_bytes" || x.name == "proc_write_bytes") && p.ty == GType::new("array_u8", vec![])) {
+            } else if p.ty == GType::str() || ((x.name == "file_write_bytes" || x.name == "proc_write_bytes" || x.name == "net_write_bytes") && p.ty == GType::new("array_u8", vec![])) {
                 args.push(self.arr_ref(xa)?);
             } else {
                 args.push(self.e(xa)?);

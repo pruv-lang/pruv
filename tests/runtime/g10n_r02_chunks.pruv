@@ -1,0 +1,63 @@
+// G10 net A2 gate 1 (--no-verify only: the byte arithmetic is not proved): a stream is read chunk by chunk with a small, an
+// odd and a huge max. Every chunk is at most max bytes, the reassembled bytes are exactly the peer's pattern (the byte at
+// stream offset i is (i * 31 + 5) % 251), the total matches, and a read after the end gives an empty buffer and EOF true.
+fn close_with(take s: Socket, base: i64) -> i64 ! net, alloc
+  requires base >= 0 && base <= 1000000
+{
+  let e: i64 = net_error(s);
+  let r: Result<i64> = net_close(move s);
+  return base + e;
+}
+
+// the public buffer holds the pattern bytes starting at stream offset `offset`
+fn chunk_ok(s: Socket, offset: i64) -> bool {
+  let n: i64 = net_size(s);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n
+    decreases n - i
+  {
+    if net_byte(s, i) != ((offset + i) * 31 + 5) % 251 { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+fn chunked(host: str, port: i64, max: i64, want: i64) -> i64 ! net, alloc
+  requires 1 <= port && port <= 65535
+  requires 0 < max && max <= 1099511627776
+{
+  let mut s: Socket = net_connect(host, port);
+  if !net_ok(s) { return close_with(move s, 100); }
+  s = net_set_timeout(move s, 20000);
+  if !net_ok(s) { return close_with(move s, 110); }
+
+  let mut got: i64 = 0;
+  let mut rounds: i64 = 5000000;
+  while rounds > 0 && net_ok(s) && !net_eof(s)
+    invariant 0 <= rounds
+    decreases rounds
+  {
+    s = net_read(move s, max);
+    if net_ok(s) {
+      if net_size(s) > max { return close_with(move s, 900); }
+      if !chunk_ok(s, got) { return close_with(move s, 910); }
+      got = got + net_size(s);
+    }
+    rounds = rounds - 1;
+  }
+  if !net_ok(s) { return close_with(move s, 300); }
+
+  // reading a stream that is at EOF again gives an empty buffer and EOF true
+  s = net_read(move s, max);
+  if !net_ok(s) { return close_with(move s, 400); }
+  let again: bool = net_size(s) == 0 && net_eof(s);
+
+  let r: Result<i64> = net_close(move s);
+  if got != want { return 1; }
+  if !again { return 3; }
+  match r {
+    Ok(v) => { return v; }
+    Err(code) => { return 600 + code; }
+  }
+}

@@ -1,6 +1,6 @@
 # G10: the `net` effect and the owned `Socket` and `Listener` handles
 
-Status: **Design, 2026-11-16. A0 is next.**
+Status: **A0–A2 implemented, 2026-11-16 (frontend, verification, Rust runtime). A3 is next.**
 Batch status will be recorded per batch below and in `RESULTS.md` with Q.
 
 This document defines the network slice that `docs/G10_SPEC.md` §9 deferred (`net` with a `Socket` handle). A
@@ -117,7 +117,7 @@ OS default.
 | `net_write_str(take s: Socket, text: str) -> Socket` | `net, alloc` | requires `ok(s) && open(s)`; write_all of the UTF-8 bytes; on success buffer, EOF and write-open are preserved; failure is error 4 |
 | `net_write_bytes(take s: Socket, data: [u8]) -> Socket` | `net, alloc` | same requires and contract; write_all of all bytes |
 | `net_shutdown_write(take s: Socket) -> Socket` | `net, alloc` | requires `ok(s) && open(s)`; ensures `!open(result)`; on success buffer and EOF are preserved; failure is error 4 |
-| `net_set_timeout(take s: Socket, ms: i64) -> Socket` | `net, alloc` | requires `ok(s)` and `0 <= ms && ms <= 86400000`; 0 = no timeout (the default). Sets both the read and the write timeout. On success all observed state is preserved |
+| `net_set_timeout(take s: Socket, ms: i64) -> Socket` | `net, alloc` | requires `ok(s)` and `0 <= ms && ms <= 86400000`; 0 = no timeout (the default). Sets both the read and the write timeout. On success all observed state is preserved. Failure (the OS refused the timeout): `!ok(result) ==> err(result) == 4` |
 
 `net_shutdown_write` is a half-close: the peer sees EOF, and reading on this socket continues. A write
 timeout set with `net_set_timeout` makes a later write fail with error 6. Writes after a failure or after
@@ -463,10 +463,12 @@ There are no worker threads and no queues.
 ### 5.3 Reading, writing, timeouts
 
 - A read makes one `read` call into a buffer of `max` bytes and retries on `Interrupted`. The bytes read
-  become the public buffer. Zero bytes read is EOF.
+  become the public buffer. Zero bytes read is EOF. A read may return fewer bytes than `max`, so one call never
+  allocates more than 1 MiB, however large `max` is.
 - `WouldBlock` or `TimedOut` from a socket timeout is error 6. Any other read error, including a reset, is
   error 3.
-- `net_read_all` loops over reads until EOF, appending to the buffer; the same error mapping applies.
+- `net_read_all` loops over reads until EOF, appending to the buffer; the same error mapping applies. A stream
+  that would grow the buffer past `2^40` bytes ends the call with error 3.
 - Writes use `write_all`. A write error is error 4, a write timeout is error 6, and a broken pipe is error 4
   and never aborts the process. Rust `std` already suppresses `SIGPIPE` on sockets, so the runtime does not
   install signal handlers.

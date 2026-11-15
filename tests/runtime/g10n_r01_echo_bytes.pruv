@@ -1,0 +1,48 @@
+// G10 net A2 gate 1: exact bytes in both directions. The client writes `data`, half-closes, and reads to EOF; the peer is an
+// echo server that answers with the same bytes in odd-sized writes. Empty, one byte, every byte value, a few chunks and a
+// multi-megabyte transfer all come back unchanged (the driver also checks what the peer received).
+fn close_with(take s: Socket, base: i64) -> i64 ! net, alloc
+  requires base >= 0 && base <= 1000000
+{
+  let e: i64 = net_error(s);
+  let r: Result<i64> = net_close(move s);
+  return base + e;
+}
+
+fn bytes_eq(s: Socket, expected: [u8]) -> bool ! alloc {
+  let got: [u8] = net_bytes(s);
+  if len(got) != len(expected) { return false; }
+  let mut i: i64 = 0;
+  while i < len(got)
+    invariant 0 <= i && i <= len(got)
+    decreases len(got) - i
+  {
+    if got[i] != expected[i] { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+fn echo_roundtrip(host: str, port: i64, data: [u8], expected: [u8]) -> i64 ! net, alloc
+  requires 1 <= port && port <= 65535
+{
+  let mut s: Socket = net_connect(host, port);
+  if !net_ok(s) { return close_with(move s, 100); }
+  s = net_set_timeout(move s, 20000);
+  if !net_ok(s) { return close_with(move s, 110); }
+  s = net_write_bytes(move s, data);
+  if !net_ok(s) { return close_with(move s, 200); }
+  s = net_shutdown_write(move s);
+  if !net_ok(s) { return close_with(move s, 210); }
+  s = net_read_all(move s);
+  if !net_ok(s) { return close_with(move s, 300); }
+  let same: bool = bytes_eq(s, expected);
+  let done: bool = net_eof(s) && !net_write_open(s);
+  let r: Result<i64> = net_close(move s);
+  if !same { return 1; }
+  if !done { return 2; }
+  match r {
+    Ok(v) => { return v; }
+    Err(code) => { return 400 + code; }
+  }
+}

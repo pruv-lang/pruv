@@ -28,18 +28,20 @@ compile, A2) and, since A3, the LLVM backend generates it too. The g10p_v_* root
 
 group g10_net_frontend (G10 net A0; backend null rows): tests/g10_net/frontend/*.pruv runs on both backends in
 default, no-verify, trust-callers and foreign-checks-off modes. Every root that uses a Socket, a Listener or a net_*
-operation type-checks and then stops at the A0 staging guard (pruvc exit 1, a codegen/unsupported_type diagnostic) on
-both backends in every mode; the roots in G10_NET_COMPILES use no such type or operation (a function that only declares
-`! net`) and generate code on both backends (exit 0). A2 / A3 replace the guard rows with real generation. The g10n_*
-roots are ordinary must_reject rows in default mode (the g10n_guard_* ones with the flags of their .json). Since A1
-the guard sits at the codegen entry, after verification: every frontend root that uses the net types must also verify
-completely before it reaches the guard (the roots state the catalog requires of net_connect / net_listen).
+operation type-checks and then, since A2, generates code on the Rust backend (exit 0; the generated Rust must compile,
+rustc --emit=metadata) and stops at the staging guard (pruvc exit 1, a codegen/unsupported_type diagnostic) on the llvm
+backend in every mode (A3 removes it); the roots in G10_NET_COMPILES use no such type or operation (a function that only
+declares `! net`) and generate code on both backends (exit 0). The g10n_*
+roots are ordinary must_reject rows in default mode (the g10n_guard_* ones with the flags and, since A2, the llvm backend
+of their .json). Since A1 the guard sits at the codegen entry, after verification: every frontend root that uses the net
+types must also verify completely before it reaches the guard (the roots state the catalog requires of net_connect /
+net_listen).
 
 group g10_net_proof (G10 net A1; backend null rows): tests/g10_net/proof/*.pruv runs on both backends in default and
-no-verify modes. Every program must verify completely (default mode) and then stops at the staging guard
-(pruvc exit 1, a codegen/unsupported_type diagnostic, no verify diagnostic) on both backends; with --no-verify the guard
-fires directly. A2 / A3 replace the guard rows with real generation. The g10n_v_* roots are ordinary must_reject rows
-(verify stage).
+no-verify modes. Every program must verify completely (default mode) and then, since A2, generates code on the Rust
+backend (the Rust must compile) and stops at the staging guard (pruvc exit 1, a codegen/unsupported_type diagnostic, no
+verify diagnostic) on the llvm backend; with --no-verify the same without the proof. The g10n_v_* roots are ordinary
+must_reject rows (verify stage).
 
 group runtime, G10 proc A2/A3: tests/runtime/g10p_r*.pruv (+ .rs driver, .json; both backends since A3, except
 g10p_r17_requires_catch, whose catch_unwind driver stays "backends": ["rust"]; every exit-0 spec sets g6_drop_balance). The runner compiles the
@@ -49,6 +51,14 @@ environment variable PRUV_PROC_CHILD; a g10p_ driver runs in a fresh temporary d
 lines of the generated Process runtime; without it the generated code contains none). A2 gate 12 (the Python and Rust
 compilers generate identical Rust) is covered by tests/diff_compilers.py --only runtime, which compares the generated
 bytes of every tests/runtime row with each compiler, the g10p rows included.
+
+group runtime, G10 net A2: tests/runtime/g10n_r*.pruv (+ .rs driver, .json; "backends": ["rust"] until A3 removes the llvm
+staging guard). The .rs driver starts its own loopback peers (std::net, 127.0.0.1 only) in threads and passes the port to
+the Pruv `pub fn`; there is no fixture program. The spec field "net_hook" (string) sets the compile-time
+PRUV_NET_TEST_HOOK (accept, read, write, shutdown: test-only fault lines of the generated Socket / Listener runtime;
+without it the generated code contains none). A g10n_ driver runs in the plain runtime environment. An optional json
+field "backend": "llvm" in a tests/must_reject/g10n_guard_*.json runs that sample on the llvm backend (the net staging
+guard, until A3).
 
 groups g5_frontend / g5_reject (G5 A0, inventory tests/g5/fixtures.json; rows have backend null): g5_frontend runs the roots of
 tests/g5/frontend (flat files and <name>/root.pruv projects, copied to a new directory first) in modes no-verify and default.
@@ -350,7 +360,18 @@ def must_reject_jobs():
                 flags = list(fl)
 
         def fn(f=f, flags=flags):
-            c = pruvc(f, os.path.join(WORK, "mr_%s.rs" % os.path.splitext(os.path.basename(f))[0]), flags)
+            stem = os.path.splitext(os.path.basename(f))[0]
+            jb = os.path.splitext(f)[0] + ".json"
+            llvm_backend = False   # G10 net A2: optional json "backend": "llvm" runs the sample on the llvm backend (the net staging guard)
+            if os.path.exists(jb):
+                try:
+                    llvm_backend = json.load(open(jb)).get("backend") == "llvm"
+                except (OSError, ValueError, AttributeError):
+                    llvm_backend = False
+            if llvm_backend:
+                c = pruvc_llvm(f, os.path.join(WORK, "mr_%s.ll" % stem), os.path.join(WORK, "mr_%s_llvm.rs" % stem), flags)
+            else:
+                c = pruvc(f, os.path.join(WORK, "mr_%s.rs" % stem), flags)
             ok = c.returncode == 1
             detail = "exit %d (expected 1) %s" % (c.returncode, c.stdout + c.stderr)
             jf = os.path.splitext(f)[0] + ".json"
@@ -696,8 +717,9 @@ G10_NET_COMPILES = ("net_only",)   # the only frontend roots that use no Socket 
 
 
 def g10_net_frontend_jobs(group="g10_net_frontend", subdir="frontend", modes=None):
-    """G10 net A0/A1: every root that uses Socket / Listener / net_* is rejected by the staging guard on both backends in
-    every mode (exit 1, stage=codegen code=unsupported_type), after the type check accepted it (A1: and after the
+    """G10 net A0/A1/A2: every root that uses Socket / Listener / net_* generates code on the Rust backend (A2: exit 0, and
+    the generated Rust compiles, rustc --emit=metadata) and is rejected by the staging guard on the llvm backend in every
+    mode (exit 1, stage=codegen code=unsupported_type; A3 removes it), after the type check accepted it (A1: and after the
     verifier proved it, so a verification error shows up as a missing guard diagnostic); the G10_NET_COMPILES roots
     generate code on both backends (exit 0)."""
     if modes is None:
@@ -719,6 +741,16 @@ def g10_net_frontend_jobs(group="g10_net_frontend", subdir="frontend", modes=Non
                             return False, "%s: exit %d (expected 0) %s" % (backend, c.returncode,
                                                                            (c.stdout + c.stderr)[-600:])
                         continue
+                    if backend == "rust":
+                        # A2: the Rust backend lowers Socket / Listener; the generated Rust must compile
+                        if c.returncode != 0:
+                            return False, "rust: exit %d (expected 0) %s" % (c.returncode, (c.stdout + c.stderr)[-600:])
+                        r = subprocess.run([RUSTC, "--crate-type=lib", "--emit=metadata", "--edition", "2021",
+                                            "--crate-name", "g10net_gen", out + ".rs", "-o", out + ".rmeta"],
+                                           capture_output=True, text=True, timeout=300)
+                        if r.returncode != 0:
+                            return False, "rustc: " + r.stderr[-600:]
+                        continue
                     diags = []
                     for line in c.stdout.splitlines():
                         try:
@@ -737,8 +769,9 @@ def g10_net_frontend_jobs(group="g10_net_frontend", subdir="frontend", modes=Non
 
 
 def g10_net_proof_jobs():
-    """G10 net A1: every tests/g10_net/proof root verifies completely (default mode) and then stops at the staging guard
-    (codegen/unsupported_type) on both backends; --no-verify: the guard fires directly."""
+    """G10 net A1/A2: every tests/g10_net/proof root verifies completely (default mode) and then generates code on the Rust
+    backend (the Rust must compile) and stops at the staging guard (codegen/unsupported_type) on the llvm backend;
+    --no-verify: the same without the proof."""
     return g10_net_frontend_jobs("g10_net_proof", "proof", (("default", []), ("no-verify", ["--no-verify"])))
 
 
@@ -1153,12 +1186,15 @@ def runtime_job(j, t, spec, flags, name, suffix, llvm):
                 return False, "rustc (extern %s): %s" % (xname, r.stderr[-400:])
             xflags += ["--rust-extern", "%s=%s" % (xname, rlib)]
             xlink += ["--extern", "%s=%s" % (xname, rlib)]
-        # compile-time test-only hooks: PRUV_G7_TEST_HOOK (spec "g7_hook"), PRUV_PROC_TEST_HOOK (spec "proc_hook", G10 proc A2)
+        # compile-time test-only hooks: PRUV_G7_TEST_HOOK (spec "g7_hook"), PRUV_PROC_TEST_HOOK (spec "proc_hook", G10 proc A2),
+        # PRUV_NET_TEST_HOOK (spec "net_hook", G10 net A2)
         hook_env = {}
         if spec.get("g7_hook"):
             hook_env["PRUV_G7_TEST_HOOK"] = spec["g7_hook"]
         if spec.get("proc_hook"):
             hook_env["PRUV_PROC_TEST_HOOK"] = spec["proc_hook"]
+        if spec.get("net_hook"):   # G10 net A2: PRUV_NET_TEST_HOOK (accept, read, write, shutdown)
+            hook_env["PRUV_NET_TEST_HOOK"] = spec["net_hook"]
         if llvm:
             key = t + suffix + "_llvm"
             ll = os.path.join(work, key + ".ll")

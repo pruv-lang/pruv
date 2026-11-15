@@ -1,0 +1,9 @@
+{
+  "backends": ["rust"],
+  "flags_matrix": [
+    ["--no-verify"],
+    ["--no-verify", "--foreign-checks", "all"]
+  ],
+  "exit": 0,
+  "stdout_contains": "survived"
+}

@@ -1,0 +1,54 @@
+// G10 net A2 gate 9 (fault path, spec "net_hook": "accept"): a failing accept returns an empty failed socket with error 5
+// (write closed, no bytes, no EOF) without blocking; it must still be closed and net_close returns Err(5). net_accept
+// borrows the listener, so the listener is unchanged by the failure: it is still ok and has the same port, and it can
+// try again (and fail again).
+
+// 0 for Ok(0), the error code of Err
+fn close_code(take s: Socket) -> i64 ! net, alloc {
+  let r: Result<i64> = net_close(move s);
+  match r {
+    Ok(v) => { return 0; }
+    Err(code) => { return code; }
+  }
+}
+
+fn lclose_code(take l: Listener) -> i64 ! net, alloc {
+  let r: Result<i64> = net_listener_close(move l);
+  match r {
+    Ok(v) => { return 0; }
+    Err(code) => { return code; }
+  }
+}
+
+fn accept_fault(host: str) -> i64 ! net, alloc {
+  let l: Listener = net_listen(host, 0);
+  if !net_listener_ok(l) {
+    let c0: i64 = lclose_code(move l);
+    return 100;
+  }
+  let port: i64 = net_listener_port(l);
+
+  let a: Socket = net_accept(l);
+  let alive: bool = net_ok(a);
+  let e: i64 = net_error(a);
+  let open: bool = net_write_open(a);
+  let clean: bool = net_size(a) == 0 && !net_eof(a);
+  let ca: i64 = close_code(move a);
+
+  // the listener is untouched and can accept again
+  let b: Socket = net_accept(l);
+  let e2: i64 = net_error(b);
+  let cb: i64 = close_code(move b);
+
+  let same: bool = net_listener_ok(l) && net_listener_port(l) == port;
+  let cl: i64 = lclose_code(move l);
+  if alive { return 1; }
+  if e != 5 { return 2; }
+  if open || !clean { return 3; }
+  if e2 != 5 { return 4; }
+  if !same { return 5; }
+  if ca != 5 { return 6; }
+  if cb != 5 { return 7; }
+  if cl != 0 { return 8; }
+  return 0;
+}

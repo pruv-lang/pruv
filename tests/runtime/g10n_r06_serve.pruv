@@ -1,0 +1,50 @@
+// G10 net A2 gates 1 and 4: the listening side. A finite accept budget serves clients that the driver starts as threads of
+// its own: each round accepts (net_accept borrows the listener, so it serves every round), sets a timeout, reads to the
+// client's half-close, echoes the bytes back and closes the accepted socket; the helper hands the listener back and the
+// caller closes it.
+fn serve(take input: Listener, rounds: i64) -> Listener ! net, alloc
+  requires net_listener_ok(input)
+  requires 0 <= rounds && rounds <= 1000000
+{
+  let mut l: Listener = move input;
+  let mut remaining: i64 = rounds;
+
+  while remaining > 0 && net_listener_ok(l)
+    invariant 0 <= remaining && remaining <= rounds
+    invariant net_listener_ok(l)
+    decreases remaining
+  {
+    let mut s: Socket = net_accept(l);
+    if net_ok(s) {
+      s = net_set_timeout(move s, 20000);
+      if net_ok(s) {
+        s = net_read_all(move s);
+      }
+      if net_ok(s) && net_write_open(s) {
+        let got: [u8] = net_bytes(s);
+        s = net_write_bytes(move s, got);
+      }
+    }
+    let r: Result<i64> = net_close(move s);
+    remaining = remaining - 1;
+  }
+
+  return move l;
+}
+
+fn serve_n(host: str, port: i64, rounds: i64) -> i64 ! net, alloc
+  requires 0 <= port && port <= 65535
+  requires 0 <= rounds && rounds <= 1000000
+{
+  let l: Listener = net_listen(host, port);
+  if !net_listener_ok(l) {
+    let r0: Result<i64> = net_listener_close(move l);
+    return 100;
+  }
+  let served: Listener = serve(move l, rounds);
+  let r: Result<i64> = net_listener_close(move served);
+  match r {
+    Ok(v) => { return v; }
+    Err(code) => { return 200 + code; }
+  }
+}

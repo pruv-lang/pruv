@@ -98,6 +98,8 @@ class ForeignGen:
             return s._file_text(op, name)
         if op.startswith("proc_"):
             return s._proc_text(op, name)
+        if op.startswith("net_"):
+            return s._net_text(op, name)
         STRING = "::std::string::String"
         if op in ("vec_new", "vec_push", "vec_get"):
             T = rty(low[0])
@@ -355,6 +357,136 @@ class ForeignGen:
                      "let pruv_r: i64 = pruv_b[pruv_k] as i64;"]
             body += s._ens("0 <= pruv_r && pruv_r <= 255", "0 <= result && result <= 255")
             return s._fn(name, "p: &%s, stream: i64, i: i64" % P, "i64", body + ["pruv_r"])
+        raise Exception("codegen: unknown catalog operation %s" % op)
+
+    def _net_text(s, op, name):
+        """G10 net A2: thin helpers over the Socket / Listener runtime (codegen.NET_PRELUDE). Failure stays in the owned handle;
+        runtime requires follow --foreign-checks, the ensures (mode all) re-check the public state of the result."""
+        S, L = "pruv_Socket", "pruv_Listener"
+        RES = "::std::result::Result<i64, i64>"
+        VEC = "::std::vec::Vec<u8>"
+        # mode all: the entry state the preservation ensures compare against
+        snap = []
+        if s.ens:
+            snap = ["pruv_g6_charge(&mut pruv_budget, s.buf.len());",
+                    "let pruv_sb: ::std::vec::Vec<u8> = s.buf.clone();",
+                    "let pruv_se: bool = s.eof;",
+                    "let pruv_sw: bool = s.write_open;"]
+        keep = "pruv_r.eof == pruv_se && pruv_r.buf == pruv_sb"
+        # the reads replace the buffer: only the flags are compared, no buffer copy is charged
+        snap_flags = snap[2:]
+        if op == "net_listen":
+            body = s._req("port >= 0 && port <= 65535", "0 <= port && port <= 65535")
+            body += ["let pruv_r: %s = pruv_net_listen(host, port);" % L]
+            body += s._ens("pruv_net_lwf(&pruv_r)",
+                           "lok(result) && 1 <= port(result) && port(result) <= 65535 || !lok(result) && port(result) == 0")
+            return s._fn(name, "host: &str, port: i64", L, body + ["pruv_r"])
+        if op == "net_accept":
+            body = s._req("l.error == 0", "lok(l)")
+            body += ["let pruv_r: %s = pruv_net_accept(l);" % S]
+            body += s._ens("(if pruv_r.error == 0 { pruv_r.write_open } else { pruv_r.error == 5 }) && pruv_net_wf(&pruv_r) && "
+                           "pruv_r.buf.is_empty() && !pruv_r.eof",
+                           "ok(result) && open(result) || err(result) == 5, empty buffer, EOF false")
+            return s._fn(name, "l: &%s" % L, S, body + ["pruv_r"])
+        if op == "net_listener_close":
+            body = ["let pruv_r: %s = pruv_net_lclose(l);" % RES]
+            body += s._ens("match pruv_r { Ok(pruv_v) => pruv_v == 0, Err(pruv_e) => pruv_e >= 1 && pruv_e <= 2 }",
+                           "Ok(0) or Err carries a listener error code 1..2")
+            return s._fn(name, "l: %s" % L, RES, body + ["pruv_r"])
+        if op == "net_connect":
+            body = s._req("port >= 1 && port <= 65535", "1 <= port && port <= 65535")
+            body += ["let pruv_r: %s = pruv_net_connect(host, port);" % S]
+            body += s._ens("(if pruv_r.error == 0 { pruv_r.write_open } else { pruv_r.error == 1 || pruv_r.error == 2 }) && "
+                           "pruv_net_wf(&pruv_r) && pruv_r.buf.is_empty() && !pruv_r.eof",
+                           "ok(result) && open(result) || err(result) == 1 || err(result) == 2, empty buffer, EOF false")
+            return s._fn(name, "host: &str, port: i64", S, body + ["pruv_r"])
+        if op in ("net_write_str", "net_write_bytes"):
+            text = op == "net_write_str"
+            body = s._req("s.error == 0 && s.write_open", "ok(s) && open(s)")
+            body += snap
+            body += ["let pruv_r: %s = pruv_net_write(s, %s);" % (S, "text.as_bytes()" if text else "data")]
+            body += s._ens("(pruv_r.error == 0 || pruv_r.error == 4 || pruv_r.error == 6) && pruv_net_wf(&pruv_r)",
+                           "ok(result) || err(result) == 4 || err(result) == 6")
+            body += s._ens("pruv_r.error != 0 || (pruv_r.write_open == pruv_sw && %s)" % keep,
+                           "write-open, buffer and EOF preserved")
+            return s._fn(name, "s: %s, %s" % (S, "text: &str" if text else "data: &[u8]"), S, body + ["pruv_r"])
+        if op == "net_shutdown_write":
+            body = s._req("s.error == 0 && s.write_open", "ok(s) && open(s)")
+            body += snap
+            body += ["let pruv_r: %s = pruv_net_shutdown(s);" % S]
+            body += s._ens("!pruv_r.write_open && (pruv_r.error == 0 || (pruv_r.error == 4 && pruv_net_wf(&pruv_r)))",
+                           "!open(result) && (ok(result) || err(result) == 4)")
+            body += s._ens("pruv_r.error != 0 || (%s)" % keep, "buffer and EOF preserved")
+            return s._fn(name, "s: %s" % S, S, body + ["pruv_r"])
+        if op == "net_set_timeout":
+            body = s._req("s.error == 0", "ok(s)")
+            body += s._req("ms >= 0 && ms <= 86400000", "0 <= ms && ms <= 86400000")
+            body += snap
+            body += ["let pruv_r: %s = pruv_net_set_timeout(s, ms);" % S]
+            body += s._ens("pruv_r.error == 0 || (pruv_r.error == 4 && pruv_net_wf(&pruv_r))", "ok(result) || err(result) == 4")
+            body += s._ens("pruv_r.error != 0 || (pruv_r.write_open == pruv_sw && %s)" % keep,
+                           "write-open, buffer and EOF preserved")
+            return s._fn(name, "s: %s, ms: i64" % S, S, body + ["pruv_r"])
+        if op == "net_read":
+            body = s._req("s.error == 0", "ok(s)")
+            body += s._req("0 < max && max <= (1i64 << 40)", "0 < max && max <= 2^40")
+            body += snap_flags
+            body += ["let pruv_r: %s = pruv_net_read(s, max);" % S]
+            body += s._ens("(pruv_r.error == 0 || pruv_r.error == 3 || pruv_r.error == 6) && pruv_net_wf(&pruv_r)",
+                           "ok(result) || err(result) == 3 || err(result) == 6")
+            body += s._ens("pruv_r.error != 0 || ((pruv_r.buf.len() as u64) <= (max as u64) && pruv_r.eof == pruv_r.buf.is_empty() && "
+                           "pruv_r.write_open == pruv_sw && (!pruv_se || pruv_r.buf.is_empty()))",
+                           "size(result) <= max && eof(result) == (size(result) == 0), write-open preserved")
+            return s._fn(name, "s: %s, max: i64" % S, S, body + ["pruv_r"])
+        if op == "net_read_all":
+            body = s._req("s.error == 0", "ok(s)")
+            body += snap_flags
+            body += ["let pruv_r: %s = pruv_net_read_all(s);" % S]
+            body += s._ens("(pruv_r.error == 0 && pruv_r.eof && pruv_r.write_open == pruv_sw) || "
+                           "((pruv_r.error == 3 || pruv_r.error == 6) && pruv_net_wf(&pruv_r))",
+                           "ok(result) && eof(result) || err(result) == 3 || err(result) == 6")
+            return s._fn(name, "s: %s" % S, S, body + ["pruv_r"])
+        if op == "net_bytes":
+            body = ["let pruv_r: %s = s.buf.clone();" % VEC]
+            body += s._ens("pruv_r[..] == s.buf[..]", "result is the public buffer")
+            return s._fn(name, "s: &%s" % S, VEC, body + ["pruv_r"])
+        if op == "net_close":
+            body = ["let pruv_r: %s = pruv_net_close(s);" % RES]
+            body += s._ens("match pruv_r { Ok(pruv_v) => pruv_v == 0, Err(pruv_e) => pruv_e >= 1 && pruv_e <= 6 }",
+                           "Ok(0) or Err carries an error code 1..6")
+            return s._fn(name, "s: %s" % S, RES, body + ["pruv_r"])
+        if op == "net_ok":
+            return s._fn(name, "s: &%s" % S, "bool", ["s.error == 0"])
+        if op == "net_write_open":
+            return s._fn(name, "s: &%s" % S, "bool", ["s.write_open"])
+        if op == "net_eof":
+            return s._fn(name, "s: &%s" % S, "bool", ["s.eof"])
+        if op == "net_error":
+            body = ["let pruv_r: i64 = s.error;"]
+            body += s._ens("0 <= pruv_r && pruv_r <= 6", "0 <= result && result <= 6")
+            return s._fn(name, "s: &%s" % S, "i64", body + ["pruv_r"])
+        if op == "net_size":
+            body = ["let pruv_r: i64 = s.buf.len() as i64;"]
+            body += s._ens("0 <= pruv_r && (pruv_r as u64) <= (1u64 << 40)", "0 <= result && result <= 2^40")
+            return s._fn(name, "s: &%s" % S, "i64", body + ["pruv_r"])
+        if op == "net_byte":
+            cond = "i >= 0 && (i as u64) < (s.buf.len() as u64)"
+            body = s._req(cond, "0 <= i && i < net_size(s)")
+            body += ["let pruv_k: usize = if %s { i as usize } else { pruv_g6_repr(\"index\") };" % cond,
+                     "let pruv_r: i64 = s.buf[pruv_k] as i64;"]
+            body += s._ens("0 <= pruv_r && pruv_r <= 255", "0 <= result && result <= 255")
+            return s._fn(name, "s: &%s, i: i64" % S, "i64", body + ["pruv_r"])
+        if op == "net_listener_ok":
+            return s._fn(name, "l: &%s" % L, "bool", ["l.error == 0"])
+        if op == "net_listener_error":
+            body = ["let pruv_r: i64 = l.error;"]
+            body += s._ens("0 <= pruv_r && pruv_r <= 2", "0 <= result && result <= 2")
+            return s._fn(name, "l: &%s" % L, "i64", body + ["pruv_r"])
+        if op == "net_listener_port":
+            body = ["let pruv_r: i64 = l.port;"]
+            body += s._ens("(l.error == 0 && pruv_r >= 1 && pruv_r <= 65535) || (l.error != 0 && pruv_r == 0)",
+                           "ok implies 1 <= result && result <= 65535; failed implies result == 0")
+            return s._fn(name, "l: &%s" % L, "i64", body + ["pruv_r"])
         raise Exception("codegen: unknown catalog operation %s" % op)
 
     # ------------------------------------------------------------------ contract-only scan (requires)

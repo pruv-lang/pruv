@@ -1,0 +1,10 @@
+{
+  "backends": ["rust"],
+  "g6_drop_balance": true,
+  "flags_matrix": [
+    ["--no-verify"],
+    ["--no-verify", "--foreign-checks", "all"]
+  ],
+  "exit": 0,
+  "stdout_contains": "no repeats"
+}

@@ -1,0 +1,20 @@
+// G10 net A2 gate 3: a connect to the port of a closed listener is error 2; an empty host and a NUL in the host are error 1
+// (checked before any OS call). A failed handle is empty (write closed, no bytes, no EOF), must still be closed, and its
+// close returns the same error as Err. The control case (a listener that is alive) connects with no error.
+fn connect_error(host: str, port: i64) -> i64 ! net, alloc
+  requires 1 <= port && port <= 65535
+{
+  let s: Socket = net_connect(host, port);
+  let e: i64 = net_error(s);
+  let clean: bool = !net_write_open(s) && net_size(s) == 0 && !net_eof(s);
+  let r: Result<i64> = net_close(move s);
+  if e == 0 { return 0; }
+  if !clean { return 100 + e; }
+  match r {
+    Ok(v) => { return 300; }
+    Err(code) => {
+      if code != e { return 400 + code; }
+      return e;
+    }
+  }
+}

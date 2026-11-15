@@ -369,8 +369,8 @@ pub fn catalog_fn(name: &str) -> Option<CatFn> {
             tparams: vec![],
         },
         // G10 net (docs/G10_NET_SPEC.md 2.3): signatures and effects. Since A1 the section 2.3 / 2.4 / 4 contracts are
-        // encoded for every net_* operation by symbolic.rs `net_call` (pruv-proof); a program that uses Socket /
-        // Listener is verified and then stops at the staging guard at the codegen entry (first_net_use).
+        // encoded for every net_* operation by symbolic.rs `net_call` (pruv-proof). A2: the Rust source backend lowers
+        // Socket / Listener (codegen.rs NET_PRELUDE); the staging guard (first_net_use) stays for the LLVM backend until A3.
         "net_listen" => CatFn { requires: vec![], ensures: vec![],
             params: vec![p("host", GType::str(), false), p("port", GType::i64(), false)],
             ret: listener_t(),

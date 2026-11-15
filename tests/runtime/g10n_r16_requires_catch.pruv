@@ -1,0 +1,132 @@
+// G10 net A2 gate 11 (--no-verify only: every function here violates a requires on purpose): the runtime requires checks of
+// the Socket and Listener operations panic with `pruv: foreign requires violated: <op>: ...` (the driver catches each
+// panic and checks the message). An OS failure (a refused connect, a bad host) is an ordinary error value and never panics.
+fn start(host: str, port: i64) -> Socket ! net, alloc {
+  return net_connect(host, port);
+}
+
+fn finish(take s: Socket) -> i64 ! net, alloc {
+  let r: Result<i64> = net_close(move s);
+  match r {
+    Ok(v) => { return v; }
+    Err(code) => { return 1000 + code; }
+  }
+}
+
+fn write_str_after_shutdown(host: str, port: i64) -> i64 ! net, alloc {
+  let mut s: Socket = start(host, port);
+  s = net_shutdown_write(move s);
+  s = net_write_str(move s, "x");
+  return finish(move s);
+}
+
+fn write_bytes_after_shutdown(host: str, port: i64, data: [u8]) -> i64 ! net, alloc {
+  let mut s: Socket = start(host, port);
+  s = net_shutdown_write(move s);
+  s = net_write_bytes(move s, data);
+  return finish(move s);
+}
+
+fn shutdown_twice(host: str, port: i64) -> i64 ! net, alloc {
+  let mut s: Socket = start(host, port);
+  s = net_shutdown_write(move s);
+  s = net_shutdown_write(move s);
+  return finish(move s);
+}
+
+fn read_zero_max(host: str, port: i64) -> i64 ! net, alloc {
+  let mut s: Socket = start(host, port);
+  s = net_read(move s, 0);
+  return finish(move s);
+}
+
+fn read_huge_max(host: str, port: i64) -> i64 ! net, alloc {
+  let mut s: Socket = start(host, port);
+  s = net_read(move s, 1099511627777);
+  return finish(move s);
+}
+
+fn timeout_negative(host: str, port: i64) -> i64 ! net, alloc {
+  let mut s: Socket = start(host, port);
+  s = net_set_timeout(move s, -1);
+  return finish(move s);
+}
+
+fn timeout_huge(host: str, port: i64) -> i64 ! net, alloc {
+  let mut s: Socket = start(host, port);
+  s = net_set_timeout(move s, 86400001);
+  return finish(move s);
+}
+
+fn byte_out_of_range(host: str, port: i64) -> i64 ! net, alloc {
+  let s: Socket = start(host, port);
+  let b: i64 = net_byte(s, 0);
+  return finish(move s);
+}
+
+fn read_failed_handle(host: str, port: i64) -> i64 ! net, alloc {
+  let mut s: Socket = start(host, port);
+  s = net_read(move s, 10);
+  return finish(move s);
+}
+
+fn read_all_failed_handle(host: str, port: i64) -> i64 ! net, alloc {
+  let mut s: Socket = start(host, port);
+  s = net_read_all(move s);
+  return finish(move s);
+}
+
+fn write_failed_handle(host: str, port: i64) -> i64 ! net, alloc {
+  let mut s: Socket = start(host, port);
+  s = net_write_str(move s, "x");
+  return finish(move s);
+}
+
+fn shutdown_failed_handle(host: str, port: i64) -> i64 ! net, alloc {
+  let mut s: Socket = start(host, port);
+  s = net_shutdown_write(move s);
+  return finish(move s);
+}
+
+fn timeout_failed_handle(host: str, port: i64) -> i64 ! net, alloc {
+  let mut s: Socket = start(host, port);
+  s = net_set_timeout(move s, 100);
+  return finish(move s);
+}
+
+fn connect_port_zero(host: str) -> i64 ! net, alloc {
+  let s: Socket = start(host, 0);
+  return finish(move s);
+}
+
+fn connect_port_big(host: str) -> i64 ! net, alloc {
+  let s: Socket = start(host, 65536);
+  return finish(move s);
+}
+
+fn listen_port_negative(host: str) -> i64 ! net, alloc {
+  let l: Listener = net_listen(host, -1);
+  let r: Result<i64> = net_listener_close(move l);
+  return 0;
+}
+
+fn listen_port_big(host: str) -> i64 ! net, alloc {
+  let l: Listener = net_listen(host, 65536);
+  let r: Result<i64> = net_listener_close(move l);
+  return 0;
+}
+
+fn accept_failed_listener(host: str) -> i64 ! net, alloc {
+  let l: Listener = net_listen("", 0);
+  let s: Socket = net_accept(l);
+  let r: Result<i64> = net_listener_close(move l);
+  return finish(move s);
+}
+
+// not a violation: a refused connect is error 2 and net_close returns it as Err: 2 * 1000 + (1000 + 2)
+fn os_failure(host: str, port: i64) -> i64 ! net, alloc {
+  let s: Socket = start(host, port);
+  let e: i64 = net_error(s);
+  let r: i64 = finish(move s);
+  return e * 1000 + r;
+}

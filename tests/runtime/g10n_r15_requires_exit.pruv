@@ -1,0 +1,22 @@
+// G10 net A2 gate 11 (--no-verify only: the second function violates a requires on purpose): an uncaught runtime requires
+// violation ends the process with exit code 101 and the `pruv: foreign requires violated:` prefix; an OS failure before it
+// (a refused connect) is an ordinary value (no panic).
+fn os_failure(host: str, port: i64) -> i64 ! net, alloc {
+  let s: Socket = net_connect(host, port);
+  let e: i64 = net_error(s);
+  let r: Result<i64> = net_close(move s);
+  match r {
+    Ok(v) => { return 1000 + v; }
+    Err(code) => { return e * 1000 + code; }
+  }
+}
+
+fn bad_read(host: str, port: i64) -> i64 ! net, alloc {
+  let mut s: Socket = net_connect(host, port);
+  s = net_read(move s, 10);
+  let r: Result<i64> = net_close(move s);
+  match r {
+    Ok(v) => { return v; }
+    Err(code) => { return 1000 + code; }
+  }
+}
