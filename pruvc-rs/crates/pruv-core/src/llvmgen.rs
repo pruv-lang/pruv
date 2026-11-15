@@ -548,6 +548,8 @@ pub struct Mod {
     pub g6_v2: bool,
     /// P3 M3: some string_to_str takes the String buffer (pruv_g6_v1_string_take)
     pub g6_take: bool,
+    /// P3 M5: trusted String functions lowered through the unboxed adapter <f>__str (sorted by name)
+    pub g6_unbox: BTreeSet<String>,
     /// G6 A3: some function references @pruv_g6_bridge_v1
     pub g6_bridge: bool,
     /// G9 A3: types whose runtime-contract size / equality helpers are needed
@@ -583,6 +585,7 @@ impl Mod {
             g6_decls: BTreeMap::new(),
             g6_v2: false,
             g6_take: false,
+            g6_unbox: BTreeSet::new(),
             g6_bridge: false,
             need_size: BTreeSet::new(),
             need_eq: BTreeSet::new(),
@@ -780,6 +783,8 @@ pub struct FnGen<'a> {
     ret_take: HashSet<String>,
     /// P3 M3: the String local the let / assignment being lowered takes (take_src)
     take_let: HashSet<String>,
+    /// P3 M5: the let being lowered binds an unboxed String local (unbox_let)
+    unbox_next: bool,
 }
 
 impl<'a> FnGen<'a> {
@@ -821,6 +826,7 @@ impl<'a> FnGen<'a> {
             moving: HashSet::new(),
             ret_take: HashSet::new(),
             take_let: HashSet::new(),
+            unbox_next: false,
         }
     }
 
@@ -1203,12 +1209,14 @@ impl<'a> FnGen<'a> {
     /// P3 M3: `name` is an owned local String (not a parameter, not borrowed): string_to_str of it may take the buffer
     fn takeable(&self, name: &str) -> bool {
         let Ok(Bind::Slot(x)) = self.lookup(name) else { return false };
-        if x.k != Kind::Coll || !self.owned_slot(&x) {
+        if !self.owned_slot(&x) {
             return false;
         }
-        match &x.ty {
-            Some(t) if crate::emit_common::key_name(t) == "string" => {}
-            _ => return false,
+        let is_string = x.k == Kind::Coll && matches!(&x.ty, Some(t) if crate::emit_common::key_name(t) == "string");
+        // P3 M5: an unboxed String local is an owned str array slot
+        let is_str = x.k == Kind::Arr && x.ty.as_deref() == Some(STR);
+        if !(is_string || is_str) {
+            return false;
         }
         // scope 0 holds the owned (take) parameters
         !self.scopes.first().is_some_and(|sc| sc.arrays.iter().any(|y| y.a == x.a))
@@ -1283,6 +1291,84 @@ impl<'a> FnGen<'a> {
         }
         out.insert(x.name.clone());
         out
+    }
+
+    /// P3 M5: every occurrence of `name` in the expression e is len(name) or string_to_str(name) (code only)
+    fn unbox_uses(name: &str, e: &Expr, contract: bool) -> bool {
+        match e {
+            Expr::Var(v) => return v.name != name,
+            Expr::Move(v) => return v.name != name,
+            Expr::Quant(q) if q.var == name => return false,
+            Expr::Call(c) => {
+                if c.name == name {
+                    return false;
+                }
+                if (c.name == "len" || c.name == "string_to_str") && c.args.len() == 1 {
+                    if let Expr::Var(v) = &c.args[0] {
+                        if v.name == name {
+                            return !contract;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        crate::refine::kids(e).into_iter().all(|k| Self::unbox_uses(name, k, contract))
+    }
+
+    /// P3 M5: no statement of the block (nested blocks included) binds, assigns or uses `name` other than through
+    /// len(name) / string_to_str(name); a contract expression (assert, loop invariant / decreases) never names it
+    fn unbox_block(name: &str, stmts: &[Stmt]) -> bool {
+        for st in stmts {
+            let ok = match st {
+                Stmt::Let(x) => x.name != name && Self::unbox_uses(name, &x.value, false),
+                Stmt::Assign(x) => x.name != name && Self::unbox_uses(name, &x.value, false),
+                Stmt::FieldAssign(x) => x.name != name && Self::unbox_uses(name, &x.value, false),
+                Stmt::IndexAssign(x) => {
+                    x.name != name && Self::unbox_uses(name, &x.index, false) && Self::unbox_uses(name, &x.value, false)
+                }
+                Stmt::If(x) => {
+                    Self::unbox_uses(name, &x.cond, false) && Self::unbox_block(name, &x.then) && Self::unbox_block(name, &x.els)
+                }
+                Stmt::While(x) => {
+                    Self::unbox_uses(name, &x.cond, false)
+                        && x.invariants.iter().all(|i| Self::unbox_uses(name, i, true))
+                        && Self::unbox_uses(name, &x.decreases, true)
+                        && Self::unbox_block(name, &x.body)
+                }
+                Stmt::Return(x) => x.value.as_ref().map_or(true, |v| Self::unbox_uses(name, v, false)),
+                Stmt::Assert(x) => Self::unbox_uses(name, &x.cond, true),
+                Stmt::ExprStmt(x) => Self::unbox_uses(name, &x.expr, false),
+                Stmt::Par(x) => x.calls.iter().all(|c| Self::unbox_uses(name, c, false)),
+                Stmt::Match(x) => {
+                    Self::unbox_uses(name, &x.scrutinee, false)
+                        && x.arms.iter().all(|a| !a.binders.iter().any(|b| b == name) && Self::unbox_block(name, &a.body))
+                }
+            };
+            if !ok {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// P3 M5: `let x: String = f(args)` with a trusted foreign f returning String (not a catalog op, not cost mode)
+    /// whose name is, in the rest of the block, only measured (len) or converted (string_to_str): x is kept as an owned
+    /// str array filled by the adapter pruv_g6_v1_<f>__str, with no String box
+    fn unbox_let(&self, x: &Let, rest: &[Stmt]) -> bool {
+        if self.cost || crate::emit_common::key_name(&x.ty) != "string" {
+            return false;
+        }
+        let Expr::Call(c) = &x.value else { return false };
+        let Some(f) = self.funcs.get(&c.name) else { return false };
+        if f.foreign.is_none()
+            || crate::foreign::is_catalog(&c.name)
+            || !is_collection(&f.ret)
+            || crate::emit_common::key_name(&f.ret) != "string"
+        {
+            return false;
+        }
+        Self::unbox_block(&x.name, rest)
     }
 
     /// P3 (the LLVM form of the Rust backend's return_movable / consuming match): a return is the last use of every
@@ -2088,6 +2174,7 @@ impl<'a> FnGen<'a> {
             if let Some(fr) = self.frames.last_mut() {
                 fr.1 = std::mem::take(&mut later[i + 1]);
             }
+            self.unbox_next = matches!(s, Stmt::Let(l) if self.unbox_let(l, &stmts[i + 1..]));
             self.stmt(s)?;
             if let Stmt::Let(l) = s {
                 if let Some(fr) = self.frames.last_mut() {
@@ -2285,6 +2372,35 @@ impl<'a> FnGen<'a> {
                 self.store(&sl, &v)?;
                 let sc = self.scopes.last_mut().ok_or_else(|| IDX_ERR.to_string())?;
                 sc.names.insert(x.name.clone(), Bind::Slot(sl));
+                self.end_temps()
+            }
+            Stmt::Let(x) if self.unbox_next => {
+                // P3 M5: an unboxed String local: the adapter fills an owned str array (null, 0 when empty), no box
+                self.unbox_next = false;
+                self.begin_temps();
+                let Expr::Call(c) = &x.value else { return Err(IDX_ERR.to_string()) };
+                let f = self.funcs[&c.name];
+                let mut args: Vec<(String, String)> = Vec::new();
+                for a in &c.args {
+                    let v = self.ev(a, false)?;
+                    args.extend(self.g6_arg(&v)?);
+                }
+                let d = self.g6_out("ptr");
+                let l = self.g6_out("i64");
+                self.m.g6_unbox.insert(f.name.clone());
+                self.m.g6_v2 = true;
+                args.push(("ptr".to_string(), d.clone()));
+                args.push(("ptr".to_string(), l.clone()));
+                self.g6_call(&crate::foreign_shim::unbox_adapter_sym(&f.name), "void", &args)?;
+                let dp = self.op(format!("load ptr, ptr {}", d))?;
+                let ln = self.op(format!("load i64, ptr {}", l))?;
+                let sl = self.new_slot(&x.name, STR);
+                let mut rv = V::with_b(Kind::Arr, dp, ln);
+                rv.ty = Some(STR.to_string());
+                self.store(&sl, &rv)?;
+                let sc = self.scopes.last_mut().ok_or_else(|| IDX_ERR.to_string())?;
+                sc.names.insert(x.name.clone(), Bind::Slot(sl.clone()));
+                sc.arrays.push(sl);
                 self.end_temps()
             }
             Stmt::Let(x) => {
@@ -3024,6 +3140,31 @@ impl<'a> FnGen<'a> {
                 return Ok(V::new(Kind::I64, r));
             }
             return Ok(V::new(Kind::I64, x.b));
+        }
+        if n == "string_to_str" && !self.funcs.contains_key(n) {
+            // P3 M5: string_to_str of an unboxed String local (an owned str array): move it out in a take position
+            // (M3 conditions), else copy it; the other paths free the array with the scope
+            if let Some(Expr::Var(x)) = a.first() {
+                if let Ok(Bind::Slot(sl)) = self.lookup(&x.name) {
+                    if sl.k == Kind::Arr {
+                        self.m.g6_v2 = true;
+                        let v = self.ev(&a[0], false)?;
+                        if !self.cost && self.ret_take.contains(&x.name) {
+                            self.ret_moved.insert(sl.a.clone(), None); // the return's cleanup skips the slot
+                            return self.temp_arr(v, owned);
+                        }
+                        if !self.cost && self.take_let.contains(&x.name) {
+                            self.ins(format!("store ptr null, ptr {}", sl.a))?;
+                            self.ins(format!("store i64 0, ptr {}", sl.b))?;
+                            return self.temp_arr(v, owned);
+                        }
+                        let p = self.op(format!("call ptr @pruv_copy_v2(ptr {}, i64 {}, i64 1, i64 1)", v.a, v.b))?;
+                        let mut rv = V::with_b(Kind::Arr, p, v.b.clone());
+                        rv.ty = Some(STR.to_string());
+                        return self.temp_arr(rv, owned);
+                    }
+                }
+            }
         }
         if crate::foreign::is_catalog(n) && !crate::foreign::is_catalog_contract_only(n) && !self.funcs.contains_key(n) {
             // G6 A3: reserved names
@@ -5626,7 +5767,7 @@ fn gen_llvm_body(
         ir.push_str(&m.par_trampolines.join("\n"));
     }
     let mut shim = if is_g6 {
-        Some(crate::foreign_shim::build_shim(prog, verified, trust_callers, budget, foreign_checks, m.g6_take)?)
+        Some(crate::foreign_shim::build_shim(prog, verified, trust_callers, budget, foreign_checks, m.g6_take, &m.g6_unbox.iter().cloned().collect::<Vec<String>>())?)
     } else {
         None
     };

@@ -341,6 +341,7 @@ class Mod:
         s.g6_decls = {}         # G6 A3: shim symbol -> declare line
         s.g6_v2 = False         # G6 A3: string_to_str needs the v2 copy/free declarations
         s.g6_take = False       # P3 M3: some string_to_str takes the String buffer (pruv_g6_v1_string_take)
+        s.g6_unbox = set()      # P3 M5: trusted String functions lowered through the unboxed adapter <f>__str
         s.g6_bridge = False     # G6 A3: some function references @pruv_g6_bridge_v1
         s.bswap = set()         # P2 batch 4: widths of the llvm.bswap declarations the byte-word accesses used
         s.shrink = False        # P2 batch 4: some in-place `return truncate` calls @pruv_shrink_v2
@@ -437,6 +438,7 @@ class FnGen:
         s.moving = set()    # P3: names the copy of the let / assignment being lowered moves (move_src)
         s.ret_take = set()  # P3 M3: String locals whose string_to_str in the return result position takes the buffer
         s.take_let = set()  # P3 M3: String local the let / assignment being lowered takes (take_src)
+        s.unbox_st = None   # P3 M5: the let being lowered binds an unboxed String local (unbox_let)
         s.cenv = {}
         s.cregions = []     # G9: constructor temporaries of the contract expression being evaluated, per region
         s.tt = m.tt
@@ -777,8 +779,10 @@ class FnGen:
             kind, x = s.lookup(name)
         except Exception:
             return False
-        if kind != "slot" or x.k != "coll" or x.ty.name != "string" or not s.owned_slot(x):
+        if kind != "slot" or not s.owned_slot(x):
             return False
+        if not ((x.k == "coll" and x.ty.name == "string") or (x.k == "arr" and x.ty is not None and x.ty.name == "str")):
+            return False    # P3 M5: an unboxed String local is an owned str array slot
         return not any(x is y for y in s.scopes[0]["arrays"])     # scope 0 holds the owned (take) parameters
 
     def ret_takable(s, e):
@@ -817,6 +821,74 @@ class FnGen:
         if not isinstance(x, Var) or x.name == st.name or not s.dead_after(x.name) or not s.takeable(x.name):
             return set()
         return {x.name}
+
+    def unbox_uses(s, name, e, contract=False):
+        """P3 M5: every occurrence of `name` in the expression e is len(name) or string_to_str(name) (code only)"""
+        if isinstance(e, (Var, Move)):
+            return e.name != name
+        if isinstance(e, Quant) and e.var == name:
+            return False
+        if isinstance(e, Call):
+            if e.name == name:
+                return False
+            if (e.name in ("len", "string_to_str") and len(e.args) == 1 and isinstance(e.args[0], Var)
+                    and e.args[0].name == name):
+                return not contract
+        return all(s.unbox_uses(name, k, contract) for k in codegen.expr_kids(e))
+
+    def unbox_block(s, name, stmts):
+        """P3 M5: no statement of the block (nested blocks included) binds, assigns or uses `name` other than through
+        len(name) / string_to_str(name); a contract expression (assert, loop invariant / decreases) never names it"""
+        for st in stmts:
+            if isinstance(st, Let):
+                if st.name == name or not s.unbox_uses(name, st.value):
+                    return False
+            elif isinstance(st, (Assign, FieldAssign)):
+                if st.name == name or not s.unbox_uses(name, st.value):
+                    return False
+            elif isinstance(st, IndexAssign):
+                if st.name == name or not s.unbox_uses(name, st.index) or not s.unbox_uses(name, st.value):
+                    return False
+            elif isinstance(st, If):
+                if not (s.unbox_uses(name, st.cond) and s.unbox_block(name, st.then) and s.unbox_block(name, st.els)):
+                    return False
+            elif isinstance(st, While):
+                if not (s.unbox_uses(name, st.cond) and all(s.unbox_uses(name, i, True) for i in st.invariants)
+                        and s.unbox_uses(name, st.decreases, True) and s.unbox_block(name, st.body)):
+                    return False
+            elif isinstance(st, Return):
+                if st.value is not None and not s.unbox_uses(name, st.value):
+                    return False
+            elif isinstance(st, Assert):
+                if not s.unbox_uses(name, st.cond, True):
+                    return False
+            elif isinstance(st, ExprStmt):
+                if not s.unbox_uses(name, st.expr):
+                    return False
+            elif isinstance(st, Par):
+                if not all(s.unbox_uses(name, c) for c in st.calls):
+                    return False
+            elif isinstance(st, Match):
+                if not s.unbox_uses(name, st.scrutinee):
+                    return False
+                for a in st.arms:
+                    if name in a.binders or not s.unbox_block(name, a.body):
+                        return False
+            else:
+                return False
+        return True
+
+    def unbox_let(s, st, rest):
+        """P3 M5: `let x: String = f(args)` with a trusted foreign f returning String (not a catalog op, not cost mode)
+        whose name is, in the rest of the block, only measured (len) or converted (string_to_str): x is kept as an owned
+        str array filled by the adapter pruv_g6_v1_<f>__str, with no String box"""
+        e = st.value
+        if s.cost or st.type is None or st.type.name != "string" or not isinstance(e, Call):
+            return False
+        f = s.funcs.get(e.name)
+        if f is None or f.foreign is None or e.name in CATALOG or not is_collection(f.ret) or f.ret.name != "string":
+            return False
+        return s.unbox_block(st.name, rest)
 
     def hold(s, v):
         """move a temporary into a fresh owner slot (returned); the caller registers it in a scope"""
@@ -1166,6 +1238,7 @@ class FnGen:
         s.frames.append(frame)
         for i, st in enumerate(stmts):
             frame[1] = later[i + 1]
+            s.unbox_st = st if isinstance(st, Let) and s.unbox_let(st, stmts[i + 1:]) else None
             s.stmt(st)
             if isinstance(st, Let):
                 frame[0].add(st.name)
@@ -1294,6 +1367,25 @@ class FnGen:
             sl = s.new_slot(st.name, st.type)
             s.store(sl, v)
             s.scopes[-1]["names"][st.name] = ("slot", sl)
+            s.end_temps()
+        elif isinstance(st, Let) and st is s.unbox_st:
+            # P3 M5: an unboxed String local: the adapter fills an owned str array (null, 0 when empty), no box
+            s.begin_temps()
+            f = s.funcs[st.value.name]
+            args = []
+            for x in st.value.args:
+                args += s.g6_arg(s.ev(x))
+            d, l = s.g6_out("ptr"), s.g6_out("i64")
+            s.m.g6_unbox.add(f.name)
+            s.m.g6_v2 = True
+            s.g6_call(foreign_shim.unbox_adapter_sym(f.name), "void", args + [("ptr", d), ("ptr", l)])
+            dp = s.op("load ptr, ptr %s" % d)
+            ln = s.op("load i64, ptr %s" % l)
+            sl = s.new_slot(st.name, STR)
+            s.store(sl, V("arr", dp, ln, STR))
+            sc = s.scopes[-1]
+            sc["names"][st.name] = ("slot", sl)
+            sc["arrays"].append(sl)
             s.end_temps()
         elif isinstance(st, Let):
             s.begin_temps()
@@ -1864,6 +1956,22 @@ class FnGen:
             if x.k == "coll":   # G6 A3
                 return V("i64", s.g6_call(foreign_shim.len_sym(x.ty), "i64", [("ptr", x.a)]))
             return V("i64", x.b)
+        if (n == "string_to_str" and n not in s.funcs and isinstance(a[0], Var) and s.lookup(a[0].name)[0] == "slot"
+                and s.lookup(a[0].name)[1].k == "arr"):
+            # P3 M5: string_to_str of an unboxed String local (an owned str array): move it out in a take position
+            # (M3 conditions), else copy it; the other paths free the array with the scope
+            s.m.g6_v2 = True
+            sl = s.lookup(a[0].name)[1]
+            v = s.ev(a[0])
+            if not s.cost and a[0].name in s.ret_take:
+                s.ret_moved[sl.a] = None            # the return's cleanup skips the slot
+                return s.temp_arr(v, owned)
+            if not s.cost and a[0].name in s.take_let:
+                s.ins("store ptr null, ptr %s" % sl.a)
+                s.ins("store i64 0, ptr %s" % sl.b)
+                return s.temp_arr(v, owned)
+            p = s.op("call ptr @pruv_copy_v2(ptr %s, i64 %s, i64 1, i64 1)" % (v.a, v.b))
+            return s.temp_arr(V("arr", p, v.b, STR), owned)
         if n in CATALOG and n not in CATALOG_CONTRACT_ONLY and n not in s.funcs:   # G6 A3: reserved names
             return s.catalog_call(e, owned)
         if n == "alloc":
@@ -4166,7 +4274,8 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
         ir += "\n".join(m.par_trampolines)
     shim = None
     if is_g6:
-        shim = foreign_shim.build_shim(prog, verified, trust_callers, budget, foreign_checks, m.g6_take)
+        shim = foreign_shim.build_shim(prog, verified, trust_callers, budget, foreign_checks, m.g6_take,
+                                       sorted(m.g6_unbox))
     if first_par(prog) is not None:
         shim = (shim or "") + parallel_shim.build_shim()
     if cost_used:

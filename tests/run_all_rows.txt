@@ -550,6 +550,7 @@
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_m2_lit_let.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_m3_str_take.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_m4_trunc_ctor.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_m5_unbox_str.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_n1_noverify.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_s1_stack.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_v1_fail.pruv"}
@@ -1709,6 +1710,7 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_m2_lit_let.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_m3_str_take.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_m4_trunc_ctor.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_m5_unbox_str.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_n1_noverify.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_s1_stack.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_v1_fail.pruv"}

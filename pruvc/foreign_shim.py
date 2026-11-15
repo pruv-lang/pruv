@@ -41,6 +41,11 @@ def adapter_sym(helper):
     return PREFIX + helper
 
 
+def unbox_adapter_sym(name):
+    """P3 M5: the unboxed-String adapter of the trusted function `name` (fills a str array, no String box)"""
+    return PREFIX + name + "__str"
+
+
 def cname(t):
     """<C>: G3 encoding of a collection type"""
     if t.name == "vec":
@@ -305,7 +310,7 @@ def _file_adapter(sym, helper, op):
     return _fn(sym, params, "i64" if op == "file_close" else "PruvH", "pruv_g6_guard(|| { %s })" % body)
 
 
-def _trusted_adapter(f):
+def _trusted_params(f):
     params, args = [], []
     for i, p in enumerate(f.params):
         t = p.type
@@ -329,6 +334,27 @@ def _trusted_adapter(f):
             args.append("pruv_g6_bools(a%d, n%d)" % (i, i))
         else:
             raise Exception("foreign_shim: unsupported trusted parameter type %r" % (t,))
+    return params, args
+
+
+def _unbox_adapter(f):
+    """P3 M5: `let x: String = f(args)` kept as a plain owned str array: the String result is written as (data, len)
+    with no box and no PRUV_G6_LIVE change; an empty String gives (NULL, 0).  into_boxed_str makes the block layout
+    exactly (len, 1), as in the take adapter."""
+    params, args = _trusted_params(f)
+    return _fn(unbox_adapter_sym(f.name), ", ".join(params + ["data: *mut *mut u8", "len: *mut i64"]), None,
+               "pruv_g6_guard(|| { "
+               "let _ = ::std::hint::black_box(pruv_g6_alloc::pruv_runtime_rust_allocator_v2 as unsafe extern \"C\" fn()); "
+               "if data.is_null() || len.is_null() { pruv_g6_repr(\"null output\") } "
+               "let pruv_b: ::std::boxed::Box<str> = %s(%s).into_boxed_str(); "
+               "let pruv_n: usize = pruv_b.len(); "
+               "if pruv_n == 0 { drop(pruv_b); unsafe { *data = ::std::ptr::null_mut(); *len = 0; } } "
+               "else { unsafe { *data = ::std::boxed::Box::into_raw(pruv_b) as *mut u8; *len = pruv_n as i64; } } })"
+               % (f.name, ", ".join(args)))
+
+
+def _trusted_adapter(f):
+    params, args = _trusted_params(f)
     call = "%s(%s)" % (f.name, ", ".join(args))
     S = adapter_sym(f.name)
     if is_collection(f.ret):   # G6b: the helper checked the result; box it once, even when empty
@@ -375,9 +401,11 @@ def _string_take_adapter():
 # ---------------------------------------------------------------------------
 # the module
 # ---------------------------------------------------------------------------
-def build_shim(prog, verified=True, trust_callers=False, budget=1 << 30, foreign_checks="requires", take=False):
+def build_shim(prog, verified=True, trust_callers=False, budget=1 << 30, foreign_checks="requires", take=False,
+               unbox=()):
     """text of `mod pruv_g6_shim` for the (concrete) program prog; deterministic.  take: the LLVM lowering used
-    pruv_g6_v1_string_take (P3 M3), so the take adapter and the allocator marker reference are emitted"""
+    pruv_g6_v1_string_take (P3 M3), so the take adapter and the allocator marker reference are emitted;
+    unbox: sorted names of the trusted String functions lowered unboxed (P3 M5), one `<f>__str` adapter each"""
     cats, colls, trusted = collect(prog)
     # helper discovery: exactly the A2 helpers (same texts, same mode and budget).  The entry checks of the Rust
     # source backend are not emitted here (trust=True): the LLVM entries evaluate requires themselves.
@@ -400,7 +428,7 @@ def build_shim(prog, verified=True, trust_callers=False, budget=1 << 30, foreign
         out.append(CONTRACT_PRELUDE_STR)
     out.append(G6_PRELUDE)
     out.append(BRIDGE_RUNTIME)
-    if take:
+    if take or unbox:
         out.append(TAKE_RUNTIME)
     adapters = []
     for name, text in items.items():
@@ -419,6 +447,9 @@ def build_shim(prog, verified=True, trust_callers=False, budget=1 << 30, foreign
             if take:
                 adapters.append(_string_take_adapter())
             break
+    for name in unbox:
+        if name in trusted:
+            adapters.append(_unbox_adapter(trusted[name]))
     for key in sorted(colls):
         adapters.append(_coll_adapters(colls[key]))
     out.extend(adapters)

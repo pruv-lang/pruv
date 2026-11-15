@@ -1,0 +1,95 @@
+// P3 M5: a String local returned by a trusted rust fn that is only measured (len) or converted (string_to_str) in the
+// rest of its block is kept as a plain owned str array: the shim's `<f>__str` adapter fills (data, len) and no String
+// box is created. string_to_str takes the array in the return result position / at the last use in a let, and copies it
+// anywhere else; every other path frees the array with the scope (also an early return). A String that is used any
+// other way (string_byte) stays boxed. word() is multibyte ("한a", 4 bytes), empty_text() is empty.
+enum Wrap { Empty, Text(s: str), Pair(n: i64, s: str) }
+
+trusted rust fn word() -> String ! alloc
+  ensures len(result) == 4
+  = "::g6b_adapter::word";
+
+trusted rust fn empty_text() -> String ! alloc
+  ensures len(result) == 0
+  = "::g6b_adapter::empty_text";
+
+fn wrap_len(w: Wrap) -> i64 {
+  match w {
+    Wrap::Empty => { return 0; }
+    Wrap::Text(s) => { return len(s); }
+    Wrap::Pair(n, s) => { return n * 100 + len(s); }
+  }
+}
+
+// return take: string_to_str in an enum constructor field
+fn build_word() -> Wrap ! alloc {
+  let s: String = word();
+  return Wrap::Text(string_to_str(s));
+}
+
+fn build_empty() -> Wrap ! alloc {
+  let s: String = empty_text();
+  return Wrap::Text(string_to_str(s));
+}
+
+// s is named twice in the return: len(s) is a measure and the conversion copies
+fn build_pair() -> Wrap ! alloc {
+  let s: String = word();
+  return Wrap::Pair(len(s), string_to_str(s));
+}
+
+fn ret_word() -> i64 ! alloc {
+  let w: Wrap = build_word();
+  return wrap_len(w);
+}
+
+fn ret_empty() -> i64 ! alloc {
+  let w: Wrap = build_empty();
+  return wrap_len(w);
+}
+
+fn ret_pair() -> i64 ! alloc {
+  let w: Wrap = build_pair();
+  return wrap_len(w);
+}
+
+// let take at the last use of s
+fn take_let() -> i64 ! alloc {
+  let s: String = word();
+  let u: str = string_to_str(s);
+  return len(u);
+}
+
+fn empty_let() -> i64 ! alloc {
+  let s: String = empty_text();
+  let u: str = string_to_str(s);
+  return len(u);
+}
+
+// the early return only measures s (the array must be freed); the other path converts inside a call (a copy)
+fn early(k: i64) -> i64 ! alloc {
+  let s: String = word();
+  if k > 0 {
+    return len(s) + k;
+  }
+  return len(string_to_str(s));
+}
+
+// a later use of s: the conversion before it copies
+fn copy_then_len() -> i64 ! alloc {
+  let s: String = word();
+  let u: str = string_to_str(s);
+  return len(u) * 10 + len(s);
+}
+
+fn empty_copy() -> i64 ! alloc {
+  let s: String = empty_text();
+  let u: str = string_to_str(s);
+  return len(u) * 10 + len(s);
+}
+
+// negative: string_byte(s, 0) is another use, so s stays a boxed String
+fn neg_byte() -> i64 ! alloc {
+  let s: String = word();
+  return string_byte(s, 0) + len(s);
+}

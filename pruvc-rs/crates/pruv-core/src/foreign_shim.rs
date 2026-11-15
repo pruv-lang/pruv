@@ -42,6 +42,11 @@ pub fn adapter_sym(helper: &str) -> String {
     format!("{}{}", PREFIX, helper)
 }
 
+/// P3 M5: the unboxed-String adapter of the trusted function `name` (fills a str array, no String box)
+pub fn unbox_adapter_sym(name: &str) -> String {
+    format!("{}{}__str", PREFIX, name)
+}
+
 /// <C>: G3 encoding of a collection type
 pub fn cname(t: &GType) -> R<String> {
     match t.name.as_str() {
@@ -563,7 +568,7 @@ fn file_adapter(sym: &str, helper: &str, op: &str) -> String {
         &format!("pruv_g6_guard(|| {{ {} }})", body))
 }
 
-fn trusted_adapter(f: &Function) -> R<String> {
+fn trusted_params(f: &Function) -> R<(Vec<String>, Vec<String>)> {
     let mut params: Vec<String> = Vec::new();
     let mut args: Vec<String> = Vec::new();
     for (i, p) in f.params.iter().enumerate() {
@@ -599,6 +604,36 @@ fn trusted_adapter(f: &Function) -> R<String> {
             other => return Err(format!("foreign_shim: unsupported trusted parameter type {}", other)),
         }
     }
+    Ok((params, args))
+}
+
+/// P3 M5: `let x: String = f(args)` kept as a plain owned str array: the String result is written as (data, len)
+/// with no box and no PRUV_G6_LIVE change; an empty String gives (NULL, 0). into_boxed_str makes the block layout
+/// exactly (len, 1), as in the take adapter.
+fn unbox_adapter(f: &Function) -> R<String> {
+    let (mut params, args) = trusted_params(f)?;
+    params.push("data: *mut *mut u8".to_string());
+    params.push("len: *mut i64".to_string());
+    Ok(fn_text(
+        &unbox_adapter_sym(&f.name),
+        &params.join(", "),
+        None,
+        &format!(
+            "pruv_g6_guard(|| {{ \
+             let _ = ::std::hint::black_box(pruv_g6_alloc::pruv_runtime_rust_allocator_v2 as unsafe extern \"C\" fn()); \
+             if data.is_null() || len.is_null() {{ pruv_g6_repr(\"null output\") }} \
+             let pruv_b: ::std::boxed::Box<str> = {}({}).into_boxed_str(); \
+             let pruv_n: usize = pruv_b.len(); \
+             if pruv_n == 0 {{ drop(pruv_b); unsafe {{ *data = ::std::ptr::null_mut(); *len = 0; }} }} \
+             else {{ unsafe {{ *data = ::std::boxed::Box::into_raw(pruv_b) as *mut u8; *len = pruv_n as i64; }} }} }})",
+            f.name,
+            args.join(", ")
+        ),
+    ))
+}
+
+fn trusted_adapter(f: &Function) -> R<String> {
+    let (params, args) = trusted_params(f)?;
     let call = format!("{}({})", f.name, args.join(", "));
     let s = adapter_sym(&f.name);
     let ps = params.join(", ");
@@ -678,8 +713,17 @@ fn string_take_adapter() -> String {
 // ---------------------------------------------------------------------------
 
 /// text of `mod pruv_g6_shim` for the (concrete) program prog; deterministic. take: the LLVM lowering used
-/// pruv_g6_v1_string_take (P3 M3), so the take adapter and the allocator marker reference are emitted
-pub fn build_shim(prog: &Program, verified: bool, _trust_callers: bool, budget: u64, foreign_checks: &str, take: bool) -> R<String> {
+/// pruv_g6_v1_string_take (P3 M3), so the take adapter and the allocator marker reference are emitted;
+/// unbox: sorted names of the trusted String functions lowered unboxed (P3 M5), one `<f>__str` adapter each
+pub fn build_shim(
+    prog: &Program,
+    verified: bool,
+    _trust_callers: bool,
+    budget: u64,
+    foreign_checks: &str,
+    take: bool,
+    unbox: &[String],
+) -> R<String> {
     let (cats, colls, trusted, observers) = collect(prog)?;
     // helper discovery: exactly the A2 helpers (same texts, same mode and budget). The entry checks of the Rust
     // source backend are not emitted here (trust=True): the LLVM entries evaluate requires themselves.
@@ -704,7 +748,7 @@ pub fn build_shim(prog: &Program, verified: bool, _trust_callers: bool, budget: 
     }
     out.push(G6_PRELUDE.to_string());
     out.push(BRIDGE_RUNTIME.to_string());
-    if take {
+    if take || !unbox.is_empty() {
         out.push(TAKE_RUNTIME.to_string());
     }
     let mut adapters: Vec<String> = Vec::new();
@@ -728,6 +772,11 @@ pub fn build_shim(prog: &Program, verified: bool, _trust_callers: bool, budget: 
         adapters.push(string_bytes_adapter());
         if take {
             adapters.push(string_take_adapter());
+        }
+    }
+    for name in unbox {
+        if let Some(f) = trusted.get(name) {
+            adapters.push(unbox_adapter(f)?);
         }
     }
     for t in colls.values() {
