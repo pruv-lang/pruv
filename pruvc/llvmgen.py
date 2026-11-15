@@ -576,8 +576,7 @@ def is_internal_fn(f, tt):
 
 def ir_params(f, tt=None):
     """internal parameter list [(type, name)].  G9: an extended result is the leading `ptr %out` (output storage);
-    an extended parameter is a plain `ptr %p.NAME` to valid caller-owned storage (no noalias: the same subtree can
-    be passed twice)."""
+    an extended parameter is `ptr %p.NAME` to valid caller-owned storage (see sig_text for its attributes)."""
     out = []
     if tt is not None and is_ext_t(tt, f.ret):
         out.append(("ptr", "%out"))
@@ -604,10 +603,12 @@ def ir_params(f, tt=None):
 def sig_text(params, f=None):
     """definition parameter list of an internal function: array pointers are read-only borrows (their IR names
     end in .a; a G6 collection handle %p.NAME.h is a plain ptr).  G5 A3: with the function `f`, the pointer of an
-    inout parameter is a mutable borrow: `ptr noalias nocapture` (no readonly)"""
+    inout parameter is a mutable borrow: `ptr noalias nocapture` (no readonly).  G9: an extended parameter %p.NAME is
+    a read-only view: `ptr noalias nocapture readonly` (the same subtree may be passed twice, which noalias allows
+    because nothing writes it; output storage %out is always a fresh alloca of the caller)"""
     mut = set("%%p.%s.a" % mangle(p.name) for p in f.params if p.mode == "inout") if f is not None else ()
     return ", ".join("%s %s" % (("ptr noalias nocapture" if n in mut else "ptr noalias nocapture readonly")
-                                if t == "ptr" and n.endswith(".a") else t, n)
+                                if t == "ptr" and n != "%out" and not n.endswith(".h") else t, n)
                      for t, n in params)
 
 
@@ -3255,8 +3256,8 @@ def entry_of(m, funcs, f, trust, budget=1 << 30, cost=False, verified=False):
 #    view.  An assignment evaluates its right side and takes ownership of the result before the old value is dropped.
 #  Calls.  An extended read argument is `ptr` to valid caller-owned storage (a slot, a parameter, a node, or a spilled
 #    copy of a fresh temporary that lives through the call).  An extended result is written through the leading
-#    `ptr %out`.  Extended signatures are internal (no ABI wrapper, no binding).  Pointer parameters carry no noalias:
-#    the same subtree may be passed twice.
+#    `ptr %out`.  Extended signatures are internal (no ABI wrapper, no binding).  Read pointer parameters are
+#    `noalias nocapture readonly`: the same subtree may be passed twice, which is sound because neither writes it.
 #  Helpers (stable names, SCC-condensed declaration order): pruv_drop__T(ptr) releases the owned parts of the value at
 #    the pointer, children first, but never the root storage itself; pruv_clone__T(ptr src, ptr dst) writes a deep copy;
 #    pruv_box__T / pruv_dropnode__T / pruv_clonenode__T allocate, release and clone a node (pruv_node_alloc_v1 /

@@ -831,8 +831,8 @@ impl Default for Mod {
 }
 
 /// Internal parameter list [(type, name)]
-/// G9: an extended result is the leading `ptr %out` (output storage); an extended parameter is a plain `ptr %p.NAME`
-/// to valid caller-owned storage (no noalias: the same subtree can be passed twice).
+/// G9: an extended result is the leading `ptr %out` (output storage); an extended parameter is `ptr %p.NAME` to valid
+/// caller-owned storage (see sig_text for its attributes).
 pub fn ir_params(f: &Function, tt: &TypeTable) -> Vec<(String, String)> {
     let mut out = Vec::new();
     if is_ext_t(tt, &f.ret) {
@@ -865,7 +865,9 @@ pub fn ir_params(f: &Function, tt: &TypeTable) -> Vec<(String, String)> {
 
 /// Parameter list of an internal function definition: array pointers (names ending in `.a`) are read-only borrows;
 /// a G6 collection handle `%p.NAME.h` is a plain ptr. G5 A3: with the function `f`, the pointer of an inout parameter
-/// is a mutable borrow: `ptr noalias nocapture` (no readonly)
+/// is a mutable borrow: `ptr noalias nocapture` (no readonly). G9: an extended parameter `%p.NAME` is a read-only view:
+/// `ptr noalias nocapture readonly` (the same subtree may be passed twice, which noalias allows because nothing writes
+/// it; output storage `%out` is always a fresh alloca of the caller)
 pub fn sig_text(params: &[(String, String)], f: Option<&Function>) -> String {
     let mut_names: Vec<String> = match f {
         Some(f) => f
@@ -881,7 +883,7 @@ pub fn sig_text(params: &[(String, String)], f: Option<&Function>) -> String {
         .map(|(t, n)| {
             format!(
                 "{} {}",
-                if t == "ptr" && n.ends_with(".a") {
+                if t == "ptr" && n != "%out" && !n.ends_with(".h") {
                     if mut_names.contains(n) { "ptr noalias nocapture" } else { "ptr noalias nocapture readonly" }
                 } else {
                     t.as_str()
