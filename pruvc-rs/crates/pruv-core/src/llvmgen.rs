@@ -213,6 +213,70 @@ pub const DECLS_U8: &str = concat!(
     "}\n",
 );
 
+/// P3: only emitted when a tail-filled alloc is lowered (FnGen::tail_fill): `alloc(n, 0)` whose first k elements the
+/// next loop overwrites zeroes only elements k..n (k clamped to 0..n); a large block still comes from the zeroed
+/// allocator, whose fresh pages are already zero.
+pub const DECLS_TAIL: &str = concat!(
+    "define internal noalias ptr @pruv_alloc_tail(i64 %n, i64 %k) alwaysinline nounwind {\n",
+    "entry:\n",
+    "  %e = icmp sle i64 %n, 0\n",
+    "  br i1 %e, label %none, label %chk\n",
+    "none:\n",
+    "  ret ptr null\n",
+    "chk:\n",
+    "  %big = icmp ugt i64 %n, 1152921504606846975\n",
+    "  br i1 %big, label %fail, label %ok\n",
+    "fail:\n",
+    "  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)\n",
+    "  unreachable\n",
+    "ok:\n",
+    "  %large = icmp ugt i64 %n, 16384\n",
+    "  br i1 %large, label %zero, label %part\n",
+    "zero:\n",
+    "  %p = call ptr @pruv_raw_alloc_zeroed_v3(i64 %n, i64 8, i64 8)\n",
+    "  ret ptr %p\n",
+    "part:\n",
+    "  %q = call ptr @pruv_raw_alloc_v3(i64 %n, i64 8, i64 8)\n",
+    "  %k0 = call i64 @llvm.smax.i64(i64 %k, i64 0)\n",
+    "  %k1 = call i64 @llvm.smin.i64(i64 %k0, i64 %n)\n",
+    "  %g = getelementptr inbounds i64, ptr %q, i64 %k1\n",
+    "  %r = sub nuw nsw i64 %n, %k1\n",
+    "  %b = shl nuw nsw i64 %r, 3\n",
+    "  call void @llvm.memset.p0.i64(ptr %g, i8 0, i64 %b, i1 false)\n",
+    "  ret ptr %q\n",
+    "}\n",
+);
+pub const DECLS_TAIL_U8: &str = concat!(
+    "define internal noalias ptr @pruv_alloc_tail_u8(i64 %n, i64 %k) alwaysinline nounwind {\n",
+    "entry:\n",
+    "  %e = icmp sle i64 %n, 0\n",
+    "  br i1 %e, label %none, label %chk\n",
+    "none:\n",
+    "  ret ptr null\n",
+    "chk:\n",
+    "  %big = icmp ugt i64 %n, 1099511627776\n",
+    "  br i1 %big, label %fail, label %ok\n",
+    "fail:\n",
+    "  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)\n",
+    "  unreachable\n",
+    "ok:\n",
+    "  %large = icmp ugt i64 %n, 131072\n",
+    "  br i1 %large, label %zero, label %part\n",
+    "zero:\n",
+    "  %p = call ptr @pruv_raw_alloc_zeroed_v3(i64 %n, i64 1, i64 1)\n",
+    "  ret ptr %p\n",
+    "part:\n",
+    "  %q = call ptr @pruv_raw_alloc_v3(i64 %n, i64 1, i64 1)\n",
+    "  %k0 = call i64 @llvm.smax.i64(i64 %k, i64 0)\n",
+    "  %k1 = call i64 @llvm.smin.i64(i64 %k0, i64 %n)\n",
+    "  %g = getelementptr inbounds i8, ptr %q, i64 %k1\n",
+    "  %r = sub nuw nsw i64 %n, %k1\n",
+    "  call void @llvm.memset.p0.i64(ptr %g, i8 0, i64 %r, i1 false)\n",
+    "  ret ptr %q\n",
+    "}\n",
+);
+pub const DECLS_MINMAX: &str = "declare i64 @llvm.smax.i64(i64, i64)\ndeclare i64 @llvm.smin.i64(i64, i64)\n";
+
 /// G2 A5: declarations appended after DECLS_U8 only for programs that use `[bool]`.
 pub const DECLS_BOOL: &str = "declare void @pruv_check_bool(ptr nocapture readonly, i64) nounwind\n";
 
@@ -689,6 +753,9 @@ pub struct Mod {
     pub stack: crate::stack::StackPlan,
     /// P3-S1: some stack array calls @pruv_fill_v2
     pub fill: bool,
+    /// P3: tail-filled alloc helpers used (pruv_alloc_tail, pruv_alloc_tail_u8)
+    pub tail_i64: bool,
+    pub tail_u8: bool,
     /// P3 batch 2: `!range` node bodies in first-use order (index = metadata number)
     pub range_nodes: Vec<String>,
     /// G4 A3: explicit visibility mode (Pruv calls use the Rust-backend routing)
@@ -717,6 +784,8 @@ impl Mod {
             shrink: false,
             stack: crate::stack::StackPlan::default(),
             fill: false,
+            tail_i64: false,
+            tail_u8: false,
             range_nodes: Vec::new(),
             explicit: false,
             fn_disp: HashMap::new(),
@@ -913,6 +982,8 @@ pub struct FnGen<'a> {
     take_let: HashSet<String>,
     /// P3 M5: the let being lowered binds an unboxed String local (unbox_let)
     unbox_next: bool,
+    /// P3: the let being lowered is a tail-filled alloc (tail_fill): the address of its alloc call and the bound k
+    tail: Option<(usize, Expr)>,
 }
 
 impl<'a> FnGen<'a> {
@@ -955,6 +1026,7 @@ impl<'a> FnGen<'a> {
             ret_take: HashSet::new(),
             take_let: HashSet::new(),
             unbox_next: false,
+            tail: None,
         }
     }
 
@@ -1482,6 +1554,50 @@ impl<'a> FnGen<'a> {
             }
         }
         true
+    }
+
+    /// P3: `let mut x: [i64 | u8] = alloc(n, 0); let mut i: i64 = 0; while i < k { x[i] = e; i = i + 1; }` in
+    /// verified mode (not cost mode), with k a name other than x and i and e a call-free expression not naming x:
+    /// the loop overwrites x[0..min(k, n)) before any read, so the alloc zeroes only the rest. Returns the alloc
+    /// call's address and the k node
+    fn tail_fill(&self, x: &Let, nxt: &[Stmt]) -> Option<(usize, Expr)> {
+        let is0 = |e: &Expr, v: i128| matches!(e, Expr::IntLit(l) if l.value.parse::<i128>().ok() == Some(v));
+        let is_var = |e: &Expr, n: &str| matches!(e, Expr::Var(v) if v.name == n);
+        if !self.verified || self.cost || !x.mutable {
+            return None;
+        }
+        let tn = crate::emit_common::key_name(&x.ty);
+        if (tn != "array" && tn != "array_u8") || nxt.len() != 2 {
+            return None;
+        }
+        let Expr::Call(c) = &x.value else { return None };
+        if c.name != "alloc" || self.funcs.contains_key(&c.name) || c.args.len() != 2 || !is0(&c.args[1], 0) {
+            return None;
+        }
+        let Stmt::Let(li) = &nxt[0] else { return None };
+        if crate::emit_common::key_name(&li.ty) != "i64" || !is0(&li.value, 0) || li.name == x.name {
+            return None;
+        }
+        let (xn, i) = (x.name.as_str(), li.name.as_str());
+        let Stmt::While(w) = &nxt[1] else { return None };
+        let Expr::Binary(cb) = &w.cond else { return None };
+        let k = match &*cb.right {
+            Expr::Var(v) if v.name != xn && v.name != i && v.name != "result" => &*cb.right,
+            _ => return None,
+        };
+        if cb.op != "<" || !is_var(&cb.left, i) || w.body.len() != 2 {
+            return None;
+        }
+        let Stmt::IndexAssign(sa) = &w.body[0] else { return None };
+        if sa.name != xn || !is_var(&sa.index, i) || !tail_pure(&sa.value, xn) {
+            return None;
+        }
+        let Stmt::Assign(inc) = &w.body[1] else { return None };
+        let Expr::Binary(ib) = &inc.value else { return None };
+        if inc.name != i || ib.op != "+" || !is_var(&ib.left, i) || !is0(&ib.right, 1) {
+            return None;
+        }
+        Some((c as *const Call as usize, k.clone()))
     }
 
     /// P3 M5: `let x: String = f(args)` with a trusted foreign f returning String (not a catalog op, not cost mode)
@@ -2307,6 +2423,10 @@ impl<'a> FnGen<'a> {
                 fr.1 = std::mem::take(&mut later[i + 1]);
             }
             self.unbox_next = matches!(s, Stmt::Let(l) if self.unbox_let(l, &stmts[i + 1..]));
+            self.tail = match s {
+                Stmt::Let(l) => self.tail_fill(l, &stmts[i + 1..stmts.len().min(i + 3)]),
+                _ => None,
+            };
             self.stmt(s)?;
             if let Stmt::Let(l) = s {
                 if let Some(fr) = self.frames.last_mut() {
@@ -3359,7 +3479,20 @@ impl<'a> FnGen<'a> {
                 rv.ty = Some(ARRAY_BOOL.to_string());
                 return self.temp_arr(rv, owned);
             }
+            let tail = match &self.tail {
+                Some((at, k)) if *at == e as *const Call as usize => Some(k.clone()),
+                _ => None,
+            };
             if u8a {
+                if let Some(k) = &tail {
+                    // P3: tail_fill
+                    let kv = self.ev(k, false)?;
+                    self.m.tail_u8 = true;
+                    let p = self.op(format!("call ptr @pruv_alloc_tail_u8(i64 {}, i64 {})", cnt.a, kv.a))?;
+                    let mut rv = V::with_b(Kind::Arr, p, cnt.a.clone());
+                    rv.ty = Some(ARRAY_U8.to_string());
+                    return self.temp_arr(rv, owned);
+                }
                 let p = self.op(format!("call ptr @pruv_alloc_u8(i64 {}, i64 {})", cnt.a, v.a))?;
                 let mut rv = V::with_b(Kind::Arr, p, cnt.a.clone());
                 rv.ty = Some(ARRAY_U8.to_string());
@@ -3369,6 +3502,15 @@ impl<'a> FnGen<'a> {
                 let p = self.op(format!("call ptr @pruv_alloc_narrow(i64 {}, i64 {}, i64 {}, i64 {})", cnt.a, v.a, elem_size(layout), alignment(layout)))?;
                 let mut rv = V::with_b(Kind::Arr, p, cnt.a.clone());
                 rv.layout = layout;
+                rv.rng = rng;
+                return self.temp_arr(rv, owned);
+            }
+            if let Some(k) = &tail {
+                // P3: tail_fill
+                let kv = self.ev(k, false)?;
+                self.m.tail_i64 = true;
+                let p = self.op(format!("call ptr @pruv_alloc_tail(i64 {}, i64 {})", cnt.a, kv.a))?;
+                let mut rv = V::with_b(Kind::Arr, p, cnt.a.clone());
                 rv.rng = rng;
                 return self.temp_arr(rv, owned);
             }
@@ -5899,7 +6041,7 @@ fn gen_llvm_body(
         }
     }
     let mut ir = format!(
-        "{}{}\n{}{}{}{}{}{}{}{}{}{}{}{}{}\n{}",
+        "{}{}\n{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}\n{}",
         if target == AbiTarget::WinX64 { WIN_X64_HEADER } else { "" },
         m.render_strings(),
         type_defs(&tt),
@@ -5923,6 +6065,9 @@ fn gen_llvm_body(
         m.bswap.iter().map(|w| format!("declare i{w} @llvm.bswap.i{w}(i{w})\n", w = w)).collect::<String>(),
         if m.shrink { "declare ptr @pruv_shrink_v2(ptr, i64, i64, i64, i64) nounwind\n" } else { "" },
         if m.fill { "declare void @pruv_fill_v2(ptr nocapture, i64, i64, i64) nounwind\n" } else { "" },
+        if m.tail_i64 { DECLS_TAIL } else { "" },
+        if m.tail_u8 { DECLS_TAIL_U8 } else { "" },
+        if m.tail_i64 || m.tail_u8 { DECLS_MINMAX } else { "" },
         g6decls,
         chunks.join("\n")
     );
@@ -6064,5 +6209,17 @@ mod tests {
         assert!(t.starts_with("define internal i128 @pruv_cdiv(i128 %a, i128 %b) {\nentry:\n  %z = icmp eq i128 %b, 0\n"));
         assert!(t.contains("icmp eq i128 %a, -170141183460469231731687303715884105728\n"));
         assert!(t.ends_with("  ret i128 %qq\n}\n"));
+    }
+}
+
+/// P3 (FnGen::tail_fill): e has no call and does not name x
+fn tail_pure(e: &Expr, x: &str) -> bool {
+    match e {
+        Expr::IntLit(_) | Expr::BoolLit(_) => true,
+        Expr::Var(v) => v.name != x,
+        Expr::Unary(u) => tail_pure(&u.operand, x),
+        Expr::Binary(b) => tail_pure(&b.left, x) && tail_pure(&b.right, x),
+        Expr::Index(i) => tail_pure(&i.array, x) && tail_pure(&i.index, x),
+        _ => false,
     }
 }

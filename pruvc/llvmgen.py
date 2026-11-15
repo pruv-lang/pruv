@@ -216,6 +216,70 @@ done:
 # G2 A5 (docs/G2_A5_IMPL.md 4.2): only emitted when the program uses [bool]
 DECLS_BOOL = "declare void @pruv_check_bool(ptr nocapture readonly, i64) nounwind\n"
 
+# P3: only emitted when a tail-filled alloc is lowered (Gen.tail_fill): `alloc(n, 0)` whose first k elements the
+# next loop overwrites zeroes only elements k..n (k clamped to 0..n); a large block still comes from the zeroed
+# allocator, whose fresh pages are already zero.
+DECLS_TAIL = """\
+define internal noalias ptr @pruv_alloc_tail(i64 %n, i64 %k) alwaysinline nounwind {
+entry:
+  %e = icmp sle i64 %n, 0
+  br i1 %e, label %none, label %chk
+none:
+  ret ptr null
+chk:
+  %big = icmp ugt i64 %n, 1152921504606846975
+  br i1 %big, label %fail, label %ok
+fail:
+  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)
+  unreachable
+ok:
+  %large = icmp ugt i64 %n, 16384
+  br i1 %large, label %zero, label %part
+zero:
+  %p = call ptr @pruv_raw_alloc_zeroed_v3(i64 %n, i64 8, i64 8)
+  ret ptr %p
+part:
+  %q = call ptr @pruv_raw_alloc_v3(i64 %n, i64 8, i64 8)
+  %k0 = call i64 @llvm.smax.i64(i64 %k, i64 0)
+  %k1 = call i64 @llvm.smin.i64(i64 %k0, i64 %n)
+  %g = getelementptr inbounds i64, ptr %q, i64 %k1
+  %r = sub nuw nsw i64 %n, %k1
+  %b = shl nuw nsw i64 %r, 3
+  call void @llvm.memset.p0.i64(ptr %g, i8 0, i64 %b, i1 false)
+  ret ptr %q
+}
+"""
+DECLS_TAIL_U8 = """\
+define internal noalias ptr @pruv_alloc_tail_u8(i64 %n, i64 %k) alwaysinline nounwind {
+entry:
+  %e = icmp sle i64 %n, 0
+  br i1 %e, label %none, label %chk
+none:
+  ret ptr null
+chk:
+  %big = icmp ugt i64 %n, 1099511627776
+  br i1 %big, label %fail, label %ok
+fail:
+  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)
+  unreachable
+ok:
+  %large = icmp ugt i64 %n, 131072
+  br i1 %large, label %zero, label %part
+zero:
+  %p = call ptr @pruv_raw_alloc_zeroed_v3(i64 %n, i64 1, i64 1)
+  ret ptr %p
+part:
+  %q = call ptr @pruv_raw_alloc_v3(i64 %n, i64 1, i64 1)
+  %k0 = call i64 @llvm.smax.i64(i64 %k, i64 0)
+  %k1 = call i64 @llvm.smin.i64(i64 %k0, i64 %n)
+  %g = getelementptr inbounds i8, ptr %q, i64 %k1
+  %r = sub nuw nsw i64 %n, %k1
+  call void @llvm.memset.p0.i64(ptr %g, i8 0, i64 %r, i1 false)
+  ret ptr %q
+}
+"""
+DECLS_MINMAX = "declare i64 @llvm.smax.i64(i64, i64)\ndeclare i64 @llvm.smin.i64(i64, i64)\n"
+
 # G9 A3: only emitted when the program has a recursive (boxed) edge.  The marker global is kept alive through
 # @llvm.used, so linking a runtime without pruv_runtime_nodes_v1 fails even when no node helper survives inlining.
 DECLS_NODE = ("declare noalias ptr @pruv_node_alloc_v1(i64, i64) nounwind\n"
@@ -475,6 +539,7 @@ class Mod:
         s.need_eq = set()
         s.stack = None          # P3-S1: StackPlan (set by gen_llvm)
         s.fill = False          # P3-S1: some stack array calls @pruv_fill_v2
+        s.tail = set()          # P3: tail-filled alloc helpers used ("i64" -> pruv_alloc_tail, "u8" -> _u8)
         s.range_nodes = {}      # P3 batch 2: `iW a, iW b` body -> !N number (first-use order)
         s.explicit = False      # G4 A3: explicit visibility mode (set by gen_llvm); Pruv calls use the Rust-backend routing
 
@@ -564,6 +629,8 @@ class FnGen:
         s.ret_take = set()  # P3 M3: String locals whose string_to_str in the return result position takes the buffer
         s.take_let = set()  # P3 M3: String local the let / assignment being lowered takes (take_src)
         s.unbox_st = None   # P3 M5: the let being lowered binds an unboxed String local (unbox_let)
+        s.tail_st = None    # P3: the let being lowered is a tail-filled alloc (tail_fill); s.tail_k is its bound (a Var)
+        s.tail_k = None
         s.cenv = {}
         s.cregions = []     # G9: constructor temporaries of the contract expression being evaluated, per region
         s.tt = m.tt
@@ -1007,6 +1074,53 @@ class FnGen:
                 return False
         return True
 
+    def tail_fill(s, st, nxt):
+        """P3: `let mut x: [i64 | u8] = alloc(n, 0); let mut i: i64 = 0; while i < k { x[i] = e; i = i + 1; }` in
+        verified mode (not cost mode), with k a name other than x and i and e a call-free expression not naming x:
+        the loop overwrites x[0..min(k, n)) before any read, so the alloc zeroes only the rest.  Returns the k node or None"""
+        if not s.verified or s.cost or not st.mutable or st.type is None:
+            return None
+        if st.type.name not in ("array", "array_u8") or len(nxt) != 2:
+            return None
+        e = st.value
+        if not (isinstance(e, Call) and e.name == "alloc" and e.name not in s.funcs and len(e.args) == 2
+                and isinstance(e.args[1], IntLit) and e.args[1].value == 0):
+            return None
+        li, w = nxt
+        if not (isinstance(li, Let) and li.type is not None and li.type.name == "i64" and isinstance(li.value, IntLit)
+                and li.value.value == 0 and li.name != st.name):
+            return None
+        x, i = st.name, li.name
+        c = w.cond if isinstance(w, While) else None
+        if not (isinstance(c, Binary) and c.op == "<" and isinstance(c.left, Var) and c.left.name == i
+                and isinstance(c.right, Var) and c.right.name not in (x, i, "result")):
+            return None
+        if len(w.body) != 2:
+            return None
+        sa, inc = w.body
+        if not (isinstance(sa, IndexAssign) and sa.name == x and isinstance(sa.index, Var) and sa.index.name == i
+                and s.tail_pure(sa.value, x)):
+            return None
+        if not (isinstance(inc, Assign) and inc.name == i and isinstance(inc.value, Binary) and inc.value.op == "+"
+                and isinstance(inc.value.left, Var) and inc.value.left.name == i
+                and isinstance(inc.value.right, IntLit) and inc.value.right.value == 1):
+            return None
+        return c.right
+
+    def tail_pure(s, e, x):
+        """P3 (tail_fill): e has no call and does not name x"""
+        if isinstance(e, (IntLit, BoolLit)):
+            return True
+        if isinstance(e, Var):
+            return e.name != x
+        if isinstance(e, Unary):
+            return s.tail_pure(e.operand, x)
+        if isinstance(e, Binary):
+            return s.tail_pure(e.left, x) and s.tail_pure(e.right, x)
+        if isinstance(e, Index):
+            return s.tail_pure(e.array, x) and s.tail_pure(e.index, x)
+        return False
+
     def unbox_let(s, st, rest):
         """P3 M5: `let x: String = f(args)` with a trusted foreign f returning String (not a catalog op, not cost mode)
         whose name is, in the rest of the block, only measured (len) or converted (string_to_str): x is kept as an owned
@@ -1369,6 +1483,8 @@ class FnGen:
         for i, st in enumerate(stmts):
             frame[1] = later[i + 1]
             s.unbox_st = st if isinstance(st, Let) and s.unbox_let(st, stmts[i + 1:]) else None
+            s.tail_k = s.tail_fill(st, stmts[i + 1:i + 3]) if isinstance(st, Let) else None
+            s.tail_st = st if s.tail_k is not None else None
             s.stmt(st)
             if isinstance(st, Let):
                 frame[0].add(st.name)
@@ -2136,6 +2252,11 @@ class FnGen:
                 if not s.verified:
                     ok = s.op("icmp ule i64 %s, 255" % v.a)
                     s.guard(ok, s.panic_elem(v.a), False)
+                if s.tail_st is not None and e is s.tail_st.value:   # P3: tail_fill
+                    k = s.ev(s.tail_k)
+                    s.m.tail.add("u8")
+                    p = s.op("call ptr @pruv_alloc_tail_u8(i64 %s, i64 %s)" % (cnt.a, k.a))
+                    return s.temp_arr(V("arr", p, cnt.a, ARRAY_U8), owned)
                 p = s.op("call ptr @pruv_alloc_u8(i64 %s, i64 %s)" % (cnt.a, v.a))
                 return s.temp_arr(V("arr", p, cnt.a, ARRAY_U8), owned)
             layout = getattr(e, "pruv_storage_layout", s.m.storage.layout_of(e))
@@ -2144,6 +2265,11 @@ class FnGen:
                 p = s.op("call ptr @pruv_alloc_narrow(i64 %s, i64 %s, i64 %d, i64 %d)" %
                          (cnt.a, v.a, elem_size(layout), alignment(layout)))
                 return s.temp_arr(V("arr", p, cnt.a, layout=layout, rng=rng), owned)
+            if s.tail_st is not None and e is s.tail_st.value:       # P3: tail_fill
+                k = s.ev(s.tail_k)
+                s.m.tail.add("i64")
+                p = s.op("call ptr @pruv_alloc_tail(i64 %s, i64 %s)" % (cnt.a, k.a))
+                return s.temp_arr(V("arr", p, cnt.a, rng=rng), owned)
             p = s.op("call ptr @pruv_alloc(i64 %s, i64 %s)" % (cnt.a, v.a))
             return s.temp_arr(V("arr", p, cnt.a, rng=rng), owned)
         if n == "copy":
@@ -4412,6 +4538,9 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
         "declare i%d @llvm.bswap.i%d(i%d)\n" % (w, w, w) for w in (16, 32, 64) if w in m.bswap) + (
         "declare ptr @pruv_shrink_v2(ptr, i64, i64, i64, i64) nounwind\n" if m.shrink else "") + (
         "declare void @pruv_fill_v2(ptr nocapture, i64, i64, i64) nounwind\n" if m.fill else "") + (
+        DECLS_TAIL if "i64" in m.tail else "") + (
+        DECLS_TAIL_U8 if "u8" in m.tail else "") + (
+        DECLS_MINMAX if m.tail else "") + (
         g6decls + "\n" + "\n".join(chunks))  # G2 A5/B2, G3, G6 A3, G9 A3; P2 batch 4: llvm.bswap when used
     if m.par_trampolines:
         ir = "%pruv_g7_job = type { ptr, ptr }\n" + "\n".join(m.par_types) + "\n" + ir
