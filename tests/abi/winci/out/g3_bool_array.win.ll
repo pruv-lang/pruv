@@ -27,11 +27,32 @@ declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)
 declare { i128, i1 } @llvm.sadd.with.overflow.i128(i128, i128)
 declare { i128, i1 } @llvm.ssub.with.overflow.i128(i128, i128)
 declare { i128, i1 } @llvm.smul.with.overflow.i128(i128, i128)
+define internal void @pruv_free_nn(ptr %p, i64 %n) alwaysinline nounwind {
+entry:
+  %z = icmp eq ptr %p, null
+  br i1 %z, label %done, label %do
+do:
+  call void @pruv_free(ptr %p, i64 %n)
+  br label %done
+done:
+  ret void
+}
 declare noalias ptr @pruv_alloc_u8(i64, i64) nounwind
 declare noalias ptr @pruv_copy_v2(ptr nocapture readonly, i64, i64, i64) nounwind
 declare void @pruv_free_v2(ptr nocapture, i64, i64, i64) nounwind
 declare void @pruv_panic_elem(i64, ptr) noreturn cold nounwind
+define internal void @pruv_free_v2_nn(ptr %p, i64 %n, i64 %s, i64 %a) alwaysinline nounwind {
+entry:
+  %z = icmp eq ptr %p, null
+  br i1 %z, label %done, label %do
+do:
+  call void @pruv_free_v2(ptr %p, i64 %n, i64 %s, i64 %a)
+  br label %done
+done:
+  ret void
+}
 declare void @pruv_check_bool(ptr nocapture readonly, i64) nounwind
+declare ptr @pruv_shrink_v2(ptr, i64, i64, i64, i64) nounwind
 
 define internal i128 @pruv_cdiv(i128 %a, i128 %b) {
 entry:
@@ -216,10 +237,11 @@ entry:
   ret void
 }
 
-define internal { ptr, i64 } @pruv_g3_f_4_fill_1_b__pruv_body(i64 %p.n, i1 %p.v) {
+define internal { ptr, i64, i64 } @pruv_g3_f_4_fill_1_b__pruv_body(i64 %p.n, i1 %p.v) {
 entry:
   %l0.out.a = alloca ptr
   %l0.out.b = alloca i64
+  %l0.out.c = alloca i64
   %l1.i.a = alloca i64
   br label %start
 start:
@@ -227,6 +249,7 @@ start:
   %t2 = call ptr @pruv_alloc_u8(i64 %p.n, i64 %t1)
   store ptr %t2, ptr %l0.out.a
   store i64 %p.n, ptr %l0.out.b
+  store i64 %p.n, ptr %l0.out.c
   store i64 0, ptr %l1.i.a
   br label %wcond.1
 wcond.1:
@@ -237,27 +260,32 @@ wbody.2:
   %t5 = load i64, ptr %l1.i.a
   %t6 = load ptr, ptr %l0.out.a
   %t7 = load i64, ptr %l0.out.b
-  %t8 = getelementptr inbounds i8, ptr %t6, i64 %t5
-  %t9 = zext i1 %p.v to i8
-  store i8 %t9, ptr %t8
-  %t10 = load i64, ptr %l1.i.a
-  %t11 = add nsw i64 %t10, 1
-  store i64 %t11, ptr %l1.i.a
+  %t8 = load i64, ptr %l0.out.c
+  %t9 = getelementptr inbounds i8, ptr %t6, i64 %t5
+  %t10 = zext i1 %p.v to i8
+  store i8 %t10, ptr %t9
+  %t11 = load i64, ptr %l1.i.a
+  %t12 = add nsw i64 %t11, 1
+  store i64 %t12, ptr %l1.i.a
   br label %wcond.1
 wend.3:
-  %t12 = load ptr, ptr %l0.out.a
-  %t13 = load i64, ptr %l0.out.b
+  %t13 = load ptr, ptr %l0.out.a
+  %t14 = load i64, ptr %l0.out.b
+  %t15 = load i64, ptr %l0.out.c
   store ptr null, ptr %l0.out.a
   store i64 0, ptr %l0.out.b
-  %t14 = load ptr, ptr %l0.out.a
-  %t15 = load i64, ptr %l0.out.b
-  call void @pruv_free_v2(ptr %t14, i64 %t15, i64 1, i64 1)
-  %t16 = insertvalue { ptr, i64 } undef, ptr %t12, 0
-  %t17 = insertvalue { ptr, i64 } %t16, i64 %t13, 1
-  ret { ptr, i64 } %t17
+  store i64 0, ptr %l0.out.c
+  %t16 = load ptr, ptr %l0.out.a
+  %t17 = load i64, ptr %l0.out.b
+  %t18 = load i64, ptr %l0.out.c
+  call void @pruv_free_v2_nn(ptr %t16, i64 %t18, i64 1, i64 1)
+  %t19 = insertvalue { ptr, i64, i64 } undef, ptr %t13, 0
+  %t20 = insertvalue { ptr, i64, i64 } %t19, i64 %t14, 1
+  %t21 = insertvalue { ptr, i64, i64 } %t20, i64 %t15, 2
+  ret { ptr, i64, i64 } %t21
 }
 
-define internal { ptr, i64 } @pruv_g3_f_4_fill_1_b__pruv_entry(i64 %p.n, i1 %p.v) {
+define internal { ptr, i64, i64 } @pruv_g3_f_4_fill_1_b__pruv_entry(i64 %p.n, i1 %p.v) {
 entry:
   %req.budget = alloca i64
   br label %start
@@ -276,34 +304,41 @@ fail.4:
   call void @pruv_panic_requires(ptr @.str.7, ptr @.str.8)
   unreachable
 ok.3:
-  %t5 = call { ptr, i64 } @pruv_g3_f_4_fill_1_b__pruv_body(i64 %p.n, i1 %p.v)
-  ret { ptr, i64 } %t5
+  %t5 = call { ptr, i64, i64 } @pruv_g3_f_4_fill_1_b__pruv_body(i64 %p.n, i1 %p.v)
+  ret { ptr, i64, i64 } %t5
 }
 
-define internal { ptr, i64 } @fill_bool__pruv_body(i64 %p.n, i1 %p.v) {
+define internal { ptr, i64, i64 } @fill_bool__pruv_body(i64 %p.n, i1 %p.v) {
 entry:
   %l0.out.a = alloca ptr
   %l0.out.b = alloca i64
+  %l0.out.c = alloca i64
   br label %start
 start:
-  %t1 = call { ptr, i64 } @pruv_g3_f_4_fill_1_b__pruv_body(i64 %p.n, i1 %p.v)
-  %t2 = extractvalue { ptr, i64 } %t1, 0
-  %t3 = extractvalue { ptr, i64 } %t1, 1
+  %t1 = call { ptr, i64, i64 } @pruv_g3_f_4_fill_1_b__pruv_body(i64 %p.n, i1 %p.v)
+  %t2 = extractvalue { ptr, i64, i64 } %t1, 0
+  %t3 = extractvalue { ptr, i64, i64 } %t1, 1
+  %t4 = extractvalue { ptr, i64, i64 } %t1, 2
   store ptr %t2, ptr %l0.out.a
   store i64 %t3, ptr %l0.out.b
-  %t4 = load ptr, ptr %l0.out.a
-  %t5 = load i64, ptr %l0.out.b
+  store i64 %t4, ptr %l0.out.c
+  %t5 = load ptr, ptr %l0.out.a
+  %t6 = load i64, ptr %l0.out.b
+  %t7 = load i64, ptr %l0.out.c
   store ptr null, ptr %l0.out.a
   store i64 0, ptr %l0.out.b
-  %t6 = load ptr, ptr %l0.out.a
-  %t7 = load i64, ptr %l0.out.b
-  call void @pruv_free_v2(ptr %t6, i64 %t7, i64 1, i64 1)
-  %t8 = insertvalue { ptr, i64 } undef, ptr %t4, 0
-  %t9 = insertvalue { ptr, i64 } %t8, i64 %t5, 1
-  ret { ptr, i64 } %t9
+  store i64 0, ptr %l0.out.c
+  %t8 = load ptr, ptr %l0.out.a
+  %t9 = load i64, ptr %l0.out.b
+  %t10 = load i64, ptr %l0.out.c
+  call void @pruv_free_v2_nn(ptr %t8, i64 %t10, i64 1, i64 1)
+  %t11 = insertvalue { ptr, i64, i64 } undef, ptr %t5, 0
+  %t12 = insertvalue { ptr, i64, i64 } %t11, i64 %t6, 1
+  %t13 = insertvalue { ptr, i64, i64 } %t12, i64 %t7, 2
+  ret { ptr, i64, i64 } %t13
 }
 
-define internal { ptr, i64 } @fill_bool__pruv_entry(i64 %p.n, i1 %p.v) {
+define internal { ptr, i64, i64 } @fill_bool__pruv_entry(i64 %p.n, i1 %p.v) {
 entry:
   %req.budget = alloca i64
   br label %start
@@ -322,19 +357,27 @@ fail.4:
   call void @pruv_panic_requires(ptr @.str.9, ptr @.str.8)
   unreachable
 ok.3:
-  %t5 = call { ptr, i64 } @fill_bool__pruv_body(i64 %p.n, i1 %p.v)
-  ret { ptr, i64 } %t5
+  %t5 = call { ptr, i64, i64 } @fill_bool__pruv_body(i64 %p.n, i1 %p.v)
+  ret { ptr, i64, i64 } %t5
 }
 
 define void @pruv_abi_fill_bool(i64 %a.n, i64 %a.v, ptr %out) {
 entry:
   %c.v = icmp ne i64 %a.v, 0
-  %r = call { ptr, i64 } @fill_bool__pruv_entry(i64 %a.n, i1 %c.v)
-  %x0 = extractvalue { ptr, i64 } %r, 0
-  %x1 = extractvalue { ptr, i64 } %r, 1
+  %r = call { ptr, i64, i64 } @fill_bool__pruv_entry(i64 %a.n, i1 %c.v)
+  %x0r = extractvalue { ptr, i64, i64 } %r, 0
+  %x1 = extractvalue { ptr, i64, i64 } %r, 1
+  %x2 = extractvalue { ptr, i64, i64 } %r, 2
   %o0 = getelementptr inbounds { ptr, i64 }, ptr %out, i32 0, i32 0
   %o1 = getelementptr inbounds { ptr, i64 }, ptr %out, i32 0, i32 1
-  store ptr %x0, ptr %o0
   store i64 %x1, ptr %o1
+  %x3 = icmp eq i64 %x2, %x1
+  br i1 %x3, label %shr.same, label %shr.do
+shr.do:
+  %x0 = call ptr @pruv_shrink_v2(ptr %x0r, i64 %x2, i64 %x1, i64 1, i64 1)
+  store ptr %x0, ptr %o0
+  ret void
+shr.same:
+  store ptr %x0r, ptr %o0
   ret void
 }

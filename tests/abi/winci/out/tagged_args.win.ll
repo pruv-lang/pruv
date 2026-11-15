@@ -17,6 +17,16 @@ declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)
 declare { i128, i1 } @llvm.sadd.with.overflow.i128(i128, i128)
 declare { i128, i1 } @llvm.ssub.with.overflow.i128(i128, i128)
 declare { i128, i1 } @llvm.smul.with.overflow.i128(i128, i128)
+define internal void @pruv_free_nn(ptr %p, i64 %n) alwaysinline nounwind {
+entry:
+  %z = icmp eq ptr %p, null
+  br i1 %z, label %done, label %do
+do:
+  call void @pruv_free(ptr %p, i64 %n)
+  br label %done
+done:
+  ret void
+}
 
 define internal i64 @unwrap_or__pruv_body({ i1, i64 } %p.o, i64 %p.d) {
 entry:

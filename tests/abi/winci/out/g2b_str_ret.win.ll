@@ -24,13 +24,34 @@ declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)
 declare { i128, i1 } @llvm.sadd.with.overflow.i128(i128, i128)
 declare { i128, i1 } @llvm.ssub.with.overflow.i128(i128, i128)
 declare { i128, i1 } @llvm.smul.with.overflow.i128(i128, i128)
+define internal void @pruv_free_nn(ptr %p, i64 %n) alwaysinline nounwind {
+entry:
+  %z = icmp eq ptr %p, null
+  br i1 %z, label %done, label %do
+do:
+  call void @pruv_free(ptr %p, i64 %n)
+  br label %done
+done:
+  ret void
+}
 declare noalias ptr @pruv_alloc_u8(i64, i64) nounwind
 declare noalias ptr @pruv_copy_v2(ptr nocapture readonly, i64, i64, i64) nounwind
 declare void @pruv_free_v2(ptr nocapture, i64, i64, i64) nounwind
 declare void @pruv_panic_elem(i64, ptr) noreturn cold nounwind
+define internal void @pruv_free_v2_nn(ptr %p, i64 %n, i64 %s, i64 %a) alwaysinline nounwind {
+entry:
+  %z = icmp eq ptr %p, null
+  br i1 %z, label %done, label %do
+do:
+  call void @pruv_free_v2(ptr %p, i64 %n, i64 %s, i64 %a)
+  br label %done
+done:
+  ret void
+}
 declare i32 @pruv_str_boundary(ptr nocapture readonly, i64, i64) nounwind willreturn memory(argmem: read)
 declare noalias ptr @pruv_substr(ptr nocapture readonly, i64, i64, i64) nounwind
 declare void @pruv_check_utf8(ptr nocapture readonly, i64) nounwind
+declare ptr @pruv_shrink_v2(ptr, i64, i64, i64, i64) nounwind
 
 define internal i128 @pruv_cdiv(i128 %a, i128 %b) {
 entry:
@@ -92,40 +113,50 @@ c2:
   ret i128 %rr
 }
 
-define internal { ptr, i64 } @cut__pruv_body(ptr noalias nocapture readonly %p.s.a, i64 %p.s.n, i64 %p.i) {
+define internal { ptr, i64, i64 } @cut__pruv_body(ptr noalias nocapture readonly %p.s.a, i64 %p.s.n, i64 %p.i) {
 entry:
   %l0.c.a = alloca ptr
   %l0.c.b = alloca i64
+  %l0.c.c = alloca i64
   %l1.d.a = alloca ptr
   %l1.d.b = alloca i64
+  %l1.d.c = alloca i64
   br label %start
 start:
   %t1 = call ptr @pruv_copy_v2(ptr %p.s.a, i64 %p.s.n, i64 1, i64 1)
   store ptr %t1, ptr %l0.c.a
   store i64 %p.s.n, ptr %l0.c.b
+  store i64 %p.s.n, ptr %l0.c.c
   %t2 = load ptr, ptr %l0.c.a
   %t3 = load i64, ptr %l0.c.b
-  %t4 = sub i64 %p.i, 0
-  %t5 = getelementptr inbounds i8, ptr %t2, i64 0
-  %t6 = call ptr @pruv_copy_v2(ptr %t5, i64 %t4, i64 1, i64 1)
-  store ptr %t6, ptr %l1.d.a
-  store i64 %t4, ptr %l1.d.b
-  %t7 = load ptr, ptr %l1.d.a
-  %t8 = load i64, ptr %l1.d.b
+  %t4 = load i64, ptr %l0.c.c
+  %t5 = sub i64 %p.i, 0
+  %t6 = getelementptr inbounds i8, ptr %t2, i64 0
+  %t7 = call ptr @pruv_copy_v2(ptr %t6, i64 %t5, i64 1, i64 1)
+  store ptr %t7, ptr %l1.d.a
+  store i64 %t5, ptr %l1.d.b
+  store i64 %t5, ptr %l1.d.c
+  %t8 = load ptr, ptr %l1.d.a
+  %t9 = load i64, ptr %l1.d.b
+  %t10 = load i64, ptr %l1.d.c
   store ptr null, ptr %l1.d.a
   store i64 0, ptr %l1.d.b
-  %t9 = load ptr, ptr %l1.d.a
-  %t10 = load i64, ptr %l1.d.b
-  call void @pruv_free_v2(ptr %t9, i64 %t10, i64 1, i64 1)
-  %t11 = load ptr, ptr %l0.c.a
-  %t12 = load i64, ptr %l0.c.b
-  call void @pruv_free_v2(ptr %t11, i64 %t12, i64 1, i64 1)
-  %t13 = insertvalue { ptr, i64 } undef, ptr %t7, 0
-  %t14 = insertvalue { ptr, i64 } %t13, i64 %t8, 1
-  ret { ptr, i64 } %t14
+  store i64 0, ptr %l1.d.c
+  %t11 = load ptr, ptr %l1.d.a
+  %t12 = load i64, ptr %l1.d.b
+  %t13 = load i64, ptr %l1.d.c
+  call void @pruv_free_v2_nn(ptr %t11, i64 %t13, i64 1, i64 1)
+  %t14 = load ptr, ptr %l0.c.a
+  %t15 = load i64, ptr %l0.c.b
+  %t16 = load i64, ptr %l0.c.c
+  call void @pruv_free_v2_nn(ptr %t14, i64 %t16, i64 1, i64 1)
+  %t17 = insertvalue { ptr, i64, i64 } undef, ptr %t8, 0
+  %t18 = insertvalue { ptr, i64, i64 } %t17, i64 %t9, 1
+  %t19 = insertvalue { ptr, i64, i64 } %t18, i64 %t10, 2
+  ret { ptr, i64, i64 } %t19
 }
 
-define internal { ptr, i64 } @cut__pruv_entry(ptr noalias nocapture readonly %p.s.a, i64 %p.s.n, i64 %p.i) {
+define internal { ptr, i64, i64 } @cut__pruv_entry(ptr noalias nocapture readonly %p.s.a, i64 %p.s.n, i64 %p.i) {
 entry:
   %req.budget = alloca i64
   br label %start
@@ -156,31 +187,47 @@ fail.6:
   call void @pruv_panic_requires(ptr @.str.4, ptr @.str.6)
   unreachable
 ok.5:
-  %t12 = call { ptr, i64 } @cut__pruv_body(ptr %p.s.a, i64 %p.s.n, i64 %p.i)
-  ret { ptr, i64 } %t12
+  %t12 = call { ptr, i64, i64 } @cut__pruv_body(ptr %p.s.a, i64 %p.s.n, i64 %p.i)
+  ret { ptr, i64, i64 } %t12
 }
 
 define void @pruv_abi_cut(ptr %a.s.a, i64 %a.s.n, i64 %a.i, ptr %out) {
 entry:
   call void @pruv_check_utf8(ptr %a.s.a, i64 %a.s.n)
-  %r = call { ptr, i64 } @cut__pruv_entry(ptr %a.s.a, i64 %a.s.n, i64 %a.i)
-  %x0 = extractvalue { ptr, i64 } %r, 0
-  %x1 = extractvalue { ptr, i64 } %r, 1
+  %r = call { ptr, i64, i64 } @cut__pruv_entry(ptr %a.s.a, i64 %a.s.n, i64 %a.i)
+  %x0r = extractvalue { ptr, i64, i64 } %r, 0
+  %x1 = extractvalue { ptr, i64, i64 } %r, 1
+  %x2 = extractvalue { ptr, i64, i64 } %r, 2
   %o0 = getelementptr inbounds { ptr, i64 }, ptr %out, i32 0, i32 0
   %o1 = getelementptr inbounds { ptr, i64 }, ptr %out, i32 0, i32 1
-  store ptr %x0, ptr %o0
   store i64 %x1, ptr %o1
+  %x3 = icmp eq i64 %x2, %x1
+  br i1 %x3, label %shr.same, label %shr.do
+shr.do:
+  %x0 = call ptr @pruv_shrink_v2(ptr %x0r, i64 %x2, i64 %x1, i64 1, i64 1)
+  store ptr %x0, ptr %o0
+  ret void
+shr.same:
+  store ptr %x0r, ptr %o0
   ret void
 }
 
 define void @pruv_abi_cut__typed(ptr %a.s.a, i64 %a.s.n, i64 %a.i, ptr %out) {
 entry:
-  %r = call { ptr, i64 } @cut__pruv_entry(ptr %a.s.a, i64 %a.s.n, i64 %a.i)
-  %x0 = extractvalue { ptr, i64 } %r, 0
-  %x1 = extractvalue { ptr, i64 } %r, 1
+  %r = call { ptr, i64, i64 } @cut__pruv_entry(ptr %a.s.a, i64 %a.s.n, i64 %a.i)
+  %x0r = extractvalue { ptr, i64, i64 } %r, 0
+  %x1 = extractvalue { ptr, i64, i64 } %r, 1
+  %x2 = extractvalue { ptr, i64, i64 } %r, 2
   %o0 = getelementptr inbounds { ptr, i64 }, ptr %out, i32 0, i32 0
   %o1 = getelementptr inbounds { ptr, i64 }, ptr %out, i32 0, i32 1
-  store ptr %x0, ptr %o0
   store i64 %x1, ptr %o1
+  %x3 = icmp eq i64 %x2, %x1
+  br i1 %x3, label %shr.same, label %shr.do
+shr.do:
+  %x0 = call ptr @pruv_shrink_v2(ptr %x0r, i64 %x2, i64 %x1, i64 1, i64 1)
+  store ptr %x0, ptr %o0
+  ret void
+shr.same:
+  store ptr %x0r, ptr %o0
   ret void
 }

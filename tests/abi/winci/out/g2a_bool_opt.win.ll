@@ -23,10 +23,30 @@ declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)
 declare { i128, i1 } @llvm.sadd.with.overflow.i128(i128, i128)
 declare { i128, i1 } @llvm.ssub.with.overflow.i128(i128, i128)
 declare { i128, i1 } @llvm.smul.with.overflow.i128(i128, i128)
+define internal void @pruv_free_nn(ptr %p, i64 %n) alwaysinline nounwind {
+entry:
+  %z = icmp eq ptr %p, null
+  br i1 %z, label %done, label %do
+do:
+  call void @pruv_free(ptr %p, i64 %n)
+  br label %done
+done:
+  ret void
+}
 declare noalias ptr @pruv_alloc_u8(i64, i64) nounwind
 declare noalias ptr @pruv_copy_v2(ptr nocapture readonly, i64, i64, i64) nounwind
 declare void @pruv_free_v2(ptr nocapture, i64, i64, i64) nounwind
 declare void @pruv_panic_elem(i64, ptr) noreturn cold nounwind
+define internal void @pruv_free_v2_nn(ptr %p, i64 %n, i64 %s, i64 %a) alwaysinline nounwind {
+entry:
+  %z = icmp eq ptr %p, null
+  br i1 %z, label %done, label %do
+do:
+  call void @pruv_free_v2(ptr %p, i64 %n, i64 %s, i64 %a)
+  br label %done
+done:
+  ret void
+}
 declare void @pruv_check_bool(ptr nocapture readonly, i64) nounwind
 
 define internal i128 @pruv_cdiv(i128 %a, i128 %b) {

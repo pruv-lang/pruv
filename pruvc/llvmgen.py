@@ -83,6 +83,16 @@ declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)
 declare { i128, i1 } @llvm.sadd.with.overflow.i128(i128, i128)
 declare { i128, i1 } @llvm.ssub.with.overflow.i128(i128, i128)
 declare { i128, i1 } @llvm.smul.with.overflow.i128(i128, i128)
+define internal void @pruv_free_nn(ptr %p, i64 %n) alwaysinline nounwind {
+entry:
+  %z = icmp eq ptr %p, null
+  br i1 %z, label %done, label %do
+do:
+  call void @pruv_free(ptr %p, i64 %n)
+  br label %done
+done:
+  ret void
+}
 """
 
 # G2 A4 (docs/G2_A4_IMPL.md 2.9): only emitted when the program uses [u8]
@@ -91,6 +101,16 @@ declare noalias ptr @pruv_alloc_u8(i64, i64) nounwind
 declare noalias ptr @pruv_copy_v2(ptr nocapture readonly, i64, i64, i64) nounwind
 declare void @pruv_free_v2(ptr nocapture, i64, i64, i64) nounwind
 declare void @pruv_panic_elem(i64, ptr) noreturn cold nounwind
+define internal void @pruv_free_v2_nn(ptr %p, i64 %n, i64 %s, i64 %a) alwaysinline nounwind {
+entry:
+  %z = icmp eq ptr %p, null
+  br i1 %z, label %done, label %do
+do:
+  call void @pruv_free_v2(ptr %p, i64 %n, i64 %s, i64 %a)
+  br label %done
+done:
+  ret void
+}
 """
 
 
@@ -683,17 +703,18 @@ class FnGen:
                 s.ins("store %s %s, ptr %s" % (st(ft), s.pack(v, ft, False), g))
 
     def free_val(s, v):
+        # The *_nn wrappers let the optimizer drop the call when the moved-out slot is null.
         if v.k == "coll":  # G6 A3: a fresh (non-null) collection temporary
             s.g6_drop(v)
         elif v.k == "agg":  # G9 A3: an extended temporary
             s.drop_agg(v)
         elif v.layout != "i64":
             sz, al = elem_size(v.layout), alignment(v.layout)
-            s.ins("call void @pruv_free_v2(ptr %s, i64 %s, i64 %d, i64 %d)" % (v.a, capof(v), sz, al))
+            s.ins("call void @pruv_free_v2_nn(ptr %s, i64 %s, i64 %d, i64 %d)" % (v.a, capof(v), sz, al))
         elif is_bytes(v):  # G2 A5
-            s.ins("call void @pruv_free_v2(ptr %s, i64 %s, i64 1, i64 1)" % (v.a, capof(v)))
+            s.ins("call void @pruv_free_v2_nn(ptr %s, i64 %s, i64 1, i64 1)" % (v.a, capof(v)))
         else:
-            s.ins("call void @pruv_free(ptr %s, i64 %s)" % (v.a, capof(v)))   # P3: the size is the cap, not the len
+            s.ins("call void @pruv_free_nn(ptr %s, i64 %s)" % (v.a, capof(v)))   # P3: the size is the cap, not the len
 
     def free_scope(s, sc):
         for sl in reversed(sc["arrays"]):

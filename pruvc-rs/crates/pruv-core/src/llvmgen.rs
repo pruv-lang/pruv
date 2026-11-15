@@ -84,6 +84,16 @@ pub const DECLS: &str = concat!(
     "declare { i128, i1 } @llvm.sadd.with.overflow.i128(i128, i128)\n",
     "declare { i128, i1 } @llvm.ssub.with.overflow.i128(i128, i128)\n",
     "declare { i128, i1 } @llvm.smul.with.overflow.i128(i128, i128)\n",
+    "define internal void @pruv_free_nn(ptr %p, i64 %n) alwaysinline nounwind {\n",
+    "entry:\n",
+    "  %z = icmp eq ptr %p, null\n",
+    "  br i1 %z, label %done, label %do\n",
+    "do:\n",
+    "  call void @pruv_free(ptr %p, i64 %n)\n",
+    "  br label %done\n",
+    "done:\n",
+    "  ret void\n",
+    "}\n",
 );
 
 /// Declarations appended right after DECLS only for `[u8]` programs (G2 A4 §2.9).
@@ -92,6 +102,16 @@ pub const DECLS_U8: &str = concat!(
     "declare noalias ptr @pruv_copy_v2(ptr nocapture readonly, i64, i64, i64) nounwind\n",
     "declare void @pruv_free_v2(ptr nocapture, i64, i64, i64) nounwind\n",
     "declare void @pruv_panic_elem(i64, ptr) noreturn cold nounwind\n",
+    "define internal void @pruv_free_v2_nn(ptr %p, i64 %n, i64 %s, i64 %a) alwaysinline nounwind {\n",
+    "entry:\n",
+    "  %z = icmp eq ptr %p, null\n",
+    "  br i1 %z, label %done, label %do\n",
+    "do:\n",
+    "  call void @pruv_free_v2(ptr %p, i64 %n, i64 %s, i64 %a)\n",
+    "  br label %done\n",
+    "done:\n",
+    "  ret void\n",
+    "}\n",
 );
 
 /// G2 A5: declarations appended after DECLS_U8 only for programs that use `[bool]`.
@@ -1150,6 +1170,7 @@ impl<'a> FnGen<'a> {
     }
 
     pub fn free_val(&mut self, v: &V) -> R<()> {
+        // The *_nn wrappers let the optimizer drop the call when the moved-out slot is null.
         if v.k == Kind::Coll {
             // G6 A3: a fresh (non-null) collection temporary
             return self.g6_drop(v);
@@ -1159,12 +1180,12 @@ impl<'a> FnGen<'a> {
             return self.drop_agg(v);
         }
         if v.layout != "i64" {
-            return self.ins(format!("call void @pruv_free_v2(ptr {}, i64 {}, i64 {}, i64 {})", v.a, capof(v), elem_size(v.layout), alignment(v.layout)));
+            return self.ins(format!("call void @pruv_free_v2_nn(ptr {}, i64 {}, i64 {}, i64 {})", v.a, capof(v), elem_size(v.layout), alignment(v.layout)));
         }
         if is_bytes_ty(&v.ty) {
-            return self.ins(format!("call void @pruv_free_v2(ptr {}, i64 {}, i64 1, i64 1)", v.a, capof(v)));
+            return self.ins(format!("call void @pruv_free_v2_nn(ptr {}, i64 {}, i64 1, i64 1)", v.a, capof(v)));
         }
-        self.ins(format!("call void @pruv_free(ptr {}, i64 {})", v.a, capof(v))) // P3: the size is the cap, not the len
+        self.ins(format!("call void @pruv_free_nn(ptr {}, i64 {})", v.a, capof(v))) // P3: the size is the cap, not the len
     }
 
     fn free_scope(&mut self, arrays: &[Slot]) -> R<()> {
