@@ -89,7 +89,7 @@ def compile_file(path, out, verify=True, trust_callers=False, backend="rust", ru
     elif infer and show_inferred:
         print(json.dumps({"status": "skipped_no_verify"}, sort_keys=True, ensure_ascii=False), file=sys.stderr)
     use = first_async_use(prog)
-    if use:
+    if use and (backend == "llvm" or also_llvm):
         f, line, col = use
         raise PruvError("codegen", line, col, "unsupported_type",
                         "Loop and ev_* operations are not implemented in this batch",

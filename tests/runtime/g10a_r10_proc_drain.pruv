@@ -1,0 +1,97 @@
+fn timer() -> i64 ! async, net, proc, alloc {
+ let mut l: Loop = ev_new(2);
+ l = ev_wait(move l, 0);
+ assert ev_event_slot(l) == -1;
+ assert ev_event_kind(l) == 0;
+ l = ev_add_timer(move l, 50);
+ assert ev_last(l) == 0;
+ l = ev_wait(move l, -1);
+ assert ev_event_kind(l) == 4;
+ assert ev_kind(l, 0) == 0;
+ l = ev_wait(move l, 0);
+ assert ev_event_kind(l) == 0;
+ let r: Result<i64> = ev_close(move l);
+ match r { Ok(n) => { return n; } Err(e) => { return -e; } }
+}
+fn socket(port: i64, mode: i64, payload: [u8]) -> i64 ! async, net, proc, alloc {
+ let s: Socket = net_connect("127.0.0.1", port);
+ let mut l: Loop = ev_new(3);
+ l = ev_add_socket(move l, move s);
+ if !ev_ok(l) { let r: Result<i64> = ev_close(move l); match r {Ok(n)=>{return n;} Err(e)=>{return -e;}} }
+ if mode == 1 {l = ev_remove(move l, 0);} else {
+ if mode == 2 {l = ev_write(move l, 0, payload);} else {
+ let mut total: i64 = 0;
+ let mut done: bool = false;
+ let mut rounds: i64 = 10000;
+ while !done && rounds > 0 decreases rounds {
+  l = ev_wait(move l, 2000);
+  if ev_event_kind(l) == 1 {
+   l = ev_read(move l, 0, 65536);
+   let data: [u8] = ev_bytes(l);
+   let n: i64 = ev_size(l);
+   if ev_write_open(l, 0) { l = ev_write(move l, 0, data); }
+   total = total + n;
+  } else { done = true; }
+  rounds = rounds - 1;
+ }
+ if ev_event_kind(l) == 3 {
+  l = ev_read(move l, 0, 1); assert ev_eof(l, 0);
+  l = ev_wait(move l, 0); assert ev_event_kind(l) == 0;
+ }
+ if ev_event_kind(l) == 5 {
+  assert ev_ok(l); l = ev_read(move l, 0, 1); assert ev_size(l) == 0;
+  l = ev_wait(move l, 0); assert ev_event_kind(l) == 0;
+ }
+ }
+ }
+ let r: Result<i64> = ev_close(move l);
+ match r {Ok(n)=>{return n;} Err(e)=>{return -e;}}
+}
+fn listener(port: i64) -> i64 ! async, net, proc, alloc {
+ let x: Listener = net_listen("127.0.0.1", port);
+ let mut l: Loop = ev_new(3);
+ l = ev_add_listener(move l, move x);
+ if ev_ok(l) {
+ l = ev_accept(move l, 0); assert ev_last(l) == -1;
+ l = ev_remove(move l, 0);
+ }
+ let r: Result<i64> = ev_close(move l);
+ match r {Ok(n)=>{return n;} Err(e)=>{return -e;}}
+}
+fn process(program: str, mode: str, cancel: bool) -> i64 ! async, net, proc, alloc {
+ let mut a: ProcessArgs = proc_args_new();
+ a = proc_args_push(move a, mode);
+ let p: Process = proc_spawn(program, a, "");
+ let mut l: Loop = ev_new(2);
+ l = ev_add_process(move l, move p);
+ if ev_ok(l) {
+ if cancel {l = ev_remove(move l, 0);} else {
+ l = ev_proc_close_stdin(move l, 0);
+ let mut done: bool = false; let mut rounds: i64 = 10000; let mut out: i64 = 0; let mut err: i64 = 0;
+ while !done && rounds > 0 decreases rounds {
+  l = ev_wait(move l, 2000);
+  if ev_event_kind(l) == 1 {
+   l = ev_proc_read(move l, 0, 1, 65536);
+   let mut i: i64 = 0;
+   while i < ev_size(l) decreases ev_size(l) - i { assert ev_byte(l, i) == ((out + i) * 31 + 12) % 251; i = i + 1; }
+   out = out + ev_size(l);
+   l = ev_proc_read(move l, 0, 2, 65536);
+   let mut j: i64 = 0;
+   while j < ev_size(l) decreases ev_size(l) - j { assert ev_byte(l, j) == ((err + j) * 31 + 19) % 251; j = j + 1; }
+   err = err + ev_size(l);
+  } else {done = true;}
+  rounds = rounds - 1;
+ }
+ assert out == 2097152; assert err == 2097152;
+ l = ev_proc_wait(move l, 0); assert ev_exit(l) == 0;
+ }
+ }
+ let r: Result<i64> = ev_close(move l);
+ match r {Ok(n)=>{return n;} Err(e)=>{return -e;}}
+}
+fn bad(which: i64) -> i64 ! async, net, proc, alloc {
+ let mut l: Loop = ev_new(1);
+ if which == 0 {l = ev_read(move l, 0, 1);} else {l = ev_add_timer(move l, -1);}
+ let r: Result<i64> = ev_close(move l);
+ return 0;
+}

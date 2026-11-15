@@ -704,9 +704,8 @@ G10_ASYNC_COMPILES = ("async_only", "user_names")  # no async catalog use
 
 
 def g10_async_frontend_jobs(group="g10_async_frontend", subdir="frontend", modes=None):
-    """G10 async A0: every root that uses Loop / ev_* is rejected by the staging guard on both backends in
-    every mode (exit 1, stage=codegen code=unsupported_type), after the type check accepted it; the G10_ASYNC_COMPILES roots
-    generate code on both backends (exit 0)."""
+    """G10 async A2: Rust lowers every root; LLVM retains the staging guard for Loop / ev_*.
+    The roots without async catalog use generate code on both backends."""
     if modes is None:
         modes = (("default", []), ("no-verify", ["--no-verify"]), ("trust-callers", ["--trust-callers"]),
                  ("foreign-checks-off", ["--foreign-checks", "off"]))
@@ -721,7 +720,7 @@ def g10_async_frontend_jobs(group="g10_async_frontend", subdir="frontend", modes
                 for backend in ("rust", "llvm"):
                     c = (pruvc(f, out + ".rs", flags) if backend == "rust" else
                          pruvc_llvm(f, out + ".ll", out + "_llvm.rs", flags))
-                    if stem in G10_ASYNC_COMPILES:
+                    if stem in G10_ASYNC_COMPILES or backend == "rust":
                         if c.returncode != 0:
                             return False, "%s: exit %d (expected 0) %s" % (backend, c.returncode,
                                                                            (c.stdout + c.stderr)[-600:])
@@ -1207,6 +1206,8 @@ def runtime_job(j, t, spec, flags, name, suffix, llvm):
             hook_env["PRUV_G7_TEST_HOOK"] = spec["g7_hook"]
         if spec.get("proc_hook"):
             hook_env["PRUV_PROC_TEST_HOOK"] = spec["proc_hook"]
+        if spec.get("async_hook"):
+            hook_env["PRUV_ASYNC_TEST_HOOK"] = spec["async_hook"]
         if spec.get("net_hook"):   # G10 net A2: PRUV_NET_TEST_HOOK (accept, read, write, shutdown)
             hook_env["PRUV_NET_TEST_HOOK"] = spec["net_hook"]
         if llvm:
@@ -1254,7 +1255,7 @@ def runtime_job(j, t, spec, flags, name, suffix, llvm):
             return False, "rustc: " + r.stderr[-400:]
         g6_count = bool(llvm and spec.get("g6_drop_balance"))   # G6 A3 (G6_SPEC 13.4)
         env = dict(os.environ, PRUV_G6_COUNT="1") if g6_count else None
-        if t.startswith("g10p_"):
+        if t.startswith(("g10p_", "g10a_")):
             # G10 proc A2: the fixture child (compiled once) and a fresh temporary directory for the driver
             child, child_err = proc_child()
             if child_err:
@@ -1275,7 +1276,7 @@ def runtime_job(j, t, spec, flags, name, suffix, llvm):
             if m is None or m.group(1) != "0":
                 problems.append("g6 live boxes at exit: %s (expected 0)" % (m.group(1) if m else "no report"))
         if p.returncode != spec["exit"]:
-            problems.append("exit %d (expected %d)" % (p.returncode, spec["exit"]))
+            problems.append("exit %d (expected %d): %s" % (p.returncode, spec["exit"], p.stderr[-1200:]))
         so, se = spec.get("stdout_contains"), spec.get("stderr_contains")
         if so is not None and so not in p.stdout:
             problems.append("stdout %r lacks %r" % (p.stdout[:150], so))

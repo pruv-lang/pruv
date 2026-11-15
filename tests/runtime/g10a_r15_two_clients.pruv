@@ -1,0 +1,75 @@
+pub fn echo_two(port: i64) -> i64 ! async, net, proc, alloc
+  requires 0 <= port && port <= 65535
+{
+  let ls: Listener = net_listen("127.0.0.1", port);
+  if !net_listener_ok(ls) {
+    let r0: Result<i64> = net_listener_close(move ls);
+    return -1;
+  }
+
+  let mut l: Loop = ev_new(3);
+  l = ev_add_listener(move l, move ls);
+  if !ev_ok(l) {
+    let r1: Result<i64> = ev_close(move l);
+    return -2;
+  }
+  let lslot: i64 = ev_last(l);
+  let mut listening: i64 = 1;
+  let mut accepted: i64 = 0;
+  let mut echoed: i64 = 0;
+  let mut rounds: i64 = 100000;
+
+  while rounds > 0 && ev_ok(l) && ev_count(l) > 0
+    invariant 0 <= rounds && rounds <= 100000
+    invariant 0 <= accepted && accepted <= 2
+    invariant 0 <= echoed && echoed <= 4096 * (100000 - rounds)
+    invariant 0 <= lslot && lslot < ev_cap(l)
+    invariant (listening == 1) ==> ev_kind(l, lslot) == 2
+    decreases rounds
+  {
+    l = ev_wait(move l, 5000);
+    let slot: i64 = ev_event_slot(l);
+    let ek: i64 = ev_event_kind(l);
+    if ek == 0 {
+      rounds = 0;
+    } else {
+      if ek == 2 {
+        // a client is connecting: take it into a new slot
+        if ev_count(l) < ev_cap(l) {
+          l = ev_accept(move l, slot);
+          if ev_ok(l) && ev_last(l) != -1 {
+            accepted = accepted + 1;
+          }
+        }
+        // two clients are enough: stop listening
+        if ev_ok(l) && accepted == 2 && listening == 1 {
+          l = ev_remove(move l, lslot);
+          listening = 0;
+        }
+      } else {
+        if ek == 1 {
+          // data from a client: echo it back
+          if ev_kind(l, slot) == 1 {
+            l = ev_read(move l, slot, 4096);
+            let n: i64 = ev_size(l);
+            if n > 0 && ev_write_open(l, slot) {
+              let chunk: [u8] = ev_bytes(l);
+              l = ev_write(move l, slot, chunk);
+              echoed = echoed + n;
+            }
+          }
+        } else {
+          // end of stream (3) or a slot error (5): drop that slot
+          if ek == 3 || ek == 5 {
+            l = ev_remove(move l, slot);
+            if slot == lslot { listening = 0; }
+          }
+        }
+      }
+      rounds = rounds - 1;
+    }
+  }
+
+  let r: Result<i64> = ev_close(move l);
+  return echoed;
+}

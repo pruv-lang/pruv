@@ -1,0 +1,1 @@
+fn main(){assert!(std::panic::catch_unwind(||sol::bad(0)).is_err());assert!(std::panic::catch_unwind(||sol::bad(1)).is_err());assert_eq!(sol::PRUV_ASYNC_THREADS.load(std::sync::atomic::Ordering::SeqCst), 0); println!("async runtime ok");}

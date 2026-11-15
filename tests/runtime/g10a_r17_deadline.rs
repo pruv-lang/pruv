@@ -1,0 +1,2 @@
+use std::io::Read;
+fn main(){let l=std::net::TcpListener::bind("127.0.0.1:0").unwrap();let port=l.local_addr().unwrap().port();let h=std::thread::spawn(move ||{let (mut s,_)=l.accept().unwrap();let mut b=Vec::new();s.read_to_end(&mut b).unwrap();});let child=std::env::var("PRUV_PROC_CHILD").unwrap();assert_eq!(sol::relay(&child,"127.0.0.1",port as i64,50),2);h.join().unwrap();assert_eq!(sol::PRUV_ASYNC_THREADS.load(std::sync::atomic::Ordering::SeqCst),0); println!("async runtime ok");}

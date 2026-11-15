@@ -1,0 +1,21 @@
+fn fair(a: i64, b: i64) -> i64 ! async, net, proc, alloc {
+ let s: Socket = net_connect("127.0.0.1", a);
+ let t: Socket = net_connect("127.0.0.1", b);
+ let mut l: Loop = ev_new(3);
+ l = ev_add_socket(move l, move s); l = ev_add_socket(move l, move t);
+ let mut first: bool = false; let mut second: bool = false; let mut rounds: i64 = 10000000;
+ while (!first || !second) && rounds > 0 decreases rounds {
+  l = ev_wait(move l, 2000);
+  if ev_event_slot(l) == 0 { first = true; }
+  if ev_event_slot(l) == 1 { second = true; }
+  rounds = rounds - 1;
+ }
+ assert first && second;
+ let mut prev: i64 = ev_event_slot(l); let mut n: i64 = 100;
+ while n > 0 decreases n {
+  l = ev_wait(move l, 0); assert ev_event_kind(l) == 1;
+  assert ev_event_slot(l) != prev; prev = ev_event_slot(l); n = n - 1;
+ }
+ let r: Result<i64> = ev_close(move l);
+ match r {Ok(v)=>{return v;} Err(e)=>{return -e;}}
+}

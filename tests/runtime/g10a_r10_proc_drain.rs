@@ -1,0 +1,1 @@
+fn main(){let child=std::env::var("PRUV_PROC_CHILD").unwrap();assert_eq!(sol::process(&child,"async_flood",false),0);assert_eq!(sol::PRUV_ASYNC_THREADS.load(std::sync::atomic::Ordering::SeqCst),0); println!("async runtime ok");}

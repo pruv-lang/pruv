@@ -98,6 +98,8 @@ class ForeignGen:
             return s._file_text(op, name)
         if op.startswith("proc_"):
             return s._proc_text(op, name)
+        if op.startswith("ev_"):
+            return s._async_text(op, name)
         if op.startswith("net_"):
             return s._net_text(op, name)
         STRING = "::std::string::String"
@@ -489,6 +491,19 @@ class ForeignGen:
             return s._fn(name, "l: &%s" % L, "i64", body + ["pruv_r"])
         raise Exception("codegen: unknown catalog operation %s" % op)
 
+    def _async_text(s, op, name):
+        args, ret, req, expr, ens = ASYNC_HELPERS[op]
+        body = s._req(req, req) if req else []
+        if s.ens and ret == "pruv_Loop" and op != "ev_new":
+            body += ["pruv_g6_charge(&mut pruv_budget, l.public.len() + l.buf.len());",
+                     "let pruv_snap = pruv_ev_snapshot(&l);"]
+        body += ["let pruv_r: %s = %s;" % (ret, expr)]
+        body += s._ens(ens or "pruv_ev_wf(&pruv_r)", ens or "well-formed loop") if ret == "pruv_Loop" or ens else []
+        if s.ens and ret == "pruv_Loop" and op != "ev_new":
+            body += s._ens('pruv_ev_post("%s", &pruv_snap, &pruv_r, %s)' % (op, "slot" if "slot:" in args else "-1"), "public state frame")
+        body += ["pruv_r"]
+        return s._fn(name, args, ret, body)
+
     # ------------------------------------------------------------------ contract-only scan (requires)
     def map_updated_helper(s, kt, vt, src):
         name = "pruv_g6_map_updated" + "".join("__" + encode(safe_type(t)) for t in src)
@@ -567,3 +582,5 @@ class ForeignGen:
         L.extend("    " + x for x in body)
         L.append("}")
         return "\n".join(L) + "\n"
+
+ASYNC_HELPERS = {'ev_new': ('cap: i64', 'pruv_Loop', 'cap >= 1 && cap <= 4096', 'pruv_ev_new(cap)', 'pruv_ev_wf(&pruv_r) && pruv_ev_count(&pruv_r)==0'), 'ev_close': ('l: pruv_Loop', '::std::result::Result<i64, i64>', '', 'pruv_ev_close(l)', 'match pruv_r {Ok(n)=>n>=0,Err(e)=>(1..=8).contains(&e)}'), 'ev_add_socket': ('l: pruv_Loop, s: pruv_Socket', 'pruv_Loop', 'l.error == 0 && pruv_ev_count(&l) < l.slots.len() as i64 && s.error == 0', 'pruv_ev_socket(l, s)', ''), 'ev_add_listener': ('l: pruv_Loop, x: pruv_Listener', 'pruv_Loop', 'l.error == 0 && pruv_ev_count(&l) < l.slots.len() as i64 && x.error == 0', 'pruv_ev_listener(l, x)', ''), 'ev_add_process': ('l: pruv_Loop, p: pruv_Process', 'pruv_Loop', 'l.error == 0 && pruv_ev_count(&l) < l.slots.len() as i64 && p.error == 0', 'pruv_ev_process(l, p)', ''), 'ev_add_timer': ('l: pruv_Loop, ms: i64', 'pruv_Loop', 'l.error == 0 && pruv_ev_count(&l) < l.slots.len() as i64 && ms >= 0 && ms <= 86400000', 'pruv_ev_timer(l, ms)', ''), 'ev_wait': ('l: pruv_Loop, timeout_ms: i64', 'pruv_Loop', 'l.error == 0 && timeout_ms >= -1 && timeout_ms <= 86400000', 'pruv_ev_wait(l, timeout_ms)', ''), 'ev_read': ('l: pruv_Loop, slot: i64, max: i64', 'pruv_Loop', 'pruv_ev_valid(&l, slot, 1) && max > 0 && max <= (1i64 << 40)', 'pruv_ev_read(l, slot, 1, max, false)', ''), 'ev_proc_read': ('l: pruv_Loop, slot: i64, stream: i64, max: i64', 'pruv_Loop', 'pruv_ev_valid(&l, slot, 3) && max > 0 && max <= (1i64 << 40) && (stream == 1 || stream == 2)', 'pruv_ev_read(l, slot, stream, max, true)', ''), 'ev_write': ('l: pruv_Loop, slot: i64, data: &[u8]', 'pruv_Loop', 'pruv_ev_valid(&l, slot, 1) && l.public[slot as usize].open', 'pruv_ev_write(l, slot, data, 0)', ''), 'ev_shutdown_write': ('l: pruv_Loop, slot: i64', 'pruv_Loop', 'pruv_ev_valid(&l, slot, 1) && l.public[slot as usize].open', 'pruv_ev_write(l, slot, &[], 1)', ''), 'ev_proc_write': ('l: pruv_Loop, slot: i64, data: &[u8]', 'pruv_Loop', 'pruv_ev_valid(&l, slot, 3) && l.public[slot as usize].open', 'pruv_ev_write(l, slot, data, 2)', ''), 'ev_proc_close_stdin': ('l: pruv_Loop, slot: i64', 'pruv_Loop', 'pruv_ev_valid(&l, slot, 3) && l.public[slot as usize].open', 'pruv_ev_write(l, slot, &[], 3)', ''), 'ev_accept': ('l: pruv_Loop, slot: i64', 'pruv_Loop', 'pruv_ev_valid(&l, slot, 2) && pruv_ev_count(&l) < l.slots.len() as i64', 'pruv_ev_accept(l, slot)', ''), 'ev_proc_wait': ('l: pruv_Loop, slot: i64', 'pruv_Loop', 'pruv_ev_valid(&l, slot, 3)', 'pruv_ev_remove(l, slot, true)', ''), 'ev_remove': ('l: pruv_Loop, slot: i64', 'pruv_Loop', 'pruv_ev_valid(&l, slot, 0) && l.public[slot as usize].kind != 0', 'pruv_ev_remove(l, slot, false)', ''), 'ev_ok': ('l: &pruv_Loop', 'bool', '', 'l.error == 0', ''), 'ev_error': ('l: &pruv_Loop', 'i64', '', 'l.error', ''), 'ev_cap': ('l: &pruv_Loop', 'i64', '', 'l.public.len() as i64', ''), 'ev_count': ('l: &pruv_Loop', 'i64', '', 'l.public.iter().filter(|p|p.kind!=0).count() as i64', ''), 'ev_last': ('l: &pruv_Loop', 'i64', '', 'l.last', ''), 'ev_event_slot': ('l: &pruv_Loop', 'i64', '', 'l.event_slot', ''), 'ev_event_kind': ('l: &pruv_Loop', 'i64', '', 'l.event_kind', ''), 'ev_size': ('l: &pruv_Loop', 'i64', '', 'l.buf.len() as i64', ''), 'ev_exit': ('l: &pruv_Loop', 'i64', '', 'l.exit', ''), 'ev_bytes': ('l: &pruv_Loop', '::std::vec::Vec<u8>', '', 'l.buf.clone()', ''), 'ev_kind': ('l: &pruv_Loop, slot: i64', 'i64', 'slot >= 0 && slot < l.public.len() as i64', 'l.public[pruv_cev_slot(l, slot as i128)].kind', ''), 'ev_eof': ('l: &pruv_Loop, slot: i64', 'bool', 'slot >= 0 && slot < l.public.len() as i64', 'l.public[pruv_cev_slot(l, slot as i128)].eof', ''), 'ev_write_open': ('l: &pruv_Loop, slot: i64', 'bool', 'slot >= 0 && slot < l.public.len() as i64', 'l.public[pruv_cev_slot(l, slot as i128)].open', ''), 'ev_byte': ('l: &pruv_Loop, i: i64', 'i64', 'i >= 0 && i < l.buf.len() as i64', 'if i >= 0 && i < l.buf.len() as i64 { l.buf[i as usize] as i64 } else { pruv_ud("loop byte out of range") }', '')}

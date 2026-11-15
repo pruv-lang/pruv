@@ -136,6 +136,7 @@ fn rty_name(t: &str, param: bool) -> String {
         "socket" => {
             if param { "&pruv_Socket".to_string() } else { "pruv_Socket".to_string() }
         }
+        "loop" => { if param { "&pruv_Loop".to_string() } else { "pruv_Loop".to_string() } }
         "listener" => {
             if param { "&pruv_Listener".to_string() } else { "pruv_Listener".to_string() }
         }

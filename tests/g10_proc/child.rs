@@ -105,6 +105,12 @@ fn main() {
     let mode = args.get(1).map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let num = |k: usize| -> u64 { args.get(k).and_then(|s| s.to_str()).and_then(|s| s.parse().ok()).unwrap_or(0) };
     match mode.as_str() {
+        "async_flood" => {
+            for i in 0..512u64 {
+                put(1, &block(1, i*4096, 4096));
+                put(2, &block(2, i*4096, 4096));
+            }
+        }
         "args" => {
             let mut out: Vec<u8> = Vec::new();
             for a in args.iter().skip(2) {

@@ -1,0 +1,1 @@
+fn main(){let x=std::net::TcpListener::bind("127.0.0.1:0").unwrap();let p=x.local_addr().unwrap().port() as i64;drop(x);assert_eq!(sol::listener(p),0);let _x=std::net::TcpListener::bind(("127.0.0.1",p as u16)).unwrap();assert_eq!(sol::PRUV_ASYNC_THREADS.load(std::sync::atomic::Ordering::SeqCst), 0); println!("async runtime ok");}
