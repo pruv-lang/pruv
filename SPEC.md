@@ -741,6 +741,57 @@ runtime in the §6d shim emitted with `--rust-bindings`. `--emit exe|obj` reject
 `codegen/foreign_target`. Functions with `Process` parameters are internal only, so their contracts are proved,
 never checked at run time. Run on macOS and Linux (CI) and on Windows (`tests/g10_proc/windows.py`, manual).
 
+## 6m. TCP sockets: net (G10)
+
+Full contract: `docs/G10_NET_SPEC.md`. Tests: `tests/g10_net/`, `tests/runtime/g10n_r*`.
+
+`net` is the effect for blocking TCP, independent of `io`, `fs`, `proc` and `alloc`. `Socket` (a connection) and
+`Listener` (a bound server port) are owned types with the `File` placement rules, and both are **must-consume**
+like `Process`: every handle, including a failed one, must end in `net_close` or `net_listener_close`.
+
+| Operation | Effects | Meaning / contract |
+|---|---|---|
+| `net_listen(host: str, port: i64) -> Listener` | net, alloc | requires `0 <= port <= 65535` (0 = OS-chosen); ok and `net_listener_port` the bound port, or error 1 or 2 and port 0 |
+| `net_accept(l: Listener) -> Socket` | net, alloc | borrows `l`; requires `net_listener_ok(l)`; ok and write-open, or error 5. Blocks |
+| `net_connect(host: str, port: i64) -> Socket` | net, alloc | requires `1 <= port <= 65535`; ok and write-open, or error 1 or 2 |
+| `net_write_str/write_bytes(take s, ...) -> Socket` | net, alloc | requires ok and write-open; writes everything |
+| `net_shutdown_write(take s) -> Socket` | net, alloc | requires ok and write-open; half-close, reading continues |
+| `net_set_timeout(take s, ms: i64) -> Socket` | net, alloc | requires ok, `0 <= ms <= 86400000` (0 = none); read and write timeout |
+| `net_read(take s, max: i64) -> Socket` | net, alloc | requires ok, `0 < max`; next chunk of at most `max` bytes; EOF iff the chunk is empty |
+| `net_read_all(take s) -> Socket` | net, alloc | requires ok; the bytes up to EOF not delivered by earlier reads |
+| `net_bytes(s) -> [u8]` | alloc | independent copy of the public buffer |
+| `net_close(take s)`, `net_listener_close(take l) -> Result<i64>` | net, alloc | no requires; release; `Ok(0)` or `Err(first error)` |
+| `net_ok/error/write_open/eof/size/byte(s, ...)`, `net_listener_ok/error/port(l)` | none | observers, usable in code and contracts |
+
+`net_error` is `0..6`: 0 none, 1 bad input (empty host, NUL), 2 connect or listen failed, 3 read, 4 write,
+shutdown or set_timeout, 5 accept, 6 a timeout set by `net_set_timeout` expired. The first error is kept; a
+failed update closes the write side and empties the buffer, so only `net_close` remains allowed. Observers never
+query the OS: data becomes visible only at the next effect operation. `net_read_all` does not close the write
+side; a peer that waits for our EOF needs `net_shutdown_write` first. TLS, UDP, HTTP, DNS, async and
+multiplexing are not part of this slice.
+
+```
+pub fn ask(host: str, port: i64, q: [u8]) -> Result<i64> ! net, alloc
+  requires 1 <= port && port <= 65535
+{
+  let mut s: Socket = net_connect(host, port);
+  if !net_ok(s) { return net_close(move s); }
+  s = net_write_bytes(move s, q);
+  if !net_ok(s) { return net_close(move s); }
+  s = net_shutdown_write(move s);
+  if !net_ok(s) { return net_close(move s); }
+  s = net_read_all(move s);
+  let answer: [u8] = net_bytes(s);
+  return net_close(move s);
+}
+```
+
+Rust uses `pruv_Socket`/`pruv_Listener` over `std::net`; LLVM uses opaque pointers and the same Rust runtime in
+the §6d shim emitted with `--rust-bindings`. `--emit exe|obj` rejects net programs with
+`codegen/foreign_target`. Functions with `Socket` or `Listener` parameters are internal only, so their contracts
+are proved, never checked at run time. Run on macOS and Linux (CI) and on Windows (`tests/g10_net/windows.py`,
+manual), over the loopback.
+
 ## 7. What the compiler proves (all must succeed)
 1. Every `a[i]` (read or write): `0 <= i < len(a)`.
 2. Every `+ - * unary-` in code: result within i64 range.

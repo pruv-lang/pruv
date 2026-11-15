@@ -14,7 +14,7 @@ use crate::codegen::{
     contract_prelude_g6, shim_helpers, CONTRACT_PRELUDE_BOOL, CONTRACT_PRELUDE_STR, CONTRACT_PRELUDE_U8, FILE_PRELUDE, G6_PRELUDE,
 };
 use crate::emit_common::rty_g;
-use crate::foreign::{is_catalog, is_catalog_contract_only, FILE_OBSERVERS, PROC_OBSERVERS};
+use crate::foreign::{is_catalog, is_catalog_contract_only, FILE_OBSERVERS, NET_OBSERVERS, PROC_OBSERVERS};
 use crate::gtype::{encode, GType};
 use crate::llvmgen::{expr_ty, is_collection};
 use crate::typeinfo::{uses_array_type, uses_str};
@@ -63,6 +63,8 @@ pub fn cname(t: &GType) -> R<String> {
         "file" => Ok("File".to_string()),
         "process" => Ok("Process".to_string()),
         "process_args" => Ok("ProcessArgs".to_string()),
+        "socket" => Ok("Socket".to_string()),
+        "listener" => Ok("Listener".to_string()),
         _ => Ok("string".to_string()),
     }
 }
@@ -255,7 +257,9 @@ fn collect<'a>(prog: &'a Program) -> R<(Cats, Colls, HashMap<String, &'a Functio
                         match helper_name(&c.name, &src) {
                             Ok(h) => {
                                 if !cats.contains_key(&h)
-                                    && (FILE_OBSERVERS.contains(&c.name.as_str()) || PROC_OBSERVERS.contains(&c.name.as_str()))
+                                    && (FILE_OBSERVERS.contains(&c.name.as_str())
+                                        || PROC_OBSERVERS.contains(&c.name.as_str())
+                                        || NET_OBSERVERS.contains(&c.name.as_str()))
                                 {
                                     observers.push((c.name.clone(), low.clone()));
                                 }
@@ -274,6 +278,14 @@ fn collect<'a>(prog: &'a Program) -> R<(Cats, Colls, HashMap<String, &'a Functio
                                         observers.push(("proc_size".to_string(), vec![]));
                                     }
                                     cats.entry(size).or_insert(("proc_size".to_string(), vec![]));
+                                }
+                                if c.name == "net_byte" {
+                                    // G10 net A3: the contract bounds guard of net_byte reads net_size
+                                    let size = "pruv_g6_net_size".to_string();
+                                    if !cats.contains_key(&size) {
+                                        observers.push(("net_size".to_string(), vec![]));
+                                    }
+                                    cats.entry(size).or_insert(("net_size".to_string(), vec![]));
                                 }
                             }
                             Err(e2) => {
@@ -294,7 +306,10 @@ fn collect<'a>(prog: &'a Program) -> R<(Cats, Colls, HashMap<String, &'a Functio
         for e in f.requires.iter().chain(f.ensures.iter()).chain(f.cost.iter()) {
             walk_expr(e, &mut |n| {
                 if let Node::Expr(Expr::Call(c)) = &n {
-                    if FILE_OBSERVERS.contains(&c.name.as_str()) || PROC_OBSERVERS.contains(&c.name.as_str()) {
+                    if FILE_OBSERVERS.contains(&c.name.as_str())
+                        || PROC_OBSERVERS.contains(&c.name.as_str())
+                        || NET_OBSERVERS.contains(&c.name.as_str())
+                    {
                         visit(n);
                     }
                 }
@@ -438,6 +453,9 @@ fn cat_adapter(helper: &str, op: &str, low: &[GType]) -> R<String> {
     }
     if op.starts_with("proc_") {
         return proc_adapter(&s, helper, op);
+    }
+    if op.starts_with("net_") {
+        return net_adapter(&s, helper, op);
     }
     let mut t: Option<&GType> = None;
     let mut k: Option<&GType> = None;
@@ -658,6 +676,71 @@ fn proc_adapter(sym: &str, helper: &str, op: &str) -> R<String> {
     Err(format!("foreign_shim: no adapter for catalog operation {}", op))
 }
 
+/// G10 net A3 (G10_NET_SPEC 6): adapters of the A2 helpers, parallel to proc_adapter (_net_adapter of foreign_shim.py).
+/// connect / listen build a new box; accept borrows the Listener and builds a Socket box; updates and reads consume the
+/// Socket box and return a new one; close / listener_close consume it and write (tag 1 = Ok, value 0); net_bytes hands
+/// out a borrowed (data, len) view of the ORIGINAL s.buf, which the LLVM caller copies at once; the observers borrow the
+/// handle and return i64 (bool as 0/1).
+fn net_adapter(sym: &str, helper: &str, op: &str) -> R<String> {
+    let (s_ty, l_ty) = ("pruv_Socket", "pruv_Listener");
+    match op {
+        "net_connect" | "net_listen" => {
+            return Ok(fn_text(sym, "p: *const u8, n: i64, port: i64", Some("PruvH"), &format!(
+                "pruv_g6_guard(|| {{ let pruv_h: &str = pruv_g6_str(p, n); pruv_g6_new({}(pruv_h, port)) }})", helper)));
+        }
+        "net_accept" => {
+            return Ok(fn_text(sym, "l: PruvH", Some("PruvH"), &format!(
+                "pruv_g6_guard(|| pruv_g6_new({}(pruv_g6_ref::<{}>(l))))", helper, l_ty)));
+        }
+        "net_write_str" | "net_write_bytes" | "net_shutdown_write" | "net_set_timeout" | "net_read" | "net_read_all" => {
+            let (params, pre, arg) = match op {
+                "net_write_str" => ("h: PruvH, p: *const u8, n: i64", "let pruv_d: &str = pruv_g6_str(p, n); ", ", pruv_d"),
+                "net_write_bytes" => (
+                    "h: PruvH, p: *const u8, n: i64",
+                    "let pruv_d: &[u8] = pruv_g6_slice::<u8>(p, n); ",
+                    ", pruv_d",
+                ),
+                "net_set_timeout" => ("h: PruvH, ms: i64", "", ", ms"),
+                "net_read" => ("h: PruvH, max: i64", "", ", max"),
+                _ => ("h: PruvH", "", ""),
+            };
+            return Ok(fn_text(sym, params, Some("PruvH"), &format!(
+                "pruv_g6_guard(|| {{ {}{}pruv_g6_new({}(pruv_o{})) }})", pre, proc_consume("h", s_ty), helper, arg)));
+        }
+        "net_close" | "net_listener_close" => {
+            let t = if op == "net_listener_close" { l_ty } else { s_ty };
+            return Ok(fn_text(sym, "h: PruvH, tag: *mut i64, val: *mut i64", None, &format!(
+                "pruv_g6_guard(|| {{ let pruv_t: *mut i64 = pruv_g6_out(tag); let pruv_v: *mut i64 = pruv_g6_out(val); \
+                 {}let pruv_r: ::std::result::Result<i64, i64> = {}(pruv_o); \
+                 unsafe {{ match pruv_r {{ ::std::result::Result::Ok(pruv_x) => {{ *pruv_t = 1; *pruv_v = pruv_x; }} \
+                 ::std::result::Result::Err(pruv_e) => {{ *pruv_t = 0; *pruv_v = pruv_e; }} }} }} }})",
+                proc_consume("h", t), helper)));
+        }
+        "net_bytes" => {
+            // the view is s.buf on the borrowed handle; the LLVM caller copies it once (no helper call, which would
+            // copy the buffer again only to drop it)
+            return Ok(fn_text(sym, "h: PruvH, data: *mut *const u8, len: *mut i64", None, &format!(
+                "pruv_g6_guard(|| {{ if data.is_null() || len.is_null() {{ pruv_g6_repr(\"null output\") }} \
+                 let pruv_s: &{s} = pruv_g6_ref::<{s}>(h); \
+                 unsafe {{ *data = pruv_s.buf.as_ptr(); *len = pruv_s.buf.len() as i64; }} }})", s = s_ty)));
+        }
+        _ => {}
+    }
+    let (params, arg) = match op {
+        "net_byte" => ("h: PruvH, i: i64", ", i"),
+        _ => ("h: PruvH", ""),
+    };
+    if matches!(op, "net_ok" | "net_error" | "net_write_open" | "net_eof" | "net_size" | "net_byte") {
+        return Ok(fn_text(sym, params, Some("i64"),
+            &format!("pruv_g6_guard(|| {}(pruv_g6_ref::<{}>(h){}) as i64)", helper, s_ty, arg)));
+    }
+    if matches!(op, "net_listener_ok" | "net_listener_error" | "net_listener_port") {
+        return Ok(fn_text(sym, params, Some("i64"),
+            &format!("pruv_g6_guard(|| {}(pruv_g6_ref::<{}>(h)) as i64)", helper, l_ty)));
+    }
+    Err(format!("foreign_shim: no adapter for catalog operation {}", op))
+}
+
 fn trusted_params(f: &Function) -> R<(Vec<String>, Vec<String>)> {
     let mut params: Vec<String> = Vec::new();
     let mut args: Vec<String> = Vec::new();
@@ -747,7 +830,7 @@ fn trusted_adapter(f: &Function) -> R<String> {
 
 fn coll_adapters(t: &GType) -> R<String> {
     let c = rty_t(t);
-    if matches!(t.name.as_str(), "file" | "process" | "process_args") {
+    if matches!(t.name.as_str(), "file" | "process" | "process_args" | "socket" | "listener") {
         // G10: a handle has no len adapter
         return Ok(fn_text(&format!("{}drop__{}", PREFIX, cname(t)?), "h: PruvH", None,
             &format!("pruv_g6_guard(|| pruv_g6_free::<pruv_{}>(h))", cname(t)?)));
@@ -830,6 +913,9 @@ pub fn build_shim(
     }
     if crate::foreign::first_proc_use(prog).is_some() {
         out.push(crate::codegen::proc_prelude(&std::env::var("PRUV_PROC_TEST_HOOK").unwrap_or_default()));
+    }
+    if crate::foreign::first_net_use(prog).is_some() {
+        out.push(crate::codegen::net_prelude(&std::env::var("PRUV_NET_TEST_HOOK").unwrap_or_default()));
     }
     out.push(contract_prelude_g6());
     if uses_array_type(prog, "array_u8") || g10 {

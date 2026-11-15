@@ -22,8 +22,8 @@ pointer (File updates consume the old box and return a fresh box).  The helper-n
 from vast import *
 from typeinfo import encode, is_collection, uses_array_type, uses_str
 from codegen import (Gen, rty, CONTRACT_PRELUDE_G6, CONTRACT_PRELUDE_U8, CONTRACT_PRELUDE_BOOL,
-                     CONTRACT_PRELUDE_STR, G6_PRELUDE, FILE_PRELUDE, proc_prelude)
-from foreign import CATALOG, CATALOG_CONTRACT_ONLY, FILE_OBSERVERS, PROC_OBSERVERS
+                     CONTRACT_PRELUDE_STR, G6_PRELUDE, FILE_PRELUDE, proc_prelude, net_prelude)
+from foreign import CATALOG, CATALOG_CONTRACT_ONLY, FILE_OBSERVERS, PROC_OBSERVERS, NET_OBSERVERS
 
 PREFIX = "pruv_g6_v1_"
 BRIDGE_SYM = "pruv_g6_bridge_v1"
@@ -52,7 +52,8 @@ def cname(t):
         return "vec__" + encode(t.args[0])
     if t.name == "hashmap":
         return "hashmap__%s__%s" % (encode(t.args[0]), encode(t.args[1]))
-    return {"file": "File", "process": "Process", "process_args": "ProcessArgs"}.get(t.name, "string")
+    return {"file": "File", "process": "Process", "process_args": "ProcessArgs",
+            "socket": "Socket", "listener": "Listener"}.get(t.name, "string")
 
 
 def drop_sym(t):
@@ -113,6 +114,8 @@ def collect(prog):
                     cats.setdefault(helper_name("file_size", ()), ("file_size", ()))
                 if n.name == "proc_byte":   # G10 proc A3: the contract bounds guard of proc_byte reads proc_size
                     cats.setdefault(helper_name("proc_size", ()), ("proc_size", ()))
+                if n.name == "net_byte":    # G10 net A3: the contract bounds guard of net_byte reads net_size
+                    cats.setdefault(helper_name("net_size", ()), ("net_size", ()))
             else:
                 f = fmap.get(n.name)
                 if f is not None and f.foreign is not None:
@@ -126,7 +129,7 @@ def collect(prog):
         add(f.ret)
         _walk(f.body, visit)
         def contract_visit(n):
-            if isinstance(n, Call) and (n.name in FILE_OBSERVERS or n.name in PROC_OBSERVERS):
+            if isinstance(n, Call) and (n.name in FILE_OBSERVERS or n.name in PROC_OBSERVERS or n.name in NET_OBSERVERS):
                 visit(n)
         _walk(f.requires, contract_visit)
         _walk(f.ensures, contract_visit)
@@ -250,6 +253,8 @@ def _cat_adapter(helper, op, low):
         return _file_adapter(S, helper, op)
     if op.startswith("proc_"):
         return _proc_adapter(S, helper, op)
+    if op.startswith("net_"):
+        return _net_adapter(S, helper, op)
     if op in ("vec_new", "vec_push", "vec_get"):
         T = low[0]
         C = rty(Type("vec", (T,)))
@@ -374,6 +379,55 @@ def _proc_adapter(sym, helper, op):
     raise Exception("foreign_shim: no adapter for catalog operation %s" % op)
 
 
+def _net_adapter(sym, helper, op):
+    """G10 net A3 (G10_NET_SPEC 6): adapters of the A2 helpers, parallel to _proc_adapter. connect / listen build a new
+    box; accept borrows the Listener and builds a Socket box; updates and reads consume the Socket box and return a
+    new one; close / listener_close consume it and write (tag 1 = Ok, value 0); net_bytes hands out a borrowed
+    (data, len) view of the ORIGINAL s.buf, which the LLVM caller copies at once; the observers borrow the handle and
+    return i64 (bool as 0/1)."""
+    S, L = "pruv_Socket", "pruv_Listener"
+    if op in ("net_connect", "net_listen"):
+        return _fn(sym, "p: *const u8, n: i64, port: i64", "PruvH",
+                   "pruv_g6_guard(|| { let pruv_h: &str = pruv_g6_str(p, n); pruv_g6_new(%s(pruv_h, port)) })" % helper)
+    if op == "net_accept":
+        return _fn(sym, "l: PruvH", "PruvH", "pruv_g6_guard(|| pruv_g6_new(%s(pruv_g6_ref::<%s>(l))))" % (helper, L))
+    if op in ("net_write_str", "net_write_bytes", "net_shutdown_write", "net_set_timeout", "net_read", "net_read_all"):
+        params, pre, arg = "h: PruvH", "", ""
+        if op == "net_write_str":
+            params, pre, arg = params + ", p: *const u8, n: i64", "let pruv_d: &str = pruv_g6_str(p, n); ", ", pruv_d"
+        elif op == "net_write_bytes":
+            params, pre, arg = params + ", p: *const u8, n: i64", "let pruv_d: &[u8] = pruv_g6_slice::<u8>(p, n); ", ", pruv_d"
+        elif op == "net_set_timeout":
+            params, arg = params + ", ms: i64", ", ms"
+        elif op == "net_read":
+            params, arg = params + ", max: i64", ", max"
+        return _fn(sym, params, "PruvH", "pruv_g6_guard(|| { %s%spruv_g6_new(%s(pruv_o%s)) })" % (
+            pre, _proc_consume("h", S), helper, arg))
+    if op in ("net_close", "net_listener_close"):
+        T = L if op == "net_listener_close" else S
+        return _fn(sym, "h: PruvH, tag: *mut i64, val: *mut i64", None,
+                   "pruv_g6_guard(|| { let pruv_t: *mut i64 = pruv_g6_out(tag); let pruv_v: *mut i64 = pruv_g6_out(val); "
+                   "%slet pruv_r: ::std::result::Result<i64, i64> = %s(pruv_o); "
+                   "unsafe { match pruv_r { ::std::result::Result::Ok(pruv_x) => { *pruv_t = 1; *pruv_v = pruv_x; } "
+                   "::std::result::Result::Err(pruv_e) => { *pruv_t = 0; *pruv_v = pruv_e; } } } })" % (
+                       _proc_consume("h", T), helper))
+    if op == "net_bytes":
+        # the view is s.buf on the borrowed handle; the LLVM caller copies it once (no helper call, which would copy
+        # the buffer again only to drop it)
+        return _fn(sym, "h: PruvH, data: *mut *const u8, len: *mut i64", None,
+                   "pruv_g6_guard(|| { if data.is_null() || len.is_null() { pruv_g6_repr(\"null output\") } "
+                   "let pruv_s: &%s = pruv_g6_ref::<%s>(h); "
+                   "unsafe { *data = pruv_s.buf.as_ptr(); *len = pruv_s.buf.len() as i64; } })" % (S, S))
+    params, arg = "h: PruvH", ""
+    if op == "net_byte":
+        params, arg = params + ", i: i64", ", i"
+    if op in ("net_ok", "net_error", "net_write_open", "net_eof", "net_size", "net_byte"):
+        return _fn(sym, params, "i64", "pruv_g6_guard(|| %s(pruv_g6_ref::<%s>(h)%s) as i64)" % (helper, S, arg))
+    if op in ("net_listener_ok", "net_listener_error", "net_listener_port"):
+        return _fn(sym, params, "i64", "pruv_g6_guard(|| %s(pruv_g6_ref::<%s>(h)) as i64)" % (helper, L))
+    raise Exception("foreign_shim: no adapter for catalog operation %s" % op)
+
+
 def _trusted_params(f):
     params, args = [], []
     for i, p in enumerate(f.params):
@@ -432,7 +486,7 @@ def _trusted_adapter(f):
 
 def _coll_adapters(t):
     C = rty(t)
-    if t.name in ("file", "process", "process_args"):   # G10: a handle has no len adapter
+    if t.name in ("file", "process", "process_args", "socket", "listener"):   # G10: a handle has no len adapter
         return _fn(drop_sym(t), "h: PruvH", None, "pruv_g6_guard(|| pruv_g6_free::<pruv_%s>(h))" % cname(t))
     return (_fn(len_sym(t), "h: PruvH", "i64", "pruv_g6_guard(|| pruv_g6_ref::<%s>(h).len() as i64)" % C) +
             _fn(drop_sym(t), "h: PruvH", None, "pruv_g6_guard(|| pruv_g6_free::<%s>(h))" % C))
@@ -479,7 +533,7 @@ def build_shim(prog, verified=True, trust_callers=False, budget=1 << 30, foreign
     for f in prog.functions:
         g.fn(f)
     for op, low in cats.values():
-        if op in FILE_OBSERVERS or op in PROC_OBSERVERS:
+        if op in FILE_OBSERVERS or op in PROC_OBSERVERS or op in NET_OBSERVERS:
             g.fg.catalog_helper(op, low, low)
     items = g.fg.items
     out = [MOD_ALLOW, "mod pruv_g6_shim {"]
@@ -487,6 +541,8 @@ def build_shim(prog, verified=True, trust_callers=False, budget=1 << 30, foreign
         out.append(FILE_PRELUDE)
     if g.proc:
         out.append(proc_prelude(g.proc_hook))
+    if g.net:
+        out.append(net_prelude(g.net_hook))
     out.append(CONTRACT_PRELUDE_G6)
     if uses_array_type(prog, "array_u8") or g.g10:
         out.append(CONTRACT_PRELUDE_U8)

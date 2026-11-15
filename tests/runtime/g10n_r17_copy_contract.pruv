@@ -1,0 +1,62 @@
+// G10 net A3 gate 4: a net_bytes copy of the first chunk keeps its bytes after the socket is updated (shutdown_write,
+// read_all, which replaces the buffer with the rest) and consumed (close). net_write_open and net_eof appear only in the
+// contract of closed_len (an internal function, so the contract is proved, not checked at run time); the program still
+// builds on both backends.
+fn closed_len(s: Socket) -> i64
+  requires !net_write_open(s) && net_eof(s)
+  ensures result >= 0
+{
+  return net_size(s);
+}
+
+fn copy_after(host: str, port: i64, expected: [u8]) -> i64 ! net, alloc
+  requires 1 <= port && port <= 65535
+{
+  let mut s: Socket = net_connect(host, port);
+  if !net_ok(s) {
+    let r0: Result<i64> = net_close(move s);
+    return 100;
+  }
+  s = net_set_timeout(move s, 20000);
+  if !net_ok(s) {
+    let rt: Result<i64> = net_close(move s);
+    return 150;
+  }
+  s = net_read(move s, 64);
+  if !net_ok(s) {
+    let r1: Result<i64> = net_close(move s);
+    return 200;
+  }
+  let copy: [u8] = net_bytes(s);
+  if !net_write_open(s) {
+    let rw: Result<i64> = net_close(move s);
+    return 250;
+  }
+  s = net_shutdown_write(move s);
+  if !net_ok(s) {
+    let r2: Result<i64> = net_close(move s);
+    return 300;
+  }
+  s = net_read_all(move s);
+  if !net_ok(s) {
+    let r3: Result<i64> = net_close(move s);
+    return 310;
+  }
+  let n: i64 = closed_len(s);
+  let r: Result<i64> = net_close(move s);
+  if len(copy) < 1 { return 1; }
+  if n != len(expected) - len(copy) { return 2; }
+  let mut i: i64 = 0;
+  while i < len(copy)
+    invariant 0 <= i && i <= len(copy)
+    decreases len(copy) - i
+  {
+    if i >= len(expected) { return 3; }
+    if copy[i] != expected[i] { return 4; }
+    i = i + 1;
+  }
+  match r {
+    Ok(v) => { return v; }
+    Err(code) => { return 400 + code; }
+  }
+}

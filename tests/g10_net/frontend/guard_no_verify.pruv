@@ -1,4 +1,4 @@
-// G10 net A0 staging guard also fires with --no-verify (a Listener program this time).
+// G10 net A3: a Listener program (the former A0 staging guard sample for --no-verify) generates code on both backends.
 fn run(host: str) -> Result<i64> ! net, alloc {
   let l: Listener = net_listen(host, 0);
   return net_listener_close(move l);

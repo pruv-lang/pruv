@@ -369,8 +369,8 @@ pub fn catalog_fn(name: &str) -> Option<CatFn> {
             tparams: vec![],
         },
         // G10 net (docs/G10_NET_SPEC.md 2.3): signatures and effects. Since A1 the section 2.3 / 2.4 / 4 contracts are
-        // encoded for every net_* operation by symbolic.rs `net_call` (pruv-proof). A2: the Rust source backend lowers
-        // Socket / Listener (codegen.rs NET_PRELUDE); the staging guard (first_net_use) stays for the LLVM backend until A3.
+        // encoded for every net_* operation by symbolic.rs `net_call` (pruv-proof). Both backends lower Socket / Listener
+        // (A2 Rust source backend, codegen.rs NET_PRELUDE; A3 LLVM backend through the Rust shim).
         "net_listen" => CatFn { requires: vec![], ensures: vec![],
             params: vec![p("host", GType::str(), false), p("port", GType::i64(), false)],
             ret: listener_t(),
@@ -1454,7 +1454,7 @@ pub fn first_proc_use(prog: &Program) -> Option<(i64, i64)> {
 }
 
 // ---------------------------------------------------------------------------
-// G10 net A0: first Socket / Listener use (counterpart of foreign.py first_net_use) and the staging guard
+// G10 net: first Socket / Listener use (counterpart of foreign.py first_net_use)
 // ---------------------------------------------------------------------------
 
 fn key_has_net(key: &str) -> bool {
@@ -1579,20 +1579,6 @@ pub fn first_net_use(prog: &Program) -> Option<(i64, i64)> {
         }
     }
     None
-}
-
-/// G10 net A0 staging guard: PruvError (unsupported_type) for the first Socket / Listener use, or None. Run right after
-/// type checking, in every mode, until A2 (Rust backend) and A3 (LLVM backend) implement the lowering.
-pub fn net_unimplemented_error(prog: &Program, stage: &str) -> Option<PruvError> {
-    let (line, col) = first_net_use(prog)?;
-    Some(PruvError::new(
-        stage,
-        line,
-        col,
-        "unsupported_type",
-        "G10 net Socket and Listener are not implemented by the codegen layer yet",
-        "avoid Socket, Listener and the net_* operations for now",
-    ))
 }
 
 // ---------------------------------------------------------------------------

@@ -269,14 +269,6 @@ fn compile(a: &Args) -> Result<(), Fail> {
             eprintln!("{{\"status\": \"skipped_no_verify\"}}");
         }
     }
-    // G10 net A2: the Rust source backend lowers Socket and Listener. The staging guard stays for everything that needs the
-    // LLVM lowering (--backend llvm, --also-llvm, native --emit) until A3; it runs after verification (so verification
-    // errors win). A function that only declares `! net` is not guarded. Same as Python compile_file.
-    if !matches!(a.kind, Kind::Rs) || a.also_llvm.is_some() {
-        if let Some(e) = pruv_core::foreign::net_unimplemented_error(&prog, "codegen") {
-            return Err(Fail::Lang(vec![e]));
-        }
-    }
     // G7 A3: native targets cannot link the scoped-thread bridge.
     if g6_native {
         if let Some(e) = pruv_core::foreign::g7_target_error(&prog) { return Err(Fail::Lang(vec![e])); }

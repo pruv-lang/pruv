@@ -1,5 +1,5 @@
 {
-  "backends": ["rust"],
+  "backends": ["rust", "llvm"],
   "g6_drop_balance": true,
   "net_hook": "shutdown",
   "flags_matrix": [

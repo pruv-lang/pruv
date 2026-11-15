@@ -37,7 +37,7 @@ pub fn is_collection(t: &str) -> bool {
     if t.starts_with('\u{1}') {
         return false;
     }
-    matches!(crate::emit_common::key_name(t), "vec" | "hashmap" | "string" | "file" | "process" | "process_args")
+    matches!(crate::emit_common::key_name(t), "vec" | "hashmap" | "string" | "file" | "process" | "process_args" | "socket" | "listener")
 }
 
 /// G6: a collection type or one anywhere inside its type arguments.
@@ -3822,6 +3822,8 @@ impl<'a> FnGen<'a> {
                 | "file_open_read" | "file_create" | "file_read_all" | "file_write_str" | "file_write_bytes"
                 | "proc_args_new" | "proc_args_push" | "proc_spawn" | "proc_write_str" | "proc_write_bytes"
                 | "proc_close_stdin" | "proc_read" | "proc_read_all"
+                | "net_connect" | "net_listen" | "net_accept" | "net_write_str" | "net_write_bytes"
+                | "net_shutdown_write" | "net_set_timeout" | "net_read" | "net_read_all"
         ) {
             // a fresh box, or the very same box pointer of a consuming update
             let r = self.g6_call(&sym, "ptr", &args)?;
@@ -3832,6 +3834,8 @@ impl<'a> FnGen<'a> {
             n,
             "vec_get" | "string_byte" | "file_close" | "file_ok" | "file_readable" | "file_writable" | "file_size" | "file_byte"
                 | "proc_args_len" | "proc_ok" | "proc_error" | "proc_stdin_open" | "proc_eof" | "proc_size" | "proc_byte"
+                | "net_ok" | "net_error" | "net_write_open" | "net_eof" | "net_size" | "net_byte"
+                | "net_listener_ok" | "net_listener_error" | "net_listener_port"
         ) {
             let r = self.g6_call(&sym, "i64", &args)?;
             if e.ty.as_deref() == Some("bool") {
@@ -3860,8 +3864,8 @@ impl<'a> FnGen<'a> {
             let a1 = self.op(format!("insertvalue {} {}, i1 {}, 1", tt_, a0, x1))?;
             return Ok(V::agg(a1, &ety));
         }
-        if n == "proc_wait" || n == "proc_kill" {
-            // G10 proc A3: consume the box; (tag 1 = Ok, value) -> Result<i64>
+        if matches!(n, "proc_wait" | "proc_kill" | "net_close" | "net_listener_close") {
+            // G10 proc / net A3: consume the box; (tag 1 = Ok, value) -> Result<i64>
             let tag = self.g6_out("i64");
             let val = self.g6_out("i64");
             let mut a2 = args.clone();
@@ -3873,8 +3877,8 @@ impl<'a> FnGen<'a> {
             let t1 = self.op(format!("icmp ne i64 {}, 0", t))?;
             return Ok(V::with_b(Kind::Opt, t1, x));
         }
-        if n == "proc_bytes" {
-            // G10 proc A3: a borrowed view of the public buffer, copied at once into a fresh [u8]
+        if n == "proc_bytes" || n == "net_bytes" {
+            // G10 proc / net A3: a borrowed view of the public buffer, copied at once into a fresh [u8]
             self.m.g6_v2 = true;
             let d = self.g6_out("ptr");
             let l = self.g6_out("i64");
@@ -4503,6 +4507,29 @@ impl<'a> FnGen<'a> {
                         return Ok(V::new(Kind::I1, self.op(format!("icmp ne i64 {}, 0", r))?));
                     }
                     if n == "proc_error" {
+                        // the error code is 0..6, never negative
+                        return Ok(V::new(Kind::I128, self.op(format!("sext i64 {} to i128", r))?));
+                    }
+                    return Ok(V::new(Kind::I128, self.op(format!("zext i64 {} to i128", r))?));
+                }
+                if crate::foreign::NET_OBSERVERS.contains(&n) {
+                    // G10 net A3: observers over the public state of the handle; the index guard carries the
+                    // undefined-contract message of the Rust source backend
+                    let v = self.cev(arg(a, 0)?)?;
+                    let mut args = vec![("ptr".to_string(), v.a)];
+                    if n == "net_byte" {
+                        let i = self.cev(arg(a, 1)?)?;
+                        let size = self.g6_call(&crate::foreign_shim::adapter_sym("pruv_g6_net_size"), "i64", &args)?;
+                        let size = self.op(format!("zext i64 {} to i128", size))?;
+                        let ok = self.op(format!("icmp ult i128 {}, {}", i.a, size))?;
+                        self.guard(&ok, und("socket byte index out of range".to_string()), false)?;
+                        args.push(("i64".to_string(), self.op(format!("trunc i128 {} to i64", i.a))?));
+                    }
+                    let r = self.g6_call(&crate::foreign_shim::adapter_sym(&format!("pruv_g6_{}", n)), "i64", &args)?;
+                    if x.ty.as_deref() == Some("bool") {
+                        return Ok(V::new(Kind::I1, self.op(format!("icmp ne i64 {}, 0", r))?));
+                    }
+                    if n == "net_error" || n == "net_listener_error" {
                         // the error code is 0..6, never negative
                         return Ok(V::new(Kind::I128, self.op(format!("sext i64 {} to i128", r))?));
                     }
@@ -5753,7 +5780,7 @@ fn g6_coll_ok(t: &str) -> bool {
         Ok(g) => match g.name.as_str() {
             "vec" => g.args.first().map_or(false, |a| g6_scalar(&a.to_key())),
             "hashmap" => g.args.len() >= 2 && g6_scalar(&g.args[0].to_key()) && g6_scalar(&g.args[1].to_key()),
-            _ => matches!(g.name.as_str(), "string" | "file" | "process" | "process_args"),
+            _ => matches!(g.name.as_str(), "string" | "file" | "process" | "process_args" | "socket" | "listener"),
         },
         Err(_) => false,
     }

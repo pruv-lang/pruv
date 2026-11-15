@@ -100,9 +100,8 @@ _add("proc_size", [], lambda: ([_p("p", PROCESS), _p("stream", I64)], I64))
 _add("proc_byte", [], lambda: ([_p("p", PROCESS), _p("stream", I64), _p("i", I64)], I64))
 # G10 net (docs/G10_NET_SPEC.md 2.3): signatures and effects. Since A1 the section 2.3 / 2.4 / 4 contracts (requires,
 # fresh result, well-formedness, ensures, preservation facts) are encoded for every net_* operation by
-# verify.py FnVerifier.net_call (and its Rust twin in pruv-proof symbolic.rs). A2: the Rust source backend lowers
-# Socket / Listener (codegen.NET_PRELUDE); a program that uses them is still stopped by the staging guard
-# (first_net_use) for the LLVM backend, --also-llvm and native emit until A3.
+# verify.py FnVerifier.net_call (and its Rust twin in pruv-proof symbolic.rs). Both backends lower Socket / Listener
+# (A2 Rust source backend, codegen.NET_PRELUDE; A3 LLVM backend through the Rust shim).
 _add("net_listen", [], lambda: ([_p("host", STR), _p("port", I64)], LISTENER), ["net", "alloc"])
 _add("net_accept", [], lambda: ([_p("l", LISTENER)], SOCKET), ["net", "alloc"])
 _add("net_listener_close", [], lambda: ([_p("l", LISTENER, True)], RESULT), ["net", "alloc"])
@@ -619,18 +618,6 @@ def first_net_use(prog):
             line, col = min(cands)
             return (f, line, col)
     return None
-
-
-def net_unimplemented_error(prog, stage="codegen"):
-    """G10 net A0 staging guard: PruvError (unsupported_type) for the first Socket / Listener use, or None. Run right
-    after type checking, in every mode, until A2 (Rust backend) and A3 (LLVM backend) implement the lowering."""
-    hit = first_net_use(prog)
-    if hit is None:
-        return None
-    _f, line, col = hit
-    return PruvError(stage, line, col, "unsupported_type",
-                     "G10 net Socket and Listener are not implemented by the codegen layer yet",
-                     "avoid Socket, Listener and the net_* operations for now")
 
 
 def _par_nodes(node, out):

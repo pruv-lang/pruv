@@ -1,6 +1,6 @@
 # G10: the `net` effect and the owned `Socket` and `Listener` handles
 
-Status: **A0–A2 implemented, 2026-11-16 (frontend, verification, Rust runtime). A3 is next.**
+Status: **A0–A3 implemented, 2026-11-16 (frontend, verification, Rust runtime, LLVM shim, Windows run). Q is next.**
 Batch status will be recorded per batch below and in `RESULTS.md` with Q.
 
 This document defines the network slice that `docs/G10_SPEC.md` §9 deferred (`net` with a `Socket` handle). A

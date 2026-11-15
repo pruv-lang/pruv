@@ -1,0 +1,3 @@
+// G10 net A3: a signature-only use, a Socket parameter (the former A0 staging guard sample for --trust-callers),
+// generates code on both backends.
+fn hand_back(take s: Socket) -> Socket { return move s; }

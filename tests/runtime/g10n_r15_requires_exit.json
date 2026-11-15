@@ -1,5 +1,5 @@
 {
-  "backends": ["rust"],
+  "backends": ["rust", "llvm"],
   "flags_matrix": [
     ["--no-verify"],
     ["--no-verify", "--foreign-checks", "all"]
