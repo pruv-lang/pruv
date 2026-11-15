@@ -8,8 +8,8 @@ target triple = "x86_64-pc-windows-msvc"
 @.str.4 = private unnamed_addr constant [10 x i8] c"count_opt\00"
 @.str.5 = private unnamed_addr constant [20 x i8] c"(len(a) <= 1000000)\00"
 
-declare noalias nonnull ptr @pruv_raw_alloc_v3(i64, i64, i64) nounwind
-declare noalias nonnull ptr @pruv_raw_alloc_zeroed_v3(i64, i64, i64) nounwind
+declare noalias nonnull ptr @pruv_raw_alloc_v3(i64, i64, i64) nounwind memory(inaccessiblemem: readwrite)
+declare noalias nonnull ptr @pruv_raw_alloc_zeroed_v3(i64, i64, i64) nounwind memory(inaccessiblemem: readwrite)
 @pruv_alloc_failed_msg = private unnamed_addr constant [18 x i8] c"allocation failed\00"
 define internal noalias ptr @pruv_alloc(i64 %n, i64 %v) alwaysinline nounwind {
 entry:
@@ -62,7 +62,7 @@ ok:
 }
 declare void @llvm.memcpy.p0.p0.i64(ptr noalias nocapture writeonly, ptr noalias nocapture readonly, i64, i1 immarg)
 declare void @llvm.memset.p0.i64(ptr nocapture writeonly, i8, i64, i1)
-declare void @pruv_free(ptr nocapture, i64) nounwind
+declare void @pruv_free(ptr nocapture, i64) nounwind memory(argmem: readwrite, inaccessiblemem: readwrite)
 declare void @pruv_print_i64(i64) nounwind
 declare void @pruv_print_bool(i64) nounwind
 declare void @pruv_panic_oob(i64, i64) noreturn cold nounwind
@@ -127,7 +127,7 @@ ok:
   call void @llvm.memcpy.p0.p0.i64(ptr %q, ptr %s, i64 %b, i1 false)
   ret ptr %q
 }
-declare void @pruv_free_v2(ptr nocapture, i64, i64, i64) nounwind
+declare void @pruv_free_v2(ptr nocapture, i64, i64, i64) nounwind memory(argmem: readwrite, inaccessiblemem: readwrite)
 declare void @pruv_panic_elem(i64, ptr) noreturn cold nounwind
 define internal void @pruv_free_v2_nn(ptr %p, i64 %n, i64 %s, i64 %a) alwaysinline nounwind {
 entry:
