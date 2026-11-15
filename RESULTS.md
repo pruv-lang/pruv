@@ -1992,3 +1992,27 @@ The planned P3 item was to emit `nounwind`, `nosync`, `norecurse` and memory-eff
 - **Limits:** no async, poll, timeouts or process groups; output queues have no memory limit; the child's output is checked at run time, not proved (G10_PROC_SPEC §9).
 
 **G10 processes complete.** Network and async come next.
+
+## 126. G10: network with the `net` effect (A0-A3 and Q, 2026-11-16)
+
+- **Design:** `docs/G10_NET_SPEC.md`. `Socket` and `Listener` are owned TCP handles that must be consumed by `net_close` / `net_listener_close` (or returned). Catalog operations connect, listen on a port (0 picks one), accept, set a read/write timeout, read a chunk, read to EOF, write bytes or a string and shut down the write side. Observers (`net_ok`, `net_error`, `net_eof`, `net_write_open`, `net_size`, `net_byte`, `net_bytes`, `net_listener_ok`, `net_listener_port`) appear in contracts. Writes require `error == 0 && write_open`; a failed read has size 0. SPEC.md §6m documents the user rules.
+- **A0** (`d83e71d`): the effect, the types, must-consume with `net_unconsumed`, `net` forbidden inside `par`, and a staging guard. **A1** (`b3feb32`): verification of both types, catalog contracts (port, max, index and timeout ranges, ok/write_open preconditions, buffer and EOF preservation, exact copy for `net_bytes`), observer domains. **A2** (`0204343`): the Rust runtime over `std::net` with error codes 0-6, test hooks for read, accept, write and shutdown failures, and runtime cases on 127.0.0.1. **A3** (`223fe77`): the LLVM backend through the G6 Rust shim, and a real Windows run of the loopback cases (`tests/g10_net/windows.py`).
+- **Problems and solutions:** `bench/g10_net/PROBLEMS.md` (q01, a length-prefixed request/response client with exact framing, split reads and every failure path closing the socket; q02, a bounded line server that listens on port 0, announces the port on a control connection and serves a budget of connections). The reference solutions pass on all four py/rs × rust/llvm pairs (q01 12/12, q02 13/13). The driver hosts the peers in threads and every wait is bounded.
+- **Independent use** (a worker given only SPEC.md and the problems, no compiler): first attempt **2/2** on all four pairs, 0 revisions (`bench/g10_net/solutions/indep1`, `results/indep1_first.json`).
+- **Source mutants:** `bench/g10_net/mutate.py`, 16 explicit wrong mutants and 2 controls, both compilers and both backends, 0 unexpected. Static mutants (11: missing close, overwrite, branch, temporary, unchecked I/O, write after shutdown, range errors, a reply buffer one byte short) are caught at compile time: per compiler 10 rejected by the checker and 12 by the verifier over the two backends. Oracle mutants (5: two EOF misreadings, `net_read_all` duplication, a misread frame length, a wrong line terminator) verify and are caught by the driver oracle at run time (10 `wrong_but_proved` per compiler). They are reported separately: what the peer sends is not proved, so these are the expected class, not unsoundness. The 2 controls are accepted.
+- **Compiler fault injections** (`bench/g10_net/faults/`, Python compiler, each patch alone in a disposable copy): removing must-consume at `return` (g10n_early_return), removing the `net_write_open` requires of the writes (g10n_v_write_after_shutdown), a write that no longer keeps the received snapshot (a local accept program), and swapping the Ok/Err tag of the close operations in the shim (g10n_r01_echo_bytes on LLVM): **4/4 caught** with clean baselines. The proc fault patches were rebased onto the current compiler and still give 4/4 (`bench/g10_proc/results/faults.json`).
+- **Measurement:** `bench/g10_net/perf.py`, 1 MiB from a Rust server thread over loopback, read in 4 KiB chunks, alternating with a hand-written Rust client in the same driver. Both sides assert the exact total and the byte pattern (no loss, no duplication). Medians over 20 runs, Pruv/Rust:
+
+  | compiler | backend | per byte (`net_byte` on every byte) | bulk copy (`net_bytes` per chunk) |
+  |---|---|---|---|
+  | py | rust | 3.46 / 3.49 ms (0.99x) | 0.365 / 0.375 ms (0.97x) |
+  | py | llvm | 2.93 / 3.42 ms (0.85x) | 0.367 / 0.375 ms (0.98x) |
+  | rs | rust | 3.30 / 3.25 ms (1.02x) | 0.366 / 0.367 ms (1.00x) |
+  | rs | llvm | 2.95 / 3.47 ms (0.85x) | 0.385 / 0.398 ms (0.97x) |
+
+  Max RSS about 2.7 MB on both sides. No target is declared. In the per-byte column both sides fold every byte into a checksum (a multiply and a modulo per byte); unlike proc (§125), LLVM is not slower here, so the per-observer shim call is not visible in this workload. The File and proc measurements (§64, §125) are unchanged.
+- **Results:** Q changes benchmarks and documents only; the compilers are unchanged since A3, whose CI run covers the full rows.
+- **Limits:** no async, poll, connect/accept timeouts, TLS, UDP or Unix sockets; what the peer sends is checked at run time, not proved (G10_NET_SPEC §9).
+- **Follow-up:** the proc shim adapter for `proc_bytes` calls the Rust helper only to run the stream requires and drops its result, so each call copies the buffer once more than needed (`pruvc/foreign_shim.py`, `pruvc-rs/crates/pruv-core/src/foreign_shim.rs`). The `net_bytes` adapter already skips this. Replace the helper call with the range check alone; the proc bulk copy is 1.00x, so the measurements do not show the cost.
+
+**G10 network complete.** Async comes next.

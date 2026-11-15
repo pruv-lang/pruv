@@ -1,0 +1,10 @@
+// Must verify: a successful write keeps the received-bytes snapshot (G10_NET_SPEC 4.5).
+fn good(take input: Socket) -> Socket ! net, alloc
+  requires net_ok(input) && net_write_open(input) && net_size(input) == 3
+{
+  let s: Socket = net_write_str(move input, "x");
+  if net_ok(s) {
+    assert net_size(s) == 3;
+  }
+  return move s;
+}

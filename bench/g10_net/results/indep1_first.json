@@ -1,0 +1,85 @@
+{
+  "tools": {
+    "py": [
+      "/Users/spica4345/Projects/pruv/.venv/bin/python",
+      "/Users/spica4345/Projects/pruv/pruvc/pruvc.py"
+    ],
+    "rs": [
+      "/Users/spica4345/Projects/pruv/pruvc-rs/target/release/pruvc"
+    ]
+  },
+  "results": {
+    "py-rust": {
+      "q01": {
+        "rc": 0,
+        "stdout": "TESTS 12 12\n",
+        "stderr": "",
+        "status": "ok",
+        "tests_passed": 12,
+        "tests_total": 12
+      },
+      "q02": {
+        "rc": 0,
+        "stdout": "TESTS 13 13\n",
+        "stderr": "",
+        "status": "ok",
+        "tests_passed": 13,
+        "tests_total": 13
+      }
+    },
+    "py-llvm": {
+      "q01": {
+        "rc": 0,
+        "stdout": "TESTS 12 12\n",
+        "stderr": "",
+        "status": "ok",
+        "tests_passed": 12,
+        "tests_total": 12
+      },
+      "q02": {
+        "rc": 0,
+        "stdout": "TESTS 13 13\n",
+        "stderr": "",
+        "status": "ok",
+        "tests_passed": 13,
+        "tests_total": 13
+      }
+    },
+    "rs-rust": {
+      "q01": {
+        "rc": 0,
+        "stdout": "TESTS 12 12\n",
+        "stderr": "",
+        "status": "ok",
+        "tests_passed": 12,
+        "tests_total": 12
+      },
+      "q02": {
+        "rc": 0,
+        "stdout": "TESTS 13 13\n",
+        "stderr": "",
+        "status": "ok",
+        "tests_passed": 13,
+        "tests_total": 13
+      }
+    },
+    "rs-llvm": {
+      "q01": {
+        "rc": 0,
+        "stdout": "TESTS 12 12\n",
+        "stderr": "",
+        "status": "ok",
+        "tests_passed": 12,
+        "tests_total": 12
+      },
+      "q02": {
+        "rc": 0,
+        "stdout": "TESTS 13 13\n",
+        "stderr": "",
+        "status": "ok",
+        "tests_passed": 13,
+        "tests_total": 13
+      }
+    }
+  }
+}

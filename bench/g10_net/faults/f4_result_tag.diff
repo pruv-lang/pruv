@@ -1,0 +1,13 @@
+--- a/pruvc/foreign_shim.py
++++ b/pruvc/foreign_shim.py
+@@ -408,8 +408,8 @@
+         return _fn(sym, "h: PruvH, tag: *mut i64, val: *mut i64", None,
+                    "pruv_g6_guard(|| { let pruv_t: *mut i64 = pruv_g6_out(tag); let pruv_v: *mut i64 = pruv_g6_out(val); "
+                    "%slet pruv_r: ::std::result::Result<i64, i64> = %s(pruv_o); "
+-                   "unsafe { match pruv_r { ::std::result::Result::Ok(pruv_x) => { *pruv_t = 1; *pruv_v = pruv_x; } "
+-                   "::std::result::Result::Err(pruv_e) => { *pruv_t = 0; *pruv_v = pruv_e; } } } })" % (
++                   "unsafe { match pruv_r { ::std::result::Result::Ok(pruv_x) => { *pruv_t = 0; *pruv_v = pruv_x; } "
++                   "::std::result::Result::Err(pruv_e) => { *pruv_t = 1; *pruv_v = pruv_e; } } } })" % (
+                        _proc_consume("h", T), helper))
+     if op == "net_bytes":
+         # the view is s.buf on the borrowed handle; the LLVM caller copies it once (no helper call, which would copy

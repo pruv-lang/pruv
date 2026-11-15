@@ -1,0 +1,11 @@
+--- a/pruvc/foreign.py
++++ b/pruvc/foreign.py
+@@ -365,7 +365,7 @@
+         if isinstance(x, Return):
+             if x.value is not None:
+                 s.consume(x.value, st, "return")
+-            for n in st:       # every owned handle leaving the function must be dead (the value was consumed first)
++            for n in ():       # FAULT: every owned handle leaving the function must be dead (the value was consumed first)
+                 if n in s.proc and st[n] != "dead":
+                     _handle_lost(x, s.proc[n], "%s %s is not consumed before return" % (s.proc[n], n))
+             return None

@@ -735,6 +735,11 @@ Gates:
    separately.
 8. Results and limits go into `RESULTS.md`; the net status in `BLUEPRINT.md` is updated. Existing File and
    proc measurements are not replaced.
+Record (2026-11-16): all eight gates pass, see `bench/g10_net/README.md` and RESULTS.md §126. Gate 1: 4/4 pairs.
+Gate 2: independent author 2/2 first attempt, 0 fixes. Gates 3-4: 16 mutants, 11 static rejected at compile time, 5
+peer-data mutants caught by the driver oracle (reported as `wrong_but_proved`), 0 unexpected. Gate 5: 4/4 faults
+caught. Gates 6-7: 1 MiB with exact totals on both sides; bulk copy 0.97-1.00x and per byte 0.85-1.02x hand Rust, no
+target. Gate 8: RESULTS §126 and BLUEPRINT item 7; the Windows run was in A3.
 
 ## 9. Later work
 

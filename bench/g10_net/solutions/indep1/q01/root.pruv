@@ -1,0 +1,105 @@
+// q01: length-prefixed request/response client.
+
+fn fin(take s: Socket, code: i64) -> i64 ! net, alloc
+  ensures result == code
+{
+  let r: Result<i64> = net_close(move s);
+  match r {
+    Ok(v) => { return code; }
+    Err(c) => { return code; }
+  }
+}
+
+pub fn call(host: str, port: i64, request: [u8]) -> i64 ! net, alloc
+  requires 1 <= port && port <= 65535
+  requires len(request) <= 1000000
+  ensures -5 <= result && result < 1000001000000
+{
+  let mut s: Socket = net_connect(host, port);
+  if !net_ok(s) { return fin(move s, -1); }
+
+  s = net_set_timeout(move s, 2000);
+  if !net_ok(s) { return fin(move s, -2); }
+  if !net_write_open(s) { return fin(move s, -2); }
+
+  let mut hdr: [u8] = alloc(4, 0);
+  store_be(inout hdr, 0, len(request), 4);
+  s = net_write_bytes(move s, hdr);
+  if !net_ok(s) { return fin(move s, -2); }
+  if !net_write_open(s) { return fin(move s, -2); }
+  s = net_write_bytes(move s, request);
+  if !net_ok(s) { return fin(move s, -2); }
+
+  // reply header: 4 bytes big-endian, never reading more than still needed
+  let mut got: i64 = 0;
+  let mut flen: i64 = 0;
+  while got < 4
+    invariant 0 <= got && got <= 4
+    invariant 0 <= flen && flen <= 4294967295
+    invariant got == 0 ==> flen == 0
+    invariant got == 1 ==> flen <= 255
+    invariant got == 2 ==> flen <= 65535
+    invariant got == 3 ==> flen <= 16777215
+    invariant net_ok(s)
+    decreases 4 - got
+  {
+    let want: i64 = 4 - got;
+    s = net_read(move s, want);
+    if !net_ok(s) { return fin(move s, -3); }
+    let n: i64 = net_size(s);
+    if n <= 0 { return fin(move s, -4); }
+    if n > want { return fin(move s, -3); }
+    let got0: i64 = got;
+    let mut i: i64 = 0;
+    while i < n
+      invariant 0 <= i && i <= n
+      invariant got == got0 + i
+      invariant 0 <= flen && flen <= 4294967295
+      invariant got == 0 ==> flen == 0
+      invariant got == 1 ==> flen <= 255
+      invariant got == 2 ==> flen <= 65535
+      invariant got == 3 ==> flen <= 16777215
+      decreases n - i
+    {
+      let b: i64 = net_byte(s, i);
+      if b < 0 || b > 255 { return fin(move s, -3); }
+      flen = flen * 256 + b;
+      got = got + 1;
+      i = i + 1;
+    }
+  }
+
+  if flen > 1000000 { return fin(move s, -5); }
+
+  let total: i64 = flen;
+  let mut rem: i64 = total;
+  let mut h: i64 = 1;
+  while rem > 0
+    invariant 0 <= rem && rem <= total
+    invariant 0 <= h && h < 999983
+    invariant net_ok(s)
+    decreases rem
+  {
+    let mut want: i64 = rem;
+    if want > 4096 { want = 4096; }
+    s = net_read(move s, want);
+    if !net_ok(s) { return fin(move s, -3); }
+    let n: i64 = net_size(s);
+    if n <= 0 { return fin(move s, -4); }
+    if n > want { return fin(move s, -3); }
+    let mut i: i64 = 0;
+    while i < n
+      invariant 0 <= i && i <= n
+      invariant 0 <= h && h < 999983
+      decreases n - i
+    {
+      let b: i64 = net_byte(s, i);
+      if b < 0 || b > 255 { return fin(move s, -3); }
+      h = (h * 256 + b) % 999983;
+      i = i + 1;
+    }
+    rem = rem - n;
+  }
+
+  return fin(move s, total * 1000000 + h);
+}

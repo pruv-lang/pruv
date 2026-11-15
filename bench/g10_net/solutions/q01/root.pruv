@@ -1,0 +1,86 @@
+// Length-prefixed request/response client: write a 4-byte big-endian length and the request, read a reply frame in
+// chunks that never pass the end of the frame, and fold the payload into a polynomial digest.
+fn close_with(take s: Socket, code: i64) -> i64 ! net, alloc
+  requires -5 <= code && code <= -1
+  ensures result == code
+{
+  let r: Result<i64> = net_close(move s);
+  return code;
+}
+
+pub fn call(host: str, port: i64, request: [u8]) -> i64 ! net, alloc
+  requires 1 <= port && port <= 65535
+  requires len(request) <= 1000000
+  ensures -5 <= result && result < 1000001000000
+{
+  let mut s: Socket = net_connect(host, port);
+  if !net_ok(s) { return close_with(move s, -1); }
+  s = net_set_timeout(move s, 2000);
+  if !net_ok(s) { return close_with(move s, -2); }
+
+  // request frame: header, then body
+  let n: i64 = len(request);
+  let mut head: [u8] = alloc(4, 0);
+  store_be(inout head, 0, n, 4);
+  s = net_write_bytes(move s, head);
+  if !net_ok(s) { return close_with(move s, -2); }
+  s = net_write_bytes(move s, request);
+  if !net_ok(s) { return close_with(move s, -2); }
+
+  // reply header: 4 bytes that may arrive split across reads; never read past them
+  let mut hb: [u8] = alloc(4, 0);
+  let mut got: i64 = 0;
+  while got < 4
+    invariant 0 <= got && got <= 4
+    invariant len(hb) == 4
+    invariant net_ok(s)
+    decreases 4 - got
+  {
+    s = net_read(move s, 4 - got);
+    if !net_ok(s) { return close_with(move s, -3); }
+    let m: i64 = net_size(s);
+    if m == 0 { return close_with(move s, -4); }
+    let mut i: i64 = 0;
+    while i < m
+      invariant 0 <= i && i <= m && m <= 4 - got
+      invariant len(hb) == 4
+      decreases m - i
+    {
+      hb[got + i] = net_byte(s, i);
+      i = i + 1;
+    }
+    got = got + m;
+  }
+  let plen: i64 = load_be(hb, 0, 4);
+  if plen > 1000000 { return close_with(move s, -5); }
+
+  // reply payload: chunks of at most 4096 and never more than the bytes still needed
+  let mut h: i64 = 1;
+  let mut have: i64 = 0;
+  while have < plen
+    invariant 0 <= have && have <= plen && plen <= 1000000
+    invariant 0 <= h && h < 999983
+    invariant net_ok(s)
+    decreases plen - have
+  {
+    let mut mx: i64 = plen - have;
+    if mx > 4096 { mx = 4096; }
+    s = net_read(move s, mx);
+    if !net_ok(s) { return close_with(move s, -3); }
+    let m: i64 = net_size(s);
+    if m == 0 { return close_with(move s, -4); }
+    let mut i: i64 = 0;
+    while i < m
+      invariant 0 <= i && i <= m && m <= mx
+      invariant 0 <= h && h < 999983
+      decreases m - i
+    {
+      h = (h * 256 + net_byte(s, i)) % 999983;
+      i = i + 1;
+    }
+    have = have + m;
+  }
+
+  let r: Result<i64> = net_close(move s);
+  return plen * 1000000 + h;
+}

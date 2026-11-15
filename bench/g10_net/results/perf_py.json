@@ -1,0 +1,86 @@
+{
+  "compiler": "py",
+  "verified": true,
+  "repeat": 20,
+  "bytes_per_run": 1048576,
+  "tools": {
+    "py": [
+      "/Users/spica4345/Projects/pruv/.venv/bin/python",
+      "/Users/spica4345/Projects/pruv/pruvc/pruvc.py"
+    ],
+    "rs": [
+      "/Users/spica4345/Projects/pruv/pruvc-rs/target/release/pruvc"
+    ]
+  },
+  "platform": "macOS-26.5-arm64-arm-64bit",
+  "rustc": {
+    "rc": 0,
+    "stdout": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\n",
+    "stderr": ""
+  },
+  "method": "G10 net Q perf: a loopback 1 MiB transfer read in 4 KiB chunks; default verified builds.\n\nA Rust server thread on 127.0.0.1 writes 1048576 bytes (offset % 251) in 65536-byte writes and closes. The client is\neither the Pruv pump or a hand-written Rust client (std::net, 4096-byte reads); each timed run is one connect, read to\nEOF and close in the same driver process, alternating Pruv and Rust. Mode 0 (per byte: every byte through net_byte into\na checksum) and mode 1 (bulk copy: a net_bytes copy of each chunk, first byte, last byte and length used) are recorded\nseparately. Both sides must return the exactly expected value (checksum, or total*1000 + first byte), so a lost or\nduplicated byte fails the run. Memory is the maximum RSS of one single-side run of the driver process. Time is the\nmedian of the rounds. No target is declared; the numbers are recorded.",
+  "rows": {
+    "rust": {
+      "status": "ok",
+      "modes": {
+        "per_byte": {
+          "bytes": 1048576,
+          "pruv_median_ms": 3.463,
+          "rust_median_ms": 3.489875,
+          "ratio": 0.9922991511157276,
+          "pruv_max_rss_bytes": 2719744,
+          "rust_max_rss_bytes": 2703360,
+          "raw": {
+            "total": 1048576,
+            "pruv_ns": 3463000,
+            "rust_ns": 3489875
+          }
+        },
+        "bulk_copy": {
+          "bytes": 1048576,
+          "pruv_median_ms": 0.364625,
+          "rust_median_ms": 0.375292,
+          "ratio": 0.9715767988659497,
+          "pruv_max_rss_bytes": 2719744,
+          "rust_max_rss_bytes": 2719744,
+          "raw": {
+            "total": 1048576,
+            "pruv_ns": 364625,
+            "rust_ns": 375292
+          }
+        }
+      }
+    },
+    "llvm": {
+      "status": "ok",
+      "modes": {
+        "per_byte": {
+          "bytes": 1048576,
+          "pruv_median_ms": 2.925291,
+          "rust_median_ms": 3.422125,
+          "ratio": 0.854817109252292,
+          "pruv_max_rss_bytes": 2768896,
+          "rust_max_rss_bytes": 2719744,
+          "raw": {
+            "total": 1048576,
+            "pruv_ns": 2925291,
+            "rust_ns": 3422125
+          }
+        },
+        "bulk_copy": {
+          "bytes": 1048576,
+          "pruv_median_ms": 0.367209,
+          "rust_median_ms": 0.374708,
+          "ratio": 0.9799870832755105,
+          "pruv_max_rss_bytes": 2768896,
+          "rust_max_rss_bytes": 2752512,
+          "raw": {
+            "total": 1048576,
+            "pruv_ns": 367209,
+            "rust_ns": 374708
+          }
+        }
+      }
+    }
+  }
+}

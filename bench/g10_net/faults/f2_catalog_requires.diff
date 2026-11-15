@@ -1,0 +1,11 @@
+--- a/pruvc/verify.py
++++ b/pruvc/verify.py
+@@ -2203,7 +2203,7 @@
+         elif n == "net_connect":
+             need(z3.And(args[1] >= 1, args[1] <= 65535))
+         elif n in ("net_write_str", "net_write_bytes", "net_shutdown_write"):
+-            need(z3.And(p.error == 0, p.write_open))
++            need(p.error == 0)  # FAULT: no write_open requires
+         elif n == "net_set_timeout":
+             need(p.error == 0)
+             need(z3.And(args[1] >= 0, args[1] <= 86400000))

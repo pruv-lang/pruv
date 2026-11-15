@@ -1,0 +1,246 @@
+{
+  "rows": [
+    {
+      "fault": "f1_must_consume",
+      "patch": "f1_must_consume.diff",
+      "sha256": "d8d9d40f1f49d09a433f560b5852da38f4177ea63a53f75a08cf6871bec80145",
+      "source_sha256": "44ad5b9998e9af1a0d9a30286339037ad0c4a9e92caf3608386ed61f205dcbe9",
+      "probes": {
+        "g10n_early_return": {
+          "kind": "reject",
+          "baseline": {
+            "rc": 1,
+            "stdout": "{\"stage\": \"type\", \"line\": 3, \"col\": 19, \"code\": \"net_unconsumed\", \"message\": \"Socket s is not consumed before return\", \"fix\": \"consume it with net_close(move s) or net_listener_close(move l), or return / transfer ownership\"}\n",
+            "stderr": "",
+            "command": [
+              "/Users/spica4345/Projects/pruv/.venv/bin/python",
+              "/Users/spica4345/Projects/pruv/bench/g10_net/.work/f1_must_consume_32ncmmj7/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/tests/must_reject/g10n_early_return.pruv",
+              "--backend",
+              "rust",
+              "-o",
+              "/Users/spica4345/Projects/pruv/bench/g10_net/.work/f1_must_consume_32ncmmj7/clean/g10n_early_return.rs"
+            ],
+            "expected": {
+              "stage": "type",
+              "code": "net_unconsumed"
+            },
+            "passed": true,
+            "internal_error": false,
+            "started": true
+          },
+          "faulty": {
+            "rc": 1,
+            "stdout": "{\"stage\": \"verify\", \"line\": 2, \"col\": 19, \"code\": \"call_requires\", \"message\": \"cannot prove precondition of net_connect (catalog) in f\", \"fix\": \"make the callee's requires hold before the call\", \"counterexample\": {\"host\": {\"len\": 0, \"first\": []}, \"port\": 65536}}\n",
+            "stderr": "",
+            "command": [
+              "/Users/spica4345/Projects/pruv/.venv/bin/python",
+              "/Users/spica4345/Projects/pruv/bench/g10_net/.work/f1_must_consume_32ncmmj7/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/tests/must_reject/g10n_early_return.pruv",
+              "--backend",
+              "rust",
+              "-o",
+              "/Users/spica4345/Projects/pruv/bench/g10_net/.work/f1_must_consume_32ncmmj7/faulty/g10n_early_return.rs"
+            ],
+            "expected": {
+              "stage": "type",
+              "code": "net_unconsumed"
+            },
+            "passed": false,
+            "internal_error": false,
+            "started": true
+          },
+          "detected": true
+        }
+      },
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/foreign.py'\n",
+        "stderr": ""
+      },
+      "status": "detected"
+    },
+    {
+      "fault": "f2_catalog_requires",
+      "patch": "f2_catalog_requires.diff",
+      "sha256": "2dca42f9332442e60fae8865878f2621a90fc67a62245a2127663b11d098e9b8",
+      "source_sha256": "449b1397060d7505e3be4e4e09e2cf0d7dec59987541b72444bc412c5eab5e7b",
+      "probes": {
+        "g10n_v_write_after_shutdown": {
+          "kind": "reject",
+          "baseline": {
+            "rc": 1,
+            "stdout": "{\"stage\": \"verify\", \"line\": 12, \"col\": 7, \"code\": \"call_requires\", \"message\": \"cannot prove precondition of net_write_str (catalog) in bad\", \"fix\": \"make the callee's requires hold before the call\", \"counterexample\": {\"host\": {\"len\": 0, \"first\": []}, \"port\": 1, \"s\": {\"ok\": true, \"error\": 0, \"write_open\": false, \"eof\": false, \"size\": 0}}}\n",
+            "stderr": "",
+            "command": [
+              "/Users/spica4345/Projects/pruv/.venv/bin/python",
+              "/Users/spica4345/Projects/pruv/bench/g10_net/.work/f2_catalog_requires_853oj2lx/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/tests/must_reject/g10n_v_write_after_shutdown.pruv",
+              "--backend",
+              "rust",
+              "-o",
+              "/Users/spica4345/Projects/pruv/bench/g10_net/.work/f2_catalog_requires_853oj2lx/clean/g10n_v_write_after_shutdown.rs"
+            ],
+            "expected": {
+              "stage": "verify",
+              "code": "call_requires"
+            },
+            "passed": true,
+            "internal_error": false,
+            "started": true
+          },
+          "faulty": {
+            "rc": 0,
+            "stdout": "{\"ok\": true}\n",
+            "stderr": "",
+            "command": [
+              "/Users/spica4345/Projects/pruv/.venv/bin/python",
+              "/Users/spica4345/Projects/pruv/bench/g10_net/.work/f2_catalog_requires_853oj2lx/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/tests/must_reject/g10n_v_write_after_shutdown.pruv",
+              "--backend",
+              "rust",
+              "-o",
+              "/Users/spica4345/Projects/pruv/bench/g10_net/.work/f2_catalog_requires_853oj2lx/faulty/g10n_v_write_after_shutdown.rs"
+            ],
+            "expected": {
+              "stage": "verify",
+              "code": "call_requires"
+            },
+            "passed": false,
+            "internal_error": false,
+            "started": true
+          },
+          "detected": true
+        }
+      },
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/verify.py'\n",
+        "stderr": ""
+      },
+      "status": "detected"
+    },
+    {
+      "fault": "f3_write_keep",
+      "patch": "f3_write_keep.diff",
+      "sha256": "60e8cfb2136a167ca5a0d1dcd04ffb63ba5c82498c35e199a32964bab46e7e8f",
+      "source_sha256": "449b1397060d7505e3be4e4e09e2cf0d7dec59987541b72444bc412c5eab5e7b",
+      "probes": {
+        "n_keep_write": {
+          "kind": "local_accept",
+          "baseline": {
+            "rc": 0,
+            "stdout": "{\"ok\": true}\n",
+            "stderr": "",
+            "command": [
+              "/Users/spica4345/Projects/pruv/.venv/bin/python",
+              "/Users/spica4345/Projects/pruv/bench/g10_net/.work/f3_write_keep_v6q4zr1u/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/bench/g10_net/faults/n_keep_write.pruv",
+              "--backend",
+              "rust",
+              "-o",
+              "/Users/spica4345/Projects/pruv/bench/g10_net/.work/f3_write_keep_v6q4zr1u/clean/n_keep_write.rs"
+            ],
+            "expected": null,
+            "passed": true,
+            "internal_error": false,
+            "started": true
+          },
+          "faulty": {
+            "rc": 1,
+            "stdout": "{\"stage\": \"verify\", \"line\": 7, \"col\": 5, \"code\": \"assert\", \"message\": \"cannot prove assertion in good\", \"fix\": \"strengthen invariants or fix the code\", \"counterexample\": {\"input\": {\"ok\": true, \"error\": 0, \"write_open\": true, \"eof\": false, \"size\": 3}, \"s\": {\"ok\": true, \"error\": 0, \"write_open\": true, \"eof\": false, \"size\": 0}}}\n",
+            "stderr": "",
+            "command": [
+              "/Users/spica4345/Projects/pruv/.venv/bin/python",
+              "/Users/spica4345/Projects/pruv/bench/g10_net/.work/f3_write_keep_v6q4zr1u/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/bench/g10_net/faults/n_keep_write.pruv",
+              "--backend",
+              "rust",
+              "-o",
+              "/Users/spica4345/Projects/pruv/bench/g10_net/.work/f3_write_keep_v6q4zr1u/faulty/n_keep_write.rs"
+            ],
+            "expected": null,
+            "passed": false,
+            "internal_error": false,
+            "started": true
+          },
+          "detected": true
+        }
+      },
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/verify.py'\n",
+        "stderr": ""
+      },
+      "status": "detected"
+    },
+    {
+      "fault": "f4_result_tag",
+      "patch": "f4_result_tag.diff",
+      "sha256": "d266c71cb7f08e9ec39a79e6a75a04992d870c771e4dc43ec182dba788f3ec9d",
+      "source_sha256": "20a7848cfa808a67a8e5d2e4f8810b7b2a418d15af6c86b080082f69f6e31a42",
+      "probes": {
+        "g10n_r01_echo_bytes": {
+          "kind": "runtime",
+          "baseline": {
+            "rc": 0,
+            "stdout": "{\"ok\": true}\n",
+            "stderr": "",
+            "command": [
+              "/Users/spica4345/Projects/pruv/.venv/bin/python",
+              "/Users/spica4345/Projects/pruv/bench/g10_net/.work/f4_result_tag_tauj_rr1/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/tests/runtime/g10n_r01_echo_bytes.pruv",
+              "-o",
+              "/Users/spica4345/Projects/pruv/bench/g10_net/.work/f4_result_tag_tauj_rr1/clean/g10n_r01_echo_bytes.ll",
+              "--backend",
+              "llvm",
+              "--rust-bindings",
+              "/Users/spica4345/Projects/pruv/bench/g10_net/.work/f4_result_tag_tauj_rr1/clean/g10n_r01_echo_bytes_gen.rs"
+            ],
+            "run": {
+              "rc": 0,
+              "stdout": "echoed\n",
+              "stderr": ""
+            },
+            "passed": true,
+            "reason": "exit 0",
+            "internal_error": false,
+            "started": true
+          },
+          "faulty": {
+            "rc": 0,
+            "stdout": "{\"ok\": true}\n",
+            "stderr": "",
+            "command": [
+              "/Users/spica4345/Projects/pruv/.venv/bin/python",
+              "/Users/spica4345/Projects/pruv/bench/g10_net/.work/f4_result_tag_tauj_rr1/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/tests/runtime/g10n_r01_echo_bytes.pruv",
+              "-o",
+              "/Users/spica4345/Projects/pruv/bench/g10_net/.work/f4_result_tag_tauj_rr1/faulty/g10n_r01_echo_bytes.ll",
+              "--backend",
+              "llvm",
+              "--rust-bindings",
+              "/Users/spica4345/Projects/pruv/bench/g10_net/.work/f4_result_tag_tauj_rr1/faulty/g10n_r01_echo_bytes_gen.rs"
+            ],
+            "run": {
+              "rc": 101,
+              "stdout": "",
+              "stderr": "\nthread 'main' (83225751) panicked at /Users/spica4345/Projects/pruv/bench/g10_net/.work/f4_result_tag_tauj_rr1/faulty/main.rs:47:9:\nassertion `left == right` failed: echo of 0 bytes\n  left: 400\n right: 0\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+            },
+            "passed": false,
+            "reason": "exit 101",
+            "internal_error": false,
+            "started": true
+          },
+          "detected": true
+        }
+      },
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/foreign_shim.py'\n",
+        "stderr": ""
+      },
+      "status": "detected"
+    }
+  ]
+}

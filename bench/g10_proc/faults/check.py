@@ -21,7 +21,7 @@ import run as G
 
 FAULTS = [
  ('f1_must_consume', 'foreign.py',
-  [('            for n in st:       # every owned Process', '            for n in ():       # FAULT: every owned Process')],
+  [('            for n in st:       # every owned handle leaving', '            for n in ():       # FAULT: every owned handle leaving')],
   [('reject', 'g10p_early_return')]),
  ('f2_catalog_requires', 'verify.py',
   [('            need(_proc_stream_ok(args[1]))\n            need(z3.And(args[2] > 0',
@@ -32,8 +32,8 @@ FAULTS = [
    ('z3.Implies(z3.And(ok, sm == 2), _proc_keep_out(res, p))', 'z3.Implies(z3.And(ok, sm == 2), _proc_keep_err(res, p))')],
   [('local_accept', 'p_keep_other'), ('local_reject', 'p_keep_read')]),
  ('f4_result_tag', 'foreign_shim.py',
-  [('Ok(pruv_x) => { *pruv_t = 1;', 'Ok(pruv_x) => { *pruv_t = 0;'),
-   ('Err(pruv_e) => { *pruv_t = 0;', 'Err(pruv_e) => { *pruv_t = 1;')],
+  [('{ *pruv_t = 1; *pruv_v = pruv_x; } "\n                   "::std::result::Result::Err(pruv_e) => { *pruv_t = 0; *pruv_v = pruv_e; } } } })" % (\n                       _proc_consume("h", P)',
+    '{ *pruv_t = 0; *pruv_v = pruv_x; } "\n                   "::std::result::Result::Err(pruv_e) => { *pruv_t = 1; *pruv_v = pruv_e; } } } })" % (\n                       _proc_consume("h", P)')],
   [('runtime', 'g10p_r10_exit_kill')]),
 ]
 LOCAL_EXPECTED = {'stage': 'verify', 'code': 'assert'}

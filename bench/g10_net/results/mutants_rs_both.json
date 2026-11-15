@@ -1,0 +1,1333 @@
+{
+  "tools": {
+    "py": [
+      "/Users/spica4345/Projects/pruv/.venv/bin/python",
+      "/Users/spica4345/Projects/pruv/pruvc/pruvc.py"
+    ],
+    "rs": [
+      "/Users/spica4345/Projects/pruv/pruvc-rs/target/release/pruvc"
+    ]
+  },
+  "summary": {
+    "total": 18,
+    "explicit_incorrect": 16,
+    "controls": 2,
+    "by_expected": {
+      "static": {
+        "rejected_check": 10,
+        "rejected_verify": 12
+      },
+      "oracle": {
+        "wrong_but_proved": 10
+      },
+      "accepted": {
+        "accepted": 4
+      }
+    },
+    "unexpected": []
+  },
+  "items": [
+    {
+      "id": "m001",
+      "pid": "q01",
+      "family": "missing_close",
+      "expected": "static",
+      "old": "if plen > 1000000 { return close_with(move s, -5); }",
+      "new": "if plen > 1000000 { return -5; }",
+      "intent": "incorrect",
+      "sha256": "d4a9296c6e754a09fdfe2b7795ecba2e7174b6c221562f8b34645291cd509cc5",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_check",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "type",
+                "line": 55,
+                "col": 23,
+                "code": "net_unconsumed",
+                "message": "Socket s is not consumed before return",
+                "fix": "consume it with net_close(move s) or net_listener_close(move l), or return / transfer ownership",
+                "file": "root.pruv"
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_d1bj041p/root_gen.rs",
+            "ll": null,
+            "stderr": "{\"stage\": \"type\", \"line\": 55, \"col\": 23, \"code\": \"net_unconsumed\", \"message\": \"Socket s is not consumed before return\", \"fix\": \"consume it with net_close(move s) or net_listener_close(move l), or return / transfer ownership\", \"file\": \"root.pruv\"}\n",
+            "status": "pruv_error"
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_check",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "type",
+                "line": 55,
+                "col": 23,
+                "code": "net_unconsumed",
+                "message": "Socket s is not consumed before return",
+                "fix": "consume it with net_close(move s) or net_listener_close(move l), or return / transfer ownership",
+                "file": "root.pruv"
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_mtwudq5j/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_mtwudq5j/root_gen.ll",
+            "stderr": "{\"stage\": \"type\", \"line\": 55, \"col\": 23, \"code\": \"net_unconsumed\", \"message\": \"Socket s is not consumed before return\", \"fix\": \"consume it with net_close(move s) or net_listener_close(move l), or return / transfer ownership\", \"file\": \"root.pruv\"}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m002",
+      "pid": "q02",
+      "family": "missing_close",
+      "expected": "static",
+      "old": "let r0: Result<i64> = net_listener_close(move l);\n    return -1;",
+      "new": "return -1;",
+      "intent": "incorrect",
+      "sha256": "b6de9f3fca6ee120e9f04c91df49983bb6a24ea7d80d1472a8ac3d80c5c2bc1c",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_check",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "type",
+                "line": 90,
+                "col": 5,
+                "code": "net_unconsumed",
+                "message": "Listener l is not consumed before return",
+                "fix": "consume it with net_close(move s) or net_listener_close(move l), or return / transfer ownership",
+                "file": "root.pruv"
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_2c8n2_a6/root_gen.rs",
+            "ll": null,
+            "stderr": "{\"stage\": \"type\", \"line\": 90, \"col\": 5, \"code\": \"net_unconsumed\", \"message\": \"Listener l is not consumed before return\", \"fix\": \"consume it with net_close(move s) or net_listener_close(move l), or return / transfer ownership\", \"file\": \"root.pruv\"}\n",
+            "status": "pruv_error"
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_check",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "type",
+                "line": 90,
+                "col": 5,
+                "code": "net_unconsumed",
+                "message": "Listener l is not consumed before return",
+                "fix": "consume it with net_close(move s) or net_listener_close(move l), or return / transfer ownership",
+                "file": "root.pruv"
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_hxtwjnc_/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_hxtwjnc_/root_gen.ll",
+            "stderr": "{\"stage\": \"type\", \"line\": 90, \"col\": 5, \"code\": \"net_unconsumed\", \"message\": \"Listener l is not consumed before return\", \"fix\": \"consume it with net_close(move s) or net_listener_close(move l), or return / transfer ownership\", \"file\": \"root.pruv\"}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m003",
+      "pid": "q01",
+      "family": "overwrite",
+      "expected": "static",
+      "old": "let mut s: Socket = net_connect(host, port);",
+      "new": "let mut s: Socket = net_connect(host, port);\n  s = net_connect(host, port);",
+      "intent": "incorrect",
+      "sha256": "a385084b05ba7ec5941d5f84da7cfe06a24b85a2158fc1b52938a0f884257c10",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_check",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "type",
+                "line": 17,
+                "col": 3,
+                "code": "net_unconsumed",
+                "message": "Socket s is overwritten while it is not consumed",
+                "fix": "consume it with net_close(move s) or net_listener_close(move l), or return / transfer ownership",
+                "file": "root.pruv"
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_3p8gxfqe/root_gen.rs",
+            "ll": null,
+            "stderr": "{\"stage\": \"type\", \"line\": 17, \"col\": 3, \"code\": \"net_unconsumed\", \"message\": \"Socket s is overwritten while it is not consumed\", \"fix\": \"consume it with net_close(move s) or net_listener_close(move l), or return / transfer ownership\", \"file\": \"root.pruv\"}\n",
+            "status": "pruv_error"
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_check",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "type",
+                "line": 17,
+                "col": 3,
+                "code": "net_unconsumed",
+                "message": "Socket s is overwritten while it is not consumed",
+                "fix": "consume it with net_close(move s) or net_listener_close(move l), or return / transfer ownership",
+                "file": "root.pruv"
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_vd4_92jn/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_vd4_92jn/root_gen.ll",
+            "stderr": "{\"stage\": \"type\", \"line\": 17, \"col\": 3, \"code\": \"net_unconsumed\", \"message\": \"Socket s is overwritten while it is not consumed\", \"fix\": \"consume it with net_close(move s) or net_listener_close(move l), or return / transfer ownership\", \"file\": \"root.pruv\"}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m004",
+      "pid": "q01",
+      "family": "branch",
+      "expected": "static",
+      "old": "if !net_ok(s) { return close_with(move s, -1); }",
+      "new": "if !net_ok(s) { let z: i64 = close_with(move s, -1); }",
+      "intent": "incorrect",
+      "sha256": "92af6086f4d2ed934f9aa66e1dfe4c6bbbfd83e7731d22d2636110b7771974ca",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_check",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "type",
+                "line": 18,
+                "col": 23,
+                "code": "foreign_move",
+                "message": "binding may have been moved",
+                "fix": "s is moved on some paths; make every path leave it live, or do not use it afterwards",
+                "file": "root.pruv"
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_irobct9a/root_gen.rs",
+            "ll": null,
+            "stderr": "{\"stage\": \"type\", \"line\": 18, \"col\": 23, \"code\": \"foreign_move\", \"message\": \"binding may have been moved\", \"fix\": \"s is moved on some paths; make every path leave it live, or do not use it afterwards\", \"file\": \"root.pruv\"}\n",
+            "status": "pruv_error"
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_check",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "type",
+                "line": 18,
+                "col": 23,
+                "code": "foreign_move",
+                "message": "binding may have been moved",
+                "fix": "s is moved on some paths; make every path leave it live, or do not use it afterwards",
+                "file": "root.pruv"
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_ehhuaiei/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_ehhuaiei/root_gen.ll",
+            "stderr": "{\"stage\": \"type\", \"line\": 18, \"col\": 23, \"code\": \"foreign_move\", \"message\": \"binding may have been moved\", \"fix\": \"s is moved on some paths; make every path leave it live, or do not use it afterwards\", \"file\": \"root.pruv\"}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m005",
+      "pid": "q02",
+      "family": "temporary",
+      "expected": "static",
+      "old": "c = net_write_bytes(move c, msg);",
+      "new": "let t: i64 = net_size(net_write_bytes(move c, msg));",
+      "intent": "incorrect",
+      "sha256": "ff4e09ef03489ef572d42038599772ad44c2f2bb9ba535270c7252f5fe9e95d7",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_check",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "type",
+                "line": 104,
+                "col": 25,
+                "code": "net_unconsumed",
+                "message": "temporary Socket is not consumed",
+                "fix": "consume it with net_close(move s) or net_listener_close(move l), or return / transfer ownership",
+                "file": "root.pruv"
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_xmw6ww0u/root_gen.rs",
+            "ll": null,
+            "stderr": "{\"stage\": \"type\", \"line\": 104, \"col\": 25, \"code\": \"net_unconsumed\", \"message\": \"temporary Socket is not consumed\", \"fix\": \"consume it with net_close(move s) or net_listener_close(move l), or return / transfer ownership\", \"file\": \"root.pruv\"}\n",
+            "status": "pruv_error"
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_check",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "type",
+                "line": 104,
+                "col": 25,
+                "code": "net_unconsumed",
+                "message": "temporary Socket is not consumed",
+                "fix": "consume it with net_close(move s) or net_listener_close(move l), or return / transfer ownership",
+                "file": "root.pruv"
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_in58ids8/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_in58ids8/root_gen.ll",
+            "stderr": "{\"stage\": \"type\", \"line\": 104, \"col\": 25, \"code\": \"net_unconsumed\", \"message\": \"temporary Socket is not consumed\", \"fix\": \"consume it with net_close(move s) or net_listener_close(move l), or return / transfer ownership\", \"file\": \"root.pruv\"}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m006",
+      "pid": "q01",
+      "family": "unchecked_io",
+      "expected": "static",
+      "old": "s = net_set_timeout(move s, 2000);\n  if !net_ok(s) { return close_with(move s, -2); }",
+      "new": "s = net_set_timeout(move s, 2000);",
+      "intent": "incorrect",
+      "sha256": "132862314ae3aba27a0c6b4a08797fb1665e1e14f8d4c2c9172c3c354b82da20",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 24,
+                "col": 7,
+                "code": "call_requires",
+                "message": "cannot prove precondition of net_write_bytes (catalog) in crate::call",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "host": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "port": 1,
+                  "request": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "s": {
+                    "ok": false,
+                    "error": 4,
+                    "write_open": false,
+                    "eof": false,
+                    "size": 0
+                  },
+                  "n": 0,
+                  "head": {
+                    "len": 4,
+                    "first": [
+                      0,
+                      0,
+                      0,
+                      0
+                    ]
+                  }
+                }
+              },
+              {
+                "stage": "verify",
+                "line": 26,
+                "col": 7,
+                "code": "call_requires",
+                "message": "cannot prove precondition of net_write_bytes (catalog) in crate::call",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "host": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "port": 1,
+                  "request": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "s": {
+                    "ok": true,
+                    "error": 0,
+                    "write_open": false,
+                    "eof": false,
+                    "size": 0
+                  },
+                  "n": 0,
+                  "head": {
+                    "len": 4,
+                    "first": [
+                      0,
+                      0,
+                      0,
+                      0
+                    ]
+                  }
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_radygv9o/root_gen.rs",
+            "ll": null,
+            "stderr": "ead\": {\"len\": 4, \"first\": [0, 0, 0, 0]}}}\n{\"stage\": \"verify\", \"line\": 26, \"col\": 7, \"code\": \"call_requires\", \"message\": \"cannot prove precondition of net_write_bytes (catalog) in crate::call\", \"fix\": \"make the callee's requires hold before the call\", \"file\": \"root.pruv\", \"counterexample\": {\"host\": {\"len\": 0, \"first\": []}, \"port\": 1, \"request\": {\"len\": 0, \"first\": []}, \"s\": {\"ok\": true, \"error\": 0, \"write_open\": false, \"eof\": false, \"size\": 0}, \"n\": 0, \"head\": {\"len\": 4, \"first\": [0, 0, 0, 0]}}}\n",
+            "status": "pruv_error"
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 24,
+                "col": 7,
+                "code": "call_requires",
+                "message": "cannot prove precondition of net_write_bytes (catalog) in crate::call",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "host": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "port": 1,
+                  "request": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "s": {
+                    "ok": false,
+                    "error": 4,
+                    "write_open": false,
+                    "eof": false,
+                    "size": 0
+                  },
+                  "n": 0,
+                  "head": {
+                    "len": 4,
+                    "first": [
+                      0,
+                      0,
+                      0,
+                      0
+                    ]
+                  }
+                }
+              },
+              {
+                "stage": "verify",
+                "line": 26,
+                "col": 7,
+                "code": "call_requires",
+                "message": "cannot prove precondition of net_write_bytes (catalog) in crate::call",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "host": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "port": 1,
+                  "request": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "s": {
+                    "ok": true,
+                    "error": 0,
+                    "write_open": false,
+                    "eof": false,
+                    "size": 0
+                  },
+                  "n": 0,
+                  "head": {
+                    "len": 4,
+                    "first": [
+                      0,
+                      0,
+                      0,
+                      0
+                    ]
+                  }
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_mgaupb41/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_mgaupb41/root_gen.ll",
+            "stderr": "ead\": {\"len\": 4, \"first\": [0, 0, 0, 0]}}}\n{\"stage\": \"verify\", \"line\": 26, \"col\": 7, \"code\": \"call_requires\", \"message\": \"cannot prove precondition of net_write_bytes (catalog) in crate::call\", \"fix\": \"make the callee's requires hold before the call\", \"file\": \"root.pruv\", \"counterexample\": {\"host\": {\"len\": 0, \"first\": []}, \"port\": 1, \"request\": {\"len\": 0, \"first\": []}, \"s\": {\"ok\": true, \"error\": 0, \"write_open\": false, \"eof\": false, \"size\": 0}, \"n\": 0, \"head\": {\"len\": 4, \"first\": [0, 0, 0, 0]}}}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m007",
+      "pid": "q02",
+      "family": "unchecked_io",
+      "expected": "static",
+      "old": "let mut c: Socket = net_connect(host, ctl);\n  if !net_ok(c) {\n    let r1: Result<i64> = net_close(move c);\n    let r2: Result<i64> = net_listener_close(move l);\n    return -2;\n  }",
+      "new": "let mut c: Socket = net_connect(host, ctl);",
+      "intent": "incorrect",
+      "sha256": "6e6c50223c1a56fd6a4730fb4679e52ceff3306972374cb56a131ea6fd85558d",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 99,
+                "col": 7,
+                "code": "call_requires",
+                "message": "cannot prove precondition of net_write_bytes (catalog) in crate::serve",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "host": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "ctl": 1,
+                  "budget": 0,
+                  "l": {
+                    "ok": true,
+                    "error": 0,
+                    "port": 1
+                  },
+                  "c": {
+                    "ok": false,
+                    "error": 1,
+                    "write_open": false,
+                    "eof": false,
+                    "size": 0
+                  },
+                  "msg": {
+                    "len": 2,
+                    "first": [
+                      0,
+                      1
+                    ]
+                  },
+                  "port": 1
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_b2hq4dm3/root_gen.rs",
+            "ll": null,
+            "stderr": "{\"stage\": \"verify\", \"line\": 99, \"col\": 7, \"code\": \"call_requires\", \"message\": \"cannot prove precondition of net_write_bytes (catalog) in crate::serve\", \"fix\": \"make the callee's requires hold before the call\", \"file\": \"root.pruv\", \"counterexample\": {\"host\": {\"len\": 0, \"first\": []}, \"ctl\": 1, \"budget\": 0, \"l\": {\"ok\": true, \"error\": 0, \"port\": 1}, \"c\": {\"ok\": false, \"error\": 1, \"write_open\": false, \"eof\": false, \"size\": 0}, \"msg\": {\"len\": 2, \"first\": [0, 1]}, \"port\": 1}}\n",
+            "status": "pruv_error"
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 99,
+                "col": 7,
+                "code": "call_requires",
+                "message": "cannot prove precondition of net_write_bytes (catalog) in crate::serve",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "host": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "ctl": 1,
+                  "budget": 0,
+                  "l": {
+                    "ok": true,
+                    "error": 0,
+                    "port": 1
+                  },
+                  "c": {
+                    "ok": false,
+                    "error": 1,
+                    "write_open": false,
+                    "eof": false,
+                    "size": 0
+                  },
+                  "msg": {
+                    "len": 2,
+                    "first": [
+                      0,
+                      1
+                    ]
+                  },
+                  "port": 1
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_qh_j3few/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_qh_j3few/root_gen.ll",
+            "stderr": "{\"stage\": \"verify\", \"line\": 99, \"col\": 7, \"code\": \"call_requires\", \"message\": \"cannot prove precondition of net_write_bytes (catalog) in crate::serve\", \"fix\": \"make the callee's requires hold before the call\", \"file\": \"root.pruv\", \"counterexample\": {\"host\": {\"len\": 0, \"first\": []}, \"ctl\": 1, \"budget\": 0, \"l\": {\"ok\": true, \"error\": 0, \"port\": 1}, \"c\": {\"ok\": false, \"error\": 1, \"write_open\": false, \"eof\": false, \"size\": 0}, \"msg\": {\"len\": 2, \"first\": [0, 1]}, \"port\": 1}}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m008",
+      "pid": "q02",
+      "family": "write_after_shutdown",
+      "expected": "static",
+      "old": "s = net_write_str(move s, \"!\\n\");",
+      "new": "s = net_shutdown_write(move s);\n    s = net_write_str(move s, \"!\\n\");",
+      "intent": "incorrect",
+      "sha256": "84cfd4be0c46222778f87c1aa3ebf16dfe02752fecd1e7baf21f30af1cfcee7c",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 61,
+                "col": 9,
+                "code": "call_requires",
+                "message": "cannot prove precondition of net_write_str (catalog) in crate::handle",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "input": {
+                    "ok": true,
+                    "error": 0,
+                    "write_open": true,
+                    "eof": false,
+                    "size": 0
+                  },
+                  "s": {
+                    "ok": true,
+                    "error": 0,
+                    "write_open": false,
+                    "eof": true,
+                    "size": 1
+                  },
+                  "line": {
+                    "len": 1025,
+                    "first": [
+                      5,
+                      5,
+                      5,
+                      5,
+                      5,
+                      5,
+                      5,
+                      5
+                    ]
+                  },
+                  "have": 1025,
+                  "fin": 0
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_0wg3tssp/root_gen.rs",
+            "ll": null,
+            "stderr": "{\"stage\": \"verify\", \"line\": 61, \"col\": 9, \"code\": \"call_requires\", \"message\": \"cannot prove precondition of net_write_str (catalog) in crate::handle\", \"fix\": \"make the callee's requires hold before the call\", \"file\": \"root.pruv\", \"counterexample\": {\"input\": {\"ok\": true, \"error\": 0, \"write_open\": true, \"eof\": false, \"size\": 0}, \"s\": {\"ok\": true, \"error\": 0, \"write_open\": false, \"eof\": true, \"size\": 1}, \"line\": {\"len\": 1025, \"first\": [5, 5, 5, 5, 5, 5, 5, 5]}, \"have\": 1025, \"fin\": 0}}\n",
+            "status": "pruv_error"
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 61,
+                "col": 9,
+                "code": "call_requires",
+                "message": "cannot prove precondition of net_write_str (catalog) in crate::handle",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "input": {
+                    "ok": true,
+                    "error": 0,
+                    "write_open": true,
+                    "eof": false,
+                    "size": 0
+                  },
+                  "s": {
+                    "ok": true,
+                    "error": 0,
+                    "write_open": false,
+                    "eof": true,
+                    "size": 1
+                  },
+                  "line": {
+                    "len": 1025,
+                    "first": [
+                      5,
+                      5,
+                      5,
+                      5,
+                      5,
+                      5,
+                      5,
+                      5
+                    ]
+                  },
+                  "have": 1025,
+                  "fin": 0
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_05fa8th5/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_05fa8th5/root_gen.ll",
+            "stderr": "{\"stage\": \"verify\", \"line\": 61, \"col\": 9, \"code\": \"call_requires\", \"message\": \"cannot prove precondition of net_write_str (catalog) in crate::handle\", \"fix\": \"make the callee's requires hold before the call\", \"file\": \"root.pruv\", \"counterexample\": {\"input\": {\"ok\": true, \"error\": 0, \"write_open\": true, \"eof\": false, \"size\": 0}, \"s\": {\"ok\": true, \"error\": 0, \"write_open\": false, \"eof\": true, \"size\": 1}, \"line\": {\"len\": 1025, \"first\": [5, 5, 5, 5, 5, 5, 5, 5]}, \"have\": 1025, \"fin\": 0}}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m009",
+      "pid": "q01",
+      "family": "range",
+      "expected": "static",
+      "old": "hb[got + i] = net_byte(s, i);",
+      "new": "hb[got + i] = net_byte(s, i + 1);",
+      "intent": "incorrect",
+      "sha256": "a2197255e074de0c0fc7a5de64079615503e2c39165174cddb8b2a985548a141",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 49,
+                "col": 21,
+                "code": "call_requires",
+                "message": "cannot prove precondition of net_byte (catalog) in crate::call",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "host": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "port": 4,
+                  "request": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "s": {
+                    "ok": true,
+                    "error": 0,
+                    "write_open": false,
+                    "eof": false,
+                    "size": 2
+                  },
+                  "n": 0,
+                  "head": {
+                    "len": 4,
+                    "first": [
+                      0,
+                      0,
+                      0,
+                      0
+                    ]
+                  },
+                  "hb": {
+                    "len": 4,
+                    "first": [
+                      173,
+                      3,
+                      3,
+                      73
+                    ]
+                  },
+                  "got": 0,
+                  "m": 2,
+                  "i": 1
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_sb5mf0u_/root_gen.rs",
+            "ll": null,
+            "stderr": "ine\": 49, \"col\": 21, \"code\": \"call_requires\", \"message\": \"cannot prove precondition of net_byte (catalog) in crate::call\", \"fix\": \"make the callee's requires hold before the call\", \"file\": \"root.pruv\", \"counterexample\": {\"host\": {\"len\": 0, \"first\": []}, \"port\": 4, \"request\": {\"len\": 0, \"first\": []}, \"s\": {\"ok\": true, \"error\": 0, \"write_open\": false, \"eof\": false, \"size\": 2}, \"n\": 0, \"head\": {\"len\": 4, \"first\": [0, 0, 0, 0]}, \"hb\": {\"len\": 4, \"first\": [173, 3, 3, 73]}, \"got\": 0, \"m\": 2, \"i\": 1}}\n",
+            "status": "pruv_error"
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 49,
+                "col": 21,
+                "code": "call_requires",
+                "message": "cannot prove precondition of net_byte (catalog) in crate::call",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "host": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "port": 4,
+                  "request": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "s": {
+                    "ok": true,
+                    "error": 0,
+                    "write_open": false,
+                    "eof": false,
+                    "size": 2
+                  },
+                  "n": 0,
+                  "head": {
+                    "len": 4,
+                    "first": [
+                      0,
+                      0,
+                      0,
+                      0
+                    ]
+                  },
+                  "hb": {
+                    "len": 4,
+                    "first": [
+                      173,
+                      3,
+                      3,
+                      73
+                    ]
+                  },
+                  "got": 0,
+                  "m": 2,
+                  "i": 1
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_brwmpb3l/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_brwmpb3l/root_gen.ll",
+            "stderr": "ine\": 49, \"col\": 21, \"code\": \"call_requires\", \"message\": \"cannot prove precondition of net_byte (catalog) in crate::call\", \"fix\": \"make the callee's requires hold before the call\", \"file\": \"root.pruv\", \"counterexample\": {\"host\": {\"len\": 0, \"first\": []}, \"port\": 4, \"request\": {\"len\": 0, \"first\": []}, \"s\": {\"ok\": true, \"error\": 0, \"write_open\": false, \"eof\": false, \"size\": 2}, \"n\": 0, \"head\": {\"len\": 4, \"first\": [0, 0, 0, 0]}, \"hb\": {\"len\": 4, \"first\": [173, 3, 3, 73]}, \"got\": 0, \"m\": 2, \"i\": 1}}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m010",
+      "pid": "q02",
+      "family": "range",
+      "expected": "static",
+      "old": "line[have + j] = net_byte(s, j);",
+      "new": "line[have + j + 1] = net_byte(s, j);",
+      "intent": "incorrect",
+      "sha256": "4b5f85811c971bdd348eaff1635553300ddff25915f9d9fe8bfa6c2a6b15f38a",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 52,
+                "col": 7,
+                "code": "index_oob",
+                "message": "cannot prove index in bounds for line[...] = in crate::handle",
+                "fix": "add a requires/invariant/if that bounds the index, e.g. `invariant 0 <= i && i <= len(a)`",
+                "file": "root.pruv",
+                "counterexample": {
+                  "input": {
+                    "ok": true,
+                    "error": 0,
+                    "write_open": true,
+                    "eof": false,
+                    "size": 0
+                  },
+                  "s": {
+                    "ok": true,
+                    "error": 0,
+                    "write_open": true,
+                    "eof": false,
+                    "size": 1
+                  },
+                  "line": {
+                    "len": 1025,
+                    "first": [
+                      133,
+                      133,
+                      133,
+                      133,
+                      133,
+                      133,
+                      133,
+                      133
+                    ]
+                  },
+                  "have": 1024,
+                  "fin": 0,
+                  "m": 1,
+                  "k": 1,
+                  "j": 0
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_jfx48tbc/root_gen.rs",
+            "ll": null,
+            "stderr": "ob\", \"message\": \"cannot prove index in bounds for line[...] = in crate::handle\", \"fix\": \"add a requires/invariant/if that bounds the index, e.g. `invariant 0 <= i && i <= len(a)`\", \"file\": \"root.pruv\", \"counterexample\": {\"input\": {\"ok\": true, \"error\": 0, \"write_open\": true, \"eof\": false, \"size\": 0}, \"s\": {\"ok\": true, \"error\": 0, \"write_open\": true, \"eof\": false, \"size\": 1}, \"line\": {\"len\": 1025, \"first\": [133, 133, 133, 133, 133, 133, 133, 133]}, \"have\": 1024, \"fin\": 0, \"m\": 1, \"k\": 1, \"j\": 0}}\n",
+            "status": "pruv_error"
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 52,
+                "col": 7,
+                "code": "index_oob",
+                "message": "cannot prove index in bounds for line[...] = in crate::handle",
+                "fix": "add a requires/invariant/if that bounds the index, e.g. `invariant 0 <= i && i <= len(a)`",
+                "file": "root.pruv",
+                "counterexample": {
+                  "input": {
+                    "ok": true,
+                    "error": 0,
+                    "write_open": true,
+                    "eof": false,
+                    "size": 0
+                  },
+                  "s": {
+                    "ok": true,
+                    "error": 0,
+                    "write_open": true,
+                    "eof": false,
+                    "size": 1
+                  },
+                  "line": {
+                    "len": 1025,
+                    "first": [
+                      133,
+                      133,
+                      133,
+                      133,
+                      133,
+                      133,
+                      133,
+                      133
+                    ]
+                  },
+                  "have": 1024,
+                  "fin": 0,
+                  "m": 1,
+                  "k": 1,
+                  "j": 0
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_lk8odweq/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_lk8odweq/root_gen.ll",
+            "stderr": "ob\", \"message\": \"cannot prove index in bounds for line[...] = in crate::handle\", \"fix\": \"add a requires/invariant/if that bounds the index, e.g. `invariant 0 <= i && i <= len(a)`\", \"file\": \"root.pruv\", \"counterexample\": {\"input\": {\"ok\": true, \"error\": 0, \"write_open\": true, \"eof\": false, \"size\": 0}, \"s\": {\"ok\": true, \"error\": 0, \"write_open\": true, \"eof\": false, \"size\": 1}, \"line\": {\"len\": 1025, \"first\": [133, 133, 133, 133, 133, 133, 133, 133]}, \"have\": 1024, \"fin\": 0, \"m\": 1, \"k\": 1, \"j\": 0}}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m011",
+      "pid": "q02",
+      "family": "eof_misread",
+      "expected": "oracle",
+      "old": "if m == 0 { return done(move s, 0); }",
+      "new": "if m < 1025 - have { return done(move s, 0); }",
+      "intent": "incorrect",
+      "sha256": "fefba4c301f52973442f3a29730d1abc1a501c72166a580579ec9071d2659567",
+      "runs": {
+        "rs-rust": {
+          "class": "wrong_but_proved",
+          "grader": {
+            "rc": 0,
+            "stdout": "FAIL client_1\nFAIL client_2\nFAIL client_3\nFAIL client_4\nFAIL client_5\nFAIL client_10\nFAIL value\nTESTS 6 13\n",
+            "stderr": "serve returned 10009\n",
+            "status": "wrong",
+            "tests_passed": 6,
+            "tests_total": 13
+          }
+        },
+        "rs-llvm": {
+          "class": "wrong_but_proved",
+          "grader": {
+            "rc": 0,
+            "stdout": "FAIL client_1\nFAIL client_2\nFAIL client_3\nFAIL client_4\nFAIL client_5\nFAIL client_10\nFAIL value\nTESTS 6 13\n",
+            "stderr": "serve returned 10009\n",
+            "status": "wrong",
+            "tests_passed": 6,
+            "tests_total": 13
+          }
+        }
+      }
+    },
+    {
+      "id": "m012",
+      "pid": "q01",
+      "family": "eof_misread",
+      "expected": "oracle",
+      "old": "s = net_read(move s, 4 - got);\n    if !net_ok(s) { return close_with(move s, -3); }\n    let m: i64 = net_size(s);\n    if m == 0 {",
+      "new": "s = net_read(move s, 4 - got);\n    if !net_ok(s) { return close_with(move s, -3); }\n    let m: i64 = net_size(s);\n    if m < 4 - got {",
+      "intent": "incorrect",
+      "sha256": "f71ec32dea8da565e60d28883e201a101f7199f2697d61fb6105e121a721caa3",
+      "runs": {
+        "rs-rust": {
+          "class": "wrong_but_proved",
+          "grader": {
+            "rc": 0,
+            "stdout": "FAIL echo_empty\nFAIL echo_a\nFAIL echo_all256\nFAIL echo_100k\nFAIL echo_300k\nFAIL extra_hello\nTESTS 6 12\n",
+            "stderr": "echo_empty: got -4 want 1, request seen intact: true\necho_a: got -4 want 1000354, request seen intact: true\necho_all256: got -4 want 256712060, request seen intact: true\necho_100k: got -4 want 100000183710, request seen intact: true\necho_300k: got -4 want 300000287858, request seen intact: true\nextra_hello: got -4 want 5029204, request seen intact: true\n",
+            "status": "wrong",
+            "tests_passed": 6,
+            "tests_total": 12
+          }
+        },
+        "rs-llvm": {
+          "class": "wrong_but_proved",
+          "grader": {
+            "rc": 0,
+            "stdout": "FAIL echo_empty\nFAIL echo_a\nFAIL echo_all256\nFAIL echo_100k\nFAIL echo_300k\nFAIL extra_hello\nTESTS 6 12\n",
+            "stderr": "echo_empty: got -4 want 1, request seen intact: true\necho_a: got -4 want 1000354, request seen intact: true\necho_all256: got -4 want 256712060, request seen intact: true\necho_100k: got -4 want 100000183710, request seen intact: true\necho_300k: got -4 want 300000287858, request seen intact: true\nextra_hello: got -4 want 5029204, request seen intact: true\n",
+            "status": "wrong",
+            "tests_passed": 6,
+            "tests_total": 12
+          }
+        }
+      }
+    },
+    {
+      "id": "m013",
+      "pid": "q01",
+      "family": "read_all_duplication",
+      "expected": "oracle",
+      "old": "if plen > 1000000 { return close_with(move s, -5); }",
+      "new": "if plen > 1000000 { return close_with(move s, -5); }\n  s = net_read_all(move s);\n  if !net_ok(s) { return close_with(move s, -3); }",
+      "intent": "incorrect",
+      "sha256": "abfd41b6e5218f7057cbee470bd009464a250107703b2d2ba1fb76dca0ee4862",
+      "runs": {
+        "rs-rust": {
+          "class": "wrong_but_proved",
+          "grader": {
+            "rc": 0,
+            "stdout": "FAIL echo_a\nFAIL echo_all256\nFAIL echo_100k\nFAIL echo_300k\nFAIL extra_hello\nTESTS 7 12\n",
+            "stderr": "echo_a: got -4 want 1000354, request seen intact: true\necho_all256: got -4 want 256712060, request seen intact: true\necho_100k: got -4 want 100000183710, request seen intact: true\necho_300k: got -4 want 300000287858, request seen intact: true\nextra_hello: got -4 want 5029204, request seen intact: true\n",
+            "status": "wrong",
+            "tests_passed": 7,
+            "tests_total": 12
+          }
+        },
+        "rs-llvm": {
+          "class": "wrong_but_proved",
+          "grader": {
+            "rc": 0,
+            "stdout": "FAIL echo_a\nFAIL echo_all256\nFAIL echo_100k\nFAIL echo_300k\nFAIL extra_hello\nTESTS 7 12\n",
+            "stderr": "echo_a: got -4 want 1000354, request seen intact: true\necho_all256: got -4 want 256712060, request seen intact: true\necho_100k: got -4 want 100000183710, request seen intact: true\necho_300k: got -4 want 300000287858, request seen intact: true\nextra_hello: got -4 want 5029204, request seen intact: true\n",
+            "status": "wrong",
+            "tests_passed": 7,
+            "tests_total": 12
+          }
+        }
+      }
+    },
+    {
+      "id": "m014",
+      "pid": "q01",
+      "family": "framing",
+      "expected": "oracle",
+      "old": "let plen: i64 = load_be(hb, 0, 4);",
+      "new": "let plen: i64 = load_be(hb, 0, 2);",
+      "intent": "incorrect",
+      "sha256": "236c67a745c3c845905e748b249793d3770afe4e7b7fc875db49577375c04461",
+      "runs": {
+        "rs-rust": {
+          "class": "wrong_but_proved",
+          "grader": {
+            "rc": 0,
+            "stdout": "FAIL echo_a\nFAIL echo_all256\nFAIL echo_100k\nFAIL echo_300k\nFAIL extra_hello\nFAIL short\nFAIL huge\nTESTS 5 12\n",
+            "stderr": "echo_a: got 1 want 1000354, request seen intact: true\necho_all256: got 1 want 256712060, request seen intact: true\necho_100k: got 1000260 want 100000183710, request seen intact: true\necho_300k: got 4958745 want 300000287858, request seen intact: true\nextra_hello: got 1 want 5029204, request seen intact: true\nshort: got 1 want -4, request seen intact: true\nhuge: got -4 want -5, request seen intact: true\n",
+            "status": "wrong",
+            "tests_passed": 5,
+            "tests_total": 12
+          }
+        },
+        "rs-llvm": {
+          "class": "wrong_but_proved",
+          "grader": {
+            "rc": 0,
+            "stdout": "FAIL echo_a\nFAIL echo_all256\nFAIL echo_100k\nFAIL echo_300k\nFAIL extra_hello\nFAIL short\nFAIL huge\nTESTS 5 12\n",
+            "stderr": "echo_a: got 1 want 1000354, request seen intact: true\necho_all256: got 1 want 256712060, request seen intact: true\necho_100k: got 1000260 want 100000183710, request seen intact: true\necho_300k: got 4958745 want 300000287858, request seen intact: true\nextra_hello: got 1 want 5029204, request seen intact: true\nshort: got 1 want -4, request seen intact: true\nhuge: got -4 want -5, request seen intact: true\n",
+            "status": "wrong",
+            "tests_passed": 5,
+            "tests_total": 12
+          }
+        }
+      }
+    },
+    {
+      "id": "m015",
+      "pid": "q02",
+      "family": "framing",
+      "expected": "static",
+      "old": "let mut out: [u8] = alloc(n + 1, 0);",
+      "new": "let mut out: [u8] = alloc(n, 0);",
+      "intent": "incorrect",
+      "sha256": "708f29b7e94c03a4c3fec3699f53cbaf9adcfd8044127d73af55a6899c8ac3da",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 70,
+                "col": 24,
+                "code": "invariant_entry",
+                "message": "cannot prove loop invariant on entry in crate::handle",
+                "fix": "the invariant must hold before the first iteration; check initial values",
+                "file": "root.pruv",
+                "counterexample": {
+                  "input": {
+                    "ok": true,
+                    "error": 0,
+                    "write_open": true,
+                    "eof": false,
+                    "size": 0
+                  },
+                  "s": {
+                    "ok": true,
+                    "error": 0,
+                    "write_open": true,
+                    "eof": false,
+                    "size": 0
+                  },
+                  "line": {
+                    "len": 1025,
+                    "first": [
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0
+                    ]
+                  },
+                  "have": 0,
+                  "fin": 1,
+                  "n": 0,
+                  "out": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "i": 0
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade_y9o50qwb/root_gen.rs",
+            "ll": null,
+            "stderr": "ode\": \"invariant_entry\", \"message\": \"cannot prove loop invariant on entry in crate::handle\", \"fix\": \"the invariant must hold before the first iteration; check initial values\", \"file\": \"root.pruv\", \"counterexample\": {\"input\": {\"ok\": true, \"error\": 0, \"write_open\": true, \"eof\": false, \"size\": 0}, \"s\": {\"ok\": true, \"error\": 0, \"write_open\": true, \"eof\": false, \"size\": 0}, \"line\": {\"len\": 1025, \"first\": [0, 0, 0, 0, 0, 0, 0, 0]}, \"have\": 0, \"fin\": 1, \"n\": 0, \"out\": {\"len\": 0, \"first\": []}, \"i\": 0}}\n",
+            "status": "pruv_error"
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 70,
+                "col": 24,
+                "code": "invariant_entry",
+                "message": "cannot prove loop invariant on entry in crate::handle",
+                "fix": "the invariant must hold before the first iteration; check initial values",
+                "file": "root.pruv",
+                "counterexample": {
+                  "input": {
+                    "ok": true,
+                    "error": 0,
+                    "write_open": true,
+                    "eof": false,
+                    "size": 0
+                  },
+                  "s": {
+                    "ok": true,
+                    "error": 0,
+                    "write_open": true,
+                    "eof": false,
+                    "size": 0
+                  },
+                  "line": {
+                    "len": 1025,
+                    "first": [
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0
+                    ]
+                  },
+                  "have": 0,
+                  "fin": 1,
+                  "n": 0,
+                  "out": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "i": 0
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade__t1rb_57/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_net/.work/grade__t1rb_57/root_gen.ll",
+            "stderr": "ode\": \"invariant_entry\", \"message\": \"cannot prove loop invariant on entry in crate::handle\", \"fix\": \"the invariant must hold before the first iteration; check initial values\", \"file\": \"root.pruv\", \"counterexample\": {\"input\": {\"ok\": true, \"error\": 0, \"write_open\": true, \"eof\": false, \"size\": 0}, \"s\": {\"ok\": true, \"error\": 0, \"write_open\": true, \"eof\": false, \"size\": 0}, \"line\": {\"len\": 1025, \"first\": [0, 0, 0, 0, 0, 0, 0, 0]}, \"have\": 0, \"fin\": 1, \"n\": 0, \"out\": {\"len\": 0, \"first\": []}, \"i\": 0}}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m016",
+      "pid": "q02",
+      "family": "line_boundary",
+      "expected": "oracle",
+      "old": "net_byte(s, k) != 10",
+      "new": "net_byte(s, k) != 13",
+      "intent": "incorrect",
+      "sha256": "3d3422f4ba78abd8b25a60997cb7658f612ccd7e7f5f47052ce9a648da0d2546",
+      "runs": {
+        "rs-rust": {
+          "class": "wrong_but_proved",
+          "grader": {
+            "rc": 0,
+            "stdout": "FAIL client_1\nFAIL client_2\nFAIL client_3\nFAIL client_4\nFAIL client_5\nFAIL client_6\nFAIL client_10\nFAIL value\nTESTS 5 13\n",
+            "stderr": "serve returned 400000006\n",
+            "status": "wrong",
+            "tests_passed": 5,
+            "tests_total": 13
+          }
+        },
+        "rs-llvm": {
+          "class": "wrong_but_proved",
+          "grader": {
+            "rc": 0,
+            "stdout": "FAIL client_1\nFAIL client_2\nFAIL client_3\nFAIL client_4\nFAIL client_5\nFAIL client_6\nFAIL client_10\nFAIL value\nTESTS 5 13\n",
+            "stderr": "serve returned 400000006\n",
+            "status": "wrong",
+            "tests_passed": 5,
+            "tests_total": 13
+          }
+        }
+      }
+    },
+    {
+      "id": "m017",
+      "pid": "q01",
+      "family": "smaller_chunks",
+      "expected": "accepted",
+      "old": "if mx > 4096 { mx = 4096; }",
+      "new": "if mx > 1000 { mx = 1000; }",
+      "intent": "control",
+      "sha256": "005064bd7159ad17cdf1f0f6dd4b4781a09cbd4301ddc4cd74c901fb2093381d",
+      "runs": {
+        "rs-rust": {
+          "class": "accepted",
+          "grader": {
+            "rc": 0,
+            "stdout": "TESTS 12 12\n",
+            "stderr": "",
+            "status": "ok",
+            "tests_passed": 12,
+            "tests_total": 12
+          }
+        },
+        "rs-llvm": {
+          "class": "accepted",
+          "grader": {
+            "rc": 0,
+            "stdout": "TESTS 12 12\n",
+            "stderr": "",
+            "status": "ok",
+            "tests_passed": 12,
+            "tests_total": 12
+          }
+        }
+      }
+    },
+    {
+      "id": "m018",
+      "pid": "q02",
+      "family": "longer_timeout",
+      "expected": "accepted",
+      "old": "s = net_set_timeout(move s, 2000);",
+      "new": "s = net_set_timeout(move s, 5000);",
+      "intent": "control",
+      "sha256": "113418a8e605017175a9c159904a73f383789962aebf1c7faa8307ee4a8b417d",
+      "runs": {
+        "rs-rust": {
+          "class": "accepted",
+          "grader": {
+            "rc": 0,
+            "stdout": "TESTS 13 13\n",
+            "stderr": "",
+            "status": "ok",
+            "tests_passed": 13,
+            "tests_total": 13
+          }
+        },
+        "rs-llvm": {
+          "class": "accepted",
+          "grader": {
+            "rc": 0,
+            "stdout": "TESTS 13 13\n",
+            "stderr": "",
+            "status": "ok",
+            "tests_passed": 13,
+            "tests_total": 13
+          }
+        }
+      }
+    }
+  ]
+}

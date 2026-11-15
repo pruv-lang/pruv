@@ -1,0 +1,136 @@
+// Bounded line server: listen on an ephemeral port, announce it on a control port, then serve a budget of connections.
+// Each connection returns its line reversed (byte-wise), or "!" LF when the line is longer than 1024 bytes.
+fn done(take s: Socket, outcome: i64) -> i64 ! net, alloc
+  requires 0 <= outcome && outcome <= 2
+  ensures result == outcome
+{
+  let r: Result<i64> = net_close(move s);
+  return outcome;
+}
+
+// 0 = dropped, 1 = served, 2 = line too long; the accepted socket is always closed
+fn handle(take input: Socket) -> i64 ! net, alloc
+  ensures 0 <= result && result <= 2
+{
+  let mut s: Socket = move input;
+  if !net_ok(s) { return done(move s, 0); }
+  s = net_set_timeout(move s, 2000);
+  if !net_ok(s) { return done(move s, 0); }
+  if !net_write_open(s) { return done(move s, 0); }
+
+  let mut line: [u8] = alloc(1025, 0);
+  let mut have: i64 = 0;
+  let mut fin: i64 = 0;
+  while fin == 0 && have < 1025
+    invariant 0 <= have && have <= 1025
+    invariant fin == 0 || fin == 1
+    invariant fin == 0 || have <= 1024
+    invariant len(line) == 1025
+    invariant net_ok(s)
+    invariant net_write_open(s)
+    decreases 1025 - have + 1 - fin
+  {
+    s = net_read(move s, 1025 - have);
+    if !net_ok(s) { return done(move s, 0); }
+    let m: i64 = net_size(s);
+    if m == 0 { return done(move s, 0); }
+
+    // k = number of line bytes before the first LF of this chunk (m when there is none)
+    let mut k: i64 = 0;
+    while k < m && net_byte(s, k) != 10
+      invariant 0 <= k && k <= m
+      decreases m - k
+    {
+      k = k + 1;
+    }
+    let mut j: i64 = 0;
+    while j < k
+      invariant 0 <= j && j <= k && k <= m && m <= 1025 - have
+      invariant len(line) == 1025
+      decreases k - j
+    {
+      line[have + j] = net_byte(s, j);
+      j = j + 1;
+    }
+    have = have + k;
+    if k < m { fin = 1; }
+  }
+
+  if fin == 0 {
+    s = net_write_str(move s, "!\n");
+    if !net_ok(s) { return done(move s, 0); }
+    return done(move s, 2);
+  }
+
+  let n: i64 = have;
+  let mut out: [u8] = alloc(n + 1, 0);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n <= 1024
+    invariant len(out) == n + 1
+    invariant len(line) == 1025
+    decreases n - i
+  {
+    out[i] = line[n - 1 - i];
+    i = i + 1;
+  }
+  out[n] = 10;
+  s = net_write_bytes(move s, out);
+  if !net_ok(s) { return done(move s, 0); }
+  return done(move s, 1);
+}
+
+pub fn serve(host: str, ctl: i64, budget: i64) -> i64 ! net, alloc
+  requires 1 <= ctl && ctl <= 65535
+  requires 0 <= budget && budget <= 1000
+  ensures -3 <= result && result <= 100010001000
+{
+  let l: Listener = net_listen(host, 0);
+  if !net_listener_ok(l) {
+    let r0: Result<i64> = net_listener_close(move l);
+    return -1;
+  }
+
+  // announce the bound port on the control connection
+  let mut c: Socket = net_connect(host, ctl);
+  if !net_ok(c) {
+    let r1: Result<i64> = net_close(move c);
+    let r2: Result<i64> = net_listener_close(move l);
+    return -2;
+  }
+  let mut msg: [u8] = alloc(2, 0);
+  let port: i64 = net_listener_port(l);
+  store_be(inout msg, 0, port, 2);
+  c = net_write_bytes(move c, msg);
+  if !net_ok(c) {
+    let r3: Result<i64> = net_close(move c);
+    let r4: Result<i64> = net_listener_close(move l);
+    return -2;
+  }
+  let r5: Result<i64> = net_close(move c);
+
+  let mut round: i64 = 0;
+  let mut served: i64 = 0;
+  let mut longs: i64 = 0;
+  let mut dropped: i64 = 0;
+  while round < budget
+    invariant 0 <= round && round <= budget
+    invariant 0 <= served && 0 <= longs && 0 <= dropped
+    invariant served + longs + dropped == round
+    invariant net_listener_ok(l)
+    decreases budget - round
+  {
+    let s: Socket = net_accept(l);
+    let o: i64 = handle(move s);
+    if o == 1 { served = served + 1; }
+    if o == 2 { longs = longs + 1; }
+    if o == 0 { dropped = dropped + 1; }
+    round = round + 1;
+  }
+
+  let r: Result<i64> = net_listener_close(move l);
+  match r {
+    Ok(v) => { return served * 100000000 + longs * 10000 + dropped; }
+    Err(e) => { return -3; }
+  }
+}

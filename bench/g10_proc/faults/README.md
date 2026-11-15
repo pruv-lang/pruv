@@ -6,10 +6,10 @@ A fault is detected when a named probe passes on the clean copy and fails on the
 
 | Fault | Patch SHA256 prefix | Probe(s) | Result |
 |---|---|---|---|
-| f1_must_consume.diff | 5cd445ddd20d65b2 | reject `g10p_early_return` | detected |
-| f2_catalog_requires.diff | b1ba2aa26be2468f | reject `g10p_v_bad_stream` | detected |
-| f3_snapshot_keep.diff | c256c277d45fef29 | local_accept `p_keep_other`, local_reject `p_keep_read` | detected |
-| f4_result_tag.diff | d7d2dfdef51e7d16 | runtime `g10p_r10_exit_kill` | detected |
+| f1_must_consume.diff | d8d9d40f1f49d09a | reject `g10p_early_return` | detected |
+| f2_catalog_requires.diff | e88eeb60bfb2e5ac | reject `g10p_v_bad_stream` | detected |
+| f3_snapshot_keep.diff | f167e74d76eb8a19 | local_accept `p_keep_other`, local_reject `p_keep_read` | detected |
+| f4_result_tag.diff | 6c7f087f2d816d39 | runtime `g10p_r10_exit_kill` | detected |
 
 Probe kinds: `reject` is a tests/must_reject row (its stage/code JSON); `local_accept` / `local_reject`
 are the programs in this folder (verified / rejected with an `assert` diagnostic); `runtime` builds the

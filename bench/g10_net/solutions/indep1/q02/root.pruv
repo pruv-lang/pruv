@@ -1,0 +1,169 @@
+// q02: bounded line server.
+
+fn fin(take s: Socket, code: i64) -> i64 ! net, alloc
+  ensures result == code
+{
+  let r: Result<i64> = net_close(move s);
+  match r {
+    Ok(v) => { return code; }
+    Err(c) => { return code; }
+  }
+}
+
+// true iff the close returned Ok
+fn lclose(take l: Listener) -> bool ! net, alloc
+{
+  let r: Result<i64> = net_listener_close(move l);
+  match r {
+    Ok(v) => { return true; }
+    Err(c) => { return false; }
+  }
+}
+
+// Handles one accepted socket and closes it.
+// Returns 0 served, 1 long, 2 dropped.
+fn handle(take s: Socket) -> i64 ! net, alloc
+  ensures 0 <= result && result <= 2
+{
+  if !net_ok(s) { return fin(move s, 2); }
+  let mut t: Socket = net_set_timeout(move s, 2000);
+  if !net_ok(t) { return fin(move t, 2); }
+
+  let mut buf: [u8] = alloc(1025, 0);
+  let mut used: i64 = 0;
+  // 0 reading, 1 LF found, 2 too long, 3 failed or EOF
+  let mut state: i64 = 0;
+  while state == 0
+    invariant 0 <= state && state <= 3
+    invariant 0 <= used && used <= 1025
+    invariant state != 2 ==> used <= 1024
+    invariant len(buf) == 1025
+    invariant state <= 2 ==> net_ok(t)
+    decreases 1030 - used - state
+  {
+    let want: i64 = 1025 - used;
+    t = net_read(move t, want);
+    if !net_ok(t) {
+      state = 3;
+    } else {
+      let n: i64 = net_size(t);
+      if n <= 0 || n > want {
+        state = 3;
+      } else {
+        let used0: i64 = used;
+        let mut i: i64 = 0;
+        while i < n && state == 0
+          invariant 0 <= i && i <= n
+          invariant 0 <= state && state <= 3
+          invariant used0 <= used && used <= 1025
+          invariant state == 0 ==> used == used0 + i
+          invariant state != 2 ==> used <= 1024
+          invariant len(buf) == 1025
+          decreases n - i
+        {
+          let b: i64 = net_byte(t, i);
+          if b < 0 || b > 255 {
+            state = 3;
+          } else if b == 10 {
+            state = 1;
+          } else {
+            buf[used] = b;
+            used = used + 1;
+            if used == 1025 { state = 2; }
+          }
+          i = i + 1;
+        }
+      }
+    }
+  }
+
+  if state == 3 { return fin(move t, 2); }
+  if !net_write_open(t) { return fin(move t, 2); }
+
+  if state == 2 {
+    let mut bang: [u8] = alloc(2, 0);
+    bang[0] = 33;
+    bang[1] = 10;
+    t = net_write_bytes(move t, bang);
+    if !net_ok(t) { return fin(move t, 2); }
+    return fin(move t, 1);
+  }
+
+  // state == 1: reply the used line bytes reversed, then LF
+  let mut out: [u8] = alloc(used + 1, 0);
+  let mut j: i64 = 0;
+  while j < used
+    invariant 0 <= j && j <= used
+    invariant len(out) == used + 1
+    invariant len(buf) == 1025
+    invariant used <= 1024
+    decreases used - j
+  {
+    out[j] = buf[used - 1 - j];
+    j = j + 1;
+  }
+  out[used] = 10;
+  t = net_write_bytes(move t, out);
+  if !net_ok(t) { return fin(move t, 2); }
+  return fin(move t, 0);
+}
+
+pub fn serve(host: str, ctl: i64, budget: i64) -> i64 ! net, alloc
+  requires 1 <= ctl && ctl <= 65535
+  requires 0 <= budget && budget <= 1000
+  ensures -3 <= result && result <= 100010001000
+{
+  let l: Listener = net_listen(host, 0);
+  if !net_listener_ok(l) {
+    let ig: bool = lclose(move l);
+    return -1;
+  }
+
+  let mut c: Socket = net_connect(host, ctl);
+  if !net_ok(c) {
+    let a1: i64 = fin(move c, 0);
+    let b1: bool = lclose(move l);
+    return -2;
+  }
+  let p: i64 = net_listener_port(l);
+  let mut hdr: [u8] = alloc(2, 0);
+  store_be(inout hdr, 0, p, 2);
+  if !net_write_open(c) {
+    let a2: i64 = fin(move c, 0);
+    let b2: bool = lclose(move l);
+    return -2;
+  }
+  c = net_write_bytes(move c, hdr);
+  if !net_ok(c) {
+    let a3: i64 = fin(move c, 0);
+    let b3: bool = lclose(move l);
+    return -2;
+  }
+  let a4: i64 = fin(move c, 0);
+
+  let mut served: i64 = 0;
+  let mut long: i64 = 0;
+  let mut dropped: i64 = 0;
+  let mut k: i64 = 0;
+  while k < budget
+    invariant 0 <= k && k <= budget
+    invariant 0 <= served && 0 <= long && 0 <= dropped
+    invariant served + long + dropped == k
+    decreases budget - k
+  {
+    let s: Socket = net_accept(l);
+    let r: i64 = handle(move s);
+    if r == 0 {
+      served = served + 1;
+    } else if r == 1 {
+      long = long + 1;
+    } else {
+      dropped = dropped + 1;
+    }
+    k = k + 1;
+  }
+
+  let closed_ok: bool = lclose(move l);
+  if !closed_ok { return -3; }
+  return served * 100000000 + long * 10000 + dropped;
+}

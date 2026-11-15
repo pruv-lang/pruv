@@ -1,0 +1,11 @@
+--- a/pruvc/verify.py
++++ b/pruvc/verify.py
+@@ -2232,7 +2232,7 @@
+             s.assume(st, g, z3.Implies(z3.Not(ok), z3.And(z3.Or(res.error == 1, res.error == 2), res.buf.n == 0,
+                                                           z3.Not(res.eof))))
+         elif n in ("net_write_str", "net_write_bytes"):
+-            s.assume(st, g, z3.Implies(ok, z3.And(res.write_open == p.write_open, _net_keep_buf(res, p))))
++            s.assume(st, g, z3.Implies(ok, res.write_open == p.write_open))  # FAULT: snapshot not kept
+             s.assume(st, g, z3.Implies(z3.Not(ok), z3.Or(res.error == 4, res.error == 6)))
+         elif n == "net_shutdown_write":
+             s.assume(st, g, z3.Not(res.write_open))
