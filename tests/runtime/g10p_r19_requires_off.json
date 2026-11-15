@@ -1,0 +1,10 @@
+{
+  "backends": ["rust"],
+  "flags_matrix": [
+    ["--trust-callers", "--foreign-checks", "off"]
+  ],
+  "exit": 101,
+  "stdout_contains": "no panic with checks off",
+  "stderr_contains": "pruv: invalid representation: stream",
+  "stderr_absent": "foreign requires violated"
+}

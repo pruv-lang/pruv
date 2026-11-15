@@ -1,0 +1,28 @@
+// G10 proc A2 gate 11 (--no-verify only): an uncaught runtime requires violation ends the process with exit code 101
+// and the `pruv: foreign requires violated:` prefix; an OS failure before it is an ordinary value (no panic).
+fn start(child: str, mode: str) -> Process ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, mode);
+  return proc_spawn(child, args, "");
+}
+
+fn finish(take p: Process) -> i64 ! proc, alloc {
+  let r: Result<i64> = proc_wait(move p);
+  match r {
+    Ok(v) => { return v; }
+    Err(code) => { return 1000 + code; }
+  }
+}
+
+fn os_failure(program: str) -> i64 ! proc, alloc {
+  let p: Process = start(program, "x");
+  let e: i64 = proc_error(p);
+  let r: i64 = finish(move p);
+  return e * 1000 + r;
+}
+
+fn bad_read(child: str) -> i64 ! proc, alloc {
+  let mut p: Process = start(child, "quick");
+  p = proc_read(move p, 3, 10);
+  return finish(move p);
+}

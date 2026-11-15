@@ -1,0 +1,111 @@
+// G10 proc A2 gate 4 (failure side): a write to a child that exits without reading is error 4 (a partial write is
+// possible, nothing is retried), the Pruv process is not killed by SIGPIPE, stdin is closed, both public buffers are
+// empty, both EOFs are false, and proc_wait still reaps the child and returns the same error as Err.
+fn broken_write(child: str, data: [u8]) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "quick");
+  let mut p: Process = proc_spawn(child, args, "");
+  if !proc_ok(p) {
+    let r0: Result<i64> = proc_wait(move p);
+    return 100;
+  }
+  p = proc_write_bytes(move p, data);
+  let e: i64 = proc_error(p);
+  let open: bool = proc_stdin_open(p);
+  let clean: bool = proc_size(p, 1) == 0 && proc_size(p, 2) == 0 && !proc_eof(p, 1) && !proc_eof(p, 2);
+  let r: Result<i64> = proc_wait(move p);
+  if e != 4 { return 1; }
+  if open { return 2; }
+  if !clean { return 3; }
+  match r {
+    Ok(v) => { return 4; }
+    Err(code) => {
+      if code == 4 { return 0; }
+      return 5;
+    }
+  }
+}
+
+// the child reads exactly 16 bytes, saves them to `file`, and exits without reading more: of a write far larger than a pipe
+// holds, the first part arrives and the rest fails with error 4 (published on the handle; wait returns the same Err(4)).
+// A failed handle publishes no output, so the driver reads `file` to see which part arrived.
+fn partial_write(child: str, data: [u8], file: str) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "take");
+  args = proc_args_push(move args, "16");
+  args = proc_args_push(move args, file);
+  let mut p: Process = proc_spawn(child, args, "");
+  if !proc_ok(p) {
+    let r0: Result<i64> = proc_wait(move p);
+    return 100;
+  }
+  p = proc_write_bytes(move p, data);
+  let e: i64 = proc_error(p);
+  let r: Result<i64> = proc_wait(move p);
+  if e != 4 { return 1; }
+  match r {
+    Ok(v) => { return 4; }
+    Err(code) => {
+      if code == 4 { return 0; }
+      return 5;
+    }
+  }
+}
+
+// control: exactly 16 bytes written, stdin closed: `take 16` prints them to stdout and exits 0; returns the stdout size (16)
+fn take_ok(child: str, data: [u8]) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "take");
+  args = proc_args_push(move args, "16");
+  let mut p: Process = proc_spawn(child, args, "");
+  if !proc_ok(p) {
+    let r0: Result<i64> = proc_wait(move p);
+    return 100;
+  }
+  p = proc_write_bytes(move p, data);
+  if proc_error(p) != 0 || !proc_stdin_open(p) {
+    let r2: Result<i64> = proc_wait(move p);
+    return 250;
+  }
+  p = proc_close_stdin(move p);
+  if proc_error(p) != 0 {
+    let r3: Result<i64> = proc_wait(move p);
+    return 260;
+  }
+  p = proc_read_all(move p);
+  if !proc_ok(p) {
+    let r1: Result<i64> = proc_kill(move p);
+    return 200;
+  }
+  let n: i64 = proc_size(p, 1);
+  let r: Result<i64> = proc_wait(move p);
+  match r {
+    Ok(v) => {
+      if v != 0 { return 300; }
+      return n;
+    }
+    Err(code) => { return 400 + code; }
+  }
+}
+
+fn close_only(child: str) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "quick");
+  let mut p: Process = proc_spawn(child, args, "");
+  if !proc_ok(p) {
+    let r0: Result<i64> = proc_wait(move p);
+    return 100;
+  }
+  p = proc_close_stdin(move p);
+  if !proc_ok(p) {
+    let r1: Result<i64> = proc_kill(move p);
+    return 200;
+  }
+  let open: bool = proc_stdin_open(p);
+  let r: Result<i64> = proc_wait(move p);
+  if open { return 1; }
+  match r {
+    Ok(v) => { return v; }
+    Err(code) => { return 400 + code; }
+  }
+}

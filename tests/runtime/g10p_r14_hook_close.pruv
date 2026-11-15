@@ -1,0 +1,28 @@
+// G10 proc A2 gate 10 (fault path, spec "proc_hook": "close"): closing stdin fails. proc_close_stdin publishes error 4
+// (stdin is released anyway, buffers empty, EOFs false) and the handle is still consumed by proc_wait, which reaps the
+// child and returns Err(4).
+fn close_fail(child: str) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "quick");
+  let mut p: Process = proc_spawn(child, args, "");
+  if !proc_ok(p) {
+    let r0: Result<i64> = proc_wait(move p);
+    return 100;
+  }
+  p = proc_close_stdin(move p);
+  let alive: bool = proc_ok(p);
+  let e: i64 = proc_error(p);
+  let open: bool = proc_stdin_open(p);
+  let clean: bool = proc_size(p, 1) == 0 && proc_size(p, 2) == 0 && !proc_eof(p, 1) && !proc_eof(p, 2);
+  let r: Result<i64> = proc_wait(move p);
+  if alive { return 1; }
+  if e != 4 { return 2; }
+  if open || !clean { return 3; }
+  match r {
+    Ok(v) => { return 4; }
+    Err(code) => {
+      if code == 4 { return 0; }
+      return 5;
+    }
+  }
+}

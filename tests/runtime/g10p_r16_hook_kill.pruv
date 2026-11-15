@@ -1,0 +1,25 @@
+// G10 proc A2 gate 10 (fault path, spec "proc_hook": "kill"): the kill request is reported as failed. proc_kill still
+// reaps the child (the handle is never abandoned) and returns Err(6); the platform kill itself did run, so the sleeping
+// child does not keep the test waiting.
+fn kill_fail(child: str) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "hold");
+  let mut p: Process = proc_spawn(child, args, "");
+  if !proc_ok(p) {
+    let r0: Result<i64> = proc_wait(move p);
+    return 100;
+  }
+  p = proc_read(move p, 1, 64);
+  if !proc_ok(p) {
+    let r1: Result<i64> = proc_kill(move p);
+    return 300;
+  }
+  let r: Result<i64> = proc_kill(move p);
+  match r {
+    Ok(v) => { return 1; }
+    Err(code) => {
+      if code == 6 { return 0; }
+      return 2;
+    }
+  }
+}

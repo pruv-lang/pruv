@@ -1,0 +1,12 @@
+{
+  "backends": ["rust"],
+  "proc_hook": "kill",
+  "flags_matrix": [
+    [],
+    ["--foreign-checks", "all"],
+    ["--no-verify"]
+  ],
+  "exit": 0,
+  "gen_contains": ["kbad = true;"],
+  "gen_absent": ["    bad = true;", "pruv test wait fault", "//@hook"]
+}

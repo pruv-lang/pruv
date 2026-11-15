@@ -1,0 +1,91 @@
+// G10 proc A2 gate 10 (fault path, spec "proc_hook": "read1"): the stdout reader reports a read error. proc_read and
+// proc_read_all then publish error 3: stdin is closed, both public buffers are empty, both EOFs are false. proc_kill and
+// proc_wait still clean up the child and return the recorded error as Err(3).
+fn read_fail(child: str) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "hold");
+  let mut p: Process = proc_spawn(child, args, "");
+  if !proc_ok(p) {
+    let r0: Result<i64> = proc_wait(move p);
+    return 100;
+  }
+  p = proc_read(move p, 1, 64);
+  let alive: bool = proc_ok(p);
+  let e: i64 = proc_error(p);
+  let open: bool = proc_stdin_open(p);
+  let clean: bool = proc_size(p, 1) == 0 && proc_size(p, 2) == 0 && !proc_eof(p, 1) && !proc_eof(p, 2);
+  let r: Result<i64> = proc_kill(move p);
+  if alive { return 1; }
+  if e != 3 { return 2; }
+  if open || !clean { return 3; }
+  match r {
+    Ok(v) => { return 4; }
+    Err(code) => {
+      if code == 3 { return 0; }
+      return 5;
+    }
+  }
+}
+
+fn read_all_fail(child: str) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "exit");
+  args = proc_args_push(move args, "0");
+  let mut p: Process = proc_spawn(child, args, "");
+  if !proc_ok(p) {
+    let r0: Result<i64> = proc_wait(move p);
+    return 100;
+  }
+  p = proc_close_stdin(move p);
+  if !proc_ok(p) {
+    let r1: Result<i64> = proc_kill(move p);
+    return 200;
+  }
+  p = proc_read_all(move p);
+  let alive: bool = proc_ok(p);
+  let e: i64 = proc_error(p);
+  let clean: bool = proc_size(p, 1) == 0 && proc_size(p, 2) == 0 && !proc_eof(p, 1) && !proc_eof(p, 2) && !proc_stdin_open(p);
+  let r: Result<i64> = proc_wait(move p);
+  if alive { return 1; }
+  if e != 3 { return 2; }
+  if !clean { return 3; }
+  match r {
+    Ok(v) => { return 4; }
+    Err(code) => {
+      if code == 3 { return 0; }
+      return 5;
+    }
+  }
+}
+
+// the other stream is not affected by the stdout fault until it is read: stderr reads fine
+fn stderr_still_reads(child: str) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "errout");
+  args = proc_args_push(move args, "10");
+  args = proc_args_push(move args, "0");
+  let mut p: Process = proc_spawn(child, args, "");
+  if !proc_ok(p) {
+    let r0: Result<i64> = proc_wait(move p);
+    return 100;
+  }
+  p = proc_close_stdin(move p);
+  if !proc_ok(p) {
+    let r1: Result<i64> = proc_kill(move p);
+    return 200;
+  }
+  p = proc_read(move p, 2, 64);
+  let alive: bool = proc_ok(p);
+  let n: i64 = proc_size(p, 2);
+  let r: Result<i64> = proc_wait(move p);
+  if !alive { return 1; }
+  if n != 10 { return 2; }
+  match r {
+    Ok(v) => { return 4; }
+    Err(code) => {
+      // the stdout reader still failed: wait publishes it (no earlier error exists)
+      if code == 3 { return 0; }
+      return 5;
+    }
+  }
+}

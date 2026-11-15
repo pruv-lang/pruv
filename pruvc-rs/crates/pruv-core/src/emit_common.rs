@@ -125,6 +125,13 @@ fn rty_name(t: &str, param: bool) -> String {
         "file" => {
             if param { "&pruv_File".to_string() } else { "pruv_File".to_string() }
         }
+        // G10 proc A2: Process and ProcessArgs are owned; a borrowed parameter is a reference
+        "process" => {
+            if param { "&pruv_Process".to_string() } else { "pruv_Process".to_string() }
+        }
+        "process_args" => {
+            if param { "&pruv_ProcessArgs".to_string() } else { "pruv_ProcessArgs".to_string() }
+        }
         // G6: String is owned; a borrowed parameter is a reference
         "string" => {
             if param { "&::std::string::String".to_string() } else { "::std::string::String".to_string() }

@@ -17,15 +17,25 @@ default and infer modes, expecting both backends to generate code after a comple
 The g10_v_* roots are ordinary must_reject rows in default mode.
 
 group g10_proc_frontend (G10 proc A0; backend null rows): tests/g10_proc/frontend/*.pruv runs on both backends in
-default, no-verify, trust-callers and foreign-checks-off modes. Until the proc slice lands, every program that uses
-Process, ProcessArgs or a proc_* operation must stop with codegen/unsupported_type (the staging guard) in every mode;
-proc_only.pruv (a function that only declares `! proc`) must compile on both backends. The g10p_* roots are ordinary
-must_reject rows in default mode.
+default, no-verify, trust-callers and foreign-checks-off modes. Since A2 the Rust backend generates every program
+(exit 0) and the generated Rust must compile (rustc --emit=metadata); the LLVM backend still stops every program that
+uses Process, ProcessArgs or a proc_* operation with codegen/unsupported_type (the staging guard, until A3) in every
+mode; proc_only.pruv (a function that only declares `! proc`) must compile on both backends. The g10p_* roots are
+ordinary must_reject rows in default mode.
 
 group g10_proc_proof (G10 proc A1; backend null rows): tests/g10_proc/proof/*.pruv runs on both backends in default and
-no-verify modes. Every program must verify completely (default mode) and then stop at the staging guard, which now sits
-at the codegen entry after verification: exit 1 with codegen/unsupported_type for the proc slice (a verification error
-would be a different diagnostic and fails the row). The g10p_v_* roots are ordinary must_reject rows (verify stage).
+no-verify modes. Every program must verify completely (default mode); then the Rust backend generates (and the Rust must
+compile, A2) and the LLVM backend exits 1 with codegen/unsupported_type for the proc slice at the codegen entry after
+verification (a verification error would be a different diagnostic and fails the row). The g10p_v_* roots are ordinary
+must_reject rows (verify stage).
+
+group runtime, G10 proc A2: tests/runtime/g10p_r*.pruv (+ .rs driver, .json; "backends": ["rust"]). The runner compiles the
+fixture child tests/g10_proc/child.rs once into the work directory and passes its absolute path to the drivers in the
+environment variable PRUV_PROC_CHILD; a g10p_ driver runs in a fresh temporary directory (like g10_). The spec field
+"proc_hook" (string) sets the compile-time PRUV_PROC_TEST_HOOK (setup, setup_late, read1, read2, close, wait, kill: test-only fault
+lines of the generated Process runtime; without it the generated code contains none). A2 gate 12 (the Python and Rust
+compilers generate identical Rust) is covered by tests/diff_compilers.py --only runtime, which compares the generated
+bytes of every tests/runtime row with each compiler, the g10p rows included.
 
 groups g5_frontend / g5_reject (G5 A0, inventory tests/g5/fixtures.json; rows have backend null): g5_frontend runs the roots of
 tests/g5/frontend (flat files and <name>/root.pruv projects, copied to a new directory first) in modes no-verify and default.
@@ -208,6 +218,26 @@ def runtime_object(count_allocs):
             except OSError as e:
                 _rt_cache[count_allocs] = (None, label + ": cannot execute: %s" % e)
         return _rt_cache[count_allocs]
+
+
+_proc_child = {}   # "r" -> (absolute path or None, error or None)
+_proc_child_lock = threading.Lock()
+
+
+def proc_child():
+    """G10 proc A2: tests/g10_proc/child.rs compiled once into the work directory (thread-safe). Returns (absolute
+    path, error); the g10p runtime drivers get the path in PRUV_PROC_CHILD."""
+    with _proc_child_lock:
+        if "r" not in _proc_child:
+            exe = os.path.join(WORK, "proc_child" + (".exe" if os.name == "nt" else ""))
+            try:
+                c = subprocess.run([RUSTC, "-O", "--edition", "2021", os.path.join(ROOT, "tests", "g10_proc", "child.rs"),
+                                    "-o", exe], capture_output=True, text=True, timeout=300)
+                _proc_child["r"] = (os.path.abspath(exe), None) if c.returncode == 0 else \
+                    (None, "rustc (proc child): " + c.stderr[-400:])
+            except (OSError, subprocess.TimeoutExpired) as e:
+                _proc_child["r"] = (None, "rustc (proc child): %r" % e)
+        return _proc_child["r"]
 
 
 def llvm_objects(ll, stem, work, count_allocs=False):
@@ -612,8 +642,9 @@ G10_PROC_COMPILES = ("proc_only",)   # the only frontend roots that use no Proce
 
 
 def g10_proc_frontend_jobs(group="g10_proc_frontend", subdir="frontend", modes=None):
-    """G10 proc A0: the staging guard stops every Process program (codegen/unsupported_type) in every mode; the roots
-    in G10_PROC_COMPILES generate code on both backends."""
+    """G10 proc A0/A2: on the Rust backend every root generates code and the generated Rust compiles (A2); the staging
+    guard still stops every Process program on the LLVM backend (codegen/unsupported_type) in every mode (until A3);
+    the roots in G10_PROC_COMPILES generate code on both backends."""
     if modes is None:
         modes = (("default", []), ("no-verify", ["--no-verify"]), ("trust-callers", ["--trust-callers"]),
                  ("foreign-checks-off", ["--foreign-checks", "off"]))
@@ -628,9 +659,16 @@ def g10_proc_frontend_jobs(group="g10_proc_frontend", subdir="frontend", modes=N
                 for backend in ("rust", "llvm"):
                     c = (pruvc(f, out + ".rs", flags) if backend == "rust" else
                          pruvc_llvm(f, out + ".ll", out + "_llvm.rs", flags))
-                    if stem in G10_PROC_COMPILES:
+                    if stem in G10_PROC_COMPILES or backend == "rust":
                         if c.returncode != 0:
                             return False, "%s: exit %d (expected 0) %s" % (backend, c.returncode, (c.stdout + c.stderr)[-600:])
+                        if backend == "rust" and stem not in G10_PROC_COMPILES:
+                            # A2: the generated Rust must compile (type and borrow check only; no code generation)
+                            r = subprocess.run([RUSTC, "--crate-type=lib", "--emit=metadata", "--edition", "2021",
+                                                "--crate-name", "g10proc_gen", out + ".rs", "-o", out + ".rmeta"],
+                                               capture_output=True, text=True, timeout=300)
+                            if r.returncode != 0:
+                                return False, "rustc: " + r.stderr[-600:]
                         continue
                     diags = []
                     for line in c.stdout.splitlines():
@@ -652,8 +690,9 @@ def g10_proc_frontend_jobs(group="g10_proc_frontend", subdir="frontend", modes=N
 
 
 def g10_proc_proof_jobs():
-    """G10 proc A1: every tests/g10_proc/proof root verifies completely and then stops at the staging guard (the guard
-    now runs after verification); --no-verify stops at the guard as well."""
+    """G10 proc A1/A2: every tests/g10_proc/proof root verifies completely (default mode); then the Rust backend
+    generates compilable Rust (A2) and the LLVM backend stops at the staging guard (it runs after verification);
+    --no-verify: Rust generates, LLVM stops at the guard."""
     return g10_proc_frontend_jobs("g10_proc_proof", "proof", (("default", []), ("no-verify", ["--no-verify"])))
 
 
@@ -1068,14 +1107,20 @@ def runtime_job(j, t, spec, flags, name, suffix, llvm):
                 return False, "rustc (extern %s): %s" % (xname, r.stderr[-400:])
             xflags += ["--rust-extern", "%s=%s" % (xname, rlib)]
             xlink += ["--extern", "%s=%s" % (xname, rlib)]
+        # compile-time test-only hooks: PRUV_G7_TEST_HOOK (spec "g7_hook"), PRUV_PROC_TEST_HOOK (spec "proc_hook", G10 proc A2)
+        hook_env = {}
+        if spec.get("g7_hook"):
+            hook_env["PRUV_G7_TEST_HOOK"] = spec["g7_hook"]
+        if spec.get("proc_hook"):
+            hook_env["PRUV_PROC_TEST_HOOK"] = spec["proc_hook"]
         if llvm:
             key = t + suffix + "_llvm"
             ll = os.path.join(work, key + ".ll")
             gen = os.path.join(work, key + "_gen.rs")
             src = _g4().copy_project(pruv, os.path.join(work, "g4rt_" + key)) if proj else pruv
-            if spec.get("g7_hook"):
+            if hook_env:
                 c = subprocess.run(_driver().argv(src, ll, ["--rust-bindings", gen] + list(flags) + xflags, "llvm"),
-                                   env=dict(os.environ, PRUV_G7_TEST_HOOK=spec["g7_hook"]),
+                                   env=dict(os.environ, **hook_env),
                                    capture_output=True, text=True, timeout=300)
             else:
                 c = pruvc_llvm(src, ll, gen, list(flags) + xflags)
@@ -1085,9 +1130,9 @@ def runtime_job(j, t, spec, flags, name, suffix, llvm):
             key = t + suffix
             gen = os.path.join(work, key + "_gen.rs")
             src = _g4().copy_project(pruv, os.path.join(work, "g4rt_" + key)) if proj else pruv
-            if spec.get("g7_hook"):
+            if hook_env:
                 c = subprocess.run(_driver().argv(src, gen, list(flags) + xflags, "rust"),
-                                   env=dict(os.environ, PRUV_G7_TEST_HOOK=spec["g7_hook"]),
+                                   env=dict(os.environ, **hook_env),
                                    capture_output=True, text=True, timeout=300)
             else:
                 c = pruvc(src, gen, list(flags) + xflags)
@@ -1113,7 +1158,15 @@ def runtime_job(j, t, spec, flags, name, suffix, llvm):
             return False, "rustc: " + r.stderr[-400:]
         g6_count = bool(llvm and spec.get("g6_drop_balance"))   # G6 A3 (G6_SPEC 13.4)
         env = dict(os.environ, PRUV_G6_COUNT="1") if g6_count else None
-        if t.startswith("g10_"):
+        if t.startswith("g10p_"):
+            # G10 proc A2: the fixture child (compiled once) and a fresh temporary directory for the driver
+            child, child_err = proc_child()
+            if child_err:
+                return False, child_err
+            with tempfile.TemporaryDirectory(prefix="g10p_run_", dir=work) as run_dir:
+                p = subprocess.run([exe], capture_output=True, text=True, timeout=120,
+                                   env=dict(env if env is not None else os.environ, PRUV_PROC_CHILD=child), cwd=run_dir)
+        elif t.startswith("g10_"):
             with tempfile.TemporaryDirectory(prefix="g10_fs_", dir=work) as run_dir:
                 p = subprocess.run([exe], capture_output=True, text=True, timeout=60, env=env, cwd=run_dir)
         else:

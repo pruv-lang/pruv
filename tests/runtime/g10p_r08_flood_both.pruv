@@ -1,0 +1,47 @@
+// G10 proc A2 gate 7 (--no-verify only): the child writes a lot to BOTH outputs before it reads stdin while the parent
+// writes a lot to stdin. Without independent draining of both pipes this deadlocks (child blocked on a full output
+// pipe, parent blocked on a full stdin pipe). The child checks the stdin bytes itself and exits 0 when they are exact.
+fn abort_with(take p: Process, base: i64) -> i64 ! proc, alloc {
+  let e: i64 = proc_error(p);
+  let r: Result<i64> = proc_wait(move p);
+  return base + e;
+}
+
+fn pattern_ok(p: Process, stream: i64, offset: i64) -> bool
+  requires stream == 1 || stream == 2
+{
+  let n: i64 = proc_size(p, stream);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n
+    decreases n - i
+  {
+    if proc_byte(p, stream, i) != ((offset + i) * 31 + stream * 7 + 5) % 251 { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+fn flood(child: str, nout: str, nin: str, data: [u8], want_out: i64) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "flood");
+  args = proc_args_push(move args, nout);
+  args = proc_args_push(move args, nin);
+  let mut p: Process = proc_spawn(child, args, "");
+  if !proc_ok(p) { return abort_with(move p, 100); }
+  p = proc_write_bytes(move p, data);
+  if !proc_ok(p) { return abort_with(move p, 120); }
+  p = proc_close_stdin(move p);
+  if !proc_ok(p) { return abort_with(move p, 200); }
+  p = proc_read_all(move p);
+  if !proc_ok(p) { return abort_with(move p, 300); }
+  let sizes: bool = proc_size(p, 1) == want_out && proc_size(p, 2) == want_out;
+  let good: bool = pattern_ok(p, 1, 0) && pattern_ok(p, 2, 0);
+  let r: Result<i64> = proc_wait(move p);
+  if !sizes { return 1; }
+  if !good { return 2; }
+  match r {
+    Ok(v) => { return v; }
+    Err(code) => { return 600 + code; }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "backends": ["rust"],
+  "flags_matrix": [
+    ["--no-verify"],
+    ["--no-verify", "--foreign-checks", "all"]
+  ],
+  "exit": 101,
+  "stdout_contains": "os failure is a value",
+  "stderr_contains": "pruv: foreign requires violated: proc_read:"
+}

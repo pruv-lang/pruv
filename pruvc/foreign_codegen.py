@@ -96,6 +96,8 @@ class ForeignGen:
     def _catalog_text(s, op, name, low):
         if op.startswith("file_"):
             return s._file_text(op, name)
+        if op.startswith("proc_"):
+            return s._proc_text(op, name)
         STRING = "::std::string::String"
         if op in ("vec_new", "vec_push", "vec_get"):
             T = rty(low[0])
@@ -260,6 +262,100 @@ class ForeignGen:
             body += s._ens("!f.readable && f.writable == f.ok && f.buf.is_empty()",
                            "!file_readable(result) && file_writable(result) == file_ok(result) && file_size(result) == 0")
         return s._fn(name, params, "pruv_File", body + ["f"])
+
+    def _proc_text(s, op, name):
+        """G10 proc A2: thin helpers over the Process runtime (codegen.PROC_PRELUDE). Failure stays in the owned handle;
+        runtime requires follow --foreign-checks, the ensures (mode all) re-check the public state of the result."""
+        P, A = "pruv_Process", "pruv_ProcessArgs"
+        if op == "proc_args_new":
+            body = ["let pruv_r: %s = pruv_proc_args_new();" % A]
+            body += s._ens("pruv_r.args.len() == 0", "proc_args_len(result) == 0")
+            return s._fn(name, "", A, body + ["pruv_r"])
+        if op == "proc_args_push":
+            body = s._req("(a.args.len() as u64) < (1u64 << 40)", "proc_args_len(a) < 2^40")
+            if s.ens:
+                body += ["let pruv_n: usize = a.args.len();"]
+            body += ["let pruv_r: %s = pruv_proc_args_push(a, arg);" % A]
+            body += s._ens("pruv_r.args.len() == pruv_n + 1", "proc_args_len(result) == proc_args_len(a) + 1")
+            return s._fn(name, "a: %s, arg: &str" % A, A, body + ["pruv_r"])
+        if op == "proc_args_len":
+            body = ["let pruv_r: i64 = a.args.len() as i64;"]
+            body += s._ens("pruv_r >= 0 && (pruv_r as u64) <= (1u64 << 40)", "0 <= result && result <= 2^40")
+            return s._fn(name, "a: &%s" % A, "i64", body + ["pruv_r"])
+        if op == "proc_spawn":
+            body = ["let pruv_r: %s = pruv_proc_spawn(program, args, cwd);" % P]
+            body += s._ens("if pruv_r.error == 0 { pruv_r.stdin_open } else { (pruv_r.error == 1 || pruv_r.error == 2) && pruv_proc_wf(&pruv_r) }",
+                           "ok(result) && open(result) || !ok(result) && !open(result) && (err(result) == 1 || err(result) == 2)")
+            body += s._ens("pruv_r.stdout_buf.is_empty() && pruv_r.stderr_buf.is_empty() && !pruv_r.stdout_eof && !pruv_r.stderr_eof",
+                           "both public buffers empty and both EOFs false")
+            return s._fn(name, "program: &str, args: &%s, cwd: &str" % A, P, body + ["pruv_r"])
+        if op in ("proc_write_str", "proc_write_bytes"):
+            text = op == "proc_write_str"
+            body = s._req("p.error == 0 && p.stdin_open", "proc_ok(p) && proc_stdin_open(p)")
+            body += ["let pruv_r: %s = pruv_proc_write(p, %s);" % (P, "text.as_bytes()" if text else "data")]
+            body += s._ens("(pruv_r.error == 0 || pruv_r.error == 4) && pruv_proc_wf(&pruv_r)",
+                           "ok(result) || err(result) == 4")
+            return s._fn(name, "p: %s, %s" % (P, "text: &str" if text else "data: &[u8]"), P, body + ["pruv_r"])
+        if op == "proc_close_stdin":
+            body = s._req("p.error == 0 && p.stdin_open", "proc_ok(p) && proc_stdin_open(p)")
+            body += ["let pruv_r: %s = pruv_proc_close(p);" % P]
+            body += s._ens("(pruv_r.error == 0 && !pruv_r.stdin_open) || (pruv_r.error == 4 && pruv_proc_wf(&pruv_r))",
+                           "ok(result) && !open(result) || err(result) == 4")
+            return s._fn(name, "p: %s" % P, P, body + ["pruv_r"])
+        if op == "proc_read":
+            body = s._req("p.error == 0", "proc_ok(p)")
+            body += s._req("stream == 1 || stream == 2", "stream == 1 || stream == 2")
+            body += s._req("0 < max && max <= (1i64 << 40)", "0 < max && max <= 2^40")
+            body += ["let pruv_r: %s = pruv_proc_read(p, stream, max);" % P]
+            body += s._ens("(pruv_r.error == 0 || pruv_r.error == 3) && pruv_proc_wf(&pruv_r)", "ok(result) || err(result) == 3")
+            body += s._ens("pruv_r.error != 0 || { let pruv_s: usize = if stream == 1 { pruv_r.stdout_buf.len() } else { pruv_r.stderr_buf.len() }; "
+                           "let pruv_e: bool = if stream == 1 { pruv_r.stdout_eof } else { pruv_r.stderr_eof }; "
+                           "(pruv_s as i64) <= max && pruv_e == (pruv_s == 0) }",
+                           "size(result, stream) <= max && eof(result, stream) == (size(result, stream) == 0)")
+            return s._fn(name, "p: %s, stream: i64, max: i64" % P, P, body + ["pruv_r"])
+        if op == "proc_read_all":
+            body = s._req("p.error == 0 && !p.stdin_open", "proc_ok(p) && !proc_stdin_open(p)")
+            body += ["let pruv_r: %s = pruv_proc_read_all(p);" % P]
+            body += s._ens("(pruv_r.error == 0 && !pruv_r.stdin_open && pruv_r.stdout_eof && pruv_r.stderr_eof) || "
+                           "(pruv_r.error == 3 && pruv_proc_wf(&pruv_r))",
+                           "ok(result) && both EOFs true || err(result) == 3")
+            return s._fn(name, "p: %s" % P, P, body + ["pruv_r"])
+        if op == "proc_bytes":
+            body = s._req("stream == 1 || stream == 2", "stream == 1 || stream == 2")
+            body += ["let pruv_r: ::std::vec::Vec<u8> = pruv_proc_buf(p, stream).clone();"]
+            body += s._ens("pruv_r[..] == pruv_proc_buf(p, stream)[..]", "result is the public buffer of the stream")
+            return s._fn(name, "p: &%s, stream: i64" % P, "::std::vec::Vec<u8>", body + ["pruv_r"])
+        if op in ("proc_wait", "proc_kill"):
+            body = ["let pruv_r: ::std::result::Result<i64, i64> = pruv_proc_finish(p, %s);" % ("true" if op == "proc_kill" else "false")]
+            body += s._ens("match pruv_r { Ok(_) => true, Err(pruv_e) => pruv_e >= 1 && pruv_e <= 6 }", "Err carries an error code 1..6")
+            return s._fn(name, "p: %s" % P, "::std::result::Result<i64, i64>", body + ["pruv_r"])
+        if op == "proc_ok":
+            return s._fn(name, "p: &%s" % P, "bool", ["p.error == 0"])
+        if op == "proc_stdin_open":
+            return s._fn(name, "p: &%s" % P, "bool", ["p.stdin_open"])
+        if op == "proc_error":
+            body = ["let pruv_r: i64 = p.error;"]
+            body += s._ens("0 <= pruv_r && pruv_r <= 6", "0 <= result && result <= 6")
+            return s._fn(name, "p: &%s" % P, "i64", body + ["pruv_r"])
+        if op == "proc_eof":
+            body = s._req("stream == 1 || stream == 2", "stream == 1 || stream == 2")
+            body += ["let pruv_r: bool = if stream == 1 { p.stdout_eof } else if stream == 2 { p.stderr_eof } else { pruv_g6_repr(\"stream\") };",
+                     "pruv_r"]
+            return s._fn(name, "p: &%s, stream: i64" % P, "bool", body)
+        if op == "proc_size":
+            body = s._req("stream == 1 || stream == 2", "stream == 1 || stream == 2")
+            body += ["let pruv_r: i64 = pruv_proc_buf(p, stream).len() as i64;"]
+            body += s._ens("0 <= pruv_r && (pruv_r as u64) <= (1u64 << 40)", "0 <= result && result <= 2^40")
+            return s._fn(name, "p: &%s, stream: i64" % P, "i64", body + ["pruv_r"])
+        if op == "proc_byte":
+            cond = "(stream == 1 || stream == 2) && i >= 0 && (i as u64) < (pruv_proc_buf(p, stream).len() as u64)"
+            body = s._req(cond, "valid stream and 0 <= i && i < proc_size(p, stream)")
+            body += ["let pruv_b: &::std::vec::Vec<u8> = pruv_proc_buf(p, stream);",
+                     "let pruv_k: usize = if i >= 0 && (i as u64) < (pruv_b.len() as u64) { i as usize } else { pruv_g6_repr(\"index\") };",
+                     "let pruv_r: i64 = pruv_b[pruv_k] as i64;"]
+            body += s._ens("0 <= pruv_r && pruv_r <= 255", "0 <= result && result <= 255")
+            return s._fn(name, "p: &%s, stream: i64, i: i64" % P, "i64", body + ["pruv_r"])
+        raise Exception("codegen: unknown catalog operation %s" % op)
 
     # ------------------------------------------------------------------ contract-only scan (requires)
     def map_updated_helper(s, kt, vt, src):

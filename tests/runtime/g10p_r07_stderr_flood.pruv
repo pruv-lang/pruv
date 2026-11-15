@@ -1,0 +1,79 @@
+// G10 proc A2 gate 6 (--no-verify only): the child writes far more to stderr than a pipe holds before it writes a
+// single byte to stdout, while the parent reads only stdout first. Without internal draining of stderr this hangs.
+// Afterwards the stderr bytes are still all there (proc_read_all), and proc_wait returns Ok(0).
+fn abort_with(take p: Process, base: i64) -> i64 ! proc, alloc {
+  let e: i64 = proc_error(p);
+  let r: Result<i64> = proc_wait(move p);
+  return base + e;
+}
+
+fn pattern_ok(p: Process, stream: i64, offset: i64) -> bool
+  requires stream == 1 || stream == 2
+{
+  let n: i64 = proc_size(p, stream);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n
+    decreases n - i
+  {
+    if proc_byte(p, stream, i) != ((offset + i) * 31 + stream * 7 + 5) % 251 { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+fn stderr_flood(child: str, nerr: str, nout: str, want_err: i64, want_out: i64) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "errout");
+  args = proc_args_push(move args, nerr);
+  args = proc_args_push(move args, nout);
+  let mut p: Process = proc_spawn(child, args, "");
+  if !proc_ok(p) { return abort_with(move p, 100); }
+  p = proc_close_stdin(move p);
+  if !proc_ok(p) { return abort_with(move p, 200); }
+
+  // stdout only, to EOF
+  let mut got_out: i64 = 0;
+  let mut rounds: i64 = 100000;
+  while rounds > 0 && proc_ok(p) && !proc_eof(p, 1)
+    invariant 0 <= rounds
+    decreases rounds
+  {
+    p = proc_read(move p, 1, 65536);
+    if proc_ok(p) {
+      if !pattern_ok(p, 1, got_out) { return abort_with(move p, 900); }
+      got_out = got_out + proc_size(p, 1);
+    }
+    rounds = rounds - 1;
+  }
+  if !proc_ok(p) { return abort_with(move p, 300); }
+
+  // stderr was never read so far: all of it is delivered now, none of it twice
+  p = proc_read_all(move p);
+  if !proc_ok(p) { return abort_with(move p, 400); }
+  let got_err: i64 = proc_size(p, 2);
+  let good: bool = pattern_ok(p, 2, 0) && proc_size(p, 1) == 0 && proc_eof(p, 1) && proc_eof(p, 2);
+  let r: Result<i64> = proc_wait(move p);
+  if got_out != want_out { return 1; }
+  if got_err != want_err { return 2; }
+  if !good { return 3; }
+  match r {
+    Ok(v) => { return v; }
+    Err(code) => { return 600 + code; }
+  }
+}
+
+// proc_wait alone drains and discards both outputs: the child fills stderr and stdout, the parent never reads
+fn wait_only(child: str, nerr: str, nout: str) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "errout");
+  args = proc_args_push(move args, nerr);
+  args = proc_args_push(move args, nout);
+  let p: Process = proc_spawn(child, args, "");
+  if !proc_ok(p) { return abort_with(move p, 100); }
+  let r: Result<i64> = proc_wait(move p);
+  match r {
+    Ok(v) => { return v; }
+    Err(code) => { return 600 + code; }
+  }
+}

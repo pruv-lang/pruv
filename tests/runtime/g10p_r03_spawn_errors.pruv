@@ -1,0 +1,19 @@
+// G10 proc A2 gate 3: a missing program, a bad cwd and NUL / empty input are error values, never a panic. The failed
+// handle is consumed by proc_wait, which returns the same error as Err; a good spawn is told apart (9).
+fn spawn_code(program: str, cwd: str, arg: str) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, arg);
+  let p: Process = proc_spawn(program, args, cwd);
+  let e: i64 = proc_error(p);
+  let ok: bool = proc_ok(p);
+  let open: bool = proc_stdin_open(p);
+  let sized: bool = proc_size(p, 1) == 0 && proc_size(p, 2) == 0;
+  let eofs: bool = proc_eof(p, 1) || proc_eof(p, 2);
+  let r: Result<i64> = proc_wait(move p);
+  if ok && !open { return 90; }
+  if !ok && (open || !sized || eofs) { return 91; }
+  match r {
+    Ok(v) => { return e * 10 + 9; }
+    Err(code) => { return e * 10 + code; }
+  }
+}

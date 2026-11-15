@@ -1,0 +1,140 @@
+// G10 proc A2 gate 9 and gate 10 (failed handle): exit 0, a non-zero exit, killing a running child and killing a child
+// that has already exited are told apart; Ok(7) is exit code 7, not a failure. A handle of a failed spawn is consumed
+// by proc_wait or proc_kill and both return the spawn error as Err (1 or 2).
+fn run_exit(child: str, code: str) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "exit");
+  args = proc_args_push(move args, code);
+  let mut p: Process = proc_spawn(child, args, "");
+  if !proc_ok(p) {
+    let r0: Result<i64> = proc_wait(move p);
+    return 100;
+  }
+  p = proc_close_stdin(move p);
+  if !proc_ok(p) {
+    let r1: Result<i64> = proc_kill(move p);
+    return 200;
+  }
+  let r: Result<i64> = proc_wait(move p);
+  match r {
+    Ok(v) => { return v; }
+    Err(e) => { return 1000 + e; }
+  }
+}
+
+// the child announces itself and then sleeps; once "ready" has arrived it certainly runs, and proc_kill ends it
+fn kill_running(child: str) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "hold");
+  let mut p: Process = proc_spawn(child, args, "");
+  if !proc_ok(p) {
+    let r0: Result<i64> = proc_wait(move p);
+    return 100;
+  }
+  p = proc_read(move p, 1, 64);
+  if !proc_ok(p) {
+    let r1: Result<i64> = proc_kill(move p);
+    return 300;
+  }
+  let announced: bool = proc_size(p, 1) > 0;
+  let r: Result<i64> = proc_kill(move p);
+  if !announced { return 1; }
+  match r {
+    Ok(v) => { return v; }
+    Err(e) => { return 1000 + e; }
+  }
+}
+
+// both outputs are read to EOF first (the child has exited or is exiting), then the kill request comes
+fn kill_exited(child: str) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "exit");
+  args = proc_args_push(move args, "5");
+  let mut p: Process = proc_spawn(child, args, "");
+  if !proc_ok(p) {
+    let r0: Result<i64> = proc_wait(move p);
+    return 100;
+  }
+  p = proc_close_stdin(move p);
+  if !proc_ok(p) {
+    let r1: Result<i64> = proc_kill(move p);
+    return 200;
+  }
+  p = proc_read_all(move p);
+  if !proc_ok(p) {
+    let r2: Result<i64> = proc_kill(move p);
+    return 300;
+  }
+  let r: Result<i64> = proc_kill(move p);
+  match r {
+    Ok(v) => { return v; }
+    Err(e) => { return 1000 + e; }
+  }
+}
+
+fn failed_wait(program: str) -> i64 ! proc, alloc {
+  let args: ProcessArgs = proc_args_new();
+  let p: Process = proc_spawn(program, args, "");
+  let alive: bool = proc_ok(p);
+  let r: Result<i64> = proc_wait(move p);
+  if alive { return 1; }
+  match r {
+    Ok(v) => { return 1000 + v; }
+    Err(e) => { return e; }
+  }
+}
+
+fn failed_kill(program: str) -> i64 ! proc, alloc {
+  let args: ProcessArgs = proc_args_new();
+  let p: Process = proc_spawn(program, args, "");
+  let alive: bool = proc_ok(p);
+  let r: Result<i64> = proc_kill(move p);
+  if alive { return 1; }
+  match r {
+    Ok(v) => { return 1000 + v; }
+    Err(e) => { return e; }
+  }
+}
+
+// deterministic kill of a child that has certainly exited: `exit_mark 5 MARK` creates MARK and exits 5; the helper child
+// `waitfile MARK` returns once MARK exists plus 200 ms, so the first child is gone before proc_kill is called. The runtime
+// does try_wait first, sends no signal and returns the real status: exactly Ok(5), never the -9 of the race above.
+// Returns 5 on success, 1000 + error for Err, 700 when the helper did not finish with 0, 100 / 150 on a failed spawn.
+fn kill_exited_sync(child: str, mark: str) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "exit_mark");
+  args = proc_args_push(move args, "5");
+  args = proc_args_push(move args, mark);
+  let a: Process = proc_spawn(child, args, "");
+  if !proc_ok(a) {
+    let r0: Result<i64> = proc_wait(move a);
+    return 100;
+  }
+  let mut hargs: ProcessArgs = proc_args_new();
+  hargs = proc_args_push(move hargs, "waitfile");
+  hargs = proc_args_push(move hargs, mark);
+  let h: Process = proc_spawn(child, hargs, "");
+  if !proc_ok(h) {
+    let r1: Result<i64> = proc_wait(move h);
+    let r2: Result<i64> = proc_kill(move a);
+    return 150;
+  }
+  let hr: Result<i64> = proc_wait(move h);
+  match hr {
+    Ok(v) => {
+      if v != 0 {
+        let r3: Result<i64> = proc_kill(move a);
+        return 700;
+      }
+      let rk: Result<i64> = proc_kill(move a);
+      match rk {
+        Ok(k) => { return k; }
+        Err(e) => { return 1000 + e; }
+      }
+    }
+    Err(e2) => {
+      let r4: Result<i64> = proc_kill(move a);
+      return 1000 + e2;
+    }
+  }
+}

@@ -1,0 +1,107 @@
+// G10 proc A2 gate 11 (--no-verify only: every function here violates a requires on purpose): the runtime requires
+// checks of the Process operations panic with `pruv: foreign requires violated: <op>: ...` (the driver catches each
+// panic and checks the message). An OS failure (a missing program) is an ordinary error value and never panics.
+fn start(child: str, mode: str) -> Process ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, mode);
+  return proc_spawn(child, args, "");
+}
+
+fn finish(take p: Process) -> i64 ! proc, alloc {
+  let r: Result<i64> = proc_wait(move p);
+  match r {
+    Ok(v) => { return v; }
+    Err(code) => { return 1000 + code; }
+  }
+}
+
+fn write_closed(child: str) -> i64 ! proc, alloc {
+  let mut p: Process = start(child, "quick");
+  p = proc_close_stdin(move p);
+  p = proc_write_str(move p, "x");
+  return finish(move p);
+}
+
+fn write_bytes_closed(child: str, data: [u8]) -> i64 ! proc, alloc {
+  let mut p: Process = start(child, "quick");
+  p = proc_close_stdin(move p);
+  p = proc_write_bytes(move p, data);
+  return finish(move p);
+}
+
+fn close_twice(child: str) -> i64 ! proc, alloc {
+  let mut p: Process = start(child, "quick");
+  p = proc_close_stdin(move p);
+  p = proc_close_stdin(move p);
+  return finish(move p);
+}
+
+fn read_bad_stream(child: str) -> i64 ! proc, alloc {
+  let mut p: Process = start(child, "quick");
+  p = proc_read(move p, 3, 10);
+  return finish(move p);
+}
+
+fn read_zero_max(child: str) -> i64 ! proc, alloc {
+  let mut p: Process = start(child, "quick");
+  p = proc_read(move p, 1, 0);
+  return finish(move p);
+}
+
+fn read_huge_max(child: str) -> i64 ! proc, alloc {
+  let mut p: Process = start(child, "quick");
+  p = proc_read(move p, 1, 1099511627777);
+  return finish(move p);
+}
+
+fn read_all_open(child: str) -> i64 ! proc, alloc {
+  let mut p: Process = start(child, "quick");
+  p = proc_read_all(move p);
+  return finish(move p);
+}
+
+fn byte_out_of_range(child: str) -> i64 ! proc, alloc {
+  let mut p: Process = start(child, "quick");
+  p = proc_close_stdin(move p);
+  p = proc_read_all(move p);
+  let b: i64 = proc_byte(p, 1, 0);
+  return finish(move p);
+}
+
+fn eof_bad_stream(child: str) -> i64 ! proc, alloc {
+  let p: Process = start(child, "quick");
+  let b: bool = proc_eof(p, 0);
+  return finish(move p);
+}
+
+fn size_bad_stream(child: str) -> i64 ! proc, alloc {
+  let p: Process = start(child, "quick");
+  let n: i64 = proc_size(p, 7);
+  return finish(move p);
+}
+
+fn bytes_bad_stream(child: str) -> i64 ! proc, alloc {
+  let p: Process = start(child, "quick");
+  let d: [u8] = proc_bytes(p, 9);
+  return finish(move p);
+}
+
+fn read_failed_handle(program: str) -> i64 ! proc, alloc {
+  let mut p: Process = start(program, "x");
+  p = proc_read(move p, 1, 10);
+  return finish(move p);
+}
+
+fn write_failed_handle(program: str) -> i64 ! proc, alloc {
+  let mut p: Process = start(program, "x");
+  p = proc_write_str(move p, "x");
+  return finish(move p);
+}
+
+// not a violation: the failed spawn is an error value (error 2) and proc_wait returns it as Err
+fn os_failure(program: str) -> i64 ! proc, alloc {
+  let p: Process = start(program, "x");
+  let e: i64 = proc_error(p);
+  let r: i64 = finish(move p);
+  return e * 1000 + r;
+}

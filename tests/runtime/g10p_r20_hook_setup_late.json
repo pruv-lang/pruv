@@ -1,0 +1,12 @@
+{
+  "backends": ["rust"],
+  "proc_hook": "setup_late",
+  "flags_matrix": [
+    [],
+    ["--foreign-checks", "all"],
+    ["--no-verify"]
+  ],
+  "exit": 0,
+  "gen_contains": ["errq.is_none();\n        bad = true;"],
+  "gen_absent": ["pruv test wait fault", "pruv test", "//@hook"]
+}

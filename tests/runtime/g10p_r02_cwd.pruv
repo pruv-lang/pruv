@@ -1,0 +1,42 @@
+// G10 proc A2 gate 2: an inherited and an explicit cwd both work (the child prints its cwd), the parent's cwd is unchanged.
+fn abort_with(take p: Process, base: i64) -> i64 ! proc, alloc
+  requires base >= 0 && base <= 1000000
+{
+  let e: i64 = proc_error(p);
+  let r: Result<i64> = proc_wait(move p);
+  return base + e;
+}
+
+fn bytes_eq(p: Process, stream: i64, expected: [u8]) -> bool ! alloc
+  requires stream == 1 || stream == 2
+{
+  let got: [u8] = proc_bytes(p, stream);
+  if len(got) != len(expected) { return false; }
+  let mut i: i64 = 0;
+  while i < len(got)
+    invariant 0 <= i && i <= len(got)
+    decreases len(got) - i
+  {
+    if got[i] != expected[i] { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+fn child_cwd(child: str, cwd: str, expected: [u8]) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "cwd");
+  let mut p: Process = proc_spawn(child, args, cwd);
+  if !proc_ok(p) { return abort_with(move p, 100); }
+  p = proc_close_stdin(move p);
+  if !proc_ok(p) { return abort_with(move p, 200); }
+  p = proc_read_all(move p);
+  if !proc_ok(p) { return abort_with(move p, 300); }
+  let same: bool = bytes_eq(p, 1, expected);
+  let r: Result<i64> = proc_wait(move p);
+  if !same { return 1; }
+  match r {
+    Ok(v) => { return v; }
+    Err(code) => { return 400 + code; }
+  }
+}

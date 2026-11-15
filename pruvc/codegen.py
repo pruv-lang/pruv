@@ -336,6 +336,380 @@ CONTRACT_PRELUDE_G6 = CONTRACT_PRELUDE.replace(_UD_OLD, _UD_G6)
 FILE_PRELUDE = ("struct pruv_File { file: ::std::option::Option<::std::fs::File>, "
                 "ok: bool, readable: bool, writable: bool, buf: ::std::vec::Vec<u8> }\n")
 
+# G10 proc A2 (docs/G10_PROC_SPEC.md section 5): the Process / ProcessArgs runtime, emitted once in front of the Pruv
+# functions of a program that uses them. std only. Lines of the form `//@hook NAME code` are test-only fault paths: they are
+# dropped unless the compile-time environment variable PRUV_PROC_TEST_HOOK equals NAME (see proc_prelude), so without the
+# variable the generated text contains no fault path. The Rust twin (pruv-core codegen.rs PROC_PRELUDE) holds the same text.
+PROC_PRELUDE = r"""#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+struct pruv_ProcessArgs { args: ::std::vec::Vec<::std::string::String> }
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+enum PruvProcMsg { Chunk(::std::vec::Vec<u8>), Eof, Err }
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+struct PruvProcStream {
+    rx: ::std::sync::mpsc::Receiver<PruvProcMsg>,
+    rest: ::std::vec::Vec<u8>,
+    off: usize,
+    done: bool,
+    failed: bool,
+    join: ::std::option::Option<::std::thread::JoinHandle<()>>,
+    discard: ::std::sync::Arc<::std::sync::atomic::AtomicBool>,
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+struct pruv_Process {
+    child: ::std::option::Option<::std::process::Child>,
+    stdin: ::std::option::Option<::std::process::ChildStdin>,
+    outq: ::std::option::Option<PruvProcStream>,
+    errq: ::std::option::Option<PruvProcStream>,
+    error: i64,
+    stdin_open: bool,
+    stdout_eof: bool,
+    stderr_eof: bool,
+    stdout_buf: ::std::vec::Vec<u8>,
+    stderr_buf: ::std::vec::Vec<u8>,
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+impl ::std::ops::Drop for pruv_Process {
+    fn drop(&mut self) {
+        // defensive only (must-consume is the contract): an unconsumed handle still kills and reaps its direct child
+        self.stdin = None;
+        if let Some(mut c) = self.child.take() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+#[cfg(unix)]
+fn pruv_proc_sigpipe() {
+    extern "C" { fn signal(signum: i32, handler: usize) -> usize; }
+    static PRUV_PROC_ONCE: ::std::sync::Once = ::std::sync::Once::new();
+    // a write to a closed pipe is the error 4, never a SIGPIPE death of the Pruv process (SIGPIPE = 13, SIG_IGN = 1)
+    PRUV_PROC_ONCE.call_once(|| { unsafe { signal(13, 1); } });
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+#[cfg(not(unix))]
+fn pruv_proc_sigpipe() {}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+#[cfg(windows)]
+fn pruv_proc_batch(program: &str) -> bool {
+    let l = program.to_ascii_lowercase();
+    l.ends_with(".bat") || l.ends_with(".cmd")
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+#[cfg(not(windows))]
+fn pruv_proc_batch(program: &str) -> bool { false }
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+#[cfg(unix)]
+fn pruv_proc_status(st: ::std::process::ExitStatus) -> i64 {
+    match st.code() {
+        Some(c) => c as i64,
+        None => match ::std::os::unix::process::ExitStatusExt::signal(&st) { Some(s) => -(s as i64), None => -1 },
+    }
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+#[cfg(not(unix))]
+fn pruv_proc_status(st: ::std::process::ExitStatus) -> i64 {
+    match st.code() { Some(c) => (c as u32) as i64, None => -1 }
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_failed(code: i64) -> pruv_Process {
+    pruv_Process { child: None, stdin: None, outq: None, errq: None, error: code, stdin_open: false, stdout_eof: false, stderr_eof: false, stdout_buf: ::std::vec::Vec::new(), stderr_buf: ::std::vec::Vec::new() }
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_fail(p: &mut pruv_Process, code: i64) {
+    // the first published error is kept; an update failure closes stdin and empties the public state
+    if p.error == 0 { p.error = code; }
+    p.stdin = None;
+    p.stdin_open = false;
+    p.stdout_buf = ::std::vec::Vec::new();
+    p.stderr_buf = ::std::vec::Vec::new();
+    p.stdout_eof = false;
+    p.stderr_eof = false;
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_reader<R: ::std::io::Read>(mut r: R, tx: ::std::sync::mpsc::Sender<PruvProcMsg>, stream: i64, discard: ::std::sync::Arc<::std::sync::atomic::AtomicBool>) {
+    let mut buf: ::std::vec::Vec<u8> = vec![0u8; 8192];
+    //@hook read1 if stream == 1 { let _ = tx.send(PruvProcMsg::Err); while let Ok(n) = ::std::io::Read::read(&mut r, &mut buf) { if n == 0 { break; } } return; }
+    //@hook read2 if stream == 2 { let _ = tx.send(PruvProcMsg::Err); while let Ok(n) = ::std::io::Read::read(&mut r, &mut buf) { if n == 0 { break; } } return; }
+    loop {
+        match ::std::io::Read::read(&mut r, &mut buf) {
+            Ok(0) => { let _ = tx.send(PruvProcMsg::Eof); return; }
+            Ok(n) => {
+                // discard mode (wait / kill / setup failure): keep reading to EOF but queue nothing more
+                if discard.load(::std::sync::atomic::Ordering::SeqCst) { continue; }
+                if tx.send(PruvProcMsg::Chunk(buf[..n].to_vec())).is_err() { return; }
+            }
+            Err(e) => {
+                if e.kind() == ::std::io::ErrorKind::Interrupted { continue; }
+                let _ = tx.send(PruvProcMsg::Err);
+                return;
+            }
+        }
+    }
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_collector<R: ::std::io::Read + Send + 'static>(r: R, stream: i64) -> ::std::option::Option<PruvProcStream> {
+    let (tx, rx) = ::std::sync::mpsc::channel::<PruvProcMsg>();
+    let discard = ::std::sync::Arc::new(::std::sync::atomic::AtomicBool::new(false));
+    let flag = discard.clone();
+    let join = match ::std::thread::Builder::new().spawn(move || pruv_proc_reader(r, tx, stream, flag)) {
+        Ok(h) => h,
+        Err(_) => return None,
+    };
+    Some(PruvProcStream { rx, rest: ::std::vec::Vec::new(), off: 0, done: false, failed: false, join: Some(join), discard })
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_spawn(program: &str, args: &pruv_ProcessArgs, cwd: &str) -> pruv_Process {
+    pruv_proc_sigpipe();
+    if program.is_empty() || program.contains('\0') || cwd.contains('\0') || args.args.iter().any(|a| a.contains('\0')) {
+        return pruv_proc_failed(1);
+    }
+    if pruv_proc_batch(program) {
+        return pruv_proc_failed(1);
+    }
+    let mut cmd = ::std::process::Command::new(program);
+    cmd.args(args.args.iter());
+    if !cwd.is_empty() {
+        cmd.current_dir(cwd);
+    }
+    cmd.stdin(::std::process::Stdio::piped());
+    cmd.stdout(::std::process::Stdio::piped());
+    cmd.stderr(::std::process::Stdio::piped());
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(_) => return pruv_proc_failed(2),
+    };
+    let stdin = child.stdin.take();
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let mut outq: ::std::option::Option<PruvProcStream> = None;
+    let mut errq: ::std::option::Option<PruvProcStream> = None;
+    let mut bad: bool = stdin.is_none() || stdout.is_none() || stderr.is_none();
+    //@hook setup bad = true;
+    if !bad {
+        outq = match stdout { Some(r) => pruv_proc_collector(r, 1), None => None };
+        errq = match stderr { Some(r) => pruv_proc_collector(r, 2), None => None };
+        bad = outq.is_none() || errq.is_none();
+        //@hook setup_late bad = true;
+    }
+    if bad {
+        // setup failed after the spawn: release stdin, kill and reap the direct child, stop and join the started readers
+        drop(stdin);
+        let _ = child.kill();
+        let _ = child.wait();
+        if let Some(q) = outq.take() { pruv_proc_discard(&q); let _ = pruv_proc_finish_stream(q); }
+        if let Some(q) = errq.take() { pruv_proc_discard(&q); let _ = pruv_proc_finish_stream(q); }
+        return pruv_proc_failed(2);
+    }
+    pruv_Process { child: Some(child), stdin, outq, errq, error: 0, stdin_open: true, stdout_eof: false, stderr_eof: false, stdout_buf: ::std::vec::Vec::new(), stderr_buf: ::std::vec::Vec::new() }
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_take(q: &mut PruvProcStream, max: usize) -> ::std::option::Option<::std::vec::Vec<u8>> {
+    // at most max bytes of the queue; blocks until bytes, EOF or an error; None = the stream failed
+    loop {
+        if q.off < q.rest.len() {
+            let end: usize = q.off + ::std::cmp::min(q.rest.len() - q.off, max);
+            let out: ::std::vec::Vec<u8> = q.rest[q.off..end].to_vec();
+            q.off = end;
+            if q.off == q.rest.len() {
+                q.rest.clear();
+                q.off = 0;
+            }
+            return Some(out);
+        }
+        if q.done {
+            return Some(::std::vec::Vec::new());
+        }
+        if q.failed {
+            return None;
+        }
+        match q.rx.recv() {
+            Ok(PruvProcMsg::Chunk(c)) => { q.rest = c; q.off = 0; }
+            Ok(PruvProcMsg::Eof) => { q.done = true; }
+            Ok(PruvProcMsg::Err) | Err(_) => { q.failed = true; }
+        }
+    }
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_collect(q: &mut PruvProcStream, out: &mut ::std::vec::Vec<u8>) -> bool {
+    // everything not yet delivered, up to EOF; false = the stream failed
+    loop {
+        if q.off < q.rest.len() {
+            out.extend_from_slice(&q.rest[q.off..]);
+            q.rest.clear();
+            q.off = 0;
+        }
+        if q.done {
+            return true;
+        }
+        if q.failed {
+            return false;
+        }
+        match q.rx.recv() {
+            Ok(PruvProcMsg::Chunk(c)) => { q.rest = c; q.off = 0; }
+            Ok(PruvProcMsg::Eof) => { q.done = true; }
+            Ok(PruvProcMsg::Err) | Err(_) => { q.failed = true; }
+        }
+    }
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_discard(q: &PruvProcStream) {
+    q.discard.store(true, ::std::sync::atomic::Ordering::SeqCst);
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_finish_stream(mut q: PruvProcStream) -> bool {
+    // discard the rest of a stream up to EOF, then join its reader thread; false = the stream failed
+    let mut ok: bool = true;
+    loop {
+        if q.done { break; }
+        if q.failed { ok = false; break; }
+        match q.rx.recv() {
+            Ok(PruvProcMsg::Chunk(_)) => {}
+            Ok(PruvProcMsg::Eof) => { q.done = true; }
+            Ok(PruvProcMsg::Err) | Err(_) => { q.failed = true; }
+        }
+    }
+    if let Some(h) = q.join.take() {
+        if h.join().is_err() { ok = false; }
+    }
+    ok
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_write(mut p: pruv_Process, data: &[u8]) -> pruv_Process {
+    if p.error != 0 { return p; }
+    let ok: bool = match p.stdin.as_mut() {
+        Some(w) => ::std::io::Write::write_all(w, data).is_ok(),
+        None => false,
+    };
+    if !ok { pruv_proc_fail(&mut p, 4); }
+    p
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_close(mut p: pruv_Process) -> pruv_Process {
+    if p.error != 0 { return p; }
+    let mut bad: bool = p.stdin.is_none();
+    //@hook close bad = true;
+    p.stdin = None;
+    p.stdin_open = false;
+    if bad { pruv_proc_fail(&mut p, 4); }
+    p
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_read(mut p: pruv_Process, stream: i64, max: i64) -> pruv_Process {
+    if stream != 1 && stream != 2 { pruv_g6_repr("stream"); }
+    if max <= 0 || max > (1i64 << 40) { pruv_g6_repr("max"); }
+    if p.error != 0 { return p; }
+    let lim: usize = ::std::cmp::min(max as u64, usize::MAX as u64) as usize;
+    let got: ::std::option::Option<::std::vec::Vec<u8>> = {
+        let q = if stream == 1 { p.outq.as_mut() } else { p.errq.as_mut() };
+        match q { Some(q) => pruv_proc_take(q, lim), None => None }
+    };
+    match got {
+        Some(chunk) => {
+            let eof: bool = chunk.is_empty();
+            if stream == 1 { p.stdout_buf = chunk; p.stdout_eof = eof; } else { p.stderr_buf = chunk; p.stderr_eof = eof; }
+        }
+        None => { pruv_proc_fail(&mut p, 3); }
+    }
+    p
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_read_all(mut p: pruv_Process) -> pruv_Process {
+    if p.error != 0 { return p; }
+    let mut ok: bool = true;
+    let mut a: ::std::vec::Vec<u8> = ::std::vec::Vec::new();
+    let mut b: ::std::vec::Vec<u8> = ::std::vec::Vec::new();
+    // fixed publication order: stdout, then stderr (both are always drained to EOF)
+    match p.outq.as_mut() { Some(q) => { if !pruv_proc_collect(q, &mut a) { ok = false; } } None => { ok = false; } }
+    match p.errq.as_mut() { Some(q) => { if !pruv_proc_collect(q, &mut b) { ok = false; } } None => { ok = false; } }
+    if ok {
+        p.stdout_buf = a;
+        p.stderr_buf = b;
+        p.stdout_eof = true;
+        p.stderr_eof = true;
+    } else {
+        pruv_proc_fail(&mut p, 3);
+    }
+    p
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_finish(mut p: pruv_Process, kill: bool) -> ::std::result::Result<i64, i64> {
+    // wait / kill: release stdin, (kill,) reap the direct child, discard the rest of both outputs and join the readers
+    p.stdin = None;
+    p.stdin_open = false;
+    let mut code: i64 = 0;
+    let mut op_err: i64 = 0;
+    // both collectors stop queueing before the wait, so output the child writes meanwhile is not held in memory
+    if let Some(q) = p.outq.as_ref() { pruv_proc_discard(q); }
+    if let Some(q) = p.errq.as_ref() { pruv_proc_discard(q); }
+    if let Some(mut c) = p.child.take() {
+        let mut kbad: bool = false;
+        if kill {
+            let exited: bool = match c.try_wait() { Ok(Some(_)) => true, _ => false };
+            if !exited {
+                if c.kill().is_err() {
+                    // the child may have exited between the check and the request: that race is not a failure
+                    kbad = match c.try_wait() { Ok(Some(_)) => false, _ => true };
+                }
+            }
+            //@hook kill kbad = true;
+        }
+        let mut st = c.wait();
+        //@hook wait st = Err(::std::io::Error::new(::std::io::ErrorKind::Other, "pruv test wait fault"));
+        match st {
+            Ok(s) => { code = pruv_proc_status(s); if kbad { op_err = 6; } }
+            Err(_) => { op_err = if kbad { 6 } else { 5 }; }
+        }
+    }
+    let mut cbad: bool = false;
+    if let Some(q) = p.outq.take() { if !pruv_proc_finish_stream(q) { cbad = true; } }
+    if let Some(q) = p.errq.take() { if !pruv_proc_finish_stream(q) { cbad = true; } }
+    let err: i64 = if p.error != 0 { p.error } else if op_err != 0 { op_err } else if cbad { 3 } else { 0 };
+    if err != 0 { Err(err) } else { Ok(code) }
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_buf(p: &pruv_Process, stream: i64) -> &::std::vec::Vec<u8> {
+    if stream == 1 { &p.stdout_buf } else if stream == 2 { &p.stderr_buf } else { pruv_g6_repr("stream") }
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_wf(p: &pruv_Process) -> bool {
+    p.error >= 0 && p.error <= 6 && (p.error == 0 || (!p.stdin_open && p.stdout_buf.is_empty() && p.stderr_buf.is_empty() && !p.stdout_eof && !p.stderr_eof))
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_args_new() -> pruv_ProcessArgs { pruv_ProcessArgs { args: ::std::vec::Vec::new() } }
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_args_push(mut a: pruv_ProcessArgs, arg: &str) -> pruv_ProcessArgs { a.args.push(::std::string::String::from(arg)); a }
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_cproc_buf(p: &pruv_Process, stream: i128) -> &::std::vec::Vec<u8> {
+    if stream == 1 { &p.stdout_buf } else if stream == 2 { &p.stderr_buf } else { pruv_ud("process stream outside 1..2") }
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_cproc_eof(p: &pruv_Process, stream: i128) -> bool {
+    if stream == 1 { p.stdout_eof } else if stream == 2 { p.stderr_eof } else { pruv_ud("process stream outside 1..2") }
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_cproc_byte(p: &pruv_Process, stream: i128, i: i128) -> i128 {
+    let b = pruv_cproc_buf(p, stream);
+    if i >= 0 && i < (b.len() as i128) { b[i as usize] as i128 } else { pruv_ud("process byte index out of range") }
+}
+"""
+
+
+def proc_prelude(hook):
+    """PROC_PRELUDE with the test-only fault line of `hook` (PRUV_PROC_TEST_HOOK: setup, setup_late, read1, read2, close, wait or
+    kill) switched on; every other `//@hook` line is dropped. An empty or unknown hook leaves no fault path at all."""
+    out = []
+    for line in PROC_PRELUDE.split("\n"):
+        t = line.lstrip()
+        if t.startswith("//@hook "):
+            name, _, code = t[8:].partition(" ")
+            if name == hook:
+                out.append(line[:len(line) - len(t)] + code)
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
 G6_PRELUDE = """\
 #[allow(dead_code)]
 #[cold]
@@ -383,13 +757,17 @@ def rty(t, param=False):
         if t.name == "option":
             return "::std::option::Option<%s>" % x
         return "::std::result::Result<%s, i64>" % x
-    if t.owner is None and t.name in ("vec", "hashmap", "string", "file"):   # G6: owned; a borrowed parameter is a reference
+    if t.owner is None and t.name in ("vec", "hashmap", "string", "file", "process", "process_args"):   # G6: owned; a borrowed parameter is a reference
         if t.name == "vec":
             r = "::std::vec::Vec<%s>" % rty(t.args[0])
         elif t.name == "hashmap":
             r = "::std::collections::HashMap<%s, %s>" % (rty(t.args[0]), rty(t.args[1]))
         elif t.name == "file":
             r = "pruv_File"
+        elif t.name == "process":   # G10 proc A2
+            r = "pruv_Process"
+        elif t.name == "process_args":
+            r = "pruv_ProcessArgs"
         else:
             r = "::std::string::String"
         return "&" + r if param else r
@@ -809,6 +1187,9 @@ class Gen:
         # Without this opt-in, generated output contains no test instrumentation.
         import os
         s.par_hook = os.environ.get("PRUV_G7_TEST_HOOK", "")
+        # Compile-time PRUV_PROC_TEST_HOOK=setup|read1|read2|close|wait|kill is test-only (G10 proc A2): it switches on one
+        # fault line of the Process runtime. Without it the generated output contains no fault path.
+        s.proc_hook = os.environ.get("PRUV_PROC_TEST_HOOK", "")
 
         # G4 A2 (explicit visibility mode, docs/G4_SPEC.md 4): only host entries are `pub`. Verified: just the entries
         # that have a requires get a checked wrapper (host boundary; none under trust_callers), every Pruv call goes to
@@ -850,8 +1231,9 @@ class Gen:
         s.need_shift = set()  # P2 batch 2: shifts used in code under --no-verify (pruv_shl / pruv_ushr helpers)
         s.need_load_be = False  # P2 batch 4: load_be used in a runtime contract (pruv_cload_be helper)
         # G6 (section 12): only a program that uses G6 gets any of the following
-        from foreign import first_g6_use, uses_files
+        from foreign import first_g6_use, first_proc_use, uses_files
         s.g10 = uses_files(prog)
+        s.proc = first_proc_use(prog) is not None   # G10 proc A2: the Process / ProcessArgs runtime
         s.g6 = first_g6_use(prog) is not None
         s.fmode = foreign_checks
         s.allow = ALLOW_G6 if s.g6 else ALLOW
@@ -878,6 +1260,8 @@ class Gen:
     def prelude(s):
         if s.g10:
             s.out.append(FILE_PRELUDE)
+        if s.proc:
+            s.out.append(proc_prelude(s.proc_hook))
         types = emit_public_types(s.prog, s.table.order if s.g9 else None)
         if types:
             s.out.append(types)
@@ -1469,6 +1853,21 @@ class Gen:
                 return "((%s).buf.len() as i128)" % s.c(a[0])
             if n == "file_byte":
                 return "pruv_cidx_u8(&(%s).buf, %s)" % (s.c(a[0]), s.c(a[1]))
+            # G10 proc A2: observers over the public state of the handle (never the OS or the queues)
+            if n == "proc_ok":
+                return "((%s).error == 0)" % s.c(a[0])
+            if n == "proc_error":
+                return "((%s).error as i128)" % s.c(a[0])
+            if n == "proc_stdin_open":
+                return "(%s).stdin_open" % s.c(a[0])
+            if n == "proc_args_len":
+                return "((%s).args.len() as i128)" % s.c(a[0])
+            if n == "proc_eof":
+                return "pruv_cproc_eof(&(%s), %s)" % (s.c(a[0]), s.c(a[1]))
+            if n == "proc_size":
+                return "(pruv_cproc_buf(&(%s), %s).len() as i128)" % (s.c(a[0]), s.c(a[1]))
+            if n == "proc_byte":
+                return "pruv_cproc_byte(&(%s), %s, %s)" % (s.c(a[0]), s.c(a[1]), s.c(a[2]))
             if n == "map_lookup":   # G6: finite-map lookup, Option mirror of the stored value
                 kt, vt = a[0].ty.args[0], a[0].ty.args[1]
                 key = s.c(a[1])
@@ -2107,7 +2506,7 @@ class Gen:
         for p, x in zip(cat.params, e.args):
             if is_collection(p.type):
                 args.append(s.e(x) if p.take else s.cref(x))
-            elif p.type == STR or (e.name == "file_write_bytes" and p.type == ARRAY_U8):
+            elif p.type == STR or (e.name in ("file_write_bytes", "proc_write_bytes") and p.type == ARRAY_U8):
                 args.append(s.arr_ref(x))
             else:
                 args.append(s.e(x))

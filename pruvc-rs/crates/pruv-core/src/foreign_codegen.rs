@@ -223,6 +223,9 @@ impl ForeignGen {
         if op.starts_with("file_") {
             return Ok(self.file_text(op, name));
         }
+        if op.starts_with("proc_") {
+            return self.proc_text(op, name);
+        }
         const STRING: &str = "::std::string::String";
         let g = |i: usize| low.get(i).ok_or_else(idx_err);
         match op {
@@ -455,6 +458,157 @@ impl ForeignGen {
         }
         body.push("f".to_string());
         self.fn_text(name, &params, Some("pruv_File"), &body)
+    }
+
+    /// G10 proc A2: thin helpers over the Process runtime (codegen.rs PROC_PRELUDE). Failure stays in the owned handle;
+    /// runtime requires follow --foreign-checks, the ensures (mode all) re-check the public state of the result.
+    fn proc_text(&self, op: &str, name: &str) -> R<String> {
+        const P: &str = "pruv_Process";
+        const A: &str = "pruv_ProcessArgs";
+        const RES: &str = "::std::result::Result<i64, i64>";
+        const VEC: &str = "::std::vec::Vec<u8>";
+        let with = |mut body: Vec<String>, last: &str| -> Vec<String> {
+            body.push(last.to_string());
+            body
+        };
+        match op {
+            "proc_args_new" => {
+                let mut body = vec![format!("let pruv_r: {} = pruv_proc_args_new();", A)];
+                body.extend(self.ens_line("pruv_r.args.len() == 0", "proc_args_len(result) == 0"));
+                Ok(self.fn_text(name, "", Some(A), &with(body, "pruv_r")))
+            }
+            "proc_args_push" => {
+                let mut body = self.req_line("(a.args.len() as u64) < (1u64 << 40)", "proc_args_len(a) < 2^40");
+                if self.ens {
+                    body.push("let pruv_n: usize = a.args.len();".to_string());
+                }
+                body.push(format!("let pruv_r: {} = pruv_proc_args_push(a, arg);", A));
+                body.extend(self.ens_line("pruv_r.args.len() == pruv_n + 1", "proc_args_len(result) == proc_args_len(a) + 1"));
+                Ok(self.fn_text(name, &format!("a: {}, arg: &str", A), Some(A), &with(body, "pruv_r")))
+            }
+            "proc_args_len" => {
+                let mut body = vec!["let pruv_r: i64 = a.args.len() as i64;".to_string()];
+                body.extend(self.ens_line("pruv_r >= 0 && (pruv_r as u64) <= (1u64 << 40)", "0 <= result && result <= 2^40"));
+                Ok(self.fn_text(name, &format!("a: &{}", A), Some("i64"), &with(body, "pruv_r")))
+            }
+            "proc_spawn" => {
+                let mut body = vec![format!("let pruv_r: {} = pruv_proc_spawn(program, args, cwd);", P)];
+                body.extend(self.ens_line(
+                    "if pruv_r.error == 0 { pruv_r.stdin_open } else { (pruv_r.error == 1 || pruv_r.error == 2) && pruv_proc_wf(&pruv_r) }",
+                    "ok(result) && open(result) || !ok(result) && !open(result) && (err(result) == 1 || err(result) == 2)",
+                ));
+                body.extend(self.ens_line(
+                    "pruv_r.stdout_buf.is_empty() && pruv_r.stderr_buf.is_empty() && !pruv_r.stdout_eof && !pruv_r.stderr_eof",
+                    "both public buffers empty and both EOFs false",
+                ));
+                Ok(self.fn_text(name, &format!("program: &str, args: &{}, cwd: &str", A), Some(P), &with(body, "pruv_r")))
+            }
+            "proc_write_str" | "proc_write_bytes" => {
+                let text = op == "proc_write_str";
+                let mut body = self.req_line("p.error == 0 && p.stdin_open", "proc_ok(p) && proc_stdin_open(p)");
+                body.push(format!(
+                    "let pruv_r: {} = pruv_proc_write(p, {});",
+                    P,
+                    if text { "text.as_bytes()" } else { "data" }
+                ));
+                body.extend(self.ens_line(
+                    "(pruv_r.error == 0 || pruv_r.error == 4) && pruv_proc_wf(&pruv_r)",
+                    "ok(result) || err(result) == 4",
+                ));
+                Ok(self.fn_text(
+                    name,
+                    &format!("p: {}, {}", P, if text { "text: &str" } else { "data: &[u8]" }),
+                    Some(P),
+                    &with(body, "pruv_r"),
+                ))
+            }
+            "proc_close_stdin" => {
+                let mut body = self.req_line("p.error == 0 && p.stdin_open", "proc_ok(p) && proc_stdin_open(p)");
+                body.push(format!("let pruv_r: {} = pruv_proc_close(p);", P));
+                body.extend(self.ens_line(
+                    "(pruv_r.error == 0 && !pruv_r.stdin_open) || (pruv_r.error == 4 && pruv_proc_wf(&pruv_r))",
+                    "ok(result) && !open(result) || err(result) == 4",
+                ));
+                Ok(self.fn_text(name, &format!("p: {}", P), Some(P), &with(body, "pruv_r")))
+            }
+            "proc_read" => {
+                let mut body = self.req_line("p.error == 0", "proc_ok(p)");
+                body.extend(self.req_line("stream == 1 || stream == 2", "stream == 1 || stream == 2"));
+                body.extend(self.req_line("0 < max && max <= (1i64 << 40)", "0 < max && max <= 2^40"));
+                body.push(format!("let pruv_r: {} = pruv_proc_read(p, stream, max);", P));
+                body.extend(self.ens_line(
+                    "(pruv_r.error == 0 || pruv_r.error == 3) && pruv_proc_wf(&pruv_r)",
+                    "ok(result) || err(result) == 3",
+                ));
+                body.extend(self.ens_line(
+                    "pruv_r.error != 0 || { let pruv_s: usize = if stream == 1 { pruv_r.stdout_buf.len() } else { pruv_r.stderr_buf.len() }; let pruv_e: bool = if stream == 1 { pruv_r.stdout_eof } else { pruv_r.stderr_eof }; (pruv_s as i64) <= max && pruv_e == (pruv_s == 0) }",
+                    "size(result, stream) <= max && eof(result, stream) == (size(result, stream) == 0)",
+                ));
+                Ok(self.fn_text(name, &format!("p: {}, stream: i64, max: i64", P), Some(P), &with(body, "pruv_r")))
+            }
+            "proc_read_all" => {
+                let mut body = self.req_line("p.error == 0 && !p.stdin_open", "proc_ok(p) && !proc_stdin_open(p)");
+                body.push(format!("let pruv_r: {} = pruv_proc_read_all(p);", P));
+                body.extend(self.ens_line(
+                    "(pruv_r.error == 0 && !pruv_r.stdin_open && pruv_r.stdout_eof && pruv_r.stderr_eof) || (pruv_r.error == 3 && pruv_proc_wf(&pruv_r))",
+                    "ok(result) && both EOFs true || err(result) == 3",
+                ));
+                Ok(self.fn_text(name, &format!("p: {}", P), Some(P), &with(body, "pruv_r")))
+            }
+            "proc_bytes" => {
+                let mut body = self.req_line("stream == 1 || stream == 2", "stream == 1 || stream == 2");
+                body.push(format!("let pruv_r: {} = pruv_proc_buf(p, stream).clone();", VEC));
+                body.extend(self.ens_line("pruv_r[..] == pruv_proc_buf(p, stream)[..]", "result is the public buffer of the stream"));
+                Ok(self.fn_text(name, &format!("p: &{}, stream: i64", P), Some(VEC), &with(body, "pruv_r")))
+            }
+            "proc_wait" | "proc_kill" => {
+                let mut body = vec![format!(
+                    "let pruv_r: {} = pruv_proc_finish(p, {});",
+                    RES,
+                    if op == "proc_kill" { "true" } else { "false" }
+                )];
+                body.extend(self.ens_line(
+                    "match pruv_r { Ok(_) => true, Err(pruv_e) => pruv_e >= 1 && pruv_e <= 6 }",
+                    "Err carries an error code 1..6",
+                ));
+                Ok(self.fn_text(name, &format!("p: {}", P), Some(RES), &with(body, "pruv_r")))
+            }
+            "proc_ok" => Ok(self.fn_text(name, &format!("p: &{}", P), Some("bool"), &["p.error == 0".to_string()])),
+            "proc_stdin_open" => Ok(self.fn_text(name, &format!("p: &{}", P), Some("bool"), &["p.stdin_open".to_string()])),
+            "proc_error" => {
+                let mut body = vec!["let pruv_r: i64 = p.error;".to_string()];
+                body.extend(self.ens_line("0 <= pruv_r && pruv_r <= 6", "0 <= result && result <= 6"));
+                Ok(self.fn_text(name, &format!("p: &{}", P), Some("i64"), &with(body, "pruv_r")))
+            }
+            "proc_eof" => {
+                let mut body = self.req_line("stream == 1 || stream == 2", "stream == 1 || stream == 2");
+                body.push(
+                    "let pruv_r: bool = if stream == 1 { p.stdout_eof } else if stream == 2 { p.stderr_eof } else { pruv_g6_repr(\"stream\") };"
+                        .to_string(),
+                );
+                body.push("pruv_r".to_string());
+                Ok(self.fn_text(name, &format!("p: &{}, stream: i64", P), Some("bool"), &body))
+            }
+            "proc_size" => {
+                let mut body = self.req_line("stream == 1 || stream == 2", "stream == 1 || stream == 2");
+                body.push("let pruv_r: i64 = pruv_proc_buf(p, stream).len() as i64;".to_string());
+                body.extend(self.ens_line("0 <= pruv_r && (pruv_r as u64) <= (1u64 << 40)", "0 <= result && result <= 2^40"));
+                Ok(self.fn_text(name, &format!("p: &{}, stream: i64", P), Some("i64"), &with(body, "pruv_r")))
+            }
+            "proc_byte" => {
+                let cond = "(stream == 1 || stream == 2) && i >= 0 && (i as u64) < (pruv_proc_buf(p, stream).len() as u64)";
+                let mut body = self.req_line(cond, "valid stream and 0 <= i && i < proc_size(p, stream)");
+                body.push("let pruv_b: &::std::vec::Vec<u8> = pruv_proc_buf(p, stream);".to_string());
+                body.push(
+                    "let pruv_k: usize = if i >= 0 && (i as u64) < (pruv_b.len() as u64) { i as usize } else { pruv_g6_repr(\"index\") };"
+                        .to_string(),
+                );
+                body.push("let pruv_r: i64 = pruv_b[pruv_k] as i64;".to_string());
+                body.extend(self.ens_line("0 <= pruv_r && pruv_r <= 255", "0 <= result && result <= 255"));
+                Ok(self.fn_text(name, &format!("p: &{}, stream: i64, i: i64", P), Some("i64"), &with(body, "pruv_r")))
+            }
+            other => Err(format!("codegen: unknown catalog operation {}", other)),
+        }
     }
 
     // ------------------------------------------------------------------ contract-only scan (requires)

@@ -539,7 +539,8 @@ def first_proc_use(prog):
 def proc_unimplemented_error(prog, stage="codegen"):
     """G10 proc staging guard: PruvError (unsupported_type) for the first Process use, or None. Since A1 it runs at the
     codegen entry, after verification (verification errors win; type diagnostics win as before); with --no-verify it
-    runs right after type checking. It applies in every mode."""
+    runs right after type checking. G10 proc A2: the Rust source backend no longer calls it (it lowers Process); the LLVM
+    paths (backend llvm, --also-llvm, native emit) still do until A3."""
     hit = first_proc_use(prog)
     if hit is None:
         return None

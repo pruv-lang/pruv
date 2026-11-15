@@ -1,0 +1,12 @@
+{
+  "backends": ["rust"],
+  "proc_hook": "read1",
+  "flags_matrix": [
+    [],
+    ["--foreign-checks", "all"],
+    ["--no-verify"]
+  ],
+  "exit": 0,
+  "gen_contains": ["if stream == 1 { let _ = tx.send(PruvProcMsg::Err);"],
+  "gen_absent": ["if stream == 2 { let _ = tx.send(PruvProcMsg::Err);", "//@hook"]
+}

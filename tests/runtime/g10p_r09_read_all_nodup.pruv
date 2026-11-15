@@ -1,0 +1,65 @@
+// G10 proc A2 gate 8 (--no-verify only): proc_read_all does not repeat what earlier reads already delivered. After some
+// chunk reads the buffers of read_all hold exactly the not yet delivered rest of each stream (the pattern bytes from the
+// delivered offset on), earlier buffers are not prepended, and both EOFs are true.
+fn abort_with(take p: Process, base: i64) -> i64 ! proc, alloc {
+  let e: i64 = proc_error(p);
+  let r: Result<i64> = proc_wait(move p);
+  return base + e;
+}
+
+fn pattern_ok(p: Process, stream: i64, offset: i64) -> bool
+  requires stream == 1 || stream == 2
+{
+  let n: i64 = proc_size(p, stream);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n
+    decreases n - i
+  {
+    if proc_byte(p, stream, i) != ((offset + i) * 31 + stream * 7 + 5) % 251 { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+fn no_repeat(child: str, nerr: str, nout: str, want_err: i64, want_out: i64) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "errout");
+  args = proc_args_push(move args, nerr);
+  args = proc_args_push(move args, nout);
+  let mut p: Process = proc_spawn(child, args, "");
+  if !proc_ok(p) { return abort_with(move p, 100); }
+  p = proc_close_stdin(move p);
+  if !proc_ok(p) { return abort_with(move p, 200); }
+
+  // two reads of stdout and one of stderr, each with a small max
+  p = proc_read(move p, 1, 100);
+  if !proc_ok(p) { return abort_with(move p, 300); }
+  let a1: i64 = proc_size(p, 1);
+  if !pattern_ok(p, 1, 0) { return abort_with(move p, 310); }
+  p = proc_read(move p, 1, 150);
+  if !proc_ok(p) { return abort_with(move p, 320); }
+  let a2: i64 = proc_size(p, 1);
+  if !pattern_ok(p, 1, a1) { return abort_with(move p, 330); }
+  p = proc_read(move p, 2, 10);
+  if !proc_ok(p) { return abort_with(move p, 340); }
+  let b1: i64 = proc_size(p, 2);
+  if !pattern_ok(p, 2, 0) { return abort_with(move p, 350); }
+  // the stdout buffer of the stderr read is the one of the earlier stdout read (the other stream is preserved)
+  let kept: bool = proc_size(p, 1) == a2 && pattern_ok(p, 1, a1);
+
+  p = proc_read_all(move p);
+  if !proc_ok(p) { return abort_with(move p, 400); }
+  let rest_out: i64 = proc_size(p, 1);
+  let rest_err: i64 = proc_size(p, 2);
+  let good: bool = pattern_ok(p, 1, a1 + a2) && pattern_ok(p, 2, b1) && proc_eof(p, 1) && proc_eof(p, 2) && !proc_stdin_open(p);
+  let r: Result<i64> = proc_wait(move p);
+  if !kept { return 1; }
+  if a1 + a2 + rest_out != want_out { return 2; }
+  if b1 + rest_err != want_err { return 3; }
+  if !good { return 4; }
+  match r {
+    Ok(v) => { return v; }
+    Err(code) => { return 600 + code; }
+  }
+}

@@ -1,0 +1,25 @@
+// G10 proc A2 gate 3 and 10 (fault path, spec "proc_hook": "setup_late"): the generated runtime is compiled with the
+// test-only late setup fault: stderr's collector is lost AFTER both reader threads were started. The failure path must kill
+// and reap the child, release stdin, and stop and join the started readers; the result is the failed handle with error 2.
+// The child is the `pidfile` fixture mode (writes its pid to `pidfile`, then blocks on stdin).
+fn setup_late_fail(child: str, pidfile: str) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "pidfile");
+  args = proc_args_push(move args, pidfile);
+  let p: Process = proc_spawn(child, args, "");
+  let alive: bool = proc_ok(p);
+  let e: i64 = proc_error(p);
+  let open: bool = proc_stdin_open(p);
+  let clean: bool = proc_size(p, 1) == 0 && proc_size(p, 2) == 0 && !proc_eof(p, 1) && !proc_eof(p, 2);
+  let r: Result<i64> = proc_wait(move p);
+  if alive { return 1; }
+  if e != 2 { return 2; }
+  if open || !clean { return 3; }
+  match r {
+    Ok(v) => { return 4; }
+    Err(code) => {
+      if code == 2 { return 0; }
+      return 5;
+    }
+  }
+}

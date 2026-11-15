@@ -1,0 +1,47 @@
+// G10 proc A2 gate 10 (fault path, spec "proc_hook": "wait"): reaping the child's exit status fails. proc_wait returns
+// Err(5) after it released stdin, drained both outputs and (really) reaped the child. An error that was published
+// earlier wins: after a broken-pipe write (error 4) the wait result is Err(4), not Err(5).
+fn wait_fail(child: str) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "exit");
+  args = proc_args_push(move args, "3");
+  let mut p: Process = proc_spawn(child, args, "");
+  if !proc_ok(p) {
+    let r0: Result<i64> = proc_wait(move p);
+    return 100;
+  }
+  p = proc_close_stdin(move p);
+  if !proc_ok(p) {
+    let r1: Result<i64> = proc_kill(move p);
+    return 200;
+  }
+  let r: Result<i64> = proc_wait(move p);
+  match r {
+    Ok(v) => { return 1; }
+    Err(code) => {
+      if code == 5 { return 0; }
+      return 2;
+    }
+  }
+}
+
+fn first_error_wins(child: str, data: [u8]) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "quick");
+  let mut p: Process = proc_spawn(child, args, "");
+  if !proc_ok(p) {
+    let r0: Result<i64> = proc_wait(move p);
+    return 100;
+  }
+  p = proc_write_bytes(move p, data);
+  let e: i64 = proc_error(p);
+  let r: Result<i64> = proc_wait(move p);
+  if e != 4 { return 1; }
+  match r {
+    Ok(v) => { return 2; }
+    Err(code) => {
+      if code == 4 { return 0; }
+      return 3;
+    }
+  }
+}

@@ -1,0 +1,56 @@
+// G10 proc A2 gate 1: argument order, empty arguments, spaces, quotes, backslashes and Unicode arrive exactly.
+fn abort_with(take p: Process, base: i64) -> i64 ! proc, alloc
+  requires base >= 0 && base <= 1000000
+{
+  let e: i64 = proc_error(p);
+  let r: Result<i64> = proc_wait(move p);
+  return base + e;
+}
+
+fn bytes_eq(p: Process, stream: i64, expected: [u8]) -> bool ! alloc
+  requires stream == 1 || stream == 2
+{
+  let got: [u8] = proc_bytes(p, stream);
+  if len(got) != len(expected) { return false; }
+  let mut i: i64 = 0;
+  while i < len(got)
+    invariant 0 <= i && i <= len(got)
+    decreases len(got) - i
+  {
+    if got[i] != expected[i] { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+fn echo_args(child: str, s1: str, s2: str, s3: str, s4: str, expected: [u8]) -> i64 ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "args");
+  args = proc_args_push(move args, s1);
+  args = proc_args_push(move args, s2);
+  args = proc_args_push(move args, s3);
+  args = proc_args_push(move args, s4);
+  let mut p: Process = proc_spawn(child, args, "");
+  if !proc_ok(p) { return abort_with(move p, 100); }
+  p = proc_close_stdin(move p);
+  if !proc_ok(p) { return abort_with(move p, 200); }
+  p = proc_read_all(move p);
+  if !proc_ok(p) { return abort_with(move p, 300); }
+  let same: bool = bytes_eq(p, 1, expected);
+  let quiet: bool = proc_size(p, 2) == 0;
+  let r: Result<i64> = proc_wait(move p);
+  if !same { return 1; }
+  if !quiet { return 2; }
+  match r {
+    Ok(v) => { return v; }
+    Err(code) => { return 400 + code; }
+  }
+}
+
+fn args_len(a: str, b: str, c: str) -> i64 ! alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, a);
+  args = proc_args_push(move args, b);
+  args = proc_args_push(move args, c);
+  return proc_args_len(args);
+}

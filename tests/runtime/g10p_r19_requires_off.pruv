@@ -1,0 +1,52 @@
+// G10 proc A2 gate 11 (--trust-callers --foreign-checks off): with the runtime checks off a violation is still memory safe.
+// The Rust driver breaks the requires of the exported functions (not checked under --trust-callers), so the proc
+// operations run with their own requires violated. A write after close is an I/O failure value (error 4, no panic); an invalid stream stops the process through the
+// representation defense (`pruv: invalid representation`, exit 101), never undefined behaviour.
+fn start(child: str, mode: str) -> Process ! proc, alloc {
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, mode);
+  return proc_spawn(child, args, "");
+}
+
+fn finish(take p: Process) -> i64 ! proc, alloc
+  ensures result >= 0 && result <= 1006
+{
+  let r: Result<i64> = proc_wait(move p);
+  match r {
+    Ok(v) => { if v < 0 || v > 999 { return 999; } return v; }
+    Err(code) => { return 1000 + code; }
+  }
+}
+
+fn write_after_close(child: str, close: i64) -> i64 ! proc, alloc
+  requires close == 0
+{
+  let mut p: Process = start(child, "quick");
+  if close != 0 { p = proc_close_stdin(move p); }
+  if (proc_error(p) == 0 && proc_stdin_open(p)) || close != 0 { p = proc_write_str(move p, "x"); }
+  let e: i64 = proc_error(p);
+  let r: i64 = finish(move p);
+  return e * 10000 + r;
+}
+
+fn read_after_failure(child: str, fail: i64) -> i64 ! proc, alloc
+  requires fail == 0
+{
+  let mut p: Process = start(child, "quick");
+  if fail != 0 {
+    let r0: i64 = finish(move p);
+    p = start("/no/such/dir/pruv-missing-program", "x");
+  }
+  if proc_error(p) == 0 || fail != 0 { p = proc_read(move p, 1, 10); }
+  let e: i64 = proc_error(p);
+  let r: i64 = finish(move p);
+  return e * 10000 + r;
+}
+
+fn bad_stream(child: str, stream: i64) -> i64 ! proc, alloc
+  requires stream == 1 || stream == 2
+{
+  let mut p: Process = start(child, "quick");
+  if proc_error(p) == 0 { p = proc_read(move p, stream, 10); }
+  return finish(move p);
+}
