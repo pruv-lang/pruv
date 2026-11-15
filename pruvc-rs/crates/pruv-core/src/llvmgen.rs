@@ -546,6 +546,8 @@ pub struct Mod {
     pub g6_decls: BTreeMap<String, String>,
     /// G6 A3: string_to_str needs the v2 copy/free declarations
     pub g6_v2: bool,
+    /// P3 M3: some string_to_str takes the String buffer (pruv_g6_v1_string_take)
+    pub g6_take: bool,
     /// G6 A3: some function references @pruv_g6_bridge_v1
     pub g6_bridge: bool,
     /// G9 A3: types whose runtime-contract size / equality helpers are needed
@@ -580,6 +582,7 @@ impl Mod {
             par_trampolines: Vec::new(),
             g6_decls: BTreeMap::new(),
             g6_v2: false,
+            g6_take: false,
             g6_bridge: false,
             need_size: BTreeSet::new(),
             need_eq: BTreeSet::new(),
@@ -773,6 +776,10 @@ pub struct FnGen<'a> {
     frames: Vec<(HashSet<String>, HashSet<String>, bool)>,
     /// P3: names the copy of the let / assignment being lowered moves (move_src)
     moving: HashSet<String>,
+    /// P3 M3: String locals whose string_to_str in the return result position takes the buffer (ret_takable)
+    ret_take: HashSet<String>,
+    /// P3 M3: the String local the let / assignment being lowered takes (take_src)
+    take_let: HashSet<String>,
 }
 
 impl<'a> FnGen<'a> {
@@ -812,6 +819,8 @@ impl<'a> FnGen<'a> {
             ret_moved: HashMap::new(),
             frames: Vec::new(),
             moving: HashSet::new(),
+            ret_take: HashSet::new(),
+            take_let: HashSet::new(),
         }
     }
 
@@ -1189,6 +1198,91 @@ impl<'a> FnGen<'a> {
 
     fn owned_slot(&self, sl: &Slot) -> bool {
         self.scopes.iter().any(|sc| sc.arrays.iter().any(|x| x.a == sl.a))
+    }
+
+    /// P3 M3: `name` is an owned local String (not a parameter, not borrowed): string_to_str of it may take the buffer
+    fn takeable(&self, name: &str) -> bool {
+        let Ok(Bind::Slot(x)) = self.lookup(name) else { return false };
+        if x.k != Kind::Coll || !self.owned_slot(&x) {
+            return false;
+        }
+        match &x.ty {
+            Some(t) if crate::emit_common::key_name(t) == "string" => {}
+            _ => return false,
+        }
+        // scope 0 holds the owned (take) parameters
+        !self.scopes.first().is_some_and(|sc| sc.arrays.iter().any(|y| y.a == x.a))
+    }
+
+    /// P3 M3: the String locals whose `string_to_str(x)` is in a result position of the returned expression (the
+    /// expression itself, or a field of a constructor / struct literal / enum constructor in it, the same place walk
+    /// as ret_movable) and that the expression names exactly once; the return is their last use, so the call takes the
+    /// buffer and the return's cleanup skips the slot
+    fn ret_takable(&self, e: &Expr) -> HashSet<String> {
+        let mut out = HashSet::new();
+        if self.cost {
+            return out;
+        }
+        fn walk(x: &Expr, counts: &mut Vec<(String, usize)>) {
+            let n = match x {
+                Expr::Var(v) => Some(&v.name),
+                Expr::Move(v) => Some(&v.name),
+                _ => None,
+            };
+            if let Some(n) = n {
+                match counts.iter_mut().find(|(m, _)| m == n) {
+                    Some(c) => c.1 += 1,
+                    None => counts.push((n.clone(), 1)),
+                }
+            }
+            for k in crate::refine::kids(x) {
+                walk(k, counts);
+            }
+        }
+        let mut counts = Vec::new();
+        walk(e, &mut counts);
+        fn place(x: &Expr, res: &mut Vec<String>) {
+            match x {
+                Expr::Ctor(_) | Expr::StructLit(_) | Expr::EnumCtor(_) => {
+                    for k in crate::refine::kids(x) {
+                        place(k, res);
+                    }
+                }
+                Expr::Call(c) if c.name == "string_to_str" && c.args.len() == 1 => {
+                    if let Expr::Var(v) = &c.args[0] {
+                        res.push(v.name.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut res = Vec::new();
+        place(e, &mut res);
+        for n in res {
+            if counts.iter().any(|(m, k)| *m == n && *k == 1) && self.takeable(&n) {
+                out.insert(n);
+            }
+        }
+        out
+    }
+
+    /// P3 M3: a let / assignment `y = string_to_str(x)` whose whole right side is that call, at the last use of the
+    /// owned local String x (dead_after), takes x's buffer; returns {x}, else an empty set
+    fn take_src(&self, name: &str, e: &Expr) -> HashSet<String> {
+        let mut out = HashSet::new();
+        if self.cost {
+            return out;
+        }
+        let Expr::Call(c) = e else { return out };
+        if c.name != "string_to_str" || c.args.len() != 1 {
+            return out;
+        }
+        let Expr::Var(x) = &c.args[0] else { return out };
+        if x.name == name || !self.dead_after(&x.name) || !self.takeable(&x.name) {
+            return out;
+        }
+        out.insert(x.name.clone());
+        out
     }
 
     /// P3 (the LLVM form of the Rust backend's return_movable / consuming match): a return is the last use of every
@@ -2190,8 +2284,10 @@ impl<'a> FnGen<'a> {
             Stmt::Let(x) => {
                 self.begin_temps();
                 self.moving = self.move_src(&x.name, &x.value);
+                self.take_let = self.take_src(&x.name, &x.value);
                 let v = self.ev(&x.value, true);
                 self.moving.clear();
+                self.take_let.clear();
                 let v = v?;
                 let sl = self.new_slot(&x.name, &x.ty);
                 self.store(&sl, &v)?;
@@ -2209,8 +2305,10 @@ impl<'a> FnGen<'a> {
                 let sl = self.lookup(&x.name)?.val().clone();
                 // the right side is complete and owned before the old value is destroyed
                 self.moving = self.move_src(&x.name, &x.value);
+                self.take_let = self.take_src(&x.name, &x.value);
                 let v = self.ev(&x.value, true);
                 self.moving.clear();
+                self.take_let.clear();
                 let v = v?;
                 if sl.k == Kind::Arr {
                     let old = self.load(&sl)?;
@@ -2356,8 +2454,10 @@ impl<'a> FnGen<'a> {
                     self.ins(format!("store i64 0, ptr {}", sl.b))?;
                 } else if let Some(val) = &x.value {
                     self.ret_cand = self.ret_movable(val);
+                    self.ret_take = self.ret_takable(val);
                     v = self.ev(val, true)?;
                     self.ret_cand.clear();
+                    self.ret_take.clear();
                     if v.k == Kind::Arr {
                         if let Expr::Var(var) = val {
                             // When returning a local array out: empty the slot so the cleanup below does not free it
@@ -3266,6 +3366,34 @@ impl<'a> FnGen<'a> {
             let mut a2 = args.clone();
             a2.push(("ptr".to_string(), d.clone()));
             a2.push(("ptr".to_string(), l.clone()));
+            // P3 M3: take the buffer of a dying owned local String instead of copying it
+            let mut mode = "";
+            if let (Some(Expr::Var(x)), false) = (e.args.first(), self.cost) {
+                if self.ret_take.contains(&x.name) {
+                    mode = "ret";
+                } else if self.take_let.contains(&x.name) {
+                    mode = "let";
+                }
+            }
+            if !mode.is_empty() {
+                self.m.g6_take = true;
+                self.g6_call(crate::foreign_shim::STRING_TAKE_SYM, "void", &a2)?;
+                let name = match e.args.first() {
+                    Some(Expr::Var(x)) => x.name.clone(),
+                    _ => return Err(IDX_ERR.to_string()),
+                };
+                let sl = self.lookup(&name)?.val().clone();
+                if mode == "ret" {
+                    self.ret_moved.insert(sl.a.clone(), None); // the return's cleanup skips the slot
+                } else {
+                    self.ins(format!("store ptr null, ptr {}", sl.a))?; // the scope cleanup drops a null handle as nothing
+                }
+                let dp = self.op(format!("load ptr, ptr {}", d))?;
+                let ln = self.op(format!("load i64, ptr {}", l))?;
+                let mut rv = V::with_b(Kind::Arr, dp, ln);
+                rv.ty = Some(STR.to_string());
+                return self.temp_arr(rv, owned);
+            }
             self.g6_call(crate::foreign_shim::STRING_BYTES_SYM, "void", &a2)?;
             let dp = self.op(format!("load ptr, ptr {}", d))?;
             let ln = self.op(format!("load i64, ptr {}", l))?;
@@ -5470,7 +5598,7 @@ fn gen_llvm_body(
         ir.push_str(&m.par_trampolines.join("\n"));
     }
     let mut shim = if is_g6 {
-        Some(crate::foreign_shim::build_shim(prog, verified, trust_callers, budget, foreign_checks)?)
+        Some(crate::foreign_shim::build_shim(prog, verified, trust_callers, budget, foreign_checks, m.g6_take)?)
     } else {
         None
     };

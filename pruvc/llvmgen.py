@@ -340,6 +340,7 @@ class Mod:
         s.par_trampolines = []
         s.g6_decls = {}         # G6 A3: shim symbol -> declare line
         s.g6_v2 = False         # G6 A3: string_to_str needs the v2 copy/free declarations
+        s.g6_take = False       # P3 M3: some string_to_str takes the String buffer (pruv_g6_v1_string_take)
         s.g6_bridge = False     # G6 A3: some function references @pruv_g6_bridge_v1
         s.bswap = set()         # P2 batch 4: widths of the llvm.bswap declarations the byte-word accesses used
         s.shrink = False        # P2 batch 4: some in-place `return truncate` calls @pruv_shrink_v2
@@ -434,6 +435,8 @@ class FnGen:
         s.ret_moved = {}    # P3: owner slot address -> None (whole value moved) or {storage index of a moved field}
         s.frames = []       # P3: enclosing blocks being lowered: [names declared so far, names named later, loop body]
         s.moving = set()    # P3: names the copy of the let / assignment being lowered moves (move_src)
+        s.ret_take = set()  # P3 M3: String locals whose string_to_str in the return result position takes the buffer
+        s.take_let = set()  # P3 M3: String local the let / assignment being lowered takes (take_src)
         s.cenv = {}
         s.cregions = []     # G9: constructor temporaries of the contract expression being evaluated, per region
         s.tt = m.tt
@@ -765,6 +768,53 @@ class FnGen:
                 if counts[n] == 1 and x is not None and n in res:
                     out[n] = x
         return out
+
+    def takeable(s, name):
+        """P3 M3: `name` is an owned local String (not a parameter, not borrowed): string_to_str of it may take the buffer"""
+        try:
+            kind, x = s.lookup(name)
+        except Exception:
+            return False
+        if kind != "slot" or x.k != "coll" or x.ty.name != "string" or not s.owned_slot(x):
+            return False
+        return not any(x is y for y in s.scopes[0]["arrays"])     # scope 0 holds the owned (take) parameters
+
+    def ret_takable(s, e):
+        """P3 M3: the String locals whose `string_to_str(x)` is in a result position of the returned expression (the
+        expression itself, or a field of a constructor / struct literal / enum constructor in it, the same place walk
+        as ret_movable) and that the expression names exactly once; the return is their last use, so the call takes the
+        buffer and the return's cleanup skips the slot"""
+        if s.cost or e is None:
+            return set()
+        counts = {}
+
+        def walk(x):
+            if isinstance(x, (Var, Move)):
+                counts[x.name] = counts.get(x.name, 0) + 1
+            for k in codegen.expr_kids(x):
+                walk(k)
+        walk(e)
+        res = set()
+
+        def place(x):
+            if isinstance(x, (Ctor, StructLit, EnumCtor)):
+                for k in codegen.expr_kids(x):
+                    place(k)
+            elif isinstance(x, Call) and x.name == "string_to_str" and len(x.args) == 1 and isinstance(x.args[0], Var):
+                res.add(x.args[0].name)
+        place(e)
+        return set(n for n in res if counts.get(n) == 1 and s.takeable(n))
+
+    def take_src(s, st):
+        """P3 M3: a let / assignment `y = string_to_str(x)` whose whole right side is that call, at the last use of the
+        owned local String x (dead_after), takes x's buffer; returns {x}, else an empty set"""
+        e = st.value
+        if s.cost or not (isinstance(e, Call) and e.name == "string_to_str" and len(e.args) == 1):
+            return set()
+        x = e.args[0]
+        if not isinstance(x, Var) or x.name == st.name or not s.dead_after(x.name) or not s.takeable(x.name):
+            return set()
+        return {x.name}
 
     def hold(s, v):
         """move a temporary into a fresh owner slot (returned); the caller registers it in a scope"""
@@ -1246,8 +1296,10 @@ class FnGen:
         elif isinstance(st, Let):
             s.begin_temps()
             s.moving = s.move_src(st)
+            s.take_let = s.take_src(st)
             v = s.ev(st.value, True)
             s.moving = set()
+            s.take_let = set()
             sl = s.new_slot(st.name, st.type)
             s.store(sl, v)
             sc = s.scopes[-1]
@@ -1259,8 +1311,10 @@ class FnGen:
             s.begin_temps()
             sl = s.lookup(st.name)[1]
             s.moving = s.move_src(st)
+            s.take_let = s.take_src(st)
             v = s.ev(st.value, True)        # the right side is complete and owned before the old value is destroyed
             s.moving = set()
+            s.take_let = set()
             if sl.k == "arr":
                 s.free_val(s.load(sl))
             elif sl.k == "coll":   # G6 A3: drop the old value (null when moved out) after the right side
@@ -1363,8 +1417,10 @@ class FnGen:
                 s.ins("store i64 0, ptr %s" % sl.b)
             elif st.value is not None:
                 s.ret_cand = s.ret_movable(st.value)
+                s.ret_take = s.ret_takable(st.value)
                 v = s.ev(st.value, True)
                 s.ret_cand = {}
+                s.ret_take = set()
                 if v.k == "arr" and isinstance(st.value, Var):
                     # moving a local array out: empty its slot so the cleanup below does not free it
                     sl = s.lookup(st.value.name)[1]
@@ -2014,6 +2070,21 @@ class FnGen:
         if n == "string_to_str":
             s.m.g6_v2 = True
             d, l = s.g6_out("ptr"), s.g6_out("i64")
+            x = e.args[0]
+            mode = None     # P3 M3: take the buffer of a dying owned local String instead of copying it
+            if isinstance(x, Var) and not s.cost:
+                mode = "ret" if x.name in s.ret_take else ("let" if x.name in s.take_let else None)
+            if mode is not None:
+                s.m.g6_take = True
+                s.g6_call(foreign_shim.STRING_TAKE_SYM, "void", args + [("ptr", d), ("ptr", l)])
+                sl = s.lookup(x.name)[1]
+                if mode == "ret":
+                    s.ret_moved[sl.a] = None        # the return's cleanup skips the slot
+                else:
+                    s.ins("store ptr null, ptr %s" % sl.a)      # the scope cleanup drops a null handle as nothing
+                dp = s.op("load ptr, ptr %s" % d)
+                ln = s.op("load i64, ptr %s" % l)
+                return s.temp_arr(V("arr", dp, ln, STR), owned)
             s.g6_call(foreign_shim.STRING_BYTES_SYM, "void", args + [("ptr", d), ("ptr", l)])
             dp = s.op("load ptr, ptr %s" % d)
             ln = s.op("load i64, ptr %s" % l)
@@ -4084,7 +4155,7 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
         ir += "\n".join(m.par_trampolines)
     shim = None
     if is_g6:
-        shim = foreign_shim.build_shim(prog, verified, trust_callers, budget, foreign_checks)
+        shim = foreign_shim.build_shim(prog, verified, trust_callers, budget, foreign_checks, m.g6_take)
     if first_par(prog) is not None:
         shim = (shim or "") + parallel_shim.build_shim()
     if cost_used:

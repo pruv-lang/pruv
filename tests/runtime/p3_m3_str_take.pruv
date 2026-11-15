@@ -1,0 +1,71 @@
+// P3 M3: string_to_str(x) of an owned local String at its last use takes the String buffer (no copy, one less free):
+// in the return result position (a field of an enum constructor) and in a let at the last use of x. A use of x that is
+// not the last one keeps the copy. Empty and multibyte strings go through every path.
+enum Wrap { Empty, Text(s: str), Pair(n: i64, s: str) }
+
+fn wrap_len(w: Wrap) -> i64 {
+  match w {
+    Wrap::Empty => { return 0; }
+    Wrap::Text(s) => { return len(s); }
+    Wrap::Pair(n, s) => { return n * 100 + len(s); }
+  }
+}
+
+fn build_text(t: str) -> Wrap ! alloc
+  requires len(t) <= 1000
+{
+  let mut s: String = string_new();
+  s = string_push_str(move s, t);
+  return Wrap::Text(string_to_str(s));
+}
+
+fn build_pair(t: str) -> Wrap ! alloc
+  requires len(t) <= 1000
+{
+  let mut s: String = string_new();
+  s = string_push_str(move s, t);
+  return Wrap::Pair(len(s), string_to_str(s));
+}
+
+fn take_ret(t: str) -> i64 ! alloc
+  requires len(t) <= 1000
+{
+  let w: Wrap = build_text(t);
+  return wrap_len(w);
+}
+
+fn copy_ret(t: str) -> i64 ! alloc
+  requires len(t) <= 1000
+{
+  let w: Wrap = build_pair(t);
+  return wrap_len(w);
+}
+
+fn take_let(t: str) -> i64 ! alloc
+  requires len(t) <= 1000
+{
+  let mut s: String = string_new();
+  s = string_push_str(move s, t);
+  let u: str = string_to_str(s);
+  return len(u);
+}
+
+fn copy_let(t: str) -> i64 ! alloc
+  requires len(t) <= 1000
+{
+  let mut s: String = string_new();
+  s = string_push_str(move s, t);
+  let u: str = string_to_str(s);
+  return len(s) * 10 + len(u);
+}
+
+// A later `move s` is a use of s: the conversion before it must copy, not take.
+fn copy_then_move(t: str) -> i64 ! alloc
+  requires len(t) <= 1000
+{
+  let mut s: String = string_new();
+  s = string_push_str(move s, t);
+  let u: str = string_to_str(s);
+  let v: String = move s;
+  return len(u) * 10 + len(v);
+}

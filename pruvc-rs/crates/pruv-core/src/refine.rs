@@ -164,6 +164,9 @@ pub(crate) fn expr_names(e: &Expr, out: &mut HashSet<String>) {
         Expr::Quant(x) => {
             out.insert(x.var.clone());
         }
+        Expr::Move(x) => {
+            out.insert(x.name.clone());
+        }
         _ => {}
     }
     for c in kids(e) {

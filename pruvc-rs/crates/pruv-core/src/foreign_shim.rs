@@ -25,6 +25,8 @@ type R<T> = Result<T, String>;
 pub const PREFIX: &str = "pruv_g6_v1_";
 pub const BRIDGE_SYM: &str = "pruv_g6_bridge_v1";
 pub const STRING_BYTES_SYM: &str = "pruv_g6_v1_string_bytes";
+/// P3 M3: takes the buffer of a dying String (emitted only when used)
+pub const STRING_TAKE_SYM: &str = "pruv_g6_v1_string_take";
 
 /// the A2 helper name of a catalog instance (ForeignGen.catalog_helper)
 pub fn helper_name(op: &str, src: &[GType]) -> R<String> {
@@ -366,6 +368,15 @@ fn pruv_g6_str<'a>(p: *const u8, n: i64) -> &'a str {
 fn pruv_g6_out(p: *mut i64) -> *mut i64 { if p.is_null() { pruv_g6_repr("null output") } p }
 "##;
 
+// P3 M3: a taken String buffer is freed by pruv_free_v2, which is the Rust allocator only under
+// -DPRUV_RUST_ALLOCATOR; the take adapter references the runtime marker so a malloc runtime fails to link.
+const TAKE_RUNTIME: &str = r##"mod pruv_g6_alloc {
+    extern "C" {
+        pub fn pruv_runtime_rust_allocator_v2();
+    }
+}
+"##;
+
 const MOD_ALLOW: &str = "#[allow(dead_code, unused_imports, unused_variables, unused_mut, unused_parens, unused_unsafe, non_snake_case, non_camel_case_types, non_upper_case_globals, improper_ctypes_definitions, unreachable_code, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]";
 
 // ---------------------------------------------------------------------------
@@ -641,12 +652,34 @@ fn string_bytes_adapter() -> String {
     )
 }
 
+/// P3 M3: consume the String box and hand its buffer to the caller as (data, len); an empty String gives
+/// (NULL, 0), like pruv_copy_v2 of length 0. into_boxed_str makes the block layout exactly (len, 1).
+fn string_take_adapter() -> String {
+    fn_text(
+        STRING_TAKE_SYM,
+        "h: PruvH, data: *mut *mut u8, len: *mut i64",
+        None,
+        "pruv_g6_guard(|| { \
+         let _ = ::std::hint::black_box(pruv_g6_alloc::pruv_runtime_rust_allocator_v2 as unsafe extern \"C\" fn()); \
+         if data.is_null() || len.is_null() { pruv_g6_repr(\"null output\") } \
+         if h.is_null() { pruv_g6_repr(\"null handle\") } \
+         let pruv_b: ::std::boxed::Box<::std::string::String> = \
+         unsafe { ::std::boxed::Box::from_raw(h as *mut ::std::string::String) }; \
+         PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); \
+         let pruv_s: ::std::boxed::Box<str> = (*pruv_b).into_boxed_str(); \
+         let pruv_n: usize = pruv_s.len(); \
+         if pruv_n == 0 { drop(pruv_s); unsafe { *data = ::std::ptr::null_mut(); *len = 0; } } \
+         else { unsafe { *data = ::std::boxed::Box::into_raw(pruv_s) as *mut u8; *len = pruv_n as i64; } } })",
+    )
+}
+
 // ---------------------------------------------------------------------------
 // the module
 // ---------------------------------------------------------------------------
 
-/// text of `mod pruv_g6_shim` for the (concrete) program prog; deterministic
-pub fn build_shim(prog: &Program, verified: bool, _trust_callers: bool, budget: u64, foreign_checks: &str) -> R<String> {
+/// text of `mod pruv_g6_shim` for the (concrete) program prog; deterministic. take: the LLVM lowering used
+/// pruv_g6_v1_string_take (P3 M3), so the take adapter and the allocator marker reference are emitted
+pub fn build_shim(prog: &Program, verified: bool, _trust_callers: bool, budget: u64, foreign_checks: &str, take: bool) -> R<String> {
     let (cats, colls, trusted, observers) = collect(prog)?;
     // helper discovery: exactly the A2 helpers (same texts, same mode and budget). The entry checks of the Rust
     // source backend are not emitted here (trust=True): the LLVM entries evaluate requires themselves.
@@ -671,6 +704,9 @@ pub fn build_shim(prog: &Program, verified: bool, _trust_callers: bool, budget: 
     }
     out.push(G6_PRELUDE.to_string());
     out.push(BRIDGE_RUNTIME.to_string());
+    if take {
+        out.push(TAKE_RUNTIME.to_string());
+    }
     let mut adapters: Vec<String> = Vec::new();
     for (name, text) in &items {
         if let Some((op, _)) = cats.get(name) {
@@ -690,6 +726,9 @@ pub fn build_shim(prog: &Program, verified: bool, _trust_callers: bool, budget: 
     }
     if cats.values().any(|(op, _)| op == "string_to_str") {
         adapters.push(string_bytes_adapter());
+        if take {
+            adapters.push(string_take_adapter());
+        }
     }
     for t in colls.values() {
         adapters.push(coll_adapters(t)?);

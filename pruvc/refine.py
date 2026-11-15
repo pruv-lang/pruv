@@ -100,6 +100,8 @@ def _expr_names(e, out):
         out.add(e.name)
     elif isinstance(e, Quant):
         out.add(e.var)
+    elif isinstance(e, Move):
+        out.add(e.name)
     for c in _kids(e):
         _expr_names(c, out)
 

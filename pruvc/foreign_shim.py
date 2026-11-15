@@ -29,6 +29,7 @@ PREFIX = "pruv_g6_v1_"
 BRIDGE_SYM = "pruv_g6_bridge_v1"
 STRING_BYTES_SYM = PREFIX + "string_bytes"
 STRING_TO_STR = "pruv_g6_string_to_str"       # A2 helper name replaced by the borrowed view string_bytes
+STRING_TAKE_SYM = PREFIX + "string_take"        # P3 M3: takes the buffer of a dying String (emitted only when used)
 
 
 def helper_name(op, src):
@@ -204,6 +205,16 @@ fn pruv_g6_str<'a>(p: *const u8, n: i64) -> &'a str {
 fn pruv_g6_out(p: *mut i64) -> *mut i64 { if p.is_null() { pruv_g6_repr("null output") } p }
 """
 
+# P3 M3: a taken String buffer is freed by pruv_free_v2, which is the Rust allocator only under
+# -DPRUV_RUST_ALLOCATOR; the take adapter references the runtime marker so a malloc runtime fails to link.
+TAKE_RUNTIME = """\
+mod pruv_g6_alloc {
+    extern "C" {
+        pub fn pruv_runtime_rust_allocator_v2();
+    }
+}
+"""
+
 MOD_ALLOW = ("#[allow(dead_code, unused_imports, unused_variables, unused_mut, unused_parens, unused_unsafe, "
              "non_snake_case, non_camel_case_types, non_upper_case_globals, improper_ctypes_definitions, "
              "unreachable_code, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]")
@@ -344,11 +355,29 @@ def _string_bytes_adapter():
                "unsafe { *data = pruv_s.as_ptr(); *len = pruv_s.len() as i64; } })")
 
 
+def _string_take_adapter():
+    """P3 M3: consume the String box and hand its buffer to the caller as (data, len); an empty String gives
+    (NULL, 0), like pruv_copy_v2 of length 0.  into_boxed_str makes the block layout exactly (len, 1)."""
+    return _fn(STRING_TAKE_SYM, "h: PruvH, data: *mut *mut u8, len: *mut i64", None,
+               "pruv_g6_guard(|| { "
+               "let _ = ::std::hint::black_box(pruv_g6_alloc::pruv_runtime_rust_allocator_v2 as unsafe extern \"C\" fn()); "
+               "if data.is_null() || len.is_null() { pruv_g6_repr(\"null output\") } "
+               "if h.is_null() { pruv_g6_repr(\"null handle\") } "
+               "let pruv_b: ::std::boxed::Box<::std::string::String> = "
+               "unsafe { ::std::boxed::Box::from_raw(h as *mut ::std::string::String) }; "
+               "PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); "
+               "let pruv_s: ::std::boxed::Box<str> = (*pruv_b).into_boxed_str(); "
+               "let pruv_n: usize = pruv_s.len(); "
+               "if pruv_n == 0 { drop(pruv_s); unsafe { *data = ::std::ptr::null_mut(); *len = 0; } } "
+               "else { unsafe { *data = ::std::boxed::Box::into_raw(pruv_s) as *mut u8; *len = pruv_n as i64; } } })")
+
+
 # ---------------------------------------------------------------------------
 # the module
 # ---------------------------------------------------------------------------
-def build_shim(prog, verified=True, trust_callers=False, budget=1 << 30, foreign_checks="requires"):
-    """text of `mod pruv_g6_shim` for the (concrete) program prog; deterministic"""
+def build_shim(prog, verified=True, trust_callers=False, budget=1 << 30, foreign_checks="requires", take=False):
+    """text of `mod pruv_g6_shim` for the (concrete) program prog; deterministic.  take: the LLVM lowering used
+    pruv_g6_v1_string_take (P3 M3), so the take adapter and the allocator marker reference are emitted"""
     cats, colls, trusted = collect(prog)
     # helper discovery: exactly the A2 helpers (same texts, same mode and budget).  The entry checks of the Rust
     # source backend are not emitted here (trust=True): the LLVM entries evaluate requires themselves.
@@ -371,6 +400,8 @@ def build_shim(prog, verified=True, trust_callers=False, budget=1 << 30, foreign
         out.append(CONTRACT_PRELUDE_STR)
     out.append(G6_PRELUDE)
     out.append(BRIDGE_RUNTIME)
+    if take:
+        out.append(TAKE_RUNTIME)
     adapters = []
     for name, text in items.items():
         if name in cats and cats[name][0] == "string_to_str":
@@ -385,6 +416,8 @@ def build_shim(prog, verified=True, trust_callers=False, budget=1 << 30, foreign
     for helper in cats:
         if cats[helper][0] == "string_to_str":
             adapters.append(_string_bytes_adapter())
+            if take:
+                adapters.append(_string_take_adapter())
             break
     for key in sorted(colls):
         adapters.append(_coll_adapters(colls[key]))
