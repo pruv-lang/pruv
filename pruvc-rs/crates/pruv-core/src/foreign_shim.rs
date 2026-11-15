@@ -687,24 +687,26 @@ fn string_bytes_adapter() -> String {
     )
 }
 
-/// P3 M3: consume the String box and hand its buffer to the caller as (data, len); an empty String gives
-/// (NULL, 0), like pruv_copy_v2 of length 0. into_boxed_str makes the block layout exactly (len, 1).
+/// P3 M3: consume the String box and hand its buffer to the caller as (data, len, cap); an empty String gives
+/// (NULL, 0, 0), like pruv_copy_v2 of length 0. The block layout is (cap, 1), which pruv_free_v2 frees with the
+/// cap, so no shrinking realloc is needed.
 fn string_take_adapter() -> String {
     fn_text(
         STRING_TAKE_SYM,
-        "h: PruvH, data: *mut *mut u8, len: *mut i64",
+        "h: PruvH, data: *mut *mut u8, len: *mut i64, cap: *mut i64",
         None,
         "pruv_g6_guard(|| { \
          let _ = ::std::hint::black_box(pruv_g6_alloc::pruv_runtime_rust_allocator_v2 as unsafe extern \"C\" fn()); \
-         if data.is_null() || len.is_null() { pruv_g6_repr(\"null output\") } \
+         if data.is_null() || len.is_null() || cap.is_null() { pruv_g6_repr(\"null output\") } \
          if h.is_null() { pruv_g6_repr(\"null handle\") } \
          let pruv_b: ::std::boxed::Box<::std::string::String> = \
          unsafe { ::std::boxed::Box::from_raw(h as *mut ::std::string::String) }; \
          PRUV_G6_LIVE.fetch_sub(1, ::std::sync::atomic::Ordering::SeqCst); \
-         let pruv_s: ::std::boxed::Box<str> = (*pruv_b).into_boxed_str(); \
+         let mut pruv_s = ::std::mem::ManuallyDrop::new(*pruv_b); \
          let pruv_n: usize = pruv_s.len(); \
-         if pruv_n == 0 { drop(pruv_s); unsafe { *data = ::std::ptr::null_mut(); *len = 0; } } \
-         else { unsafe { *data = ::std::boxed::Box::into_raw(pruv_s) as *mut u8; *len = pruv_n as i64; } } })",
+         if pruv_n == 0 { unsafe { ::std::mem::ManuallyDrop::drop(&mut pruv_s); \
+         *data = ::std::ptr::null_mut(); *len = 0; *cap = 0; } } \
+         else { unsafe { *data = pruv_s.as_mut_ptr(); *len = pruv_n as i64; *cap = pruv_s.capacity() as i64; } } })",
     )
 }
 

@@ -3857,6 +3857,8 @@ impl<'a> FnGen<'a> {
             }
             if !mode.is_empty() {
                 self.m.g6_take = true;
+                let c = self.g6_out("i64"); // P3: the String's capacity travels as the cap (no shrinking realloc)
+                a2.push(("ptr".to_string(), c.clone()));
                 self.g6_call(crate::foreign_shim::STRING_TAKE_SYM, "void", &a2)?;
                 let name = match e.args.first() {
                     Some(Expr::Var(x)) => x.name.clone(),
@@ -3870,8 +3872,10 @@ impl<'a> FnGen<'a> {
                 }
                 let dp = self.op(format!("load ptr, ptr {}", d))?;
                 let ln = self.op(format!("load i64, ptr {}", l))?;
+                let cp = self.op(format!("load i64, ptr {}", c))?;
                 let mut rv = V::with_b(Kind::Arr, dp, ln);
                 rv.ty = Some(STR.to_string());
+                rv.c = Some(cp);
                 return self.temp_arr(rv, owned);
             }
             self.g6_call(crate::foreign_shim::STRING_BYTES_SYM, "void", &a2)?;

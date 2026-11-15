@@ -2468,7 +2468,8 @@ class FnGen:
                 mode = "ret" if x.name in s.ret_take else ("let" if x.name in s.take_let else None)
             if mode is not None:
                 s.m.g6_take = True
-                s.g6_call(foreign_shim.STRING_TAKE_SYM, "void", args + [("ptr", d), ("ptr", l)])
+                c = s.g6_out("i64")     # P3: the String's capacity travels as the cap (no shrinking realloc)
+                s.g6_call(foreign_shim.STRING_TAKE_SYM, "void", args + [("ptr", d), ("ptr", l), ("ptr", c)])
                 sl = s.lookup(x.name)[1]
                 if mode == "ret":
                     s.ret_moved[sl.a] = None        # the return's cleanup skips the slot
@@ -2476,7 +2477,8 @@ class FnGen:
                     s.ins("store ptr null, ptr %s" % sl.a)      # the scope cleanup drops a null handle as nothing
                 dp = s.op("load ptr, ptr %s" % d)
                 ln = s.op("load i64, ptr %s" % l)
-                return s.temp_arr(V("arr", dp, ln, STR), owned)
+                cp = s.op("load i64, ptr %s" % c)
+                return s.temp_arr(V("arr", dp, ln, STR, c=cp), owned)
             s.g6_call(foreign_shim.STRING_BYTES_SYM, "void", args + [("ptr", d), ("ptr", l)])
             dp = s.op("load ptr, ptr %s" % d)
             ln = s.op("load i64, ptr %s" % l)
