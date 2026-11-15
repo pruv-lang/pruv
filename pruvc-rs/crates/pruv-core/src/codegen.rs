@@ -4343,7 +4343,7 @@ mod tests {
 pub const ASYNC_PRELUDE: &str = r###"#[derive(Clone, Default)]
 struct PruvEvPublic { kind: i64, open: bool, eof: bool, failed: bool, ends: [bool;2] }
 #[derive(Default)]
-struct PruvEvQueue { bytes: [::std::collections::VecDeque<u8>;2], ended: [bool;2], err: i64, closing: bool, reported: bool, pending: ::std::collections::VecDeque<::std::net::TcpStream> }
+struct PruvEvQueue { bytes: [::std::collections::VecDeque<u8>;2], ended: [bool;2], err: i64, closing: bool, accepting: bool, reported: bool, pending: ::std::collections::VecDeque<::std::net::TcpStream> }
 struct PruvEvShared { state: ::std::sync::Mutex<Vec<PruvEvQueue>>, cv: ::std::sync::Condvar }
 enum PruvEvResource { Free, Socket(::std::net::TcpStream, Option<::std::thread::JoinHandle<()>>), Listener(::std::net::SocketAddr, Option<::std::thread::JoinHandle<()>>, ::std::net::TcpListener), Process(pruv_Process), Timer(::std::time::Instant) }
 #[allow(non_camel_case_types)]
@@ -4404,8 +4404,8 @@ fn pruv_ev_listener(mut l: pruv_Loop, mut x: pruv_Listener) -> pruv_Loop {
     let h=pruv_ev_spawn(move || {
         let result=::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
             //@hook accept { sh.state.lock().unwrap()[i].err=6; sh.cv.notify_all(); return; }
-            loop { let mut q=sh.state.lock().unwrap(); while q[i].pending.len()>=64 && !q[i].closing {q=sh.cv.wait(q).unwrap();} if q[i].closing{return;} drop(q);
-                let r=lis.accept(); let mut q=sh.state.lock().unwrap(); if q[i].closing{return;}
+            loop { let mut q=sh.state.lock().unwrap(); while q[i].pending.len()>=64 && !q[i].closing {q=sh.cv.wait(q).unwrap();} if q[i].closing{return;} q[i].accepting=true; drop(q);
+                let r=lis.accept(); let mut q=sh.state.lock().unwrap(); q[i].accepting=false; if q[i].closing{return;}
                 match r {Ok((s,_))=>{let _=s.set_nodelay(true);q[i].pending.push_back(s);},Err(e) if e.kind()==::std::io::ErrorKind::Interrupted=>continue,Err(_)=>q[i].err=6} sh.cv.notify_all(); if q[i].err!=0{return;}
             }
         })); if result.is_err(){sh.state.lock().unwrap()[i].err=6;sh.cv.notify_all();}
@@ -4454,15 +4454,15 @@ fn pruv_ev_write(mut l: pruv_Loop, slot: i64, data: &[u8], action: i64) -> pruv_
     if code==0 { match &mut l.slots[i] {
         PruvEvResource::Socket(s,_)=>{let r=if action==1{s.shutdown(::std::net::Shutdown::Write)}else{::std::io::Write::write_all(s,data)};if let Err(e)=r{code=if action==0 && pruv_net_timed_out(&e){5}else{4};}},
         PruvEvResource::Process(p)=>{if action==3 {p.stdin=None;}else if p.stdin.as_mut().map_or(true,|s|::std::io::Write::write_all(s,data).is_err()){code=7;}},_=>{}
-    }} if code!=0{pruv_ev_mark(&mut l,i,code);}else if action==1 || action==3 {l.public[i].open=false;}l
+    }} if code!=0{let eof=l.public[i].eof;pruv_ev_mark(&mut l,i,code);l.public[i].eof=eof;}else if action==1 || action==3 {l.public[i].open=false;}l
 }
 fn pruv_ev_accept(mut l: pruv_Loop, slot: i64) -> pruv_Loop {l.last=-1;if !pruv_ev_valid(&l,slot,2) || pruv_ev_free(&l).is_none(){pruv_ev_fail(&mut l,1);return l;}let i=slot as usize;if l.public[i].failed{return l;}let sh=l.shared.clone();let mut q=sh.state.lock().unwrap();let s=q[i].pending.pop_front();let err=q[i].err;sh.cv.notify_all();drop(q);if let Some(s)=s {return pruv_ev_socket(l,pruv_Socket{stream:Some(s),error:0,write_open:true,eof:false,buf:Vec::new()});}if err!=0{pruv_ev_mark(&mut l,i,err);}l}
 fn pruv_ev_end(l: &mut pruv_Loop, i: usize, wait: bool) {
-    {let mut q=l.shared.state.lock().unwrap();q[i].closing=true;l.shared.cv.notify_all();}
+    let accepting={let mut q=l.shared.state.lock().unwrap();q[i].closing=true;l.shared.cv.notify_all();q[i].accepting};
     let mut code=0;
     match ::std::mem::replace(&mut l.slots[i],PruvEvResource::Free) {
         PruvEvResource::Socket(s,h)=>{let _=s.shutdown(::std::net::Shutdown::Both);if h.map_or(false,|h|h.join().is_err()){code=3;}},
-        PruvEvResource::Listener(mut a,h,own)=>{if a.ip().is_unspecified(){a.set_ip(if a.is_ipv4(){"127.0.0.1".parse().unwrap()}else{"::1".parse().unwrap()});}if h.as_ref().map_or(false,|h|h.is_finished()){if h.unwrap().join().is_err(){code=6;}}else if ::std::net::TcpStream::connect(a).is_err(){code=2;}else if h.map_or(false,|h|h.join().is_err()){code=6;}drop(own);},
+        PruvEvResource::Listener(mut a,h,own)=>{if a.ip().is_unspecified(){a.set_ip(if a.is_ipv4(){"127.0.0.1".parse().unwrap()}else{"::1".parse().unwrap()});}if accepting && ::std::net::TcpStream::connect_timeout(&a,::std::time::Duration::from_secs(1)).is_err(){code=2;}else if h.map_or(false,|h|h.join().is_err()){code=6;}drop(own);},
         PruvEvResource::Process(p)=>{let kill=!wait || l.public[i].failed;let r=pruv_proc_finish(p,kill);match r {Ok(n)=>if wait{l.exit=n;},Err(_)=>{code=8;if wait{l.exit=0;}}}
             //@hook reap code=8;
         },_=>{}

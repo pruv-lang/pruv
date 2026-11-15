@@ -392,6 +392,10 @@ are the known limits of this slice:
   full queue stops that slot's reader until the program has read some of it. A peer or child that outpaces the
   program therefore stalls on its own side instead of growing memory. The pending queue of a listener holds at
   most 64 connections; further ones wait in the OS backlog.
+  Output a child wrote **before** `ev_add_process` is kept in full (the proc runtime's queues are unbounded,
+  G10_PROC_SPEC §2.5) and moves into the slot as is, so that one queue may start above 1 MiB. Nothing is
+  dropped; the collector stays stopped until the program has read the queue below the bound. Programs that
+  spawn a noisy child should add it to the loop at once.
 - **Threads.** The runtime uses one reader thread per socket slot, one accept thread per listener slot, and two
   collector threads per process slot. A loop with the maximum capacity can therefore run up to 8192 threads.
   An OS poller (§9) is the long-term fix; this slice keeps `std` only.
@@ -819,7 +823,8 @@ an end or an error, and after a queue is drained (to wake a reader stopped by ba
 3. `ev_add_listener` duplicates the listener, records its `local_addr`, and spawns the accept thread. Failure is
    loop error 2.
 4. `ev_add_process` attaches the loop's notifier and the 1 MiB bound to the process's two output queues (the
-   collectors already exist, from the proc runtime) and signals the condvar once. Failure is loop error 2, and
+   collectors already exist, from the proc runtime) and signals the condvar once. Bytes already queued move
+   over unchanged; the bound only stops further collection (§2.5 backpressure). Failure is loop error 2, and
    the process is killed and reaped.
 5. `ev_add_timer` stores `Instant::now() + ms`. No thread.
 
