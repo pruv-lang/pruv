@@ -1959,3 +1959,13 @@ Loads with `!range`: sudoku 20, bedcov 7, nqueen 2, the other bench programs 0. 
 Peak RSS ratios: sudoku 1.000, nqueen 1.000–1.010, bedcov 0.707.
 
 - **Effect:** sudoku and bedcov move within noise of section 121 (0.959 and 0.959). The metadata is correct but does not, by itself, unlock a measurable optimization on these programs. It is kept because it is free and gives later passes the element bounds.
+
+## 123. P3: function attributes on generated code (2026-11-15, not implemented)
+
+The planned P3 item was to emit `nounwind`, `nosync`, `norecurse` and memory-effect attributes on the generated LLVM functions. It was dropped after reading clang's `-O3` output for the bench programs. The function-attribute passes already infer `nofree norecurse nosync nounwind memory(argmem: readwrite)` (or tighter) on the internal Pruv functions, and every runtime declaration is already `nounwind`. Emitting the attributes by hand would add a second, unverified source of the same facts without changing the optimized code.
+
+## 124. P3: optimization remarks tool (2026-11-15)
+
+`bench/perf/remarks.py` (documented in `docs/PERF_SPEC.md`, "Optimization remarks") compiles a program with either compiler and runs the same clang `-O3` as `bench/perf/run.py` with `-fsave-optimization-record`. It prints the remarks one per line as `KIND pass function: message`, deduplicated, followed by a count per kind and pass. It reads the YAML record because the generated IR has no debug locations, so the printed `-Rpass` lines carry no function name.
+
+`python3 bench/perf/remarks.py sudoku --pass loop-vectorize` reports 4 missed and 9 analysis remarks. The loops in `forward` and the exported `bench` are not vectorized because of unidentified array bounds, non-reduction values used after the loop, and calls inside the loop. This is the starting point for the next P3 vectorization item.

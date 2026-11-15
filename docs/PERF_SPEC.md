@@ -108,6 +108,16 @@ the input generator if one is needed. `bench/perf/run.py` builds all
 variants, checks outputs and runs the timing above; `bench/perf/run.py --dev` uses the dev inputs and 5 rounds for a
 quick check.
 
+## Optimization remarks
+
+`bench/perf/remarks.py` compiles a program to LLVM IR, runs the same clang `-O3` as run.py with an optimization record,
+and prints the remarks one per line as `KIND pass function: message`, deduplicated, with a count per kind and pass.
+Usage: `python3 bench/perf/remarks.py [--compiler py|rs] [--pass REGEX] [--kind missed,passed,analysis] [--function SUBSTR] <program-or-.pruv> ...`
+(defaults: `rs`, passes `loop-vectorize|slp-vectorizer|licm|inline|loop-unroll`, kinds `missed,analysis`).
+Example: `python3 bench/perf/remarks.py sudoku --pass loop-vectorize`. Output goes to `bench/perf/work/remarks/<name>/`.
+The remarks are read from the optimization record (`.opt.yaml`) because the IR has no debug locations: clang's printed
+-Rpass lines show `<unknown>:0:0` without a function name, while the record carries `Function:`.
+
 ## Next
 
 - Linux x86-64: the same suite on a Linux x86-64 machine (the CI runner is too noisy for timing; a quiet machine
