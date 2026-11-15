@@ -1,0 +1,49 @@
+// G10 net A1 gate 8 (4.7): net_close and net_listener_close return Ok(0) exactly when there is no entry error; an entry
+// error is returned as Err. An unconditional Ok is not provable (g10n_v_close_ok, g10n_v_listener_close_ok).
+fn finish(take s: Socket) -> i64 ! net, alloc {
+  let code: i64 = net_error(s);
+  let failed: bool = !net_ok(s);
+  let r: Result<i64> = net_close(move s);
+  assert failed ==> (!is_ok(r) && err_val(r) == code);
+  assert !failed ==> (is_ok(r) && ok_val(r) == 0);
+  assert !is_ok(r) ==> 1 <= err_val(r) && err_val(r) <= 6;
+  return 0;
+}
+
+fn finish_listener(take l: Listener) -> i64 ! net, alloc {
+  let code: i64 = net_listener_error(l);
+  let failed: bool = !net_listener_ok(l);
+  let r: Result<i64> = net_listener_close(move l);
+  assert failed ==> (!is_ok(r) && err_val(r) == code);
+  assert !failed ==> (is_ok(r) && ok_val(r) == 0);
+  assert !is_ok(r) ==> 1 <= err_val(r) && err_val(r) <= 2;
+  return 0;
+}
+
+fn close_ok(take s: Socket) -> Result<i64> ! net, alloc
+  requires net_ok(s)
+  ensures is_ok(result) && ok_val(result) == 0
+{
+  return net_close(move s);
+}
+
+fn close_failed(take s: Socket) -> Result<i64> ! net, alloc
+  requires !net_ok(s)
+  ensures !is_ok(result) && err_val(result) == net_error(s)
+{
+  return net_close(move s);
+}
+
+fn close_listener_ok(take l: Listener) -> Result<i64> ! net, alloc
+  requires net_listener_ok(l)
+  ensures is_ok(result) && ok_val(result) == 0
+{
+  return net_listener_close(move l);
+}
+
+fn close_listener_failed(take l: Listener) -> Result<i64> ! net, alloc
+  requires !net_listener_ok(l)
+  ensures !is_ok(result) && err_val(result) == net_listener_error(l)
+{
+  return net_listener_close(move l);
+}

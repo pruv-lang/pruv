@@ -1,0 +1,19 @@
+fn bad(host: str, port: i64, rounds: i64) -> Result<i64> ! net, alloc
+  requires 1 <= port && port <= 65535
+  requires 0 <= rounds && rounds <= 100
+{
+  let mut s: Socket = net_connect(host, port);
+  assert !net_eof(s);
+  let mut i: i64 = 0;
+  while i < rounds
+    invariant 0 <= i && i <= rounds
+    decreases rounds - i
+  {
+    if net_ok(s) {
+      s = net_read(move s, 4096);
+    }
+    i = i + 1;
+  }
+  assert !net_eof(s);
+  return net_close(move s);
+}

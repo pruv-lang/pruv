@@ -1,0 +1,4 @@
+fn bad(host: str) -> Result<i64> ! net, alloc {
+  let s: Socket = net_connect(host, 0);
+  return net_close(move s);
+}

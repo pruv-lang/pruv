@@ -98,8 +98,10 @@ _add("proc_stdin_open", [], lambda: ([_p("p", PROCESS)], BOOL))
 _add("proc_eof", [], lambda: ([_p("p", PROCESS), _p("stream", I64)], BOOL))
 _add("proc_size", [], lambda: ([_p("p", PROCESS), _p("stream", I64)], I64))
 _add("proc_byte", [], lambda: ([_p("p", PROCESS), _p("stream", I64), _p("i", I64)], I64))
-# G10 net A0 (docs/G10_NET_SPEC.md 2.3): signatures and effects only. The section 2.3 contracts are not installed yet
-# (A1 encodes them in the verifier); a program that uses Socket / Listener stops at the staging guard (first_net_use).
+# G10 net (docs/G10_NET_SPEC.md 2.3): signatures and effects. Since A1 the section 2.3 / 2.4 / 4 contracts (requires,
+# fresh result, well-formedness, ensures, preservation facts) are encoded for every net_* operation by
+# verify.py FnVerifier.net_call (and its Rust twin in pruv-proof symbolic.rs). A program that uses Socket / Listener
+# is verified and then stops at the staging guard at the codegen entry (first_net_use) until A2 / A3.
 _add("net_listen", [], lambda: ([_p("host", STR), _p("port", I64)], LISTENER), ["net", "alloc"])
 _add("net_accept", [], lambda: ([_p("l", LISTENER)], SOCKET), ["net", "alloc"])
 _add("net_listener_close", [], lambda: ([_p("l", LISTENER, True)], RESULT), ["net", "alloc"])

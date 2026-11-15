@@ -1,0 +1,21 @@
+fn pass(take l: Listener) -> Listener { return move l; }
+
+fn bad(host: str, rounds: i64) -> Result<i64> ! net, alloc
+  requires 0 <= rounds && rounds <= 100
+{
+  let mut l: Listener = net_listen(host, 0);
+  if !net_listener_ok(l) {
+    return net_listener_close(move l);
+  }
+  assert net_listener_port(l) >= 1;
+  let mut i: i64 = 0;
+  while i < rounds
+    invariant 0 <= i && i <= rounds
+    decreases rounds - i
+  {
+    l = pass(move l);
+    i = i + 1;
+  }
+  assert net_listener_port(l) >= 1;
+  return net_listener_close(move l);
+}

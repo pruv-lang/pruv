@@ -4,7 +4,7 @@ import z3
 from vast import *
 from typeinfo import (TypeTable, is_array, array_elem, array_of, bind_args, substitute, decl_owner, format_type,
                       is_collection)
-from foreign import CATALOG, CATALOG_NAMES, FILE, FILE_OBSERVERS, PROCESS, PROCESS_ARGS
+from foreign import CATALOG, CATALOG_NAMES, FILE, FILE_OBSERVERS, PROCESS, PROCESS_ARGS, SOCKET, LISTENER
 
 I64_MIN, I64_MAX = -2 ** 63, 2 ** 63 - 1
 MAX_LEN = 2 ** 40
@@ -556,6 +556,10 @@ class Model:
             return PROCESS
         if isinstance(v, PArgs):
             return PROCESS_ARGS
+        if isinstance(v, Socket):
+            return SOCKET
+        if isinstance(v, Listener):
+            return LISTENER
         if isinstance(v, Map):      # G6 A1
             return Type("hashmap", (v.kty, v.vty))
         try:
@@ -594,7 +598,8 @@ def _partial_here(e, kind):
         return e.op in ("/", "%")
     if isinstance(e, Call):
         return (e.name in _TAG_FNS or e.name == "file_byte" or e.name in BIT_Z3 or e.name == "load_be"
-                or e.name in _PROC_DOM)   # G10 proc A1: the stream / index domains of the Process observers
+                or e.name in _PROC_DOM    # G10 proc A1: the stream / index domains of the Process observers
+                or e.name in _NET_DOM)    # G10 net A1: the index domain of net_byte
     if isinstance(e, Quant):
         return e.kind in ("max", "min")
     return False
@@ -679,8 +684,48 @@ class PArgs:
         s.argc = argc
 
 
+class Socket:
+    """G10 net A1 (G10_NET_SPEC 4.1): the public state of a Socket only. error: Int, write_open / eof: Bool, buf: the
+    public buffer as a U8 Arr (length, byte map). The descriptor, peer, address and kernel buffers are not modeled."""
+    __slots__ = ("error", "write_open", "eof", "buf")
+
+    def __init__(s, error, write_open, eof, buf):
+        s.error, s.write_open, s.eof, s.buf = error, write_open, eof, buf
+
+
+class Listener:
+    """G10 net A1 (G10_NET_SPEC 4.1): {error: Int, port: Int}."""
+    __slots__ = ("error", "port")
+
+    def __init__(s, error, port):
+        s.error, s.port = error, port
+
+
+def _wf_socket(p):
+    """G10 net A1 (G10_NET_SPEC 4.2): 0 <= error <= 6; buffer length in 0..M with bytes in 0..255; an open write side
+    implies no error; an error means write side closed, empty buffer, EOF false. EOF and an empty buffer are not
+    made equivalent."""
+    return z3.And(p.error >= 0, p.error <= 6, p.buf.n >= 0, p.buf.n <= MAX_LEN, u8_dom(p.buf),
+                  z3.Implies(p.write_open, p.error == 0),
+                  z3.Implies(p.error != 0, z3.And(z3.Not(p.write_open), p.buf.n == 0, z3.Not(p.eof))))
+
+
+def _wf_listener(l):
+    """G10 net A1 (G10_NET_SPEC 4.2): 0 <= error <= 2; ok implies 1 <= port <= 65535; failed implies port == 0."""
+    return z3.And(l.error >= 0, l.error <= 2,
+                  z3.Implies(l.error == 0, z3.And(l.port >= 1, l.port <= 65535)),
+                  z3.Implies(l.error != 0, l.port == 0))
+
+
+def _net_keep_buf(r, p):
+    """the public buffer snapshot (length, byte map) and EOF of r equal those of p"""
+    return z3.And(r.buf.n == p.buf.n, r.buf.a == p.buf.a, r.eof == p.eof)
+
+
 _COLL = ("vec", "hashmap", "string", "file")
 _STRING = Type("string")
+# G10 net A1: the observer with an index domain (net_byte), checked like the File byte observer
+_NET_DOM = ("net_byte",)
 # G10 proc A1: observers with a stream (and index) domain, checked like the File byte observer
 _PROC_DOM = ("proc_eof", "proc_size", "proc_byte")
 
@@ -747,6 +792,10 @@ def _wf_of(m, ty, v):
         return z3.And(v.buf.n >= 0, u8_dom(v.buf))
     if ty.owner is None and ty.name == "process":       # G10 proc A1 (4.2)
         return _wf_proc(v)
+    if ty.owner is None and ty.name == "socket":        # G10 net A1 (4.2)
+        return _wf_socket(v)
+    if ty.owner is None and ty.name == "listener":      # G10 net A1 (4.2)
+        return _wf_listener(v)
     if ty.owner is None and ty.name == "process_args":  # G10 proc A1 (4.3): 0 <= argc <= M
         return z3.And(v.argc >= 0, v.argc <= MAX_LEN)
     if ty.owner is None and ty.name in _COLL:     # G6 A1: 0 <= n <= MAX_LEN (and the u8 domain of a String)
@@ -969,6 +1018,11 @@ class FnVerifier:
                            z3.Bool(n + ".stderr_eof"), out, err)
         if ty.owner is None and ty.name == "process_args":  # G10 proc A1 (4.3)
             return PArgs(z3.Int(n + ".argc"))
+        if ty.owner is None and ty.name == "socket":        # G10 net A1 (4.1): the public state record
+            buf = mk_arr(z3.Array(n + ".buf", z3.IntSort(), z3.IntSort()), z3.Int(n + ".buf.len"), base, U8)
+            return Socket(z3.Int(n + ".error"), z3.Bool(n + ".write_open"), z3.Bool(n + ".eof"), buf)
+        if ty.owner is None and ty.name == "listener":      # G10 net A1 (4.1)
+            return Listener(z3.Int(n + ".error"), z3.Int(n + ".port"))
         if ty.owner is None and ty.name in _COLL:   # G6 A1: Vec = [T] array, String = u8 array, HashMap = (d, a, n)
             if ty.name == "file":
                 buf = mk_arr(z3.Array(n, z3.IntSort(), z3.IntSort()), z3.Int(n + ".size"), base, U8)
@@ -1161,6 +1215,15 @@ class FnVerifier:
                                  "stderr_size": m.eval(v.err.n, model_completion=True).as_long()}
                 elif isinstance(v, PArgs):
                     out[name] = {"argc": m.eval(v.argc, model_completion=True).as_long()}
+                elif isinstance(v, Socket):      # G10 net A1: the public state; ok is error == 0
+                    err = m.eval(v.error, model_completion=True).as_long()
+                    out[name] = {"ok": err == 0, "error": err,
+                                 "write_open": z3.is_true(m.eval(v.write_open, model_completion=True)),
+                                 "eof": z3.is_true(m.eval(v.eof, model_completion=True)),
+                                 "size": m.eval(v.buf.n, model_completion=True).as_long()}
+                elif isinstance(v, Listener):
+                    err = m.eval(v.error, model_completion=True).as_long()
+                    out[name] = {"ok": err == 0, "error": err, "port": m.eval(v.port, model_completion=True).as_long()}
                 elif isinstance(v, Arr):
                     n = m.eval(v.n, model_completion=True).as_long()
                     if v.elem == BOOL:   # G2 A5: bool elements print as true/false
@@ -1488,6 +1551,10 @@ class FnVerifier:
                 if e.name == "proc_byte":
                     i = s.ev(e.args[2], st, g, False, env)
                     parts.append(z3.And(i >= 0, i < _proc_size(pv, sm)))
+            if wo and e.name in _NET_DOM:       # G10 net A1 (4.9): net_byte needs a valid index
+                sv = s.ev(e.args[0], st, g, False, env)
+                i = s.ev(e.args[1], st, g, False, env)
+                parts.append(z3.And(i >= 0, i < sv.buf.n))
             if wo and e.name == "load_be":      # P2 batch 4: the word lies inside the array
                 arr = s.ev(e.args[0], st, g, False, env)
                 i = s.ev(e.args[1], st, g, False, env)
@@ -1925,6 +1992,8 @@ class FnVerifier:
 
         if n.startswith("proc_"):
             return s.proc_call(n, e, args, st, g, code, rty)
+        if n.startswith("net_"):
+            return s.net_call(n, e, args, st, g, code, rty)
         if n in FILE_OBSERVERS:
             f = args[0]
             if n == "file_size":
@@ -2088,6 +2157,104 @@ class FnVerifier:
             raise Exception("catalog: " + n)
         return res
 
+    def net_call(s, n, e, args, st, g, code, rty):
+        """G10 net A1 (G10_NET_SPEC 2.3, 2.4, 4): the catalog contracts of the net operations. The requires of an
+        operation are call_requires obligations in order (code only); an effect operation then gets a fresh result with
+        its well-formedness and the ensures facts below. The observers and net_bytes are exact terms. Parameter
+        observers in the ensures denote the values at call entry (the actuals in args). Two identical connects or
+        accepts are never equated: every effect result is a fresh symbol. net_accept borrows its listener: the
+        listener value is not touched."""
+        def need(ob):
+            if code:
+                s.prove(st, g, ob, e, "call_requires", "precondition of %s (catalog)" % n)
+
+        # observers: field reads and array selects
+        if n == "net_ok":
+            return args[0].error == 0
+        if n == "net_error":
+            return args[0].error
+        if n == "net_write_open":
+            return args[0].write_open
+        if n == "net_eof":
+            return args[0].eof
+        if n == "net_size":
+            return args[0].buf.n
+        if n == "net_byte":
+            sv, i = args
+            need(z3.And(i >= 0, i < sv.buf.n))
+            r = z3.Select(sv.buf.a, i)
+            if code:
+                s.assume(st, g, z3.And(r >= 0, r <= 255))
+            return r
+        if n == "net_listener_ok":
+            return args[0].error == 0
+        if n == "net_listener_error":
+            return args[0].error
+        if n == "net_listener_port":
+            return args[0].port
+        if n == "net_bytes":        # 4.6: a new array with the snapshot's length and byte map
+            return mk_arr(args[0].buf.a, args[0].buf.n, n, U8)
+        # effect operations: requires -> fresh result -> well-formedness -> ensures
+        p = args[0]
+        if n == "net_listen":
+            need(z3.And(args[1] >= 0, args[1] <= 65535))
+        elif n == "net_accept":
+            need(p.error == 0)
+        elif n == "net_connect":
+            need(z3.And(args[1] >= 1, args[1] <= 65535))
+        elif n in ("net_write_str", "net_write_bytes", "net_shutdown_write"):
+            need(z3.And(p.error == 0, p.write_open))
+        elif n == "net_set_timeout":
+            need(p.error == 0)
+            need(z3.And(args[1] >= 0, args[1] <= 86400000))
+        elif n == "net_read":
+            need(p.error == 0)
+            need(z3.And(args[1] > 0, args[1] <= MAX_LEN))
+        elif n == "net_read_all":
+            need(p.error == 0)
+        res = s.fresh(n, rty)
+        s.assume(st, g, s.wf(rty, res))
+        if n in ("net_close", "net_listener_close"):    # 4.7: the existing Result<i64> encoding
+            o = s.model.res(None)
+            top = 6 if n == "net_close" else 2
+            s.assume(st, g, z3.Implies(p.error != 0, res == o.err(p.error)))
+            s.assume(st, g, z3.Implies(p.error == 0, res == o.ok(z3.IntVal(0))))
+            s.assume(st, g, z3.Implies(o.is_err(res), z3.And(o.eval(res) >= 1, o.eval(res) <= top)))
+            return res
+        ok = res.error == 0
+        if n == "net_listen":
+            s.assume(st, g, z3.Implies(z3.Not(ok), z3.Or(res.error == 1, res.error == 2)))
+        elif n == "net_accept":
+            s.assume(st, g, z3.Implies(ok, z3.And(res.write_open, res.buf.n == 0, z3.Not(res.eof))))
+            s.assume(st, g, z3.Implies(z3.Not(ok), z3.And(res.error == 5, res.buf.n == 0, z3.Not(res.eof))))
+        elif n == "net_connect":
+            s.assume(st, g, z3.Implies(ok, z3.And(res.write_open, res.buf.n == 0, z3.Not(res.eof))))
+            s.assume(st, g, z3.Implies(z3.Not(ok), z3.And(z3.Or(res.error == 1, res.error == 2), res.buf.n == 0,
+                                                          z3.Not(res.eof))))
+        elif n in ("net_write_str", "net_write_bytes"):
+            s.assume(st, g, z3.Implies(ok, z3.And(res.write_open == p.write_open, _net_keep_buf(res, p))))
+            s.assume(st, g, z3.Implies(z3.Not(ok), z3.Or(res.error == 4, res.error == 6)))
+        elif n == "net_shutdown_write":
+            s.assume(st, g, z3.Not(res.write_open))
+            s.assume(st, g, z3.Implies(ok, _net_keep_buf(res, p)))
+            s.assume(st, g, z3.Implies(z3.Not(ok), res.error == 4))
+        elif n == "net_set_timeout":
+            s.assume(st, g, z3.Implies(ok, z3.And(res.write_open == p.write_open, _net_keep_buf(res, p))))
+        elif n == "net_read":
+            mx = args[1]
+            sz = res.buf.n
+            s.assume(st, g, z3.Implies(ok, z3.And(sz >= 0, sz <= mx)))
+            s.assume(st, g, z3.Implies(ok, res.eof == (sz == 0)))
+            s.assume(st, g, z3.Implies(z3.And(ok, p.eof), sz == 0))
+            s.assume(st, g, z3.Implies(ok, res.write_open == p.write_open))
+            s.assume(st, g, z3.Implies(z3.Not(ok), z3.Or(res.error == 3, res.error == 6)))
+        elif n == "net_read_all":
+            s.assume(st, g, z3.Implies(ok, z3.And(res.eof, res.write_open == p.write_open)))
+            s.assume(st, g, z3.Implies(z3.Not(ok), z3.Or(res.error == 3, res.error == 6)))
+        else:
+            raise Exception("catalog: " + n)
+        return res
+
     def map_lookup(s, m, k, rty):
         """If(m.d[k], Some(m.a[k]), None) as an Option<V> of the call's own result type"""
         o = s.model.opt(rty)
@@ -2197,6 +2364,11 @@ class FnVerifier:
                 pty = PROCESS if isinstance(old, Process) else PROCESS_ARGS
                 nv = s.fresh(n, pty)
                 h.pc.append(s.wf(pty, nv))
+                h.env[n] = nv
+            elif isinstance(old, (Socket, Listener)):   # G10 net A1 (4.8): only well-formedness survives
+                nty = SOCKET if isinstance(old, Socket) else LISTENER
+                nv = s.fresh(n, nty)
+                h.pc.append(s.wf(nty, nv))
                 h.env[n] = nv
             elif isinstance(old, Arr):
                 # G6 A1: an element type without a legacy array type (a Vec<X>) is re-created as a Vec

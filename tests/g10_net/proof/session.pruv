@@ -1,0 +1,64 @@
+// G10 net A1 gate 1: write, shutdown and read after a confirmed connect or accept verify.
+fn session(host: str, port: i64, input: str) -> Result<i64> ! net, alloc
+  requires 1 <= port && port <= 65535
+{
+  let mut s: Socket = net_connect(host, port);
+  if !net_ok(s) {
+    return net_close(move s);
+  }
+
+  s = net_set_timeout(move s, 5000);
+  if !net_ok(s) {
+    return net_close(move s);
+  }
+
+  s = net_write_str(move s, input);
+  if !net_ok(s) {
+    return net_close(move s);
+  }
+
+  s = net_shutdown_write(move s);
+  if !net_ok(s) {
+    return net_close(move s);
+  }
+  assert !net_write_open(s);
+
+  s = net_read(move s, 4096);
+  if !net_ok(s) {
+    return net_close(move s);
+  }
+
+  s = net_read_all(move s);
+  if !net_ok(s) {
+    return net_close(move s);
+  }
+
+  let reply: [u8] = net_bytes(s);
+  return net_close(move s);
+}
+
+fn send_bytes(take input: Socket, data: [u8]) -> Socket ! net, alloc
+  requires net_ok(input) && net_write_open(input)
+{
+  let mut s: Socket = net_write_bytes(move input, data);
+  if net_ok(s) {
+    s = net_write_str(move s, "\n");
+  }
+  return move s;
+}
+
+fn accept_one(take input: Listener) -> Listener ! net, alloc
+  requires net_listener_ok(input)
+{
+  let l: Listener = move input;
+  let s: Socket = net_accept(l);
+  if !net_ok(s) {
+    assert net_error(s) == 5 && !net_write_open(s);
+    let failed: Result<i64> = net_close(move s);
+    return move l;
+  }
+  assert net_write_open(s) && net_size(s) == 0 && !net_eof(s);
+  let t: Socket = net_write_str(move s, "hi\n");
+  let done: Result<i64> = net_close(move t);
+  return move l;
+}

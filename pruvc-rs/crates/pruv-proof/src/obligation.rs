@@ -472,6 +472,25 @@ impl<'a> FnVerifier<'a> {
                     ("stderr_size".into(), Json::Num(m.eval(&p.err.n)?.numeral_string()?)),
                 ]))
             }
+            // G10 net A1 (verify.py cex): the public state; ok is error == 0
+            Val::Sock(s) => {
+                let err = m.eval(&s.error)?.numeral_string()?;
+                Some(Json::Obj(vec![
+                    ("ok".into(), Json::Bool(err == "0")),
+                    ("error".into(), Json::Num(err)),
+                    ("write_open".into(), Json::Bool(m.eval(&s.write_open)?.is_true())),
+                    ("eof".into(), Json::Bool(m.eval(&s.eof)?.is_true())),
+                    ("size".into(), Json::Num(m.eval(&s.buf.n)?.numeral_string()?)),
+                ]))
+            }
+            Val::Lis(l) => {
+                let err = m.eval(&l.error)?.numeral_string()?;
+                Some(Json::Obj(vec![
+                    ("ok".into(), Json::Bool(err == "0")),
+                    ("error".into(), Json::Num(err)),
+                    ("port".into(), Json::Num(m.eval(&l.port)?.numeral_string()?)),
+                ]))
+            }
             Val::PArgs(a) => Some(Json::Obj(vec![("argc".into(), Json::Num(m.eval(a)?.numeral_string()?))])),
             Val::Arr(a) => {
                 let n = m.eval(&a.n)?.numeral_string()?;

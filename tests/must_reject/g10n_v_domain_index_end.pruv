@@ -1,0 +1,5 @@
+fn bad(s: Socket) -> i64
+  requires net_byte(s, net_size(s)) == 0
+{
+  return 0;
+}

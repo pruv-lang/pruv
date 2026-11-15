@@ -1,0 +1,10 @@
+fn bad(host: str, port: i64) -> Result<i64> ! net, alloc
+  requires 1 <= port && port <= 65535
+{
+  let mut s: Socket = net_connect(host, port);
+  if !net_ok(s) {
+    return net_close(move s);
+  }
+  s = net_read(move s, 1099511627777);
+  return net_close(move s);
+}

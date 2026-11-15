@@ -1,0 +1,6 @@
+fn bad(host: str) -> Result<i64> ! net, alloc {
+  let l: Listener = net_listen(host, 0);
+  let s: Socket = net_accept(l);
+  let r: Result<i64> = net_close(move s);
+  return net_listener_close(move l);
+}

@@ -1,0 +1,64 @@
+// G10 net A1 gate 4: write, shutdown and timeout keep the buffer and EOF snapshot, and net_bytes is an exact copy.
+fn bytes_of(s: Socket) -> [u8] ! alloc
+  ensures len(result) == net_size(s)
+  ensures forall k in 0..len(result): result[k] == net_byte(s, k)
+{
+  return net_bytes(s);
+}
+
+fn snapshot_size(s: Socket) -> bool ! alloc {
+  let a: [u8] = net_bytes(s);
+  assert len(a) == net_size(s);
+  return len(a) >= 0;
+}
+
+fn write_keep(take input: Socket, text: str) -> Socket ! net, alloc
+  requires net_ok(input) && net_write_open(input)
+  ensures net_ok(result) ==> net_write_open(result) == net_write_open(input)
+  ensures net_ok(result) ==> net_size(result) == net_size(input) && net_eof(result) == net_eof(input)
+  ensures net_ok(result) ==> forall k in 0..net_size(input): net_byte(result, k) == net_byte(input, k)
+{
+  return net_write_str(move input, text);
+}
+
+fn write_bytes_keep(take input: Socket, data: [u8]) -> Socket ! net, alloc
+  requires net_ok(input) && net_write_open(input)
+  ensures net_ok(result) ==> net_size(result) == net_size(input) && net_eof(result) == net_eof(input)
+{
+  return net_write_bytes(move input, data);
+}
+
+fn shutdown_keep(take input: Socket) -> Socket ! net, alloc
+  requires net_ok(input) && net_write_open(input)
+  ensures !net_write_open(result)
+  ensures net_ok(result) ==> net_size(result) == net_size(input) && net_eof(result) == net_eof(input)
+  ensures net_ok(result) ==> forall k in 0..net_size(input): net_byte(result, k) == net_byte(input, k)
+{
+  return net_shutdown_write(move input);
+}
+
+fn timeout_keep(take input: Socket, ms: i64) -> Socket ! net, alloc
+  requires net_ok(input) && 0 <= ms && ms <= 86400000
+  ensures net_ok(result) ==> net_write_open(result) == net_write_open(input)
+  ensures net_ok(result) ==> net_size(result) == net_size(input) && net_eof(result) == net_eof(input)
+{
+  return net_set_timeout(move input, ms);
+}
+
+fn read_keep(take input: Socket) -> Socket ! net, alloc
+  requires net_ok(input)
+  ensures net_ok(result) ==> net_write_open(result) == net_write_open(input)
+{
+  return net_read(move input, 4096);
+}
+
+fn chunk_facts(take input: Socket) -> Socket ! net, alloc
+  requires net_ok(input)
+{
+  let s: Socket = net_read(move input, 64);
+  if net_ok(s) {
+    assert 0 <= net_size(s) && net_size(s) <= 64;
+    assert net_eof(s) == (net_size(s) == 0);
+  }
+  return move s;
+}

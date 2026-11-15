@@ -1,8 +1,12 @@
 // G10 net A0: an unnamed Socket / Listener result taken at once by a take argument.
-fn run(host: str, port: i64) -> Result<i64> ! net, alloc {
+fn run(host: str, port: i64) -> Result<i64> ! net, alloc
+  requires 1 <= port && port <= 65535
+{
   return net_close(net_connect(host, port));
 }
 
-fn run_listener(host: str, port: i64) -> Result<i64> ! net, alloc {
+fn run_listener(host: str, port: i64) -> Result<i64> ! net, alloc
+  requires 0 <= port && port <= 65535
+{
   return net_listener_close(net_listen(host, port));
 }

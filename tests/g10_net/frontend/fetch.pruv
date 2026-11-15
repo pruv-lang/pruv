@@ -1,5 +1,6 @@
 // G10 net A0: the fetch shape of G10_NET_SPEC 2.6; every failure path closes the socket.
 pub fn fetch(host: str, port: i64, request: [u8]) -> i64 ! net, alloc
+  requires 1 <= port && port <= 65535
 {
   let mut s: Socket = net_connect(host, port);
   if !net_ok(s) {

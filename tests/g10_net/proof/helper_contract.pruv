@@ -1,0 +1,46 @@
+// G10 net A1 (4.4, 4.8): a user function returning a Socket or Listener carries its ensures to the caller; a fresh
+// result of an unknown callee only has well-formedness. Observers are field reads and array selects (4.6).
+fn start(host: str, port: i64) -> Socket ! net, alloc
+  requires 1 <= port && port <= 65535
+  ensures net_ok(result) == net_write_open(result)
+  ensures net_size(result) == 0 && !net_eof(result)
+{
+  return net_connect(host, port);
+}
+
+fn run(host: str, port: i64) -> Result<i64> ! net, alloc
+  requires 1 <= port && port <= 65535
+{
+  let s: Socket = start(host, port);
+  assert !net_eof(s) && net_size(s) == 0;
+  assert net_ok(s) == net_write_open(s);
+  return net_close(move s);
+}
+
+fn healthy(s: Socket) -> bool
+  ensures result == (net_ok(s) && net_write_open(s))
+{
+  return net_ok(s) && net_write_open(s);
+}
+
+fn check_health(host: str, port: i64) -> Result<i64> ! net, alloc
+  requires 1 <= port && port <= 65535
+{
+  let s: Socket = start(host, port);
+  let h: bool = healthy(s);
+  assert h ==> net_ok(s);
+  return net_close(move s);
+}
+
+fn bound_listener(host: str) -> Listener ! net, alloc
+  ensures net_listener_ok(result) ==> 1 <= net_listener_port(result) && net_listener_port(result) <= 65535
+  ensures !net_listener_ok(result) ==> net_listener_port(result) == 0
+{
+  return net_listen(host, 0);
+}
+
+fn use_listener(host: str) -> Result<i64> ! net, alloc {
+  let l: Listener = bound_listener(host);
+  assert net_listener_ok(l) ==> net_listener_port(l) >= 1;
+  return net_listener_close(move l);
+}

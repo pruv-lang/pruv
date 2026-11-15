@@ -1,0 +1,11 @@
+fn bad(host: str, port: i64) -> bool ! net, alloc
+  requires 1 <= port && port <= 65535
+{
+  let a: Socket = net_connect(host, port);
+  let b: Socket = net_connect(host, port);
+  let same: bool = net_ok(a) == net_ok(b);
+  assert same;
+  let r1: Result<i64> = net_close(move a);
+  let r2: Result<i64> = net_close(move b);
+  return same;
+}

@@ -1,0 +1,16 @@
+fn bad(take input: Socket) -> Socket ! net, alloc
+  requires net_ok(input)
+{
+  let mut s: Socket = move input;
+  let mut open_flag: i64 = 1;
+  while open_flag > 0 && net_ok(s)
+    invariant 0 <= open_flag && open_flag <= 1
+    decreases open_flag
+  {
+    s = net_read(move s, 4096);
+    if net_ok(s) && net_eof(s) {
+      open_flag = 0;
+    }
+  }
+  return move s;
+}

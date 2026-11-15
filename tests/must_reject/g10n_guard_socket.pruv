@@ -1,5 +1,8 @@
-// G10 net A0 staging guard: a correct Socket program stops at codegen/unsupported_type until A2 / A3.
-fn run(host: str, port: i64) -> i64 ! net, alloc {
+// G10 net A0 staging guard: a correct Socket program stops at codegen/unsupported_type until A2 / A3. Since A1 the
+// program is verified first, so it states the catalog requires of net_connect.
+fn run(host: str, port: i64) -> i64 ! net, alloc
+  requires 1 <= port && port <= 65535
+{
   let s: Socket = net_connect(host, port);
   let r: Result<i64> = net_close(move s);
   return 0;

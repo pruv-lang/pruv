@@ -1,0 +1,4 @@
+fn bad(host: str) -> Result<i64> ! net, alloc {
+  let l: Listener = net_listen(host, 65536);
+  return net_listener_close(move l);
+}

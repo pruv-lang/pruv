@@ -1,0 +1,29 @@
+// G10 net A1 gate 5: read_all gives EOF true; EOF true and an empty buffer are not equated, so a non-empty final
+// buffer is consistent (the claim that the buffer is empty is rejected in g10n_v_eof_empty).
+fn drain(take input: Socket) -> Socket ! net, alloc
+  requires net_ok(input)
+{
+  let s: Socket = net_read_all(move input);
+  if net_ok(s) {
+    assert net_eof(s);
+    assert 0 <= net_size(s);
+  }
+  return move s;
+}
+
+fn drain_after_shutdown(take input: Socket) -> Socket ! net, alloc
+  requires net_ok(input) && net_write_open(input)
+{
+  let mut s: Socket = net_shutdown_write(move input);
+  if net_ok(s) {
+    s = net_read_all(move s);
+  }
+  return move s;
+}
+
+fn eof_consistent(take input: Socket) -> Socket ! net, alloc
+  requires net_ok(input)
+  ensures net_ok(result) ==> net_eof(result) && net_write_open(result) == net_write_open(input)
+{
+  return net_read_all(move input);
+}

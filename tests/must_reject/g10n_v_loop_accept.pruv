@@ -1,0 +1,18 @@
+fn bad(take input: Listener) -> Listener ! net, alloc
+  requires net_listener_ok(input)
+{
+  let mut l: Listener = move input;
+  let mut waiting: i64 = 1;
+  while waiting > 0 && net_listener_ok(l)
+    invariant 0 <= waiting && waiting <= 1
+    invariant net_listener_ok(l)
+    decreases waiting
+  {
+    let s: Socket = net_accept(l);
+    if net_ok(s) {
+      waiting = 0;
+    }
+    let r: Result<i64> = net_close(move s);
+  }
+  return move l;
+}

@@ -1,0 +1,5 @@
+fn bad(take l: Listener) -> i64 ! net, alloc {
+  let r: Result<i64> = net_listener_close(move l);
+  assert is_ok(r);
+  return 0;
+}

@@ -226,6 +226,11 @@ fn is_proc_dom(n: &str) -> bool {
     matches!(n, "proc_eof" | "proc_size" | "proc_byte")
 }
 
+/// G10 net A1 (verify.py `_NET_DOM`): the Socket observer with an index domain.
+fn is_net_dom(n: &str) -> bool {
+    n == "net_byte"
+}
+
 /// verify.py `_partial_here` (line 86).
 /// P2 batch 4: the integer literal width argument of load_be / store_be (the checker guarantees 1..=8).
 fn lit_width(e: &Expr) -> i64 {
@@ -244,6 +249,7 @@ fn partial_here(e: &Expr, kind: PKind) -> bool {
         Expr::Binary(b) => b.op == "/" || b.op == "%",
         Expr::Call(c) => {
             is_tag_fn(&c.name) || c.name == "file_byte" || is_bit_z3(&c.name) || c.name == "load_be" || is_proc_dom(&c.name)
+                || is_net_dom(&c.name)
         }
         Expr::Quant(q) => q.kind == "max" || q.kind == "min",
         _ => false,
@@ -510,12 +516,33 @@ pub struct ProcV {
     pub err: Arr,
 }
 
+/// G10 net A1 (verify.py `Socket`, G10_NET_SPEC 4.1): the public state of a Socket only. `buf` is the public buffer as a
+/// U8 array (length, byte map). The descriptor, peer, address and kernel buffers are not modeled.
+#[derive(Clone)]
+pub struct SockV {
+    pub error: Ast,
+    pub write_open: Ast,
+    pub eof: Ast,
+    pub buf: Arr,
+}
+
+/// G10 net A1 (verify.py `Listener`, G10_NET_SPEC 4.1): `{error: Int, port: Int}`.
+#[derive(Clone)]
+pub struct LisV {
+    pub error: Ast,
+    pub port: Ast,
+}
+
 /// Environment value. verify.py distinguishes Int/Bool/Datatype by the z3 expression's sort, but here they are carried as tags.
 #[derive(Clone)]
 pub enum Val {
     File(FileV),
     /// G10 proc A1: a Process record.
     Proc(ProcV),
+    /// G10 net A1: a Socket record.
+    Sock(SockV),
+    /// G10 net A1: a Listener record.
+    Lis(LisV),
     /// G10 proc A1: a ProcessArgs value is its argument count only.
     PArgs(Ast),
     Int(Ast),
@@ -533,7 +560,9 @@ impl Val {
     pub fn ast(&self) -> &Ast {
         match self {
             Val::Int(a) | Val::Bool(a) | Val::Dt(a, _) => a,
-            Val::Arr(_) | Val::Map(_) | Val::File(_) | Val::Proc(_) | Val::PArgs(_) | Val::Unit => panic!("value has no single ast"),
+            Val::Arr(_) | Val::Map(_) | Val::File(_) | Val::Proc(_) | Val::Sock(_) | Val::Lis(_) | Val::PArgs(_) | Val::Unit => {
+                panic!("value has no single ast")
+            }
         }
     }
     pub fn arr(&self) -> &Arr {
@@ -548,6 +577,8 @@ impl Val {
             Val::Arr(_) => Err("expected a z3 value, got an array".to_string()),
             Val::File(_) => Err("expected a z3 value, got a file".to_string()),
             Val::Proc(_) => Err("expected a z3 value, got a process".to_string()),
+            Val::Sock(_) => Err("expected a z3 value, got a socket".to_string()),
+            Val::Lis(_) => Err("expected a z3 value, got a listener".to_string()),
             Val::PArgs(_) => Err("expected a z3 value, got process args".to_string()),
             Val::Map(_) => Err("expected a z3 value, got a map".to_string()),
             Val::Unit => Err("expected a z3 value, got None".to_string()),
@@ -555,6 +586,12 @@ impl Val {
     }
     pub fn try_proc(&self) -> R<&ProcV> {
         match self { Val::Proc(p) => Ok(p), _ => Err("expected a process".into()) }
+    }
+    pub fn try_sock(&self) -> R<&SockV> {
+        match self { Val::Sock(p) => Ok(p), _ => Err("expected a socket".into()) }
+    }
+    pub fn try_lis(&self) -> R<&LisV> {
+        match self { Val::Lis(p) => Ok(p), _ => Err("expected a listener".into()) }
     }
     pub fn try_pargs(&self) -> R<&Ast> {
         match self { Val::PArgs(a) => Ok(a), _ => Err("expected process args".into()) }
@@ -885,6 +922,18 @@ impl<'a> FnVerifier<'a> {
         if *ty == Ty::User("process_args".into()) {
             return Ok(Val::PArgs(z.int_const(&format!("{}.argc", n))));
         }
+        // G10 net A1 (4.1): the public state records, same constant names as verify.py fresh
+        if *ty == Ty::User("socket".into()) {
+            let buf = Arr::new(z.constant(&format!("{}.buf", n), &z.array_sort(&z.int_sort(), &z.int_sort())),
+                z.int_const(&format!("{}.buf.len", n)), base.into(), Elem::U8);
+            return Ok(Val::Sock(SockV { error: z.int_const(&format!("{}.error", n)),
+                write_open: z.bool_const(&format!("{}.write_open", n)),
+                eof: z.bool_const(&format!("{}.eof", n)), buf }));
+        }
+        if *ty == Ty::User("listener".into()) {
+            return Ok(Val::Lis(LisV { error: z.int_const(&format!("{}.error", n)),
+                port: z.int_const(&format!("{}.port", n)) }));
+        }
         // G6 A1: Vec = [T] array, String = u8 array, HashMap = (d, a, n). Python checks this after the legacy array
         // cases, but a collection type is never one of them, so the order is not observable.
         if let Some(c) = ty.coll() {
@@ -1007,6 +1056,33 @@ impl<'a> FnVerifier<'a> {
                 p.stdout_eof.not(), p.stderr_eof.not(),
             ])),
         ])
+    }
+
+    /// G10 net A1 (verify.py `_wf_socket`, 4.2): 0 <= error <= 6; buffer length in 0..M with bytes in 0..255; an open write
+    /// side implies no error; an error means write side closed, empty buffer, EOF false.
+    fn wf_sock(&self, p: &SockV) -> Ast {
+        let z = &self.z;
+        z.and(&[
+            p.error.ge_i(0), p.error.le_i(6),
+            p.buf.n.ge_i(0), p.buf.n.le_i(MAX_LEN), self.u8_dom(&p.buf),
+            p.write_open.implies(&p.error.raw_eq(&z.int(0))),
+            p.error.ne_i(0).implies(&z.and(&[p.write_open.not(), p.buf.n.raw_eq(&z.int(0)), p.eof.not()])),
+        ])
+    }
+
+    /// G10 net A1 (verify.py `_wf_listener`, 4.2): 0 <= error <= 2; ok implies 1 <= port <= 65535; failed implies port == 0.
+    fn wf_lis(&self, l: &LisV) -> Ast {
+        let z = &self.z;
+        z.and(&[
+            l.error.ge_i(0), l.error.le_i(2),
+            l.error.raw_eq(&z.int(0)).implies(&z.and(&[l.port.ge_i(1), l.port.le_i(65535)])),
+            l.error.ne_i(0).implies(&l.port.raw_eq(&z.int(0))),
+        ])
+    }
+
+    /// verify.py `_net_keep_buf`: the public buffer snapshot (length, byte map) and EOF of r equal those of p
+    fn net_keep_buf(&self, r: &SockV, p: &SockV) -> Ast {
+        self.z.and(&[r.buf.n.eq(&p.buf.n), r.buf.a.eq(&p.buf.a), r.eof.eq(&p.eof)])
     }
 
     /// G10 proc A1 (4.3): 0 <= argc <= M
@@ -1149,6 +1225,8 @@ impl<'a> FnVerifier<'a> {
     fn wf_of_val(&self, ty: &Ty, v: &Val) -> R<Option<Ast>> {
         if let Val::File(f) = v { return Ok(Some(self.wf_file(f))); }
         if let Val::Proc(p) = v { return Ok(Some(self.wf_proc(p))); }
+        if let Val::Sock(p) = v { return Ok(Some(self.wf_sock(p))); }
+        if let Val::Lis(l) = v { return Ok(Some(self.wf_lis(l))); }
         if let Val::PArgs(a) = v { return Ok(Some(self.wf_pargs(a))); }
         if let Val::Arr(a) = v {
             if Model::is_buf(ty) {
@@ -1288,6 +1366,8 @@ impl<'a> FnVerifier<'a> {
                 Val::Arr(a) => pc.push(self.z.and(&[a.n.ge_i(0), a.n.le_i(MAX_LEN)])),
                 Val::File(f) => pc.push(self.wf_file(f)),
                 Val::Proc(p) => pc.push(self.wf_proc(p)),
+                Val::Sock(p) => pc.push(self.wf_sock(p)),
+                Val::Lis(l) => pc.push(self.wf_lis(l)),
                 Val::PArgs(a) => pc.push(self.wf_pargs(a)),
                 Val::Map(m) => pc.push(self.z.and(&[m.n.ge_i(0), m.n.le_i(MAX_LEN)])),
                 Val::Unit => {}
@@ -1418,6 +1498,17 @@ impl<'a> FnVerifier<'a> {
                 Val::Proc(_) => {
                     let nv = self.try_fresh(n, &Ty::User("process".into()))?;
                     h.pc.push(self.wf_proc(nv.try_proc()?));
+                    h.env.set(n, nv);
+                }
+                // G10 net A1 (4.8): only well-formedness survives a havoc
+                Val::Sock(_) => {
+                    let nv = self.try_fresh(n, &Ty::User("socket".into()))?;
+                    h.pc.push(self.wf_sock(nv.try_sock()?));
+                    h.env.set(n, nv);
+                }
+                Val::Lis(_) => {
+                    let nv = self.try_fresh(n, &Ty::User("listener".into()))?;
+                    h.pc.push(self.wf_lis(nv.try_lis()?));
                     h.env.set(n, nv);
                 }
                 Val::PArgs(_) => {
@@ -2333,6 +2424,10 @@ impl<'a> FnVerifier<'a> {
             self.assume(st, g, self.wf_file(f));
         } else if let Val::Proc(p) = &res {
             self.assume(st, g, self.wf_proc(p));
+        } else if let Val::Sock(p) = &res {
+            self.assume(st, g, self.wf_sock(p));
+        } else if let Val::Lis(l) = &res {
+            self.assume(st, g, self.wf_lis(l));
         } else if let Val::PArgs(a) = &res {
             self.assume(st, g, self.wf_pargs(a));
         } else if let Val::Map(rm) = &res {
@@ -2752,6 +2847,159 @@ impl<'a> FnVerifier<'a> {
         Ok(res)
     }
 
+    /// verify.py `FnVerifier.net_call` (G10_NET_SPEC 2.3, 2.4, 4): the catalog contracts of the net operations. The requires of
+    /// an operation are call_requires obligations in order (code only); an effect operation then gets a fresh result with its
+    /// well-formedness and the ensures facts. The observers and net_bytes are exact terms. Parameter observers in the ensures
+    /// denote the values at call entry (the actuals in args). Every effect result is a fresh symbol: two identical connects or
+    /// accepts are never equated. net_accept borrows its listener: the listener value is not touched.
+    #[allow(clippy::too_many_arguments)]
+    fn net_call(&mut self, e: &Expr, n: &str, args: &[Val], st: &mut State, g: &[Ast], code: bool, rty: Option<Ty>) -> R<Val> {
+        let z = self.z.clone();
+        let what = format!("precondition of {} (catalog)", n);
+        let arg = |i: usize| -> R<&Val> { args.get(i).ok_or_else(|| "not enough values to unpack".to_string()) };
+        // observers: field reads and array selects
+        match n {
+            "net_ok" => return Ok(Val::Bool(arg(0)?.try_sock()?.error.raw_eq(&z.int(0)))),
+            "net_error" => return Ok(Val::Int(arg(0)?.try_sock()?.error.clone())),
+            "net_write_open" => return Ok(Val::Bool(arg(0)?.try_sock()?.write_open.clone())),
+            "net_eof" => return Ok(Val::Bool(arg(0)?.try_sock()?.eof.clone())),
+            "net_size" => return Ok(Val::Int(arg(0)?.try_sock()?.buf.n.clone())),
+            "net_byte" => {
+                let sv = arg(0)?.try_sock()?.clone();
+                let i = arg(1)?.try_ast()?.clone();
+                self.proc_need(st, g, e, code, &what, z.and(&[i.ge_i(0), i.lt(&sv.buf.n)]));
+                let r = sv.buf.a.select(&i);
+                if code {
+                    self.assume(st, g, z.and(&[r.ge_i(0), r.le_i(255)]));
+                }
+                return Ok(Val::Int(r));
+            }
+            "net_listener_ok" => return Ok(Val::Bool(arg(0)?.try_lis()?.error.raw_eq(&z.int(0)))),
+            "net_listener_error" => return Ok(Val::Int(arg(0)?.try_lis()?.error.clone())),
+            "net_listener_port" => return Ok(Val::Int(arg(0)?.try_lis()?.port.clone())),
+            "net_bytes" => {
+                // 4.6: a new array with the snapshot's length and byte map
+                let sv = arg(0)?.try_sock()?.clone();
+                return Ok(Val::Arr(Arr::new(sv.buf.a.clone(), sv.buf.n.clone(), n.to_string(), Elem::U8)));
+            }
+            _ => {}
+        }
+        // effect operations: requires -> fresh result -> well-formedness -> ensures
+        match n {
+            "net_listen" => {
+                let port = arg(1)?.try_ast()?.clone();
+                self.proc_need(st, g, e, code, &what, z.and(&[port.ge_i(0), port.le_i(65535)]));
+            }
+            "net_accept" => {
+                let l = arg(0)?.try_lis()?.clone();
+                self.proc_need(st, g, e, code, &what, l.error.raw_eq(&z.int(0)));
+            }
+            "net_connect" => {
+                let port = arg(1)?.try_ast()?.clone();
+                self.proc_need(st, g, e, code, &what, z.and(&[port.ge_i(1), port.le_i(65535)]));
+            }
+            "net_write_str" | "net_write_bytes" | "net_shutdown_write" => {
+                let p = arg(0)?.try_sock()?.clone();
+                self.proc_need(st, g, e, code, &what, z.and(&[p.error.raw_eq(&z.int(0)), p.write_open.clone()]));
+            }
+            "net_set_timeout" => {
+                let p = arg(0)?.try_sock()?.clone();
+                self.proc_need(st, g, e, code, &what, p.error.raw_eq(&z.int(0)));
+                let ms = arg(1)?.try_ast()?.clone();
+                self.proc_need(st, g, e, code, &what, z.and(&[ms.ge_i(0), ms.le_i(86400000)]));
+            }
+            "net_read" => {
+                let p = arg(0)?.try_sock()?.clone();
+                self.proc_need(st, g, e, code, &what, p.error.raw_eq(&z.int(0)));
+                let mx = arg(1)?.try_ast()?.clone();
+                self.proc_need(st, g, e, code, &what, z.and(&[mx.gt_i(0), mx.le_i(MAX_LEN)]));
+            }
+            "net_read_all" => {
+                let p = arg(0)?.try_sock()?.clone();
+                self.proc_need(st, g, e, code, &what, p.error.raw_eq(&z.int(0)));
+            }
+            _ => {}
+        }
+        let rt = rty.ok_or_else(|| "fresh: None".to_string())?;
+        let res = self.try_fresh(n, &rt)?;
+        if let Some(w) = self.wf_of_val(&rt, &res)? {
+            self.assume(st, g, w);
+        }
+        if n == "net_close" || n == "net_listener_close" {
+            // 4.7: the existing Result<i64> encoding; Ok(0) exactly when there is no entry error
+            let perr = if n == "net_close" { arg(0)?.try_sock()?.error.clone() } else { arg(0)?.try_lis()?.error.clone() };
+            let top = if n == "net_close" { 6 } else { 2 };
+            let r = res.try_ast()?.clone();
+            let f1 = perr.ne_i(0).implies(&r.eq(&self.prelude.err(&perr)));
+            let f2 = perr.raw_eq(&z.int(0)).implies(&r.eq(&self.prelude.ok(&z.int(0))));
+            let f3 = self.prelude.is_err(&r).implies(&z.and(&[self.prelude.eval(&r).ge_i(1), self.prelude.eval(&r).le_i(top)]));
+            self.assume(st, g, f1);
+            self.assume(st, g, f2);
+            self.assume(st, g, f3);
+            return Ok(res);
+        }
+        let mut facts: Vec<Ast> = Vec::new();
+        if n == "net_listen" {
+            let rl = res.try_lis()?.clone();
+            let ok = rl.error.raw_eq(&z.int(0));
+            facts.push(ok.not().implies(&z.or(&[rl.error.raw_eq(&z.int(1)), rl.error.raw_eq(&z.int(2))])));
+        } else {
+            let rp = res.try_sock()?.clone();
+            let ok = rp.error.raw_eq(&z.int(0));
+            let fail = ok.not();
+            let empty_fresh = || z.and(&[rp.write_open.clone(), rp.buf.n.raw_eq(&z.int(0)), rp.eof.not()]);
+            match n {
+                "net_accept" => {
+                    facts.push(ok.implies(&empty_fresh()));
+                    facts.push(fail.implies(&z.and(&[rp.error.raw_eq(&z.int(5)), rp.buf.n.raw_eq(&z.int(0)), rp.eof.not()])));
+                }
+                "net_connect" => {
+                    facts.push(ok.implies(&empty_fresh()));
+                    facts.push(fail.implies(&z.and(&[
+                        z.or(&[rp.error.raw_eq(&z.int(1)), rp.error.raw_eq(&z.int(2))]),
+                        rp.buf.n.raw_eq(&z.int(0)),
+                        rp.eof.not(),
+                    ])));
+                }
+                "net_write_str" | "net_write_bytes" => {
+                    let p = arg(0)?.try_sock()?.clone();
+                    facts.push(ok.implies(&z.and(&[rp.write_open.eq(&p.write_open), self.net_keep_buf(&rp, &p)])));
+                    facts.push(fail.implies(&z.or(&[rp.error.raw_eq(&z.int(4)), rp.error.raw_eq(&z.int(6))])));
+                }
+                "net_shutdown_write" => {
+                    let p = arg(0)?.try_sock()?.clone();
+                    facts.push(rp.write_open.not());
+                    facts.push(ok.implies(&self.net_keep_buf(&rp, &p)));
+                    facts.push(fail.implies(&rp.error.raw_eq(&z.int(4))));
+                }
+                "net_set_timeout" => {
+                    let p = arg(0)?.try_sock()?.clone();
+                    facts.push(ok.implies(&z.and(&[rp.write_open.eq(&p.write_open), self.net_keep_buf(&rp, &p)])));
+                }
+                "net_read" => {
+                    let p = arg(0)?.try_sock()?.clone();
+                    let mx = arg(1)?.try_ast()?.clone();
+                    let sz = rp.buf.n.clone();
+                    facts.push(ok.implies(&z.and(&[sz.ge_i(0), sz.le(&mx)])));
+                    facts.push(ok.implies(&rp.eof.eq(&sz.raw_eq(&z.int(0)))));
+                    facts.push(z.and(&[ok.clone(), p.eof.clone()]).implies(&sz.raw_eq(&z.int(0))));
+                    facts.push(ok.implies(&rp.write_open.eq(&p.write_open)));
+                    facts.push(fail.implies(&z.or(&[rp.error.raw_eq(&z.int(3)), rp.error.raw_eq(&z.int(6))])));
+                }
+                "net_read_all" => {
+                    let p = arg(0)?.try_sock()?.clone();
+                    facts.push(ok.implies(&z.and(&[rp.eof.clone(), rp.write_open.eq(&p.write_open)])));
+                    facts.push(fail.implies(&z.or(&[rp.error.raw_eq(&z.int(3)), rp.error.raw_eq(&z.int(6))])));
+                }
+                _ => return Err(format!("catalog: {}", n)),
+            }
+        }
+        for f in facts {
+            self.assume(st, g, f);
+        }
+        Ok(res)
+    }
+
     /// verify.py `catalog_call` (G6_SPEC 11.3): the standard catalog; every requires is a `call_requires` obligation
     /// (only in code), then an exact term is the result (a fresh symbol only for new_* and string_push_str).
     fn catalog_call(&mut self, e: &Expr, x: &ast::Call, args: &[Val], st: &mut State, g: &[Ast], code: bool) -> R<Val> {
@@ -2766,6 +3014,9 @@ impl<'a> FnVerifier<'a> {
         let what = format!("precondition of {} (catalog)", n);
         if n.starts_with("proc_") {
             return self.proc_call(e, n, args, st, g, code, rty);
+        }
+        if n.starts_with("net_") {
+            return self.net_call(e, n, args, st, g, code, rty);
         }
         if pruv_core::foreign::is_file_observer(n) {
             let f = argv(0)?.try_file()?;
@@ -2985,6 +3236,12 @@ impl<'a> FnVerifier<'a> {
                         let size = self.proc_size_t(pv.try_proc()?, &sm);
                         parts.push(Some(self.z.and(&[i.ge_i(0), i.lt(&size)])));
                     }
+                }
+                if wo && is_net_dom(&x.name) {
+                    // G10 net A1 (4.9): net_byte needs a valid index
+                    let sv = self.ev(&x.args[0], st, g, false, env)?;
+                    let i = self.ev_ast(&x.args[1], st, g, false, env)?;
+                    parts.push(Some(self.z.and(&[i.ge_i(0), i.lt(&sv.try_sock()?.buf.n)])));
                 }
                 if wo && x.name == "load_be" {
                     // P2 batch 4: the word lies inside the array
@@ -3544,6 +3801,8 @@ impl<'a> FnVerifier<'a> {
                 }
                 Val::File(f) => st.pc.push(self.wf_file(f)),
                 Val::Proc(p) => st.pc.push(self.wf_proc(p)),
+                Val::Sock(p) => st.pc.push(self.wf_sock(p)),
+                Val::Lis(l) => st.pc.push(self.wf_lis(l)),
                 Val::PArgs(a) => st.pc.push(self.wf_pargs(a)),
                 Val::Map(m) => st.pc.push(self.z.and(&[m.n.ge_i(0), m.n.le_i(MAX_LEN)])),
                 other => {
@@ -3585,6 +3844,8 @@ impl<'a> FnVerifier<'a> {
                 }
                 Val::File(f) => pc.push(self.wf_file(f)),
                 Val::Proc(p) => pc.push(self.wf_proc(p)),
+                Val::Sock(p) => pc.push(self.wf_sock(p)),
+                Val::Lis(l) => pc.push(self.wf_lis(l)),
                 Val::PArgs(a) => pc.push(self.wf_pargs(a)),
                 Val::Map(m) => pc.push(self.z.and(&[m.n.ge_i(0), m.n.le_i(MAX_LEN)])), // G6 A1
                 other => {

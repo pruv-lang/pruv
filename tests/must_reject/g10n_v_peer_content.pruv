@@ -1,0 +1,9 @@
+fn bad(take input: Socket) -> Socket ! net, alloc
+  requires net_ok(input)
+{
+  let s: Socket = net_read(move input, 16);
+  if net_ok(s) && net_size(s) > 0 {
+    assert net_byte(s, 0) == 65;
+  }
+  return move s;
+}

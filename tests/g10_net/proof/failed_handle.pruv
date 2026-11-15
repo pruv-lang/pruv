@@ -1,0 +1,45 @@
+// G10 net A1 gate 2: a failed handle is still owned; closing it verifies in every state.
+fn connect_or_stop(host: str, port: i64) -> Result<i64> ! net, alloc
+  requires 1 <= port && port <= 65535
+{
+  let s: Socket = net_connect(host, port);
+  if !net_ok(s) {
+    assert !net_write_open(s);
+    assert net_size(s) == 0 && !net_eof(s);
+    assert 1 <= net_error(s) && net_error(s) <= 2;
+    return net_close(move s);
+  }
+  assert net_write_open(s);
+  return net_close(move s);
+}
+
+fn listen_or_stop(host: str, port: i64) -> Result<i64> ! net, alloc
+  requires 0 <= port && port <= 65535
+{
+  let l: Listener = net_listen(host, port);
+  if !net_listener_ok(l) {
+    assert net_listener_port(l) == 0;
+    assert 1 <= net_listener_error(l) && net_listener_error(l) <= 2;
+    return net_listener_close(move l);
+  }
+  assert 1 <= net_listener_port(l) && net_listener_port(l) <= 65535;
+  return net_listener_close(move l);
+}
+
+fn accept_or_stop(l: Listener) -> Result<i64> ! net, alloc
+  requires net_listener_ok(l)
+{
+  let s: Socket = net_accept(l);
+  if !net_ok(s) {
+    assert net_error(s) == 5 && net_size(s) == 0 && !net_eof(s);
+  }
+  return net_close(move s);
+}
+
+fn close_any(take s: Socket) -> Result<i64> ! net, alloc {
+  return net_close(move s);
+}
+
+fn close_any_listener(take l: Listener) -> Result<i64> ! net, alloc {
+  return net_listener_close(move l);
+}

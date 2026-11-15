@@ -1,0 +1,14 @@
+fn bad(take input: Socket, rounds: i64) -> Socket ! net, alloc
+  requires net_ok(input) && 0 <= rounds && rounds <= 100
+{
+  let mut s: Socket = move input;
+  let mut i: i64 = 0;
+  while i < rounds
+    invariant 0 <= i && i <= rounds
+    decreases rounds - i
+  {
+    s = net_read(move s, 4096);
+    i = i + 1;
+  }
+  return move s;
+}

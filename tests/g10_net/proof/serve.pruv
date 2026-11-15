@@ -1,0 +1,62 @@
+// G10 net A1 gate 10: a finite accept budget is a valid termination measure (a peer event is not, g10n_v_loop_peer).
+// net_accept borrows the listener, so the loop keeps net_listener_ok(l) as an invariant.
+fn serve(take input: Listener, rounds: i64) -> Listener ! net, alloc
+  requires net_listener_ok(input)
+  requires 0 <= rounds && rounds <= 1000000
+{
+  let mut l: Listener = move input;
+  let mut remaining: i64 = rounds;
+
+  while remaining > 0 && net_listener_ok(l)
+    invariant 0 <= remaining && remaining <= rounds
+    invariant net_listener_ok(l)
+    decreases remaining
+  {
+    let mut s: Socket = net_accept(l);
+    if net_ok(s) {
+      s = net_set_timeout(move s, 5000);
+      if net_ok(s) {
+        s = net_read(move s, 4096);
+      }
+      if net_ok(s) && net_write_open(s) {
+        s = net_write_str(move s, "ok\n");
+      }
+    }
+    let r: Result<i64> = net_close(move s);
+    remaining = remaining - 1;
+  }
+
+  return move l;
+}
+
+fn run_server(host: str, rounds: i64) -> Result<i64> ! net, alloc
+  requires 0 <= rounds && rounds <= 1000000
+{
+  let l: Listener = net_listen(host, 0);
+  if !net_listener_ok(l) {
+    return net_listener_close(move l);
+  }
+  let served: Listener = serve(move l, rounds);
+  return net_listener_close(move served);
+}
+
+fn read_window(take input: Socket, rounds: i64) -> Socket ! net, alloc
+  requires net_ok(input)
+  requires 0 <= rounds && rounds <= 1000000
+{
+  let mut s: Socket = move input;
+  let mut remaining: i64 = rounds;
+
+  while remaining > 0 && net_ok(s) && !net_eof(s)
+    invariant 0 <= remaining && remaining <= rounds
+    decreases remaining
+  {
+    s = net_read(move s, 4096);
+    if net_ok(s) {
+      let chunk: [u8] = net_bytes(s);
+    }
+    remaining = remaining - 1;
+  }
+
+  return move s;
+}

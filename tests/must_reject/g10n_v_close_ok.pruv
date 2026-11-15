@@ -1,0 +1,5 @@
+fn bad(take s: Socket) -> i64 ! net, alloc {
+  let r: Result<i64> = net_close(move s);
+  assert is_ok(r);
+  return 0;
+}
