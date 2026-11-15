@@ -1,0 +1,7 @@
+fn f(host: str, port: i64, flag: bool) -> i64 ! net, alloc {
+  let s: Socket = net_connect(host, port);
+  if flag {
+    let r: Result<i64> = net_close(move s);
+  }
+  return 0;
+}

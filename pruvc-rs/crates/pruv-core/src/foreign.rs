@@ -40,7 +40,7 @@ pub struct CatFn {
 }
 
 /// CATALOG_NAMES of foreign.py (insertion order).
-pub const CATALOG_NAMES: [&str; 41] = [
+pub const CATALOG_NAMES: [&str; 62] = [
     "vec_new",
     "vec_push",
     "vec_get",
@@ -80,6 +80,27 @@ pub const CATALOG_NAMES: [&str; 41] = [
     "proc_eof",
     "proc_size",
     "proc_byte",
+    "net_listen",
+    "net_accept",
+    "net_listener_close",
+    "net_connect",
+    "net_write_str",
+    "net_write_bytes",
+    "net_shutdown_write",
+    "net_set_timeout",
+    "net_read",
+    "net_read_all",
+    "net_bytes",
+    "net_close",
+    "net_ok",
+    "net_error",
+    "net_write_open",
+    "net_eof",
+    "net_size",
+    "net_byte",
+    "net_listener_ok",
+    "net_listener_error",
+    "net_listener_port",
     "map_lookup",
     "map_updated",
 ];
@@ -105,6 +126,28 @@ pub fn is_proc_observer(name: &str) -> bool {
 
 pub fn is_proc_op(name: &str) -> bool {
     name.starts_with("proc_") && CATALOG_NAMES.contains(&name)
+}
+
+/// NET_OBSERVERS of foreign.py (G10 net A0): net catalog reads allowed in contracts; every other net_* operation
+/// (effects, the allocating net_bytes) is type/foreign_contract there.
+pub const NET_OBSERVERS: [&str; 9] = [
+    "net_ok",
+    "net_error",
+    "net_write_open",
+    "net_eof",
+    "net_size",
+    "net_byte",
+    "net_listener_ok",
+    "net_listener_error",
+    "net_listener_port",
+];
+
+pub fn is_net_observer(name: &str) -> bool {
+    NET_OBSERVERS.contains(&name)
+}
+
+pub fn is_net_op(name: &str) -> bool {
+    name.starts_with("net_") && CATALOG_NAMES.contains(&name)
 }
 
 pub fn is_catalog(name: &str) -> bool {
@@ -143,6 +186,14 @@ fn process_args_t() -> GType {
     GType::new("process_args", Vec::new())
 }
 
+fn socket_t() -> GType {
+    GType::new("socket", Vec::new())
+}
+
+fn listener_t() -> GType {
+    GType::new("listener", Vec::new())
+}
+
 fn tp(name: &str, bound: Option<&str>) -> TParam {
     TParam { line: 0, col: 0, name: name.to_string(), bound: bound.map(|b| b.to_string()) }
 }
@@ -157,6 +208,7 @@ pub fn catalog_fn(name: &str) -> Option<CatFn> {
     let alloc = || vec!["alloc".to_string()];
     let fs = || vec!["fs".to_string()];
     let proc_alloc = || vec!["proc".to_string(), "alloc".to_string()];
+    let net_alloc = || vec!["net".to_string(), "alloc".to_string()];
     let tp_t = || vec![tp("T", None)];
     let tp_kv = || vec![tp("K", Some("Element")), tp("V", None)];
     let mut f = match name {
@@ -316,6 +368,85 @@ pub fn catalog_fn(name: &str) -> Option<CatFn> {
             effects: vec![],
             tparams: vec![],
         },
+        // G10 net A0 (docs/G10_NET_SPEC.md 2.3): signatures and effects only. The section 2.3 contracts are not
+        // installed yet (A1 encodes them in the verifier); a program that uses Socket / Listener stops at the
+        // staging guard (first_net_use).
+        "net_listen" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("host", GType::str(), false), p("port", GType::i64(), false)],
+            ret: listener_t(),
+            effects: net_alloc(),
+            tparams: vec![],
+        },
+        "net_accept" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("l", listener_t(), false)],
+            ret: socket_t(),
+            effects: net_alloc(),
+            tparams: vec![],
+        },
+        "net_listener_close" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("l", listener_t(), true)],
+            ret: GType::result(),
+            effects: net_alloc(),
+            tparams: vec![],
+        },
+        "net_connect" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("host", GType::str(), false), p("port", GType::i64(), false)],
+            ret: socket_t(),
+            effects: net_alloc(),
+            tparams: vec![],
+        },
+        "net_write_str" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("s", socket_t(), true), p("text", GType::str(), false)],
+            ret: socket_t(),
+            effects: net_alloc(),
+            tparams: vec![],
+        },
+        "net_write_bytes" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("s", socket_t(), true), p("data", GType::array_u8(), false)],
+            ret: socket_t(),
+            effects: net_alloc(),
+            tparams: vec![],
+        },
+        "net_shutdown_write" | "net_read_all" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("s", socket_t(), true)],
+            ret: socket_t(),
+            effects: net_alloc(),
+            tparams: vec![],
+        },
+        "net_set_timeout" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("s", socket_t(), true), p("ms", GType::i64(), false)],
+            ret: socket_t(),
+            effects: net_alloc(),
+            tparams: vec![],
+        },
+        "net_read" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("s", socket_t(), true), p("max", GType::i64(), false)],
+            ret: socket_t(),
+            effects: net_alloc(),
+            tparams: vec![],
+        },
+        "net_bytes" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("s", socket_t(), false)],
+            ret: GType::array_u8(),
+            effects: alloc(),
+            tparams: vec![],
+        },
+        "net_close" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("s", socket_t(), true)],
+            ret: GType::result(),
+            effects: net_alloc(),
+            tparams: vec![],
+        },
+        "net_ok" | "net_write_open" | "net_eof" => CatFn { requires: vec![], ensures: vec![], params: vec![p("s", socket_t(), false)], ret: GType::bool(), effects: vec![], tparams: vec![] },
+        "net_error" | "net_size" => CatFn { requires: vec![], ensures: vec![], params: vec![p("s", socket_t(), false)], ret: GType::i64(), effects: vec![], tparams: vec![] },
+        "net_byte" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("s", socket_t(), false), p("i", GType::i64(), false)],
+            ret: GType::i64(),
+            effects: vec![],
+            tparams: vec![],
+        },
+        "net_listener_ok" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", listener_t(), false)], ret: GType::bool(), effects: vec![], tparams: vec![] },
+        "net_listener_error" | "net_listener_port" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", listener_t(), false)], ret: GType::i64(), effects: vec![], tparams: vec![] },
         // contract-only observers
         "map_lookup" => CatFn { requires: vec![], ensures: vec![],
             params: vec![p("m", map_of(k(), v()), false), p("k", k(), false)],
@@ -609,33 +740,54 @@ struct Ownership<'a> {
     bor: HashSet<String>,
     /// name -> "move" | "borrow" of the outermost call being checked (shared by nested calls)
     track: Option<Track>,
-    /// G10 proc A0: names of Process bindings (must-consume); never File, String or ProcessArgs
-    proc: HashSet<String>,
-    /// name -> (line, col) of the Let that declared it (location of a scope-end proc_unconsumed)
+    /// G10 A0: must-consume bindings, name -> "Process" | "Socket" | "Listener"; never File, String or ProcessArgs
+    proc: HashMap<String, &'static str>,
+    /// name -> (line, col) of the Let that declared it (location of a scope-end proc_unconsumed / net_unconsumed)
     decl: HashMap<String, (i64, i64)>,
 }
 
 type Track = HashMap<String, &'static str>;
 
-/// G10 proc A0 (G10_PROC_SPEC 3.3 / 7.1): a Process duty is left at (line, col)
-fn proc_lost(line: i64, col: i64, msg: String) -> PruvError {
-    err(line, col, "proc_unconsumed", msg, "consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership")
+/// G10 net A0 (G10_NET_SPEC 3.3): "Process" / "Socket" / "Listener" for a must-consume handle type key, else None.
+fn must_kind(key: &str) -> Option<&'static str> {
+    match key {
+        "process" => Some("Process"),
+        "socket" => Some("Socket"),
+        "listener" => Some("Listener"),
+        _ => None,
+    }
+}
+
+/// G10 proc A0 / net A0 (G10_PROC_SPEC 3.3 / 7.1, G10_NET_SPEC 3.3 / 7.1): a must-consume duty is left at
+/// (line, col); the code follows the type of the handle that loses its duty
+fn handle_lost(kind: &str, line: i64, col: i64, msg: String) -> PruvError {
+    if kind == "Process" {
+        return err(line, col, "proc_unconsumed", msg, "consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership");
+    }
+    err(line, col, "net_unconsumed", msg, "consume it with net_close(move s) or net_listener_close(move l), or return / transfer ownership")
 }
 
 impl<'a> Ownership<'a> {
     fn run(&mut self, f: &Function) -> Res<()> {
         self.bor = f.params.iter().filter(|p| key_is_collection(&p.ty) && !p.take).map(|p| p.name.clone()).collect();
-        self.proc = f.params.iter().filter(|p| p.take && p.ty == "process").map(|p| p.name.clone()).collect();
+        self.proc = f
+            .params
+            .iter()
+            .filter(|p| p.take)
+            .filter_map(|p| must_kind(&p.ty).map(|k| (p.name.clone(), k)))
+            .collect();
         let mut st = St::default();
         for p in f.params.iter().filter(|p| p.take) {
             st.set(&p.name, V::Live);
         }
         let end = self.block(&f.body, st)?;
         if let Some(end) = &end {
-            // fallthrough: a live take Process parameter is a lost duty
+            // fallthrough: a live take must-consume parameter is a lost duty
             for (n, v) in end.iter() {
-                if self.proc.contains(n) && *v != V::Dead {
-                    return Err(proc_lost(f.line, f.col, format!("Process {} is not consumed before the end of the function", n)));
+                if let Some(kind) = self.proc.get(n) {
+                    if *v != V::Dead {
+                        return Err(handle_lost(kind, f.line, f.col, format!("{} {} is not consumed before the end of the function", kind, n)));
+                    }
                 }
             }
         }
@@ -654,9 +806,11 @@ impl<'a> Ownership<'a> {
         }
         if let Some(s) = cur.as_mut() {
             for n in &declared {
-                if self.proc.contains(n) && matches!(s.get(n), Some(V::Live) | Some(V::Maybe)) {
-                    let (l, c) = self.decl.get(n).copied().unwrap_or((0, 0));
-                    return Err(proc_lost(l, c, format!("Process {} is not consumed before the end of its scope", n)));
+                if let Some(kind) = self.proc.get(n) {
+                    if matches!(s.get(n), Some(V::Live) | Some(V::Maybe)) {
+                        let (l, c) = self.decl.get(n).copied().unwrap_or((0, 0));
+                        return Err(handle_lost(kind, l, c, format!("{} {} is not consumed before the end of its scope", kind, n)));
+                    }
                 }
                 s.pop(n);
             }
@@ -671,8 +825,8 @@ impl<'a> Ownership<'a> {
                 if key_is_collection(&l.ty) {
                     st.set(&l.name, V::Live);
                     declared.push(l.name.clone());
-                    if l.ty == "process" {
-                        self.proc.insert(l.name.clone());
+                    if let Some(kind) = must_kind(&l.ty) {
+                        self.proc.insert(l.name.clone(), kind);
                         self.decl.insert(l.name.clone(), (l.line, l.col));
                     } else {
                         self.proc.remove(&l.name);
@@ -682,8 +836,10 @@ impl<'a> Ownership<'a> {
             }
             Stmt::Assign(a) => {
                 self.consume(&a.value, &mut st, "assign")?; // the right-hand side is consumed first
-                if self.proc.contains(&a.name) && matches!(st.get(&a.name), Some(V::Live) | Some(V::Maybe)) {
-                    return Err(proc_lost(a.line, a.col, format!("Process {} is overwritten while it is not consumed", a.name)));
+                if let Some(kind) = self.proc.get(&a.name) {
+                    if matches!(st.get(&a.name), Some(V::Live) | Some(V::Maybe)) {
+                        return Err(handle_lost(kind, a.line, a.col, format!("{} {} is overwritten while it is not consumed", kind, a.name)));
+                    }
                 }
                 if st.contains(&a.name) {
                     st.set(&a.name, V::Live);
@@ -732,10 +888,12 @@ impl<'a> Ownership<'a> {
                 if let Some(v) = &r.value {
                     self.consume(v, &mut st, "return")?;
                 }
-                // every owned Process leaving the function must be dead (the value was consumed first)
+                // every owned handle leaving the function must be dead (the value was consumed first)
                 for (n, v) in st.iter() {
-                    if self.proc.contains(n) && *v != V::Dead {
-                        return Err(proc_lost(r.line, r.col, format!("Process {} is not consumed before return", n)));
+                    if let Some(kind) = self.proc.get(n) {
+                        if *v != V::Dead {
+                            return Err(handle_lost(kind, r.line, r.col, format!("{} {} is not consumed before return", kind, n)));
+                        }
                     }
                 }
                 Ok(None)
@@ -826,7 +984,7 @@ impl<'a> Ownership<'a> {
         }
         if self.bor.contains(n) {
             // G10 specifies foreign_borrow; the established G6 diagnostic stays for the other types.
-            let code = if matches!(e.ty.as_deref(), Some("file") | Some("process")) { "foreign_borrow" } else { "foreign_move" };
+            let code = if matches!(e.ty.as_deref(), Some("file") | Some("process") | Some("socket") | Some("listener")) { "foreign_borrow" } else { "foreign_move" };
             return Err(err(
                 line,
                 col,
@@ -905,9 +1063,11 @@ impl<'a> Ownership<'a> {
             Expr::Move(m) => self.mv(m, st, false, false),
             Expr::Call(c) => {
                 self.call(c, st)?;
-                if !owned && c.ty.as_deref() == Some("process") {
-                    // a Process temporary that is borrowed or dropped keeps its duty
-                    return Err(proc_lost(c.line, c.col, "temporary Process is not consumed".to_string()));
+                if !owned {
+                    // a handle temporary that is borrowed or dropped keeps its duty
+                    if let Some(kind) = c.ty.as_deref().and_then(must_kind) {
+                        return Err(handle_lost(kind, c.line, c.col, format!("temporary {} is not consumed", kind)));
+                    }
                 }
                 Ok(())
             }
@@ -1005,7 +1165,7 @@ impl<'a> Ownership<'a> {
 
 /// ownership/liveness of one typed, non-foreign function; funcs: name -> `take` flags of the program's functions
 pub fn check_ownership(f: &Function, funcs: &Takes) -> Res<()> {
-    Ownership { funcs, bor: HashSet::new(), track: None, proc: HashSet::new(), decl: HashMap::new() }.run(f)
+    Ownership { funcs, bor: HashSet::new(), track: None, proc: HashMap::new(), decl: HashMap::new() }.run(f)
 }
 
 // ---------------------------------------------------------------------------
@@ -1294,6 +1454,148 @@ pub fn first_proc_use(prog: &Program) -> Option<(i64, i64)> {
 }
 
 // ---------------------------------------------------------------------------
+// G10 net A0: first Socket / Listener use (counterpart of foreign.py first_net_use) and the staging guard
+// ---------------------------------------------------------------------------
+
+fn key_has_net(key: &str) -> bool {
+    fn has(t: &GType) -> bool {
+        (t.owner.is_none() && (t.name == "socket" || t.name == "listener")) || t.args.iter().any(has)
+    }
+    match GType::try_from_key(key) {
+        Ok(t) => has(&t),
+        Err(_) => false,
+    }
+}
+
+fn net_expr(e: &Expr, out: &mut Cands) {
+    match e {
+        Expr::Call(c) => {
+            if is_net_op(&c.name) {
+                out.push((c.line, c.col));
+            }
+            for a in &c.args {
+                net_expr(a, out);
+            }
+        }
+        Expr::Unary(x) => net_expr(&x.operand, out),
+        Expr::Binary(x) => {
+            net_expr(&x.left, out);
+            net_expr(&x.right, out);
+        }
+        Expr::Index(x) => {
+            net_expr(&x.array, out);
+            net_expr(&x.index, out);
+        }
+        Expr::Ctor(x) => {
+            if let Some(a) = &x.arg {
+                net_expr(a, out);
+            }
+        }
+        Expr::Quant(x) => {
+            net_expr(&x.lo, out);
+            net_expr(&x.hi, out);
+            net_expr(&x.body, out);
+        }
+        Expr::StructLit(x) => {
+            for f in &x.fields {
+                net_expr(&f.value, out);
+            }
+        }
+        Expr::EnumCtor(x) => {
+            for a in &x.args {
+                net_expr(a, out);
+            }
+        }
+        Expr::FieldAccess(x) => net_expr(&x.base, out),
+        Expr::IsVariant(x) => net_expr(&x.value, out),
+        Expr::VariantField(x) => net_expr(&x.value, out),
+        Expr::InoutArg(x) => net_expr(&x.expr, out),
+        Expr::Move(_) | Expr::Spent(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StrLit(_) | Expr::Var(_) => {}
+    }
+}
+
+fn net_stmts(stmts: &[Stmt], out: &mut Cands) {
+    for s in stmts {
+        match s {
+            Stmt::Let(l) => {
+                if key_has_net(&l.ty) {
+                    out.push((l.line, l.col));
+                }
+                net_expr(&l.value, out);
+            }
+            Stmt::Assign(a) => net_expr(&a.value, out),
+            Stmt::IndexAssign(a) => {
+                net_expr(&a.index, out);
+                net_expr(&a.value, out);
+            }
+            Stmt::If(i) => {
+                net_expr(&i.cond, out);
+                net_stmts(&i.then, out);
+                net_stmts(&i.els, out);
+            }
+            Stmt::While(w) => {
+                net_expr(&w.cond, out);
+                for inv in &w.invariants {
+                    net_expr(inv, out);
+                }
+                net_expr(&w.decreases, out);
+                net_stmts(&w.body, out);
+            }
+            Stmt::Return(r) => {
+                if let Some(v) = &r.value {
+                    net_expr(v, out);
+                }
+            }
+            Stmt::Assert(a) => net_expr(&a.cond, out),
+            Stmt::Par(e) => {
+                for c in &e.calls {
+                    net_expr(c, out);
+                }
+            }
+            Stmt::ExprStmt(e) => net_expr(&e.expr, out),
+            Stmt::FieldAssign(f) => net_expr(&f.value, out),
+            Stmt::Match(m) => {
+                net_expr(&m.scrutinee, out);
+                for a in &m.arms {
+                    net_stmts(&a.body, out);
+                }
+            }
+        }
+    }
+}
+
+/// The first use of Socket, Listener or a net_* operation -> (line, col): functions in order; the signature (a Socket /
+/// Listener parameter or result) before the body, whose first use is the smallest source position. A function that
+/// only declares `! net` is not a use.
+pub fn first_net_use(prog: &Program) -> Option<(i64, i64)> {
+    for f in &prog.functions {
+        if f.params.iter().any(|p| key_has_net(&p.ty)) || key_has_net(&f.ret) {
+            return Some((f.line, f.col));
+        }
+        let mut cands: Cands = Vec::new();
+        net_stmts(&f.body, &mut cands);
+        if let Some(best) = cands.into_iter().min() {
+            return Some(best);
+        }
+    }
+    None
+}
+
+/// G10 net A0 staging guard: PruvError (unsupported_type) for the first Socket / Listener use, or None. Run right after
+/// type checking, in every mode, until A2 (Rust backend) and A3 (LLVM backend) implement the lowering.
+pub fn net_unimplemented_error(prog: &Program, stage: &str) -> Option<PruvError> {
+    let (line, col) = first_net_use(prog)?;
+    Some(PruvError::new(
+        stage,
+        line,
+        col,
+        "unsupported_type",
+        "G10 net Socket and Listener are not implemented by the codegen layer yet",
+        "avoid Socket, Listener and the net_* operations for now",
+    ))
+}
+
+// ---------------------------------------------------------------------------
 // G10 File runtime detection (counterpart of foreign.py uses_files)
 // ---------------------------------------------------------------------------
 
@@ -1371,7 +1673,7 @@ mod tests {
 
     #[test]
     fn catalog_shapes() {
-        assert_eq!(CATALOG_NAMES.len(), 41);
+        assert_eq!(CATALOG_NAMES.len(), 62);
         for n in CATALOG_NAMES.iter() {
             assert!(catalog_fn(n).is_some());
         }

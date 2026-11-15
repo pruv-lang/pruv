@@ -1,0 +1,3 @@
+fn f(take s: Socket) -> bool ! net, alloc {
+  return net_ok(net_shutdown_write(move s));
+}

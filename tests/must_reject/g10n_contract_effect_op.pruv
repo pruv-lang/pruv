@@ -1,0 +1,4 @@
+// an effect operation (net_bytes allocates) is not allowed in a contract
+fn f(s: Socket) -> i64
+  requires len(net_bytes(s)) == 0
+{ return 0; }

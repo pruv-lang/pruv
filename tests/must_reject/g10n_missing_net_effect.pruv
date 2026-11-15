@@ -1,0 +1,3 @@
+fn f(host: str, port: i64) -> Result<i64> ! alloc {
+  return net_close(net_connect(host, port));
+}

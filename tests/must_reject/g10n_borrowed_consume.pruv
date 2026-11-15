@@ -1,0 +1,1 @@
+fn f(s: Socket) -> Result<i64> ! net, alloc { return net_close(move s); }

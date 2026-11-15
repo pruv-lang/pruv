@@ -1,0 +1,15 @@
+// G10 net A0: a par branch that declares the net effect itself
+fn set_first(inout a: [i64], value: i64) -> ()
+  requires len(a) > 0
+  ensures a[0] == value
+{ a[0] = value; }
+
+fn probe(inout a: [i64]) -> () ! net {
+}
+
+fn demo(inout a: [i64], inout b: [i64]) -> () ! net {
+  par {
+    set_first(inout b, 2);
+    probe(inout a);
+  }
+}

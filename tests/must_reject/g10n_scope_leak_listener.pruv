@@ -1,0 +1,4 @@
+fn f(host: str, port: i64) -> i64 ! net, alloc {
+  let l: Listener = net_listen(host, port);
+  return 0;
+}

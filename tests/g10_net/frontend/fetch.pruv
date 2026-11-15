@@ -1,0 +1,21 @@
+// G10 net A0: the fetch shape of G10_NET_SPEC 2.6; every failure path closes the socket.
+pub fn fetch(host: str, port: i64, request: [u8]) -> i64 ! net, alloc
+{
+  let mut s: Socket = net_connect(host, port);
+  if !net_ok(s) {
+    let r: Result<i64> = net_close(move s);
+    return -1;
+  }
+
+  s = net_write_bytes(move s, request);
+  if !net_ok(s) { let r: Result<i64> = net_close(move s); return -1; }
+  s = net_shutdown_write(move s);
+  if !net_ok(s) { let r: Result<i64> = net_close(move s); return -1; }
+  s = net_read_all(move s);
+  if !net_ok(s) { let r: Result<i64> = net_close(move s); return -1; }
+
+  let reply: [u8] = net_bytes(s);
+  let n: i64 = len(reply);
+  let r: Result<i64> = net_close(move s);
+  return n;
+}

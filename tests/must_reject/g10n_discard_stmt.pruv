@@ -1,0 +1,4 @@
+// G10 net A0: an update result dropped as an expression statement still carries the duty.
+fn f(take s: Socket) -> () ! net, alloc {
+  net_shutdown_write(move s);
+}

@@ -1,0 +1,32 @@
+// G10 net A0: s = net_read(move s, 4096) restores the owner, also inside a loop.
+fn pump(take input: Socket) -> Socket ! net, alloc
+  requires net_ok(input)
+{
+  let mut s: Socket = move input;
+  s = net_read(move s, 4096);
+  if net_ok(s) {
+    s = net_read_all(move s);
+  }
+  return move s;
+}
+
+fn read_window(take input: Socket, rounds: i64) -> Socket ! net, alloc
+  requires net_ok(input)
+  requires 0 <= rounds && rounds <= 1000000
+{
+  let mut s: Socket = move input;
+  let mut remaining: i64 = rounds;
+
+  while remaining > 0 && net_ok(s) && !net_eof(s)
+    invariant 0 <= remaining && remaining <= rounds
+    decreases remaining
+  {
+    s = net_read(move s, 4096);
+    if net_ok(s) {
+      let chunk: [u8] = net_bytes(s);
+    }
+    remaining = remaining - 1;
+  }
+
+  return move s;
+}

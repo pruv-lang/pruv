@@ -1,0 +1,9 @@
+// G10 net A0: return move s / return move l transfers the duty to the caller.
+fn hand_back(take s: Socket) -> Socket { return move s; }
+
+fn relay(take s: Socket) -> Socket {
+  let q: Socket = hand_back(move s);
+  return move q;
+}
+
+fn hand_back_listener(take l: Listener) -> Listener { return move l; }

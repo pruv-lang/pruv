@@ -1,0 +1,1 @@
+fn f(r: Result<Socket>) -> i64 { return 0; }

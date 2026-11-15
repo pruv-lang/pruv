@@ -8,7 +8,7 @@
 use crate::ast::*;
 use crate::diagnostic::PruvError;
 use crate::foreign::{
-    catalog_fn, check_foreign_decl, check_ownership, is_catalog, is_catalog_contract_only, is_file_observer, is_proc_observer, CatFn,
+    catalog_fn, check_foreign_decl, check_ownership, is_catalog, is_catalog_contract_only, is_file_observer, is_net_observer, is_proc_observer, CatFn,
     Takes,
 };
 use crate::gtype::{
@@ -704,6 +704,8 @@ impl Checker {
                 "File" => "file".to_string(), // G10 A0
                 "Process" => "process".to_string(), // G10 proc A0
                 "ProcessArgs" => "process_args".to_string(),
+                "Socket" => "socket".to_string(), // G10 net A0
+                "Listener" => "listener".to_string(),
                 _ => name.clone(),
             };
         }
@@ -726,7 +728,9 @@ impl Checker {
 
     /// `norm_type` on an AST type key; a key without any of the three spellings is returned unchanged.
     fn norm_key(&self, key: &str) -> String {
-        if !(key.contains("Vec") || key.contains("HashMap") || key.contains("String") || key.contains("File") || key.contains("Process")) {
+        if !(key.contains("Vec") || key.contains("HashMap") || key.contains("String") || key.contains("File") || key.contains("Process")
+            || key.contains("Socket") || key.contains("Listener"))
+        {
             return key.to_string();
         }
         self.norm_type(&GType::from_key(key)).to_key()
@@ -2058,6 +2062,17 @@ impl Checker {
                         "consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership",
                     ));
                 }
+                if t.owner.is_none() && (t.name == "socket" || t.name == "listener") {
+                    // G10 net A0: a discarded Socket / Listener keeps its duty
+                    let what = if t.name == "socket" { "Socket" } else { "Listener" };
+                    return Err(terr(
+                        s.line,
+                        s.col,
+                        "net_unconsumed",
+                        format!("temporary {} is not consumed", what),
+                        "consume it with net_close(move s) or net_listener_close(move l), or return / transfer ownership",
+                    ));
+                }
                 if t != unitt() {
                     return Err(terr(
                         s.line,
@@ -2224,7 +2239,7 @@ impl Checker {
                                     ("effect", "parallel_effect",
                                         format!("par branch {} reaches {}, which declares the `{}` effect ({})",
                                             c.name, last, eff, path.join(" -> ")),
-                                        format!("move the {} work outside the par group", if eff == "io" { "I/O" } else if eff == "fs" { "file" } else { "process" }))
+                                        format!("move the {} work outside the par group", if eff == "io" { "I/O" } else if eff == "fs" { "file" } else if eff == "net" { "network" } else { "process" }))
                                 }
                                 1 => {
                                     let leaf = info.foreign.as_ref().unwrap();
@@ -3506,7 +3521,7 @@ impl Checker {
                         if n == "map_lookup" { "use map_get in code" } else { "state the update in ensures" },
                     ));
                 }
-            } else if c && !is_file_observer(&n) && !is_proc_observer(&n) {
+            } else if c && !is_file_observer(&n) && !is_proc_observer(&n) && !is_net_observer(&n) {
                 return Err(terr(
                     line,
                     col,
@@ -3662,7 +3677,7 @@ struct ParInfo {
 
 fn par_info(f: &Function, funcs: &HashMap<String, Rc<FuncInfo>>) -> ParInfo {
     let mut info = ParInfo {
-        effects: ["io", "fs", "proc"].iter().filter(|e| f.effects.iter().any(|x| x == **e)).map(|e| e.to_string()).collect(),
+        effects: ["io", "fs", "proc", "net"].iter().filter(|e| f.effects.iter().any(|x| x == **e)).map(|e| e.to_string()).collect(),
         foreign: f.foreign.as_ref().map(|_| f.name.clone()),
         par: false,
         callees: Vec::new(),

@@ -1,0 +1,30 @@
+// G10 net A0: consumed in both branches (one returns, the other falls through to a join).
+fn pick(host: str, port: i64, flag: bool) -> Result<i64> ! net, alloc {
+  let s: Socket = net_connect(host, port);
+  if flag {
+    return net_close(move s);
+  } else {
+    let t: Socket = net_shutdown_write(move s);
+    return net_close(move t);
+  }
+}
+
+fn both(host: str, port: i64, flag: bool) -> i64 ! net, alloc {
+  let s: Socket = net_connect(host, port);
+  if flag {
+    let r: Result<i64> = net_close(move s);
+  } else {
+    let q: Result<i64> = net_close(move s);
+  }
+  return 0;
+}
+
+fn both_listener(host: str, port: i64, flag: bool) -> i64 ! net, alloc {
+  let l: Listener = net_listen(host, port);
+  if flag {
+    let r: Result<i64> = net_listener_close(move l);
+  } else {
+    let q: Result<i64> = net_listener_close(move l);
+  }
+  return 0;
+}

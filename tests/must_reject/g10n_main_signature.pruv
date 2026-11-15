@@ -1,0 +1,1 @@
+fn main(s: Socket) -> bool { return net_ok(s); }

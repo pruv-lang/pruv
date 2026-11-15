@@ -1,0 +1,2 @@
+// G10 net A0 staging guard also fires with --trust-callers (a signature-only use: a Socket parameter).
+fn hand_back(take s: Socket) -> Socket { return move s; }

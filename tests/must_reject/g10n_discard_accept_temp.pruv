@@ -1,0 +1,4 @@
+// net_accept borrows the listener; its Socket result as a bare temporary is not consumed.
+fn f(l: Listener) -> bool ! net, alloc {
+  return net_ok(net_accept(l));
+}

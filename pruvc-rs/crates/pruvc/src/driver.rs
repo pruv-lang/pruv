@@ -226,6 +226,11 @@ fn compile(a: &Args) -> Result<(), Fail> {
         None => pruv_core::check::check_with_externs(&mut prog, &a.rust_extern),
     };
     let tt = checked.map_err(|e| Fail::Lang(vec![e]))?;
+    // G10 net A0: staging guard, in every mode and for every backend, before verification (A1 moves it to the codegen
+    // entry; A2 / A3 remove it). A function that only declares `! net` is not guarded. Same as Python compile_file.
+    if let Some(e) = pruv_core::foreign::net_unimplemented_error(&prog, "codegen") {
+        return Err(Fail::Lang(vec![e]));
+    }
     // G4 A1: the staging guard of explicit visibility mode now comes after the proof (below), like Python compile_file.
     // G9 A3: both back ends lower G9 programs; the G9 staging guard is gone from the driver.
     // G6: the Rust source backend lowers foreign calls and collections (A2); the LLVM backend (and --also-llvm) lowers

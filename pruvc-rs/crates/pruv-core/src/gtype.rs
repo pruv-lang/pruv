@@ -158,6 +158,7 @@ pub fn collection_arity(name: &str) -> Option<usize> {
         "string" => Some(0),
         "file" => Some(0), // G10 A0
         "process" | "process_args" => Some(0), // G10 proc A0
+        "socket" | "listener" => Some(0),      // G10 net A0
         _ => None,
     }
 }
@@ -171,6 +172,8 @@ pub fn collection_spelling(name: &str) -> Option<&'static str> {
         "file" => Some("File"), // G10 A0
         "process" => Some("Process"), // G10 proc A0
         "process_args" => Some("ProcessArgs"),
+        "socket" => Some("Socket"), // G10 net A0
+        "listener" => Some("Listener"),
         _ => None,
     }
 }
@@ -376,6 +379,8 @@ fn builtin_print(name: &str) -> &str {
         "file" => "File",     // G10 A0
         "process" => "Process", // G10 proc A0
         "process_args" => "ProcessArgs",
+        "socket" => "Socket", // G10 net A0
+        "listener" => "Listener",
         other => other,
     }
 }

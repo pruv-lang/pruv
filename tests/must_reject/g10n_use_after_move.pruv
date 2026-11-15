@@ -1,0 +1,6 @@
+fn f(host: str, port: i64) -> Result<i64> ! net, alloc {
+  let s: Socket = net_connect(host, port);
+  let t: Socket = net_shutdown_write(move s);
+  let ok: bool = net_ok(s);
+  return net_close(move t);
+}

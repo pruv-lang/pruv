@@ -1,0 +1,10 @@
+// G10 net A0: a Socket created inside a loop body (an accepted socket) must be consumed in that iteration.
+fn f(take input: Listener, n: i64) -> Listener ! net, alloc {
+  let mut l: Listener = move input;
+  let mut i: i64 = 0;
+  while i < n decreases n - i {
+    let s: Socket = net_accept(l);
+    i = i + 1;
+  }
+  return move l;
+}

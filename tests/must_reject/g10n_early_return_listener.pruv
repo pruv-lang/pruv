@@ -1,0 +1,6 @@
+fn f(host: str, port: i64) -> i64 ! net, alloc {
+  let l: Listener = net_listen(host, port);
+  if !net_listener_ok(l) { return 1; }
+  let r: Result<i64> = net_listener_close(move l);
+  return 0;
+}

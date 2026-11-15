@@ -1,0 +1,29 @@
+// G10 net A0: the bounded serve shape of G10_NET_SPEC 2.6; the accepted socket is a loop local consumed every round.
+fn serve(take input: Listener, rounds: i64) -> Listener ! net, alloc
+  requires net_listener_ok(input)
+  requires 0 <= rounds && rounds <= 1000000
+{
+  let mut l: Listener = move input;
+  let mut remaining: i64 = rounds;
+
+  while remaining > 0 && net_listener_ok(l)
+    invariant 0 <= remaining && remaining <= rounds
+    invariant net_listener_ok(l)
+    decreases remaining
+  {
+    let mut s: Socket = net_accept(l);
+    if net_ok(s) {
+      s = net_set_timeout(move s, 5000);
+      if net_ok(s) {
+        s = net_read(move s, 4096);
+      }
+      if net_ok(s) && net_write_open(s) {
+        s = net_write_str(move s, "ok\n");
+      }
+    }
+    let r: Result<i64> = net_close(move s);
+    remaining = remaining - 1;
+  }
+
+  return move l;
+}

@@ -1,0 +1,5 @@
+// type mismatch: net_close takes a Socket
+fn f(host: str, port: i64) -> Result<i64> ! net, alloc {
+  let l: Listener = net_listen(host, port);
+  return net_close(move l);
+}

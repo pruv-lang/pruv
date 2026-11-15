@@ -1,0 +1,2 @@
+struct Holder { s: Socket }
+fn f() -> i64 { return 0; }

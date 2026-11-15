@@ -1,0 +1,18 @@
+// G10 net A0: read-only borrowed Socket and Listener parameters and observers.
+fn healthy(s: Socket) -> bool { return net_ok(s) && net_write_open(s); }
+fn sizes(s: Socket) -> i64 { return net_size(s) + net_error(s); }
+fn bound(l: Listener) -> bool { return net_listener_ok(l) && net_listener_port(l) > 0; }
+
+fn run(host: str, port: i64) -> Result<i64> ! net, alloc {
+  let s: Socket = net_connect(host, port);
+  let ok: bool = healthy(s);
+  let n: i64 = sizes(s);
+  let bytes: [u8] = net_bytes(s);
+  return net_close(move s);
+}
+
+fn listen_once(host: str, port: i64) -> Result<i64> ! net, alloc {
+  let l: Listener = net_listen(host, port);
+  let ok: bool = bound(l);
+  return net_listener_close(move l);
+}

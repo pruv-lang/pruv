@@ -36,6 +36,8 @@ STRING = Type("string")
 FILE = Type("file")
 PROCESS = Type("process")
 PROCESS_ARGS = Type("process_args")
+SOCKET = Type("socket")
+LISTENER = Type("listener")
 CATALOG = {}
 
 
@@ -96,6 +98,29 @@ _add("proc_stdin_open", [], lambda: ([_p("p", PROCESS)], BOOL))
 _add("proc_eof", [], lambda: ([_p("p", PROCESS), _p("stream", I64)], BOOL))
 _add("proc_size", [], lambda: ([_p("p", PROCESS), _p("stream", I64)], I64))
 _add("proc_byte", [], lambda: ([_p("p", PROCESS), _p("stream", I64), _p("i", I64)], I64))
+# G10 net A0 (docs/G10_NET_SPEC.md 2.3): signatures and effects only. The section 2.3 contracts are not installed yet
+# (A1 encodes them in the verifier); a program that uses Socket / Listener stops at the staging guard (first_net_use).
+_add("net_listen", [], lambda: ([_p("host", STR), _p("port", I64)], LISTENER), ["net", "alloc"])
+_add("net_accept", [], lambda: ([_p("l", LISTENER)], SOCKET), ["net", "alloc"])
+_add("net_listener_close", [], lambda: ([_p("l", LISTENER, True)], RESULT), ["net", "alloc"])
+_add("net_connect", [], lambda: ([_p("host", STR), _p("port", I64)], SOCKET), ["net", "alloc"])
+_add("net_write_str", [], lambda: ([_p("s", SOCKET, True), _p("text", STR)], SOCKET), ["net", "alloc"])
+_add("net_write_bytes", [], lambda: ([_p("s", SOCKET, True), _p("data", ARRAY_U8)], SOCKET), ["net", "alloc"])
+_add("net_shutdown_write", [], lambda: ([_p("s", SOCKET, True)], SOCKET), ["net", "alloc"])
+_add("net_set_timeout", [], lambda: ([_p("s", SOCKET, True), _p("ms", I64)], SOCKET), ["net", "alloc"])
+_add("net_read", [], lambda: ([_p("s", SOCKET, True), _p("max", I64)], SOCKET), ["net", "alloc"])
+_add("net_read_all", [], lambda: ([_p("s", SOCKET, True)], SOCKET), ["net", "alloc"])
+_add("net_bytes", [], lambda: ([_p("s", SOCKET)], ARRAY_U8), ["alloc"])
+_add("net_close", [], lambda: ([_p("s", SOCKET, True)], RESULT), ["net", "alloc"])
+_add("net_ok", [], lambda: ([_p("s", SOCKET)], BOOL))
+_add("net_error", [], lambda: ([_p("s", SOCKET)], I64))
+_add("net_write_open", [], lambda: ([_p("s", SOCKET)], BOOL))
+_add("net_eof", [], lambda: ([_p("s", SOCKET)], BOOL))
+_add("net_size", [], lambda: ([_p("s", SOCKET)], I64))
+_add("net_byte", [], lambda: ([_p("s", SOCKET), _p("i", I64)], I64))
+_add("net_listener_ok", [], lambda: ([_p("l", LISTENER)], BOOL))
+_add("net_listener_error", [], lambda: ([_p("l", LISTENER)], I64))
+_add("net_listener_port", [], lambda: ([_p("l", LISTENER)], I64))
 # contract-only observers
 _add("map_lookup", _KV, lambda K, V: ([_p("m", _map(K, V)), _p("k", K)], mk_option(V)))
 _add("map_updated", _KV, lambda K, V: ([_p("after", _map(K, V)), _p("before", _map(K, V)), _p("k", K), _p("v", V)],
@@ -107,6 +132,11 @@ FILE_OBSERVERS = ("file_ok", "file_readable", "file_writable", "file_size", "fil
 # is type/foreign_contract there.
 PROC_OBSERVERS = ("proc_args_len", "proc_ok", "proc_error", "proc_stdin_open", "proc_eof", "proc_size", "proc_byte")
 PROC_OPS = tuple(n for n in CATALOG if n.startswith("proc_"))
+# G10 net A0: the observers allowed in contracts; every other net_* operation (effects, allocating net_bytes) is
+# type/foreign_contract there.
+NET_OBSERVERS = ("net_ok", "net_error", "net_write_open", "net_eof", "net_size", "net_byte",
+                 "net_listener_ok", "net_listener_error", "net_listener_port")
+NET_OPS = tuple(n for n in CATALOG if n.startswith("net_"))
 
 
 # G10 A1: typed contract ASTs, evaluated by the catalog-call verifier.
@@ -236,10 +266,25 @@ def _join(a, b):
     return dict((n, v if b[n] == v else "maybe") for n, v in a.items() if n in b)
 
 
-def _proc_lost(node, msg):
-    """G10 proc A0 (G10_PROC_SPEC 3.3 / 7.1): a Process duty is left at `node`"""
-    _err(node, "proc_unconsumed", msg,
-         "consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership")
+_MUST_CONSUME = {"process": "Process", "socket": "Socket", "listener": "Listener"}
+
+
+def _must_kind(t):
+    """G10 net A0 (G10_NET_SPEC 3.3): "Process" / "Socket" / "Listener" for a must-consume handle type, else None.
+    File, String, ProcessArgs, Vec and HashMap are never must-consume."""
+    if t is None or t.owner is not None:
+        return None
+    return _MUST_CONSUME.get(t.name)
+
+
+def _handle_lost(node, kind, msg):
+    """G10 proc A0 / net A0 (G10_PROC_SPEC 3.3 / 7.1, G10_NET_SPEC 3.3 / 7.1): a must-consume duty is left at `node`;
+    the code follows the type of the handle that loses its duty"""
+    if kind == "Process":
+        _err(node, "proc_unconsumed", msg,
+             "consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership")
+    _err(node, "net_unconsumed", msg,
+         "consume it with net_close(move s) or net_listener_close(move l), or return / transfer ownership")
 
 
 class _Ownership:
@@ -247,17 +292,17 @@ class _Ownership:
         s.funcs = funcs
         s.bor = set()
         s.track = None   # name -> "move" | "borrow" of the outermost call being checked (shared by nested calls)
-        s.proc = set()   # G10 proc A0: names of Process bindings (must-consume); never File, String or ProcessArgs
-        s.decl = {}      # name -> the Let that declared it (location of a scope-end proc_unconsumed)
+        s.proc = {}      # G10 A0: must-consume bindings, name -> "Process" | "Socket" | "Listener"; never File etc.
+        s.decl = {}      # name -> the Let that declared it (location of a scope-end proc_unconsumed / net_unconsumed)
 
     def run(s, f):
         s.bor = set(p.name for p in f.params if is_collection(p.type) and not p.take)
-        s.proc = set(p.name for p in f.params if p.take and p.type == PROCESS)
+        s.proc = dict((p.name, _must_kind(p.type)) for p in f.params if p.take and _must_kind(p.type) is not None)
         st = s.block(f.body, dict((p.name, "live") for p in f.params if p.take))
-        if st is not None:     # fallthrough: a live take Process parameter is a lost duty
+        if st is not None:     # fallthrough: a live take must-consume parameter is a lost duty
             for n in st:
                 if n in s.proc and st[n] != "dead":
-                    _proc_lost(f, "Process %s is not consumed before the end of the function" % n)
+                    _handle_lost(f, s.proc[n], "%s %s is not consumed before the end of the function" % (s.proc[n], n))
 
     def block(s, stmts, st):
         declared = []
@@ -268,7 +313,8 @@ class _Ownership:
         if st is not None:
             for n in declared:
                 if n in s.proc and st.get(n) in ("live", "maybe"):
-                    _proc_lost(s.decl[n], "Process %s is not consumed before the end of its scope" % n)
+                    _handle_lost(s.decl[n], s.proc[n],
+                                 "%s %s is not consumed before the end of its scope" % (s.proc[n], n))
                 st.pop(n, None)
         return st
 
@@ -278,16 +324,18 @@ class _Ownership:
             if is_collection(x.type):
                 st[x.name] = "live"
                 declared.append(x.name)
-                if x.type == PROCESS:
-                    s.proc.add(x.name)
+                kind = _must_kind(x.type)
+                if kind is not None:
+                    s.proc[x.name] = kind
                     s.decl[x.name] = x
                 else:
-                    s.proc.discard(x.name)
+                    s.proc.pop(x.name, None)
             return st
         if isinstance(x, Assign):
             s.consume(x.value, st, "assign")       # the right-hand side is consumed first
             if x.name in s.proc and st.get(x.name) in ("live", "maybe"):
-                _proc_lost(x, "Process %s is overwritten while it is not consumed" % x.name)
+                _handle_lost(x, s.proc[x.name], "%s %s is overwritten while it is not consumed" % (
+                    s.proc[x.name], x.name))
             if x.name in st:
                 st[x.name] = "live"
             return st
@@ -315,9 +363,9 @@ class _Ownership:
         if isinstance(x, Return):
             if x.value is not None:
                 s.consume(x.value, st, "return")
-            for n in st:       # every owned Process leaving the function must be dead (the value was consumed first)
+            for n in st:       # every owned handle leaving the function must be dead (the value was consumed first)
                 if n in s.proc and st[n] != "dead":
-                    _proc_lost(x, "Process %s is not consumed before return" % n)
+                    _handle_lost(x, s.proc[n], "%s %s is not consumed before return" % (s.proc[n], n))
             return None
         if isinstance(x, ExprStmt):
             s.expr(x.expr, st)
@@ -363,7 +411,7 @@ class _Ownership:
                  "use move for a take argument, a let initializer, an assignment or return")
         if n in s.bor:
             # G10 specifies foreign_borrow; preserve the established G6 diagnostic for other types.
-            _err(e, "foreign_borrow" if e.ty in (FILE, PROCESS) else "foreign_move", "moving a borrowed parameter",
+            _err(e, "foreign_borrow" if e.ty in (FILE, PROCESS, SOCKET, LISTENER) else "foreign_move", "moving a borrowed parameter",
                  "%s is a read parameter; declare it `take %s: ...` to consume it" % (n, n))
         st[n] = "dead"
         if track is not None:
@@ -394,9 +442,10 @@ class _Ownership:
         elif isinstance(e, Move):
             s.move(e, st, False, None)
         elif isinstance(e, Call):
-            if not owned and e.ty == PROCESS:     # a Process temporary that is borrowed or dropped keeps its duty
+            kind = _must_kind(e.ty)
+            if not owned and kind is not None:    # a handle temporary that is borrowed or dropped keeps its duty
                 s.call(e, st)
-                _proc_lost(e, "temporary Process is not consumed")
+                _handle_lost(e, kind, "temporary %s is not consumed" % kind)
             s.call(e, st)
         elif isinstance(e, Binary) and e.op in ("&&", "||"):
             s.expr(e.left, st)
@@ -533,6 +582,52 @@ def first_proc_use(prog):
             line, col = min(cands)
             return (f, line, col)
     return None
+
+
+def _is_net_type(t):
+    return t.owner is None and (t.name in ("socket", "listener") or any(_is_net_type(a) for a in t.args))
+
+
+def _net_candidates(node, out):
+    if isinstance(node, (list, tuple)):
+        for x in node:
+            _net_candidates(x, out)
+        return
+    if not hasattr(node, "__dataclass_fields__") or isinstance(node, Type):
+        return
+    if isinstance(node, Let) and _is_net_type(node.type):
+        out.append((node.line, node.col))
+    elif isinstance(node, Call) and node.name in NET_OPS:
+        out.append((node.line, node.col))
+    for fname in node.__dataclass_fields__:
+        _net_candidates(getattr(node, fname), out)
+
+
+def first_net_use(prog):
+    """G10 net A0: the first use of Socket, Listener or a net_* operation of a checked program -> (node, line, col) or
+    None. Functions in order; the signature (a Socket / Listener parameter or result) comes before the body, whose
+    first use is the smallest source position. A function that only declares `! net` is not a use."""
+    for f in prog.functions:
+        if any(_is_net_type(p.type) for p in f.params) or _is_net_type(f.ret):
+            return (f, f.line, f.col)
+        cands = []
+        _net_candidates(f.body, cands)
+        if cands:
+            line, col = min(cands)
+            return (f, line, col)
+    return None
+
+
+def net_unimplemented_error(prog, stage="codegen"):
+    """G10 net A0 staging guard: PruvError (unsupported_type) for the first Socket / Listener use, or None. Run right
+    after type checking, in every mode, until A2 (Rust backend) and A3 (LLVM backend) implement the lowering."""
+    hit = first_net_use(prog)
+    if hit is None:
+        return None
+    _f, line, col = hit
+    return PruvError(stage, line, col, "unsupported_type",
+                     "G10 net Socket and Listener are not implemented by the codegen layer yet",
+                     "avoid Socket, Listener and the net_* operations for now")
 
 
 def _par_nodes(node, out):

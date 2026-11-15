@@ -8,7 +8,7 @@ from typeinfo import (TypeTable, BUILTIN_TYPE_NAMES, type_name, is_user_type, is
                       program_uses_inout)  # G5 A0
 from refine import expand as refine_expand
 from refine import _kids as expr_kids
-from foreign import (CATALOG, CATALOG_NAMES, CATALOG_CONTRACT_ONLY, FILE_OBSERVERS, PROC_OBSERVERS,
+from foreign import (CATALOG, CATALOG_NAMES, CATALOG_CONTRACT_ONLY, FILE_OBSERVERS, PROC_OBSERVERS, NET_OBSERVERS,
                      check_foreign_decl, check_ownership)  # G6 A0 / G10 A0
 
 # name -> (argument kind, result: BOOL | I64 | "payload" = the Option/Result payload type)
@@ -257,9 +257,11 @@ class Checker:
             return ty
         args = tuple(s.norm_type(a) for a in ty.args)
         name = ty.name
-        if name not in s.decls and name in ("Vec", "HashMap", "String", "File", "Process", "ProcessArgs"):
+        if name not in s.decls and name in ("Vec", "HashMap", "String", "File", "Process", "ProcessArgs", "Socket",
+                                            "Listener"):
             name = {"Vec": "vec", "HashMap": "hashmap", "String": "string", "File": "file",
-                    "Process": "process", "ProcessArgs": "process_args"}[name]
+                    "Process": "process", "ProcessArgs": "process_args", "Socket": "socket",
+                    "Listener": "listener"}[name]
         if name == ty.name and args == ty.args:
             return ty
         if name == "array" and len(args) == 1:
@@ -916,6 +918,12 @@ class Checker:
             if t.owner is None and t.name == "process":   # G10 proc: a discarded Process result keeps its duty
                 terr(st, "proc_unconsumed", "temporary Process is not consumed",
                      "consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership")
+            if t.owner is None and t.name == "socket":    # G10 net A0: a discarded Socket / Listener keeps its duty
+                terr(st, "net_unconsumed", "temporary Socket is not consumed",
+                     "consume it with net_close(move s) or net_listener_close(move l), or return / transfer ownership")
+            if t.owner is None and t.name == "listener":
+                terr(st, "net_unconsumed", "temporary Listener is not consumed",
+                     "consume it with net_close(move s) or net_listener_close(move l), or return / transfer ownership")
             if t != UNIT:
                 terr(st, "unused_value", "value of type %s is dropped" % type_name(t),
                      "bind it with `let` or `match` it")
@@ -1077,7 +1085,7 @@ class Checker:
         info = cache.get(f.name)
         if info is not None:
             return info
-        info = {"effects": [e for e in ("io", "fs", "proc") if e in f.effects],
+        info = {"effects": [e for e in ("io", "fs", "proc", "net") if e in f.effects],
                 "foreign": f.name if f.foreign is not None else None, "par": False, "callees": []}
         items = []
         s.par_items(f.body, items)
@@ -1159,7 +1167,8 @@ class Checker:
                     terr(c, "parallel_effect", "par branch %s reaches %s, which declares the `%s` effect (%s)" % (
                         n, path[-1], eff, " -> ".join(path)),
                          "move the %s work outside the par group" % (
-                             "I/O" if eff == "io" else "file" if eff == "fs" else "process"), stage="effect")
+                             "I/O" if eff == "io" else "file" if eff == "fs" else "network" if eff == "net"
+                             else "process"), stage="effect")
                 path = s.par_witness(n, lambda i: i["foreign"] is not None, cache)
                 if path is not None:
                     leaf = s.par_info(s.funcs[path[-1]], cache)["foreign"]
@@ -1731,7 +1740,7 @@ class Checker:
                 if not c:
                     terr(e, "foreign_contract", "%s is only allowed in contracts" % n,
                          "use map_get in code" if n == "map_lookup" else "state the update in ensures")
-            elif c and n not in FILE_OBSERVERS and n not in PROC_OBSERVERS:
+            elif c and n not in FILE_OBSERVERS and n not in PROC_OBSERVERS and n not in NET_OBSERVERS:
                 terr(e, "foreign_contract", "%s cannot be called in a contract" % n,
                      "contracts observe collections with len(x), x[i], map_lookup and map_updated")
             f = CATALOG[n]

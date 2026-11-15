@@ -1,0 +1,22 @@
+// G10 net A0: a helper returns a Socket / Listener; a take helper terminates it.
+fn start(host: str, port: i64) -> Socket ! net, alloc {
+  return net_connect(host, port);
+}
+
+fn finish(take s: Socket) -> Result<i64> ! net, alloc { return net_close(move s); }
+
+fn run(host: str, port: i64) -> Result<i64> ! net, alloc {
+  let s: Socket = start(host, port);
+  return finish(move s);
+}
+
+fn open_listener(host: str, port: i64) -> Listener ! net, alloc {
+  return net_listen(host, port);
+}
+
+fn finish_listener(take l: Listener) -> Result<i64> ! net, alloc { return net_listener_close(move l); }
+
+fn run_listener(host: str, port: i64) -> Result<i64> ! net, alloc {
+  let l: Listener = open_listener(host, port);
+  return finish_listener(move l);
+}

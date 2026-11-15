@@ -1,0 +1,4 @@
+// G10 net A0: a function that only declares `! net` uses no Socket / Listener type or operation; it compiles normally.
+pub fn declares(n: i64) -> i64 ! net { return n; }
+
+fn caller(n: i64) -> i64 ! net { return declares(n); }

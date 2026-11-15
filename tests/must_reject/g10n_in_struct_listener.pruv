@@ -1,0 +1,2 @@
+struct Holder { l: Listener }
+fn f() -> i64 { return 0; }

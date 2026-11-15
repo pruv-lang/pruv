@@ -1,0 +1,12 @@
+// G10 net A0: net_accept borrows the listener; it stays valid and is closed by its owner afterwards.
+fn accept_one(host: str) -> Result<i64> ! net, alloc {
+  let l: Listener = net_listen(host, 0);
+  if !net_listener_ok(l) {
+    return net_listener_close(move l);
+  }
+  let s: Socket = net_accept(l);
+  let first: Result<i64> = net_close(move s);
+  let s2: Socket = net_accept(l);
+  let second: Result<i64> = net_close(move s2);
+  return net_listener_close(move l);
+}

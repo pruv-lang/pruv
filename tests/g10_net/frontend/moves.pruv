@@ -1,0 +1,11 @@
+// G10 net A0: a Socket moves through updates and ends with net_close (type-checks, then stops at the staging guard).
+fn run(host: str, port: i64) -> i64 ! net, alloc {
+  let s: Socket = net_connect(host, port);
+  if !net_ok(s) {
+    let failed: Result<i64> = net_close(move s);
+    return 1;
+  }
+  let t: Socket = net_shutdown_write(move s);
+  let r: Result<i64> = net_close(move t);
+  return 0;
+}
