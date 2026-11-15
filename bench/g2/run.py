@@ -12,7 +12,8 @@ RUSTC = shutil.which("rustc") or os.path.expanduser("~/.cargo/bin/rustc")
 PY = os.path.join(ROOT, ".venv/bin/python")
 PRUVC = os.path.join(ROOT, "pruvc/pruvc.py")
 PRUVC_RS = os.path.join(ROOT, "pruvc-rs/target/release/pruvc")
-CLANG = shutil.which("clang") or "/usr/bin/clang"
+# PRUV_CLANG picks the clang that builds LLVM-backend objects (e.g. one whose LLVM major matches rustc's).
+CLANG = os.environ.get("PRUV_CLANG") or shutil.which("clang") or "/usr/bin/clang"
 
 COMPILERS = {"py": [PY, PRUVC], "rs": [PRUVC_RS]}
 

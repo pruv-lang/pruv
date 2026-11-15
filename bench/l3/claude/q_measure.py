@@ -17,6 +17,8 @@ The TS baseline is not timed here: only work/qmeasure/fixtures.json is written (
 reference run is timed separately by hand.
 
 Usage: python3 q_measure.py [--only SUBSTRING_OF_INPUT] [--pairs py/rust,rs/llvm]
+Set PRUV_CLANG to a clang whose LLVM major is close to rustc's (rustc --version --verbose) so both backends get the
+same optimizer generation; measure.json records both versions.
 """
 import argparse
 import base64
@@ -298,7 +300,8 @@ def main():
                    '(Instant, ms); median/min/max of the 5. Peak RSS from /usr/bin/time -l (bytes) or wait4 ru_maxrss of that child; '
                    'covers the whole process. Build seconds: compile_pruv wall time and rustc wall time, separately.'),
         'machine': {'platform': platform.platform(), 'cpu': cpu_brand(), 'cpu_count': os.cpu_count()},
-        'versions': {'python': platform.python_version(), 'rustc': tool_version([g2.RUSTC, '--version'])},
+        'versions': {'python': platform.python_version(), 'rustc': tool_version([g2.RUSTC, '--version', '--verbose']),
+                     'clang': tool_version([g2.CLANG, '--version'])},
         'inputs': {n: {'bytes': len(d), 'file': f'inputs/{n}.jsonl'} for n, d in inputs},
         'notes': [
             'Fixed workspace: turns.new_buffer is 13,116,800 bytes (allocated per window collection regardless of input size).',
