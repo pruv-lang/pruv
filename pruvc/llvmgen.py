@@ -60,7 +60,7 @@ BIT_LLVM = {"band": "and", "bor": "or", "bxor": "xor", "wrapping_shl": "shl", "u
              "wrapping_add": "add", "wrapping_mul": "mul"}   # P2: bit builtin -> LLVM instruction; later batches add entries
 OPT = "{ i1, i64 }"
 COPT = "{ i1, i128 }"       # Option/Result stored inside a contract aggregate (%pruv_c_*)
-ARR = "{ ptr, i64 }"
+ARR = "{ ptr, i64, i64 }"   # P3: owned buffer inside the module: { data, len, cap }; cap = allocated element count
 
 # G1 (docs/M2_G1_SPEC.md section 5): user struct/enum layout
 #   %pruv_t_Name  struct: its fields in order ({} if none); enum: { i64 tag, every variant's payload fields in
@@ -312,22 +312,29 @@ class V:
     ref (G9 contract evaluation: a=ptr to the REAL storage of an extended value, ty=its Type).
     p (G9, agg only): address of storage that holds this value when known (a parameter, a local slot, a boxed
     node, a call-result slot); lets a read argument pass the pointer instead of spilling a copy."""
-    __slots__ = ("k", "a", "b", "ty", "p", "layout", "rng", "mv")
+    __slots__ = ("k", "a", "b", "ty", "p", "layout", "rng", "mv", "c")
 
-    def __init__(s, k, a=None, b=None, ty=None, p=None, layout="i64", rng=None):
+    def __init__(s, k, a=None, b=None, ty=None, p=None, layout="i64", rng=None, c=None):
         s.k, s.a, s.b, s.ty, s.p = k, a, b, ty, p
         s.layout = layout
         s.rng = rng
         s.mv = None     # P3: (owner slot, variant, storage index) of a payload binder of a match on an owned local
+        s.c = c         # P3 (arr only): allocated element count (cap) SSA; None means cap == len (b)
+
+
+def capof(v):
+    """P3: the allocated element count of an owned array value (the size argument of every free)"""
+    return v.c if v.c is not None else v.b
 
 
 class Slot:
-    __slots__ = ("k", "a", "b", "ty", "layout", "rng")
+    __slots__ = ("k", "a", "b", "ty", "layout", "rng", "c")
 
     def __init__(s, k, a, b=None, ty=None):
         s.k, s.a, s.b, s.ty = k, a, b, ty
         s.layout = "i64"
         s.rng = None
+        s.c = None      # P3 (arr only): storage of the cap
 
 
 class Mod:
@@ -344,7 +351,7 @@ class Mod:
         s.g6_unbox = set()      # P3 M5: trusted String functions lowered through the unboxed adapter <f>__str
         s.g6_bridge = False     # G6 A3: some function references @pruv_g6_bridge_v1
         s.bswap = set()         # P2 batch 4: widths of the llvm.bswap declarations the byte-word accesses used
-        s.shrink = False        # P2 batch 4: some in-place `return truncate` calls @pruv_shrink_v2
+        s.shrink = False        # P3: some external array-return wrapper normalizes cap to len with @pruv_shrink_v2
         s.need_size = set()     # G9 A3: types whose runtime-contract size / equality helpers are needed
         s.need_eq = set()
         s.stack = None          # P3-S1: StackPlan (set by gen_llvm)
@@ -527,7 +534,10 @@ class FnGen:
         if kind == "arr":
             s.allocas.append("%s = alloca ptr" % a)
             s.allocas.append("%s = alloca i64" % b)
-            return Slot("arr", a, b, elem_ty(ty))
+            sl = Slot("arr", a, b, elem_ty(ty))
+            sl.c = base + ".c"      # P3: the cap lives next to the len
+            s.allocas.append("%s = alloca i64" % sl.c)
+            return sl
         if kind == "agg":
             s.allocas.append("%s = alloca %s" % (a, lty(ty)))
             return Slot("agg", a, None, ty)
@@ -545,7 +555,8 @@ class FnGen:
         if sl.k == "arr":
             p = s.op("load ptr, ptr %s" % sl.a)
             n = s.op("load i64, ptr %s" % sl.b)
-            return V("arr", p, n, sl.ty, layout=sl.layout, rng=sl.rng)
+            c = s.op("load i64, ptr %s" % sl.c)
+            return V("arr", p, n, sl.ty, layout=sl.layout, rng=sl.rng, c=c)
         t = s.op("load i1, ptr %s" % sl.a)
         v = s.op("load i64, ptr %s" % sl.b)
         return V("opt", t, v)
@@ -562,6 +573,7 @@ class FnGen:
             sl.rng = v.rng
             s.ins("store ptr %s, ptr %s" % (v.a, sl.a))
             s.ins("store i64 %s, ptr %s" % (v.b, sl.b))
+            s.ins("store i64 %s, ptr %s" % (capof(v), sl.c))
         else:
             s.ins("store i1 %s, ptr %s" % (v.a, sl.a))
             s.ins("store i64 %s, ptr %s" % (v.b, sl.b))
@@ -662,8 +674,7 @@ class FnGen:
                 s.ins("store ptr %s, ptr %s" % (nd, g))
             elif is_arr(ft):
                 x = s.op("load %s, ptr %s" % (ARR, g))
-                s.free_val(V("arr", s.op("extractvalue %s %s, 0" % (ARR, x)), s.op("extractvalue %s %s, 1" % (ARR, x)),
-                             elem_ty(ft)))
+                s.free_val(s.unpack(x, ft, False))      # the old buffer is freed with its cap
                 s.ins("store %s %s, ptr %s" % (ARR, s.agg(v), g))
             elif s.is_ext(ft):
                 s.ins("call void @pruv_drop__%s(ptr %s)" % (ft.name, g))
@@ -678,11 +689,11 @@ class FnGen:
             s.drop_agg(v)
         elif v.layout != "i64":
             sz, al = elem_size(v.layout), alignment(v.layout)
-            s.ins("call void @pruv_free_v2(ptr %s, i64 %s, i64 %d, i64 %d)" % (v.a, v.b, sz, al))
+            s.ins("call void @pruv_free_v2(ptr %s, i64 %s, i64 %d, i64 %d)" % (v.a, capof(v), sz, al))
         elif is_bytes(v):  # G2 A5
-            s.ins("call void @pruv_free_v2(ptr %s, i64 %s, i64 1, i64 1)" % (v.a, v.b))
+            s.ins("call void @pruv_free_v2(ptr %s, i64 %s, i64 1, i64 1)" % (v.a, capof(v)))
         else:
-            s.ins("call void @pruv_free(ptr %s, i64 %s)" % (v.a, v.b))
+            s.ins("call void @pruv_free(ptr %s, i64 %s)" % (v.a, capof(v)))   # P3: the size is the cap, not the len
 
     def free_scope(s, sc):
         for sl in reversed(sc["arrays"]):
@@ -711,8 +722,7 @@ class FnGen:
                 s.ins("call void @pruv_dropnode__%s(ptr %s)" % (ft.name, s.op("load ptr, ptr %s" % gp)))
             elif is_arr(ft):
                 x = s.op("load %s, ptr %s" % (ARR, gp))
-                s.free_val(V("arr", s.op("extractvalue %s %s, 0" % (ARR, x)), s.op("extractvalue %s %s, 1" % (ARR, x)),
-                             elem_ty(ft)))
+                s.free_val(s.unpack(x, ft, False))
             else:
                 s.ins("call void @pruv_drop__%s(ptr %s)" % (ft.name, gp))
 
@@ -951,7 +961,7 @@ class FnGen:
             ot, pt = (COPT, "i128") if c else (OPT, "i64")
             a = s.op("insertvalue %s undef, i1 %s, 0" % (ot, v.a))
             return s.op("insertvalue %s %s, %s %s, 1" % (ot, a, pt, v.b))
-        if is_arr(ty):  # G9 A3: a buffer field is stored as { ptr, i64 }
+        if is_arr(ty):  # G9 A3: a buffer field is stored as { ptr, i64, i64 } (data, len, cap)
             return s.agg(v)
         return v.a
 
@@ -959,7 +969,7 @@ class FnGen:
         n = ty.name
         if is_arr(ty):  # G9 A3
             return V("arr", s.op("extractvalue %s %s, 0" % (ARR, x)), s.op("extractvalue %s %s, 1" % (ARR, x)),
-                     elem_ty(ty))
+                     elem_ty(ty), c=s.op("extractvalue %s %s, 2" % (ARR, x)))
         if n == "i64":
             return V("i128" if c else "i64", x)
         if n == "bool":
@@ -1172,7 +1182,8 @@ class FnGen:
             return v.a
         if v.k == "arr":
             a = s.op("insertvalue %s undef, ptr %s, 0" % (ARR, v.a))
-            return s.op("insertvalue %s %s, i64 %s, 1" % (ARR, a, v.b))
+            a = s.op("insertvalue %s %s, i64 %s, 1" % (ARR, a, v.b))
+            return s.op("insertvalue %s %s, i64 %s, 2" % (ARR, a, capof(v)))
         a = s.op("insertvalue %s undef, i1 %s, 0" % (OPT, v.a))
         return s.op("insertvalue %s %s, i64 %s, 1" % (OPT, a, v.b))
 
@@ -1290,6 +1301,7 @@ class FnGen:
             else:
                 s.ins("store ptr null, ptr %s" % x.a)
                 s.ins("store i64 0, ptr %s" % x.b)
+                s.ins("store i64 0, ptr %s" % x.c)      # P3: the emptied owner also forgets its cap
             return v
         sl, vn, k, _dead = x.mv
         if e.name in s.ret_cand:
@@ -1502,13 +1514,12 @@ class FnGen:
                 if not s.verified:
                     ok = s.op("icmp ule i64 %s, %s" % (m.a, src.b))
                     s.guard(ok, s.panic1("pruv_panic_arith", "truncate length outside 0..len"), False)
-                # the runtime shrinks the block to m elements so the later free gets its real layout
-                sz = 1 if is_bytes(src) else elem_size(src.layout)
-                s.m.shrink = True
-                p = s.op("call ptr @pruv_shrink_v2(ptr %s, i64 %s, i64 %s, i64 %d, i64 %d)" % (src.a, src.b, m.a, sz, sz))
-                v = V("arr", p, m.a, src.ty, layout=src.layout, rng=src.rng)
+                # P3: no runtime call: the same pointer with length m moves out and keeps the source cap, so the
+                # eventual free still gets the real allocation size
+                v = V("arr", src.a, m.a, src.ty, layout=src.layout, rng=src.rng, c=capof(src))
                 s.ins("store ptr null, ptr %s" % sl.a)
                 s.ins("store i64 0, ptr %s" % sl.b)
+                s.ins("store i64 0, ptr %s" % sl.c)
             elif st.value is not None:
                 s.ret_cand = s.ret_movable(st.value)
                 s.ret_take = s.ret_takable(st.value)
@@ -1520,6 +1531,7 @@ class FnGen:
                     sl = s.lookup(st.value.name)[1]
                     s.ins("store ptr null, ptr %s" % sl.a)
                     s.ins("store i64 0, ptr %s" % sl.b)
+                    s.ins("store i64 0, ptr %s" % sl.c)
             s.end_temps()
             for sc in reversed(s.scopes):
                 s.free_scope(sc)
@@ -1969,6 +1981,7 @@ class FnGen:
             if not s.cost and a[0].name in s.take_let:
                 s.ins("store ptr null, ptr %s" % sl.a)
                 s.ins("store i64 0, ptr %s" % sl.b)
+                s.ins("store i64 0, ptr %s" % sl.c)
                 return s.temp_arr(v, owned)
             p = s.op("call ptr @pruv_copy_v2(ptr %s, i64 %s, i64 1, i64 1)" % (v.a, v.b))
             return s.temp_arr(V("arr", p, v.b, STR), owned)
@@ -2022,13 +2035,10 @@ class FnGen:
                 s.guard(ok, s.panic1("pruv_panic_arith", "truncate length outside 0..len"), False)
             if (isinstance(a[0], Var) and a[0].name in s.ret_cand and s.lookup(a[0].name)[0] == "slot"
                     and s.lookup(a[0].name)[1].k == "arr"):
-                # P3: an owned local array the return moves (ret_movable): shrink its block to m elements in place,
-                # as `return truncate(x, m)` does; the return's cleanup skips the slot
+                # P3: an owned local array the return moves (ret_movable): the same block with length m and the source
+                # cap moves out (no runtime call), as `return truncate(x, m)` does; the return's cleanup skips the slot
                 s.ret_moved[s.lookup(a[0].name)[1].a] = None
-                sz = 1 if is_bytes(src) else elem_size(src.layout)
-                s.m.shrink = True
-                p = s.op("call ptr @pruv_shrink_v2(ptr %s, i64 %s, i64 %s, i64 %d, i64 %d)" % (src.a, src.b, m.a, sz, sz))
-                return s.temp_arr(V("arr", p, m.a, src.ty, layout=src.layout, rng=src.rng), owned)
+                return s.temp_arr(V("arr", src.a, m.a, src.ty, layout=src.layout, rng=src.rng, c=capof(src)), owned)
             if src.layout != "i64":
                 p = s.op("call ptr @pruv_copy_v2(ptr %s, i64 %s, i64 %d, i64 %d)" %
                          (src.a, m.a, elem_size(src.layout), alignment(src.layout)))
@@ -2135,7 +2145,8 @@ class FnGen:
         x0 = s.op("extractvalue %s %s, 0" % (lty(f.ret), r))
         x1 = s.op("extractvalue %s %s, 1" % (lty(f.ret), r))
         if is_arr(f.ret):
-            return s.temp_arr(V("arr", x0, x1, elem_ty(f.ret), layout=s.m.storage.layout_of(f), rng=s.m.storage.range_of(f)), owned)
+            x2 = s.op("extractvalue %s %s, 2" % (lty(f.ret), r))     # P3: the cap travels with the returned buffer
+            return s.temp_arr(V("arr", x0, x1, elem_ty(f.ret), layout=s.m.storage.layout_of(f), rng=s.m.storage.range_of(f), c=x2), owned)
         return V("opt", x0, x1)
 
     # ---------- G6 A3: catalog operations and trusted rust fn through the bridge ----------
@@ -2919,7 +2930,8 @@ def fuse_ll(g, f, plan):
     g.condbr(g.op("load i1, ptr %s" % bad), ff, fr)
     g.place(fr)
     a = g.op("insertvalue %s undef, ptr %s, 0" % (ARR, p))
-    g.term("ret %s %s" % (ARR, g.op("insertvalue %s %s, i64 %s, 1" % (ARR, a, n))))
+    a = g.op("insertvalue %s %s, i64 %s, 1" % (ARR, a, n))
+    g.term("ret %s %s" % (ARR, g.op("insertvalue %s %s, i64 %s, 2" % (ARR, a, n))))     # P3: cap == len
     g.place(ff)
     g.ins("call void @pruv_free(ptr %s, i64 %s)" % (p, n))
     g.br(slow)
@@ -3053,8 +3065,7 @@ def g9_drop_text(m, tt, d):
                 g.ins("call void @pruv_dropnode__%s(ptr %s)" % (ft.name, c))
             elif is_arr(ft):
                 x = g.op("load %s, ptr %s" % (ARR, gp))
-                g.free_val(V("arr", g.op("extractvalue %s %s, 0" % (ARR, x)), g.op("extractvalue %s %s, 1" % (ARR, x)),
-                             elem_ty(ft)))
+                g.free_val(g.unpack(x, ft, False))      # P3: freed with its cap
             else:                          # an inline extended child (not a node)
                 g.ins("call void @pruv_drop__%s(ptr %s)" % (ft.name, gp))
     vs = [(vn, t, fs) for vn, t, fs in g9_variants(d) if any(is_arr(f.type) or g.is_ext(f.type) for f in fs)]
@@ -3092,7 +3103,8 @@ def g9_clone_text(m, tt, d):
                 else:
                     np_ = g.op("call ptr @pruv_copy(ptr %s, i64 %s)" % (p, n))
                 a1 = g.op("insertvalue %s %s, ptr %s, 0" % (ARR, x, np_))
-                g.ins("store %s %s, ptr %s" % (ARR, a1, gd))
+                a2 = g.op("insertvalue %s %s, i64 %s, 2" % (ARR, a1, n))    # P3: the new block holds exactly len elements
+                g.ins("store %s %s, ptr %s" % (ARR, a2, gd))
             else:
                 g.ins("call void @pruv_clone__%s(ptr %s, ptr %s)" % (ft.name, gs, gd))
     vs = [(vn, t, fs) for vn, t, fs in g9_variants(d) if any(is_arr(f.type) or g.is_ext(f.type) for f in fs)]
@@ -3648,12 +3660,28 @@ def abi_of(f, tt, m=None, target="entry"):
     if is_arr(rt):
         ext.append("ptr %out")
         body.append("  %%r = call %s %s(%s)" % (lty(rt), entry, ", ".join(args)))
-        body.append("  %%x0 = extractvalue %s %%r, 0" % lty(rt))
+        body.append("  %%x0r = extractvalue %s %%r, 0" % lty(rt))
         body.append("  %%x1 = extractvalue %s %%r, 1" % lty(rt))
+        body.append("  %%x2 = extractvalue %s %%r, 2" % lty(rt))
+        # P3: the host frees with the exact length, so the buffer is normalized to cap == len first (only a moved
+        # truncate has cap != len; the cap is a runtime value here, so pruv_shrink_v2 runs only when cap != len)
+        if rt.name in ("array_u8", "array_bool", "str"):
+            sz = 1
+        else:
+            sz = elem_size(m.storage.layout_of(f)) if m is not None else 8
+        if m is not None:
+            m.shrink = True
         body.append("  %o0 = getelementptr inbounds { ptr, i64 }, ptr %out, i32 0, i32 0")
         body.append("  %o1 = getelementptr inbounds { ptr, i64 }, ptr %out, i32 0, i32 1")
-        body.append("  store ptr %x0, ptr %o0")
         body.append("  store i64 %x1, ptr %o1")
+        body.append("  %x3 = icmp eq i64 %x2, %x1")
+        body.append("  br i1 %x3, label %shr.same, label %shr.do")
+        body.append("shr.do:")
+        body.append("  %%x0 = call ptr @pruv_shrink_v2(ptr %%x0r, i64 %%x2, i64 %%x1, i64 %d, i64 %d)" % (sz, sz))
+        body.append("  store ptr %x0, ptr %o0")
+        body.append("  ret void")
+        body.append("shr.same:")
+        body.append("  store ptr %x0r, ptr %o0")
         body.append("  ret void")
         ret = "void"
     elif rt in (OPTION, RESULT):

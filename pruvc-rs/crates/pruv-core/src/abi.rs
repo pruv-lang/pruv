@@ -550,12 +550,28 @@ pub fn abi_of_target(f: &Function, tt: &TypeTable, target: AbiTarget, m: &mut Mo
     if is_array_name(rt) || rt == "str" {
         ext.push("ptr %out".to_string());
         body.push(format!("  %r = call {} {}({})", lty(rt), entry, argl));
-        body.push(format!("  %x0 = extractvalue {} %r, 0", lty(rt)));
+        body.push(format!("  %x0r = extractvalue {} %r, 0", lty(rt)));
         body.push(format!("  %x1 = extractvalue {} %r, 1", lty(rt)));
+        body.push(format!("  %x2 = extractvalue {} %r, 2", lty(rt)));
+        // P3: the host frees with the exact length, so the buffer is normalized to cap == len first (only a moved
+        // truncate has cap != len; the cap is a runtime value here, so pruv_shrink_v2 runs only when cap != len)
+        let sz = if rt == "array_u8" || rt == "array_bool" || rt == "str" {
+            1
+        } else {
+            crate::storage::elem_size(m.storage.layout_of(f))
+        };
+        m.shrink = true;
         body.push("  %o0 = getelementptr inbounds { ptr, i64 }, ptr %out, i32 0, i32 0".to_string());
         body.push("  %o1 = getelementptr inbounds { ptr, i64 }, ptr %out, i32 0, i32 1".to_string());
-        body.push("  store ptr %x0, ptr %o0".to_string());
         body.push("  store i64 %x1, ptr %o1".to_string());
+        body.push("  %x3 = icmp eq i64 %x2, %x1".to_string());
+        body.push("  br i1 %x3, label %shr.same, label %shr.do".to_string());
+        body.push("shr.do:".to_string());
+        body.push(format!("  %x0 = call ptr @pruv_shrink_v2(ptr %x0r, i64 %x2, i64 %x1, i64 {}, i64 {})", sz, sz));
+        body.push("  store ptr %x0, ptr %o0".to_string());
+        body.push("  ret void".to_string());
+        body.push("shr.same:".to_string());
+        body.push("  store ptr %x0r, ptr %o0".to_string());
         body.push("  ret void".to_string());
         ret = "void";
     } else if (rt == "option" || rt == "result") && target == AbiTarget::WinX64 {

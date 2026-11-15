@@ -297,9 +297,12 @@ void pruv_free_v2(void *data, int64_t len, int64_t size, int64_t align) {
 #endif
 }
 
-/* P2 batch 4: in-place `return truncate(x, m)`. Returns a block of m elements holding the first m
- * elements of data (len elements, layout size/align), so the later pruv_free_v2 / pruv_free with
- * length m uses the block's real layout. m == len keeps data; m == 0 frees it and returns NULL.
+/* P2 batch 4 / P3: normalizes a block to m elements. In the LLVM backend the module keeps the allocated
+ * element count (cap) next to the len, so a moved `truncate` no longer calls this; the external ABI
+ * wrappers call it as pruv_shrink_v2(data, cap, len, size, align) before handing the buffer to the host,
+ * which frees with the exact length. Here `len` is the allocated element count (cap). Returns a block of
+ * m elements holding the first m elements of data (layout size/align), so the later pruv_free_v2 /
+ * pruv_free with length m uses the block's real layout. m == len keeps data; m == 0 frees it and returns NULL.
  * Default mode: realloc (keeps data if the shrinking realloc fails). -DPRUV_RUST_ALLOCATOR: the host
  * helper pruv_host_realloc_v2 (std::alloc::realloc with the block's own layout). */
 void *pruv_shrink_v2(void *data, int64_t len, int64_t m, int64_t size, int64_t align) {
