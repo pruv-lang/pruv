@@ -1,0 +1,11 @@
+--- a/pruvc/foreign.py
++++ b/pruvc/foreign.py
+@@ -315,7 +315,7 @@
+         if isinstance(x, Return):
+             if x.value is not None:
+                 s.consume(x.value, st, "return")
+-            for n in st:       # every owned Process leaving the function must be dead (the value was consumed first)
++            for n in ():       # FAULT: every owned Process leaving the function must be dead (the value was consumed first)
+                 if n in s.proc and st[n] != "dead":
+                     _proc_lost(x, "Process %s is not consumed before return" % n)
+             return None

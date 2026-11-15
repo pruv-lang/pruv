@@ -1,0 +1,292 @@
+{
+  "rows": [
+    {
+      "fault": "f1_must_consume",
+      "patch": "f1_must_consume.diff",
+      "sha256": "5cd445ddd20d65b2b4a67b03d270cad85b97a01ca43664ba2a9b9f1e1e5cf20c",
+      "source_sha256": "60516b24d0c46a4cfbf43afa5dfbe5c46c79373c12bdf8257dd3a7e82299470f",
+      "probes": {
+        "g10p_early_return": {
+          "kind": "reject",
+          "baseline": {
+            "rc": 1,
+            "stdout": "{\"stage\": \"type\", \"line\": 4, \"col\": 20, \"code\": \"proc_unconsumed\", \"message\": \"Process p is not consumed before return\", \"fix\": \"consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership\"}\n",
+            "stderr": "",
+            "command": [
+              "/Users/spica4345/Projects/pruv/.venv/bin/python",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f1_must_consume_ptexs_80/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/tests/must_reject/g10p_early_return.pruv",
+              "--backend",
+              "rust",
+              "-o",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f1_must_consume_ptexs_80/clean/g10p_early_return.rs"
+            ],
+            "expected": {
+              "stage": "type",
+              "code": "proc_unconsumed"
+            },
+            "passed": true,
+            "internal_error": false,
+            "started": true
+          },
+          "faulty": {
+            "rc": 0,
+            "stdout": "{\"ok\": true}\n",
+            "stderr": "",
+            "command": [
+              "/Users/spica4345/Projects/pruv/.venv/bin/python",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f1_must_consume_ptexs_80/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/tests/must_reject/g10p_early_return.pruv",
+              "--backend",
+              "rust",
+              "-o",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f1_must_consume_ptexs_80/faulty/g10p_early_return.rs"
+            ],
+            "expected": {
+              "stage": "type",
+              "code": "proc_unconsumed"
+            },
+            "passed": false,
+            "internal_error": false,
+            "started": true
+          },
+          "detected": true
+        }
+      },
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/foreign.py'\n",
+        "stderr": ""
+      },
+      "status": "detected"
+    },
+    {
+      "fault": "f2_catalog_requires",
+      "patch": "f2_catalog_requires.diff",
+      "sha256": "b1ba2aa26be2468fcc4986c25698790d8ec112abe9e8e07bda16995ce787309c",
+      "source_sha256": "bdd2da74aaf0d7dbdd7caf2d93e008d3b26c42c51fb5f1c90bea80848794b910",
+      "probes": {
+        "g10p_v_bad_stream": {
+          "kind": "reject",
+          "baseline": {
+            "rc": 1,
+            "stdout": "{\"stage\": \"verify\", \"line\": 4, \"col\": 10, \"code\": \"call_requires\", \"message\": \"cannot prove precondition of proc_read (catalog) in bad\", \"fix\": \"make the callee's requires hold before the call\", \"counterexample\": {\"input\": {\"ok\": true, \"error\": 0, \"stdin_open\": false, \"stdout_eof\": false, \"stderr_eof\": false, \"stdout_size\": 0, \"stderr_size\": 0}}}\n",
+            "stderr": "",
+            "command": [
+              "/Users/spica4345/Projects/pruv/.venv/bin/python",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f2_catalog_requires_39mbraby/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/tests/must_reject/g10p_v_bad_stream.pruv",
+              "--backend",
+              "rust",
+              "-o",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f2_catalog_requires_39mbraby/clean/g10p_v_bad_stream.rs"
+            ],
+            "expected": {
+              "stage": "verify",
+              "code": "call_requires"
+            },
+            "passed": true,
+            "internal_error": false,
+            "started": true
+          },
+          "faulty": {
+            "rc": 0,
+            "stdout": "{\"ok\": true}\n",
+            "stderr": "",
+            "command": [
+              "/Users/spica4345/Projects/pruv/.venv/bin/python",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f2_catalog_requires_39mbraby/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/tests/must_reject/g10p_v_bad_stream.pruv",
+              "--backend",
+              "rust",
+              "-o",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f2_catalog_requires_39mbraby/faulty/g10p_v_bad_stream.rs"
+            ],
+            "expected": {
+              "stage": "verify",
+              "code": "call_requires"
+            },
+            "passed": false,
+            "internal_error": false,
+            "started": true
+          },
+          "detected": true
+        }
+      },
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/verify.py'\n",
+        "stderr": ""
+      },
+      "status": "detected"
+    },
+    {
+      "fault": "f3_snapshot_keep",
+      "patch": "f3_snapshot_keep.diff",
+      "sha256": "c256c277d45fef2994a2962309546ea35b46f4cb3093fbf0a09b94b39d41a68e",
+      "source_sha256": "bdd2da74aaf0d7dbdd7caf2d93e008d3b26c42c51fb5f1c90bea80848794b910",
+      "probes": {
+        "p_keep_other": {
+          "kind": "local_accept",
+          "baseline": {
+            "rc": 0,
+            "stdout": "{\"ok\": true}\n",
+            "stderr": "",
+            "command": [
+              "/Users/spica4345/Projects/pruv/.venv/bin/python",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f3_snapshot_keep_gz_8wi25/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/faults/p_keep_other.pruv",
+              "--backend",
+              "rust",
+              "-o",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f3_snapshot_keep_gz_8wi25/clean/p_keep_other.rs"
+            ],
+            "expected": null,
+            "passed": true,
+            "internal_error": false,
+            "started": true
+          },
+          "faulty": {
+            "rc": 1,
+            "stdout": "{\"stage\": \"verify\", \"line\": 7, \"col\": 5, \"code\": \"assert\", \"message\": \"cannot prove assertion in good\", \"fix\": \"strengthen invariants or fix the code\", \"counterexample\": {\"input\": {\"ok\": true, \"error\": 0, \"stdin_open\": false, \"stdout_eof\": false, \"stderr_eof\": true, \"stdout_size\": 3, \"stderr_size\": 0}, \"p\": {\"ok\": true, \"error\": 0, \"stdin_open\": false, \"stdout_eof\": false, \"stderr_eof\": true, \"stdout_size\": 0, \"stderr_size\": 0}}}\n",
+            "stderr": "",
+            "command": [
+              "/Users/spica4345/Projects/pruv/.venv/bin/python",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f3_snapshot_keep_gz_8wi25/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/faults/p_keep_other.pruv",
+              "--backend",
+              "rust",
+              "-o",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f3_snapshot_keep_gz_8wi25/faulty/p_keep_other.rs"
+            ],
+            "expected": null,
+            "passed": false,
+            "internal_error": false,
+            "started": true
+          },
+          "detected": true
+        },
+        "p_keep_read": {
+          "kind": "local_reject",
+          "baseline": {
+            "rc": 1,
+            "stdout": "{\"stage\": \"verify\", \"line\": 7, \"col\": 5, \"code\": \"assert\", \"message\": \"cannot prove assertion in bad\", \"fix\": \"strengthen invariants or fix the code\", \"counterexample\": {\"input\": {\"ok\": true, \"error\": 0, \"stdin_open\": false, \"stdout_eof\": false, \"stderr_eof\": false, \"stdout_size\": 3, \"stderr_size\": 0}, \"p\": {\"ok\": true, \"error\": 0, \"stdin_open\": false, \"stdout_eof\": false, \"stderr_eof\": false, \"stdout_size\": 1, \"stderr_size\": 0}}}\n",
+            "stderr": "",
+            "command": [
+              "/Users/spica4345/Projects/pruv/.venv/bin/python",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f3_snapshot_keep_gz_8wi25/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/faults/p_keep_read.pruv",
+              "--backend",
+              "rust",
+              "-o",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f3_snapshot_keep_gz_8wi25/clean/p_keep_read.rs"
+            ],
+            "expected": {
+              "stage": "verify",
+              "code": "assert"
+            },
+            "passed": true,
+            "internal_error": false,
+            "started": true
+          },
+          "faulty": {
+            "rc": 0,
+            "stdout": "{\"ok\": true}\n",
+            "stderr": "",
+            "command": [
+              "/Users/spica4345/Projects/pruv/.venv/bin/python",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f3_snapshot_keep_gz_8wi25/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/faults/p_keep_read.pruv",
+              "--backend",
+              "rust",
+              "-o",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f3_snapshot_keep_gz_8wi25/faulty/p_keep_read.rs"
+            ],
+            "expected": {
+              "stage": "verify",
+              "code": "assert"
+            },
+            "passed": false,
+            "internal_error": false,
+            "started": true
+          },
+          "detected": true
+        }
+      },
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/verify.py'\n",
+        "stderr": ""
+      },
+      "status": "detected"
+    },
+    {
+      "fault": "f4_result_tag",
+      "patch": "f4_result_tag.diff",
+      "sha256": "d7d2dfdef51e7d16c48db87d759ce4adc17deebf80bde00a829bb291d6faf05c",
+      "source_sha256": "375729e1e1d96e116433a2d4a71baac27b834188f3e3619e0d1c6d393c6c1a35",
+      "probes": {
+        "g10p_r10_exit_kill": {
+          "kind": "runtime",
+          "baseline": {
+            "rc": 0,
+            "stdout": "{\"ok\": true}\n",
+            "stderr": "",
+            "command": [
+              "/Users/spica4345/Projects/pruv/.venv/bin/python",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f4_result_tag_2nlsj8su/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/tests/runtime/g10p_r10_exit_kill.pruv",
+              "-o",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f4_result_tag_2nlsj8su/clean/g10p_r10_exit_kill.ll",
+              "--backend",
+              "llvm",
+              "--rust-bindings",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f4_result_tag_2nlsj8su/clean/g10p_r10_exit_kill_gen.rs"
+            ],
+            "run": {
+              "rc": 0,
+              "stdout": "",
+              "stderr": ""
+            },
+            "passed": true,
+            "reason": "exit 0",
+            "internal_error": false,
+            "started": true
+          },
+          "faulty": {
+            "rc": 0,
+            "stdout": "{\"ok\": true}\n",
+            "stderr": "",
+            "command": [
+              "/Users/spica4345/Projects/pruv/.venv/bin/python",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f4_result_tag_2nlsj8su/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/tests/runtime/g10p_r10_exit_kill.pruv",
+              "-o",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f4_result_tag_2nlsj8su/faulty/g10p_r10_exit_kill.ll",
+              "--backend",
+              "llvm",
+              "--rust-bindings",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f4_result_tag_2nlsj8su/faulty/g10p_r10_exit_kill_gen.rs"
+            ],
+            "run": {
+              "rc": 101,
+              "stdout": "",
+              "stderr": "\nthread 'main' (81988589) panicked at /Users/spica4345/Projects/pruv/bench/g10_proc/.work/f4_result_tag_2nlsj8su/faulty/main.rs:6:5:\nassertion `left == right` failed\n  left: 1000\n right: 0\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+            },
+            "passed": false,
+            "reason": "exit 101",
+            "internal_error": false,
+            "started": true
+          },
+          "detected": true
+        }
+      },
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/foreign_shim.py'\n",
+        "stderr": ""
+      },
+      "status": "detected"
+    }
+  ]
+}

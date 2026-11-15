@@ -1,0 +1,78 @@
+// Stream the child's stdout in 4096-byte chunks and count LF-terminated lines by bytes only.
+fn kill_with(take p: Process, code: i64) -> i64 ! proc, alloc
+  requires -3 <= code && code <= -1
+  ensures result == code
+{
+  let r: Result<i64> = proc_kill(move p);
+  return code;
+}
+
+pub fn scan(program: str, mode: str, budget: i64) -> i64 ! proc, alloc
+  requires 0 <= budget && budget <= 10000
+  ensures -4 <= result && result <= 4096000040960000
+{
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "lines");
+  args = proc_args_push(move args, mode);
+  let mut p: Process = proc_spawn(program, args, "");
+  if !proc_ok(p) {
+    let r0: Result<i64> = proc_wait(move p);
+    return -1;
+  }
+  p = proc_close_stdin(move p);
+  if !proc_ok(p) { return kill_with(move p, -2); }
+
+  let mut used: i64 = 0;
+  let mut total: i64 = 0;
+  let mut lines: i64 = 0;
+  let mut longest: i64 = 0;
+  let mut cur: i64 = 0;
+  let mut done: bool = false;
+  while !done && used < budget
+    invariant 0 <= used && used <= budget
+    invariant 0 <= total && total <= 4096 * used
+    invariant proc_ok(p)
+    invariant 0 <= lines && 0 <= cur && lines + cur <= total
+    invariant 0 <= longest && longest <= total
+    decreases budget - used
+  {
+    p = proc_read(move p, 1, 4096);
+    used = used + 1;
+    if !proc_ok(p) { return kill_with(move p, -2); }
+    let n: i64 = proc_size(p, 1);
+    if n == 0 {
+      done = true;
+    } else {
+      let mut i: i64 = 0;
+      while i < n
+        invariant 0 <= i && i <= n && n <= 4096
+        invariant 0 <= lines && 0 <= cur && lines + cur <= total + i
+        invariant 0 <= longest && longest <= total + i
+        decreases n - i
+      {
+        if proc_byte(p, 1, i) == 10 {
+          lines = lines + 1;
+          if cur > longest { longest = cur; }
+          cur = 0;
+        } else {
+          cur = cur + 1;
+        }
+        i = i + 1;
+      }
+      total = total + n;
+    }
+  }
+  if !done { return kill_with(move p, -3); }
+  if cur > 0 {
+    lines = lines + 1;
+    if cur > longest { longest = cur; }
+  }
+  let r: Result<i64> = proc_wait(move p);
+  match r {
+    Ok(code) => {
+      if code != 0 { return -4; }
+      return lines * 100000000 + longest;
+    }
+    Err(e) => { return -2; }
+  }
+}

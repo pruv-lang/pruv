@@ -1,0 +1,92 @@
+pub fn scan(program: str, mode: str, budget: i64) -> i64 ! proc, alloc
+  requires 0 <= budget && budget <= 10000
+  ensures -4 <= result && result <= 4096000040960000
+{
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "lines");
+  args = proc_args_push(move args, mode);
+
+  let mut p: Process = proc_spawn(program, args, "");
+  if !proc_ok(p) {
+    let waited: Result<i64> = proc_wait(move p);
+    return -1;
+  }
+
+  p = proc_close_stdin(move p);
+  if !proc_ok(p) {
+    let killed: Result<i64> = proc_kill(move p);
+    return -2;
+  }
+
+  let mut reads: i64 = 0;
+  let mut seen: i64 = 0;
+  let mut lines: i64 = 0;
+  let mut rest: i64 = 0;
+  let mut longest: i64 = 0;
+
+  while reads < budget
+    invariant 0 <= reads && reads <= budget
+    invariant proc_ok(p)
+    invariant 0 <= seen && seen <= 4096 * reads
+    invariant 0 <= lines
+    invariant 0 <= rest
+    invariant lines + rest <= seen
+    invariant 0 <= longest && longest <= seen
+    decreases budget - reads
+  {
+    p = proc_read(move p, 1, 4096);
+    reads = reads + 1;
+    if !proc_ok(p) {
+      let killed: Result<i64> = proc_kill(move p);
+      return -2;
+    }
+
+    let chunk: [u8] = proc_bytes(p, 1);
+    if len(chunk) == 0 {
+      if rest > 0 {
+        lines = lines + 1;
+        if rest > longest {
+          longest = rest;
+        }
+      }
+      let status: Result<i64> = proc_wait(move p);
+      match status {
+        Ok(code) => {
+          if code != 0 {
+            return -4;
+          }
+          return lines * 100000000 + longest;
+        }
+        Err(error) => {
+          return -2;
+        }
+      }
+    }
+
+    let mut i: i64 = 0;
+    while i < len(chunk)
+      invariant 0 <= i && i <= len(chunk)
+      invariant 0 <= seen && seen <= 4096 * (reads - 1) + i
+      invariant 0 <= lines
+      invariant 0 <= rest
+      invariant lines + rest <= seen
+      invariant 0 <= longest && longest <= seen
+      decreases len(chunk) - i
+    {
+      if chunk[i] == 10 {
+        lines = lines + 1;
+        if rest > longest {
+          longest = rest;
+        }
+        rest = 0;
+      } else {
+        rest = rest + 1;
+      }
+      seen = seen + 1;
+      i = i + 1;
+    }
+  }
+
+  let killed: Result<i64> = proc_kill(move p);
+  return -3;
+}

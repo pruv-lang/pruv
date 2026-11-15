@@ -1,0 +1,58 @@
+// polynomial digest of one output stream: h = 1, then h = (h * 256 + b) % 999983 for every byte b in order
+fn digest(p: Process, stream: i64) -> i64
+  requires stream == 1 || stream == 2
+  ensures 0 <= result && result < 999983
+{
+  let n: i64 = proc_size(p, stream);
+  let mut h: i64 = 1;
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n
+    invariant 0 <= h && h < 999983
+    decreases n - i
+  {
+    h = (h * 256 + proc_byte(p, stream, i)) % 999983;
+    i = i + 1;
+  }
+  return h;
+}
+
+fn fail_wait(take p: Process) -> i64 ! proc, alloc
+  ensures -16 <= result && result <= -10
+{
+  let e: i64 = proc_error(p);
+  let r: Result<i64> = proc_wait(move p);
+  return -10 - e;
+}
+
+fn fail_kill(take p: Process) -> i64 ! proc, alloc
+  ensures -26 <= result && result <= -20
+{
+  let e: i64 = proc_error(p);
+  let r: Result<i64> = proc_kill(move p);
+  return -20 - e;
+}
+
+pub fn version(program: str, flag: str, cwd: str) -> i64 ! proc, alloc
+  ensures -31 <= result && result < 256000000000000
+{
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "--version");
+  args = proc_args_push(move args, flag);
+  let mut p: Process = proc_spawn(program, args, cwd);
+  if !proc_ok(p) { return fail_wait(move p); }
+  p = proc_close_stdin(move p);
+  if !proc_ok(p) { return fail_kill(move p); }
+  p = proc_read_all(move p);
+  if !proc_ok(p) { return fail_kill(move p); }
+  let out: i64 = digest(p, 1);
+  let err: i64 = digest(p, 2);
+  let r: Result<i64> = proc_wait(move p);
+  match r {
+    Ok(code) => {
+      if code < 0 || code > 255 { return -31; }
+      return code * 1000000000000 + out * 1000000 + err;
+    }
+    Err(e) => { return -30; }
+  }
+}

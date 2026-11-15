@@ -1,0 +1,13 @@
+--- a/pruvc/verify.py
++++ b/pruvc/verify.py
+@@ -2078,8 +2078,8 @@
+             s.assume(st, g, z3.Implies(ok, z3.And(sz >= 0, sz <= mx)))
+             s.assume(st, g, z3.Implies(ok, _proc_eof(res, sm) == (sz == 0)))
+             s.assume(st, g, z3.Implies(z3.And(ok, _proc_eof(p, sm)), sz == 0))
+-            s.assume(st, g, z3.Implies(z3.And(ok, sm == 1), _proc_keep_err(res, p)))
+-            s.assume(st, g, z3.Implies(z3.And(ok, sm == 2), _proc_keep_out(res, p)))
++            s.assume(st, g, z3.Implies(z3.And(ok, sm == 1), _proc_keep_out(res, p)))
++            s.assume(st, g, z3.Implies(z3.And(ok, sm == 2), _proc_keep_err(res, p)))
+             s.assume(st, g, z3.Implies(ok, res.stdin_open == p.stdin_open))
+         elif n == "proc_read_all":
+             s.assume(st, g, z3.Not(res.stdin_open))

@@ -721,6 +721,11 @@ Gates:
 8. Results and limits go into `RESULTS.md`; the proc status in `BLUEPRINT.md` is updated. Existing File
    measurements are not replaced by proc measurements.
 
+Record (2026-11-16): all eight gates pass, see `bench/g10_proc/README.md` and RESULTS.md §125. Gate 1: 4/4 pairs.
+Gate 2: independent author 2/2 first attempt, 0 fixes. Gates 3-4: 16 mutants, 12 static rejected at compile time, 4
+output mutants caught by the fixture oracle (reported as `wrong_but_proved`), 0 unexpected. Gate 5: 4/4 faults caught.
+Gates 6-7: 1 MiB with exact totals on both sides; bulk copy 0.98-1.01x and per byte 1.14-1.86x hand Rust, no target.
+
 ## 9. Later work
 
 - User-facing async, poll, timeouts, cancellation and long-running engine sessions.

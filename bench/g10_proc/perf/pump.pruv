@@ -1,0 +1,87 @@
+// G10 proc Q perf: drain both outputs of `child bulk N` in chunks of at most 4096 bytes, alternating stdout and stderr.
+// mode 0 checks every byte through proc_byte (the per-byte path); mode 1 takes a proc_bytes copy of each chunk and
+// checks only its first and last byte (the bulk-copy path). Either way a lost or duplicated byte changes a checked
+// byte or a total. Returns the total number of bytes read from both outputs, or a negative error.
+fn stop(take p: Process, code: i64) -> i64 ! proc, alloc
+  requires -9 <= code && code <= -1
+  ensures result == code
+{
+  let r: Result<i64> = proc_kill(move p);
+  return code;
+}
+
+fn chunk_ok(p: Process, s: i64, off: i64, mode: i64) -> bool ! alloc
+  requires s == 1 || s == 2
+  requires 0 <= off && off <= 40960000
+  requires proc_size(p, s) <= 4096
+{
+  let n: i64 = proc_size(p, s);
+  if mode == 0 {
+    let mut i: i64 = 0;
+    while i < n
+      invariant 0 <= i && i <= n
+      decreases n - i
+    {
+      if proc_byte(p, s, i) != (off + i) % 251 { return false; }
+      i = i + 1;
+    }
+    return true;
+  }
+  let c: [u8] = proc_bytes(p, s);
+  if len(c) == 0 { return true; }
+  return c[0] == off % 251 && c[len(c) - 1] == (off + len(c) - 1) % 251;
+}
+
+pub fn pump(program: str, n: str, mode: i64) -> i64 ! proc, alloc
+  ensures -9 <= result && result <= 81920000
+{
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "bulk");
+  args = proc_args_push(move args, n);
+  let mut p: Process = proc_spawn(program, args, "");
+  if !proc_ok(p) {
+    let r0: Result<i64> = proc_wait(move p);
+    return -1;
+  }
+  p = proc_close_stdin(move p);
+  if !proc_ok(p) { return stop(move p, -2); }
+  let mut out: i64 = 0;
+  let mut err: i64 = 0;
+  let mut done1: bool = false;
+  let mut done2: bool = false;
+  let mut used: i64 = 0;
+  while !(done1 && done2) && used < 10000
+    invariant proc_ok(p)
+    invariant 0 <= used && used <= 10000
+    invariant 0 <= out && out <= 4096 * used
+    invariant 0 <= err && err <= 4096 * used
+    decreases 10000 - used
+  {
+    used = used + 1;
+    if !done1 {
+      p = proc_read(move p, 1, 4096);
+      if !proc_ok(p) { return stop(move p, -3); }
+      let k: i64 = proc_size(p, 1);
+      if k == 0 { done1 = true; } else {
+        if !chunk_ok(p, 1, out, mode) { return stop(move p, -5); }
+        out = out + k;
+      }
+    }
+    if !done2 {
+      p = proc_read(move p, 2, 4096);
+      if !proc_ok(p) { return stop(move p, -3); }
+      let k: i64 = proc_size(p, 2);
+      if k == 0 { done2 = true; } else {
+        if !chunk_ok(p, 2, err, mode) { return stop(move p, -6); }
+        err = err + k;
+      }
+    }
+  }
+  if !(done1 && done2) { return stop(move p, -4); }
+  let r: Result<i64> = proc_wait(move p);
+  match r {
+    Ok(code) => { if code != 0 { return -7; } }
+    Err(e) => { return -8; }
+  }
+  return out + err;
+}

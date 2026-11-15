@@ -1,0 +1,1409 @@
+{
+  "tools": {
+    "py": [
+      "/Users/spica4345/Projects/pruv/.venv/bin/python",
+      "/Users/spica4345/Projects/pruv/pruvc/pruvc.py"
+    ],
+    "rs": [
+      "/Users/spica4345/Projects/pruv/pruvc-rs/target/release/pruvc"
+    ]
+  },
+  "summary": {
+    "total": 18,
+    "explicit_incorrect": 16,
+    "controls": 2,
+    "by_expected": {
+      "static": {
+        "rejected_check": 10,
+        "rejected_verify": 14
+      },
+      "oracle": {
+        "wrong_but_proved": 8
+      },
+      "accepted": {
+        "accepted": 4
+      }
+    },
+    "unexpected": []
+  },
+  "items": [
+    {
+      "id": "m001",
+      "pid": "q01",
+      "family": "missing_consume",
+      "expected": "static",
+      "old": "let r: Result<i64> = proc_wait(move p);\n  return -10 - e;",
+      "new": "return -10 - e;",
+      "intent": "incorrect",
+      "sha256": "aa5a435d32ed8b2769a755c9f98245bd40db89fa44c39264ee55b49cd25f63e4",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_check",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "type",
+                "line": 24,
+                "col": 3,
+                "code": "proc_unconsumed",
+                "message": "Process p is not consumed before return",
+                "fix": "consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership",
+                "file": "root.pruv"
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade__6yt_72c/root_gen.rs",
+            "ll": null,
+            "stderr": "{\"stage\": \"type\", \"line\": 24, \"col\": 3, \"code\": \"proc_unconsumed\", \"message\": \"Process p is not consumed before return\", \"fix\": \"consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership\", \"file\": \"root.pruv\"}\n",
+            "status": "pruv_error"
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_check",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "type",
+                "line": 24,
+                "col": 3,
+                "code": "proc_unconsumed",
+                "message": "Process p is not consumed before return",
+                "fix": "consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership",
+                "file": "root.pruv"
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_zws3khhr/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_zws3khhr/root_gen.ll",
+            "stderr": "{\"stage\": \"type\", \"line\": 24, \"col\": 3, \"code\": \"proc_unconsumed\", \"message\": \"Process p is not consumed before return\", \"fix\": \"consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership\", \"file\": \"root.pruv\"}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m002",
+      "pid": "q02",
+      "family": "missing_consume",
+      "expected": "static",
+      "old": "if !done { return kill_with(move p, -3); }",
+      "new": "if !done { return -3; }",
+      "intent": "incorrect",
+      "sha256": "78f0ada99796d72eccfe68f09ff047d1080241b78cf0b59fa133c4962d9745ea",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_check",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "type",
+                "line": 65,
+                "col": 14,
+                "code": "proc_unconsumed",
+                "message": "Process p is not consumed before return",
+                "fix": "consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership",
+                "file": "root.pruv"
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_oikqd1xh/root_gen.rs",
+            "ll": null,
+            "stderr": "{\"stage\": \"type\", \"line\": 65, \"col\": 14, \"code\": \"proc_unconsumed\", \"message\": \"Process p is not consumed before return\", \"fix\": \"consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership\", \"file\": \"root.pruv\"}\n",
+            "status": "pruv_error"
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_check",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "type",
+                "line": 65,
+                "col": 14,
+                "code": "proc_unconsumed",
+                "message": "Process p is not consumed before return",
+                "fix": "consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership",
+                "file": "root.pruv"
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_93ix9_h3/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_93ix9_h3/root_gen.ll",
+            "stderr": "{\"stage\": \"type\", \"line\": 65, \"col\": 14, \"code\": \"proc_unconsumed\", \"message\": \"Process p is not consumed before return\", \"fix\": \"consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership\", \"file\": \"root.pruv\"}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m003",
+      "pid": "q01",
+      "family": "overwrite",
+      "expected": "static",
+      "old": "let mut p: Process = proc_spawn(program, args, cwd);",
+      "new": "let mut p: Process = proc_spawn(program, args, cwd);\n  p = proc_spawn(program, proc_args_new(), cwd);",
+      "intent": "incorrect",
+      "sha256": "8cad2d84050f2fc9791f3e7da251728ec869a0e230f479f95264a68157acece3",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_check",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "type",
+                "line": 43,
+                "col": 3,
+                "code": "proc_unconsumed",
+                "message": "Process p is overwritten while it is not consumed",
+                "fix": "consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership",
+                "file": "root.pruv"
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_p_ixe5_h/root_gen.rs",
+            "ll": null,
+            "stderr": "{\"stage\": \"type\", \"line\": 43, \"col\": 3, \"code\": \"proc_unconsumed\", \"message\": \"Process p is overwritten while it is not consumed\", \"fix\": \"consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership\", \"file\": \"root.pruv\"}\n",
+            "status": "pruv_error"
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_check",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "type",
+                "line": 43,
+                "col": 3,
+                "code": "proc_unconsumed",
+                "message": "Process p is overwritten while it is not consumed",
+                "fix": "consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership",
+                "file": "root.pruv"
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_7je0_8ny/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_7je0_8ny/root_gen.ll",
+            "stderr": "{\"stage\": \"type\", \"line\": 43, \"col\": 3, \"code\": \"proc_unconsumed\", \"message\": \"Process p is overwritten while it is not consumed\", \"fix\": \"consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership\", \"file\": \"root.pruv\"}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m004",
+      "pid": "q01",
+      "family": "branch",
+      "expected": "static",
+      "old": "if !proc_ok(p) { return fail_wait(move p); }",
+      "new": "if !proc_ok(p) { let z: i64 = fail_wait(move p); }",
+      "intent": "incorrect",
+      "sha256": "cbeed0b87b2434ed55ed7aff119af915b2a38416d2f2dbf122aacfb68386ae66",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_check",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "type",
+                "line": 44,
+                "col": 24,
+                "code": "foreign_move",
+                "message": "binding may have been moved",
+                "fix": "p is moved on some paths; make every path leave it live, or do not use it afterwards",
+                "file": "root.pruv"
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_hifz4ljx/root_gen.rs",
+            "ll": null,
+            "stderr": "{\"stage\": \"type\", \"line\": 44, \"col\": 24, \"code\": \"foreign_move\", \"message\": \"binding may have been moved\", \"fix\": \"p is moved on some paths; make every path leave it live, or do not use it afterwards\", \"file\": \"root.pruv\"}\n",
+            "status": "pruv_error"
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_check",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "type",
+                "line": 44,
+                "col": 24,
+                "code": "foreign_move",
+                "message": "binding may have been moved",
+                "fix": "p is moved on some paths; make every path leave it live, or do not use it afterwards",
+                "file": "root.pruv"
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_pl5w7i0g/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_pl5w7i0g/root_gen.ll",
+            "stderr": "{\"stage\": \"type\", \"line\": 44, \"col\": 24, \"code\": \"foreign_move\", \"message\": \"binding may have been moved\", \"fix\": \"p is moved on some paths; make every path leave it live, or do not use it afterwards\", \"file\": \"root.pruv\"}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m005",
+      "pid": "q02",
+      "family": "temporary",
+      "expected": "static",
+      "old": "p = proc_close_stdin(move p);",
+      "new": "let t: i64 = proc_size(proc_close_stdin(move p), 1);",
+      "intent": "incorrect",
+      "sha256": "b758e4848f1c40451519b8bd4c7ca92d6fc0f1927eea0710af22be6d04be21fc",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_check",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "type",
+                "line": 22,
+                "col": 26,
+                "code": "proc_unconsumed",
+                "message": "temporary Process is not consumed",
+                "fix": "consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership",
+                "file": "root.pruv"
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_efjnjf8e/root_gen.rs",
+            "ll": null,
+            "stderr": "{\"stage\": \"type\", \"line\": 22, \"col\": 26, \"code\": \"proc_unconsumed\", \"message\": \"temporary Process is not consumed\", \"fix\": \"consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership\", \"file\": \"root.pruv\"}\n",
+            "status": "pruv_error"
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_check",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "type",
+                "line": 22,
+                "col": 26,
+                "code": "proc_unconsumed",
+                "message": "temporary Process is not consumed",
+                "fix": "consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership",
+                "file": "root.pruv"
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_7fig_5hs/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_7fig_5hs/root_gen.ll",
+            "stderr": "{\"stage\": \"type\", \"line\": 22, \"col\": 26, \"code\": \"proc_unconsumed\", \"message\": \"temporary Process is not consumed\", \"fix\": \"consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership\", \"file\": \"root.pruv\"}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m006",
+      "pid": "q01",
+      "family": "unchecked_io",
+      "expected": "static",
+      "old": "if !proc_ok(p) { return fail_wait(move p); }",
+      "new": "",
+      "intent": "incorrect",
+      "sha256": "217f7807a5573a36e0dbfc4f90311168b0b381c6bda49a446975a44ab809867f",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 44,
+                "col": 7,
+                "code": "call_requires",
+                "message": "cannot prove precondition of proc_close_stdin (catalog) in crate::version",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "program": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "flag": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "cwd": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "args": {
+                    "argc": 2
+                  },
+                  "p": {
+                    "ok": false,
+                    "error": 1,
+                    "stdin_open": false,
+                    "stdout_eof": false,
+                    "stderr_eof": false,
+                    "stdout_size": 0,
+                    "stderr_size": 0
+                  }
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_ze0szlr4/root_gen.rs",
+            "ll": null,
+            "stderr": "\": \"verify\", \"line\": 44, \"col\": 7, \"code\": \"call_requires\", \"message\": \"cannot prove precondition of proc_close_stdin (catalog) in crate::version\", \"fix\": \"make the callee's requires hold before the call\", \"file\": \"root.pruv\", \"counterexample\": {\"program\": {\"len\": 0, \"first\": []}, \"flag\": {\"len\": 0, \"first\": []}, \"cwd\": {\"len\": 0, \"first\": []}, \"args\": {\"argc\": 2}, \"p\": {\"ok\": false, \"error\": 1, \"stdin_open\": false, \"stdout_eof\": false, \"stderr_eof\": false, \"stdout_size\": 0, \"stderr_size\": 0}}}\n",
+            "status": "pruv_error"
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 44,
+                "col": 7,
+                "code": "call_requires",
+                "message": "cannot prove precondition of proc_close_stdin (catalog) in crate::version",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "program": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "flag": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "cwd": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "args": {
+                    "argc": 2
+                  },
+                  "p": {
+                    "ok": false,
+                    "error": 1,
+                    "stdin_open": false,
+                    "stdout_eof": false,
+                    "stderr_eof": false,
+                    "stdout_size": 0,
+                    "stderr_size": 0
+                  }
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_f_qkk0en/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_f_qkk0en/root_gen.ll",
+            "stderr": "\": \"verify\", \"line\": 44, \"col\": 7, \"code\": \"call_requires\", \"message\": \"cannot prove precondition of proc_close_stdin (catalog) in crate::version\", \"fix\": \"make the callee's requires hold before the call\", \"file\": \"root.pruv\", \"counterexample\": {\"program\": {\"len\": 0, \"first\": []}, \"flag\": {\"len\": 0, \"first\": []}, \"cwd\": {\"len\": 0, \"first\": []}, \"args\": {\"argc\": 2}, \"p\": {\"ok\": false, \"error\": 1, \"stdin_open\": false, \"stdout_eof\": false, \"stderr_eof\": false, \"stdout_size\": 0, \"stderr_size\": 0}}}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m007",
+      "pid": "q02",
+      "family": "unchecked_io",
+      "expected": "static",
+      "old": "used = used + 1;\n    if !proc_ok(p) { return kill_with(move p, -2); }",
+      "new": "used = used + 1;",
+      "intent": "incorrect",
+      "sha256": "b144c6de87f2e2bdea631bab105c791a32b3c94ff4246da7ae377cfb3349194a",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 34,
+                "col": 15,
+                "code": "invariant_preserved",
+                "message": "cannot prove loop invariant preserved in crate::scan",
+                "fix": "the invariant must hold again after one body iteration; add facts it depends on as more invariants",
+                "file": "root.pruv",
+                "counterexample": {
+                  "program": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "mode": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "budget": 1,
+                  "args": {
+                    "argc": 2
+                  },
+                  "p": {
+                    "ok": false,
+                    "error": 1,
+                    "stdin_open": false,
+                    "stdout_eof": false,
+                    "stderr_eof": false,
+                    "stdout_size": 0,
+                    "stderr_size": 0
+                  },
+                  "used": 1,
+                  "total": 0,
+                  "lines": 0,
+                  "longest": 0,
+                  "cur": 0,
+                  "done": true,
+                  "n": 0
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_9p1wyw03/root_gen.rs",
+            "ll": null,
+            "stderr": "variant preserved in crate::scan\", \"fix\": \"the invariant must hold again after one body iteration; add facts it depends on as more invariants\", \"file\": \"root.pruv\", \"counterexample\": {\"program\": {\"len\": 0, \"first\": []}, \"mode\": {\"len\": 0, \"first\": []}, \"budget\": 1, \"args\": {\"argc\": 2}, \"p\": {\"ok\": false, \"error\": 1, \"stdin_open\": false, \"stdout_eof\": false, \"stderr_eof\": false, \"stdout_size\": 0, \"stderr_size\": 0}, \"used\": 1, \"total\": 0, \"lines\": 0, \"longest\": 0, \"cur\": 0, \"done\": true, \"n\": 0}}\n",
+            "status": "pruv_error"
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 34,
+                "col": 15,
+                "code": "invariant_preserved",
+                "message": "cannot prove loop invariant preserved in crate::scan",
+                "fix": "the invariant must hold again after one body iteration; add facts it depends on as more invariants",
+                "file": "root.pruv",
+                "counterexample": {
+                  "program": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "mode": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "budget": 1,
+                  "args": {
+                    "argc": 2
+                  },
+                  "p": {
+                    "ok": false,
+                    "error": 1,
+                    "stdin_open": false,
+                    "stdout_eof": false,
+                    "stderr_eof": false,
+                    "stdout_size": 0,
+                    "stderr_size": 0
+                  },
+                  "used": 1,
+                  "total": 0,
+                  "lines": 0,
+                  "longest": 0,
+                  "cur": 0,
+                  "done": true,
+                  "n": 0
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_vjhj454k/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_vjhj454k/root_gen.ll",
+            "stderr": "variant preserved in crate::scan\", \"fix\": \"the invariant must hold again after one body iteration; add facts it depends on as more invariants\", \"file\": \"root.pruv\", \"counterexample\": {\"program\": {\"len\": 0, \"first\": []}, \"mode\": {\"len\": 0, \"first\": []}, \"budget\": 1, \"args\": {\"argc\": 2}, \"p\": {\"ok\": false, \"error\": 1, \"stdin_open\": false, \"stdout_eof\": false, \"stderr_eof\": false, \"stdout_size\": 0, \"stderr_size\": 0}, \"used\": 1, \"total\": 0, \"lines\": 0, \"longest\": 0, \"cur\": 0, \"done\": true, \"n\": 0}}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m008",
+      "pid": "q01",
+      "family": "write_after_close",
+      "expected": "static",
+      "old": "p = proc_read_all(move p);",
+      "new": "p = proc_write_str(move p, \"late\");\n  p = proc_read_all(move p);",
+      "intent": "incorrect",
+      "sha256": "0dadf23cc219eb5c880fcb284dfea4b43a6c7f2cc7410df96edccc4c8fb3fa3f",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 46,
+                "col": 7,
+                "code": "call_requires",
+                "message": "cannot prove precondition of proc_write_str (catalog) in crate::version",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "program": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "flag": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "cwd": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "args": {
+                    "argc": 2
+                  },
+                  "p": {
+                    "ok": true,
+                    "error": 0,
+                    "stdin_open": false,
+                    "stdout_eof": false,
+                    "stderr_eof": false,
+                    "stdout_size": 0,
+                    "stderr_size": 0
+                  }
+                }
+              },
+              {
+                "stage": "verify",
+                "line": 47,
+                "col": 7,
+                "code": "call_requires",
+                "message": "cannot prove precondition of proc_read_all (catalog) in crate::version",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "program": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "flag": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "cwd": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "args": {
+                    "argc": 2
+                  },
+                  "p": {
+                    "ok": false,
+                    "error": 1,
+                    "stdin_open": false,
+                    "stdout_eof": false,
+                    "stderr_eof": false,
+                    "stdout_size": 0,
+                    "stderr_size": 0
+                  }
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_n4xbd8xi/root_gen.rs",
+            "ll": null,
+            "stderr": "age\": \"verify\", \"line\": 47, \"col\": 7, \"code\": \"call_requires\", \"message\": \"cannot prove precondition of proc_read_all (catalog) in crate::version\", \"fix\": \"make the callee's requires hold before the call\", \"file\": \"root.pruv\", \"counterexample\": {\"program\": {\"len\": 0, \"first\": []}, \"flag\": {\"len\": 0, \"first\": []}, \"cwd\": {\"len\": 0, \"first\": []}, \"args\": {\"argc\": 2}, \"p\": {\"ok\": false, \"error\": 1, \"stdin_open\": false, \"stdout_eof\": false, \"stderr_eof\": false, \"stdout_size\": 0, \"stderr_size\": 0}}}\n",
+            "status": "pruv_error"
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 46,
+                "col": 7,
+                "code": "call_requires",
+                "message": "cannot prove precondition of proc_write_str (catalog) in crate::version",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "program": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "flag": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "cwd": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "args": {
+                    "argc": 2
+                  },
+                  "p": {
+                    "ok": true,
+                    "error": 0,
+                    "stdin_open": false,
+                    "stdout_eof": false,
+                    "stderr_eof": false,
+                    "stdout_size": 0,
+                    "stderr_size": 0
+                  }
+                }
+              },
+              {
+                "stage": "verify",
+                "line": 47,
+                "col": 7,
+                "code": "call_requires",
+                "message": "cannot prove precondition of proc_read_all (catalog) in crate::version",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "program": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "flag": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "cwd": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "args": {
+                    "argc": 2
+                  },
+                  "p": {
+                    "ok": false,
+                    "error": 1,
+                    "stdin_open": false,
+                    "stdout_eof": false,
+                    "stderr_eof": false,
+                    "stdout_size": 0,
+                    "stderr_size": 0
+                  }
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_rjklggm_/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_rjklggm_/root_gen.ll",
+            "stderr": "age\": \"verify\", \"line\": 47, \"col\": 7, \"code\": \"call_requires\", \"message\": \"cannot prove precondition of proc_read_all (catalog) in crate::version\", \"fix\": \"make the callee's requires hold before the call\", \"file\": \"root.pruv\", \"counterexample\": {\"program\": {\"len\": 0, \"first\": []}, \"flag\": {\"len\": 0, \"first\": []}, \"cwd\": {\"len\": 0, \"first\": []}, \"args\": {\"argc\": 2}, \"p\": {\"ok\": false, \"error\": 1, \"stdin_open\": false, \"stdout_eof\": false, \"stderr_eof\": false, \"stdout_size\": 0, \"stderr_size\": 0}}}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m009",
+      "pid": "q01",
+      "family": "range",
+      "expected": "static",
+      "old": "proc_byte(p, stream, i)",
+      "new": "proc_byte(p, stream, i + 1)",
+      "intent": "incorrect",
+      "sha256": "efe69f11738d6c90c7dc294a3cb711c1e7f6b91400b443e93ed4d2231d0165b6",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 14,
+                "col": 20,
+                "code": "call_requires",
+                "message": "cannot prove precondition of proc_byte (catalog) in crate::digest",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "p": {
+                    "ok": true,
+                    "error": 0,
+                    "stdin_open": true,
+                    "stdout_eof": true,
+                    "stderr_eof": true,
+                    "stdout_size": 1,
+                    "stderr_size": 31599
+                  },
+                  "stream": 2,
+                  "n": 31599,
+                  "h": 0,
+                  "i": 31598
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_elm51mac/root_gen.rs",
+            "ll": null,
+            "stderr": "{\"stage\": \"verify\", \"line\": 14, \"col\": 20, \"code\": \"call_requires\", \"message\": \"cannot prove precondition of proc_byte (catalog) in crate::digest\", \"fix\": \"make the callee's requires hold before the call\", \"file\": \"root.pruv\", \"counterexample\": {\"p\": {\"ok\": true, \"error\": 0, \"stdin_open\": true, \"stdout_eof\": true, \"stderr_eof\": true, \"stdout_size\": 1, \"stderr_size\": 31599}, \"stream\": 2, \"n\": 31599, \"h\": 0, \"i\": 31598}}\n",
+            "status": "pruv_error"
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 14,
+                "col": 20,
+                "code": "call_requires",
+                "message": "cannot prove precondition of proc_byte (catalog) in crate::digest",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "p": {
+                    "ok": true,
+                    "error": 0,
+                    "stdin_open": true,
+                    "stdout_eof": true,
+                    "stderr_eof": true,
+                    "stdout_size": 1,
+                    "stderr_size": 31599
+                  },
+                  "stream": 2,
+                  "n": 31599,
+                  "h": 0,
+                  "i": 31598
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_spjho6u0/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_spjho6u0/root_gen.ll",
+            "stderr": "{\"stage\": \"verify\", \"line\": 14, \"col\": 20, \"code\": \"call_requires\", \"message\": \"cannot prove precondition of proc_byte (catalog) in crate::digest\", \"fix\": \"make the callee's requires hold before the call\", \"file\": \"root.pruv\", \"counterexample\": {\"p\": {\"ok\": true, \"error\": 0, \"stdin_open\": true, \"stdout_eof\": true, \"stderr_eof\": true, \"stdout_size\": 1, \"stderr_size\": 31599}, \"stream\": 2, \"n\": 31599, \"h\": 0, \"i\": 31598}}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m010",
+      "pid": "q02",
+      "family": "range",
+      "expected": "static",
+      "old": "proc_byte(p, 1, i) == 10",
+      "new": "proc_byte(p, 1, n) == 10",
+      "intent": "incorrect",
+      "sha256": "a37e6cfebcbf81590a1ff9a26be1ff4358de87f2f2263e3ca7b4a49f44ae69ba",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 53,
+                "col": 12,
+                "code": "call_requires",
+                "message": "cannot prove precondition of proc_byte (catalog) in crate::scan",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "program": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "mode": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "budget": 1,
+                  "args": {
+                    "argc": 2
+                  },
+                  "p": {
+                    "ok": true,
+                    "error": 0,
+                    "stdin_open": false,
+                    "stdout_eof": false,
+                    "stderr_eof": false,
+                    "stdout_size": 1,
+                    "stderr_size": 0
+                  },
+                  "used": 1,
+                  "total": 0,
+                  "lines": 0,
+                  "longest": 0,
+                  "cur": 0,
+                  "done": false,
+                  "n": 1,
+                  "i": 0
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_jplnkfwq/root_gen.rs",
+            "ll": null,
+            "stderr": "\"message\": \"cannot prove precondition of proc_byte (catalog) in crate::scan\", \"fix\": \"make the callee's requires hold before the call\", \"file\": \"root.pruv\", \"counterexample\": {\"program\": {\"len\": 0, \"first\": []}, \"mode\": {\"len\": 0, \"first\": []}, \"budget\": 1, \"args\": {\"argc\": 2}, \"p\": {\"ok\": true, \"error\": 0, \"stdin_open\": false, \"stdout_eof\": false, \"stderr_eof\": false, \"stdout_size\": 1, \"stderr_size\": 0}, \"used\": 1, \"total\": 0, \"lines\": 0, \"longest\": 0, \"cur\": 0, \"done\": false, \"n\": 1, \"i\": 0}}\n",
+            "status": "pruv_error"
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 53,
+                "col": 12,
+                "code": "call_requires",
+                "message": "cannot prove precondition of proc_byte (catalog) in crate::scan",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "program": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "mode": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "budget": 1,
+                  "args": {
+                    "argc": 2
+                  },
+                  "p": {
+                    "ok": true,
+                    "error": 0,
+                    "stdin_open": false,
+                    "stdout_eof": false,
+                    "stderr_eof": false,
+                    "stdout_size": 1,
+                    "stderr_size": 0
+                  },
+                  "used": 1,
+                  "total": 0,
+                  "lines": 0,
+                  "longest": 0,
+                  "cur": 0,
+                  "done": false,
+                  "n": 1,
+                  "i": 0
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_h_kixtok/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_h_kixtok/root_gen.ll",
+            "stderr": "\"message\": \"cannot prove precondition of proc_byte (catalog) in crate::scan\", \"fix\": \"make the callee's requires hold before the call\", \"file\": \"root.pruv\", \"counterexample\": {\"program\": {\"len\": 0, \"first\": []}, \"mode\": {\"len\": 0, \"first\": []}, \"budget\": 1, \"args\": {\"argc\": 2}, \"p\": {\"ok\": true, \"error\": 0, \"stdin_open\": false, \"stdout_eof\": false, \"stderr_eof\": false, \"stdout_size\": 1, \"stderr_size\": 0}, \"used\": 1, \"total\": 0, \"lines\": 0, \"longest\": 0, \"cur\": 0, \"done\": false, \"n\": 1, \"i\": 0}}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m011",
+      "pid": "q02",
+      "family": "range",
+      "expected": "static",
+      "old": "proc_read(move p, 1, 4096)",
+      "new": "proc_read(move p, 3, 4096)",
+      "intent": "incorrect",
+      "sha256": "299258090ada496bec7f1fa649151d980835042215210711ef4523df13266a70",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 39,
+                "col": 9,
+                "code": "call_requires",
+                "message": "cannot prove precondition of proc_read (catalog) in crate::scan",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "program": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "mode": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "budget": 1,
+                  "args": {
+                    "argc": 2
+                  },
+                  "p": {
+                    "ok": true,
+                    "error": 0,
+                    "stdin_open": false,
+                    "stdout_eof": false,
+                    "stderr_eof": false,
+                    "stdout_size": 0,
+                    "stderr_size": 0
+                  },
+                  "used": 0,
+                  "total": 0,
+                  "lines": 0,
+                  "longest": 0,
+                  "cur": 0,
+                  "done": false
+                }
+              },
+              {
+                "stage": "verify",
+                "line": 48,
+                "col": 36,
+                "code": "invariant_entry",
+                "message": "cannot prove loop invariant on entry in crate::scan",
+                "fix": "the invariant must hold before the first iteration; check initial values",
+                "file": "root.pruv",
+                "counterexample": {
+                  "program": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "mode": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "budget": 1,
+                  "args": {
+                    "argc": 2
+                  },
+                  "p": {
+                    "ok": true,
+                    "error": 0,
+                    "stdin_open": false,
+                    "stdout_eof": false,
+                    "stderr_eof": true,
+                    "stdout_size": 4097,
+                    "stderr_size": 0
+                  },
+                  "used": 1,
+                  "total": 0,
+                  "lines": 0,
+                  "longest": 0,
+                  "cur": 0,
+                  "done": false,
+                  "n": 4097,
+                  "i": 0
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_gwzhhvb1/root_gen.rs",
+            "ll": null,
+            "stderr": " prove loop invariant on entry in crate::scan\", \"fix\": \"the invariant must hold before the first iteration; check initial values\", \"file\": \"root.pruv\", \"counterexample\": {\"program\": {\"len\": 0, \"first\": []}, \"mode\": {\"len\": 0, \"first\": []}, \"budget\": 1, \"args\": {\"argc\": 2}, \"p\": {\"ok\": true, \"error\": 0, \"stdin_open\": false, \"stdout_eof\": false, \"stderr_eof\": true, \"stdout_size\": 4097, \"stderr_size\": 0}, \"used\": 1, \"total\": 0, \"lines\": 0, \"longest\": 0, \"cur\": 0, \"done\": false, \"n\": 4097, \"i\": 0}}\n",
+            "status": "pruv_error"
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 39,
+                "col": 9,
+                "code": "call_requires",
+                "message": "cannot prove precondition of proc_read (catalog) in crate::scan",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "program": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "mode": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "budget": 1,
+                  "args": {
+                    "argc": 2
+                  },
+                  "p": {
+                    "ok": true,
+                    "error": 0,
+                    "stdin_open": false,
+                    "stdout_eof": false,
+                    "stderr_eof": false,
+                    "stdout_size": 0,
+                    "stderr_size": 0
+                  },
+                  "used": 0,
+                  "total": 0,
+                  "lines": 0,
+                  "longest": 0,
+                  "cur": 0,
+                  "done": false
+                }
+              },
+              {
+                "stage": "verify",
+                "line": 48,
+                "col": 36,
+                "code": "invariant_entry",
+                "message": "cannot prove loop invariant on entry in crate::scan",
+                "fix": "the invariant must hold before the first iteration; check initial values",
+                "file": "root.pruv",
+                "counterexample": {
+                  "program": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "mode": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "budget": 1,
+                  "args": {
+                    "argc": 2
+                  },
+                  "p": {
+                    "ok": true,
+                    "error": 0,
+                    "stdin_open": false,
+                    "stdout_eof": false,
+                    "stderr_eof": true,
+                    "stdout_size": 4097,
+                    "stderr_size": 0
+                  },
+                  "used": 1,
+                  "total": 0,
+                  "lines": 0,
+                  "longest": 0,
+                  "cur": 0,
+                  "done": false,
+                  "n": 4097,
+                  "i": 0
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_0his4gzd/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_0his4gzd/root_gen.ll",
+            "stderr": " prove loop invariant on entry in crate::scan\", \"fix\": \"the invariant must hold before the first iteration; check initial values\", \"file\": \"root.pruv\", \"counterexample\": {\"program\": {\"len\": 0, \"first\": []}, \"mode\": {\"len\": 0, \"first\": []}, \"budget\": 1, \"args\": {\"argc\": 2}, \"p\": {\"ok\": true, \"error\": 0, \"stdin_open\": false, \"stdout_eof\": false, \"stderr_eof\": true, \"stdout_size\": 4097, \"stderr_size\": 0}, \"used\": 1, \"total\": 0, \"lines\": 0, \"longest\": 0, \"cur\": 0, \"done\": false, \"n\": 4097, \"i\": 0}}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m012",
+      "pid": "q02",
+      "family": "eof_misread",
+      "expected": "oracle",
+      "old": "if n == 0 {",
+      "new": "if n < 4096 {",
+      "intent": "incorrect",
+      "sha256": "5d55f5dd0a7182c3544dc35162012bdd849412a7c0477e3331e1a0d6cd55177a",
+      "runs": {
+        "rs-rust": {
+          "class": "wrong_but_proved",
+          "grader": {
+            "rc": -1,
+            "stdout": "",
+            "stderr": "timeout",
+            "status": "wrong",
+            "tests_passed": 0,
+            "tests_total": -1
+          }
+        },
+        "rs-llvm": {
+          "class": "wrong_but_proved",
+          "grader": {
+            "rc": -1,
+            "stdout": "",
+            "stderr": "timeout",
+            "status": "wrong",
+            "tests_passed": 0,
+            "tests_total": -1
+          }
+        }
+      }
+    },
+    {
+      "id": "m013",
+      "pid": "q02",
+      "family": "eof_misread",
+      "expected": "oracle",
+      "old": "if n == 0 {",
+      "new": "if proc_eof(p, 2) {",
+      "intent": "incorrect",
+      "sha256": "e943275fdf5ecfcd3f20afe1a21f458a9ab2178c70352939e86663ae8e5b605a",
+      "runs": {
+        "rs-rust": {
+          "class": "wrong_but_proved",
+          "grader": {
+            "rc": 0,
+            "stdout": "FAIL empty_10\nFAIL empty_1\nFAIL one_10\nFAIL blank_10\nFAIL long_50\nFAIL mix_1000\nFAIL bin_10\nFAIL big_10000\nFAIL fail_100\nFAIL unknown_mode\nTESTS 6 16\n",
+            "stderr": "",
+            "status": "wrong",
+            "tests_passed": 6,
+            "tests_total": 16
+          }
+        },
+        "rs-llvm": {
+          "class": "wrong_but_proved",
+          "grader": {
+            "rc": 0,
+            "stdout": "FAIL empty_10\nFAIL empty_1\nFAIL one_10\nFAIL blank_10\nFAIL long_50\nFAIL mix_1000\nFAIL bin_10\nFAIL big_10000\nFAIL fail_100\nFAIL unknown_mode\nTESTS 6 16\n",
+            "stderr": "",
+            "status": "wrong",
+            "tests_passed": 6,
+            "tests_total": 16
+          }
+        }
+      }
+    },
+    {
+      "id": "m014",
+      "pid": "q01",
+      "family": "read_all_duplication",
+      "expected": "oracle",
+      "old": "let out: i64 = digest(p, 1);",
+      "new": "p = proc_read_all(move p);\n  if !proc_ok(p) { return fail_kill(move p); }\n  let out: i64 = digest(p, 1);",
+      "intent": "incorrect",
+      "sha256": "26ec1e12039e7886eaafe1b8b20d4f102aec4aa7f867497de6596522e9c8dc0f",
+      "runs": {
+        "rs-rust": {
+          "class": "wrong_but_proved",
+          "grader": {
+            "rc": 0,
+            "stdout": "FAIL flag_0\nFAIL cwd_0\nFAIL flag_1\nFAIL cwd_1\nFAIL flag_2\nFAIL cwd_2\nFAIL flag_3\nFAIL cwd_3\nFAIL flag_4\nFAIL cwd_4\nFAIL flag_5\nFAIL cwd_5\nFAIL flag_6\nFAIL cwd_6\nFAIL flag_7\nFAIL cwd_7\nTESTS 4 20\n",
+            "stderr": "",
+            "status": "wrong",
+            "tests_passed": 4,
+            "tests_total": 20
+          }
+        },
+        "rs-llvm": {
+          "class": "wrong_but_proved",
+          "grader": {
+            "rc": 0,
+            "stdout": "FAIL flag_0\nFAIL cwd_0\nFAIL flag_1\nFAIL cwd_1\nFAIL flag_2\nFAIL cwd_2\nFAIL flag_3\nFAIL cwd_3\nFAIL flag_4\nFAIL cwd_4\nFAIL flag_5\nFAIL cwd_5\nFAIL flag_6\nFAIL cwd_6\nFAIL flag_7\nFAIL cwd_7\nTESTS 4 20\n",
+            "stderr": "",
+            "status": "wrong",
+            "tests_passed": 4,
+            "tests_total": 20
+          }
+        }
+      }
+    },
+    {
+      "id": "m015",
+      "pid": "q02",
+      "family": "line_boundary",
+      "expected": "static",
+      "old": "if cur > 0 {",
+      "new": "if cur >= 0 {",
+      "intent": "incorrect",
+      "sha256": "1e44ed250150608e82e040d0b6083cddcfd26d5e974e99dc5f2344618aea0fab",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 74,
+                "col": 7,
+                "code": "ensures",
+                "message": "cannot prove postcondition (line 12) in crate::scan",
+                "fix": "fix the code, or strengthen loop invariants so the postcondition follows",
+                "file": "root.pruv",
+                "counterexample": {
+                  "program": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "mode": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "budget": 10000,
+                  "args": {
+                    "argc": 2
+                  },
+                  "p": {
+                    "ok": true,
+                    "error": 0,
+                    "stdin_open": false,
+                    "stdout_eof": false,
+                    "stderr_eof": false,
+                    "stdout_size": 0,
+                    "stderr_size": 0
+                  },
+                  "used": 10000,
+                  "total": 40960000,
+                  "lines": 40960001,
+                  "longest": 0,
+                  "cur": 0,
+                  "done": true,
+                  "r": "ok(0)",
+                  "code": 0
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_ykxrrtib/root_gen.rs",
+            "ll": null,
+            "stderr": "e 12) in crate::scan\", \"fix\": \"fix the code, or strengthen loop invariants so the postcondition follows\", \"file\": \"root.pruv\", \"counterexample\": {\"program\": {\"len\": 0, \"first\": []}, \"mode\": {\"len\": 0, \"first\": []}, \"budget\": 10000, \"args\": {\"argc\": 2}, \"p\": {\"ok\": true, \"error\": 0, \"stdin_open\": false, \"stdout_eof\": false, \"stderr_eof\": false, \"stdout_size\": 0, \"stderr_size\": 0}, \"used\": 10000, \"total\": 40960000, \"lines\": 40960001, \"longest\": 0, \"cur\": 0, \"done\": true, \"r\": \"ok(0)\", \"code\": 0}}\n",
+            "status": "pruv_error"
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 74,
+                "col": 7,
+                "code": "ensures",
+                "message": "cannot prove postcondition (line 12) in crate::scan",
+                "fix": "fix the code, or strengthen loop invariants so the postcondition follows",
+                "file": "root.pruv",
+                "counterexample": {
+                  "program": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "mode": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "budget": 10000,
+                  "args": {
+                    "argc": 2
+                  },
+                  "p": {
+                    "ok": true,
+                    "error": 0,
+                    "stdin_open": false,
+                    "stdout_eof": false,
+                    "stderr_eof": false,
+                    "stdout_size": 0,
+                    "stderr_size": 0
+                  },
+                  "used": 10000,
+                  "total": 40960000,
+                  "lines": 40960001,
+                  "longest": 0,
+                  "cur": 0,
+                  "done": true,
+                  "r": "ok(0)",
+                  "code": 0
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_ri048yuv/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/grade_ri048yuv/root_gen.ll",
+            "stderr": "e 12) in crate::scan\", \"fix\": \"fix the code, or strengthen loop invariants so the postcondition follows\", \"file\": \"root.pruv\", \"counterexample\": {\"program\": {\"len\": 0, \"first\": []}, \"mode\": {\"len\": 0, \"first\": []}, \"budget\": 10000, \"args\": {\"argc\": 2}, \"p\": {\"ok\": true, \"error\": 0, \"stdin_open\": false, \"stdout_eof\": false, \"stderr_eof\": false, \"stdout_size\": 0, \"stderr_size\": 0}, \"used\": 10000, \"total\": 40960000, \"lines\": 40960001, \"longest\": 0, \"cur\": 0, \"done\": true, \"r\": \"ok(0)\", \"code\": 0}}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m016",
+      "pid": "q02",
+      "family": "line_boundary",
+      "expected": "oracle",
+      "old": "if cur > longest { longest = cur; }\n          cur = 0;",
+      "new": "if cur > longest { longest = cur; }",
+      "intent": "incorrect",
+      "sha256": "8f806e27abf9e1a5658697803bb1f5622cf55f691d150c8b5dd5e3e1830082fa",
+      "runs": {
+        "rs-rust": {
+          "class": "wrong_but_proved",
+          "grader": {
+            "rc": 0,
+            "stdout": "FAIL long_50\nFAIL mix_1000\nFAIL bin_10\nFAIL big_10000\nTESTS 12 16\n",
+            "stderr": "",
+            "status": "wrong",
+            "tests_passed": 12,
+            "tests_total": 16
+          }
+        },
+        "rs-llvm": {
+          "class": "wrong_but_proved",
+          "grader": {
+            "rc": 0,
+            "stdout": "FAIL long_50\nFAIL mix_1000\nFAIL bin_10\nFAIL big_10000\nTESTS 12 16\n",
+            "stderr": "",
+            "status": "wrong",
+            "tests_passed": 12,
+            "tests_total": 16
+          }
+        }
+      }
+    },
+    {
+      "id": "m017",
+      "pid": "q01",
+      "family": "kill_after_failed_spawn",
+      "expected": "accepted",
+      "old": "let r: Result<i64> = proc_wait(move p);\n  return -10 - e;",
+      "new": "let r: Result<i64> = proc_kill(move p);\n  return -10 - e;",
+      "intent": "control",
+      "sha256": "fe8898be2fee9a21ef91de4e079ef15d8cfb79eb779bea274eb18e1f6d655180",
+      "runs": {
+        "rs-rust": {
+          "class": "accepted",
+          "grader": {
+            "rc": 0,
+            "stdout": "TESTS 20 20\n",
+            "stderr": "",
+            "status": "ok",
+            "tests_passed": 20,
+            "tests_total": 20
+          }
+        },
+        "rs-llvm": {
+          "class": "accepted",
+          "grader": {
+            "rc": 0,
+            "stdout": "TESTS 20 20\n",
+            "stderr": "",
+            "status": "ok",
+            "tests_passed": 20,
+            "tests_total": 20
+          }
+        }
+      }
+    },
+    {
+      "id": "m018",
+      "pid": "q02",
+      "family": "smaller_chunks",
+      "expected": "accepted",
+      "old": "proc_read(move p, 1, 4096)",
+      "new": "proc_read(move p, 1, 1000)",
+      "intent": "control",
+      "sha256": "a3895701cbb983a0ff6cdc4072bc8667ca5b715b4e95e94b8f19f2ca4e3fa2ff",
+      "runs": {
+        "rs-rust": {
+          "class": "accepted",
+          "grader": {
+            "rc": 0,
+            "stdout": "TESTS 16 16\n",
+            "stderr": "",
+            "status": "ok",
+            "tests_passed": 16,
+            "tests_total": 16
+          }
+        },
+        "rs-llvm": {
+          "class": "accepted",
+          "grader": {
+            "rc": 0,
+            "stdout": "TESTS 16 16\n",
+            "stderr": "",
+            "status": "ok",
+            "tests_passed": 16,
+            "tests_total": 16
+          }
+        }
+      }
+    }
+  ]
+}

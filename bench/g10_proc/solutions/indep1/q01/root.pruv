@@ -1,0 +1,61 @@
+fn hash_bytes(data: [u8]) -> i64
+  ensures 0 <= result && result < 999983
+{
+  let mut h: i64 = 1;
+  let mut i: i64 = 0;
+  while i < len(data)
+    invariant 0 <= i && i <= len(data)
+    invariant 0 <= h && h < 999983
+    decreases len(data) - i
+  {
+    h = (h * 256 + data[i]) % 999983;
+    i = i + 1;
+  }
+  return h;
+}
+
+pub fn version(program: str, flag: str, cwd: str) -> i64 ! proc, alloc
+  ensures -31 <= result && result < 256000000000000
+{
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "--version");
+  args = proc_args_push(move args, flag);
+
+  let mut p: Process = proc_spawn(program, args, cwd);
+  if !proc_ok(p) {
+    let error: i64 = proc_error(p);
+    let waited: Result<i64> = proc_wait(move p);
+    return -10 - error;
+  }
+
+  p = proc_close_stdin(move p);
+  if !proc_ok(p) {
+    let error: i64 = proc_error(p);
+    let killed: Result<i64> = proc_kill(move p);
+    return -20 - error;
+  }
+
+  p = proc_read_all(move p);
+  if !proc_ok(p) {
+    let error: i64 = proc_error(p);
+    let killed: Result<i64> = proc_kill(move p);
+    return -20 - error;
+  }
+
+  let out: [u8] = proc_bytes(p, 1);
+  let err: [u8] = proc_bytes(p, 2);
+  let out_hash: i64 = hash_bytes(out);
+  let err_hash: i64 = hash_bytes(err);
+  let status: Result<i64> = proc_wait(move p);
+  match status {
+    Ok(code) => {
+      if code < 0 || code > 255 {
+        return -31;
+      }
+      return code * 1000000000000 + out_hash * 1000000 + err_hash;
+    }
+    Err(error) => {
+      return -30;
+    }
+  }
+}

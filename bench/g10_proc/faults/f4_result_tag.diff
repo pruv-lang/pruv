@@ -1,0 +1,13 @@
+--- a/pruvc/foreign_shim.py
++++ b/pruvc/foreign_shim.py
+@@ -352,8 +352,8 @@
+         return _fn(sym, "h: PruvH, tag: *mut i64, val: *mut i64", None,
+                    "pruv_g6_guard(|| { let pruv_t: *mut i64 = pruv_g6_out(tag); let pruv_v: *mut i64 = pruv_g6_out(val); "
+                    "%slet pruv_r: ::std::result::Result<i64, i64> = %s(pruv_o); "
+-                   "unsafe { match pruv_r { ::std::result::Result::Ok(pruv_x) => { *pruv_t = 1; *pruv_v = pruv_x; } "
+-                   "::std::result::Result::Err(pruv_e) => { *pruv_t = 0; *pruv_v = pruv_e; } } } })" % (
++                   "unsafe { match pruv_r { ::std::result::Result::Ok(pruv_x) => { *pruv_t = 0; *pruv_v = pruv_x; } "
++                   "::std::result::Result::Err(pruv_e) => { *pruv_t = 1; *pruv_v = pruv_e; } } } })" % (
+                        _proc_consume("h", P), helper))
+     if op == "proc_bytes":
+         # the helper's requires (stream 1 or 2, by --foreign-checks) runs on the borrowed handle; the view itself is

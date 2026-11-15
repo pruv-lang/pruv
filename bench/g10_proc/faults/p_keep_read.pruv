@@ -1,0 +1,10 @@
+// Must be rejected: reading stdout replaces the stdout snapshot, so its old size is not known afterwards.
+fn bad(take input: Process) -> Process ! proc, alloc
+  requires proc_ok(input) && proc_size(input, 1) == 3
+{
+  let p: Process = proc_read(move input, 1, 16);
+  if proc_ok(p) {
+    assert proc_size(p, 1) == 3;
+  }
+  return move p;
+}

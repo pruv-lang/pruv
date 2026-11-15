@@ -1969,3 +1969,26 @@ The planned P3 item was to emit `nounwind`, `nosync`, `norecurse` and memory-eff
 `bench/perf/remarks.py` (documented in `docs/PERF_SPEC.md`, "Optimization remarks") compiles a program with either compiler and runs the same clang `-O3` as `bench/perf/run.py` with `-fsave-optimization-record`. It prints the remarks one per line as `KIND pass function: message`, deduplicated, followed by a count per kind and pass. It reads the YAML record because the generated IR has no debug locations, so the printed `-Rpass` lines carry no function name.
 
 `python3 bench/perf/remarks.py sudoku --pass loop-vectorize` reports 4 missed and 9 analysis remarks. The loops in `forward` and the exported `bench` are not vectorized because of unidentified array bounds, non-reduction values used after the loop, and calls inside the loop. This is the starting point for the next P3 vectorization item.
+
+## 125. G10: processes with the `proc` effect (A0-A3 and Q, 2026-11-16)
+
+- **Design:** `docs/G10_PROC_SPEC.md`. `Process` is an owned handle that must be consumed by `proc_wait` or `proc_kill` (or returned); `ProcessArgs` builds an exact argv with no splitting or quoting. Catalog operations spawn, close stdin, write, read a chunk of one stream, read everything and wait/kill with a `Result<i64>`; observers (`proc_ok`, `proc_error`, `proc_eof`, `proc_size`, `proc_byte`, `proc_bytes`) appear in contracts. SPEC.md §6l documents the user rules.
+- **A0** (`9d049c6`): the effect, the types, must-consume with `proc_unconsumed`, and a staging guard. **A1** (`04f5d97`): verification of both types, catalog contracts (a read keeps the other stream's snapshot), observer domains. **A2** (`99b94f9`): the Rust runtime with collector threads for both outputs, test hooks and runtime cases. **A3** (`d22c07f`): the LLVM backend through the G6 Rust shim (adapters, Result tags, observer adapters from requires, ensures and cost), and a real Windows run (`tests/g10_proc/windows.py`: argv quoting, cwd, exit/kill codes, batch files refused with error 1 and never run). The A3 audit found observers in `cost` clauses missing from the Python bindings; fixed before the commit (py/rs output now identical).
+- **Problems and solutions:** `bench/g10_proc/PROBLEMS.md` (q01, a `--version` run with exact argv, cwd, both outputs and the exit Result; q02, streaming line statistics with a finite read budget while the child floods stderr). The reference solutions pass on all four py/rs × rust/llvm pairs (q01 20/20, q02 16/16).
+- **Independent use** (a worker given only SPEC.md and the problems, no compiler): first attempt **2/2** on all four pairs, 0 revisions (`bench/g10_proc/solutions/indep1`, `results/indep1_first.json`).
+- **Source mutants:** `bench/g10_proc/mutate.py`, 16 explicit wrong mutants and 2 controls, both compilers and both backends, 0 unexpected. Static mutants (12) are caught at compile time: per compiler 10 rejected by the checker and 14 by the verifier over the two backends. Oracle mutants (4: two EOF misreadings, read-all duplication, a lost line reset) verify and are caught by the fixture oracle at run time (8 `wrong_but_proved` per compiler). They are reported separately: what the child prints is not proved, so these are the expected class, not unsoundness. The 2 controls are accepted.
+- **Compiler fault injections** (`bench/g10_proc/faults/`, Python compiler, each patch alone in a disposable copy): removing must-consume at `return` (g10p_early_return), removing the `stream` requires of `proc_read` (g10p_v_bad_stream), keeping the read stream instead of the other one (a local accept/reject pair), and swapping the Ok/Err tag in the shim (g10p_r10_exit_kill on LLVM): **4/4 caught** with clean baselines.
+- **Measurement:** `bench/g10_proc/perf.py`, 1 MiB over both outputs (`child bulk 524288`) in 4 KiB chunks, alternating with hand-written Rust in the same driver. Both sides assert the exact total and the byte pattern (no loss, no duplication). Medians over 20 runs, Pruv/Rust:
+
+  | compiler | backend | per byte (`proc_byte` on every byte) | bulk copy (`proc_bytes` per chunk) |
+  |---|---|---|---|
+  | rs | rust | 2.26 / 1.98 ms (1.14x) | 1.76 / 1.75 ms (1.00x) |
+  | rs | llvm | 3.39 / 1.92 ms (1.77x) | 1.73 / 1.73 ms (1.00x) |
+  | py | rust | 2.27 / 1.94 ms (1.17x) | 1.77 / 1.75 ms (1.01x) |
+  | py | llvm | 3.55 / 1.91 ms (1.86x) | 1.79 / 1.82 ms (0.98x) |
+
+  Max RSS 2.0-2.7 MB for Pruv against 2.0 MB for Rust. No target is declared. The per-byte cost is the shim call per observer (larger on LLVM); bulk copy matches Rust. The file measurements in §64 are unchanged.
+- **Results:** `run_all --backend both` 3666/3666 with the Python compiler before the A3 commit; the row list (3678) is the Rust compiler's.
+- **Limits:** no async, poll, timeouts or process groups; output queues have no memory limit; the child's output is checked at run time, not proved (G10_PROC_SPEC §9).
+
+**G10 processes complete.** Network and async come next.

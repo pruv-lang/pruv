@@ -1,0 +1,259 @@
+{
+  "compiler": "rs",
+  "verified": true,
+  "repeat": 20,
+  "bytes_per_run": 1048576,
+  "tools": {
+    "py": [
+      "/Users/spica4345/Projects/pruv/.venv/bin/python",
+      "/Users/spica4345/Projects/pruv/pruvc/pruvc.py"
+    ],
+    "rs": [
+      "/Users/spica4345/Projects/pruv/pruvc-rs/target/release/pruvc"
+    ]
+  },
+  "platform": "macOS-26.5-arm64-arm-64bit",
+  "rustc": {
+    "rc": 0,
+    "stdout": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\n",
+    "stderr": ""
+  },
+  "clang": {
+    "rc": 0,
+    "stdout": "Apple clang version 17.0.0 (clang-1700.6.4.2)\nTarget: arm64-apple-darwin25.5.0\nThread model: posix\nInstalledDir: /Library/Developer/CommandLineTools/usr/bin\n",
+    "stderr": ""
+  },
+  "method": "G10 proc Q perf: 1 MiB over both outputs of `child bulk 524288` in 4 KiB chunks; default verified builds.\n\nEach timed run is a whole spawn/close/drain/wait in the same driver process, alternating Pruv and hand-written Rust;\nmode 0 (per byte: every byte checked through proc_byte) and mode 1 (bulk copy: a proc_bytes copy of each chunk, two\nbytes checked) are recorded separately. Both sides assert the exact total of 1048576 bytes and the byte pattern, so a\nlost or duplicated chunk fails the run. Memory is the maximum RSS of one single-side run (driver and child; the\nlargest of the waited processes). No target is declared; the numbers are recorded.",
+  "rows": {
+    "rust": {
+      "status": "ok",
+      "modes": {
+        "per_byte": {
+          "bytes": 1048576,
+          "pruv_median_ms": 2.261937,
+          "rust_median_ms": 1.9825625,
+          "ratio": 1.1409158601557328,
+          "pruv_max_rss_bytes": 2555904,
+          "rust_max_rss_bytes": 2097152,
+          "raw": {
+            "total": 1048576,
+            "pruv_ns": [
+              4662042,
+              3890583,
+              3127250,
+              2489708,
+              2542875,
+              2658916,
+              2548000,
+              2372041,
+              2433750,
+              2121459,
+              2521000,
+              2087708,
+              2151833,
+              1972041,
+              1962333,
+              1977208,
+              1924667,
+              1987333,
+              1923500,
+              1923167
+            ],
+            "rust_ns": [
+              3308084,
+              3055250,
+              2680584,
+              2732750,
+              2291042,
+              2286333,
+              2185250,
+              2044833,
+              2011708,
+              1953417,
+              1895042,
+              1840166,
+              1821875,
+              1746208,
+              2069625,
+              1779666,
+              1829958,
+              1817083,
+              1891583,
+              1848542
+            ]
+          }
+        },
+        "bulk_copy": {
+          "bytes": 1048576,
+          "pruv_median_ms": 1.758583,
+          "rust_median_ms": 1.750271,
+          "ratio": 1.0047489788724147,
+          "pruv_max_rss_bytes": 2097152,
+          "rust_max_rss_bytes": 2097152,
+          "raw": {
+            "total": 1048576,
+            "pruv_ns": [
+              1901375,
+              1761750,
+              1790750,
+              1726500,
+              1695750,
+              1761208,
+              1659083,
+              1704000,
+              1704208,
+              1897542,
+              1755958,
+              1771583,
+              1753000,
+              1698667,
+              1779458,
+              1676167,
+              1728375,
+              1762791,
+              1819083,
+              1781625
+            ],
+            "rust_ns": [
+              1746000,
+              1760083,
+              1909167,
+              1809000,
+              1765792,
+              1818083,
+              1745916,
+              1784875,
+              1697541,
+              1771125,
+              1741417,
+              1690000,
+              1728583,
+              1715917,
+              1744666,
+              1760833,
+              1708583,
+              1778500,
+              1737583,
+              1754542
+            ]
+          }
+        }
+      }
+    },
+    "llvm": {
+      "status": "ok",
+      "modes": {
+        "per_byte": {
+          "bytes": 1048576,
+          "pruv_median_ms": 3.387271,
+          "rust_median_ms": 1.916417,
+          "ratio": 1.7675020624425686,
+          "pruv_max_rss_bytes": 2867200,
+          "rust_max_rss_bytes": 2097152,
+          "raw": {
+            "total": 1048576,
+            "pruv_ns": [
+              7646500,
+              5450083,
+              4772917,
+              4359125,
+              4229208,
+              3859500,
+              3807750,
+              3534000,
+              3435083,
+              3284959,
+              3185709,
+              3170667,
+              3206750,
+              3314750,
+              3430333,
+              3283500,
+              3344209,
+              3323875,
+              3276500,
+              3196459
+            ],
+            "rust_ns": [
+              3620042,
+              3242125,
+              2473417,
+              2331542,
+              2404958,
+              2179167,
+              1985084,
+              1934834,
+              1806334,
+              1988042,
+              1812042,
+              1898000,
+              1788375,
+              1747667,
+              1862041,
+              1696375,
+              1738000,
+              1746792,
+              1990791,
+              1833542
+            ]
+          }
+        },
+        "bulk_copy": {
+          "bytes": 1048576,
+          "pruv_median_ms": 1.7281665,
+          "rust_median_ms": 1.7253125,
+          "ratio": 1.0016541930809635,
+          "pruv_max_rss_bytes": 2146304,
+          "rust_max_rss_bytes": 2097152,
+          "raw": {
+            "total": 1048576,
+            "pruv_ns": [
+              1788000,
+              1728917,
+              1736209,
+              1698292,
+              1654333,
+              1696333,
+              1728125,
+              1806250,
+              1728208,
+              1718875,
+              1795666,
+              1770333,
+              1822375,
+              1683333,
+              1695041,
+              1719292,
+              1734125,
+              1662125,
+              1646250,
+              1794875
+            ],
+            "rust_ns": [
+              1935667,
+              1802959,
+              1867042,
+              1733459,
+              1693167,
+              1806875,
+              1679625,
+              1764958,
+              1641166,
+              1681250,
+              1719333,
+              1704833,
+              1833750,
+              1731292,
+              1806459,
+              1824500,
+              1642333,
+              1712000,
+              1717500,
+              1692208
+            ]
+          }
+        }
+      }
+    }
+  }
+}
