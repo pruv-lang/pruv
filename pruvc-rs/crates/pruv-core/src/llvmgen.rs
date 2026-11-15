@@ -2702,6 +2702,12 @@ impl<'a> FnGen<'a> {
                 // G2 B2: copy the global string into a new buffer (for an empty string pruv_copy_v2 gives NULL)
                 let g = self.str_global(&x.value);
                 let l = x.value.len().to_string();
+                if !owned {
+                    // P3: a borrowed literal reads the read-only global directly (nothing to free)
+                    let mut rv = V::with_b(Kind::Arr, g, l);
+                    rv.ty = Some(STR.to_string());
+                    return Ok(rv);
+                }
                 let p = self.op(format!("call ptr @pruv_copy_v2(ptr {}, i64 {}, i64 1, i64 1)", g, l))?;
                 let mut rv = V::with_b(Kind::Arr, p, l);
                 rv.ty = Some(STR.to_string());

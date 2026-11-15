@@ -1718,6 +1718,8 @@ class FnGen:
         if isinstance(e, StrLit):  # G2 B2
             nm = s.m.string(e.value.decode("utf-8"))
             ln = str(len(e.value))
+            if not owned:   # P3: a borrowed literal reads the read-only global directly (nothing to free)
+                return V("arr", nm, ln, STR)
             p = s.op("call ptr @pruv_copy_v2(ptr %s, i64 %s, i64 1, i64 1)" % (nm, ln))
             return s.temp_arr(V("arr", p, ln, STR), owned)
         if isinstance(e, Ctor):
