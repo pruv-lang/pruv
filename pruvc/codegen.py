@@ -2957,7 +2957,7 @@ class Gen:
                 return ("{ let pruv_s: &str = %s; let pruv_lo: i64 = %s; let pruv_hi: i64 = %s; "
                         "::std::string::String::from(unsafe { pruv_s.get_unchecked((pruv_lo as usize)..(pruv_hi as usize)) }) }") % (
                             s.arr_ref(a[0]), s.e(a[1]), s.e(a[2]))
-            if s.g6 and n in CATALOG:
+            if s.g6 and n in CATALOG and n not in s.fmap:
                 return s.catalog_call(e)
             callee = s.fmap.get(n) if s.g6 else None
             if callee is not None and callee.foreign is not None:

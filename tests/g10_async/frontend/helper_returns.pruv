@@ -1,0 +1,3 @@
+fn start() -> Loop ! async, alloc { return ev_new(4); }
+fn finish(take l: Loop) -> Result<i64> ! async, net, proc, alloc { return ev_close(move l); }
+fn run() -> Result<i64> ! async, net, proc, alloc { let l: Loop = start(); return finish(move l); }

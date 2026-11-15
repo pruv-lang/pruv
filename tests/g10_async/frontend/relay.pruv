@@ -1,0 +1,84 @@
+pub fn relay(program: str, host: str, port: i64, deadline_ms: i64) -> i64 ! async, net, proc, alloc
+  requires 1 <= port && port <= 65535
+  requires 1 <= deadline_ms && deadline_ms <= 86400000
+{
+  let mut c: Socket = net_connect(host, port);
+  if !net_ok(c) { let r0: Result<i64> = net_close(move c); return -1; }
+  c = net_set_timeout(move c, 5000);
+  if !net_ok(c) { let r1: Result<i64> = net_close(move c); return -1; }
+
+  let args: ProcessArgs = proc_args_new();
+  let p: Process = proc_spawn(program, args, "");
+  if !proc_ok(p) {
+    let r2: Result<i64> = proc_wait(move p);
+    let r3: Result<i64> = net_close(move c);
+    return -2;
+  }
+
+  let mut l: Loop = ev_new(3);
+  l = ev_add_socket(move l, move c);
+  if !ev_ok(l) {
+    let r4: Result<i64> = proc_kill(move p);
+    let r5: Result<i64> = ev_close(move l);
+    return -3;
+  }
+  let sslot: i64 = ev_last(l);
+  l = ev_add_process(move l, move p);
+  if !ev_ok(l) {
+    let r6: Result<i64> = ev_close(move l);
+    return -3;
+  }
+  let pslot: i64 = ev_last(l);
+  l = ev_add_timer(move l, deadline_ms);
+
+  let mut outcome: i64 = 0;
+  let mut rounds: i64 = 1000000;
+  while outcome == 0 && rounds > 0 && ev_ok(l)
+    invariant 0 <= rounds && rounds <= 1000000
+    invariant 0 <= outcome && outcome <= 4
+    invariant 0 <= sslot && sslot < ev_cap(l)
+    invariant 0 <= pslot && pslot < ev_cap(l)
+    invariant sslot != pslot
+    invariant (outcome == 0) ==> ev_kind(l, sslot) == 1
+    invariant (outcome == 0) ==> ev_kind(l, pslot) == 3
+    decreases rounds
+  {
+    l = ev_wait(move l, -1);
+    let slot: i64 = ev_event_slot(l);
+    let ek: i64 = ev_event_kind(l);
+    if ek == 4 {
+      outcome = 2;                      // the deadline: leave the loop, ev_close kills the child
+    } else {
+      if slot == pslot {
+        if ek == 1 {
+          l = ev_proc_read(move l, pslot, 1, 4096);
+          if ev_size(l) > 0 && ev_write_open(l, sslot) {
+            let chunk: [u8] = ev_bytes(l);
+            l = ev_write(move l, sslot, chunk);
+          }
+          l = ev_proc_read(move l, pslot, 2, 4096);   // drop stderr so the child cannot stall
+        } else {
+          if ek == 3 {
+            l = ev_proc_wait(move l, pslot);
+            if ev_exit(l) != 0 { outcome = 4; } else { outcome = 1; }
+          } else {
+            outcome = 3;
+          }
+        }
+      } else {
+        if ek == 1 {
+          l = ev_read(move l, sslot, 4096);           // discard what the client sends
+        } else {
+          outcome = 3;                                // the client left or failed
+        }
+      }
+    }
+    rounds = rounds - 1;
+  }
+
+  let r: Result<i64> = ev_close(move l);
+  match r {
+    Ok(n) => { return outcome; }
+    Err(e) => { return -5; }
+  }
+}

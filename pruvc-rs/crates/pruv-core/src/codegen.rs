@@ -3950,7 +3950,7 @@ impl<'a> Gen<'a> {
                         s0, lo, hi
                     ));
                 }
-                if self.g6 && is_catalog(n) {
+                if self.g6 && is_catalog(n) && !self.fmap.contains_key(n) {
                     return self.catalog_call(x); // G6: executable catalog operation
                 }
                 let callee: Option<&'a Function> = if self.g6 { self.fmap.get(n).copied() } else { None };

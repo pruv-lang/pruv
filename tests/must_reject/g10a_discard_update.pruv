@@ -1,0 +1,3 @@
+fn f(take s: Loop) -> bool ! async, net, proc, alloc {
+  return ev_ok(ev_wait(move s, 0));
+}

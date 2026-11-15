@@ -329,7 +329,7 @@ class Function:
     name: str
     params: List[Param]
     ret: Type
-    effects: List[str]       # subset of ["io", "alloc", "fs", "proc", "net"]
+    effects: List[str]       # subset of ["io", "alloc", "fs", "proc", "net", "async"]
     requires: List[Expr]
     ensures: List[Expr]
     body: List[Stmt]

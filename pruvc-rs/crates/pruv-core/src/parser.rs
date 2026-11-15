@@ -992,9 +992,9 @@ impl Parser {
         if self.at("!", 0) {
             self.bump();
             loop {
-                let e = self.ident()?;
-                if e.val != "io" && e.val != "alloc" && e.val != "fs" && e.val != "proc" && e.val != "net" {
-                    return Err(self.err(format!("unknown effect {}", repr_str(&e.val)), "effects are io, alloc, fs, proc, net", Some(&e)));
+                let e = if self.at("async", 0) { self.expect_tok("async")? } else { self.ident()? };
+                if e.val != "io" && e.val != "alloc" && e.val != "fs" && e.val != "proc" && e.val != "net" && e.val != "async" {
+                    return Err(self.err(format!("unknown effect {}", repr_str(&e.val)), "effects are io, alloc, fs, proc, net, async", Some(&e)));
                 }
                 effects.push(e.val);
                 if !self.at(",", 0) {

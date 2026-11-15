@@ -1,0 +1,1 @@
+fn main(s: Loop) -> bool { return ev_ok(s); }

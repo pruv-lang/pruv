@@ -1,0 +1,4 @@
+// an effect operation (ev_bytes allocates) is not allowed in a contract
+fn f(s: Loop) -> i64
+  requires len(ev_bytes(s)) == 0
+{ return 0; }

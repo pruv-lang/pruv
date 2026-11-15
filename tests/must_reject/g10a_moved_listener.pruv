@@ -1,0 +1,5 @@
+fn f(take l: Loop, take h: Listener) -> Loop ! async, net, proc, alloc {
+  let q: Loop = ev_add_listener(move l, move h);
+  let ok: bool = net_listener_ok(h);
+  return move q;
+}

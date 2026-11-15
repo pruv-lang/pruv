@@ -6,7 +6,7 @@ use crate::pyrepr::repr_str;
 pub const KEYWORDS: &[&str] = &[
     "fn", "let", "mut", "if", "else", "while", "return", "match", "true", "false", "invariant",
     "cost", "spent", "decreases", "requires", "ensures", "assert", "forall", "exists", "in", "Some", "None", "Ok",
-    "Err", "struct", "enum", "is_variant", "variant_field",
+    "Err", "struct", "enum", "is_variant", "variant_field", "async",
 ];
 
 /// Rust keywords that are not Pruv keywords: user names go into the generated Rust as they are.

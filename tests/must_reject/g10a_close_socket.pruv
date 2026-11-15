@@ -1,0 +1,1 @@
+fn f(take s: Socket) -> Result<i64> ! async, net, proc, alloc { return ev_close(move s); }

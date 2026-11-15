@@ -1,5 +1,5 @@
 """Run all regression tests.
-python tests/run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof]
+python tests/run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof]
                         [--backend rust|llvm|both]
 
 group s5_proof: tests/s5/proof/*.pruv verifies in default, trust-callers and infer modes
@@ -699,6 +699,50 @@ def g10_proc_proof_jobs():
 G10_NET_COMPILES = ("net_only",)   # the only frontend roots that use no Socket / Listener type or net_* operation
 
 
+G10_ASYNC_COMPILES = ("async_only", "user_names")  # no async catalog use
+
+
+def g10_async_frontend_jobs(group="g10_async_frontend", subdir="frontend", modes=None):
+    """G10 async A0: every root that uses Loop / ev_* is rejected by the staging guard on both backends in
+    every mode (exit 1, stage=codegen code=unsupported_type), after the type check accepted it; the G10_ASYNC_COMPILES roots
+    generate code on both backends (exit 0)."""
+    if modes is None:
+        modes = (("default", []), ("no-verify", ["--no-verify"]), ("trust-callers", ["--trust-callers"]),
+                 ("foreign-checks-off", ["--foreign-checks", "off"]))
+    jobs = []
+    for f in sorted(glob.glob(os.path.join(ROOT, "tests", "g10_async", subdir, "*.pruv"))):
+        stem = os.path.splitext(os.path.basename(f))[0]
+        for mode, flags in modes:
+            name = "%s/%s [%s]" % (group, stem, mode)
+
+            def fn(f=f, stem=stem, mode=mode, flags=flags):
+                out = os.path.join(WORK, "%s_%s_%s" % (group, stem, mode))
+                for backend in ("rust", "llvm"):
+                    c = (pruvc(f, out + ".rs", flags) if backend == "rust" else
+                         pruvc_llvm(f, out + ".ll", out + "_llvm.rs", flags))
+                    if stem in G10_ASYNC_COMPILES:
+                        if c.returncode != 0:
+                            return False, "%s: exit %d (expected 0) %s" % (backend, c.returncode,
+                                                                           (c.stdout + c.stderr)[-600:])
+                        continue
+                    diags = []
+                    for line in c.stdout.splitlines():
+                        try:
+                            d = json.loads(line)
+                        except ValueError:
+                            continue
+                        if isinstance(d, dict):
+                            diags.append((d.get("stage"), d.get("code")))
+                    if c.returncode != 1 or ("codegen", "unsupported_type") not in diags:
+                        return False, "%s: exit %d (expected 1), diagnostics %s (expected codegen/unsupported_type) %s" % (
+                            backend, c.returncode, diags, (c.stdout + c.stderr)[-400:])
+                return True, ""
+            jobs.append(safe(name, fn, {"sample": rel_sample(f), "backend": None,
+                                       "flags": list(flags), "mode": mode, "group": group}))
+    return jobs
+
+
+
 def g10_net_frontend_jobs(group="g10_net_frontend", subdir="frontend", modes=None):
     """G10 net A0-A3: every root generates code on the Rust backend (A2: exit 0, and the generated Rust compiles, rustc
     --emit=metadata) and, since A3 (no staging guard), on the llvm backend too (exit 0) in every mode, after the type check
@@ -1339,7 +1383,7 @@ def runtime_jobs(backend):
     return jobs
 
 
-USAGE = ("usage: run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof] [--backend rust|llvm|both] "
+USAGE = ("usage: run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof] [--backend rust|llvm|both] "
          "[--sample-prefix PATH] [--compiler py|rs] [--compiler-path PATH] [--ir-tool PATH] [--list-rows [FILE]] [--compare-rows FILE]")
 
 
@@ -1432,7 +1476,7 @@ def main():
         i = sys.argv.index("--only")
         only = sys.argv[i + 1] if i + 1 < len(sys.argv) else None
         if only not in ("must_reject", "examples", "runtime", "g3_proof", "g6_frontend", "g6_proof", "g9_frontend",
-                        "g9_proof", "g4_frontend", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "g8_proof"):
+                        "g9_proof", "g4_frontend", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "g8_proof"):
             print(USAGE)
             return 2
     backend = "rust"
@@ -1471,6 +1515,8 @@ def main():
             jobs += g10_proc_frontend_jobs()
         if only in (None, "g10_proc_proof"):
             jobs += g10_proc_proof_jobs()
+        if only in (None, "g10_async_frontend"):
+            jobs += g10_async_frontend_jobs()
         if only in (None, "g10_net_frontend"):
             jobs += g10_net_frontend_jobs()
         if only in (None, "g10_net_proof"):
@@ -1538,7 +1584,7 @@ def main():
         # scope comes from the arguments (--only/--backend), not from the rows that actually ran
         scope = set()
         null_backend = ("must_reject", "g3_proof", "g6_frontend", "g6_proof", "g9_frontend", "g9_proof", "g4_frontend",
-                        "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend")
+                        "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend")
         for g in null_backend + ("examples", "runtime", "g8_proof"):
             if only in (None, g):
                 # g8_proof always runs both backends (whatever --backend says) plus one backend-free bundle row.

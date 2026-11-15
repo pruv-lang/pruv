@@ -1,0 +1,13 @@
+// G10 async A0: a Loop moves through updates and ends with ev_close (type-checks, then stops at the staging guard).
+fn run(host: str, port: i64) -> i64 ! async, net, proc, alloc
+  requires 1 <= port && port <= 65535
+{
+  let s: Loop = ev_new(4);
+  if !ev_ok(s) {
+    let failed: Result<i64> = ev_close(move s);
+    return 1;
+  }
+  let t: Loop = ev_wait(move s, 0);
+  let r: Result<i64> = ev_close(move t);
+  return 0;
+}

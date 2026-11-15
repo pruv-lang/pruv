@@ -1,0 +1,15 @@
+// G10 async A0: a par branch that declares the async effect itself
+fn set_first(inout a: [i64], value: i64) -> ()
+  requires len(a) > 0
+  ensures a[0] == value
+{ a[0] = value; }
+
+fn probe(inout a: [i64]) -> () ! async {
+}
+
+fn demo(inout a: [i64], inout b: [i64]) -> () ! async {
+  par {
+    set_first(inout b, 2);
+    probe(inout a);
+  }
+}

@@ -8,7 +8,7 @@ from typeinfo import (TypeTable, BUILTIN_TYPE_NAMES, type_name, is_user_type, is
                       program_uses_inout)  # G5 A0
 from refine import expand as refine_expand
 from refine import _kids as expr_kids
-from foreign import (CATALOG, CATALOG_NAMES, CATALOG_CONTRACT_ONLY, FILE_OBSERVERS, PROC_OBSERVERS, NET_OBSERVERS,
+from foreign import (CATALOG, CATALOG_NAMES, CATALOG_CONTRACT_ONLY, FILE_OBSERVERS, PROC_OBSERVERS, NET_OBSERVERS, ASYNC_OBSERVERS, ASYNC_OPS,
                      check_foreign_decl, check_ownership)  # G6 A0 / G10 A0
 
 # name -> (argument kind, result: BOOL | I64 | "payload" = the Option/Result payload type)
@@ -140,7 +140,7 @@ class Checker:
         for f in prog.functions:
             if f.name in s.funcs:
                 terr(f, "dup_fn", "function %s defined twice" % f.name)
-            if f.name in BUILTIN_FNS or f.name in CONTRACT_ONLY or f.name in CATALOG_NAMES:
+            if f.name in BUILTIN_FNS or f.name in CONTRACT_ONLY or (f.name in CATALOG_NAMES and f.name not in ASYNC_OPS):
                 terr(f, "reserved", "%s is a builtin name" % f.name, "rename the function")
             if s.uses_inout and (f.src_name or f.name) == "old":
                 terr(f, "reserved", "old is a builtin name in a program that uses inout", "rename the function")
@@ -258,10 +258,10 @@ class Checker:
         args = tuple(s.norm_type(a) for a in ty.args)
         name = ty.name
         if name not in s.decls and name in ("Vec", "HashMap", "String", "File", "Process", "ProcessArgs", "Socket",
-                                            "Listener"):
+                                            "Listener", "Loop"):
             name = {"Vec": "vec", "HashMap": "hashmap", "String": "string", "File": "file",
                     "Process": "process", "ProcessArgs": "process_args", "Socket": "socket",
-                    "Listener": "listener"}[name]
+                    "Listener": "listener", "Loop": "loop"}[name]
         if name == ty.name and args == ty.args:
             return ty
         if name == "array" and len(args) == 1:
@@ -921,6 +921,9 @@ class Checker:
             if t.owner is None and t.name == "socket":    # G10 net A0: a discarded Socket / Listener keeps its duty
                 terr(st, "net_unconsumed", "temporary Socket is not consumed",
                      "consume it with net_close(move s) or net_listener_close(move l), or return / transfer ownership")
+            if t.owner is None and t.name == "loop":
+                terr(st, "async_unconsumed", "temporary Loop is not consumed",
+                     "consume it with ev_close(move l), or return / transfer ownership")
             if t.owner is None and t.name == "listener":
                 terr(st, "net_unconsumed", "temporary Listener is not consumed",
                      "consume it with net_close(move s) or net_listener_close(move l), or return / transfer ownership")
@@ -1085,7 +1088,7 @@ class Checker:
         info = cache.get(f.name)
         if info is not None:
             return info
-        info = {"effects": [e for e in ("io", "fs", "proc", "net") if e in f.effects],
+        info = {"effects": [e for e in ("io", "fs", "proc", "net", "async") if e in f.effects],
                 "foreign": f.name if f.foreign is not None else None, "par": False, "callees": []}
         items = []
         s.par_items(f.body, items)
@@ -1167,7 +1170,7 @@ class Checker:
                     terr(c, "parallel_effect", "par branch %s reaches %s, which declares the `%s` effect (%s)" % (
                         n, path[-1], eff, " -> ".join(path)),
                          "move the %s work outside the par group" % (
-                             "I/O" if eff == "io" else "file" if eff == "fs" else "network" if eff == "net"
+                             "I/O" if eff == "io" else "file" if eff == "fs" else "async" if eff == "async" else "network" if eff == "net"
                              else "process"), stage="effect")
                 path = s.par_witness(n, lambda i: i["foreign"] is not None, cache)
                 if path is not None:
@@ -1734,13 +1737,13 @@ class Checker:
             if rt == "payload":     # G3: the payload type of Option<X> / Result<X>
                 return t.args[0] if t.args else I64
             return rt
-        catalog = n in CATALOG       # G6: fixed standard catalog (G6_SPEC 10.3)
+        catalog = n in CATALOG and n not in s.funcs       # G6: fixed standard catalog (G6_SPEC 10.3)
         if catalog:
             if n in CATALOG_CONTRACT_ONLY:
                 if not c:
                     terr(e, "foreign_contract", "%s is only allowed in contracts" % n,
                          "use map_get in code" if n == "map_lookup" else "state the update in ensures")
-            elif c and n not in FILE_OBSERVERS and n not in PROC_OBSERVERS and n not in NET_OBSERVERS:
+            elif c and n not in FILE_OBSERVERS and n not in PROC_OBSERVERS and n not in NET_OBSERVERS and n not in ASYNC_OBSERVERS:
                 terr(e, "foreign_contract", "%s cannot be called in a contract" % n,
                      "contracts observe collections with len(x), x[i], map_lookup and map_updated")
             f = CATALOG[n]

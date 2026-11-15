@@ -8,7 +8,7 @@
 use crate::ast::*;
 use crate::diagnostic::PruvError;
 use crate::foreign::{
-    catalog_fn, check_foreign_decl, check_ownership, is_catalog, is_catalog_contract_only, is_file_observer, is_net_observer, is_proc_observer, CatFn,
+    catalog_fn, check_foreign_decl, check_ownership, is_catalog, is_catalog_contract_only, is_file_observer, is_net_observer, is_async_observer, is_async_op, is_proc_observer, CatFn,
     Takes,
 };
 use crate::gtype::{
@@ -465,7 +465,7 @@ impl Checker {
                 || is_bit_builtin(&name)
                 || is_word_builtin(&name)
                 || contract_only(&name).is_some()
-                || is_catalog(&name)
+                || (is_catalog(&name) && !is_async_op(&name))
             {
                 return Err(terr(f.line, f.col, "reserved", format!("{} is a builtin name", name), "rename the function"));
             }
@@ -706,6 +706,7 @@ impl Checker {
                 "ProcessArgs" => "process_args".to_string(),
                 "Socket" => "socket".to_string(), // G10 net A0
                 "Listener" => "listener".to_string(),
+                "Loop" => "loop".to_string(),
                 _ => name.clone(),
             };
         }
@@ -729,7 +730,7 @@ impl Checker {
     /// `norm_type` on an AST type key; a key without any of the three spellings is returned unchanged.
     fn norm_key(&self, key: &str) -> String {
         if !(key.contains("Vec") || key.contains("HashMap") || key.contains("String") || key.contains("File") || key.contains("Process")
-            || key.contains("Socket") || key.contains("Listener"))
+            || key.contains("Socket") || key.contains("Listener") || key.contains("Loop"))
         {
             return key.to_string();
         }
@@ -2062,6 +2063,9 @@ impl Checker {
                         "consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership",
                     ));
                 }
+                if t.owner.is_none() && t.name == "loop" {
+                    return Err(terr(s.line, s.col, "async_unconsumed", "temporary Loop is not consumed", "consume it with ev_close(move l), or return / transfer ownership"));
+                }
                 if t.owner.is_none() && (t.name == "socket" || t.name == "listener") {
                     // G10 net A0: a discarded Socket / Listener keeps its duty
                     let what = if t.name == "socket" { "Socket" } else { "Listener" };
@@ -2239,7 +2243,7 @@ impl Checker {
                                     ("effect", "parallel_effect",
                                         format!("par branch {} reaches {}, which declares the `{}` effect ({})",
                                             c.name, last, eff, path.join(" -> ")),
-                                        format!("move the {} work outside the par group", if eff == "io" { "I/O" } else if eff == "fs" { "file" } else if eff == "net" { "network" } else { "process" }))
+                                        format!("move the {} work outside the par group", if eff == "io" { "I/O" } else if eff == "fs" { "file" } else if eff == "async" { "async" } else if eff == "net" { "network" } else { "process" }))
                                 }
                                 1 => {
                                     let leaf = info.foreign.as_ref().unwrap();
@@ -3509,7 +3513,7 @@ impl Checker {
             });
         }
         // G6: fixed standard catalog (G6_SPEC 10.3)
-        let cat: Option<CatFn> = catalog_fn(&n);
+        let cat: Option<CatFn> = if self.funcs.contains_key(&n) { None } else { catalog_fn(&n) };
         let f: Rc<FuncInfo> = if let Some(cf) = &cat {
             if is_catalog_contract_only(&n) {
                 if !c {
@@ -3521,7 +3525,7 @@ impl Checker {
                         if n == "map_lookup" { "use map_get in code" } else { "state the update in ensures" },
                     ));
                 }
-            } else if c && !is_file_observer(&n) && !is_proc_observer(&n) && !is_net_observer(&n) {
+            } else if c && !is_file_observer(&n) && !is_proc_observer(&n) && !is_net_observer(&n) && !is_async_observer(&n) {
                 return Err(terr(
                     line,
                     col,
@@ -3677,7 +3681,7 @@ struct ParInfo {
 
 fn par_info(f: &Function, funcs: &HashMap<String, Rc<FuncInfo>>) -> ParInfo {
     let mut info = ParInfo {
-        effects: ["io", "fs", "proc", "net"].iter().filter(|e| f.effects.iter().any(|x| x == **e)).map(|e| e.to_string()).collect(),
+        effects: ["io", "fs", "proc", "net", "async"].iter().filter(|e| f.effects.iter().any(|x| x == **e)).map(|e| e.to_string()).collect(),
         foreign: f.foreign.as_ref().map(|_| f.name.clone()),
         par: false,
         callees: Vec::new(),

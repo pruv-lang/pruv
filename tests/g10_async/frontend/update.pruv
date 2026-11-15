@@ -1,0 +1,6 @@
+fn f() -> Result<i64> ! async, net, proc, alloc {
+  let mut l: Loop = ev_new(4);
+  l = ev_add_timer(move l, 1);
+  l = ev_wait(move l, 0);
+  return ev_close(move l);
+}

@@ -2626,6 +2626,17 @@
 {"backend": null, "compiler": "rs", "flags": ["--emit", "obj"], "group": "g8_frontend", "mode": "obj", "only_compiler": "rs", "sample": "tests/g8/frontend/local_name/root.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--emit", "obj"], "group": "g8_frontend", "mode": "obj", "only_compiler": "rs", "sample": "tests/g8/frontend/root_calls/root.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--emit", "obj"], "group": "g8_frontend", "mode": "obj", "only_compiler": "rs", "sample": "tests/g8/frontend/wrappers/root.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--foreign-checks", "off"], "group": "g10_async_frontend", "mode": "foreign-checks-off", "sample": "tests/g10_async/frontend/async_only.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--foreign-checks", "off"], "group": "g10_async_frontend", "mode": "foreign-checks-off", "sample": "tests/g10_async/frontend/both_branch.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--foreign-checks", "off"], "group": "g10_async_frontend", "mode": "foreign-checks-off", "sample": "tests/g10_async/frontend/catalog_updates.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--foreign-checks", "off"], "group": "g10_async_frontend", "mode": "foreign-checks-off", "sample": "tests/g10_async/frontend/echo_two.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--foreign-checks", "off"], "group": "g10_async_frontend", "mode": "foreign-checks-off", "sample": "tests/g10_async/frontend/helper_returns.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--foreign-checks", "off"], "group": "g10_async_frontend", "mode": "foreign-checks-off", "sample": "tests/g10_async/frontend/moves.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--foreign-checks", "off"], "group": "g10_async_frontend", "mode": "foreign-checks-off", "sample": "tests/g10_async/frontend/observers.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--foreign-checks", "off"], "group": "g10_async_frontend", "mode": "foreign-checks-off", "sample": "tests/g10_async/frontend/relay.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--foreign-checks", "off"], "group": "g10_async_frontend", "mode": "foreign-checks-off", "sample": "tests/g10_async/frontend/return_move.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--foreign-checks", "off"], "group": "g10_async_frontend", "mode": "foreign-checks-off", "sample": "tests/g10_async/frontend/update.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--foreign-checks", "off"], "group": "g10_async_frontend", "mode": "foreign-checks-off", "sample": "tests/g10_async/frontend/user_names.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--foreign-checks", "off"], "group": "g10_net_frontend", "mode": "foreign-checks-off", "sample": "tests/g10_net/frontend/accept_borrowed.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--foreign-checks", "off"], "group": "g10_net_frontend", "mode": "foreign-checks-off", "sample": "tests/g10_net/frontend/borrows.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--foreign-checks", "off"], "group": "g10_net_frontend", "mode": "foreign-checks-off", "sample": "tests/g10_net/frontend/both_branch.pruv"}
@@ -2724,6 +2735,17 @@
 {"backend": null, "compiler": "rs", "flags": ["--infer"], "group": "s5_proof", "mode": "infer", "sample": "tests/s5/proof/sum.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--infer"], "group": "s5_proof", "mode": "infer", "sample": "tests/s5/proof/unbounded.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--infer"], "group": "s5_proof", "mode": "infer", "sample": "tests/s5/proof/zero.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g10_async_frontend", "mode": "no-verify", "sample": "tests/g10_async/frontend/async_only.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g10_async_frontend", "mode": "no-verify", "sample": "tests/g10_async/frontend/both_branch.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g10_async_frontend", "mode": "no-verify", "sample": "tests/g10_async/frontend/catalog_updates.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g10_async_frontend", "mode": "no-verify", "sample": "tests/g10_async/frontend/echo_two.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g10_async_frontend", "mode": "no-verify", "sample": "tests/g10_async/frontend/helper_returns.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g10_async_frontend", "mode": "no-verify", "sample": "tests/g10_async/frontend/moves.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g10_async_frontend", "mode": "no-verify", "sample": "tests/g10_async/frontend/observers.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g10_async_frontend", "mode": "no-verify", "sample": "tests/g10_async/frontend/relay.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g10_async_frontend", "mode": "no-verify", "sample": "tests/g10_async/frontend/return_move.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g10_async_frontend", "mode": "no-verify", "sample": "tests/g10_async/frontend/update.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g10_async_frontend", "mode": "no-verify", "sample": "tests/g10_async/frontend/user_names.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g10_frontend", "mode": "no-verify", "sample": "tests/g10/frontend/borrow_helper.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g10_frontend", "mode": "no-verify", "sample": "tests/g10/frontend/checksum.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g10_frontend", "mode": "no-verify", "sample": "tests/g10/frontend/contract_observer.pruv"}
@@ -2920,6 +2942,17 @@
 {"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "s5_frontend", "mode": "no-verify", "sample": "tests/s5/frontend/plain.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "s5_frontend", "mode": "no-verify", "sample": "tests/s5/frontend/recursive.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "s5_frontend", "mode": "no-verify", "sample": "tests/s5/frontend/sum.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g10_async_frontend", "mode": "trust-callers", "sample": "tests/g10_async/frontend/async_only.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g10_async_frontend", "mode": "trust-callers", "sample": "tests/g10_async/frontend/both_branch.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g10_async_frontend", "mode": "trust-callers", "sample": "tests/g10_async/frontend/catalog_updates.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g10_async_frontend", "mode": "trust-callers", "sample": "tests/g10_async/frontend/echo_two.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g10_async_frontend", "mode": "trust-callers", "sample": "tests/g10_async/frontend/helper_returns.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g10_async_frontend", "mode": "trust-callers", "sample": "tests/g10_async/frontend/moves.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g10_async_frontend", "mode": "trust-callers", "sample": "tests/g10_async/frontend/observers.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g10_async_frontend", "mode": "trust-callers", "sample": "tests/g10_async/frontend/relay.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g10_async_frontend", "mode": "trust-callers", "sample": "tests/g10_async/frontend/return_move.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g10_async_frontend", "mode": "trust-callers", "sample": "tests/g10_async/frontend/update.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g10_async_frontend", "mode": "trust-callers", "sample": "tests/g10_async/frontend/user_names.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g10_frontend", "mode": "trust-callers", "sample": "tests/g10/frontend/borrow_helper.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g10_frontend", "mode": "trust-callers", "sample": "tests/g10/frontend/checksum.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g10_frontend", "mode": "trust-callers", "sample": "tests/g10/frontend/contract_observer.pruv"}
@@ -3015,6 +3048,17 @@
 {"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "s5_proof", "mode": "trust-callers", "sample": "tests/s5/proof/sum.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "s5_proof", "mode": "trust-callers", "sample": "tests/s5/proof/unbounded.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "s5_proof", "mode": "trust-callers", "sample": "tests/s5/proof/zero.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_frontend", "mode": "default", "sample": "tests/g10_async/frontend/async_only.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_frontend", "mode": "default", "sample": "tests/g10_async/frontend/both_branch.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_frontend", "mode": "default", "sample": "tests/g10_async/frontend/catalog_updates.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_frontend", "mode": "default", "sample": "tests/g10_async/frontend/echo_two.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_frontend", "mode": "default", "sample": "tests/g10_async/frontend/helper_returns.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_frontend", "mode": "default", "sample": "tests/g10_async/frontend/moves.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_frontend", "mode": "default", "sample": "tests/g10_async/frontend/observers.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_frontend", "mode": "default", "sample": "tests/g10_async/frontend/relay.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_frontend", "mode": "default", "sample": "tests/g10_async/frontend/return_move.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_frontend", "mode": "default", "sample": "tests/g10_async/frontend/update.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_frontend", "mode": "default", "sample": "tests/g10_async/frontend/user_names.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g10_frontend", "mode": "default", "sample": "tests/g10/frontend/borrow_helper.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g10_frontend", "mode": "default", "sample": "tests/g10/frontend/checksum.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g10_frontend", "mode": "default", "sample": "tests/g10/frontend/contract_observer.pruv"}
@@ -3265,6 +3309,37 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10_v_read_created.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10_v_read_unchecked.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10_v_write_opened.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_borrowed_consume.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_close_socket.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_contract_effect_op.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_direct_par.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_discard_borrowed_temp.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_discard_stmt.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_discard_update.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_double_end.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_early_return.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_ev_close_missing_net.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_ev_close_missing_proc.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_ev_remove_missing_net.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_ev_remove_missing_proc.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_forgotten_take.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_host_entry.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_in_array.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_in_collection.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_in_result.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_in_struct.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_indirect_par.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_live_overwrite.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_loop_local.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_loop_outer.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_main_signature.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_missing_async_effect.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_moved_listener.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_moved_process.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_moved_socket.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_net_close_loop.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_one_branch.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_use_after_move.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10n_borrowed_consume.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10n_borrowed_listener_consume.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10n_close_listener_with_net_close.pruv"}

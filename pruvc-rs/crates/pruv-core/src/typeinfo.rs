@@ -6,9 +6,9 @@ use crate::gtype::{dependencies, format_type, is_g3_key, GType};
 use std::collections::{HashMap, HashSet};
 
 /// G6 A0: also the internal names of the owned collection types (vec / hashmap / string).
-pub const BUILTIN_TYPE_NAMES: [&str; 17] = [
+pub const BUILTIN_TYPE_NAMES: [&str; 18] = [
     "i64", "bool", "unit", "array", "option", "result", "array_u8", "array_bool", "str", "vec", "hashmap", "string", "file",
-    "process", "process_args", "socket", "listener",
+    "process", "process_args", "socket", "listener", "loop",
 ];
 
 /// A name that is not built in is a user type (whether or not it is declared).
@@ -59,6 +59,7 @@ pub fn type_name(ty: &str) -> String {
         "process_args" => "ProcessArgs".to_string(),
         "socket" => "Socket".to_string(), // G10 net A0
         "listener" => "Listener".to_string(),
+        "loop" => "Loop".to_string(),
         other => other.to_string(),
     }
 }
@@ -983,7 +984,9 @@ mod tests {
         assert_eq!(type_name("array_bool"), "[bool]");
         assert!(!is_user_type("array_u8"));
         assert!(!is_user_type("array_bool"));
-        assert_eq!(BUILTIN_TYPE_NAMES.len(), 17);
+        assert_eq!(BUILTIN_TYPE_NAMES.len(), 18);
         assert_eq!(type_name("string"), "String");
+        assert_eq!(type_name("loop"), "Loop");
+        assert!(!is_user_type("loop"));
     }
 }

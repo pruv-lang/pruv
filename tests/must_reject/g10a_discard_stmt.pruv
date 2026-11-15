@@ -1,0 +1,1 @@
+fn f() -> () ! async, alloc { ev_new(4); }

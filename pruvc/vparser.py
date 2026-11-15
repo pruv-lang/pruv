@@ -5,7 +5,7 @@ from typeinfo import decl_owner, fn_owner
 
 KEYWORDS = {"fn", "let", "mut", "if", "else", "while", "return", "match", "true", "false",
             "cost", "spent", "invariant", "decreases", "requires", "ensures", "assert", "forall", "exists",
-            "in", "Some", "None", "Ok", "Err", "struct", "enum", "is_variant", "variant_field"}
+            "in", "Some", "None", "Ok", "Err", "struct", "enum", "is_variant", "variant_field", "async"}
 # Rust keywords that are not Pruv keywords: user names go into the generated Rust unchanged.
 RUST_KEYWORDS = {"as", "async", "await", "break", "const", "continue", "crate", "dyn", "enum", "extern", "for",
                  "impl", "loop", "mod", "move", "pub", "ref", "self", "Self", "static", "struct", "super",
@@ -684,9 +684,9 @@ class Parser:
         if s.at("!"):
             s.next()
             while True:
-                e = s.ident()
-                if e.val not in ("io", "alloc", "fs", "proc", "net"):
-                    s.err("unknown effect %r" % e.val, "effects are io, alloc, fs, proc, net", e)
+                e = s.next() if s.at("async") else s.ident()
+                if e.val not in ("io", "alloc", "fs", "proc", "net", "async"):
+                    s.err("unknown effect %r" % e.val, "effects are io, alloc, fs, proc, net, async", e)
                 effects.append(e.val)
                 if not s.at(","):
                     break

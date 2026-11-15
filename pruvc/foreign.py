@@ -38,6 +38,7 @@ PROCESS = Type("process")
 PROCESS_ARGS = Type("process_args")
 SOCKET = Type("socket")
 LISTENER = Type("listener")
+LOOP = Type("loop")
 CATALOG = {}
 
 
@@ -123,6 +124,39 @@ _add("net_byte", [], lambda: ([_p("s", SOCKET), _p("i", I64)], I64))
 _add("net_listener_ok", [], lambda: ([_p("l", LISTENER)], BOOL))
 _add("net_listener_error", [], lambda: ([_p("l", LISTENER)], I64))
 _add("net_listener_port", [], lambda: ([_p("l", LISTENER)], I64))
+
+# G10 async A0: placeholders are protected by the pre-verification staging guard.
+_add('ev_new', [], lambda: ([_p('cap', I64)], LOOP), ['async', 'alloc'])
+_add('ev_close', [], lambda: ([_p('l', LOOP, True)], RESULT), ['async', 'net', 'proc', 'alloc'])
+_add('ev_add_socket', [], lambda: ([_p('l', LOOP, True), _p('s', SOCKET, True)], LOOP), ['async', 'net', 'alloc'])
+_add('ev_add_listener', [], lambda: ([_p('l', LOOP, True), _p('x', LISTENER, True)], LOOP), ['async', 'net', 'alloc'])
+_add('ev_add_process', [], lambda: ([_p('l', LOOP, True), _p('p', PROCESS, True)], LOOP), ['async', 'proc', 'alloc'])
+_add('ev_add_timer', [], lambda: ([_p('l', LOOP, True), _p('ms', I64)], LOOP), ['async', 'alloc'])
+_add('ev_wait', [], lambda: ([_p('l', LOOP, True), _p('timeout_ms', I64)], LOOP), ['async', 'alloc'])
+_add('ev_read', [], lambda: ([_p('l', LOOP, True), _p('slot', I64), _p('max', I64)], LOOP), ['async', 'net', 'alloc'])
+_add('ev_write', [], lambda: ([_p('l', LOOP, True), _p('slot', I64), _p('data', ARRAY_U8)], LOOP), ['async', 'net', 'alloc'])
+_add('ev_shutdown_write', [], lambda: ([_p('l', LOOP, True), _p('slot', I64)], LOOP), ['async', 'net', 'alloc'])
+_add('ev_accept', [], lambda: ([_p('l', LOOP, True), _p('slot', I64)], LOOP), ['async', 'net', 'alloc'])
+_add('ev_proc_read', [], lambda: ([_p('l', LOOP, True), _p('slot', I64), _p('stream', I64), _p('max', I64)], LOOP), ['async', 'proc', 'alloc'])
+_add('ev_proc_write', [], lambda: ([_p('l', LOOP, True), _p('slot', I64), _p('data', ARRAY_U8)], LOOP), ['async', 'proc', 'alloc'])
+_add('ev_proc_close_stdin', [], lambda: ([_p('l', LOOP, True), _p('slot', I64)], LOOP), ['async', 'proc', 'alloc'])
+_add('ev_proc_wait', [], lambda: ([_p('l', LOOP, True), _p('slot', I64)], LOOP), ['async', 'proc', 'alloc'])
+_add('ev_remove', [], lambda: ([_p('l', LOOP, True), _p('slot', I64)], LOOP), ['async', 'net', 'proc', 'alloc'])
+_add('ev_bytes', [], lambda: ([_p('l', LOOP)], ARRAY_U8), ['alloc'])
+_add('ev_ok', [], lambda: ([_p('l', LOOP)], BOOL), [])
+_add('ev_error', [], lambda: ([_p('l', LOOP)], I64), [])
+_add('ev_cap', [], lambda: ([_p('l', LOOP)], I64), [])
+_add('ev_count', [], lambda: ([_p('l', LOOP)], I64), [])
+_add('ev_last', [], lambda: ([_p('l', LOOP)], I64), [])
+_add('ev_kind', [], lambda: ([_p('l', LOOP), _p('slot', I64)], I64), [])
+_add('ev_eof', [], lambda: ([_p('l', LOOP), _p('slot', I64)], BOOL), [])
+_add('ev_write_open', [], lambda: ([_p('l', LOOP), _p('slot', I64)], BOOL), [])
+_add('ev_event_slot', [], lambda: ([_p('l', LOOP)], I64), [])
+_add('ev_event_kind', [], lambda: ([_p('l', LOOP)], I64), [])
+_add('ev_size', [], lambda: ([_p('l', LOOP)], I64), [])
+_add('ev_byte', [], lambda: ([_p('l', LOOP), _p('i', I64)], I64), [])
+_add('ev_exit', [], lambda: ([_p('l', LOOP)], I64), [])
+
 # contract-only observers
 _add("map_lookup", _KV, lambda K, V: ([_p("m", _map(K, V)), _p("k", K)], mk_option(V)))
 _add("map_updated", _KV, lambda K, V: ([_p("after", _map(K, V)), _p("before", _map(K, V)), _p("k", K), _p("v", V)],
@@ -139,6 +173,8 @@ PROC_OPS = tuple(n for n in CATALOG if n.startswith("proc_"))
 NET_OBSERVERS = ("net_ok", "net_error", "net_write_open", "net_eof", "net_size", "net_byte",
                  "net_listener_ok", "net_listener_error", "net_listener_port")
 NET_OPS = tuple(n for n in CATALOG if n.startswith("net_"))
+ASYNC_OBSERVERS = ('ev_ok', 'ev_error', 'ev_cap', 'ev_count', 'ev_last', 'ev_kind', 'ev_eof', 'ev_write_open', 'ev_event_slot', 'ev_event_kind', 'ev_size', 'ev_byte', 'ev_exit')
+ASYNC_OPS = tuple(n for n in CATALOG if n.startswith("ev_"))
 
 
 # G10 A1: typed contract ASTs, evaluated by the catalog-call verifier.
@@ -268,7 +304,7 @@ def _join(a, b):
     return dict((n, v if b[n] == v else "maybe") for n, v in a.items() if n in b)
 
 
-_MUST_CONSUME = {"process": "Process", "socket": "Socket", "listener": "Listener"}
+_MUST_CONSUME = {"process": "Process", "socket": "Socket", "listener": "Listener", "loop": "Loop"}
 
 
 def _must_kind(t):
@@ -282,6 +318,9 @@ def _must_kind(t):
 def _handle_lost(node, kind, msg):
     """G10 proc A0 / net A0 (G10_PROC_SPEC 3.3 / 7.1, G10_NET_SPEC 3.3 / 7.1): a must-consume duty is left at `node`;
     the code follows the type of the handle that loses its duty"""
+    if kind == "Loop":
+        _err(node, "async_unconsumed", msg,
+             "consume it with ev_close(move l), or return / transfer ownership")
     if kind == "Process":
         _err(node, "proc_unconsumed", msg,
              "consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership")
@@ -413,7 +452,7 @@ class _Ownership:
                  "use move for a take argument, a let initializer, an assignment or return")
         if n in s.bor:
             # G10 specifies foreign_borrow; preserve the established G6 diagnostic for other types.
-            _err(e, "foreign_borrow" if e.ty in (FILE, PROCESS, SOCKET, LISTENER) else "foreign_move", "moving a borrowed parameter",
+            _err(e, "foreign_borrow" if e.ty in (FILE, PROCESS, SOCKET, LISTENER, LOOP) else "foreign_move", "moving a borrowed parameter",
                  "%s is a read parameter; declare it `take %s: ...` to consume it" % (n, n))
         st[n] = "dead"
         if track is not None:
@@ -461,7 +500,7 @@ class _Ownership:
                 s.expr(k, st)
 
     def call(s, e, st):
-        f = CATALOG.get(e.name) or s.funcs.get(e.name)
+        f = s.funcs.get(e.name) or CATALOG.get(e.name)
         takes = [bool(p.take) for p in f.params] if f is not None else [False] * len(e.args)
         outer = s.track
         track = outer if outer is not None else {}   # nested calls share the outermost call's track (R1)
@@ -669,3 +708,38 @@ def uses_files(prog):
         return any(uses_file(getattr(node, name)) for name in node.__dataclass_fields__)
 
     return any(uses_file(f) for f in prog.functions)
+
+
+def _is_async_type(t):
+    return t.owner is None and (t.name in ("loop",) or any(_is_async_type(a) for a in t.args))
+
+
+def _async_candidates(node, out, names):
+    if isinstance(node, (list, tuple)):
+        for x in node:
+            _async_candidates(x, out, names)
+        return
+    if not hasattr(node, "__dataclass_fields__") or isinstance(node, Type):
+        return
+    if isinstance(node, Let) and _is_async_type(node.type):
+        out.append((node.line, node.col))
+    elif isinstance(node, Call) and node.name in ASYNC_OPS and node.name not in names:
+        out.append((node.line, node.col))
+    for fname in node.__dataclass_fields__:
+        _async_candidates(getattr(node, fname), out, names)
+
+
+def first_async_use(prog):
+    """G10 async A0: the first use of Loop or an ev_* operation of a checked program -> (node, line, col) or
+    None. Functions in order; the signature (a Loop parameter or result) comes before the body, whose
+    first use is the smallest source position. A function that only declares `! async` is not a use."""
+    for f in prog.functions:
+        if any(_is_async_type(p.type) for p in f.params) or _is_async_type(f.ret):
+            return (f, f.line, f.col)
+        cands = []
+        _async_candidates(f.body, cands, {fn.name for fn in prog.functions})
+        if cands:
+            line, col = min(cands)
+            return (f, line, col)
+    return None
+

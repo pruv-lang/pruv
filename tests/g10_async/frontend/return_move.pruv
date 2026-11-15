@@ -1,0 +1,8 @@
+// G10 async A0: return move s / return move l transfers the duty to the caller.
+fn hand_back(take s: Loop) -> Loop { return move s; }
+
+fn relay(take s: Loop) -> Loop {
+  let q: Loop = hand_back(move s);
+  return move q;
+}
+

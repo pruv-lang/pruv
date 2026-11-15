@@ -1,0 +1,3 @@
+fn f(host: str, port: i64) -> bool ! async, net, proc, alloc {
+  return ev_ok(ev_new(4));
+}

@@ -1,0 +1,6 @@
+fn f(host: str, port: i64) -> i64 ! async, net, proc, alloc {
+  let s: Loop = ev_new(4);
+  if !ev_ok(s) { return 1; }
+  let r: Result<i64> = ev_close(move s);
+  return 0;
+}

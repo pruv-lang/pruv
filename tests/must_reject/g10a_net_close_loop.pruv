@@ -1,0 +1,1 @@
+fn f(take l: Loop) -> Result<i64> ! net, alloc { return net_close(move l); }

@@ -1,0 +1,5 @@
+fn f(take l: Loop, take h: Socket) -> Loop ! async, net, proc, alloc {
+  let q: Loop = ev_add_socket(move l, move h);
+  let ok: bool = net_ok(h);
+  return move q;
+}

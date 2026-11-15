@@ -1,0 +1,19 @@
+// G10 async A0: async is reachable from a par branch through a helper
+fn set_first(inout a: [i64], value: i64) -> ()
+  requires len(a) > 0
+  ensures a[0] == value
+{ a[0] = value; }
+
+fn probe(inout a: [i64]) -> () ! async {
+}
+
+fn middle(inout a: [i64]) -> () ! async {
+  probe(inout a);
+}
+
+fn demo(inout a: [i64], inout b: [i64]) -> () ! async {
+  par {
+    set_first(inout b, 2);
+    middle(inout a);
+  }
+}

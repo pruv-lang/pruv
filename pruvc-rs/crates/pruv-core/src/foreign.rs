@@ -40,7 +40,7 @@ pub struct CatFn {
 }
 
 /// CATALOG_NAMES of foreign.py (insertion order).
-pub const CATALOG_NAMES: [&str; 62] = [
+pub const CATALOG_NAMES: [&str; 92] = [
     "vec_new",
     "vec_push",
     "vec_get",
@@ -80,6 +80,36 @@ pub const CATALOG_NAMES: [&str; 62] = [
     "proc_eof",
     "proc_size",
     "proc_byte",
+    "ev_new",
+    "ev_close",
+    "ev_add_socket",
+    "ev_add_listener",
+    "ev_add_process",
+    "ev_add_timer",
+    "ev_wait",
+    "ev_read",
+    "ev_write",
+    "ev_shutdown_write",
+    "ev_accept",
+    "ev_proc_read",
+    "ev_proc_write",
+    "ev_proc_close_stdin",
+    "ev_proc_wait",
+    "ev_remove",
+    "ev_bytes",
+    "ev_ok",
+    "ev_error",
+    "ev_cap",
+    "ev_count",
+    "ev_last",
+    "ev_kind",
+    "ev_eof",
+    "ev_write_open",
+    "ev_event_slot",
+    "ev_event_kind",
+    "ev_size",
+    "ev_byte",
+    "ev_exit",
     "net_listen",
     "net_accept",
     "net_listener_close",
@@ -142,6 +172,11 @@ pub const NET_OBSERVERS: [&str; 9] = [
     "net_listener_port",
 ];
 
+pub const ASYNC_OBSERVERS: [&str; 13] = ["ev_ok","ev_error","ev_cap","ev_count","ev_last","ev_kind","ev_eof","ev_write_open","ev_event_slot","ev_event_kind","ev_size","ev_byte","ev_exit"];
+pub const ASYNC_OPS: [&str; 30] = ["ev_new","ev_close","ev_add_socket","ev_add_listener","ev_add_process","ev_add_timer","ev_wait","ev_read","ev_write","ev_shutdown_write","ev_accept","ev_proc_read","ev_proc_write","ev_proc_close_stdin","ev_proc_wait","ev_remove","ev_bytes","ev_ok","ev_error","ev_cap","ev_count","ev_last","ev_kind","ev_eof","ev_write_open","ev_event_slot","ev_event_kind","ev_size","ev_byte","ev_exit"];
+pub fn is_async_observer(name: &str) -> bool { ASYNC_OBSERVERS.contains(&name) }
+pub fn is_async_op(name: &str) -> bool { ASYNC_OPS.contains(&name) }
+
 pub fn is_net_observer(name: &str) -> bool {
     NET_OBSERVERS.contains(&name)
 }
@@ -189,6 +224,8 @@ fn process_args_t() -> GType {
 fn socket_t() -> GType {
     GType::new("socket", Vec::new())
 }
+
+fn loop_t() -> GType { GType::new("loop", vec![]) }
 
 fn listener_t() -> GType {
     GType::new("listener", Vec::new())
@@ -371,6 +408,38 @@ pub fn catalog_fn(name: &str) -> Option<CatFn> {
         // G10 net (docs/G10_NET_SPEC.md 2.3): signatures and effects. Since A1 the section 2.3 / 2.4 / 4 contracts are
         // encoded for every net_* operation by symbolic.rs `net_call` (pruv-proof). Both backends lower Socket / Listener
         // (A2 Rust source backend, codegen.rs NET_PRELUDE; A3 LLVM backend through the Rust shim).
+
+        // G10 async A0: placeholders cannot pass the staging guard.
+        "ev_new" => CatFn { requires: vec![], ensures: vec![], params: vec![p("cap", GType::i64(), false)], ret: loop_t(), effects: vec!["async".to_string(), "alloc".to_string()], tparams: vec![] },
+        "ev_close" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true)], ret: GType::new("result", vec![]), effects: vec!["async".to_string(), "net".to_string(), "proc".to_string(), "alloc".to_string()], tparams: vec![] },
+        "ev_add_socket" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("s", socket_t(), true)], ret: loop_t(), effects: vec!["async".to_string(), "net".to_string(), "alloc".to_string()], tparams: vec![] },
+        "ev_add_listener" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("x", listener_t(), true)], ret: loop_t(), effects: vec!["async".to_string(), "net".to_string(), "alloc".to_string()], tparams: vec![] },
+        "ev_add_process" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("p", process_t(), true)], ret: loop_t(), effects: vec!["async".to_string(), "proc".to_string(), "alloc".to_string()], tparams: vec![] },
+        "ev_add_timer" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("ms", GType::i64(), false)], ret: loop_t(), effects: vec!["async".to_string(), "alloc".to_string()], tparams: vec![] },
+        "ev_wait" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("timeout_ms", GType::i64(), false)], ret: loop_t(), effects: vec!["async".to_string(), "alloc".to_string()], tparams: vec![] },
+        "ev_read" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("slot", GType::i64(), false), p("max", GType::i64(), false)], ret: loop_t(), effects: vec!["async".to_string(), "net".to_string(), "alloc".to_string()], tparams: vec![] },
+        "ev_write" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("slot", GType::i64(), false), p("data", GType::new("array_u8", vec![]), false)], ret: loop_t(), effects: vec!["async".to_string(), "net".to_string(), "alloc".to_string()], tparams: vec![] },
+        "ev_shutdown_write" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("slot", GType::i64(), false)], ret: loop_t(), effects: vec!["async".to_string(), "net".to_string(), "alloc".to_string()], tparams: vec![] },
+        "ev_accept" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("slot", GType::i64(), false)], ret: loop_t(), effects: vec!["async".to_string(), "net".to_string(), "alloc".to_string()], tparams: vec![] },
+        "ev_proc_read" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("slot", GType::i64(), false), p("stream", GType::i64(), false), p("max", GType::i64(), false)], ret: loop_t(), effects: vec!["async".to_string(), "proc".to_string(), "alloc".to_string()], tparams: vec![] },
+        "ev_proc_write" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("slot", GType::i64(), false), p("data", GType::new("array_u8", vec![]), false)], ret: loop_t(), effects: vec!["async".to_string(), "proc".to_string(), "alloc".to_string()], tparams: vec![] },
+        "ev_proc_close_stdin" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("slot", GType::i64(), false)], ret: loop_t(), effects: vec!["async".to_string(), "proc".to_string(), "alloc".to_string()], tparams: vec![] },
+        "ev_proc_wait" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("slot", GType::i64(), false)], ret: loop_t(), effects: vec!["async".to_string(), "proc".to_string(), "alloc".to_string()], tparams: vec![] },
+        "ev_remove" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), true), p("slot", GType::i64(), false)], ret: loop_t(), effects: vec!["async".to_string(), "net".to_string(), "proc".to_string(), "alloc".to_string()], tparams: vec![] },
+        "ev_bytes" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), false)], ret: GType::new("array_u8", vec![]), effects: vec!["alloc".to_string()], tparams: vec![] },
+        "ev_ok" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), false)], ret: GType::bool(), effects: vec![], tparams: vec![] },
+        "ev_error" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), false)], ret: GType::i64(), effects: vec![], tparams: vec![] },
+        "ev_cap" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), false)], ret: GType::i64(), effects: vec![], tparams: vec![] },
+        "ev_count" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), false)], ret: GType::i64(), effects: vec![], tparams: vec![] },
+        "ev_last" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), false)], ret: GType::i64(), effects: vec![], tparams: vec![] },
+        "ev_kind" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), false), p("slot", GType::i64(), false)], ret: GType::i64(), effects: vec![], tparams: vec![] },
+        "ev_eof" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), false), p("slot", GType::i64(), false)], ret: GType::bool(), effects: vec![], tparams: vec![] },
+        "ev_write_open" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), false), p("slot", GType::i64(), false)], ret: GType::bool(), effects: vec![], tparams: vec![] },
+        "ev_event_slot" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), false)], ret: GType::i64(), effects: vec![], tparams: vec![] },
+        "ev_event_kind" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), false)], ret: GType::i64(), effects: vec![], tparams: vec![] },
+        "ev_size" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), false)], ret: GType::i64(), effects: vec![], tparams: vec![] },
+        "ev_byte" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), false), p("i", GType::i64(), false)], ret: GType::i64(), effects: vec![], tparams: vec![] },
+        "ev_exit" => CatFn { requires: vec![], ensures: vec![], params: vec![p("l", loop_t(), false)], ret: GType::i64(), effects: vec![], tparams: vec![] },
         "net_listen" => CatFn { requires: vec![], ensures: vec![],
             params: vec![p("host", GType::str(), false), p("port", GType::i64(), false)],
             ret: listener_t(),
@@ -754,6 +823,7 @@ fn must_kind(key: &str) -> Option<&'static str> {
         "process" => Some("Process"),
         "socket" => Some("Socket"),
         "listener" => Some("Listener"),
+        "loop" => Some("Loop"),
         _ => None,
     }
 }
@@ -761,6 +831,9 @@ fn must_kind(key: &str) -> Option<&'static str> {
 /// G10 proc A0 / net A0 (G10_PROC_SPEC 3.3 / 7.1, G10_NET_SPEC 3.3 / 7.1): a must-consume duty is left at
 /// (line, col); the code follows the type of the handle that loses its duty
 fn handle_lost(kind: &str, line: i64, col: i64, msg: String) -> PruvError {
+    if kind == "Loop" {
+        return err(line, col, "async_unconsumed", msg, "consume it with ev_close(move l), or return / transfer ownership");
+    }
     if kind == "Process" {
         return err(line, col, "proc_unconsumed", msg, "consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership");
     }
@@ -984,7 +1057,7 @@ impl<'a> Ownership<'a> {
         }
         if self.bor.contains(n) {
             // G10 specifies foreign_borrow; the established G6 diagnostic stays for the other types.
-            let code = if matches!(e.ty.as_deref(), Some("file") | Some("process") | Some("socket") | Some("listener")) { "foreign_borrow" } else { "foreign_move" };
+            let code = if matches!(e.ty.as_deref(), Some("file") | Some("process") | Some("socket") | Some("listener") | Some("loop")) { "foreign_borrow" } else { "foreign_move" };
             return Err(err(
                 line,
                 col,
@@ -1092,7 +1165,7 @@ impl<'a> Ownership<'a> {
     }
 
     fn call(&mut self, e: &Call, st: &mut St) -> Res<()> {
-        let takes: Vec<bool> = match catalog_fn(&e.name) {
+        let takes: Vec<bool> = match if self.funcs.contains_key(&e.name) { None } else { catalog_fn(&e.name) } {
             Some(f) => f.params.iter().map(|p| p.take).collect(),
             None => match self.funcs.get(&e.name) {
                 Some(t) => t.clone(),
@@ -1564,8 +1637,7 @@ fn net_stmts(stmts: &[Stmt], out: &mut Cands) {
     }
 }
 
-/// The first use of Socket, Listener or a net_* operation -> (line, col): functions in order; the signature (a Socket /
-/// Listener parameter or result) before the body, whose first use is the smallest source position. A function that
+/// The first use of Socket, Listener or a net_* operation -> (line, col): functions in order; the signature (a Loop parameter or result) before the body, whose first use is the smallest source position. A function that
 /// only declares `! net` is not a use.
 pub fn first_net_use(prog: &Program) -> Option<(i64, i64)> {
     for f in &prog.functions {
@@ -1659,7 +1731,7 @@ mod tests {
 
     #[test]
     fn catalog_shapes() {
-        assert_eq!(CATALOG_NAMES.len(), 62);
+        assert_eq!(CATALOG_NAMES.len(), 92);
         for n in CATALOG_NAMES.iter() {
             assert!(catalog_fn(n).is_some());
         }
@@ -1698,3 +1770,128 @@ pub fn first_par(stmts: &[Stmt]) -> Option<&Par> {
 pub fn g7_target_error(prog: &Program) -> Option<PruvError> {
     prog.functions.iter().find_map(|f| first_par(&f.body)).map(parallel_error)
 }
+
+fn key_has_async(key: &str) -> bool {
+    fn has(t: &GType) -> bool {
+        (t.owner.is_none() && t.name == "loop") || t.args.iter().any(has)
+    }
+    match GType::try_from_key(key) {
+        Ok(t) => has(&t),
+        Err(_) => false,
+    }
+}
+
+fn async_expr(e: &Expr, out: &mut Cands, names: &HashSet<&str>) {
+    match e {
+        Expr::Call(c) => {
+            if is_async_op(&c.name) && !names.contains(c.name.as_str()) {
+                out.push((c.line, c.col));
+            }
+            for a in &c.args {
+                async_expr(a, out, names);
+            }
+        }
+        Expr::Unary(x) => async_expr(&x.operand, out, names),
+        Expr::Binary(x) => {
+            async_expr(&x.left, out, names);
+            async_expr(&x.right, out, names);
+        }
+        Expr::Index(x) => {
+            async_expr(&x.array, out, names);
+            async_expr(&x.index, out, names);
+        }
+        Expr::Ctor(x) => {
+            if let Some(a) = &x.arg {
+                async_expr(a, out, names);
+            }
+        }
+        Expr::Quant(x) => {
+            async_expr(&x.lo, out, names);
+            async_expr(&x.hi, out, names);
+            async_expr(&x.body, out, names);
+        }
+        Expr::StructLit(x) => {
+            for f in &x.fields {
+                async_expr(&f.value, out, names);
+            }
+        }
+        Expr::EnumCtor(x) => {
+            for a in &x.args {
+                async_expr(a, out, names);
+            }
+        }
+        Expr::FieldAccess(x) => async_expr(&x.base, out, names),
+        Expr::IsVariant(x) => async_expr(&x.value, out, names),
+        Expr::VariantField(x) => async_expr(&x.value, out, names),
+        Expr::InoutArg(x) => async_expr(&x.expr, out, names),
+        Expr::Move(_) | Expr::Spent(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StrLit(_) | Expr::Var(_) => {}
+    }
+}
+
+fn async_stmts(stmts: &[Stmt], out: &mut Cands, names: &HashSet<&str>) {
+    for s in stmts {
+        match s {
+            Stmt::Let(l) => {
+                if key_has_async(&l.ty) {
+                    out.push((l.line, l.col));
+                }
+                async_expr(&l.value, out, names);
+            }
+            Stmt::Assign(a) => async_expr(&a.value, out, names),
+            Stmt::IndexAssign(a) => {
+                async_expr(&a.index, out, names);
+                async_expr(&a.value, out, names);
+            }
+            Stmt::If(i) => {
+                async_expr(&i.cond, out, names);
+                async_stmts(&i.then, out, names);
+                async_stmts(&i.els, out, names);
+            }
+            Stmt::While(w) => {
+                async_expr(&w.cond, out, names);
+                for inv in &w.invariants {
+                    async_expr(inv, out, names);
+                }
+                async_expr(&w.decreases, out, names);
+                async_stmts(&w.body, out, names);
+            }
+            Stmt::Return(r) => {
+                if let Some(v) = &r.value {
+                    async_expr(v, out, names);
+                }
+            }
+            Stmt::Assert(a) => async_expr(&a.cond, out, names),
+            Stmt::Par(e) => {
+                for c in &e.calls {
+                    async_expr(c, out, names);
+                }
+            }
+            Stmt::ExprStmt(e) => async_expr(&e.expr, out, names),
+            Stmt::FieldAssign(f) => async_expr(&f.value, out, names),
+            Stmt::Match(m) => {
+                async_expr(&m.scrutinee, out, names);
+                for a in &m.arms {
+                    async_stmts(&a.body, out, names);
+                }
+            }
+        }
+    }
+}
+
+/// The first use of Loop or a ev_* operation -> (line, col): functions in order; the signature (a Loop parameter or result) before the body, whose first use is the smallest source position. A function that
+/// only declares `! async` is not a use.
+pub fn first_async_use(prog: &Program) -> Option<(i64, i64)> {
+    let names: HashSet<&str> = prog.functions.iter().map(|f| f.name.as_str()).collect();
+    for f in &prog.functions {
+        if f.params.iter().any(|p| key_has_async(&p.ty)) || key_has_async(&f.ret) {
+            return Some((f.line, f.col));
+        }
+        let mut cands: Cands = Vec::new();
+        async_stmts(&f.body, &mut cands, &names);
+        if let Some(best) = cands.into_iter().min() {
+            return Some(best);
+        }
+    }
+    None
+}
+

@@ -1,0 +1,1 @@
+fn f(take l: Loop) -> Loop ! async, proc, alloc { return ev_remove(move l, 0); }

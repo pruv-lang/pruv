@@ -1,0 +1,8 @@
+// A0 checks signatures and effects before the staging guard.
+fn updates(take l: Loop, data: [u8]) -> Result<i64> ! async, net, proc, alloc {
+  let mut q: Loop = move l;
+  q = ev_shutdown_write(move q, 0);
+  q = ev_proc_write(move q, 1, data);
+  q = ev_proc_close_stdin(move q, 1);
+  return ev_close(move q);
+}

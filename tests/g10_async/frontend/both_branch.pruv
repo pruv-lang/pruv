@@ -1,0 +1,6 @@
+fn f(flag: bool) -> i64 ! async, net, proc, alloc {
+  let l: Loop = ev_new(4);
+  if flag { let r: Result<i64> = ev_close(move l); }
+  else { let r: Result<i64> = ev_close(move l); }
+  return 0;
+}

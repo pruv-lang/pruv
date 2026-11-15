@@ -49,7 +49,7 @@ from check import check  # noqa: E402
 from codegen import gen_rust, gen_rust_ex  # noqa: E402
 from typeinfo import g2_unimplemented_error, first_g3_use  # noqa: E402
 from mono import specialize  # noqa: E402
-from foreign import g6_unimplemented_error, g7_target_error  # noqa: E402
+from foreign import g6_unimplemented_error, g7_target_error, first_async_use  # noqa: E402
 
 USAGE = ("usage: pruvc.py in.pruv -o OUT [--no-verify] [--trust-callers] "
          "[--backend rust|llvm] [--rust-bindings PATH] [--infer [--show-inferred]] "
@@ -71,6 +71,12 @@ def compile_file(path, out, verify=True, trust_callers=False, backend="rust", ru
         raise ValueError("also_llvm requires backend='rust'")
     prog = load_program(path)   # G4: the root file plus its declared module files; a legacy root is plain parse(src)
     check(prog, externs=externs)
+    use = first_async_use(prog)
+    if use:
+        f, line, col = use
+        raise PruvError("codegen", line, col, "unsupported_type",
+                        "Loop and ev_* operations are not implemented in this batch",
+                        "wait for G10 async A1-A3", file=getattr(f, "file", None))
     # G9 A3: both back ends lower G9 programs; the G9 staging guard is gone from the driver.
     # G6: the Rust source backend lowers foreign calls and collections (A2); the LLVM backend (and --also-llvm)
     # lowers the G6_SPEC 13.1 subset (A3) and rejects everything else with codegen/unsupported_type: that decision
