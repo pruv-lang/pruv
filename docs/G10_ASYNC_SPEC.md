@@ -1,6 +1,6 @@
 # G10: the `async` effect and the owned `Loop` handle
 
-Status: **A0–A3 implemented, 2026-11-16. Windows gate 8 passed: `tests/g10_async/windows.py` 7/7 on the Windows host (MSVC target), both compilers. Q is next.**
+Status: **A0–A3 implemented, 2026-11-16. Windows gate 8 passed: `tests/g10_async/windows.py` 7/7 on the Windows host (MSVC target), both compilers. Q done (RESULTS.md §127).**
 Batch status will be recorded per batch below and in `RESULTS.md` with Q.
 
 This document defines the multiplexing slice that `docs/G10_NET_SPEC.md` §9 and `docs/G10_PROC_SPEC.md` §9

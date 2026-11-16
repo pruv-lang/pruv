@@ -1,0 +1,110 @@
+pub fn supervise(program: str, ctl: i64, deadline_ms: i64) -> i64 ! async, net, proc, alloc
+  requires 1 <= ctl && ctl <= 65535
+  requires 1 <= deadline_ms && deadline_ms <= 86400000
+{
+  let ls: Listener = net_listen("127.0.0.1", 0);
+  if !net_listener_ok(ls) { let r: Result<i64> = net_listener_close(move ls); return -1; }
+  let port: i64 = net_listener_port(ls);
+  let mut ctl_socket: Socket = net_connect("127.0.0.1", ctl);
+  if !net_ok(ctl_socket) {
+    let r: Result<i64> = net_close(move ctl_socket);
+    let t: Result<i64> = net_listener_close(move ls);
+    return -1;
+  }
+  let mut announcement: [u8] = alloc(2, 0);
+  store_be(inout announcement, 0, port, 2);
+  ctl_socket = net_write_bytes(move ctl_socket, announcement);
+  let cr: Result<i64> = net_close(move ctl_socket);
+  let mut c: Socket = net_accept(ls);
+  let lr: Result<i64> = net_listener_close(move ls);
+  if !net_ok(c) { let r: Result<i64> = net_close(move c); return -1; }
+  c = net_set_timeout(move c, 5000);
+  if !net_ok(c) { let r: Result<i64> = net_close(move c); return -1; }
+
+  let args: ProcessArgs = proc_args_new();
+  let p: Process = proc_spawn(program, args, "");
+  if !proc_ok(p) {
+    let r2: Result<i64> = proc_wait(move p);
+    let r3: Result<i64> = net_close(move c);
+    return -2;
+  }
+
+  let mut l: Loop = ev_new(3);
+  l = ev_add_socket(move l, move c);
+  if !ev_ok(l) {
+    let r4: Result<i64> = proc_kill(move p);
+    let r5: Result<i64> = ev_close(move l);
+    return -3;
+  }
+  let sslot: i64 = ev_last(l);
+  l = ev_add_process(move l, move p);
+  if !ev_ok(l) {
+    let r6: Result<i64> = ev_close(move l);
+    return -3;
+  }
+  let pslot: i64 = ev_last(l);
+  l = ev_add_timer(move l, deadline_ms);
+
+  let mut outcome: i64 = 0;
+  let mut status: i64 = 0;
+  let mut rounds: i64 = 1000000;
+  while outcome == 0 && rounds > 0 && ev_ok(l)
+    invariant 0 <= rounds && rounds <= 1000000
+    invariant 0 <= outcome && outcome <= 4
+    invariant -2147483648 <= status && status <= 2147483647
+    invariant 0 <= sslot && sslot < ev_cap(l)
+    invariant 0 <= pslot && pslot < ev_cap(l)
+    invariant sslot != pslot
+    invariant (outcome == 0) ==> ev_kind(l, sslot) == 1
+    invariant (outcome == 0) ==> ev_kind(l, pslot) == 3
+    decreases rounds
+  {
+    l = ev_wait(move l, -1);
+    let slot: i64 = ev_event_slot(l);
+    let ek: i64 = ev_event_kind(l);
+    if ek == 4 {
+      outcome = 2;                      // the deadline: leave the loop, ev_close kills the child
+    } else {
+      if slot == pslot {
+        if ek == 1 {
+          l = ev_proc_read(move l, pslot, 1, 4096);
+          if ev_size(l) > 0 && ev_write_open(l, sslot) {
+            let chunk: [u8] = ev_bytes(l);
+            l = ev_write(move l, sslot, chunk);
+          }
+          l = ev_proc_read(move l, pslot, 2, 4096);   // drop stderr so the child cannot stall
+        } else {
+          if ek == 3 {
+            l = ev_proc_wait(move l, pslot);
+            status = ev_exit(l);
+            if status < -2147483648 || status > 2147483647 { status = 0; }
+            outcome = 1;
+          } else {
+            outcome = 3;
+          }
+        }
+      } else {
+        if ek == 1 {
+          l = ev_read(move l, sslot, 4096);
+          if ev_size(l) > 0 { outcome = 4; }
+        } else {
+          outcome = 3;                                // the client left or failed
+        }
+      }
+    }
+    rounds = rounds - 1;
+  }
+
+  if ev_ok(l) && ev_kind(l, sslot) == 1 && ev_write_open(l, sslot) {
+    let mut reply: [u8] = alloc(9, 0);
+    reply[0] = outcome;
+    store_be(inout reply, 1, status + 2147483648, 8);
+    l = ev_write(move l, sslot, reply);
+  }
+  let r: Result<i64> = ev_close(move l);
+  match r {
+    Ok(n) => { return outcome; }
+    Err(e) => { return -5; }
+  }
+}
+

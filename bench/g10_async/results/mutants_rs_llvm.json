@@ -1,0 +1,911 @@
+{
+  "tools": {
+    "py": [
+      "/Users/spica4345/Projects/pruv/.venv/bin/python",
+      "/Users/spica4345/Projects/pruv/pruvc/pruvc.py"
+    ],
+    "rs": [
+      "/Users/spica4345/Projects/pruv/pruvc-rs/target/release/pruvc"
+    ]
+  },
+  "summary": {
+    "total": 18,
+    "explicit_incorrect": 16,
+    "controls": 2,
+    "by_expected": {
+      "static": {
+        "rejected_check": 4,
+        "rejected_verify": 7
+      },
+      "oracle": {
+        "wrong_but_proved": 5
+      },
+      "accepted": {
+        "accepted": 2
+      }
+    },
+    "unexpected": [],
+    "blocked": []
+  },
+  "items": [
+    {
+      "id": "m001",
+      "pid": "q01",
+      "family": "missing_close",
+      "expected": "static",
+      "old": "  let r: Result<i64> = ev_close(move l);\n  return finished;",
+      "new": "  return finished;",
+      "helper": "",
+      "intent": "incorrect",
+      "sha256": "c702ce992252f071402d0f68ca0b26150a6e79a71f0a94be1898bb65d40a5f7c",
+      "runs": {
+        "rs-llvm": {
+          "class": "rejected_check",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "type",
+                "line": 111,
+                "col": 3,
+                "code": "async_unconsumed",
+                "message": "Loop l is not consumed before return",
+                "fix": "consume it with ev_close(move l), or return / transfer ownership",
+                "file": "root.pruv"
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade_hf7fm1i3/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade_hf7fm1i3/root_gen.ll",
+            "stderr": "{\"stage\": \"type\", \"line\": 111, \"col\": 3, \"code\": \"async_unconsumed\", \"message\": \"Loop l is not consumed before return\", \"fix\": \"consume it with ev_close(move l), or return / transfer ownership\", \"file\": \"root.pruv\"}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m002",
+      "pid": "q01",
+      "family": "overwrite_live_loop",
+      "expected": "static",
+      "old": "  l = ev_add_listener(move l, move ls);",
+      "new": "  l = ev_new(17);\n  l = ev_add_listener(move l, move ls);",
+      "helper": "",
+      "intent": "incorrect",
+      "sha256": "e1de28370a33d50668ca819a931561c2cf0ad23826aa5a6369d98b356fcc2260",
+      "runs": {
+        "rs-llvm": {
+          "class": "rejected_check",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "type",
+                "line": 16,
+                "col": 3,
+                "code": "async_unconsumed",
+                "message": "Loop l is overwritten while it is not consumed",
+                "fix": "consume it with ev_close(move l), or return / transfer ownership",
+                "file": "root.pruv"
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade_amz37nks/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade_amz37nks/root_gen.ll",
+            "stderr": "{\"stage\": \"type\", \"line\": 16, \"col\": 3, \"code\": \"async_unconsumed\", \"message\": \"Loop l is overwritten while it is not consumed\", \"fix\": \"consume it with ev_close(move l), or return / transfer ownership\", \"file\": \"root.pruv\"}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m003",
+      "pid": "q01",
+      "family": "close_one_branch",
+      "expected": "static",
+      "old": "  let r: Result<i64> = ev_close(move l);\n  return finished;",
+      "new": "  if finished == budget { let r: Result<i64> = ev_close(move l); }\n  return finished;",
+      "helper": "",
+      "intent": "incorrect",
+      "sha256": "dfbef3a9ac71bc72ace62fe9bf4f233d6095242560d18fbf7ad7b7501e3e2571",
+      "runs": {
+        "rs-llvm": {
+          "class": "rejected_check",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "type",
+                "line": 112,
+                "col": 3,
+                "code": "async_unconsumed",
+                "message": "Loop l is not consumed before return",
+                "fix": "consume it with ev_close(move l), or return / transfer ownership",
+                "file": "root.pruv"
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade_mvnod59n/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade_mvnod59n/root_gen.ll",
+            "stderr": "{\"stage\": \"type\", \"line\": 112, \"col\": 3, \"code\": \"async_unconsumed\", \"message\": \"Loop l is not consumed before return\", \"fix\": \"consume it with ev_close(move l), or return / transfer ownership\", \"file\": \"root.pruv\"}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m004",
+      "pid": "q01",
+      "family": "discarded_temporary",
+      "expected": "static",
+      "old": "  let mut l: Loop = ev_new(17);",
+      "new": "  let discarded: i64 = ev_cap(ev_new(1));\n  let mut l: Loop = ev_new(17);",
+      "helper": "",
+      "intent": "incorrect",
+      "sha256": "a09cd256f14b215f3ac8c3e595045235650b7a373ee7ec8d01d4dc243a985a6d",
+      "runs": {
+        "rs-llvm": {
+          "class": "rejected_check",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "type",
+                "line": 15,
+                "col": 31,
+                "code": "async_unconsumed",
+                "message": "temporary Loop is not consumed",
+                "fix": "consume it with ev_close(move l), or return / transfer ownership",
+                "file": "root.pruv"
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade_f18_br5i/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade_f18_br5i/root_gen.ll",
+            "stderr": "{\"stage\": \"type\", \"line\": 15, \"col\": 31, \"code\": \"async_unconsumed\", \"message\": \"temporary Loop is not consumed\", \"fix\": \"consume it with ev_close(move l), or return / transfer ownership\", \"file\": \"root.pruv\"}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m005",
+      "pid": "q01",
+      "family": "unchecked_ok_before_add",
+      "expected": "static",
+      "old": "  l = ev_add_listener(move l, move ls);",
+      "new": "  l = ev_add_listener(move l, move ls);\n  l = ev_add_timer(move l, 1);",
+      "helper": "",
+      "intent": "incorrect",
+      "sha256": "61bba111f17b79d7c4745245f634623e849eb33de1b93a2acaa75055ec493757",
+      "runs": {
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 17,
+                "col": 7,
+                "code": "call_requires",
+                "message": "cannot prove precondition of ev_add_timer (catalog) in crate::serve",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "ctl": 1,
+                  "budget": 0,
+                  "ls": {
+                    "ok": true,
+                    "error": 0,
+                    "port": 1
+                  },
+                  "port": 1,
+                  "c": {
+                    "ok": true,
+                    "error": 0,
+                    "write_open": true,
+                    "eof": false,
+                    "size": 0
+                  },
+                  "msg": {
+                    "len": 2,
+                    "first": [
+                      0,
+                      1
+                    ]
+                  },
+                  "cr": "ok(0)",
+                  "l": {
+                    "error": 1,
+                    "cap": 17,
+                    "count": 0,
+                    "last": -1,
+                    "ev_slot": -1,
+                    "ev_kind_": 0,
+                    "exit": 0,
+                    "size": 0,
+                    "ok": false
+                  }
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade_1vw2bek5/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade_1vw2bek5/root_gen.ll",
+            "stderr": "sage\": \"cannot prove precondition of ev_add_timer (catalog) in crate::serve\", \"fix\": \"make the callee's requires hold before the call\", \"file\": \"root.pruv\", \"counterexample\": {\"ctl\": 1, \"budget\": 0, \"ls\": {\"ok\": true, \"error\": 0, \"port\": 1}, \"port\": 1, \"c\": {\"ok\": true, \"error\": 0, \"write_open\": true, \"eof\": false, \"size\": 0}, \"msg\": {\"len\": 2, \"first\": [0, 1]}, \"cr\": \"ok(0)\", \"l\": {\"error\": 1, \"cap\": 17, \"count\": 0, \"last\": -1, \"ev_slot\": -1, \"ev_kind_\": 0, \"exit\": 0, \"size\": 0, \"ok\": false}}}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m006",
+      "pid": "q01",
+      "family": "slot_after_remove",
+      "expected": "static",
+      "old": "            l = ev_remove(move l, i);",
+      "new": "            l = removed_read(move l, i);",
+      "helper": "fn removed_read(take l: Loop, slot: i64) -> Loop ! async, net, proc, alloc\n  requires ev_ok(l) && 0 <= slot && slot < ev_cap(l)\n  requires ev_kind(l, slot) == 1\n  ensures ev_ok(result) && ev_cap(result) == ev_cap(l)\n{\n  let mut q: Loop = ev_remove(move l, slot);\n  return ev_read(move q, slot, 1);\n}\n",
+      "intent": "incorrect",
+      "sha256": "5b557e218b5dc47291af65061ffe102dde282ea9997c52c60e5fd60144a20fe4",
+      "runs": {
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 7,
+                "col": 10,
+                "code": "call_requires",
+                "message": "cannot prove precondition of ev_read (catalog) in crate::removed_read",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "l": {
+                    "error": 0,
+                    "cap": 4,
+                    "count": 1,
+                    "last": -1,
+                    "ev_slot": 0,
+                    "ev_kind_": 5,
+                    "exit": 0,
+                    "size": 0,
+                    "ok": true
+                  },
+                  "slot": 2,
+                  "q": {
+                    "error": 0,
+                    "cap": 4,
+                    "count": 0,
+                    "last": -1,
+                    "ev_slot": 0,
+                    "ev_kind_": 5,
+                    "exit": 0,
+                    "size": 0,
+                    "ok": true
+                  }
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade_cm_znoum/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade_cm_znoum/root_gen.ll",
+            "stderr": "{\"stage\": \"verify\", \"line\": 7, \"col\": 10, \"code\": \"call_requires\", \"message\": \"cannot prove precondition of ev_read (catalog) in crate::removed_read\", \"fix\": \"make the callee's requires hold before the call\", \"file\": \"root.pruv\", \"counterexample\": {\"l\": {\"error\": 0, \"cap\": 4, \"count\": 1, \"last\": -1, \"ev_slot\": 0, \"ev_kind_\": 5, \"exit\": 0, \"size\": 0, \"ok\": true}, \"slot\": 2, \"q\": {\"error\": 0, \"cap\": 4, \"count\": 0, \"last\": -1, \"ev_slot\": 0, \"ev_kind_\": 5, \"exit\": 0, \"size\": 0, \"ok\": true}}}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m007",
+      "pid": "q01",
+      "family": "read_listener",
+      "expected": "static",
+      "old": "        l = ev_accept(move l, slot);",
+      "new": "        l = ev_read(move l, slot, 1);",
+      "helper": "",
+      "intent": "incorrect",
+      "sha256": "ba3b28791baf16965a5194e3aa6675bd365495f3d8fd273c0a89cd50db82c1a9",
+      "runs": {
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 38,
+                "col": 13,
+                "code": "call_requires",
+                "message": "cannot prove precondition of ev_read (catalog) in crate::serve",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "ctl": 1,
+                  "budget": 6,
+                  "ls": {
+                    "ok": true,
+                    "error": 0,
+                    "port": 1
+                  },
+                  "port": 1,
+                  "c": {
+                    "ok": true,
+                    "error": 0,
+                    "write_open": true,
+                    "eof": false,
+                    "size": 0
+                  },
+                  "msg": {
+                    "len": 2,
+                    "first": [
+                      0,
+                      1
+                    ]
+                  },
+                  "cr": "ok(0)",
+                  "l": {
+                    "error": 0,
+                    "cap": 17,
+                    "count": 0,
+                    "last": -1,
+                    "ev_slot": 9,
+                    "ev_kind_": 2,
+                    "exit": 0,
+                    "size": 0,
+                    "ok": true
+                  },
+                  "lengths": {
+                    "len": 17,
+                    "first": [
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0
+                    ]
+                  },
+                  "lines": {
+                    "len": 17408,
+                    "first": [
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0
+                    ]
+                  },
+                  "timers": {
+                    "len": 17,
+                    "first": [
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0
+                    ]
+                  },
+                  "owners": {
+                    "len": 17,
+                    "first": [
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0
+                    ]
+                  },
+                  "accepted": 5,
+                  "finished": 0,
+                  "rounds": 3,
+                  "slot": 9,
+                  "ek": 2
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade_xypi4ao5/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade_xypi4ao5/root_gen.ll",
+            "stderr": " true, \"eof\": false, \"size\": 0}, \"msg\": {\"len\": 2, \"first\": [0, 1]}, \"cr\": \"ok(0)\", \"l\": {\"error\": 0, \"cap\": 17, \"count\": 0, \"last\": -1, \"ev_slot\": 9, \"ev_kind_\": 2, \"exit\": 0, \"size\": 0, \"ok\": true}, \"lengths\": {\"len\": 17, \"first\": [0, 0, 0, 0, 0, 0, 0, 0]}, \"lines\": {\"len\": 17408, \"first\": [0, 0, 0, 0, 0, 0, 0, 0]}, \"timers\": {\"len\": 17, \"first\": [0, 0, 0, 0, 0, 0, 0, 0]}, \"owners\": {\"len\": 17, \"first\": [0, 0, 0, 0, 0, 0, 0, 0]}, \"accepted\": 5, \"finished\": 0, \"rounds\": 3, \"slot\": 9, \"ek\": 2}}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m008",
+      "pid": "q01",
+      "family": "write_after_shutdown",
+      "expected": "static",
+      "old": "                  l = ev_write(move l, slot, reply);",
+      "new": "                  l = shut_write(move l, slot, reply);",
+      "helper": "fn shut_write(take l: Loop, slot: i64, data: [u8]) -> Loop ! async, net, alloc\n  requires ev_ok(l) && 0 <= slot && slot < ev_cap(l)\n  requires ev_kind(l, slot) == 1 && ev_write_open(l, slot)\n  ensures ev_ok(result) && ev_cap(result) == ev_cap(l)\n  ensures ev_kind(result, slot) == 1\n{\n  let mut q: Loop = ev_shutdown_write(move l, slot);\n  return ev_write(move q, slot, data);\n}\n",
+      "intent": "incorrect",
+      "sha256": "1cc69eeb7f7a30cd994eaed8b909e14f752355e065c3f44076f7d34fde1e1f11",
+      "runs": {
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 8,
+                "col": 10,
+                "code": "call_requires",
+                "message": "cannot prove precondition of ev_write (catalog) in crate::shut_write",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "l": {
+                    "error": 0,
+                    "cap": 5,
+                    "count": 0,
+                    "last": 1,
+                    "ev_slot": 0,
+                    "ev_kind_": 5,
+                    "exit": 0,
+                    "size": 0,
+                    "ok": true
+                  },
+                  "slot": 3,
+                  "data": {
+                    "len": 0,
+                    "first": []
+                  },
+                  "q": {
+                    "error": 0,
+                    "cap": 5,
+                    "count": 0,
+                    "last": -1,
+                    "ev_slot": 0,
+                    "ev_kind_": 5,
+                    "exit": 0,
+                    "size": 0,
+                    "ok": true
+                  }
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade_fawr6do_/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade_fawr6do_/root_gen.ll",
+            "stderr": "e\": 8, \"col\": 10, \"code\": \"call_requires\", \"message\": \"cannot prove precondition of ev_write (catalog) in crate::shut_write\", \"fix\": \"make the callee's requires hold before the call\", \"file\": \"root.pruv\", \"counterexample\": {\"l\": {\"error\": 0, \"cap\": 5, \"count\": 0, \"last\": 1, \"ev_slot\": 0, \"ev_kind_\": 5, \"exit\": 0, \"size\": 0, \"ok\": true}, \"slot\": 3, \"data\": {\"len\": 0, \"first\": []}, \"q\": {\"error\": 0, \"cap\": 5, \"count\": 0, \"last\": -1, \"ev_slot\": 0, \"ev_kind_\": 5, \"exit\": 0, \"size\": 0, \"ok\": true}}}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m009",
+      "pid": "q01",
+      "family": "cap_out_of_range",
+      "expected": "static",
+      "old": "ev_new(17)",
+      "new": "ev_new(0)",
+      "helper": "",
+      "intent": "incorrect",
+      "sha256": "3ba4a742d92592dda18a503554f41e8407b1759f00aeba739409dfd5dfbb5b31",
+      "runs": {
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 15,
+                "col": 21,
+                "code": "call_requires",
+                "message": "cannot prove precondition of ev_new (catalog) in crate::serve",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "ctl": 1,
+                  "budget": 0,
+                  "ls": {
+                    "ok": true,
+                    "error": 0,
+                    "port": 1
+                  },
+                  "port": 1,
+                  "c": {
+                    "ok": false,
+                    "error": 4,
+                    "write_open": false,
+                    "eof": false,
+                    "size": 0
+                  },
+                  "msg": {
+                    "len": 2,
+                    "first": [
+                      0,
+                      1
+                    ]
+                  },
+                  "cr": "err(4)"
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade_21e9kva0/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade_21e9kva0/root_gen.ll",
+            "stderr": "{\"stage\": \"verify\", \"line\": 15, \"col\": 21, \"code\": \"call_requires\", \"message\": \"cannot prove precondition of ev_new (catalog) in crate::serve\", \"fix\": \"make the callee's requires hold before the call\", \"file\": \"root.pruv\", \"counterexample\": {\"ctl\": 1, \"budget\": 0, \"ls\": {\"ok\": true, \"error\": 0, \"port\": 1}, \"port\": 1, \"c\": {\"ok\": false, \"error\": 4, \"write_open\": false, \"eof\": false, \"size\": 0}, \"msg\": {\"len\": 2, \"first\": [0, 1]}, \"cr\": \"err(4)\"}}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m010",
+      "pid": "q01",
+      "family": "add_to_full",
+      "expected": "static",
+      "old": "  let mut l: Loop = ev_new(17);",
+      "new": "  let mut full: Loop = ev_new(1);\n  full = ev_add_timer(move full, 1);\n  full = ev_add_timer(move full, 1);\n  let closed: Result<i64> = ev_close(move full);\n  let mut l: Loop = ev_new(17);",
+      "helper": "",
+      "intent": "incorrect",
+      "sha256": "49231d4809588d0a3de8d9b8e8c93c1e4240a9250e0fdb1c61ed377cb7e151f0",
+      "runs": {
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 17,
+                "col": 10,
+                "code": "call_requires",
+                "message": "cannot prove precondition of ev_add_timer (catalog) in crate::serve",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "ctl": 1,
+                  "budget": 0,
+                  "ls": {
+                    "ok": true,
+                    "error": 0,
+                    "port": 1
+                  },
+                  "port": 1,
+                  "c": {
+                    "ok": false,
+                    "error": 4,
+                    "write_open": false,
+                    "eof": false,
+                    "size": 0
+                  },
+                  "msg": {
+                    "len": 2,
+                    "first": [
+                      0,
+                      1
+                    ]
+                  },
+                  "cr": "err(4)",
+                  "full": {
+                    "error": 0,
+                    "cap": 1,
+                    "count": 1,
+                    "last": 0,
+                    "ev_slot": -1,
+                    "ev_kind_": 0,
+                    "exit": 0,
+                    "size": 0,
+                    "ok": true
+                  }
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade_csj6qawf/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade_csj6qawf/root_gen.ll",
+            "stderr": "e\": \"cannot prove precondition of ev_add_timer (catalog) in crate::serve\", \"fix\": \"make the callee's requires hold before the call\", \"file\": \"root.pruv\", \"counterexample\": {\"ctl\": 1, \"budget\": 0, \"ls\": {\"ok\": true, \"error\": 0, \"port\": 1}, \"port\": 1, \"c\": {\"ok\": false, \"error\": 4, \"write_open\": false, \"eof\": false, \"size\": 0}, \"msg\": {\"len\": 2, \"first\": [0, 1]}, \"cr\": \"err(4)\", \"full\": {\"error\": 0, \"cap\": 1, \"count\": 1, \"last\": 0, \"ev_slot\": -1, \"ev_kind_\": 0, \"exit\": 0, \"size\": 0, \"ok\": true}}}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m011",
+      "pid": "q01",
+      "family": "eos_never_removed",
+      "expected": "oracle",
+      "old": "              l = ev_remove(move l, slot);\n              timers[slot] = -1;\n              finished = finished + 1;",
+      "new": "              timers[slot] = -1;",
+      "helper": "",
+      "intent": "incorrect",
+      "sha256": "ad4cefa6d6f8b269da8b498da55a08c497db2ef577e6075ff3663ebf2ee4ebb1",
+      "runs": {
+        "rs-llvm": {
+          "class": "wrong_but_proved",
+          "grader": {
+            "rc": 0,
+            "stdout": "FAIL budget\nTESTS 2 3\n",
+            "stderr": "",
+            "status": "wrong",
+            "tests_passed": 2,
+            "tests_total": 3
+          }
+        }
+      }
+    },
+    {
+      "id": "m012",
+      "pid": "q01",
+      "family": "fired_timer_kept",
+      "expected": "static",
+      "old": "          let i: i64 = owners[slot];",
+      "new": "          l = ev_remove(move l, slot);\n          let i: i64 = owners[slot];",
+      "helper": "",
+      "intent": "incorrect",
+      "sha256": "ecb2f9bf8b157eee4a7bc61fc7dccee4e40b03d4b387832d01565ceae41ff193",
+      "runs": {
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "grader": {
+            "rc": 1,
+            "errors": [
+              {
+                "stage": "verify",
+                "line": 49,
+                "col": 15,
+                "code": "call_requires",
+                "message": "cannot prove precondition of ev_remove (catalog) in crate::serve",
+                "fix": "make the callee's requires hold before the call",
+                "file": "root.pruv",
+                "counterexample": {
+                  "ctl": 1,
+                  "budget": 7,
+                  "ls": {
+                    "ok": true,
+                    "error": 0,
+                    "port": 1
+                  },
+                  "port": 1,
+                  "c": {
+                    "ok": false,
+                    "error": 4,
+                    "write_open": false,
+                    "eof": false,
+                    "size": 0
+                  },
+                  "msg": {
+                    "len": 2,
+                    "first": [
+                      0,
+                      1
+                    ]
+                  },
+                  "cr": "err(4)",
+                  "l": {
+                    "error": 0,
+                    "cap": 17,
+                    "count": 0,
+                    "last": -1,
+                    "ev_slot": 3,
+                    "ev_kind_": 4,
+                    "exit": 0,
+                    "size": 0,
+                    "ok": true
+                  },
+                  "lengths": {
+                    "len": 17,
+                    "first": [
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0
+                    ]
+                  },
+                  "lines": {
+                    "len": 17408,
+                    "first": [
+                      0,
+                      2,
+                      3,
+                      0,
+                      2,
+                      2,
+                      0,
+                      2
+                    ]
+                  },
+                  "timers": {
+                    "len": 17,
+                    "first": [
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0
+                    ]
+                  },
+                  "owners": {
+                    "len": 17,
+                    "first": [
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0
+                    ]
+                  },
+                  "accepted": 5,
+                  "finished": 1,
+                  "rounds": 17,
+                  "slot": 3,
+                  "ek": 4
+                }
+              }
+            ],
+            "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade_va_9tuz6/root_gen.rs",
+            "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade_va_9tuz6/root_gen.ll",
+            "stderr": "lse, \"eof\": false, \"size\": 0}, \"msg\": {\"len\": 2, \"first\": [0, 1]}, \"cr\": \"err(4)\", \"l\": {\"error\": 0, \"cap\": 17, \"count\": 0, \"last\": -1, \"ev_slot\": 3, \"ev_kind_\": 4, \"exit\": 0, \"size\": 0, \"ok\": true}, \"lengths\": {\"len\": 17, \"first\": [0, 0, 0, 0, 0, 0, 0, 0]}, \"lines\": {\"len\": 17408, \"first\": [0, 2, 3, 0, 2, 2, 0, 2]}, \"timers\": {\"len\": 17, \"first\": [0, 0, 0, 0, 0, 0, 0, 0]}, \"owners\": {\"len\": 17, \"first\": [0, 0, 0, 0, 0, 0, 0, 0]}, \"accepted\": 5, \"finished\": 1, \"rounds\": 17, \"slot\": 3, \"ek\": 4}}\n",
+            "status": "pruv_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "m013",
+      "pid": "q01",
+      "family": "line_off_by_one",
+      "expected": "oracle",
+      "old": "store_be(inout reply, 0, have, 2);",
+      "new": "store_be(inout reply, 0, have + 1, 2);",
+      "helper": "",
+      "intent": "incorrect",
+      "sha256": "7da3df6574d506fa52e8951bea0b9ea623250da08b4911c2d64469ea0f566343",
+      "runs": {
+        "rs-llvm": {
+          "class": "wrong_but_proved",
+          "grader": {
+            "rc": 0,
+            "stdout": "FAIL clients_chunks_lf_eof_timeout_rearm_boundary\nTESTS 2 3\n",
+            "stderr": "",
+            "status": "wrong",
+            "tests_passed": 2,
+            "tests_total": 3
+          }
+        }
+      }
+    },
+    {
+      "id": "m014",
+      "pid": "q01",
+      "family": "queued_chunk_dropped",
+      "expected": "oracle",
+      "old": "            let chunk: [u8] = ev_bytes(l);",
+      "new": "            let chunk: [u8] = alloc(0, 0);",
+      "helper": "",
+      "intent": "incorrect",
+      "sha256": "faa20e91c429328f4a907e2983c5a48aa927af1b55fe5971277374298abdb217",
+      "runs": {
+        "rs-llvm": {
+          "class": "wrong_but_proved",
+          "grader": {
+            "rc": 0,
+            "stdout": "FAIL clients_chunks_lf_eof_timeout_rearm_boundary\nTESTS 2 3\n",
+            "stderr": "",
+            "status": "wrong",
+            "tests_passed": 2,
+            "tests_total": 3
+          }
+        }
+      }
+    },
+    {
+      "id": "m015",
+      "pid": "q02",
+      "family": "cancel_ignored",
+      "expected": "oracle",
+      "old": "if ev_size(l) > 0 { outcome = 4; }",
+      "new": "if ev_size(l) < 0 { outcome = 4; }",
+      "helper": "",
+      "intent": "incorrect",
+      "sha256": "09638cff4bd20c9d93e7cbc54a31e274ea4eefd8dd45ad62ddf4c5c02c93b28d",
+      "runs": {
+        "rs-llvm": {
+          "class": "wrong_but_proved",
+          "grader": {
+            "rc": 0,
+            "stdout": "FAIL supervisor_4\nTESTS 2 3\n",
+            "stderr": "",
+            "status": "wrong",
+            "tests_passed": 2,
+            "tests_total": 3
+          }
+        }
+      }
+    },
+    {
+      "id": "m016",
+      "pid": "q02",
+      "family": "stderr_not_drained",
+      "expected": "oracle",
+      "old": "          l = ev_proc_read(move l, pslot, 2, 4096);   // drop stderr so the child cannot stall",
+      "new": "          // stderr intentionally not drained",
+      "helper": "",
+      "intent": "incorrect",
+      "sha256": "b839c18af3b3ee9da1aaf6c5c04a7cb15febad2c0fd2e494862d9d305e52c4ed",
+      "runs": {
+        "rs-llvm": {
+          "class": "wrong_but_proved",
+          "grader": {
+            "rc": 0,
+            "stdout": "FAIL supervisor_1\nFAIL supervisor_2\nTESTS 1 3\n",
+            "stderr": "",
+            "status": "wrong",
+            "tests_passed": 1,
+            "tests_total": 3
+          }
+        }
+      }
+    },
+    {
+      "id": "m017",
+      "pid": "q01",
+      "family": "smaller_reads",
+      "expected": "accepted",
+      "old": "l = ev_read(move l, slot, 4096);",
+      "new": "l = ev_read(move l, slot, 2048);",
+      "helper": "",
+      "intent": "control",
+      "sha256": "545f41475066ef8d717b5a990bb73dc8c0c0b2b6fd33b3eaa08bbd015ce6b008",
+      "runs": {
+        "rs-llvm": {
+          "class": "accepted",
+          "grader": {
+            "rc": 0,
+            "stdout": "TESTS 3 3\n",
+            "stderr": "",
+            "status": "ok",
+            "tests_passed": 3,
+            "tests_total": 3
+          }
+        }
+      }
+    },
+    {
+      "id": "m018",
+      "pid": "q02",
+      "family": "longer_write_timeout",
+      "expected": "accepted",
+      "old": "c = net_set_timeout(move c, 5000);",
+      "new": "c = net_set_timeout(move c, 6000);",
+      "helper": "",
+      "intent": "control",
+      "sha256": "36671b7fc8ba0d81d732b8ad0dce14869ce438ff285a9c2ecd74c96f5686aa8c",
+      "runs": {
+        "rs-llvm": {
+          "class": "accepted",
+          "grader": {
+            "rc": 0,
+            "stdout": "TESTS 3 3\n",
+            "stderr": "",
+            "status": "ok",
+            "tests_passed": 3,
+            "tests_total": 3
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+fn missing_close() -> i64 ! async, alloc {
+  let l: Loop = ev_new(1);
+  return 0;
+}

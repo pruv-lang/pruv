@@ -1,0 +1,22 @@
+--- a/pruvc/verify.py
++++ b/pruvc/verify.py
+@@ -2287,7 +2287,7 @@
+             need(z3.And(i >= 0, i < p.cap))
+             k = z3.Select(p.kind, i)
+             expected = 2 if n == "ev_accept" else 3 if n.startswith("ev_proc_") else 1
+-            need(k != 0 if n == "ev_remove" else k == expected)
++            if n != "ev_read": need(k != 0 if n == "ev_remove" else k == expected)
+         if n in ('ev_write', 'ev_shutdown_write', 'ev_proc_write', 'ev_proc_close_stdin'):
+             i = args[1]
+             need(z3.Select(p.write_open, i))
+--- a/pruvc-rs/crates/pruv-proof/src/symbolic.rs
++++ b/pruvc-rs/crates/pruv-proof/src/symbolic.rs
+@@ -3008,7 +3008,7 @@
+             self.proc_need(st, g, e, code, &what, z.and(&[(i.clone()).ge(&z.int(0)), (i.clone()).lt(&p.cap.clone())]));
+             let k = p.kind.select(&i);
+             let expected = if n == "ev_accept" { 2 } else if n.starts_with("ev_proc_") { 3 } else { 1 };
+-            self.proc_need(st,g,e,code,&what,if n == "ev_remove" { k.ne_i(0) } else { k.eq(&z.int(expected)) });
++            if n != "ev_read" { self.proc_need(st,g,e,code,&what,if n == "ev_remove" { k.ne_i(0) } else { k.eq(&z.int(expected)) }); }
+         }
+         if matches!(n, "ev_write" | "ev_shutdown_write" | "ev_proc_write" | "ev_proc_close_stdin") {
+             let i = args[1].try_ast()?.clone();

@@ -1,0 +1,31 @@
+{
+  "tools": {
+    "py": [
+      "/Users/spica4345/Projects/pruv/.venv/bin/python",
+      "/Users/spica4345/Projects/pruv/pruvc/pruvc.py"
+    ],
+    "rs": [
+      "/Users/spica4345/Projects/pruv/pruvc-rs/target/release/pruvc"
+    ]
+  },
+  "results": {
+    "rs-rust": {
+      "q01": {
+        "rc": 0,
+        "stdout": "TESTS 3 3\n",
+        "stderr": "",
+        "status": "ok",
+        "tests_passed": 3,
+        "tests_total": 3
+      },
+      "q02": {
+        "rc": 0,
+        "stdout": "TESTS 3 3\n",
+        "stderr": "",
+        "status": "ok",
+        "tests_passed": 3,
+        "tests_total": 3
+      }
+    }
+  }
+}

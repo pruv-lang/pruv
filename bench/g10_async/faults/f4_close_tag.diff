@@ -1,0 +1,22 @@
+--- a/pruvc/codegen.py
++++ b/pruvc/codegen.py
+@@ -3203,7 +3203,7 @@
+     l.public[i]=PruvEvPublic::default();l.shared.state.lock().unwrap()[i]=PruvEvQueue::default();if code!=0{pruv_ev_remember(l,code);if code==2 {pruv_ev_fail(l,2);}}
+ }
+ fn pruv_ev_remove(mut l: pruv_Loop, slot: i64, wait: bool) -> pruv_Loop {l.last=-1;if !pruv_ev_valid(&l,slot,if wait{3}else{0}) || l.public[slot as usize].kind==0 {pruv_ev_fail(&mut l,1);return l;}pruv_ev_end(&mut l,slot as usize,wait);l}
+-fn pruv_ev_close(mut l: pruv_Loop) -> Result<i64,i64> {let n=pruv_ev_count(&l);for i in 0..l.slots.len(){if l.public[i].kind!=0{pruv_ev_end(&mut l,i,false);}}if l.first_err!=0 {Err(l.first_err)}else{Ok(n)}}
++fn pruv_ev_close(mut l: pruv_Loop) -> Result<i64,i64> {let n=pruv_ev_count(&l);for i in 0..l.slots.len(){if l.public[i].kind!=0{pruv_ev_end(&mut l,i,false);}}if l.first_err!=0 {Ok(l.first_err)}else{Err(n)}}
+ impl Drop for pruv_Loop {fn drop(&mut self){for i in 0..self.slots.len(){if self.public[i].kind!=0{pruv_ev_end(self,i,false);}}}}
+ fn pruv_ev_post(op:&str, s:&PruvEvSnapshot, r:&pruv_Loop, slot:i64)->bool {
+     if !pruv_ev_wf(r) || r.public.len()!=s.public.len(){return false;}
+--- a/pruvc-rs/crates/pruv-core/src/codegen.rs
++++ b/pruvc-rs/crates/pruv-core/src/codegen.rs
+@@ -4470,7 +4470,7 @@
+     l.public[i]=PruvEvPublic::default();l.shared.state.lock().unwrap()[i]=PruvEvQueue::default();if code!=0{pruv_ev_remember(l,code);if code==2 {pruv_ev_fail(l,2);}}
+ }
+ fn pruv_ev_remove(mut l: pruv_Loop, slot: i64, wait: bool) -> pruv_Loop {l.last=-1;if !pruv_ev_valid(&l,slot,if wait{3}else{0}) || l.public[slot as usize].kind==0 {pruv_ev_fail(&mut l,1);return l;}pruv_ev_end(&mut l,slot as usize,wait);l}
+-fn pruv_ev_close(mut l: pruv_Loop) -> Result<i64,i64> {let n=pruv_ev_count(&l);for i in 0..l.slots.len(){if l.public[i].kind!=0{pruv_ev_end(&mut l,i,false);}}if l.first_err!=0 {Err(l.first_err)}else{Ok(n)}}
++fn pruv_ev_close(mut l: pruv_Loop) -> Result<i64,i64> {let n=pruv_ev_count(&l);for i in 0..l.slots.len(){if l.public[i].kind!=0{pruv_ev_end(&mut l,i,false);}}if l.first_err!=0 {Ok(l.first_err)}else{Err(n)}}
+ impl Drop for pruv_Loop {fn drop(&mut self){for i in 0..self.slots.len(){if self.public[i].kind!=0{pruv_ev_end(self,i,false);}}}}
+ fn pruv_ev_post(op:&str, s:&PruvEvSnapshot, r:&pruv_Loop, slot:i64)->bool {
+     if !pruv_ev_wf(r) || r.public.len()!=s.public.len(){return false;}

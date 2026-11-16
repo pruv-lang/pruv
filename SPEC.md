@@ -823,7 +823,7 @@ consume it with `ev_close` or transfer it to another owner. Observers read snaps
 later updates and close. Reads publish EOF only after queued bytes are drained; size zero alone means nothing yet.
 Wait scans round-robin, reports one event, and frees fired timers. End and error events are reported once.
 
-Error codes: 1 internal, 2 worker spawn, 3 read, 4 write, 5 write timeout, 6 accept, 7 process I/O, 8 reap.
+Error codes: 1 internal (including invalid input), 2 setup (worker spawn, descriptor clone, timeout reset), 3 read, 4 write, 5 write timeout, 6 accept, 7 process I/O, 8 reap.
 Slot failures leave the loop usable and require removing that slot; spawn failure makes the loop failed, so close it.
 Close preserves the first published failure, even after its slot is removed. Runtime contract violations exit 101.
 Writes may block (accepted sockets have no write timeout); this is readiness multiplexing, without `async fn` / `await`.

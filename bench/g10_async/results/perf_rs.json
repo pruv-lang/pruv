@@ -1,0 +1,323 @@
+{
+  "compiler": "rs",
+  "verified": true,
+  "clients": 50,
+  "bytes_per_client": 65536,
+  "repeat": 3,
+  "platform": "macOS-26.5-arm64-arm-64bit",
+  "tools": {
+    "py": [
+      "/Users/spica4345/Projects/pruv/.venv/bin/python",
+      "/Users/spica4345/Projects/pruv/pruvc/pruvc.py"
+    ],
+    "rs": [
+      "/Users/spica4345/Projects/pruv/pruvc-rs/target/release/pruvc"
+    ]
+  },
+  "rustc": {
+    "rc": 0,
+    "stdout": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\n",
+    "stderr": ""
+  },
+  "method": "Server wall time includes client startup; RSS and live threads are sampled at 10ms plus ps overhead. Client memory excluded. per_byte reads and writes one byte through ev_byte (the Rust server reads one byte per call and writes one byte per call into a 4 KiB BufWriter, as the Pruv runtime writer coalesces queued writes); bulk_copy copies and writes each chunk. Exact payload and EOF checked. No target.",
+  "rows": {
+    "rust": {
+      "status": "ok",
+      "modes": {
+        "per_byte": {
+          "pruv": [
+            {
+              "status": "ok",
+              "elapsed_ns": 5150453750,
+              "max_rss_bytes_sampled": 7766016,
+              "max_live_threads_sampled": 3,
+              "samples": 243,
+              "server_rc": 0,
+              "client_rc": 0,
+              "stdout": "CLIENTS 50 BYTES 3276800 EXACT_ECHO OK\n",
+              "stderr": ""
+            },
+            {
+              "status": "ok",
+              "elapsed_ns": 4716654625,
+              "max_rss_bytes_sampled": 7454720,
+              "max_live_threads_sampled": 2,
+              "samples": 225,
+              "server_rc": 0,
+              "client_rc": 0,
+              "stdout": "CLIENTS 50 BYTES 3276800 EXACT_ECHO OK\n",
+              "stderr": ""
+            },
+            {
+              "status": "ok",
+              "elapsed_ns": 5108624625,
+              "max_rss_bytes_sampled": 7651328,
+              "max_live_threads_sampled": 12,
+              "samples": 242,
+              "server_rc": 0,
+              "client_rc": 0,
+              "stdout": "CLIENTS 50 BYTES 3276800 EXACT_ECHO OK\n",
+              "stderr": ""
+            }
+          ],
+          "rust": [
+            {
+              "status": "ok",
+              "elapsed_ns": 1930189333,
+              "max_rss_bytes_sampled": 2785280,
+              "max_live_threads_sampled": 51,
+              "samples": 57,
+              "server_rc": 0,
+              "client_rc": 0,
+              "stdout": "CLIENTS 50 BYTES 3276800 EXACT_ECHO OK\n",
+              "stderr": ""
+            },
+            {
+              "status": "ok",
+              "elapsed_ns": 1902187083,
+              "max_rss_bytes_sampled": 2752512,
+              "max_live_threads_sampled": 51,
+              "samples": 57,
+              "server_rc": 0,
+              "client_rc": 0,
+              "stdout": "CLIENTS 50 BYTES 3276800 EXACT_ECHO OK\n",
+              "stderr": ""
+            },
+            {
+              "status": "ok",
+              "elapsed_ns": 1910606375,
+              "max_rss_bytes_sampled": 2785280,
+              "max_live_threads_sampled": 51,
+              "samples": 58,
+              "server_rc": 0,
+              "client_rc": 0,
+              "stdout": "CLIENTS 50 BYTES 3276800 EXACT_ECHO OK\n",
+              "stderr": ""
+            }
+          ]
+        },
+        "bulk_copy": {
+          "pruv": [
+            {
+              "status": "ok",
+              "elapsed_ns": 35411417,
+              "max_rss_bytes_sampled": 1703936,
+              "max_live_threads_sampled": 2,
+              "samples": 2,
+              "server_rc": 0,
+              "client_rc": 0,
+              "stdout": "CLIENTS 50 BYTES 3276800 EXACT_ECHO OK\n",
+              "stderr": ""
+            },
+            {
+              "status": "ok",
+              "elapsed_ns": 40293292,
+              "max_rss_bytes_sampled": 1703936,
+              "max_live_threads_sampled": 2,
+              "samples": 2,
+              "server_rc": 0,
+              "client_rc": 0,
+              "stdout": "CLIENTS 50 BYTES 3276800 EXACT_ECHO OK\n",
+              "stderr": ""
+            },
+            {
+              "status": "ok",
+              "elapsed_ns": 36753542,
+              "max_rss_bytes_sampled": 1703936,
+              "max_live_threads_sampled": 2,
+              "samples": 2,
+              "server_rc": 0,
+              "client_rc": 0,
+              "stdout": "CLIENTS 50 BYTES 3276800 EXACT_ECHO OK\n",
+              "stderr": ""
+            }
+          ],
+          "rust": [
+            {
+              "status": "ok",
+              "elapsed_ns": 38176250,
+              "max_rss_bytes_sampled": 1572864,
+              "max_live_threads_sampled": 14,
+              "samples": 2,
+              "server_rc": 0,
+              "client_rc": 0,
+              "stdout": "CLIENTS 50 BYTES 3276800 EXACT_ECHO OK\n",
+              "stderr": ""
+            },
+            {
+              "status": "ok",
+              "elapsed_ns": 38769750,
+              "max_rss_bytes_sampled": 1572864,
+              "max_live_threads_sampled": 11,
+              "samples": 2,
+              "server_rc": 0,
+              "client_rc": 0,
+              "stdout": "CLIENTS 50 BYTES 3276800 EXACT_ECHO OK\n",
+              "stderr": ""
+            },
+            {
+              "status": "ok",
+              "elapsed_ns": 40671750,
+              "max_rss_bytes_sampled": 1572864,
+              "max_live_threads_sampled": 9,
+              "samples": 2,
+              "server_rc": 0,
+              "client_rc": 0,
+              "stdout": "CLIENTS 50 BYTES 3276800 EXACT_ECHO OK\n",
+              "stderr": ""
+            }
+          ]
+        }
+      }
+    },
+    "llvm": {
+      "status": "ok",
+      "modes": {
+        "per_byte": {
+          "pruv": [
+            {
+              "status": "ok",
+              "elapsed_ns": 5496475792,
+              "max_rss_bytes_sampled": 8650752,
+              "max_live_threads_sampled": 2,
+              "samples": 244,
+              "server_rc": 0,
+              "client_rc": 0,
+              "stdout": "CLIENTS 50 BYTES 3276800 EXACT_ECHO OK\n",
+              "stderr": ""
+            },
+            {
+              "status": "ok",
+              "elapsed_ns": 5121896458,
+              "max_rss_bytes_sampled": 7929856,
+              "max_live_threads_sampled": 2,
+              "samples": 244,
+              "server_rc": 0,
+              "client_rc": 0,
+              "stdout": "CLIENTS 50 BYTES 3276800 EXACT_ECHO OK\n",
+              "stderr": ""
+            },
+            {
+              "status": "ok",
+              "elapsed_ns": 5459673083,
+              "max_rss_bytes_sampled": 8142848,
+              "max_live_threads_sampled": 2,
+              "samples": 256,
+              "server_rc": 0,
+              "client_rc": 0,
+              "stdout": "CLIENTS 50 BYTES 3276800 EXACT_ECHO OK\n",
+              "stderr": ""
+            }
+          ],
+          "rust": [
+            {
+              "status": "ok",
+              "elapsed_ns": 1937961375,
+              "max_rss_bytes_sampled": 2801664,
+              "max_live_threads_sampled": 51,
+              "samples": 59,
+              "server_rc": 0,
+              "client_rc": 0,
+              "stdout": "CLIENTS 50 BYTES 3276800 EXACT_ECHO OK\n",
+              "stderr": ""
+            },
+            {
+              "status": "ok",
+              "elapsed_ns": 1903282625,
+              "max_rss_bytes_sampled": 2736128,
+              "max_live_threads_sampled": 51,
+              "samples": 55,
+              "server_rc": 0,
+              "client_rc": 0,
+              "stdout": "CLIENTS 50 BYTES 3276800 EXACT_ECHO OK\n",
+              "stderr": ""
+            },
+            {
+              "status": "ok",
+              "elapsed_ns": 1949276750,
+              "max_rss_bytes_sampled": 2768896,
+              "max_live_threads_sampled": 51,
+              "samples": 55,
+              "server_rc": 0,
+              "client_rc": 0,
+              "stdout": "CLIENTS 50 BYTES 3276800 EXACT_ECHO OK\n",
+              "stderr": ""
+            }
+          ]
+        },
+        "bulk_copy": {
+          "pruv": [
+            {
+              "status": "ok",
+              "elapsed_ns": 52114000,
+              "max_rss_bytes_sampled": 1769472,
+              "max_live_threads_sampled": 2,
+              "samples": 2,
+              "server_rc": 0,
+              "client_rc": 0,
+              "stdout": "CLIENTS 50 BYTES 3276800 EXACT_ECHO OK\n",
+              "stderr": ""
+            },
+            {
+              "status": "ok",
+              "elapsed_ns": 44806708,
+              "max_rss_bytes_sampled": 1769472,
+              "max_live_threads_sampled": 2,
+              "samples": 2,
+              "server_rc": 0,
+              "client_rc": 0,
+              "stdout": "CLIENTS 50 BYTES 3276800 EXACT_ECHO OK\n",
+              "stderr": ""
+            },
+            {
+              "status": "ok",
+              "elapsed_ns": 58578625,
+              "max_rss_bytes_sampled": 1769472,
+              "max_live_threads_sampled": 2,
+              "samples": 2,
+              "server_rc": 0,
+              "client_rc": 0,
+              "stdout": "CLIENTS 50 BYTES 3276800 EXACT_ECHO OK\n",
+              "stderr": ""
+            }
+          ],
+          "rust": [
+            {
+              "status": "ok",
+              "elapsed_ns": 43026917,
+              "max_rss_bytes_sampled": 1572864,
+              "max_live_threads_sampled": 1,
+              "samples": 2,
+              "server_rc": 0,
+              "client_rc": 0,
+              "stdout": "CLIENTS 50 BYTES 3276800 EXACT_ECHO OK\n",
+              "stderr": ""
+            },
+            {
+              "status": "ok",
+              "elapsed_ns": 43085250,
+              "max_rss_bytes_sampled": 1572864,
+              "max_live_threads_sampled": 1,
+              "samples": 2,
+              "server_rc": 0,
+              "client_rc": 0,
+              "stdout": "CLIENTS 50 BYTES 3276800 EXACT_ECHO OK\n",
+              "stderr": ""
+            },
+            {
+              "status": "ok",
+              "elapsed_ns": 36142167,
+              "max_rss_bytes_sampled": 1572864,
+              "max_live_threads_sampled": 1,
+              "samples": 2,
+              "server_rc": 0,
+              "client_rc": 0,
+              "stdout": "CLIENTS 50 BYTES 3276800 EXACT_ECHO OK\n",
+              "stderr": ""
+            }
+          ]
+        }
+      }
+    }
+  }
+}

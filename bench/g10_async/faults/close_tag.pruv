@@ -1,0 +1,5 @@
+pub fn close_tag() -> i64 ! async, net, proc, alloc {
+  let l: Loop = ev_new(1);
+  let r: Result<i64> = ev_close(move l);
+  match r { Ok(n) => { return n; } Err(e) => { return -100 - e; } }
+}

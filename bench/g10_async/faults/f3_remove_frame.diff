@@ -1,0 +1,22 @@
+--- a/pruvc/verify.py
++++ b/pruvc/verify.py
+@@ -2333,7 +2333,7 @@
+             s.assume(st, g, r.kind == z3.Store(p.kind, i, k))
+             s.assume(st, g, r.eof == z3.Store(p.eof, i, z3.Select(r.eof, i)))
+             s.assume(st, g, r.write_open == z3.Store(p.write_open, i, z3.Select(r.write_open, i)))
+-            s.assume(st, g, r.count == (p.count - 1 if freed else p.count))
++            s.assume(st, g, r.count == (p.count if n == "ev_remove" else (p.count - 1 if freed else p.count)))
+             if freed:
+                 s.assume(st, g, z3.Not(z3.Select(r.eof, i)))
+                 s.assume(st, g, z3.Not(z3.Select(r.write_open, i)))
+--- a/pruvc-rs/crates/pruv-proof/src/symbolic.rs
++++ b/pruvc-rs/crates/pruv-proof/src/symbolic.rs
+@@ -3061,7 +3061,7 @@
+             self.assume(st, g, (r.kind.clone()).eq(&(p.kind.clone()).store(&i.clone(), &k.clone())));
+             self.assume(st, g, (r.eof.clone()).eq(&(p.eof.clone()).store(&i.clone(), &(r.eof.clone()).select(&i.clone()))));
+             self.assume(st, g, (r.write_open.clone()).eq(&(p.write_open.clone()).store(&i.clone(), &(r.write_open.clone()).select(&i.clone()))));
+-            self.assume(st,g,r.count.eq(&if freed { p.count.sub(&z.int(1)) } else { p.count.clone() }));
++            self.assume(st,g,r.count.eq(&if n == "ev_remove" { p.count.clone() } else if freed { p.count.sub(&z.int(1)) } else { p.count.clone() }));
+             if freed {
+                 self.assume(st, g, ((r.eof.clone()).select(&i.clone())).not());
+                 self.assume(st, g, ((r.write_open.clone()).select(&i.clone())).not());

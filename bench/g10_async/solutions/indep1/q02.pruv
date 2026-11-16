@@ -1,0 +1,273 @@
+// q02.pruv
+fn close_sock(take s: Socket) -> () ! net, alloc
+{
+  let r: Result<i64> = net_close(move s);
+  return;
+}
+
+fn close_lis(take l: Listener) -> () ! net, alloc
+{
+  let r: Result<i64> = net_listener_close(move l);
+  return;
+}
+
+fn close_loop(take l: Loop) -> () ! async, net, proc, alloc
+{
+  let r: Result<i64> = ev_close(move l);
+  return;
+}
+
+fn kill_proc(take p: Process) -> () ! proc, alloc
+{
+  let r: Result<i64> = proc_kill(move p);
+  return;
+}
+
+// 0 = not a socket slot, 1 = live socket, 2 = socket with EOF published
+fn sock_state(l: Loop, s: i64) -> i64
+  requires ev_ok(l)
+  ensures 0 <= result && result <= 2
+{
+  if s < 0 || s >= ev_cap(l) { return 0; }
+  if ev_kind(l, s) != 1 { return 0; }
+  if ev_eof(l, s) { return 2; }
+  return 1;
+}
+
+fn sock_writable(l: Loop, s: i64) -> bool
+  requires ev_ok(l)
+{
+  if s < 0 || s >= ev_cap(l) { return false; }
+  if ev_kind(l, s) != 1 { return false; }
+  return ev_write_open(l, s);
+}
+
+// 0 = not a process slot, 1 = live process, 2 = process with EOF published
+fn proc_state(l: Loop, p: i64) -> i64
+  requires ev_ok(l)
+  ensures 0 <= result && result <= 2
+{
+  if p < 0 || p >= ev_cap(l) { return 0; }
+  if ev_kind(l, p) != 3 { return 0; }
+  if ev_eof(l, p) { return 2; }
+  return 1;
+}
+
+// one stdout read (forwarded to socket slot s) and one stderr read (discarded)
+fn drain_once(take l: Loop, p: i64, s: i64) -> Loop ! async, net, proc, alloc
+  requires ev_ok(l)
+{
+  let mut m: Loop = move l;
+  if proc_state(m, p) != 1 { return move m; }
+  m = ev_proc_read(move m, p, 1, 1048576);
+  if !ev_ok(m) { return move m; }
+  if ev_size(m) > 0 {
+    let data: [u8] = ev_bytes(m);
+    if sock_writable(m, s) {
+      m = ev_write(move m, s, data);
+    }
+    if !ev_ok(m) { return move m; }
+  }
+  if proc_state(m, p) == 1 {
+    m = ev_proc_read(move m, p, 2, 1048576);
+  }
+  return move m;
+}
+
+fn drain_all(take l: Loop, p: i64, s: i64) -> Loop ! async, net, proc, alloc
+  requires ev_ok(l)
+{
+  let mut m: Loop = move l;
+  let mut n: i64 = 0;
+  while n < 100000 && ev_ok(m) && proc_state(m, p) == 1
+    invariant 0 <= n && n <= 100000
+    decreases 100000 - n
+  {
+    m = drain_once(move m, p, s);
+    n = n + 1;
+  }
+  return move m;
+}
+
+fn make_reply(tag: i64, status: i64) -> [u8] ! alloc
+  requires 1 <= tag && tag <= 4
+  requires -2147483648 <= status && status <= 2147483647
+  ensures len(result) == 9
+{
+  let mut r: [u8] = alloc(9, 0);
+  r[0] = tag;
+  store_be(inout r, 1, status + 2147483648, 8);
+  return r;
+}
+
+pub fn supervise(program: str, ctl: i64, deadline_ms: i64) -> i64 ! async, net, proc, alloc
+  requires 1 <= ctl && ctl <= 65535
+  requires 1 <= deadline_ms && deadline_ms <= 86400000
+{
+  let lis: Listener = net_listen("127.0.0.1", 0);
+  if !net_listener_ok(lis) {
+    close_lis(move lis);
+    return -1;
+  }
+  let port: i64 = net_listener_port(lis);
+  if port < 0 || port > 65535 {
+    close_lis(move lis);
+    return -1;
+  }
+  let cs0: Socket = net_connect("127.0.0.1", ctl);
+  if !net_ok(cs0) {
+    close_sock(move cs0);
+    close_lis(move lis);
+    return -1;
+  }
+  let mut hdr: [u8] = alloc(2, 0);
+  store_be(inout hdr, 0, port, 2);
+  let cs1: Socket = net_write_bytes(move cs0, hdr);
+  close_sock(move cs1);
+
+  let cl: Socket = net_accept(lis);
+  close_lis(move lis);
+  if !net_ok(cl) {
+    close_sock(move cl);
+    return -1;
+  }
+
+  let args: ProcessArgs = proc_args_new();
+  let p: Process = proc_spawn(program, args, "");
+  if !proc_ok(p) {
+    let wr: Result<i64> = proc_wait(move p);
+    close_sock(move cl);
+    return -2;
+  }
+
+  let mut l: Loop = ev_new(3);
+  if !ev_ok(l) || ev_count(l) >= ev_cap(l) {
+    close_loop(move l);
+    kill_proc(move p);
+    close_sock(move cl);
+    return -3;
+  }
+  l = ev_add_process(move l, move p);
+  if !ev_ok(l) {
+    close_loop(move l);
+    close_sock(move cl);
+    return -3;
+  }
+  let pslot: i64 = ev_last(l);
+  if ev_count(l) >= ev_cap(l) {
+    close_loop(move l);
+    close_sock(move cl);
+    return -3;
+  }
+  l = ev_add_socket(move l, move cl);
+  if !ev_ok(l) {
+    close_loop(move l);
+    return -3;
+  }
+  let sslot: i64 = ev_last(l);
+  if ev_count(l) >= ev_cap(l) {
+    close_loop(move l);
+    return -3;
+  }
+  l = ev_add_timer(move l, deadline_ms);
+  if !ev_ok(l) {
+    close_loop(move l);
+    return -3;
+  }
+  let tslot: i64 = ev_last(l);
+  if pslot < 0 || pslot >= 3 || sslot < 0 || sslot >= 3 || tslot < 0 || tslot >= 3 {
+    close_loop(move l);
+    return -3;
+  }
+
+  let mut tag: i64 = 0;
+  let mut st: i64 = 0;
+  let mut broken: bool = false;
+  let mut events: i64 = 0;
+  while tag == 0 && !broken && events < 1000000
+    invariant 0 <= events && events <= 1000000
+    invariant 0 <= tag && tag <= 4
+    invariant -2147483648 <= st && st <= 2147483647
+    invariant broken || ev_ok(l)
+    decreases 1000000 - events
+  {
+    events = events + 1;
+    l = ev_wait(move l, -1);
+    if ev_ok(l) {
+      let ek: i64 = ev_event_kind(l);
+      let es: i64 = ev_event_slot(l);
+      if ek == 4 && es == tslot {
+        tag = 2;
+      } else if es == sslot && (ek == 1 || ek == 3 || ek == 5) {
+        if ek == 5 {
+          tag = 3;
+        } else {
+          let ss: i64 = sock_state(l, sslot);
+          if ss != 1 {
+            tag = 3;
+          } else {
+            l = ev_read(move l, sslot, 4096);
+            if ev_ok(l) {
+              if ev_size(l) > 0 {
+                tag = 4;
+              } else if sock_state(l, sslot) != 1 {
+                tag = 3;
+              } else if ek == 3 {
+                tag = 3;
+              }
+            }
+          }
+        }
+      } else if es == pslot && (ek == 1 || ek == 3) {
+        l = drain_once(move l, pslot, sslot);
+        if ev_ok(l) {
+          if ek == 3 || proc_state(l, pslot) == 2 {
+            l = drain_all(move l, pslot, sslot);
+            if ev_ok(l) {
+              if proc_state(l, pslot) != 0 {
+                l = ev_proc_wait(move l, pslot);
+                if ev_ok(l) {
+                  let x: i64 = ev_exit(l);
+                  if x < -2147483648 || x > 2147483647 {
+                    st = 0;
+                  } else {
+                    st = x;
+                  }
+                  tag = 1;
+                }
+              }
+            }
+          }
+        }
+      } else if es == pslot && ek == 5 {
+        broken = true;
+      }
+    }
+    if !ev_ok(l) { broken = true; }
+  }
+
+  if broken || tag == 0 {
+    close_loop(move l);
+    return -5;
+  }
+
+  let mut rs: i64 = 0;
+  if tag == 1 { rs = st; }
+  if tag != 1 {
+    if proc_state(l, pslot) != 0 {
+      l = ev_remove(move l, pslot);
+    }
+  }
+  if ev_ok(l) && sock_writable(l, sslot) {
+    let rep: [u8] = make_reply(tag, rs);
+    l = ev_write(move l, sslot, rep);
+  }
+  let r: Result<i64> = ev_close(move l);
+  match r {
+    Ok(n) => { return tag; }
+    Err(e) => {
+      if tag == 3 { return 3; }
+      return -5;
+    }
+  }
+}

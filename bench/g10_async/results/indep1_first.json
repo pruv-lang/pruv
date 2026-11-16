@@ -1,0 +1,731 @@
+{
+  "tools": {
+    "py": [
+      "/Users/spica4345/Projects/pruv/.venv/bin/python",
+      "/Users/spica4345/Projects/pruv/pruvc/pruvc.py"
+    ],
+    "rs": [
+      "/Users/spica4345/Projects/pruv/pruvc-rs/target/release/pruvc"
+    ]
+  },
+  "results": {
+    "rs-llvm": {
+      "q01": {
+        "rc": 1,
+        "errors": [
+          {
+            "stage": "verify",
+            "line": 44,
+            "col": 10,
+            "code": "call_requires",
+            "message": "cannot prove precondition of ev_remove (catalog) in crate::drop_kind",
+            "fix": "make the callee's requires hold before the call",
+            "file": "q01.pruv",
+            "counterexample": {
+              "l": {
+                "error": 0,
+                "cap": 4,
+                "count": 0,
+                "last": 3,
+                "ev_slot": 0,
+                "ev_kind_": 1,
+                "exit": 0,
+                "size": 0,
+                "ok": true
+              },
+              "s": 2,
+              "k": 0
+            }
+          },
+          {
+            "stage": "verify",
+            "line": 252,
+            "col": 15,
+            "code": "call_requires",
+            "message": "cannot prove precondition of ev_read (catalog) in crate::serve",
+            "fix": "make the callee's requires hold before the call",
+            "file": "q01.pruv",
+            "counterexample": {
+              "ctl": 1,
+              "budget": 1,
+              "lis": {
+                "ok": true,
+                "error": 0,
+                "port": 1
+              },
+              "port": 1,
+              "cs0": {
+                "ok": true,
+                "error": 0,
+                "write_open": true,
+                "eof": false,
+                "size": 0
+              },
+              "hdr": {
+                "len": 2,
+                "first": [
+                  0,
+                  1
+                ]
+              },
+              "cs1": {
+                "ok": true,
+                "error": 0,
+                "write_open": true,
+                "eof": false,
+                "size": 0
+              },
+              "l": {
+                "error": 0,
+                "cap": 2,
+                "count": 0,
+                "last": -1,
+                "ev_slot": 0,
+                "ev_kind_": 1,
+                "exit": 0,
+                "size": 0,
+                "ok": true
+              },
+              "lslot": 0,
+              "stimer": {
+                "len": 17,
+                "first": [
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ]
+              },
+              "towner": {
+                "len": 17,
+                "first": [
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ]
+              },
+              "cur": {
+                "len": 17,
+                "first": [
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ]
+              },
+              "accepted": 0,
+              "finished": 0,
+              "events": 1,
+              "stop": false,
+              "dead": -1,
+              "ek": 1,
+              "es": 0,
+              "ss": 1
+            }
+          },
+          {
+            "stage": "verify",
+            "line": 268,
+            "col": 23,
+            "code": "call_requires",
+            "message": "cannot prove precondition of ev_write (catalog) in crate::serve",
+            "fix": "make the callee's requires hold before the call",
+            "file": "q01.pruv",
+            "counterexample": {
+              "ctl": 1,
+              "budget": 1,
+              "lis": {
+                "ok": true,
+                "error": 0,
+                "port": 1
+              },
+              "port": 1,
+              "cs0": {
+                "ok": true,
+                "error": 0,
+                "write_open": true,
+                "eof": false,
+                "size": 0
+              },
+              "hdr": {
+                "len": 2,
+                "first": [
+                  0,
+                  1
+                ]
+              },
+              "cs1": {
+                "ok": false,
+                "error": 4,
+                "write_open": false,
+                "eof": false,
+                "size": 0
+              },
+              "l": {
+                "error": 0,
+                "cap": 2,
+                "count": 0,
+                "last": -1,
+                "ev_slot": 1,
+                "ev_kind_": 1,
+                "exit": 0,
+                "size": 1,
+                "ok": true
+              },
+              "lslot": 0,
+              "stimer": {
+                "len": 17,
+                "first": [
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ]
+              },
+              "towner": {
+                "len": 17,
+                "first": [
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ]
+              },
+              "cur": {
+                "len": 17,
+                "first": [
+                  -1,
+                  0,
+                  -1,
+                  -1,
+                  -1,
+                  -1,
+                  -1,
+                  -1
+                ]
+              },
+              "accepted": 0,
+              "finished": 0,
+              "events": 1,
+              "stop": false,
+              "dead": -1,
+              "ek": 1,
+              "es": 1,
+              "ss": 1,
+              "sz": 1,
+              "got": true,
+              "data": {
+                "len": 1,
+                "first": [
+                  2
+                ]
+              },
+              "st0": 0,
+              "out": {
+                "len": 1,
+                "first": [
+                  2
+                ]
+              }
+            }
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade_ny03rjoi/q01_gen.rs",
+        "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade_ny03rjoi/q01_gen.ll",
+        "stderr": ": {\"error\": 0, \"cap\": 2, \"count\": 0, \"last\": -1, \"ev_slot\": 1, \"ev_kind_\": 1, \"exit\": 0, \"size\": 1, \"ok\": true}, \"lslot\": 0, \"stimer\": {\"len\": 17, \"first\": [0, 0, 0, 0, 0, 0, 0, 0]}, \"towner\": {\"len\": 17, \"first\": [0, 0, 0, 0, 0, 0, 0, 0]}, \"cur\": {\"len\": 17, \"first\": [-1, 0, -1, -1, -1, -1, -1, -1]}, \"accepted\": 0, \"finished\": 0, \"events\": 1, \"stop\": false, \"dead\": -1, \"ek\": 1, \"es\": 1, \"ss\": 1, \"sz\": 1, \"got\": true, \"data\": {\"len\": 1, \"first\": [2]}, \"st0\": 0, \"out\": {\"len\": 1, \"first\": [2]}}}\n",
+        "status": "pruv_error"
+      },
+      "q02": {
+        "rc": 1,
+        "errors": [
+          {
+            "stage": "verify",
+            "line": 62,
+            "col": 7,
+            "code": "call_requires",
+            "message": "cannot prove precondition of ev_proc_read (catalog) in crate::drain_once",
+            "fix": "make the callee's requires hold before the call",
+            "file": "q02.pruv",
+            "counterexample": {
+              "l": {
+                "error": 0,
+                "cap": 1,
+                "count": 0,
+                "last": 0,
+                "ev_slot": 0,
+                "ev_kind_": 1,
+                "exit": 0,
+                "size": 0,
+                "ok": true
+              },
+              "p": -1,
+              "s": 0,
+              "m": {
+                "error": 0,
+                "cap": 1,
+                "count": 0,
+                "last": 0,
+                "ev_slot": 0,
+                "ev_kind_": 1,
+                "exit": 0,
+                "size": 0,
+                "ok": true
+              }
+            }
+          },
+          {
+            "stage": "verify",
+            "line": 67,
+            "col": 11,
+            "code": "call_requires",
+            "message": "cannot prove precondition of ev_write (catalog) in crate::drain_once",
+            "fix": "make the callee's requires hold before the call",
+            "file": "q02.pruv",
+            "counterexample": {
+              "l": {
+                "error": 0,
+                "cap": 1,
+                "count": 0,
+                "last": 0,
+                "ev_slot": 0,
+                "ev_kind_": 1,
+                "exit": 0,
+                "size": 0,
+                "ok": true
+              },
+              "p": 1,
+              "s": -1,
+              "m": {
+                "error": 0,
+                "cap": 1,
+                "count": 0,
+                "last": -1,
+                "ev_slot": 0,
+                "ev_kind_": 1,
+                "exit": 0,
+                "size": 1,
+                "ok": true
+              },
+              "data": {
+                "len": 1,
+                "first": [
+                  2
+                ]
+              }
+            }
+          },
+          {
+            "stage": "verify",
+            "line": 72,
+            "col": 9,
+            "code": "call_requires",
+            "message": "cannot prove precondition of ev_proc_read (catalog) in crate::drain_once",
+            "fix": "make the callee's requires hold before the call",
+            "file": "q02.pruv",
+            "counterexample": {
+              "l": {
+                "error": 0,
+                "cap": 1,
+                "count": 0,
+                "last": 0,
+                "ev_slot": 0,
+                "ev_kind_": 1,
+                "exit": 0,
+                "size": 0,
+                "ok": true
+              },
+              "p": -1,
+              "s": -2,
+              "m": {
+                "error": 0,
+                "cap": 1,
+                "count": 0,
+                "last": -1,
+                "ev_slot": 0,
+                "ev_kind_": 1,
+                "exit": 0,
+                "size": 1,
+                "ok": true
+              },
+              "data": {
+                "len": 1,
+                "first": [
+                  2
+                ]
+              }
+            }
+          },
+          {
+            "stage": "verify",
+            "line": 209,
+            "col": 17,
+            "code": "call_requires",
+            "message": "cannot prove precondition of ev_read (catalog) in crate::supervise",
+            "fix": "make the callee's requires hold before the call",
+            "file": "q02.pruv",
+            "counterexample": {
+              "program": {
+                "len": 0,
+                "first": []
+              },
+              "ctl": 13005,
+              "deadline_ms": 4986,
+              "lis": {
+                "ok": true,
+                "error": 0,
+                "port": 3873
+              },
+              "port": 3873,
+              "cs0": {
+                "ok": true,
+                "error": 0,
+                "write_open": true,
+                "eof": false,
+                "size": 0
+              },
+              "hdr": {
+                "len": 2,
+                "first": [
+                  15,
+                  33
+                ]
+              },
+              "cs1": {
+                "ok": false,
+                "error": 4,
+                "write_open": false,
+                "eof": false,
+                "size": 0
+              },
+              "cl": {
+                "ok": true,
+                "error": 0,
+                "write_open": true,
+                "eof": false,
+                "size": 0
+              },
+              "args": {
+                "argc": 0
+              },
+              "p": {
+                "ok": true,
+                "error": 0,
+                "stdin_open": true,
+                "stdout_eof": false,
+                "stderr_eof": false,
+                "stdout_size": 0,
+                "stderr_size": 0
+              },
+              "l": {
+                "error": 0,
+                "cap": 2,
+                "count": 0,
+                "last": -1,
+                "ev_slot": 1,
+                "ev_kind_": 3,
+                "exit": 0,
+                "size": 0,
+                "ok": true
+              },
+              "pslot": 2,
+              "sslot": 1,
+              "tslot": 0,
+              "tag": 0,
+              "st": 0,
+              "broken": false,
+              "events": 1,
+              "ek": 3,
+              "es": 1,
+              "ss": 1
+            }
+          },
+          {
+            "stage": "verify",
+            "line": 228,
+            "col": 21,
+            "code": "call_requires",
+            "message": "cannot prove precondition of ev_proc_wait (catalog) in crate::supervise",
+            "fix": "make the callee's requires hold before the call",
+            "file": "q02.pruv",
+            "counterexample": {
+              "program": {
+                "len": 0,
+                "first": []
+              },
+              "ctl": 24887,
+              "deadline_ms": 1,
+              "lis": {
+                "ok": true,
+                "error": 0,
+                "port": 1
+              },
+              "port": 1,
+              "cs0": {
+                "ok": true,
+                "error": 0,
+                "write_open": true,
+                "eof": false,
+                "size": 0
+              },
+              "hdr": {
+                "len": 2,
+                "first": [
+                  0,
+                  1
+                ]
+              },
+              "cs1": {
+                "ok": false,
+                "error": 6,
+                "write_open": false,
+                "eof": false,
+                "size": 0
+              },
+              "cl": {
+                "ok": true,
+                "error": 0,
+                "write_open": true,
+                "eof": false,
+                "size": 0
+              },
+              "args": {
+                "argc": 0
+              },
+              "p": {
+                "ok": true,
+                "error": 0,
+                "stdin_open": true,
+                "stdout_eof": false,
+                "stderr_eof": false,
+                "stdout_size": 0,
+                "stderr_size": 0
+              },
+              "l": {
+                "error": 0,
+                "cap": 1,
+                "count": 0,
+                "last": -1,
+                "ev_slot": 0,
+                "ev_kind_": 1,
+                "exit": 0,
+                "size": 0,
+                "ok": true
+              },
+              "pslot": 1,
+              "sslot": 2,
+              "tslot": 0,
+              "tag": 0,
+              "st": 0,
+              "broken": false,
+              "events": 1,
+              "ek": 3,
+              "es": 1
+            }
+          },
+          {
+            "stage": "verify",
+            "line": 258,
+            "col": 11,
+            "code": "call_requires",
+            "message": "cannot prove precondition of ev_remove (catalog) in crate::supervise",
+            "fix": "make the callee's requires hold before the call",
+            "file": "q02.pruv",
+            "counterexample": {
+              "program": {
+                "len": 0,
+                "first": []
+              },
+              "ctl": 1,
+              "deadline_ms": 1,
+              "lis": {
+                "ok": true,
+                "error": 0,
+                "port": 1
+              },
+              "port": 1,
+              "cs0": {
+                "ok": true,
+                "error": 0,
+                "write_open": true,
+                "eof": false,
+                "size": 0
+              },
+              "hdr": {
+                "len": 2,
+                "first": [
+                  0,
+                  1
+                ]
+              },
+              "cs1": {
+                "ok": false,
+                "error": 4,
+                "write_open": false,
+                "eof": false,
+                "size": 0
+              },
+              "cl": {
+                "ok": true,
+                "error": 0,
+                "write_open": true,
+                "eof": false,
+                "size": 0
+              },
+              "args": {
+                "argc": 0
+              },
+              "p": {
+                "ok": true,
+                "error": 0,
+                "stdin_open": true,
+                "stdout_eof": false,
+                "stderr_eof": false,
+                "stdout_size": 0,
+                "stderr_size": 0
+              },
+              "l": {
+                "error": 0,
+                "cap": 1,
+                "count": 0,
+                "last": 0,
+                "ev_slot": 0,
+                "ev_kind_": 1,
+                "exit": 0,
+                "size": 0,
+                "ok": true
+              },
+              "pslot": 2,
+              "sslot": 1,
+              "tslot": 0,
+              "tag": 2,
+              "st": 0,
+              "broken": false,
+              "events": 0,
+              "rs": 0
+            }
+          },
+          {
+            "stage": "verify",
+            "line": 263,
+            "col": 9,
+            "code": "call_requires",
+            "message": "cannot prove precondition of ev_write (catalog) in crate::supervise",
+            "fix": "make the callee's requires hold before the call",
+            "file": "q02.pruv",
+            "counterexample": {
+              "program": {
+                "len": 0,
+                "first": []
+              },
+              "ctl": 1,
+              "deadline_ms": 1,
+              "lis": {
+                "ok": true,
+                "error": 0,
+                "port": 1
+              },
+              "port": 1,
+              "cs0": {
+                "ok": true,
+                "error": 0,
+                "write_open": true,
+                "eof": false,
+                "size": 0
+              },
+              "hdr": {
+                "len": 2,
+                "first": [
+                  0,
+                  1
+                ]
+              },
+              "cs1": {
+                "ok": false,
+                "error": 4,
+                "write_open": false,
+                "eof": false,
+                "size": 0
+              },
+              "cl": {
+                "ok": true,
+                "error": 0,
+                "write_open": true,
+                "eof": false,
+                "size": 0
+              },
+              "args": {
+                "argc": 0
+              },
+              "p": {
+                "ok": true,
+                "error": 0,
+                "stdin_open": true,
+                "stdout_eof": false,
+                "stderr_eof": false,
+                "stdout_size": 0,
+                "stderr_size": 0
+              },
+              "l": {
+                "error": 0,
+                "cap": 1,
+                "count": 0,
+                "last": -1,
+                "ev_slot": 0,
+                "ev_kind_": 1,
+                "exit": 0,
+                "size": 0,
+                "ok": true
+              },
+              "pslot": 2,
+              "sslot": 1,
+              "tslot": 0,
+              "tag": 1,
+              "st": 0,
+              "broken": false,
+              "events": 0,
+              "rs": 0,
+              "rep": {
+                "len": 9,
+                "first": [
+                  4,
+                  1,
+                  3,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade__gv5gtwi/q02_gen.rs",
+        "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/grade__gv5gtwi/q02_gen.ll",
+        "stderr": "e\": 0}, \"cl\": {\"ok\": true, \"error\": 0, \"write_open\": true, \"eof\": false, \"size\": 0}, \"args\": {\"argc\": 0}, \"p\": {\"ok\": true, \"error\": 0, \"stdin_open\": true, \"stdout_eof\": false, \"stderr_eof\": false, \"stdout_size\": 0, \"stderr_size\": 0}, \"l\": {\"error\": 0, \"cap\": 1, \"count\": 0, \"last\": -1, \"ev_slot\": 0, \"ev_kind_\": 1, \"exit\": 0, \"size\": 0, \"ok\": true}, \"pslot\": 2, \"sslot\": 1, \"tslot\": 0, \"tag\": 1, \"st\": 0, \"broken\": false, \"events\": 0, \"rs\": 0, \"rep\": {\"len\": 9, \"first\": [4, 1, 3, 0, 0, 0, 0, 0]}}}\n",
+        "status": "pruv_error"
+      }
+    }
+  }
+}

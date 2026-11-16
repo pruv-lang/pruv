@@ -1,0 +1,856 @@
+{
+  "rows": [
+    {
+      "fault": "f1_must_consume",
+      "compiler": "py",
+      "backend": "rust",
+      "test": "missing_close",
+      "kind": "reject",
+      "patch_sha256": "ee27a562a41c86c0bfdfd121ef6e1a0b14d7883e7bd47e5f24162d335b48218f",
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/foreign.py'\npatching file 'pruvc-rs/crates/pruv-core/src/foreign.rs'\n",
+        "stderr": ""
+      },
+      "baseline": {
+        "rc": 1,
+        "errors": [
+          {
+            "stage": "type",
+            "line": 3,
+            "col": 3,
+            "code": "async_unconsumed",
+            "message": "Loop l is not consumed before return",
+            "fix": "consume it with ev_close(move l), or return / transfer ownership"
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f1_must_consume_hjktxrqd/clean_py_rust/missing_close_gen.rs",
+        "ll": null,
+        "stderr": "{\"stage\": \"type\", \"line\": 3, \"col\": 3, \"code\": \"async_unconsumed\", \"message\": \"Loop l is not consumed before return\", \"fix\": \"consume it with ev_close(move l), or return / transfer ownership\"}\n",
+        "passed": true,
+        "valid": true
+      },
+      "faulty": {
+        "rc": 0,
+        "errors": [
+          {
+            "ok": true
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f1_must_consume_hjktxrqd/faulty_py_rust/missing_close_gen.rs",
+        "ll": null,
+        "stderr": "{\"ok\": true}\n",
+        "passed": false,
+        "valid": true
+      },
+      "status": "caught"
+    },
+    {
+      "fault": "f1_must_consume",
+      "compiler": "py",
+      "backend": "llvm",
+      "test": "missing_close",
+      "kind": "reject",
+      "patch_sha256": "ee27a562a41c86c0bfdfd121ef6e1a0b14d7883e7bd47e5f24162d335b48218f",
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/foreign.py'\npatching file 'pruvc-rs/crates/pruv-core/src/foreign.rs'\n",
+        "stderr": ""
+      },
+      "baseline": {
+        "rc": 1,
+        "errors": [
+          {
+            "stage": "type",
+            "line": 3,
+            "col": 3,
+            "code": "async_unconsumed",
+            "message": "Loop l is not consumed before return",
+            "fix": "consume it with ev_close(move l), or return / transfer ownership"
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f1_must_consume_hjktxrqd/clean_py_llvm/missing_close_gen.rs",
+        "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f1_must_consume_hjktxrqd/clean_py_llvm/missing_close_gen.ll",
+        "stderr": "{\"stage\": \"type\", \"line\": 3, \"col\": 3, \"code\": \"async_unconsumed\", \"message\": \"Loop l is not consumed before return\", \"fix\": \"consume it with ev_close(move l), or return / transfer ownership\"}\n",
+        "passed": true,
+        "valid": true
+      },
+      "faulty": {
+        "rc": 0,
+        "errors": [
+          {
+            "ok": true
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f1_must_consume_hjktxrqd/faulty_py_llvm/missing_close_gen.rs",
+        "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f1_must_consume_hjktxrqd/faulty_py_llvm/missing_close_gen.ll",
+        "stderr": "{\"ok\": true}\n",
+        "passed": false,
+        "valid": true
+      },
+      "status": "caught"
+    },
+    {
+      "fault": "f1_must_consume",
+      "compiler": "rs",
+      "backend": "rust",
+      "test": "missing_close",
+      "kind": "reject",
+      "patch_sha256": "ee27a562a41c86c0bfdfd121ef6e1a0b14d7883e7bd47e5f24162d335b48218f",
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/foreign.py'\npatching file 'pruvc-rs/crates/pruv-core/src/foreign.rs'\n",
+        "stderr": ""
+      },
+      "baseline": {
+        "rc": 1,
+        "errors": [
+          {
+            "stage": "type",
+            "line": 3,
+            "col": 3,
+            "code": "async_unconsumed",
+            "message": "Loop l is not consumed before return",
+            "fix": "consume it with ev_close(move l), or return / transfer ownership"
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f1_must_consume_hjktxrqd/clean_rs_rust/missing_close_gen.rs",
+        "ll": null,
+        "stderr": "{\"stage\": \"type\", \"line\": 3, \"col\": 3, \"code\": \"async_unconsumed\", \"message\": \"Loop l is not consumed before return\", \"fix\": \"consume it with ev_close(move l), or return / transfer ownership\"}\n",
+        "passed": true,
+        "valid": true
+      },
+      "faulty": {
+        "rc": 0,
+        "errors": [
+          {
+            "ok": true
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f1_must_consume_hjktxrqd/faulty_rs_rust/missing_close_gen.rs",
+        "ll": null,
+        "stderr": "{\"ok\": true}\n",
+        "passed": false,
+        "valid": true
+      },
+      "status": "caught"
+    },
+    {
+      "fault": "f1_must_consume",
+      "compiler": "rs",
+      "backend": "llvm",
+      "test": "missing_close",
+      "kind": "reject",
+      "patch_sha256": "ee27a562a41c86c0bfdfd121ef6e1a0b14d7883e7bd47e5f24162d335b48218f",
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/foreign.py'\npatching file 'pruvc-rs/crates/pruv-core/src/foreign.rs'\n",
+        "stderr": ""
+      },
+      "baseline": {
+        "rc": 1,
+        "errors": [
+          {
+            "stage": "type",
+            "line": 3,
+            "col": 3,
+            "code": "async_unconsumed",
+            "message": "Loop l is not consumed before return",
+            "fix": "consume it with ev_close(move l), or return / transfer ownership"
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f1_must_consume_hjktxrqd/clean_rs_llvm/missing_close_gen.rs",
+        "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f1_must_consume_hjktxrqd/clean_rs_llvm/missing_close_gen.ll",
+        "stderr": "{\"stage\": \"type\", \"line\": 3, \"col\": 3, \"code\": \"async_unconsumed\", \"message\": \"Loop l is not consumed before return\", \"fix\": \"consume it with ev_close(move l), or return / transfer ownership\"}\n",
+        "passed": true,
+        "valid": true
+      },
+      "faulty": {
+        "rc": 0,
+        "errors": [
+          {
+            "ok": true
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f1_must_consume_hjktxrqd/faulty_rs_llvm/missing_close_gen.rs",
+        "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f1_must_consume_hjktxrqd/faulty_rs_llvm/missing_close_gen.ll",
+        "stderr": "{\"ok\": true}\n",
+        "passed": false,
+        "valid": true
+      },
+      "status": "caught"
+    },
+    {
+      "fault": "f2_read_kind",
+      "compiler": "py",
+      "backend": "rust",
+      "test": "read_listener",
+      "kind": "reject",
+      "patch_sha256": "4f304dcb4cb650d12b90f5ae3865299716d689123c9b83628e0ea7d0e0a51f16",
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/verify.py'\npatching file 'pruvc-rs/crates/pruv-proof/src/symbolic.rs'\n",
+        "stderr": ""
+      },
+      "baseline": {
+        "rc": 1,
+        "errors": [
+          {
+            "stage": "verify",
+            "line": 6,
+            "col": 17,
+            "code": "call_requires",
+            "message": "cannot prove precondition of ev_read (catalog) in bad",
+            "fix": "make the callee's requires hold before the call",
+            "counterexample": {
+              "l": {
+                "error": 0,
+                "cap": 1,
+                "count": 0,
+                "last": 0,
+                "ev_slot": 0,
+                "ev_kind_": 1,
+                "exit": 0,
+                "ok": true,
+                "size": 0
+              }
+            }
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f2_read_kind_96hs01yo/clean_py_rust/read_listener_gen.rs",
+        "ll": null,
+        "stderr": "{\"stage\": \"verify\", \"line\": 6, \"col\": 17, \"code\": \"call_requires\", \"message\": \"cannot prove precondition of ev_read (catalog) in bad\", \"fix\": \"make the callee's requires hold before the call\", \"counterexample\": {\"l\": {\"error\": 0, \"cap\": 1, \"count\": 0, \"last\": 0, \"ev_slot\": 0, \"ev_kind_\": 1, \"exit\": 0, \"ok\": true, \"size\": 0}}}\n",
+        "passed": true,
+        "valid": true
+      },
+      "faulty": {
+        "rc": 0,
+        "errors": [
+          {
+            "ok": true
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f2_read_kind_96hs01yo/faulty_py_rust/read_listener_gen.rs",
+        "ll": null,
+        "stderr": "{\"ok\": true}\n",
+        "passed": false,
+        "valid": true
+      },
+      "status": "caught"
+    },
+    {
+      "fault": "f2_read_kind",
+      "compiler": "py",
+      "backend": "llvm",
+      "test": "read_listener",
+      "kind": "reject",
+      "patch_sha256": "4f304dcb4cb650d12b90f5ae3865299716d689123c9b83628e0ea7d0e0a51f16",
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/verify.py'\npatching file 'pruvc-rs/crates/pruv-proof/src/symbolic.rs'\n",
+        "stderr": ""
+      },
+      "baseline": {
+        "rc": 1,
+        "errors": [
+          {
+            "stage": "verify",
+            "line": 6,
+            "col": 17,
+            "code": "call_requires",
+            "message": "cannot prove precondition of ev_read (catalog) in bad",
+            "fix": "make the callee's requires hold before the call",
+            "counterexample": {
+              "l": {
+                "error": 0,
+                "cap": 1,
+                "count": 0,
+                "last": 0,
+                "ev_slot": 0,
+                "ev_kind_": 1,
+                "exit": 0,
+                "ok": true,
+                "size": 0
+              }
+            }
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f2_read_kind_96hs01yo/clean_py_llvm/read_listener_gen.rs",
+        "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f2_read_kind_96hs01yo/clean_py_llvm/read_listener_gen.ll",
+        "stderr": "{\"stage\": \"verify\", \"line\": 6, \"col\": 17, \"code\": \"call_requires\", \"message\": \"cannot prove precondition of ev_read (catalog) in bad\", \"fix\": \"make the callee's requires hold before the call\", \"counterexample\": {\"l\": {\"error\": 0, \"cap\": 1, \"count\": 0, \"last\": 0, \"ev_slot\": 0, \"ev_kind_\": 1, \"exit\": 0, \"ok\": true, \"size\": 0}}}\n",
+        "passed": true,
+        "valid": true
+      },
+      "faulty": {
+        "rc": 0,
+        "errors": [
+          {
+            "ok": true
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f2_read_kind_96hs01yo/faulty_py_llvm/read_listener_gen.rs",
+        "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f2_read_kind_96hs01yo/faulty_py_llvm/read_listener_gen.ll",
+        "stderr": "{\"ok\": true}\n",
+        "passed": false,
+        "valid": true
+      },
+      "status": "caught"
+    },
+    {
+      "fault": "f2_read_kind",
+      "compiler": "rs",
+      "backend": "rust",
+      "test": "read_listener",
+      "kind": "reject",
+      "patch_sha256": "4f304dcb4cb650d12b90f5ae3865299716d689123c9b83628e0ea7d0e0a51f16",
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/verify.py'\npatching file 'pruvc-rs/crates/pruv-proof/src/symbolic.rs'\n",
+        "stderr": ""
+      },
+      "baseline": {
+        "rc": 1,
+        "errors": [
+          {
+            "stage": "verify",
+            "line": 6,
+            "col": 17,
+            "code": "call_requires",
+            "message": "cannot prove precondition of ev_read (catalog) in bad",
+            "fix": "make the callee's requires hold before the call",
+            "counterexample": {
+              "l": {
+                "error": 0,
+                "cap": 1,
+                "count": 0,
+                "last": 0,
+                "ev_slot": 0,
+                "ev_kind_": 1,
+                "exit": 0,
+                "size": 0,
+                "ok": true
+              }
+            }
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f2_read_kind_96hs01yo/clean_rs_rust/read_listener_gen.rs",
+        "ll": null,
+        "stderr": "{\"stage\": \"verify\", \"line\": 6, \"col\": 17, \"code\": \"call_requires\", \"message\": \"cannot prove precondition of ev_read (catalog) in bad\", \"fix\": \"make the callee's requires hold before the call\", \"counterexample\": {\"l\": {\"error\": 0, \"cap\": 1, \"count\": 0, \"last\": 0, \"ev_slot\": 0, \"ev_kind_\": 1, \"exit\": 0, \"size\": 0, \"ok\": true}}}\n",
+        "passed": true,
+        "valid": true
+      },
+      "faulty": {
+        "rc": 0,
+        "errors": [
+          {
+            "ok": true
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f2_read_kind_96hs01yo/faulty_rs_rust/read_listener_gen.rs",
+        "ll": null,
+        "stderr": "{\"ok\": true}\n",
+        "passed": false,
+        "valid": true
+      },
+      "status": "caught"
+    },
+    {
+      "fault": "f2_read_kind",
+      "compiler": "rs",
+      "backend": "llvm",
+      "test": "read_listener",
+      "kind": "reject",
+      "patch_sha256": "4f304dcb4cb650d12b90f5ae3865299716d689123c9b83628e0ea7d0e0a51f16",
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/verify.py'\npatching file 'pruvc-rs/crates/pruv-proof/src/symbolic.rs'\n",
+        "stderr": ""
+      },
+      "baseline": {
+        "rc": 1,
+        "errors": [
+          {
+            "stage": "verify",
+            "line": 6,
+            "col": 17,
+            "code": "call_requires",
+            "message": "cannot prove precondition of ev_read (catalog) in bad",
+            "fix": "make the callee's requires hold before the call",
+            "counterexample": {
+              "l": {
+                "error": 0,
+                "cap": 1,
+                "count": 0,
+                "last": 0,
+                "ev_slot": 0,
+                "ev_kind_": 1,
+                "exit": 0,
+                "size": 0,
+                "ok": true
+              }
+            }
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f2_read_kind_96hs01yo/clean_rs_llvm/read_listener_gen.rs",
+        "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f2_read_kind_96hs01yo/clean_rs_llvm/read_listener_gen.ll",
+        "stderr": "{\"stage\": \"verify\", \"line\": 6, \"col\": 17, \"code\": \"call_requires\", \"message\": \"cannot prove precondition of ev_read (catalog) in bad\", \"fix\": \"make the callee's requires hold before the call\", \"counterexample\": {\"l\": {\"error\": 0, \"cap\": 1, \"count\": 0, \"last\": 0, \"ev_slot\": 0, \"ev_kind_\": 1, \"exit\": 0, \"size\": 0, \"ok\": true}}}\n",
+        "passed": true,
+        "valid": true
+      },
+      "faulty": {
+        "rc": 0,
+        "errors": [
+          {
+            "ok": true
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f2_read_kind_96hs01yo/faulty_rs_llvm/read_listener_gen.rs",
+        "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f2_read_kind_96hs01yo/faulty_rs_llvm/read_listener_gen.ll",
+        "stderr": "{\"ok\": true}\n",
+        "passed": false,
+        "valid": true
+      },
+      "status": "caught"
+    },
+    {
+      "fault": "f3_remove_frame",
+      "compiler": "py",
+      "backend": "rust",
+      "test": "remove_frame",
+      "kind": "accept",
+      "patch_sha256": "c547d1cef73fd2a7af69c2dec140257633678b74aec5b3776cfe077af6a3cb54",
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/verify.py'\npatching file 'pruvc-rs/crates/pruv-proof/src/symbolic.rs'\n",
+        "stderr": ""
+      },
+      "baseline": {
+        "rc": 0,
+        "errors": [
+          {
+            "ok": true
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f3_remove_frame_kt1z1f6q/clean_py_rust/remove_frame_gen.rs",
+        "ll": null,
+        "stderr": "{\"ok\": true}\n",
+        "passed": true,
+        "valid": true
+      },
+      "faulty": {
+        "rc": 1,
+        "errors": [
+          {
+            "stage": "verify",
+            "line": 9,
+            "col": 3,
+            "code": "ensures",
+            "message": "cannot prove postcondition (line 8) in check",
+            "fix": "fix the code, or strengthen loop invariants so the postcondition follows",
+            "counterexample": {
+              "l": {
+                "error": 0,
+                "cap": 2,
+                "count": 0,
+                "last": 0,
+                "ev_slot": 0,
+                "ev_kind_": 1,
+                "exit": 0,
+                "ok": true,
+                "size": 0
+              },
+              "a": 1,
+              "b": 0
+            }
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f3_remove_frame_kt1z1f6q/faulty_py_rust/remove_frame_gen.rs",
+        "ll": null,
+        "stderr": "{\"stage\": \"verify\", \"line\": 9, \"col\": 3, \"code\": \"ensures\", \"message\": \"cannot prove postcondition (line 8) in check\", \"fix\": \"fix the code, or strengthen loop invariants so the postcondition follows\", \"counterexample\": {\"l\": {\"error\": 0, \"cap\": 2, \"count\": 0, \"last\": 0, \"ev_slot\": 0, \"ev_kind_\": 1, \"exit\": 0, \"ok\": true, \"size\": 0}, \"a\": 1, \"b\": 0}}\n",
+        "passed": false,
+        "valid": true
+      },
+      "status": "caught"
+    },
+    {
+      "fault": "f3_remove_frame",
+      "compiler": "py",
+      "backend": "llvm",
+      "test": "remove_frame",
+      "kind": "accept",
+      "patch_sha256": "c547d1cef73fd2a7af69c2dec140257633678b74aec5b3776cfe077af6a3cb54",
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/verify.py'\npatching file 'pruvc-rs/crates/pruv-proof/src/symbolic.rs'\n",
+        "stderr": ""
+      },
+      "baseline": {
+        "rc": 0,
+        "errors": [
+          {
+            "ok": true
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f3_remove_frame_kt1z1f6q/clean_py_llvm/remove_frame_gen.rs",
+        "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f3_remove_frame_kt1z1f6q/clean_py_llvm/remove_frame_gen.ll",
+        "stderr": "{\"ok\": true}\n",
+        "passed": true,
+        "valid": true
+      },
+      "faulty": {
+        "rc": 1,
+        "errors": [
+          {
+            "stage": "verify",
+            "line": 9,
+            "col": 3,
+            "code": "ensures",
+            "message": "cannot prove postcondition (line 8) in check",
+            "fix": "fix the code, or strengthen loop invariants so the postcondition follows",
+            "counterexample": {
+              "l": {
+                "error": 0,
+                "cap": 2,
+                "count": 0,
+                "last": 0,
+                "ev_slot": 0,
+                "ev_kind_": 1,
+                "exit": 0,
+                "ok": true,
+                "size": 0
+              },
+              "a": 1,
+              "b": 0
+            }
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f3_remove_frame_kt1z1f6q/faulty_py_llvm/remove_frame_gen.rs",
+        "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f3_remove_frame_kt1z1f6q/faulty_py_llvm/remove_frame_gen.ll",
+        "stderr": "{\"stage\": \"verify\", \"line\": 9, \"col\": 3, \"code\": \"ensures\", \"message\": \"cannot prove postcondition (line 8) in check\", \"fix\": \"fix the code, or strengthen loop invariants so the postcondition follows\", \"counterexample\": {\"l\": {\"error\": 0, \"cap\": 2, \"count\": 0, \"last\": 0, \"ev_slot\": 0, \"ev_kind_\": 1, \"exit\": 0, \"ok\": true, \"size\": 0}, \"a\": 1, \"b\": 0}}\n",
+        "passed": false,
+        "valid": true
+      },
+      "status": "caught"
+    },
+    {
+      "fault": "f3_remove_frame",
+      "compiler": "rs",
+      "backend": "rust",
+      "test": "remove_frame",
+      "kind": "accept",
+      "patch_sha256": "c547d1cef73fd2a7af69c2dec140257633678b74aec5b3776cfe077af6a3cb54",
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/verify.py'\npatching file 'pruvc-rs/crates/pruv-proof/src/symbolic.rs'\n",
+        "stderr": ""
+      },
+      "baseline": {
+        "rc": 0,
+        "errors": [
+          {
+            "ok": true
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f3_remove_frame_kt1z1f6q/clean_rs_rust/remove_frame_gen.rs",
+        "ll": null,
+        "stderr": "{\"ok\": true}\n",
+        "passed": true,
+        "valid": true
+      },
+      "faulty": {
+        "rc": 1,
+        "errors": [
+          {
+            "stage": "verify",
+            "line": 9,
+            "col": 3,
+            "code": "ensures",
+            "message": "cannot prove postcondition (line 8) in check",
+            "fix": "fix the code, or strengthen loop invariants so the postcondition follows",
+            "counterexample": {
+              "l": {
+                "error": 0,
+                "cap": 7,
+                "count": 0,
+                "last": 0,
+                "ev_slot": 0,
+                "ev_kind_": 5,
+                "exit": 0,
+                "size": 0,
+                "ok": true
+              },
+              "a": 5,
+              "b": 3
+            }
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f3_remove_frame_kt1z1f6q/faulty_rs_rust/remove_frame_gen.rs",
+        "ll": null,
+        "stderr": "{\"stage\": \"verify\", \"line\": 9, \"col\": 3, \"code\": \"ensures\", \"message\": \"cannot prove postcondition (line 8) in check\", \"fix\": \"fix the code, or strengthen loop invariants so the postcondition follows\", \"counterexample\": {\"l\": {\"error\": 0, \"cap\": 7, \"count\": 0, \"last\": 0, \"ev_slot\": 0, \"ev_kind_\": 5, \"exit\": 0, \"size\": 0, \"ok\": true}, \"a\": 5, \"b\": 3}}\n",
+        "passed": false,
+        "valid": true
+      },
+      "status": "caught"
+    },
+    {
+      "fault": "f3_remove_frame",
+      "compiler": "rs",
+      "backend": "llvm",
+      "test": "remove_frame",
+      "kind": "accept",
+      "patch_sha256": "c547d1cef73fd2a7af69c2dec140257633678b74aec5b3776cfe077af6a3cb54",
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/verify.py'\npatching file 'pruvc-rs/crates/pruv-proof/src/symbolic.rs'\n",
+        "stderr": ""
+      },
+      "baseline": {
+        "rc": 0,
+        "errors": [
+          {
+            "ok": true
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f3_remove_frame_kt1z1f6q/clean_rs_llvm/remove_frame_gen.rs",
+        "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f3_remove_frame_kt1z1f6q/clean_rs_llvm/remove_frame_gen.ll",
+        "stderr": "{\"ok\": true}\n",
+        "passed": true,
+        "valid": true
+      },
+      "faulty": {
+        "rc": 1,
+        "errors": [
+          {
+            "stage": "verify",
+            "line": 9,
+            "col": 3,
+            "code": "ensures",
+            "message": "cannot prove postcondition (line 8) in check",
+            "fix": "fix the code, or strengthen loop invariants so the postcondition follows",
+            "counterexample": {
+              "l": {
+                "error": 0,
+                "cap": 7,
+                "count": 0,
+                "last": 0,
+                "ev_slot": 0,
+                "ev_kind_": 5,
+                "exit": 0,
+                "size": 0,
+                "ok": true
+              },
+              "a": 5,
+              "b": 3
+            }
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f3_remove_frame_kt1z1f6q/faulty_rs_llvm/remove_frame_gen.rs",
+        "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f3_remove_frame_kt1z1f6q/faulty_rs_llvm/remove_frame_gen.ll",
+        "stderr": "{\"stage\": \"verify\", \"line\": 9, \"col\": 3, \"code\": \"ensures\", \"message\": \"cannot prove postcondition (line 8) in check\", \"fix\": \"fix the code, or strengthen loop invariants so the postcondition follows\", \"counterexample\": {\"l\": {\"error\": 0, \"cap\": 7, \"count\": 0, \"last\": 0, \"ev_slot\": 0, \"ev_kind_\": 5, \"exit\": 0, \"size\": 0, \"ok\": true}, \"a\": 5, \"b\": 3}}\n",
+        "passed": false,
+        "valid": true
+      },
+      "status": "caught"
+    },
+    {
+      "fault": "f4_close_tag",
+      "compiler": "py",
+      "backend": "rust",
+      "test": "close_tag",
+      "kind": "runtime",
+      "patch_sha256": "9e6ab1cac0c6872e691cbce58edc1da1ebb1bc4eae78a7e0778a3e1dba64b3ba",
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/codegen.py'\npatching file 'pruvc-rs/crates/pruv-core/src/codegen.rs'\n",
+        "stderr": ""
+      },
+      "baseline": {
+        "rc": 0,
+        "errors": [
+          {
+            "ok": true
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f4_close_tag_74n66y40/clean_py_rust/close_tag_gen.rs",
+        "ll": null,
+        "stderr": "{\"ok\": true}\n",
+        "run": {
+          "rc": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        "passed": true,
+        "valid": true
+      },
+      "faulty": {
+        "rc": 0,
+        "errors": [
+          {
+            "ok": true
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f4_close_tag_74n66y40/faulty_py_rust/close_tag_gen.rs",
+        "ll": null,
+        "stderr": "{\"ok\": true}\n",
+        "run": {
+          "rc": 101,
+          "stdout": "",
+          "stderr": "\nthread 'main' (83888666) panicked at /Users/spica4345/Projects/pruv/bench/g10_async/.work/f4_close_tag_74n66y40/faulty_py_rust/main.rs:3:13:\nassertion `left == right` failed\n  left: -100\n right: 0\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+        },
+        "passed": false,
+        "valid": true
+      },
+      "status": "caught"
+    },
+    {
+      "fault": "f4_close_tag",
+      "compiler": "py",
+      "backend": "llvm",
+      "test": "close_tag",
+      "kind": "runtime",
+      "patch_sha256": "9e6ab1cac0c6872e691cbce58edc1da1ebb1bc4eae78a7e0778a3e1dba64b3ba",
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/codegen.py'\npatching file 'pruvc-rs/crates/pruv-core/src/codegen.rs'\n",
+        "stderr": ""
+      },
+      "baseline": {
+        "rc": 0,
+        "errors": [
+          {
+            "ok": true
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f4_close_tag_74n66y40/clean_py_llvm/close_tag_gen.rs",
+        "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f4_close_tag_74n66y40/clean_py_llvm/close_tag_gen.ll",
+        "stderr": "{\"ok\": true}\n",
+        "run": {
+          "rc": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        "passed": true,
+        "valid": true
+      },
+      "faulty": {
+        "rc": 0,
+        "errors": [
+          {
+            "ok": true
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f4_close_tag_74n66y40/faulty_py_llvm/close_tag_gen.rs",
+        "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f4_close_tag_74n66y40/faulty_py_llvm/close_tag_gen.ll",
+        "stderr": "{\"ok\": true}\n",
+        "run": {
+          "rc": 101,
+          "stdout": "",
+          "stderr": "\nthread 'main' (83888727) panicked at /Users/spica4345/Projects/pruv/bench/g10_async/.work/f4_close_tag_74n66y40/faulty_py_llvm/main.rs:3:13:\nassertion `left == right` failed\n  left: -100\n right: 0\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+        },
+        "passed": false,
+        "valid": true
+      },
+      "status": "caught"
+    },
+    {
+      "fault": "f4_close_tag",
+      "compiler": "rs",
+      "backend": "rust",
+      "test": "close_tag",
+      "kind": "runtime",
+      "patch_sha256": "9e6ab1cac0c6872e691cbce58edc1da1ebb1bc4eae78a7e0778a3e1dba64b3ba",
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/codegen.py'\npatching file 'pruvc-rs/crates/pruv-core/src/codegen.rs'\n",
+        "stderr": ""
+      },
+      "baseline": {
+        "rc": 0,
+        "errors": [
+          {
+            "ok": true
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f4_close_tag_74n66y40/clean_rs_rust/close_tag_gen.rs",
+        "ll": null,
+        "stderr": "{\"ok\": true}\n",
+        "run": {
+          "rc": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        "passed": true,
+        "valid": true
+      },
+      "faulty": {
+        "rc": 0,
+        "errors": [
+          {
+            "ok": true
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f4_close_tag_74n66y40/faulty_rs_rust/close_tag_gen.rs",
+        "ll": null,
+        "stderr": "{\"ok\": true}\n",
+        "run": {
+          "rc": 101,
+          "stdout": "",
+          "stderr": "\nthread 'main' (83889125) panicked at /Users/spica4345/Projects/pruv/bench/g10_async/.work/f4_close_tag_74n66y40/faulty_rs_rust/main.rs:3:13:\nassertion `left == right` failed\n  left: -100\n right: 0\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+        },
+        "passed": false,
+        "valid": true
+      },
+      "status": "caught"
+    },
+    {
+      "fault": "f4_close_tag",
+      "compiler": "rs",
+      "backend": "llvm",
+      "test": "close_tag",
+      "kind": "runtime",
+      "patch_sha256": "9e6ab1cac0c6872e691cbce58edc1da1ebb1bc4eae78a7e0778a3e1dba64b3ba",
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/codegen.py'\npatching file 'pruvc-rs/crates/pruv-core/src/codegen.rs'\n",
+        "stderr": ""
+      },
+      "baseline": {
+        "rc": 0,
+        "errors": [
+          {
+            "ok": true
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f4_close_tag_74n66y40/clean_rs_llvm/close_tag_gen.rs",
+        "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f4_close_tag_74n66y40/clean_rs_llvm/close_tag_gen.ll",
+        "stderr": "{\"ok\": true}\n",
+        "run": {
+          "rc": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        "passed": true,
+        "valid": true
+      },
+      "faulty": {
+        "rc": 0,
+        "errors": [
+          {
+            "ok": true
+          }
+        ],
+        "rs": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f4_close_tag_74n66y40/faulty_rs_llvm/close_tag_gen.rs",
+        "ll": "/Users/spica4345/Projects/pruv/bench/g10_async/.work/f4_close_tag_74n66y40/faulty_rs_llvm/close_tag_gen.ll",
+        "stderr": "{\"ok\": true}\n",
+        "run": {
+          "rc": 101,
+          "stdout": "",
+          "stderr": "\nthread 'main' (83889195) panicked at /Users/spica4345/Projects/pruv/bench/g10_async/.work/f4_close_tag_74n66y40/faulty_rs_llvm/main.rs:3:13:\nassertion `left == right` failed\n  left: -100\n right: 0\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+        },
+        "passed": false,
+        "valid": true
+      },
+      "status": "caught"
+    }
+  ]
+}

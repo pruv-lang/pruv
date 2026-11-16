@@ -19,7 +19,7 @@ fn socket(port: i64, mode: i64, payload: [u8]) -> i64 ! async, net, proc, alloc 
  l = ev_add_socket(move l, move s);
  if !ev_ok(l) { let r: Result<i64> = ev_close(move l); match r {Ok(n)=>{return n;} Err(e)=>{return -e;}} }
  if mode == 3 {
- l = ev_add_timer(move l, 250);
+ l = ev_add_timer(move l, 1000);
  let mut ready: bool = false; let mut limit: i64 = 100000000;
  while !ready && limit > 0 decreases limit { l = ev_wait(move l, -1); ready = ev_event_kind(l) == 4; limit = limit - 1; }
  assert ready;

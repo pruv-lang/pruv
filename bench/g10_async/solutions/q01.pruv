@@ -1,0 +1,113 @@
+// Byte-oriented line server with renewable per-client timers.
+pub fn serve(ctl: i64, budget: i64) -> i64 ! async, net, proc, alloc
+  requires 1 <= ctl && ctl <= 65535
+  requires 0 <= budget && budget <= 8
+{
+  let ls: Listener = net_listen("127.0.0.1", 0);
+  if !net_listener_ok(ls) { let r: Result<i64> = net_listener_close(move ls); return -1; }
+  let port: i64 = net_listener_port(ls);
+  let mut c: Socket = net_connect("127.0.0.1", ctl);
+  if !net_ok(c) { let r: Result<i64> = net_close(move c); let t: Result<i64> = net_listener_close(move ls); return -2; }
+  let mut msg: [u8] = alloc(2, 0);
+  store_be(inout msg, 0, port, 2);
+  c = net_write_bytes(move c, msg);
+  let cr: Result<i64> = net_close(move c);
+  let mut l: Loop = ev_new(17);
+  l = ev_add_listener(move l, move ls);
+  let mut lengths: [i64] = alloc(17, 0);
+  let mut lines: [u8] = alloc(17408, 0);
+  let mut timers: [i64] = alloc(17, -1);
+  let mut owners: [i64] = alloc(17, -1);
+  let mut accepted: i64 = 0;
+  let mut finished: i64 = 0;
+  let mut rounds: i64 = 100000;
+  while rounds > 0 && finished < budget && ev_ok(l)
+    invariant 0 <= rounds && rounds <= 100000
+    invariant ev_cap(l) == 17
+    invariant len(lengths) == 17 && len(timers) == 17 && len(lines) == 17408
+    invariant len(owners) == 17
+    invariant 0 <= accepted && accepted <= budget
+    invariant 0 <= finished && finished <= accepted
+    decreases rounds
+  {
+    l = ev_wait(move l, 2000);
+    let slot: i64 = ev_event_slot(l);
+    let ek: i64 = ev_event_kind(l);
+    if ek == 0 { rounds = 0; } else {
+      if ek == 2 && accepted < budget && ev_count(l) < 16 {
+        l = ev_accept(move l, slot);
+        if ev_ok(l) && ev_last(l) >= 0 {
+          let s: i64 = ev_last(l);
+          lengths[s] = 0;
+          accepted = accepted + 1;
+          l = ev_add_timer(move l, 400);
+          timers[s] = ev_last(l);
+          owners[ev_last(l)] = s;
+        }
+      } else {
+        if ek == 4 {
+          let i: i64 = owners[slot];
+          if 0 <= i && i < 17 && ev_kind(l, i) == 1 && finished < accepted {
+            l = ev_remove(move l, i);
+            timers[i] = -1;
+            finished = finished + 1;
+          }
+        } else {
+          if ek == 1 && ev_kind(l, slot) == 1 {
+            let timer: i64 = timers[slot];
+            if timer >= 0 && timer < 17 && ev_kind(l, timer) == 4 { l = ev_remove(move l, timer); }
+            timers[slot] = -1;
+            l = ev_read(move l, slot, 4096);
+            let chunk: [u8] = ev_bytes(l);
+            let n: i64 = len(chunk);
+            let mut have: i64 = lengths[slot];
+            if have < 0 || have > 1024 { have = 0; }
+            let mut j: i64 = 0;
+            while j < n
+              invariant 0 <= j && j <= n && n == len(chunk)
+              invariant len(lengths) == 17 && len(lines) == 17408
+              invariant 0 <= have && have <= 1024
+              invariant ev_ok(l) && ev_cap(l) == 17
+              invariant ev_kind(l, slot) == 1
+              invariant 0 <= slot && slot < 17
+              decreases n - j
+            {
+              let b: i64 = chunk[j];
+              if b == 10 {
+                if ev_write_open(l, slot) {
+                  let mut reply: [u8] = alloc(2, 0);
+                  store_be(inout reply, 0, have, 2);
+                  l = ev_write(move l, slot, reply);
+                }
+                have = 0;
+              } else {
+                if have < 1024 {
+                  lines[slot * 1024 + have] = b;
+                  have = have + 1;
+                }
+              }
+              j = j + 1;
+            }
+            lengths[slot] = have;
+            if ev_kind(l, slot) == 1 && ev_count(l) < 17 {
+              l = ev_add_timer(move l, 400);
+              timers[slot] = ev_last(l);
+              owners[ev_last(l)] = slot;
+            }
+          } else {
+            if (ek == 3 || ek == 5) && ev_kind(l, slot) == 1 && finished < accepted {
+              let timer: i64 = timers[slot];
+              if timer >= 0 && timer < 17 && ev_kind(l, timer) == 4 { l = ev_remove(move l, timer); }
+              l = ev_remove(move l, slot);
+              timers[slot] = -1;
+              finished = finished + 1;
+            }
+          }
+        }
+      }
+      if rounds > 0 { rounds = rounds - 1; }
+    }
+  }
+  let r: Result<i64> = ev_close(move l);
+  return finished;
+}

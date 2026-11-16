@@ -1,0 +1,304 @@
+// q01.pruv
+fn close_sock(take s: Socket) -> () ! net, alloc
+{
+  let r: Result<i64> = net_close(move s);
+  return;
+}
+
+fn close_lis(take l: Listener) -> () ! net, alloc
+{
+  let r: Result<i64> = net_listener_close(move l);
+  return;
+}
+
+fn close_loop(take l: Loop) -> () ! async, net, proc, alloc
+{
+  let r: Result<i64> = ev_close(move l);
+  return;
+}
+
+// 0 = not a socket slot, 1 = live socket, 2 = socket with EOF published
+fn sock_state(l: Loop, s: i64) -> i64
+  requires ev_ok(l)
+  ensures 0 <= result && result <= 2
+{
+  if s < 0 || s >= ev_cap(l) { return 0; }
+  if ev_kind(l, s) != 1 { return 0; }
+  if ev_eof(l, s) { return 2; }
+  return 1;
+}
+
+fn sock_writable(l: Loop, s: i64) -> bool
+  requires ev_ok(l)
+{
+  if s < 0 || s >= ev_cap(l) { return false; }
+  if ev_kind(l, s) != 1 { return false; }
+  return ev_write_open(l, s);
+}
+
+fn drop_kind(take l: Loop, s: i64, k: i64) -> Loop ! async, net, proc, alloc
+  requires ev_ok(l)
+{
+  if s < 0 || s >= ev_cap(l) { return move l; }
+  if ev_kind(l, s) != k { return move l; }
+  return ev_remove(move l, s);
+}
+
+// replace the idle timer of client socket slot s by a fresh 400 ms timer
+fn arm(take l: Loop, inout stimer: [i64], inout towner: [i64], s: i64) -> Loop ! async, net, proc, alloc
+  requires ev_ok(l)
+  requires len(stimer) == 17 && len(towner) == 17
+  requires 0 <= s && s < 17
+{
+  let prev: i64 = stimer[s];
+  stimer[s] = -1;
+  let mut m: Loop = drop_kind(move l, prev, 4);
+  if prev >= 0 && prev < 17 { towner[prev] = -1; }
+  if !ev_ok(m) { return move m; }
+  if ev_count(m) >= ev_cap(m) { return move m; }
+  m = ev_add_timer(move m, 400);
+  if !ev_ok(m) { return move m; }
+  let t: i64 = ev_last(m);
+  if t >= 0 && t < 17 {
+    stimer[s] = t;
+    towner[t] = s;
+  }
+  return move m;
+}
+
+// remove the remaining timer and the socket of client slot s
+fn finish_client(take l: Loop, inout stimer: [i64], inout towner: [i64], s: i64) -> Loop ! async, net, proc, alloc
+  requires ev_ok(l)
+  requires len(stimer) == 17 && len(towner) == 17
+  requires 0 <= s && s < 17
+{
+  let t: i64 = stimer[s];
+  stimer[s] = -1;
+  let mut m: Loop = drop_kind(move l, t, 4);
+  if t >= 0 && t < 17 { towner[t] = -1; }
+  if !ev_ok(m) { return move m; }
+  m = drop_kind(move m, s, 1);
+  return move m;
+}
+
+fn accept_one(take l: Loop, inout stimer: [i64], inout towner: [i64], lslot: i64) -> Loop ! async, net, proc, alloc
+  requires ev_ok(l)
+  requires len(stimer) == 17 && len(towner) == 17
+{
+  if lslot < 0 || lslot >= ev_cap(l) { return move l; }
+  if ev_kind(l, lslot) != 2 { return move l; }
+  if ev_count(l) >= ev_cap(l) { return move l; }
+  let mut m: Loop = ev_accept(move l, lslot);
+  if !ev_ok(m) { return move m; }
+  let s: i64 = ev_last(m);
+  if s < 0 || s >= 17 || s >= ev_cap(m) { return move m; }
+  if ev_kind(m, s) != 1 { return move m; }
+  m = arm(move m, inout stimer, inout towner, s);
+  return move m;
+}
+
+// two-byte big-endian replies for every LF in data; start = current line length
+fn replies(data: [u8], start: i64) -> [u8] ! alloc
+  requires 0 <= start && start <= 1024
+  requires len(data) <= 1_000_000
+  ensures len(result) <= 2 * len(data)
+{
+  let mut out: [u8] = alloc(2 * len(data), 0);
+  let mut w: i64 = 0;
+  let mut c: i64 = start;
+  let mut i: i64 = 0;
+  while i < len(data)
+    invariant 0 <= i && i <= len(data)
+    invariant 0 <= c && c <= 1024
+    invariant 0 <= w && w <= 2 * i
+    invariant len(out) == 2 * len(data)
+    decreases len(data) - i
+  {
+    if data[i] == 10 {
+      store_be(inout out, w, c, 2);
+      w = w + 2;
+      c = 0;
+    } else {
+      if c < 1024 { c = c + 1; }
+    }
+    i = i + 1;
+  }
+  return truncate(out, w);
+}
+
+fn endcur(data: [u8], start: i64) -> i64
+  requires 0 <= start && start <= 1024
+  requires len(data) <= 1_000_000
+  ensures 0 <= result && result <= 1024
+{
+  let mut c: i64 = start;
+  let mut i: i64 = 0;
+  while i < len(data)
+    invariant 0 <= i && i <= len(data)
+    invariant 0 <= c && c <= 1024
+    decreases len(data) - i
+  {
+    if data[i] == 10 {
+      c = 0;
+    } else {
+      if c < 1024 { c = c + 1; }
+    }
+    i = i + 1;
+  }
+  return c;
+}
+
+pub fn serve(ctl: i64, budget: i64) -> i64 ! async, net, proc, alloc
+  requires 1 <= ctl && ctl <= 65535
+  requires 0 <= budget && budget <= 8
+  ensures -2 <= result && result <= 8
+{
+  let lis: Listener = net_listen("127.0.0.1", 0);
+  if !net_listener_ok(lis) {
+    close_lis(move lis);
+    return -1;
+  }
+  let port: i64 = net_listener_port(lis);
+  if port < 0 || port > 65535 {
+    close_lis(move lis);
+    return -1;
+  }
+  let cs0: Socket = net_connect("127.0.0.1", ctl);
+  if !net_ok(cs0) {
+    close_sock(move cs0);
+    close_lis(move lis);
+    return -2;
+  }
+  let mut hdr: [u8] = alloc(2, 0);
+  store_be(inout hdr, 0, port, 2);
+  let cs1: Socket = net_write_bytes(move cs0, hdr);
+  close_sock(move cs1);
+
+  let mut l: Loop = ev_new(17);
+  if !ev_ok(l) {
+    close_loop(move l);
+    close_lis(move lis);
+    return 0;
+  }
+  if ev_count(l) >= ev_cap(l) {
+    close_loop(move l);
+    close_lis(move lis);
+    return 0;
+  }
+  l = ev_add_listener(move l, move lis);
+  if !ev_ok(l) {
+    close_loop(move l);
+    return 0;
+  }
+  let lslot: i64 = ev_last(l);
+  if lslot < 0 || lslot >= 17 {
+    close_loop(move l);
+    return 0;
+  }
+
+  let mut stimer: [i64] = alloc(17, -1);
+  let mut towner: [i64] = alloc(17, -1);
+  let mut cur: [i64] = alloc(17, 0);
+  let mut accepted: i64 = 0;
+  let mut finished: i64 = 0;
+  let mut events: i64 = 0;
+  let mut stop: bool = false;
+
+  while !stop && finished < budget && events < 100000
+    invariant 0 <= finished && finished <= budget
+    invariant 0 <= accepted && accepted <= budget
+    invariant 0 <= events && events <= 100000
+    invariant len(stimer) == 17 && len(towner) == 17 && len(cur) == 17
+    invariant stop || ev_ok(l)
+    decreases 100000 - events
+  {
+    events = events + 1;
+    l = ev_wait(move l, 2000);
+    let mut dead: i64 = -1;
+    if ev_ok(l) {
+      let ek: i64 = ev_event_kind(l);
+      let es: i64 = ev_event_slot(l);
+      if ek == 0 {
+        stop = true;
+      } else if es < 0 || es >= 17 || es >= ev_cap(l) {
+        stop = true;
+      } else if ek == 2 {
+        if es == lslot && accepted < budget {
+          let c0: i64 = ev_count(l);
+          l = accept_one(move l, inout stimer, inout towner, es);
+          if ev_ok(l) {
+            if ev_count(l) > c0 {
+              accepted = accepted + 1;
+              if accepted >= budget {
+                l = drop_kind(move l, lslot, 2);
+              }
+            }
+          }
+        }
+      } else if ek == 4 {
+        let owner: i64 = towner[es];
+        if owner >= 0 && owner < 17 {
+          towner[es] = -1;
+          stimer[owner] = -1;
+          dead = owner;
+        }
+      } else if ek == 5 {
+        if sock_state(l, es) != 0 { dead = es; }
+      } else if ek == 1 || ek == 3 {
+        let ss: i64 = sock_state(l, es);
+        if ss == 2 {
+          dead = es;
+        } else if ss == 1 {
+          l = ev_read(move l, es, 4096);
+          if ev_ok(l) {
+            let sz: i64 = ev_size(l);
+            let mut got: bool = false;
+            if sz > 0 {
+              let data: [u8] = ev_bytes(l);
+              if len(data) > 1_000_000 {
+                dead = es;
+              } else {
+                got = true;
+                let mut st0: i64 = cur[es];
+                if st0 < 0 { st0 = 0; }
+                if st0 > 1024 { st0 = 1024; }
+                let out: [u8] = replies(data, st0);
+                cur[es] = endcur(data, st0);
+                if len(out) > 0 && sock_writable(l, es) {
+                  l = ev_write(move l, es, out);
+                }
+              }
+            }
+            if ev_ok(l) {
+              if dead < 0 {
+                let s2: i64 = sock_state(l, es);
+                if s2 != 1 {
+                  dead = es;
+                } else if sz == 0 && ek == 3 {
+                  dead = es;
+                }
+              }
+              if dead < 0 && got {
+                l = arm(move l, inout stimer, inout towner, es);
+              }
+            }
+          }
+        }
+      }
+    }
+    if dead >= 0 && dead < 17 {
+      finished = finished + 1;
+      cur[dead] = 0;
+      if ev_ok(l) {
+        l = finish_client(move l, inout stimer, inout towner, dead);
+      }
+    }
+    if !ev_ok(l) { stop = true; }
+  }
+
+  let r: Result<i64> = ev_close(move l);
+  match r {
+    Ok(n) => { return finished; }
+    Err(e) => { return finished; }
+  }
+}
