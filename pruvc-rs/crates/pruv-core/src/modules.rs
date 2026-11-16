@@ -119,6 +119,8 @@ pub struct Module {
     pub path: Vec<String>,
     /// path relative to the root directory, `/` separators
     pub file: String,
+    /// G4b-2: the path the loader opened (absolute for the root); None for the embedded `@std/std.pruv`
+    pub src_path: Option<PathBuf>,
     pub parent: Option<usize>,
     /// G4b-1: package name of a dependency module, None = the program package
     pub pkg: Option<String>,
@@ -141,6 +143,7 @@ impl Module {
         Module {
             path,
             file,
+            src_path: None,
             parent,
             pkg: None,
             pkginfo: None,
@@ -187,6 +190,7 @@ pub struct G4 {
     pub main: Option<String>,
     pub resolved: bool,
 }
+
 
 pub struct Loaded {
     pub prog: Program,
@@ -301,6 +305,7 @@ impl<'g> Loader<'g> {
         };
         let ci = self.modules.len();
         let mut child = Module::new(Vec::new(), rel, Some(mi));
+        child.src_path = Some(fpath.clone());
         child.pkg = Some(dpkg.name.clone());
         child.pkginfo = Some(di);
         child.mods = parsed.mods.clone();
@@ -478,6 +483,9 @@ impl<'g> Loader<'g> {
             };
             let ci = self.modules.len();
             let mut child = Module::new(cpath, rel, Some(mi));
+            if md.name != "std" {
+                child.src_path = Some(fpath.clone());
+            }
             child.pkg = self.modules[mi].pkg.clone();
             child.pkginfo = self.modules[mi].pkginfo;
             child.mods = parsed.mods.clone();
@@ -595,6 +603,7 @@ fn load_source_full(
     };
     let root_dir = abs.parent().map(|p| p.to_path_buf()).unwrap_or_default();
     let mut root_mod = Module::new(Vec::new(), root_file.clone(), None);
+    root_mod.src_path = Some(abs.clone());
     root_mod.pkginfo = graph.map(|_| 0);
     root_mod.mods = root.mods.clone();
     let mut loaded = HashMap::new();

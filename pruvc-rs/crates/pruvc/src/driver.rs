@@ -243,6 +243,45 @@ fn check_runtime(target: &Target) -> Result<(), Fail> {
     }
 }
 
+/// G4b-2 (G4B_SPEC section 6 rules 7-8): runs mono and the Rust-source generator in memory (whatever the emit kind) with
+/// `verified` = the verify flag, keeps only the trust data, and writes the report. A language error of the collection is
+/// the compile's result (the same error would stop Rust-source output); no report is written then.
+fn write_trust_report(
+    a: &Args,
+    path: &str,
+    prog: &Program,
+    g4: Option<&pruv_core::modules::G4>,
+    graph: Option<&pruv_core::manifest::Graph>,
+) -> Result<(), Fail> {
+    let plan: Option<Program> = if pruv_core::typeinfo::first_g3_use(prog).is_some() || g4.is_some() {
+        match pruv_core::mono::specialize_g4(prog, g4) {
+            Ok(p) => Some(p.program),
+            Err(pruv_core::mono::MonoError::Limit(e)) => return Err(Fail::Lang(vec![e])),
+            Err(pruv_core::mono::MonoError::Internal(m)) => return Err(Fail::Internal(m)),
+        }
+    } else {
+        None
+    };
+    let cprog: &Program = plan.as_ref().unwrap_or(prog);
+    if let Some(e) = pruv_core::typeinfo::g2_unimplemented_error(cprog, "codegen", None, &["array_u8", "array_bool", "str"], None) {
+        return Err(Fail::Lang(vec![e]));
+    }
+    let data = pruv_core::codegen::gen_rust_trust_data(
+        cprog,
+        a.verify,
+        a.trust_callers,
+        a.budget,
+        &a.foreign_checks,
+        &a.rust_extern_specs,
+    )
+    .map_err(|e| match e {
+        pruv_core::codegen::GenError::Diag(p) => Fail::Lang(vec![p]),
+        pruv_core::codegen::GenError::Msg(m) => Fail::Internal(m),
+    })?;
+    let text = crate::trust_report::build(a, g4, graph, &data).map_err(Fail::Internal)?;
+    write_text(path, &text)
+}
+
 fn compile(a: &Args, graph: Option<&pruv_core::manifest::Graph>) -> Result<(), Fail> {
     // G4: the root file plus its declared module files (a legacy root is the plain parse). A read failure or UTF-8 decode
     // failure of the root is an internal error (handled like Python open().read()).
@@ -298,10 +337,18 @@ fn compile(a: &Args, graph: Option<&pruv_core::manifest::Graph>) -> Result<(), F
         } else {
             pruv_proof::verify_program(&prog, &tt, None).map_err(Fail::Internal)?
         };
+        // G4b-2: the trust report is written after verification, proved or not, before the proof errors are returned
+        if let Some(p) = &a.trust_report {
+            write_trust_report(a, p, &prog, g4.as_ref(), graph)?;
+        }
         if !errs.is_empty() {
             return Err(Fail::Lang(errs));
         }
     } else {
+        // G4b-2: with --no-verify the report comes right where verification would have been
+        if let Some(p) = &a.trust_report {
+            write_trust_report(a, p, &prog, g4.as_ref(), graph)?;
+        }
         // Pre-G10 order for File-free native programs: with --no-verify, foreign_target fires before the notice.
         if g6_native && pruv_core::foreign::g7_target_error(&prog).is_none() && !pruv_core::foreign::uses_files(&prog) {
             if let Some(e) = foreign_target_error(&prog) {

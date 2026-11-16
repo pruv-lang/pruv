@@ -25,6 +25,7 @@ pruv-core = { path = "../pruv-core" }
 pruv-proof = { path = "../pruv-proof" }
 llvm-sys = { version = "=221.1.2", features = ["force-static"] }
 tempfile = "=3.27.0"
+sha2 = "=0.10.9"
 
 [build-dependencies]
 cc = "=1.11.1"

@@ -62,10 +62,37 @@ def default_bindings_path(out):
     return os.path.splitext(out)[0] + ".rs"
 
 
+def _write_trust_report(prog, path, report_path, verify, trust_callers, budget, infer, foreign_checks,
+                        rust_extern_raw, rust_search_raw, graph):
+    """G4b-2 (docs/G4B_SPEC.md 6, rule 8): run mono and the Rust-source generator in memory, keep only the trust data,
+    write the report.  Nothing is written when a language error is raised."""
+    from trust_report import build_report, write_report
+    plan = None
+    gprog = prog
+    if first_g3_use(prog) is not None or prog.explicit:
+        plan = specialize(prog)          # PruvError specialization_limit propagates
+        gprog = plan.program
+    g2err = g2_unimplemented_error(gprog, "codegen", skip=("array_u8", "array_bool", "str"))
+    if g2err is not None:
+        raise g2err
+    specs = []
+    for spec in rust_extern_raw:
+        n, _, p = spec.partition("=")
+        specs.append((n, p))
+    trust = {}
+    gen_rust_ex(prog, verified=verify, trust_callers=trust_callers, budget=budget, plan=plan,
+                foreign_checks=foreign_checks, externs=specs, trust_out=trust)
+    text = build_report(prog, trust, graph, path, verify, trust_callers, foreign_checks, infer,
+                        rust_extern_raw, rust_search_raw)
+    write_report(report_path, text)
+
+
 def compile_file(path, out, verify=True, trust_callers=False, backend="rust", rust_bindings=None,
                  budget=None, also_llvm=None, infer=False, show_inferred=False, externs=(),
-                 foreign_checks="requires", extern_specs=(), emit=None, libs=(), manifest=None):
-    """extern_specs: [(name, path)] of --rust-extern (recorded in the manifest); externs: the names only."""
+                 foreign_checks="requires", extern_specs=(), emit=None, libs=(), manifest=None,
+                 trust_report=None, rust_extern_raw=(), rust_search_raw=()):
+    """extern_specs: [(name, path)] of --rust-extern (recorded in the manifest); externs: the names only.
+    trust_report: PATH of --trust-report (G4b-2); rust_extern_raw / rust_search_raw: the raw flag values for it."""
     if budget is None:
         budget = 1 << 30
     assert 1 <= budget <= 2 ** 62
@@ -86,10 +113,17 @@ def compile_file(path, out, verify=True, trust_callers=False, backend="rust", ru
                 print(json.dumps(rec, sort_keys=True, ensure_ascii=False), file=sys.stderr)
         else:
             errs = verify_program(prog)
-        if errs:
-            return errs
     elif infer and show_inferred:
         print(json.dumps({"status": "skipped_no_verify"}, sort_keys=True, ensure_ascii=False), file=sys.stderr)
+        errs = []
+    else:
+        errs = []
+    if trust_report is not None:
+        # G4b-2: after verification (proved or not); a language error raised here is the compile's result
+        _write_trust_report(prog, path, trust_report, verify, trust_callers, budget, infer, foreign_checks,
+                            rust_extern_raw, rust_search_raw, manifest)
+    if errs:
+        return errs
     g7err = g7_target_error(prog) if emit in ("exe", "obj") else None
     if g7err is not None:
         return [g7err]
@@ -180,6 +214,7 @@ def main(argv):
     ap.add_argument("--rust-search", dest="rust_search", action="append", default=[], metavar="PATH")
     ap.add_argument("--lib", dest="libs", action="append", default=[], metavar="DIR")
     ap.add_argument("--manifest", dest="manifest", default=None, metavar="PATH")
+    ap.add_argument("--trust-report", dest="trust_report", default=None, metavar="PATH")
     ap.add_argument("--foreign-checks", dest="foreign_checks", choices=["requires", "all", "off"],
                     default="requires")
     ap.add_argument("--contract-budget", dest="budget", type=int, default=None,
@@ -224,10 +259,16 @@ def main(argv):
             ap.error("--manifest needs an existing file")
     bindings = a.rust_bindings
     if a.backend == "llvm":
-        if bindings is None:
+        if not bindings:  # same default as the write in compile_file (an empty value means the default)
             bindings = default_bindings_path(a.out)
         if os.path.abspath(bindings) == os.path.abspath(a.out):
             ap.error("--rust-bindings path must differ from -o path")
+    if a.trust_report is not None:
+        # G4b-2: the report must not overwrite the input or be overwritten by an output written after it
+        taken = [a.input, a.out, a.out + ".foreign.json"] + ([bindings] if a.backend == "llvm" else []) + \
+            (list(a.also_llvm) if a.also_llvm else [])
+        if any(os.path.realpath(p) == os.path.realpath(a.trust_report) for p in taken):
+            ap.error("--trust-report path must differ from the input and output paths")
     if a.manifest is not None:
         from manifest import load_graph
         try:
@@ -244,7 +285,8 @@ def main(argv):
                           a.budget, tuple(a.also_llvm) if a.also_llvm else None,
                           infer=a.infer, show_inferred=a.show_inferred, externs=tuple(externs),
                           foreign_checks=a.foreign_checks, extern_specs=tuple(extern_specs), emit=a.emit,
-                          libs=tuple(a.libs), manifest=graph)
+                          libs=tuple(a.libs), manifest=graph, trust_report=a.trust_report,
+                          rust_extern_raw=tuple(a.rust_extern), rust_search_raw=tuple(a.rust_search))
     except NativeEmitUnavailable:
         ap.error("unrecognized arguments: --emit " + a.emit)
     except PruvError as e:

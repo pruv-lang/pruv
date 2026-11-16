@@ -35,6 +35,12 @@ class ForeignGen:
         s.items = {}       # helper name -> text (insertion order = first use)
         s.catalog = []     # manifest: executable catalog instances in first-use order
         s.called = set()   # trusted fn names called from an emitted function
+        s.pkg_catalog = {}   # G4b-2: package (None = program) -> set of (op, tuple(type_args)); every use, not only first
+
+    def _note_catalog(s, op, src):
+        """G4b-2: record a catalog use for the package of the function being emitted"""
+        key = getattr(s.g, "function_pkg", None)
+        s.pkg_catalog.setdefault(key, set()).add((op, tuple(format_type(t) for t in src)))
 
     # ------------------------------------------------------------------ results
     def helper_texts(s):
@@ -86,6 +92,7 @@ class ForeignGen:
     def catalog_helper(s, op, low, src):
         if not src and low:
             src = low
+        s._note_catalog(op, src)
         name = "pruv_g6_" + op + "".join("__" + encode(safe_type(t)) for t in src)
         if name not in s.items:
             s.op = op
@@ -506,6 +513,7 @@ class ForeignGen:
 
     # ------------------------------------------------------------------ contract-only scan (requires)
     def map_updated_helper(s, kt, vt, src):
+        s._note_catalog("map_updated", src)
         name = "pruv_g6_map_updated" + "".join("__" + encode(safe_type(t)) for t in src)
         if name in s.items:
             return name

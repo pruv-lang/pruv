@@ -69,6 +69,7 @@ class Module:
         s.parent = parent
         s.pkg = None             # G4b-1: package name of a dependency module, None = the program package
         s.pkginfo = None         # manifest mode: the manifest.Pkg this module belongs to
+        s.abspath = None         # G4b-2: the path the file was opened from (the trust report hashes its raw bytes)
         s.mods = []              # ModDecl list in source order (duplicates included)
         s.children = {}          # name -> Module (loaded children; a duplicate declaration is not loaded again)
         s.items = []             # Function / StructDecl / EnumDecl in source order
@@ -141,6 +142,7 @@ def load_program(path, libs=(), manifest=None):
     prog.explicit = True
     root = Module((), root_file, None)
     root.base, root.relpre = root_dir, ""
+    root.abspath = os.path.abspath(path)
     if graph is not None:
         root.pkginfo = graph.program
     pkg_mods = {}                       # canonical dependency dir -> its root Module (one per package)
@@ -245,6 +247,8 @@ def load_program(path, libs=(), manifest=None):
                 raise
             child = Module(cpath, rel, m)
             child.base, child.relpre = base, relpre
+            # the bundled std belongs to the compiler (its version), not to a package hash (G4B_SPEC 6 rule 11)
+            child.abspath = None if md.name == "std" else os.path.abspath(fpath)
             child.pkg, child.pkginfo = m.pkg, m.pkginfo
             child.mods = list(cprog.mods)
             child.items = list(cprog.items)
@@ -296,6 +300,7 @@ def load_program(path, libs=(), manifest=None):
             raise
         child = Module((), rel, m)
         child.pkg, child.pkginfo = dpkg.name, dpkg
+        child.abspath = os.path.abspath(fpath)
         child.base = os.path.join(dpkg.dir, *sub.split("/")) if sub else dpkg.dir
         child.relpre = "@pkg/%s/%s" % (dpkg.name, sub + "/" if sub else "")
         child.mods = list(cprog.mods)

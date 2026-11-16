@@ -14,7 +14,7 @@ use crate::codegen::{fmt_underscore, ALLOW_G6};
 use crate::emit_common::{rstr, rty_g, show, try_conv_g, try_cty_g};
 use crate::gtype::{encode, format_type, mk_option, GType};
 use crate::modules::safe_type_cow;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 type R<T> = Result<T, String>;
 
@@ -41,6 +41,10 @@ pub struct ForeignGen {
     /// trusted fn names called from an emitted function
     pub called: HashSet<String>,
     op: String,
+    /// G4b-2: package of the function being emitted (None = the program package); set by Gen::func
+    pub cur_pkg: Option<String>,
+    /// G4b-2: package name ("" = program package) -> every (op, type_args) catalog_helper was asked for (not only first use)
+    pkg_catalog: BTreeMap<String, BTreeSet<(String, Vec<String>)>>,
 }
 
 impl ForeignGen {
@@ -54,7 +58,19 @@ impl ForeignGen {
             catalog: Vec::new(),
             called: HashSet::new(),
             op: String::new(),
+            cur_pkg: None,
+            pkg_catalog: BTreeMap::new(),
         }
+    }
+
+    /// G4b-2: per-package catalog entries, keyed by package name ("" = program package), sorted and deduplicated.
+    pub fn pkg_catalog(&self) -> &BTreeMap<String, BTreeSet<(String, Vec<String>)>> {
+        &self.pkg_catalog
+    }
+
+    fn record_pkg_catalog(&mut self, op: &str, targs: Vec<String>) {
+        let key = self.cur_pkg.clone().unwrap_or_default();
+        self.pkg_catalog.entry(key).or_default().insert((op.to_string(), targs));
     }
 
     // ------------------------------------------------------------------ results
@@ -210,6 +226,7 @@ impl ForeignGen {
             name.push_str("__");
             name.push_str(&encode(&safe_type_cow(t))?); // G4: nominal identities use their [0-9A-Za-z_] encoding
         }
+        self.record_pkg_catalog(op, src.iter().map(format_type).collect());
         if !self.has_item(&name) {
             self.op = op.to_string();
             let text = self.catalog_text(op, &name, low)?;
@@ -862,6 +879,8 @@ impl ForeignGen {
             name.push_str("__");
             name.push_str(&encode(&safe_type_cow(t))?); // G4: nominal identities use their [0-9A-Za-z_] encoding
         }
+        // G4b-2: every request counts for the package (the global catalog below only keeps the first use)
+        self.record_pkg_catalog("map_updated", src.iter().map(format_type).collect());
         if self.has_item(&name) {
             return Ok(name);
         }
@@ -908,7 +927,7 @@ impl ForeignGen {
 // ---------------------------------------------------------------------- manifest JSON
 // Python json.dumps(doc, sort_keys=True, indent=2, ensure_ascii=False)
 
-enum J {
+pub enum J {
     Str(String),
     I(i64),
     B(bool),
@@ -917,7 +936,7 @@ enum J {
 }
 
 impl J {
-    fn s(x: &str) -> J {
+    pub fn s(x: &str) -> J {
         J::Str(x.to_string())
     }
 }
@@ -940,7 +959,7 @@ fn json_str(out: &mut String, s: &str) {
     out.push('"');
 }
 
-fn dump_json(j: &J, level: usize, out: &mut String) {
+pub fn dump_json(j: &J, level: usize, out: &mut String) {
     match j {
         J::Str(s) => json_str(out, s),
         J::I(n) => out.push_str(&n.to_string()),

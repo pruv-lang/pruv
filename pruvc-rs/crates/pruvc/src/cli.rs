@@ -51,6 +51,8 @@ pub struct Args {
     pub libs: Vec<String>,
     /// G4b-1: --manifest PATH (the program's own pruv.json; last one wins); never used together with --lib.
     pub manifest: Option<String>,
+    /// G4b-2: --trust-report PATH (written after verification; the raw --rust-extern specs are rebuilt as NAME=PATH from `rust_extern_specs`).
+    pub trust_report: Option<String>,
     /// G6: --foreign-checks requires|all|off (default requires).
     pub foreign_checks: String,
     pub budget: u64,
@@ -72,7 +74,7 @@ pub fn usage_error(msg: &str) -> i32 {
 }
 
 // Option names and the number of values they take. The declaration order is also the order of argparse's abbreviation-ambiguity message.
-static OPTS: [(&str, usize); 16] = [
+static OPTS: [(&str, usize); 17] = [
     ("-o", 1),
     ("--no-verify", 0),
     ("--trust-callers", 0),
@@ -89,6 +91,7 @@ static OPTS: [(&str, usize); 16] = [
     ("--target", 1),
     ("--lib", 1),
     ("--manifest", 1),
+    ("--trust-report", 1),
 ];
 
 #[derive(Default)]
@@ -107,6 +110,8 @@ struct Raw {
     libs: Vec<String>,
     /// G4b-1: --manifest PATH (the last one wins)
     manifest: Option<String>,
+    /// G4b-2: --trust-report PATH (the last one wins)
+    trust_report: Option<String>,
     foreign_checks: Option<&'static str>,
     budget: Option<i128>,
     also_llvm: Option<(String, String)>,
@@ -277,6 +282,7 @@ fn parse_raw(argv: &[String]) -> Result<Raw, String> {
             "--rust-search" => r.rust_search.extend(vals.pop()),
             "--lib" => r.libs.extend(vals.pop()),
             "--manifest" => r.manifest = vals.pop(),
+            "--trust-report" => r.trust_report = vals.pop(),
             "--foreign-checks" => {
                 let v = vals.pop().unwrap_or_default();
                 r.foreign_checks = Some(match v.as_str() {
@@ -357,33 +363,58 @@ fn splitext_root(p: &str) -> String {
     }
 }
 
-fn lexical_normalize(p: &Path) -> PathBuf {
+/// Real path like Python's os.path.realpath: components resolved left to right, a symbolic link followed
+/// before a later `..`, a link to a missing target followed too, missing components kept as written.
+fn real_path(p: &Path) -> PathBuf {
+    use std::collections::VecDeque;
+    let abs = std::path::absolute(p).unwrap_or_else(|_| PathBuf::from(p));
     let mut out = PathBuf::new();
-    for c in p.components() {
+    let mut rest: VecDeque<std::ffi::OsString> = VecDeque::new();
+    for c in abs.components() {
         match c {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if !out.pop() && !out.has_root() {
-                    out.push("..");
+            Component::Prefix(_) | Component::RootDir => out.push(c.as_os_str()),
+            other => rest.push_back(other.as_os_str().to_os_string()),
+        }
+    }
+    let root = out.clone();
+    let mut hops = 0;
+    while let Some(c) = rest.pop_front() {
+        if c.is_empty() || c == "." {
+            continue;
+        }
+        if c == ".." {
+            if out != root {
+                out.pop();
+            }
+            continue;
+        }
+        let cand = out.join(&c);
+        match std::fs::read_link(&cand) {
+            Ok(target) if hops < 40 => {
+                hops += 1;
+                let mut front: Vec<std::ffi::OsString> = Vec::new();
+                for tc in target.components() {
+                    match tc {
+                        Component::Prefix(_) | Component::RootDir => {
+                            out = PathBuf::new();
+                            out.push(tc.as_os_str());
+                        }
+                        other => front.push(other.as_os_str().to_os_string()),
+                    }
+                }
+                for f in front.into_iter().rev() {
+                    rest.push_front(f);
                 }
             }
-            other => out.push(other.as_os_str()),
+            _ => out = cand,
         }
     }
     out
 }
 
-/// Path comparison key: absolute and normalized, the real path with symbolic links resolved if it exists (aliases of an existing file), lowercase on Windows.
+/// Path comparison key: the real path (symbolic links resolved component by component), lowercase on Windows.
 fn path_key(p: &str) -> String {
-    let abs = std::path::absolute(Path::new(p)).unwrap_or_else(|_| PathBuf::from(p));
-    let norm = lexical_normalize(&abs);
-    let resolved = match std::fs::canonicalize(&norm) {
-        Ok(c) => c,
-        Err(_) => match (norm.parent().and_then(|d| std::fs::canonicalize(d).ok()), norm.file_name()) {
-            (Some(d), Some(n)) => d.join(n),
-            _ => norm,
-        },
-    };
+    let resolved = real_path(Path::new(p));
     let s = resolved.to_string_lossy().into_owned();
     if cfg!(windows) {
         s.to_lowercase()
@@ -540,7 +571,10 @@ pub fn parse(argv: &[String]) -> Result<Args, String> {
         }
     };
     let bindings = match kind {
-        Kind::Ll => Some(r.rust_bindings.clone().unwrap_or_else(|| format!("{}.rs", splitext_root(&out)))),
+        // an empty value means the default, as in Python's `rust_bindings or default_bindings_path(out)`
+        Kind::Ll => Some(
+            r.rust_bindings.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| format!("{}.rs", splitext_root(&out))),
+        ),
         Kind::Obj => r.rust_bindings.clone(),
         _ => None,
     };
@@ -558,9 +592,16 @@ pub fn parse(argv: &[String]) -> Result<Args, String> {
         outs.push(("--also-llvm LL", ll.as_str()));
         outs.push(("--also-llvm RS", rs.as_str()));
     }
-    for (label, p) in outs {
+    for (label, p) in &outs {
         if same_path(&input, p) {
             return Err(format!("{label} path must differ from the input path"));
+        }
+    }
+    // G4b-2: the report must not overwrite the input or be overwritten by an output written after it
+    if let Some(t) = &r.trust_report {
+        let manifest = format!("{out}.foreign.json");
+        if same_path(t, &input) || same_path(t, &manifest) || outs.iter().any(|(_, p)| same_path(t, p)) {
+            return Err("--trust-report path must differ from the input and output paths".to_string());
         }
     }
 
@@ -577,6 +618,7 @@ pub fn parse(argv: &[String]) -> Result<Args, String> {
         rust_search: r.rust_search,
         libs: r.libs,
         manifest: r.manifest,
+        trust_report: r.trust_report,
         foreign_checks: foreign_checks.to_string(),
         budget,
         bindings,

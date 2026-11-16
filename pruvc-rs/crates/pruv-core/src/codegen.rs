@@ -1571,6 +1571,19 @@ impl<'a> Gen<'a> {
 
     fn func(&mut self, f: &Function) -> R<()> {
         self.function_name = f.name.clone();
+        // G4b-2: the package of the function being emitted (identity `@NAME::...` = package NAME, else the program package)
+        if let Some(fg) = self.fg.as_mut() {
+            fg.cur_pkg = match &self.prog.explicit {
+                Some(x) => self
+                    .prog
+                    .functions
+                    .iter()
+                    .position(|g| g.name == f.name)
+                    .and_then(|i| x.fns.get(i))
+                    .and_then(|m| m.disp.strip_prefix('@').and_then(|r| r.split_once("::")).map(|(n, _)| n.to_string())),
+                None => None,
+            };
+        }
         if f.foreign.is_some() {
             return Ok(()); // G6: a trusted rust fn has no body; its boundary helper is emitted on first use
         }
@@ -4141,6 +4154,53 @@ pub fn gen_rust_concrete_ex(
     foreign_checks: &str,
     externs: &[(String, String)],
 ) -> Result<(String, Option<String>), GenError> {
+    gen_rust_concrete_core(prog, verified, trust_callers, budget, foreign_checks, externs).map(|(s, m, _)| (s, m))
+}
+
+/// G4b-2: one `trusted rust fn` of the concrete program, as the trust report lists it.
+#[derive(Debug, Clone)]
+pub struct TrustedFnInfo {
+    /// the identity (`crate::m::f`, `@pkg::f`); the plain name in a legacy program
+    pub item: String,
+    /// package name of a dependency item; None = the program package
+    pub pkg: Option<String>,
+    /// display file of the declaration; None = legacy program (the caller supplies the input basename)
+    pub file: Option<String>,
+    /// plain line (no file tag)
+    pub line: i64,
+    /// the function is in the generator's `called` set
+    pub reachable: bool,
+}
+
+/// G4b-2: the trust data the Rust-source generator collects (what the foreign manifest is built from, plus per package).
+#[derive(Debug, Clone, Default)]
+pub struct TrustData {
+    pub trusted: Vec<TrustedFnInfo>,
+    /// package name ("" = program package) -> sorted, deduplicated (op, type_args)
+    pub catalog: std::collections::BTreeMap<String, std::collections::BTreeSet<(String, Vec<String>)>>,
+}
+
+/// G4b-2: runs the Rust-source generator in memory for a CONCRETE program and keeps only its trust data.
+pub fn gen_rust_trust_data(
+    prog: &Program,
+    verified: bool,
+    trust_callers: bool,
+    budget: u64,
+    foreign_checks: &str,
+    externs: &[(String, String)],
+) -> Result<TrustData, GenError> {
+    gen_rust_concrete_core(prog, verified, trust_callers, budget, foreign_checks, externs)
+        .map(|(_, _, t)| t)
+}
+
+fn gen_rust_concrete_core(
+    prog: &Program,
+    verified: bool,
+    trust_callers: bool,
+    budget: u64,
+    foreign_checks: &str,
+    externs: &[(String, String)],
+) -> Result<(String, Option<String>, TrustData), GenError> {
     if !matches!(foreign_checks, "requires" | "all" | "off") {
         return Err(GenError::Msg("foreign_checks must be requires, all or off".to_string()));
     }
@@ -4204,18 +4264,42 @@ pub fn gen_rust_concrete_ex(
         drop(g.out.splice(mark..mark, vec![CONTRACT_LOAD_HELPER.to_string()]));
     }
     let mut manifest: Option<String> = None;
+    let mut trust = TrustData::default();
     if g.g6 {
         // helpers are discovered while the functions are generated; they go in front of them, in first-use order
         let (texts, m) = match g.fg.as_ref() {
             Some(fg) => (fg.helper_texts(), fg.manifest(prog, externs)),
             None => (Vec::new(), String::new()),
         };
+        if let Some(fg) = g.fg.as_ref() {
+            for (fi, f) in prog.functions.iter().enumerate() {
+                if f.foreign.is_none() {
+                    continue;
+                }
+                let (item, pkg): (String, Option<String>) = match &prog.explicit {
+                    Some(x) => {
+                        let d = x.fns[fi].disp.clone();
+                        let p = d.strip_prefix('@').and_then(|r| r.split_once("::")).map(|(n, _)| n.to_string());
+                        (d, p)
+                    }
+                    None => (f.name.clone(), None),
+                };
+                trust.trusted.push(TrustedFnInfo {
+                    item,
+                    pkg,
+                    file: crate::diagnostic::file_of_tag(crate::diagnostic::line_tag(f.line)),
+                    line: crate::diagnostic::plain_line(f.line),
+                    reachable: fg.called.contains(&f.name),
+                });
+            }
+            trust.catalog = fg.pkg_catalog().clone();
+        }
         drop(g.out.splice(mark..mark, texts));
         manifest = Some(m);
     }
     let mut s = g.out.join("\n");
     s.push('\n');
-    Ok((s, manifest))
+    Ok((s, manifest, trust))
 }
 
 /// `e` denotes a fresh constructor value, or a field / variant_field part of one (Python `Gen.g9_owned`)

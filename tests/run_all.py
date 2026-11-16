@@ -493,9 +493,17 @@ def g4b_frontend_jobs():
                            (["--rs", _driver().path] if _driver().kind == "rs" else []),
                            capture_output=True, text=True, timeout=1200)
         return c.returncode == 0, c.stdout + c.stderr
+    def trust_checks():
+        c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/g4b/check_trust.py"), WORK] +
+                           (["--rs", _driver().path] if _driver().kind == "rs" else []),
+                           capture_output=True, text=True, timeout=1200)
+        return c.returncode == 0, c.stdout + c.stderr
     return [safe("g4b_frontend/pkg", pkg_checks,
                  {"sample": "tests/g4b/check_pkg.py", "backend": None, "flags": [],
-                  "mode": "pkg", "group": "g4b_frontend"})]
+                  "mode": "pkg", "group": "g4b_frontend"}),
+            safe("g4b_frontend/trust", trust_checks,
+                 {"sample": "tests/g4b/check_trust.py", "backend": None, "flags": [],
+                  "mode": "trust", "group": "g4b_frontend"})]
 
 
 def g4_proof_jobs():

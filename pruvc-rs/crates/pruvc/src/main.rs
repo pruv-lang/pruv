@@ -2,6 +2,7 @@
 
 mod cli;
 mod driver;
+mod trust_report;
 
 use std::io::Write;
 

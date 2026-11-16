@@ -1440,6 +1440,7 @@ class Gen:
         s.storage = storage
         s.stack = stack     # P3-S1 stack plan (None: every array on the heap)
         s.function_name = ""
+        s.function_pkg = None
         s.budget = budget
         s.prog = prog
         s.verified = verified
@@ -1640,6 +1641,7 @@ class Gen:
 
     def fn(s, f):
         s.function_name = f.name
+        s.function_pkg = getattr(f, "pkg", None)   # G4b-2: package of the function being emitted (trust report)
         if f.foreign is not None:
             return   # G6: a trusted rust fn has no body; its boundary helper is emitted on first use
         s.params = {p.name for p in f.params}
@@ -3032,9 +3034,10 @@ def gen_rust(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
 
 
 def gen_rust_ex(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None, foreign_checks="requires",
-                externs=()):
+                externs=(), trust_out=None):
     """(rust text, manifest text or None). The manifest (G6_SPEC 12.4) exists only for programs that use G6;
-    externs: [(name, path)] as given with --rust-extern."""
+    externs: [(name, path)] as given with --rust-extern.
+    trust_out: G4b-2, a dict filled with the trust data (the concrete program and the ForeignGen or None)."""
     from typeinfo import g2_unimplemented_error, first_g3_use
     if foreign_checks not in ("requires", "all", "off"):
         raise ValueError("foreign_checks must be requires, all or off")
@@ -3071,6 +3074,9 @@ def gen_rust_ex(prog, verified=True, trust_callers=False, budget=1 << 30, plan=N
         # helpers are discovered while the functions are generated; they go in front of them, in first-use order
         g.out[mark:mark] = g.fg.helper_texts()
         manifest = g.fg.manifest(externs)
+    if trust_out is not None:
+        trust_out["program"] = prog
+        trust_out["fg"] = g.fg if g.g6 else None
     return "\n".join(g.out) + "\n", manifest
 
 ASYNC_PRELUDE = r"""#[derive(Clone, Default)]

@@ -273,6 +273,34 @@ when there is no manifest).
    of the program.
 6. `proof_cache` counts are 0 when the cache is off.
 
+Implementation decisions fixed in G4b-2:
+
+7. When: after verification finishes (proved or not) and before the compile returns its proof diagnostics or emits.
+   A compile that stops earlier (usage, manifest, parse, check errors) writes no report. If the report's in-memory
+   collection (rule 8) raises a language error, that error is the compile's result and no report is written; the same
+   error would stop Rust-source output.
+8. Collection: the report runs the Rust-source generator in memory once (mono, then `gen_rust` with `verified` equal to
+   the `verify` flag), whatever the backend and whatever the proof outcome, and keeps only its trust data. The
+   generator records, next to its global first-use catalog, a per-package set of `{op, type_args}`: every
+   `catalog_helper` call adds the entry to the package of the function being emitted (no dedup across packages). A
+   function's package is its declaration's package, so a mono instance of a dependency generic belongs to the
+   dependency. `reachable` is the existing `called` set.
+9. Package of a trusted function or emitted function: identity `@NAME::...` belongs to package `NAME`, anything else to
+   the program package. `item` is the identity (`crate::m::f`, `@jstr::utf8_to_string`; the plain name in a legacy
+   single-file program). `file` is the file's display path, `line` the plain line.
+10. Packages: every package in the graph. The program package has `display` `""`; a dependency has `@pkg/NAME`.
+    Without `--manifest`: one package `{"name": "", "version": "", "display": ""}`.
+11. Hash input: the files of a package in module load order (root-first depth-first, a diamond package once), each
+    read again as raw bytes from the path the loader opened. A legacy single-file program hashes its one input file
+    under its basename. The bundled `@std/std.pruv` is not hashed: it belongs to the compiler, named by
+    `compiler.version`. A report path equal to the input or to an output path (`-o`, `--rust-bindings`, `--also-llvm`,
+    `OUT.foreign.json`) is a usage error (exit 2).
+12. `compiler.version` is the `pruvc` crate version (`CARGO_PKG_VERSION`, currently `0.0.1`); Python has the same
+    constant. `compiler.solver` is the full Z3 version string. `flags.rust_extern` / `rust_search` are the raw flag
+    values (`NAME=PATH`, `DIR`) in command-line order.
+13. Format: keys sorted, two-space indent, non-ASCII kept, `\n` at the end (the foreign manifest's printer).
+    `catalog` is sorted by `(op, type_args)` and deduplicated within a package.
+
 ## 7. Proof cache
 
 `--proof-cache DIR` enables a local, content-addressed cache of solver answers. Off by default, so the G8 policy
@@ -350,8 +378,9 @@ Done when:
   test file.
 - Every trust construct in section 6 rule 3 has at least one case; the completeness fixture fails if a construct is
   removed from the report code.
-- The L3 `mcp` piece's report has `@jstr::utf8_to_string` as its only `trusted` entry and lists the `Process`, `Loop`
-  and collection operations it uses under `catalog`, matching its foreign manifest.
+- The L3 `mcp` piece's report has `@jstr::utf8_to_string` as the only `trusted` entry of its dependencies (the
+  program package has its own `crate::command_missing`), and the union of its packages' `catalog` entries equals the
+  `Process`, `Loop` and collection operations of its foreign manifest.
 
 Tests (`tests/g4b/check_trust.py`, row `g4b_frontend/trust`): one case per trust kind; each flag in `flags`; report
 written for a failing proof; no-manifest program; package sorting and `sha256` (changing one byte of one dependency
