@@ -1,0 +1,11 @@
+--- a/pruvc-rs/crates/pruv-core/src/manifest.rs
++++ b/pruvc-rs/crates/pruv-core/src/manifest.rs
+@@ -723,7 +723,7 @@
+         let found = parse_version(&p.version).unwrap_or_default();
+         let bad_first = p.reqs.iter().find(|r| {
+             let want = pad(&r.2);
+-            !(line(&found) == line(&want) && found >= want)
++            !(found >= want)
+         });
+         if let Some(b) = bad_first {
+             let listed: Vec<String> = p.reqs.iter().map(|r| format!("{} requires {}", g.pkgs[r.0].name, r.2)).collect();

@@ -1,0 +1,11 @@
+--- a/pruvc/manifest.py
++++ b/pruvc/manifest.py
+@@ -200,7 +200,7 @@
+     for p in g.pkgs:
+         found = _parts(p.version)
+         bad = [r for r in p.reqs
+-               if not (_line(found) == _line(_pad(r[2])) and found >= _pad(r[2]))]
++               if not (found >= _pad(r[2]))]
+         if bad:
+             raise PruvError("pkg", 1, 1, "version_unsatisfied",
+                             "package %s version %s does not satisfy: %s"

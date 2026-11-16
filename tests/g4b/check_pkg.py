@@ -1,6 +1,8 @@
 """G4b-1 (docs/G4B_SPEC.md sections 3, 4, 5): manifests, package namespaces, identity, versions, on the selected compiler.
 
-usage: check_pkg.py WORK [--rs PATH]     (PATH: the Rust driver; default: the Python compiler)
+usage: check_pkg.py WORK [--rs PATH] [--py PATH]
+  --rs PATH: the Rust driver (default: the Python compiler)
+  --py PATH: the pruvc.py to run when --rs is absent (default: pruvc/pruvc.py of this repository)
 Prints one line per failing case; exit 0 only if every case passes."""
 from pathlib import Path
 import json
@@ -50,10 +52,11 @@ def code_of(d):
 
 
 class Runner:
-    def __init__(self, work, binary):
+    def __init__(self, work, binary, py=None):
         self.work = Path(work) / "g4b_pkg"
         self.work.mkdir(parents=True)
-        self.cmd = [binary] if binary else [sys.executable, str(ROOT / "pruvc" / "pruvc.py")]
+        pyc = str(Path(py).resolve()) if py else str(ROOT / "pruvc" / "pruvc.py")
+        self.cmd = [binary] if binary else [sys.executable, pyc]
         self.n = 0
 
     def project(self, files):
@@ -85,8 +88,8 @@ class Runner:
         return c.returncode, diags, c.stdout + c.stderr, out
 
 
-def main(work, binary=None):
-    r = Runner(work, binary)
+def main(work, binary=None, py=None):
+    r = Runner(work, binary, py)
     fails = []
 
     def check(name, ok, detail=""):
@@ -293,6 +296,16 @@ def main(work, binary=None):
                    "dependency json is declared but not mounted by `mod json;` in the package root", file="pruv.json")
           and no_path(p, txt), "exit %d %s" % (rc, txt))
 
+    # legacy root (no `mod`, no `pub`) that declares a dependency: it mounts nothing, so the dependency is unused
+    f = {"app/pruv.json": man("app", deps={"json": dep("../json")}), "app/app.pruv": "fn f(x: i64) -> i64 { return x; }\n"}
+    f.update(pkg_files("json", "json", INC))
+    p = r.project(f)
+    rc, ds, txt, _ = app(p)
+    check("unused dependency: legacy root",
+          pkg_diag(rc, ds, "unused_dependency",
+                   "dependency json is declared but not mounted by `mod json;` in the package root", file="pruv.json")
+          and no_path(p, txt), "exit %d %s" % (rc, txt))
+
     f = {"app/pruv.json": man("app", deps={"lines": dep("../lines")}), "app/app.pruv": "mod lines;\n" + APP_PLAIN}
     f.update(pkg_files("lines", "lines", INC, deps={"json": dep("../json")}))
     f.update(pkg_files("json", "json", INC))
@@ -411,4 +424,17 @@ def main(work, binary=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1], sys.argv[3] if len(sys.argv) == 4 and sys.argv[2] == "--rs" else None))
+    args = sys.argv[1:]
+    opts = {}
+    for flag in ("--rs", "--py"):
+        if flag in args:
+            i = args.index(flag)
+            if i + 1 >= len(args):
+                print(__doc__)
+                sys.exit(2)
+            opts[flag] = args[i + 1]
+            del args[i:i + 2]
+    if len(args) != 1:
+        print(__doc__)
+        sys.exit(2)
+    sys.exit(main(args[0], opts.get("--rs"), opts.get("--py")))

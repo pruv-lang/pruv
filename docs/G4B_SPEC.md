@@ -351,6 +351,14 @@ Implementation decisions fixed in G4b-2:
    cache-off by more than 10 percent on an L3 piece, the batch records it in RESULTS.md and the decision on option 7 is
    revisited before G4b-Q.
 
+   Revisited in G4b-Q (RESULTS.md section 133): option 7 and the per-assertion key stay as they are. Over two
+   measurement runs the cold compile is 13 to 33 percent slower than cache off (rs) and 10 to 34 percent (py); the warm
+   compile is 29 to 56 percent faster (rs) and 2 to 23 percent (py). The cold cost is paid only by compiles that turn
+   the cache on, which is off by default, and it is repaid by the first warm compile on every rs piece and by the
+   first to eighth warm compile on the py pieces (py supervisor is the slowest because most of its time is outside
+   the solver). A cheaper key (for example reusing assertion digests between attempts of one obligation) is deferred
+   (section 9); it would change only the cost, not the key's meaning.
+
 Implementation decisions fixed in G4b-3:
 
 9. Compiler id: `<impl> <version>` with one space, `py 0.0.1` / `rs 0.0.1` (the `compiler` object of section 6).
@@ -481,6 +489,11 @@ compilers; mutants of the resolver (drop the cycle check, the identity check, th
 must each be caught by a test; mutants of the cache (store `sat`, drop the solver options from the key) must be caught;
 measure cold vs warm compile time and hit rate for every L3 piece and record it in RESULTS.md.
 
+Done in G4b-Q (RESULTS.md section 133): `bench/g4b/fuzz_pkg.py` (random package graphs, py/rs agreement plus an
+expected-diagnostic oracle), `bench/g4b/faults/check.py` (seven faults per compiler, every one caught by
+`tests/g4b/check_pkg.py` or `tests/g4b/check_cache.py`) and `bench/g4b/measure_cache.py` (off, cold, warm and a
+second cold run per L3 piece and compiler).
+
 ## 9. Deferred
 
 - Git, archive and registry sources, the lock file that pins them (option 5), and MVS selection over several
@@ -491,6 +504,12 @@ measure cold vs warm compile time and hit rate for every L3 piece and record it 
 - Proof hints (option 8), pre-verified bundles (option 6), curated library sets (option 10).
 - Re-exports, `use`, opaque types (unchanged from G4 section 15).
 - Retiring `--lib`.
+- A cheaper proof-cache key (section 7 rule 8).
 
 Open evidence: whether query bytes are deterministic across runs in each compiler (decides the cache hit rate), and
 the real saving on the L3 pieces. Neither is measured by this design.
+
+Answered in G4b-Q (RESULTS.md section 133). Raw query bytes are not deterministic (section 7 rule 7 lists why), but
+the canonical key text is: two cold compiles into two fresh directories wrote the same key set on all four L3 pieces
+and both compilers, and the warm compile hit every stored answer (hit rate above 99.9 percent; the remaining misses
+are the `sat` and unknown attempts, which are never stored). The real saving is in rule 8 above.

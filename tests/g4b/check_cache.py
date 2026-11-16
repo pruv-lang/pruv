@@ -1,6 +1,10 @@
 """G4b-3 (docs/G4B_SPEC.md section 7): `--proof-cache DIR` on the Python compiler and, with --rs, on the Rust driver.
 
-usage: check_cache.py WORK [--rs PATH]     (PATH: the Rust driver; the Python compiler always runs)
+usage: check_cache.py WORK [--rs PATH] [--py PATH] [--only py|rs] [--case NAME]...
+  --rs PATH: the Rust driver (adds the rs compiler); --py PATH: the pruvc.py to test (default pruvc/pruvc.py; its
+  directory also serves the Python trace tool); --only: run one compiler; --case: run only the named cases
+  (case_cold_warm, case_contract_change, case_never_stored, case_corrupt, case_readonly, case_concurrent, case_keys,
+  case_off, case_noverify), repeatable. The Python compiler always runs unless --only rs.
 Every case runs on each selected compiler (own cache directories per compiler). Compiles use `pruvc --proof-cache`;
 traces use `tests/diff_py_adapter.py trace ... --proof-cache DIR` (py) and `pruv-trace-dump [--infer]
 [--proof-cache DIR] FILE` next to the Rust driver (rs). Prints one line per failing check and `cache: N/N passed`;
@@ -131,6 +135,28 @@ def proved_texts(tr):
     return set(a["smt2"] for a in attempts(tr) if a.get("status") == "proved")
 
 
+WRAPPER = '''import importlib.abc
+import importlib.machinery
+import runpy
+import sys
+
+FAULT_DIR, ADAPTER = sys.argv[1], sys.argv[2]
+
+
+class First(importlib.abc.MetaPathFinder):
+    def find_spec(self, name, path=None, target=None):
+        if path is None:
+            return importlib.machinery.PathFinder.find_spec(name, [FAULT_DIR])
+        return None
+
+
+sys.meta_path.insert(0, First())
+sys.path.insert(0, FAULT_DIR)
+sys.argv = [ADAPTER] + sys.argv[3:]
+runpy.run_path(ADAPTER, run_name="__main__")
+'''
+
+
 class R:
     """result of one compile"""
 
@@ -147,11 +173,22 @@ class R:
 
 
 class Harness:
-    def __init__(self, work, binary):
+    def __init__(self, work, binary, py=None, only=None):
         self.work = Path(work) / "g4b_cache"
         self.work.mkdir(parents=True)
-        self.comps = [("py", [sys.executable, str(ROOT / "pruvc" / "pruvc.py")],
-                       [sys.executable, str(ROOT / "tests" / "diff_py_adapter.py"), "trace"])]
+        self.comps = []
+        if only != "rs":
+            if py:
+                pyc = Path(py).resolve()
+                # the adapter imports pruvc from a fixed path: run it through a wrapper that serves every top-level
+                # module found next to PY first (a meta path finder placed before the normal path finder)
+                wrapper = self.work / "py_trace_wrapper.py"
+                wrapper.write_text(WRAPPER)
+                trace = [sys.executable, str(wrapper), str(pyc.parent), str(ROOT / "tests" / "diff_py_adapter.py"), "trace"]
+                self.comps.append(("py", [sys.executable, str(pyc)], trace))
+            else:
+                self.comps.append(("py", [sys.executable, str(ROOT / "pruvc" / "pruvc.py")],
+                                   [sys.executable, str(ROOT / "tests" / "diff_py_adapter.py"), "trace"]))
         if binary:
             dump = str(Path(binary).parent / "pruv-trace-dump")
             self.comps.append(("rs", [binary], [dump]))
@@ -542,10 +579,23 @@ def case_noverify(h):
         check(tag + ": a missing DIR is not created", not absent.exists(), "")
 
 
-def main(work, binary=None):
-    h = Harness(work, binary)
-    for fn in (case_cold_warm, case_contract_change, case_never_stored, case_corrupt, case_readonly,
-               case_concurrent, case_keys, case_off, case_noverify):
+CASES = (case_cold_warm, case_contract_change, case_never_stored, case_corrupt, case_readonly,
+         case_concurrent, case_keys, case_off, case_noverify)
+
+
+def main(work, binary=None, py=None, only=None, cases=()):
+    names = [f.__name__ for f in CASES]
+    for c in cases:
+        if c not in names:
+            print("unknown case %s (known: %s)" % (c, ", ".join(names)))
+            return 2
+    if only == "rs" and not binary:
+        print("--only rs needs --rs PATH")
+        return 2
+    h = Harness(work, binary, py, only)
+    for fn in CASES:
+        if cases and fn.__name__ not in cases:
+            continue
         try:
             fn(h)
         except Exception as e:  # a broken case is a failure, not a crash of the whole run
@@ -561,12 +611,20 @@ def main(work, binary=None):
 
 if __name__ == "__main__":
     args = sys.argv[1:]
-    rs = None
-    if "--rs" in args:
-        i = args.index("--rs")
-        rs = args[i + 1]
-        del args[i:i + 2]
-    if len(args) != 1:
+    opts = {}
+    cases = []
+    for flag in ("--rs", "--py", "--only", "--case"):
+        while flag in args:
+            i = args.index(flag)
+            if i + 1 >= len(args):
+                print(__doc__)
+                sys.exit(2)
+            if flag == "--case":
+                cases.append(args[i + 1])
+            else:
+                opts[flag] = args[i + 1]
+            del args[i:i + 2]
+    if len(args) != 1 or opts.get("--only") not in (None, "py", "rs"):
         print(__doc__)
         sys.exit(2)
-    sys.exit(main(args[0], rs))
+    sys.exit(main(args[0], opts.get("--rs"), opts.get("--py"), opts.get("--only"), tuple(cases)))

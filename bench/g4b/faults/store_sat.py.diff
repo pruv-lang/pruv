@@ -1,0 +1,11 @@
+--- a/pruvc/verify.py
++++ b/pruvc/verify.py
+@@ -1194,7 +1194,7 @@
+                 reason = sol.reason_unknown() if r == z3.unknown else None
+                 s.rec.attempt(idx, with_lemmas, text, str(r), query_status(r, reason), cfg.timeout_ms,
+                               cfg.rlimit, cfg.seed, reason)
+-            if cache is not None and r == z3.unsat:
++            if cache is not None and r in (z3.unsat, z3.sat):
+                 cache.store(key_text)
+             return sol, r
+ 

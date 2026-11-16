@@ -1,0 +1,20 @@
+--- a/pruvc/modules.py
++++ b/pruvc/modules.py
+@@ -131,7 +131,7 @@
+             e.file = root_file
+         raise
+     if not (prog.mods or prog.has_pub):
+-        if graph is not None and graph.program.deps:
++        if False:
+             raise PruvError("pkg", 1, 1, "unused_dependency",
+                             "dependency %s is declared but not mounted by `mod %s;` in the package root"
+                             % (graph.program.deps[0][0], graph.program.deps[0][0]),
+@@ -259,7 +259,7 @@
+         if graph is not None and not m.path:
+             # every dependency key must be mounted by a `mod` of the package root
+             for key, _, _ in m.pkginfo.deps:
+-                if key not in seen:
++                if False:
+                     raise PruvError("pkg", 1, 1, "unused_dependency",
+                                     "dependency %s is declared but not mounted by `mod %s;` in the package root"
+                                     % (key, key),

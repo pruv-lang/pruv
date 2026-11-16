@@ -2132,3 +2132,27 @@ python3 bench/l3/mcp/q_mutants.py
 - **Checks before commit:** Python full run `--backend both --compare-rows` 4191/4191 (missing 0, extra 0, failed 0), `check_cache.py` 291/291 and `check_trust.py` 419/419 on both compilers, `cargo test --release`, `diff_rust.py --fuzz-count 20` (all same). The Python L3 times above were measured before the term-order fix.
 
 **G4b-3 complete.**
+
+## 133. G4b-Q: package fuzzing, resolver and cache mutants, cache measurement (2026-11-16)
+
+- **Package fuzzing:** `bench/g4b/fuzz_pkg.py` generates package graphs (2 to 7 packages; DAGs, diamonds, aliased keys, chains) with verified functions calling across packages, and plants one fault in about 60 percent of cases: a cycle, an identity conflict (two directories with one package name), an unsatisfied version line, or an unused dependency. Oracle: both compilers give the same exit code, normalized stdout and generated Rust, and the result is the planted diagnostic or a clean compile. Seed 1 (200 cases) and seeds 2 to 5 (500 each): 2200 cases, 0 disagreements, 0 oracle failures (clean 879, cycle 284, identity 261, unused 396, version 380).
+- **Mutants:** `bench/g4b/faults/check.py` applies each fault alone to a disposable copy of `pruvc/` or `pruvc-rs/` (the Rust copy also carries `stdlib/std.pruv` and `pruvc/runtime.c`, which the build reads), builds it, and runs the probe tests. Faults: drop the cycle check, the identity check, the version-line comparison (keep only `>=`), the unused check in a package root and in a legacy root (no `mod`), store `sat` answers, and drop the `set-option` head from the key. All 14 (7 per compiler) pass on the clean copy and fail on the faulty one; the diffs are in `bench/g4b/faults/*.diff`. `tests/g4b/check_pkg.py` gained `--py` and a legacy-root unused check (the only probe for that fault); `tests/g4b/check_cache.py` gained `--py`, `--only` and `--case`.
+- **Cache measurement:** `bench/g4b/measure_cache.py`, per L3 piece and compiler in sequence: cache off, cold into a fresh DIR_A, warm from DIR_A, cold into a fresh DIR_B. Second run (the first gave the same counts and times within a few percent):
+
+| piece | compiler | off | cold | warm | cold overhead | warm saving | cold hits / misses / stores | warm hits / misses |
+|---|---|---|---|---|---|---|---|---|
+| json | rs | 7.78s | 9.37s | 5.06s | 20% | 35% | 57 / 16657 / 16654 | 16711 / 3 |
+| mcp | rs | 13.60s | 18.08s | 7.82s | 33% | 42% | 215 / 25620 / 25617 | 25832 / 3 |
+| qwen | rs | 18.61s | 23.05s | 8.93s | 24% | 52% | 364 / 26325 / 26316 | 26680 / 9 |
+| supervisor | rs | 15.32s | 17.36s | 10.55s | 13% | 31% | 16 / 20610 / 20610 | 20626 / 0 |
+| json | py | 14.27s | 19.18s | 12.73s | 34% | 11% | 57 / 16657 / 16654 | 16711 / 3 |
+| mcp | py | 29.27s | 36.33s | 24.05s | 24% | 18% | 215 / 25620 / 25617 | 25832 / 3 |
+| qwen | py | 33.27s | 40.85s | 25.94s | 23% | 22% | 364 / 26325 / 26316 | 26680 / 9 |
+| supervisor | py | 39.83s | 46.05s | 38.99s | 16% | 2% | 16 / 20610 / 20610 | 20626 / 0 |
+
+  On all eight pairs, generated code, stdout and stderr are byte-identical across the four runs. The warm run stores nothing, and its hits equal the cold hits plus the cold stores. A cold run already hits on queries repeated within the compile. The warm misses are the `sat` and unknown attempts. DIR_A and DIR_B hold the same key set, and the py and rs key sets are disjoint.
+- **Open evidence (G4B_SPEC section 9):** the canonical key text is deterministic across runs on both compilers, so the warm hit rate is above 99.9 percent. The real saving is 29 to 56 percent of the compile time with the Rust compiler and 2 to 23 percent with the Python one. Most of the Python compile time is outside the solver.
+- **Option 7 revisited (section 7 rule 8):** kept, with the per-assertion key unchanged. The 10 to 34 percent cold overhead falls only on compiles that turn the cache on. The first warm compile repays it on every rs piece, and the py pieces need one to eight warm compiles. A cheaper key is deferred.
+- **Checks before commit:** `run_all.py --backend both --only g4b_frontend` and `--only g4b_proof`. The compilers did not change; only the test scripts and the new bench tools did, and the run_all rows are unchanged.
+
+**G4b complete.**

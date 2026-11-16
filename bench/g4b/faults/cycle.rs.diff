@@ -1,0 +1,11 @@
+--- a/pruvc-rs/crates/pruv-core/src/manifest.rs
++++ b/pruvc-rs/crates/pruv-core/src/manifest.rs
+@@ -657,7 +657,7 @@
+     let deps = g.pkgs[pkg].deps.clone();
+     for (key, ddir, req) in deps {
+         for (i, &s) in stack.iter().enumerate() {
+-            if g.pkgs[s].dir == ddir {
++            if false {
+                 let mut names: Vec<&str> = stack[i..].iter().map(|x| g.pkgs[*x].name.as_str()).collect();
+                 names.push(g.pkgs[s].name.as_str());
+                 return Err(PkgError::new(

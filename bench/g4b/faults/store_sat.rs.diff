@@ -1,0 +1,11 @@
+--- a/pruvc-rs/crates/pruv-proof/src/obligation.rs
++++ b/pruvc-rs/crates/pruv-proof/src/obligation.rs
+@@ -467,7 +467,7 @@
+         let result = sol.check();
+         let reason = if result == Sat::Unknown { Some(sol.reason_unknown()) } else { None };
+         let status = query_status(result, reason.as_deref()).to_string();
+-        if result == Sat::Unsat {
++        if [Sat::Unsat, Sat::Sat].contains(&result) {
+             if let Some(c) = &cache {
+                 c.store(&key_text);
+             }

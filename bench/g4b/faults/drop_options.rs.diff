@@ -1,0 +1,11 @@
+--- a/pruvc-rs/crates/pruv-proof/src/obligation.rs
++++ b/pruvc-rs/crates/pruv-proof/src/obligation.rs
+@@ -398,7 +398,7 @@
+     /// (first appearance over the whole query). Each distinct assertion (by AST id; the context is non-rc, so ids are
+     /// never reused) is rendered once per function verifier.
+     fn key_text(kmemo: &mut std::collections::HashMap<u32, (String, Vec<String>)>, head: &str, sol: &Solver) -> String {
+-        let mut out = head.to_string();
++        let mut out = String::new();
+         let mut num: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+         for e in sol.assertions() {
+             let (digest, names) = kmemo.entry(e.id()).or_insert_with(|| crate::proof_cache::piece(&e.benchmark()));

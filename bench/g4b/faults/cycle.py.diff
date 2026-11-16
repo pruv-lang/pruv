@@ -1,0 +1,11 @@
+--- a/pruvc/manifest.py
++++ b/pruvc/manifest.py
+@@ -169,7 +169,7 @@
+     def visit(pkg):
+         for key, ddir, req in pkg.deps:
+             for i, s in enumerate(stack):
+-                if s.dir == ddir:
++                if False:
+                     names = [x.name for x in stack[i:]] + [s.name]
+                     raise PruvError("pkg", 1, 1, "dependency_cycle", "dependency cycle: " + " -> ".join(names),
+                                     "remove one of the dependencies on the cycle", file=pkg.display)

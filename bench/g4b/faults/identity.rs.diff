@@ -1,0 +1,11 @@
+--- a/pruvc-rs/crates/pruv-core/src/manifest.rs
++++ b/pruvc-rs/crates/pruv-core/src/manifest.rs
+@@ -672,7 +672,7 @@
+             None => {
+                 let d = read(&ddir, &ddir.join("pruv.json"), &format!("@pkg/{}/pruv.json", key))?;
+                 for o in &g.pkgs {
+-                    if o.name == d.name {
++                    if false {
+                         let a = match &o.first {
+                             None => format!("the program package {} (version {})", o.name, o.version),
+                             Some((who, k)) => {

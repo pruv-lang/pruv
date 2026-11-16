@@ -1,0 +1,11 @@
+--- a/pruvc-rs/crates/pruv-core/src/modules.rs
++++ b/pruvc-rs/crates/pruv-core/src/modules.rs
+@@ -570,7 +570,7 @@
+     };
+     if first.mods.is_empty() && !first.has_pub {
+         if let Some(g) = graph {
+-            if let Some((key, _, _)) = g.program().deps.first() {
++            if let Some((key, _, _)) = g.program().deps.get(usize::MAX) {
+                 // a legacy root mounts nothing: the first declared dependency is unused
+                 return Err(LoadError::Lang(
+                     crate::manifest::PkgError {

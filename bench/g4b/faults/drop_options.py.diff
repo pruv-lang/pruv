@@ -1,0 +1,11 @@
+--- a/pruvc/proof_cache.py
++++ b/pruvc/proof_cache.py
+@@ -86,7 +86,7 @@
+     global _scratch
+     if _scratch is None:
+         _scratch = z3.Context()
+-    out = [head]
++    out = []
+     num = {}
+     for p in assertions:
+         hit = memo.get(id(p))

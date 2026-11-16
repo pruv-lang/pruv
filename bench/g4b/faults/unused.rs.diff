@@ -1,0 +1,20 @@
+--- a/pruvc-rs/crates/pruv-core/src/modules.rs
++++ b/pruvc-rs/crates/pruv-core/src/modules.rs
+@@ -500,7 +500,7 @@
+             // every dependency key must be mounted by a `mod` of the package root
+             let pkg = &graph.pkgs[self.modules[mi].pkginfo.unwrap_or(0)];
+             for (key, _, _) in &pkg.deps {
+-                if !seen.contains(key) {
++                if false {
+                     return Err(self.pkg_err(
+                         &pkg.display,
+                         "unused_dependency",
+@@ -570,7 +570,7 @@
+     };
+     if first.mods.is_empty() && !first.has_pub {
+         if let Some(g) = graph {
+-            if let Some((key, _, _)) = g.program().deps.first() {
++            if let Some((key, _, _)) = g.program().deps.get(usize::MAX) {
+                 // a legacy root mounts nothing: the first declared dependency is unused
+                 return Err(LoadError::Lang(
+                     crate::manifest::PkgError {
