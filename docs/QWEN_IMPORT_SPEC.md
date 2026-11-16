@@ -1,6 +1,6 @@
 # Qwen conversation import
 
-Status: implementation landed; Q pending
+Status: done
 
 ## Goal
 
@@ -108,7 +108,56 @@ Pinned reference: Lair fa192269, src/backend/engine-import/qwen.ts, tail.ts, ope
 
 Current implementation tests use explicit expected JSON for normal conversations, thought/tool behavior, provenance, custom title, branch cut, duplicate UUIDs, cycles, missing UUID fallback, oversized dropped markers, invalid timestamps, turn/window trimming, clipping and malformed/final fragments. Names and host discovery/filtering are separately asserted.
 
-Q remains pending: execute a differential oracle against the pinned TS importer; project away lastPlan; explicitly account for P1–P5 rather than treating them as blanket mismatch exemptions. Measure repeated-scan time/memory on long UUID chains and add fault injection and mutants in Q.
+The Q harness uses the pinned TS importer with lastPlan stubbed out. The reference
+files and dependency boundaries are documented in `bench/l3/qwen/reference/README.md`.
+`q.py` generates 20,000 transcripts (seed 20261116), adds 20 fixed fixtures and one
+total-budget fixture, and compares head, tail and read records on all four pairs.
+Each pair has 19,755 exact transcript matches, 64 P1 differences, 201 P4 differences,
+one P5 difference, and zero unexplained differences. P1/P4 differences must equal
+TS rerun on a narrowly normalized input, not merely carry a policy tag. P5 is only
+the fixed empty-cwd input: TS read rejects folder mismatch; the positional fixture
+host returns the checked-in pure result. Both head/tail outputs still match.
+
+The 22 list scenarios include the fixed edges and 51 newer rejected files before
+52 valid files (limit 50 after filtering). Each pair has 21 exact list matches and
+one P4 difference: the invalid-calendar fixture's updatedAt, checked against its
+normalized tail. No list mismatch is waived under P5. Branches, missing parents,
+cycles, duplicate UUIDs, dropped oversized lines, provenance, thought/functionCall
+parts, custom titles, invalid timestamps/UTF-8, window trimming and turn/reply/total
+limits are covered. Generated invalid UTF-8 often has no observable effect because
+chain selection excludes that line; only actual differences enter P1 counts.
+
+### Q mutants
+
+`q_mutants.py` builds 12 single-replacement source copies under work with rs/rust,
+then compares the 20 fixed fixtures. Nine are differential-killed: human role,
+provenance, human/assistant thought filtering, custom title, functionCall, model,
+missing-parent cut and chain filtering. Two are rejected by the verifier: last-title
+replacement violates ensures; reducing the turn cap violates the plan loop's entry
+invariant. One survives: replacing the actual leaf's initial parent with the last
+duplicate UUID's parent. The fixed fixtures do not place a metadata entry with the
+leaf UUID and a different parent after that leaf; generated cases use unique UUIDs.
+This is a recorded coverage gap, not an equivalence claim. No verified Pruv source
+was changed, and no compiler, Lair, Claude or MCP files were edited.
+
+### Q measurement: open performance issue
+
+`q_measure.py` performs one size sweep on rs/llvm versus Node 26.4.0. Each input is
+a linear parentUuid chain with 8192-byte entries (inert padding), filling the window.
+Single cold-call milliseconds, excluding process startup:
+
+| Bytes | Chain entries | rs/llvm | TS | Ratio |
+|---|---:|---:|---:|---:|
+| 2097152 | 256 | 228.40 | 7.76 | 29.4x |
+| 4194304 | 512 | 949.67 | 11.55 | 82.2x |
+| 8388608 | 1024 | 3841.34 | 22.53 | 170.5x |
+
+Pruv times window_packet; TS times readQwen including head/file I/O. Retained turn
+counts agree. This is a diagnostic sweep, not repeated statistical measurement or
+a worst-case bound. Denser chains may be much slower. The repeated scans are
+pathologically slow at 8 MiB; redesign is explicitly deferred. No performance
+source change was made. Peak memory and filesystem fault injection were not
+measured in this default Q batch.
 
 ## Deferred
 
@@ -116,5 +165,5 @@ lastPlan/qwenPlan from plan.ts: no plan field is emitted. Production Node bindin
 
 ## Risks
 
-Chain selection reparses the window for each ancestor and copies the bitmap for cycle detection; this can be substantially slower than the TS UUID Map. Deep chains need Q measurements before production integration. The pure packet cannot prove host file snapshot identity. A live file can grow or change after metadata checks. Policy differences can affect title bytes, timestamps, retained suffixes and filename collision behavior; equality outside the documented shared domain is not asserted.
+Chain selection reparses the window for each ancestor and copies the bitmap for cycle detection; Q measured 170.5x TS cost on the full-window padded chain above. This open performance issue needs resolution before production integration. The pure packet cannot prove host file snapshot identity. A live file can grow or change after metadata checks. Policy differences can affect title bytes, timestamps, retained suffixes and filename collision behavior; equality outside the documented shared domain is not asserted.
 
