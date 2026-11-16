@@ -1,6 +1,6 @@
 # Command supervisor port design
 
-Status: proposed design (2026-11-16), track L3-2. Implementation belongs in `bench/l3/supervisor/`. It uses the
+Status: implemented (2026-11-16, A0-A3 and Q; results in RESULTS.md §128), track L3-2. Implementation belongs in `bench/l3/supervisor/`. It uses the
 G10 `fs`, `proc`, `net` and `async` surfaces (SPEC §6h, §6l, §6m, §6n) and needs **no language changes**.
 
 ## Goal

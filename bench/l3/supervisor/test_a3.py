@@ -176,6 +176,12 @@ def main():
         '\U0001F600'.encode() * 3, tail=3)
     run('tail 1', 'import sys; sys.stdout.write("abc한")', 'abc한'.encode(), tail=1)
     run('tail max', 'import sys; sys.stdout.write("z"*70000)', b'z' * 70000, tail=65536)
+    # one decoder per stream: a sequence split on stdout around a stderr byte still decodes
+    run('split across streams', r'import sys,time; o=sys.stdout.buffer; o.write(b"\xe2\x82"); o.flush(); '
+        r'time.sleep(0.3); sys.stderr.write("x"); sys.stderr.flush(); time.sleep(0.3); o.write(b"\xac")',
+        b'\xe2\x82x\xac', text='x€')
+    # stdin is closed at once, so a child that reads it ends
+    run('stdin eof', 'import sys; print(len(sys.stdin.read()))', b'0\n')
     cwd = str(WORK / 'cwd')
     run('cwd', 'import os; print(os.getcwd())', (cwd + '\n').encode(), cwd=cwd)
     run('args', 'import sys; print(sys.argv[1:])', (repr(['', 'a b', '한글 😀', '-x']) + '\n').encode(),

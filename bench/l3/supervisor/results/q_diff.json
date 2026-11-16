@@ -1,0 +1,678 @@
+{
+ "cases": 29,
+ "pairs": {
+  "py/rust": {
+   "counts": {
+    "same": 22,
+    "allowed": 7,
+    "DIFF": 0
+   },
+   "rows": [
+    {
+     "label": "hello",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "empty",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "exit 7",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "stderr",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "signal",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "two streams",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "big truncated",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "big fits",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "limit 0",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "exact fit",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "over by one",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "invalid utf8",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "surrogate cut",
+     "status": "allowed",
+     "notes": [
+      "P5 lone low surrogate dropped"
+     ]
+    },
+    {
+     "label": "tail 1",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "tail max",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "split across streams",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "stdin eof",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "cwd",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "args",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "create fail",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "spawn missing",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "spawn empty",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "spawn create fail",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "stop",
+     "status": "allowed",
+     "notes": [
+      "P1 stop is a kill (TS None/SIGTERM, Pruv status unknown)"
+     ]
+    },
+    {
+     "label": "disconnect",
+     "status": "allowed",
+     "notes": [
+      "disconnect: no TS exit message, file compared"
+     ]
+    },
+    {
+     "label": "early close",
+     "status": "allowed",
+     "notes": [
+      "disconnect: no TS exit message, file compared"
+     ]
+    },
+    {
+     "label": "stop quiet",
+     "status": "allowed",
+     "notes": [
+      "P1 stop is a kill (TS None/SIGTERM, Pruv status unknown)"
+     ]
+    },
+    {
+     "label": "stop truncated",
+     "status": "allowed",
+     "notes": [
+      "P1 stop is a kill (TS None/SIGTERM, Pruv status unknown)"
+     ]
+    },
+    {
+     "label": "fault write",
+     "status": "allowed",
+     "notes": [
+      "P3 whole writes (fileBytes 4096 vs 6000)"
+     ]
+    }
+   ]
+  },
+  "py/llvm": {
+   "counts": {
+    "same": 22,
+    "allowed": 7,
+    "DIFF": 0
+   },
+   "rows": [
+    {
+     "label": "hello",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "empty",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "exit 7",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "stderr",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "signal",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "two streams",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "big truncated",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "big fits",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "limit 0",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "exact fit",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "over by one",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "invalid utf8",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "surrogate cut",
+     "status": "allowed",
+     "notes": [
+      "P5 lone low surrogate dropped"
+     ]
+    },
+    {
+     "label": "tail 1",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "tail max",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "split across streams",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "stdin eof",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "cwd",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "args",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "create fail",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "spawn missing",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "spawn empty",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "spawn create fail",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "stop",
+     "status": "allowed",
+     "notes": [
+      "P1 stop is a kill (TS None/SIGTERM, Pruv status unknown)"
+     ]
+    },
+    {
+     "label": "disconnect",
+     "status": "allowed",
+     "notes": [
+      "disconnect: no TS exit message, file compared"
+     ]
+    },
+    {
+     "label": "early close",
+     "status": "allowed",
+     "notes": [
+      "disconnect: no TS exit message, file compared"
+     ]
+    },
+    {
+     "label": "stop quiet",
+     "status": "allowed",
+     "notes": [
+      "P1 stop is a kill (TS None/SIGTERM, Pruv status unknown)"
+     ]
+    },
+    {
+     "label": "stop truncated",
+     "status": "allowed",
+     "notes": [
+      "P1 stop is a kill (TS None/SIGTERM, Pruv status unknown)"
+     ]
+    },
+    {
+     "label": "fault write",
+     "status": "allowed",
+     "notes": [
+      "P3 whole writes (fileBytes 4096 vs 6000)"
+     ]
+    }
+   ]
+  },
+  "rs/rust": {
+   "counts": {
+    "same": 22,
+    "allowed": 7,
+    "DIFF": 0
+   },
+   "rows": [
+    {
+     "label": "hello",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "empty",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "exit 7",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "stderr",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "signal",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "two streams",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "big truncated",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "big fits",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "limit 0",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "exact fit",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "over by one",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "invalid utf8",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "surrogate cut",
+     "status": "allowed",
+     "notes": [
+      "P5 lone low surrogate dropped"
+     ]
+    },
+    {
+     "label": "tail 1",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "tail max",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "split across streams",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "stdin eof",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "cwd",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "args",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "create fail",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "spawn missing",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "spawn empty",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "spawn create fail",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "stop",
+     "status": "allowed",
+     "notes": [
+      "P1 stop is a kill (TS None/SIGTERM, Pruv status unknown)"
+     ]
+    },
+    {
+     "label": "disconnect",
+     "status": "allowed",
+     "notes": [
+      "disconnect: no TS exit message, file compared"
+     ]
+    },
+    {
+     "label": "early close",
+     "status": "allowed",
+     "notes": [
+      "disconnect: no TS exit message, file compared"
+     ]
+    },
+    {
+     "label": "stop quiet",
+     "status": "allowed",
+     "notes": [
+      "P1 stop is a kill (TS None/SIGTERM, Pruv status unknown)"
+     ]
+    },
+    {
+     "label": "stop truncated",
+     "status": "allowed",
+     "notes": [
+      "P1 stop is a kill (TS None/SIGTERM, Pruv status unknown)"
+     ]
+    },
+    {
+     "label": "fault write",
+     "status": "allowed",
+     "notes": [
+      "P3 whole writes (fileBytes 4096 vs 6000)"
+     ]
+    }
+   ]
+  },
+  "rs/llvm": {
+   "counts": {
+    "same": 22,
+    "allowed": 7,
+    "DIFF": 0
+   },
+   "rows": [
+    {
+     "label": "hello",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "empty",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "exit 7",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "stderr",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "signal",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "two streams",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "big truncated",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "big fits",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "limit 0",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "exact fit",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "over by one",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "invalid utf8",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "surrogate cut",
+     "status": "allowed",
+     "notes": [
+      "P5 lone low surrogate dropped"
+     ]
+    },
+    {
+     "label": "tail 1",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "tail max",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "split across streams",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "stdin eof",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "cwd",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "args",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "create fail",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "spawn missing",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "spawn empty",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "spawn create fail",
+     "status": "same",
+     "notes": []
+    },
+    {
+     "label": "stop",
+     "status": "allowed",
+     "notes": [
+      "P1 stop is a kill (TS None/SIGTERM, Pruv status unknown)"
+     ]
+    },
+    {
+     "label": "disconnect",
+     "status": "allowed",
+     "notes": [
+      "disconnect: no TS exit message, file compared"
+     ]
+    },
+    {
+     "label": "early close",
+     "status": "allowed",
+     "notes": [
+      "disconnect: no TS exit message, file compared"
+     ]
+    },
+    {
+     "label": "stop quiet",
+     "status": "allowed",
+     "notes": [
+      "P1 stop is a kill (TS None/SIGTERM, Pruv status unknown)"
+     ]
+    },
+    {
+     "label": "stop truncated",
+     "status": "allowed",
+     "notes": [
+      "P1 stop is a kill (TS None/SIGTERM, Pruv status unknown)"
+     ]
+    },
+    {
+     "label": "fault write",
+     "status": "allowed",
+     "notes": [
+      "P3 whole writes (fileBytes 4096 vs 6000)"
+     ]
+    }
+   ]
+  }
+ },
+ "ts": {}
+}

@@ -1,0 +1,62 @@
+[
+ {
+  "mutant": "stopped swapped",
+  "result": "detected",
+  "detail": "stop, stop quiet, stop truncated"
+ },
+ {
+  "mutant": "stop byte as disconnect",
+  "result": "detected",
+  "detail": "stop, stop quiet, stop truncated"
+ },
+ {
+  "mutant": "no draining after end",
+  "result": "SURVIVED",
+  "detail": ""
+ },
+ {
+  "mutant": "no drain on stop",
+  "result": "SURVIVED",
+  "detail": ""
+ },
+ {
+  "mutant": "signal status dropped",
+  "result": "detected",
+  "detail": "signal"
+ },
+ {
+  "mutant": "spawn failure as exit",
+  "result": "detected",
+  "detail": "spawn missing, spawn empty, spawn create fail"
+ },
+ {
+  "mutant": "reaped not set",
+  "result": "detected",
+  "detail": "hello, empty, exit 7, stderr, signal, two streams, big truncated, big fits, limit 0, exact fit, over by one, invalid utf8, surrogate cut, tail 1, tail max, split across streams, stdin eof, cwd, args, create fail"
+ },
+ {
+  "mutant": "stream 2 dropped",
+  "result": "detected",
+  "detail": "stderr, two streams, split across streams"
+ },
+ {
+  "mutant": "stream index swapped",
+  "result": "detected",
+  "detail": "split across streams"
+ },
+ {
+  "mutant": "file_open inverted",
+  "result": "detected",
+  "detail": "hello, empty, exit 7, stderr, signal, two streams, big truncated, big fits, limit 0, exact fit, over by one, invalid utf8, surrogate cut, tail 1, tail max, split across streams, stdin eof, cwd, args, create fail, spawn missing, spawn empty, spawn create fail, stop, disconnect, early close, stop quie"
+ },
+ {
+  "mutant": "stdin kept open",
+  "result": "detected",
+  "detail": "timeout"
+ },
+ {
+  "mutant": "slot check dropped",
+  "result": "rejected",
+  "detail": "compile/verify failed: [{'stage': 'verify', 'line': 39, 'col': 6, 'code': 'call_requires', 'message': 'cannot prove precondition of ev_kind (catalog) in crate::sock_state', 'fix': \"make the callee's requires hold before the call\", 'file': 'supervise.pruv', 'counterexample': {'l': {'error': 0, 'cap':"
+ }
+]
