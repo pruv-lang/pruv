@@ -1,8 +1,5 @@
 // Protocol and G10 transport policy.
 mod json;
-mod lex;
-mod parse;
-mod jstr;
 mod access;
 mod lines;
 mod tail;

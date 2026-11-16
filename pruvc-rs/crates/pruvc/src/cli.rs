@@ -49,6 +49,8 @@ pub struct Args {
     pub rust_search: Vec<String>,
     /// G4b-0: --lib DIR values in flag order (existing directories; never written to any output).
     pub libs: Vec<String>,
+    /// G4b-1: --manifest PATH (the program's own pruv.json; last one wins); never used together with --lib.
+    pub manifest: Option<String>,
     /// G6: --foreign-checks requires|all|off (default requires).
     pub foreign_checks: String,
     pub budget: u64,
@@ -70,7 +72,7 @@ pub fn usage_error(msg: &str) -> i32 {
 }
 
 // Option names and the number of values they take. The declaration order is also the order of argparse's abbreviation-ambiguity message.
-static OPTS: [(&str, usize); 15] = [
+static OPTS: [(&str, usize); 16] = [
     ("-o", 1),
     ("--no-verify", 0),
     ("--trust-callers", 0),
@@ -86,6 +88,7 @@ static OPTS: [(&str, usize); 15] = [
     ("--emit", 1),
     ("--target", 1),
     ("--lib", 1),
+    ("--manifest", 1),
 ];
 
 #[derive(Default)]
@@ -102,6 +105,8 @@ struct Raw {
     rust_extern: Vec<String>,
     rust_search: Vec<String>,
     libs: Vec<String>,
+    /// G4b-1: --manifest PATH (the last one wins)
+    manifest: Option<String>,
     foreign_checks: Option<&'static str>,
     budget: Option<i128>,
     also_llvm: Option<(String, String)>,
@@ -271,6 +276,7 @@ fn parse_raw(argv: &[String]) -> Result<Raw, String> {
             "--rust-extern" => r.rust_extern.extend(vals.pop()),
             "--rust-search" => r.rust_search.extend(vals.pop()),
             "--lib" => r.libs.extend(vals.pop()),
+            "--manifest" => r.manifest = vals.pop(),
             "--foreign-checks" => {
                 let v = vals.pop().unwrap_or_default();
                 r.foreign_checks = Some(match v.as_str() {
@@ -493,6 +499,15 @@ pub fn parse(argv: &[String]) -> Result<Args, String> {
     if r.libs.iter().any(|d| d.is_empty() || !Path::new(d).is_dir()) {
         return Err("--lib needs an existing directory".to_string());
     }
+    // G4b-1: --manifest PATH names the program's own manifest (checked right after --lib, as in pruvc.py main)
+    if let Some(m) = &r.manifest {
+        if !r.libs.is_empty() {
+            return Err("--manifest and --lib cannot be used together".to_string());
+        }
+        if !Path::new(m).is_file() {
+            return Err("--manifest needs an existing file".to_string());
+        }
+    }
 
     // Target and CPU
     let target = match (&r.target, kind) {
@@ -561,6 +576,7 @@ pub fn parse(argv: &[String]) -> Result<Args, String> {
         rust_extern_specs,
         rust_search: r.rust_search,
         libs: r.libs,
+        manifest: r.manifest,
         foreign_checks: foreign_checks.to_string(),
         budget,
         bindings,

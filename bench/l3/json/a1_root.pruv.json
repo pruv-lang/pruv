@@ -1,0 +1,1 @@
+{"name": "l3_json_a1_root", "version": "0.1.0", "root": "a1_root.pruv", "dependencies": {"lex": {"path": "../pkgs/lex", "version": "0.1"}}}

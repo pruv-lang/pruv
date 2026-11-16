@@ -64,14 +64,14 @@ def default_bindings_path(out):
 
 def compile_file(path, out, verify=True, trust_callers=False, backend="rust", rust_bindings=None,
                  budget=None, also_llvm=None, infer=False, show_inferred=False, externs=(),
-                 foreign_checks="requires", extern_specs=(), emit=None, libs=()):
+                 foreign_checks="requires", extern_specs=(), emit=None, libs=(), manifest=None):
     """extern_specs: [(name, path)] of --rust-extern (recorded in the manifest); externs: the names only."""
     if budget is None:
         budget = 1 << 30
     assert 1 <= budget <= 2 ** 62
     if also_llvm and backend != "rust":
         raise ValueError("also_llvm requires backend='rust'")
-    prog = load_program(path, libs=libs)   # G4: the root file plus its declared module files; a legacy root is plain parse(src)
+    prog = load_program(path, libs=libs, manifest=manifest)   # G4: the root file plus its declared module files; a legacy root is plain parse(src)
     check(prog, externs=externs)
     # G9 A3: both back ends lower G9 programs; the G9 staging guard is gone from the driver.
     # G6: the Rust source backend lowers foreign calls and collections (A2); the LLVM backend (and --also-llvm)
@@ -179,6 +179,7 @@ def main(argv):
     ap.add_argument("--rust-extern", dest="rust_extern", action="append", default=[], metavar="NAME=PATH")
     ap.add_argument("--rust-search", dest="rust_search", action="append", default=[], metavar="PATH")
     ap.add_argument("--lib", dest="libs", action="append", default=[], metavar="DIR")
+    ap.add_argument("--manifest", dest="manifest", default=None, metavar="PATH")
     ap.add_argument("--foreign-checks", dest="foreign_checks", choices=["requires", "all", "off"],
                     default="requires")
     ap.add_argument("--contract-budget", dest="budget", type=int, default=None,
@@ -215,18 +216,35 @@ def main(argv):
         ap.error("--rust-search needs a non-empty PATH")
     if any(not p or not os.path.isdir(p) for p in a.libs):
         ap.error("--lib needs an existing directory")
+    graph = None
+    if a.manifest is not None:
+        if a.libs:
+            ap.error("--manifest and --lib cannot be used together")
+        if not os.path.isfile(a.manifest):
+            ap.error("--manifest needs an existing file")
     bindings = a.rust_bindings
     if a.backend == "llvm":
         if bindings is None:
             bindings = default_bindings_path(a.out)
         if os.path.abspath(bindings) == os.path.abspath(a.out):
             ap.error("--rust-bindings path must differ from -o path")
+    if a.manifest is not None:
+        from manifest import load_graph
+        try:
+            graph = load_graph(a.manifest)
+        except PruvError as e:          # manifest diagnostics come before the root match check
+            print(e.to_json())
+            return 1
+        prog_pkg = graph.program
+        rootf = os.path.join(prog_pkg.dir, *prog_pkg.root.split("/"))
+        if not (os.path.exists(a.input) and os.path.samefile(rootf, a.input)):
+            ap.error("--manifest root does not match the input file")
     try:
         errs = compile_file(a.input, a.out, not a.no_verify, a.trust_callers, a.backend, bindings,
                           a.budget, tuple(a.also_llvm) if a.also_llvm else None,
                           infer=a.infer, show_inferred=a.show_inferred, externs=tuple(externs),
                           foreign_checks=a.foreign_checks, extern_specs=tuple(extern_specs), emit=a.emit,
-                          libs=tuple(a.libs))
+                          libs=tuple(a.libs), manifest=graph)
     except NativeEmitUnavailable:
         ap.error("unrecognized arguments: --emit " + a.emit)
     except PruvError as e:

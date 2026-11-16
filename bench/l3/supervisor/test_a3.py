@@ -8,7 +8,7 @@ Output: packet | started byte seen | output file summary.
 import os
 import sys
 
-from common import HERE, LIB_FLAGS, run_lines
+from common import HERE, manifest_flags, run_lines
 from checker import parse_packet
 
 HARNESS = r'''
@@ -219,7 +219,7 @@ def main():
     add('control port 0', 'zero', 0, PY, ['-c', 'pass'], bad, 0, None)
     for p in WORK.glob('out*.bin'):
         p.unlink()
-    return run_lines('a3', HERE / 'supervise.pruv', HARNESS, cases, flags=LIB_FLAGS)
+    return run_lines('a3', HERE / 'supervise.pruv', HARNESS, cases, flags=manifest_flags(HERE / 'supervise.pruv'))
 
 
 if __name__ == '__main__':

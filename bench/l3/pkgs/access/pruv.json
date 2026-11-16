@@ -1,0 +1,1 @@
+{"name": "access", "version": "0.1.0", "root": "access.pruv", "dependencies": {"json": {"path": "../json", "version": "0.1"}, "jstr": {"path": "../jstr", "version": "0.1"}}}

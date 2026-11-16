@@ -1,5 +1,4 @@
 mod json;
-mod lex;
 mod parse;
 mod jstr;
 

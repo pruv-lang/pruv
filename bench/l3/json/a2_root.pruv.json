@@ -1,0 +1,1 @@
+{"name": "l3_json_a2_root", "version": "0.1.0", "root": "a2_root.pruv", "dependencies": {"json": {"path": "../pkgs/json", "version": "0.1"}, "parse": {"path": "../pkgs/parse", "version": "0.1"}}}

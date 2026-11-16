@@ -49,6 +49,13 @@ from typeinfo import (bind_args, decl_owner, encode, first_g3_use, format_type, 
 from foreign import CATALOG   # G6: catalog calls keep their name (never specialized)
 from modules import encode_name, encode_stem, identity_components, safe_type   # G4 A2: shared symbol encoding
 
+
+def ident_key(name):
+    """G3 key token of a declaration identity: crate::a::x -> encode_name(a, x); @pkg::a::x -> "p" + encode_name(pkg, a, x)"""
+    if name.startswith("@"):
+        return "p" + encode_name(name[1:].split("::"))
+    return encode_name(identity_components(name))
+
 MAX_FN_SPECS = 4096
 MAX_TYPE_APPS = 4096
 MAX_DEPTH = 128
@@ -203,11 +210,17 @@ class _Mono:
         if self.explicit:
             for f in prog.functions:
                 if not f.tparams and self.fdecls[f.name] is f:
-                    self.rfns[f.name] = f.src_name if f.host_entry else encode_stem("f", f.mod_path + (f.src_name,))
+                    if getattr(f, "pkg", None) is not None:   # G4b-1: dependency item, stem from the package name
+                        self.rfns[f.name] = "pruv_p_f_" + encode_name((f.pkg,) + f.mod_path + (f.src_name,))
+                    else:
+                        self.rfns[f.name] = f.src_name if f.host_entry else encode_stem("f", f.mod_path + (f.src_name,))
             for d in prog.types:
                 if not d.tparams and self.tdecls[d.name] is d:
-                    self.rtypes[d.name] = d.src_name if (d.pub and d.mod_path == ()) else \
-                        encode_stem("t", d.mod_path + (d.src_name,))
+                    if getattr(d, "pkg", None) is not None:
+                        self.rtypes[d.name] = "pruv_p_t_" + encode_name((d.pkg,) + d.mod_path + (d.src_name,))
+                    else:
+                        self.rtypes[d.name] = d.src_name if (d.pub and d.mod_path == ()) else \
+                            encode_stem("t", d.mod_path + (d.src_name,))
         self.fns = {}            # stem -> FnSpec
         self.types = {}          # stem -> TypeSpec
         self.queue = deque()
@@ -217,7 +230,7 @@ class _Mono:
     # ---------- G4 A2 naming (explicit mode) ----------
     def _gname(self, name):
         """the name token of a generic declaration inside a pruv_g3 stem / argument encoding"""
-        return encode_name(identity_components(name)) if self.explicit else name
+        return ident_key(name) if self.explicit else name
 
     def _enc(self, t):
         return encode(safe_type(t)) if self.explicit else encode(t)
@@ -233,13 +246,15 @@ class _Mono:
             new.pub = f.pub                      # a specialization inherits the generic declaration's visibility
             new.host_entry = bool(f.host_entry) and not private
             new.src_name, new.mod_path = f.src_name, f.mod_path
-            new.disp = f.name                    # display name = resolved identity (source-qualified)
+            new.pkg = getattr(f, "pkg", None)
+            new.disp = f.name                   # display name = resolved identity (source-qualified)
         return new
 
     def _mark_type(self, new, d):
         if self.explicit:
             new.pub = d.pub
             new.src_name, new.mod_path = d.src_name, d.mod_path
+            new.pkg = getattr(d, "pkg", None)
             new.disp = d.name
         return new
 

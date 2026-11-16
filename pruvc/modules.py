@@ -24,9 +24,9 @@ from typeinfo import BUILTIN_TYPE_NAMES, dependencies, decl_owner, fn_owner
 from refine import _kids
 
 
-def disp(path):
-    """display form of a module path tuple: crate, crate::a, crate::a::b"""
-    return "::".join(("crate",) + tuple(path))
+def disp(path, pkg=None):
+    """display form of a module path tuple: crate, crate::a, crate::a::b (a dependency package: @json, @json::a)"""
+    return "::".join((("crate",) if pkg is None else ("@" + pkg,)) + tuple(path))
 
 
 def encode_name(components):
@@ -53,10 +53,12 @@ def safe_type(ty):
     if ty.owner is not None:
         return ty
     args = tuple(safe_type(a) for a in ty.args)
-    if ty.name in BUILTIN_TYPE_NAMES or not ty.name.startswith("crate::"):
+    if ty.name in BUILTIN_TYPE_NAMES or not (ty.name.startswith("crate::") or ty.name.startswith("@")):
         if args == ty.args:
             return ty
         return Type(ty.name, args)
+    if ty.name.startswith("@"):
+        return Type("p" + encode_name(ty.name[1:].split("::")), args)
     return Type(encode_name(identity_components(ty.name)), args)
 
 
@@ -65,6 +67,8 @@ class Module:
         s.path = path            # tuple of module names; () is the root
         s.file = file            # path relative to the root directory, `/` separators
         s.parent = parent
+        s.pkg = None             # G4b-1: package name of a dependency module, None = the program package
+        s.pkginfo = None         # manifest mode: the manifest.Pkg this module belongs to
         s.mods = []              # ModDecl list in source order (duplicates included)
         s.children = {}          # name -> Module (loaded children; a duplicate declaration is not loaded again)
         s.items = []             # Function / StructDecl / EnumDecl in source order
@@ -110,7 +114,12 @@ def _file_id(p):
     return (st.st_dev, st.st_ino)
 
 
-def load_program(path, libs=()):
+def load_program(path, libs=(), manifest=None):
+    """manifest: None, a pruv.json path, or a manifest.Graph (G4b-1: packages mounted by `mod KEY;` in package roots)"""
+    graph = manifest
+    if isinstance(graph, str):
+        from manifest import load_graph
+        graph = load_graph(graph)
     # the root is read exactly as before (same exceptions); parse(src) stays the file-local API
     src = open(path, encoding="utf-8").read()
     root_file = os.path.basename(path)
@@ -121,11 +130,20 @@ def load_program(path, libs=()):
             e.file = root_file
         raise
     if not (prog.mods or prog.has_pub):
+        if graph is not None and graph.program.deps:
+            raise PruvError("pkg", 1, 1, "unused_dependency",
+                            "dependency %s is declared but not mounted by `mod %s;` in the package root"
+                            % (graph.program.deps[0][0], graph.program.deps[0][0]),
+                            "add `mod %s;` to the package root or remove the dependency" % graph.program.deps[0][0],
+                            file=graph.program.display)
         return prog                      # legacy mode: untouched
     root_dir = os.path.dirname(os.path.abspath(path))
     prog.explicit = True
     root = Module((), root_file, None)
     root.base, root.relpre = root_dir, ""
+    if graph is not None:
+        root.pkginfo = graph.program
+    pkg_mods = {}                       # canonical dependency dir -> its root Module (one per package)
     root.mods = list(prog.mods)
     root.items = list(prog.items)
     _tag(root.items + root.mods, root_file)
@@ -145,7 +163,22 @@ def load_program(path, libs=()):
             rel = m.relpre + "/".join(cpath) + ".pruv"
             fpath = os.path.join(m.base, *cpath) + ".pruv"
             base, relpre = m.base, m.relpre
-            if not m.path and md.name != "std":
+            if graph is not None and not m.path:
+                keys = {k: d for k, d, _ in m.pkginfo.deps}
+                if md.name == "std" and m.pkg is not None:
+                    raise PruvError("pkg", md.line, md.col, "std_in_dependency",
+                                    "`mod std;` is only available in the program root, not in package %s" % m.pkg,
+                                    "remove `mod std;`", file=m.file)
+                if md.name in keys:
+                    dpkg = graph.by_dir[keys[md.name]]
+                    if os.path.lexists(fpath):
+                        raise PruvError("pkg", md.line, md.col, "mount_conflict",
+                                        "module %s is found in more than one place: %s, @pkg/%s"
+                                        % (md.name, rel, dpkg.name),
+                                        "remove the local file or rename the dependency key", file=m.file)
+                    mount(m, md, dpkg)
+                    continue
+            if not m.path and md.name != "std" and graph is None:
                 # G4b-0 (docs/G4B_LIB_SPEC.md 2): local file plus one candidate per --lib DIR
                 cands = []
                 if os.path.lexists(fpath):
@@ -187,11 +220,16 @@ def load_program(path, libs=()):
                                 "the file of module %s is not valid UTF-8" % disp(cpath),
                                 "save %s as UTF-8" % rel, file=m.file)
             except OSError:
+                if graph is not None and not m.path:
+                    hint = "create %s next to the root file, add %s to dependencies, or remove `mod %s;`" \
+                           % (rel, md.name, md.name)
+                else:
+                    hint = (("create %s next to the root file, pass --lib DIR, or remove `mod %s;`"
+                             if not m.path else "create %s next to the root file, or remove `mod %s;`")
+                            % (rel, md.name))
                 raise PruvError("parse", md.line, md.col, "module_file",
-                                "cannot read the file of module %s (expected %s)" % (disp(cpath), rel),
-                                ("create %s next to the root file, pass --lib DIR, or remove `mod %s;`"
-                                 if not m.path else "create %s next to the root file, or remove `mod %s;`")
-                                % (rel, md.name), file=m.file)
+                                "cannot read the file of module %s (expected %s)" % (disp(cpath, m.pkg), rel),
+                                hint, file=m.file)
             # The bundle has a logical resource identity, not a physical one (same as pruvc-rs).
             fid = None if md.name == "std" else _file_id(fpath)
             if fid is not None and fid in loaded:
@@ -207,17 +245,72 @@ def load_program(path, libs=()):
                 raise
             child = Module(cpath, rel, m)
             child.base, child.relpre = base, relpre
+            child.pkg, child.pkginfo = m.pkg, m.pkginfo
             child.mods = list(cprog.mods)
             child.items = list(cprog.items)
             _tag(child.items + child.mods, rel)
             m.children[md.name] = child
             modules.append(child)
             visit(child)
+        if graph is not None and not m.path:
+            # every dependency key must be mounted by a `mod` of the package root
+            for key, _, _ in m.pkginfo.deps:
+                if key not in seen:
+                    raise PruvError("pkg", 1, 1, "unused_dependency",
+                                    "dependency %s is declared but not mounted by `mod %s;` in the package root"
+                                    % (key, key),
+                                    "add `mod %s;` to the package root or remove the dependency" % key,
+                                    file=m.pkginfo.display)
+
+    def mount(m, md, dpkg):
+        """mount dependency package dpkg as child md.name of the package root m (its root Module is built once)"""
+        done = pkg_mods.get(dpkg.dir)
+        if done is not None:
+            m.children[md.name] = done
+            return
+        cpath = (md.name,)
+        sub = os.path.dirname(dpkg.root)
+        rel = "@pkg/%s/%s" % (dpkg.name, dpkg.root)
+        fpath = os.path.join(dpkg.dir, *dpkg.root.split("/"))
+        try:
+            text = open(fpath, encoding="utf-8").read()
+        except UnicodeDecodeError:
+            raise PruvError("parse", md.line, md.col, "module_file",
+                            "the file of module %s is not valid UTF-8" % disp(cpath),
+                            "save %s as UTF-8" % rel, file=m.file)
+        except OSError:
+            raise PruvError("parse", md.line, md.col, "module_file",
+                            "cannot read the file of module %s (expected %s)" % (disp(cpath), rel),
+                            "restore the root file of package %s" % dpkg.name, file=m.file)
+        fid = _file_id(fpath)
+        if fid is not None and fid in loaded:
+            raise PruvError("parse", md.line, md.col, "module_alias",
+                            "the file %s of module %s was already loaded as %s" % (rel, disp(cpath), loaded[fid]),
+                            "every module needs its own file; remove the alias", file=m.file)
+        if fid is not None:
+            loaded[fid] = rel
+        try:
+            cprog = parse(text)
+        except PruvError as e:
+            e.file = rel
+            raise
+        child = Module((), rel, m)
+        child.pkg, child.pkginfo = dpkg.name, dpkg
+        child.base = os.path.join(dpkg.dir, *sub.split("/")) if sub else dpkg.dir
+        child.relpre = "@pkg/%s/%s" % (dpkg.name, sub + "/" if sub else "")
+        child.mods = list(cprog.mods)
+        child.items = list(cprog.items)
+        _tag(child.items + child.mods, rel)
+        pkg_mods[dpkg.dir] = child
+        m.children[md.name] = child
+        modules.append(child)
+        visit(child)
 
     visit(root)
     prog.items = []
     for m in modules:
         for it in m.items:
+            it.pkg = m.pkg
             it.mod_path = m.path
             it.src_name = it.name
             prog.items.append(it)
@@ -250,14 +343,16 @@ def decl_fields(d):
 class _Resolver:
     def __init__(s, prog):
         s.prog = prog
-        s.by_path = {m.path: m for m in prog.modules}
-        s.root = s.by_path[()]
+        s.by_path = {(m.pkg, m.path): m for m in prog.modules}
+        s.root = s.by_path[(None, ())]
         s.m = s.root
         s.old_owner = s.new_owner = None
         s.type_by_id = {}
 
     @staticmethod
-    def ident(path, name):
+    def ident(path, name, pkg=None):
+        if pkg is not None:
+            return "::".join(("@" + pkg,) + tuple(path) + (name,))
         return "::".join(("crate",) + tuple(path) + (name,))
 
     def run(s):
@@ -268,7 +363,7 @@ class _Resolver:
         for m in prog.modules:
             for f in [i for i in m.items if isinstance(i, Function)]:
                 if f.name in m.funcs:
-                    _err(f, "dup_fn", "function %s defined twice" % s.ident(m.path, f.name))
+                    _err(f, "dup_fn", "function %s defined twice" % s.ident(m.path, f.name, m.pkg))
                 if f.name in BUILTIN_FNS or f.name in CONTRACT_ONLY or f.name in CATALOG_NAMES:
                     _err(f, "reserved", "%s is a builtin name" % f.name, "rename the function")
                 m.funcs[f.name] = f
@@ -279,33 +374,33 @@ class _Resolver:
                 if d.name in RESERVED_TYPE_NAMES:
                     _err(d, "reserved", "%s is a builtin name" % d.name, "rename the type")
                 if d.name in m.types:
-                    _err(d, "dup_type", "type %s defined twice" % s.ident(m.path, d.name))
+                    _err(d, "dup_type", "type %s defined twice" % s.ident(m.path, d.name, m.pkg))
                 if d.name in m.funcs:
-                    _err(d, "name_collision", "%s is both a type and a function" % s.ident(m.path, d.name),
+                    _err(d, "name_collision", "%s is both a type and a function" % s.ident(m.path, d.name, m.pkg),
                          "rename the type or the function")
                 m.types[d.name] = d
             seen = set()
             for md in m.mods:
                 if md.name in seen:
-                    _err(md, "duplicate_module", "module %s is declared twice in %s" % (md.name, disp(m.path)),
+                    _err(md, "duplicate_module", "module %s is declared twice in %s" % (md.name, disp(m.path, m.pkg)),
                          "remove the second `mod %s;`" % md.name)
                 seen.add(md.name)
                 if md.name in m.funcs:
-                    _err(md, "name_collision", "%s is both a module and a function in %s" % (md.name, disp(m.path)),
+                    _err(md, "name_collision", "%s is both a module and a function in %s" % (md.name, disp(m.path, m.pkg)),
                          "rename the module or the function")
         # 1b. a type parameter may not carry the name of a type of its module (builtin names: the checker)
         for it in prog.items:
-            m = s.by_path[it.mod_path]
+            m = s.by_path[(it.pkg, it.mod_path)]
             for tp in it.tparams:
                 if tp.name in m.types:
                     _err(tp, "type_parameter", "type parameter %s shadows a declared or built-in type" % tp.name,
                          "choose a name that is not a type, e.g. T")
         for m in prog.modules:
             for name, d in m.types.items():
-                s.type_by_id[s.ident(m.path, name)] = d
+                s.type_by_id[s.ident(m.path, name, m.pkg)] = d
         # 2. resolve every reference (items in program order); then rename the items to their identities
         for it in prog.items:
-            s.m = s.by_path[it.mod_path]
+            s.m = s.by_path[(it.pkg, it.mod_path)]
             if isinstance(it, Function):
                 s.fn(it)
             else:
@@ -323,20 +418,24 @@ class _Resolver:
     def walk(s, path):
         """crate::a::b::x -> (innermost module reached by module segments, remaining segments)"""
         segs = path.split("::")[1:]
-        m = s.root
+        P = s.m.pkg
+        m = s.by_path[(P, ())]           # `crate` = the root of the package of the module being resolved
         i = 0
         while i < len(segs) - 1 and segs[i] in m.children:
-            m = m.children[segs[i]]
+            ch = m.children[segs[i]]
+            if ch.pkg != m.pkg and m.pkg != P:
+                break                    # a package never sees its dependencies' dependencies
+            m = ch
             i += 1
         return m, segs[i:]
 
     def access(s, d, m, node, path):
         if not d.pub and m is not s.m:
-            _err(node, "private_item", "%s is private to module %s" % (path, disp(m.path)),
+            _err(node, "private_item", "%s is private to module %s" % (path, disp(m.path, m.pkg)),
                  "mark it `pub` in %s, or call it through a public item of that module" % m.file)
 
     def unknown_module(s, m, rem, node, path):
-        _err(node, "unknown_module", "unknown module %s in %s (path %s)" % (rem[0], disp(m.path), path),
+        _err(node, "unknown_module", "unknown module %s in %s (path %s)" % (rem[0], disp(m.path, m.pkg), path),
              "declare it with `mod %s;` in %s, or correct the path" % (rem[0], m.file))
 
     def type_item(s, path, node):
@@ -350,7 +449,7 @@ class _Resolver:
             _err(node, "unknown_type", "unknown type %s" % path,
                  "declare it with `struct`/`enum` in %s" % m.file)
         s.access(d, m, node, path)
-        return s.ident(m.path, rem[0])
+        return s.ident(m.path, rem[0], m.pkg)
 
     def local_or_path_type(s, name, node):
         """a nominal name as written -> identity (qualified: resolved; unqualified: the current module only;
@@ -358,7 +457,7 @@ class _Resolver:
         if name.startswith("crate::"):
             return s.type_item(name, node)
         if name in s.m.types:
-            return s.ident(s.m.path, name)
+            return s.ident(s.m.path, name, s.m.pkg)
         return name
 
     def fn_item(s, m, rem, node, path):
@@ -370,7 +469,7 @@ class _Resolver:
                 _err(node, "unknown_fn", "%s is a module, not a function" % path, "name a function of the module")
             _err(node, "unknown_fn", "unknown function %s" % path, "declare it in %s" % m.file)
         s.access(f, m, node, path)
-        return s.ident(m.path, rem[0])
+        return s.ident(m.path, rem[0], m.pkg)
 
     # ---- types ----
     def rtype(s, ty, node):
@@ -393,13 +492,13 @@ class _Resolver:
     # ---- items ----
     def own(s, it, kind_owner):
         s.old_owner = kind_owner(it.src_name)
-        s.new_owner = kind_owner(s.ident(it.mod_path, it.src_name))
+        s.new_owner = kind_owner(s.ident(it.mod_path, it.src_name, it.pkg))
 
     def tdecl(s, d):
         s.own(d, decl_owner)
         for fd in decl_fields(d):
             fd.type = s.rtype(fd.type, fd)
-        d.name = s.ident(d.mod_path, d.src_name)
+        d.name = s.ident(d.mod_path, d.src_name, d.pkg)
 
     def fn(s, f):
         s.own(f, fn_owner)
@@ -415,7 +514,7 @@ class _Resolver:
         if f.cost is not None:
             f.cost = s.rexpr(f.cost)
         s.rstmts(f.body)
-        f.name = s.ident(f.mod_path, f.src_name)
+        f.name = s.ident(f.mod_path, f.src_name, f.pkg)
 
     # ---- statements ----
     def rstmts(s, stmts):
@@ -470,14 +569,14 @@ class _Resolver:
                                         "write `%s::%s` for a variant without fields, or pass its fields as arguments"
                                         % (e.name.rsplit("::", 1)[0], rem[1]), file=getattr(e, "file", None))
                     d = m.types[rem[0]]
-                    s.access(d, m, e, "::".join([disp(m.path), rem[0]]))
-                    new = EnumCtor(e.line, e.col, s.ident(m.path, rem[0]), rem[1], e.args)
+                    s.access(d, m, e, "::".join([disp(m.path, m.pkg), rem[0]]))
+                    new = EnumCtor(e.line, e.col, s.ident(m.path, rem[0], m.pkg), rem[1], e.args)
                     new.file = e.file
                     new.args = [s.rexpr(a) for a in new.args]
                     return new
                 e.name = s.fn_item(m, rem, e, e.name)
             elif e.name in s.m.funcs:
-                e.name = s.ident(s.m.path, e.name)
+                e.name = s.ident(s.m.path, e.name, s.m.pkg)
             s.targs(e)
             e.args = [s.rexpr(a) for a in e.args]
             return e
@@ -584,7 +683,7 @@ class _Resolver:
         prog = s.prog
         out = []
         for f in prog.functions:
-            if f.mod_path != ():
+            if f.mod_path != () or f.pkg is not None:
                 continue
             if f.src_name == "main":
                 if not f.pub:

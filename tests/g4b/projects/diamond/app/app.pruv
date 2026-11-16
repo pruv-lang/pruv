@@ -1,0 +1,6 @@
+mod a;
+mod b;
+pub fn f(x: i64) -> i64
+  requires 0 <= x && x <= 9
+  ensures result == x + 2
+{ return crate::b::b_inc(crate::a::a_inc(x)); }

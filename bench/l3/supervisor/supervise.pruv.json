@@ -1,0 +1,1 @@
+{"name": "l3_supervisor_supervise", "version": "0.1.0", "root": "supervise.pruv", "dependencies": {"tail": {"path": "../pkgs/tail", "version": "0.1"}}}

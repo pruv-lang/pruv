@@ -47,12 +47,13 @@ def main():
         d = WORK / name.replace(' ', '_')
         shutil.rmtree(d, ignore_errors=True)
         d.mkdir(parents=True)
-        for m in ('args', 'capfile', 'packet'):  # tail comes from the shared library (--lib)
+        for m in ('args', 'capfile', 'packet'):  # tail comes from the shared package (--manifest)
             shutil.copy(HERE / f'{m}.pruv', d / f'{m}.pruv')
         (d / 'supervise.pruv').write_text(src.replace(old, new))
+        common.copy_manifest(HERE / 'supervise.pruv', d)
         try:
             exe = common.build(g2, run, 'rs', 'rust', d / 'supervise.pruv', d / 'build', test_a3.HARNESS, 'mut',
-                               common.LIB_FLAGS)
+                               common.manifest_flags(d / 'supervise.pruv'))
         except Exception as exc:
             rows.append(dict(mutant=name, result='rejected', detail=str(exc)[:300]))
             print(f'{name}: rejected', flush=True)

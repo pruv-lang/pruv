@@ -30,7 +30,7 @@ use crate::gtype::{
     bind_args, decl_owner, encode, fn_owner, format_type, is_g3_key, mk_array, mk_option, mk_result, spec_fn_stem,
     spec_type_stem, substitute, GType, Mapping, ParamId,
 };
-use crate::modules::{encode_name, encode_stem, identity_components, safe_type, G4};
+use crate::modules::{encode_name, encode_stem, ident_key, safe_type, G4};
 use crate::typeinfo::first_g3_use;
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
@@ -177,7 +177,13 @@ impl<'a> Mono<'a> {
             for (i, f) in prog.functions.iter().enumerate() {
                 if f.tparams.is_empty() && findex.get(&f.name) == Some(&i) {
                     let m = &g.fn_meta[i];
-                    let stem = if m.host_entry {
+                    let stem = if let Some(pkg) = &m.pkg {
+                        // G4b-1: a dependency item, stem from the package name
+                        let mut comps = vec![pkg.clone()];
+                        comps.extend(g.modules[m.module].path.iter().cloned());
+                        comps.push(m.src_name.clone());
+                        format!("pruv_p_f_{}", encode_name(&comps))
+                    } else if m.host_entry {
                         m.src_name.clone()
                     } else {
                         let mut comps = g.modules[m.module].path.clone();
@@ -191,7 +197,12 @@ impl<'a> Mono<'a> {
                 if d.tparams().is_empty() && tindex.get(d.name()) == Some(&i) {
                     let m = &g.ty_meta[i];
                     let path = &g.modules[m.module].path;
-                    let stem = if m.is_pub && path.is_empty() {
+                    let stem = if let Some(pkg) = &m.pkg {
+                        let mut comps = vec![pkg.clone()];
+                        comps.extend(path.iter().cloned());
+                        comps.push(m.src_name.clone());
+                        format!("pruv_p_t_{}", encode_name(&comps))
+                    } else if m.is_pub && path.is_empty() {
                         m.src_name.clone()
                     } else {
                         let mut comps = path.clone();
@@ -239,7 +250,7 @@ impl<'a> Mono<'a> {
     /// borrowed outside explicit mode, so legacy specialization requests copy nothing before the lookup
     fn gname<'n>(&self, name: &'n str) -> Cow<'n, str> {
         if self.g4.is_some() {
-            Cow::Owned(encode_name(&identity_components(name)))
+            Cow::Owned(ident_key(name)) // G4b-1: a dependency identity (@pkg::..) gets the "p" key token
         } else {
             Cow::Borrowed(name)
         }

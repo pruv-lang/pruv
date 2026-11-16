@@ -8,7 +8,7 @@ import shutil
 import statistics
 import subprocess
 import time
-from run_q_mutants import HERE, WORK, LIB_FLAGS, setup, build, run
+from run_q_mutants import HERE, WORK, manifest_flags, setup, build, run
 
 HARNESS = r'''#![allow(dead_code, unused_imports)]
 #[path = "@SOL@"] mod sol;
@@ -103,7 +103,7 @@ def main():
                 for batch,template in ((2,HARNESS),(3,TEXT_HARNESS)):
                     if time.monotonic()-start > 1100: raise RuntimeError('Measurement build budget exceeded')
                     work = root/f'a{batch}_{compiler}_{backend}'; work.mkdir(exist_ok=True)
-                    c = g2.compile_pruv(compiler,str(HERE/f'a{batch}_root.pruv'),str(work),backend,flags+LIB_FLAGS)
+                    c = g2.compile_pruv(compiler,str(HERE/f'a{batch}_root.pruv'),str(work),backend,flags+manifest_flags(batch))
                     report['builds'][f'{pair}/a{batch}'] = c
                     if c['rc']: raise RuntimeError(f'{pair}/a{batch} compile failed: {c}')
                     exe = build(g2,c,work,template,rustflags)

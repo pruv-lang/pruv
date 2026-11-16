@@ -1,6 +1,5 @@
 // Q canonical dump through accessors; keys use a standalone string view.
 mod json;
-mod lex;
 mod parse;
 mod jstr;
 mod access;

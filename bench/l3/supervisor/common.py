@@ -8,8 +8,25 @@ import sys
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 PAIRS = [(c, b) for c in ('py', 'rs') for b in ('rust', 'llvm')]
-LIB = HERE.parent / 'lib'
-LIB_FLAGS = ('--lib', str(LIB))
+PKGS = HERE.parent / 'pkgs'
+
+
+def manifest_flags(root):
+    """`--manifest` flags for a root: its manifest sits next to it as `<root file name>.json`."""
+    root = Path(root)
+    return ('--manifest', str(root.with_name(root.name + '.json')))
+
+
+def copy_manifest(root, dest_dir):
+    """Copy the manifest of `root` next to a copy of the root in `dest_dir`, dependency paths rewritten to still
+    point at the original package directories (paths are relative to the manifest file)."""
+    import json
+    root = Path(root)
+    src = root.with_name(root.name + '.json')
+    manifest = json.loads(src.read_text())
+    for dep in manifest.get('dependencies', {}).values():
+        dep['path'] = os.path.relpath((src.parent / dep['path']).resolve(), Path(dest_dir).resolve())
+    (Path(dest_dir) / (root.name + '.json')).write_text(json.dumps(manifest) + '\n')
 
 
 def enc(values):

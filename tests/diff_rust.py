@@ -6,8 +6,12 @@
                             [--fuzz-count 200] [--mutations 3] [--save-dir DIR]
                             [--modes VT,Vt,vT,vt,B]
 
-Groups: must_reject examples runtime bench g9 g4 edge fuzz mutate
+Groups: must_reject examples runtime bench g9 g4 g4b edge fuzz mutate
   g9 = tests/g9/frontend/*.pruv (until batch A2 both compilers must agree on the downstream guard diagnostic).
+  g4b = manifest workspaces tests/g4b/projects/<name>/ (tests/g4b/projects.py): the program package app/ is loaded with its
+       pruv.json (Python: manifest.load_graph + load_program(manifest=graph); Rust: `pruv-rust-dump --manifest M FILE`, one
+       call per case). A manifest error is the {"error": ..} object. A saved g4b case also copies the whole workspace
+       (<case>/workspace/).
   g4 = G4 project roots (G4 A2): every root of tests/g4/fixtures.json (frontend, reject, proof, runtime), examples/g4_*/root.pruv
        and tests/must_reject/g4_*/root.pruv; they are loaded through modules.load_program (the driver's path), so the
        companion module files are read from the project directory. The Rust dump binary is ported separately.
@@ -19,7 +23,7 @@ Modes (case = input x mode): the first letter V/v = verified on/off, the second 
 Expected line = json.dumps(obj, sort_keys=True, ensure_ascii=False), obj =
   {"rs":..} | {"error":{..}} | {"internal":msg} | {"adapter_error":"decode"}.
   RecursionError -> py_recursion (excluded from comparison). Rust: one call per 200 files for each (mode, budget)
-  (`pruv-rust-dump [--no-verify] [--trust-callers] --budget N FILE...`).
+  (`pruv-rust-dump [--no-verify] [--trust-callers] --budget N [--manifest M] FILE...`).
   Exit code != 0, timeout, line-count mismatch, or no trailing newline -> the whole batch is rs_crash.
 Exit codes: 0 = diff and crash (py_crash, rs_crash) are all 0, 1 = anything else, 2 = bad arguments / binary missing.
 Uses only the Python 3.9 standard library.
@@ -31,6 +35,7 @@ import json
 import os
 import random
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -42,6 +47,7 @@ sys.path.insert(0, os.path.join(ROOT, "pruvc"))
 from vast import PruvError  # noqa: E402
 from check import check  # noqa: E402
 from modules import load_program  # noqa: E402
+from manifest import load_graph  # noqa: E402
 from codegen import gen_rust  # noqa: E402
 from typeinfo import g9_unimplemented_error  # noqa: E402
 
@@ -59,7 +65,7 @@ GROUP_DIRS = [
     ("g9", "tests/g9/frontend"),
 ]
 CHECK_EDGE_DIR = "tests/check_edge"
-ALL_GROUPS = ["must_reject", "examples", "runtime", "bench", "g9", "g4", "edge", "fuzz", "mutate"]
+ALL_GROUPS = ["must_reject", "examples", "runtime", "bench", "g9", "g4", "g4b", "edge", "fuzz", "mutate"]
 
 # (label, verified, trust_callers). B is handled separately.
 MODE_TABLE = collections.OrderedDict([
@@ -81,10 +87,11 @@ FRAGMENTS = [
 
 
 class Case(object):
-    __slots__ = ("group", "name", "path", "mode", "verified", "trust", "budget", "py", "rs", "status", "note")
+    __slots__ = ("group", "name", "path", "mode", "verified", "trust", "budget", "py", "rs", "status", "note", "manifest")
 
-    def __init__(self, group, name, path, mode, verified, trust, budget):
+    def __init__(self, group, name, path, mode, verified, trust, budget, manifest=None):
         self.group, self.name, self.path = group, name, path
+        self.manifest = manifest   # G4b: absolute path of the pruv.json given to both sides (None for other groups)
         self.mode, self.verified, self.trust, self.budget = mode, verified, trust, budget
         self.py = None      # bytes (no newline)
         self.rs = None
@@ -209,6 +216,12 @@ def build_inputs(selected, args, tmp):
             if r not in seen:
                 seen.add(r)
                 per["g4"].append((r, os.path.join(ROOT, *r.split("/")), []))
+    if "g4b" in selected:   # G4b: manifest workspaces (inputs carry the manifest as a 4th element)
+        sys.path.insert(0, HERE)
+        import importlib
+        PB = importlib.import_module("g4b.projects")
+        for pname, manifest, root in PB.all_projects():
+            per["g4b"].append(("g4b/" + pname, root, [], manifest))
     edge = list_edge()
     if not edge:
         notes.append("warning: no *.pruv in edge (%s)" % CHECK_EDGE_DIR)
@@ -258,14 +271,16 @@ def build_inputs(selected, args, tmp):
 
 def make_cases(group, inputs, modes):
     cases = []
-    for name, path, budgets in inputs:
+    for item in inputs:
+        name, path, budgets = item[0], item[1], item[2]
+        manifest = item[3] if len(item) > 3 else None
         for m in modes:
             if m == BUDGET_MODE:
                 for b in budgets:
-                    cases.append(Case(group, name, path, "B%d" % b, True, False, b))
+                    cases.append(Case(group, name, path, "B%d" % b, True, False, b, manifest))
             else:
                 v, t = MODE_TABLE[m]
-                cases.append(Case(group, name, path, m, v, t, DEFAULT_BUDGET))
+                cases.append(Case(group, name, path, m, v, t, DEFAULT_BUDGET, manifest))
     return cases
 
 
@@ -277,7 +292,11 @@ def eval_python(c):
     try:
         # G4 A2 / G5 A2: through the module loader like the Rust dump (a legacy file is returned untouched; a file with
         # `pub` or `mod` is an explicit-mode program, e.g. the G5 runtime roots and examples)
-        prog = load_program(c.path)
+        # G4b: a manifest case loads the package graph first (its PruvError is the same {"error": ..} object)
+        if c.manifest:
+            prog = load_program(c.path, manifest=load_graph(c.manifest))
+        else:
+            prog = load_program(c.path)
         check(prog)
         # G5 A2: the Rust source backend lowers inout programs (no guard; only the llvm backend keeps it until A3)
         # G9 A2: the Rust source backend lowers G9 programs (no guard)
@@ -326,9 +345,12 @@ def eval_rust(rs, cases, problems):
     groups = collections.OrderedDict()
     for c in cases:
         if c.status is None:
-            groups.setdefault((c.verified, c.trust, c.budget), []).append(c)
-    for (v, t, b), lst in groups.items():
+            # G4b: the manifest is part of the key, so cases with different manifests are never batched together
+            groups.setdefault((c.verified, c.trust, c.budget, c.manifest), []).append(c)
+    for (v, t, b, man), lst in groups.items():
         flags = (["--no-verify"] if not v else []) + (["--trust-callers"] if t else []) + ["--budget", str(b)]
+        if man:
+            flags += ["--manifest", man]
         for i in range(0, len(lst), BATCH):
             chunk = lst[i:i + BATCH]
             lines, err = run_batch(rs, flags, [c.path for c in chunk])
@@ -408,6 +430,12 @@ def save_case(save_dir, seq, c):
         write_bytes(os.path.join(d, "input.pruv"), fh.read())
     info = ["group: %s" % c.group, "name: %s" % c.name, "mode: %s (verified=%s trust_callers=%s budget=%d)" % (
         c.mode, c.verified, c.trust, c.budget), "status: %s" % c.status]
+    if c.manifest:
+        # G4b: the whole workspace (sibling packages), so the case can be rerun with --manifest workspace/app/pruv.json
+        ws = os.path.dirname(os.path.dirname(c.manifest))
+        shutil.copytree(ws, os.path.join(d, "workspace"), dirs_exist_ok=True)
+        info.append("manifest: %s (workspace copy: workspace/%s)" % (
+            rel(c.manifest), os.path.relpath(c.manifest, ws).replace(os.sep, "/")))
     for tag, line in (("py", c.py), ("rs", c.rs)):
         o = load(line) if line is not None else None
         if o is None:

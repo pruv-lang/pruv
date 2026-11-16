@@ -1,7 +1,7 @@
 """Hand mutants in work only; verifier rejection or exact fixture-output kill."""
 import sys
 sys.dont_write_bytecode=True
-import json, shutil
+import json, os, shutil
 from pathlib import Path
 import test_impl as t
 
@@ -22,13 +22,18 @@ MUTANTS=[
 
 def main():
  g=t.configure();base=t.WORK/'mutants';base.mkdir(exist_ok=True);report=[]
- flags=['--rust-extern',f'pruv_str={t.WORK / "libpruv_str.rlib"}','--rust-search',str(t.WORK),'--lib',str(t.LIB)]
+ flags=['--rust-extern',f'pruv_str={t.WORK / "libpruv_str.rlib"}','--rust-search',str(t.WORK)]
+ manifest=json.loads((t.HERE/'q_root.pruv.json').read_text())
  fixtures=sorted((t.HERE/'fixtures').glob('*.jsonl'));expected=[json.loads(f.with_suffix('.expected.json').read_text()) for f in fixtures]
  for name,file,old,new in MUTANTS:
-  w=base/name;shutil.rmtree(w,ignore_errors=True);w.mkdir(exist_ok=True)  # no stale library copies: they conflict with --lib
+  w=base/name;shutil.rmtree(w,ignore_errors=True);w.mkdir(exist_ok=True)
   for p in t.HERE.glob('*.pruv'):shutil.copy2(p,w/p.name)
+  # manifest copy next to the root: dependency paths are relative to the manifest, so point them at the real packages
+  mutated=json.loads(json.dumps(manifest))
+  for dep in mutated.get('dependencies',{}).values():dep['path']=os.path.relpath((t.HERE/dep['path']).resolve(),w.resolve())
+  (w/'q_root.pruv.json').write_text(json.dumps(mutated)+'\n')
   p=w/file;s=p.read_text();assert s.count(old)==1,(name,s.count(old));p.write_text(s.replace(old,new))
-  c=g.compile_pruv('rs',str(w/'q_root.pruv'),str(w),'rust',flags)
+  c=g.compile_pruv('rs',str(w/'q_root.pruv'),str(w),'rust',flags+['--manifest',str(w/'q_root.pruv.json')])
   (w/'compile.json').write_text(json.dumps(c,default=str,indent=2))
   row={'name':name,'file':file,'old':old,'new':new}
   if c['rc']:

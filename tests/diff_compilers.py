@@ -3,7 +3,7 @@
 
     python tests/diff_compilers.py [--b-path P] (default pruvc-rs/target/release/pruvc, .exe on Windows) [--backend rust|llvm|both]
         [--a py|rs] [--a-path P] [--b py|rs] [--b-path P] [--input FILE ...] [--flag F ...]
-        [--only must_reject|examples|runtime|bench|g4|g5] [--jobs N] [--timeout 300] [--save-dir DIR]
+        [--only must_reject|examples|runtime|bench|g4|g4b|g5] [--jobs N] [--timeout 300] [--save-dir DIR]
     python tests/diff_compilers.py --replay CASE_DIR
 
 Runs both compilers on the same input, flags and backend, each in a new process per input (a, then b, in order within one worker ->
@@ -14,6 +14,10 @@ and --input FILE (repeatable; set flags with --flag).
 G4 (group g4; A3: on both backends, rust and llvm): the project roots of tests/g4/fixtures.json (frontend, reject, proof and
 runtime with the flags/budget/externs of each spec.json) plus examples/g4_*/root.pruv in the three example modes. Only the root
 is the input; the compilers read the declared module files themselves.
+
+G4b (group g4b): the manifest workspaces tests/g4b/projects/<name>/ (tests/g4b/projects.py), each with `--manifest <app/pruv.json>`
+in default and --no-verify mode, on the selected backends. The saved case copies the whole workspace (workspace/) and the
+manifest argument is a placeholder (@MANIFEST@) in argv.json, so --replay runs against the copied workspace.
 
 G5 (group g5; A0): the frontend roots of tests/g5/fixtures.json (default and --no-verify) plus the g5_host_entry rejection project.
 The flat tests/must_reject/g5_*.pruv rejections are part of group must_reject.
@@ -61,6 +65,7 @@ NI_RE = re.compile(r"\b(?:not (?:yet )?(?:implemented|supported)|unimplemented|ë
 CEX_KEY = "counterexample"  # design section 5: counterexample numbers need not be byte-identical -> only presence on both sides is compared
 EXAMPLE_MODES = [("default", []), ("no-verify", ["--no-verify"]), ("trust-callers", ["--trust-callers"])]
 SRC_T, OUT_T, BIND_T = "@SRC@", "@OUT@", "@BIND@"
+MAN_T = "@MANIFEST@"   # G4b: placeholder of the --manifest argument (filled from spec["manifest"])
 
 
 # ---------------------------------------------------------------- input list
@@ -133,6 +138,14 @@ def build_cases(args):
             for mode, flags in EXAMPLE_MODES:
                 cases.append({"name": "g4/%s [%s]" % (root.split("/")[1], mode), "src": os.path.join(ROOT, *root.split("/")),
                               "flags": list(flags), "project": True})
+    if want("g4b"):
+        # G4b: manifest workspaces; "workspace" is the whole tree a saved case copies (the manifest is app/pruv.json)
+        import importlib
+        PB = importlib.import_module("g4b.projects")
+        for pname, manifest, root in PB.all_projects():
+            for mode, flags in (("default", []), ("no-verify", ["--no-verify"])):
+                cases.append({"name": "g4b/%s [%s]" % (pname, mode), "src": root, "flags": list(flags) + ["--manifest", MAN_T],
+                              "manifest": manifest, "workspace": os.path.dirname(os.path.dirname(manifest))})
     if want("g5"):
         # G5 A0: frontend roots and the rejection project of tests/g5/fixtures.json (flat tests/must_reject/g5_*.pruv are
         # in the must_reject group); until the Rust port, the Rust compiler is expected to differ on these inputs
@@ -180,10 +193,13 @@ def build_cases(args):
 
 # ---------------------------------------------------------------- normalization and comparison
 
-def norm_replacements(workdir, src, prefix):
-    """Normalize only the work directory, the input path and the compiler executable name/path."""
+def norm_replacements(workdir, src, prefix, manifest=None):
+    """Normalize only the work directory, the input path (and a G4b manifest path) and the compiler executable name/path."""
     reps = []
-    for p, tag in ((workdir, "<WORK>"), (src, "<SRC>")):
+    paths = [(workdir, "<WORK>"), (src, "<SRC>")]
+    if manifest:
+        paths.append((manifest, "<MANIFEST>"))
+    for p, tag in paths:
         for v in {p, os.path.realpath(p)}:
             reps.append((v, tag))
     for tok in prefix:
@@ -317,8 +333,10 @@ def template_argv(drv, backend, flags):
     return drv.argv(SRC_T, OUT_T, extra + list(flags), backend)
 
 
-def fill(tmpl, src, out, bind):
+def fill(tmpl, src, out, bind, manifest=None):
     m = {SRC_T: src, OUT_T: out, BIND_T: bind}
+    if manifest is not None:
+        m[MAN_T] = manifest
     return [m.get(t, t) for t in tmpl]
 
 
@@ -332,10 +350,11 @@ def run_pair(spec, tmpl_a, tmpl_b, work, timeout):
         os.makedirs(d, exist_ok=True)
         out = os.path.join(d, "out.ll" if backend == "llvm" else "out.rs")
         bind = os.path.join(d, "bind.rs")
-        argv = fill(tmpl, spec["src"], out, bind)
+        argv = fill(tmpl, spec["src"], out, bind, spec.get("manifest"))
         prefix = tmpl[:tmpl.index(SRC_T)]
         res = CD.run_argv(argv, timeout=timeout)
-        sides[side] = {"argv": argv, "res": res, "dir": d, "reps": norm_replacements(d, spec["src"], prefix)}
+        sides[side] = {"argv": argv, "res": res, "dir": d,
+                       "reps": norm_replacements(d, spec["src"], prefix, spec.get("manifest"))}
     ra, rb = sides["a"]["res"], sides["b"]["res"]
     details = []
     if ra.returncode != rb.returncode:
@@ -363,7 +382,14 @@ def write_text(path, text):
 def save_case(case_dir, spec, tmpl_a, tmpl_b, outcome, versions, case_id):
     os.makedirs(case_dir, exist_ok=True)
     project_root = None
-    if spec.get("project"):
+    ws_info = None
+    if spec.get("workspace"):
+        # G4b: the whole workspace (sibling packages); replay finds root and manifest at the same relative paths
+        ws = spec["workspace"]
+        shutil.copytree(ws, os.path.join(case_dir, "workspace"), dirs_exist_ok=True)
+        ws_info = {"src": os.path.relpath(spec["src"], ws).replace(os.sep, "/"),
+                   "manifest": os.path.relpath(spec["manifest"], ws).replace(os.sep, "/")}
+    elif spec.get("project"):
         # G4: the whole project directory, so replay sees the same relative tree and the same root basename
         shutil.copytree(os.path.dirname(spec["src"]), os.path.join(case_dir, "project"))
         project_root = os.path.basename(spec["src"])
@@ -389,6 +415,7 @@ def save_case(case_dir, spec, tmpl_a, tmpl_b, outcome, versions, case_id):
         {"id": case_id, "name": spec["name"], "original_src": spec["src"], "flags": spec["flags"],
          "backend": spec["backend"], "classification": outcome["cls"], "details": outcome["details"],
          "cex_differs": outcome.get("cex_differs", False), "project_root": project_root,
+         "workspace": ws_info,
          "exit": {"a": sides["a"]["res"].returncode, "b": sides["b"]["res"].returncode}}, indent=1, ensure_ascii=False))
 
 
@@ -406,11 +433,23 @@ def replay(case_dir, args):
         print("replay: cannot read case folder %s: %r" % (case_dir, e))
         return 2
     pr = meta.get("project_root")   # G4: a saved project keeps its tree and its root basename
-    src = os.path.abspath(os.path.join(case_dir, "project", pr) if pr else os.path.join(case_dir, "input.pruv"))
-    if not os.path.exists(src):
-        print("replay: %s missing in %s" % ("project/" + pr if pr else "input.pruv", case_dir))
-        return 2
+    wsi = meta.get("workspace")      # G4b: saved workspace copy; the manifest placeholder is filled with the copied manifest
+    manifest = None
+    if wsi:
+        wsdir = os.path.join(case_dir, "workspace")
+        src = os.path.abspath(os.path.join(wsdir, *wsi["src"].split("/")))
+        manifest = os.path.abspath(os.path.join(wsdir, *wsi["manifest"].split("/")))
+        if not (os.path.exists(src) and os.path.exists(manifest)):
+            print("replay: workspace/%s or workspace/%s missing in %s" % (wsi["src"], wsi["manifest"], case_dir))
+            return 2
+    else:
+        src = os.path.abspath(os.path.join(case_dir, "project", pr) if pr else os.path.join(case_dir, "input.pruv"))
+        if not os.path.exists(src):
+            print("replay: %s missing in %s" % ("project/" + pr if pr else "input.pruv", case_dir))
+            return 2
     spec = {"name": meta["name"], "src": src, "flags": meta["flags"], "backend": meta["backend"]}
+    if manifest:
+        spec["manifest"] = manifest
     print("replay %s  (saved classification: %s)" % (meta["name"], meta["classification"]))
     for s in ("a", "b"):
         print("  %s: %s" % (s, json.dumps(versions.get(s), ensure_ascii=False)))
@@ -451,7 +490,7 @@ def main():
     ap.add_argument("--backend", choices=["rust", "llvm", "both"], default="both")
     ap.add_argument("--input", action="append", default=[], metavar="FILE", help="additional input (repeatable)")
     ap.add_argument("--flag", action="append", default=[], help="compiler flag to give the --input files (repeatable)")
-    ap.add_argument("--only", choices=["must_reject", "examples", "runtime", "bench", "g4", "g5"], default=None)
+    ap.add_argument("--only", choices=["must_reject", "examples", "runtime", "bench", "g4", "g4b", "g5"], default=None)
     ap.add_argument("--no-default-inputs", action="store_true", help="only --input, no default inputs")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
     ap.add_argument("--timeout", type=int, default=300, help="seconds per compiler process (default 300)")

@@ -1,0 +1,237 @@
+// L3-2 A1: output tail. Two WHATWG UTF-8 decoders (one per stream) feed one buffer of UTF-16 units.
+//
+// ts layout (len 12): [0] count of units in buf, [1] T = tail_chars,
+//   stream 1 decoder at 2..7, stream 2 decoder at 7..12: needed, seen, cp, lower, upper.
+// buf has 2T+2 slots and holds at most 2T units between calls. When a code point pushes the count past 2T, the
+// last T units move to the front (TS keeps the last tailChars units of its string at each trim).
+
+pub fn tail_state(t: i64) -> [i64] ! alloc
+  requires 1 <= t && t <= 65536
+  ensures len(result) == 12
+  ensures result[0] == 0 && result[1] == t
+{
+  let mut ts: [i64] = alloc(12, 0);
+  ts[1] = t;
+  ts[5] = 128;
+  ts[6] = 191;
+  ts[10] = 128;
+  ts[11] = 191;
+  return ts;
+}
+
+pub fn tail_buf(t: i64) -> [i64] ! alloc
+  requires 1 <= t && t <= 65536
+  ensures len(result) == 2 * t + 2
+{
+  let b: [i64] = alloc(2 * t + 2, 0);
+  return b;
+}
+
+// Appends one code point (anything outside the scalar values becomes U+FFFD) as one or two UTF-16 units.
+fn put_cp(inout buf: [i64], inout ts: [i64], cp0: i64) -> ()
+  requires len(ts) == 12
+  requires 1 <= ts[1] && ts[1] <= 65536
+  requires len(buf) == 2 * ts[1] + 2
+  requires 0 <= ts[0] && ts[0] <= 2 * ts[1]
+  ensures ts[1] == old(ts)[1]
+  ensures 0 <= ts[0] && ts[0] <= 2 * ts[1]
+  ensures forall k in 2..12: ts[k] == old(ts)[k]
+{
+  let mut cp: i64 = cp0;
+  if cp < 0 || cp > 1114111 || (cp >= 55296 && cp <= 57343) { cp = 65533; }
+  let mut n: i64 = ts[0];
+  if cp < 65536 {
+    buf[n] = cp;
+    n = n + 1;
+  } else {
+    buf[n] = 55296 + (cp - 65536) / 1024;
+    buf[n + 1] = 56320 + (cp - 65536) % 1024;
+    n = n + 2;
+  }
+  let t: i64 = ts[1];
+  if n > 2 * t {
+    let start: i64 = n - t;
+    let mut k: i64 = 0;
+    while k < t
+      invariant 0 <= k && k <= t
+      invariant len(buf) == 2 * t + 2
+      decreases t - k
+    {
+      buf[k] = buf[start + k];
+      k = k + 1;
+    }
+    n = t;
+  }
+  ts[0] = n;
+}
+
+fn reset(inout ts: [i64], base: i64) -> ()
+  requires len(ts) == 12
+  requires base == 2 || base == 7
+  ensures forall k in 0..12: (k < base || k >= base + 5) ==> ts[k] == old(ts)[k]
+{
+  ts[base] = 0;
+  ts[base + 1] = 0;
+  ts[base + 2] = 0;
+  ts[base + 3] = 128;
+  ts[base + 4] = 191;
+}
+
+// One byte through the decoder at ts[base..base+5] (WHATWG UTF-8 decoder, maximal-subpart replacement).
+fn dec_byte(inout buf: [i64], inout ts: [i64], base: i64, b: i64) -> ()
+  requires len(ts) == 12
+  requires 1 <= ts[1] && ts[1] <= 65536
+  requires len(buf) == 2 * ts[1] + 2
+  requires 0 <= ts[0] && ts[0] <= 2 * ts[1]
+  requires base == 2 || base == 7
+  requires 0 <= b && b <= 255
+  ensures ts[1] == old(ts)[1]
+  ensures 0 <= ts[0] && ts[0] <= 2 * ts[1]
+{
+  if ts[base] != 0 {
+    if b < ts[base + 3] || b > ts[base + 4] {
+      // Not a continuation here: one U+FFFD for the pending sequence, then the byte starts over.
+      reset(inout ts, base);
+      put_cp(inout buf, inout ts, 65533);
+    } else {
+      ts[base + 3] = 128;
+      ts[base + 4] = 191;
+      // A pending code point has at most 15 bits (3 lead bits + two continuations), so the mask is a no-op.
+      let c: i64 = band(ts[base + 2], 32767) * 64 + b % 64;
+      let seen: i64 = band(ts[base + 1], 3) + 1;
+      if seen >= ts[base] {
+        reset(inout ts, base);
+        put_cp(inout buf, inout ts, c);
+      } else {
+        ts[base + 1] = seen;
+        ts[base + 2] = c;
+      }
+      return;
+    }
+  }
+  if b <= 127 {
+    put_cp(inout buf, inout ts, b);
+  } else if b >= 194 && b <= 223 {
+    ts[base] = 1;
+    ts[base + 1] = 0;
+    ts[base + 2] = b % 32;
+  } else if b >= 224 && b <= 239 {
+    if b == 224 { ts[base + 3] = 160; }
+    if b == 237 { ts[base + 4] = 159; }
+    ts[base] = 2;
+    ts[base + 1] = 0;
+    ts[base + 2] = b % 16;
+  } else if b >= 240 && b <= 244 {
+    if b == 240 { ts[base + 3] = 144; }
+    if b == 244 { ts[base + 4] = 143; }
+    ts[base] = 3;
+    ts[base + 1] = 0;
+    ts[base + 2] = b % 8;
+  } else {
+    put_cp(inout buf, inout ts, 65533);
+  }
+}
+
+// Decodes one chunk of stream s (1 or 2) into the tail.
+pub fn tail_push(inout buf: [i64], inout ts: [i64], s: i64, data: [u8]) -> ()
+  requires len(ts) == 12
+  requires 1 <= ts[1] && ts[1] <= 65536
+  requires len(buf) == 2 * ts[1] + 2
+  requires 0 <= ts[0] && ts[0] <= 2 * ts[1]
+  requires s == 1 || s == 2
+  ensures ts[1] == old(ts)[1]
+  ensures 0 <= ts[0] && ts[0] <= 2 * ts[1]
+{
+  let mut base: i64 = 2;
+  if s == 2 { base = 7; }
+  let mut i: i64 = 0;
+  while i < len(data)
+    invariant 0 <= i && i <= len(data)
+    invariant ts[1] == old(ts)[1]
+    invariant 0 <= ts[0] && ts[0] <= 2 * ts[1]
+    decreases len(data) - i
+  {
+    dec_byte(inout buf, inout ts, base, data[i]);
+    i = i + 1;
+  }
+}
+
+// End of input: an incomplete sequence becomes one U+FFFD, stream 1 first.
+pub fn tail_flush(inout buf: [i64], inout ts: [i64]) -> ()
+  requires len(ts) == 12
+  requires 1 <= ts[1] && ts[1] <= 65536
+  requires len(buf) == 2 * ts[1] + 2
+  requires 0 <= ts[0] && ts[0] <= 2 * ts[1]
+  ensures ts[1] == old(ts)[1]
+  ensures 0 <= ts[0] && ts[0] <= 2 * ts[1]
+{
+  if ts[2] != 0 {
+    reset(inout ts, 2);
+    put_cp(inout buf, inout ts, 65533);
+  }
+  if ts[7] != 0 {
+    reset(inout ts, 7);
+    put_cp(inout buf, inout ts, 65533);
+  }
+}
+
+fn put3(inout out: [u8], w: i64, c: i64) -> i64
+  requires 0 <= w && w + 3 <= len(out)
+  requires 0 <= c && c <= 65535
+  ensures w + 1 <= result && result <= w + 3
+{
+  if c < 128 {
+    out[w] = c;
+    return w + 1;
+  }
+  if c < 2048 {
+    out[w] = 192 + c / 64;
+    out[w + 1] = 128 + c % 64;
+    return w + 2;
+  }
+  out[w] = 224 + c / 4096;
+  out[w + 1] = 128 + (c / 64) % 64;
+  out[w + 2] = 128 + c % 64;
+  return w + 3;
+}
+
+// The last T units as UTF-8; a low surrogate whose high half was cut off is dropped (policy P5).
+pub fn tail_bytes(buf: [i64], ts: [i64]) -> [u8] ! alloc
+  requires len(ts) == 12
+  requires 1 <= ts[1] && ts[1] <= 65536
+  requires len(buf) == 2 * ts[1] + 2
+  requires 0 <= ts[0] && ts[0] <= 2 * ts[1]
+  ensures len(result) <= 3 * ts[1]
+{
+  let t: i64 = ts[1];
+  let n: i64 = ts[0];
+  let mut start: i64 = 0;
+  if n > t { start = n - t; }
+  if start < n && buf[start] >= 56320 && buf[start] <= 57343 { start = start + 1; }
+  let mut out: [u8] = alloc(3 * t, 0);
+  let mut w: i64 = 0;
+  let mut i: i64 = start;
+  while i < n
+    invariant start <= i && i <= n
+    invariant 0 <= w && w <= 3 * (i - start)
+    invariant len(out) == 3 * t
+    decreases n - i
+  {
+    let u: i64 = buf[i];
+    if u >= 55296 && u <= 56319 && i + 1 < n && buf[i + 1] >= 56320 && buf[i + 1] <= 57343 {
+      let cp: i64 = 65536 + (u - 55296) * 1024 + (buf[i + 1] - 56320);
+      out[w] = 240 + cp / 262144;
+      out[w + 1] = 128 + (cp / 4096) % 64;
+      out[w + 2] = 128 + (cp / 64) % 64;
+      out[w + 3] = 128 + cp % 64;
+      w = w + 4;
+      i = i + 2;
+    } else {
+      let mut c: i64 = u;
+      if c < 0 || c > 65535 || (c >= 55296 && c <= 57343) { c = 65533; }
+      w = put3(inout out, w, c);
+      i = i + 1;
+    }
+  }
+  return truncate(out, w);
+}

@@ -1,0 +1,2 @@
+mod json;
+pub fn f(x: i64) -> i64 { return crate::json::hid(x); }

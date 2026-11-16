@@ -11,7 +11,6 @@ import sys
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
-LIB = HERE.parent / 'lib'
 ROOT = HERE.parents[2]
 WORK = HERE / 'work'
 
@@ -120,7 +119,7 @@ def main():
     run([shutil.which('cargo') or str(Path.home()/'.cargo/bin/cargo'), 'build', '--release', '--offline',
          '--quiet', '--manifest-path', HERE/'str_adapter/Cargo.toml', '--target-dir', target])
     rlib, deps = target/'release/libpruv_str.rlib', target/'release/deps'
-    flags = ['--rust-extern', f'pruv_str={rlib}', '--rust-search', str(deps), '--lib', str(LIB)]
+    flags = ['--rust-extern', f'pruv_str={rlib}', '--rust-search', str(deps), '--manifest', str(HERE / 'a3_root.pruv.json')]
     rustflags = ['--extern', f'pruv_str={rlib}', '-L', f'dependency={deps}']
     cases = fixtures()
     payload = ''.join(op + ':' + nums(data) + '\n' for op, data, _ in cases)

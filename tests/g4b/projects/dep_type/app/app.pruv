@@ -1,0 +1,4 @@
+mod json;
+pub fn f() -> i64
+  ensures result == 5
+{ return crate::json::get(crate::json::Value { n: 5 }); }

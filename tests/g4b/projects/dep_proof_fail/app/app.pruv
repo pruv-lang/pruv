@@ -1,0 +1,5 @@
+mod json;
+pub fn f(x: i64) -> i64
+  requires 0 <= x && x <= 10
+  ensures result == x + 2
+{ return crate::json::inc(x); }

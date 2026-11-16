@@ -1,0 +1,1 @@
+{"name": "lines", "version": "0.1.0", "root": "lines.pruv", "dependencies": {"json": {"path": "../json", "version": "0.1"}, "lex": {"path": "../lex", "version": "0.1"}, "parse": {"path": "../parse", "version": "0.1"}}}

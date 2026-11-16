@@ -188,7 +188,7 @@ def main():
     for compiler, backend in common.PAIRS:
         key = f'{compiler}/{backend}'
         exe = common.build(g2, run, compiler, backend, HERE / 'supervise.pruv', WORK / f'{compiler}_{backend}',
-                           test_a3.HARNESS, 'q', common.LIB_FLAGS)
+                           test_a3.HARNESS, 'q', common.manifest_flags(HERE / 'supervise.pruv'))
         rows = []
         for group, tsr, fs in ((cases, ts, None), (faults, ts_fault, 6000)):
             pr = run_pruv(exe, group, fs)

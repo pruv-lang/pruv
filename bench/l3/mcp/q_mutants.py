@@ -1,7 +1,7 @@
 """Single source replacements in work only, rs/rust; original TS oracle."""
 import sys
 sys.dont_write_bytecode=True
-import importlib.util,json,shutil
+import importlib.util,json,os,shutil
 from q import HERE,WORK,cases,run
 from oracle import classify
 MUTANTS=[
@@ -22,15 +22,19 @@ def main():
  spec=importlib.util.spec_from_file_location('common',HERE.parent/'supervisor/common.py')
  c=importlib.util.module_from_spec(spec);spec.loader.exec_module(c);g,buildrun=c.configure(WORK)
  deps=WORK/'host/debug/deps';lib=next(deps.glob('libmcp_host-*.rlib'));serde=next(deps.glob('libserde_json-*.rlib'));adapter=WORK/'libpruv_str.rlib'
- LIB=HERE.parent/'lib'
- flags=['--rust-extern',f'mcp_host={lib}','--rust-extern',f'pruv_str={adapter}','--lib',str(LIB)]
+ manifest=json.loads((HERE/'pruv.json').read_text())
+ flags=['--rust-extern',f'mcp_host={lib}','--rust-extern',f'pruv_str={adapter}']
  requests=cases(0)[:22];expected=json.loads((WORK/'reference.json').read_text())[:22]
  report=[]
  for name,file,old,new in MUTANTS:
-  w=WORK/'mutants'/name;shutil.rmtree(w,ignore_errors=True);w.mkdir(parents=True,exist_ok=True)  # no stale library copies: they conflict with --lib
+  w=WORK/'mutants'/name;shutil.rmtree(w,ignore_errors=True);w.mkdir(parents=True,exist_ok=True)
   for p in HERE.glob('*.pruv'):shutil.copy2(p,w/p.name)
+  # manifest copy next to the root: dependency paths are relative to the manifest, so point them at the real packages
+  mutated=json.loads(json.dumps(manifest))
+  for dep in mutated.get('dependencies',{}).values():dep['path']=os.path.relpath((HERE/dep['path']).resolve(),w.resolve())
+  (w/'pruv.json').write_text(json.dumps(mutated)+'\n')
   p=w/file;s=p.read_text();assert s.count(old)==1,(name,s.count(old));p.write_text(s.replace(old,new))
-  built=g.compile_pruv('rs',str(w/'root.pruv'),str(w),'rust',flags)
+  built=g.compile_pruv('rs',str(w/'root.pruv'),str(w),'rust',flags+['--manifest',str(w/'pruv.json')])
   (w/'compile.json').write_text(json.dumps(built,default=str,indent=2))
   row={'name':name,'file':file,'old':old,'new':new}
   if built['rc']:

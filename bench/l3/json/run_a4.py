@@ -11,7 +11,6 @@ import sys
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
-LIB = HERE.parent / 'lib'
 ROOT = HERE.parents[2]
 WORK = HERE / 'work/a4'
 spec = importlib.util.spec_from_file_location('a3', HERE / 'run_a3.py')
@@ -187,7 +186,7 @@ def main():
     run([shutil.which('cargo') or str(Path.home()/'.cargo/bin/cargo'), 'build','--release','--offline','--quiet',
          '--manifest-path',HERE/'str_adapter/Cargo.toml','--target-dir',target])
     rlib, deps = target/'release/libpruv_str.rlib', target/'release/deps'
-    flags = ['--rust-extern',f'pruv_str={rlib}','--rust-search',str(deps),'--lib',str(LIB)]
+    flags = ['--rust-extern',f'pruv_str={rlib}','--rust-search',str(deps),'--manifest',str(HERE/'a4_root.pruv.json')]
     rustflags = ['--extern',f'pruv_str={rlib}','-L',f'dependency={deps}']
     cases = fixtures()
     payload = ''.join('|'.join([nums(d),nums(o),nums(k),nums(t.encode()),str(m)])+'\n' for d,o,k,t,m,w in cases)

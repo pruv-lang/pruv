@@ -69,7 +69,26 @@ pub fn internal_json(msg: &str) -> String {
 
 /// Runs the pipeline and returns the exit code.
 pub fn run(a: &Args) -> i32 {
-    match compile(a) {
+    // G4b-1 (same place as pruvc.py main): load the manifest graph after the option checks. A manifest diagnostic is
+    // printed and ends the run with exit 1, before the root match check.
+    let graph = match &a.manifest {
+        Some(m) => match pruv_core::manifest::load_graph(Path::new(m)) {
+            Ok(g) => {
+                let prog = g.program();
+                let root = pruv_core::manifest::join_rel(&prog.dir, &prog.root);
+                if !same_file(&root, Path::new(&a.input)) {
+                    return crate::cli::usage_error("--manifest root does not match the input file");
+                }
+                Some(g)
+            }
+            Err(e) => {
+                out_line(&e.into_pruv().to_cli_json());
+                return 1;
+            }
+        },
+        None => None,
+    };
+    match compile(a, graph.as_ref()) {
         Ok(()) => {
             out_line("{\"ok\": true}");
             0
@@ -90,6 +109,25 @@ pub fn run(a: &Args) -> i32 {
         Err(Fail::Internal(m)) => {
             out_line(&internal_json(&m));
             3
+        }
+    }
+}
+
+/// os.path.samefile with a missing file counting as "not the same" (device and inode on unix).
+fn same_file(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match (std::fs::metadata(a), std::fs::metadata(b)) {
+            (Ok(x), Ok(y)) => x.dev() == y.dev() && x.ino() == y.ino(),
+            _ => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        match (a.canonicalize(), b.canonicalize()) {
+            (Ok(x), Ok(y)) => x == y,
+            _ => false,
         }
     }
 }
@@ -205,12 +243,16 @@ fn check_runtime(target: &Target) -> Result<(), Fail> {
     }
 }
 
-fn compile(a: &Args) -> Result<(), Fail> {
+fn compile(a: &Args, graph: Option<&pruv_core::manifest::Graph>) -> Result<(), Fail> {
     // G4: the root file plus its declared module files (a legacy root is the plain parse). A read failure or UTF-8 decode
     // failure of the root is an internal error (handled like Python open().read()).
     // Exceeding the depth limit is reported by the parser as stage "internal" (exit 3, like Python RecursionError).
     let libs: Vec<std::path::PathBuf> = a.libs.iter().map(std::path::PathBuf::from).collect();
-    let loaded = pruv_core::modules::load_program_with_libs(Path::new(&a.input), &libs).map_err(|e| match e {
+    let loading = match graph {
+        Some(g) => pruv_core::modules::load_program_with_manifest(Path::new(&a.input), g),
+        None => pruv_core::modules::load_program_with_libs(Path::new(&a.input), &libs),
+    };
+    let loaded = loading.map_err(|e| match e {
         pruv_core::modules::LoadError::Io(m) | pruv_core::modules::LoadError::Decode(m) => Fail::Internal(m),
         pruv_core::modules::LoadError::Lang(e) => {
             if e.stage == "internal" {

@@ -4,7 +4,6 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 WORK = HERE / "work"
-LIB = HERE.parent / "lib"
 def configure():
     WORK.mkdir(parents=True, exist_ok=True)
     os.environ['TMPDIR'] = str(WORK)
@@ -49,7 +48,7 @@ def main():
  g2=configure()
  rlib=WORK/'libpruv_str.rlib'
  run([g2.RUSTC,'--crate-type','rlib','--crate-name','pruv_str',HERE/'str_adapter.rs','-o',rlib])
- flags=['--rust-extern',f'pruv_str={rlib}','--rust-search',str(WORK),'--lib',str(LIB)]
+ flags=['--rust-extern',f'pruv_str={rlib}','--rust-search',str(WORK),'--manifest',str(HERE/'root.pruv.json')]
  rustflags=['--extern',f'pruv_str={rlib}','-L',f'dependency={WORK}']
  fixtures=sorted((HERE/'fixtures').glob('*.jsonl'))
  expected=[json.loads(f.with_suffix('.expected.json').read_text()) for f in fixtures]

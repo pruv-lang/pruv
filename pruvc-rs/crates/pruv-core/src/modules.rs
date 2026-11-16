@@ -32,7 +32,15 @@ const BUILTIN_FNS: [&str; 16] = [
 
 /// Display form of a module path: crate, crate::a, crate::a::b.
 pub fn disp(path: &[String]) -> String {
-    let mut s = "crate".to_string();
+    disp_pkg(path, None)
+}
+
+/// `disp` of a module of package `pkg` (G4b-1; a dependency package: @json, @json::a; None = the program package).
+pub fn disp_pkg(path: &[String], pkg: Option<&str>) -> String {
+    let mut s = match pkg {
+        None => "crate".to_string(),
+        Some(p) => format!("@{}", p),
+    };
     for p in path {
         s.push_str("::");
         s.push_str(p);
@@ -42,7 +50,24 @@ pub fn disp(path: &[String]) -> String {
 
 /// The identity of an item: crate::a::b::name (root items crate::name).
 pub fn ident(path: &[String], name: &str) -> String {
-    format!("{}::{}", disp(path), name)
+    ident_in(path, name, None)
+}
+
+/// The identity of an item of package `pkg`: @pkg::a::name (None: the program package, crate::a::name).
+pub fn ident_in(path: &[String], name: &str, pkg: Option<&str>) -> String {
+    format!("{}::{}", disp_pkg(path, pkg), name)
+}
+
+/// G3 key token of a declaration identity (Python `mono.ident_key`): crate::a::x -> encode_name(a, x);
+/// @pkg::a::x -> "p" + encode_name(pkg, a, x).
+pub fn ident_key(name: &str) -> String {
+    match name.strip_prefix('@') {
+        Some(rest) => {
+            let comps: Vec<String> = rest.split("::").map(|s| s.to_string()).collect();
+            format!("p{}", encode_name(&comps))
+        }
+        None => encode_name(&identity_components(name)),
+    }
 }
 
 /// G4 A2 (docs/G4_SPEC.md 6; Python `encode_name`): the count of the components, then for each one `_<ASCII byte length>_<component>`.
@@ -78,13 +103,14 @@ pub fn safe_type_cow(ty: &GType) -> std::borrow::Cow<'_, GType> {
         return Cow::Borrowed(ty);
     }
     let args: Vec<Cow<'_, GType>> = ty.args.iter().map(safe_type_cow).collect();
-    if BUILTIN_TYPE_NAMES.contains(&ty.name.as_str()) || !ty.name.starts_with("crate::") {
+    if BUILTIN_TYPE_NAMES.contains(&ty.name.as_str()) || !(ty.name.starts_with("crate::") || ty.name.starts_with('@')) {
         if args.iter().all(|a| matches!(a, Cow::Borrowed(_))) {
             return Cow::Borrowed(ty);
         }
         return Cow::Owned(GType::new(&ty.name, args.into_iter().map(Cow::into_owned).collect()));
     }
-    Cow::Owned(GType::new(&encode_name(&identity_components(&ty.name)), args.into_iter().map(Cow::into_owned).collect()))
+    // a dependency package's identity: "p" + encode_name(pkg, a, x) (G4b-1)
+    Cow::Owned(GType::new(&ident_key(&ty.name), args.into_iter().map(Cow::into_owned).collect()))
 }
 
 #[derive(Debug, Clone)]
@@ -94,6 +120,10 @@ pub struct Module {
     /// path relative to the root directory, `/` separators
     pub file: String,
     pub parent: Option<usize>,
+    /// G4b-1: package name of a dependency module, None = the program package
+    pub pkg: Option<String>,
+    /// manifest mode: index of this module's package in the manifest Graph
+    pub pkginfo: Option<usize>,
     /// ModDecl list in source order (duplicates included)
     pub mods: Vec<ModDecl>,
     /// name -> loaded child (a duplicate declaration is not loaded again)
@@ -112,6 +142,8 @@ impl Module {
             path,
             file,
             parent,
+            pkg: None,
+            pkginfo: None,
             mods: Vec::new(),
             children: Vec::new(),
             items: Vec::new(),
@@ -136,6 +168,8 @@ pub struct ItemMeta {
     pub src_name: String,
     /// root `pub` nongeneric ordinary function (set by resolve)
     pub host_entry: bool,
+    /// G4b-1: package name of a dependency item, None = the program package
+    pub pkg: Option<String>,
 }
 
 /// Explicit-mode data of a program (Python `Program.explicit` / `modules` / `items` / `entries` / `main`).
@@ -185,7 +219,7 @@ fn file_id(a: &Path) -> Option<String> {
     a.canonicalize().ok().map(|x| x.to_string_lossy().into_owned())
 }
 
-struct Loader {
+struct Loader<'g> {
     modules: Vec<Module>,
     parsed: Vec<crate::parser::ParsedFile>,
     /// file identity -> display path of every loaded file
@@ -194,11 +228,93 @@ struct Loader {
     libs: Vec<PathBuf>,
     /// per module (same index as `modules`): the directory its children are resolved in (the root directory for the
     /// root tree) and the display prefix
-    /// ("" for the root tree, "@lib/" for a library module and its children)
-    origin: Vec<(PathBuf, &'static str)>,
+    /// ("" for the root tree, "@lib/" for a library module and its children, "@pkg/NAME/sub/" for a dependency package)
+    origin: Vec<(PathBuf, String)>,
+    /// G4b-1: the package graph of `--manifest`; packages are mounted by `mod KEY;` in package roots
+    graph: Option<&'g crate::manifest::Graph>,
+    /// canonical dependency dir -> index of its root module (one per package, a diamond reuses it)
+    pkg_mods: HashMap<PathBuf, usize>,
 }
 
-impl Loader {
+impl<'g> Loader<'g> {
+    /// A `pkg` diagnostic at line 1, col 1 reported for `display` (a manifest, not a loaded module file).
+    fn pkg_err(&self, display: &str, code: &str, message: String, fix: String) -> PruvError {
+        self.publish(Some(display));
+        PruvError::new("pkg", tagged_line(1, self.modules.len() + 1), 1, code, message, fix)
+    }
+
+    /// Mounts dependency package `di` as child `md.name` of the package root `mi` (its root module is built once).
+    fn mount(&mut self, mi: usize, md: &ModDecl, di: usize) -> Res<()> {
+        let graph: &'g crate::manifest::Graph = match self.graph {
+            Some(g) => g,
+            None => return Ok(()),
+        };
+        let dpkg = &graph.pkgs[di];
+        if let Some(&done) = self.pkg_mods.get(&dpkg.dir) {
+            self.modules[mi].children.push((md.name.clone(), done));
+            return Ok(());
+        }
+        let cpath = vec![md.name.clone()];
+        let sub: &str = match dpkg.root.rfind('/') {
+            Some(i) => &dpkg.root[..i],
+            None => "",
+        };
+        let rel = format!("@pkg/{}/{}", dpkg.name, dpkg.root);
+        let fpath = crate::manifest::join_rel(&dpkg.dir, &dpkg.root);
+        let text = match std::fs::read(&fpath) {
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    return Err(PruvError::new(
+                        "parse", md.line, md.col, "module_file",
+                        format!("the file of module {} is not valid UTF-8", disp(&cpath)),
+                        format!("save {} as UTF-8", rel),
+                    ));
+                }
+            },
+            Err(_) => {
+                return Err(PruvError::new(
+                    "parse", md.line, md.col, "module_file",
+                    format!("cannot read the file of module {} (expected {})", disp(&cpath), rel),
+                    format!("restore the root file of package {}", dpkg.name),
+                ));
+            }
+        };
+        let fid = file_id(&fpath);
+        if let Some(orel) = fid.as_ref().and_then(|k| self.loaded.get(k)) {
+            return Err(PruvError::new(
+                "parse", md.line, md.col, "module_alias",
+                format!("the file {} of module {} was already loaded as {}", rel, disp(&cpath), orel),
+                "every module needs its own file; remove the alias",
+            ));
+        }
+        if let Some(k) = fid {
+            self.loaded.insert(k, rel.clone());
+        }
+        let tag = self.modules.len() + 1;
+        let parsed = match crate::parser::parse_file(&text, tag) {
+            Ok(p) => p,
+            Err(e) => {
+                self.publish(Some(&rel)); // the error carries the tag of this file
+                return Err(e);
+            }
+        };
+        let ci = self.modules.len();
+        let mut child = Module::new(Vec::new(), rel, Some(mi));
+        child.pkg = Some(dpkg.name.clone());
+        child.pkginfo = Some(di);
+        child.mods = parsed.mods.clone();
+        let base = if sub.is_empty() { dpkg.dir.clone() } else { crate::manifest::join_rel(&dpkg.dir, sub) };
+        let relpre = if sub.is_empty() { format!("@pkg/{}/", dpkg.name) } else { format!("@pkg/{}/{}/", dpkg.name, sub) };
+        self.pkg_mods.insert(dpkg.dir.clone(), ci);
+        self.modules[mi].children.push((md.name.clone(), ci));
+        self.modules.push(child);
+        self.origin.push((base, relpre));
+        self.parsed.push(parsed);
+        self.publish(None);
+        self.visit(ci)
+    }
+
     /// Registers the file names of the modules loaded so far (diagnostic line tags), plus one pending file.
     fn publish(&self, extra: Option<&str>) {
         let mut v: Vec<String> = self.modules.iter().map(|m| m.file.clone()).collect();
@@ -218,15 +334,41 @@ impl Loader {
             let mut cpath = self.modules[mi].path.clone();
             cpath.push(md.name.clone());
             let (base, prefix) = self.origin[mi].clone();
-            let mut origin = (base.clone(), prefix);
+            let mut origin = (base.clone(), prefix.clone());
             let mut rel = format!("{}{}.pruv", prefix, cpath.join("/"));
             let mut fp = base;
             for c in &cpath {
                 fp.push(c);
             }
             let mut fpath = PathBuf::from(format!("{}.pruv", fp.to_string_lossy()));
+            // G4b-1: in a package root `mod NAME;` may mount a dependency package (the program root is the root of the
+            // program's own package)
+            if let (Some(graph), true) = (self.graph, self.modules[mi].path.is_empty()) {
+                let pi = self.modules[mi].pkginfo.unwrap_or(0);
+                if md.name == "std" {
+                    if let Some(p) = self.modules[mi].pkg.clone() {
+                        return Err(PruvError::new(
+                            "pkg", md.line, md.col, "std_in_dependency",
+                            format!("`mod std;` is only available in the program root, not in package {}", p),
+                            "remove `mod std;`",
+                        ));
+                    }
+                }
+                if let Some((_, ddir, _)) = graph.pkgs[pi].deps.iter().find(|d| d.0 == md.name) {
+                    let di = graph.by_dir[ddir];
+                    if std::fs::symlink_metadata(&fpath).is_ok() {
+                        return Err(PruvError::new(
+                            "pkg", md.line, md.col, "mount_conflict",
+                            format!("module {} is found in more than one place: {}, @pkg/{}", md.name, rel, graph.pkgs[di].name),
+                            "remove the local file or rename the dependency key",
+                        ));
+                    }
+                    self.mount(mi, md, di)?;
+                    continue;
+                }
+            }
             // G4b-0: a root declaration may also be found in a library directory (never std, never below the root)
-            if mi == 0 && md.name != "std" && !self.libs.is_empty() {
+            if mi == 0 && md.name != "std" && !self.libs.is_empty() && self.graph.is_none() {
                 let mut found: Vec<(PathBuf, String, Option<usize>)> = Vec::new();
                 if std::fs::symlink_metadata(&fpath).is_ok() {
                     found.push((fpath.clone(), rel.clone(), None));
@@ -248,7 +390,7 @@ impl Loader {
                 if let Some((p, r, Some(k))) = found.pop() {
                     fpath = p;
                     rel = r;
-                    origin = (self.libs[k].clone(), "@lib/");
+                    origin = (self.libs[k].clone(), "@lib/".to_string());
                 }
             }
             let text = if md.name == "std" {
@@ -296,8 +438,14 @@ impl Loader {
                             md.line,
                             md.col,
                             "module_file",
-                            format!("cannot read the file of module {} (expected {})", disp(&cpath), rel),
-                            if mi == 0 {
+                            format!(
+                                "cannot read the file of module {} (expected {})",
+                                disp_pkg(&cpath, self.modules[mi].pkg.as_deref()),
+                                rel
+                            ),
+                            if self.graph.is_some() && self.modules[mi].path.is_empty() {
+                                format!("create {} next to the root file, add {} to dependencies, or remove `mod {};`", rel, md.name, md.name)
+                            } else if mi == 0 {
                                 format!("create {} next to the root file, pass --lib DIR, or remove `mod {};`", rel, md.name)
                             } else {
                                 format!("create {} next to the root file, or remove `mod {};`", rel, md.name)
@@ -330,6 +478,8 @@ impl Loader {
             };
             let ci = self.modules.len();
             let mut child = Module::new(cpath, rel, Some(mi));
+            child.pkg = self.modules[mi].pkg.clone();
+            child.pkginfo = self.modules[mi].pkginfo;
             child.mods = parsed.mods.clone();
             self.modules[mi].children.push((md.name.clone(), ci));
             self.modules.push(child);
@@ -337,6 +487,20 @@ impl Loader {
             self.parsed.push(parsed);
             self.publish(None);
             self.visit(ci)?;
+        }
+        if let (Some(graph), true) = (self.graph, self.modules[mi].path.is_empty()) {
+            // every dependency key must be mounted by a `mod` of the package root
+            let pkg = &graph.pkgs[self.modules[mi].pkginfo.unwrap_or(0)];
+            for (key, _, _) in &pkg.deps {
+                if !seen.contains(key) {
+                    return Err(self.pkg_err(
+                        &pkg.display,
+                        "unused_dependency",
+                        format!("dependency {} is declared but not mounted by `mod {};` in the package root", key, key),
+                        format!("add `mod {};` to the package root or remove the dependency", key),
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -349,12 +513,22 @@ pub fn load_program(path: &Path) -> Result<Loaded, LoadError> {
 
 /// `load_program` with the ordered `--lib` directories (docs/G4B_LIB_SPEC.md section 2); an empty list is `load_program`.
 pub fn load_program_with_libs(path: &Path, libs: &[PathBuf]) -> Result<Loaded, LoadError> {
+    load_program_full(path, libs, None)
+}
+
+/// `load_program` of a program with a manifest (G4b-1): `mod KEY;` in a package root mounts the dependency package of
+/// that key. `graph` comes from `manifest::load_graph`; `path` is the program root (the root file of its manifest).
+pub fn load_program_with_manifest(path: &Path, graph: &crate::manifest::Graph) -> Result<Loaded, LoadError> {
+    load_program_full(path, &[], Some(graph))
+}
+
+fn load_program_full(path: &Path, libs: &[PathBuf], graph: Option<&crate::manifest::Graph>) -> Result<Loaded, LoadError> {
     let bytes = std::fs::read(path).map_err(|e| LoadError::Io(io_error_message(path, &e)))?;
     let src = match std::str::from_utf8(&bytes) {
         Ok(s) => s.to_string(),
         Err(e) => return Err(LoadError::Decode(utf8_error_message(&bytes, &e))),
     };
-    load_source_with_libs(path, &src, libs)
+    load_source_full(path, &src, libs, graph)
 }
 
 /// `load_program` for an already decoded root text (`path` still names the root: children are relative to its directory).
@@ -364,6 +538,15 @@ pub fn load_source(path: &Path, src: &str) -> Result<Loaded, LoadError> {
 
 /// `load_source` with the ordered `--lib` directories.
 pub fn load_source_with_libs(path: &Path, src: &str, libs: &[PathBuf]) -> Result<Loaded, LoadError> {
+    load_source_full(path, src, libs, None)
+}
+
+fn load_source_full(
+    path: &Path,
+    src: &str,
+    libs: &[PathBuf],
+    graph: Option<&crate::manifest::Graph>,
+) -> Result<Loaded, LoadError> {
     let root_file = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let first = match crate::parser::parse_file(src, 0) {
         Ok(f) => f,
@@ -378,6 +561,22 @@ pub fn load_source_with_libs(path: &Path, src: &str, libs: &[PathBuf]) -> Result
         }
     };
     if first.mods.is_empty() && !first.has_pub {
+        if let Some(g) = graph {
+            if let Some((key, _, _)) = g.program().deps.first() {
+                // a legacy root mounts nothing: the first declared dependency is unused
+                return Err(LoadError::Lang(
+                    crate::manifest::PkgError {
+                        err: PruvError::new(
+                            "pkg", 1, 1, "unused_dependency",
+                            format!("dependency {} is declared but not mounted by `mod {};` in the package root", key, key),
+                            format!("add `mod {};` to the package root or remove the dependency", key),
+                        ),
+                        file: g.program().display.clone(),
+                    }
+                    .into_pruv(),
+                ));
+            }
+        }
         set_files(Vec::new());
         return Ok(Loaded { prog: first.prog, g4: None }); // legacy mode: untouched
     }
@@ -396,6 +595,7 @@ pub fn load_source_with_libs(path: &Path, src: &str, libs: &[PathBuf]) -> Result
     };
     let root_dir = abs.parent().map(|p| p.to_path_buf()).unwrap_or_default();
     let mut root_mod = Module::new(Vec::new(), root_file.clone(), None);
+    root_mod.pkginfo = graph.map(|_| 0);
     root_mod.mods = root.mods.clone();
     let mut loaded = HashMap::new();
     if let Some(k) = file_id(&abs) {
@@ -403,7 +603,15 @@ pub fn load_source_with_libs(path: &Path, src: &str, libs: &[PathBuf]) -> Result
     }
     // library paths are made absolute like the root (relative ones are relative to the working directory)
     let libs: Vec<PathBuf> = libs.iter().map(|d| std::path::absolute(d).unwrap_or_else(|_| d.clone())).collect();
-    let mut ld = Loader { origin: vec![(root_dir, "")], modules: vec![root_mod], parsed: vec![root], loaded, libs };
+    let mut ld = Loader {
+        origin: vec![(root_dir, String::new())],
+        modules: vec![root_mod],
+        parsed: vec![root],
+        loaded,
+        libs,
+        graph,
+        pkg_mods: HashMap::new(),
+    };
     ld.publish(None);
     ld.visit(0).map_err(LoadError::Lang)?;
 
@@ -423,7 +631,13 @@ pub fn load_source_with_libs(path: &Path, src: &str, libs: &[PathBuf]) -> Result
                 Item::Fn(i) => {
                     if let Some(f) = fns[i].take() {
                         let gi = prog.functions.len();
-                        fn_meta.push(ItemMeta { module: mi, is_pub: fn_pub[i], src_name: f.name.clone(), host_entry: false });
+                        fn_meta.push(ItemMeta {
+                            module: mi,
+                            is_pub: fn_pub[i],
+                            src_name: f.name.clone(),
+                            host_entry: false,
+                            pkg: modules[mi].pkg.clone(),
+                        });
                         prog.functions.push(f);
                         mitems.push(Item::Fn(gi));
                     }
@@ -431,7 +645,13 @@ pub fn load_source_with_libs(path: &Path, src: &str, libs: &[PathBuf]) -> Result
                 Item::Ty(i) => {
                     if let Some(d) = tys[i].take() {
                         let gi = prog.types.len();
-                        ty_meta.push(ItemMeta { module: mi, is_pub: ty_pub[i], src_name: d.name().to_string(), host_entry: false });
+                        ty_meta.push(ItemMeta {
+                            module: mi,
+                            is_pub: ty_pub[i],
+                            src_name: d.name().to_string(),
+                            host_entry: false,
+                            pkg: modules[mi].pkg.clone(),
+                        });
                         prog.types.push(d);
                         mitems.push(Item::Ty(gi));
                     }
@@ -473,11 +693,13 @@ fn run(prog: &mut Program, g4: &mut G4) -> Res<()> {
     for mi in 0..g4.modules.len() {
         let items = g4.modules[mi].items.clone();
         let path = g4.modules[mi].path.clone();
+        let pkg = g4.modules[mi].pkg.clone();
+        let pk = pkg.as_deref();
         for it in &items {
             if let Item::Fn(fi) = *it {
                 let f = &prog.functions[fi];
                 if g4.modules[mi].funcs.contains_key(&f.name) {
-                    return Err(err(f.line, f.col, "dup_fn", format!("function {} defined twice", ident(&path, &f.name)), ""));
+                    return Err(err(f.line, f.col, "dup_fn", format!("function {} defined twice", ident_in(&path, &f.name, pk)), ""));
                 }
                 if BUILTIN_FNS.contains(&f.name.as_str()) || crate::check::contract_only(&f.name).is_some() || is_catalog(&f.name) {
                     return Err(err(f.line, f.col, "reserved", format!("{} is a builtin name", f.name), "rename the function"));
@@ -502,14 +724,14 @@ fn run(prog: &mut Program, g4: &mut G4) -> Res<()> {
                     return Err(err(line, col, "reserved", format!("{} is a builtin name", name), "rename the type"));
                 }
                 if g4.modules[mi].types.contains_key(&name) {
-                    return Err(err(line, col, "dup_type", format!("type {} defined twice", ident(&path, &name)), ""));
+                    return Err(err(line, col, "dup_type", format!("type {} defined twice", ident_in(&path, &name, pk)), ""));
                 }
                 if g4.modules[mi].funcs.contains_key(&name) {
                     return Err(err(
                         line,
                         col,
                         "name_collision",
-                        format!("{} is both a type and a function", ident(&path, &name)),
+                        format!("{} is both a type and a function", ident_in(&path, &name, pk)),
                         "rename the type or the function",
                     ));
                 }
@@ -524,7 +746,7 @@ fn run(prog: &mut Program, g4: &mut G4) -> Res<()> {
                     md.line,
                     md.col,
                     "duplicate_module",
-                    format!("module {} is declared twice in {}", md.name, disp(&path)),
+                    format!("module {} is declared twice in {}", md.name, disp_pkg(&path, pk)),
                     format!("remove the second `mod {};`", md.name),
                 ));
             }
@@ -534,7 +756,7 @@ fn run(prog: &mut Program, g4: &mut G4) -> Res<()> {
                     md.line,
                     md.col,
                     "name_collision",
-                    format!("{} is both a module and a function in {}", md.name, disp(&path)),
+                    format!("{} is both a module and a function in {}", md.name, disp_pkg(&path, pk)),
                     "rename the module or the function",
                 ));
             }
@@ -562,7 +784,14 @@ fn run(prog: &mut Program, g4: &mut G4) -> Res<()> {
     // 2. resolve every reference (items in program order); then rename the items to their identities
     {
         let g4r: &G4 = &*g4;
-        let mut rs = Rs { g4: g4r, cur: 0, old_owner: String::new(), new_owner: String::new() };
+        // the root module of every package (`crate` of a module is the root of its own package)
+        let mut roots: HashMap<Option<String>, usize> = HashMap::new();
+        for (i, m) in g4r.modules.iter().enumerate() {
+            if m.path.is_empty() {
+                roots.entry(m.pkg.clone()).or_insert(i);
+            }
+        }
+        let mut rs = Rs { g4: g4r, cur: 0, old_owner: String::new(), new_owner: String::new(), roots };
         for it in &items {
             match *it {
                 Item::Fn(fi) => {
@@ -585,7 +814,7 @@ fn run(prog: &mut Program, g4: &mut G4) -> Res<()> {
                 .into_iter()
                 .map(|fd| (fd.name.clone(), GType::from_key(&fd.ty)))
                 .collect();
-            type_by_id.insert(ident(&m.path, name), TyIface { is_pub: g4.ty_meta[*ti].is_pub, fields });
+            type_by_id.insert(ident_in(&m.path, name, m.pkg.as_deref()), TyIface { is_pub: g4.ty_meta[*ti].is_pub, fields });
         }
     }
     // one visited set for the whole program: the first leak aborts the check, so every public declaration visited by an
@@ -616,6 +845,8 @@ struct Rs<'a> {
     cur: usize,
     old_owner: String,
     new_owner: String,
+    /// package (None = the program package) -> index of its root module
+    roots: HashMap<Option<String>, usize>,
 }
 
 impl<'a> Rs<'a> {
@@ -627,11 +858,16 @@ impl<'a> Rs<'a> {
     /// crate::a::b::x -> (innermost module reached by module segments, remaining segments)
     fn walk(&self, path: &str) -> (usize, Vec<String>) {
         let segs: Vec<&str> = path.split("::").skip(1).collect();
-        let mut m = 0usize;
+        // `crate` = the root of the package of the module being resolved
+        let p: &Option<String> = &self.module(self.cur).pkg;
+        let mut m = self.roots.get(p).copied().unwrap_or(0);
         let mut i = 0usize;
         while i + 1 < segs.len() {
             match self.module(m).child(segs[i]) {
                 Some(c) => {
+                    if self.module(c).pkg != self.module(m).pkg && self.module(m).pkg != *p {
+                        break; // a package never sees its dependencies' dependencies
+                    }
                     m = c;
                     i += 1;
                 }
@@ -648,7 +884,7 @@ impl<'a> Rs<'a> {
                 line,
                 col,
                 "private_item",
-                format!("{} is private to module {}", path, disp(&md.path)),
+                format!("{} is private to module {}", path, disp_pkg(&md.path, md.pkg.as_deref())),
                 format!("mark it `pub` in {}, or call it through a public item of that module", md.file),
             ));
         }
@@ -661,7 +897,7 @@ impl<'a> Rs<'a> {
             line,
             col,
             "unknown_module",
-            format!("unknown module {} in {} (path {})", rem[0], disp(&md.path), path),
+            format!("unknown module {} in {} (path {})", rem[0], disp_pkg(&md.path, md.pkg.as_deref()), path),
             format!("declare it with `mod {};` in {}, or correct the path", rem[0], md.file),
         )
     }
@@ -688,7 +924,7 @@ impl<'a> Rs<'a> {
             }
         };
         self.access(self.g4.ty_meta[ti].is_pub, m, line, col, path)?;
-        Ok(ident(&md.path, &rem[0]))
+        Ok(ident_in(&md.path, &rem[0], md.pkg.as_deref()))
     }
 
     /// a nominal name as written -> identity (qualified: resolved; unqualified: the current module only; otherwise
@@ -699,7 +935,7 @@ impl<'a> Rs<'a> {
         }
         let cur = self.module(self.cur);
         if cur.types.contains_key(name) {
-            return Ok(ident(&cur.path, name));
+            return Ok(ident_in(&cur.path, name, cur.pkg.as_deref()));
         }
         Ok(name.to_string())
     }
@@ -719,7 +955,7 @@ impl<'a> Rs<'a> {
             }
         };
         self.access(self.g4.fn_meta[fi].is_pub, m, line, col, path)?;
-        Ok(ident(&md.path, &rem[0]))
+        Ok(ident_in(&md.path, &rem[0], md.pkg.as_deref()))
     }
 
     // ---- types ----
@@ -783,8 +1019,8 @@ impl<'a> Rs<'a> {
     fn tdecl(&mut self, d: &mut TypeDecl, meta: &ItemMeta) -> Res<()> {
         let path = &self.module(meta.module).path;
         self.old_owner = decl_owner(&meta.src_name);
-        self.new_owner = decl_owner(&ident(path, &meta.src_name));
-        let new_name = ident(path, &meta.src_name);
+        self.new_owner = decl_owner(&ident_in(path, &meta.src_name, meta.pkg.as_deref()));
+        let new_name = ident_in(path, &meta.src_name, meta.pkg.as_deref());
         match d {
             TypeDecl::Struct(s) => {
                 for fd in s.fields.iter_mut() {
@@ -807,7 +1043,7 @@ impl<'a> Rs<'a> {
     fn fn_(&mut self, f: &mut Function, meta: &ItemMeta) -> Res<()> {
         let path = &self.module(meta.module).path;
         self.old_owner = fn_owner(&meta.src_name);
-        self.new_owner = fn_owner(&ident(path, &meta.src_name));
+        self.new_owner = fn_owner(&ident_in(path, &meta.src_name, meta.pkg.as_deref()));
         let (fl, fc) = (f.line, f.col);
         for p in f.params.iter_mut() {
             p.ty = self.rtype_key(&p.ty, fl, fc)?;
@@ -826,7 +1062,7 @@ impl<'a> Rs<'a> {
             self.rexpr(d)?;
         }
         self.rstmts(&mut f.body)?;
-        f.name = ident(path, &meta.src_name);
+        f.name = ident_in(path, &meta.src_name, meta.pkg.as_deref());
         Ok(())
     }
 
@@ -909,12 +1145,18 @@ impl<'a> Rs<'a> {
                     }
                     let md = self.module(m);
                     let ti = md.types[&rem[0]];
-                    self.access(self.g4.ty_meta[ti].is_pub, m, c.line, c.col, &format!("{}::{}", disp(&md.path), rem[0]))?;
+                    self.access(
+                        self.g4.ty_meta[ti].is_pub,
+                        m,
+                        c.line,
+                        c.col,
+                        &format!("{}::{}", disp_pkg(&md.path, md.pkg.as_deref()), rem[0]),
+                    )?;
                     let args = std::mem::take(&mut c.args);
                     replace = Some(Expr::EnumCtor(EnumCtor {
                         line: c.line,
                         col: c.col,
-                        enum_name: ident(&md.path, &rem[0]),
+                        enum_name: ident_in(&md.path, &rem[0], md.pkg.as_deref()),
                         variant: rem[1].clone(),
                         args,
                         ty: None,
@@ -942,7 +1184,7 @@ impl<'a> Rs<'a> {
                 } else {
                     let cur = self.module(self.cur);
                     if cur.funcs.contains_key(&c.name) {
-                        c.name = ident(&cur.path, &c.name);
+                        c.name = ident_in(&cur.path, &c.name, cur.pkg.as_deref());
                     }
                 }
                 self.targs(&mut c.targs, c.line, c.col)?;
@@ -1158,8 +1400,8 @@ fn entries(prog: &Program, g4: &mut G4) -> Res<()> {
     let mut out: Vec<String> = Vec::new();
     for (i, f) in prog.functions.iter().enumerate() {
         let meta_module = g4.fn_meta[i].module;
-        if !g4.modules[meta_module].path.is_empty() {
-            continue;
+        if !g4.modules[meta_module].path.is_empty() || g4.fn_meta[i].pkg.is_some() {
+            continue; // not the program root (a dependency root's `pub fn` is an ordinary public function)
         }
         if g4.fn_meta[i].src_name == "main" {
             if !g4.fn_meta[i].is_pub {

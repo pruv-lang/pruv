@@ -1,7 +1,5 @@
 // Qwen import; adapted from the L3-1 verified modules. See docs/QWEN_IMPORT_SPEC.md.
 mod json;
-mod lex;
-mod parse;
 mod lines;
 mod jstr;
 mod access;

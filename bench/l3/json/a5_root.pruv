@@ -1,7 +1,5 @@
 // Plain-array host wrappers. Size preconditions only bound flat output allocation.
 mod json;
-mod lex;
-mod parse;
 mod lines;
 
 fn prefix(data: [i64], n: i64) -> [i64] ! alloc

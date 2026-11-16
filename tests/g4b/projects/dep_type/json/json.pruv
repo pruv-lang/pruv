@@ -1,0 +1,5 @@
+pub struct Value { n: i64 }
+pub fn get(v: Value) -> i64
+  requires 0 <= v.n
+  ensures result == v.n
+{ return v.n; }

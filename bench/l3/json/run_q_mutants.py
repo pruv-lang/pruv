@@ -12,8 +12,10 @@ import time
 
 HERE = Path(__file__).resolve().parent
 WORK = HERE / 'work'
-LIB = HERE.parent / 'lib'
-LIB_FLAGS = ['--lib', str(LIB)]
+PKGS = HERE.parent / 'pkgs'
+
+def manifest_flags(batch, root_dir=HERE):
+    return ['--manifest', str(root_dir / f'a{batch}_root.pruv.json')]
 
 def run(cmd, data=None, timeout=180):
     p = subprocess.run(list(map(str, cmd)), input=data, text=True, capture_output=True, timeout=timeout)
@@ -115,7 +117,7 @@ def main():
         for batch in range(6):
             cache[batch] = fixtures(batch)
             work = WORK/'mutants'/f'baseline_a{batch}'; work.mkdir(parents=True, exist_ok=True)
-            c = g2.compile_pruv('rs', str(HERE/f'a{batch}_root.pruv'), str(work), 'rust', flags + LIB_FLAGS)
+            c = g2.compile_pruv('rs', str(HERE/f'a{batch}_root.pruv'), str(work), 'rust', flags + manifest_flags(batch))
             if c['rc']: raise RuntimeError(f'baseline A{batch}: {c}')
             exe = build(g2, c, work, cache[batch][0], rustflags)
             if run([exe], cache[batch][1]).splitlines() != cache[batch][2]:
@@ -123,14 +125,18 @@ def main():
             print(f'기준 A{batch}: 통과', flush=True)
         for module,name,batch,description,old,new in MUTANTS:
             work = WORK/'mutants'/name
-            shutil.rmtree(work, ignore_errors=True)  # no stale local module copies: they would conflict with --lib
+            shutil.rmtree(work, ignore_errors=True)  # no stale copies from an earlier run
             work.mkdir(parents=True, exist_ok=True)
-            # Temporary library: a copy of the shared library with the one mutated module replaced.
-            mutlib = work/'lib'
-            shutil.copytree(LIB, mutlib)
-            for b in range(6): shutil.copyfile(HERE/f'a{b}_root.pruv', work/f'a{b}_root.pruv')
-            path = mutlib/f'{module}.pruv'; text = path.read_text()
-            mutflags = flags + ['--lib', str(mutlib)]
+            # Temporary packages: a copy of the shared packages with the one mutated module replaced. The roots and
+            # their manifests are copied to work/piece, so the manifests' ../pkgs/NAME paths reach work/pkgs.
+            mutpkgs = work/'pkgs'
+            shutil.copytree(PKGS, mutpkgs)
+            piece = work/'piece'; piece.mkdir()
+            for b in range(6):
+                shutil.copyfile(HERE/f'a{b}_root.pruv', piece/f'a{b}_root.pruv')
+                shutil.copyfile(HERE/f'a{b}_root.pruv.json', piece/f'a{b}_root.pruv.json')
+            path = mutpkgs/module/f'{module}.pruv'; text = path.read_text()
+            mutflags = flags + manifest_flags(batch, piece)
             if text.count(old) != 1: raise RuntimeError(f'{name}: replacement occurs {text.count(old)} times, expected exactly one')
             path.write_text(text.replace(old,new,1))
             entry = {'name':name,'module':module+'.pruv','description':description,'replacement':{'old':old,'new':new},'verification':{}}
@@ -138,7 +144,7 @@ def main():
             compiled = None
             for compiler in ('py','rs'):
                 out = work/compiler; out.mkdir(exist_ok=True)
-                c = g2.compile_pruv(compiler,str(work/f'a{batch}_root.pruv'),str(out),'rust',mutflags)
+                c = g2.compile_pruv(compiler,str(piece/f'a{batch}_root.pruv'),str(out),'rust',mutflags)
                 entry['verification'][compiler] = c
                 if c['rc']:
                     diagnostic = json.dumps(c['errors']) + c['stderr']
