@@ -1,0 +1,362 @@
+// L3-2 A3: the supervisor entry (TS `run`, `stop`, `report`). One Loop with the shell and the control socket.
+// See docs/COMMAND_SUPERVISOR_SPEC.md for the order of operations, the packet and the policies P1-P8.
+mod args;
+mod capfile;
+mod tail;
+mod packet;
+
+fn close_sock(take s: Socket) -> () ! net, alloc
+{
+  let r: Result<i64> = net_close(move s);
+  return;
+}
+
+fn close_loop(take l: Loop) -> () ! async, net, proc, alloc
+{
+  let r: Result<i64> = ev_close(move l);
+  return;
+}
+
+// 1 when the kill reaped the shell.
+fn kill_proc(take p: Process) -> i64 ! proc, alloc
+  ensures result == 0 || result == 1
+{
+  let r: Result<i64> = proc_kill(move p);
+  match r {
+    Ok(c) => { return 1; }
+    Err(e) => { return 0; }
+  }
+}
+
+// 0 = not a socket slot, 1 = live socket, 2 = socket with EOF published
+fn sock_state(l: Loop, s: i64) -> i64
+  requires ev_ok(l)
+  ensures 0 <= result && result <= 2
+  ensures result != 0 ==> 0 <= s && s < ev_cap(l) && ev_kind(l, s) == 1
+  ensures result == 1 ==> !ev_eof(l, s)
+{
+  if s < 0 || s >= ev_cap(l) { return 0; }
+  if ev_kind(l, s) != 1 { return 0; }
+  if ev_eof(l, s) { return 2; }
+  return 1;
+}
+
+// 0 = not a process slot, 1 = live process, 2 = process with EOF published on both streams
+fn proc_state(l: Loop, p: i64) -> i64
+  requires ev_ok(l)
+  ensures 0 <= result && result <= 2
+  ensures result != 0 ==> 0 <= p && p < ev_cap(l) && ev_kind(l, p) == 3
+  ensures result == 1 ==> !ev_eof(l, p)
+{
+  if p < 0 || p >= ev_cap(l) { return 0; }
+  if ev_kind(l, p) != 3 { return 0; }
+  if ev_eof(l, p) { return 2; }
+  return 1;
+}
+
+// One chunk into the file and the tail. A chunk longer than one read or a total near 2^62 cannot occur with
+// reads of at most 65536 bytes inside the event bounds; it is skipped so the counters stay in range.
+fn take(take f: File, inout cw: [i64], inout buf: [i64], inout ts: [i64], s: i64, data: [u8]) -> File ! fs, alloc
+  requires len(cw) == 5
+  requires 0 <= cw[3] && cw[3] <= 1099511627776
+  requires 0 <= cw[0] && cw[0] <= cw[3]
+  requires 0 <= cw[4] && cw[4] <= 4611686018427387904
+  requires 0 <= cw[1] && cw[1] <= 1
+  requires 0 <= cw[2] && cw[2] <= 2
+  requires len(ts) == 12
+  requires 1 <= ts[1] && ts[1] <= 65536
+  requires len(buf) == 2 * ts[1] + 2
+  requires 0 <= ts[0] && ts[0] <= 2 * ts[1]
+  requires s == 1 || s == 2
+  ensures len(cw) == 5 && cw[3] == old(cw)[3]
+  ensures 0 <= cw[0] && cw[0] <= cw[3]
+  ensures 0 <= cw[4] && cw[4] <= 4611686018427387904
+  ensures 0 <= cw[1] && cw[1] <= 1
+  ensures 0 <= cw[2] && cw[2] <= 2
+  ensures len(ts) == 12 && ts[1] == old(ts)[1]
+  ensures len(buf) == 2 * ts[1] + 2
+  ensures 0 <= ts[0] && ts[0] <= 2 * ts[1]
+{
+  if len(data) > 65536 || cw[4] > 4611686018427387904 - 65536 { return move f; }
+  let g: File = crate::capfile::cap_take(move f, inout cw, data);
+  crate::tail::tail_push(inout buf, inout ts, s, data);
+  return move g;
+}
+
+// Close the file, flush the decoders and build the packet. Kind 3 carries the file fields only.
+fn report(take f: File, inout cw: [i64], inout buf: [i64], inout ts: [i64], opened: bool,
+          kind: i64, exit: i64, known: i64, stopped: i64, reaped: i64) -> [i64] ! fs, alloc
+  requires len(cw) == 5
+  requires 0 <= cw[2] && cw[2] <= 2
+  requires len(ts) == 12
+  requires 1 <= ts[1] && ts[1] <= 65536
+  requires len(buf) == 2 * ts[1] + 2
+  requires 0 <= ts[0] && ts[0] <= 2 * ts[1]
+{
+  crate::capfile::cap_finish(move f, inout cw);
+  crate::tail::tail_flush(inout buf, inout ts);
+  let mut h: [i64] = crate::packet::header(0, kind);
+  h[2] = exit;
+  h[3] = known;
+  h[4] = stopped;
+  h[5] = reaped;
+  h[6] = cw[1];
+  h[7] = cw[2];
+  if opened { h[8] = 1; }
+  if kind == 1 {
+    h[9] = cw[4];
+    h[10] = cw[0];
+    let tb: [u8] = crate::tail::tail_bytes(buf, ts);
+    return crate::packet::packet(h, tb);
+  }
+  let none: [u8] = alloc(0, 0);
+  return crate::packet::packet(h, none);
+}
+
+pub fn supervise(shell: str, argv: str, cwd: str, out: str, file_limit: i64, tail_chars: i64, ctl: i64) -> [i64]
+  ! async, net, proc, fs, alloc
+{
+  if tail_chars < 1 || tail_chars > 65536 || file_limit < 0 || file_limit > 1099511627776 || ctl < 1 || ctl > 65535 {
+    return crate::packet::bad_input();
+  }
+  let sp: [i64] = crate::args::arg_spans(argv);
+  if sp[0] != 0 { return crate::packet::bad_input(); }
+
+  let cs0: Socket = net_connect("127.0.0.1", ctl);
+  if !net_ok(cs0) {
+    close_sock(move cs0);
+    let h4: [i64] = crate::packet::header(0, 4);
+    let none: [u8] = alloc(0, 0);
+    return crate::packet::packet(h4, none);
+  }
+
+  let mut f: File = file_create(out);
+  let opened: bool = file_writable(f);
+  let mut cw: [i64] = crate::capfile::cap_state(file_limit, !opened);
+  let mut ts: [i64] = crate::tail::tail_state(tail_chars);
+  let mut buf: [i64] = crate::tail::tail_buf(tail_chars);
+
+  let pa: ProcessArgs = crate::args::build_args(argv);
+  let p0: Process = proc_spawn(shell, pa, cwd);
+  if !proc_ok(p0) {
+    let mut code: i64 = proc_error(p0);
+    let wr: Result<i64> = proc_wait(move p0);
+    close_sock(move cs0);
+    if code < 1 || code > 6 { code = 2; }
+    return report(move f, inout cw, inout buf, inout ts, opened, 2, code, 0, 0, 0);
+  }
+  let p: Process = proc_close_stdin(move p0);
+  if !proc_ok(p) {
+    let k0: i64 = kill_proc(move p);
+    close_sock(move cs0);
+    return report(move f, inout cw, inout buf, inout ts, opened, 3, 0, 0, 0, 0);
+  }
+
+  let started: [u8] = alloc(1, 1);
+  let cs: Socket = net_write_bytes(move cs0, started);
+  if !net_ok(cs) {
+    // The controller is gone before the first event: a disconnect with nothing read.
+    let k1: i64 = kill_proc(move p);
+    close_sock(move cs);
+    return report(move f, inout cw, inout buf, inout ts, opened, 1, 0, 0, 2, k1);
+  }
+
+  let mut l: Loop = ev_new(2);
+  if !ev_ok(l) || ev_count(l) >= ev_cap(l) {
+    close_loop(move l);
+    let k2: i64 = kill_proc(move p);
+    close_sock(move cs);
+    return report(move f, inout cw, inout buf, inout ts, opened, 3, 0, 0, 0, 0);
+  }
+  l = ev_add_process(move l, move p);
+  if !ev_ok(l) {
+    close_loop(move l);
+    close_sock(move cs);
+    return report(move f, inout cw, inout buf, inout ts, opened, 3, 0, 0, 0, 0);
+  }
+  let pslot: i64 = ev_last(l);
+  if ev_count(l) >= ev_cap(l) {
+    close_loop(move l);
+    close_sock(move cs);
+    return report(move f, inout cw, inout buf, inout ts, opened, 3, 0, 0, 0, 0);
+  }
+  l = ev_add_socket(move l, move cs);
+  if !ev_ok(l) {
+    close_loop(move l);
+    return report(move f, inout cw, inout buf, inout ts, opened, 3, 0, 0, 0, 0);
+  }
+  let sslot: i64 = ev_last(l);
+  if pslot < 0 || pslot >= 2 || sslot < 0 || sslot >= 2 {
+    close_loop(move l);
+    return report(move f, inout cw, inout buf, inout ts, opened, 3, 0, 0, 0, 0);
+  }
+
+  // tag: 0 running, 1 exited, 2 stop, 3 disconnect. After the shell's end event, pump without waiting until
+  // both streams have published EOF.
+  let mut tag: i64 = 0;
+  let mut broken: bool = false;
+  let mut draining: bool = false;
+  let mut events: i64 = 0;
+  while tag == 0 && !broken && events < 10000000
+    invariant 0 <= events && events <= 10000000
+    invariant 0 <= tag && tag <= 3
+    invariant broken || ev_ok(l)
+    invariant len(cw) == 5 && cw[3] == file_limit
+    invariant 0 <= cw[0] && cw[0] <= cw[3]
+    invariant 0 <= cw[4] && cw[4] <= 4611686018427387904
+    invariant 0 <= cw[1] && cw[1] <= 1
+    invariant 0 <= cw[2] && cw[2] <= 2
+    invariant len(ts) == 12 && ts[1] == tail_chars
+    invariant len(buf) == 2 * tail_chars + 2
+    invariant 0 <= ts[0] && ts[0] <= 2 * tail_chars
+    decreases 10000000 - events
+  {
+    events = events + 1;
+    let mut pump: bool = draining;
+    if !draining {
+      l = ev_wait(move l, -1);
+      if ev_ok(l) {
+        let ek: i64 = ev_event_kind(l);
+        let es: i64 = ev_event_slot(l);
+        if es == sslot && (ek == 1 || ek == 3 || ek == 5) {
+          if ek == 5 {
+            tag = 3;
+          } else if sock_state(l, sslot) != 1 {
+            tag = 3;
+          } else {
+            l = ev_read(move l, sslot, 4096);
+            if ev_ok(l) {
+              if ev_size(l) > 0 {
+                tag = 2;
+              } else if sock_state(l, sslot) != 1 || ek == 3 {
+                tag = 3;
+              }
+            }
+          }
+        } else if es == pslot && (ek == 1 || ek == 3) {
+          pump = true;
+          if ek == 3 { draining = true; }
+        } else if es == pslot && ek == 5 {
+          broken = true;
+        }
+      }
+    }
+    if pump && !broken && tag == 0 && ev_ok(l) {
+      if proc_state(l, pslot) == 1 {
+        l = ev_proc_read(move l, pslot, 1, 65536);
+        if ev_ok(l) {
+          let d1: [u8] = ev_bytes(l);
+          f = take(move f, inout cw, inout buf, inout ts, 1, d1);
+        }
+      }
+      if ev_ok(l) && proc_state(l, pslot) == 1 {
+        l = ev_proc_read(move l, pslot, 2, 65536);
+        if ev_ok(l) {
+          let d2: [u8] = ev_bytes(l);
+          f = take(move f, inout cw, inout buf, inout ts, 2, d2);
+        }
+      }
+      if ev_ok(l) {
+        let ps: i64 = proc_state(l, pslot);
+        if ps == 2 {
+          tag = 1;
+        } else if ps == 0 {
+          broken = true;
+        }
+      }
+    }
+    if !ev_ok(l) { broken = true; }
+  }
+
+  if broken || tag == 0 {
+    close_loop(move l);
+    return report(move f, inout cw, inout buf, inout ts, opened, 3, 0, 0, 0, 0);
+  }
+
+  let mut exit: i64 = 0;
+  let mut known: i64 = 0;
+  let mut reaped: i64 = 0;
+  if tag == 1 {
+    if proc_state(l, pslot) != 0 {
+      l = ev_proc_wait(move l, pslot);
+      if ev_ok(l) {
+        let x: i64 = ev_exit(l);
+        if x >= -2147483648 && x <= 2147483647 {
+          exit = x;
+          known = 1;
+        }
+        reaped = 1;
+      }
+    }
+    // A normal end without a status (a reap failure is caught at close) cannot be reported as kind 1.
+    if known == 0 {
+      close_loop(move l);
+      return report(move f, inout cw, inout buf, inout ts, opened, 3, 0, 0, 0, 0);
+    }
+  } else {
+    // Stop or disconnect: take what is already queued (until a pump step reads nothing), then kill and reap.
+    let mut more: bool = true;
+    let mut n: i64 = 0;
+    while more && ev_ok(l) && n < 10000000 && proc_state(l, pslot) == 1
+      invariant 0 <= n && n <= 10000000
+      invariant len(cw) == 5 && cw[3] == file_limit
+      invariant 0 <= cw[0] && cw[0] <= cw[3]
+      invariant 0 <= cw[4] && cw[4] <= 4611686018427387904
+      invariant 0 <= cw[1] && cw[1] <= 1
+      invariant 0 <= cw[2] && cw[2] <= 2
+      invariant len(ts) == 12 && ts[1] == tail_chars
+      invariant len(buf) == 2 * tail_chars + 2
+      invariant 0 <= ts[0] && ts[0] <= 2 * tail_chars
+      decreases 10000000 - n
+    {
+      n = n + 1;
+      let mut got: i64 = 0;
+      l = ev_proc_read(move l, pslot, 1, 65536);
+      if ev_ok(l) {
+        got = ev_size(l);
+        let e1: [u8] = ev_bytes(l);
+        f = take(move f, inout cw, inout buf, inout ts, 1, e1);
+      }
+      if ev_ok(l) && proc_state(l, pslot) == 1 {
+        l = ev_proc_read(move l, pslot, 2, 65536);
+        if ev_ok(l) {
+          got = got + ev_size(l);
+          let e2: [u8] = ev_bytes(l);
+          f = take(move f, inout cw, inout buf, inout ts, 2, e2);
+        }
+      }
+      if got == 0 { more = false; }
+    }
+    if ev_ok(l) {
+      if proc_state(l, pslot) != 0 {
+        l = ev_remove(move l, pslot);
+      }
+      if ev_ok(l) { reaped = 1; }
+    }
+  }
+  if !ev_ok(l) {
+    close_loop(move l);
+    return report(move f, inout cw, inout buf, inout ts, opened, 3, 0, 0, 0, 0);
+  }
+
+  // Close ends the socket. Err(3) is a control socket read failure (a reset); Err(8) is a reap failure.
+  let r: Result<i64> = ev_close(move l);
+  let mut failed: bool = false;
+  match r {
+    Ok(c) => { }
+    Err(e) => {
+      if e == 8 && tag != 1 {
+        reaped = 0;
+      } else if e != 3 {
+        failed = true;
+      }
+    }
+  }
+  if failed {
+    return report(move f, inout cw, inout buf, inout ts, opened, 3, 0, 0, 0, 0);
+  }
+  let mut stopped: i64 = 0;
+  if tag == 2 { stopped = 1; }
+  if tag == 3 { stopped = 2; }
+  return report(move f, inout cw, inout buf, inout ts, opened, 1, exit, known, stopped, reaped);
+}
