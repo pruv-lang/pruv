@@ -2188,3 +2188,15 @@ python3 bench/l3/codex/q_mutants.py
 ```
 
 **L3-5 implementation and default Q complete.**
+
+## 135. G10-PROC-ENV: environment for child processes (2026-11-16)
+
+- **Design:** `docs/G10_PROC_SPEC.md` §8b. New catalog entry `proc_spawn_env(program, args, cwd, env_names: ProcessArgs, env_values: ProcessArgs) -> Process` with the `proc` effect and the same must-consume and `proc_ok` rules as `proc_spawn`. The child inherits the parent environment, then the pairs are set in order and the last value for a name wins. Unequal list lengths, an empty name, `=` or NUL in a name and NUL in a value give a failed process with error 1, checked before anything is spawned, the same as a failed `proc_spawn`. Both compilers, both backends (Rust source wrappers and the LLVM shim) and both runtime preludes (sync and async) share one spawn helper; `proc_spawn` passes empty lists. The catalog grows from 92 to 93 entries.
+- **Tests:** runtime `g10p_r22_env` (set, override, last value wins, inherited variable, each invalid case, with a new `env` mode in the test child), proof `tests/g10_proc/proof/spawn_env.pruv`, must-reject `g10p_env_unconsumed` (type/proc_unconsumed) and `g10p_v_env_unchecked` (verify/call_requires). The row list grows by 16 to 4,219 rows; Rust `--list-rows` and the Python `--compare-rows` full run agree.
+- **Mutants (`bench/g10_proc/mutate_env.py`, both compilers, both backends):** 7 wrong mutants and 1 control. 2 static: a dropped `proc_wait` (type/proc_unconsumed) and a dropped `proc_ok` check (verify/call_requires). 5 caught by the child oracle: swapped name and value lists, the same list twice, `proc_spawn` instead of `proc_spawn_env`, a lost pair and reordered pairs. The control (kill instead of wait on the failure path) is accepted. All 32 runs are as expected. Only a positive non-zero driver exit counts as an oracle catch; signal exits are graded `crash`.
+- **Fault injections (`bench/g10_proc/faults/check.py`):** 6 of 6 caught, the 4 earlier ones plus f5 (env pairs ignored) and f6 (`=` allowed in names). A runtime probe counts only when the faulty driver ran and exited with a positive code.
+- **Audit (one read-only audit, then one confirmation audit limited to its findings):** no contract, ABI, ownership, Python/Rust divergence or performance findings. 1 required finding, fixed: the mutant harness counted a signal exit of the driver as an oracle catch. 2 recommended: the fault check counted a compile or build failure of the faulty copy as a catch (fixed, those probes now carry `started=False`); there is no runtime test that goes through the async prelude's copy of the helper (left open; f5 and f6 patch both copies and the text is identical).
+- **Before commit:** `cargo test --release`, `tests/diff_rust.py --fuzz-count 20` (all same), Rust `--list-rows`, Python full `--compare-rows`.
+- **Limits:** no environment clearing or removal of inherited variables, no Windows run for this entry, no async-prelude env runtime test.
+
+**G10-PROC-ENV complete.**

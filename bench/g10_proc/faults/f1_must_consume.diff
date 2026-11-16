@@ -1,6 +1,6 @@
 --- a/pruvc/foreign.py
 +++ b/pruvc/foreign.py
-@@ -365,7 +365,7 @@
+@@ -406,7 +406,7 @@
          if isinstance(x, Return):
              if x.value is not None:
                  s.consume(x.value, st, "return")

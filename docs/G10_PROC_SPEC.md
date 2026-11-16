@@ -109,6 +109,7 @@ failure state.
 | Operation | Effect | Contract / meaning |
 |---|---|---|
 | `proc_spawn(program: str, args: ProcessArgs, cwd: str) -> Process` | `proc, alloc` | no requires. Success: `ok(result) && open(result)`. Failure: `!ok(result) && !open(result)` with error 1 or 2. Both public buffers empty, both EOFs false |
+| `proc_spawn_env(program: str, args: ProcessArgs, cwd: str, env_names: ProcessArgs, env_values: ProcessArgs) -> Process` | `proc, alloc` | same contract as `proc_spawn` (no requires; success `ok && open`, failure `!ok && !open` with error 1 or 2, buffers empty, EOFs false). All parameters borrowed. The child inherits the parent environment, then `(names[i], values[i])` are set in order; see §8b |
 | `proc_write_str(take p: Process, text: str) -> Process` | `proc, alloc` | requires `ok(p) && open(p)`; writes all UTF-8 bytes; on success the observed state is preserved |
 | `proc_write_bytes(take p: Process, data: [u8]) -> Process` | `proc, alloc` | same requires; writes all bytes; on success the observed state is preserved |
 | `proc_close_stdin(take p: Process) -> Process` | `proc, alloc` | requires `ok(p) && open(p)`; ensures `!open(result)`; on success buffers and EOFs are preserved |
@@ -725,6 +726,41 @@ Record (2026-11-16): all eight gates pass, see `bench/g10_proc/README.md` and RE
 Gate 2: independent author 2/2 first attempt, 0 fixes. Gates 3-4: 16 mutants, 12 static rejected at compile time, 4
 output mutants caught by the fixture oracle (reported as `wrong_but_proved`), 0 unexpected. Gate 5: 4/4 faults caught.
 Gates 6-7: 1 MiB with exact totals on both sides; bulk copy 0.98-1.01x and per byte 1.14-1.86x hand Rust, no target.
+
+## 8b. Environment (G10-PROC-ENV)
+
+Signature: `proc_spawn_env(program: str, args: ProcessArgs, cwd: str, env_names: ProcessArgs, env_values: ProcessArgs) -> Process ! proc, alloc`.
+All parameters are borrowed; the returned handle carries the same must-consume duty as `proc_spawn`.
+
+- **Order:** the child inherits the parent environment first; then the pairs `(env_names[i], env_values[i])` are set in
+  list order. A new name is added; a name the parent already has is overridden. The parent's own environment never changes.
+- **Repeated name:** the last pair wins.
+- **No removal:** a pair always sets. An empty value is a set, empty variable (`NAME=`), not a removal. Removing or
+  clearing variables is later work (§9).
+- **Error 1 (bad input):** the counts of names and values differ; a name is empty; a name contains `=` or NUL; a value
+  contains NUL. The result is a failed Process with `proc_error == 1`, exactly like an invalid `proc_spawn` input. The
+  handle is still owned and must be consumed with `proc_wait` or `proc_kill` (`proc_wait` returns `Err(1)`). Program,
+  argument and cwd errors are checked as in `proc_spawn`; an OS refusal is error 2.
+- **Windows:** variable names are case-insensitive there; Rust `std::process::Command` handles that, the runtime adds
+  no handling of its own.
+- **PATH:** if the pairs set `PATH`, a bare program name is looked up the way Rust `std::process::Command` does it (on
+  Unix the new `PATH`; on Windows the platform rules). An explicit path is used as is.
+- **Verification:** the same contract as `proc_spawn` (§2.3): no requires; on success `ok(result) && open(result)`; on
+  failure `!ok(result) && !open(result)`, error 1 or 2, buffers empty, EOFs false. Nothing is proved about the child's
+  environment.
+- **Lowering:** Rust and LLVM share one runtime function `pruv_proc_spawn_in`, used by both `proc_spawn` (no pairs) and
+  `proc_spawn_env`; the Rust backend emits `pruv_proc_spawn_env`, the LLVM shim `pruv_g6_proc_spawn_env`.
+
+Tests:
+
+| Test | What it checks |
+|---|---|
+| `tests/runtime/g10p_r22_env` | inherited, new, overridden, repeated, empty and Unicode / quoted values, zero pairs, PATH lookup (Unix), error 1 for each invalid case with the failed handle consumed, parent environment unchanged; fixture child mode `env` |
+| `tests/g10_proc/proof/spawn_env.pruv` | a root that verifies completely: failed-handle branch and a write / close / read-all / wait session |
+| `tests/must_reject/g10p_env_unconsumed` | `type` / `proc_unconsumed`: a `proc_spawn_env` handle leaked on an early return |
+| `tests/must_reject/g10p_v_env_unchecked` | `verify` / `call_requires`: `proc_write_str` on a `proc_spawn_env` result without `proc_ok` |
+| fault `f5_env_ignored` | the runtime ignores the pairs; caught by `g10p_r22_env` |
+| fault `f6_env_validation` | the `=` rule of names is dropped; caught by `g10p_r22_env` |
 
 ## 9. Later work
 

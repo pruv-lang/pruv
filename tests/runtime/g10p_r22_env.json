@@ -1,0 +1,14 @@
+{
+  "g6_drop_balance": true,
+  "flags_matrix": [
+    [],
+    ["--foreign-checks", "all"],
+    ["--foreign-checks", "off"],
+    ["--no-verify"],
+    ["--no-verify", "--foreign-checks", "all"],
+    ["--trust-callers"]
+  ],
+  "exit": 0,
+  "gen_contains": ["fn pruv_proc_spawn_env", "pruv_g6_proc_spawn_env"],
+  "gen_absent": ["    bad = true;", "pruv test wait fault", "kbad = true;", "//@hook"]
+}

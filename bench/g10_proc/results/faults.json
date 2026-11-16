@@ -3,8 +3,8 @@
     {
       "fault": "f1_must_consume",
       "patch": "f1_must_consume.diff",
-      "sha256": "d8d9d40f1f49d09a433f560b5852da38f4177ea63a53f75a08cf6871bec80145",
-      "source_sha256": "44ad5b9998e9af1a0d9a30286339037ad0c4a9e92caf3608386ed61f205dcbe9",
+      "sha256": "ce99c583097a190ad326a0c5e68ee6e6686a0a75a9c810edea29cafecf3406f1",
+      "source_sha256": "e334de9a50fa51a0a3963c3b47971117799695518f3e3d828a2a7bfa279af6a1",
       "probes": {
         "g10p_early_return": {
           "kind": "reject",
@@ -14,12 +14,12 @@
             "stderr": "",
             "command": [
               "/Users/spica4345/Projects/pruv/.venv/bin/python",
-              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f1_must_consume_1kq43o3f/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f1_must_consume_lr1c9j2t/pruvc/pruvc.py",
               "/Users/spica4345/Projects/pruv/tests/must_reject/g10p_early_return.pruv",
               "--backend",
               "rust",
               "-o",
-              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f1_must_consume_1kq43o3f/clean/g10p_early_return.rs"
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f1_must_consume_lr1c9j2t/clean/g10p_early_return.rs"
             ],
             "expected": {
               "stage": "type",
@@ -35,12 +35,12 @@
             "stderr": "",
             "command": [
               "/Users/spica4345/Projects/pruv/.venv/bin/python",
-              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f1_must_consume_1kq43o3f/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f1_must_consume_lr1c9j2t/pruvc/pruvc.py",
               "/Users/spica4345/Projects/pruv/tests/must_reject/g10p_early_return.pruv",
               "--backend",
               "rust",
               "-o",
-              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f1_must_consume_1kq43o3f/faulty/g10p_early_return.rs"
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f1_must_consume_lr1c9j2t/faulty/g10p_early_return.rs"
             ],
             "expected": {
               "stage": "type",
@@ -63,8 +63,8 @@
     {
       "fault": "f2_catalog_requires",
       "patch": "f2_catalog_requires.diff",
-      "sha256": "e88eeb60bfb2e5ac3e9e02da3cd636559f979768df415490895f13769cd35100",
-      "source_sha256": "449b1397060d7505e3be4e4e09e2cf0d7dec59987541b72444bc412c5eab5e7b",
+      "sha256": "c3af395004237a8a33a798e041287c856bed0af5c486b85be5fb5049470c472b",
+      "source_sha256": "fa15d4f06f8b6da54bee2e0ea0ac7948716f4b6ef2ed92c3839987a6a95e2fed",
       "probes": {
         "g10p_v_bad_stream": {
           "kind": "reject",
@@ -74,12 +74,12 @@
             "stderr": "",
             "command": [
               "/Users/spica4345/Projects/pruv/.venv/bin/python",
-              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f2_catalog_requires__dk7pp47/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f2_catalog_requires_fgc0j8y9/pruvc/pruvc.py",
               "/Users/spica4345/Projects/pruv/tests/must_reject/g10p_v_bad_stream.pruv",
               "--backend",
               "rust",
               "-o",
-              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f2_catalog_requires__dk7pp47/clean/g10p_v_bad_stream.rs"
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f2_catalog_requires_fgc0j8y9/clean/g10p_v_bad_stream.rs"
             ],
             "expected": {
               "stage": "verify",
@@ -95,12 +95,12 @@
             "stderr": "",
             "command": [
               "/Users/spica4345/Projects/pruv/.venv/bin/python",
-              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f2_catalog_requires__dk7pp47/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f2_catalog_requires_fgc0j8y9/pruvc/pruvc.py",
               "/Users/spica4345/Projects/pruv/tests/must_reject/g10p_v_bad_stream.pruv",
               "--backend",
               "rust",
               "-o",
-              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f2_catalog_requires__dk7pp47/faulty/g10p_v_bad_stream.rs"
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f2_catalog_requires_fgc0j8y9/faulty/g10p_v_bad_stream.rs"
             ],
             "expected": {
               "stage": "verify",
@@ -123,8 +123,8 @@
     {
       "fault": "f3_snapshot_keep",
       "patch": "f3_snapshot_keep.diff",
-      "sha256": "f167e74d76eb8a1907865781a2993c39100e71cbb3680253a4b384cc44de2a6c",
-      "source_sha256": "449b1397060d7505e3be4e4e09e2cf0d7dec59987541b72444bc412c5eab5e7b",
+      "sha256": "7df079afcb061b37e65c093ca9fb019c202fc56d9f8ac19d04359274e1ea59ae",
+      "source_sha256": "fa15d4f06f8b6da54bee2e0ea0ac7948716f4b6ef2ed92c3839987a6a95e2fed",
       "probes": {
         "p_keep_other": {
           "kind": "local_accept",
@@ -134,12 +134,12 @@
             "stderr": "",
             "command": [
               "/Users/spica4345/Projects/pruv/.venv/bin/python",
-              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f3_snapshot_keep_o2yovq4h/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f3_snapshot_keep_6hj852ll/pruvc/pruvc.py",
               "/Users/spica4345/Projects/pruv/bench/g10_proc/faults/p_keep_other.pruv",
               "--backend",
               "rust",
               "-o",
-              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f3_snapshot_keep_o2yovq4h/clean/p_keep_other.rs"
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f3_snapshot_keep_6hj852ll/clean/p_keep_other.rs"
             ],
             "expected": null,
             "passed": true,
@@ -152,12 +152,12 @@
             "stderr": "",
             "command": [
               "/Users/spica4345/Projects/pruv/.venv/bin/python",
-              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f3_snapshot_keep_o2yovq4h/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f3_snapshot_keep_6hj852ll/pruvc/pruvc.py",
               "/Users/spica4345/Projects/pruv/bench/g10_proc/faults/p_keep_other.pruv",
               "--backend",
               "rust",
               "-o",
-              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f3_snapshot_keep_o2yovq4h/faulty/p_keep_other.rs"
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f3_snapshot_keep_6hj852ll/faulty/p_keep_other.rs"
             ],
             "expected": null,
             "passed": false,
@@ -174,12 +174,12 @@
             "stderr": "",
             "command": [
               "/Users/spica4345/Projects/pruv/.venv/bin/python",
-              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f3_snapshot_keep_o2yovq4h/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f3_snapshot_keep_6hj852ll/pruvc/pruvc.py",
               "/Users/spica4345/Projects/pruv/bench/g10_proc/faults/p_keep_read.pruv",
               "--backend",
               "rust",
               "-o",
-              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f3_snapshot_keep_o2yovq4h/clean/p_keep_read.rs"
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f3_snapshot_keep_6hj852ll/clean/p_keep_read.rs"
             ],
             "expected": {
               "stage": "verify",
@@ -195,12 +195,12 @@
             "stderr": "",
             "command": [
               "/Users/spica4345/Projects/pruv/.venv/bin/python",
-              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f3_snapshot_keep_o2yovq4h/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f3_snapshot_keep_6hj852ll/pruvc/pruvc.py",
               "/Users/spica4345/Projects/pruv/bench/g10_proc/faults/p_keep_read.pruv",
               "--backend",
               "rust",
               "-o",
-              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f3_snapshot_keep_o2yovq4h/faulty/p_keep_read.rs"
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f3_snapshot_keep_6hj852ll/faulty/p_keep_read.rs"
             ],
             "expected": {
               "stage": "verify",
@@ -223,8 +223,8 @@
     {
       "fault": "f4_result_tag",
       "patch": "f4_result_tag.diff",
-      "sha256": "6c7f087f2d816d3934def555dc3dc3dd8d19a2cb803730acf105822827b5d812",
-      "source_sha256": "20a7848cfa808a67a8e5d2e4f8810b7b2a418d15af6c86b080082f69f6e31a42",
+      "sha256": "7d17a4e9cd6963cb034b1bf44f2db7aea26b05464a2d57955a84d0f4663dede0",
+      "source_sha256": "8c6698f1edb022ee73dea51e9268fb49b5159fd8369d7381c2349d632cf5bab8",
       "probes": {
         "g10p_r10_exit_kill": {
           "kind": "runtime",
@@ -234,14 +234,14 @@
             "stderr": "",
             "command": [
               "/Users/spica4345/Projects/pruv/.venv/bin/python",
-              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f4_result_tag_ctp48mrr/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f4_result_tag_2i35io3l/pruvc/pruvc.py",
               "/Users/spica4345/Projects/pruv/tests/runtime/g10p_r10_exit_kill.pruv",
               "-o",
-              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f4_result_tag_ctp48mrr/clean/g10p_r10_exit_kill.ll",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f4_result_tag_2i35io3l/clean/g10p_r10_exit_kill.ll",
               "--backend",
               "llvm",
               "--rust-bindings",
-              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f4_result_tag_ctp48mrr/clean/g10p_r10_exit_kill_gen.rs"
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f4_result_tag_2i35io3l/clean/g10p_r10_exit_kill_gen.rs"
             ],
             "run": {
               "rc": 0,
@@ -251,7 +251,7 @@
             "passed": true,
             "reason": "exit 0",
             "internal_error": false,
-            "started": true
+            "started": false
           },
           "faulty": {
             "rc": 0,
@@ -259,19 +259,19 @@
             "stderr": "",
             "command": [
               "/Users/spica4345/Projects/pruv/.venv/bin/python",
-              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f4_result_tag_ctp48mrr/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f4_result_tag_2i35io3l/pruvc/pruvc.py",
               "/Users/spica4345/Projects/pruv/tests/runtime/g10p_r10_exit_kill.pruv",
               "-o",
-              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f4_result_tag_ctp48mrr/faulty/g10p_r10_exit_kill.ll",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f4_result_tag_2i35io3l/faulty/g10p_r10_exit_kill.ll",
               "--backend",
               "llvm",
               "--rust-bindings",
-              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f4_result_tag_ctp48mrr/faulty/g10p_r10_exit_kill_gen.rs"
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f4_result_tag_2i35io3l/faulty/g10p_r10_exit_kill_gen.rs"
             ],
             "run": {
               "rc": 101,
               "stdout": "",
-              "stderr": "\nthread 'main' (83226350) panicked at /Users/spica4345/Projects/pruv/bench/g10_proc/.work/f4_result_tag_ctp48mrr/faulty/main.rs:6:5:\nassertion `left == right` failed\n  left: 1000\n right: 0\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+              "stderr": "\nthread 'main' (87344248) panicked at /Users/spica4345/Projects/pruv/bench/g10_proc/.work/f4_result_tag_2i35io3l/faulty/main.rs:6:5:\nassertion `left == right` failed\n  left: 1000\n right: 0\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
             },
             "passed": false,
             "reason": "exit 101",
@@ -284,6 +284,142 @@
       "patch_apply": {
         "rc": 0,
         "stdout": "patching file 'pruvc/foreign_shim.py'\n",
+        "stderr": ""
+      },
+      "status": "detected"
+    },
+    {
+      "fault": "f5_env_ignored",
+      "patch": "f5_env_ignored.diff",
+      "sha256": "fcd080deddc010dcef54758a0bef5101eae4e26ef24e39750d0e903343a99355",
+      "source_sha256": "dd382cd2413a4862afee4bd2b51fb84dcbc592c67bd34701bb678b67b0332efc",
+      "probes": {
+        "g10p_r22_env": {
+          "kind": "runtime",
+          "baseline": {
+            "rc": 0,
+            "stdout": "{\"ok\": true}\n",
+            "stderr": "",
+            "command": [
+              "/Users/spica4345/Projects/pruv/.venv/bin/python",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f5_env_ignored_0lr3r_ap/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/tests/runtime/g10p_r22_env.pruv",
+              "-o",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f5_env_ignored_0lr3r_ap/clean/g10p_r22_env.ll",
+              "--backend",
+              "llvm",
+              "--rust-bindings",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f5_env_ignored_0lr3r_ap/clean/g10p_r22_env_gen.rs"
+            ],
+            "run": {
+              "rc": 0,
+              "stdout": "",
+              "stderr": ""
+            },
+            "passed": true,
+            "reason": "exit 0",
+            "internal_error": false,
+            "started": false
+          },
+          "faulty": {
+            "rc": 0,
+            "stdout": "{\"ok\": true}\n",
+            "stderr": "",
+            "command": [
+              "/Users/spica4345/Projects/pruv/.venv/bin/python",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f5_env_ignored_0lr3r_ap/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/tests/runtime/g10p_r22_env.pruv",
+              "-o",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f5_env_ignored_0lr3r_ap/faulty/g10p_r22_env.ll",
+              "--backend",
+              "llvm",
+              "--rust-bindings",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f5_env_ignored_0lr3r_ap/faulty/g10p_r22_env_gen.rs"
+            ],
+            "run": {
+              "rc": 101,
+              "stdout": "",
+              "stderr": "\nthread 'main' (87347271) panicked at /Users/spica4345/Projects/pruv/bench/g10_proc/.work/f5_env_ignored_0lr3r_ap/faulty/main.rs:38:5:\nassertion `left == right` failed\n  left: 1\n right: 0\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+            },
+            "passed": false,
+            "reason": "exit 101",
+            "internal_error": false,
+            "started": true
+          },
+          "detected": true
+        }
+      },
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/codegen.py'\n",
+        "stderr": ""
+      },
+      "status": "detected"
+    },
+    {
+      "fault": "f6_env_validation",
+      "patch": "f6_env_validation.diff",
+      "sha256": "343a1f78d6ad45e63ab26e677a5a4d5b12238902417d40d2796bb32534188516",
+      "source_sha256": "dd382cd2413a4862afee4bd2b51fb84dcbc592c67bd34701bb678b67b0332efc",
+      "probes": {
+        "g10p_r22_env": {
+          "kind": "runtime",
+          "baseline": {
+            "rc": 0,
+            "stdout": "{\"ok\": true}\n",
+            "stderr": "",
+            "command": [
+              "/Users/spica4345/Projects/pruv/.venv/bin/python",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f6_env_validation_l4_ccffk/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/tests/runtime/g10p_r22_env.pruv",
+              "-o",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f6_env_validation_l4_ccffk/clean/g10p_r22_env.ll",
+              "--backend",
+              "llvm",
+              "--rust-bindings",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f6_env_validation_l4_ccffk/clean/g10p_r22_env_gen.rs"
+            ],
+            "run": {
+              "rc": 0,
+              "stdout": "",
+              "stderr": ""
+            },
+            "passed": true,
+            "reason": "exit 0",
+            "internal_error": false,
+            "started": false
+          },
+          "faulty": {
+            "rc": 0,
+            "stdout": "{\"ok\": true}\n",
+            "stderr": "",
+            "command": [
+              "/Users/spica4345/Projects/pruv/.venv/bin/python",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f6_env_validation_l4_ccffk/pruvc/pruvc.py",
+              "/Users/spica4345/Projects/pruv/tests/runtime/g10p_r22_env.pruv",
+              "-o",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f6_env_validation_l4_ccffk/faulty/g10p_r22_env.ll",
+              "--backend",
+              "llvm",
+              "--rust-bindings",
+              "/Users/spica4345/Projects/pruv/bench/g10_proc/.work/f6_env_validation_l4_ccffk/faulty/g10p_r22_env_gen.rs"
+            ],
+            "run": {
+              "rc": 101,
+              "stdout": "",
+              "stderr": "\nthread 'main' (87350057) panicked at /Users/spica4345/Projects/pruv/bench/g10_proc/.work/f6_env_validation_l4_ccffk/faulty/main.rs:99:5:\nassertion `left == right` failed\n  left: 9\n right: 11\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+            },
+            "passed": false,
+            "reason": "exit 101",
+            "internal_error": false,
+            "started": true
+          },
+          "detected": true
+        }
+      },
+      "patch_apply": {
+        "rc": 0,
+        "stdout": "patching file 'pruvc/codegen.py'\n",
         "stderr": ""
       },
       "status": "detected"

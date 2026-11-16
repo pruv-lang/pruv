@@ -350,6 +350,10 @@ def _proc_adapter(sym, helper, op):
         return _fn(sym, "p: *const u8, n: i64, a: PruvH, q: *const u8, m: i64", "PruvH",
                    "pruv_g6_guard(|| { let pruv_prog: &str = pruv_g6_str(p, n); let pruv_cwd: &str = pruv_g6_str(q, m); "
                    "pruv_g6_new(%s(pruv_prog, pruv_g6_ref::<%s>(a), pruv_cwd)) })" % (helper, A))
+    if op == "proc_spawn_env":
+        return _fn(sym, "p: *const u8, n: i64, a: PruvH, q: *const u8, m: i64, en: PruvH, ev: PruvH", "PruvH",
+                   "pruv_g6_guard(|| { let pruv_prog: &str = pruv_g6_str(p, n); let pruv_cwd: &str = pruv_g6_str(q, m); "
+                   "pruv_g6_new(%s(pruv_prog, pruv_g6_ref::<%s>(a), pruv_cwd, pruv_g6_ref::<%s>(en), pruv_g6_ref::<%s>(ev))) })" % (helper, A, A, A))
     if op in ("proc_write_str", "proc_write_bytes", "proc_close_stdin", "proc_read", "proc_read_all"):
         params, pre, arg = "h: PruvH", "", ""
         if op == "proc_write_str":

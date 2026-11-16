@@ -84,6 +84,8 @@ _add("proc_args_push", [], lambda: ([_p("a", PROCESS_ARGS, True), _p("arg", STR)
 _add("proc_args_len", [], lambda: ([_p("a", PROCESS_ARGS)], I64))
 _add("proc_spawn", [], lambda: ([_p("program", STR), _p("args", PROCESS_ARGS), _p("cwd", STR)], PROCESS),
      ["proc", "alloc"])
+_add("proc_spawn_env", [], lambda: ([_p("program", STR), _p("args", PROCESS_ARGS), _p("cwd", STR), _p("env_names", PROCESS_ARGS), _p("env_values", PROCESS_ARGS)], PROCESS),
+     ["proc", "alloc"])
 _add("proc_write_str", [], lambda: ([_p("p", PROCESS, True), _p("text", STR)], PROCESS), ["proc", "alloc"])
 _add("proc_write_bytes", [], lambda: ([_p("p", PROCESS, True), _p("data", ARRAY_U8)], PROCESS), ["proc", "alloc"])
 _add("proc_close_stdin", [], lambda: ([_p("p", PROCESS, True)], PROCESS), ["proc", "alloc"])

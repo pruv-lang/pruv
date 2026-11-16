@@ -4,6 +4,8 @@
 // argv[1] selects the mode; the other arguments belong to the mode:
 //   args A...         print every argument after the mode, each followed by one LF, with its exact bytes
 //   cwd               print the current directory followed by LF
+//   env NAME...       for each NAME print `NAME=value` and LF when the variable is set (exact bytes of its value; an empty
+//                     value prints `NAME=`), or `NAME!` and LF when it is not set; exit 0 without reading stdin
 //   echo              copy stdin to stdout until EOF, exit 0
 //   count             read stdin until EOF, print its length in decimal and LF
 //   errout N M        write N pattern bytes to stderr, then M pattern bytes to stdout, exit 0
@@ -115,6 +117,21 @@ fn main() {
             let mut out: Vec<u8> = Vec::new();
             for a in args.iter().skip(2) {
                 out.extend_from_slice(&os_bytes(a));
+                out.push(b'\n');
+            }
+            put(1, &out);
+        }
+        "env" => {
+            let mut out: Vec<u8> = Vec::new();
+            for a in args.iter().skip(2) {
+                out.extend_from_slice(&os_bytes(a));
+                match std::env::var_os(a) {
+                    Some(v) => {
+                        out.push(b'=');
+                        out.extend_from_slice(&os_bytes(&v));
+                    }
+                    None => out.push(b'!'),
+                }
                 out.push(b'\n');
             }
             put(1, &out);

@@ -576,6 +576,18 @@ impl ForeignGen {
                 ));
                 Ok(self.fn_text(name, &format!("program: &str, args: &{}, cwd: &str", A), Some(P), &with(body, "pruv_r")))
             }
+            "proc_spawn_env" => {
+                let mut body = vec![format!("let pruv_r: {} = pruv_proc_spawn_env(program, args, cwd, env_names, env_values);", P)];
+                body.extend(self.ens_line(
+                    "if pruv_r.error == 0 { pruv_r.stdin_open } else { (pruv_r.error == 1 || pruv_r.error == 2) && pruv_proc_wf(&pruv_r) }",
+                    "ok(result) && open(result) || !ok(result) && !open(result) && (err(result) == 1 || err(result) == 2)",
+                ));
+                body.extend(self.ens_line(
+                    "pruv_r.stdout_buf.is_empty() && pruv_r.stderr_buf.is_empty() && !pruv_r.stdout_eof && !pruv_r.stderr_eof",
+                    "both public buffers empty and both EOFs false",
+                ));
+                Ok(self.fn_text(name, &format!("program: &str, args: &{}, cwd: &str, env_names: &{}, env_values: &{}", A, A, A), Some(P), &with(body, "pruv_r")))
+            }
             "proc_write_str" | "proc_write_bytes" => {
                 let text = op == "proc_write_str";
                 let mut body = self.req_line("p.error == 0 && p.stdin_open", "proc_ok(p) && proc_stdin_open(p)");

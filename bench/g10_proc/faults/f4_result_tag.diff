@@ -1,6 +1,6 @@
 --- a/pruvc/foreign_shim.py
 +++ b/pruvc/foreign_shim.py
-@@ -358,8 +358,8 @@
+@@ -368,8 +368,8 @@
          return _fn(sym, "h: PruvH, tag: *mut i64, val: *mut i64", None,
                     "pruv_g6_guard(|| { let pruv_t: *mut i64 = pruv_g6_out(tag); let pruv_v: *mut i64 = pruv_g6_out(val); "
                     "%slet pruv_r: ::std::result::Result<i64, i64> = %s(pruv_o); "

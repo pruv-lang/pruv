@@ -2811,10 +2811,10 @@ impl<'a> FnVerifier<'a> {
             _ => {}
         }
         // effect operations: requires -> fresh result -> well-formedness -> ensures
-        let pr: Option<ProcV> = if n == "proc_spawn" { None } else { Some(arg(0)?.try_proc()?.clone()) };
+        let pr: Option<ProcV> = if n == "proc_spawn" || n == "proc_spawn_env" { None } else { Some(arg(0)?.try_proc()?.clone()) };
         let no_p = || "not enough values to unpack".to_string();
         match n {
-            "proc_spawn" => {}
+            "proc_spawn" | "proc_spawn_env" => {}
             "proc_write_str" | "proc_write_bytes" | "proc_close_stdin" => {
                 let p = pr.as_ref().ok_or_else(no_p)?;
                 self.proc_need(st, g, e, code, &what, z.and(&[p.error.raw_eq(&z.int(0)), p.stdin_open.clone()]));
@@ -2852,7 +2852,7 @@ impl<'a> FnVerifier<'a> {
         let ok = rp.error.raw_eq(&z.int(0));
         let mut facts: Vec<Ast> = Vec::new();
         match n {
-            "proc_spawn" => {
+            "proc_spawn" | "proc_spawn_env" => {
                 facts.push(ok.implies(&rp.stdin_open));
                 facts.push(ok.not().implies(&z.and(&[
                     rp.stdin_open.not(),

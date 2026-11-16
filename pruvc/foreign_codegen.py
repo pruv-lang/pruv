@@ -300,6 +300,13 @@ class ForeignGen:
             body += s._ens("pruv_r.stdout_buf.is_empty() && pruv_r.stderr_buf.is_empty() && !pruv_r.stdout_eof && !pruv_r.stderr_eof",
                            "both public buffers empty and both EOFs false")
             return s._fn(name, "program: &str, args: &%s, cwd: &str" % A, P, body + ["pruv_r"])
+        if op == "proc_spawn_env":
+            body = ["let pruv_r: %s = pruv_proc_spawn_env(program, args, cwd, env_names, env_values);" % P]
+            body += s._ens("if pruv_r.error == 0 { pruv_r.stdin_open } else { (pruv_r.error == 1 || pruv_r.error == 2) && pruv_proc_wf(&pruv_r) }",
+                           "ok(result) && open(result) || !ok(result) && !open(result) && (err(result) == 1 || err(result) == 2)")
+            body += s._ens("pruv_r.stdout_buf.is_empty() && pruv_r.stderr_buf.is_empty() && !pruv_r.stdout_eof && !pruv_r.stderr_eof",
+                           "both public buffers empty and both EOFs false")
+            return s._fn(name, "program: &str, args: &%s, cwd: &str, env_names: &%s, env_values: &%s" % (A, A, A), P, body + ["pruv_r"])
         if op in ("proc_write_str", "proc_write_bytes"):
             text = op == "proc_write_str"
             body = s._req("p.error == 0 && p.stdin_open", "proc_ok(p) && proc_stdin_open(p)")

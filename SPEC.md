@@ -712,6 +712,7 @@ UTF-8 arguments with the same placement rules, affine with auto-drop; an argumen
 |---|---|---|
 | `proc_args_new() -> ProcessArgs`, `proc_args_push(take a, arg: str) -> ProcessArgs` | alloc | build the list; `proc_args_len` counts it |
 | `proc_spawn(program: str, args: ProcessArgs, cwd: str) -> Process` | proc, alloc | no requires; ok and stdin open, or not ok with error 1 or 2. `cwd == ""` inherits |
+| `proc_spawn_env(program: str, args: ProcessArgs, cwd: str, env_names: ProcessArgs, env_values: ProcessArgs) -> Process` | proc, alloc | same contract as `proc_spawn`; the child inherits the parent environment, then the pairs are set in order (last wins, no removal); unequal counts, empty name, `=` or NUL in a name, NUL in a value: error 1 |
 | `proc_write_str/write_bytes(take p, ...) -> Process` | proc, alloc | requires ok and stdin open; writes everything |
 | `proc_close_stdin(take p) -> Process` | proc, alloc | requires ok and stdin open; ensures stdin closed |
 | `proc_read(take p, stream: i64, max: i64) -> Process` | proc, alloc | requires ok, stream 1 or 2, `0 < max`; next chunk of at most `max` bytes; EOF iff the chunk is empty |

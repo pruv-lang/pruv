@@ -645,6 +645,12 @@ fn proc_adapter(sym: &str, helper: &str, op: &str) -> R<String> {
                 "pruv_g6_guard(|| {{ let pruv_prog: &str = pruv_g6_str(p, n); let pruv_cwd: &str = pruv_g6_str(q, m); \
                  pruv_g6_new({}(pruv_prog, pruv_g6_ref::<{}>(a), pruv_cwd)) }})", helper, a_ty)));
         }
+        "proc_spawn_env" => {
+            return Ok(fn_text(sym, "p: *const u8, n: i64, a: PruvH, q: *const u8, m: i64, en: PruvH, ev: PruvH", Some("PruvH"), &format!(
+                "pruv_g6_guard(|| {{ let pruv_prog: &str = pruv_g6_str(p, n); let pruv_cwd: &str = pruv_g6_str(q, m); \
+                 pruv_g6_new({}(pruv_prog, pruv_g6_ref::<{}>(a), pruv_cwd, pruv_g6_ref::<{}>(en), pruv_g6_ref::<{}>(ev))) }})",
+                helper, a_ty, a_ty, a_ty)));
+        }
         "proc_write_str" | "proc_write_bytes" | "proc_close_stdin" | "proc_read" | "proc_read_all" => {
             let (params, pre, arg) = match op {
                 "proc_write_str" => ("h: PruvH, p: *const u8, n: i64", "let pruv_d: &str = pruv_g6_str(p, n); ", ", pruv_d"),

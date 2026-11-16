@@ -9,7 +9,8 @@ file stays under `.work/` (not committed). Results are in `results/`.
 | `python3 run.py solutions/indep1 results/indep1_first.json` | grades the independent author's solutions as received |
 | `python3 mutate.py --compiler py` (and `rs`) | 16 explicit wrong mutants and 2 controls on both backends, classified by stage |
 | `python3 perf.py --compiler py` (and `rs`) | 1 MiB over both outputs in 4 KiB chunks, Pruv against hand-written Rust |
-| `python3 faults/check.py` | four compiler faults, each applied alone to a copy of `pruvc/` (see `faults/README.md`) |
+| `python3 mutate_env.py --compiler py` (and `rs`) | G10-PROC-ENV: 7 wrong mutants and 1 control of `tests/runtime/g10p_r22_env.pruv` on both backends (2 static, 5 oracle) |
+| `python3 faults/check.py` | six compiler faults, each applied alone to a copy of `pruvc/` (see `faults/README.md`) |
 
 `PROBLEMS.md` has the two problems: q01, a `--version` run with exact argv, cwd, both outputs and the exit Result;
 q02, streaming line statistics with a finite read budget while the child floods stderr.

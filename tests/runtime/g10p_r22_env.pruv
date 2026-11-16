@@ -1,0 +1,89 @@
+// G10 proc env gate: proc_spawn_env inherits the parent environment, then sets the pairs in order (a repeated name: last
+// wins; no removal). Unequal counts, an empty name, '=' or NUL in a name and NUL in a value are input error 1; the failed
+// handle is still owned and is consumed by proc_wait.
+fn abort_with(take p: Process, base: i64) -> i64 ! proc, alloc
+  requires base >= 0 && base <= 1000000
+{
+  let e: i64 = proc_error(p);
+  let r: Result<i64> = proc_wait(move p);
+  return base + e;
+}
+
+fn bytes_eq(p: Process, stream: i64, expected: [u8]) -> bool ! alloc
+  requires stream == 1 || stream == 2
+{
+  let got: [u8] = proc_bytes(p, stream);
+  if len(got) != len(expected) { return false; }
+  let mut i: i64 = 0;
+  while i < len(got)
+    invariant 0 <= i && i <= len(got)
+    decreases len(got) - i
+  {
+    if got[i] != expected[i] { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+// the first k of three strings, in order (k is 0..3)
+fn pick(k: i64, a: str, b: str, c: str) -> ProcessArgs ! alloc
+  requires k >= 0 && k <= 3
+{
+  let mut l: ProcessArgs = proc_args_new();
+  if k >= 1 { l = proc_args_push(move l, a); }
+  if k >= 2 { l = proc_args_push(move l, b); }
+  if k >= 3 { l = proc_args_push(move l, c); }
+  return move l;
+}
+
+// run `program env q1 q2 q3` with kn names and kv values; 0 = the child printed exactly `expected` and exited 0
+fn env_run(program: str, kn: i64, kv: i64, n1: str, v1: str, n2: str, v2: str, n3: str, v3: str,
+           q1: str, q2: str, q3: str, expected: [u8]) -> i64 ! proc, alloc
+  requires kn >= 0 && kn <= 3 && kv >= 0 && kv <= 3
+{
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "env");
+  args = proc_args_push(move args, q1);
+  args = proc_args_push(move args, q2);
+  args = proc_args_push(move args, q3);
+  let names: ProcessArgs = pick(kn, n1, n2, n3);
+  let values: ProcessArgs = pick(kv, v1, v2, v3);
+  let mut p: Process = proc_spawn_env(program, args, "", names, values);
+  if !proc_ok(p) { return abort_with(move p, 100); }
+  p = proc_close_stdin(move p);
+  if !proc_ok(p) { return abort_with(move p, 200); }
+  p = proc_read_all(move p);
+  if !proc_ok(p) { return abort_with(move p, 300); }
+  let same: bool = bytes_eq(p, 1, expected);
+  let quiet: bool = proc_size(p, 2) == 0;
+  let r: Result<i64> = proc_wait(move p);
+  if !same { return 1; }
+  if !quiet { return 2; }
+  match r {
+    Ok(v) => { return v; }
+    Err(code) => { return 400 + code; }
+  }
+}
+
+// spawn `program quick` with kn names and kv values and report like g10p_r03: e * 10 + (9 for Ok, or the Err code of the wait)
+fn env_bad(program: str, kn: i64, kv: i64, n1: str, v1: str, n2: str, v2: str) -> i64 ! proc, alloc
+  requires kn >= 0 && kn <= 2 && kv >= 0 && kv <= 2
+{
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, "quick");
+  let names: ProcessArgs = pick(kn, n1, n2, n2);
+  let values: ProcessArgs = pick(kv, v1, v2, v2);
+  let p: Process = proc_spawn_env(program, args, "", names, values);
+  let e: i64 = proc_error(p);
+  let ok: bool = proc_ok(p);
+  let open: bool = proc_stdin_open(p);
+  let sized: bool = proc_size(p, 1) == 0 && proc_size(p, 2) == 0;
+  let eofs: bool = proc_eof(p, 1) || proc_eof(p, 2);
+  let r: Result<i64> = proc_wait(move p);
+  if ok && !open { return 90; }
+  if !ok && (open || !sized || eofs) { return 91; }
+  match r {
+    Ok(v) => { return e * 10 + 9; }
+    Err(code) => { return e * 10 + code; }
+  }
+}

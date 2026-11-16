@@ -40,7 +40,7 @@ pub struct CatFn {
 }
 
 /// CATALOG_NAMES of foreign.py (insertion order).
-pub const CATALOG_NAMES: [&str; 92] = [
+pub const CATALOG_NAMES: [&str; 93] = [
     "vec_new",
     "vec_push",
     "vec_get",
@@ -66,6 +66,7 @@ pub const CATALOG_NAMES: [&str; 92] = [
     "proc_args_push",
     "proc_args_len",
     "proc_spawn",
+    "proc_spawn_env",
     "proc_write_str",
     "proc_write_bytes",
     "proc_close_stdin",
@@ -345,6 +346,13 @@ pub fn catalog_fn(name: &str) -> Option<CatFn> {
         "proc_args_len" => CatFn { requires: vec![], ensures: vec![], params: vec![p("a", process_args_t(), false)], ret: GType::i64(), effects: vec![], tparams: vec![] },
         "proc_spawn" => CatFn { requires: vec![], ensures: vec![],
             params: vec![p("program", GType::str(), false), p("args", process_args_t(), false), p("cwd", GType::str(), false)],
+            ret: process_t(),
+            effects: proc_alloc(),
+            tparams: vec![],
+        },
+        "proc_spawn_env" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("program", GType::str(), false), p("args", process_args_t(), false), p("cwd", GType::str(), false),
+                         p("env_names", process_args_t(), false), p("env_values", process_args_t(), false)],
             ret: process_t(),
             effects: proc_alloc(),
             tparams: vec![],
@@ -1731,7 +1739,7 @@ mod tests {
 
     #[test]
     fn catalog_shapes() {
-        assert_eq!(CATALOG_NAMES.len(), 92);
+        assert_eq!(CATALOG_NAMES.len(), 93);
         for n in CATALOG_NAMES.iter() {
             assert!(catalog_fn(n).is_some());
         }

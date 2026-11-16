@@ -3820,7 +3820,7 @@ impl<'a> FnGen<'a> {
             n,
             "vec_new" | "map_new" | "string_new" | "vec_push" | "map_insert" | "string_push_str"
                 | "file_open_read" | "file_create" | "file_read_all" | "file_write_str" | "file_write_bytes"
-                | "proc_args_new" | "proc_args_push" | "proc_spawn" | "proc_write_str" | "proc_write_bytes"
+                | "proc_args_new" | "proc_args_push" | "proc_spawn" | "proc_spawn_env" | "proc_write_str" | "proc_write_bytes"
                 | "proc_close_stdin" | "proc_read" | "proc_read_all"
                 | "net_connect" | "net_listen" | "net_accept" | "net_write_str" | "net_write_bytes"
                 | "net_shutdown_write" | "net_set_timeout" | "net_read" | "net_read_all" | "ev_new" | "ev_add_socket" | "ev_add_listener" | "ev_add_process" | "ev_add_timer" | "ev_wait" | "ev_read" | "ev_write" | "ev_shutdown_write" | "ev_accept" | "ev_proc_read" | "ev_proc_write" | "ev_proc_close_stdin" | "ev_proc_wait" | "ev_remove"

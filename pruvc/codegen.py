@@ -461,8 +461,19 @@ fn pruv_proc_collector<R: ::std::io::Read + Send + 'static>(r: R, stream: i64) -
 }
 #[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
 fn pruv_proc_spawn(program: &str, args: &pruv_ProcessArgs, cwd: &str) -> pruv_Process {
+    pruv_proc_spawn_in(program, args, cwd, &[], &[])
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_spawn_env(program: &str, args: &pruv_ProcessArgs, cwd: &str, names: &pruv_ProcessArgs, values: &pruv_ProcessArgs) -> pruv_Process {
+    pruv_proc_spawn_in(program, args, cwd, &names.args, &values.args)
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_spawn_in(program: &str, args: &pruv_ProcessArgs, cwd: &str, names: &[::std::string::String], values: &[::std::string::String]) -> pruv_Process {
     pruv_proc_sigpipe();
     if program.is_empty() || program.contains('\0') || cwd.contains('\0') || args.args.iter().any(|a| a.contains('\0')) {
+        return pruv_proc_failed(1);
+    }
+    if names.len() != values.len() || names.iter().any(|k| k.is_empty() || k.contains('=') || k.contains('\0')) || values.iter().any(|v| v.contains('\0')) {
         return pruv_proc_failed(1);
     }
     if pruv_proc_batch(program) {
@@ -470,6 +481,9 @@ fn pruv_proc_spawn(program: &str, args: &pruv_ProcessArgs, cwd: &str) -> pruv_Pr
     }
     let mut cmd = ::std::process::Command::new(program);
     cmd.args(args.args.iter());
+    for (k, v) in names.iter().zip(values.iter()) {
+        cmd.env(k, v);
+    }
     if !cwd.is_empty() {
         cmd.current_dir(cwd);
     }
@@ -3387,8 +3401,19 @@ fn pruv_proc_collector<R: ::std::io::Read + Send + 'static>(r: R, stream: i64) -
 }
 #[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
 fn pruv_proc_spawn(program: &str, args: &pruv_ProcessArgs, cwd: &str) -> pruv_Process {
+    pruv_proc_spawn_in(program, args, cwd, &[], &[])
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_spawn_env(program: &str, args: &pruv_ProcessArgs, cwd: &str, names: &pruv_ProcessArgs, values: &pruv_ProcessArgs) -> pruv_Process {
+    pruv_proc_spawn_in(program, args, cwd, &names.args, &values.args)
+}
+#[allow(dead_code, non_camel_case_types, non_snake_case, unused_variables, unused_mut, unused_assignments)]
+fn pruv_proc_spawn_in(program: &str, args: &pruv_ProcessArgs, cwd: &str, names: &[::std::string::String], values: &[::std::string::String]) -> pruv_Process {
     pruv_proc_sigpipe();
     if program.is_empty() || program.contains('\0') || cwd.contains('\0') || args.args.iter().any(|a| a.contains('\0')) {
+        return pruv_proc_failed(1);
+    }
+    if names.len() != values.len() || names.iter().any(|k| k.is_empty() || k.contains('=') || k.contains('\0')) || values.iter().any(|v| v.contains('\0')) {
         return pruv_proc_failed(1);
     }
     if pruv_proc_batch(program) {
@@ -3396,6 +3421,9 @@ fn pruv_proc_spawn(program: &str, args: &pruv_ProcessArgs, cwd: &str) -> pruv_Pr
     }
     let mut cmd = ::std::process::Command::new(program);
     cmd.args(args.args.iter());
+    for (k, v) in names.iter().zip(values.iter()) {
+        cmd.env(k, v);
+    }
     if !cwd.is_empty() {
         cmd.current_dir(cwd);
     }

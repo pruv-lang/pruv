@@ -1,4 +1,4 @@
-"""Four isolated G10 proc compiler faults, each applied alone to a disposable copy of `pruvc/`.
+"""Six isolated G10 proc compiler faults, each applied alone to a disposable copy of `pruvc/`.
 
 The source compiler is never edited. A fault counts as detected when a named probe that passes on the clean copy fails
 on the faulty copy. Probes: `reject` (a tests/must_reject row, matched by its stage/code JSON oracle), `local_reject` /
@@ -35,6 +35,14 @@ FAULTS = [
   [('{ *pruv_t = 1; *pruv_v = pruv_x; } "\n                   "::std::result::Result::Err(pruv_e) => { *pruv_t = 0; *pruv_v = pruv_e; } } } })" % (\n                       _proc_consume("h", P)',
     '{ *pruv_t = 0; *pruv_v = pruv_x; } "\n                   "::std::result::Result::Err(pruv_e) => { *pruv_t = 1; *pruv_v = pruv_e; } } } })" % (\n                       _proc_consume("h", P)')],
   [('runtime', 'g10p_r10_exit_kill')]),
+ # an edit is (old, new) and must match exactly once, or (old, new, N) and must match exactly N times
+ ('f5_env_ignored', 'codegen.py',
+  [('        cmd.env(k, v);', '        let _ = (k, v); // FAULT: env ignored', 2)],
+  [('runtime', 'g10p_r22_env')]),
+ ('f6_env_validation', 'codegen.py',
+  [("names.iter().any(|k| k.is_empty() || k.contains('=') || k.contains('\\0'))",
+    "names.iter().any(|k| k.is_empty() || k.contains('\\0'))", 2)],
+  [('runtime', 'g10p_r22_env')]),
 ]
 LOCAL_EXPECTED = {'stage': 'verify', 'code': 'assert'}
 
@@ -69,16 +77,16 @@ def probe(compiler, kind, name, wd):
         r = G.run(cmd, timeout=600)
         row = dict(r, command=[str(x) for x in cmd])
         if r['rc']:
-            return dict(row, passed=False, reason='compile', internal_error=False)
+            return dict(row, passed=False, reason='compile', internal_error=False, started=False)
         exe, error = G.build({'rs': str(rs), 'll': str(ll)}, wd, (G.ROOT / 'tests/runtime' / (name + '.rs')).read_text())
         if error:
-            return dict(row, passed=False, reason='build: ' + error[-400:], internal_error=False)
+            return dict(row, passed=False, reason='build: ' + error[-400:], internal_error=False, started=False)
         run_dir = wd / ('run_' + name)
         run_dir.mkdir()
         env = dict(os.environ, PRUV_PROC_CHILD=str(test_child()))
         x = G.run([exe], timeout=300, env=env, cwd=run_dir)
         return dict(row, run=x, passed=x['rc'] == 0, reason='exit %d' % x['rc'], internal_error=False,
-                    started=x['rc'] not in (-1, -2))
+                    started=x['rc'] > 0)
     if kind == 'reject':
         src = G.ROOT / 'tests/must_reject' / (name + '.pruv')
         expected = json.loads(src.with_suffix('.json').read_text())
@@ -105,8 +113,8 @@ def main():
     for name, filename, edits, probes in FAULTS:
         original = (G.ROOT / 'pruvc' / filename).read_text()
         altered = original
-        for old, new in edits:
-            assert altered.count(old) == 1, (name, old, altered.count(old))
+        for old, new, *times in edits:
+            assert altered.count(old) == (times[0] if times else 1), (name, old, altered.count(old))
             altered = altered.replace(old, new)
         patch = ''.join(difflib.unified_diff(original.splitlines(True), altered.splitlines(True),
                         fromfile='a/pruvc/' + filename, tofile='b/pruvc/' + filename))
@@ -142,7 +150,9 @@ def main():
     table = ['# G10 proc compiler fault injections', '',
              'Each patch is applied alone with `patch -p1` to a disposable copy of the current `pruvc/` under',
              '`bench/g10_proc/.work`; the source compiler is never patched. Run `python3 bench/g10_proc/faults/check.py`.',
-             'A fault is detected when a named probe passes on the clean copy and fails on the faulty one.', '',
+             'A fault is detected when a named probe passes on the clean copy and fails on the faulty one (a runtime',
+             'probe only counts when the faulty driver ran and exited with a positive code; compile or build failures,',
+             'timeouts and signals do not).', '',
              '| Fault | Patch SHA256 prefix | Probe(s) | Result |', '|---|---|---|---|']
     for row, (_, _, _, probes) in zip(rows, FAULTS):
         table.append('| ' + ' | '.join([row['patch'], row['sha256'][:16],
@@ -152,7 +162,8 @@ def main():
               'tests/runtime driver on the LLVM backend (the Rust shim carries the Result tag) and expects exit 0.',
               'The faults: f1 drops the must-consume check at `return`; f2 drops the `stream` 1-or-2 requires of',
               '`proc_read`; f3 keeps the read stream instead of the other one; f4 swaps the Ok/Err tag of',
-              '`proc_wait`/`proc_kill` in the shim. Full commands and outputs are in `../results/faults.json`.', '']
+              '`proc_wait`/`proc_kill` in the shim; f5 drops the env pairs in `proc_spawn_env`; f6 stops rejecting',
+              '`=` in env names. Full commands and outputs are in `../results/faults.json`.', '']
     (G.HERE / 'faults/README.md').write_text('\n'.join(table))
     return int(not a.generate_only and any(r['status'] != 'detected' for r in rows))
 

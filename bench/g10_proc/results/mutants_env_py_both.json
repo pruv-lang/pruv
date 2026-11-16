@@ -1,0 +1,243 @@
+{
+  "tools": {
+    "py": [
+      "python",
+      "pruvc.py"
+    ],
+    "rs": [
+      "pruvc"
+    ]
+  },
+  "summary": {
+    "total": 8,
+    "explicit_incorrect": 7,
+    "controls": 1,
+    "by_expected": {
+      "static": {
+        "rejected_check": 2,
+        "rejected_verify": 2
+      },
+      "oracle": {
+        "wrong_but_proved": 10
+      },
+      "accepted": {
+        "accepted": 2
+      }
+    },
+    "unexpected": []
+  },
+  "items": [
+    {
+      "id": "e01",
+      "family": "missing_consume",
+      "expected": "static",
+      "old": "let r: Result<i64> = proc_wait(move p);\n  if ok && !open",
+      "new": "let r: Result<i64> = Ok(0);\n  if ok && !open",
+      "intent": "incorrect",
+      "sha256": "212bf29c970704b727573641fb8ba73b200c73124f7ccd6efa5215f1a57de1dd",
+      "runs": {
+        "py-rust": {
+          "class": "rejected_check",
+          "detail": {
+            "rc": 1,
+            "stderr": "",
+            "codes": [
+              "type/proc_unconsumed"
+            ]
+          }
+        },
+        "py-llvm": {
+          "class": "rejected_check",
+          "detail": {
+            "rc": 1,
+            "stderr": "",
+            "codes": [
+              "type/proc_unconsumed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "e02",
+      "family": "unchecked_spawn",
+      "expected": "static",
+      "old": "  if !proc_ok(p) { return abort_with(move p, 100); }\n",
+      "new": "",
+      "intent": "incorrect",
+      "sha256": "1ccdf34859b9c15ef998f34e0f30e1550ea32c19fe270c9197644bbc7722e032",
+      "runs": {
+        "py-rust": {
+          "class": "rejected_verify",
+          "detail": {
+            "rc": 1,
+            "stderr": "",
+            "codes": [
+              "verify/call_requires"
+            ]
+          }
+        },
+        "py-llvm": {
+          "class": "rejected_verify",
+          "detail": {
+            "rc": 1,
+            "stderr": "",
+            "codes": [
+              "verify/call_requires"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "e03",
+      "family": "swapped_lists",
+      "expected": "oracle",
+      "old": "let mut p: Process = proc_spawn_env(program, args, \"\", names, values)",
+      "new": "let mut p: Process = proc_spawn_env(program, args, \"\", values, names)",
+      "intent": "incorrect",
+      "sha256": "a01bf9ded9a30baeb836bbf5c86df7129da7691e7619fbb018773ac8a644d6de",
+      "runs": {
+        "py-rust": {
+          "class": "wrong_but_proved",
+          "detail": {
+            "rc": 101,
+            "stderr": "\nthread 'main' (87341144) panicked at /Users/spica4345/Projects/pruv/bench/g10_proc/.work/e03_13wvwbh_/main.rs:38:5:\nassertion `left == right` failed\n  left: 1\n right: 0\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+          }
+        },
+        "py-llvm": {
+          "class": "wrong_but_proved",
+          "detail": {
+            "rc": 101,
+            "stderr": "\nthread 'main' (87343400) panicked at /Users/spica4345/Projects/pruv/bench/g10_proc/.work/e03_l2h2luwh/main.rs:38:5:\nassertion `left == right` failed\n  left: 1\n right: 0\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+          }
+        }
+      }
+    },
+    {
+      "id": "e04",
+      "family": "same_list",
+      "expected": "oracle",
+      "old": "let mut p: Process = proc_spawn_env(program, args, \"\", names, values)",
+      "new": "let mut p: Process = proc_spawn_env(program, args, \"\", names, names)",
+      "intent": "incorrect",
+      "sha256": "fb2b448e03447db107ee286fbee27b3b6afd0a25ae4c0fd74774618d54c59ab8",
+      "runs": {
+        "py-rust": {
+          "class": "wrong_but_proved",
+          "detail": {
+            "rc": 101,
+            "stderr": "\nthread 'main' (87341155) panicked at /Users/spica4345/Projects/pruv/bench/g10_proc/.work/e04_grj25e8s/main.rs:38:5:\nassertion `left == right` failed\n  left: 1\n right: 0\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+          }
+        },
+        "py-llvm": {
+          "class": "wrong_but_proved",
+          "detail": {
+            "rc": 101,
+            "stderr": "\nthread 'main' (87343545) panicked at /Users/spica4345/Projects/pruv/bench/g10_proc/.work/e04_xdel69zg/main.rs:38:5:\nassertion `left == right` failed\n  left: 1\n right: 0\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+          }
+        }
+      }
+    },
+    {
+      "id": "e05",
+      "family": "dropped_pairs",
+      "expected": "oracle",
+      "old": "let p: Process = proc_spawn_env(program, args, \"\", names, values);",
+      "new": "let p: Process = proc_spawn(program, args, \"\");",
+      "intent": "incorrect",
+      "sha256": "3be08db12ed300465821a7fb2840a3c9e8b8cae1c225bdcd0fb3d920caa3ecc7",
+      "runs": {
+        "py-rust": {
+          "class": "wrong_but_proved",
+          "detail": {
+            "rc": 101,
+            "stderr": "\nthread 'main' (87341128) panicked at /Users/spica4345/Projects/pruv/bench/g10_proc/.work/e05_cnk4n790/main.rs:94:5:\nassertion `left == right` failed\n  left: 9\n right: 11\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+          }
+        },
+        "py-llvm": {
+          "class": "wrong_but_proved",
+          "detail": {
+            "rc": 101,
+            "stderr": "\nthread 'main' (87343274) panicked at /Users/spica4345/Projects/pruv/bench/g10_proc/.work/e05_n0x0hnuf/main.rs:94:5:\nassertion `left == right` failed\n  left: 9\n right: 11\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+          }
+        }
+      }
+    },
+    {
+      "id": "e06",
+      "family": "lost_pair",
+      "expected": "oracle",
+      "old": "  if k >= 3 { l = proc_args_push(move l, c); }\n",
+      "new": "",
+      "intent": "incorrect",
+      "sha256": "0194c3e71827acb1570da77781fc729162d57927115a18a0718aca7f935f5461",
+      "runs": {
+        "py-rust": {
+          "class": "wrong_but_proved",
+          "detail": {
+            "rc": 101,
+            "stderr": "\nthread 'main' (87341046) panicked at /Users/spica4345/Projects/pruv/bench/g10_proc/.work/e06_e8e32hvk/main.rs:50:5:\nassertion `left == right` failed\n  left: 1\n right: 0\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+          }
+        },
+        "py-llvm": {
+          "class": "wrong_but_proved",
+          "detail": {
+            "rc": 101,
+            "stderr": "\nthread 'main' (87343026) panicked at /Users/spica4345/Projects/pruv/bench/g10_proc/.work/e06_1c1bf20h/main.rs:50:5:\nassertion `left == right` failed\n  left: 1\n right: 0\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+          }
+        }
+      }
+    },
+    {
+      "id": "e07",
+      "family": "reordered_pairs",
+      "expected": "oracle",
+      "old": "let names: ProcessArgs = pick(kn, n1, n2, n3);",
+      "new": "let names: ProcessArgs = pick(kn, n1, n3, n2);",
+      "intent": "incorrect",
+      "sha256": "c04cefcd429e9d0bd8eaebac867a598891d5791c5a4dc6c908a6296ec8f3b4bf",
+      "runs": {
+        "py-rust": {
+          "class": "wrong_but_proved",
+          "detail": {
+            "rc": 101,
+            "stderr": "\nthread 'main' (87341124) panicked at /Users/spica4345/Projects/pruv/bench/g10_proc/.work/e07_gsi79z6k/main.rs:55:5:\nassertion `left == right` failed\n  left: 1\n right: 0\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+          }
+        },
+        "py-llvm": {
+          "class": "wrong_but_proved",
+          "detail": {
+            "rc": 101,
+            "stderr": "\nthread 'main' (87343125) panicked at /Users/spica4345/Projects/pruv/bench/g10_proc/.work/e07_mwaey26m/main.rs:55:5:\nassertion `left == right` failed\n  left: 1\n right: 0\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+          }
+        }
+      }
+    },
+    {
+      "id": "e08",
+      "family": "kill_instead_of_wait",
+      "expected": "accepted",
+      "old": "if !proc_ok(p) { return abort_with(move p, 100); }",
+      "new": "if !proc_ok(p) { let r: Result<i64> = proc_kill(move p); return 100; }",
+      "intent": "control",
+      "sha256": "b854cfc9c3efdf6493259d5ec1680a57d3288e7f1367037f76009b8afe0c787c",
+      "runs": {
+        "py-rust": {
+          "class": "accepted",
+          "detail": {
+            "rc": 0,
+            "stderr": ""
+          }
+        },
+        "py-llvm": {
+          "class": "accepted",
+          "detail": {
+            "rc": 0,
+            "stderr": ""
+          }
+        }
+      }
+    }
+  ]
+}

@@ -2194,7 +2194,7 @@ class FnVerifier:
             return mk_arr(z3.If(sm == 1, p.out.a, p.err.a), _proc_size(p, sm), n, U8)
         # effect operations: requires -> fresh result -> well-formedness -> ensures
         p = args[0]
-        if n == "proc_spawn":
+        if n in ("proc_spawn", "proc_spawn_env"):
             pass
         elif n in ("proc_write_str", "proc_write_bytes", "proc_close_stdin"):
             need(z3.And(p.error == 0, p.stdin_open))
@@ -2212,7 +2212,7 @@ class FnVerifier:
             s.assume(st, g, z3.Implies(o.is_err(res), z3.And(o.eval(res) >= 1, o.eval(res) <= 6)))
             return res
         ok = res.error == 0
-        if n == "proc_spawn":
+        if n in ("proc_spawn", "proc_spawn_env"):
             s.assume(st, g, z3.Implies(ok, res.stdin_open))
             s.assume(st, g, z3.Implies(z3.Not(ok), z3.And(z3.Not(res.stdin_open), z3.Or(res.error == 1, res.error == 2))))
             s.assume(st, g, z3.And(res.out.n == 0, res.err.n == 0, z3.Not(res.stdout_eof), z3.Not(res.stderr_eof)))

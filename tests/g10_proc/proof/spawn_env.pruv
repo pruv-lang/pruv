@@ -1,0 +1,35 @@
+// G10 proc env: proc_spawn_env has the contract of proc_spawn. A failed handle is still owned (error 1 or 2, stdin closed)
+// and is consumed by proc_wait; after a confirmed spawn the write / close / read-all / wait session verifies.
+fn env_session(program: str, cwd: str, name: str, value: str, input: str) -> Result<i64> ! proc, alloc {
+  let args: ProcessArgs = proc_args_new();
+  let mut names: ProcessArgs = proc_args_new();
+  names = proc_args_push(move names, name);
+  let mut values: ProcessArgs = proc_args_new();
+  values = proc_args_push(move values, value);
+  let mut p: Process = proc_spawn_env(program, args, cwd, names, values);
+  if !proc_ok(p) {
+    assert proc_error(p) == 1 || proc_error(p) == 2;
+    assert !proc_stdin_open(p);
+    return proc_wait(move p);
+  }
+
+  p = proc_write_str(move p, input);
+  if !proc_ok(p) {
+    return proc_kill(move p);
+  }
+
+  p = proc_close_stdin(move p);
+  if !proc_ok(p) {
+    return proc_kill(move p);
+  }
+  assert !proc_stdin_open(p);
+
+  p = proc_read_all(move p);
+  if !proc_ok(p) {
+    return proc_kill(move p);
+  }
+
+  let so: [u8] = proc_bytes(p, 1);
+  let se: [u8] = proc_bytes(p, 2);
+  return proc_wait(move p);
+}
