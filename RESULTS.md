@@ -2106,3 +2106,29 @@ python3 bench/l3/mcp/q_mutants.py
 - **Checks before commit:** `cargo test --release`, `tests/diff_rust.py --fuzz-count 20` (all same), Python full run_all with rows compare (4188/4188 passed; 4200 saved rows, 12 outside the py scope, 0 missing, 0 extra, 0 failed). Mutant scripts were not rerun (Q-only). The audit found no required defect; it noted that four `run_q_mutants.py` entries (`trailing_comma`, `wrong_colon_kind`, `surrogate_combine`, `first_wins`) target strings absent from the current source, which predates this change and is left for the next Q batch.
 
 **G4b-0 complete.**
+
+## 132. G4b-3: proof cache (`--proof-cache DIR`, 2026-11-16)
+
+- **Design:** `docs/G4B_SPEC.md` section 7. `--proof-cache DIR` stores `unsat` answers as `DIR/<xx>/<key>` (`pruv-proof-cache 1\nunsat\n`, temporary file + rename). The key is SHA-256 of `<impl> <version>\0<z3 full version>\0<key text>`; the key text is the set-option head (timeout, rlimit, seed) and one line per solver assertion: the SHA-256 of its canonical benchmark text plus the query-wide numbers of the fresh names it declares. The first design keyed on the trace text (`sol.sexpr()`); rendering it on every attempt cost 3 to 13 times the cache-off compile on the L3 pieces, so the key became per-assertion with a memo per function verifier.
+- **Determinism (rule 7):** three sources of context state were found and removed. Let names follow AST ids (renumbered). Fresh constants and fresh bound variables (`k!14`, `j!q14`, `t!dk3`) follow context-wide counters that also move during solver calls (renumbered; only declared names get query numbers). The printer binds a subterm with `let` when its reference count is above one, which includes other live terms and the solver's own references on both compilers: both now print a `translate` copy in a reference-counted scratch context.
+- **Implementation:** `pruvc/proof_cache.py`, `pruvc/verify.py`, `pruvc/infer.py`, `pruvc/pruvc.py`, `pruvc/trust_report.py`; `pruv-proof/src/proof_cache.rs`, `obligation.rs`, `sys.rs` (scratch context), `pruvc/src/cli.rs`, `driver.rs`, `trust_report.rs`; trace tools take `--proof-cache`. Hits are recorded in the trace with `"cached": true`; the trust report counts hits, misses and stores.
+- **Tests:** `tests/g4b/check_cache.py` (run_all row `g4b_proof/cache`, 291/291 on both compilers): cold/warm identity of output, counts and traces (plain, `--infer`, manifest program), contract changes, failing, undecided (timeout) obligations and inference candidates never stored, corrupt and unreadable entries, read-only DIR, two concurrent compiles, option sets in the key, py/rs entries disjoint, cache off, `--no-verify`.
+- **L3 measurement** (cold and warm into one fresh DIR; generated code, stdout and stderr identical to cache off; every cold store was a warm hit and warm stored nothing, on all eight pairs):
+
+| piece | compiler | off | cold | warm | cold hits / misses / stores | warm misses |
+|---|---|---|---|---|---|---|
+| json | rs | 8.1s | 9.1s | 5.3s | 57 / 16657 / 16654 | 3 |
+| mcp | rs | 13.4s | 17.9s | 7.8s | 215 / 25620 / 25617 | 3 |
+| qwen | rs | 19.0s | 23.6s | 8.7s | 364 / 26325 / 26316 | 9 |
+| supervisor | rs | 14.0s | 16.8s | 10.0s | 16 / 20610 / 20610 | 0 |
+| json | py | 13.4s | 18.6s | 13.0s | 57 / 16657 / 16654 | 3 |
+| mcp | py | 27.4s | 34.2s | 24.0s | 215 / 25620 / 25617 | 3 |
+| qwen | py | 32.1s | 39.3s | 25.2s | 364 / 26325 / 26316 | 9 |
+| supervisor | py | 40.3s | 46.1s | 43.2s | 16 / 20610 / 20610 | 0 |
+
+  The warm misses are the `sat` and unknown attempts, which are never stored. The py json and supervisor rows ran alongside `check_cache.py`, so their times are noisy. Python's warm saving is small because most of its compile time is outside the solver.
+- **Rule 8:** the cold compile is 12 to 33 percent slower than cache off (rs) and 14 to 39 percent (py), above the 10 percent line. Recorded here; the decision on option 7 (key form and its cost) is revisited before G4b-Q.
+- **Audit:** one audit (Codex), three required findings, all fixed: a declared constant named like a let name (`?x7`) or named `assert` could make two different queries share a key (the canonical form now gives declared let-form names query numbers, and the declarations end only at the `assert` command at a line start; not reachable from Pruv names, reproduced on the Python API); `check_trust.py` expected the report without `misses`; the unknown-never-stored check had no unknown attempt (a fixture that times out was added, `check_cache.py` now 291 checks). The full run also found that building the query list before adding the assertions changed z3 term numbering and turned `g10a_v_wait_equal` from sat into unknown; the cache-off path builds terms in the old order again and the list is built only with the cache on. The confirmation audit found that list copy on the cache-off path (moved), nothing else.
+- **Checks before commit:** Python full run `--backend both --compare-rows` 4191/4191 (missing 0, extra 0, failed 0), `check_cache.py` 291/291 and `check_trust.py` 419/419 on both compilers, `cargo test --release`, `diff_rust.py --fuzz-count 20` (all same). The Python L3 times above were measured before the term-order fix.
+
+**G4b-3 complete.**

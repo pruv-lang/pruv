@@ -1,6 +1,7 @@
 """Pruv verifier: symbolic execution + z3. Proves bounds, overflow, contracts, loops."""
 import time
 import z3
+import proof_cache
 from vast import *
 from typeinfo import (TypeTable, is_array, array_elem, array_of, bind_args, substitute, decl_owner, format_type,
                       is_collection)
@@ -132,10 +133,13 @@ class TraceRecorder:
         s.obligations.append(entry)
         return len(s.obligations) - 1
 
-    def attempt(s, idx, lemmas, smt2, result, status, timeout_ms, rlimit, seed, reason_unknown):
-        s.obligations[idx]["attempts"].append({
+    def attempt(s, idx, lemmas, smt2, result, status, timeout_ms, rlimit, seed, reason_unknown, cached=False):
+        a = {
             "lemmas": lemmas, "smt2": smt2, "result": result, "status": status, "timeout_ms": timeout_ms,
-            "rlimit": rlimit, "seed": seed, "reason_unknown": reason_unknown})
+            "rlimit": rlimit, "seed": seed, "reason_unknown": reason_unknown}
+        if cached:      # G4b-3: only a proof-cache hit carries the key
+            a["cached"] = True
+        s.obligations[idx]["attempts"].append(a)
 
 
 class Model:
@@ -984,8 +988,10 @@ FIX = {
 
 
 class FnVerifier:
-    def __init__(s, prog, f, errors, model=None, rec=None, qcfg=None, extra=None, probe=None):
+    def __init__(s, prog, f, errors, model=None, rec=None, qcfg=None, extra=None, probe=None, cache=None):
         s.rec = rec
+        s.cache = cache     # G4b-3: ProofCache or None
+        s._kmemo = {}       # G4b-3: id(assertion object) -> (object, key text piece), proof_cache.key_text
         s.qcfg = qcfg if qcfg is not None else QueryConfig()
         # STAGE1 B2: extra = {loop number: [(cand id, expr, text)]} (inferred invariants); probe = exploration
         # state (only candidate obligations are queried, nothing is reported). Both empty = the old path.
@@ -1144,6 +1150,8 @@ class FnVerifier:
                 sol.set("rlimit", cfg.rlimit)
             if cfg.seed is not None:
                 sol.set("random_seed", cfg.seed)
+            # the terms are built in the same order as without the cache: z3 numbers terms by creation, and the
+            # numbering steers the solver (a sat answer can become unknown)
             for p in st.pc:
                 sol.add(p)
             for p in g:
@@ -1151,15 +1159,30 @@ class FnVerifier:
             if with_lemmas:
                 for p in s.lemmas:
                     sol.add(p)
-            sol.add(z3.Not(ob))
-            text = None
-            if s.rec is not None:
-                text = "(set-option :timeout %d)\n" % cfg.timeout_ms
+            neg = z3.Not(ob)
+            sol.add(neg)
+            text = key_text = None
+            cache = s.cache
+            if s.rec is not None or cache is not None:
+                head = "(set-option :timeout %d)\n" % cfg.timeout_ms
                 if cfg.rlimit is not None:
-                    text += "(set-option :rlimit %d)\n" % cfg.rlimit
+                    head += "(set-option :rlimit %d)\n" % cfg.rlimit
                 if cfg.seed is not None:
-                    text += "(set-option :random_seed %d)\n" % cfg.seed
-                text += sol.sexpr()
+                    head += "(set-option :random_seed %d)\n" % cfg.seed
+                # the trace text (sexpr) and the cache key text (per-assertion benchmark pieces, docs/G4B_SPEC.md 7 rule 9)
+                if s.rec is not None:
+                    text = head + sol.sexpr()
+                if cache is not None:
+                    parts = list(st.pc) + list(g) + (list(s.lemmas) if with_lemmas else []) + [neg]
+                    key_text = proof_cache.key_text(head, parts, s._kmemo)
+            if cache is not None and cache.lookup(key_text):
+                cache.hits += 1
+                if s.rec is not None:
+                    s.rec.attempt(idx, with_lemmas, text, "unsat", "proved", cfg.timeout_ms, cfg.rlimit,
+                                  cfg.seed, None, cached=True)
+                return sol, z3.unsat
+            if cache is not None:
+                cache.misses += 1
             try:
                 r = sol.check()
             except z3.Z3Exception as e:
@@ -1171,6 +1194,8 @@ class FnVerifier:
                 reason = sol.reason_unknown() if r == z3.unknown else None
                 s.rec.attempt(idx, with_lemmas, text, str(r), query_status(r, reason), cfg.timeout_ms,
                               cfg.rlimit, cfg.seed, reason)
+            if cache is not None and r == z3.unsat:
+                cache.store(key_text)
             return sol, r
 
         if probing:
@@ -2860,7 +2885,7 @@ class FnVerifier:
                 s.ensures_ok(end, None, f)
 
 
-def verify_program(prog, rec=None, infer=False, report=None):
+def verify_program(prog, rec=None, infer=False, report=None, cache=None):
     """infer=True (STAGE1 B2, --infer): per function, explore template invariant candidates (infer.py), then
     verify the whole function with the survivors as extra loop invariants. report (a list) receives one record
     per loop (docs/STAGE1_B_INFER.md section 5). infer=False: exactly the old path."""
@@ -2874,11 +2899,11 @@ def verify_program(prog, rec=None, infer=False, report=None):
     model = Model(prog)
     if not infer:
         for f in prog.functions:
-            FnVerifier(prog, f, errors, model, rec=rec).run()
+            FnVerifier(prog, f, errors, model, rec=rec, cache=cache).run()
         return errors
     import infer as infer_mod      # lazy: infer.py imports this module
     for f in prog.functions:
-        res = infer_mod.infer_function(prog, f, model, rec)
+        res = infer_mod.infer_function(prog, f, model, rec, cache)
         before = len(errors)
         if res.status == "timeout":
             errors.append(PruvError(
@@ -2886,7 +2911,7 @@ def verify_program(prog, rec=None, infer=False, report=None):
                 "invariant inference for %s hit the time safety limit (5 s per function, 500 ms per query)" % f.name,
                 "write the loop invariants explicitly, or compile without --infer", file=f.file))
         else:
-            FnVerifier(prog, f, errors, model, rec=rec, extra=res.extra()).run()
+            FnVerifier(prog, f, errors, model, rec=rec, extra=res.extra(), cache=cache).run()
         if report is not None:
             report.extend(res.records(len(errors) - before))
     return errors

@@ -60,7 +60,7 @@ fn output(
     dumps_sorted(&Json::Obj(kv))
 }
 
-fn run(path: &std::ffi::OsStr, infer: bool, no_verify: bool) -> String {
+fn run(path: &std::ffi::OsStr, infer: bool, no_verify: bool, cache_dir: Option<std::path::PathBuf>) -> String {
     // Like the adapter's trace_result, read/decode failures are also reported as internal_error (Python exception sentence) (audit must-fix 1).
     // G4: through the module loader (an explicit-mode root also reads its declared module files)
     let loaded = match pruv_core::modules::load_program(std::path::Path::new(path)) {
@@ -91,7 +91,10 @@ fn run(path: &std::ffi::OsStr, infer: bool, no_verify: bool) -> String {
                 let mut internal = false;
                 if !no_verify {
                     timeout = Some(TIMEOUT_MS);
-                    let opts = VerifyOptions { infer };
+                    // G4b-3: the compiler version is the pruvc crate's ("0.0.1").
+                    let proof_cache = cache_dir
+                        .map(|d| std::rc::Rc::new(pruv_proof::proof_cache::ProofCache::new(d, "0.0.1")));
+                    let opts = VerifyOptions { infer, proof_cache };
                     let rep = if infer { Some(&mut report) } else { None };
                     match verify_program_opts(&prog, &tt, Some(&mut trace), &opts, rep) {
                         Ok(errs) => {
@@ -122,6 +125,7 @@ fn main() {
     let mut unknown: Vec<String> = Vec::new();
     let mut infer = false;
     let mut no_verify = false;
+    let mut cache_dir: Option<std::path::PathBuf> = None;
     let mut args = args.into_iter();
     while let Some(a) = args.next() {
         let s = a.to_string_lossy().into_owned();
@@ -129,6 +133,14 @@ fn main() {
             infer = true;
         } else if s == "--no-verify" {
             no_verify = true;
+        } else if s == "--proof-cache" {
+            match args.next() {
+                Some(d) => cache_dir = Some(std::path::PathBuf::from(d)),
+                None => {
+                    eprintln!("pruv-trace-dump: --proof-cache needs a value");
+                    std::process::exit(2);
+                }
+            }
         } else if s == "--trust-callers" {
             // No effect on proofs: just accept it.
         } else if s == "--contract-budget" {
@@ -153,7 +165,7 @@ fn main() {
     }
     let path = files.remove(0);
     // Run on a 1GB-stack thread for deeply nested input (parser, checker and symbolic execution are all recursive).
-    let handle = std::thread::Builder::new().stack_size(1 << 30).spawn(move || run(&path, infer, no_verify));
+    let handle = std::thread::Builder::new().stack_size(1 << 30).spawn(move || run(&path, infer, no_verify, cache_dir));
     // A panic or thread-creation failure exits with a nonzero code so the differential tool counts it as rs_crash.
     let line = match handle.map(|h| h.join()) {
         Ok(Ok(s)) => s,

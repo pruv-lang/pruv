@@ -5,7 +5,7 @@ use pruvc::target::{Cpu, Target};
 use std::path::{Component, Path, PathBuf};
 
 // The usage line on stdout is kept the same as Python pruvc.py (except for the executable name) (audit must-fix 3). New options are reported on stderr.
-pub const USAGE: &str = "usage: pruvc in.pruv -o OUT [--no-verify] [--trust-callers] [--backend rust|llvm] [--rust-bindings PATH] [--infer [--show-inferred]] [--rust-extern NAME=PATH] [--rust-search PATH] [--lib DIR] [--foreign-checks requires|all|off]";
+pub const USAGE: &str = "usage: pruvc in.pruv -o OUT [--no-verify] [--trust-callers] [--backend rust|llvm] [--rust-bindings PATH] [--infer [--show-inferred]] [--rust-extern NAME=PATH] [--rust-search PATH] [--lib DIR] [--proof-cache DIR] [--foreign-checks requires|all|off]";
 pub const USAGE_MORE: &str = "       [--emit exe|obj|ll|rs] [--target TRIPLE] [-mcpu=CPU]";
 
 /// Internal output kind (the result of the backend x emit decision table).
@@ -53,6 +53,8 @@ pub struct Args {
     pub manifest: Option<String>,
     /// G4b-2: --trust-report PATH (written after verification; the raw --rust-extern specs are rebuilt as NAME=PATH from `rust_extern_specs`).
     pub trust_report: Option<String>,
+    /// G4b-3: --proof-cache DIR (local cache of solver `unsat` answers; off when None).
+    pub proof_cache: Option<String>,
     /// G6: --foreign-checks requires|all|off (default requires).
     pub foreign_checks: String,
     pub budget: u64,
@@ -74,7 +76,7 @@ pub fn usage_error(msg: &str) -> i32 {
 }
 
 // Option names and the number of values they take. The declaration order is also the order of argparse's abbreviation-ambiguity message.
-static OPTS: [(&str, usize); 17] = [
+static OPTS: [(&str, usize); 18] = [
     ("-o", 1),
     ("--no-verify", 0),
     ("--trust-callers", 0),
@@ -92,6 +94,7 @@ static OPTS: [(&str, usize); 17] = [
     ("--lib", 1),
     ("--manifest", 1),
     ("--trust-report", 1),
+    ("--proof-cache", 1),
 ];
 
 #[derive(Default)]
@@ -112,6 +115,8 @@ struct Raw {
     manifest: Option<String>,
     /// G4b-2: --trust-report PATH (the last one wins)
     trust_report: Option<String>,
+    /// G4b-3: --proof-cache DIR (the last one wins)
+    proof_cache: Option<String>,
     foreign_checks: Option<&'static str>,
     budget: Option<i128>,
     also_llvm: Option<(String, String)>,
@@ -283,6 +288,7 @@ fn parse_raw(argv: &[String]) -> Result<Raw, String> {
             "--lib" => r.libs.extend(vals.pop()),
             "--manifest" => r.manifest = vals.pop(),
             "--trust-report" => r.trust_report = vals.pop(),
+            "--proof-cache" => r.proof_cache = vals.pop(),
             "--foreign-checks" => {
                 let v = vals.pop().unwrap_or_default();
                 r.foreign_checks = Some(match v.as_str() {
@@ -619,6 +625,7 @@ pub fn parse(argv: &[String]) -> Result<Args, String> {
         libs: r.libs,
         manifest: r.manifest,
         trust_report: r.trust_report,
+        proof_cache: r.proof_cache,
         foreign_checks: foreign_checks.to_string(),
         budget,
         bindings,

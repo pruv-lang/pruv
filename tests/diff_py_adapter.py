@@ -2,7 +2,7 @@
 
   diff_py_adapter.py parse FILE
   diff_py_adapter.py check FILE
-  diff_py_adapter.py trace FILE [--no-verify] [--trust-callers] [--contract-budget N] [--infer]
+  diff_py_adapter.py trace FILE [--no-verify] [--trust-callers] [--contract-budget N] [--infer] [--proof-cache DIR]
   diff_py_adapter.py snapshot --out DIR [--inputs manifest|all] [--python PATH]
   diff_py_adapter.py seeds --out DIR [--inputs manifest|all] [--python PATH]
   diff_py_adapter.py _all FILE [flags]      (internal: parse+check+trace in ONE process)
@@ -306,7 +306,7 @@ def check_result(path, externs=()):
 # ---------------------------------------------------------------------------
 # trace
 # ---------------------------------------------------------------------------
-def trace_result(path, verify_on=True, infer=False, externs=()):
+def trace_result(path, verify_on=True, infer=False, externs=(), cache_dir=None):
     errors = []
     rec = None
     out = {"schema": "pruv-trace-v2", "options": {"infer": bool(infer), "no_verify": not verify_on},
@@ -325,10 +325,14 @@ def trace_result(path, verify_on=True, infer=False, externs=()):
             rec = verify.TraceRecorder()
             out["obligations"] = rec.obligations
             out["timeout_ms"] = verify.TIMEOUT_MS
+            cache = None
+            if cache_dir is not None:       # G4b-3: --proof-cache DIR
+                from proof_cache import ProofCache
+                cache = ProofCache(cache_dir)
             if infer:
-                errs = verify.verify_program(prog, rec=rec, infer=True, report=rep)
+                errs = verify.verify_program(prog, rec=rec, infer=True, report=rep, cache=cache)
             else:
-                errs = verify.verify_program(prog, rec=rec)
+                errs = verify.verify_program(prog, rec=rec, cache=cache)
             errors.extend(err_dict(e) for e in errs)
         # G5 A2 / G4 A2: no guard here. pruvc.compile_file keeps its G5 and G4 staging guards only for the LLVM backend
         # (--backend llvm / --also-llvm); this adapter's code generator is the Rust source backend.
@@ -616,6 +620,7 @@ def main(argv):
             p.add_argument("--trust-callers", action="store_true")
             p.add_argument("--contract-budget", default=None)
             p.add_argument("--infer", action="store_true")
+            p.add_argument("--proof-cache", dest="proof_cache", default=None, metavar="DIR")
     for n in ("snapshot", "seeds"):
         p = sub.add_parser(n)
         p.add_argument("--out", required=True)
@@ -633,10 +638,10 @@ def main(argv):
             return 2
         ext = _extern_names(a)
         if a.cmd == "trace":
-            emit(trace_result(a.file, not a.no_verify, a.infer, ext))
+            emit(trace_result(a.file, not a.no_verify, a.infer, ext, a.proof_cache))
         else:
             emit({"schema": "pruv-snapshot-item-v1", "parse": parse_result(a.file),
-                  "check": check_result(a.file, ext), "trace": trace_result(a.file, not a.no_verify, a.infer, ext)})
+                  "check": check_result(a.file, ext), "trace": trace_result(a.file, not a.no_verify, a.infer, ext, a.proof_cache)})
         return 0
     if extra:
         ap.error("unexpected arguments: %s" % extra)

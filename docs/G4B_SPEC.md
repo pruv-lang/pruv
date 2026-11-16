@@ -108,7 +108,7 @@ The options are the table at the end of `docs/notes/g4b_package_research.md`.
 | 4 | Incompatible versions coexist (Cargo) | Reject | Two versions of one package give two nominal types with the same source name and two proofs of the same code. Proof facts about one version's `Value` would not apply to the other's, and the research notes show users already struggle with this in Cargo. The cost of rejecting is a resolution error, which is visible and fixable. |
 | 5 | Pin transitive revisions in a lock file | Hold | Path sources have no revision to pin; a lock would only repeat what the manifests already determine. The lock format is designed together with the first source kind that has revisions (section 9). Provenance for proofs is covered by content hashes in the trust report (section 6). |
 | 6 | Pre-verified bundle matched on tool and options (Dafny `.doo`) | Reject | It moves trust to whoever built the bundle. Pruv's rule since G4 section 5 and G8 section 5 is that no compile succeeds on a definition that was not proved. A local cache (option 7) gets most of the saving without importing foreign claims. |
-| 7 | Per-module dependency hash and proof cache | Adopt, as a content-addressed solver cache | Key on the exact bytes sent to the solver plus solver identity and limits, not on a dependency graph of hashes. Exact invalidation then needs no analysis: a changed callee contract changes the query text. Only proved (`unsat`) answers are stored, so a stale or corrupt entry can at worst repeat an earlier proof of the identical query. Opt-in and reported as a trust point (section 7). |
+| 7 | Per-module dependency hash and proof cache | Adopt, as a content-addressed solver cache | Key on the canonical text of the assertions sent to the solver plus solver identity and limits, not on a dependency graph of hashes. Exact invalidation then needs no analysis: a changed callee contract changes an assertion text. Only proved (`unsat`) answers are stored, so a stale or corrupt entry can at worst repeat an earlier proof of the identical query. Opt-in and reported as a trust point (section 7). |
 | 8 | Proof hint replay (F* `.hints`) | Hold | No measured unstable proof in the repository motivates it, hints need upkeep, and the solver still runs. Revisit when a Q bundle records a proof that flips between runs. |
 | 9 | Explicit report of trust assumptions | Adopt | Packages make it normal to compile code one did not write; the user must be able to see `trusted rust fn`, foreign declarations, unchecked flags and cache use without reading every file (section 6). |
 | 10 | Library set aligned to tool releases (Isabelle AFP) | Hold, std only | std is already bundled with the compiler (G8). There is no second curated library to align. |
@@ -246,7 +246,7 @@ when there is no manifest).
       "catalog": [ { "op": "map_updated", "type_args": ["..."] } ]
     }
   ],
-  "proof_cache": { "hits": 0, "stores": 0 }
+  "proof_cache": { "hits": 0, "misses": 0, "stores": 0 }
 }
 ```
 
@@ -306,13 +306,14 @@ Implementation decisions fixed in G4b-2:
 `--proof-cache DIR` enables a local, content-addressed cache of solver answers. Off by default, so the G8 policy
 "every compile re-proves" stays the default behavior.
 
-1. Key: SHA-256 over `<compiler id>\0<full solver version>\0<query text>`. The compiler id is the implementation
+1. Key: SHA-256 over `<compiler id>\0<full solver version>\0<key text>`. The compiler id is the implementation
    (`py` or `rs`) and its version string; the solver version is `z3.get_full_version()` / `Z3_get_full_version`. The
-   query text is exactly the SMT2 the trace already records for the attempt: the `set-option` lines for timeout, rlimit
-   and seed followed by `sol.sexpr()` / `Solver::to_smt2()`. The options are therefore part of the text, so an
-   inference attempt (500 ms, rlimit 100000, seed 0) and a verification attempt (8000 ms) of the same formula have
-   different keys. Nothing else (file paths, package names, definition names) is in the key. With the cache on, the
-   text is rendered for every attempt, not only when tracing.
+   key text starts with the `set-option` lines for timeout, rlimit and seed that the trace records for the attempt,
+   followed by one digest per solver assertion (rule 9). The options are therefore part of the key, so an inference
+   attempt (500 ms, rlimit 100000, seed 0) and a verification attempt (8000 ms) of the same formula have different
+   keys. Nothing else (file paths, package names, definition names) is in the key. The design first used the trace's
+   SMT2 text (`sol.sexpr()`) as the key text; G4b-3 measured rendering it on every attempt at 3 to 13 times the
+   cache-off compile time on the L3 pieces, so the key text became the per-assertion form of rule 9.
 2. On a cache hit the compiler uses the stored answer instead of calling the solver. Only `unsat` answers (the
    obligation is proved) are stored. `sat` (counterexample) and unknown are never stored, so failure output, models
    and inference search on failures always come from a live solver.
@@ -323,17 +324,88 @@ Implementation decisions fixed in G4b-2:
    one check call per attempt (section 1.1: `verify.py:1164`, `PROOF/obligation.rs:419`). A hit records the attempt in
    the trace with its usual fields and `"cached": true`. Unknown, timeout, `canceled` and errors are never success and
    never stored.
-5. Soundness argument: a hit returns `unsat` only for byte-identical input to the same solver and options that once
-   answered `unsat`. The trust that remains is in the cache directory's integrity (anyone who can write `DIR` can
-   insert answers). That is why use is reported (section 6) and why entries carry no data the solver did not produce.
+5. Soundness argument: a hit returns `unsat` only when every assertion of the query has the same canonical SMT-LIB
+   text (rule 9), in the same order, as a query that the same solver once answered `unsat` with the same options.
+   That text declares every sort (datatypes with their constructors), function and constant the assertion uses, so
+   equal canonical texts are the same formulas up to the names of `let` bindings, a renaming of bound variables and a
+   renaming of fresh constants. The key records, for each assertion, the query-wide number of each fresh name it
+   declares, so equal keys rename free fresh constants consistently over the whole query (one bijection, sharing
+   between assertions kept); a bound variable is local to its assertion. Unsatisfiability does not depend on those
+   names. The trust that remains is in SHA-256, in Z3's printer (`Z3_benchmark_to_smtlib_string`) and in the
+   cache directory's integrity (anyone who can write `DIR` can insert answers). That is why use is reported
+   (section 6) and why entries carry no data the solver did not produce.
 6. No eviction, size limit or cleanup in G4b; deleting `DIR` is always safe.
-7. Query bytes must be deterministic for the same input for hits to happen. Rust uses a fresh Z3 context per function,
-   which helps; Python shares one context across the program, so auxiliary names in the text may depend on what was
-   verified before. A nondeterministic query is a missed saving, not an unsound result; G4b-3 measures it on the L3
-   pieces and the cold/warm test of G4b-3 must pass on each compiler before the batch is done.
-8. Rendering the text costs time on every attempt. If G4b-3 measures that the cache-on cold compile is slower than
+7. Key texts must be deterministic for the same input for hits to happen. A nondeterministic key costs a saving; it
+   never gives an unsound result. Z3 output depends on context state in three ways, and rule 9 removes each one:
+   - Z3 names `let` bindings after internal AST ids, which shift with what the context created before.
+   - Z3 numbers fresh constants (`k!14`) and fresh bound variables (`j!q14`, `t!dk3`) with context-wide counters.
+     In Python the counter also moves during solver calls, so it differs between a compile that calls the solver
+     and one that hits.
+   - The printer binds a subterm with `let` when its reference count is above one. That count includes other live
+     terms and the solver's own references, on both compilers (Rust's non-reference-counted context still counts
+     internal references), so it also differs between a compile that calls the solver and one that hits.
+
+   G4b-3 measured cold then warm compiles of the four L3 pieces (json, mcp, qwen, supervisor). Every attempt that a
+   cold compile stored was a hit in the warm compile, on both compilers, and the warm compile stored nothing.
+8. Building the key costs time on every attempt. If G4b-3 measures that the cache-on cold compile is slower than
    cache-off by more than 10 percent on an L3 piece, the batch records it in RESULTS.md and the decision on option 7 is
    revisited before G4b-Q.
+
+Implementation decisions fixed in G4b-3:
+
+9. Compiler id: `<impl> <version>` with one space, `py 0.0.1` / `rs 0.0.1` (the `compiler` object of section 6).
+   The key is the lowercase hex SHA-256 of `<compiler id>\0<solver>\0<key text>` (UTF-8). The key text is the
+   `set-option` head of the trace text, with one line each for timeout, then rlimit and random_seed when set.
+
+   After the head comes one line per solver assertion, in order. Python uses the objects passed to `Solver.add`, as
+   Bool; Rust uses `Z3_solver_get_assertions`. Each line is built like this:
+   - Start with the lowercase hex SHA-256 of the assertion's canonical text.
+   - For each fresh name of the assertion, in local order, add a space and the name's query number. The query
+     number counts first appearance over the whole query, in assertion order, starting at 1.
+   - End with a newline.
+
+   The assertion's text is `Z3_benchmark_to_smtlib_string(ctx, "benchmark generated from python API", "",
+   "unknown", "", 0, [], a)` printed in a scratch context: both compilers first copy the assertion with `translate`
+   (`Z3_translate`) into a reference-counted context that holds nothing else and print the copy, so `let` sharing
+   reflects only the formula (rule 7). The copy is released right after printing; the scratch context lives for the
+   compile.
+
+   To make the text canonical, first split it into SMT-LIB lexemes:
+   - a quoted symbol `|...|`;
+   - a string literal `"..."` (`""` reads as two adjacent literals);
+   - a `;` comment up to the newline;
+   - an atom: a run of bytes other than whitespace, `(`, `)`, `|`, `"` and `;`.
+
+   An unclosed quote or literal runs to the end of the text. Then renumber by first appearance, with one counter
+   each:
+   - Let names are the atoms `?x<digits>` and `$x<digits>`. They become `?x1`, `$x2`, and so on; the sigil is kept.
+   - Fresh names are atoms or quoted symbols whose symbol is `<prefix>!<lowercase letters><digits>` with a nonempty
+     prefix, split at the last `!`. They become `<prefix>!<letters>1`, `<prefix>!<letters>2`, and so on; the
+     prefix, the letters and the quoting are kept.
+
+   The query numbers on the line are those of the fresh names and let-form names that first appear before the
+   `assert` command (the atom `assert` right after a `(` that starts a line; the printer starts every command on a
+   line, and a declared symbol `assert` is never there), that is in the declarations (free constants, functions,
+   sorts), in local first-appearance order. A fresh name first seen after it is a bound variable, and a let-form name
+   first seen after it is a let name; neither gets a query number. So two assertions share a declared symbol in the
+   key exactly when they share it in the query, whatever the symbol's name (a Pruv-generated name never has the let
+   form, but a declared `?x7` would still be numbered across the query).
+   Each distinct assertion is rendered once per function verifier: Python remembers it by object, Rust by AST id.
+   The trace text is unchanged and is rendered only when tracing.
+10. A lookup is a hit only when the entry's bytes are exactly `pruv-proof-cache 1\nunsat\n`. A live `unsat` answer is
+    stored even if a (malformed) entry existed. `DIR` and `DIR/<xx>` are created on the first store. The temporary
+    file is `DIR/<xx>/.tmp.<pid>.<n>`; any OS error while creating, writing or renaming drops that store silently
+    (not counted, the compile goes on, the temporary file is removed when possible).
+11. Counts, program-wide, in the trust report `proof_cache` object: `hits` (attempts answered from an entry),
+    `misses` (attempts with the cache on that called the solver, including errors) and `stores` (entries written).
+    All three are 0 when the cache is off; `flags.proof_cache` is true when `--proof-cache` is given (the path is not
+    in the report). `misses` is what shows "no solver call" for a warm compile of a manifest program.
+12. Trace: a hit attempt has its usual fields (`result` `unsat`, `status` `proved`, `reason_unknown` null, the query
+    text) plus `"cached": true`; the key is absent on every other attempt, so traces without the cache are unchanged.
+    The trace tools (`tests/diff_py_adapter.py`, `pruv-trace-dump`) take `--proof-cache DIR`. Cold/warm trace identity
+    compares traces with `cached` removed.
+13. `--no-verify` makes no solver calls, so the cache is not touched. The cache never changes diagnostics, inference
+    results or generated code; it only replaces calls whose answer would be `unsat` again.
 
 ## 8. Batches
 

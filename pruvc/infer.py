@@ -877,7 +877,7 @@ class InferResult:
         return out
 
 
-def infer_function(prog, f, model, rec=None):
+def infer_function(prog, f, model, rec=None, cache=None):
     """candidates + Houdini rounds for one function; returns an InferResult (status ok / budget_exhausted /
     timeout). Does not touch any error list."""
     cfg = INFER_CONFIG
@@ -890,20 +890,20 @@ def infer_function(prog, f, model, rec=None):
     res = InferResult(f, loops)
     deadline = time.monotonic() + cfg["max_seconds"]
     probe = Probe(cfg["max_queries"], deadline)
-    status, r = _explore(prog, f, model, rec, res, probe, 0)
+    status, r = _explore(prog, f, model, rec, res, probe, 0, cache)
     res.status, res.rounds, res.queries = status, r, probe.queries
     # 4.1 version 1 fall-back: budget exhausted and a kind >= 12 candidate was in the first lists
     if status == "budget_exhausted" and any(k >= 12 for l in loops for k in l.kinds):
         for l in loops:
             l.restart_v1()
         probe2 = Probe(cfg["max_queries"], deadline)
-        status, r = _explore(prog, f, model, rec, res, probe2, r)
+        status, r = _explore(prog, f, model, rec, res, probe2, r, cache)
         res.fallback = True
         res.status, res.rounds, res.queries = status, r, probe.queries + probe2.queries
     return res
 
 
-def _explore(prog, f, model, rec, res, probe, r):
+def _explore(prog, f, model, rec, res, probe, r, cache=None):
     """Houdini rounds (4.1) from round number r+1 on, over the loops' alive lists. Returns (status, last round
     number); on budget exhaustion / timeout every alive list is emptied."""
     cfg = INFER_CONFIG
@@ -918,7 +918,7 @@ def _explore(prog, f, model, rec, res, probe, r):
             probe.begin_round()
             qcfg = QueryConfig(phase="inference", round=r, timeout_ms=cfg["timeout_ms"], rlimit=cfg["rlimit"],
                                seed=cfg["seed"])
-            FnVerifier(prog, f, [], model, rec=rec, qcfg=qcfg, extra=extra, probe=probe).run()
+            FnVerifier(prog, f, [], model, rec=rec, qcfg=qcfg, extra=extra, probe=probe, cache=cache).run()
             failed = probe.failed
             if not failed:
                 break

@@ -802,6 +802,9 @@ pub struct FnVerifier<'a> {
     /// G5 A1 (`s.snap`): immutable entry snapshots {inout parameter name: entry array}; separate from the current
     /// environment. Empty for a function without inout parameters.
     pub(crate) snap: Env,
+    /// G4b-3 (verify.py `s._kmemo`): AST id -> key piece of that assertion (digest, fresh names; obligation.rs
+    /// `key_text`).
+    pub(crate) kmemo: HashMap<u32, (String, Vec<String>)>,
 }
 
 /// G5 A1: the environment key of a frozen pre-call array (Python `("old", name)`); no identifier can contain the byte 1.
@@ -861,6 +864,7 @@ impl<'a> FnVerifier<'a> {
             cost0: None,
             fn_tag: 0,
             snap: Env::default(),
+            kmemo: HashMap::new(),
         }
     }
 

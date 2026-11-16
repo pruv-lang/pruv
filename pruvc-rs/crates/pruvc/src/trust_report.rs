@@ -44,7 +44,13 @@ fn strs(xs: &[String]) -> J {
 }
 
 /// Builds the report text (with the final newline). `Err` is an internal-error message (a source file cannot be read again).
-pub fn build(a: &Args, g4: Option<&G4>, graph: Option<&Graph>, data: &TrustData) -> Result<String, String> {
+pub fn build(
+    a: &Args,
+    g4: Option<&G4>,
+    graph: Option<&Graph>,
+    data: &TrustData,
+    cache: Option<&pruv_proof::proof_cache::ProofCache>,
+) -> Result<String, String> {
     let basename: String = Path::new(&a.input)
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
@@ -165,13 +171,17 @@ pub fn build(a: &Args, g4: Option<&G4>, graph: Option<&Graph>, data: &TrustData)
                 ("infer".to_string(), J::B(a.infer)),
                 ("rust_extern".to_string(), strs(&raw_extern)),
                 ("rust_search".to_string(), strs(&a.rust_search)),
-                ("proof_cache".to_string(), J::B(false)),
+                ("proof_cache".to_string(), J::B(a.proof_cache.is_some())),
             ]),
         ),
         ("packages".to_string(), J::A(plist)),
         (
             "proof_cache".to_string(),
-            J::O(vec![("hits".to_string(), J::I(0)), ("stores".to_string(), J::I(0))]),
+            J::O(vec![
+                ("hits".to_string(), J::I(cache.map_or(0, |c| c.hits()) as _)),
+                ("misses".to_string(), J::I(cache.map_or(0, |c| c.misses()) as _)),
+                ("stores".to_string(), J::I(cache.map_or(0, |c| c.stores()) as _)),
+            ]),
         ),
     ]);
     let mut out = String::new();

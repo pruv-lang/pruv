@@ -55,7 +55,7 @@ from foreign import g6_unimplemented_error, g7_target_error, first_async_use  # 
 
 USAGE = ("usage: pruvc.py in.pruv -o OUT [--no-verify] [--trust-callers] "
          "[--backend rust|llvm] [--rust-bindings PATH] [--infer [--show-inferred]] "
-         "[--rust-extern NAME=PATH] [--rust-search PATH] [--lib DIR] [--foreign-checks requires|all|off]")
+         "[--rust-extern NAME=PATH] [--rust-search PATH] [--lib DIR] [--proof-cache DIR] [--foreign-checks requires|all|off]")
 
 
 def default_bindings_path(out):
@@ -63,7 +63,7 @@ def default_bindings_path(out):
 
 
 def _write_trust_report(prog, path, report_path, verify, trust_callers, budget, infer, foreign_checks,
-                        rust_extern_raw, rust_search_raw, graph):
+                        rust_extern_raw, rust_search_raw, graph, cache=None, cache_flag=False):
     """G4b-2 (docs/G4B_SPEC.md 6, rule 8): run mono and the Rust-source generator in memory, keep only the trust data,
     write the report.  Nothing is written when a language error is raised."""
     from trust_report import build_report, write_report
@@ -83,14 +83,14 @@ def _write_trust_report(prog, path, report_path, verify, trust_callers, budget, 
     gen_rust_ex(prog, verified=verify, trust_callers=trust_callers, budget=budget, plan=plan,
                 foreign_checks=foreign_checks, externs=specs, trust_out=trust)
     text = build_report(prog, trust, graph, path, verify, trust_callers, foreign_checks, infer,
-                        rust_extern_raw, rust_search_raw)
+                        rust_extern_raw, rust_search_raw, cache=cache, cache_flag=cache_flag)
     write_report(report_path, text)
 
 
 def compile_file(path, out, verify=True, trust_callers=False, backend="rust", rust_bindings=None,
                  budget=None, also_llvm=None, infer=False, show_inferred=False, externs=(),
                  foreign_checks="requires", extern_specs=(), emit=None, libs=(), manifest=None,
-                 trust_report=None, rust_extern_raw=(), rust_search_raw=()):
+                 trust_report=None, rust_extern_raw=(), rust_search_raw=(), proof_cache=None):
     """extern_specs: [(name, path)] of --rust-extern (recorded in the manifest); externs: the names only.
     trust_report: PATH of --trust-report (G4b-2); rust_extern_raw / rust_search_raw: the raw flag values for it."""
     if budget is None:
@@ -104,15 +104,19 @@ def compile_file(path, out, verify=True, trust_callers=False, backend="rust", ru
     # G6: the Rust source backend lowers foreign calls and collections (A2); the LLVM backend (and --also-llvm)
     # lowers the G6_SPEC 13.1 subset (A3) and rejects everything else with codegen/unsupported_type: that decision
     # is made inside llvmgen.gen_llvm (after verification, so verification errors win).
+    cache = None
+    if verify and proof_cache is not None:
+        from proof_cache import ProofCache
+        cache = ProofCache(proof_cache)     # G4b-3: only built when verification runs
     if verify:
         from verify import verify_program
         if infer:
             report = [] if show_inferred else None
-            errs = verify_program(prog, infer=True, report=report)
+            errs = verify_program(prog, infer=True, report=report, cache=cache)
             for rec in report or []:
                 print(json.dumps(rec, sort_keys=True, ensure_ascii=False), file=sys.stderr)
         else:
-            errs = verify_program(prog)
+            errs = verify_program(prog, cache=cache)
     elif infer and show_inferred:
         print(json.dumps({"status": "skipped_no_verify"}, sort_keys=True, ensure_ascii=False), file=sys.stderr)
         errs = []
@@ -121,7 +125,8 @@ def compile_file(path, out, verify=True, trust_callers=False, backend="rust", ru
     if trust_report is not None:
         # G4b-2: after verification (proved or not); a language error raised here is the compile's result
         _write_trust_report(prog, path, trust_report, verify, trust_callers, budget, infer, foreign_checks,
-                            rust_extern_raw, rust_search_raw, manifest)
+                            rust_extern_raw, rust_search_raw, manifest, cache=cache,
+                            cache_flag=proof_cache is not None)
     if errs:
         return errs
     g7err = g7_target_error(prog) if emit in ("exe", "obj") else None
@@ -215,6 +220,7 @@ def main(argv):
     ap.add_argument("--lib", dest="libs", action="append", default=[], metavar="DIR")
     ap.add_argument("--manifest", dest="manifest", default=None, metavar="PATH")
     ap.add_argument("--trust-report", dest="trust_report", default=None, metavar="PATH")
+    ap.add_argument("--proof-cache", dest="proof_cache", default=None, metavar="DIR")
     ap.add_argument("--foreign-checks", dest="foreign_checks", choices=["requires", "all", "off"],
                     default="requires")
     ap.add_argument("--contract-budget", dest="budget", type=int, default=None,
@@ -286,7 +292,8 @@ def main(argv):
                           infer=a.infer, show_inferred=a.show_inferred, externs=tuple(externs),
                           foreign_checks=a.foreign_checks, extern_specs=tuple(extern_specs), emit=a.emit,
                           libs=tuple(a.libs), manifest=graph, trust_report=a.trust_report,
-                          rust_extern_raw=tuple(a.rust_extern), rust_search_raw=tuple(a.rust_search))
+                          rust_extern_raw=tuple(a.rust_extern), rust_search_raw=tuple(a.rust_search),
+                          proof_cache=a.proof_cache)
     except NativeEmitUnavailable:
         ap.error("unrecognized arguments: --emit " + a.emit)
     except PruvError as e:

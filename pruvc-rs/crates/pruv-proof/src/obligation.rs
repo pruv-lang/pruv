@@ -47,6 +47,8 @@ pub struct Attempt {
     pub seed: Option<u32>,
     /// `Some(sol.reason_unknown())` only when Unknown.
     pub reason_unknown: Option<String>,
+    /// G4b-3: answered from the proof cache (no solver call).
+    pub cached: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -75,23 +77,25 @@ pub struct Trace {
     pub adapter: bool,
     /// false: record nothing (SMT text is not produced either).
     pub record: bool,
+    /// G4b-3: proof cache (set by `verify_program_opts` from `VerifyOptions`).
+    pub cache: Option<std::rc::Rc<crate::proof_cache::ProofCache>>,
 }
 
 impl Default for Trace {
     /// Prototype format (from 1, skipped is not recorded).
     fn default() -> Self {
-        Trace { obligations: Vec::new(), adapter: false, record: true }
+        Trace { obligations: Vec::new(), adapter: false, record: true, cache: None }
     }
 }
 
 impl Trace {
     /// The same recording as `diff_py_adapter.trace_result`.
     pub fn adapter() -> Trace {
-        Trace { obligations: Vec::new(), adapter: true, record: true }
+        Trace { obligations: Vec::new(), adapter: true, record: true, cache: None }
     }
     /// No recording (when no trace is given to verify_program).
     pub fn off() -> Trace {
-        Trace { obligations: Vec::new(), adapter: true, record: false }
+        Trace { obligations: Vec::new(), adapter: true, record: false, cache: None }
     }
 
     /// `prove` entry: creates the entry and returns its position (None if not recording).
@@ -389,6 +393,27 @@ impl<'a> FnVerifier<'a> {
     }
 
     /// verify.py inner `run(with_lemmas)` (lines 258-269): (solver, verdict).
+    /// proof_cache.py `key_text`: the set-option head, then one line per solver assertion in order: the digest of its
+    /// canonical text, then for each of its fresh names in local order a space and that name's number in the query
+    /// (first appearance over the whole query). Each distinct assertion (by AST id; the context is non-rc, so ids are
+    /// never reused) is rendered once per function verifier.
+    fn key_text(kmemo: &mut std::collections::HashMap<u32, (String, Vec<String>)>, head: &str, sol: &Solver) -> String {
+        let mut out = head.to_string();
+        let mut num: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for e in sol.assertions() {
+            let (digest, names) = kmemo.entry(e.id()).or_insert_with(|| crate::proof_cache::piece(&e.benchmark()));
+            out.push_str(digest);
+            for n in names.iter() {
+                let next = num.len() + 1;
+                let k = *num.entry(n.clone()).or_insert(next);
+                out.push(' ');
+                out.push_str(&k.to_string());
+            }
+            out.push('\n');
+        }
+        out
+    }
+
     fn run_attempt(&mut self, pc: &[Ast], g: &[Ast], ob: &Ast, with_lemmas: bool, idx: Option<usize>) -> (Solver, Sat) {
         let q = &self.qcfg;
         let mut sol = Solver::with_options(&self.z, q.timeout_ms, q.rlimit, q.seed);
@@ -404,7 +429,8 @@ impl<'a> FnVerifier<'a> {
             }
         }
         sol.add(&ob.not());
-        let smt2 = if self.trace.record {
+        let cache = self.trace.cache.clone();
+        let head = if self.trace.record || cache.is_some() {
             let mut head = format!("(set-option :timeout {})\n", q.timeout_ms);
             if let Some(r) = q.rlimit {
                 head.push_str(&format!("(set-option :rlimit {})\n", r));
@@ -412,13 +438,40 @@ impl<'a> FnVerifier<'a> {
             if let Some(s) = q.seed {
                 head.push_str(&format!("(set-option :random_seed {})\n", s));
             }
-            format!("{}{}", head, sol.to_smt2())
+            head
         } else {
             String::new()
         };
+        // the trace text (sexpr) and the cache key text (per-assertion benchmark pieces, docs/G4B_SPEC.md 7 rule 9) are rendered
+        // only when needed
+        let smt2 = if self.trace.record { format!("{}{}", head, sol.to_smt2()) } else { String::new() };
+        let key_text = if cache.is_some() { Self::key_text(&mut self.kmemo, &head, &sol) } else { String::new() };
+        if let Some(c) = &cache {
+            if c.lookup(&key_text) {
+                let attempt = Attempt {
+                    lemmas: with_lemmas,
+                    smt2,
+                    result: Sat::Unsat,
+                    status: "proved".to_string(),
+                    timeout_ms: q.timeout_ms,
+                    rlimit: q.rlimit,
+                    seed: q.seed,
+                    reason_unknown: None,
+                    cached: true,
+                };
+                self.trace.attempt(idx, attempt);
+                return (sol, Sat::Unsat);
+            }
+            c.count_miss();
+        }
         let result = sol.check();
         let reason = if result == Sat::Unknown { Some(sol.reason_unknown()) } else { None };
         let status = query_status(result, reason.as_deref()).to_string();
+        if result == Sat::Unsat {
+            if let Some(c) = &cache {
+                c.store(&key_text);
+            }
+        }
         let attempt = Attempt {
             lemmas: with_lemmas,
             smt2,
@@ -428,6 +481,7 @@ impl<'a> FnVerifier<'a> {
             rlimit: q.rlimit,
             seed: q.seed,
             reason_unknown: reason,
+            cached: false,
         };
         self.trace.attempt(idx, attempt);
         (sol, result)
@@ -840,7 +894,7 @@ pub fn adapter_obligations_json(trace: &Trace) -> Json {
                 .attempts
                 .iter()
                 .map(|a| {
-                    Json::Obj(vec![
+                    let mut akv = vec![
                         ("lemmas".to_string(), Json::Bool(a.lemmas)),
                         ("smt2".to_string(), Json::Str(a.smt2.clone())),
                         ("result".to_string(), Json::str(a.result.as_str())),
@@ -849,7 +903,11 @@ pub fn adapter_obligations_json(trace: &Trace) -> Json {
                         ("rlimit".to_string(), opt_u32(a.rlimit)),
                         ("seed".to_string(), opt_u32(a.seed)),
                         ("reason_unknown".to_string(), opt_str(&a.reason_unknown)),
-                    ])
+                    ];
+                    if a.cached {
+                        akv.push(("cached".to_string(), Json::Bool(true)));
+                    }
+                    Json::Obj(akv)
                 })
                 .collect();
             let mut kv = vec![

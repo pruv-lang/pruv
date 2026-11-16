@@ -26,7 +26,7 @@ def _sha256(files):
 
 
 def build_report(prog, trust, graph, input_path, verify, trust_callers, foreign_checks, infer,
-                 rust_extern, rust_search):
+                 rust_extern, rust_search, cache=None, cache_flag=False):
     """prog: the loaded program (modules in load order); trust: the dict filled by gen_rust_ex(trust_out=...);
     graph: manifest.Graph or None; input_path: the root file given on the command line."""
     cprog = trust.get("program")
@@ -73,9 +73,11 @@ def build_report(prog, trust, graph, input_path, verify, trust_callers, foreign_
            "flags": {"verify": bool(verify), "trust_callers": bool(trust_callers),
                      "foreign_checks": foreign_checks, "infer": bool(infer),
                      "rust_extern": list(rust_extern), "rust_search": list(rust_search),
-                     "proof_cache": False},
+                     "proof_cache": bool(cache_flag)},
            "packages": packages,
-           "proof_cache": {"hits": 0, "stores": 0}}
+           "proof_cache": {"hits": cache.hits if cache is not None else 0,
+                           "misses": cache.misses if cache is not None else 0,
+                           "stores": cache.stores if cache is not None else 0}}
     return json.dumps(doc, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
 
 

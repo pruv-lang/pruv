@@ -236,7 +236,7 @@ def schema_errors(rep, label):
         errs.append("flags keys %r" % (f,))
     elif f["proof_cache"] is not False:
         errs.append("flags.proof_cache %r" % (f["proof_cache"],))
-    if rep["proof_cache"] != {"hits": 0, "stores": 0}:
+    if rep["proof_cache"] != {"hits": 0, "misses": 0, "stores": 0}:
         errs.append("proof_cache %r" % (rep["proof_cache"],))
     pk = rep["packages"]
     if not isinstance(pk, list) or not pk:

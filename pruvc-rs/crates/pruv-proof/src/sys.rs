@@ -190,6 +190,30 @@ macro_rules! nary_ast {
     };
 }
 
+/// `Ast::benchmark`'s scratch context: reference counted (z3py `Context()`), same print mode and error handler, one per thread.
+struct Scratch(RawCtx);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        // SAFETY: S1 — the context is deleted once, with the thread; no copy in it is referenced any more.
+        unsafe { z::Z3_del_context(self.0) }
+    }
+}
+
+thread_local! {
+    static SCRATCH: Scratch = {
+        // SAFETY: S2 — as `Z3::new`, but with `Z3_mk_context_rc`.
+        unsafe {
+            let cfg = nn(z::Z3_mk_config());
+            let raw = nn(z::Z3_mk_context_rc(cfg));
+            z::Z3_del_config(cfg);
+            z::Z3_set_error_handler(raw, Some(on_z3_error));
+            z::Z3_set_ast_print_mode(raw, z::AstPrintMode::Smtlib2Compliant);
+            Scratch(raw)
+        }
+    };
+}
+
 impl Z3 {
     /// Counterpart of z3py `Context()`: non-rc context + SMT-LIB2 output mode.
     pub fn new() -> Z3 {
@@ -652,6 +676,37 @@ impl Ast {
         // SAFETY: S1.
         unsafe { z::Z3_get_ast_id(self.z.raw(), self.raw) as u32 }
     }
+    /// The benchmark text of this one formula with no assumptions, printed from a copy in a scratch context (proof_cache.py
+    /// `key_text`): `Z3_benchmark_to_smtlib_string(scratch, "benchmark generated from python API", "", "unknown", "", 0, [], f)`.
+    /// The printer names a subterm with `let` when its reference count is above one, and in this context other live terms
+    /// (and the solver's) add references, so the text would depend on what else was built. The scratch context is
+    /// reference counted and holds nothing else; the copy is released right after printing.
+    pub fn benchmark(&self) -> String {
+        let name = CString::new("benchmark generated from python API").unwrap();
+        let empty = CString::new("").unwrap();
+        let status = CString::new("unknown").unwrap();
+        SCRATCH.with(|sc| {
+            // SAFETY: S1 S4 — the strings outlive the call; no assumption array is read (count 0). `sc.0` is a live rc context
+            // owned by this thread; the copy is referenced (inc_ref) while it is printed, the text is copied out before
+            // dec_ref, and nothing else keeps a pointer to the copy.
+            unsafe {
+                let c = nn(z::Z3_translate(self.z.raw(), self.raw, sc.0));
+                z::Z3_inc_ref(sc.0, c);
+                let t = take_string(z::Z3_benchmark_to_smtlib_string(
+                    sc.0,
+                    name.as_ptr(),
+                    empty.as_ptr(),
+                    status.as_ptr(),
+                    empty.as_ptr(),
+                    0,
+                    std::ptr::null(),
+                    c,
+                ));
+                z::Z3_dec_ref(sc.0, c);
+                t
+            }
+        })
+    }
     fn kind(&self) -> u32 {
         // SAFETY: S1.
         unsafe { z::Z3_get_ast_kind(self.z.raw(), self.raw) as u32 }
@@ -841,6 +896,20 @@ impl Solver {
     pub fn to_smt2(&self) -> String {
         // SAFETY: S1 S4.
         unsafe { take_string(z::Z3_solver_to_string(self.z.raw(), self.raw)) }
+    }
+    /// z3py `Solver.assertions()`: the asserted formulas in order (the context is non-rc, so the handles stay valid).
+    pub fn assertions(&self) -> Vec<Ast> {
+        let c = self.z.raw();
+        // SAFETY: S1 S4 S5 — the vector gets inc_ref right after creation and dec_ref after its elements are read; the
+        // elements are ASTs of this non-rc context and stay valid until it is deleted.
+        unsafe {
+            let v = nn(z::Z3_solver_get_assertions(c, self.raw));
+            z::Z3_ast_vector_inc_ref(c, v);
+            let n = z::Z3_ast_vector_size(c, v);
+            let out = (0..n).map(|i| self.z.wrap(nn(z::Z3_ast_vector_get(c, v, i)))).collect();
+            z::Z3_ast_vector_dec_ref(c, v);
+            out
+        }
     }
     /// z3py `Solver.model()`: call only when the preceding check was sat (otherwise the z3 error handler aborts).
     pub fn model(&self) -> ZModel {

@@ -252,6 +252,7 @@ fn write_trust_report(
     prog: &Program,
     g4: Option<&pruv_core::modules::G4>,
     graph: Option<&pruv_core::manifest::Graph>,
+    cache: Option<&pruv_proof::proof_cache::ProofCache>,
 ) -> Result<(), Fail> {
     let plan: Option<Program> = if pruv_core::typeinfo::first_g3_use(prog).is_some() || g4.is_some() {
         match pruv_core::mono::specialize_g4(prog, g4) {
@@ -278,7 +279,7 @@ fn write_trust_report(
         pruv_core::codegen::GenError::Diag(p) => Fail::Lang(vec![p]),
         pruv_core::codegen::GenError::Msg(m) => Fail::Internal(m),
     })?;
-    let text = crate::trust_report::build(a, g4, graph, &data).map_err(Fail::Internal)?;
+    let text = crate::trust_report::build(a, g4, graph, &data, cache).map_err(Fail::Internal)?;
     write_text(path, &text)
 }
 
@@ -318,8 +319,15 @@ fn compile(a: &Args, graph: Option<&pruv_core::manifest::Graph>) -> Result<(), F
     let g6_native = matches!(a.kind, Kind::Obj | Kind::Exe);
     // G10 proc A3: both back ends lower Process and ProcessArgs; the proc staging guard is gone from the driver.
     if a.verify {
+        // G4b-3: the cache exists only when --proof-cache is given and verification runs (--no-verify never touches it).
+        let cache: Option<std::rc::Rc<pruv_proof::proof_cache::ProofCache>> = a.proof_cache.as_ref().map(|d| {
+            std::rc::Rc::new(pruv_proof::proof_cache::ProofCache::new(
+                std::path::PathBuf::from(d),
+                env!("CARGO_PKG_VERSION"),
+            ))
+        });
         let errs = if a.infer {
-            let opts = pruv_proof::VerifyOptions { infer: true };
+            let opts = pruv_proof::VerifyOptions { infer: true, proof_cache: cache.clone() };
             let mut report: Vec<pruv_core::pyjson::Json> = Vec::new();
             let r = pruv_proof::verify_program_opts(
                 &prog,
@@ -335,11 +343,11 @@ fn compile(a: &Args, graph: Option<&pruv_core::manifest::Graph>) -> Result<(), F
             }
             errs
         } else {
-            pruv_proof::verify_program(&prog, &tt, None).map_err(Fail::Internal)?
+            pruv_proof::verify_program_cached(&prog, &tt, None, cache.clone()).map_err(Fail::Internal)?
         };
         // G4b-2: the trust report is written after verification, proved or not, before the proof errors are returned
         if let Some(p) = &a.trust_report {
-            write_trust_report(a, p, &prog, g4.as_ref(), graph)?;
+            write_trust_report(a, p, &prog, g4.as_ref(), graph, cache.as_deref())?;
         }
         if !errs.is_empty() {
             return Err(Fail::Lang(errs));
@@ -347,7 +355,7 @@ fn compile(a: &Args, graph: Option<&pruv_core::manifest::Graph>) -> Result<(), F
     } else {
         // G4b-2: with --no-verify the report comes right where verification would have been
         if let Some(p) = &a.trust_report {
-            write_trust_report(a, p, &prog, g4.as_ref(), graph)?;
+            write_trust_report(a, p, &prog, g4.as_ref(), graph, None)?;
         }
         // Pre-G10 order for File-free native programs: with --no-verify, foreign_target fires before the notice.
         if g6_native && pruv_core::foreign::g7_target_error(&prog).is_none() && !pruv_core::foreign::uses_files(&prog) {

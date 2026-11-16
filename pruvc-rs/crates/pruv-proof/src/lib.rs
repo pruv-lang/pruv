@@ -21,6 +21,7 @@ pub mod sys;
 pub mod infer;
 pub mod model;
 pub mod obligation;
+pub mod proof_cache;
 pub mod samples;
 pub mod symbolic;
 
@@ -46,14 +47,26 @@ pub fn z3_full_version() -> String {
 /// - `rec`: adapter trace recording (`Trace::adapter()`). If None, nothing is recorded.
 /// - A Python exception (internal failure) becomes `Err(message)` — errors gathered so far are discarded (Python likewise returns no value on an exception).
 pub fn verify_program(prog: &Program, tt: &TypeTable, rec: Option<&mut Trace>) -> Result<Vec<PruvError>, String> {
-    verify_program_opts(prog, tt, rec, &VerifyOptions { infer: false }, None)
+    verify_program_opts(prog, tt, rec, &VerifyOptions::default(), None)
+}
+
+/// `verify_program` with an optional proof cache (G4b-3).
+pub fn verify_program_cached(
+    prog: &Program,
+    tt: &TypeTable,
+    rec: Option<&mut Trace>,
+    cache: Option<std::rc::Rc<proof_cache::ProofCache>>,
+) -> Result<Vec<PruvError>, String> {
+    verify_program_opts(prog, tt, rec, &VerifyOptions { infer: false, proof_cache: cache }, None)
 }
 
 /// STAGE1 B2 options.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct VerifyOptions {
     /// `--infer`: per function, run template Houdini invariant inference (infer.rs) and verify together with the surviving candidates.
     pub infer: bool,
+    /// `--proof-cache DIR` (G4b-3). None: no extra work.
+    pub proof_cache: Option<std::rc::Rc<proof_cache::ProofCache>>,
 }
 
 /// verify.py `verify_program(prog, rec, infer, report)`. `infer=false` keeps the existing path unchanged.
@@ -75,6 +88,8 @@ pub fn verify_program_opts(
         Some(t) => t,
         None => &mut local,
     };
+    // G4b-3: the cache travels with the trace so run_attempt can reach it.
+    trace.cache = opts.proof_cache.clone();
     let decls = decls_from_ast(&prog.types);
     let seq = next_seq();
     {

@@ -15,6 +15,8 @@ z3-src = "=503.3.0"
 # If versions drift, z3-sys/z3-src get built twice; catch it with `cargo tree -d` (README step 3).
 z3-sys = { version = "=0.14.1", features = ["vendored"] }
 serde_json = "=1.0.154"
+# G4b-3: proof cache keys
+sha2 = "=0.10.9"
 # Step 3: parser, checker, error/JSON emitter (pyjson)
 pruv-core = { path = "../pruv-core" }
 
