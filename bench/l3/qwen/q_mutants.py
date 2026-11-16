@@ -17,7 +17,7 @@ MUTANTS=[
  ('chain-filter','chain.pruv','active: leaf.found, cut: lost, bad: leaf.bad','active: false, cut: lost, bad: leaf.bad'),
  ('leaf-parent','chain.pruv','if count > 0 { parent = copy(f.parent); }','if count >= 0 { parent = copy(f.parent); }'),
  ('last-title','import.pruv','return rank >= best;','return rank > best;'),
- ('turn-cap','turns.pruv','if avail > 200 { avail = 200; }','if avail > 199 { avail = 199; }'),
+ ('turn-cap','pkgs/turns/turns.pruv','if avail > 200 { avail = 200; }','if avail > 199 { avail = 199; }'),
 ]
 
 def main():
@@ -32,6 +32,14 @@ def main():
   mutated=json.loads(json.dumps(manifest))
   for dep in mutated.get('dependencies',{}).values():dep['path']=os.path.relpath((t.HERE/dep['path']).resolve(),w.resolve())
   (w/'q_root.pruv.json').write_text(json.dumps(mutated)+'\n')
+  if file.startswith('pkgs/'):
+   # package mutant: copy that package next to the root and point the root manifest at the copy
+   pk=file.split('/')[1];src=t.HERE.parent/'pkgs'/pk;dst=w/'pkgs'/pk;shutil.copytree(src,dst)
+   pm=json.loads((dst/'pruv.json').read_text())
+   for dep in pm.get('dependencies',{}).values():dep['path']=os.path.relpath((src/dep['path']).resolve(),dst.resolve())
+   (dst/'pruv.json').write_text(json.dumps(pm)+'\n')
+   mutated['dependencies'][pk]['path']=os.path.relpath(dst.resolve(),w.resolve())
+   (w/'q_root.pruv.json').write_text(json.dumps(mutated)+'\n')
   p=w/file;s=p.read_text();assert s.count(old)==1,(name,s.count(old));p.write_text(s.replace(old,new))
   c=g.compile_pruv('rs',str(w/'q_root.pruv'),str(w),'rust',flags+['--manifest',str(w/'q_root.pruv.json')])
   (w/'compile.json').write_text(json.dumps(c,default=str,indent=2))

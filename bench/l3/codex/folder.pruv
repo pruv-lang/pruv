@@ -1,0 +1,50 @@
+// folderKey (non-win32): strip every trailing '/', but keep an all-slash string unchanged.
+// Comparison is exact UTF-8 byte equality, which is UTF-16 unit equality for valid text. A cwd holding a lone
+// surrogate never equals the (valid) folder: its decoded U+FFFD must not stand in for the surrogate.
+pub fn key_len(s: str) -> i64
+  ensures 0 <= result && result <= len(s)
+{
+  let mut n: i64 = len(s);
+  while n > 0 && s[n - 1] == 47
+    invariant 0 <= n && n <= len(s)
+    decreases n
+  {
+    n = n - 1;
+  }
+  if n == 0 { return len(s); }
+  return n;
+}
+
+pub fn same(a: str, b: str) -> bool
+{
+  let na: i64 = key_len(a);
+  let nb: i64 = key_len(b);
+  if na != nb { return false; }
+  let mut i: i64 = 0;
+  while i < na
+    invariant 0 <= i && i <= na && na == nb && na <= len(a) && nb <= len(b)
+    decreases na - i
+  {
+    let x: i64 = a[i];
+    let y: i64 = b[i];
+    if x != y { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+// true when the UTF-16 units hold a surrogate that is not part of a high-low pair
+pub fn lone(u: [i64]) -> bool
+{
+  let mut i: i64 = 0;
+  while i < len(u)
+    invariant 0 <= i && i <= len(u)
+    decreases len(u) - i
+  {
+    let x: i64 = u[i];
+    if x >= 55296 && x <= 56319 && i + 1 < len(u) && u[i + 1] >= 56320 && u[i + 1] <= 57343 { i = i + 2; }
+    else if x >= 55296 && x <= 57343 { return true; }
+    else { i = i + 1; }
+  }
+  return false;
+}

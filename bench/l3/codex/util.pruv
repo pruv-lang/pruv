@@ -1,0 +1,162 @@
+// Codex import helpers (mirror of bench/l3/mcp/util.pruv plus request building and tape iteration).
+pub fn field(d: crate::json::JsonDocument, id: i64, key: str) -> i64 ! alloc { return crate::access::field(d,id,key); }
+pub fn raw(d: crate::json::JsonDocument, id: i64) -> [u8] ! alloc {
+  let s: crate::access::Span = crate::access::raw_span(d,id);
+  if s.status != 0 { let e: [u8] = alloc(0,0); return e; }
+  let mut b: [u8] = alloc(s.end-s.start,0); let mut i: i64 = 0;
+  while i < len(b) invariant 0 <= i && i <= len(b) && len(b) == s.end-s.start decreases len(b)-i
+  { b[i]=d.source[s.start+i]; i=i+1; } return b;
+}
+pub fn to_bytes(s: str) -> [u8] ! alloc
+  ensures len(result) == len(s)
+{
+  let mut b: [u8] = alloc(len(s),0); let mut i: i64 = 0;
+  while i < len(s) invariant 0 <= i && i <= len(s) && len(b) == len(s) decreases len(s)-i
+  { b[i]=s[i]; i=i+1; }
+  return b;
+}
+pub fn join(a: [u8], b: [u8]) -> [u8] ! alloc {
+  if len(a) > 20000000 || len(b) > 20000000 { let e: [u8] = alloc(0,0); return e; }
+  let mut out: [u8] = alloc(len(a)+len(b),0); let mut i: i64 = 0;
+  while i < len(out) invariant 0 <= i && i <= len(out) && len(out) == len(a)+len(b) decreases len(out)-i
+  { if i < len(a) { out[i]=a[i]; } else { out[i]=b[i-len(a)]; } i=i+1; } return out;
+}
+// P6: a response id matches only when its JSON token is exactly the decimal text of the request id.
+pub fn id_is(b: [u8], id: i64) -> bool
+  requires 1 <= id && id <= 99
+{
+  if id < 10 {
+    if len(b) != 1 { return false; }
+    let c: i64 = b[0];
+    return c == 48 + id;
+  }
+  if len(b) != 2 { return false; }
+  let c0: i64 = b[0]; let c1: i64 = b[1];
+  return c0 == 48 + id / 10 && c1 == 48 + id % 10;
+}
+pub fn int_bytes(n: i64) -> [u8] ! alloc
+  requires 1 <= n && n <= 99
+{
+  if n < 10 { let mut a: [u8] = alloc(1,0); a[0]=48+n; return a; }
+  let mut c: [u8] = alloc(2,0); c[0]=48+n/10; c[1]=48+n%10; return c;
+}
+fn hex(d: i64) -> i64
+  requires 0 <= d && d <= 15
+  ensures 48 <= result && result <= 102
+{
+  if d < 10 { return 48 + d; }
+  return 87 + d;
+}
+// JSON string content of s (no surrounding quotes): quote, backslash and C0 controls escaped.
+pub fn escaped(s: str) -> [u8] ! alloc
+  requires len(s) <= 100000000
+{
+  let mut out: [u8] = alloc(6*len(s),0); let mut i: i64 = 0; let mut n: i64 = 0;
+  while i < len(s)
+    invariant 0 <= i && i <= len(s) && 0 <= n && n <= 6*i && len(out) == 6*len(s)
+    decreases len(s)-i
+  {
+    let c: i64 = s[i];
+    if c == 34 { out[n]=92; out[n+1]=34; n=n+2; }
+    else if c == 92 { out[n]=92; out[n+1]=92; n=n+2; }
+    else if c < 32 { out[n]=92; out[n+1]=117; out[n+2]=48; out[n+3]=48; out[n+4]=hex(c/16); out[n+5]=hex(c%16); n=n+6; }
+    else { out[n]=c; n=n+1; }
+    i=i+1;
+  }
+  let mut r: [u8] = alloc(n,0); let mut j: i64 = 0;
+  while j < n invariant 0 <= j && j <= n && n <= len(out) && len(r) == n decreases n-j
+  { r[j]=out[j]; j=j+1; }
+  return r;
+}
+// ECMAScript trim whitespace, encoded as UTF-8 (mcp util).
+fn space(b: [u8], i: i64) -> i64
+ requires 0 <= i && i < len(b)
+ ensures 0 <= result && result <= 3 && result <= len(b)-i
+{
+ let c: i64 = b[i];
+ if c == 32 || (9 <= c && c <= 13) { return 1; }
+ if i+1 < len(b) && c == 194 && b[i+1] == 160 { return 2; }
+ if i+2 < len(b) {
+ if c == 225 && b[i+1] == 154 && b[i+2] == 128 { return 3; }
+ if c == 226 && b[i+1] == 128 && ((128 <= b[i+2] && b[i+2] <= 138) || b[i+2] == 168 || b[i+2] == 169 || b[i+2] == 175) { return 3; }
+ if c == 226 && b[i+1] == 129 && b[i+2] == 159 { return 3; }
+ if c == 227 && b[i+1] == 128 && b[i+2] == 128 { return 3; }
+ if c == 239 && b[i+1] == 187 && b[i+2] == 191 { return 3; }
+ }
+ return 0;
+}
+pub fn trim(b: [u8]) -> [u8] ! alloc
+ ensures len(result) <= len(b)
+{
+ let mut lo: i64 = 0; let mut hi: i64 = 0; let mut i: i64 = 0;
+ while i < len(b)
+ invariant 0 <= lo && lo <= i && 0 <= hi && hi <= i && i <= len(b)
+ decreases len(b)-i
+ {
+ let n: i64 = space(b,i);
+ if n > 0 { if lo == i { lo=lo+n; } i=i+n; }
+ else { i=i+1; hi=i; }
+ }
+ if hi < lo { hi=lo; }
+ let mut out: [u8] = alloc(hi-lo,0); let mut j: i64 = 0;
+ while j < len(out)
+ invariant 0 <= j && j <= len(out) && len(out) == hi-lo
+ decreases len(out)-j
+ { out[j]=b[lo+j]; j=j+1; }
+ return out;
+}
+// The decoded text of string value id (lone surrogates became U+FFFD in the decoder, policy P2); "" for anything else.
+pub fn str_at(d: crate::json::JsonDocument, id: i64) -> str ! alloc
+  ensures len(result) <= 50331648
+{
+  let none: str = "";
+  let t: crate::jstr::Text = crate::access::string_text(d, id);
+  match t {
+    crate::jstr::Text::Decoded(x) => {
+      if len(x) > 50331648 { return copy(none); }
+      return copy(x);
+    }
+    crate::jstr::Text::InternalInvariant(e) => { return copy(none); }
+  }
+}
+// Length of s in UTF-16 code units (a four-byte scalar is two units).
+pub fn units16(s: str) -> i64
+  requires len(s) <= 100000000
+  ensures 0 <= result && result <= 2 * len(s)
+{
+  let mut i: i64 = 0; let mut u: i64 = 0;
+  while i < len(s)
+    invariant 0 <= i && i <= len(s) && 0 <= u && u <= 2 * i
+    decreases len(s) - i
+  {
+    let b: i64 = s[i];
+    if b < 128 || b >= 192 { u = u + 1; }
+    if b >= 240 { u = u + 1; }
+    i = i + 1;
+  }
+  return u;
+}
+// Ids of the elements of array value c in order (empty for anything else or a corrupt tape). One pass over the tape,
+// so a page with many entries stays linear (array_at alone would be quadratic).
+pub fn elements(d: crate::json::JsonDocument, c: i64) -> [i64] ! alloc
+{
+  let empty: [i64] = alloc(0,0);
+  let n: i64 = crate::access::array_length(d, c);
+  if n <= 0 || n > 1048576 { return empty; }
+  if len(d.tape) > 6291456 || c < 0 || c >= len(d.tape) / 6 { return empty; }
+  let stop: i64 = d.tape[6 * c + 3];
+  if stop <= c || stop > len(d.tape) / 6 { return empty; }
+  let mut ids: [i64] = alloc(n, 0);
+  let mut j: i64 = c + 1; let mut k: i64 = 0;
+  while j < stop && k < n
+    invariant 0 <= c && c < j && j <= stop && stop <= len(d.tape) / 6 && len(d.tape) <= 6291456
+    invariant 0 <= k && k <= n && len(ids) == n
+    decreases stop - j
+  {
+    let next: i64 = d.tape[6 * j + 3];
+    if next <= j || next > stop || d.tape[6 * j + 4] != c { return empty; }
+    ids[k] = j; k = k + 1; j = next;
+  }
+  if k != n { return empty; }
+  return ids;
+}

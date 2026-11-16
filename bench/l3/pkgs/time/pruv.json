@@ -1,0 +1,1 @@
+{"name": "time", "version": "0.1.0", "root": "time.pruv", "dependencies": {"json": {"path": "../json", "version": "0.1"}, "jstr": {"path": "../jstr", "version": "0.1"}, "access": {"path": "../access", "version": "0.1"}, "text": {"path": "../text", "version": "0.1"}}}

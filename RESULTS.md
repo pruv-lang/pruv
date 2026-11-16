@@ -2156,3 +2156,35 @@ python3 bench/l3/mcp/q_mutants.py
 - **Checks before commit:** `run_all.py --backend both --only g4b_frontend` and `--only g4b_proof`. The compilers did not change; only the test scripts and the new bench tools did, and the run_all rows are unchanged.
 
 **G4b complete.**
+
+## 134. L3-5: Codex conversation import in Pruv (implementation and Q, 2026-11-16)
+
+- **Design:** `docs/CODEX_IMPORT_SPEC.md`. Lair's Codex import (`listCodex` / `readCodex`, commit 744d14af) is ported to `bench/l3/codex/` as is. Codex import parses no files: it spawns `codex app-server --stdio` for one request and speaks newline-delimited JSON. Pruv owns spawn, framing, request ids and response matching, the `initialized` notification, server-request replies, error mapping, paging, list admission, turn classification, the acquisition budget (200 turns, 2 MiB, replies counted up to 32 KiB), the turn collector, the last plan and the result packet. The Rust host passes binary, arguments, cwd, folder, thread and timeout and renders the packet. No compiler or language changes.
+- **Packages:** the modules that qwen and mcp kept as local copies now live once as packages in `bench/l3/pkgs/` (`bytes`, `text`, `time`, `names`, `turns`, `args`, `transport`, with the G4b manifests); qwen, mcp and codex depend on them. qwen (26/26) and mcp (22/22) pass on all four pairs after the move.
+- **Implementation:** 136 fixtures against the scripted fake app-server (`q_server.py`, which validates the handshake and every request shape and records the client's requests). The pinned TypeScript passes 136/136 against the checked-in expected JSON, and py/rust, py/llvm, rs/rust and rs/llvm each pass 136/136 with the same results and the same recorded requests as TypeScript. Both compilers verify the module graph.
+- **Reference:** `reference/` holds the pinned TS (`codex.ts`, `tail.ts`, `plan.ts` and helpers) run on Node with type stripping through `reference.mjs`.
+- **Differential (`q.py`, seed 20261116):** 2,023 cases per pair: 2,000 random scenarios (paging, cursors, list filters, turn and item shapes, plans, server requests, RPC errors, malformed lines, short deadlines), 3 large-budget cases, 10 policy probes and 10 edge probes.
+
+| Pair | Cases | Exact | P4 timestamp | P2 surrogate | P3 trailing FFFD | P6 id token | P1 invalid UTF-8 | P8 plan cut | Unexplained | Total wall s |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| py/rust | 2023 | 1633 | 382 | 2 | 2 | 2 | 1 | 1 | 0 | 57.31 |
+| py/llvm | 2023 | 1633 | 382 | 2 | 2 | 2 | 1 | 1 | 0 | 57.33 |
+| rs/rust | 2023 | 1633 | 382 | 2 | 2 | 2 | 1 | 1 | 0 | 56.88 |
+| rs/llvm | 2023 | 1633 | 382 | 2 | 2 | 2 | 1 | 1 | 0 | 56.90 |
+
+- **Classified differences:** each class is checked against the input that causes it, not accepted as a label. P4: Pruv reads only integer and canonical-ISO timestamps, so the field is absent (never different), and the plan's `at` falls back to `createdAt` only when TS accepts `completedAt` and P4 rejects it. P2: a lone surrogate in a value becomes U+FFFD. P3: TS strips a genuine U+FFFD left at the end of a byte clip; this is allowed only on prompt or reply strings of 32765 to 32768 bytes in the same turn. P6: a response id counts only when its token is exactly the decimal id. P1: an invalid UTF-8 line is skipped. P8: the 200-unit plan slice drops a split surrogate pair. All four pairs have **0 unexplained differences**. The TS reference took 55.18 s for the set.
+- **Audit (one read-only audit, then one confirmation audit limited to its findings):** 8 required findings. Fixed: a `cwd` holding a lone surrogate matched a folder through its U+FFFD (now compared as UTF-16 units and rejected, as TS does); `error.code` given as `-32601.0` or `-3.2601e4` was not mapped to codex-unsupported; three oracle classes that accepted too much (P3 trailing FFFD on any string, P4 on any missing timestamp, the plan fallback without checking `completedAt`); each matched response was parsed twice (now parsed once and reused). The confirmation audit marked two items as partly fixed. The error code compared exact decimals, while JS `===` compares binary64 values (`-32601.000000000001` is `-32601`). It now accepts exactly the decimals that round to -32601: the bounds are the two binary64 midpoints around -32601, both inclusive, because a tie rounds to the even significand, which is -32601's. The lone-surrogate folder check builds one UTF-16 array and decodes again. It runs once per read, on one folder string, so it was judged not a hot path and left as is. Two findings are known limits rather than fixes (see below).
+- **Mutants (`q_mutants.py`, rs/rust):** 16 single replacements in copies under `work/mutants/`, with all 136 fixed fixtures as witnesses: **16 differential-killed, 0 survived, 0 build errors**. `reply-bytes-cap-off-by-one` first survived the one-byte boundary case, because the TS collector's second 2 MiB pass trims the extra turn again; the new three-byte scalar case `read_budget_reply_cap_scalar_clip` kills it. Running only those cases also showed that a bare `process.exit` in the Node driver cut a large last result short on a pipe; `reference.mjs` now exits after stdout drains.
+- **Timing:** only total differential wall time per pair is reported; stall and timeout cases use 300-400 ms deadlines on both sides and dominate it. This is not a performance campaign.
+- **Scope and limits:** P7 lifecycle: G10 child close replaces TS's SIGTERM, 1.5 s SIGKILL and 5 s give-up timers; the result is decided before shutdown. Two known limits of the shared `transport` package (also in mcp): `ev_proc_wait` after EOF can block past the timeout when the child closes stdout but keeps running, and a blocking `ev_proc_write` ignores the timeout when the child stops reading. TS bounds both with timers. The G-track follow-ups are a deadline-aware wait (or a nonblocking exit poll) and a nonblocking or deadline-aware write. Neither was used to explain an observed difference. The real `codex` binary, Windows and outer cancellation are not exercised. `fixtures/cases.json` was once truncated during an edit (the file was opened for writing before the new content was built). It was restored from the last good content and checked case by case. All edits now build the content first and replace the file atomically. This is differential evidence and local verification, not whole-program equivalence.
+
+Commands (from the repository root):
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+python3 bench/l3/codex/test_impl.py
+python3 bench/l3/codex/q.py
+python3 bench/l3/codex/q_mutants.py
+```
+
+**L3-5 implementation and default Q complete.**

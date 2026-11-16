@@ -1,0 +1,4 @@
+work/
+host/target/
+__pycache__/
+xcrun_db*

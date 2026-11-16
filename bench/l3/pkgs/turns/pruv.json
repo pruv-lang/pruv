@@ -1,0 +1,1 @@
+{"name": "turns", "version": "0.1.0", "root": "turns.pruv", "dependencies": {"bytes": {"path": "../bytes", "version": "0.1"}, "text": {"path": "../text", "version": "0.1"}}}

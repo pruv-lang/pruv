@@ -1,3 +1,5 @@
+mod bytes;
+mod text;
 // L3-1 A3 turn collector (port of tail.ts TurnCollector; docs/CLAUDE_IMPORT_SPEC.md "Collector state and
 // transitions", policies P2/P3). State lives in three caller-owned arrays passed through `inout`:
 //   st  [4]    st[0] begun (ordinal counter), st[1] current present, st[2] lost_before, st[3] slot of the newest draft
@@ -57,7 +59,7 @@ pub fn grow(buf: [u8], begun: i64) -> [u8] ! alloc
   ensures forall k in 0..len(buf): result[k] == buf[k]
 {
   let mut nb: [u8] = alloc(13116800, 0);
-  crate::boundary::copy_span(inout nb, 0, buf, 0, len(buf));
+  crate::bytes::copy_span(inout nb, 0, buf, 0, len(buf));
   return nb;
 }
 
@@ -347,13 +349,13 @@ pub fn finish(st: [i64], sl: [i64], buf: [u8], base: i64) -> Collected ! alloc
     }
     let lo: i64 = tl - e;
     let sb: i64 = 65584 * w;
-    crate::boundary::copy_span(inout text, lo, buf, sb, sb + plen);
-    crate::boundary::copy_span(inout text, lo + plen, buf, sb + 32768, sb + 32768 + rlen);
+    crate::bytes::copy_span(inout text, lo, buf, sb, sb + plen);
+    crate::bytes::copy_span(inout text, lo + plen, buf, sb + 32768, sb + 32768 + rlen);
     if cp == 1 {
-      crate::boundary::copy_span(inout text, lo + plen + rlen, buf, sb + 65536, sb + 65560);
+      crate::bytes::copy_span(inout text, lo + plen + rlen, buf, sb + 65536, sb + 65560);
     }
     if dp == 1 {
-      crate::boundary::copy_span(inout text, lo + plen + rlen + 24 * cp, buf, sb + 65560, sb + 65584);
+      crate::bytes::copy_span(inout text, lo + plen + rlen + 24 * cp, buf, sb + 65560, sb + 65584);
     }
     let t: i64 = kept - 1 - j;
     turns[10 * t] = base + lo;

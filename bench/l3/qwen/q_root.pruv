@@ -3,6 +3,7 @@ mod json;
 mod lines;
 mod jstr;
 mod access;
+mod bytes;
 mod boundary;
 mod framing;
 mod text;

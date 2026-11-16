@@ -1,0 +1,363 @@
+// Codex app-server conversation (withRpcChild with jsonrpc false, withCodex) on the G10 event loop.
+// The caller owns the receive state: st [5], line [8388608], chunk [65536], tb [2050], ts [12] (see transport::receive)
+// and the control array ctl [8]:
+//   ctl[0] failure code (0 none; 2 internal, 3 not-found, 4 codex-unsupported, 5 timeout, 6 read-failed, 7 engine-missing)
+//   ctl[1] stage (0 pre-spawn, 1 spawn, 2 initialize, 3 thread/list, 4 thread/read, 5 thread/turns/list, 6 result)
+//   ctl[2] process slot (-1 none)   ctl[3] overall timer slot   ctl[4] last request id
+//   ctl[5] 1 when step left a line  ctl[6] length of that line in `line`
+//   ctl[7] exit code of a closed child (diagnostic)
+// Callers pump with step until kind_of says the response arrived (at most 1,000,000 events, then read-failed); the
+// first failure wins.
+
+// child arguments: app-server --stdio, then the host's extra arguments
+fn child_args(argv: str) -> ProcessArgs ! alloc
+{
+  let sp: [i64] = crate::args::arg_spans(argv);
+  let mut a: ProcessArgs = proc_args_new();
+  a = proc_args_push(move a, "app-server");
+  a = proc_args_push(move a, "--stdio");
+  if sp[0] != 0 { return move a; }
+  let cnt: i64 = sp[1];
+  let mut k: i64 = 0;
+  while k < cnt
+    invariant 0 <= k && k <= cnt && proc_args_len(a) == k + 2
+    invariant sp[0] == 0 && len(sp) == 2 + 2 * cnt && cnt == sp[1]
+    decreases cnt - k
+  {
+    let lo: i64 = sp[2 + 2 * k];
+    let hi: i64 = sp[3 + 2 * k];
+    if lo < 0 || hi < lo || hi > len(argv) || !is_char_boundary(argv, lo) || !is_char_boundary(argv, hi) { return move a; }
+    let piece: str = substr(argv, lo, hi);
+    a = proc_args_push(move a, piece);
+    k = k + 1;
+  }
+  return move a;
+}
+
+// Spawn the child and register it with one overall timer. On failure ctl[0] is set and the returned loop is only to be closed.
+pub fn start(binary: str, argv: str, cwd: str, timeout_ms: i64, inout ctl: [i64]) -> Loop ! async, net, proc, alloc
+  requires len(ctl) == 8
+  ensures len(ctl) == 8 && ctl[6] == 0
+{
+  ctl[0] = 0; ctl[1] = 0; ctl[2] = -1; ctl[3] = -1; ctl[4] = 0; ctl[6] = 0;
+  let sp: [i64] = crate::args::arg_spans(argv);
+  if sp[0] != 0 { ctl[0] = 2; let l0: Loop = ev_new(3); return move l0; }
+  let args: ProcessArgs = child_args(argv);
+  ctl[1] = 1;
+  let child: Process = proc_spawn(binary, args, cwd);
+  if !proc_ok(child) {
+    let r: Result<i64> = proc_wait(move child);
+    ctl[0] = 7;
+    let l1: Loop = ev_new(3);
+    return move l1;
+  }
+  let mut l: Loop = ev_new(3);
+  if !ev_ok(l) || ev_count(l) >= ev_cap(l) {
+    let k: Result<i64> = proc_kill(move child);
+    ctl[0] = 6;
+    return move l;
+  }
+  l = ev_add_process(move l, move child);
+  ctl[2] = ev_last(l);
+  if !ev_ok(l) || ev_count(l) >= ev_cap(l) { ctl[0] = 6; return move l; }
+  let mut ms: i64 = timeout_ms;
+  if ms < 0 { ms = 0; }
+  if ms > 86400000 { ms = 86400000; }
+  l = ev_add_timer(move l, ms);
+  ctl[3] = ev_last(l);
+  if !ev_ok(l) || ev_count(l) >= ev_cap(l) { ctl[0] = 6; return move l; }
+  return move l;
+}
+
+// trim the line, parse it as JSON (P1: invalid UTF-8 is a parse failure and the line is skipped)
+pub fn parse_line(line: [u8], n: i64) -> crate::json::JsonParse ! alloc
+  requires 0 <= n && n <= len(line)
+{
+  let mut b: [u8] = alloc(n, 0);
+  let mut i: i64 = 0;
+  while i < n invariant 0 <= i && i <= n && len(b) == n && n <= len(line) decreases n - i
+  { let c: i64 = line[i]; b[i] = c; i = i + 1; }
+  let trimmed: [u8] = crate::util::trim(b);
+  return crate::lines::parse_range(trimmed, 0, len(trimmed));
+}
+
+// One receive step of a caller's pump loop (the caller parses each line once and keeps the document; a document cannot
+// travel back with the loop). ctl[5] = 1 when a line of ctl[6] bytes is in `line`, 0 when nothing usable arrived
+// (an oversized line is skipped); a closed child, a timeout or a transport failure sets ctl[0].
+pub fn step(take l: Loop, slot: i64, overall: i64, inout ctl: [i64], inout st: [i64], inout line: [u8], inout chunk: [u8], inout tb: [i64], inout ts: [i64]) -> Loop ! async, proc, alloc
+  requires len(ctl) == 8
+  requires len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+  requires len(line) == 8388608
+  requires len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+  ensures len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= 8388608
+  ensures len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+  ensures len(line) == 8388608
+  ensures len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+{
+  let mut q: Loop = crate::transport::receive(move l, slot, overall, -1, true, 8388608, inout st, inout line, inout chunk, inout tb, inout ts);
+  let n: i64 = st[0];
+  ctl[5] = 0;
+  ctl[6] = 0;
+  if n < 0 && n != -6 {
+    ctl[0] = 6;
+    if n == -1 { ctl[0] = 5; }
+    if n == -4 { ctl[7] = st[3]; }
+  } else if n >= 0 && n <= 8388608 {
+    ctl[5] = 1;
+    ctl[6] = n;
+  }
+  return move q;
+}
+
+// What a parsed line is to a caller waiting for request `id`: 1 a server request (answer it with not_handled), 2 the
+// response to `id`, 0 anything to ignore (notifications, garbage, other ids, id tokens that are not exactly the decimal id).
+pub fn kind_of(d: crate::json::JsonDocument, id: i64) -> i64 ! alloc
+  requires 1 <= id && id <= 99
+{
+  if crate::access::kind(d, 0) != 6 { return 0; }
+  let mid: i64 = crate::util::field(d, 0, "id");
+  let method: i64 = crate::util::field(d, 0, "method");
+  if mid >= 0 && crate::access::kind(d, method) == 4 { return 1; }
+  if mid >= 0 {
+    let number: crate::access::Number = crate::access::number(d, mid);
+    if number.status == 0 && crate::util::id_is(crate::util::raw(d, mid), id) { return 2; }
+  }
+  return 0;
+}
+
+// the -32601 "not handled" reply to a server request
+pub fn not_handled(d: crate::json::JsonDocument) -> [u8] ! alloc
+{
+  let head: [u8] = crate::util::join(crate::util::to_bytes("{\"id\":"), crate::util::raw(d, crate::util::field(d, 0, "id")));
+  return crate::util::join(head, crate::util::to_bytes(",\"error\":{\"code\":-32601,\"message\":\"not handled\"}}\n"));
+}
+
+// initialize (id 1), then the initialized notification. An error response to initialize is read-failed at stage 2.
+pub fn open(take l: Loop, inout ctl: [i64], inout st: [i64], inout line: [u8], inout chunk: [u8], inout tb: [i64], inout ts: [i64]) -> Loop ! async, proc, alloc
+  requires len(ctl) == 8
+  requires len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+  requires len(line) == 8388608
+  requires len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+  ensures len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= 8388608
+  ensures len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+  ensures len(line) == 8388608
+  ensures len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+{
+  let slot: i64 = ctl[2];
+  let overall: i64 = ctl[3];
+  ctl[1] = 2;
+  ctl[4] = 1;
+  ctl[5] = 0;
+  ctl[6] = 0;
+  let req: [u8] = crate::util::to_bytes("{\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"lair\",\"title\":\"Lair\",\"version\":\"0.0.1\"},\"capabilities\":{\"experimentalApi\":true,\"requestAttestation\":false}}}\n");
+  let mut q: Loop = crate::transport::send(move l, slot, req);
+  let mut done: bool = false;
+  let mut events: i64 = 0;
+  while ctl[0] == 0 && !done && events < 1000000
+    invariant 0 <= events && events <= 1000000 && len(ctl) == 8 && 0 <= ctl[6] && ctl[6] <= 8388608
+    invariant len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+    invariant len(line) == 8388608
+    invariant len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+    decreases 1000000 - events
+  {
+    events = events + 1;
+    q = step(move q, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tb, inout ts);
+    if ctl[0] == 0 && ctl[5] == 1 {
+      let parsed: crate::json::JsonParse = parse_line(line, ctl[6]);
+      match parsed {
+        crate::json::JsonParse::Failed(e) => { }
+        crate::json::JsonParse::Parsed(d) => {
+          let k: i64 = kind_of(d, 1);
+          if k == 1 { q = crate::transport::send(move q, slot, not_handled(d)); }
+          if k == 2 {
+            done = true;
+            let error: i64 = crate::util::field(d, 0, "error");
+            if crate::access::kind(d, error) == 6 { ctl[0] = 6; }
+            else { q = crate::transport::send(move q, slot, crate::util::to_bytes("{\"method\":\"initialized\",\"params\":{}}\n")); }
+          }
+        }
+      }
+    }
+  }
+  if ctl[0] == 0 && !done { ctl[0] = 6; }
+  return move q;
+}
+
+pub fn req_list(id: i64, folder: str) -> [u8] ! alloc
+  requires 1 <= id && id <= 99 && len(folder) <= 1000000
+{
+  let mut b: [u8] = crate::util::to_bytes("{\"id\":");
+  b = crate::util::join(b, crate::util::int_bytes(id));
+  b = crate::util::join(b, crate::util::to_bytes(",\"method\":\"thread/list\",\"params\":{\"cwd\":[\""));
+  b = crate::util::join(b, crate::util::escaped(folder));
+  b = crate::util::join(b, crate::util::to_bytes("\"],\"limit\":50,\"sortKey\":\"updated_at\",\"useStateDbOnly\":true,\"sourceKinds\":[\"cli\",\"vscode\",\"exec\",\"appServer\"]}}\n"));
+  return b;
+}
+
+pub fn req_read(id: i64, thread: str) -> [u8] ! alloc
+  requires 1 <= id && id <= 99 && len(thread) <= 1000000
+{
+  let mut b: [u8] = crate::util::to_bytes("{\"id\":");
+  b = crate::util::join(b, crate::util::int_bytes(id));
+  b = crate::util::join(b, crate::util::to_bytes(",\"method\":\"thread/read\",\"params\":{\"threadId\":\""));
+  b = crate::util::join(b, crate::util::escaped(thread));
+  b = crate::util::join(b, crate::util::to_bytes("\",\"includeTurns\":false}}\n"));
+  return b;
+}
+
+// cursor is the raw JSON token (with its quotes) received as nextCursor, or empty for the first page
+pub fn req_turns(id: i64, thread: str, cursor: [u8]) -> [u8] ! alloc
+  requires 1 <= id && id <= 99 && len(thread) <= 1000000
+{
+  let mut b: [u8] = crate::util::to_bytes("{\"id\":");
+  b = crate::util::join(b, crate::util::int_bytes(id));
+  b = crate::util::join(b, crate::util::to_bytes(",\"method\":\"thread/turns/list\",\"params\":{\"threadId\":\""));
+  b = crate::util::join(b, crate::util::escaped(thread));
+  b = crate::util::join(b, crate::util::to_bytes("\",\"limit\":20,\"sortDirection\":\"desc\",\"itemsView\":\"summary\""));
+  if len(cursor) > 0 {
+    b = crate::util::join(b, crate::util::to_bytes(",\"cursor\":"));
+    b = crate::util::join(b, cursor);
+  }
+  b = crate::util::join(b, crate::util::to_bytes("}}\n"));
+  return b;
+}
+
+// ---- error responses ----
+
+fn lower(x: i64) -> i64
+{
+  if x >= 65 && x <= 90 { return x + 32; }
+  return x;
+}
+
+// ASCII-case-insensitive literal at unit position i of u[0..n) (JS /i never matches a non-ASCII unit to an ASCII letter)
+fn lit_at(u: [i64], n: i64, i: i64, lit: str) -> bool
+  requires 0 <= n && n <= len(u) && 0 <= i
+{
+  if len(lit) > n - i { return false; }
+  let mut k: i64 = 0;
+  while k < len(lit)
+    invariant 0 <= k && k <= len(lit) && len(lit) <= n - i && 0 <= i && n <= len(u)
+    decreases len(lit) - k
+  {
+    let x: i64 = u[i + k];
+    let y: i64 = lit[k];
+    if lower(x) != y { return false; }
+    k = k + 1;
+  }
+  return true;
+}
+
+// /not found|no rollout|unknown thread/i over the first n units
+fn has_phrase(u: [i64], n: i64) -> bool ! alloc
+  requires 0 <= n && n <= len(u)
+{
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n <= len(u)
+    decreases n - i
+  {
+    if lit_at(u, n, i, "not found") { return true; }
+    if lit_at(u, n, i, "no rollout") { return true; }
+    if lit_at(u, n, i, "unknown thread") { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+// the expected significant digit at position p of 32601
+// The JSON number token src[s..e) reads as -32601 after JS's binary64 rounding (JS ===): "-32601", "-32601.0",
+// "-3.2601e4", and any value within half an ulp (2^-39, ties to even, so both ends included) of it. The token is
+// already a valid JSON number. Its significant digits (leading zeros skipped) are compared with the exact decimal
+// bounds 32601 -/+ 2^-39 (digits past a bound are zeros), and the decimal exponent must put the fifth significant
+// digit in the units place. The exponent saturates far beyond what a line can compensate.
+fn is_minus_32601(src: [u8], s: i64, e: i64) -> bool ! alloc
+  requires 0 <= s && s <= e && e <= len(src)
+{
+  if e - s < 2 || src[s] != 45 { return false; }
+  let lo: str = "32600999999999998181010596454143524169921875";
+  let hi: str = "32601000000000001818989403545856475830078125";
+  let mut i: i64 = s + 1;
+  let mut sig: i64 = 0;
+  let mut ip: i64 = 0;
+  let mut first: i64 = 0;
+  let mut dot: bool = false;
+  let mut on_lo: bool = true;
+  let mut on_hi: bool = true;
+  while i < e && ((src[i] >= 48 && src[i] <= 57) || src[i] == 46)
+    invariant s + 1 <= i && i <= e && e <= len(src) && 0 <= sig && sig <= i && 0 <= ip && ip <= i && 0 <= first && first <= i
+    decreases e - i
+  {
+    let c: i64 = src[i];
+    if c == 46 { dot = true; }
+    else {
+      let v: i64 = c - 48;
+      if sig == 0 && v == 0 { first = first + 1; }
+      else {
+        let mut l: i64 = 0;
+        let mut h: i64 = 0;
+        if sig < len(lo) { l = lo[sig] - 48; }
+        if sig < len(hi) { h = hi[sig] - 48; }
+        if on_lo { if v < l { return false; } if v > l { on_lo = false; } }
+        if on_hi { if v > h { return false; } if v < h { on_hi = false; } }
+        sig = sig + 1;
+      }
+      if !dot { ip = ip + 1; }
+    }
+    i = i + 1;
+  }
+  // a prefix of the lower bound (its last digit is 5) is below it
+  if sig < 5 || (on_lo && sig < len(lo)) { return false; }
+  let mut x: i64 = 0;
+  if i < e && (src[i] == 101 || src[i] == 69) {
+    i = i + 1;
+    let mut neg: bool = false;
+    if i < e && (src[i] == 43 || src[i] == 45) { neg = src[i] == 45; i = i + 1; }
+    while i < e && src[i] >= 48 && src[i] <= 57
+      invariant s + 1 <= i && i <= e && e <= len(src) && 0 <= x && x <= 1000000000
+      decreases e - i
+    {
+      x = 10 * x + (src[i] - 48);
+      if x > 100000000 { x = 1000000000; }
+      i = i + 1;
+    }
+    if neg { x = 0 - x; }
+  }
+  if i != e { return false; }
+  return ip - first + x == 5;
+}
+
+// 1: error.code is exactly -32601 (codex-unsupported); 2: the message (cut to 300 units) matches the not-found regex;
+// 3: anything else (read-failed).
+pub fn error_class(d: crate::json::JsonDocument, e: i64) -> i64 ! alloc
+{
+  let c: crate::access::Number = crate::access::number(d, crate::util::field(d, e, "code"));
+  if c.status == 0 && is_minus_32601(d.source, c.start, c.end) { return 1; }
+  let u: crate::access::Units = crate::access::string_units(d, crate::util::field(d, e, "message"));
+  if u.status == 0 {
+    let mut m: i64 = len(u.units);
+    if m > 300 { m = 300; }
+    if has_phrase(u.units, m) { return 2; }
+  }
+  return 3;
+}
+
+// diagnostic detail: the message (cut to 300 units) with non-ASCII units shown as '?', "rejected" when it has none
+pub fn error_detail(d: crate::json::JsonDocument, e: i64) -> [u8] ! alloc
+{
+  let u: crate::access::Units = crate::access::string_units(d, crate::util::field(d, e, "message"));
+  if u.status != 0 { return crate::util::to_bytes("rejected"); }
+  let mut m: i64 = len(u.units);
+  if m > 300 { m = 300; }
+  let mut out: [u8] = alloc(m, 0);
+  let mut i: i64 = 0;
+  while i < m
+    invariant 0 <= i && i <= m && m <= len(u.units) && len(out) == m
+    decreases m - i
+  {
+    let x: i64 = u.units[i];
+    if x >= 32 && x < 127 { out[i] = x; } else { out[i] = 63; }
+    i = i + 1;
+  }
+  return out;
+}

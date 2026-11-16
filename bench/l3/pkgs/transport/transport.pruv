@@ -1,4 +1,5 @@
-// G10 transport: state holds status, partial length, chunk offset, exit code, chunk length.
+mod tail;
+// G10 transport (moved from bench/l3/mcp; cap is the line buffer size: mcp 4194304, codex 8388608): state holds status, partial length, chunk offset, exit code, chunk length.
 pub fn live(l: Loop, slot: i64) -> bool
  requires ev_ok(l)
  ensures result ==> 0 <= slot && slot < ev_cap(l) && ev_kind(l,slot) == 3
@@ -28,13 +29,13 @@ pub fn poll(take l: Loop, overall: i64, init: i64, ready: bool, inout st: [i64],
  }
  return move q;
 }
-pub fn receive(take l: Loop, slot: i64, overall: i64, init: i64, ready: bool,
+pub fn receive(take l: Loop, slot: i64, overall: i64, init: i64, ready: bool, cap: i64,
  inout st: [i64], inout line: [u8], inout chunk: [u8], inout tb: [i64], inout ts: [i64]) -> Loop ! async, proc, alloc
- requires len(st) == 5 && 0 <= st[1] && st[1] <= 4194304 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
- requires len(line) == 4194304
+ requires len(st) == 5 && 0 <= st[1] && st[1] <= cap && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+ requires 1 <= cap && cap <= 8388608 && len(line) == cap
  requires len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
- ensures len(st) == 5 && 0 <= st[1] && st[1] <= 4194304 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
- ensures len(line) == 4194304
+ ensures len(st) == 5 && 0 <= st[1] && st[1] <= cap && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+ ensures len(line) == cap
  ensures len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
 {
  st[0]=-6;
@@ -63,12 +64,12 @@ pub fn receive(take l: Loop, slot: i64, overall: i64, init: i64, ready: bool,
  let mut i: i64 = st[2];
  while i < st[4] && st[0] == -6
  invariant 0 <= i && i <= st[4] && st[4] <= 65536 && len(chunk) == 65536
- invariant len(st) == 5 && 0 <= st[1] && st[1] <= 4194304 && len(line) == 4194304
+ invariant len(st) == 5 && 0 <= st[1] && st[1] <= cap && len(line) == cap
  decreases st[4]-i
  {
  let c: i64 = chunk[i]; i=i+1;
  if c == 10 { st[0]=st[1]; st[1]=0; }
- else if st[1] == 4194304 { st[0]=-3; }
+ else if st[1] == cap { st[0]=-3; }
  else { line[st[1]]=c; st[1]=st[1]+1; }
  }
  st[2]=i;

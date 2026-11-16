@@ -1,0 +1,1 @@
+{"name": "transport", "version": "0.1.0", "root": "transport.pruv", "dependencies": {"tail": {"path": "../tail", "version": "0.1"}}}

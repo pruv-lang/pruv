@@ -1,0 +1,170 @@
+// readTurn and itemText (codex.ts). One turn object of a thread/turns/list page becomes a RawTurn.
+// The replies of a turn are folded as they are met with exactly the arithmetic of TurnCollector.answer
+// (budget counter, whole-scalar clipping, separators) into fb [32768]; fs [3] is the fold state:
+//   fs[0] reply length, fs[1] budget counter (saturates at 32768), fs[2] clipped. Invariant 0 <= fs[0] <= fs[1] <= 32768.
+// The fold is replayed into the real collector by read.pruv (one answer per turn, with a padding scalar when clipped).
+
+pub struct RawTurn { prompt: [u8], reply: [u8], nreply: i64, rbytes: i64, rclipped: i64, tools: i64, has_plan: bool, plan: [u8], created: [u8], completed: [u8] }
+
+// sep LF bytes followed by text[0..n) at dst[at..].
+fn put_piece(inout dst: [u8], at: i64, sep: i64, text: str, n: i64) -> ()
+  requires 0 <= sep && sep <= 2 && 0 <= n && n <= len(text) && 0 <= at && at <= len(dst) && sep + n <= len(dst) - at
+  ensures len(dst) == len(old(dst))
+{
+  if sep >= 1 { dst[at] = 10; }
+  if sep == 2 { dst[at + 1] = 10; }
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && n <= len(text) && 0 <= at && at <= len(dst) && sep + n <= len(dst) - at && len(dst) == len(old(dst))
+    decreases n - j
+  {
+    dst[at + sep + j] = text[j];
+    j = j + 1;
+  }
+}
+
+fn fold_reply(inout fs: [i64], inout fb: [u8], text: str) -> () ! alloc
+  requires len(fs) == 3 && len(fb) == 32768 && 0 <= fs[0] && fs[0] <= fs[1] && fs[1] <= 32768 && (fs[2] == 0 || fs[2] == 1) && len(text) <= 100000000
+  ensures len(fs) == 3 && len(fb) == 32768 && 0 <= fs[0] && fs[0] <= fs[1] && fs[1] <= 32768 && (fs[2] == 0 || fs[2] == 1)
+{
+  if len(text) == 0 { return; }
+  let used: i64 = fs[1];
+  if used >= 32768 { return; }
+  let rl: i64 = fs[0];
+  let room: i64 = 32768 - used;
+  let mut sep: i64 = 0;
+  if rl > 0 { sep = 2; }
+  if sep + len(text) <= room {
+    put_piece(inout fb, rl, sep, text, len(text));
+    fs[0] = rl + sep + len(text);
+    fs[1] = used + sep + len(text);
+    return;
+  }
+  let mut s2: i64 = sep;
+  let mut take: i64 = 0;
+  if sep == 2 && room < 2 {
+    s2 = room;
+  } else {
+    let cp: str = crate::text::clip_bytes(text, room - sep);
+    take = len(cp);
+  }
+  put_piece(inout fb, rl, s2, text, take);
+  fs[0] = rl + s2 + take;
+  fs[1] = 32768;
+  fs[2] = 1;
+}
+
+// itemText: item.text when a string; else the nonempty string `text` fields of the content parts joined by a blank line.
+pub fn item_text(d: crate::json::JsonDocument, it: i64) -> str ! alloc
+  ensures len(result) <= 120000000
+{
+  let none: str = "";
+  let tf: i64 = crate::util::field(d, it, "text");
+  if crate::access::kind(d, tf) == 4 { return crate::util::str_at(d, tf); }
+  let c: i64 = crate::util::field(d, it, "content");
+  if crate::access::kind(d, c) != 5 { return copy(none); }
+  let ids: [i64] = crate::util::elements(d, c);
+  let n: i64 = len(ids);
+  let mut out: String = string_new();
+  let mut first: bool = true;
+  let mut total: i64 = 0;
+  let mut k: i64 = 0;
+  while k < n && total <= 60000000
+    invariant 0 <= k && k <= n && n == len(ids) && 0 <= total && total <= 120000000 && len(out) <= total
+    decreases n - k
+  {
+    let part: i64 = ids[k];
+    k = k + 1;
+    if crate::access::kind(d, part) == 6 {
+      let pt: i64 = crate::util::field(d, part, "text");
+      if crate::access::kind(d, pt) == 4 {
+        let x: str = crate::util::str_at(d, pt);
+        if len(x) > 0 {
+          if !first { out = string_push_str(move out, "\n\n"); }
+          out = string_push_str(move out, x);
+          first = false;
+          total = total + len(x) + 2;
+        }
+      }
+    }
+  }
+  return string_to_str(out);
+}
+
+// 24-byte timestamp of the field `key` of turn t via isoOf, else an empty array.
+fn stamp(d: crate::json::JsonDocument, t: i64, key: str) -> [u8] ! alloc
+{
+  let empty: [u8] = alloc(0, 0);
+  let f: i64 = crate::util::field(d, t, key);
+  if f < 0 { return empty; }
+  let iso: crate::time::Iso = crate::time::iso_of(d, f);
+  if iso.status == 0 && len(iso.text) == 24 { return copy(iso.text); }
+  return empty;
+}
+
+pub fn read_turn(d: crate::json::JsonDocument, t: i64, inout fs: [i64], inout fb: [u8]) -> RawTurn ! alloc
+  requires len(fs) == 3 && len(fb) == 32768
+  ensures len(fs) == 3 && len(fb) == 32768 && 0 <= fs[0] && fs[0] <= fs[1] && fs[1] <= 32768 && (fs[2] == 0 || fs[2] == 1)
+{
+  fs[0] = 0;
+  fs[1] = 0;
+  fs[2] = 0;
+  let ids: [i64] = crate::util::elements(d, crate::util::field(d, t, "items"));
+  let n: i64 = len(ids);
+  let mut prompt: String = string_new();
+  let mut np: i64 = 0;
+  let mut nreply: i64 = 0;
+  let mut rbytes: i64 = 0;
+  let mut tools: i64 = 0;
+  let mut has_plan: bool = false;
+  let mut plan: str = "";
+  let mut k: i64 = 0;
+  while k < n
+    invariant 0 <= k && k <= n && n == len(ids) && 0 <= np && 0 <= nreply && 0 <= rbytes && 0 <= tools
+    invariant np <= k && nreply <= k && tools <= k && rbytes <= 32768 && len(prompt) <= 300000000
+    invariant len(fs) == 3 && len(fb) == 32768 && 0 <= fs[0] && fs[0] <= fs[1] && fs[1] <= 32768 && (fs[2] == 0 || fs[2] == 1)
+    decreases n - k
+  {
+    let it: i64 = ids[k];
+    k = k + 1;
+    if crate::access::kind(d, it) == 6 {
+      let ty: i64 = crate::util::field(d, it, "type");
+      if crate::access::string_is(d, ty, "userMessage") == 1 {
+        let x: str = item_text(d, it);
+        if !crate::text::is_blank(x) && len(x) <= 290000000 - len(prompt) {
+          if np > 0 { prompt = string_push_str(move prompt, "\n\n"); }
+          prompt = string_push_str(move prompt, x);
+          np = np + 1;
+        }
+      } else if crate::access::string_is(d, ty, "agentMessage") == 1 {
+        // commentary is not an answer
+        let mut x: str = "";
+        if crate::access::string_is(d, crate::util::field(d, it, "phase"), "commentary") != 1 { x = item_text(d, it); }
+        if !crate::text::is_blank(x) && len(x) <= 100000000 {
+          nreply = nreply + 1;
+          rbytes = rbytes + len(x);
+          if rbytes > 32768 { rbytes = 32768; }
+          fold_reply(inout fs, inout fb, x);
+        }
+      } else if crate::access::string_is(d, ty, "plan") == 1 {
+        // a plan item is not a tool; the last nonblank text of the turn wins
+        let tf: i64 = crate::util::field(d, it, "text");
+        if crate::access::kind(d, tf) == 4 {
+          let x: str = crate::util::str_at(d, tf);
+          if !crate::text::is_blank(x) { has_plan = true; plan = copy(x); }
+        }
+      } else if crate::access::string_is(d, ty, "reasoning") != 1 {
+        tools = tools + 1;
+      }
+    }
+  }
+  let created: [u8] = stamp(d, t, "startedAt");
+  let completed: [u8] = stamp(d, t, "completedAt");
+  let ps: str = string_to_str(prompt);
+  let pbytes: [u8] = crate::util::to_bytes(ps);
+  let plbytes: [u8] = crate::util::to_bytes(plan);
+  let rn: i64 = fs[0];
+  let mut rb: [u8] = alloc(rn, 0);
+  crate::bytes::copy_span(inout rb, 0, fb, 0, rn);
+  return RawTurn { prompt: copy(pbytes), reply: copy(rb), nreply: nreply, rbytes: rbytes, rclipped: fs[2], tools: tools, has_plan: has_plan, plan: copy(plbytes), created: copy(created), completed: copy(completed) };
+}

@@ -1,0 +1,91 @@
+// listCodex row building (non-win32): the first 50 raw entries of result.data (else result.threads), valid ids only.
+// List row (9 words): thread ref, title ref, updatedAt ref, path ref, origin (-1 absent, 0 other, 1 lair).
+// Text order per row: thread, title, updatedAt, path (the refs tile the text).
+
+pub fn build(d: crate::json::JsonDocument, rid: i64) -> [i64] ! alloc
+  ensures len(result) >= 3
+{
+  let empty: [u8] = alloc(0, 0);
+  let mut data: i64 = crate::util::field(d, rid, "data");
+  if crate::access::kind(d, data) != 5 { data = crate::util::field(d, rid, "threads"); }
+  let ids: [i64] = crate::util::elements(d, data);
+  let mut lim: i64 = len(ids);
+  if lim > 50 { lim = 50; }
+  let mut rows: [i64] = alloc(450, 0);
+  let mut tx: String = string_new();
+  let mut off: i64 = 0;
+  let mut count: i64 = 0;
+  let mut k: i64 = 0;
+  while k < lim
+    invariant 0 <= k && k <= lim && lim <= 50 && lim <= len(ids) && 0 <= count && count <= k && len(rows) == 450 && 0 <= off
+    invariant off <= 100000000 && len(tx) == off
+    decreases lim - k
+  {
+    let t: i64 = ids[k];
+    k = k + 1;
+    if crate::access::kind(d, t) == 6 {
+      let idv: str = crate::util::str_at(d, crate::util::field(d, t, "id"));
+      if len(idv) > 0 && crate::names::valid_thread(idv) {
+        let b: i64 = 9 * count;
+        rows[b] = off;
+        rows[b + 1] = len(idv);
+        if len(idv) > 100000000 - off { return crate::packet::fail(2, 6, empty); }
+        tx = string_push_str(move tx, idv);
+        off = off + len(idv);
+        // title: name, else preview (each trimmed), one line, 120 units
+        let mut title: str = crate::text::trim(crate::util::str_at(d, crate::util::field(d, t, "name")));
+        if len(title) == 0 { title = crate::text::trim(crate::util::str_at(d, crate::util::field(d, t, "preview"))); }
+        let one: str = crate::text::one_line(title, 120);
+        rows[b + 2] = off;
+        rows[b + 3] = len(one);
+        if len(one) > 100000000 - off { return crate::packet::fail(2, 6, empty); }
+        tx = string_push_str(move tx, one);
+        off = off + len(one);
+        rows[b + 4] = -1;
+        rows[b + 5] = 0;
+        let uf: i64 = crate::util::field(d, t, "updatedAt");
+        if uf >= 0 {
+          let iso: crate::time::Iso = crate::time::iso_of(d, uf);
+          if iso.status == 0 && len(iso.text) == 24 {
+            let s: str = crate::jstr::adapter_probe(iso.text);
+            if len(s) == 24 {
+              rows[b + 4] = off;
+              rows[b + 5] = 24;
+              if 24 > 100000000 - off { return crate::packet::fail(2, 6, empty); }
+              tx = string_push_str(move tx, s);
+              off = off + 24;
+            }
+          }
+        }
+        rows[b + 6] = -1;
+        rows[b + 7] = 0;
+        let pf: i64 = crate::util::field(d, t, "path");
+        if crate::access::kind(d, pf) == 4 {
+          let ps: str = crate::util::str_at(d, pf);
+          if len(ps) > 0 {
+            rows[b + 6] = off;
+            rows[b + 7] = len(ps);
+            if len(ps) > 100000000 - off { return crate::packet::fail(2, 6, empty); }
+            tx = string_push_str(move tx, ps);
+            off = off + len(ps);
+          }
+        }
+        rows[b + 8] = -1;
+        let of: i64 = crate::util::field(d, t, "originator");
+        if crate::access::kind(d, of) == 4 {
+          let o: str = crate::util::str_at(d, of);
+          rows[b + 8] = 0;
+          if len(o) >= 4 {
+            let c0: i64 = o[0]; let c1: i64 = o[1]; let c2: i64 = o[2]; let c3: i64 = o[3];
+            if c0 == 108 && c1 == 97 && c2 == 105 && c3 == 114 { rows[b + 8] = 1; }
+          }
+        }
+        count = count + 1;
+      }
+    }
+  }
+  let all: str = string_to_str(tx);
+  if len(all) > 100000000 { return crate::packet::fail(2, 6, empty); }
+  let text: [u8] = crate::util::to_bytes(all);
+  return crate::packet::list_ok(rows, count, text);
+}

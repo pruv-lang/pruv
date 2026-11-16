@@ -1,0 +1,152 @@
+// codexPlan and fit (plan.ts, no statuses): lines of the plan text become items.
+// Output arrays (caller owned):
+//   pl [64]  pl[0] kept item count (1..30), -1 when no item remains; pl[1] more (dropped item count);
+//            pl[2+2k] blob offset and pl[3+2k] byte length of item k; pl[62] blob bytes used; pl[63] at present (0/1)
+//   pb [18024]  items blob at 0..18000, the 24-byte `at` stamp at 18000..18024
+// P8: the 200-unit slice drops a split surrogate pair as a whole scalar (a Pruv str cannot hold a lone surrogate).
+
+// End of the character starting at boundary i (as text.pruv next).
+fn next(s: str, i: i64) -> i64
+  requires 0 <= i && i < len(s)
+  ensures i < result && result <= len(s)
+{
+  let mut j: i64 = i + 1;
+  while j < len(s) && !is_char_boundary(s, j)
+    invariant i < j && j <= len(s)
+    decreases len(s) - j
+  {
+    j = j + 1;
+  }
+  return j;
+}
+
+// Byte length of the longest prefix of s holding at most max UTF-16 units (whole scalars only).
+fn clip_units(s: str, max: i64) -> i64
+  requires 0 <= max && max <= 1000
+  ensures 0 <= result && result <= len(s)
+{
+  let n: i64 = len(s);
+  let mut i: i64 = 0;
+  let mut u: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && 0 <= u && u <= max
+    decreases n - i
+  {
+    let j: i64 = next(s, i);
+    let mut w: i64 = 1;
+    if j - i == 4 { w = 2; }
+    if u + w > max { return i; }
+    u = u + w;
+    i = j;
+  }
+  return n;
+}
+
+// Index just after a leading list marker ("-", "*" or digits followed by ".") that is followed by whitespace, else -1.
+fn marker_end(t: str) -> i64
+  ensures result == -1 || (1 <= result && result <= len(t))
+{
+  let n: i64 = len(t);
+  if n == 0 { return -1; }
+  let c: i64 = t[0];
+  let mut m: i64 = -1;
+  if c == 45 || c == 42 { m = 1; }
+  else if c >= 48 && c <= 57 {
+    let mut j: i64 = 1;
+    while j < n && t[j] >= 48 && t[j] <= 57
+      invariant 1 <= j && j <= n
+      decreases n - j
+    {
+      j = j + 1;
+    }
+    if j < n && t[j] == 46 { m = j + 1; }
+  }
+  if m < 0 { return -1; }
+  if m > n { return -1; }
+  if crate::text::space_len(t, m) == 0 { return -1; }
+  return m;
+}
+
+// One raw line b[lo..hi): trim, strip one marker, trim, drop when empty, slice to 200 units.
+fn take_segment(b: [u8], lo: i64, hi: i64, inout pl: [i64], inout pb: [u8]) -> () ! alloc
+  requires 0 <= lo && lo <= hi && hi <= len(b) && len(pl) == 64 && len(pb) == 18024
+  requires 0 <= pl[0] && pl[0] <= 30 && 0 <= pl[1] && pl[1] <= 100000000 && 0 <= pl[62] && pl[62] <= 18000
+  requires pl[63] == 0 || pl[63] == 1
+  ensures len(pl) == 64 && len(pb) == 18024
+  ensures 0 <= pl[0] && pl[0] <= 30 && 0 <= pl[1] && pl[1] <= 100000000 && 0 <= pl[62] && pl[62] <= 18000
+  ensures pl[63] == 0 || pl[63] == 1
+{
+  let mut seg: [u8] = alloc(hi - lo, 0);
+  crate::bytes::copy_span(inout seg, 0, b, lo, hi);
+  let s: str = crate::jstr::adapter_probe(seg);
+  if len(s) != hi - lo { return; }
+  let t: str = crate::text::trim(s);
+  let m: i64 = marker_end(t);
+  let mut u: str = copy(t);
+  if m >= 0 {
+    if is_char_boundary(t, m) && is_char_boundary(t, len(t)) {
+      u = crate::text::trim(substr(t, m, len(t)));
+    }
+  }
+  if len(u) == 0 { return; }
+  let k: i64 = clip_units(u, 200);
+  if pl[0] < 30 {
+    let used: i64 = pl[62];
+    let c: i64 = pl[0];
+    if used + k <= 18000 {
+      let mut j: i64 = 0;
+      while j < k
+        invariant 0 <= j && j <= k && k <= len(u) && 0 <= used && used + k <= 18000 && len(pb) == 18024
+        decreases k - j
+      {
+        pb[used + j] = u[j];
+        j = j + 1;
+      }
+      pl[2 + 2 * c] = used;
+      pl[3 + 2 * c] = k;
+      pl[0] = c + 1;
+      pl[62] = used + k;
+    }
+  } else {
+    if pl[1] < 100000000 { pl[1] = pl[1] + 1; }
+  }
+}
+
+pub fn codex_plan(text: [u8], at: [u8], inout pl: [i64], inout pb: [u8]) -> () ! alloc
+  requires len(pl) == 64 && len(pb) == 18024 && len(text) <= 100000000 && (len(at) == 0 || len(at) == 24)
+  ensures len(pl) == 64 && len(pb) == 18024
+  ensures -1 <= pl[0] && pl[0] <= 30 && 0 <= pl[1] && pl[1] <= 100000000 && 0 <= pl[62] && pl[62] <= 18000
+  ensures pl[63] == 0 || pl[63] == 1
+{
+  pl[0] = 0;
+  pl[1] = 0;
+  pl[62] = 0;
+  pl[63] = 0;
+  if len(at) == 24 {
+    crate::bytes::copy_span(inout pb, 18000, at, 0, 24);
+    pl[63] = 1;
+  }
+  let n: i64 = len(text);
+  let mut start: i64 = 0;
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= start && start <= i && i <= n && n == len(text)
+    invariant len(pl) == 64 && len(pb) == 18024
+    invariant 0 <= pl[0] && pl[0] <= 30 && 0 <= pl[1] && pl[1] <= 100000000 && 0 <= pl[62] && pl[62] <= 18000
+    invariant pl[63] == 0 || pl[63] == 1
+    decreases n - i
+  {
+    let c: i64 = text[i];
+    if c == 10 {
+      take_segment(text, start, i, inout pl, inout pb);
+      start = i + 1;
+    }
+    i = i + 1;
+  }
+  take_segment(text, start, n, inout pl, inout pb);
+  if pl[0] == 0 {
+    pl[0] = -1;
+    pl[1] = 0;
+    pl[63] = 0;
+  }
+}

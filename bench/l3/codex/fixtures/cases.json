@@ -1,0 +1,4111 @@
+{
+ "cases": [
+  {
+   "name": "list_basic",
+   "mode": "list",
+   "list": {
+    "data": [
+     {
+      "id": "a1",
+      "name": "First  chat\n",
+      "preview": "p",
+      "updatedAt": 1700000000,
+      "path": "/r/a1.jsonl",
+      "originator": "lair-desktop"
+     },
+     {
+      "id": "b2",
+      "name": "",
+      "preview": "  Preview\ttext  ",
+      "updatedAt": 1700000000123,
+      "originator": "codex_cli"
+     },
+     {
+      "id": "c3",
+      "name": "   ",
+      "preview": "",
+      "updatedAt": "2023-11-14T22:13:20.000Z",
+      "path": "",
+      "originator": ""
+     },
+     {
+      "id": "d4",
+      "updatedAt": "1700000000"
+     },
+     {
+      "id": "../x",
+      "name": "bad"
+     },
+     {
+      "id": "-lead",
+      "name": "bad"
+     },
+     {
+      "id": "",
+      "name": "bad"
+     },
+     {
+      "id": 7,
+      "name": "bad"
+     },
+     5,
+     null,
+     "s",
+     [],
+     {
+      "name": "noid"
+     },
+     {
+      "id": "e5",
+      "name": "x"
+     }
+    ]
+   },
+   "expected": [
+    {
+     "thread": "a1",
+     "title": "First chat",
+     "updatedAt": "2023-11-14T22:13:20.000Z",
+     "path": "/r/a1.jsonl",
+     "origin": "lair"
+    },
+    {
+     "thread": "b2",
+     "title": "Preview text",
+     "updatedAt": "2023-11-14T22:13:20.123Z",
+     "origin": "other"
+    },
+    {
+     "thread": "c3",
+     "title": "",
+     "updatedAt": "2023-11-14T22:13:20.000Z",
+     "origin": "other"
+    },
+    {
+     "thread": "d4",
+     "title": "",
+     "updatedAt": "2023-11-14T22:13:20.000Z"
+    },
+    {
+     "thread": "e5",
+     "title": "x"
+    }
+   ],
+   "expect_calls": [
+    {
+     "method": "thread/list",
+     "params": {
+      "cwd": [
+       "/work/proj"
+      ],
+      "limit": 50,
+      "sortKey": "updated_at",
+      "useStateDbOnly": true,
+      "sourceKinds": [
+       "cli",
+       "vscode",
+       "exec",
+       "appServer"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "name": "list_threads_key",
+   "mode": "list",
+   "list": {
+    "threads": [
+     {
+      "id": "x1",
+      "name": "N"
+     }
+    ]
+   },
+   "expected": [
+    {
+     "thread": "x1",
+     "title": "N"
+    }
+   ]
+  },
+  {
+   "name": "list_data_not_array",
+   "mode": "list",
+   "list": {
+    "data": {},
+    "threads": [
+     {
+      "id": "y",
+      "name": "Y"
+     }
+    ]
+   },
+   "expected": [
+    {
+     "thread": "y",
+     "title": "Y"
+    }
+   ]
+  },
+  {
+   "name": "list_data_wins",
+   "mode": "list",
+   "list": {
+    "data": [
+     {
+      "id": "d",
+      "name": "D"
+     }
+    ],
+    "threads": [
+     {
+      "id": "t",
+      "name": "T"
+     }
+    ]
+   },
+   "expected": [
+    {
+     "thread": "d",
+     "title": "D"
+    }
+   ]
+  },
+  {
+   "name": "list_empty",
+   "mode": "list",
+   "list": {},
+   "expected": []
+  },
+  {
+   "name": "list_result_missing",
+   "mode": "list",
+   "list_actions": [
+    {
+     "raw": "{\"id\":2}"
+    }
+   ],
+   "expected": []
+  },
+  {
+   "name": "list_result_null",
+   "mode": "list",
+   "list": null,
+   "expected": []
+  },
+  {
+   "name": "list_result_scalar",
+   "mode": "list",
+   "list": 5,
+   "expected": []
+  },
+  {
+   "name": "list_50_raw_then_filter",
+   "mode": "list",
+   "list": {
+    "data": {
+     "$concat": [
+      {
+       "$list": {
+        "id": "../b{i}"
+       },
+       "n": 10
+      },
+      {
+       "$list": {
+        "id": "u{i}"
+       },
+       "n": 50
+      }
+     ]
+    }
+   },
+   "expected": {
+    "$list": {
+     "thread": "u{i}",
+     "title": ""
+    },
+    "n": 40
+   }
+  },
+  {
+   "name": "list_over_50",
+   "mode": "list",
+   "list": {
+    "data": {
+     "$list": {
+      "id": "t{i}",
+      "name": "n{i}"
+     },
+     "n": 60
+    }
+   },
+   "expected": {
+    "$list": {
+     "thread": "t{i}",
+     "title": "n{i}"
+    },
+    "n": 50
+   }
+  },
+  {
+   "name": "list_title_cut",
+   "mode": "list",
+   "list": {
+    "data": [
+     {
+      "id": "x1",
+      "name": {
+       "$str": "x",
+       "n": 300
+      }
+     }
+    ]
+   },
+   "expected": [
+    {
+     "thread": "x1",
+     "title": {
+      "$str": "x",
+      "n": 120
+     }
+    }
+   ]
+  },
+  {
+   "name": "list_title_unicode",
+   "mode": "list",
+   "list": {
+    "data": [
+     {
+      "id": "x1",
+      "name": " 안녕 하세요　 世界\n "
+     }
+    ]
+   },
+   "expected": [
+    {
+     "thread": "x1",
+     "title": "안녕 하세요 世界"
+    }
+   ]
+  },
+  {
+   "name": "list_updated_forms",
+   "mode": "list",
+   "list": {
+    "data": [
+     {
+      "id": "s1",
+      "updatedAt": 1
+     },
+     {
+      "id": "s2",
+      "updatedAt": 100000000000
+     },
+     {
+      "id": "s3",
+      "updatedAt": "garbage"
+     },
+     {
+      "id": "s4",
+      "updatedAt": null
+     },
+     {
+      "id": "s5",
+      "updatedAt": true
+     },
+     {
+      "id": "s6",
+      "updatedAt": -1
+     },
+     {
+      "id": "s7",
+      "updatedAt": "  0042  "
+     },
+     {
+      "id": "s8",
+      "updatedAt": ""
+     },
+     {
+      "id": "s9",
+      "updatedAt": {}
+     },
+     {
+      "id": "s10",
+      "updatedAt": [
+       1
+      ]
+     }
+    ]
+   },
+   "expected": [
+    {
+     "thread": "s1",
+     "title": "",
+     "updatedAt": "1970-01-01T00:00:01.000Z"
+    },
+    {
+     "thread": "s2",
+     "title": "",
+     "updatedAt": "1973-03-03T09:46:40.000Z"
+    },
+    {
+     "thread": "s3",
+     "title": ""
+    },
+    {
+     "thread": "s4",
+     "title": ""
+    },
+    {
+     "thread": "s5",
+     "title": ""
+    },
+    {
+     "thread": "s6",
+     "title": "",
+     "updatedAt": "1969-12-31T23:59:59.000Z"
+    },
+    {
+     "thread": "s7",
+     "title": "",
+     "updatedAt": "1970-01-01T00:00:42.000Z"
+    },
+    {
+     "thread": "s8",
+     "title": ""
+    },
+    {
+     "thread": "s9",
+     "title": ""
+    },
+    {
+     "thread": "s10",
+     "title": ""
+    }
+   ]
+  },
+  {
+   "name": "list_origin",
+   "mode": "list",
+   "list": {
+    "data": [
+     {
+      "id": "o1",
+      "originator": "lair"
+     },
+     {
+      "id": "o2",
+      "originator": "lairx"
+     },
+     {
+      "id": "o3",
+      "originator": "LAIR"
+     },
+     {
+      "id": "o4",
+      "originator": "xlair"
+     },
+     {
+      "id": "o5",
+      "originator": 5
+     },
+     {
+      "id": "o6",
+      "originator": null
+     },
+     {
+      "id": "o7",
+      "originator": ""
+     },
+     {
+      "id": "o8",
+      "originator": "la"
+     }
+    ]
+   },
+   "expected": [
+    {
+     "thread": "o1",
+     "title": "",
+     "origin": "lair"
+    },
+    {
+     "thread": "o2",
+     "title": "",
+     "origin": "lair"
+    },
+    {
+     "thread": "o3",
+     "title": "",
+     "origin": "other"
+    },
+    {
+     "thread": "o4",
+     "title": "",
+     "origin": "other"
+    },
+    {
+     "thread": "o5",
+     "title": ""
+    },
+    {
+     "thread": "o6",
+     "title": ""
+    },
+    {
+     "thread": "o7",
+     "title": "",
+     "origin": "other"
+    },
+    {
+     "thread": "o8",
+     "title": "",
+     "origin": "other"
+    }
+   ]
+  },
+  {
+   "name": "list_utf8",
+   "mode": "list",
+   "list_actions": [
+    {
+     "utf8": true,
+     "result": {
+      "data": [
+       {
+        "id": "u1",
+        "name": "이름 😀",
+        "path": "/데이터/x.jsonl"
+       }
+      ]
+     }
+    }
+   ],
+   "expected": [
+    {
+     "thread": "u1",
+     "title": "이름 😀",
+     "path": "/데이터/x.jsonl"
+    }
+   ]
+  },
+  {
+   "name": "list_folder_escape",
+   "mode": "list",
+   "folder": "/tmp/a \"b\" \\cé",
+   "list": {
+    "data": []
+   },
+   "expected": [],
+   "expect_calls": [
+    {
+     "method": "thread/list",
+     "params": {
+      "cwd": [
+       "/tmp/a \"b\" \\cé"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "name": "list_error",
+   "mode": "list",
+   "list_actions": [
+    {
+     "error": {
+      "code": -1,
+      "message": "no"
+     }
+    }
+   ],
+   "expected": {
+    "error": "codex-unsupported"
+   }
+  },
+  {
+   "name": "list_error_message_only",
+   "mode": "list",
+   "list_actions": [
+    {
+     "error": {
+      "message": "boom"
+     }
+    }
+   ],
+   "expected": {
+    "error": "codex-unsupported"
+   }
+  },
+  {
+   "name": "list_init_error",
+   "mode": "list",
+   "init": [
+    {
+     "error": {
+      "code": -1,
+      "message": "denied"
+     }
+    }
+   ],
+   "expected": {
+    "error": "read-failed"
+   }
+  },
+  {
+   "name": "list_init_stall",
+   "mode": "list",
+   "init": [
+    {
+     "stall": true
+    }
+   ],
+   "timeout": 400,
+   "expected": {
+    "error": "timeout"
+   }
+  },
+  {
+   "name": "list_init_exit",
+   "mode": "list",
+   "init": [
+    {
+     "exit": 2,
+     "stderr": "boom\n"
+    }
+   ],
+   "expected": {
+    "error": "read-failed"
+   }
+  },
+  {
+   "name": "list_init_banner",
+   "mode": "list",
+   "init": [
+    {
+     "pre": [
+      "banner line",
+      "{\"method\":\"hello\"}"
+     ],
+     "result": {
+      "userAgent": "x"
+     }
+    }
+   ],
+   "list": {
+    "data": [
+     {
+      "id": "a",
+      "name": "A"
+     }
+    ]
+   },
+   "expected": [
+    {
+     "thread": "a",
+     "title": "A"
+    }
+   ]
+  },
+  {
+   "name": "list_missing_binary",
+   "mode": "list",
+   "binary": "/nonexistent/codex-q",
+   "expect_no_spawn": true,
+   "expected": {
+    "error": "engine-missing"
+   }
+  },
+  {
+   "name": "list_exit_early",
+   "mode": "list",
+   "list_actions": [
+    {
+     "exit": 3
+    }
+   ],
+   "expected": {
+    "error": "read-failed"
+   }
+  },
+  {
+   "name": "list_stall",
+   "mode": "list",
+   "list_actions": [
+    {
+     "stall": true
+    }
+   ],
+   "timeout": 400,
+   "expected": {
+    "error": "timeout"
+   }
+  },
+  {
+   "name": "list_oversize",
+   "mode": "list",
+   "list_actions": [
+    {
+     "oversize": 9000000
+    }
+   ],
+   "timeout": 20000,
+   "expected": {
+    "error": "read-failed"
+   }
+  },
+  {
+   "name": "list_server_requests",
+   "mode": "list",
+   "list_actions": [
+    {
+     "pre": [
+      {
+       "id": 77,
+       "method": "item/tool/call",
+       "params": {}
+      },
+      {
+       "id": "abc",
+       "method": "x/y"
+      },
+      {
+       "id": null,
+       "method": "n"
+      },
+      {
+       "method": "thread/started",
+       "params": {}
+      }
+     ],
+     "result": {
+      "data": [
+       {
+        "id": "a",
+        "name": "A"
+       }
+      ]
+     },
+     "await": 3
+    }
+   ],
+   "expected": [
+    {
+     "thread": "a",
+     "title": "A"
+    }
+   ],
+   "expect_recv": [
+    {
+     "id": 77,
+     "error": {
+      "code": -32601,
+      "message": "not handled"
+     }
+    },
+    {
+     "id": "abc",
+     "error": {
+      "code": -32601,
+      "message": "not handled"
+     }
+    },
+    {
+     "id": null,
+     "error": {
+      "code": -32601,
+      "message": "not handled"
+     }
+    }
+   ]
+  },
+  {
+   "name": "list_noise_ignored",
+   "mode": "list",
+   "list_actions": [
+    {
+     "pre": [
+      "not json",
+      "[1,2]",
+      "",
+      "   ",
+      "{\"id\":1,\"result\":{\"data\":[{\"id\":\"old\"}]}}",
+      {
+       "id": "2",
+       "result": {
+        "data": [
+         {
+          "id": "strid"
+         }
+        ]
+       }
+      },
+      {
+       "id": 999,
+       "result": {}
+      },
+      {
+       "method": "thread/started",
+       "params": {}
+      },
+      "{\"x\":1}"
+     ],
+     "result": {
+      "data": [
+       {
+        "id": "ok",
+        "name": "OK"
+       }
+      ]
+     }
+    }
+   ],
+   "expected": [
+    {
+     "thread": "ok",
+     "title": "OK"
+    }
+   ]
+  },
+  {
+   "name": "list_stderr_flood",
+   "mode": "list",
+   "list_actions": [
+    {
+     "stderr": {
+      "$str": "e",
+      "n": 2000000
+     },
+     "result": {
+      "data": [
+       {
+        "id": "a",
+        "name": "A"
+       }
+      ]
+     }
+    }
+   ],
+   "expected": [
+    {
+     "thread": "a",
+     "title": "A"
+    }
+   ]
+  },
+  {
+   "name": "read_invalid_empty",
+   "mode": "read",
+   "thread": "",
+   "expect_no_spawn": true,
+   "expected": {
+    "error": "not-found"
+   }
+  },
+  {
+   "name": "read_invalid_space",
+   "mode": "read",
+   "thread": "a b",
+   "expect_no_spawn": true,
+   "expected": {
+    "error": "not-found"
+   }
+  },
+  {
+   "name": "read_invalid_dots",
+   "mode": "read",
+   "thread": "../x",
+   "expect_no_spawn": true,
+   "expected": {
+    "error": "not-found"
+   }
+  },
+  {
+   "name": "read_invalid_long",
+   "mode": "read",
+   "thread": {
+    "$str": "a",
+    "n": 129
+   },
+   "expect_no_spawn": true,
+   "expected": {
+    "error": "not-found"
+   }
+  },
+  {
+   "name": "read_valid_long",
+   "mode": "read",
+   "thread": {
+    "$str": "a",
+    "n": 128
+   },
+   "pages": [
+    {
+     "data": []
+    }
+   ],
+   "expected": {
+    "turns": [],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_basic",
+   "mode": "read",
+   "meta": {
+    "id": "t-1",
+    "cwd": "/work/proj",
+    "name": "My  thread",
+    "model": "gpt-5"
+   },
+   "pages": [
+    {
+     "data": [
+      {
+       "startedAt": 1700000000,
+       "completedAt": 1700000005,
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "hi"
+        },
+        {
+         "type": "agentMessage",
+         "text": "yo"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "hi",
+      "reply": "yo",
+      "tools": 0,
+      "createdAt": "2023-11-14T22:13:20.000Z",
+      "completedAt": "2023-11-14T22:13:25.000Z"
+     }
+    ],
+    "omittedBefore": false,
+    "model": "gpt-5",
+    "title": "My thread"
+   },
+   "expect_calls": [
+    {
+     "method": "thread/read",
+     "params": {
+      "threadId": "t-1",
+      "includeTurns": false
+     }
+    },
+    {
+     "method": "thread/turns/list",
+     "params": {
+      "threadId": "t-1",
+      "limit": 20,
+      "sortDirection": "desc",
+      "itemsView": "summary"
+     }
+    }
+   ]
+  },
+  {
+   "name": "read_meta_error",
+   "mode": "read",
+   "read_actions": [
+    {
+     "error": {
+      "code": -32600,
+      "message": "nope"
+     }
+    }
+   ],
+   "expected": {
+    "error": "not-found"
+   }
+  },
+  {
+   "name": "read_meta_error_empty",
+   "mode": "read",
+   "read_actions": [
+    {
+     "error": {}
+    }
+   ],
+   "expected": {
+    "error": "not-found"
+   }
+  },
+  {
+   "name": "read_meta_error_null",
+   "mode": "read",
+   "read_actions": [
+    {
+     "error": null
+    }
+   ],
+   "expected": {
+    "error": "not-found"
+   }
+  },
+  {
+   "name": "read_cwd_mismatch",
+   "mode": "read",
+   "meta": {
+    "id": "t-1",
+    "cwd": "/other"
+   },
+   "expected": {
+    "error": "not-found"
+   }
+  },
+  {
+   "name": "read_cwd_case",
+   "mode": "read",
+   "meta": {
+    "id": "t-1",
+    "cwd": "/Work/Proj"
+   },
+   "expected": {
+    "error": "not-found"
+   }
+  },
+  {
+   "name": "read_cwd_missing",
+   "mode": "read",
+   "meta": {
+    "id": "t-1"
+   },
+   "expected": {
+    "error": "not-found"
+   }
+  },
+  {
+   "name": "read_cwd_number",
+   "mode": "read",
+   "meta": {
+    "id": "t-1",
+    "cwd": 5
+   },
+   "expected": {
+    "error": "not-found"
+   }
+  },
+  {
+   "name": "read_cwd_lone_surrogate",
+   "mode": "read",
+   "folder": "/work/proj�",
+   "meta": {
+    "id": "t-1",
+    "cwd": "/work/proj\ud800"
+   },
+   "expected": {
+    "error": "not-found"
+   }
+  },
+  {
+   "name": "read_cwd_lone_low_surrogate",
+   "mode": "read",
+   "folder": "/work/�proj",
+   "meta": {
+    "id": "t-1",
+    "cwd": "/work/\udc00proj"
+   },
+   "expected": {
+    "error": "not-found"
+   }
+  },
+  {
+   "name": "read_cwd_surrogate_pair",
+   "mode": "read",
+   "folder": "/work/proj😀",
+   "meta": {
+    "id": "t-1",
+    "cwd": "/work/proj😀"
+   },
+   "pages": [
+    {
+     "data": []
+    }
+   ],
+   "expected": {
+    "turns": [],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_thread_scalar",
+   "mode": "read",
+   "read_actions": [
+    {
+     "result": {
+      "thread": 5
+     }
+    }
+   ],
+   "expected": {
+    "error": "not-found"
+   }
+  },
+  {
+   "name": "read_result_missing",
+   "mode": "read",
+   "read_actions": [
+    {
+     "raw": "{\"id\":2}"
+    }
+   ],
+   "expected": {
+    "error": "not-found"
+   }
+  },
+  {
+   "name": "read_slash_cwd",
+   "mode": "read",
+   "meta": {
+    "id": "t-1",
+    "cwd": "/work/proj///"
+   },
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_slash_folder",
+   "mode": "read",
+   "folder": "/work/proj/",
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_all_slash_mismatch",
+   "mode": "read",
+   "folder": "/",
+   "meta": {
+    "id": "t-1",
+    "cwd": "//"
+   },
+   "expected": {
+    "error": "not-found"
+   }
+  },
+  {
+   "name": "read_all_slash_equal",
+   "mode": "read",
+   "folder": "//",
+   "meta": {
+    "id": "t-1",
+    "cwd": "//"
+   },
+   "pages": [
+    {
+     "data": []
+    }
+   ],
+   "expected": {
+    "turns": [],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_paging",
+   "mode": "read",
+   "pages": [
+    {
+     "data": [
+      {
+       "startedAt": 1700000030,
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "p3"
+        },
+        {
+         "type": "agentMessage",
+         "text": "r3"
+        }
+       ]
+      },
+      {
+       "startedAt": 1700000020,
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "p2"
+        },
+        {
+         "type": "agentMessage",
+         "text": "r2"
+        }
+       ]
+      }
+     ],
+     "nextCursor": "c1"
+    },
+    {
+     "data": [
+      {
+       "startedAt": 1700000010,
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "p1"
+        },
+        {
+         "type": "agentMessage",
+         "text": "r1"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "p1",
+      "reply": "r1",
+      "tools": 0,
+      "createdAt": "2023-11-14T22:13:30.000Z"
+     },
+     {
+      "prompt": "p2",
+      "reply": "r2",
+      "tools": 0,
+      "createdAt": "2023-11-14T22:13:40.000Z"
+     },
+     {
+      "prompt": "p3",
+      "reply": "r3",
+      "tools": 0,
+      "createdAt": "2023-11-14T22:13:50.000Z"
+     }
+    ],
+    "omittedBefore": false
+   },
+   "expect_calls": [
+    {
+     "method": "thread/read"
+    },
+    {
+     "method": "thread/turns/list"
+    },
+    {
+     "method": "thread/turns/list",
+     "params": {
+      "cursor": "c1"
+     }
+    }
+   ]
+  },
+  {
+   "name": "read_cursor_escapes",
+   "mode": "read",
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        }
+       ]
+      }
+     ],
+     "nextCursor": "c\"\\é x"
+    },
+    {
+     "data": []
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false
+   },
+   "expect_calls": [
+    {
+     "method": "thread/read"
+    },
+    {
+     "method": "thread/turns/list"
+    },
+    {
+     "method": "thread/turns/list",
+     "params": {
+      "cursor": "c\"\\é x"
+     }
+    }
+   ]
+  },
+  {
+   "name": "read_cursor_pair",
+   "mode": "read",
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        }
+       ]
+      }
+     ],
+     "nextCursor": "😀z"
+    },
+    {
+     "data": []
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false
+   },
+   "expect_calls": [
+    {
+     "method": "thread/read"
+    },
+    {
+     "method": "thread/turns/list"
+    },
+    {
+     "method": "thread/turns/list",
+     "params": {
+      "cursor": "😀z"
+     }
+    }
+   ]
+  },
+  {
+   "name": "read_cursor_not_string",
+   "mode": "read",
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        }
+       ]
+      }
+     ],
+     "nextCursor": 5
+    },
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "WRONG"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false
+   },
+   "expect_count": {
+    "thread/turns/list": 1
+   }
+  },
+  {
+   "name": "read_cursor_empty",
+   "mode": "read",
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        }
+       ]
+      }
+     ],
+     "nextCursor": ""
+    },
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "WRONG"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false
+   },
+   "expect_count": {
+    "thread/turns/list": 1
+   }
+  },
+  {
+   "name": "read_empty_data_cursor",
+   "mode": "read",
+   "pages": [
+    {
+     "data": [],
+     "nextCursor": "c"
+    },
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "WRONG"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [],
+    "omittedBefore": false
+   },
+   "expect_count": {
+    "thread/turns/list": 1
+   }
+  },
+  {
+   "name": "read_data_not_array",
+   "mode": "read",
+   "pages": [
+    {
+     "data": {}
+    }
+   ],
+   "expected": {
+    "turns": [],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_page_scalar",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "result": 5
+    }
+   ],
+   "expected": {
+    "turns": [],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_pages_40",
+   "mode": "read",
+   "pages_actions": {
+    "$list": {
+     "result": {
+      "data": [
+       {
+        "items": [
+         {
+          "type": "userMessage",
+          "text": "p{i}"
+         },
+         {
+          "type": "agentMessage",
+          "text": "r{i}"
+         }
+        ]
+       }
+      ],
+      "nextCursor": "c{i}"
+     }
+    },
+    "n": 45
+   },
+   "expected": {
+    "turns": {
+     "$list": {
+      "prompt": "p{i}",
+      "reply": "r{i}",
+      "tools": 0
+     },
+     "n": 40,
+     "desc": true
+    },
+    "omittedBefore": true
+   },
+   "expect_count": {
+    "thread/turns/list": 40
+   }
+  },
+  {
+   "name": "read_pages_40_end",
+   "mode": "read",
+   "pages_actions": {
+    "$concat": [
+     {
+      "$list": {
+       "result": {
+        "data": [
+         {
+          "items": [
+           {
+            "type": "userMessage",
+            "text": "p{i}"
+           },
+           {
+            "type": "agentMessage",
+            "text": "r{i}"
+           }
+          ]
+         }
+        ],
+        "nextCursor": "c{i}"
+       }
+      },
+      "n": 39
+     },
+     {
+      "$list": {
+       "result": {
+        "data": [
+         {
+          "items": [
+           {
+            "type": "userMessage",
+            "text": "p{i}"
+           },
+           {
+            "type": "agentMessage",
+            "text": "r{i}"
+           }
+          ]
+         }
+        ]
+       }
+      },
+      "n": 1,
+      "base": 39
+     }
+    ]
+   },
+   "expected": {
+    "turns": {
+     "$list": {
+      "prompt": "p{i}",
+      "reply": "r{i}",
+      "tools": 0
+     },
+     "n": 40,
+     "desc": true
+    },
+    "omittedBefore": false
+   },
+   "expect_count": {
+    "thread/turns/list": 40
+   }
+  },
+  {
+   "name": "read_unsupported",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "error": {
+      "code": -32601,
+      "message": "Method not found"
+     }
+    }
+   ],
+   "expected": {
+    "error": "codex-unsupported"
+   }
+  },
+  {
+   "name": "read_unsupported_first",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "error": {
+      "code": -32601,
+      "message": "thread not found"
+     }
+    }
+   ],
+   "expected": {
+    "error": "codex-unsupported"
+   }
+  },
+  {
+   "name": "read_unsupported_decimal",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "raw": "{\"id\":3,\"error\":{\"code\":-32601.0,\"message\":\"x\"}}"
+    }
+   ],
+   "expected": {
+    "error": "codex-unsupported"
+   }
+  },
+  {
+   "name": "read_unsupported_exponent",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "raw": "{\"id\":3,\"error\":{\"code\":-3.2601e4,\"message\":\"x\"}}"
+    }
+   ],
+   "expected": {
+    "error": "codex-unsupported"
+   }
+  },
+  {
+   "name": "read_unsupported_scaled",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "raw": "{\"id\":3,\"error\":{\"code\":-326010E-1,\"message\":\"x\"}}"
+    }
+   ],
+   "expected": {
+    "error": "codex-unsupported"
+   }
+  },
+  {
+   "name": "read_code_near_miss",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "raw": "{\"id\":3,\"error\":{\"code\":-32601.5,\"message\":\"x\"}}"
+    }
+   ],
+   "expected": {
+    "error": "read-failed"
+   }
+  },
+  {
+   "name": "read_code_positive",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "raw": "{\"id\":3,\"error\":{\"code\":32601,\"message\":\"x\"}}"
+    }
+   ],
+   "expected": {
+    "error": "read-failed"
+   }
+  },
+  {
+   "name": "read_unsupported_rounds",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "raw": "{\"id\":3,\"error\":{\"code\":-32601.000000000001,\"message\":\"x\"}}"
+    }
+   ],
+   "expected": {
+    "error": "codex-unsupported"
+   }
+  },
+  {
+   "name": "read_unsupported_tie_high",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "raw": "{\"id\":3,\"error\":{\"code\":-32601.000000000001818989403545856475830078125,\"message\":\"x\"}}"
+    }
+   ],
+   "expected": {
+    "error": "codex-unsupported"
+   }
+  },
+  {
+   "name": "read_unsupported_tie_low",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "raw": "{\"id\":3,\"error\":{\"code\":-3260099999999999818101059645414352416992187.5e-38,\"message\":\"x\"}}"
+    }
+   ],
+   "expected": {
+    "error": "codex-unsupported"
+   }
+  },
+  {
+   "name": "read_code_past_tie",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "raw": "{\"id\":3,\"error\":{\"code\":-32601.0000000000018189894035458564758300781250001,\"message\":\"x\"}}"
+    }
+   ],
+   "expected": {
+    "error": "read-failed"
+   }
+  },
+  {
+   "name": "read_code_below_low",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "raw": "{\"id\":3,\"error\":{\"code\":-32600.99999999999818101059645414352416992187,\"message\":\"x\"}}"
+    }
+   ],
+   "expected": {
+    "error": "read-failed"
+   }
+  },
+  {
+   "name": "read_no_rollout",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "error": {
+      "code": -32000,
+      "message": "no rollout found for thread id"
+     }
+    }
+   ],
+   "expected": {
+    "error": "not-found"
+   }
+  },
+  {
+   "name": "read_nf_upper",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "error": {
+      "code": -1,
+      "message": "Thread NOT FOUND"
+     }
+    }
+   ],
+   "expected": {
+    "error": "not-found"
+   }
+  },
+  {
+   "name": "read_unknown_thread",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "error": {
+      "code": -1,
+      "message": "Unknown Thread xyz"
+     }
+    }
+   ],
+   "expected": {
+    "error": "not-found"
+   }
+  },
+  {
+   "name": "read_other_error",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "error": {
+      "code": -32603,
+      "message": "boom"
+     }
+    }
+   ],
+   "expected": {
+    "error": "read-failed"
+   }
+  },
+  {
+   "name": "read_error_no_message",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "error": {
+      "code": 5
+     }
+    }
+   ],
+   "expected": {
+    "error": "read-failed"
+   }
+  },
+  {
+   "name": "read_error_message_number",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "error": {
+      "message": 5
+     }
+    }
+   ],
+   "expected": {
+    "error": "read-failed"
+   }
+  },
+  {
+   "name": "read_error_cut_miss",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "error": {
+      "code": 1,
+      "message": {
+       "$cat": [
+        {
+         "$str": "x",
+         "n": 295
+        },
+        " not found"
+       ]
+      }
+     }
+    }
+   ],
+   "expected": {
+    "error": "read-failed"
+   }
+  },
+  {
+   "name": "read_error_cut_hit",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "error": {
+      "code": 1,
+      "message": {
+       "$cat": [
+        {
+         "$str": "x",
+         "n": 290
+        },
+        " not found"
+       ]
+      }
+     }
+    }
+   ],
+   "expected": {
+    "error": "not-found"
+   }
+  },
+  {
+   "name": "read_error_second_page",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "result": {
+      "data": [
+       {
+        "items": [
+         {
+          "type": "userMessage",
+          "text": "u"
+         }
+        ]
+       }
+      ],
+      "nextCursor": "c"
+     }
+    },
+    {
+     "error": {
+      "code": -1,
+      "message": "no rollout"
+     }
+    }
+   ],
+   "expected": {
+    "error": "not-found"
+   }
+  },
+  {
+   "name": "read_commentary",
+   "mode": "read",
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "q"
+        },
+        {
+         "type": "agentMessage",
+         "phase": "commentary",
+         "text": "thinking"
+        },
+        {
+         "type": "agentMessage",
+         "phase": "final_answer",
+         "text": "answer"
+        },
+        {
+         "type": "agentMessage",
+         "text": "second"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "q",
+      "reply": "answer\n\nsecond",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_content_parts",
+   "mode": "read",
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "content": [
+          {
+           "type": "input_text",
+           "text": "u1"
+          },
+          {
+           "type": "image"
+          },
+          {
+           "text": ""
+          },
+          {
+           "text": "u2"
+          },
+          5,
+          null
+         ]
+        },
+        {
+         "type": "userMessage",
+         "text": "A",
+         "content": [
+          {
+           "text": "ignored"
+          }
+         ]
+        },
+        {
+         "type": "userMessage",
+         "text": "   "
+        },
+        {
+         "type": "agentMessage",
+         "content": [
+          {
+           "text": "a1"
+          },
+          {
+           "text": "a2"
+          }
+         ]
+        },
+        {
+         "type": "agentMessage",
+         "text": ""
+        },
+        {
+         "type": "agentMessage",
+         "text": "  \n "
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u1\n\nu2\n\nA",
+      "reply": "a1\n\na2",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_tools",
+   "mode": "read",
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "go"
+        },
+        {
+         "type": "reasoning",
+         "text": "r"
+        },
+        {
+         "type": "reasoning"
+        },
+        {
+         "type": "plan",
+         "text": "- a\n- b"
+        },
+        {
+         "type": "commandExecution",
+         "command": "ls"
+        },
+        {
+         "type": "fileChange"
+        },
+        {
+         "type": "mcpToolCall"
+        },
+        {},
+        {
+         "type": 5
+        },
+        "str",
+        7,
+        null,
+        [
+         1
+        ],
+        {
+         "type": "agentMessage",
+         "text": "done"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "go",
+      "reply": "done",
+      "tools": 5
+     }
+    ],
+    "omittedBefore": false,
+    "lastPlan": {
+     "items": [
+      {
+       "text": "a"
+      },
+      {
+       "text": "b"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "read_plan_last_in_turn",
+   "mode": "read",
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "p"
+        },
+        {
+         "type": "plan",
+         "text": "- first"
+        },
+        {
+         "type": "plan",
+         "text": "   "
+        },
+        {
+         "type": "plan",
+         "text": "- second\n- third"
+        },
+        {
+         "type": "plan",
+         "text": 5
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "p",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false,
+    "lastPlan": {
+     "items": [
+      {
+       "text": "second"
+      },
+      {
+       "text": "third"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "read_plan_newest_wins",
+   "mode": "read",
+   "pages": [
+    {
+     "data": [
+      {
+       "startedAt": 1700000100,
+       "completedAt": 1700000110,
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "new"
+        },
+        {
+         "type": "plan",
+         "text": "- n1"
+        },
+        {
+         "type": "agentMessage",
+         "text": "r"
+        }
+       ]
+      },
+      {
+       "startedAt": 1700000000,
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "old"
+        },
+        {
+         "type": "plan",
+         "text": "- o1"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "old",
+      "reply": "",
+      "tools": 0,
+      "createdAt": "2023-11-14T22:13:20.000Z"
+     },
+     {
+      "prompt": "new",
+      "reply": "r",
+      "tools": 0,
+      "createdAt": "2023-11-14T22:15:00.000Z",
+      "completedAt": "2023-11-14T22:15:10.000Z"
+     }
+    ],
+    "omittedBefore": false,
+    "lastPlan": {
+     "at": "2023-11-14T22:15:10.000Z",
+     "items": [
+      {
+       "text": "n1"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "read_plan_second_page",
+   "mode": "read",
+   "pages": [
+    {
+     "data": [
+      {
+       "startedAt": 1700000200,
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "b"
+        }
+       ]
+      }
+     ],
+     "nextCursor": "c"
+    },
+    {
+     "data": [
+      {
+       "startedAt": 1700000100,
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "a"
+        },
+        {
+         "type": "plan",
+         "text": "1. x"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "a",
+      "reply": "",
+      "tools": 0,
+      "createdAt": "2023-11-14T22:15:00.000Z"
+     },
+     {
+      "prompt": "b",
+      "reply": "",
+      "tools": 0,
+      "createdAt": "2023-11-14T22:16:40.000Z"
+     }
+    ],
+    "omittedBefore": false,
+    "lastPlan": {
+     "at": "2023-11-14T22:15:00.000Z",
+     "items": [
+      {
+       "text": "x"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "read_plan_format",
+   "mode": "read",
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "p"
+        },
+        {
+         "type": "plan",
+         "text": "Intro\r\n- step one\r\n  * step two  \n3. step three\n4.nospace\n-nospace\n\n   \n- \n10.  ten"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "p",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false,
+    "lastPlan": {
+     "items": [
+      {
+       "text": "Intro"
+      },
+      {
+       "text": "step one"
+      },
+      {
+       "text": "step two"
+      },
+      {
+       "text": "step three"
+      },
+      {
+       "text": "4.nospace"
+      },
+      {
+       "text": "-nospace"
+      },
+      {
+       "text": "-"
+      },
+      {
+       "text": "ten"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "read_plan_limits",
+   "mode": "read",
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "p"
+        },
+        {
+         "type": "plan",
+         "text": {
+          "$join": {
+           "$concat": [
+            [
+             {
+              "$str": "x",
+              "n": 250
+             }
+            ],
+            {
+             "$list": "- i{i}",
+             "n": 34
+            }
+           ]
+          },
+          "sep": "\n"
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "p",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false,
+    "lastPlan": {
+     "items": {
+      "$concat": [
+       [
+        {
+         "text": {
+          "$str": "x",
+          "n": 200
+         }
+        }
+       ],
+       {
+        "$list": {
+         "text": "i{i}"
+        },
+        "n": 29
+       }
+      ]
+     },
+     "more": 5
+    }
+   }
+  },
+  {
+   "name": "read_empty_turns",
+   "mode": "read",
+   "pages": [
+    {
+     "data": [
+      {
+       "startedAt": 1700000040,
+       "items": [
+        {
+         "type": "agentMessage",
+         "text": "orphan"
+        },
+        {
+         "type": "commandExecution"
+        }
+       ]
+      },
+      {
+       "startedAt": 1700000030,
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "only"
+        }
+       ]
+      },
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "   "
+        },
+        {
+         "type": "reasoning"
+        },
+        {
+         "type": "commandExecution"
+        }
+       ]
+      },
+      {
+       "items": []
+      },
+      {
+       "items": [
+        {
+         "type": "agentMessage",
+         "phase": "commentary",
+         "text": "c"
+        }
+       ]
+      },
+      {},
+      5,
+      null,
+      "x",
+      [
+       1
+      ]
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "only",
+      "reply": "",
+      "tools": 0,
+      "createdAt": "2023-11-14T22:13:50.000Z"
+     },
+     {
+      "prompt": "",
+      "reply": "orphan",
+      "tools": 1,
+      "createdAt": "2023-11-14T22:14:00.000Z"
+     }
+    ],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_user_multi",
+   "mode": "read",
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "one"
+        },
+        {
+         "type": "userMessage",
+         "text": "two"
+        },
+        {
+         "type": "agentMessage",
+         "text": "r"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "one\n\ntwo",
+      "reply": "r",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_budget_turns",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "result": {
+      "data": {
+       "$list": {
+        "items": [
+         {
+          "type": "userMessage",
+          "text": "p{i}"
+         },
+         {
+          "type": "agentMessage",
+          "text": "r{i}"
+         }
+        ]
+       },
+       "n": 120
+      },
+      "nextCursor": "c1"
+     }
+    },
+    {
+     "result": {
+      "data": {
+       "$list": {
+        "items": [
+         {
+          "type": "userMessage",
+          "text": "p{i}"
+         },
+         {
+          "type": "agentMessage",
+          "text": "r{i}"
+         }
+        ]
+       },
+       "n": 120,
+       "base": 120
+      }
+     }
+    }
+   ],
+   "expected": {
+    "turns": {
+     "$list": {
+      "prompt": "p{i}",
+      "reply": "r{i}",
+      "tools": 0
+     },
+     "n": 200,
+     "desc": true
+    },
+    "omittedBefore": true
+   },
+   "expect_count": {
+    "thread/turns/list": 2
+   }
+  },
+  {
+   "name": "read_budget_exact_200",
+   "mode": "read",
+   "pages": [
+    {
+     "data": {
+      "$list": {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "p{i}"
+        },
+        {
+         "type": "agentMessage",
+         "text": "r{i}"
+        }
+       ]
+      },
+      "n": 200
+     }
+    }
+   ],
+   "expected": {
+    "turns": {
+     "$list": {
+      "prompt": "p{i}",
+      "reply": "r{i}",
+      "tools": 0
+     },
+     "n": 200,
+     "desc": true
+    },
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_budget_bytes",
+   "mode": "read",
+   "pages": [
+    {
+     "data": {
+      "$list": {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": {
+          "$str": "x",
+          "n": 500000
+         }
+        }
+       ]
+      },
+      "n": 5
+     }
+    }
+   ],
+   "expected": {
+    "turns": {
+     "$list": {
+      "prompt": {
+       "$str": "x",
+       "n": 32768
+      },
+      "reply": "",
+      "tools": 0,
+      "clipped": true
+     },
+     "n": 4
+    },
+    "omittedBefore": true
+   }
+  },
+  {
+   "name": "read_budget_exact_bytes",
+   "mode": "read",
+   "pages": [
+    {
+     "data": {
+      "$list": {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": {
+          "$str": "x",
+          "n": 524288
+         }
+        }
+       ]
+      },
+      "n": 4
+     }
+    }
+   ],
+   "expected": {
+    "turns": {
+     "$list": {
+      "prompt": {
+       "$str": "x",
+       "n": 32768
+      },
+      "reply": "",
+      "tools": 0,
+      "clipped": true
+     },
+     "n": 4
+    },
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_budget_bytes_plus1",
+   "mode": "read",
+   "pages": [
+    {
+     "data": {
+      "$concat": [
+       {
+        "$list": {
+         "items": [
+          {
+           "type": "userMessage",
+           "text": {
+            "$str": "x",
+            "n": 524288
+           }
+          }
+         ]
+        },
+        "n": 4
+       },
+       [
+        {
+         "items": [
+          {
+           "type": "userMessage",
+           "text": "z"
+          }
+         ]
+        }
+       ]
+      ]
+     }
+    }
+   ],
+   "expected": {
+    "turns": {
+     "$list": {
+      "prompt": {
+       "$str": "x",
+       "n": 32768
+      },
+      "reply": "",
+      "tools": 0,
+      "clipped": true
+     },
+     "n": 4
+    },
+    "omittedBefore": true
+   }
+  },
+  {
+   "name": "read_budget_reply_cap",
+   "mode": "read",
+   "pages": [
+    {
+     "data": {
+      "$list": {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "p{i}"
+        },
+        {
+         "type": "agentMessage",
+         "text": {
+          "$str": "y",
+          "n": 100000
+         }
+        }
+       ]
+      },
+      "n": 40
+     }
+    }
+   ],
+   "expected": {
+    "turns": {
+     "$list": {
+      "prompt": "p{i}",
+      "reply": {
+       "$str": "y",
+       "n": 32768
+      },
+      "tools": 0,
+      "clipped": true
+     },
+     "n": 40,
+     "desc": true
+    },
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_budget_reply_cap_boundary",
+   "mode": "read",
+   "pages": [
+    {
+     "data": {
+      "$concat": [
+       {
+        "$list": {
+         "items": [
+          {
+           "type": "agentMessage",
+           "text": {
+            "$str": "y",
+            "n": 40000
+           }
+          }
+         ]
+        },
+        "n": 64
+       },
+       [
+        {
+         "items": [
+          {
+           "type": "agentMessage",
+           "text": "z"
+          }
+         ]
+        }
+       ]
+      ]
+     }
+    }
+   ],
+   "expected": {
+    "turns": {
+     "$list": {
+      "prompt": "",
+      "reply": {
+       "$str": "y",
+       "n": 32768
+      },
+      "tools": 0,
+      "clipped": true
+     },
+     "n": 64
+    },
+    "omittedBefore": true
+   }
+  },
+  {
+   "name": "read_budget_reply_cap_scalar_clip",
+   "mode": "read",
+   "pages": [
+    {
+     "data": {
+      "$concat": [
+       {
+        "$list": {
+         "items": [
+          {
+           "type": "agentMessage",
+           "text": {
+            "$str": "あ",
+            "n": 13334
+           }
+          }
+         ]
+        },
+        "n": 64
+       },
+       [
+        {
+         "items": [
+          {
+           "type": "agentMessage",
+           "text": "z"
+          }
+         ]
+        }
+       ]
+      ]
+     }
+    }
+   ],
+   "expected": {
+    "turns": {
+     "$list": {
+      "prompt": "",
+      "reply": {
+       "$str": "あ",
+       "n": 10922
+      },
+      "tools": 0,
+      "clipped": true
+     },
+     "n": 64
+    },
+    "omittedBefore": true
+   }
+  },
+  {
+   "name": "read_reply_cap",
+   "mode": "read",
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        },
+        {
+         "type": "agentMessage",
+         "text": {
+          "$str": "y",
+          "n": 100000
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": {
+       "$str": "y",
+       "n": 32768
+      },
+      "tools": 0,
+      "clipped": true
+     }
+    ],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_reply_fold",
+   "mode": "read",
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        },
+        {
+         "type": "agentMessage",
+         "text": {
+          "$str": "a",
+          "n": 20000
+         }
+        },
+        {
+         "type": "agentMessage",
+         "text": {
+          "$str": "b",
+          "n": 20000
+         }
+        },
+        {
+         "type": "agentMessage",
+         "text": "zzz"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": {
+       "$cat": [
+        {
+         "$str": "a",
+         "n": 20000
+        },
+        "\n\n",
+        {
+         "$str": "b",
+         "n": 12766
+        }
+       ]
+      },
+      "tools": 0,
+      "clipped": true
+     }
+    ],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_reply_exact",
+   "mode": "read",
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        },
+        {
+         "type": "agentMessage",
+         "text": {
+          "$str": "a",
+          "n": 16383
+         }
+        },
+        {
+         "type": "agentMessage",
+         "text": {
+          "$str": "b",
+          "n": 16383
+         }
+        },
+        {
+         "type": "agentMessage",
+         "text": "c"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": {
+       "$cat": [
+        {
+         "$str": "a",
+         "n": 16383
+        },
+        "\n\n",
+        {
+         "$str": "b",
+         "n": 16383
+        }
+       ]
+      },
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_reply_multibyte",
+   "mode": "read",
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        },
+        {
+         "type": "agentMessage",
+         "text": {
+          "$str": "é",
+          "n": 16383
+         }
+        },
+        {
+         "type": "agentMessage",
+         "text": "日"
+        },
+        {
+         "type": "agentMessage",
+         "text": "zzz"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": {
+       "$cat": [
+        {
+         "$str": "é",
+         "n": 16383
+        },
+        "\n\n"
+       ]
+      },
+      "tools": 0,
+      "clipped": true
+     }
+    ],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_reply_room_one",
+   "mode": "read",
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        },
+        {
+         "type": "agentMessage",
+         "text": {
+          "$str": "a",
+          "n": 32767
+         }
+        },
+        {
+         "type": "agentMessage",
+         "text": "bb"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": {
+       "$cat": [
+        {
+         "$str": "a",
+         "n": 32767
+        },
+        "\n"
+       ]
+      },
+      "tools": 0,
+      "clipped": true
+     }
+    ],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_prompt_clip",
+   "mode": "read",
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": {
+          "$str": "p",
+          "n": 40000
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": {
+       "$str": "p",
+       "n": 32768
+      },
+      "reply": "",
+      "tools": 0,
+      "clipped": true
+     }
+    ],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_prompt_multibyte_clip",
+   "mode": "read",
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": {
+          "$str": "日",
+          "n": 20000
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": {
+       "$str": "日",
+       "n": 10922
+      },
+      "reply": "",
+      "tools": 0,
+      "clipped": true
+     }
+    ],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_completed_no_reply",
+   "mode": "read",
+   "pages": [
+    {
+     "data": [
+      {
+       "startedAt": 1700000000,
+       "completedAt": 1700000050,
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "hi"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "hi",
+      "reply": "",
+      "tools": 0,
+      "createdAt": "2023-11-14T22:13:20.000Z"
+     }
+    ],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_timestamp_forms",
+   "mode": "read",
+   "pages": [
+    {
+     "data": [
+      {
+       "startedAt": "1700000000",
+       "completedAt": 1700000005123,
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "hi"
+        },
+        {
+         "type": "agentMessage",
+         "text": "yo"
+        }
+       ]
+      },
+      {
+       "startedAt": "garbage",
+       "completedAt": null,
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "older"
+        },
+        {
+         "type": "agentMessage",
+         "text": "r"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "older",
+      "reply": "r",
+      "tools": 0
+     },
+     {
+      "prompt": "hi",
+      "reply": "yo",
+      "tools": 0,
+      "createdAt": "2023-11-14T22:13:20.000Z",
+      "completedAt": "2023-11-14T22:13:25.123Z"
+     }
+    ],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_model_string",
+   "mode": "read",
+   "meta": {
+    "id": "t-1",
+    "cwd": "/work/proj",
+    "model": "gpt-5.1"
+   },
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false,
+    "model": "gpt-5.1"
+   }
+  },
+  {
+   "name": "read_model_object",
+   "mode": "read",
+   "meta": {
+    "id": "t-1",
+    "cwd": "/work/proj",
+    "model": {
+     "id": "o3",
+     "x": 1
+    }
+   },
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false,
+    "model": "o3"
+   }
+  },
+  {
+   "name": "read_model_object_nonstring",
+   "mode": "read",
+   "meta": {
+    "id": "t-1",
+    "cwd": "/work/proj",
+    "model": {
+     "id": 5
+    }
+   },
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_model_number",
+   "mode": "read",
+   "meta": {
+    "id": "t-1",
+    "cwd": "/work/proj",
+    "model": 5
+   },
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_model_trim",
+   "mode": "read",
+   "meta": {
+    "id": "t-1",
+    "cwd": "/work/proj",
+    "model": "  spaced\t"
+   },
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false,
+    "model": "spaced"
+   }
+  },
+  {
+   "name": "read_model_blank",
+   "mode": "read",
+   "meta": {
+    "id": "t-1",
+    "cwd": "/work/proj",
+    "model": "   "
+   },
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_model_200",
+   "mode": "read",
+   "meta": {
+    "id": "t-1",
+    "cwd": "/work/proj",
+    "model": {
+     "$str": "x",
+     "n": 200
+    }
+   },
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false,
+    "model": {
+     "$str": "x",
+     "n": 200
+    }
+   }
+  },
+  {
+   "name": "read_model_201",
+   "mode": "read",
+   "meta": {
+    "id": "t-1",
+    "cwd": "/work/proj",
+    "model": {
+     "$str": "x",
+     "n": 201
+    }
+   },
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_model_untrimmed_long",
+   "mode": "read",
+   "meta": {
+    "id": "t-1",
+    "cwd": "/work/proj",
+    "model": {
+     "$cat": [
+      "  ",
+      {
+       "$str": "x",
+       "n": 199
+      },
+      "  "
+     ]
+    }
+   },
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_model_emoji_200",
+   "mode": "read",
+   "meta": {
+    "id": "t-1",
+    "cwd": "/work/proj",
+    "model": {
+     "$str": "😀",
+     "n": 100
+    }
+   },
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false,
+    "model": {
+     "$str": "😀",
+     "n": 100
+    }
+   }
+  },
+  {
+   "name": "read_model_emoji_202",
+   "mode": "read",
+   "meta": {
+    "id": "t-1",
+    "cwd": "/work/proj",
+    "model": {
+     "$str": "😀",
+     "n": 101
+    }
+   },
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_title_oneline",
+   "mode": "read",
+   "meta": {
+    "id": "t-1",
+    "cwd": "/work/proj",
+    "name": "  A\n\nB\t C  "
+   },
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false,
+    "title": "A B C"
+   }
+  },
+  {
+   "name": "read_title_cut",
+   "mode": "read",
+   "meta": {
+    "id": "t-1",
+    "cwd": "/work/proj",
+    "name": {
+     "$str": "x",
+     "n": 300
+    }
+   },
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false,
+    "title": {
+     "$str": "x",
+     "n": 120
+    }
+   }
+  },
+  {
+   "name": "read_title_blank",
+   "mode": "read",
+   "meta": {
+    "id": "t-1",
+    "cwd": "/work/proj",
+    "name": "   "
+   },
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_title_number",
+   "mode": "read",
+   "meta": {
+    "id": "t-1",
+    "cwd": "/work/proj",
+    "name": 5
+   },
+   "pages": [
+    {
+     "data": [
+      {
+       "items": [
+        {
+         "type": "userMessage",
+         "text": "u"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false
+   }
+  },
+  {
+   "name": "read_init_error",
+   "mode": "read",
+   "init": [
+    {
+     "error": {
+      "code": -1,
+      "message": "denied"
+     }
+    }
+   ],
+   "expected": {
+    "error": "read-failed"
+   }
+  },
+  {
+   "name": "read_init_stall",
+   "mode": "read",
+   "init": [
+    {
+     "stall": true
+    }
+   ],
+   "timeout": 400,
+   "expected": {
+    "error": "timeout"
+   }
+  },
+  {
+   "name": "read_missing_binary",
+   "mode": "read",
+   "binary": "/nonexistent/codex-q",
+   "expect_no_spawn": true,
+   "expected": {
+    "error": "engine-missing"
+   }
+  },
+  {
+   "name": "read_meta_stall",
+   "mode": "read",
+   "read_actions": [
+    {
+     "stall": true
+    }
+   ],
+   "timeout": 400,
+   "expected": {
+    "error": "timeout"
+   }
+  },
+  {
+   "name": "read_meta_exit",
+   "mode": "read",
+   "read_actions": [
+    {
+     "exit": 3
+    }
+   ],
+   "expected": {
+    "error": "read-failed"
+   }
+  },
+  {
+   "name": "read_meta_oversize",
+   "mode": "read",
+   "read_actions": [
+    {
+     "oversize": 9000000
+    }
+   ],
+   "expected": {
+    "error": "read-failed"
+   }
+  },
+  {
+   "name": "read_turns_stall",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "stall": true
+    }
+   ],
+   "timeout": 400,
+   "expected": {
+    "error": "timeout"
+   }
+  },
+  {
+   "name": "read_turns_exit",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "exit": 3
+    }
+   ],
+   "expected": {
+    "error": "read-failed"
+   }
+  },
+  {
+   "name": "read_turns_oversize",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "oversize": 9000000
+    }
+   ],
+   "expected": {
+    "error": "read-failed"
+   }
+  },
+  {
+   "name": "read_stall_second_page",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "result": {
+      "data": [
+       {
+        "items": [
+         {
+          "type": "userMessage",
+          "text": "u"
+         }
+        ]
+       }
+      ],
+      "nextCursor": "c"
+     }
+    },
+    {
+     "stall": true
+    }
+   ],
+   "timeout": 400,
+   "expected": {
+    "error": "timeout"
+   }
+  },
+  {
+   "name": "read_server_requests",
+   "mode": "read",
+   "read_actions": [
+    {
+     "pre": [
+      {
+       "id": 5,
+       "method": "a/b"
+      }
+     ],
+     "result": {
+      "thread": {
+       "id": "t-1",
+       "cwd": "/work/proj"
+      }
+     }
+    }
+   ],
+   "pages_actions": [
+    {
+     "pre": [
+      {
+       "id": 6,
+       "method": "c/d",
+       "params": {}
+      },
+      {
+       "method": "n"
+      }
+     ],
+     "result": {
+      "data": [
+       {
+        "items": [
+         {
+          "type": "userMessage",
+          "text": "u"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false
+   },
+   "expect_recv": [
+    {
+     "id": 5,
+     "error": {
+      "code": -32601,
+      "message": "not handled"
+     }
+    },
+    {
+     "id": 6,
+     "error": {
+      "code": -32601,
+      "message": "not handled"
+     }
+    }
+   ]
+  },
+  {
+   "name": "read_wrong_ids",
+   "mode": "read",
+   "pages_actions": [
+    {
+     "pre": [
+      {
+       "id": 2,
+       "result": {
+        "data": [
+         {
+          "items": [
+           {
+            "type": "userMessage",
+            "text": "WRONG"
+           }
+          ]
+         }
+        ]
+       }
+      },
+      {
+       "id": "3",
+       "result": {}
+      },
+      {
+       "id": 99,
+       "result": {}
+      },
+      "garbage"
+     ],
+     "result": {
+      "data": [
+       {
+        "items": [
+         {
+          "type": "userMessage",
+          "text": "u"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ],
+   "expected": {
+    "turns": [
+     {
+      "prompt": "u",
+      "reply": "",
+      "tools": 0
+     }
+    ],
+    "omittedBefore": false
+   }
+  }
+ ]
+}

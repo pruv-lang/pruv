@@ -151,7 +151,7 @@ fn tail_result(title: str, has_title: bool, last: [u8], has_at: bool) -> crate::
   let mut m: [i64] = meta_new(1);
   if has_title { m[4] = 0; m[5] = tl; }
   if has_at {
-    crate::boundary::copy_span(inout text, tl, last, 0, 24);
+    crate::bytes::copy_span(inout text, tl, last, 0, 24);
     m[10] = tl;
     m[11] = 24;
   }
@@ -498,7 +498,7 @@ pub fn read_window(data: [u8], cut_before: bool) -> crate::boundary::ImportResul
       crate::framing::Frame::Dropped(s, e, n) => {
         if s < 0 || s > e || e > len(data) || e - s > 8192 || n <= offset || n > len(data) { return fail_zero(); }
         let mut head: [u8] = alloc(e - s, 0);
-        crate::boundary::copy_span(inout head, 0, data, s, e);
+        crate::bytes::copy_span(inout head, 0, data, s, e);
         if crate::text::dropped_user(head) { pending = true; if started { crate::turns::skip_user(inout st); } }
         offset = n;
       }
@@ -520,7 +520,7 @@ pub fn read_window(data: [u8], cut_before: bool) -> crate::boundary::ImportResul
   let mut packed: [u8] = alloc(total, 0);
   put_str(inout packed, 0, title);
   put_str(inout packed, tl, model);
-  crate::boundary::copy_span(inout packed, base, col.text, 0, nx);
+  crate::bytes::copy_span(inout packed, base, col.text, 0, nx);
   let mut m: [i64] = meta_new(2);
   if cut_before || col.trimmed == 1 || chain.cut { m[2] = 1; }
   m[3] = col.kept;

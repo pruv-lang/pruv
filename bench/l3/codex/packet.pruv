@@ -1,0 +1,152 @@
+// Result packets (docs/CODEX_IMPORT_SPEC.md "Boundary representation").
+//   success  [0, 16, row_words, byte_len, ...meta16, ...rows, ...text_bytes]
+//   failure  [code, stage, detail_len, ...detail]   (code != 0)
+// meta: 0 schema 1, 1 mode (0 list, 1 read), 2 omittedBefore, 3 row count, 4-5 title ref, 6-7 model ref,
+//       8-9 lastPlan at ref, 10 row width (list 9, read 10), 11 lastPlan item count (-1 absent), 12 lastPlan more, 13-15 0.
+// Refs are (start,len) into the text bytes; (-1,0) is absent.
+// Failure codes: 1 InputTooLarge, 2 InternalInvariant, 3 not-found, 4 codex-unsupported, 5 timeout, 6 read-failed, 7 engine-missing.
+
+pub fn fail(code: i64, stage: i64, detail: [u8]) -> [i64] ! alloc
+  requires len(detail) <= 100000000
+  ensures len(result) == 3 + len(detail)
+{
+  let mut p: [i64] = alloc(3 + len(detail), 0);
+  let mut c: i64 = code;
+  if c < 1 { c = 2; }
+  p[0] = c;
+  p[1] = stage;
+  p[2] = len(detail);
+  let mut i: i64 = 0;
+  while i < len(detail)
+    invariant 0 <= i && i <= len(detail) && len(p) == 3 + len(detail)
+    decreases len(detail) - i
+  {
+    p[3 + i] = detail[i];
+    i = i + 1;
+  }
+  return p;
+}
+
+// fresh meta for a mode: schema 1, all refs absent, no plan
+pub fn meta_new(mode: i64) -> [i64] ! alloc
+  requires 0 <= mode && mode <= 1
+  ensures len(result) == 16
+{
+  let mut m: [i64] = alloc(16, 0);
+  m[0] = 1;
+  m[1] = mode;
+  m[4] = -1;
+  m[6] = -1;
+  m[8] = -1;
+  m[10] = 9;
+  if mode == 1 { m[10] = 10; }
+  m[11] = -1;
+  return m;
+}
+
+// A ref (s,l) is absent (-1,0) or inside a text of n bytes.
+fn ref_ok(s: i64, l: i64, n: i64) -> bool
+  requires 0 <= n
+{
+  if s == -1 { return l == 0; }
+  if s < 0 || s > n { return false; }
+  if l < 0 || l > n - s { return false; }
+  return true;
+}
+
+fn check_list(rows: [i64], count: i64, n: i64) -> bool
+  requires 0 <= n && 0 <= count && count <= 50 && len(rows) == 450
+{
+  let mut i: i64 = 0;
+  while i < count
+    invariant 0 <= i && i <= count && count <= 50 && len(rows) == 450 && 0 <= n
+    decreases count - i
+  {
+    let b: i64 = 9 * i;
+    if !ref_ok(rows[b], rows[b + 1], n) { return false; }
+    if !ref_ok(rows[b + 2], rows[b + 3], n) { return false; }
+    if !ref_ok(rows[b + 4], rows[b + 5], n) { return false; }
+    if !ref_ok(rows[b + 6], rows[b + 7], n) { return false; }
+    if rows[b + 8] < -1 || rows[b + 8] > 1 { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+fn assemble(meta: [i64], rows: [i64], rw: i64, text: [u8]) -> [i64] ! alloc
+  requires len(meta) == 16 && 0 <= rw && rw <= len(rows) && len(rows) <= 100000000 && len(text) <= 100000000
+  ensures len(result) == 20 + rw + len(text)
+{
+  let nx: i64 = len(text);
+  let mut p: [i64] = alloc(20 + rw + nx, 0);
+  p[1] = 16;
+  p[2] = rw;
+  p[3] = nx;
+  let mut i: i64 = 0;
+  while i < 16
+    invariant 0 <= i && i <= 16 && len(p) == 20 + rw + nx && len(meta) == 16
+    decreases 16 - i
+  { p[4 + i] = meta[i]; i = i + 1; }
+  let mut j: i64 = 0;
+  while j < rw
+    invariant 0 <= j && j <= rw && rw <= len(rows) && len(p) == 20 + rw + nx
+    decreases rw - j
+  { p[20 + j] = rows[j]; j = j + 1; }
+  let mut k: i64 = 0;
+  while k < nx
+    invariant 0 <= k && k <= nx && nx == len(text) && len(p) == 20 + rw + nx
+    decreases nx - k
+  { p[20 + rw + k] = text[k]; k = k + 1; }
+  return p;
+}
+
+// rows holds 9 words per row for `count` rows (rows has room for 50)
+pub fn list_ok(rows: [i64], count: i64, text: [u8]) -> [i64] ! alloc
+  requires len(rows) == 450 && 0 <= count && count <= 50 && len(text) <= 100000000
+  ensures len(result) >= 3
+{
+  let empty: [u8] = alloc(0, 0);
+  if !check_list(rows, count, len(text)) { return fail(2, 6, empty); }
+  let mut m: [i64] = meta_new(0);
+  m[3] = count;
+  return assemble(m, rows, 9 * count, text);
+}
+
+// meta from meta_new(1); rows = 10 words per turn (kept = meta[3]) then 2 words per plan item (items = meta[11])
+pub fn read_ok(meta: [i64], rows: [i64], text: [u8]) -> [i64] ! alloc
+  requires len(meta) == 16 && len(rows) <= 100000000 && len(text) <= 100000000
+  ensures len(result) >= 3
+{
+  let empty: [u8] = alloc(0, 0);
+  let kept: i64 = meta[3];
+  let mut items: i64 = meta[11];
+  if items < 0 { items = 0; }
+  let n: i64 = len(text);
+  if kept < 0 || kept > 200 || items > 30 || len(rows) != 10 * kept + 2 * items { return fail(2, 6, empty); }
+  if !ref_ok(meta[4], meta[5], n) || !ref_ok(meta[6], meta[7], n) || !ref_ok(meta[8], meta[9], n) { return fail(2, 6, empty); }
+  let mut i: i64 = 0;
+  while i < kept
+    invariant 0 <= i && i <= kept && kept <= 200 && 0 <= items && items <= 30 && len(rows) == 10 * kept + 2 * items && 0 <= n
+    decreases kept - i
+  {
+    let b: i64 = 10 * i;
+    if !ref_ok(rows[b], rows[b + 1], n) { return fail(2, 6, empty); }
+    if !ref_ok(rows[b + 2], rows[b + 3], n) { return fail(2, 6, empty); }
+    if !ref_ok(rows[b + 4], rows[b + 5], n) { return fail(2, 6, empty); }
+    if !ref_ok(rows[b + 6], rows[b + 7], n) { return fail(2, 6, empty); }
+    if rows[b + 8] < 0 { return fail(2, 6, empty); }
+    if rows[b + 9] != 0 && rows[b + 9] != 1 { return fail(2, 6, empty); }
+    i = i + 1;
+  }
+  let mut j: i64 = 0;
+  while j < items
+    invariant 0 <= j && j <= items && items <= 30 && 0 <= kept && kept <= 200 && len(rows) == 10 * kept + 2 * items && 0 <= n
+    decreases items - j
+  {
+    let b: i64 = 10 * kept + 2 * j;
+    if !ref_ok(rows[b], rows[b + 1], n) { return fail(2, 6, empty); }
+    if rows[b] < 0 { return fail(2, 6, empty); }
+    j = j + 1;
+  }
+  return assemble(meta, rows, len(rows), text);
+}
