@@ -1,0 +1,49 @@
+[
+  {"name": "budgets-200-turns-no-omit", "mode": "read",
+   "gen": [{"session": {"thread": "A", "history": [{"$repeat": [{"type": "user", "content": "q"}, {"type": "assistant", "content": "a"}], "count": 200}]}}],
+   "expected": {"status": "ok", "nrows": 200, "omitted": false}},
+  {"name": "budgets-201-turns-omitted", "mode": "read", "kills": ["M12"],
+   "gen": [{"session": {"thread": "A", "history": [{"$repeat": [{"type": "user", "content": "q"}, {"type": "assistant", "content": "a"}], "count": 201}]}}],
+   "expected": {"status": "ok", "nrows": 200, "omitted": true}},
+  {"name": "budgets-2mib-suffix-omitted", "mode": "read", "kills": ["M12"],
+   "gen": [{"session": {"thread": "A", "history": [{"$repeat": [{"$line": {"type": "user", "prefix": "P", "size": 100}}, {"$line": {"type": "assistant", "prefix": "R", "size": 40000}}], "count": 70}]}}],
+   "expected": {"status": "ok", "omitted": true}},
+  {"name": "budgets-under-2mib-kept", "mode": "read",
+   "gen": [{"session": {"thread": "A", "history": [{"$repeat": [{"$line": {"type": "user", "prefix": "P", "size": 100}}, {"$line": {"type": "assistant", "prefix": "R", "size": 40000}}], "count": 60}]}}],
+   "expected": {"status": "ok", "nrows": 60, "omitted": false}},
+  {"name": "budgets-answer-saturation-and-empty", "mode": "read",
+   "gen": [{"session": {"thread": "A", "history": [
+     {"type": "user", "content": "q"},
+     {"$line": {"type": "assistant", "prefix": "A1", "size": 20050}}, {"$line": {"type": "assistant", "prefix": "A2", "size": 20050}},
+     {"type": "assistant", "content": ""}, {"type": "assistant", "content": "tail"},
+     {"type": "user", "content": "q2"}, {"type": "assistant", "content": ""}]}}],
+   "expected": {"status": "ok", "nrows": 2}},
+  {"name": "budgets-reply-cut-on-scalar-boundary", "mode": "read",
+   "gen": [{"session": {"thread": "A", "history": [
+     {"type": "user", "content": "q"}, {"type": "assistant", "content": {"$rep": "日", "n": 11000}}]}}]},
+  {"name": "budgets-prompt-clipped-4byte-scalars", "mode": "read",
+   "gen": [{"session": {"thread": "A", "history": [
+     {"type": "user", "content": {"$cat": ["a", {"$rep": "😀", "n": 9000}]}}, {"type": "assistant", "content": "r"},
+     {"type": "user", "content": {"$rep": "p", "n": 40000}}, {"type": "assistant", "content": "r2"}]}}],
+   "expected": {"status": "ok", "nrows": 2}},
+  {"name": "window-8mib-start-on-line-boundary", "mode": "read",
+   "gen": [{"session": {"thread": "A", "history": [
+     {"$line": {"type": "user", "prefix": "OLD", "size": 100}}, {"$repeat": {"$line": {"type": "assistant", "size": 1024}}, "count": 8190},
+     {"$line": {"type": "user", "prefix": "KEEP1", "size": 1024}}, {"$line": {"type": "assistant", "prefix": "R1", "size": 1024}}]}}],
+   "expected": {"status": "ok", "nrows": 1, "omitted": true}},
+  {"name": "window-8mib-start-mid-line", "mode": "read",
+   "gen": [{"session": {"thread": "A", "history": [
+     {"$line": {"type": "user", "prefix": "OLD", "size": 1000}}, {"$repeat": {"$line": {"type": "assistant", "size": 1024}}, "count": 8190},
+     {"$line": {"type": "user", "prefix": "KEEP1", "size": 1024}}, {"$line": {"type": "assistant", "prefix": "R1", "size": 324}}]}}],
+   "expected": {"status": "ok", "nrows": 1, "omitted": true}},
+  {"name": "window-8mib-exact-no-cut", "mode": "read",
+   "gen": [{"session": {"thread": "A", "history": [
+     {"$line": {"type": "user", "prefix": "FIRST", "size": 1024}}, {"$repeat": {"$line": {"type": "assistant", "size": 1024}}, "count": 8190},
+     {"$line": {"type": "assistant", "prefix": "LAST", "size": 1024}}]}}],
+   "expected": {"status": "ok", "nrows": 1, "omitted": false}},
+  {"name": "window-empty-history", "mode": "read",
+   "gen": [{"session": {"thread": "A", "history_raw": {"utf8": ""}}}], "expected": {"status": "ok", "nrows": 0, "omitted": false}},
+  {"name": "window-history-is-directory", "mode": "read",
+   "gen": [{"session": {"thread": "A", "files": {"chat_history.jsonl": {"kind": "dir"}}}}],
+   "expected": {"status": "error", "class": "EngineImportError", "code": "not-found"}}
+]

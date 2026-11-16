@@ -1,0 +1,1509 @@
+// Grok list module (L3-6 package C): readdir, four-slot scheduler, per-candidate small-json reads, exact V8 sort, top 50, active ids.
+// NOT COMPILED, NOT VERIFIED (written without a shell). Things I was unsure about:
+//  1. The per-candidate small-json state machine (lstat/realpath/open/fstat/read/close) lives HERE (slot phases 310..318), because root
+//     dispatches by the global phase only. From package B I use only summary::decode (purpose 1 = summary) and summary::active.
+//  2. List-private ctl words (in the reserved range 31..127): 32,33 = readdir name bytes base/len inside bank 2; 34,35 = sessions dir
+//     path ref in bank 2; 36 = active-file read started. Global phases: 300 begin, 301 await readdir, 302 schedule, 303 running.
+//  3. Banks: bank 0 = 3 words per readdir row (event rows); bank 2 grows by exact resizes (base path, readdir completion bytes, then one
+//     chunk per admitted row); bank 1 = 13 words per candidate (admitted flag + 12 list words) at the raw enumeration index; banks 3..6
+//     hold the small-json bytes of slot s (data = first ctl[slot+26] bytes; a first read shrinks the bank via resize).
+//  4. summary::decode result: purpose 1, count 0 => not admitted, status 1 => propagated as the final result. I use only its title,
+//     updatedAt and messages refs (words 30,31 / 32,33 / 36,37 of the packet) and write thread and path myself.
+//  5. summary::active(data, threads, text): threads = (start,len) pairs, 2 words per top row, refs into bank 2; I expect len(result)==rows.
+//  6. finish() takes the 13-word bank rows; sort_indices() takes 12-word list rows. Dates compare as the 17-digit key of the canonical
+//     24-byte ISO text (equal order to Date.parse for years 0000..9999); missing => key -1 => comparator 0.
+//  7. Stage numbers: 10 for InputTooLarge when a small file grows past 16777216 bytes; 3 for count > 5000000 or bank overflow.
+//  8. Reads use count 65536; EOF = completion empty or event[15]==1. dev/ino are compared as 4 limbs.
+//  9. Defensive branches in the sort (stack depth > 128, bad run geometry) set st[2]=1 and sort_indices then returns an empty array.
+
+// ======================= sort: comparator and array helpers =======================
+// cmp(x,y) < 0  <=>  both dates present and date(y) < date(x)
+fn lt(keys: [i64], x: i64, y: i64) -> bool
+{
+  if x < 0 || x >= len(keys) || y < 0 || y >= len(keys) { return false; }
+  let kx: i64 = keys[x];
+  let ky: i64 = keys[y];
+  return kx >= 0 && ky >= 0 && ky < kx;  // MUT:M06 => return (kx >= 0 && ky < 0) || (kx >= 0 && ky >= 0 && ky < kx);
+}
+
+fn mg_next(mg: i64) -> i64
+  requires 1 <= mg && mg <= 1000000000
+  ensures 1 <= result && result <= 1000000000
+{
+  if mg >= 1000000000 { return mg; }
+  return mg + 1;
+}
+
+fn put_from(inout w: [i64], dst: i64, t: [i64], src: i64, n: i64) -> ()
+  requires 0 <= dst && 0 <= src && 0 <= n && dst + n <= len(w) && src + n <= len(t)
+  ensures len(w) == len(old(w))
+{
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && 0 <= dst && 0 <= src && dst + n <= len(w) && src + n <= len(t) && len(w) == len(old(w))
+    decreases n - j
+  { w[dst + j] = t[src + j]; j = j + 1; }
+}
+
+fn slide_fwd(inout w: [i64], dst: i64, src: i64, n: i64) -> ()
+  requires 0 <= dst && dst <= src && 0 <= n && src + n <= len(w)
+  ensures len(w) == len(old(w))
+{
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && 0 <= dst && dst <= src && src + n <= len(w) && len(w) == len(old(w))
+    decreases n - j
+  { w[dst + j] = w[src + j]; j = j + 1; }
+}
+
+fn slide_bwd(inout w: [i64], dst: i64, src: i64, n: i64) -> ()
+  requires 0 <= src && src <= dst && 0 <= n && dst + n <= len(w)
+  ensures len(w) == len(old(w))
+{
+  let mut j: i64 = n;
+  while j > 0
+    invariant 0 <= j && j <= n && 0 <= src && src <= dst && dst + n <= len(w) && len(w) == len(old(w))
+    decreases j
+  { j = j - 1; w[dst + j] = w[src + j]; }
+}
+
+fn reverse_range(inout w: [i64], lo: i64, n: i64) -> ()
+  requires 0 <= lo && 0 <= n && lo + n <= len(w)
+  ensures len(w) == len(old(w))
+{
+  let mut a: i64 = lo;
+  let mut b: i64 = lo + n - 1;
+  while a < b
+    invariant lo <= a && b <= lo + n - 1 && a + b == 2 * lo + n - 1 && 0 <= lo && lo + n <= len(w) && len(w) == len(old(w))
+    decreases b - a
+  {
+    let t: i64 = w[a];
+    w[a] = w[b];
+    w[b] = t;
+    a = a + 1;
+    b = b - 1;
+  }
+}
+
+// V8 CountAndMakeRun: strictly descending runs are reversed in place
+fn count_run(keys: [i64], inout w: [i64], lo: i64, hi: i64) -> i64
+  requires 0 <= lo && lo < hi && hi <= len(w)
+  ensures len(w) == len(old(w))
+  ensures 1 <= result && result <= hi - lo
+{
+  let low: i64 = lo + 1;
+  if low == hi { return 1; }
+  let mut rl: i64 = 2;
+  let mut prev: i64 = w[low];
+  let desc: bool = lt(keys, w[low], w[low - 1]);
+  let mut i: i64 = low + 1;
+  while i < hi
+    invariant low + 1 <= i && i <= hi && hi <= len(w) && 0 <= lo && lo < low && len(w) == len(old(w)) && 2 <= rl && rl <= i - lo
+    decreases hi - i
+  {
+    let o: bool = lt(keys, w[i], prev);
+    let mut stop: bool = false;
+    if desc { if !o { stop = true; } } else { if o { stop = true; } }
+    if stop { i = hi; } else { prev = w[i]; rl = rl + 1; i = i + 1; }
+  }
+  if desc { reverse_range(inout w, lo, rl); }
+  return rl;
+}
+
+// V8 BinaryInsertionSort(low, start, high)
+fn binary_insertion(keys: [i64], inout w: [i64], low: i64, start0: i64, high: i64) -> ()
+  requires 0 <= low && low <= start0 && start0 <= high && high <= len(w)
+  ensures len(w) == len(old(w))
+{
+  let mut start: i64 = start0;
+  if low == start { start = start + 1; }
+  while start < high
+    invariant 0 <= low && low < start && start <= high + 1 && high <= len(w) && len(w) == len(old(w))
+    decreases high - start
+  {
+    let p: i64 = w[start];
+    let mut left: i64 = low;
+    let mut right: i64 = start;
+    while left < right
+      invariant low <= left && left <= right && right <= start && start < high && high <= len(w) && 0 <= low && len(w) == len(old(w))
+      decreases right - left
+    {
+      let mid: i64 = left + (right - left) / 2;
+      if lt(keys, p, w[mid]) { right = mid; } else { left = mid + 1; }
+    }
+    let mut j: i64 = start;
+    while j > left
+      invariant left <= j && j <= start && start < high && high <= len(w) && 0 <= low && low <= left && len(w) == len(old(w))
+      decreases j - left
+    { w[j] = w[j - 1]; j = j - 1; }
+    w[left] = p;
+    start = start + 1;
+  }
+}
+
+fn min_run(n0: i64) -> i64
+  requires 1 <= n0 && n0 <= 100000000
+  ensures 1 <= result
+{
+  let mut n: i64 = n0;
+  let mut r: i64 = 0;
+  while n >= 64
+    invariant 1 <= n && n <= n0 && 0 <= r && r <= 1
+    decreases n
+  {
+    if band(n, 1) == 1 { r = 1; }
+    n = n / 2;
+  }
+  return n + r;
+}
+
+// ======================= sort: galloping =======================
+fn gallop_left(keys: [i64], arr: [i64], key: i64, base: i64, length: i64, hint: i64) -> i64
+  requires 0 <= base && 1 <= length && base + length <= len(arr) && len(arr) <= 100000000
+  requires 0 <= hint && hint < length
+  ensures 0 <= result && result <= length
+{
+  let mut last: i64 = 0;
+  let mut off: i64 = 1;
+  if lt(keys, arr[base + hint], key) {
+    let maxo: i64 = length - hint;
+    while off < maxo && lt(keys, arr[base + hint + off], key)
+      invariant 0 <= last && last < off && last < maxo && 1 <= off && maxo == length - hint && 1 <= maxo && off <= 2 * maxo
+      invariant 0 <= base && base + length <= len(arr) && len(arr) <= 100000000 && 0 <= hint && hint < length
+      decreases maxo - off
+    { last = off; off = 2 * off + 1; }
+    if off > maxo { off = maxo; }
+    last = last + hint;
+    off = off + hint;
+  } else {
+    let maxo: i64 = hint + 1;
+    while off < maxo && !lt(keys, arr[base + hint - off], key)
+      invariant 0 <= last && last < off && last < maxo && 1 <= off && maxo == hint + 1 && off <= 2 * maxo
+      invariant 0 <= base && base + length <= len(arr) && len(arr) <= 100000000 && 0 <= hint && hint < length
+      decreases maxo - off
+    { last = off; off = 2 * off + 1; }
+    if off > maxo { off = maxo; }
+    let nl: i64 = hint - off;
+    let no: i64 = hint - last;
+    last = nl;
+    off = no;
+  }
+  last = last + 1;
+  while last < off
+    invariant 0 <= last && last <= off && off <= length && 0 <= base && base + length <= len(arr)
+    decreases off - last
+  {
+    let m: i64 = last + (off - last) / 2;
+    if lt(keys, arr[base + m], key) { last = m + 1; } else { off = m; }
+  }
+  return off;
+}
+
+fn gallop_right(keys: [i64], arr: [i64], key: i64, base: i64, length: i64, hint: i64) -> i64
+  requires 0 <= base && 1 <= length && base + length <= len(arr) && len(arr) <= 100000000
+  requires 0 <= hint && hint < length
+  ensures 0 <= result && result <= length
+{
+  let mut last: i64 = 0;
+  let mut off: i64 = 1;
+  if lt(keys, key, arr[base + hint]) {
+    let maxo: i64 = hint + 1;
+    while off < maxo && lt(keys, key, arr[base + hint - off])
+      invariant 0 <= last && last < off && last < maxo && 1 <= off && maxo == hint + 1 && off <= 2 * maxo
+      invariant 0 <= base && base + length <= len(arr) && len(arr) <= 100000000 && 0 <= hint && hint < length
+      decreases maxo - off
+    { last = off; off = 2 * off + 1; }
+    if off > maxo { off = maxo; }
+    let nl: i64 = hint - off;
+    let no: i64 = hint - last;
+    last = nl;
+    off = no;
+  } else {
+    let maxo: i64 = length - hint;
+    while off < maxo && !lt(keys, key, arr[base + hint + off])
+      invariant 0 <= last && last < off && last < maxo && 1 <= off && maxo == length - hint && 1 <= maxo && off <= 2 * maxo
+      invariant 0 <= base && base + length <= len(arr) && len(arr) <= 100000000 && 0 <= hint && hint < length
+      decreases maxo - off
+    { last = off; off = 2 * off + 1; }
+    if off > maxo { off = maxo; }
+    last = last + hint;
+    off = off + hint;
+  }
+  last = last + 1;
+  while last < off
+    invariant 0 <= last && last <= off && off <= length && 0 <= base && base + length <= len(arr)
+    decreases off - last
+  {
+    let m: i64 = last + (off - last) / 2;
+    if lt(keys, key, arr[base + m]) { off = m; } else { last = m + 1; }
+  }
+  return off;
+}
+
+// ======================= sort: merges (flattened v8sort.py merge_low / merge_high) =======================
+// ph 0 = one-at-a-time phase, ph 1 = galloping phase; mode 0 running, 1 "ok" finish, 2 "copy last" finish.
+// Every iteration consumes at least one element or switches ph 1 -> 0, so 2*(la+lb)+ph decreases.
+fn merge_low(keys: [i64], inout w: [i64], inout st: [i64], ba: i64, la0: i64, bb: i64, lb0: i64) -> () ! alloc
+  requires len(st) == 260 && 1 <= st[0] && st[0] <= 1000000000
+  requires 0 <= ba && 1 <= la0 && ba + la0 == bb && 1 <= lb0 && bb + lb0 <= len(w) && len(w) <= 100000000
+  ensures len(w) == len(old(w)) && len(st) == len(old(st)) && 1 <= st[0] && st[0] <= 1000000000
+  ensures st[1] == old(st)[1] && st[2] == old(st)[2]
+{
+  let fin: i64 = bb + lb0;
+  let mut t: [i64] = alloc(la0, 0);
+  let mut j: i64 = 0;
+  while j < la0
+    invariant 0 <= j && j <= la0 && len(t) == la0 && 0 <= ba && ba + la0 <= len(w) && len(w) == len(old(w)) && len(st) == len(old(st))
+    invariant 1 <= st[0] && st[0] <= 1000000000 && st[1] == old(st)[1] && st[2] == old(st)[2]
+    decreases la0 - j
+  { t[j] = w[ba + j]; j = j + 1; }
+  let mut dest: i64 = ba;
+  let mut ct: i64 = 0;
+  let mut cb: i64 = bb;
+  let mut la: i64 = la0;
+  let mut lb: i64 = lb0;
+  w[dest] = w[cb];
+  dest = dest + 1;
+  cb = cb + 1;
+  lb = lb - 1;
+  let mut mode: i64 = 0;
+  if lb == 0 { mode = 1; } else if la == 1 { mode = 2; }
+  let mut mg: i64 = st[0];
+  let mut ph: i64 = 0;
+  let mut first: bool = true;
+  let mut wa: i64 = 0;
+  let mut wb: i64 = 0;
+  while mode == 0
+    invariant 0 <= mode && mode <= 2 && 0 <= ph && ph <= 1
+    invariant len(t) == la0 && 0 <= ct && ct + la == len(t) && 0 <= la
+    invariant 0 <= lb && cb + lb == fin && dest + la == cb && 0 <= dest
+    invariant fin == bb + lb0 && fin <= len(w) && len(w) == len(old(w)) && len(w) <= 100000000
+    invariant 1 <= mg && mg <= 1000000000 && 1 <= st[0] && st[0] <= 1000000000 && len(st) == len(old(st))
+    invariant st[1] == old(st)[1] && st[2] == old(st)[2]
+    invariant mode == 0 ==> (la >= 2 && lb >= 1)
+    invariant mode == 2 ==> la == 1
+    invariant 0 <= wa && wa <= 1000000000 && 0 <= wb && wb <= 1000000000
+    invariant (ph == 0 && mode == 0) ==> (wa < mg && wb < mg)
+    decreases 2 * (la + lb) + ph
+  {
+    if ph == 0 {
+      if lt(keys, w[cb], t[ct]) {
+        w[dest] = w[cb];
+        dest = dest + 1; cb = cb + 1; wb = wb + 1; lb = lb - 1; wa = 0;
+        if lb == 0 { mode = 1; }
+        else if wb >= mg { mg = mg_next(mg); ph = 1; first = true; }
+      } else {
+        w[dest] = t[ct];
+        dest = dest + 1; ct = ct + 1; wa = wa + 1; la = la - 1; wb = 0;
+        if la == 1 { mode = 2; }
+        else if wa >= mg { mg = mg_next(mg); ph = 1; first = true; }
+      }
+    } else {
+      if !(first || wa >= 7 || wb >= 7) {
+        mg = mg_next(mg);
+        st[0] = mg;
+        ph = 0; wa = 0; wb = 0;
+      } else {
+        first = false;
+        if mg > 1 { mg = mg - 1; }
+        st[0] = mg;
+        let k: i64 = gallop_right(keys, t, w[cb], ct, la, 0);
+        wa = k;
+        if wa > 0 {
+          put_from(inout w, dest, t, ct, wa);
+          dest = dest + wa; ct = ct + wa; la = la - wa;
+          if la == 1 { mode = 2; } else if la == 0 { mode = 1; }
+        }
+        if mode == 0 {
+          w[dest] = w[cb];
+          dest = dest + 1; cb = cb + 1; lb = lb - 1;
+          if lb == 0 { mode = 1; }
+        }
+        if mode == 0 {
+          let k2: i64 = gallop_left(keys, w, t[ct], cb, lb, 0);
+          wb = k2;
+          if wb > 0 {
+            slide_fwd(inout w, dest, cb, wb);
+            dest = dest + wb; cb = cb + wb; lb = lb - wb;
+            if lb == 0 { mode = 1; }
+          }
+        }
+        if mode == 0 {
+          w[dest] = t[ct];
+          dest = dest + 1; ct = ct + 1; la = la - 1;
+          if la == 1 { mode = 2; }
+        }
+      }
+    }
+  }
+  if mode == 1 {
+    if la > 0 { put_from(inout w, dest, t, ct, la); }
+  } else {
+    slide_fwd(inout w, dest, cb, lb);
+    w[dest + lb] = t[ct];
+  }
+}
+
+fn merge_high(keys: [i64], inout w: [i64], inout st: [i64], ba: i64, la0: i64, bb: i64, lb0: i64) -> () ! alloc
+  requires len(st) == 260 && 1 <= st[0] && st[0] <= 1000000000
+  requires 0 <= ba && 1 <= la0 && ba + la0 == bb && 1 <= lb0 && bb + lb0 <= len(w) && len(w) <= 100000000
+  ensures len(w) == len(old(w)) && len(st) == len(old(st)) && 1 <= st[0] && st[0] <= 1000000000
+  ensures st[1] == old(st)[1] && st[2] == old(st)[2]
+{
+  let mut t: [i64] = alloc(lb0, 0);
+  let mut j: i64 = 0;
+  while j < lb0
+    invariant 0 <= j && j <= lb0 && len(t) == lb0 && 0 <= bb && bb + lb0 <= len(w) && len(w) == len(old(w)) && len(st) == len(old(st))
+    invariant 1 <= st[0] && st[0] <= 1000000000 && st[1] == old(st)[1] && st[2] == old(st)[2]
+    decreases lb0 - j
+  { t[j] = w[bb + j]; j = j + 1; }
+  let mut dest: i64 = bb + lb0 - 1;
+  let mut ct: i64 = lb0 - 1;
+  let mut ca: i64 = ba + la0 - 1;
+  let mut la: i64 = la0;
+  let mut lb: i64 = lb0;
+  w[dest] = w[ca];
+  dest = dest - 1;
+  ca = ca - 1;
+  la = la - 1;
+  let mut mode: i64 = 0;
+  if la == 0 { mode = 1; } else if lb == 1 { mode = 2; }
+  let mut mg: i64 = st[0];
+  let mut ph: i64 = 0;
+  let mut first: bool = true;
+  let mut wa: i64 = 0;
+  let mut wb: i64 = 0;
+  while mode == 0
+    invariant 0 <= mode && mode <= 2 && 0 <= ph && ph <= 1
+    invariant len(t) == lb0 && 0 <= la && la <= la0 && 0 <= lb && lb <= len(t)
+    invariant ct == lb - 1 && ca == ba + la - 1 && dest == ba + la + lb - 1
+    invariant 0 <= ba && ba + la0 + lb0 <= len(w) && len(w) == len(old(w)) && len(w) <= 100000000
+    invariant 1 <= mg && mg <= 1000000000 && 1 <= st[0] && st[0] <= 1000000000 && len(st) == len(old(st))
+    invariant st[1] == old(st)[1] && st[2] == old(st)[2]
+    invariant mode == 0 ==> (la >= 1 && lb >= 2)
+    invariant mode == 2 ==> lb == 1
+    invariant 0 <= wa && wa <= 1000000000 && 0 <= wb && wb <= 1000000000
+    invariant (ph == 0 && mode == 0) ==> (wa < mg && wb < mg)
+    decreases 2 * (la + lb) + ph
+  {
+    if ph == 0 {
+      if lt(keys, t[ct], w[ca]) {
+        w[dest] = w[ca];
+        dest = dest - 1; ca = ca - 1; wa = wa + 1; la = la - 1; wb = 0;
+        if la == 0 { mode = 1; }
+        else if wa >= mg { mg = mg_next(mg); ph = 1; first = true; }
+      } else {
+        w[dest] = t[ct];
+        dest = dest - 1; ct = ct - 1; wb = wb + 1; lb = lb - 1; wa = 0;
+        if lb == 1 { mode = 2; }
+        else if wb >= mg { mg = mg_next(mg); ph = 1; first = true; }
+      }
+    } else {
+      if !(first || wa >= 7 || wb >= 7) {
+        mg = mg_next(mg);
+        st[0] = mg;
+        ph = 0; wa = 0; wb = 0;
+      } else {
+        first = false;
+        if mg > 1 { mg = mg - 1; }
+        st[0] = mg;
+        let k: i64 = gallop_right(keys, w, t[ct], ba, la, la - 1);
+        wa = la - k;
+        if wa > 0 {
+          dest = dest - wa; ca = ca - wa;
+          slide_bwd(inout w, dest + 1, ca + 1, wa);
+          la = la - wa;
+          if la == 0 { mode = 1; }
+        }
+        if mode == 0 {
+          w[dest] = t[ct];
+          dest = dest - 1; ct = ct - 1; lb = lb - 1;
+          if lb == 1 { mode = 2; }
+        }
+        if mode == 0 {
+          let k2: i64 = gallop_left(keys, t, w[ca], 0, lb, lb - 1);
+          wb = lb - k2;
+          if wb > 0 {
+            dest = dest - wb; ct = ct - wb;
+            put_from(inout w, dest + 1, t, ct + 1, wb);
+            lb = lb - wb;
+            if lb == 1 { mode = 2; } else if lb == 0 { mode = 1; }
+          }
+        }
+        if mode == 0 {
+          w[dest] = w[ca];
+          dest = dest - 1; ca = ca - 1; la = la - 1;
+          if la == 0 { mode = 1; }
+        }
+      }
+    }
+  }
+  if mode == 1 {
+    if lb > 0 { put_from(inout w, dest - lb + 1, t, 0, lb); }
+  } else {
+    dest = dest - la;
+    ca = ca - la;
+    slide_bwd(inout w, dest + 1, ca + 1, la);
+    w[dest] = t[ct];
+  }
+}
+
+// ======================= sort: run stack, collapse, driver =======================
+// st: [0] minGallop, [1] run count (<= 128), [2] failure flag, runs at 4+2k (base), 5+2k (length); len 260
+fn run_base(st: [i64], k: i64) -> i64
+  requires len(st) == 260 && 0 <= k && k < 128
+  ensures 0 <= result && result <= 1000000000
+{
+  let v: i64 = st[4 + 2 * k];
+  if v < 0 { return 0; }
+  if v > 1000000000 { return 1000000000; }
+  return v;
+}
+
+fn run_len(st: [i64], k: i64) -> i64
+  requires len(st) == 260 && 0 <= k && k < 128
+  ensures 0 <= result && result <= 1000000000
+{
+  let v: i64 = st[5 + 2 * k];
+  if v < 0 { return 0; }
+  if v > 1000000000 { return 1000000000; }
+  return v;
+}
+
+fn set_run(inout st: [i64], k: i64, b: i64, l: i64) -> ()
+  requires len(st) == 260 && 0 <= k && k < 128 && 0 <= b && b <= 1000000000 && 0 <= l && l <= 2000000000
+  ensures len(st) == len(old(st)) && st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2]
+{
+  st[4 + 2 * k] = b;
+  st[5 + 2 * k] = l;
+}
+
+// MergeCollapse invariant helper: k < 2 or runs[k-2] > runs[k-1] + runs[k]
+fn inv_ok(st: [i64], k: i64) -> bool
+  requires len(st) == 260 && 0 <= k && k < 128
+{
+  if k < 2 { return true; }
+  return run_len(st, k - 2) > run_len(st, k - 1) + run_len(st, k);
+}
+
+fn merge_at(keys: [i64], inout w: [i64], inout st: [i64], i: i64) -> () ! alloc
+  requires len(st) == 260 && len(w) <= 100000000
+  requires 0 <= st[1] && st[1] <= 128 && 1 <= st[0] && st[0] <= 1000000000
+  requires 0 <= i && i + 1 < st[1]
+  ensures len(w) == len(old(w)) && len(st) == len(old(st))
+  ensures st[1] == old(st)[1] - 1 && 1 <= st[0] && st[0] <= 1000000000
+{
+  let cnt: i64 = st[1];
+  let ba: i64 = run_base(st, i);
+  let la: i64 = run_len(st, i);
+  let bb: i64 = run_base(st, i + 1);
+  let lb: i64 = run_len(st, i + 1);
+  set_run(inout st, i, ba, la + lb);
+  let mut j: i64 = i + 1;
+  while j + 1 < cnt
+    invariant i + 1 <= j && j <= cnt && cnt <= 128 && len(st) == 260 && st[1] == cnt && 1 <= st[0] && st[0] <= 1000000000
+    decreases cnt - j
+  {
+    let nb: i64 = run_base(st, j + 1);
+    let nl: i64 = run_len(st, j + 1);
+    set_run(inout st, j, nb, nl);
+    j = j + 1;
+  }
+  st[1] = cnt - 1;
+  if la < 1 || lb < 1 || bb != ba + la || bb + lb > len(w) { st[2] = 1; return; }
+  let k: i64 = gallop_right(keys, w, w[bb], ba, la, 0);
+  let ba2: i64 = ba + k;
+  let la2: i64 = la - k;
+  if la2 == 0 { return; }
+  let lb2: i64 = gallop_left(keys, w, w[ba2 + la2 - 1], bb, lb, lb - 1);
+  if lb2 == 0 { return; }
+  if la2 <= lb2 {
+    merge_low(keys, inout w, inout st, ba2, la2, bb, lb2);
+  } else {
+    merge_high(keys, inout w, inout st, ba2, la2, bb, lb2);
+  }
+}
+
+fn collapse(keys: [i64], inout w: [i64], inout st: [i64]) -> () ! alloc
+  requires len(st) == 260 && len(w) <= 100000000 && 0 <= st[1] && st[1] <= 128 && 1 <= st[0] && st[0] <= 1000000000
+  ensures len(w) == len(old(w)) && len(st) == len(old(st)) && 0 <= st[1] && st[1] <= 128 && 1 <= st[0] && st[0] <= 1000000000
+{
+  let mut go: bool = true;
+  let mut fuel: i64 = 200;
+  while go && fuel > 0 && st[1] > 1
+    invariant len(st) == 260 && len(w) <= 100000000 && len(w) == len(old(w)) && len(st) == len(old(st))
+    invariant 0 <= st[1] && st[1] <= 128 && 1 <= st[0] && st[0] <= 1000000000 && 0 <= fuel
+    decreases fuel
+  {
+    fuel = fuel - 1;
+    let n: i64 = st[1] - 2;
+    let bad: bool = !inv_ok(st, n + 1) || !inv_ok(st, n);
+    if bad {
+      let mut m: i64 = n;
+      if n >= 1 && run_len(st, n - 1) < run_len(st, n + 1) { m = n - 1; }
+      merge_at(keys, inout w, inout st, m);
+    } else if run_len(st, n) <= run_len(st, n + 1) {
+      merge_at(keys, inout w, inout st, n);
+    } else {
+      go = false;
+    }
+  }
+}
+
+fn force_collapse(keys: [i64], inout w: [i64], inout st: [i64]) -> () ! alloc
+  requires len(st) == 260 && len(w) <= 100000000 && 0 <= st[1] && st[1] <= 128 && 1 <= st[0] && st[0] <= 1000000000
+  ensures len(w) == len(old(w)) && len(st) == len(old(st))
+{
+  while st[1] > 1
+    invariant len(st) == 260 && len(w) <= 100000000 && len(w) == len(old(w)) && len(st) == len(old(st))
+    invariant 0 <= st[1] && st[1] <= 128 && 1 <= st[0] && st[0] <= 1000000000
+    decreases st[1]
+  {
+    let mut n: i64 = st[1] - 2;
+    if n > 0 && run_len(st, n - 1) < run_len(st, n + 1) { n = n - 1; }
+    merge_at(keys, inout w, inout st, n);
+  }
+}
+
+// n > 7: minrun, runs, binary insertion to minrun, MergeCollapse after each run, MergeForceCollapse
+fn timsort(keys: [i64], inout w: [i64], inout st: [i64]) -> () ! alloc
+  requires len(st) == 260 && 8 <= len(w) && len(w) <= 100000000 && 1 <= st[0] && st[0] <= 1000000000 && st[1] == 0
+  ensures len(w) == len(old(w)) && len(st) == len(old(st))
+{
+  let n: i64 = len(w);
+  let mr: i64 = min_run(n);
+  let mut lo: i64 = 0;
+  let mut rem: i64 = n;
+  while rem > 0
+    invariant 0 <= lo && 0 <= rem && lo + rem == n && n == len(w) && n <= 100000000 && 1 <= mr
+    invariant len(st) == 260 && 0 <= st[1] && st[1] <= 128 && 1 <= st[0] && st[0] <= 1000000000
+    invariant len(w) == len(old(w)) && len(st) == len(old(st))
+    decreases rem
+  {
+    let mut cur: i64 = count_run(keys, inout w, lo, lo + rem);
+    if cur < mr {
+      let mut f: i64 = mr;
+      if rem < f { f = rem; }
+      binary_insertion(keys, inout w, lo, lo + cur, lo + f);
+      cur = f;
+    }
+    let cnt: i64 = st[1];
+    if cnt >= 128 { st[2] = 1; return; }
+    set_run(inout st, cnt, lo, cur);
+    st[1] = cnt + 1;
+    collapse(keys, inout w, inout st);
+    lo = lo + cur;
+    rem = rem - cur;
+  }
+  force_collapse(keys, inout w, inout st);
+}
+
+// ======================= sort: keys and entry =======================
+fn dg(b: [u8], i: i64) -> i64
+  requires 0 <= i && i < len(b)
+  ensures -1 <= result && result <= 9
+{
+  let c: i64 = b[i];
+  if c < 48 || c > 57 { return -1; }
+  return c - 48;
+}
+
+// 17-digit key YYYYMMDDHHmmssSSS of 24 canonical ISO bytes at t[s..s+24]; -1 when absent or malformed
+fn ms_key(t: [u8], s: i64, l: i64) -> i64
+  ensures -1 <= result
+{
+  if s < 0 || l != 24 || s > len(t) - 24 { return -1; }
+  if t[s + 4] != 45 || t[s + 7] != 45 || t[s + 10] != 84 || t[s + 13] != 58 || t[s + 16] != 58 || t[s + 19] != 46 || t[s + 23] != 90 { return -1; }
+  let y0: i64 = dg(t, s);
+  let y1: i64 = dg(t, s + 1);
+  let y2: i64 = dg(t, s + 2);
+  let y3: i64 = dg(t, s + 3);
+  let m0: i64 = dg(t, s + 5);
+  let m1: i64 = dg(t, s + 6);
+  let d0: i64 = dg(t, s + 8);
+  let d1: i64 = dg(t, s + 9);
+  let h0: i64 = dg(t, s + 11);
+  let h1: i64 = dg(t, s + 12);
+  let n0: i64 = dg(t, s + 14);
+  let n1: i64 = dg(t, s + 15);
+  let c0: i64 = dg(t, s + 17);
+  let c1: i64 = dg(t, s + 18);
+  let f0: i64 = dg(t, s + 20);
+  let f1: i64 = dg(t, s + 21);
+  let f2: i64 = dg(t, s + 22);
+  if y0 < 0 || y1 < 0 || y2 < 0 || y3 < 0 || m0 < 0 || m1 < 0 || d0 < 0 || d1 < 0 { return -1; }
+  if h0 < 0 || h1 < 0 || n0 < 0 || n1 < 0 || c0 < 0 || c1 < 0 || f0 < 0 || f1 < 0 || f2 < 0 { return -1; }
+  let ymd: i64 = (y0 * 1000 + y1 * 100 + y2 * 10 + y3) * 10000 + (m0 * 10 + m1) * 100 + (d0 * 10 + d1);
+  let hms: i64 = (h0 * 10 + h1) * 10000 + (n0 * 10 + n1) * 100 + (c0 * 10 + c1);
+  let f: i64 = f0 * 100 + f1 * 10 + f2;
+  return ymd * 1000000000 + hms * 1000 + f;
+}
+
+fn build_keys(rows: [i64], n: i64, text: [u8]) -> [i64] ! alloc
+  requires 0 <= n && 12 * n <= len(rows) && len(rows) <= 100000000
+  ensures len(result) == n
+{
+  let mut keys: [i64] = alloc(n, 0);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && len(keys) == n && 12 * n <= len(rows)
+    decreases n - i
+  {
+    keys[i] = ms_key(text, rows[12 * i + 4], rows[12 * i + 5]);
+    i = i + 1;
+  }
+  return keys;
+}
+
+// rows: 12-word list rows (updatedAt ref at words 4,5). Returns the permutation (item indices in sorted order),
+// empty only on an internal defect.
+pub fn sort_indices(rows: [i64], text: [u8]) -> [i64] ! alloc
+  requires len(rows) <= 100000000 && len(text) <= 100000000
+  ensures len(result) == 0 || len(result) == len(rows) / 12
+{
+  let n: i64 = len(rows) / 12;
+  let keys: [i64] = build_keys(rows, n, text);
+  let mut w: [i64] = alloc(n, 0);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && len(w) == n
+    decreases n - i
+  { w[i] = i; i = i + 1; }
+  if n < 2 { return w; }
+  if n <= 7 {
+    binary_insertion(keys, inout w, 0, 0, n);
+    return w;
+  }
+  let mut st: [i64] = alloc(260, 0);
+  st[0] = 7;
+  timsort(keys, inout w, inout st);
+  if st[2] != 0 {
+    let e: [i64] = alloc(0, 0);
+    return e;
+  }
+  return w;
+}
+
+// ======================= finish: sort, top 50, active ids, result packet =======================
+fn bad(stage: i64) -> [i64] ! alloc
+  requires 0 <= stage && stage <= 30
+  ensures len(result) >= 28
+{ return crate::packet::simple_error(0, stage, 6, 2); }
+
+fn count_admitted(rows: [i64], n13: i64) -> i64
+  requires 0 <= n13 && 13 * n13 <= len(rows)
+  ensures 0 <= result && result <= n13
+{
+  let mut m: i64 = 0;
+  let mut i: i64 = 0;
+  while i < n13
+    invariant 0 <= i && i <= n13 && 0 <= m && m <= i && 13 * n13 <= len(rows)
+    decreases n13 - i
+  {
+    if rows[13 * i] == 1 { m = m + 1; }
+    i = i + 1;
+  }
+  return m;
+}
+
+// admitted rows in enumeration order as 12-word list rows
+fn compact(rows: [i64], n13: i64, m: i64) -> [i64] ! alloc
+  requires 0 <= n13 && 13 * n13 <= len(rows) && 0 <= m && m <= n13 && n13 <= 8000000
+  ensures len(result) == 12 * m
+{
+  let mut items: [i64] = alloc(12 * m, 0);
+  let mut j: i64 = 0;
+  let mut i: i64 = 0;
+  while i < n13
+    invariant 0 <= i && i <= n13 && 0 <= j && j <= m && len(items) == 12 * m && 13 * n13 <= len(rows)
+    decreases n13 - i
+  {
+    if rows[13 * i] == 1 && j < m {
+      let mut f: i64 = 0;
+      while f < 12
+        invariant 0 <= f && f <= 12 && 0 <= j && j < m && len(items) == 12 * m && 0 <= i && i < n13 && 13 * n13 <= len(rows)
+        decreases 12 - f
+      { items[12 * j + f] = rows[13 * i + 1 + f]; f = f + 1; }
+      j = j + 1;
+    }
+    i = i + 1;
+  }
+  return items;
+}
+
+fn items_ok(items: [i64], m: i64, text: [u8]) -> bool
+  requires 0 <= m && len(items) == 12 * m
+{
+  let n: i64 = len(text);
+  let mut i: i64 = 0;
+  while i < m
+    invariant 0 <= i && i <= m && len(items) == 12 * m && n == len(text)
+    decreases m - i
+  {
+    let b: i64 = 12 * i;
+    if !crate::packet::ref_ok(items[b], items[b + 1], n) { return false; }
+    if !crate::packet::ref_ok(items[b + 2], items[b + 3], n) { return false; }
+    if !crate::packet::ref_ok(items[b + 4], items[b + 5], n) { return false; }
+    if !crate::packet::ref_ok(items[b + 6], items[b + 7], n) { return false; }
+    if !crate::packet::ref_ok(items[b + 8], items[b + 9], n) { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+fn perm_ok(idx: [i64], m: i64) -> bool ! alloc
+  requires 0 <= m && len(idx) == m
+{
+  let mut seen: [i64] = alloc(m, 0);
+  let mut j: i64 = 0;
+  while j < m
+    invariant 0 <= j && j <= m && len(seen) == m && len(idx) == m
+    decreases m - j
+  {
+    let v: i64 = idx[j];
+    if v < 0 || v >= m { return false; }
+    if seen[v] != 0 { return false; }
+    seen[v] = 1;
+    j = j + 1;
+  }
+  return true;
+}
+
+// (start,len) of the thread ref of the first k sorted items
+fn thread_refs(items: [i64], idx: [i64], k: i64) -> [i64] ! alloc
+  requires 0 <= k && k <= 50 && len(idx) >= k
+  ensures len(result) == 2 * k
+{
+  let mut thr: [i64] = alloc(2 * k, 0);
+  let mut j: i64 = 0;
+  while j < k
+    invariant 0 <= j && j <= k && len(thr) == 2 * k && len(idx) >= k
+    decreases k - j
+  {
+    let it: i64 = idx[j];
+    thr[2 * j] = -1;
+    if it >= 0 && it < len(items) / 12 {
+      thr[2 * j] = items[12 * it];
+      thr[2 * j + 1] = items[12 * it + 1];
+    }
+    j = j + 1;
+  }
+  return thr;
+}
+
+// out ++ text[s..s+l]; the new ref goes to orows[ob], orows[ob+1] (an invalid ref -2 makes packet::result reject)
+fn emit_ref(inout orows: [i64], ob: i64, out: [u8], text: [u8], s: i64, l: i64) -> [u8] ! alloc
+  requires 0 <= ob && ob + 1 < len(orows) && len(out) <= 50000000 && len(text) <= 100000000
+  ensures len(orows) == len(old(orows)) && len(result) <= 50000000
+{
+  if s == -1 {
+    orows[ob] = -1;
+    orows[ob + 1] = 0;
+    return copy(out);
+  }
+  if s < 0 || l < 0 || l > 20000000 || len(out) > 25000000 || !crate::packet::ref_ok(s, l, len(text)) {
+    orows[ob] = -2;
+    orows[ob + 1] = 0;
+    return copy(out);
+  }
+  let piece: [u8] = crate::util::span_bytes(text, s, l);
+  if len(piece) > 20000000 {
+    orows[ob] = -2;
+    orows[ob + 1] = 0;
+    return copy(out);
+  }
+  orows[ob] = len(out);
+  orows[ob + 1] = len(piece);
+  return crate::packet::cat_bytes(out, piece);
+}
+
+fn emit_rows(items: [i64], idx: [i64], k: i64, act: [i64], text: [u8]) -> [i64] ! alloc
+  requires 0 <= k && k <= 50 && len(idx) >= k && len(act) >= k && len(text) <= 100000000
+  ensures len(result) >= 28
+{
+  let mut orows: [i64] = alloc(12 * k, 0);
+  let mut out: [u8] = alloc(0, 0);
+  let mut j: i64 = 0;
+  while j < k
+    invariant 0 <= j && j <= k && len(orows) == 12 * k && len(out) <= 50000000 && len(idx) >= k && len(act) >= k && len(text) <= 100000000
+    decreases k - j
+  {
+    let it: i64 = idx[j];
+    if it < 0 || it >= len(items) / 12 { return bad(14); }
+    let ib: i64 = 12 * it;
+    let ob: i64 = 12 * j;
+    out = emit_ref(inout orows, ob, out, text, items[ib], items[ib + 1]);
+    out = emit_ref(inout orows, ob + 2, out, text, items[ib + 2], items[ib + 3]);
+    out = emit_ref(inout orows, ob + 4, out, text, items[ib + 4], items[ib + 5]);
+    out = emit_ref(inout orows, ob + 6, out, text, items[ib + 6], items[ib + 7]);
+    out = emit_ref(inout orows, ob + 8, out, text, items[ib + 8], items[ib + 9]);
+    if act[j] == 1 { orows[ob + 10] = 1; }
+    j = j + 1;
+  }
+  let mut meta: [i64] = crate::packet::meta_new(0);
+  meta[3] = k;
+  meta[10] = 12;
+  return crate::packet::result(meta, orows, out);
+}
+
+// rows: bank 1 (13 words per candidate: admitted flag + 12 list words); text: bank 2; active: bytes of active_sessions.json (empty = none)
+pub fn finish(rows: [i64], text: [u8], active: [u8]) -> [i64] ! alloc
+  requires len(rows) <= 100000000 && len(text) <= 100000000 && len(active) <= 100000000
+  ensures len(result) >= 28
+{
+  let n13: i64 = len(rows) / 13;
+  if len(rows) % 13 != 0 || n13 > 7000000 { return bad(14); }
+  let m: i64 = count_admitted(rows, n13);
+  let items: [i64] = compact(rows, n13, m);
+  if !items_ok(items, m, text) { return bad(14); }
+  let idx: [i64] = sort_indices(items, text);
+  if len(idx) != m { return bad(14); }
+  if !perm_ok(idx, m) { return bad(14); }
+  let mut k: i64 = m;
+  if k > 50 { k = 50; }
+  let mut act: [i64] = alloc(k, 0);
+  if k > 0 && len(active) > 0 {
+    let thr: [i64] = thread_refs(items, idx, k);
+    let a: [i64] = crate::summary::active(active, thr, text);
+    if len(a) != k { return bad(15); }
+    let mut j: i64 = 0;
+    while j < k
+      invariant 0 <= j && j <= k && len(act) == k && len(a) == k
+      decreases k - j
+    { act[j] = a[j]; j = j + 1; }
+  }
+  return emit_rows(items, idx, k, act, text);
+}
+
+// ======================= scheduler helpers =======================
+fn bit(s: i64) -> i64
+  requires 0 <= s && s <= 3
+  ensures 1 <= result && result <= 8
+{
+  if s == 0 { return 1; }
+  if s == 1 { return 2; }
+  if s == 2 { return 4; }
+  return 8;
+}
+
+fn consume(inout c: [i64], s: i64) -> ()
+  requires len(c) == 256 && 0 <= s && s <= 3
+  ensures len(c) == len(old(c))
+{
+  let b: i64 = 128 + 32 * s;
+  c[b + 2] = 0;
+  c[b + 3] = 0;
+  c[4] = band(c[4], bxor(bit(s), 15));
+}
+
+fn arm(inout c: [i64], s: i64, id: i64, op: i64) -> ()
+  requires len(c) == 256 && 0 <= s && s <= 3
+  ensures len(c) == len(old(c))
+{
+  let b: i64 = 128 + 32 * s;
+  c[b + 2] = id;
+  c[b + 3] = op;
+  c[4] = bor(c[4], bit(s));
+}
+
+fn init_slot(inout c: [i64], s: i64, idx: i64, purpose: i64, phase: i64) -> ()
+  requires len(c) == 256 && 0 <= s && s <= 3
+  ensures len(c) == len(old(c))
+{
+  let b: i64 = 128 + 32 * s;
+  c[b] = phase;
+  c[b + 1] = idx;
+  c[b + 4] = -1;
+  c[b + 11] = 0;
+  c[b + 13] = purpose;
+  c[b + 26] = 0;
+}
+
+// name of readdir row idx (a ref into bank 2: names base c[32] + start); "" when anything is off
+fn name_of(directory: [i64], text: [u8], c: [i64], idx: i64) -> str ! alloc
+  requires len(c) == 256 && len(text) <= 100000000 && len(directory) <= 100000000
+  ensures len(result) <= 1000000
+{
+  let none: str = "";
+  let cnt: i64 = c[6];
+  if idx < 0 || idx >= cnt || cnt > 5000000 || 3 * cnt > len(directory) { return copy(none); }
+  let ns: i64 = directory[3 * idx];
+  let ln: i64 = directory[3 * idx + 1];
+  let base: i64 = c[32];
+  if ns < 0 || ns > 100000000 || ln < 0 || ln > 1000000 || base < 0 || base > 100000000 { return copy(none); }
+  if !crate::packet::ref_ok(base + ns, ln, len(text)) { return copy(none); }
+  return crate::util::cfg_str(text, base + ns, ln);
+}
+
+// next directory entry that is a directory with a valid thread name; advances c[5]. -1 none, -2 corrupt state
+fn claim(directory: [i64], text: [u8], inout c: [i64]) -> i64 ! alloc
+  requires len(c) == 256 && len(text) <= 100000000 && len(directory) <= 100000000
+  ensures len(c) == len(old(c))
+  ensures result >= -2
+{
+  let cnt: i64 = c[6];
+  if cnt < 0 || cnt > 5000000 || 3 * cnt > len(directory) { return -2; }
+  let mut i: i64 = c[5];
+  if i < 0 || i > cnt { return -2; }
+  let mut found: i64 = -1;
+  while found == -1 && i < cnt  // MUT:M05 => while found == -1 && i < cnt && i < 50
+    invariant 0 <= i && i <= cnt && cnt <= 5000000 && 3 * cnt <= len(directory) && len(c) == 256 && len(c) == len(old(c))
+    invariant found >= -1 && found < cnt && len(text) <= 100000000 && len(directory) <= 100000000
+    decreases cnt - i
+  {
+    let idx: i64 = i;
+    i = i + 1;
+    if directory[3 * idx + 2] == 2 {
+      let name: str = name_of(directory, text, c, idx);
+      if len(name) > 0 && crate::path::valid(name) { found = idx; }
+    }
+  }
+  c[5] = i;
+  return found;
+}
+
+fn dir_of(cfg: [i64], cfg_text: [u8], c: [i64], directory: [i64], text: [u8], idx: i64) -> str ! alloc
+  requires len(cfg) == 24 && len(c) == 256 && len(text) <= 100000000 && len(directory) <= 100000000
+  ensures len(result) <= 1000000
+{
+  let none: str = "";
+  let base: str = crate::util::cfg_str(text, c[34], c[35]);
+  let name: str = name_of(directory, text, c, idx);
+  if len(base) == 0 || len(name) == 0 { return copy(none); }
+  let p: str = crate::path::join(base, name);
+  if len(p) > 1000000 { return copy(none); }
+  return copy(p);
+}
+
+fn active_path(cfg: [i64], cfg_text: [u8]) -> str ! alloc
+  requires len(cfg) == 24 && len(cfg_text) <= 100000000
+  ensures len(result) <= 1000000
+{
+  let none: str = "";
+  let home: str = crate::util::cfg_str(cfg_text, cfg[4], cfg[5]);
+  if len(home) == 0 { return copy(none); }
+  let p: str = crate::path::join(home, "active_sessions.json");
+  if len(p) > 1000000 { return copy(none); }
+  return copy(p);
+}
+
+// the file a slot reads: active_sessions.json (purpose 2) or <candidate dir>/summary.json (purpose 1)
+fn slot_file(cfg: [i64], cfg_text: [u8], ctl: [i64], directory: [i64], text: [u8], s: i64) -> str ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256 && 0 <= s && s <= 3 && len(text) <= 100000000 && len(cfg_text) <= 100000000 && len(directory) <= 100000000
+  ensures len(result) <= 1000000
+{
+  let none: str = "";
+  let b: i64 = 128 + 32 * s;
+  if ctl[b + 13] == 2 { return active_path(cfg, cfg_text); }
+  let dir: str = dir_of(cfg, cfg_text, ctl, directory, text, ctl[b + 1]);
+  if len(dir) == 0 { return copy(none); }
+  let p: str = crate::path::join(dir, "summary.json");
+  if len(p) > 1000000 { return copy(none); }
+  return copy(p);
+}
+
+// one await packet with one request on slot s (the slot keeps its record; id0 = next request id)
+fn one_request(c0: [i64], s: i64, op: i64, flags: i64, handle: i64, off: i64, cnt: i64, path: str, stage: i64,
+               patches: [i64], words: [i64], pool0: [u8], id0: i64) -> [i64] ! alloc
+  requires len(c0) == 256 && 0 <= s && s <= 3 && 1 <= op && op <= 13 && 0 <= flags && flags <= 3
+  requires -1 <= handle && 0 <= off && 0 <= cnt && 0 <= stage && stage <= 30 && 1 <= id0 && id0 <= 1000000000
+  requires len(path) <= 1000000 && len(patches) <= 4096 && len(words) <= 1000 && len(pool0) <= 3000000
+  ensures len(result) >= 268
+{
+  let mut c: [i64] = copy(c0);
+  c[3] = id0 + 1;
+  arm(inout c, s, id0, op);
+  let mut pool: [u8] = copy(pool0);
+  let mut p1s: i64 = -1;
+  let mut p1l: i64 = 0;
+  if len(path) > 0 {
+    p1s = len(pool);
+    p1l = len(path);
+    pool = crate::packet::append_str(pool, path);
+  }
+  let req: [i64] = crate::packet::request(id0, s, op, flags, handle, off, cnt, 0, p1s, p1l, -1, 0, -1, 0, stage);
+  let ep: [i64] = alloc(0, 0);
+  return crate::packet::step_packet(c, patches, req, words, pool, ep, 0);
+}
+
+// Give the slots lo..hi their next candidate (lstat of the candidate directory); when nothing is left and nothing is
+// outstanding, start the active_sessions.json read on slot 0. Always an await packet.
+fn fill_and_go(cfg: [i64], cfg_text: [u8], c0: [i64], directory: [i64], text: [u8], lo: i64, hi: i64,
+               patches: [i64], words: [i64], pool0: [u8], id0: i64) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(c0) == 256 && 0 <= lo && lo <= hi && hi <= 4
+  requires 1 <= id0 && id0 <= 1000000000 && len(text) <= 100000000 && len(cfg_text) <= 100000000 && len(directory) <= 100000000
+  requires len(patches) <= 4096 && len(words) <= 1000 && len(pool0) <= 3000000
+  ensures len(result) >= 268
+{
+  let ep: [i64] = alloc(0, 0);
+  let mut c: [i64] = copy(c0);
+  let mut pool: [u8] = copy(pool0);
+  let mut reqs: [i64] = alloc(0, 0);
+  let mut nid: i64 = id0;
+  let mut s: i64 = lo;
+  while s < hi
+    invariant lo <= s && s <= hi && hi <= 4 && len(c) == 256 && len(text) <= 100000000 && len(directory) <= 100000000 && len(cfg) == 24
+    invariant id0 <= nid && nid <= id0 + (s - lo) && 1 <= id0 && id0 <= 1000000000
+    invariant len(reqs) == 16 * (nid - id0) && len(pool) <= 3000000 + 1000000 * (s - lo) && len(cfg_text) <= 100000000
+    decreases hi - s
+  {
+    let idx: i64 = claim(directory, text, inout c);
+    if idx == -2 { return crate::packet::done_internal(c0, 3); }
+    if idx >= 0 {
+      let path: str = dir_of(cfg, cfg_text, c, directory, text, idx);
+      if len(path) == 0 { return crate::packet::done_internal(c0, 4); }
+      let p0: i64 = len(pool);
+      pool = crate::packet::append_str(pool, path);
+      let row: [i64] = crate::packet::request(nid, s, 2, 0, -1, 0, 0, 0, p0, len(path), -1, 0, -1, 0, 4);
+      reqs = crate::packet::cat_words(reqs, row);
+      arm(inout c, s, nid, 2);
+      init_slot(inout c, s, idx, 1, 310);
+      nid = nid + 1;
+    }
+    s = s + 1;
+  }
+  if c[4] == 0 && nid == id0 {
+    if c[36] != 0 { return crate::packet::done_internal(c0, 3); }
+    let apath: str = active_path(cfg, cfg_text);
+    if len(apath) == 0 { return crate::packet::done_internal(c0, 15); }
+    let p1: i64 = len(pool);
+    pool = crate::packet::append_str(pool, apath);
+    let row2: [i64] = crate::packet::request(nid, 0, 2, 0, -1, 0, 0, 0, p1, len(apath), -1, 0, -1, 0, 15);
+    reqs = crate::packet::cat_words(reqs, row2);
+    arm(inout c, 0, nid, 2);
+    init_slot(inout c, 0, -1, 2, 311);
+    c[36] = 1;
+    nid = nid + 1;
+  }
+  c[2] = 303;
+  c[3] = nid;
+  return crate::packet::step_packet(c, patches, reqs, words, pool, ep, 0);
+}
+
+// the candidate on slot s is finished (admitted or not): count it, free the slot, take the next candidate
+fn candidate_done(cfg: [i64], cfg_text: [u8], ctl: [i64], directory: [i64], text: [u8], s: i64,
+                  patches: [i64], words: [i64], pool: [u8], id0: i64) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256 && 0 <= s && s <= 3 && 1 <= id0 && id0 <= 1000000000
+  requires len(text) <= 100000000 && len(cfg_text) <= 100000000 && len(directory) <= 100000000
+  requires len(patches) <= 4096 && len(words) <= 1000 && len(pool) <= 3000000
+  ensures len(result) >= 268
+{
+  let mut c: [i64] = copy(ctl);
+  consume(inout c, s);
+  if c[7] >= 0 && c[7] < 1000000000 { c[7] = c[7] + 1; }
+  return fill_and_go(cfg, cfg_text, c, directory, text, s, s + 1, patches, words, pool, id0);
+}
+
+fn finish_with(ctl: [i64], rows: [i64], text: [u8], data: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 256 && len(rows) <= 100000000 && len(text) <= 100000000 && len(data) <= 100000000
+  ensures len(result) >= 268
+{
+  return crate::packet::done_wrap(ctl, finish(rows, text, data));
+}
+
+// the file of slot s is unusable (any error is "absent"): active -> no ids; candidate -> not admitted
+fn reject(cfg: [i64], cfg_text: [u8], ctl: [i64], directory: [i64], rows: [i64], text: [u8], s: i64) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256 && 0 <= s && s <= 3 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  requires len(text) <= 100000000 && len(cfg_text) <= 100000000 && len(directory) <= 100000000 && len(rows) <= 100000000
+  ensures len(result) >= 268
+{
+  let b: i64 = 128 + 32 * s;
+  let ep: [i64] = alloc(0, 0);
+  let eb: [u8] = alloc(0, 0);
+  if ctl[b + 13] == 2 { return finish_with(ctl, rows, text, eb); }
+  return candidate_done(cfg, cfg_text, ctl, directory, text, s, ep, ep, eb, ctl[3]);
+}
+
+// ======================= per-slot handlers (slot phases 310..318) =======================
+// 310 lstat dir -> 311 lstat summary/active file -> 312 realpath -> 313 open -> 314 fstat -> 315 read* -> 316 close -> decode
+// 317 close then reject, 318 close then InputTooLarge
+
+fn h_dir(cfg: [i64], cfg_text: [u8], ctl: [i64], directory: [i64], rows: [i64], text: [u8], event: [i64], s: i64) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256 && len(event) >= 24 && 0 <= s && s <= 3 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  requires len(text) <= 100000000 && len(cfg_text) <= 100000000 && len(directory) <= 100000000 && len(rows) <= 100000000
+  ensures len(result) >= 268
+{
+  let b: i64 = 128 + 32 * s;
+  if event[4] != 0 || event[7] != 2 { return reject(cfg, cfg_text, ctl, directory, rows, text, s); }
+  let path: str = slot_file(cfg, cfg_text, ctl, directory, text, s);
+  if len(path) == 0 { return crate::packet::done_internal(ctl, 5); }
+  let mut c: [i64] = copy(ctl);
+  c[b] = 311;
+  let ep: [i64] = alloc(0, 0);
+  let eb: [u8] = alloc(0, 0);
+  return one_request(c, s, 2, 0, -1, 0, 0, path, 5, ep, ep, eb, ctl[3]);
+}
+
+fn h_lstat(cfg: [i64], cfg_text: [u8], ctl: [i64], directory: [i64], rows: [i64], text: [u8], event: [i64], s: i64) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256 && len(event) >= 24 && 0 <= s && s <= 3 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  requires len(text) <= 100000000 && len(cfg_text) <= 100000000 && len(directory) <= 100000000 && len(rows) <= 100000000
+  ensures len(result) >= 268
+{
+  let b: i64 = 128 + 32 * s;
+  if event[4] != 0 || event[7] != 1 { return reject(cfg, cfg_text, ctl, directory, rows, text, s); }
+  let path: str = slot_file(cfg, cfg_text, ctl, directory, text, s);
+  if len(path) == 0 { return crate::packet::done_internal(ctl, 5); }
+  let mut c: [i64] = copy(ctl);
+  c[b] = 312;
+  c[b + 6] = event[8];
+  c[b + 7] = event[9];
+  c[b + 8] = event[10];
+  c[b + 9] = event[11];
+  c[b + 10] = event[12];
+  let ep: [i64] = alloc(0, 0);
+  let eb: [u8] = alloc(0, 0);
+  return one_request(c, s, 3, 0, -1, 0, 0, path, 6, ep, ep, eb, ctl[3]);
+}
+
+fn h_real(cfg: [i64], cfg_text: [u8], ctl: [i64], directory: [i64], rows: [i64], text: [u8], event: [i64], completion: [u8], s: i64) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256 && len(event) >= 24 && 0 <= s && s <= 3 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  requires len(text) <= 100000000 && len(cfg_text) <= 100000000 && len(directory) <= 100000000 && len(rows) <= 100000000 && len(completion) <= 100000000
+  ensures len(result) >= 268
+{
+  let b: i64 = 128 + 32 * s;
+  if event[4] != 0 { return reject(cfg, cfg_text, ctl, directory, rows, text, s); }
+  let size: i64 = ctl[b + 6];
+  if size > 65536 { return reject(cfg, cfg_text, ctl, directory, rows, text, s); }
+  let real: str = crate::util::cfg_str(completion, 0, len(completion));
+  let home: str = crate::util::cfg_str(text, ctl[16], ctl[17]);
+  if len(home) == 0 { return crate::packet::done_internal(ctl, 6); }
+  if len(real) == 0 || !crate::path::inside(home, real) { return reject(cfg, cfg_text, ctl, directory, rows, text, s); }
+  let path: str = slot_file(cfg, cfg_text, ctl, directory, text, s);
+  if len(path) == 0 { return crate::packet::done_internal(ctl, 6); }
+  let mut c: [i64] = copy(ctl);
+  c[b] = 313;
+  let ep: [i64] = alloc(0, 0);
+  let eb: [u8] = alloc(0, 0);
+  return one_request(c, s, 4, 1, -1, 0, 0, path, 7, ep, ep, eb, ctl[3]);
+}
+
+fn h_open(cfg: [i64], cfg_text: [u8], ctl: [i64], directory: [i64], rows: [i64], text: [u8], event: [i64], s: i64) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256 && len(event) >= 24 && 0 <= s && s <= 3 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  requires len(text) <= 100000000 && len(cfg_text) <= 100000000 && len(directory) <= 100000000 && len(rows) <= 100000000
+  ensures len(result) >= 268
+{
+  let b: i64 = 128 + 32 * s;
+  if event[4] != 0 { return reject(cfg, cfg_text, ctl, directory, rows, text, s); }
+  let handle: i64 = event[13];
+  if handle < 0 { return crate::packet::done_internal(ctl, 7); }
+  let mut c: [i64] = copy(ctl);
+  c[b] = 314;
+  c[b + 4] = handle;
+  let ep: [i64] = alloc(0, 0);
+  let eb: [u8] = alloc(0, 0);
+  let nop: str = "";
+  return one_request(c, s, 5, 0, handle, 0, 0, nop, 8, ep, ep, eb, ctl[3]);
+}
+
+fn h_fstat(cfg: [i64], cfg_text: [u8], ctl: [i64], event: [i64], s: i64) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256 && len(event) >= 24 && 0 <= s && s <= 3 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  ensures len(result) >= 268
+{
+  let b: i64 = 128 + 32 * s;
+  let handle: i64 = ctl[b + 4];
+  if handle < 0 { return crate::packet::done_internal(ctl, 8); }
+  let mut c: [i64] = copy(ctl);
+  let ep: [i64] = alloc(0, 0);
+  let eb: [u8] = alloc(0, 0);
+  let nop: str = "";
+  let same: bool = event[9] == ctl[b + 7] && event[10] == ctl[b + 8] && event[11] == ctl[b + 9] && event[12] == ctl[b + 10];
+  if event[4] != 0 || !same {
+    c[b] = 317;
+    return one_request(c, s, 7, 0, handle, 0, 0, nop, 11, ep, ep, eb, ctl[3]);
+  }
+  c[b] = 315;
+  c[b + 11] = 0;
+  c[b + 26] = 0;
+  return one_request(c, s, 6, 0, handle, 0, 65536, nop, 10, ep, ep, eb, ctl[3]);
+}
+
+fn h_read(cfg: [i64], cfg_text: [u8], ctl: [i64], event: [i64], completion: [u8], s: i64) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256 && len(event) >= 24 && 0 <= s && s <= 3 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  requires len(completion) <= 100000000
+  ensures len(result) >= 268
+{
+  let b: i64 = 128 + 32 * s;
+  let handle: i64 = ctl[b + 4];
+  if handle < 0 { return crate::packet::done_internal(ctl, 10); }
+  let mut c: [i64] = copy(ctl);
+  let ep: [i64] = alloc(0, 0);
+  let eb: [u8] = alloc(0, 0);
+  let nop: str = "";
+  if event[4] != 0 {
+    c[b] = 317;
+    return one_request(c, s, 7, 0, handle, 0, 0, nop, 11, ep, ep, eb, ctl[3]);
+  }
+  let n: i64 = len(completion);
+  let acc: i64 = ctl[b + 26];
+  if event[18] != n || acc < 0 || acc > 16777216 { return crate::packet::done_internal(ctl, 10); }
+  let newacc: i64 = acc + n;
+  if newacc > 16777216 {
+    c[b] = 318;
+    return one_request(c, s, 7, 0, handle, 0, 0, nop, 11, ep, ep, eb, ctl[3]);
+  }
+  let pa: [i64] = crate::packet::patch_resize(3 + s, newacc);
+  let pb: [i64] = crate::packet::patch_copy(3 + s, acc, n, 2, 0);
+  let patches: [i64] = crate::packet::cat_words(pa, pb);
+  c[b + 26] = newacc;
+  if event[15] == 1 || n == 0 {
+    c[b] = 316;
+    return one_request(c, s, 7, 0, handle, 0, 0, nop, 11, patches, ep, eb, ctl[3]);
+  }
+  c[b + 11] = newacc;
+  return one_request(c, s, 6, 0, handle, newacc, 65536, nop, 10, patches, ep, eb, ctl[3]);
+}
+
+// bytes of a result packet's text (words -> bytes)
+fn res_bytes(res: [i64], at: i64, l: i64) -> [u8] ! alloc
+  requires 0 <= at && 0 <= l && l <= 100000 && at + l <= len(res)
+  ensures len(result) == l
+{
+  let mut o: [u8] = alloc(l, 0);
+  let mut j: i64 = 0;
+  while j < l
+    invariant 0 <= j && j <= l && len(o) == l && 0 <= at && at + l <= len(res)
+    decreases l - j
+  { o[j] = band(res[at + j], 255); j = j + 1; }
+  return o;
+}
+
+// 13 bank words of an admitted row: admitted, thread, title, updatedAt, path, messages, maybeOpen 0, 0
+fn row_words(tb: i64, nl: i64, tlen: i64, has_u: bool, ulen: i64, plen: i64, has_m: bool, mlen: i64) -> [i64] ! alloc
+  requires 0 <= tb && tb <= 100000000 && 0 <= nl && nl <= 1000000 && 0 <= tlen && tlen <= 100000 && 0 <= ulen && ulen <= 100
+  requires 0 <= plen && plen <= 1000000 && 0 <= mlen && mlen <= 100
+  ensures len(result) == 13
+{
+  let mut r: [i64] = alloc(13, 0);
+  let mut at: i64 = tb;
+  r[0] = 1;
+  r[1] = at; r[2] = nl; at = at + nl;
+  r[3] = at; r[4] = tlen; at = at + tlen;
+  if has_u { r[5] = at; r[6] = ulen; at = at + ulen; } else { r[5] = -1; r[6] = 0; }
+  r[7] = at; r[8] = plen; at = at + plen;
+  if has_m { r[9] = at; r[10] = mlen; } else { r[9] = -1; r[10] = 0; }
+  return r;
+}
+
+fn h_close_ok(cfg: [i64], cfg_text: [u8], ctl: [i64], directory: [i64], rows: [i64], text: [u8], event: [i64], s: i64, data: [u8]) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256 && len(event) >= 24 && 0 <= s && s <= 3 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  requires len(text) <= 100000000 && len(cfg_text) <= 100000000 && len(directory) <= 100000000 && len(rows) <= 100000000 && len(data) <= 100000000
+  ensures len(result) >= 268
+{
+  let b: i64 = 128 + 32 * s;
+  if event[4] != 0 { return reject(cfg, cfg_text, ctl, directory, rows, text, s); }
+  if ctl[b + 13] == 2 { return finish_with(ctl, rows, text, data); }
+  let idx: i64 = ctl[b + 1];
+  let name: str = name_of(directory, text, ctl, idx);
+  let folder: str = crate::util::cfg_str(cfg_text, cfg[6], cfg[7]);
+  let path: str = dir_of(cfg, cfg_text, ctl, directory, text, idx);
+  if len(name) == 0 || len(path) == 0 || idx < 0 || idx >= ctl[6] || idx > 5000000 { return crate::packet::done_internal(ctl, 12); }
+  let res: [i64] = crate::summary::decode(data, 1, folder, name);
+  if len(res) < 28 || len(res) > 100000000 { return crate::packet::done_internal(ctl, 12); }
+  if res[0] == 1 { return crate::packet::done_wrap(ctl, res); }
+  if res[0] != 0 || res[2] < 0 || res[3] < 0 || res[2] > 100000000 || res[3] > 100000000 || res[2] + res[3] != len(res) - 28 { return crate::packet::done_internal(ctl, 12); }
+  let ep: [i64] = alloc(0, 0);
+  let eb: [u8] = alloc(0, 0);
+  if res[7] == 0 {
+    if res[2] != 0 { return crate::packet::done_internal(ctl, 12); }
+    return candidate_done(cfg, cfg_text, ctl, directory, text, s, ep, ep, eb, ctl[3]);
+  }
+  if res[7] != 1 || res[2] != 12 { return crate::packet::done_internal(ctl, 12); }
+  let tl: i64 = res[3];
+  let ts: i64 = res[30];
+  let tn: i64 = res[31];
+  let us: i64 = res[32];
+  let un: i64 = res[33];
+  let ms: i64 = res[36];
+  let mn: i64 = res[37];
+  if !crate::packet::ref_ok(ts, tn, tl) || !crate::packet::ref_ok(us, un, tl) || !crate::packet::ref_ok(ms, mn, tl) {
+    return crate::packet::done_internal(ctl, 12);
+  }
+  if tn > 100000 || un > 100 || mn > 100 || tl > 100000000 { return crate::packet::done_internal(ctl, 12); }
+  let has_u: bool = us >= 0;
+  let has_m: bool = ms >= 0;
+  let mut tlen: i64 = tn;
+  let mut tsrc: i64 = ts;
+  if ts < 0 { tlen = 0; tsrc = 0; }
+  let mut ulen: i64 = 0;
+  let mut usrc: i64 = 0;
+  if has_u { ulen = un; usrc = us; }
+  let mut mlen: i64 = 0;
+  let mut msrc: i64 = 0;
+  if has_m { mlen = mn; msrc = ms; }
+  if 40 + tsrc + tlen > len(res) || 40 + usrc + ulen > len(res) || 40 + msrc + mlen > len(res) {
+    return crate::packet::done_internal(ctl, 12);
+  }
+  let nb: [u8] = crate::util::to_bytes(name);
+  let pbytes: [u8] = crate::util::to_bytes(path);
+  let tb: [u8] = res_bytes(res, 40 + tsrc, tlen);
+  let ub: [u8] = res_bytes(res, 40 + usrc, ulen);
+  let mb: [u8] = res_bytes(res, 40 + msrc, mlen);
+  let mut chunk: [u8] = crate::packet::cat_bytes(nb, tb);
+  chunk = crate::packet::cat_bytes(chunk, ub);
+  chunk = crate::packet::cat_bytes(chunk, pbytes);
+  chunk = crate::packet::cat_bytes(chunk, mb);
+  let tl0: i64 = len(text);
+  let cl: i64 = len(chunk);
+  if tl0 + cl > 100000000 { return crate::packet::done_simple(ctl, 3, 6, 1); }
+  if cl > 3000000 { return crate::packet::done_internal(ctl, 12); }
+  let words: [i64] = row_words(tl0, len(name), tlen, has_u, ulen, len(path), has_m, mlen);
+  let p1: [i64] = crate::packet::patch_resize(2, tl0 + cl);
+  let p2: [i64] = crate::packet::patch_copy(2, tl0, cl, 4, 0);
+  let p3: [i64] = crate::packet::patch_copy(1, 13 * idx, 13, 3, 0);
+  let p12: [i64] = crate::packet::cat_words(p1, p2);
+  let patches: [i64] = crate::packet::cat_words(p12, p3);
+  let mut c: [i64] = copy(ctl);
+  if c[8] >= 0 && c[8] < 1000000000 { c[8] = c[8] + 1; }
+  return candidate_done(cfg, cfg_text, c, directory, text, s, patches, words, chunk, ctl[3]);
+}
+
+fn bank_data(small0: [u8], small1: [u8], small2: [u8], small3: [u8], s: i64, acc: i64) -> [u8] ! alloc
+  requires len(small0) <= 100000000 && len(small1) <= 100000000 && len(small2) <= 100000000 && len(small3) <= 100000000
+  ensures len(result) <= 100000000
+{
+  if s == 0 { return crate::util::span_bytes(small0, 0, acc); }
+  if s == 1 { return crate::util::span_bytes(small1, 0, acc); }
+  if s == 2 { return crate::util::span_bytes(small2, 0, acc); }
+  return crate::util::span_bytes(small3, 0, acc);
+}
+
+fn op_for(p: i64) -> i64
+{
+  if p == 310 || p == 311 { return 2; }
+  if p == 312 { return 3; }
+  if p == 313 { return 4; }
+  if p == 314 { return 5; }
+  if p == 315 { return 6; }
+  if p == 316 || p == 317 || p == 318 { return 7; }
+  return -1;
+}
+
+fn on_slot(cfg: [i64], cfg_text: [u8], ctl: [i64], directory: [i64], rows: [i64], text: [u8],
+           small0: [u8], small1: [u8], small2: [u8], small3: [u8], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256 && len(event) >= 24 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  requires len(text) <= 100000000 && len(cfg_text) <= 100000000 && len(directory) <= 100000000 && len(rows) <= 100000000 && len(completion) <= 100000000
+  requires len(small0) <= 100000000 && len(small1) <= 100000000 && len(small2) <= 100000000 && len(small3) <= 100000000
+  ensures len(result) >= 268
+{
+  let s: i64 = event[2];
+  if s < 0 || s > 3 { return crate::packet::done_internal(ctl, 30); }
+  let b: i64 = 128 + 32 * s;
+  let p: i64 = ctl[b];
+  if op_for(p) != event[3] || ctl[b + 2] != event[1] { return crate::packet::done_internal(ctl, 30); }
+  if p == 310 { return h_dir(cfg, cfg_text, ctl, directory, rows, text, event, s); }
+  if p == 311 { return h_lstat(cfg, cfg_text, ctl, directory, rows, text, event, s); }
+  if p == 312 { return h_real(cfg, cfg_text, ctl, directory, rows, text, event, completion, s); }
+  if p == 313 { return h_open(cfg, cfg_text, ctl, directory, rows, text, event, s); }
+  if p == 314 { return h_fstat(cfg, cfg_text, ctl, event, s); }
+  if p == 315 { return h_read(cfg, cfg_text, ctl, event, completion, s); }
+  if p == 316 {
+    let acc: i64 = ctl[b + 26];
+    if acc < 0 || acc > 16777216 { return crate::packet::done_internal(ctl, 10); }
+    let data: [u8] = bank_data(small0, small1, small2, small3, s, acc);
+    return h_close_ok(cfg, cfg_text, ctl, directory, rows, text, event, s, data);
+  }
+  if p == 317 { return reject(cfg, cfg_text, ctl, directory, rows, text, s); }
+  if p == 318 { return crate::packet::done_simple(ctl, 10, 6, 1); }
+  return crate::packet::done_internal(ctl, 30);
+}
+
+// ======================= global phases 300..303 and the public entry =======================
+// 300: sessions dir path -> bank 2, readdir request on slot 0
+fn begin(cfg: [i64], cfg_text: [u8], ctl: [i64], text: [u8]) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(text) <= 100000000 && len(cfg_text) <= 100000000
+  ensures len(result) >= 268
+{
+  if ctl[16] < 0 || ctl[17] <= 0 || !crate::packet::ref_ok(ctl[16], ctl[17], len(text)) { return crate::packet::done_internal(ctl, 1); }
+  let home: str = crate::util::cfg_str(cfg_text, cfg[4], cfg[5]);
+  let folder: str = crate::util::cfg_str(cfg_text, cfg[6], cfg[7]);
+  if len(home) == 0 { return crate::packet::done_internal(ctl, 1); }
+  let enc: [u8] = crate::path::encode_folder(folder);
+  if len(enc) == 0 { return crate::packet::done_simple(ctl, 2, 1, 3); }
+  if len(enc) > 1000000 { return crate::packet::done_simple(ctl, 0, 6, 1); }
+  let encs: str = crate::util::cfg_str(enc, 0, len(enc));
+  if len(encs) == 0 { return crate::packet::done_simple(ctl, 2, 1, 3); }
+  let sess: str = crate::path::join(home, "sessions");
+  if len(sess) == 0 || len(sess) > 1000000 { return crate::packet::done_internal(ctl, 2); }
+  let base: str = crate::path::join(sess, encs);
+  if len(base) == 0 || len(base) > 1000000 { return crate::packet::done_internal(ctl, 2); }
+  let tl: i64 = len(text);
+  let bl: i64 = len(base);
+  if tl + bl > 100000000 { return crate::packet::done_simple(ctl, 3, 6, 1); }
+  let p1: [i64] = crate::packet::patch_resize(2, tl + bl);
+  let p2: [i64] = crate::packet::patch_copy(2, tl, bl, 4, 0);
+  let patches: [i64] = crate::packet::cat_words(p1, p2);
+  let mut c: [i64] = copy(ctl);
+  c[2] = 301;
+  c[5] = 0; c[6] = 0; c[7] = 0; c[8] = 0;
+  c[34] = tl;
+  c[35] = bl;
+  c[36] = 0;
+  c[128] = 301;
+  let ep: [i64] = alloc(0, 0);
+  let eb: [u8] = alloc(0, 0);
+  return one_request(c, 0, 1, 1, -1, 0, 0, base, 3, patches, ep, eb, ctl[3]);
+}
+
+// 301: readdir completion. Failure or no entries -> straight to the active file; otherwise store rows/names and continue.
+fn on_readdir(cfg: [i64], cfg_text: [u8], ctl: [i64], directory: [i64], text: [u8], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256 && len(event) >= 24 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  requires len(text) <= 100000000 && len(cfg_text) <= 100000000 && len(directory) <= 100000000 && len(completion) <= 100000000
+  ensures len(result) >= 268
+{
+  if event[2] != 0 || event[3] != 1 { return crate::packet::done_internal(ctl, 3); }
+  let mut c: [i64] = copy(ctl);
+  consume(inout c, 0);
+  c[5] = 0; c[6] = 0; c[7] = 0; c[8] = 0;
+  let ep: [i64] = alloc(0, 0);
+  let eb: [u8] = alloc(0, 0);
+  let cnt: i64 = event[16];
+  if event[4] != 0 || cnt <= 0 {
+    return fill_and_go(cfg, cfg_text, c, directory, text, 0, 1, ep, ep, eb, ctl[3]);
+  }
+  let clen: i64 = len(completion);
+  if cnt > 5000000 { return crate::packet::done_simple(ctl, 3, 6, 1); }
+  if event[17] != 3 || len(event) != 24 + 3 * cnt || event[18] != clen { return crate::packet::done_internal(ctl, 3); }
+  let tl: i64 = len(text);
+  if tl + clen > 100000000 { return crate::packet::done_simple(ctl, 3, 6, 1); }
+  let a1: [i64] = crate::packet::patch_resize(0, 3 * cnt);
+  let a2: [i64] = crate::packet::patch_copy(0, 0, 3 * cnt, 1, 24);
+  let a3: [i64] = crate::packet::patch_resize(2, tl + clen);
+  let a4: [i64] = crate::packet::patch_copy(2, tl, clen, 2, 0);
+  let a5: [i64] = crate::packet::patch_resize(1, 0);
+  let a6: [i64] = crate::packet::patch_resize(1, 13 * cnt);
+  let q1: [i64] = crate::packet::cat_words(a1, a2);
+  let q2: [i64] = crate::packet::cat_words(a3, a4);
+  let q3: [i64] = crate::packet::cat_words(a5, a6);
+  let q12: [i64] = crate::packet::cat_words(q1, q2);
+  let patches: [i64] = crate::packet::cat_words(q12, q3);
+  c[6] = cnt;
+  c[32] = tl;
+  c[33] = clen;
+  c[2] = 302;
+  return crate::packet::step_packet(c, patches, ep, ep, eb, ep, 2);
+}
+
+pub fn advance(cfg: [i64], cfg_text: [u8], ctl: [i64], directory: [i64], rows: [i64], text: [u8],
+               small0: [u8], small1: [u8], small2: [u8], small3: [u8], history: [u8],
+               event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(cfg) == 24 && 0 <= cfg[2] && cfg[2] <= 2147483647 && len(ctl) == 256 && len(event) >= 24
+  requires 1 <= ctl[3] && ctl[3] <= 1000000000 && 0 <= ctl[4] && ctl[4] <= 15 && 0 <= ctl[2] && ctl[2] <= 999
+  requires len(cfg_text) <= 100000000 && len(directory) <= 100000000 && len(rows) <= 100000000 && len(text) <= 100000000
+  requires len(small0) <= 100000000 && len(small1) <= 100000000 && len(small2) <= 100000000 && len(small3) <= 100000000
+  requires len(history) <= 100000000 && len(completion) <= 100000000
+  ensures len(result) >= 268
+{
+  if ctl[1] != 0 { return crate::packet::done_internal(ctl, 30); }
+  let phase: i64 = ctl[2];
+  if phase == 300 { return begin(cfg, cfg_text, ctl, text); }
+  if phase == 301 { return on_readdir(cfg, cfg_text, ctl, directory, text, event, completion); }
+  if phase == 302 {
+    let ep: [i64] = alloc(0, 0);
+    let eb: [u8] = alloc(0, 0);
+    return fill_and_go(cfg, cfg_text, ctl, directory, text, 0, 4, ep, ep, eb, ctl[3]);
+  }
+  if phase == 303 {
+    return on_slot(cfg, cfg_text, ctl, directory, rows, text, small0, small1, small2, small3, event, completion);
+  }
+  return crate::packet::done_internal(ctl, 30);
+}

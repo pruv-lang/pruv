@@ -1,0 +1,250 @@
+// Grok history entry -> TurnCollector calls (reference/grok.ts readGrok loop body + contentText). NOT compiled or verified (no shell).
+//
+// feed(d, st, sl, buf) result: 0 = handled (also for every ignored entry), 1 = "grow buf and call again" (nothing was changed; returned
+// only when a begin would not fit buf: 65584*(st[0]%200)+65584 > len(buf)), -1 = internal failure (corrupt tape, timestamp defect, ...).
+// Collector state st/sl/buf is the caller's (turns.pruv); the owner (read::window) grows buf with turns::grow when feed returns 1.
+//
+// UNSURE / for the main agent:
+//  1. feed requires st[0] < 100000000 (a window has at most 4194304 lines) and ensures st[0] <= 100000000, so the owner can chain calls
+//     without carrying the 1e12 bound of turns::begin. Loop owners must keep st[0] <= (number of feed calls so far).
+//  2. entry_at returns a 1-byte sentinel string for "iso_of defect" (the only values are "" / 24 bytes / 1 byte); feed turns that into -1.
+//     A timestamp defect is computed only where the timestamp is used (after the synthetic/user_info/blank skips), because TS never fails there.
+//  3. The tag unwrapping builds the inner text through [u8] + jstr::adapter_probe (the only [u8]->str conversion) instead of substr,
+//     so no is_char_boundary proof is needed; the tags are ASCII, so the cut points are always boundaries at run time (a mismatch gives -1).
+//  4. content() stops collecting after 40000000 bytes of joined text (unreachable: a line is at most 1 MiB); same guard style as codex item_text.
+//  5. add_tools loops once per slot with turns::tool (collector contract: tools saturate at 1e15), as the codex importer does.
+
+pub fn content(d: crate::json::JsonDocument, id: i64) -> str ! alloc
+  ensures len(result) <= 100000000
+{
+  let none: str = "";
+  let k0: i64 = crate::access::kind(d, id);
+  if k0 == 4 { return crate::util::str_at(d, id); }
+  if k0 != 5 { return copy(none); }
+  let ids: [i64] = crate::util::elements(d, id);
+  let n: i64 = len(ids);
+  let mut out: String = string_new();
+  let mut first: bool = true;
+  let mut total: i64 = 0;
+  let mut k: i64 = 0;
+  while k < n && total <= 40000000
+    invariant 0 <= k && k <= n && n == len(ids) && 0 <= total && total <= 90331650 && len(out) <= total
+    decreases n - k
+  {
+    let part: i64 = ids[k];
+    k = k + 1;
+    if crate::access::kind(d, part) == 6 {
+      let pt: i64 = crate::access::field(d, part, "text");
+      if crate::access::kind(d, pt) == 4 {
+        let x: str = crate::util::str_at(d, pt);
+        if len(x) > 0 {
+          if !first { out = string_push_str(move out, "\n\n"); }
+          out = string_push_str(move out, x);
+          first = false;
+          total = total + len(x) + 2;
+        }
+      }
+    }
+  }
+  return string_to_str(out);
+}
+
+// n tool items on the current draft, one turns::tool per array slot (no-op without a current draft).
+pub fn add_tools(n: i64, inout st: [i64], inout sl: [i64]) -> ()
+  requires len(st) == 4 && len(sl) == 1600 && 0 <= st[3] && st[3] < 200 && 0 <= n
+  requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+  ensures len(st) == 4 && len(sl) == 1600 && st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2] && st[3] == old(st)[3]
+  ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+{
+  let mut k: i64 = 0;
+  while k < n
+    invariant 0 <= k && k <= n && len(st) == 4 && len(sl) == 1600
+    invariant st[0] == old(st)[0] && st[1] == old(st)[1] && st[2] == old(st)[2] && st[3] == old(st)[3]
+    invariant 0 <= st[3] && st[3] < 200
+    invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+    invariant forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+    decreases n - k
+  {
+    crate::turns::tool(inout st, inout sl);
+    k = k + 1;
+  }
+}
+
+// isoOf(timestamp ?? created_at) of the entry object (root id 0): "" absent, 24 bytes present, 1 byte = iso_of defect.
+// A present timestamp that is not null never falls back to created_at (an invalid one is simply absent).
+fn entry_at(d: crate::json::JsonDocument) -> str ! alloc
+  ensures len(result) == 0 || len(result) == 1 || len(result) == 24
+{
+  let none: str = "";
+  let flag: str = "x";
+  let ts: i64 = crate::access::field(d, 0, "timestamp");
+  let mut id: i64 = ts;
+  if ts < 0 || crate::access::kind(d, ts) == 0 { id = crate::access::field(d, 0, "created_at"); }
+  if id < 0 { return copy(none); }
+  let iso: crate::time::Iso = crate::time::iso_of(d, id);
+  if iso.status == 1 { return copy(none); }
+  if iso.status != 0 || len(iso.text) != 24 { return copy(flag); }
+  let s: str = crate::jstr::adapter_probe(iso.text);
+  if len(s) != 24 { return copy(flag); }
+  return copy(s);
+}
+
+// lit occurs in s at byte position at.
+fn has_at(s: str, at: i64, lit: str) -> bool
+  requires 0 <= at
+{
+  if at > len(s) || len(lit) > len(s) - at { return false; }
+  let mut k: i64 = 0;
+  while k < len(lit)
+    invariant 0 <= k && k <= len(lit) && 0 <= at && at <= len(s) && len(lit) <= len(s) - at
+    decreases len(lit) - k
+  {
+    let a: i64 = s[at + k];
+    let b: i64 = lit[k];
+    if a != b { return false; }
+    k = k + 1;
+  }
+  return true;
+}
+
+// trimmed = s[lo..hi). When it starts <user_query>, ends </user_query> and is at least 25 bytes (the tags may not overlap), the inner
+// bounds after removing exactly one leading \r?\n and then one trailing \r?\n; else [-1,-1].
+fn query_range(s: str, lo: i64, hi: i64) -> [i64] ! alloc
+  requires 0 <= lo && lo <= hi && hi <= len(s)
+  ensures len(result) == 2
+  ensures result[0] == -1 || (lo + 12 <= result[0] && result[0] <= result[1] && result[1] <= hi - 13)
+{
+  let mut r: [i64] = alloc(2, 0);
+  r[0] = -1;
+  r[1] = -1;
+  if hi - lo < 25 { return r; }
+  if !has_at(s, lo, "<user_query>") { return r; }
+  if !has_at(s, hi - 13, "</user_query>") { return r; }
+  let mut a: i64 = lo + 12;
+  let mut b: i64 = hi - 13;
+  if a < b {
+    let x: i64 = s[a];
+    if x == 10 {
+      a = a + 1;
+    } else if x == 13 && a + 1 < b {
+      let y: i64 = s[a + 1];
+      if y == 10 { a = a + 2; }
+    }
+  }
+  if a < b {
+    let z: i64 = s[b - 1];
+    if z == 10 {
+      b = b - 1;
+      if a < b {
+        let w: i64 = s[b - 1];
+        if w == 13 { b = b - 1; }
+      }
+    }
+  }
+  r[0] = a;
+  r[1] = b;
+  return r;
+}
+
+// dst[0..n) = src[lo..lo+n)
+fn copy_range(inout dst: [u8], src: str, lo: i64, n: i64) -> ()
+  requires 0 <= lo && 0 <= n && n <= len(dst) && lo <= len(src) && n <= len(src) - lo
+  ensures len(dst) == len(old(dst))
+{
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && n <= len(dst) && 0 <= lo && lo <= len(src) && n <= len(src) - lo && len(dst) == len(old(dst))
+    decreases n - j
+  {
+    let b: i64 = src[lo + j];
+    dst[j] = b;
+    j = j + 1;
+  }
+}
+
+// type == "user" entry.
+fn feed_user(d: crate::json::JsonDocument, inout st: [i64], inout sl: [i64], inout buf: [u8]) -> i64 ! alloc
+  requires len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && 0 <= st[0] && st[0] < 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
+  requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+  ensures len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && 0 <= st[0] && st[0] <= 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
+  ensures st[0] == old(st)[0] || st[0] == old(st)[0] + 1
+  ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+{
+  // synthetic_reason neither missing nor null (false, 0 and "" included) => the entry is skipped
+  let sr: i64 = crate::access::field(d, 0, "synthetic_reason");
+  if sr >= 0 && crate::access::kind(d, sr) != 0 { return 0; }  // MUT:M09 => if sr >= 0 && crate::access::kind(d, sr) == 4 { return 0; }
+  let txt: str = content(d, crate::access::field(d, 0, "content"));
+  let tr: crate::text::Span = crate::text::trim_span(txt);
+  let q: [i64] = query_range(txt, tr.lo, tr.hi);
+  let mut prompt: str = copy(txt);
+  if q[0] >= 0 {
+    // user_query wins over everything: only the inner text is used (outer whitespace discarded)
+    let n: i64 = q[1] - q[0];
+    if n < 0 || n > len(txt) { return -1; }
+    let mut bb: [u8] = alloc(n, 0);
+    copy_range(inout bb, txt, q[0], n);
+    let inner: str = crate::jstr::adapter_probe(bb);
+    if len(inner) != n { return -1; }
+    prompt = copy(inner);  // MUT:M08 => prompt = crate::text::trim(inner);
+  } else {
+    // <user_info> start without a prompt_index (missing or null) is Grok head text
+    let pi: i64 = crate::access::field(d, 0, "prompt_index");
+    if (pi < 0 || crate::access::kind(d, pi) == 0) && has_at(txt, tr.lo, "<user_info>") { return 0; }
+  }
+  if crate::text::is_blank(prompt) { return 0; }
+  if len(prompt) > 100000000 { return -1; }
+  let at: str = entry_at(d);
+  if len(at) == 1 { return -1; }
+  if 65584 * (st[0] % 200) + 65584 > len(buf) { return 1; }
+  crate::turns::begin(inout st, inout sl, inout buf, prompt, at);
+  return 0;
+}
+
+// type == "assistant" entry: answer(contentText, at) even for empty text, then tool(tool_calls.length) when it is an array.
+fn feed_assistant(d: crate::json::JsonDocument, inout st: [i64], inout sl: [i64], inout buf: [u8]) -> i64 ! alloc
+  requires len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && 0 <= st[0] && st[0] < 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
+  requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+  ensures len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && 0 <= st[0] && st[0] <= 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
+  ensures st[0] == old(st)[0]
+  ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+{
+  let txt: str = content(d, crate::access::field(d, 0, "content"));
+  let at: str = entry_at(d);
+  if len(at) == 1 { return -1; }
+  crate::turns::answer(inout st, inout sl, inout buf, txt, at);
+  let tc: i64 = crate::access::field(d, 0, "tool_calls");
+  if crate::access::kind(d, tc) == 5 {
+    let n: i64 = crate::access::array_length(d, tc);
+    if n < 0 { return -1; }
+    add_tools(n, inout st, inout sl);  // MUT:M11 => add_tools(1, inout st, inout sl);
+  }
+  return 0;
+}
+
+// One parsed history line. Non-object roots and other entry types do nothing.
+pub fn feed(d: crate::json::JsonDocument, inout st: [i64], inout sl: [i64], inout buf: [u8]) -> i64 ! alloc
+  requires len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && 0 <= st[0] && st[0] < 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
+  requires forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  requires forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+  ensures len(st) == 4 && len(sl) == 1600 && len(buf) <= 13116800 && 0 <= st[0] && st[0] <= 100000000 && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
+  ensures st[0] == old(st)[0] || st[0] == old(st)[0] + 1
+  ensures forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+  ensures forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+{
+  let r: i64 = crate::access::root(d);
+  if crate::access::kind(d, r) != 6 { return 0; }
+  let ty: i64 = crate::access::field(d, r, "type");
+  if crate::access::string_is(d, ty, "user") == 1 {
+    return feed_user(d, inout st, inout sl, inout buf);
+  }
+  if crate::access::string_is(d, ty, "assistant") == 1 {
+    return feed_assistant(d, inout st, inout sl, inout buf);
+  }
+  return 0;
+}

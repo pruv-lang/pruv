@@ -1,0 +1,775 @@
+// Grok copy (copyGrokSession) state machine, mode 2, phases 500..599 (IMPL_NOTES sections 2-4). Package E, written WITHOUT a shell:
+// nothing here was compiled or verified. Slot 0 only (everything is serial). Pinned behaviour: reference/grok.ts copyGrokSession.
+//
+// NOTES / THINGS I WAS UNSURE ABOUT
+//  1. Package B (path.pruv) was not present: I call encode_folder / join / inside / valid exactly as the task lists them and know no
+//     `requires`/`ensures`. Every call passes strings of at most 1000000 bytes and results are re-capped by the wrappers `jn`, `enc_of`
+//     (a result over 1000000 bytes or empty means InputTooLarge, stage 0, class 6, code 1; an empty/"."/".." encoding is not-found).
+//  2. The skipped count goes in meta[12] (packet::result_ok accepts 0..1e9).
+//  3. Pending error (original error kept while cleaning up) is stored as NUMBERS in ctl 26 stage, 27 class, 28 code, 29 present flag
+//     (DESIGN says "ref in bank 2"; nothing in root reads these words). Class is 1 (EngineImportError: read-failed 7 / grok-exists 4 /
+//     grok-load-failed 5) or 6 (InputTooLarge).  Raw OS errors that propagate (first lstat non-ENOENT, entropy) are class 4 and finish at once.
+//  4. Slot 0 record words used (base 128): +4 source handle (132), +5 destination handle (133), +7..10 dev/ino limbs of the lstat (135..138),
+//     +11 total bytes read so far (139), +12 bytes of the current chunk not yet written (140), +24,+25 file name ref in bank 2 (152,153),
+//     +27 write cursor inside the chunk (155). ctl 5 next row, 6 row count, 9 skipped, 10 base of the readdir bytes in bank 2, 11 their
+//     length, 13 verify called, 16,17 homeReal ref, 18,19 temp path ref (all bank 2).
+//  5. Bank layout: bank 2 = homeReal ++ temp path ++ readdir completion bytes; bank 0 = 3 words per name (start rel. to the completion, len,
+//     kind) copied from the event words (patch source 1, offset 24); bank 3 (small0) = the chunk being written (kept for short writes).
+//  6. Per allowed file: lstat (5) -> realpath (6) -> open O_NOFOLLOW (7) -> fstat dev/ino compare (8) -> exclusive create 0600 (20) ->
+//     loop {read 65536 (10) ; write the chunk, re-write the unwritten suffix on a short write (21)} until a 0-byte read -> close source (11)
+//     -> close destination (21). A successful 0-byte write is a no-progress error (read-failed, stage 21). End of file = a read that returns 0 bytes.
+//     The destination is created BEFORE the first read (Node opens it concurrently; the order is not observable except in the trace).
+//  7. Any failure inside the try (everything from the parent mkdir to the rename, including grok-exists on the second lstat) keeps the first
+//     error, closes the open handles (source first), removes the temp directory (recursive force, result ignored), then finishes with that error.
+//     Host-protocol violations (bad handle, bad length) are InternalInvariant (stage 30) at once, WITHOUT cleanup.
+//  8. After the rename completion: rpc::load_check exactly once (flag ctl 13). Failure of any kind (load_check status 1) -> remove the target
+//     (rm, stage 28, result ignored) and finish with EngineImportError grok-load-failed (class 1, code 5) at the load_check stage (24..26).
+//  9. Names that are not valid UTF-8 or longer than 1000000 bytes become "" (util::cfg_str style) and are not on the allow-list: skipped once.
+// 10. realHome of an empty source home: the empty path is sent to realpath as is (the host decides). An empty target home is not-found (stage 0).
+// 11. The ctl phases I return: 501..509 setup, 510 next name, 511..515 per-file start, 516 read, 517/518 closes, 519 write, 520 second lstat,
+//     521 rename, 550 close-for-failure, 561 rm done. Not used: 522..549, 551..560, 562..599.
+
+// ---- small helpers ----
+
+// bytes -> text; "" when invalid UTF-8 or longer than 1000000
+fn str_of(b: [u8]) -> str ! alloc
+  ensures len(result) <= 1000000
+{
+  let none: str = "";
+  let x: str = crate::jstr::adapter_probe(b);
+  if len(x) > 1000000 { return copy(none); }
+  return copy(x);
+}
+
+fn np() -> [i64] ! alloc
+  ensures len(result) == 0
+{
+  let e: [i64] = alloc(0, 0);
+  return e;
+}
+
+// path::join with the result capped (empty = over 1000000)
+fn jn(a: str, b: str) -> str ! alloc
+  requires len(a) <= 1000000 && len(b) <= 1000000
+  ensures len(result) <= 1000000
+{
+  let none: str = "";
+  let r: str = crate::path::join(a, b);
+  if len(r) > 1000000 { return copy(none); }
+  return copy(r);
+}
+
+// encodeURIComponent(folder) as text; "" when empty, "." or ".." (not-found) or too long
+fn enc_of(folder: str) -> str ! alloc
+  requires len(folder) <= 1000000
+  ensures len(result) <= 1000000
+{
+  let none: str = "";
+  let b: [u8] = crate::path::encode_folder(folder);
+  if len(b) == 0 || len(b) > 1000000 { return copy(none); }
+  let s: str = str_of(b);
+  if crate::text::same(s, ".") || crate::text::same(s, "..") { return copy(none); }
+  return copy(s);
+}
+
+// the 13 names of COPY_ALLOW, exactly
+pub fn allowed(name: str) -> bool ! alloc
+{
+  if crate::text::same(name, "summary.json") { return true; }  // MUT:M13 => if true { return true; }
+  if crate::text::same(name, "chat_history.jsonl") { return true; }
+  if crate::text::same(name, "events.jsonl") { return true; }
+  if crate::text::same(name, "updates.jsonl") { return true; }
+  if crate::text::same(name, "prompt_context.json") { return true; }
+  if crate::text::same(name, "resources_state.json") { return true; }
+  if crate::text::same(name, "rewind_points.jsonl") { return true; }
+  if crate::text::same(name, "signals.json") { return true; }
+  if crate::text::same(name, "usage.json") { return true; }
+  if crate::text::same(name, "system_prompt.txt") { return true; }
+  if crate::text::same(name, "tool_definitions.json") { return true; }
+  if crate::text::same(name, "announcement_state.json") { return true; }
+  if crate::text::same(name, "title_refresh_idx") { return true; }
+  return false;
+}
+
+fn hex_digit(d: i64) -> i64
+  requires 0 <= d && d <= 15
+  ensures 48 <= result && result <= 102
+{
+  if d < 10 { return 48 + d; }
+  return 87 + d;
+}
+
+// `<thread>.lair-import-<12 lowercase hex digits>` from the six entropy bytes
+pub fn temp_name(thread: str, entropy: [u8]) -> str ! alloc
+  requires len(thread) <= 1000 && len(entropy) == 6
+  ensures len(result) <= 1000000
+{
+  let head: [u8] = crate::packet::append_str(crate::util::to_bytes(thread), ".lair-import-");
+  let mut h: [u8] = alloc(12, 0);
+  let mut k: i64 = 0;
+  while k < 6
+    invariant 0 <= k && k <= 6 && len(h) == 12 && len(entropy) == 6
+    decreases 6 - k
+  {
+    let mut x: i64 = entropy[k];
+    if x > 255 { x = 255; }
+    if x < 0 { x = 0; }
+    h[2 * k] = hex_digit(x / 16);
+    h[2 * k + 1] = hex_digit(x % 16);
+    k = k + 1;
+  }
+  return str_of(crate::packet::cat_bytes(head, h));
+}
+
+// which: 0 source home/sessions, 1 source session folder (… / encoded folder), 2 source thread dir, 3 target parent
+// (target home/sessions/encoded folder), 4 target thread dir, 5 source home as given. "" = unusable (not-found or over 1000000).
+fn path_of(cfg: [i64], t: [u8], which: i64) -> str ! alloc
+  requires len(cfg) == 24 && len(t) <= 100000000 && 0 <= which && which <= 5
+  ensures len(result) <= 1000000
+{
+  let none: str = "";
+  let src: str = crate::util::cfg_str(t, cfg[4], cfg[5]);
+  if which == 5 { return copy(src); }
+  let folder: str = crate::util::cfg_str(t, cfg[6], cfg[7]);
+  let enc: str = enc_of(folder);
+  if len(enc) == 0 { return copy(none); }
+  let thread: str = crate::util::cfg_str(t, cfg[8], cfg[9]);
+  if which <= 2 {
+    let sessions: str = jn(src, "sessions");
+    if len(sessions) == 0 { return copy(none); }
+    if which == 0 { return copy(sessions); }
+    let base: str = jn(sessions, enc);
+    if len(base) == 0 { return copy(none); }
+    if which == 1 { return copy(base); }
+    return jn(base, thread);
+  }
+  let dst: str = crate::util::cfg_str(t, cfg[10], cfg[11]);
+  let dsess: str = jn(dst, "sessions");
+  if len(dsess) == 0 { return copy(none); }
+  let parent: str = jn(dsess, enc);
+  if len(parent) == 0 { return copy(none); }
+  if which == 3 { return copy(parent); }
+  return jn(parent, thread);
+}
+
+// ---- packet builders ----
+
+// One await packet with one request on slot 0 (new id = ctl[3]); the previous slot record is overwritten (= consumed).
+fn issue(ctl: [i64], phase: i64, op: i64, flags: i64, handle: i64, offset: i64, count: i64, mode: i64, stage: i64,
+         pool: [u8], p1s: i64, p1l: i64, p2s: i64, p2l: i64, ds: i64, dl: i64, patches: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000 && 0 <= phase && phase <= 999
+  requires 1 <= op && op <= 13 && 0 <= flags && flags <= 3 && -1 <= handle && 0 <= offset && 0 <= count && 0 <= mode
+  requires 0 <= stage && stage <= 30 && len(pool) <= 100000000 && len(patches) <= 4096
+  ensures len(result) >= 268
+{
+  let id: i64 = ctl[3];
+  let mut c: [i64] = copy(ctl);
+  c[2] = phase;
+  c[3] = id + 1;
+  c[4] = 1;
+  c[130] = id;
+  c[131] = op;
+  let req: [i64] = crate::packet::request(id, 0, op, flags, handle, offset, count, mode, p1s, p1l, p2s, p2l, ds, dl, stage);
+  let ew: [i64] = alloc(0, 0);
+  return crate::packet::step_packet(c, patches, req, ew, pool, ew, 0);
+}
+
+// One-path request on path_of(which)
+fn path_req(ctl: [i64], cfg: [i64], t: [u8], phase: i64, op: i64, flags: i64, mode: i64, stage: i64, which: i64, patches: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(cfg) == 24 && len(t) <= 100000000
+  requires 0 <= phase && phase <= 999 && 1 <= op && op <= 13 && 0 <= flags && flags <= 3 && 0 <= mode
+  requires 0 <= stage && stage <= 30 && 0 <= which && which <= 5 && len(patches) <= 4096
+  ensures len(result) >= 268
+{
+  let p: str = path_of(cfg, t, which);
+  if len(p) == 0 && which != 5 { return crate::packet::done_simple(ctl, 0, 6, 1); }
+  let pool: [u8] = crate::util::to_bytes(p);
+  return issue(ctl, phase, op, flags, -1, 0, 0, mode, stage, pool, 0, len(pool), -1, 0, -1, 0, patches);
+}
+
+// Continue packet (storage patches only); the caller must change at least one ctl word (the phase does).
+fn cont(ctl: [i64], phase: i64, patches: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 256 && 0 <= phase && phase <= 999 && len(patches) <= 4096
+  ensures len(result) >= 268
+{
+  let mut c: [i64] = copy(ctl);
+  c[2] = phase;
+  c[4] = 0;
+  c[130] = 0;
+  c[131] = 0;
+  let e: [i64] = alloc(0, 0);
+  let eb: [u8] = alloc(0, 0);
+  return crate::packet::step_packet(c, patches, e, e, eb, e, 2);
+}
+
+fn eie(ctl: [i64], stage: i64, code: i64) -> [i64] ! alloc
+  requires len(ctl) == 256
+  ensures len(result) >= 268
+{
+  let none: [u8] = alloc(0, 0);
+  return crate::packet::done_error(ctl, stage, 1, code, 0, 0, none, "EngineImportError", "");
+}
+
+// a raw OS error that propagates unchanged (class 4): errno class and native errno from the completion; raw = the OS
+// code string (event 19, 20 into the completion bytes) as a JSON string, absent when the completion has none
+fn raw_os(ctl: [i64], stage: i64, event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 256 && len(event) >= 24 && len(completion) <= 100000000
+  ensures len(result) >= 268
+{
+  let s: i64 = event[19];
+  let n: i64 = event[20];
+  if s < 0 || n <= 0 || n > 64 || s > len(completion) - n {
+    let none: [u8] = alloc(0, 0);
+    return crate::packet::done_error(ctl, stage, 4, 0, event[5], event[6], none, "Error", "");
+  }
+  let mut raw: [u8] = alloc(n + 2, 34);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && len(raw) == n + 2
+    decreases n - i
+  {
+    let b: i64 = completion[s + i];
+    if b < 32 || b == 34 || b == 92 || b > 126 { raw[i + 1] = 63; } else { raw[i + 1] = b; }
+    i = i + 1;
+  }
+  return crate::packet::done_error(ctl, stage, 4, 0, event[5], event[6], raw, "Error", "");
+}
+
+// the pending error (ctl 26 stage, 27 class, 28 code) as the final packet
+fn done_pending(ctl: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 256
+  ensures len(result) >= 268
+{
+  let none: [u8] = alloc(0, 0);
+  if ctl[27] == 1 { return crate::packet::done_error(ctl, ctl[26], 1, ctl[28], 0, 0, none, "EngineImportError", ""); }
+  return crate::packet::done_error(ctl, ctl[26], ctl[27], ctl[28], 0, 0, none, "", "");
+}
+
+// Cleanup chain: close the source handle, then the destination handle (phase 550 after each), then rm the temp directory
+// (phase 561), whose completion finishes with the pending error.
+fn next_close(c: [i64], text: [u8]) -> [i64] ! alloc
+  requires len(c) == 256 && 1 <= c[3] && c[3] <= 1000000000 && len(text) <= 100000000
+  ensures len(result) >= 268
+{
+  let eb: [u8] = alloc(0, 0);
+  if c[132] >= 1 {
+    let h: i64 = c[132];
+    let mut c2: [i64] = copy(c);
+    c2[132] = -1;
+    return issue(c2, 550, 7, 0, h, 0, 0, 0, 11, eb, -1, 0, -1, 0, -1, 0, np());
+  }
+  if c[133] >= 1 {
+    let h2: i64 = c[133];
+    let mut c3: [i64] = copy(c);
+    c3[133] = -1;
+    return issue(c3, 550, 7, 0, h2, 0, 0, 0, 21, eb, -1, 0, -1, 0, -1, 0, np());
+  }
+  let tb: [u8] = crate::util::span_bytes(text, c[18], c[19]);
+  if len(tb) == 0 { return done_pending(c); }
+  return issue(c, 561, 10, 3, -1, 0, 0, 0, 27, tb, 0, len(tb), -1, 0, -1, 0, np());
+}
+
+// Record the first error (stage, class, code) and start the cleanup chain.
+fn fail_with(ctl: [i64], text: [u8], stage: i64, cls: i64, code: i64) -> [i64] ! alloc
+  requires len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(text) <= 100000000
+  ensures len(result) >= 268
+{
+  let mut c: [i64] = copy(ctl);
+  c[26] = stage;
+  c[27] = cls;
+  c[28] = code;
+  c[29] = 1;
+  c[4] = 0;
+  c[130] = 0;
+  c[131] = 0;
+  return next_close(c, text);
+}
+
+// ---- phases 500..508: checks, chain, first lstat, entropy, mkdirs ----
+
+fn p500(cfg: [i64], t: [u8], ctl: [i64]) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(t) <= 100000000 && len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  ensures len(result) >= 268
+{
+  let engine: str = crate::util::cfg_str(t, cfg[14], cfg[15]);
+  let thread: str = crate::util::cfg_str(t, cfg[8], cfg[9]);
+  let dst: str = crate::util::cfg_str(t, cfg[10], cfg[11]);
+  if !crate::text::same(engine, "grok") || len(thread) > 128 || len(dst) == 0 { return eie(ctl, 0, 3); }
+  if !crate::path::valid(thread) { return eie(ctl, 0, 3); }
+  // the encoded folder is rejected (not-found) when the source path is built, before realHome
+  let folder: str = crate::util::cfg_str(t, cfg[6], cfg[7]);
+  if len(enc_of(folder)) == 0 { return eie(ctl, 0, 3); }
+  if len(path_of(cfg, t, 2)) == 0 || len(path_of(cfg, t, 4)) == 0 { return crate::packet::done_simple(ctl, 0, 6, 1); }
+  return path_req(ctl, cfg, t, 501, 3, 0, 0, 1, 5, np());
+}
+
+// realpath(source home) done: the whole completion is the real path; keep it in bank 2 at 0
+fn p501(cfg: [i64], t: [u8], ctl: [i64], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(t) <= 100000000 && len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(event) >= 24 && len(completion) <= 100000000
+  ensures len(result) >= 268
+{
+  if event[4] != 0 || len(completion) == 0 || len(completion) > 1000000 { return eie(ctl, 1, 3); }
+  let n: i64 = len(completion);
+  let patches: [i64] = crate::packet::cat_words(crate::packet::patch_resize(2, n), crate::packet::patch_copy(2, 0, n, 2, 0));
+  let mut c: [i64] = copy(ctl);
+  c[16] = 0;
+  c[17] = n;
+  return path_req(c, cfg, t, 502, 2, 0, 0, 2, 0, patches);
+}
+
+// lstat of home/sessions (502), the session folder (503), the thread dir (504): each must be a plain directory (not a link)
+fn p_chain(cfg: [i64], t: [u8], ctl: [i64], event: [i64], phase: i64) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(t) <= 100000000 && len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(event) >= 24
+  ensures len(result) >= 268
+{
+  if event[4] != 0 || event[7] != 2 { return eie(ctl, 2, 3); }
+  if phase == 502 { return path_req(ctl, cfg, t, 503, 2, 0, 0, 2, 1, np()); }
+  if phase == 503 { return path_req(ctl, cfg, t, 504, 2, 0, 0, 2, 2, np()); }
+  // 504: the first target lstat (stage 16)
+  return path_req(ctl, cfg, t, 505, 2, 0, 0, 16, 4, np());
+}
+
+// first target lstat: success (any kind) = grok-exists; only ENOENT = absent; anything else propagates raw
+fn p505(ctl: [i64], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(event) >= 24 && len(completion) <= 100000000
+  ensures len(result) >= 268
+{
+  if event[4] == 0 { return eie(ctl, 16, 4); }
+  if event[5] != 1 { return raw_os(ctl, 16, event, completion); }
+  let eb: [u8] = alloc(0, 0);
+  return issue(ctl, 506, 13, 0, -1, 0, 6, 0, 17, eb, -1, 0, -1, 0, -1, 0, np());
+}
+
+// entropy done (6 bytes): build the temp name, keep the temp path in bank 2 after the real home, mkdir -p the parent (mode 0700)
+fn p506(cfg: [i64], t: [u8], ctl: [i64], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(t) <= 100000000 && len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(event) >= 24 && len(completion) <= 100000000
+  ensures len(result) >= 268
+{
+  if event[4] != 0 { return raw_os(ctl, 17, event, completion); }
+  if len(completion) != 6 { return crate::packet::done_internal(ctl, 30); }
+  let thread: str = crate::util::cfg_str(t, cfg[8], cfg[9]);
+  if len(thread) > 1000 { return crate::packet::done_internal(ctl, 30); }
+  let h: i64 = ctl[17];
+  if h < 0 || h > 1000000 { return crate::packet::done_internal(ctl, 30); }
+  let name: str = temp_name(thread, completion);
+  let parent: str = path_of(cfg, t, 3);
+  if len(parent) == 0 || len(name) == 0 { return crate::packet::done_simple(ctl, 0, 6, 1); }
+  let temp: str = jn(parent, name);
+  if len(temp) == 0 { return crate::packet::done_simple(ctl, 0, 6, 1); }
+  let tb: [u8] = crate::util::to_bytes(temp);
+  let pb: [u8] = crate::util::to_bytes(parent);
+  let pool: [u8] = crate::packet::cat_bytes(tb, pb);
+  let patches: [i64] = crate::packet::cat_words(crate::packet::patch_resize(2, h + len(tb)), crate::packet::patch_copy(2, h, len(tb), 4, 0));
+  let mut c: [i64] = copy(ctl);
+  c[18] = h;
+  c[19] = len(tb);
+  return issue(c, 507, 8, 1, -1, 0, 0, 448, 18, pool, len(tb), len(pb), -1, 0, -1, 0, patches);
+}
+
+// parent mkdir done (507): then the temp directory (non-recursive, 0700); a failure here already needs the cleanup chain (508)
+fn p507(ctl: [i64], text: [u8], event: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(text) <= 100000000 && len(event) >= 24
+  ensures len(result) >= 268
+{
+  if event[4] != 0 { return fail_with(ctl, text, 18, 1, 7); }
+  let tb: [u8] = crate::util::span_bytes(text, ctl[18], ctl[19]);
+  if len(tb) == 0 { return crate::packet::done_internal(ctl, 30); }
+  return issue(ctl, 508, 8, 0, -1, 0, 0, 448, 19, tb, 0, len(tb), -1, 0, -1, 0, np());
+}
+
+fn part_a(cfg: [i64], t: [u8], ctl: [i64], text: [u8], event: [i64], completion: [u8], ph: i64) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(t) <= 100000000 && len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(event) >= 24
+  requires len(text) <= 100000000 && len(completion) <= 100000000
+  ensures len(result) >= 268
+{
+  if ph == 500 { return p500(cfg, t, ctl); }
+  if ph == 501 { return p501(cfg, t, ctl, event, completion); }
+  if ph >= 502 && ph <= 504 { return p_chain(cfg, t, ctl, event, ph); }
+  if ph == 505 { return p505(ctl, event, completion); }
+  if ph == 506 { return p506(cfg, t, ctl, event, completion); }
+  if ph == 507 { return p507(ctl, text, event); }
+  // 508: temp mkdir done, then the source readdir (names only, stage 3)
+  if event[4] != 0 { return fail_with(ctl, text, 19, 1, 7); }
+  return path_req(ctl, cfg, t, 509, 1, 0, 0, 3, 2, np());
+}
+
+// ---- phases 509..515: listing, next name, per-file checks and opens ----
+
+// readdir done: keep the names (completion bytes into bank 2 after the temp path, rows into bank 0), count 0 skipped
+fn p509(ctl: [i64], text: [u8], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(text) <= 100000000 && len(event) >= 24 && len(completion) <= 100000000
+  ensures len(result) >= 268
+{
+  if event[4] != 0 { return fail_with(ctl, text, 3, 1, 7); }
+  let cnt: i64 = event[16];
+  let clen: i64 = len(completion);
+  let h: i64 = ctl[18];
+  let tl: i64 = ctl[19];
+  if cnt < 0 || cnt > 33333333 || h < 0 || h > 1000000 || tl < 0 || tl > 1000000 { return crate::packet::done_internal(ctl, 30); }
+  let base: i64 = h + tl;
+  if base + clen > 100000000 { return fail_with(ctl, text, 3, 6, 1); }
+  let p1: [i64] = crate::packet::cat_words(crate::packet::patch_resize(2, base + clen), crate::packet::patch_copy(2, base, clen, 2, 0));
+  let p2: [i64] = crate::packet::cat_words(crate::packet::patch_resize(0, 3 * cnt), crate::packet::patch_copy(0, 0, 3 * cnt, 1, 24));
+  let mut c: [i64] = copy(ctl);
+  c[5] = 0;
+  c[6] = cnt;
+  c[9] = 0;
+  c[10] = base;
+  c[11] = clen;
+  return cont(c, 510, crate::packet::cat_words(p1, p2));
+}
+
+// [index of the next allowed name, names skipped before it, its start in bank 2, its length]; length -1 = none left, -2 = corrupt state
+fn scan(ctl: [i64], directory: [i64], text: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 256 && len(directory) <= 100000000 && len(text) <= 100000000
+  ensures len(result) == 4
+{
+  let mut out: [i64] = alloc(4, 0);
+  out[3] = -2;
+  let cnt: i64 = ctl[6];
+  let base: i64 = ctl[10];
+  let clen: i64 = ctl[11];
+  let first: i64 = ctl[5];
+  if cnt < 0 || cnt > 33333333 || first < 0 || first > cnt || 3 * cnt > len(directory) { return out; }
+  if base < 0 || base > len(text) || clen < 0 || clen > len(text) - base { return out; }
+  let mut i: i64 = first;
+  while i < cnt
+    invariant first <= i && i <= cnt && 0 <= cnt && cnt <= 33333333 && 3 * cnt <= len(directory) && len(out) == 4
+    invariant 0 <= base && base <= len(text) && 0 <= clen && clen <= len(text) - base && 0 <= first
+    decreases cnt - i
+  {
+    let s: i64 = directory[3 * i];
+    let l: i64 = directory[3 * i + 1];
+    if s < 0 || !crate::packet::ref_ok(s, l, clen) { out[3] = -2; return out; }
+    let name: str = str_of(crate::util::span_bytes(text, base + s, l));
+    if allowed(name) {
+      out[0] = i;
+      out[1] = i - first;
+      out[2] = base + s;
+      out[3] = l;
+      return out;
+    }
+    i = i + 1;
+  }
+  out[0] = cnt;
+  out[1] = cnt - first;
+  out[3] = -1;
+  return out;
+}
+
+// the file path of the current name: source (dest false) = source thread dir / name, destination (dest true) = temp dir / name
+fn file_path(cfg: [i64], t: [u8], ctl: [i64], text: [u8], dest: bool) -> str ! alloc
+  requires len(cfg) == 24 && len(t) <= 100000000 && len(ctl) == 256 && len(text) <= 100000000
+  ensures len(result) <= 1000000
+{
+  let none: str = "";
+  let name: str = str_of(crate::util::span_bytes(text, ctl[152], ctl[153]));
+  if len(name) == 0 { return copy(none); }
+  if dest {
+    let temp: str = str_of(crate::util::span_bytes(text, ctl[18], ctl[19]));
+    if len(temp) == 0 { return copy(none); }
+    return jn(temp, name);
+  }
+  let sdir: str = path_of(cfg, t, 2);
+  if len(sdir) == 0 { return copy(none); }
+  return jn(sdir, name);
+}
+
+fn file_req(cfg: [i64], t: [u8], ctl: [i64], text: [u8], dest: bool, phase: i64, op: i64, flags: i64, mode: i64, stage: i64) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(t) <= 100000000 && len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(text) <= 100000000
+  requires 0 <= phase && phase <= 999 && 1 <= op && op <= 13 && 0 <= flags && flags <= 3 && 0 <= mode && 0 <= stage && stage <= 30
+  ensures len(result) >= 268
+{
+  let p: str = file_path(cfg, t, ctl, text, dest);
+  if len(p) == 0 { return crate::packet::done_internal(ctl, 30); }
+  let pool: [u8] = crate::util::to_bytes(p);
+  return issue(ctl, phase, op, flags, -1, 0, 0, mode, stage, pool, 0, len(pool), -1, 0, -1, 0, np());
+}
+
+// not copied (not on the list was counted by scan; here: not a plain file inside the source home): one more skipped, next name
+fn skip_next(ctl: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 256
+  ensures len(result) >= 268
+{
+  let k: i64 = ctl[9];
+  if k < 0 || k > 1000000000 { return crate::packet::done_internal(ctl, 30); }
+  let mut c: [i64] = copy(ctl);
+  c[9] = k + 1;
+  return cont(c, 510, np());
+}
+
+// 510: next allowed name (lstat it) or, when none is left, the second target lstat (stage 22)
+fn p510(cfg: [i64], t: [u8], ctl: [i64], directory: [i64], text: [u8]) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(t) <= 100000000 && len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  requires len(directory) <= 100000000 && len(text) <= 100000000
+  ensures len(result) >= 268
+{
+  let sc: [i64] = scan(ctl, directory, text);
+  if sc[3] == -2 || sc[1] < 0 || sc[1] > 33333333 || sc[0] < -1 || sc[0] > 100000000 { return crate::packet::done_internal(ctl, 30); }
+  let k: i64 = ctl[9];
+  if k < 0 || k > 1000000000 { return crate::packet::done_internal(ctl, 30); }
+  let mut c: [i64] = copy(ctl);
+  c[9] = k + sc[1];
+  if sc[3] == -1 {
+    c[5] = ctl[6];
+    return path_req(c, cfg, t, 520, 2, 0, 0, 22, 4, np());
+  }
+  c[5] = sc[0] + 1;
+  c[152] = sc[2];
+  c[153] = sc[3];
+  return file_req(cfg, t, c, text, false, 511, 2, 0, 0, 5);
+}
+
+// lstat of the file: must be a plain regular file (a link, directory or error counts as skipped); remember dev/ino, then realpath
+fn p511(cfg: [i64], t: [u8], ctl: [i64], text: [u8], event: [i64]) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(t) <= 100000000 && len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(text) <= 100000000 && len(event) >= 24
+  ensures len(result) >= 268
+{
+  if event[4] != 0 || event[7] != 1 { return skip_next(ctl); }
+  let mut c: [i64] = copy(ctl);
+  c[135] = event[9];
+  c[136] = event[10];
+  c[137] = event[11];
+  c[138] = event[12];
+  return file_req(cfg, t, c, text, false, 512, 3, 0, 0, 6);
+}
+
+// realpath of the file must lie inside the real source home; then open read-only with O_NOFOLLOW (flags 1)
+fn p512(cfg: [i64], t: [u8], ctl: [i64], text: [u8], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(t) <= 100000000 && len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(text) <= 100000000 && len(event) >= 24
+  requires len(completion) <= 100000000
+  ensures len(result) >= 268
+{
+  if event[4] != 0 { return skip_next(ctl); }
+  let rp: str = str_of(completion);
+  let hr: str = str_of(crate::util::span_bytes(text, ctl[16], ctl[17]));
+  if len(rp) == 0 || len(hr) == 0 { return skip_next(ctl); }
+  if !crate::path::inside(hr, rp) { return skip_next(ctl); }
+  return file_req(cfg, t, ctl, text, false, 513, 4, 1, 0, 7);
+}
+
+// open done: fstat the handle; a failed open is a read-failed (nothing to close yet)
+fn p513(ctl: [i64], text: [u8], event: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(text) <= 100000000 && len(event) >= 24
+  ensures len(result) >= 268
+{
+  if event[4] != 0 { return fail_with(ctl, text, 7, 1, 7); }
+  let h: i64 = event[13];
+  if h < 1 { return crate::packet::done_internal(ctl, 30); }
+  let mut c: [i64] = copy(ctl);
+  c[132] = h;
+  let eb: [u8] = alloc(0, 0);
+  return issue(c, 514, 5, 0, h, 0, 0, 0, 8, eb, -1, 0, -1, 0, -1, 0, np());
+}
+
+// fstat done: dev and ino must equal the lstat's, else (or on error) close and read-failed; then create the destination (wx, 0600)
+fn p514(cfg: [i64], t: [u8], ctl: [i64], text: [u8], event: [i64]) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(t) <= 100000000 && len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(text) <= 100000000 && len(event) >= 24
+  ensures len(result) >= 268
+{
+  if event[4] != 0 { return fail_with(ctl, text, 8, 1, 7); }
+  if event[9] != ctl[135] || event[10] != ctl[136] || event[11] != ctl[137] || event[12] != ctl[138] {
+    return fail_with(ctl, text, 8, 1, 7);
+  }
+  return file_req(cfg, t, ctl, text, true, 515, 11, 0, 384, 20);
+}
+
+// create done: keep the destination handle, first read at offset 0
+fn p515(ctl: [i64], text: [u8], event: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(text) <= 100000000 && len(event) >= 24
+  ensures len(result) >= 268
+{
+  if event[4] != 0 { return fail_with(ctl, text, 20, 1, 7); }
+  let h: i64 = event[13];
+  let src: i64 = ctl[132];
+  if h < 1 || src < 1 { return crate::packet::done_internal(ctl, 30); }
+  let mut c: [i64] = copy(ctl);
+  c[133] = h;
+  c[139] = 0;
+  c[140] = 0;
+  c[155] = 0;
+  let eb: [u8] = alloc(0, 0);
+  return issue(c, 516, 6, 0, src, 0, 65536, 0, 10, eb, -1, 0, -1, 0, -1, 0, np());
+}
+
+fn part_b(cfg: [i64], t: [u8], ctl: [i64], directory: [i64], text: [u8], event: [i64], completion: [u8], ph: i64) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(t) <= 100000000 && len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(event) >= 24
+  requires len(directory) <= 100000000 && len(text) <= 100000000 && len(completion) <= 100000000
+  ensures len(result) >= 268
+{
+  if ph == 509 { return p509(ctl, text, event, completion); }
+  if ph == 510 { return p510(cfg, t, ctl, directory, text); }
+  if ph == 511 { return p511(cfg, t, ctl, text, event); }
+  if ph == 512 { return p512(cfg, t, ctl, text, event, completion); }
+  if ph == 513 { return p513(ctl, text, event); }
+  if ph == 514 { return p514(cfg, t, ctl, text, event); }
+  return p515(ctl, text, event);
+}
+
+// ---- phases 516..519: transfer and the two closes ----
+
+// read done: 0 bytes = end of file (close the source); else keep the chunk in bank 3 and write it from the completion bytes
+fn p516(ctl: [i64], text: [u8], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(text) <= 100000000 && len(event) >= 24 && len(completion) <= 100000000
+  ensures len(result) >= 268
+{
+  if event[4] != 0 { return fail_with(ctl, text, 10, 1, 7); }
+  let n: i64 = event[14];
+  let total: i64 = ctl[139];
+  let src: i64 = ctl[132];
+  let dst: i64 = ctl[133];
+  if n < 0 || n > 65536 || n != len(completion) || total < 0 || total > 1000000000000000 { return crate::packet::done_internal(ctl, 30); }
+  if src < 1 || dst < 1 { return crate::packet::done_internal(ctl, 30); }
+  let eb: [u8] = alloc(0, 0);
+  if n == 0 {
+    let mut c: [i64] = copy(ctl);
+    c[132] = -1;
+    return issue(c, 517, 7, 0, src, 0, 0, 0, 11, eb, -1, 0, -1, 0, -1, 0, np());
+  }
+  let patches: [i64] = crate::packet::cat_words(crate::packet::patch_resize(3, n), crate::packet::patch_copy(3, 0, n, 2, 0));
+  let mut c2: [i64] = copy(ctl);
+  c2[139] = total + n;
+  c2[140] = n;
+  c2[155] = 0;
+  return issue(c2, 519, 12, 0, dst, total, 0, 0, 21, completion, -1, 0, -1, 0, 0, n, patches);
+}
+
+// write done: advance by the bytes written (0 = no progress = error); a short write re-writes the suffix from bank 3, a complete one reads on
+fn p519(ctl: [i64], text: [u8], small0: [u8], event: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(text) <= 100000000 && len(small0) <= 100000000 && len(event) >= 24
+  ensures len(result) >= 268
+{
+  if event[4] != 0 { return fail_with(ctl, text, 21, 1, 7); }
+  let w: i64 = event[14];
+  let u: i64 = ctl[140];
+  let cur: i64 = ctl[155];
+  let total: i64 = ctl[139];
+  let src: i64 = ctl[132];
+  let dst: i64 = ctl[133];
+  if u < 1 || u > 65536 || cur < 0 || cur > 65536 || total < u || total > 1000000000000000 { return crate::packet::done_internal(ctl, 30); }
+  if src < 1 || dst < 1 { return crate::packet::done_internal(ctl, 30); }
+  if w < 1 { return fail_with(ctl, text, 21, 1, 7); }
+  if w > u { return crate::packet::done_internal(ctl, 30); }
+  let u2: i64 = u - w;
+  let cur2: i64 = cur + w;
+  let mut c: [i64] = copy(ctl);
+  c[140] = u2;
+  c[155] = cur2;
+  if u2 > 0 {
+    if !crate::packet::ref_ok(cur2, u2, len(small0)) { return crate::packet::done_internal(ctl, 30); }
+    let pool: [u8] = crate::util::span_bytes(small0, cur2, u2);
+    return issue(c, 519, 12, 0, dst, total - u2, 0, 0, 21, pool, -1, 0, -1, 0, 0, len(pool), np());
+  }
+  let eb: [u8] = alloc(0, 0);
+  return issue(c, 516, 6, 0, src, total, 65536, 0, 10, eb, -1, 0, -1, 0, -1, 0, np());
+}
+
+// source closed (517) -> close the destination (stage 21, 518); destination closed (518) -> next name
+fn p_close(ctl: [i64], text: [u8], event: [i64], phase: i64) -> [i64] ! alloc
+  requires len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(text) <= 100000000 && len(event) >= 24
+  ensures len(result) >= 268
+{
+  if phase == 517 {
+    if event[4] != 0 { return fail_with(ctl, text, 11, 1, 7); }
+    let dst: i64 = ctl[133];
+    if dst < 1 { return crate::packet::done_internal(ctl, 30); }
+    let mut c: [i64] = copy(ctl);
+    c[133] = -1;
+    let eb: [u8] = alloc(0, 0);
+    return issue(c, 518, 7, 0, dst, 0, 0, 0, 21, eb, -1, 0, -1, 0, -1, 0, np());
+  }
+  if event[4] != 0 { return fail_with(ctl, text, 21, 1, 7); }
+  return cont(ctl, 510, np());
+}
+
+fn part_c(ctl: [i64], text: [u8], small0: [u8], event: [i64], completion: [u8], ph: i64) -> [i64] ! alloc
+  requires len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(text) <= 100000000 && len(small0) <= 100000000
+  requires len(event) >= 24 && len(completion) <= 100000000
+  ensures len(result) >= 268
+{
+  if ph == 516 { return p516(ctl, text, event, completion); }
+  if ph == 519 { return p519(ctl, text, small0, event); }
+  return p_close(ctl, text, event, ph);
+}
+
+// ---- phases 520..521: second lstat, rename, the one verify ----
+
+// verify (rpc::load_check) once. Success -> result with the target path and the skipped count; failure -> remove the target (stage 28)
+// and finish with grok-load-failed at the load_check stage.
+fn verify(cfg: [i64], t: [u8], ctl: [i64]) -> [i64] ! async, net, proc, alloc
+  requires len(cfg) == 24 && 0 <= cfg[2] && cfg[2] <= 2147483647 && len(t) <= 100000000 && len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  ensures len(result) >= 268
+{
+  let binary: str = crate::util::cfg_str(t, cfg[12], cfg[13]);
+  let dhome: str = crate::util::cfg_str(t, cfg[10], cfg[11]);
+  let folder: str = crate::util::cfg_str(t, cfg[6], cfg[7]);
+  let thread: str = crate::util::cfg_str(t, cfg[8], cfg[9]);
+  let res: [i64] = crate::rpc::load_check(binary, dhome, folder, thread, cfg[2]);
+  let tb: [u8] = crate::util::to_bytes(path_of(cfg, t, 4));
+  let mut c: [i64] = copy(ctl);
+  c[13] = 1;
+  if res[0] == 0 {
+    let mut meta: [i64] = crate::packet::meta_new(2);
+    meta[8] = 0;
+    meta[9] = len(tb);
+    if ctl[9] >= 0 && ctl[9] <= 1000000000 { meta[12] = ctl[9]; }
+    let er: [i64] = alloc(0, 0);
+    let pr: [i64] = crate::packet::result(meta, er, tb);
+    return crate::packet::done_wrap(c, pr);
+  }
+  let mut st: i64 = res[17];
+  if st < 24 || st > 26 { st = 25; }
+  c[26] = st;
+  c[27] = 1;
+  c[28] = 5;
+  c[29] = 1;
+  if len(tb) == 0 { return done_pending(c); }  // MUT:M15 => if true { return done_pending(c); }
+  return issue(c, 561, 10, 3, -1, 0, 0, 0, 28, tb, 0, len(tb), -1, 0, -1, 0, np());
+}
+
+fn part_d(cfg: [i64], t: [u8], ctl: [i64], text: [u8], event: [i64], ph: i64) -> [i64] ! async, net, proc, alloc
+  requires len(cfg) == 24 && 0 <= cfg[2] && cfg[2] <= 2147483647 && len(t) <= 100000000 && len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  requires len(text) <= 100000000 && len(event) >= 24
+  ensures len(result) >= 268
+{
+  if ph == 520 {
+    // second lstat: success (any kind) = grok-exists; every error means absent here; then rename temp -> target
+    if event[4] == 0 { return fail_with(ctl, text, 22, 1, 4); }  // MUT:M14 => if false { return fail_with(ctl, text, 22, 1, 4); }
+    let target: str = path_of(cfg, t, 4);
+    let tmp: [u8] = crate::util::span_bytes(text, ctl[18], ctl[19]);
+    if len(target) == 0 || len(tmp) == 0 { return crate::packet::done_internal(ctl, 30); }
+    let tb: [u8] = crate::util::to_bytes(target);
+    if len(tmp) > 1000000 || len(tb) > 1000000 { return crate::packet::done_internal(ctl, 30); }
+    let pool: [u8] = crate::packet::cat_bytes(tmp, tb);
+    return issue(ctl, 521, 9, 0, -1, 0, 0, 0, 23, pool, 0, len(tmp), len(tmp), len(tb), -1, 0, np());
+  }
+  // 521: rename done
+  if event[4] != 0 { return fail_with(ctl, text, 23, 1, 7); }
+  // exactly one verify: a second entry here would be a protocol fault
+  if ctl[13] != 0 { return crate::packet::done_internal(ctl, 30); }
+  return verify(cfg, t, ctl);
+}
+
+// ---- entry ----
+
+pub fn advance(cfg: [i64], cfg_text: [u8], ctl: [i64], directory: [i64], rows: [i64], text: [u8],
+               small0: [u8], small1: [u8], small2: [u8], small3: [u8], history: [u8],
+               event: [i64], completion: [u8]) -> [i64] ! async, net, proc, alloc
+  requires len(cfg) == 24 && 0 <= cfg[2] && cfg[2] <= 2147483647 && len(ctl) == 256 && len(event) >= 24
+  requires 1 <= ctl[3] && ctl[3] <= 1000000000 && 0 <= ctl[4] && ctl[4] <= 15 && 0 <= ctl[2] && ctl[2] <= 999
+  requires len(cfg_text) <= 100000000 && len(directory) <= 100000000 && len(rows) <= 100000000 && len(text) <= 100000000
+  requires len(small0) <= 100000000 && len(small1) <= 100000000 && len(small2) <= 100000000 && len(small3) <= 100000000
+  requires len(history) <= 100000000 && len(completion) <= 100000000
+  ensures len(result) >= 268
+{
+  let ph: i64 = ctl[2];
+  if ph >= 500 && ph <= 508 { return part_a(cfg, cfg_text, ctl, text, event, completion, ph); }
+  if ph >= 509 && ph <= 515 { return part_b(cfg, cfg_text, ctl, directory, text, event, completion, ph); }
+  if ph >= 516 && ph <= 519 { return part_c(ctl, text, small0, event, completion, ph); }
+  if ph == 520 || ph == 521 { return part_d(cfg, cfg_text, ctl, text, event, ph); }
+  // 550: a close made for a failure completed (its result never matters): the next close, then the temp removal
+  if ph == 550 { return next_close(ctl, text); }
+  // 561: the removal of the temp directory (or of the target after a failed verify) completed: finish with the pending error
+  if ph == 561 { return done_pending(ctl); }
+  return crate::packet::done_internal(ctl, 30);
+}

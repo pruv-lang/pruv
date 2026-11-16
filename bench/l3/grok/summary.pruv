@@ -1,0 +1,795 @@
+// Grok import, package B: the small-json state machine and the summary/active decisions (phases 200-299).
+// NOT compiled, NOT verified (written without a shell).
+//
+// NOTES / DOUBTS (read these first; the hand-off protocol is MY ASSUMPTION, DESIGN/IMPL_NOTES do not fix it):
+//  1. Global phases (ctl[2]): 200 = start for mode 4 (direct small-json, purpose 0) or mode 1 (summary after the chain, purpose 1), slot 0;
+//     201..204 = start a job on slot 0..3 that the caller (list) prepared: slot record +13 purpose (1 summary, 2 active),
+//     +14 return phase (300..999), +24,+25 thread name ref in bank 2 (purpose 1), and ctl[15] = follow-up GLOBAL phase (300..999);
+//     the event must be the empty one. 210..213 = finish slot 0..3 (decode with the exact-size bank; my own continue phase);
+//     220 = waiting for a completion; the real state is the slot phase (record +0): 231 lstat, 232 realpath, 233 open, 234 fstat,
+//     235 read, 236 close after EOF, 237 close after a failure (then absent), 238 close after growth (then InputTooLarge), 239 ready to decode.
+//     If list drives a slot, list::advance must forward completions of slots whose phase is 231..238 to summary::advance (the global phase
+//     is 220 while the summary waits; list may have its own phase there, then it has to call summary::advance itself).
+//  2. Results. mode 4: done packet = decode(.., 0, ..) (meta mode 4; present flag meta[11], value = JSON fragment ref meta[8,9]).
+//     mode 1: summary missing/mismatching -> not-found (stage 13, class 1, code 3); else ctl[20,21] title ref, ctl[22,23] model ref (bank 2,
+//     appended at len(text); -1 = absent), CONTINUE at ctl[2] = 400 (read::advance start; ctl[16,17] homeReal stays; all slots idle).
+//     mode 0 (list slot): slot +15 = 1 (present) / 0 (absent); purpose 1: +16,17 title, +18,19 model, +20,21 updatedAt, +22,23 messages decimal
+//     (refs into bank 2, appended at len(text); -1 start = absent; an empty title is present), slot phase := +14, ctl[2] := ctl[15], CONTINUE.
+//     purpose 2: the exact-size file bytes stay in small bank 3+s (empty on absent); list passes them to active().
+//     I treat len(text) as the used length of bank 2 and append there; the small banks are resized by me (geometric growth, final shrink).
+//  3. decode(data, purpose, folder, thread): purpose 0 -> result packet mode 4 (present flag, value ref); purpose 1 -> result packet mode 0,
+//     row width 12, count 1 = accepted summary (ONE list row: thread ref, title ref (present even if empty), updatedAt ref or -1, path ref -1
+//     (caller fills), messages ref or -1, maybeOpen 0), count 0 = no summary; meta[4,5] title (absent when empty), meta[6,7] model (absent when
+//     empty); the text area is thread ++ title ++ updatedAt ++ messages ++ model. Other purposes give the InternalInvariant packet.
+//  4. active(data, threads, text): `threads` is read as PAIRS (start,len) into `text`, one flag per pair: result length len(threads)/2.
+//     If list passes 13-word candidate rows or 12-word list rows instead, this must change.
+//  5. Error choices: file grew past 16777216 bytes -> done InputTooLarge at stage 10 (class 6, code 1), after the close, whatever the close
+//     says; a parse failure of kind 18 (InternalInvariant) -> internal at stage 12; kind 1 -> InputTooLarge stage 10; other parse failures are
+//     "absent" (P1). Close failure after a normal read -> absent (readSmallJson's finally throws into the catch). iso_of defect -> internal 13.
+//  6. Trace per file: lstat -> realpath -> (size > 65536 stops here) -> open (O_NOFOLLOW flag 1) -> fstat (identity) -> reads of 65536 (the reference's readFile chunk) -> close.
+//     EOF = completion flag event[15] == 1 or a read of 0 bytes. dev/ino are compared as the exact four 32-bit limbs.
+//  7. Unsure: a read completion with event[14] != len(completion) is treated as internal (stage 10); lstat size < 0 internal (stage 5).
+//  8. `active` quadratic worst case: ids x threads (threads is at most about 50). Duplicate keys: access::field returns the last (JS semantics).
+//  9. Runtime guards return an InternalInvariant packet instead of proving impossible length bounds (title > 4096 bytes, model > 20 MB).
+
+// ---- small helpers ----
+fn bit_of(s: i64) -> i64
+  requires 0 <= s && s <= 3
+  ensures 1 <= result && result <= 8
+{
+  if s == 0 { return 1; }
+  if s == 1 { return 2; }
+  if s == 2 { return 4; }
+  return 8;
+}
+
+fn small_cap(s: i64, a: [u8], b: [u8], c: [u8], d: [u8]) -> i64
+  requires 0 <= s && s <= 3 && len(a) <= 100000000 && len(b) <= 100000000 && len(c) <= 100000000 && len(d) <= 100000000
+  ensures 0 <= result && result <= 100000000
+{
+  if s == 0 { return len(a); }
+  if s == 1 { return len(b); }
+  if s == 2 { return len(c); }
+  return len(d);
+}
+
+// capacity after growth: at least `need`, at least 65536, about twice the need
+fn grown(need: i64) -> i64
+  requires 0 <= need && need <= 16777216
+  ensures need <= result && result <= 33554432
+{
+  let mut w: i64 = 2 * need;
+  if w < 65536 { w = 65536; }
+  return w;
+}
+
+// -1 stays -1 (absent), otherwise the offset moves by base
+fn shift(start: i64, base: i64) -> i64
+  requires 0 <= base && base <= 100000000
+{
+  if start < 0 || start > 1000000000000000 { return -1; }
+  return start + base;
+}
+
+// 0 = malformed input (absent), 1 = over the parser cap (InputTooLarge), 2 = implementation failure
+fn fail_class(k: i64) -> i64
+  ensures 0 <= result && result <= 2
+{
+  if k == 1 { return 1; }
+  if k == 18 { return 2; }
+  return 0;
+}
+
+// ---- decisions ----
+fn res_absent_small() -> [i64] ! alloc
+  ensures len(result) >= 28
+{
+  let m0: [i64] = crate::packet::meta_new(4);
+  let er: [i64] = alloc(0, 0);
+  let et: [u8] = alloc(0, 0);
+  return crate::packet::result(m0, er, et);
+}
+
+// no summary: mode 0, list row width, count 0
+fn res_no_summary() -> [i64] ! alloc
+  ensures len(result) >= 28
+{
+  let m0: [i64] = crate::packet::meta_new(0);
+  let mut m: [i64] = copy(m0);
+  m[10] = 12;
+  let er: [i64] = alloc(0, 0);
+  let et: [u8] = alloc(0, 0);
+  return crate::packet::result(m, er, et);
+}
+
+// purpose 0: readSmallJson result. An object root is present (the value is its JSON fragment), anything else absent.
+fn decode_direct(data: [u8]) -> [i64] ! alloc
+  ensures len(result) >= 28
+{
+  let parsed: crate::json::JsonParse = crate::parse::parse(data);
+  match parsed {
+    crate::json::JsonParse::Failed(e) => {
+      let fc: i64 = fail_class(e.kind);
+      if fc == 1 { return crate::packet::simple_error(4, 10, 6, 1); }
+      if fc == 2 { return crate::packet::simple_error(4, 12, 6, 2); }
+      return res_absent_small();
+    }
+    crate::json::JsonParse::Parsed(d) => {
+      if crate::access::kind(d, 0) != 6 { return res_absent_small(); }
+      let frag: [u8] = crate::util::json_value(d, 0);
+      if len(frag) == 0 || len(frag) > 100000000 { return crate::packet::simple_error(4, 12, 6, 2); }
+      let m0: [i64] = crate::packet::meta_new(4);
+      let mut m: [i64] = copy(m0);
+      m[11] = 1;
+      m[8] = 0;
+      m[9] = len(frag);
+      let er: [i64] = alloc(0, 0);
+      return crate::packet::result(m, er, frag);
+    }
+  }
+}
+
+// string value `id`, trimmed; "" for any other kind or a missing member
+fn trimmed_string(d: crate::json::JsonDocument, id: i64) -> str ! alloc
+  ensures len(result) <= 50331648
+{
+  let none: str = "";
+  if crate::access::kind(d, id) != 4 { return copy(none); }
+  return crate::text::trim(crate::util::str_at(d, id));
+}
+
+// trim(generated_title) || trim(session_summary) || ''
+fn first_title(d: crate::json::JsonDocument) -> str ! alloc
+  ensures len(result) <= 50331648
+{
+  let g: str = trimmed_string(d, crate::access::field(d, 0, "generated_title"));
+  if len(g) > 0 { return copy(g); }
+  return trimmed_string(d, crate::access::field(d, 0, "session_summary"));
+}
+
+// P9: the raw token of a nonnegative decimal integer (no sign, fraction, exponent) up to 2^53-1; empty otherwise
+fn messages_token(d: crate::json::JsonDocument, id: i64) -> [u8] ! alloc
+{
+  let empty: [u8] = alloc(0, 0);
+  let n: crate::access::Number = crate::access::number(d, id);
+  if n.status != 0 || !n.has_integer || n.integer < 0 || n.negative_zero { return empty; }
+  return crate::util::raw(d, id);
+}
+
+// readSummary: object root, object info, string id == thread, string cwd with the same folderKey as the folder
+fn summary_ok(d: crate::json::JsonDocument, thread: str, folder: str) -> bool ! alloc
+{
+  if crate::access::kind(d, 0) != 6 { return false; }
+  let info: i64 = crate::access::field(d, 0, "info");
+  if crate::access::kind(d, info) != 6 { return false; }
+  let idf: i64 = crate::access::field(d, info, "id");
+  if crate::access::string_is(d, idf, thread) != 1 { return false; }
+  return crate::path::folder_same(d, crate::access::field(d, info, "cwd"), folder);
+}
+
+// text area thread ++ title ++ updatedAt ++ messages ++ model, one list row, meta title/model refs
+fn build_summary(thread: str, title: str, iso: [u8], msg: [u8], model: str, title_present: bool) -> [i64] ! alloc
+  requires len(thread) <= 128 && len(title) <= 4096 && len(iso) <= 24 && len(msg) <= 32 && len(model) <= 20000000
+  ensures len(result) >= 28
+{
+  let l_th: i64 = len(thread);
+  let l_ti: i64 = len(title);
+  let l_is: i64 = len(iso);
+  let l_ms: i64 = len(msg);
+  let l_mo: i64 = len(model);
+  let o_ti: i64 = l_th;
+  let o_is: i64 = o_ti + l_ti;
+  let o_ms: i64 = o_is + l_is;
+  let o_mo: i64 = o_ms + l_ms;
+  let mut t: [u8] = crate::util::to_bytes(thread);
+  t = crate::packet::append_str(t, title);
+  t = crate::packet::cat_bytes(t, iso);
+  t = crate::packet::cat_bytes(t, msg);
+  t = crate::packet::append_str(t, model);
+  let mut rows: [i64] = alloc(12, 0);
+  rows[0] = 0;
+  rows[1] = l_th;
+  rows[2] = o_ti;
+  rows[3] = l_ti;
+  rows[4] = -1;
+  rows[5] = 0;
+  if l_is > 0 {
+    rows[4] = o_is;
+    rows[5] = l_is;
+  }
+  rows[6] = -1;
+  rows[7] = 0;
+  rows[8] = -1;
+  rows[9] = 0;
+  if l_ms > 0 {
+    rows[8] = o_ms;
+    rows[9] = l_ms;
+  }
+  rows[10] = 0;
+  rows[11] = 0;
+  let m0: [i64] = crate::packet::meta_new(0);
+  let mut m: [i64] = copy(m0);
+  m[3] = 1;
+  m[10] = 12;
+  if title_present {
+    m[4] = o_ti;
+    m[5] = l_ti;
+  }
+  if l_mo > 0 {
+    m[6] = o_mo;
+    m[7] = l_mo;
+  }
+  return crate::packet::result(m, rows, t);
+}
+
+// purpose 1 on a parsed document
+fn summary_from(d: crate::json::JsonDocument, folder: str, thread: str) -> [i64] ! alloc
+  requires len(thread) <= 128
+  ensures len(result) >= 28
+{
+  if !summary_ok(d, thread, folder) { return res_no_summary(); }
+  let title_raw: str = first_title(d);
+  let title: str = crate::text::one_line(title_raw, 120);
+  let model: str = trimmed_string(d, crate::access::field(d, 0, "current_model_id"));
+  let msg: [u8] = messages_token(d, crate::access::field(d, 0, "num_chat_messages"));
+  let mut iso: [u8] = alloc(0, 0);
+  let ua: i64 = crate::access::field(d, 0, "updated_at");
+  if ua >= 0 {
+    let r: crate::time::Iso = crate::time::iso_of(d, ua);
+    if r.status == 0 && len(r.text) == 24 {
+      iso = copy(r.text);
+    } else if r.status != 1 {
+      return crate::packet::simple_error(0, 13, 6, 2);
+    }
+  }
+  if len(title) > 4096 || len(model) > 20000000 || len(msg) > 32 { return crate::packet::simple_error(0, 13, 6, 2); }
+  return build_summary(thread, title, iso, msg, model, len(title_raw) > 0);
+}
+
+fn decode_summary(data: [u8], folder: str, thread: str) -> [i64] ! alloc
+  ensures len(result) >= 28
+{
+  if len(thread) > 128 { return res_no_summary(); }
+  let parsed: crate::json::JsonParse = crate::parse::parse(data);
+  match parsed {
+    crate::json::JsonParse::Failed(e) => {
+      let fc: i64 = fail_class(e.kind);
+      if fc == 1 { return crate::packet::simple_error(0, 10, 6, 1); }
+      if fc == 2 { return crate::packet::simple_error(0, 12, 6, 2); }
+      return res_no_summary();
+    }
+    crate::json::JsonParse::Parsed(d) => {
+      return summary_from(d, folder, thread);
+    }
+  }
+}
+
+pub fn decode(data: [u8], purpose: i64, folder: str, thread: str) -> [i64] ! alloc
+  ensures len(result) >= 28
+{
+  if purpose == 0 { return decode_direct(data); }
+  if purpose == 1 { return decode_summary(data, folder, thread); }
+  return crate::packet::internal_packet(0);
+}
+
+// ---- active_sessions.json ----
+// entry is a string, else the first string among id, sessionId, session_id (an empty string wins and is then ignored by the caller)
+fn entry_id(d: crate::json::JsonDocument, e: i64) -> str ! alloc
+  ensures len(result) <= 50331648
+{
+  let none: str = "";
+  let k: i64 = crate::access::kind(d, e);
+  if k == 4 { return crate::util::str_at(d, e); }
+  if k != 6 { return copy(none); }
+  let f1: i64 = crate::access::field(d, e, "id");
+  if crate::access::kind(d, f1) == 4 { return crate::util::str_at(d, f1); }  // MUT:M07 => if crate::access::kind(d, f1) == 4 && len(crate::util::str_at(d, f1)) > 0 { return crate::util::str_at(d, f1); }
+  let f2: i64 = crate::access::field(d, e, "sessionId");
+  if crate::access::kind(d, f2) == 4 { return crate::util::str_at(d, f2); }
+  let f3: i64 = crate::access::field(d, e, "session_id");
+  if crate::access::kind(d, f3) == 4 { return crate::util::str_at(d, f3); }
+  return copy(none);
+}
+
+fn same_at(id: str, text: [u8], s: i64, l: i64) -> bool
+  requires 0 <= s && s <= len(text) && 0 <= l && l <= len(text) - s
+{
+  if len(id) != l { return false; }
+  let mut i: i64 = 0;
+  while i < l
+    invariant 0 <= i && i <= l && l == len(id) && 0 <= s && s <= len(text) && l <= len(text) - s
+    decreases l - i
+  {
+    let x: i64 = id[i];
+    let y: i64 = text[s + i];
+    if x != y { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+// flags[k] = 1 for every thread ref pair k equal to id
+fn mark(inout flags: [i64], threads: [i64], text: [u8], id: str) -> ()
+  requires len(flags) == len(threads) / 2
+  ensures len(flags) == len(old(flags))
+{
+  let n: i64 = len(threads) / 2;
+  let mut k: i64 = 0;
+  while k < n
+    invariant 0 <= k && k <= n && n == len(threads) / 2 && len(flags) == n && len(threads) >= 2 * n
+    decreases n - k
+  {
+    let s: i64 = threads[2 * k];
+    let l: i64 = threads[2 * k + 1];
+    if s >= 0 && s <= len(text) && l >= 0 && l <= len(text) - s {
+      if same_at(id, text, s, l) { flags[k] = 1; }
+    }
+    k = k + 1;
+  }
+}
+
+// One 0/1 flag per (start,len) pair of `threads` (refs into `text`): the thread id is in the active set. Any error gives all zeros.
+pub fn active(data: [u8], threads: [i64], text: [u8]) -> [i64] ! alloc
+  ensures len(result) == len(threads) / 2
+{
+  let n: i64 = len(threads) / 2;
+  let mut flags: [i64] = alloc(n, 0);
+  let parsed: crate::json::JsonParse = crate::parse::parse(data);
+  match parsed {
+    crate::json::JsonParse::Failed(e) => {
+      return flags;
+    }
+    crate::json::JsonParse::Parsed(d) => {
+      if crate::access::kind(d, 0) != 5 { return flags; }
+      let ids: [i64] = crate::util::elements(d, 0);
+      let mut k: i64 = 0;
+      while k < len(ids)
+        invariant 0 <= k && k <= len(ids) && len(flags) == n && n == len(threads) / 2
+        decreases len(ids) - k
+      {
+        let id: str = entry_id(d, ids[k]);
+        if len(id) > 0 { mark(inout flags, threads, text, id); }
+        k = k + 1;
+      }
+      return flags;
+    }
+  }
+}
+
+// ---- step packet helpers ----
+// slot s finished its job: hand control back to the follow-up phase ctl[15] with the slot phase = its return phase (+14)
+fn slot_return(ctl: [i64], s: i64, present: i64, patches: [i64], bytes: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 256 && 0 <= s && s <= 3 && 0 <= present && present <= 1 && len(patches) <= 4096 && len(bytes) <= 100000000
+  ensures len(result) >= 268
+{
+  let b: i64 = 128 + 32 * s;
+  let rp: i64 = ctl[b + 14];
+  let fp: i64 = ctl[15];
+  if rp < 300 || rp > 999 || fp < 300 || fp > 999 { return crate::packet::done_internal(ctl, 30); }
+  let mut c: [i64] = copy(ctl);
+  c[b + 2] = 0;
+  c[b + 3] = 0;
+  c[4] = band(c[4], 15 - bit_of(s));
+  c[b] = rp;
+  c[b + 15] = present;
+  c[2] = fp;
+  let ep: [i64] = alloc(0, 0);
+  return crate::packet::step_packet(c, patches, ep, ep, bytes, ep, 2);
+}
+
+// no readable file: done for modes 4 (present:false) and 1 (not-found at `stage`), slot result 0 for list jobs.
+// The reference stage of mode 1's not-found is the stage of the last primitive: file-lstat (5), containment (6), open (7),
+// or summary (13) after any close of summary.json.
+fn absent_fin(ctl: [i64], s: i64, stage: i64) -> [i64] ! alloc
+  requires len(ctl) == 256 && 0 <= s && s <= 3 && 0 <= stage && stage <= 30
+  ensures len(result) >= 268
+{
+  let mode: i64 = ctl[1];
+  if mode == 4 { return crate::packet::done_wrap(ctl, res_absent_small()); }
+  if mode == 1 { return crate::packet::done_simple(ctl, stage, 1, 3); }
+  if mode == 0 {
+    let patches: [i64] = crate::packet::patch_resize(3 + s, 0);
+    let eb: [u8] = alloc(0, 0);
+    return slot_return(ctl, s, 0, patches, eb);
+  }
+  return crate::packet::done_internal(ctl, 30);
+}
+
+// issue one request on slot s (the same slot's completed request is replaced); global phase 220, slot phase sp
+fn ask_slot(ctl: [i64], s: i64, sp: i64, opcode: i64, stage: i64, flags: i64, handle: i64, offset: i64, count: i64,
+            p: str, patches: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000 && 0 <= s && s <= 3 && 0 <= sp && sp <= 999
+  requires 1 <= opcode && opcode <= 13 && 0 <= stage && stage <= 30 && 0 <= flags && flags <= 3
+  requires -1 <= handle && 0 <= offset && 0 <= count && len(p) <= 100000000 && len(patches) <= 4096
+  ensures len(result) >= 268
+{
+  let id: i64 = ctl[3];
+  let b: i64 = 128 + 32 * s;
+  let mut c: [i64] = copy(ctl);
+  c[2] = 220;
+  c[3] = id + 1;
+  c[b] = sp;
+  c[b + 2] = id;
+  c[b + 3] = opcode;
+  c[4] = bor(c[4], bit_of(s));
+  let mut ps: i64 = -1;
+  if len(p) > 0 { ps = 0; }
+  let req: [i64] = crate::packet::request(id, s, opcode, flags, handle, offset, count, 0, ps, len(p), -1, 0, -1, 0, stage);
+  let bytes: [u8] = crate::util::to_bytes(p);
+  let ep: [i64] = alloc(0, 0);
+  return crate::packet::step_packet(c, patches, req, ep, bytes, ep, 0);
+}
+
+// slot s: record cleared, pending bit cleared
+fn release(ctl: [i64], s: i64) -> [i64] ! alloc
+  requires len(ctl) == 256 && 0 <= s && s <= 3
+  ensures len(result) == 256 && result[3] == ctl[3]
+{
+  let b: i64 = 128 + 32 * s;
+  let mut c: [i64] = copy(ctl);
+  c[b + 2] = 0;
+  c[b + 3] = 0;
+  c[4] = band(c[4], 15 - bit_of(s));
+  return c;
+}
+
+// ---- paths ----
+// the file's own homeReal: cfg 18,19 in mode 4, else bank 2 at ctl 16,17
+fn home_real(cfg: [i64], cfg_text: [u8], ctl: [i64], text: [u8]) -> str ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256
+  ensures len(result) <= 1000000
+{
+  if ctl[1] == 4 { return crate::util::cfg_str(cfg_text, cfg[18], cfg[19]); }
+  return crate::util::cfg_str(text, ctl[16], ctl[17]);
+}
+
+// the thread of a summary job: cfg thread in mode 1, the slot's name ref (bank 2) in mode 0
+fn thread_of(cfg: [i64], cfg_text: [u8], ctl: [i64], text: [u8], s: i64) -> str ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256 && 0 <= s && s <= 3
+  ensures len(result) <= 1000000
+{
+  if ctl[1] == 1 { return crate::util::cfg_str(cfg_text, cfg[8], cfg[9]); }
+  let b: i64 = 128 + 32 * s;
+  return crate::util::cfg_str(text, ctl[b + 24], ctl[b + 25]);
+}
+
+// the file of slot s by purpose: 0 direct path (cfg 16,17), 1 <home>/sessions/<enc>/<thread>/summary.json, 2 <home>/active_sessions.json
+fn file_path(cfg: [i64], cfg_text: [u8], ctl: [i64], text: [u8], s: i64) -> str ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256 && 0 <= s && s <= 3
+  ensures len(result) <= 20000000
+{
+  let none: str = "";
+  let b: i64 = 128 + 32 * s;
+  let purpose: i64 = ctl[b + 13];
+  if purpose == 0 { return crate::util::cfg_str(cfg_text, cfg[16], cfg[17]); }
+  let home: str = crate::util::cfg_str(cfg_text, cfg[4], cfg[5]);
+  if len(home) == 0 { return copy(none); }
+  if purpose == 2 { return crate::path::join(home, "active_sessions.json"); }
+  if purpose != 1 { return copy(none); }
+  let base: str = crate::path::base_path(cfg, cfg_text);
+  let name: str = thread_of(cfg, cfg_text, ctl, text, s);
+  if len(base) == 0 || len(name) == 0 { return copy(none); }
+  let dir: str = crate::path::join(base, name);
+  return crate::path::join(dir, "summary.json");
+}
+
+// ---- start ----
+fn begin(cfg: [i64], cfg_text: [u8], ctl: [i64], text: [u8], event: [i64], s: i64) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256 && len(event) >= 24 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  requires 0 <= s && s <= 3 && len(cfg_text) <= 100000000 && len(text) <= 100000000
+  ensures len(result) >= 268
+{
+  if !crate::packet::event_empty(event) { return crate::packet::done_internal(ctl, 30); }
+  let b: i64 = 128 + 32 * s;
+  let mode: i64 = ctl[1];
+  let mut purpose: i64 = ctl[b + 13];
+  if ctl[2] == 200 {
+    if mode == 4 { purpose = 0; }
+    else if mode == 1 { purpose = 1; }
+    else { return crate::packet::done_internal(ctl, 30); }
+  }
+  if purpose < 0 || purpose > 2 { return crate::packet::done_internal(ctl, 30); }
+  if mode == 0 && purpose == 0 { return crate::packet::done_internal(ctl, 30); }
+  if mode != 0 && s != 0 { return crate::packet::done_internal(ctl, 30); }
+  let mut c: [i64] = copy(ctl);
+  c[b + 13] = purpose;
+  c[b + 26] = 0;
+  c[b + 11] = 0;
+  c[b + 4] = -1;
+  c[b + 5] = -1;
+  let path: str = file_path(cfg, cfg_text, c, text, s);
+  if len(path) == 0 { return absent_fin(c, s, 13); }
+  let ep: [i64] = alloc(0, 0);
+  return ask_slot(c, s, 231, 2, 5, 0, -1, 0, 0, path, ep);
+}
+
+// ---- completions (slot phase decides) ----
+// 231: lstat of the file: a plain regular file (kind 1), remember size and identity, then realpath
+fn on_lstat(cfg: [i64], cfg_text: [u8], ctl: [i64], text: [u8], event: [i64], s: i64) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256 && len(event) >= 24 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  requires 0 <= s && s <= 3 && len(cfg_text) <= 100000000 && len(text) <= 100000000
+  ensures len(result) >= 268
+{
+  if event[4] != 0 || event[7] != 1 { return absent_fin(ctl, s, 5); }
+  if event[8] < 0 { return crate::packet::done_internal(ctl, 5); }
+  let b: i64 = 128 + 32 * s;
+  let mut c: [i64] = copy(ctl);
+  c[b + 6] = event[8];
+  c[b + 7] = event[9];
+  c[b + 8] = event[10];
+  c[b + 9] = event[11];
+  c[b + 10] = event[12];
+  let path: str = file_path(cfg, cfg_text, ctl, text, s);
+  let ep: [i64] = alloc(0, 0);
+  return ask_slot(c, s, 232, 3, 6, 0, -1, 0, 0, path, ep);
+}
+
+// 232: realpath: inside homeReal, then the size check (> 65536 stops before open), then open with O_NOFOLLOW
+fn on_realpath(cfg: [i64], cfg_text: [u8], ctl: [i64], text: [u8], event: [i64], completion: [u8], s: i64) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256 && len(event) >= 24 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  requires 0 <= s && s <= 3 && len(cfg_text) <= 100000000 && len(text) <= 100000000
+  ensures len(result) >= 268
+{
+  if event[4] != 0 { return absent_fin(ctl, s, 6); }
+  let real: str = crate::util::cfg_str(completion, 0, len(completion));
+  let home: str = home_real(cfg, cfg_text, ctl, text);
+  if !crate::path::inside(home, real) { return absent_fin(ctl, s, 6); }
+  let b: i64 = 128 + 32 * s;
+  if ctl[b + 6] > 65536 { return absent_fin(ctl, s, 6); }
+  let path: str = file_path(cfg, cfg_text, ctl, text, s);
+  let ep: [i64] = alloc(0, 0);
+  return ask_slot(ctl, s, 233, 4, 7, 1, -1, 0, 0, path, ep);
+}
+
+// 233: open: keep the handle, fstat it (an open failure is absent, no handle to close)
+fn on_open(ctl: [i64], event: [i64], s: i64) -> [i64] ! alloc
+  requires len(ctl) == 256 && len(event) >= 24 && 1 <= ctl[3] && ctl[3] <= 1000000000 && 0 <= s && s <= 3
+  ensures len(result) >= 268
+{
+  if event[4] != 0 { return absent_fin(ctl, s, 7); }
+  let h: i64 = event[13];
+  if h < 0 { return crate::packet::done_internal(ctl, 7); }
+  let b: i64 = 128 + 32 * s;
+  let mut c: [i64] = copy(ctl);
+  c[b + 4] = h;
+  let none: str = "";
+  let ep: [i64] = alloc(0, 0);
+  return ask_slot(c, s, 234, 5, 8, 0, h, 0, 0, none, ep);
+}
+
+// 234: fstat: identity must equal the lstat's, else close and answer absent; then the first read
+fn on_fstat(ctl: [i64], event: [i64], s: i64) -> [i64] ! alloc
+  requires len(ctl) == 256 && len(event) >= 24 && 1 <= ctl[3] && ctl[3] <= 1000000000 && 0 <= s && s <= 3
+  ensures len(result) >= 268
+{
+  let b: i64 = 128 + 32 * s;
+  let h: i64 = ctl[b + 4];
+  if h < 0 { return crate::packet::done_internal(ctl, 8); }
+  let none: str = "";
+  let ep: [i64] = alloc(0, 0);
+  let same: bool = event[4] == 0 && event[9] == ctl[b + 7] && event[10] == ctl[b + 8] && event[11] == ctl[b + 9] && event[12] == ctl[b + 10];
+  if !same { return ask_slot(ctl, s, 237, 7, 11, 0, h, 0, 0, none, ep); }
+  let mut c: [i64] = copy(ctl);
+  c[b + 11] = 0;
+  c[b + 26] = 0;
+  return ask_slot(c, s, 235, 6, 10, 0, h, 0, 65536, none, ep);
+}
+
+// 235: a read: store the bytes in bank 3+s (geometric growth), next read or close at EOF; growth past 16777216 closes then InputTooLarge
+fn on_read(ctl: [i64], event: [i64], completion: [u8], s: i64, cap: i64) -> [i64] ! alloc
+  requires len(ctl) == 256 && len(event) >= 24 && 1 <= ctl[3] && ctl[3] <= 1000000000 && 0 <= s && s <= 3
+  requires 0 <= cap && cap <= 100000000 && len(completion) <= 100000000
+  ensures len(result) >= 268
+{
+  let b: i64 = 128 + 32 * s;
+  let h: i64 = ctl[b + 4];
+  if h < 0 { return crate::packet::done_internal(ctl, 10); }
+  let none: str = "";
+  let ep: [i64] = alloc(0, 0);
+  if event[4] != 0 { return ask_slot(ctl, s, 237, 7, 11, 0, h, 0, 0, none, ep); }
+  let n: i64 = len(completion);
+  if event[14] != n { return crate::packet::done_internal(ctl, 10); }
+  let used: i64 = ctl[b + 26];
+  let off: i64 = ctl[b + 11];
+  if used < 0 || used > 16777216 || off < 0 || off > 16777216 { return crate::packet::done_internal(ctl, 10); }
+  let nu: i64 = used + n;
+  if nu > 16777216 { return ask_slot(ctl, s, 238, 7, 11, 0, h, 0, 0, none, ep); }
+  let mut patches: [i64] = alloc(0, 0);
+  if n > 0 {
+    let mut p1: [i64] = alloc(0, 0);
+    if nu > cap {
+      p1 = crate::packet::patch_resize(3 + s, grown(nu));
+    }
+    let p2: [i64] = crate::packet::patch_copy(3 + s, used, n, 2, 0);
+    patches = crate::packet::cat_words(p1, p2);
+  }
+  let mut c: [i64] = copy(ctl);
+  c[b + 26] = nu;
+  c[b + 11] = off + n;
+  if event[15] == 1 || n == 0 { return ask_slot(c, s, 236, 7, 11, 0, h, 0, 0, none, patches); }
+  return ask_slot(c, s, 235, 6, 10, 0, h, off + n, 65536, none, patches);
+}
+
+// 236: close after EOF: a close error is absent; else shrink bank 3+s to the exact size and decode in the next step
+fn on_close_ok(ctl: [i64], event: [i64], s: i64) -> [i64] ! alloc
+  requires len(ctl) == 256 && len(event) >= 24 && 0 <= s && s <= 3
+  ensures len(result) >= 268
+{
+  if event[4] != 0 { return absent_fin(ctl, s, 13); }
+  let b: i64 = 128 + 32 * s;
+  let used: i64 = ctl[b + 26];
+  if used < 0 || used > 16777216 { return crate::packet::done_internal(ctl, 11); }
+  let patches: [i64] = crate::packet::patch_resize(3 + s, used);
+  let mut c: [i64] = copy(release(ctl, s));
+  c[b] = 239;
+  c[2] = 210 + s;
+  let ep: [i64] = alloc(0, 0);
+  let eb: [u8] = alloc(0, 0);
+  return crate::packet::step_packet(c, patches, ep, ep, eb, ep, 2);
+}
+
+fn on_completion(cfg: [i64], cfg_text: [u8], ctl: [i64], text: [u8], event: [i64], completion: [u8], s: i64, cap: i64) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256 && len(event) >= 24 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  requires 0 <= s && s <= 3 && len(cfg_text) <= 100000000 && len(text) <= 100000000
+  requires 0 <= cap && cap <= 100000000 && len(completion) <= 100000000
+  ensures len(result) >= 268
+{
+  let b: i64 = 128 + 32 * s;
+  let sp: i64 = ctl[b];
+  let op: i64 = event[3];
+  if sp == 231 && op == 2 { return on_lstat(cfg, cfg_text, ctl, text, event, s); }
+  if sp == 232 && op == 3 { return on_realpath(cfg, cfg_text, ctl, text, event, completion, s); }
+  if sp == 233 && op == 4 { return on_open(ctl, event, s); }
+  if sp == 234 && op == 5 { return on_fstat(ctl, event, s); }
+  if sp == 235 && op == 6 { return on_read(ctl, event, completion, s, cap); }
+  if sp == 236 && op == 7 { return on_close_ok(ctl, event, s); }
+  if sp == 237 && op == 7 { return absent_fin(ctl, s, 13); }
+  if sp == 238 && op == 7 { return crate::packet::done_simple(ctl, 10, 6, 1); }
+  return crate::packet::done_internal(ctl, 30);
+}
+
+// ---- finish: the exact-size bytes are in the bank ----
+fn res_text(res: [i64]) -> [u8] ! alloc
+  requires len(res) >= 28
+  ensures len(result) <= len(res)
+{
+  let empty: [u8] = alloc(0, 0);
+  let rw: i64 = res[2];
+  let tl: i64 = res[3];
+  if rw < 0 || tl < 0 || rw > len(res) || tl > len(res) || rw + tl != len(res) - 28 { return empty; }
+  let mut t: [u8] = alloc(tl, 0);
+  let mut i: i64 = 0;
+  while i < tl
+    invariant 0 <= i && i <= tl && len(t) == tl && tl <= len(res) && rw >= 0 && rw + tl == len(res) - 28 && len(res) >= 28
+    decreases tl - i
+  {
+    let v: i64 = res[28 + rw + i];
+    if v < 0 || v > 255 { return empty; }
+    t[i] = v;
+    i = i + 1;
+  }
+  return t;
+}
+
+// mode 1: title/model refs into ctl 20..23 (bank 2, appended at len(text)), then read::advance at 400
+fn apply_read(ctl: [i64], text: [u8], res: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 256 && len(res) >= 40 && len(text) <= 100000000
+  ensures len(result) >= 268
+{
+  let rt: [u8] = res_text(res);
+  let base: i64 = len(text);
+  let n: i64 = len(rt);
+  if n > 100000000 { return crate::packet::done_internal(ctl, 30); }
+  let mut c: [i64] = copy(ctl);
+  c[20] = shift(res[8], base);
+  c[21] = res[9];
+  c[22] = shift(res[10], base);
+  c[23] = res[11];
+  c[130] = 0;
+  c[131] = 0;
+  c[4] = band(c[4], 14);
+  c[2] = 400;
+  let mut patches: [i64] = alloc(0, 0);
+  if n > 0 {
+    let p1: [i64] = crate::packet::patch_resize(2, base + n);
+    let p2: [i64] = crate::packet::patch_copy(2, base, n, 4, 0);
+    patches = crate::packet::cat_words(p1, p2);
+  }
+  if len(patches) > 4096 { return crate::packet::done_internal(ctl, 30); }
+  let ep: [i64] = alloc(0, 0);
+  return crate::packet::step_packet(c, patches, ep, ep, rt, ep, 2);
+}
+
+// mode 0 summary job: the row refs go into the slot record (+16.. +23), bytes into bank 2, back to the scheduler
+fn apply_list(ctl: [i64], text: [u8], s: i64, res: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 256 && 0 <= s && s <= 3 && len(res) >= 40 && len(text) <= 100000000
+  ensures len(result) >= 268
+{
+  let rt: [u8] = res_text(res);
+  let base: i64 = len(text);
+  let n: i64 = len(rt);
+  if n > 100000000 { return crate::packet::done_internal(ctl, 30); }
+  let b: i64 = 128 + 32 * s;
+  let mut c: [i64] = copy(ctl);
+  c[b + 16] = shift(res[30], base);
+  c[b + 17] = res[31];
+  c[b + 18] = shift(res[10], base);
+  c[b + 19] = res[11];
+  c[b + 20] = shift(res[32], base);
+  c[b + 21] = res[33];
+  c[b + 22] = shift(res[36], base);
+  c[b + 23] = res[37];
+  let mut patches: [i64] = alloc(0, 0);
+  if n > 0 {
+    let p1: [i64] = crate::packet::patch_resize(2, base + n);
+    let p2: [i64] = crate::packet::patch_copy(2, base, n, 4, 0);
+    patches = crate::packet::cat_words(p1, p2);
+  }
+  if len(patches) > 4096 { return crate::packet::done_internal(ctl, 30); }
+  return slot_return(c, s, 1, patches, rt);
+}
+
+fn finish(cfg: [i64], cfg_text: [u8], ctl: [i64], text: [u8], s: i64, data: [u8]) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256 && 0 <= s && s <= 3 && len(cfg_text) <= 100000000 && len(text) <= 100000000
+  ensures len(result) >= 268
+{
+  let b: i64 = 128 + 32 * s;
+  if ctl[b] != 239 { return crate::packet::done_internal(ctl, 30); }
+  let purpose: i64 = ctl[b + 13];
+  let mode: i64 = ctl[1];
+  let none: str = "";
+  if purpose == 0 {
+    if mode != 4 { return crate::packet::done_internal(ctl, 30); }
+    return crate::packet::done_wrap(ctl, decode(data, 0, none, none));
+  }
+  if purpose == 2 {
+    if mode != 0 { return crate::packet::done_internal(ctl, 30); }
+    let ep: [i64] = alloc(0, 0);
+    let eb: [u8] = alloc(0, 0);
+    return slot_return(ctl, s, 1, ep, eb);
+  }
+  if purpose != 1 { return crate::packet::done_internal(ctl, 30); }
+  let folder: str = crate::util::cfg_str(cfg_text, cfg[6], cfg[7]);
+  let thread: str = thread_of(cfg, cfg_text, ctl, text, s);
+  let res: [i64] = decode(data, 1, folder, thread);
+  if res[0] != 0 { return crate::packet::done_wrap(ctl, res); }
+  if res[7] != 1 || len(res) < 40 { return absent_fin(ctl, s, 13); }
+  if mode == 1 { return apply_read(ctl, text, res); }
+  if mode == 0 { return apply_list(ctl, text, s, res); }
+  return crate::packet::done_internal(ctl, 30);
+}
+
+fn finish_slot(cfg: [i64], cfg_text: [u8], ctl: [i64], text: [u8], event: [i64], s: i64,
+               small0: [u8], small1: [u8], small2: [u8], small3: [u8]) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256 && len(event) >= 24 && 0 <= s && s <= 3 && len(cfg_text) <= 100000000 && len(text) <= 100000000
+  ensures len(result) >= 268
+{
+  if !crate::packet::event_empty(event) { return crate::packet::done_internal(ctl, 30); }
+  if s == 0 { return finish(cfg, cfg_text, ctl, text, 0, small0); }
+  if s == 1 { return finish(cfg, cfg_text, ctl, text, 1, small1); }
+  if s == 2 { return finish(cfg, cfg_text, ctl, text, 2, small2); }
+  return finish(cfg, cfg_text, ctl, text, 3, small3);
+}
+
+pub fn advance(cfg: [i64], cfg_text: [u8], ctl: [i64], directory: [i64], rows: [i64], text: [u8],
+               small0: [u8], small1: [u8], small2: [u8], small3: [u8], history: [u8],
+               event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(cfg) == 24 && 0 <= cfg[2] && cfg[2] <= 2147483647 && len(ctl) == 256 && len(event) >= 24
+  requires 1 <= ctl[3] && ctl[3] <= 1000000000 && 0 <= ctl[4] && ctl[4] <= 15 && 0 <= ctl[2] && ctl[2] <= 999
+  requires len(cfg_text) <= 100000000 && len(directory) <= 100000000 && len(rows) <= 100000000 && len(text) <= 100000000
+  requires len(small0) <= 100000000 && len(small1) <= 100000000 && len(small2) <= 100000000 && len(small3) <= 100000000
+  requires len(history) <= 100000000 && len(completion) <= 100000000
+  ensures len(result) >= 268
+{
+  let phase: i64 = ctl[2];
+  if phase == 200 { return begin(cfg, cfg_text, ctl, text, event, 0); }
+  if phase >= 201 && phase <= 204 { return begin(cfg, cfg_text, ctl, text, event, phase - 201); }
+  if phase >= 210 && phase <= 213 { return finish_slot(cfg, cfg_text, ctl, text, event, phase - 210, small0, small1, small2, small3); }
+  if phase == 220 {
+    if crate::packet::event_empty(event) { return crate::packet::done_internal(ctl, 30); }
+    let s: i64 = event[2];
+    if s < 0 || s > 3 { return crate::packet::done_internal(ctl, 30); }
+    let cap: i64 = small_cap(s, small0, small1, small2, small3);
+    return on_completion(cfg, cfg_text, ctl, text, event, completion, s, cap);
+  }
+  return crate::packet::done_internal(ctl, 30);
+}

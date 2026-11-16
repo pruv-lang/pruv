@@ -1,0 +1,463 @@
+// Grok ACP load check (grokLoadCheck on withRpcChild, jsonrpc true) on the G10 event loop. Package E, written WITHOUT a shell:
+// nothing here was compiled or verified. Style and proofs follow bench/l3/codex/rpc.pruv (same transport, same loop invariants).
+//
+// NOTES / THINGS I WAS UNSURE ABOUT
+//  1. Local helpers: grok util.pruv has no `field`, `join`, `id_is`, `int_bytes`, `trim` (the Codex util has them), so this file has
+//     private copies (`field`, `id_is`, `trim_bytes`); joins use packet::cat_bytes.
+//  2. `inout` arrays are only written element by element (never replaced): the RpcResponseError detail text and raw `error.code` JSON
+//     travel in the caller-owned buffer `aux` (detail at 0..300, raw code from 512, at most 8388608 bytes; longer => internal invariant).
+//  3. kind 0 null/1 false/2 true/3 number/4 string/5 array/6 object are taken from access::kind (as the Codex rpc does).
+//     "loadSession === true" is access::boolean(..) == 1 on an object agentCapabilities of an object-or-not result.
+//  4. A non-object `error` (string, number, ...) does NOT reject (TS: record(error) is undefined => resolve(result)); the line is
+//     then a normal response whose result is `result` (missing/null allowed for session/load, not enough for initialize).
+//  5. `timeout_ms == 0` means the host default 20000 (IMPL_NOTES leaves the meaning of 0 to load_check). Capped at 86400000 like Codex.
+//  6. Drain: after the initialize reply settles, the remaining COMPLETE lines of the same chunk (st[2] < st[4]) are processed with an
+//     empty outstanding set (server requests get -32601, everything else is ignored) BEFORE request 2 is written (P6 chunk ordering).
+//     The drain calls transport::receive via `step`, which also polls once with wait 0 (a timeout could fire there; acceptable).
+//  7. proc_spawn_env(binary, args, cwd, names, values): the arguments are not `move`d, as in tests/runtime/g10p_r22_env.pruv.
+//  8. Result mapping (all mode 3, class 1 = EngineImportError, class 3 = RpcResponseError):
+//       spawn failure: stage 24 code 8 (engine-missing); loop capacity failure: stage 24 code 7;
+//       read-failed (EOF, exit, transport failure, 1000000 pump events, oversize line): stage 25 or 26 code 7;
+//       timeout: stage 25/26 code 6; capability missing/false/non-true: stage 25 code 5 (grok-load-failed);
+//       error response: stage 25/26 class 3 code 0 with raw error.code JSON (absent if no code), name RpcResponseError,
+//       detail = message cut to 300 units with non-ASCII as '?' or "rejected";   internal: stage 30 class 6 code 2.
+//  9. The `args` package is not used (the argv is the fixed three words agent --no-leader stdio).
+// ctl (16 words): 0 failure (0 none, 2 internal, 3 rpc error response, 4 no loadSession, 5 timeout, 6 read-failed, 7 engine-missing)
+//   1 stage (24 spawn, 25 initialize, 26 session/load)  2 process slot (-1 none)  3 timer slot  4 last request id
+//   5 1 when step left a line  6 length of that line in `line`  7 exit code of a closed child  8 raw code length in aux  9 detail length in aux
+
+// ---- private helpers ----
+
+fn field(d: crate::json::JsonDocument, id: i64, key: str) -> i64 ! alloc { return crate::access::field(d, id, key); }
+
+// P6: a response id matches only when its JSON token is exactly the decimal text of the request id.
+fn id_is(b: [u8], id: i64) -> bool
+  requires 1 <= id && id <= 99
+{
+  if id < 10 {
+    if len(b) != 1 { return false; }
+    let c: i64 = b[0];
+    return c == 48 + id;
+  }
+  if len(b) != 2 { return false; }
+  let c0: i64 = b[0];
+  let c1: i64 = b[1];
+  return c0 == 48 + id / 10 && c1 == 48 + id % 10;
+}
+
+// ECMAScript trim whitespace, encoded as UTF-8 (same table as the Codex util).
+fn space(b: [u8], i: i64) -> i64
+  requires 0 <= i && i < len(b)
+  ensures 0 <= result && result <= 3 && result <= len(b) - i
+{
+  let c: i64 = b[i];
+  if c == 32 || (9 <= c && c <= 13) { return 1; }
+  if i + 1 < len(b) && c == 194 && b[i + 1] == 160 { return 2; }
+  if i + 2 < len(b) {
+    if c == 225 && b[i + 1] == 154 && b[i + 2] == 128 { return 3; }
+    if c == 226 && b[i + 1] == 128 && ((128 <= b[i + 2] && b[i + 2] <= 138) || b[i + 2] == 168 || b[i + 2] == 169 || b[i + 2] == 175) { return 3; }
+    if c == 226 && b[i + 1] == 129 && b[i + 2] == 159 { return 3; }
+    if c == 227 && b[i + 1] == 128 && b[i + 2] == 128 { return 3; }
+    if c == 239 && b[i + 1] == 187 && b[i + 2] == 191 { return 3; }
+  }
+  return 0;
+}
+
+fn trim_bytes(b: [u8]) -> [u8] ! alloc
+  ensures len(result) <= len(b)
+{
+  let mut lo: i64 = 0;
+  let mut hi: i64 = 0;
+  let mut i: i64 = 0;
+  while i < len(b)
+    invariant 0 <= lo && lo <= i && 0 <= hi && hi <= i && i <= len(b)
+    decreases len(b) - i
+  {
+    let n: i64 = space(b, i);
+    if n > 0 { if lo == i { lo = lo + n; } i = i + n; }
+    else { i = i + 1; hi = i; }
+  }
+  if hi < lo { hi = lo; }
+  let mut out: [u8] = alloc(hi - lo, 0);
+  let mut j: i64 = 0;
+  while j < len(out)
+    invariant 0 <= j && j <= len(out) && len(out) == hi - lo && 0 <= lo && hi <= len(b)
+    decreases len(out) - j
+  { out[j] = b[lo + j]; j = j + 1; }
+  return out;
+}
+
+// ---- process start ----
+
+// child arguments: agent --no-leader stdio, exactly
+fn child_args() -> ProcessArgs ! alloc
+{
+  let mut a: ProcessArgs = proc_args_new();
+  a = proc_args_push(move a, "agent");
+  a = proc_args_push(move a, "--no-leader");
+  a = proc_args_push(move a, "stdio");
+  return move a;
+}
+
+// Spawn the child with GROK_HOME=home (inherit the parent environment, then set the pair) in cwd=folder and register it with one
+// overall timer. On failure ctl[0] is set and the returned loop is only to be closed.
+pub fn start(binary: str, home: str, folder: str, timeout_ms: i64, inout ctl: [i64]) -> Loop ! async, net, proc, alloc
+  requires len(ctl) == 16
+  ensures len(ctl) == 16 && ctl[6] == 0
+{
+  ctl[0] = 0; ctl[1] = 24; ctl[2] = -1; ctl[3] = -1; ctl[4] = 0; ctl[5] = 0; ctl[6] = 0; ctl[7] = 0; ctl[8] = 0; ctl[9] = 0;
+  let args: ProcessArgs = child_args();
+  let mut names: ProcessArgs = proc_args_new();
+  names = proc_args_push(move names, "GROK_HOME");
+  let mut values: ProcessArgs = proc_args_new();
+  values = proc_args_push(move values, home);
+  let child: Process = proc_spawn_env(binary, args, folder, names, values);
+  if !proc_ok(child) {
+    let r: Result<i64> = proc_wait(move child);
+    ctl[0] = 7;
+    let l1: Loop = ev_new(3);
+    return move l1;
+  }
+  let mut l: Loop = ev_new(3);
+  if !ev_ok(l) || ev_count(l) >= ev_cap(l) {
+    let k: Result<i64> = proc_kill(move child);
+    ctl[0] = 6;
+    return move l;
+  }
+  l = ev_add_process(move l, move child);
+  ctl[2] = ev_last(l);
+  if !ev_ok(l) || ev_count(l) >= ev_cap(l) { ctl[0] = 6; return move l; }
+  let mut ms: i64 = timeout_ms;
+  if ms <= 0 { ms = 20000; }
+  if ms > 86400000 { ms = 86400000; }
+  l = ev_add_timer(move l, ms);
+  ctl[3] = ev_last(l);
+  if !ev_ok(l) || ev_count(l) >= ev_cap(l) { ctl[0] = 6; return move l; }
+  return move l;
+}
+
+// trim the line, parse it as JSON (P1: invalid UTF-8 is a parse failure and the line is skipped)
+pub fn parse_line(line: [u8], n: i64) -> crate::json::JsonParse ! alloc
+  requires 0 <= n && n <= len(line)
+{
+  let mut b: [u8] = alloc(n, 0);
+  let mut i: i64 = 0;
+  while i < n invariant 0 <= i && i <= n && len(b) == n && n <= len(line) decreases n - i
+  { let c: i64 = line[i]; b[i] = c; i = i + 1; }
+  let trimmed: [u8] = trim_bytes(b);
+  return crate::lines::parse_range(trimmed, 0, len(trimmed));
+}
+
+// One receive step of the pump (same contract as the Codex rpc::step with a 16-word ctl). ctl[5] = 1 when a line of ctl[6] bytes is
+// in `line`, 0 when nothing usable arrived; a closed child, a timeout or a transport failure sets ctl[0].
+pub fn step(take l: Loop, slot: i64, overall: i64, inout ctl: [i64], inout st: [i64], inout line: [u8], inout chunk: [u8], inout tb: [i64], inout ts: [i64]) -> Loop ! async, proc, alloc
+  requires len(ctl) == 16
+  requires len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+  requires len(line) == 8388608
+  requires len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+  ensures len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608
+  ensures len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+  ensures len(line) == 8388608
+  ensures len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+{
+  let mut q: Loop = crate::transport::receive(move l, slot, overall, -1, true, 8388608, inout st, inout line, inout chunk, inout tb, inout ts);
+  let n: i64 = st[0];
+  ctl[5] = 0;
+  ctl[6] = 0;
+  if n < 0 && n != -6 {
+    ctl[0] = 6;
+    if n == -1 { ctl[0] = 5; }
+    if n == -4 { ctl[7] = st[3]; }
+  } else if n >= 0 && n <= 8388608 {
+    ctl[5] = 1;
+    ctl[6] = n;
+  }
+  return move q;
+}
+
+// What a parsed line is to a caller waiting for request `id`: 1 a server request (a string `method` with any id, null included:
+// answer it with not_handled), 2 the response to `id` (numeric id whose token is exactly the decimal id), 0 anything to ignore.
+pub fn kind_of(d: crate::json::JsonDocument, id: i64) -> i64 ! alloc
+  requires 1 <= id && id <= 99
+{
+  if crate::access::kind(d, 0) != 6 { return 0; }
+  let mid: i64 = field(d, 0, "id");
+  let method: i64 = field(d, 0, "method");
+  if mid >= 0 && crate::access::kind(d, method) == 4 { return 1; }
+  if mid >= 0 {
+    let number: crate::access::Number = crate::access::number(d, mid);
+    if number.status == 0 && id_is(crate::util::raw(d, mid), id) { return 2; }
+  }
+  return 0;
+}
+
+// the -32601 "not handled" reply to a server request: same raw id token, jsonrpc 2.0, LF. Empty only on an absurd id token.
+pub fn not_handled(d: crate::json::JsonDocument) -> [u8] ! alloc
+{
+  let idr: [u8] = crate::util::raw(d, field(d, 0, "id"));
+  if len(idr) > 20000000 { let e: [u8] = alloc(0, 0); return e; }
+  let head: [u8] = crate::packet::cat_bytes(crate::util::to_bytes("{\"jsonrpc\":\"2.0\",\"id\":"), idr);
+  return crate::packet::cat_bytes(head, crate::util::to_bytes(",\"error\":{\"code\":-32601,\"message\":\"not handled\"}}\n"));
+}
+
+// ---- requests ----
+
+pub fn req_init() -> [u8] ! alloc
+{
+  return crate::util::to_bytes("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":1,\"clientCapabilities\":{\"fs\":{\"readTextFile\":false,\"writeTextFile\":false},\"terminal\":false},\"clientInfo\":{\"name\":\"lair\",\"title\":\"Lair\",\"version\":\"0.1.0\"}}}\n");
+}
+
+pub fn req_load(thread: str, folder: str) -> [u8] ! alloc
+  requires len(thread) <= 1000000 && len(folder) <= 1000000
+{
+  let a: [u8] = crate::util::to_bytes("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"session/load\",\"params\":{\"sessionId\":\"");
+  let b: [u8] = crate::packet::cat_bytes(a, crate::util::escaped(thread));
+  let c: [u8] = crate::packet::cat_bytes(b, crate::util::to_bytes("\",\"cwd\":\""));
+  let d: [u8] = crate::packet::cat_bytes(c, crate::util::escaped(folder));
+  return crate::packet::cat_bytes(d, crate::util::to_bytes("\",\"mcpServers\":[]}}\n"));
+}
+
+// ---- response handling ----
+
+// diagnostic detail: the message (cut to 300 units) with non-ASCII units shown as '?', "rejected" when it has none
+pub fn error_detail(d: crate::json::JsonDocument, e: i64) -> [u8] ! alloc
+  ensures len(result) <= 300
+{
+  let u: crate::access::Units = crate::access::string_units(d, field(d, e, "message"));
+  if u.status != 0 { return crate::util::to_bytes("rejected"); }
+  let mut m: i64 = len(u.units);
+  if m > 300 { m = 300; }
+  let mut out: [u8] = alloc(m, 0);
+  let mut i: i64 = 0;
+  while i < m
+    invariant 0 <= i && i <= m && m <= len(u.units) && m <= 300 && len(out) == m
+    decreases m - i
+  {
+    let x: i64 = u.units[i];
+    if x >= 32 && x < 127 { out[i] = x; } else { out[i] = 63; }
+    i = i + 1;
+  }
+  return out;
+}
+
+// the response to request `id` arrived (d is its document): an object error rejects (ctl[0] = 3, detail and raw code into aux);
+// otherwise the initialize response must carry an object agentCapabilities whose loadSession is exactly true (else ctl[0] = 4).
+fn on_reply(d: crate::json::JsonDocument, id: i64, inout ctl: [i64], inout aux: [u8]) -> () ! alloc
+  requires len(ctl) == 16 && len(aux) == 8389120 && 1 <= id && id <= 2
+  ensures len(ctl) == 16 && len(aux) == 8389120 && ctl[6] == old(ctl)[6]
+{
+  let error: i64 = field(d, 0, "error");
+  if crate::access::kind(d, error) == 6 {
+    ctl[0] = 3;
+    let m: [u8] = error_detail(d, error);
+    let mut i: i64 = 0;
+    while i < len(m)
+      invariant 0 <= i && i <= len(m) && len(m) <= 300 && len(aux) == 8389120 && len(ctl) == 16
+      decreases len(m) - i
+    { let c: i64 = m[i]; aux[i] = c; i = i + 1; }
+    ctl[9] = len(m);
+    let code: i64 = field(d, error, "code");
+    if code >= 0 {
+      let rj: [u8] = crate::util::json_value(d, code);
+      if len(rj) == 0 || len(rj) > 8388608 {
+        ctl[0] = 2;
+      } else {
+        let mut k: i64 = 0;
+        while k < len(rj)
+          invariant 0 <= k && k <= len(rj) && len(rj) <= 8388608 && len(aux) == 8389120 && len(ctl) == 16
+          decreases len(rj) - k
+        { let c2: i64 = rj[k]; aux[512 + k] = c2; k = k + 1; }
+        ctl[8] = len(rj);
+      }
+    }
+  } else if id == 1 {
+    let res: i64 = field(d, 0, "result");
+    let caps: i64 = field(d, res, "agentCapabilities");
+    let mut ok: bool = false;
+    if crate::access::kind(d, res) == 6 && crate::access::kind(d, caps) == 6 {
+      if crate::access::boolean(d, field(d, caps, "loadSession")) == 1 { ok = true; }  // MUT:M16 => if crate::access::kind(d, field(d, caps, "loadSession")) > 0 { ok = true; }
+    }
+    if !ok { ctl[0] = 4; }
+  }
+}
+
+// Pump until the response to request `id` arrives (at most 1000000 events, then read-failed). The first failure wins. A server
+// request in between is answered with not_handled. On return ctl[0] == 0 means the response arrived and was accepted.
+// Write to the child's stdin. A failed write marks the G10 process slot failed (write-open false, no more stdout), so it is
+// read-failed at once (spec P11) instead of a wait that can only end at the timer.
+fn send_or_fail(take l: Loop, slot: i64, data: [u8], inout ctl: [i64]) -> Loop ! async, proc, alloc
+  requires len(ctl) == 16
+  ensures len(ctl) == 16 && (old(ctl)[0] != 0 ==> ctl[0] == old(ctl)[0]) && ctl[5] == old(ctl)[5] && ctl[6] == old(ctl)[6]
+  ensures ctl[8] == old(ctl)[8] && ctl[9] == old(ctl)[9]
+{
+  let q: Loop = crate::transport::send(move l, slot, data);
+  let mut open: bool = false;
+  if ev_ok(q) { if crate::transport::live(q, slot) { open = ev_write_open(q, slot); } }
+  if ctl[0] == 0 && !open { ctl[0] = 6; }
+  return move q;
+}
+
+fn pump(take l: Loop, slot: i64, overall: i64, id: i64, inout ctl: [i64], inout st: [i64], inout line: [u8], inout chunk: [u8], inout tb: [i64], inout ts: [i64], inout aux: [u8]) -> Loop ! async, proc, alloc
+  requires len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608 && 1 <= id && id <= 2 && len(aux) == 8389120
+  requires len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+  requires len(line) == 8388608
+  requires len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+  ensures len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608 && len(aux) == 8389120
+  ensures len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+  ensures len(line) == 8388608
+  ensures len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+{
+  let mut q: Loop = move l;
+  let mut done: bool = false;
+  let mut events: i64 = 0;
+  while ctl[0] == 0 && !done && events < 1000000
+    invariant 0 <= events && events <= 1000000 && len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608 && len(aux) == 8389120
+    invariant len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+    invariant len(line) == 8388608 && 1 <= id && id <= 2
+    invariant len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+    decreases 1000000 - events
+  {
+    events = events + 1;
+    q = step(move q, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tb, inout ts);
+    if ctl[0] == 0 && ctl[5] == 1 {
+      let parsed: crate::json::JsonParse = parse_line(line, ctl[6]);
+      match parsed {
+        crate::json::JsonParse::Failed(e) => { }
+        crate::json::JsonParse::Parsed(d) => {
+          let k: i64 = kind_of(d, id);
+          if k == 1 { q = send_or_fail(move q, slot, not_handled(d), inout ctl); }
+          if k == 2 {
+            done = true;
+            on_reply(d, id, inout ctl, inout aux);
+          }
+        }
+      }
+    }
+  }
+  if ctl[0] == 0 && !done { ctl[0] = 6; }
+  return move q;
+}
+
+// After a response settled a request: the remaining complete lines of the current chunk are processed with nothing outstanding
+// (server requests answered, everything else ignored) before the next request is written. Each step eats at least one chunk byte.
+fn drain(take l: Loop, slot: i64, overall: i64, inout ctl: [i64], inout st: [i64], inout line: [u8], inout chunk: [u8], inout tb: [i64], inout ts: [i64]) -> Loop ! async, proc, alloc
+  requires len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608
+  requires len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+  requires len(line) == 8388608
+  requires len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+  ensures len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608
+  ensures len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+  ensures len(line) == 8388608
+  ensures len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+{
+  let mut q: Loop = move l;
+  let mut n: i64 = 0;
+  while ctl[0] == 0 && st[2] < st[4] && n < 70000
+    invariant 0 <= n && n <= 70000 && len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608
+    invariant len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+    invariant len(line) == 8388608
+    invariant len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+    decreases 70000 - n
+  {
+    n = n + 1;
+    q = step(move q, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tb, inout ts);
+    if ctl[0] == 0 && ctl[5] == 1 {
+      let parsed: crate::json::JsonParse = parse_line(line, ctl[6]);
+      match parsed {
+        crate::json::JsonParse::Failed(e) => { }
+        crate::json::JsonParse::Parsed(d) => {
+          // an id of 99 is never outstanding: only server requests (kind 1) matter here
+          if kind_of(d, 99) == 1 { q = send_or_fail(move q, slot, not_handled(d), inout ctl); }
+        }
+      }
+    }
+  }
+  return move q;
+}
+
+// ---- result ----
+
+// the failure as a mode 3 result packet (see NOTE 8)
+fn failure(code: i64, stage: i64, aux: [u8], rl: i64, dl: i64) -> [i64] ! alloc
+  requires len(aux) == 8389120 && 0 <= rl && rl <= 8388608 && 0 <= dl && dl <= 300
+  ensures len(result) >= 28
+{
+  let none: [u8] = alloc(0, 0);
+  if code == 3 {
+    let mut raw: [u8] = alloc(rl, 0);
+    let mut i: i64 = 0;
+    while i < rl
+      invariant 0 <= i && i <= rl && len(raw) == rl && rl <= 8388608 && len(aux) == 8389120
+      decreases rl - i
+    { let c: i64 = aux[512 + i]; raw[i] = c; i = i + 1; }
+    let mut dt: [u8] = alloc(dl, 0);
+    let mut j: i64 = 0;
+    while j < dl
+      invariant 0 <= j && j <= dl && len(dt) == dl && dl <= 300 && len(aux) == 8389120
+      decreases dl - j
+    { let c2: i64 = aux[j]; dt[j] = c2; j = j + 1; }
+    let detail: str = crate::jstr::adapter_probe(dt);
+    return crate::packet::error_mode(3, stage, 3, 0, 0, 0, raw, "RpcResponseError", detail);
+  }
+  if code == 7 { return crate::packet::error_mode(3, 24, 1, 8, 0, 0, none, "EngineImportError", ""); }
+  if code == 6 { return crate::packet::error_mode(3, stage, 1, 7, 0, 0, none, "EngineImportError", ""); }
+  if code == 5 { return crate::packet::error_mode(3, stage, 1, 6, 0, 0, none, "EngineImportError", ""); }
+  if code == 4 { return crate::packet::error_mode(3, 25, 1, 5, 0, 0, none, "EngineImportError", ""); }
+  return crate::packet::error_mode(3, 30, 6, 2, 0, 0, none, "", "");
+}
+
+// The ACP load check of the copy in `home`: spawn `binary agent --no-leader stdio` (cwd folder, GROK_HOME=home), initialize (id 1),
+// require loadSession === true, then session/load (id 2); any successful reply (missing or null result included) passes.
+// Returns a RESULT packet (mode 3): status 0 on success, status 1 with the stage 24..26 error otherwise. The loop and the child are
+// closed on every path (transport::close consumes the Loop; a failed spawn is consumed by proc_wait).
+pub fn load_check(binary: str, home: str, folder: str, thread: str, timeout_ms: i64) -> [i64] ! async, net, proc, alloc
+  requires len(binary) <= 1000000 && len(home) <= 1000000 && len(folder) <= 1000000 && len(thread) <= 1000000
+  requires 0 <= timeout_ms && timeout_ms <= 2147483647
+  ensures len(result) >= 28
+{
+  let mut ctl: [i64] = alloc(16, 0);
+  let mut l: Loop = start(binary, home, folder, timeout_ms, inout ctl);
+  let slot: i64 = ctl[2];
+  let overall: i64 = ctl[3];
+  let mut st: [i64] = alloc(5, 0);
+  let mut line: [u8] = alloc(8388608, 0);
+  let mut chunk: [u8] = alloc(65536, 0);
+  let mut tb: [i64] = crate::tail::tail_buf(1024);
+  let mut ts: [i64] = crate::tail::tail_state(1024);
+  let mut aux: [u8] = alloc(8389120, 0);
+  if ctl[0] == 0 {
+    ctl[1] = 25;
+    ctl[4] = 1;
+    l = send_or_fail(move l, slot, req_init(), inout ctl);
+    l = pump(move l, slot, overall, 1, inout ctl, inout st, inout line, inout chunk, inout tb, inout ts, inout aux);
+  }
+  if ctl[0] == 0 {
+    l = drain(move l, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tb, inout ts);
+  }
+  if ctl[0] == 0 {
+    ctl[1] = 26;
+    ctl[4] = 2;
+    l = send_or_fail(move l, slot, req_load(thread, folder), inout ctl);
+    l = pump(move l, slot, overall, 2, inout ctl, inout st, inout line, inout chunk, inout tb, inout ts, inout aux);
+  }
+  // A settling response (0 ok, 2/3 error object, 4 bad capabilities) leaves the rest of its chunk: the reference's data handler still
+  // answers server requests in it before the child is closed. The outcome is already settled, so a failed write there is ignored.
+  let settled: i64 = ctl[0];
+  if settled == 0 || settled == 2 || settled == 3 || settled == 4 {
+    ctl[0] = 0;
+    l = drain(move l, slot, overall, inout ctl, inout st, inout line, inout chunk, inout tb, inout ts);
+    ctl[0] = settled;
+  }
+  let code: i64 = ctl[0];
+  let stage: i64 = ctl[1];
+  let mut rl: i64 = ctl[8];
+  let mut dl: i64 = ctl[9];
+  if rl < 0 || rl > 8388608 { rl = 0; }
+  if dl < 0 || dl > 300 { dl = 0; }
+  crate::transport::close(move l, slot);
+  if code != 0 { return failure(code, stage, aux, rl, dl); }
+  let meta: [i64] = crate::packet::meta_new(3);
+  let er: [i64] = alloc(0, 0);
+  let et: [u8] = alloc(0, 0);
+  return crate::packet::result(meta, er, et);
+}

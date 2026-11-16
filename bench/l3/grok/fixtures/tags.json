@@ -1,0 +1,48 @@
+[
+  {"name": "tags-query-crlf-interior-kept", "mode": "read", "kills": ["M08"],
+   "gen": [{"session": {"thread": "A", "history": [
+     {"type": "user", "content": "  <user_query>\r\n  keep  inner\n\n text \r\n</user_query>  "}, {"type": "assistant", "content": "a1"},
+     {"type": "user", "content": "<user_query>\n\n  two newlines  \n\n</user_query>"}, {"type": "assistant", "content": "a2"},
+     {"type": "user", "content": "\t<user_query>lone\rcr kept\r</user_query>\n"}, {"type": "assistant", "content": "a3"}]}}],
+   "expected": {"status": "ok", "nrows": 3}},
+  {"name": "tags-query-lf-and-boundaries", "mode": "read", "kills": ["M08"],
+   "gen": [{"session": {"thread": "A", "history": [
+     {"type": "user", "content": "<user_query>\n inner \n</user_query>"}, {"type": "assistant", "content": "a1"},
+     {"type": "user", "content": "<user_query></user_query>"}, {"type": "assistant", "content": "dropped: empty after unwrap"},
+     {"type": "user", "content": "<user_query>"}, {"type": "assistant", "content": "a3"},
+     {"type": "user", "content": "<user_query>x"}, {"type": "assistant", "content": "a4"},
+     {"type": "user", "content": "x</user_query>"}, {"type": "assistant", "content": "a5"},
+     {"type": "user", "content": "<user_query>a</user_query> <user_query>b</user_query>"}, {"type": "assistant", "content": "a6"},
+     {"type": "user", "content": "<user_query> </user_query>"}, {"type": "assistant", "content": "a7"}]}}]},
+  {"name": "tags-user-info-skipped-without-prompt-index", "mode": "read",
+   "gen": [{"session": {"thread": "A", "history": [
+     {"type": "user", "content": "  <user_info>os linux</user_info>"}, {"type": "assistant", "content": "ignored"},
+     {"type": "user", "content": "<user_info>x</user_info>", "prompt_index": null}, {"type": "assistant", "content": "ignored too"},
+     {"type": "user", "content": "real"}, {"type": "assistant", "content": "a"}]}}],
+   "expected": {"status": "ok", "nrows": 1}},
+  {"name": "tags-user-info-kept-with-prompt-index", "mode": "read",
+   "gen": [{"session": {"thread": "A", "history": [
+     {"type": "user", "content": "<user_info>zero</user_info>", "prompt_index": 0}, {"type": "assistant", "content": "a0"},
+     {"type": "user", "content": "<user_info>false</user_info>", "prompt_index": false}, {"type": "assistant", "content": "a1"},
+     {"type": "user", "content": "<user_info>empty</user_info>", "prompt_index": ""}, {"type": "assistant", "content": "a2"},
+     {"type": "user", "content": "<user_info>five</user_info>", "prompt_index": 5}, {"type": "assistant", "content": "a3"}]}}],
+   "expected": {"status": "ok", "nrows": 4}},
+  {"name": "tags-wrapped-user-info-unwraps-first", "mode": "read",
+   "gen": [{"session": {"thread": "A", "history": [
+     {"type": "user", "content": "<user_query><user_info>wrapped</user_info></user_query>"}, {"type": "assistant", "content": "a"}]}}],
+   "expected": {"status": "ok", "nrows": 1}},
+  {"name": "synthetic-reason-truthiness", "mode": "read", "kills": ["M09"],
+   "gen": [{"session": {"thread": "A", "history": [
+     {"type": "user", "content": "first", "synthetic_reason": null}, {"type": "assistant", "content": "a1"},
+     {"type": "user", "content": "s-false", "synthetic_reason": false}, {"type": "assistant", "content": "a2"},
+     {"type": "user", "content": "s-zero", "synthetic_reason": 0}, {"type": "assistant", "content": "a3"},
+     {"type": "user", "content": "s-empty", "synthetic_reason": ""}, {"type": "assistant", "content": "a4"},
+     {"type": "user", "content": "s-text", "synthetic_reason": "compaction"}, {"type": "assistant", "content": "a5"},
+     {"type": "user", "content": "last"}, {"type": "assistant", "content": "a6"}]}}],
+   "expected": {"status": "ok", "nrows": 2}},
+  {"name": "synthetic-reason-only-skips-no-detach", "mode": "read", "kills": ["M09"],
+   "gen": [{"session": {"thread": "A", "history": [
+     {"type": "user", "content": "q", "synthetic_reason": false}, {"type": "assistant", "content": "orphan"},
+     {"type": "user", "content": "q2", "synthetic_reason": 0}, {"type": "assistant", "content": "orphan2", "tool_calls": [1, 2]}]}}],
+   "expected": {"status": "ok", "nrows": 0}}
+]

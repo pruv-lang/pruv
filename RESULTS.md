@@ -2200,3 +2200,35 @@ python3 bench/l3/codex/q_mutants.py
 - **Limits:** no environment clearing or removal of inherited variables, no Windows run for this entry, no async-prelude env runtime test.
 
 **G10-PROC-ENV complete.**
+
+## 136. L3-6: Grok conversation import in Pruv (implementation and Q, 2026-11-17)
+
+- **Design:** `docs/GROK_IMPORT_SPEC.md` and `bench/l3/grok/DESIGN.md`. Lair's Grok import (commit 744d14af: `listGrok`, `readGrok`, `copyGrokSession`, `grokLoadCheck` and the `readSmallJson` utility; `removeGrokCopy` stays out with the undo flow) is ported to `bench/l3/grok/` as a Pruv state machine that emits primitive requests and consumes raw results. Pruv owns path building, directory admission, JSON parsing, summary and history reading, sorting, budgets, the turn collector, the copy allow-list, temp names, race checks, rollback, error mapping, and the ACP load check (spawn of `agent --no-leader stdio`, framing, ids, `initialize` capability gate, `session/load`, server-request replies). The Rust host (`host.rs`) only dispatches readdir/lstat/realpath/open/fstat/read/close/mkdir/rename/rm/create/write/entropy and the process calls, and renders the packet; it never parses JSON or makes import decisions. No compiler or language changes.
+- **Reference:** `reference/` holds the pinned TS (`grok.ts`, `tail.ts`, `plan.ts`, `shared-engine-import.ts` and stubs) run on Node through `reference.mjs`, with `reference-hooks.mjs` / `reference-primitives.mjs` recording the same primitive trace and applying the same scripted races and faults as `host.rs`.
+- **Implementation:** 254 fixtures (listing, summaries, read, budgets, content, tags, dropped, active, identity, paths, copy, rollback, acp, verify) against fresh trees and the scripted fake ACP (`q_server.py`). Each fixture compares the result, the ACP transcript, the per-path primitive trace and the final source and target trees. py/rust, py/llvm, rs/rust and rs/llvm each pass 254/254 (policies used on fixtures: P1 9, P2 5, P4 3, P10 3, P6 2, P3 1, P9 1, P11 1). Both compilers verify the module graph.
+- **Differential (`q.py`, seed 20261116, `--jobs 6`):** 2,254 cases per pair: 2,000 random cases (list 30, read 30, copy 16, load 12, small-json 8, caller-cleanup 4 by weight) plus the 254 fixtures.
+
+| Pair | Cases | Exact | P1 | P2 | P3 | P4 | P6 | P9 | P10 | Other policy | Unexplained |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| py/rust | 2254 | 1683 | 87 | 49 | 9 | 67 | 24 | 178 | 13 | 144 | 0 |
+| py/llvm | 2254 | 1683 | 87 | 49 | 9 | 67 | 24 | 178 | 13 | 144 | 0 |
+| rs/rust | 2254 | 1683 | 87 | 49 | 9 | 67 | 24 | 178 | 13 | 144 | 0 |
+| rs/llvm | 2254 | 1683 | 87 | 49 | 9 | 67 | 24 | 178 | 13 | 144 | 0 |
+
+- **Classified differences:** each policy applies only when its trigger is found in the case inputs (`oracle.triggers`). P1: Pruv's parser rejects invalid UTF-8 and depth over 128; judged against a TS rerun with those lines replaced by same-length filler. P2: lone surrogates and the 120-unit title cut. P3: a trailing U+FFFD after a clip. P4: unsupported date tokens, judged against a TS rerun with the tokens edited. P6: response id tokens other than the exact decimal, and a premature id in one write. P9: `num_chat_messages`. P10: overflowing number tokens compared as binary64. P11: stdin half-close. "Other policy" is P11 alone (1) and combinations (143: P2+P9 55, P1+P4 29, P4+P9 15, P1+P2+P4 12, P1+P2 9, P2+P4+P9 8, P2+P4 6, P3+P4 5, P2+P10 2, P2+P3 2). All four pairs have **0 unexplained differences** and 0 fixture problems. Whole-run wall time 672.5 s (reference plus four pairs per case; stall cases dominate). Node v26.4.0.
+- **Flipped copy target:** the first full Q run had 14 copy cases per pair (56) unexplained. An `id` token `1.0` in the initialize reply: TS accepts it and keeps the copy; Pruv rejects it (P6), fails with grok-load-failed and removes the target. P6 explained the result, transcript and trace but not the dst tree. The oracle now puts a dst tree difference under an ACP policy (P6, P7, P11, P12) only when exactly one side succeeded and the difference is exactly the copy target subtree, present on the ok side and absent on the failed side. The rerun had 0 unexplained.
+- **Audit (one read-only audit, then one confirmation audit limited to its findings):** fixed in the implementation: a second `one_line` on the read title dropped a trailing space the 120-unit slice can leave (I1); a summary that grows after the size check lost its model past 1000000 bytes (I2, now read with the 20000000-byte summary bound); server requests after the settling response were not answered with -32601 (I3); `framing::scan` preallocated about twice the needed memory for dense windows (P1, now counts then fills in place). Not changed: the 5000000-entry directory packet bound (I4, a core packet bound, not a session cap). Fixed in the harness and oracle: P1 shape rules that accepted any subsequence of rows (O1); the P4 baseline value (O2); P1+P4 reruns (O3); a symlinked home snapshot (O4); the fake ACP's `load_ok` decision (O5, it now parses every byte written for the initialize reply, including `together` items and `also_correct` lines); the copy-transfer filter dropped raced reads on both sides (O6, now on the reference side only); ACP policies no longer exempt argv or dst tree differences (O7, except the flipped target above). The host schedule now follows the reference hooks (mode 0 kept, `append` creates, per-(op, path) counts, `releaseWhen` events), and the after-result barrier is noted before the hold check (confirmation audit H2). RPC timers in stall fixtures and Q are 3000 ms (the last 400 ms one was found by the confirmation audit).
+- **Mutants (`q_mutants.py`, rs/rust):** the spec's 16 single-bug mutants in copies under `work/mutants/`, with the 254 fixtures as witnesses (0 fail on the baseline): **16 differential-killed, 0 survived, 0 build errors**, run after the oracle change.
+- **Scope and limits:** `removeGrokCopy`, database/account/UI integration, the real `agent` binary, Windows and outer cancellation are not exercised. Listing gets no live mutations (outside the equivalence domain). The host schedule approximates two reference details (`held` counts buffered completions; only the last hold on a call applies). The shared `transport` limits from section 134 (wait after EOF and a blocking write ignore the deadline) still apply; neither explained an observed difference. This is differential evidence and local verification, not whole-program equivalence.
+
+Commands (from the repository root):
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+export GROK_TS_TRANSPILER=/path/to/typescript
+python3 bench/l3/grok/test_impl.py
+python3 bench/l3/grok/q.py --cases 2000 --seed 20261116
+python3 bench/l3/grok/q_mutants.py
+```
+
+**L3-6 implementation and default Q complete.**

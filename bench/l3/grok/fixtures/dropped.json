@@ -1,0 +1,65 @@
+[
+  {"name": "dropped-user-prefix-detaches", "mode": "read", "kills": ["M10"],
+   "gen": [{"session": {"thread": "A", "history": [
+     {"type": "user", "content": "first"}, {"type": "assistant", "content": "a1"},
+     {"$line": {"type": "user", "prefix": "BIG", "size": 1200000}},
+     {"type": "assistant", "content": "orphan after drop"},
+     {"type": "user", "content": "second"}, {"type": "assistant", "content": "a3"}]}}],
+   "expected": {"status": "ok", "nrows": 2}},
+  {"name": "dropped-intervening-assistant-with-tools", "mode": "read", "kills": ["M10"],
+   "gen": [{"session": {"thread": "A", "history": [
+     {"type": "user", "content": "first"},
+     {"$line": {"type": "user", "prefix": "BIG", "size": 1100000}},
+     {"type": "assistant", "content": "must not attach", "tool_calls": [1, 2, 3]},
+     {"type": "user", "content": "second"}, {"type": "assistant", "content": "a"}]}}]},
+  {"name": "dropped-synthetic-marker-early-not-dropped", "mode": "read", "kills": ["M10"],
+   "gen": [{"session": {"thread": "A", "history": [
+     {"type": "user", "content": "first"},
+     {"$line": {"type": "user", "pre": "\"synthetic_reason\":\"compaction\",", "prefix": "BIG", "size": 1100000}},
+     {"type": "assistant", "content": "attaches to first"}, {"type": "user", "content": "second"}]}}]},
+  {"name": "dropped-synthetic-marker-beyond-8192-still-dropped", "mode": "read", "kills": ["M10"],
+   "gen": [{"session": {"thread": "A", "history": [
+     {"type": "user", "content": "first"},
+     {"$line": {"type": "user", "prefix": "BIG", "extra": ",\"synthetic_reason\":\"late\"", "size": 1100000}},
+     {"type": "assistant", "content": "orphan"}, {"type": "user", "content": "second"}, {"type": "assistant", "content": "a"}]}}]},
+  {"name": "dropped-synthetic-numeric-still-dropped", "mode": "read", "kills": ["M10"],
+   "gen": [{"session": {"thread": "A", "history": [
+     {"type": "user", "content": "first"},
+     {"$line": {"type": "user", "pre": "\"synthetic_reason\":0,", "prefix": "BIG", "size": 1100000}},
+     {"type": "assistant", "content": "orphan"}, {"type": "user", "content": "second"}, {"type": "assistant", "content": "a"}]}}]},
+  {"name": "dropped-type-not-first-not-dropped", "mode": "read", "kills": ["M10"],
+   "gen": [{"session": {"thread": "A", "history": [
+     {"type": "user", "content": "first"},
+     {"$line": {"type": "user", "lead": "\"a\":1,", "prefix": "BIG", "size": 1100000}},
+     {"type": "assistant", "content": "attaches to first"}, {"type": "user", "content": "second"}]}}]},
+  {"name": "dropped-escaped-type-key-not-dropped", "mode": "read", "kills": ["M10"],
+   "gen": [{"session": {"thread": "A", "history": [
+     {"type": "user", "content": "first"},
+     {"$line": {"type": "user", "typekey": "t\\u0079pe", "prefix": "BIG", "size": 1100000}},
+     {"type": "assistant", "content": "attaches to first"}, {"type": "user", "content": "second"}]}}]},
+  {"name": "dropped-leading-whitespace-dropped", "mode": "read", "kills": ["M10"],
+   "gen": [{"session": {"thread": "A", "history": [
+     {"type": "user", "content": "first"},
+     {"$line": {"type": "user", "indent": " \t ", "prefix": "BIG", "size": 1100000}},
+     {"type": "assistant", "content": "orphan"}, {"type": "user", "content": "second"}, {"type": "assistant", "content": "a"}]}}]},
+  {"name": "dropped-oversized-assistant-line", "mode": "read",
+   "gen": [{"session": {"thread": "A", "history": [
+     {"type": "user", "content": "first"}, {"$line": {"type": "assistant", "prefix": "HUGE", "size": 1100000}},
+     {"type": "assistant", "content": "after"}]}}]},
+  {"name": "dropped-final-fragment-oversize", "mode": "read",
+   "gen": [{"session": {"thread": "A", "history": [
+     {"type": "user", "content": "first"}, {"type": "assistant", "content": "a"},
+     {"$line": {"type": "user", "prefix": "BIG", "size": 1100000, "nolf": true}}]}}]},
+  {"name": "framing-cap-lf-exact-admitted", "mode": "read",
+   "gen": [{"session": {"thread": "A", "history": [
+     {"type": "user", "content": "first"}, {"$line": {"type": "user", "prefix": "CAP", "size": 1048577}}, {"type": "assistant", "content": "after"}]}}]},
+  {"name": "framing-cap-lf-plus-one-dropped", "mode": "read", "kills": ["M10"],
+   "gen": [{"session": {"thread": "A", "history": [
+     {"type": "user", "content": "first"}, {"$line": {"type": "user", "prefix": "CAP", "size": 1048578}}, {"type": "assistant", "content": "after"}]}}]},
+  {"name": "framing-cap-cr-exact-admitted", "mode": "read",
+   "gen": [{"session": {"thread": "A", "history": [
+     {"type": "user", "content": "first"}, {"$line": {"type": "user", "prefix": "CAP", "size": 1048577, "cr": true}}, {"type": "assistant", "content": "after"}]}}]},
+  {"name": "framing-cap-cr-plus-one-dropped", "mode": "read", "kills": ["M10"],
+   "gen": [{"session": {"thread": "A", "history": [
+     {"type": "user", "content": "first"}, {"$line": {"type": "user", "prefix": "CAP", "size": 1048578, "cr": true}}, {"type": "assistant", "content": "after"}]}}]}
+]

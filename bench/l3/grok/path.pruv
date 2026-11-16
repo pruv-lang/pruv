@@ -1,0 +1,524 @@
+// Grok import, package B: path helpers and the home/chain phases (100-199). NOT compiled, NOT verified (written without a shell).
+//
+// NOTES / DOUBTS (read these first):
+//  1. Hand-off contract I assumed (nothing in DESIGN/IMPL_NOTES fixes it; main agent please reconcile with list/read):
+//     mode 0 (list): after realHome + chain(home/sessions, encoded folder) succeed, path returns a CONTINUE packet with ctl[2] = 300
+//       (list::advance start). ctl[16,17] = homeReal ref in bank 2 (appended by path at the old end of bank 2; I treat len(text) as the
+//       used length of bank 2). All slots are idle (ctl[4] == 0). If realHome is absent or the chain fails, path finishes mode 0 itself
+//       with an EMPTY LIST result (meta mode 0, row width 12, count 0), as listGrok returns [].
+//     mode 1 (read): after the chain incl. the thread directory succeeds, CONTINUE with ctl[2] = 200 (summary start; summary then
+//       hands to read at 400 with ctl[20..23] = title/model refs).
+//  2. Phases used: 100 start, 101 realpath(home) completion, 102 lstat(home/sessions), 103 lstat(sessions/<enc>), 104 lstat(<enc>/<thread>).
+//     All requests use slot 0. ctl words written: 2 (phase), 3/4 and slot 0 words +2,+3 (request bookkeeping), 16,17 (homeReal ref).
+//  3. encode_folder returns an EMPTY array for the three rejected names ("", "." and ".."); a valid encoding is never empty. Callers
+//     treat empty as not-found (stage 2, class 1, code 3). A folder longer than 1000000 bytes also gives empty.
+//  4. join has an added precondition len(a) <= 1e9 && len(b) <= 1e9 (callers pass strings of at most a few MB) and ensures
+//     len(result) <= len(a)+len(b)+2. It is Node path.posix.join(a, b): empty args skipped, '.'/'..'/duplicate separators normalised.
+//  5. Extra pub helpers (not in DESIGN): enc_str(folder)->str, base_path(cfg,cfg_text)->str (= join(join(home,"sessions"),enc)).
+//  6. An empty source home skips the realpath request (realpath("") fails with ENOENT in Node, same outcome), no request is sent.
+//  7. A realpath result of 0 bytes counts as absent (JS: '' is falsy), more than 1000000 bytes is InputTooLarge (stage 1).
+//  8. Not verified: the byte-array arithmetic in normalize/push_seg (capacity invariant u <= 2*st), to_str's runtime cap fallback ("" on
+//     the impossible overflow), loop invariants. Exceeding any cap silently returns "" / empty rather than failing.
+//  9. valid() relies on names::valid_thread (len <= 128 guarded before the call).
+
+// ---- encodeURIComponent ----
+fn hexd(d: i64) -> i64
+  requires 0 <= d && d <= 15
+  ensures 48 <= result && result <= 70
+{
+  if d < 10 { return 48 + d; }
+  return 55 + d;
+}
+
+// A-Z a-z 0-9 - _ . ! ~ * ' ( )
+fn plain_byte(c: i64) -> bool
+{
+  if (48 <= c && c <= 57) || (65 <= c && c <= 90) || (97 <= c && c <= 122) { return true; }
+  return c == 45 || c == 95 || c == 46 || c == 33 || c == 126 || c == 42 || c == 39 || c == 40 || c == 41;
+}
+
+// UTF-8 percent encoding with uppercase hex. Empty result = rejected name ("", "." or "..") or a folder over 1000000 bytes.
+pub fn encode_folder(folder: str) -> [u8] ! alloc
+  ensures len(result) <= 3 * len(folder)
+{
+  let empty: [u8] = alloc(0, 0);
+  if len(folder) > 1000000 { return empty; }  // MUT:M01 => if len(folder) > 1000000 { return empty; } if true { return crate::util::to_bytes(folder); }
+  let n: i64 = len(folder);
+  let mut out: [u8] = alloc(3 * n, 0);
+  let mut used: i64 = 0;
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(folder) && n <= 1000000 && len(out) == 3 * n && 0 <= used && used <= 3 * i
+    decreases n - i
+  {
+    let c: i64 = folder[i];
+    if c < 0 || c > 255 { return empty; }
+    if plain_byte(c) {
+      out[used] = c;
+      used = used + 1;
+    } else {
+      out[used] = 37;
+      out[used + 1] = hexd(c / 16);
+      out[used + 2] = hexd(c % 16);
+      used = used + 3;
+    }
+    i = i + 1;
+  }
+  if used == 0 { return empty; }
+  if used == 1 && out[0] == 46 { return empty; }
+  if used == 2 && out[0] == 46 && out[1] == 46 { return empty; }
+  return truncate(out, used);
+}
+
+// [u8] -> str for text that is valid UTF-8 by construction; "" if the (impossible) cap is exceeded.
+fn to_str(b: [u8], cap: i64) -> str ! alloc
+  requires 0 <= cap
+  ensures len(result) <= cap
+{
+  let none: str = "";
+  let x: str = crate::jstr::adapter_probe(b);
+  if len(x) > cap { return copy(none); }
+  return copy(x);
+}
+
+pub fn enc_str(folder: str) -> str ! alloc
+  ensures len(result) <= 3000000
+{
+  let b: [u8] = encode_folder(folder);
+  return to_str(b, 3000000);
+}
+
+// ---- POSIX join/normalize (Node path.posix) ----
+fn last_dotdot(out: [u8], u: i64) -> bool
+  requires 0 <= u && u <= len(out)
+{
+  if u < 2 { return false; }
+  if out[u - 1] != 46 || out[u - 2] != 46 { return false; }
+  return u == 2 || out[u - 3] == 47;
+}
+
+// position of the last '/' in out[0..u), or 0 when there is none (the result then is the empty path)
+fn pop_pos(out: [u8], u: i64) -> i64
+  requires 0 <= u && u <= len(out)
+  ensures 0 <= result && result <= u
+{
+  let mut k: i64 = u;
+  while k > 0
+    invariant 0 <= k && k <= u && u <= len(out)
+    decreases k
+  {
+    if out[k - 1] == 47 { return k - 1; }
+    k = k - 1;
+  }
+  return 0;
+}
+
+// append p[s..e) to out[0..u) with a '/' first when u > 0; returns the new length
+fn append_seg(inout out: [u8], u: i64, p: [u8], s: i64, e: i64) -> i64
+  requires 0 <= s && s <= e && e <= len(p) && 0 <= u && u + (e - s) + 1 <= len(out)
+  ensures len(out) == len(old(out)) && 0 <= result && result <= u + (e - s) + 1
+{
+  let mut at: i64 = u;
+  if u > 0 {
+    out[u] = 47;
+    at = u + 1;
+  }
+  crate::bytes::copy_span(inout out, at, p, s, e);
+  return at + (e - s);
+}
+
+// one path segment p[s..e): '' and '.' vanish, '..' pops (or is kept/dropped above the start), anything else is appended
+fn push_seg(inout out: [u8], u: i64, p: [u8], s: i64, e: i64, rel: bool) -> i64
+  requires 0 <= s && s <= e && e <= len(p) && 0 <= u && u + (e - s) + 3 <= len(out)
+  ensures len(out) == len(old(out)) && 0 <= result && result <= u + (e - s) + 1
+{
+  let w: i64 = e - s;
+  if w == 0 { return u; }
+  if w == 1 && p[s] == 46 { return u; }
+  if w == 2 && p[s] == 46 && p[s + 1] == 46 {
+    if u > 0 && !last_dotdot(out, u) { return pop_pos(out, u); }
+    if rel {
+      let mut at: i64 = u;
+      if u > 0 {
+        out[u] = 47;
+        at = u + 1;
+      }
+      out[at] = 46;
+      out[at + 1] = 46;
+      return at + 2;
+    }
+    return u;
+  }
+  return append_seg(inout out, u, p, s, e);
+}
+
+fn normalize(p: [u8]) -> [u8] ! alloc
+  requires 1 <= len(p) && len(p) <= 2000000002
+  ensures len(result) <= 2 * len(p) + 4
+{
+  let n: i64 = len(p);
+  let absolute: bool = p[0] == 47;
+  let trailing: bool = p[n - 1] == 47;
+  let mut out: [u8] = alloc(2 * n + 4, 0);
+  let mut u: i64 = 0;
+  let mut st: i64 = 0;
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= st && st <= i && i <= n && n == len(p) && 0 <= u && u <= 2 * st && len(out) == 2 * n + 4
+    decreases n - i
+  {
+    if p[i] == 47 {
+      u = push_seg(inout out, u, p, st, i, !absolute);
+      st = i + 1;
+    }
+    i = i + 1;
+  }
+  u = push_seg(inout out, u, p, st, n, !absolute);
+  if u == 0 {
+    if absolute {
+      let mut r1: [u8] = alloc(1, 0);
+      r1[0] = 47;
+      return r1;
+    }
+    if trailing {
+      let mut r2: [u8] = alloc(2, 0);
+      r2[0] = 46;
+      r2[1] = 47;
+      return r2;
+    }
+    let mut r3: [u8] = alloc(1, 0);
+    r3[0] = 46;
+    return r3;
+  }
+  let mut a: i64 = 0;
+  if absolute { a = 1; }
+  let mut t: i64 = 0;
+  if trailing { t = 1; }
+  let mut r: [u8] = alloc(a + u + t, 0);
+  if absolute { r[0] = 47; }
+  crate::bytes::copy_span(inout r, a, out, 0, u);
+  if trailing { r[a + u] = 47; }
+  return r;
+}
+
+// path.join(a, b): empty arguments are skipped, the rest is joined with '/' and normalised ("." when both are empty).
+pub fn join(a: str, b: str) -> str ! alloc
+  requires len(a) <= 1000000000 && len(b) <= 1000000000
+  ensures len(result) <= len(a) + len(b) + 2
+{
+  let na: i64 = len(a);
+  let nb: i64 = len(b);
+  let dot: str = ".";
+  if na == 0 && nb == 0 { return copy(dot); }
+  let mut jb: [u8] = alloc(na + nb + 1, 0);
+  let mut i: i64 = 0;
+  while i < na
+    invariant 0 <= i && i <= na && na == len(a) && nb == len(b) && len(jb) == na + nb + 1
+    decreases na - i
+  {
+    jb[i] = a[i];
+    i = i + 1;
+  }
+  let mut at: i64 = na;
+  if na > 0 && nb > 0 {
+    jb[at] = 47;
+    at = at + 1;
+  }
+  let mut j: i64 = 0;
+  while j < nb
+    invariant 0 <= j && j <= nb && 0 <= at && at <= na + 1 && nb == len(b) && len(jb) == na + nb + 1
+    decreases nb - j
+  {
+    jb[at + j] = b[j];
+    j = j + 1;
+  }
+  let total: i64 = at + nb;
+  if total < 1 || total > len(jb) { return copy(dot); }
+  let joined: [u8] = truncate(jb, total);
+  let norm: [u8] = normalize(joined);
+  return to_str(norm, na + nb + 2);
+}
+
+// `path` starts with home + '/' (home itself when it already ends with '/'): tail.ts plainFileIn containment
+pub fn inside(home: str, path: str) -> bool
+{
+  let hn: i64 = len(home);
+  let pn: i64 = len(path);
+  let mut sep: bool = true;
+  if hn > 0 && home[hn - 1] == 47 { sep = false; }
+  let mut need: i64 = hn;
+  if sep { need = hn + 1; }
+  if pn < need { return false; }
+  let mut i: i64 = 0;
+  while i < hn
+    invariant 0 <= i && i <= hn && hn == len(home) && hn <= pn && pn == len(path)
+    decreases hn - i
+  {
+    let x: i64 = home[i];
+    let y: i64 = path[i];
+    if x != y { return false; }
+    i = i + 1;
+  }
+  if sep {
+    if path[hn] != 47 { return false; }
+  }
+  return true;
+}
+
+// /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
+pub fn valid(thread: str) -> bool
+{
+  if len(thread) > 128 { return false; }
+  return crate::names::valid_thread(thread);
+}
+
+// ---- folderKey (non-win32), as bench/l3/codex/folder.pruv ----
+fn key_len(s: str) -> i64
+  ensures 0 <= result && result <= len(s)
+{
+  let mut n: i64 = len(s);
+  while n > 0 && s[n - 1] == 47
+    invariant 0 <= n && n <= len(s)
+    decreases n
+  {
+    n = n - 1;
+  }
+  if n == 0 { return len(s); }
+  return n;
+}
+
+fn same_key(a: str, b: str) -> bool
+{
+  let na: i64 = key_len(a);
+  let nb: i64 = key_len(b);
+  if na != nb { return false; }
+  let mut i: i64 = 0;
+  while i < na
+    invariant 0 <= i && i <= na && na == nb && na <= len(a) && nb <= len(b)
+    decreases na - i
+  {
+    let x: i64 = a[i];
+    let y: i64 = b[i];
+    if x != y { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+// a surrogate that is not part of a high-low pair
+fn lone(u: [i64]) -> bool
+{
+  let mut i: i64 = 0;
+  while i < len(u)
+    invariant 0 <= i && i <= len(u)
+    decreases len(u) - i
+  {
+    let x: i64 = u[i];
+    if x >= 55296 && x <= 56319 && i + 1 < len(u) && u[i + 1] >= 56320 && u[i + 1] <= 57343 { i = i + 2; }
+    else if x >= 55296 && x <= 57343 { return true; }
+    else { i = i + 1; }
+  }
+  return false;
+}
+
+// folderKey(cwd) == folderKey(folder) where cwd is the string value `id` of the document (P2: a lone surrogate never matches)
+pub fn folder_same(cwd: crate::json::JsonDocument, id: i64, folder: str) -> bool ! alloc
+{
+  if crate::access::kind(cwd, id) != 4 { return false; }
+  let u: crate::access::Units = crate::access::string_units(cwd, id);
+  if u.status != 0 { return false; }
+  if lone(u.units) { return false; }
+  return same_key(crate::util::str_at(cwd, id), folder);  // MUT:M04 => return true;
+}
+
+// home/sessions/<encoded folder> from cfg (source home words 4,5; folder words 6,7); "" when the folder is rejected
+pub fn base_path(cfg: [i64], cfg_text: [u8]) -> str ! alloc
+  requires len(cfg) == 24
+  ensures len(result) <= 5000000
+{
+  let none: str = "";
+  let home: str = crate::util::cfg_str(cfg_text, cfg[4], cfg[5]);
+  let folder: str = crate::util::cfg_str(cfg_text, cfg[6], cfg[7]);
+  let enc: str = enc_str(folder);
+  if len(enc) == 0 { return copy(none); }
+  let sess: str = join(home, "sessions");
+  return join(sess, enc);
+}
+
+// ---- step packet helpers (slot 0 only) ----
+// the completed slot-0 request is consumed: record cleared, pending bit 0 cleared
+fn consumed(ctl: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 256
+  ensures len(result) == 256 && result[3] == ctl[3]
+{
+  let mut c: [i64] = copy(ctl);
+  c[130] = 0;
+  c[131] = 0;
+  c[4] = band(c[4], 14);
+  return c;
+}
+
+// consume slot 0, set the phase, issue ONE path request on slot 0 (opcode 2 lstat / 3 realpath), with storage patches
+fn ask(ctl: [i64], phase: i64, opcode: i64, stage: i64, p: str, patches: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 256 && 1 <= ctl[3] && ctl[3] <= 1000000000 && 0 <= phase && phase <= 999
+  requires 1 <= opcode && opcode <= 13 && 0 <= stage && stage <= 30 && len(p) <= 100000000 && len(patches) <= 4096
+  ensures len(result) >= 268
+{
+  let id: i64 = ctl[3];
+  let mut c: [i64] = copy(consumed(ctl));
+  c[2] = phase;
+  c[3] = id + 1;
+  c[130] = id;
+  c[131] = opcode;
+  c[4] = bor(c[4], 1);
+  let req: [i64] = crate::packet::request(id, 0, opcode, 0, -1, 0, 0, 0, 0, len(p), -1, 0, -1, 0, stage);
+  let bytes: [u8] = crate::util::to_bytes(p);
+  let ep: [i64] = alloc(0, 0);
+  return crate::packet::step_packet(c, patches, req, ep, bytes, ep, 0);
+}
+
+// consume slot 0 and continue at another module's phase (the host then passes the empty event)
+fn handoff(ctl: [i64], phase: i64) -> [i64] ! alloc
+  requires len(ctl) == 256 && 0 <= phase && phase <= 999
+  ensures len(result) >= 268
+{
+  let mut c: [i64] = copy(consumed(ctl));
+  c[2] = phase;
+  let ep: [i64] = alloc(0, 0);
+  let eb: [u8] = alloc(0, 0);
+  return crate::packet::step_packet(c, ep, ep, ep, eb, ep, 2);
+}
+
+// listGrok returns [] : success, mode 0, list row width, no rows
+fn empty_list(ctl: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 256
+  ensures len(result) >= 268
+{
+  let m0: [i64] = crate::packet::meta_new(0);
+  let mut m: [i64] = copy(m0);
+  m[10] = 12;
+  let er: [i64] = alloc(0, 0);
+  let et: [u8] = alloc(0, 0);
+  return crate::packet::done_wrap(ctl, crate::packet::result(m, er, et));
+}
+
+// the home is absent or a chain directory is not plain: mode 0 lists nothing, mode 1 is not-found at `stage`
+fn fail_chain(ctl: [i64], stage: i64) -> [i64] ! alloc
+  requires len(ctl) == 256 && 0 <= stage && stage <= 30
+  ensures len(result) >= 268
+{
+  let mode: i64 = ctl[1];
+  if mode == 0 { return empty_list(ctl); }
+  if mode == 1 { return crate::packet::done_simple(ctl, stage, 1, 3); }
+  return crate::packet::done_internal(ctl, 30);
+}
+
+// plainDir: lstat succeeded, a directory (kind 2), not a symlink (kind 3)
+fn is_dir(event: [i64]) -> bool
+  requires len(event) >= 24
+{
+  return event[4] == 0 && event[7] == 2;  // MUT:M02 => return event[4] == 0 && (event[7] == 2 || event[7] == 3);
+}
+
+// ---- phases ----
+// 100: input checks, then realpath(home)
+fn p100(cfg: [i64], cfg_text: [u8], ctl: [i64], event: [i64]) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256 && len(event) >= 24 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(cfg_text) <= 100000000
+  ensures len(result) >= 268
+{
+  if !crate::packet::event_empty(event) { return crate::packet::done_internal(ctl, 30); }
+  let mode: i64 = ctl[1];
+  if mode != 0 && mode != 1 { return crate::packet::done_internal(ctl, 30); }
+  if mode == 1 {
+    let thread: str = crate::util::cfg_str(cfg_text, cfg[8], cfg[9]);
+    if !valid(thread) { return crate::packet::done_simple(ctl, 0, 1, 3); }
+  }
+  let home: str = crate::util::cfg_str(cfg_text, cfg[4], cfg[5]);
+  if len(home) == 0 { return fail_chain(ctl, 1); }
+  let ep: [i64] = alloc(0, 0);
+  return ask(ctl, 101, 3, 1, home, ep);
+}
+
+// 101: realpath(home) completed: keep homeReal in bank 2 (ctl 16,17), check the folder encoding, lstat(home/sessions)
+fn p101(cfg: [i64], cfg_text: [u8], ctl: [i64], text: [u8], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256 && len(event) >= 24 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  requires len(cfg_text) <= 100000000 && len(text) <= 100000000 && len(completion) <= 100000000
+  ensures len(result) >= 268
+{
+  if event[2] != 0 || event[3] != 3 { return crate::packet::done_internal(ctl, 30); }
+  let n: i64 = len(completion);
+  if event[4] != 0 || n == 0 { return fail_chain(ctl, 1); }
+  if n > 1000000 { return crate::packet::done_simple(ctl, 1, 6, 1); }
+  let folder: str = crate::util::cfg_str(cfg_text, cfg[6], cfg[7]);
+  let enc: str = enc_str(folder);
+  if len(enc) == 0 { return crate::packet::done_simple(ctl, 1, 1, 3); }  // reference stage: the last primitive (realpath)
+  let home: str = crate::util::cfg_str(cfg_text, cfg[4], cfg[5]);
+  let prior: i64 = len(text);
+  let p1: [i64] = crate::packet::patch_resize(2, prior + n);
+  let p2: [i64] = crate::packet::patch_copy(2, prior, n, 2, 0);
+  let patches: [i64] = crate::packet::cat_words(p1, p2);
+  let mut c: [i64] = copy(ctl);
+  c[16] = prior;
+  c[17] = n;
+  let sess: str = join(home, "sessions");
+  return ask(c, 102, 2, 2, sess, patches);
+}
+
+// 102: lstat(home/sessions) completed
+fn p102(cfg: [i64], cfg_text: [u8], ctl: [i64], event: [i64]) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256 && len(event) >= 24 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(cfg_text) <= 100000000
+  ensures len(result) >= 268
+{
+  if event[2] != 0 || event[3] != 2 { return crate::packet::done_internal(ctl, 30); }
+  if !is_dir(event) { return fail_chain(ctl, 2); }
+  let base: str = base_path(cfg, cfg_text);
+  if len(base) == 0 { return crate::packet::done_simple(ctl, 2, 1, 3); }
+  let ep: [i64] = alloc(0, 0);
+  return ask(ctl, 103, 2, 2, base, ep);
+}
+
+// 103: lstat(sessions/<enc>) completed: mode 0 is done here (list takes over), mode 1 also checks the thread directory
+fn p103(cfg: [i64], cfg_text: [u8], ctl: [i64], event: [i64]) -> [i64] ! alloc
+  requires len(cfg) == 24 && len(ctl) == 256 && len(event) >= 24 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(cfg_text) <= 100000000
+  ensures len(result) >= 268
+{
+  if event[2] != 0 || event[3] != 2 { return crate::packet::done_internal(ctl, 30); }
+  if !is_dir(event) { return fail_chain(ctl, 2); }
+  if ctl[1] == 0 { return handoff(ctl, 300); }
+  if ctl[1] != 1 { return crate::packet::done_internal(ctl, 30); }
+  let base: str = base_path(cfg, cfg_text);
+  let thread: str = crate::util::cfg_str(cfg_text, cfg[8], cfg[9]);
+  if len(base) == 0 { return crate::packet::done_simple(ctl, 2, 1, 3); }
+  let dir: str = join(base, thread);
+  let ep: [i64] = alloc(0, 0);
+  return ask(ctl, 104, 2, 2, dir, ep);
+}
+
+// 104: lstat(<enc>/<thread>) completed (mode 1): the summary phase takes over
+fn p104(ctl: [i64], event: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 256 && len(event) >= 24
+  ensures len(result) >= 268
+{
+  if event[2] != 0 || event[3] != 2 { return crate::packet::done_internal(ctl, 30); }
+  if !is_dir(event) { return fail_chain(ctl, 2); }
+  return handoff(ctl, 200);
+}
+
+pub fn advance(cfg: [i64], cfg_text: [u8], ctl: [i64], directory: [i64], rows: [i64], text: [u8],
+               small0: [u8], small1: [u8], small2: [u8], small3: [u8], history: [u8],
+               event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(cfg) == 24 && 0 <= cfg[2] && cfg[2] <= 2147483647 && len(ctl) == 256 && len(event) >= 24
+  requires 1 <= ctl[3] && ctl[3] <= 1000000000 && 0 <= ctl[4] && ctl[4] <= 15 && 0 <= ctl[2] && ctl[2] <= 999
+  requires len(cfg_text) <= 100000000 && len(directory) <= 100000000 && len(rows) <= 100000000 && len(text) <= 100000000
+  requires len(small0) <= 100000000 && len(small1) <= 100000000 && len(small2) <= 100000000 && len(small3) <= 100000000
+  requires len(history) <= 100000000 && len(completion) <= 100000000
+  ensures len(result) >= 268
+{
+  let phase: i64 = ctl[2];
+  if phase == 100 { return p100(cfg, cfg_text, ctl, event); }
+  if phase == 101 { return p101(cfg, cfg_text, ctl, text, event, completion); }
+  if phase == 102 { return p102(cfg, cfg_text, ctl, event); }
+  if phase == 103 { return p103(cfg, cfg_text, ctl, event); }
+  if phase == 104 { return p104(ctl, event); }
+  return crate::packet::done_internal(ctl, 30);
+}

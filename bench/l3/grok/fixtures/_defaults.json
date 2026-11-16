@@ -1,0 +1,39 @@
+{
+  "list": {
+    "folder": "/work",
+    "source": {"engine": "grok", "home": "$SRC"},
+    "tree": [{"path": "$SRC", "kind": "dir"}]
+  },
+  "read": {
+    "folder": "/work",
+    "thread": "A",
+    "source": {"engine": "grok", "home": "$SRC"},
+    "tree": [{"path": "$SRC", "kind": "dir"}]
+  },
+  "copy": {
+    "folder": "/",
+    "thread": "A",
+    "targetHome": "$DST",
+    "umask": 18,
+    "source": {"engine": "grok", "home": "$SRC"},
+    "tree": [{"path": "$SRC", "kind": "dir"}, {"path": "$DST", "kind": "dir"}],
+    "schedule": {"entropyHex": ["000102a0feff"]}
+  },
+  "load": {
+    "folder": "/",
+    "thread": "A",
+    "targetHome": "$DST",
+    "source": {"engine": "grok", "home": "$SRC"},
+    "tree": [{"path": "$SRC", "kind": "dir"}, {"path": "$DST", "kind": "dir"}]
+  },
+  "small-json": {
+    "source": {"engine": "grok", "home": "$SRC"},
+    "smallHomeReal": "$SRC_REAL",
+    "tree": [{"path": "$SRC", "kind": "dir"}]
+  },
+  "caller-cleanup": {
+    "source": {"engine": "grok", "home": "$SRC"},
+    "targetHome": "$DST",
+    "tree": [{"path": "$SRC", "kind": "dir"}, {"path": "$DST", "kind": "dir"}]
+  }
+}

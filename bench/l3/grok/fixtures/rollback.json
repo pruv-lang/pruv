@@ -1,0 +1,14 @@
+[
+  {"name": "rollback-caller-cleanup-removes-copy", "mode": "caller-cleanup", "cleanupPath": "$DST/sessions/%2F/A",
+   "tree": [{"path": "$DST/sessions/%2F/A/summary.json", "kind": "file", "bytes": {"utf8": "{}"}}, {"path": "$DST/sessions/%2F/A/usage.json", "kind": "file", "bytes": {"utf8": "{}"}},
+            {"path": "$DST/sessions/%2F/A/sub/deep.txt", "kind": "file", "bytes": {"utf8": "x"}}, {"path": "$SRC/sessions/%2F/A/summary.json", "kind": "file", "bytes": {"utf8": "{}"}}],
+   "expected": {"status": "ok"}},
+  {"name": "rollback-caller-cleanup-missing-path", "mode": "caller-cleanup", "cleanupPath": "$DST/sessions/%2F/never-existed",
+   "expected": {"status": "ok"}},
+  {"name": "rollback-caller-cleanup-leaves-source", "mode": "caller-cleanup", "cleanupPath": "$DST/sessions/%2F/A",
+   "tree": [{"path": "$DST/sessions/%2F/A/summary.json", "kind": "file", "bytes": {"utf8": "{}"}}, {"path": "$SRC/sessions/%2F/A/chat_history.jsonl", "kind": "file", "bytes": {"utf8": "keep\n"}}],
+   "expected": {"status": "ok"}},
+  {"name": "rollback-after-copy-open-raced", "mode": "copy",
+   "gen": [{"session": {"thread": "A", "readdir": true, "files": {"usage.json": "{}"}}}],
+   "expected": {"status": "ok", "skipped": 0}}
+]

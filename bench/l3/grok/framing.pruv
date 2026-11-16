@@ -1,0 +1,250 @@
+// Grok history framing (reference/tail.ts openLineWindow + grok.ts droppedUser). NOT compiled or verified (no shell).
+//
+// UNSURE / for the main agent:
+//  1. scan() returns [count, kind,lo,hi, ...]. Empty LF-terminated lines (length 0) emit NO event: they can never parse to an
+//     object, so read::window would skip them anyway; this keeps the event array at most n/2+1 events (cap is 3*(n/2+2)+1 words,
+//     guarded by put_event, so an overflow could only truncate, never write out of range). Deviation from DESIGN only in
+//     "one event per line"; observable behaviour is the same.
+//  2. The chunking of the TS stream (256 KiB) is not modelled: with the whole window in one buffer the event order is identical
+//     (a drop is reported at the point where its line is recognised as over 1 MiB, always before the next line).
+//  3. dropped_user is a byte scanner like text::dropped_user (whitespace = ECMAScript \s as UTF-8 sequences, every other byte
+//     is a non-space non-brace). The head passed in is expected to be at most 8192 bytes (read::window takes lo..lo+8192 from
+//     scan's drop event). Its own bounds are not enforced here.
+//  4. scan has no contract about the content of the events beyond the length formula; read::window re-checks every lo/hi
+//     (0 <= lo <= hi <= len(window), kind 0/1) at run time, like turns::finish does for its plan.
+
+// ---- dropped_user helpers (local copies of the private text.pruv scanners) ----
+
+fn ws_at(head: [u8], p: i64) -> i64
+  requires 0 <= p && p <= len(head)
+  ensures 0 <= result && result <= 3
+  ensures result <= len(head) - p
+{
+  if p >= len(head) { return 0; }
+  let b: i64 = head[p];
+  if (9 <= b && b <= 13) || b == 32 { return 1; }
+  if p + 1 >= len(head) { return 0; }
+  let c: i64 = head[p + 1];
+  if b == 194 && c == 160 { return 2; }
+  if p + 2 >= len(head) { return 0; }
+  let d: i64 = head[p + 2];
+  if b == 225 && c == 154 && d == 128 { return 3; }
+  if b == 226 && c == 128 && ((128 <= d && d <= 138) || d == 168 || d == 169 || d == 175) { return 3; }
+  if b == 226 && c == 129 && d == 159 { return 3; }
+  if b == 227 && c == 128 && d == 128 { return 3; }
+  if b == 239 && c == 187 && d == 191 { return 3; }
+  return 0;
+}
+
+// Position after the whitespace run starting at p.
+fn skip_ws(head: [u8], p: i64) -> i64
+  requires 0 <= p && p <= len(head)
+  ensures p <= result && result <= len(head)
+{
+  let mut q: i64 = p;
+  while q < len(head)
+    invariant p <= q && q <= len(head)
+    decreases len(head) - q
+  {
+    let w: i64 = ws_at(head, q);
+    if w == 0 { return q; }
+    q = q + w;
+  }
+  return q;
+}
+
+// End of the literal lit at p, or -1.
+fn lit_end(head: [u8], p: i64, lit: str) -> i64
+  requires 0 <= p
+  ensures result == -1 || (p <= result && result <= len(head))
+{
+  if p > len(head) { return -1; }
+  if len(lit) > len(head) - p { return -1; }
+  let mut k: i64 = 0;
+  while k < len(lit)
+    invariant 0 <= k && k <= len(lit) && 0 <= p && p <= len(head) && len(lit) <= len(head) - p
+    decreases len(lit) - k
+  {
+    let a: i64 = head[p + k];
+    let b: i64 = lit[k];
+    if a != b { return -1; }
+    k = k + 1;
+  }
+  return p + len(lit);
+}
+
+// End of "word" (with its quotes) at p, or -1.
+fn quoted_end(head: [u8], p: i64, word: str) -> i64
+  requires 0 <= p
+  ensures result == -1 || (p < result && result <= len(head))
+{
+  if p >= len(head) { return -1; }
+  let q: i64 = head[p];
+  if q != 34 { return -1; }
+  let e: i64 = lit_end(head, p + 1, word);
+  if e < 0 { return -1; }
+  if e >= len(head) { return -1; }
+  let r: i64 = head[e];
+  if r != 34 { return -1; }
+  return e + 1;
+}
+
+// After a key ending at e: \s* : \s*; returns the value start or -1.
+fn colon_value(head: [u8], e: i64) -> i64
+  requires 0 <= e && e <= len(head)
+  ensures result == -1 || (e < result && result <= len(head))
+{
+  let a: i64 = skip_ws(head, e);
+  if a >= len(head) { return -1; }
+  let c: i64 = head[a];
+  if c != 58 { return -1; }
+  return skip_ws(head, a + 1);
+}
+
+// "synthetic_reason"\s*:\s*" starting at the quote at p.
+fn synth_hit(head: [u8], p: i64) -> bool ! alloc
+  requires 0 <= p
+{
+  let e: i64 = quoted_end(head, p, "synthetic_reason");
+  if e < 0 { return false; }
+  let v: i64 = colon_value(head, e);
+  if v < 0 { return false; }
+  if v >= len(head) { return false; }
+  let c: i64 = head[v];
+  return c == 34;
+}
+
+// grok.ts droppedUser: /^\s*\{\s*"type"\s*:\s*"user"/ matches AND /"synthetic_reason"\s*:\s*"/ does not match anywhere.
+// Raw matching, not JSON: type must be the first field, no delimiter after "user", escaped keys do not match.
+pub fn dropped_user(head: [u8]) -> bool ! alloc
+{
+  let n: i64 = len(head);
+  let a: i64 = skip_ws(head, 0);
+  if a >= n { return false; }
+  let c: i64 = head[a];
+  if c != 123 { return false; }
+  let b: i64 = skip_ws(head, a + 1);
+  let e: i64 = quoted_end(head, b, "type");
+  if e < 0 { return false; }
+  let v: i64 = colon_value(head, e);
+  if v < 0 { return false; }
+  let u: i64 = quoted_end(head, v, "user");
+  if u < 0 { return false; }
+  let mut p: i64 = 0;
+  while p < n
+    invariant 0 <= p && p <= n && n == len(head)
+    decreases n - p
+  {
+    let d: i64 = head[p];
+    if d == 34 {
+      if synth_hit(head, p) { return false; }
+    }
+    p = p + 1;
+  }
+  return true;
+}
+
+// ---- scan ----
+
+// Index of the first LF at or after `from`, or -1.
+fn find_lf(w: [u8], from: i64) -> i64
+  requires 0 <= from && from <= len(w)
+  ensures result == -1 || (from <= result && result < len(w))
+{
+  let mut i: i64 = from;
+  while i < len(w)
+    invariant from <= i && i <= len(w)
+    decreases len(w) - i
+  {
+    let c: i64 = w[i];
+    if c == 10 { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+// Event k at ev[1+3k..1+3k+3]; returns the new event count (unchanged when the array has no room: cannot happen).
+fn put_event(inout ev: [i64], k: i64, kind: i64, lo: i64, hi: i64) -> i64
+  requires 0 <= k && 3 * k + 1 <= len(ev)
+  ensures len(ev) == len(old(ev))
+  ensures result == k || result == k + 1
+  ensures 0 <= result && 3 * result + 1 <= len(ev)
+{
+  if 3 * k + 4 > len(ev) { return k; }
+  ev[3 * k + 1] = kind;
+  ev[3 * k + 2] = lo;
+  ev[3 * k + 3] = hi;
+  return k + 1;
+}
+
+// Event list of the history window, in file order: [count, kind,lo,hi, ...].
+//   kind 0: an LF-terminated line [lo,hi) of at most 1048576 bytes (CR stays in the span and counts toward the cap; empty lines omitted)
+//   kind 1: a drop marker for a line over 1048576 bytes (LF-terminated, or the unterminated final fragment); [lo,hi) = its first 8192 bytes
+// omitted (window starts inside the file): everything up to and including the first LF is discarded without an event; with no LF at
+// all the window has no event. An ordinary unterminated final fragment (at most 1 MiB) is ignored.
+pub fn scan(window: [u8], omitted: bool) -> [i64] ! alloc
+  requires len(window) <= 100000000
+  ensures len(result) >= 1 && 0 <= result[0] && len(result) == 1 + 3 * result[0]
+{
+  let n: i64 = len(window);
+  // Pass 1: count the events (no allocation).
+  let mut c: i64 = 0;
+  let mut p: i64 = scan_start(window, omitted);
+  while p < n
+    invariant 0 <= p && p <= n && n == len(window) && n <= 100000000
+    invariant 0 <= c && c <= p
+    decreases n - p
+  {
+    let q: i64 = find_lf(window, p);
+    if q < 0 {
+      if n - p > 1048576 { c = c + 1; }
+      p = n;
+    } else {
+      let ln: i64 = q - p;
+      if ln > 1048576 {
+        c = c + 1;
+      } else if ln > 0 {
+        c = c + 1;
+      }
+      p = q + 1;
+    }
+  }
+  // Pass 2: one exactly-sized result, filled in place (same classification as pass 1).
+  let mut out: [i64] = alloc(1 + 3 * c, 0);
+  out[0] = c;
+  let mut k: i64 = 0;
+  let mut r: i64 = scan_start(window, omitted);
+  while r < n
+    invariant 0 <= r && r <= n && n == len(window) && n <= 100000000
+    invariant len(out) == 1 + 3 * c && 0 <= c && 0 <= k && 3 * k + 1 <= len(out)
+    decreases n - r
+  {
+    let q: i64 = find_lf(window, r);
+    if q < 0 {
+      if n - r > 1048576 { k = put_event(inout out, k, 1, r, r + 8192); }
+      r = n;
+    } else {
+      let ln: i64 = q - r;
+      if ln > 1048576 {
+        k = put_event(inout out, k, 1, r, r + 8192);
+      } else if ln > 0 {
+        k = put_event(inout out, k, 0, r, q);
+      }
+      r = q + 1;
+    }
+  }
+  out[0] = c;  // put_event never touches index 0; set after the loop so the ensures needs no frame fact
+  return out;
+}
+
+// Where scanning starts: 0, or just past the first LF when the window starts inside the file (n when there is no LF).
+fn scan_start(window: [u8], omitted: bool) -> i64
+  ensures 0 <= result && result <= len(window)
+{
+  if omitted {
+    let q0: i64 = find_lf(window, 0);
+    if q0 < 0 { return len(window); }
+    return q0 + 1;
+  }
+  return 0;
+}
