@@ -19,6 +19,8 @@
 --rust-extern NAME=PATH  repeatable (G6): a crate a `trusted rust fn` path may start with (NAME: a Rust
                  identifier, not std, no duplicates). A0: only NAME is used; the file is not opened.
 --rust-search PATH  repeatable (G6): rustc `-L dependency=PATH` directory (recorded only in A0).
+--lib DIR        repeatable (G4b-0): library directory searched for `mod NAME;` declared in the root
+                 file (docs/G4B_LIB_SPEC.md); DIR must be an existing directory.
 --foreign-checks requires|all|off  G6 boundary contract checks (default requires); `off` needs verification,
                  so `--no-verify --foreign-checks off` is a usage error.
 --contract-budget N  internal/test-only (overrides the per-entry requires iteration
@@ -53,7 +55,7 @@ from foreign import g6_unimplemented_error, g7_target_error, first_async_use  # 
 
 USAGE = ("usage: pruvc.py in.pruv -o OUT [--no-verify] [--trust-callers] "
          "[--backend rust|llvm] [--rust-bindings PATH] [--infer [--show-inferred]] "
-         "[--rust-extern NAME=PATH] [--rust-search PATH] [--foreign-checks requires|all|off]")
+         "[--rust-extern NAME=PATH] [--rust-search PATH] [--lib DIR] [--foreign-checks requires|all|off]")
 
 
 def default_bindings_path(out):
@@ -62,14 +64,14 @@ def default_bindings_path(out):
 
 def compile_file(path, out, verify=True, trust_callers=False, backend="rust", rust_bindings=None,
                  budget=None, also_llvm=None, infer=False, show_inferred=False, externs=(),
-                 foreign_checks="requires", extern_specs=(), emit=None):
+                 foreign_checks="requires", extern_specs=(), emit=None, libs=()):
     """extern_specs: [(name, path)] of --rust-extern (recorded in the manifest); externs: the names only."""
     if budget is None:
         budget = 1 << 30
     assert 1 <= budget <= 2 ** 62
     if also_llvm and backend != "rust":
         raise ValueError("also_llvm requires backend='rust'")
-    prog = load_program(path)   # G4: the root file plus its declared module files; a legacy root is plain parse(src)
+    prog = load_program(path, libs=libs)   # G4: the root file plus its declared module files; a legacy root is plain parse(src)
     check(prog, externs=externs)
     # G9 A3: both back ends lower G9 programs; the G9 staging guard is gone from the driver.
     # G6: the Rust source backend lowers foreign calls and collections (A2); the LLVM backend (and --also-llvm)
@@ -176,6 +178,7 @@ def main(argv):
     ap.add_argument("--show-inferred", dest="show_inferred", action="store_true")
     ap.add_argument("--rust-extern", dest="rust_extern", action="append", default=[], metavar="NAME=PATH")
     ap.add_argument("--rust-search", dest="rust_search", action="append", default=[], metavar="PATH")
+    ap.add_argument("--lib", dest="libs", action="append", default=[], metavar="DIR")
     ap.add_argument("--foreign-checks", dest="foreign_checks", choices=["requires", "all", "off"],
                     default="requires")
     ap.add_argument("--contract-budget", dest="budget", type=int, default=None,
@@ -210,6 +213,8 @@ def main(argv):
         extern_specs.append((name, xpath))
     if any(not p for p in a.rust_search):
         ap.error("--rust-search needs a non-empty PATH")
+    if any(not p or not os.path.isdir(p) for p in a.libs):
+        ap.error("--lib needs an existing directory")
     bindings = a.rust_bindings
     if a.backend == "llvm":
         if bindings is None:
@@ -220,7 +225,8 @@ def main(argv):
         errs = compile_file(a.input, a.out, not a.no_verify, a.trust_callers, a.backend, bindings,
                           a.budget, tuple(a.also_llvm) if a.also_llvm else None,
                           infer=a.infer, show_inferred=a.show_inferred, externs=tuple(externs),
-                          foreign_checks=a.foreign_checks, extern_specs=tuple(extern_specs), emit=a.emit)
+                          foreign_checks=a.foreign_checks, extern_specs=tuple(extern_specs), emit=a.emit,
+                          libs=tuple(a.libs))
     except NativeEmitUnavailable:
         ap.error("unrecognized arguments: --emit " + a.emit)
     except PruvError as e:

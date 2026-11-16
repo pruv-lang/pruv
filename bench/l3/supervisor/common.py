@@ -8,6 +8,8 @@ import sys
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 PAIRS = [(c, b) for c in ('py', 'rs') for b in ('rust', 'llvm')]
+LIB = HERE.parent / 'lib'
+LIB_FLAGS = ('--lib', str(LIB))
 
 
 def enc(values):
@@ -46,10 +48,10 @@ def configure(work):
     return setup.configure(), setup.run
 
 
-def build(g2, run, compiler, backend, root, work, harness_src, name):
+def build(g2, run, compiler, backend, root, work, harness_src, name, flags=()):
     """Verify and compile root, build the harness, return the executable path."""
     work.mkdir(parents=True, exist_ok=True)
-    compiled = g2.compile_pruv(compiler, str(root), str(work), backend)
+    compiled = g2.compile_pruv(compiler, str(root), str(work), backend, flags)
     if compiled['rc'] != 0:
         raise RuntimeError('compile/verify failed: ' + str(compiled['errors'] or compiled['stderr']))
     harness = work / 'main.rs'
@@ -64,7 +66,7 @@ def build(g2, run, compiler, backend, root, work, harness_src, name):
     return exe
 
 
-def run_lines(name, root, harness_src, cases, pairs=PAIRS):
+def run_lines(name, root, harness_src, cases, pairs=PAIRS, flags=()):
     """cases: list of (label, input line, expected output line). Returns the process exit code."""
     work_root = HERE / 'work' / name
     g2, run = configure(work_root)
@@ -73,7 +75,7 @@ def run_lines(name, root, harness_src, cases, pairs=PAIRS):
     for compiler, backend in pairs:
         key = f'{compiler}/{backend}'
         try:
-            exe = build(g2, run, compiler, backend, root, work_root / f'{compiler}_{backend}', harness_src, name)
+            exe = build(g2, run, compiler, backend, root, work_root / f'{compiler}_{backend}', harness_src, name, flags)
             print(f'{key}: verified and compiled', flush=True)
             got = run([exe], payload).splitlines()
             if len(got) != len(cases):

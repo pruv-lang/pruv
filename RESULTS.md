@@ -2096,3 +2096,13 @@ python3 bench/l3/mcp/q_mutants.py
 ```
 
 **L3-3 implementation and default Q complete.**
+
+## 131. G4b-0: library directories (`--lib DIR`, 2026-11-16)
+
+- **Design:** `docs/G4B_LIB_SPEC.md`. `--lib DIR` (repeatable, order kept) adds library directories for modules declared in the root file only (never `std`). Exactly one candidate among `ROOT_DIR/NAME.pruv` and each `DIR/NAME.pruv` (lexists, like the std conflict check) is used; none is the existing `parse/module_file` with the hint `... pass --lib DIR, or remove ...`; more than one is the new `parse/lib_module_conflict`. Children of a library module resolve inside that library. Library files are displayed as `@lib/NAME.pruv` and `@lib/NAME/x.pruv`, so `DIR` never appears in output. Legacy roots ignore `--lib`; an empty or non-directory value is a usage error (exit 2, `--lib needs an existing directory`). Names, visibility, proof and code generation are unchanged.
+- **Implementation:** both compilers (`pruvc/modules.py`, `pruvc/pruvc.py`; `pruv-core/src/modules.rs`, `pruvc/src/cli.rs`, `driver.rs`), with Rust unit tests for the loader.
+- **Tests:** `tests/g4/check_lib.py` (run_all row `g4_frontend/lib`) covers library-only and child modules, a child not read from the root directory, two libraries, local+library and two-library conflicts, missing-module hints, std inside a library, `@lib/` file in verify errors, legacy roots, bad `--lib` values, and generated Rust byte-identical to the same project with the files copied next to the root. It passes on both compilers.
+- **Use:** `bench/l3/lib/` now holds the single copy of `json`, `jstr`, `lex`, `lines`, `parse`, `access` and `tail` (byte-identical to the deleted copies, checked with `cmp`). `bench/l3/{json,mcp,qwen,supervisor}/` compile with `--lib bench/l3/lib`; their implementation tests pass on all four pairs (json A0-A5, mcp 22/22, qwen 26/26, supervisor A0-A3). The mutant scripts copy the library into each mutant's work directory. `bench/l3/claude/` stays frozen as the L3-1 record.
+- **Checks before commit:** `cargo test --release`, `tests/diff_rust.py --fuzz-count 20` (all same), Python full run_all with rows compare (4188/4188 passed; 4200 saved rows, 12 outside the py scope, 0 missing, 0 extra, 0 failed). Mutant scripts were not rerun (Q-only). The audit found no required defect; it noted that four `run_q_mutants.py` entries (`trailing_comma`, `wrong_colon_kind`, `surrogate_combine`, `first_wins`) target strings absent from the current source, which predates this change and is left for the next Q batch.
+
+**G4b-0 complete.**

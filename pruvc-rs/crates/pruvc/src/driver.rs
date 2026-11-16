@@ -209,7 +209,8 @@ fn compile(a: &Args) -> Result<(), Fail> {
     // G4: the root file plus its declared module files (a legacy root is the plain parse). A read failure or UTF-8 decode
     // failure of the root is an internal error (handled like Python open().read()).
     // Exceeding the depth limit is reported by the parser as stage "internal" (exit 3, like Python RecursionError).
-    let loaded = pruv_core::modules::load_program(Path::new(&a.input)).map_err(|e| match e {
+    let libs: Vec<std::path::PathBuf> = a.libs.iter().map(std::path::PathBuf::from).collect();
+    let loaded = pruv_core::modules::load_program_with_libs(Path::new(&a.input), &libs).map_err(|e| match e {
         pruv_core::modules::LoadError::Io(m) | pruv_core::modules::LoadError::Decode(m) => Fail::Internal(m),
         pruv_core::modules::LoadError::Lang(e) => {
             if e.stage == "internal" {

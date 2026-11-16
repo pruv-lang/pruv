@@ -3270,6 +3270,7 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "g3_proof", "mode": "verify_only", "sample": "tests/g3/proof/p22_equality_chain.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g3_proof", "mode": "verify_only", "sample": "tests/g3/proof/p23_unused_generic.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g3_proof", "mode": "verify_only", "sample": "tests/g3/proof/p24_two_sorts.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "g4_frontend", "mode": "lib", "sample": "tests/g4/check_lib.py"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g4_proof", "mode": "default", "sample": "tests/g4/proof/p01_same_spelled_types/root.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g4_proof", "mode": "default", "sample": "tests/g4/proof/p02_cross_file_generics/root.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g4_proof", "mode": "default", "sample": "tests/g4/proof/p03_recursive_fn_scc/root.pruv"}

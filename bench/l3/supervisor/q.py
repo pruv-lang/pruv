@@ -28,7 +28,7 @@ NODE = os.environ.get('NODE', 'node')
 
 def a3_cases():
     got = []
-    test_a3.run_lines = lambda name, root, harness, cases: got.extend(cases) or 0
+    test_a3.run_lines = lambda name, root, harness, cases, **kw: got.extend(cases) or 0
     test_a3.main()
     out = []
     for label, line, _ in got:
@@ -188,7 +188,7 @@ def main():
     for compiler, backend in common.PAIRS:
         key = f'{compiler}/{backend}'
         exe = common.build(g2, run, compiler, backend, HERE / 'supervise.pruv', WORK / f'{compiler}_{backend}',
-                           test_a3.HARNESS, 'q')
+                           test_a3.HARNESS, 'q', common.LIB_FLAGS)
         rows = []
         for group, tsr, fs in ((cases, ts, None), (faults, ts_fault, 6000)):
             pr = run_pruv(exe, group, fs)

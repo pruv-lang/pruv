@@ -2,7 +2,7 @@
 import random
 import sys
 
-from common import EXPAND, HERE, enc, run_lines
+from common import EXPAND, HERE, LIB_FLAGS, enc, run_lines
 
 HARNESS = r'''
 #[path="@SOL@"] mod sol;
@@ -88,7 +88,7 @@ def main():
     cases.append(('bad byte', f'{FILES / "b3.bin"} 5 1 256', '-1 | '))
     for p in FILES.glob('*.bin'):
         p.unlink()
-    return run_lines('a2', HERE / 'a2_root.pruv', HARNESS, cases)
+    return run_lines('a2', HERE / 'a2_root.pruv', HARNESS, cases, flags=LIB_FLAGS)
 
 
 if __name__ == '__main__':

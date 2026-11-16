@@ -16,6 +16,7 @@ import sys
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
+LIB = HERE.parent / 'lib'
 ROOT = HERE.parents[2]
 WORK = HERE / 'work'
 
@@ -140,7 +141,7 @@ def main():
             try:
                 work = WORK / f'{compiler}_{backend}'
                 work.mkdir(exist_ok=True)
-                compiled = g2.compile_pruv(compiler, str(HERE / 'a0_root.pruv'), str(work), backend)
+                compiled = g2.compile_pruv(compiler, str(HERE / 'a0_root.pruv'), str(work), backend, ['--lib', str(LIB)])
                 if compiled['rc'] != 0:
                     raise RuntimeError('compile/verify failed: ' + str(compiled['errors'] or compiled['stderr']))
                 print(f'{key}: json.pruv verified and compiled (rc 0)', flush=True)

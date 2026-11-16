@@ -474,6 +474,15 @@ def g4_frontend_jobs(group="g4_frontend", modes=(("no-verify", ["--no-verify"]),
                 return c.returncode == 0, "pruvc exit %d (expected 0) %s" % (c.returncode, text[-400:])
             jobs.append(safe(name, fn, {"sample": e["root"], "backend": None, "flags": flags, "mode": mode,
                                          "group": group}))
+    if group == "g4_frontend":
+        def lib_checks():
+            c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/g4/check_lib.py"), WORK] +
+                               (["--rs", _driver().path] if _driver().kind == "rs" else []),
+                               capture_output=True, text=True, timeout=300)
+            return c.returncode == 0, c.stdout + c.stderr
+        jobs.append(safe("g4_frontend/lib", lib_checks,
+                         {"sample": "tests/g4/check_lib.py", "backend": None, "flags": [],
+                          "mode": "lib", "group": "g4_frontend"}))
     return jobs
 
 

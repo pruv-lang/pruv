@@ -110,7 +110,7 @@ def _file_id(p):
     return (st.st_dev, st.st_ino)
 
 
-def load_program(path):
+def load_program(path, libs=()):
     # the root is read exactly as before (same exceptions); parse(src) stays the file-local API
     src = open(path, encoding="utf-8").read()
     root_file = os.path.basename(path)
@@ -125,6 +125,7 @@ def load_program(path):
     root_dir = os.path.dirname(os.path.abspath(path))
     prog.explicit = True
     root = Module((), root_file, None)
+    root.base, root.relpre = root_dir, ""
     root.mods = list(prog.mods)
     root.items = list(prog.items)
     _tag(root.items + root.mods, root_file)
@@ -141,8 +142,25 @@ def load_program(path):
                 continue                 # reported by resolve as type/duplicate_module; the file is loaded once
             seen.add(md.name)
             cpath = m.path + (md.name,)
-            rel = "/".join(cpath) + ".pruv"
-            fpath = os.path.join(root_dir, *cpath) + ".pruv"
+            rel = m.relpre + "/".join(cpath) + ".pruv"
+            fpath = os.path.join(m.base, *cpath) + ".pruv"
+            base, relpre = m.base, m.relpre
+            if not m.path and md.name != "std":
+                # G4b-0 (docs/G4B_LIB_SPEC.md 2): local file plus one candidate per --lib DIR
+                cands = []
+                if os.path.lexists(fpath):
+                    cands.append((fpath, rel, base, relpre))
+                for d in libs:
+                    lp = os.path.join(d, md.name) + ".pruv"
+                    if os.path.lexists(lp):
+                        cands.append((lp, "@lib/" + md.name + ".pruv", d, "@lib/"))
+                if len(cands) > 1:
+                    raise PruvError("parse", md.line, md.col, "lib_module_conflict",
+                                    "module %s is found in more than one place: %s"
+                                    % (md.name, ", ".join(c[1] for c in cands)),
+                                    "remove the duplicate file or drop one --lib", file=m.file)
+                if cands:
+                    fpath, rel, base, relpre = cands[0]
             if md.name == "std":
                 if m.path:
                     raise PruvError("parse", md.line, md.col, "std_import_location",
@@ -171,7 +189,9 @@ def load_program(path):
             except OSError:
                 raise PruvError("parse", md.line, md.col, "module_file",
                                 "cannot read the file of module %s (expected %s)" % (disp(cpath), rel),
-                                "create %s next to the root file, or remove `mod %s;`" % (rel, md.name), file=m.file)
+                                ("create %s next to the root file, pass --lib DIR, or remove `mod %s;`"
+                                 if not m.path else "create %s next to the root file, or remove `mod %s;`")
+                                % (rel, md.name), file=m.file)
             # The bundle has a logical resource identity, not a physical one (same as pruvc-rs).
             fid = None if md.name == "std" else _file_id(fpath)
             if fid is not None and fid in loaded:
@@ -186,6 +206,7 @@ def load_program(path):
                 e.file = rel
                 raise
             child = Module(cpath, rel, m)
+            child.base, child.relpre = base, relpre
             child.mods = list(cprog.mods)
             child.items = list(cprog.items)
             _tag(child.items + child.mods, rel)

@@ -16,6 +16,7 @@ import time
 sys.dont_write_bytecode = True
 sys.setrecursionlimit(30000)
 HERE = Path(__file__).resolve().parent
+LIB = HERE.parent / 'lib'
 ROOT = HERE.parents[2]
 WORK = HERE / 'work/q'
 SEED = 20261114
@@ -237,7 +238,7 @@ def main():
         run([shutil.which('cargo') or str(Path.home()/'.cargo/bin/cargo'),'build','--release','--offline','--quiet',
              '--manifest-path',HERE/'str_adapter/Cargo.toml','--target-dir',target])
         rlib = target/'release/libpruv_str.rlib'; deps = target/'release/deps'
-        flags = ['--rust-extern',f'pruv_str={rlib}','--rust-search',str(deps)]
+        flags = ['--rust-extern',f'pruv_str={rlib}','--rust-search',str(deps),'--lib',str(LIB)]
         rustflags = ['--extern',f'pruv_str={rlib}','-L',f'dependency={deps}']
         # JSONL calls include terminal Done/NeedMore, and independently parse each range.
         linecases = []

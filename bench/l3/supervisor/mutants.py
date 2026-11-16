@@ -36,7 +36,7 @@ MUTANTS = [
 
 def main():
     cases = []
-    test_a3.run_lines = lambda name, root, harness, c: cases.extend(c) or 0
+    test_a3.run_lines = lambda name, root, harness, c, **kw: cases.extend(c) or 0
     test_a3.main()
     payload = ''.join(line + '\n' for _, line, _ in cases)
     g2, run = common.configure(WORK)
@@ -47,11 +47,12 @@ def main():
         d = WORK / name.replace(' ', '_')
         shutil.rmtree(d, ignore_errors=True)
         d.mkdir(parents=True)
-        for m in ('args', 'capfile', 'tail', 'packet'):
+        for m in ('args', 'capfile', 'packet'):  # tail comes from the shared library (--lib)
             shutil.copy(HERE / f'{m}.pruv', d / f'{m}.pruv')
         (d / 'supervise.pruv').write_text(src.replace(old, new))
         try:
-            exe = common.build(g2, run, 'rs', 'rust', d / 'supervise.pruv', d / 'build', test_a3.HARNESS, 'mut')
+            exe = common.build(g2, run, 'rs', 'rust', d / 'supervise.pruv', d / 'build', test_a3.HARNESS, 'mut',
+                               common.LIB_FLAGS)
         except Exception as exc:
             rows.append(dict(mutant=name, result='rejected', detail=str(exc)[:300]))
             print(f'{name}: rejected', flush=True)

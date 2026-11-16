@@ -15,7 +15,8 @@ deps=WORK/'host/debug/deps'
 lib=next(deps.glob('libmcp_host-*.rlib'));serde=next(deps.glob('libserde_json-*.rlib'))
 adapter=WORK/'libpruv_str.rlib'
 run([g.RUSTC,'--crate-name','pruv_str','--crate-type','rlib',HERE/'str_adapter.rs','-o',adapter])
-flags=['--rust-extern',f'mcp_host={lib}','--rust-extern',f'pruv_str={adapter}']
+LIB=HERE.parent/'lib'
+flags=['--rust-extern',f'mcp_host={lib}','--rust-extern',f'pruv_str={adapter}','--lib',str(LIB)]
 failures=[]
 for compiler,backend in c.PAIRS:
  out=WORK/f'{compiler}_{backend}';out.mkdir(exist_ok=True)

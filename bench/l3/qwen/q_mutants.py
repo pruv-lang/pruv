@@ -22,10 +22,10 @@ MUTANTS=[
 
 def main():
  g=t.configure();base=t.WORK/'mutants';base.mkdir(exist_ok=True);report=[]
- flags=['--rust-extern',f'pruv_str={t.WORK / "libpruv_str.rlib"}','--rust-search',str(t.WORK)]
+ flags=['--rust-extern',f'pruv_str={t.WORK / "libpruv_str.rlib"}','--rust-search',str(t.WORK),'--lib',str(t.LIB)]
  fixtures=sorted((t.HERE/'fixtures').glob('*.jsonl'));expected=[json.loads(f.with_suffix('.expected.json').read_text()) for f in fixtures]
  for name,file,old,new in MUTANTS:
-  w=base/name;w.mkdir(exist_ok=True)
+  w=base/name;shutil.rmtree(w,ignore_errors=True);w.mkdir(exist_ok=True)  # no stale library copies: they conflict with --lib
   for p in t.HERE.glob('*.pruv'):shutil.copy2(p,w/p.name)
   p=w/file;s=p.read_text();assert s.count(old)==1,(name,s.count(old));p.write_text(s.replace(old,new))
   c=g.compile_pruv('rs',str(w/'q_root.pruv'),str(w),'rust',flags)

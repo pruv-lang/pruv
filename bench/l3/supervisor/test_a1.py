@@ -2,7 +2,7 @@
 import random
 import sys
 
-from common import EXPAND, HERE, enc, run_lines
+from common import EXPAND, HERE, LIB_FLAGS, enc, run_lines
 
 HARNESS = r'''
 #[path="@SOL@"] mod sol;
@@ -128,7 +128,7 @@ def main():
     cases.append(('bad T', '0 1 0', '-1'))
     cases.append(('bad script', '5 1 3 97', '-1'))
     print(f'{len(cases)} fixtures', flush=True)
-    return run_lines('a1', HERE / 'a1_root.pruv', HARNESS, cases)
+    return run_lines('a1', HERE / 'a1_root.pruv', HARNESS, cases, flags=LIB_FLAGS)
 
 
 if __name__ == '__main__':

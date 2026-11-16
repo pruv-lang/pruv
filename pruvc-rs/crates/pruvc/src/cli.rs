@@ -5,7 +5,7 @@ use pruvc::target::{Cpu, Target};
 use std::path::{Component, Path, PathBuf};
 
 // The usage line on stdout is kept the same as Python pruvc.py (except for the executable name) (audit must-fix 3). New options are reported on stderr.
-pub const USAGE: &str = "usage: pruvc in.pruv -o OUT [--no-verify] [--trust-callers] [--backend rust|llvm] [--rust-bindings PATH] [--infer [--show-inferred]] [--rust-extern NAME=PATH] [--rust-search PATH] [--foreign-checks requires|all|off]";
+pub const USAGE: &str = "usage: pruvc in.pruv -o OUT [--no-verify] [--trust-callers] [--backend rust|llvm] [--rust-bindings PATH] [--infer [--show-inferred]] [--rust-extern NAME=PATH] [--rust-search PATH] [--lib DIR] [--foreign-checks requires|all|off]";
 pub const USAGE_MORE: &str = "       [--emit exe|obj|ll|rs] [--target TRIPLE] [-mcpu=CPU]";
 
 /// Internal output kind (the result of the backend x emit decision table).
@@ -47,6 +47,8 @@ pub struct Args {
     pub rust_extern_specs: Vec<(String, String)>,
     /// G6: --rust-search PATH values (recorded only in A0).
     pub rust_search: Vec<String>,
+    /// G4b-0: --lib DIR values in flag order (existing directories; never written to any output).
+    pub libs: Vec<String>,
     /// G6: --foreign-checks requires|all|off (default requires).
     pub foreign_checks: String,
     pub budget: u64,
@@ -68,7 +70,7 @@ pub fn usage_error(msg: &str) -> i32 {
 }
 
 // Option names and the number of values they take. The declaration order is also the order of argparse's abbreviation-ambiguity message.
-static OPTS: [(&str, usize); 14] = [
+static OPTS: [(&str, usize); 15] = [
     ("-o", 1),
     ("--no-verify", 0),
     ("--trust-callers", 0),
@@ -83,6 +85,7 @@ static OPTS: [(&str, usize); 14] = [
     ("--also-llvm", 2),
     ("--emit", 1),
     ("--target", 1),
+    ("--lib", 1),
 ];
 
 #[derive(Default)]
@@ -98,6 +101,7 @@ struct Raw {
     rust_bindings: Option<String>,
     rust_extern: Vec<String>,
     rust_search: Vec<String>,
+    libs: Vec<String>,
     foreign_checks: Option<&'static str>,
     budget: Option<i128>,
     also_llvm: Option<(String, String)>,
@@ -266,6 +270,7 @@ fn parse_raw(argv: &[String]) -> Result<Raw, String> {
             "--rust-bindings" => r.rust_bindings = vals.pop(),
             "--rust-extern" => r.rust_extern.extend(vals.pop()),
             "--rust-search" => r.rust_search.extend(vals.pop()),
+            "--lib" => r.libs.extend(vals.pop()),
             "--foreign-checks" => {
                 let v = vals.pop().unwrap_or_default();
                 r.foreign_checks = Some(match v.as_str() {
@@ -485,6 +490,9 @@ pub fn parse(argv: &[String]) -> Result<Args, String> {
     if r.rust_search.iter().any(|p| p.is_empty()) {
         return Err("--rust-search needs a non-empty PATH".to_string());
     }
+    if r.libs.iter().any(|d| d.is_empty() || !Path::new(d).is_dir()) {
+        return Err("--lib needs an existing directory".to_string());
+    }
 
     // Target and CPU
     let target = match (&r.target, kind) {
@@ -552,6 +560,7 @@ pub fn parse(argv: &[String]) -> Result<Args, String> {
         rust_extern,
         rust_extern_specs,
         rust_search: r.rust_search,
+        libs: r.libs,
         foreign_checks: foreign_checks.to_string(),
         budget,
         bindings,

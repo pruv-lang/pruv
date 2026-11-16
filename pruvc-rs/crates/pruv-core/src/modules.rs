@@ -186,11 +186,16 @@ fn file_id(a: &Path) -> Option<String> {
 }
 
 struct Loader {
-    root_dir: PathBuf,
     modules: Vec<Module>,
     parsed: Vec<crate::parser::ParsedFile>,
     /// file identity -> display path of every loaded file
     loaded: HashMap<String, String>,
+    /// `--lib` directories in flag order (G4b-0); only consulted for `mod NAME;` declared in the root
+    libs: Vec<PathBuf>,
+    /// per module (same index as `modules`): the directory its children are resolved in (the root directory for the
+    /// root tree) and the display prefix
+    /// ("" for the root tree, "@lib/" for a library module and its children)
+    origin: Vec<(PathBuf, &'static str)>,
 }
 
 impl Loader {
@@ -212,12 +217,40 @@ impl Loader {
             }
             let mut cpath = self.modules[mi].path.clone();
             cpath.push(md.name.clone());
-            let mut rel = format!("{}.pruv", cpath.join("/"));
-            let mut fp = self.root_dir.clone();
+            let (base, prefix) = self.origin[mi].clone();
+            let mut origin = (base.clone(), prefix);
+            let mut rel = format!("{}{}.pruv", prefix, cpath.join("/"));
+            let mut fp = base;
             for c in &cpath {
                 fp.push(c);
             }
-            let fpath = PathBuf::from(format!("{}.pruv", fp.to_string_lossy()));
+            let mut fpath = PathBuf::from(format!("{}.pruv", fp.to_string_lossy()));
+            // G4b-0: a root declaration may also be found in a library directory (never std, never below the root)
+            if mi == 0 && md.name != "std" && !self.libs.is_empty() {
+                let mut found: Vec<(PathBuf, String, Option<usize>)> = Vec::new();
+                if std::fs::symlink_metadata(&fpath).is_ok() {
+                    found.push((fpath.clone(), rel.clone(), None));
+                }
+                for (k, d) in self.libs.iter().enumerate() {
+                    let p = d.join(format!("{}.pruv", md.name));
+                    if std::fs::symlink_metadata(&p).is_ok() {
+                        found.push((p, format!("@lib/{}.pruv", md.name), Some(k)));
+                    }
+                }
+                if found.len() > 1 {
+                    let places: Vec<&str> = found.iter().map(|f| f.1.as_str()).collect();
+                    return Err(PruvError::new(
+                        "parse", md.line, md.col, "lib_module_conflict",
+                        format!("module {} is found in more than one place: {}", md.name, places.join(", ")),
+                        "remove the duplicate file or drop one --lib",
+                    ));
+                }
+                if let Some((p, r, Some(k))) = found.pop() {
+                    fpath = p;
+                    rel = r;
+                    origin = (self.libs[k].clone(), "@lib/");
+                }
+            }
             let text = if md.name == "std" {
                 if !self.modules[mi].path.is_empty() {
                     return Err(PruvError::new(
@@ -264,7 +297,11 @@ impl Loader {
                             md.col,
                             "module_file",
                             format!("cannot read the file of module {} (expected {})", disp(&cpath), rel),
-                            format!("create {} next to the root file, or remove `mod {};`", rel, md.name),
+                            if mi == 0 {
+                                format!("create {} next to the root file, pass --lib DIR, or remove `mod {};`", rel, md.name)
+                            } else {
+                                format!("create {} next to the root file, or remove `mod {};`", rel, md.name)
+                            },
                         ));
                     }
                 }
@@ -296,6 +333,7 @@ impl Loader {
             child.mods = parsed.mods.clone();
             self.modules[mi].children.push((md.name.clone(), ci));
             self.modules.push(child);
+            self.origin.push(origin);
             self.parsed.push(parsed);
             self.publish(None);
             self.visit(ci)?;
@@ -306,16 +344,26 @@ impl Loader {
 
 /// Reads the root file (same failures as Python `open(path).read()`) and loads the program.
 pub fn load_program(path: &Path) -> Result<Loaded, LoadError> {
+    load_program_with_libs(path, &[])
+}
+
+/// `load_program` with the ordered `--lib` directories (docs/G4B_LIB_SPEC.md section 2); an empty list is `load_program`.
+pub fn load_program_with_libs(path: &Path, libs: &[PathBuf]) -> Result<Loaded, LoadError> {
     let bytes = std::fs::read(path).map_err(|e| LoadError::Io(io_error_message(path, &e)))?;
     let src = match std::str::from_utf8(&bytes) {
         Ok(s) => s.to_string(),
         Err(e) => return Err(LoadError::Decode(utf8_error_message(&bytes, &e))),
     };
-    load_source(path, &src)
+    load_source_with_libs(path, &src, libs)
 }
 
 /// `load_program` for an already decoded root text (`path` still names the root: children are relative to its directory).
 pub fn load_source(path: &Path, src: &str) -> Result<Loaded, LoadError> {
+    load_source_with_libs(path, src, &[])
+}
+
+/// `load_source` with the ordered `--lib` directories.
+pub fn load_source_with_libs(path: &Path, src: &str, libs: &[PathBuf]) -> Result<Loaded, LoadError> {
     let root_file = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let first = match crate::parser::parse_file(src, 0) {
         Ok(f) => f,
@@ -353,7 +401,9 @@ pub fn load_source(path: &Path, src: &str) -> Result<Loaded, LoadError> {
     if let Some(k) = file_id(&abs) {
         loaded.insert(k, root_file);
     }
-    let mut ld = Loader { root_dir, modules: vec![root_mod], parsed: vec![root], loaded };
+    // library paths are made absolute like the root (relative ones are relative to the working directory)
+    let libs: Vec<PathBuf> = libs.iter().map(|d| std::path::absolute(d).unwrap_or_else(|_| d.clone())).collect();
+    let mut ld = Loader { origin: vec![(root_dir, "")], modules: vec![root_mod], parsed: vec![root], loaded, libs };
     ld.publish(None);
     ld.visit(0).map_err(LoadError::Lang)?;
 
@@ -1139,4 +1189,64 @@ fn entries(prog: &Program, g4: &mut G4) -> Res<()> {
     }
     g4.entries = out;
     Ok(())
+}
+
+#[cfg(test)]
+mod lib_tests {
+    use super::*;
+
+    const FN: &str = "pub fn f() -> i64 ensures result == 1 { return 1; }\n";
+
+    /// a fresh scratch directory with the given files (relative path, text)
+    fn project(tag: &str, files: &[(&str, &str)]) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("pruv_lib_{}_{}", std::process::id(), tag));
+        let _ = std::fs::remove_dir_all(&d);
+        for (p, t) in files {
+            let f = d.join(p);
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(f, t).unwrap();
+        }
+        d
+    }
+
+    fn files_of(r: Result<Loaded, LoadError>) -> Result<Vec<String>, PruvError> {
+        match r {
+            Ok(l) => Ok(l.g4.unwrap().modules.iter().map(|m| m.file.clone()).collect()),
+            Err(LoadError::Lang(e)) => Err(e),
+            Err(_) => panic!("unexpected io/decode error"),
+        }
+    }
+
+    #[test]
+    fn library_module_found() {
+        let d = project("found", &[("app/main.pruv", "mod json;\n"), ("lib/json.pruv", FN)]);
+        let r = load_program_with_libs(&d.join("app/main.pruv"), &[d.join("lib")]);
+        assert_eq!(files_of(r).unwrap(), vec!["main.pruv", "@lib/json.pruv"]);
+        // without the library the file is missing and the root hint names --lib
+        let e = files_of(load_program(&d.join("app/main.pruv"))).unwrap_err();
+        assert_eq!(e.code, "module_file");
+        assert_eq!(e.fix, "create json.pruv next to the root file, pass --lib DIR, or remove `mod json;`");
+    }
+
+    #[test]
+    fn local_and_library_conflict() {
+        let d = project(
+            "conflict",
+            &[("app/main.pruv", "mod json;\n"), ("app/json.pruv", FN), ("l1/json.pruv", FN), ("l2/json.pruv", FN)],
+        );
+        let e = files_of(load_program_with_libs(&d.join("app/main.pruv"), &[d.join("l1"), d.join("l2")])).unwrap_err();
+        assert_eq!(e.code, "lib_module_conflict");
+        assert_eq!(e.message, "module json is found in more than one place: json.pruv, @lib/json.pruv, @lib/json.pruv");
+        assert_eq!(e.fix, "remove the duplicate file or drop one --lib");
+    }
+
+    #[test]
+    fn library_module_child() {
+        let d = project(
+            "child",
+            &[("app/main.pruv", "mod json;\n"), ("lib/json.pruv", "mod x;\n"), ("lib/json/x.pruv", FN)],
+        );
+        let r = load_program_with_libs(&d.join("app/main.pruv"), &[d.join("lib")]);
+        assert_eq!(files_of(r).unwrap(), vec!["main.pruv", "@lib/json.pruv", "@lib/json/x.pruv"]);
+    }
 }

@@ -403,6 +403,14 @@ pub fn bounded(x: i64) -> i64                requires 0 <= x && x <= 10
 - **Diagnostics** in explicit mode carry a `file` field (relative to the root, `/` separators). New codes include
   `parse/module_syntax`, `parse/visibility_syntax`, `parse/module_file`, `type/private_item`, `type/public_interface`,
   `type/entry_signature`, `type/entry_main` (see `docs/G4_SPEC.md` §8 for the full table).
+- **Library directories (G4b-0).** Full rule: `docs/G4B_LIB_SPEC.md`. `--lib DIR` (repeatable, order kept) only changes
+  where the file of a `mod NAME;` written in the root is looked up (`NAME` other than `std`):
+  `ROOT_DIR/NAME.pruv` plus `DIR/NAME.pruv` for each `--lib`. Exactly one hit is used; none is `parse/module_file`
+  (its hint adds `pass --lib DIR`); more than one is `parse/lib_module_conflict`. Children of a library module resolve
+  inside that library (`DIR/NAME/x.pruv`); libraries are never consulted below the root, and `std` is never taken from
+  one. Library files show as `@lib/NAME.pruv` / `@lib/NAME/x.pruv` in diagnostics (never the real `DIR`). A library
+  module is mounted at `crate::NAME` like a local one and names its siblings by `crate::OTHER`, so the root must
+  declare them too. The alias check applies; a legacy root ignores `--lib`. `DIR` must be an existing directory.
 
 ## 6g. In-place array parameters: `inout` (G5)
 Full contract: `docs/G5_SPEC.md` (§2–§8 and §15 for deferred limits). Examples: `examples/g5_*.pruv`, `tests/runtime/g5_r*`.
