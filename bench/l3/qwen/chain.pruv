@@ -1,17 +1,37 @@
 // Qwen currentChain. Byte-position marks avoid retaining parsed JSON documents.
-// Repeated scans are deliberately simple; performance measurement is deferred to Q.
+// Build newest-first hash buckets once; exact UUID comparison resolves collisions.
+fn bucket(key: str, size: i64) -> i64
+  requires 0 < size && size <= 16777219
+  ensures 0 <= result && result < size
+{
+  let mut h: i64 = 0;
+  let mut i: i64 = 0;
+  while i < len(key)
+    invariant 0 <= i && i <= len(key) && 0 <= h && h < size
+    decreases len(key) - i
+  {
+    h = (h * 257 + key[i]) % size;
+    i = i + 1;
+  }
+  return h;
+}
 pub struct Found { uuid: str, parent: str, found: bool, bad: bool }
-pub fn scan(data: [u8], cut: bool, key: str, leaf: bool, inout marks: [u8]) -> Found ! alloc
+pub fn scan(data: [u8], cut: bool, inout marks: [u8], inout heads: [i64], inout slots: [i64]) -> Found ! alloc
   requires len(data) <= 8388608 && len(marks) == len(data)
+  requires 0 < len(heads) && len(heads) <= 16777219 && len(slots) <= 25165827
   ensures len(marks) == len(old(marks))
+  ensures len(heads) == len(old(heads)) && len(slots) == len(old(slots))
 {
   let mut uuid: str = "";
   let mut parent: str = "";
   let mut found: bool = false;
   let mut role_seen: bool = false;
+  let mut used: i64 = 0;
   let mut off: i64 = crate::framing::skip_first(data, cut);
   while off < len(data)
     invariant 0 <= off && off <= len(data) && len(data) <= 8388608 && len(marks) == len(data)
+    invariant 0 <= used && used <= len(slots) && len(slots) <= 25165827
+    invariant 0 < len(heads) && len(heads) <= 16777219
     decreases len(data) - off
   {
     let step: crate::framing::Frame = crate::framing::window_next(data, off);
@@ -24,9 +44,17 @@ pub fn scan(data: [u8], cut: bool, key: str, leaf: bool, inout marks: [u8]) -> F
             let f: crate::entry::Field = crate::entry::string_field(d, 0, "uuid");
             match f {
               crate::entry::Field::Value(u) => {
+                if len(u) > 0 {
+                  if used + 3 > len(slots) { return Found { uuid: "", parent: "", found: false, bad: true }; }
+                  let b: i64 = bucket(u, len(heads));
+                  slots[used] = s;
+                  slots[used + 1] = e;
+                  slots[used + 2] = heads[b];
+                  heads[b] = used;
+                  used = used + 3;
+                }
                 let role: bool = crate::entry::field_is(d, 0, "type", "user") == 1 || crate::entry::field_is(d, 0, "type", "assistant") == 1 || crate::entry::field_is(d, 0, "type", "tool_result") == 1;
-                if len(u) > 0 && ((leaf && (role || !role_seen)) || (!leaf && crate::text::same(u, key))) {
-                  if !leaf { marks[s] = 1; }
+                if len(u) > 0 && (role || !role_seen) {
                   found = true;
                   uuid = copy(u);
                   parent = "";
@@ -55,13 +83,81 @@ pub fn scan(data: [u8], cut: bool, key: str, leaf: bool, inout marks: [u8]) -> F
   return Found { uuid: copy(uuid), parent: copy(parent), found: found, bad: false };
 }
 
+// First match supplies the last-write parent; mark all duplicates.
+// Existing marks detect cycles without copying or comparing the whole bitmap.
+pub struct Hit { parent: str, found: bool, changed: bool, bad: bool }
+fn lookup(data: [u8], key: str, heads: [i64], slots: [i64], inout marks: [u8]) -> Hit ! alloc
+  requires len(marks) == len(data)
+  requires 0 < len(heads) && len(heads) <= 16777219 && len(slots) <= 25165827
+  ensures len(marks) == len(old(marks))
+{
+  let mut at: i64 = heads[bucket(key, len(heads))];
+  let mut left: i64 = len(slots);
+  let mut found: bool = false;
+  let mut changed: bool = false;
+  let mut parent: str = "";
+  while at >= 0 && left > 0
+    invariant 0 <= left && left <= len(slots) && len(slots) <= 25165827
+    invariant len(marks) == len(data)
+    decreases left
+  {
+    if at > len(slots) - 3 { return Hit { parent: "", found: false, changed: false, bad: true }; }
+    let s: i64 = slots[at];
+    let e: i64 = slots[at + 1];
+    if s < 0 || s >= len(data) || e < s || e > len(data) { return Hit { parent: "", found: false, changed: false, bad: true }; }
+    let line: crate::entry::Line = crate::entry::parse_line(data, s, e);
+    match line {
+      crate::entry::Line::Object(d) => {
+        let u: crate::entry::Field = crate::entry::string_field(d, 0, "uuid");
+        match u {
+          crate::entry::Field::Value(v) => {
+            if crate::text::same(v, key) {
+              if marks[s] == 0 { changed = true; }
+              marks[s] = 1;
+              let p: crate::entry::Field = crate::entry::string_field(d, 0, "parentUuid");
+              match p {
+                crate::entry::Field::Value(vp) => { if !found { parent = copy(vp); } }
+                crate::entry::Field::Missing => { parent = copy(parent); }
+                crate::entry::Field::Defect(k) => { return Hit { parent: "", found: false, changed: false, bad: true }; }
+              }
+              found = true;
+            }
+          }
+          crate::entry::Field::Missing => { found = found; }
+          crate::entry::Field::Defect(k) => { return Hit { parent: "", found: false, changed: false, bad: true }; }
+        }
+      }
+      crate::entry::Line::Skip => { found = found; }
+      crate::entry::Line::Defect(k) => { return Hit { parent: "", found: false, changed: false, bad: true }; }
+    }
+    let next: i64 = slots[at + 2];
+    if next >= at { return Hit { parent: "", found: false, changed: false, bad: true }; }
+    at = next;
+    left = left - 1;
+  }
+  return Hit { parent: copy(parent), found: found, changed: changed, bad: false };
+}
+
 pub struct Chain { marks: [u8], active: bool, cut: bool, bad: bool }
 pub fn select(data: [u8], cut: bool) -> Chain ! alloc
   requires len(data) <= 8388608
   ensures len(result.marks) == len(data)
 {
   let mut marks: [u8] = alloc(len(data), 0);
-  let leaf: Found = scan(data, cut, "", true, inout marks);
+  // One frame per newline, plus a possible unterminated final line.
+  let mut capacity: i64 = 1;
+  let mut i: i64 = 0;
+  while i < len(data)
+    invariant 0 <= i && i <= len(data) && len(data) <= 8388608
+    invariant 1 <= capacity && capacity <= i + 1
+    decreases len(data) - i
+  {
+    if data[i] == 10 { capacity = capacity + 1; }
+    i = i + 1;
+  }
+  let mut heads: [i64] = alloc(capacity * 2 + 1, -1);
+  let mut slots: [i64] = alloc(capacity * 3, -1);
+  let leaf: Found = scan(data, cut, inout marks, inout heads, inout slots);
   let mut key: str = copy(leaf.uuid);
   let mut parent: str = copy(leaf.parent);
   let mut lost: bool = false;
@@ -69,24 +165,15 @@ pub fn select(data: [u8], cut: bool) -> Chain ! alloc
   let mut done: bool = !leaf.found;
   while !done && count < len(data)
     invariant len(marks) == len(data) && len(data) <= 8388608 && 0 <= count && count <= len(data)
+    invariant 0 < len(heads) && len(heads) <= 16777219 && len(slots) <= 25165827
     decreases len(data) - count
   {
-    let before: [u8] = copy(marks);
-    let f: Found = scan(data, cut, key, false, inout marks);
+    let f: Hit = lookup(data, key, heads, slots, inout marks);
     if f.bad { return Chain { marks: copy(marks), active: leaf.found, cut: lost, bad: true }; }
     // The initial parent belongs to the leaf entry itself, not the last duplicate UUID.
     if count > 0 { parent = copy(f.parent); }
     if !f.found { lost = true; done = true; }
-    let mut changed: bool = false;
-    let mut j: i64 = 0;
-    while j < len(data)
-      invariant 0 <= j && j <= len(data) && len(marks) == len(data) && len(before) == len(data)
-      decreases len(data) - j
-    {
-      if marks[j] != before[j] { changed = true; }
-      j = j + 1;
-    }
-    if !changed || len(parent) == 0 { done = true; }
+    if !f.changed || len(parent) == 0 { done = true; }
     key = copy(parent);
     count = count + 1;
   }

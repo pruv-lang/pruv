@@ -1,0 +1,4 @@
+{"type": "user", "uuid": "root", "message": {"parts": [{"text": "root"}]}}
+{"type": "user", "uuid": "other", "message": {"parts": [{"text": "wrong"}]}}
+{"type": "assistant", "uuid": "leaf", "parentUuid": "root", "message": {"parts": [{"text": "kept"}]}}
+{"type": "system", "uuid": "leaf", "parentUuid": "other"}

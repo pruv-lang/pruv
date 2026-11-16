@@ -10,7 +10,7 @@ Port the pure Qwen conversation importer from Lair commit fa192269 into Pruv, wi
 
 Use local copies of the L3-1 parser, accessors, text, calendar, framing, boundary and collector. Parse object roots only; own-property lookup is last-wins. Do not retain JSON documents across lines.
 
-Qwen requires currentChain before turn collection. chain.pruv first finds the last nonempty UUID on user/assistant/tool_result, falling back to the last UUID on any entry. It then follows parentUuid through last-wins UUID lookup, marks every entry with a selected UUID, stops on cycles, and sets cut on a missing parent. The initial parent comes from the actual leaf, even when a later metadata entry duplicates its UUID. Repeated scans and a byte-position bitmap keep the implementation simple; their cost is not claimed to match the TS Map implementation.
+Qwen requires currentChain before turn collection. chain.pruv first finds the last nonempty UUID on user/assistant/tool_result, falling back to the last UUID on any entry. It then follows parentUuid through last-wins UUID lookup, marks every entry with a selected UUID, stops on cycles, and sets cut on a missing parent. The initial parent comes from the actual leaf, even when a later metadata entry duplicates its UUID. A newline count bounds index capacity. One parse pass builds newest-first UUID hash buckets containing frame start/end positions and links. Lookup reparses only bucket candidates and compares decoded UUID bytes exactly, preserving duplicates even on collisions. The first match supplies the last-write parent; all matching positions are marked. Existing marks detect cycles without a full bitmap copy or scan. Expected lookup cost is linear in chain length under well-distributed hashes; adversarial collisions can still degrade it.
 
 Project naming supports the requested non-win32 platform: each non-ASCII-alphanumeric UTF-16 unit becomes '-'. Supplementary characters yield two hyphens. Names input is valid UTF-8; valid_thread rejects everything outside the ASCII filename grammar.
 
@@ -82,7 +82,7 @@ These are the L3-1 policy decisions, not a claim of full JS Date or Unicode-stri
 
 ## Proof targets
 
-Both compilers verify the reachable root/module contracts, including memory access, loop termination, collector bounds and publication shape. Inherited semantic contracts cover selection helpers, UTF-8 clipping and collector transitions. Qwen chain membership and full TS equivalence are fixture-tested, not claimed as a global mechanized theorem. The bitmap scan has bounded loops but no linear-time cost claim.
+Both compilers verify the reachable root/module contracts, including memory access, loop termination, collector bounds and publication shape. Inherited semantic contracts cover selection helpers, UTF-8 clipping and collector transitions. Qwen chain membership and full TS equivalence are fixture-tested, not claimed as a global mechanized theorem. Index construction and bucket traversal have bounded loops; hash distribution is not a proved worst-case linear-time guarantee.
 
 ## Batches
 
@@ -98,7 +98,7 @@ Implementation verification: all four pairs passed verification and 24 original 
 (20 transcript fixtures, three name checks, one listing scenario). After adding the
 mtime fallback/recent-file scenario, the targeted command
 `test_impl.py --host-policy` passed its additional check on all four existing runners.
-Combined result: 25/25 per pair. The default driver now includes that check.
+Combined result: 26/26 per pair, including the new duplicate-leaf metadata fixture. The default driver includes the host-policy check.
 The Python/Rust host was rebuilt after adding opened-file identity checks; the other
 three hosts were initially built with those checks.
 
@@ -110,9 +110,9 @@ Current implementation tests use explicit expected JSON for normal conversations
 
 The Q harness uses the pinned TS importer with lastPlan stubbed out. The reference
 files and dependency boundaries are documented in `bench/l3/qwen/reference/README.md`.
-`q.py` generates 20,000 transcripts (seed 20261116), adds 20 fixed fixtures and one
+`q.py` generates 20,000 transcripts (seed 20261116), adds 21 fixed fixtures and one
 total-budget fixture, and compares head, tail and read records on all four pairs.
-Each pair has 19,755 exact transcript matches, 64 P1 differences, 201 P4 differences,
+Each pair has 19,756 exact transcript matches, 64 P1 differences, 201 P4 differences,
 one P5 difference, and zero unexplained differences. P1/P4 differences must equal
 TS rerun on a narrowly normalized input, not merely carry a policy tag. P5 is only
 the fixed empty-cwd input: TS read rejects folder mismatch; the positional fixture
@@ -130,17 +130,16 @@ chain selection excludes that line; only actual differences enter P1 counts.
 ### Q mutants
 
 `q_mutants.py` builds 12 single-replacement source copies under work with rs/rust,
-then compares the 20 fixed fixtures. Nine are differential-killed: human role,
+then compares the 21 fixed fixtures. Ten are differential-killed: human role,
 provenance, human/assistant thought filtering, custom title, functionCall, model,
-missing-parent cut and chain filtering. Two are rejected by the verifier: last-title
-replacement violates ensures; reducing the turn cap violates the plan loop's entry
-invariant. One survives: replacing the actual leaf's initial parent with the last
-duplicate UUID's parent. The fixed fixtures do not place a metadata entry with the
-leaf UUID and a different parent after that leaf; generated cases use unique UUIDs.
-This is a recorded coverage gap, not an equivalence claim. No verified Pruv source
-was changed, and no compiler, Lair, Claude or MCP files were edited.
+missing-parent cut, chain filtering and leaf-parent overwrite. Two are rejected
+by the verifier: last-title replacement violates ensures; reducing the turn cap
+violates the plan loop's entry invariant. All 12 are killed, with zero survivors.
+The new leaf-parent-duplicate fixture places metadata with the last conversation
+UUID but a different parent after that conversation. It kills the previous
+survivor without changing existing fixture expectations.
 
-### Q measurement: open performance issue
+### Q measurement: indexed chain lookup
 
 `q_measure.py` performs one size sweep on rs/llvm versus Node 26.4.0. Each input is
 a linear parentUuid chain with 8192-byte entries (inert padding), filling the window.
@@ -148,15 +147,15 @@ Single cold-call milliseconds, excluding process startup:
 
 | Bytes | Chain entries | rs/llvm | TS | Ratio |
 |---|---:|---:|---:|---:|
-| 2097152 | 256 | 228.40 | 7.76 | 29.4x |
-| 4194304 | 512 | 949.67 | 11.55 | 82.2x |
-| 8388608 | 1024 | 3841.34 | 22.53 | 170.5x |
+| 2097152 | 256 | 5.23 | 5.69 | 0.92x |
+| 4194304 | 512 | 9.31 | 8.73 | 1.07x |
+| 8388608 | 1024 | 13.43 | 16.66 | 0.81x |
 
 Pruv times window_packet; TS times readQwen including head/file I/O. Retained turn
 counts agree. This is a diagnostic sweep, not repeated statistical measurement or
-a worst-case bound. Denser chains may be much slower. The repeated scans are
-pathologically slow at 8 MiB; redesign is explicitly deferred. No performance
-source change was made. Peak memory and filesystem fault injection were not
+a worst-case bound. Before indexing, the same sizes measured 228.40/7.76 ms
+(29.4x), 949.67/11.55 ms (82.2x), and 3841.34/22.53 ms (170.5x). The
+indexed implementation removes per-ancestor full-window scans and bitmap copies. Peak memory and filesystem fault injection were not
 measured in this default Q batch.
 
 ## Deferred
@@ -165,5 +164,5 @@ lastPlan/qwenPlan from plan.ts: no plan field is emitted. Production Node bindin
 
 ## Risks
 
-Chain selection reparses the window for each ancestor and copies the bitmap for cycle detection; Q measured 170.5x TS cost on the full-window padded chain above. This open performance issue needs resolution before production integration. The pure packet cannot prove host file snapshot identity. A live file can grow or change after metadata checks. Policy differences can affect title bytes, timestamps, retained suffixes and filename collision behavior; equality outside the documented shared domain is not asserted.
+Hash collisions retain exact selection semantics but can increase candidate reparsing; worst-case adversarial collision cost is not bounded linearly. Q measured 0.81x TS cost on the full-window padded chain above. The pure packet cannot prove host file snapshot identity. A live file can grow or change after metadata checks. Policy differences can affect title bytes, timestamps, retained suffixes and filename collision behavior; equality outside the documented shared domain is not asserted.
 
