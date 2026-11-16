@@ -1,0 +1,3 @@
+use std::{io::Write,process::{Command,Stdio}};
+// Fingerprint semantics are intentionally hosted in Node, including JS number formatting.
+pub fn fingerprints(raw:Vec<String>)->Vec<String>{let script=std::env::var("MCP_FINGERPRINT_SCRIPT").expect("MCP_FINGERPRINT_SCRIPT");let mut c=Command::new(std::env::var("MCP_NODE").unwrap_or("node".into())).arg(script).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().expect("node");c.stdin.take().unwrap().write_all(&serde_json::to_vec(&raw).unwrap()).unwrap();let out=c.wait_with_output().unwrap();assert!(out.status.success());serde_json::from_slice(&out.stdout).unwrap()}

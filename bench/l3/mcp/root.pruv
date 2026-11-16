@@ -1,0 +1,167 @@
+// Protocol and G10 transport policy.
+mod json;
+mod lex;
+mod parse;
+mod jstr;
+mod access;
+mod lines;
+mod tail;
+mod packet;
+mod util;
+mod args;
+mod transport;
+trusted rust fn command_missing(command: str, cwd: str) -> bool ! proc, alloc
+  ensures true
+  = "::mcp_host::command_missing";
+pub fn page_cap() -> i64 ensures result == 5 { return 5; }
+pub fn tool_cap() -> i64 ensures result == 500 { return 500; }
+fn bytes(s: str) -> [u8] ! alloc {
+  let mut b: [u8] = alloc(len(s),0); let mut i: i64 = 0;
+  while i < len(s) invariant 0 <= i && i <= len(s) && len(b) == len(s) decreases len(s)-i
+  { b[i]=s[i]; i=i+1; } return b;
+}
+fn join(a: [u8], b: [u8]) -> [u8] ! alloc {
+  if len(a) > 20000000 || len(b) > 20000000 { let e: [u8] = alloc(0,0); return e; }
+  let mut out: [u8] = alloc(len(a)+len(b),0); let mut i: i64 = 0;
+  while i < len(out) invariant 0 <= i && i <= len(out) && len(out) == len(a)+len(b) decreases len(out)-i
+  { if i < len(a) { out[i]=a[i]; } else { out[i]=b[i-len(a)]; } i=i+1; } return out;
+}
+fn request(take l: Loop, slot: i64, id: i64, init: bool, old: bool, cursor: [u8]) -> Loop ! async, alloc, proc
+  requires 1 <= id && id <= 7
+{
+  let mut s: String = string_new(); s=string_push_str(move s,"{\"jsonrpc\":\"2.0\",\"id\":");
+  if id == 1 { s=string_push_str(move s,"1"); } if id == 2 { s=string_push_str(move s,"2"); }
+  if id == 3 { s=string_push_str(move s,"3"); } if id == 4 { s=string_push_str(move s,"4"); }
+  if id == 5 { s=string_push_str(move s,"5"); } if id == 6 { s=string_push_str(move s,"6"); }
+  if id == 7 { s=string_push_str(move s,"7"); }
+  if init {
+    s=string_push_str(move s,",\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"");
+    if old { s=string_push_str(move s,"2025-06-18"); } else { s=string_push_str(move s,"2025-11-25"); }
+    s=string_push_str(move s,"\",\"capabilities\":{},\"clientInfo\":{\"name\":\"lair\",\"version\":\"1\"}}}\n"); return crate::transport::send(move l,slot,bytes(string_to_str(s)));
+  } else {
+    s=string_push_str(move s,",\"method\":\"tools/list\""); let mut b: [u8] = bytes(string_to_str(s));
+    if len(cursor) > 2 { b=join(b,bytes(",\"params\":{\"cursor\":")); b=join(b,cursor); b=join(b,bytes("}")); }
+    b=join(b,bytes("}\n")); return crate::transport::send(move l,slot,b);
+  }
+}
+pub fn mcp_check(command: str, argv: str, cwd: str, timeout_ms: i64) -> [i64] ! async, net, proc, alloc
+  ensures len(result) >= 5010
+{
+  let mut p: [i64] = alloc(5010,0); p[1]=1; p[4]=-1; p[6]=-1;
+  let sp: [i64] = crate::args::arg_spans(argv);
+  if sp[0] != 0 { p[1]=0; p[2]=2; return p; }
+  let args: ProcessArgs = crate::args::build_args(argv);
+  let child: Process = proc_spawn(command,args,cwd);
+  if !proc_ok(child) {
+    let error: i64 = proc_error(child);
+    let r: Result<i64> = proc_wait(move child);
+    p[1]=0; p[2]=2;
+    if error == 2 && command_missing(command,cwd) { p[2]=1; }
+    return p;
+  }
+  let mut l: Loop = ev_new(3);
+  if !ev_ok(l) || ev_count(l) >= ev_cap(l) {
+    let k: Result<i64> = proc_kill(move child);
+    crate::transport::close(move l,-1); p[2]=7; return p;
+  }
+  l=ev_add_process(move l,move child);
+  let slot: i64 = ev_last(l);
+  if !ev_ok(l) || ev_count(l) >= ev_cap(l) { crate::transport::close(move l,slot); p[2]=7; return p; }
+  let mut ms: i64 = timeout_ms;
+  if ms < 0 { ms=0; } if ms > 86400000 { ms=86400000; }
+  l=ev_add_timer(move l,ms); let overall: i64 = ev_last(l);
+  if !ev_ok(l) || ev_count(l) >= ev_cap(l) { crate::transport::close(move l,slot); p[2]=7; return p; }
+  l=ev_add_timer(move l,30000); let init: i64 = ev_last(l);
+  let mut st: [i64] = alloc(5,0);
+  let mut line: [u8] = alloc(4194304,0); let mut chunk: [u8] = alloc(65536,0);
+  let mut tb: [i64] = crate::tail::tail_buf(1024); let mut ts: [i64] = crate::tail::tail_state(1024);
+  let mut id: i64 = 1; let mut ready: bool = false; let mut page: i64 = 0; let mut objects: i64 = 0;
+  let mut count: i64 = 0; let mut done: bool = false; let mut events: i64 = 0;
+  let empty: [u8] = alloc(0,0); l=request(move l,slot,id,true,false,empty);
+  while !done && events < 1000000
+    invariant 0 <= events && events <= 1000000
+    invariant 1 <= id && id <= 7 && 0 <= page && page <= 5
+    invariant 0 <= objects && objects <= 500 && 0 <= count && count <= 500
+    invariant 5010 <= len(p) && len(p) <= 100000000
+    invariant len(st) == 5 && 0 <= st[1] && st[1] <= 4194304 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
+    invariant len(line) == 4194304
+    invariant len(ts) == 12 && ts[1] == 1024 && 0 <= ts[0] && ts[0] <= 2048 && len(tb) == 2050
+    decreases 1000000-events
+  {
+    events=events+1; l=crate::transport::receive(move l,slot,overall,init,ready,inout st,inout line,inout chunk,inout tb,inout ts); let n: i64 = st[0];
+    if n < 0 && n != -6 {
+      p[2]=3;
+      if n == -2 { p[2]=4; } if n == -3 { p[2]=5; p[1]=1; }
+      if n == -4 { p[2]=6; p[3]=st[3]; } if n == -5 { p[2]=7; }
+      done=true;
+    } else if n >= 0 && n <= 4194304 {
+      let mut b: [u8] = alloc(n,0); let mut i: i64 = 0;
+      while i < n invariant 0 <= i && i <= n && len(b) == n decreases n-i
+      { let c: i64 = line[i]; b[i]=c; i=i+1; }
+      let trimmed: [u8] = crate::util::trim(b);
+      let parsed: crate::json::JsonParse = crate::lines::parse_range(trimmed,0,len(trimmed));
+      match parsed {
+        crate::json::JsonParse::Failed(e) => { }
+        crate::json::JsonParse::Parsed(d) => {
+          if crate::access::kind(d,0) == 6 {
+            let mid: i64 = crate::util::field(d,0,"id"); let method: i64 = crate::util::field(d,0,"method");
+            if mid >= 0 && crate::access::kind(d,method) == 4 {
+              let mut reply: [u8] = join(bytes("{\"jsonrpc\":\"2.0\",\"id\":"),crate::util::raw(d,mid));
+              if crate::access::string_is(d,method,"ping") == 1 { reply=join(reply,bytes(",\"result\":{}}\n")); }
+              else { reply=join(reply,bytes(",\"error\":{\"code\":-32601,\"message\":\"Lair 앱은 이 요청을 지원하지 않아.\"}}\n")); }
+              l=crate::transport::send(move l,slot,reply);
+            } else {
+              let number: crate::access::Number = crate::access::number(d,mid);
+              if crate::util::id_matches(crate::util::raw(d,mid),id) && number.status == 0 {
+                let error: i64 = crate::util::field(d,0,"error");
+                if crate::access::kind(d,error) == 6 {
+                  if !ready && id == 1 { id=2; l=request(move l,slot,id,true,true,empty); }
+                  else {
+                    p[2]=8; let u: crate::access::Units = crate::access::string_units(d,crate::util::field(d,error,"message"));
+                    if u.status == 0 && len(u.units) <= 20000000 && len(p) <= 80000000 {
+                      p[6]=len(p); p[7]=len(u.units); p=crate::packet::append(p,u.units);
+                    }
+                    done=true;
+                  }
+                } else if !ready {
+                  ready=true; p[1]=2; l=crate::transport::send(move l,slot,bytes("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n"));
+                  if id < 7 { id=id+1; l=request(move l,slot,id,false,false,empty); }
+                } else {
+                  let result_id: i64 = crate::util::field(d,0,"result"); let tools: i64 = crate::util::field(d,result_id,"tools");
+                  let total: i64 = crate::access::array_length(d,tools); let mut t: i64 = 0;
+                  while t < total && t < 1048576 && objects < 500
+                    invariant 0 <= t && t <= 1048576 && 0 <= objects && objects <= 500 && 0 <= count && count <= 500
+                    invariant 5010 <= len(p) && len(p) <= 100000000
+                    decreases 1048576-t
+                  {
+                    let tool: i64 = crate::access::array_at(d,tools,t); t=t+1;
+                    if crate::access::kind(d,tool) == 6 {
+                      objects=objects+1; let name: crate::access::Units = crate::access::string_units(d,crate::util::field(d,tool,"name"));
+                      if name.status == 0 && crate::packet::usable(name.units) && count < 500 {
+                        p=crate::packet::tool(p,d,tool,count); count=count+1;
+                      }
+                    }
+                  }
+                  if page < 5 { page=page+1; }
+                  let cur: i64 = crate::util::field(d,result_id,"nextCursor"); let cu: crate::access::Units = crate::access::string_units(d,cur);
+                  if page >= 5 || objects >= 500 || cu.status != 0 || len(cu.units) == 0 { p[0]=1; p[8]=count; done=true; }
+                  else if id < 7 { id=id+1; l=request(move l,slot,id,false,false,crate::util::raw(d,cur)); }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  if !done { p[2]=9; }
+  st[0]=-6; l=crate::transport::poll(move l,overall,init,true,inout st,0);
+  if st[0] == -1 { p[0]=0; p[2]=3; p[8]=0; }
+  crate::tail::tail_flush(inout tb,inout ts);
+  let err: [u8] = crate::util::last_line(crate::tail::tail_bytes(tb,ts));
+  let sn: i64 = len(err); let mut sb: [i64] = alloc(sn,0); let mut j: i64 = 0;
+  while j < sn invariant 0 <= j && j <= sn && len(sb) == sn decreases sn-j
+  { sb[j]=err[j]; j=j+1; }
+  if len(p) <= 99995904 { p[4]=len(p); p[5]=sn; p=crate::packet::append(p,sb); }
+  crate::transport::close(move l,slot); return p;
+}
