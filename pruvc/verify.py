@@ -2307,13 +2307,16 @@ class FnVerifier:
         if n in ('ev_add_timer', 'ev_wait'):
             ms = args[1]
             need(z3.And(ms >= (-1 if n == "ev_wait" else 0), ms <= 86400000))
-        if n in ('ev_read', 'ev_write', 'ev_shutdown_write', 'ev_accept', 'ev_proc_read', 'ev_proc_write', 'ev_proc_close_stdin', 'ev_proc_wait', 'ev_remove'):
+        if n in ('ev_proc_wait_for', 'ev_proc_write_for'):
+            ms = args[-1]
+            need(z3.And(ms >= 0, ms <= 86400000))
+        if n in ('ev_read', 'ev_write', 'ev_shutdown_write', 'ev_accept', 'ev_proc_read', 'ev_proc_write', 'ev_proc_close_stdin', 'ev_proc_wait', 'ev_remove', 'ev_proc_wait_for', 'ev_proc_write_for'):
             i = args[1]
             need(z3.And(i >= 0, i < p.cap))
             k = z3.Select(p.kind, i)
             expected = 2 if n == "ev_accept" else 3 if n.startswith("ev_proc_") else 1
             need(k != 0 if n == "ev_remove" else k == expected)
-        if n in ('ev_write', 'ev_shutdown_write', 'ev_proc_write', 'ev_proc_close_stdin'):
+        if n in ('ev_write', 'ev_shutdown_write', 'ev_proc_write', 'ev_proc_close_stdin', 'ev_proc_write_for'):
             i = args[1]
             need(z3.Select(p.write_open, i))
         if n in ('ev_read', 'ev_proc_read'):
@@ -2351,15 +2354,23 @@ class FnVerifier:
             s.assume(st, g, z3.Implies(k != 4, z3.And(r.kind == p.kind, r.count == p.count)))
             s.assume(st, g, z3.Implies(k == 5, z3.And(r.eof == z3.Store(p.eof, i, False), r.write_open == z3.Store(p.write_open, i, False))))
             s.assume(st, g, z3.Implies(z3.And(k != 4, k != 5), z3.And(r.eof == p.eof, r.write_open == p.write_open)))
-        if n in ('ev_read', 'ev_write', 'ev_shutdown_write', 'ev_proc_read', 'ev_proc_write', 'ev_proc_close_stdin', 'ev_proc_wait', 'ev_remove'):
+        if n in ('ev_read', 'ev_write', 'ev_shutdown_write', 'ev_proc_read', 'ev_proc_write', 'ev_proc_close_stdin', 'ev_proc_wait', 'ev_remove', 'ev_proc_wait_for', 'ev_proc_write_for'):
             i = args[1]
             freed = n in ("ev_remove", "ev_proc_wait")
-            k = z3.IntVal(0) if freed else z3.Select(p.kind, i)
+            k = z3.IntVal(0) if freed else z3.Select(r.kind, i) if n == "ev_proc_wait_for" else z3.Select(p.kind, i)
             s.assume(st, g, r.kind == z3.Store(p.kind, i, k))
             s.assume(st, g, r.eof == z3.Store(p.eof, i, z3.Select(r.eof, i)))
             s.assume(st, g, r.write_open == z3.Store(p.write_open, i, z3.Select(r.write_open, i)))
-            s.assume(st, g, r.count == (p.count - 1 if freed else p.count))
-            if freed:
+            if n == "ev_proc_wait_for":
+                # G10-ASYNC-DEADLINE: either the slot was freed (as ev_proc_wait) or it was kept with stdin closed
+                s.assume(st, g, z3.Not(z3.Select(r.write_open, i)))
+                s.assume(st, g, z3.Or(z3.And(z3.Select(r.kind, i) == 0, z3.Not(z3.Select(r.eof, i)), r.count == p.count - 1),
+                                      z3.And(z3.Select(r.kind, i) == 3, z3.Select(r.eof, i) == z3.Select(p.eof, i), r.count == p.count, r.exit == p.exit)))
+            else:
+                s.assume(st, g, r.count == (p.count - 1 if freed else p.count))
+            if n == "ev_proc_wait_for":
+                pass
+            elif freed:
                 s.assume(st, g, z3.Not(z3.Select(r.eof, i)))
                 s.assume(st, g, z3.Not(z3.Select(r.write_open, i)))
             elif n in ("ev_read", "ev_proc_read"):
@@ -2374,7 +2385,7 @@ class FnVerifier:
         if n != "ev_wait":
             s.assume(st, g, z3.Implies(r.error == 0, r.ev_slot == p.ev_slot))
             s.assume(st, g, z3.Implies(r.error == 0, r.ev_kind_ == p.ev_kind_))
-        if n != "ev_proc_wait":
+        if n not in ("ev_proc_wait", "ev_proc_wait_for"):
             s.assume(st, g, r.exit == p.exit)
         if n not in ("ev_read", "ev_proc_read"):
             s.assume(st, g, z3.Implies(r.error == 0, r.buf.n == p.buf.n))

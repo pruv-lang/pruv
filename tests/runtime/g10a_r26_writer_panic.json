@@ -1,0 +1,20 @@
+{
+  "backends": [
+    "rust",
+    "llvm"
+  ],
+  "flags_matrix": [
+    [
+      "--no-verify"
+    ],
+    [
+      "--no-verify",
+      "--foreign-checks",
+      "all"
+    ]
+  ],
+  "exit": 0,
+  "stdout_contains": "async runtime ok",
+  "g6_drop_balance": true,
+  "async_hook": "writer_panic"
+}

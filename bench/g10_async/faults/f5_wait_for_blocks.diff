@@ -1,0 +1,22 @@
+--- a/pruvc/codegen.py
++++ b/pruvc/codegen.py
+@@ -3262,7 +3262,7 @@
+     l.last=-1; if !pruv_ev_valid(&l,slot,3) || !(0..=86400000).contains(&ms) {pruv_ev_fail(&mut l,1);return l;}
+     let i=slot as usize; pruv_ev_half(&mut l,i);
+     if l.public[i].failed { pruv_ev_end(&mut l,i,true); return l; }
+-    let deadline=::std::time::Instant::now()+::std::time::Duration::from_millis(ms as u64); let mut step: u64=1;
++    let deadline=::std::time::Instant::now()+::std::time::Duration::from_millis(86400000); let mut step: u64=1;
+     loop {
+         let exited=match &mut l.slots[i] { PruvEvResource::Process(p)=>p.child.as_mut().map_or(true,|c| !matches!(c.try_wait(),Ok(None))), _=>true };
+         let sh=l.shared.clone(); let q=sh.state.lock().unwrap();
+--- a/pruvc-rs/crates/pruv-core/src/codegen.rs
++++ b/pruvc-rs/crates/pruv-core/src/codegen.rs
+@@ -4607,7 +4607,7 @@
+     l.last=-1; if !pruv_ev_valid(&l,slot,3) || !(0..=86400000).contains(&ms) {pruv_ev_fail(&mut l,1);return l;}
+     let i=slot as usize; pruv_ev_half(&mut l,i);
+     if l.public[i].failed { pruv_ev_end(&mut l,i,true); return l; }
+-    let deadline=::std::time::Instant::now()+::std::time::Duration::from_millis(ms as u64); let mut step: u64=1;
++    let deadline=::std::time::Instant::now()+::std::time::Duration::from_millis(86400000); let mut step: u64=1;
+     loop {
+         let exited=match &mut l.slots[i] { PruvEvResource::Process(p)=>p.child.as_mut().map_or(true,|c| !matches!(c.try_wait(),Ok(None))), _=>true };
+         let sh=l.shared.clone(); let q=sh.state.lock().unwrap();

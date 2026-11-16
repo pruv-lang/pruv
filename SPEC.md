@@ -818,6 +818,8 @@ timers. Declare `! async` for loop operations; `alloc` is also required. Socket 
 | `ev_shutdown_write`, `ev_proc_close_stdin` | End writes while keeping reads available |
 | `ev_accept(l, slot)` | Nonblocking accept; `ev_last == -1` if nothing is pending |
 | `ev_proc_wait(l, slot)` | Wait and reap (kill a failed slot), free the slot, publish `ev_exit` |
+| `ev_proc_wait_for(l, slot, timeout_ms)` | Close stdin and wait at most 0..86400000 ms; if the child exited and its outputs ended, act as `ev_proc_wait` (kind becomes 0), else keep the slot (kind 3, stdin closed, `ev_exit` unchanged) |
+| `ev_proc_write_for(l, slot, data, timeout_ms)` | Write with a deadline; on a deadline or a closed pipe stdin is half-closed (`ev_write_open` false) and the slot stays usable, not failed |
 | `ev_remove(l, slot)` | Cancel, join workers and free a non-free slot |
 | `ev_close(l)` | Consume the loop and end all slots; `Ok(number ended)` or `Err(code)` |
 | `ev_ok`, `ev_error`, `ev_cap`, `ev_count`, `ev_last`, `ev_exit` | Observe the last published state |
@@ -835,7 +837,7 @@ Wait scans round-robin, reports one event, and frees fired timers. End and error
 Error codes: 1 internal (including invalid input), 2 setup (worker spawn, descriptor clone, timeout reset), 3 read, 4 write, 5 write timeout, 6 accept, 7 process I/O, 8 reap.
 Slot failures leave the loop usable and require removing that slot; spawn failure makes the loop failed, so close it.
 Close preserves the first published failure, even after its slot is removed. Runtime contract violations exit 101.
-Writes may block (accepted sockets have no write timeout); this is readiness multiplexing, without `async fn` / `await`.
+Writes may block (accepted sockets have no write timeout; process writes can use `ev_proc_write_for`); this is readiness multiplexing, without `async fn` / `await`.
 LLVM uses the Rust shim; native `--emit exe|obj` requires the Rust host build and reports `codegen/foreign_target`.
 
 ```pruv

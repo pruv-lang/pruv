@@ -3012,14 +3012,18 @@ impl<'a> FnVerifier<'a> {
             let ms = args[1].try_ast()?.clone();
             self.proc_need(st,g,e,code,&what,z.and(&[ms.ge_i(if n == "ev_wait" { -1 } else { 0 }),ms.le_i(86400000)]));
         }
-        if matches!(n, "ev_read" | "ev_write" | "ev_shutdown_write" | "ev_accept" | "ev_proc_read" | "ev_proc_write" | "ev_proc_close_stdin" | "ev_proc_wait" | "ev_remove") {
+        if matches!(n, "ev_proc_wait_for" | "ev_proc_write_for") {
+            let ms = args.last().unwrap().try_ast()?.clone();
+            self.proc_need(st,g,e,code,&what,z.and(&[ms.ge_i(0),ms.le_i(86400000)]));
+        }
+        if matches!(n, "ev_read" | "ev_write" | "ev_shutdown_write" | "ev_accept" | "ev_proc_read" | "ev_proc_write" | "ev_proc_close_stdin" | "ev_proc_wait" | "ev_remove" | "ev_proc_wait_for" | "ev_proc_write_for") {
             let i = args[1].try_ast()?.clone();
             self.proc_need(st, g, e, code, &what, z.and(&[(i.clone()).ge_i(0), (i.clone()).lt(&p.cap.clone())]));
             let k = p.kind.select(&i);
             let expected = if n == "ev_accept" { 2 } else if n.starts_with("ev_proc_") { 3 } else { 1 };
             self.proc_need(st,g,e,code,&what,if n == "ev_remove" { k.ne_i(0) } else { k.raw_eq(&z.int(expected)) });
         }
-        if matches!(n, "ev_write" | "ev_shutdown_write" | "ev_proc_write" | "ev_proc_close_stdin") {
+        if matches!(n, "ev_write" | "ev_shutdown_write" | "ev_proc_write" | "ev_proc_close_stdin" | "ev_proc_write_for") {
             let i = args[1].try_ast()?.clone();
             self.proc_need(st, g, e, code, &what, (p.write_open.clone()).select(&i.clone()));
         }
@@ -3063,15 +3067,25 @@ impl<'a> FnVerifier<'a> {
             self.assume(st, g, ((k.clone()).raw_eq(&z.int(5))).implies(&z.and(&[(r.eof.clone()).eq(&(p.eof.clone()).store(&i.clone(), &z.bool_val(false))), (r.write_open.clone()).eq(&(p.write_open.clone()).store(&i.clone(), &z.bool_val(false)))])));
             self.assume(st, g, (z.and(&[(k.clone()).ne_i(4), (k.clone()).ne_i(5)])).implies(&z.and(&[(r.eof.clone()).eq(&p.eof.clone()), (r.write_open.clone()).eq(&p.write_open.clone())])));
         }
-        if matches!(n, "ev_read" | "ev_write" | "ev_shutdown_write" | "ev_proc_read" | "ev_proc_write" | "ev_proc_close_stdin" | "ev_proc_wait" | "ev_remove") {
+        if matches!(n, "ev_read" | "ev_write" | "ev_shutdown_write" | "ev_proc_read" | "ev_proc_write" | "ev_proc_close_stdin" | "ev_proc_wait" | "ev_remove" | "ev_proc_wait_for" | "ev_proc_write_for") {
             let i = args[1].try_ast()?.clone();
             let freed = matches!(n,"ev_remove" | "ev_proc_wait");
-            let k = if freed { z.int(0) } else { p.kind.select(&i) };
+            let k = if freed { z.int(0) } else if n == "ev_proc_wait_for" { r.kind.select(&i) } else { p.kind.select(&i) };
             self.assume(st, g, (r.kind.clone()).eq(&(p.kind.clone()).store(&i.clone(), &k.clone())));
             self.assume(st, g, (r.eof.clone()).eq(&(p.eof.clone()).store(&i.clone(), &(r.eof.clone()).select(&i.clone()))));
             self.assume(st, g, (r.write_open.clone()).eq(&(p.write_open.clone()).store(&i.clone(), &(r.write_open.clone()).select(&i.clone()))));
-            self.assume(st,g,r.count.eq(&if freed { p.count.sub(&z.int(1)) } else { p.count.clone() }));
-            if freed {
+            if n == "ev_proc_wait_for" {
+                // G10-ASYNC-DEADLINE: either the slot was freed (as ev_proc_wait) or it was kept with stdin closed
+                self.assume(st, g, r.write_open.select(&i).not());
+                self.assume(st, g, z.or(&[z.and(&[r.kind.select(&i).raw_eq(&z.int(0)), r.eof.select(&i).not(), r.count.eq(&p.count.sub(&z.int(1)))]),
+                                          z.and(&[r.kind.select(&i).raw_eq(&z.int(3)), r.eof.select(&i).eq(&p.eof.select(&i)), r.count.eq(&p.count), r.exit.eq(&p.exit)])]));
+            }
+            else {
+                self.assume(st,g,r.count.eq(&if freed { p.count.sub(&z.int(1)) } else { p.count.clone() }));
+            }
+            if n == "ev_proc_wait_for" {
+            }
+            else if freed {
                 self.assume(st, g, ((r.eof.clone()).select(&i.clone())).not());
                 self.assume(st, g, ((r.write_open.clone()).select(&i.clone())).not());
             }
@@ -3091,7 +3105,7 @@ impl<'a> FnVerifier<'a> {
             self.assume(st, g, r.error.raw_eq(&z.int(0)).implies(&(r.ev_slot.clone()).eq(&p.ev_slot.clone())));
             self.assume(st, g, r.error.raw_eq(&z.int(0)).implies(&(r.ev_kind_.clone()).eq(&p.ev_kind_.clone())));
         }
-        if n != "ev_proc_wait" {
+        if !matches!(n, "ev_proc_wait" | "ev_proc_wait_for") {
             self.assume(st, g, (r.exit.clone()).eq(&p.exit.clone()));
         }
         if !matches!(n,"ev_read" | "ev_proc_read") {

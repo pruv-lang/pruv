@@ -1,0 +1,5 @@
+fn bad(take l: Loop, data: [u8]) -> Loop ! async, proc, alloc
+  requires ev_ok(l) && ev_cap(l) == 2 && ev_kind(l, 0) == 3 && ev_write_open(l, 0)
+{
+  return ev_proc_write_for(move l, 0, data, -1);
+}

@@ -1,0 +1,22 @@
+--- a/pruvc/codegen.py
++++ b/pruvc/codegen.py
+@@ -3256,7 +3256,7 @@
+             loop { if j.err {ok=false;break;} if !j.busy {break;} let now=::std::time::Instant::now(); if now>=deadline {ok=false;j.stop=true;j.data=Vec::new();cv.notify_all();break;} j=cv.wait_timeout(j,deadline-now).unwrap_or_else(|e| e.into_inner()).0; }
+         }
+     }
+-    if !ok { pruv_ev_half(&mut l,i); } l
++    if !ok { pruv_ev_mark(&mut l,i,7); } l
+ }
+ fn pruv_ev_wait_for(mut l: pruv_Loop, slot: i64, ms: i64) -> pruv_Loop {
+     l.last=-1; if !pruv_ev_valid(&l,slot,3) || !(0..=86400000).contains(&ms) {pruv_ev_fail(&mut l,1);return l;}
+--- a/pruvc-rs/crates/pruv-core/src/codegen.rs
++++ b/pruvc-rs/crates/pruv-core/src/codegen.rs
+@@ -4601,7 +4601,7 @@
+             loop { if j.err {ok=false;break;} if !j.busy {break;} let now=::std::time::Instant::now(); if now>=deadline {ok=false;j.stop=true;j.data=Vec::new();cv.notify_all();break;} j=cv.wait_timeout(j,deadline-now).unwrap_or_else(|e| e.into_inner()).0; }
+         }
+     }
+-    if !ok { pruv_ev_half(&mut l,i); } l
++    if !ok { pruv_ev_mark(&mut l,i,7); } l
+ }
+ fn pruv_ev_wait_for(mut l: pruv_Loop, slot: i64, ms: i64) -> pruv_Loop {
+     l.last=-1; if !pruv_ev_valid(&l,slot,3) || !(0..=86400000).contains(&ms) {pruv_ev_fail(&mut l,1);return l;}

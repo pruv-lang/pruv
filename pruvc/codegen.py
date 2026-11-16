@@ -2844,7 +2844,7 @@ class Gen:
         for p, x in zip(cat.params, e.args):
             if is_collection(p.type):
                 args.append(s.e(x) if p.take else s.cref(x))
-            elif p.type == STR or (e.name in ("file_write_bytes", "proc_write_bytes", "net_write_bytes", "ev_write", "ev_proc_write") and p.type == ARRAY_U8):
+            elif p.type == STR or (e.name in ("file_write_bytes", "proc_write_bytes", "net_write_bytes", "ev_write", "ev_proc_write", "ev_proc_write_for") and p.type == ARRAY_U8):
                 args.append(s.arr_ref(x))
             else:
                 args.append(s.e(x))
@@ -3100,7 +3100,10 @@ struct PruvEvQueue { bytes: [::std::collections::VecDeque<u8>;2], ended: [bool;2
 struct PruvEvShared { state: ::std::sync::Mutex<Vec<PruvEvQueue>>, cv: ::std::sync::Condvar }
 enum PruvEvResource { Free, Socket(::std::net::TcpStream, Option<::std::thread::JoinHandle<()>>), Listener(::std::net::SocketAddr, Option<::std::thread::JoinHandle<()>>, ::std::net::TcpListener), Process(pruv_Process), Timer(::std::time::Instant) }
 #[allow(non_camel_case_types)]
-struct pruv_Loop { shared: ::std::sync::Arc<PruvEvShared>, slots: Vec<PruvEvResource>, public: Vec<PruvEvPublic>, error: i64, first_err: i64, last: i64, event_slot: i64, event_kind: i64, cursor: usize, buf: Vec<u8>, exit: i64 }
+struct pruv_Loop { shared: ::std::sync::Arc<PruvEvShared>, slots: Vec<PruvEvResource>, public: Vec<PruvEvPublic>, error: i64, first_err: i64, last: i64, event_slot: i64, event_kind: i64, cursor: usize, buf: Vec<u8>, exit: i64, writers: Vec<Option<PruvEvWriter>> }
+struct PruvEvJob { data: Vec<u8>, off: usize, busy: bool, err: bool, stop: bool }
+type PruvEvJobRef = ::std::sync::Arc<(::std::sync::Mutex<PruvEvJob>, ::std::sync::Condvar)>;
+struct PruvEvWriter { job: PruvEvJobRef, h: Option<::std::thread::JoinHandle<()>> }
 pub static PRUV_ASYNC_THREADS: ::std::sync::atomic::AtomicUsize = ::std::sync::atomic::AtomicUsize::new(0);
 struct PruvEvThread;
 impl PruvEvThread { fn new() -> Self { PRUV_ASYNC_THREADS.fetch_add(1, ::std::sync::atomic::Ordering::SeqCst); Self } }
@@ -3110,7 +3113,7 @@ fn pruv_ev_fail(l: &mut pruv_Loop, e: i64) { if l.error == 0 { l.error=e; } pruv
 fn pruv_ev_mark(l: &mut pruv_Loop, i: usize, e: i64) { pruv_ev_remember(l,e); l.public[i].failed=true; l.public[i].open=false; l.public[i].eof=false; l.shared.state.lock().unwrap()[i].reported=true; }
 fn pruv_ev_new(cap: i64) -> pruv_Loop {
     let n = cap.clamp(1,4096) as usize;
-    let mut l=pruv_Loop { shared: ::std::sync::Arc::new(PruvEvShared { state: ::std::sync::Mutex::new((0..n).map(|_| PruvEvQueue::default()).collect()), cv: ::std::sync::Condvar::new() }), slots: (0..n).map(|_| PruvEvResource::Free).collect(), public: vec![PruvEvPublic::default();n], error:0, first_err:0, last:-1, event_slot:-1, event_kind:0, cursor:n-1, buf:Vec::new(), exit:0 };
+    let mut l=pruv_Loop { shared: ::std::sync::Arc::new(PruvEvShared { state: ::std::sync::Mutex::new((0..n).map(|_| PruvEvQueue::default()).collect()), cv: ::std::sync::Condvar::new() }), slots: (0..n).map(|_| PruvEvResource::Free).collect(), public: vec![PruvEvPublic::default();n], error:0, first_err:0, last:-1, event_slot:-1, event_kind:0, cursor:n-1, buf:Vec::new(), exit:0, writers:(0..n).map(|_| None).collect() };
     if cap<1 || cap>4096 { pruv_ev_fail(&mut l,1); } l
 }
 fn pruv_ev_count(l: &pruv_Loop) -> i64 { l.public.iter().filter(|p|p.kind!=0).count() as i64 }
@@ -3137,6 +3140,35 @@ fn pruv_ev_reader(mut s: ::std::net::TcpStream, sh: ::std::sync::Arc<PruvEvShare
     }));
     if result.is_err() { sh.state.lock().unwrap()[i].err=3; sh.cv.notify_all(); }
 }
+// G10-ASYNC-DEADLINE: the stdin writer of a process slot; it writes 4096-byte pieces and checks stop between them
+fn pruv_ev_writer(mut s: ::std::process::ChildStdin, job: PruvEvJobRef) {
+    let (m,cv)=&*job;
+    let result=::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
+        //@hook write_for { let mut j=m.lock().unwrap(); j.err=true; j.busy=false; cv.notify_all(); return; }
+        //@hook writer_panic panic!("pruv test hook: writer_panic");
+        loop {
+            let mut j=m.lock().unwrap_or_else(|e| e.into_inner());
+            while !j.busy && !j.stop { j=cv.wait(j).unwrap_or_else(|e| e.into_inner()); }
+            if j.stop { j.data=Vec::new(); return; }
+            let a=j.off; let b=(a+4096).min(j.data.len()); let piece=j.data[a..b].to_vec(); drop(j);
+            let r=::std::io::Write::write_all(&mut s,&piece);
+            let mut j=m.lock().unwrap_or_else(|e| e.into_inner());
+            match r { Ok(())=>{ j.off=b; if j.off>=j.data.len() { j.busy=false; j.data=Vec::new(); j.off=0; } cv.notify_all(); }, Err(_)=>{ j.err=true; j.busy=false; j.data=Vec::new(); cv.notify_all(); return; } }
+        }
+    }));
+    if let Err(p)=result { { let mut j=m.lock().unwrap_or_else(|e| e.into_inner()); j.err=true; j.busy=false; j.data=Vec::new(); cv.notify_all(); } ::std::panic::resume_unwind(p); }
+}
+fn pruv_ev_writer_start(l: &mut pruv_Loop, i: usize) -> bool {
+    if l.writers[i].is_some() { return true; }
+    let s=match &mut l.slots[i] { PruvEvResource::Process(p)=>p.stdin.take(), _=>None };
+    let s=match s { Some(s)=>s, None=>return false };
+    let job: PruvEvJobRef=::std::sync::Arc::new((::std::sync::Mutex::new(PruvEvJob { data: Vec::new(), off: 0, busy: false, err: false, stop: false }), ::std::sync::Condvar::new()));
+    let j2=job.clone();
+    match pruv_ev_spawn(move || pruv_ev_writer(s,j2)) { Some(h)=>{ l.writers[i]=Some(PruvEvWriter { job, h: Some(h) }); true }, None=>false }
+}
+fn pruv_ev_writer_stop(l: &mut pruv_Loop, i: usize) { if let Some(w)=&l.writers[i] { let (m,cv)=&*w.job; m.lock().unwrap_or_else(|e| e.into_inner()).stop=true; cv.notify_all(); } }
+// half-close: the slot keeps running and is not failed; stdin is released (by the writer after its current piece)
+fn pruv_ev_half(l: &mut pruv_Loop, i: usize) { pruv_ev_writer_stop(l,i); if let PruvEvResource::Process(p)=&mut l.slots[i] { p.stdin=None; p.stdin_open=false; } l.public[i].open=false; }
 fn pruv_ev_socket(mut l: pruv_Loop, mut s: pruv_Socket) -> pruv_Loop {
     l.last=-1;
     let i=match pruv_ev_free(&l) { Some(i) if l.error==0 && s.error==0=>i, _=>{ pruv_ev_fail(&mut l,1); return l; } };
@@ -3204,10 +3236,40 @@ fn pruv_ev_write(mut l: pruv_Loop, slot: i64, data: &[u8], action: i64) -> pruv_
     //@hook write if !proc {code=4;}
     //@hook write_timeout if !proc {code=5;}
     //@hook proc_io if proc {code=7;}
-    if code==0 { match &mut l.slots[i] {
+    if code==0 && proc && l.writers[i].is_some() {
+        let job=l.writers[i].as_ref().unwrap().job.clone(); let (m,cv)=&*job; let mut j=m.lock().unwrap_or_else(|e| e.into_inner());
+        if action==3 { j.stop=true; cv.notify_all(); } else if j.err { code=7; } else if !data.is_empty() { j.data=data.to_vec(); j.off=0; j.busy=true; cv.notify_all(); while j.busy && !j.err { j=cv.wait(j).unwrap_or_else(|e| e.into_inner()); } if j.err { code=7; } }
+    } else if code==0 { match &mut l.slots[i] {
         PruvEvResource::Socket(s,_)=>{let r=if action==1{s.shutdown(::std::net::Shutdown::Write)}else{::std::io::Write::write_all(s,data)};if let Err(e)=r{code=if action==0 && pruv_net_timed_out(&e){5}else{4};}},
         PruvEvResource::Process(p)=>{if action==3 {p.stdin=None;}else if p.stdin.as_mut().map_or(true,|s|::std::io::Write::write_all(s,data).is_err()){code=7;}},_=>{}
     }} if code!=0{let eof=l.public[i].eof;pruv_ev_mark(&mut l,i,code);l.public[i].eof=eof;}else if action==1 || action==3 {l.public[i].open=false;}l
+}
+fn pruv_ev_write_for(mut l: pruv_Loop, slot: i64, data: &[u8], ms: i64) -> pruv_Loop {
+    l.last=-1; if !pruv_ev_valid(&l,slot,3) || !l.public[slot as usize].open || !(0..=86400000).contains(&ms) {pruv_ev_fail(&mut l,1);return l;}
+    let i=slot as usize; if data.is_empty() {return l;}
+    let mut ok=pruv_ev_writer_start(&mut l,i);
+    if ok {
+        let job=l.writers[i].as_ref().unwrap().job.clone(); let (m,cv)=&*job; let mut j=m.lock().unwrap_or_else(|e| e.into_inner());
+        if j.err { ok=false; } else {
+            j.data=data.to_vec(); j.off=0; j.busy=true; cv.notify_all();
+            let deadline=::std::time::Instant::now()+::std::time::Duration::from_millis(ms as u64);
+            loop { if j.err {ok=false;break;} if !j.busy {break;} let now=::std::time::Instant::now(); if now>=deadline {ok=false;j.stop=true;j.data=Vec::new();cv.notify_all();break;} j=cv.wait_timeout(j,deadline-now).unwrap_or_else(|e| e.into_inner()).0; }
+        }
+    }
+    if !ok { pruv_ev_half(&mut l,i); } l
+}
+fn pruv_ev_wait_for(mut l: pruv_Loop, slot: i64, ms: i64) -> pruv_Loop {
+    l.last=-1; if !pruv_ev_valid(&l,slot,3) || !(0..=86400000).contains(&ms) {pruv_ev_fail(&mut l,1);return l;}
+    let i=slot as usize; pruv_ev_half(&mut l,i);
+    if l.public[i].failed { pruv_ev_end(&mut l,i,true); return l; }
+    let deadline=::std::time::Instant::now()+::std::time::Duration::from_millis(ms as u64); let mut step: u64=1;
+    loop {
+        let exited=match &mut l.slots[i] { PruvEvResource::Process(p)=>p.child.as_mut().map_or(true,|c| !matches!(c.try_wait(),Ok(None))), _=>true };
+        let sh=l.shared.clone(); let q=sh.state.lock().unwrap();
+        if exited && (q[i].err!=0 || (q[i].ended[0] && q[i].ended[1])) { drop(q); pruv_ev_end(&mut l,i,true); return l; }
+        let now=::std::time::Instant::now(); if now>=deadline { return l; }
+        let q=sh.cv.wait_timeout(q,::std::time::Duration::from_millis(step).min(deadline-now)).unwrap().0; drop(q); step=(step*2).min(10);
+    }
 }
 fn pruv_ev_accept(mut l: pruv_Loop, slot: i64) -> pruv_Loop {l.last=-1;if !pruv_ev_valid(&l,slot,2) || pruv_ev_free(&l).is_none(){pruv_ev_fail(&mut l,1);return l;}let i=slot as usize;if l.public[i].failed{return l;}let sh=l.shared.clone();let mut q=sh.state.lock().unwrap();let s=q[i].pending.pop_front();let err=q[i].err;sh.cv.notify_all();drop(q);if let Some(s)=s {return pruv_ev_socket(l,pruv_Socket{stream:Some(s),error:0,write_open:true,eof:false,buf:Vec::new()});}if err!=0{pruv_ev_mark(&mut l,i,err);}l}
 fn pruv_ev_end(l: &mut pruv_Loop, i: usize, wait: bool) {
@@ -3216,7 +3278,8 @@ fn pruv_ev_end(l: &mut pruv_Loop, i: usize, wait: bool) {
     match ::std::mem::replace(&mut l.slots[i],PruvEvResource::Free) {
         PruvEvResource::Socket(s,h)=>{let _=s.shutdown(::std::net::Shutdown::Both);if h.map_or(false,|h|h.join().is_err()){code=3;}},
         PruvEvResource::Listener(mut a,h,own)=>{if a.ip().is_unspecified(){a.set_ip(if a.is_ipv4(){"127.0.0.1".parse().unwrap()}else{"::1".parse().unwrap()});}if accepting && ::std::net::TcpStream::connect_timeout(&a,::std::time::Duration::from_secs(1)).is_err(){code=2;}else if h.map_or(false,|h|h.join().is_err()){code=6;}drop(own);},
-        PruvEvResource::Process(p)=>{let kill=!wait || l.public[i].failed;let r=pruv_proc_finish(p,kill);match r {Ok(n)=>if wait{l.exit=n;},Err(_)=>{code=8;if wait{l.exit=0;}}}
+        PruvEvResource::Process(p)=>{pruv_ev_writer_stop(l,i);let w=l.writers[i].take();let kill=!wait || l.public[i].failed;let r=pruv_proc_finish(p,kill);match r {Ok(n)=>if wait{l.exit=n;},Err(_)=>{code=8;if wait{l.exit=0;}}}
+            if let Some(mut w)=w {if w.h.take().map_or(false,|h|h.join().is_err()){code=8;}}
             //@hook reap code=8;
         },_=>{}
     }
@@ -3229,7 +3292,7 @@ fn pruv_ev_post(op:&str, s:&PruvEvSnapshot, r:&pruv_Loop, slot:i64)->bool {
     if !pruv_ev_wf(r) || r.public.len()!=s.public.len(){return false;}
     if r.error!=0{return r.last == -1 && r.event_slot == -1 && r.event_kind == 0 && r.buf.is_empty();}
     if op!="ev_wait" && (r.event_slot!=s.event_slot || r.event_kind!=s.event_kind){return false;}
-    if op!="ev_proc_wait" && r.exit!=s.exit{return false;}
+    if op!="ev_proc_wait" && op!="ev_proc_wait_for" && r.exit!=s.exit{return false;}
     if op!="ev_read" && op!="ev_proc_read" && r.buf!=s.buf{return false;}
     if !op.starts_with("ev_add_") && op!="ev_accept" && r.last != -1{return false;}
     let changed=if op.starts_with("ev_add_") || op=="ev_accept" {r.last}else if op=="ev_wait"{if r.event_kind==4 || r.event_kind==5{r.event_slot}else{-1}}else{slot};

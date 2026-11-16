@@ -1,0 +1,84 @@
+// ev_proc_write_for with the test hook `writer_panic` (the writer thread panics before writing): the write fails
+// and half-closes stdin, the slot is not failed, the child sees end of input and prints 0, and ending the process
+// reports the panicked writer as code 8 (the slot is freed with exit 0 and ev_close returns Err(8)).
+pub fn run(program: str, child_mode: str, n: str, mode: i64, data: [u8], tail: [u8], ms: i64) -> i64 ! async, net, proc, alloc
+  requires 0 <= ms && ms <= 86400000
+{
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, child_mode);
+  args = proc_args_push(move args, n);
+  let p: Process = proc_spawn(program, args, "");
+  if !proc_ok(p) {
+    let r0: Result<i64> = proc_wait(move p);
+    return -1;
+  }
+  let mut l: Loop = ev_new(2);
+  l = ev_add_process(move l, move p);
+  if !ev_ok(l) {
+    let r1: Result<i64> = ev_close(move l);
+    return -2;
+  }
+  let ps: i64 = ev_last(l);
+  l = ev_proc_write_for(move l, ps, data, ms);
+  if !ev_ok(l) || ev_kind(l, ps) != 3 || ev_count(l) != 1 {
+    let r2: Result<i64> = ev_close(move l);
+    return -3;
+  }
+  let half: bool = !ev_write_open(l, ps);
+  if mode == 3 && !half {
+    l = ev_proc_write(move l, ps, tail);
+    l = ev_proc_close_stdin(move l, ps);
+  }
+  if mode == 4 && !half {
+    l = ev_proc_close_stdin(move l, ps);
+  }
+  if !ev_ok(l) || ev_write_open(l, ps) {
+    let r3: Result<i64> = ev_close(move l);
+    return -4;
+  }
+  // read stdout until "ready" (mode 1) or until both pipes end, keeping a decimal number of the digits seen
+  let mut total: i64 = 0;
+  let mut number: i64 = 0;
+  let mut done: bool = false;
+  let mut rounds: i64 = 100000;
+  while !done && ev_ok(l) && rounds > 0 decreases rounds {
+    l = ev_wait(move l, 5000);
+    let ek: i64 = ev_event_kind(l);
+    if ek == 1 {
+      l = ev_proc_read(move l, ps, 1, 4096);
+      let k: i64 = ev_size(l);
+      let mut j: i64 = 0;
+      while j < k decreases k - j {
+        let b: i64 = ev_byte(l, j);
+        if b >= 48 && b <= 57 && number < 100000000 { number = number * 10 + (b - 48); }
+        j = j + 1;
+      }
+      total = total + k;
+      l = ev_proc_read(move l, ps, 2, 4096);
+      if mode == 1 && total >= 6 { done = true; }
+    } else {
+      done = true;
+    }
+    rounds = rounds - 1;
+  }
+  let mut out: i64 = -5;
+  if mode == 1 {
+    if half && total == 6 && ev_ok(l) && ev_kind(l, ps) == 3 { out = 1000 + total; }
+  } else {
+    let mut w: i64 = 200;
+    while ev_ok(l) && ev_kind(l, ps) == 3 && w > 0 decreases w {
+      l = ev_proc_wait_for(move l, ps, 100);
+      w = w - 1;
+    }
+    if ev_ok(l) && ev_kind(l, ps) == 0 && ev_exit(l) == 0 {
+      if mode == 2 && half { out = 2000 + total; }
+      if mode == 3 && !half { out = 3000000000 + number; }
+      if mode == 4 && !half { out = 4000 + number; }
+    }
+  }
+  let r: Result<i64> = ev_close(move l);
+  match r {
+    Ok(c) => { return out; }
+    Err(e) => { return -100 - e; }
+  }
+}

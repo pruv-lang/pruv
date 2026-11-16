@@ -764,7 +764,8 @@ Tests:
 
 ## 9. Later work
 
-- User-facing async, poll, timeouts, cancellation and long-running engine sessions.
+- User-facing async, poll, timeouts, cancellation and long-running engine sessions. (Loops have bounded process
+  waits and writes since G10-ASYNC-DEADLINE, G10_ASYNC_SPEC §8b; the plain `proc_*` operations do not.)
 - Expressing an external event loop beyond a finite budget.
 - Explicit memory limits, backpressure or spooling for output queues.
 - Process groups, killing descendant trees, lifetimes of descendants that inherit pipes.

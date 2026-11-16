@@ -1,0 +1,55 @@
+// ev_proc_wait_for (G10-ASYNC-DEADLINE): a bounded wait keeps the slot while the child runs (stdin closed,
+// ev_exit unchanged) and frees it with the exit code once the child has exited and both output pipes ended.
+// mode 1 close_out: stdout ends at once, the child runs 400 ms more and exits 3.
+// mode 2 sleep: the child runs 120 s; waits of 0 and 30 ms keep the slot; ev_remove ends it.
+// mode 3 quick: a plain ev_proc_write fails the slot (the child is gone); the wait frees it at once.
+pub fn run(program: str, child_mode: str, mode: i64, data: [u8]) -> i64 ! async, net, proc, alloc
+{
+  let mut args: ProcessArgs = proc_args_new();
+  args = proc_args_push(move args, child_mode);
+  let p: Process = proc_spawn(program, args, "");
+  if !proc_ok(p) {
+    let r0: Result<i64> = proc_wait(move p);
+    return -1;
+  }
+  let mut l: Loop = ev_new(2);
+  l = ev_add_process(move l, move p);
+  if !ev_ok(l) {
+    let r1: Result<i64> = ev_close(move l);
+    return -2;
+  }
+  let ps: i64 = ev_last(l);
+  let mut out: i64 = -3;
+  if mode == 1 {
+    let e0: i64 = ev_exit(l);
+    l = ev_proc_wait_for(move l, ps, 20);
+    if ev_ok(l) && ev_kind(l, ps) == 3 && !ev_write_open(l, ps) && ev_count(l) == 1 && ev_exit(l) == e0 {
+      let mut rounds: i64 = 100;
+      while ev_ok(l) && ev_kind(l, ps) == 3 && rounds > 0 decreases rounds {
+        l = ev_proc_wait_for(move l, ps, 100);
+        rounds = rounds - 1;
+      }
+      if ev_ok(l) && ev_kind(l, ps) == 0 && ev_count(l) == 0 { out = ev_exit(l); } else { out = -4; }
+    }
+  }
+  if mode == 2 {
+    l = ev_proc_wait_for(move l, ps, 0);
+    if ev_ok(l) && ev_kind(l, ps) == 3 && !ev_write_open(l, ps) {
+      l = ev_proc_wait_for(move l, ps, 30);
+      if ev_ok(l) && ev_kind(l, ps) == 3 {
+        l = ev_remove(move l, ps);
+        if ev_ok(l) && ev_count(l) == 0 { out = 100; } else { out = -5; }
+      }
+    }
+  }
+  if mode == 3 {
+    l = ev_proc_write(move l, ps, data);
+    l = ev_proc_wait_for(move l, ps, 86400000);
+    if ev_ok(l) && ev_kind(l, ps) == 0 && ev_count(l) == 0 { out = 200; } else { out = -6; }
+  }
+  let r: Result<i64> = ev_close(move l);
+  match r {
+    Ok(n) => { return out; }
+    Err(e) => { return out + 1000 * e; }
+  }
+}

@@ -1,0 +1,29 @@
+fn check(take l: Loop, a: i64, b: i64, data: [u8]) -> Loop ! async, net, proc, alloc
+  requires ev_ok(l)
+  requires 0 <= a && a < ev_cap(l)
+  requires ev_kind(l, a) == 3
+  requires 0 <= b && b < ev_cap(l) && a != b
+  requires ev_write_open(l, a)
+  ensures ev_ok(result)
+  ensures ev_kind(result, a) == 3
+  ensures ev_eof(result, a) == ev_eof(l, a)
+  ensures ev_kind(result, b) == ev_kind(l, b)
+  ensures ev_eof(result, b) == ev_eof(l, b)
+  ensures ev_write_open(result, b) == ev_write_open(l, b)
+  ensures ev_count(result) == ev_count(l)
+{ return ev_proc_write_for(move l, a, data, 86400000); }
+
+// A bounded write may half-close stdin; closing it is allowed only when it is still open.
+fn write_then_close(take l: Loop, a: i64, data: [u8]) -> Loop ! async, net, proc, alloc
+  requires ev_ok(l)
+  requires 0 <= a && a < ev_cap(l)
+  requires ev_kind(l, a) == 3
+  requires ev_write_open(l, a)
+  ensures ev_ok(result)
+  ensures ev_kind(result, a) == 3
+  ensures !ev_write_open(result, a)
+{
+  let q: Loop = ev_proc_write_for(move l, a, data, 100);
+  if ev_write_open(q, a) { return ev_proc_close_stdin(move q, a); }
+  return move q;
+}

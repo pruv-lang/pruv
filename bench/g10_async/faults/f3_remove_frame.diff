@@ -1,22 +1,22 @@
 --- a/pruvc/verify.py
 +++ b/pruvc/verify.py
-@@ -2333,7 +2333,7 @@
-             s.assume(st, g, r.kind == z3.Store(p.kind, i, k))
-             s.assume(st, g, r.eof == z3.Store(p.eof, i, z3.Select(r.eof, i)))
-             s.assume(st, g, r.write_open == z3.Store(p.write_open, i, z3.Select(r.write_open, i)))
--            s.assume(st, g, r.count == (p.count - 1 if freed else p.count))
-+            s.assume(st, g, r.count == (p.count if n == "ev_remove" else (p.count - 1 if freed else p.count)))
-             if freed:
-                 s.assume(st, g, z3.Not(z3.Select(r.eof, i)))
-                 s.assume(st, g, z3.Not(z3.Select(r.write_open, i)))
+@@ -2367,7 +2367,7 @@
+                 s.assume(st, g, z3.Or(z3.And(z3.Select(r.kind, i) == 0, z3.Not(z3.Select(r.eof, i)), r.count == p.count - 1),
+                                       z3.And(z3.Select(r.kind, i) == 3, z3.Select(r.eof, i) == z3.Select(p.eof, i), r.count == p.count, r.exit == p.exit)))
+             else:
+-                s.assume(st, g, r.count == (p.count - 1 if freed else p.count))
++                s.assume(st, g, r.count == (p.count if n == "ev_remove" else (p.count - 1 if freed else p.count)))
+             if n == "ev_proc_wait_for":
+                 pass
+             elif freed:
 --- a/pruvc-rs/crates/pruv-proof/src/symbolic.rs
 +++ b/pruvc-rs/crates/pruv-proof/src/symbolic.rs
-@@ -3061,7 +3061,7 @@
-             self.assume(st, g, (r.kind.clone()).eq(&(p.kind.clone()).store(&i.clone(), &k.clone())));
-             self.assume(st, g, (r.eof.clone()).eq(&(p.eof.clone()).store(&i.clone(), &(r.eof.clone()).select(&i.clone()))));
-             self.assume(st, g, (r.write_open.clone()).eq(&(p.write_open.clone()).store(&i.clone(), &(r.write_open.clone()).select(&i.clone()))));
--            self.assume(st,g,r.count.eq(&if freed { p.count.sub(&z.int(1)) } else { p.count.clone() }));
-+            self.assume(st,g,r.count.eq(&if n == "ev_remove" { p.count.clone() } else if freed { p.count.sub(&z.int(1)) } else { p.count.clone() }));
-             if freed {
-                 self.assume(st, g, ((r.eof.clone()).select(&i.clone())).not());
-                 self.assume(st, g, ((r.write_open.clone()).select(&i.clone())).not());
+@@ -3081,7 +3081,7 @@
+                                           z.and(&[r.kind.select(&i).raw_eq(&z.int(3)), r.eof.select(&i).eq(&p.eof.select(&i)), r.count.eq(&p.count), r.exit.eq(&p.exit)])]));
+             }
+             else {
+-                self.assume(st,g,r.count.eq(&if freed { p.count.sub(&z.int(1)) } else { p.count.clone() }));
++                self.assume(st,g,r.count.eq(&if n == "ev_remove" { p.count.clone() } else if freed { p.count.sub(&z.int(1)) } else { p.count.clone() }));
+             }
+             if n == "ev_proc_wait_for" {
+             }

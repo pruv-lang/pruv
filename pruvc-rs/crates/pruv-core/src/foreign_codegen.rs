@@ -253,6 +253,8 @@ impl ForeignGen {
             "ev_proc_close_stdin"=>("l: pruv_Loop, slot: i64","pruv_Loop","pruv_ev_valid(&l, slot, 3) && l.public[slot as usize].open","pruv_ev_write(l, slot, &[], 3)",""),
             "ev_accept"=>("l: pruv_Loop, slot: i64","pruv_Loop","pruv_ev_valid(&l, slot, 2) && pruv_ev_count(&l) < l.slots.len() as i64","pruv_ev_accept(l, slot)",""),
             "ev_proc_wait"=>("l: pruv_Loop, slot: i64","pruv_Loop","pruv_ev_valid(&l, slot, 3)","pruv_ev_remove(l, slot, true)",""),
+            "ev_proc_wait_for"=>("l: pruv_Loop, slot: i64, timeout_ms: i64","pruv_Loop","pruv_ev_valid(&l, slot, 3) && timeout_ms >= 0 && timeout_ms <= 86400000","pruv_ev_wait_for(l, slot, timeout_ms)",""),
+            "ev_proc_write_for"=>("l: pruv_Loop, slot: i64, data: &[u8], timeout_ms: i64","pruv_Loop","pruv_ev_valid(&l, slot, 3) && l.public[slot as usize].open && timeout_ms >= 0 && timeout_ms <= 86400000","pruv_ev_write_for(l, slot, data, timeout_ms)",""),
             "ev_remove"=>("l: pruv_Loop, slot: i64","pruv_Loop","pruv_ev_valid(&l, slot, 0) && l.public[slot as usize].kind != 0","pruv_ev_remove(l, slot, false)",""),
             "ev_ok"=>("l: &pruv_Loop","bool","","l.error == 0",""),
             "ev_error"=>("l: &pruv_Loop","i64","","l.error",""),

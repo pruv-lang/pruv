@@ -143,6 +143,8 @@ _add('ev_proc_read', [], lambda: ([_p('l', LOOP, True), _p('slot', I64), _p('str
 _add('ev_proc_write', [], lambda: ([_p('l', LOOP, True), _p('slot', I64), _p('data', ARRAY_U8)], LOOP), ['async', 'proc', 'alloc'])
 _add('ev_proc_close_stdin', [], lambda: ([_p('l', LOOP, True), _p('slot', I64)], LOOP), ['async', 'proc', 'alloc'])
 _add('ev_proc_wait', [], lambda: ([_p('l', LOOP, True), _p('slot', I64)], LOOP), ['async', 'proc', 'alloc'])
+_add('ev_proc_wait_for', [], lambda: ([_p('l', LOOP, True), _p('slot', I64), _p('timeout_ms', I64)], LOOP), ['async', 'proc', 'alloc'])
+_add('ev_proc_write_for', [], lambda: ([_p('l', LOOP, True), _p('slot', I64), _p('data', ARRAY_U8), _p('timeout_ms', I64)], LOOP), ['async', 'proc', 'alloc'])
 _add('ev_remove', [], lambda: ([_p('l', LOOP, True), _p('slot', I64)], LOOP), ['async', 'net', 'proc', 'alloc'])
 _add('ev_bytes', [], lambda: ([_p('l', LOOP)], ARRAY_U8), ['alloc'])
 _add('ev_ok', [], lambda: ([_p('l', LOOP)], BOOL), [])

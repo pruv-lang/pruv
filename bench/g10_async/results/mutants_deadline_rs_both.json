@@ -1,0 +1,596 @@
+{
+  "tools": {
+    "py": [
+      "python",
+      "pruvc.py"
+    ],
+    "rs": [
+      "pruvc"
+    ]
+  },
+  "summary": {
+    "total": 19,
+    "explicit_incorrect": 15,
+    "controls": 4,
+    "by_catch": {
+      "contract": {
+        "static": {
+          "rejected_verify": 16
+        },
+        "accepted": {
+          "accepted": 4
+        }
+      },
+      "harness": {
+        "oracle": {
+          "wrong_but_proved": 14
+        },
+        "accepted": {
+          "accepted": 4
+        }
+      }
+    },
+    "unexpected": []
+  },
+  "items": [
+    {
+      "id": "d01",
+      "target": "tests/g10_async/proof/ev_proc_wait_for.pruv",
+      "family": "wait_for_not_process",
+      "expected": "static",
+      "old": "  requires ev_kind(l, a) == 3\n  requires 0 <= b",
+      "new": "  requires 0 <= b",
+      "intent": "incorrect",
+      "catch": "contract",
+      "sha256": "bcb857ef034a36823dafb6f0a0760b2224b9cc2dc443dd35da8f74d9df6f1b36",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_verify",
+          "detail": {
+            "rc": 1,
+            "stderr": "",
+            "codes": [
+              "verify/call_requires"
+            ]
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "detail": {
+            "rc": 1,
+            "stderr": "",
+            "codes": [
+              "verify/call_requires"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "d02",
+      "target": "tests/g10_async/proof/ev_proc_wait_for.pruv",
+      "family": "wait_for_deadline_too_long",
+      "expected": "static",
+      "old": "return ev_proc_wait_for(move l, a, 50);",
+      "new": "return ev_proc_wait_for(move l, a, 86400001);",
+      "intent": "incorrect",
+      "catch": "contract",
+      "sha256": "e79c1eaacccfcf59a924a4b70ea3bded047e8d7cd7f47352d718e4119aebd4fa",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_verify",
+          "detail": {
+            "rc": 1,
+            "stderr": "",
+            "codes": [
+              "verify/call_requires"
+            ]
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "detail": {
+            "rc": 1,
+            "stderr": "",
+            "codes": [
+              "verify/call_requires"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "d03",
+      "target": "tests/g10_async/proof/ev_proc_wait_for.pruv",
+      "family": "wait_after_free",
+      "expected": "static",
+      "old": "  if ev_kind(q, a) == 3 { return ev_proc_wait(move q, a); }\n  return move q;",
+      "new": "  return ev_proc_wait(move q, a);",
+      "intent": "incorrect",
+      "catch": "contract",
+      "sha256": "731221bf52162461d380a4a6842f4ac32b0a8634223c3adfd5a2aad15600dc28",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_verify",
+          "detail": {
+            "rc": 1,
+            "stderr": "",
+            "codes": [
+              "verify/call_requires",
+              "verify/ensures"
+            ]
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "detail": {
+            "rc": 1,
+            "stderr": "",
+            "codes": [
+              "verify/call_requires",
+              "verify/ensures"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "d04",
+      "target": "tests/g10_async/proof/ev_proc_wait_for.pruv",
+      "family": "wait_for_claims_stdin_kept",
+      "expected": "static",
+      "old": "  ensures ev_write_open(result, a) == false",
+      "new": "  ensures ev_write_open(result, a) == ev_write_open(l, a)",
+      "intent": "incorrect",
+      "catch": "contract",
+      "sha256": "a0f6c115b7f45547d730feb54233c0d4c8e8a8fd33adc62b05f05f7e46bcfeb3",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_verify",
+          "detail": {
+            "rc": 1,
+            "stderr": "",
+            "codes": [
+              "verify/ensures"
+            ]
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "detail": {
+            "rc": 1,
+            "stderr": "",
+            "codes": [
+              "verify/ensures"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "d05",
+      "target": "tests/g10_async/proof/ev_proc_write_for.pruv",
+      "family": "write_for_after_close",
+      "expected": "static",
+      "old": "  requires ev_write_open(l, a)\n  ensures ev_ok(result)\n  ensures ev_kind(result, a) == 3\n  ensures ev_eof",
+      "new": "  ensures ev_ok(result)\n  ensures ev_kind(result, a) == 3\n  ensures ev_eof",
+      "intent": "incorrect",
+      "catch": "contract",
+      "sha256": "19a6e820b821afe9b595109a514dd39a5c5c2fe12346c3d24d9dabbf12be008b",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_verify",
+          "detail": {
+            "rc": 1,
+            "stderr": "",
+            "codes": [
+              "verify/call_requires"
+            ]
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "detail": {
+            "rc": 1,
+            "stderr": "",
+            "codes": [
+              "verify/call_requires"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "d06",
+      "target": "tests/g10_async/proof/ev_proc_write_for.pruv",
+      "family": "close_after_half_close",
+      "expected": "static",
+      "old": "  if ev_write_open(q, a) { return ev_proc_close_stdin(move q, a); }\n  return move q;",
+      "new": "  return ev_proc_close_stdin(move q, a);",
+      "intent": "incorrect",
+      "catch": "contract",
+      "sha256": "75f70760e5792659792ae97866c0f06619e9c14e5016cf13154d47e590cf3437",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_verify",
+          "detail": {
+            "rc": 1,
+            "stderr": "",
+            "codes": [
+              "verify/call_requires"
+            ]
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "detail": {
+            "rc": 1,
+            "stderr": "",
+            "codes": [
+              "verify/call_requires"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "d07",
+      "target": "tests/g10_async/proof/ev_proc_write_for.pruv",
+      "family": "write_for_claims_stdin_kept",
+      "expected": "static",
+      "old": "  ensures ev_count(result) == ev_count(l)\n",
+      "new": "  ensures ev_count(result) == ev_count(l)\n  ensures ev_write_open(result, a)\n",
+      "intent": "incorrect",
+      "catch": "contract",
+      "sha256": "1ec86b78c7272831026eefa6ee1c3abb1a927148d94cfd963f3f9789a5786d95",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_verify",
+          "detail": {
+            "rc": 1,
+            "stderr": "",
+            "codes": [
+              "verify/ensures"
+            ]
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "detail": {
+            "rc": 1,
+            "stderr": "",
+            "codes": [
+              "verify/ensures"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "d08",
+      "target": "tests/g10_async/proof/ev_proc_write_for.pruv",
+      "family": "write_for_negative_deadline",
+      "expected": "static",
+      "old": "ev_proc_write_for(move l, a, data, 100)",
+      "new": "ev_proc_write_for(move l, a, data, -1)",
+      "intent": "incorrect",
+      "catch": "contract",
+      "sha256": "bbadfff59b824a5810e746c5407e985d9d3d4a1dc22b7aa1ea5c60b39f245563",
+      "runs": {
+        "rs-rust": {
+          "class": "rejected_verify",
+          "detail": {
+            "rc": 1,
+            "stderr": "",
+            "codes": [
+              "verify/call_requires"
+            ]
+          }
+        },
+        "rs-llvm": {
+          "class": "rejected_verify",
+          "detail": {
+            "rc": 1,
+            "stderr": "",
+            "codes": [
+              "verify/call_requires"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "d09",
+      "target": "tests/runtime/g10a_r23_wait_for.pruv",
+      "family": "wait_past_exit",
+      "expected": "oracle",
+      "old": "l = ev_proc_wait_for(move l, ps, 20);",
+      "new": "l = ev_proc_wait_for(move l, ps, 2000);",
+      "intent": "incorrect",
+      "catch": "harness",
+      "sha256": "b4808044769830c2a43146734594b7b5cf59ee6139312fd5ece49660a42c78af",
+      "runs": {
+        "rs-rust": {
+          "class": "wrong_but_proved",
+          "detail": {
+            "rc": 101,
+            "stderr": "\nthread 'main' (91085341) panicked at /Users/spica4345/Projects/pruv/bench/g10_async/.work/d09_w2_reov_/main.rs:7:2:\nassertion `left == right` failed\n  left: -3\n right: 3\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+          }
+        },
+        "rs-llvm": {
+          "class": "wrong_but_proved",
+          "detail": {
+            "rc": 101,
+            "stderr": "\nthread 'main' (91085726) panicked at /Users/spica4345/Projects/pruv/bench/g10_async/.work/d09_wm15fz9b/main.rs:7:2:\nassertion `left == right` failed\n  left: -3\n right: 3\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+          }
+        }
+      }
+    },
+    {
+      "id": "d10",
+      "target": "tests/runtime/g10a_r23_wait_for.pruv",
+      "family": "kept_slot_not_removed",
+      "expected": "oracle",
+      "old": "        l = ev_remove(move l, ps);\n",
+      "new": "",
+      "intent": "incorrect",
+      "catch": "harness",
+      "sha256": "8da421d847acb7d68ac24c5e21e85b8adf8447ca182ea2d0370a9b8b0b2b74db",
+      "runs": {
+        "rs-rust": {
+          "class": "wrong_but_proved",
+          "detail": {
+            "rc": 101,
+            "stderr": "\nthread 'main' (91085386) panicked at /Users/spica4345/Projects/pruv/bench/g10_async/.work/d10_fp3a9oj7/main.rs:9:2:\nassertion `left == right` failed\n  left: -5\n right: 100\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+          }
+        },
+        "rs-llvm": {
+          "class": "wrong_but_proved",
+          "detail": {
+            "rc": 101,
+            "stderr": "\nthread 'main' (91085915) panicked at /Users/spica4345/Projects/pruv/bench/g10_async/.work/d10_lri90ttz/main.rs:9:2:\nassertion `left == right` failed\n  left: -5\n right: 100\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+          }
+        }
+      }
+    },
+    {
+      "id": "d11",
+      "target": "tests/runtime/g10a_r23_wait_for.pruv",
+      "family": "exit_read_too_early",
+      "expected": "oracle",
+      "old": "if ev_ok(l) && ev_kind(l, ps) == 0 && ev_count(l) == 0 { out = ev_exit(l); }",
+      "new": "if ev_ok(l) && ev_count(l) == 0 { out = e0; }",
+      "intent": "incorrect",
+      "catch": "harness",
+      "sha256": "23763e56d30525e80032948f2d84fe9a9b946cb8757edc68bfdad158021773cb",
+      "runs": {
+        "rs-rust": {
+          "class": "wrong_but_proved",
+          "detail": {
+            "rc": 101,
+            "stderr": "\nthread 'main' (91085422) panicked at /Users/spica4345/Projects/pruv/bench/g10_async/.work/d11_51sifdci/main.rs:7:2:\nassertion `left == right` failed\n  left: 0\n right: 3\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+          }
+        },
+        "rs-llvm": {
+          "class": "wrong_but_proved",
+          "detail": {
+            "rc": 101,
+            "stderr": "\nthread 'main' (91085952) panicked at /Users/spica4345/Projects/pruv/bench/g10_async/.work/d11_jjco7t4p/main.rs:7:2:\nassertion `left == right` failed\n  left: 0\n right: 3\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+          }
+        }
+      }
+    },
+    {
+      "id": "d12",
+      "target": "tests/runtime/g10a_r24_write_for.pruv",
+      "family": "unbounded_write",
+      "expected": "oracle",
+      "old": "l = ev_proc_write_for(move l, ps, data, ms);",
+      "new": "l = ev_proc_write(move l, ps, data);",
+      "intent": "incorrect",
+      "catch": "harness",
+      "sha256": "950fe77fa14cd554a26af5980db05f08c0305fd77696b2bf1a9a014ba71c61e1",
+      "runs": {
+        "rs-rust": {
+          "class": "wrong_but_proved",
+          "detail": {
+            "rc": 101,
+            "stderr": "\nthread 'main' (91085604) panicked at /Users/spica4345/Projects/pruv/bench/g10_async/.work/d12_4iwwb813/main.rs:8:2:\nassertion `left == right` failed\n  left: -107\n right: 1006\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+          }
+        },
+        "rs-llvm": {
+          "class": "wrong_but_proved",
+          "detail": {
+            "rc": 101,
+            "stderr": "\nthread 'main' (91092315) panicked at /Users/spica4345/Projects/pruv/bench/g10_async/.work/d12_8shxlwcb/main.rs:8:2:\nassertion `left == right` failed\n  left: -107\n right: 1006\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+          }
+        }
+      }
+    },
+    {
+      "id": "d13",
+      "target": "tests/runtime/g10a_r24_write_for.pruv",
+      "family": "stdin_never_closed",
+      "expected": "oracle",
+      "old": "    l = ev_proc_write(move l, ps, tail);\n    l = ev_proc_close_stdin(move l, ps);\n",
+      "new": "    l = ev_proc_write(move l, ps, tail);\n",
+      "intent": "incorrect",
+      "catch": "harness",
+      "sha256": "0102187ea205dae88f60439a0a3206b7388b40390a33cda7ca656ce85d51173d",
+      "runs": {
+        "rs-rust": {
+          "class": "wrong_but_proved",
+          "detail": {
+            "rc": 101,
+            "stderr": "\nthread 'main' (91086127) panicked at /Users/spica4345/Projects/pruv/bench/g10_async/.work/d13_l1vriozq/main.rs:13:2:\nassertion `left == right` failed\n  left: -4\n right: 3001048581\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+          }
+        },
+        "rs-llvm": {
+          "class": "wrong_but_proved",
+          "detail": {
+            "rc": 101,
+            "stderr": "\nthread 'main' (91086450) panicked at /Users/spica4345/Projects/pruv/bench/g10_async/.work/d13_9ifwecjj/main.rs:13:2:\nassertion `left == right` failed\n  left: -4\n right: 3001048581\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+          }
+        }
+      }
+    },
+    {
+      "id": "d14",
+      "target": "tests/runtime/g10a_r24_write_for.pruv",
+      "family": "empty_write_closes",
+      "expected": "oracle",
+      "old": "  if mode == 4 && !half {\n    l = ev_proc_close_stdin(move l, ps);\n  }\n",
+      "new": "",
+      "intent": "incorrect",
+      "catch": "harness",
+      "sha256": "3122c40045ee7e122680934f6be4cf9ea751614890d14dc3e72f149087a430a3",
+      "runs": {
+        "rs-rust": {
+          "class": "wrong_but_proved",
+          "detail": {
+            "rc": 101,
+            "stderr": "\nthread 'main' (91086177) panicked at /Users/spica4345/Projects/pruv/bench/g10_async/.work/d14_c3icftgd/main.rs:15:2:\nassertion `left == right` failed\n  left: -4\n right: 4000\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+          }
+        },
+        "rs-llvm": {
+          "class": "wrong_but_proved",
+          "detail": {
+            "rc": 101,
+            "stderr": "\nthread 'main' (91086494) panicked at /Users/spica4345/Projects/pruv/bench/g10_async/.work/d14_9pvbzzn8/main.rs:15:2:\nassertion `left == right` failed\n  left: -4\n right: 4000\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+          }
+        }
+      }
+    },
+    {
+      "id": "d15",
+      "target": "tests/runtime/g10a_r24_write_for.pruv",
+      "family": "half_close_ignored",
+      "expected": "oracle",
+      "old": "let half: bool = !ev_write_open(l, ps);",
+      "new": "let half: bool = false;",
+      "intent": "incorrect",
+      "catch": "harness",
+      "sha256": "5d657430f904ba70a2c12ee899aba3d8a113b9de74c330a2ee9b033e5124f433",
+      "runs": {
+        "rs-rust": {
+          "class": "wrong_but_proved",
+          "detail": {
+            "rc": 101,
+            "stderr": "\nthread 'main' (91086228) panicked at /Users/spica4345/Projects/pruv/bench/g10_async/.work/d15_c2nxd6cb/main.rs:8:2:\nassertion `left == right` failed\n  left: -5\n right: 1006\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+          }
+        },
+        "rs-llvm": {
+          "class": "wrong_but_proved",
+          "detail": {
+            "rc": 101,
+            "stderr": "\nthread 'main' (91086606) panicked at /Users/spica4345/Projects/pruv/bench/g10_async/.work/d15_6dzbdv9x/main.rs:8:2:\nassertion `left == right` failed\n  left: -5\n right: 1006\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+          }
+        }
+      }
+    },
+    {
+      "id": "d16",
+      "target": "tests/g10_async/proof/ev_proc_wait_for.pruv",
+      "family": "longer_wait",
+      "expected": "accepted",
+      "old": "return ev_proc_wait_for(move l, a, 50);",
+      "new": "return ev_proc_wait_for(move l, a, 86400000);",
+      "intent": "control",
+      "catch": "contract",
+      "sha256": "8e28d3bfb1807a50b4332c0efd55adfbcbdb3c71d645e5ee3aa2d5cd83c12e4d",
+      "runs": {
+        "rs-rust": {
+          "class": "accepted",
+          "detail": {
+            "rc": 0
+          }
+        },
+        "rs-llvm": {
+          "class": "accepted",
+          "detail": {
+            "rc": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "d17",
+      "target": "tests/g10_async/proof/ev_proc_write_for.pruv",
+      "family": "zero_deadline",
+      "expected": "accepted",
+      "old": "ev_proc_write_for(move l, a, data, 100)",
+      "new": "ev_proc_write_for(move l, a, data, 0)",
+      "intent": "control",
+      "catch": "contract",
+      "sha256": "d7a1861410c29b83c5fea9e689e8218bccd770ef669ad9b098a5f753c04653b3",
+      "runs": {
+        "rs-rust": {
+          "class": "accepted",
+          "detail": {
+            "rc": 0
+          }
+        },
+        "rs-llvm": {
+          "class": "accepted",
+          "detail": {
+            "rc": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "d18",
+      "target": "tests/runtime/g10a_r23_wait_for.pruv",
+      "family": "failed_slot_any_deadline",
+      "expected": "accepted",
+      "old": "l = ev_proc_wait_for(move l, ps, 86400000);",
+      "new": "l = ev_proc_wait_for(move l, ps, 0);",
+      "intent": "control",
+      "catch": "harness",
+      "sha256": "20b5f4f014a33fcb83c32de334c1f08971930d19740184a7509603b9e63f1bb6",
+      "runs": {
+        "rs-rust": {
+          "class": "accepted",
+          "detail": {
+            "rc": 0,
+            "stderr": ""
+          }
+        },
+        "rs-llvm": {
+          "class": "accepted",
+          "detail": {
+            "rc": 0,
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "id": "d19",
+      "target": "tests/runtime/g10a_r24_write_for.pruv",
+      "family": "tail_bounded_write",
+      "expected": "accepted",
+      "old": "l = ev_proc_write(move l, ps, tail);",
+      "new": "l = ev_proc_write_for(move l, ps, tail, 20000);",
+      "intent": "control",
+      "catch": "harness",
+      "sha256": "b542263f102146e89e67d6660212a82cc8a5ef72b347393463781c6eb5e56615",
+      "runs": {
+        "rs-rust": {
+          "class": "accepted",
+          "detail": {
+            "rc": 0,
+            "stderr": ""
+          }
+        },
+        "rs-llvm": {
+          "class": "accepted",
+          "detail": {
+            "rc": 0,
+            "stderr": ""
+          }
+        }
+      }
+    }
+  ]
+}

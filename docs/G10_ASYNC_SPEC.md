@@ -269,7 +269,7 @@ reports event 5 once.
 | Operation | Effect | Contract / meaning |
 |---|---|---|
 | `ev_proc_read(take l: Loop, slot: i64, stream: i64, max: i64) -> Loop` | `async, proc, alloc` | requires P, slot ok, `kind(l,slot) == 3`, `stream == 1 \|\| stream == 2` (1 stdout, 2 stderr), `0 < max && max <= M`. **Never blocks.** Takes up to `max` already-collected bytes of that stream into the public buffer. Ensures O, B except the buffer, N, F({slot}), `kind(result,slot) == 3`, `0 <= size(result) && size(result) <= max`, `eof(l,slot) ==> eof(result,slot)`, `eof(result,slot) ==> size(result) == 0`, `open(result,slot) ==> open(l,slot)` |
-| `ev_proc_write(take l: Loop, slot: i64, data: [u8]) -> Loop` | `async, proc, alloc` | requires P, slot ok, `kind(l,slot) == 3`, `open(l,slot)` (stdin open). Writes everything to the child's stdin; may block (the known limit). Ensures O, B, N, F({slot}), `kind(result,slot) == 3`, `eof(result,slot) == eof(l,slot)` |
+| `ev_proc_write(take l: Loop, slot: i64, data: [u8]) -> Loop` | `async, proc, alloc` | requires P, slot ok, `kind(l,slot) == 3`, `open(l,slot)` (stdin open). Writes everything to the child's stdin; may block (the known limit; `ev_proc_write_for`, §8b, bounds it). Ensures O, B, N, F({slot}), `kind(result,slot) == 3`, `eof(result,slot) == eof(l,slot)` |
 | `ev_proc_close_stdin(take l: Loop, slot: i64) -> Loop` | `async, proc, alloc` | requires P, slot ok, `kind(l,slot) == 3`, `open(l,slot)`. Ensures O, B, N, F({slot}), `kind(result,slot) == 3`, `!open(result,slot)`, `eof(result,slot) == eof(l,slot)` |
 | `ev_proc_wait(take l: Loop, slot: i64) -> Loop` | `async, proc, alloc` | requires P, slot ok, `kind(l,slot) == 3`. Closes stdin, keeps draining and **discarding** the output, waits for the child to exit, joins its collectors, frees the slot. Ensures O, `cap` preserved, event preserved, buffer preserved, N, `kind(result,slot) == 0`, `!eof(result,slot)`, `!open(result,slot)`, `cnt(result) == cnt(l) - 1`, F({slot}). `ev_exit(result)` is the exit status (proc §2.4 rules 8–10); it is not tied to any number by the contract |
 
@@ -878,7 +878,7 @@ makes the bound and notifier inert for standalone processes, and gate A2.12 chec
 - `ev_proc_wait` closes stdin, keeps draining and discarding both outputs, waits, joins the collectors, frees
   the slot, and stores the exit status (proc §2.4 rules 8–10) in `exit`. On a failed slot it kills first.
   A reap failure is code 8 with `exit = 0`.
-- `ev_exit` is only changed by `ev_proc_wait`.
+- `ev_exit` is only changed by `ev_proc_wait` and a freeing `ev_proc_wait_for` (§8b).
 
 ### 5.6 Removal and close
 
@@ -925,6 +925,8 @@ the user API.
 | `accept` | an accept thread reports an accept error | slot code 6 |
 | `proc_io` | a process collector or stdin write fails | slot code 7 |
 | `reap` | reaping or killing a child fails | code 8 |
+| `write_for` | the stdin writer thread of `ev_proc_write_for` reports a write error | half-close, no code (§8b) |
+| `writer_panic` | the stdin writer thread of `ev_proc_write_for` panics | half-close, then code 8 when the slot ends (§8b) |
 
 The test build also keeps a counter of live loop threads that the Rust host driver can read, so thread leaks are
 testable. Neither is a user API.
@@ -1221,12 +1223,88 @@ Gates:
 8. Results and limits go into `RESULTS.md`; the async status in `BLUEPRINT.md` is updated. Existing File, proc
    and net measurements are not replaced.
 
+## 8b. Deadlines and stdin half-close (G10-ASYNC-DEADLINE)
+
+Two process-slot operations bound the two blocking points of §2.5 that a supervisor cannot avoid:
+a child that closes its outputs but keeps running (`ev_proc_wait` blocks until it exits), and a child that
+stops reading stdin (`ev_proc_write` blocks until it reads). Both new operations keep the slot usable when the
+deadline passes; neither marks the slot failed on a deadline.
+
+| Operation | Effect | Contract / meaning |
+|---|---|---|
+| `ev_proc_wait_for(take l: Loop, slot: i64, timeout_ms: i64) -> Loop` | `async, proc, alloc` | requires P, slot ok, `kind(l,slot) == 3`, `0 <= timeout_ms && timeout_ms <= 86400000`. Closes stdin. Waits at most `timeout_ms` for the child to exit **and** both output collectors to end. If both happen in time it is `ev_proc_wait`: the rest of the output is discarded, the slot is freed, `ev_exit` is set. Otherwise the slot is kept with stdin closed; output, EOF state and `ev_exit` are unchanged. Ensures O, `cap`, event and buffer preserved, N, F({slot}), `!open(result,slot)`, and either (freed) `kind(result,slot) == 0`, `!eof(result,slot)`, `cnt(result) == cnt(l) - 1`, or (kept) `kind(result,slot) == 3`, `eof(result,slot) == eof(l,slot)`, `cnt(result) == cnt(l)`, `ev_exit(result) == ev_exit(l)` |
+| `ev_proc_write_for(take l: Loop, slot: i64, data: [u8], timeout_ms: i64) -> Loop` | `async, proc, alloc` | requires P, slot ok, `kind(l,slot) == 3`, `open(l,slot)`, `0 <= timeout_ms && timeout_ms <= 86400000`. Writes `data` to the child's stdin, waiting at most `timeout_ms`. On success stdin stays open. On a deadline or a write error (the child closed stdin or exited) stdin is **half-closed**: `open(result,slot)` is false, the slot is **not** failed, output keeps being collected and reported. Ensures O, B, N, F({slot}), `kind(result,slot) == 3`, `eof(result,slot) == eof(l,slot)` (the same ensures as `ev_proc_write`) |
+
+Rules:
+
+1. **Failed slot.** `ev_proc_wait_for` on a failed slot kills the child first and then behaves like `ev_proc_wait`
+   (it frees the slot without waiting for the deadline; a killed child is reaped at once). `ev_proc_write_for`
+   cannot reach a failed slot: `open` is false there.
+2. **What "done" means for `ev_proc_wait_for`.** The child has exited (`try_wait` reports a status) and both
+   collectors have seen the end of their pipe, or a collector has failed (then the slot is freed with code 8 in
+   `ev_close`'s `Err`, as `ev_proc_wait` does). Queued output that the program has not read yet does not keep the
+   slot alive; it is discarded, as in `ev_proc_wait`. A program that wants that output reads it before the call.
+3. **No discard while kept.** While the deadline has not passed, output keeps going into the 1 MiB queues. A child
+   that is blocked writing into a full queue does not exit, so `ev_proc_wait_for` returns with the slot kept; the
+   program reads the queue and calls again. `ev_proc_wait` remains the operation that discards.
+4. **Polling.** The child's exit is polled with `try_wait` (no signals, no OS poller): every 1 ms at first, the
+   interval doubling up to 10 ms, waiting on the loop condvar between polls (so a collector ending wakes it). The
+   call never returns before the child has exited and the collectors have ended, unless the deadline has passed.
+   `timeout_ms == 0` checks once.
+5. **Half-close is not an error.** `ev_proc_write_for` does not record its deadline or write error anywhere: it
+   is not remembered for `ev_close`, and `ev_error`, the event and the buffer are unchanged. A program cannot tell
+   a deadline from a closed pipe (later work: a per-slot cause observer, §9). The child sees end of input once the
+   piece being written (rule 6) completes or the child exits.
+6. **Writer thread.** The first `ev_proc_write_for` on a slot moves the stdin endpoint into one writer thread for
+   that slot (counted with the other loop threads). The thread writes a request in pieces of at most 4096 bytes
+   and checks a stop flag between pieces. On a deadline the call sets the flag and returns at once: at most the
+   piece being written still reaches the child; the rest is dropped; the thread drops stdin after that piece. On a
+   write error the thread drops stdin and ends. After the writer exists, `ev_proc_write` and
+   `ev_proc_close_stdin` on that slot go through it with the same results as before (a plain write still waits
+   without bound and still marks the slot failed, code 7, on an error). An empty `data` succeeds at once and does
+   not start the writer.
+7. **Ending the slot.** `ev_proc_wait`, `ev_proc_wait_for` (when it frees), `ev_remove` and `ev_close` stop the
+   writer first, then end the process as before, then join the writer. A writer blocked in a piece is released
+   when the child reads or exits; a killed child releases it at once. A grandchild that inherited stdin and never
+   reads can keep the join waiting (the same limit as the collectors, §2.5). A writer thread that panicked is
+   code 8.
+8. **Spawn failure.** If the writer thread cannot be spawned, `ev_proc_write_for` half-closes stdin (rule 5).
+9. **`ev_exit`** is changed only by `ev_proc_wait` and by an `ev_proc_wait_for` that frees its slot.
+10. **Lowering.** Rust and LLVM use the same runtime functions `pruv_ev_wait_for` and `pruv_ev_write_for` (LLVM
+    through the shim adapters `pruv_g6_ev_proc_wait_for` and `pruv_g6_ev_proc_write_for`). Default foreign
+    requires checks cover the slot, kind, open and timeout requires.
+11. **Test hooks.** `write_for`: the writer thread reports a write error before writing anything (a half-close).
+    `writer_panic`: the writer thread panics before writing anything; the waiting call sees a write error (a
+    half-close) and ending the slot reports code 8 (rule 7).
+
+Tests:
+
+| Test | What it checks |
+|---|---|
+| `tests/runtime/g10a_r23_wait_for` | a child that closes stdout and keeps running 400 ms: a 20 ms `ev_proc_wait_for` returns kept (kind 3, `!open`, count and `ev_exit` unchanged), a later one frees the slot with exit 3; a child that runs 120 s: waits of 0 and 30 ms keep the slot and `ev_remove` ends it, all well under the child's run time; a slot failed by a plain `ev_proc_write` (code 7) is freed at once by a 24 h `ev_proc_wait_for`; no thread left |
+| `tests/runtime/g10a_r24_write_for` | a child that never reads: a 1 MiB `ev_proc_write_for` half-closes within the deadline, the slot is not failed, its stdout ("ready") is still read; a child that takes N bytes and exits: the write half-closes on the broken pipe and the child's output and exit status are still read (Grok P11); a successful write keeps stdin open and a later `ev_proc_write` / `ev_proc_close_stdin` go through the writer (the child counts 1 MiB + 5 bytes); an empty write keeps stdin open; `ev_close` is `Ok`; no thread left |
+| `tests/runtime/g10a_r25_write_hook` | hook `write_for`: the writer reports an error before writing; the write half-closes, the slot is not failed, the child sees end of input and exits 0 |
+| `tests/runtime/g10a_r26_writer_panic` | hook `writer_panic`: the writer panics before writing; the write half-closes, the child exits 0, the slot is freed with exit 0 and `ev_close` is `Err(8)`; no thread left |
+| `tests/g10_async/proof/ev_proc_wait_for.pruv` | both branches of the result verify; `ev_proc_wait` is still required after a kept result |
+| `tests/g10_async/proof/ev_proc_write_for.pruv` | `ev_proc_write_for`, then `ev_proc_close_stdin` only under `ev_write_open` |
+| `tests/must_reject/g10a_v_wait_for_kind` | `verify` / `call_requires`: `ev_proc_wait_for` on a timer slot |
+| `tests/must_reject/g10a_v_wait_for_timeout` | `verify` / `call_requires`: a timeout above 86400000 |
+| `tests/must_reject/g10a_v_write_for_timeout` | `verify` / `call_requires`: a negative timeout |
+| `tests/must_reject/g10a_v_write_for_closed` | `verify` / `call_requires`: a second `ev_proc_write_for` without checking `ev_write_open` |
+| `tests/must_reject/g10a_v_wait_for_freed` | `verify` / `call_requires`: `ev_proc_read` after `ev_proc_wait_for` without checking the kind |
+| `bench/g10_async/mutate_deadline.py` | wrong programs over the two operations (contract and harness catches recorded separately) |
+| fault `f5_wait_for_blocks` | `ev_proc_wait_for` ignores the deadline; caught by `g10a_r23_wait_for` |
+| fault `f6_write_for_fails_slot` | a deadline marks the slot failed; caught by `g10a_r24_write_for` |
+| fault `f7_wait_for_frame` | the kept branch of the encoding drops `ev_exit` preservation; caught by `ev_proc_wait_for.pruv` |
+
 ## 9. Later work
 
 - `async fn` / `await` syntax over the same runtime.
 - Taking handles back out of a loop (`ev_take_socket` and similar), so a program can hand a connection to a
   `net_*` routine.
-- Non-blocking writes with output queues, so `ev_write` never blocks, and write readiness events.
+- Non-blocking writes with output queues, so `ev_write` never blocks, and write readiness events (process
+  slots have bounded writes since §8b; sockets do not).
+- A per-slot cause observer that tells a deadline from a closed pipe after `ev_proc_write_for` (§8b rule 5).
 - UDP and TLS in loops.
 - Sharing a loop across `par` branches.
 - An OS poller (epoll, kqueue, IOCP) instead of one thread per slot, which removes the per-slot threads and the

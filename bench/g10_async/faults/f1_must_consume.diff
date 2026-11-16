@@ -1,6 +1,6 @@
 --- a/pruvc/foreign.py
 +++ b/pruvc/foreign.py
-@@ -405,7 +405,7 @@
+@@ -409,7 +409,7 @@
              if x.value is not None:
                  s.consume(x.value, st, "return")
              for n in st:       # every owned handle leaving the function must be dead (the value was consumed first)
@@ -11,7 +11,7 @@
          if isinstance(x, ExprStmt):
 --- a/pruvc-rs/crates/pruv-core/src/foreign.rs
 +++ b/pruvc-rs/crates/pruv-core/src/foreign.rs
-@@ -964,7 +964,7 @@
+@@ -976,7 +976,7 @@
                  // every owned handle leaving the function must be dead (the value was consumed first)
                  for (n, v) in st.iter() {
                      if let Some(kind) = self.proc.get(n) {

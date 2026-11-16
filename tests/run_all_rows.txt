@@ -171,6 +171,10 @@
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r20_fairness.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r21_backpressure.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r22_copy_contract.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r23_wait_for.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r24_write_for.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r25_write_hook.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r26_writer_panic.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10n_r01_echo_bytes.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10n_r02_chunks.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10n_r03_half_close.pruv"}
@@ -437,6 +441,10 @@
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r20_fairness.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r21_backpressure.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r22_copy_contract.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r23_wait_for.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r24_write_for.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r25_write_hook.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r26_writer_panic.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10n_r01_echo_bytes.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10n_r02_chunks.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10n_r03_half_close.pruv"}
@@ -1527,6 +1535,10 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r20_fairness.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r21_backpressure.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r22_copy_contract.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r23_wait_for.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r24_write_for.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r25_write_hook.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r26_writer_panic.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10n_r01_echo_bytes.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10n_r02_chunks.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify", "--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10n_r03_half_close.pruv"}
@@ -1795,6 +1807,10 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r20_fairness.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r21_backpressure.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r22_copy_contract.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r23_wait_for.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r24_write_for.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r25_write_hook.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10a_r26_writer_panic.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10n_r01_echo_bytes.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10n_r02_chunks.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10n_r03_half_close.pruv"}
@@ -2856,7 +2872,9 @@
 {"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g10_async_proof", "mode": "no-verify", "sample": "tests/g10_async/proof/ev_proc_close_stdin.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g10_async_proof", "mode": "no-verify", "sample": "tests/g10_async/proof/ev_proc_read.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g10_async_proof", "mode": "no-verify", "sample": "tests/g10_async/proof/ev_proc_wait.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g10_async_proof", "mode": "no-verify", "sample": "tests/g10_async/proof/ev_proc_wait_for.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g10_async_proof", "mode": "no-verify", "sample": "tests/g10_async/proof/ev_proc_write.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g10_async_proof", "mode": "no-verify", "sample": "tests/g10_async/proof/ev_proc_write_for.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g10_async_proof", "mode": "no-verify", "sample": "tests/g10_async/proof/ev_read.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g10_async_proof", "mode": "no-verify", "sample": "tests/g10_async/proof/ev_remove.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g10_async_proof", "mode": "no-verify", "sample": "tests/g10_async/proof/ev_shutdown_write.pruv"}
@@ -3195,7 +3213,9 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_proof", "mode": "default", "sample": "tests/g10_async/proof/ev_proc_close_stdin.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_proof", "mode": "default", "sample": "tests/g10_async/proof/ev_proc_read.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_proof", "mode": "default", "sample": "tests/g10_async/proof/ev_proc_wait.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_proof", "mode": "default", "sample": "tests/g10_async/proof/ev_proc_wait_for.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_proof", "mode": "default", "sample": "tests/g10_async/proof/ev_proc_write.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_proof", "mode": "default", "sample": "tests/g10_async/proof/ev_proc_write_for.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_proof", "mode": "default", "sample": "tests/g10_async/proof/ev_read.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_proof", "mode": "default", "sample": "tests/g10_async/proof/ev_remove.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_proof", "mode": "default", "sample": "tests/g10_async/proof/ev_shutdown_write.pruv"}
@@ -3530,8 +3550,13 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_v_timeout.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_v_timeout_high.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_v_wait_equal.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_v_wait_for_freed.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_v_wait_for_kind.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_v_wait_for_timeout.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_v_wait_time.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_v_write_closed.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_v_write_for_closed.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10a_v_write_for_timeout.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10n_borrowed_consume.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10n_borrowed_listener_consume.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g10n_close_listener_with_net_close.pruv"}
