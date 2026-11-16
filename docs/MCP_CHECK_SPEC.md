@@ -1,6 +1,6 @@
 # MCP stdio check port
 
-Status: implementation landed; Q pending
+Status: done
 
 ## Goal
 
@@ -131,21 +131,46 @@ allocation success, OS scheduling or process-tree cleanup proof is claimed.
 
 One implementation batch: Pruv root and packet helpers; copied JSON/UTF-8 modules;
 G10 transport and Rust renderer; fake stdio servers; four-pair fixture driver. No
-language changes or edits to other L3 ports. Q is separate and pending.
+language changes or edits to other L3 ports. Q uses the separate drivers below.
 
 ## Q reference and oracle
 
-Pinned reference: Lair fa192269, src/backend/mcp-client.ts. Fixed fixtures assert
-handshake wire messages inside real child processes and compare the host output
-to independent expected results. Both Python/Rust compilers and Rust/LLVM
-backends run the same fixtures. This is implementation testing, not Q. Future Q
-should run the unchanged pinned TS against the same servers, add randomized
-protocol traces and targeted mutants, and classify the explicit Unicode, resource,
-close policies without masking unrelated mismatches.
+Pinned reference: Lair fa192269, src/backend/mcp-client.ts, copied verbatim into
+`bench/l3/mcp/reference/backend/mcp-client.ts` (SHA-256
+`621c452aefd45cc7bafd39b14d9a22b997fe0e5bcc67f228971349e704480c89`).
+Node 26 type stripping, extension resolution and minimal i18n/Windows stubs run
+its real stdio client. Only messageI18n is omitted by the driver because the
+packet has no localization metadata; all other result fields are compared.
+
+`q.py` uses the 22 original fixtures, 2,000 seeded server behaviours and 18
+boundary probes on all four compiler/backend pairs. `q_server.py` keeps the
+random extension separate from the unchanged fixed server. `oracle.py` accepts
+only exact results or these narrow, result-checked policy differences:
+
+- Byte line cap: 2.2 million UTF-8 e-acute characters exceed Pruv's 4 MiB byte
+  cap but not TS's UTF-16 cap. Pruv must return the exact long-line failure;
+  TS must successfully finish the handshake and list.
+- Decimal ID: 1.00000000000000001 rounds to 1 in JS; exact Pruv matching ignores
+  it. TS succeeds and Pruv must return the exact connect timeout result.
+- Invalid UTF-8: a malformed byte inside a JSON string is replaced by Node;
+  Pruv rejects the line. TS succeeds and Pruv must return the connect timeout.
+- Numeric signal: only SIGTERM -> 15 in the failure message is permitted;
+  every other field must match.
+- Surrogate-safe description cut: the fixed cut fixture leaves a lone high
+  surrogate at TS's 65536-unit boundary. Pruv removes that single unit. Only
+  that exact suffix removal is allowed; fingerprints and all other fields match.
+
+The synchronous write timeout limitation is retained, not a general mismatch
+waiver: no blocked-write case is run or classified. Native init timeout and
+process-tree cleanup are likewise not claimed tested. Mutants are independent
+single replacements in source copies under work, verified/built on rs/rust and
+compared with the pinned reference on all 22 fixed fixtures. Tool/build errors
+are not semantic kills. Commands and generated evidence paths are in
+`bench/l3/mcp/Q_README.md`; durable results are in RESULTS.md section 130.
 
 ## Deferred
 
-Full Q differential/mutation/performance campaign; process-group integration;
+Performance campaign; process-group integration;
 HTTP/authentication; outer abort; packaging into Lair. The native 30-second initialization
 limit requires a slow fixture and is not shortened by a testing-only switch.
 
@@ -169,6 +194,15 @@ passes with its original ENOENT wording. Only this command is used:
 PATH="$HOME/.cargo/bin:$PATH" python3 bench/l3/mcp/test_impl.py
 ```
 
-No full repository suite, Q campaign, native 30-second init-timeout wait or
+No full repository suite, native 30-second init-timeout wait or
 malicious-descendant cleanup experiment is included. Unix signals still render
 numeric identifiers rather than Node's symbolic names.
+
+## Q evidence (2026-11-16)
+
+All four pairs completed 2,040 cases each: 2,027 exact, 13 classified, zero
+unexplained. Per pair: byte cap 3, exact decimal ID 3, invalid UTF-8 3, numeric
+signal 3, surrogate-safe cut 1. The 12 rs/rust mutants yielded 2 verifier
+rejections, 10 differential kills and no survivors. No Pruv source fix was
+needed. Full counts, total wall times and commands are in
+RESULTS.md section 130. No performance campaign was run.

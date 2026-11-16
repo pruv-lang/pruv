@@ -2065,3 +2065,34 @@ The planned P3 item was to emit `nounwind`, `nosync`, `norecurse` and memory-eff
 - **Scope and limits:** the performance fix is confined to chain.pruv, with one added duplicate-leaf fixture and its expectation. No compiler, Claude, MCP or Lair edits, full suite, network, commit or deployment. Generated artifacts stay in ignored `bench/l3/qwen/work/`. Peak memory, concurrent file mutation, filesystem fault injection, plan tracking and production integration were not tested by this Q batch.
 
 **L3-4 implementation and default Q complete; indexed chain lookup resolves the measured performance issue (8 MiB: 0.81x TS), and all 12 mutants are killed.**
+
+## 130. L3-3: MCP stdio check in Pruv (implementation and Q, 2026-11-16)
+
+- **Design:** `docs/MCP_CHECK_SPEC.md`. The stdio `checkMcp` flow from Lair `fa192269` is ported to `bench/l3/mcp/`: Pruv owns process/Loop transport, JSON parsing, numeric ID matching, initialization with one old-protocol retry, server-request replies, five-page/500-object traversal, tool validation and packet construction. Host code renders the packet and messages, approximates ENOENT after spawn failure, and invokes Node for reference-compatible fingerprints. No compiler or language changes.
+- **Implementation:** the existing 22 strict child-process fixtures pass on py/rust, py/llvm, rs/rust and rs/llvm. Both compilers verify the module graph; this Q batch required no Pruv source fixes.
+- **Reference:** `reference/backend/mcp-client.ts` is a byte-for-byte copy of `git show fa192269:src/backend/mcp-client.ts`, checked by SHA-256 (`621c452aefd45cc7bafd39b14d9a22b997fe0e5bcc67f228971349e704480c89`). Node 26.4.0 runs the original stdio client with type stripping, extension resolution and minimal metadata/Windows stubs. `reference.mjs` accepts the harness JSON-lines interface and omits only messageI18n, which the packet does not represent.
+- **Differential (`q.py`):** 2,040 cases per pair: all 22 fixed fixtures, 2,000 seeded behaviours and 18 targeted boundary probes. Real stdio children cover randomized tools/pagination, annotation types, invalid names, malformed/odd lines, notifications, mismatched IDs, same-ID server requests, RPC errors/retry, early exits with stderr, partial lines and short timeouts. No sockets are used. Every other result field, optional-field presence and fingerprint is compared.
+
+| Pair | Cases | Exact | Byte cap | Decimal ID | UTF-8 | Signal | Safe cut | Unexplained | Total wall s |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| py/rust | 2040 | 2027 | 3 | 3 | 3 | 3 | 1 | 0 | 76.720 |
+| py/llvm | 2040 | 2027 | 3 | 3 | 3 | 3 | 1 | 0 | 76.768 |
+| rs/rust | 2040 | 2027 | 3 | 3 | 3 | 3 | 1 | 0 | 75.197 |
+| rs/llvm | 2040 | 2027 | 3 | 3 | 3 | 3 | 1 | 0 | 73.704 |
+
+- **Classified differences:** byte cap (3): Pruv counts incoming UTF-8 bytes, TS UTF-16 units; exact decimal ID (3): Pruv rejects near-integer decimal replies that JS rounds to ID 1; invalid UTF-8 (3): Pruv rejects the response while Node replaces the malformed byte; signal (3): only SIGTERM versus 15 in the error text; surrogate-safe description cut (1): Pruv drops the high surrogate left by TS's slice. `oracle.py` verifies the expected outcomes and exact remaining fields, rather than accepting a category alone. The fixed 22 contribute 21 exact and one safe-cut difference. All four pairs have **0 unexplained differences**.
+- **Mutants (`q_mutants.py`, rs/rust):** 12 single replacements in copies under `work/mutants/`, with all 22 fixed fixtures as differential witnesses: **2 verifier-rejected, 10 differential-killed, 0 survived**. Return-value changes violate the page/tool-cap contracts. Differential kills cover old/new protocol strings, retry suppression, ping handling, early page termination, missing-command classification, title selection, description cap and both annotation flags. Build/tool failures are not credited as kills. These cap-contract mutants exercise proof rejection; they do not demonstrate a proof of complete page/tool traversal semantics.
+- **Timing:** only total differential wall time per pair is reported above, including process startup, child servers and host fingerprinting; this is not a performance campaign. The pinned TS corpus took 41.25 seconds. Mutation compilation ran concurrently during part of the campaign, so these are execution records, not comparative performance claims.
+- **Scope and limits:** no verified source, compiler, other bench, RESULTS.md, BLUEPRINT.md or original Lair edits; no commit, deployment or network. The random server is a new Q file to preserve the existing fixtures. Generated requests, outputs and reports are in ignored `work/`. Synchronous blocked writes, the native 30-second initialization timeout, Windows, HTTP/authentication, outer cancellation and malicious descendants remain untested. The existing sync-write limitation is documented, never used to excuse an observed mismatch. All drivers exited successfully and the tested clients close/reap their directly spawned children. An independent final process-list scan was denied by the sandbox (`ps: Operation not permitted`), so absence of leftover processes was not independently confirmed. Stray xcrun_db files under this bench were removed. This is differential evidence and local verification, not whole-program equivalence.
+
+Commands (from the repository root):
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+export MCP_NODE=/opt/homebrew/bin/node
+python3 bench/l3/mcp/test_impl.py
+python3 bench/l3/mcp/q.py
+python3 bench/l3/mcp/q_mutants.py
+```
+
+**L3-3 implementation and default Q complete.**
