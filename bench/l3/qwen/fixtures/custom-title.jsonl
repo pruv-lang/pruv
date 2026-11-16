@@ -1,0 +1,5 @@
+{"type":"user","message":{"parts":[{"text":"Fallback"}]}}
+{"type":"system","subtype":"custom_title","systemPayload":{"customTitle":"First"}}
+{"type":"system","subtype":"custom_title","systemPayload":{"customTitle":"  Last\n title  "}}
+{"type":"system","subtype":"custom_title","systemPayload":{"customTitle":" "}}
+{"type":"assistant","message":{"parts":[{"text":"ok"}]}}

@@ -1,0 +1,20 @@
+{
+  "head": {
+    "human": true,
+    "firstPrompt": "old"
+  },
+  "tail": {
+    "title": "Global"
+  },
+  "record": {
+    "turns": [
+      {
+        "prompt": "new",
+        "reply": "kept",
+        "tools": 0
+      }
+    ],
+    "omittedBefore": true,
+    "title": "Global"
+  }
+}

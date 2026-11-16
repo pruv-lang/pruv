@@ -1,0 +1,2 @@
+{"type":"user","message":{"parts":[{"text":"Hello"}]},"cwd":"/project","uuid":"u","timestamp":"2026-11-14T01:02:03.000Z"}
+{"type":"assistant","message":{"parts":[{"text":"World"}]},"uuid":"a","parentUuid":"u","model":"qwen","timestamp":"2026-11-14T01:02:03.000Z"}

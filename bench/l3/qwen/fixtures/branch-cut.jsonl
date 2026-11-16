@@ -1,0 +1,5 @@
+{"type":"user","message":{"parts":[{"text":"old"}]},"uuid":"old"}
+{"type":"assistant","message":{"parts":[{"text":"ignored"}]},"uuid":"x","parentUuid":"old"}
+{"type":"user","message":{"parts":[{"text":"new"}]},"uuid":"new","parentUuid":"outside"}
+{"type":"assistant","message":{"parts":[{"text":"kept"}]},"uuid":"z","parentUuid":"new"}
+{"type":"system","subtype":"custom_title","systemPayload":{"customTitle":"Global"},"uuid":"meta"}

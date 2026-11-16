@@ -1,0 +1,2 @@
+{"type":"user","message":{"parts":[{"thought":true,"text":"secret"},{"text":"Hi"},{"text":"There"}]}}
+{"type":"assistant","model":"qwen","message":{"parts":[{"thought":true,"text":"secret"},{"text":"A","functionCall":{}},{"functionCall":{}},{"functionCall":[]},{"text":"B"},{"thought":true,"functionCall":{}}]}}

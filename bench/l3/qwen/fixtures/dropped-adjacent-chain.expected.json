@@ -1,0 +1,17 @@
+{
+  "head": {
+    "human": false
+  },
+  "tail": {},
+  "record": {
+    "turns": [
+      {
+        "prompt": "kept",
+        "reply": "",
+        "tools": 0,
+        "clipped": true
+      }
+    ],
+    "omittedBefore": false
+  }
+}

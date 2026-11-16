@@ -1,0 +1,2 @@
+{"type":"user","message":{"parts":[{"text":"cycle"}]},"uuid":"u","parentUuid":"a"}
+{"type":"assistant","message":{"parts":[{"text":"reply"}]},"uuid":"a","parentUuid":"u"}

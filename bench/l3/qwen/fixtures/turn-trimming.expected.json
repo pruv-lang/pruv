@@ -1,0 +1,1013 @@
+{
+  "head": {
+    "human": true,
+    "firstPrompt": "p0"
+  },
+  "tail": {},
+  "record": {
+    "turns": [
+      {
+        "prompt": "p1",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p2",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p3",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p4",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p5",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p6",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p7",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p8",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p9",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p10",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p11",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p12",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p13",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p14",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p15",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p16",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p17",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p18",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p19",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p20",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p21",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p22",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p23",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p24",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p25",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p26",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p27",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p28",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p29",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p30",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p31",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p32",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p33",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p34",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p35",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p36",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p37",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p38",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p39",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p40",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p41",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p42",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p43",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p44",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p45",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p46",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p47",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p48",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p49",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p50",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p51",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p52",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p53",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p54",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p55",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p56",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p57",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p58",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p59",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p60",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p61",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p62",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p63",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p64",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p65",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p66",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p67",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p68",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p69",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p70",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p71",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p72",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p73",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p74",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p75",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p76",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p77",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p78",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p79",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p80",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p81",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p82",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p83",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p84",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p85",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p86",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p87",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p88",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p89",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p90",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p91",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p92",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p93",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p94",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p95",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p96",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p97",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p98",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p99",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p100",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p101",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p102",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p103",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p104",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p105",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p106",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p107",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p108",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p109",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p110",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p111",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p112",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p113",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p114",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p115",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p116",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p117",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p118",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p119",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p120",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p121",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p122",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p123",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p124",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p125",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p126",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p127",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p128",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p129",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p130",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p131",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p132",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p133",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p134",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p135",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p136",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p137",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p138",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p139",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p140",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p141",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p142",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p143",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p144",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p145",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p146",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p147",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p148",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p149",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p150",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p151",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p152",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p153",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p154",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p155",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p156",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p157",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p158",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p159",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p160",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p161",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p162",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p163",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p164",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p165",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p166",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p167",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p168",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p169",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p170",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p171",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p172",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p173",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p174",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p175",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p176",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p177",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p178",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p179",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p180",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p181",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p182",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p183",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p184",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p185",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p186",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p187",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p188",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p189",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p190",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p191",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p192",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p193",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p194",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p195",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p196",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p197",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p198",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p199",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "p200",
+        "reply": "",
+        "tools": 0
+      }
+    ],
+    "omittedBefore": true,
+    "title": "p0"
+  }
+}

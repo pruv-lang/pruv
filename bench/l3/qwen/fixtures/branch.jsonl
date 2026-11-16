@@ -1,0 +1,4 @@
+{"type":"user","message":{"parts":[{"text":"root"}]},"uuid":"u"}
+{"type":"assistant","message":{"parts":[{"text":"old"}]},"uuid":"old","parentUuid":"u"}
+{"type":"assistant","message":{"parts":[{"text":"new"}]},"uuid":"new","parentUuid":"u"}
+{"type":"assistant","message":{"parts":[{"text":"uuidless"}]}}

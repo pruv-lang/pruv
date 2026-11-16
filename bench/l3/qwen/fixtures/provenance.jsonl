@@ -1,0 +1,5 @@
+{"type":"user","message":{"parts":[{"text":"no"}]},"provenance":null}
+{"type":"user","message":{"parts":[{"text":"no"}]},"provenance":"tool"}
+{"type":"user","message":{"parts":[{"text":"yes"}]},"provenance":"real_user"}
+{"type":"user","message":{"parts":[{"text":"old"}]}}
+{"type":"assistant","message":{"parts":[{"text":"reply"}]}}

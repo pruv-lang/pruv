@@ -1,0 +1,23 @@
+{
+  "head": {
+    "human": true,
+    "firstPrompt": "yes"
+  },
+  "tail": {},
+  "record": {
+    "turns": [
+      {
+        "prompt": "yes",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "old",
+        "reply": "reply",
+        "tools": 0
+      }
+    ],
+    "omittedBefore": false,
+    "title": "yes"
+  }
+}

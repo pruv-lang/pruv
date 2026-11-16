@@ -1,0 +1,22 @@
+{
+  "head": {
+    "human": true,
+    "firstPrompt": "p"
+  },
+  "tail": {
+    "lastAt": "2026-01-01T00:00:00.000Z"
+  },
+  "record": {
+    "turns": [
+      {
+        "prompt": "p",
+        "reply": "one",
+        "tools": 0,
+        "createdAt": "2026-11-14T01:02:03.000Z",
+        "completedAt": "2026-01-01T00:00:00.000Z"
+      }
+    ],
+    "omittedBefore": false,
+    "title": "p"
+  }
+}

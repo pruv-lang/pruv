@@ -1,0 +1,4 @@
+{"type":"user","message":{"parts":[{"text":"p"}]},"timestamp":"2026-11-14T01:02:03.000Z"}
+{"type":"assistant","message":{"parts":[{"text":"one"}]},"timestamp":"bad"}
+{"type":"assistant","message":{"parts":[{"text":""}]},"timestamp":"2026-01-01T00:00:00.000Z"}
+{"type":"system","timestamp":"2026-02-30T00:00:00.000Z"}

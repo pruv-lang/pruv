@@ -1,0 +1,95 @@
+// Qwen currentChain. Byte-position marks avoid retaining parsed JSON documents.
+// Repeated scans are deliberately simple; performance measurement is deferred to Q.
+pub struct Found { uuid: str, parent: str, found: bool, bad: bool }
+pub fn scan(data: [u8], cut: bool, key: str, leaf: bool, inout marks: [u8]) -> Found ! alloc
+  requires len(data) <= 8388608 && len(marks) == len(data)
+  ensures len(marks) == len(old(marks))
+{
+  let mut uuid: str = "";
+  let mut parent: str = "";
+  let mut found: bool = false;
+  let mut role_seen: bool = false;
+  let mut off: i64 = crate::framing::skip_first(data, cut);
+  while off < len(data)
+    invariant 0 <= off && off <= len(data) && len(data) <= 8388608 && len(marks) == len(data)
+    decreases len(data) - off
+  {
+    let step: crate::framing::Frame = crate::framing::window_next(data, off);
+    match step {
+      crate::framing::Frame::Entry(s, e, n) => {
+        if s < 0 || s >= len(data) || e < s || e > len(data) || n <= off || n > len(data) { return Found { uuid: copy(uuid), parent: copy(parent), found: false, bad: true }; }
+        let line: crate::entry::Line = crate::entry::parse_line(data, s, e);
+        match line {
+          crate::entry::Line::Object(d) => {
+            let f: crate::entry::Field = crate::entry::string_field(d, 0, "uuid");
+            match f {
+              crate::entry::Field::Value(u) => {
+                let role: bool = crate::entry::field_is(d, 0, "type", "user") == 1 || crate::entry::field_is(d, 0, "type", "assistant") == 1 || crate::entry::field_is(d, 0, "type", "tool_result") == 1;
+                if len(u) > 0 && ((leaf && (role || !role_seen)) || (!leaf && crate::text::same(u, key))) {
+                  if !leaf { marks[s] = 1; }
+                  found = true;
+                  uuid = copy(u);
+                  parent = "";
+                  let p: crate::entry::Field = crate::entry::string_field(d, 0, "parentUuid");
+                  match p {
+                    crate::entry::Field::Value(v) => { parent = copy(v); }
+                    crate::entry::Field::Missing => { parent = ""; }
+                    crate::entry::Field::Defect(k) => { return Found { uuid: copy(uuid), parent: copy(parent), found: false, bad: true }; }
+                  }
+                }
+                if len(u) > 0 && role { role_seen = true; }
+              }
+              crate::entry::Field::Missing => { found = found; }
+              crate::entry::Field::Defect(k) => { return Found { uuid: copy(uuid), parent: copy(parent), found: false, bad: true }; }
+            }
+          }
+          crate::entry::Line::Skip => { found = found; }
+          crate::entry::Line::Defect(k) => { return Found { uuid: copy(uuid), parent: copy(parent), found: false, bad: true }; }
+        }
+        off = n;
+      }
+      crate::framing::Frame::Dropped(s, e, n) => { if n <= off || n > len(data) { return Found { uuid: copy(uuid), parent: copy(parent), found: false, bad: true }; } off = n; }
+      crate::framing::Frame::Done => { off = len(data); }
+    }
+  }
+  return Found { uuid: copy(uuid), parent: copy(parent), found: found, bad: false };
+}
+
+pub struct Chain { marks: [u8], active: bool, cut: bool, bad: bool }
+pub fn select(data: [u8], cut: bool) -> Chain ! alloc
+  requires len(data) <= 8388608
+  ensures len(result.marks) == len(data)
+{
+  let mut marks: [u8] = alloc(len(data), 0);
+  let leaf: Found = scan(data, cut, "", true, inout marks);
+  let mut key: str = copy(leaf.uuid);
+  let mut parent: str = copy(leaf.parent);
+  let mut lost: bool = false;
+  let mut count: i64 = 0;
+  let mut done: bool = !leaf.found;
+  while !done && count < len(data)
+    invariant len(marks) == len(data) && len(data) <= 8388608 && 0 <= count && count <= len(data)
+    decreases len(data) - count
+  {
+    let before: [u8] = copy(marks);
+    let f: Found = scan(data, cut, key, false, inout marks);
+    if f.bad { return Chain { marks: copy(marks), active: leaf.found, cut: lost, bad: true }; }
+    // The initial parent belongs to the leaf entry itself, not the last duplicate UUID.
+    if count > 0 { parent = copy(f.parent); }
+    if !f.found { lost = true; done = true; }
+    let mut changed: bool = false;
+    let mut j: i64 = 0;
+    while j < len(data)
+      invariant 0 <= j && j <= len(data) && len(marks) == len(data) && len(before) == len(data)
+      decreases len(data) - j
+    {
+      if marks[j] != before[j] { changed = true; }
+      j = j + 1;
+    }
+    if !changed || len(parent) == 0 { done = true; }
+    key = copy(parent);
+    count = count + 1;
+  }
+  return Chain { marks: copy(marks), active: leaf.found, cut: lost, bad: leaf.bad };
+}
+

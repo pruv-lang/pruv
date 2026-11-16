@@ -1,0 +1,19 @@
+{
+  "head": {
+    "human": true,
+    "cwd": "",
+    "firstPrompt": "  hello\nworld  "
+  },
+  "tail": {},
+  "record": {
+    "turns": [
+      {
+        "prompt": "  hello\nworld  ",
+        "reply": "",
+        "tools": 0
+      }
+    ],
+    "omittedBefore": false,
+    "title": "hello world"
+  }
+}

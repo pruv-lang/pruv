@@ -1,0 +1,20 @@
+{
+  "head": {
+    "human": true,
+    "firstPrompt": "Fallback"
+  },
+  "tail": {
+    "title": "Last title"
+  },
+  "record": {
+    "turns": [
+      {
+        "prompt": "Fallback",
+        "reply": "ok",
+        "tools": 0
+      }
+    ],
+    "omittedBefore": false,
+    "title": "Last title"
+  }
+}

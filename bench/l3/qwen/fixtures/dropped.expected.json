@@ -1,0 +1,24 @@
+{
+  "head": {
+    "human": true,
+    "firstPrompt": "before"
+  },
+  "tail": {},
+  "record": {
+    "turns": [
+      {
+        "prompt": "before",
+        "reply": "",
+        "tools": 0
+      },
+      {
+        "prompt": "after",
+        "reply": "ok",
+        "tools": 0,
+        "clipped": true
+      }
+    ],
+    "omittedBefore": false,
+    "title": "before"
+  }
+}

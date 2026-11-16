@@ -1,0 +1,18 @@
+{
+  "head": {
+    "human": true,
+    "firstPrompt": "cycle"
+  },
+  "tail": {},
+  "record": {
+    "turns": [
+      {
+        "prompt": "cycle",
+        "reply": "reply",
+        "tools": 0
+      }
+    ],
+    "omittedBefore": false,
+    "title": "cycle"
+  }
+}

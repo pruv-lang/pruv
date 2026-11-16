@@ -1,0 +1,12 @@
+{
+  "head": {
+    "human": true,
+    "firstPrompt": "uuidless"
+  },
+  "tail": {},
+  "record": {
+    "turns": [],
+    "omittedBefore": true,
+    "title": "uuidless"
+  }
+}

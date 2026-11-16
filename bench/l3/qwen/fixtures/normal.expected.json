@@ -1,0 +1,24 @@
+{
+  "head": {
+    "human": true,
+    "cwd": "/project",
+    "firstPrompt": "Hello"
+  },
+  "tail": {
+    "lastAt": "2026-11-14T01:02:03.000Z"
+  },
+  "record": {
+    "turns": [
+      {
+        "prompt": "Hello",
+        "reply": "World",
+        "tools": 0,
+        "createdAt": "2026-11-14T01:02:03.000Z",
+        "completedAt": "2026-11-14T01:02:03.000Z"
+      }
+    ],
+    "omittedBefore": false,
+    "title": "Hello",
+    "model": "qwen"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "head": {
+    "human": true,
+    "firstPrompt": "Hi\n\nThere"
+  },
+  "tail": {},
+  "record": {
+    "turns": [
+      {
+        "prompt": "Hi\n\nThere",
+        "reply": "A\n\nB",
+        "tools": 1
+      }
+    ],
+    "omittedBefore": false,
+    "title": "Hi There",
+    "model": "qwen"
+  }
+}

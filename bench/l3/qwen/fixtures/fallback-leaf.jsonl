@@ -1,0 +1,2 @@
+{"type":"user","message":{"parts":[{"text":"uuidless"}]}}
+{"type":"system","uuid":"s","parentUuid":"gone"}

@@ -1,0 +1,5 @@
+{bad}
+[]
+{"type":"user","message":{"parts":[{"text":"ok"}]}}
+{"type":"assistant","message":{"parts":[{"text":"yes"}]}}
+{"type": "assistant", "message": {"parts": [{"text": "unterminated"}]}}

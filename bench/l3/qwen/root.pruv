@@ -1,0 +1,55 @@
+// Qwen import; adapted from the L3-1 verified modules. See docs/QWEN_IMPORT_SPEC.md.
+mod json;
+mod lex;
+mod parse;
+mod lines;
+mod jstr;
+mod access;
+mod boundary;
+mod framing;
+mod text;
+mod entry;
+mod time;
+mod turns;
+mod import;
+
+pub fn head_packet(data: [u8], cut_after: i64) -> [i64] ! alloc
+{
+  let r: crate::boundary::ImportResult = crate::import::read_head(data, cut_after != 0);
+  return crate::boundary::pack_result(r);
+}
+
+pub fn tail_packet(data: [u8], cut_before: i64) -> [i64] ! alloc
+{
+  let r: crate::boundary::ImportResult = crate::import::tail_info(data, cut_before != 0);
+  return crate::boundary::pack_result(r);
+}
+
+pub fn window_packet(data: [u8], cut_before: i64) -> [i64] ! alloc
+{
+  let r: crate::boundary::ImportResult = crate::import::read_window(data, cut_before != 0);
+  return crate::boundary::pack_result(r);
+}
+
+mod chain;
+mod names;
+pub fn valid_thread(data: [u8]) -> i64 ! alloc {
+ let s: str = crate::jstr::adapter_probe(data);
+ if len(s) > 100000000000 { return 0; }
+ if crate::names::valid_thread(s) { return 1; }
+ return 0;
+}
+pub fn project_name(data: [u8]) -> [u8] ! alloc { return crate::names::project_name(data); }
+
+pub fn title_bytes(data: [u8]) -> [u8] ! alloc {
+  let s: str = crate::jstr::adapter_probe(data);
+  if len(s) > 100000000000 { return alloc(0, 0); }
+  let t: str = crate::text::one_line(s, 120);
+  let mut out: [u8] = alloc(len(t), 0);
+  let mut i: i64 = 0;
+  while i < len(t)
+    invariant 0 <= i && i <= len(t) && len(out) == len(t)
+    decreases len(t) - i
+  { out[i] = t[i]; i = i + 1; }
+  return out;
+}
