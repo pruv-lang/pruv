@@ -1,0 +1,1877 @@
+[
+ {
+  "name": "rethrow-import-all-codes",
+  "op": "list_external",
+  "id": "R01",
+  "subs": [
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "EngineImportError",
+       "ref": "e1",
+       "code": "not-found",
+       "message": "m"
+      }
+     }
+    },
+    "id": "R01/not-found",
+    "expect": {
+     "terminal": "throw_existing",
+     "value": {
+      "ref": "e1"
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "EngineImportError",
+       "ref": "e1",
+       "code": "codex-unsupported",
+       "message": "m"
+      }
+     }
+    },
+    "id": "R01/codex-unsupported",
+    "expect": {
+     "terminal": "throw_existing",
+     "value": {
+      "ref": "e1"
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "EngineImportError",
+       "ref": "e1",
+       "code": "grok-exists",
+       "message": "m"
+      }
+     }
+    },
+    "id": "R01/grok-exists",
+    "expect": {
+     "terminal": "throw_existing",
+     "value": {
+      "ref": "e1"
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "EngineImportError",
+       "ref": "e1",
+       "code": "grok-load-failed",
+       "message": "m"
+      }
+     }
+    },
+    "id": "R01/grok-load-failed",
+    "expect": {
+     "terminal": "throw_existing",
+     "value": {
+      "ref": "e1"
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "EngineImportError",
+       "ref": "e1",
+       "code": "timeout",
+       "message": "m"
+      }
+     }
+    },
+    "id": "R01/timeout",
+    "expect": {
+     "terminal": "throw_existing",
+     "value": {
+      "ref": "e1"
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "EngineImportError",
+       "ref": "e1",
+       "code": "read-failed",
+       "message": "m"
+      }
+     }
+    },
+    "id": "R01/read-failed",
+    "expect": {
+     "terminal": "throw_existing",
+     "value": {
+      "ref": "e1"
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "EngineImportError",
+       "ref": "e1",
+       "code": "engine-missing",
+       "message": "m"
+      }
+     }
+    },
+    "id": "R01/engine-missing",
+    "expect": {
+     "terminal": "throw_existing",
+     "value": {
+      "ref": "e1"
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "read_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "thread": "t",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "EngineImportError",
+       "ref": "e1",
+       "code": "not-found"
+      }
+     }
+    },
+    "id": "R01/not-found-read",
+    "expect": {
+     "terminal": "throw_existing",
+     "value": {
+      "ref": "e1"
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "read",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "thread": "t",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "read_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "thread": "t",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "EngineImportError",
+       "ref": "e1",
+       "code": "codex-unsupported"
+      }
+     }
+    },
+    "id": "R01/codex-unsupported-read",
+    "expect": {
+     "terminal": "throw_existing",
+     "value": {
+      "ref": "e1"
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "read",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "thread": "t",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "rethrow-import-renamed",
+  "op": "list_external",
+  "id": "R02",
+  "subs": [
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "EngineImportError",
+       "ref": "e1",
+       "code": "timeout",
+       "rename": "SomethingElse"
+      }
+     }
+    },
+    "id": "R02/list",
+    "expect": {
+     "terminal": "throw_existing",
+     "value": {
+      "ref": "e1"
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "read_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "thread": "t",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "EngineImportError",
+       "ref": "e1",
+       "code": "not-found",
+       "rename": ""
+      }
+     }
+    },
+    "id": "R02/read",
+    "expect": {
+     "terminal": "throw_existing",
+     "value": {
+      "ref": "e1"
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "read",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "thread": "t",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "rethrow-abort-error",
+  "op": "list_external",
+  "id": "R03",
+  "subs": [
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "Error",
+       "ref": "e1",
+       "name": "AbortError",
+       "message": "aborted"
+      }
+     }
+    },
+    "id": "R03/reject",
+    "expect": {
+     "terminal": "throw_existing",
+     "value": {
+      "ref": "e1"
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "sync_throw": {
+       "class": "Error",
+       "ref": "e1",
+       "name": "AbortError"
+      }
+     }
+    },
+    "id": "R03/sync",
+    "expect": {
+     "terminal": "throw_existing",
+     "value": {
+      "ref": "e1"
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "read_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "thread": "t",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "Error",
+       "ref": "e1",
+       "name": "AbortError"
+      }
+     }
+    },
+    "id": "R03/read",
+    "expect": {
+     "terminal": "throw_existing",
+     "value": {
+      "ref": "e1"
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "read",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "thread": "t",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "rethrow-abort-object",
+  "op": "list_external",
+  "id": "R04",
+  "subs": [
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "plain",
+       "ref": "e1",
+       "name": "AbortError"
+      }
+     }
+    },
+    "id": "R04/reject",
+    "expect": {
+     "terminal": "throw_existing",
+     "value": {
+      "ref": "e1"
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "read_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "thread": "t",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "plain",
+       "ref": "e1",
+       "name": "AbortError"
+      }
+     }
+    },
+    "id": "R04/read",
+    "expect": {
+     "terminal": "throw_existing",
+     "value": {
+      "ref": "e1"
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "read",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "thread": "t",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   }
+  ],
+  "mutant": "M11"
+ },
+ {
+  "name": "rethrow-fake-import-name",
+  "op": "list_external",
+  "id": "R05",
+  "subs": [
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "plain",
+       "ref": "e1",
+       "name": "EngineImportError",
+       "code": "not-found",
+       "message": "fake"
+      }
+     }
+    },
+    "id": "R05/plain",
+    "expect": {
+     "terminal": "throw_import",
+     "value": {
+      "code": "read-failed",
+      "message": "read-failed",
+      "cause": {
+       "ref": "e1"
+      },
+      "hasCause": true
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "Error",
+       "ref": "e1",
+       "name": "EngineImportError",
+       "message": "fake-err"
+      }
+     }
+    },
+    "id": "R05/error",
+    "expect": {
+     "terminal": "throw_import",
+     "value": {
+      "code": "read-failed",
+      "message": "read-failed: fake-err",
+      "cause": {
+       "ref": "e1"
+      },
+      "hasCause": true
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "rethrow-error-detail",
+  "op": "list_external",
+  "id": "R06",
+  "subs": [
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "Error",
+       "ref": "e1",
+       "message": "the exact detail"
+      }
+     }
+    },
+    "id": "R06/ascii",
+    "expect": {
+     "terminal": "throw_import",
+     "value": {
+      "code": "read-failed",
+      "message": "read-failed: the exact detail",
+      "cause": {
+       "ref": "e1"
+      },
+      "hasCause": true
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "Error",
+       "ref": "e1",
+       "message": {
+        "u16": [
+         100,
+         233,
+         116,
+         97,
+         105,
+         108,
+         32,
+         55296,
+         32,
+         55357,
+         56832,
+         32,
+         101,
+         110,
+         100
+        ]
+       }
+      }
+     }
+    },
+    "id": "R06/unicode",
+    "expect": {
+     "terminal": "throw_import",
+     "value": {
+      "code": "read-failed",
+      "message": {
+       "u16": [
+        114,
+        101,
+        97,
+        100,
+        45,
+        102,
+        97,
+        105,
+        108,
+        101,
+        100,
+        58,
+        32,
+        100,
+        233,
+        116,
+        97,
+        105,
+        108,
+        32,
+        55296,
+        32,
+        55357,
+        56832,
+        32,
+        101,
+        110,
+        100
+       ]
+      },
+      "cause": {
+       "ref": "e1"
+      },
+      "hasCause": true
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "TypeError",
+       "ref": "e1",
+       "message": "tt"
+      }
+     }
+    },
+    "id": "R06/type-error",
+    "expect": {
+     "terminal": "throw_import",
+     "value": {
+      "code": "read-failed",
+      "message": "read-failed: tt",
+      "cause": {
+       "ref": "e1"
+      },
+      "hasCause": true
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "read_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "thread": "t",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "Error",
+       "ref": "e1",
+       "message": "r d"
+      }
+     }
+    },
+    "id": "R06/read",
+    "expect": {
+     "terminal": "throw_import",
+     "value": {
+      "code": "read-failed",
+      "message": "read-failed: r d",
+      "cause": {
+       "ref": "e1"
+      },
+      "hasCause": true
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "read",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "thread": "t",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "rethrow-empty-error-detail",
+  "op": "list_external",
+  "id": "R07",
+  "subs": [
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "Error",
+       "ref": "e1",
+       "message": ""
+      }
+     }
+    },
+    "id": "R07/empty",
+    "expect": {
+     "terminal": "throw_import",
+     "value": {
+      "code": "read-failed",
+      "message": "read-failed",
+      "cause": {
+       "ref": "e1"
+      },
+      "hasCause": true
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "read_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "thread": "t",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "Error",
+       "ref": "e1",
+       "message": ""
+      }
+     }
+    },
+    "id": "R07/read",
+    "expect": {
+     "terminal": "throw_import",
+     "value": {
+      "code": "read-failed",
+      "message": "read-failed",
+      "cause": {
+       "ref": "e1"
+      },
+      "hasCause": true
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "read",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "thread": "t",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "rethrow-null-undefined",
+  "op": "list_external",
+  "id": "R08",
+  "subs": [
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "primitive",
+       "ref": "p_null",
+       "value": null
+      }
+     }
+    },
+    "id": "R08/null",
+    "expect": {
+     "terminal": "throw_import",
+     "value": {
+      "code": "read-failed",
+      "message": "read-failed",
+      "cause": {
+       "ref": "p_null"
+      },
+      "hasCause": true
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "primitive",
+       "ref": "p_undef",
+       "value": {
+        "undef": 1
+       }
+      }
+     }
+    },
+    "id": "R08/undefined",
+    "expect": {
+     "terminal": "throw_import",
+     "value": {
+      "code": "read-failed",
+      "message": "read-failed",
+      "cause": {
+       "ref": "p_undef"
+      },
+      "hasCause": true
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "read_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "thread": "t",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "primitive",
+       "ref": "p_null",
+       "value": null
+      }
+     }
+    },
+    "id": "R08/null-read",
+    "expect": {
+     "terminal": "throw_import",
+     "value": {
+      "code": "read-failed",
+      "message": "read-failed",
+      "cause": {
+       "ref": "p_null"
+      },
+      "hasCause": true
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "read",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "thread": "t",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "rethrow-primitive-values",
+  "op": "list_external",
+  "id": "R09",
+  "subs": [
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "primitive",
+       "ref": "p_str",
+       "value": "oops"
+      }
+     }
+    },
+    "id": "R09/string",
+    "expect": {
+     "terminal": "throw_import",
+     "value": {
+      "code": "read-failed",
+      "message": "read-failed",
+      "cause": {
+       "ref": "p_str"
+      },
+      "hasCause": true
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "primitive",
+       "ref": "p_num",
+       "value": 42
+      }
+     }
+    },
+    "id": "R09/number",
+    "expect": {
+     "terminal": "throw_import",
+     "value": {
+      "code": "read-failed",
+      "message": "read-failed",
+      "cause": {
+       "ref": "p_num"
+      },
+      "hasCause": true
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "primitive",
+       "ref": "p_bool",
+       "value": false
+      }
+     }
+    },
+    "id": "R09/boolean",
+    "expect": {
+     "terminal": "throw_import",
+     "value": {
+      "code": "read-failed",
+      "message": "read-failed",
+      "cause": {
+       "ref": "p_bool"
+      },
+      "hasCause": true
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "read_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "thread": "t",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "primitive",
+       "ref": "p_str",
+       "value": "oops"
+      }
+     }
+    },
+    "id": "R09/string-read",
+    "expect": {
+     "terminal": "throw_import",
+     "value": {
+      "code": "read-failed",
+      "message": "read-failed",
+      "cause": {
+       "ref": "p_str"
+      },
+      "hasCause": true
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "read",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "thread": "t",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "plain",
+       "ref": "e1",
+       "message": "ignored"
+      }
+     }
+    },
+    "id": "R09/object",
+    "expect": {
+     "terminal": "throw_import",
+     "value": {
+      "code": "read-failed",
+      "message": "read-failed",
+      "cause": {
+       "ref": "e1"
+      },
+      "hasCause": true
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   }
+  ],
+  "mutant": "M12"
+ },
+ {
+  "name": "rethrow-name-near-misses",
+  "op": "list_external",
+  "id": "R10",
+  "subs": [
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "Error",
+       "ref": "e1",
+       "name": "TimeoutError",
+       "message": "slow"
+      }
+     }
+    },
+    "id": "R10/timeout-error",
+    "expect": {
+     "terminal": "throw_import",
+     "value": {
+      "code": "read-failed",
+      "message": "read-failed: slow",
+      "cause": {
+       "ref": "e1"
+      },
+      "hasCause": true
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "plain",
+       "ref": "e1",
+       "name": "aborterror"
+      }
+     }
+    },
+    "id": "R10/lowercase",
+    "expect": {
+     "terminal": "throw_import",
+     "value": {
+      "code": "read-failed",
+      "message": "read-failed",
+      "cause": {
+       "ref": "e1"
+      },
+      "hasCause": true
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "plain",
+       "ref": "e1",
+       "name": "AbortError "
+      }
+     }
+    },
+    "id": "R10/padded",
+    "expect": {
+     "terminal": "throw_import",
+     "value": {
+      "code": "read-failed",
+      "message": "read-failed",
+      "cause": {
+       "ref": "e1"
+      },
+      "hasCause": true
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "Error",
+       "ref": "e1",
+       "name": "engineimporterror"
+      }
+     }
+    },
+    "id": "R10/import-lookalike-error",
+    "expect": {
+     "terminal": "throw_import",
+     "value": {
+      "code": "read-failed",
+      "message": "read-failed",
+      "cause": {
+       "ref": "e1"
+      },
+      "hasCause": true
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ }
+]

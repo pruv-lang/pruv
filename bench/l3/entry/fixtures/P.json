@@ -1,0 +1,1725 @@
+[
+ {
+  "name": "packet-empty-vs-undefined",
+  "op": "session_threads",
+  "id": "P01",
+  "subs": [
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "claude",
+       "thread": ""
+      }
+     }
+    },
+    "id": "P01/empty",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "claude",
+       ""
+      ]
+     ],
+     "trace": []
+    }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "claude",
+       "thread": {
+        "undef": 1
+       }
+      }
+     }
+    },
+    "id": "P01/undefined",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "claude",
+       {
+        "undef": 1
+       }
+      ]
+     ],
+     "trace": []
+    }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "",
+       "thread": {
+        "undef": 1
+       }
+      }
+     }
+    },
+    "id": "P01/empty-engine-undefined-thread",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "",
+       {
+        "undef": 1
+       }
+      ]
+     ],
+     "trace": []
+    }
+   },
+   {
+    "op": "find_source",
+    "args": {
+     "sources": [
+      {
+       "source": {
+        "undef": 1
+       }
+      },
+      {
+       "source": ""
+      }
+     ],
+     "query": ""
+    },
+    "id": "P01/find",
+    "expect": {
+     "terminal": "ok",
+     "value": 1,
+     "trace": []
+    }
+   }
+  ]
+ },
+ {
+  "name": "packet-null-vs-undefined",
+  "op": "session_threads",
+  "id": "P02",
+  "subs": [
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "claude",
+       "thread": null
+      }
+     }
+    },
+    "id": "P02/null",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "claude",
+       null
+      ]
+     ],
+     "trace": []
+    }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "claude",
+       "thread": {
+        "undef": 1
+       }
+      }
+     }
+    },
+    "id": "P02/undefined",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "claude",
+       {
+        "undef": 1
+       }
+      ]
+     ],
+     "trace": []
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "primitive",
+       "ref": "p_null",
+       "value": null
+      }
+     }
+    },
+    "id": "P02/cause-null",
+    "expect": {
+     "terminal": "throw_import",
+     "value": {
+      "code": "read-failed",
+      "message": "read-failed",
+      "cause": {
+       "ref": "p_null"
+      },
+      "hasCause": true
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "primitive",
+       "ref": "p_undef",
+       "value": {
+        "undef": 1
+       }
+      }
+     }
+    },
+    "id": "P02/cause-undefined",
+    "expect": {
+     "terminal": "throw_import",
+     "value": {
+      "code": "read-failed",
+      "message": "read-failed",
+      "cause": {
+       "ref": "p_undef"
+      },
+      "hasCause": true
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "packet-surrogate-roundtrip",
+  "op": "session_threads",
+  "id": "P03",
+  "subs": [
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "claude",
+       "thread": {
+        "u16": [
+         0,
+         65,
+         55296,
+         56319,
+         56320,
+         57343,
+         65535,
+         65279,
+         160,
+         55357,
+         56832,
+         56832,
+         55357
+        ]
+       }
+      }
+     }
+    },
+    "id": "P03/units",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "claude",
+       {
+        "u16": [
+         0,
+         65,
+         55296,
+         56319,
+         56320,
+         57343,
+         65535,
+         65279,
+         160,
+         55357,
+         56832,
+         56832,
+         55357
+        ]
+       }
+      ]
+     ],
+     "trace": []
+    }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "claude",
+       "thread": "a😀b",
+       "forks": {
+        "arr": [
+         {
+          "u16": [
+           56832,
+           55357
+          ]
+         }
+        ]
+       }
+      }
+     }
+    },
+    "id": "P03/pairs-and-lone",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "claude",
+       "a😀b"
+      ],
+      [
+       "claude",
+       {
+        "u16": [
+         56832,
+         55357
+        ]
+       }
+      ]
+     ],
+     "trace": []
+    }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "engineThreads": {
+       "obj": [
+        [
+         "a:b",
+         {
+          "threadId": {
+           "u16": [
+            56320
+           ]
+          }
+         }
+        ]
+       ]
+      }
+     }
+    },
+    "id": "P03/slot-thread-id",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "a",
+       {
+        "u16": [
+         56320
+        ]
+       }
+      ]
+     ],
+     "trace": []
+    }
+   }
+  ]
+ },
+ {
+  "name": "packet-object-extra-fields",
+  "op": "list_external",
+  "id": "P04",
+  "subs": [
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude",
+      "extra_src": 7
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "rows": [
+       {
+        "ref": "r1",
+        "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "id": "i1",
+        "n": {
+         "num": "3ff8000000000000"
+        },
+        "o": {
+         "ref": "objx"
+        },
+        "a": {
+         "arr": [
+          "p",
+          null,
+          {
+           "undef": 1
+          }
+         ]
+        },
+        "m": {
+         "obj": [
+          [
+           "k",
+           1
+          ],
+          [
+           "j",
+           2
+          ]
+         ]
+        },
+        "z": {
+         "undef": 1
+        }
+       }
+      ]
+     }
+    },
+    "id": "P04/copy",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "copy_title",
+       {
+        "ref": "r1"
+       },
+       "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ]
+     ],
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "rows": [
+       {
+        "ref": "r1",
+        "title": "x",
+        "obj": {
+         "ref": "objy"
+        }
+       }
+      ]
+     }
+    },
+    "id": "P04/keep",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "keep",
+       {
+        "ref": "r1"
+       }
+      ]
+     ],
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "packet-number-bits",
+  "op": "session_threads",
+  "id": "P05",
+  "subs": [
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "claude",
+       "thread": {
+        "num": "8000000000000000"
+       }
+      }
+     }
+    },
+    "id": "P05/negative-zero",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "claude",
+       {
+        "num": "8000000000000000"
+       }
+      ]
+     ],
+     "trace": []
+    }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "claude",
+       "thread": 0
+      }
+     }
+    },
+    "id": "P05/zero",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "claude",
+       0
+      ]
+     ],
+     "trace": []
+    }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "claude",
+       "thread": {
+        "num": "3ff8000000000000"
+       },
+       "forks": {
+        "arr": [
+         {
+          "num": "7fefffffffffffff"
+         },
+         {
+          "num": "0000000000000001"
+         },
+         123456789012
+        ]
+       }
+      }
+     }
+    },
+    "id": "P05/finite",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "claude",
+       {
+        "num": "3ff8000000000000"
+       }
+      ],
+      [
+       "claude",
+       {
+        "num": "7fefffffffffffff"
+       }
+      ],
+      [
+       "claude",
+       {
+        "num": "0000000000000001"
+       }
+      ],
+      [
+       "claude",
+       123456789012
+      ]
+     ],
+     "trace": []
+    }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "claude",
+       "thread": "t",
+       "forks": {
+        "arr": [
+         {
+          "num": "8000000000000000"
+         },
+         0,
+         -1,
+         9007199254740991,
+         -9007199254740991
+        ]
+       }
+      }
+     }
+    },
+    "id": "P05/forks",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "claude",
+       "t"
+      ],
+      [
+       "claude",
+       {
+        "num": "8000000000000000"
+       }
+      ],
+      [
+       "claude",
+       0
+      ],
+      [
+       "claude",
+       -1
+      ],
+      [
+       "claude",
+       9007199254740991
+      ],
+      [
+       "claude",
+       -9007199254740991
+      ]
+     ],
+     "trace": []
+    }
+   }
+  ]
+ },
+ {
+  "name": "packet-wrong-version-length",
+  "op": "session_threads",
+  "id": "P06",
+  "subs": [
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "claude",
+       "thread": "t"
+      }
+     }
+    },
+    "probe": {
+     "at": 0,
+     "corrupt": "version"
+    },
+    "id": "P06/version-begin",
+    "expect": {
+     "terminal": "boundary_error",
+     "value": {
+      "code": "InvalidPacket"
+     },
+     "trace": [],
+     "driver": null
+    }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "claude",
+       "thread": "t"
+      }
+     }
+    },
+    "probe": {
+     "at": 0,
+     "corrupt": "length"
+    },
+    "id": "P06/length-begin",
+    "expect": {
+     "terminal": "boundary_error",
+     "value": {
+      "code": "InvalidPacket"
+     },
+     "trace": [],
+     "driver": null
+    }
+   },
+   {
+    "op": "import_sources",
+    "args": {
+     "env": {}
+    },
+    "probe": {
+     "at": 1,
+     "corrupt": "version"
+    },
+    "script": {
+     "accounts": {
+      "claude": {
+       "ok": [
+        {
+         "id": "acc_0123456789abcdef",
+         "name": "one"
+        }
+       ]
+      },
+      "codex": {
+       "ok": [
+        {
+         "id": "acc_fedcba9876543210",
+         "name": "two"
+        }
+       ]
+      }
+     }
+    },
+    "id": "P06/version-step",
+    "expect": {
+     "terminal": "boundary_error",
+     "value": {
+      "code": "InvalidPacket"
+     },
+     "trace": [
+      [
+       "homedir"
+      ]
+     ],
+     "driver": null
+    }
+   },
+   {
+    "op": "import_sources",
+    "args": {
+     "env": {}
+    },
+    "probe": {
+     "at": 2,
+     "corrupt": "length"
+    },
+    "script": {
+     "accounts": {
+      "claude": {
+       "ok": [
+        {
+         "id": "acc_0123456789abcdef",
+         "name": "one"
+        }
+       ]
+      },
+      "codex": {
+       "ok": [
+        {
+         "id": "acc_fedcba9876543210",
+         "name": "two"
+        }
+       ]
+      }
+     }
+    },
+    "id": "P06/length-step",
+    "expect": {
+     "terminal": "boundary_error",
+     "value": {
+      "code": "InvalidPacket"
+     },
+     "trace": [
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "claude"
+      ]
+     ],
+     "driver": null
+    }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "claude",
+       "thread": "t"
+      }
+     }
+    },
+    "probe": {
+     "at": 0,
+     "corrupt": "tag"
+    },
+    "id": "P06/tag-begin",
+    "expect": {
+     "terminal": "boundary_error",
+     "value": {
+      "code": "InvalidPacket"
+     },
+     "trace": [],
+     "driver": null
+    }
+   },
+   {
+    "op": "import_sources",
+    "args": {
+     "env": {}
+    },
+    "probe": {
+     "at": 1,
+     "corrupt": "tag"
+    },
+    "script": {
+     "accounts": {
+      "claude": {
+       "ok": [
+        {
+         "id": "acc_0123456789abcdef",
+         "name": "one"
+        }
+       ]
+      },
+      "codex": {
+       "ok": [
+        {
+         "id": "acc_fedcba9876543210",
+         "name": "two"
+        }
+       ]
+      }
+     }
+    },
+    "id": "P06/tag-step",
+    "expect": {
+     "terminal": "boundary_error",
+     "value": {
+      "code": "InvalidPacket"
+     },
+     "trace": [
+      [
+       "homedir"
+      ]
+     ],
+     "driver": null
+    }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "claude",
+       "thread": "t"
+      }
+     }
+    },
+    "probe": {
+     "at": 0,
+     "corrupt": "unit"
+    },
+    "id": "P06/unit-begin",
+    "expect": {
+     "terminal": "boundary_error",
+     "value": {
+      "code": "InvalidPacket"
+     },
+     "trace": [],
+     "driver": null
+    }
+   },
+   {
+    "op": "import_sources",
+    "args": {
+     "env": {}
+    },
+    "probe": {
+     "at": 3,
+     "corrupt": "unit"
+    },
+    "script": {
+     "accounts": {
+      "claude": {
+       "ok": [
+        {
+         "id": "acc_0123456789abcdef",
+         "name": "one"
+        }
+       ]
+      },
+      "codex": {
+       "ok": [
+        {
+         "id": "acc_fedcba9876543210",
+         "name": "two"
+        }
+       ]
+      }
+     }
+    },
+    "id": "P06/unit-step",
+    "expect": {
+     "terminal": "boundary_error",
+     "value": {
+      "code": "InvalidPacket"
+     },
+     "trace": [
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "claude"
+      ]
+     ],
+     "driver": null
+    }
+   }
+  ]
+ },
+ {
+  "name": "packet-wrong-operation-sequence",
+  "op": "session_threads",
+  "id": "P07",
+  "subs": [
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "claude",
+       "thread": "t"
+      }
+     }
+    },
+    "probe": {
+     "at": 0,
+     "corrupt": "op_id"
+    },
+    "id": "P07/op-id-begin",
+    "expect": {
+     "terminal": "boundary_error",
+     "value": {
+      "code": "InvalidPacket"
+     },
+     "trace": [],
+     "driver": null
+    }
+   },
+   {
+    "op": "import_sources",
+    "args": {
+     "env": {}
+    },
+    "probe": {
+     "at": 1,
+     "corrupt": "op_id"
+    },
+    "script": {
+     "accounts": {
+      "claude": {
+       "ok": [
+        {
+         "id": "acc_0123456789abcdef",
+         "name": "one"
+        }
+       ]
+      },
+      "codex": {
+       "ok": [
+        {
+         "id": "acc_fedcba9876543210",
+         "name": "two"
+        }
+       ]
+      }
+     }
+    },
+    "id": "P07/op-id-step",
+    "expect": {
+     "terminal": "boundary_error",
+     "value": {
+      "code": "InvalidPacket"
+     },
+     "trace": [
+      [
+       "homedir"
+      ]
+     ],
+     "driver": null
+    }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "claude",
+       "thread": "t"
+      }
+     }
+    },
+    "probe": {
+     "at": 0,
+     "corrupt": "seq"
+    },
+    "id": "P07/seq-begin",
+    "expect": {
+     "terminal": "boundary_error",
+     "value": {
+      "code": "InvalidPacket"
+     },
+     "trace": [],
+     "driver": null
+    }
+   },
+   {
+    "op": "import_sources",
+    "args": {
+     "env": {}
+    },
+    "probe": {
+     "at": 2,
+     "corrupt": "seq"
+    },
+    "script": {
+     "accounts": {
+      "claude": {
+       "ok": [
+        {
+         "id": "acc_0123456789abcdef",
+         "name": "one"
+        }
+       ]
+      },
+      "codex": {
+       "ok": [
+        {
+         "id": "acc_fedcba9876543210",
+         "name": "two"
+        }
+       ]
+      }
+     }
+    },
+    "id": "P07/seq-step",
+    "expect": {
+     "terminal": "boundary_error",
+     "value": {
+      "code": "InvalidPacket"
+     },
+     "trace": [
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "claude"
+      ]
+     ],
+     "driver": null
+    }
+   }
+  ]
+ },
+ {
+  "name": "packet-duplicate-completion",
+  "op": "import_sources",
+  "id": "P08",
+  "subs": [
+   {
+    "op": "import_sources",
+    "args": {
+     "env": {}
+    },
+    "probe": {
+     "at": 1,
+     "corrupt": "duplicate"
+    },
+    "script": {
+     "accounts": {
+      "claude": {
+       "ok": [
+        {
+         "id": "acc_0123456789abcdef",
+         "name": "one"
+        }
+       ]
+      },
+      "codex": {
+       "ok": [
+        {
+         "id": "acc_fedcba9876543210",
+         "name": "two"
+        }
+       ]
+      }
+     }
+    },
+    "id": "P08/duplicate-1",
+    "expect": {
+     "terminal": "boundary_error",
+     "value": {
+      "code": "InvalidPacket"
+     },
+     "trace": [
+      [
+       "homedir"
+      ]
+     ],
+     "driver": "InvalidPacket"
+    }
+   },
+   {
+    "op": "import_sources",
+    "args": {
+     "env": {}
+    },
+    "probe": {
+     "at": 3,
+     "corrupt": "duplicate"
+    },
+    "script": {
+     "accounts": {
+      "claude": {
+       "ok": [
+        {
+         "id": "acc_0123456789abcdef",
+         "name": "one"
+        }
+       ]
+      },
+      "codex": {
+       "ok": [
+        {
+         "id": "acc_fedcba9876543210",
+         "name": "two"
+        }
+       ]
+      }
+     }
+    },
+    "id": "P08/duplicate-3",
+    "expect": {
+     "terminal": "boundary_error",
+     "value": {
+      "code": "InvalidPacket"
+     },
+     "trace": [
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "claude"
+      ]
+     ],
+     "driver": "InvalidPacket"
+    }
+   }
+  ]
+ },
+ {
+  "name": "packet-terminal-reentry",
+  "op": "session_threads",
+  "id": "P09",
+  "subs": [
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "claude",
+       "thread": "t"
+      }
+     }
+    },
+    "probe": {
+     "at": 0,
+     "corrupt": "reentry"
+    },
+    "id": "P09/reentry-threads",
+    "expect": {
+     "terminal": "boundary_error",
+     "value": {
+      "code": "InvalidPacket"
+     },
+     "trace": [],
+     "driver": null
+    }
+   },
+   {
+    "op": "import_sources",
+    "args": {
+     "env": {}
+    },
+    "probe": {
+     "at": 0,
+     "corrupt": "reentry"
+    },
+    "script": {
+     "accounts": {
+      "claude": {
+       "ok": [
+        {
+         "id": "acc_0123456789abcdef",
+         "name": "one"
+        }
+       ]
+      },
+      "codex": {
+       "ok": [
+        {
+         "id": "acc_fedcba9876543210",
+         "name": "two"
+        }
+       ]
+      }
+     }
+    },
+    "id": "P09/reentry-import",
+    "expect": {
+     "terminal": "boundary_error",
+     "value": {
+      "code": "InvalidPacket"
+     },
+     "trace": [
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "claude"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "codex"
+      ],
+      [
+       "realpath",
+       "/data/engine-homes/codex/acc_fedcba9876543210"
+      ],
+      [
+       "realpath",
+       "/data/engine-homes/codex"
+      ],
+      [
+       "realpath",
+       "/data/engine-homes"
+      ],
+      [
+       "realpath",
+       "/data"
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "realpath",
+       "/home/test/.codex"
+      ],
+      [
+       "realpath",
+       "/home/test"
+      ],
+      [
+       "realpath",
+       "/home"
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "realpath",
+       "/home/test/.codex"
+      ],
+      [
+       "realpath",
+       "/home/test"
+      ],
+      [
+       "realpath",
+       "/home"
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "stat",
+       "/data/engine-homes/codex/acc_fedcba9876543210"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "stat",
+       "/data/engine-homes/codex/acc_fedcba9876543210"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ]
+     ],
+     "driver": null
+    }
+   }
+  ]
+ },
+ {
+  "name": "packet-size-boundary",
+  "op": "session_threads",
+  "id": "P10",
+  "subs": [
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "claude",
+       "thread": "t"
+      }
+     }
+    },
+    "probe": {
+     "at": 0,
+     "corrupt": "oversize"
+    },
+    "id": "P10/oversize-begin",
+    "expect": {
+     "terminal": "boundary_error",
+     "value": {
+      "code": "InputTooLarge"
+     },
+     "trace": [],
+     "driver": null
+    }
+   },
+   {
+    "op": "import_sources",
+    "args": {
+     "env": {}
+    },
+    "probe": {
+     "at": 1,
+     "corrupt": "oversize"
+    },
+    "script": {
+     "accounts": {
+      "claude": {
+       "ok": [
+        {
+         "id": "acc_0123456789abcdef",
+         "name": "one"
+        }
+       ]
+      },
+      "codex": {
+       "ok": [
+        {
+         "id": "acc_fedcba9876543210",
+         "name": "two"
+        }
+       ]
+      }
+     }
+    },
+    "id": "P10/oversize-step",
+    "expect": {
+     "terminal": "boundary_error",
+     "value": {
+      "code": "InputTooLarge"
+     },
+     "trace": [
+      [
+       "homedir"
+      ]
+     ],
+     "driver": null
+    }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "claude",
+       "thread": "t"
+      }
+     }
+    },
+    "probe": {
+     "at": 0,
+     "corrupt": "exact_limit"
+    },
+    "id": "P10/exact-limit-begin",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "claude",
+       "t"
+      ]
+     ],
+     "trace": [],
+     "driver": null
+    }
+   },
+   {
+    "op": "import_sources",
+    "args": {
+     "env": {}
+    },
+    "probe": {
+     "at": 1,
+     "corrupt": "exact_limit"
+    },
+    "script": {
+     "accounts": {
+      "claude": {
+       "ok": [
+        {
+         "id": "acc_0123456789abcdef",
+         "name": "one"
+        }
+       ]
+      },
+      "codex": {
+       "ok": [
+        {
+         "id": "acc_fedcba9876543210",
+         "name": "two"
+        }
+       ]
+      }
+     }
+    },
+    "id": "P10/exact-limit-step",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      {
+       "source": "claude:home",
+       "engine": "claude",
+       "kind": "home",
+       "home": "/home/test/.claude"
+      },
+      {
+       "source": "claude:acc_0123456789abcdef",
+       "engine": "claude",
+       "kind": "account",
+       "account": "acc_0123456789abcdef",
+       "accountName": "one",
+       "home": "/data/engine-homes/claude/acc_0123456789abcdef"
+      },
+      {
+       "source": "codex:home",
+       "engine": "codex",
+       "kind": "home",
+       "home": "/home/test/.codex"
+      },
+      {
+       "source": "codex:acc_fedcba9876543210",
+       "engine": "codex",
+       "kind": "account",
+       "account": "acc_fedcba9876543210",
+       "accountName": "two",
+       "home": "/data/engine-homes/codex/acc_fedcba9876543210"
+      },
+      {
+       "source": "grok:home",
+       "engine": "grok",
+       "kind": "home",
+       "home": "/home/test/.grok"
+      },
+      {
+       "source": "opencode:home",
+       "engine": "opencode",
+       "kind": "home",
+       "home": "/home/test/.local/share/opencode"
+      },
+      {
+       "source": "qwen:home",
+       "engine": "qwen",
+       "kind": "home",
+       "home": "/home/test/.qwen"
+      }
+     ],
+     "trace": [
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "claude"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "codex"
+      ],
+      [
+       "realpath",
+       "/data/engine-homes/codex/acc_fedcba9876543210"
+      ],
+      [
+       "realpath",
+       "/data/engine-homes/codex"
+      ],
+      [
+       "realpath",
+       "/data/engine-homes"
+      ],
+      [
+       "realpath",
+       "/data"
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "realpath",
+       "/home/test/.codex"
+      ],
+      [
+       "realpath",
+       "/home/test"
+      ],
+      [
+       "realpath",
+       "/home"
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "realpath",
+       "/home/test/.codex"
+      ],
+      [
+       "realpath",
+       "/home/test"
+      ],
+      [
+       "realpath",
+       "/home"
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "stat",
+       "/data/engine-homes/codex/acc_fedcba9876543210"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "stat",
+       "/data/engine-homes/codex/acc_fedcba9876543210"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ]
+     ],
+     "driver": null
+    }
+   }
+  ]
+ }
+]

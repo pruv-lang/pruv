@@ -1,0 +1,328 @@
+[
+ {
+  "id": "F01",
+  "name": "find-empty-array",
+  "op": "find_source",
+  "args": {
+   "sources": [],
+   "query": "a"
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": {
+    "undef": 1
+   },
+   "trace": []
+  }
+ },
+ {
+  "id": "F02",
+  "name": "find-first-entry",
+  "op": "find_source",
+  "args": {
+   "sources": [
+    {
+     "source": "a"
+    },
+    {
+     "source": "b"
+    },
+    {
+     "source": "c"
+    }
+   ],
+   "query": "a"
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": 0,
+   "trace": []
+  }
+ },
+ {
+  "id": "F03",
+  "name": "find-last-entry",
+  "op": "find_source",
+  "args": {
+   "sources": [
+    {
+     "source": "a"
+    },
+    {
+     "source": "b"
+    },
+    {
+     "source": "c"
+    }
+   ],
+   "query": "c"
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": 2,
+   "trace": []
+  }
+ },
+ {
+  "id": "F04",
+  "name": "find-missing",
+  "op": "find_source",
+  "args": {
+   "sources": [
+    {
+     "source": "a"
+    },
+    {
+     "source": "b"
+    }
+   ],
+   "query": "zz"
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": {
+    "undef": 1
+   },
+   "trace": []
+  }
+ },
+ {
+  "id": "F05",
+  "name": "find-duplicate-first-wins",
+  "op": "find_source",
+  "args": {
+   "sources": [
+    {
+     "source": "x"
+    },
+    {
+     "source": "y"
+    },
+    {
+     "source": "x"
+    },
+    {
+     "source": "x"
+    }
+   ],
+   "query": "x"
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": 0,
+   "trace": []
+  },
+  "mutant": "M08"
+ },
+ {
+  "id": "F06",
+  "name": "find-case-sensitive",
+  "op": "find_source",
+  "args": {
+   "sources": [
+    {
+     "source": "claude:home"
+    },
+    {
+     "source": "Claude:Home"
+    }
+   ],
+   "query": "CLAUDE:home"
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": {
+    "undef": 1
+   },
+   "trace": []
+  }
+ },
+ {
+  "name": "find-no-trim",
+  "op": "find_source",
+  "id": "F07",
+  "subs": [
+   {
+    "op": "find_source",
+    "args": {
+     "sources": [
+      {
+       "source": "claude:home"
+      }
+     ],
+     "query": " claude:home "
+    },
+    "id": "F07/query",
+    "expect": {
+     "terminal": "ok",
+     "value": {
+      "undef": 1
+     },
+     "trace": []
+    }
+   },
+   {
+    "op": "find_source",
+    "args": {
+     "sources": [
+      {
+       "source": " claude:home"
+      },
+      {
+       "source": "claude:home"
+      }
+     ],
+     "query": "claude:home"
+    },
+    "id": "F07/source",
+    "expect": {
+     "terminal": "ok",
+     "value": 1,
+     "trace": []
+    }
+   }
+  ]
+ },
+ {
+  "id": "F08",
+  "name": "find-empty-id",
+  "op": "find_source",
+  "args": {
+   "sources": [
+    {
+     "source": "a"
+    },
+    {
+     "source": ""
+    },
+    {
+     "source": "b"
+    }
+   ],
+   "query": ""
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": 1,
+   "trace": []
+  }
+ },
+ {
+  "id": "F09",
+  "name": "find-colons-verbatim",
+  "op": "find_source",
+  "args": {
+   "sources": [
+    {
+     "source": "a"
+    },
+    {
+     "source": "a:b"
+    },
+    {
+     "source": "a:b:c"
+    },
+    {
+     "source": "a:b:c:d"
+    }
+   ],
+   "query": "a:b:c"
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": 2,
+   "trace": []
+  }
+ },
+ {
+  "name": "find-surrogate-identity",
+  "op": "find_source",
+  "id": "F10",
+  "subs": [
+   {
+    "op": "find_source",
+    "args": {
+     "sources": [
+      {
+       "source": {
+        "u16": [
+         55296
+        ]
+       }
+      },
+      {
+       "source": "�"
+      }
+     ],
+     "query": {
+      "u16": [
+       55296
+      ]
+     }
+    },
+    "id": "F10/lone",
+    "expect": {
+     "terminal": "ok",
+     "value": 0,
+     "trace": []
+    }
+   },
+   {
+    "op": "find_source",
+    "args": {
+     "sources": [
+      {
+       "source": {
+        "u16": [
+         55296
+        ]
+       }
+      },
+      {
+       "source": "�"
+      }
+     ],
+     "query": "�"
+    },
+    "id": "F10/fffd",
+    "expect": {
+     "terminal": "ok",
+     "value": 1,
+     "trace": []
+    }
+   },
+   {
+    "op": "find_source",
+    "args": {
+     "sources": [
+      {
+       "source": {
+        "u16": [
+         56320
+        ]
+       }
+      },
+      {
+       "source": {
+        "u16": [
+         55296
+        ]
+       }
+      }
+     ],
+     "query": {
+      "u16": [
+       55296
+      ]
+     }
+    },
+    "id": "F10/low",
+    "expect": {
+     "terminal": "ok",
+     "value": 1,
+     "trace": []
+    }
+   }
+  ]
+ }
+]

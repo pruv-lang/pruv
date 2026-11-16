@@ -1,0 +1,87 @@
+// L3-8 entry: account ids, accountHome and op 5 account_home (reference/backend-accounts.ts).
+// Also the input check for ops 1, 5 and 6, which packet::input_check does not cover.
+
+// /^acc_[a-f0-9]{16}$/ : exactly 20 units, so a trailing line terminator is rejected by the length
+pub fn valid_account_id(w: [i64], p: i64) -> bool
+{
+  if crate::u16::rd(w, p) != 6 { return false; }
+  if crate::value::str_len(w, p) != 20 { return false; }
+  let s: i64 = crate::value::str_start(w, p);
+  if crate::u16::rd(w, s) != 97 || crate::u16::rd(w, s + 1) != 99 || crate::u16::rd(w, s + 2) != 99 || crate::u16::rd(w, s + 3) != 95 { return false; }
+  let mut i: i64 = 4;
+  while i < 20
+    invariant 4 <= i && i <= 20 && 0 <= s && s <= 67108864
+    decreases 20 - i
+  {
+    let u: i64 = crate::u16::rd(w, s + i);
+    if !((u >= 48 && u <= 57) || (u >= 97 && u <= 102)) { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+// join(dataDir, 'engine-homes', engine, id) for a valid id
+pub fn account_home(data_dir: [i64], engine: [i64], id: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  return crate::path::join4(data_dir, crate::u16::lit("engine-homes"), engine, id);
+}
+
+// tag mask of an env slot: undefined, null, string, absent
+pub fn m_env() -> i64 ensures result == 1091 { return 1091; }
+
+// Input check for ops 1, 5, 6 (kind 0, envelope already ok). Returns the pool prefix length the record references, or -1.
+pub fn io_check(w: [i64]) -> i64 ! alloc
+{
+  let op: i64 = crate::u16::rd(w, 5);
+  let mut meta: [i64] = crate::packet::new_meta(w);
+  let r0: i64 = crate::packet::sec_start(w, 1);
+  let rl: i64 = crate::packet::sec_len(w, 1);
+  if op == 1 {
+    if rl != 24 { return -1; }
+    crate::packet::vs(w, r0, crate::packet::m_str(), 0, inout meta);
+    let mut k: i64 = 1;
+    while k < 8
+      invariant 1 <= k && k <= 8 && 0 <= r0 && r0 <= 33554432
+      decreases 8 - k
+    {
+      crate::packet::vs(w, r0 + 3 * k, m_env(), 0, inout meta);
+      k = k + 1;
+    }
+  } else if op == 5 {
+    if rl != 9 { return -1; }
+    crate::packet::vs(w, r0, crate::packet::m_str(), 0, inout meta);
+    crate::packet::vs(w, r0 + 3, crate::packet::m_str(), 0, inout meta);
+    crate::packet::vs(w, r0 + 6, crate::packet::m_any(), 0, inout meta);
+  } else if op == 6 {
+    if rl != 9 { return -1; }
+    crate::packet::vs(w, r0, crate::packet::m_str(), 0, inout meta);
+    crate::packet::vs(w, r0 + 3, crate::packet::m_any(), 0, inout meta);
+    crate::packet::vs(w, r0 + 6, crate::packet::m_any(), 0, inout meta);
+  } else {
+    return -1;
+  }
+  if crate::packet::is_bad(meta) || !crate::packet::all_claimed(w, meta) { return -1; }
+  return crate::u16::clamp(crate::u16::rd(meta, 0), crate::packet::sec_len(w, 0));
+}
+
+// op 5: record dataDir {6}, engine {6}, id any. Done: [0, home] or the wire error invalidId [3, 0]. Never awaits.
+pub fn account_home_begin(input: [i64]) -> [i64] ! alloc
+{
+  let id: i64 = crate::u16::rd(input, 2);
+  let hi: i64 = io_check(input);
+  if hi < 0 { return crate::packet::boundary(5, id, 0); }
+  let r0: i64 = crate::u16::clamp(crate::packet::sec_start(input, 1), 33554432);
+  let e: [i64] = crate::u16::empty();
+  if !valid_account_id(input, r0 + 6) {
+    let mut rec: [i64] = crate::u16::zeros(2);
+    crate::u16::wr(inout rec, 0, 3);
+    crate::u16::wr(inout rec, 1, 0);
+    return crate::packet::mk_packet(3, id, 0, 5, e, rec, e, e, e, 0);
+  }
+  let home: [i64] = account_home(crate::value::str_units(input, r0), crate::value::str_units(input, r0 + 3), crate::value::str_units(input, r0 + 6));
+  let mut rec: [i64] = crate::u16::zeros(4);
+  crate::u16::wr(inout rec, 0, 0);
+  crate::packet::put_vs(inout rec, 1, 6, 0, len(home));
+  return crate::packet::mk_packet(3, id, 0, 5, home, rec, e, e, e, 0);
+}

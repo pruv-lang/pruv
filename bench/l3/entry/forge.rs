@@ -1,0 +1,122 @@
+#![allow(dead_code, unused_imports, unused_variables)]
+#[path="@SOL@"] mod sol;
+// WA forge harness: the same driver as harness.rs, but entry_step receives a TAMPERED copy of the await packet it is
+// resumed from. The host (host.rs) never forges, so this wrapper is how the R1 replay validation is exercised.
+//
+//   FORGE_TAMPER  JSON {"at": N, "ops": [...]}   tamper the prev of the N-th entry_step call (1-based) with the ops in order
+//   FORGE_STATS   1                              print one line per entry_step to stderr:  step prev_len state_len entries
+//
+// The await packet is [1, kind, op_id, seq, len, op, nsec, len_0.., sections]; section 2 is the state
+// [magic, op, code, aux, ck0..ck7, L, G, blob(L), log(G)] and a log entry is [n, rcode, aux, completion packet].
+// Ops (indices j of log entries are 0-based; words are absolute inside the named section):
+//   {"ck":[i,v]}  {"code":v}  {"aux":v}
+//   {"entry_seq":[j,v]} {"entry_op":[j,v]} {"entry_rc":[j,v]}      completion packet seq / op word, entry request code
+//   {"drop":j} {"dup":j} {"swap":[i,j]} {"push":[j,seq]}          remove / duplicate / swap / append a copy of entry j with seq
+//   {"rec":[k,v]} {"pool":[k,v]} {"tab":[k,v]}                      words of section 1 / 0 / 4 of prev
+//   {"blob_pool":[k,v]}                                            word k of the pool of the repacked input in the state
+use std::cell::Cell;
+use serde_json::Value;
+
+struct G { n: Cell<usize>, tamper: Option<Value>, stats: bool }
+
+fn sec_bounds(w: &[i64]) -> Vec<(usize, usize)> {
+    let ns = w[6] as usize;
+    let mut at = 7 + ns;
+    let mut o = Vec::new();
+    for i in 0..ns {
+        let l = w[7 + i] as usize;
+        o.push((at, at + l));
+        at += l;
+    }
+    o
+}
+
+fn rebuild(w: &[i64], secs: &[Vec<i64>]) -> Vec<i64> {
+    let ns = secs.len();
+    let mut o: Vec<i64> = vec![w[0], w[1], w[2], w[3], 0, w[5], ns as i64];
+    for s in secs { o.push(s.len() as i64); }
+    for s in secs { o.extend_from_slice(s); }
+    o[4] = (o.len() - 5) as i64;
+    o
+}
+
+fn entries(lg: &[i64]) -> Vec<Vec<i64>> {
+    let mut o = Vec::new();
+    let mut p = 0;
+    while p < lg.len() {
+        let n = lg[p] as usize;
+        o.push(lg[p..p + n].to_vec());
+        p += n;
+    }
+    o
+}
+
+fn tamper(prev: &[i64], t: &Value) -> Vec<i64> {
+    let b = sec_bounds(prev);
+    let mut secs: Vec<Vec<i64>> = b.iter().map(|&(s, e)| prev[s..e].to_vec()).collect();
+    let mut st = secs[2].clone();
+    let l = st[12] as usize;
+    let mut head: Vec<i64> = st[..12].to_vec();
+    let mut blob: Vec<i64> = st[14..14 + l].to_vec();
+    let mut ents = entries(&st[14 + l..]);
+    let num = |v: &Value, i: usize| v.get(i).and_then(|x| x.as_i64()).unwrap();
+    for op in t["ops"].as_array().unwrap() {
+        if let Some(v) = op.get("ck") { head[4 + num(v, 0) as usize] = num(v, 1); }
+        if let Some(v) = op.get("code") { head[2] = v.as_i64().unwrap(); }
+        if let Some(v) = op.get("aux") { head[3] = v.as_i64().unwrap(); }
+        if let Some(v) = op.get("entry_seq") { ents[num(v, 0) as usize][3 + 3] = num(v, 1); }
+        if let Some(v) = op.get("entry_op") { ents[num(v, 0) as usize][3 + 5] = num(v, 1); }
+        if let Some(v) = op.get("entry_rc") { ents[num(v, 0) as usize][1] = num(v, 1); }
+        if let Some(v) = op.get("drop") { ents.remove(v.as_i64().unwrap() as usize); }
+        if let Some(v) = op.get("dup") { let e = ents[v.as_i64().unwrap() as usize].clone(); ents.push(e); }
+        if let Some(v) = op.get("swap") { ents.swap(num(v, 0) as usize, num(v, 1) as usize); }
+        if let Some(v) = op.get("push") {
+            let mut e = ents[num(v, 0) as usize].clone();
+            e[3 + 3] = num(v, 1);
+            ents.push(e);
+        }
+        if let Some(v) = op.get("rec") { secs[1][num(v, 0) as usize] = num(v, 1); }
+        if let Some(v) = op.get("pool") { secs[0][num(v, 0) as usize] = num(v, 1); }
+        if let Some(v) = op.get("tab") { secs[4][num(v, 0) as usize] = num(v, 1); }
+        if let Some(v) = op.get("blob_pool") {
+            let bb = sec_bounds(&blob);
+            blob[bb[0].0 + num(v, 0) as usize] = num(v, 1);
+        }
+    }
+    let lg: Vec<i64> = ents.concat();
+    head[0 + 0] = head[0];
+    let mut o: Vec<i64> = vec![st[0], st[1], head[2], head[3]];
+    o.extend_from_slice(&head[4..12]);
+    o.push(blob.len() as i64);
+    o.push(lg.len() as i64);
+    o.extend_from_slice(&blob);
+    o.extend_from_slice(&lg);
+    secs[2] = o;
+    rebuild(prev, &secs)
+}
+
+impl entry_host::Sol for G {
+    fn begin(&self, input: &[i64]) -> Vec<i64> {
+        sol::entry_begin(input)
+    }
+    fn step(&self, prev: &[i64], completion: &[i64]) -> Vec<i64> {
+        let n = self.n.get() + 1;
+        self.n.set(n);
+        let mut p: Vec<i64> = prev.to_vec();
+        if let Some(t) = &self.tamper {
+            if t["at"].as_u64().unwrap() as usize == n { p = tamper(prev, t); }
+        }
+        if self.stats {
+            let b = sec_bounds(prev);
+            let st = &prev[b[2].0..b[2].1];
+            let l = st[12] as usize;
+            eprintln!("step {} prev_len {} state_len {} entries {}", n, prev.len(), st.len(), entries(&st[14 + l..]).len());
+        }
+        sol::entry_step(&p, completion)
+    }
+}
+fn main() {
+    let tamper = std::env::var("FORGE_TAMPER").ok().map(|s| serde_json::from_str::<Value>(&s).unwrap());
+    let stats = std::env::var("FORGE_STATS").is_ok();
+    entry_host::run(&G { n: Cell::new(0), tamper, stats });
+}

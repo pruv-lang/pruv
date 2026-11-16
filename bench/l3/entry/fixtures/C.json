@@ -1,0 +1,1952 @@
+[
+ {
+  "id": "C01",
+  "name": "canonical-existing-realpath",
+  "op": "codex_account_folder",
+  "args": {
+   "dataDir": "/data",
+   "account": {
+    "id": "acc_0123456789abcdef",
+    "home": "/data/engine-homes/codex/acc_0123456789abcdef"
+   }
+  },
+  "script": {
+   "realpath": {
+    "/data/engine-homes/codex/acc_0123456789abcdef": [
+     {
+      "ok": "/real/shared"
+     }
+    ],
+    "/amb": [
+     {
+      "ok": "/real/shared"
+     }
+    ]
+   },
+   "ambient": [
+    {
+     "ok": "/amb"
+    }
+   ]
+  },
+  "expect": {
+   "terminal": "throw_account_wire",
+   "value": {
+    "key": "wireEngine.account.folder.codexHostExecution",
+    "message": "기본 Codex 계정 폴더에서는 추가 계정으로 실행하지 않아."
+   },
+   "trace": [
+    [
+     "realpath",
+     "/data/engine-homes/codex/acc_0123456789abcdef"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "realpath",
+     "/amb"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "C02",
+  "name": "canonical-one-missing-leaf",
+  "op": "codex_account_folder",
+  "args": {
+   "dataDir": "/data",
+   "account": {
+    "id": "acc_0123456789abcdef",
+    "home": "/data/engine-homes/codex/acc_0123456789abcdef"
+   }
+  },
+  "script": {
+   "realpath": {
+    "/data/engine-homes/codex": [
+     {
+      "ok": "/real/codex"
+     }
+    ],
+    "/amb": [
+     {
+      "ok": "/real/codex/acc_0123456789abcdef"
+     }
+    ]
+   },
+   "ambient": [
+    {
+     "ok": "/amb"
+    }
+   ]
+  },
+  "expect": {
+   "terminal": "throw_account_wire",
+   "value": {
+    "key": "wireEngine.account.folder.codexHostExecution",
+    "message": "기본 Codex 계정 폴더에서는 추가 계정으로 실행하지 않아."
+   },
+   "trace": [
+    [
+     "realpath",
+     "/data/engine-homes/codex/acc_0123456789abcdef"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "realpath",
+     "/amb"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "C03",
+  "name": "canonical-multiple-missing-components",
+  "op": "codex_account_folder",
+  "args": {
+   "dataDir": "/data",
+   "account": {
+    "id": "acc_0123456789abcdef",
+    "home": "/data/engine-homes/codex/acc_0123456789abcdef"
+   }
+  },
+  "script": {
+   "realpath": {
+    "/data": [
+     {
+      "ok": "/real/data"
+     }
+    ],
+    "/amb": [
+     {
+      "ok": "/real/data/engine-homes/codex/acc_0123456789abcdef"
+     }
+    ]
+   },
+   "ambient": [
+    {
+     "ok": "/amb"
+    }
+   ]
+  },
+  "expect": {
+   "terminal": "throw_account_wire",
+   "value": {
+    "key": "wireEngine.account.folder.codexHostExecution",
+    "message": "기본 Codex 계정 폴더에서는 추가 계정으로 실행하지 않아."
+   },
+   "trace": [
+    [
+     "realpath",
+     "/data/engine-homes/codex/acc_0123456789abcdef"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes"
+    ],
+    [
+     "realpath",
+     "/data"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "realpath",
+     "/amb"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "C04",
+  "name": "canonical-enoent-skips-stat",
+  "op": "codex_account_folder",
+  "args": {
+   "dataDir": "/data",
+   "account": {
+    "id": "acc_0123456789abcdef",
+    "home": "/data/engine-homes/codex/acc_0123456789abcdef"
+   }
+  },
+  "script": {
+   "realpath": {
+    "/data": [
+     {
+      "ok": "/real/data"
+     }
+    ]
+   },
+   "ambient": [
+    {
+     "ok": "/amb"
+    }
+   ]
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": "/data/engine-homes/codex/acc_0123456789abcdef",
+   "trace": [
+    [
+     "realpath",
+     "/data/engine-homes/codex/acc_0123456789abcdef"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes"
+    ],
+    [
+     "realpath",
+     "/data"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "realpath",
+     "/amb"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0123456789abcdef"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0123456789abcdef"
+    ]
+   ]
+  },
+  "mutant": "M06"
+ },
+ {
+  "id": "C05",
+  "name": "canonical-eacces-stat-identity",
+  "op": "codex_account_folder",
+  "args": {
+   "dataDir": "/data",
+   "account": {
+    "id": "acc_0123456789abcdef",
+    "home": "/data/engine-homes/codex/acc_0123456789abcdef"
+   }
+  },
+  "script": {
+   "realpath": {
+    "/data/engine-homes/codex/acc_0123456789abcdef": [
+     {
+      "errno": "EACCES"
+     }
+    ],
+    "/amb": [
+     {
+      "errno": "EACCES"
+     }
+    ]
+   },
+   "stat": {
+    "/data/engine-homes/codex/acc_0123456789abcdef": [
+     {
+      "ok": {
+       "dev": "11",
+       "ino": "22"
+      }
+     }
+    ],
+    "/amb": [
+     {
+      "ok": {
+       "dev": "11",
+       "ino": "22"
+      }
+     }
+    ]
+   },
+   "ambient": [
+    {
+     "ok": "/amb"
+    }
+   ]
+  },
+  "expect": {
+   "terminal": "throw_account_wire",
+   "value": {
+    "key": "wireEngine.account.folder.codexHostExecution",
+    "message": "기본 Codex 계정 폴더에서는 추가 계정으로 실행하지 않아."
+   },
+   "trace": [
+    [
+     "realpath",
+     "/data/engine-homes/codex/acc_0123456789abcdef"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0123456789abcdef"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "realpath",
+     "/amb"
+    ],
+    [
+     "stat",
+     "/amb"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "C06",
+  "name": "canonical-eloop-stat-identity",
+  "op": "codex_account_folder",
+  "args": {
+   "dataDir": "/data",
+   "account": {
+    "id": "acc_0123456789abcdef",
+    "home": "/data/engine-homes/codex/acc_0123456789abcdef"
+   }
+  },
+  "script": {
+   "realpath": {
+    "/data/engine-homes/codex/acc_0123456789abcdef": [
+     {
+      "errno": "ELOOP"
+     }
+    ],
+    "/amb": [
+     {
+      "errno": "ELOOP"
+     }
+    ]
+   },
+   "stat": {
+    "/data/engine-homes/codex/acc_0123456789abcdef": [
+     {
+      "ok": {
+       "dev": "5",
+       "ino": "6"
+      }
+     }
+    ],
+    "/amb": [
+     {
+      "ok": {
+       "dev": "5",
+       "ino": "6"
+      }
+     }
+    ]
+   },
+   "ambient": [
+    {
+     "ok": "/amb"
+    }
+   ]
+  },
+  "expect": {
+   "terminal": "throw_account_wire",
+   "value": {
+    "key": "wireEngine.account.folder.codexHostExecution",
+    "message": "기본 Codex 계정 폴더에서는 추가 계정으로 실행하지 않아."
+   },
+   "trace": [
+    [
+     "realpath",
+     "/data/engine-homes/codex/acc_0123456789abcdef"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0123456789abcdef"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "realpath",
+     "/amb"
+    ],
+    [
+     "stat",
+     "/amb"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "C07",
+  "name": "canonical-stat-failure-climbs",
+  "op": "codex_account_folder",
+  "args": {
+   "dataDir": "/data",
+   "account": {
+    "id": "acc_0123456789abcdef",
+    "home": "/data/engine-homes/codex/acc_0123456789abcdef"
+   }
+  },
+  "script": {
+   "realpath": {
+    "/data/engine-homes/codex/acc_0123456789abcdef": [
+     {
+      "errno": "EACCES"
+     }
+    ],
+    "/data/engine-homes/codex": [
+     {
+      "ok": "/real/codex"
+     }
+    ],
+    "/amb": [
+     {
+      "ok": "/real/codex/acc_0123456789abcdef"
+     }
+    ]
+   },
+   "stat": {
+    "/data/engine-homes/codex/acc_0123456789abcdef": [
+     {
+      "errno": "EIO"
+     }
+    ]
+   },
+   "ambient": [
+    {
+     "ok": "/amb"
+    }
+   ]
+  },
+  "expect": {
+   "terminal": "throw_account_wire",
+   "value": {
+    "key": "wireEngine.account.folder.codexHostExecution",
+    "message": "기본 Codex 계정 폴더에서는 추가 계정으로 실행하지 않아."
+   },
+   "trace": [
+    [
+     "realpath",
+     "/data/engine-homes/codex/acc_0123456789abcdef"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0123456789abcdef"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "realpath",
+     "/amb"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ]
+   ]
+  }
+ },
+ {
+  "name": "canonical-root-exhaustion",
+  "op": "codex_account_folder",
+  "id": "C08",
+  "subs": [
+   {
+    "op": "codex_account_folder",
+    "args": {
+     "dataDir": "/data",
+     "account": {
+      "id": "acc_0123456789abcdef",
+      "home": "/data/engine-homes/codex/acc_0123456789abcdef"
+     }
+    },
+    "script": {
+     "ambient": [
+      {
+       "ok": "/data/engine-homes/codex/acc_0123456789abcdef"
+      }
+     ]
+    },
+    "id": "C08/exact",
+    "expect": {
+     "terminal": "throw_account_wire",
+     "value": {
+      "key": "wireEngine.account.folder.codexHostExecution",
+      "message": "기본 Codex 계정 폴더에서는 추가 계정으로 실행하지 않아."
+     },
+     "trace": [
+      [
+       "realpath",
+       "/data/engine-homes/codex/acc_0123456789abcdef"
+      ],
+      [
+       "realpath",
+       "/data/engine-homes/codex"
+      ],
+      [
+       "realpath",
+       "/data/engine-homes"
+      ],
+      [
+       "realpath",
+       "/data"
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "realpath",
+       "/data/engine-homes/codex/acc_0123456789abcdef"
+      ],
+      [
+       "realpath",
+       "/data/engine-homes/codex"
+      ],
+      [
+       "realpath",
+       "/data/engine-homes"
+      ],
+      [
+       "realpath",
+       "/data"
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "realpath",
+       "/home/test/.codex"
+      ],
+      [
+       "realpath",
+       "/home/test"
+      ],
+      [
+       "realpath",
+       "/home"
+      ],
+      [
+       "realpath",
+       "/"
+      ]
+     ]
+    }
+   },
+   {
+    "op": "codex_account_folder",
+    "args": {
+     "dataDir": "/data",
+     "account": {
+      "id": "acc_0123456789abcdef",
+      "home": "/data/engine-homes/codex/acc_0123456789abcdef"
+     }
+    },
+    "script": {
+     "ambient": [
+      {
+       "ok": "/data/x/../engine-homes/./codex/acc_0123456789abcdef"
+      }
+     ]
+    },
+    "id": "C08/normalized",
+    "expect": {
+     "terminal": "throw_account_wire",
+     "value": {
+      "key": "wireEngine.account.folder.codexHostExecution",
+      "message": "기본 Codex 계정 폴더에서는 추가 계정으로 실행하지 않아."
+     },
+     "trace": [
+      [
+       "realpath",
+       "/data/engine-homes/codex/acc_0123456789abcdef"
+      ],
+      [
+       "realpath",
+       "/data/engine-homes/codex"
+      ],
+      [
+       "realpath",
+       "/data/engine-homes"
+      ],
+      [
+       "realpath",
+       "/data"
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "realpath",
+       "/data/engine-homes/codex/acc_0123456789abcdef"
+      ],
+      [
+       "realpath",
+       "/data/engine-homes/codex"
+      ],
+      [
+       "realpath",
+       "/data/engine-homes"
+      ],
+      [
+       "realpath",
+       "/data"
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "realpath",
+       "/home/test/.codex"
+      ],
+      [
+       "realpath",
+       "/home/test"
+      ],
+      [
+       "realpath",
+       "/home"
+      ],
+      [
+       "realpath",
+       "/"
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "canonical-relative-cwd",
+  "op": "codex_account_folder",
+  "id": "C09",
+  "subs": [
+   {
+    "op": "codex_account_folder",
+    "args": {
+     "dataDir": "rel/data",
+     "account": {
+      "id": "acc_0123456789abcdef",
+      "home": "rel/data/engine-homes/codex/acc_0123456789abcdef"
+     }
+    },
+    "script": {
+     "ambient": [
+      {
+       "ok": "/cwdx/rel/data/engine-homes/codex/acc_0123456789abcdef"
+      }
+     ],
+     "cwd": [
+      {
+       "ok": "/cwdx"
+      }
+     ]
+    },
+    "id": "C09/relative",
+    "expect": {
+     "terminal": "throw_account_wire",
+     "value": {
+      "key": "wireEngine.account.folder.codexHostExecution",
+      "message": "기본 Codex 계정 폴더에서는 추가 계정으로 실행하지 않아."
+     },
+     "trace": [
+      [
+       "cwd"
+      ],
+      [
+       "realpath",
+       "/cwdx/rel/data/engine-homes/codex/acc_0123456789abcdef"
+      ],
+      [
+       "realpath",
+       "/cwdx/rel/data/engine-homes/codex"
+      ],
+      [
+       "realpath",
+       "/cwdx/rel/data/engine-homes"
+      ],
+      [
+       "realpath",
+       "/cwdx/rel/data"
+      ],
+      [
+       "realpath",
+       "/cwdx/rel"
+      ],
+      [
+       "realpath",
+       "/cwdx"
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "cwd"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "realpath",
+       "/cwdx/rel/data/engine-homes/codex/acc_0123456789abcdef"
+      ],
+      [
+       "realpath",
+       "/cwdx/rel/data/engine-homes/codex"
+      ],
+      [
+       "realpath",
+       "/cwdx/rel/data/engine-homes"
+      ],
+      [
+       "realpath",
+       "/cwdx/rel/data"
+      ],
+      [
+       "realpath",
+       "/cwdx/rel"
+      ],
+      [
+       "realpath",
+       "/cwdx"
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "realpath",
+       "/home/test/.codex"
+      ],
+      [
+       "realpath",
+       "/home/test"
+      ],
+      [
+       "realpath",
+       "/home"
+      ],
+      [
+       "realpath",
+       "/"
+      ]
+     ]
+    }
+   },
+   {
+    "op": "codex_account_folder",
+    "args": {
+     "dataDir": "rel/data",
+     "account": {
+      "id": "acc_0123456789abcdef",
+      "home": "rel/data/engine-homes/codex/acc_0123456789abcdef"
+     }
+    },
+    "script": {
+     "ambient": [
+      {
+       "ok": "/cwdx/rel/data/engine-homes/codex/acc_0123456789abcdef"
+      }
+     ],
+     "cwd": [
+      {
+       "ok": "/elsewhere"
+      }
+     ]
+    },
+    "id": "C09/other-cwd",
+    "expect": {
+     "terminal": "ok",
+     "value": "rel/data/engine-homes/codex/acc_0123456789abcdef",
+     "trace": [
+      [
+       "cwd"
+      ],
+      [
+       "realpath",
+       "/elsewhere/rel/data/engine-homes/codex/acc_0123456789abcdef"
+      ],
+      [
+       "realpath",
+       "/elsewhere/rel/data/engine-homes/codex"
+      ],
+      [
+       "realpath",
+       "/elsewhere/rel/data/engine-homes"
+      ],
+      [
+       "realpath",
+       "/elsewhere/rel/data"
+      ],
+      [
+       "realpath",
+       "/elsewhere/rel"
+      ],
+      [
+       "realpath",
+       "/elsewhere"
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "cwd"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "realpath",
+       "/cwdx/rel/data/engine-homes/codex/acc_0123456789abcdef"
+      ],
+      [
+       "realpath",
+       "/cwdx/rel/data/engine-homes/codex"
+      ],
+      [
+       "realpath",
+       "/cwdx/rel/data/engine-homes"
+      ],
+      [
+       "realpath",
+       "/cwdx/rel/data"
+      ],
+      [
+       "realpath",
+       "/cwdx/rel"
+      ],
+      [
+       "realpath",
+       "/cwdx"
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "realpath",
+       "/home/test/.codex"
+      ],
+      [
+       "realpath",
+       "/home/test"
+      ],
+      [
+       "realpath",
+       "/home"
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "stat",
+       "rel/data/engine-homes/codex/acc_0123456789abcdef"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "stat",
+       "rel/data/engine-homes/codex/acc_0123456789abcdef"
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "canonical-identity-suffix",
+  "op": "codex_account_folder",
+  "id": "C10",
+  "subs": [
+   {
+    "op": "codex_account_folder",
+    "args": {
+     "dataDir": "/data",
+     "account": {
+      "id": "acc_0123456789abcdef",
+      "home": "/data/engine-homes/codex/acc_0123456789abcdef"
+     }
+    },
+    "script": {
+     "realpath": {
+      "/data/engine-homes/codex": [
+       {
+        "errno": "EACCES"
+       }
+      ],
+      "/amb": [
+       {
+        "errno": "EACCES"
+       }
+      ],
+      "/amb/acc_0123456789abcdef": [
+       {
+        "errno": "ENOENT"
+       }
+      ]
+     },
+     "stat": {
+      "/data/engine-homes/codex": [
+       {
+        "ok": {
+         "dev": "3",
+         "ino": "4"
+        }
+       }
+      ],
+      "/amb": [
+       {
+        "ok": {
+         "dev": "3",
+         "ino": "4"
+        }
+       }
+      ]
+     },
+     "ambient": [
+      {
+       "ok": "/amb/acc_0123456789abcdef"
+      }
+     ]
+    },
+    "id": "C10/equal",
+    "expect": {
+     "terminal": "throw_account_wire",
+     "value": {
+      "key": "wireEngine.account.folder.codexHostExecution",
+      "message": "기본 Codex 계정 폴더에서는 추가 계정으로 실행하지 않아."
+     },
+     "trace": [
+      [
+       "realpath",
+       "/data/engine-homes/codex/acc_0123456789abcdef"
+      ],
+      [
+       "realpath",
+       "/data/engine-homes/codex"
+      ],
+      [
+       "stat",
+       "/data/engine-homes/codex"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "realpath",
+       "/amb/acc_0123456789abcdef"
+      ],
+      [
+       "realpath",
+       "/amb"
+      ],
+      [
+       "stat",
+       "/amb"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "realpath",
+       "/home/test/.codex"
+      ],
+      [
+       "realpath",
+       "/home/test"
+      ],
+      [
+       "realpath",
+       "/home"
+      ],
+      [
+       "realpath",
+       "/"
+      ]
+     ]
+    }
+   },
+   {
+    "op": "codex_account_folder",
+    "args": {
+     "dataDir": "/data",
+     "account": {
+      "id": "acc_0123456789abcdef",
+      "home": "/data/engine-homes/codex/acc_0123456789abcdef"
+     }
+    },
+    "script": {
+     "realpath": {
+      "/data/engine-homes/codex": [
+       {
+        "errno": "EACCES"
+       }
+      ],
+      "/amb": [
+       {
+        "errno": "EACCES"
+       }
+      ],
+      "/amb/B": [
+       {
+        "errno": "ENOENT"
+       }
+      ]
+     },
+     "stat": {
+      "/data/engine-homes/codex": [
+       {
+        "ok": {
+         "dev": "3",
+         "ino": "4"
+        }
+       }
+      ],
+      "/amb": [
+       {
+        "ok": {
+         "dev": "3",
+         "ino": "4"
+        }
+       }
+      ]
+     },
+     "ambient": [
+      {
+       "ok": "/amb/B"
+      }
+     ]
+    },
+    "id": "C10/other",
+    "expect": {
+     "terminal": "ok",
+     "value": "/data/engine-homes/codex/acc_0123456789abcdef",
+     "trace": [
+      [
+       "realpath",
+       "/data/engine-homes/codex/acc_0123456789abcdef"
+      ],
+      [
+       "realpath",
+       "/data/engine-homes/codex"
+      ],
+      [
+       "stat",
+       "/data/engine-homes/codex"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "realpath",
+       "/amb/B"
+      ],
+      [
+       "realpath",
+       "/amb"
+      ],
+      [
+       "stat",
+       "/amb"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "realpath",
+       "/home/test/.codex"
+      ],
+      [
+       "realpath",
+       "/home/test"
+      ],
+      [
+       "realpath",
+       "/home"
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "stat",
+       "/data/engine-homes/codex/acc_0123456789abcdef"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "stat",
+       "/data/engine-homes/codex/acc_0123456789abcdef"
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "cwd-u16-result",
+  "op": "codex_account_folder",
+  "id": "C11",
+  "subs": [
+   {
+    "op": "codex_account_folder",
+    "args": {
+     "dataDir": "rel/data",
+     "account": {
+      "id": "acc_0123456789abcdef",
+      "home": "rel/data/engine-homes/codex/acc_0123456789abcdef"
+     }
+    },
+    "script": {
+     "cwd": [
+      {
+       "ok": {
+        "u16": [
+         47,
+         119,
+         55357,
+         56832
+        ]
+       }
+      }
+     ]
+    },
+    "id": "C11/pair",
+    "expect": {
+     "terminal": "ok",
+     "value": "rel/data/engine-homes/codex/acc_0123456789abcdef",
+     "trace": [
+      [
+       "cwd"
+      ],
+      [
+       "realpath",
+       "/w😀/rel/data/engine-homes/codex/acc_0123456789abcdef"
+      ],
+      [
+       "realpath",
+       "/w😀/rel/data/engine-homes/codex"
+      ],
+      [
+       "realpath",
+       "/w😀/rel/data/engine-homes"
+      ],
+      [
+       "realpath",
+       "/w😀/rel/data"
+      ],
+      [
+       "realpath",
+       "/w😀/rel"
+      ],
+      [
+       "realpath",
+       "/w😀"
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "cwd"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "realpath",
+       "/home/test/.codex"
+      ],
+      [
+       "realpath",
+       "/home/test"
+      ],
+      [
+       "realpath",
+       "/home"
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "realpath",
+       "/home/test/.codex"
+      ],
+      [
+       "realpath",
+       "/home/test"
+      ],
+      [
+       "realpath",
+       "/home"
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "stat",
+       "rel/data/engine-homes/codex/acc_0123456789abcdef"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "stat",
+       "rel/data/engine-homes/codex/acc_0123456789abcdef"
+      ]
+     ]
+    }
+   },
+   {
+    "op": "codex_account_folder",
+    "args": {
+     "dataDir": "rel/data",
+     "account": {
+      "id": "acc_0123456789abcdef",
+      "home": "rel/data/engine-homes/codex/acc_0123456789abcdef"
+     }
+    },
+    "script": {
+     "cwd": [
+      {
+       "ok": {
+        "u16": [
+         47,
+         119,
+         55296
+        ]
+       }
+      }
+     ]
+    },
+    "id": "C11/lone",
+    "expect": {
+     "terminal": "ok",
+     "value": "rel/data/engine-homes/codex/acc_0123456789abcdef",
+     "trace": [
+      [
+       "cwd"
+      ],
+      [
+       "realpath",
+       {
+        "u16": [
+         47,
+         119,
+         55296,
+         47,
+         114,
+         101,
+         108,
+         47,
+         100,
+         97,
+         116,
+         97,
+         47,
+         101,
+         110,
+         103,
+         105,
+         110,
+         101,
+         45,
+         104,
+         111,
+         109,
+         101,
+         115,
+         47,
+         99,
+         111,
+         100,
+         101,
+         120,
+         47,
+         97,
+         99,
+         99,
+         95,
+         48,
+         49,
+         50,
+         51,
+         52,
+         53,
+         54,
+         55,
+         56,
+         57,
+         97,
+         98,
+         99,
+         100,
+         101,
+         102
+        ]
+       }
+      ],
+      [
+       "realpath",
+       {
+        "u16": [
+         47,
+         119,
+         55296,
+         47,
+         114,
+         101,
+         108,
+         47,
+         100,
+         97,
+         116,
+         97,
+         47,
+         101,
+         110,
+         103,
+         105,
+         110,
+         101,
+         45,
+         104,
+         111,
+         109,
+         101,
+         115,
+         47,
+         99,
+         111,
+         100,
+         101,
+         120
+        ]
+       }
+      ],
+      [
+       "realpath",
+       {
+        "u16": [
+         47,
+         119,
+         55296,
+         47,
+         114,
+         101,
+         108,
+         47,
+         100,
+         97,
+         116,
+         97,
+         47,
+         101,
+         110,
+         103,
+         105,
+         110,
+         101,
+         45,
+         104,
+         111,
+         109,
+         101,
+         115
+        ]
+       }
+      ],
+      [
+       "realpath",
+       {
+        "u16": [
+         47,
+         119,
+         55296,
+         47,
+         114,
+         101,
+         108,
+         47,
+         100,
+         97,
+         116,
+         97
+        ]
+       }
+      ],
+      [
+       "realpath",
+       {
+        "u16": [
+         47,
+         119,
+         55296,
+         47,
+         114,
+         101,
+         108
+        ]
+       }
+      ],
+      [
+       "realpath",
+       {
+        "u16": [
+         47,
+         119,
+         55296
+        ]
+       }
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "cwd"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "realpath",
+       "/home/test/.codex"
+      ],
+      [
+       "realpath",
+       "/home/test"
+      ],
+      [
+       "realpath",
+       "/home"
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "realpath",
+       "/home/test/.codex"
+      ],
+      [
+       "realpath",
+       "/home/test"
+      ],
+      [
+       "realpath",
+       "/home"
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "stat",
+       "rel/data/engine-homes/codex/acc_0123456789abcdef"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "stat",
+       "rel/data/engine-homes/codex/acc_0123456789abcdef"
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "realpath-u16-result",
+  "op": "codex_account_folder",
+  "id": "C12",
+  "subs": [
+   {
+    "op": "codex_account_folder",
+    "args": {
+     "dataDir": "/data",
+     "account": {
+      "id": "acc_0123456789abcdef",
+      "home": "/data/engine-homes/codex/acc_0123456789abcdef"
+     }
+    },
+    "script": {
+     "realpath": {
+      "/data/engine-homes/codex/acc_0123456789abcdef": [
+       {
+        "ok": {
+         "u16": [
+          47,
+          114,
+          55357,
+          56832
+         ]
+        }
+       }
+      ],
+      "/amb": [
+       {
+        "ok": "/r😀"
+       }
+      ]
+     },
+     "ambient": [
+      {
+       "ok": "/amb"
+      }
+     ]
+    },
+    "id": "C12/pair-equal",
+    "expect": {
+     "terminal": "throw_account_wire",
+     "value": {
+      "key": "wireEngine.account.folder.codexHostExecution",
+      "message": "기본 Codex 계정 폴더에서는 추가 계정으로 실행하지 않아."
+     },
+     "trace": [
+      [
+       "realpath",
+       "/data/engine-homes/codex/acc_0123456789abcdef"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "realpath",
+       "/amb"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "realpath",
+       "/home/test/.codex"
+      ],
+      [
+       "realpath",
+       "/home/test"
+      ],
+      [
+       "realpath",
+       "/home"
+      ],
+      [
+       "realpath",
+       "/"
+      ]
+     ]
+    }
+   },
+   {
+    "op": "codex_account_folder",
+    "args": {
+     "dataDir": "/data",
+     "account": {
+      "id": "acc_0123456789abcdef",
+      "home": "/data/engine-homes/codex/acc_0123456789abcdef"
+     }
+    },
+    "script": {
+     "realpath": {
+      "/data/engine-homes/codex/acc_0123456789abcdef": [
+       {
+        "ok": {
+         "u16": [
+          47,
+          114,
+          55296
+         ]
+        }
+       }
+      ],
+      "/amb": [
+       {
+        "ok": {
+         "u16": [
+          47,
+          114,
+          55296
+         ]
+        }
+       }
+      ]
+     },
+     "ambient": [
+      {
+       "ok": "/amb"
+      }
+     ]
+    },
+    "id": "C12/lone-equal",
+    "expect": {
+     "terminal": "throw_account_wire",
+     "value": {
+      "key": "wireEngine.account.folder.codexHostExecution",
+      "message": "기본 Codex 계정 폴더에서는 추가 계정으로 실행하지 않아."
+     },
+     "trace": [
+      [
+       "realpath",
+       "/data/engine-homes/codex/acc_0123456789abcdef"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "realpath",
+       "/amb"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "realpath",
+       "/home/test/.codex"
+      ],
+      [
+       "realpath",
+       "/home/test"
+      ],
+      [
+       "realpath",
+       "/home"
+      ],
+      [
+       "realpath",
+       "/"
+      ]
+     ]
+    }
+   },
+   {
+    "op": "codex_account_folder",
+    "args": {
+     "dataDir": "/data",
+     "account": {
+      "id": "acc_0123456789abcdef",
+      "home": "/data/engine-homes/codex/acc_0123456789abcdef"
+     }
+    },
+    "script": {
+     "realpath": {
+      "/data/engine-homes/codex/acc_0123456789abcdef": [
+       {
+        "ok": {
+         "u16": [
+          47,
+          114,
+          55296
+         ]
+        }
+       }
+      ],
+      "/amb": [
+       {
+        "ok": {
+         "u16": [
+          47,
+          114,
+          55297
+         ]
+        }
+       }
+      ]
+     },
+     "ambient": [
+      {
+       "ok": "/amb"
+      }
+     ]
+    },
+    "id": "C12/lone-differs",
+    "expect": {
+     "terminal": "ok",
+     "value": "/data/engine-homes/codex/acc_0123456789abcdef",
+     "trace": [
+      [
+       "realpath",
+       "/data/engine-homes/codex/acc_0123456789abcdef"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "realpath",
+       "/amb"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "realpath",
+       "/home/test/.codex"
+      ],
+      [
+       "realpath",
+       "/home/test"
+      ],
+      [
+       "realpath",
+       "/home"
+      ],
+      [
+       "realpath",
+       "/"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "stat",
+       "/data/engine-homes/codex/acc_0123456789abcdef"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "stat",
+       "/data/engine-homes/codex/acc_0123456789abcdef"
+      ]
+     ]
+    }
+   }
+  ]
+ }
+]

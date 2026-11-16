@@ -1,0 +1,439 @@
+// L3-8 entry: ops 7 session_threads, 8 excluded_from_bound, 9 bound_session_index.
+// Session record (30 words, slots of 3 at position p): id p, temporary p+3, engine p+6, externalThread p+9 (tag 11 object:
+// engine p+12, thread p+15, forks p+18), terminal p+21 (tag 11: cliSession p+24), engineThreads p+27 (rows of 9: key, bound, threadId).
+
+// one pair descriptor: engine slot position e (-1 = the literal "codex"), engine length cut l (-1 = whole slot), thread slot t
+fn add_pair(inout ep: [i64], inout el: [i64], inout tp: [i64], k: i64, fill: i64, e: i64, l: i64, t: i64) -> ()
+  ensures len(ep) == len(old(ep)) && len(el) == len(old(el)) && len(tp) == len(old(tp))
+{
+  if fill != 0 {
+    crate::u16::wr(inout ep, k, e);
+    crate::u16::wr(inout el, k, l);
+    crate::u16::wr(inout tp, k, t);
+  }
+}
+
+// length of the key's engine part: the units before the first ':' (a key without ':' gives the whole key)
+fn colon_at(w: [i64], p: i64) -> i64
+  ensures 0 <= result && result <= 16777216
+{
+  let n: i64 = crate::value::str_len(w, p);
+  let s: i64 = crate::value::str_start(w, p);
+  let mut i: i64 = 0;
+  // MUTANT M14: the prefix ends before the LAST colon (scan the whole key and keep the last match)
+  while i < n
+    invariant 0 <= i && i <= n && n <= 16777216 && 0 <= s && s <= 67108864
+    decreases n - i
+  {
+    if crate::u16::rd(w, s + i) == 58 { return i; }
+    i = i + 1;
+  }
+  return n;
+}
+
+// om = packet::new_meta(w): its offset table gives section starts in O(1) (sessions are many, sections are many).
+// the (engine, thread) pairs of the session at p, in order, starting at index k0; with fill != 0 they are recorded.
+// returns the index after the last pair
+fn ses_pairs(w: [i64], om: [i64], p0: i64, inout ep: [i64], inout el: [i64], inout tp: [i64], k0: i64, fill: i64) -> i64
+  ensures 0 <= result && result <= 100000000 && len(ep) == len(old(ep)) && len(el) == len(old(el)) && len(tp) == len(old(tp))
+{
+  let p: i64 = crate::u16::clamp(p0, 100000000);
+  let mut k: i64 = crate::u16::clamp(k0, 16777216);
+  let kk: i64 = k;
+  if crate::value::tag_at(w, p + 9) == 11 {
+    add_pair(inout ep, inout el, inout tp, k, fill, p + 12, 0 - 1, p + 15);
+    k = k + 1;
+    if crate::value::tag_at(w, p + 18) == 7 {
+      let sec: i64 = crate::u16::clamp(crate::u16::rd(w, p + 19), 1000000);
+      let cnt: i64 = crate::u16::clamp(crate::u16::rd(w, p + 20), 16777216);
+      let base: i64 = crate::u16::clamp(crate::packet::sec_start_m(w, om, sec), 33554432);
+      let k1: i64 = k;
+      let mut i: i64 = 0;
+      while i < cnt
+        invariant 0 <= i && i <= cnt && cnt <= 16777216 && 0 <= base && base <= 33554432 && k == k1 + i && k1 <= 16777217 && 0 <= p && p <= 100000000 && len(ep) == len(old(ep)) && len(el) == len(old(el)) && len(tp) == len(old(tp))
+        decreases cnt - i
+      {
+        add_pair(inout ep, inout el, inout tp, k, fill, p + 12, 0 - 1, base + 3 * i);
+        k = k + 1;
+        i = i + 1;
+      }
+    }
+  }
+  if crate::value::tag_at(w, p + 21) == 11 && crate::value::truthy(w, p + 24) {
+    // MUTANT M13: the engine fallback uses || (falsy engines also give codex) instead of ?? (undefined/null/absent only)
+    if crate::value::nullish(w, p + 6) {
+      add_pair(inout ep, inout el, inout tp, k, fill, 0 - 1, 0 - 1, p + 24);
+    } else {
+      add_pair(inout ep, inout el, inout tp, k, fill, p + 6, 0 - 1, p + 24);
+    }
+    k = k + 1;
+  }
+  if crate::value::tag_at(w, p + 27) == 8 {
+    let sec: i64 = crate::u16::clamp(crate::u16::rd(w, p + 28), 1000000);
+    let cnt: i64 = crate::u16::clamp(crate::u16::rd(w, p + 29), 16777216);
+    let base: i64 = crate::u16::clamp(crate::packet::sec_start_m(w, om, sec), 33554432);
+    let k2: i64 = k;
+    let mut i: i64 = 0;
+    while i < cnt
+      invariant 0 <= i && i <= cnt && cnt <= 16777216 && 0 <= base && base <= 33554432 && k2 <= k && k <= k2 + i && k2 <= 33554436 && 0 <= p && p <= 100000000 && len(ep) == len(old(ep)) && len(el) == len(old(el)) && len(tp) == len(old(tp))
+      decreases cnt - i
+    {
+      let q: i64 = base + 9 * i;
+      if crate::value::tag_at(w, q + 3) == 11 && crate::value::truthy(w, q + 6) {
+        add_pair(inout ep, inout el, inout tp, k, fill, q, colon_at(w, q), q + 6);
+        k = k + 1;
+      }
+      i = i + 1;
+    }
+  }
+  return k;
+}
+
+// ---- helpers ----
+fn throw_existing_at(cx: crate::state::Ctx, p0: i64) -> crate::state::Ctx ! alloc
+{
+  let p: i64 = crate::u16::clamp(p0, 4294967296);
+  let mut rec: [i64] = crate::u16::zeros(4);
+  crate::u16::wr(inout rec, 0, 1);
+  let a: i64 = crate::u16::put_range(inout rec, 1, cx.ent, p, 3);
+  let e: [i64] = crate::u16::empty();
+  return crate::state::set_done(cx, e, rec, e, 0);
+}
+
+// copy the id slot at p of w into a request table row at `at` (an absent id is sent as undefined)
+fn put_id(inout tab: [i64], at: i64, w: [i64], p: i64) -> ()
+  ensures len(tab) == len(old(tab))
+{
+  let a: i64 = crate::u16::put_range(inout tab, crate::u16::clamp(at, 4294967296), w, crate::u16::clamp(p, 4294967296), 3);
+  if crate::u16::rd(w, p) == 10 { crate::u16::wr(inout tab, at, 0); }
+}
+
+// the temporary slot is exactly true
+fn temp_true(w: [i64], p: i64) -> bool
+{
+  // MUTANT M15: the check is truthiness instead of === true
+  return crate::value::tag_at(w, crate::u16::clamp(p, 4294967296) + 3) == 3;
+}
+
+// ---- op 7 ----
+pub fn threads_item(cx: crate::state::Ctx) -> crate::state::Ctx ! alloc
+{
+  let om: [i64] = crate::packet::new_meta(cx.blob);
+  let r0: i64 = crate::u16::clamp(crate::packet::sec_start(cx.blob, 1), 33554432);
+  let mut ep: [i64] = crate::u16::empty();
+  let mut el: [i64] = crate::u16::empty();
+  let mut tp: [i64] = crate::u16::empty();
+  let n: i64 = ses_pairs(cx.blob, om, r0, inout ep, inout el, inout tp, 0, 0);
+  if n > 2796202 { return crate::state::too_big(cx); }
+  let mut ep2: [i64] = alloc(n, 0);
+  let mut el2: [i64] = alloc(n, 0);
+  let mut tp2: [i64] = alloc(n, 0);
+  let n2: i64 = ses_pairs(cx.blob, om, r0, inout ep2, inout el2, inout tp2, 0, 1);
+  let pl: i64 = crate::u16::clamp(crate::packet::sec_len(cx.blob, 0), 16777216);
+  let mut tab: [i64] = alloc(6 * n, 0);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n <= 2796202 && len(tab) == 6 * n && len(ep2) == n && len(el2) == n && len(tp2) == n && 0 <= pl && pl <= 16777216
+    decreases n - i
+  {
+    let e: i64 = crate::u16::rd(ep2, i);
+    let l: i64 = crate::u16::rd(el2, i);
+    let t: i64 = crate::u16::clamp(crate::u16::rd(tp2, i), 4294967296);
+    if e < 0 {
+      crate::packet::put_vs(inout tab, 6 * i, 6, pl, 5);
+    } else if l >= 0 {
+      crate::packet::put_vs(inout tab, 6 * i, 6, crate::u16::rd(cx.blob, crate::u16::clamp(e, 4294967296) + 1), l);
+    } else {
+      let a: i64 = crate::u16::put_range(inout tab, 6 * i, cx.blob, crate::u16::clamp(e, 4294967296), 3);
+    }
+    let b: i64 = crate::u16::put_range(inout tab, 6 * i + 3, cx.blob, t, 3);
+    i = i + 1;
+  }
+  let pool: [i64] = crate::u16::cat(crate::dispatch::blob_pool(cx.blob), crate::u16::lit("codex"));
+  let mut rec: [i64] = crate::u16::zeros(4);
+  crate::packet::put_vs(inout rec, 1, 7, 4, n);
+  let e: [i64] = crate::u16::empty();
+  return crate::state::set_done(cx, pool, rec, tab, 1);
+}
+
+// ---- op 8 ----
+pub fn excluded_item(cx0: crate::state::Ctx) -> crate::state::Ctx ! alloc
+{
+  let r0: i64 = crate::u16::clamp(crate::packet::sec_start(cx0.blob, 1), 33554432);
+  let e: [i64] = crate::u16::empty();
+  if temp_true(cx0.blob, r0) {
+    let mut rec: [i64] = crate::u16::zeros(4);
+    crate::packet::put_vs(inout rec, 1, 3, 0, 0);
+    return crate::state::set_done(cx0, e, rec, e, 0);
+  }
+  let mut tab: [i64] = alloc(3, 0);
+  put_id(inout tab, 0, cx0.blob, r0);
+  let mut rq: [i64] = crate::u16::zeros(4);
+  crate::u16::wr(inout rq, 0, 8);
+  crate::packet::put_vs(inout rq, 1, 7, 4, 1);
+  let cx: crate::state::Ctx = crate::state::obs(cx0, 8, 1, crate::dispatch::blob_pool(cx0.blob), rq, tab, 1);
+  if cx.stalled != 0 || cx.bad != 0 { return cx; }
+  let rp: i64 = crate::u16::clamp(crate::packet::sec_start(cx.ent, 1), 33554432);
+  if crate::u16::rd(cx.ent, rp + 4) == 1 { return throw_existing_at(cx, rp + 5); }
+  let sec: i64 = crate::u16::clamp(crate::u16::rd(cx.ent, rp + 2), 1000000);
+  let base: i64 = crate::u16::clamp(crate::packet::sec_start(cx.ent, sec), 33554432);
+  let mut rec: [i64] = crate::u16::zeros(4);
+  let a: i64 = crate::u16::put_range(inout rec, 1, cx.ent, base, 3);
+  let s0: i64 = crate::u16::clamp(crate::packet::sec_start(cx.ent, 0), 33554432);
+  let pool: [i64] = crate::u16::slice(cx.ent, s0, s0 + crate::u16::clamp(crate::packet::sec_len(cx.ent, 0), 16777216));
+  return crate::state::set_done(cx, pool, rec, e, 0);
+}
+
+// ---- op 9 ----
+fn pool_eq(pool: [i64], a: i64, b: i64, n: i64) -> bool
+{
+  let mut i: i64 = 0;
+  let nn: i64 = crate::u16::clamp(n, 16777216);
+  let aa: i64 = crate::u16::clamp(a, 4294967296);
+  let bb: i64 = crate::u16::clamp(b, 4294967296);
+  while i < nn
+    invariant 0 <= i && i <= nn && nn <= 16777216 && 0 <= aa && aa <= 4294967296 && 0 <= bb && bb <= 4294967296
+    decreases nn - i
+  {
+    if crate::u16::rd(pool, aa + i) != crate::u16::rd(pool, bb + i) { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+// units of the engine part of the key
+fn eng_len(w: [i64], e: i64, l: i64) -> i64
+  ensures -1 <= result && result <= 16777216
+{
+  if e < 0 { return 5; }
+  if l >= 0 { return crate::u16::clamp(l, 16777216); }
+  return crate::value::key_len(w, e);
+}
+
+fn eng_put(w: [i64], e: i64, l: i64, inout o: [i64], at: i64) -> i64 ! alloc
+  ensures len(o) == len(old(o))
+{
+  if e < 0 {
+    let r: i64 = crate::value::put_lit(inout o, at, "codex");
+    return r;
+  }
+  if l >= 0 {
+    let r: i64 = crate::u16::put_range(inout o, crate::u16::clamp(at, 4294967296), w, crate::value::str_start(w, e), l);
+    return r;
+  }
+  let r: i64 = crate::value::key_put(w, e, inout o, at);
+  return r;
+}
+
+pub fn index_item(cx0: crate::state::Ctx) -> crate::state::Ctx ! alloc
+{
+  let w: [i64] = copy(cx0.blob);
+  let om: [i64] = crate::packet::new_meta(w);
+  let r0: i64 = crate::u16::clamp(crate::packet::sec_start(w, 1), 33554432);
+  let sec: i64 = crate::u16::clamp(crate::u16::rd(w, r0 + 1), 1000000);
+  let ns: i64 = crate::u16::clamp(crate::u16::rd(w, r0 + 2), 559240);
+  let base: i64 = crate::u16::clamp(crate::packet::sec_start(w, sec), 33554432);
+  let e: [i64] = crate::u16::empty();
+  // sessions needing the predicate
+  let mut nt: i64 = 0;
+  let mut i: i64 = 0;
+  while i < ns
+    invariant 0 <= i && i <= ns && ns <= 559240 && 0 <= nt && nt <= i && 0 <= base && base <= 33554432
+    decreases ns - i
+  {
+    if !temp_true(w, base + 30 * i) { nt = nt + 1; }
+    i = i + 1;
+  }
+  let mut cx: crate::state::Ctx = cx0;
+  let mut rbase: i64 = 0;
+  if nt > 0 {
+    let mut tab: [i64] = alloc(3 * nt, 0);
+    let mut j: i64 = 0;
+    let mut m: i64 = 0;
+    while j < ns
+      invariant 0 <= j && j <= ns && ns <= 559240 && 0 <= m && m <= j && nt <= 559240 && len(tab) == 3 * nt && 0 <= base && base <= 33554432
+      decreases ns - j
+    {
+      if !temp_true(w, base + 30 * j) {
+        put_id(inout tab, 3 * m, w, base + 30 * j);
+        m = m + 1;
+      }
+      j = j + 1;
+    }
+    let mut rq: [i64] = crate::u16::zeros(4);
+    crate::u16::wr(inout rq, 0, 8);
+    crate::packet::put_vs(inout rq, 1, 7, 4, nt);
+    cx = crate::state::obs(cx0, 8, nt, crate::dispatch::blob_pool(w), rq, tab, 1);
+    if cx.stalled != 0 || cx.bad != 0 { return cx; }
+    let rp: i64 = crate::u16::clamp(crate::packet::sec_start(cx.ent, 1), 33554432);
+    if crate::u16::rd(cx.ent, rp + 4) == 1 { return throw_existing_at(cx, rp + 5); }
+    let rsec: i64 = crate::u16::clamp(crate::u16::rd(cx.ent, rp + 2), 1000000);
+    rbase = crate::u16::clamp(crate::packet::sec_start(cx.ent, rsec), 33554432);
+  }
+  // pass 1: count the candidate pairs of the sessions that are not excluded
+  let mut ep: [i64] = crate::u16::empty();
+  let mut el: [i64] = crate::u16::empty();
+  let mut tp: [i64] = crate::u16::empty();
+  let mut total: i64 = 0;
+  let mut r: i64 = 0;
+  let mut a: i64 = 0;
+  while a < ns
+    invariant 0 <= a && a <= ns && ns <= 559240 && 0 <= total && total <= 16777216 && 0 <= r && r <= a && 0 <= base && base <= 33554432 && 0 <= rbase && rbase <= 33554432
+    decreases ns - a
+  {
+    let p: i64 = base + 30 * a;
+    if !temp_true(w, p) {
+      if !crate::value::truthy(cx.ent, rbase + 3 * r) {
+        total = ses_pairs(w, om, p, inout ep, inout el, inout tp, total, 0);
+        if total > 16777216 { return crate::state::too_big(cx); }
+      }
+      r = r + 1;
+    }
+    a = a + 1;
+  }
+  if total > 2796202 { return crate::state::too_big(cx); }
+  let n: i64 = total;
+  let mut ep2: [i64] = alloc(n, 0);
+  let mut el2: [i64] = alloc(n, 0);
+  let mut tp2: [i64] = alloc(n, 0);
+  let mut sp: [i64] = alloc(n, 0);
+  let mut t2: i64 = 0;
+  let mut r2: i64 = 0;
+  let mut b: i64 = 0;
+  while b < ns
+    invariant 0 <= b && b <= ns && ns <= 559240 && 0 <= t2 && t2 <= 100000000 && 0 <= r2 && r2 <= b && 0 <= base && base <= 33554432 && 0 <= rbase && rbase <= 33554432 && len(ep2) == n && len(el2) == n && len(tp2) == n && len(sp) == n
+    decreases ns - b
+  {
+    let p: i64 = base + 30 * b;
+    let mut take: bool = false;
+    if !temp_true(w, p) {
+      take = true;
+      if crate::value::truthy(cx.ent, rbase + 3 * r2) { take = false; }
+      r2 = r2 + 1;
+    }
+    if take {
+      let from: i64 = t2;
+      t2 = ses_pairs(w, om, p, inout ep2, inout el2, inout tp2, t2, 1);
+      let mut q: i64 = crate::u16::clamp(from, n);
+      while q < t2 && q < n
+        invariant 0 <= q && q <= n && len(sp) == n
+        decreases t2 - q
+      {
+        crate::u16::wr(inout sp, q, p);
+        q = q + 1;
+      }
+    }
+    b = b + 1;
+  }
+  // key lengths and offsets (relative to the key pool)
+  let mut ko: [i64] = alloc(n, 0);
+  let mut kl: [i64] = alloc(n, 0);
+  let mut sum: i64 = 0;
+  let mut c: i64 = 0;
+  while c < n
+    invariant 0 <= c && c <= n && n <= 2796202 && 0 <= sum && sum <= 16000000 && len(ko) == n && len(kl) == n && len(ep2) == n && len(el2) == n && len(tp2) == n
+    decreases n - c
+  {
+    let a1: i64 = eng_len(w, crate::u16::rd(ep2, c), crate::u16::rd(el2, c));
+    let a2: i64 = crate::value::key_len(w, crate::u16::rd(tp2, c));
+    if a1 < 0 || a2 < 0 { return crate::state::fail(cx); }
+    let ln: i64 = a1 + 1 + a2;
+    crate::u16::wr(inout ko, c, sum);
+    crate::u16::wr(inout kl, c, ln);
+    sum = sum + ln;
+    if sum > 16000000 { return crate::state::too_big(cx); }
+    c = c + 1;
+  }
+  let mut keys: [i64] = alloc(sum, 0);
+  let mut d: i64 = 0;
+  while d < n
+    invariant 0 <= d && d <= n && n <= 2796202 && len(keys) == sum && len(ko) == n && len(kl) == n && len(ep2) == n && len(el2) == n && len(tp2) == n && 0 <= sum && sum <= 16000000
+    decreases n - d
+  {
+    let at: i64 = crate::u16::clamp(crate::u16::rd(ko, d), 16000000);
+    let x0: i64 = eng_put(w, crate::u16::rd(ep2, d), crate::u16::rd(el2, d), inout keys, at);
+    let x: i64 = crate::u16::clamp(x0, 4294967296);
+    crate::u16::wr(inout keys, x, 58);
+    let y: i64 = crate::value::key_put(w, crate::u16::rd(tp2, d), inout keys, x + 1);
+    d = d + 1;
+  }
+  // first write wins: keep[i] = the entry index holding key i's value; the first occurrence is the entry.
+  // Keys are looked up through an open-addressing hash index (slot = position g in keep, -1 empty), built as the entries are
+  // visited in order, so each key costs O(its length) expected instead of a scan over all kept keys. A hash hit is confirmed
+  // by comparing length and units, so the result equals the first-occurrence scan exactly.
+  let mut keep: [i64] = alloc(n, 0 - 1);
+  let mut val: [i64] = alloc(n, 0);
+  let tsz: i64 = 2 * n + 1;
+  let mut tbl: [i64] = alloc(tsz, 0 - 1);
+  let mut m: i64 = 0;
+  let mut f: i64 = 0;
+  while f < n
+    invariant 0 <= f && f <= n && n <= 2796202 && 0 <= m && m <= f && len(keep) == n && len(val) == n && len(ko) == n && len(kl) == n && len(sp) == n && len(keys) == sum && 0 <= sum && tsz == 2 * n + 1 && len(tbl) == tsz
+    decreases n - f
+  {
+    let fo: i64 = crate::u16::rd(ko, f);
+    let fl: i64 = crate::u16::rd(kl, f);
+    let fln: i64 = crate::u16::clamp(fl, 16777216);
+    let fo0: i64 = crate::u16::clamp(fo, 4294967296);
+    // hash of the key units (clamped into 0..2^32 so the arithmetic stays far from overflow)
+    let mut hh: i64 = fln;
+    let mut q: i64 = 0;
+    while q < fln
+      invariant 0 <= q && q <= fln && fln <= 16777216 && 0 <= hh && hh < 2147483629 && 0 <= fo0 && fo0 <= 4294967296
+      decreases fln - q
+    {
+      hh = (hh * 1000003 + crate::u16::clamp(crate::u16::rd(keys, fo0 + q), 4294967296)) % 2147483629;
+      q = q + 1;
+    }
+    let mut s: i64 = hh % tsz;
+    let mut hit: i64 = 0 - 1;
+    let mut done: bool = false;
+    let mut stp: i64 = 0;
+    while !done && stp < tsz
+      invariant 0 <= s && s < tsz && 0 <= stp && stp <= tsz && len(tbl) == tsz && len(keep) == n && len(kl) == n && len(ko) == n && -1 <= hit && 0 <= m && m <= f && f <= n
+      decreases tsz - stp
+    {
+      let g: i64 = crate::u16::rd(tbl, s);
+      if g < 0 {
+        done = true;
+      } else {
+        let e2: i64 = crate::u16::rd(keep, g);
+        if crate::u16::rd(kl, e2) == fl && pool_eq(keys, crate::u16::rd(ko, e2), fo, fl) {
+          hit = g;
+          done = true;
+        } else {
+          s = s + 1;
+          if s >= tsz { s = 0; }
+        }
+      }
+      stp = stp + 1;
+    }
+    // the table is never full (m < tsz), so a probe always ends on a hit or an empty slot
+    if !done { return crate::state::fail(cx); }
+    if hit < 0 {
+      crate::u16::wr(inout tbl, s, m);
+      crate::u16::wr(inout keep, m, f);
+      crate::u16::wr(inout val, m, crate::u16::rd(sp, f));
+      m = m + 1;
+    } else {
+      // MUTANT M16: a later write overwrites the stored session (last write wins)
+    }
+    f = f + 1;
+  }
+  let pl: i64 = crate::u16::clamp(crate::packet::sec_len(w, 0), 16777216);
+  let mut tab: [i64] = alloc(6 * m, 0);
+  let mut h: i64 = 0;
+  while h < m
+    invariant 0 <= h && h <= m && m <= n && n <= 2796202 && len(tab) == 6 * m && len(keep) == n && len(val) == n && len(ko) == n && len(kl) == n && 0 <= pl && pl <= 16777216
+    decreases m - h
+  {
+    let e3: i64 = crate::u16::rd(keep, h);
+    crate::packet::put_vs(inout tab, 6 * h, 6, pl + crate::u16::clamp(crate::u16::rd(ko, e3), 16000000), crate::u16::rd(kl, e3));
+    let z: i64 = crate::u16::put_range(inout tab, 6 * h + 3, w, crate::u16::clamp(crate::u16::rd(val, h), 4294967296), 3);
+    h = h + 1;
+  }
+  let pool: [i64] = crate::u16::cat(crate::dispatch::blob_pool(w), keys);
+  let mut rec: [i64] = crate::u16::zeros(4);
+  crate::packet::put_vs(inout rec, 1, 7, 4, m);
+  return crate::state::set_done(cx, pool, rec, tab, 1);
+}

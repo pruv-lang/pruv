@@ -1,0 +1,973 @@
+[
+ {
+  "name": "bound-empty",
+  "op": "bound_session_index",
+  "id": "B01",
+  "subs": [
+   {
+    "op": "bound_session_index",
+    "args": {
+     "sessions": []
+    },
+    "id": "B01/none",
+    "expect": {
+     "terminal": "ok",
+     "value": [],
+     "trace": [],
+     "callerTitles": []
+    }
+   },
+   {
+    "op": "bound_session_index",
+    "args": {
+     "sessions": [
+      {
+       "id": "s1"
+      },
+      {
+       "id": "s2"
+      }
+     ]
+    },
+    "id": "B01/no-threads",
+    "expect": {
+     "terminal": "ok",
+     "value": [],
+     "trace": [
+      [
+       "isTemporary",
+       "s1"
+      ],
+      [
+       "isTemporary",
+       "s2"
+      ]
+     ],
+     "callerTitles": [
+      [
+       "s1",
+       {
+        "undef": 1
+       }
+      ],
+      [
+       "s2",
+       {
+        "undef": 1
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "B02",
+  "name": "bound-one",
+  "op": "bound_session_index",
+  "args": {
+   "sessions": [
+    {
+     "id": "s1",
+     "externalThread": {
+      "engine": "claude",
+      "thread": "t1"
+     }
+    }
+   ]
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    [
+     "claude:t1",
+     "s1"
+    ]
+   ],
+   "trace": [
+    [
+     "isTemporary",
+     "s1"
+    ]
+   ],
+   "callerTitles": [
+    [
+     "s1",
+     {
+      "undef": 1
+     }
+    ]
+   ]
+  }
+ },
+ {
+  "id": "B03",
+  "name": "bound-duplicate-first-wins",
+  "op": "bound_session_index",
+  "args": {
+   "sessions": [
+    {
+     "id": "s1",
+     "externalThread": {
+      "engine": "claude",
+      "thread": "t"
+     }
+    },
+    {
+     "id": "s2",
+     "externalThread": {
+      "engine": "claude",
+      "thread": "t"
+     }
+    },
+    {
+     "id": "s3",
+     "externalThread": {
+      "engine": "claude",
+      "thread": "t"
+     }
+    }
+   ]
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    [
+     "claude:t",
+     "s1"
+    ]
+   ],
+   "trace": [
+    [
+     "isTemporary",
+     "s1"
+    ],
+    [
+     "isTemporary",
+     "s2"
+    ],
+    [
+     "isTemporary",
+     "s3"
+    ]
+   ],
+   "callerTitles": [
+    [
+     "s1",
+     {
+      "undef": 1
+     }
+    ],
+    [
+     "s2",
+     {
+      "undef": 1
+     }
+    ],
+    [
+     "s3",
+     {
+      "undef": 1
+     }
+    ]
+   ]
+  },
+  "mutant": "M16"
+ },
+ {
+  "name": "bound-temporary-first-skipped",
+  "op": "bound_session_index",
+  "id": "B04",
+  "subs": [
+   {
+    "op": "bound_session_index",
+    "args": {
+     "sessions": [
+      {
+       "id": "s1",
+       "externalThread": {
+        "engine": "claude",
+        "thread": "t"
+       },
+       "temporary": true
+      },
+      {
+       "id": "s2",
+       "externalThread": {
+        "engine": "claude",
+        "thread": "t"
+       }
+      }
+     ]
+    },
+    "id": "B04/literal",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "claude:t",
+       "s2"
+      ]
+     ],
+     "trace": [
+      [
+       "isTemporary",
+       "s2"
+      ]
+     ],
+     "callerTitles": [
+      [
+       "s1",
+       {
+        "undef": 1
+       }
+      ],
+      [
+       "s2",
+       {
+        "undef": 1
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "bound_session_index",
+    "args": {
+     "sessions": [
+      {
+       "id": "s1",
+       "externalThread": {
+        "engine": "claude",
+        "thread": "t"
+       }
+      },
+      {
+       "id": "s2",
+       "externalThread": {
+        "engine": "claude",
+        "thread": "t"
+       }
+      }
+     ]
+    },
+    "script": {
+     "isTemporary": [
+      {
+       "ok": true
+      },
+      {
+       "ok": false
+      }
+     ]
+    },
+    "id": "B04/callback",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "claude:t",
+       "s2"
+      ]
+     ],
+     "trace": [
+      [
+       "isTemporary",
+       "s1"
+      ],
+      [
+       "isTemporary",
+       "s2"
+      ]
+     ],
+     "callerTitles": [
+      [
+       "s1",
+       {
+        "undef": 1
+       }
+      ],
+      [
+       "s2",
+       {
+        "undef": 1
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "bound-within-session-duplicates",
+  "op": "bound_session_index",
+  "id": "B05",
+  "subs": [
+   {
+    "op": "bound_session_index",
+    "args": {
+     "sessions": [
+      {
+       "id": "s1",
+       "externalThread": {
+        "engine": "claude",
+        "thread": "t",
+        "forks": {
+         "arr": [
+          "t",
+          "u",
+          "t"
+         ]
+        }
+       }
+      }
+     ]
+    },
+    "id": "B05/forks",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "claude:t",
+       "s1"
+      ],
+      [
+       "claude:u",
+       "s1"
+      ]
+     ],
+     "trace": [
+      [
+       "isTemporary",
+       "s1"
+      ]
+     ],
+     "callerTitles": [
+      [
+       "s1",
+       {
+        "undef": 1
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "bound_session_index",
+    "args": {
+     "sessions": [
+      {
+       "id": "s1",
+       "externalThread": {
+        "engine": "claude",
+        "thread": "t"
+       },
+       "engineThreads": {
+        "obj": [
+         [
+          "claude:x",
+          {
+           "threadId": "t"
+          }
+         ]
+        ]
+       }
+      }
+     ]
+    },
+    "id": "B05/slots",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "claude:t",
+       "s1"
+      ]
+     ],
+     "trace": [
+      [
+       "isTemporary",
+       "s1"
+      ]
+     ],
+     "callerTitles": [
+      [
+       "s1",
+       {
+        "undef": 1
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "bound-colon-collision",
+  "op": "bound_session_index",
+  "id": "B06",
+  "subs": [
+   {
+    "op": "bound_session_index",
+    "args": {
+     "sessions": [
+      {
+       "id": "s1",
+       "externalThread": {
+        "engine": "a",
+        "thread": "b:c"
+       }
+      },
+      {
+       "id": "s2",
+       "externalThread": {
+        "engine": "a:b",
+        "thread": "c"
+       }
+      }
+     ]
+    },
+    "id": "B06/engine-thread",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "a:b:c",
+       "s1"
+      ]
+     ],
+     "trace": [
+      [
+       "isTemporary",
+       "s1"
+      ],
+      [
+       "isTemporary",
+       "s2"
+      ]
+     ],
+     "callerTitles": [
+      [
+       "s1",
+       {
+        "undef": 1
+       }
+      ],
+      [
+       "s2",
+       {
+        "undef": 1
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "bound_session_index",
+    "args": {
+     "sessions": [
+      {
+       "id": "s1",
+       "externalThread": {
+        "engine": "a:b",
+        "thread": "c"
+       }
+      },
+      {
+       "id": "s2",
+       "externalThread": {
+        "engine": "a",
+        "thread": "b:c"
+       }
+      }
+     ]
+    },
+    "id": "B06/reverse",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "a:b:c",
+       "s1"
+      ]
+     ],
+     "trace": [
+      [
+       "isTemporary",
+       "s1"
+      ],
+      [
+       "isTemporary",
+       "s2"
+      ]
+     ],
+     "callerTitles": [
+      [
+       "s1",
+       {
+        "undef": 1
+       }
+      ],
+      [
+       "s2",
+       {
+        "undef": 1
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "bound_session_index",
+    "args": {
+     "sessions": [
+      {
+       "id": "s1",
+       "externalThread": {
+        "engine": "",
+        "thread": ":x"
+       }
+      },
+      {
+       "id": "s2",
+       "externalThread": {
+        "engine": ":",
+        "thread": "x"
+       }
+      }
+     ]
+    },
+    "id": "B06/empty-parts",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "::x",
+       "s1"
+      ]
+     ],
+     "trace": [
+      [
+       "isTemporary",
+       "s1"
+      ],
+      [
+       "isTemporary",
+       "s2"
+      ]
+     ],
+     "callerTitles": [
+      [
+       "s1",
+       {
+        "undef": 1
+       }
+      ],
+      [
+       "s2",
+       {
+        "undef": 1
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "B07",
+  "name": "bound-account-source-ignored",
+  "op": "bound_session_index",
+  "args": {
+   "sessions": [
+    {
+     "id": "s1",
+     "externalThread": {
+      "engine": "claude",
+      "thread": "t"
+     },
+     "source": "claude:acc1",
+     "account": "acc_0123456789abcdef"
+    },
+    {
+     "id": "s2",
+     "externalThread": {
+      "engine": "claude",
+      "thread": "t"
+     },
+     "source": "claude:acc2",
+     "account": "acc_fedcba9876543210"
+    },
+    {
+     "id": "s3",
+     "externalThread": {
+      "engine": "claude",
+      "thread": "t"
+     },
+     "source": "codex:home"
+    }
+   ]
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    [
+     "claude:t",
+     "s1"
+    ]
+   ],
+   "trace": [
+    [
+     "isTemporary",
+     "s1"
+    ],
+    [
+     "isTemporary",
+     "s2"
+    ],
+    [
+     "isTemporary",
+     "s3"
+    ]
+   ],
+   "callerTitles": [
+    [
+     "s1",
+     {
+      "undef": 1
+     }
+    ],
+    [
+     "s2",
+     {
+      "undef": 1
+     }
+    ],
+    [
+     "s3",
+     {
+      "undef": 1
+     }
+    ]
+   ]
+  }
+ },
+ {
+  "name": "bound-empty-id-still-present",
+  "op": "bound_session_index",
+  "id": "B08",
+  "subs": [
+   {
+    "op": "bound_session_index",
+    "args": {
+     "sessions": [
+      {
+       "id": "",
+       "externalThread": {
+        "engine": "claude",
+        "thread": "t"
+       }
+      },
+      {
+       "id": "s2",
+       "externalThread": {
+        "engine": "claude",
+        "thread": "t"
+       }
+      }
+     ]
+    },
+    "id": "B08/empty-first",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "claude:t",
+       ""
+      ]
+     ],
+     "trace": [
+      [
+       "isTemporary",
+       ""
+      ],
+      [
+       "isTemporary",
+       "s2"
+      ]
+     ],
+     "callerTitles": [
+      [
+       "",
+       {
+        "undef": 1
+       }
+      ],
+      [
+       "s2",
+       {
+        "undef": 1
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "bound_session_index",
+    "args": {
+     "sessions": [
+      {
+       "id": {
+        "undef": 1
+       },
+       "externalThread": {
+        "engine": "claude",
+        "thread": "t"
+       }
+      },
+      {
+       "id": "s2",
+       "externalThread": {
+        "engine": "claude",
+        "thread": "t"
+       }
+      }
+     ]
+    },
+    "id": "B08/undefined-first",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "claude:t",
+       {
+        "undef": 1
+       }
+      ]
+     ],
+     "trace": [
+      [
+       "isTemporary",
+       {
+        "undef": 1
+       }
+      ],
+      [
+       "isTemporary",
+       "s2"
+      ]
+     ],
+     "callerTitles": [
+      [
+       {
+        "undef": 1
+       },
+       {
+        "undef": 1
+       }
+      ],
+      [
+       "s2",
+       {
+        "undef": 1
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "B09",
+  "name": "bound-insertion-order",
+  "op": "bound_session_index",
+  "args": {
+   "sessions": [
+    {
+     "id": "s1",
+     "externalThread": {
+      "engine": "qwen",
+      "thread": "z"
+     }
+    },
+    {
+     "id": "s2",
+     "externalThread": {
+      "engine": "claude",
+      "thread": "a"
+     }
+    },
+    {
+     "id": "s3",
+     "externalThread": {
+      "engine": "codex",
+      "thread": "m"
+     }
+    },
+    {
+     "id": "s4",
+     "externalThread": {
+      "engine": "claude",
+      "thread": "3"
+     }
+    },
+    {
+     "id": "s5",
+     "externalThread": {
+      "engine": "claude",
+      "thread": "1"
+     }
+    }
+   ]
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    [
+     "qwen:z",
+     "s1"
+    ],
+    [
+     "claude:a",
+     "s2"
+    ],
+    [
+     "codex:m",
+     "s3"
+    ],
+    [
+     "claude:3",
+     "s4"
+    ],
+    [
+     "claude:1",
+     "s5"
+    ]
+   ],
+   "trace": [
+    [
+     "isTemporary",
+     "s1"
+    ],
+    [
+     "isTemporary",
+     "s2"
+    ],
+    [
+     "isTemporary",
+     "s3"
+    ],
+    [
+     "isTemporary",
+     "s4"
+    ],
+    [
+     "isTemporary",
+     "s5"
+    ]
+   ],
+   "callerTitles": [
+    [
+     "s1",
+     {
+      "undef": 1
+     }
+    ],
+    [
+     "s2",
+     {
+      "undef": 1
+     }
+    ],
+    [
+     "s3",
+     {
+      "undef": 1
+     }
+    ],
+    [
+     "s4",
+     {
+      "undef": 1
+     }
+    ],
+    [
+     "s5",
+     {
+      "undef": 1
+     }
+    ]
+   ]
+  }
+ },
+ {
+  "id": "B10",
+  "name": "bound-vs-title-map-winner",
+  "op": "bound_session_index",
+  "args": {
+   "sessions": [
+    {
+     "id": "s1",
+     "externalThread": {
+      "engine": "claude",
+      "thread": "t"
+     },
+     "title": "first"
+    },
+    {
+     "id": "s2",
+     "externalThread": {
+      "engine": "claude",
+      "thread": "t"
+     },
+     "title": "second"
+    },
+    {
+     "id": "s1",
+     "externalThread": {
+      "engine": "claude",
+      "thread": "u"
+     },
+     "title": "third"
+    }
+   ]
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    [
+     "claude:t",
+     "s1"
+    ],
+    [
+     "claude:u",
+     "s1"
+    ]
+   ],
+   "trace": [
+    [
+     "isTemporary",
+     "s1"
+    ],
+    [
+     "isTemporary",
+     "s2"
+    ],
+    [
+     "isTemporary",
+     "s1"
+    ]
+   ],
+   "callerTitles": [
+    [
+     "s1",
+     "third"
+    ],
+    [
+     "s2",
+     "second"
+    ]
+   ]
+  }
+ }
+]

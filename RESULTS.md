@@ -2286,3 +2286,38 @@ python3 bench/l3/opencode/q_mutants.py
 ```
 
 **L3-7 implementation and default Q complete.**
+
+## 140. L3-8: engine-import common entry in Pruv (implementation and Q, 2026-11-17)
+
+- **Design:** `docs/ENGINE_IMPORT_ENTRY_SPEC.md` and `bench/l3/entry/DESIGN.md`. Lair's common engine-import entry (pinned at commit 744d14af: `backend-engine-import.ts`, `backend-engine-import-bound.ts`, `backend-codex-home.ts`, `backend-accounts.ts`, `backend-engine-import-tail.ts`, plus `opencodeDataDir` and `qwenRuntimeDir`) is ported to `bench/l3/entry/` as nine Pruv operations: import_sources, find_source, list_external, read_external, account_home, codex_account_folder, session_threads, excluded_from_bound and bound_session_index. Pruv owns source discovery and order, environment trimming, home and account paths, account id admission, the Codex home check (canonical path climb, sameFile, the home/`.codex` rules), routing, title cleaning, error rethrow rules, the bound session index (slots, forks, engineThreads, first-write keys) and the result packet. Calls back into the host (homedir, cwd, realpath, stat, accounts, account_at, the engine runners, isTemporary) are awaits in a replayed state machine: each step re-runs the current item against the log of its own answers and the host only performs the call. The host (`host.rs`) checks the packet bounds, dispatches the calls and renders values. No compiler or language changes.
+- **Reference:** `reference.mjs` runs the pinned TS on Node 26.4.0 with `reference-hooks.mjs` / `reference-primitives.mjs` recording the same call trace and applying the same scripted answers as `host.rs`; fake engines play the Claude, Codex, Grok, OpenCode and Qwen routes.
+- **Implementation:** 155 fixtures (`gen_fixtures.py --check`), of which 291 runnable variants in 14 groups (accounts, bound index, Codex home, dispatch, environment, find, sameFile, packets, rethrow, homes, titles, threads, slots, excluded) each compare the terminal, the value and the per-call trace against the expectation and the oracle. py/rust, py/llvm, rs/rust and rs/llvm: 1,164 runs, **0 unexplained differences**. Both compilers verify the module graph. Integration (`integrate.py`, group I): the Codex, Grok, OpenCode and Qwen routes forward to the L3-5..L3-7 and L3-4 runners and pass (10 cases); the Claude routes are integration limits because the L3-1 piece has no driver.
+- **Differential (`q.py`, seed 20261118, `--jobs 4`):** 2,000 cases per pair in eight families (G1 import_sources and account_home 400, G2 codex_account_folder 300, G3 find_source and routing 200, G4 titles 300, G5 errors 300, G6 session_threads 200, G7 excluded_from_bound and bound_session_index 200, G8 corrupted packets and step probes 100).
+
+| Pair | Cases | Exact | P5 | P6 | Engine policy | Excluded domain | Unexplained |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| py/rust | 2000 | 1996 | 0 | 0 | 0 | 4 | 0 |
+| py/llvm | 2000 | 1996 | 0 | 0 | 0 | 4 | 0 |
+| rs/rust | 2000 | 1996 | 0 | 0 | 0 | 4 | 0 |
+| rs/llvm | 2000 | 1996 | 0 | 0 | 0 | 4 | 0 |
+
+- **Classified differences:** excluded domain (4, all G7): a bound engine given as an opaque reference, which TS stringifies and Pruv rejects as InvalidPacket; it applies only when the oracle completed (so the stringification was reached), the Pruv side is the InvalidPacket boundary error and the traces are equal. P5 (native error prose of homedir/cwd/realpath/stat) and P6 (InputTooLarge, only with matching boundary kind, code and trace) are defined but not used in this run. All four pairs have **0 unexplained differences**. Wall time about 12 s with `--reuse-verified`.
+- **Audit (one read-only audit, then one confirmation audit limited to its findings):** ten REQUIRED findings, all fixed. Replay (R1): the regenerated request must equal the outstanding one recorded in the previous state, log entries must continue in op and sequence, the log must be fully consumed, and checkpoint phase/index/count must be consistent; forged replays are rejected (`forge_test.py`, 25 forgeries and 6 honest controls over codex_account_folder and import_sources). Cost: the canonical path climb keeps its depth in checkpoints instead of re-running from the start (R3; requests grow as n + 16 for 10..160 missing segments), the duplicate-key check uses a first-write hash index (R2) and section starts come from an offset table built once (R4; 20,000 sessions with tables went from 2.6 s to 0.13 s). Host and oracle: stat dev/ino decimal strings are normalized in both (R5), the oracle defines `__proto__` keys as own data properties (R6) and decodes UTF-16 homedir/cwd/realpath answers (R7). Policy: P6 and excluded domain now check the boundary kind, code and trace (R8), and the step-probe expectation is one shared derivation (R9). Mutant M04 is now a real deduplication mutant (R10). The confirmation audit found three of these only partly fixed, and they were fixed again; no audit budget remained, so these second fixes are checked by tests only, as in section 139. R1: import_sources keeps the item start sequence in checkpoint 0, and the replay requires start + dropped + kept entries to equal the current request sequence, so an entry moved below the item start is rejected (4 new op 1 forgeries, 2 controls). R3: relative paths are checkpointed too; with cwd `rel` at depth 10/20/40 the largest log went from 24/34/54 entries to 10/10/10 and the largest state from 2,301/3,971/8,511 words to 700/820/1,060 (absolute: 8 entries, 665/785/1,025). R8: excluded domain is allowed only when the session holding the forbidden engine value is really reached (not excluded by `temporary === true` or the scripted isTemporary answer, and no earlier answer throws); `judge_test.py` checks 8 such rows, and the 4 Q cases still qualify.
+- **Mutants (`q_mutants.py`, rs/rust):** the spec's 16 single-bug mutants with fixtures as witnesses: **16 killed, 0 survived, 0 build errors** (about 20 s).
+- **Before commit:** compilers unchanged, so no Rust compiler checks or full test run.
+- **Limits:** forged-replay tests cover codex_account_folder and import_sources only (the other operations finish in one step in the harness). The Claude integration routes are not run. Native error prose (P5) is not compared. Windows paths, the real engine binaries and outer cancellation are not exercised. This is differential evidence and local verification, not whole-program equivalence.
+
+Commands (from the repository root):
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+export GROK_TS_TRANSPILER=/path/to/typescript
+python3 bench/l3/entry/test_impl.py
+python3 bench/l3/entry/q.py --seed 20261118 --count 2000 --jobs 4
+python3 bench/l3/entry/q_mutants.py --jobs 4
+python3 bench/l3/entry/integrate.py
+sh bench/l3/entry/forge_build.sh && python3 bench/l3/entry/forge_test.py
+python3 bench/l3/entry/judge_test.py
+```
+
+**L3-8 implementation and default Q complete.**

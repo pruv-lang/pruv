@@ -1,0 +1,4 @@
+{
+  "args": {"dataDir": "/data"},
+  "script": {"homedir": [{"ok": "/home/test"}], "cwd": [{"ok": "/work"}]}
+}

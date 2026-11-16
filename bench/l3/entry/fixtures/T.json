@@ -1,0 +1,1881 @@
+[
+ {
+  "id": "T01",
+  "name": "title-empty",
+  "op": "list_external",
+  "args": {
+   "source": {
+    "ref": "s1",
+    "engine": "claude"
+   },
+   "folder": "/f",
+   "options": {
+    "ref": "o1"
+   }
+  },
+  "script": {
+   "engine": {
+    "rows": [
+     {
+      "ref": "r1",
+      "title": ""
+     }
+    ]
+   }
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    [
+     "keep",
+     {
+      "ref": "r1"
+     }
+    ]
+   ],
+   "trace": [
+    [
+     "engine",
+     "claude",
+     "list",
+     {
+      "source": {
+       "ref": "s1"
+      },
+      "folder": "/f",
+      "options": {
+       "ref": "o1"
+      }
+     }
+    ]
+   ]
+  }
+ },
+ {
+  "id": "T02",
+  "name": "title-199",
+  "op": "list_external",
+  "args": {
+   "source": {
+    "ref": "s1",
+    "engine": "claude"
+   },
+   "folder": "/f",
+   "options": {
+    "ref": "o1"
+   }
+  },
+  "script": {
+   "engine": {
+    "rows": [
+     {
+      "ref": "r1",
+      "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    [
+     "keep",
+     {
+      "ref": "r1"
+     }
+    ]
+   ],
+   "trace": [
+    [
+     "engine",
+     "claude",
+     "list",
+     {
+      "source": {
+       "ref": "s1"
+      },
+      "folder": "/f",
+      "options": {
+       "ref": "o1"
+      }
+     }
+    ]
+   ]
+  }
+ },
+ {
+  "id": "T03",
+  "name": "title-200",
+  "op": "list_external",
+  "args": {
+   "source": {
+    "ref": "s1",
+    "engine": "claude"
+   },
+   "folder": "/f",
+   "options": {
+    "ref": "o1"
+   }
+  },
+  "script": {
+   "engine": {
+    "rows": [
+     {
+      "ref": "r1",
+      "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    [
+     "keep",
+     {
+      "ref": "r1"
+     }
+    ]
+   ],
+   "trace": [
+    [
+     "engine",
+     "claude",
+     "list",
+     {
+      "source": {
+       "ref": "s1"
+      },
+      "folder": "/f",
+      "options": {
+       "ref": "o1"
+      }
+     }
+    ]
+   ]
+  }
+ },
+ {
+  "id": "T04",
+  "name": "title-201",
+  "op": "list_external",
+  "args": {
+   "source": {
+    "ref": "s1",
+    "engine": "claude"
+   },
+   "folder": "/f",
+   "options": {
+    "ref": "o1"
+   }
+  },
+  "script": {
+   "engine": {
+    "rows": [
+     {
+      "ref": "r1",
+      "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxy"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    [
+     "copy_title",
+     {
+      "ref": "r1"
+     },
+     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    ]
+   ],
+   "trace": [
+    [
+     "engine",
+     "claude",
+     "list",
+     {
+      "source": {
+       "ref": "s1"
+      },
+      "folder": "/f",
+      "options": {
+       "ref": "o1"
+      }
+     }
+    ]
+   ]
+  }
+ },
+ {
+  "id": "T05",
+  "name": "title-many-kilobytes",
+  "op": "list_external",
+  "args": {
+   "source": {
+    "ref": "s1",
+    "engine": "claude"
+   },
+   "folder": "/f",
+   "options": {
+    "ref": "o1"
+   }
+  },
+  "script": {
+   "engine": {
+    "rows": [
+     {
+      "ref": "r1",
+      "title": "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefgh"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    [
+     "copy_title",
+     {
+      "ref": "r1"
+     },
+     "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqr"
+    ]
+   ],
+   "trace": [
+    [
+     "engine",
+     "claude",
+     "list",
+     {
+      "source": {
+       "ref": "s1"
+      },
+      "folder": "/f",
+      "options": {
+       "ref": "o1"
+      }
+     }
+    ]
+   ]
+  }
+ },
+ {
+  "id": "T06",
+  "name": "title-pair-fits",
+  "op": "list_external",
+  "args": {
+   "source": {
+    "ref": "s1",
+    "engine": "claude"
+   },
+   "folder": "/f",
+   "options": {
+    "ref": "o1"
+   }
+  },
+  "script": {
+   "engine": {
+    "rows": [
+     {
+      "ref": "r1",
+      "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx😀"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    [
+     "keep",
+     {
+      "ref": "r1"
+     }
+    ]
+   ],
+   "trace": [
+    [
+     "engine",
+     "claude",
+     "list",
+     {
+      "source": {
+       "ref": "s1"
+      },
+      "folder": "/f",
+      "options": {
+       "ref": "o1"
+      }
+     }
+    ]
+   ]
+  }
+ },
+ {
+  "id": "T07",
+  "name": "title-pair-split",
+  "op": "list_external",
+  "args": {
+   "source": {
+    "ref": "s1",
+    "engine": "claude"
+   },
+   "folder": "/f",
+   "options": {
+    "ref": "o1"
+   }
+  },
+  "script": {
+   "engine": {
+    "rows": [
+     {
+      "ref": "r1",
+      "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx😀"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    [
+     "copy_title",
+     {
+      "ref": "r1"
+     },
+     {
+      "u16": [
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       120,
+       55357
+      ]
+     }
+    ]
+   ],
+   "trace": [
+    [
+     "engine",
+     "claude",
+     "list",
+     {
+      "source": {
+       "ref": "s1"
+      },
+      "folder": "/f",
+      "options": {
+       "ref": "o1"
+      }
+     }
+    ]
+   ]
+  },
+  "mutant": "M10"
+ },
+ {
+  "name": "title-lone-surrogates",
+  "op": "list_external",
+  "id": "T08",
+  "subs": [
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "rows": [
+       {
+        "ref": "r1",
+        "title": {
+         "u16": [
+          97,
+          55296,
+          98,
+          56320,
+          56321,
+          55296
+         ]
+        }
+       }
+      ]
+     }
+    },
+    "id": "T08/short",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "keep",
+       {
+        "ref": "r1"
+       }
+      ]
+     ],
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "rows": [
+       {
+        "ref": "r1",
+        "title": {
+         "u16": [
+          56320,
+          55296,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120
+         ]
+        }
+       }
+      ]
+     }
+    },
+    "id": "T08/long",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "copy_title",
+       {
+        "ref": "r1"
+       },
+       {
+        "u16": [
+         56320,
+         55296,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120
+        ]
+       }
+      ]
+     ],
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "rows": [
+       {
+        "ref": "r1",
+        "title": {
+         "u16": [
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          120,
+          55357,
+          56832,
+          121
+         ]
+        }
+       }
+      ]
+     }
+    },
+    "id": "T08/cut-between-pair",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "copy_title",
+       {
+        "ref": "r1"
+       },
+       {
+        "u16": [
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         120,
+         55357
+        ]
+       }
+      ]
+     ],
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "title-whitespace-not-cleaned",
+  "op": "list_external",
+  "id": "T09",
+  "subs": [
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "rows": [
+       {
+        "ref": "r1",
+        "title": "\n  pad \t\n"
+       }
+      ]
+     }
+    },
+    "id": "T09/short",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "keep",
+       {
+        "ref": "r1"
+       }
+      ]
+     ],
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "rows": [
+       {
+        "ref": "r1",
+        "title": "\n          xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+       }
+      ]
+     }
+    },
+    "id": "T09/long",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "copy_title",
+       {
+        "ref": "r1"
+       },
+       "\n          xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ]
+     ],
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "rows": [
+       {
+        "ref": "r1",
+        "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx                    tail"
+       }
+      ]
+     }
+    },
+    "id": "T09/trailing",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "copy_title",
+       {
+        "ref": "r1"
+       },
+       "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx          "
+      ]
+     ],
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "T10",
+  "name": "title-metadata-and-order",
+  "op": "list_external",
+  "args": {
+   "source": {
+    "ref": "s1",
+    "engine": "claude"
+   },
+   "folder": "/f",
+   "options": {
+    "ref": "o1"
+   }
+  },
+  "script": {
+   "engine": {
+    "rows": [
+     {
+      "ref": "r1",
+      "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "a": 1,
+      "o": {
+       "ref": "obj1"
+      },
+      "n": {
+       "num": "8000000000000000"
+      },
+      "arr": {
+       "arr": [
+        1,
+        {
+         "undef": 1
+        },
+        null
+       ]
+      },
+      "u": {
+       "undef": 1
+      },
+      "z": "last"
+     },
+     {
+      "ref": "r2",
+      "title": "short",
+      "b": 2
+     },
+     {
+      "ref": "r3",
+      "a": 1,
+      "title": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+      "c": {
+       "ref": "obj2"
+      }
+     },
+     {
+      "ref": "r4",
+      "title": ""
+     }
+    ]
+   }
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    [
+     "copy_title",
+     {
+      "ref": "r1"
+     },
+     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    ],
+    [
+     "keep",
+     {
+      "ref": "r2"
+     }
+    ],
+    [
+     "copy_title",
+     {
+      "ref": "r3"
+     },
+     "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+    ],
+    [
+     "keep",
+     {
+      "ref": "r4"
+     }
+    ]
+   ],
+   "trace": [
+    [
+     "engine",
+     "claude",
+     "list",
+     {
+      "source": {
+       "ref": "s1"
+      },
+      "folder": "/f",
+      "options": {
+       "ref": "o1"
+      }
+     }
+    ]
+   ]
+  }
+ }
+]

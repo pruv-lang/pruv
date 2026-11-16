@@ -1,0 +1,6 @@
+{
+  "name": "l3_entry_root",
+  "version": "0.1.0",
+  "root": "root.pruv",
+  "dependencies": {}
+}

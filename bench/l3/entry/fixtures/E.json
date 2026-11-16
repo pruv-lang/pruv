@@ -1,0 +1,1223 @@
+[
+ {
+  "id": "E01",
+  "name": "xdg-absolute-join",
+  "op": "import_sources",
+  "args": {
+   "env": {
+    "XDG_DATA_HOME": "/xdg/share"
+   }
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    {
+     "source": "claude:home",
+     "engine": "claude",
+     "kind": "home",
+     "home": "/home/test/.claude"
+    },
+    {
+     "source": "codex:home",
+     "engine": "codex",
+     "kind": "home",
+     "home": "/home/test/.codex"
+    },
+    {
+     "source": "grok:home",
+     "engine": "grok",
+     "kind": "home",
+     "home": "/home/test/.grok"
+    },
+    {
+     "source": "opencode:home",
+     "engine": "opencode",
+     "kind": "home",
+     "home": "/xdg/share/opencode"
+    },
+    {
+     "source": "qwen:home",
+     "engine": "qwen",
+     "kind": "home",
+     "home": "/home/test/.qwen"
+    }
+   ],
+   "trace": [
+    [
+     "homedir"
+    ],
+    [
+     "accounts",
+     "claude"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "accounts",
+     "codex"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "homedir"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "E02",
+  "name": "xdg-relative-fallback",
+  "op": "import_sources",
+  "args": {
+   "env": {
+    "XDG_DATA_HOME": "xdg/rel"
+   }
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    {
+     "source": "claude:home",
+     "engine": "claude",
+     "kind": "home",
+     "home": "/home/test/.claude"
+    },
+    {
+     "source": "codex:home",
+     "engine": "codex",
+     "kind": "home",
+     "home": "/home/test/.codex"
+    },
+    {
+     "source": "grok:home",
+     "engine": "grok",
+     "kind": "home",
+     "home": "/home/test/.grok"
+    },
+    {
+     "source": "opencode:home",
+     "engine": "opencode",
+     "kind": "home",
+     "home": "/home/test/.local/share/opencode"
+    },
+    {
+     "source": "qwen:home",
+     "engine": "qwen",
+     "kind": "home",
+     "home": "/home/test/.qwen"
+    }
+   ],
+   "trace": [
+    [
+     "homedir"
+    ],
+    [
+     "accounts",
+     "claude"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "accounts",
+     "codex"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "homedir"
+    ]
+   ]
+  },
+  "mutant": "M03"
+ },
+ {
+  "name": "xdg-blank-fallback",
+  "op": "import_sources",
+  "id": "E03",
+  "subs": [
+   {
+    "args": {
+     "env": {
+      "XDG_DATA_HOME": ""
+     }
+    },
+    "id": "E03/empty",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      {
+       "source": "claude:home",
+       "engine": "claude",
+       "kind": "home",
+       "home": "/home/test/.claude"
+      },
+      {
+       "source": "codex:home",
+       "engine": "codex",
+       "kind": "home",
+       "home": "/home/test/.codex"
+      },
+      {
+       "source": "grok:home",
+       "engine": "grok",
+       "kind": "home",
+       "home": "/home/test/.grok"
+      },
+      {
+       "source": "opencode:home",
+       "engine": "opencode",
+       "kind": "home",
+       "home": "/home/test/.local/share/opencode"
+      },
+      {
+       "source": "qwen:home",
+       "engine": "qwen",
+       "kind": "home",
+       "home": "/home/test/.qwen"
+      }
+     ],
+     "trace": [
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "claude"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "codex"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ]
+     ]
+    }
+   },
+   {
+    "args": {
+     "env": {
+      "XDG_DATA_HOME": " \t "
+     }
+    },
+    "id": "E03/trimmed-empty",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      {
+       "source": "claude:home",
+       "engine": "claude",
+       "kind": "home",
+       "home": "/home/test/.claude"
+      },
+      {
+       "source": "codex:home",
+       "engine": "codex",
+       "kind": "home",
+       "home": "/home/test/.codex"
+      },
+      {
+       "source": "grok:home",
+       "engine": "grok",
+       "kind": "home",
+       "home": "/home/test/.grok"
+      },
+      {
+       "source": "opencode:home",
+       "engine": "opencode",
+       "kind": "home",
+       "home": "/home/test/.local/share/opencode"
+      },
+      {
+       "source": "qwen:home",
+       "engine": "qwen",
+       "kind": "home",
+       "home": "/home/test/.qwen"
+      }
+     ],
+     "trace": [
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "claude"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "codex"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "xdg-root-and-dot-normalization",
+  "op": "import_sources",
+  "id": "E04",
+  "subs": [
+   {
+    "args": {
+     "env": {
+      "XDG_DATA_HOME": "/"
+     }
+    },
+    "id": "E04/root",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      {
+       "source": "claude:home",
+       "engine": "claude",
+       "kind": "home",
+       "home": "/home/test/.claude"
+      },
+      {
+       "source": "codex:home",
+       "engine": "codex",
+       "kind": "home",
+       "home": "/home/test/.codex"
+      },
+      {
+       "source": "grok:home",
+       "engine": "grok",
+       "kind": "home",
+       "home": "/home/test/.grok"
+      },
+      {
+       "source": "opencode:home",
+       "engine": "opencode",
+       "kind": "home",
+       "home": "/opencode"
+      },
+      {
+       "source": "qwen:home",
+       "engine": "qwen",
+       "kind": "home",
+       "home": "/home/test/.qwen"
+      }
+     ],
+     "trace": [
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "claude"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "codex"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ]
+     ]
+    }
+   },
+   {
+    "args": {
+     "env": {
+      "XDG_DATA_HOME": "/a/./b/../c"
+     }
+    },
+    "id": "E04/dots",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      {
+       "source": "claude:home",
+       "engine": "claude",
+       "kind": "home",
+       "home": "/home/test/.claude"
+      },
+      {
+       "source": "codex:home",
+       "engine": "codex",
+       "kind": "home",
+       "home": "/home/test/.codex"
+      },
+      {
+       "source": "grok:home",
+       "engine": "grok",
+       "kind": "home",
+       "home": "/home/test/.grok"
+      },
+      {
+       "source": "opencode:home",
+       "engine": "opencode",
+       "kind": "home",
+       "home": "/a/c/opencode"
+      },
+      {
+       "source": "qwen:home",
+       "engine": "qwen",
+       "kind": "home",
+       "home": "/home/test/.qwen"
+      }
+     ],
+     "trace": [
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "claude"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "codex"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ]
+     ]
+    }
+   },
+   {
+    "args": {
+     "env": {
+      "XDG_DATA_HOME": "/a//b/"
+     }
+    },
+    "id": "E04/double-slash",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      {
+       "source": "claude:home",
+       "engine": "claude",
+       "kind": "home",
+       "home": "/home/test/.claude"
+      },
+      {
+       "source": "codex:home",
+       "engine": "codex",
+       "kind": "home",
+       "home": "/home/test/.codex"
+      },
+      {
+       "source": "grok:home",
+       "engine": "grok",
+       "kind": "home",
+       "home": "/home/test/.grok"
+      },
+      {
+       "source": "opencode:home",
+       "engine": "opencode",
+       "kind": "home",
+       "home": "/a/b/opencode"
+      },
+      {
+       "source": "qwen:home",
+       "engine": "qwen",
+       "kind": "home",
+       "home": "/home/test/.qwen"
+      }
+     ],
+     "trace": [
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "claude"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "codex"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "E05",
+  "name": "qwen-runtime-precedence",
+  "op": "import_sources",
+  "args": {
+   "env": {
+    "QWEN_RUNTIME_DIR": "/rt",
+    "QWEN_HOME": "/glob"
+   }
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    {
+     "source": "claude:home",
+     "engine": "claude",
+     "kind": "home",
+     "home": "/home/test/.claude"
+    },
+    {
+     "source": "codex:home",
+     "engine": "codex",
+     "kind": "home",
+     "home": "/home/test/.codex"
+    },
+    {
+     "source": "grok:home",
+     "engine": "grok",
+     "kind": "home",
+     "home": "/home/test/.grok"
+    },
+    {
+     "source": "opencode:home",
+     "engine": "opencode",
+     "kind": "home",
+     "home": "/home/test/.local/share/opencode"
+    },
+    {
+     "source": "qwen:home",
+     "engine": "qwen",
+     "kind": "home",
+     "home": "/rt"
+    }
+   ],
+   "trace": [
+    [
+     "homedir"
+    ],
+    [
+     "accounts",
+     "claude"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "accounts",
+     "codex"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "homedir"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "E06",
+  "name": "qwen-runtime-blank-global",
+  "op": "import_sources",
+  "args": {
+   "env": {
+    "QWEN_RUNTIME_DIR": "  ",
+    "QWEN_HOME": " /glob "
+   }
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    {
+     "source": "claude:home",
+     "engine": "claude",
+     "kind": "home",
+     "home": "/home/test/.claude"
+    },
+    {
+     "source": "codex:home",
+     "engine": "codex",
+     "kind": "home",
+     "home": "/home/test/.codex"
+    },
+    {
+     "source": "grok:home",
+     "engine": "grok",
+     "kind": "home",
+     "home": "/home/test/.grok"
+    },
+    {
+     "source": "opencode:home",
+     "engine": "opencode",
+     "kind": "home",
+     "home": "/home/test/.local/share/opencode"
+    },
+    {
+     "source": "qwen:home",
+     "engine": "qwen",
+     "kind": "home",
+     "home": "/glob"
+    }
+   ],
+   "trace": [
+    [
+     "homedir"
+    ],
+    [
+     "accounts",
+     "claude"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "accounts",
+     "codex"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "homedir"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "E07",
+  "name": "qwen-both-blank-default",
+  "op": "import_sources",
+  "args": {
+   "env": {
+    "QWEN_RUNTIME_DIR": " ",
+    "QWEN_HOME": "\t"
+   }
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    {
+     "source": "claude:home",
+     "engine": "claude",
+     "kind": "home",
+     "home": "/home/test/.claude"
+    },
+    {
+     "source": "codex:home",
+     "engine": "codex",
+     "kind": "home",
+     "home": "/home/test/.codex"
+    },
+    {
+     "source": "grok:home",
+     "engine": "grok",
+     "kind": "home",
+     "home": "/home/test/.grok"
+    },
+    {
+     "source": "opencode:home",
+     "engine": "opencode",
+     "kind": "home",
+     "home": "/home/test/.local/share/opencode"
+    },
+    {
+     "source": "qwen:home",
+     "engine": "qwen",
+     "kind": "home",
+     "home": "/home/test/.qwen"
+    }
+   ],
+   "trace": [
+    [
+     "homedir"
+    ],
+    [
+     "accounts",
+     "claude"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "accounts",
+     "codex"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "homedir"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "E08",
+  "name": "qwen-relative-verbatim",
+  "op": "import_sources",
+  "args": {
+   "env": {
+    "QWEN_RUNTIME_DIR": "rel/./rt/../x"
+   }
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    {
+     "source": "claude:home",
+     "engine": "claude",
+     "kind": "home",
+     "home": "/home/test/.claude"
+    },
+    {
+     "source": "codex:home",
+     "engine": "codex",
+     "kind": "home",
+     "home": "/home/test/.codex"
+    },
+    {
+     "source": "grok:home",
+     "engine": "grok",
+     "kind": "home",
+     "home": "/home/test/.grok"
+    },
+    {
+     "source": "opencode:home",
+     "engine": "opencode",
+     "kind": "home",
+     "home": "/home/test/.local/share/opencode"
+    },
+    {
+     "source": "qwen:home",
+     "engine": "qwen",
+     "kind": "home",
+     "home": "rel/./rt/../x"
+    }
+   ],
+   "trace": [
+    [
+     "homedir"
+    ],
+    [
+     "accounts",
+     "claude"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "accounts",
+     "codex"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "homedir"
+    ]
+   ]
+  }
+ },
+ {
+  "name": "trim-unicode-membership",
+  "op": "import_sources",
+  "id": "E09",
+  "subs": [
+   {
+    "args": {
+     "env": {
+      "CLAUDE_CONFIG_DIR": "﻿ /c ﻿"
+     }
+    },
+    "id": "E09/trimmed",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      {
+       "source": "claude:home",
+       "engine": "claude",
+       "kind": "home",
+       "home": "/c"
+      },
+      {
+       "source": "codex:home",
+       "engine": "codex",
+       "kind": "home",
+       "home": "/home/test/.codex"
+      },
+      {
+       "source": "grok:home",
+       "engine": "grok",
+       "kind": "home",
+       "home": "/home/test/.grok"
+      },
+      {
+       "source": "opencode:home",
+       "engine": "opencode",
+       "kind": "home",
+       "home": "/home/test/.local/share/opencode"
+      },
+      {
+       "source": "qwen:home",
+       "engine": "qwen",
+       "kind": "home",
+       "home": "/home/test/.qwen"
+      }
+     ],
+     "trace": [
+      [
+       "accounts",
+       "claude"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "codex"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ]
+     ]
+    }
+   },
+   {
+    "args": {
+     "env": {
+      "CLAUDE_CONFIG_DIR": "/c"
+     }
+    },
+    "id": "E09/nel-retained",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      {
+       "source": "claude:home",
+       "engine": "claude",
+       "kind": "home",
+       "home": "/c"
+      },
+      {
+       "source": "codex:home",
+       "engine": "codex",
+       "kind": "home",
+       "home": "/home/test/.codex"
+      },
+      {
+       "source": "grok:home",
+       "engine": "grok",
+       "kind": "home",
+       "home": "/home/test/.grok"
+      },
+      {
+       "source": "opencode:home",
+       "engine": "opencode",
+       "kind": "home",
+       "home": "/home/test/.local/share/opencode"
+      },
+      {
+       "source": "qwen:home",
+       "engine": "qwen",
+       "kind": "home",
+       "home": "/home/test/.qwen"
+      }
+     ],
+     "trace": [
+      [
+       "accounts",
+       "claude"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "codex"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ]
+     ]
+    }
+   },
+   {
+    "args": {
+     "env": {
+      "CLAUDE_CONFIG_DIR": "/c​"
+     }
+    },
+    "id": "E09/zwsp-retained",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      {
+       "source": "claude:home",
+       "engine": "claude",
+       "kind": "home",
+       "home": "/c​"
+      },
+      {
+       "source": "codex:home",
+       "engine": "codex",
+       "kind": "home",
+       "home": "/home/test/.codex"
+      },
+      {
+       "source": "grok:home",
+       "engine": "grok",
+       "kind": "home",
+       "home": "/home/test/.grok"
+      },
+      {
+       "source": "opencode:home",
+       "engine": "opencode",
+       "kind": "home",
+       "home": "/home/test/.local/share/opencode"
+      },
+      {
+       "source": "qwen:home",
+       "engine": "qwen",
+       "kind": "home",
+       "home": "/home/test/.qwen"
+      }
+     ],
+     "trace": [
+      [
+       "accounts",
+       "claude"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "codex"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ]
+     ]
+    }
+   },
+   {
+    "args": {
+     "env": {
+      "GROK_HOME": "       　\u000b\f/g"
+     }
+    },
+    "id": "E09/all-trimmed",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      {
+       "source": "claude:home",
+       "engine": "claude",
+       "kind": "home",
+       "home": "/home/test/.claude"
+      },
+      {
+       "source": "codex:home",
+       "engine": "codex",
+       "kind": "home",
+       "home": "/home/test/.codex"
+      },
+      {
+       "source": "grok:home",
+       "engine": "grok",
+       "kind": "home",
+       "home": "/g"
+      },
+      {
+       "source": "opencode:home",
+       "engine": "opencode",
+       "kind": "home",
+       "home": "/home/test/.local/share/opencode"
+      },
+      {
+       "source": "qwen:home",
+       "engine": "qwen",
+       "kind": "home",
+       "home": "/home/test/.qwen"
+      }
+     ],
+     "trace": [
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "claude"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "codex"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ]
+     ]
+    }
+   }
+  ],
+  "mutant": "M01"
+ },
+ {
+  "name": "qwen-eager-home-observation",
+  "op": "import_sources",
+  "id": "E10",
+  "subs": [
+   {
+    "args": {
+     "env": {
+      "CLAUDE_CONFIG_DIR": "/c",
+      "GROK_HOME": "/g",
+      "XDG_DATA_HOME": "/x",
+      "QWEN_RUNTIME_DIR": "/rt"
+     }
+    },
+    "script": {
+     "ambient": [
+      {
+       "ok": "/amb"
+      }
+     ]
+    },
+    "id": "E10/override",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      {
+       "source": "claude:home",
+       "engine": "claude",
+       "kind": "home",
+       "home": "/c"
+      },
+      {
+       "source": "codex:home",
+       "engine": "codex",
+       "kind": "home",
+       "home": "/amb"
+      },
+      {
+       "source": "grok:home",
+       "engine": "grok",
+       "kind": "home",
+       "home": "/g"
+      },
+      {
+       "source": "opencode:home",
+       "engine": "opencode",
+       "kind": "home",
+       "home": "/x/opencode"
+      },
+      {
+       "source": "qwen:home",
+       "engine": "qwen",
+       "kind": "home",
+       "home": "/rt"
+      }
+     ],
+     "trace": [
+      [
+       "accounts",
+       "claude"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "accounts",
+       "codex"
+      ],
+      [
+       "homedir"
+      ]
+     ]
+    }
+   },
+   {
+    "args": {
+     "env": {
+      "CLAUDE_CONFIG_DIR": "/c",
+      "GROK_HOME": "/g",
+      "XDG_DATA_HOME": "/x",
+      "QWEN_RUNTIME_DIR": "/rt"
+     }
+    },
+    "script": {
+     "homedir": [
+      {
+       "throw": {
+        "class": "Error",
+        "ref": "hd_err",
+        "message": "boom"
+       }
+      }
+     ],
+     "ambient": [
+      {
+       "ok": "/amb"
+      }
+     ]
+    },
+    "id": "E10/throw",
+    "expect": {
+     "terminal": "throw_existing",
+     "value": {
+      "ref": "hd_err"
+     },
+     "trace": [
+      [
+       "accounts",
+       "claude"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "accounts",
+       "codex"
+      ],
+      [
+       "homedir"
+      ]
+     ]
+    }
+   }
+  ]
+ }
+]

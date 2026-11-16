@@ -1,0 +1,733 @@
+[
+ {
+  "name": "temporary-literal-true",
+  "op": "excluded_from_bound",
+  "id": "X01",
+  "subs": [
+   {
+    "op": "excluded_from_bound",
+    "args": {
+     "session": {
+      "id": "s",
+      "temporary": true
+     }
+    },
+    "script": {
+     "isTemporary": [
+      {
+       "ok": true
+      }
+     ]
+    },
+    "id": "X01/callback-true",
+    "expect": {
+     "terminal": "ok",
+     "value": true,
+     "trace": []
+    }
+   },
+   {
+    "op": "excluded_from_bound",
+    "args": {
+     "session": {
+      "id": "s",
+      "temporary": true
+     }
+    },
+    "script": {
+     "isTemporary": [
+      {
+       "ok": false
+      }
+     ]
+    },
+    "id": "X01/callback-false",
+    "expect": {
+     "terminal": "ok",
+     "value": true,
+     "trace": []
+    }
+   },
+   {
+    "op": "excluded_from_bound",
+    "args": {
+     "session": {
+      "id": "s",
+      "temporary": true
+     }
+    },
+    "script": {
+     "isTemporary": [
+      {
+       "throw": {
+        "class": "Error",
+        "ref": "tx"
+       }
+      }
+     ]
+    },
+    "id": "X01/callback-throws",
+    "expect": {
+     "terminal": "ok",
+     "value": true,
+     "trace": []
+    }
+   }
+  ],
+  "mutant": "M15"
+ },
+ {
+  "id": "X02",
+  "name": "temporary-missing-false-callback",
+  "op": "excluded_from_bound",
+  "args": {
+   "session": {
+    "id": "s"
+   }
+  },
+  "script": {
+   "isTemporary": [
+    {
+     "ok": false
+    }
+   ]
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": false,
+   "trace": [
+    [
+     "isTemporary",
+     "s"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "X03",
+  "name": "temporary-missing-true-callback",
+  "op": "excluded_from_bound",
+  "args": {
+   "session": {
+    "id": "s"
+   }
+  },
+  "script": {
+   "isTemporary": [
+    {
+     "ok": true
+    }
+   ]
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": true,
+   "trace": [
+    [
+     "isTemporary",
+     "s"
+    ]
+   ]
+  }
+ },
+ {
+  "name": "temporary-explicit-false",
+  "op": "excluded_from_bound",
+  "id": "X04",
+  "subs": [
+   {
+    "op": "excluded_from_bound",
+    "args": {
+     "session": {
+      "id": "s",
+      "temporary": false
+     }
+    },
+    "script": {
+     "isTemporary": [
+      {
+       "ok": true
+      }
+     ]
+    },
+    "id": "X04/callback-true",
+    "expect": {
+     "terminal": "ok",
+     "value": true,
+     "trace": [
+      [
+       "isTemporary",
+       "s"
+      ]
+     ]
+    }
+   },
+   {
+    "op": "excluded_from_bound",
+    "args": {
+     "session": {
+      "id": "s",
+      "temporary": false
+     }
+    },
+    "script": {
+     "isTemporary": [
+      {
+       "ok": false
+      }
+     ]
+    },
+    "id": "X04/callback-false",
+    "expect": {
+     "terminal": "ok",
+     "value": false,
+     "trace": [
+      [
+       "isTemporary",
+       "s"
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "temporary-null",
+  "op": "excluded_from_bound",
+  "id": "X05",
+  "subs": [
+   {
+    "op": "excluded_from_bound",
+    "args": {
+     "session": {
+      "id": "s",
+      "temporary": null
+     }
+    },
+    "script": {
+     "isTemporary": [
+      {
+       "ok": true
+      }
+     ]
+    },
+    "id": "X05/callback-true",
+    "expect": {
+     "terminal": "ok",
+     "value": true,
+     "trace": [
+      [
+       "isTemporary",
+       "s"
+      ]
+     ]
+    }
+   },
+   {
+    "op": "excluded_from_bound",
+    "args": {
+     "session": {
+      "id": "s",
+      "temporary": {
+       "undef": 1
+      }
+     }
+    },
+    "script": {
+     "isTemporary": [
+      {
+       "ok": false
+      }
+     ]
+    },
+    "id": "X05/undefined",
+    "expect": {
+     "terminal": "ok",
+     "value": false,
+     "trace": [
+      [
+       "isTemporary",
+       "s"
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "temporary-number-one",
+  "op": "excluded_from_bound",
+  "id": "X06",
+  "subs": [
+   {
+    "op": "excluded_from_bound",
+    "args": {
+     "session": {
+      "id": "s",
+      "temporary": 1
+     }
+    },
+    "script": {
+     "isTemporary": [
+      {
+       "ok": false
+      }
+     ]
+    },
+    "id": "X06/callback-false",
+    "expect": {
+     "terminal": "ok",
+     "value": false,
+     "trace": [
+      [
+       "isTemporary",
+       "s"
+      ]
+     ]
+    }
+   },
+   {
+    "op": "excluded_from_bound",
+    "args": {
+     "session": {
+      "id": "s",
+      "temporary": 1
+     }
+    },
+    "script": {
+     "isTemporary": [
+      {
+       "ok": true
+      }
+     ]
+    },
+    "id": "X06/callback-true",
+    "expect": {
+     "terminal": "ok",
+     "value": true,
+     "trace": [
+      [
+       "isTemporary",
+       "s"
+      ]
+     ]
+    }
+   }
+  ],
+  "mutant": "M15"
+ },
+ {
+  "name": "temporary-string-true",
+  "op": "excluded_from_bound",
+  "id": "X07",
+  "subs": [
+   {
+    "op": "excluded_from_bound",
+    "args": {
+     "session": {
+      "id": "s",
+      "temporary": "true"
+     }
+    },
+    "script": {
+     "isTemporary": [
+      {
+       "ok": false
+      }
+     ]
+    },
+    "id": "X07/callback-false",
+    "expect": {
+     "terminal": "ok",
+     "value": false,
+     "trace": [
+      [
+       "isTemporary",
+       "s"
+      ]
+     ]
+    }
+   },
+   {
+    "op": "excluded_from_bound",
+    "args": {
+     "session": {
+      "id": "s",
+      "temporary": {
+       "ref": "obj"
+      }
+     }
+    },
+    "script": {
+     "isTemporary": [
+      {
+       "ok": false
+      }
+     ]
+    },
+    "id": "X07/other-truthy",
+    "expect": {
+     "terminal": "ok",
+     "value": false,
+     "trace": [
+      [
+       "isTemporary",
+       "s"
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "temporary-callback-throws",
+  "op": "excluded_from_bound",
+  "id": "X08",
+  "subs": [
+   {
+    "op": "excluded_from_bound",
+    "args": {
+     "session": {
+      "id": "s"
+     }
+    },
+    "script": {
+     "isTemporary": [
+      {
+       "throw": {
+        "class": "Error",
+        "ref": "tx",
+        "message": "no"
+       }
+      }
+     ]
+    },
+    "id": "X08/error",
+    "expect": {
+     "terminal": "throw_existing",
+     "value": {
+      "ref": "tx"
+     },
+     "trace": [
+      [
+       "isTemporary",
+       "s"
+      ]
+     ]
+    }
+   },
+   {
+    "op": "excluded_from_bound",
+    "args": {
+     "session": {
+      "id": "s"
+     }
+    },
+    "script": {
+     "isTemporary": [
+      {
+       "throw": {
+        "class": "primitive",
+        "ref": "tp",
+        "value": "str"
+       }
+      }
+     ]
+    },
+    "id": "X08/primitive",
+    "expect": {
+     "terminal": "throw_existing",
+     "value": {
+      "ref": "tp"
+     },
+     "trace": [
+      [
+       "isTemporary",
+       "s"
+      ]
+     ]
+    }
+   },
+   {
+    "op": "bound_session_index",
+    "args": {
+     "sessions": [
+      {
+       "id": "s1",
+       "externalThread": {
+        "engine": "claude",
+        "thread": "t"
+       }
+      }
+     ]
+    },
+    "script": {
+     "isTemporary": [
+      {
+       "throw": {
+        "class": "Error",
+        "ref": "tx",
+        "message": "no"
+       }
+      }
+     ]
+    },
+    "id": "X08/bound",
+    "expect": {
+     "terminal": "throw_existing",
+     "value": {
+      "ref": "tx"
+     },
+     "trace": [
+      [
+       "isTemporary",
+       "s1"
+      ]
+     ],
+     "callerTitles": [
+      [
+       "s1",
+       {
+        "undef": 1
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "X09",
+  "name": "temporary-duplicate-id-calls",
+  "op": "bound_session_index",
+  "args": {
+   "sessions": [
+    {
+     "id": "s1",
+     "temporary": true,
+     "externalThread": {
+      "engine": "claude",
+      "thread": "a"
+     }
+    },
+    {
+     "id": "s1",
+     "externalThread": {
+      "engine": "claude",
+      "thread": "b"
+     }
+    },
+    {
+     "id": "s1",
+     "temporary": false,
+     "externalThread": {
+      "engine": "claude",
+      "thread": "c"
+     }
+    },
+    {
+     "id": "s1",
+     "temporary": 1,
+     "externalThread": {
+      "engine": "claude",
+      "thread": "d"
+     }
+    }
+   ]
+  },
+  "script": {
+   "isTemporary": [
+    {
+     "ok": false
+    }
+   ]
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    [
+     "claude:b",
+     "s1"
+    ],
+    [
+     "claude:c",
+     "s1"
+    ],
+    [
+     "claude:d",
+     "s1"
+    ]
+   ],
+   "trace": [
+    [
+     "isTemporary",
+     "s1"
+    ],
+    [
+     "isTemporary",
+     "s1"
+    ],
+    [
+     "isTemporary",
+     "s1"
+    ]
+   ],
+   "callerTitles": [
+    [
+     "s1",
+     {
+      "undef": 1
+     }
+    ]
+   ]
+  }
+ },
+ {
+  "name": "temporary-excludes-before-threads",
+  "op": "bound_session_index",
+  "id": "X10",
+  "subs": [
+   {
+    "args": {
+     "sessions": [
+      {
+       "id": "s1",
+       "temporary": true,
+       "externalThread": {
+        "engine": "claude",
+        "thread": "t",
+        "forks": {
+         "arr": [
+          "f"
+         ]
+        }
+       },
+       "engineThreads": {
+        "obj": [
+         [
+          "codex:x",
+          {
+           "threadId": "z"
+          }
+         ]
+        ]
+       },
+       "terminal": {
+        "cliSession": "c"
+       }
+      },
+      {
+       "id": "s2",
+       "externalThread": {
+        "engine": "claude",
+        "thread": "t"
+       }
+      }
+     ]
+    },
+    "id": "X10/literal",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "claude:t",
+       "s2"
+      ]
+     ],
+     "trace": [
+      [
+       "isTemporary",
+       "s2"
+      ]
+     ],
+     "callerTitles": [
+      [
+       "s1",
+       {
+        "undef": 1
+       }
+      ],
+      [
+       "s2",
+       {
+        "undef": 1
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "args": {
+     "sessions": [
+      {
+       "id": "s1",
+       "externalThread": {
+        "engine": "claude",
+        "thread": "t",
+        "forks": {
+         "arr": [
+          "f"
+         ]
+        }
+       },
+       "terminal": {
+        "cliSession": "c"
+       }
+      },
+      {
+       "id": "s2",
+       "externalThread": {
+        "engine": "claude",
+        "thread": "t"
+       }
+      }
+     ]
+    },
+    "script": {
+     "isTemporary": [
+      {
+       "ok": true
+      },
+      {
+       "ok": false
+      }
+     ]
+    },
+    "id": "X10/callback",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "claude:t",
+       "s2"
+      ]
+     ],
+     "trace": [
+      [
+       "isTemporary",
+       "s1"
+      ],
+      [
+       "isTemporary",
+       "s2"
+      ]
+     ],
+     "callerTitles": [
+      [
+       "s1",
+       {
+        "undef": 1
+       }
+      ],
+      [
+       "s2",
+       {
+        "undef": 1
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ }
+]

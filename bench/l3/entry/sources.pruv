@@ -1,0 +1,318 @@
+// L3-8 entry: op 1 import_sources (reference/backend-engine-import.ts importSources).
+//
+// Item/checkpoint design: the work is a chain of items (ck0 phase 0..9, ck1 account index, ck2 account count). An item is
+// re-run from scratch against the log of ITS OWN answers (see state.pruv). When an item completes, its row (if any) is
+// appended to the rows of this step, the log is dropped and the next item starts. The step ends when an item stalls (await:
+// request + this step's rows + checkpoint + the current item's log) or the last phase finishes (done). Rows are emitted once,
+// in the packet of the step where their item completed, and never carried. Cost of a step = O(input blob + current item
+// log + request + rows completed in this step).
+//
+// done == 2 inside this file means "item complete, advance" (ck already updated; the row, if any, is in opool/orec).
+
+fn adv(cx0: crate::state::Ctx, ph: i64, idx: i64, cnt: i64) -> crate::state::Ctx ! alloc
+{
+  let a: crate::state::Ctx = crate::state::set_ck(cx0, 0, ph);
+  let b: crate::state::Ctx = crate::state::set_ck(a, 1, idx);
+  let b1: crate::state::Ctx = crate::state::set_ck(b, 2, cnt);
+  // the climb words (ck3..7, see canon.pruv canonical) belong to one item: every new item starts with them cleared
+  let b2: crate::state::Ctx = crate::state::set_ck(crate::state::set_ck(crate::state::set_ck(b1, 3, 0), 4, 0), 5, 0);
+  let mut c: crate::state::Ctx = crate::state::set_ck(crate::state::set_ck(b2, 6, 0), 7, 0);
+  c.done = 2;
+  return c;
+}
+
+// the item emitted no row
+fn skip(cx0: crate::state::Ctx, ph: i64, idx: i64, cnt: i64) -> crate::state::Ctx ! alloc
+{
+  let mut cx: crate::state::Ctx = cx0;
+  let e: [i64] = crate::u16::empty();
+  cx.opool = copy(e);
+  cx.orec = copy(e);
+  cx.done = 0;
+  return adv(cx, ph, idx, cnt);
+}
+
+fn rec0(cx: crate::state::Ctx) -> i64
+  ensures 0 <= result && result <= 33554432
+{
+  return crate::u16::clamp(crate::packet::sec_start(cx.blob, 1), 33554432);
+}
+
+// trimmed env slot (empty for a non-string slot); slot k is at record offset 3k
+fn env_trim(cx: crate::state::Ctx, k: i64) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let p: i64 = rec0(cx) + 3 * crate::u16::clamp(k, 16);
+  if crate::value::tag_at(cx.blob, p) == 6 { return crate::u16::trim(crate::value::str_units(cx.blob, p)); }
+  return crate::u16::empty();
+}
+
+// the row (18 words) into cx.orec / cx.opool; pool = source|engine|kind|account|name|home
+fn emit_row(cx0: crate::state::Ctx, src: [i64], eng: [i64], kind: [i64], hasacct: bool, acct: [i64],
+            nt: i64, na: i64, nb: i64, nu: [i64], home: [i64]) -> crate::state::Ctx ! alloc
+{
+  let mut cx: crate::state::Ctx = cx0;
+  let ls: i64 = len(src);
+  let le: i64 = len(eng);
+  let lk: i64 = len(kind);
+  let la: i64 = len(acct);
+  let ln: i64 = len(nu);
+  let lh: i64 = len(home);
+  let o1: i64 = ls;
+  let o2: i64 = o1 + le;
+  let o3: i64 = o2 + lk;
+  let o4: i64 = o3 + la;
+  let o5: i64 = o4 + ln;
+  let pool: [i64] = crate::u16::cat(crate::u16::cat(crate::u16::cat(src, eng), crate::u16::cat(kind, acct)), crate::u16::cat(nu, home));
+  let mut rec: [i64] = crate::u16::zeros(18);
+  crate::packet::put_vs(inout rec, 0, 6, 0, ls);
+  crate::packet::put_vs(inout rec, 3, 6, o1, le);
+  crate::packet::put_vs(inout rec, 6, 6, o2, lk);
+  if hasacct {
+    crate::packet::put_vs(inout rec, 9, 6, o3, la);
+    if nt == 6 {
+      crate::packet::put_vs(inout rec, 12, 6, o4, ln);
+    } else {
+      crate::packet::put_vs(inout rec, 12, nt, na, nb);
+    }
+  } else {
+    crate::packet::put_vs(inout rec, 9, 10, 0, 0);
+    crate::packet::put_vs(inout rec, 12, 10, 0, 0);
+  }
+  crate::packet::put_vs(inout rec, 15, 6, o5, lh);
+  cx.opool = copy(pool);
+  cx.orec = copy(rec);
+  return cx;
+}
+
+// a home row whose home is cx.opool
+fn home_row(cx: crate::state::Ctx, src: str, eng: str) -> crate::state::Ctx ! alloc
+{
+  let e: [i64] = crate::u16::empty();
+  return emit_row(cx, crate::u16::lit(src), crate::u16::lit(eng), crate::u16::lit("home"), false, e, 0, 0, 0, e, copy(cx.opool));
+}
+
+// trimmed env slot, else join(homedir(), seg)
+fn env_or_home(cx0: crate::state::Ctx, slot: i64, seg: str) -> crate::state::Ctx ! alloc
+{
+  let t: [i64] = env_trim(cx0, slot);
+  if len(t) > 0 { return crate::canon::with_pool(cx0, t); }
+  return crate::canon::home_sub(cx0, seg);
+}
+
+fn ph_home(cx0: crate::state::Ctx, slot: i64, seg: str, src: str, eng: str, next: i64) -> crate::state::Ctx ! alloc
+{
+  let cx: crate::state::Ctx = env_or_home(cx0, slot, seg);
+  if crate::canon::early(cx) { return cx; }
+  return adv(home_row(cx, src, eng), next, 0, 0);
+}
+
+// accounts(eng): the count goes to the next phase; a throw is thrown on
+fn ph_accounts(cx0: crate::state::Ctx, eng: i64, next: i64) -> crate::state::Ctx ! alloc
+{
+  let cx: crate::state::Ctx = crate::state::ctx_accounts(cx0, eng);
+  if cx.stalled != 0 || cx.bad != 0 { return cx; }
+  if crate::state::ent_r(cx, 0) == 1 { return crate::canon::throw_existing(cx); }
+  return adv(cx, next, 0, crate::u16::clamp(crate::state::ent_r(cx, 1), 16777216));
+}
+
+// ---- Claude accounts: one account_at per item ----
+fn ph_claude_acct(cx0: crate::state::Ctx) -> crate::state::Ctx ! alloc
+{
+  let idx: i64 = crate::u16::clamp(crate::state::get_ck(cx0, 1), 16777216);
+  let cnt: i64 = crate::u16::clamp(crate::state::get_ck(cx0, 2), 16777216);
+  if idx >= cnt { return adv(cx0, 3, 0, 0); }
+  let cx: crate::state::Ctx = crate::state::ctx_account_at(cx0, 0, idx);
+  if cx.stalled != 0 || cx.bad != 0 { return cx; }
+  let rp: i64 = crate::u16::clamp(crate::packet::sec_start(cx.ent, 1), 33554432);
+  // MUTANT M05: an invalid id (or nullish row) aborts the import (throws) instead of being skipped
+  if crate::state::ent_r(cx, 1) == 0 || !crate::accounts::valid_account_id(cx.ent, rp + 2) { return skip(cx, 2, idx + 1, cnt); }
+  let id: [i64] = crate::value::str_units(cx.ent, rp + 2);
+  let nt: i64 = crate::value::tag_at(cx.ent, rp + 5);
+  let na: i64 = crate::u16::rd(cx.ent, rp + 6);
+  let nb: i64 = crate::u16::rd(cx.ent, rp + 7);
+  let mut nu: [i64] = crate::u16::empty();
+  if nt == 6 { nu = crate::value::str_units(cx.ent, rp + 5); }
+  let home: [i64] = crate::accounts::account_home(crate::value::str_units(cx.blob, rec0(cx)), crate::u16::lit("claude"), id);
+  return adv(emit_row(cx, crate::u16::cat(crate::u16::lit("claude:"), id), crate::u16::lit("claude"), crate::u16::lit("account"), true, id, nt, na, nb, nu, home), 2, idx + 1, cnt);
+}
+
+// ---- Codex accounts: the body (codexAccountFolder) may observe several times; any throw in it skips the account ----
+fn ph_codex_acct(cx0: crate::state::Ctx) -> crate::state::Ctx ! alloc
+{
+  let idx: i64 = crate::u16::clamp(crate::state::get_ck(cx0, 1), 16777216);
+  let cnt: i64 = crate::u16::clamp(crate::state::get_ck(cx0, 2), 16777216);
+  if idx >= cnt { return adv(cx0, 6, 0, 0); }
+  let cx: crate::state::Ctx = crate::state::ctx_account_at(cx0, 1, idx);
+  if cx.stalled != 0 || cx.bad != 0 { return cx; }
+  let rp: i64 = crate::u16::clamp(crate::packet::sec_start(cx.ent, 1), 33554432);
+  // MUTANT M05: an invalid id (or nullish row) aborts the import (throws) instead of being skipped
+  if crate::state::ent_r(cx, 1) == 0 || !crate::accounts::valid_account_id(cx.ent, rp + 2) { return skip(cx, 5, idx + 1, cnt); }
+  // everything needed from the account_at answer is taken before the body overwrites cx.ent
+  let id: [i64] = crate::value::str_units(cx.ent, rp + 2);
+  let nt: i64 = crate::value::tag_at(cx.ent, rp + 5);
+  let na: i64 = crate::u16::rd(cx.ent, rp + 6);
+  let nb: i64 = crate::u16::rd(cx.ent, rp + 7);
+  let mut nu: [i64] = crate::u16::empty();
+  if nt == 6 { nu = crate::value::str_units(cx.ent, rp + 5); }
+  let expected: [i64] = crate::accounts::account_home(crate::value::str_units(cx.blob, rec0(cx)), crate::u16::lit("codex"), id);
+  let cy: crate::state::Ctx = crate::canon::is_host_codex_home(cx, expected);
+  if cy.stalled != 0 || cy.bad != 0 { return cy; }
+  if cy.done == 1 || cy.ontab == 1 { return skip(cy, 5, idx + 1, cnt); }
+  // MUTANT M04: a Codex row whose id equals the previously emitted Codex id is skipped (deduplicated; id hash in ck6)
+  return adv(emit_row(cy, crate::u16::cat(crate::u16::lit("codex:"), id), crate::u16::lit("codex"), crate::u16::lit("account"), true, id, nt, na, nb, nu, expected), 5, idx + 1, cnt);
+}
+
+// ---- Codex home: hostCodexHome() reads the AMBIENT CODEX_HOME ----
+fn ph_codex_home(cx0: crate::state::Ctx) -> crate::state::Ctx ! alloc
+{
+  // MUTANT M02: reads the input env slot CODEX_HOME (record offset 18) instead of the ambient request
+  let cx: crate::state::Ctx = crate::canon::host_home(cx0);
+  if crate::canon::early(cx) { return cx; }
+  return adv(home_row(cx, "codex:home", "codex"), 4, 0, 0);
+}
+
+fn ph_opencode(cx0: crate::state::Ctx) -> crate::state::Ctx ! alloc
+{
+  let xdg: [i64] = env_trim(cx0, 3);
+  // MUTANT M03: the starts-with '/' check is dropped (a relative XDG_DATA_HOME is used)
+  if len(xdg) > 0 && crate::u16::rd(xdg, 0) == 47 {
+    let cx: crate::state::Ctx = crate::canon::with_pool(cx0, crate::path::join2(xdg, crate::u16::lit("opencode")));
+    return adv(home_row(cx, "opencode:home", "opencode"), 8, 0, 0);
+  }
+  let cx: crate::state::Ctx = crate::canon::homedir_units(cx0);
+  if crate::canon::early(cx) { return cx; }
+  let h: [i64] = crate::path::join4(cx.opool, crate::u16::lit(".local"), crate::u16::lit("share"), crate::u16::lit("opencode"));
+  return adv(home_row(crate::canon::with_pool(cx, h), "opencode:home", "opencode"), 8, 0, 0);
+}
+
+// Qwen: homedir() is evaluated first (eager argument), even when QWEN_RUNTIME_DIR is set
+fn ph_qwen(cx0: crate::state::Ctx) -> crate::state::Ctx ! alloc
+{
+  let cx: crate::state::Ctx = crate::canon::homedir_units(cx0);
+  if crate::canon::early(cx) { return cx; }
+  let rt: [i64] = env_trim(cx, 4);
+  let qh: [i64] = env_trim(cx, 5);
+  let mut h: [i64] = crate::path::join2(cx.opool, crate::u16::lit(".qwen"));
+  if len(qh) > 0 { h = copy(qh); }
+  if len(rt) > 0 { h = copy(rt); }
+  return adv(home_row(crate::canon::with_pool(cx, h), "qwen:home", "qwen"), 9, 0, 0);
+}
+
+fn phase_item(cx: crate::state::Ctx) -> crate::state::Ctx ! alloc
+{
+  let ph: i64 = crate::state::get_ck(cx, 0);
+  if ph == 0 { return ph_home(cx, 1, ".claude", "claude:home", "claude", 1); }
+  if ph == 1 { return ph_accounts(cx, 0, 2); }
+  if ph == 2 { return ph_claude_acct(cx); }
+  if ph == 3 { return ph_codex_home(cx); }
+  if ph == 4 { return ph_accounts(cx, 1, 5); }
+  if ph == 5 { return ph_codex_acct(cx); }
+  if ph == 6 { return ph_home(cx, 2, ".grok", "grok:home", "grok", 7); }
+  if ph == 7 { return ph_opencode(cx); }
+  if ph == 8 { return ph_qwen(cx); }
+  if ph == 9 {
+    let mut rec: [i64] = crate::u16::zeros(1);
+    crate::u16::wr(inout rec, 0, 0);
+    let e: [i64] = crate::u16::empty();
+    return crate::state::set_done(cx, e, rec, e, 0);
+  }
+  return crate::state::fail(cx);
+}
+
+// add to the pool offset of every string slot of a row array (3-word slots)
+fn rebase(rows: [i64], add: i64) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let mut o: [i64] = copy(rows);
+  let n: i64 = len(o);
+  let a: i64 = crate::u16::clamp(add, 16777216);
+  let mut i: i64 = 0;
+  while i + 2 < n
+    invariant 0 <= i && i <= n && n == len(o) && 0 <= a && a <= 16777216
+    decreases n - i
+  {
+    if crate::u16::rd(o, i) == 6 {
+      let nv: i64 = crate::u16::clamp(crate::u16::rd(o, i + 1), 16777216) + a;
+      crate::u16::wr(inout o, i + 1, nv);
+    }
+    i = i + 3;
+  }
+  return o;
+}
+
+// s0 = the seq of the first request of the current item (R1: the await state keeps it in ck0 as phase + 16 * s0, so that the
+// continuity of start seq + dropped entries + kept log + current request can be checked). An item that completes in this step
+// is followed by one whose first request is the one this step emits (aseq).
+fn drive(cx0: crate::state::Ctx, aseq: i64, dseq: i64, s00: i64) -> [i64] ! alloc
+{
+  let mut cx: crate::state::Ctx = cx0;
+  let mut s0: i64 = s00;
+  let mut racc: [i64] = crate::u16::empty();
+  let mut pacc: [i64] = crate::u16::empty();
+  let mut iter: i64 = 0;
+  while iter < 64
+    invariant 0 <= iter && iter <= 64
+    decreases 64 - iter
+  {
+    cx = phase_item(cx);
+    if cx.stalled == 0 && cx.bad == 0 && crate::u16::clamp(cx.pos, 4294967296) != len(cx.lg) { cx = crate::state::fail(cx); }
+    if cx.done != 2 { iter = 64; } else {
+      let lp: i64 = len(pacc);
+      let r: [i64] = rebase(cx.orec, lp);
+      racc = crate::u16::cat(racc, r);
+      pacc = crate::u16::cat(pacc, cx.opool);
+      let e: [i64] = crate::u16::empty();
+      cx = crate::state::ctx_new(1, cx.op_id, cx.blob, e, cx.ck);
+      s0 = aseq;
+      iter = iter + 1;
+    }
+  }
+  if cx.done == 2 { return crate::packet::boundary(1, cx.op_id, 2); }
+  if cx.bad == 2 { return crate::packet::boundary(1, cx.op_id, 1); }
+  if cx.bad != 0 { return crate::packet::boundary(1, cx.op_id, 0); }
+  let e: [i64] = crate::u16::empty();
+  if cx.stalled != 0 {
+    if aseq >= 268435456 || s0 >= 268435456 { return crate::packet::boundary(1, cx.op_id, 1); }
+    let ckp: crate::state::Ctx = crate::state::set_ck(cx, 0, crate::u16::clamp(crate::state::get_ck(cx, 0), 15) + 16 * crate::u16::clamp(s0, 268435455));
+    let st: [i64] = crate::state::encode_state(1, cx.rcode, cx.raux, ckp.ck, cx.blob, cx.lg);
+    let pool: [i64] = crate::u16::cat(cx.rpool, pacc);
+    return crate::packet::mk_packet(1, cx.op_id, aseq, 1, pool, cx.rrec, st, rebase(racc, len(cx.rpool)), cx.rtab, cx.rntab);
+  }
+  if cx.done != 0 {
+    let pool: [i64] = crate::u16::cat(cx.opool, pacc);
+    return crate::packet::mk_packet(3, cx.op_id, dseq, 1, pool, cx.orec, e, rebase(racc, len(cx.opool)), cx.otab, cx.ontab);
+  }
+  return crate::packet::boundary(1, cx.op_id, 2);
+}
+
+pub fn import_begin(input: [i64]) -> [i64] ! alloc
+{
+  let id: i64 = crate::u16::rd(input, 2);
+  let hi: i64 = crate::accounts::io_check(input);
+  if hi < 0 { return crate::packet::boundary(1, id, 0); }
+  let blob: [i64] = crate::state::repack(input, hi);
+  let cx0: crate::state::Ctx = crate::state::ctx_new(1, id, blob, crate::u16::empty(), crate::u16::zeros(8));
+  return drive(cx0, 1, 0, 1);
+}
+
+pub fn import_step(prev: [i64], completion: [i64]) -> [i64] ! alloc
+{
+  let id: i64 = crate::u16::rd(prev, 2);
+  let seq: i64 = crate::u16::rd(prev, 3);
+  if seq < 0 || seq >= 9007199254740992 { return crate::packet::boundary(1, id, 0); }
+  let s2: i64 = crate::u16::clamp(crate::packet::sec_start(prev, 2), 33554432);
+  let st: [i64] = crate::u16::slice(prev, s2, s2 + crate::u16::clamp(crate::packet::sec_len(prev, 2), 16777216));
+  if !crate::canon::state_ok_ie(st, 1, id) { return crate::packet::boundary(1, id, 0); }
+  if !crate::state::st_replay_ok(st, 1, seq) { return crate::packet::boundary(1, id, 0); }
+  let code: i64 = crate::state::st_code(st);
+  let aux: i64 = crate::state::st_aux(st);
+  let hi: i64 = crate::packet::comp_check(completion, code, aux);
+  if hi < 0 { return crate::packet::boundary(1, id, 0); }
+  let lg: [i64] = crate::state::log_append(crate::state::st_log(st), code, aux, completion, hi);
+  if len(lg) > 16777216 { return crate::packet::boundary(1, id, 1); }
+  let ck0: [i64] = crate::state::st_ck(st);
+  let s0: i64 = crate::state::st_s0(1, ck0);
+  let cx0: crate::state::Ctx = crate::state::with_prev(crate::state::ctx_new(1, id, crate::state::st_blob(st), lg, crate::state::set_ck_arr0(ck0)), prev, false);
+  return drive(cx0, seq + 1, seq, s0);
+}

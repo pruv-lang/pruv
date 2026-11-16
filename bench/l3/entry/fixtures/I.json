@@ -1,0 +1,214 @@
+[
+ {
+  "id": "I01",
+  "name": "integration-claude-list",
+  "integration": {
+   "route": "claude",
+   "op": "list",
+   "piece": "bench/l3/claude",
+   "asserts": [
+    "exactly one engine invocation",
+    "route and args",
+    "list rows unchanged except the 200-unit title cut, order and metadata kept",
+    "read returns the same record",
+    "piece error forwarded unchanged"
+   ],
+   "limit": "bench/l3/claude is the pure packet API (head_packet / tail_packet / window_packet of a0..a4_root.pruv, runner work/a4/rs_rust/runner reads \"op flag|bytes\" lines and prints packet words). It has no listing or read driver that returns import rows or an ExternalRecord, no project/home walk and no JSON result, so there is nothing to register as the entry engine result."
+  }
+ },
+ {
+  "id": "I02",
+  "name": "integration-claude-read",
+  "integration": {
+   "route": "claude",
+   "op": "read",
+   "piece": "bench/l3/claude",
+   "asserts": [
+    "exactly one engine invocation",
+    "route and args",
+    "list rows unchanged except the 200-unit title cut, order and metadata kept",
+    "read returns the same record",
+    "piece error forwarded unchanged"
+   ],
+   "limit": "bench/l3/claude is the pure packet API (head_packet / tail_packet / window_packet of a0..a4_root.pruv, runner work/a4/rs_rust/runner reads \"op flag|bytes\" lines and prints packet words). It has no listing or read driver that returns import rows or an ExternalRecord, no project/home walk and no JSON result, so there is nothing to register as the entry engine result."
+  }
+ },
+ {
+  "id": "I03",
+  "name": "integration-qwen-list",
+  "integration": {
+   "route": "qwen",
+   "op": "list",
+   "piece": "bench/l3/qwen",
+   "asserts": [
+    "exactly one engine invocation",
+    "route and args",
+    "list rows unchanged except the 200-unit title cut, order and metadata kept",
+    "read returns the same record",
+    "piece error forwarded unchanged"
+   ],
+   "driver": "bench/l3/qwen/work/rs_rust/runner",
+   "picks": {
+    "list": "fixtures/normal.jsonl in a throwaway home (runner --list home /project)"
+   },
+   "no_error_fixture": [
+    "list_error"
+   ]
+  }
+ },
+ {
+  "id": "I04",
+  "name": "integration-qwen-read",
+  "integration": {
+   "route": "qwen",
+   "op": "read",
+   "piece": "bench/l3/qwen",
+   "asserts": [
+    "exactly one engine invocation",
+    "route and args",
+    "list rows unchanged except the 200-unit title cut, order and metadata kept",
+    "read returns the same record",
+    "piece error forwarded unchanged"
+   ],
+   "driver": "bench/l3/qwen/work/rs_rust/runner",
+   "picks": {
+    "read": "fixtures/normal.jsonl (runner <path>)"
+   },
+   "no_error_fixture": [
+    "read_error"
+   ]
+  }
+ },
+ {
+  "id": "I05",
+  "name": "integration-codex-list",
+  "integration": {
+   "route": "codex",
+   "op": "list",
+   "piece": "bench/l3/codex",
+   "asserts": [
+    "exactly one engine invocation",
+    "route and args",
+    "list rows unchanged except the 200-unit title cut, order and metadata kept",
+    "read returns the same record",
+    "piece error forwarded unchanged"
+   ],
+   "driver": "bench/l3/codex/work/rs_rust/runner",
+   "picks": {
+    "list": "list_basic",
+    "list_error": "list_error"
+   },
+   "no_error_fixture": []
+  }
+ },
+ {
+  "id": "I06",
+  "name": "integration-codex-read",
+  "integration": {
+   "route": "codex",
+   "op": "read",
+   "piece": "bench/l3/codex",
+   "asserts": [
+    "exactly one engine invocation",
+    "route and args",
+    "list rows unchanged except the 200-unit title cut, order and metadata kept",
+    "read returns the same record",
+    "piece error forwarded unchanged"
+   ],
+   "driver": "bench/l3/codex/work/rs_rust/runner",
+   "picks": {
+    "read": "read_basic",
+    "read_error": "read_meta_error"
+   },
+   "no_error_fixture": []
+  }
+ },
+ {
+  "id": "I07",
+  "name": "integration-grok-list",
+  "integration": {
+   "route": "grok",
+   "op": "list",
+   "piece": "bench/l3/grok",
+   "asserts": [
+    "exactly one engine invocation",
+    "route and args",
+    "list rows unchanged except the 200-unit title cut, order and metadata kept",
+    "read returns the same record",
+    "piece error forwarded unchanged"
+   ],
+   "driver": "bench/l3/grok/work/rs_rust/runner",
+   "picks": {
+    "list": "listing-mixed-missing-3",
+    "list_error": "paths-empty-folder"
+   },
+   "no_error_fixture": []
+  }
+ },
+ {
+  "id": "I08",
+  "name": "integration-grok-read",
+  "integration": {
+   "route": "grok",
+   "op": "read",
+   "piece": "bench/l3/grok",
+   "asserts": [
+    "exactly one engine invocation",
+    "route and args",
+    "list rows unchanged except the 200-unit title cut, order and metadata kept",
+    "read returns the same record",
+    "piece error forwarded unchanged"
+   ],
+   "driver": "bench/l3/grok/work/rs_rust/runner",
+   "picks": {
+    "read": "budgets-200-turns-no-omit",
+    "read_error": "window-history-is-directory"
+   },
+   "no_error_fixture": []
+  }
+ },
+ {
+  "id": "I09",
+  "name": "integration-opencode-list",
+  "integration": {
+   "route": "opencode",
+   "op": "list",
+   "piece": "bench/l3/opencode",
+   "asserts": [
+    "exactly one engine invocation",
+    "route and args",
+    "list rows unchanged except the 200-unit title cut, order and metadata kept",
+    "read returns the same record",
+    "piece error forwarded unchanged"
+   ],
+   "driver": "bench/l3/opencode/work/rs_rust/runner",
+   "picks": {
+    "list": "F04-limit-49",
+    "list_error": "F03-count-prepare-empty-error"
+   },
+   "no_error_fixture": []
+  }
+ },
+ {
+  "id": "I10",
+  "name": "integration-opencode-read",
+  "integration": {
+   "route": "opencode",
+   "op": "read",
+   "piece": "bench/l3/opencode",
+   "asserts": [
+    "exactly one engine invocation",
+    "route and args",
+    "list rows unchanged except the 200-unit title cut, order and metadata kept",
+    "read returns the same record",
+    "piece error forwarded unchanged"
+   ],
+   "driver": "bench/l3/opencode/work/rs_rust/runner",
+   "picks": {
+    "read": "F06-extra-slashes",
+    "read_error": "F06-invalid-thread"
+   },
+   "no_error_fixture": []
+  }
+ }
+]

@@ -1,0 +1,1351 @@
+[
+ {
+  "name": "dispatch-claude",
+  "op": "list_external",
+  "id": "D01",
+  "subs": [
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "rows": [
+       {
+        "ref": "r1",
+        "title": "t1"
+       },
+       {
+        "ref": "r2",
+        "title": "t2"
+       }
+      ]
+     }
+    },
+    "id": "D01/list",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "keep",
+       {
+        "ref": "r1"
+       }
+      ],
+      [
+       "keep",
+       {
+        "ref": "r2"
+       }
+      ]
+     ],
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "read_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "thread": "t1",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "record": "rec"
+     }
+    },
+    "id": "D01/read",
+    "expect": {
+     "terminal": "ok",
+     "value": {
+      "ref": "rec"
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "read",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "thread": "t1",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "dispatch-codex",
+  "op": "list_external",
+  "id": "D02",
+  "subs": [
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "codex"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "rows": [
+       {
+        "ref": "r1",
+        "title": "t1"
+       },
+       {
+        "ref": "r2",
+        "title": "t2"
+       }
+      ]
+     }
+    },
+    "id": "D02/list",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "keep",
+       {
+        "ref": "r1"
+       }
+      ],
+      [
+       "keep",
+       {
+        "ref": "r2"
+       }
+      ]
+     ],
+     "trace": [
+      [
+       "engine",
+       "codex",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "read_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "codex"
+     },
+     "folder": "/f",
+     "thread": "t1",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "record": "rec"
+     }
+    },
+    "id": "D02/read",
+    "expect": {
+     "terminal": "ok",
+     "value": {
+      "ref": "rec"
+     },
+     "trace": [
+      [
+       "engine",
+       "codex",
+       "read",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "thread": "t1",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "dispatch-opencode",
+  "op": "list_external",
+  "id": "D03",
+  "subs": [
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "opencode"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "rows": [
+       {
+        "ref": "r1",
+        "title": "t1"
+       },
+       {
+        "ref": "r2",
+        "title": "t2"
+       }
+      ]
+     }
+    },
+    "id": "D03/list",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "keep",
+       {
+        "ref": "r1"
+       }
+      ],
+      [
+       "keep",
+       {
+        "ref": "r2"
+       }
+      ]
+     ],
+     "trace": [
+      [
+       "engine",
+       "opencode",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "read_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "opencode"
+     },
+     "folder": "/f",
+     "thread": "t1",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "record": "rec"
+     }
+    },
+    "id": "D03/read",
+    "expect": {
+     "terminal": "ok",
+     "value": {
+      "ref": "rec"
+     },
+     "trace": [
+      [
+       "engine",
+       "opencode",
+       "read",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "thread": "t1",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "dispatch-qwen",
+  "op": "list_external",
+  "id": "D04",
+  "subs": [
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "qwen"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "rows": [
+       {
+        "ref": "r1",
+        "title": "t1"
+       },
+       {
+        "ref": "r2",
+        "title": "t2"
+       }
+      ]
+     }
+    },
+    "id": "D04/list",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "keep",
+       {
+        "ref": "r1"
+       }
+      ],
+      [
+       "keep",
+       {
+        "ref": "r2"
+       }
+      ]
+     ],
+     "trace": [
+      [
+       "engine",
+       "qwen",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "read_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "qwen"
+     },
+     "folder": "/f",
+     "thread": "t1",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "record": "rec"
+     }
+    },
+    "id": "D04/read",
+    "expect": {
+     "terminal": "ok",
+     "value": {
+      "ref": "rec"
+     },
+     "trace": [
+      [
+       "engine",
+       "qwen",
+       "read",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "thread": "t1",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "dispatch-grok",
+  "op": "list_external",
+  "id": "D05",
+  "subs": [
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "grok"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "rows": [
+       {
+        "ref": "r1",
+        "title": "t1"
+       },
+       {
+        "ref": "r2",
+        "title": "t2"
+       }
+      ]
+     }
+    },
+    "id": "D05/list",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "keep",
+       {
+        "ref": "r1"
+       }
+      ],
+      [
+       "keep",
+       {
+        "ref": "r2"
+       }
+      ]
+     ],
+     "trace": [
+      [
+       "engine",
+       "grok",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "read_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "grok"
+     },
+     "folder": "/f",
+     "thread": "t1",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "record": "rec"
+     }
+    },
+    "id": "D05/read",
+    "expect": {
+     "terminal": "ok",
+     "value": {
+      "ref": "rec"
+     },
+     "trace": [
+      [
+       "engine",
+       "grok",
+       "read",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "thread": "t1",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "dispatch-unknown-falls-grok",
+  "op": "list_external",
+  "id": "D06",
+  "subs": [
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "gemini"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "rows": [
+       {
+        "ref": "r1",
+        "title": "t1"
+       },
+       {
+        "ref": "r2",
+        "title": "t2"
+       }
+      ]
+     }
+    },
+    "id": "D06/list",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "keep",
+       {
+        "ref": "r1"
+       }
+      ],
+      [
+       "keep",
+       {
+        "ref": "r2"
+       }
+      ]
+     ],
+     "trace": [
+      [
+       "engine",
+       "grok",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "read_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "gemini"
+     },
+     "folder": "/f",
+     "thread": "t1",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "record": "rec"
+     }
+    },
+    "id": "D06/read",
+    "expect": {
+     "terminal": "ok",
+     "value": {
+      "ref": "rec"
+     },
+     "trace": [
+      [
+       "engine",
+       "grok",
+       "read",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "thread": "t1",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "Claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "rows": [
+       {
+        "ref": "r1",
+        "title": "t1"
+       },
+       {
+        "ref": "r2",
+        "title": "t2"
+       }
+      ]
+     }
+    },
+    "id": "D06/list-unknown2",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "keep",
+       {
+        "ref": "r1"
+       }
+      ],
+      [
+       "keep",
+       {
+        "ref": "r2"
+       }
+      ]
+     ],
+     "trace": [
+      [
+       "engine",
+       "grok",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   }
+  ],
+  "mutant": "M09"
+ },
+ {
+  "name": "dispatch-empty-falls-grok",
+  "op": "list_external",
+  "id": "D07",
+  "subs": [
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": ""
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "rows": [
+       {
+        "ref": "r1",
+        "title": "t1"
+       },
+       {
+        "ref": "r2",
+        "title": "t2"
+       }
+      ]
+     }
+    },
+    "id": "D07/list",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "keep",
+       {
+        "ref": "r1"
+       }
+      ],
+      [
+       "keep",
+       {
+        "ref": "r2"
+       }
+      ]
+     ],
+     "trace": [
+      [
+       "engine",
+       "grok",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "read_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": ""
+     },
+     "folder": "/f",
+     "thread": "t1",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "record": "rec"
+     }
+    },
+    "id": "D07/read",
+    "expect": {
+     "terminal": "ok",
+     "value": {
+      "ref": "rec"
+     },
+     "trace": [
+      [
+       "engine",
+       "grok",
+       "read",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "thread": "t1",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "dispatch-arguments-identical",
+  "op": "list_external",
+  "id": "D08",
+  "subs": [
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "codex",
+      "source": "codex:home",
+      "home": "/h",
+      "kind": "home"
+     },
+     "folder": {
+      "u16": [
+       47,
+       102,
+       55296,
+       120
+      ]
+     },
+     "options": {
+      "ref": "o9"
+     }
+    },
+    "script": {
+     "engine": {
+      "rows": [
+       {
+        "ref": "r1",
+        "title": "t1"
+       },
+       {
+        "ref": "r2",
+        "title": "t2"
+       }
+      ]
+     }
+    },
+    "id": "D08/list",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "keep",
+       {
+        "ref": "r1"
+       }
+      ],
+      [
+       "keep",
+       {
+        "ref": "r2"
+       }
+      ]
+     ],
+     "trace": [
+      [
+       "engine",
+       "codex",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": {
+         "u16": [
+          47,
+          102,
+          55296,
+          120
+         ]
+        },
+        "options": {
+         "ref": "o9"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "read_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "qwen",
+      "source": "qwen:home"
+     },
+     "folder": "/folder",
+     "thread": {
+      "u16": [
+       116,
+       55296
+      ]
+     },
+     "options": {
+      "ref": "o9"
+     }
+    },
+    "script": {
+     "engine": {
+      "record": "rec"
+     }
+    },
+    "id": "D08/read",
+    "expect": {
+     "terminal": "ok",
+     "value": {
+      "ref": "rec"
+     },
+     "trace": [
+      [
+       "engine",
+       "qwen",
+       "read",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/folder",
+        "thread": {
+         "u16": [
+          116,
+          55296
+         ]
+        },
+        "options": {
+         "ref": "o9"
+        }
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "dispatch-exactly-once",
+  "op": "list_external",
+  "id": "D09",
+  "subs": [
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "EngineImportError",
+       "ref": "e1",
+       "code": "not-found"
+      }
+     }
+    },
+    "id": "D09/list",
+    "expect": {
+     "terminal": "throw_existing",
+     "value": {
+      "ref": "e1"
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "read_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "thread": "t",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "reject": {
+       "class": "EngineImportError",
+       "ref": "e1",
+       "code": "not-found"
+      }
+     }
+    },
+    "id": "D09/read",
+    "expect": {
+     "terminal": "throw_existing",
+     "value": {
+      "ref": "e1"
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "read",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "thread": "t",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "list_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "opencode"
+     },
+     "folder": "/f",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "sync_throw": {
+       "class": "Error",
+       "ref": "e2",
+       "message": "sync"
+      }
+     }
+    },
+    "id": "D09/sync",
+    "expect": {
+     "terminal": "throw_import",
+     "value": {
+      "code": "read-failed",
+      "message": "read-failed: sync",
+      "cause": {
+       "ref": "e2"
+      },
+      "hasCause": true
+     },
+     "trace": [
+      [
+       "engine",
+       "opencode",
+       "list",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "dispatch-read-record-identity",
+  "op": "read_external",
+  "id": "D10",
+  "subs": [
+   {
+    "op": "read_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "claude"
+     },
+     "folder": "/f",
+     "thread": "t",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "record": "rec_claude"
+     }
+    },
+    "id": "D10/claude",
+    "expect": {
+     "terminal": "ok",
+     "value": {
+      "ref": "rec_claude"
+     },
+     "trace": [
+      [
+       "engine",
+       "claude",
+       "read",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "thread": "t",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "read_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "codex"
+     },
+     "folder": "/f",
+     "thread": "t",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "record": "rec_codex"
+     }
+    },
+    "id": "D10/codex",
+    "expect": {
+     "terminal": "ok",
+     "value": {
+      "ref": "rec_codex"
+     },
+     "trace": [
+      [
+       "engine",
+       "codex",
+       "read",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "thread": "t",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "read_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "opencode"
+     },
+     "folder": "/f",
+     "thread": "t",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "record": "rec_opencode"
+     }
+    },
+    "id": "D10/opencode",
+    "expect": {
+     "terminal": "ok",
+     "value": {
+      "ref": "rec_opencode"
+     },
+     "trace": [
+      [
+       "engine",
+       "opencode",
+       "read",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "thread": "t",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "read_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "qwen"
+     },
+     "folder": "/f",
+     "thread": "t",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "record": "rec_qwen"
+     }
+    },
+    "id": "D10/qwen",
+    "expect": {
+     "terminal": "ok",
+     "value": {
+      "ref": "rec_qwen"
+     },
+     "trace": [
+      [
+       "engine",
+       "qwen",
+       "read",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "thread": "t",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   },
+   {
+    "op": "read_external",
+    "args": {
+     "source": {
+      "ref": "s1",
+      "engine": "grok"
+     },
+     "folder": "/f",
+     "thread": "t",
+     "options": {
+      "ref": "o1"
+     }
+    },
+    "script": {
+     "engine": {
+      "record": "rec_grok"
+     }
+    },
+    "id": "D10/grok",
+    "expect": {
+     "terminal": "ok",
+     "value": {
+      "ref": "rec_grok"
+     },
+     "trace": [
+      [
+       "engine",
+       "grok",
+       "read",
+       {
+        "source": {
+         "ref": "s1"
+        },
+        "folder": "/f",
+        "thread": "t",
+        "options": {
+         "ref": "o1"
+        }
+       }
+      ]
+     ]
+    }
+   }
+  ]
+ }
+]

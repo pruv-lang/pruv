@@ -1,0 +1,214 @@
+// L3-8 entry: UTF-16 unit buffers ([i64], every element 0..65535) and total accessors.
+// Total accessors (rd/wr/slice) make every index in-bounds by construction: an out-of-range read gives 0 and an
+// out-of-range write is dropped. Validation of packets happens before use, so these are defence in depth, not control flow.
+
+pub fn rd(a: [i64], i: i64) -> i64
+{
+  if i < 0 || i >= len(a) { return 0; }
+  return a[i];
+}
+
+pub fn wr(inout a: [i64], i: i64, v: i64) -> ()
+  ensures len(a) == len(old(a))
+{
+  if i < 0 || i >= len(a) { return; }
+  a[i] = v;
+}
+
+pub fn max_alloc() -> i64 ensures result == 1099511627776 { return 1099511627776; }
+
+// zero array of n words (n clamped into 0..2^40)
+pub fn zeros(n: i64) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let mut k: i64 = n;
+  if k < 0 || k > 1099511627776 { k = 0; }
+  let o: [i64] = alloc(k, 0);
+  return o;
+}
+
+pub fn empty() -> [i64] ! alloc
+  ensures len(result) == 0
+{
+  let o: [i64] = alloc(0, 0);
+  return o;
+}
+
+// a[s..e) with s,e clamped
+pub fn slice(a: [i64], s: i64, e: i64) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let n: i64 = len(a);
+  let mut lo: i64 = s;
+  let mut hi: i64 = e;
+  if lo < 0 { lo = 0; }
+  if hi > n { hi = n; }
+  if hi <= lo { return empty(); }
+  let m: i64 = hi - lo;
+  let mut o: [i64] = alloc(m, 0);
+  let mut i: i64 = 0;
+  while i < m
+    invariant 0 <= i && i <= m && len(o) == m && 0 <= lo && lo + m <= n && n == len(a)
+    decreases m - i
+  { o[i] = a[lo + i]; i = i + 1; }
+  return o;
+}
+
+pub fn cat(a: [i64], b: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let na: i64 = len(a);
+  let nb: i64 = len(b);
+  if na > 1073741823 || nb > 1073741823 { return empty(); }
+  let mut o: [i64] = alloc(na + nb, 0);
+  let mut i: i64 = 0;
+  while i < na
+    invariant 0 <= i && i <= na && na == len(a) && nb == len(b) && len(o) == na + nb
+    decreases na - i
+  { o[i] = a[i]; i = i + 1; }
+  let mut j: i64 = 0;
+  while j < nb
+    invariant 0 <= j && j <= nb && na == len(a) && nb == len(b) && len(o) == na + nb
+    decreases nb - j
+  { o[na + j] = b[j]; j = j + 1; }
+  return o;
+}
+
+// ASCII text literal as units
+pub fn lit(s: str) -> [i64] ! alloc
+  ensures len(result) == len(s)
+{
+  let n: i64 = len(s);
+  let mut o: [i64] = alloc(n, 0);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(s) && len(o) == n
+    decreases n - i
+  { o[i] = s[i]; i = i + 1; }
+  return o;
+}
+
+pub fn one(u: i64) -> [i64] ! alloc
+  ensures len(result) == 1
+{
+  let mut o: [i64] = alloc(1, 0);
+  o[0] = u;
+  return o;
+}
+
+pub fn eq(a: [i64], b: [i64]) -> bool
+{
+  let n: i64 = len(a);
+  if n != len(b) { return false; }
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(a) && n == len(b)
+    decreases n - i
+  {
+    if a[i] != b[i] { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+// a equals the ASCII literal s
+pub fn eq_lit(a: [i64], s: str) -> bool
+{
+  let n: i64 = len(s);
+  if n != len(a) { return false; }
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(s) && n == len(a)
+    decreases n - i
+  {
+    if a[i] != s[i] { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+// first index >= from where a[i] == u, or -1
+pub fn index_of(a: [i64], u: i64, from: i64) -> i64
+  ensures result >= -1 && result < len(a)
+{
+  let n: i64 = len(a);
+  let mut i: i64 = from;
+  if i < 0 { i = 0; }
+  if i > n { i = n; }
+  while i < n
+    invariant 0 <= i && i <= n && n == len(a)
+    decreases n - i
+  {
+    if a[i] == u { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+// ECMAScript WhiteSpace + LineTerminator set of String.prototype.trim. 0085 and 200B are not members.
+pub fn is_trim_unit(u: i64) -> bool
+{
+  if u >= 9 && u <= 13 { return true; }   // MUTANT M01
+  if u == 32 || u == 160 { return true; }
+  if u == 5760 || u == 65279 { return true; }
+  if u >= 8192 && u <= 8202 { return true; }
+  if u == 8232 || u == 8233 || u == 8239 || u == 8287 || u == 12288 { return true; }
+  return false;
+}
+
+pub fn trim(a: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let n: i64 = len(a);
+  let mut s: i64 = 0;
+  while s < n && is_trim_unit(a[s])
+    invariant 0 <= s && s <= n && n == len(a)
+    decreases n - s
+  { s = s + 1; }
+  let mut e: i64 = n;
+  while e > s && is_trim_unit(a[e - 1])
+    invariant s <= e && e <= n && 0 <= s && n == len(a)
+    decreases e - s
+  { e = e - 1; }
+  return slice(a, s, e);
+}
+
+// ---- W4core additions (new helpers only; nothing above is changed) ----
+
+// x clamped into 0..hi (hi >= 0)
+pub fn clamp(x: i64, hi: i64) -> i64
+  requires 0 <= hi
+  ensures 0 <= result && result <= hi
+{
+  if x < 0 { return 0; }
+  if x > hi { return hi; }
+  return x;
+}
+
+// copy m units of src starting at s into o at position at; every index is total (out of range reads give 0, writes are dropped).
+// Returns at + m' where m' is m clamped into 0..2^30. at must be in 0..2^32.
+pub fn put_range(inout o: [i64], at: i64, src: [i64], s: i64, m: i64) -> i64
+  requires 0 <= at && at <= 4294967296 && 0 <= s && s <= 4294967296
+  ensures len(o) == len(old(o)) && at <= result && result <= at + 1073741824
+{
+  let mut mm: i64 = m;
+  if mm < 0 { mm = 0; }
+  if mm > 1073741824 { mm = 1073741824; }
+  let mut k: i64 = 0;
+  while k < mm
+    invariant 0 <= k && k <= mm && mm <= 1073741824 && 0 <= at && at <= 4294967296 && 0 <= s && s <= 4294967296 && len(o) == len(old(o))
+    decreases mm - k
+  {
+    wr(inout o, at + k, rd(src, s + k));
+    k = k + 1;
+  }
+  return at + mm;
+}
+
+// copy all of src into o at at; returns the position after it
+pub fn put_all(inout o: [i64], at: i64, src: [i64]) -> i64
+  requires 0 <= at && at <= 4294967296
+  ensures len(o) == len(old(o)) && at <= result && result <= at + 1073741824
+{
+  return put_range(inout o, at, src, 0, len(src));
+}

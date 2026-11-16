@@ -1,0 +1,505 @@
+// L3-8 entry: await state, answer log and the replay context (Ctx).
+//
+// API (for every op implementation; see IMPL_NOTES_W4core.md for the full description)
+// -------------------------------------------------------------------------------------
+// Architecture: per-item replay. An await packet carries (section 2) everything needed to re-run the current item from
+// scratch: the validated input packet (the "blob") and the log of answers received so far. entry_step appends the new
+// completion to the log and re-runs the item in direct style. Observation helpers take the next log entry when one
+// exists; otherwise they stall the Ctx and record the request to emit. An item therefore looks like
+//
+//     pub fn my_item(cx0: Ctx) -> Ctx ! alloc {
+//       let cx1: Ctx = crate::state::ctx_cwd(cx0);            // observation (or ctx_accounts, ctx_stat, ...)
+//       if cx1.stalled != 0 || cx1.bad != 0 { return cx1; }    // MUST be checked after every observation
+//       ... read the answer with ent_r / ent_p over cx1.ent ...
+//       return crate::state::set_done(cx1, pool, rec, tab, ntab);
+//     }
+//
+// The input packet is cx.blob (kind 0, validated by packet::input_check, pool truncated to the referenced prefix).
+// Observations: ctx_accounts(eng) code 1, ctx_account_at(eng, idx) code 2, ctx_ambient code 3, ctx_homedir code 4,
+// ctx_cwd code 5, ctx_realpath(path units) code 6, ctx_stat(path units) code 7, and the generic obs(code, aux, rpool,
+// rrec, rtab, rntab) used for is_temporary (code 8, aux = ids sent) and invoke_engine (code 9, aux = opKind).
+// The answer of the last observation is the packet cx.ent (kind 2); ent_r(cx, k) / ent_p(cx, k) address its record.
+// A throw answer has record word 0 == 1 (and E at record offset 1) for codes 1, 4, 5, 6, 7, 9.
+// Output: set_done(...) fixes the done record; finish(cx, aseq, dseq) builds the packet to return to the host.
+//
+// State (section 2 of an await), all words range-checked on decode:
+//   [0] magic 1162761298   [1] op   [2] outstanding request code 1..9   [3] aux   [4..11] checkpoint words 0..2^32
+//   [12] L   [13] G   [14, 14+L) blob (repacked input)   [14+L, 14+L+G) log
+// log entry: [n, rcode, aux, completion packet (kind 2, pool truncated to the referenced prefix)] with n the entry length.
+
+pub fn magic() -> i64 ensures result == 1162761298 { return 1162761298; }
+
+// ---- repack: a copy of packet w whose pool is truncated to its first hi units ----
+pub fn repack(w: [i64], hi0: i64) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let n: i64 = len(w);
+  if n > 16777216 { return crate::u16::empty(); }
+  let hi: i64 = crate::u16::clamp(hi0, crate::packet::sec_len(w, 0));
+  let drop: i64 = crate::packet::sec_len(w, 0) - hi;
+  let hdr: i64 = 7 + crate::packet::nsec(w);
+  let s0: i64 = crate::packet::sec_start(w, 0);
+  let s1: i64 = crate::packet::sec_start(w, 1);
+  let mut o: [i64] = crate::u16::zeros(n - drop);
+  let a: i64 = crate::u16::put_range(inout o, 0, w, 0, hdr);
+  let b: i64 = crate::u16::put_range(inout o, crate::u16::clamp(a, 4294967296), w, s0, hi);
+  let c: i64 = crate::u16::put_range(inout o, crate::u16::clamp(b, 4294967296), w, s1, n - s1);
+  crate::u16::wr(inout o, 4, n - drop - 5);
+  crate::u16::wr(inout o, 7, hi);
+  return o;
+}
+
+// ---- log ----
+
+// request code / aux valid for an await emitted by this core for op
+fn pair_ok(op: i64, code: i64, aux: i64) -> bool
+{
+  if op == 3 { return code == 9 && aux == 0; }
+  if op == 4 { return code == 9 && aux == 1; }
+  if op == 8 || op == 9 { return code == 8 && aux >= 1 && aux <= 16777216; }
+  return false;
+}
+
+// every entry of the log is a well-formed, canonical completion for the op_id
+pub fn log_ok(lg: [i64], op_id: i64) -> bool ! alloc
+{
+  let g: i64 = len(lg);
+  let mut pos: i64 = 0;
+  while pos < g
+    invariant 0 <= pos && pos <= g && g == len(lg)
+    decreases g - pos
+  {
+    let n: i64 = crate::u16::rd(lg, pos);
+    if n < 12 || n > g - pos { return false; }
+    let rc: i64 = crate::u16::rd(lg, pos + 1);
+    let ax: i64 = crate::u16::rd(lg, pos + 2);
+    if rc < 1 || rc > 9 || ax < 0 || ax > 16777216 { return false; }
+    if rc == 9 && ax > 1 { return false; }
+    let pk: [i64] = crate::u16::slice(lg, pos + 3, pos + n);
+    if crate::packet::env_check(pk) != 0 { return false; }
+    if crate::u16::rd(pk, 1) != 2 || crate::u16::rd(pk, 2) != op_id { return false; }
+    let hi: i64 = crate::packet::comp_check(pk, rc, ax);
+    if hi < 0 || hi != crate::packet::sec_len(pk, 0) { return false; }
+    pos = pos + n;
+  }
+  return true;
+}
+
+// log + one entry for the completion packet comp (answer to request rc/ax); hi = its comp_check result
+pub fn log_append(lg: [i64], rc: i64, ax: i64, comp: [i64], hi: i64) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let pk: [i64] = repack(comp, hi);
+  let a: i64 = len(lg);
+  let b: i64 = len(pk);
+  if a > 16777216 || b > 16777216 { return crate::u16::zeros(16777217); }
+  let mut o: [i64] = crate::u16::zeros(a + b + 3);
+  let r1: i64 = crate::u16::put_all(inout o, 0, lg);
+  crate::u16::wr(inout o, a, b + 3);
+  crate::u16::wr(inout o, a + 1, rc);
+  crate::u16::wr(inout o, a + 2, ax);
+  let r2: i64 = crate::u16::put_all(inout o, crate::u16::clamp(a + 3, 4294967296), pk);
+  return o;
+}
+
+// ---- state ----
+pub fn encode_state(op: i64, code: i64, aux: i64, ck: [i64], blob: [i64], lg: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let lb: i64 = len(blob);
+  let lgn: i64 = len(lg);
+  if lb > 16777216 || lgn > 16777216 { return crate::u16::zeros(16777217); }
+  let total: i64 = 14 + lb + lgn;
+  if total > 16777216 { return crate::u16::zeros(16777217); }
+  let mut o: [i64] = crate::u16::zeros(total);
+  crate::u16::wr(inout o, 0, magic());
+  crate::u16::wr(inout o, 1, op);
+  crate::u16::wr(inout o, 2, code);
+  crate::u16::wr(inout o, 3, aux);
+  let r0: i64 = crate::u16::put_range(inout o, 4, ck, 0, 8);
+  crate::u16::wr(inout o, 12, lb);
+  crate::u16::wr(inout o, 13, lgn);
+  let r1: i64 = crate::u16::put_all(inout o, 14, blob);
+  let r2: i64 = crate::u16::put_all(inout o, 14 + lb, lg);
+  return o;
+}
+
+pub fn st_code(st: [i64]) -> i64 { return crate::u16::rd(st, 2); }
+pub fn st_aux(st: [i64]) -> i64 { return crate::u16::rd(st, 3); }
+pub fn st_ck(st: [i64]) -> [i64] ! alloc ensures len(result) >= 0 { return crate::u16::slice(st, 4, 12); }
+pub fn st_blob(st: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let l: i64 = crate::u16::clamp(crate::u16::rd(st, 12), 16777216);
+  return crate::u16::slice(st, 14, 14 + l);
+}
+pub fn st_log(st: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let l: i64 = crate::u16::clamp(crate::u16::rd(st, 12), 16777216);
+  let g: i64 = crate::u16::clamp(crate::u16::rd(st, 13), 16777216);
+  return crate::u16::slice(st, 14 + l, 14 + l + g);
+}
+
+// the state of an await for (op, op_id) is well-formed; any violation is an InvalidPacket for the caller
+pub fn state_ok(st: [i64], op: i64, op_id: i64) -> bool ! alloc
+{
+  let n: i64 = len(st);
+  if n < 14 || n > 16777216 { return false; }
+  if st[0] != magic() || st[1] != op { return false; }
+  if !pair_ok(op, st[2], st[3]) { return false; }
+  let mut i: i64 = 4;
+  while i < 12
+    invariant 4 <= i && i <= 12 && n == len(st) && n >= 14
+    decreases 12 - i
+  {
+    if st[i] < 0 || st[i] > 4294967296 { return false; }
+    i = i + 1;
+  }
+  let l: i64 = st[12];
+  let g: i64 = st[13];
+  if l < 13 || g < 0 || l > n || g > n { return false; }
+  if 14 + l + g != n { return false; }
+  let blob: [i64] = st_blob(st);
+  if crate::packet::env_check(blob) != 0 { return false; }
+  if crate::u16::rd(blob, 1) != 0 || crate::u16::rd(blob, 3) != 0 { return false; }
+  if crate::u16::rd(blob, 5) != op || crate::u16::rd(blob, 2) != op_id { return false; }
+  let hi: i64 = crate::packet::input_check(blob);
+  if hi < 0 || hi != crate::packet::sec_len(blob, 0) { return false; }
+  return log_ok(st_log(st), op_id);
+}
+
+// ---- replay context ----
+pub struct Ctx { op: i64, op_id: i64, pos: i64, stalled: i64, bad: i64, rcode: i64, raux: i64, rntab: i64, done: i64, ontab: i64,
+                 blob: [i64], lg: [i64], rpool: [i64], rrec: [i64], rtab: [i64], ent: [i64], ck: [i64],
+                 opool: [i64], orec: [i64], otab: [i64],
+                 ncan: i64, qon: i64, qexact: i64, qns: i64, qpool: [i64], qrec: [i64], qtab: [i64] }
+
+pub fn ctx_new(op: i64, op_id: i64, blob: [i64], lg: [i64], ck: [i64]) -> Ctx ! alloc
+{
+  let e1: [i64] = crate::u16::empty();
+  let e2: [i64] = crate::u16::empty();
+  let e3: [i64] = crate::u16::empty();
+  let e4: [i64] = crate::u16::empty();
+  let e5: [i64] = crate::u16::empty();
+  let e6: [i64] = crate::u16::empty();
+  let e7: [i64] = crate::u16::empty();
+  let e8: [i64] = crate::u16::empty();
+  let e9: [i64] = crate::u16::empty();
+  let e10: [i64] = crate::u16::empty();
+  let mut k: [i64] = crate::u16::zeros(8);
+  let r: i64 = crate::u16::put_range(inout k, 0, ck, 0, 8);
+  return Ctx { op: op, op_id: op_id, pos: 0, stalled: 0, bad: 0, rcode: 0, raux: 0, rntab: 0, done: 0, ontab: 0,
+               blob: copy(blob), lg: copy(lg), rpool: copy(e1), rrec: copy(e2), rtab: copy(e3), ent: copy(e4), ck: copy(k),
+               opool: copy(e5), orec: copy(e6), otab: copy(e7),
+               ncan: 0, qon: 0, qexact: 0, qns: 0, qpool: copy(e8), qrec: copy(e9), qtab: copy(e10) };
+}
+
+// Observation: the next log entry if present (it must answer exactly this request), else stall with the request to emit.
+pub fn obs(cx0: Ctx, code: i64, aux: i64, rpool: [i64], rrec: [i64], rtab: [i64], rntab: i64) -> Ctx ! alloc
+{
+  let mut cx: Ctx = cx0;
+  if cx.stalled != 0 || cx.bad != 0 { return cx; }
+  let g: i64 = len(cx.lg);
+  let pos: i64 = crate::u16::clamp(cx.pos, 4294967296);
+  if pos < g {
+    let n: i64 = crate::u16::rd(cx.lg, pos);
+    let rc: i64 = crate::u16::rd(cx.lg, pos + 1);
+    let ax: i64 = crate::u16::rd(cx.lg, pos + 2);
+    if n < 12 || n > g - pos || rc != code || ax != aux {
+      cx.bad = 1;
+      return cx;
+    }
+    // R1(a): the last log entry answers the outstanding request recorded in prev; the regenerated request must equal it
+    if cx.qon != 0 && pos + n == g && !req_same(cx, rpool, rrec, rtab, rntab) {
+      cx.bad = 1;
+      return cx;
+    }
+    cx.ent = crate::u16::slice(cx.lg, pos + 3, pos + n);
+    cx.pos = pos + n;
+    return cx;
+  }
+  cx.stalled = 1;
+  cx.rcode = code;
+  cx.raux = aux;
+  cx.rpool = copy(rpool);
+  cx.rrec = copy(rrec);
+  cx.rtab = copy(rtab);
+  cx.rntab = rntab;
+  return cx;
+}
+
+// ---- R1: replay validation of prev (request, log continuity, checkpoint words) ----
+
+// Remember the request recorded in prev (an await packet) so that obs can compare it with the regenerated one.
+// exact: the pool must be equal (ops 3..9 except 1); otherwise the recorded pool only has to start with the regenerated pool
+// (op 1 appends the pools of the rows completed in the same step after the request pool).
+pub fn with_prev(cx0: Ctx, prev: [i64], exact: bool) -> Ctx ! alloc
+{
+  let mut cx: Ctx = cx0;
+  let ns: i64 = crate::packet::nsec(prev);
+  let p0: i64 = crate::packet::sec_start(prev, 0);
+  let p1: i64 = crate::packet::sec_start(prev, 1);
+  cx.qon = 1;
+  cx.qexact = 0;
+  if exact { cx.qexact = 1; }
+  cx.qns = ns;
+  cx.qpool = crate::u16::slice(prev, p0, p0 + crate::packet::sec_len(prev, 0));
+  cx.qrec = crate::u16::slice(prev, p1, p1 + crate::packet::sec_len(prev, 1));
+  cx.qtab = crate::u16::empty();
+  if ns >= 5 {
+    let p4: i64 = crate::packet::sec_start(prev, 4);
+    cx.qtab = crate::u16::slice(prev, p4, p4 + crate::packet::sec_len(prev, 4));
+  }
+  return cx;
+}
+
+// the regenerated request (rpool, rrec, rtab, rntab) equals the one recorded by with_prev
+fn req_same(cx: Ctx, rpool: [i64], rrec: [i64], rtab: [i64], rntab: i64) -> bool ! alloc
+{
+  if !crate::u16::eq(cx.qrec, rrec) { return false; }
+  if cx.qexact != 0 {
+    if !crate::u16::eq(cx.qpool, rpool) { return false; }
+  } else {
+    let lr: i64 = len(rpool);
+    if len(cx.qpool) < lr { return false; }
+    if !crate::u16::eq(crate::u16::slice(cx.qpool, 0, lr), rpool) { return false; }
+  }
+  if rntab != 0 {
+    if cx.qns != 5 { return false; }
+    return crate::u16::eq(cx.qtab, rtab);
+  }
+  return cx.qns == 4;
+}
+
+// R1(b): continuity of the log of prev (the awaiting packet carries seq). The item's requests carry the seqs s0, s0+1, ..
+// seq-1 (s0 = the seq of the item's first request: 1 for every op but 1; op 1 keeps it in ck0 / 16, see sources.pruv).
+// Every kept entry is a completion of this op, its seq strictly increases, starts at s0 or above and stays below seq. Entries
+// that R3 dropped leave gaps (head, inside, and between the last kept entry and the current request); d (ck7) counts them,
+// so the continuity is exact: s0 + d + (kept entries) == seq.
+pub fn log_cont(lg: [i64], op: i64, seq: i64, d: i64, s0: i64) -> bool ! alloc
+{
+  if seq < 1 || seq > 9007199254740992 { return false; }
+  if s0 < 1 || s0 > seq { return false; }
+  let g: i64 = len(lg);
+  let mut pos: i64 = 0;
+  let mut cnt: i64 = 0;
+  let mut ps: i64 = s0 - 1;
+  while pos < g
+    invariant 0 <= pos && pos <= g && g == len(lg) && 0 <= cnt && cnt <= pos && 0 <= ps && ps < seq
+    decreases g - pos
+  {
+    let n: i64 = crate::u16::rd(lg, pos);
+    if n < 12 || n > g - pos { return false; }
+    let pk: [i64] = crate::u16::slice(lg, pos + 3, pos + n);
+    if crate::u16::rd(pk, 5) != op { return false; }
+    let s: i64 = crate::u16::rd(pk, 3);
+    if s <= ps || s >= seq { return false; }
+    ps = s;
+    cnt = cnt + 1;
+    pos = pos + n;
+  }
+  return d == seq - s0 - cnt;
+}
+
+// R3 climb words of canonical (ck3..ck5 = levels already dropped for canonical call 0..2 of the item, ck6 reserved = 0,
+// ck7 = log entries dropped in total; every dropped level removed 1 or 2 entries)
+fn canon_ck_ok(ck: [i64]) -> bool
+{
+  let a: i64 = crate::u16::clamp(crate::u16::rd(ck, 3), 4294967296);
+  let b: i64 = crate::u16::clamp(crate::u16::rd(ck, 4), 4294967296);
+  let c: i64 = crate::u16::clamp(crate::u16::rd(ck, 5), 4294967296);
+  let d: i64 = crate::u16::clamp(crate::u16::rd(ck, 7), 4294967296);
+  if crate::u16::rd(ck, 6) != 0 { return false; }
+  if a > 33554432 || b > 33554432 || c > 33554432 || d > 4294967296 { return false; }
+  let s: i64 = a + b + c;
+  return s <= d && d <= 2 * s;
+}
+
+fn ck_zero_from(ck: [i64], from: i64) -> bool
+{
+  let mut i: i64 = crate::u16::clamp(from, 8);
+  while i < 8
+    invariant 0 <= i && i <= 8
+    decreases 8 - i
+  {
+    if crate::u16::rd(ck, i) != 0 { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+// R1(d): the checkpoint words of an await for op with outstanding request code are consistent.
+// ops 3 4 8 9: all zero. Op 6: ck0..2 zero, ck3..7 climb words. Op 1: ck0 phase 0..8 (an await never carries phase 9), the
+// outstanding code must be one the phase can emit, ck1 idx and ck2 cnt are used only by the account loops (phases 2 and 5)
+// where idx < cnt <= 16777216 (idx >= cnt advances without a request), and the climb words are used only by phase 5.
+pub fn ck_ok(op: i64, code: i64, ck: [i64]) -> bool
+{
+  if len(ck) != 8 { return false; }
+  if op == 6 {
+    if crate::u16::rd(ck, 0) != 0 || crate::u16::rd(ck, 1) != 0 || crate::u16::rd(ck, 2) != 0 { return false; }
+    return canon_ck_ok(ck);
+  }
+  if op != 1 { return ck_zero_from(ck, 0); }
+  let ph: i64 = crate::u16::clamp(crate::u16::rd(ck, 0), 4294967296) % 16;
+  let idx: i64 = crate::u16::rd(ck, 1);
+  let cnt: i64 = crate::u16::rd(ck, 2);
+  if ph > 8 { return false; }
+  let mut codes_ok: bool = false;
+  if ph == 0 || ph == 6 || ph == 7 || ph == 8 { codes_ok = code == 4; }
+  if ph == 1 || ph == 4 { codes_ok = code == 1; }
+  if ph == 2 { codes_ok = code == 2; }
+  if ph == 3 { codes_ok = code == 3 || code == 4; }
+  if ph == 5 { codes_ok = code >= 2 && code <= 7; }
+  if !codes_ok { return false; }
+  if ph == 2 || ph == 5 {
+    if idx >= cnt || cnt > 16777216 { return false; }
+  } else {
+    if idx != 0 || cnt != 0 { return false; }
+  }
+  if ph == 5 { return canon_ck_ok(ck); }
+  return ck_zero_from(ck, 3);
+}
+
+// the seq of the current item's first request: 1 for every op but 1; op 1 packs it above the phase (ck0 = phase + 16 * s0)
+pub fn st_s0(op: i64, ck: [i64]) -> i64
+{
+  if op != 1 { return 1; }
+  return crate::u16::clamp(crate::u16::rd(ck, 0), 4294967296) / 16;
+}
+
+// ck with word 0 reduced to the phase (the item start seq is carried separately by the op 1 driver)
+pub fn set_ck_arr0(ck: [i64]) -> [i64] ! alloc ensures len(result) >= 0
+{
+  let mut k: [i64] = crate::u16::zeros(8);
+  let r: i64 = crate::u16::put_range(inout k, 0, ck, 0, 8);
+  crate::u16::wr(inout k, 0, crate::u16::clamp(crate::u16::rd(ck, 0), 4294967296) % 16);
+  return k;
+}
+
+// everything R1 needs from prev's state, in one call: checkpoint words and log continuity (seq = the awaiting packet's seq)
+pub fn st_replay_ok(st: [i64], op: i64, seq: i64) -> bool ! alloc
+{
+  let ck: [i64] = st_ck(st);
+  if !ck_ok(op, st_code(st), ck) { return false; }
+  return log_cont(st_log(st), op, seq, crate::u16::rd(ck, 7), st_s0(op, ck));
+}
+
+// R3: remove the log entries [a, pos) (the ne entries consumed by a failed climb level), put the cursor at a, and count the
+// level in ck[slot] and the entries in ck7
+pub fn drop_level(cx0: Ctx, a: i64, slot: i64, ne: i64) -> Ctx ! alloc
+{
+  let mut cx: Ctx = cx0;
+  let p: i64 = crate::u16::clamp(cx.pos, 4294967296);
+  let a1: i64 = crate::u16::clamp(a, p);
+  let g: i64 = len(cx.lg);
+  cx.lg = crate::u16::cat(crate::u16::slice(cx.lg, 0, a1), crate::u16::slice(cx.lg, p, g));
+  cx.pos = a1;
+  let c1: Ctx = set_ck(cx, slot, crate::u16::clamp(get_ck(cx, slot), 4294967296) + 1);
+  return set_ck(c1, 7, crate::u16::clamp(get_ck(c1, 7), 4294967296) + crate::u16::clamp(ne, 2));
+}
+
+pub fn ctx_accounts(cx: Ctx, eng: i64) -> Ctx ! alloc
+{
+  let mut r: [i64] = crate::u16::zeros(2);
+  crate::u16::wr(inout r, 0, 1);
+  crate::u16::wr(inout r, 1, eng);
+  let e: [i64] = crate::u16::empty();
+  return obs(cx, 1, 0, e, r, e, 0);
+}
+
+pub fn ctx_account_at(cx: Ctx, eng: i64, idx: i64) -> Ctx ! alloc
+{
+  let mut r: [i64] = crate::u16::zeros(3);
+  crate::u16::wr(inout r, 0, 2);
+  crate::u16::wr(inout r, 1, eng);
+  crate::u16::wr(inout r, 2, idx);
+  let e: [i64] = crate::u16::empty();
+  return obs(cx, 2, 0, e, r, e, 0);
+}
+
+fn ctx_nullary(cx: Ctx, code: i64) -> Ctx ! alloc
+{
+  let mut r: [i64] = crate::u16::zeros(1);
+  crate::u16::wr(inout r, 0, code);
+  let e: [i64] = crate::u16::empty();
+  return obs(cx, code, 0, e, r, e, 0);
+}
+
+pub fn ctx_ambient(cx: Ctx) -> Ctx ! alloc { return ctx_nullary(cx, 3); }
+pub fn ctx_homedir(cx: Ctx) -> Ctx ! alloc { return ctx_nullary(cx, 4); }
+pub fn ctx_cwd(cx: Ctx) -> Ctx ! alloc { return ctx_nullary(cx, 5); }
+
+fn ctx_path(cx: Ctx, code: i64, path: [i64]) -> Ctx ! alloc
+{
+  let mut r: [i64] = crate::u16::zeros(4);
+  crate::u16::wr(inout r, 0, code);
+  crate::u16::wr(inout r, 1, 6);
+  crate::u16::wr(inout r, 2, 0);
+  crate::u16::wr(inout r, 3, len(path));
+  let e: [i64] = crate::u16::empty();
+  return obs(cx, code, 0, path, r, e, 0);
+}
+
+pub fn ctx_realpath(cx: Ctx, path: [i64]) -> Ctx ! alloc { return ctx_path(cx, 6, path); }
+pub fn ctx_stat(cx: Ctx, path: [i64]) -> Ctx ! alloc { return ctx_path(cx, 7, path); }
+
+// answer packet addressing: record word k, pool unit k, word k of section s
+pub fn ent_r(cx: Ctx, k: i64) -> i64 { return crate::u16::rd(cx.ent, crate::packet::sec_start(cx.ent, 1) + crate::u16::clamp(k, 4294967296)); }
+pub fn ent_p(cx: Ctx, k: i64) -> i64 { return crate::u16::rd(cx.ent, crate::packet::sec_start(cx.ent, 0) + crate::u16::clamp(k, 4294967296)); }
+pub fn ent_s(cx: Ctx, s: i64, k: i64) -> i64 { return crate::u16::rd(cx.ent, crate::packet::sec_start(cx.ent, s) + crate::u16::clamp(k, 4294967296)); }
+
+pub fn set_ck(cx0: Ctx, i: i64, v: i64) -> Ctx ! alloc
+{
+  let mut cx: Ctx = cx0;
+  let mut k: [i64] = crate::u16::slice(cx.ck, 0, 8);
+  crate::u16::wr(inout k, i, v);
+  cx.ck = copy(k);
+  return cx;
+}
+pub fn get_ck(cx: Ctx, i: i64) -> i64 { return crate::u16::rd(cx.ck, i); }
+
+pub fn set_done(cx0: Ctx, pool: [i64], rec: [i64], tab: [i64], ntab: i64) -> Ctx ! alloc
+{
+  let mut cx: Ctx = cx0;
+  cx.done = 1;
+  cx.opool = copy(pool);
+  cx.orec = copy(rec);
+  cx.otab = copy(tab);
+  cx.ontab = ntab;
+  return cx;
+}
+
+// an output that cannot fit the 16,777,216-word packet limit: finish gives a boundary InputTooLarge
+pub fn too_big(cx0: Ctx) -> Ctx ! alloc
+{
+  let mut cx: Ctx = cx0;
+  cx.bad = 2;
+  return cx;
+}
+
+pub fn fail(cx0: Ctx) -> Ctx ! alloc
+{
+  let mut cx: Ctx = cx0;
+  cx.bad = 1;
+  return cx;
+}
+
+// the packet to return to the host: await (aseq), done (dseq) or a boundary
+pub fn finish(cx: Ctx, aseq: i64, dseq: i64) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  if cx.bad == 2 { return crate::packet::boundary(cx.op, cx.op_id, 1); }
+  if cx.bad != 0 { return crate::packet::boundary(cx.op, cx.op_id, 0); }
+  // R1(c): the replay must have consumed the whole log; leftover entries are a protocol error
+  if crate::u16::clamp(cx.pos, 4294967296) != len(cx.lg) { return crate::packet::boundary(cx.op, cx.op_id, 0); }
+  let e: [i64] = crate::u16::empty();
+  if cx.stalled != 0 {
+    let st: [i64] = encode_state(cx.op, cx.rcode, cx.raux, cx.ck, cx.blob, cx.lg);
+    return crate::packet::mk_packet(1, cx.op_id, aseq, cx.op, cx.rpool, cx.rrec, st, e, cx.rtab, cx.rntab);
+  }
+  if cx.done != 0 {
+    return crate::packet::mk_packet(3, cx.op_id, dseq, cx.op, cx.opool, cx.orec, e, e, cx.otab, cx.ontab);
+  }
+  return crate::packet::boundary(cx.op, cx.op_id, 2);
+}

@@ -1,0 +1,551 @@
+[
+ {
+  "name": "threads-empty-session",
+  "op": "session_threads",
+  "id": "U01",
+  "subs": [
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s"
+     }
+    },
+    "id": "U01/bare",
+    "expect": {
+     "terminal": "ok",
+     "value": [],
+     "trace": []
+    }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": null,
+      "engineThreads": null,
+      "terminal": null
+     }
+    },
+    "id": "U01/explicit-nulls",
+    "expect": {
+     "terminal": "ok",
+     "value": [],
+     "trace": []
+    }
+   }
+  ]
+ },
+ {
+  "id": "U02",
+  "name": "threads-origin-only",
+  "op": "session_threads",
+  "args": {
+   "session": {
+    "id": "s",
+    "externalThread": {
+     "engine": "claude",
+     "thread": "t1"
+    }
+   }
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    [
+     "claude",
+     "t1"
+    ]
+   ],
+   "trace": []
+  }
+ },
+ {
+  "id": "U03",
+  "name": "threads-forks-order",
+  "op": "session_threads",
+  "args": {
+   "session": {
+    "id": "s",
+    "externalThread": {
+     "engine": "claude",
+     "thread": "t0",
+     "forks": {
+      "arr": [
+       "f3",
+       "f1",
+       "f2"
+      ]
+     }
+    }
+   }
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    [
+     "claude",
+     "t0"
+    ],
+    [
+     "claude",
+     "f3"
+    ],
+    [
+     "claude",
+     "f1"
+    ],
+    [
+     "claude",
+     "f2"
+    ]
+   ],
+   "trace": []
+  }
+ },
+ {
+  "name": "threads-nullish-forks",
+  "op": "session_threads",
+  "id": "U04",
+  "subs": [
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "claude",
+       "thread": "t"
+      }
+     }
+    },
+    "id": "U04/absent",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "claude",
+       "t"
+      ]
+     ],
+     "trace": []
+    }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "claude",
+       "thread": "t",
+       "forks": null
+      }
+     }
+    },
+    "id": "U04/null",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "claude",
+       "t"
+      ]
+     ],
+     "trace": []
+    }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "claude",
+       "thread": "t",
+       "forks": {
+        "undef": 1
+       }
+      }
+     }
+    },
+    "id": "U04/undefined",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "claude",
+       "t"
+      ]
+     ],
+     "trace": []
+    }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "externalThread": {
+       "engine": "claude",
+       "thread": "t",
+       "forks": {
+        "arr": []
+       }
+      }
+     }
+    },
+    "id": "U04/empty-array",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "claude",
+       "t"
+      ]
+     ],
+     "trace": []
+    }
+   }
+  ]
+ },
+ {
+  "id": "U05",
+  "name": "threads-empty-origin-fork",
+  "op": "session_threads",
+  "args": {
+   "session": {
+    "id": "s",
+    "externalThread": {
+     "engine": "",
+     "thread": "",
+     "forks": {
+      "arr": [
+       "",
+       "f"
+      ]
+     }
+    }
+   }
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    [
+     "",
+     ""
+    ],
+    [
+     "",
+     ""
+    ],
+    [
+     "",
+     "f"
+    ]
+   ],
+   "trace": []
+  }
+ },
+ {
+  "id": "U06",
+  "name": "threads-duplicate-forks",
+  "op": "session_threads",
+  "args": {
+   "session": {
+    "id": "s",
+    "externalThread": {
+     "engine": "codex",
+     "thread": "t",
+     "forks": {
+      "arr": [
+       "t",
+       "f",
+       "f",
+       "t"
+      ]
+     }
+    }
+   }
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    [
+     "codex",
+     "t"
+    ],
+    [
+     "codex",
+     "t"
+    ],
+    [
+     "codex",
+     "f"
+    ],
+    [
+     "codex",
+     "f"
+    ],
+    [
+     "codex",
+     "t"
+    ]
+   ],
+   "trace": []
+  }
+ },
+ {
+  "name": "threads-terminal-default",
+  "op": "session_threads",
+  "id": "U07",
+  "subs": [
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "terminal": {
+       "cliSession": "cli1"
+      }
+     }
+    },
+    "id": "U07/absent",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "codex",
+       "cli1"
+      ]
+     ],
+     "trace": []
+    }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "engine": {
+       "undef": 1
+      },
+      "terminal": {
+       "cliSession": "cli1"
+      }
+     }
+    },
+    "id": "U07/undefined",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "codex",
+       "cli1"
+      ]
+     ],
+     "trace": []
+    }
+   }
+  ]
+ },
+ {
+  "id": "U08",
+  "name": "threads-terminal-null-engine",
+  "op": "session_threads",
+  "args": {
+   "session": {
+    "id": "s",
+    "engine": null,
+    "terminal": {
+     "cliSession": "cli1"
+    }
+   }
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    [
+     "codex",
+     "cli1"
+    ]
+   ],
+   "trace": []
+  }
+ },
+ {
+  "name": "threads-terminal-empty-engine",
+  "op": "session_threads",
+  "id": "U09",
+  "subs": [
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "engine": "",
+      "terminal": {
+       "cliSession": "cli1"
+      }
+     }
+    },
+    "id": "U09/empty",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "",
+       "cli1"
+      ]
+     ],
+     "trace": []
+    }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "engine": "qwen",
+      "terminal": {
+       "cliSession": "cli1"
+      }
+     }
+    },
+    "id": "U09/named",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "qwen",
+       "cli1"
+      ]
+     ],
+     "trace": []
+    }
+   }
+  ],
+  "mutant": "M13"
+ },
+ {
+  "name": "threads-terminal-truthiness",
+  "op": "session_threads",
+  "id": "U10",
+  "subs": [
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "terminal": {
+       "cliSession": "",
+       "started": true
+      }
+     }
+    },
+    "id": "U10/empty-cli",
+    "expect": {
+     "terminal": "ok",
+     "value": [],
+     "trace": []
+    }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "terminal": {
+       "cliSession": " ",
+       "started": false
+      }
+     }
+    },
+    "id": "U10/space-cli",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "codex",
+       " "
+      ]
+     ],
+     "trace": []
+    }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "terminal": {
+       "cliSession": "c",
+       "started": false
+      }
+     }
+    },
+    "id": "U10/started-ignored",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      [
+       "codex",
+       "c"
+      ]
+     ],
+     "trace": []
+    }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "terminal": {
+       "started": true
+      }
+     }
+    },
+    "id": "U10/missing-cli",
+    "expect": {
+     "terminal": "ok",
+     "value": [],
+     "trace": []
+    }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "terminal": {
+       "cliSession": null
+      }
+     }
+    },
+    "id": "U10/null-cli",
+    "expect": {
+     "terminal": "ok",
+     "value": [],
+     "trace": []
+    }
+   },
+   {
+    "op": "session_threads",
+    "args": {
+     "session": {
+      "id": "s",
+      "terminal": null
+     }
+    },
+    "id": "U10/null-terminal",
+    "expect": {
+     "terminal": "ok",
+     "value": [],
+     "trace": []
+    }
+   }
+  ]
+ }
+]

@@ -1,0 +1,2872 @@
+[
+ {
+  "id": "A01",
+  "name": "account-valid-lower-hex",
+  "op": "import_sources",
+  "args": {
+   "env": {}
+  },
+  "script": {
+   "accounts": {
+    "claude": {
+     "ok": [
+      {
+       "id": "acc_0123456789abcdef",
+       "name": "One"
+      }
+     ]
+    },
+    "codex": {
+     "ok": [
+      {
+       "id": "acc_fedcba9876543210",
+       "name": "Two"
+      }
+     ]
+    }
+   }
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    {
+     "source": "claude:home",
+     "engine": "claude",
+     "kind": "home",
+     "home": "/home/test/.claude"
+    },
+    {
+     "source": "claude:acc_0123456789abcdef",
+     "engine": "claude",
+     "kind": "account",
+     "account": "acc_0123456789abcdef",
+     "accountName": "One",
+     "home": "/data/engine-homes/claude/acc_0123456789abcdef"
+    },
+    {
+     "source": "codex:home",
+     "engine": "codex",
+     "kind": "home",
+     "home": "/home/test/.codex"
+    },
+    {
+     "source": "codex:acc_fedcba9876543210",
+     "engine": "codex",
+     "kind": "account",
+     "account": "acc_fedcba9876543210",
+     "accountName": "Two",
+     "home": "/data/engine-homes/codex/acc_fedcba9876543210"
+    },
+    {
+     "source": "grok:home",
+     "engine": "grok",
+     "kind": "home",
+     "home": "/home/test/.grok"
+    },
+    {
+     "source": "opencode:home",
+     "engine": "opencode",
+     "kind": "home",
+     "home": "/home/test/.local/share/opencode"
+    },
+    {
+     "source": "qwen:home",
+     "engine": "qwen",
+     "kind": "home",
+     "home": "/home/test/.qwen"
+    }
+   ],
+   "trace": [
+    [
+     "homedir"
+    ],
+    [
+     "accounts",
+     "claude"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "accounts",
+     "codex"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex/acc_fedcba9876543210"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes"
+    ],
+    [
+     "realpath",
+     "/data"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_fedcba9876543210"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_fedcba9876543210"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "homedir"
+    ]
+   ]
+  }
+ },
+ {
+  "name": "account-uppercase-rejected",
+  "op": "import_sources",
+  "id": "A02",
+  "subs": [
+   {
+    "args": {
+     "env": {}
+    },
+    "script": {
+     "accounts": {
+      "claude": {
+       "ok": [
+        {
+         "id": "acc_0123456789ABCDEF",
+         "name": "n"
+        },
+        {
+         "id": "acc_0123456789abcdef",
+         "name": "n"
+        }
+       ]
+      },
+      "codex": {
+       "ok": [
+        {
+         "id": "acc_0123456789ABCDEF",
+         "name": "n"
+        }
+       ]
+      }
+     }
+    },
+    "id": "A02/import",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      {
+       "source": "claude:home",
+       "engine": "claude",
+       "kind": "home",
+       "home": "/home/test/.claude"
+      },
+      {
+       "source": "claude:acc_0123456789abcdef",
+       "engine": "claude",
+       "kind": "account",
+       "account": "acc_0123456789abcdef",
+       "accountName": "n",
+       "home": "/data/engine-homes/claude/acc_0123456789abcdef"
+      },
+      {
+       "source": "codex:home",
+       "engine": "codex",
+       "kind": "home",
+       "home": "/home/test/.codex"
+      },
+      {
+       "source": "grok:home",
+       "engine": "grok",
+       "kind": "home",
+       "home": "/home/test/.grok"
+      },
+      {
+       "source": "opencode:home",
+       "engine": "opencode",
+       "kind": "home",
+       "home": "/home/test/.local/share/opencode"
+      },
+      {
+       "source": "qwen:home",
+       "engine": "qwen",
+       "kind": "home",
+       "home": "/home/test/.qwen"
+      }
+     ],
+     "trace": [
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "claude"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "codex"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ]
+     ]
+    }
+   },
+   {
+    "op": "account_home",
+    "args": {
+     "engine": "claude",
+     "id": "acc_0123456789ABCDEF"
+    },
+    "id": "A02/home",
+    "expect": {
+     "terminal": "throw_account_wire",
+     "value": {
+      "key": "wireEngine.account.invalidId",
+      "message": "계정 번호 모양이 틀려."
+     },
+     "trace": []
+    }
+   },
+   {
+    "op": "account_home",
+    "args": {
+     "engine": "codex",
+     "id": "acc_0123456789abcdeF"
+    },
+    "id": "A02/mixed-case",
+    "expect": {
+     "terminal": "throw_account_wire",
+     "value": {
+      "key": "wireEngine.account.invalidId",
+      "message": "계정 번호 모양이 틀려."
+     },
+     "trace": []
+    }
+   }
+  ]
+ },
+ {
+  "name": "account-length-boundaries",
+  "op": "import_sources",
+  "id": "A03",
+  "subs": [
+   {
+    "args": {
+     "env": {}
+    },
+    "script": {
+     "accounts": {
+      "claude": {
+       "ok": [
+        {
+         "id": "acc_0123456789abcde",
+         "name": "n"
+        },
+        {
+         "id": "acc_0123456789abcdef",
+         "name": "n"
+        },
+        {
+         "id": "acc_0123456789abcdef0",
+         "name": "n"
+        }
+       ]
+      }
+     }
+    },
+    "id": "A03/import",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      {
+       "source": "claude:home",
+       "engine": "claude",
+       "kind": "home",
+       "home": "/home/test/.claude"
+      },
+      {
+       "source": "claude:acc_0123456789abcdef",
+       "engine": "claude",
+       "kind": "account",
+       "account": "acc_0123456789abcdef",
+       "accountName": "n",
+       "home": "/data/engine-homes/claude/acc_0123456789abcdef"
+      },
+      {
+       "source": "codex:home",
+       "engine": "codex",
+       "kind": "home",
+       "home": "/home/test/.codex"
+      },
+      {
+       "source": "grok:home",
+       "engine": "grok",
+       "kind": "home",
+       "home": "/home/test/.grok"
+      },
+      {
+       "source": "opencode:home",
+       "engine": "opencode",
+       "kind": "home",
+       "home": "/home/test/.local/share/opencode"
+      },
+      {
+       "source": "qwen:home",
+       "engine": "qwen",
+       "kind": "home",
+       "home": "/home/test/.qwen"
+      }
+     ],
+     "trace": [
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "claude"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "codex"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ]
+     ]
+    }
+   },
+   {
+    "op": "account_home",
+    "args": {
+     "engine": "claude",
+     "id": "acc_0123456789abcde"
+    },
+    "id": "A03/home15",
+    "expect": {
+     "terminal": "throw_account_wire",
+     "value": {
+      "key": "wireEngine.account.invalidId",
+      "message": "계정 번호 모양이 틀려."
+     },
+     "trace": []
+    }
+   },
+   {
+    "op": "account_home",
+    "args": {
+     "engine": "claude",
+     "id": "acc_0123456789abcdef0"
+    },
+    "id": "A03/home17",
+    "expect": {
+     "terminal": "throw_account_wire",
+     "value": {
+      "key": "wireEngine.account.invalidId",
+      "message": "계정 번호 모양이 틀려."
+     },
+     "trace": []
+    }
+   },
+   {
+    "op": "account_home",
+    "args": {
+     "engine": "claude",
+     "id": "acc_0123456789abcdef"
+    },
+    "id": "A03/home16",
+    "expect": {
+     "terminal": "ok",
+     "value": "/data/engine-homes/claude/acc_0123456789abcdef",
+     "trace": []
+    }
+   }
+  ]
+ },
+ {
+  "name": "account-newline-and-path-rejected",
+  "op": "account_home",
+  "id": "A04",
+  "subs": [
+   {
+    "args": {
+     "engine": "claude",
+     "id": "acc_0123456789abcdef\n"
+    },
+    "id": "A04/newline",
+    "expect": {
+     "terminal": "throw_account_wire",
+     "value": {
+      "key": "wireEngine.account.invalidId",
+      "message": "계정 번호 모양이 틀려."
+     },
+     "trace": []
+    }
+   },
+   {
+    "args": {
+     "engine": "claude",
+     "id": "acc_0123456789/abcdef"
+    },
+    "id": "A04/slash",
+    "expect": {
+     "terminal": "throw_account_wire",
+     "value": {
+      "key": "wireEngine.account.invalidId",
+      "message": "계정 번호 모양이 틀려."
+     },
+     "trace": []
+    }
+   },
+   {
+    "args": {
+     "engine": "claude",
+     "id": "../acc_0123456789abcdef"
+    },
+    "id": "A04/traversal",
+    "expect": {
+     "terminal": "throw_account_wire",
+     "value": {
+      "key": "wireEngine.account.invalidId",
+      "message": "계정 번호 모양이 틀려."
+     },
+     "trace": []
+    }
+   },
+   {
+    "args": {
+     "engine": "claude",
+     "id": "acc_../../etc/passw"
+    },
+    "id": "A04/embedded-dotdot",
+    "expect": {
+     "terminal": "throw_account_wire",
+     "value": {
+      "key": "wireEngine.account.invalidId",
+      "message": "계정 번호 모양이 틀려."
+     },
+     "trace": []
+    }
+   },
+   {
+    "args": {
+     "engine": "claude",
+     "id": "/acc_0123456789abcdef"
+    },
+    "id": "A04/prefix-slash",
+    "expect": {
+     "terminal": "throw_account_wire",
+     "value": {
+      "key": "wireEngine.account.invalidId",
+      "message": "계정 번호 모양이 틀려."
+     },
+     "trace": []
+    }
+   },
+   {
+    "args": {
+     "engine": "claude",
+     "id": "\nacc_0123456789abcdef"
+    },
+    "id": "A04/leading-newline",
+    "expect": {
+     "terminal": "throw_account_wire",
+     "value": {
+      "key": "wireEngine.account.invalidId",
+      "message": "계정 번호 모양이 틀려."
+     },
+     "trace": []
+    }
+   },
+   {
+    "op": "import_sources",
+    "args": {
+     "env": {}
+    },
+    "script": {
+     "accounts": {
+      "claude": {
+       "ok": [
+        {
+         "id": "acc_0123456789abcdef\n",
+         "name": "n"
+        },
+        {
+         "id": "acc_0123456789/abcdef",
+         "name": "n"
+        },
+        {
+         "id": "../acc_0123456789abcdef",
+         "name": "n"
+        },
+        {
+         "id": "acc_../../etc/passw",
+         "name": "n"
+        },
+        {
+         "id": "/acc_0123456789abcdef",
+         "name": "n"
+        },
+        {
+         "id": "\nacc_0123456789abcdef",
+         "name": "n"
+        }
+       ]
+      },
+      "codex": {
+       "ok": [
+        {
+         "id": "acc_0123456789abcdef\n",
+         "name": "n"
+        },
+        {
+         "id": "acc_0123456789/abcdef",
+         "name": "n"
+        },
+        {
+         "id": "../acc_0123456789abcdef",
+         "name": "n"
+        },
+        {
+         "id": "acc_../../etc/passw",
+         "name": "n"
+        },
+        {
+         "id": "/acc_0123456789abcdef",
+         "name": "n"
+        },
+        {
+         "id": "\nacc_0123456789abcdef",
+         "name": "n"
+        }
+       ]
+      }
+     }
+    },
+    "id": "A04/import",
+    "expect": {
+     "terminal": "ok",
+     "value": [
+      {
+       "source": "claude:home",
+       "engine": "claude",
+       "kind": "home",
+       "home": "/home/test/.claude"
+      },
+      {
+       "source": "codex:home",
+       "engine": "codex",
+       "kind": "home",
+       "home": "/home/test/.codex"
+      },
+      {
+       "source": "grok:home",
+       "engine": "grok",
+       "kind": "home",
+       "home": "/home/test/.grok"
+      },
+      {
+       "source": "opencode:home",
+       "engine": "opencode",
+       "kind": "home",
+       "home": "/home/test/.local/share/opencode"
+      },
+      {
+       "source": "qwen:home",
+       "engine": "qwen",
+       "kind": "home",
+       "home": "/home/test/.qwen"
+      }
+     ],
+     "trace": [
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "claude"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "codex"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "homedir"
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "A05",
+  "name": "account-name-verbatim",
+  "op": "import_sources",
+  "args": {
+   "env": {}
+  },
+  "script": {
+   "accounts": {
+    "claude": {
+     "ok": [
+      {
+       "id": "acc_0123456789abcdef",
+       "name": ""
+      },
+      {
+       "id": "acc_fedcba9876543210",
+       "name": "  pad \n"
+      }
+     ]
+    },
+    "codex": {
+     "ok": [
+      {
+       "id": "acc_0123456789abcdef",
+       "name": ""
+      }
+     ]
+    }
+   }
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    {
+     "source": "claude:home",
+     "engine": "claude",
+     "kind": "home",
+     "home": "/home/test/.claude"
+    },
+    {
+     "source": "claude:acc_0123456789abcdef",
+     "engine": "claude",
+     "kind": "account",
+     "account": "acc_0123456789abcdef",
+     "accountName": "",
+     "home": "/data/engine-homes/claude/acc_0123456789abcdef"
+    },
+    {
+     "source": "claude:acc_fedcba9876543210",
+     "engine": "claude",
+     "kind": "account",
+     "account": "acc_fedcba9876543210",
+     "accountName": "  pad \n",
+     "home": "/data/engine-homes/claude/acc_fedcba9876543210"
+    },
+    {
+     "source": "codex:home",
+     "engine": "codex",
+     "kind": "home",
+     "home": "/home/test/.codex"
+    },
+    {
+     "source": "codex:acc_0123456789abcdef",
+     "engine": "codex",
+     "kind": "account",
+     "account": "acc_0123456789abcdef",
+     "accountName": "",
+     "home": "/data/engine-homes/codex/acc_0123456789abcdef"
+    },
+    {
+     "source": "grok:home",
+     "engine": "grok",
+     "kind": "home",
+     "home": "/home/test/.grok"
+    },
+    {
+     "source": "opencode:home",
+     "engine": "opencode",
+     "kind": "home",
+     "home": "/home/test/.local/share/opencode"
+    },
+    {
+     "source": "qwen:home",
+     "engine": "qwen",
+     "kind": "home",
+     "home": "/home/test/.qwen"
+    }
+   ],
+   "trace": [
+    [
+     "homedir"
+    ],
+    [
+     "accounts",
+     "claude"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "accounts",
+     "codex"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex/acc_0123456789abcdef"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes"
+    ],
+    [
+     "realpath",
+     "/data"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0123456789abcdef"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0123456789abcdef"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "homedir"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "A06",
+  "name": "account-callback-order",
+  "op": "import_sources",
+  "args": {
+   "env": {}
+  },
+  "script": {
+   "accounts": {
+    "claude": {
+     "ok": [
+      {
+       "id": "acc_0123456789abcdef",
+       "name": "n"
+      }
+     ]
+    },
+    "codex": {
+     "ok": [
+      {
+       "id": "acc_0123456789abcdef",
+       "name": "n"
+      }
+     ]
+    }
+   }
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    {
+     "source": "claude:home",
+     "engine": "claude",
+     "kind": "home",
+     "home": "/home/test/.claude"
+    },
+    {
+     "source": "claude:acc_0123456789abcdef",
+     "engine": "claude",
+     "kind": "account",
+     "account": "acc_0123456789abcdef",
+     "accountName": "n",
+     "home": "/data/engine-homes/claude/acc_0123456789abcdef"
+    },
+    {
+     "source": "codex:home",
+     "engine": "codex",
+     "kind": "home",
+     "home": "/home/test/.codex"
+    },
+    {
+     "source": "codex:acc_0123456789abcdef",
+     "engine": "codex",
+     "kind": "account",
+     "account": "acc_0123456789abcdef",
+     "accountName": "n",
+     "home": "/data/engine-homes/codex/acc_0123456789abcdef"
+    },
+    {
+     "source": "grok:home",
+     "engine": "grok",
+     "kind": "home",
+     "home": "/home/test/.grok"
+    },
+    {
+     "source": "opencode:home",
+     "engine": "opencode",
+     "kind": "home",
+     "home": "/home/test/.local/share/opencode"
+    },
+    {
+     "source": "qwen:home",
+     "engine": "qwen",
+     "kind": "home",
+     "home": "/home/test/.qwen"
+    }
+   ],
+   "trace": [
+    [
+     "homedir"
+    ],
+    [
+     "accounts",
+     "claude"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "accounts",
+     "codex"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex/acc_0123456789abcdef"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes"
+    ],
+    [
+     "realpath",
+     "/data"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0123456789abcdef"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0123456789abcdef"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "homedir"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "A07",
+  "name": "account-array-order-duplicates",
+  "op": "import_sources",
+  "args": {
+   "env": {}
+  },
+  "script": {
+   "accounts": {
+    "claude": {
+     "ok": [
+      {
+       "id": "acc_0123456789abcdef",
+       "name": "a"
+      },
+      {
+       "id": "acc_fedcba9876543210",
+       "name": "b"
+      },
+      {
+       "id": "acc_0123456789abcdef",
+       "name": "c"
+      }
+     ]
+    },
+    "codex": {
+     "ok": [
+      {
+       "id": "acc_fedcba9876543210",
+       "name": "x"
+      },
+      {
+       "id": "acc_fedcba9876543210",
+       "name": "y"
+      }
+     ]
+    }
+   }
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    {
+     "source": "claude:home",
+     "engine": "claude",
+     "kind": "home",
+     "home": "/home/test/.claude"
+    },
+    {
+     "source": "claude:acc_0123456789abcdef",
+     "engine": "claude",
+     "kind": "account",
+     "account": "acc_0123456789abcdef",
+     "accountName": "a",
+     "home": "/data/engine-homes/claude/acc_0123456789abcdef"
+    },
+    {
+     "source": "claude:acc_fedcba9876543210",
+     "engine": "claude",
+     "kind": "account",
+     "account": "acc_fedcba9876543210",
+     "accountName": "b",
+     "home": "/data/engine-homes/claude/acc_fedcba9876543210"
+    },
+    {
+     "source": "claude:acc_0123456789abcdef",
+     "engine": "claude",
+     "kind": "account",
+     "account": "acc_0123456789abcdef",
+     "accountName": "c",
+     "home": "/data/engine-homes/claude/acc_0123456789abcdef"
+    },
+    {
+     "source": "codex:home",
+     "engine": "codex",
+     "kind": "home",
+     "home": "/home/test/.codex"
+    },
+    {
+     "source": "codex:acc_fedcba9876543210",
+     "engine": "codex",
+     "kind": "account",
+     "account": "acc_fedcba9876543210",
+     "accountName": "x",
+     "home": "/data/engine-homes/codex/acc_fedcba9876543210"
+    },
+    {
+     "source": "codex:acc_fedcba9876543210",
+     "engine": "codex",
+     "kind": "account",
+     "account": "acc_fedcba9876543210",
+     "accountName": "y",
+     "home": "/data/engine-homes/codex/acc_fedcba9876543210"
+    },
+    {
+     "source": "grok:home",
+     "engine": "grok",
+     "kind": "home",
+     "home": "/home/test/.grok"
+    },
+    {
+     "source": "opencode:home",
+     "engine": "opencode",
+     "kind": "home",
+     "home": "/home/test/.local/share/opencode"
+    },
+    {
+     "source": "qwen:home",
+     "engine": "qwen",
+     "kind": "home",
+     "home": "/home/test/.qwen"
+    }
+   ],
+   "trace": [
+    [
+     "homedir"
+    ],
+    [
+     "accounts",
+     "claude"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "accounts",
+     "codex"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex/acc_fedcba9876543210"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes"
+    ],
+    [
+     "realpath",
+     "/data"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_fedcba9876543210"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_fedcba9876543210"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex/acc_fedcba9876543210"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes"
+    ],
+    [
+     "realpath",
+     "/data"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_fedcba9876543210"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_fedcba9876543210"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "homedir"
+    ]
+   ]
+  },
+  "mutant": "M04"
+ },
+ {
+  "id": "A08",
+  "name": "account-bad-middle-skipped",
+  "op": "import_sources",
+  "args": {
+   "env": {}
+  },
+  "script": {
+   "accounts": {
+    "claude": {
+     "ok": [
+      {
+       "id": "acc_0123456789abcdef",
+       "name": "n"
+      },
+      {
+       "id": "not-valid",
+       "name": "n"
+      },
+      {
+       "id": "acc_fedcba9876543210",
+       "name": "n"
+      }
+     ]
+    },
+    "codex": {
+     "ok": [
+      {
+       "id": "acc_0123456789abcdef",
+       "name": "n"
+      },
+      {
+       "id": "BAD",
+       "name": "n"
+      },
+      {
+       "id": "acc_fedcba9876543210",
+       "name": "n"
+      }
+     ]
+    }
+   }
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    {
+     "source": "claude:home",
+     "engine": "claude",
+     "kind": "home",
+     "home": "/home/test/.claude"
+    },
+    {
+     "source": "claude:acc_0123456789abcdef",
+     "engine": "claude",
+     "kind": "account",
+     "account": "acc_0123456789abcdef",
+     "accountName": "n",
+     "home": "/data/engine-homes/claude/acc_0123456789abcdef"
+    },
+    {
+     "source": "claude:acc_fedcba9876543210",
+     "engine": "claude",
+     "kind": "account",
+     "account": "acc_fedcba9876543210",
+     "accountName": "n",
+     "home": "/data/engine-homes/claude/acc_fedcba9876543210"
+    },
+    {
+     "source": "codex:home",
+     "engine": "codex",
+     "kind": "home",
+     "home": "/home/test/.codex"
+    },
+    {
+     "source": "codex:acc_0123456789abcdef",
+     "engine": "codex",
+     "kind": "account",
+     "account": "acc_0123456789abcdef",
+     "accountName": "n",
+     "home": "/data/engine-homes/codex/acc_0123456789abcdef"
+    },
+    {
+     "source": "codex:acc_fedcba9876543210",
+     "engine": "codex",
+     "kind": "account",
+     "account": "acc_fedcba9876543210",
+     "accountName": "n",
+     "home": "/data/engine-homes/codex/acc_fedcba9876543210"
+    },
+    {
+     "source": "grok:home",
+     "engine": "grok",
+     "kind": "home",
+     "home": "/home/test/.grok"
+    },
+    {
+     "source": "opencode:home",
+     "engine": "opencode",
+     "kind": "home",
+     "home": "/home/test/.local/share/opencode"
+    },
+    {
+     "source": "qwen:home",
+     "engine": "qwen",
+     "kind": "home",
+     "home": "/home/test/.qwen"
+    }
+   ],
+   "trace": [
+    [
+     "homedir"
+    ],
+    [
+     "accounts",
+     "claude"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "accounts",
+     "codex"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex/acc_0123456789abcdef"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes"
+    ],
+    [
+     "realpath",
+     "/data"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0123456789abcdef"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0123456789abcdef"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex/acc_fedcba9876543210"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes"
+    ],
+    [
+     "realpath",
+     "/data"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_fedcba9876543210"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_fedcba9876543210"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "homedir"
+    ]
+   ]
+  },
+  "mutant": "M05"
+ },
+ {
+  "name": "account-callback-throw-escapes",
+  "op": "import_sources",
+  "id": "A09",
+  "subs": [
+   {
+    "args": {
+     "env": {}
+    },
+    "script": {
+     "accounts": {
+      "claude": {
+       "throw": {
+        "class": "Error",
+        "ref": "cb_err",
+        "message": "cb failed"
+       }
+      },
+      "codex": {
+       "ok": [
+        {
+         "id": "acc_0123456789abcdef",
+         "name": "n"
+        }
+       ]
+      }
+     }
+    },
+    "id": "A09/claude",
+    "expect": {
+     "terminal": "throw_existing",
+     "value": {
+      "ref": "cb_err"
+     },
+     "trace": [
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "claude"
+      ]
+     ]
+    }
+   },
+   {
+    "args": {
+     "env": {}
+    },
+    "script": {
+     "accounts": {
+      "claude": {
+       "ok": [
+        {
+         "id": "acc_0123456789abcdef",
+         "name": "n"
+        }
+       ]
+      },
+      "codex": {
+       "throw": {
+        "class": "Error",
+        "ref": "cb_err2",
+        "message": "cb2 failed"
+       }
+      }
+     }
+    },
+    "id": "A09/codex",
+    "expect": {
+     "terminal": "throw_existing",
+     "value": {
+      "ref": "cb_err2"
+     },
+     "trace": [
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "claude"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "codex"
+      ]
+     ]
+    }
+   },
+   {
+    "args": {
+     "env": {}
+    },
+    "script": {
+     "accounts": {
+      "claude": {
+       "ok": [
+        {
+         "id": "acc_0123456789abcdef",
+         "name": "n"
+        }
+       ]
+      },
+      "codex": {
+       "throw": {
+        "class": "TypeError",
+        "ref": "cb_err3",
+        "message": "t"
+       }
+      }
+     }
+    },
+    "id": "A09/after-rows",
+    "expect": {
+     "terminal": "throw_existing",
+     "value": {
+      "ref": "cb_err3"
+     },
+     "trace": [
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "claude"
+      ],
+      [
+       "ambient",
+       "CODEX_HOME"
+      ],
+      [
+       "homedir"
+      ],
+      [
+       "accounts",
+       "codex"
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "A10",
+  "name": "account-no-eight-cap",
+  "op": "import_sources",
+  "args": {
+   "env": {}
+  },
+  "script": {
+   "accounts": {
+    "claude": {
+     "ok": [
+      {
+       "id": "acc_0000000000000001",
+       "name": "n1"
+      },
+      {
+       "id": "acc_0000000000000002",
+       "name": "n2"
+      },
+      {
+       "id": "acc_0000000000000003",
+       "name": "n3"
+      },
+      {
+       "id": "acc_0000000000000004",
+       "name": "n4"
+      },
+      {
+       "id": "acc_0000000000000005",
+       "name": "n5"
+      },
+      {
+       "id": "acc_0000000000000006",
+       "name": "n6"
+      },
+      {
+       "id": "acc_0000000000000007",
+       "name": "n7"
+      },
+      {
+       "id": "acc_0000000000000008",
+       "name": "n8"
+      },
+      {
+       "id": "acc_0000000000000009",
+       "name": "n9"
+      }
+     ]
+    },
+    "codex": {
+     "ok": [
+      {
+       "id": "acc_0000000000000001",
+       "name": "n1"
+      },
+      {
+       "id": "acc_0000000000000002",
+       "name": "n2"
+      },
+      {
+       "id": "acc_0000000000000003",
+       "name": "n3"
+      },
+      {
+       "id": "acc_0000000000000004",
+       "name": "n4"
+      },
+      {
+       "id": "acc_0000000000000005",
+       "name": "n5"
+      },
+      {
+       "id": "acc_0000000000000006",
+       "name": "n6"
+      },
+      {
+       "id": "acc_0000000000000007",
+       "name": "n7"
+      },
+      {
+       "id": "acc_0000000000000008",
+       "name": "n8"
+      },
+      {
+       "id": "acc_0000000000000009",
+       "name": "n9"
+      }
+     ]
+    }
+   }
+  },
+  "expect": {
+   "terminal": "ok",
+   "value": [
+    {
+     "source": "claude:home",
+     "engine": "claude",
+     "kind": "home",
+     "home": "/home/test/.claude"
+    },
+    {
+     "source": "claude:acc_0000000000000001",
+     "engine": "claude",
+     "kind": "account",
+     "account": "acc_0000000000000001",
+     "accountName": "n1",
+     "home": "/data/engine-homes/claude/acc_0000000000000001"
+    },
+    {
+     "source": "claude:acc_0000000000000002",
+     "engine": "claude",
+     "kind": "account",
+     "account": "acc_0000000000000002",
+     "accountName": "n2",
+     "home": "/data/engine-homes/claude/acc_0000000000000002"
+    },
+    {
+     "source": "claude:acc_0000000000000003",
+     "engine": "claude",
+     "kind": "account",
+     "account": "acc_0000000000000003",
+     "accountName": "n3",
+     "home": "/data/engine-homes/claude/acc_0000000000000003"
+    },
+    {
+     "source": "claude:acc_0000000000000004",
+     "engine": "claude",
+     "kind": "account",
+     "account": "acc_0000000000000004",
+     "accountName": "n4",
+     "home": "/data/engine-homes/claude/acc_0000000000000004"
+    },
+    {
+     "source": "claude:acc_0000000000000005",
+     "engine": "claude",
+     "kind": "account",
+     "account": "acc_0000000000000005",
+     "accountName": "n5",
+     "home": "/data/engine-homes/claude/acc_0000000000000005"
+    },
+    {
+     "source": "claude:acc_0000000000000006",
+     "engine": "claude",
+     "kind": "account",
+     "account": "acc_0000000000000006",
+     "accountName": "n6",
+     "home": "/data/engine-homes/claude/acc_0000000000000006"
+    },
+    {
+     "source": "claude:acc_0000000000000007",
+     "engine": "claude",
+     "kind": "account",
+     "account": "acc_0000000000000007",
+     "accountName": "n7",
+     "home": "/data/engine-homes/claude/acc_0000000000000007"
+    },
+    {
+     "source": "claude:acc_0000000000000008",
+     "engine": "claude",
+     "kind": "account",
+     "account": "acc_0000000000000008",
+     "accountName": "n8",
+     "home": "/data/engine-homes/claude/acc_0000000000000008"
+    },
+    {
+     "source": "claude:acc_0000000000000009",
+     "engine": "claude",
+     "kind": "account",
+     "account": "acc_0000000000000009",
+     "accountName": "n9",
+     "home": "/data/engine-homes/claude/acc_0000000000000009"
+    },
+    {
+     "source": "codex:home",
+     "engine": "codex",
+     "kind": "home",
+     "home": "/home/test/.codex"
+    },
+    {
+     "source": "codex:acc_0000000000000001",
+     "engine": "codex",
+     "kind": "account",
+     "account": "acc_0000000000000001",
+     "accountName": "n1",
+     "home": "/data/engine-homes/codex/acc_0000000000000001"
+    },
+    {
+     "source": "codex:acc_0000000000000002",
+     "engine": "codex",
+     "kind": "account",
+     "account": "acc_0000000000000002",
+     "accountName": "n2",
+     "home": "/data/engine-homes/codex/acc_0000000000000002"
+    },
+    {
+     "source": "codex:acc_0000000000000003",
+     "engine": "codex",
+     "kind": "account",
+     "account": "acc_0000000000000003",
+     "accountName": "n3",
+     "home": "/data/engine-homes/codex/acc_0000000000000003"
+    },
+    {
+     "source": "codex:acc_0000000000000004",
+     "engine": "codex",
+     "kind": "account",
+     "account": "acc_0000000000000004",
+     "accountName": "n4",
+     "home": "/data/engine-homes/codex/acc_0000000000000004"
+    },
+    {
+     "source": "codex:acc_0000000000000005",
+     "engine": "codex",
+     "kind": "account",
+     "account": "acc_0000000000000005",
+     "accountName": "n5",
+     "home": "/data/engine-homes/codex/acc_0000000000000005"
+    },
+    {
+     "source": "codex:acc_0000000000000006",
+     "engine": "codex",
+     "kind": "account",
+     "account": "acc_0000000000000006",
+     "accountName": "n6",
+     "home": "/data/engine-homes/codex/acc_0000000000000006"
+    },
+    {
+     "source": "codex:acc_0000000000000007",
+     "engine": "codex",
+     "kind": "account",
+     "account": "acc_0000000000000007",
+     "accountName": "n7",
+     "home": "/data/engine-homes/codex/acc_0000000000000007"
+    },
+    {
+     "source": "codex:acc_0000000000000008",
+     "engine": "codex",
+     "kind": "account",
+     "account": "acc_0000000000000008",
+     "accountName": "n8",
+     "home": "/data/engine-homes/codex/acc_0000000000000008"
+    },
+    {
+     "source": "codex:acc_0000000000000009",
+     "engine": "codex",
+     "kind": "account",
+     "account": "acc_0000000000000009",
+     "accountName": "n9",
+     "home": "/data/engine-homes/codex/acc_0000000000000009"
+    },
+    {
+     "source": "grok:home",
+     "engine": "grok",
+     "kind": "home",
+     "home": "/home/test/.grok"
+    },
+    {
+     "source": "opencode:home",
+     "engine": "opencode",
+     "kind": "home",
+     "home": "/home/test/.local/share/opencode"
+    },
+    {
+     "source": "qwen:home",
+     "engine": "qwen",
+     "kind": "home",
+     "home": "/home/test/.qwen"
+    }
+   ],
+   "trace": [
+    [
+     "homedir"
+    ],
+    [
+     "accounts",
+     "claude"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "accounts",
+     "codex"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex/acc_0000000000000001"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes"
+    ],
+    [
+     "realpath",
+     "/data"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0000000000000001"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0000000000000001"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex/acc_0000000000000002"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes"
+    ],
+    [
+     "realpath",
+     "/data"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0000000000000002"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0000000000000002"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex/acc_0000000000000003"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes"
+    ],
+    [
+     "realpath",
+     "/data"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0000000000000003"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0000000000000003"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex/acc_0000000000000004"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes"
+    ],
+    [
+     "realpath",
+     "/data"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0000000000000004"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0000000000000004"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex/acc_0000000000000005"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes"
+    ],
+    [
+     "realpath",
+     "/data"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0000000000000005"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0000000000000005"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex/acc_0000000000000006"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes"
+    ],
+    [
+     "realpath",
+     "/data"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0000000000000006"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0000000000000006"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex/acc_0000000000000007"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes"
+    ],
+    [
+     "realpath",
+     "/data"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0000000000000007"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0000000000000007"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex/acc_0000000000000008"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes"
+    ],
+    [
+     "realpath",
+     "/data"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0000000000000008"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0000000000000008"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex/acc_0000000000000009"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes/codex"
+    ],
+    [
+     "realpath",
+     "/data/engine-homes"
+    ],
+    [
+     "realpath",
+     "/data"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "realpath",
+     "/home/test/.codex"
+    ],
+    [
+     "realpath",
+     "/home/test"
+    ],
+    [
+     "realpath",
+     "/home"
+    ],
+    [
+     "realpath",
+     "/"
+    ],
+    [
+     "ambient",
+     "CODEX_HOME"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0000000000000009"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "stat",
+     "/data/engine-homes/codex/acc_0000000000000009"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "homedir"
+    ],
+    [
+     "homedir"
+    ]
+   ]
+  }
+ }
+]
