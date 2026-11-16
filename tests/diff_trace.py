@@ -255,6 +255,48 @@ def unknown_involved(py, rs):
     return False
 
 
+DROP_STATUSES = ("not_proved", "resource_unknown")
+
+
+def same_query_dropped(py, rs):
+    """Do the two sides differ only in inference candidate queries whose SMT text is byte-identical, where one side
+    answered sat and the other stopped at the rlimit, so both dropped the candidate? The compilers built the same
+    query; the rlimit stop depends on z3's internal term order (G10 async Loop queries with `--infer`: same text,
+    py sat / rs "max. resource limit exceeded"). The final inference result and errors must still be identical."""
+    po, ro = py.get("obligations", []), rs.get("obligations", [])
+    if len(po) != len(ro):
+        return False
+    py2, rs2 = dict(py), dict(rs)
+    obs_p, obs_r, seen = [], [], False
+    for a, b in zip(po, ro):
+        aa, ba = a.get("attempts", []), b.get("attempts", [])
+        if len(aa) != len(ba):
+            return False
+        na = []
+        for x, y in zip(aa, ba):
+            if x.get("result") != y.get("result"):
+                pair = {x.get("result"), y.get("result")}
+                unk = x if x.get("result") == "unknown" else y
+                if (a.get("phase") != "inference" or pair != {"sat", "unknown"} or x.get("smt2") != y.get("smt2")
+                        or unk.get("status") != "resource_unknown" or unk.get("reason_unknown") not in RLIMIT_REASONS):
+                    return False
+                seen = True
+                na.append(x)
+            else:
+                na.append(y)
+        obs_p.append(a)
+        obs_r.append(dict(b, attempts=na))
+    if not seen:
+        return False
+
+    def drops(inf):
+        return [dict(e, dropped=[dict(d, status="<dropped>") if d.get("status") in DROP_STATUSES else d
+                                 for d in (e.get("dropped") or [])]) for e in (inf or [])]
+    py2["obligations"], rs2["obligations"] = obs_p, obs_r
+    py2["inference"], rs2["inference"] = drops(py.get("inference")), drops(rs.get("inference"))
+    return canon(strip_cex(py2)) == canon(strip_cex(rs2))
+
+
 def py_recursion(obj):
     """Did Python emit internal_error because of the recursion limit (RecursionError)? (nothing to compare; same category as in diff_parse)"""
     return any(isinstance(e, dict) and e.get("code") == "internal_error"
@@ -287,6 +329,8 @@ def classify(case, expected):
         return "cex_only"
     if canon(strip_reason(strip_cex(case.py_obj))) == canon(strip_reason(strip_cex(case.rs_obj))):
         return "same_unknown"   # only the z3 text of resource_unknown differs (that attempt is unknown, so it is not counted as success)
+    if same_query_dropped(case.py_obj, case.rs_obj):
+        return "same_unknown"
     if unknown_involved(case.py_obj, case.rs_obj):
         return "flaky_unknown"
     if ("inference_timeout" in error_codes(case.py_obj) or "inference_timeout" in error_codes(case.rs_obj)) \
