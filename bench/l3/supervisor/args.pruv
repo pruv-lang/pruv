@@ -1,0 +1,64 @@
+// L3-2 arguments: the host passes every argument followed by one NUL byte.
+
+// [0, n, lo0, hi0, ...] with one span per argument, or [1, 0] when the blob is not NUL-terminated.
+pub fn arg_spans(argv: str) -> [i64] ! alloc
+  ensures len(result) >= 2
+  ensures result[0] == 0 || result[0] == 1
+  ensures result[0] == 0 ==> 0 <= result[1] && result[1] <= len(argv) && len(argv) <= 1048576
+  ensures result[0] == 0 ==> len(result) == 2 + 2 * result[1]
+  ensures result[0] == 0 ==> forall k in 0..result[1]:
+    0 <= result[2 + 2 * k] && result[2 + 2 * k] <= result[3 + 2 * k] && result[3 + 2 * k] <= len(argv)
+    && is_char_boundary(argv, result[2 + 2 * k]) && is_char_boundary(argv, result[3 + 2 * k])
+{
+  let n: i64 = len(argv);
+  let mut bad: [i64] = alloc(2, 0);
+  bad[0] = 1;
+  if n > 1048576 { return bad; }
+  let mut out: [i64] = alloc(2 + 2 * n, 0);
+  let mut cnt: i64 = 0;
+  let mut start: i64 = 0;
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n
+    invariant 0 <= start && start <= i
+    invariant 0 <= cnt && cnt <= start
+    invariant len(out) == 2 + 2 * n
+    invariant is_char_boundary(argv, start)
+    invariant forall k in 0..cnt:
+      0 <= out[2 + 2 * k] && out[2 + 2 * k] <= out[3 + 2 * k] && out[3 + 2 * k] <= n
+      && is_char_boundary(argv, out[2 + 2 * k]) && is_char_boundary(argv, out[3 + 2 * k])
+    decreases n - i
+  {
+    if argv[i] == 0 {
+      if !is_char_boundary(argv, i + 1) { return bad; }
+      out[2 + 2 * cnt] = start;
+      out[3 + 2 * cnt] = i;
+      cnt = cnt + 1;
+      start = i + 1;
+    }
+    i = i + 1;
+  }
+  if start != n { return bad; }
+  out[0] = 0;
+  out[1] = cnt;
+  return truncate(out, 2 + 2 * cnt);
+}
+
+// ProcessArgs holding every argument of the blob (empty when the blob is malformed; callers check arg_spans first).
+pub fn build_args(argv: str) -> ProcessArgs ! alloc
+{
+  let sp: [i64] = arg_spans(argv);
+  let mut a: ProcessArgs = proc_args_new();
+  if sp[0] != 0 { return move a; }
+  let cnt: i64 = sp[1];
+  let mut k: i64 = 0;
+  while k < cnt
+    invariant 0 <= k && k <= cnt && proc_args_len(a) == k
+    decreases cnt - k
+  {
+    let piece: str = substr(argv, sp[2 + 2 * k], sp[3 + 2 * k]);
+    a = proc_args_push(move a, piece);
+    k = k + 1;
+  }
+  return move a;
+}

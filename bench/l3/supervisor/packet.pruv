@@ -1,0 +1,56 @@
+// L3-2 result packet: 11 header fields, the tail length, then the tail bytes (UTF-8).
+// Header: status, kind, exit_status, exit_known, stopped, reaped, truncated, file_error, file_open, total, file_bytes.
+
+pub fn packet(h: [i64], tail: [u8]) -> [i64] ! alloc
+  requires len(h) == 11
+  requires len(tail) <= 1048576
+  ensures len(result) == 12 + len(tail)
+  ensures forall k in 0..11: result[k] == h[k]
+  ensures result[11] == len(tail)
+  ensures forall k in 0..len(tail): result[12 + k] == tail[k]
+{
+  let n: i64 = len(tail);
+  let mut out: [i64] = alloc(12 + n, 0);
+  let mut k: i64 = 0;
+  while k < 11
+    invariant 0 <= k && k <= 11 && len(out) == 12 + n
+    invariant forall j in 0..k: out[j] == h[j]
+    decreases 11 - k
+  {
+    out[k] = h[k];
+    k = k + 1;
+  }
+  out[11] = n;
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && len(out) == 12 + n
+    invariant forall j in 0..11: out[j] == h[j]
+    invariant out[11] == n
+    invariant forall j in 0..i: out[12 + j] == tail[j]
+    decreases n - i
+  {
+    out[12 + i] = tail[i];
+    i = i + 1;
+  }
+  return out;
+}
+
+// A header of zeros with the given status and kind.
+pub fn header(status: i64, kind: i64) -> [i64] ! alloc
+  ensures len(result) == 11 && result[0] == status && result[1] == kind
+  ensures forall k in 2..11: result[k] == 0
+{
+  let mut h: [i64] = alloc(11, 0);
+  h[0] = status;
+  h[1] = kind;
+  return h;
+}
+
+// The bad-input packet: status 1, kind 5, empty tail.
+pub fn bad_input() -> [i64] ! alloc
+  ensures len(result) == 12 && result[0] == 1 && result[1] == 5
+{
+  let h: [i64] = header(1, 5);
+  let none: [u8] = alloc(0, 0);
+  return packet(h, none);
+}
