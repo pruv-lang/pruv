@@ -90,7 +90,8 @@ These settle the designer's open questions and bind the implementation.
   cancellation waiver" wording: there is no waiver, the paths are simply not ported.
 - **D4 — message counts: P9, not a G prerequisite.** A JS-exact binary64 parse-and-print facility is recorded as the
   G-track follow-up **G-JSON-NUM**; L3-6 uses P9.
-- **D5 — deadline-aware wait/write** stays the known limit already recorded after L3-5 (P7, G10-ASYNC-DEADLINE).
+- **D5 — deadline-aware wait/write: adopted.** G10-ASYNC-DEADLINE added `ev_proc_wait_for` and `ev_proc_write_for`;
+  the shared `transport` package uses both (transport adoption, RESULTS §138). P7 keeps only the close-time limits.
 
 ## Preserved behaviors
 
@@ -266,8 +267,11 @@ Every allowed difference is labeled below. No P5 blanket exemption for filesyste
   A 1000000-step per-request pump exhaustion => `read-failed`; pin that count in tests. Final non-LF RPC fragments
   are ignored on both sides. Compare outgoing JSON semantically, not property order or escape spelling.
 - **P7 — Deviation:** the shared transport's G10 close replaces TS's timed TERM/KILL/give-up sequence. Trigger:
-  a child requiring a grace period, keeping pipes open, or not exiting after EOF. No promise of a 20 s wall-clock
-  bound through wait/write/close; classify these separately (limits below). This does not waive GROK_HOME (D2).
+  a child requiring a grace period, keeping pipes open, or not exiting after EOF. After EOF `transport::receive`
+  waits for the exit in 10 ms `ev_proc_wait_for` slices and polls the overall timer between them, so a child that
+  closes stdout and stays alive ends as `timeout` as in TS. `transport::send` writes with `ev_proc_write_for` and the
+  overall budget as its deadline. Write latency is a stated limit, not part of P7: the loop has no clock, so each write gets the whole budget; the first write that hits it half-closes stdin and later writes are skipped, but a child that reads slowly can delay timer observation by up to one budget per write. A fired timer is still seen by the next poll, so only latency differs, not the result (a new request after a deadline half-close first takes the expired overall timer and ends in timeout). G follow-up G10-TIMER-LEFT (remaining time of a timer slot) would bound writes by the remaining overall time. Close
+  (`ev_remove`) can still wait on a descendant that inherited the pipes; classify these separately (limits below). This does not waive GROK_HOME (D2).
   Detached groups and AbortError are not ported (D3), so they are known limits, not P7 cases.
 - **P8 — plan cut:** Codex's Deviation (split high surrogate at a 200-unit plan slice) has no triggering Grok input:
   Grok emits no lastPlan. Do not add plan extraction or claim a plan-omission deviation.
@@ -283,11 +287,13 @@ Every allowed difference is labeled below. No P5 blanket exemption for filesyste
   `1.0` vs `1` compare equal. The remaining difference is a token that overflows binary64: TS sends/returns `null`
   (JSON.stringify of Infinity), Pruv the token. Trigger: `{"x":1e400}` small JSON, server request id `1e400`, error
   code `-1e400`. G follow-up: G-JSON-NUM.
-- **P11 — Deviation (child stdin write failure):** TS ignores stdin write errors and error events and keeps reading
-  stdout. G10 `ev_proc_write` failure marks the whole process slot failed, after which no stdout is read. Pruv maps a
-  failed write to `read-failed` at once. Trigger: the fake closes its stdin, then sends a server request and later a
-  valid `session/load` result in a separate chunk: TS completes (or times out if it never answers), Pruv gives
-  `read-failed`. G follow-up: **G10-PROC-HALFCLOSE** (per-pipe failure state). Fixture required on both sides.
+- **P11 — child stdin write failure: equal (was a deviation before transport adoption).** TS ignores stdin write
+  errors and error events and keeps reading stdout. `transport::send` now uses `ev_proc_write_for`, which half-closes
+  stdin on a broken pipe without failing the slot, so Pruv keeps reading stdout too. Replies to server requests ignore a closed stdin (TS catches the throw); a new
+  request (`initialize`, `session/load`) on a closed stdin fails read-failed at its stage, as TS's `write` throws
+  `read-failed 'closed'` when `!child.stdin.writable`. Fixture `acp-p11-stdin-closed-then-late-result` (the fake
+  closes its stdin, sends a server request, then a valid `session/load` result) compares equal; the oracle no longer
+  has a P11 allowance. The G follow-up G10-PROC-HALFCLOSE is covered by G10-ASYNC-DEADLINE.
 - **P12 — Deviation (read boundaries):** a Node `data` event holds up to 65536 bytes; the G10 process reader reads
   8192-byte pieces into an unbounded queue and `ev_proc_read` returns what has arrived. When a response settles a
   request, Pruv processes only the lines already read; lines read later are processed after the next request is sent.
@@ -396,10 +402,10 @@ from the baseline, or the verifier must reject it for the changed contract. Reco
 
 ## Limits and completion
 
-- `transport::receive` calls `ev_proc_wait` after EOF: a child that closes stdout but stays alive can block past
-  the deadline. Blocking `ev_proc_write` also ignores the timer if the child stops reading; `ev_remove`/close can
-  block while reaping/joining inherited pipes. **G10-ASYNC-DEADLINE** needs exit polling/deadline-aware wait and
-  nonblocking/deadline-aware writes/cleanup. P7 records the current limitation; no hidden importer workaround.
+- After transport adoption the wait after EOF is bounded by the overall timer (10 ms slices) and a write by its own
+  overall budget (a stated latency limit, not P7; G10-TIMER-LEFT). A new request after a write deadline closed stdin
+  first takes the expired overall timer (`transport::expired`), so the result is timeout as in TS. `ev_remove`/close can still block while reaping/joining pipes that a descendant
+  inherited; that is the remaining P7 limit (G10 §2.5), with no hidden importer workaround.
 - Windows folderKey slash conversion/lowercasing, filesystem names/identities and taskkill are outside this
   benchmark's P5 platform domain. A Windows build alone does not establish Windows import parity.
 - Source metadata checks are not a snapshot: contents can change in place without changing inode. There is a

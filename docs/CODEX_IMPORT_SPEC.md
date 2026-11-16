@@ -152,10 +152,11 @@ The host renders list results as the TS item array, read results as the TS Exter
   (`1`, not `1.0` or `1e0`). A final unterminated fragment at EOF is ignored (TS: never parsed). The pump loop has a
   fixed iteration bound; reaching it fails as `read-failed`.
 - P7 lifecycle: G10 child close replaces SIGTERM / 1.5 s SIGKILL / 5 s give-up timers. The result is decided
-  before shutdown and shutdown never changes it. Known limits (G10, shared `transport` package, also mcp):
-  `ev_proc_wait` after EOF can block past the timeout when the child closes stdout but keeps running, and a
-  blocking `ev_proc_write` ignores the timeout when the child stops reading. TS bounds both with its timers.
-  G track: a deadline-aware wait (or a nonblocking exit poll) and a nonblocking or deadline-aware write.
+  before shutdown and shutdown never changes it. Since transport adoption (RESULTS §138) the shared `transport`
+  package waits for the exit after EOF in 10 ms `ev_proc_wait_for` slices bounded by the overall timer, and writes
+  with `ev_proc_write_for` using the overall budget as the deadline (a broken pipe half-closes stdin and stdout is still read; a new request or the `initialized` notification on a
+  closed stdin fails read-failed as TS's `write` does, replies to server requests ignore it). Write latency: the loop has no clock, so each write gets the whole budget; the first write that hits it half-closes stdin and later writes are skipped, but a child that reads slowly can delay timer observation by up to one budget per write. A fired timer is still seen by the next poll, so only latency differs, not the result (a new request after a deadline half-close first takes the expired overall timer and ends in timeout). G follow-up G10-TIMER-LEFT (remaining time of a timer slot) would bound writes by the remaining overall time. Remaining
+  limit: close can wait on a descendant that inherited the pipes.
 - P8 plan text: the 200-unit slice drops a trailing high surrogate split by the cut, as one_line does.
 - P3 and P4 consequences: a genuine U+FFFD left at the end of a byte clip is kept (TS strips it). Rule 6 takes
   `completedAt ?? createdAt` after isoOf, so when P4 drops the plan turn's `completedAt` (for example a fractional

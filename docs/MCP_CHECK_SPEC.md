@@ -176,8 +176,9 @@ limit requires a slow fixture and is not shortened by a testing-only switch.
 
 ## Risks
 
-G10 ev_proc_write writes synchronously and may block; timers cannot interrupt a
-blocked write. Parsing/packing can also delay deadline observation. The pump polls
+Since transport adoption (RESULTS §138) writes use ev_proc_write_for with the overall
+budget as the deadline (at most 30000 ms before initialize settles, the init timer): the loop has no clock, so each write gets the whole budget; the first write that hits it half-closes stdin and later writes are skipped, but a child that reads slowly can delay timer observation by up to one budget per write. A fired timer is still seen by the next poll, so only latency differs, not the result (a new request after a deadline half-close first takes the expired overall timer and ends in timeout). G follow-up G10-TIMER-LEFT (remaining time of a timer slot) would bound writes by the remaining overall time.
+A closed stdin is not a failure here, as in the reference (`mcp-client.ts` skips writes to a destroyed stdin). Parsing/packing can also delay deadline observation. The pump polls
 timers during noise and again before publication, but scheduling and a queued
 event can delay observation. G10 worker queues are not memory-bounded against an
 unlimited producer. No process-group termination or malicious-descendant cleanup

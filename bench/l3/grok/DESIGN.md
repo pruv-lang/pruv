@@ -635,7 +635,7 @@ appended. Each case's fake executable finds its sibling scenario/log itself.
 - P6 premature response in a single ≤512-byte write;
 - P11 server request / later response after stdin half-close;
 - P12 premature id=2 after more than 8192 bytes of padding;
-- P7 EOF-without-exit, blocked write, inherited pipe, and the external watchdog.
+- P7 EOF-without-exit, inherited pipe, and the external watchdog; a blocked write is the stated write-latency limit (timeout as in TS).
 
 A watchdog kill never counts as success.
 
@@ -702,8 +702,8 @@ the main agent. Shared package changes are not part of this split.
 | FS catalog gaps | `_add(file_*)` in `pruvc/foreign.py:65–75` | no readdir/lstat/no-follow/wx/positioned read; use the D1 primitive host, decisions stay in Pruv. |
 | environment override | `pruvc/foreign.py:87`; `docs/G10_PROC_SPEC.md:730`; `RESULTS.md §135` | `proc_spawn_env` exists; `rpc::load_check` uses it. |
 | Process/Loop ownership | Codex `rpc::start`, shared `transport::close`; `docs/G10_ASYNC_SPEC.md §2` | a failed-spawn Process is still consumed with wait/kill; once moved into a loop, the loop is closed on every normal path. |
-| timer limits | `transport::receive` (`ev_proc_wait` after EOF), `transport::send` (`ev_proc_write`), `transport::close` | P7/D5 apply; no ad-hoc timeout bypass inside the importer. |
-| stdin failure | `transport::send/receive`, pinned `tail::withRpcChild` | difference allowed only at the P11 trigger; do not assume stdout keeps being read on a failed process slot. |
+| timer limits | `transport::receive` (`ev_proc_wait_for` slices after EOF), `transport::send` (`ev_proc_write_for`), `transport::close` | P7 covers close; write latency (one budget per slow write, no loop clock, follow-up G10-TIMER-LEFT) is a stated limit, not P7; no ad-hoc timeout bypass inside the importer. |
+| stdin failure | `transport::send/receive`, pinned `tail::withRpcChild` | equal after transport adoption: a broken pipe half-closes stdin and stdout is still read; a new request on a closed stdin fails read-failed as in TS (P11). |
 | chunk order | Codex `rpc::open`; `st[2],st[4]` of `transport::receive` | do not copy Codex open as is: after initialize settles, process the remaining complete lines of the same chunk with an empty outstanding set, then send request 2. |
 | number representation | `access::number`, `time::iso_of`, pinned `grok::listGrok` | P4/P9/P10 apply; a full JS binary64 implementation is not a new language prerequisite. |
 | collector metadata offset | `turns::finish` `base≤3500000` requires | build turn text at base=0 and append title/model; do not truncate long models. |

@@ -271,8 +271,6 @@ def triggers(case):
         tok = a.get('idtoken')
         if tok is not None and tok not in ('1', '2') or 'oversize' in a or a.get('p6'):
             t.add('P6')
-        if a.get('close_stdin') or any(isinstance(i, dict) and '$close_stdin' in i for i in a.get('post', [])):
-            t.add('P11')
         if a.get('p12'):
             t.add('P12')
         if any(k in a for k in ('eof_no_exit', 'no_read', 'inherit_pipe')) or any(isinstance(i, dict) and '$requests' in i for i in a.get('post', [])):
@@ -387,7 +385,7 @@ def acp_target_only(ts, im, bad, policy):
     """An ACP policy that flips a copy's outcome also flips its target: the side that failed removed it, the side that
     succeeded kept it. The tree difference is explained only when it is exactly one copied target (a directory and the
     entries under it), present on the successful side and absent on the failed side; the rest of the tree is equal."""
-    if policy not in ('P6', 'P7', 'P11', 'P12') or not bad:
+    if policy not in ('P6', 'P7', 'P12') or not bad:
         return False
     ok_side = [x for x in (ts, im) if x['result'].get('status') == 'ok']
     bad_side = [x for x in (ts, im) if x['result'].get('status') != 'ok']
@@ -400,14 +398,12 @@ def acp_target_only(ts, im, bad, policy):
 
 
 def acp_class_policy(ts, im, trig):
-    """P1/P5/P6/P7/P11/P12: differences that only exist at those triggers, checked on the error/result pair."""
+    """P1/P5/P6/P7/P12: differences that only exist at those triggers, checked on the error/result pair."""
     te, ie = ts.get('error'), im.get('error')
     ic = ie['code'] if ie else None
     tc = te['code'] if te else None
     if 'P5' in trig and ic == 'InputTooLarge' and tc != 'InputTooLarge':
         return 'P5'
-    if 'P11' in trig and ie and (ic in ('read-failed', 'grok-load-failed')) and tc != ic:
-        return 'P11'
     if 'P12' in trig and ts.get('status') != 'ok' and im.get('status') == 'ok' and tc in ('grok-load-failed', 'timeout'):
         return 'P12'
     if 'P6' in trig and ie and ic in ('timeout', 'read-failed', 'grok-load-failed') and (ts.get('status') == 'ok' or tc != ic):
@@ -492,7 +488,7 @@ def compare(case, ts, impl, p4_baseline=None):
 
     # ACP transcript -------------------------------------------------------------------------------------------
     ta, ia = acp_view(ts), acp_view(impl)
-    acp_policy = result_policy if result_policy in ('P6', 'P7', 'P11', 'P12', 'P1', 'P5') else None
+    acp_policy = result_policy if result_policy in ('P6', 'P7', 'P12', 'P1', 'P5') else None
     if (ta is None) != (ia is None):
         diffs.append(D('acp', 'the fake ACP was started on one side only (ts=%s impl=%s)' % (ta is not None, ia is not None), acp_policy))
     elif ta is not None:
@@ -513,7 +509,7 @@ def compare(case, ts, impl, p4_baseline=None):
     if tt != it:
         at = next((i for i, (a, b) in enumerate(zip(tt, it)) if a != b), min(len(tt), len(it)))
         spawn = first_spawn(tt)
-        allowed = acp_policy in ('P6', 'P7', 'P11', 'P12') and spawn is not None and at > spawn
+        allowed = acp_policy in ('P6', 'P7', 'P12') and spawn is not None and at > spawn
         diffs.append(D('trace', 'first difference at record %d: ts=%s impl=%s' % (at, json.dumps(tt[at:at + 1]), json.dumps(it[at:at + 1])), acp_policy if allowed else None))
 
     # final trees ---------------------------------------------------------------------------------------------

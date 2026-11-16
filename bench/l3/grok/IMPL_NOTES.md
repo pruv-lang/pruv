@@ -222,8 +222,9 @@ Root itself only issues opcode 10 (slot 0, stage 29, flags 3, handle -1, offset/
 Implementation:
 - **Read size.** The summary reader asks for 65536 bytes per read, the reference's `readFile` chunk. The trace keeps a
   digest only for a single-read run, so a different chunk size is a visible trace difference, not just a speed choice.
-- **`rpc::send_or_fail`.** A failed write to the child's stdin marks the request failed at once (read-failed, spec P11)
-  instead of waiting for the RPC timer.
+- **Sends in `rpc`.** All writes go through `transport::send` with the overall budget (`ctl[10]`). A failed write half-closes
+  stdin and stdout is still read (spec P11 resolved by G10-ASYNC-DEADLINE adoption). Before `initialize` and `session/load`,
+  `transport::stdin_closed` fails the request read-failed, as TS's `write` throws on a non-writable stdin.
 - **Stage of a missing summary / path failure.** `summary.pruv` reports `absent_fin` and `path.pruv` failures at the
   stage the reference reports them (found by the fixture run).
 - **Read title and model (audit I1).** `read::p_finish` uses the title and model refs from `summary::summary_from` as
@@ -255,7 +256,7 @@ Harness and oracle (`common.py`, `oracle.py`, `q.py`, `q_server.py`):
   After a failed create, source reads that raced it are dropped from the reference trace only (the reference's
   read stream may start before the create fails); the implementation's trace keeps them, so an implementation
   that reads after a failed create is still a difference (audit O6: an earlier filter dropped them on both sides).
-- **Flipped copy target.** When an ACP policy (P6, P7, P11, P12) flips a copy's outcome, the failed side removes its
+- **Flipped copy target.** When an ACP policy (P6, P7, P12) flips a copy's outcome, the failed side removes its
   target and the successful side keeps it, so the dst trees differ. That tree difference is put under the same policy
   only when it is exactly one target subtree, present on the ok side and absent on the failed side, with the rest of
   the tree equal (Q seed 20261116 had 14 such P6 cases: an `id` token `1.0` that TS accepts and Pruv does not).
@@ -272,7 +273,7 @@ Harness and oracle (`common.py`, `oracle.py`, `q.py`, `q_server.py`):
 - **ACP P1 rule.** A rejected ACP reply line is never delivered, so where TS fails on another ground at initialize or
   session/load, Pruv waits out that same request (timeout at the same stage); `acp_class_policy` explains it as P1,
   only when the trigger is a rejected ACP reply (`'P1-ACP'`). ACP policies never exempt argv or dst tree differences
-  (audit O7); they explain the result, error and request stream, and P6/P7/P11/P12 the trace after spawn.
+  (audit O7); they explain the result, error and request stream, and P6/P7/P12 the trace after spawn.
 - **Fake `load_ok`.** The fake ACP server decides whether `session/load` was allowed by parsing the initialize reply it
   actually wrote, the way the reference data handler does (audit O5): lines with a string `method` are skipped, the
   first line whose id is a number equal to the request id settles it, an object `error` rejects (`error: null` does

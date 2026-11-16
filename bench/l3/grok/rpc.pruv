@@ -1,7 +1,7 @@
 // Grok ACP load check (grokLoadCheck on withRpcChild, jsonrpc true) on the G10 event loop. Package E, written WITHOUT a shell:
 // nothing here was compiled or verified. Style and proofs follow bench/l3/codex/rpc.pruv (same transport, same loop invariants).
 //
-// NOTES / THINGS I WAS UNSURE ABOUT
+// NOTES / THINGS I WAS UNSURE ABOUT  (spec P11 is resolved: a failed stdin write half-closes stdin and stdout is still read, as TS does)
 //  1. Local helpers: grok util.pruv has no `field`, `join`, `id_is`, `int_bytes`, `trim` (the Codex util has them), so this file has
 //     private copies (`field`, `id_is`, `trim_bytes`); joins use packet::cat_bytes.
 //  2. `inout` arrays are only written element by element (never replaced): the RpcResponseError detail text and raw `error.code` JSON
@@ -25,6 +25,7 @@
 // ctl (16 words): 0 failure (0 none, 2 internal, 3 rpc error response, 4 no loadSession, 5 timeout, 6 read-failed, 7 engine-missing)
 //   1 stage (24 spawn, 25 initialize, 26 session/load)  2 process slot (-1 none)  3 timer slot  4 last request id
 //   5 1 when step left a line  6 length of that line in `line`  7 exit code of a closed child  8 raw code length in aux  9 detail length in aux
+//   10 overall budget in ms (transport::send deadline)
 
 // ---- private helpers ----
 
@@ -130,6 +131,7 @@ pub fn start(binary: str, home: str, folder: str, timeout_ms: i64, inout ctl: [i
   let mut ms: i64 = timeout_ms;
   if ms <= 0 { ms = 20000; }
   if ms > 86400000 { ms = 86400000; }
+  ctl[10] = ms;
   l = ev_add_timer(move l, ms);
   ctl[3] = ev_last(l);
   if !ev_ok(l) || ev_count(l) >= ev_cap(l) { ctl[0] = 6; return move l; }
@@ -283,19 +285,8 @@ fn on_reply(d: crate::json::JsonDocument, id: i64, inout ctl: [i64], inout aux: 
 
 // Pump until the response to request `id` arrives (at most 1000000 events, then read-failed). The first failure wins. A server
 // request in between is answered with not_handled. On return ctl[0] == 0 means the response arrived and was accepted.
-// Write to the child's stdin. A failed write marks the G10 process slot failed (write-open false, no more stdout), so it is
-// read-failed at once (spec P11) instead of a wait that can only end at the timer.
-fn send_or_fail(take l: Loop, slot: i64, data: [u8], inout ctl: [i64]) -> Loop ! async, proc, alloc
-  requires len(ctl) == 16
-  ensures len(ctl) == 16 && (old(ctl)[0] != 0 ==> ctl[0] == old(ctl)[0]) && ctl[5] == old(ctl)[5] && ctl[6] == old(ctl)[6]
-  ensures ctl[8] == old(ctl)[8] && ctl[9] == old(ctl)[9]
-{
-  let q: Loop = crate::transport::send(move l, slot, data);
-  let mut open: bool = false;
-  if ev_ok(q) { if crate::transport::live(q, slot) { open = ev_write_open(q, slot); } }
-  if ctl[0] == 0 && !open { ctl[0] = 6; }
-  return move q;
-}
+// Writes go through transport::send with the overall budget ctl[10]. Spec P11 is resolved: a failed stdin write half-closes stdin
+// and the reader keeps reading stdout (as TS does); the slot is not failed.
 
 fn pump(take l: Loop, slot: i64, overall: i64, id: i64, inout ctl: [i64], inout st: [i64], inout line: [u8], inout chunk: [u8], inout tb: [i64], inout ts: [i64], inout aux: [u8]) -> Loop ! async, proc, alloc
   requires len(ctl) == 16 && 0 <= ctl[6] && ctl[6] <= 8388608 && 1 <= id && id <= 2 && len(aux) == 8389120
@@ -325,7 +316,7 @@ fn pump(take l: Loop, slot: i64, overall: i64, id: i64, inout ctl: [i64], inout 
         crate::json::JsonParse::Failed(e) => { }
         crate::json::JsonParse::Parsed(d) => {
           let k: i64 = kind_of(d, id);
-          if k == 1 { q = send_or_fail(move q, slot, not_handled(d), inout ctl); }
+          if k == 1 { q = crate::transport::send(move q, slot, not_handled(d), ctl[10]); }
           if k == 2 {
             done = true;
             on_reply(d, id, inout ctl, inout aux);
@@ -367,7 +358,7 @@ fn drain(take l: Loop, slot: i64, overall: i64, inout ctl: [i64], inout st: [i64
         crate::json::JsonParse::Failed(e) => { }
         crate::json::JsonParse::Parsed(d) => {
           // an id of 99 is never outstanding: only server requests (kind 1) matter here
-          if kind_of(d, 99) == 1 { q = send_or_fail(move q, slot, not_handled(d), inout ctl); }
+          if kind_of(d, 99) == 1 { q = crate::transport::send(move q, slot, not_handled(d), ctl[10]); }
         }
       }
     }
@@ -428,7 +419,11 @@ pub fn load_check(binary: str, home: str, folder: str, thread: str, timeout_ms: 
   if ctl[0] == 0 {
     ctl[1] = 25;
     ctl[4] = 1;
-    l = send_or_fail(move l, slot, req_init(), inout ctl);
+    if crate::transport::stdin_closed(l, slot) {
+      l = crate::transport::expired(move l, overall, inout st);
+      if st[0] == -1 { ctl[0] = 5; } else { ctl[0] = 6; }
+    }
+    l = crate::transport::send(move l, slot, req_init(), ctl[10]);
     l = pump(move l, slot, overall, 1, inout ctl, inout st, inout line, inout chunk, inout tb, inout ts, inout aux);
   }
   if ctl[0] == 0 {
@@ -437,11 +432,15 @@ pub fn load_check(binary: str, home: str, folder: str, thread: str, timeout_ms: 
   if ctl[0] == 0 {
     ctl[1] = 26;
     ctl[4] = 2;
-    l = send_or_fail(move l, slot, req_load(thread, folder), inout ctl);
+    if crate::transport::stdin_closed(l, slot) {
+      l = crate::transport::expired(move l, overall, inout st);
+      if st[0] == -1 { ctl[0] = 5; } else { ctl[0] = 6; }
+    }
+    l = crate::transport::send(move l, slot, req_load(thread, folder), ctl[10]);
     l = pump(move l, slot, overall, 2, inout ctl, inout st, inout line, inout chunk, inout tb, inout ts, inout aux);
   }
   // A settling response (0 ok, 2/3 error object, 4 bad capabilities) leaves the rest of its chunk: the reference's data handler still
-  // answers server requests in it before the child is closed. The outcome is already settled, so a failed write there is ignored.
+  // answers server requests in it before the child is closed. The outcome is already settled, so a failed write there only half-closes stdin and is ignored.
   let settled: i64 = ctl[0];
   if settled == 0 || settled == 2 || settled == 3 || settled == 4 {
     ctl[0] = 0;

@@ -31,7 +31,7 @@ named policies:
 A difference passes only through the policy whose trigger is detected from the case inputs (`oracle.triggers`): P1 invalid UTF-8 / depth,
 P2 lone surrogates and the 120-unit cut, P3 trailing U+FFFD after a clip, P4 unsupported date tokens (judged against a TS rerun of the case
 whose date tokens were edited, `oracle.p4_case`), P5 growth past 16 MiB, P6 id token / premature id in one write, P7 lifecycle (watchdog
-limit, never a success), P9 `num_chat_messages`, P10 overflowing number tokens, P11 stdin half-close, P12 read boundaries. P8 does not apply.
+limit, never a success), P9 `num_chat_messages`, P10 overflowing number tokens, P12 read boundaries (P11 stdin half-close compares equal since transport adoption). P8 does not apply.
 Fixtures with an `expected` block are also checked against the TypeScript result itself (a fixture that does not do what it says is a
 fixture bug, reported as `ts/expected`).
 

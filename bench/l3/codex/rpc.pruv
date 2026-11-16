@@ -133,7 +133,7 @@ pub fn not_handled(d: crate::json::JsonDocument) -> [u8] ! alloc
 }
 
 // initialize (id 1), then the initialized notification. An error response to initialize is read-failed at stage 2.
-pub fn open(take l: Loop, inout ctl: [i64], inout st: [i64], inout line: [u8], inout chunk: [u8], inout tb: [i64], inout ts: [i64]) -> Loop ! async, proc, alloc
+pub fn open(take l: Loop, inout ctl: [i64], inout st: [i64], inout line: [u8], inout chunk: [u8], inout tb: [i64], inout ts: [i64], ms: i64) -> Loop ! async, proc, alloc
   requires len(ctl) == 8
   requires len(st) == 5 && 0 <= st[1] && st[1] <= 8388608 && 0 <= st[2] && st[2] <= st[4] && 0 <= st[4] && st[4] <= 65536 && len(chunk) == 65536
   requires len(line) == 8388608
@@ -150,7 +150,7 @@ pub fn open(take l: Loop, inout ctl: [i64], inout st: [i64], inout line: [u8], i
   ctl[5] = 0;
   ctl[6] = 0;
   let req: [u8] = crate::util::to_bytes("{\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"lair\",\"title\":\"Lair\",\"version\":\"0.0.1\"},\"capabilities\":{\"experimentalApi\":true,\"requestAttestation\":false}}}\n");
-  let mut q: Loop = crate::transport::send(move l, slot, req);
+  let mut q: Loop = crate::transport::send(move l, slot, req, ms);
   let mut done: bool = false;
   let mut events: i64 = 0;
   while ctl[0] == 0 && !done && events < 1000000
@@ -168,12 +168,16 @@ pub fn open(take l: Loop, inout ctl: [i64], inout st: [i64], inout line: [u8], i
         crate::json::JsonParse::Failed(e) => { }
         crate::json::JsonParse::Parsed(d) => {
           let k: i64 = kind_of(d, 1);
-          if k == 1 { q = crate::transport::send(move q, slot, not_handled(d)); }
+          if k == 1 { q = crate::transport::send(move q, slot, not_handled(d), ms); }
           if k == 2 {
             done = true;
             let error: i64 = crate::util::field(d, 0, "error");
             if crate::access::kind(d, error) == 6 { ctl[0] = 6; }
-            else { q = crate::transport::send(move q, slot, crate::util::to_bytes("{\"method\":\"initialized\",\"params\":{}}\n")); }
+            else if crate::transport::stdin_closed(q, slot) {
+              q = crate::transport::expired(move q, overall, inout st);
+              if st[0] == -1 { ctl[0] = 5; } else { ctl[0] = 6; }
+            }
+            else { q = crate::transport::send(move q, slot, crate::util::to_bytes("{\"method\":\"initialized\",\"params\":{}}\n"), ms); }
           }
         }
       }
