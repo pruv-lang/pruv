@@ -1,0 +1,276 @@
+// OpenCode export JSON -> read result packet (decode) and the phase-500 step (advance); follows DESIGN.md/IMPL_NOTES.md; written without a shell (not compiled or verified).
+//
+// decode(export bytes, DB fallback title) parses the whole document once, validates EVERY message (object with object info and array parts,
+// unknown roles and summaries included; any malformed one fails the whole read, no partial turns), runs entry::feed per message, then
+// builds the section 5 read result: turns (collector, finish base 0) + title + model + last plan, one byte pool laid out as
+//   [turn text][title][model][plan at][plan item text]   (refs absolute into that pool).
+// Errors (all mode 1): bytes > 16777216 = CoreError/InputTooLarge stage 24 (P5); parser failure = read-failed detail `json` stage 24 (internal
+// kind 18 = InternalInvariant stage 24); shape = read-failed detail `shape` stage 25; any internal defect = InternalInvariant stage 26 (convert)
+// or 27 (plan).
+//
+// UNSURE / for the main agent:
+//  1. BLOCKER outside this package: packet::result_shape requires N == 1 for a read result (mode 1). A read result has N = number of kept turns
+//     (0..200) and the oversized/empty read has N = 0, so every ordinary read gets turned into InternalInvariant by ok_result until packet.pruv
+//     allows 0 <= N <= 200 for mode 1 (and read_row_ok loops over all rows). This module builds N = kept as DESIGN section 5 says.
+//  2. advance also handles an oversized export (ctl[39] > 33554432: {turns:[],omittedBefore:true} + nonempty fallback title) and a saved
+//     result (ctl[38] == 1), in case export hands those off at phase 500 instead of finishing itself.
+//  3. error name refs are left absent (detail only); raw error code absent, native code 0.
+
+fn put_str(inout dst: [u8], at: i64, s: str) -> ()
+  requires 0 <= at && at <= len(dst) && len(s) <= len(dst) - at
+  ensures len(dst) == len(old(dst))
+{
+  let n: i64 = len(s);
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && n == len(s) && 0 <= at && at <= len(dst) && n <= len(dst) - at && len(dst) == len(old(dst))
+    decreases n - j
+  {
+    let b: i64 = s[j];
+    dst[at + j] = b;
+    j = j + 1;
+  }
+}
+
+// lit is a prefix of s
+fn has_prefix(s: str, lit: str) -> bool
+{
+  if len(lit) > len(s) { return false; }
+  let mut k: i64 = 0;
+  while k < len(lit)
+    invariant 0 <= k && k <= len(lit) && len(lit) <= len(s)
+    decreases len(lit) - k
+  {
+    let a: i64 = s[k];
+    let b: i64 = lit[k];
+    if a != b { return false; }
+    k = k + 1;
+  }
+  return true;
+}
+
+// cleanTitle: empty for an empty string or a raw string starting exactly "New session - " / "Child session - " (tested before trimming);
+// else collapse ECMAScript whitespace, trim, slice to 120 UTF-16 units.
+fn clean_title(t: str) -> str ! alloc
+  requires len(t) <= 50331648
+  ensures len(result) <= 50331648
+{
+  let none: str = "";
+  if len(t) == 0 || has_prefix(t, "New session - ") || has_prefix(t, "Child session - ") { return copy(none); }
+  let r: str = crate::text::one_line(t, 120);
+  if len(r) > 50331648 { return copy(none); }
+  return copy(r);
+}
+
+// cleanTitle(str(root.info.title))
+fn export_title(doc: crate::json::JsonDocument, root: i64) -> str ! alloc
+  ensures len(result) <= 50331648
+{
+  let none: str = "";
+  let info: i64 = crate::access::field(doc, root, "info");
+  if crate::access::kind(doc, info) != 6 { return copy(none); }
+  let t: i64 = crate::access::field(doc, info, "title");
+  if crate::access::kind(doc, t) != 4 { return copy(none); }
+  let s: str = crate::util::str_at(doc, t);
+  return clean_title(s);
+}
+
+// providerID + "/" + modelID of the last eligible pair (tape ids), empty when there is none.
+fn model_bytes(doc: crate::json::JsonDocument, pid: i64, mid: i64) -> [u8] ! alloc
+  ensures len(result) <= 100663298
+{
+  let none: [u8] = alloc(0, 0);
+  if pid < 0 || mid < 0 { return none; }
+  let p: str = crate::util::str_at(doc, pid);
+  let m: str = crate::util::str_at(doc, mid);
+  if len(p) == 0 || len(m) == 0 { return none; }
+  let lp: i64 = len(p);
+  let lm: i64 = len(m);
+  let mut b: [u8] = alloc(lp + 1 + lm, 0);
+  put_str(inout b, 0, p);
+  b[lp] = 47;
+  put_str(inout b, lp + 1, m);
+  return b;
+}
+
+fn shape_error() -> [i64] ! alloc
+  ensures len(result) >= 40
+{
+  let eb: [u8] = alloc(0, 0);
+  return crate::packet::error(1, 25, 1, 2, 0, eb, "", "shape");
+}
+
+fn json_error() -> [i64] ! alloc
+  ensures len(result) >= 40
+{
+  let eb: [u8] = alloc(0, 0);
+  return crate::packet::error(1, 24, 1, 2, 0, eb, "", "json");
+}
+
+fn valid_message(doc: crate::json::JsonDocument, m: i64) -> bool ! alloc
+{
+  if crate::access::kind(doc, m) != 6 { return false; }
+  let info: i64 = crate::access::field(doc, m, "info");
+  if crate::access::kind(doc, info) != 6 { return false; }
+  let parts: i64 = crate::access::field(doc, m, "parts");
+  return crate::access::kind(doc, parts) == 5;
+}
+
+// The read result of a finished collector (mode 1, row width 10, N = kept turns).
+fn assemble(col: crate::turns::Collected, title: str, model: [u8], pv: crate::plan::PlanValue) -> [i64] ! alloc
+  requires 0 <= col.kept && col.kept <= 200 && len(col.turns) == 10 * col.kept && 0 <= len(col.text) && len(col.text) <= 2106752 && (col.trimmed == 0 || col.trimmed == 1)
+  requires len(title) <= 50331648 && len(model) <= 100663298
+  requires len(pv.at) <= 50331648 && len(pv.text) <= 24000 && len(pv.items) <= 90 && 0 <= pv.more && (pv.present == 0 || pv.present == 1)
+  ensures len(result) >= 40
+{
+  let nx: i64 = len(col.text);
+  let tl: i64 = len(title);
+  let ml: i64 = len(model);
+  let usep: bool = pv.present == 1 && len(pv.items) >= 3;
+  let mut la: i64 = 0;
+  let mut lt: i64 = 0;
+  if usep {
+    la = len(pv.at);
+    lt = len(pv.text);
+  }
+  let base: i64 = nx + tl + ml;
+  let mut pool: [u8] = alloc(base + la + lt, 0);
+  crate::bytes::copy_span(inout pool, 0, col.text, 0, nx);
+  put_str(inout pool, nx, title);
+  crate::bytes::copy_span(inout pool, nx + tl, model, 0, ml);
+  let mut m: [i64] = crate::packet::meta_new(1);
+  m[4] = col.kept;
+  m[5] = 10;
+  if col.trimmed == 1 { m[8] = 1; }  // MUT:M16 => m[8] = m[8];
+  if tl > 0 {
+    m[10] = nx;
+    m[11] = tl;
+  }
+  if ml > 0 {
+    m[12] = nx + tl;
+    m[13] = ml;
+  }
+  let mut items: [i64] = alloc(0, 0);
+  if usep {
+    crate::bytes::copy_span(inout pool, base, pv.at, 0, la);
+    crate::bytes::copy_span(inout pool, base + la, pv.text, 0, lt);
+    m[9] = 1;
+    m[18] = pv.more;
+    if la > 0 {
+      m[16] = base;
+      m[17] = la;
+    }
+    items = crate::plan::items_at(pv, base);
+  }
+  return crate::packet::ok_result(m, col.turns, items, pool);
+}
+
+// Whole document -> result.
+fn convert_doc(doc: crate::json::JsonDocument, fallback: str) -> [i64] ! alloc
+  requires len(fallback) <= 1000000
+  ensures len(result) >= 40
+{
+  let root: i64 = crate::access::root(doc);
+  if crate::access::kind(doc, root) != 6 { return shape_error(); }
+  let msgs: i64 = crate::access::field(doc, root, "messages");
+  if crate::access::kind(doc, msgs) != 5 { return shape_error(); }
+  let ids: [i64] = crate::util::elements(doc, msgs);
+  let n: i64 = len(ids);
+  if n > 1048576 || n != crate::access::array_length(doc, msgs) { return crate::packet::simple_error(1, 26, 3, 6); }
+  let mut st: [i64] = crate::turns::new_state();
+  let mut sl: [i64] = crate::turns::new_slots();
+  let mut buf: [u8] = crate::turns::new_buffer();
+  let mut mt: [i64] = alloc(4, 0);
+  mt[1] = -1;
+  mt[2] = -1;
+  let mut bad: i64 = 0;
+  let mut j: i64 = 0;
+  while j < n && bad == 0
+    invariant 0 <= j && j <= n && n <= 1048576 && n == len(ids) && 0 <= bad && bad <= 2
+    invariant len(st) == 4 && len(sl) == 1600 && len(mt) == 4 && len(buf) <= 13116800 && 0 <= st[0] && st[0] <= j && 0 <= st[3] && st[3] < 200 && (st[1] == 0 || st[1] == 1) && (st[2] == 0 || st[2] == 1) && (st[1] == 0 || 65584 * st[3] + 65584 <= len(buf))
+    invariant (mt[0] == 0 || mt[0] == 1) && -1 <= mt[1] && -1 <= mt[2]
+    invariant forall s in 0..200: (0 <= sl[8 * s] && sl[8 * s] <= 32768 && 0 <= sl[8 * s + 1] && sl[8 * s + 1] <= sl[8 * s + 2] && sl[8 * s + 2] <= 32768 && 0 <= sl[8 * s + 3] && sl[8 * s + 3] <= 1000000000000000 && (sl[8 * s + 4] == 0 || sl[8 * s + 4] == 1) && (sl[8 * s + 5] == 0 || sl[8 * s + 5] == 1) && (sl[8 * s + 6] == 0 || sl[8 * s + 6] == 1))
+    invariant forall s in 0..200: ((st[0] <= s ==> sl[8 * s + 7] == -1) && (st[0] > s ==> (0 <= sl[8 * s + 7] && sl[8 * s + 7] < st[0] && st[0] - 200 <= sl[8 * s + 7] && sl[8 * s + 7] % 200 == s)))
+    decreases n - j
+  {
+    let m: i64 = ids[j];
+    if !valid_message(doc, m) {
+      bad = 1;  // MUT:M12 => bad = 0;
+    } else {
+      let mut r: i64 = crate::entry::feed(doc, m, inout st, inout sl, inout buf, inout mt);
+      if r == 1 {
+        buf = crate::turns::grow(buf, st[0]);
+        r = crate::entry::feed(doc, m, inout st, inout sl, inout buf, inout mt);
+      }
+      if r != 0 { bad = 2; }
+    }
+    j = j + 1;
+  }
+  if bad == 1 { return shape_error(); }
+  if bad != 0 { return crate::packet::simple_error(1, 26, 3, 6); }
+  let col: crate::turns::Collected = crate::turns::finish(st, sl, buf, 0);
+  let tt: str = export_title(doc, root);
+  let mut title: str = copy(tt);
+  if len(tt) == 0 { title = copy(fallback); }
+  let model: [u8] = model_bytes(doc, mt[1], mt[2]);
+  let pv: crate::plan::PlanValue = crate::plan::select(doc, msgs, 0);
+  if pv.status != 0 { return crate::packet::simple_error(1, 27, 3, 6); }
+  return assemble(col, title, model, pv);
+}
+
+// The read result for the export bytes (already read to EOF) and the nonempty-or-empty DB fallback title (cleanTitle already applied).
+pub fn decode(doc_bytes: [u8], fallback: str) -> [i64] ! alloc
+  requires len(fallback) <= 1000000 && len(doc_bytes) <= 2147483647
+  ensures len(result) >= 40
+{
+  if len(doc_bytes) > 16777216 { return crate::packet::simple_error(1, 24, 3, 5); }
+  let parsed: crate::json::JsonParse = crate::parse::parse(doc_bytes);
+  match parsed {
+    crate::json::JsonParse::Failed(e) => {
+      if e.kind == 1 { return crate::packet::simple_error(1, 24, 3, 5); }
+      if e.kind == 18 { return crate::packet::simple_error(1, 24, 3, 6); }
+      return json_error();
+    }
+    crate::json::JsonParse::Parsed(doc) => {
+      return convert_doc(doc, fallback);
+    }
+  }
+}
+
+// {turns:[], omittedBefore:true} plus only a nonempty fallback title (the oversized export, never read).
+fn oversized(fallback: str) -> [i64] ! alloc
+  requires len(fallback) <= 1000000
+  ensures len(result) >= 40
+{
+  let mut m: [i64] = crate::packet::meta_new(1);
+  m[5] = 10;
+  m[8] = 1;
+  if len(fallback) > 0 {
+    m[10] = 0;
+    m[11] = len(fallback);
+  }
+  let rows: [i64] = alloc(0, 0);
+  let items: [i64] = alloc(0, 0);
+  let pool: [u8] = crate::util::to_bytes(fallback);
+  return crate::packet::ok_result(m, rows, items, pool);
+}
+
+// Phase 500, mode 1 (root calls this only then). The export bytes are bank 4 (`document`), the DB fallback title is ctl[32,33] in bank 3.
+pub fn advance(cfg: [i64], cfg_text: [u8], ctl: [i64], query_words: [i64], query_bytes: [u8], rows: [i64], text: [u8],
+               document: [u8], saved_result: [i64], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(cfg) >= 32 && len(cfg) <= 2147483647 && 0 <= cfg[1] && cfg[1] <= 5 && len(ctl) == 64 && len(event) >= 16
+  requires 1 <= ctl[3] && ctl[3] <= 1000000000 && 0 <= ctl[4] && ctl[4] < ctl[3] && 0 <= ctl[2] && ctl[2] <= 999
+  requires 0 <= ctl[5] && ctl[5] <= 15 && 0 <= ctl[6] && ctl[6] <= 2 && ctl[1] == cfg[1]
+  requires len(cfg_text) <= 2147483647 && len(query_words) <= 2147483647 && len(query_bytes) <= 2147483647 && len(rows) <= 2147483647
+  requires len(text) <= 2147483647 && len(document) <= 2147483647 && len(saved_result) <= 2147483647 && len(completion) <= 2147483647
+  ensures len(result) >= 76
+{
+  if ctl[2] != 500 || cfg[1] != 1 { return crate::packet::done_internal(ctl, 26); }
+  if !crate::packet::event_empty(event) { return crate::packet::done_internal(ctl, 26); }
+  if ctl[38] == 1 { return crate::packet::done_wrap(ctl, saved_result); }
+  let fb: str = crate::util::cfg_str(text, ctl[32], ctl[33]);
+  if len(fb) > 1000000 { return crate::packet::done_internal(ctl, 26); }  // Pruv wrote it: cleanTitle, at most 120 units
+  if ctl[39] > 33554432 { return crate::packet::done_wrap(ctl, oversized(fb)); }
+  let res: [i64] = decode(document, fb);
+  return crate::packet::done_wrap(ctl, res);
+}

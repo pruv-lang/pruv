@@ -1,0 +1,29 @@
+[
+  {"name": "F13-tools-several",
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user"}, "parts": [{"type": "text", "text": "q"}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "text", "text": "a"}, {"type": "tool", "tool": "bash", "state": {"status": "completed"}},
+                                               {"type": "tool", "tool": "read", "state": {"status": "completed"}}, {"type": "tool", "tool": "edit", "state": {"status": "running"}}]}]}}},
+   "expected": {"status": "ok", "rowCount": 1}},
+  {"name": "F13-tools-error",
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user"}, "parts": [{"type": "text", "text": "q"}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "tool", "tool": "bash", "state": {"status": "error", "error": "boom"}}]}]}}},
+   "expected": {"status": "ok", "rowCount": 1}},
+  {"name": "F13-tools-todowrite",
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user"}, "parts": [{"type": "text", "text": "q"}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "tool", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": [{"content": "c", "status": "pending"}]}}}]}]}}},
+   "expected": {"status": "ok", "rowCount": 1, "planPresent": true}},
+  {"name": "F13-tools-malformed",
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user"}, "parts": [{"type": "text", "text": "q"}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "tool"}, "junk", null, 5, {"type": "tool", "tool": 5}, {"type": "tool", "tool": "todowrite", "state": "x"}, []]}]}}},
+   "expected": {"status": "ok", "rowCount": 1}},
+  {"name": "F13-tools-closed", "policies": ["P11"],
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "assistant"}, "parts": [{"type": "tool", "tool": "bash", "state": {"status": "completed"}}]},
+     {"info": {"role": "user"}, "parts": [{"type": "text", "text": "q"}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "text", "text": "a"}]}]}}},
+   "expected": {"status": "ok", "rowCount": 1}}
+]

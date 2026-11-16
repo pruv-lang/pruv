@@ -1,0 +1,95 @@
+[
+  {"name": "F12-model-last-pair",
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user"}, "parts": [{"type": "text", "text": "q"}]},
+     {"info": {"role": "assistant", "providerID": "p1", "modelID": "m1"}, "parts": [{"type": "text", "text": "a"}]},
+     {"info": {"role": "assistant", "providerID": "p2", "modelID": "m2"}, "parts": []}]}}},
+   "expected": {"status": "ok", "rowCount": 1, "model": "p2/m2"}},
+  {"name": "F12-model-partial-pair",
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "assistant", "providerID": "p1", "modelID": "m1"}, "parts": []},
+     {"info": {"role": "assistant", "providerID": "p2"}, "parts": []},
+     {"info": {"role": "assistant", "modelID": "m3"}, "parts": []},
+     {"info": {"role": "assistant", "providerID": "", "modelID": "x"}, "parts": []},
+     {"info": {"role": "assistant", "providerID": 5, "modelID": "y"}, "parts": []}]}}},
+   "expected": {"status": "ok", "rowCount": 0, "model": "p1/m1"}},
+  {"name": "F12-model-whitespace",
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [{"info": {"role": "assistant", "providerID": " p ", "modelID": " m "}, "parts": []}]}}},
+   "expected": {"status": "ok", "rowCount": 0, "model": " p / m "}},
+  {"name": "F12-model-long",
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [{"info": {"role": "assistant", "providerID": {"$rep": "p", "n": 300}, "modelID": {"$rep": "m", "n": 300}}, "parts": []}]}}},
+   "expected": {"status": "ok", "rowCount": 0}},
+
+  {"name": "F12-title-fallback", "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": []}}},
+   "expected": {"status": "ok", "title": "DB Title"}},
+  {"name": "F12-title-export", "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"info": {"title": "  Export \n Title "}, "messages": []}}},
+   "expected": {"status": "ok", "title": "Export Title"}},
+  {"name": "F12-title-prefix", "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"info": {"title": "New session - x"}, "messages": []}}},
+   "expected": {"status": "ok", "title": "DB Title"}},
+
+  {"name": "F12-time-created",
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user", "time": {"created": "2024-01-02T03:04:05.000Z"}}, "parts": [{"type": "text", "text": "q"}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "text", "text": "a"}]}]}}},
+   "expected": {"status": "ok", "rowCount": 1}},
+  {"name": "F12-time-completed",
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user"}, "parts": [{"type": "text", "text": "q"}]},
+     {"info": {"role": "assistant", "time": {"created": 1700000000, "completed": 1700000005}}, "parts": [{"type": "text", "text": "a"}]}]}}},
+   "expected": {"status": "ok", "rowCount": 1}},
+  {"name": "F12-time-invalid-completed-fallback",
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user", "time": {"created": 1700000000}}, "parts": [{"type": "text", "text": "q"}]},
+     {"info": {"role": "assistant", "time": {"created": 1700000001, "completed": "garbage"}},
+      "parts": [{"type": "text", "text": "a"}, {"type": "tool", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": [{"content": "c", "status": "pending"}]}}}]}]}}},
+   "expected": {"status": "ok", "rowCount": 1, "planPresent": true}},
+  {"name": "F12-time-seconds-ms",
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user", "time": {"created": 99999999999}}, "parts": [{"type": "text", "text": "s"}]},
+     {"info": {"role": "assistant", "time": {"completed": 99999999999}}, "parts": []},
+     {"info": {"role": "user", "time": {"created": 100000000000}}, "parts": [{"type": "text", "text": "ms"}]},
+     {"info": {"role": "assistant", "time": {"completed": 100000000000}}, "parts": []}]}}},
+   "expected": {"status": "ok", "rowCount": 2}},
+
+  {"name": "F12-p4-fraction", "policies": ["P4"],
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user", "time": {"created": {"$raw": "1700000000.5"}}}, "parts": [{"type": "text", "text": "q"}]},
+     {"info": {"role": "assistant", "time": {"completed": {"$raw": "1700000001.5"}}},
+      "parts": [{"type": "text", "text": "a"}, {"type": "tool", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": [{"content": "c"}]}}}]}]}}},
+   "expected": {"status": "ok", "rowCount": 1, "planPresent": true}},
+  {"name": "F12-p4-exponent", "policies": ["P4"],
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user", "time": {"created": {"$raw": "1e3"}}}, "parts": [{"type": "text", "text": "q"}]},
+     {"info": {"role": "assistant", "time": {"completed": {"$raw": "1e3"}}},
+      "parts": [{"type": "text", "text": "a"}, {"type": "tool", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": [{"content": "c"}]}}}]}]}}},
+   "expected": {"status": "ok", "rowCount": 1, "planPresent": true}},
+  {"name": "F12-p4-signed-string", "policies": ["P4"],
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user", "time": {"created": "-5"}}, "parts": [{"type": "text", "text": "q"}]},
+     {"info": {"role": "assistant", "time": {"completed": "-5"}},
+      "parts": [{"type": "text", "text": "a"}, {"type": "tool", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": [{"content": "c"}]}}}]}]}}},
+   "expected": {"status": "ok", "rowCount": 1, "planPresent": true}},
+  {"name": "F12-p4-offset", "policies": ["P4"],
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user", "time": {"created": "2024-01-02T03:04:05+09:00"}}, "parts": [{"type": "text", "text": "q"}]},
+     {"info": {"role": "assistant", "time": {"completed": "2024-01-02T03:04:05+09:00"}},
+      "parts": [{"type": "text", "text": "a"}, {"type": "tool", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": [{"content": "c"}]}}}]}]}}},
+   "expected": {"status": "ok", "rowCount": 1, "planPresent": true}},
+  {"name": "F12-p4-local", "policies": ["P4"],
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user", "time": {"created": "2024-01-02T03:04:05"}}, "parts": [{"type": "text", "text": "q"}]},
+     {"info": {"role": "assistant", "time": {"completed": "2024-01-02T03:04:05"}},
+      "parts": [{"type": "text", "text": "a"}, {"type": "tool", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": [{"content": "c"}]}}}]}]}}},
+   "expected": {"status": "ok", "rowCount": 1, "planPresent": true}},
+
+  {"name": "F12-unused-numbers", "policies": ["P10"],
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"unused": {"$raw": "1e400"}, "messages": [
+     {"info": {"role": "user", "cost": {"$raw": "1.0"}, "big": {"$raw": "9007199254740993"}}, "parts": [{"type": "text", "text": "q", "n": {"$raw": "-0"}}]},
+     {"info": {"role": "assistant", "tokens": {"$raw": "1E+2"}}, "parts": [{"type": "text", "text": "a"}]}]}}},
+   "expected": {"status": "ok", "rowCount": 1}},
+  {"name": "F12-lone-surrogate", "policies": ["P2"],
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user"}, "parts": [{"type": "text", "text": {"$raw": "\"a\\ud800b\""}}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "text", "text": "ok"}]}]}}},
+   "expected": {"status": "ok", "rowCount": 1}}
+]

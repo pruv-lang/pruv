@@ -1,0 +1,488 @@
+// OpenCode path module (package B): follows DESIGN.md/IMPL_NOTES.md; written without a shell (not compiled).
+// Contents: POSIX join/dirname/containment, data dir, DB path, folder key, `utility` (modes 3/4), and the step helpers that
+// admit.pruv, sql.pruv and list.pruv share (ask, proceed, append_patch, ok_event, db_error, fail_with, rows_ok).
+
+fn to_str(b: [u8], cap: i64) -> str ! alloc
+  requires 0 <= cap
+  ensures len(result) <= cap
+{
+  let none: str = "";
+  let x: str = crate::jstr::adapter_probe(b);
+  if len(x) > cap { return copy(none); }
+  return copy(x);
+}
+
+// ---- POSIX join/normalize (Node path.posix), as bench/l3/grok/path.pruv ----
+fn last_dotdot(out: [u8], u: i64) -> bool
+  requires 0 <= u && u <= len(out)
+{
+  if u < 2 { return false; }
+  if out[u - 1] != 46 || out[u - 2] != 46 { return false; }
+  return u == 2 || out[u - 3] == 47;
+}
+
+fn pop_pos(out: [u8], u: i64) -> i64
+  requires 0 <= u && u <= len(out)
+  ensures 0 <= result && result <= u
+{
+  let mut k: i64 = u;
+  while k > 0
+    invariant 0 <= k && k <= u && u <= len(out)
+    decreases k
+  {
+    if out[k - 1] == 47 { return k - 1; }
+    k = k - 1;
+  }
+  return 0;
+}
+
+fn append_seg(inout out: [u8], u: i64, p: [u8], s: i64, e: i64) -> i64
+  requires 0 <= s && s <= e && e <= len(p) && 0 <= u && u + (e - s) + 1 <= len(out)
+  ensures len(out) == len(old(out)) && 0 <= result && result <= u + (e - s) + 1
+{
+  let mut at: i64 = u;
+  if u > 0 {
+    out[u] = 47;
+    at = u + 1;
+  }
+  crate::bytes::copy_span(inout out, at, p, s, e);
+  return at + (e - s);
+}
+
+fn push_seg(inout out: [u8], u: i64, p: [u8], s: i64, e: i64, rel: bool) -> i64
+  requires 0 <= s && s <= e && e <= len(p) && 0 <= u && u + (e - s) + 3 <= len(out)
+  ensures len(out) == len(old(out)) && 0 <= result && result <= u + (e - s) + 1
+{
+  let w: i64 = e - s;
+  if w == 0 { return u; }
+  if w == 1 && p[s] == 46 { return u; }
+  if w == 2 && p[s] == 46 && p[s + 1] == 46 {
+    if u > 0 && !last_dotdot(out, u) { return pop_pos(out, u); }
+    if rel {
+      let mut at: i64 = u;
+      if u > 0 {
+        out[u] = 47;
+        at = u + 1;
+      }
+      out[at] = 46;
+      out[at + 1] = 46;
+      return at + 2;
+    }
+    return u;
+  }
+  return append_seg(inout out, u, p, s, e);
+}
+
+fn normalize(p: [u8]) -> [u8] ! alloc
+  requires 1 <= len(p) && len(p) <= 2000000002
+  ensures len(result) <= 2 * len(p) + 4
+{
+  let n: i64 = len(p);
+  let absolute: bool = p[0] == 47;
+  let trailing: bool = p[n - 1] == 47;
+  let mut out: [u8] = alloc(2 * n + 4, 0);
+  let mut u: i64 = 0;
+  let mut st: i64 = 0;
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= st && st <= i && i <= n && n == len(p) && 0 <= u && u <= 2 * st && len(out) == 2 * n + 4
+    decreases n - i
+  {
+    if p[i] == 47 {
+      u = push_seg(inout out, u, p, st, i, !absolute);
+      st = i + 1;
+    }
+    i = i + 1;
+  }
+  u = push_seg(inout out, u, p, st, n, !absolute);
+  if u == 0 {
+    if absolute {
+      let mut r1: [u8] = alloc(1, 0);
+      r1[0] = 47;
+      return r1;
+    }
+    if trailing {
+      let mut r2: [u8] = alloc(2, 0);
+      r2[0] = 46;
+      r2[1] = 47;
+      return r2;
+    }
+    let mut r3: [u8] = alloc(1, 0);
+    r3[0] = 46;
+    return r3;
+  }
+  let mut a: i64 = 0;
+  if absolute { a = 1; }
+  let mut t: i64 = 0;
+  if trailing { t = 1; }
+  let mut r: [u8] = alloc(a + u + t, 0);
+  if absolute { r[0] = 47; }
+  crate::bytes::copy_span(inout r, a, out, 0, u);
+  if trailing { r[a + u] = 47; }
+  return r;
+}
+
+// path.posix.join(a, b): empty arguments are skipped, the rest joined with '/' and normalised ("." when both are empty).
+pub fn join(a: str, b: str) -> str ! alloc
+  requires len(a) <= 1000000000 && len(b) <= 1000000000
+  ensures len(result) <= len(a) + len(b) + 2
+{
+  let na: i64 = len(a);
+  let nb: i64 = len(b);
+  let dot: str = ".";
+  if na == 0 && nb == 0 { return copy(dot); }
+  let mut jb: [u8] = alloc(na + nb + 1, 0);
+  let mut i: i64 = 0;
+  while i < na
+    invariant 0 <= i && i <= na && na == len(a) && nb == len(b) && len(jb) == na + nb + 1
+    decreases na - i
+  {
+    jb[i] = a[i];
+    i = i + 1;
+  }
+  let mut at: i64 = na;
+  if na > 0 && nb > 0 {
+    jb[at] = 47;
+    at = at + 1;
+  }
+  let mut j: i64 = 0;
+  while j < nb
+    invariant 0 <= j && j <= nb && 0 <= at && at <= na + 1 && nb == len(b) && len(jb) == na + nb + 1 && at + nb <= len(jb)
+    decreases nb - j
+  {
+    jb[at + j] = b[j];
+    j = j + 1;
+  }
+  let total: i64 = at + nb;
+  if total < 1 || total > len(jb) { return copy(dot); }
+  let joined: [u8] = truncate(jb, total);
+  let norm: [u8] = normalize(joined);
+  return to_str(norm, na + nb + 2);
+}
+
+// path.posix.dirname on bytes: "." for "", "/" or "//" for rooted inputs, else the prefix before the last non-trailing '/'
+pub fn dirname_bytes(p: [u8]) -> [u8] ! alloc
+  ensures len(result) <= len(p) + 1
+{
+  let n: i64 = len(p);
+  if n == 0 {
+    let mut d0: [u8] = alloc(1, 0);
+    d0[0] = 46;
+    return d0;
+  }
+  let root: bool = p[0] == 47;
+  let mut endp: i64 = -1;
+  let mut matched: bool = true;
+  let mut i: i64 = n - 1;
+  while i >= 1 && endp == -1
+    invariant 0 <= i && i <= n - 1 && n == len(p) && (endp == -1 || (1 <= endp && endp < n))
+    decreases i
+  {
+    if p[i] == 47 {
+      if !matched { endp = i; }
+    } else {
+      matched = false;
+    }
+    i = i - 1;
+  }
+  if endp == -1 {
+    if root {
+      let mut d1: [u8] = alloc(1, 0);
+      d1[0] = 47;
+      return d1;
+    }
+    let mut d2: [u8] = alloc(1, 0);
+    d2[0] = 46;
+    return d2;
+  }
+  if root && endp == 1 {
+    let mut d3: [u8] = alloc(2, 0);
+    d3[0] = 47;
+    d3[1] = 47;
+    return d3;
+  }
+  let mut r: [u8] = alloc(endp, 0);
+  crate::bytes::copy_span(inout r, 0, p, 0, endp);
+  return r;
+}
+
+pub fn dirname(p: str) -> str ! alloc
+  requires len(p) <= 1000000000
+  ensures len(result) <= len(p) + 1
+{
+  let b: [u8] = crate::util::to_bytes(p);
+  let d: [u8] = dirname_bytes(b);
+  return to_str(d, len(p) + 1);
+}
+
+// `file` starts with `parent` + '/' (just `parent` when it already ends with '/'); the prefix must be nonempty.
+pub fn contained(parent: [u8], file: [u8]) -> bool
+{
+  let pn: i64 = len(parent);
+  if pn == 0 { return false; }
+  let mut extra: i64 = 1;
+  if parent[pn - 1] == 47 { extra = 0; }
+  if len(file) - pn < extra { return false; }
+  let mut i: i64 = 0;
+  while i < pn
+    invariant 0 <= i && i <= pn && pn == len(parent) && pn <= len(file)
+    decreases pn - i
+  {
+    let x: i64 = parent[i];
+    let y: i64 = file[i];
+    if x != y { return false; }
+    i = i + 1;
+  }
+  if extra == 1 {
+    if file[pn] != 47 { return false; }
+  }
+  return true;
+}
+
+// ---- folderKey (non-win32): drop all trailing '/' unless that empties the input ----
+pub fn key_len(b: [u8]) -> i64
+  ensures 0 <= result && result <= len(b)
+{
+  let mut n: i64 = len(b);
+  while n > 0 && b[n - 1] == 47
+    invariant 0 <= n && n <= len(b)
+    decreases n
+  {
+    n = n - 1;
+  }
+  if n == 0 { return len(b); }
+  return n;
+}
+
+pub fn folder_key(b: [u8]) -> [u8] ! alloc
+  ensures len(result) <= len(b)
+{
+  let k: i64 = key_len(b);
+  let mut r: [u8] = alloc(k, 0);
+  crate::bytes::copy_span(inout r, 0, b, 0, k);
+  return r;
+}
+
+pub fn same_key(a: [u8], b: [u8]) -> bool
+{
+  let na: i64 = key_len(a);
+  let nb: i64 = key_len(b);
+  if na != nb { return false; }
+  let mut i: i64 = 0;
+  while i < na
+    invariant 0 <= i && i <= na && na == nb && na <= len(a) && nb <= len(b)
+    decreases na - i
+  {
+    let x: i64 = a[i];
+    let y: i64 = b[i];
+    if x != y { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+// ---- environment, data dir, DB path ----
+fn key_eq(t: [u8], s: i64, l: i64, lit: str) -> bool
+  requires 0 <= s && 0 <= l && l <= len(t) - s
+{
+  if l != len(lit) { return false; }
+  let mut i: i64 = 0;
+  while i < l
+    invariant 0 <= i && i <= l && l == len(lit) && 0 <= s && l <= len(t) - s
+    decreases l - i
+  {
+    let x: i64 = t[s + i];
+    let y: i64 = lit[i];
+    if x != y { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+// value of the environment pair named `name` ("" when absent; absent and empty are the same for every caller)
+pub fn env_value(cfg: [i64], cfg_text: [u8], name: str) -> str ! alloc
+  requires len(cfg) >= 32 && len(cfg) <= 2147483647
+  ensures len(result) <= 1000000000
+{
+  let none: str = "";
+  let n: i64 = (len(cfg) - 32) / 4;
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && 4 * n <= len(cfg) - 32 && len(cfg) >= 32 && len(cfg) <= 2147483647
+    decreases n - i
+  {
+    let b: i64 = 32 + 4 * i;
+    let ks: i64 = cfg[b];
+    let kl: i64 = cfg[b + 1];
+    if ks >= 0 && crate::packet::ref_ok(ks, kl, len(cfg_text)) {
+      if key_eq(cfg_text, ks, kl, name) { return crate::util::cfg_str(cfg_text, cfg[b + 2], cfg[b + 3]); }
+    }
+    i = i + 1;
+  }
+  return copy(none);
+}
+
+// opencodeDataDir: trimmed XDG_DATA_HOME when nonempty and absolute (join with opencode), else <OS home>/.local/share/opencode
+pub fn data_dir(cfg: [i64], cfg_text: [u8]) -> str ! alloc
+  requires len(cfg) >= 32 && len(cfg) <= 2147483647
+  ensures len(result) <= 1000000100
+{
+  let xdg: str = crate::text::trim(env_value(cfg, cfg_text, "XDG_DATA_HOME"));
+  if len(xdg) > 0 && xdg[0] == 47 { return join(xdg, "opencode"); }
+  let home: str = crate::util::cfg_str(cfg_text, cfg[16], cfg[17]);
+  return join(home, ".local/share/opencode");
+}
+
+// OPENCODE_DB (trimmed) is exactly ":memory:" => no database
+pub fn db_none(cfg: [i64], cfg_text: [u8]) -> bool ! alloc
+  requires len(cfg) >= 32 && len(cfg) <= 2147483647
+{
+  let given: str = crate::text::trim(env_value(cfg, cfg_text, "OPENCODE_DB"));
+  return crate::text::same(given, ":memory:");  // MUT:M01 => return false;
+}
+
+// DB path: empty => join(home, "opencode.db"); absolute => as given; relative => join(home, given). home = source.home (words 6,7).
+pub fn db_path(cfg: [i64], cfg_text: [u8]) -> str ! alloc
+  requires len(cfg) >= 32 && len(cfg) <= 2147483647
+  ensures len(result) <= 2000000100
+{
+  let given: str = crate::text::trim(env_value(cfg, cfg_text, "OPENCODE_DB"));
+  let home: str = crate::util::cfg_str(cfg_text, cfg[6], cfg[7]);
+  if len(given) == 0 { return join(home, "opencode.db"); }
+  if given[0] == 47 { return copy(given); }
+  return join(home, given);
+}
+
+// result packet for mode 3 (dataDir) or 4 (folderKey of the folder ref, words 8,9); no I/O
+pub fn utility(cfg: [i64], cfg_text: [u8], mode: i64) -> [i64] ! alloc
+  requires len(cfg) >= 32 && len(cfg) <= 2147483647 && (mode == 3 || mode == 4) && len(cfg_text) <= 2147483647
+  ensures len(result) >= 40
+{
+  if mode == 3 {
+    let d: str = data_dir(cfg, cfg_text);
+    let b: [u8] = crate::util::to_bytes(d);
+    if len(b) > 1073741823 { return crate::packet::simple_error(3, 0, 3, 5); }
+    return crate::packet::ok_value(3, b);
+  }
+  let folder: [u8] = crate::util::span_bytes(cfg_text, cfg[8], cfg[9]);
+  let k: [u8] = folder_key(folder);
+  if len(k) > 1073741823 { return crate::packet::simple_error(4, 0, 3, 5); }
+  return crate::packet::ok_value(4, k);
+}
+
+// ---- step helpers shared by admit, sql and list ----
+// Issue ONE request (id ctl[3]); `args` is the step word pool (its first argn words are the request arguments, the rest may be
+// literal patch words), `bytes` the byte pool, `patches` apply before the request.
+pub fn ask(ctl: [i64], phase: i64, opcode: i64, stage: i64, flags: i64, handle: i64,
+           patches: [i64], args: [i64], argn: i64, bytes: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 64 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  requires 0 <= phase && phase <= 998 && 1 <= opcode && opcode <= 15 && 0 <= stage && stage <= 28 && 0 <= flags && -1 <= handle
+  requires len(patches) <= 4096 && len(args) <= 2147483647 && 0 <= argn && argn <= len(args) && len(bytes) <= 2147483647
+  ensures len(result) >= 76
+{
+  if ctl[3] >= 1000000000 { return crate::packet::done_internal(ctl, 28); }
+  let id: i64 = ctl[3];
+  let c: [i64] = crate::packet::ctl_await(ctl, phase, opcode);
+  let req: [i64] = crate::packet::request(id, opcode, stage, flags, handle, 0, 0, 0, 0, argn);
+  let ep: [i64] = alloc(0, 0);
+  return crate::packet::step_packet(c, patches, req, args, bytes, ep, 0);
+}
+
+// Continue packet at `phase` (nothing pending); the phase must differ from the incoming one so root sees progress.
+pub fn proceed(ctl: [i64], phase: i64, patches: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 64 && 0 <= phase && phase <= 998 && len(patches) <= 4096
+  ensures len(result) >= 76
+{
+  let c: [i64] = crate::packet::ctl_next(ctl, phase);
+  let ep: [i64] = alloc(0, 0);
+  let eb: [u8] = alloc(0, 0);
+  return crate::packet::step_packet(c, patches, ep, ep, eb, ep, 2);
+}
+
+// patches: resize bank to cur+count, then copy `count` elements to offset cur from source src at src_off
+pub fn append_patch(bank: i64, cur: i64, count: i64, src: i64, src_off: i64) -> [i64] ! alloc
+  requires 0 <= bank && bank <= 5 && 0 <= cur && 0 <= count && cur <= 2147483647 - count && 1 <= src && src <= 4 && 0 <= src_off
+  ensures len(result) == 16
+{
+  let r: [i64] = crate::packet::patch_resize(bank, cur + count);
+  let cp: [i64] = crate::packet::patch_copy(bank, cur, count, src, src_off);
+  return crate::packet::cat_words(r, cp);
+}
+
+// a successful completion of `opcode` with exactly `nwords` payload words
+pub fn ok_event(event: [i64], opcode: i64, nwords: i64) -> bool
+  requires len(event) >= 16 && 0 <= nwords && nwords <= 1000000000
+  ensures result ==> (len(event) == 16 + nwords && event[2] == opcode && event[3] == 0 && event[6] == nwords)
+{
+  return event[2] == opcode && event[3] == 0 && event[6] == nwords && len(event) - 16 == nwords;
+}
+
+// bank 2 holds 7*n row words followed by n count words
+pub fn rows_ok(rows: [i64], n: i64) -> bool
+  ensures result ==> (0 <= n && n <= 134217727 && 8 * n <= len(rows))
+{
+  return 0 <= n && n <= 134217727 && 8 * n <= len(rows);
+}
+
+// read-failed result for a failed DB completion (class 4 => InputTooLarge, class 5 => InternalInvariant); raw code and native kept
+pub fn db_error(ctl: [i64], stage: i64, event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 64 && len(event) >= 16 && 0 <= stage && stage <= 28
+  ensures len(result) >= 40
+{
+  let mode: i64 = ctl[1];
+  let none: str = "";
+  let raw0: [u8] = alloc(0, 0);
+  let cls: i64 = event[4];
+  if cls == 4 { return crate::packet::error(mode, stage, 3, 5, 0, raw0, none, none); }
+  if cls == 5 { return crate::packet::error(mode, stage, 3, 6, 0, raw0, none, none); }
+  let mut native: i64 = event[5];
+  if native < 0 { native = 0; }
+  let raw: [u8] = crate::util::span_bytes(completion, event[8], event[9]);
+  return crate::packet::error(mode, stage, 1, 2, native, raw, none, none);
+}
+
+// error results without a completion: InternalInvariant / InputTooLarge / read-failed detail `columns`, at `stage`
+pub fn internal_at(ctl: [i64], stage: i64) -> [i64] ! alloc
+  requires len(ctl) == 64
+  ensures len(result) >= 40
+{
+  let none: str = "";
+  let raw0: [u8] = alloc(0, 0);
+  return crate::packet::error(ctl[1], stage, 3, 6, 0, raw0, none, none);
+}
+
+pub fn toobig_at(ctl: [i64], stage: i64) -> [i64] ! alloc
+  requires len(ctl) == 64
+  ensures len(result) >= 40
+{
+  let none: str = "";
+  let raw0: [u8] = alloc(0, 0);
+  return crate::packet::error(ctl[1], stage, 3, 5, 0, raw0, none, none);
+}
+
+pub fn columns_at(ctl: [i64], stage: i64) -> [i64] ! alloc
+  requires len(ctl) == 64
+  ensures len(result) >= 40
+{
+  let none: str = "";
+  let det: str = "columns";
+  let raw0: [u8] = alloc(0, 0);
+  return crate::packet::error(ctl[1], stage, 1, 2, 0, raw0, none, det);
+}
+
+// DB failure: save the error result in bank 5 (ctl[38] = 1) and close the connection (phase 390 consumes the close); no
+// connection => finish at once.
+pub fn fail_with(ctl: [i64], err: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 64 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(err) >= 40
+  ensures len(result) >= 76
+{
+  if len(err) > 100000000 || ctl[8] < 0 || ctl[3] >= 1000000000 { return crate::packet::done_wrap(ctl, err); }
+  let n: i64 = len(err);
+  let pr: [i64] = crate::packet::patch_resize(5, n);
+  let pc: [i64] = crate::packet::patch_copy(5, 0, n, 3, 0);
+  let patches: [i64] = crate::packet::cat_words(pr, pc);
+  let mut c: [i64] = copy(ctl);
+  c[38] = 1;
+  let eb: [u8] = alloc(0, 0);
+  return ask(c, 390, 5, 10, 0, ctl[8], patches, err, 0, eb);
+}

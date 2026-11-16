@@ -1,0 +1,146 @@
+// OpenCode admission (package B, phases 100-199): follows DESIGN.md/IMPL_NOTES.md; written without a shell (not compiled).
+// 100 thread check (read), DB path, realpath(dirname DB) | 101 lstat(DB) | 102 realpath(DB) | 103 containment -> phase 200 (sql).
+// Every failure here means "no database": list continues at phase 300 with no DB handle (it still samples the clock), rows finishes
+// with zero rows, read finishes not-found (stage 11). The DB path and the resolved parent are appended to bank 3 (ctl[24,25] and
+// ctl[26,27]); the DB is opened by its original path, never the resolved one. ctl[23] = return mode (0 list, 1 read, 2 rows).
+
+// no database: mode 0 -> list at 300 (ctl[8] = -1), mode 1 -> not-found, mode 2 -> empty rows
+fn absent_db(ctl: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 64
+  ensures len(result) >= 76
+{
+  let mode: i64 = ctl[1];
+  if mode == 0 {
+    let mut c: [i64] = copy(ctl);
+    c[8] = -1;
+    c[20] = 0;
+    c[21] = 0;
+    c[23] = 0;
+    let ep: [i64] = alloc(0, 0);
+    return crate::path::proceed(c, 300, ep);
+  }
+  if mode == 1 { return crate::packet::done_simple(ctl, 11, 1, 1); }
+  if mode == 2 {
+    let mut m: [i64] = crate::packet::meta_new(2);
+    m[5] = 7;
+    let ew: [i64] = alloc(0, 0);
+    let eb: [u8] = alloc(0, 0);
+    return crate::packet::done_wrap(ctl, crate::packet::ok_result(m, ew, ew, eb));
+  }
+  return crate::packet::done_internal(ctl, 28);
+}
+
+// 100: validate the thread (read), compute the DB path, realpath(dirname(path))
+fn p100(cfg: [i64], cfg_text: [u8], ctl: [i64], text: [u8], event: [i64]) -> [i64] ! alloc
+  requires len(cfg) >= 32 && len(cfg) <= 2147483647 && len(ctl) == 64 && len(event) >= 16 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  requires len(cfg_text) <= 2147483647 && len(text) <= 2147483647
+  ensures len(result) >= 76
+{
+  if ctl[6] != 0 { return crate::packet::done_internal(ctl, 28); }
+  let mode: i64 = ctl[1];
+  if mode < 0 || mode > 2 { return crate::packet::done_internal(ctl, 28); }
+  if mode == 1 {
+    let thread: str = crate::util::cfg_str(cfg_text, cfg[10], cfg[11]);
+    if !crate::names::valid_thread(thread) { return crate::packet::done_simple(ctl, 0, 1, 1); }
+  }
+  if crate::path::db_none(cfg, cfg_text) { return absent_db(ctl); }
+  let p: str = crate::path::db_path(cfg, cfg_text);
+  let pb: [u8] = crate::util::to_bytes(p);
+  let parent: [u8] = crate::path::dirname_bytes(pb);
+  let np: i64 = len(pb);
+  let nq: i64 = len(parent);
+  let cur: i64 = len(text);
+  if !crate::util::bank_fits(cur, np) || np > 1073741823 || nq > 1073741823 { return crate::packet::done_simple(ctl, 1, 3, 5); }
+  let pool: [u8] = crate::util::pool_bytes(pb, parent);
+  let patches: [i64] = crate::path::append_patch(3, cur, np, 4, 0);
+  let mut c: [i64] = copy(ctl);
+  c[23] = mode;
+  c[24] = cur;
+  c[25] = np;
+  let mut words: [i64] = alloc(2, 0);
+  words[0] = np;
+  words[1] = nq;
+  return crate::path::ask(c, 101, 1, 1, 0, -1, patches, words, 2, pool);
+}
+
+// 101: realpath(dirname) completed: append the resolved parent, lstat(DB) (no following of the final link)
+fn p101(ctl: [i64], text: [u8], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 64 && len(event) >= 16 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  requires len(text) <= 2147483647 && len(completion) <= 2147483647
+  ensures len(result) >= 76
+{
+  if ctl[6] != 1 { return crate::packet::done_internal(ctl, 28); }
+  if event[3] == 1 { return absent_db(ctl); }
+  if !crate::path::ok_event(event, 1, 2) { return crate::packet::done_internal(ctl, 28); }
+  let rs: i64 = event[16];
+  let rl: i64 = event[17];
+  if !crate::packet::ref_ok(rs, rl, len(completion)) || rs < 0 { return crate::packet::done_internal(ctl, 1); }
+  if rl < 1 { return absent_db(ctl); }
+  let cur: i64 = len(text);
+  if !crate::util::bank_fits(cur, rl) { return crate::packet::done_simple(ctl, 1, 3, 5); }
+  let dbp: [u8] = crate::util::span_bytes(text, ctl[24], ctl[25]);
+  if len(dbp) == 0 { return crate::packet::done_internal(ctl, 2); }
+  let patches: [i64] = crate::path::append_patch(3, cur, rl, 2, rs);
+  let mut c: [i64] = copy(ctl);
+  c[26] = cur;
+  c[27] = rl;
+  let mut words: [i64] = alloc(2, 0);
+  words[0] = 0;
+  words[1] = len(dbp);
+  return crate::path::ask(c, 102, 2, 2, 0, -1, patches, words, 2, dbp);
+}
+
+// 102: lstat(DB) completed: only a regular file (kind 1, not a symlink) continues, with realpath(DB)
+fn p102(ctl: [i64], text: [u8], event: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 64 && len(event) >= 16 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(text) <= 2147483647
+  ensures len(result) >= 76
+{
+  if ctl[6] != 1 { return crate::packet::done_internal(ctl, 28); }
+  if event[3] == 1 { return absent_db(ctl); }
+  if !crate::path::ok_event(event, 2, 2) { return crate::packet::done_internal(ctl, 28); }
+  let kind: i64 = event[16];
+  if kind != 1 { return absent_db(ctl); }  // MUT:M02 => if kind != 1 && kind != 3 { return absent_db(ctl); }
+  let dbp: [u8] = crate::util::span_bytes(text, ctl[24], ctl[25]);
+  if len(dbp) == 0 { return crate::packet::done_internal(ctl, 3); }
+  let ep: [i64] = alloc(0, 0);
+  let mut words: [i64] = alloc(2, 0);
+  words[0] = 0;
+  words[1] = len(dbp);
+  return crate::path::ask(ctl, 103, 1, 3, 0, -1, ep, words, 2, dbp);
+}
+
+// 103: realpath(DB) completed: containment below the resolved parent, then the sql module (phase 200)
+fn p103(ctl: [i64], text: [u8], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 64 && len(event) >= 16 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  requires len(text) <= 2147483647 && len(completion) <= 2147483647
+  ensures len(result) >= 76
+{
+  if ctl[6] != 1 { return crate::packet::done_internal(ctl, 28); }
+  if event[3] == 1 { return absent_db(ctl); }
+  if !crate::path::ok_event(event, 1, 2) { return crate::packet::done_internal(ctl, 28); }
+  let rs: i64 = event[16];
+  let rl: i64 = event[17];
+  if !crate::packet::ref_ok(rs, rl, len(completion)) || rs < 0 { return crate::packet::done_internal(ctl, 3); }
+  let file: [u8] = crate::util::span_bytes(completion, rs, rl);
+  let parent: [u8] = crate::util::span_bytes(text, ctl[26], ctl[27]);
+  if !crate::path::contained(parent, file) { return absent_db(ctl); }
+  let ep: [i64] = alloc(0, 0);
+  return crate::path::proceed(ctl, 200, ep);
+}
+
+pub fn advance(cfg: [i64], cfg_text: [u8], ctl: [i64], query_words: [i64], query_bytes: [u8], rows: [i64], text: [u8],
+               document: [u8], saved_result: [i64], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(cfg) >= 32 && len(cfg) <= 2147483647 && 0 <= cfg[1] && cfg[1] <= 5 && len(ctl) == 64 && len(event) >= 16
+  requires 1 <= ctl[3] && ctl[3] <= 1000000000 && 0 <= ctl[4] && ctl[4] < ctl[3] && 0 <= ctl[2] && ctl[2] <= 999
+  requires 0 <= ctl[5] && ctl[5] <= 15 && 0 <= ctl[6] && ctl[6] <= 2 && ctl[1] == cfg[1]
+  requires len(cfg_text) <= 2147483647 && len(query_words) <= 2147483647 && len(query_bytes) <= 2147483647 && len(rows) <= 2147483647
+  requires len(text) <= 2147483647 && len(document) <= 2147483647 && len(saved_result) <= 2147483647 && len(completion) <= 2147483647
+  ensures len(result) >= 76
+{
+  let phase: i64 = ctl[2];
+  if phase == 100 { return p100(cfg, cfg_text, ctl, text, event); }
+  if phase == 101 { return p101(ctl, text, event, completion); }
+  if phase == 102 { return p102(ctl, text, event); }
+  if phase == 103 { return p103(ctl, text, event, completion); }
+  return crate::packet::done_internal(ctl, 28);
+}

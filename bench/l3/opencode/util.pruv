@@ -1,0 +1,254 @@
+// OpenCode import helpers (bench/l3/opencode/DESIGN.md section 1; contract in IMPL_NOTES.md).
+// Written without a shell: not compiled. to_bytes/span_bytes/cfg_str/str_at/raw/elements follow bench/l3/grok/util.pruv.
+// New here: bank/pool arithmetic checks, bounded decimal formatting, IEEE-754 binary64 limb helpers.
+
+pub fn to_bytes(s: str) -> [u8] ! alloc
+  ensures len(result) == len(s)
+{
+  let mut b: [u8] = alloc(len(s), 0);
+  let mut i: i64 = 0;
+  while i < len(s)
+    invariant 0 <= i && i <= len(s) && len(b) == len(s)
+    decreases len(s) - i
+  { b[i] = s[i]; i = i + 1; }
+  return b;
+}
+
+// The bytes t[s..s+l]; empty for an absent or invalid ref.
+pub fn span_bytes(t: [u8], s: i64, l: i64) -> [u8] ! alloc
+  ensures len(result) <= len(t)
+{
+  let empty: [u8] = alloc(0, 0);
+  if !crate::packet::ref_ok(s, l, len(t)) || s < 0 { return empty; }
+  let mut b: [u8] = alloc(l, 0);
+  crate::bytes::copy_span(inout b, 0, t, s, s + l);
+  return b;
+}
+
+// cfg_text[s..s+l] as text ("" for an absent/invalid ref or invalid UTF-8). Begin refuses a configuration text over
+// 1000000000 bytes with InputTooLarge, so the length guard below never changes a value of an admitted case.
+pub fn cfg_str(t: [u8], s: i64, l: i64) -> str ! alloc
+  ensures len(result) <= 1000000000
+{
+  let none: str = "";
+  if !crate::packet::ref_ok(s, l, len(t)) || s < 0 || l > 1000000000 { return copy(none); }
+  let b: [u8] = span_bytes(t, s, l);
+  let x: str = crate::jstr::adapter_probe(b);
+  if len(x) > 1000000000 { return copy(none); }
+  return copy(x);
+}
+
+// ---- checked bank / pool arithmetic ----
+pub fn bank_limit() -> i64 ensures result == 2147483647 { return 2147483647; }
+
+// used + add <= limit without overflow (all three nonnegative)
+pub fn fits(used: i64, add: i64, limit: i64) -> bool
+  ensures result ==> (0 <= used && 0 <= add && 0 <= limit && used <= limit && add <= limit - used)
+{
+  if used < 0 || add < 0 || limit < 0 { return false; }
+  if used > limit { return false; }
+  return add <= limit - used;
+}
+
+// bank of `cur` elements may grow by `add` and stay within B = 2^31-1 (else the caller reports CoreError/InputTooLarge)
+pub fn bank_fits(cur: i64, add: i64) -> bool
+  ensures result ==> (0 <= cur && 0 <= add && cur <= 2147483647 && add <= 2147483647 - cur)
+{
+  return fits(cur, add, 2147483647);
+}
+
+// pool ++ add (new bytes start at len(pool))
+pub fn pool_bytes(pool: [u8], add: [u8]) -> [u8] ! alloc
+  requires len(pool) <= 1073741823 && len(add) <= 1073741823
+  ensures len(result) == len(pool) + len(add)
+{ return crate::packet::cat_bytes(pool, add); }
+
+pub fn pool_str(pool: [u8], s: str) -> [u8] ! alloc
+  requires len(pool) <= 1073741823 && len(s) <= 1073741823
+  ensures len(result) == len(pool) + len(s)
+{ return crate::packet::append_str(pool, s); }
+
+// pool ++ decimal(n)
+pub fn pool_dec(pool: [u8], n: i64) -> [u8] ! alloc
+  requires len(pool) <= 1073741823 && -9223372036854775807 <= n
+  ensures len(result) >= len(pool) + 1 && len(result) <= len(pool) + 20
+{
+  let d: [u8] = format_i64(n);
+  return crate::packet::cat_bytes(pool, d);
+}
+
+// ---- bounded decimal ----
+// Decimal text of n: optional '-' then digits without leading zeros ("0" for zero); 1..20 bytes.
+// The most negative i64 is excluded (its negation overflows); callers hold safe-integer values.
+pub fn format_i64(n: i64) -> [u8] ! alloc
+  requires -9223372036854775807 <= n
+  ensures 1 <= len(result) && len(result) <= 20
+{
+  let neg: bool = n < 0;
+  let mut v: i64 = n;
+  if neg { v = 0 - n; }
+  let mut out: [u8] = alloc(19, 0);
+  let mut k: i64 = 0;
+  while k < 19
+    invariant 0 <= k && k <= 19 && len(out) == 19 && 0 <= v
+    decreases 19 - k
+  {
+    out[18 - k] = 48 + v % 10;
+    v = v / 10;
+    k = k + 1;
+  }
+  let mut s: i64 = 0;
+  while s < 18 && out[s] == 48
+    invariant 0 <= s && s <= 18 && len(out) == 19
+    decreases 18 - s
+  { s = s + 1; }
+  let digits: i64 = 19 - s;
+  if neg {
+    let mut r1: [u8] = alloc(digits + 1, 0);
+    r1[0] = 45;
+    crate::bytes::copy_span(inout r1, 1, out, s, 19);
+    return r1;
+  }
+  let mut r2: [u8] = alloc(digits, 0);
+  crate::bytes::copy_span(inout r2, 0, out, s, 19);
+  return r2;
+}
+
+// ---- IEEE-754 binary64 from unsigned 32-bit limbs (typed SQL REAL: a = high32, b = low32) ----
+// 50.0 = 0x4049000000000000 (the LIMIT parameter of the list query, bound as REAL)
+pub fn real_50_hi() -> i64 ensures result == 1078525952 { return 1078525952; }
+pub fn real_50_lo() -> i64 ensures result == 0 { return 0; }
+
+pub fn limbs_ok(hi: i64, lo: i64) -> bool
+  ensures result ==> (0 <= hi && hi <= 4294967295 && 0 <= lo && lo <= 4294967295)
+{
+  return 0 <= hi && hi <= 4294967295 && 0 <= lo && lo <= 4294967295;
+}
+
+pub fn real_negative(hi: i64) -> bool
+  requires 0 <= hi && hi <= 4294967295
+{ return hi >= 2147483648; }
+
+// biased exponent field, 2047 = infinity/NaN, 0 = zero/subnormal
+pub fn real_exp(hi: i64) -> i64
+  requires 0 <= hi && hi <= 4294967295
+  ensures 0 <= result && result <= 2047
+{ return (hi / 1048576) % 2048; }
+
+// 52 fraction bits
+pub fn real_mantissa(hi: i64, lo: i64) -> i64
+  requires 0 <= hi && hi <= 4294967295 && 0 <= lo && lo <= 4294967295
+  ensures 0 <= result && result <= 4503599627370495
+{ return (hi % 1048576) * 4294967296 + lo; }
+
+pub fn real_is_finite(hi: i64) -> bool
+  requires 0 <= hi && hi <= 4294967295
+{ return real_exp(hi) != 2047; }
+
+// finite and a whole number (+0 and -0 included; subnormals and |v| < 1 other than zero are not)
+pub fn real_is_integral(hi: i64, lo: i64) -> bool
+  requires 0 <= hi && hi <= 4294967295 && 0 <= lo && lo <= 4294967295
+{
+  let e: i64 = real_exp(hi);
+  let m: i64 = real_mantissa(hi, lo);
+  if e == 2047 { return false; }
+  if e == 0 { return m == 0; }
+  if e < 1023 { return false; }
+  if e >= 1075 { return true; }
+  let mut f: i64 = 1075 - e;
+  let mut x: i64 = m;
+  while f > 0
+    invariant 0 <= f && f <= 52 && 0 <= x
+    decreases f
+  {
+    if x % 2 != 0 { return false; }
+    x = x / 2;
+    f = f - 1;
+  }
+  return true;
+}
+
+// finite whole number with |v| <= 9007199254740991 (2^53 - 1)
+pub fn real_is_safe_integer(hi: i64, lo: i64) -> bool
+  requires 0 <= hi && hi <= 4294967295 && 0 <= lo && lo <= 4294967295
+{
+  if !real_is_integral(hi, lo) { return false; }
+  return real_exp(hi) <= 1075;
+}
+
+// The integral value when real_is_safe_integer holds (negative zero gives 0); 0 otherwise. Check the predicate first.
+pub fn real_to_integer(hi: i64, lo: i64) -> i64
+  requires 0 <= hi && hi <= 4294967295 && 0 <= lo && lo <= 4294967295
+  ensures -9007199254740991 <= result && result <= 9007199254740991
+{
+  if !real_is_safe_integer(hi, lo) { return 0; }
+  let e: i64 = real_exp(hi);
+  if e < 1023 || e > 1075 { return 0; }
+  let mut x: i64 = 4503599627370496 + real_mantissa(hi, lo);
+  let mut f: i64 = 1075 - e;
+  while f > 0
+    invariant 0 <= f && f <= 52 && 0 <= x && x <= 9007199254740991
+    decreases f
+  {
+    x = x / 2;
+    f = f - 1;
+  }
+  if real_negative(hi) { return 0 - x; }
+  return x;
+}
+
+// ---- JSON tape access (same as Grok) ----
+// The source bytes of value id (strings with their quotes); empty on a bad id or corrupt tape.
+pub fn raw(d: crate::json::JsonDocument, id: i64) -> [u8] ! alloc
+{
+  let s: crate::access::Span = crate::access::raw_span(d, id);
+  if s.status != 0 { let e: [u8] = alloc(0, 0); return e; }
+  let mut b: [u8] = alloc(s.end - s.start, 0);
+  let mut i: i64 = 0;
+  while i < len(b)
+    invariant 0 <= i && i <= len(b) && len(b) == s.end - s.start
+    decreases len(b) - i
+  { b[i] = d.source[s.start + i]; i = i + 1; }
+  return b;
+}
+
+// The decoded text of string value id (lone surrogates became U+FFFD, policy P2); "" for anything else.
+pub fn str_at(d: crate::json::JsonDocument, id: i64) -> str ! alloc
+  ensures len(result) <= 50331648
+{
+  let none: str = "";
+  let t: crate::jstr::Text = crate::access::string_text(d, id);
+  match t {
+    crate::jstr::Text::Decoded(x) => {
+      if len(x) > 50331648 { return copy(none); }
+      return copy(x);
+    }
+    crate::jstr::Text::InternalInvariant(e) => { return copy(none); }
+  }
+}
+
+// One-pass child index: ids of the elements of array value c in order (empty for anything else, an empty array, a
+// corrupt tape, or more than 1048576 elements). Each tape record is visited at most once.
+pub fn elements(d: crate::json::JsonDocument, c: i64) -> [i64] ! alloc
+{
+  let empty: [i64] = alloc(0, 0);
+  let n: i64 = crate::access::array_length(d, c);
+  if n <= 0 || n > 1048576 { return empty; }
+  if len(d.tape) > 6291456 || c < 0 || c >= len(d.tape) / 6 { return empty; }
+  let stop: i64 = d.tape[6 * c + 3];
+  if stop <= c || stop > len(d.tape) / 6 { return empty; }
+  let mut ids: [i64] = alloc(n, 0);
+  let mut j: i64 = c + 1;
+  let mut k: i64 = 0;
+  while j < stop && k < n
+    invariant 0 <= c && c < j && j <= stop && stop <= len(d.tape) / 6 && len(d.tape) <= 6291456
+    invariant 0 <= k && k <= n && len(ids) == n
+    decreases stop - j
+  {
+    let next: i64 = d.tape[6 * j + 3];
+    if next <= j || next > stop || d.tape[6 * j + 4] != c { return empty; }
+    ids[k] = j; k = k + 1; j = next;
+  }
+  if k != n { return empty; }
+  return ids;
+}

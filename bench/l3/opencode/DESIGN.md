@@ -434,7 +434,8 @@ byte per i64). Refs always address the final byte pool, never banks or request l
 | 40 onward | N rows of width W, K plan items of width 3, T bytes |
 
 Length `40+N*W+3*K+T`. Result error classes: 0 none, 1 EngineImportError, 2 RawOsError,
-3 CoreError. Codes: 0 none, 1 not-found, 2 read-failed, 3 engine-missing, 4 timeout,
+3 CoreError, 4 OtherError (a Node argument/range error with no errno/syscall, e.g. a NUL
+path at temp-create; code none, raw code kept). Codes: 0 none, 1 not-found, 2 read-failed, 3 engine-missing, 4 timeout,
 5 InputTooLarge, 6 InternalInvariant. Errors have no rows/plan/value/metadata; error refs
 may contain the small detail `columns`, `json`, `shape`, or a diagnostic. Native/raw cause
 facts survive DB-error wrapping, but output class is EngineImportError/read-failed.

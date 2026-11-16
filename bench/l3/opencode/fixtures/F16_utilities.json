@@ -1,0 +1,26 @@
+[
+  {"name": "F16-data-dir-direct", "mode": "dataDir", "homedir": "/home/q", "env": {"mode": "full", "values": {"XDG_DATA_HOME": "/data/"}},
+   "expected": {"status": "ok", "value": "/data/opencode"}},
+  {"name": "F16-folder-empty", "mode": "folderKey", "folder": "", "expected": {"status": "ok", "value": ""}},
+  {"name": "F16-folder-slashes", "mode": "folderKey", "folder": "///", "expected": {"status": "ok", "value": "///"}},
+  {"name": "F16-folder-dots", "mode": "folderKey", "folder": "/a/./b/..//", "expected": {"status": "ok", "value": "/a/./b/.."}},
+  {"name": "F16-folder-case", "mode": "folderKey", "folder": "/A/B/", "expected": {"status": "ok", "value": "/A/B"}},
+  {"name": "F16-folder-backslash", "mode": "folderKey", "folder": "a\\b\\", "expected": {"status": "ok", "value": "a\\b\\"}},
+  {"name": "F16-rows-unfiltered-51", "mode": "rows", "policies": ["P6"],
+   "db": {"path": "$SRC/opencode.db", "ddl": ["CREATE TABLE session(id,parent_id,directory,title,time_updated)", "CREATE TABLE message(session_id)"],
+          "generate": {"sessions": 51, "messagesPerSession": 1, "directory": "/work"}},
+   "expected": {"status": "ok", "rowCount": 51}},
+  {"name": "F16-rows-no-order", "mode": "rows", "policies": ["P6"],
+   "db": {"path": "$SRC/opencode.db", "ddl": ["CREATE TABLE session(id,parent_id,directory,title,time_updated)", "CREATE TABLE message(session_id)"],
+          "inserts": [
+            {"table": "session", "columns": ["id", "parent_id", "directory", "title", "time_updated"],
+             "rows": [
+               [{"kind": "text", "text": "Sc"}, {"kind": "null"}, {"kind": "text", "text": "/z"}, {"kind": "text", "text": "third inserted, newest"}, {"kind": "integer", "decimal": "300"}],
+               [{"kind": "text", "text": "Sa"}, {"kind": "null"}, {"kind": "text", "text": "/y"}, {"kind": "text", "text": "first inserted, oldest"}, {"kind": "integer", "decimal": "100"}],
+               [{"kind": "text", "text": "Sb"}, {"kind": "null"}, {"kind": "text", "text": "/x"}, {"kind": "text", "text": "second inserted"}, {"kind": "integer", "decimal": "200"}]]},
+            {"table": "message", "columns": ["session_id"], "rows": [[{"kind": "text", "text": "Sa"}], [{"kind": "text", "text": "Sb"}], [{"kind": "text", "text": "Sc"}]]}]},
+   "expected": {"status": "ok", "rowCount": 3}},
+  {"name": "F16-plan-direct", "mode": "plan", "policies": ["P12"],
+   "planJson": "[{\"parts\":[{\"type\":\"tool\",\"tool\":\"todowrite\",\"state\":{\"status\":\"completed\",\"input\":{\"todos\":[{\"content\":\"a\",\"status\":\"pending\"},{\"content\":\" b \",\"status\":\"done\"}]}}}],\"at\":\"2024-01-02T03:04:05.000Z\"},{\"parts\":[]}]",
+   "expected": {"status": "ok", "planPresent": true}}
+]

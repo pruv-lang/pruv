@@ -1,0 +1,667 @@
+// OpenCode export state machine (phases 400-499): follows DESIGN.md/IMPL_NOTES.md; written without a shell (not compiled or verified).
+//
+// One request at a time; the phase that CONSUMES a completion is the phase set by the await packet:
+//   400 admitted read (empty event)        -> mkdtemp(join(tempRoot,"opencode-"))                       await 401
+//   401 mkdtemp done   (fail: raw, stage 13, no cleanup target) -> open <dir>/export.json wx 0600       await 402
+//   402 open done      (fail: save raw stage 14, rm)    -> spawn_stdout_fd (flags 0)                    await 403
+//   403 spawn done     (fail: engine-missing, close)    -> clock_now monotonic                          await 405
+//   405 clock (start)  -> start, deadline = start + cfg[2] -> observe(deadline)                         await 406
+//   406 observe        close/error/deadline per the DESIGN 3 transition table; TERM/KILL send           await 407 / 408
+//   407 kill done      (signal result ignored) -> clock_now                                             await 408
+//   408 clock (grace)  -> deadline = now + grace (TERM: cfg[3], KILL: cfg[4]) -> observe               await 406
+//   404 close done     (fail replaces pending result) -> stat (no failure pending) else rm              await 409 / 411
+//   409 stat done      oversized (> 33554432): no read -> rm; else read                                 await 410 / 411
+//   410 read done      bytes patched into bank 4 -> rm                                                  await 411
+//   411 rm done        (result ignored) saved result -> done; else continue at phase 500
+// ctl words used: 11 output file, 12 child, 13 timed-out, 14 settled, 15 child ended, 16 start, 17 deadline, 18 last observation,
+//   19 termination stage (0 waiting, 1 TERM sent, 2 KILL sent), 28/30 temp dir / export path refs (bank 3), 38 saved result present
+//   (bank 5 holds the whole result packet), 39 stat size (> 33554432 with an empty bank 4 = oversized, convert builds that result).
+
+fn safe_max() -> i64 ensures result == 9007199254740991 { return 9007199254740991; }
+fn export_max() -> i64 ensures result == 33554432 { return 33554432; }
+
+fn md(m: i64) -> i64
+  ensures 0 <= result && result <= 5
+{
+  if m < 0 || m > 5 { return 0; }
+  return m;
+}
+
+// pool ++ t[s..s+l]
+fn with_span(pool: [u8], t: [u8], s: i64, l: i64) -> [u8] ! alloc
+  requires 0 <= s && 0 <= l && l <= len(t) - s && len(pool) <= 1073741823 && l <= 1073741823 - len(pool)
+  ensures len(result) == len(pool) + l
+{
+  let np: i64 = len(pool);
+  let mut o: [u8] = alloc(np + l, 0);
+  crate::bytes::copy_span(inout o, 0, pool, 0, np);
+  crate::bytes::copy_span(inout o, np, t, s, s + l);
+  return o;
+}
+
+// ---- results ----
+fn eng(mode: i64, stage: i64, code: i64) -> [i64] ! alloc
+  requires 0 <= stage && stage <= 28 && 1 <= code && code <= 4
+  ensures len(result) == 40
+{ return crate::packet::simple_error(md(mode), stage, 1, code); }
+
+fn defect(mode: i64, stage: i64) -> [i64] ! alloc
+  requires 0 <= stage && stage <= 28
+  ensures len(result) == 40
+{ return crate::packet::simple_error(md(mode), stage, 3, 6); }
+
+fn code_bytes(event: [i64], completion: [u8]) -> [u8] ! alloc
+  requires len(event) >= 16
+{
+  let none: [u8] = alloc(0, 0);
+  let s: i64 = event[8];
+  let l: i64 = event[9];
+  if s < 0 || l < 0 || l > 100000 || !crate::packet::ref_ok(s, l, len(completion)) { return none; }
+  return with_span(none, completion, s, l);
+}
+
+// raw failed completion: OS/SQLite class => RawOsError (code none) with the raw code and native code; Node binding
+// argument/range class => OtherError (code none, raw code kept; TS sees no errno/syscall); host capacity =>
+// CoreError/InputTooLarge; protocol or unknown => InternalInvariant
+fn raw_error(mode: i64, stage: i64, event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(event) >= 16 && 0 <= stage && stage <= 28
+  ensures len(result) >= 40
+{
+  let m: i64 = md(mode);
+  let cls: i64 = event[4];
+  if cls < 1 || cls > 4 { return crate::packet::simple_error(m, stage, 3, 6); }
+  let rc: [u8] = code_bytes(event, completion);
+  if cls == 4 { return crate::packet::error(m, stage, 3, 5, event[5], rc, "", ""); }
+  if cls == 3 { return crate::packet::error(m, stage, 4, 0, event[5], rc, "", ""); }
+  return crate::packet::error(m, stage, 2, 0, event[5], rc, "", "");
+}
+
+// engine-missing (spawn failure or child error event) keeping the raw cause facts
+fn engine_err(mode: i64, stage: i64, event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(event) >= 16 && 0 <= stage && stage <= 28
+  ensures len(result) >= 40
+{
+  let m: i64 = md(mode);
+  if event[4] == 5 { return crate::packet::simple_error(m, stage, 3, 6); }
+  let rc: [u8] = code_bytes(event, completion);
+  return crate::packet::error(m, stage, 1, 3, event[5], rc, "EngineImportError", "");
+}
+
+// ---- request building ----
+// patches that replace the saved-result bank (5) by res (literal words 0..len(res))
+fn save_patches(res: [i64]) -> [i64] ! alloc
+  requires len(res) <= 1073741823
+  ensures len(result) == 16
+{
+  let a: [i64] = crate::packet::patch_resize(5, len(res));
+  let b: [i64] = crate::packet::patch_copy(5, 0, len(res), 3, 0);
+  return crate::packet::cat_words(a, b);
+}
+
+// one request (action 0): id = ctl[3]; the guard refuses to wrap or exhaust ids
+fn await_req(ctl: [i64], phase: i64, op: i64, stage: i64, flags: i64, handle: i64, a: i64,
+             patches: [i64], words: [i64], arg_start: i64, arg_words: i64, bytes: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 64 && len(patches) <= 4096 && len(words) <= 2147483647 && len(bytes) <= 2147483647
+  ensures len(result) >= 76
+{
+  if ctl[3] < 1 || ctl[3] > 999999999 || phase < 0 || phase > 998 || op < 1 || op > 15 { return crate::packet::done_internal(ctl, 28); }
+  if stage < 0 || stage > 28 || flags < 0 || handle < -1 || a < 0 || arg_start < 0 || arg_words < 0 { return crate::packet::done_internal(ctl, 28); }
+  let id: i64 = ctl[3];
+  let c: [i64] = crate::packet::ctl_await(ctl, phase, op);
+  let req: [i64] = crate::packet::request(id, op, stage, flags, handle, a, 0, 0, arg_start, arg_words);
+  let ep: [i64] = alloc(0, 0);
+  return crate::packet::step_packet(c, patches, req, words, bytes, ep, 0);
+}
+
+fn observe_step(c: [i64]) -> [i64] ! alloc
+  requires len(c) == 64
+  ensures len(result) >= 76
+{
+  let ep: [i64] = alloc(0, 0);
+  let eb: [u8] = alloc(0, 0);
+  return await_req(c, 406, 9, 16, 0, c[12], c[17], ep, ep, 0, 0, eb);
+}
+
+fn clock_step(c: [i64], phase: i64, stage: i64) -> [i64] ! alloc
+  requires len(c) == 64
+  ensures len(result) >= 76
+{
+  let ep: [i64] = alloc(0, 0);
+  let eb: [u8] = alloc(0, 0);
+  return await_req(c, phase, 15, stage, 0, -1, 0, ep, ep, 0, 0, eb);
+}
+
+// POSIX isolated-group signal (15 TERM / 9 KILL) to the child
+fn kill_step(c: [i64], sig: i64, stage: i64) -> [i64] ! alloc
+  requires len(c) == 64
+  ensures len(result) >= 76
+{
+  let ep: [i64] = alloc(0, 0);
+  let eb: [u8] = alloc(0, 0);
+  return await_req(c, 407, 10, stage, 1, c[12], sig, ep, ep, 0, 0, eb);
+}
+
+// rm recursive+force of the temp directory (bank 3 ref ctl[28,29]); `words` are literal words already needed by `patches`
+fn rm_step(c: [i64], text: [u8], patches: [i64], words: [i64]) -> [i64] ! alloc
+  requires len(c) == 64 && len(text) <= 2147483647 && len(patches) <= 4096 && len(words) <= 2147483647
+  ensures len(result) >= 76
+{
+  let s: i64 = c[28];
+  let l: i64 = c[29];
+  if s < 0 || l < 1 || l > 1073741000 || !crate::packet::ref_ok(s, l, len(text)) || len(words) > 1073741000 {
+    return crate::packet::done_internal(c, 28);
+  }
+  let none: [u8] = alloc(0, 0);
+  let pb: [u8] = with_span(none, text, s, l);
+  let mut aw: [i64] = alloc(2, 0);
+  aw[1] = l;
+  let all: [i64] = crate::packet::cat_words(words, aw);
+  return await_req(c, 411, 14, 23, 3, -1, 0, patches, all, len(words), 2, pb);
+}
+
+// save res as the pending failure (replacing any earlier one), then clean up
+fn fail_rm(c: [i64], text: [u8], res: [i64]) -> [i64] ! alloc
+  requires len(c) == 64 && len(text) <= 2147483647
+  ensures len(result) >= 76
+{
+  if len(res) > 1073741000 { return crate::packet::done_internal(c, 28); }
+  let mut d: [i64] = copy(c);
+  d[38] = 1;
+  return rm_step(d, text, save_patches(res), res);
+}
+
+// the wait is over: record the outcome (res = failure when fail), then close the output file once
+fn settle(ctl: [i64], res: [i64], fail: bool) -> [i64] ! alloc
+  requires len(ctl) == 64
+  ensures len(result) >= 76
+{
+  let ep: [i64] = alloc(0, 0);
+  let eb: [u8] = alloc(0, 0);
+  if ctl[11] < 0 { return crate::packet::done_internal(ctl, 28); }
+  let mut c: [i64] = copy(ctl);
+  c[14] = 1;
+  if !fail { return await_req(c, 404, 11, 20, 0, ctl[11], 0, ep, ep, 0, 0, eb); }
+  if len(res) > 1073741000 { return crate::packet::done_internal(ctl, 28); }
+  c[38] = 1;
+  return await_req(c, 404, 11, 20, 0, ctl[11], 0, save_patches(res), res, 0, 0, eb);
+}
+
+// stat (12) / read (13) of the export file
+fn path_step(c: [i64], text: [u8], phase: i64, op: i64, stage: i64, patches: [i64]) -> [i64] ! alloc
+  requires len(c) == 64 && len(text) <= 2147483647 && len(patches) <= 4096
+  ensures len(result) >= 76
+{
+  let s: i64 = c[30];
+  let l: i64 = c[31];
+  if s < 0 || l < 1 || l > 2000000 || !crate::packet::ref_ok(s, l, len(text)) { return crate::packet::done_internal(c, 28); }
+  let none: [u8] = alloc(0, 0);
+  let pb: [u8] = with_span(none, text, s, l);
+  let mut w: [i64] = alloc(2, 0);
+  w[1] = l;
+  return await_req(c, phase, op, stage, 0, -1, 0, patches, w, 0, 2, pb);
+}
+
+// ---- POSIX join(tempRoot, "opencode-") ----
+// `full` = tempRoot ++ "/opencode-" normalized like Node's path.join (empty/'.' segments dropped, '..' pops, above-root '..' kept
+// only for a relative path, repeated '/' collapsed). The last segment is never '.'/'..', so the result is nonempty.
+fn join_prefix(full: [u8]) -> [u8] ! alloc
+  requires len(full) >= 1 && len(full) <= 2000000
+  ensures len(result) <= len(full) + 1
+{
+  let m: i64 = len(full);
+  let absolute: bool = full[0] == 47;
+  let mut ss: [i64] = alloc(m + 1, 0);
+  let mut sl: [i64] = alloc(m + 1, 0);
+  let mut sp: i64 = 0;
+  let mut dd: i64 = 0;
+  let mut i: i64 = 0;
+  while i <= m
+    invariant 0 <= dd && dd <= sp && sp <= i && i <= m + 1 && m == len(full) && len(ss) == m + 1 && len(sl) == m + 1
+    decreases m + 1 - i
+  {
+    let mut e: i64 = i;
+    while e < m && full[e] != 47
+      invariant 0 <= i && i <= e && e <= m && m == len(full)
+      decreases m - e
+    { e = e + 1; }
+    let l: i64 = e - i;
+    if l == 0 {
+    } else if l == 1 && full[i] == 46 {
+    } else if l == 2 && full[i] == 46 && full[i + 1] == 46 {
+      if sp > dd {
+        sp = sp - 1;
+      } else if !absolute {
+        ss[sp] = i;
+        sl[sp] = l;
+        sp = sp + 1;
+        dd = dd + 1;
+      }
+    } else {
+      ss[sp] = i;
+      sl[sp] = l;
+      sp = sp + 1;
+    }
+    i = e + 1;
+  }
+  let mut out: [u8] = alloc(m + 1, 0);
+  let mut at: i64 = 0;
+  if absolute {
+    out[0] = 47;
+    at = 1;
+  }
+  let mut k: i64 = 0;
+  while k < sp
+    invariant 0 <= k && k <= sp && sp <= m + 1 && 0 <= at && at <= m + 1 && len(out) == m + 1 && len(ss) == m + 1 && len(sl) == m + 1 && m == len(full)
+    decreases sp - k
+  {
+    if k > 0 {
+      if at >= m + 1 { return copy(full); }
+      out[at] = 47;
+      at = at + 1;
+    }
+    let s: i64 = ss[k];
+    let l2: i64 = sl[k];
+    if s < 0 || l2 < 0 || s > m || l2 > m - s || l2 > m + 1 - at { return copy(full); }
+    crate::bytes::copy_span(inout out, at, full, s, s + l2);
+    at = at + l2;
+    k = k + 1;
+  }
+  let mut res: [u8] = alloc(at, 0);
+  crate::bytes::copy_span(inout res, 0, out, 0, at);
+  return res;
+}
+
+// ---- spawn arguments (DESIGN 3): 18 + 4n words, strings in the returned byte pool ----
+// w[7] != 0 on return means failure (a bad ref or a pool over 1073741823 bytes); success sets w[7] = 0.
+// The pool size is summed first and the pool allocated once (no per-entry copy of the growing pool).
+fn spawn_pool(cfg: [i64], t: [u8], n: i64, inout w: [i64]) -> [u8] ! alloc
+  requires 0 <= n && n <= 536870903 && len(cfg) == 32 + 4 * n && len(w) == 18 + 4 * n && len(t) <= 2147483647
+  ensures len(w) == 18 + 4 * n && len(result) <= 1073741823
+{
+  let none: [u8] = alloc(0, 0);
+  w[7] = 1;
+  let hs: i64 = cfg[6];
+  let hl: i64 = cfg[7];
+  let ts: i64 = cfg[10];
+  let tl: i64 = cfg[11];
+  let bs: i64 = cfg[12];
+  let bl: i64 = cfg[13];
+  if bs < 0 || bl < 1 || bl > 1073741823 || !crate::packet::ref_ok(bs, bl, len(t)) { return none; }
+  if ts < 0 || tl < 1 || tl > 1073741823 || !crate::packet::ref_ok(ts, tl, len(t)) { return none; }
+  if hl > 1073741823 || !crate::packet::ref_ok(hs, hl, len(t)) { return none; }
+  let mut hn: i64 = 0;
+  if hs >= 0 { hn = hl; }
+  let mut total: i64 = bl + hn + 12 + tl;
+  if total > 1073741823 { return none; }
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n <= 536870903 && len(cfg) == 32 + 4 * n && len(w) == 18 + 4 * n && 0 <= total && total <= 1073741823 && len(t) <= 2147483647
+    decreases n - i
+  {
+    let b: i64 = 32 + 4 * i;
+    let ks: i64 = cfg[b];
+    let kl: i64 = cfg[b + 1];
+    let vs: i64 = cfg[b + 2];
+    let vl: i64 = cfg[b + 3];
+    if ks < 0 || vs < 0 || !crate::packet::ref_ok(ks, kl, len(t)) || !crate::packet::ref_ok(vs, vl, len(t)) { return none; }
+    if kl > 1073741823 - total { return none; }
+    total = total + kl;
+    if vl > 1073741823 - total { return none; }
+    total = total + vl;
+    i = i + 1;
+  }
+  let mut pool: [u8] = alloc(total, 0);
+  let pure: [u8] = crate::util::to_bytes("--pure");
+  let exp: [u8] = crate::util::to_bytes("export");
+  let mut at: i64 = 0;
+  if bl > total - at { return none; }
+  crate::bytes::copy_span(inout pool, at, t, bs, bs + bl);
+  w[0] = at;
+  w[1] = bl;
+  at = at + bl;
+  if hs >= 0 {
+    if hl > total - at { return none; }
+    crate::bytes::copy_span(inout pool, at, t, hs, hs + hl);
+    w[2] = at;
+    w[3] = hl;
+    at = at + hl;
+  } else {
+    w[2] = -1;
+    w[3] = 0;
+  }
+  if len(pure) > total - at { return none; }
+  crate::bytes::copy_span(inout pool, at, pure, 0, len(pure));
+  w[12] = at;
+  w[13] = 6;
+  at = at + len(pure);
+  if len(exp) > total - at { return none; }
+  crate::bytes::copy_span(inout pool, at, exp, 0, len(exp));
+  w[14] = at;
+  w[15] = 6;
+  at = at + len(exp);
+  if tl > total - at { return none; }
+  crate::bytes::copy_span(inout pool, at, t, ts, ts + tl);
+  w[16] = at;
+  w[17] = tl;
+  at = at + tl;
+  let mut e: i64 = 0;
+  while e < n
+    invariant 0 <= e && e <= n && n <= 536870903 && len(cfg) == 32 + 4 * n && len(w) == 18 + 4 * n && len(pool) == total && total <= 1073741823 && 0 <= at && at <= total && len(t) <= 2147483647
+    decreases n - e
+  {
+    let b: i64 = 32 + 4 * e;
+    let ks: i64 = cfg[b];
+    let kl: i64 = cfg[b + 1];
+    let vs: i64 = cfg[b + 2];
+    let vl: i64 = cfg[b + 3];
+    if ks < 0 || vs < 0 || !crate::packet::ref_ok(ks, kl, len(t)) || !crate::packet::ref_ok(vs, vl, len(t)) { return none; }
+    if kl > total - at { return none; }
+    crate::bytes::copy_span(inout pool, at, t, ks, ks + kl);
+    let kp: i64 = at;
+    at = at + kl;
+    if vl > total - at { return none; }
+    crate::bytes::copy_span(inout pool, at, t, vs, vs + vl);
+    let vp: i64 = at;
+    at = at + vl;
+    let o: i64 = 18 + 4 * e;
+    w[o] = kp;
+    w[o + 1] = kl;
+    w[o + 2] = vp;
+    w[o + 3] = vl;
+    e = e + 1;
+  }
+  if at != total { return none; }
+  w[4] = 3;
+  w[5] = cfg[5];
+  w[6] = n;
+  w[7] = 0;
+  w[8] = 0;
+  w[9] = 0;
+  w[10] = 1;
+  w[11] = 1;
+  return pool;
+}
+
+// ---- phases ----
+// 400: the admitted read (empty event). mkdtemp(join(tempRoot, "opencode-")).
+fn start_export(cfg: [i64], cfg_text: [u8], ctl: [i64]) -> [i64] ! alloc
+  requires len(cfg) >= 32 && len(cfg) <= 2147483647 && len(ctl) == 64 && len(cfg_text) <= 2147483647
+  ensures len(result) >= 76
+{
+  if ctl[1] != 1 || ctl[6] != 0 || ctl[38] != 0 { return crate::packet::done_internal(ctl, 28); }
+  let ts: i64 = cfg[14];
+  let tl: i64 = cfg[15];
+  // admission already refused a missing binary/tempRoot; defensive engine-missing
+  if ts < 0 || tl < 1 || tl > 1073741000 || !crate::packet::ref_ok(ts, tl, len(cfg_text)) || cfg[12] < 0 || cfg[13] < 1 {
+    return crate::packet::done_simple(ctl, 0, 1, 3);
+  }
+  let none: [u8] = alloc(0, 0);
+  let tr: [u8] = with_span(none, cfg_text, ts, tl);
+  let full: [u8] = crate::util::pool_str(tr, "/opencode-");
+  if len(full) < 1 || len(full) > 2000000 { return crate::packet::done_internal(ctl, 28); }
+  let prefix: [u8] = join_prefix(full);
+  if len(prefix) < 1 { return crate::packet::done_internal(ctl, 28); }
+  let mut w: [i64] = alloc(2, 0);
+  w[1] = len(prefix);
+  let ep: [i64] = alloc(0, 0);
+  return await_req(ctl, 401, 6, 13, 0, -1, 0, ep, w, 0, 2, prefix);
+}
+
+// 401: mkdtemp completion. Failure is raw with no cleanup target. Success keeps dir and <dir>/export.json in bank 3, opens it wx 0600.
+fn on_mkdtemp(ctl: [i64], text: [u8], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 64 && len(event) >= 16 && len(text) <= 2147483647 && len(completion) <= 2147483647
+  ensures len(result) >= 76
+{
+  if event[2] != 6 { return crate::packet::done_internal(ctl, 28); }
+  if event[3] == 1 { return crate::packet::done_wrap(ctl, raw_error(ctl[1], 13, event, completion)); }
+  if event[3] != 0 || event[6] != 2 || len(event) != 18 { return crate::packet::done_internal(ctl, 28); }
+  let s: i64 = event[16];
+  let l: i64 = event[17];
+  if s < 0 || l < 1 || l > 1073741000 || !crate::packet::ref_ok(s, l, len(completion)) { return crate::packet::done_internal(ctl, 28); }
+  let none: [u8] = alloc(0, 0);
+  let dirb: [u8] = with_span(none, completion, s, l);
+  let expb: [u8] = crate::util::pool_str(dirb, "/export.json");
+  let exl: i64 = len(expb);
+  if exl < 1 || exl > 1073741823 { return crate::packet::done_internal(ctl, 28); }
+  let pool: [u8] = crate::packet::cat_bytes(dirb, expb);
+  let add: i64 = l + exl;
+  let base: i64 = len(text);
+  if !crate::util::bank_fits(base, add) { return crate::packet::done_simple(ctl, 13, 3, 5); }
+  let ptc: [i64] = crate::packet::cat_words(crate::packet::patch_resize(3, base + add), crate::packet::patch_copy(3, base, add, 4, 0));
+  let mut c: [i64] = copy(ctl);
+  c[28] = base;
+  c[29] = l;
+  c[30] = base + l;
+  c[31] = exl;
+  let mut w: [i64] = alloc(2, 0);
+  w[0] = l;
+  w[1] = exl;
+  return await_req(c, 402, 7, 14, 1, -1, 384, ptc, w, 0, 2, pool);
+}
+
+// 402: open completion. Failure: save the raw error, still remove the directory. Success: spawn with the file as fd 1.
+fn on_open(cfg: [i64], cfg_text: [u8], ctl: [i64], text: [u8], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(cfg) >= 32 && len(cfg) <= 2147483647 && len(ctl) == 64 && len(event) >= 16
+  requires len(cfg_text) <= 2147483647 && len(text) <= 2147483647 && len(completion) <= 2147483647
+  ensures len(result) >= 76
+{
+  let m: i64 = ctl[1];
+  if event[2] != 7 { return fail_rm(ctl, text, defect(m, 14)); }
+  if event[3] == 1 { return fail_rm(ctl, text, raw_error(m, 14, event, completion)); }
+  if event[3] != 0 || event[6] != 1 || len(event) != 17 || event[16] < 0 { return fail_rm(ctl, text, defect(m, 14)); }
+  let h: i64 = event[16];
+  let mut c: [i64] = copy(ctl);
+  c[11] = h;
+  if (len(cfg) - 32) % 4 != 0 { return settle(c, eng(m, 15, 3), true); }
+  let n: i64 = (len(cfg) - 32) / 4;
+  let mut w: [i64] = alloc(18 + 4 * n, 0);
+  let pool: [u8] = spawn_pool(cfg, cfg_text, n, inout w);
+  if w[7] != 0 { return settle(c, eng(m, 15, 3), true); }
+  let ep: [i64] = alloc(0, 0);
+  return await_req(c, 403, 8, 15, 0, h, 0, ep, w, 0, len(w), pool);  // MUT:M10 => return await_req(c, 403, 8, 15, 1, h, 0, ep, w, 0, len(w), pool);
+}
+
+// 403: spawn completion. Failure (a synchronous throw): engine-missing, still close the file.
+fn on_spawn(ctl: [i64], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 64 && len(event) >= 16 && len(completion) <= 2147483647
+  ensures len(result) >= 76
+{
+  let m: i64 = ctl[1];
+  if event[2] != 8 { return settle(ctl, defect(m, 15), true); }
+  if event[3] == 1 { return settle(ctl, engine_err(m, 15, event, completion), true); }
+  if event[3] != 0 || event[6] != 1 || len(event) != 17 || event[16] < 0 { return settle(ctl, defect(m, 15), true); }
+  let mut c: [i64] = copy(ctl);
+  c[12] = event[16];
+  return clock_step(c, 405, 16);
+}
+
+// 405: the monotonic clock after spawn: start, deadline = start + export timeout (checked), observe
+fn on_clock_start(cfg: [i64], ctl: [i64], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(cfg) >= 32 && len(ctl) == 64 && len(event) >= 16 && len(completion) <= 2147483647
+  ensures len(result) >= 76
+{
+  let m: i64 = ctl[1];
+  if event[2] != 15 { return settle(ctl, defect(m, 16), true); }
+  if event[3] == 1 { return settle(ctl, raw_error(m, 16, event, completion), true); }
+  if event[3] != 0 || event[6] != 1 || len(event) != 17 { return settle(ctl, defect(m, 16), true); }
+  let ms: i64 = event[16];
+  if ms < 0 || ms > safe_max() || cfg[2] < 1 || cfg[2] > 2147483647 { return settle(ctl, defect(m, 16), true); }
+  let mut c: [i64] = copy(ctl);
+  c[13] = 0;
+  c[16] = ms;
+  c[17] = ms + cfg[2];
+  c[18] = ms;
+  c[19] = 0;
+  return observe_step(c);
+}
+
+// 406: one observation of the child (DESIGN 3 transition table)
+fn on_observe(ctl: [i64], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 64 && len(event) >= 16 && len(completion) <= 2147483647
+  ensures len(result) >= 76
+{
+  let m: i64 = ctl[1];
+  let ep: [i64] = alloc(0, 0);
+  if event[2] != 9 { return settle(ctl, defect(m, 16), true); }
+  if event[3] == 1 { return settle(ctl, raw_error(m, 16, event, completion), true); }
+  if event[3] != 0 || event[6] != 6 || len(event) != 22 { return settle(ctl, defect(m, 16), true); }
+  let kind: i64 = event[16];
+  let cp: i64 = event[17];
+  let code: i64 = event[18];
+  let mono: i64 = event[20];
+  let ex: i64 = event[21];
+  if kind < 0 || kind > 2 || cp < 0 || cp > 1 || ex < 0 || ex > 1 || mono < 0 || mono > safe_max() { return settle(ctl, defect(m, 16), true); }
+  let mut c: [i64] = copy(ctl);
+  if ex == 1 { c[15] = 1; }
+  if mono > ctl[18] { c[18] = mono; }
+  if kind == 2 {
+    // child error: engine-missing even after a recorded timeout
+    return settle(c, engine_err(m, 16, event, completion), true);
+  }
+  if kind == 1 {
+    // child close: a stored timeout wins, even with exit code zero
+    if ctl[13] == 1 { return settle(c, eng(m, 16, 4), true); }
+    if cp == 1 && code == 0 { return settle(c, ep, false); }
+    return settle(c, eng(m, 16, 2), true);
+  }
+  // deadline reached; an early wake-up re-observes the same deadline (the budget is never restarted)
+  if mono < ctl[17] { return observe_step(c); }
+  let st: i64 = ctl[19];
+  if st == 2 { return settle(c, eng(m, 16, 4), true); }
+  if st != 0 && st != 1 { return settle(c, defect(m, 16), true); }
+  c[13] = 1;
+  c[19] = st + 1;
+  if st == 0 {
+    if ctl[15] == 1 || ex == 1 { return clock_step(c, 408, 17); }
+    return kill_step(c, 15, 17);
+  }
+  if ctl[15] == 1 || ex == 1 { return clock_step(c, 408, 18); }
+  return kill_step(c, 9, 18);
+}
+
+// 407: a signal was sent (its result, including errors, is ignored): observe the clock
+fn on_kill(ctl: [i64], event: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 64 && len(event) >= 16
+  ensures len(result) >= 76
+{
+  let m: i64 = ctl[1];
+  if event[2] != 10 { return settle(ctl, defect(m, 16), true); }
+  let st: i64 = ctl[19];
+  if st == 1 { return clock_step(copy(ctl), 408, 17); }
+  if st == 2 { return clock_step(copy(ctl), 408, 18); }
+  return settle(ctl, defect(m, 16), true);
+}
+
+// 408: the clock after a signal: deadline = now + grace (TERM stage 1: cfg[3], KILL stage 2: cfg[4]); observe
+fn on_clock_grace(cfg: [i64], ctl: [i64], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(cfg) >= 32 && len(ctl) == 64 && len(event) >= 16 && len(completion) <= 2147483647
+  ensures len(result) >= 76
+{
+  let m: i64 = ctl[1];
+  if event[2] != 15 { return settle(ctl, defect(m, 16), true); }
+  if event[3] == 1 { return settle(ctl, raw_error(m, 16, event, completion), true); }
+  if event[3] != 0 || event[6] != 1 || len(event) != 17 { return settle(ctl, defect(m, 16), true); }
+  let ms: i64 = event[16];
+  let st: i64 = ctl[19];
+  if ms < 0 || ms > safe_max() || (st != 1 && st != 2) { return settle(ctl, defect(m, 16), true); }
+  let mut grace: i64 = cfg[3];
+  if st == 2 { grace = cfg[4]; }
+  if grace < 1 || grace > 2147483647 { return settle(ctl, defect(m, 16), true); }
+  let mut c: [i64] = copy(ctl);
+  c[17] = ms + grace;
+  if ms > ctl[18] { c[18] = ms; }
+  return observe_step(c);
+}
+
+// 404: output close. A failure replaces the pending result; a pending failure skips stat/read; else stat.
+fn on_close(ctl: [i64], text: [u8], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 64 && len(event) >= 16 && len(text) <= 2147483647 && len(completion) <= 2147483647
+  ensures len(result) >= 76
+{
+  let m: i64 = ctl[1];
+  let ep: [i64] = alloc(0, 0);
+  let mut c: [i64] = copy(ctl);
+  c[11] = -1;
+  if event[2] != 11 { return fail_rm(c, text, defect(m, 20)); }
+  if event[3] == 1 { return fail_rm(c, text, raw_error(m, 20, event, completion)); }
+  if event[3] != 0 || event[6] != 0 { return fail_rm(c, text, defect(m, 20)); }
+  if ctl[38] == 1 { return rm_step(c, text, ep, ep); }  // MUT:M11 => if false { return rm_step(c, text, ep, ep); }
+  return path_step(c, text, 409, 12, 21, ep);
+}
+
+// 409: stat. Failure: raw, cleanup. Size > 33554432: oversized, no read. Else read to EOF.
+fn on_stat(ctl: [i64], text: [u8], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 64 && len(event) >= 16 && len(text) <= 2147483647 && len(completion) <= 2147483647
+  ensures len(result) >= 76
+{
+  let m: i64 = ctl[1];
+  let ep: [i64] = alloc(0, 0);
+  if event[2] != 12 { return fail_rm(ctl, text, defect(m, 21)); }
+  if event[3] == 1 { return fail_rm(ctl, text, raw_error(m, 21, event, completion)); }
+  if event[3] != 0 || event[6] != 2 || len(event) != 18 || event[17] < 0 { return fail_rm(ctl, text, defect(m, 21)); }
+  let size: i64 = event[17];
+  let mut c: [i64] = copy(ctl);
+  c[39] = size;
+  if size > export_max() {
+    return rm_step(c, text, crate::packet::patch_resize(4, 0), ep);
+  }
+  return path_step(c, text, 410, 13, 22, ep);
+}
+
+// 410: read. Failure: raw, cleanup. Success: the bytes go to bank 4 (completion bytes), then cleanup.
+fn on_read(ctl: [i64], text: [u8], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 64 && len(event) >= 16 && len(text) <= 2147483647 && len(completion) <= 2147483647
+  ensures len(result) >= 76
+{
+  let m: i64 = ctl[1];
+  let ep: [i64] = alloc(0, 0);
+  if event[2] != 13 { return fail_rm(ctl, text, defect(m, 22)); }
+  if event[3] == 1 { return fail_rm(ctl, text, raw_error(m, 22, event, completion)); }
+  if event[3] != 0 || event[6] != 2 || len(event) != 18 { return fail_rm(ctl, text, defect(m, 22)); }
+  let s: i64 = event[16];
+  let l: i64 = event[17];
+  if s < 0 || l < 0 || !crate::packet::ref_ok(s, l, len(completion)) { return fail_rm(ctl, text, defect(m, 22)); }
+  let ptc: [i64] = crate::packet::cat_words(crate::packet::patch_resize(4, l), crate::packet::patch_copy(4, 0, l, 2, s));
+  return rm_step(copy(ctl), text, ptc, ep);
+}
+
+// 411: rm completion (success or failure is ignored). Saved result => done; else continue to conversion at phase 500.
+fn on_rm(ctl: [i64], saved_result: [i64], event: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 64 && len(event) >= 16
+  ensures len(result) >= 76
+{
+  if event[2] != 14 { return crate::packet::done_internal(ctl, 28); }
+  if ctl[38] == 1 { return crate::packet::done_wrap(ctl, saved_result); }
+  let c: [i64] = crate::packet::ctl_next(ctl, 500);
+  let ep: [i64] = alloc(0, 0);
+  let eb: [u8] = alloc(0, 0);
+  return crate::packet::step_packet(c, ep, ep, ep, eb, ep, 2);
+}
+
+pub fn advance(cfg: [i64], cfg_text: [u8], ctl: [i64], query_words: [i64], query_bytes: [u8], rows: [i64], text: [u8],
+               document: [u8], saved_result: [i64], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(cfg) >= 32 && len(cfg) <= 2147483647 && 0 <= cfg[1] && cfg[1] <= 5 && len(ctl) == 64 && len(event) >= 16
+  requires 1 <= ctl[3] && ctl[3] <= 1000000000 && 0 <= ctl[4] && ctl[4] < ctl[3] && 0 <= ctl[2] && ctl[2] <= 999
+  requires 0 <= ctl[5] && ctl[5] <= 15 && 0 <= ctl[6] && ctl[6] <= 2 && ctl[1] == cfg[1]
+  requires len(cfg_text) <= 2147483647 && len(query_words) <= 2147483647 && len(query_bytes) <= 2147483647 && len(rows) <= 2147483647
+  requires len(text) <= 2147483647 && len(document) <= 2147483647 && len(saved_result) <= 2147483647 && len(completion) <= 2147483647
+  ensures len(result) >= 76
+{
+  let phase: i64 = ctl[2];
+  if phase < 400 || phase > 499 { return crate::packet::done_internal(ctl, 28); }
+  if phase == 400 { return start_export(cfg, cfg_text, ctl); }
+  // every later phase consumes exactly one completion
+  if ctl[6] != 1 { return crate::packet::done_internal(ctl, 28); }
+  if phase == 401 { return on_mkdtemp(ctl, text, event, completion); }
+  if phase == 402 { return on_open(cfg, cfg_text, ctl, text, event, completion); }
+  if phase == 403 { return on_spawn(ctl, event, completion); }
+  if phase == 404 { return on_close(ctl, text, event, completion); }
+  if phase == 405 { return on_clock_start(cfg, ctl, event, completion); }
+  if phase == 406 { return on_observe(ctl, event, completion); }
+  if phase == 407 { return on_kill(ctl, event); }
+  if phase == 408 { return on_clock_grace(cfg, ctl, event, completion); }
+  if phase == 409 { return on_stat(ctl, text, event, completion); }
+  if phase == 410 { return on_read(ctl, text, event, completion); }
+  if phase == 411 { return on_rm(ctl, saved_result, event); }
+  return crate::packet::done_internal(ctl, 28);
+}

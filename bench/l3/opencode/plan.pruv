@@ -1,0 +1,360 @@
+// OpenCode last-plan selection (opencodePlan + fit); follows DESIGN.md/IMPL_NOTES.md; written without a shell (not compiled or verified).
+//
+// select(doc, arr, input_kind): arr is the tape id of the messages array. input_kind 0 = export messages {info, parts} (only nonsummary
+// assistants count, plan time = isoOf(completed) ?? isoOf(created)); 1 = direct opencodePlan input {parts, at?} (at is a string or absent).
+// Messages newest first, parts last first; the FIRST candidate ends the search even when nothing survives (empty fit = no plan).
+// PlanValue: status 0 ok / 1 shape defect (direct input only) / 2 internal (corrupt tape or timestamp defect); present 0/1;
+// at = plan time bytes (empty = absent; 24 bytes for export input); items = 3 words per stored item [textStart, textLen, status 0..3]
+// with textStart relative to `text`; more = count of surviving entries beyond the 30 stored (0 = omitted).
+// UNSURE: item text pool is a fixed 24000 bytes (30 items x at most 600 bytes: 200 UTF-16 units are at most 600 UTF-8 bytes); an item that
+// would not fit is dropped (unreachable). Refs/enum domains are re-checked at runtime by packet::result_shape.
+
+pub struct PlanValue { status: i64, present: i64, at: [u8], items: [i64], text: [u8], more: i64 }
+
+// End of the character starting at boundary i.
+fn next(s: str, i: i64) -> i64
+  requires 0 <= i && i < len(s)
+  ensures i < result && result <= len(s)
+{
+  let mut j: i64 = i + 1;
+  while j < len(s) && !is_char_boundary(s, j)
+    invariant i < j && j <= len(s)
+    decreases len(s) - j
+  {
+    j = j + 1;
+  }
+  return j;
+}
+
+// Byte length of the longest prefix of s with at most max UTF-16 units, whole scalars only (P8: a split astral scalar is dropped).
+fn clip_units(s: str, max: i64) -> i64
+  requires 0 <= max && max <= 1000
+  ensures 0 <= result && result <= len(s)
+{
+  let n: i64 = len(s);
+  let mut i: i64 = 0;
+  let mut u: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && 0 <= u && u <= max
+    decreases n - i
+  {
+    let j: i64 = next(s, i);
+    let mut w: i64 = 1;
+    if j - i == 4 { w = 2; }
+    if u + w > max { return i; }
+    u = u + w;
+    i = j;
+  }
+  return n;
+}
+
+fn empty_value(status: i64) -> PlanValue ! alloc
+  requires 0 <= status && status <= 2
+  ensures result.status == status && result.present == 0 && len(result.items) == 0 && len(result.text) == 0 && len(result.at) == 0 && result.more == 0
+{
+  let a: [u8] = alloc(0, 0);
+  let i: [i64] = alloc(0, 0);
+  let t: [u8] = alloc(0, 0);
+  return PlanValue { status: status, present: 0, at: copy(a), items: copy(i), text: copy(t), more: 0 };
+}
+
+// 1 pending, 2 in_progress, 3 completed, 0 anything else (also a missing or nonstring status)
+fn status_code(doc: crate::json::JsonDocument, todo: i64) -> i64 ! alloc
+  ensures 0 <= result && result <= 3
+{
+  let st: i64 = crate::access::field(doc, todo, "status");
+  if crate::access::string_is(doc, st, "pending") == 1 { return 1; }
+  if crate::access::string_is(doc, st, "in_progress") == 1 { return 2; }
+  if crate::access::string_is(doc, st, "completed") == 1 { return 3; }
+  return 0;
+}
+
+// fit: todos is the tape id of the todos array. Object entries with a string content; ECMAScript trim, blanks dropped (internal whitespace
+// preserved), 200-UTF-16-unit scalar-safe prefix, status only pending/in_progress/completed. ALL surviving entries are counted, the first 30
+// stored, more = count - 30 when positive. Nothing surviving = no plan (present 0).
+pub fn fit(doc: crate::json::JsonDocument, todos: i64, at: [u8]) -> PlanValue ! alloc
+  requires len(at) <= 50331648
+  ensures 0 <= result.status && result.status <= 2 && (result.present == 0 || result.present == 1)
+  ensures len(result.items) <= 90 && len(result.items) % 3 == 0 && len(result.text) <= 24000 && len(result.at) <= 50331648 && 0 <= result.more
+  ensures (result.present == 1 ==> len(result.items) >= 3) && (result.present == 0 ==> len(result.items) == 0)
+{
+  let ids: [i64] = crate::util::elements(doc, todos);
+  let n: i64 = len(ids);
+  let mut items: [i64] = alloc(90, 0);
+  let mut pb: [u8] = alloc(24000, 0);
+  let mut stored: i64 = 0;
+  let mut used: i64 = 0;
+  let mut cnt: i64 = 0;
+  let mut k: i64 = 0;
+  while k < n
+    invariant 0 <= k && k <= n && n == len(ids) && len(items) == 90 && len(pb) == 24000
+    invariant 0 <= stored && stored <= 30 && stored <= cnt && 0 <= used && used <= 24000 && 0 <= cnt && cnt <= k
+    decreases n - k
+  {
+    let todo: i64 = ids[k];
+    k = k + 1;
+    if crate::access::kind(doc, todo) == 6 {
+      let c: i64 = crate::access::field(doc, todo, "content");
+      if crate::access::kind(doc, c) == 4 {
+        let x: str = crate::util::str_at(doc, c);
+        let t: str = crate::text::trim(x);
+        if len(t) > 0 {
+          cnt = cnt + 1;
+          if stored < 30 {
+            let w: i64 = clip_units(t, 200);
+            if used + w <= 24000 {
+              let mut j: i64 = 0;
+              while j < w
+                invariant 0 <= j && j <= w && w <= len(t) && 0 <= used && used + w <= 24000 && len(pb) == 24000
+                decreases w - j
+              {
+                let b: i64 = t[j];
+                pb[used + j] = b;
+                j = j + 1;
+              }
+              items[3 * stored] = used;
+              items[3 * stored + 1] = w;
+              items[3 * stored + 2] = status_code(doc, todo);
+              stored = stored + 1;
+              used = used + w;
+            }
+          }
+        }
+      }
+    }
+  }
+  if stored == 0 { return empty_value(0); }
+  let mut more: i64 = 0;
+  if cnt > 30 { more = cnt - 30; }
+  let mut io: [i64] = alloc(3 * stored, 0);
+  let mut q: i64 = 0;
+  while q < 3 * stored
+    invariant 0 <= q && q <= 3 * stored && 0 < stored && stored <= 30 && len(io) == 3 * stored && len(items) == 90
+    decreases 3 * stored - q
+  {
+    io[q] = items[q];
+    q = q + 1;
+  }
+  let mut tb: [u8] = alloc(used, 0);
+  crate::bytes::copy_span(inout tb, 0, pb, 0, used);
+  return PlanValue { status: 0, present: 1, at: copy(at), items: copy(io), text: copy(tb), more: more };
+}
+
+// The todos array id of a candidate part (object, type "tool", tool "todowrite", object state whose status is not exactly "error",
+// object state.input with an array todos), else -1.
+fn candidate(doc: crate::json::JsonDocument, part: i64) -> i64 ! alloc
+  ensures result >= -1
+{
+  if crate::access::kind(doc, part) != 6 { return -1; }
+  let ty: i64 = crate::access::field(doc, part, "type");
+  if crate::access::string_is(doc, ty, "tool") != 1 { return -1; }
+  let tl: i64 = crate::access::field(doc, part, "tool");
+  if crate::access::string_is(doc, tl, "todowrite") != 1 { return -1; }
+  let state: i64 = crate::access::field(doc, part, "state");
+  if crate::access::kind(doc, state) != 6 { return -1; }
+  let sts: i64 = crate::access::field(doc, state, "status");
+  if crate::access::string_is(doc, sts, "error") == 1 { return -1; }
+  let input: i64 = crate::access::field(doc, state, "input");
+  if crate::access::kind(doc, input) != 6 { return -1; }
+  let td: i64 = crate::access::field(doc, input, "todos");
+  if crate::access::kind(doc, td) != 5 { return -1; }
+  if td < 0 { return -1; }
+  return td;
+}
+
+// The first candidate's todos id scanning parts last to first, else -1.
+fn find_todos(doc: crate::json::JsonDocument, parts: i64) -> i64 ! alloc
+  ensures result >= -1
+{
+  let pids: [i64] = crate::util::elements(doc, parts);
+  let n: i64 = len(pids);
+  let mut j: i64 = n;
+  while j > 0
+    invariant 0 <= j && j <= n && n == len(pids)
+    decreases j
+  {
+    j = j - 1;
+    let td: i64 = candidate(doc, pids[j]);
+    if td >= 0 { return td; }
+  }
+  return -1;
+}
+
+// Plan time of an export message: isoOf(completed), else isoOf(created). Empty = absent, 1 byte = defect.
+fn export_at(doc: crate::json::JsonDocument, info: i64) -> [u8] ! alloc
+  ensures len(result) == 0 || len(result) == 1 || len(result) == 24
+{
+  let c: [u8] = crate::entry::iso_bytes(doc, crate::entry::stamp(doc, info, "completed"));
+  if len(c) == 24 || len(c) == 1 { return copy(c); }
+  let d: [u8] = crate::entry::iso_bytes(doc, crate::entry::stamp(doc, info, "created"));
+  return copy(d);
+}
+
+fn fail_status(input_kind: i64) -> i64
+  ensures result == 1 || result == 2
+{
+  if input_kind == 1 { return 1; }
+  return 2;
+}
+
+pub fn select(doc: crate::json::JsonDocument, arr: i64, input_kind: i64) -> PlanValue ! alloc
+  requires input_kind == 0 || input_kind == 1
+  ensures 0 <= result.status && result.status <= 2 && (result.present == 0 || result.present == 1)
+  ensures len(result.items) <= 90 && len(result.items) % 3 == 0 && len(result.text) <= 24000 && len(result.at) <= 50331648 && 0 <= result.more
+  ensures (result.present == 1 ==> len(result.items) >= 3) && (result.present == 0 ==> len(result.items) == 0)
+{
+  let bad: i64 = fail_status(input_kind);
+  if crate::access::kind(doc, arr) != 5 { return empty_value(bad); }
+  let ids: [i64] = crate::util::elements(doc, arr);
+  let n: i64 = len(ids);
+  if n > 1048576 || n != crate::access::array_length(doc, arr) { return empty_value(2); }
+  if input_kind == 1 {
+    // direct input: every element must be an object with an array parts, before any search
+    let mut v: i64 = 0;
+    while v < n
+      invariant 0 <= v && v <= n && n == len(ids)
+      decreases n - v
+    {
+      let m0: i64 = ids[v];
+      if crate::access::kind(doc, m0) != 6 { return empty_value(1); }
+      let p0: i64 = crate::access::field(doc, m0, "parts");
+      if crate::access::kind(doc, p0) != 5 { return empty_value(1); }
+      v = v + 1;
+    }
+  }
+  let mut i: i64 = n;
+  while i > 0
+    invariant 0 <= i && i <= n && n == len(ids) && n <= 1048576
+    decreases i
+  {
+    i = i - 1;
+    let m: i64 = ids[i];
+    if crate::access::kind(doc, m) != 6 { return empty_value(bad); }
+    let parts: i64 = crate::access::field(doc, m, "parts");
+    if crate::access::kind(doc, parts) != 5 { return empty_value(bad); }
+    let mut skip: bool = false;
+    let mut info: i64 = -1;
+    if input_kind == 0 {
+      info = crate::access::field(doc, m, "info");
+      if crate::access::kind(doc, info) != 6 { return empty_value(2); }
+      let role: i64 = crate::access::field(doc, info, "role");
+      if crate::access::string_is(doc, role, "assistant") != 1 {
+        skip = true;
+      } else {
+        let sm: i64 = crate::access::field(doc, info, "summary");
+        if crate::access::boolean(doc, sm) == 1 { skip = true; }
+      }
+    }
+    if !skip {
+      let td: i64 = find_todos(doc, parts);
+      if td >= 0 {
+        let mut at: [u8] = alloc(0, 0);
+        if input_kind == 1 {
+          let a: i64 = crate::access::field(doc, m, "at");
+          if crate::access::kind(doc, a) == 4 {
+            let s: str = crate::util::str_at(doc, a);
+            at = crate::util::to_bytes(s);
+          }
+        } else {
+          at = export_at(doc, info);
+          if len(at) == 1 { return empty_value(2); }
+        }
+        return fit(doc, td, at);  // MUT:M15 => let fv: PlanValue = fit(doc, td, at); if fv.present == 1 || fv.status != 0 { return fv; }
+      }
+    }
+  }
+  return empty_value(0);
+}
+
+// ---- result packet (mode 5) for the direct plan input ----
+
+fn err5(stage: i64, detail: str) -> [i64] ! alloc
+  requires 0 <= stage && stage <= 28
+  ensures len(result) >= 40
+{
+  let eb: [u8] = alloc(0, 0);
+  return crate::packet::error(5, stage, 1, 2, 0, eb, "", detail);
+}
+
+// at ++ text: the plan's part of a result byte pool
+pub fn pool_of(v: PlanValue) -> [u8] ! alloc
+  requires len(v.at) <= 50331648 && len(v.text) <= 24000
+  ensures len(result) == len(v.at) + len(v.text)
+{
+  return crate::packet::cat_bytes(v.at, v.text);
+}
+
+// The plan item words with every textStart moved into a pool where the plan's `at ++ text` begins at `base`.
+pub fn items_at(v: PlanValue, base: i64) -> [i64] ! alloc
+  requires len(v.items) <= 90 && len(v.at) <= 50331648 && 0 <= base && base <= 1000000000
+  ensures len(result) == len(v.items)
+{
+  let n: i64 = len(v.items);
+  let shift: i64 = base + len(v.at);
+  let cnt: i64 = n / 3;
+  let mut o: [i64] = alloc(n, 0);
+  let mut k: i64 = 0;
+  while k < cnt
+    invariant 0 <= k && k <= cnt && cnt == n / 3 && 3 * cnt <= n && n == len(v.items) && len(o) == n && 0 <= shift && shift <= 1050331648
+    decreases cnt - k
+  {
+    let mut s: i64 = v.items[3 * k];
+    if s < 0 || s > 24000 { s = 0; }
+    o[3 * k] = shift + s;
+    o[3 * k + 1] = v.items[3 * k + 1];
+    o[3 * k + 2] = v.items[3 * k + 2];
+    k = k + 1;
+  }
+  return o;
+}
+
+fn plan_result(v: PlanValue) -> [i64] ! alloc
+  requires len(v.items) <= 90 && len(v.at) <= 50331648 && len(v.text) <= 24000 && 0 <= v.more && (v.present == 0 || v.present == 1)
+  ensures len(result) >= 40
+{
+  if v.present != 1 || len(v.items) < 3 { return crate::packet::ok_plan_absent(); }
+  let mut m: [i64] = crate::packet::meta_new(5);
+  m[9] = 1;
+  m[18] = v.more;
+  if len(v.at) > 0 {
+    m[16] = 0;
+    m[17] = len(v.at);
+  }
+  let rows: [i64] = alloc(0, 0);
+  let items: [i64] = items_at(v, 0);
+  let pool: [u8] = pool_of(v);
+  return crate::packet::ok_result(m, rows, items, pool);
+}
+
+fn direct_doc(doc: crate::json::JsonDocument) -> [i64] ! alloc
+  ensures len(result) >= 40
+{
+  let root: i64 = crate::access::root(doc);
+  if crate::access::kind(doc, root) != 5 { return err5(25, "shape"); }
+  let v: PlanValue = select(doc, root, 1);
+  if v.status == 1 { return err5(25, "shape"); }
+  if v.status != 0 { return crate::packet::simple_error(5, 27, 3, 6); }
+  return plan_result(v);
+}
+
+// Mode 5: the plan JSON array is cfg_text[cfg[19]..cfg[19]+cfg[20]]. Returns a RESULT packet (root wraps it with done_wrap).
+// Bad JSON = read-failed/json (stage 24), nonarray root or malformed element = read-failed/shape (stage 25), corrupt tape = InternalInvariant
+// (stage 27), over the parser's input limit = InputTooLarge (stage 24).
+pub fn direct(cfg: [i64], cfg_text: [u8]) -> [i64] ! alloc
+  requires len(cfg) >= 32 && len(cfg) <= 2147483647 && cfg[1] == 5 && 0 <= cfg[19] && 0 <= cfg[20] && len(cfg_text) <= 2147483647
+  ensures len(result) >= 40
+{
+  let jb: [u8] = crate::util::span_bytes(cfg_text, cfg[19], cfg[20]);
+  if len(jb) > 16777216 { return crate::packet::simple_error(5, 24, 3, 5); }
+  let parsed: crate::json::JsonParse = crate::parse::parse(jb);
+  match parsed {
+    crate::json::JsonParse::Failed(e) => {
+      if e.kind == 1 { return crate::packet::simple_error(5, 24, 3, 5); }
+      if e.kind == 18 { return crate::packet::simple_error(5, 24, 3, 6); }
+      return err5(24, "json");
+    }
+    crate::json::JsonParse::Parsed(doc) => {
+      return direct_doc(doc);
+    }
+  }
+}

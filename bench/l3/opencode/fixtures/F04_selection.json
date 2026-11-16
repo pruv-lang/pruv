@@ -1,0 +1,99 @@
+[
+  {"name": "F04-exclude-child-archived-empty", "mode": "list", "kills": ["M04"],
+   "db": {"path": "$SRC/opencode.db",
+          "ddl": ["CREATE TABLE session(id,parent_id,directory,title,time_updated,time_archived)", "CREATE TABLE message(session_id)"],
+          "inserts": [
+            {"table": "session", "columns": ["id", "parent_id", "directory", "title", "time_updated", "time_archived"],
+             "rows": [
+               [{"kind": "text", "text": "S0000"}, {"kind": "null"}, {"kind": "text", "text": "/work"}, {"kind": "text", "text": "root"}, {"kind": "integer", "decimal": "1700000000004"}, {"kind": "null"}],
+               [{"kind": "text", "text": "S0001"}, {"kind": "text", "text": "S0000"}, {"kind": "text", "text": "/work"}, {"kind": "text", "text": "child"}, {"kind": "integer", "decimal": "1700000000003"}, {"kind": "null"}],
+               [{"kind": "text", "text": "S0002"}, {"kind": "null"}, {"kind": "text", "text": "/work"}, {"kind": "text", "text": "archived"}, {"kind": "integer", "decimal": "1700000000002"}, {"kind": "integer", "decimal": "5"}],
+               [{"kind": "text", "text": "S0003"}, {"kind": "null"}, {"kind": "text", "text": "/work"}, {"kind": "text", "text": "no messages"}, {"kind": "integer", "decimal": "1700000000001"}, {"kind": "null"}]]},
+            {"table": "message", "columns": ["session_id"],
+             "rows": [[{"kind": "text", "text": "S0000"}], [{"kind": "text", "text": "S0001"}], [{"kind": "text", "text": "S0002"}]]}]},
+   "expected": {"status": "ok", "rowCount": 1}},
+  {"name": "F04-invalid-id", "mode": "list",
+   "db": {"path": "$SRC/opencode.db", "ddl": ["CREATE TABLE session(id,parent_id,directory,title,time_updated)", "CREATE TABLE message(session_id)"],
+          "inserts": [
+            {"table": "session", "columns": ["id", "parent_id", "directory", "title", "time_updated"],
+             "rows": [
+               [{"kind": "text", "text": "S0000"}, {"kind": "null"}, {"kind": "text", "text": "/work"}, {"kind": "text", "text": "ok"}, {"kind": "integer", "decimal": "1700000000001"}],
+               [{"kind": "text", "text": "bad.id"}, {"kind": "null"}, {"kind": "text", "text": "/work"}, {"kind": "text", "text": "bad"}, {"kind": "integer", "decimal": "1700000000002"}]]},
+            {"table": "message", "columns": ["session_id"], "rows": [[{"kind": "text", "text": "S0000"}], [{"kind": "text", "text": "bad.id"}]]}]},
+   "expected": {"status": "ok", "rowCount": 1}},
+  {"name": "F04-empty-dir", "mode": "rows",
+   "db": {"path": "$SRC/opencode.db", "ddl": ["CREATE TABLE session(id,parent_id,directory,title,time_updated)", "CREATE TABLE message(session_id)"],
+          "inserts": [
+            {"table": "session", "columns": ["id", "parent_id", "directory", "title", "time_updated"],
+             "rows": [
+               [{"kind": "text", "text": "S0000"}, {"kind": "null"}, {"kind": "text", "text": "/work"}, {"kind": "text", "text": "ok"}, {"kind": "integer", "decimal": "1"}],
+               [{"kind": "text", "text": "S0001"}, {"kind": "null"}, {"kind": "text", "text": ""}, {"kind": "text", "text": "empty dir"}, {"kind": "integer", "decimal": "2"}]]},
+            {"table": "message", "columns": ["session_id"], "rows": [[{"kind": "text", "text": "S0000"}], [{"kind": "text", "text": "S0001"}]]}]},
+   "expected": {"status": "ok", "rowCount": 1}},
+  {"name": "F04-nonstring-dir", "mode": "rows",
+   "db": {"path": "$SRC/opencode.db", "ddl": ["CREATE TABLE session(id,parent_id,directory,title,time_updated)", "CREATE TABLE message(session_id)"],
+          "inserts": [
+            {"table": "session", "columns": ["id", "parent_id", "directory", "title", "time_updated"],
+             "rows": [
+               [{"kind": "text", "text": "S0000"}, {"kind": "null"}, {"kind": "text", "text": "/work"}, {"kind": "text", "text": "ok"}, {"kind": "integer", "decimal": "1"}],
+               [{"kind": "text", "text": "S0001"}, {"kind": "null"}, {"kind": "integer", "decimal": "5"}, {"kind": "text", "text": "int dir"}, {"kind": "integer", "decimal": "2"}],
+               [{"kind": "text", "text": "S0002"}, {"kind": "null"}, {"kind": "blob", "hex": "2f776f726b"}, {"kind": "text", "text": "blob dir"}, {"kind": "integer", "decimal": "3"}]]},
+            {"table": "message", "columns": ["session_id"],
+             "rows": [[{"kind": "text", "text": "S0000"}], [{"kind": "text", "text": "S0001"}], [{"kind": "text", "text": "S0002"}]]}]},
+   "expected": {"status": "ok", "rowCount": 1}},
+
+  {"name": "F04-limit-49", "mode": "list", "policies": ["P6"],
+   "db": {"path": "$SRC/opencode.db", "ddl": ["CREATE TABLE session(id,parent_id,directory,title,time_updated)", "CREATE TABLE message(session_id)"],
+          "generate": {"sessions": 49, "messagesPerSession": 1, "directory": "/work"}},
+   "expected": {"status": "ok", "rowCount": 49}},
+  {"name": "F04-limit-50", "mode": "list", "policies": ["P6"],
+   "db": {"path": "$SRC/opencode.db", "ddl": ["CREATE TABLE session(id,parent_id,directory,title,time_updated)", "CREATE TABLE message(session_id)"],
+          "generate": {"sessions": 50, "messagesPerSession": 1, "directory": "/work"}},
+   "expected": {"status": "ok", "rowCount": 50}},
+  {"name": "F04-limit-51", "mode": "list", "policies": ["P6"],
+   "db": {"path": "$SRC/opencode.db", "ddl": ["CREATE TABLE session(id,parent_id,directory,title,time_updated)", "CREATE TABLE message(session_id)"],
+          "generate": {"sessions": 51, "messagesPerSession": 1, "directory": "/work"}},
+   "expected": {"status": "ok", "rowCount": 50}},
+  {"name": "F04-limit-51-invalid-newest", "mode": "list", "kills": ["M06"], "policies": ["P6"],
+   "db": {"path": "$SRC/opencode.db", "ddl": ["CREATE TABLE session(id,parent_id,directory,title,time_updated)", "CREATE TABLE message(session_id)"],
+          "generate": {"sessions": 51, "messagesPerSession": 1, "directory": "/work", "invalidNewestId": "bad.id"}},
+   "expected": {"status": "ok", "rowCount": 49}},
+
+  {"name": "F04-list-slash-asymmetry", "mode": "list", "kills": ["M05"], "policies": ["P6"],
+   "db": {"path": "$SRC/opencode.db", "ddl": ["CREATE TABLE session(id,parent_id,directory,title,time_updated)", "CREATE TABLE message(session_id)"],
+          "inserts": [
+            {"table": "session", "columns": ["id", "parent_id", "directory", "title", "time_updated"],
+             "rows": [
+               [{"kind": "text", "text": "S0000"}, {"kind": "null"}, {"kind": "text", "text": "/work"}, {"kind": "text", "text": "plain"}, {"kind": "integer", "decimal": "1700000000003"}],
+               [{"kind": "text", "text": "S0001"}, {"kind": "null"}, {"kind": "text", "text": "/work/"}, {"kind": "text", "text": "one slash"}, {"kind": "integer", "decimal": "1700000000002"}],
+               [{"kind": "text", "text": "S0002"}, {"kind": "null"}, {"kind": "text", "text": "/work//"}, {"kind": "text", "text": "two slashes"}, {"kind": "integer", "decimal": "1700000000001"}]]},
+            {"table": "message", "columns": ["session_id"], "rows": [[{"kind": "text", "text": "S0000"}], [{"kind": "text", "text": "S0001"}], [{"kind": "text", "text": "S0002"}]]}]},
+   "expected": {"status": "ok", "rowCount": 2}},
+  {"name": "F04-ties", "mode": "list", "policies": ["P6"],
+   "db": {"path": "$SRC/opencode.db", "ddl": ["CREATE TABLE session(id,parent_id,directory,title,time_updated)", "CREATE TABLE message(session_id)"],
+          "inserts": [
+            {"table": "session", "columns": ["id", "parent_id", "directory", "title", "time_updated"],
+             "rows": [
+               [{"kind": "text", "text": "Sc"}, {"kind": "null"}, {"kind": "text", "text": "/work"}, {"kind": "text", "text": "c"}, {"kind": "integer", "decimal": "1700000000000"}],
+               [{"kind": "text", "text": "Sa"}, {"kind": "null"}, {"kind": "text", "text": "/work"}, {"kind": "text", "text": "a"}, {"kind": "integer", "decimal": "1700000000000"}],
+               [{"kind": "text", "text": "Sb"}, {"kind": "null"}, {"kind": "text", "text": "/work"}, {"kind": "text", "text": "b"}, {"kind": "integer", "decimal": "1700000000000"}]]},
+            {"table": "message", "columns": ["session_id"], "rows": [[{"kind": "text", "text": "Sa"}], [{"kind": "text", "text": "Sb"}], [{"kind": "text", "text": "Sc"}]]}]},
+   "expected": {"status": "ok", "rowCount": 3}},
+  {"name": "F04-raw-storage-order", "mode": "list", "kills": ["M07"], "policies": ["P6", "P9"],
+   "db": {"path": "$SRC/opencode.db", "ddl": ["CREATE TABLE session(id,parent_id,directory,title,time_updated)", "CREATE TABLE message(session_id)"],
+          "inserts": [
+            {"table": "session", "columns": ["id", "parent_id", "directory", "title", "time_updated"],
+             "rows": [
+               [{"kind": "text", "text": "S0000"}, {"kind": "null"}, {"kind": "text", "text": "/work"}, {"kind": "text", "text": "int 5"}, {"kind": "integer", "decimal": "5"}],
+               [{"kind": "text", "text": "S0001"}, {"kind": "null"}, {"kind": "text", "text": "/work"}, {"kind": "text", "text": "text 9"}, {"kind": "text", "text": "9"}],
+               [{"kind": "text", "text": "S0002"}, {"kind": "null"}, {"kind": "text", "text": "/work"}, {"kind": "text", "text": "real 7.5"}, {"kind": "real", "bits": "401e000000000000"}],
+               [{"kind": "text", "text": "S0003"}, {"kind": "null"}, {"kind": "text", "text": "/work"}, {"kind": "text", "text": "null"}, {"kind": "null"}],
+               [{"kind": "text", "text": "S0004"}, {"kind": "null"}, {"kind": "text", "text": "/work"}, {"kind": "text", "text": "int 100"}, {"kind": "integer", "decimal": "100"}]]},
+            {"table": "message", "columns": ["session_id"],
+             "rows": [[{"kind": "text", "text": "S0000"}], [{"kind": "text", "text": "S0001"}], [{"kind": "text", "text": "S0002"}], [{"kind": "text", "text": "S0003"}], [{"kind": "text", "text": "S0004"}]]}]},
+   "expected": {"status": "ok", "rowCount": 5}},
+  {"name": "F04-live-count-mutation", "mode": "list", "policies": ["P6"],
+   "schedule": {"rules": [{"match": {"op": "db_query", "phase": "get", "sql": "SELECT COUNT(*) AS n FROM message WHERE session_id = ?", "occurrence": 1, "barrier": "before-call"},
+                           "actions": [{"kind": "db-exec", "path": "$SRC/opencode.db", "sql": "INSERT INTO message(session_id) VALUES (?)", "params": [{"kind": "text", "text": "S0000"}]}]}]},
+   "expected": {"status": "ok", "rowCount": 1}}
+]

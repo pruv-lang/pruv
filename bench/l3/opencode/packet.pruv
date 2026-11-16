@@ -1,0 +1,805 @@
+// OpenCode import packets (bench/l3/opencode/DESIGN.md sections 2, 3, 5; cross-module contract in IMPL_NOTES.md).
+// Written without a shell: not compiled or verified.
+//   step packet   [0x4f435331, 1, action, 64, pc, rc, lw, lb, lres, 0, 0, 0, ctl(64), patches(8*pc), request(12*rc),
+//                  literal words(lw), literal bytes(lb, one word per byte), final result(lres)]   length 76 + ...
+//   result packet [0x4f435231, 1, status, mode, N, W, K, T, ... 40 header words, rows(N*W), plan items(3*K), bytes(T)]
+// Refs are (start,len); (-1,0) alone is absent. No consts: constants are nullary fns.
+
+pub fn step_magic() -> i64 ensures result == 1329812273 { return 1329812273; }
+pub fn result_magic() -> i64 ensures result == 1329812017 { return 1329812017; }
+pub fn ctl_len() -> i64 ensures result == 64 { return 64; }
+pub fn step_head() -> i64 ensures result == 12 { return 12; }
+pub fn head_len() -> i64 ensures result == 76 { return 76; }
+pub fn request_words() -> i64 ensures result == 12 { return 12; }
+pub fn patch_words() -> i64 ensures result == 8 { return 8; }
+pub fn event_head() -> i64 ensures result == 16 { return 16; }
+pub fn result_head() -> i64 ensures result == 40 { return 40; }
+pub fn bank_max() -> i64 ensures result == 2147483647 { return 2147483647; }
+
+// A ref (s,n) is absent (-1,0) or lies inside a pool of `total` elements.
+pub fn ref_ok(s: i64, n: i64, total: i64) -> bool
+  ensures result ==> (total >= 0 && ((s == -1 && n == 0) || (0 <= s && s <= total && 0 <= n && n <= total - s)))
+{
+  if total < 0 { return false; }
+  if s == -1 { return n == 0; }
+  if s < 0 || s > total { return false; }
+  if n < 0 || n > total - s { return false; }
+  return true;
+}
+
+// ---- small array helpers ----
+fn put_words(inout dst: [i64], at: i64, src: [i64]) -> ()
+  requires 0 <= at && at <= len(dst) && len(src) <= len(dst) - at
+  ensures len(dst) == len(old(dst))
+{
+  let n: i64 = len(src);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(src) && 0 <= at && at <= len(dst) && n <= len(dst) - at && len(dst) == len(old(dst))
+    decreases n - i
+  { dst[at + i] = src[i]; i = i + 1; }
+}
+fn put_bytes(inout dst: [i64], at: i64, src: [u8]) -> ()
+  requires 0 <= at && at <= len(dst) && len(src) <= len(dst) - at
+  ensures len(dst) == len(old(dst))
+{
+  let n: i64 = len(src);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(src) && 0 <= at && at <= len(dst) && n <= len(dst) - at && len(dst) == len(old(dst))
+    decreases n - i
+  { dst[at + i] = src[i]; i = i + 1; }
+}
+pub fn cat_words(a: [i64], b: [i64]) -> [i64] ! alloc
+  requires len(a) <= 1073741823 && len(b) <= 1073741823
+  ensures len(result) == len(a) + len(b)
+{
+  let mut o: [i64] = alloc(len(a) + len(b), 0);
+  put_words(inout o, 0, a);
+  put_words(inout o, len(a), b);
+  return o;
+}
+pub fn cat_bytes(a: [u8], b: [u8]) -> [u8] ! alloc
+  requires len(a) <= 1073741823 && len(b) <= 1073741823
+  ensures len(result) == len(a) + len(b)
+{
+  let na: i64 = len(a);
+  let nb: i64 = len(b);
+  let mut o: [u8] = alloc(na + nb, 0);
+  let mut i: i64 = 0;
+  while i < na
+    invariant 0 <= i && i <= na && na == len(a) && nb == len(b) && len(o) == na + nb
+    decreases na - i
+  { o[i] = a[i]; i = i + 1; }
+  let mut j: i64 = 0;
+  while j < nb
+    invariant 0 <= j && j <= nb && na == len(a) && nb == len(b) && len(o) == na + nb
+    decreases nb - j
+  { o[na + j] = b[j]; j = j + 1; }
+  return o;
+}
+// a followed by the UTF-8 bytes of s; the new bytes start at len(a)
+pub fn append_str(a: [u8], s: str) -> [u8] ! alloc
+  requires len(a) <= 1073741823 && len(s) <= 1073741823
+  ensures len(result) == len(a) + len(s)
+{
+  let na: i64 = len(a);
+  let ns: i64 = len(s);
+  let mut o: [u8] = alloc(na + ns, 0);
+  let mut i: i64 = 0;
+  while i < na
+    invariant 0 <= i && i <= na && na == len(a) && ns == len(s) && len(o) == na + ns
+    decreases na - i
+  { o[i] = a[i]; i = i + 1; }
+  let mut j: i64 = 0;
+  while j < ns
+    invariant 0 <= j && j <= ns && na == len(a) && ns == len(s) && len(o) == na + ns
+    decreases ns - j
+  { o[na + j] = s[j]; j = j + 1; }
+  return o;
+}
+
+// ---- ctl (64 words) ----
+// Fresh control array: version 1, mode, phase, next request id 1, nothing pending, expects the empty event (word 6 = 0;
+// 2 if phase is 999), handles 8..12 = -1, refs at 24,26,28,30,32,34,36 absent (-1 start), everything else 0.
+pub fn ctl_init(mode: i64, phase: i64) -> [i64] ! alloc
+  requires 0 <= mode && mode <= 5 && 0 <= phase && phase <= 999
+  ensures len(result) == 64 && result[1] == mode && result[2] == phase && result[3] == 1
+{
+  let mut c: [i64] = alloc(64, 0);
+  c[0] = 1;
+  c[1] = mode;
+  c[2] = phase;
+  c[3] = 1;
+  if phase == 999 { c[6] = 2; }
+  c[8] = -1; c[9] = -1; c[10] = -1; c[11] = -1; c[12] = -1;
+  c[24] = -1; c[26] = -1; c[28] = -1; c[30] = -1; c[32] = -1; c[34] = -1; c[36] = -1;
+  return c;
+}
+// Terminal control: phase 999, nothing pending, expected event 2 (terminal).
+pub fn ctl_final(ctl: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 64
+  ensures len(result) == 64 && result[2] == 999 && result[4] == 0 && result[5] == 0 && result[6] == 2
+{
+  let mut c: [i64] = copy(ctl);
+  c[0] = 1;
+  c[2] = 999;
+  c[4] = 0;
+  c[5] = 0;
+  c[6] = 2;
+  return c;
+}
+// Control for a continue packet: phase set, nothing pending, expects the empty event. The caller must also change
+// another word (or the phase) relative to the incoming ctl, or root rejects the packet (progress rule).
+pub fn ctl_next(ctl: [i64], phase: i64) -> [i64] ! alloc
+  requires len(ctl) == 64 && 0 <= phase && phase <= 998
+  ensures len(result) == 64 && result[2] == phase && result[3] == ctl[3] && result[4] == 0 && result[5] == 0 && result[6] == 0
+{
+  let mut c: [i64] = copy(ctl);
+  c[2] = phase;
+  c[4] = 0;
+  c[5] = 0;
+  c[6] = 0;
+  return c;
+}
+// Control for an await packet that issues one request with id ctl[3] and the given opcode: next id + 1, pending id/opcode
+// set, expected event 1 (completion), phase set (the phase that will consume the completion).
+pub fn ctl_await(ctl: [i64], phase: i64, opcode: i64) -> [i64] ! alloc
+  requires len(ctl) == 64 && 1 <= ctl[3] && ctl[3] <= 999999999 && 0 <= phase && phase <= 998 && 1 <= opcode && opcode <= 15
+  ensures len(result) == 64 && result[2] == phase && result[3] == ctl[3] + 1 && result[4] == ctl[3] && result[5] == opcode && result[6] == 1
+{
+  let mut c: [i64] = copy(ctl);
+  let id: i64 = ctl[3];
+  c[2] = phase;
+  c[3] = id + 1;
+  c[4] = id;
+  c[5] = opcode;
+  c[6] = 1;
+  return c;
+}
+fn ctl_mode(ctl: [i64]) -> i64
+  requires len(ctl) == 64
+  ensures 0 <= result && result <= 5
+{
+  let m: i64 = ctl[1];
+  if m < 0 || m > 5 { return 0; }
+  return m;
+}
+fn mode_of(m: i64) -> i64
+  ensures 0 <= result && result <= 5
+{
+  if m < 0 || m > 5 { return 0; }
+  return m;
+}
+
+// ---- patch rows (8 words) and request rows (12 words) ----
+// kind 0: resize bank to newlen elements (keeps the prefix, new space zero). Banks: 0 query words, 1 query bytes, 2 rows,
+// 3 text, 4 document, 5 saved result.
+pub fn patch_resize(bank: i64, newlen: i64) -> [i64] ! alloc
+  requires 0 <= bank && bank <= 5 && 0 <= newlen && newlen <= 2147483647
+  ensures len(result) == 8
+{
+  let mut p: [i64] = alloc(8, 0);
+  p[1] = bank;
+  p[3] = newlen;
+  return p;
+}
+// kind 1: copy `count` elements into the bank at dst_off. src 1 event words (absolute index in the event array), 2 completion
+// bytes, 3 literal words, 4 literal bytes. Word banks (0,2,5) take src 1 or 3; byte banks (1,3,4) take src 2 or 4.
+pub fn patch_copy(bank: i64, dst_off: i64, count: i64, src: i64, src_off: i64) -> [i64] ! alloc
+  requires 0 <= bank && bank <= 5 && 0 <= dst_off && 0 <= count && 1 <= src && src <= 4 && 0 <= src_off
+  ensures len(result) == 8
+{
+  let mut p: [i64] = alloc(8, 0);
+  p[0] = 1;
+  p[1] = bank;
+  p[2] = dst_off;
+  p[3] = count;
+  p[4] = src;
+  p[5] = src_off;
+  return p;
+}
+// [id, opcode, stage, flags, handle, a, b, c, argStart, argWords, 0, 0]; arguments are words of the step wordPool
+pub fn request(id: i64, opcode: i64, stage: i64, flags: i64, handle: i64, a: i64, b: i64, c: i64, arg_start: i64, arg_words: i64) -> [i64] ! alloc
+  requires 1 <= id && 1 <= opcode && opcode <= 15 && 0 <= stage && stage <= 28 && 0 <= flags && -1 <= handle
+  requires 0 <= a && 0 <= b && 0 <= c && 0 <= arg_start && 0 <= arg_words
+  ensures len(result) == 12
+{
+  let mut r: [i64] = alloc(12, 0);
+  r[0] = id; r[1] = opcode; r[2] = stage; r[3] = flags; r[4] = handle;
+  r[5] = a; r[6] = b; r[7] = c; r[8] = arg_start; r[9] = arg_words;
+  return r;
+}
+
+// ---- completion event: 16-word header + payload words ----
+// [1, id, opcode, status, errorClass, nativeCode, payloadWords, byteCount, codeStart, codeLen, messageStart, messageLen, 0,0,0,0, payload...]
+// The empty continuation event: version 1, everything 0, code/message refs absent (-1,0), no payload.
+pub fn event_empty(event: [i64]) -> bool
+  requires len(event) >= 16
+{
+  if len(event) != 16 { return false; }
+  if event[0] != 1 || event[1] != 0 || event[2] != 0 || event[3] != 0 { return false; }
+  if event[4] != 0 || event[5] != 0 || event[6] != 0 || event[7] != 0 { return false; }
+  if event[8] != -1 || event[9] != 0 || event[10] != -1 || event[11] != 0 { return false; }
+  return event[12] == 0 && event[13] == 0 && event[14] == 0 && event[15] == 0;
+}
+// shape of any event: version, ranges, payload length, byte count == clen, refs inside the completion bytes.
+pub fn event_shape(event: [i64], clen: i64) -> bool
+  ensures result ==> len(event) >= 16
+{
+  if len(event) < 16 || clen < 0 { return false; }
+  if event[0] != 1 || event[1] < 0 || event[2] < 0 || event[2] > 15 { return false; }
+  if event[3] < 0 || event[3] > 1 || event[4] < 0 || event[4] > 5 || event[5] < 0 { return false; }
+  if event[6] < 0 || len(event) - 16 != event[6] { return false; }
+  if event[7] != clen { return false; }
+  if event[12] != 0 || event[13] != 0 || event[14] != 0 || event[15] != 0 { return false; }
+  if !ref_ok(event[8], event[9], clen) || !ref_ok(event[10], event[11], clen) { return false; }
+  if event[3] == 1 && (event[4] == 0 || event[6] != 0) { return false; }
+  return true;
+}
+
+// ---- result packet ----
+// header: 0 magic, 1 version, 2 status, 3 mode, 4 N, 5 W, 6 K, 7 T, 8 omittedBefore, 9 planPresent, 10,12,14,16 refs
+// (title, model, scalar value, plan at), 18 plan more, 19 stage, 20 class, 21 code, 22 native, 23,25,27 refs (raw code, name,
+// detail), 29..39 zero. Then N*W row words, 3*K plan-item words, T byte words.
+// Meta for a success result: magic/version/mode set, status 0, every ref absent (-1,0), everything else 0. The caller sets
+// meta[4] N, meta[5] W, meta[8], meta[9], refs, meta[18]; ok_result fills K (words 6) and T (7) from the arrays.
+pub fn meta_new(mode: i64) -> [i64] ! alloc
+  requires 0 <= mode && mode <= 5
+  ensures len(result) == 40 && result[3] == mode
+{
+  let mut m: [i64] = alloc(40, 0);
+  m[0] = 1329812017;
+  m[1] = 1;
+  m[3] = mode;
+  m[10] = -1; m[12] = -1; m[14] = -1; m[16] = -1;
+  m[23] = -1; m[25] = -1; m[27] = -1;
+  return m;
+}
+fn assemble_result(meta: [i64], rows: [i64], items: [i64], pool: [u8]) -> [i64] ! alloc
+  requires len(meta) == 40 && len(rows) <= 1073741823 && len(items) <= 4096 && len(pool) <= 1073741823
+  ensures len(result) == 40 + len(rows) + len(items) + len(pool)
+{
+  let nr: i64 = len(rows);
+  let ni: i64 = len(items);
+  let nb: i64 = len(pool);
+  let mut p: [i64] = alloc(40 + nr + ni + nb, 0);
+  put_words(inout p, 0, meta);
+  p[2] = 0;
+  p[6] = ni / 3;
+  p[7] = nb;
+  put_words(inout p, 40, rows);
+  put_words(inout p, 40 + nr, items);
+  put_bytes(inout p, 40 + nr + ni, pool);
+  return p;
+}
+// Error header only (no refs), status 1.
+pub fn simple_error(mode: i64, stage: i64, cls: i64, code: i64) -> [i64] ! alloc
+  requires 0 <= mode && mode <= 5 && 0 <= stage && stage <= 28 && 1 <= cls && cls <= 4 && 0 <= code && code <= 6
+  ensures len(result) == 40
+{
+  let mut m: [i64] = meta_new(mode);
+  m[2] = 1;
+  m[19] = stage;
+  m[20] = cls;
+  m[21] = code;
+  return m;
+}
+// CoreError / InternalInvariant at stage 28 (result).
+pub fn internal_packet(mode: i64) -> [i64] ! alloc
+  requires 0 <= mode && mode <= 5
+  ensures len(result) == 40
+{ return simple_error(mode, 28, 3, 6); }
+
+fn build_error(mode: i64, stage: i64, cls: i64, code: i64, native: i64, raw_code: [u8], name: str, detail: str) -> [i64] ! alloc
+  requires 0 <= mode && mode <= 5 && 0 <= stage && stage <= 28 && 1 <= cls && cls <= 4 && 0 <= code && code <= 6 && 0 <= native
+  requires len(raw_code) <= 10000000 && len(name) <= 10000000 && len(detail) <= 10000000
+  ensures len(result) == 40 + len(raw_code) + len(name) + len(detail)
+{
+  let lr: i64 = len(raw_code);
+  let ln: i64 = len(name);
+  let ld: i64 = len(detail);
+  let nx: i64 = lr + ln + ld;
+  let mut p: [i64] = alloc(40 + nx, 0);
+  p[0] = 1329812017; p[1] = 1; p[2] = 1; p[3] = mode; p[7] = nx;
+  p[10] = -1; p[12] = -1; p[14] = -1; p[16] = -1;
+  p[19] = stage; p[20] = cls; p[21] = code; p[22] = native;
+  p[23] = -1; p[25] = -1; p[27] = -1;
+  if lr > 0 { p[23] = 0; p[24] = lr; }
+  if ln > 0 { p[25] = lr; p[26] = ln; }
+  if ld > 0 { p[27] = lr + ln; p[28] = ld; }
+  let mut i: i64 = 0;
+  while i < lr
+    invariant 0 <= i && i <= lr && lr == len(raw_code) && ln == len(name) && ld == len(detail) && nx == lr + ln + ld && len(p) == 40 + nx
+    decreases lr - i
+  { p[40 + i] = raw_code[i]; i = i + 1; }
+  let mut j: i64 = 0;
+  while j < ln
+    invariant 0 <= j && j <= ln && lr == len(raw_code) && ln == len(name) && ld == len(detail) && nx == lr + ln + ld && len(p) == 40 + nx
+    decreases ln - j
+  { p[40 + lr + j] = name[j]; j = j + 1; }
+  let mut k: i64 = 0;
+  while k < ld
+    invariant 0 <= k && k <= ld && lr == len(raw_code) && ln == len(name) && ld == len(detail) && nx == lr + ln + ld && len(p) == 40 + nx
+    decreases ld - k
+  { p[40 + lr + ln + k] = detail[k]; k = k + 1; }
+  return p;
+}
+// DESIGN 5 error(mode, stage, cls, code, native, raw error code, name, detail). Bytes = raw ++ name ++ detail; an empty
+// string is an absent ref. Out-of-range enums or strings over 10 MB give the InternalInvariant packet.
+pub fn error(mode: i64, stage: i64, cls: i64, code: i64, native: i64, raw_code: [u8], name: str, detail: str) -> [i64] ! alloc
+  ensures len(result) >= 40
+{
+  let m: i64 = mode_of(mode);
+  if stage < 0 || stage > 28 || cls < 1 || cls > 4 || code < 0 || code > 6 || native < 0 { return internal_packet(m); }
+  if len(raw_code) > 10000000 || len(name) > 10000000 || len(detail) > 10000000 { return internal_packet(m); }
+  return build_error(m, stage, cls, code, native, raw_code, name, detail);
+}
+
+// ---- result shape check (also run by step_packet for every action-1 packet) ----
+fn absent_at(res: [i64], i: i64) -> bool
+  requires len(res) >= 40 && 0 <= i && i <= 38
+{ return res[i] == -1 && res[i + 1] == 0; }
+
+// ref (s,l) into the byte pool res[bb..bb+t): absent, or inside the pool and starting/ending on UTF-8 scalar boundaries
+fn bref(res: [i64], bb: i64, t: i64, s: i64, l: i64) -> bool
+  requires 0 <= bb && 0 <= t && bb <= len(res) - t
+{
+  if !ref_ok(s, l, t) { return false; }
+  if s == -1 { return true; }
+  if s < t {
+    let c: i64 = res[bb + s];
+    if c >= 128 && c < 192 { return false; }
+  }
+  let e: i64 = s + l;
+  if e < t {
+    let c2: i64 = res[bb + e];
+    if c2 >= 128 && c2 < 192 { return false; }
+  }
+  return true;
+}
+fn bytes_ok(res: [i64], bb: i64, t: i64) -> bool
+  requires 0 <= bb && 0 <= t && bb <= len(res) - t
+{
+  let mut j: i64 = 0;
+  while j < t
+    invariant 0 <= j && j <= t && 0 <= bb && 0 <= t && bb <= len(res) - t
+    decreases t - j
+  {
+    let c: i64 = res[bb + j];
+    if c < 0 || c > 255 { return false; }
+    j = j + 1;
+  }
+  return true;
+}
+// list rows (width 10): thread ref, title ref (both present), updatedAt ref (optional), messagesPresent, messages, maybeOpen, 0
+fn list_rows_ok(res: [i64], n: i64, bb: i64, t: i64) -> bool
+  requires 0 <= n && n <= 2147483647 && 0 <= bb && 0 <= t && bb <= len(res) - t && len(res) >= 40 + 10 * n
+{
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n <= 2147483647 && 0 <= bb && 0 <= t && bb <= len(res) - t && len(res) >= 40 + 10 * n
+    decreases n - i
+  {
+    let b: i64 = 40 + 10 * i;
+    if res[b] < 0 || res[b + 2] < 0 { return false; }
+    if !bref(res, bb, t, res[b], res[b + 1]) || !bref(res, bb, t, res[b + 2], res[b + 3]) { return false; }
+    if !bref(res, bb, t, res[b + 4], res[b + 5]) { return false; }
+    if res[b + 6] < 0 || res[b + 6] > 1 || res[b + 7] < 0 || res[b + 8] < 0 || res[b + 8] > 1 || res[b + 9] != 0 { return false; }
+    if res[b + 6] == 0 && res[b + 7] != 0 { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+// read rows (width 10, at most 200): prompt, reply (present), createdAt, completedAt (optional), tools, clipped
+fn read_rows_ok(res: [i64], n: i64, bb: i64, t: i64) -> bool
+  requires 0 <= n && n <= 200 && 0 <= bb && 0 <= t && bb <= len(res) - t && len(res) >= 40 + 10 * n
+{
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n <= 200 && 0 <= bb && 0 <= t && bb <= len(res) - t && len(res) >= 40 + 10 * n
+    decreases n - i
+  {
+    let b: i64 = 40 + 10 * i;
+    if res[b] < 0 || res[b + 2] < 0 { return false; }
+    if !bref(res, bb, t, res[b], res[b + 1]) || !bref(res, bb, t, res[b + 2], res[b + 3]) { return false; }
+    if !bref(res, bb, t, res[b + 4], res[b + 5]) || !bref(res, bb, t, res[b + 6], res[b + 7]) { return false; }
+    if res[b + 8] < 0 || res[b + 9] < 0 || res[b + 9] > 1 { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+// rows (width 7): id, directory, title refs (all present), updatedMs
+fn rows_rows_ok(res: [i64], n: i64, bb: i64, t: i64) -> bool
+  requires 0 <= n && n <= 2147483647 && 0 <= bb && 0 <= t && bb <= len(res) - t && len(res) >= 40 + 7 * n
+{
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n <= 2147483647 && 0 <= bb && 0 <= t && bb <= len(res) - t && len(res) >= 40 + 7 * n
+    decreases n - i
+  {
+    let b: i64 = 40 + 7 * i;
+    if res[b] < 0 || res[b + 2] < 0 || res[b + 4] < 0 { return false; }
+    if !bref(res, bb, t, res[b], res[b + 1]) || !bref(res, bb, t, res[b + 2], res[b + 3]) { return false; }
+    if !bref(res, bb, t, res[b + 4], res[b + 5]) { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+// plan fields (words 9, 16-18) and the K items at ib: [textStart, textLen, status 0..3]
+fn plan_ok(res: [i64], k: i64, ib: i64, bb: i64, t: i64) -> bool
+  requires len(res) >= 40 && 0 <= k && k <= 30 && 40 <= ib && ib + 3 * k <= bb && 0 <= bb && 0 <= t && bb <= len(res) - t
+{
+  let pp: i64 = res[9];
+  if pp == 0 { return k == 0 && res[16] == -1 && res[17] == 0 && res[18] == 0; }
+  if pp != 1 { return false; }
+  if k < 1 || res[18] < 0 { return false; }
+  if !bref(res, bb, t, res[16], res[17]) { return false; }
+  let mut i: i64 = 0;
+  while i < k
+    invariant 0 <= i && i <= k && k <= 30 && 40 <= ib && ib + 3 * k <= bb && 0 <= bb && 0 <= t && bb <= len(res) - t && len(res) >= 40
+    decreases k - i
+  {
+    let b: i64 = ib + 3 * i;
+    if res[b] < 0 || !bref(res, bb, t, res[b], res[b + 1]) { return false; }
+    if res[b + 2] < 0 || res[b + 2] > 3 { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+// Does res describe a well-formed result packet? Length, ranges, widths per mode, refs inside the byte pool and on scalar
+// boundaries, byte values 0..255, plan presence rules, error class/code pairs. Total and bounded (loops over N, K<=30, T).
+pub fn result_shape(res: [i64]) -> bool
+  requires len(res) <= 2147483647
+{
+  if len(res) < 40 { return false; }
+  if res[0] != 1329812017 || res[1] != 1 { return false; }
+  let status: i64 = res[2];
+  let mode: i64 = res[3];
+  let n: i64 = res[4];
+  let w: i64 = res[5];
+  let k: i64 = res[6];
+  let t: i64 = res[7];
+  if status < 0 || status > 1 || mode < 0 || mode > 5 { return false; }
+  if n < 0 || n > 2147483647 || w < 0 || w > 10 || k < 0 || k > 30 || t < 0 || t > 2147483647 { return false; }
+  let mut rw: i64 = 0;
+  if w == 7 { rw = 7 * n; } else if w == 10 { rw = 10 * n; } else if w != 0 { return false; }
+  if w == 0 && n != 0 { return false; }
+  if len(res) != 40 + rw + 3 * k + t { return false; }
+  let ib: i64 = 40 + rw;
+  let bb: i64 = ib + 3 * k;
+  let mut z: i64 = 29;
+  while z < 40
+    invariant 29 <= z && z <= 40 && len(res) >= 40
+    decreases 40 - z
+  {
+    if res[z] != 0 { return false; }
+    z = z + 1;
+  }
+  if res[8] < 0 || res[8] > 1 || res[9] < 0 || res[9] > 1 { return false; }
+  if !bytes_ok(res, bb, t) { return false; }
+  if status == 1 {
+    if n != 0 || w != 0 || k != 0 || res[8] != 0 || res[9] != 0 || res[18] != 0 { return false; }
+    if !absent_at(res, 10) || !absent_at(res, 12) || !absent_at(res, 14) || !absent_at(res, 16) { return false; }
+    if res[19] < 0 || res[19] > 28 || res[20] < 1 || res[20] > 4 || res[21] < 0 || res[21] > 6 || res[22] < 0 { return false; }
+    if res[20] == 1 && (res[21] < 1 || res[21] > 4) { return false; }
+    if res[20] == 3 && res[21] != 5 && res[21] != 6 { return false; }
+    if (res[20] == 2 || res[20] == 4) && res[21] != 0 { return false; }
+    if !bref(res, bb, t, res[23], res[24]) || !bref(res, bb, t, res[25], res[26]) || !bref(res, bb, t, res[27], res[28]) { return false; }
+    return true;
+  }
+  if res[19] != 0 || res[20] != 0 || res[21] != 0 || res[22] != 0 { return false; }
+  if !absent_at(res, 23) || !absent_at(res, 25) || !absent_at(res, 27) { return false; }
+  if mode == 0 {
+    if w != 10 || k != 0 || res[8] != 0 || res[9] != 0 || res[18] != 0 { return false; }
+    if !absent_at(res, 10) || !absent_at(res, 12) || !absent_at(res, 14) || !absent_at(res, 16) { return false; }
+    return list_rows_ok(res, n, bb, t);
+  }
+  if mode == 1 {
+    if n > 200 || w != 10 || !absent_at(res, 14) { return false; }
+    if !bref(res, bb, t, res[10], res[11]) || !bref(res, bb, t, res[12], res[13]) { return false; }
+    if !read_rows_ok(res, n, bb, t) { return false; }
+    return plan_ok(res, k, ib, bb, t);
+  }
+  if mode == 2 {
+    if w != 7 || k != 0 || res[8] != 0 || res[9] != 0 || res[18] != 0 { return false; }
+    if !absent_at(res, 10) || !absent_at(res, 12) || !absent_at(res, 14) || !absent_at(res, 16) { return false; }
+    return rows_rows_ok(res, n, bb, t);
+  }
+  if mode == 3 || mode == 4 {
+    if w != 0 || k != 0 || res[8] != 0 || res[9] != 0 || res[18] != 0 { return false; }
+    if !absent_at(res, 10) || !absent_at(res, 12) || !absent_at(res, 16) { return false; }
+    if res[14] < 0 { return false; }
+    return bref(res, bb, t, res[14], res[15]);
+  }
+  // mode 5: plan (absent or the last plan)
+  if w != 0 || res[8] != 0 { return false; }
+  if !absent_at(res, 10) || !absent_at(res, 12) || !absent_at(res, 14) { return false; }
+  return plan_ok(res, k, ib, bb, t);
+}
+
+// Success result from meta (see meta_new), the row words, plan items (3 words each) and the UTF-8 byte pool. Shape failures give
+// the InternalInvariant result; a combined size over the 2^31-1 packet bound gives CoreError/InputTooLarge (stage 0).
+pub fn ok_result(meta: [i64], rows: [i64], items: [i64], pool: [u8]) -> [i64] ! alloc
+  requires len(meta) == 40 && len(rows) <= 1073741823 && len(items) <= 4096 && len(pool) <= 1073741823
+  ensures len(result) >= 40
+{
+  let m: i64 = mode_of(meta[3]);
+  if len(rows) + len(items) + len(pool) > 2147483600 { return simple_error(m, 0, 3, 5); }
+  let p: [i64] = assemble_result(meta, rows, items, pool);
+  if !result_shape(p) { return internal_packet(m); }
+  return p;
+}
+// dataDir / folderKey (mode 3 or 4): the present scalar value is the whole pool (an empty value is the valid ref (0,0)).
+pub fn ok_value(mode: i64, value: [u8]) -> [i64] ! alloc
+  requires 3 <= mode && mode <= 4 && len(value) <= 1073741823
+  ensures len(result) >= 40
+{
+  let mut m: [i64] = meta_new(mode);
+  m[14] = 0;
+  m[15] = len(value);
+  let ew: [i64] = alloc(0, 0);
+  return ok_result(m, ew, ew, value);
+}
+// plan mode with no plan: planPresent 0, nothing else.
+pub fn ok_plan_absent() -> [i64] ! alloc
+  ensures len(result) >= 40
+{
+  let m: [i64] = meta_new(5);
+  let ew: [i64] = alloc(0, 0);
+  let eb: [u8] = alloc(0, 0);
+  return ok_result(m, ew, ew, eb);
+}
+
+// ---- step packet ----
+fn pref_ok(words: [i64], s: i64, bl: i64) -> bool
+  requires 0 <= s && s + 2 <= len(words) && 0 <= bl
+{
+  if words[s] < 0 { return false; }
+  return ref_ok(words[s], words[s + 1], bl);
+}
+fn refs2_ok(words: [i64], s: i64, cnt: i64, bl: i64) -> bool
+  requires 0 <= s && 0 <= cnt && cnt <= 1000000 && s + 2 * cnt <= len(words) && 0 <= bl
+{
+  let mut i: i64 = 0;
+  while i < cnt
+    invariant 0 <= i && i <= cnt && cnt <= 1000000 && 0 <= s && s + 2 * cnt <= len(words) && 0 <= bl
+    decreases cnt - i
+  {
+    if !pref_ok(words, s + 2 * i, bl) { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+fn refs4_ok(words: [i64], s: i64, cnt: i64, bl: i64) -> bool
+  requires 0 <= s && 0 <= cnt && cnt <= 1000000 && s + 4 * cnt <= len(words) && 0 <= bl
+{
+  let mut i: i64 = 0;
+  while i < cnt
+    invariant 0 <= i && i <= cnt && cnt <= 1000000 && 0 <= s && s + 4 * cnt <= len(words) && 0 <= bl
+    decreases cnt - i
+  {
+    if !pref_ok(words, s + 4 * i, bl) || !pref_ok(words, s + 4 * i + 2, bl) { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+// typed SQL values [kind,a,b,c]: NULL 0,0,0 / INTEGER a / REAL hi32,lo32 / TEXT,BLOB start,len in the byte pool
+fn values_ok(words: [i64], s: i64, cnt: i64, bl: i64) -> bool
+  requires 0 <= s && 0 <= cnt && cnt <= 500000000 && s + 4 * cnt <= len(words) && 0 <= bl
+{
+  let mut i: i64 = 0;
+  while i < cnt
+    invariant 0 <= i && i <= cnt && cnt <= 500000000 && 0 <= s && s + 4 * cnt <= len(words) && 0 <= bl
+    decreases cnt - i
+  {
+    let v: i64 = s + 4 * i;
+    let kd: i64 = words[v];
+    let va: i64 = words[v + 1];
+    let vb: i64 = words[v + 2];
+    if kd < 0 || kd > 4 || words[v + 3] != 0 { return false; }
+    if kd == 0 && (va != 0 || vb != 0) { return false; }
+    if kd == 1 && vb != 0 { return false; }
+    if kd == 2 && (va < 0 || va > 4294967295 || vb < 0 || vb > 4294967295) { return false; }
+    if (kd == 3 || kd == 4) && (va < 0 || !ref_ok(va, vb, bl)) { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+// argument words of one request by opcode (DESIGN 3): path-like 1,2,3,6,7,12,13,14 and prepare (4, flags 0) = one ref;
+// 5,9,10,11,15 none; execute (4, flags 1/2) = [P, P*4 typed values]; spawn (8) = 12 scalars/refs + 2*argc + 4*envCount words.
+fn args_ok(words: [i64], s: i64, n: i64, bl: i64, op: i64, flags: i64) -> bool
+  requires 0 <= s && 0 <= n && n <= len(words) - s && 0 <= bl
+{
+  if op == 1 || op == 2 || op == 3 || op == 6 || op == 7 || op == 12 || op == 13 || op == 14 {
+    if n != 2 { return false; }
+    return pref_ok(words, s, bl);
+  }
+  if op == 5 || op == 9 || op == 10 || op == 11 || op == 15 { return n == 0; }
+  if op == 4 {
+    if flags == 0 {
+      if n != 2 { return false; }
+      return pref_ok(words, s, bl);
+    }
+    if flags != 1 && flags != 2 { return false; }
+    if n < 1 { return false; }
+    let p: i64 = words[s];
+    if p < 0 || p > 400000000 || n != 1 + 4 * p { return false; }
+    return values_ok(words, s + 1, p, bl);
+  }
+  if op == 8 {
+    if n < 12 { return false; }
+    let argc: i64 = words[s + 4];
+    let envc: i64 = words[s + 6];
+    if argc < 0 || argc > 100000 || envc < 0 || envc > 100000 { return false; }
+    if n != 12 + 2 * argc + 4 * envc { return false; }
+    if !pref_ok(words, s, bl) { return false; }
+    if !ref_ok(words[s + 2], words[s + 3], bl) { return false; }
+    if !refs2_ok(words, s + 12, argc, bl) { return false; }
+    return refs4_ok(words, s + 12 + 2 * argc, envc, bl);
+  }
+  return false;
+}
+fn patches_ok(p: [i64], cnt: i64, wl: i64, bl: i64) -> bool
+  requires 0 <= cnt && cnt <= 512 && len(p) == 8 * cnt && 0 <= wl && 0 <= bl
+{
+  let mut i: i64 = 0;
+  while i < cnt
+    invariant 0 <= i && i <= cnt && cnt <= 512 && len(p) == 8 * cnt && 0 <= wl && 0 <= bl
+    decreases cnt - i
+  {
+    let b: i64 = 8 * i;
+    let kind: i64 = p[b];
+    let bank: i64 = p[b + 1];
+    if kind < 0 || kind > 1 || bank < 0 || bank > 5 { return false; }
+    if p[b + 2] < 0 || p[b + 2] > 2147483647 || p[b + 3] < 0 || p[b + 3] > 2147483647 { return false; }
+    if p[b + 6] != 0 || p[b + 7] != 0 { return false; }
+    if kind == 0 {
+      if p[b + 2] != 0 || p[b + 4] != 0 || p[b + 5] != 0 { return false; }
+    } else {
+      let src: i64 = p[b + 4];
+      let off: i64 = p[b + 5];
+      if src < 1 || src > 4 || off < 0 { return false; }
+      if p[b + 3] > 2147483647 - p[b + 2] { return false; }
+      if bank == 0 || bank == 2 || bank == 5 {
+        if src != 1 && src != 3 { return false; }
+      } else {
+        if src != 2 && src != 4 { return false; }
+      }
+      if src == 3 && (off > wl || p[b + 3] > wl - off) { return false; }
+      if src == 4 && (off > bl || p[b + 3] > bl - off) { return false; }
+    }
+    i = i + 1;
+  }
+  return true;
+}
+fn requests_ok(r: [i64], cnt: i64, words: [i64], bl: i64) -> bool
+  requires 0 <= cnt && cnt <= 1 && len(r) == 12 * cnt && len(words) <= 2147483647 && 0 <= bl
+{
+  let mut i: i64 = 0;
+  while i < cnt
+    invariant 0 <= i && i <= cnt && cnt <= 1 && len(r) == 12 * cnt && len(words) <= 2147483647 && 0 <= bl
+    decreases cnt - i
+  {
+    let b: i64 = 12 * i;
+    if r[b] < 1 || r[b + 1] < 1 || r[b + 1] > 15 || r[b + 2] < 0 || r[b + 2] > 28 { return false; }
+    if r[b + 3] < 0 || r[b + 4] < -1 || r[b + 5] < 0 || r[b + 6] < 0 || r[b + 7] < 0 { return false; }
+    if r[b + 10] != 0 || r[b + 11] != 0 { return false; }
+    let a0: i64 = r[b + 8];
+    let an: i64 = r[b + 9];
+    if a0 < 0 || an < 0 || a0 > len(words) || an > len(words) - a0 { return false; }
+    if !args_ok(words, a0, an, bl, r[b + 1], r[b + 3]) { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+fn step_args_ok(ctl: [i64], patches: [i64], requests: [i64], words: [i64], bytes: [u8], res: [i64], action: i64) -> bool
+  requires len(ctl) == 64 && len(patches) <= 4096 && len(requests) <= 4096 && len(words) <= 2147483647 && len(bytes) <= 2147483647 && len(res) <= 2147483647
+{
+  if action < 0 || action > 2 { return false; }
+  if ctl[0] != 1 || ctl[2] < 0 || ctl[2] > 999 { return false; }
+  if len(patches) % 8 != 0 { return false; }
+  if len(requests) != 0 && len(requests) != 12 { return false; }
+  if action == 1 {
+    if len(patches) != 0 || len(requests) != 0 || !result_shape(res) { return false; }
+    if ctl[2] != 999 || ctl[4] != 0 || ctl[5] != 0 || ctl[6] != 2 { return false; }
+  } else {
+    if len(res) != 0 || ctl[2] == 999 { return false; }
+    if action == 2 {
+      if len(requests) != 0 || ctl[4] != 0 || ctl[5] != 0 || ctl[6] != 0 { return false; }
+    } else {
+      if len(requests) != 12 { return false; }
+      if ctl[4] != requests[0] || ctl[5] != requests[1] || ctl[6] != 1 { return false; }
+    }
+  }
+  if !patches_ok(patches, len(patches) / 8, len(words), len(bytes)) { return false; }
+  return requests_ok(requests, len(requests) / 12, words, len(bytes));
+}
+fn assemble_step(ctl: [i64], patches: [i64], requests: [i64], words: [i64], bytes: [u8], res: [i64], action: i64) -> [i64] ! alloc
+  requires len(ctl) == 64 && len(patches) <= 4096 && len(requests) <= 4096 && len(words) <= 2147483647 && len(bytes) <= 2147483647 && len(res) <= 2147483647
+  ensures len(result) == 76 + len(patches) + len(requests) + len(words) + len(bytes) + len(res)
+{
+  let lp: i64 = len(patches);
+  let lq: i64 = len(requests);
+  let lw: i64 = len(words);
+  let lb: i64 = len(bytes);
+  let lr: i64 = len(res);
+  let total: i64 = 76 + lp + lq + lw + lb + lr;
+  let mut p: [i64] = alloc(total, 0);
+  p[0] = 1329812273;
+  p[1] = 1;
+  p[2] = action;
+  p[3] = 64;
+  p[4] = lp / 8;
+  p[5] = lq / 12;
+  p[6] = lw;
+  p[7] = lb;
+  p[8] = lr;
+  let a1: i64 = 76;
+  let a2: i64 = a1 + lp;
+  let a3: i64 = a2 + lq;
+  let a4: i64 = a3 + lw;
+  let a5: i64 = a4 + lb;
+  put_words(inout p, 12, ctl);
+  put_words(inout p, a1, patches);
+  put_words(inout p, a2, requests);
+  put_words(inout p, a3, words);
+  put_bytes(inout p, a4, bytes);
+  put_words(inout p, a5, res);
+  return p;
+}
+// Done packet carrying the InternalInvariant result: used whenever a step packet fails its own shape check.
+fn invariant_step(ctl: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 64
+  ensures len(result) >= 76
+{
+  let c: [i64] = ctl_final(ctl);
+  let e: [i64] = internal_packet(ctl_mode(c));
+  let ep: [i64] = alloc(0, 0);
+  let eb: [u8] = alloc(0, 0);
+  return assemble_step(c, ep, ep, ep, eb, e, 1);
+}
+// Runtime shape check (DESIGN 2): action 0 = exactly one request and ctl[4]/[5]/[6] = its id/opcode/1; action 1 = done, no
+// patches/requests, a well-formed result and terminal ctl (phase 999, [4]=[5]=0, [6]=2); action 2 = continue, no request,
+// ctl[4]=[5]=[6]=0, phase not 999. Patch rows and request rows are range-checked against the literal pools. A failure returns a
+// done packet with InternalInvariant instead.
+pub fn step_packet(ctl: [i64], patches: [i64], requests: [i64], words: [i64], bytes: [u8], res: [i64], action: i64) -> [i64] ! alloc
+  requires len(ctl) == 64 && len(patches) <= 4096 && len(requests) <= 4096 && len(words) <= 2147483647 && len(bytes) <= 2147483647 && len(res) <= 2147483647
+  ensures len(result) >= 76
+{
+  if !step_args_ok(ctl, patches, requests, words, bytes, res, action) { return invariant_step(ctl); }
+  return assemble_step(ctl, patches, requests, words, bytes, res, action);
+}
+// Finish with a result packet (ok_result/ok_value/error/...). ctl is finalised (phase 999, nothing pending).
+pub fn done_wrap(ctl: [i64], res: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 64
+  ensures len(result) >= 76
+{
+  let c: [i64] = ctl_final(ctl);
+  if len(res) > 2147483647 { return invariant_step(c); }
+  let ep: [i64] = alloc(0, 0);
+  let eb: [u8] = alloc(0, 0);
+  return step_packet(c, ep, ep, ep, eb, res, 1);
+}
+// done packet with an error result; the mode word comes from ctl[1]
+pub fn done_error(ctl: [i64], stage: i64, cls: i64, code: i64, native: i64, raw_code: [u8], name: str, detail: str) -> [i64] ! alloc
+  requires len(ctl) == 64
+  ensures len(result) >= 76
+{
+  let e: [i64] = error(ctl_mode(ctl), stage, cls, code, native, raw_code, name, detail);
+  return done_wrap(ctl, e);
+}
+// done packet with a text-free error (stage, class, code); out-of-range enums give InternalInvariant
+pub fn done_simple(ctl: [i64], stage: i64, cls: i64, code: i64) -> [i64] ! alloc
+  requires len(ctl) == 64
+  ensures len(result) >= 76
+{
+  if stage < 0 || stage > 28 || cls < 1 || cls > 4 || code < 0 || code > 6 { return invariant_step(ctl); }
+  let e: [i64] = simple_error(ctl_mode(ctl), stage, cls, code);
+  return done_wrap(ctl, e);
+}
+// CoreError / InternalInvariant at `stage`
+pub fn done_internal(ctl: [i64], stage: i64) -> [i64] ! alloc
+  requires len(ctl) == 64
+  ensures len(result) >= 76
+{ return done_simple(ctl, stage, 3, 6); }

@@ -1,0 +1,62 @@
+[
+  {"name": "F15-turns-200",
+   "export": {"expect": {"cwd": "$SRC"},
+              "bytes": {"concat": [
+                {"utf8": "{\"messages\":["},
+                {"repeat": {"utf8": "{\"info\":{\"role\":\"user\"},\"parts\":[{\"type\":\"text\",\"text\":\"q\"}]},{\"info\":{\"role\":\"assistant\"},\"parts\":[{\"type\":\"text\",\"text\":\"a\"}]},"}, "count": 200},
+                {"utf8": "{\"info\":{\"role\":\"system\"},\"parts\":[]}]}"}]}},
+   "expected": {"status": "ok", "rowCount": 200, "omitted": false}},
+  {"name": "F15-turns-201", "kills": ["M16"],
+   "export": {"expect": {"cwd": "$SRC"},
+              "bytes": {"concat": [
+                {"utf8": "{\"messages\":["},
+                {"repeat": {"utf8": "{\"info\":{\"role\":\"user\"},\"parts\":[{\"type\":\"text\",\"text\":\"q\"}]},{\"info\":{\"role\":\"assistant\"},\"parts\":[{\"type\":\"text\",\"text\":\"a\"}]},"}, "count": 201},
+                {"utf8": "{\"info\":{\"role\":\"system\"},\"parts\":[]}]}"}]}},
+   "expected": {"status": "ok", "rowCount": 200, "omitted": true}},
+  {"name": "F15-bytes-2097152",
+   "export": {"expect": {"cwd": "$SRC"},
+              "bytes": {"concat": [
+                {"utf8": "{\"messages\":["},
+                {"repeat": {"concat": [
+                  {"utf8": "{\"info\":{\"role\":\"user\"},\"parts\":[{\"type\":\"text\",\"text\":\""}, {"repeat": {"utf8": "p"}, "count": 16384},
+                  {"utf8": "\"}]},{\"info\":{\"role\":\"assistant\"},\"parts\":[{\"type\":\"text\",\"text\":\""}, {"repeat": {"utf8": "r"}, "count": 16384},
+                  {"utf8": "\"}]},"}]}, "count": 64},
+                {"utf8": "{\"info\":{\"role\":\"system\"},\"parts\":[]}]}"}]}},
+   "expected": {"status": "ok", "rowCount": 64, "omitted": false}},
+  {"name": "F15-bytes-over", "kills": ["M16"],
+   "export": {"expect": {"cwd": "$SRC"},
+              "bytes": {"concat": [
+                {"utf8": "{\"messages\":["},
+                {"repeat": {"concat": [
+                  {"utf8": "{\"info\":{\"role\":\"user\"},\"parts\":[{\"type\":\"text\",\"text\":\""}, {"repeat": {"utf8": "p"}, "count": 16384},
+                  {"utf8": "\"}]},{\"info\":{\"role\":\"assistant\"},\"parts\":[{\"type\":\"text\",\"text\":\""}, {"repeat": {"utf8": "r"}, "count": 16384},
+                  {"utf8": "\"}]},"}]}, "count": 65},
+                {"utf8": "{\"info\":{\"role\":\"system\"},\"parts\":[]}]}"}]}},
+   "expected": {"status": "ok", "rowCount": 64, "omitted": true}},
+  {"name": "F15-prompt-clip",
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user"}, "parts": [{"type": "text", "text": {"$rep": "x", "n": 33000}}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "text", "text": "a"}]}]}}},
+   "expected": {"status": "ok", "rowCount": 1}},
+  {"name": "F15-reply-clip",
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user"}, "parts": [{"type": "text", "text": "q"}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "text", "text": {"$rep": "y", "n": 33000}}, {"type": "text", "text": "tail"}]}]}}},
+   "expected": {"status": "ok", "rowCount": 1}},
+  {"name": "F15-exact-full-then-text",
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user"}, "parts": [{"type": "text", "text": "q"}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "text", "text": {"$rep": "a", "n": 32768}}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "text", "text": "b"}]}]}}},
+   "expected": {"status": "ok", "rowCount": 1}},
+  {"name": "F15-empty-answer-time",
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user", "time": {"created": 1700000000}}, "parts": [{"type": "text", "text": "q"}]},
+     {"info": {"role": "assistant", "time": {"completed": 1700000005}}, "parts": []}]}}},
+   "expected": {"status": "ok", "rowCount": 1}},
+  {"name": "F15-ufffd-cut", "policies": ["P3"],
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user"}, "parts": [{"type": "text", "text": {"$cat": [{"$rep": "a", "n": 32765}, "�", "zz"]}}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "text", "text": "r"}]}]}}},
+   "expected": {"status": "ok", "rowCount": 1}}
+]

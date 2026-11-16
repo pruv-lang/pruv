@@ -1,0 +1,346 @@
+// OpenCode SQL module (package B, phases 200-299): follows DESIGN.md/IMPL_NOTES.md; written without a shell (not compiled).
+// 200 db_open_readonly(original DB path) | 201 open done -> prepare schema SQL | 202 prepared -> all(TEXT session) | 203 session names:
+// all five required present (else read-failed/`columns`, no message query), remember time_archived, prepare again | 204 prepared ->
+// all(TEXT message) | 205 session_id required, prepare the selection | 206 prepared -> all(params) | 207 result copied to banks 0/1 |
+// 208 rows::decode -> bank 2 (7*n row words then n count words = -1) and bank 3 (id/dir/title pool), ctl[21] = n, -> phase 300 (list).
+// DB errors save the error result (bank 5, ctl[38] = 1) and close the connection (phase 390 in list.pruv); open failure finishes at once.
+
+fn schema_sql() -> [u8] ! alloc
+  ensures len(result) <= 100
+{
+  let s: str = "SELECT name FROM pragma_table_info(?)";
+  return crate::util::to_bytes(s);
+}
+
+// SELECT prefix + optional archive predicate + EXISTS + filter + tail (DESIGN 4); single spaces, no newline
+fn select_sql(mode: i64, archived: bool) -> [u8] ! alloc
+  ensures len(result) <= 2000
+{
+  let s0: str = "SELECT s.id AS id, s.directory AS directory, s.title AS title, s.time_updated AS updated FROM session s WHERE s.parent_id IS NULL";
+  let s1: str = " AND s.time_archived IS NULL";
+  let s2: str = " AND EXISTS (SELECT 1 FROM message m WHERE m.session_id = s.id)";  // MUT:M04 => let s2: str = "";
+  let s3: str = " AND s.id = ?";
+  let s4: str = " AND s.directory IN (?, ?)";  // MUT:M05 => let s4: str = " AND RTRIM(s.directory, '/') IN (?, ?)";
+  let s5: str = " ORDER BY s.time_updated DESC LIMIT ?";
+  let mut b: [u8] = crate::util::to_bytes(s0);
+  if archived { b = crate::util::pool_str(b, s1); }
+  b = crate::util::pool_str(b, s2);
+  if mode == 1 { b = crate::util::pool_str(b, s3); }
+  if mode == 0 {
+    b = crate::util::pool_str(b, s4);
+    b = crate::util::pool_str(b, s5);
+  }
+  return b;
+}
+
+// byte pool of the select parameters: list = base ++ base ++ "/" (base = folderKey(folder)); read = the thread; rows = empty.
+// Empty result for list/read means unusable input (over 1e8 bytes or no thread).
+fn select_pool(cfg: [i64], cfg_text: [u8], mode: i64) -> [u8] ! alloc
+  requires len(cfg) >= 32 && len(cfg) <= 2147483647
+  ensures len(result) <= 200000001
+{
+  let empty: [u8] = alloc(0, 0);
+  if mode == 0 {
+    let folder: [u8] = crate::util::span_bytes(cfg_text, cfg[8], cfg[9]);
+    let base: [u8] = crate::path::folder_key(folder);
+    if len(base) > 100000000 { return empty; }
+    let sl: str = "/";
+    let slash: [u8] = crate::util::to_bytes(sl);
+    let two: [u8] = crate::packet::cat_bytes(base, base);
+    return crate::packet::cat_bytes(two, slash);
+  }
+  if mode == 1 {
+    let thread: [u8] = crate::util::span_bytes(cfg_text, cfg[10], cfg[11]);
+    if len(thread) > 100000000 { return empty; }
+    return copy(thread);
+  }
+  return empty;
+}
+
+// typed parameter words: list [3, TEXT base, TEXT base+"/", REAL 50.0], read [1, TEXT thread], rows [0]; l1 = len(base) / len(thread)
+fn select_words(mode: i64, l1: i64) -> [i64] ! alloc
+  requires 0 <= l1 && l1 <= 100000000
+  ensures 1 <= len(result) && len(result) <= 13
+{
+  if mode == 0 {
+    let mut w: [i64] = alloc(13, 0);
+    w[0] = 3;
+    w[1] = 3;
+    w[2] = 0;
+    w[3] = l1;
+    w[5] = 3;
+    w[6] = l1;
+    w[7] = l1 + 1;
+    w[9] = 2;
+    w[10] = crate::util::real_50_hi();  // MUT:M06 => w[10] = 1083129856;
+    w[11] = crate::util::real_50_lo();
+    return w;
+  }
+  if mode == 1 {
+    let mut w1: [i64] = alloc(5, 0);
+    w1[0] = 1;
+    w1[1] = 3;
+    w1[2] = 0;
+    w1[3] = l1;
+    return w1;
+  }
+  let w2: [i64] = alloc(1, 0);
+  return w2;
+}
+
+fn text_words(l: i64) -> [i64] ! alloc
+  ensures len(result) == 5
+{
+  let mut w: [i64] = alloc(5, 0);
+  w[0] = 1;
+  w[1] = 3;
+  w[3] = l;
+  return w;
+}
+
+fn path_words(l: i64) -> [i64] ! alloc
+  ensures len(result) == 2
+{
+  let mut w: [i64] = alloc(2, 0);
+  w[1] = l;
+  return w;
+}
+
+fn lit_eq(c: [u8], a: i64, l: i64, lit: str) -> bool
+  requires 0 <= a && 0 <= l && l <= len(c) - a
+{
+  if l != len(lit) { return false; }
+  let mut i: i64 = 0;
+  while i < l
+    invariant 0 <= i && i <= l && l == len(lit) && 0 <= a && l <= len(c) - a
+    decreases l - i
+  {
+    let x: i64 = c[a + i];
+    let y: i64 = lit[i];
+    if x != y { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+// pragma_table_info result (one column `name`, R rows): 1 when some TEXT cell equals lit, 0 when none, -1 for a malformed payload.
+// Nonstring names never count.
+fn has_name(event: [i64], completion: [u8], lit: str) -> i64
+  requires len(event) >= 16
+{
+  let nw: i64 = event[6];
+  if nw < 4 || len(event) - 16 != nw { return -1; }
+  if event[16] != 1 { return -1; }
+  let nr: i64 = event[17];
+  if nr < 0 || nr > 100000000 || nw != 4 + 4 * nr { return -1; }
+  let mut r: i64 = 0;
+  let mut found: bool = false;
+  while r < nr
+    invariant 0 <= r && r <= nr && nr <= 100000000 && len(event) == 20 + 4 * nr
+    decreases nr - r
+  {
+    let b: i64 = 20 + 4 * r;
+    if event[b] == 3 {
+      let a: i64 = event[b + 1];
+      let l: i64 = event[b + 2];
+      if a >= 0 && crate::packet::ref_ok(a, l, len(completion)) {
+        if lit_eq(completion, a, l, lit) { found = true; }
+      }
+    }
+    r = r + 1;
+  }
+  if found { return 1; }
+  return 0;
+}
+
+// 200: open the original DB path read-only
+fn p200(ctl: [i64], text: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 64 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(text) <= 2147483647
+  ensures len(result) >= 76
+{
+  if ctl[6] != 0 || ctl[1] < 0 || ctl[1] > 2 { return crate::packet::done_internal(ctl, 28); }
+  let dbp: [u8] = crate::util::span_bytes(text, ctl[24], ctl[25]);
+  if len(dbp) == 0 { return crate::packet::done_internal(ctl, 4); }
+  let ep: [i64] = alloc(0, 0);
+  return crate::path::ask(ctl, 201, 3, 4, 0, -1, ep, path_words(len(dbp)), 2, dbp);
+}
+
+// 201: open completed: remember the handle, prepare the schema query
+fn p201(ctl: [i64], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 64 && len(event) >= 16 && 1 <= ctl[3] && ctl[3] <= 1000000000 && len(completion) <= 2147483647
+  ensures len(result) >= 76
+{
+  if ctl[6] != 1 { return crate::packet::done_internal(ctl, 28); }
+  if event[3] == 1 { return crate::packet::done_wrap(ctl, crate::path::db_error(ctl, 4, event, completion)); }
+  if !crate::path::ok_event(event, 3, 1) { return crate::packet::done_internal(ctl, 28); }
+  let conn: i64 = event[16];
+  if conn < 0 { return crate::packet::done_internal(ctl, 4); }
+  let mut c: [i64] = copy(ctl);
+  c[8] = conn;
+  let sql: [u8] = schema_sql();
+  let ep: [i64] = alloc(0, 0);
+  return crate::path::ask(c, 202, 4, 5, 0, conn, ep, path_words(len(sql)), 2, sql);
+}
+
+// 202/204: a schema statement was prepared: execute it with TEXT `table`
+fn prep_exec(ctl: [i64], event: [i64], completion: [u8], next: i64, stage: i64, table: str) -> [i64] ! alloc
+  requires len(ctl) == 64 && len(event) >= 16 && 1 <= ctl[3] && ctl[3] <= 1000000000 && 0 <= ctl[8] && len(completion) <= 2147483647
+  requires 0 <= next && next <= 998 && 5 <= stage && stage <= 6 && len(table) <= 64
+  ensures len(result) >= 76
+{
+  if ctl[6] != 1 { return crate::packet::done_internal(ctl, 28); }
+  if event[3] == 1 { return crate::path::fail_with(ctl, crate::path::db_error(ctl, stage, event, completion)); }
+  if !crate::path::ok_event(event, 4, 4) { return crate::path::fail_with(ctl, crate::path::internal_at(ctl, stage)); }
+  let stmt: i64 = event[16];
+  if stmt < 0 || event[17] != 1 { return crate::path::fail_with(ctl, crate::path::internal_at(ctl, stage)); }
+  let b: [u8] = crate::util::to_bytes(table);
+  let ep: [i64] = alloc(0, 0);
+  return crate::path::ask(ctl, next, 4, stage, 1, stmt, ep, text_words(len(b)), 5, b);
+}
+
+// 203: session columns
+fn p203(ctl: [i64], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 64 && len(event) >= 16 && 1 <= ctl[3] && ctl[3] <= 1000000000 && 0 <= ctl[8] && len(completion) <= 2147483647
+  ensures len(result) >= 76
+{
+  if ctl[6] != 1 { return crate::packet::done_internal(ctl, 28); }
+  if event[3] == 1 { return crate::path::fail_with(ctl, crate::path::db_error(ctl, 5, event, completion)); }
+  let h1: i64 = has_name(event, completion, "id");
+  let h2: i64 = has_name(event, completion, "parent_id");
+  let h3: i64 = has_name(event, completion, "directory");
+  let h4: i64 = has_name(event, completion, "title");
+  let h5: i64 = has_name(event, completion, "time_updated");
+  let h6: i64 = has_name(event, completion, "time_archived");
+  if h1 < 0 || h2 < 0 || h3 < 0 || h4 < 0 || h5 < 0 || h6 < 0 {
+    return crate::path::fail_with(ctl, crate::path::internal_at(ctl, 5));
+  }
+  if h1 == 0 || h2 == 0 || h3 == 0 || h4 == 0 || h5 == 0 {  // MUT:M03 => if false {
+    return crate::path::fail_with(ctl, crate::path::columns_at(ctl, 5));
+  }
+  let mut c: [i64] = copy(ctl);
+  if h6 == 1 { c[22] = 1; } else { c[22] = 0; }
+  let sql: [u8] = schema_sql();
+  let ep: [i64] = alloc(0, 0);
+  return crate::path::ask(c, 204, 4, 6, 0, ctl[8], ep, path_words(len(sql)), 2, sql);
+}
+
+// 205: message.session_id, then prepare the selection
+fn p205(ctl: [i64], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 64 && len(event) >= 16 && 1 <= ctl[3] && ctl[3] <= 1000000000 && 0 <= ctl[8] && len(completion) <= 2147483647
+  ensures len(result) >= 76
+{
+  if ctl[6] != 1 { return crate::packet::done_internal(ctl, 28); }
+  if event[3] == 1 { return crate::path::fail_with(ctl, crate::path::db_error(ctl, 6, event, completion)); }
+  let h: i64 = has_name(event, completion, "session_id");
+  if h < 0 { return crate::path::fail_with(ctl, crate::path::internal_at(ctl, 6)); }
+  if h == 0 {
+    return crate::path::fail_with(ctl, crate::path::columns_at(ctl, 6));
+  }
+  let sql: [u8] = select_sql(ctl[1], ctl[22] == 1);
+  let ep: [i64] = alloc(0, 0);
+  return crate::path::ask(ctl, 206, 4, 7, 0, ctl[8], ep, path_words(len(sql)), 2, sql);
+}
+
+// 206: selection prepared: execute with the typed parameters (no filter value is ever interpolated)
+fn p206(cfg: [i64], cfg_text: [u8], ctl: [i64], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(cfg) >= 32 && len(cfg) <= 2147483647 && len(ctl) == 64 && len(event) >= 16 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  requires 0 <= ctl[8] && len(completion) <= 2147483647 && len(cfg_text) <= 2147483647
+  ensures len(result) >= 76
+{
+  if ctl[6] != 1 { return crate::packet::done_internal(ctl, 28); }
+  if event[3] == 1 { return crate::path::fail_with(ctl, crate::path::db_error(ctl, 7, event, completion)); }
+  if !crate::path::ok_event(event, 4, 10) { return crate::path::fail_with(ctl, crate::path::internal_at(ctl, 7)); }
+  let stmt: i64 = event[16];
+  if stmt < 0 || event[17] != 4 { return crate::path::fail_with(ctl, crate::path::internal_at(ctl, 7)); }
+  let mode: i64 = ctl[1];
+  if mode < 0 || mode > 2 { return crate::path::fail_with(ctl, crate::path::internal_at(ctl, 7)); }
+  let pool: [u8] = select_pool(cfg, cfg_text, mode);
+  if mode != 2 && len(pool) == 0 { return crate::path::fail_with(ctl, crate::path::toobig_at(ctl, 7)); }
+  if len(pool) > 100000000 { return crate::path::fail_with(ctl, crate::path::toobig_at(ctl, 7)); }
+  let mut l1: i64 = 0;
+  if mode == 0 { l1 = (len(pool) - 1) / 2; }
+  if mode == 1 { l1 = len(pool); }
+  let words: [i64] = select_words(mode, l1);
+  let mut c: [i64] = copy(ctl);
+  c[9] = stmt;
+  let ep: [i64] = alloc(0, 0);
+  return crate::path::ask(c, 207, 4, 7, 1, stmt, ep, words, len(words), pool);
+}
+
+// 207: the selection rows arrived: copy the payload words to bank 0 and the completion bytes to bank 1 (decode runs next step)
+fn p207(ctl: [i64], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 64 && len(event) >= 16 && 1 <= ctl[3] && ctl[3] <= 1000000000 && 0 <= ctl[8] && len(completion) <= 2147483647
+  ensures len(result) >= 76
+{
+  if ctl[6] != 1 { return crate::packet::done_internal(ctl, 28); }
+  if event[3] == 1 { return crate::path::fail_with(ctl, crate::path::db_error(ctl, 7, event, completion)); }
+  let nw: i64 = event[6];
+  if nw < 10 || len(event) - 16 != nw { return crate::path::fail_with(ctl, crate::path::internal_at(ctl, 7)); }
+  if nw > 1000000000 { return crate::path::fail_with(ctl, crate::path::toobig_at(ctl, 7)); }
+  let nb: i64 = len(completion);
+  let p0: [i64] = crate::path::append_patch(0, 0, nw, 1, 16);
+  let p1: [i64] = crate::path::append_patch(1, 0, nb, 2, 0);
+  let patches: [i64] = crate::packet::cat_words(p0, p1);
+  return crate::path::proceed(ctl, 208, patches);
+}
+
+// 208: validate and convert the rows (SQL order kept), store them with their text, hand off to list (phase 300)
+fn p208(ctl: [i64], query_words: [i64], query_bytes: [u8], text: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 64 && 1 <= ctl[3] && ctl[3] <= 1000000000 && 0 <= ctl[8]
+  requires len(query_words) <= 2147483647 && len(query_bytes) <= 2147483647 && len(text) <= 2147483647
+  ensures len(result) >= 76
+{
+  if ctl[6] != 0 { return crate::packet::done_internal(ctl, 28); }
+  let d: crate::rows::Decoded = crate::rows::decode(query_words, query_bytes);
+  if d.status == 1 { return crate::path::fail_with(ctl, crate::path::internal_at(ctl, 7)); }
+  if d.status != 0 { return crate::path::fail_with(ctl, crate::path::toobig_at(ctl, 7)); }
+  let n: i64 = d.count;
+  let cur: i64 = len(text);
+  let pn: i64 = len(d.pool);
+  if n < 0 || n > 100000000 || pn > 1000000000 || !crate::util::bank_fits(cur, pn) {
+    return crate::path::fail_with(ctl, crate::path::toobig_at(ctl, 7));
+  }
+  let rel: [i64] = crate::rows::relocate(d.rows, cur);
+  if len(rel) != 7 * n { return crate::path::fail_with(ctl, crate::path::internal_at(ctl, 7)); }
+  let mut lit: [i64] = alloc(8 * n, -1);
+  let mut j: i64 = 0;
+  while j < 7 * n
+    invariant 0 <= j && j <= 7 * n && n <= 100000000 && len(lit) == 8 * n && len(rel) == 7 * n
+    decreases 7 * n - j
+  {
+    lit[j] = rel[j];
+    j = j + 1;
+  }
+  let p2: [i64] = crate::path::append_patch(2, 0, 8 * n, 3, 0);
+  let p3: [i64] = crate::path::append_patch(3, cur, pn, 4, 0);
+  let patches: [i64] = crate::packet::cat_words(p2, p3);
+  let mut c: [i64] = copy(ctl);
+  c[20] = 0;
+  c[21] = n;
+  let c2: [i64] = crate::packet::ctl_next(c, 300);
+  let ep: [i64] = alloc(0, 0);
+  return crate::packet::step_packet(c2, patches, ep, lit, d.pool, ep, 2);
+}
+
+pub fn advance(cfg: [i64], cfg_text: [u8], ctl: [i64], query_words: [i64], query_bytes: [u8], rows: [i64], text: [u8],
+               document: [u8], saved_result: [i64], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(cfg) >= 32 && len(cfg) <= 2147483647 && 0 <= cfg[1] && cfg[1] <= 5 && len(ctl) == 64 && len(event) >= 16
+  requires 1 <= ctl[3] && ctl[3] <= 1000000000 && 0 <= ctl[4] && ctl[4] < ctl[3] && 0 <= ctl[2] && ctl[2] <= 999
+  requires 0 <= ctl[5] && ctl[5] <= 15 && 0 <= ctl[6] && ctl[6] <= 2 && ctl[1] == cfg[1]
+  requires len(cfg_text) <= 2147483647 && len(query_words) <= 2147483647 && len(query_bytes) <= 2147483647 && len(rows) <= 2147483647
+  requires len(text) <= 2147483647 && len(document) <= 2147483647 && len(saved_result) <= 2147483647 && len(completion) <= 2147483647
+  ensures len(result) >= 76
+{
+  let phase: i64 = ctl[2];
+  if phase == 200 { return p200(ctl, text); }
+  if phase == 201 { return p201(ctl, event, completion); }
+  if phase < 202 || phase > 208 { return crate::packet::done_internal(ctl, 28); }
+  if ctl[8] < 0 { return crate::packet::done_internal(ctl, 28); }
+  if phase == 202 { return prep_exec(ctl, event, completion, 203, 5, "session"); }
+  if phase == 203 { return p203(ctl, event, completion); }
+  if phase == 204 { return prep_exec(ctl, event, completion, 205, 6, "message"); }
+  if phase == 205 { return p205(ctl, event, completion); }
+  if phase == 206 { return p206(cfg, cfg_text, ctl, event, completion); }
+  if phase == 207 { return p207(ctl, event, completion); }
+  return p208(ctl, query_words, query_bytes, text);
+}

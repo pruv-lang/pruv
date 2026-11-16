@@ -1,0 +1,320 @@
+// OpenCode row module (package B): follows DESIGN.md/IMPL_NOTES.md; written without a shell (not compiled).
+// decode(queryWords, queryBytes): the select result payload (banks 0/1: [C=4, R, 8 column-ref words, R*16 typed values]) becomes
+// validated seven-word rows [idStart, idLen, dirStart, dirLen, titleStart, titleLen, updatedMs] (refs relative to a pool that holds
+// id ++ directory ++ cleaned title per kept row, in SQL order), plus updated_number (P9), clean_title, db_iso (with the extended
+// years of JS TimeClip). Nothing here sorts, caps or backfills rows.
+
+pub struct Decoded { status: i64, count: i64, rows: [i64], pool: [u8] }
+
+fn bad(status: i64) -> Decoded ! alloc
+  ensures result.status == status && result.count == 0 && len(result.rows) == 0 && len(result.pool) == 0
+{
+  let er: [i64] = alloc(0, 0);
+  let eb: [u8] = alloc(0, 0);
+  return Decoded { status: status, count: 0, rows: copy(er), pool: copy(eb) };
+}
+
+fn alnum(x: i64) -> bool
+{
+  return (48 <= x && x <= 57) || (65 <= x && x <= 90) || (97 <= x && x <= 122);
+}
+
+// /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/ on the bytes t[s..s+l]
+pub fn valid_id(t: [u8], s: i64, l: i64) -> bool
+  ensures result ==> (0 <= s && 1 <= l && l <= 128 && l <= len(t) - s)
+{
+  if !crate::packet::ref_ok(s, l, len(t)) || s < 0 || l < 1 || l > 128 { return false; }
+  let c0: i64 = t[s];
+  if !alnum(c0) { return false; }
+  let mut i: i64 = 1;
+  while i < l
+    invariant 1 <= i && i <= l && l <= 128 && 0 <= s && l <= len(t) - s
+    decreases l - i
+  {
+    let x: i64 = t[s + i];
+    if !(alnum(x) || x == 95 || x == 45) { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+fn has_prefix(t: [u8], s: i64, l: i64, lit: str) -> bool
+  requires 0 <= s && 0 <= l && l <= len(t) - s
+{
+  if len(lit) > l { return false; }
+  let mut k: i64 = 0;
+  while k < len(lit)
+    invariant 0 <= k && k <= len(lit) && len(lit) <= l && 0 <= s && l <= len(t) - s
+    decreases len(lit) - k
+  {
+    let x: i64 = t[s + k];
+    let y: i64 = lit[k];
+    if x != y { return false; }
+    k = k + 1;
+  }
+  return true;
+}
+
+// cleanTitle: only a TEXT value counts; empty, or a raw start "New session - " / "Child session - " (tested before trimming),
+// gives ""; otherwise whitespace collapsed, trimmed, cut to 120 UTF-16 units (P2: a split astral scalar is dropped).
+pub fn clean_title(kind: i64, a: i64, b: i64, qb: [u8]) -> [u8] ! alloc
+  ensures len(result) <= 100000000
+{
+  let empty: [u8] = alloc(0, 0);
+  if kind != 3 { return empty; }
+  if !crate::packet::ref_ok(a, b, len(qb)) || a < 0 || b < 1 { return empty; }
+  if has_prefix(qb, a, b, "New session - ") { return empty; }
+  if has_prefix(qb, a, b, "Child session - ") { return empty; }
+  let raw: [u8] = crate::util::span_bytes(qb, a, b);
+  let s: str = crate::jstr::adapter_probe(raw);
+  if len(s) > 100000000000 { return empty; }
+  let t: str = crate::text::one_line(s, 120);
+  let out: [u8] = crate::util::to_bytes(t);
+  if len(out) > 100000000 { return empty; }
+  return out;
+}
+
+// trimmed [+-]?[0-9]+ within +-(2^53-1) (checked accumulation); blank, other text, or beyond the range => 0 (P9)
+fn text_number(s: str) -> i64
+  ensures -9007199254740991 <= result && result <= 9007199254740991
+{
+  let sp: crate::text::Span = crate::text::trim_span(s);
+  let hi: i64 = sp.hi;
+  let mut i: i64 = sp.lo;
+  if i >= hi { return 0; }
+  let mut neg: bool = false;
+  let c0: i64 = s[i];
+  if c0 == 43 {
+    i = i + 1;
+  } else if c0 == 45 {
+    neg = true;
+    i = i + 1;
+  }
+  if i >= hi { return 0; }
+  let mut v: i64 = 0;
+  while i < hi
+    invariant 0 <= i && i <= hi && hi <= len(s) && 0 <= v && v <= 9007199254740991
+    decreases hi - i
+  {
+    let c: i64 = s[i];
+    if c < 48 || c > 57 { return 0; }
+    let d: i64 = c - 48;
+    if v > (9007199254740991 - d) / 10 { return 0; }
+    v = v * 10 + d;
+    i = i + 1;
+  }
+  if neg { return 0 - v; }
+  return v;
+}
+
+// P9 for the `updated` cell [kind, a, b]: safe INTEGER; finite integral REAL within the safe range (limbs a=high32, b=low32);
+// trimmed integer TEXT (a,b = start,len in qb); NULL, BLOB, fractions, exponents, hex, anything else => 0.
+pub fn updated_number(kind: i64, a: i64, b: i64, qb: [u8]) -> i64 ! alloc
+  ensures -9007199254740991 <= result && result <= 9007199254740991
+{
+  if kind == 1 {
+    if a < -9007199254740991 || a > 9007199254740991 { return 0; }
+    return a;
+  }
+  if kind == 2 {
+    if !crate::util::limbs_ok(a, b) { return 0; }
+    if !crate::util::real_is_safe_integer(a, b) { return 0; }
+    return crate::util::real_to_integer(a, b);
+  }
+  if kind == 3 {
+    if !crate::packet::ref_ok(a, b, len(qb)) || a < 0 { return 0; }
+    let raw: [u8] = crate::util::span_bytes(qb, a, b);
+    let s: str = crate::jstr::adapter_probe(raw);
+    return text_number(s);
+  }
+  return 0;
+}
+
+// "+YYYYYY-MM-DDTHH:mm:ss.sssZ" for 253402300800000 <= ms <= 8640000000000000 (years 10000..275760); empty only if the
+// calendar arithmetic left its guarded ranges.
+fn format_ext(ms: i64) -> [u8] ! alloc
+  requires 253402300800000 <= ms && ms <= 8640000000000000
+  ensures len(result) == 0 || len(result) == 27
+{
+  let day: i64 = 86400000;
+  let days: i64 = ms / day;
+  let rem: i64 = ms - days * day;
+  let z: i64 = days + 719468;
+  let era: i64 = z / 146097;
+  let doe: i64 = z - era * 146097;
+  let yoe: i64 = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  let doy: i64 = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  let mp: i64 = (5 * doy + 2) / 153;
+  let d: i64 = doy - (153 * mp + 2) / 5 + 1;
+  let mut m: i64 = mp + 3;
+  if mp >= 10 { m = mp - 9; }
+  let mut y: i64 = yoe + era * 400;
+  if m <= 2 { y = y + 1; }
+  let h: i64 = rem / 3600000;
+  let mi: i64 = (rem / 60000) % 60;
+  let sec: i64 = (rem / 1000) % 60;
+  let f: i64 = rem % 1000;
+  if y < 10000 || y > 275760 || m < 1 || m > 12 || d < 1 || d > 31 || rem < 0 || h < 0 || h > 23 {
+    let none: [u8] = alloc(0, 0);
+    return none;
+  }
+  let mut out: [u8] = alloc(27, 0);
+  out[0] = 43;
+  out[1] = 48 + (y / 100000) % 10;
+  out[2] = 48 + (y / 10000) % 10;
+  out[3] = 48 + (y / 1000) % 10;
+  out[4] = 48 + (y / 100) % 10;
+  out[5] = 48 + (y / 10) % 10;
+  out[6] = 48 + y % 10;
+  out[7] = 45;
+  out[8] = 48 + (m / 10) % 10;
+  out[9] = 48 + m % 10;
+  out[10] = 45;
+  out[11] = 48 + (d / 10) % 10;
+  out[12] = 48 + d % 10;
+  out[13] = 84;
+  out[14] = 48 + (h / 10) % 10;
+  out[15] = 48 + h % 10;
+  out[16] = 58;
+  out[17] = 48 + (mi / 10) % 10;
+  out[18] = 48 + mi % 10;
+  out[19] = 58;
+  out[20] = 48 + (sec / 10) % 10;
+  out[21] = 48 + sec % 10;
+  out[22] = 46;
+  out[23] = 48 + (f / 100) % 10;
+  out[24] = 48 + (f / 10) % 10;
+  out[25] = 48 + f % 10;
+  out[26] = 90;
+  return out;
+}
+
+// isoOf(v) for a positive updated value: seconds below 1e11, else milliseconds. The 24-byte text for years 0000..9999 (shared
+// time package), the 27-byte signed six-digit-year text up to the TimeClip limit 8640000000000000, else empty (absent).
+pub fn db_iso(v: i64) -> [u8] ! alloc
+  requires -9007199254740991 <= v && v <= 9007199254740991
+  ensures len(result) == 0 || len(result) == 24 || len(result) == 27
+{
+  let empty: [u8] = alloc(0, 0);
+  if v <= 0 { return empty; }
+  let t: i64 = crate::time::integer_time(v);
+  if t != crate::time::time_none() { return crate::time::format_iso(t); }
+  if v < 253402300800000 || v > 8640000000000000 { return empty; }
+  return format_ext(v);
+}
+
+// add base to the three ref starts of every 7-word row
+pub fn relocate(rows: [i64], base: i64) -> [i64] ! alloc
+  requires 0 <= base && base <= 2147483647
+  ensures len(result) == len(rows)
+{
+  let n: i64 = len(rows);
+  let mut o: [i64] = alloc(n, 0);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(rows) && len(o) == n
+    decreases n - i
+  {
+    o[i] = rows[i];
+    i = i + 1;
+  }
+  let cnt: i64 = n / 7;
+  let mut r: i64 = 0;
+  while r < cnt
+    invariant 0 <= r && r <= cnt && cnt == n / 7 && 7 * cnt <= n && n == len(rows) && len(o) == n
+    decreases cnt - r
+  {
+    let b: i64 = 7 * r;
+    // refs are pool offsets (0..2^31-1); anything else is left as is and fails the later shape check
+    if 0 <= rows[b] && rows[b] <= 2147483647 { o[b] = rows[b] + base; }
+    if 0 <= rows[b + 2] && rows[b + 2] <= 2147483647 { o[b + 2] = rows[b + 2] + base; }
+    if 0 <= rows[b + 4] && rows[b + 4] <= 2147483647 { o[b + 4] = rows[b + 4] + base; }
+    r = r + 1;
+  }
+  return o;
+}
+
+fn grow(b: [u8], used: i64, need: i64) -> [u8] ! alloc
+  requires 0 <= used && used <= len(b) && used <= 1000000000 && 0 <= need && need <= 1000000000 - used
+  ensures len(result) >= used + need && len(result) <= 2000000000
+{
+  let mut want: i64 = 2 * (used + need);
+  if want < 256 { want = 256; }
+  let mut o: [u8] = alloc(want, 0);
+  crate::bytes::copy_span(inout o, 0, b, 0, used);
+  return o;
+}
+
+// status 0 ok; 1 malformed payload (not 4 columns, bad length); 2 pool over 1e9 bytes. A row is kept when id is a TEXT thread name and
+// directory a nonempty TEXT; every other row is dropped (it keeps its place in SQLite's limit but not in the output).
+pub fn decode(query_words: [i64], query_bytes: [u8]) -> Decoded ! alloc
+  requires len(query_words) <= 2147483647 && len(query_bytes) <= 2147483647
+  ensures result.status == 0 ==> (0 <= result.count && len(result.rows) == 7 * result.count)
+  ensures result.status != 0 ==> (result.count == 0 && len(result.rows) == 0 && len(result.pool) == 0)
+{
+  let nw: i64 = len(query_words);
+  if nw < 10 { return bad(1); }
+  let cc: i64 = query_words[0];
+  let nr: i64 = query_words[1];
+  if cc != 4 || nr < 0 || nr > 100000000 { return bad(1); }
+  if nw != 10 + 16 * nr { return bad(1); }
+  let nq: i64 = len(query_bytes);
+  let mut rows: [i64] = alloc(7 * nr, 0);
+  let mut pool: [u8] = alloc(256, 0);
+  let mut used: i64 = 0;
+  let mut cnt: i64 = 0;
+  let mut i: i64 = 0;
+  while i < nr
+    invariant 0 <= i && i <= nr && nr <= 100000000 && nw == 10 + 16 * nr && nw == len(query_words) && nq == len(query_bytes)
+    invariant 0 <= cnt && cnt <= i && len(rows) == 7 * nr
+    invariant 0 <= used && used <= len(pool) && used <= 1000000000 && len(pool) <= 2000000000
+    decreases nr - i
+  {
+    let b: i64 = 10 + 16 * i;
+    let kid: i64 = query_words[b];
+    let ia: i64 = query_words[b + 1];
+    let il: i64 = query_words[b + 2];
+    let kdir: i64 = query_words[b + 4];
+    let da: i64 = query_words[b + 5];
+    let dl: i64 = query_words[b + 6];
+    let ktit: i64 = query_words[b + 8];
+    let ta: i64 = query_words[b + 9];
+    let tl: i64 = query_words[b + 10];
+    let kupd: i64 = query_words[b + 12];
+    let ua: i64 = query_words[b + 13];
+    let ub: i64 = query_words[b + 14];
+    if kid == 3 && kdir == 3 && valid_id(query_bytes, ia, il) && crate::packet::ref_ok(da, dl, nq) && da >= 0 && dl >= 1 {
+      let title: [u8] = clean_title(ktit, ta, tl, query_bytes);
+      let tn: i64 = len(title);
+      let need: i64 = il + dl + tn;
+      if need > 1000000000 - used { return bad(2); }
+      if len(pool) - used < need { pool = grow(pool, used, need); }
+      crate::bytes::copy_span(inout pool, used, query_bytes, ia, ia + il);
+      crate::bytes::copy_span(inout pool, used + il, query_bytes, da, da + dl);
+      crate::bytes::copy_span(inout pool, used + il + dl, title, 0, tn);
+      let o: i64 = 7 * cnt;
+      rows[o] = used;
+      rows[o + 1] = il;
+      rows[o + 2] = used + il;
+      rows[o + 3] = dl;
+      rows[o + 4] = used + il + dl;
+      rows[o + 5] = tn;
+      rows[o + 6] = updated_number(kupd, ua, ub, query_bytes);
+      used = used + need;
+      cnt = cnt + 1;
+    }
+    i = i + 1;
+  }
+  let mut fr: [i64] = alloc(7 * cnt, 0);
+  let mut j: i64 = 0;
+  while j < 7 * cnt
+    invariant 0 <= j && j <= 7 * cnt && len(fr) == 7 * cnt && 7 * cnt <= len(rows)
+    decreases 7 * cnt - j
+  {
+    fr[j] = rows[j];
+    j = j + 1;
+  }
+  let mut fp: [u8] = alloc(used, 0);
+  crate::bytes::copy_span(inout fp, 0, pool, 0, used);
+  return Decoded { status: 0, count: cnt, rows: copy(fr), pool: copy(fp) };
+}

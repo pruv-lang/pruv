@@ -1,0 +1,375 @@
+// OpenCode list module (package B, phases 300-399): follows DESIGN.md/IMPL_NOTES.md; written without a shell (not compiled).
+// 300 entry (mode 0: prepare COUNT once; modes 1/2: close; no DB: wall clock) | 301 COUNT prepared -> get(id) of row 0 or close |
+// 302 count of row ctl[20] -> bank 2 count word 7n+i, next get or close | 390 close consumed (error ignored; ctl[38] = 1 finishes with
+// the saved error result): mode 0 -> wall clock, mode 2 -> rows result, mode 1 -> read hand-off to export (phase 400, DB closed, handles
+// -1, fallback title ctl[32,33], first directory ctl[34,35], first thread ctl[36,37] as bank-3 refs) | 391 clock -> list result.
+// Bank 2 layout: 7*n row words [idRef, dirRef, titleRef, updatedMs], then n count words (-1 = no count). Refs address bank 3.
+
+fn count_sql() -> [u8] ! alloc
+  ensures len(result) <= 100
+{
+  let s: str = "SELECT COUNT(*) AS n FROM message WHERE session_id = ?";
+  return crate::util::to_bytes(s);
+}
+
+fn path_words(l: i64) -> [i64] ! alloc
+  ensures len(result) == 2
+{
+  let mut w: [i64] = alloc(2, 0);
+  w[1] = l;
+  return w;
+}
+
+// the single wall-clock observation (list only), taken after the DB is closed (or absent)
+fn clock_request(ctl: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 64 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  ensures len(result) >= 76
+{
+  let ep: [i64] = alloc(0, 0);
+  let eb: [u8] = alloc(0, 0);
+  return crate::path::ask(ctl, 391, 15, 12, 1, -1, ep, ep, 0, eb);
+}
+
+fn close_request(ctl: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 64 && 1 <= ctl[3] && ctl[3] <= 1000000000 && 0 <= ctl[8]
+  ensures len(result) >= 76
+{
+  let ep: [i64] = alloc(0, 0);
+  let eb: [u8] = alloc(0, 0);
+  return crate::path::ask(ctl, 390, 5, 10, 0, ctl[8], ep, ep, 0, eb);
+}
+
+// get(TEXT id of row i) on the count statement. args = [1, 3, 0, idLen, 0]; the word after them is `extra` (a literal word the
+// patches may copy).
+fn get_next(ctl: [i64], rows: [i64], text: [u8], i: i64, patches: [i64], extra: i64) -> [i64] ! alloc
+  requires len(ctl) == 64 && 1 <= ctl[3] && ctl[3] <= 1000000000 && 0 <= ctl[10] && 0 <= ctl[8]
+  requires len(rows) <= 2147483647 && len(text) <= 2147483647 && len(patches) <= 4096
+  ensures len(result) >= 76
+{
+  let n: i64 = ctl[21];
+  if !crate::path::rows_ok(rows, n) || i < 0 || i >= n { return crate::path::fail_with(ctl, crate::path::internal_at(ctl, 9)); }
+  let id: [u8] = crate::util::span_bytes(text, rows[7 * i], rows[7 * i + 1]);
+  if len(id) == 0 { return crate::path::fail_with(ctl, crate::path::internal_at(ctl, 9)); }
+  let mut w: [i64] = alloc(6, 0);
+  w[0] = 1;
+  w[1] = 3;
+  w[3] = len(id);
+  w[5] = extra;
+  return crate::path::ask(ctl, 302, 4, 9, 2, ctl[10], patches, w, 5, id);
+}
+
+// COUNT(*) cell of a get result [C=1, R, name ref(2), kind, a, b, c]: a safe nonnegative INTEGER, else -1 (no count)
+fn count_cell(event: [i64]) -> i64
+  requires len(event) >= 16
+  ensures -1 <= result && result <= 9007199254740991
+{
+  let nw: i64 = event[6];
+  if len(event) - 16 != nw || nw != 8 { return -1; }
+  if event[16] != 1 || event[17] != 1 { return -1; }
+  if event[20] != 1 { return -1; }
+  let a: i64 = event[21];
+  if a < 0 || a > 9007199254740991 { return -1; }
+  return a;
+}
+
+// 300: entry from sql (DB open, rows in banks 2/3) or from admit (no DB, ctl[8] = -1)
+fn p300(ctl: [i64]) -> [i64] ! alloc
+  requires len(ctl) == 64 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  ensures len(result) >= 76
+{
+  if ctl[6] != 0 { return crate::packet::done_internal(ctl, 28); }
+  let mode: i64 = ctl[1];
+  if ctl[8] < 0 {
+    if mode == 0 { return clock_request(ctl); }
+    return crate::packet::done_internal(ctl, 28);
+  }
+  if mode == 0 {
+    let sql: [u8] = count_sql();
+    let ep: [i64] = alloc(0, 0);
+    return crate::path::ask(ctl, 301, 4, 8, 0, ctl[8], ep, path_words(len(sql)), 2, sql);
+  }
+  if mode == 1 || mode == 2 { return close_request(ctl); }
+  return crate::packet::done_internal(ctl, 28);
+}
+
+// 301: COUNT prepared (once, even with zero validated rows)
+fn p301(ctl: [i64], rows: [i64], text: [u8], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 64 && len(event) >= 16 && 1 <= ctl[3] && ctl[3] <= 1000000000 && 0 <= ctl[8]
+  requires len(rows) <= 2147483647 && len(text) <= 2147483647 && len(completion) <= 2147483647
+  ensures len(result) >= 76
+{
+  if ctl[6] != 1 { return crate::packet::done_internal(ctl, 28); }
+  if event[3] == 1 { return crate::path::fail_with(ctl, crate::path::db_error(ctl, 8, event, completion)); }
+  if !crate::path::ok_event(event, 4, 4) { return crate::path::fail_with(ctl, crate::path::internal_at(ctl, 8)); }
+  if event[17] != 1 || event[16] < 0 { return crate::path::fail_with(ctl, crate::path::internal_at(ctl, 8)); }
+  let n: i64 = ctl[21];
+  if !crate::path::rows_ok(rows, n) { return crate::path::fail_with(ctl, crate::path::internal_at(ctl, 8)); }
+  let mut c: [i64] = copy(ctl);
+  c[10] = event[16];
+  if n == 0 { return close_request(c); }
+  let ep: [i64] = alloc(0, 0);
+  return get_next(c, rows, text, 0, ep, 0);
+}
+
+// 302: the count of row ctl[20] arrived: store it in bank 2, then the next get or the close
+fn p302(ctl: [i64], rows: [i64], text: [u8], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 64 && len(event) >= 16 && 1 <= ctl[3] && ctl[3] <= 1000000000 && 0 <= ctl[8] && 0 <= ctl[10]
+  requires len(rows) <= 2147483647 && len(text) <= 2147483647 && len(completion) <= 2147483647
+  ensures len(result) >= 76
+{
+  if ctl[6] != 1 { return crate::packet::done_internal(ctl, 28); }
+  if event[3] == 1 { return crate::path::fail_with(ctl, crate::path::db_error(ctl, 9, event, completion)); }
+  if event[2] != 4 { return crate::path::fail_with(ctl, crate::path::internal_at(ctl, 9)); }
+  let i: i64 = ctl[20];
+  let n: i64 = ctl[21];
+  if !crate::path::rows_ok(rows, n) || i < 0 || i >= n { return crate::path::fail_with(ctl, crate::path::internal_at(ctl, 9)); }
+  let cnt: i64 = count_cell(event);
+  let mut c: [i64] = copy(ctl);
+  c[20] = i + 1;
+  if i + 1 < n {
+    let pc: [i64] = crate::packet::patch_copy(2, 7 * n + i, 1, 3, 5);
+    return get_next(c, rows, text, i + 1, pc, cnt);
+  }
+  let pc2: [i64] = crate::packet::patch_copy(2, 7 * n + i, 1, 3, 0);
+  let mut w: [i64] = alloc(1, 0);
+  w[0] = cnt;
+  let eb: [u8] = alloc(0, 0);
+  return crate::path::ask(c, 390, 5, 10, 0, ctl[8], pc2, w, 0, eb);
+}
+
+// Row order of the list result: SQL order (the identity permutation). by_updated_desc is the M07 mutant's re-sort by the
+// converted updated number (stable, descending); the baseline never calls it.
+fn sql_order(n: i64) -> [i64] ! alloc
+  requires 0 <= n && n <= 100000000
+  ensures len(result) == n
+{
+  let mut o: [i64] = alloc(n, 0);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && len(o) == n
+    decreases n - i
+  {
+    o[i] = i;
+    i = i + 1;
+  }
+  return o;
+}
+
+fn by_updated_desc(rows: [i64], n: i64) -> [i64] ! alloc
+  requires 0 <= n && n <= 100000000 && 7 * n <= len(rows)
+  ensures len(result) == n
+{
+  let mut o: [i64] = sql_order(n);
+  if n < 2 { return o; }
+  let mut i: i64 = 1;
+  while i < n
+    invariant 1 <= i && i <= n && len(o) == n && 7 * n <= len(rows)
+    decreases n - i
+  {
+    let mut j: i64 = i;
+    while j > 0
+      invariant 0 <= j && j <= i && i < n && len(o) == n && 7 * n <= len(rows)
+      decreases j
+    {
+      let a: i64 = o[j - 1];
+      let c: i64 = o[j];
+      if a < 0 || a >= n || c < 0 || c >= n { return o; }
+      if rows[7 * a + 6] >= rows[7 * c + 6] {
+        j = 0;
+      } else {
+        o[j - 1] = c;
+        o[j] = a;
+        j = j - 1;
+      }
+    }
+    i = i + 1;
+  }
+  return o;
+}
+
+// list result: rows in SQL order, width 10: [thread(2), title(2), updatedAt(2), messagesPresent, messages, maybeOpen, 0]
+fn list_result(ctl: [i64], rows: [i64], text: [u8], now: i64) -> [i64] ! alloc
+  requires len(ctl) == 64 && 0 <= now && now <= 9007199254740991 && len(rows) <= 2147483647 && len(text) <= 2147483647
+  ensures len(result) >= 40
+{
+  let n: i64 = ctl[21];
+  if !crate::path::rows_ok(rows, n) || n > 100000000 { return crate::path::internal_at(ctl, 12); }
+  let ord: [i64] = sql_order(n);  // MUT:M07 => let ord: [i64] = by_updated_desc(rows, n);
+  let mut out: [i64] = alloc(10 * n, 0);
+  let mut pool: [u8] = alloc(0, 0);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n <= 100000000 && 8 * n <= len(rows) && len(out) == 10 * n && len(text) <= 2147483647 && len(ord) == n
+    decreases n - i
+  {
+    let r: i64 = ord[i];
+    if r < 0 || r >= n { return crate::path::internal_at(ctl, 12); }
+    let b: i64 = 7 * r;
+    let ob: i64 = 10 * i;
+    let ids: i64 = rows[b];
+    let il: i64 = rows[b + 1];
+    let ts: i64 = rows[b + 4];
+    let tl: i64 = rows[b + 5];
+    let upd: i64 = rows[b + 6];
+    let cnt: i64 = rows[7 * n + r];
+    if ids < 0 || ts < 0 || !crate::packet::ref_ok(ids, il, len(text)) || !crate::packet::ref_ok(ts, tl, len(text)) {
+      return crate::path::internal_at(ctl, 12);
+    }
+    if upd < -9007199254740991 || upd > 9007199254740991 { return crate::path::internal_at(ctl, 12); }
+    let idb: [u8] = crate::util::span_bytes(text, ids, il);
+    let tb: [u8] = crate::util::span_bytes(text, ts, tl);
+    if len(pool) > 500000000 || len(idb) > 100000000 || len(tb) > 100000000 { return crate::path::toobig_at(ctl, 12); }
+    let iso: [u8] = crate::rows::db_iso(upd);
+    out[ob] = len(pool);
+    out[ob + 1] = len(idb);
+    pool = crate::packet::cat_bytes(pool, idb);
+    out[ob + 2] = len(pool);
+    out[ob + 3] = len(tb);
+    pool = crate::packet::cat_bytes(pool, tb);
+    if len(iso) > 0 {
+      out[ob + 4] = len(pool);
+      out[ob + 5] = len(iso);
+      pool = crate::packet::cat_bytes(pool, iso);
+    } else {
+      out[ob + 4] = -1;
+      out[ob + 5] = 0;
+    }
+    if cnt >= 0 {
+      out[ob + 6] = 1;
+      out[ob + 7] = cnt;
+    }
+    if upd > 0 && now - upd < 120000 { out[ob + 8] = 1; }  // MUT:M08 => if upd > 0 && now - upd <= 120000 { out[ob + 8] = 1; }
+    out[ob + 9] = 0;
+    i = i + 1;
+  }
+  if len(pool) > 1073741823 { return crate::path::toobig_at(ctl, 12); }
+  let mut m: [i64] = crate::packet::meta_new(0);
+  m[4] = n;
+  m[5] = 10;
+  let ew: [i64] = alloc(0, 0);
+  return crate::packet::ok_result(m, out, ew, pool);
+}
+
+// unfiltered rows result, width 7: [id(2), directory(2), title(2), updatedMs]; refs are re-based to the final pool = text[base..]
+fn rows_result(ctl: [i64], rows: [i64], text: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 64 && len(rows) <= 2147483647 && len(text) <= 2147483647
+  ensures len(result) >= 40
+{
+  let n: i64 = ctl[21];
+  if !crate::path::rows_ok(rows, n) || n > 100000000 { return crate::path::internal_at(ctl, 10); }
+  let b0: i64 = ctl[26];
+  let l0: i64 = ctl[27];
+  if b0 < 0 || l0 < 0 || b0 > len(text) || l0 > len(text) - b0 { return crate::path::internal_at(ctl, 10); }
+  let base: i64 = b0 + l0;
+  let pool: [u8] = crate::util::span_bytes(text, base, len(text) - base);
+  if len(pool) > 1073741823 { return crate::path::toobig_at(ctl, 10); }
+  let mut out: [i64] = alloc(7 * n, 0);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n <= 100000000 && 8 * n <= len(rows) && len(out) == 7 * n && 0 <= base
+    decreases n - i
+  {
+    let b: i64 = 7 * i;
+    if rows[b] < base || rows[b + 2] < base || rows[b + 4] < base { return crate::path::internal_at(ctl, 10); }
+    out[b] = rows[b] - base;
+    out[b + 1] = rows[b + 1];
+    out[b + 2] = rows[b + 2] - base;
+    out[b + 3] = rows[b + 3];
+    out[b + 4] = rows[b + 4] - base;
+    out[b + 5] = rows[b + 5];
+    out[b + 6] = rows[b + 6];
+    i = i + 1;
+  }
+  let mut m: [i64] = crate::packet::meta_new(2);
+  m[4] = n;
+  m[5] = 7;
+  let ew: [i64] = alloc(0, 0);
+  return crate::packet::ok_result(m, out, ew, pool);
+}
+
+// read hand-off after the close: first validated row, folderKey equality, binary and tempRoot truthiness, then export (phase 400)
+fn read_handoff(cfg: [i64], cfg_text: [u8], ctl: [i64], rows: [i64], text: [u8]) -> [i64] ! alloc
+  requires len(cfg) >= 32 && len(cfg) <= 2147483647 && len(ctl) == 64 && len(rows) <= 2147483647 && len(text) <= 2147483647
+  ensures len(result) >= 76
+{
+  let n: i64 = ctl[21];
+  if n < 1 { return crate::packet::done_simple(ctl, 11, 1, 1); }
+  if !crate::path::rows_ok(rows, n) { return crate::packet::done_internal(ctl, 11); }
+  if !crate::packet::ref_ok(rows[0], rows[1], len(text)) || !crate::packet::ref_ok(rows[2], rows[3], len(text)) || !crate::packet::ref_ok(rows[4], rows[5], len(text)) {
+    return crate::packet::done_internal(ctl, 11);
+  }
+  let dir: [u8] = crate::util::span_bytes(text, rows[2], rows[3]);
+  let folder: [u8] = crate::util::span_bytes(cfg_text, cfg[8], cfg[9]);
+  if !crate::path::same_key(dir, folder) { return crate::packet::done_simple(ctl, 11, 1, 1); }  // MUT:M09 => if false { return crate::packet::done_simple(ctl, 11, 1, 1); }
+  if cfg[13] < 1 || cfg[15] < 1 { return crate::packet::done_simple(ctl, 11, 1, 3); }
+  let mut c: [i64] = copy(ctl);
+  c[32] = rows[4];
+  c[33] = rows[5];
+  c[34] = rows[2];
+  c[35] = rows[3];
+  c[36] = rows[0];
+  c[37] = rows[1];
+  let ep: [i64] = alloc(0, 0);
+  return crate::path::proceed(c, 400, ep);
+}
+
+// 390: close consumed (its error is ignored)
+fn p390(cfg: [i64], cfg_text: [u8], ctl: [i64], rows: [i64], text: [u8], saved_result: [i64]) -> [i64] ! alloc
+  requires len(cfg) >= 32 && len(cfg) <= 2147483647 && len(ctl) == 64 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  requires len(rows) <= 2147483647 && len(text) <= 2147483647 && len(saved_result) <= 2147483647
+  ensures len(result) >= 76
+{
+  if ctl[6] != 1 { return crate::packet::done_internal(ctl, 28); }
+  if ctl[38] == 1 { return crate::packet::done_wrap(ctl, saved_result); }
+  let mut c: [i64] = copy(ctl);
+  c[8] = -1;
+  c[9] = -1;
+  c[10] = -1;
+  let mode: i64 = ctl[1];
+  if mode == 0 { return clock_request(c); }
+  if mode == 2 { return crate::packet::done_wrap(c, rows_result(c, rows, text)); }
+  if mode == 1 { return read_handoff(cfg, cfg_text, c, rows, text); }
+  return crate::packet::done_internal(c, 28);
+}
+
+// 391: wall clock observed (once): the list result
+fn p391(ctl: [i64], rows: [i64], text: [u8], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(ctl) == 64 && len(event) >= 16 && 1 <= ctl[3] && ctl[3] <= 1000000000
+  requires len(rows) <= 2147483647 && len(text) <= 2147483647 && len(completion) <= 2147483647
+  ensures len(result) >= 76
+{
+  if ctl[6] != 1 { return crate::packet::done_internal(ctl, 28); }
+  if event[3] == 1 {
+    let none: str = "";
+    let raw: [u8] = crate::util::span_bytes(completion, event[8], event[9]);
+    let mut native: i64 = event[5];
+    if native < 0 { native = 0; }
+    return crate::packet::done_error(ctl, 12, 2, 0, native, raw, none, none);
+  }
+  if !crate::path::ok_event(event, 15, 1) { return crate::packet::done_internal(ctl, 12); }
+  let now: i64 = event[16];
+  if now < 0 || now > 9007199254740991 { return crate::packet::done_internal(ctl, 12); }
+  return crate::packet::done_wrap(ctl, list_result(ctl, rows, text, now));
+}
+
+pub fn advance(cfg: [i64], cfg_text: [u8], ctl: [i64], query_words: [i64], query_bytes: [u8], rows: [i64], text: [u8],
+               document: [u8], saved_result: [i64], event: [i64], completion: [u8]) -> [i64] ! alloc
+  requires len(cfg) >= 32 && len(cfg) <= 2147483647 && 0 <= cfg[1] && cfg[1] <= 5 && len(ctl) == 64 && len(event) >= 16
+  requires 1 <= ctl[3] && ctl[3] <= 1000000000 && 0 <= ctl[4] && ctl[4] < ctl[3] && 0 <= ctl[2] && ctl[2] <= 999
+  requires 0 <= ctl[5] && ctl[5] <= 15 && 0 <= ctl[6] && ctl[6] <= 2 && ctl[1] == cfg[1]
+  requires len(cfg_text) <= 2147483647 && len(query_words) <= 2147483647 && len(query_bytes) <= 2147483647 && len(rows) <= 2147483647
+  requires len(text) <= 2147483647 && len(document) <= 2147483647 && len(saved_result) <= 2147483647 && len(completion) <= 2147483647
+  ensures len(result) >= 76
+{
+  let phase: i64 = ctl[2];
+  if phase == 300 { return p300(ctl); }
+  if phase == 390 { return p390(cfg, cfg_text, ctl, rows, text, saved_result); }
+  if phase == 391 { return p391(ctl, rows, text, event, completion); }
+  if phase == 301 || phase == 302 {
+    if ctl[8] < 0 { return crate::packet::done_internal(ctl, 28); }
+    if phase == 301 { return p301(ctl, rows, text, event, completion); }
+    if ctl[10] < 0 { return crate::packet::done_internal(ctl, 28); }
+    return p302(ctl, rows, text, event, completion);
+  }
+  return crate::packet::done_internal(ctl, 28);
+}

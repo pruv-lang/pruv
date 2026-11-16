@@ -1,0 +1,25 @@
+[
+  {"name": "F10-messages-missing", "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {}}},
+   "expected": {"status": "error", "class": "EngineImportError", "code": "read-failed", "stage": "shape"}},
+  {"name": "F10-messages-nonarray", "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": {}}}},
+   "expected": {"status": "error", "class": "EngineImportError", "code": "read-failed", "stage": "shape"}},
+  {"name": "F10-message-null", "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [null]}}},
+   "expected": {"status": "error", "class": "EngineImportError", "code": "read-failed", "stage": "shape"}},
+  {"name": "F10-message-array", "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [[]]}}},
+   "expected": {"status": "error", "class": "EngineImportError", "code": "read-failed", "stage": "shape"}},
+  {"name": "F10-info-missing", "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [{"parts": []}]}}},
+   "expected": {"status": "error", "class": "EngineImportError", "code": "read-failed", "stage": "shape"}},
+  {"name": "F10-info-array", "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [{"info": [], "parts": []}]}}},
+   "expected": {"status": "error", "class": "EngineImportError", "code": "read-failed", "stage": "shape"}},
+  {"name": "F10-parts-missing", "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [{"info": {"role": "user"}}]}}},
+   "expected": {"status": "error", "class": "EngineImportError", "code": "read-failed", "stage": "shape"}},
+  {"name": "F10-parts-nonarray", "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [{"info": {"role": "user"}, "parts": {}}]}}},
+   "expected": {"status": "error", "class": "EngineImportError", "code": "read-failed", "stage": "shape"}},
+  {"name": "F10-late-malformed", "kills": ["M12"],
+   "export": {"expect": {"cwd": "$SRC"},
+              "bytes": {"concat": [
+                {"utf8": "{\"messages\":["},
+                {"repeat": {"utf8": "{\"info\":{\"role\":\"user\"},\"parts\":[{\"type\":\"text\",\"text\":\"q\"}]},"}, "count": 201},
+                {"utf8": "5]}"}]}},
+   "expected": {"status": "error", "class": "EngineImportError", "code": "read-failed", "stage": "shape"}}
+]

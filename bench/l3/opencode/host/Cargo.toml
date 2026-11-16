@@ -1,0 +1,14 @@
+[package]
+name = "opencode_host"
+version = "0.1.0"
+edition = "2021"
+[lib]
+path = "src/lib.rs"
+[dependencies]
+serde_json = { version = "1", features = ["raw_value"] }
+# SQLite 3.53.2 bundled: the released pair closest to Node 26.4.0's SQLite 3.53.4
+# (rusqlite 0.41/0.42/0.43 bundle 3.54.x). Recorded in IMPL_NOTES.md and build metadata.
+rusqlite = { version = "=0.40.0", features = ["bundled"] }
+libsqlite3-sys = { version = "=0.38.2", features = ["bundled"] }
+sha2 = "0.10"
+libc = "0.2"

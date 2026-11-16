@@ -1,0 +1,68 @@
+[
+  {"name": "F14-message-reverse", "policies": ["P12"],
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "assistant"}, "parts": [{"type": "tool", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": [{"content": "old", "status": "pending"}]}}}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "tool", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": [{"content": "new", "status": "pending"}]}}}]}]}}},
+   "expected": {"status": "ok", "planPresent": true}},
+  {"name": "F14-part-reverse", "policies": ["P12"],
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "assistant"}, "parts": [
+       {"type": "tool", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": [{"content": "first"}]}}},
+       {"type": "tool", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": [{"content": "second"}]}}}]}]}}},
+   "expected": {"status": "ok", "planPresent": true}},
+  {"name": "F14-empty-clears", "kills": ["M15"], "policies": ["P12"],
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "assistant"}, "parts": [{"type": "tool", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": [{"content": "old", "status": "pending"}]}}}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "tool", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": []}}}]}]}}},
+   "expected": {"status": "ok", "planPresent": false}},
+  {"name": "F14-blank-clears", "policies": ["P12"],
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "assistant"}, "parts": [{"type": "tool", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": [{"content": "old", "status": "pending"}]}}}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "tool", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": [{"content": "   "}, {"content": 5}, {"status": "pending"}]}}}]}]}}},
+   "expected": {"status": "ok", "planPresent": false}},
+  {"name": "F14-nonarray-fallback", "policies": ["P12"],
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "assistant"}, "parts": [{"type": "tool", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": [{"content": "old", "status": "pending"}]}}}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "tool", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": "not an array"}}}]}]}}},
+   "expected": {"status": "ok", "planPresent": true}},
+  {"name": "F14-error-skip", "policies": ["P12"],
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "assistant"}, "parts": [{"type": "tool", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": [{"content": "old", "status": "pending"}]}}}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "tool", "tool": "todowrite", "state": {"status": "error", "input": {"todos": []}}}]}]}}},
+   "expected": {"status": "ok", "planPresent": true}},
+  {"name": "F14-noncompleted-state",
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "assistant"}, "parts": [{"type": "tool", "tool": "todowrite", "state": {"status": "running", "input": {"todos": [{"content": "running", "status": "in_progress"}]}}},
+                                               {"type": "tool", "tool": "todowrite", "state": {"input": {"todos": [{"content": "no status"}]}}}]}]}}},
+   "expected": {"status": "ok", "planPresent": true}},
+  {"name": "F14-statuses",
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "assistant"}, "parts": [{"type": "tool", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": [
+       {"content": "a", "status": "pending"}, {"content": "b", "status": "in_progress"}, {"content": "c", "status": "completed"},
+       {"content": "d", "status": "weird"}, {"content": "e"}, {"content": "f", "status": 5}]}}}]}]}}},
+   "expected": {"status": "ok", "planPresent": true}},
+  {"name": "F14-items-30",
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "assistant"}, "parts": [{"type": "tool", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": [
+       {"content": "t01"}, {"content": "t02"}, {"content": "t03"}, {"content": "t04"}, {"content": "t05"}, {"content": "t06"}, {"content": "t07"}, {"content": "t08"},
+       {"content": "t09"}, {"content": "t10"}, {"content": "t11"}, {"content": "t12"}, {"content": "t13"}, {"content": "t14"}, {"content": "t15"}, {"content": "t16"},
+       {"content": "t17"}, {"content": "t18"}, {"content": "t19"}, {"content": "t20"}, {"content": "t21"}, {"content": "t22"}, {"content": "t23"}, {"content": "t24"},
+       {"content": "t25"}, {"content": "t26"}, {"content": "t27"}, {"content": "t28"}, {"content": "t29"}, {"content": "t30"}]}}}]}]}}},
+   "expected": {"status": "ok", "planPresent": true}},
+  {"name": "F14-items-31",
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "assistant"}, "parts": [{"type": "tool", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": [
+       {"content": "t01"}, {"content": "t02"}, {"content": "t03"}, {"content": "t04"}, {"content": "t05"}, {"content": "t06"}, {"content": "t07"}, {"content": "t08"},
+       {"content": "t09"}, {"content": "t10"}, {"content": "t11"}, {"content": "t12"}, {"content": "t13"}, {"content": "t14"}, {"content": "t15"}, {"content": "t16"},
+       {"content": "t17"}, {"content": "t18"}, {"content": "t19"}, {"content": "t20"}, {"content": "t21"}, {"content": "t22"}, {"content": "t23"}, {"content": "t24"},
+       {"content": "t25"}, {"content": "t26"}, {"content": "t27"}, {"content": "t28"}, {"content": "t29"}, {"content": "t30"}, {"content": "t31"}]}}}]}]}}},
+   "expected": {"status": "ok", "planPresent": true}},
+  {"name": "F14-cut-200",
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "assistant"}, "parts": [{"type": "tool", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": [{"content": {"$rep": "c", "n": 250}, "status": "pending"}]}}}]}]}}},
+   "expected": {"status": "ok", "planPresent": true}},
+  {"name": "F14-split-astral", "policies": ["P8"],
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "assistant"}, "parts": [{"type": "tool", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": [{"content": {"$cat": [{"$rep": "a", "n": 199}, "😀b"]}, "status": "pending"}]}}}]}]}}},
+   "expected": {"status": "ok", "planPresent": true}}
+]

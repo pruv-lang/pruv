@@ -1,0 +1,54 @@
+[
+  {"name": "F11-text-parts", "policies": ["P11"],
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user"}, "parts": [{"type": "text", "text": "a"}, {"type": "reasoning", "text": "skip"}, {"type": "text", "text": "b"}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "text", "text": "ans"}]}]}}},
+   "expected": {"status": "ok", "rowCount": 1}},
+  {"name": "F11-blank-text", "policies": ["P11"],
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user"}, "parts": [{"type": "text", "text": "   "}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "text", "text": "orphan"}]},
+     {"info": {"role": "user"}, "parts": [{"type": "text", "text": "real"}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "text", "text": "ok"}]}]}}},
+   "expected": {"status": "ok", "rowCount": 1}},
+  {"name": "F11-marks-boolean", "policies": ["P11"],
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user"}, "parts": [{"type": "text", "text": "human"}, {"type": "text", "text": "syn", "synthetic": true}, {"type": "text", "text": "ign", "ignored": true}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "text", "text": "r", "synthetic": true}]}]}}},
+   "expected": {"status": "ok", "rowCount": 1}},
+  {"name": "F11-marks-truthy-nonboolean", "policies": ["P11"],
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user"}, "parts": [{"type": "text", "text": "keep1", "synthetic": "true"}, {"type": "text", "text": "keep2", "ignored": 1}, {"type": "text", "text": "keep3", "synthetic": 1}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "text", "text": "r"}]}]}}},
+   "expected": {"status": "ok", "rowCount": 1}},
+  {"name": "F11-synthetic-detach", "kills": ["M13"], "policies": ["P11"],
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user"}, "parts": [{"type": "text", "text": "first"}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "text", "text": "a1"}]},
+     {"info": {"role": "user"}, "parts": [{"type": "text", "text": "compaction", "synthetic": true}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "text", "text": "a2-must-not-attach"}]},
+     {"info": {"role": "user"}, "parts": [{"type": "text", "text": "third"}]}]}}},
+   "expected": {"status": "ok", "rowCount": 2}},
+  {"name": "F11-unknown-role", "policies": ["P11"],
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user"}, "parts": [{"type": "text", "text": "q"}]},
+     {"info": {"role": "system"}, "parts": [{"type": "text", "text": "sys"}]},
+     {"info": {"role": "tool"}, "parts": []},
+     {"info": {"role": 5}, "parts": []},
+     {"info": {"role": "assistant"}, "parts": [{"type": "text", "text": "a"}]}]}}},
+   "expected": {"status": "ok", "rowCount": 1}},
+  {"name": "F11-summary", "policies": ["P11"],
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "user"}, "parts": [{"type": "text", "text": "q"}]},
+     {"info": {"role": "assistant", "summary": true, "providerID": "p", "modelID": "m"},
+      "parts": [{"type": "text", "text": "summary text"}, {"type": "tool", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": [{"content": "hidden", "status": "pending"}]}}}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "text", "text": "real"}]}]}}},
+   "expected": {"status": "ok", "rowCount": 1, "model": null, "planPresent": false}},
+  {"name": "F11-orphan-metadata", "kills": ["M14"], "policies": ["P11"],
+   "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": [
+     {"info": {"role": "assistant", "providerID": "prov", "modelID": "mod"},
+      "parts": [{"type": "text", "text": "orphan"}, {"type": "tool", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": [{"content": "c", "status": "pending"}]}}}]},
+     {"info": {"role": "user"}, "parts": [{"type": "text", "text": "q"}]},
+     {"info": {"role": "assistant"}, "parts": [{"type": "text", "text": "a"}]}]}}},
+   "expected": {"status": "ok", "rowCount": 1, "model": "prov/mod", "planPresent": true}}
+]

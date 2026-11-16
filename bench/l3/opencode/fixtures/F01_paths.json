@@ -1,0 +1,25 @@
+[
+  {"name": "F01-xdg-missing", "mode": "dataDir", "homedir": "/home/q", "expected": {"status": "ok", "value": "/home/q/.local/share/opencode"}},
+  {"name": "F01-xdg-blank", "mode": "dataDir", "homedir": "/home/q", "env": {"mode": "full", "values": {"XDG_DATA_HOME": "   "}},
+   "expected": {"status": "ok", "value": "/home/q/.local/share/opencode"}},
+  {"name": "F01-xdg-absolute", "mode": "dataDir", "homedir": "/home/q", "env": {"mode": "full", "values": {"XDG_DATA_HOME": "/xdg/share"}},
+   "expected": {"status": "ok", "value": "/xdg/share/opencode"}},
+  {"name": "F01-xdg-relative", "mode": "dataDir", "homedir": "/home/q", "env": {"mode": "full", "values": {"XDG_DATA_HOME": "rel/share"}},
+   "expected": {"status": "ok", "value": "/home/q/.local/share/opencode"}},
+  {"name": "F01-xdg-unicode-trim", "mode": "dataDir", "homedir": "/home/q", "env": {"mode": "full", "values": {"XDG_DATA_HOME": " ﻿/xdg-한글 "}},
+   "expected": {"status": "ok", "value": "/xdg-한글/opencode"}},
+  {"name": "F01-xdg-all-slash", "mode": "dataDir", "homedir": "/home/q", "env": {"mode": "full", "values": {"XDG_DATA_HOME": "///"}},
+   "expected": {"status": "ok", "value": "/opencode"}},
+
+  {"name": "F01-db-default", "mode": "rows", "expected": {"status": "ok", "rowCount": 1}},
+  {"name": "F01-db-absolute", "mode": "rows", "env": {"mode": "full", "values": {"OPENCODE_DB": "$SRC/opencode.db"}}, "expected": {"status": "ok", "rowCount": 1}},
+  {"name": "F01-db-relative", "mode": "rows", "env": {"mode": "full", "values": {"OPENCODE_DB": "./x/../opencode.db"}}, "expected": {"status": "ok", "rowCount": 1}},
+  {"name": "F01-db-parent-relative", "mode": "rows", "sourceHome": "$SRC/home",
+   "tree": [{"path": "$TMP", "kind": "dir", "mode": 448}, {"path": "$SRC/home", "kind": "dir"}],
+   "env": {"mode": "full", "values": {"OPENCODE_DB": "../opencode.db"}}, "expected": {"status": "ok", "rowCount": 1}},
+  {"name": "F01-db-memory", "mode": "rows", "env": {"mode": "full", "values": {"OPENCODE_DB": ":memory:"}}, "kills": ["M01"],
+   "expected": {"status": "ok", "rowCount": 0}},
+  {"name": "F01-db-trim", "mode": "rows", "env": {"mode": "full", "values": {"OPENCODE_DB": "  opencode.db\t"}}, "expected": {"status": "ok", "rowCount": 1}},
+  {"name": "F01-home-nul", "mode": "list", "sourceHome": "$SRC/h\u0000x", "expected": {"status": "ok", "rowCount": 0}},
+  {"name": "F01-db-all-slash", "mode": "rows", "env": {"mode": "full", "values": {"OPENCODE_DB": "///"}}, "expected": {"status": "ok", "rowCount": 0}}
+]

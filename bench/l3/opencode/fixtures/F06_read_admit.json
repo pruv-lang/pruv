@@ -1,0 +1,18 @@
+[
+  {"name": "F06-invalid-thread", "thread": "../x", "expected": {"status": "error", "class": "EngineImportError", "code": "not-found", "stage": "input"}},
+  {"name": "F06-missing-row", "thread": "S9999", "expected": {"status": "error", "class": "EngineImportError", "code": "not-found", "stage": "read-admission"}},
+  {"name": "F06-wrong-folder", "folder": "/other", "kills": ["M09"],
+   "expected": {"status": "error", "class": "EngineImportError", "code": "not-found", "stage": "read-admission"}},
+  {"name": "F06-extra-slashes", "folder": "/work",
+   "db": {"path": "$SRC/opencode.db", "ddl": ["CREATE TABLE session(id,parent_id,directory,title,time_updated)", "CREATE TABLE message(session_id)"],
+          "inserts": [{"table": "session", "columns": ["id", "parent_id", "directory", "title", "time_updated"],
+                       "rows": [[{"kind": "text", "text": "S0000"}, {"kind": "null"}, {"kind": "text", "text": "/work//"}, {"kind": "text", "text": "DB Title"}, {"kind": "integer", "decimal": "1700000000000"}]]},
+                      {"table": "message", "columns": ["session_id"], "rows": [[{"kind": "text", "text": "S0000"}]]}]},
+   "policies": ["P6"], "expected": {"status": "ok", "rowCount": 0}},
+  {"name": "F06-binary-missing", "binary": null, "expected": {"status": "error", "class": "EngineImportError", "code": "engine-missing", "stage": "read-admission"}},
+  {"name": "F06-binary-empty", "binary": "", "expected": {"status": "error", "class": "EngineImportError", "code": "engine-missing", "stage": "read-admission"}},
+  {"name": "F06-temp-missing", "tempRoot": null, "expected": {"status": "error", "class": "EngineImportError", "code": "engine-missing", "stage": "read-admission"}},
+  {"name": "F06-temp-empty", "tempRoot": "", "expected": {"status": "error", "class": "EngineImportError", "code": "engine-missing", "stage": "read-admission"}},
+  {"name": "F06-db-rejected-no-spawn", "db": {}, "tree": [{"path": "$TMP", "kind": "dir", "mode": 448}, {"path": "$SRC", "kind": "dir"}],
+   "expected": {"status": "error", "class": "EngineImportError", "code": "not-found", "stage": "read-admission"}}
+]

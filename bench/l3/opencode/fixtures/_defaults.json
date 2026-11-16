@@ -1,0 +1,27 @@
+{
+  "mode": "read",
+  "folder": "/work",
+  "thread": "S0000",
+  "sourceHome": "$SRC",
+  "homedir": "$HOME",
+  "env": {"mode": "full", "values": {}},
+  "binary": "$BIN/exporter",
+  "tempRoot": "$TMP",
+  "nowMs": 1700000000000,
+  "rpcMs": 20000,
+  "umask": 18,
+  "tree": [{"path": "$TMP", "kind": "dir", "mode": 448}],
+  "db": {
+    "path": "$SRC/opencode.db",
+    "ddl": ["CREATE TABLE session(id,parent_id,directory,title,time_updated)", "CREATE TABLE message(session_id)"],
+    "inserts": [
+      {"table": "session", "columns": ["id", "parent_id", "directory", "title", "time_updated"],
+       "rows": [[{"kind": "text", "text": "S0000"}, {"kind": "null"}, {"kind": "text", "text": "/work"}, {"kind": "text", "text": "DB Title"}, {"kind": "integer", "decimal": "1700000000000"}]]},
+      {"table": "message", "columns": ["session_id"], "rows": [[{"kind": "text", "text": "S0000"}]]}
+    ]
+  },
+  "export": {"expect": {"cwd": "$SRC"}, "bytes": {"json": {"messages": []}}},
+  "schedule": {"rules": []},
+  "policies": [],
+  "slow": false
+}
