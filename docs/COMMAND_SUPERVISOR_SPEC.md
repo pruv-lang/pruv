@@ -146,6 +146,7 @@ cannot order two streams), the tail cut against a direct UTF-16 slice, and the w
 - **A0** `args.pruv`, `packet.pruv`: spans, packet builder, Python checker.
 - **A1** `tail.pruv`: decoder, unit buffer, flush and cut, against a WHATWG model over random chunkings.
 - **A2** `capfile.pruv`: capped writer over real files, including limit 0, exact fit and create failure.
+  Write and close failures are not injected here (a real file does not fail on demand); Q injects them.
 - **A3** `supervise.pruv`: the whole entry with real children (local Python fixtures) and a Rust host that plays
   the controller: normal exit, nonzero exit, signal exit, spawn failure, stop, disconnect, big output, truncation.
 - **Q** differential against the TS reference on Node, mutants, fault injections and a measurement.

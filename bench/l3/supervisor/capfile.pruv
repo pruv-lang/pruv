@@ -1,0 +1,70 @@
+// L3-2 capped output file (TS `take`, file half).
+// cw = [written, truncated, error, limit, total]; error 0 none, 1 create, 2 write.
+
+pub fn cap_state(limit: i64, create_failed: bool) -> [i64] ! alloc
+  requires 0 <= limit && limit <= 1099511627776
+  ensures len(result) == 5
+  ensures result[0] == 0 && result[3] == limit && result[4] == 0
+  ensures 0 <= result[1] && result[1] <= 1
+  ensures 0 <= result[2] && result[2] <= 2
+{
+  let mut cw: [i64] = alloc(5, 0);
+  cw[3] = limit;
+  if create_failed { cw[2] = 1; }
+  return cw;
+}
+
+// One chunk: write the prefix that fits with one write; count it only if the write succeeded.
+pub fn cap_take(take f: File, inout cw: [i64], data: [u8]) -> File ! fs, alloc
+  requires len(cw) == 5
+  requires 0 <= cw[3] && cw[3] <= 1099511627776
+  requires 0 <= cw[0] && cw[0] <= cw[3]
+  requires 0 <= cw[4] && cw[4] <= 4611686018427387904
+  requires len(data) <= 65536
+  requires 0 <= cw[1] && cw[1] <= 1
+  requires 0 <= cw[2] && cw[2] <= 2
+  ensures len(cw) == 5
+  ensures cw[3] == old(cw)[3]
+  ensures old(cw)[0] <= cw[0] && cw[0] <= cw[3]
+  ensures cw[4] == old(cw)[4] + len(data)
+  ensures old(cw)[1] <= cw[1] && cw[1] <= 1
+  ensures 0 <= cw[2] && cw[2] <= 2
+  ensures old(cw)[2] != 0 ==> cw[2] == old(cw)[2]
+  ensures cw[2] != 0 || old(cw)[1] != 0 ==> cw[0] == old(cw)[0]
+{
+  cw[4] = cw[4] + len(data);
+  if cw[2] != 0 || cw[1] != 0 { return move f; }
+  if !file_writable(f) {
+    cw[2] = 2;
+    return move f;
+  }
+  let room: i64 = cw[3] - cw[0];
+  let mut n: i64 = len(data);
+  if n > room {
+    n = room;
+    cw[1] = 1;
+  }
+  if n == 0 { return move f; }
+  let part: [u8] = truncate(copy(data), n);
+  let g: File = file_write_bytes(move f, part);
+  if file_writable(g) {
+    cw[0] = cw[0] + n;
+  } else {
+    cw[2] = 2;
+  }
+  return move g;
+}
+
+// Close the file; a failed close is a write error unless an error is already set (P4).
+pub fn cap_finish(take f: File, inout cw: [i64]) -> () ! fs, alloc
+  requires len(cw) == 5
+  requires 0 <= cw[2] && cw[2] <= 2
+  ensures len(cw) == 5
+  ensures cw[0] == old(cw)[0] && cw[1] == old(cw)[1] && cw[3] == old(cw)[3] && cw[4] == old(cw)[4]
+  ensures 0 <= cw[2] && cw[2] <= 2
+  ensures old(cw)[2] != 0 ==> cw[2] == old(cw)[2]
+{
+  let ok: bool = file_close(move f);
+  if !ok && cw[2] == 0 { cw[2] = 2; }
+  return;
+}
