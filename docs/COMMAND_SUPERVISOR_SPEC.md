@@ -57,14 +57,14 @@ later chunk is written. After the run, `file_close`; a false result sets `fileEr
 ### Tail (TS `take`, tail half, and `finalTail`)
 
 One UTF-8 decoder per stream (WHATWG decoder: maximal-subpart U+FFFD replacement, at most three pending bytes,
-one U+FFFD for an incomplete sequence at the end). Decoded code points go into one ring of code points in read
-order; the ring tracks its UTF-16 length (1 unit below U+10000, 2 above). When the length exceeds `2 * tailChars`,
-code points are dropped from the front while at least `tailChars` units remain. At the end both decoders are
-flushed (stream 1 then stream 2) and the tail is the longest suffix whose UTF-16 length is at most `tailChars`,
-encoded as UTF-8.
+one U+FFFD for an incomplete sequence at the end). Decoded code points go, in read order, into one buffer of UTF-16
+units (`2 * tailChars + 2` slots). When a code point pushes the count past `2 * tailChars`, the last `tailChars`
+units move to the front, as TS keeps the last `tailChars` units of its string. At the end both decoders are flushed
+(stream 1 then stream 2) and the tail is the last `tailChars` units, without a leading low surrogate (P5), encoded
+as UTF-8.
 
-Because every trim keeps at least `tailChars` units, the result is the last `tailChars` units of the whole decoded
-output independently of chunk sizes, as in TS (which keeps exactly `tailChars` units at each trim).
+Every trim keeps the last `tailChars` units, so the result is the last `tailChars` units of the whole decoded output
+independently of chunk sizes.
 
 ## Scope
 
@@ -74,7 +74,7 @@ output independently of chunk sizes, as in TS (which keeps exactly `tailChars` u
 |---|---|---|
 | `message.args` | `args.pruv::arg_spans`, `build_args` | NUL-terminated split; spans are proved in range and on character boundaries |
 | `take` (file) | `capfile.pruv::cap_take`, `cap_finish` | One write per chunk, all-or-nothing count |
-| `take` (tail), `decoder.end`, `finalTail` | `tail.pruv::tail_push`, `tail_flush`, `tail_bytes` | Ring of code points, UTF-16 length |
+| `take` (tail), `decoder.end`, `finalTail` | `tail.pruv::tail_push`, `tail_flush`, `tail_bytes` | Buffer of UTF-16 units |
 | `run`, `stop`, `report` | `supervise.pruv::supervise` | Loop with a process and a control socket |
 | `exit` message fields | `packet.pruv::packet` | Flat record plus tail bytes |
 
@@ -135,15 +135,16 @@ Safety (proved): every index, slot range and kind check before each loop operati
 header ranges.
 
 Semantics (proved): `arg_spans` spans partition the blob; `cap_take` never lets `written` exceed `file_limit`;
-`packet` copies the header fields and tail bytes; tail ring length never exceeds its capacity.
+`packet` copies the header fields and tail bytes; the tail buffer count never exceeds `2 * tailChars` between pushes.
 
-Tested rather than proved: decoder output against Python's `bytes.decode('utf-8', 'replace')` (same WHATWG
-replacement), the tail cut against a direct UTF-16 slice, and the whole run against the TS reference.
+Tested rather than proved: decoder output against a WHATWG model whose per-stream text is checked against Python's
+`bytes.decode('utf-8', 'replace')` (Python's incremental decoder holds back some invalid bytes at a chunk end, so it
+cannot order two streams), the tail cut against a direct UTF-16 slice, and the whole run against the TS reference.
 
 ## Batches
 
 - **A0** `args.pruv`, `packet.pruv`: spans, packet builder, Python checker.
-- **A1** `tail.pruv`: decoder, ring, flush and cut, against a Python oracle over random chunkings.
+- **A1** `tail.pruv`: decoder, unit buffer, flush and cut, against a WHATWG model over random chunkings.
 - **A2** `capfile.pruv`: capped writer over real files, including limit 0, exact fit and create failure.
 - **A3** `supervise.pruv`: the whole entry with real children (local Python fixtures) and a Rust host that plays
   the controller: normal exit, nonzero exit, signal exit, spawn failure, stop, disconnect, big output, truncation.

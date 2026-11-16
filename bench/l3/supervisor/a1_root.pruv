@@ -1,0 +1,50 @@
+// L3-2 A1 root. script = repeated [stream, n, n bytes]; returns the final tail bytes, or [-1] on a malformed script.
+mod tail;
+
+pub fn run(t: i64, script: [i64]) -> [i64] ! alloc
+{
+  let mut bad: [i64] = alloc(1, -1);
+  if t < 1 || t > 65536 { return bad; }
+  let mut ts: [i64] = crate::tail::tail_state(t);
+  let mut buf: [i64] = crate::tail::tail_buf(t);
+  let mut i: i64 = 0;
+  while i < len(script)
+    invariant 0 <= i && i <= len(script)
+    invariant len(ts) == 12 && ts[1] == t
+    invariant len(buf) == 2 * t + 2
+    invariant 0 <= ts[0] && ts[0] <= 2 * t
+    decreases len(script) - i
+  {
+    if i + 2 > len(script) { return bad; }
+    let s: i64 = script[i];
+    let n: i64 = script[i + 1];
+    if (s != 1 && s != 2) || n < 0 || n > len(script) - i - 2 { return bad; }
+    let mut chunk: [u8] = alloc(n, 0);
+    let mut k: i64 = 0;
+    while k < n
+      invariant 0 <= k && k <= n
+      invariant len(chunk) == n
+      decreases n - k
+    {
+      let v: i64 = script[i + 2 + k];
+      if v < 0 || v > 255 { return bad; }
+      chunk[k] = v;
+      k = k + 1;
+    }
+    crate::tail::tail_push(inout buf, inout ts, s, chunk);
+    i = i + 2 + n;
+  }
+  crate::tail::tail_flush(inout buf, inout ts);
+  let tb: [u8] = crate::tail::tail_bytes(buf, ts);
+  let mut out: [i64] = alloc(len(tb), 0);
+  let mut j: i64 = 0;
+  while j < len(tb)
+    invariant 0 <= j && j <= len(tb)
+    invariant len(out) == len(tb)
+    decreases len(tb) - j
+  {
+    out[j] = tb[j];
+    j = j + 1;
+  }
+  return out;
+}
