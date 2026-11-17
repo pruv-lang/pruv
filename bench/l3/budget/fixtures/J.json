@@ -1,0 +1,3623 @@
+[
+ {
+  "id": "J01",
+  "name": "missing-and-closed-use-the-missing-error",
+  "rule": "B:481-484,88-107; spec 4.7 steps 1-4",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "\uc9c0\uae08 \uc608\uc0b0\uc744 \ucc3e\uc744 \uc218 \uc5c6\uc5b4 \uc791\uc5c5 \uce74\ub4dc\ub97c \uc800\uc7a5\ud558\uc9c0 \ubabb\ud588\ub2e4."
+     }
+    },
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "\uc9c0\uae08 \uc608\uc0b0\uc744 \ucc3e\uc744 \uc218 \uc5c6\uc5b4 \uc791\uc5c5 \uce74\ub4dc\ub97c \uc800\uc7a5\ud558\uc9c0 \ubabb\ud588\ub2e4."
+     }
+    },
+    {
+     "req": "r3",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "The current budget was not found, so the work card was not saved."
+     }
+    }
+   ],
+   "counts": {
+    "findSession": 6,
+    "now": 0,
+    "save": 0
+   }
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "closed",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      },
+      "ended": {
+       "how": "quiet",
+       "at": "2023-11-14T22:13:20.000Z"
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "nope",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ]
+      ]
+     },
+     "en"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "J02",
+  "name": "deliverable-type-empty-and-300-301-units",
+  "rule": "B:145-147,486; spec 4.7 step 5",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "deliverable \uc740 1~300\uc790\uc5ec\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "deliverable \uc740 1~300\uc790\uc5ec\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r3",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "deliverable \uc740 1~300\uc790\uc5ec\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r4",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    },
+    {
+     "req": "r5",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "deliverable \uc740 1~300\uc790\uc5ec\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r6",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    },
+    {
+     "req": "r7",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "deliverable \uc740 1~300\uc790\uc5ec\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r8",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "deliverable \uc740 1~300\uc790\uc5ec\uc57c \ud55c\ub2e4."
+     }
+    }
+   ],
+   "counts": {
+    "now": 2,
+    "save": 2,
+    "changed": 2
+   },
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.card.deliverable",
+     "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+   ]
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        5
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        ""
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "   "
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r4",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r5",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r6",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        " aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r7",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        {
+         "undef": 1
+        }
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r8",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        null
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "J03",
+  "name": "done-counts-and-invalid-lines",
+  "rule": "B:149-150,487; spec 4.7 step 6",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "done \uc740 \uac01 300\uc790 \uc774\ud558 1~5\uc904\uc774\uc5b4\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "done \uc740 \uac01 300\uc790 \uc774\ud558 1~5\uc904\uc774\uc5b4\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r3",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "done \uc740 \uac01 300\uc790 \uc774\ud558 1~5\uc904\uc774\uc5b4\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r4",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "done \uc740 \uac01 300\uc790 \uc774\ud558 1~5\uc904\uc774\uc5b4\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r5",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "done \uc740 \uac01 300\uc790 \uc774\ud558 1~5\uc904\uc774\uc5b4\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r6",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    },
+    {
+     "req": "r7",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "done \uc740 \uac01 300\uc790 \uc774\ud558 1~5\uc904\uc774\uc5b4\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r8",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "done \uc740 \uac01 300\uc790 \uc774\ud558 1~5\uc904\uc774\uc5b4\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r9",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "done \uc740 \uac01 300\uc790 \uc774\ud558 1~5\uc904\uc774\uc5b4\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r10",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    }
+   ],
+   "counts": {
+    "now": 2,
+    "save": 2
+   },
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.card.done",
+     "value": [
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+     ]
+    }
+   ]
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "d"
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": []
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "x",
+          "x",
+          "x",
+          "x",
+          "x",
+          "x"
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r4",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r5",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "ok",
+          ""
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r6",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "x",
+          "x",
+          "x",
+          "x",
+          "x"
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r7",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        "text"
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r8",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          5
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r9",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "  "
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r10",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "J04",
+  "name": "targets-missing-negative-fractional-and-absent",
+  "rule": "B:489-495; spec 4.7 step 8",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "targets \uc758 \uc218\ub294 0 \uc774\uc0c1 \uc815\uc218\uc5ec\uc57c \ud558\uace0 note \ub294 300\uc790 \uc774\ud558\uc5ec\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "targets \uc758 \uc218\ub294 0 \uc774\uc0c1 \uc815\uc218\uc5ec\uc57c \ud558\uace0 note \ub294 300\uc790 \uc774\ud558\uc5ec\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r3",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "targets \uc758 \uc218\ub294 0 \uc774\uc0c1 \uc815\uc218\uc5ec\uc57c \ud558\uace0 note \ub294 300\uc790 \uc774\ud558\uc5ec\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r4",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "targets \uc758 \uc218\ub294 0 \uc774\uc0c1 \uc815\uc218\uc5ec\uc57c \ud558\uace0 note \ub294 300\uc790 \uc774\ud558\uc5ec\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r5",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    },
+    {
+     "req": "r6",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    }
+   ],
+   "counts": {
+    "now": 6,
+    "save": 2
+   },
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.card.targets",
+     "absent": true
+    }
+   ]
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "targets",
+        null
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "targets",
+        {
+         "obj": [
+          [
+           "confirmed",
+           -1
+          ],
+          [
+           "candidate",
+           0
+          ],
+          [
+           "unknown",
+           0
+          ]
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "targets",
+        {
+         "obj": [
+          [
+           "confirmed",
+           {
+            "num": "3ff8000000000000"
+           }
+          ],
+          [
+           "candidate",
+           0
+          ],
+          [
+           "unknown",
+           0
+          ]
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r4",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "targets",
+        {
+         "obj": [
+          [
+           "confirmed",
+           1
+          ]
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r5",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "targets",
+        {
+         "obj": [
+          [
+           "confirmed",
+           1
+          ],
+          [
+           "candidate",
+           0
+          ],
+          [
+           "unknown",
+           2
+          ]
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r6",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "targets",
+        {
+         "undef": 1
+        }
+       ]
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "J05",
+  "name": "raw-note-types-and-300-301-units",
+  "rule": "B:492; spec 4.7 step 8 (note is measured raw); 15.1 #19",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "targets \uc758 \uc218\ub294 0 \uc774\uc0c1 \uc815\uc218\uc5ec\uc57c \ud558\uace0 note \ub294 300\uc790 \uc774\ud558\uc5ec\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    },
+    {
+     "req": "r3",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "targets \uc758 \uc218\ub294 0 \uc774\uc0c1 \uc815\uc218\uc5ec\uc57c \ud558\uace0 note \ub294 300\uc790 \uc774\ud558\uc5ec\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r4",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "targets \uc758 \uc218\ub294 0 \uc774\uc0c1 \uc815\uc218\uc5ec\uc57c \ud558\uace0 note \ub294 300\uc790 \uc774\ud558\uc5ec\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r5",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    },
+    {
+     "req": "r6",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    }
+   ],
+   "counts": {
+    "now": 6,
+    "save": 3
+   },
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.card.targets",
+     "keys": [
+      "confirmed",
+      "candidate",
+      "unknown"
+     ]
+    }
+   ]
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "targets",
+        {
+         "obj": [
+          [
+           "confirmed",
+           0
+          ],
+          [
+           "candidate",
+           0
+          ],
+          [
+           "unknown",
+           0
+          ],
+          [
+           "note",
+           0
+          ]
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "targets",
+        {
+         "obj": [
+          [
+           "confirmed",
+           0
+          ],
+          [
+           "candidate",
+           0
+          ],
+          [
+           "unknown",
+           0
+          ],
+          [
+           "note",
+           "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          ]
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "targets",
+        {
+         "obj": [
+          [
+           "confirmed",
+           0
+          ],
+          [
+           "candidate",
+           0
+          ],
+          [
+           "unknown",
+           0
+          ],
+          [
+           "note",
+           "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          ]
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r4",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "targets",
+        {
+         "obj": [
+          [
+           "confirmed",
+           0
+          ],
+          [
+           "candidate",
+           0
+          ],
+          [
+           "unknown",
+           0
+          ],
+          [
+           "note",
+           null
+          ]
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r5",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "targets",
+        {
+         "obj": [
+          [
+           "confirmed",
+           0
+          ],
+          [
+           "candidate",
+           0
+          ],
+          [
+           "unknown",
+           0
+          ],
+          [
+           "note",
+           ""
+          ]
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r6",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "targets",
+        {
+         "obj": [
+          [
+           "confirmed",
+           0
+          ],
+          [
+           "candidate",
+           0
+          ],
+          [
+           "unknown",
+           0
+          ],
+          [
+           "note",
+           {
+            "undef": 1
+           }
+          ]
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "J06",
+  "name": "verify-count-label-and-status",
+  "rule": "B:496-500; spec 4.7 step 9",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    },
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "verify \ub294 label 1~300\uc790\uc640 status(planned\u00b7done\u00b7skipped)\ub97c \uac00\uc9c4 0~5\uac1c \ud56d\ubaa9\uc774\uc5b4\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r3",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "verify \ub294 label 1~300\uc790\uc640 status(planned\u00b7done\u00b7skipped)\ub97c \uac00\uc9c4 0~5\uac1c \ud56d\ubaa9\uc774\uc5b4\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r4",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "verify \ub294 label 1~300\uc790\uc640 status(planned\u00b7done\u00b7skipped)\ub97c \uac00\uc9c4 0~5\uac1c \ud56d\ubaa9\uc774\uc5b4\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r5",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "verify \ub294 label 1~300\uc790\uc640 status(planned\u00b7done\u00b7skipped)\ub97c \uac00\uc9c4 0~5\uac1c \ud56d\ubaa9\uc774\uc5b4\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r6",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    },
+    {
+     "req": "r7",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "verify \ub294 label 1~300\uc790\uc640 status(planned\u00b7done\u00b7skipped)\ub97c \uac00\uc9c4 0~5\uac1c \ud56d\ubaa9\uc774\uc5b4\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r8",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "verify \ub294 label 1~300\uc790\uc640 status(planned\u00b7done\u00b7skipped)\ub97c \uac00\uc9c4 0~5\uac1c \ud56d\ubaa9\uc774\uc5b4\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r9",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    }
+   ],
+   "counts": {
+    "save": 3
+   },
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.card.verify",
+     "value": [
+      {
+       "label": "t",
+       "status": "done"
+      }
+     ]
+    }
+   ]
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "verify",
+        {
+         "arr": []
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "verify",
+        {
+         "arr": [
+          {
+           "obj": [
+            [
+             "label",
+             "x"
+            ],
+            [
+             "status",
+             "done"
+            ]
+           ]
+          },
+          {
+           "obj": [
+            [
+             "label",
+             "x"
+            ],
+            [
+             "status",
+             "done"
+            ]
+           ]
+          },
+          {
+           "obj": [
+            [
+             "label",
+             "x"
+            ],
+            [
+             "status",
+             "done"
+            ]
+           ]
+          },
+          {
+           "obj": [
+            [
+             "label",
+             "x"
+            ],
+            [
+             "status",
+             "done"
+            ]
+           ]
+          },
+          {
+           "obj": [
+            [
+             "label",
+             "x"
+            ],
+            [
+             "status",
+             "done"
+            ]
+           ]
+          },
+          {
+           "obj": [
+            [
+             "label",
+             "x"
+            ],
+            [
+             "status",
+             "done"
+            ]
+           ]
+          }
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "verify",
+        {
+         "arr": [
+          {
+           "obj": [
+            [
+             "label",
+             "x"
+            ],
+            [
+             "status",
+             "bad"
+            ]
+           ]
+          }
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r4",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "verify",
+        {
+         "arr": [
+          null
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r5",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "verify",
+        {
+         "arr": [
+          {
+           "obj": [
+            [
+             "label",
+             ""
+            ],
+            [
+             "status",
+             "done"
+            ]
+           ]
+          }
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r6",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "verify",
+        {
+         "arr": [
+          {
+           "obj": [
+            [
+             "label",
+             "x"
+            ],
+            [
+             "status",
+             "planned"
+            ]
+           ]
+          },
+          {
+           "obj": [
+            [
+             "label",
+             "x"
+            ],
+            [
+             "status",
+             "done"
+            ]
+           ]
+          },
+          {
+           "obj": [
+            [
+             "label",
+             "x"
+            ],
+            [
+             "status",
+             "skipped"
+            ]
+           ]
+          },
+          {
+           "obj": [
+            [
+             "label",
+             "x"
+            ],
+            [
+             "status",
+             "done"
+            ]
+           ]
+          },
+          {
+           "obj": [
+            [
+             "label",
+             "x"
+            ],
+            [
+             "status",
+             "planned"
+            ]
+           ]
+          }
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r7",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "verify",
+        "x"
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r8",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "verify",
+        {
+         "arr": [
+          {
+           "obj": [
+            [
+             "label",
+             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ],
+            [
+             "status",
+             "done"
+            ]
+           ]
+          }
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r9",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "verify",
+        {
+         "arr": [
+          {
+           "obj": [
+            [
+             "label",
+             "  t  "
+            ],
+            [
+             "status",
+             "done"
+            ]
+           ]
+          }
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "J07",
+  "name": "conflicts-count-empty-and-invalid",
+  "rule": "B:501-504; spec 4.7 step 10",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    },
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "conflicts \ub294 \uac01 300\uc790 \uc774\ud558 0~5\uc904\uc774\uc5b4\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r3",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "conflicts \ub294 \uac01 300\uc790 \uc774\ud558 0~5\uc904\uc774\uc5b4\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r4",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "conflicts \ub294 \uac01 300\uc790 \uc774\ud558 0~5\uc904\uc774\uc5b4\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r5",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    },
+    {
+     "req": "r6",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    }
+   ],
+   "counts": {
+    "save": 3
+   },
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.card.conflicts",
+     "value": [
+      "c"
+     ]
+    }
+   ]
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "conflicts",
+        {
+         "arr": []
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "conflicts",
+        {
+         "arr": [
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c"
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "conflicts",
+        {
+         "arr": [
+          ""
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r4",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "conflicts",
+        {
+         "arr": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r5",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "conflicts",
+        {
+         "arr": [
+          "c",
+          "c",
+          "c",
+          "c",
+          "c"
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r6",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "conflicts",
+        {
+         "arr": [
+          " c "
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "J08",
+  "name": "all-state-values-and-invalid-state",
+  "rule": "B:505-508; spec 4.7 step 11",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    },
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    },
+    {
+     "req": "r3",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    },
+    {
+     "req": "r4",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    },
+    {
+     "req": "r5",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "state \ub294 working\u00b7done\u00b7waiting-user\u00b7blocked \uc911 \ud558\ub098\uc5ec\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r6",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "state \ub294 working\u00b7done\u00b7waiting-user\u00b7blocked \uc911 \ud558\ub098\uc5ec\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r7",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "state \ub294 working\u00b7done\u00b7waiting-user\u00b7blocked \uc911 \ud558\ub098\uc5ec\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r8",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    }
+   ],
+   "counts": {
+    "save": 5
+   },
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.card.state",
+     "absent": true
+    }
+   ]
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "state",
+        "working"
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "state",
+        "done"
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "state",
+        "waiting-user"
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r4",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "state",
+        "blocked"
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r5",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "state",
+        "idle"
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r6",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "state",
+        5
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r7",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "state",
+        ""
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r8",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "state",
+        {
+         "undef": 1
+        }
+       ]
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "J09",
+  "name": "multi-error-precedence",
+  "rule": "B:486-508; spec 4.7 (missing, deliverable, done, targets, verify, conflicts, state)",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "deliverable \uc740 1~300\uc790\uc5ec\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "done \uc740 \uac01 300\uc790 \uc774\ud558 1~5\uc904\uc774\uc5b4\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r3",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "targets \uc758 \uc218\ub294 0 \uc774\uc0c1 \uc815\uc218\uc5ec\uc57c \ud558\uace0 note \ub294 300\uc790 \uc774\ud558\uc5ec\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r4",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "verify \ub294 label 1~300\uc790\uc640 status(planned\u00b7done\u00b7skipped)\ub97c \uac00\uc9c4 0~5\uac1c \ud56d\ubaa9\uc774\uc5b4\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r5",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "conflicts \ub294 \uac01 300\uc790 \uc774\ud558 0~5\uc904\uc774\uc5b4\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r6",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "state \ub294 working\u00b7done\u00b7waiting-user\u00b7blocked \uc911 \ud558\ub098\uc5ec\uc57c \ud55c\ub2e4."
+     }
+    }
+   ],
+   "counts": {
+    "save": 0,
+    "changed": 0,
+    "now": 4
+   },
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.card",
+     "absent": true
+    }
+   ]
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        5
+       ],
+       [
+        "done",
+        {
+         "arr": []
+        }
+       ],
+       [
+        "targets",
+        {
+         "obj": [
+          [
+           "confirmed",
+           -1
+          ],
+          [
+           "candidate",
+           0
+          ],
+          [
+           "unknown",
+           0
+          ]
+         ]
+        }
+       ],
+       [
+        "verify",
+        {
+         "arr": [
+          {
+           "obj": [
+            [
+             "label",
+             ""
+            ],
+            [
+             "status",
+             "x"
+            ]
+           ]
+          }
+         ]
+        }
+       ],
+       [
+        "conflicts",
+        {
+         "arr": [
+          ""
+         ]
+        }
+       ],
+       [
+        "state",
+        "idle"
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": []
+        }
+       ],
+       [
+        "targets",
+        {
+         "obj": [
+          [
+           "confirmed",
+           -1
+          ],
+          [
+           "candidate",
+           0
+          ],
+          [
+           "unknown",
+           0
+          ]
+         ]
+        }
+       ],
+       [
+        "verify",
+        {
+         "arr": [
+          {
+           "obj": [
+            [
+             "label",
+             ""
+            ],
+            [
+             "status",
+             "x"
+            ]
+           ]
+          }
+         ]
+        }
+       ],
+       [
+        "conflicts",
+        {
+         "arr": [
+          ""
+         ]
+        }
+       ],
+       [
+        "state",
+        "idle"
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "targets",
+        {
+         "obj": [
+          [
+           "confirmed",
+           -1
+          ],
+          [
+           "candidate",
+           0
+          ],
+          [
+           "unknown",
+           0
+          ]
+         ]
+        }
+       ],
+       [
+        "verify",
+        {
+         "arr": [
+          {
+           "obj": [
+            [
+             "label",
+             ""
+            ],
+            [
+             "status",
+             "x"
+            ]
+           ]
+          }
+         ]
+        }
+       ],
+       [
+        "conflicts",
+        {
+         "arr": [
+          ""
+         ]
+        }
+       ],
+       [
+        "state",
+        "idle"
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r4",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "verify",
+        {
+         "arr": [
+          {
+           "obj": [
+            [
+             "label",
+             ""
+            ],
+            [
+             "status",
+             "x"
+            ]
+           ]
+          }
+         ]
+        }
+       ],
+       [
+        "conflicts",
+        {
+         "arr": [
+          ""
+         ]
+        }
+       ],
+       [
+        "state",
+        "idle"
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r5",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "conflicts",
+        {
+         "arr": [
+          ""
+         ]
+        }
+       ],
+       [
+        "state",
+        "idle"
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r6",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "state",
+        "idle"
+       ]
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "J10",
+  "name": "old-card-preserved-and-optional-error-consumes-now",
+  "rule": "B:488-510; spec 4.7 step 7; 15.1 #18, #21",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    },
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "targets \uc758 \uc218\ub294 0 \uc774\uc0c1 \uc815\uc218\uc5ec\uc57c \ud558\uace0 note \ub294 300\uc790 \uc774\ud558\uc5ec\uc57c \ud55c\ub2e4."
+     }
+    }
+   ],
+   "counts": {
+    "now": 2,
+    "save": 1,
+    "changed": 1
+   },
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.card.deliverable",
+     "value": "first"
+    },
+    {
+     "id": "s1",
+     "path": "budget.card.updatedAt",
+     "value": "2023-11-14T22:13:20.000Z"
+    },
+    {
+     "id": "s1",
+     "path": "budget.card.verify",
+     "value": [
+      {
+       "label": "v",
+       "status": "done"
+      }
+     ]
+    }
+   ]
+  },
+  "kd": [
+   "KD-1"
+  ],
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "first"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "verify",
+        {
+         "arr": [
+          {
+           "obj": [
+            [
+             "label",
+             "v"
+            ],
+            [
+             "status",
+             "done"
+            ]
+           ]
+          }
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "setTime",
+    "now": 1700000005000
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "second"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "targets",
+        {
+         "obj": [
+          [
+           "confirmed",
+           -1
+          ],
+          [
+           "candidate",
+           0
+          ],
+          [
+           "unknown",
+           0
+          ]
+         ]
+        }
+       ]
+      ]
+     }
+    ]
+   }
+  ]
+ }
+]

@@ -1,0 +1,1159 @@
+[
+ {
+  "id": "M01",
+  "name": "restore-without-a-budget-does-nothing",
+  "rule": "B:556-557; spec 4.9 bootRestore",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": {
+      "undef": 1
+     }
+    }
+   ],
+   "counts": {
+    "findSession": 0,
+    "now": 0,
+    "timer.clear": 0,
+    "changed": 0,
+    "save": 0
+   }
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1"
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "bootRestore",
+    "args": [
+     {
+      "sess": "s1"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "M02",
+  "name": "restore-drops-the-running-clock-without-charging",
+  "rule": "B:558-559; spec 4.9; 15.1 #24",
+  "expect": {
+   "requests": [
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": {
+      "undef": 1
+     }
+    }
+   ],
+   "counts": {
+    "timer.clear": 1,
+    "now": 1
+   },
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.used.activeMs",
+     "value": 0
+    },
+    {
+     "id": "s1",
+     "path": "budget.activeSince",
+     "absent": true
+    }
+   ],
+   "clocks": {
+    "count": 0
+   },
+   "timers": 0
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "runStarted",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     "k1"
+    ]
+   },
+   {
+    "ev": "advance",
+    "ms": 3000
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "bootRestore",
+    "args": [
+     {
+      "sess": "s1"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "M03",
+  "name": "restore-keeps-a-halted-budget",
+  "rule": "B:556-560; spec 4.9",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": {
+      "undef": 1
+     }
+    }
+   ],
+   "counts": {
+    "save": 0,
+    "changed": 0
+   },
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.activeSince",
+     "absent": true
+    },
+    {
+     "id": "s1",
+     "path": "budget.state",
+     "value": "halted"
+    },
+    {
+     "id": "s1",
+     "path": "budget.halt.reason",
+     "value": "reviews"
+    },
+    {
+     "id": "s1",
+     "path": "budget.used.activeMs",
+     "value": 5000
+    },
+    {
+     "id": "s1",
+     "path": "budget.used.reviews",
+     "value": 2
+    }
+   ]
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "halted",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 5000,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 2,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      },
+      "activeSince": "2023-11-14T22:13:20.000Z",
+      "halt": {
+       "reason": "reviews",
+       "at": "2023-11-14T22:13:20.000Z",
+       "stoppedDelegationIds": []
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "bootRestore",
+    "args": [
+     {
+      "sess": "s1"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "M04",
+  "name": "restore-preserves-usage-card-and-tool-dedup",
+  "rule": "B:555-560; spec 4.9 (toolSeen kept)",
+  "expect": {
+   "requests": [
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": {
+      "undef": 1
+     }
+    }
+   ],
+   "counts": {
+    "findSession": 1
+   },
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.used.tools",
+     "value": 1
+    },
+    {
+     "id": "s1",
+     "path": "budget.used.commands",
+     "value": 2
+    },
+    {
+     "id": "s1",
+     "path": "budget.used.activeMs",
+     "value": 7000
+    },
+    {
+     "id": "s1",
+     "path": "budget.card.deliverable",
+     "value": "d"
+    },
+    {
+     "id": "s1",
+     "path": "budget.autoContinue.count",
+     "value": 1
+    },
+    {
+     "id": "s1",
+     "path": "budget.activeSince",
+     "absent": true
+    }
+   ]
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 7000,
+       "delegations": 0,
+       "commands": 2,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      },
+      "activeSince": "2023-11-14T22:13:20.000Z",
+      "card": {
+       "deliverable": "d",
+       "done": [
+        "x"
+       ],
+       "updatedAt": "2023-11-14T22:13:20.000Z"
+      },
+      "autoContinue": {
+       "sessionId": "s1",
+       "userTurnId": "u1",
+       "count": 1
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "noteTool",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     "t1",
+     "a1"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "bootRestore",
+    "args": [
+     {
+      "sess": "s1"
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "noteTool",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     "t1",
+     "a1"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "M05",
+  "name": "forgetSession-drops-only-matching-clocks",
+  "rule": "B:563-564; spec 4.9; 15.1 #25",
+  "expect": {
+   "requests": [
+    {
+     "req": "r3",
+     "terminal": "ok",
+     "value": {
+      "undef": 1
+     }
+    }
+   ],
+   "counts": {
+    "timer.clear": 1
+   },
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.activeSince",
+     "value": "2023-11-14T22:13:20.000Z"
+    },
+    {
+     "id": "s1",
+     "path": "budget.state",
+     "value": "open"
+    }
+   ],
+   "clocks": {
+    "count": 1,
+    "has": [
+     "11111111-1111-4111-8111-000000000002"
+    ],
+    "absent": [
+     "11111111-1111-4111-8111-000000000001"
+    ]
+   },
+   "timers": 1
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    },
+    {
+     "id": "s2",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000002",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "runStarted",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     "k1"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "runStarted",
+    "args": [
+     {
+      "sessionId": "s2",
+      "budgetId": "11111111-1111-4111-8111-000000000002"
+     },
+     "k1"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "forgetSession",
+    "args": [
+     "s1"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "M06",
+  "name": "forgetSession-with-no-match-changes-nothing",
+  "rule": "B:563-564; spec 4.9",
+  "expect": {
+   "requests": [
+    {
+     "req": "r3",
+     "terminal": "ok",
+     "value": {
+      "undef": 1
+     }
+    }
+   ],
+   "counts": {
+    "timer.clear": 0
+   },
+   "clocks": {
+    "count": 2
+   },
+   "timers": 2
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    },
+    {
+     "id": "s2",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000002",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "runStarted",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     "k1"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "runStarted",
+    "args": [
+     {
+      "sessionId": "s2",
+      "budgetId": "11111111-1111-4111-8111-000000000002"
+     },
+     "k1"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "forgetSession",
+    "args": [
+     "nope"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "M07",
+  "name": "dispose-clears-every-timer-and-all-clocks",
+  "rule": "B:568-572; spec 4.9 dispose",
+  "expect": {
+   "requests": [
+    {
+     "req": "r4",
+     "terminal": "ok",
+     "value": {
+      "undef": 1
+     }
+    }
+   ],
+   "counts": {
+    "timer.set": 3,
+    "timer.clear": 3,
+    "now": 3
+   },
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.used.activeMs",
+     "value": 0
+    },
+    {
+     "id": "s3",
+     "path": "budget.activeSince",
+     "value": "2023-11-14T22:13:20.000Z"
+    }
+   ],
+   "clocks": {
+    "count": 0
+   },
+   "timers": 0
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    },
+    {
+     "id": "s2",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000002",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    },
+    {
+     "id": "s3",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000003",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "runStarted",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     "k1"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "runStarted",
+    "args": [
+     {
+      "sessionId": "s2",
+      "budgetId": "11111111-1111-4111-8111-000000000002"
+     },
+     "k1"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "runStarted",
+    "args": [
+     {
+      "sessionId": "s3",
+      "budgetId": "11111111-1111-4111-8111-000000000003"
+     },
+     "k1"
+    ]
+   },
+   {
+    "ev": "advance",
+    "ms": 1000
+   },
+   {
+    "ev": "call",
+    "req": "r4",
+    "op": "dispose",
+    "args": []
+   }
+  ]
+ },
+ {
+  "id": "M08",
+  "name": "dispose-clears-the-tool-dedup",
+  "rule": "B:571; spec 4.9",
+  "expect": {
+   "requests": [
+    {
+     "req": "r3",
+     "terminal": "ok",
+     "value": {
+      "undef": 1
+     }
+    }
+   ],
+   "counts": {
+    "findSession": 2
+   },
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.used.tools",
+     "value": 2
+    }
+   ]
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "noteTool",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     "t1",
+     "a1"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "dispose",
+    "args": []
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "noteTool",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     "t1",
+     "a1"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "M09",
+  "name": "cleanup-neither-settles-nor-edits-persisted-markers",
+  "rule": "B:562-572; spec 4.9; 15.1 #25",
+  "expect": {
+   "requests": [
+    {
+     "req": "r3",
+     "terminal": "ok",
+     "value": {
+      "undef": 1
+     }
+    }
+   ],
+   "counts": {
+    "now": 1,
+    "timer.clear": 1
+   },
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.used.activeMs",
+     "value": 0
+    },
+    {
+     "id": "s1",
+     "path": "budget.activeSince",
+     "value": "2023-11-14T22:13:20.000Z"
+    },
+    {
+     "id": "s1",
+     "path": "budget.state",
+     "value": "open"
+    }
+   ],
+   "clocks": {
+    "count": 0
+   },
+   "timers": 0
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "runStarted",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     "k1"
+    ]
+   },
+   {
+    "ev": "advance",
+    "ms": 4000
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "forgetSession",
+    "args": [
+     "s1"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "dispose",
+    "args": []
+   }
+  ]
+ },
+ {
+  "id": "M10",
+  "name": "two-instances-and-repeated-cleanup",
+  "rule": "B:162-165,562-572; spec 2.2 (clocks are per instance)",
+  "expect": {
+   "requests": [
+    {
+     "req": "r6",
+     "terminal": "ok",
+     "value": {
+      "undef": 1
+     }
+    }
+   ],
+   "counts": {
+    "timer.set": 2,
+    "timer.clear": 2
+   },
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.state",
+     "value": "open"
+    }
+   ],
+   "timers": 0
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "instances": [
+   "A",
+   "B"
+  ],
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "runStarted",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     "k1"
+    ],
+    "i": "A"
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "runStarted",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     "k1"
+    ],
+    "i": "B"
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "dispose",
+    "args": [],
+    "i": "A"
+   },
+   {
+    "ev": "call",
+    "req": "r4",
+    "op": "dispose",
+    "args": [],
+    "i": "A"
+   },
+   {
+    "ev": "call",
+    "req": "r5",
+    "op": "forgetSession",
+    "args": [
+     "s1"
+    ],
+    "i": "B"
+   },
+   {
+    "ev": "call",
+    "req": "r6",
+    "op": "dispose",
+    "args": [],
+    "i": "B"
+   }
+  ]
+ }
+]
