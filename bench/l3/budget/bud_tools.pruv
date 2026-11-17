@@ -10,20 +10,16 @@
 pub fn note_tool(inout st: [i64], tkey: [i64], tks: i64, tkn: i64, akey: [i64], aks: i64, akn: i64) -> i64
 {
   let t: i64 = crate::bud_map::find(st, 2, tkey, tks, tkn);
-  let mut ents: i64 = 2;
-  let mut words: i64 = crate::bud_store::c32(tkn) + crate::bud_store::c32(akn);
-  if t >= 0 {
-    if crate::bud_map::find(st, t, akey, aks, akn) >= 0 { return 0; }
-    ents = 1;
-    words = crate::bud_store::c32(akn);
-  }
-  let nd: i64 = crate::bud_map::make_room(inout st, ents, words);
+  // known turn: one hash of the activity key for both the lookup and the insert
+  if t >= 0 { return crate::bud_map::add_absent(inout st, t, akey, aks, akn, 1, crate::bud_store::c32(akn)); }
+  // new turn: the turn and its first activity together
+  let words: i64 = crate::bud_store::c32(tkn) + crate::bud_store::c32(akn);
+  let nd: i64 = crate::bud_map::make_room(inout st, 2, words);
   if nd != 0 {
     if nd < 0 { return 2; }
     return -nd;
   }
-  let mut tt: i64 = t;
-  if tt < 0 { tt = crate::bud_map::add(inout st, 2, tkey, tks, tkn); }
+  let tt: i64 = crate::bud_map::add(inout st, 2, tkey, tks, tkn);
   if tt < 0 { return 2; }
   let x: i64 = crate::bud_map::add(inout st, tt, akey, aks, akn);
   if x < 0 { return 2; }

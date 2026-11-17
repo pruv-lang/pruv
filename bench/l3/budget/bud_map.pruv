@@ -148,6 +148,13 @@ pub fn find(st: [i64], owner: i64, key: [i64], ks: i64, kn: i64) -> i64
 {
   let og: i64 = gf(st, owner, 3);
   let h: i64 = hash_key(owner, og, key, ks, kn);
+  return find_h(st, owner, og, h, key, ks, kn);
+}
+
+// find() with og = gf(st, owner, 3) and h = hash_key(owner, og, key, ks, kn) already computed. A wrong h can only
+// miss (entry_matches compares the stored hash and the key), never return another key's entry.
+fn find_h(st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn: i64) -> i64
+{
   let slots: i64 = crate::bud_store::c32(hw(st, 4));
   let mut i: i64 = 0;
   if len(st) >= 5 && slots >= 1 {
@@ -345,6 +352,12 @@ fn put_key(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, absent: bo
   if gf(st, owner, 0) != 1 { return -1; }
   let og: i64 = gf(st, owner, 3);
   let h: i64 = hash_key(owner, og, key, ks, kn);
+  return put_key_h(inout st, owner, og, h, key, ks, kn, absent);
+}
+
+// put_key() with og = gf(st, owner, 3) and h = hash_key(owner, og, key, ks, kn) already computed (owner is live).
+fn put_key_h(inout st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn: i64, absent: bool) -> i64
+{
   let slots: i64 = crate::bud_store::c32(hw(st, 4));
   // header words 3, 4 in range: slot base and mask read once (the same addresses slot_pos gives)
   let fast: bool = len(st) >= 5 && slots >= 1;
@@ -595,6 +608,25 @@ pub fn make_room(inout st: [i64], entries: i64, words: i64) -> i64
     return crate::bud_store::need(st, entries, words);
   }
   return r;
+}
+
+// find(), and when the key is absent make_room(entries, words) and add(), hashing the key once: the hash depends only
+// on owner, the owner's generation (field 3) and the key, and make_room() (a possible rehash) rewrites only the index.
+// 0 already present, 1 added, -N Grow(N) (nothing written), 2 invalid or the add failed.
+pub fn add_absent(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, entries: i64, words: i64) -> i64
+{
+  let og: i64 = gf(st, owner, 3);
+  let h: i64 = hash_key(owner, og, key, ks, kn);
+  if find_h(st, owner, og, h, key, ks, kn) >= 0 { return 0; }
+  let nd: i64 = make_room(inout st, entries, words);
+  if nd != 0 {
+    if nd < 0 { return 2; }
+    return -nd;
+  }
+  if gf(st, owner, 0) != 1 { return 2; }
+  let x: i64 = put_key_h(inout st, owner, og, h, key, ks, kn, true);
+  if x < 0 { return 2; }
+  return 1;
 }
 
 // ---- grow ----
