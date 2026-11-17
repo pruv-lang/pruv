@@ -166,3 +166,6 @@ carryHeld rules, fresh record init, the layout comment.
 After the fixes: Q1 113 / 0 / 187 / 0 (Rust and Python pruvc), derived 300 exact, byte-identical (139485 bytes).
 A perf rerun gave the same ratio band (the machine was loaded; TS and hand numbers rose with it), so the table
 above is kept.
+
+Post-fix check (Codex gpt-6-astra, ultra, static): all three fixes confirmed, no new defect. The early error returns
+2/3 (before the session lookup succeeds) still write nothing to out, as before.
