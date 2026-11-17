@@ -366,6 +366,7 @@ fn parse_json(bytes: &[u8]) -> Option<Jv> {
 // ---------------------------------------------------------------------------
 
 /// posixpath.normpath on a string
+#[cfg(not(windows))]
 fn normpath(p: &str) -> String {
     if p.is_empty() {
         return ".".to_string();
@@ -393,7 +394,77 @@ fn normpath(p: &str) -> String {
     }
 }
 
+// On Windows Python uses ntpath: drive-letter paths, `\\` and `/` as separators, and `realpath` from the file system.
+// The posixpath versions below would glue the cwd in front of `D:\...`, so Windows gets lexical/canonical versions.
+
+/// `\\?\D:\x` -> `D:\x`, `\\?\UNC\h\s` -> `\\h\s` (what ntpath.realpath returns)
+#[cfg(windows)]
+fn strip_verbatim(p: PathBuf) -> PathBuf {
+    let s = p.to_string_lossy().into_owned();
+    if let Some(r) = s.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{}", r));
+    }
+    if let Some(r) = s.strip_prefix(r"\\?\") {
+        return PathBuf::from(r.to_string());
+    }
+    p
+}
+
+/// ntpath.normpath on components (prefix and root kept, `.` dropped, `..` pops a normal component)
+#[cfg(windows)]
+fn lexical(p: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    let mut normals = 0usize;
+    for c in p.components() {
+        match c {
+            Component::Prefix(_) | Component::RootDir => out.push(c.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if normals > 0 {
+                    out.pop();
+                    normals -= 1;
+                }
+            }
+            Component::Normal(n) => {
+                out.push(n);
+                normals += 1;
+            }
+        }
+    }
+    out
+}
+
+/// ntpath.abspath
+#[cfg(windows)]
+fn abspath(p: &Path) -> PathBuf {
+    if p.is_absolute() {
+        lexical(p)
+    } else {
+        lexical(&std::env::current_dir().unwrap_or_default().join(p))
+    }
+}
+
+/// ntpath.realpath (non-strict: a path that cannot be resolved stays its absolute form)
+#[cfg(windows)]
+fn realpath(p: &Path) -> PathBuf {
+    let a = abspath(p);
+    std::fs::canonicalize(&a).map(strip_verbatim).unwrap_or(a)
+}
+
+/// the resolved path of an existing file, in the same form as `realpath`
+#[cfg(windows)]
+fn canonical(p: &Path) -> Option<PathBuf> {
+    std::fs::canonicalize(p).ok().map(strip_verbatim)
+}
+
+#[cfg(not(windows))]
+fn canonical(p: &Path) -> Option<PathBuf> {
+    std::fs::canonicalize(p).ok()
+}
+
 /// os.path.abspath
+#[cfg(not(windows))]
 fn abspath(p: &Path) -> PathBuf {
     let s = p.to_string_lossy().into_owned();
     let full = if s.starts_with('/') {
@@ -406,6 +477,7 @@ fn abspath(p: &Path) -> PathBuf {
 }
 
 /// os.path.realpath (non-strict: components that do not exist are kept, `..` pops them)
+#[cfg(not(windows))]
 fn realpath(p: &Path) -> PathBuf {
     use std::path::Component;
     fn parts(p: &Path) -> Vec<std::ffi::OsString> {
@@ -573,8 +645,8 @@ fn read(pkgdir: &Path, mfile: &Path, display: &str) -> Res<Pkg> {
         return bad(display, "root", "root file not found");
     }
     // the root file (after resolving symlinks) must stay inside the canonical package directory, by path components
-    match std::fs::canonicalize(&rpath) {
-        Ok(r) if r.starts_with(pkgdir) => {}
+    match canonical(&rpath) {
+        Some(r) if r.starts_with(pkgdir) => {}
         _ => return bad(display, "root", "root file is outside the package directory"),
     }
     let mut deps: Vec<(String, PathBuf, String)> = Vec::new();
@@ -712,7 +784,8 @@ pub fn load_graph(manifest_path: &Path) -> Res<Graph> {
     let mpath = abspath(manifest_path);
     let dir = mpath.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("/"));
     let raw = manifest_path.to_string_lossy().into_owned();
-    let display = raw.rsplit('/').next().unwrap_or("").to_string();
+    // os.path.basename: ntpath also splits at `\\` (and after a drive `D:`)
+    let display = raw.rsplit(|c: char| c == '/' || (cfg!(windows) && (c == '\\' || c == ':'))).next().unwrap_or("").to_string();
     let prog = read(&realpath(&dir), &mpath, &display)?;
     let mut g = Graph { pkgs: Vec::new(), by_dir: HashMap::new() };
     g.by_dir.insert(prog.dir.clone(), 0);
