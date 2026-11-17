@@ -203,6 +203,12 @@ pub fn plan(p: [i64], d: crate::json::JsonDocument, tools: i64, count: i64, obje
   res[0]=cnt-count; res[1]=r; res[2]=cnt; res[3]=obj;
   return res;
 }
+// False exactly when plan's loop cannot run (array_length <= 0, or objects already 500): plan would then return
+// [0, 0, count, objects] and write would not be called, so the caller skips both and allocates nothing (P05N).
+pub fn has_work(d: crate::json::JsonDocument, tools: i64, objects: i64) -> bool
+{
+  return objects < 500 && crate::access::array_length(d,tools) > 0;
+}
 // Decode the string token src[start..end] (as access::string_units would) into q[at..]; returns the pair-safe cut count
 // n = cut(units, cap). Units are stored only where at+k < len(q); positions beyond at+n may hold scratch units that the
 // caller overwrites or truncates away (nothing at or past the cursor is ever read).

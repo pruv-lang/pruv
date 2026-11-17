@@ -440,9 +440,10 @@ def run_perf(exe, new, args):
                 r = subprocess.run([exe, "time", row, arg, str(args.time_ms)], capture_output=True, text=True)
                 if r.returncode != 0:
                     sys.exit("time %s %s failed:\n%s" % (row, cell, r.stderr[-2000:]))
-                med, mn, mx, n, ck = r.stdout.split()
-                e = res.setdefault((row, cell), {"med": [], "min": [], "max": [], "calls": 0, "ck": set()})
+                med, mn, mx, n, ck, tm = r.stdout.split()
+                e = res.setdefault((row, cell), {"med": [], "min": [], "max": [], "tmean": [], "calls": 0, "ck": set()})
                 e["med"].append(int(med)); e["min"].append(int(mn)); e["max"].append(int(mx))
+                e["tmean"].append(float(tm))
                 e["calls"] += int(n); e["ck"].add(int(ck))
         print("round %d/%d done" % (rd + 1, args.rounds), file=sys.stderr, flush=True)
     out = []
@@ -463,7 +464,8 @@ def run_perf(exe, new, args):
                         vals.append((hi - lo) / (4 * reps))
                 ins = statistics.median(vals) if vals else None
             out.append({"cell": cell, "row": row, "median_ns": statistics.median(e["med"]), "min_ns": min(e["min"]),
-                        "max_ns": max(e["max"]), "calls": e["calls"], "rounds_median_ns": e["med"],
+                        "max_ns": max(e["max"]), "tmean_ns": statistics.median(e["tmean"]),
+                        "rounds_tmean_ns": e["tmean"], "calls": e["calls"], "rounds_median_ns": e["med"],
                         "checksum": sorted(e["ck"]), "counter_checksum": ock, "out_words": ow,
                         "alloc_count": ac, "alloc_bytes": ab, "realloc_count": ar, "instr_per_call": ins})
     return cells, rows, out
@@ -472,8 +474,8 @@ def run_perf(exe, new, args):
 def report(cells, rows, out, args, new, pruvc):
     by = {(o["cell"], o["row"]): o for o in out}
     bad = 0
-    print("\n| cell | row | median ns | min | max | instr/call | alloc_count | alloc_bytes | out words | checksum | vs hand (ns) | vs old (ns) |")
-    print("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    print("\n| cell | row | median ns | min | max | tmean ns | instr/call | alloc_count | alloc_bytes | out words | checksum | vs hand (ns) | vs old (ns) | vs hand (tmean) |")
+    print("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     for cell, _ in cells:
         cks = {c for r in rows for c in by[(cell, r)]["checksum"]} | {by[(cell, r)]["counter_checksum"] for r in rows}
         agree = len(cks) == 1
@@ -483,10 +485,11 @@ def report(cells, rows, out, args, new, pruvc):
         for row in rows:
             o = by[(cell, row)]
             h, ol = by[(cell, "hand")], by[(cell, "old")]
-            print("| %s | %s | %d | %d | %d | %s | %d | %d | %d | %d%s | %.2fx | %.2fx |" % (
-                cell, row, o["median_ns"], o["min_ns"], o["max_ns"], fmt(o["instr_per_call"]), o["alloc_count"],
-                o["alloc_bytes"], o["out_words"], o["counter_checksum"], "" if agree else " !",
-                o["median_ns"] / max(h["median_ns"], 1), o["median_ns"] / max(ol["median_ns"], 1)))
+            print("| %s | %s | %d | %d | %d | %.0f | %s | %d | %d | %d | %d%s | %.2fx | %.2fx | %.2fx |" % (
+                cell, row, o["median_ns"], o["min_ns"], o["max_ns"], o["tmean_ns"], fmt(o["instr_per_call"]),
+                o["alloc_count"], o["alloc_bytes"], o["out_words"], o["counter_checksum"], "" if agree else " !",
+                o["median_ns"] / max(h["median_ns"], 1), o["median_ns"] / max(ol["median_ns"], 1),
+                o["tmean_ns"] / max(h["tmean_ns"], 1e-9)))
     meta = run_meta(pruvc=pruvc, backend="rust", rustc=rustc(), flags=RUSTC_FLAGS, profile="p05m-packet-core",
                     lanes=rows, extra={"new_wired": new, "rounds": args.rounds, "time_ms": args.time_ms,
                                        "cells": [c for c, _ in cells]})
