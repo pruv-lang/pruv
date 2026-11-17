@@ -824,6 +824,12 @@ noise except tooldup 100 (+7%) and toolgrow (+2-5%); M4 tools core +3-9%. Line-l
   in 0..65535" into `bud_map` (I1 gaps 1, 2 in the P03 section: no named predicate in contracts, no refined slice type).
 - toolgrow also writes keys through `put_key_units` (pack per word) instead of a unit copy.
 - `tail_word` (in-range tail, no `rd`) removed 5-17 of the extra instructions; the rest is the representation mismatch.
+- The compare-side packing runs only on candidates whose stored hash, owner and length match, not on every probe.
+- P04 audit: `put_key_units` already checked the whole source range, yet `units_word` re-checks range and tail per
+  word; a full-word direct-read loop plus one `tail_word` removes that with existing features. Not done in P04
+  because P05 deletes the unit insert path entirely; if P05 slips, this is the first partial fix.
+- P04 audit: `bud_tools.pruv` / `bud_world.pruv` reserve key room in units, so Grow can be asked for more than the
+  packed words need (over-reservation only, accounting is exact). P05 switches the key reservation to `words(n)`.
 
 Root fix: P05 moves the wire and id blobs to packed keys. Lookups then hash the caller words directly (`bud_keys::hash`,
 one mix per word, no packing, no masks) and compare with `bud_keys::eq` (one word-slice compare over ceil(n/4)
@@ -836,11 +842,19 @@ lands and is measured; P04 alone does not meet the "no regression" bar on instru
   splitmix64 / murmur3 finalizer. It is not keyed: a caller who controls key text can precompute colliding keys and
   push one owner's lookups to O(entries in the index). Keys come from the app's own session / tool / delegation ids,
   not from remote input, so this is accepted for the budget store; a keyed seed (per-store random word in the header)
-  is the fix if keys ever become remote-controlled.
-- Probe budget: every probe loop in `find_h` / `put_key_h` / `slot_of` is bounded by the slot count (termination does
-  not depend on contents). `make_room` rebuilds the index when used + tombstones > 3/4 of the slots, so load including
-  tombstones stays <= 0.75; expected linear-probe lengths at alpha = 0.75 are about 2.5 (hit) and 8.5 (miss) slots.
-  Each probe compares the stored hash first; the key words are read only on a full 64-bit hash match.
+  is the fix if keys ever become remote-controlled. Concrete construction (P04 audit, reproduced with 128 distinct
+  keys): for an owner start hash H, any two packed words `x, mix(H, x)` of length 8 reach the same state, so every
+  such key hashes to `fin(8)`. The exposure is CPU time only (no memory growth beyond the normal entry cost, no
+  wrong answers): the trust boundary is "whoever can choose key text for one owner can slow that owner's map".
+- Probe budget: every single probe loop in `find_h` / `put_key_h` / `slot_of` is bounded by the slot count S
+  (termination does not depend on contents). This bounds one search, not one operation: `add_absent` is a lookup
+  plus an insert search plus a possible rebuild, and a rebuild reinserts every live entry, so under a colliding key
+  set one operation is O(S + E x S), not O(S). Rebuilding never resolves collisions (same seed, same hashes); only a
+  keyed seed would.
+- Load: header[13] counts live slots plus tombstones; `make_room` rebuilds when used + new entries > 3S/4 (and also
+  when entry or arena room runs out), so load including tombstones stays <= 0.75. For random keys the expected
+  linear-probe lengths at alpha = 0.75 are about 2.5 (hit) and 8.5 (miss) slots. Each probe compares the stored hash
+  first; the key words are read only on a full 64-bit hash match.
 - Packing does not change collision behaviour: equal packed words imply equal unit lists for valid units, and n is
   compared separately (`"a"` vs `"a\0"`).
 

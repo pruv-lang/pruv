@@ -762,7 +762,9 @@ fn copy_kids(prev: [i64], inout nxt: [i64], pr: i64, nr: i64, budget: i64, deep:
 
 // Writes a fresh layout for len(nxt) into nxt and copies the reachable entries of prev: roots 0..2, each map in
 // insertion order, children after their parent (two levels below the roots). Keys and blobs are re-appended to the
-// new arena and rehashed; tombstones and dead arena words are dropped. O(len(nxt)). 0 ok, 2 invalid prev,
+// new arena; a stored hash is reused when owner and generation are unchanged and recomputed from the packed words
+// otherwise; tombstones and dead arena words are dropped. O(len(prev) + len(nxt)) with short probes; a colliding key
+// set (see PERF_HEADROOM P04 threat model) can push reinsertion to O(entries x slots). 0 ok, 2 invalid prev,
 // nxt too small, or nxt cannot hold the copy.
 pub fn grow_copy(prev: [i64], inout nxt: [i64]) -> i64
 {
