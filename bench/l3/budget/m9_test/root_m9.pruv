@@ -1,0 +1,142 @@
+mod ent_u16;
+mod bud_store;
+mod bud_map;
+mod bud_world;
+mod bud_clock;
+
+// L3-10 M9 test root (test only, not product): drives bud_clock over the M4 world.
+// PLACEHOLDER budget record: until M7 defines the record, a session's blob holds
+//   [state, unlimited, timeMinutes, activeMs, activeSince kind, since, budgetId length, budgetId units...]
+// (state -1 = the session has no budget). CURRENT(ref) = the session exists, has a budget, and its budgetId equals
+// ref.budgetId; the budget view frame of bud_clock is filled from that blob and written back after the call.
+//
+// t_call op: [code, sessionId key, budgetId key, runKey key, flag], key = `len, units...`.
+//   code 1 runStarted, 2 runWaiting (flag = waiting), 3 runEnded, 4 FIRE (the ref the delivered timer captured when it was
+//   armed), 5 DROP, 6 CLOSE (clock part), 7 REFRESH.
+// Status: bud_clock's (0 done, 4 HALT_TIME, 2 invalid, 3 fx small, -N Grow), plus 2 for a bad op.
+// Scratch `bv` (>= 8 words) and `tmp` (unused since FIRE takes the captured ref) are caller-provided working memory; the host never reads them.
+
+fn key_end(op: [i64], p: i64) -> i64
+  requires 0 <= p
+  ensures result == -1 || (result > p && result <= len(op))
+{
+  let n: i64 = len(op);
+  if p >= n { return -1; }
+  let kn: i64 = crate::ent_u16::rd(op, p);
+  if kn < 0 || kn > n - p - 1 { return -1; }
+  return p + 1 + kn;
+}
+
+// Loads the budget view for ref (sk, bk) from the session blob into bv; bv[0] = 1 when current.
+// The blob offset and length are read once (the same words bud_map::blob_len / blob_unit read per unit).
+fn load_bv(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64, inout bv: [i64]) -> i64
+{
+  crate::ent_u16::wr(inout bv, 0, 0);
+  let se: i64 = crate::bud_map::find(st, 0, sk, ss, sn);
+  if se < 0 { return -1; }
+  let a: i64 = crate::bud_store::field_addr(st, se);
+  if a < 0 { return -1; }
+  let n: i64 = crate::bud_store::c40(crate::ent_u16::rd(st, a + 13));
+  let off: i64 = crate::bud_store::c40(crate::ent_u16::rd(st, a + 12));
+  if n < 7 { return -1; }
+  if bn < 0 || bn > 4294967296 || bs < 0 || bs > 1099511627776 { return -1; }
+  if crate::ent_u16::rd(st, off) < 0 { return -1; }
+  if crate::ent_u16::rd(st, off + 6) != bn || n != 7 + bn { return -1; }
+  let mut j: i64 = 0;
+  while j < bn
+    invariant 0 <= j && j <= bn && bn <= 4294967296 && 0 <= off && off <= 1099511627776 && 0 <= bs && bs <= 1099511627776
+    decreases bn - j
+  {
+    if crate::ent_u16::rd(st, off + 7 + j) != crate::ent_u16::rd(bk, bs + j) { return -1; }
+    j = j + 1;
+  }
+  let mut i: i64 = 0;
+  while i < 6
+    invariant 0 <= i && i <= 6 && 0 <= off && off <= 1099511627776
+    decreases 6 - i
+  {
+    crate::ent_u16::wr(inout bv, 1 + i, crate::ent_u16::rd(st, off + i));
+    i = i + 1;
+  }
+  crate::ent_u16::wr(inout bv, 0, 1);
+  return se;
+}
+
+// Writes bv[1..6] back into words 0..5 of the session blob (in place: same length).
+fn store_bv(inout st: [i64], se: i64, bv: [i64]) -> i64
+{
+  if se < 0 { return 0; }
+  let n: i64 = crate::bud_map::blob_len(st, se);
+  if n < 7 { return 2; }
+  let a: i64 = crate::bud_store::c40(crate::bud_store::ef(st, se, 12));
+  let mut i: i64 = 0;
+  while i < 6
+    invariant 0 <= i && i <= 6
+    decreases 6 - i
+  {
+    crate::ent_u16::wr(inout st, a + i, crate::ent_u16::rd(bv, 1 + i));
+    i = i + 1;
+  }
+  return 0;
+}
+
+pub fn t_init(inout st: [i64]) -> i64
+{ return crate::bud_store::init_store(inout st); }
+
+pub fn t_grow(prev: [i64], inout next: [i64]) -> i64
+{
+  if !crate::bud_store::valid(prev) { return 2; }
+  if len(next) < len(prev) { return 2; }
+  let r: i64 = crate::bud_map::grow_copy(prev, inout next);
+  if r != 0 { return 2; }
+  return 0;
+}
+
+// session put: [sessionId key, n, words...]; 0 ok, 1 Grow (out[0] = N), 2 invalid, 3 out small.
+pub fn t_put(inout st: [i64], op: [i64], inout out: [i64]) -> i64
+{
+  if !crate::bud_store::valid(st) { return 2; }
+  let e1: i64 = key_end(op, 0);
+  if e1 < 0 || e1 >= len(op) { return 2; }
+  let kn: i64 = crate::ent_u16::rd(op, 0);
+  let n: i64 = crate::ent_u16::rd(op, e1);
+  if n < 0 || n != len(op) - e1 - 1 { return 2; }
+  return crate::bud_world::session_put(inout st, op, 1, kn, op, e1 + 1, n, inout out);
+}
+
+pub fn t_call(inout st: [i64], op: [i64], now: i64, inout bv: [i64], inout tmp: [i64], inout fx: [i64]) -> i64
+{
+  if !crate::bud_store::valid(st) { return 2; }
+  let code: i64 = crate::ent_u16::rd(op, 0);
+  let e1: i64 = key_end(op, 1);
+  if e1 < 0 { return 2; }
+  let e2: i64 = key_end(op, e1);
+  if e2 < 0 { return 2; }
+  let e3: i64 = key_end(op, e2);
+  if e3 < 0 || e3 + 1 != len(op) { return 2; }
+  let sn: i64 = crate::ent_u16::rd(op, 1);
+  let bn: i64 = crate::ent_u16::rd(op, e1);
+  let rn: i64 = crate::ent_u16::rd(op, e2);
+  let flag: i64 = crate::ent_u16::rd(op, e3);
+  // code 4 (FIRE): the ref is the one the timer captured when it was armed; the host keeps it per token and passes
+  // it here like any other ref.
+  let se: i64 = load_bv(st, op, 2, sn, op, e1 + 1, bn, inout bv);
+  let mut r: i64 = 2;
+  if code == 4 { r = crate::bud_clock::fire(inout st, op, e1 + 1, bn, op, 2, sn, now, inout bv, inout fx); }
+  if code == 1 { r = crate::bud_clock::run_started(inout st, op, e1 + 1, bn, op, 2, sn, op, e2 + 1, rn, now, inout bv, inout fx); }
+  if code == 2 { r = crate::bud_clock::run_waiting(inout st, op, e1 + 1, bn, op, 2, sn, op, e2 + 1, rn, flag == 1, now, inout bv, inout fx); }
+  if code == 3 { r = crate::bud_clock::run_ended(inout st, op, e1 + 1, bn, op, 2, sn, op, e2 + 1, rn, now, inout bv, inout fx); }
+  if code == 5 { r = crate::bud_clock::drop(inout st, op, e1 + 1, bn, inout fx); }
+  if code == 6 { r = crate::bud_clock::close(inout st, op, e1 + 1, bn, op, 2, sn, now, inout bv, inout fx); }
+  if code == 7 { r = crate::bud_clock::refresh(inout st, op, e1 + 1, bn, op, 2, sn, now, inout bv, inout fx); }
+  if r < 0 || r == 2 || r == 3 { return r; }
+  let w: i64 = store_bv(inout st, se, bv);
+  if w != 0 { return 2; }
+  return r;
+}
+
+pub fn t_observe(st: [i64], inout out: [i64]) -> i64
+{
+  if !crate::bud_store::valid(st) { return 2; }
+  return crate::bud_world::observe(st, inout out);
+}
