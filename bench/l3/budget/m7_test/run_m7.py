@@ -579,23 +579,25 @@ def cmd_perf(args):
                         chk.setdefault((f[1], int(f[2])), set()).add(f[3])
                         continue
                     if f[0] == "rchk":  # rchk <item> <size> <value> (pruv and hand16; per-op results, untimed pass)
-                        rchk.setdefault((f[1], int(f[2])), {}).setdefault(side, set()).add(f[3])
+                        # kept per run (one list entry per process run), so a value missing from one round is seen
+                        rchk.setdefault((f[1], int(f[2])), {}).setdefault(side, {}).setdefault(rd, []).append(f[3])
                         continue
                     item, sz, ns = f
                     res.setdefault((item, int(sz)), {}).setdefault(side, []).append(float(ns))
     bad = ["chk %s %d varies across rounds: %s" % (i, s, sorted(v)) for (i, s), v in sorted(chk.items()) if len(v) != 1]
-    # Per-cell result check: Pruv vs hand16 rchk of every item both lanes run. A missing value on either lane, a value
-    # that varies across rounds, or a different value is a FAIL cell (no ratio is reported for it).
+    # Per-cell result check: Pruv vs hand16 rchk of every item both lanes run. Each lane must print exactly one value in
+    # EVERY round; a value missing from any round, a value that varies across rounds, or a different value is a FAIL
+    # cell (no ratio is reported for it).
     cell_status, n_cmp, n_bad = {}, 0, 0
     for (item, sz) in sorted(res):
         if item not in PERF_ITEMS:
             continue
         n_cmp += 1
         r = rchk.get((item, sz), {})
-        p, h = r.get("pruv", set()), r.get("hand16", set())
-        if not p or not h:
+        pr, hr = r.get("pruv", {}), r.get("hand16", {})
+        if any(len(pr.get(rd, [])) != 1 or len(hr.get(rd, [])) != 1 for rd in range(args.rounds)):
             cell_status[(item, sz)] = "RCHK MISSING"
-        elif len(p) != 1 or len(h) != 1 or p != h:
+        elif len({v for vs in pr.values() for v in vs} | {v for vs in hr.values() for v in vs}) != 1:
             cell_status[(item, sz)] = "RCHK MISMATCH"
         if (item, sz) in cell_status:
             n_bad += 1

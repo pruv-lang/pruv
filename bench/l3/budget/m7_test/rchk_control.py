@@ -2,8 +2,8 @@
 `rchk <item> ...` value (or none) for one item; perf must then mark that cell FAIL, drop its ratio and exit non-zero,
 while the untouched cells still pass.
   python3 rchk_control.py [--item current] [--size 100]
-Small run (2 rounds, 3000 reps, no instruction counts). Exit 0 only if both the mismatch and the missing case fail
-exactly the tampered cell."""
+Small run (2 rounds, 3000 reps, no instruction counts). Exit 0 only if the mismatch, the missing and the
+partial (missing in one round only) case each fail exactly the tampered cell."""
 import sys
 sys.dont_write_bytecode = True
 import argparse
@@ -19,8 +19,15 @@ sys.path.insert(0, os.path.dirname(HERE))
 
 import run_m7  # noqa: E402
 
+# mode partial: the line is dropped only in the first process run (a marker file records that it happened), so the
+# other round still prints the right value; per-round accounting must still mark the cell missing.
 WRAP = """#!/bin/sh
-"%s" "$@" | awk -v item="%s" -v mode="%s" '$1 == "rchk" && $2 == item { if (mode == "mismatch") { $4 = $4 "1"; print } ; next } { print }'
+drop=1
+if [ "%(mode)s" = partial ]; then
+  if [ -e "%(marker)s" ]; then drop=0; else : > "%(marker)s"; fi
+fi
+"%(real)s" "$@" | awk -v item="%(item)s" -v mode="%(mode)s" -v drop="$drop" \
+  '$1 == "rchk" && $2 == item && drop == 1 { if (mode == "mismatch") { $4 = $4 "1"; print } ; next } { print }'
 """
 
 
@@ -28,7 +35,7 @@ def run(item, size, mode, tmp):
     real = run_m7.build_hand16()
     wrap = os.path.join(tmp, "hand16_" + mode)
     with open(wrap, "w") as f:
-        f.write(WRAP % (real, item, mode))
+        f.write(WRAP % {"real": real, "item": item, "mode": mode, "marker": wrap + ".marker"})
     os.chmod(wrap, os.stat(wrap).st_mode | stat.S_IEXEC)
     orig = run_m7.build_hand16
     run_m7.build_hand16 = lambda: wrap
@@ -48,7 +55,7 @@ def main():
     ap.add_argument("--item", default="current")
     ap.add_argument("--size", type=int, default=100)
     a = ap.parse_args()
-    want = {"mismatch": "RCHK MISMATCH", "missing": "RCHK MISSING"}
+    want = {"mismatch": "RCHK MISMATCH", "missing": "RCHK MISSING", "partial": "RCHK MISSING"}
     failed = []
     with tempfile.TemporaryDirectory() as tmp:
         for mode, tag in want.items():
@@ -60,7 +67,7 @@ def main():
             if not ok:
                 failed.append(mode)
                 print(out[-1500:])
-    print("SUMMARY %d/2 controls passed" % (2 - len(failed)))
+    print("SUMMARY %d/%d controls passed" % (len(want) - len(failed), len(want)))
     return 1 if failed else 0
 
 

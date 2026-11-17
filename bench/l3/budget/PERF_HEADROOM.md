@@ -505,8 +505,8 @@ Open, with line-level causes:
   - Why Pruv cannot emit the hand code: the resident state is a `[i64]` handed in on each call. The language has no way
     to carry "this buffer is still valid" between calls (resident or host invariants, P06 / P07 / P11), so the check
     and the clamps must stay to keep the total semantics.
-  - Instructions are at or below oaw, so the remaining ns gap is the dependent load chain of the 14-word copy, not
-    instruction count.
+  - Instructions are 1.01-1.07x of oaw after the restored check; the rest of the ns gap is the dependent load chain
+    of the 14-word copy.
 - **tooldup at n = 500 (oaw 1.08x, fxmixw 1.10x).** Same causes as above, plus a cache effect: Pruv entries are 20
   words (160 B), oa entries are 12 B plus the arena.
 - **toolgrow (oaw 1.33-1.56x, 1.18-1.25x instructions).**
@@ -528,35 +528,38 @@ Before the audit fix (`fd0aff9`, no fallback; `work/p01_keys/p02_perf_after.txt`
 | surr | 7.07 / 7.65 | 0.47 / 0.53 | 1.16 / 1.31 | 1.11 / 1.10 | 161 / 151 |
 | uuid | 12.70 / 14.41 | 0.62 / 0.70 | 1.32 / 1.44 | 1.12 / 1.18 | 220 / 210 |
 
-After the audit fix (header fallback to `tab_find_checked`; checksums equal, no hand rows missing):
+After the audit fixes (header fallback to `tab_find_checked`, plus the sb / eb <= 2^40 test from the confirm audit;
+checksums equal, no hand rows missing; `p02fix2_keys_perf.txt` in the run's output folder):
 
 | set | ret ns (100 / 500) | Pruv/sip | Pruv/fxmix | Pruv/oa | instr Pruv / oa (100) |
 |---|---|---|---|---|---|
-| sid | 8.03 / 7.89 | 0.55 / 0.58 | 1.29 / 1.37 | 1.24 / 1.19 | 165 / 149 |
-| nonascii | 7.63 / 8.62 | 0.52 / 0.64 | 1.30 / 1.48 | 1.16 / 1.21 | 168 / 152 |
-| surr | 8.15 / 8.55 | 0.53 / 0.59 | 1.28 / 1.45 | 1.24 / 1.22 | 168 / 151 |
-| uuid | 13.87 / 15.55 | 0.67 / 0.72 | 1.39 / 1.47 | 1.17 / 1.23 | 227 / 210 |
+| sid | 8.11 / 7.69 | 0.58 / 0.57 | 1.32 / 1.33 | 1.25 / 1.18 | 168 / 149 |
+| nonascii | 8.30 / 8.40 | 0.58 / 0.61 | 1.44 / 1.48 | 1.26 / 1.19 | 171 / 152 |
+| surr | 7.67 / 8.50 | 0.51 / 0.60 | 1.24 / 1.41 | 1.19 / 1.25 | 171 / 151 |
+| uuid | 13.82 / 15.17 | 0.66 / 0.72 | 1.39 / 1.45 | 1.18 / 1.21 | 230 / 210 |
 
 `raw` (re-encode on every call) is 1.08-1.16x of oa raw. `miss` is 1.08-1.24x of oa.
 
-Open (regression, blocking for P03): the retained-key find went from 1.08-1.18x to 1.16-1.24x of oa, +6-7
-instructions per lookup (sid 159 -> 165, uuid 220 -> 227). The cause is the fallback itself: the fast loop must keep
-`t`, `k`, `h`, `hw` live for the cold `tab_find_checked` call, and there are now three call sites (two header tests,
-one `w > cap` probe test). A single cold exit (flag + one call after the loop) is the next thing to try; it was not
-built in this budget.
+Open (regression, blocking for P03): the retained-key find went from 1.08-1.18x to 1.18-1.26x of oa, +9-10
+instructions per lookup (sid 159 -> 168, uuid 220 -> 230). The cause is the fallback itself: the fast loop must keep
+`t`, `k`, `h`, `hw` live for the cold `tab_find_checked` call, there are three call sites (two header tests, one
+`w > cap` probe test), and the header needs the extra or-fold `bor(sb, eb) >= 2^40` test (+3 instructions; without it
+a table longer than 2^40 words gave 0 where the checked loop gives -1). A single cold exit (flag + one call after the
+loop) is the next thing to try; it was not built in this budget. The root fix is the same as for M8: a checked
+table invariant carried between calls (P06 / P07 / P11) drops the header test and the fallback.
 
 Line-level diff, `keys.pruv` `tab_find` against `hand_keys.rs` `find_h`:
 
-- `keys.pruv:466-475`: the header is loaded from `t[0]`, `t[3]`, `t[4]` and `t[5]`, followed by 8 range compares on
+- `keys.pruv:466-477`: the header is loaded from `t[0]`, `t[3]`, `t[4]` and `t[5]`, followed by 8 range compares on
   every call; a failing cap / sb / eb test runs `tab_find_checked` (`keys.pruv:426`). The hand reads
   `self.slots.len()` and `self.mask` from a struct whose fields are consistent by construction.
-- `keys.pruv:487-489`: each probe tests `w >= 1`, then `w > cap` exits to the checked loop. The hand indexes
+- `keys.pruv:489-491`: each probe tests `w >= 1`, then `w > cap` exits to the checked loop. The hand indexes
   `self.ents[s - 1]` with one bounds check, which it also pays.
 - `ent_match` compares the stored hash and length, then the words. This is the same work as the hand's
   `e.hash == h && e.len == k.len()` plus the zip compare.
 
 Pruv cannot emit the hand code because `t` is a plain `[i64]` argument, and the table header invariant cannot be
-carried between calls (P06 / P07 / P11). Once it can be, `keys.pruv:474-475` and the fallback drop, and the find should go below oa,
+carried between calls (P06 / P07 / P11). Once it can be, `keys.pruv:476-477` and the fallback drop, and the find should go below oa,
 because the per-probe `ents` bounds check in the hand has no counterpart in Pruv.
 
 ### M7 (`run_m7.py perf`, typed hand16, S = 100)
@@ -643,22 +646,39 @@ The six blocking findings of the first audit:
   the probe loop, runs `tab_find_checked`, the old per-probe checked loop, for the whole call. `run_keys.py check`
   adds 104 corrupt-header controls (`t[3]` = 0, 1, cap - 1, -1, 2^31; `t[4]` / `t[5]` = len or -1; bad slot
   count; a stored id of cap + 1) compared against
-  `12c78a4^`: 0 mismatches (32 / 104 on `fd0aff9`). A missing Pruv row is now an error. Perf cost: open, see the key
-  bench section (+6-7 instructions per find).
+  `12c78a4^`: 0 mismatches (32 / 104 on `fd0aff9`). A missing Pruv row is now an error. Confirm audit: a table
+  with `eb` > 2^40 (len(t) > 2^40) passed the fast header and returned 0 where the checked loop returns -1; the
+  fast path now also sends `bor(sb, eb) >= 2^40` to the checked loop (static code path; such a table cannot be
+  allocated in the control). Perf cost: open, see the key bench section (+9-10 instructions per find).
 - **Fixed: `perf_budget.py`.** Every result line is validated against the oracle (results and checksum); `{}` and
   lines with missing fields are rejected. Axes follow the spec profile: 100 / 500 for sessions and calls, 10 / 50 for
   runs, delegations and clocks. Implementations alternate per rep; min, median and spread are kept.
-  `perf_budget_controls.py`: 10 / 10 controls pass (one per rule).
+  Confirm audit: the P6 early-terminal class was still accepted (a first request ended on `ResourceBound(input)`
+  skipped every comparison, final state included), and a run without `--impl` stopped after one TS rep; now only
+  `exact` is accepted and a no-impl run does `repeat` TS reps. `perf_budget_controls.py`: 14 / 14 pass (one per rule,
+  including P6, final state only, a wrong result on a later rep only, and no-impl repeat).
 - **Fixed: M7 perf result equality.** Driver and hand16 print a per-op result checksum (`rchk`) from an untimed pass;
   `run_m7.py perf` compares it per cell and marks a mismatch or a missing line `FAIL` with no ratio and exit 1.
-  `rchk_control.py` (tampered and dropped hand line): 2 / 2 pass.
+  Confirm audit: values were pooled into a set, so a line missing from one round only passed; each lane must now
+  print exactly one value in every round. `rchk_control.py` (tampered, dropped, dropped in round 1 only): 3 / 3 pass.
 - **Fixed: `q.py` / `run_meta.py`.** Backend and flags come from the build command (`--backend`, `--build-flags`) or a
-  `<impl>.build.json` sidecar next to the binary; otherwise they are recorded as `unknown`, never a default.
+  `<impl>.build.json` sidecar next to the binary; otherwise they are recorded as `unknown`, never a default. Confirm
+  audit: with an `impl=` override (`run_m5.py`) the sidecar was read from `--impl`, not the binary run; `q.py` and
+  `perf_budget.py` now pass the argv actually run (control 10).
 - **Fixed (noise): M7 `rawcall` at n = 500.** Five re-runs gave 5.0, 4.7, 8.2, 4.6 and 4.7 ns (median 4.7) at an
   unchanged instruction count; the fix-round run gives 4.5. The 9.1 ns cell was a noisy round, not a regression.
 
+Still open after the confirm audit:
+
+- Performance: M8 charge / failure +50 / +44 instructions (restored check) and the key find +9-10 instructions
+  (fallback). Both are recorded with causes above; the root fix is the checked resident / table invariant (P06 / P07 /
+  P11 with the P03-P05 typed state).
+- `corrupt_resident.py` changes stored key units without updating the stored hash, so its "hit" variants are real
+  misses (`bud_map.pruv` hash compare); the restored hit-path check is shown by code reading and the state / reason /
+  word-14 controls, not by a corrupted-key hit. A control that rewrites the hash with the key is the next step.
+
 Non-blocking:
 
-- `run_keys.py` skips the comparison when a Pruv row is missing.
+- (fixed) `run_keys.py` skipped the comparison when a Pruv row was missing.
 - The key checksum is a sum, so it cannot see a permutation of the returned ids.
 - The diff harnesses can reuse a stale Pruv binary.

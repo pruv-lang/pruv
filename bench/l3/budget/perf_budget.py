@@ -79,7 +79,8 @@ def _observed(obs):
 
 def validate_obs(expected, actual):
     """Compares one implementation output line with the oracle's normal observation. -> problem string or None.
-    Uses compare.compare (exact or P6 accepted, as q.py does); timing fields and the `domain` echo are excluded."""
+    Uses compare.compare and accepts only 'exact': a perf cell must do the oracle's whole work, so the P6 early-terminal
+    class (accepted by q.py) is rejected here. Timing fields and the `domain` echo are excluded."""
     if not isinstance(actual, dict):
         return 'result mismatch vs oracle: output is not a JSON object'
     want = _observed(expected)
@@ -88,7 +89,7 @@ def validate_obs(expected, actual):
             return f'missing field {name}'
     got = _observed(actual)
     cls, detail = compare_mod.compare(want, got)
-    if cls in ('exact', 'P6'):
+    if cls == 'exact':
         return None
     return f'result mismatch vs oracle: {detail or cls}'
 
@@ -123,7 +124,7 @@ def measure_cell(impl_cmd, case, expected, repeat):
     order, ts_runs, impl_core, impl_wall = [], [], [], []
     problem = None
     for r in range(max(1, repeat)):
-        lanes = ['ts', 'impl'] if (r % 2 == 0 or not impl_cmd) else ['impl', 'ts']
+        lanes = ['ts'] if not impl_cmd else ['ts', 'impl'] if r % 2 == 0 else ['impl', 'ts']
         for lane in lanes:
             order.append(lane)
             if lane == 'ts':
@@ -162,7 +163,7 @@ def main(argv=None):
     else:
         sizes_of = {a: list(AXIS_PROFILES[profile][a]) for a in axes}
     impl_cmd = q_mod.impl_from_args(args.impl, args.impl_arg)
-    meta = q_mod.build_meta(args, extra={'sizes': sizes_of, 'sizeSource': 'sizes' if args.sizes else 'AXIS_PROFILES.' + profile,
+    meta = q_mod.build_meta(args, impl_argv_used=impl_cmd, extra={'sizes': sizes_of, 'sizeSource': 'sizes' if args.sizes else 'AXIS_PROFILES.' + profile,
                                          'repeat': args.repeat})
     col = 'hand' if args.lane == 'hand' else 'Pruv'
 

@@ -46,6 +46,24 @@ elif mode == "delfield":
 elif mode == "mutate":
     obs["requests"][0]["id"] = "tampered"
     print(json.dumps(obs))
+elif mode == "earlyterm":
+    # P6 shape: the first request ends on a resource bound, so nothing before it is compared; final state also differs
+    obs["requests"][0]["terminal"] = "core"
+    obs["requests"][0]["value"] = "ResourceBound(input)"
+    obs["finalClocks"] = {"tampered": 1}
+    print(json.dumps(obs))
+elif mode == "finalstate":
+    obs["finalClocks"] = {"tampered": 1}
+    print(json.dumps(obs))
+elif mode == "late":
+    # correct on the first run, wrong on every later run (a counter file next to the map file)
+    import os
+    cnt = mapfile + ".count"
+    n = int(open(cnt).read()) if os.path.exists(cnt) else 0
+    open(cnt, "w").write(str(n + 1))
+    if n:
+        obs["finalClocks"] = {"tampered": 1}
+    print(json.dumps(obs))
 elif mode == "twolines":
     print(json.dumps(obs))
     print(json.dumps(obs))
@@ -173,6 +191,11 @@ def main():
             meta = q_mod.build_meta(parse([], binary))
             if meta['backend'] != 'cranelift' or meta['flags'] != ['-O']:
                 return f'build.json: backend {meta["backend"]!r}, flags {meta["flags"]!r}'
+            other = Path(tmp) / 'other_binary'
+            other.write_text('#!/bin/sh\n', encoding='utf-8')
+            meta = q_mod.build_meta(parse([], binary), impl_argv_used=[str(other)])
+            if meta['backend'] != 'unknown' or meta['flags'] != 'unknown':
+                return f'override argv: metadata read from --impl, not from the binary run: {meta["backend"]!r}'
             side.unlink()
             meta = q_mod.build_meta(parse(['--lane', 'ts'], binary))
             if meta['backend'] != 'ts-oracle' or meta['flags'] != 'n/a':
@@ -188,7 +211,20 @@ def main():
         guarded('7 --profile M sizes (runs/delegations/clocks 50, sessions/calls 500)', lambda: check_profile(env, 'M', 50, 500))
         guarded('8 order alternates, 2 * repeat entries', c8 if 'data' in good else lambda: 'control 1 produced no data')
         guarded('9 min <= median and spread for both lanes', c9 if 'data' in good else lambda: 'control 1 produced no data')
-        guarded('10 q.build_meta records unknown / the given backend and flags', c10)
+        guarded('10 q.build_meta records unknown / the given backend and flags (of the argv actually run)', c10)
+
+        def c14():
+            rc, data, _t = env.run(['--axes', AXIS, '--sizes', str(SIZE), '--repeat', '3'])
+            row = data['axes'][AXIS][0]
+            if rc != 3 or len(row['coreNsRuns']) != 3 or row['order'] != ['ts', 'ts', 'ts']:
+                return f'no implementation, repeat 3: exit {rc}, {len(row["coreNsRuns"])} ts runs, order {row["order"]}'
+            return None
+
+        guarded('11 P6 early terminal with a different final state is rejected',
+                lambda: expect_rejected(env, 'earlyterm', 'result mismatch vs oracle'))
+        guarded('12 changed final state alone is rejected', lambda: expect_rejected(env, 'finalstate', 'result mismatch vs oracle'))
+        guarded('13 a wrong result on a later rep only is rejected', lambda: expect_rejected(env, 'late', 'result mismatch vs oracle'))
+        guarded('14 no implementation: repeat N gives N oracle runs', c14)
 
     failed = [n for n, e in results if e is not None]
     print(f'SUMMARY {len(results) - len(failed)}/{len(results)} controls passed' + ('' if not failed else '; FAILED: ' + '; '.join(failed)))

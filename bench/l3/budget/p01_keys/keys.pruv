@@ -471,7 +471,9 @@ fn tab_find(t: [i64], k: [i64], h: i64, hw: i64) -> i64
   let eb: i64 = t[5];
   if slots < 1 || slots > 1073741824 { return -1; }
   // sb + slots <= n puts every probed slot in t, and eb + 3 * cap <= n puts every entry id in 1..cap in t.
-  if cap < 0 || cap > 1073741824 { return tab_find_checked(t, k, h, hw); }
+  // sb / eb above 2^40 return -1 in tab_find_checked, so they must not reach the fast loop either (len(t) is unbounded).
+  // One or-fold test: it also sends sb = 2^40 | x tables to the checked loop, which is exact on every table anyway.
+  if cap < 0 || cap > 1073741824 || bor(sb, eb) >= 1099511627776 { return tab_find_checked(t, k, h, hw); }
   if sb < 0 || sb > n - slots || eb < 0 || eb > n - 3 * cap { return tab_find_checked(t, k, h, hw); }
   let mask: i64 = slots - 1;
   let mut i: i64 = 0;

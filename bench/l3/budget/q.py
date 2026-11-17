@@ -94,27 +94,30 @@ def _sidecar_build_info(argv):
     return None, None
 
 
-def resolve_build(args):
+def resolve_build(args, impl_argv_used=None):
     """-> (backend, flags) describing how the implementation was built. Explicit --backend / --build-flags win; lane ts is the
-    oracle ("ts-oracle", "n/a"); otherwise <impl>.build.json; anything still missing is UNKNOWN (never guessed)."""
+    oracle ("ts-oracle", "n/a"); otherwise <impl>.build.json of the argv actually run (impl_argv_used, else --impl);
+    anything still missing is UNKNOWN (never guessed)."""
     backend = getattr(args, 'backend', None)
     text = getattr(args, 'build_flags', None)
     flags = shlex.split(text) if text is not None else None
     if getattr(args, 'lane', None) == 'ts':
         return backend if backend is not None else 'ts-oracle', flags if flags is not None else 'n/a'
     if backend is None or flags is None:
-        try:
-            argv = impl_from_args(getattr(args, 'impl', None), getattr(args, 'impl_arg', None))
-        except ValueError:
-            argv = None
+        argv = impl_argv_used
+        if argv is None:
+            try:
+                argv = impl_from_args(getattr(args, 'impl', None), getattr(args, 'impl_arg', None))
+            except ValueError:
+                argv = None
         side_backend, side_flags = _sidecar_build_info(argv)
         backend = backend if backend is not None else side_backend
         flags = flags if flags is not None else side_flags
     return (backend if backend is not None else UNKNOWN), (flags if flags is not None else UNKNOWN)
 
 
-def build_meta(args, seed=SEED, extra=None):
-    backend, flags = resolve_build(args)
+def build_meta(args, seed=SEED, extra=None, impl_argv_used=None):
+    backend, flags = resolve_build(args, impl_argv_used)
     return run_meta(pruvc=getattr(args, 'pruvc', None), backend=backend, rustc=getattr(args, 'rustc', None) or shutil.which('rustc'),
                     flags=flags, seed=seed, profile=getattr(args, 'profile', None), lanes=[args.lane], extra=extra)
 
@@ -195,7 +198,7 @@ def main(argv=None, impl=None):
     add_common_args(ap)
     args = ap.parse_args(argv)
     impl_cmd = list(impl) if impl else impl_from_args(args.impl, args.impl_arg)
-    _META = build_meta(args, seed=args.seed)
+    _META = build_meta(args, seed=args.seed, impl_argv_used=impl_cmd)
 
     t0 = time.time()
     fams = families_arg(args.families, None)
