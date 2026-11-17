@@ -140,6 +140,7 @@ fn put_int(inout o: [i64], at: i64, x: i64, n: i64) -> ()
 // String(x) for a safe integer, built in one allocation.
 pub fn int_text(x: i64) -> [i64] ! alloc
   requires -9007199254740991 <= x && x <= 9007199254740991
+  ensures len(result) <= 17
 {
   let n: i64 = int_len(x);
   let mut o: [i64] = alloc(n, 0);

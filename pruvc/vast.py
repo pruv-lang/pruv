@@ -376,6 +376,7 @@ Function.foreign = None    # trusted rust fn: {"path": "::std::cmp::min", "line"
 # Same convention: plain class attributes, set on an instance only when a G9 feature is present.
 Function.cost = None      # Stage 5 entry-state work bound
 Function.decreases = None  # the `decreases Expr` clause of a function header (None = absent)
+Function.small_bound = None  # KD-M6-3: K of the source `ensures len(result) <= K`, kept across specialization
 Program.g9 = None          # checker metadata dict (see check.Checker.g9_meta), only when a G9 feature exists
 
 # ---------- G5 A0: inout parameters ----------

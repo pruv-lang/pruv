@@ -1057,6 +1057,7 @@ impl Parser {
             foreign: info,
             decreases,
             cost,
+            small_bound: None,
         })
     }
 

@@ -852,6 +852,7 @@ impl<'a> Mono<'a> {
         // G6: the ensures of a trusted rust fn are kept (checked by `--foreign-checks all`)
         let ensures = if f.foreign.is_some() { self.cp_es(&f.ensures)? } else { Vec::new() };
         let body = self.cp_stmts(&f.body)?;
+        let small_bound = crate::small::declared_bound(f);
         Ok(Function {
             line: f.line,
             col: f.col,
@@ -866,6 +867,7 @@ impl<'a> Mono<'a> {
             tparams: Vec::new(),
             foreign: f.foreign.clone(),
             cost: f.cost.as_ref().map(|e| self.cp_e(e)).transpose()?, decreases: None, // G9 A0: G9 programs are rejected before specialization
+            small_bound,
         })
     }
 

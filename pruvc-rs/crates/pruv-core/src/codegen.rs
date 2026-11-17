@@ -1225,6 +1225,13 @@ struct Gen<'a> {
     checks_needed: bool,
     /// G4 A2: function name -> its explicit-mode attributes (empty outside explicit mode)
     fmarks: HashMap<String, &'a FnMark>,
+    /// KD-M6-3 (docs/SMALL_RESULT_SPEC.md): small array results on the stack, verified mode only
+    small: crate::small::SmallPlan,
+    /// the local `o` while a `__pruv_small` variant is emitted
+    small_o: Option<String>,
+    /// address of the Call being emitted as a rewritten call site (0 = none) and the name of its binding
+    small_call: usize,
+    small_buf: String,
 }
 
 impl<'a> Gen<'a> {
@@ -1264,9 +1271,18 @@ impl<'a> Gen<'a> {
             });
         let storage = crate::storage::plan_storage(prog, verified);
         let stack = crate::stack::plan_stack(prog, &storage, verified);
+        let small = if verified && !trust_callers {
+            crate::small::plan_small(prog, &fmap, &storage, &stack)
+        } else {
+            Default::default()
+        };
         Gen {
             storage,
             stack,
+            small,
+            small_o: None,
+            small_call: 0,
+            small_buf: String::new(),
             function_name: String::new(),
             prog,
             explicit,
@@ -1645,8 +1661,11 @@ impl<'a> Gen<'a> {
         }
         self.emit(0, "}");
         self.emit(0, "");
+        if let Some((k, o)) = self.small.fns.get(&f.name).cloned() {
+            self.small_fn(f, &ps, k, &o)?;
+        }
         if self.cost {
-            let cps = join_map(&f.params, ", ", |p| format!("{}: {}", p.name, self.rt(&p.ty, true)));
+            let cps =join_map(&f.params, ", ", |p| format!("{}: {}", p.name, self.rt(&p.ty, true)));
             self.emit(0, allow);
             self.emit(0, &format!("fn {}__pruv_cost({}) -> i128 {{", f.name, cps));
             // The bound is evaluated only inside the callee's requires (spec 5: requires before contract_domain).
@@ -1691,6 +1710,24 @@ impl<'a> Gen<'a> {
                 self.entry(f, &ps, &ret, &body_name, Some(f.name.as_str()), Some(false), Some(true))?;
             }
         }
+        Ok(())
+    }
+
+    /// KD-M6-3: the variant of a small function that writes its result into the caller's stack buffer
+    fn small_fn(&mut self, f: &Function, ps: &str, k: i64, o: &str) -> R<()> {
+        let allow = self.allow;
+        self.emit(0, allow);
+        let sep = if ps.is_empty() { "" } else { ", " };
+        self.emit(0, &format!("fn {}__pruv_small(pruv_sb: &mut [i64; {}]{}{}) -> usize {{", f.name, k, sep, ps));
+        let saved = self.inouts.clone();
+        self.inouts.insert(o.to_string());
+        self.small_o = Some(o.to_string());
+        let r = self.block(&f.body, 1);
+        self.small_o = None;
+        self.inouts = saved;
+        r?;
+        self.emit(0, "}");
+        self.emit(0, "");
         Ok(())
     }
 
@@ -3284,6 +3321,40 @@ impl<'a> Gen<'a> {
                 self.vars.insert(x.name.clone(), x.ty.clone());
                 self.refs.remove(&x.name);
             }
+            Stmt::Let(x) if self.small_o.as_deref() == Some(x.name.as_str()) => {
+                let (n0, v0) = match &x.value {
+                    Expr::Call(c) if c.args.len() == 2 => {
+                        let n0 = self.e(&c.args[0])?;
+                        let v0 = self.e(&c.args[1])?;
+                        (n0, v0)
+                    }
+                    _ => return Err("codegen: internal error: small alloc".to_string()),
+                };
+                self.emit(
+                    ind,
+                    &format!(
+                        "let {}: &mut [i64] = {{ let pruv_n: i64 = {}; let pruv_v: i64 = {}; let pruv_s: &mut [i64] = &mut pruv_sb[..pruv_n as usize]; pruv_s.fill(pruv_v); pruv_s }};",
+                        x.name, n0, v0
+                    ),
+                );
+                self.vars.insert(x.name.clone(), x.ty.clone());
+                self.refs.remove(&x.name);
+            }
+            Stmt::Let(x) if self.small.sites.contains_key(&(x as *const Let as usize)) => {
+                let k = self.small.sites[&(x as *const Let as usize)].1;
+                if let Expr::Call(c) = &x.value {
+                    self.small_call = c as *const Call as usize;
+                }
+                self.small_buf = x.name.clone();
+                let call = self.e(&x.value);
+                self.small_call = 0;
+                let call = call?;
+                self.emit(ind, &format!("let mut pruv_sb_{}: [i64; {}] = [0i64; {}];", x.name, k, k));
+                self.emit(ind, &format!("let pruv_sl_{}: usize = {};", x.name, call));
+                self.emit(ind, &format!("let {}: &[i64] = &pruv_sb_{}[..pruv_sl_{}];", x.name, x.name, x.name));
+                self.vars.insert(x.name.clone(), x.ty.clone());
+                self.refs.remove(&x.name);
+            }
             Stmt::Let(x) => {
                 self.moving = self.last_copy(&x.name, &x.value);
                 let v = self.own_e(&x.value);
@@ -3392,6 +3463,13 @@ impl<'a> Gen<'a> {
                 }
                 self.block_in(&x.body, ind + 1, &[], true)?;
                 self.emit(ind, "}");
+            }
+            Stmt::Return(x)
+                if self.small_o.is_some()
+                    && matches!(&x.value, Some(Expr::Var(v)) if Some(v.name.as_str()) == self.small_o.as_deref()) =>
+            {
+                let o = self.small_o.clone().unwrap_or_default();
+                self.emit(ind, &format!("return {}.len();", o));
             }
             Stmt::Return(x) if self.cost => {
                 self.moving = self.return_movable(x.value.as_ref());
@@ -4041,6 +4119,10 @@ impl<'a> Gen<'a> {
                     args = (0..args.len()).map(|i| format!("pruv_cost_arg_{}", i)).collect();
                     captured.push(Self::cost_call(n, &args));
                 }
+                if self.small_call == x as *const Call as usize {
+                    let extra: String = args.iter().map(|a| format!(", {}", a)).collect();
+                    return Ok(format!("{}__pruv_small(&mut pruv_sb_{}{})", n, self.small_buf, extra));
+                }
                 let mut name = n.to_string();
                 if self.explicit {
                     name = self.callee(&name); // G4 A2
@@ -4361,7 +4443,7 @@ mod tests {
             ret_refine: None,
             tparams: vec![],
             foreign: None,
-            cost: None, decreases: None,
+            cost: None, decreases: None, small_bound: None,
         };
         Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None }
     }
@@ -4409,7 +4491,7 @@ mod tests {
             ret_refine: None,
             tparams: vec![],
             foreign: None,
-            cost: None, decreases: None,
+            cost: None, decreases: None, small_bound: None,
         };
         Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None }
     }
@@ -4426,6 +4508,108 @@ mod tests {
         let i = gen_rust(&arr_prog("array"), false, false, 1 << 30).unwrap();
         assert!(!i.contains(SAFE_PRELUDE_U8));
         assert!(i.contains("pruv_get(a, 0i64)"));
+    }
+
+    fn call(name: &str, args: Vec<Expr>, ty: &str) -> Expr {
+        Expr::Call(Call { line: 1, col: 1, name: name.into(), args, ty: Some(ty.into()), targs: None, inst: None, old: None })
+    }
+
+    fn small_func(name: &str, ret: &str, ensures: Vec<Expr>, body: Vec<Stmt>) -> Function {
+        Function {
+            line: 1,
+            col: 1,
+            name: name.into(),
+            params: vec![Param { name: "n".into(), ty: "i64".into(), refine: None, take: false, mode_pos: None }],
+            ret: ret.into(),
+            effects: vec![],
+            requires: vec![],
+            ensures,
+            body,
+            ret_refine: None,
+            tparams: vec![],
+            foreign: None,
+            cost: None,
+            decreases: None,
+            small_bound: None,
+        }
+    }
+
+    /// `mk(n) -> [i64] ensures len(result) <= k` building `o` with alloc, and `g(n) -> i64` binding `let r = mk(n)`
+    fn small_prog(k: &str) -> Program {
+        let bound = bin("<=", call("len", vec![var("result", "array")], "i64"), int(k));
+        let mk = small_func(
+            "mk",
+            "array",
+            vec![bound],
+            vec![
+                Stmt::Let(Let {
+                    line: 1,
+                    col: 1,
+                    name: "o".into(),
+                    mutable: true,
+                    ty: "array".into(),
+                    value: call("alloc", vec![var("n", "i64"), int("0")], "array"),
+                    refine: None,
+                }),
+                Stmt::Return(Return { line: 1, col: 1, value: Some(var("o", "array")) }),
+            ],
+        );
+        let g = small_func(
+            "g",
+            "i64",
+            vec![],
+            vec![
+                Stmt::Let(Let {
+                    line: 1,
+                    col: 1,
+                    name: "r".into(),
+                    mutable: false,
+                    ty: "array".into(),
+                    value: call("mk", vec![var("n", "i64")], "array"),
+                    refine: None,
+                }),
+                Stmt::Return(Return { line: 1, col: 1, value: Some(call("len", vec![var("r", "array")], "i64")) }),
+            ],
+        );
+        Program { functions: vec![mk, g], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None }
+    }
+
+    #[test]
+    fn small_result_variant_and_call_site() {
+        let s = gen_rust(&small_prog("8"), true, false, 1 << 30).unwrap();
+        assert!(s.contains("fn mk__pruv_small(pruv_sb: &mut [i64; 8], n: i64) -> usize {\n"));
+        assert!(s.contains(
+            "    let o: &mut [i64] = { let pruv_n: i64 = n; let pruv_v: i64 = 0i64; let pruv_s: &mut [i64] = \
+             &mut pruv_sb[..pruv_n as usize]; pruv_s.fill(pruv_v); pruv_s };\n    return o.len();\n}\n"
+        ));
+        assert!(s.contains(
+            "    let mut pruv_sb_r: [i64; 8] = [0i64; 8];\n    let pruv_sl_r: usize = mk__pruv_small(&mut pruv_sb_r, n);\n    \
+             let r: &[i64] = &pruv_sb_r[..pruv_sl_r];\n    return (r.len() as i64);\n"
+        ));
+        // the heap body stays, right before the variant
+        assert!(s.contains("fn mk(n: i64) -> ::std::vec::Vec<i64> {\n"));
+    }
+
+    #[test]
+    fn small_result_off_outside_verified_mode_and_above_the_limit() {
+        for (verified, trust) in [(false, false), (true, true), (false, true)] {
+            let s = gen_rust(&small_prog("8"), verified, trust, 1 << 30).unwrap();
+            assert!(!s.contains("__pruv_small") && !s.contains("pruv_sb"), "verified={} trust={}", verified, trust);
+        }
+        let s = gen_rust(&small_prog("65"), true, false, 1 << 30).unwrap();
+        assert!(!s.contains("__pruv_small") && !s.contains("pruv_sb"));
+        let s = gen_rust(&small_prog("0"), true, false, 1 << 30).unwrap();
+        assert!(!s.contains("__pruv_small"));
+    }
+
+    #[test]
+    fn small_bound_is_read_from_the_declaration() {
+        let p = small_prog("17");
+        assert_eq!(crate::small::declared_bound(&p.functions[0]), Some(17));
+        assert_eq!(crate::small::declared_bound(&p.functions[1]), None);
+        let mut generic = p.functions[0].clone();
+        generic.tparams.push(TParam { line: 1, col: 1, name: "T".into(), bound: None });
+        assert_eq!(crate::small::declared_bound(&generic), None);
     }
 
     #[test]

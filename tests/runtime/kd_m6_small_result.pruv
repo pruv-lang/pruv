@@ -1,0 +1,209 @@
+// KD-M6-3: a short `[i64]` result bound by `ensures len(result) <= K` is built in a caller-owned stack buffer
+// (docs/SMALL_RESULT_SPEC.md). Binding names tell the call sites apart in the generated Rust: rl, rs are rewritten;
+// nm, rc, rr, rn, r65 and the calls of mk2 are not.
+
+fn fill_up(inout o: [i64], v: i64) -> ()
+  requires 0 <= v && v <= 1000
+  requires len(o) <= 100
+  ensures len(o) == len(old(o))
+{
+  let mut i: i64 = 0;
+  while i < len(o)
+    invariant 0 <= i && i <= len(o) && len(o) == len(old(o)) && len(o) <= 100 && 0 <= v && v <= 1000
+    decreases len(o) - i
+  {
+    o[i] = v + i;
+    i = i + 1;
+  }
+}
+
+fn show(a: [i64]) -> () ! io
+  requires 1 <= len(a)
+{
+  print(len(a));
+  print(a[0]);
+  print(a[len(a) - 1]);
+}
+
+// small function, K = 8
+fn mk(n: i64, v: i64) -> [i64] ! alloc
+  requires 1 <= n && n <= 8
+  requires 0 <= v && v <= 1000
+  ensures len(result) == n
+  ensures len(result) <= 8
+{
+  let mut o: [i64] = alloc(n, 0);
+  fill_up(inout o, v);
+  return o;
+}
+
+// small function that is only called in positions that stay on the heap
+fn mk2(n: i64, v: i64) -> [i64] ! alloc
+  requires 1 <= n && n <= 8
+  requires 0 <= v && v <= 1000
+  ensures len(result) == n
+  ensures len(result) <= 8
+{
+  let mut o: [i64] = alloc(n, 0);
+  fill_up(inout o, v);
+  return o;
+}
+
+// no bound in the contract: not a small function
+fn mkn(n: i64, v: i64) -> [i64] ! alloc
+  requires 1 <= n && n <= 8
+  requires 0 <= v && v <= 1000
+  ensures len(result) == n
+{
+  let mut o: [i64] = alloc(n, 0);
+  fill_up(inout o, v);
+  return o;
+}
+
+// bound 65 is above the limit of 64: not a small function
+fn mk65(n: i64, v: i64) -> [i64] ! alloc
+  requires 1 <= n && n <= 65
+  requires 0 <= v && v <= 1000
+  ensures len(result) == n
+  ensures len(result) <= 65
+{
+  let mut o: [i64] = alloc(n, 0);
+  fill_up(inout o, v);
+  return o;
+}
+
+// rewritten: a binding inside a loop, read through len, an index and a user function
+fn loop_show(count: i64) -> () ! alloc, io
+  requires 1 <= count && count <= 8
+{
+  let mut i: i64 = 1;
+  while i <= count
+    invariant 1 <= i && i <= count + 1 && count <= 8
+    decreases count + 1 - i
+  {
+    let rl: [i64] = mk(i, 3);
+    show(rl);
+    i = i + 1;
+  }
+}
+
+// rewritten: a single binding passed by value to a user function
+fn single(n: i64) -> () ! alloc, io
+  requires 1 <= n && n <= 8
+{
+  let rs: [i64] = mk(n, 5);
+  show(rs);
+}
+
+// not rewritten: the call is returned directly
+fn ret_direct(n: i64) -> [i64] ! alloc
+  requires 1 <= n && n <= 8
+  ensures len(result) == n
+{
+  return mk2(n, 7);
+}
+
+// not rewritten: nested call g(f(x))
+fn nested(n: i64) -> () ! alloc, io
+  requires 1 <= n && n <= 8
+{
+  show(mk2(n, 9));
+}
+
+// not rewritten: let mut, passed inout
+fn let_mut(n: i64) -> () ! alloc, io
+  requires 1 <= n && n <= 8
+{
+  let mut nm: [i64] = mk(n, 2);
+  fill_up(inout nm, 4);
+  show(nm);
+}
+
+// not rewritten: passed to copy
+fn copy_case(n: i64) -> () ! alloc, io
+  requires 1 <= n && n <= 8
+{
+  let rc: [i64] = mk(n, 6);
+  let cp: [i64] = copy(rc);
+  show(cp);
+}
+
+// not rewritten: the binding is returned
+fn ret_bind(n: i64) -> [i64] ! alloc
+  requires 1 <= n && n <= 8
+  ensures len(result) == n
+{
+  let rr: [i64] = mk(n, 1);
+  return rr;
+}
+
+fn use_mkn(n: i64) -> () ! alloc, io
+  requires 1 <= n && n <= 8
+{
+  let rn: [i64] = mkn(n, 8);
+  show(rn);
+}
+
+fn use_mk65(n: i64) -> () ! alloc, io
+  requires 1 <= n && n <= 65
+{
+  let r65: [i64] = mk65(n, 11);
+  show(r65);
+}
+
+// not a small function: a second return in a nested block
+fn mke(n: i64, v: i64) -> [i64] ! alloc
+  requires 1 <= n && n <= 8
+  requires 0 <= v && v <= 1000
+  ensures 1 <= len(result) && len(result) <= 8
+{
+  let mut o: [i64] = alloc(n, 0);
+  if n == 1 {
+    return alloc(1, v);
+  }
+  fill_up(inout o, v);
+  return o;
+}
+
+fn use_mke(n: i64) -> () ! alloc, io
+  requires 1 <= n && n <= 8
+{
+  let re: [i64] = mke(n, 2);
+  show(re);
+}
+
+// not rewritten: the caller is on a call cycle
+fn rec_show(d: i64) -> () ! alloc, io
+  requires 0 <= d && d <= 3
+  decreases d
+{
+  let rq: [i64] = mk(d + 1, 1);
+  show(rq);
+  if d > 0 {
+    rec_show(d - 1);
+  }
+}
+
+fn run() -> () ! alloc, io {
+  use_mke(1);
+  use_mke(8);
+  rec_show(1);
+  loop_show(8);
+  single(1);
+  single(8);
+  let t1: [i64] = ret_direct(1);
+  show(t1);
+  let t2: [i64] = ret_direct(8);
+  show(t2);
+  nested(1);
+  nested(8);
+  let_mut(1);
+  let_mut(8);
+  copy_case(1);
+  copy_case(8);
+  let t3: [i64] = ret_bind(8);
+  show(t3);
+  use_mkn(1);
+  use_mkn(8);
+  use_mk65(65);
+}
