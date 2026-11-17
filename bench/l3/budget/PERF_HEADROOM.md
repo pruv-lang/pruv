@@ -416,3 +416,159 @@ Still open:
 - Proof removal of the `load_cv` / `bud_charge` state and reason checks under the store invariant, and of `valid` on
   trusted resident state (C3): not done, no saving measured inside M8.
 - Explicit "unavailable" marks for allocation / probe counters in the key bench and M8 tables.
+
+## P02: stronger hand baselines, typed M7 hand, entry fast paths (2026-11-18)
+
+Bar: hand Rust 1.0x is the floor every op must reach; below 1.0x is the goal (proof removes checks the hand must run).
+1.1x is only the alarm line. An op between 1.0x and 1.1x stays open with its cause written down. Ratios are
+Pruv / lane, so > 1.0x means Pruv is slower. Kept outputs: `work/m8/p02_perf3.txt`, `work/p01_keys/p02_perf_after.txt`,
+`work/m7/p02_perf.txt` and `work/m7/p02_perf2.txt`.
+
+New lanes:
+
+- `fxmix`: hashbrown-style map with Fx plus an fmix64 final mix. This removes the uuid collision of the Fx 1.x row:
+  Fx hashes only the low bits of uuid words that differ in the high bits.
+- `oa`: the same data structure as Pruv, which is open addressing over packed records with u32 slots.
+- `w`: the matched wire boundary. The hand decodes the same packed words Pruv gets, using bulk unit conversion.
+- M7 `hand16`: a typed hand with a q mode. `diff_hand_m7.py` checks it against the Pruv driver: 0 mismatches, plus the
+  edge and malformed controls.
+
+### M8 (`run_m8.py perf`, 7 rounds, n = 100 / 500; checksums equal on 56 / 56 runs)
+
+| op | Pruv ns | Pruv/hand16 | Pruv/hand16w | Pruv/fxmixw | Pruv/oaw | Pruv instr | Pruv/oaw instr |
+|---|---|---|---|---|---|---|---|
+| charge | 31.4 / 36.1 | 1.50 / 1.45 | 0.93 / 0.91 | 1.17 / 1.13 | 1.18 / 1.10 | 737 / 740 | 0.94 / 0.94 |
+| failure | 23.4 / 28.8 | 1.44 / 1.57 | 0.81 / 0.90 | 1.15 / 1.29 | 1.08 / 1.14 | 627 / 630 | 1.00 / 1.00 |
+| tooldup | 29.8 / 41.5 | 1.16 / 1.64 | 0.63 / 0.82 | 0.83 / 1.13 | 1.00 / 1.13 | 783 / 796 | 0.87 / 0.88 |
+| toolgrow | 80.6 / 91.9 | 0.89 / 0.93 | 0.72 / 0.75 | 0.99 / 1.07 | 1.47 / 1.72 | 1774 / 1789 | 1.32 / 1.39 |
+
+The un-suffixed hand lanes (hand16, fxmix, oa) take typed arguments, so their boundaries are not matched. Against
+`oa`, Pruv is 2.0-3.3x in ns. The difference between the matched and unmatched lanes is the host-side decode of the
+wire words. That decode is the C4 boundary item and is a host cost, not a Pruv code cost.
+
+Changes in P02:
+
+- Step 1 (`c4d3a63`): the key unit check moved off the lookup-hit path. A hit equals a stored key, and `t_put` already
+  checked that key. Charge went from 988 to 737 instructions and tooldup from 1031 to 783.
+- Step 3d (`5b9a9d8`): `eb()` proves `16 <= base && base + 20 <= len` once per run of entry accesses. After that,
+  `fill_entry`, `entry_alloc`, `entry_free`, `put_key_h`, `drop_entry` and the `remove` child loop index `st[]`
+  directly, which compiles to unchecked loads. The total `ea` / `wr` path stays as the fallback, so short or corrupt
+  buffers give the same result. Toolgrow went from 1953 to 1774 instructions.
+
+Checks erased by proof (hand16 and oa run them, Pruv does not):
+
+- The key-unit range check on the hit path, through the I1 store invariant (step 1).
+- Per-field bounds checks on entry records: one `eb` range proof per run of accesses replaces about 20 checked
+  accesses (step 3d).
+- Probe-slot bounds checks: the table header is checked once per call (key bench step 3b), while the hand's
+  `slots[p]` / `ents[s - 1]` stay checked.
+
+Where Pruv is below 1.0x and why:
+
+- toolgrow against hand16 (0.86-0.93): the second and later probes need no per-slot bounds check, and the entry fast
+  paths write without checks.
+- tooldup against fxmixw at n = 100 (0.83), and charge, failure and tooldup against oaw in instructions (0.87-1.00):
+  the hit path skips the key-unit check.
+
+Open, with line-level causes:
+
+- **charge, failure (oaw 1.08-1.18x ns, 0.94-1.00x instructions).**
+  - `valid(st)` runs on every call (`root_m8.pruv` entry, about 60-70 instructions). The hand's `struct` holds its
+    invariant by construction.
+  - `load_cv` copies 14 words, and `store_cv` writes them back. The hand mutates the struct field in place.
+  - The `c32` / `c40` clamps on counters read from the state.
+  - Why Pruv cannot emit the hand code: the resident state is a `[i64]` handed in on each call. The language has no way
+    to carry "this buffer is still valid" between calls (resident or host invariants, P06 / P07 / P11), so the check
+    and the clamps must stay to keep the total semantics.
+  - Instructions are at or below oaw, so the remaining ns gap is the dependent load chain of the 14-word copy, not
+    instruction count.
+- **tooldup at n = 500 (oaw 1.13x).** Same causes as above, plus a cache effect: Pruv entries are 20 words (160 B), oa
+  entries are 12 B plus the arena.
+- **toolgrow (oaw 1.47-1.72x, 1.32-1.39x instructions).**
+  - `forget` is O(N): `drop_entry` re-probes with `slot_of` and calls `entry_free` for each child. The oa hand bumps a
+    generation in O(1). This is a layout choice that the P03-P05 port can change; proof does not remove it.
+  - `put_key_h` runs a second probe after `find_h`, where the hand reuses the probe position. Returning the probe
+    position from `find_h` needs a two-value result, which is the C4 item.
+  - The `ef` / `hd` accessors outside the fast-pathed functions still go through checked `rd`.
+  - `valid()` runs on every call, as for charge.
+
+### Key bench (`run_keys.py`, 7 rounds, P/w packed records with the matched wire boundary)
+
+| set | ret ns (100 / 500) | Pruv/sip | Pruv/fxmix | Pruv/oa | instr Pruv / oa (100) |
+|---|---|---|---|---|---|
+| sid | 6.96 / 7.21 | 0.50 / 0.52 | 1.14 / 1.31 | 1.08 / 1.14 | 159 / 149 |
+| nonascii | 7.09 / 7.49 | 0.51 / 0.55 | 1.27 / 1.36 | 1.11 / 1.08 | 161 / 152 |
+| surr | 7.07 / 7.65 | 0.51 / 0.55 | 1.16 / 1.31 | 1.11 / 1.10 | 161 / 151 |
+| uuid | 12.70 / 14.41 | 0.91 / 1.18 | 1.32 / 1.44 | 1.12 / 1.18 | 220 / 210 |
+
+`raw` (re-encode on every call) is 1.08-1.10x of oa raw. `miss` is 1.09-1.18x of oa.
+
+Open: the retained-key find is 1.08-1.18x of oa, about 10 instructions per lookup.
+
+Line-level diff, `keys.pruv` `tab_find` against `hand_keys.rs` `find_h`:
+
+- `keys.pruv:430-438`: the header is loaded from `t[0]`, `t[3]`, `t[4]` and `t[5]`, followed by 8 range compares on
+  every call. The hand reads `self.slots.len()` and `self.mask` from a struct whose fields are consistent by
+  construction.
+- `keys.pruv:450`: each probe tests `w >= 1 && w <= cap`. The hand indexes `self.ents[s - 1]` with one bounds check,
+  which it also pays.
+- `ent_match` compares the stored hash and length, then the words. This is the same work as the hand's
+  `e.hash == h && e.len == k.len()` plus the zip compare.
+
+Pruv cannot emit the hand code because `t` is a plain `[i64]` argument, and the table header invariant cannot be
+carried between calls (P06 / P07 / P11). Once it can be, `keys.pruv:437-438` drops, and the find should go below oa,
+because the per-probe `ents` bounds check in the hand has no counterpart in Pruv.
+
+### M7 (`run_m7.py perf`, typed hand16, S = 100)
+
+Before step 3d (`work/m7/p02_perf.txt`):
+
+| item | Pruv ns | hand16 ns | Pruv/hand16 | Pruv instr | hand16 instr |
+|---|---|---|---|---|---|
+| attach | 21.4 | 12.8 | 1.67 | 741 | 303 |
+| closereopen | 28.8 | 13.5 | 2.13 | 998 | 341 |
+| current | 25.8 | 12.7 | 2.03 | 930 | 342 |
+| ishalted | 26.2 | 12.4 | 2.11 | 895 | 335 |
+| replace | 119.9 | 125.9 | 0.95 | 3286 | 2999 |
+
+The hand16 perf lane is typed. It takes typed arguments and returns references, with no out words, so its boundary is
+not matched. The table below splits the Pruv driver variants in instructions per call at S = 100:
+
+| item | A (World::call) | B (t_call) | Bnv (no valid) | C (typed root) | observe | hand16 |
+|---|---|---|---|---|---|---|
+| attach | 987 | 882 | 811 | 762 | 245 | 280 |
+| current | 1916 | 1771 | 1713 | 1615 | 986 | 330 |
+| ishalted | 942 | 837 | 779 | 677 | 44 | 348 |
+| closereopen | 1049 | 905 | 837 | 784 | 51 | 356 |
+| replace | 3760 | 3597 | 3529 | 3478 | 474 | 2993 |
+
+After step 3d, `id_is` uses a branchless or-fold that LLVM vectorizes, which stands in for the hand's slice `bcmp`. The
+ishalted C lane dropped from 677 to 540 instructions, and current from 1615 to 1474.
+
+After step 3d (`work/m7/p02_perf2.txt`, S = 100 / 500):
+
+| item | Pruv ns | hand16 ns | Pruv/hand16 | Pruv instr | hand16 instr |
+|---|---|---|---|---|---|
+| attach | 21.1 / 21.0 | 11.6 / 11.6 | 1.82 / 1.81 | 741 / 741 | 319 / 303 |
+| closereopen | 24.6 / 24.1 | 13.4 / 13.1 | 1.84 / 1.84 | 894 / 894 | 342 / 342 |
+| current | 19.5 / 19.4 | 12.2 / 12.4 | 1.60 / 1.56 | 728 / 728 | 331 / 331 |
+| ishalted | 19.9 / 19.8 | 12.4 / 12.5 | 1.60 / 1.58 | 730 / 730 | 364 / 335 |
+| replace | 120.0 / 121.0 | 117.9 / 120.2 | 1.02 / 1.01 | 3286 / 3286 | 2999 / 2999 |
+
+Before and after 3d, Pruv went from 895 to 730 instructions on ishalted, 930 to 728 on current and 998 to 894 on
+closereopen. Pruv ns for replace is unchanged (119.9 -> 120.0, 3286 instructions both times). The hand16 replace
+median moved from 125.9 to 117.9 ns between runs, so replace is now at 1.01-1.02x.
+
+- Open: replace is 1.01-1.02x in ns and 1.10x in instructions. This is in the 1.0-1.1 band. The hand allocates
+  `Box<[u16]>` keys and hashes them with SipHash; Pruv copies words into the arena it already owns. Pruv still runs
+  more instructions: about 290 per call more than the hand, made up of the same boundary costs listed below (op build,
+  `t_call` parsing and `valid`, about 230-310 together).
+- Open: attach, closereopen, current and ishalted are 1.56-1.84x. The causes, by variant split:
+  - The op build (A - B) costs 100-145 instructions. It is in the driver.
+  - `t_call` key parsing (Bnv - C) costs 50-100 instructions. This is C4: the packed boundary has to decode `key_end`.
+  - `valid()` (B - Bnv) costs 60-70 instructions. This is C3; the resident invariant cannot be carried between calls,
+    as for M8.
+  - A C-lane residual remains. For ishalted it is about 494 instructions after the observe fold, against 348 for the
+    hand. It is not attributed line by line yet. The hand compares a 36-unit id over u16 (72 B) with one `bcmp`,
+    while Pruv stores one unit per i64 word, so it touches 288 B. Packing units 4 per word (the C1 P layout,
+    P03-P05) is the expected fix.
