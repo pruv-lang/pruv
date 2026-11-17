@@ -29,10 +29,10 @@ fn wr(inout a: [i64], i: i64, v: i64) -> ()
 
 // `what[key] ?? 0` for key slot k (0..4)
 fn amount(what: [i64], ws: i64, k: i64) -> i64
-  requires 0 <= ws && ws <= 1099511627776 && 0 <= k && k <= 4
+  requires 0 <= ws && ws + 10 <= len(what) && 0 <= k && k <= 4
 {
-  if rd(what, ws + 2 * k) != 2 { return 0; }
-  return rd(what, ws + 2 * k + 1);
+  if what[ws + 2 * k] != 2 { return 0; }
+  return what[ws + 2 * k + 1];
 }
 
 // u + a when both and the sum are JS safe integers, else BAD (the ResourceBound signal)
@@ -52,54 +52,43 @@ pub fn charge(inout cv: [i64], what: [i64], ws: i64) -> i64
   ensures len(cv) == len(old(cv))
 {
   if len(cv) < 15 || ws > len(what) - 10 { return 2; }
-  if rd(cv, 0) != 1 { return 1; }
-  let s: i64 = rd(cv, 1);
+  // len(cv) >= 15 and ws + 10 <= len(what) from here: cv and what are read with plain indexing
+  if cv[0] != 1 { return 1; }
+  let s: i64 = cv[1];
   if s == 2 { return 1; }
   if s == 1 {
-    let r: i64 = rd(cv, 3);
+    let r: i64 = cv[3];
     if r < 0 { return 17; }
     if r > 4 { return 2; }
     return 16 + r;
   }
   if s != 0 { return 2; }
-  let unl: bool = rd(cv, 2) == 1;
-  let mut k: i64 = 0;
-  while k < 4
-    invariant 0 <= k && k <= 4
-    decreases 4 - k
-  {
-    let a: i64 = amount(what, ws, k);
-    if !unl && a > 0 {
-      let t: i64 = sum(rd(cv, 8 + k), a);
-      if t == bad() { return 5; }
-      if t > rd(cv, 4 + k) { return 33 + k; }
-    }
-    k = k + 1;
+  let unl: bool = cv[2] == 1;
+  // each amount is read once; keys in BUDGET_COUNT_KEYS order, then retries
+  let a0: i64 = amount(what, ws, 0);
+  let a1: i64 = amount(what, ws, 1);
+  let a2: i64 = amount(what, ws, 2);
+  let a3: i64 = amount(what, ws, 3);
+  let a4: i64 = amount(what, ws, 4);
+  // limit checks: the first key over its limit refuses (33 + k); a ResourceBound on the way answers 5
+  if !unl {
+    if a0 > 0 { let t0: i64 = sum(cv[8], a0); if t0 == bad() { return 5; } if t0 > cv[4] { return 33; } }
+    if a1 > 0 { let t1: i64 = sum(cv[9], a1); if t1 == bad() { return 5; } if t1 > cv[5] { return 34; } }
+    if a2 > 0 { let t2: i64 = sum(cv[10], a2); if t2 == bad() { return 5; } if t2 > cv[6] { return 35; } }
+    if a3 > 0 { let t3: i64 = sum(cv[11], a3); if t3 == bad() { return 5; } if t3 > cv[7] { return 36; } }
   }
   // all sums first, then the writes (atomic: a ResourceBound leaves the record untouched)
-  let mut j: i64 = 0;
-  while j < 5
-    invariant 0 <= j && j <= 5
-    decreases 5 - j
-  {
-    let a: i64 = amount(what, ws, j);
-    let mut f: i64 = 8 + j;
-    if j == 4 { f = 14; }
-    if sum(rd(cv, f), a) == bad() { return 5; }
-    j = j + 1;
-  }
-  let mut i: i64 = 0;
-  while i < 5
-    invariant 0 <= i && i <= 5 && len(cv) >= 15
-    decreases 5 - i
-  {
-    let mut f: i64 = 8 + i;
-    if i == 4 { f = 14; }
-    let v: i64 = sum(rd(cv, f), amount(what, ws, i));
-    if v == bad() { return 5; }
-    wr(inout cv, f, v);
-    i = i + 1;
-  }
+  let v0: i64 = sum(cv[8], a0);
+  let v1: i64 = sum(cv[9], a1);
+  let v2: i64 = sum(cv[10], a2);
+  let v3: i64 = sum(cv[11], a3);
+  let v4: i64 = sum(cv[14], a4);
+  if v0 == bad() || v1 == bad() || v2 == bad() || v3 == bad() || v4 == bad() { return 5; }
+  cv[8] = v0;
+  cv[9] = v1;
+  cv[10] = v2;
+  cv[11] = v3;
+  cv[14] = v4;
   return 0;
 }
 
@@ -110,10 +99,10 @@ fn bump(inout cv: [i64], f: i64) -> i64
   ensures len(cv) == len(old(cv))
 {
   if len(cv) < 15 { return 2; }
-  if rd(cv, 0) != 1 { return 0; }
-  let v: i64 = sum(rd(cv, f), 1);
+  if cv[0] != 1 { return 0; }
+  let v: i64 = sum(cv[f], 1);
   if v == bad() { return 5; }
-  wr(inout cv, f, v);
+  cv[f] = v;
   return 0;
 }
 

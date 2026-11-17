@@ -62,60 +62,91 @@ The derived set is the same world and script without reopen / halt / current / i
 
 ## Compiler parity
 
-Python `pruvc/pruvc.py … --backend rust` and the Rust `pruvc` emit byte-identical Rust for `m8_test/root_m8.pruv` (`cmp`; sha1 `9ac4c161…`, 96343 bytes).
+Python `pruvc/pruvc.py … --backend rust` and the Rust `pruvc` emit byte-identical Rust for `m8_test/root_m8.pruv` (`cmp`; sha1 `13202593…`, 107183 bytes, after the perf pass).
 
 ## Perf
 
-`run_m8.py perf --rounds 3` (median ns per call, interleaved rounds). Items:
+`run_m8.py perf --rounds 5` (median ns per call, interleaved rounds). Items:
 - `charge`: `charge(ref_i, {commands:1, retries:1})` round-robin over N sessions;
 - `failure`: `noteFailure(ref_i)` round-robin;
 - `tooldup`: `noteTool` on a turn holding N activities, dedup hit;
 - `toolgrow`: N new activities on one turn, then `forgetTurn`; ns per noteTool, forget included.
 
-| item | size | Pruv ns | hand Rust ns | TS ns | Pruv/hand |
+Perf pass (L3-10 M8 pass 2). Before = the M8 commit, load average 17.98→17.59; after = this pass, load average
+5.40→6.45. Host load differs between the two runs, so compare the Pruv/hand ratio and the instruction counts below,
+not raw ns across runs.
+
+| item | size | before Pruv / hand / TS ns | before ratio | after Pruv / hand / TS ns | after ratio |
 |---|---|---|---|---|---|
-| charge | 100 | 63.6 | 17.6 | 212.6 | 3.61 |
-| charge | 500 | 76.1 | 18.3 | 168.6 | 4.16 |
-| charge | 1000 | 72.0 | 18.8 | 230.7 | 3.83 |
-| failure | 100 | 53.4 | 15.9 | 35.5 | 3.36 |
-| failure | 500 | 65.1 | 15.8 | 41.4 | 4.12 |
-| failure | 1000 | 65.9 | 15.1 | 56.6 | 4.36 |
-| tooldup | 100 | 50.9 | 30.5 | 16.9 | 1.67 |
-| tooldup | 500 | 65.8 | 26.8 | 15.7 | 2.46 |
-| tooldup | 1000 | 55.4 | 26.2 | 21.2 | 2.11 |
-| toolgrow | 100 | 135.9 | 89.0 | 84.7 | 1.53 |
-| toolgrow | 500 | 155.6 | 91.7 | 68.7 | 1.70 |
-| toolgrow | 1000 | 155.9 | 98.0 | 83.0 | 1.59 |
+| charge | 100 | 91.7 / 30.8 / 221.8 | 2.98 | 37.2 / 15.8 / 133.5 | 2.35 |
+| charge | 500 | 92.4 / 42.7 / 302.5 | 2.16 | 44.0 / 18.5 / 135.6 | 2.38 |
+| charge | 1000 | 97.4 / 41.6 / 259.2 | 2.34 | 43.6 / 17.0 / 141.8 | 2.56 |
+| failure | 100 | 87.4 / 31.2 / 51.9 | 2.80 | 26.4 / 13.9 / 29.0 | 1.90 |
+| failure | 500 | 77.2 / 18.5 / 46.0 | 4.17 | 34.3 / 15.0 / 33.7 | 2.29 |
+| failure | 1000 | 69.1 / 19.8 / 43.5 | 3.49 | 33.4 / 15.3 / 33.3 | 2.18 |
+| tooldup | 100 | 64.1 / 36.2 / 22.1 | 1.77 | 34.8 / 26.7 / 12.3 | 1.30 |
+| tooldup | 500 | 73.6 / 35.5 / 35.5 | 2.07 | 47.9 / 25.0 / 13.5 | 1.92 |
+| tooldup | 1000 | 45.6 / 27.7 / 39.4 | 1.65 | 46.6 / 25.9 / 14.4 | 1.80 |
+| toolgrow | 100 | 173.2 / 125.7 / 113.1 | 1.38 | 95.1 / 79.3 / 58.9 | 1.20 |
+| toolgrow | 500 | 178.8 / 116.8 / 102.8 | 1.53 | 113.1 / 86.2 / 58.2 | 1.31 |
+| toolgrow | 1000 | 188.6 / 124.5 / 123.0 | 1.51 | 116.3 / 86.0 / 59.5 | 1.35 |
 
-**Every row is above the 1.1x bar. Not fixed in M8: the dominant cost is `bud_map::find` (M4, not M8's file).**
-Pruv beats TS on charge (2.3–3.2x); on failure, tooldup and toolgrow TS's V8 Map/Set is faster than Pruv.
+Load-robust measure: instructions retired per call (`/usr/bin/time -l`, difference of two rep counts, item-gated
+driver builds, N = 1000):
 
-Profile (`sample`, `-g` build of the M8 driver, `perf 1000`, ~1470 top-of-stack samples over all items):
+| item | Pruv before | Pruv after | hand Rust | after/hand |
+|---|---|---|---|---|
+| charge | 1358 | 863 | 351 | 2.46 |
+| failure | 1181 | 736 | 287 | 2.56 |
+| tooldup | 836 | 835 | 462 | 1.81 |
+| toolgrow | 2650 | 2206 | 1739 | 1.27 |
 
-| function | samples | owner |
-|---|---|---|
-| `bud_map::find` | 959 (65%) | M4 |
-| `load_cv` (bid compare + 14-word copy) | 134 | M8 root |
-| `bud_map::add` | 87 | M4 |
-| `t_call` | 82 | M8 root |
-| `bud_store::valid` | 73 | M4 store |
-| drop_entry / fill_entry / put_units / make_room / entry_free | ~96 | M4 |
-| `note_tool` | 27 | M8 |
-| `store_cv` | 13 | M8 root |
+**No row reaches 1.1x.** Charge and failure lost ~37% of their instructions; tooldup is unchanged (its path is
+almost all `bud_map`); toolgrow lost the `load_cv` share. Pruv beats TS on charge (~3x) and ties it on failure;
+TS (V8 caches string hashes) still beats Pruv on tooldup and toolgrow.
 
-Line by line, charge (one call):
+### Fairness
 
-| step | hand Rust (`hand_m8.rs`) | generated Rust (`work/m8/gen.rs`) | cause |
-|---|---|---|---|
-| session lookup | `sessions.get_mut(&r.session_id)`: SipHash over 13 bytes, SwissTable probe, `memcmp` | `bud_map::find`: one dependent multiply per u16 unit (`mix`), linear probe re-reading header words, per-unit checked compare | M4 map format; same cause measured in M9_NOTES (hash 4 units per mix + slice compare brought M9 near 1.0x). Not editable in M8 |
-| CURRENT bid compare | `b.id == r.budget_id` → `memcmp` (36 bytes) | `load_cv` loop, `ent_u16::rd` per unit (two bound checks each) | codegen: Pruv has no bounds-proved slice compare |
-| boundary check | none | `bud_store::valid` header check (15 reads) per `t_call` | test-root boundary rule; M4 store |
-| record access | field access on a struct | `field_addr` + blob offset, copy 14 words into `cv`, write 7 back | PLACEHOLDER record until M7; frame copy is M8's choice (≈5–8 ns) |
-| limit checks | 4 compares, `Option::unwrap_or` | 4 × `amount` (checked reads) + `sum` safe-integer checks; three loops (check, validate, write) | ResourceBound atomicity (KD-M8-1); few ns |
+- Lookup count matches hand: instrumented `find` = 1 per charge / failure, 2 per tooldup (turn, activity), with
+  1.07–1.2 probes per find. Hand does 1 `HashMap` lookup per charge / failure and 2 per tooldup.
+- Both sides use `black_box` on inputs, same warm-up (1000 charge calls), same sizes and round-robin order.
+- The Pruv side also pays the test-root boundary rule (`bud_store::valid` on every `t_call`) and the PLACEHOLDER
+  blob record (copy into `cv`, write counters back); hand has neither (a struct field). Both are kept: the first is
+  the store's safety contract, the second is M8's frame until M7 defines the record.
 
-failure has the same lookup and CURRENT path with no limit work, so its ratio is the same lookup gap. tooldup is two `find`s (turn, activity) vs two hash lookups; toolgrow adds `bud_map::add` + `make_room` (+ free on forget) vs `String` alloc + set insert.
+### What this pass changed (M8 files only)
 
-What could be done next (outside M8's files): the M9 fixes to `bud_map::hash_key` / `entry_matches` (4 units per mix, slice compare); after M7, read the counters in place instead of copying `cv`.
+- `load_cv`: one range check (`off + n <= len(st)`, `bs + bn <= len(bk)`, `len(cv) >= 15`), then plain proven
+  indexing; the budget-id compare is an OR-accumulate (`d |= st[..] ^ bk[..]`, no early exit) that LLVM vectorizes;
+  the 14-word copy is plain indexing. The old `rd`/`wr` path stays as the fallback (same tests, same words).
+- `load_cv` returns the blob offset; `store_cv` writes counters at that offset directly instead of re-deriving it
+  from the session entry (`field_addr` + header reads again; the state does not change between the two). Fast path
+  for the 7 writes, total fallback.
+- `charge`: amounts read once (`a0..a4`) with direct indexing (`amount` gets a `requires` for the 10-word range);
+  the three loops (check / validate / write) are unrolled; still atomic (ResourceBound: nothing written unless
+  every sum passes, KD-M8-1).
+- `bump`, `t_call`, `key_end`: direct indexing where the range is already checked.
+
+### Remaining gap, line by line (failure, N = 1000: 736 vs 287 instructions)
+
+| step | hand Rust (`hand_m8.rs`) | generated Rust | approx. cost | owner |
+|---|---|---|---|---|
+| boundary check | none | `bud_store::valid` header check per `t_call` | ~80 instr (failure 736 → 651 with `valid` stubbed to `true`) | M4 store / boundary rule |
+| session lookup | SipHash 13 bytes + SwissTable probe + `memcmp` | `bud_map::find`: `hash_key` one dependent multiply per u16 unit, probe re-reading header words, `entry_matches` per unit | the bulk of the rest (~40% of failure samples are `load_cv` with `find` inlined, ~20% `valid`, then `hash_key`) | M4 `bud_map` (not editable here) |
+| CURRENT id compare | `memcmp` 36 bytes | vectorized OR-accumulate over 36 words | small now | M8 (done) |
+| record access | struct field | `field_addr` + copy 14 words, write 7 back | ~20–30 instr | PLACEHOLDER record until M7 |
+| call overhead | everything inlined | separate `fn`s for `load_cv` / `store_cv` / `charge` / `key_end` / `find` | 25–60 instr (all generated fns `#[inline]` in a scratch copy) | compiler (no inline hints) |
+
+charge = failure + ~130 instructions of limit work (5 amount reads, 4 limit compares, 5 safe sums, 5 writes) vs ~65
+for hand's `Option` loop; the extra is the safe-integer checks of `sum` (ResourceBound), which hand skips.
+tooldup: 2 × `find` (+ `hash_key` each) + `valid` vs 2 SipHash lookups; nothing M8-owned is left on that path
+(`note_tool` is ~30 instructions). toolgrow: the dedup `find` misses, then `bud_map::add` hashes the key again
+(no "insert at the slot `find` stopped at" API in `bud_map`), plus `make_room` / free on forget, vs `String` alloc
++ set insert.
+
+Next steps (outside M8's files): the M9 `bud_map::hash_key` / `entry_matches` change (4 units per mix, slice
+compare); a `find`-returns-slot / `add_at` API so `note_tool` hashes once; a cheaper per-call `valid` (or one check per
+batch); inline hints from the compiler; after M7, read the counters in place instead of copying `cv`.
 
 ## Complexity bound check (§9)
 
