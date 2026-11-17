@@ -1577,25 +1577,11 @@ impl Checker {
 
     /// G4 A0 (explicit mode): a host entry (root `pub`, nongeneric, ordinary function) may not have a collection or an extended
     /// (G9) type in its signature; child `pub` functions and generic functions are not host entries.
-    /// G5 A0: it may not have an inout parameter either.
+    /// An inout parameter ([i64] / [u8] / [bool], already type-checked) is allowed on a host entry.
     fn check_entries(&self, prog: &Program) -> Res<()> {
         for (i, f) in prog.functions.iter().enumerate() {
             if !self.host_entry.get(i).copied().unwrap_or(false) {
                 continue;
-            }
-            for p in &f.params {
-                if let Some((ml, mc)) = p.mode_pos {
-                    return Err(terr(
-                        ml,
-                        mc,
-                        "entry_signature",
-                        format!("host entry {} cannot have the inout parameter {}", f.name, p.name),
-                        format!(
-                            "make {} private or child `pub` and expose a root wrapper that copies the input into a `let mut` local",
-                            f.name
-                        ),
-                    ));
-                }
             }
             let mut sig: Vec<(String, &str)> = f.params.iter().map(|p| (format!("parameter {}", p.name), p.ty.as_str())).collect();
             sig.push(("the result".to_string(), f.ret.as_str()));

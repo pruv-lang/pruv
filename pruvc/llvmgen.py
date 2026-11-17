@@ -340,6 +340,50 @@ def mangle(n):
 # words); equality and selectors look only at the active payload.  Legacy Option<i64>/Result<i64> are unchanged.
 G3_TYPE_PREFIX = "pruv_g3_t_"
 DECLS_REPR = "declare void @pruv_panic_repr(i64, ptr) noreturn cold nounwind\n"
+# mutable host entries: byte-range overlap test of two argument regions (negative length or address arithmetic
+# overflow counts as an overlap; an empty region never overlaps)
+DECLS_OVERLAP = """\
+declare { i64, i1 } @llvm.umul.with.overflow.i64(i64, i64)
+declare { i64, i1 } @llvm.uadd.with.overflow.i64(i64, i64)
+define internal i1 @pruv_overlap(ptr %a, i64 %an, i64 %ae, ptr %b, i64 %bn, i64 %be) nounwind {
+entry:
+  %an.neg = icmp slt i64 %an, 0
+  %bn.neg = icmp slt i64 %bn, 0
+  %neg = or i1 %an.neg, %bn.neg
+  br i1 %neg, label %bad, label %len
+len:
+  %am = call { i64, i1 } @llvm.umul.with.overflow.i64(i64 %an, i64 %ae)
+  %ab = extractvalue { i64, i1 } %am, 0
+  %ao = extractvalue { i64, i1 } %am, 1
+  %bm = call { i64, i1 } @llvm.umul.with.overflow.i64(i64 %bn, i64 %be)
+  %bb = extractvalue { i64, i1 } %bm, 0
+  %bo = extractvalue { i64, i1 } %bm, 1
+  %a0 = ptrtoint ptr %a to i64
+  %b0 = ptrtoint ptr %b to i64
+  %ax = call { i64, i1 } @llvm.uadd.with.overflow.i64(i64 %a0, i64 %ab)
+  %a1 = extractvalue { i64, i1 } %ax, 0
+  %axo = extractvalue { i64, i1 } %ax, 1
+  %bx = call { i64, i1 } @llvm.uadd.with.overflow.i64(i64 %b0, i64 %bb)
+  %b1 = extractvalue { i64, i1 } %bx, 0
+  %bxo = extractvalue { i64, i1 } %bx, 1
+  %o1 = or i1 %ao, %bo
+  %o2 = or i1 %o1, %axo
+  %o3 = or i1 %o2, %bxo
+  br i1 %o3, label %bad, label %cmp
+cmp:
+  %az = icmp eq i64 %ab, 0
+  %bz = icmp eq i64 %bb, 0
+  %z = or i1 %az, %bz
+  %c1 = icmp ult i64 %a0, %b1
+  %c2 = icmp ult i64 %b0, %a1
+  %c = and i1 %c1, %c2
+  %nz = xor i1 %z, true
+  %r = and i1 %c, %nz
+  ret i1 %r
+bad:
+  ret i1 true
+}
+"""
 
 
 def gopt(t):
@@ -536,6 +580,7 @@ class Mod:
         s.g6_bridge = False     # G6 A3: some function references @pruv_g6_bridge_v1
         s.bswap = set()         # P2 batch 4: widths of the llvm.bswap declarations the byte-word accesses used
         s.shrink = False        # P3: some external array-return wrapper normalizes cap to len with @pruv_shrink_v2
+        s.overlap = False       # mutable host entries: some wrapper calls @pruv_overlap (DECLS_OVERLAP is emitted)
         s.need_size = set()     # G9 A3: types whose runtime-contract size / equality helpers are needed
         s.need_eq = set()
         s.stack = None          # P3-S1: StackPlan (set by gen_llvm)
@@ -572,7 +617,25 @@ def has_inout(f):
 def is_internal_fn(f, tt):
     """G9: a function with an extended type in its signature has no raw ABI wrapper and no binding;
     G5 A3: neither has a function with an inout parameter (one host-eligibility rule)"""
-    return any(is_ext_t(tt, p.type) for p in f.params) or is_ext_t(tt, f.ret) or has_inout(f)
+    return has_ext_sig(f, tt) or has_inout(f)
+
+
+def has_ext_sig(f, tt):
+    """G9: an extended (boxed/aggregate-with-buffer) type occurs in the signature (no wrapper regardless of mode)"""
+    return any(is_ext_t(tt, p.type) for p in f.params) or is_ext_t(tt, f.ret)
+
+
+def exports_abi(f, tt, explicit):
+    """the common export rule of the raw wrapper, the typed variant, the Rust binding and the public host wrapper:
+    not foreign / specialization / collection-bearing / extended, explicit mode => host entry, and an inout parameter
+    is exported only from an explicit-mode host entry (mutable host entries; legacy inout fns stay internal)"""
+    if (f.foreign is not None or getattr(f, "private", False) or _is_coll_fn(f) or has_ext_sig(f, tt)):
+        return False
+    if explicit and not f.host_entry:
+        return False
+    if has_inout(f) and not (explicit and f.host_entry):
+        return False
+    return True
 
 
 def ir_params(f, tt=None):
@@ -3961,10 +4024,59 @@ class Words:
                     idx += 1
 
 
+def overlap_lines(f, tt, m):
+    """mutable host entries: the first lines of a wrapper with an inout parameter reject (requires violation, also under
+    --trust-callers) an inout region that overlaps another pointer-carrying argument or the result storage.
+    Pointer-carrying list: array/str params and aggregate params in declaration order, then `%out`; a pair is checked
+    when at least one of its two members is inout. A lone inout region (the only pointer-carrying item) is still
+    validated: it is checked against an empty sentinel region (`ptr null, i64 0`)."""
+    if not has_inout(f):
+        return []
+    items = []   # (ptr, len, elem bytes, is_inout)
+    for p in f.params:
+        q = mangle(p.name)
+        if is_agg(p.type):
+            items.append(("%%a.%s" % q, str(words(tt, p.type) * 8), 1, p.mode == "inout"))
+        elif p.type in (I64, BOOL) or not is_arr(p.type):
+            continue   # scalars and Option/Result (two registers) carry no pointer
+        else:
+            e = 1 if p.type.name in ("array_u8", "array_bool", "str") else 8
+            items.append(("%%a.%s.a" % q, "%%a.%s.n" % q, e, p.mode == "inout"))
+    if is_arr(f.ret):
+        items.append(("%out", "16", 1, False))
+    elif is_agg(f.ret):
+        items.append(("%out", str(words(tt, f.ret) * 8), 1, False))
+    if len(items) == 1:
+        # a lone inout region has no partner, but @pruv_overlap also rejects a negative length / size overflow of one
+        # side: check it against the empty sentinel region (an empty region never overlaps)
+        items.append(("null", "0", 1, False))
+    pairs = [(a, b) for i, a in enumerate(items) for b in items[i + 1:] if a[3] or b[3]]
+    if not pairs:
+        return []
+    m.overlap = True
+    out = []
+    for k, (a, b) in enumerate(pairs):
+        out.append("  %%ov.%d = call i1 @pruv_overlap(ptr %s, i64 %s, i64 %d, ptr %s, i64 %s, i64 %d)"
+                   % (k, a[0], a[1], a[2], b[0], b[1], b[2]))
+    flag = "%ov.0"
+    for k in range(1, len(pairs)):
+        out.append("  %%ov.or.%d = or i1 %s, %%ov.%d" % (k, flag, k))
+        flag = "%%ov.or.%d" % k
+    fn = m.string(getattr(f, "disp", f.name))
+    msg = m.string("inout argument overlaps another argument")
+    out += ["  br i1 %s, label %%ovl.bad, label %%ovl.ok" % flag,
+            "ovl.bad:",
+            "  call void @pruv_panic_requires(ptr %s, ptr %s)" % (fn, msg),
+            "  unreachable",
+            "ovl.ok:"]
+    return out
+
+
 def abi_of(f, tt, m=None, target="entry"):
     """target: which internal function the wrapper calls, `entry` (checked, legacy) or `body` (G4 explicit mode when the
     host boundary needs no requires check). The representation checks below run in every mode."""
-    if has_inout(f) or is_internal_fn(f, tt):   # G5 A3: defensive, an inout function is never host-visible
+    # defensive: an extended signature never has a wrapper; an inout function only as an explicit-mode host entry
+    if has_ext_sig(f, tt) or (has_inout(f) and not (m is not None and m.explicit and f.host_entry)):
         raise Exception("llvmgen: %s has no host ABI wrapper (inout or extended signature)" % f.name)
     n = mangle(f.name)
     ext, pre, args = [], [], []
@@ -3998,7 +4110,7 @@ def abi_of(f, tt, m=None, target="entry"):
             args.append("%s %%c.%s.g" % (OPT, q))
     rt = f.ret
     entry = "@%s__pruv_%s" % (n, target)
-    body = ["  " + x for x in pre]
+    body = overlap_lines(f, tt, m) + ["  " + x for x in pre]
     for k, (okv, wv, tname) in enumerate(w.checks):
         # G3: an invalid nominal enum ordinal is rejected here, before the entry (requires) and the body run
         msg = m.string("enum " + tname)
@@ -4221,8 +4333,7 @@ def is_host_abi_fn(f, tt, explicit):
     """a function that gets `pruv_abi_*` wrappers: legacy = every ordinary function that is not a specialization or
     collection/extended-bearing; G4 explicit mode = additionally only the host entries (a child-public function is
     never exported just because Pruv callers can name it)"""
-    return (f.foreign is None and not getattr(f, "private", False) and not _is_coll_fn(f)
-            and not has_inout(f) and not is_internal_fn(f, tt) and (f.host_entry or not explicit))
+    return exports_abi(f, tt, explicit)
 
 
 def entry_type_closure(prog, tt):
@@ -4344,9 +4455,7 @@ pub unsafe extern "C" fn pruv_host_realloc_v2(data: *mut u8, len: i64, m: i64, s
     # G3: specializations of generic functions are private (no ABI symbol, not callable from the bindings)
     # G6 A3: trusted declarations and collection-bearing functions have no binding
     # G9 A3: a function with an extended type in its signature has no binding either
-    pubs = [f for f in prog.functions if not getattr(f, "private", False) and f.foreign is None
-            and not _is_coll_fn(f) and not has_inout(f) and not is_internal_fn(f, tt)
-            and (f.host_entry or not explicit)]   # G4: entries only; G5 A3: never an inout function
+    pubs = [f for f in prog.functions if exports_abi(f, tt, explicit)]   # G4: entries only; inout: explicit host entries only
     returns_array = any(is_arr(f.ret) for f in pubs)  # G2 B2: str counts
     decls = []
     for f in pubs:
@@ -4354,7 +4463,9 @@ pub unsafe extern "C" fn pruv_host_realloc_v2(data: *mut u8, len: i64, m: i64, s
             raise Exception("llvmgen: function name %s needs mangling; the bindings use the raw name" % f.name)
         ps = []
         for p in f.params:
-            if p.type.name in ("array_u8", "array_bool", "str"):  # G2 A5/B2
+            if p.mode == "inout":   # mutable host entry: the borrowed buffer is written in place
+                ps += ["*mut u8" if p.type.name in ("array_u8", "array_bool") else "*mut i64", "i64"]
+            elif p.type.name in ("array_u8", "array_bool", "str"):  # G2 A5/B2
                 ps += ["*const u8", "i64"]
             elif p.type == ARRAY:
                 ps += ["*const i64", "i64"]
@@ -4385,11 +4496,15 @@ pub unsafe extern "C" fn pruv_host_realloc_v2(data: *mut u8, len: i64, m: i64, s
     o.append(ALLOW)
     o.append('extern "C" {\n%s\n}' % "\n".join(decls))
     for f in pubs:
-        ps = ", ".join("%s: %s" % (p.name, rust_ty(p.type, True)) for p in f.params)
+        ps = ", ".join("%s: %s" % (p.name, ("&mut " + rust_ty(p.type, True)[1:]) if p.mode == "inout"
+                                   else rust_ty(p.type, True)) for p in f.params)
         ret = "" if f.ret == UNIT else " -> " + rust_ty(f.ret, False)
         pre, args = [], []
         for p in f.params:
-            if p.type == I64:
+            if p.mode == "inout":
+                args += ["%s.as_mut_ptr()%s" % (p.name, " as *mut u8" if p.type.name == "array_bool" else ""),
+                         "%s.len() as i64" % p.name]
+            elif p.type == I64:
                 args.append(p.name)
             elif p.type == BOOL:
                 args.append("%s as i64" % p.name)
@@ -4627,6 +4742,7 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
         DECLS_NODE if tt.g9_boxed else "") + "".join(
         "declare i%d @llvm.bswap.i%d(i%d)\n" % (w, w, w) for w in (16, 32, 64) if w in m.bswap) + (
         "declare ptr @pruv_shrink_v2(ptr, i64, i64, i64, i64) nounwind\n" if m.shrink else "") + (
+        DECLS_OVERLAP if m.overlap else "") + (
         "declare void @pruv_fill_v2(ptr nocapture, i64, i64, i64) nounwind\n" if m.fill else "") + (
         DECLS_TAIL if "i64" in m.tail else "") + (
         DECLS_TAIL_U8 if "u8" in m.tail else "") + (

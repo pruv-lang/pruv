@@ -1,0 +1,100 @@
+// Resident-state performance harness (docs/RESIDENT_STATE_SPEC.md section 8).
+//
+// The program has explicit visibility mode (root `pub` entries), so the entries below are host entries.
+//
+// State layout in one [i64] buffer `st`:
+//   st[0] = S   record count            (header)
+//   st[1] = 4   words per record R      (header, informational)
+//   st[2] = 0   reserved                (header)
+//   st[3] = 0   reserved                (header)
+//   record i occupies st[4 + 4*i .. 4 + 4*i + 4):
+//     word 0 = i (record id), word 1 = accumulator A, word 2 = accumulator B, word 3 = spare
+//
+// The host never reads or writes the buffer; it only allocates it (length 4 + 4*S) and calls the entries.
+// The header is not trusted by the prover: `step` re-validates it in executable code (O(1)), so the bounds proof
+// does not depend on any invariant over the records and the entry requires stay at fixed cost.
+
+// Fills the header and all S records. Runs once; O(S) is fine here.
+pub fn init(inout st: [i64], s: i64) -> ()
+  requires 0 < s && s <= 1_000_000 && len(st) >= 4 + 4 * s
+{
+  st[0] = s;
+  st[1] = 4;
+  st[2] = 0;
+  st[3] = 0;
+  let mut i: i64 = 0;
+  while i < s
+    invariant 0 <= i && i <= s
+    decreases s - i
+  {
+    let base: i64 = 4 + 4 * i;
+    st[base] = i;
+    st[base + 1] = 0;
+    st[base + 2] = 0;
+    st[base + 3] = 0;
+    i = i + 1;
+  }
+  return;
+}
+
+// One resident step: O(1) work independent of S. call = [record index, delta].
+// Reads record (call[0] mod S), updates two words of it, returns the new accumulator A.
+// Invalid input (short call, bad header, negative index) returns -1 and changes nothing.
+pub fn step(inout st: [i64], call: [i64]) -> i64
+  requires len(st) >= 4
+{
+  if len(call) < 2 {
+    return -1;
+  }
+  let n: i64 = st[0];
+  if n <= 0 || n > 1_000_000 {
+    return -1;
+  }
+  if len(st) < 4 + 4 * n {
+    return -1;
+  }
+  let k: i64 = call[0];
+  if k < 0 {
+    return -1;
+  }
+  let i: i64 = k % n;
+  let base: i64 = 4 + 4 * i;
+  let a: i64 = wrapping_add(st[base + 1], call[1]);
+  st[base + 1] = a;
+  st[base + 2] = wrapping_add(st[base + 2], st[base]);
+  return a;
+}
+
+// Empty call: measures the fixed cost of crossing the host boundary with two resident/read-only arguments.
+pub fn noop(inout st: [i64], call: [i64]) -> i64
+  requires len(st) >= 4
+{
+  return 0;
+}
+
+// The pre-batch shape: the state comes in read-only and the updated state goes back out as a fresh copy (O(S)).
+// Same logical update as `step`; on invalid input it returns the unchanged copy.
+pub fn step_copy(st: [i64], call: [i64]) -> [i64] ! alloc
+  requires len(st) >= 4
+{
+  let mut w: [i64] = copy(st);
+  if len(call) < 2 {
+    return w;
+  }
+  let n: i64 = w[0];
+  if n <= 0 || n > 1_000_000 {
+    return w;
+  }
+  if len(w) < 4 + 4 * n {
+    return w;
+  }
+  let k: i64 = call[0];
+  if k < 0 {
+    return w;
+  }
+  let i: i64 = k % n;
+  let base: i64 = 4 + 4 * i;
+  w[base + 1] = wrapping_add(w[base + 1], call[1]);
+  w[base + 2] = wrapping_add(w[base + 2], w[base]);
+  return w;
+}

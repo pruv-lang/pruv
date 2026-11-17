@@ -1,0 +1,104 @@
+// Mutable host entries (explicit mode): root `pub` functions with inout parameters work on host-owned buffers in place.
+// All decisions are made here (validation, status codes, the growth request); the host only allocates, calls and prints.
+// State layout: st[0] = number of stored records, st[1 + i] = record i, so the capacity is len(st) - 1.
+// step statuses: 0 stored, 1 call rejected (nothing written), 2 state full: grow and retry (nothing written),
+// 3 corrupt header (nothing written).
+
+pub fn init(inout st: [i64]) -> ()
+  requires len(st) >= 1
+  ensures len(st) == len(old(st))
+  ensures st[0] == 0
+{
+  st[0] = 0;
+}
+
+pub fn step(inout st: [i64], inout out: [i64], call: [i64]) -> i64
+  requires len(st) >= 1 && len(out) >= 2 && len(call) >= 2
+  ensures len(st) == len(old(st)) && len(out) == len(old(out))
+  ensures 0 <= result && result <= 3
+  ensures result == 0 ==> st[0] == old(st)[0] + 1
+  ensures result != 0 ==> st[0] == old(st)[0]
+  ensures result == 0 ==> out[0] == st[0] && out[1] == call[1]
+{
+  let kind: i64 = call[0];
+  let v: i64 = call[1];
+  let cnt: i64 = st[0];
+  if kind != 1 {
+    return 1;
+  }
+  if v < 0 {
+    return 1;
+  }
+  if v > 1000 {
+    return 1;
+  }
+  if cnt < 0 {
+    return 3;
+  }
+  if cnt >= len(st) - 1 {
+    if cnt > len(st) - 1 {
+      return 3;
+    }
+    return 2;
+  }
+  st[cnt + 1] = v;
+  st[0] = cnt + 1;
+  out[0] = cnt + 1;
+  out[1] = v;
+  return 0;
+}
+
+pub fn grow(prev: [i64], inout next: [i64]) -> ()
+  requires len(prev) >= 1 && len(next) >= len(prev)
+  ensures len(next) == len(old(next))
+  ensures forall k in 0..len(prev): next[k] == prev[k]
+{
+  let n: i64 = len(prev);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n
+    invariant len(prev) == n && len(next) >= n
+    invariant len(next) == len(old(next))
+    invariant forall k in 0..n: k < i ==> next[k] == prev[k]
+    decreases n - i
+  {
+    next[i] = prev[i];
+    i = i + 1;
+  }
+}
+
+pub fn poke(inout b: [u8], i: i64, v: i64) -> i64
+  ensures len(b) == len(old(b))
+  ensures result == 0 ==> (0 <= i && i < len(b) && b[i] == v)
+  ensures forall k in 0..len(b): k != i ==> b[k] == old(b)[k]
+{
+  if i < 0 {
+    return 1;
+  }
+  if i >= len(b) {
+    return 1;
+  }
+  if v < 0 {
+    return 1;
+  }
+  if v > 255 {
+    return 1;
+  }
+  b[i] = v;
+  return 0;
+}
+
+pub fn set_flag(inout f: [bool], i: i64, v: bool) -> bool
+  ensures len(f) == len(old(f))
+  ensures result ==> (0 <= i && i < len(f) && f[i] == v)
+  ensures forall k in 0..len(f): k != i ==> f[k] == old(f)[k]
+{
+  if i < 0 {
+    return false;
+  }
+  if i >= len(f) {
+    return false;
+  }
+  f[i] = v;
+  return true;
+}
