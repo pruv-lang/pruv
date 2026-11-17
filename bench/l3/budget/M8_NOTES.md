@@ -213,6 +213,78 @@ Rows still above 1.1x, and why:
 Next steps (outside this pass): compiler `#[inline(always)]` with an M11 evaluation; the typed-handle ABI to drop
 `valid`; a byte-packed key layout in `bud_map` (the M5 store already moved to byte keys and reached parity).
 
+### Inline policy (compiler, after perf pass 3)
+
+The compiler now chooses `#[inline(always)]` per fn (SPEC section 7, "Inline policy"). A fn gets it when it is
+non-recursive and one of these holds: `incl <= 8`, at most one call site, or `incl * (call sites - 1) <= 1500`. The
+same text pass runs in both compilers. Parity holds byte for byte on all budget roots: m7, m8, m9, m11, m34 m3 and m4.
+
+How the policy was chosen: each candidate rewrote the hints in the generated Rust and was measured on M8, M7, M9,
+M4 (m34) and M11. Instruction counts per op are `/usr/bin/time -l`, (instr(hi reps) - instr(lo reps)) / delta, which
+cancels setup. During the runs the load average was 14-51, so ns are noisy and instructions decide. Candidates:
+- `all`: `#[inline(always)]` on every non-recursive fn.
+- `size:N`: the same, limited to fns with at most N body lines.
+- `single`: fns with one call site.
+- `or:40`: size at most 40 or one call site.
+- `incl:G`: the chosen rule, with budget G.
+
+Instructions per op (Pruv; hand Rust in the last row):
+
+| candidate | M8 charge 500 | M8 failure 500 | M8 tooldup 500 | M8 toolgrow 500 | M7 500 | M9 10 | M4 sessions 100 / 1000 | M4 tools 100 / 1000 | M11 B 1000 |
+|---|---|---|---|---|---|---|---|---|---|
+| before (`#[inline]`) | 825 | 697 | 710 | 1876 | 8340 | 20728 | 6712 / 6830 | 10097 / 11064 | 16.29M |
+| all | 698 | 583 | 613 | 1661 | 8250 | 20942 | 6394 / 6396 | 9796 / 10676 | 15.16M |
+| size:20 | 814 | 683 | 708 | 1830 | 8539 | 20540 | | | |
+| size:40 | | | | | 8252 | 22320 | | | |
+| size:60 | 783 | 650 | 623 | 1685 | 8219 | 20912 | | | |
+| single | 812 | 696 | 705 | 1873 | 8500 | | | | |
+| or:40 | 824 | 703 | 705 | 1791 | 8625 | 22309 | | | |
+| incl:200 | 812 | 697 | 734 | 1888 | 7996 | 20371 | | | |
+| incl:600 | 752 | 637 | 661 | 1768 | 7895 | 20573 | 6507 / 6602 | 9704 / 10700 | 15.59M |
+| **incl:1500 (chosen)** | 698 | 585 | 611 | 1680 | 7629 | 20431 | 6323 / 6547 | 9784 / 10724 | 15.29M |
+| incl:5000 | | | | | 8301 | | | | |
+| hand Rust | 350 | 285 | 460 | 1752 | ~7805 | ~19049 | | | |
+
+The M7 column is the instruction cost of one `perf` op mix at S = 500. The other M7 sizes moved the same way: 7634
+and 7633 with the chosen policy. M9 is `perf` at size 10. Empty cells were not measured, because the candidate had
+already failed on M7, M8 or M9.
+
+rustc cost of the chosen policy against before. Each build was compiled 5 times, base and policy alternating; the
+table shows min child CPU in seconds and the binary size:
+
+| driver | before cpu | policy cpu | before bytes | policy bytes |
+|---|---|---|---|---|
+| M8 | 0.77 | 1.14 | 577344 | 592656 (+2.7%) |
+| M7 | 0.97 | 2.28 | 594864 | 658320 (+10.7%) |
+| M9 | 1.14 | 1.35 | 599280 | 614816 (+2.6%) |
+| M4 | 0.85 | 1.53 | 575024 | 590368 (+2.7%) |
+| M11 | 1.56 | 2.71 | 629152 | 693456 (+10.2%) |
+
+For comparison, `all` took 7.3 s for M7 and 6.8 s for M11, and its binaries were 823 KB and 875 KB. `incl:5000`
+took 6.7 s for M7, its binary was 807 KB, and its M7 instructions went back to 8301.
+
+Why `incl:1500`:
+- The M8 gain needs whole call trees inlined into the root's entry and the driver loop. Size limits stop at the
+  first large frame, and `single` misses the shared helpers. The inclusive-size budget takes the tree as long as the
+  copies it adds stay bounded.
+- It improves every measured piece: M7 -8.5%, M9 -1.4%, M4 -3 to -6%, M11 B -6% and C -4%.
+- Its compile time and binary growth are a fraction of `all`'s.
+- Size and `or` rules were non-monotonic. size:40 and or:40 made M9 7.7% worse. The cause is rustc's own choices
+  shifting when some frames are forced and others are not.
+
+M8 after the policy (load average ~7-50, 7 rounds, median; instructions are the stable column):
+
+| item | size | Pruv ns | hand ns | Pruv/hand | Pruv instr | hand instr | instr ratio | instr before |
+|---|---|---|---|---|---|---|---|---|
+| charge | 100 / 500 / 1000 | 61.3 / 53.1 / 59.2 | 37.9 / 40.4 / 45.0 | 1.62 / 1.31 / 1.32 | 695 / 698 / 697 | 350-352 | 1.97-1.99 | 817-825 |
+| failure | 100 / 500 / 1000 | 23.6 / 29.7 / 32.8 | 14.0 / 14.6 / 15.9 | 1.69 / 2.03 / 2.06 | 581 / 585 / 584 | 284-286 | 2.03-2.05 | 691-697 |
+| tooldup | 100 / 500 / 1000 | 25.3 / 36.1 / 38.8 | 27.5 / 24.3 / 25.0 | 0.92 / 1.49 / 1.55 | 596 / 611 / 607 | 460-461 | 1.29-1.33 | 676-710 |
+| toolgrow | 100 / 500 / 1000 | 106.1 / 101.7 / 116.0 | 107.6 / 97.6 / 107.5 | 0.99 / 1.04 / 1.08 | 1666 / 1680 / 1679 | 1643-1752 | 0.96-1.01 | 1859-1876 |
+
+Toolgrow is now within 1.1x on both ns and instructions. Charge, failure and tooldup are still above 1.1x. The
+policy removed the call-frame share, about 110-130 instructions. What is left is the key and id width and the
+`valid` boundary, as listed in the table above.
+
 ## Complexity bound check (§9)
 
 Expected normal path; Grow (host copy, rare) and rehash (amortized) are storage upkeep.

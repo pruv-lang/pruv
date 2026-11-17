@@ -15,7 +15,7 @@ use crate::foreign_codegen::ForeignGen;
 use crate::gtype::{is_g3_key, key_is_collection, mk_option, GType};
 use crate::pyrepr::repr_str;
 use crate::typeinfo::{array_elem_name, is_array_name, uses_array_type, uses_str, TypeTable};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 pub type R<T> = Result<T, String>;
 
@@ -1649,6 +1649,7 @@ impl<'a> Gen<'a> {
         let allow = self.allow;
         self.emit(0, allow);
         // Inline hint on every function body: without it rustc keeps the generated call chains as real calls.
+        // inline_policy raises it to #[inline(always)] where the measured policy says so.
         self.emit(0, "#[inline]");
         self.emit(0, &format!("{}fn {}({}){} {{", vis, body_name, ps, ret));
         self.cost = !self.verified && f.cost.is_some();
@@ -4418,7 +4419,143 @@ fn gen_rust_concrete_core(
     }
     let mut s = g.out.join("\n");
     s.push('\n');
-    Ok((s, manifest, trust))
+    Ok((inline_policy(s), manifest, trust))
+}
+
+// Inline policy (SPEC "Inline policy"; Python `inline_policy`): a pass over the finished Rust text, so the Python and Rust
+// compilers decide the same way by construction. A non-recursive `#[inline]` fn (one that cannot reach itself through
+// calls) gets `#[inline(always)]` when its inclusive size (own body lines plus, once per call, the inclusive size of
+// each callee that gets always) is at most INLINE_SMALL, when it has at most one call site, or when the copies it adds
+// beyond one, incl * (call sites - 1), fit INLINE_BUDGET. The rest keep `#[inline]` and rustc's own heuristics.
+const INLINE_SMALL: u64 = 8;
+const INLINE_BUDGET: u64 = 1500;
+
+fn ident_byte(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || c == b'_'
+}
+
+/// fn index -> number of call tokens in text: an identifier of names followed by '(', not after '.' or 'fn '
+fn inline_calls(text: &str, index: &HashMap<&str, usize>) -> BTreeMap<usize, u64> {
+    let b = text.as_bytes();
+    let mut got = BTreeMap::new();
+    let (mut i, n) = (0, b.len());
+    while i < n {
+        if !ident_byte(b[i]) {
+            i += 1;
+            continue;
+        }
+        let mut e = i;
+        while e < n && ident_byte(b[e]) {
+            e += 1;
+        }
+        if e < n && b[e] == b'(' && (i == 0 || b[i - 1] != b'.') && !(i >= 3 && &b[i - 3..i] == b"fn ") {
+            if let Some(&k) = std::str::from_utf8(&b[i..e]).ok().and_then(|w| index.get(w)) {
+                *got.entry(k).or_insert(0) += 1;
+            }
+        }
+        i = e;
+    }
+    got
+}
+
+fn inline_policy(text: String) -> String {
+    let mut lines: Vec<&str> = text.split('\n').collect();
+    // (attribute line, name, size, body text)
+    let mut fns: Vec<(usize, &str, u64, String)> = Vec::new();
+    for i in 0..lines.len().saturating_sub(1) {
+        if lines[i] != "#[inline]" {
+            continue;
+        }
+        let h = lines[i + 1];
+        let p = if h.starts_with("pub fn ") { 4 } else { 0 };
+        if !h[p..].starts_with("fn ") {
+            continue;
+        }
+        let hb = h.as_bytes();
+        let mut e = p + 3;
+        while e < hb.len() && ident_byte(hb[e]) {
+            e += 1;
+        }
+        if e == p + 3 || e >= hb.len() || hb[e] != b'(' {
+            continue;
+        }
+        let name = &h[p + 3..e];
+        if h.ends_with('}') && h.matches('{').count() == h.matches('}').count() {
+            fns.push((i, name, 1, h.to_string()));
+            continue;
+        }
+        let mut end = i + 2;
+        while end < lines.len() && lines[end] != "}" {
+            end += 1;
+        }
+        if end == lines.len() {
+            continue;
+        }
+        fns.push((i, name, std::cmp::max(end - i - 2, 1) as u64, lines[i + 2..end].join("\n")));
+    }
+    if fns.is_empty() {
+        return text;
+    }
+    let mut index: HashMap<&str, usize> = HashMap::new();
+    for (k, f) in fns.iter().enumerate() {
+        index.entry(f.1).or_insert(k);
+    }
+    let sites = inline_calls(&text, &index);
+    let edges: Vec<Vec<(usize, u64)>> = fns.iter().map(|f| inline_calls(&f.3, &index).into_iter().collect()).collect();
+    let nf = fns.len();
+    // recursive: the fn reaches itself through its calls (direct or mutual); it never gets always and adds nothing
+    let mut rec = vec![false; nf];
+    for v in 0..nf {
+        let mut seen = vec![false; nf];
+        let mut todo: Vec<usize> = edges[v].iter().map(|e| e.0).collect();
+        while let Some(w) = todo.pop() {
+            if w == v {
+                rec[v] = true;
+                break;
+            }
+            if !seen[w] {
+                seen[w] = true;
+                todo.extend(edges[w].iter().map(|e| e.0));
+            }
+        }
+    }
+    // the non-recursive fns form a DAG: incl / always in post-order (iterative, call chains can be deep)
+    let mut done = vec![false; nf];
+    let mut incl = vec![0u64; nf];
+    let mut always = vec![false; nf];
+    for root in 0..nf {
+        if rec[root] || done[root] {
+            continue;
+        }
+        let mut stack: Vec<(usize, usize)> = vec![(root, 0)];
+        while let Some(&(v, k)) = stack.last() {
+            if k < edges[v].len() {
+                stack.last_mut().unwrap().1 = k + 1;
+                let w = edges[v][k].0;
+                if !rec[w] && !done[w] {
+                    stack.push((w, 0));
+                }
+                continue;
+            }
+            stack.pop();
+            done[v] = true;
+            let mut tot = fns[v].2;
+            for &(w, c) in &edges[v] {
+                if always[w] {
+                    tot = tot.saturating_add(c.saturating_mul(incl[w]));
+                }
+            }
+            incl[v] = tot;
+            let calls = sites.get(&v).copied().unwrap_or(0);
+            always[v] = tot <= INLINE_SMALL || calls <= 1 || tot.saturating_mul(calls - 1) <= INLINE_BUDGET;
+        }
+    }
+    for (v, f) in fns.iter().enumerate() {
+        if always[v] {
+            lines[f.0] = "#[inline(always)]";
+        }
+    }
+    lines.join("\n")
 }
 
 /// `e` denotes a fresh constructor value, or a field / variant_field part of one (Python `Gen.g9_owned`)
@@ -4474,13 +4611,14 @@ mod tests {
     #[test]
     fn verified_plain() {
         let s = gen_rust(&prog(vec![]), true, false, 1 << 30).unwrap();
-        assert_eq!(s, format!("{}\n#[inline]\npub fn f(x: i64) -> i64 {{\n    return (x + 1i64);\n}}\n\n", ALLOW));
+        assert_eq!(s, format!("{}\n#[inline(always)]\npub fn f(x: i64) -> i64 {{\n    return (x + 1i64);\n}}\n\n", ALLOW));
     }
 
     #[test]
     fn safe_mode_and_requires() {
         let p = prog(vec![bin(">", var("x", "i64"), int("0"))]);
-        let s = gen_rust(&p, false, false, 1 << 30).unwrap();
+        // the prelude helpers keep `#[inline]` in the constant; inline_policy may raise them to always
+        let s = gen_rust(&p, false, false, 1 << 30).unwrap().replace("#[inline(always)]", "#[inline]");
         assert!(s.starts_with(SAFE_PRELUDE));
         assert!(s.contains(CONTRACT_PRELUDE));
         assert!(s.contains("fn f__pruv_body(x: i64) -> i64 {\n    return pruv_add(x, 1i64);\n}\n"));
@@ -4541,7 +4679,8 @@ mod tests {
 
     #[test]
     fn u8_prelude_only_when_used() {
-        let u = gen_rust(&arr_prog("array_u8"), false, false, 1 << 30).unwrap();
+        // the prelude helpers keep `#[inline]` in the constant; inline_policy may raise them to always
+        let u = gen_rust(&arr_prog("array_u8"), false, false, 1 << 30).unwrap().replace("#[inline(always)]", "#[inline]");
         assert!(u.contains(SAFE_PRELUDE_U8));
         assert!(u.contains(&format!("{}\n{}", SAFE_PRELUDE, SAFE_PRELUDE_U8)));
         assert!(u.contains("pruv_get_u8(a, 0i64)"));
