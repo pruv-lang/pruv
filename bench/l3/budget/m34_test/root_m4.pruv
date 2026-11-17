@@ -14,14 +14,14 @@ fn key_end(op: [i64], p: i64) -> i64
 {
   let n: i64 = len(op);
   if p >= n { return -1; }
-  let kn: i64 = crate::ent_u16::rd(op, p);
+  let kn: i64 = op[p];
   if kn < 0 || kn > n - p - 1 { return -1; }
   let mut j: i64 = 0;
   while j < kn
     invariant 0 <= j && j <= kn && 0 <= p && p < n && kn <= n - p - 1 && n == len(op)
     decreases kn - j
   {
-    let u: i64 = crate::ent_u16::rd(op, p + 1 + j);
+    let u: i64 = op[p + 1 + j];
     if u < 0 || u > 65535 { return -1; }
     j = j + 1;
   }
@@ -45,7 +45,7 @@ fn dec_key(inout st: [i64], op: [i64], inout out: [i64], code: i64) -> i64
 {
   let e1: i64 = key_end(op, 1);
   if e1 < 0 || e1 != len(op) { return 2; }
-  let kn: i64 = crate::ent_u16::rd(op, 1);
+  let kn: i64 = op[1];
   if code == 2 { return crate::bud_world::session_get(st, op, 2, kn, inout out); }
   if code == 3 { return crate::bud_world::session_del(inout st, op, 2, kn, inout out); }
   if code == 6 { return crate::bud_world::clock_del(inout st, op, 2, kn, inout out); }
@@ -62,8 +62,9 @@ fn dec_put(inout st: [i64], op: [i64], inout out: [i64]) -> i64
 {
   let e1: i64 = key_end(op, 1);
   if e1 < 0 || e1 >= len(op) { return 2; }
-  let kn: i64 = crate::ent_u16::rd(op, 1);
-  let n: i64 = crate::ent_u16::rd(op, e1);
+  // key_end(op, 1) >= 0 gives len(op) > 1, and e1 < len(op): plain reads (rd gives the same words)
+  let kn: i64 = op[1];
+  let n: i64 = op[e1];
   if n < 0 || n != len(op) - e1 - 1 { return 2; }
   return crate::bud_world::session_put(inout st, op, 2, kn, op, e1 + 1, n, inout out);
 }

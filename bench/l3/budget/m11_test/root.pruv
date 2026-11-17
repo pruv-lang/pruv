@@ -52,6 +52,17 @@ fn emit_all(inout out: [i64], pos: i64, w: [i64]) -> i64
   let n: i64 = len(w);
   let mut p: i64 = pos;
   let mut j: i64 = 0;
+  if n <= 1099511627776 - pos && pos + n <= len(out) {
+    // the whole range is in bounds: one check for the loop (same writes as the per-word path below)
+    while j < n
+      invariant 0 <= j && j <= n && n == len(w) && 0 <= pos && pos + n <= len(out) && pos + n <= 1099511627776 && len(out) == len(old(out))
+      decreases n - j
+    {
+      out[pos + j] = w[j];
+      j = j + 1;
+    }
+    return pos + n;
+  }
   while j < n
     invariant 0 <= j && j <= n && n == len(w) && 0 <= p && p <= 1099511627776 && len(out) == len(old(out))
     decreases n - j
@@ -111,8 +122,20 @@ fn session_entry(st: [i64], rf: [i64], sp: i64) -> i64
 fn blob_of(st: [i64], e: i64) -> [i64] ! alloc
 {
   let n: i64 = crate::bud_map::blob_len(st, e);
+  let o: i64 = crate::bud_map::blob_off(st, e);
   let mut b: [i64] = crate::ent_u16::zeros(n);
   let mut j: i64 = 0;
+  if len(b) == n && n <= len(st) - o {
+    // the blob region is in bounds: one check for the copy (same words as blob_unit below)
+    while j < n
+      invariant 0 <= j && j <= n && len(b) == n && 0 <= o && n <= len(st) - o
+      decreases n - j
+    {
+      b[j] = st[o + j];
+      j = j + 1;
+    }
+    return b;
+  }
   while j < n
     invariant 0 <= j && j <= n && n <= 1099511627776
     decreases n - j
