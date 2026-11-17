@@ -1,0 +1,243 @@
+// L3-10 M10a: the halt sub-operation (spec §4.5, B:381-397) and the halt section of the budget record.
+//
+// Halt section: the M7 record keeps the other budget properties as an opaque unit string (string 5, `rest`). A
+// halt is stored as a binary prefix of that string, before the JSON units (units are 0..65535, so -2 cannot start
+// a JSON text):
+//   [-2, reason (0 time, 1 delegations, 2 commands, 3 reviews, 4 checks), atKind (1 stored text, 2 instant in
+//    atMs), atMs, atLen, atUnits..., nIds, (len, units)* stoppedDelegationIds]
+// halt writes atKind 2 (at = now; toISOString is left to the boundary that renders the record, like M7's instants).
+//
+// halt(ref, reason): only a CURRENT open budget halts (B:383-384). Order (B:385-396):
+//   SETTLE (bud_clock: may emit [13] timerClear), runningDelegationIds(ref) ([30] consumed: the host prefetched the
+//   answer into `ids`, see M10_NOTES.md KD-M10-1), state halted + halt section, then the effects
+//   [31] cancelRecovery, [32] stopMain, [33, i] stopDelegation of id i (in list order, duplicates kept),
+//   [34] stopAttachedTurns, [35] holdQueued, [36] save, [20] changed, [37] announce.
+// Status: 0 done (also when nothing halts), 2 invalid (malformed id list, corrupt state), 3 fx too small
+// (fx[0] + 12 + 2 * nIds > len(fx)), -N Grow (nothing written).
+
+fn rd(a: [i64], i: i64) -> i64
+{ return crate::ent_u16::rd(a, i); }
+
+fn c32(x: i64) -> i64
+  ensures 0 <= result && result <= 4294967296
+{ return crate::bud_store::c32(x); }
+
+fn c40(x: i64) -> i64
+  ensures 0 <= result && result <= 1099511627776
+{ return crate::bud_store::c40(x); }
+
+fn push(inout fx: [i64], v: i64) -> ()
+{
+  let p: i64 = c40(rd(fx, 0));
+  if p + 1 >= len(fx) { return; }
+  crate::ent_u16::wr(inout fx, p + 1, v);
+  crate::ent_u16::wr(inout fx, 0, p + 1);
+}
+
+// Words of the id list `n, (len, units)*` at a[s]: 1 + sum(1 + len), or -1 when it does not fit in a.
+pub fn ids_words(a: [i64], s: i64) -> i64
+  ensures result == -1 || (1 <= result && result <= 1099511627776)
+{
+  if s < 0 || s >= len(a) || len(a) > 1099511627776 { return -1; }
+  let n: i64 = rd(a, s);
+  if n < 0 || n > len(a) { return -1; }
+  let mut p: i64 = s + 1;
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && s + 1 <= p && p <= len(a) && len(a) <= 1099511627776
+    decreases n - i
+  {
+    let l: i64 = rd(a, p);
+    if l < 0 || l > len(a) - p - 1 { return -1; }
+    p = p + 1 + l;
+    i = i + 1;
+  }
+  return p - s;
+}
+
+// Units of the halt prefix at the start of a rest string whose units are b[u..u+l), 0 without one (or when it is
+// malformed: then the units stay JSON-opaque and are kept as they are).
+fn prefix_len(b: [i64], u: i64, l: i64) -> i64
+  ensures 0 <= result && result <= 1099511627776
+{
+  if l < 6 || l > 4294967296 || u < 0 || u > 1099511627776 { return 0; }
+  if rd(b, u) != -2 { return 0; }
+  let reason: i64 = rd(b, u + 1);
+  if reason < 0 || reason > 4 { return 0; }
+  let kind: i64 = rd(b, u + 2);
+  if kind != 1 && kind != 2 { return 0; }
+  let al: i64 = rd(b, u + 4);
+  if al < 0 || al > l - 6 { return 0; }
+  let w: i64 = ids_words(b, u + 5 + al);
+  if w < 0 { return 0; }
+  let t: i64 = 5 + al + w;
+  if t > l { return 0; }
+  return c40(t);
+}
+
+// True iff the n words of the record stored in st at off form a well-formed record frame: n >= 30 and the six
+// strings (raw length words, never clamped) starting at off + 24 end exactly at off + n. The frame must lie inside st.
+pub fn rec_ok_in(st: [i64], off: i64, n: i64) -> bool
+{
+  if n < 30 || off < 0 || off > 1099511627776 || n > 1099511627776 { return false; }
+  if off + n > len(st) { return false; }
+  let end: i64 = off + n;
+  let mut p: i64 = off + 24;
+  let mut i: i64 = 0;
+  while i < 6
+    invariant 0 <= i && i <= 6 && off + 24 <= p && p <= end
+    decreases 6 - i
+  {
+    if p >= end { return false; }
+    let l: i64 = rd(st, p);
+    if l < 0 || l > end - p - 1 { return false; }
+    p = p + 1 + l;
+    i = i + 1;
+  }
+  return p == end;
+}
+
+// Start (length word) of string 5 (rest) of the record stored in st at off.
+fn rest_in(st: [i64], off: i64) -> i64
+  requires 0 <= off && off <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776
+{
+  let mut p: i64 = c40(off + 24);
+  let mut i: i64 = 0;
+  while i < 5
+    invariant 0 <= i && i <= 5 && 0 <= p && p <= 1099511627776
+    decreases 5 - i
+  {
+    p = c40(p + 1 + c32(rd(st, p)));
+    i = i + 1;
+  }
+  return p;
+}
+
+// halt.reason of the record stored in st at off: 0..4, or -1 without a halt section.
+pub fn halt_reason(st: [i64], off: i64) -> i64
+  requires 0 <= off && off <= 1099511627776
+{
+  let p: i64 = rest_in(st, off);
+  let l: i64 = c32(rd(st, p));
+  if prefix_len(st, c40(p + 1), l) == 0 { return -1; }
+  let r: i64 = rd(st, p + 2);
+  if r < 0 || r > 4 { return -1; }
+  return r;
+}
+
+// Writes `len, src[s..s+n)` at o[at]; returns the position after it.
+fn put(inout o: [i64], at: i64, src: [i64], s: i64, n: i64) -> i64
+  ensures 0 <= result && result <= 1099511627776
+{ return crate::bud_lifecycle::put_str(inout o, at, src, s, n); }
+
+// The halted record: b with header h, string 2 (activeSince text) dropped unless keep_since, and string 5 =
+// [halt prefix: reason, at = now, the ids] + b's rest without its old halt prefix. O(record + ids).
+fn halted(b: [i64], h: [i64], keep_since: bool, reason: i64, now: i64, ids: [i64], is: i64, iw: i64) -> [i64] ! alloc
+{
+  let p0: i64 = crate::bud_lifecycle::str_at(b, 0);
+  let p1: i64 = crate::bud_lifecycle::str_at(b, 1);
+  let p2: i64 = crate::bud_lifecycle::str_at(b, 2);
+  let p3: i64 = crate::bud_lifecycle::str_at(b, 3);
+  let p4: i64 = crate::bud_lifecycle::str_at(b, 4);
+  let p5: i64 = crate::bud_lifecycle::str_at(b, 5);
+  let l0: i64 = c32(rd(b, p0));
+  let l1: i64 = c32(rd(b, p1));
+  let mut l2: i64 = c32(rd(b, p2));
+  if !keep_since { l2 = 0; }
+  let l3: i64 = c32(rd(b, p3));
+  let l4: i64 = c32(rd(b, p4));
+  let l5: i64 = c32(rd(b, p5));
+  let old_pre: i64 = prefix_len(b, c40(p5 + 1), l5);
+  let tail: i64 = c32(l5 - old_pre);
+  let w: i64 = c32(iw);
+  let rl: i64 = 5 + w + tail;
+  let total: i64 = 30 + l0 + l1 + l2 + l3 + l4 + rl;
+  let mut o: [i64] = crate::ent_u16::zeros(total);
+  let mut j: i64 = 0;
+  while j < 24
+    invariant 0 <= j && j <= 24
+    decreases 24 - j
+  {
+    crate::ent_u16::wr(inout o, j, rd(h, j));
+    j = j + 1;
+  }
+  let mut at: i64 = 24;
+  at = put(inout o, at, b, c40(p0 + 1), l0);
+  at = put(inout o, at, b, c40(p1 + 1), l1);
+  at = put(inout o, at, b, c40(p2 + 1), l2);
+  at = put(inout o, at, b, c40(p3 + 1), l3);
+  at = put(inout o, at, b, c40(p4 + 1), l4);
+  crate::ent_u16::wr(inout o, at, rl);
+  crate::ent_u16::wr(inout o, at + 1, -2);
+  crate::ent_u16::wr(inout o, at + 2, reason);
+  crate::ent_u16::wr(inout o, at + 3, 2);
+  crate::ent_u16::wr(inout o, at + 4, now);
+  crate::ent_u16::wr(inout o, at + 5, 0);
+  let e: i64 = crate::ent_u16::put_range(inout o, c32(at + 6), ids, c32(is), w);
+  let f: i64 = crate::ent_u16::put_range(inout o, c32(e), b, c32(p5 + 1 + old_pre), tail);
+  return o;
+}
+
+// Room halt needs for the session's record: the rewritten record and the id list (the caller reserves this before
+// any write when halt follows another write in the same call, so halt's own reserve cannot Grow).
+pub fn halt_words(st: [i64], se: i64, ids: [i64], is: i64) -> i64
+  ensures 0 <= result && result <= 1099511627776
+{
+  let w: i64 = ids_words(ids, is);
+  let mut ww: i64 = 0;
+  if w > 0 { ww = w; }
+  return c40(crate::bud_lifecycle::blob_n(st, se) + 8 + ww);
+}
+
+// halt(ref, reason) (B:381-397). ids[is..] = the prefetched runningDelegationIds(ref) answer `n, (len, units)*`.
+pub fn halt(inout st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64, reason: i64, now: i64, ids: [i64], is: i64, inout bv: [i64], inout fx: [i64]) -> i64 ! alloc
+{
+  if reason < 0 || reason > 4 { return 2; }
+  let iw: i64 = ids_words(ids, is);
+  if iw < 0 { return 2; }
+  let d: i64 = c32(rd(ids, is));
+  let p: i64 = c40(rd(fx, 0));
+  if p + 12 + 2 * d > len(fx) { return 3; }
+  let se: i64 = crate::bud_lifecycle::current_entry(st, sk, ss, sn, bk, bs, bn);
+  if se < 0 { return 0; }
+  let off: i64 = crate::bud_lifecycle::blob_at(st, se);
+  if rd(st, off) != 0 { return 0; }
+  if !rec_ok_in(st, off, crate::bud_lifecycle::blob_n(st, se)) { return 2; }
+  let hw: i64 = halt_words(st, se, ids, is);
+  let g: i64 = crate::bud_lifecycle::reserve(inout st, hw);
+  if g != 0 { return crate::bud_lifecycle::grow(g); }
+  let b: [i64] = crate::bud_lifecycle::blob_copy(st, se);
+  if len(b) < 30 { return 2; }
+  crate::bud_lifecycle::view(b, inout bv);
+  let ce: i64 = crate::bud_clock::clock_of(st, b, 25, c32(rd(b, 24)));
+  let a: i64 = crate::bud_clock::settle_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
+  push(inout fx, 30);
+  let mut h: [i64] = crate::ent_u16::slice(b, 0, 24);
+  crate::ent_u16::wr(inout h, 0, 1);
+  crate::ent_u16::wr(inout h, 8, rd(bv, 4));
+  let k: i64 = rd(bv, 5);
+  crate::ent_u16::wr(inout h, 16, k);
+  crate::ent_u16::wr(inout h, 17, rd(bv, 6));
+  crate::ent_u16::wr(inout bv, 1, 1);
+  let r: [i64] = halted(b, h, k == 1, reason, now, ids, is, iw);
+  let w: i64 = crate::bud_lifecycle::store(inout st, sk, ss, sn, r);
+  if w != 0 { return w; }
+  push(inout fx, 31);
+  push(inout fx, 32);
+  let mut i: i64 = 0;
+  while i < d
+    invariant 0 <= i && i <= d
+    decreases d - i
+  {
+    push(inout fx, 33);
+    push(inout fx, i);
+    i = i + 1;
+  }
+  push(inout fx, 34);
+  push(inout fx, 35);
+  push(inout fx, 36);
+  push(inout fx, 20);
+  push(inout fx, 37);
+  return 0;
+}

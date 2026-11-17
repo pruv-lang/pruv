@@ -1,0 +1,248 @@
+mod ent_u16;
+mod bud_store;
+mod bud_map;
+mod bud_world;
+mod bud_clock;
+mod bud_lifecycle;
+mod bud_charge;
+mod bud_halt;
+
+// L3-10 M10a test root (test only, not product): drives halt (bud_halt.pruv) and the calls that reach it (charge over
+// limit, the run methods and FIRE through HALT_TIME) over the M7 record and the M9 clock.
+//
+// t_call op: [code, now, quiet, what x10, flag, sessionId key, budgetId key, runKey key, ids], key = `len, units...`,
+// ids = the host's next runningDelegationIds answer `n, (len, units)*` (queue head, n = 0 when the queue is empty);
+// it is consumed only when the effects hold [30] (M10_NOTES.md KD-M10-1).
+//   code 1 current(ref), 2 isHalted(ref), 5 reopen(ref), 6 maybeClose(session), 7 charge(ref, what),
+//   8 runStarted(ref, runKey), 9 runWaiting(ref, runKey, flag == 1), 10 runEnded(ref, runKey),
+//   11 FIRE (the ref the delivered timer captured when it was armed), 12 halt(ref, reason = flag).
+//   what[3..13) = bud_charge's [kind, value] x5 (delegations, commands, reviews, checks, retries).
+// out: lifecycle's tags (0 undef, 1 false, 2 true, 4 budget), charge [5, ok (1 false, 2 true), reason (0..4)].
+// Status: 0 done, 2 invalid, 3 out/fx small, 5 Need isQuiet (only quiet = -1; the driver always prefetches), -N Grow (nothing written).
+
+fn rd(a: [i64], i: i64) -> i64
+{ return crate::ent_u16::rd(a, i); }
+
+fn wr(inout a: [i64], i: i64, v: i64) -> ()
+{ crate::ent_u16::wr(inout a, i, v); }
+
+fn c32(x: i64) -> i64
+  ensures 0 <= result && result <= 4294967296
+{ return crate::bud_store::c32(x); }
+
+fn key_end(op: [i64], p: i64) -> i64
+  requires 0 <= p
+  ensures result == -1 || (result > p && result <= len(op))
+{
+  let n: i64 = len(op);
+  if p >= n { return -1; }
+  let kn: i64 = crate::ent_u16::rd(op, p);
+  if kn < 0 || kn > n - p - 1 { return -1; }
+  return p + 1 + kn;
+}
+
+pub fn t_init(inout st: [i64]) -> i64
+{ return crate::bud_store::init_store(inout st); }
+
+pub fn t_grow(prev: [i64], inout next: [i64]) -> i64
+{
+  if !crate::bud_store::valid(prev) { return 2; }
+  if len(next) < len(prev) { return 2; }
+  let r: i64 = crate::bud_map::grow_copy(prev, inout next);
+  if r != 0 { return 2; }
+  return 0;
+}
+
+// session put: [sessionId key, n, words...]; 0 ok, 1 Grow (out[0] = N), 2 invalid, 3 out small.
+pub fn t_put(inout st: [i64], op: [i64], inout out: [i64]) -> i64
+{
+  if !crate::bud_store::valid(st) { return 2; }
+  let e1: i64 = key_end(op, 0);
+  if e1 < 0 || e1 >= len(op) { return 2; }
+  let kn: i64 = crate::ent_u16::rd(op, 0);
+  let n: i64 = crate::ent_u16::rd(op, e1);
+  if n < 0 || n != len(op) - e1 - 1 { return 2; }
+  return crate::bud_world::session_put(inout st, op, 1, kn, op, e1 + 1, n, inout out);
+}
+
+// session remove: [sessionId key].
+pub fn t_del(inout st: [i64], op: [i64], inout out: [i64]) -> i64
+{
+  if !crate::bud_store::valid(st) { return 2; }
+  let e1: i64 = key_end(op, 0);
+  if e1 < 0 { return 2; }
+  let kn: i64 = crate::ent_u16::rd(op, 0);
+  return crate::bud_world::session_del(inout st, op, 1, kn, inout out);
+}
+
+fn out3(inout out: [i64], a: i64, b: i64, c: i64) -> ()
+{
+  wr(inout out, 0, a);
+  wr(inout out, 1, b);
+  wr(inout out, 2, c);
+}
+
+// charge(ref, what) (B:244-262): CURRENT, the charge frame from the record, bud_charge, then the in-place counter
+// writes, or halt(ref, key) for an over-limit key.
+fn charge(inout st: [i64], op: [i64], sn: i64, bs: i64, bn: i64, now: i64, is: i64, inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc
+{
+  if len(out) < 3 { return 3; }
+  let mut cv: [i64] = alloc(15, 0);
+  let se: i64 = crate::bud_lifecycle::current_entry(st, op, 15, sn, op, bs, bn);
+  let mut off: i64 = 0;
+  if se >= 0 {
+    off = crate::bud_lifecycle::blob_at(st, se);
+    wr(inout cv, 0, 1);
+    wr(inout cv, 1, rd(st, off));
+    let mut u: i64 = 0;
+    if rd(st, off + 2) == 1 { u = 1; }
+    wr(inout cv, 2, u);
+    wr(inout cv, 3, crate::bud_halt::halt_reason(st, off));
+    let mut i: i64 = 0;
+    while i < 4
+      invariant 0 <= i && i <= 4
+      decreases 4 - i
+    {
+      wr(inout cv, 4 + i, rd(st, off + 4 + i));
+      wr(inout cv, 8 + i, rd(st, off + 9 + i));
+      i = i + 1;
+    }
+    wr(inout cv, 12, rd(st, off + 13));
+    wr(inout cv, 13, rd(st, off + 14));
+    wr(inout cv, 14, rd(st, off + 15));
+  }
+  let r: i64 = crate::bud_charge::charge(inout cv, op, 3);
+  if r == 0 {
+    let mut j: i64 = 0;
+    while j < 4
+      invariant 0 <= j && j <= 4
+      decreases 4 - j
+    {
+      wr(inout st, off + 9 + j, rd(cv, 8 + j));
+      j = j + 1;
+    }
+    wr(inout st, off + 15, rd(cv, 14));
+    out3(inout out, 5, 2, 0);
+    return 0;
+  }
+  if r == 1 {
+    out3(inout out, 5, 2, 0);
+    return 0;
+  }
+  if r >= 16 && r <= 20 {
+    out3(inout out, 5, 1, r - 16);
+    return 0;
+  }
+  if r >= 33 && r <= 36 {
+    let k: i64 = r - 32;
+    let h: i64 = crate::bud_halt::halt(inout st, op, 15, sn, op, bs, bn, k, now, op, is, inout bv, inout fx);
+    if h != 0 { return h; }
+    out3(inout out, 5, 1, k);
+    return 0;
+  }
+  return 2;
+}
+
+// The run methods and FIRE (bud_clock keyed entries) on the M7 record: the clock frame bv is the record's view when
+// the ref is CURRENT; afterwards the record takes the frame back (used.activeMs, activeSince), and HALT_TIME runs
+// halt(ref, 'time'). Room for the clock entries, a rewritten record and halt is reserved before the first write, so a
+// Grow can only happen with nothing written. The fx room for the nested halt (5 clock words + 12 + 2 * nIds) and the
+// record check (rec_ok_in) are also done before the first write.
+fn run_op(inout st: [i64], op: [i64], code: i64, sn: i64, bs: i64, bn: i64, rs: i64, rn: i64, flag: i64, now: i64, is: i64, inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc
+{
+  if len(out) < 1 { return 3; }
+  if !crate::bud_clock::fx_ok(fx) { return 3; }
+  let se: i64 = crate::bud_lifecycle::current_entry(st, op, 15, sn, op, bs, bn);
+  wr(inout bv, 0, 0);
+  let mut k0: i64 = 0;
+  let mut hw: i64 = 0;
+  if se >= 0 {
+    let off0: i64 = crate::bud_lifecycle::blob_at(st, se);
+    let d: i64 = c32(rd(op, is));
+    if crate::bud_store::c40(rd(fx, 0)) + 5 + 12 + 2 * d > len(fx) { return 3; }
+    if !crate::bud_halt::rec_ok_in(st, off0, crate::bud_lifecycle::blob_n(st, se)) { return 2; }
+    crate::bud_lifecycle::view_in(st, off0, inout bv);
+    k0 = rd(st, off0 + 16);
+    hw = crate::bud_halt::halt_words(st, se, op, is);
+  }
+  let nd: i64 = crate::bud_map::make_room(inout st, 2, c32(bn) + c32(sn) + c32(rn) + hw);
+  if nd != 0 { return crate::bud_lifecycle::grow(nd); }
+  let mut r: i64 = 2;
+  if code == 8 { r = crate::bud_clock::run_started(inout st, op, bs, bn, op, 15, sn, op, rs, rn, now, inout bv, inout fx); }
+  if code == 9 { r = crate::bud_clock::run_waiting(inout st, op, bs, bn, op, 15, sn, op, rs, rn, flag == 1, now, inout bv, inout fx); }
+  if code == 10 { r = crate::bud_clock::run_ended(inout st, op, bs, bn, op, 15, sn, op, rs, rn, now, inout bv, inout fx); }
+  if code == 11 { r = crate::bud_clock::fire(inout st, op, bs, bn, op, 15, sn, now, inout bv, inout fx); }
+  if r != 0 && r != 4 { return 2; }
+  wr(inout out, 0, 0);
+  if se < 0 { return 0; }
+  let off: i64 = crate::bud_lifecycle::blob_at(st, se);
+  wr(inout st, off + 8, rd(bv, 4));
+  wr(inout st, off + 16, rd(bv, 5));
+  wr(inout st, off + 17, rd(bv, 6));
+  if r == 4 {
+    let h: i64 = crate::bud_halt::halt(inout st, op, 15, sn, op, bs, bn, 0, now, op, is, inout bv, inout fx);
+    if h != 0 { return 2; }
+    return 0;
+  }
+  if k0 == 1 && rd(bv, 5) != 1 {
+    let b: [i64] = crate::bud_lifecycle::blob_copy(st, se);
+    let h: [i64] = crate::ent_u16::slice(b, 0, 24);
+    let p3: i64 = crate::bud_lifecycle::str_at(b, 3);
+    let l3: i64 = c32(rd(b, p3));
+    let nb: [i64] = crate::bud_lifecycle::rewrite(b, h, true, b, crate::bud_store::c40(p3 + 1), l3);
+    let w: i64 = crate::bud_lifecycle::store(inout st, op, 15, sn, nb);
+    if w != 0 { return 2; }
+  }
+  return 0;
+}
+
+pub fn t_call(inout st: [i64], op: [i64], inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc
+{
+  if !crate::bud_store::valid(st) { return 2; }
+  let e1: i64 = key_end(op, 14);
+  if e1 < 0 { return 2; }
+  let e2: i64 = key_end(op, e1);
+  if e2 < 0 { return 2; }
+  let e3: i64 = key_end(op, e2);
+  if e3 < 0 { return 2; }
+  let iw: i64 = crate::bud_halt::ids_words(op, e3);
+  if iw < 0 || e3 + iw != len(op) { return 2; }
+  let code: i64 = rd(op, 0);
+  let now: i64 = rd(op, 1);
+  let quiet: i64 = rd(op, 2);
+  let flag: i64 = rd(op, 13);
+  let sn: i64 = rd(op, 14);
+  let bn: i64 = rd(op, e1);
+  let rn: i64 = rd(op, e2);
+  let bs: i64 = e1 + 1;
+  if code == 1 { return crate::bud_lifecycle::current(st, op, 15, sn, op, bs, bn, inout out); }
+  if code == 2 { return crate::bud_lifecycle::is_halted(st, op, 15, sn, op, bs, bn, inout out); }
+  if code == 5 { return crate::bud_lifecycle::reopen(inout st, op, 15, sn, op, bs, bn, inout fx, inout out); }
+  if code == 6 { return crate::bud_lifecycle::maybe_close(inout st, op, 15, sn, quiet, now, inout bv, inout fx, inout out); }
+  if code == 7 { return charge(inout st, op, sn, bs, bn, now, e3, inout bv, inout fx, inout out); }
+  if code >= 8 && code <= 11 { return run_op(inout st, op, code, sn, bs, bn, e2 + 1, rn, flag, now, e3, inout bv, inout fx, inout out); }
+  if code == 12 {
+    if len(out) < 1 { return 3; }
+    let h: i64 = crate::bud_halt::halt(inout st, op, 15, sn, op, bs, bn, flag, now, op, e3, inout bv, inout fx);
+    if h != 0 { return h; }
+    wr(inout out, 0, 0);
+    return 0;
+  }
+  return 2;
+}
+
+// Session blob read for the observation: [0] absent, or [1, n, words...].
+pub fn t_get(st: [i64], op: [i64], inout out: [i64]) -> i64
+{
+  if !crate::bud_store::valid(st) { return 2; }
+  let e1: i64 = key_end(op, 0);
+  if e1 < 0 { return 2; }
+  let kn: i64 = crate::ent_u16::rd(op, 0);
+  return crate::bud_world::session_get(st, op, 1, kn, inout out);
+}
+
+pub fn t_observe(st: [i64], inout out: [i64]) -> i64
+{
+  if !crate::bud_store::valid(st) { return 2; }
+  return crate::bud_world::observe(st, inout out);
+}
