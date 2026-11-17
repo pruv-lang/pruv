@@ -949,6 +949,8 @@ Measure one REFRESH at each prepared R to verify linear run scanning; do not mis
 
 Report TS and Pruv time, peak RSS, encoded input/output sizes, map-node visits, run visits, dependency calls, and serialized output size. Separate initialization, core execution, and observation serialization. Counter growth must satisfy the stated bounds; timing is supporting evidence, not a substitute.
 
+Same work boundary on both sides (M4 `run.py perf`). The timed Pruv call is `m4_op(st, op, out)`: it decodes and validates the op words, runs the map operation and writes the result words. The TS baseline (`m34_test/perf_ts.mjs`) therefore also takes each op as an integer word array, decodes and validates it the same way (key lengths, units 0..65535, exact op length, waiting 0/1, blob count), builds its key strings from the units on every call (no string reuse between calls), applies the op to its Map/Set state and writes the CONTRACT result words into a preallocated output array. A TS loop over prebuilt interned key strings skips decoding, hashing and result writing and is not a valid comparison. Op encoding and prefill stay outside the timed region on both sides. `perf` runs 200000 reps per size, alternates Pruv and TS runs and takes the median of 5. Measurements: `bench/l3/budget/M4_NOTES.md`.
+
 ## 10. Fixed scenarios
 
 Provide 14 groups of ten fixtures: 140 total. Each fixture may contain several calls to cover both a branch and its persistence consequences.

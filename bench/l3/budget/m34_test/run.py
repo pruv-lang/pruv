@@ -5,7 +5,8 @@
 
 Builds root_m3.pruv / root_m4.pruv (this directory) with pruvc into bench/l3/budget/work/m34/, compiles the Rust
 drivers against the generated modules, runs them on deterministic generated cases and compares with the Python
-reference (gen_m3.py / gen_m4.py). `perf` compares the Pruv M4 ops against the TS-style Map/Set loop (perf_ts.mjs).
+reference (gen_m3.py / gen_m4.py). `perf` compares the Pruv M4 ops against the TS-style Map/Set loop (perf_ts.mjs), which does the same work
+boundary (op words decoded and validated, result words written); 200000 reps, Pruv/TS runs alternated, median of 5.
 Exit code: 0 all pass, 1 mismatches / failed verdict, 2 build or tool problem. Python 3.9, standard library only.
 """
 import argparse
@@ -228,6 +229,23 @@ def median_run(cmd, key, runs):
     return statistics.median(vals), last
 
 
+def median_alternating(cmd_a, key_a, cmd_b, key_b, runs):
+    """Runs A,B,A,B,... (so load drifts hit both alike); returns (median A, last A output, median B)."""
+    va, vb = [], []
+    last_a = None
+    for _ in range(runs):
+        ca = run(cmd_a, timeout=900)
+        if ca.returncode != 0:
+            raise ToolError("%s exit %d: %s" % (" ".join(cmd_a), ca.returncode, tail(ca)))
+        last_a = parse_kv(ca.stdout.strip().splitlines()[-1])
+        va.append(float(last_a[key_a]))
+        cb = run(cmd_b, timeout=900)
+        if cb.returncode != 0:
+            raise ToolError("%s exit %d: %s" % (" ".join(cmd_b), cb.returncode, tail(cb)))
+        vb.append(float(parse_kv(cb.stdout.strip().splitlines()[-1])[key_b]))
+    return statistics.median(va), last_a, statistics.median(vb)
+
+
 def cmd_perf(args):
     exe4 = build(args.pruvc, "m4")
     exe3 = None
@@ -239,15 +257,19 @@ def cmd_perf(args):
     if not node:
         print("note: node not found, TS column is n/a", file=sys.stderr)
     sizes = [100, 500, 1000]
-    reps = 20000
+    reps = 200000
     rows = []
     for axis in args.axes.split(","):
         for n in sizes:
-            core, last = median_run([exe4, "perf", axis, str(n), str(reps)], "core_ns_per_op", args.runs)
-            enc = float(last["encode_ns_per_op"])
-            ts = None
+            pruv_cmd = [exe4, "perf", axis, str(n), str(reps)]
             if node:
-                ts, _ = median_run([node, os.path.join(HERE, "perf_ts.mjs"), axis, str(n), str(reps)], "ts_ns_per_op", args.runs)
+                core, last, ts = median_alternating(
+                    pruv_cmd, "core_ns_per_op",
+                    [node, os.path.join(HERE, "perf_ts.mjs"), axis, str(n), str(reps)], "ts_ns_per_op", args.runs)
+            else:
+                core, last = median_run(pruv_cmd, "core_ns_per_op", args.runs)
+                ts = None
+            enc = float(last["encode_ns_per_op"])
             rows.append({"axis": axis, "n": n, "ts": ts, "core": core, "enc": enc, "grows": last.get("grows"),
                          "grow_ns": last.get("grow_ns_total")})
     print("| axis | n | TS ns/op | Pruv core ns/op | Pruv encode ns/op | ratio (core/TS) | grows | grow ns total |")
@@ -286,7 +308,7 @@ def main():
     ap.add_argument("--pruvc", default=PRUVC_DEFAULT)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--count", type=int, default=300)
-    ap.add_argument("--runs", type=int, default=3, help="perf: runs per measurement, median is used")
+    ap.add_argument("--runs", type=int, default=5, help="perf: runs per measurement, median is used")
     ap.add_argument("--axes", default="sessions,tools", help="perf: comma list of sessions,tools,clocks")
     args = ap.parse_args()
     try:
