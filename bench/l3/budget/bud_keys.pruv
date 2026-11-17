@@ -1,0 +1,299 @@
+// L3 P03: packed-u16 key codec for the budget product (source-only module, called as crate::bud_keys::name).
+//
+// A key is n UTF-16 code units (0..65535; NUL and lone surrogates are ordinary units), 0 <= n <= 2^30. It is stored
+// as m = ceil(n / 4) data words, 4 units per i64 word, big-endian lanes: unit 4i+0 in bits 48..63 of word i, unit 4i+3
+// in bits 0..15. Lanes past n in the last word are zero. A full record is [n, w0, ..., w(m-1)].
+//
+// Invariants this layout gives:
+//   * Every i64 word is 4 valid units, so no per-unit range check exists. Canonicality is O(1): the length range, the
+//     slice range, and the lanes past n in the last word (slice_ok / rec_end).
+//   * There is exactly one encoding per unit sequence, so equality of two keys with equal n is word equality over m
+//     words. n must always be compared as well: "a" (n = 1) and "a\0" (n = 2) have the same words.
+//   * Unsigned word comparison equals UTF-16 code-unit lexical order (padding lanes are 0); ties are broken by n.
+//
+// Slice convention: (k: [i64], ks: i64, n: i64) is the words(n) data words k[ks .. ks + words(n)), with the unit count
+// n passed separately. Every function here is total: any input values give a result without an out-of-bounds access.
+// Each one has an in-range fast path (one bounds test, then direct reads) and a fallback through
+// crate::ent_u16::rd (0 outside the buffer) that gives the same words; the fast path is only taken when every word it
+// reads is inside the buffer, so both paths read the same values.
+//
+// Clamp rule for hash / eq / cmp (the "total" semantics, mirrored by the Python oracle): n is clamped into 0..2^30,
+// a slice start into 0..2^40, and a word outside the buffer reads as 0. For canonical in-range slices this is exactly
+// the content semantics; for anything else the result is some well-defined value, never a wrong match among
+// canonical in-range keys of equal n.
+//
+// EXTERNAL KEYS: slice_ok / rec_end MUST be run on every key that comes from outside (host buffers, ops). Keys that
+// are already inside the resident state rely on the state invariant instead (future C3 work); the functions that
+// only read words (hash, eq, cmp, unit) do not re-check canonicality.
+
+fn c30(x: i64) -> i64
+  ensures 0 <= result && result <= 1073741824
+{
+  if x < 0 { return 0; }
+  if x > 1073741824 { return 1073741824; }
+  return x;
+}
+
+fn c40(x: i64) -> i64
+  ensures 0 <= result && result <= 1099511627776
+{
+  if x < 0 { return 0; }
+  if x > 1099511627776 { return 1099511627776; }
+  return x;
+}
+
+fn lo2(a: i64, b: i64) -> i64
+  ensures result <= a && result <= b && (result == a || result == b)
+{
+  if a < b { return a; }
+  return b;
+}
+
+fn cmp_len(na: i64, nb: i64) -> i64
+{
+  if na < nb { return -1; }
+  if na > nb { return 1; }
+  return 0;
+}
+
+// Unsigned 64-bit comparison of two words (sign bit flipped, then signed <).
+fn ucmp(x: i64, y: i64) -> i64
+{
+  let s: i64 = wrapping_shl(1, 63);
+  if bxor(x, s) < bxor(y, s) { return -1; }
+  if x == y { return 0; }
+  return 1;
+}
+
+// ---- sizes and canonicality ----
+
+pub fn max_units() -> i64
+  ensures result == 1073741824
+{ return 1073741824; }
+
+// Data words of a key with n units: ceil(n / 4).
+pub fn words(n: i64) -> i64
+  requires 0 <= n && n <= 1073741824
+  ensures result == ushr(n + 3, 2) && 0 <= result && result <= 1073741827
+{ return ushr(n + 3, 2); }
+
+// Is k[ks .. ks + words(n)) a canonical key of n units: n in 0..2^30, the words inside k, and the lanes past n in the
+// last word zero (lane mask ushr(-1, 16 * r) covers the lanes r..3 of the last word, r = n mod 4)?
+pub fn slice_ok(k: [i64], ks: i64, n: i64) -> bool
+  ensures result ==> (0 <= n && n <= 1073741824 && 0 <= ks && ks + ushr(n + 3, 2) <= len(k))
+{
+  if n < 0 || n > 1073741824 { return false; }
+  if ks < 0 { return false; }
+  let m: i64 = ushr(n + 3, 2);
+  if m > len(k) - ks { return false; }
+  let r: i64 = band(n, 3);
+  if r != 0 && m >= 1 {
+    if band(k[ks + m - 1], ushr(-1, 16 * r)) != 0 { return false; }
+  }
+  return true;
+}
+
+// End position of the record [n, w...] that starts at k[p], or -1 when p is out of range or the record is not
+// canonical. O(1); replaces a per-unit scan.
+pub fn rec_end(k: [i64], p: i64) -> i64
+  ensures result == -1 || (result > p && result <= len(k))
+{
+  if p < 0 || p >= len(k) { return -1; }
+  let n: i64 = k[p];
+  if !slice_ok(k, p + 1, n) { return -1; }
+  return p + 1 + ushr(n + 3, 2);
+}
+
+// Unit j of the slice; 0 when j is outside 0..n, n is outside 0..2^30, ks is outside 0..2^40, or the word is outside k.
+pub fn unit(k: [i64], ks: i64, n: i64, j: i64) -> i64
+  ensures 0 <= result && result <= 65535
+{
+  if n < 0 || n > 1073741824 || ks < 0 || ks > 1099511627776 { return 0; }
+  if j < 0 || j >= n { return 0; }
+  let w: i64 = crate::ent_u16::rd(k, ks + ushr(j, 2));
+  return band(ushr(w, 48 - 16 * band(j, 3)), 65535);
+}
+
+// ---- hashing (mix / fin copied from bud_map.pruv) ----
+
+// One word into the hash: xor, then multiply by the 64-bit golden-ratio constant (odd).
+pub fn mix(h: i64, v: i64) -> i64
+{ return wrapping_mul(bxor(h, v), -7046029254386353131); }
+
+// splitmix64 / murmur3 finalizer: every input bit reaches the low bits used by a slot mask.
+pub fn fin(h: i64) -> i64
+{
+  let a: i64 = bxor(h, ushr(h, 33));
+  let b: i64 = wrapping_mul(a, -49064778989728563);
+  return bxor(b, ushr(b, 33));
+}
+
+// Word hash: one mix per data word, then fin(bxor(h, n)). n is clamped into 0..2^30 (below 0 or above 2^30 it hashes
+// the clamped value, so a negative n behaves as n = 0 and the raw n is not mixed in), ks into 0..2^40; words outside k
+// read as 0.
+pub fn hash(seed: i64, k: [i64], ks: i64, n: i64) -> i64
+{
+  let nc: i64 = c30(n);
+  let s0: i64 = c40(ks);
+  let m: i64 = ushr(nc + 3, 2);
+  let mut h: i64 = seed;
+  let mut i: i64 = 0;
+  if s0 + m <= len(k) {
+    // all m words in range: one check for the loop (same words as the total path below)
+    while i < m
+      invariant 0 <= i && i <= m && 0 <= s0 && s0 + m <= len(k)
+      decreases m - i
+    {
+      h = mix(h, k[s0 + i]);
+      i = i + 1;
+    }
+    return fin(bxor(h, nc));
+  }
+  while i < m
+    invariant 0 <= i && i <= m && m <= 1073741827 && 0 <= s0 && s0 <= 1099511627776
+    decreases m - i
+  {
+    h = mix(h, crate::ent_u16::rd(k, s0 + i));
+    i = i + 1;
+  }
+  return fin(bxor(h, nc));
+}
+
+// ---- equality and order ----
+
+// The words(n) words of a[sa..] and b[sb..] are equal (the caller has already compared both unit counts). Clamps as
+// hash does.
+pub fn eq(a: [i64], sa: i64, b: [i64], sb: i64, n: i64) -> bool
+{
+  let nc: i64 = c30(n);
+  let a0: i64 = c40(sa);
+  let b0: i64 = c40(sb);
+  let m: i64 = ushr(nc + 3, 2);
+  if a0 + m <= len(a) && b0 + m <= len(b) {
+    // both ranges in bounds: one slice comparison (same result as the total path below)
+    return eq_range(a, a0, b, b0, m);
+  }
+  let mut i: i64 = 0;
+  while i < m
+    invariant 0 <= i && i <= m && m <= 1073741827 && 0 <= a0 && a0 <= 1099511627776 && 0 <= b0 && b0 <= 1099511627776
+    decreases m - i
+  {
+    if crate::ent_u16::rd(a, a0 + i) != crate::ent_u16::rd(b, b0 + i) { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+// Unsigned lexicographic comparison of a[sa..sa+m) and b[sb..sb+m). With zero padding and big-endian lanes, the first
+// differing word decides exactly as the first differing unit would (a padding lane is 0 and every real unit is >= 0,
+// so a shorter key compares below its extensions or equal on the words, and the length decides then).
+fn cmp_words(a: [i64], sa: i64, b: [i64], sb: i64, m: i64) -> i64
+  requires 0 <= sa && sa <= 1099511627776 && 0 <= sb && sb <= 1099511627776 && 0 <= m && m <= 1073741827
+{
+  let mut i: i64 = 0;
+  if sa + m <= len(a) && sb + m <= len(b) {
+    while i < m
+      invariant 0 <= i && i <= m && 0 <= sa && sa + m <= len(a) && 0 <= sb && sb + m <= len(b)
+      decreases m - i
+    {
+      let x: i64 = a[sa + i];
+      let y: i64 = b[sb + i];
+      if x != y { return ucmp(x, y); }
+      i = i + 1;
+    }
+    return 0;
+  }
+  while i < m
+    invariant 0 <= i && i <= m && m <= 1073741827 && 0 <= sa && sa <= 1099511627776 && 0 <= sb && sb <= 1099511627776
+    decreases m - i
+  {
+    let x2: i64 = crate::ent_u16::rd(a, sa + i);
+    let y2: i64 = crate::ent_u16::rd(b, sb + i);
+    if x2 != y2 { return ucmp(x2, y2); }
+    i = i + 1;
+  }
+  return 0;
+}
+
+// -1 / 0 / 1 in UTF-16 code-unit lexical order: unsigned compare of the first min(words(na), words(nb)) words, then
+// by length. Unit counts and starts are clamped as in hash.
+pub fn cmp(a: [i64], sa: i64, na: i64, b: [i64], sb: i64, nb: i64) -> i64
+{
+  let nac: i64 = c30(na);
+  let nbc: i64 = c30(nb);
+  let r: i64 = cmp_words(a, c40(sa), b, c40(sb), lo2(ushr(nac + 3, 2), ushr(nbc + 3, 2)));
+  if r != 0 { return r; }
+  return cmp_len(nac, nbc);
+}
+
+// ---- legacy bridge: one unit per word <-> packed ----
+
+// Packs the n units src[s .. s+n) (one per word) into the words(n) packed words dst[d ..). Returns 0 ok; 1 when some
+// unit is outside 0..65535 (dst is not written); 2 when n is outside 0..2^30, s or d is negative, or a range is out of
+// bounds (dst is not written). The range checks come first, then the unit check, then the writes.
+pub fn pack_units(inout dst: [i64], d: i64, src: [i64], s: i64, n: i64) -> i64
+  ensures len(dst) == len(old(dst))
+{
+  if n < 0 || n > 1073741824 || s < 0 || d < 0 { return 2; }
+  let m: i64 = ushr(n + 3, 2);
+  if s > len(src) - n || d > len(dst) - m { return 2; }
+  // A unit u is in 0..65535 iff band(u, -65536) == 0, and OR preserves that over all units.
+  let mut acc: i64 = 0;
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && 0 <= s && s + n <= len(src) && len(dst) == len(old(dst))
+    decreases n - j
+  {
+    acc = bor(acc, src[s + j]);
+    j = j + 1;
+  }
+  if band(acc, -65536) != 0 { return 1; }
+  let mut i: i64 = 0;
+  j = 0;
+  while i < m
+    invariant 0 <= i && i <= m && m <= 1073741827 && j == 4 * i && 0 <= n && n <= 1073741824
+    invariant 0 <= s && s + n <= len(src) && 0 <= d && d + m <= len(dst) && len(dst) == len(old(dst))
+    decreases m - i
+  {
+    // units past n are 0 (canonical tail), so a partial last word needs no extra case
+    let mut u0: i64 = 0;
+    let mut u1: i64 = 0;
+    let mut u2: i64 = 0;
+    let mut u3: i64 = 0;
+    if j < n { u0 = src[s + j]; }
+    if j + 1 < n { u1 = src[s + j + 1]; }
+    if j + 2 < n { u2 = src[s + j + 2]; }
+    if j + 3 < n { u3 = src[s + j + 3]; }
+    dst[d + i] = wrapping_add(wrapping_add(wrapping_mul(u0, 281474976710656), wrapping_mul(u1, 4294967296)),
+      wrapping_add(wrapping_mul(u2, 65536), u3));
+    i = i + 1;
+    j = j + 4;
+  }
+  return 0;
+}
+
+// Writes the n units of the slice k[ks ..] to dst[d .. d+n), one per word. Returns 0 ok; 2 when n is outside
+// 0..2^30, ks or d is negative, or a range is out of bounds (dst is not written). Lanes past n are not read.
+pub fn unpack_units(inout dst: [i64], d: i64, k: [i64], ks: i64, n: i64) -> i64
+  ensures len(dst) == len(old(dst))
+{
+  if n < 0 || n > 1073741824 || ks < 0 || d < 0 { return 2; }
+  let m: i64 = ushr(n + 3, 2);
+  if ks > len(k) - m || d > len(dst) - n { return 2; }
+  let mut i: i64 = 0;
+  let mut j: i64 = 0;
+  while i < m
+    invariant 0 <= i && i <= m && m <= 1073741827 && j == 4 * i && 0 <= n && n <= 1073741824
+    invariant 0 <= ks && ks + m <= len(k) && 0 <= d && d + n <= len(dst) && len(dst) == len(old(dst))
+    decreases m - i
+  {
+    let w: i64 = k[ks + i];
+    if j < n { dst[d + j] = band(ushr(w, 48), 65535); }
+    if j + 1 < n { dst[d + j + 1] = band(ushr(w, 32), 65535); }
+    if j + 2 < n { dst[d + j + 2] = band(ushr(w, 16), 65535); }
+    if j + 3 < n { dst[d + j + 3] = band(w, 65535); }
+    i = i + 1;
+    j = j + 4;
+  }
+  return 0;
+}

@@ -682,3 +682,72 @@ Non-blocking:
 - (fixed) `run_keys.py` skipped the comparison when a Pruv row was missing.
 - The key checksum is a sum, so it cannot see a permutation of the returned ids.
 - The diff harnesses can reuse a stale Pruv binary.
+
+## P03: packed-u16 key codec `bud_keys.pruv` (2026-11-18)
+
+New source-only module, no language extension. A key of n UTF-16 code units (0..65535; NUL and lone surrogates are
+ordinary units, 0 <= n <= 2^30) is m = ceil(n / 4) i64 words, big-endian lanes (unit 4i in bits 48..63 of word i),
+zero tail. Record form `[n, w0 .. w(m-1)]`. Public functions: `max_units`, `words`, `slice_ok`, `rec_end`, `unit`,
+`mix`, `fin`, `hash(seed, k, ks, n)`, `eq`, `cmp`, `pack_units`, `unpack_units`. Every function is total (clamps and
+0-reads outside the buffer, as in `ent_u16`), so callers need no preconditions.
+
+What the layout removes, by representation rather than by a check:
+
+- **Per-unit range check.** Every 16-bit lane is a valid code unit, so `units_ok` (one band test per unit) has no
+  counterpart. Canonicality of an external key is O(1): n range, slice range and the lanes past n in the last word
+  (`slice_ok` / `rec_end`). The old `key_end` in `root_m4.pruv` loops over every unit.
+- **Per-unit hash / compare loops.** Hash mixes once per word, then `fin(bxor(h, n))`; equality is `eq_range` over m
+  words plus n; unsigned word compare equals code-unit order, ties broken by n. `"a"` and `"a\0"` have equal words, so
+  n is always compared.
+
+Gate (`m34_test/run.py keys --seed 20261117 --count 300`, Pruv binary vs Python oracle): **4848 / 4848 pass**.
+Fixed negatives: NUL at start / middle / end and `"a"` vs `"a\0"`, lone high / low surrogates and reversed pairs,
+astral pairs, 0x8000 vs 0x41 (unit order against signed word order), all-0xFFFF, tail lengths n mod 4 = 0..3,
+nonzero lanes past n (canonicality negatives for r = 1, 2, 3), out-of-range units in `pack_units` (status 1, dst
+untouched), bad slice ranges (status 2), and n clamps. Random rows: 300 seeds over hash / eq / cmp / ok / rec / unit /
+pack / unpack, with word compare asserted equal to unit-list compare on canonical keys.
+
+Regression gates (product source unchanged in P03, so these confirm nothing else moved): Q2 (`run_m8.py q`, 300):
+exact 63, not-implemented 237, fail 0, same as P02. Q6 (`run_m11.py --pairs rs`, 300): exact 213, prefix-ok 87, same
+as P02. Q8 (`run_m6.py --pairs rs`, 300): 300 / 300 exact.
+
+Per-op S/M: unchanged by construction (no root links `bud_keys` yet). The P02-end numbers (`work/base/`, commit
+`793fff6`) are the "before" column for P04 and P05:
+
+| M8 item | n | Pruv ns | /hand16 | /fxmix | /oa | Pruv instr | /hand16 | /fxmix | /oa |
+|---|---|---|---|---|---|---|---|---|---|
+| charge | 100 | 32.9 | 1.55 | 2.35 | 2.19 | 787 | 1.55 | 2.09 | 1.98 |
+| charge | 500 | 37.8 | 1.57 | 2.29 | 2.10 | 790 | 1.55 | 2.10 | 1.97 |
+| failure | 100 | 25.5 | 1.56 | 2.50 | 2.28 | 671 | 1.87 | 2.73 | 2.54 |
+| failure | 500 | 30.3 | 1.67 | 2.68 | 2.42 | 674 | 1.88 | 2.75 | 2.52 |
+| tooldup | 100 | 29.1 | 1.08 | 2.05 | 2.51 | 711 | 1.27 | 1.93 | 2.40 |
+| tooldup | 500 | 40.1 | 1.62 | 3.08 | 3.23 | 727 | 1.31 | 2.00 | 2.43 |
+| toolgrow | 100 | 73.2 | 0.81 | 1.15 | 2.07 | 1592 | 0.81 | 1.15 | 2.17 |
+| toolgrow | 500 | 85.2 | 0.85 | 1.35 | 2.66 | 1608 | 0.77 | 1.13 | 2.39 |
+
+M7 (S = 100 / 500, Pruv/hand16 ns; instructions Pruv vs hand16): attach 1.73 / 1.93 (740 vs 300), closereopen
+1.87 / 1.98 (893 vs 350), current 1.56 / 1.55 (727 vs 332), ishalted 1.58 / 1.60 (729 vs 336), replace 0.93 / 0.97
+(3283 vs 2974). All cells above 1.0x stay open with the causes listed in the P02 section.
+
+Erased checks in P03: none in the product yet. Inside the codec, the verifier proves every array access of the fast
+paths in range, so the codec has no runtime bounds checks beyond its one entry range test per call.
+
+### I1 finding (applies to P03-P05; input for P06 / P07 / P11)
+
+I1 (per-entry spans and key encodings valid for every live entry) cannot be carried by the current language, so the
+per-call `valid()` scan (~60-70 instructions) and the M8 record state / reason / word-14 checks stay. Precise gaps:
+
+1. Contracts cannot call functions (`pruvc` `check.rs:3613` rejects a call in `requires` / `ensures` /
+   `invariant`), so "every live entry satisfies `slice_ok`" cannot be stated over the store.
+2. No field refinements or type invariants: a struct cannot carry "this buffer is a valid store" across entry calls,
+   and there is no `[u16]` type, so the key representation has to be re-proved from `[i64]`.
+3. Collections are not allowed in entry signatures, so the resident state is an `[i64]` that the host can hand in
+   arbitrarily; `--trust-callers` leaves the public safe fn accepting arbitrary buffers (no visibility / private
+   adapter mechanism: P06 / P09).
+4. After an `inout` call only the callee's `ensures` are known (`verify.py` `inout_finals`), so any I1 fact would
+   need a forall frame clause in every mutator: the quantifier support is there but the frames are not.
+5. The result of `eq_range` is unconstrained in the proof (`verify.py:1822-1829`), so "a hit means the stored key
+   equals the checked external key" is not provable; it holds by the code's construction.
+
+Not patched around: no host-side flag or cached "valid" bit was added. What P03-P05 can erase without I1 is the
+per-unit work (representation), not the per-call validity scan.
