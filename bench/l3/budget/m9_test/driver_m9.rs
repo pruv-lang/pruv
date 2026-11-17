@@ -2,24 +2,70 @@
 //
 //   driver_m9 q        program on stdin, one case after another:
 //                        case <id> | put <words...> | now <ms> | step <i> | call <op words...> | adv <ms> | settime <ms>
-//                        | deliver <token> | end
+//                        | deliver <token> <captured 0/1> | end
 //   driver_m9 perf     perf program, see run_m9.py (cmd_perf)
 //
 // Boundary rule: the host owns the state buffer and the scratch frames but never reads state words. It is the
-// timer scheduler only: a timerSet effect registers token t<n> (n counts registrations) due at now + effective delay
-// for that budget, timerClear removes the budget's active token, and an elapsed timer calls FIRE (op code 4) with
-// now = due, in (due, registration) order. A delivery of a token that is no longer active is dropped (the host
-// cleared it; a real scheduler cannot run a cleared callback). Grow: status -N -> buffer of max(N, 2*len), t_grow,
-// retry.
+// timer scheduler only, like setTimeout / clearTimeout: a timerSet effect registers token t<n> (n counts
+// registrations) due at now + effective delay, with the ref (sessionId, budgetId) of the call that armed it (the
+// callback's captured ref), and makes it the budget's timer; timerClear cancels the budget's timer; timerForget makes
+// the budget own no timer without cancelling it (FIRE dropped its handle). An elapsed timer leaves the schedule and
+// calls FIRE (op code 4) with its captured ref and now = due, in (due, registration) order. deliver runs an active
+// token the same way; an inactive one (cancelled or already run) runs its captured callback only with captured = 1,
+// otherwise the script is invalid (X deliver). Grow: status -N -> buffer of max(N, 2*len), t_grow, retry.
 use std::collections::HashMap;
 use std::hint::black_box;
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
 
+// Scheduler keys hold the op's key units in the byte form hand_m9.rs keys its Strings by (each unit as its UTF-8
+// style 1-3 byte sequence, an injective encoding; ASCII keys are one byte per unit, the same bytes as the String).
+// The host never interprets them. A key is encoded into a reused scratch buffer and lookups borrow it; a key is
+// copied only when a timer captures its ref or a budget gets its first map slot, the same allocations as hand_m9.rs
+// (which clones the ref's two Strings and inserts the budget key the same way).
 struct Timer {
     token: u64,
     due: i64,
-    bid: Vec<u16>,
+    sid: Vec<u8>,
+    bid: Vec<u8>,
+}
+
+fn enc(units: &[i64], out: &mut Vec<u8>) {
+    out.clear();
+    if units.iter().all(|&x| (x as u64) < 0x80) {
+        out.extend(units.iter().map(|&x| x as u8));
+        return;
+    }
+    for &x in units {
+        let u = (x as u32) & 0xffff;
+        if u < 0x80 {
+            out.push(u as u8);
+        } else if u < 0x800 {
+            out.push(0xc0 | (u >> 6) as u8);
+            out.push(0x80 | (u & 0x3f) as u8);
+        } else {
+            out.push(0xe0 | (u >> 12) as u8);
+            out.push(0x80 | ((u >> 6) & 0x3f) as u8);
+            out.push(0x80 | (u & 0x3f) as u8);
+        }
+    }
+}
+
+fn dec(b: &[u8], out: &mut Vec<i64>) {
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xe0 {
+            out.push(((c & 0x1f) << 6) | (b[i + 1] as i64 & 0x3f));
+            i += 2;
+        } else {
+            out.push(((c & 0x0f) << 12) | ((b[i + 1] as i64 & 0x3f) << 6) | (b[i + 2] as i64 & 0x3f));
+            i += 3;
+        }
+    }
 }
 
 struct World {
@@ -31,7 +77,11 @@ struct World {
     now: i64,
     seq: u64,
     active: Vec<Timer>,
-    by_bid: HashMap<Vec<u16>, u64>,
+    by_bid: HashMap<Vec<u8>, u64>,
+    known: HashMap<u64, (Vec<u8>, Vec<u8>)>,
+    cb: Vec<i64>,
+    kb: Vec<u8>,
+    ks: Vec<u8>,
     log: Vec<String>,
     quiet: bool,
 }
@@ -62,6 +112,10 @@ impl World {
             seq: 0,
             active: Vec::new(),
             by_bid: HashMap::new(),
+            known: HashMap::new(),
+            cb: Vec::with_capacity(64),
+            kb: Vec::with_capacity(64),
+            ks: Vec::with_capacity(64),
             log: Vec::new(),
             quiet: false,
         }
@@ -112,31 +166,46 @@ impl World {
             return r;
         }
         let used = self.fx[0].max(0) as usize;
-        // budget id of the ref (scheduler key), built only when there is an effect to apply
-        let bid: Vec<u16> = if used > 0 {
-            let (bs, be) = key_at(op, 2 + op[1] as usize);
-            op[bs..be].iter().map(|&u| u as u16).collect()
-        } else {
-            Vec::new()
-        };
+        if used == 0 {
+            return self.halt_log(op, r);
+        }
+        // ref of the call (scheduler key and captured ref), encoded into the scratch keys
+        let (ss, se) = key_at(op, 1);
+        let (bs, be) = key_at(op, 2 + op[1] as usize);
+        let mut kb = std::mem::take(&mut self.kb);
+        let mut ks = std::mem::take(&mut self.ks);
+        enc(&op[bs..be], &mut kb);
+        let bid = &kb[..];
         let mut i = 1;
         while i <= used {
             match self.fx[i] {
                 12 => {
                     let req = self.fx[i + 1];
                     let eff = self.fx[i + 2];
-                    self.clear_bid(&bid, false);
+                    // like `clock.timer = setTimeout(..)`: a previous handle is overwritten, not cancelled
                     self.seq += 1;
-                    let t = Timer { token: self.seq, due: self.now + eff, bid: bid.clone() };
-                    self.by_bid.insert(bid.clone(), self.seq);
+                    enc(&op[ss..se], &mut ks);
+                    let sid = &ks[..];
+                    let t = Timer { token: self.seq, due: self.now + eff, sid: sid.to_vec(), bid: bid.to_vec() };
+                    match self.by_bid.get_mut(bid) {
+                        Some(v) => *v = self.seq,
+                        None => {
+                            self.by_bid.insert(bid.to_vec(), self.seq);
+                        }
+                    }
                     if !self.quiet {
+                        self.known.insert(self.seq, (sid.to_vec(), bid.to_vec()));
                         self.log.push(format!("S t{} {}", self.seq, req));
                     }
                     self.active.push(t);
                     i += 3;
                 }
                 13 => {
-                    self.clear_bid(&bid, true);
+                    self.clear_bid(bid, true);
+                    i += 1;
+                }
+                14 => {
+                    self.by_bid.remove(bid);
                     i += 1;
                 }
                 _ => {
@@ -145,13 +214,22 @@ impl World {
                 }
             }
         }
+        self.kb = kb;
+        self.ks = ks;
+        self.halt_log(op, r)
+    }
+
+    fn halt_log(&mut self, op: &[i64], r: i64) -> i64 {
         if r == 4 && !self.quiet {
-            self.log.push("H".to_string());
+            // HALT_TIME: when and for which session (the caller's halt(ref, 'time') is M10)
+            let (ss, se) = key_at(op, 1);
+            let u: Vec<String> = op[ss..se].iter().map(|x| x.to_string()).collect();
+            self.log.push(format!("H {} {}", self.now, u.join(",")));
         }
         r
     }
 
-    fn clear_bid(&mut self, bid: &Vec<u16>, logit: bool) {
+    fn clear_bid(&mut self, bid: &[u8], logit: bool) {
         if let Some(tok) = self.by_bid.remove(bid) {
             self.active.retain(|t| t.token != tok);
             if logit && !self.quiet {
@@ -164,16 +242,30 @@ impl World {
 
     fn fire_token(&mut self, idx: usize) -> i64 {
         let t = self.active.remove(idx);
-        self.by_bid.remove(&t.bid);
+        self.run_callback(t.token, &t.sid, &t.bid)
+    }
+
+    // The timer callback `() => this.fire(ref)` with its captured ref.
+    // The op is built in a reused scratch buffer (no allocation per delivery).
+    fn run_callback(&mut self, token: u64, sid: &[u8], bid: &[u8]) -> i64 {
         if !self.quiet {
-            self.log.push(format!("F t{}", t.token));
+            self.log.push(format!("F t{}", token));
         }
-        let mut op = vec![4i64, 0];
-        op.push(t.bid.len() as i64);
-        op.extend(t.bid.iter().map(|&u| u as i64));
+        let mut op = std::mem::take(&mut self.cb);
+        op.clear();
+        op.push(4i64);
+        op.push(0);
+        dec(sid, &mut op);
+        op[1] = (op.len() - 2) as i64;
+        let p = op.len();
+        op.push(0);
+        dec(bid, &mut op);
+        op[p] = (op.len() - p - 1) as i64;
         op.push(0);
         op.push(0);
-        self.call(&op)
+        let r = self.call(&op);
+        self.cb = op;
+        r
     }
 
     fn advance(&mut self, ms: i64) -> bool {
@@ -207,11 +299,14 @@ impl World {
         false
     }
 
-    fn deliver(&mut self, tok: u64) -> i64 {
-        match self.active.iter().position(|t| t.token == tok) {
-            Some(i) => self.fire_token(i),
-            None => {
-                self.log.push(format!("D t{}", tok));
+    fn deliver(&mut self, tok: u64, captured: bool) -> i64 {
+        if let Some(i) = self.active.iter().position(|t| t.token == tok) {
+            return self.fire_token(i);
+        }
+        match self.known.get(&tok).cloned() {
+            Some((sid, bid)) if captured => self.run_callback(tok, &sid, &bid),
+            _ => {
+                self.log.push(format!("X deliver t{}", tok));
                 0
             }
         }
@@ -233,9 +328,13 @@ impl World {
             s.push_str(&x.to_string());
         }
         s.push_str(" | T");
+        // t<token>:<due>:<budgetId units>:<1 when it is the budget's timer>
         for t in &self.active {
-            let b: Vec<String> = t.bid.iter().map(|u| u.to_string()).collect();
-            s.push_str(&format!(" t{}:{}:{}", t.token, t.due, b.join(",")));
+            let mut units = Vec::new();
+            dec(&t.bid, &mut units);
+            let b: Vec<String> = units.iter().map(|u| u.to_string()).collect();
+            let own = self.by_bid.get(&t.bid) == Some(&t.token);
+            s.push_str(&format!(" t{}:{}:{}:{}", t.token, t.due, b.join(","), own as i32));
         }
         s
     }
@@ -292,7 +391,7 @@ fn run_q() {
             }
             "settime" => w.now = p[1].parse().unwrap(),
             "deliver" => {
-                if w.deliver(p[1].trim_start_matches('t').parse().unwrap()) == 4 {
+                if w.deliver(p[1].trim_start_matches('t').parse().unwrap(), p.get(2) == Some(&"1")) == 4 {
                     halted = true;
                 }
             }
@@ -314,7 +413,7 @@ fn run_q() {
 
 // perf <R> <reps>: one session/budget with R runs (all running). Items:
 //   refresh_R  : runWaiting(k_last, true) then runWaiting(k_last, false) on R runs where the others wait, so each
-//                call reaches REFRESH with a full O(R) scan and a SETTLE / BEGIN+ARM transition (2 calls per rep)
+//                call reaches REFRESH (O(1) via the active-run count) and a SETTLE / BEGIN+ARM transition (2 calls per rep)
 //   cycle      : timer cycle with one run: runStarted (BEGIN+ARM, timerSet), runEnded (SETTLE, timerClear) (2 calls)
 //   fire       : early delivery: ARM then FIRE with time left (SETTLE + BEGIN + ARM re-arm) (1 fire per rep)
 // prints `item size ns_per_call`.

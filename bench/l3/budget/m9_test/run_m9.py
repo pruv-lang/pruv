@@ -13,9 +13,11 @@ Classes:
   exact           whole case ran and everything matched
   not-implemented the case reaches a path owned by another milestone: a raise/charge call (M5/M6 charge, M7
                   lifecycle) or a time halt (M10). The event prefix before that point is compared and must match;
-                  the rest is not counted. Nothing after the cut is filled by host code.
-  known-difference KD-M9-1: a captured delivery of a timer the host already cleared or fired. TS runs the stale
-                  callback; the Pruv host drops it. The prefix before it must match.
+                  at a time halt the halt instant and the halted session's activeMs / activeSince are compared too
+                  (when no raise/charge call follows, the oracle's final values of that budget are the ones at the
+                  halt: later clock-only steps cannot change a halted budget). The rest is not counted. Nothing
+                  after the cut is filled by host code.
+  known-difference none in M9 (the class is kept for the table).
   fail            anything else.
 """
 import argparse, datetime, json, os, shutil, statistics, subprocess, sys
@@ -29,6 +31,7 @@ LIBS = ["--lib", "bench/l3/budget", "--lib", "bench/l3/lib"]
 STATE = {"open": 0, "halted": 1, "closed": 2}
 HALT_MARK = ("runningDelegationIds", "cancelRecovery", "stopMain")
 COMPARED = {}
+HALT_CHECKED = [0]
 
 
 def rustc():
@@ -103,7 +106,7 @@ def program(case):
         d = obj(s)
         rec = budget_rec(obj(d.get("budget")) if d.get("budget") is not None else None)
         out.append("put " + " ".join(map(str, key(d["id"]) + [len(rec)] + rec)))
-    out.append("now 1700000000000")
+    out.append("now %d" % case["world"].get("clockStart", 1700000000000))
     cut = None
     for i, e in enumerate(case["script"]):
         out.append("step %d" % i)
@@ -193,16 +196,16 @@ def parse_obs(line):
     for _ in range(rd()):
         k = rkey()
         owner = rkey()
-        sp, since, armed, dl = rd(), rd(), rd(), rd()
+        sp, since, armed, act = rd(), rd(), rd(), rd()
         runs = []
         for _ in range(rd()):
             rk = rkey()
             runs.append((rk, rd()))
-        clocks.append((k, owner, sp, since, armed, dl, runs))
+        clocks.append((k, owner, sp, since, armed, act, runs))
     timers = []
     for t in tl.split():
-        tok, due, bid = t.split(":")
-        timers.append((tok, int(due), tuple(int(x) for x in bid.split(",") if x)))
+        tok, due, bid, own = t.split(":")
+        timers.append((tok, int(due), tuple(int(x) for x in bid.split(",") if x), own == "1"))
     return sessions, clocks, timers
 
 
@@ -239,7 +242,7 @@ def compare_final(case, o, obs):
             want = "".join(chr(u) for u in units(want)) if isinstance(want, dict) else want
         if got != want:
             diffs.append("activeSince %r %r" % (got, want))
-    tok_of = {t[2]: t[0] for t in timers}
+    tok_of = {t[2]: t[0] for t in timers if t[3]}
     want_clocks = []
     for bid, cv in o["finalClocks"].get("A", []):
         c = obj(cv)
@@ -250,7 +253,10 @@ def compare_final(case, o, obs):
         tm = None if (tm is None or (isinstance(tm, dict) and "undef" in tm)) else tm
         want_clocks.append((tuple(units(bid)), tuple(units(c["sessionId"])), since, tm, runs))
     got_clocks = []
-    for k, owner, sp, since, armed, dl, runs in clocks:
+    for k, owner, sp, since, armed, act, runs in clocks:
+        # field 17 is the active-run count REFRESH reads; it must equal the runs with waiting = 0
+        if act != sum(1 for _, wv in runs if wv == 0):
+            diffs.append("active count %s for %r" % (act, runs))
         got_clocks.append((k, owner, since if sp else None, tok_of.get(k) if armed else None, runs))
     if got_clocks != want_clocks:
         diffs.append("clocks %r != %r" % (got_clocks, want_clocks))
@@ -261,30 +267,61 @@ def compare_final(case, o, obs):
     return diffs
 
 
+def text(v):
+    return "".join(chr(u) for u in units(v)) if isinstance(v, dict) else v
+
+
+def compare_halt(case, o, obs, h):
+    """At a time halt (driver line `H <now> <sessionId units>`) with no raise/charge call after it: the halted
+    budget's halt instant, state and settled clock fields equal the oracle's final ones (halt(ref, 'time') settles,
+    which adds nothing after FIRE's SETTLE, and sets state / halt.at; later clock-only steps leave a halted budget
+    alone)."""
+    _, t, su = h.split(" ")
+    sk = tuple(int(x) for x in su.split(",") if x)
+    sessions, _, _ = parse_obs(obs)
+    mine = sessions.get(sk)
+    diffs = []
+    for sv in o["finalSessions"]:
+        d = obj(sv["v"])
+        if tuple(units(d["id"])) != sk:
+            continue
+        b = obj(d["budget"]["v"]) if d.get("budget") is not None else None
+        if b is None or mine is None or mine[0] == -1:
+            return ["halted budget missing"]
+        if b["state"] != "halted":
+            diffs.append("oracle state %s" % b["state"])
+        at = text(obj(b["halt"])["at"]) if obj(b.get("halt")) else None
+        if at != iso(int(t)):
+            diffs.append("halt.at %r %r" % (iso(int(t)), at))
+        if mine[3] != obj(b["used"])["activeMs"]:
+            diffs.append("activeMs %s %s" % (mine[3], obj(b["used"])["activeMs"]))
+        if mine[4] != 0 or b.get("activeSince") is not None:
+            diffs.append("activeSince kind %s %r" % (mine[4], b.get("activeSince")))
+        return diffs
+    return ["halted session missing"]
+
+
 def classify(case, o, run, cut):
     mine = [l for l in run["log"] if not l.startswith("@")]
-    drop = [i for i, l in enumerate(mine) if l.startswith("D ")]
     xs = [l for l in mine if l.startswith("X")]
     if xs:
         return "fail", "driver status %s" % xs[0]
     want = oracle_events(o, cut)
-    # captured stale deliveries: KD-M9-1 when the oracle runs that callback; a dropped non-captured delivery is a
-    # no-op on both sides.
-    for i in drop:
-        tok = mine[i][2:]
-        pre = [l for l in mine[:i] if not l.startswith("D ")]
-        if want[:len(pre)] == pre and len(want) > len(pre) and want[len(pre)] == "F " + tok:
-            return "known-difference", "KD-M9-1 at %s" % tok
-    mine = [l for l in mine if not l.startswith("D ")]
-    for l in mine[:mine.index("H") + 1] if "H" in mine else mine:
+    ev = ["H" if l.startswith("H") else l for l in mine]
+    for l in ev[:ev.index("H") + 1] if "H" in ev else ev:
         COMPARED[l[0]] = COMPARED.get(l[0], 0) + 1
-    if "H" in mine:
-        h = mine.index("H")
-        if want[:h + 1] == mine[:h + 1]:
-            return "not-implemented", "time halt (M10)"
-        return "fail", "events %r != %r" % (mine, want[:h + 2])
-    if mine != want:
-        return "fail", "events %r != %r" % (mine, want)
+    if "H" in ev:
+        h = ev.index("H")
+        if want[:h + 1] != ev[:h + 1]:
+            return "fail", "events %r != %r" % (ev, want[:h + 2])
+        if not cut:
+            d = compare_halt(case, o, run["obs"], mine[h])
+            HALT_CHECKED[0] += 1
+            if d:
+                return "fail", "at halt: " + "; ".join(d)
+        return "not-implemented", "time halt (M10)"
+    if ev != want:
+        return "fail", "events %r != %r" % (ev, want)
     if cut:
         return "not-implemented", "raise/charge call %s" % cut[1]
     d = compare_final(case, o, run["obs"])
@@ -316,12 +353,12 @@ def cmd_q(args):
         cls, note = classify(c, oracle[c["id"]], runs[c["id"]], cuts[c["id"]])
         count[cls] += 1
         if cls in ("known-difference", "not-implemented"):
-            k = note.split(" r")[0].split(" at ")[0] if cls == "not-implemented" else "KD-M9-1"
+            k = note.split(" r")[0].split(" at ")[0] if cls == "not-implemented" else note
             k = "raise/charge call" if note.startswith("raise/charge") else k
             why[k] = why.get(k, 0) + 1
         if cls == "fail":
             fails.append((c["id"], note))
-    print(json.dumps({"cases": len(cases), "count": count, "reasons": why, "compared_events": COMPARED}, ensure_ascii=False))
+    print(json.dumps({"cases": len(cases), "count": count, "reasons": why, "compared_events": COMPARED, "halt_state_checked": HALT_CHECKED[0]}, ensure_ascii=False))
     for i, n in fails[:15]:
         print("FAIL", i, n[:600])
     return 1 if fails else 0

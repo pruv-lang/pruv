@@ -1,6 +1,7 @@
 // Hand-written idiomatic Rust baseline for the M9 perf items: the same clock work as bud_clock.pruv + driver_m9.rs
-// (session lookup + budget id check, run map update, REFRESH scan, SETTLE / BEGIN+ARM, and the same host scheduler:
-// a timer list plus a budget -> token map). activeSince is kept as the begin instant (no ISO string), like the Pruv
+// (session lookup + budget id check, run map update, active-run count, REFRESH, SETTLE / BEGIN+ARM, and the same host
+// scheduler: a timer list plus a budget -> token map, keys copied only when a timer captures its ref or a budget gets
+// its first map slot). activeSince is kept as the begin instant (no ISO string), like the Pruv
 // side, which stores the instant and leaves formatting to the boundary.
 //   hand_m9 <R> <reps>   prints `item size ns_per_call` for refresh, cycle, fire (see driver_m9.rs run_perf)
 use std::collections::HashMap;
@@ -19,6 +20,8 @@ struct Budget {
 struct Clock {
     session_id: String,
     runs: HashMap<String, bool>,
+    // runs with waiting = false, kept by the run methods (bud_clock field 17); REFRESH reads it instead of scanning
+    active: usize,
     since: Option<i64>,
     timer: Option<u64>,
 }
@@ -26,6 +29,7 @@ struct Clock {
 struct Timer {
     token: u64,
     due: i64,
+    sid: String,
     bid: String,
 }
 
@@ -55,12 +59,17 @@ impl World {
         }
     }
 
-    fn set_timer(&mut self, bid: &str, left: i64) -> u64 {
+    // setTimeout with the captured ref; the budget's previous handle (none in these items) is overwritten
+    fn set_timer(&mut self, r: &Ref, left: i64) -> u64 {
         let eff = if left > 2147483647 { 1 } else { left };
-        self.clear(bid);
         self.seq += 1;
-        self.timers.push(Timer { token: self.seq, due: self.now + eff, bid: bid.to_string() });
-        self.by_bid.insert(bid.to_string(), self.seq);
+        self.timers.push(Timer { token: self.seq, due: self.now + eff, sid: r.session_id.clone(), bid: r.budget_id.clone() });
+        match self.by_bid.get_mut(&r.budget_id) {
+            Some(v) => *v = self.seq,
+            None => {
+                self.by_bid.insert(r.budget_id.clone(), self.seq);
+            }
+        }
         self.seq
     }
 
@@ -71,13 +80,20 @@ impl World {
         let c = self.clocks.entry(r.budget_id.clone()).or_insert_with(|| Clock {
             session_id: r.session_id.clone(),
             runs: HashMap::new(),
+            active: 0,
             since: None,
             timer: None,
         });
         match c.runs.get_mut(key) {
-            Some(w) => *w = false,
+            Some(w) => {
+                if *w {
+                    c.active += 1;
+                }
+                *w = false
+            }
             None => {
                 c.runs.insert(key.to_string(), false);
+                c.active += 1;
             }
         }
         self.refresh(r)
@@ -90,13 +106,20 @@ impl World {
             return false;
         }
         *w = waiting;
+        if waiting {
+            c.active = c.active.saturating_sub(1);
+        } else {
+            c.active += 1;
+        }
         self.refresh(r)
     }
 
     fn run_ended(&mut self, r: &Ref, key: &str) -> bool {
         let Some(c) = self.clocks.get_mut(&r.budget_id) else { return false };
-        if c.runs.remove(key).is_none() {
-            return false;
+        match c.runs.remove(key) {
+            None => return false,
+            Some(false) => c.active = c.active.saturating_sub(1),
+            Some(true) => {}
         }
         self.refresh(r)
     }
@@ -108,7 +131,7 @@ impl World {
         }
         let open = self.sessions[&r.session_id].open;
         let Some(c) = self.clocks.get(&r.budget_id) else { return false };
-        let consuming = open && c.runs.values().any(|w| !*w);
+        let consuming = open && c.active > 0;
         if consuming == c.since.is_some() {
             return false;
         }
@@ -135,14 +158,17 @@ impl World {
         if left <= 0 {
             return self.fire(r);
         }
-        let tok = self.set_timer(&r.budget_id, left);
+        let tok = self.set_timer(r, left);
         self.clocks.get_mut(&r.budget_id).unwrap().timer = Some(tok);
         false
     }
 
     fn fire(&mut self, r: &Ref) -> bool {
         if let Some(c) = self.clocks.get_mut(&r.budget_id) {
-            c.timer = None;
+            // forget the handle without cancelling (timerForget)
+            if c.timer.take().is_some() {
+                self.by_bid.remove(&r.budget_id);
+            }
         }
         if !self.current(r) {
             return false;
@@ -179,15 +205,10 @@ impl World {
         added
     }
 
-    // host delivery of the active timer at index i (driver_m9 fire_token)
+    // host delivery of the active timer at index i (driver_m9 fire_token): the callback runs with its captured ref
     fn deliver(&mut self, i: usize) -> bool {
         let t = self.timers.remove(i);
-        self.by_bid.remove(&t.bid);
-        let owner = self.clocks.get(&t.bid).map(|c| c.session_id.clone());
-        match owner {
-            Some(s) => self.fire(&Ref { session_id: s, budget_id: t.bid }),
-            None => false,
-        }
+        self.fire(&Ref { session_id: t.sid, budget_id: t.bid })
     }
 }
 
