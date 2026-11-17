@@ -33,6 +33,10 @@ Details, methods and raw numbers:
 | `ent_u16` guard, simple write loop `p_wr` | 6.5-7.1 | 6.1-7.1 | 92-154 | 1.00 / 0.99 / 1.08 | guard branch is predicted; no cost in a tight loop | ok |
 | M9 clock refresh R = 10 / 50 / 100 | 153-155 | 143-148 | 2900-3260 | 1.05 / 1.07 / 1.07 (was 1.10-1.11 after the map hash; 1.39-1.44 before) | `#[inline]` hints and `eq_range` key compare in `bud_map::entry_matches` | ok |
 | M9 cycle / fire | 157 / 224 | 168 / 209 | 3025 / 5506 | 0.93 / 1.07 | same | ok |
+| M7 current | 27.5-28.4 | 10.0-12.4 | 24-25 | 2.22 / 2.80 / 2.84 (main before this pass: 2.88 / 3.02 / 2.96) | root-call overhead of the M7 harness: dispatch 7.6 ns + raw call 4.6 ns, then `valid()` and one `bud_map::find` (see "M7" below) | open (> 1.1x), ABI / harness |
+| M7 isHalted | 27.0-27.6 | 9.9-10.0 | 24-25 | 2.76 / 2.73 / 2.74 (was 2.90 / 2.83 / 2.96) | same | open |
+| M7 maybeClose + reopen | 29.5-30.0 | 17.6-18.3 | 275-281 | 1.61 / 1.68 / 1.70 (was 1.74 / 1.79 / 1.78) | same, two root calls per pair | open |
+| M7 attach / replace | 21 / 124 | 53 / 205-212 | 6-9 / 1134-1166 | 0.40 / 0.58-0.61 (was 0.41-0.45 / 0.58-0.65) | - | ok |
 | M8 charge | 34.6-41.3 | 17.5-19.0 | 138-158 | 1.84 / 2.36 / 2.17 (main before this pass: 2.29 / 2.39 / 2.39) | see "M8" below | open (> 1.1x), outside this pass's files |
 | M8 noteFailure | 24.9-33.3 | 14.2-18.5 | 30-36 | 1.35 / 2.25 / 2.07 (was 1.93 / 2.37 / 2.05) | same | open |
 | M8 noteTool dedup hit | 33.9-48.7 | 25.4-28.5 | 13-16 | 1.19 / 1.92 / 1.76 (was 1.30 / 1.86 / 1.81) | same | open |
@@ -58,3 +62,26 @@ alternating run order), plain proven V-word reads plus one `obj_get` pass in `bu
 in `blob_of` / `emit_all`.
 
 New budget milestones (M7-M14) report the same three columns in their notes and meet the same bar.
+
+M7 rows are `m7_test/run_m7.py perf --rounds 5` with main's compiler and `bud_map` (d28b52c, load average 9.7-11.3)
+and with this pass (load average 8.2-9.2); the M7 code is the same in both. `current` and `isHalted` move by about
+2 ns (`#[inline]`, `eq_range`); what is left is not in the map code. Per call, hand Rust does one `HashMap::get` and a
+field read (10 ns). The generated path pays the harness dispatch (7.6 ns) and the raw-buffer call (4.6 ns), both
+measured by the runner's `dispatch` / `rawcall` rows, before any M7 code runs, then `bud_store::valid` and one
+`bud_map::find` over a short key, which take the remaining ~16 ns, about 6 ns more than the hand lookup. So about
+12 of the 18 ns gap is the root-call boundary, which Pruv cannot remove in source: the hand side has no boundary at all. The
+typed-handle design in `perf_headroom/HOST.md` removes `valid`; the boundary belongs to the ABI.
+
+Answers to the M7 requests (`M7_NOTES.md`, "Requests to other owners"):
+
+1. Hash tag bits in the slot word: implemented and measured, then not committed. Live slot words held e+1 in the
+   low 33 bits and 30 hash bits above, and `find` / `put_key` compared the tag before `entry_matches`. All Q sets
+   passed with it, but M7 current / isHalted / closereopen and M4 sessions / tools / clocks did not move (within
+   0.5 ns). Probe chains are short under the index's load bound (3/4), so there are few non-matching candidates
+   to filter (expected from linear probing; probe counts were not measured). The index format stays as it was.
+2. Cheaper `valid`: it already runs once per root call; the typed-handle design (no trust in unchecked input) is in
+   `perf_headroom/HOST.md`.
+3. `#[inline]`: done in the compiler for every generated function.
+4. Slice equality: done, `eq_range` (one bounds-proved slice `==`, `memcmp` in the binary), used in
+   `bud_map::entry_matches`. No `bud_lifecycle.pruv` change is needed for any of these.
+
