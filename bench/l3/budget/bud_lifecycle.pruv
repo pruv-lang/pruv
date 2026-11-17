@@ -117,16 +117,19 @@ pub fn id_is(st: [i64], off: i64, k: [i64], ks: i64, kn: i64) -> bool
   if kn < 0 || kn > 4294967296 || ks < 0 || ks > 1099511627776 { return false; }
   if rd(st, off + 24) != kn { return false; }
   if off + 25 + kn <= len(st) && ks + kn <= len(k) {
-    // Both ranges in bounds (checked once): direct indexing.
+    // Both ranges in bounds (checked once): direct indexing. The words are or-folded by their xor without an early
+    // exit, so the loop has no data-dependent branch and the backend vectorizes it (the hand's slice == is a bcmp);
+    // the answer is the same (all words equal iff the fold is 0).
+    let mut d: i64 = 0;
     let mut i: i64 = 0;
     while i < kn
       invariant 0 <= i && i <= kn && off + 25 + kn <= len(st) && ks + kn <= len(k) && 0 <= off && 0 <= ks
       decreases kn - i
     {
-      if st[off + 25 + i] != k[ks + i] { return false; }
+      d = bor(d, bxor(st[off + 25 + i], k[ks + i]));
       i = i + 1;
     }
-    return true;
+    return d == 0;
   }
   let mut j: i64 = 0;
   while j < kn

@@ -36,6 +36,7 @@ pub fn hd(st: [i64], i: i64) -> i64
 { return crate::ent_u16::rd(st, i); }
 
 pub fn set_hd(inout st: [i64], i: i64, v: i64) -> ()
+  ensures len(st) == len(old(st))
 { crate::ent_u16::wr(inout st, i, v); }
 
 // Number of hash slots of layout(l): the largest power of two s >= 8 with 16 + 27*s <= l; 0 if l < 232.
@@ -100,6 +101,19 @@ pub fn field_addr(st: [i64], e: i64) -> i64
   ensures result >= -1 && result <= 1099511627776
 { return ea(st, e, 0); }
 
+// Fast-path base of entry e: the address of field 0 when the whole entry (fields 0..19) lies in st past the 16 header
+// words, else -1. When it is not -1, ef(st, e, f) == st[result + f] and set_ef(st, e, f, v) is st[result + f] = v for
+// every f in 0..20, on any buffer: ea gives the same address, rd/wr are in range, and entry writes never reach the
+// header words 5/6 that ea reads, so the base stays valid across the run (header writes to other words do not move
+// it). Callers use it for one range check per run of field accesses and keep the ef/set_ef code as the fallback.
+pub fn eb(st: [i64], e: i64) -> i64
+  ensures result == -1 || (16 <= result && result + 20 <= len(st))
+{
+  let a: i64 = ea(st, e, 0);
+  if a < 16 || a > len(st) - 20 { return -1; }
+  return a;
+}
+
 // Field f of entry e; -1 if e or f is out of range (so a bad link reads as "none").
 pub fn ef(st: [i64], e: i64, f: i64) -> i64
 {
@@ -109,6 +123,7 @@ pub fn ef(st: [i64], e: i64, f: i64) -> i64
 }
 
 pub fn set_ef(inout st: [i64], e: i64, f: i64, v: i64) -> ()
+  ensures len(st) == len(old(st))
 {
   let a: i64 = ea(st, e, f);
   if a < 0 { return; }
@@ -119,7 +134,18 @@ pub fn set_ef(inout st: [i64], e: i64, f: i64, v: i64) -> ()
 // (key off 4 / key cap 18, blob off 12 / blob cap 19) are cleared too; a reused entry keeps them so that a new key or
 // blob that fits is written back into its old region (no arena growth under steady churn).
 fn fill_entry(inout st: [i64], e: i64, owner: i64, ogen: i64, egen: i64, fresh: bool) -> ()
+  ensures len(st) == len(old(st))
 {
+  let b: i64 = eb(st, e);
+  if b >= 0 {
+    // Same words in the same order as the wr path below (see eb).
+    st[b] = 1; st[b + 1] = owner; st[b + 2] = ogen; st[b + 3] = egen;
+    st[b + 5] = 0; st[b + 6] = 0;
+    st[b + 7] = -1; st[b + 8] = -1; st[b + 9] = -1; st[b + 10] = -1;
+    st[b + 11] = 0; st[b + 13] = 0; st[b + 14] = 0; st[b + 15] = 0; st[b + 16] = 0; st[b + 17] = 0;
+    if fresh { st[b + 4] = 0; st[b + 12] = 0; st[b + 18] = 0; st[b + 19] = 0; }
+    return;
+  }
   let a: i64 = ea(st, e, 0);
   if a < 0 { return; }
   crate::ent_u16::wr(inout st, a, 1);
@@ -273,8 +299,10 @@ pub fn entry_alloc(inout st: [i64], owner: i64, ogen: i64) -> i64
   let fh: i64 = hd(st, 8);
   let live: i64 = c32(hd(st, 12));
   if fh >= 3 && fh < top && fh < cap {
-    let g: i64 = ef(st, fh, 3);
-    let mut nx: i64 = ef(st, fh, 8);
+    let b: i64 = eb(st, fh);
+    let mut g: i64 = 0;
+    let mut nx: i64 = 0;
+    if b >= 0 { g = st[b + 3]; nx = st[b + 8]; } else { g = ef(st, fh, 3); nx = ef(st, fh, 8); }
     if nx < -1 || nx >= top { nx = -1; }
     set_hd(inout st, 8, nx);
     fill_entry(inout st, fh, owner, ogen, g, false);
@@ -297,6 +325,20 @@ pub fn entry_free(inout st: [i64], e: i64) -> ()
   if e < 3 { return; }
   let top: i64 = c32(hd(st, 7));
   if e >= top { return; }
+  let b: i64 = eb(st, e);
+  if b >= 0 {
+    // Same reads and writes as the ef/set_ef path below (see eb); len(st) >= 36 here, so header word 8 is st[8].
+    if st[b] != 1 { return; }
+    let g: i64 = st[b + 3];
+    let head: i64 = st[8];
+    st[b] = 0;
+    st[b + 3] = wrapping_add(g, 1);
+    st[b + 8] = head;
+    st[8] = e;
+    let live: i64 = c32(st[12]);
+    if live > 0 { st[12] = live - 1; }
+    return;
+  }
   if ef(st, e, 0) != 1 { return; }
   let g: i64 = ef(st, e, 3);
   let head: i64 = hd(st, 8);

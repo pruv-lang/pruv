@@ -3,7 +3,10 @@
 //   driver_m7 q        program on stdin, one case after another:
 //                        case <id> | now <ms> | uuids <key>... | quiet <0/1>... | put <words...> | del <key words...>
 //                        | adv <ms> | call <req> <op words without now/quiet/uuid> | end
-//   driver_m7 perf <S> <reps>   perf program, see run_m7.py (cmd_perf)
+//   driver_m7 perf <S> <reps>   perf program, see run_m7.py (cmd_perf). After each item's timed loop it runs an untimed
+//                        verification pass (fresh identical setup, same ops, V = min(reps, 2000) iterations) and prints
+//                        `rchk <item> <size> <value>`: s = s*31 + w over every op's status, effect words and result
+//                        words (see rchk_fold). hand_m7_u16 perf prints the same encoding; run_m7.py compares them.
 //
 // Boundary rule: the host owns the state buffer and the scratch frames and supplies the inputs of a call (now, the
 // next randomUUID value, the isQuiet answer); it never reads state words and decides nothing. It reads the result
@@ -370,9 +373,26 @@ fn run_perf(args: &[String]) {
         t.elapsed().as_nanos() as f64 / (reps * per) as f64
     };
     // dispatch probe: the host op build + t_call's checks (valid, 3 key scans) with an unknown code (status 2)
+    // Untimed per-op result verification (rchk): a fresh setup identical to the timed one, the same ops with the same
+    // per-call resets (next_uuid / next_quiet = 0), V = min(reps, 2000) iterations, every call's status, effect words
+    // and result words folded by rchk_fold. Runs after the item's timed loop; nothing is added inside it.
+    let vn = reps.min(2000);
+    let verify = |w: &mut World, ops: &[Vec<i64>]| -> u64 {
+        let mut s = 0u64;
+        for _ in 0..vn {
+            for op in ops {
+                w.next_uuid = 0;
+                w.next_quiet = 0;
+                let r = w.call(op);
+                s = rchk_fold(w, r, s);
+            }
+        }
+        s
+    };
     let mut w = setup(0);
-    let op = body(0, -1, -1, &bid(last));
-    println!("dispatch {} {:.1}", size, time(&mut w, &[op], 1));
+    let ops = vec![body(0, -1, -1, &bid(last))];
+    println!("dispatch {} {:.1}", size, time(&mut w, &ops, 1));
+    println!("rchk dispatch {} {}", size, verify(&mut setup(0), &ops)); // pruv only
     // raw t_call with a prepared op (no World::call): what the dispatch probe costs inside t_call itself
     {
         let mut w = setup(0);
@@ -384,25 +404,40 @@ fn run_perf(args: &[String]) {
             black_box(sol::t_call(&mut w.st, black_box(&op), &mut w.bv, &mut w.fx, &mut w.out));
         }
         println!("rawcall {} {:.1}", size, t.elapsed().as_nanos() as f64 / reps as f64);
+        let mut w = setup(0);
+        let mut s = 0u64;
+        for _ in 0..vn {
+            w.fx[0] = 0;
+            let r = sol::t_call(&mut w.st, &op, &mut w.bv, &mut w.fx, &mut w.out);
+            s = rchk_fold(&w, r, s);
+        }
+        println!("rchk rawcall {} {}", size, s); // pruv only
     }
     // isHalted (no record copy)
     let mut w = setup(0);
-    let op = body(2, -1, -1, &bid(last));
-    println!("ishalted {} {:.1}", size, time(&mut w, &[op], 1));
+    let ops = vec![body(2, -1, -1, &bid(last))];
+    println!("ishalted {} {:.1}", size, time(&mut w, &ops, 1));
+    println!("rchk ishalted {} {}", size, verify(&mut setup(0), &ops));
     // current
     let mut w = setup(0);
-    let op = body(1, -1, -1, &bid(last));
-    println!("current {} {:.1}", size, time(&mut w, &[op], 1));
+    let ops = vec![body(1, -1, -1, &bid(last))];
+    println!("current {} {:.1}", size, time(&mut w, &ops, 1));
+    println!("rchk current {} {}", size, verify(&mut setup(0), &ops));
     // attach (open budget: ref)
     let mut w = setup(0);
-    let op = body(3, 0, -1, "");
-    println!("attach {} {:.1}", size, time(&mut w, &[op], 1));
+    let ops = vec![body(3, 0, -1, "")];
+    println!("attach {} {:.1}", size, time(&mut w, &ops, 1));
+    println!("rchk attach {} {}", size, verify(&mut setup(0), &ops));
     // close + reopen cycle: maybeClose (quiet) then reopen
     let mut w = setup(0);
     w.quiet = vec![1];
-    let mc = body(6, -1, -1, "");
-    let ro = body(5, -1, -1, &bid(last));
-    println!("closereopen {} {:.1}", size, time(&mut w, &[mc, ro], 2));
+    let ops = vec![body(6, -1, -1, ""), body(5, -1, -1, &bid(last))];
+    println!("closereopen {} {:.1}", size, time(&mut w, &ops, 2));
+    {
+        let mut w = setup(0);
+        w.quiet = vec![1];
+        println!("rchk closereopen {} {}", size, verify(&mut w, &ops));
+    }
     // replace on a halted budget (CLOSE + OPEN + follows + carryHeld), then put the halted record back
     let mut w = setup(1);
     let rp = body(4, 0, 2, "");
@@ -422,6 +457,55 @@ fn run_perf(args: &[String]) {
         w.put(black_box(&put));
     }
     println!("replace {} {:.1}", size, t.elapsed().as_nanos() as f64 / reps as f64);
+    // untimed verification: fresh halted setup, the same call + put-back per iteration
+    let mut w = setup(1);
+    let mut s = 0u64;
+    for _ in 0..vn {
+        w.next_uuid = 0;
+        let r = w.call(&rp);
+        s = rchk_fold(&w, r, s);
+        w.put(&put);
+    }
+    println!("rchk replace {} {}", size, s);
+}
+
+// rchk: per-op result checksum of the perf verification pass, s = s*31 + w (wrapping u64). Per call it folds, in this
+// order: the status r, the effect count fx[0], every effect code fx[1..=fx[0]] (13 timerClear, 20 changed, 21 carryHeld,
+// 22 uuid, 23 isQuiet), and, for status 0, the result words the host reads (the same words q mode prints after `V `):
+// [0] undefined, [1] false, [2] true, [3, n, id units.. (, m, old id units.. when effect 21 is held)] a ref,
+// [4, n, record words..] a budget view (st[off..off+n)). hand_m7_u16.rs perf produces the identical words.
+fn rchk_fold(w: &World, r: i64, sum: u64) -> u64 {
+    let mut s = sum;
+    let mut fold = |x: i64| s = s.wrapping_mul(31).wrapping_add(x as u64);
+    fold(r);
+    let used = w.fx[0].max(0) as usize;
+    fold(used as i64);
+    for x in &w.fx[1..=used] {
+        fold(*x);
+    }
+    if r != 0 {
+        return s;
+    }
+    match w.out[0] {
+        4 => {
+            let n = w.out[1].max(0) as usize;
+            let off = w.out[2].max(0) as usize;
+            fold(4);
+            fold(n as i64);
+            for x in &w.st[off..off + n] {
+                fold(*x);
+            }
+        }
+        3 => {
+            let l = 2 + w.out[1].max(0) as usize;
+            let k = if w.fx[1..=used].contains(&21) { l + 1 + w.out[l].max(0) as usize } else { l };
+            for x in &w.out[..k] {
+                fold(*x);
+            }
+        }
+        x => fold(x),
+    }
+    s
 }
 
 // ---- boundary <S> <reps> [item] [variant] (P01 boundary experiment, see run_m7.py cmd_boundary) ----

@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """L3-10 M7 runner: budget lifecycle (bud_lifecycle.pruv) against the TS oracle.
 
-  python3 bench/l3/budget/m7_test/run_m7.py q      [--pruvc PATH | --py] [--cases F] [--oracle F]
+  python3 bench/l3/budget/m7_test/run_m7.py q      [--pruvc PATH | --py] [--cases F] [--oracle F] [--hand16]
   python3 bench/l3/budget/m7_test/run_m7.py derive (writes work/m7/cases_life.jsonl + oracle_life.jsonl)
   python3 bench/l3/budget/m7_test/run_m7.py same   (Python pruvc vs Rust pruvc: byte-identical Rust)
-  python3 bench/l3/budget/m7_test/run_m7.py perf   [--rounds N] [--reps N]
+  python3 bench/l3/budget/m7_test/run_m7.py perf   [--rounds N] [--reps N] [--profile S|M|SM | --sizes 100,500,1000] [--no-instr]
+
+q --hand16 runs hand_m7_u16.rs (typed UTF-16 hand Rust, q mode) on the same program instead of the Pruv driver, through the
+same classification. perf lanes: pruv (driver_m7), hand16 (hand_m7_u16), hand (hand_m7, UTF-8 String, informational), ts.
+perf also writes work/m7/perf.json with run_meta.run_meta(...) and the rows (ns, retired instructions, ratios).
+perf compares per cell the per-op result checksum `rchk` of pruv and hand16 (untimed verification pass in both lanes); a
+mismatch or missing rchk fails the cell (no ratio) and the exit status.
+If work/m7/cases.jsonl / oracle.jsonl are missing the read-only source SRC_WORK is read instead.
 
 q: each Q1 case (work/m7/cases.jsonl) becomes a driver program; per request the driver prints the M7 effects in order
 (uuid, changed, carryHeld, isQuiet, timerClear) and the result words; at the end the stored session records.
@@ -30,8 +37,16 @@ PRUVC_DEFAULT = "/Users/spica4345/Projects/pruv/pruvc-rs/target/release/pruvc"
 PY_DEFAULT = "/Users/spica4345/Projects/pruv/.venv/bin/python"
 PRUVC_PY = "/Users/spica4345/Projects/pruv/pruvc/pruvc.py"
 LIBS = ["--lib", "bench/l3/budget", "--lib", "bench/l3/lib"]
+SRC_WORK = "/Users/spica4345/Projects/pruv/bench/l3/budget/work/m7"  # read-only source of cases / oracle
 sys.path.insert(0, BUD)
 from compare import jv_decode, jv_encode, UNDEF  # noqa: E402
+from run_meta import run_meta, num, PROFILES, RUSTC_FLAGS, SEED  # noqa: E402
+
+
+def input_path(name):
+    """work/m7/<name> when present, else the read-only source copy."""
+    p = os.path.join(WORK, name)
+    return p if os.path.exists(p) else os.path.join(SRC_WORK, name)
 
 STATE = {"open": 0, "halted": 1, "closed": 2}
 STATE_N = {v: k for k, v in STATE.items()}
@@ -70,11 +85,24 @@ def build(args):
         f.write('#![allow(dead_code, unused_imports, unused_variables, unused_mut)]\n#[path = "gen.rs"] mod sol;\n')
         f.write(open(os.path.join(HERE, "driver_m7.rs")).read())
     exe = os.path.join(WORK, "driver_m7")
-    c = subprocess.run([rustc(), "-C", "opt-level=3", "--edition", "2021", "-o", exe, main], capture_output=True,
-                       text=True)
+    c = subprocess.run([rustc()] + RUSTC_FLAGS + ["-o", exe, main], capture_output=True, text=True)
     if c.returncode != 0:
         sys.exit("rustc failed:\n" + c.stderr[-4000:])
     return exe
+
+
+def build_hand(src, name):
+    """Compile a hand Rust file of this folder to work/m7/<name> with the shared rustc flags."""
+    os.makedirs(WORK, exist_ok=True)
+    exe = os.path.join(WORK, name)
+    c = subprocess.run([rustc()] + RUSTC_FLAGS + ["-o", exe, os.path.join(HERE, src)], capture_output=True, text=True)
+    if c.returncode != 0:
+        sys.exit("rustc failed (%s):\n%s" % (src, c.stderr[-4000:]))
+    return exe
+
+
+def build_hand16():
+    return build_hand("hand_m7_u16.rs", "hand_m7_u16")
 
 
 # ---- values ----
@@ -418,7 +446,9 @@ def classify(case, o, run, cut):
 
 
 def cmd_q(args):
-    exe = build(args)
+    # --hand16: the typed UTF-16 hand Rust (hand_m7_u16.rs q mode) instead of the Pruv driver; same protocol, same
+    # classification (the hand is judged against the oracle exactly like the Pruv root).
+    exe = build_hand16() if args.hand16 else build(args)
     cases = [json.loads(l) for l in open(args.cases)]
     oracle = {}
     for l in open(args.oracle):
@@ -483,48 +513,170 @@ def cmd_same(args):
     return 0 if x == y else 1
 
 
+PERF_ITEMS = ["ishalted", "current", "attach", "closereopen", "replace"]  # items the Pruv driver and hand16 both run
+PERF_CALLS = {"closereopen": 2}  # calls per rep (ns and instructions are reported per call)
+
+
+def perf_sizes(args):
+    """--profile (S = 100, M = 500, SM = both; run_meta.PROFILES) wins over --sizes; default 100,500,1000."""
+    if args.profile:
+        return list(PROFILES[args.profile])
+    return [int(x) for x in (args.sizes or "100,500,1000").split(",")]
+
+
+def instr_per_call(make_cmd, reps, calls):
+    """Retired instructions per call of one lane: (instr(5 x reps) - instr(reps)) / (4 x reps x calls), median of 3.
+    The setup, warm-up and the final observation are the same in both runs and cancel. None when unavailable."""
+    r1, r2 = reps, 5 * reps
+    vals = []
+    for _ in range(3):
+        lo, hi = instr_retired(make_cmd(r1), soft=True), instr_retired(make_cmd(r2), soft=True)
+        if lo is None or hi is None:
+            return None
+        vals.append((hi - lo) / (r2 - r1) / calls)
+    return statistics.median(vals)
+
+
 def cmd_perf(args):
-    """Alternates Pruv / hand Rust / TS runs per round and size; prints the median ns per call of each item."""
+    """Rotates Pruv / hand16 / hand / TS per round and size; prints the median ns per call of each item, retired
+    instructions per call (Pruv, hand16) and Pruv/hand16 (the bar). Writes work/m7/perf.json with run_meta.
+
+    The hand16 lane prints `chk item size value` (final observed state folded); chk only has to be identical across
+    rounds (state equality Pruv vs hand16 is checked by diff_hand_m7.py through the q-mode observation).
+    Both pruv and hand16 print `rchk item size value`: a checksum of every op's status, effect words and result words
+    from an untimed verification pass (fresh identical setup, min(reps, 2000) iterations). Per cell the two must be
+    equal; a missing or different value (or one that varies across rounds) marks the cell `RCHK MISSING` /
+    `RCHK MISMATCH`, drops its ratios, is recorded in perf.json and makes the command exit non-zero. dispatch and
+    rawcall (pruv only) print rchk too but are not compared. Last line: `result checks: N cells compared, M mismatches`.
+
+    Instructions: driver_m7 `perf` runs every item in one process (no item argument), so its per-item instructions are
+    taken from `driver_m7 boundary S reps item A` (the same World::call path and bodies as perf) minus the same item's
+    `observe` row (boundary variants additionally fold the result words into a checksum; observe is that fold alone).
+    hand16 uses `hand_m7_u16 perf S reps item`. Both: (instr(5 reps) - instr(reps)) / (4 reps x calls per rep).
+    No retired-instruction counter (no /usr/bin/time -l line) -> 'unavailable', never 0."""
     from common import NODE, TS_ENV
     exe = build(args)
-    hand = os.path.join(WORK, "hand_m7")
-    c = subprocess.run([rustc(), "-C", "opt-level=3", "--edition", "2021", "-o", hand, os.path.join(HERE, "hand_m7.rs")],
-                       capture_output=True, text=True)
-    if c.returncode != 0:
-        sys.exit("rustc failed (hand):\n" + c.stderr[-3000:])
+    hand16 = build_hand16()
+    hand = build_hand("hand_m7.rs", "hand_m7")
     env = dict(os.environ)
     env.update(TS_ENV())
     ts = [NODE, "--experimental-strip-types", "--no-warnings", "--import", os.path.join(BUD, "reference-hooks.mjs"),
           os.path.join(HERE, "perf_ts.mjs")]
-    sides = {"pruv": [exe, "perf"], "hand": [hand], "ts": ts}
-    res = {}
+    sides = [("pruv", [exe, "perf"]), ("hand16", [hand16, "perf"]), ("hand", [hand]), ("ts", ts)]
+    sizes = perf_sizes(args)
+    res, chk, rchk = {}, {}, {}
     for rd in range(args.rounds):
-        for size in (100, 500, 1000):
-            for side, cmd in sides.items():
+        for size in (sizes if rd % 2 == 0 else sizes[::-1]):
+            k = rd % len(sides)  # rotate the lane order every round
+            for side, cmd in sides[k:] + sides[:k]:
                 r = subprocess.run(cmd + [str(size), str(args.reps)], capture_output=True, text=True, env=env,
                                    cwd=HERE)
                 if r.returncode != 0:
                     sys.exit("%s perf failed:\n%s" % (side, r.stderr[-2000:]))
                 for l in r.stdout.splitlines():
-                    item, sz, ns = l.split()
+                    f = l.split()
+                    if f[0] == "chk":  # chk <item> <size> <value> (hand16 only)
+                        chk.setdefault((f[1], int(f[2])), set()).add(f[3])
+                        continue
+                    if f[0] == "rchk":  # rchk <item> <size> <value> (pruv and hand16; per-op results, untimed pass)
+                        # kept per run (one list entry per process run), so a value missing from one round is seen
+                        rchk.setdefault((f[1], int(f[2])), {}).setdefault(side, {}).setdefault(rd, []).append(f[3])
+                        continue
+                    item, sz, ns = f
                     res.setdefault((item, int(sz)), {}).setdefault(side, []).append(float(ns))
-    print("item | S | Pruv ns | hand Rust ns | TS ns | Pruv/hand")
-    for (item, sz), v in sorted(res.items()):
+    bad = ["chk %s %d varies across rounds: %s" % (i, s, sorted(v)) for (i, s), v in sorted(chk.items()) if len(v) != 1]
+    # Per-cell result check: Pruv vs hand16 rchk of every item both lanes run. Each lane must print exactly one value in
+    # EVERY round; a value missing from any round, a value that varies across rounds, or a different value is a FAIL
+    # cell (no ratio is reported for it).
+    cell_status, n_cmp, n_bad = {}, 0, 0
+    for (item, sz) in sorted(res):
+        if item not in PERF_ITEMS:
+            continue
+        n_cmp += 1
+        r = rchk.get((item, sz), {})
+        pr, hr = r.get("pruv", {}), r.get("hand16", {})
+        if any(len(pr.get(rd, [])) != 1 or len(hr.get(rd, [])) != 1 for rd in range(args.rounds)):
+            cell_status[(item, sz)] = "RCHK MISSING"
+        elif len({v for vs in pr.values() for v in vs} | {v for vs in hr.values() for v in vs}) != 1:
+            cell_status[(item, sz)] = "RCHK MISMATCH"
+        if (item, sz) in cell_status:
+            n_bad += 1
+    instr = {}
+    if not args.no_instr:
+        for size in sizes:
+            for item in PERF_ITEMS:
+                calls = PERF_CALLS.get(item, 1)
+                a = instr_per_call(lambda r: [exe, "boundary", str(size), str(r), item, "A"], args.reps, calls)
+                o = instr_per_call(lambda r: [exe, "boundary", str(size), str(r), item, "observe"], args.reps, calls)
+                instr[("pruv_A", item, size)] = a
+                instr[("pruv_observe", item, size)] = o
+                instr[("pruv", item, size)] = None if a is None or o is None else a - o
+                instr[("hand16", item, size)] = instr_per_call(
+                    lambda r: [hand16, "perf", str(size), str(r), item], args.reps, calls)
+    fi = lambda x: "unavailable" if x is None else "%.0f" % x
+    print("rounds %d, reps %d, sizes %s; ns and instructions per call" % (args.rounds, args.reps, sizes))
+    print("item | S | Pruv ns | hand16 ns | hand(old UTF-8) ns | TS ns | Pruv/hand16 | Pruv/hand(old) | Pruv instr"
+          " | hand16 instr | instr Pruv/hand16")
+    rows = []
+    for (item, sz), v in sorted(res.items(), key=lambda kv: (kv[0][1], kv[0][0])):
         m = {k: statistics.median(x) for k, x in v.items()}
         f = lambda k: ("%.1f" % m[k]) if k in m else "-"
-        ratio = ("%.2f" % (m["pruv"] / m["hand"])) if "hand" in m else "-"
-        print("%s | %d | %s | %s | %s | %s" % (item, sz, f("pruv"), f("hand"), f("ts"), ratio))
-    return 0
+        rt = lambda a, b: (m[a] / m[b]) if a in m and b in m and m[b] else None
+        ip, ih = instr.get(("pruv", item, sz)), instr.get(("hand16", item, sz))
+        ir = (ip / ih) if ip is not None and ih else None
+        fr = lambda x: "-" if x is None else "%.2f" % x
+        fail = cell_status.get((item, sz))
+        if fail:  # no ratio of a cell whose per-op results are unchecked or differ
+            rt = lambda a, b: None
+            ir = None
+        print("%s | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s%s" % (
+            item, sz, f("pruv"), f("hand16"), f("hand"), f("ts"), fr(rt("pruv", "hand16")), fr(rt("pruv", "hand")),
+            fi(ip) if item in PERF_ITEMS and not args.no_instr else "-",
+            fi(ih) if item in PERF_ITEMS and not args.no_instr else "-", fr(ir),
+            " | FAIL " + fail if fail else ""))
+        rc = rchk.get((item, sz), {})
+        rows.append({
+            "item": item, "size": sz,
+            "ns": {k: m[k] for k in m}, "raw_ns": v,
+            "rchk": {s_: sorted(x) for s_, x in rc.items()} or "unavailable",
+            "rchk_status": fail or ("ok" if item in PERF_ITEMS else "not compared (pruv only)"),
+            "pruv_over_hand16": num(rt("pruv", "hand16")), "pruv_over_hand_old": num(rt("pruv", "hand")),
+            "instr_pruv": num(ip), "instr_hand16": num(ih), "instr_pruv_over_hand16": num(ir),
+            "instr_pruv_boundary_A": num(instr.get(("pruv_A", item, sz))),
+            "instr_pruv_boundary_observe": num(instr.get(("pruv_observe", item, sz))),
+            "hand16_chk": sorted(chk.get((item, sz), [])) or "unavailable"})
+    os.makedirs(WORK, exist_ok=True)
+    meta = run_meta(pruvc=PRUVC_PY if args.py else args.pruvc, backend="rust", rustc=rustc(), flags=RUSTC_FLAGS,
+                    seed=SEED, profile=args.profile or "custom:" + ",".join(map(str, sizes)),
+                    lanes=[s for s, _ in sides],
+                    extra={"rounds": args.rounds, "reps": args.reps, "sizes": sizes, "instr_enabled": not args.no_instr,
+                           "pruv_checksum": "rchk per op (driver_m7), compared with hand16 per cell"})
+    with open(os.path.join(WORK, "perf.json"), "w") as f:
+        json.dump({"meta": meta, "rows": rows, "checksum_problems": bad,
+                   "result_checks": {"compared": n_cmp, "mismatches": n_bad,
+                                     "failed_cells": ["%s %d: %s" % (i, s_, t) for (i, s_), t in sorted(cell_status.items())]}},
+                  f, indent=1)
+    for b in bad:
+        print("CHK NONDETERMINISTIC", b)
+    for (i, s_), t in sorted(cell_status.items()):
+        print("FAIL %s %d: %s" % (i, s_, t))
+    print("result checks: %d cells compared, %d mismatches" % (n_cmp, n_bad))
+    return 1 if bad or n_bad else 0
 
 
-def instr_retired(cmd):
-    """Instructions retired by one run of cmd (`/usr/bin/time -l`, macOS)."""
+def instr_retired(cmd, soft=False):
+    """Instructions retired by one run of cmd (`/usr/bin/time -l`, macOS). soft: None instead of exiting when the run
+    fails or the counter line is missing."""
     r = subprocess.run(["/usr/bin/time", "-l"] + cmd, capture_output=True, text=True, cwd=HERE)
     if r.returncode != 0:
+        if soft:
+            return None
         sys.exit("%s failed:\n%s" % (cmd[0], r.stderr[-2000:]))
     for l in r.stderr.splitlines():
         if "instructions retired" in l:
             return int(l.split()[0])
+    if soft:
+        return None
     sys.exit("no instruction count from /usr/bin/time -l")
 
 
@@ -540,7 +692,7 @@ def cmd_boundary(args):
     closereopen which is per pair (2 calls per rep). Derived: A-B (wrapper), B-C (packed checks incl. valid),
     B-Bnv (validation only, separate: not part of B-C's decomposition)."""
     exe = build(args)
-    sizes = [int(x) for x in args.sizes.split(",")]
+    sizes = list(PROFILES[args.profile]) if args.profile else [int(x) for x in (args.sizes or "100,500").split(",")]
     combos = [(i, B_VARS) for i in B_ITEMS] + [("noop", ["A", "B"])]
     ns, al, ck = {}, {}, {}
     for rd in range(args.rounds):
@@ -621,15 +773,19 @@ def cmd_boundary(args):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["q", "perf", "derive", "same", "boundary"])
-    ap.add_argument("--sizes", default="100,500")
+    ap.add_argument("--sizes", default=None)  # perf: 100,500,1000; boundary: 100,500
+    ap.add_argument("--profile", choices=sorted(PROFILES), default=None, help="perf/boundary sizes: S=100, M=500, SM")
     ap.add_argument("--no-instr", action="store_true")
+    ap.add_argument("--hand16", action="store_true", help="q: run hand_m7_u16 instead of the Pruv driver")
     ap.add_argument("--pruvc", default=PRUVC_DEFAULT)
     ap.add_argument("--py", action="store_true")
-    ap.add_argument("--cases", default=os.path.join(WORK, "cases.jsonl"))
-    ap.add_argument("--oracle", default=os.path.join(WORK, "oracle.jsonl"))
+    ap.add_argument("--cases", default=None)  # default work/m7/cases.jsonl, else SRC_WORK
+    ap.add_argument("--oracle", default=None)
     ap.add_argument("--rounds", type=int, default=None)  # perf 5, boundary 7
     ap.add_argument("--reps", type=int, default=200000)
     a = ap.parse_args()
+    a.cases = a.cases or input_path("cases.jsonl")
+    a.oracle = a.oracle or input_path("oracle.jsonl")
     if a.rounds is None:
         a.rounds = 7 if a.cmd == "boundary" else 5
     sys.exit({"q": cmd_q, "perf": cmd_perf, "derive": cmd_derive, "same": cmd_same, "boundary": cmd_boundary}[a.cmd](a))

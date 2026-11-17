@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """L3-10 M8 runner: activity accounting of the request budget (bud_charge.pruv, bud_tools.pruv) against the TS oracle.
 
-  python3 bench/l3/budget/m8_test/run_m8.py q    [--pruvc PATH | --gen GEN.rs] [--cases F] [--oracle F] [--hand16]
+  python3 bench/l3/budget/m8_test/run_m8.py q    [--pruvc PATH | --gen GEN.rs] [--cases F] [--oracle F] [--hand16 | --hand NAME]
   python3 bench/l3/budget/m8_test/run_m8.py derive  (writes work/m8/cases_acct.jsonl + oracle_acct.jsonl)
-  python3 bench/l3/budget/m8_test/run_m8.py perf [--pruvc PATH | --gen GEN.rs] [--rounds N] [--reps N] [--no-instr] [--sizes 100,500,1000]
+  python3 bench/l3/budget/m8_test/run_m8.py perf [--pruvc PATH | --gen GEN.rs] [--rounds N] [--reps N] [--no-instr]
+                                                 [--sizes 100,500 | --profile S|M|SM]
+perf lanes: pruv, hand16, hand16w, fxmix, fxmixw, oa, oaw, hand (old), ts (see cmd_perf); writes work/m8/perf_meta.json.
 
 q: converts each Q2 case (work/m8/cases.jsonl) into the driver program, runs it, and compares with the oracle output
 (work/m8/oracle.jsonl). Compared per call: the return value of every charge ({ok} / {ok:false, reason}) and that the
@@ -38,6 +40,7 @@ OUT_OF_SCOPE = ("reopen", "halt", "current", "isHalted", "hasCard")
 HALT_CHECKED = [0]
 CHK_OK = [0]
 CALLS = {}
+BUILDS = {}  # binary name -> the rustc argv that built it in this run (recorded into the perf meta)
 
 
 def rustc():
@@ -59,21 +62,43 @@ def build(args):
         f.write('#![allow(dead_code, unused_imports, unused_variables, unused_mut)]\n#[path = "gen.rs"] mod sol;\n')
         f.write(open(os.path.join(HERE, "driver_m8.rs")).read())
     exe = os.path.join(WORK, "driver_m8")
-    c = subprocess.run([rustc(), "-C", "opt-level=3", "--edition", "2021", "-o", exe, main], capture_output=True,
-                       text=True)
+    argv = [rustc(), "-C", "opt-level=3", "--edition", "2021", "-o", exe, main]
+    c = subprocess.run(argv, capture_output=True, text=True)
     if c.returncode != 0:
         sys.exit("rustc failed:\n" + c.stderr[-4000:])
+    BUILDS[os.path.basename(exe)] = argv
     return exe
 
 
+# Hand baselines: binary name -> (source file in m8_test, extra rustc flags). hand_m8_fx is hand_m8_u16.rs built with
+# --cfg fxmix (Fx-style hasher + murmur3 fmix64 finalizer instead of SipHash).
+HANDS = {
+    "hand_m8": ("hand_m8.rs", []),
+    "hand_m8_u16": ("hand_m8_u16.rs", []),
+    "hand_m8_fx": ("hand_m8_u16.rs", ["--cfg", "fxmix"]),
+    "hand_m8_oa": ("hand_m8_oa.rs", []),
+}
+HAND_ALIAS = {"hand16": "hand_m8_u16", "fxmix": "hand_m8_fx", "oa": "hand_m8_oa", "hand": "hand_m8"}
+
+
+def hand_name(name):
+    name = HAND_ALIAS.get(name, name)
+    if name not in HANDS:
+        sys.exit("unknown hand %r (known: %s)" % (name, ", ".join(sorted(HANDS))))
+    return name
+
+
 def build_hand(name):
-    """Compiles bench/l3/budget/m8_test/<name>.rs (a standalone hand-written Rust baseline) into work/m8/<name>."""
+    """Compiles the hand baseline <name> (see HANDS) into work/m8/<name> and returns the path."""
+    name = hand_name(name)
+    src, extra = HANDS[name]
     os.makedirs(WORK, exist_ok=True)
     exe = os.path.join(WORK, name)
-    c = subprocess.run([rustc(), "-C", "opt-level=3", "--edition", "2021", "-o", exe, os.path.join(HERE, name + ".rs")],
-                       capture_output=True, text=True)
+    argv = [rustc(), "-C", "opt-level=3", "--edition", "2021"] + extra + ["-o", exe, os.path.join(HERE, src)]
+    c = subprocess.run(argv, capture_output=True, text=True)
     if c.returncode != 0:
         sys.exit("rustc failed (%s):\n%s" % (name, c.stderr[-3000:]))
+    BUILDS[name] = argv
     return exe
 
 
@@ -321,7 +346,8 @@ def classify(case, o, run, steps, cut):
 def cmd_q(args):
     # --hand16: run the hand-written UTF-16 Rust baseline (hand_m8_u16.rs q mode) instead of the Pruv driver; the
     # comparison / classification below is the same, so mismatches vs the oracle are counted the same way.
-    exe = build_hand("hand_m8_u16") if args.hand16 else build(args)
+    hand = "hand_m8_u16" if args.hand16 else args.hand
+    exe = build_hand(hand) if hand else build(args)
     cases = [json.loads(l) for l in open(args.cases)]
     oracle = {}
     for l in open(args.oracle):
@@ -380,14 +406,22 @@ def cmd_derive(args):
 
 
 def instr_retired(cmd, env):
-    """Instructions retired by one run of cmd (`/usr/bin/time -l`, macOS)."""
-    r = subprocess.run(["/usr/bin/time", "-l"] + cmd, capture_output=True, text=True, env=env, cwd=HERE)
+    """Instructions retired by one run of cmd (`/usr/bin/time -l`, macOS); None when the counter could not be read
+    (the report prints 'unavailable', never 0). A failing command still aborts."""
+    try:
+        r = subprocess.run(["/usr/bin/time", "-l"] + cmd, capture_output=True, text=True, env=env, cwd=HERE)
+    except OSError:
+        return None
     if r.returncode != 0:
         sys.exit("%s failed:\n%s" % (cmd[0], r.stderr[-2000:]))
     for l in r.stderr.splitlines():
         if "instructions retired" in l:
-            return int(l.split()[0])
-    sys.exit("no instruction count from /usr/bin/time -l")
+            try:
+                v = int(l.split()[0])
+            except ValueError:
+                return None
+            return v if v > 0 else None  # a zero counter is a failed read, not a measurement
+    return None
 
 
 def calls_of(item, size, reps):
@@ -395,26 +429,41 @@ def calls_of(item, size, reps):
 
 
 ITEMS = ("charge", "failure", "tooldup", "toolgrow")
+CHK_LANES = ["pruv", "hand16", "hand16w", "fxmix", "fxmixw", "oa", "oaw"]  # lanes that print chk lines
 
 
 def cmd_perf(args):
-    """Wall time: Pruv / hand Rust / TS runs alternate per round and size, and the side order rotates every round;
-    prints the median ns per call of each item. Pruv and hand16 also print `chk <item> <size> <value>` (the full
-    observed final state folded into a u64); the same size and reps go to every side and a chk difference between
-    Pruv and hand16 aborts the run. Instructions (Pruv and hand, unless --no-instr): one item per run
-    (the drivers' item argument), retired-instruction difference between --reps and 5 x --reps, divided by the extra
-    calls; median of 3. The instruction count does not depend on machine load."""
+    """Wall time: every lane runs once per round and size, and the lane order rotates every round; prints the median ns
+    per call of each item. Lanes (LANES): pruv = driver_m8 (i64 op words, frame parsed per call); hand16 / fxmix / oa =
+    the three hand implementations with pre-decoded keys (UNMATCHED boundary); hand16w / fxmixw / oaw = the same with
+    the matched wire boundary (`perfw`: the driver's i64 op words, frame checks and u16::try_from per unit into a
+    reused scratch buffer); hand = hand_m8 (old UTF-8 String keys, informational); ts = the TS oracle. Every lane except
+    hand and ts also prints `chk <item> <size> <value>` (the full observed final state folded into a u64); the same size
+    and reps go to every lane and any chk difference from Pruv aborts the run. Instructions (every lane except ts,
+    unless --no-instr): one item per run (the drivers' item argument), retired-instruction difference between --reps
+    and 5 x --reps, divided by the extra calls; median of 3. The instruction count does not depend on machine load. A
+    counter that could not be read is reported as 'unavailable', never 0. Sizes: --profile S|M|SM (run_meta.PROFILES)
+    or --sizes. run_meta(...) is written to work/m8/perf_meta.json."""
     sys.path.insert(0, BUD)
     from common import NODE, TS_ENV
+    from run_meta import run_meta, UNAVAILABLE, PROFILES, RUSTC_FLAGS
     exe = build(args)
     hand = build_hand("hand_m8")
     hand16 = build_hand("hand_m8_u16")
+    fx = build_hand("hand_m8_fx")
+    oa = build_hand("hand_m8_oa")
     env = dict(os.environ)
     env.update(TS_ENV())
     ts = [NODE, "--experimental-strip-types", "--no-warnings", "--import", os.path.join(BUD, "reference-hooks.mjs"),
           os.path.join(HERE, "perf_ts.mjs")]
-    sides = [("pruv", [exe, "perf"]), ("hand16", [hand16, "perf"]), ("hand", [hand]), ("ts", ts)]
-    sizes = tuple(int(x) for x in args.sizes.split(","))
+    sides = [("pruv", [exe, "perf"]), ("hand16", [hand16, "perf"]), ("hand16w", [hand16, "perfw"]),
+             ("fxmix", [fx, "perf"]), ("fxmixw", [fx, "perfw"]), ("oa", [oa, "perf"]), ("oaw", [oa, "perfw"]),
+             ("hand", [hand]), ("ts", ts)]
+    lanes = [s for s, _ in sides]
+    if args.profile:
+        sizes = PROFILES[args.profile]
+    else:
+        sizes = tuple(int(x) for x in args.sizes.split(","))
     res = {}
     for rd in range(args.rounds):
         k = rd % len(sides)
@@ -428,45 +477,86 @@ def cmd_perf(args):
                     sys.exit("%s perf failed:\n%s" % (side, r.stderr[-2000:]))
                 for l in r.stdout.splitlines():
                     f = l.split()
-                    if f[0] == "chk":  # chk <item> <size> <value>: full final-state checksum (pruv, hand16 only)
+                    if f[0] == "chk":  # chk <item> <size> <value>: full final-state checksum (every lane but hand, ts)
                         chks.setdefault(side, {})[(f[1], int(f[2]))] = f[3]
                         continue
                     item, sz, ns = f
                     res.setdefault((item, int(sz)), {}).setdefault(side, []).append(float(ns))
-            # the full observed final state must be identical between Pruv and the hand UTF-16 baseline
-            a, b = chks.get("pruv", {}), chks.get("hand16", {})
-            if not a or a.keys() != b.keys():
-                sys.exit("CHK MISMATCH (round %d, size %d, reps %d): item sets differ: pruv %r hand16 %r"
-                         % (rd, size, args.reps, sorted(a), sorted(b)))
-            for k in a:
-                if a[k] != b[k]:
-                    sys.exit("CHK MISMATCH (round %d, item %s, size %d, reps %d): pruv %s != hand16 %s"
-                             % (rd, k[0], k[1], args.reps, a[k], b[k]))
+            # the full observed final state must be identical between Pruv and every hand lane
+            a = chks.get("pruv", {})
+            if not a:
+                sys.exit("CHK MISMATCH (round %d, size %d, reps %d): pruv printed no chk" % (rd, size, args.reps))
+            for side in CHK_LANES[1:]:
+                b = chks.get(side, {})
+                if a.keys() != b.keys():
+                    sys.exit("CHK MISMATCH (round %d, size %d, reps %d): item sets differ: pruv %r %s %r"
+                             % (rd, size, args.reps, sorted(a), side, sorted(b)))
+                for k in a:
+                    if a[k] != b[k]:
+                        sys.exit("CHK MISMATCH (round %d, item %s, size %d, reps %d): pruv %s != %s %s"
+                                 % (rd, k[0], k[1], args.reps, a[k], side, b[k]))
             CHK_OK[0] += len(a)
-    ins = {}
+    ins = {}  # (item, size) -> lane -> instructions per call, or None (unavailable)
     if not args.no_instr:
         r1, r2 = args.reps, 5 * args.reps
         for size in sizes:
             for item in ITEMS:
-                for side, cmd in sides[:3]:  # pruv, hand16, hand
+                for side, cmd in sides:
+                    if side == "ts":
+                        continue
                     d = []
                     for _ in range(3):
                         lo = instr_retired(cmd + [str(size), str(r1), item], env)
                         hi = instr_retired(cmd + [str(size), str(r2), item], env)
+                        if lo is None or hi is None:
+                            d = None
+                            break
                         d.append((hi - lo) / (calls_of(item, size, r2) - calls_of(item, size, r1)))
-                    ins.setdefault((item, size), {})[side] = statistics.median(d)
-    print("chk: %d (item, size, round) checksums equal between Pruv and hand16 (hand / TS print no chk)" % CHK_OK[0])
-    print("item | size | Pruv ns | hand16 ns | hand(old) ns | TS ns | Pruv/hand16 (bar) | Pruv/hand (info) | Pruv/TS"
-          " | Pruv instr | hand16 instr | hand instr | instr Pruv/hand16 | instr Pruv/hand")
+                    ins.setdefault((item, size), {})[side] = statistics.median(d) if d else None
+
+    def fmt(x, f):
+        return UNAVAILABLE if x is None else f % x
+
+    def ratio(a, b):
+        return UNAVAILABLE if a is None or b is None or b <= 0 else "%.2f" % (a / b)
+
+    print("chk: %d (item, size, round) checksums equal between Pruv and each of %s (hand / TS print no chk)"
+          % (CHK_OK[0], ", ".join(CHK_LANES[1:])))
+    print("rounds %d, reps %d, sizes %s; Pruv/lane = Pruv / lane (>1.0x: Pruv is slower); w = matched wire boundary"
+          % (args.rounds, args.reps, ",".join(map(str, sizes))))
+    print("ns per call (median of rounds)")
+    print("item | size | " + " | ".join(l + " ns" for l in lanes) + " | " + " | ".join("Pruv/" + l for l in lanes[1:]))
+    ns_rows = {}
     for item in ITEMS:
         for sz in sizes:
             m = {k: statistics.median(x) for k, x in res[(item, sz)].items()}
+            ns_rows[(item, sz)] = m
+            print("%s | %d | %s | %s" % (item, sz, " | ".join(fmt(m.get(l), "%.1f") for l in lanes),
+                                          " | ".join(ratio(m.get("pruv"), m.get(l)) for l in lanes[1:])))
+    print("retired instructions per call (/usr/bin/time -l, difference of two rep counts)" +
+          (" -- skipped (--no-instr)" if args.no_instr else ""))
+    print("item | size | " + " | ".join(l + " instr" for l in lanes) + " | " +
+          " | ".join("Pruv/" + l for l in lanes[1:]))
+    for item in ITEMS:
+        for sz in sizes:
             i = ins.get((item, sz), {})
-            ir = ("%.0f | %.0f | %.0f | %.2f | %.2f" % (i["pruv"], i["hand16"], i["hand"], i["pruv"] / i["hand16"],
-                                                        i["pruv"] / i["hand"])) if i else "- | - | - | - | -"
-            print("%s | %d | %.1f | %.1f | %.1f | %.1f | %.2f | %.2f | %.2f | %s" % (
-                item, sz, m["pruv"], m["hand16"], m["hand"], m["ts"], m["pruv"] / m["hand16"], m["pruv"] / m["hand"],
-                m["pruv"] / m["ts"], ir))
+            print("%s | %d | %s | %s" % (item, sz, " | ".join(fmt(i.get(l), "%.0f") for l in lanes),
+                                          " | ".join(ratio(i.get("pruv"), i.get(l)) for l in lanes[1:])))
+    unavail = sorted("%s/%s/%d" % (l, it, sz) for (it, sz), d in ins.items() for l, v in d.items() if v is None)
+    if args.no_instr or not ins:
+        unavail = ["all (--no-instr)"]
+    meta = run_meta(pruvc=None if args.gen else args.pruvc, backend="rust", rustc=rustc(), flags=RUSTC_FLAGS,
+                    profile=args.profile or ("custom:" + ",".join(map(str, sizes))), lanes=lanes,
+                    extra={"sizes": list(sizes), "rounds": args.rounds, "reps": args.reps,
+                           "instr_unavailable": unavail or [],
+                           "lane_cmds": {s: [os.path.basename(c) for c in cmd[:2]] for s, cmd in sides[:-1]},
+                           "fxmix_extra_flags": HANDS["hand_m8_fx"][1], "chk_lanes": CHK_LANES,
+                           "chk_checked": CHK_OK[0], "builds": BUILDS})
+    os.makedirs(WORK, exist_ok=True)
+    with open(os.path.join(WORK, "perf_meta.json"), "w") as f:
+        json.dump(meta, f, indent=2, ensure_ascii=False)
+    print("run_meta written to %s" % os.path.join(WORK, "perf_meta.json"))
+    return 0
 
 
 def main():
@@ -479,7 +569,11 @@ def main():
     ap.add_argument("--rounds", type=int, default=7)
     ap.add_argument("--no-instr", action="store_true")
     ap.add_argument("--hand16", action="store_true", help="q: run hand_m8_u16 instead of the Pruv driver")
-    ap.add_argument("--sizes", default="100,500,1000", help="perf: comma-separated session counts")
+    ap.add_argument("--hand", help="q: run this hand baseline (hand_m8_u16 | hand_m8_fx | hand_m8_oa, or hand16 | "
+                    "fxmix | oa) instead of the Pruv driver")
+    ap.add_argument("--sizes", default="100,500", help="perf: comma-separated session counts")
+    ap.add_argument("--profile", choices=sorted(["S", "M", "SM"]), help="perf: size profile S=100 M=500 SM=100,500 "
+                    "(run_meta.PROFILES); overrides --sizes")
     ap.add_argument("--reps", type=int, default=200000)
     a = ap.parse_args()
     sys.exit({"q": cmd_q, "perf": cmd_perf, "derive": cmd_derive}[a.cmd](a))

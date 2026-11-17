@@ -2,11 +2,22 @@
 // (bud_charge.pruv + bud_tools.pruv + root_m8.pruv behind driver_m8.rs), replacing hand_m8.rs as the parity bar
 // (hand_m8.rs stays as an informational row: UTF-8 String keys, no safe-integer refusal).
 //
-//   hand_m8_u16 perf <N> <reps> [item]   prints `item size ns_per_call` and, after each item, `chk item size value`
+//   hand_m8_u16 perf  <N> <reps> [item]  prints `item size ns_per_call` and, after each item, `chk item size value`
 //                                        (same items/shapes as driver_m8.rs run_perf; chk = full observed state folded
-//                                        as s = s*31 + w, equal to driver_m8's)
+//                                        as s = s*31 + w, equal to driver_m8's). UNMATCHED boundary: keys are decoded
+//                                        to Box<[u16]> once outside the timed loop and the timed loop calls
+//                                        World::charge / note_failure / note_tool / forget_turn directly.
+//   hand_m8_u16 perfw <N> <reps> [item]  MATCHED wire boundary: the timed loop takes exactly the i64 op words that
+//                                        driver_m8.rs run_perf builds and does what a careful hand host must: frame
+//                                        checks (key spans, lengths), u16::try_from range check of every unit (status
+//                                        2 on failure) into a reused scratch Vec<u16> (no allocation per call after the
+//                                        first), then the same World methods. Same chk checksums.
 //   hand_m8_u16 q                        stdin program as driver_m8.rs run_q, byte-identical output lines (a rejected
-//                                        put prints `P X 2`, state unchanged, the case continues)
+//                                        put prints `P X 2`, state unchanged, the case continues). q mode runs through
+//                                        the same call_wire as perfw, so the malformed-frame controls test it.
+//
+// Hasher option (cargo-free): `rustc --cfg fxmix ...` swaps the std SipHash for an Fx-style multiply-rotate hasher
+// with a murmur3 fmix64 finalizer (plain Rust, no crates). Same semantics, same code otherwise (built as hand_m8_fx).
 //
 // Differences from hand_m8.rs:
 //  * keys (sessionId, budgetId, turnId, activityId) are UTF-16 code units: Box<[u16]> in HashMaps with the std default
@@ -23,6 +34,70 @@ use std::collections::HashMap;
 use std::hint::black_box;
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
+
+#[cfg(fxmix)]
+mod hs {
+    use std::hash::{BuildHasherDefault, Hasher};
+
+    const K: u64 = 0x517c_c1b7_2722_0a95; // FxHash multiplier
+
+    #[derive(Default)]
+    pub struct FxMix {
+        h: u64,
+    }
+
+    impl FxMix {
+        #[inline(always)]
+        fn add(&mut self, w: u64) {
+            self.h = (self.h.rotate_left(5) ^ w).wrapping_mul(K);
+        }
+    }
+
+    // murmur3 fmix64
+    #[inline(always)]
+    fn fmix64(mut k: u64) -> u64 {
+        k ^= k >> 33;
+        k = k.wrapping_mul(0xff51_afd7_ed55_8ccd);
+        k ^= k >> 33;
+        k = k.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+        k ^ (k >> 33)
+    }
+
+    impl Hasher for FxMix {
+        #[inline]
+        fn write(&mut self, bytes: &[u8]) {
+            let mut c = bytes.chunks_exact(8);
+            for ch in &mut c {
+                let mut b = [0u8; 8];
+                b.copy_from_slice(ch);
+                self.add(u64::from_le_bytes(b));
+            }
+            let r = c.remainder();
+            if !r.is_empty() {
+                let mut b = [0u8; 8];
+                b[..r.len()].copy_from_slice(r);
+                self.add(u64::from_le_bytes(b));
+            }
+        }
+        #[inline]
+        fn write_usize(&mut self, i: usize) {
+            self.add(i as u64);
+        }
+        #[inline]
+        fn finish(&self) -> u64 {
+            fmix64(self.h)
+        }
+    }
+
+    pub type Hs = BuildHasherDefault<FxMix>;
+}
+
+#[cfg(not(fxmix))]
+mod hs {
+    pub type Hs = std::collections::hash_map::RandomState;
+}
+
+type Map<K, V> = HashMap<K, V, hs::Hs>;
 
 // ---- safe-integer arithmetic (bud_charge.pruv `sum`) ----
 
@@ -143,19 +218,19 @@ struct ResourceBound;
 // Per-turn activity set: activity -> insertion index inside the turn; `seq` = insertion index of the turn.
 struct Turn {
     seq: u64,
-    acts: HashMap<Box<[u16]>, u32>,
+    acts: Map<Box<[u16]>, u32>,
 }
 
 struct World {
-    sessions: HashMap<Box<[u16]>, Slot>,
+    sessions: Map<Box<[u16]>, Slot>,
     session_order: Vec<Box<[u16]>>,
-    turns: HashMap<Box<[u16]>, Turn>,
+    turns: Map<Box<[u16]>, Turn>,
     next_turn: u64,
 }
 
 impl World {
     fn new() -> World {
-        World { sessions: HashMap::new(), session_order: Vec::new(), turns: HashMap::new(), next_turn: 0 }
+        World { sessions: Default::default(), session_order: Vec::new(), turns: Default::default(), next_turn: 0 }
     }
 
     // session put: a new key is appended, an existing key keeps its position.
@@ -233,7 +308,7 @@ impl World {
         let inserted = match self.turns.get_mut(turn) {
             Some(t) => t.add(act),
             None => {
-                let mut t = Turn { seq: self.next_turn, acts: HashMap::new() };
+                let mut t = Turn { seq: self.next_turn, acts: Default::default() };
                 self.next_turn += 1;
                 t.add(act);
                 self.turns.insert(turn.into(), t);
@@ -304,18 +379,147 @@ impl Turn {
     }
 }
 
-// ---- q mode: the driver_m8.rs program protocol ----
+// ---- wire boundary: the driver_m8.rs / root_m8.pruv t_call frame protocol ----
 
 const FX_LEN: usize = 256; // driver_m8.rs World::new: fx = 256 words
 
-enum Op {
-    Charge { frame: Vec<i64>, session: Vec<u16>, budget: Vec<u16>, what: What },
-    Failure { session: Vec<u16>, budget: Vec<u16> },
-    Tool { session: Vec<u16>, budget: Vec<u16>, turn: Vec<u16>, act: Vec<u16> },
-    Forget { turn: Vec<u16> },
+// What t_call leaves in fx: `r` = the charge status (fx[1]); for status 6 `k` = the limit key and `e2` = the end of the
+// ref frame (the halt frame is [20, k, op[1..e2]]).
+struct Fr {
+    r: i64,
+    k: i64,
+    e2: usize,
 }
 
-// root_m8.pruv key_end: the end of the key `len, units...` at p (length within op, every unit in 0..65535)
+// root_m8.pruv key_span: the end of the key `len, units...` at p (the length word fits inside op). Units are NOT
+// checked here: the conversion to u16 below is the range check.
+#[inline]
+fn key_span(op: &[i64], p: usize) -> Option<usize> {
+    if p >= op.len() {
+        return None;
+    }
+    let kn = op[p];
+    if kn < 0 || kn as u64 > (op.len() - p - 1) as u64 {
+        return None;
+    }
+    Some(p + 1 + kn as usize)
+}
+
+// Converts the words to u16 units appended to the scratch buffer; false when a unit is outside 0..=65535.
+#[inline]
+fn push_units(sc: &mut Vec<u16>, w: &[i64]) -> bool {
+    // One branch-free range check over the key (vectorizes), then one bulk narrowing copy: no per-unit try_from or
+    // push capacity check on the wire path.
+    if !w.iter().fold(true, |ok, &u| ok & ((u as u64) < 65536)) {
+        return false;
+    }
+    sc.extend(w.iter().map(|&u| u as u16));
+    true
+}
+
+fn what_of(w: &[i64]) -> What {
+    let amount = |k: usize| if w[2 * k] == 2 { Some(w[2 * k + 1]) } else { None };
+    What { counts: [amount(0), amount(1), amount(2), amount(3)], retries: amount(4) }
+}
+
+impl World {
+    // One call on the wire words, status as Pruv's t_call returns it: 0 done, 2 invalid input, 3 halt frame does not
+    // fit fx, 5 ResourceBound, 6 halt dispatch (over-limit charge). `sc` is the reused scratch buffer of converted
+    // units: it is cleared, never shrunk, so a call allocates only while the buffer is still growing.
+    fn call_wire(&mut self, op: &[i64], sc: &mut Vec<u16>, fr: &mut Fr) -> i64 {
+        if op.len() < 2 {
+            return 2;
+        }
+        sc.clear();
+        let code = op[0];
+        let Some(e1) = key_span(op, 1) else {
+            return 2;
+        };
+        if code == 4 {
+            if e1 != op.len() || !push_units(sc, &op[2..e1]) {
+                return 2;
+            }
+            self.forget_turn(sc);
+            return 0;
+        }
+        let Some(e2) = key_span(op, e1) else {
+            return 2;
+        };
+        if !push_units(sc, &op[2..e1]) || !push_units(sc, &op[e1 + 1..e2]) {
+            return 2;
+        }
+        let sn = e1 - 2;
+        match code {
+            1 => {
+                if e2 + 10 != op.len() {
+                    return 2;
+                }
+                let what = what_of(&op[e2..e2 + 10]);
+                let (s, b) = sc.split_at(sn);
+                match self.charge(s, b, &what) {
+                    Charge::Ok => {
+                        fr.r = 0;
+                        0
+                    }
+                    Charge::Nothing => {
+                        fr.r = 1;
+                        0
+                    }
+                    Charge::Halted(r) => {
+                        fr.r = 16 + r as i64;
+                        0
+                    }
+                    Charge::ResourceBound => 5,
+                    Charge::OverLimit(k) => {
+                        fr.k = k as i64;
+                        fr.e2 = e2;
+                        if FX_LEN < e2 + 3 {
+                            3
+                        } else {
+                            6
+                        }
+                    }
+                }
+            }
+            2 => {
+                if e2 != op.len() {
+                    return 2;
+                }
+                let (s, b) = sc.split_at(sn);
+                if self.note_failure(s, b).is_err() {
+                    return 5;
+                }
+                0
+            }
+            3 => {
+                let Some(e3) = key_span(op, e2) else {
+                    return 2;
+                };
+                if key_span(op, e3) != Some(op.len()) {
+                    return 2;
+                }
+                if !push_units(sc, &op[e2 + 1..e3]) || !push_units(sc, &op[e3 + 1..]) {
+                    return 2;
+                }
+                let bn = e2 - e1 - 1;
+                let tn = e3 - e2 - 1;
+                let (s, rest) = sc.split_at(sn);
+                let (b, rest) = rest.split_at(bn);
+                let (t, a) = rest.split_at(tn);
+                if self.note_tool(s, b, t, a).is_err() {
+                    return 5;
+                }
+                0
+            }
+            _ => 2,
+        }
+    }
+}
+
+// ---- q mode: the driver_m8.rs program protocol ----
+
+// root_m8.pruv key_end: the end of the key `len, units...` at p (length within op, every unit in 0..65535); used by the
+// put framing only (calls go through call_wire).
 fn key_end(op: &[i64], p: usize) -> Option<usize> {
     let n = op.len();
     if p >= n {
@@ -336,101 +540,29 @@ fn units(w: &[i64]) -> Result<Vec<u16>, i64> {
     w.iter().map(|&u| u16::try_from(u).map_err(|_| 2)).collect()
 }
 
-fn what_of(w: &[i64]) -> What {
-    let amount = |k: usize| if w[2 * k] == 2 { Some(w[2 * k + 1]) } else { None };
-    What { counts: [amount(0), amount(1), amount(2), amount(3)], retries: amount(4) }
-}
-
-// t_call frame checks (root_m8.pruv t_call); Err = status 2
-fn decode(op: &[i64]) -> Result<Op, i64> {
-    if op.len() < 2 {
-        return Err(2);
-    }
-    let code = op[0];
-    let e1 = key_end(op, 1).ok_or(2)?;
-    if code == 4 {
-        if e1 != op.len() {
-            return Err(2);
-        }
-        return Ok(Op::Forget { turn: units(&op[2..e1])? });
-    }
-    let e2 = key_end(op, e1).ok_or(2)?;
-    let session = units(&op[2..e1])?;
-    let budget = units(&op[e1 + 1..e2])?;
-    match code {
-        1 => {
-            if e2 + 10 != op.len() {
-                return Err(2);
-            }
-            Ok(Op::Charge { frame: op[1..e2].to_vec(), session, budget, what: what_of(&op[e2..e2 + 10]) })
-        }
-        2 => {
-            if e2 != op.len() {
-                return Err(2);
-            }
-            Ok(Op::Failure { session, budget })
-        }
-        3 => {
-            let e3 = key_end(op, e2).ok_or(2)?;
-            if key_end(op, e3) != Some(op.len()) {
-                return Err(2);
-            }
-            Ok(Op::Tool { session, budget, turn: units(&op[e2 + 1..e3])?, act: units(&op[e3 + 1..])? })
-        }
-        _ => Err(2),
-    }
-}
-
 // What the driver prints for one call.
-fn run_call(w: &mut World, words: &[i64], o: &mut impl Write) -> bool {
+fn run_call(w: &mut World, words: &[i64], sc: &mut Vec<u16>, o: &mut impl Write) -> bool {
     // returns true when the case stops
-    let op = match decode(words) {
-        Ok(op) => op,
-        Err(s) => {
+    let mut fr = Fr { r: 0, k: 0, e2: 0 };
+    match w.call_wire(words, sc, &mut fr) {
+        0 => {
+            if words[0] == 1 {
+                writeln!(o, "R {}", fr.r).unwrap();
+            } else {
+                writeln!(o, "R -").unwrap();
+            }
+            false
+        }
+        6 => {
+            let f: Vec<String> = [20, fr.k].iter().chain(words[1..fr.e2].iter()).map(|x| x.to_string()).collect();
+            writeln!(o, "H {}", f.join(" ")).unwrap();
+            true
+        }
+        s => {
             writeln!(o, "X {}", s).unwrap();
-            return true;
-        }
-    };
-    match op {
-        Op::Charge { frame, session, budget, what } => match w.charge(&session, &budget, &what) {
-            Charge::Ok => writeln!(o, "R 0").unwrap(),
-            Charge::Nothing => writeln!(o, "R 1").unwrap(),
-            Charge::Halted(r) => writeln!(o, "R {}", 16 + r).unwrap(),
-            Charge::ResourceBound => {
-                writeln!(o, "X 5").unwrap();
-                return true;
-            }
-            Charge::OverLimit(k) => {
-                // halt frame [20, k, sessionId key, budgetId key] must fit fx (status 3 otherwise)
-                if FX_LEN < frame.len() + 1 + 3 {
-                    writeln!(o, "X 3").unwrap();
-                } else {
-                    let f: Vec<String> = [20, k as i64].iter().chain(frame.iter()).map(|x| x.to_string()).collect();
-                    writeln!(o, "H {}", f.join(" ")).unwrap();
-                }
-                return true;
-            }
-        },
-        Op::Failure { session, budget } => {
-            if w.note_failure(&session, &budget).is_err() {
-                writeln!(o, "X 5").unwrap();
-                return true;
-            }
-            writeln!(o, "R -").unwrap();
-        }
-        Op::Tool { session, budget, turn, act } => {
-            if w.note_tool(&session, &budget, &turn, &act).is_err() {
-                writeln!(o, "X 5").unwrap();
-                return true;
-            }
-            writeln!(o, "R -").unwrap();
-        }
-        Op::Forget { turn } => {
-            w.forget_turn(&turn);
-            writeln!(o, "R -").unwrap();
+            true
         }
     }
-    false
 }
 
 fn nums(it: &[&str]) -> Vec<i64> {
@@ -467,6 +599,7 @@ fn run_q() {
     let stdout = io::stdout();
     let mut o = io::BufWriter::new(stdout.lock());
     let mut w = World::new();
+    let mut sc: Vec<u16> = Vec::new();
     let mut stopped = false;
     for line in stdin.lock().lines() {
         let line = line.unwrap();
@@ -493,7 +626,7 @@ fn run_q() {
             }
             "call" if !stopped => {
                 let op = nums(&p[1..]);
-                stopped = run_call(&mut w, &op, &mut o);
+                stopped = run_call(&mut w, &op, &mut sc, &mut o);
             }
             "call" => {}
             "end" => {
@@ -519,8 +652,8 @@ fn bid_of(i: usize) -> String {
     format!("99b568f7-0000-4000-8000-{:012}", i)
 }
 
-// Retained UTF-16 keys, encoded once at setup. The Pruv driver also prepares its ops (key words) once at setup and
-// does not re-encode per call; per call it decodes the frame, which the hand version has no counterpart of.
+// Retained UTF-16 keys, encoded once at setup (the UNMATCHED boundary: the Pruv driver also prepares its op words once
+// at setup, but per call it parses and validates the frame, which `perf` has no counterpart of; see perfw).
 struct Ref {
     session: Box<[u16]>,
     budget: Box<[u16]>,
@@ -621,10 +754,132 @@ fn run_perf(args: &[String]) {
     black_box(&w.sessions);
 }
 
+// ---- perfw: matched wire boundary (same op words as driver_m8.rs run_perf) ----
+
+fn key_words(s: &str) -> Vec<i64> {
+    let mut v = vec![s.encode_utf16().count() as i64];
+    v.extend(s.encode_utf16().map(|u| u as i64));
+    v
+}
+
+fn ref_words(i: usize) -> Vec<i64> {
+    let mut v = key_words(&format!("session-{:05}", i));
+    v.extend(key_words(&bid_of(i)));
+    v
+}
+
+// N sessions put through the same ingress words as driver_m8.rs world_n (open budget, limits 10^12).
+fn world_wire(n: usize) -> World {
+    let mut w = World::new();
+    for i in 0..n {
+        let mut put = key_words(&format!("session-{:05}", i));
+        let mut rec = vec![0i64, 0, -1];
+        rec.extend_from_slice(&[1_000_000_000_000i64; 4]);
+        rec.extend_from_slice(&[0i64; 7]);
+        rec.extend(key_words(&bid_of(i)));
+        put.push(rec.len() as i64);
+        put.extend(rec);
+        if put_words(&mut w, &put) != 0 {
+            eprintln!("put rejected");
+            std::process::exit(2);
+        }
+    }
+    w
+}
+
+fn run_perfw(args: &[String]) {
+    let n: usize = args[0].parse().unwrap();
+    let reps: usize = args[1].parse().unwrap();
+    let only = args.get(2).map(|s| s.as_str());
+    let on = |item: &str| only.map_or(true, |o| o == item);
+    let mut w = world_wire(n);
+    let mut sc: Vec<u16> = Vec::with_capacity(64);
+    let mut fr = Fr { r: 0, k: 0, e2: 0 };
+    let ops: Vec<Vec<i64>> = (0..n)
+        .map(|i| {
+            let mut op = vec![1];
+            op.extend(ref_words(i));
+            op.extend_from_slice(&[0, 0, 2, 1, 0, 0, 0, 0, 2, 1]);
+            op
+        })
+        .collect();
+    for i in 0..1000 {
+        w.call_wire(&ops[i % n], &mut sc, &mut fr);
+    }
+    if on("charge") {
+        let t = Instant::now();
+        for i in 0..reps {
+            black_box(w.call_wire(black_box(&ops[i % n]), &mut sc, &mut fr));
+        }
+        let ns = t.elapsed().as_nanos() as f64 / reps as f64;
+        println!("charge {} {:.1}", n, ns);
+        println!("chk charge {} {}", n, w.checksum());
+    }
+    let fo: Vec<Vec<i64>> = (0..n)
+        .map(|i| {
+            let mut op = vec![2];
+            op.extend(ref_words(i));
+            op
+        })
+        .collect();
+    if on("failure") {
+        let t = Instant::now();
+        for i in 0..reps {
+            black_box(w.call_wire(black_box(&fo[i % n]), &mut sc, &mut fr));
+        }
+        let ns = t.elapsed().as_nanos() as f64 / reps as f64;
+        println!("failure {} {:.1}", n, ns);
+        println!("chk failure {} {}", n, w.checksum());
+    }
+    let tool = |turn: &str, j: usize| -> Vec<i64> {
+        let mut op = vec![3];
+        op.extend(ref_words(0));
+        op.extend(key_words(turn));
+        op.extend(key_words(&format!("activity-{:05}", j)));
+        op
+    };
+    let dup: Vec<Vec<i64>> = (0..n).map(|j| tool("turn-1", j)).collect();
+    for d in &dup {
+        w.call_wire(d, &mut sc, &mut fr);
+    }
+    if on("tooldup") {
+        let t = Instant::now();
+        for i in 0..reps {
+            black_box(w.call_wire(black_box(&dup[i % n]), &mut sc, &mut fr));
+        }
+        let ns = t.elapsed().as_nanos() as f64 / reps as f64;
+        println!("tooldup {} {:.1}", n, ns);
+        println!("chk tooldup {} {}", n, w.checksum());
+    }
+    let grow: Vec<Vec<i64>> = (0..n).map(|j| tool("turn-2", j)).collect();
+    let mut forget = vec![4];
+    forget.extend(key_words("turn-2"));
+    for d in &grow {
+        w.call_wire(d, &mut sc, &mut fr);
+    }
+    w.call_wire(&forget, &mut sc, &mut fr);
+    if on("toolgrow") {
+        let rounds = std::cmp::max(1, reps / n);
+        let t = Instant::now();
+        for _ in 0..rounds {
+            for d in &grow {
+                black_box(w.call_wire(black_box(d), &mut sc, &mut fr));
+            }
+            black_box(w.call_wire(black_box(&forget), &mut sc, &mut fr));
+        }
+        let ns = t.elapsed().as_nanos() as f64 / (rounds * n) as f64;
+        println!("toolgrow {} {:.1}", n, ns);
+        println!("chk toolgrow {} {}", n, w.checksum());
+    }
+    black_box(&w.sessions);
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 && args[1] == "perf" {
         run_perf(&args[2..]);
+    } else if args.len() > 1 && args[1] == "perfw" {
+        run_perfw(&args[2..]);
     } else {
         run_q();
     }

@@ -17,10 +17,12 @@ present) followed by charge, noteFailure, noteTool on that ref, a valid put on t
 byte equality of the two sides, each control has an EXPECTED Pruv log (malformed put -> `P X 2`, state unchanged;
 malformed call key -> `X 2`). Policy (ABI.md, REQUEST_BUDGET_SPEC section 12): malformed host input is InvalidInput.
 
-  python3 bench/l3/budget/m8_test/diff_hand16.py [--count 300] [--seed 20261117]
+  python3 bench/l3/budget/m8_test/diff_hand16.py [--count 300] [--seed 20261117] [--hand hand_m8_u16]
+--hand names the hand baseline diffed against the Pruv driver: hand_m8_u16 (default, alias hand16), hand_m8_fx (fxmix),
+hand_m8_oa (oa); it is (re)built with run_m8.build_hand before the run. The Pruv side is work/m8/driver_m8 from
+`run_m8.py q`. The same 300 random cases and 69 malformed controls run for every hand.
 Prints: random cases + mismatches; malformed controls + mismatches between sides + expectation failures; the outcome
 tally (R / H / X 5 / X 2 / X 3 / P X). Exit status 1 on any mismatch or expectation failure.
-(needs work/m8/driver_m8 from `run_m8.py q` and work/m8/hand_m8_u16 from `run_m8.py q --hand16`)
 """
 import argparse
 import os
@@ -215,7 +217,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--count", type=int, default=300)
     ap.add_argument("--seed", type=int, default=20261117)
+    ap.add_argument("--hand", default="hand_m8_u16", help="hand baseline: hand_m8_u16 | hand_m8_fx | hand_m8_oa")
     a = ap.parse_args()
+    sys.path.insert(0, HERE)
+    import run_m8
+    hand = run_m8.hand_name(a.hand)
+    run_m8.build_hand(hand)
     rng = random.Random(a.seed)
     prog = []
     for c in range(a.count):
@@ -225,7 +232,7 @@ def main():
         prog += ["case %d" % (a.count + i)] + lines
     text = "\n".join(prog) + "\n"
     outs = []
-    for exe in ("driver_m8", "hand_m8_u16"):
+    for exe in ("driver_m8", hand):
         r = subprocess.run([os.path.join(WORK, exe)], input=text, capture_output=True, text=True)
         if r.returncode != 0:
             sys.exit("%s failed rc %d: %s" % (exe, r.returncode, r.stderr[-1000:]))
@@ -245,19 +252,20 @@ def main():
             expect_fail.append((i, name, exp, log))
     lines = outs[0].splitlines()
     tally = {t: sum(1 for l in lines if l.startswith(t)) for t in ("R ", "H ", "X 5", "X 2", "X 3", "P X")}
+    print("hand: %s" % hand)
     print("random cases %d, mismatching cases %d" % (a.count, len(bad_rand)))
     print("malformed controls %d, mismatches between sides %d, expectation failures %d"
           % (len(ctl), len(bad_ctl), len(expect_fail)))
     print("outcome lines (Pruv) %s" % tally)
     for i in bad_rand[:5]:
-        print("--- random case", i, "\npruv:", pairs[i][0][:600], "\nhand16:", pairs[i][1][:600])
+        print("--- random case", i, "\npruv:", pairs[i][0][:600], "\n%s:" % hand, pairs[i][1][:600])
     for i in bad_ctl[:5]:
-        print("--- control", i, ctl[i][0], "\npruv:", pairs[a.count + i][0][:600], "\nhand16:",
+        print("--- control", i, ctl[i][0], "\npruv:", pairs[a.count + i][0][:600], "\n%s:" % hand,
               pairs[a.count + i][1][:600])
     for i, name, exp, log in expect_fail[:5]:
         print("--- expectation", i, name, "\nexpected:", exp, "\npruv log:", log)
     if count_bad:
-        print("case count differs: pruv %d, hand16 %d, expected %d" % (len(split[0]), len(split[1]), want))
+        print("case count differs: pruv %d, %s %d, expected %d" % (len(split[0]), hand, len(split[1]), want))
     return 1 if bad_rand or bad_ctl or expect_fail or count_bad else 0
 
 

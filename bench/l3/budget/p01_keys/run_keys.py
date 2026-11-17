@@ -2,9 +2,19 @@
 """P01 budget key layouts runner (keys.pruv, driver_keys.rs, hand_keys.rs; formats in the keys.pruv header).
 
   python3 bench/l3/budget/p01_keys/run_keys.py check [--count 300] [--seed 20261117] [--pruvc PATH]
-  python3 bench/l3/budget/p01_keys/run_keys.py perf  [--rounds 7] [--sizes 100,500] [--sets sid,uuid,nonascii,surr]
+  python3 bench/l3/budget/p01_keys/run_keys.py perf  [--rounds 7] [--profile S|M|SM | --sizes 100,500]
+                                                     [--sets sid,uuid,nonascii,surr]
                                                      [--reps N] [--no-instr] [--instr-reps N] [--instr-samples N]
                                                      [--inline-variant] [--pruvc PATH]
+  python3 bench/l3/budget/p01_keys/run_keys.py collide [--profile S|M|SM | --sizes 100,500] [--sets ...]
+      (bucket-index statistics of Fx 1.x / fxmix / Pruv hashes, `hand_keys stats`; no pruvc needed)
+
+P2 additions (perf): hand rows `hand fxmix` (Fx-style multiply-rotate + murmur3 fmix64 in finish) and `hand oa`
+(open addressing over packed P records with the Pruv P/w hash, takes the same i64 words and validates them in the raw
+row). Ratio columns of every Pruv row vs each hand (sip, fx, fxmix, oa), for ns and for retired instructions. --profile
+S = size 100, M = size 500 (run_meta.PROFILES; --sizes overrides). The JSON gets run_meta.run_meta(...) under "run_meta".
+A counter that could not be read is the string "unavailable" (never 0). Every hand row must produce the same result
+checksum as the Pruv rows (ret/miss/raw/cmp); a disagreement or a missing hand row makes the exit status 1.
 
 check: generates `count` deterministic cases (pairs of UTF-16 unit lists: empty, NUL, lengths 1..17 so every tail
 0..7 occurs, ASCII, non-ASCII BMP, units 128..255, astral pairs, lone high/low surrogates; equal pairs, prefix pairs,
@@ -16,8 +26,8 @@ count (must be 0).
 
 perf: builds (pruvc, then rustc -C opt-level=3 for the driver and the hand lane; with --inline-variant also a driver
 from gen.rs with every `#[inline(always)]` replaced by `#[inline]`), runs every (set, size, layout or hand) in a
-separate process with the side order rotated every round (the hand lane runs twice, `hand sip` with std SipHash
-and `hand fx` with an inline FxHasher, as separate sides and separate rows; /hand is relative to hand sip; the enc
+separate process with the side order rotated every round (the hand lane runs four times, `hand sip` with std SipHash,
+`hand fx` with an inline FxHasher, `hand fxmix` and `hand oa`, as separate sides and separate rows; the enc
 row of the driver folds every word of the produced buffer), and reports median/min/max ns per op per
 (set, L, H, row, N). Instructions per op (`/usr/bin/time -l`, macOS) for the ret and raw rows: one (row, L, H) per
 run, retired-instruction difference between --instr-reps and 5x --instr-reps, divided by the extra operations.
@@ -28,6 +38,8 @@ import argparse, json, os, random, shutil, statistics, subprocess, sys, time
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
 BUD = os.path.dirname(HERE)
+sys.path.insert(1, BUD)
+from run_meta import run_meta, UNAVAILABLE, PROFILES as SIZE_PROFILES, SEED  # noqa: E402  (bench/l3/budget/run_meta.py, read only)
 ROOT = os.path.abspath(os.path.join(BUD, "..", "..", ".."))
 WORK = os.path.join(BUD, "work", "p01_keys")
 PRUVC_DEFAULT = "/Users/spica4345/Projects/pruv/pruvc-rs/target/release/pruvc"
@@ -35,6 +47,7 @@ LIBS = ["--lib", "bench/l3/budget", "--lib", "bench/l3/lib"]
 ROOT_PRUV = "bench/l3/budget/p01_keys/keys.pruv"
 LAYS = ["U", "P", "A8", "F1"]
 SETS = ["sid", "uuid", "nonascii", "surr"]
+HANDS = ["sip", "fx", "fxmix", "oa"]
 HEADER = ('#![allow(dead_code, unused_imports, unused_variables, unused_mut, non_snake_case, unused_parens, '
           'unused_assignments)]\n#[path = "%s"] mod sol;\n')
 
@@ -44,27 +57,60 @@ def rustc():
     return shutil.which("rustc") or os.path.expanduser("~/.cargo/bin/rustc")
 
 
-def compile_gen(pruvc, gen):
-    c = subprocess.run([pruvc, ROOT_PRUV, "-o", gen] + LIBS, cwd=ROOT, capture_output=True, text=True)
+def compile_gen(pruvc, gen, root_pruv=ROOT_PRUV):
+    if os.path.exists(gen):
+        os.remove(gen)  # a stale gen.rs must never pass for a fresh compile
+    c = subprocess.run([pruvc, root_pruv, "-o", gen] + LIBS, cwd=ROOT, capture_output=True, text=True)
     if c.returncode != 0 or not os.path.exists(gen):
         sys.exit("pruvc failed:\n" + c.stdout[-4000:] + c.stderr[-4000:])
 
 
-def rustc_build(src, exe):
-    c = subprocess.run([rustc(), "-C", "opt-level=3", "--edition", "2021", "-o", exe, src], capture_output=True,
-                       text=True)
+RUSTC_FLAGS_USED = None  # argv flags of the last rustc_build (recorded in run_meta)
+RUSTC_BUILT_FROM_PRUV = False  # True once a binary of this run was built by rustc from Pruv Rust output
+
+
+def rustc_build(src, exe, from_pruv=False):
+    global RUSTC_FLAGS_USED, RUSTC_BUILT_FROM_PRUV
+    flags = ["-C", "opt-level=3", "--edition", "2021"]
+    c = subprocess.run([rustc()] + flags + ["-o", exe, src], capture_output=True, text=True)
     if c.returncode != 0:
         sys.exit("rustc failed (%s):\n%s" % (os.path.basename(src), c.stderr[-6000:]))
+    RUSTC_FLAGS_USED = flags
+    if from_pruv:
+        RUSTC_BUILT_FROM_PRUV = True
 
 
-def build_driver(gen_name, exe_name):
-    main = os.path.join(WORK, exe_name + ".rs")
+def build_driver(gen_name, exe_name, work=None):
+    work = work or WORK
+    main = os.path.join(work, exe_name + ".rs")
     with open(main, "w") as f:
         f.write(HEADER % gen_name)
         f.write(open(os.path.join(HERE, "driver_keys.rs"), encoding="utf-8").read())
-    exe = os.path.join(WORK, exe_name)
-    rustc_build(main, exe)
+    exe = os.path.join(work, exe_name)
+    rustc_build(main, exe, from_pruv=True)
     return exe
+
+
+OLD_REV = "12c78a4^"
+
+
+def build_old(args):
+    """keys.pruv from git rev 12c78a4^ (before the once-per-call header check), same pruvc and driver, separate dir."""
+    old_dir = os.path.join(WORK, "old_src")
+    rel = ROOT_PRUV
+    dst = os.path.join(old_dir, rel)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    r = subprocess.run(["git", "-C", ROOT, "show", "%s:%s" % (OLD_REV, rel)], capture_output=True, text=True)
+    if r.returncode != 0 or not r.stdout.strip():
+        sys.exit("git show %s:%s failed:\n%s" % (OLD_REV, rel, r.stderr[-2000:]))
+    with open(dst, "w", encoding="utf-8") as f:
+        f.write(r.stdout)
+    # keys.pruv has no imports; the shared libs (--lib bench/l3/budget, bench/l3/lib) come from the current tree
+    work = os.path.join(WORK, "old")
+    os.makedirs(work, exist_ok=True)
+    gen = os.path.join(work, "gen.rs")
+    compile_gen(args.pruvc, gen, os.path.relpath(dst, ROOT))
+    return build_driver("gen.rs", "driver_keys_old", work)
 
 
 def build(args, hand=False, inline=False):
@@ -84,6 +130,47 @@ def build(args, hand=False, inline=False):
         rustc_build(os.path.join(HERE, "hand_keys.rs"), exe)
         exes["hand"] = exe
     return exes
+
+
+# ---- corrupt-header controls (new keys.pruv vs keys.pruv at 12c78a4^) ----
+HDR_CORRUPTIONS = [
+    ("t3=0", [["3", "0"]]), ("t3=1", [["3", "1"]]), ("t3=cap-1", [["3", "cap-1"]]), ("t3=-1", [["3", "-1"]]),
+    ("t3=2^31", [["3", "2147483648"]]), ("t4=len", [["4", "len"]]), ("t4=-1", [["4", "-1"]]),
+    ("t5=len", [["5", "len"]]), ("t5=-1", [["5", "-1"]]), ("t0=0", [["0", "0"]]),
+    ("t0=slots*2", [["0", "slots*2"]]), ("slot=cap+1", [["slot0", "cap+1"]]),
+]
+
+
+def header_controls(exe_new, exe_old):
+    keys = [[ord(c) for c in "key-%d-%s" % (i, "é" if i % 2 else "x")] for i in range(6)]
+    probes = [[ord(c) for c in "new-key-a"], [ord(c) for c in "key-0-x-missing"]]
+    lines, meta = [], {}
+    for L in LAYS:
+        for H in ("u", "w"):
+            for name, sets in [("positive (no corruption)", [])] + HDR_CORRUPTIONS:
+                cid = "hdr-%s-%s-%s" % (L, H, name)
+                meta[cid] = name
+                lines.append(json.dumps({"id": cid, "L": L, "H": H, "keys": keys, "probes": probes, "set": sets}))
+    inp = "\n".join(lines) + "\n"
+    outs = []
+    for exe in (exe_new, exe_old):
+        r = subprocess.run([exe, "hdr"], input=inp, capture_output=True, text=True)
+        if r.returncode != 0:
+            sys.exit("driver hdr failed (%s):\n%s" % (os.path.basename(exe), r.stderr[-3000:]))
+        outs.append({o["id"]: o["res"] for o in map(json.loads, filter(str.strip, r.stdout.splitlines()))})
+    mism, rows = [], []
+    for cid in meta:
+        a, b = outs[0].get(cid), outs[1].get(cid)
+        rows.append("%s new=%s old=%s" % (cid, a, b))
+        if a is None or b is None or a != b:
+            mism.append("%s: new=%s old=%s" % (cid, a, b))
+    # the positive control must find every stored key (guards against a driver that finds nothing)
+    for L in LAYS:
+        for H in ("u", "w"):
+            res = outs[0].get("hdr-%s-%s-positive (no corruption)" % (L, H))
+            if res is None or res[:len(keys)] != list(range(len(keys))):
+                mism.append("positive control %s/%s: finds %r" % (L, H, None if res is None else res[:len(keys)]))
+    return len(meta), mism, rows
 
 
 # ---- Python model of the layouts ----
@@ -330,18 +417,23 @@ def cmd_check(args):
             mism.append("%s (%s, %s): k_check got %r want %d, rec=%r" % (n["id"], n["neg"], n["why"],
                                                                          None if g is None else g["chk"], want,
                                                                          n["rec"]))
+    exe_old = build_old(args)
+    n_hdr, hdr_mism, hdr_rows = header_controls(exes["drv"], exe_old)
     tails = sorted({len(c["a"]) % 8 for c in cases} | {len(c["b"]) % 8 for c in cases})
-    summary = {"cases": len(cases), "negatives": sum(1 for n in negs if "want" not in n),
+    summary = {"header_controls": n_hdr, "header_mismatches": len(hdr_mism), "cases": len(cases), "negatives": sum(1 for n in negs if "want" not in n),
                "controls": sum(1 for n in negs if "want" in n), "seed": args.seed, "tails_mod8": tails,
                "mismatches": len(mism)}
     os.makedirs(WORK, exist_ok=True)
     with open(os.path.join(WORK, "check.json"), "w") as f:
-        json.dump({"summary": summary, "mismatches": mism[:200]}, f, indent=1, ensure_ascii=False)
+        json.dump({"summary": summary, "mismatches": mism[:200], "header_mismatches": hdr_mism[:200],
+                   "header_rows": hdr_rows}, f, indent=1, ensure_ascii=False)
     print(json.dumps(summary))
     for m in mism[:20]:
         print("MISMATCH", m[:600])
-    print("mismatches: %d" % len(mism))
-    return 1 if mism else 0
+    for m in hdr_mism[:20]:
+        print("HEADER MISMATCH", m[:600])
+    print("mismatches: %d, header_mismatches: %d of %d controls" % (len(mism), len(hdr_mism), n_hdr))
+    return 1 if (mism or hdr_mism) else 0
 
 
 # ---- perf ----
@@ -360,17 +452,57 @@ def instr_retired(cmd):
     for l in r.stderr.splitlines():
         if "instructions retired" in l:
             return int(l.split()[0])
-    sys.exit("no instruction count from /usr/bin/time -l")
+    return None  # counter not reported by this platform: the caller records UNAVAILABLE, never 0
+
+
+def ratio(a, b):
+    return None if a is None or b is None or b == 0 else a / b
+
+
+def pick_sizes(args):
+    if args.sizes:
+        return [int(x) for x in args.sizes.split(",")], (args.profile or "custom")
+    prof = args.profile or "SM"
+    return list(SIZE_PROFILES[prof]), prof
+
+
+def build_hand_only():
+    os.makedirs(WORK, exist_ok=True)
+    exe = os.path.join(WORK, "hand_keys")
+    rustc_build(os.path.join(HERE, "hand_keys.rs"), exe)
+    return exe
+
+
+def cmd_collide(args):
+    """Bucket-index statistics (hand_keys stats): distinct hash & (cap-1) values and linear-probe lengths."""
+    exe = build_hand_only()
+    sizes, _prof = pick_sizes(args)
+    rows = []
+    print("set | N | hash | table | cap | distinct bucket idx | max probe | mean probe")
+    for s in args.sets.split(","):
+        for N in sizes:
+            for line in run_proc([exe, "stats", s, str(N)]).splitlines():
+                f = line.split()
+                if len(f) != 9 or f[0] != "stats":
+                    continue
+                rows.append({"set": f[1], "N": int(f[2]), "hash": f[3], "table": f[4], "cap": int(f[5]),
+                             "distinct": float(f[6]), "max_probe": f[7], "mean_probe": f[8]})
+                print(" | ".join(f[1:]))
+    with open(os.path.join(WORK, "collide_latest.json"), "w") as fh:
+        json.dump({"run_meta": run_meta(pruvc=None, backend="unknown", flags=RUSTC_FLAGS_USED, rustc=rustc(),
+                                        seed=args.seed, profile=pick_sizes(args)[1],
+                                        lanes=["fx", "fxmix", "pruvw", "pruvu"]), "rows": rows}, fh, indent=1)
+    return 0
 
 
 def cmd_perf(args):
     exes = build(args, hand=True, inline=args.inline_variant)
-    sizes = [int(x) for x in args.sizes.split(",")]
+    sizes, profile = pick_sizes(args)
     sets = args.sets.split(",")
-    # side: (label, command prefix, layout or None for hand, hasher for hand or None); the hand lane runs twice
-    # (sip, fx), each as its own side in the rotation, and is reported as rows `hand sip` / `hand fx`
+    # side: (label, command prefix, layout or None for hand, hasher for hand or None); each hand hasher is its own
+    # side in the rotation and is reported as rows `hand sip` / `hand fx` / `hand fxmix` / `hand oa`
     sides = [(L, [exes["drv"], "perf"], L, None) for L in LAYS]
-    sides += [("hand", [exes["hand"]], None, "sip"), ("hand", [exes["hand"]], None, "fx")]
+    sides += [("hand", [exes["hand"]], None, h) for h in HANDS]
     if args.inline_variant:
         sides += [(L + "+inl", [exes["inl"], "perf"], L, None) for L in LAYS]
 
@@ -414,55 +546,125 @@ def cmd_perf(args):
                             for _ in range(args.instr_samples):
                                 lo = instr_retired(cmd_for(side, s, N, r1, row, H))
                                 hi = instr_retired(cmd_for(side, s, N, r2, row, H))
-                                vals.append((hi - lo) / (r2 - r1))
-                            ins[(s, side[0], H, row, N)] = statistics.median(vals)
+                                vals.append(None if lo is None or hi is None else (hi - lo) / (r2 - r1))
+                            good = [x for x in vals if x is not None]
+                            ins[(s, side[0], H, row, N)] = statistics.median(good) if good else None
     # checksum agreement: every side must fold the same results for ret/miss/raw (ids) and cmp
     cs_groups = {}
     for (s, side, H, row, N), v in cks.items():
         if row in ("ret", "miss", "raw", "cmp"):
             cs_groups.setdefault((s, N, row if row != "raw" else "ret"), set()).update(v)
     cs_bad = sorted("%s/%d/%s" % g for g, v in cs_groups.items() if len(v) != 1)
+    # every hand hasher must have produced every row (a lane that printed nothing must not pass as "equal")
+    cs_missing = sorted("%s/%d/%s/hand-%s" % (s, N, row, h) for s in sets for N in sizes
+                        for row in ("ret", "miss", "raw", "cmp") for h in HANDS if (s, "hand", h, row, N) not in cks)
+    # every Pruv row must exist too: a missing Pruv row is an error, never a skipped comparison
+    pruv_missing = sorted("%s/%d/%s/%s/%s" % (s, N, L, "-" if row == "cmp" else H, row) for s in sets for N in sizes
+                          for L in LAYS for row in ("ret", "miss", "raw", "cmp") for H in (["-"] if row == "cmp" else ["u", "w"])
+                          if (s, L, H, row, N) not in cks)
+    if pruv_missing:
+        print("ERROR: Pruv rows missing: %s" % ", ".join(pruv_missing), file=sys.stderr)
     summary = []
-    print("set | N | L | H | row | median ns | min | max | instr/op | words/key | bytes/key | /hand | /no-inl")
+    unav_instr = args.no_instr
+    print("set | N | L | H | row | median ns | min | max | instr/op | words/key | bytes/key | checksum | "
+          "ns/sip | ns/fx | ns/fxmix | ns/oa | /no-inl")
     for key in sorted(res, key=lambda k: (k[0], k[4], k[3], k[1], k[2])):
         s, L, H, row, N = key
         v = res[key]
         med = statistics.median(v)
-        hk = (s, "hand", "sip", row, N)
-        vs_hand = med / statistics.median(res[hk]) if hk in res and L != "hand" else None
+        measured = row in ("ret", "raw")  # rows the instruction counter is run for
+        i = ins.get(key)
+        if measured and i is None:
+            unav_instr = True
+        rns, rins = {}, {}
+        for h in HANDS:
+            hk = (s, "hand", h, row, N)
+            rns[h] = ratio(med, statistics.median(res[hk])) if hk in res and L != "hand" else None
+            rins[h] = ratio(i, ins.get(hk)) if measured and L != "hand" else None
         base = (s, L[:-4], H, row, N) if L.endswith("+inl") else None
         vs_base = med / statistics.median(res[base]) if base and base in res else None
-        i = ins.get(key)
         wpk, bpk = words[key]
         summary.append({"set": s, "L": L, "H": H, "row": row, "N": N, "median": med, "min": min(v), "max": max(v),
-                        "samples": v, "instr": i, "words_per_key": wpk, "bytes_per_key": bpk, "vs_hand": vs_hand,
+                        "samples": v, "instr": (UNAVAILABLE if i is None else i) if measured else None,
+                        "words_per_key": wpk, "bytes_per_key": bpk, "vs_hand": rns["sip"],
+                        "ratio_ns_vs_hand": rns,
+                        "ratio_instr_vs_hand": {h: (UNAVAILABLE if measured and L != "hand" and x is None else x)
+                                                for h, x in rins.items()},
                         "vs_always_inline": vs_base, "checksums": sorted(cks[key])})
-        print("%s | %d | %s | %s | %s | %.2f | %.2f | %.2f | %s | %.2f | %.2f | %s | %s" % (
-            s, N, L, H, row, med, min(v), max(v), "-" if i is None else "%.0f" % i, wpk, bpk,
-            "-" if vs_hand is None else "%.2f" % vs_hand, "-" if vs_base is None else "%.2f" % vs_base))
+        print("%s | %d | %s | %s | %s | %.2f | %.2f | %.2f | %s | %.2f | %.2f | %s | %s | %s | %s | %s | %s" % (
+            s, N, L, H, row, med, min(v), max(v), ("-" if not measured else UNAVAILABLE if i is None else "%.0f" % i),
+            wpk, bpk, ",".join(str(c) for c in sorted(cks[key])),
+            *["-" if rns[h] is None else "%.2f" % rns[h] for h in HANDS],
+            "-" if vs_base is None else "%.2f" % vs_base))
+    # P/w against every hand (ns and retired instructions); the cmp row has no hash kind (H "-")
+    print("\nP/w vs hands (ratio = Pruv / hand; > 1.00 means Pruv is slower)")
+    print("set | N | row | P/w ns | sip ns | fx ns | fxmix ns | oa ns | /sip | /fx | /fxmix | /oa | P/w instr | "
+          "sip | fx | fxmix | oa | /sip | /fx | /fxmix | /oa | checksum P/w = all hands")
+    pw = []
+    for s in sets:
+        for N in sizes:
+            for row in ("ret", "miss", "raw", "cmp"):
+                pk = (s, "P", "-" if row == "cmp" else "w", row, N)
+                if pk not in res:
+                    continue  # already reported in pruv_missing (non-zero exit at the end)
+                p_ns = statistics.median(res[pk])
+                h_ns = {h: statistics.median(res[(s, "hand", h, row, N)]) if (s, "hand", h, row, N) in res else None
+                        for h in HANDS}
+                measured = row in ("ret", "raw")
+                p_in = ins.get(pk) if measured else None
+                h_in = {h: ins.get((s, "hand", h, row, N)) if measured else None for h in HANDS}
+
+                def cell(x, nd, applicable=True):
+                    if not applicable:
+                        return "-"
+                    return UNAVAILABLE if x is None else "%.*f" % (nd, x)
+
+                same = all(cks.get((s, "hand", h, row, N)) == cks.get(pk) for h in HANDS)
+                pw.append({"set": s, "N": N, "row": row, "pw_ns": p_ns, "hand_ns": h_ns,
+                           "ratio_ns": {h: ratio(p_ns, h_ns[h]) for h in HANDS},
+                           "pw_instr": UNAVAILABLE if measured and p_in is None else p_in,
+                           "hand_instr": {h: (UNAVAILABLE if measured and x is None else x) for h, x in h_in.items()},
+                           "ratio_instr": {h: (UNAVAILABLE if measured and ratio(p_in, h_in[h]) is None
+                                               else ratio(p_in, h_in[h])) for h in HANDS},
+                           "checksum": sorted(cks[pk]), "checksums_equal_all_hands": same})
+                print("%s | %d | %s | %.2f | " % (s, N, row, p_ns) + " | ".join(["%s"] * 18) % ( *[cell(h_ns[h], 2) for h in HANDS],
+                    *[cell(ratio(p_ns, h_ns[h]), 2) for h in HANDS], cell(p_in, 0, measured),
+                    *[cell(h_in[h], 0, measured) for h in HANDS],
+                    *[cell(ratio(p_in, h_in[h]), 2, measured) for h in HANDS],
+                    "%s %s" % (",".join(str(c) for c in sorted(cks[pk])), "equal" if same else "DIFFERENT")))
     print("checksum groups disagreeing: %s" % (", ".join(cs_bad) if cs_bad else "none"))
+    print("hand rows missing: %s" % (", ".join(cs_missing) if cs_missing else "none"))
     os.makedirs(WORK, exist_ok=True)
-    meta = {"rounds": args.rounds, "sizes": sizes, "sets": sets, "reps": args.reps,
-            "instr_reps": None if args.no_instr else args.instr_reps, "instr_samples": args.instr_samples,
-            "inline_variant": args.inline_variant, "inline_always_replaced": exes.get("inline_always_replaced"),
-            "pruvc": args.pruvc, "time": time.strftime("%Y-%m-%dT%H:%M:%S"), "checksum_disagreements": cs_bad}
-    out = {"meta": meta, "summary": summary, "runs": runs}
+    lanes = ["P/u", "P/w", "U", "A8", "F1"] + ["hand-" + h for h in HANDS]
+    meta = run_meta(pruvc=args.pruvc, backend="rust" if RUSTC_BUILT_FROM_PRUV else "unknown", flags=RUSTC_FLAGS_USED,
+                    rustc=rustc(), seed=args.seed, profile=profile, lanes=lanes,
+                    extra={"rounds": args.rounds, "sizes": sizes, "sets": sets, "reps": args.reps,
+                           "instr_reps": UNAVAILABLE if args.no_instr else args.instr_reps,
+                           "instr_samples": args.instr_samples,
+                           "instr_counters": UNAVAILABLE if unav_instr else "read",
+                           "inline_variant": args.inline_variant,
+                           "inline_always_replaced": exes.get("inline_always_replaced"),
+                           "time": time.strftime("%Y-%m-%dT%H:%M:%S"), "checksum_disagreements": cs_bad,
+                           "hand_rows_missing": cs_missing, "pruv_rows_missing": pruv_missing})
+    out = {"run_meta": meta, "meta": meta, "summary": summary, "pw_vs_hands": pw, "runs": runs}
     stamp = time.strftime("%Y%m%d-%H%M%S")
     for name in ("perf_%s.json" % stamp, "perf_latest.json"):
         with open(os.path.join(WORK, name), "w") as f:
             json.dump(out, f, indent=1, ensure_ascii=False)
     print("raw JSON: %s" % os.path.join(WORK, "perf_latest.json"))
-    return 1 if cs_bad else 0
+    return 1 if (cs_bad or cs_missing or pruv_missing) else 0
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["check", "perf"])
+    ap.add_argument("cmd", choices=["check", "perf", "collide"])
     ap.add_argument("--pruvc", default=PRUVC_DEFAULT)
     ap.add_argument("--count", type=int, default=300)
-    ap.add_argument("--seed", type=int, default=20261117)
+    ap.add_argument("--seed", type=int, default=SEED)
     ap.add_argument("--rounds", type=int, default=7)
-    ap.add_argument("--sizes", default="100,500")
+    ap.add_argument("--profile", choices=sorted(SIZE_PROFILES), default=None,
+                    help="S = size 100, M = size 500, SM = both (default when --sizes is absent)")
+    ap.add_argument("--sizes", default=None, help="explicit comma list; overrides --profile")
     ap.add_argument("--sets", default=",".join(SETS))
     ap.add_argument("--reps", type=int, default=2000000)
     ap.add_argument("--no-instr", action="store_true")
@@ -470,7 +672,7 @@ def main():
     ap.add_argument("--instr-samples", type=int, default=1)
     ap.add_argument("--inline-variant", action="store_true")
     a = ap.parse_args()
-    sys.exit({"check": cmd_check, "perf": cmd_perf}[a.cmd](a))
+    sys.exit({"check": cmd_check, "perf": cmd_perf, "collide": cmd_collide}[a.cmd](a))
 
 
 if __name__ == "__main__":

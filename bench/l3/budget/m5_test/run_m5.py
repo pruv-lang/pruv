@@ -40,8 +40,9 @@ def main(argv=None):
         subprocess.run(['sh', str(HERE / 'dev_build.sh')], check=True, cwd=HERE)
 
     print('== Q compare (host replays generated effect programs)', flush=True)
-    rc = q.main(['--seed', str(args.seed), '--count', str(args.count),
-                 '--impl', f'{HARNESS} q --prog {WORK / "prog.jsonl"}'])
+    # the implementation is an argv list: a HARNESS / WORK path with spaces stays one element
+    rc = q.main(['--seed', str(args.seed), '--count', str(args.count), '--lane', 'hand'],
+                impl=[str(HARNESS), 'q', '--prog', str(WORK / 'prog.jsonl')])
 
     print('== perf: Rust host (ns per op)', flush=True)
     for n in args.perf.split(','):
