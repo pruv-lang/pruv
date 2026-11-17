@@ -36,3 +36,6 @@ pub fn kc_pack(inout dst: [i64], d: i64, src: [i64], s: i64, n: i64) -> i64
 
 pub fn kc_unpack(inout dst: [i64], d: i64, k: [i64], ks: i64, n: i64) -> i64
 { return crate::bud_keys::unpack_units(inout dst, d, k, ks, n); }
+
+pub fn kc_hash_units(seed: i64, src: [i64], s: i64, n: i64) -> i64
+{ return crate::bud_keys::hash_units(seed, src, s, n); }

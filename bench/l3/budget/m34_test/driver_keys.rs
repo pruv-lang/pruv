@@ -8,6 +8,7 @@
 //   ok KS N W...                buffer = W...                      -> 1 / 0
 //   unit KS N J W...            buffer = W...                      -> unit
 //   hash SEED KS N W...         buffer = W...                      -> hash
+//   hash_units SEED S N U...    buffer = units U...                -> packed-equivalent hash
 //   eq SA SB N | A... | B...    buffers A and B                    -> 1 / 0
 //   cmp SA NA SB NB | A... | B...                                  -> -1 / 0 / 1
 //   pack D S N DLEN | SRC...    dst = DLEN words of 7, src = SRC   -> `STATUS dst...`
@@ -87,6 +88,11 @@ fn main() {
                 need(&g, 3, 0, "hash");
                 let h = &g[0];
                 writeln!(w, "{}", sol::kc_hash(h[0], &h[3..], h[1], h[2])).unwrap();
+            }
+            "hash_units" => {
+                need(&g, 3, 0, "hash_units");
+                let h = &g[0];
+                writeln!(w, "{}", sol::kc_hash_units(h[0], &h[3..], h[1], h[2])).unwrap();
             }
             "eq" => {
                 need(&g, 3, 2, "eq");

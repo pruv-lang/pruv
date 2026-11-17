@@ -178,6 +178,13 @@ def c_hash(seed, k, ks, n, cat):
     return ("hash %d %d %d %s" % (seed, ks, n, ws(k)), str(o_hash(seed, k, ks, n)), cat)
 
 
+def c_hash_units(seed, src, s, n, cat):
+    nc, s0 = c30(n), c40(s)
+    packed = enc([rd(src, s0 + j) & 65535 for j in range(nc)])
+    return ("hash_units %d %d %d %s" % (seed, s, n, ws(src)),
+            str(o_hash(seed, packed, 0, nc)), cat)
+
+
 def c_words(n, cat):
     return ("words %d" % n, str(words_of(c30(n))), cat)
 
@@ -248,6 +255,12 @@ def fixed_cases():
         for seed in (0, 1469598103934665603, -1):
             out.append(c_hash(seed, buf, st, n, "fixed-hash"))
             out.append(c_hash(seed, w, 0, n, "fixed-hash"))
+            out.append(c_hash_units(seed, u, 0, n, "fixed-hash-units"))
+            out.append(c_hash_units(seed, [99] + u + [98], 1, n, "fixed-hash-units"))
+            out.append(c_hash_units(seed, u, -3, n, "fixed-hash-units"))
+            out.append(c_hash_units(seed, u, 0, n + 5, "fixed-hash-units"))
+            out.append(c_hash_units(seed, u, 1 << 41, n, "fixed-hash-units"))
+            out.append(c_hash_units(seed, u, 0, -1, "fixed-hash-units"))
         out.append(c_hash(0, w, 0, n + 8, "fixed-hash"))                      # reads past the buffer as 0
         out.append(c_hash(0, buf, -3, n, "fixed-hash"))                        # negative start clamps to 0
         out.append(c_hash(0, buf, st, -5, "fixed-hash"))                       # negative n clamps to 0
@@ -507,6 +520,10 @@ def make_cases(seed, count):
     cases = fixed_cases() + fixed_named()
     for i in range(count):
         cases.append(rand_case(rng, KINDS[i % len(KINDS)]))
+    for _ in range(count):
+        u = rand_units(rng)
+        src, start = rand_embed(rng, u)
+        cases.append(c_hash_units(sg(rng.getrandbits(64)), src, start, len(u), "rand-hash-units"))
     return cases
 
 

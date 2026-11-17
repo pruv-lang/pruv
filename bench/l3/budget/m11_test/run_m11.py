@@ -39,7 +39,7 @@ from compare import jv_decode, jv_encode, UNDEF   # noqa: E402
 
 RS_DEFAULT = '/Users/spica4345/Projects/pruv/pruvc-rs/target/release/pruvc'
 PY_DEFAULT = '/Users/spica4345/Projects/pruv/.venv/bin/python'
-MODULES = ('bud_card.pruv', 'bud_num.pruv', 'bud_text.pruv', 'bud_date.pruv', 'bud_store.pruv', 'bud_map.pruv', 'bud_world.pruv')
+MODULES = ('bud_card.pruv', 'bud_keys.pruv', 'bud_num.pruv', 'bud_text.pruv', 'bud_date.pruv', 'bud_store.pruv', 'bud_map.pruv', 'bud_world.pruv')
 PAIRS = {'py': 'py/rust', 'rs': 'rs/rust'}
 SAFE = 2 ** 53 - 1
 COUNTED = ('findSession', 'now', 'save', 'changed')

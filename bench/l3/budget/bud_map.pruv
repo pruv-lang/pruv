@@ -3,12 +3,14 @@
 // A map is the set of children of an owner entry, kept in insertion order by prev/next links (entry fields 7, 8)
 // and head/tail/count in the owner (fields 9, 10, 11). One open-addressing hash index (linear probing, slot word 0
 // empty, -1 tombstone, e+1 entry e) covers all non-root entries. The hash mixes owner, owner generation and the
-// key units. Removing an entry frees its children too; make_room rebuilds the index when tombstones pile up.
+// packed key words. Removing an entry frees its children too; make_room rebuilds the index when tombstones pile up.
 //
 // Entry fields: 0 state, 1 owner, 2 owner generation, 3 generation, 4 key off, 5 key len, 6 hash, 7 prev, 8 next,
 // 9 child head, 10 child tail, 11 child count, 12 blob off, 13 blob len, 14..17 scalars v0..v3, 18 key region
 // capacity, 19 blob region capacity. A freed entry keeps its key and blob regions (4/18, 12/19); when the entry is
 // reused, a key or blob that fits is written back in place, so steady churn does not grow the arena.
+// Keys use the bud_keys big-endian codec: field 5 counts units, field 18 and arena accounting count ceil(n/4)
+// words. Blobs keep unit records. Key units outside 0..65535 retain their low 16 bits on write.
 //
 // All probing loops are bounded by the slot count and all list walks by a caller-supplied step budget, so
 // termination never depends on the contents of the buffer.
@@ -40,58 +42,11 @@ fn fin(h: i64) -> i64
   return bxor(b, ushr(b, 33));
 }
 
-// Four key units packed into one word for one mix (units past the key end are 0; the length is mixed in at the end).
-fn pack4(u0: i64, u1: i64, u2: i64, u3: i64) -> i64
-{
-  return wrapping_add(wrapping_add(u0, wrapping_mul(u1, 65536)),
-    wrapping_add(wrapping_mul(u2, 4294967296), wrapping_mul(u3, 281474976710656)));
-}
-
-// Unit j of key[s0..s0+n) through the total read, 0 at or past n.
-fn unit_or0(key: [i64], s0: i64, n: i64, j: i64) -> i64
-  requires 0 <= s0 && s0 <= 1099511627776 && 0 <= j && j <= 8589934592
-{
-  if j < n { return crate::ent_u16::rd(key, s0 + j); }
-  return 0;
-}
-
-// Hash of (owner, owner generation, key[ks..ks+kn)). ks is clamped into 0..2^40, kn into 0..2^32.
-// The key is mixed 4 units at a time (one dependent multiply per 4 units); every map operation goes through this
-// function and entries store its result (field 6), so add, find, remove and rehash stay consistent.
+// Hash unit input exactly like its packed arena representation.
 pub fn hash_key(owner: i64, ogen: i64, key: [i64], ks: i64, kn: i64) -> i64
 {
-  let n: i64 = crate::bud_store::c32(kn);
-  let s0: i64 = crate::bud_store::c40(ks);
-  // owner and owner generation share one word (one multiply); the length goes in by xor before fin()
-  let mut h: i64 = mix(1469598103934665603, wrapping_add(owner, wrapping_mul(ogen, 4294967296)));
-  let mut j: i64 = 0;
-  if s0 + n <= len(key) {
-    // whole key in range: one check for the loop (same packed words as the total path below)
-    while j + 4 <= n
-      invariant 0 <= j && j <= n && 0 <= s0 && s0 + n <= len(key)
-      decreases n - j
-    {
-      h = mix(h, pack4(key[s0 + j], key[s0 + j + 1], key[s0 + j + 2], key[s0 + j + 3]));
-      j = j + 4;
-    }
-    if j < n {
-      let mut u1: i64 = 0;
-      let mut u2: i64 = 0;
-      if j + 1 < n { u1 = key[s0 + j + 1]; }
-      if j + 2 < n { u2 = key[s0 + j + 2]; }
-      h = mix(h, pack4(key[s0 + j], u1, u2, 0));
-    }
-    return fin(bxor(h, n));
-  }
-  while j < n
-    invariant 0 <= j && j <= n + 3 && 0 <= n && n <= 4294967296 && 0 <= s0 && s0 <= 1099511627776
-    decreases n - j
-  {
-    h = mix(h, pack4(unit_or0(key, s0, n, j), unit_or0(key, s0, n, j + 1), unit_or0(key, s0, n, j + 2),
-      unit_or0(key, s0, n, j + 3)));
-    j = j + 4;
-  }
-  return fin(bxor(h, n));
+  return crate::bud_keys::hash_units(mix(1469598103934665603,
+    wrapping_add(owner, wrapping_mul(ogen,4294967296))),key,ks,kn);
 }
 
 // Absolute address of probe position i for hash h; -1 if the slot count is 0.
@@ -128,17 +83,29 @@ fn entry_matches(st: [i64], e: i64, owner: i64, og: i64, h: i64, key: [i64], ks:
     ko = crate::bud_store::c40(crate::ent_u16::rd(st, a + 4));
   }
   let s0: i64 = crate::bud_store::c40(ks);
-  if ko + n <= len(st) && s0 + n <= len(key) {
-    // both ranges in bounds: one slice comparison (same result as the total path below)
-    return eq_range(st, ko, key, s0, n);
-  }
+  if n > 1073741824 { return false; }
+  let m: i64 = crate::bud_keys::words(n);
   let mut j: i64 = 0;
+  if ko + m <= len(st) && s0 + n <= len(key) {
+    while j + 4 <= n
+      invariant 0 <= j && j <= n && n <= 1073741824 && 0 <= ko && ko + m <= len(st)
+      invariant m == (n + 3) / 4 && 0 <= s0 && s0 + n <= len(key)
+      decreases n - j
+    {
+      if st[ko + j / 4] != crate::bud_keys::pack4(key[s0+j],key[s0+j+1],key[s0+j+2],key[s0+j+3]) { return false; }
+      j = j + 4;
+    }
+    if j < n {
+      if st[ko + j / 4] != crate::bud_keys::tail_word(key,s0,n,j) { return false; }
+    }
+    return true;
+  }
   while j < n
-    invariant 0 <= j && j <= n && n <= 4294967296 && 0 <= ko && ko <= 1099511627776 && 0 <= s0 && s0 <= 1099511627776
+    invariant 0 <= j && j <= n + 3 && n <= 1073741824 && 0 <= ko && ko <= 1099511627776 && 0 <= s0 && s0 <= 1099511627776
     decreases n - j
   {
-    if crate::ent_u16::rd(st, ko + j) != crate::ent_u16::rd(key, s0 + j) { return false; }
-    j = j + 1;
+    if crate::ent_u16::rd(st,ko + j / 4) != crate::bud_keys::units_word(key,s0,n,j) { return false; }
+    j = j + 4;
   }
   return true;
 }
@@ -252,7 +219,7 @@ pub fn key_unit(st: [i64], e: i64, j: i64) -> i64
 {
   let n: i64 = key_len(st, e);
   if j < 0 || j >= n { return 0; }
-  return crate::ent_u16::rd(st, crate::bud_store::c40(gf(st, e, 4)) + j);
+  return crate::bud_keys::unit(st, crate::bud_store::c40(gf(st, e, 4)), n, j);
 }
 
 pub fn blob_len(st: [i64], e: i64) -> i64
@@ -336,6 +303,37 @@ fn put_units(inout st: [i64], e: i64, fo: i64, fc: i64, src: [i64], s0: i64, n: 
   return 0;
 }
 
+// Pack into the arena without scratch. Callers validate units; total semantics
+// for unvalidated input retain low 16 bits. Lengths above the codec limit reject.
+fn put_key_units(inout st: [i64], e: i64, src: [i64], s0: i64, n: i64) -> i64
+  requires 0 <= s0 && s0 <= 1099511627776 && 0 <= n && n <= 4294967296
+{
+  if n > 1073741824 || s0 + n > len(src) { return -1; }
+  let m: i64 = crate::bud_keys::words(n);
+  let mut off: i64 = crate::bud_store::c40(gf(st,e,4));
+  let reuse: bool = fits_region(st,off,gf(st,e,18),m);
+  if !reuse { off = crate::bud_store::c40(hw(st,10)); }
+  let ae: i64 = crate::bud_store::c40(hw(st,11));
+  if off + m > len(st) || (!reuse && (ae > len(st) || off + m > ae)) { return -1; }
+  let mut i: i64 = 0;
+  while i < m
+    invariant 0 <= i && i <= m && m <= 268435456 && 0 <= off && off + m <= len(st)
+    invariant 0 <= s0 && s0 <= 1099511627776 && 0 <= n && n <= 1073741824
+    decreases m - i
+  {
+    st[off+i] = crate::bud_keys::units_word(src,s0,n,4*i);
+    i = i + 1;
+  }
+  if !reuse {
+    sh(inout st,10,off+m);
+    sf(inout st,e,4,off);
+    sf(inout st,e,18,m);
+  }
+  let lw: i64 = crate::bud_store::c40(hw(st,14));
+  sh(inout st,14,lw+m);
+  return 0;
+}
+
 // Existing entry for the key, or a new entry appended at the owner's tail (key stored in the entry's old region or
 // the arena, hashed into the index). One probe pass finds the match or the first reusable slot. The caller has
 // reserved capacity with make_room(); -1 on failure (nothing usable was added).
@@ -352,11 +350,11 @@ fn put_key(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, absent: bo
   if gf(st, owner, 0) != 1 { return -1; }
   let og: i64 = gf(st, owner, 3);
   let h: i64 = hash_key(owner, og, key, ks, kn);
-  return put_key_h(inout st, owner, og, h, key, ks, kn, absent);
+  return put_key_h(inout st, owner, og, h, key, ks, kn, absent, false);
 }
 
 // put_key() with og = gf(st, owner, 3) and h = hash_key(owner, og, key, ks, kn) already computed (owner is live).
-fn put_key_h(inout st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn: i64, absent: bool) -> i64
+fn put_key_h(inout st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn: i64, absent: bool, packed: bool) -> i64
 {
   let slots: i64 = crate::bud_store::c32(hw(st, 4));
   // header words 3, 4 in range: slot base and mask read once (the same addresses slot_pos gives)
@@ -390,7 +388,9 @@ fn put_key_h(inout st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, 
   if e < 0 { return -1; }
   let n: i64 = crate::bud_store::c32(kn);
   let s0: i64 = crate::bud_store::c40(ks);
-  let rk: i64 = put_units(inout st, e, 4, 18, key, s0, n);
+  let mut rk: i64 = -1;
+  if packed { rk = put_units(inout st,e,4,18,key,s0,crate::bud_keys::words(n)); }
+  else { rk = put_key_units(inout st,e,key,s0,n); }
   if rk < 0 {
     crate::bud_store::entry_free(inout st, e);
     return -1;
@@ -454,15 +454,15 @@ fn drop_entry(inout st: [i64], e: i64) -> ()
     let sl: i64 = slot_of(st, e, st[b + 6]);
     if sl >= 0 { crate::ent_u16::wr(inout st, sl, -1); }
     if sl == 5 || sl == 6 {
-      kw = crate::bud_store::c32(gf(st, e, 5)) + crate::bud_store::c40(gf(st, e, 13));
+      kw = crate::bud_keys::words(crate::bud_store::c32(gf(st, e, 5))) + crate::bud_store::c40(gf(st, e, 13));
     } else {
-      kw = crate::bud_store::c32(st[b + 5]) + crate::bud_store::c40(st[b + 13]);
+      kw = crate::bud_keys::words(crate::bud_store::c32(st[b + 5])) + crate::bud_store::c40(st[b + 13]);
     }
   } else {
     if gf(st, e, 0) != 1 { return; }
     let sl: i64 = slot_of(st, e, gf(st, e, 6));
     if sl >= 0 { crate::ent_u16::wr(inout st, sl, -1); }
-    kw = crate::bud_store::c32(gf(st, e, 5)) + crate::bud_store::c40(gf(st, e, 13));
+    kw = crate::bud_keys::words(crate::bud_store::c32(gf(st, e, 5))) + crate::bud_store::c40(gf(st, e, 13));
   }
   let lw: i64 = crate::bud_store::c40(hw(st, 14));
   if lw > kw {
@@ -664,7 +664,7 @@ pub fn add_absent(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, ent
     return -nd;
   }
   if gf(st, owner, 0) != 1 { return 2; }
-  let x: i64 = put_key_h(inout st, owner, og, h, key, ks, kn, true);
+  let x: i64 = put_key_h(inout st, owner, og, h, key, ks, kn, true, false);
   if x < 0 { return 2; }
   return 1;
 }
@@ -693,7 +693,14 @@ fn copy_node(prev: [i64], inout nxt: [i64], pe: i64, nowner: i64) -> i64
 {
   let koff: i64 = crate::bud_store::c40(gf(prev, pe, 4));
   let klen: i64 = crate::bud_store::c32(gf(prev, pe, 5));
-  let ne: i64 = add(inout nxt, nowner, prev, koff, klen);
+  let og: i64 = gf(nxt,nowner,3);
+  let mut h: i64 = gf(prev,pe,6);
+  // Reuse the stored hash unless compaction changed its owner seed.
+  if gf(prev,pe,1) != nowner || gf(prev,pe,2) != og {
+    h = crate::bud_keys::hash(mix(1469598103934665603,
+      wrapping_add(nowner,wrapping_mul(og,4294967296))),prev,koff,klen);
+  }
+  let ne: i64 = put_key_h(inout nxt,nowner,og,h,prev,koff,klen,true,true);
   if ne < 0 { return -1; }
   let boff: i64 = crate::bud_store::c40(gf(prev, pe, 12));
   let blen: i64 = crate::bud_store::c32(gf(prev, pe, 13));

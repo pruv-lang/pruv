@@ -764,3 +764,90 @@ The core blocker: every entry call receives an unproven host buffer, so `valid()
 
 Not patched around: no host-side flag or cached "valid" bit was added. What P03-P05 can erase without I1 is the
 per-unit work (representation), not the per-call validity scan.
+
+## P04: packed keys inside `bud_map.pruv` (2026-11-18)
+
+Scope (spec §6.2 row P04): map storage, hash and equality move to the P03 codec; the wire, id blobs, roots' wire
+decoding, drivers and hand baselines are unchanged (P05 owns them). No new interner, no language extension.
+
+What changed:
+- Arena keys are packed words (`bud_keys` big-endian lanes, zero tail). Entry field 5 keeps the unit count n; field 18
+  (key region capacity), header word 14 (live words) and `drop_entry` count `words(n)`. A freed entry's key region is
+  reused when `words(n)` fits.
+- `hash_key` = `bud_keys::hash_units(seed', units)`: the units are hashed exactly as their packed form (one mix per
+  word, then `fin(bxor(h, n))`), so the stored hash (field 6) is the word hash of the stored key.
+- `entry_matches` compares the stored words against `pack4` of the caller units (in-range fast path, `tail_word` for
+  the last 1-3 units) and falls back to `units_word` / `rd` when either range is short. n > 2^30 never matches.
+- `copy_node` (grow / compaction) copies the packed words directly and reuses the stored hash when owner and owner
+  generation are unchanged; otherwise it rehashes the stored words with `bud_keys::hash`. The old path re-hashed the
+  key units of every copied entry.
+- `key_unit` extracts a lane (`bud_keys::unit`). Unit values outside 0..65535 keep their low 16 bits on write; the wire
+  decoders already reject them, so no gate input reaches that path.
+- Roots m4 / m7 / m8 / m9 / m10 / m11 now declare `mod bud_keys;` (and `run_m11.py` copies it); the codec has one
+  copy. `bud_keys` gained `pack4`, `units_word`, `tail_word`, `hash_units` and a `words(n) == (n + 3) / 4` ensures
+  (the loop bound proof in `entry_matches` uses division).
+
+Gates (seed 20261117, 300 cases): keys 5823 / 5823 (adds 630 `hash_units` rows equal to hash-of-pack and 300 random);
+M4 300 / 300 (grow formula 1887 / 1887); Q2 `run_m8.py q` exact 63 / not-impl 237 / fail 0; Q1 `run_m7.py q` 113 /
+187 / 0; Q3 `run_m9.py q` 26 / 274 / 0; `run_m10.py q` 78 / 222 / 0; Q6 `run_m11.py --pairs rs` exact 213 /
+prefix-ok 87. All equal to P03. M8 perf: 56 / 56 checksums equal across hand16 / fxmix / oa and their w lanes.
+
+### M8 after P04 (`run_m8.py perf`, 7 rounds, n = 100 / 500)
+
+| M8 item | n | Pruv ns | /hand16 | /fxmix | /oa | Pruv instr | /hand16 | /fxmix | /oa | instr before (P03) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| charge | 100 | 32.0 | 1.51 | 2.29 | 2.13 | 844 | 1.66 | 2.24 | 2.12 | 787 |
+| charge | 500 | 35.8 | 1.46 | 2.20 | 2.00 | 846 | 1.67 | 2.24 | 2.11 | 790 |
+| failure | 100 | 25.0 | 1.53 | 2.38 | 2.19 | 729 | 2.03 | 2.96 | 2.75 | 671 |
+| failure | 500 | 28.5 | 1.52 | 2.50 | 2.30 | 731 | 2.04 | 2.98 | 2.73 | 674 |
+| tooldup | 100 | 31.2 | 1.19 | 2.20 | 2.71 | 804 | 1.44 | 2.19 | 2.72 | 711 |
+| tooldup | 500 | 39.3 | 1.55 | 3.02 | 3.14 | 807 | 1.45 | 2.23 | 2.70 | 727 |
+| toolgrow | 100 | 76.8 | 0.84 | 1.19 | 2.21 | 1773 | 0.91 | 1.28 | 2.42 | 1592 |
+| toolgrow | 500 | 86.8 | 0.86 | 1.36 | 2.76 | 1758 | 0.84 | 1.24 | 2.61 | 1608 |
+
+M7 (S = 100 / 500, Pruv/hand16 ns; Pruv instr): attach 1.75 / 1.79 (744 / 740), closereopen 1.81 / 1.83 (895 / 894),
+current 1.53 / 1.49 (727), ishalted 1.55 / 1.55 (729), replace 0.95 / 0.95 (3283). Instructions equal to P03 within
+4; ns within run noise. M4 core (n = 100 / 500 / 1000): sessions 13.3 / 13.6 / 14.3 (P03 13.7 / 13.6 / 13.6), tools
+29.5 / 34.7 / 33.6 (P03 28.6 / 31.8 / 30.8), clocks 26.4 / 24.5 / 25.9 (P03 27.7 / 30.2 / 27.5); verdict FLAT, NOT
+SLOWER than TS.
+
+### Open: P04 regression on the unit wire (blocking until P05)
+
+M8 instructions rose 57-63 per call on charge / failure, 80-93 on tooldup and 150-181 on toolgrow; ns stayed within
+noise except tooldup 100 (+7%) and toolgrow (+2-5%); M4 tools core +3-9%. Line-level cause (generated Rust in
+`work/m8/gen.rs`, `bud_keys_10_hash_units`, `bud_map_13_entry_matches`):
+- The wire still carries one i64 per unit, so every lookup packs the caller key twice: once in `hash_units` and again
+  in `entry_matches`. Each packed word is 4 loads + 4 `& 0xFFFF` + 3 shifts + 3 ors (`bud_keys.pruv` `pack4`). P02
+  hashed with an unmasked mul/add pack and compared with one `eq_range` slice compare (memcmp on units).
+- The four masks are needed for total semantics (units outside 0..65535 must not corrupt neighbouring lanes); the
+  units were validated by the wire decoder in the same call, but no contract can carry "every unit of this slice is
+  in 0..65535" into `bud_map` (I1 gaps 1, 2 in the P03 section: no named predicate in contracts, no refined slice type).
+- toolgrow also writes keys through `put_key_units` (pack per word) instead of a unit copy.
+- `tail_word` (in-range tail, no `rd`) removed 5-17 of the extra instructions; the rest is the representation mismatch.
+
+Root fix: P05 moves the wire and id blobs to packed keys. Lookups then hash the caller words directly (`bud_keys::hash`,
+one mix per word, no packing, no masks) and compare with `bud_keys::eq` (one word-slice compare over ceil(n/4)
+words), which is below both the P03 baseline and the per-unit hand16 key compare. These cells stay open until P05
+lands and is measured; P04 alone does not meet the "no regression" bar on instructions.
+
+### Threat model and probe budget
+
+- Hash: fixed seed 1469598103934665603 mixed with owner and owner generation, one 64-bit multiply mix per packed word,
+  splitmix64 / murmur3 finalizer. It is not keyed: a caller who controls key text can precompute colliding keys and
+  push one owner's lookups to O(entries in the index). Keys come from the app's own session / tool / delegation ids,
+  not from remote input, so this is accepted for the budget store; a keyed seed (per-store random word in the header)
+  is the fix if keys ever become remote-controlled.
+- Probe budget: every probe loop in `find_h` / `put_key_h` / `slot_of` is bounded by the slot count (termination does
+  not depend on contents). `make_room` rebuilds the index when used + tombstones > 3/4 of the slots, so load including
+  tombstones stays <= 0.75; expected linear-probe lengths at alpha = 0.75 are about 2.5 (hit) and 8.5 (miss) slots.
+  Each probe compares the stored hash first; the key words are read only on a full 64-bit hash match.
+- Packing does not change collision behaviour: equal packed words imply equal unit lists for valid units, and n is
+  compared separately (`"a"` vs `"a\0"`).
+
+### Checks erased and added in P04
+
+Erased by proof: the per-unit `rd` range branch in the hash and compare fast paths (both now one entry range test,
+then unchecked loads), and the per-unit `rd` in the in-range tail (`tail_word`). Grow copies no longer re-read and
+re-hash every key unit (stored hash reused). Added: `n > 2^30` reject in `entry_matches` / `put_key_units`, the
+packed region range test (`ko + words(n) <= len(st)`), and the arena-end test for a new key region. The per-call
+`valid()` scan and record checks are unchanged (I1).

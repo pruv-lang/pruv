@@ -78,6 +78,7 @@ pub fn max_units() -> i64
 pub fn words(n: i64) -> i64
   ensures 0 <= result && result <= 268435456
   ensures (0 <= n && n <= 1073741824) ==> result == ushr(n + 3, 2)
+  ensures (0 <= n && n <= 1073741824) ==> result == (n + 3) / 4
   ensures n < 0 ==> result == 0
   ensures n > 1073741824 ==> result == 268435456
 { let c: i64 = c30(n); return ushr(c + 3, 2); }
@@ -160,6 +161,68 @@ pub fn hash(seed: i64, k: [i64], ks: i64, n: i64) -> i64
   {
     h = mix(h, crate::ent_u16::rd(k, s0 + i));
     i = i + 1;
+  }
+  return fin(bxor(h, nc));
+}
+
+// Canonical big-endian word; unvalidated units retain their low 16 bits.
+pub fn pack4(a: i64, b: i64, c: i64, d: i64) -> i64
+{
+  return bor(bor(wrapping_shl(band(a,65535),48), wrapping_shl(band(b,65535),32)),
+    bor(wrapping_shl(band(c,65535),16), band(d,65535)));
+}
+
+// Four units, with zero tail lanes and total reads outside the source.
+pub fn units_word(src: [i64], s: i64, n: i64, j: i64) -> i64
+  requires 0 <= s && s <= 1099511627776 && 0 <= n && n <= 4294967296 && 0 <= j && j <= 4294967296
+{
+  if j + 4 <= n && s + j + 4 <= len(src) {
+    return pack4(src[s+j], src[s+j+1], src[s+j+2], src[s+j+3]);
+  }
+  let mut a: i64 = 0; let mut b: i64 = 0; let mut c: i64 = 0; let mut d: i64 = 0;
+  if j < n { a = crate::ent_u16::rd(src,s+j); }
+  if j+1 < n { b = crate::ent_u16::rd(src,s+j+1); }
+  if j+2 < n { c = crate::ent_u16::rd(src,s+j+2); }
+  if j+3 < n { d = crate::ent_u16::rd(src,s+j+3); }
+  return pack4(a,b,c,d);
+}
+
+// Last partial word of an in-range unit slice: units j..n (1 to 3 of them), zero lanes after. The caller has checked
+// s + n <= len(src), so the reads need no range test.
+pub fn tail_word(src: [i64], s: i64, n: i64, j: i64) -> i64
+  requires 0 <= s && 0 <= j && j < n && n < j + 4 && s + n <= len(src)
+{
+  let mut b: i64 = 0; let mut c: i64 = 0;
+  if j + 1 < n { b = src[s+j+1]; }
+  if j + 2 < n { c = src[s+j+2]; }
+  return pack4(src[s+j], b, c, 0);
+}
+
+// Hash a unit slice without allocating. Valid units produce exactly the hash of their packed form.
+// Clamps match hash; missing units read as zero, and other values use their low 16 bits.
+pub fn hash_units(seed: i64, src: [i64], s: i64, n: i64) -> i64
+{
+  let nc: i64 = c30(n);
+  let s0: i64 = c40(s);
+  let mut h: i64 = seed;
+  let mut j: i64 = 0;
+  if s0 + nc <= len(src) {
+    while j + 4 <= nc
+      invariant 0 <= j && j <= nc && 0 <= s0 && s0 + nc <= len(src)
+      decreases nc - j
+    {
+      h = mix(h, pack4(src[s0+j],src[s0+j+1],src[s0+j+2],src[s0+j+3]));
+      j = j + 4;
+    }
+    if j < nc { h = mix(h, tail_word(src,s0,nc,j)); }
+    return fin(bxor(h,nc));
+  }
+  while j < nc
+    invariant 0 <= j && j <= nc + 3 && nc <= 1073741824 && 0 <= s0 && s0 <= 1099511627776
+    decreases nc - j
+  {
+    h = mix(h, units_word(src,s0,nc,j));
+    j = j + 4;
   }
   return fin(bxor(h, nc));
 }
