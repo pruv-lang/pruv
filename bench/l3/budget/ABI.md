@@ -75,3 +75,22 @@ Order of checks:
 `put_call`, `put_resume`, `put_outcome`. Each returns the new position, or `-1` if `out` is too small. Every read of
 input and every write goes through `ent_u16::rd` / `ent_u16::wr`, so memory safety does not depend on the contents.
 The test entries validate first and then re-emit value by value, so `out[0..r) == inp`.
+
+## M7 test host protocol (`m7_test/root.pruv` `t_call`, `bud_lifecycle.pruv`)
+
+Rows for the M7 lifecycle test entry only; the M3 encoding above is unchanged.
+
+| row | words |
+|---|---|
+| op | `[code, now, quiet, origin, size, unit x5, defaultUnlimited, sessionId key, budgetId key, uuid key]`, key = `len, units...` |
+| code | 1 current, 2 isHalted, 3 attach, 4 replaceForUserMessage, 5 reopen, 6 maybeClose |
+| quiet | the host's `isQuiet()` answer, supplied up front on every call: 0 / 1; -1 = not known |
+| fx | `fx[0]` = words used; effects 13 timerClear, 20 changed, 21 carryHeld (+ id key), 22 uuid consumed, 23 isQuiet consulted (maybeClose only, always the first effect) |
+| out tag 3 | `[3, len, units...]` budget id ref |
+| out tag 4 | `[4, n, off]` budget view (current): the record is `st[off..off+n)`, valid until the next call that changes `st` |
+| status | 0 done, 2 invalid, 3 out / fx too small, 5 Need isQuiet (only when quiet = -1), -N Grow (grow to N words, call again) |
+
+The host consumes its next `isQuiet` answer only when the effects hold `[23]` (also on a non-zero status), so the
+call count on the host side matches the reference, which consults `isQuiet` once and only after the session, state
+and clock checks pass. Before this change `maybeClose` returned 5 to ask and the host called again, and `current`
+copied the record into `out` as `[4, n, words...]`.
