@@ -13,10 +13,10 @@ MUTANTS=[
  ('ping','root.pruv','method,"ping"','method,"pong"'),
  ('early-pages','root.pruv','page >= 5 ||','page >= 1 ||'),
  ('missing-command','root.pruv','if error == 2 && command_missing','if error == 3 && command_missing'),
- ('drop-title','packet.pruv','key="title"','key="absentTitle"'),
- ('description-cap','packet.pruv','cap=65536','cap=10'),
- ('readonly','packet.pruv','p[base+6]=1','p[base+6]=0'),
- ('destructive','packet.pruv','p[base+7]=destructive','p[base+7]=-1'),
+ ('drop-title','packet.pruv','"title"','"absentTitle"'),
+ ('description-cap','packet.pruv','{ return 65536; }','{ return 10; }'),
+ ('readonly','packet.pruv','q[base+6]=1;','q[base+6]=0;'),
+ ('destructive','packet.pruv','q[base+7]=dv;','q[base+7]=-1;'),
 ]
 def main():
  spec=importlib.util.spec_from_file_location('common',HERE.parent/'supervisor/common.py')
