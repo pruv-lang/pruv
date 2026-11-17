@@ -1,0 +1,569 @@
+// L3-10 M7: budget lifecycle (spec §5.1-5.5, §5.7 CLOSE, §5.8 maybeClose; B:169-242, B:399-408).
+// current, isHalted, attach (OPEN), replaceForUserMessage, reopen, CLOSE (lifecycle part), maybeClose.
+//
+// Budget record = the blob of the session entry (bud_world root 0). Layout (words):
+//   header (24): 0 state (-1 = the session has no budget, blob is just [-1]; 0 open, 1 halted, 2 closed)
+//                1 origin (0 user, 1 schedule, 2 direct, 3 release)
+//                2 unlimited (0 key absent, 1 true, 2 key present with a non-true value, kept as stored)
+//                3..7 limits (timeMinutes, delegations, commands, reviews, checks)
+//                8..15 used (activeMs, delegations, commands, reviews, checks, tools, failures, retries)
+//                16 activeSince kind (0 absent, 1 stored text, 2 instant in word 17), 17 activeSince ms
+//                18 ended.how (0 no ended, 1 quiet, 2 user-end, 3 user-message)
+//                19 ended.at kind (1 stored text, 2 instant in word 22)
+//                20 openedAt kind (1 stored text, 2 instant in word 21), 21 openedAt ms, 22 ended.at ms
+//                23 follows (0 key absent, 1 string, 2 key present with a non-string value, kept as stored)
+//   then six strings, each `len, units`: 0 id, 1 openedAt text, 2 activeSince text, 3 ended.at text, 4 follows,
+//   5 rest (the other budget properties - halt, card, autoContinue, ... - as an opaque unit string this module never
+//   reads; it is kept on every in-place change and dropped when OPEN replaces the budget).
+// Instants this module writes are stored as numbers (kind 2); formatting them with toISOString is left to the
+// boundary that renders the record (same choice as bud_clock's activeSince).
+//
+// Results are written to `out`: out[0] = 0 undefined, 1 false, 2 true, 3 ref (out[1] = budgetId length, units
+// follow; the sessionId of the ref is the session argument), 4 budget (out[1] = blob length, blob words follow).
+// A carryHeld effect puts the old budgetId after the ref: out[2 + len] = old length, units follow.
+// Effects are appended to `fx` (bud_clock frame, fx[0] = words used): bud_clock's [13] timerClear, and
+//   [20] changed, [21] carryHeld (args: session, old id in out, the returned ref), [22] uuid (one id consumed).
+// Status: 0 done, 2 invalid, 3 out/fx too small, 5 Need isQuiet (nothing written; the host answers through the
+// `quiet` argument of the retried call), -N Grow (nothing written).
+
+fn rd(a: [i64], i: i64) -> i64
+{ return crate::ent_u16::rd(a, i); }
+
+fn c32(x: i64) -> i64
+  ensures 0 <= result && result <= 4294967296
+{ return crate::bud_store::c32(x); }
+
+fn c40(x: i64) -> i64
+  ensures 0 <= result && result <= 1099511627776
+{ return crate::bud_store::c40(x); }
+
+pub fn header_words() -> i64
+  ensures result == 24
+{ return 24; }
+
+fn push(inout fx: [i64], v: i64) -> ()
+{
+  let p: i64 = c40(rd(fx, 0));
+  if p + 1 >= len(fx) { return; }
+  crate::ent_u16::wr(inout fx, p + 1, v);
+  crate::ent_u16::wr(inout fx, 0, p + 1);
+}
+
+// ---- record access ----
+
+// Session entry for the key, -1 if absent.
+fn session_of(st: [i64], sk: [i64], ss: i64, sn: i64) -> i64
+{ return crate::bud_map::find(st, 0, sk, ss, sn); }
+
+// Arena offset and length of the session's blob.
+fn blob_at(st: [i64], se: i64) -> i64
+  ensures 0 <= result && result <= 1099511627776
+{
+  let a: i64 = crate::bud_store::field_addr(st, se);
+  if a < 0 { return 0; }
+  return c40(rd(st, a + 12));
+}
+
+fn blob_n(st: [i64], se: i64) -> i64
+  ensures 0 <= result && result <= 1099511627776
+{
+  let a: i64 = crate::bud_store::field_addr(st, se);
+  if a < 0 { return 0; }
+  return c40(rd(st, a + 13));
+}
+
+// State word of the session's budget, -1 without a budget (or a blob too short to be a record).
+fn state_of(st: [i64], off: i64, n: i64) -> i64
+  requires 0 <= off && off <= 1099511627776
+{
+  if n < 30 { return -1; }
+  let s: i64 = rd(st, off);
+  if s < 0 || s > 2 { return -1; }
+  return s;
+}
+
+// Does the record's budgetId (string 0, at off + 24) equal k[ks..ks+kn)?  O(kn).
+fn id_is(st: [i64], off: i64, k: [i64], ks: i64, kn: i64) -> bool
+  requires 0 <= off && off <= 1099511627776
+{
+  if kn < 0 || kn > 4294967296 || ks < 0 || ks > 1099511627776 { return false; }
+  if rd(st, off + 24) != kn { return false; }
+  if off + 25 + kn <= len(st) && ks + kn <= len(k) {
+    // Both ranges in bounds (checked once): direct indexing.
+    let mut i: i64 = 0;
+    while i < kn
+      invariant 0 <= i && i <= kn && off + 25 + kn <= len(st) && ks + kn <= len(k) && 0 <= off && 0 <= ks
+      decreases kn - i
+    {
+      if st[off + 25 + i] != k[ks + i] { return false; }
+      i = i + 1;
+    }
+    return true;
+  }
+  let mut j: i64 = 0;
+  while j < kn
+    invariant 0 <= j && j <= kn && kn <= 4294967296 && 0 <= off && off <= 1099511627776 && 0 <= ks && ks <= 1099511627776
+    decreases kn - j
+  {
+    if rd(st, off + 25 + j) != rd(k, ks + j) { return false; }
+    j = j + 1;
+  }
+  return true;
+}
+
+// CURRENT(ref): the budget's session entry when the session has a budget whose id is ref.budgetId, else -1.
+fn current_entry(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64) -> i64
+{
+  let se: i64 = session_of(st, sk, ss, sn);
+  if se < 0 { return -1; }
+  let off: i64 = blob_at(st, se);
+  let n: i64 = blob_n(st, se);
+  if state_of(st, off, n) < 0 { return -1; }
+  if !id_is(st, off, bk, bs, bn) { return -1; }
+  return se;
+}
+
+// Start (the length word) of string k (0..5) of a record held in b (header at 0).
+fn str_at(b: [i64], k: i64) -> i64
+  ensures 0 <= result && result <= 1099511627776
+{
+  let mut p: i64 = 24;
+  let mut i: i64 = 0;
+  while i < k && i < 6
+    invariant 0 <= i && i <= 6 && 0 <= p && p <= 1099511627776
+    decreases 6 - i
+  {
+    p = c40(p + 1 + c32(rd(b, p)));
+    i = i + 1;
+  }
+  return p;
+}
+
+// Length of string k (0..5) of the record stored in st at off (no copy). O(k).
+fn str_len_in(st: [i64], off: i64, k: i64) -> i64
+  requires 0 <= off && off <= 1099511627776
+  ensures 0 <= result && result <= 4294967296
+{
+  let mut p: i64 = c40(off + 24);
+  let mut i: i64 = 0;
+  while i < k && i < 6
+    invariant 0 <= i && i <= 6 && 0 <= p && p <= 1099511627776
+    decreases 6 - i
+  {
+    p = c40(p + 1 + c32(rd(st, p)));
+    i = i + 1;
+  }
+  return c32(rd(st, p));
+}
+
+fn str_len(b: [i64], p: i64) -> i64
+  ensures 0 <= result && result <= 4294967296
+{ return c32(rd(b, p)); }
+
+// Writes `len, src[s..s+n)` at o[at]; returns the position after it.
+fn put_str(inout o: [i64], at: i64, src: [i64], s: i64, n: i64) -> i64
+  ensures len(o) == len(old(o)) && 0 <= result && result <= 1099511627776
+{
+  let a: i64 = crate::ent_u16::clamp(at, 4294967295);
+  let m: i64 = c32(n);
+  crate::ent_u16::wr(inout o, a, m);
+  let ss: i64 = c32(s);
+  if m <= 1073741824 && a + 1 + m <= len(o) && ss + m <= len(src) {
+    // Whole range in bounds (checked once): direct indexing, no per-word range check.
+    let mut k: i64 = 0;
+    while k < m
+      invariant 0 <= k && k <= m && a + 1 + m <= len(o) && ss + m <= len(src) && 0 <= a && 0 <= ss && len(o) == len(old(o))
+      decreases m - k
+    {
+      o[a + 1 + k] = src[ss + k];
+      k = k + 1;
+    }
+    return c40(a + 1 + m);
+  }
+  let e: i64 = crate::ent_u16::put_range(inout o, a + 1, src, ss, m);
+  return c40(e);
+}
+
+// Copy of the session's blob (O(blob)).
+fn blob_copy(st: [i64], se: i64) -> [i64] ! alloc
+{
+  let off: i64 = blob_at(st, se);
+  let n: i64 = blob_n(st, se);
+  return crate::ent_u16::slice(st, off, c40(off + n));
+}
+
+// The record b with header h and string 3 (ended.at text) replaced by e[es..es+en) and string 2 (activeSince text)
+// dropped when drop_since. Strings 0, 1, 4, 5 are kept. O(record).
+fn rewrite(b: [i64], h: [i64], drop_since: bool, e: [i64], es: i64, en: i64) -> [i64] ! alloc
+{
+  let p0: i64 = str_at(b, 0);
+  let p1: i64 = str_at(b, 1);
+  let p2: i64 = str_at(b, 2);
+  let p4: i64 = str_at(b, 4);
+  let p5: i64 = str_at(b, 5);
+  let l0: i64 = str_len(b, p0);
+  let l1: i64 = str_len(b, p1);
+  let mut l2: i64 = str_len(b, p2);
+  if drop_since { l2 = 0; }
+  let l4: i64 = str_len(b, p4);
+  let l5: i64 = str_len(b, p5);
+  let m3: i64 = c32(en);
+  let total: i64 = 30 + l0 + l1 + l2 + m3 + l4 + l5;
+  let mut o: [i64] = crate::ent_u16::zeros(total);
+  let mut j: i64 = 0;
+  while j < 24
+    invariant 0 <= j && j <= 24
+    decreases 24 - j
+  {
+    crate::ent_u16::wr(inout o, j, rd(h, j));
+    j = j + 1;
+  }
+  let mut at: i64 = 24;
+  at = put_str(inout o, at, b, c40(p0 + 1), l0);
+  at = put_str(inout o, at, b, c40(p1 + 1), l1);
+  at = put_str(inout o, at, b, c40(p2 + 1), l2);
+  at = put_str(inout o, at, e, c40(es), m3);
+  at = put_str(inout o, at, b, c40(p4 + 1), l4);
+  at = put_str(inout o, at, b, c40(p5 + 1), l5);
+  return o;
+}
+
+// Writes record r as the session's blob. Room was reserved by the caller, so a Grow here is a defect (status 2).
+fn store(inout st: [i64], sk: [i64], ss: i64, sn: i64, r: [i64]) -> i64 ! alloc
+{
+  let mut t: [i64] = alloc(2, 0);
+  let w: i64 = crate::bud_world::session_put(inout st, sk, ss, sn, r, 0, len(r), inout t);
+  if w != 0 { return 2; }
+  return 0;
+}
+
+// Reserves room for a session blob of `words` words; 0, or the Grow size N.
+fn reserve(inout st: [i64], words: i64) -> i64
+{ return crate::bud_map::make_room(inout st, 0, c32(words)); }
+
+fn grow(n: i64) -> i64
+{ return 0 - c40(n); }
+
+fn out_ok(out: [i64], words: i64) -> bool
+{ return words >= 0 && words <= len(out); }
+
+// Budget view frame of bud_clock from record header h: bv[1] state, [2] unlimited, [3] timeMinutes, [4] activeMs,
+// [5] activeSince kind, [6] since ms.
+fn view(h: [i64], inout bv: [i64]) -> ()
+{
+  crate::ent_u16::wr(inout bv, 0, 1);
+  crate::ent_u16::wr(inout bv, 1, rd(h, 0));
+  let mut u: i64 = 0;
+  if rd(h, 2) == 1 { u = 1; }
+  crate::ent_u16::wr(inout bv, 2, u);
+  crate::ent_u16::wr(inout bv, 3, rd(h, 3));
+  crate::ent_u16::wr(inout bv, 4, rd(h, 8));
+  crate::ent_u16::wr(inout bv, 5, rd(h, 16));
+  crate::ent_u16::wr(inout bv, 6, rd(h, 17));
+}
+
+// view() of the header stored in st at off (no copy).
+fn view_in(st: [i64], off: i64, inout bv: [i64]) -> ()
+  requires 0 <= off && off <= 1099511627776
+{
+  crate::ent_u16::wr(inout bv, 0, 1);
+  crate::ent_u16::wr(inout bv, 1, rd(st, off));
+  let mut u: i64 = 0;
+  if rd(st, off + 2) == 1 { u = 1; }
+  crate::ent_u16::wr(inout bv, 2, u);
+  crate::ent_u16::wr(inout bv, 3, rd(st, off + 3));
+  crate::ent_u16::wr(inout bv, 4, rd(st, off + 8));
+  crate::ent_u16::wr(inout bv, 5, rd(st, off + 16));
+  crate::ent_u16::wr(inout bv, 6, rd(st, off + 17));
+}
+
+// ---- queries ----
+
+// current(ref): out = [4, n, blob] for CURRENT(ref), else [0].  O(key length + record).
+pub fn current(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64, inout out: [i64]) -> i64
+{
+  if len(out) < 1 { return 3; }
+  let se: i64 = current_entry(st, sk, ss, sn, bk, bs, bn);
+  if se < 0 {
+    crate::ent_u16::wr(inout out, 0, 0);
+    return 0;
+  }
+  let off: i64 = blob_at(st, se);
+  let n: i64 = c32(blob_n(st, se));
+  if n + 2 > len(out) { return 3; }
+  if off + n > len(st) { return 2; }
+  crate::ent_u16::wr(inout out, 0, 4);
+  crate::ent_u16::wr(inout out, 1, n);
+  // Bounds are checked once above, so the copy indexes directly (no per-word range check).
+  let mut k: i64 = 0;
+  while k < n
+    invariant 0 <= k && k <= n && n + 2 <= len(out) && off + n <= len(st) && 0 <= off
+    decreases n - k
+  {
+    out[2 + k] = st[off + k];
+    k = k + 1;
+  }
+  return 0;
+}
+
+// isHalted(ref): out = [2] when CURRENT(ref) is halted, else [1].  O(key length).
+pub fn is_halted(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64, inout out: [i64]) -> i64
+{
+  if len(out) < 1 { return 3; }
+  let se: i64 = current_entry(st, sk, ss, sn, bk, bs, bn);
+  let mut r: i64 = 1;
+  if se >= 0 && rd(st, blob_at(st, se)) == 1 { r = 2; }
+  crate::ent_u16::wr(inout out, 0, r);
+  return 0;
+}
+
+// ---- OPEN ----
+
+// The record of a fresh budget (B:203-219): id = uk[us..us+un), openedAt = now, origin, state open, limits =
+// unit * times, unlimited when size is unlimited, used all 0, follows = f[fs..fs+fn) when fk == 1.
+// size: -1 absent (unit default), 0 unlimited, else the bundle count; unit[ut..ut+6) = [5 limits, defaultUnlimited].
+fn fresh(origin: i64, size: i64, unit: [i64], ut: i64, uk: [i64], us: i64, un: i64, now: i64, fk: i64, f: [i64], fs: i64, fl: i64) -> [i64] ! alloc
+{
+  let uo: i64 = c40(ut);
+  let mut chosen: i64 = size;
+  if chosen < 0 {
+    chosen = 1;
+    if rd(unit, uo + 5) == 1 { chosen = 0; }
+  }
+  let mut times: i64 = chosen;
+  if chosen == 0 { times = 1; }
+  if times > 8 { times = 8; }
+  let m: i64 = c32(un);
+  let mut g: i64 = 0;
+  if fk == 1 { g = c32(fl); }
+  let mut o: [i64] = crate::ent_u16::zeros(30 + m + g);
+  crate::ent_u16::wr(inout o, 0, 0);
+  crate::ent_u16::wr(inout o, 1, origin);
+  if chosen == 0 { crate::ent_u16::wr(inout o, 2, 1); }
+  let mut i: i64 = 0;
+  while i < 5
+    invariant 0 <= i && i <= 5 && 1 <= times && times <= 8
+    decreases 5 - i
+  {
+    let u: i64 = crate::ent_u16::clamp(rd(unit, uo + i), 1099511627776);
+    crate::ent_u16::wr(inout o, 3 + i, u * times);
+    i = i + 1;
+  }
+  crate::ent_u16::wr(inout o, 20, 2);
+  crate::ent_u16::wr(inout o, 21, now);
+  crate::ent_u16::wr(inout o, 23, fk);
+  let mut at: i64 = put_str(inout o, 24, uk, c40(us), m);
+  at = c40(at + 3);
+  at = put_str(inout o, at, f, c40(fs), g);
+  return o;
+}
+
+// OPEN (B:201-221) on session entry se whose current blob is b (stale budget, if any). Writes the record and the
+// effects [13]* (DROP of the stale clock), [22] uuid, [20] changed. Room was reserved by the caller.
+fn open_in(inout st: [i64], sk: [i64], ss: i64, sn: i64, b: [i64], origin: i64, size: i64, unit: [i64], ut: i64, uk: [i64], us: i64, un: i64, now: i64, fk: i64, f: [i64], fs: i64, fl: i64, inout fx: [i64]) -> i64 ! alloc
+{
+  if rd(b, 0) >= 0 && len(b) >= 30 {
+    let ce: i64 = crate::bud_clock::clock_of(st, b, 25, str_len(b, 24));
+    crate::bud_clock::drop_at(inout st, ce, inout fx);
+  }
+  let r: [i64] = fresh(origin, size, unit, ut, uk, us, un, now, fk, f, fs, fl);
+  push(inout fx, 22);
+  let w: i64 = store(inout st, sk, ss, sn, r);
+  if w != 0 { return w; }
+  push(inout fx, 20);
+  return 0;
+}
+
+fn valid_origin(o: i64) -> bool
+{ return o >= 0 && o <= 3; }
+
+fn valid_size(z: i64) -> bool
+{ return z == -1 || z == 0 || z == 1 || z == 2 || z == 4 || z == 8; }
+
+// Worst-case record words of an OPEN after a CLOSE of record b (the new id plus the old id as follows).
+fn open_words(b: [i64], un: i64) -> i64
+  ensures 0 <= result && result <= 8589934622
+{ return 30 + c32(un) + c32(len(b)); }
+
+// attach(session, origin, size) (B:181-185): the session's budget when it is not closed, else OPEN.
+// out = ref. O(key length + U).
+pub fn attach(inout st: [i64], sk: [i64], ss: i64, sn: i64, origin: i64, size: i64, unit: [i64], ut: i64, uk: [i64], us: i64, un: i64, now: i64, inout fx: [i64], inout out: [i64]) -> i64 ! alloc
+{
+  if !crate::bud_clock::fx_ok(fx) { return 3; }
+  if !valid_origin(origin) || !valid_size(size) { return 2; }
+  let se: i64 = session_of(st, sk, ss, sn);
+  if se < 0 { return 2; }
+  // The ref path reads the stored record in place; only OPEN copies it.
+  let off: i64 = blob_at(st, se);
+  let n: i64 = blob_n(st, se);
+  let mut s: i64 = 0;
+  if n >= 1 { s = rd(st, off); }
+  if s >= 0 && n < 30 { return 2; }
+  if s == 0 || s == 1 {
+    let il: i64 = c32(rd(st, off + 24));
+    if !out_ok(out, 2 + il) { return 3; }
+    crate::ent_u16::wr(inout out, 0, 3);
+    let e: i64 = put_str(inout out, 1, st, c40(off + 25), il);
+    return 0;
+  }
+  let b: [i64] = blob_copy(st, se);
+  if !out_ok(out, 2 + c32(un)) { return 3; }
+  let g: i64 = reserve(inout st, open_words(b, un));
+  if g != 0 { return grow(g); }
+  let w: i64 = open_in(inout st, sk, ss, sn, b, origin, size, unit, ut, uk, us, un, now, 0, b, 0, 0, inout fx);
+  if w != 0 { return w; }
+  crate::ent_u16::wr(inout out, 0, 3);
+  let e: i64 = put_str(inout out, 1, uk, c40(us), un);
+  return 0;
+}
+
+// ---- CLOSE ----
+
+// CLOSE (§5.7, B:233-238) of the session's budget record b: bud_clock's clock part (SETTLE, state closed, DROP),
+// then ended = {how, at: now}. Returns the new record; effects are bud_clock's. Room was reserved by the caller.
+fn close_rec(inout st: [i64], sk: [i64], ss: i64, sn: i64, b: [i64], how: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> [i64] ! alloc
+{
+  let mut h: [i64] = crate::ent_u16::slice(b, 0, 24);
+  view(h, inout bv);
+  let c: i64 = crate::bud_clock::close(inout st, b, 25, str_len(b, 24), sk, ss, sn, now, inout bv, inout fx);
+  crate::ent_u16::wr(inout h, 0, rd(bv, 1));
+  crate::ent_u16::wr(inout h, 8, rd(bv, 4));
+  let k: i64 = rd(bv, 5);
+  crate::ent_u16::wr(inout h, 16, k);
+  crate::ent_u16::wr(inout h, 17, rd(bv, 6));
+  crate::ent_u16::wr(inout h, 18, how);
+  crate::ent_u16::wr(inout h, 19, 2);
+  crate::ent_u16::wr(inout h, 22, now);
+  return rewrite(b, h, k != 1, b, 0, 0);
+}
+
+// replaceForUserMessage(session, size, origin) (B:192-200): a halted budget is closed ('user-message') and a new
+// one opened; unless origin is schedule the new budget follows the old id (set before `changed`, KD-2) and the old
+// id's held items are carried (effect [21]). Otherwise attach. origin -1 = absent (user).
+pub fn replace(inout st: [i64], sk: [i64], ss: i64, sn: i64, origin: i64, size: i64, unit: [i64], ut: i64, uk: [i64], us: i64, un: i64, now: i64, inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc
+{
+  let mut o: i64 = origin;
+  if o < 0 { o = 0; }
+  if !crate::bud_clock::fx_ok(fx) { return 3; }
+  if !valid_origin(o) || !valid_size(size) { return 2; }
+  let se: i64 = session_of(st, sk, ss, sn);
+  if se < 0 { return 2; }
+  let b: [i64] = blob_copy(st, se);
+  if rd(b, 0) != 1 || len(b) < 30 {
+    return attach(inout st, sk, ss, sn, o, size, unit, ut, uk, us, un, now, inout fx, inout out);
+  }
+  let ol: i64 = str_len(b, 24);
+  if !out_ok(out, 3 + c32(un) + ol) { return 3; }
+  let g: i64 = reserve(inout st, open_words(b, un) + 64);
+  if g != 0 { return grow(g); }
+  let closed: [i64] = close_rec(inout st, sk, ss, sn, b, 3, now, inout bv, inout fx);
+  let mut fk: i64 = 1;
+  if o == 1 { fk = 0; }
+  let w: i64 = open_in(inout st, sk, ss, sn, closed, o, size, unit, ut, uk, us, un, now, fk, b, 25, ol, inout fx);
+  if w != 0 { return w; }
+  crate::ent_u16::wr(inout out, 0, 3);
+  let e: i64 = put_str(inout out, 1, uk, c40(us), un);
+  if o != 1 {
+    let e2: i64 = put_str(inout out, e, b, 25, ol);
+    push(inout fx, 21);
+  }
+  return 0;
+}
+
+// reopen(ref) (B:224-231): CURRENT(ref) closed with ended.how quiet -> open, ended deleted, changed; out [2].
+// Otherwise [1]. O(key length + record).
+pub fn reopen(inout st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64, inout fx: [i64], inout out: [i64]) -> i64 ! alloc
+{
+  if !crate::bud_clock::fx_ok(fx) { return 3; }
+  if len(out) < 1 { return 3; }
+  let se: i64 = current_entry(st, sk, ss, sn, bk, bs, bn);
+  if se < 0 {
+    crate::ent_u16::wr(inout out, 0, 1);
+    return 0;
+  }
+  let off: i64 = blob_at(st, se);
+  if rd(st, off) != 2 || rd(st, off + 18) != 1 {
+    crate::ent_u16::wr(inout out, 0, 1);
+    return 0;
+  }
+  // No ended.at text: deleting `ended` keeps the record length, so the header words are rewritten in place.
+  if str_len_in(st, off, 3) == 0 {
+    crate::ent_u16::wr(inout st, off, 0);
+    crate::ent_u16::wr(inout st, off + 18, 0);
+    crate::ent_u16::wr(inout st, off + 19, 0);
+    crate::ent_u16::wr(inout st, off + 22, 0);
+    push(inout fx, 20);
+    crate::ent_u16::wr(inout out, 0, 2);
+    return 0;
+  }
+  let b: [i64] = blob_copy(st, se);
+  if rd(b, 0) != 2 || rd(b, 18) != 1 {
+    crate::ent_u16::wr(inout out, 0, 1);
+    return 0;
+  }
+  let mut h: [i64] = crate::ent_u16::slice(b, 0, 24);
+  crate::ent_u16::wr(inout h, 0, 0);
+  crate::ent_u16::wr(inout h, 18, 0);
+  crate::ent_u16::wr(inout h, 19, 0);
+  crate::ent_u16::wr(inout h, 22, 0);
+  let r: [i64] = rewrite(b, h, false, b, 0, 0);
+  let g: i64 = reserve(inout st, len(r));
+  if g != 0 { return grow(g); }
+  let w: i64 = store(inout st, sk, ss, sn, r);
+  if w != 0 { return w; }
+  push(inout fx, 20);
+  crate::ent_u16::wr(inout out, 0, 2);
+  return 0;
+}
+
+// maybeClose(session) (B:399-408): only an open budget with no runs on its clock closes, and only when the session
+// is quiet (quiet: -1 not asked yet -> status 5 with nothing written, 0 no, 1 yes). Closing is CLOSE('quiet') then
+// changed; out [2]. Otherwise [1]. O(key length + U).
+pub fn maybe_close(inout st: [i64], sk: [i64], ss: i64, sn: i64, quiet: i64, now: i64, inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc
+{
+  if !crate::bud_clock::fx_ok(fx) { return 3; }
+  if len(out) < 1 { return 3; }
+  let se: i64 = session_of(st, sk, ss, sn);
+  if se < 0 { return 2; }
+  let off: i64 = blob_at(st, se);
+  let n: i64 = blob_n(st, se);
+  crate::ent_u16::wr(inout out, 0, 1);
+  if state_of(st, off, n) != 0 { return 0; }
+  let ce: i64 = crate::bud_clock::clock_of(st, st, c40(off + 25), c32(rd(st, off + 24)));
+  if ce >= 0 && crate::bud_map::count(st, ce) > 0 { return 0; }
+  if quiet < 0 { return 5; }
+  if quiet == 0 { return 0; }
+  // No activeSince text and no ended.at text: CLOSE keeps the record length, so only the header changes. The clock
+  // part is bud_clock::close on the clock entry ce found above (SETTLE, state closed, DROP), then the header words
+  // are written in place (the entry is found again only when DROP removed a clock entry).
+  if str_len_in(st, off, 2) == 0 && str_len_in(st, off, 3) == 0 {
+    view_in(st, off, inout bv);
+    let a: i64 = crate::bud_clock::settle_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
+    crate::bud_clock::drop_at(inout st, ce, inout fx);
+    let mut o2: i64 = off;
+    if ce >= 0 {
+      let se2: i64 = session_of(st, sk, ss, sn);
+      if se2 < 0 { return 2; }
+      o2 = blob_at(st, se2);
+    }
+    crate::ent_u16::wr(inout st, o2, 2);
+    crate::ent_u16::wr(inout st, o2 + 8, rd(bv, 4));
+    crate::ent_u16::wr(inout st, o2 + 16, rd(bv, 5));
+    crate::ent_u16::wr(inout st, o2 + 17, rd(bv, 6));
+    crate::ent_u16::wr(inout st, o2 + 18, 1);
+    crate::ent_u16::wr(inout st, o2 + 19, 2);
+    crate::ent_u16::wr(inout st, o2 + 22, now);
+    push(inout fx, 20);
+    crate::ent_u16::wr(inout out, 0, 2);
+    return 0;
+  }
+  let b: [i64] = blob_copy(st, se);
+  let g: i64 = reserve(inout st, len(b) + 8);
+  if g != 0 { return grow(g); }
+  let r: [i64] = close_rec(inout st, sk, ss, sn, b, 1, now, inout bv, inout fx);
+  let w: i64 = store(inout st, sk, ss, sn, r);
+  if w != 0 { return w; }
+  push(inout fx, 20);
+  crate::ent_u16::wr(inout out, 0, 2);
+  return 0;
+}
