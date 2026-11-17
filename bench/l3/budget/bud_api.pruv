@@ -1,0 +1,135 @@
+// L3-10 M3: public constants of the request-budget test encoding (CONTRACT.md, section M3).
+// Every constant is a pub fn returning a literal, so the verifier knows its value from the `ensures`.
+// No `mod` lines: this file is found as a library module and named crate::bud_api::x.
+
+// ---- magic numbers and limits ----
+pub fn magic_call() -> i64 ensures result == 1112884291 { return 1112884291; }     // 0x42554443
+pub fn magic_resume() -> i64 ensures result == 1112884306 { return 1112884306; }   // 0x42554452
+pub fn magic_out() -> i64 ensures result == 1112884303 { return 1112884303; }      // 0x4255444F
+pub fn version() -> i64 ensures result == 1 { return 1; }
+pub fn max_words() -> i64 ensures result == 16777216 { return 16777216; }
+pub fn max_int() -> i64 ensures result == 9007199254740991 { return 9007199254740991; }
+pub fn max_now_ms() -> i64 ensures result == 8640000000000000 { return 8640000000000000; }
+pub fn max_depth() -> i64 ensures result == 32 { return 32; }
+pub fn max_argc() -> i64 ensures result == 8 { return 8; }
+pub fn max_effect_argc() -> i64 ensures result == 4 { return 4; }
+pub fn max_unit() -> i64 ensures result == 65535 { return 65535; }
+pub fn uuid_units() -> i64 ensures result == 36 { return 36; }
+
+// ---- value tags ----
+pub fn tag_absent() -> i64 ensures result == 0 { return 0; }
+pub fn tag_undefined() -> i64 ensures result == 1 { return 1; }
+pub fn tag_null() -> i64 ensures result == 2 { return 2; }
+pub fn tag_false() -> i64 ensures result == 3 { return 3; }
+pub fn tag_true() -> i64 ensures result == 4 { return 4; }
+pub fn tag_int() -> i64 ensures result == 5 { return 5; }
+pub fn tag_string() -> i64 ensures result == 6 { return 6; }
+pub fn tag_bits() -> i64 ensures result == 7 { return 7; }
+pub fn tag_array() -> i64 ensures result == 8 { return 8; }
+pub fn tag_object() -> i64 ensures result == 9 { return 9; }
+pub fn tag_session() -> i64 ensures result == 10 { return 10; }
+
+// ---- operation codes ----
+pub fn op_current() -> i64 ensures result == 1 { return 1; }
+pub fn op_is_halted() -> i64 ensures result == 2 { return 2; }
+pub fn op_attach() -> i64 ensures result == 3 { return 3; }
+pub fn op_replace_for_user_message() -> i64 ensures result == 4 { return 4; }
+pub fn op_reopen() -> i64 ensures result == 5 { return 5; }
+pub fn op_charge() -> i64 ensures result == 6 { return 6; }
+pub fn op_note_failure() -> i64 ensures result == 7 { return 7; }
+pub fn op_note_tool() -> i64 ensures result == 8 { return 8; }
+pub fn op_forget_turn() -> i64 ensures result == 9 { return 9; }
+pub fn op_run_started() -> i64 ensures result == 10 { return 10; }
+pub fn op_run_waiting() -> i64 ensures result == 11 { return 11; }
+pub fn op_run_ended() -> i64 ensures result == 12 { return 12; }
+pub fn op_halt() -> i64 ensures result == 13 { return 13; }
+pub fn op_maybe_close() -> i64 ensures result == 14 { return 14; }
+pub fn op_raise() -> i64 ensures result == 15 { return 15; }
+pub fn op_decide() -> i64 ensures result == 16 { return 16; }
+pub fn op_set_card() -> i64 ensures result == 17 { return 17; }
+pub fn op_has_card() -> i64 ensures result == 18 { return 18; }
+pub fn op_clear_auto_continue() -> i64 ensures result == 19 { return 19; }
+pub fn op_record_auto_continue() -> i64 ensures result == 20 { return 20; }
+pub fn op_stop_auto_continue() -> i64 ensures result == 21 { return 21; }
+pub fn op_boot_restore() -> i64 ensures result == 22 { return 22; }
+pub fn op_forget_session() -> i64 ensures result == 23 { return 23; }
+pub fn op_dispose() -> i64 ensures result == 24 { return 24; }
+pub fn op_fire() -> i64 ensures result == 25 { return 25; }
+pub fn op_limit_text() -> i64 ensures result == 30 { return 30; }
+pub fn op_refusal_wire() -> i64 ensures result == 31 { return 31; }
+pub fn op_refusal() -> i64 ensures result == 32 { return 32; }
+pub fn op_continue_text() -> i64 ensures result == 33 { return 33; }
+pub fn op_card_missing() -> i64 ensures result == 34 { return 34; }
+pub fn op_budget_unit_of() -> i64 ensures result == 35 { return 35; }
+
+// valid operation codes: 1..25 and 30..35
+pub fn op_valid(op: i64) -> bool
+{
+  if op >= 1 && op <= 25 { return true; }
+  if op >= 30 && op <= 35 { return true; }
+  return false;
+}
+
+// ---- effect codes ----
+pub fn eff_save() -> i64 ensures result == 1 { return 1; }
+pub fn eff_changed() -> i64 ensures result == 2 { return 2; }
+pub fn eff_stop_main() -> i64 ensures result == 3 { return 3; }
+pub fn eff_stop_delegation() -> i64 ensures result == 4 { return 4; }
+pub fn eff_stop_attached_turns() -> i64 ensures result == 5 { return 5; }
+pub fn eff_hold_queued() -> i64 ensures result == 6 { return 6; }
+pub fn eff_carry_held() -> i64 ensures result == 7 { return 7; }
+pub fn eff_queue_continue() -> i64 ensures result == 8 { return 8; }
+pub fn eff_drop_held() -> i64 ensures result == 9 { return 9; }
+pub fn eff_cancel_recovery() -> i64 ensures result == 10 { return 10; }
+pub fn eff_announce() -> i64 ensures result == 11 { return 11; }
+pub fn eff_timer_set() -> i64 ensures result == 12 { return 12; }
+pub fn eff_timer_clear() -> i64 ensures result == 13 { return 13; }
+
+pub fn effect_valid(code: i64) -> bool
+{
+  return code >= 1 && code <= 13;
+}
+
+// ---- query codes ----
+pub fn q_running_delegation_ids() -> i64 ensures result == 1 { return 1; }
+pub fn q_is_quiet() -> i64 ensures result == 2 { return 2; }
+pub fn q_release_held() -> i64 ensures result == 3 { return 3; }
+
+pub fn query_valid(code: i64) -> bool
+{
+  return code >= 1 && code <= 3;
+}
+
+// ---- outcome kinds ----
+pub fn kind_done() -> i64 ensures result == 1 { return 1; }
+pub fn kind_need() -> i64 ensures result == 2 { return 2; }
+pub fn kind_invalid() -> i64 ensures result == 3 { return 3; }
+pub fn kind_bound() -> i64 ensures result == 4 { return 4; }
+pub fn kind_grow() -> i64 ensures result == 5 { return 5; }
+
+// ---- rejection classes and reasons ----
+pub fn class_invalid() -> i64 ensures result == 3 { return 3; }
+pub fn class_bound() -> i64 ensures result == 4 { return 4; }
+
+// InvalidInput reasons
+pub fn why_header() -> i64 ensures result == 1 { return 1; }
+pub fn why_length() -> i64 ensures result == 2 { return 2; }
+pub fn why_value() -> i64 ensures result == 3 { return 3; }
+pub fn why_op() -> i64 ensures result == 4 { return 4; }
+pub fn why_trailing() -> i64 ensures result == 5 { return 5; }
+pub fn why_depth() -> i64 ensures result == 6 { return 6; }
+pub fn why_state() -> i64 ensures result == 7 { return 7; }
+pub fn why_resume() -> i64 ensures result == 8 { return 8; }
+
+// ResourceBound reasons
+pub fn bound_input() -> i64 ensures result == 1 { return 1; }
+pub fn bound_number() -> i64 ensures result == 2 { return 2; }
+pub fn bound_state() -> i64 ensures result == 3 { return 3; }
+
+// status encoding: a rejection is -(100*class + reason)
+pub fn reject(class: i64, reason: i64) -> i64
+  requires 0 <= class && class <= 9 && 0 <= reason && reason <= 99
+  ensures result == -(100 * class + reason)
+{
+  return -(100 * class + reason);
+}
