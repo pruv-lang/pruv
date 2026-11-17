@@ -18,7 +18,8 @@
 // Grow -N: buffer of max(N, 2*len), t_grow, retry.
 // Wire keys are packed u16 keys `n, words(n) packed words` (bud_keys layout), packed once by the encoder (run_m7.py
 // for q mode, key() below for perf / boundary); the records hold the budget id and follows packed the same way
-// (bud_lifecycle.pruv header). Result words still name ids as `len, units...`.
+// (bud_lifecycle.pruv header). A ref result keeps its ids packed too ([3, n, words(n) words (, m, words(m) words)]);
+// the host unpacks them to units at egress (ref_units) for the q-mode log and rchk, so those stay `len, units...`.
 use std::hint::black_box;
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
@@ -195,9 +196,9 @@ impl World {
         if !self.silent {
             let w: Vec<String> = match self.out[0] {
                 3 => {
-                    let l = 2 + self.out[1].max(0) as usize;
-                    let k = if self.fx[1..=used].contains(&21) { l + 1 + self.out[l].max(0) as usize } else { l };
-                    self.out[..k].iter().map(|x| x.to_string()).collect()
+                    // the ref's ids are packed in out; print them as units
+                    let carry = self.fx[1..=used].contains(&21);
+                    ref_units(&self.out, carry).iter().map(|x| x.to_string()).collect()
                 }
                 4 => {
                     // budget view: the record is st[off..off+n)
@@ -240,6 +241,34 @@ fn nums(it: &[&str]) -> Vec<i64> {
 // Data words of a packed key of n units: ceil(n / 4).
 fn words(n: i64) -> usize {
     (n.max(0) as usize + 3) / 4
+}
+
+// Host egress of a ref result (out[0] == 3): out = [3, n, packed id words (words(n)) (, m, packed old id words(m) when
+// effect 21 is held)]. Returns the unit form [3, n, id units.. (, m, old id units..)], the words q mode prints and
+// rchk folds. Untimed paths only.
+fn ref_units(out: &[i64], carry: bool) -> Vec<i64> {
+    let mut v = vec![3i64];
+    let mut p = 1;
+    for _ in 0..(if carry { 2 } else { 1 }) {
+        let n = out[p].max(0) as usize;
+        v.push(n as i64);
+        for j in 0..n {
+            let word = out[p + 1 + j / 4] as u64;
+            v.push(((word >> (48 - 16 * (j % 4))) & 0xffff) as i64);
+        }
+        p += 1 + words(n as i64);
+    }
+    v
+}
+
+// Packed words of a ref result: 2 + words(n) (+ 1 + words(m) when the old id is carried).
+fn ref_len(out: &[i64], carry: bool) -> usize {
+    let l = 2 + words(out[1]);
+    if carry {
+        l + 1 + words(out[l])
+    } else {
+        l
+    }
 }
 
 // A run of packed keys `n, words(n) packed words` into separate keys (each with its frame word).
@@ -414,6 +443,45 @@ fn run_perf(args: &[String]) {
         }
         s
     };
+    // Typed-entry lane: the same calls through c_direct(w, &Prep) (prepared once, outside the timed loop): one direct
+    // typed call per op, like the hand typed lane's bare `w.current(..)`; the Grow retry loop (c_call) runs only
+    // when a call answers Grow. The typed calls read no host UUID / isQuiet stream, so no stream reset here. Prints
+    // `t <item> <size> <ns>` and, from an untimed fresh run of vn iterations, `rchk_t <item> <size> <value>`.
+    let typed = |name: &str, state: i64, quiet: &[i64], bodies: &[Vec<i64>], per: usize, put: Option<&Vec<i64>>| {
+        let mk = || -> (World, Vec<Prep>) {
+            let mut w = setup(state);
+            w.quiet = quiet.to_vec();
+            let ps: Vec<Prep> = bodies.iter().map(|b| prep_of(&mut w, b)).collect();
+            (w, ps)
+        };
+        let step = |w: &mut World, ps: &[Prep], s: Option<&mut u64>| {
+            let mut s = s;
+            for p in ps {
+                let r = black_box(c_direct(w, black_box(p)));
+                if let Some(s) = s.as_mut() {
+                    **s = rchk_fold(w, r, **s);
+                }
+            }
+            if let Some(p) = put {
+                w.put(black_box(p));
+            }
+        };
+        let (mut w, ps) = mk();
+        for _ in 0..1000 {
+            step(&mut w, &ps, None);
+        }
+        let t = Instant::now();
+        for _ in 0..reps {
+            step(&mut w, &ps, None);
+        }
+        println!("t {} {} {:.1}", name, size, t.elapsed().as_nanos() as f64 / (reps * per) as f64);
+        let (mut w, ps) = mk();
+        let mut s = 0u64;
+        for _ in 0..vn {
+            step(&mut w, &ps, Some(&mut s));
+        }
+        println!("rchk_t {} {} {}", name, size, s);
+    };
     let mut w = setup(0);
     let ops = vec![body(0, -1, -1, &bid(last))];
     println!("dispatch {} {:.1}", size, time(&mut w, &ops, 1));
@@ -443,16 +511,19 @@ fn run_perf(args: &[String]) {
     let ops = vec![body(2, -1, -1, &bid(last))];
     println!("ishalted {} {:.1}", size, time(&mut w, &ops, 1));
     println!("rchk ishalted {} {}", size, verify(&mut setup(0), &ops));
+    typed("ishalted", 0, &[], &ops, 1, None);
     // current
     let mut w = setup(0);
     let ops = vec![body(1, -1, -1, &bid(last))];
     println!("current {} {:.1}", size, time(&mut w, &ops, 1));
     println!("rchk current {} {}", size, verify(&mut setup(0), &ops));
+    typed("current", 0, &[], &ops, 1, None);
     // attach (open budget: ref)
     let mut w = setup(0);
     let ops = vec![body(3, 0, -1, "")];
     println!("attach {} {:.1}", size, time(&mut w, &ops, 1));
     println!("rchk attach {} {}", size, verify(&mut setup(0), &ops));
+    typed("attach", 0, &[], &ops, 1, None);
     // close + reopen cycle: maybeClose (quiet) then reopen
     let mut w = setup(0);
     w.quiet = vec![1];
@@ -463,6 +534,7 @@ fn run_perf(args: &[String]) {
         w.quiet = vec![1];
         println!("rchk closereopen {} {}", size, verify(&mut w, &ops));
     }
+    typed("closereopen", 0, &[1], &ops, 2, None);
     // replace on a halted budget (CLOSE + OPEN + follows + carryHeld), then put the halted record back
     let mut w = setup(1);
     let rp = body(4, 0, 2, "");
@@ -492,6 +564,7 @@ fn run_perf(args: &[String]) {
         w.put(&put);
     }
     println!("rchk replace {} {}", size, s);
+    typed("replace", 1, &[], std::slice::from_ref(&rp), 1, Some(&put));
 }
 
 // rchk: per-op result checksum of the perf verification pass, s = s*31 + w (wrapping u64). Per call it folds, in this
@@ -522,10 +595,9 @@ fn rchk_fold(w: &World, r: i64, sum: u64) -> u64 {
             }
         }
         3 => {
-            let l = 2 + w.out[1].max(0) as usize;
-            let k = if w.fx[1..=used].contains(&21) { l + 1 + w.out[l].max(0) as usize } else { l };
-            for x in &w.out[..k] {
-                fold(*x);
+            // the ref's packed ids are unpacked to units, so the folded words equal hand16's
+            for x in ref_units(&w.out, w.fx[1..=used].contains(&21)) {
+                fold(x);
             }
         }
         x => fold(x),
@@ -668,6 +740,25 @@ fn c_call(w: &mut World, p: &Prep) -> i64 {
     r
 }
 
+// One direct typed call (the timed typed path); only a Grow answer falls back to the c_call retry loop.
+#[inline(always)]
+fn c_direct(w: &mut World, p: &Prep) -> i64 {
+    w.fx[0] = 0;
+    let r = match p.code {
+        1 => sol::c_current(&w.st, black_box(&p.sk), p.sn, black_box(&p.bk), p.bn, &mut w.out),
+        2 => sol::c_is_halted(&w.st, black_box(&p.sk), p.sn, black_box(&p.bk), p.bn, &mut w.out),
+        3 => sol::c_attach(&mut w.st, black_box(&p.sk), p.sn, p.origin, p.size, &p.unit, black_box(&p.uk), p.un, p.now, &mut w.fx, &mut w.out),
+        4 => sol::c_replace(&mut w.st, black_box(&p.sk), p.sn, p.origin, p.size, &p.unit, black_box(&p.uk), p.un, p.now, &mut w.bv, &mut w.fx, &mut w.out),
+        5 => sol::c_reopen(&mut w.st, black_box(&p.sk), p.sn, black_box(&p.bk), p.bn, &mut w.fx, &mut w.out),
+        6 => sol::c_maybe_close(&mut w.st, black_box(&p.sk), p.sn, p.quiet, p.now, &mut w.bv, &mut w.fx, &mut w.out),
+        _ => 2,
+    };
+    if r < 0 {
+        return c_call(w, p);
+    }
+    r
+}
+
 // One call of variant v with the same reset of the host's UUID / isQuiet streams.
 fn one(v: Var, w: &mut World, body: &[i64], p: &Prep) -> i64 {
     w.next_uuid = 0;
@@ -676,7 +767,7 @@ fn one(v: Var, w: &mut World, body: &[i64], p: &Prep) -> i64 {
         Var::A => w.call(black_box(body)),
         Var::B => raw_call(w, black_box(&p.op), false),
         Var::Bnv => raw_call(w, black_box(&p.op), true),
-        Var::C => c_call(w, p),
+        Var::C => c_direct(w, p),
     }
 }
 
@@ -706,8 +797,8 @@ fn consume(w: &World, r: i64, sum: u64) -> u64 {
         }
         3 => {
             let used = w.fx[0].max(0) as usize;
-            let l = 2 + w.out[1].max(0) as usize;
-            let k = if w.fx[1..=used].contains(&21) { l + 1 + w.out[l].max(0) as usize } else { l };
+            // packed ref words: [3, n, words(n) id words (, m, words(m) old id words)]
+            let k = ref_len(&w.out, w.fx[1..=used].contains(&21));
             for x in &w.out[..k] {
                 fold(*x);
             }

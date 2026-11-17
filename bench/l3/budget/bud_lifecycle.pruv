@@ -203,6 +203,12 @@ pub fn str_at(b: [i64], k: i64) -> i64
 pub fn str_len_in(st: [i64], off: i64, k: i64) -> i64
   requires 0 <= off && off <= 1099511627776
   ensures 0 <= result && result <= 4294967296
+{ return c32(rd(st, str_pos_in(st, off, k))); }
+
+// Position (the length word) of string k (0..5) of the record stored in st at off: one walk over strings 0..k-1.
+fn str_pos_in(st: [i64], off: i64, k: i64) -> i64
+  requires 0 <= off && off <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776
 {
   let mut p: i64 = c40(off + 24);
   let mut i: i64 = 0;
@@ -213,7 +219,7 @@ pub fn str_len_in(st: [i64], off: i64, k: i64) -> i64
     p = c40(p + 1 + str_words(i, rd(st, p)));
     i = i + 1;
   }
-  return c32(rd(st, p));
+  return p;
 }
 
 fn str_len(b: [i64], p: i64) -> i64
@@ -273,30 +279,6 @@ pub fn put_key(inout o: [i64], at: i64, k: [i64], s: i64, n: i64) -> i64
   if nn > 1073741824 { nn = 1073741824; }
   crate::ent_u16::wr(inout o, a, nn);
   return copy_words(inout o, a + 1, k, s, crate::bud_keys::words(nn));
-}
-
-// Writes the packed key (k, s, n) as a unit string `n, units...` at o[at] (n clamped into 0..2^30): results name keys
-// in units. bud_keys::unpack_units when both ranges are in bounds, else per unit through bud_keys::unit (total: a word
-// outside k reads 0); both give the same units. Returns the position after it.
-pub fn put_units_of(inout o: [i64], at: i64, k: [i64], s: i64, n: i64) -> i64
-  ensures len(o) == len(old(o)) && 0 <= result && result <= 1099511627776
-{
-  let a: i64 = crate::ent_u16::clamp(at, 4294967295);
-  let mut nn: i64 = c32(n);
-  if nn > 1073741824 { nn = 1073741824; }
-  crate::ent_u16::wr(inout o, a, nn);
-  let ss: i64 = c40(s);
-  let ur: i64 = crate::bud_keys::unpack_units(inout o, a + 1, k, ss, nn);
-  if ur == 0 { return a + 1 + nn; }
-  let mut j: i64 = 0;
-  while j < nn
-    invariant 0 <= j && j <= nn && nn <= 1073741824 && 0 <= a && a <= 4294967295 && len(o) == len(old(o))
-    decreases nn - j
-  {
-    crate::ent_u16::wr(inout o, a + 1 + j, crate::bud_keys::unit(k, ss, nn, j));
-    j = j + 1;
-  }
-  return a + 1 + nn;
 }
 
 // Copy of the session's blob (O(blob)).
@@ -514,7 +496,8 @@ fn open_words(b: [i64], un: i64) -> i64
 { return 30 + c32(un) + c32(len(b)); }
 
 // attach(session, origin, size) (B:181-185): the session's budget when it is not closed, else OPEN.
-// out = ref. O(key length + U).
+// out = ref = [3, n, packed id words (words(n))] (the id stays packed; the host unpacks it at egress).
+// O(key length + U).
 pub fn attach(inout st: [i64], sk: [i64], ss: i64, sn: i64, origin: i64, size: i64, unit: [i64], ut: i64, uk: [i64], us: i64, un: i64, now: i64, inout fx: [i64], inout out: [i64]) -> i64 ! alloc
 {
   if !crate::bud_clock::fx_ok(fx) { return 3; }
@@ -522,26 +505,27 @@ pub fn attach(inout st: [i64], sk: [i64], ss: i64, sn: i64, origin: i64, size: i
   let se: i64 = session_of(st, sk, ss, sn);
   if se < 0 { return 2; }
   // The ref path reads the stored record in place; only OPEN copies it.
-  let off: i64 = blob_at(st, se);
-  let n: i64 = blob_n(st, se);
+  let a: i64 = entry_addr(st, se);
+  let off: i64 = at_off(st, a);
+  let n: i64 = at_n(st, a);
   let mut s: i64 = 0;
   if n >= 1 { s = rd(st, off); }
   if s >= 0 && n < 30 { return 2; }
   if s == 0 || s == 1 {
     let il: i64 = c32(rd(st, off + 24));
-    if !out_ok(out, 2 + il) { return 3; }
+    if !out_ok(out, 2 + crate::bud_keys::words(il)) { return 3; }
     crate::ent_u16::wr(inout out, 0, 3);
-    let e: i64 = put_units_of(inout out, 1, st, c40(off + 25), il);
+    let e: i64 = put_key(inout out, 1, st, c40(off + 25), il);
     return 0;
   }
   let b: [i64] = blob_copy(st, se);
-  if !out_ok(out, 2 + c32(un)) { return 3; }
+  if !out_ok(out, 2 + crate::bud_keys::words(c32(un))) { return 3; }
   let g: i64 = reserve(inout st, open_words(b, un));
   if g != 0 { return grow(g); }
   let w: i64 = open_in(inout st, sk, ss, sn, b, origin, size, unit, ut, uk, us, un, now, 0, b, 0, 0, inout fx);
   if w != 0 { return w; }
   crate::ent_u16::wr(inout out, 0, 3);
-  let e: i64 = put_units_of(inout out, 1, uk, c40(us), un);
+  let e: i64 = put_key(inout out, 1, uk, c40(us), un);
   return 0;
 }
 
@@ -588,7 +572,8 @@ pub fn replace(inout st: [i64], sk: [i64], ss: i64, sn: i64, origin: i64, size: 
   let ow: i64 = crate::bud_keys::words(ol);
   let m: i64 = c32(un);
   let mw: i64 = crate::bud_keys::words(m);
-  if !out_ok(out, 3 + m + ol) { return 3; }
+  // out = [3, m, new id words (mw)] then, unless o == 1, [ol, old id words (ow)].
+  if !out_ok(out, 3 + mw + ow) { return 3; }
   // Room for the new record (30 + words(un) + words(ol) words, ol counted even when the old id's length word runs
   // past the blob) plus the old reservation; store's put then fits without Grow. make_room keeps entries and blob
   // offsets.
@@ -620,11 +605,11 @@ pub fn replace(inout st: [i64], sk: [i64], ss: i64, sn: i64, origin: i64, size: 
   if w != 0 { return w; }
   push(inout fx, 20);
   crate::ent_u16::wr(inout out, 0, 3);
-  let e: i64 = put_units_of(inout out, 1, uk, c40(us), un);
+  let e: i64 = put_key(inout out, 1, uk, c40(us), un);
   if o != 1 {
     // The old id is the new record's follows (string 4 at 28 + words(un): the packed id, then three empty strings),
-    // written to out in units.
-    let e2: i64 = put_units_of(inout out, e, r, c40(29 + mw), ol);
+    // written to out as a framed packed key (packed-to-packed copy).
+    let e2: i64 = put_key(inout out, e, r, c40(29 + mw), ol);
     push(inout fx, 21);
   }
   return 0;
@@ -694,7 +679,10 @@ pub fn maybe_close(inout st: [i64], sk: [i64], ss: i64, sn: i64, quiet: i64, now
   let ce: i64 = clock_in(st, st, c40(off + 25), c32(rd(st, off + 24)));
   if ce >= 0 && crate::bud_map::count(st, ce) > 0 { crate::ent_u16::wr(inout out, 0, 1); return 0; }
   if quiet < 0 { return 5; }
-  let in_place: bool = str_len_in(st, off, 2) == 0 && str_len_in(st, off, 3) == 0;
+  // activeSince (string 2) and ended.at (string 3) both empty, from one walk: with string 2 empty, string 3's length
+  // word is the next word (str_len_in(st, off, 3) == c32(rd(st, c40(p2 + 1))) when string 2 has length 0).
+  let p2: i64 = str_pos_in(st, off, 2);
+  let in_place: bool = c32(rd(st, p2)) == 0 && c32(rd(st, c40(p2 + 1))) == 0;
   if quiet != 0 && !in_place {
     // Room for the rewritten record before the first effect, so a Grow writes nothing. The same blob copy feeds
     // close_rec: reserve does not change the record, so it is not copied twice.
@@ -716,18 +704,26 @@ pub fn maybe_close(inout st: [i64], sk: [i64], ss: i64, sn: i64, quiet: i64, now
   if quiet == 0 { return 0; }
   // No activeSince text and no ended.at text: CLOSE keeps the record length, so only the header changes. The clock
   // part is bud_clock::close on the clock entry ce found above (SETTLE, state closed, DROP), then the header words
-  // are written in place (the entry is found again only when DROP removed a clock entry).
+  // are written in place (the entry is found again after DROP, which may move entries).
   if in_place {
+    if ce < 0 {
+      // No clock entry: SETTLE and DROP do nothing and amounts / spent stay as stored, so only state, closed and the
+      // end stamp change. The bv scratch frame is not loaded (nothing reads it on this path; Q compares st/fx/out).
+      crate::ent_u16::wr(inout st, off, 2);
+      crate::ent_u16::wr(inout st, off + 18, 1);
+      crate::ent_u16::wr(inout st, off + 19, 2);
+      crate::ent_u16::wr(inout st, off + 22, now);
+      push(inout fx, 20);
+      crate::ent_u16::wr(inout out, 0, 2);
+      return 0;
+    }
     view_in(st, off, inout bv);
     let sa: i64 = crate::bud_clock::settle_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
     crate::ent_u16::wr(inout bv, 1, 2);
     crate::bud_clock::drop_at(inout st, ce, inout fx);
-    let mut o2: i64 = off;
-    if ce >= 0 {
-      let se2: i64 = session_of(st, sk, ss, sn);
-      if se2 < 0 { return 2; }
-      o2 = blob_at(st, se2);
-    }
+    let se2: i64 = session_of(st, sk, ss, sn);
+    if se2 < 0 { return 2; }
+    let o2: i64 = blob_at(st, se2);
     crate::ent_u16::wr(inout st, o2, 2);
     crate::ent_u16::wr(inout st, o2 + 8, rd(bv, 4));
     crate::ent_u16::wr(inout st, o2 + 16, rd(bv, 5));

@@ -19,7 +19,8 @@ After the random cases (numbered 0..count-1, seed 20261117) a fixed set of deter
     code, a frame that swallows the uuid key as an extra "key", invalid origin / size, `del` with a malformed or
     non-canonical key (`X del 2`), maybeClose with quiet -1 (`X 5`), non-canonical packed call keys (nonzero tail lanes
     in the last word of a session, budget or uuid key: `X 2`), absent sessions;
-  * out-buffer limits: budget / uuid ids of 4094 and 4095 units (status 3 above 4096 result words);
+  * out-buffer limits: budget / uuid ids at the packed edge, 16376 / 16377 units (replace: 16368 / 16369), status 3
+    above 4096 result words;
   * fatal driver inputs, each in its own process (compared on exit status and stdout, plus stderr for status 2): put
     with n too big / too small / negative, key length overrun / negative, a non-canonical session key, no n word, no
     words; an unknown command; `call` with no request id / no body, `now` without a number, `uuids` with a key running
@@ -388,16 +389,16 @@ def controls():
             p = base("badtail", 1, quiet="1")
             p.call_words([code, 0, 2 if code == 4 else -1] + U + bad + kw(BID))
             add("call key tail lane %d = %d, session key, code %d" % (lane, v, code), p.end(), ["@ r0", "X 2"])
-    # out-buffer limits: results of more than 4096 words answer status 3
-    for il, exp in ((4094, "V 3"), (4095, "X 3")):
+    # out-buffer limits: results of more than 4096 words answer status 3 (ids are packed: 2 + words(n) <= 4096)
+    for il, exp in ((16376, "V 3"), (16377, "X 3")):
         p = base("outbig", 0, bid=[97] * il)
         p.call(3, SK, [97] * il, 0)
         add("attach ref, budget id %d units" % il, p.end(), ["@ r0", exp] if exp == "X 3" else None)
-    for ul, ex in ((4094, "ok"), (4095, "X 3")):
+    for ul, ex in ((16376, "ok"), (16377, "X 3")):
         p = base("outbig", 2, uuids=kw([98] * ul), ended=(1, ("ms", 7)))
         p.call(3, SK, BID, 0)
         add("attach open, uuid %d units" % ul, p.end(), ["@ r0", "X 3"] if ex == "X 3" else None)
-    for ol, ex in ((4090, "ok"), (4091, "X 3")):
+    for ol, ex in ((16368, "ok"), (16369, "X 3")):
         p = base("outbig", 1, bid=[97] * ol)
         p.call(4, SK, [97] * ol, 0, 2)
         add("replace halted, budget id %d units, uuid 3" % ol, p.end(), ["@ r0", "X 3"] if ex == "X 3" else None)
