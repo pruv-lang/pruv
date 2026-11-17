@@ -27,35 +27,71 @@ fn sh(inout st: [i64], i: i64, v: i64) -> ()
 
 // ---- hashing ----
 
+// One word into the hash: xor, then multiply by the 64-bit golden-ratio constant (odd). A multiply only carries bits
+// upward, so the result is finished by fin(), which brings the high bits down to the slot mask.
 fn mix(h: i64, v: i64) -> i64
-{ return wrapping_mul(bxor(h, v), 1099511628211); }
+{ return wrapping_mul(bxor(h, v), -7046029254386353131); }
+
+// splitmix64 / murmur3 finalizer: every input bit reaches the low bits used by the slot mask.
+fn fin(h: i64) -> i64
+{
+  let a: i64 = bxor(h, ushr(h, 33));
+  let b: i64 = wrapping_mul(a, -49064778989728563);
+  return bxor(b, ushr(b, 33));
+}
+
+// Four key units packed into one word for one mix (units past the key end are 0; the length is mixed in at the end).
+fn pack4(u0: i64, u1: i64, u2: i64, u3: i64) -> i64
+{
+  return wrapping_add(wrapping_add(u0, wrapping_mul(u1, 65536)),
+    wrapping_add(wrapping_mul(u2, 4294967296), wrapping_mul(u3, 281474976710656)));
+}
+
+// Unit j of key[s0..s0+n) through the total read, 0 at or past n.
+fn unit_or0(key: [i64], s0: i64, n: i64, j: i64) -> i64
+  requires 0 <= s0 && s0 <= 1099511627776 && 0 <= j && j <= 8589934592
+{
+  if j < n { return crate::ent_u16::rd(key, s0 + j); }
+  return 0;
+}
 
 // Hash of (owner, owner generation, key[ks..ks+kn)). ks is clamped into 0..2^40, kn into 0..2^32.
+// The key is mixed 4 units at a time (one dependent multiply per 4 units); every map operation goes through this
+// function and entries store its result (field 6), so add, find, remove and rehash stay consistent.
 pub fn hash_key(owner: i64, ogen: i64, key: [i64], ks: i64, kn: i64) -> i64
 {
   let n: i64 = crate::bud_store::c32(kn);
   let s0: i64 = crate::bud_store::c40(ks);
-  let mut h: i64 = mix(mix(1469598103934665603, owner), ogen);
+  // owner and owner generation share one word (one multiply); the length goes in by xor before fin()
+  let mut h: i64 = mix(1469598103934665603, wrapping_add(owner, wrapping_mul(ogen, 4294967296)));
   let mut j: i64 = 0;
   if s0 + n <= len(key) {
-    // whole key in range: one check for the loop (same units as the total path below)
-    while j < n
+    // whole key in range: one check for the loop (same packed words as the total path below)
+    while j + 4 <= n
       invariant 0 <= j && j <= n && 0 <= s0 && s0 + n <= len(key)
       decreases n - j
     {
-      h = mix(h, key[s0 + j]);
-      j = j + 1;
+      h = mix(h, pack4(key[s0 + j], key[s0 + j + 1], key[s0 + j + 2], key[s0 + j + 3]));
+      j = j + 4;
     }
-    return bxor(h, ushr(h, 32));
+    if j < n {
+      let mut u1: i64 = 0;
+      let mut u2: i64 = 0;
+      if j + 1 < n { u1 = key[s0 + j + 1]; }
+      if j + 2 < n { u2 = key[s0 + j + 2]; }
+      h = mix(h, pack4(key[s0 + j], u1, u2, 0));
+    }
+    return fin(bxor(h, n));
   }
   while j < n
-    invariant 0 <= j && j <= n && n <= 4294967296 && 0 <= s0 && s0 <= 1099511627776
+    invariant 0 <= j && j <= n + 3 && 0 <= n && n <= 4294967296 && 0 <= s0 && s0 <= 1099511627776
     decreases n - j
   {
-    h = mix(h, crate::ent_u16::rd(key, s0 + j));
-    j = j + 1;
+    h = mix(h, pack4(unit_or0(key, s0, n, j), unit_or0(key, s0, n, j + 1), unit_or0(key, s0, n, j + 2),
+      unit_or0(key, s0, n, j + 3)));
+    j = j + 4;
   }
-  return bxor(h, ushr(h, 32));
+  return fin(bxor(h, n));
 }
 
 // Absolute address of probe position i for hash h; -1 if the slot count is 0.
@@ -317,13 +353,18 @@ fn put_key(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, absent: bo
   let og: i64 = gf(st, owner, 3);
   let h: i64 = hash_key(owner, og, key, ks, kn);
   let slots: i64 = crate::bud_store::c32(hw(st, 4));
+  // header words 3, 4 in range: slot base and mask read once (the same addresses slot_pos gives)
+  let fast: bool = len(st) >= 5 && slots >= 1;
+  let mut sb: i64 = 0;
+  if fast { sb = crate::bud_store::c32(st[3]); }
   let mut slot: i64 = -1;
   let mut i: i64 = 0;
   while i < slots
     invariant 0 <= i && i <= slots && slots <= 4294967296
     decreases slots - i
   {
-    let p: i64 = slot_pos(st, h, i);
+    let mut p: i64 = -1;
+    if fast { p = sb + band(wrapping_add(h, i), slots - 1); } else { p = slot_pos(st, h, i); }
     let w: i64 = crate::ent_u16::rd(st, p);
     if w == 0 {
       if slot < 0 { slot = p; }

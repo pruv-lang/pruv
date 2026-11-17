@@ -144,3 +144,48 @@ More fast paths in `root_m4.pruv` (`key_end`, decoders), `bud_map` (`find`, `set
 The rest is no inlining of the generated call chain (compiler) plus the per-op `valid()` header check (raw-buffer
 ABI). With both removed in a scratch build, it is at parity. Line-by-line diagnosis: `perf_headroom/HOST.md`, "M4
 sessions under the 1.1x bar".
+
+### Map hash, probe and key compare (2026-11-17, input from the M9 profile)
+
+M9 found `bud_map::find` at 37% of its clock calls. Its 36-unit budget ids went through one dependent multiply per
+unit. The changes in `bud_map.pruv` (public signatures unchanged):
+
+- **Hash.**
+  - `hash_key` now packs 4 key units into one word per `mix`.
+  - `mix` multiplies by the 64-bit golden-ratio constant.
+  - Owner and owner generation share one word.
+  - The key length goes in by xor.
+  - A splitmix64 finalizer `fin` follows.
+  - Dependent multiplies per lookup: 2 + n before, 1 + ceil(n/4) + 1 now. For a 36-unit id that is 38 → 11.
+  - The finalizer is needed, not optional. A multiply only carries bits upward, so with packed units and the old FNV
+    prime, the high units never reached the slot mask. A first try without it gave 43-50 average probes per key at
+    n = 1000 (Python model of the probe table, keys `s{i}` / `a{i}` / `c{i}`), and M4 sessions at n = 1000 went
+    to 4.1x.
+  - With `fin`, the model gives 1.14-1.20 probes per key: the same as random 64-bit hashes (1.13-1.15) and the old
+    hash (1.13-1.15).
+  - Every add / find / remove / rehash path calls `hash_key`, and entries store its result (field 6), so they stay
+    consistent. `grow_copy` re-adds through `add`.
+  - This is a change of the map format. A state buffer built by an older build would not be found by the new hash.
+    Buffers are not persisted across builds in L3-10.
+- **Probe.**
+  - `find` already reads the slot base and mask once (fast path above).
+  - `put_key` (`insert` / `add`) now does the same instead of calling `slot_pos` per probe step.
+  - `free_slot` / `slot_of` (remove path) still use `slot_pos`. `slot_pos` itself reads header words 3 and 4 directly
+    after one length check.
+- **Key compare.**
+  - `entry_matches` already has one range check, then a plain indexed loop (`get_unchecked` in the generated Rust).
+  - M9's measurement used the per-unit `rd` loop, which is now only the fallback.
+  - The release asm of the M4 build (`rustc -C opt-level=3 --emit asm`) has no `memcmp` / `bcmp` call. The loop
+    stays a scalar early-exit compare of i64 words. LLVM's loop-idiom pass turns plain copy and fill loops into
+    `memcpy` / `memset`, but not an early-exit compare loop into `bcmp`.
+  - The hand code compares `&[u8]` / `&str` with `==`, which calls `memcmp` on 1 byte per unit. Pruv keys are i64
+    words, 8 bytes per u16 unit.
+  - The fix is a lib or compiler slice-equality primitive. Pruv source can state the bounds once (it does) but cannot
+    emit `a[x..x+n] == b[y..y+n]`. This was not changed here (the compiler and lib are out of scope).
+
+Results are unchanged: M4 300/300 (stats checks 1922/1922 ok), M5 exact 300 / unexplained 0, M11 exact 213 /
+prefix-ok 87 (py and rs identical).
+
+M4 perf: M4 keys are 2-5 units, so there is little to save. In alternating A/B runs (old hash vs new, 5 rounds each,
+machine load average 30-200 during the runs), Pruv sessions were 19.5-20.3 ns for both and clocks 39-51 for both.
+The difference is inside the noise. The M9 gain (36-unit ids) is for the M9 sub to measure on its driver.
