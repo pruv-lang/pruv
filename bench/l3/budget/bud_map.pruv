@@ -128,18 +128,11 @@ fn entry_matches(st: [i64], e: i64, owner: i64, og: i64, h: i64, key: [i64], ks:
     ko = crate::bud_store::c40(crate::ent_u16::rd(st, a + 4));
   }
   let s0: i64 = crate::bud_store::c40(ks);
-  let mut j: i64 = 0;
   if ko + n <= len(st) && s0 + n <= len(key) {
-    // both ranges in bounds: one check for the loop (same comparison as the total path below)
-    while j < n
-      invariant 0 <= j && j <= n && 0 <= ko && ko + n <= len(st) && 0 <= s0 && s0 + n <= len(key)
-      decreases n - j
-    {
-      if st[ko + j] != key[s0 + j] { return false; }
-      j = j + 1;
-    }
-    return true;
+    // both ranges in bounds: one slice comparison (same result as the total path below)
+    return eq_range(st, ko, key, s0, n);
   }
+  let mut j: i64 = 0;
   while j < n
     invariant 0 <= j && j <= n && n <= 4294967296 && 0 <= ko && ko <= 1099511627776 && 0 <= s0 && s0 <= 1099511627776
     decreases n - j
