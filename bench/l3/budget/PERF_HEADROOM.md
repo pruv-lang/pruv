@@ -37,18 +37,26 @@ Details, methods and raw numbers:
 | M7 isHalted | 27.0-27.6 | 9.9-10.0 | 24-25 | 2.76 / 2.73 / 2.74 (was 2.90 / 2.83 / 2.96) | same | open |
 | M7 maybeClose + reopen | 29.5-30.0 | 17.6-18.3 | 275-281 | 1.61 / 1.68 / 1.70 (was 1.74 / 1.79 / 1.78) | same, two root calls per pair | open |
 | M7 attach / replace | 21 / 124 | 53 / 205-212 | 6-9 / 1134-1166 | 0.40 / 0.58-0.61 (was 0.41-0.45 / 0.58-0.65) | - | ok |
-| M8 charge | 33.7-40.9 | 16.0-17.3 | 128-138 | 2.11 / 2.34 / 2.43 (instr 2.33-2.36; pass 2: 1.84 / 2.36 / 2.17) | i64-per-unit key and id width (hash, compare, bid), `valid()` boundary, call frames; line by line in `M8_NOTES.md` "Perf pass 3" | open (> 1.1x), written reason |
-| M8 noteFailure | 25.4-31.7 | 13.5-15.4 | 28-33 | 1.88 / 2.15 / 2.06 (instr 2.40-2.45) | same | open (> 1.1x), written reason |
-| M8 noteTool dedup hit | 27.4-39.7 | 24.3-26.0 | 12-14 | 1.05 / 1.63 / 1.61 (instr 1.46-1.53, was ~1.65) | same; TS wins with V8's cached string hashes | open (> 1.1x), written reason |
-| M8 noteTool grow + forgetTurn | 84-102 | 77-83 | 54-58 | 1.09 / 1.20 / 1.23 (instr 1.13 / 1.07 / 1.08, was ~1.19) | hash once per new activity (`bud_map::add_absent`); rest is key width | instr within 1.1x at n = 500 / 1000; ns open |
+| M8 charge | 33.7-40.9 | 16.0-17.3 | 128-138 | 2.11 / 2.34 / 2.43 (instr 1.97-1.99 with the inline policy, was 2.33-2.36; pass 2: 1.84 / 2.36 / 2.17) | i64-per-unit key and id width (hash, compare, bid), `valid()` boundary; call frames removed by the compiler inline policy; line by line in `M8_NOTES.md` "Perf pass 3" and "Inline policy" | open (> 1.1x), written reason |
+| M8 noteFailure | 25.4-31.7 | 13.5-15.4 | 28-33 | 1.88 / 2.15 / 2.06 (instr 2.03-2.05 with the inline policy, was 2.40-2.45) | same | open (> 1.1x), written reason |
+| M8 noteTool dedup hit | 27.4-39.7 | 24.3-26.0 | 12-14 | 1.05 / 1.63 / 1.61 (instr 1.29-1.33 with the inline policy, was 1.46-1.53, ~1.65) | same; TS wins with V8's cached string hashes | open (> 1.1x), written reason |
+| M8 noteTool grow + forgetTurn | 84-102 | 77-83 | 54-58 | 1.09 / 1.20 / 1.23; with the inline policy 0.99 / 1.04 / 1.08 (instr 1.01 / 0.96 / 0.97, was 1.13 / 1.07 / 1.08, ~1.19) | hash once per new activity (`bud_map::add_absent`), inline policy; rest is key width | ok (within 1.1x on ns and instr) |
 
 M8 rows are pass 3: `m8_test/run_m8.py perf` with per-item processes, rotated order, 7 rounds and an instruction
 column (load average ~4.3). `note_tool` now hashes the activity key once (`bud_map::add_absent`), which took
 toolgrow from ~2075 to ~1870 instructions and tooldup from ~760 to ~700. Charge and failure stay at ~2.4x
 instructions. The line-by-line table in `M8_NOTES.md` puts the gap in the key and id width (one i64 per UTF-16 unit:
 hash, key compare and the 36-word budget-id compare, about 300 of 694 instructions), the `valid()` boundary (about
-70) and call frames (a scratch compiler with `#[inline(always)]` on every fn saves 107-139; not committed, needs an
-M11 evaluation). The PLACEHOLDER record copy measured at about 0.
+70) and call frames. The PLACEHOLDER record copy measured at about 0.
+
+Compiler inline policy (after pass 3; SPEC section 7, "Inline policy"; candidates and numbers in `M8_NOTES.md`,
+"Inline policy"): non-recursive fns get `#[inline(always)]` when their inclusive size is at most 8, when they have one
+call site, or when incl * (call sites - 1) <= 1500. Instructions per op: M8 charge 825 -> 698, failure 697 -> 585,
+tooldup 710 -> 611, toolgrow 1876 -> 1680; M7 8340 -> 7629; M9 20728 -> 20431; M4 sessions 6712 / 6830 -> 6323 /
+6547, tools 10097 / 11064 -> 9784 / 10724; M11 B 1000 16.29M -> 15.29M, C 1000 11.43M -> 11.00M. No measured row got
+worse. rustc CPU goes up 1.2-2.4x (M7 0.97 -> 2.28 s, M11 1.56 -> 2.71 s) and binaries grow 2.6-10.7%;
+`#[inline(always)]` on every fn was 3-4x and up to +38%. The ns columns above are from before the policy except
+where marked.
 
 The guard result differs between `p_wr` (no cost) and M4 sessions (about 23%): in a tight loop the always-taken branch
 is free, while in the M4 state code the guards sit on long dependent chains of reads and block other work. M4 sessions
@@ -80,7 +88,8 @@ Answers to the M7 requests (`M7_NOTES.md`, "Requests to other owners"):
    to filter (expected from linear probing; probe counts were not measured). The index format stays as it was.
 2. Cheaper `valid`: it already runs once per root call; the typed-handle design (no trust in unchecked input) is in
    `perf_headroom/HOST.md`.
-3. `#[inline]`: done in the compiler for every generated function.
+3. `#[inline]`: done in the compiler for every generated function; the inline policy (SPEC section 7) raises it to
+   `#[inline(always)]` where it measured as a gain.
 4. Slice equality: done, `eq_range` (one bounds-proved slice `==`, `memcmp` in the binary), used in
    `bud_map::entry_matches`. No `bud_lifecycle.pruv` change is needed for any of these.
 
