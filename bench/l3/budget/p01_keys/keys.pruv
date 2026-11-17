@@ -1,0 +1,859 @@
+// =====================================================================================================================
+// P01 budget key layouts (bench/l3/budget/p01_keys) -- README
+// =====================================================================================================================
+//
+// Purpose (docs/L3_RESTRUCTURE_SPEC.md §1.2, §2.1): compare budget key layouts at a FIXED hash and call structure, so
+// that layout, hash and inline factors can be separated, retained keys can be told apart from raw (host-encoded and
+// Pruv-checked) keys, and the host encode cost is measured apart from the Pruv canonicality check.
+//
+// Files
+//   keys.pruv        this root (test only, not product); self-contained, declares no modules
+//   driver_keys.rs   Rust driver appended after `#[path = "gen.rs"] mod sol;` (host encoders, perf and check modes)
+//   hand_keys.rs     natural safe hand Rust lane: HashMap<Box<[u16]>, u32> with the std hasher, slice Ord
+//   run_keys.py      `check --count 300 --seed 20261117` and `perf --rounds 7 --sizes 100,500 [--inline-variant]`;
+//                    raw JSON goes to bench/l3/budget/work/p01_keys/
+//
+// Build (run_keys.py does this):
+//   pruvc bench/l3/budget/p01_keys/keys.pruv -o gen.rs --lib bench/l3/budget --lib bench/l3/lib
+//   main.rs = allow attributes + `#[path = "gen.rs"] mod sol;` + driver_keys.rs ; rustc -C opt-level=3 --edition 2021
+//
+// Key records ([i64], header word(s) then data words; a key is a sequence of n UTF-16 code units 0..65535):
+//   U  (current)     [n, u0, ..., u(n-1)]                    one unit per word
+//   P  (packed-u16)  [n, w0, ..., w(m-1)]   m = ceil(n/4)    4 units per word, big-endian lanes (unit 4i+0 in bits
+//                                                            48..63 of w_i), zero tail padding
+//   A8 (ASCII-8)     [2n + tag, w...]       tag 0: every unit < 128, m = ceil(n/8), 8 bytes per word big-endian
+//                                           (byte 8i+0 in bits 56..63), zero padding
+//                                           tag 1: exactly the P data words; canonical only if some unit >= 128
+//   F1               [2b + tag, n, w...]    b = byte length, bytes packed 8 per word big-endian, zero padding
+//                                           tag 0: every unit < 128, bytes = units, b = n
+//                                           tag 1: bytes = 0xFF, then each unit little-endian (lo, hi); b = 1 + 2n;
+//                                           canonical only if some unit >= 128. n is the cached unit length.
+//   Every layout has exactly one canonical record per unit sequence (an all-ASCII key MUST use tag 0), so content
+//   equality is record-word equality. Lone surrogates and NUL are plain units. Unit lengths are limited to 2^30.
+//
+// Table (one flat [i64] buffer t, same structure for all layouts and both hash kinds):
+//   t[0] slots (power of two, 2..2^30)   t[1] keys stored   t[2] arena top (next free word)   t[3] entry capacity
+//   (slots / 2)   t[4] slot base (8)   t[5] entry base (8 + slots)   t[6] arena base (entry base + 3 * capacity)
+//   t[7] reserved 0
+//   slots t[8 .. 8+slots): 0 empty, id+1 (linear probing from band(h, slots-1), no removal, so no tombstones)
+//   entries id: [stored hash, record offset, record word count] at entry base + 3*id
+//   arena: the inserted key records copied whole (header words included)
+//   Size: 8 + slots + 3*(slots/2) + total record words.
+//
+// Hash kinds (both use bud_map's mix/fin, copied below):
+//   hu  unit hash, exactly bud_map::hash_key(owner 0, generation 0, units): pack4 of 4 units per mix, then
+//       fin(bxor(h, n)). Each layout decodes its units, so all four layouts give the same value for the same key.
+//   hw  word hash: one mix per stored data word, then fin(bxor(h, header word 0)).
+//   A table must be filled and searched with the same hash kind; the driver builds one table per (layout, hash).
+//
+// Fixed call structure: every pub fn is a thin wrapper. k_find_* = hash, then tab_find (probe loop + ent_match:
+// stored hash, record word count, header word(s), eq_range over the data words). k_insert_* = hash, tab_find, then
+// append. Only the hash function and the header word count differ between layouts. Equality is content equality,
+// never hash equality.
+//
+// Public functions (root, callable from Rust as sol::name):
+//   k_init(inout t, slots) -> i64                       0 ok, 1 bad slot count or t too small
+//   k_check_{u,p,a8,f1}(k) -> i64                       0 canonical, 1 not (imported record validation, O(K))
+//   k_insert_{u,p,a8,f1}_{hu,hw}(inout t, k) -> i64     id (existing or new), -1 full / invalid table
+//   k_find_{u,p,a8,f1}_{hu,hw}(t, k) -> i64             id or -1
+//   k_cmp_{u,p,a8,f1}(a, b) -> i64                      -1 / 0 / 1 in UTF-16 code-unit lexical order
+//   k_hu_{u,p,a8,f1}(k) -> i64                          the unit hash of a record (check mode compares layouts)
+// Inputs of find / insert / cmp / hu are expected to be canonical (checked); on other records they stay total
+// (every read is in bounds or through rd) and give some -1/0/1 or id, never a wrong match of different content
+// among canonical records.
+// =====================================================================================================================
+
+// ---- small helpers ----
+
+// Total read: 0 outside a.
+fn rd(a: [i64], i: i64) -> i64
+{
+  if i < 0 || i >= len(a) { return 0; }
+  return a[i];
+}
+
+// x clamped into 0..2^30 (the unit-length limit).
+fn c30(x: i64) -> i64
+  ensures 0 <= result && result <= 1073741824
+{
+  if x < 0 { return 0; }
+  if x > 1073741824 { return 1073741824; }
+  return x;
+}
+
+fn lo2(a: i64, b: i64) -> i64
+  ensures result <= a && result <= b && (result == a || result == b)
+{
+  if a < b { return a; }
+  return b;
+}
+
+fn cmp_len(na: i64, nb: i64) -> i64
+{
+  if na < nb { return -1; }
+  if na > nb { return 1; }
+  return 0;
+}
+
+// Unsigned 64-bit comparison of two words (sign bit flipped, then signed <).
+fn ucmp(x: i64, y: i64) -> i64
+{
+  let s: i64 = wrapping_shl(1, 63);
+  if bxor(x, s) < bxor(y, s) { return -1; }
+  if x == y { return 0; }
+  return 1;
+}
+
+// 0x8080808080808080: the high bit of every byte lane.
+fn hi8() -> i64
+{ return wrapping_mul(72340172838076673, 128); }
+
+// 0xFF80FF80FF80FF80: the bits of every 16-bit lane that make a unit >= 128.
+fn hi16() -> i64
+{ return wrapping_mul(281479271743489, 65408); }
+
+// 1 when some word of k[s..len(k)) has a bit of mask set, else 0 (one OR pass, one test).
+fn any_bits(k: [i64], s: i64, mask: i64) -> i64
+  requires 0 <= s
+{
+  let n: i64 = len(k);
+  if s >= n { return 0; }
+  let mut acc: i64 = 0;
+  let mut i: i64 = s;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(k)
+    decreases n - i
+  {
+    acc = bor(acc, k[i]);
+    i = i + 1;
+  }
+  if band(acc, mask) != 0 { return 1; }
+  return 0;
+}
+
+// ---- hashing (mix / fin / pack4 copied from bud_map.pruv) ----
+
+fn mix(h: i64, v: i64) -> i64
+{ return wrapping_mul(bxor(h, v), -7046029254386353131); }
+
+fn fin(h: i64) -> i64
+{
+  let a: i64 = bxor(h, ushr(h, 33));
+  let b: i64 = wrapping_mul(a, -49064778989728563);
+  return bxor(b, ushr(b, 33));
+}
+
+fn pack4(u0: i64, u1: i64, u2: i64, u3: i64) -> i64
+{
+  return wrapping_add(wrapping_add(u0, wrapping_mul(u1, 65536)),
+    wrapping_add(wrapping_mul(u2, 4294967296), wrapping_mul(u3, 281474976710656)));
+}
+
+// bud_map::hash_key's starting value for owner 0, generation 0.
+fn seed() -> i64
+{ return mix(1469598103934665603, 0); }
+
+// ---- unit decoding ----
+
+// Byte p of the byte string packed 8 per word big-endian from k[base] (byte 0 = bits 56..63 of k[base]); 0 outside k.
+fn bt(k: [i64], base: i64, p: i64) -> i64
+  requires 0 <= base && base <= 2 && 0 <= p && p <= 8589934592
+  ensures 0 <= result && result <= 255
+{
+  let w: i64 = rd(k, base + ushr(p, 3));
+  return band(ushr(w, 56 - 8 * band(p, 7)), 255);
+}
+
+// Unit j of the units packed 4 per word big-endian from k[base] (unit 0 = bits 48..63 of k[base]); 0 outside k.
+fn lane16(k: [i64], base: i64, j: i64) -> i64
+  requires 0 <= base && base <= 2 && 0 <= j && j <= 8589934592
+  ensures 0 <= result && result <= 65535
+{
+  let w: i64 = rd(k, base + ushr(j, 2));
+  return band(ushr(w, 48 - 16 * band(j, 3)), 65535);
+}
+
+// Unit j of a U record with n units (0 at or past n).
+fn u_unit(k: [i64], n: i64, j: i64) -> i64
+  requires 0 <= j && j <= 2147483648
+{
+  if j >= n { return 0; }
+  return rd(k, 1 + j);
+}
+
+// Unit j of an A8 record with tag `tag` and n units (0 at or past n).
+fn a8_unit(k: [i64], tag: i64, n: i64, j: i64) -> i64
+  requires 0 <= j && j <= 2147483648
+{
+  if j >= n { return 0; }
+  if tag == 0 { return bt(k, 1, j); }
+  return lane16(k, 1, j);
+}
+
+// Unit j of an F1 tag-1 record with n units: bytes 1+2j (lo) and 2+2j (hi) of the byte string (0 at or past n).
+fn f1x_unit(k: [i64], n: i64, j: i64) -> i64
+  requires 0 <= j && j <= 2147483648
+  ensures 0 <= result && result <= 65535
+{
+  if j >= n { return 0; }
+  return bt(k, 2, 1 + 2 * j) + 256 * bt(k, 2, 2 + 2 * j);
+}
+
+// Unit j of an F1 record with tag `tag` and n units (0 at or past n).
+fn f1_unit(k: [i64], tag: i64, n: i64, j: i64) -> i64
+  requires 0 <= j && j <= 2147483648
+{
+  if j >= n { return 0; }
+  if tag == 0 { return bt(k, 2, j); }
+  return f1x_unit(k, n, j);
+}
+
+// ---- unit hash (hu): bud_map::hash_key over the decoded units ----
+
+// U: units k[1..1+n); the loop of bud_map::hash_key with s0 = 1.
+fn hu_units(k: [i64]) -> i64
+{
+  let mut h: i64 = seed();
+  let n: i64 = c30(rd(k, 0));
+  let mut j: i64 = 0;
+  if 1 + n <= len(k) {
+    while j + 4 <= n
+      invariant 0 <= j && j <= n && n <= 1073741824 && 1 + n <= len(k)
+      decreases n - j
+    {
+      h = mix(h, pack4(k[1 + j], k[2 + j], k[3 + j], k[4 + j]));
+      j = j + 4;
+    }
+    if j < n {
+      let mut u1: i64 = 0;
+      let mut u2: i64 = 0;
+      if j + 1 < n { u1 = k[2 + j]; }
+      if j + 2 < n { u2 = k[3 + j]; }
+      h = mix(h, pack4(k[1 + j], u1, u2, 0));
+    }
+    return fin(bxor(h, n));
+  }
+  while j < n
+    invariant 0 <= j && j <= n + 3 && 0 <= n && n <= 1073741824
+    decreases n - j
+  {
+    h = mix(h, pack4(u_unit(k, n, j), u_unit(k, n, j + 1), u_unit(k, n, j + 2), u_unit(k, n, j + 3)));
+    j = j + 4;
+  }
+  return fin(bxor(h, n));
+}
+
+// The 4 big-endian 16-bit lanes of w as one pack4 word (lane 0 is unit 0).
+fn lanes4(w: i64) -> i64
+{ return pack4(ushr(w, 48), band(ushr(w, 32), 65535), band(ushr(w, 16), 65535), band(w, 65535)); }
+
+// Bytes 0..3 (bits 63..32) of w as one pack4 word.
+fn bytes_hi(w: i64) -> i64
+{ return pack4(ushr(w, 56), band(ushr(w, 48), 255), band(ushr(w, 40), 255), band(ushr(w, 32), 255)); }
+
+// Bytes 4..7 (bits 31..0) of w as one pack4 word.
+fn bytes_lo(w: i64) -> i64
+{ return pack4(band(ushr(w, 24), 255), band(ushr(w, 16), 255), band(ushr(w, 8), 255), band(w, 255)); }
+
+// n units packed 4 per word from k[base] (P, A8 tag 1): one mix per word. With zero padding a word's pack4 is the
+// pack4 bud_map forms for the same 4 units, so the result equals hu_units on the same units.
+fn hu_lanes(k: [i64], base: i64, n: i64) -> i64
+  requires 1 <= base && base <= 2 && 0 <= n && n <= 1073741824
+{
+  let mut h: i64 = seed();
+  let m: i64 = ushr(n + 3, 2);
+  let mut i: i64 = 0;
+  if base + m <= len(k) {
+    while i < m
+      invariant 0 <= i && i <= m && 1 <= base && base + m <= len(k)
+      decreases m - i
+    {
+      h = mix(h, lanes4(k[base + i]));
+      i = i + 1;
+    }
+    return fin(bxor(h, n));
+  }
+  while i < m
+    invariant 0 <= i && i <= m && m <= 1073741827 && 1 <= base && base <= 2
+    decreases m - i
+  {
+    h = mix(h, lanes4(rd(k, base + i)));
+    i = i + 1;
+  }
+  return fin(bxor(h, n));
+}
+
+// n byte units packed 8 per word from k[base] (A8 tag 0, F1 tag 0): two mixes per word, the second only when the
+// key has a unit in the word's second half (so the mix count is ceil(n/4), as in hu_units).
+fn hu_bytes(k: [i64], base: i64, n: i64) -> i64
+  requires 1 <= base && base <= 2 && 0 <= n && n <= 1073741824
+{
+  let mut h: i64 = seed();
+  let m: i64 = ushr(n + 7, 3);
+  let mut i: i64 = 0;
+  if base + m <= len(k) {
+    while i < m
+      invariant 0 <= i && i <= m && m <= 1073741831 && 1 <= base && base + m <= len(k)
+      decreases m - i
+    {
+      let w: i64 = k[base + i];
+      h = mix(h, bytes_hi(w));
+      if 8 * i + 4 < n { h = mix(h, bytes_lo(w)); }
+      i = i + 1;
+    }
+    return fin(bxor(h, n));
+  }
+  while i < m
+    invariant 0 <= i && i <= m && m <= 1073741831 && 1 <= base && base <= 2
+    decreases m - i
+  {
+    let w2: i64 = rd(k, base + i);
+    h = mix(h, bytes_hi(w2));
+    if 8 * i + 4 < n { h = mix(h, bytes_lo(w2)); }
+    i = i + 1;
+  }
+  return fin(bxor(h, n));
+}
+
+// F1 tag 1: units decoded from the (lo, hi) byte pairs after the 0xFF byte.
+fn hu_f1x(k: [i64], n: i64) -> i64
+  requires 0 <= n && n <= 1073741824
+{
+  let mut h: i64 = seed();
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n + 3 && 0 <= n && n <= 1073741824
+    decreases n - j
+  {
+    h = mix(h, pack4(f1x_unit(k, n, j), f1x_unit(k, n, j + 1), f1x_unit(k, n, j + 2), f1x_unit(k, n, j + 3)));
+    j = j + 4;
+  }
+  return fin(bxor(h, n));
+}
+
+fn hu_rec_u(k: [i64]) -> i64
+{ return hu_units(k); }
+
+fn hu_rec_p(k: [i64]) -> i64
+{ return hu_lanes(k, 1, c30(rd(k, 0))); }
+
+fn hu_rec_a8(k: [i64]) -> i64
+{
+  let hdr: i64 = rd(k, 0);
+  let n: i64 = c30(ushr(hdr, 1));
+  if band(hdr, 1) == 0 { return hu_bytes(k, 1, n); }
+  return hu_lanes(k, 1, n);
+}
+
+fn hu_rec_f1(k: [i64]) -> i64
+{
+  let hdr: i64 = rd(k, 0);
+  let n: i64 = c30(rd(k, 1));
+  if band(hdr, 1) == 0 { return hu_bytes(k, 2, n); }
+  return hu_f1x(k, n);
+}
+
+// ---- word hash (hw): one mix per data word k[hw..], then fin(bxor(h, k[0])) ----
+
+fn hash_w(k: [i64], hw: i64) -> i64
+  requires hw == 1 || hw == 2
+{
+  let mut h: i64 = seed();
+  let n: i64 = len(k);
+  if n <= hw { return fin(bxor(h, rd(k, 0))); }
+  let mut i: i64 = hw;
+  while i < n
+    invariant 1 <= i && i <= n && n == len(k)
+    decreases n - i
+  {
+    h = mix(h, k[i]);
+    i = i + 1;
+  }
+  return fin(bxor(h, k[0]));
+}
+
+// ---- table ----
+
+pub fn k_init(inout t: [i64], slots: i64) -> i64
+{
+  if slots < 2 || slots > 1073741824 { return 1; }
+  if band(slots, slots - 1) != 0 { return 1; }
+  let cap: i64 = slots / 2;
+  let eb: i64 = 8 + slots;
+  let ab: i64 = eb + 3 * cap;
+  let n: i64 = len(t);
+  if n < ab { return 1; }
+  let mut i: i64 = 0;
+  while i < ab
+    invariant 0 <= i && i <= ab && 8 <= ab && ab <= n && n == len(t)
+    decreases ab - i
+  {
+    t[i] = 0;
+    i = i + 1;
+  }
+  t[0] = slots;
+  t[1] = 0;
+  t[2] = ab;
+  t[3] = cap;
+  t[4] = 8;
+  t[5] = eb;
+  t[6] = ab;
+  return 0;
+}
+
+// Does the entry at t[a..a+3) hold hash h and a record equal to k (hw header words, then the data words)?
+fn ent_match(t: [i64], a: i64, k: [i64], h: i64, hw: i64) -> bool
+  requires 0 <= a && a + 3 <= len(t) && (hw == 1 || hw == 2) && hw <= len(k)
+{
+  if t[a] != h { return false; }
+  let kn: i64 = len(k);
+  if t[a + 2] != kn { return false; }
+  let off: i64 = t[a + 1];
+  if off < 0 || off > len(t) - kn { return false; }
+  if t[off] != k[0] { return false; }
+  if hw == 2 {
+    if t[off + 1] != k[1] { return false; }
+  }
+  return eq_range(t, off + hw, k, hw, kn - hw);
+}
+
+// Id of the entry whose record equals k (looked up with hash h), or -1. The probe loop is bounded by the slot count.
+fn tab_find(t: [i64], k: [i64], h: i64, hw: i64) -> i64
+  requires hw == 1 || hw == 2
+{
+  let n: i64 = len(t);
+  if len(k) < hw || n < 8 { return -1; }
+  let slots: i64 = t[0];
+  let sb: i64 = t[4];
+  let eb: i64 = t[5];
+  if slots < 1 || slots > 1073741824 { return -1; }
+  if sb < 0 || sb > 1099511627776 || eb < 0 || eb > 1099511627776 { return -1; }
+  let mask: i64 = slots - 1;
+  let mut i: i64 = 0;
+  while i < slots
+    invariant 0 <= i && i <= slots && 1 <= slots && slots <= 1073741824 && mask == slots - 1 && n == len(t)
+    invariant 0 <= sb && sb <= 1099511627776 && 0 <= eb && eb <= 1099511627776
+    invariant (hw == 1 || hw == 2) && hw <= len(k)
+    decreases slots - i
+  {
+    let p: i64 = sb + band(wrapping_add(h, i), mask);
+    let mut w: i64 = 0;
+    if p < n { w = t[p]; }
+    if w == 0 { return -1; }
+    if w >= 1 && w <= 1073741824 {
+      let a: i64 = eb + 3 * (w - 1);
+      if a + 3 <= n {
+        if ent_match(t, a, k, h, hw) { return w - 1; }
+      }
+    }
+    i = i + 1;
+  }
+  return -1;
+}
+
+// Id of the entry equal to k, or a new entry (record copied into the arena, hash h stored). -1 when the table is
+// full, the arena has no room or the table header is invalid (nothing is written then).
+fn tab_insert(inout t: [i64], k: [i64], h: i64, hw: i64) -> i64
+  requires hw == 1 || hw == 2
+{
+  let f: i64 = tab_find(t, k, h, hw);
+  if f >= 0 { return f; }
+  let kn: i64 = len(k);
+  let n: i64 = len(t);
+  if kn < hw || n < 8 { return -1; }
+  let slots: i64 = t[0];
+  let nk: i64 = t[1];
+  let top: i64 = t[2];
+  let cap: i64 = t[3];
+  let sb: i64 = t[4];
+  let eb: i64 = t[5];
+  let ab: i64 = t[6];
+  if slots < 1 || slots > 1073741824 || cap > 1073741824 || nk < 0 || nk >= cap { return -1; }
+  if sb < 0 || sb > 1099511627776 || eb < 0 || eb > 1099511627776 { return -1; }
+  if top < 0 || top < ab || top > n - kn { return -1; }
+  let a: i64 = eb + 3 * nk;
+  if a + 3 > n { return -1; }
+  let mask: i64 = slots - 1;
+  let mut slot: i64 = -1;
+  let mut i: i64 = 0;
+  while i < slots
+    invariant 0 <= i && i <= slots && 1 <= slots && slots <= 1073741824 && mask == slots - 1 && n == len(t)
+    invariant 0 <= sb && sb <= 1099511627776
+    invariant slot == -1 || (0 <= slot && slot < n)
+    decreases slots - i
+  {
+    let p: i64 = sb + band(wrapping_add(h, i), mask);
+    if p < n && t[p] == 0 {
+      slot = p;
+      i = slots;
+    } else {
+      i = i + 1;
+    }
+  }
+  if slot < 0 { return -1; }
+  let mut j: i64 = 0;
+  while j < kn
+    invariant 0 <= j && j <= kn && kn == len(k) && 0 <= top && top + kn <= n && n == len(t) && 8 <= n
+    invariant 0 <= slot && slot < n && 0 <= a && a + 3 <= n && 0 <= nk && nk < 1073741824
+    decreases kn - j
+  {
+    t[top + j] = k[j];
+    j = j + 1;
+  }
+  t[a] = h;
+  t[a + 1] = top;
+  t[a + 2] = kn;
+  t[slot] = nk + 1;
+  t[1] = nk + 1;
+  t[2] = top + kn;
+  return nk;
+}
+
+// ---- canonicality checks (0 canonical, 1 not) ----
+
+pub fn k_check_u(k: [i64]) -> i64
+{
+  let kl: i64 = len(k);
+  if kl < 1 { return 1; }
+  let n: i64 = k[0];
+  if n < 0 || n > 1073741824 { return 1; }
+  if kl != 1 + n { return 1; }
+  // every unit in 0..65535: no bit outside the low 16 in any word
+  return any_bits(k, 1, -65536);
+}
+
+pub fn k_check_p(k: [i64]) -> i64
+{
+  let kl: i64 = len(k);
+  if kl < 1 { return 1; }
+  let n: i64 = k[0];
+  if n < 0 || n > 1073741824 { return 1; }
+  let m: i64 = ushr(n + 3, 2);
+  if kl != 1 + m { return 1; }
+  // every 64-bit word is 4 valid units; only the lanes past n in the last word must be zero
+  let r: i64 = band(n, 3);
+  if r != 0 && m >= 1 {
+    if band(k[m], ushr(-1, 16 * r)) != 0 { return 1; }
+  }
+  return 0;
+}
+
+pub fn k_check_a8(k: [i64]) -> i64
+{
+  let kl: i64 = len(k);
+  if kl < 1 { return 1; }
+  let hdr: i64 = k[0];
+  if hdr < 0 { return 1; }
+  let n: i64 = ushr(hdr, 1);
+  if n > 1073741824 { return 1; }
+  if band(hdr, 1) == 0 {
+    let m: i64 = ushr(n + 7, 3);
+    if kl != 1 + m { return 1; }
+    let r: i64 = band(n, 7);
+    if r != 0 && m >= 1 {
+      if band(k[m], ushr(-1, 8 * r)) != 0 { return 1; }
+    }
+    // every byte < 128
+    if any_bits(k, 1, hi8()) != 0 { return 1; }
+    return 0;
+  }
+  let m2: i64 = ushr(n + 3, 2);
+  if kl != 1 + m2 { return 1; }
+  let r2: i64 = band(n, 3);
+  if r2 != 0 && m2 >= 1 {
+    if band(k[m2], ushr(-1, 16 * r2)) != 0 { return 1; }
+  }
+  // fallback form only when some unit >= 128 (padding lanes are zero, so they cannot set these bits)
+  if any_bits(k, 1, hi16()) == 0 { return 1; }
+  return 0;
+}
+
+// Some unit of an F1 tag-1 record is >= 128?
+fn f1x_has_wide(k: [i64], n: i64) -> bool
+  requires 0 <= n && n <= 1073741824
+{
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && n <= 1073741824
+    decreases n - j
+  {
+    if f1x_unit(k, n, j) >= 128 { return true; }
+    j = j + 1;
+  }
+  return false;
+}
+
+pub fn k_check_f1(k: [i64]) -> i64
+{
+  let kl: i64 = len(k);
+  if kl < 2 { return 1; }
+  let hdr: i64 = k[0];
+  let n: i64 = k[1];
+  if hdr < 0 || n < 0 || n > 1073741824 { return 1; }
+  let tag: i64 = band(hdr, 1);
+  let bl: i64 = ushr(hdr, 1);
+  if tag == 0 {
+    if bl != n { return 1; }
+  } else {
+    if n < 1 || bl != 1 + 2 * n { return 1; }
+  }
+  if bl > 4294967296 { return 1; }
+  let m: i64 = ushr(bl + 7, 3);
+  if kl != 2 + m { return 1; }
+  let r: i64 = band(bl, 7);
+  if r != 0 && m >= 1 {
+    if band(k[1 + m], ushr(-1, 8 * r)) != 0 { return 1; }
+  }
+  if tag == 0 {
+    // every byte < 128 (this also rules out a leading 0xFF)
+    if any_bits(k, 2, hi8()) != 0 { return 1; }
+    return 0;
+  }
+  if m < 1 { return 1; }
+  if ushr(k[2], 56) != 255 { return 1; }
+  if !f1x_has_wide(k, n) { return 1; }
+  return 0;
+}
+
+// ---- comparison (UTF-16 code-unit lexical order) ----
+
+// Unsigned lexicographic comparison of a[base..base+m) and b[base..base+m). With zero padding and big-endian lanes,
+// the first differing word decides exactly as the first differing unit (a padding lane is 0 and every real unit is
+// >= 0, so a shorter key compares below its extensions or equal on the words, and the length decides then).
+fn cmp_words(a: [i64], b: [i64], base: i64, m: i64) -> i64
+  requires 1 <= base && base <= 2 && 0 <= m && m <= 2147483648
+{
+  let mut i: i64 = 0;
+  if base + m <= len(a) && base + m <= len(b) {
+    while i < m
+      invariant 0 <= i && i <= m && 1 <= base && base + m <= len(a) && base + m <= len(b)
+      decreases m - i
+    {
+      let x: i64 = a[base + i];
+      let y: i64 = b[base + i];
+      if x != y { return ucmp(x, y); }
+      i = i + 1;
+    }
+    return 0;
+  }
+  while i < m
+    invariant 0 <= i && i <= m && m <= 2147483648 && 1 <= base && base <= 2
+    decreases m - i
+  {
+    let x2: i64 = rd(a, base + i);
+    let y2: i64 = rd(b, base + i);
+    if x2 != y2 { return ucmp(x2, y2); }
+    i = i + 1;
+  }
+  return 0;
+}
+
+pub fn k_cmp_u(a: [i64], b: [i64]) -> i64
+{
+  let na: i64 = c30(rd(a, 0));
+  let nb: i64 = c30(rd(b, 0));
+  let n: i64 = lo2(na, nb);
+  let mut j: i64 = 0;
+  if 1 + n <= len(a) && 1 + n <= len(b) {
+    while j < n
+      invariant 0 <= j && j <= n && 0 <= n && 1 + n <= len(a) && 1 + n <= len(b)
+      decreases n - j
+    {
+      let x: i64 = a[1 + j];
+      let y: i64 = b[1 + j];
+      if x != y {
+        if x < y { return -1; }
+        return 1;
+      }
+      j = j + 1;
+    }
+    return cmp_len(na, nb);
+  }
+  while j < n
+    invariant 0 <= j && j <= n && 0 <= n && n <= 1073741824
+    decreases n - j
+  {
+    let x2: i64 = u_unit(a, na, j);
+    let y2: i64 = u_unit(b, nb, j);
+    if x2 != y2 {
+      if x2 < y2 { return -1; }
+      return 1;
+    }
+    j = j + 1;
+  }
+  return cmp_len(na, nb);
+}
+
+pub fn k_cmp_p(a: [i64], b: [i64]) -> i64
+{
+  let na: i64 = c30(rd(a, 0));
+  let nb: i64 = c30(rd(b, 0));
+  let r: i64 = cmp_words(a, b, 1, lo2(ushr(na + 3, 2), ushr(nb + 3, 2)));
+  if r != 0 { return r; }
+  return cmp_len(na, nb);
+}
+
+// Unit-by-unit comparison of two A8 records (used when the tags differ).
+fn cmp_units_a8(a: [i64], ta: i64, na: i64, b: [i64], tb: i64, nb: i64) -> i64
+  requires 0 <= na && na <= 1073741824 && 0 <= nb && nb <= 1073741824
+{
+  let n: i64 = lo2(na, nb);
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && 0 <= n && n <= 1073741824
+    decreases n - j
+  {
+    let x: i64 = a8_unit(a, ta, na, j);
+    let y: i64 = a8_unit(b, tb, nb, j);
+    if x != y {
+      if x < y { return -1; }
+      return 1;
+    }
+    j = j + 1;
+  }
+  return cmp_len(na, nb);
+}
+
+pub fn k_cmp_a8(a: [i64], b: [i64]) -> i64
+{
+  let ha: i64 = rd(a, 0);
+  let hb: i64 = rd(b, 0);
+  let ta: i64 = band(ha, 1);
+  let tb: i64 = band(hb, 1);
+  let na: i64 = c30(ushr(ha, 1));
+  let nb: i64 = c30(ushr(hb, 1));
+  if ta == 0 && tb == 0 {
+    let r: i64 = cmp_words(a, b, 1, lo2(ushr(na + 7, 3), ushr(nb + 7, 3)));
+    if r != 0 { return r; }
+    return cmp_len(na, nb);
+  }
+  if ta == 1 && tb == 1 {
+    let r2: i64 = cmp_words(a, b, 1, lo2(ushr(na + 3, 2), ushr(nb + 3, 2)));
+    if r2 != 0 { return r2; }
+    return cmp_len(na, nb);
+  }
+  return cmp_units_a8(a, ta, na, b, tb, nb);
+}
+
+// Unit-by-unit comparison of two F1 records (tag 1 byte order is not unit order).
+fn cmp_units_f1(a: [i64], ta: i64, na: i64, b: [i64], tb: i64, nb: i64) -> i64
+  requires 0 <= na && na <= 1073741824 && 0 <= nb && nb <= 1073741824
+{
+  let n: i64 = lo2(na, nb);
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && 0 <= n && n <= 1073741824
+    decreases n - j
+  {
+    let x: i64 = f1_unit(a, ta, na, j);
+    let y: i64 = f1_unit(b, tb, nb, j);
+    if x != y {
+      if x < y { return -1; }
+      return 1;
+    }
+    j = j + 1;
+  }
+  return cmp_len(na, nb);
+}
+
+pub fn k_cmp_f1(a: [i64], b: [i64]) -> i64
+{
+  let ta: i64 = band(rd(a, 0), 1);
+  let tb: i64 = band(rd(b, 0), 1);
+  let na: i64 = c30(rd(a, 1));
+  let nb: i64 = c30(rd(b, 1));
+  if ta == 0 && tb == 0 {
+    let r: i64 = cmp_words(a, b, 2, lo2(ushr(na + 7, 3), ushr(nb + 7, 3)));
+    if r != 0 { return r; }
+    return cmp_len(na, nb);
+  }
+  return cmp_units_f1(a, ta, na, b, tb, nb);
+}
+
+// ---- unit hashes (exported for the check mode) ----
+
+pub fn k_hu_u(k: [i64]) -> i64
+{ return hu_rec_u(k); }
+
+pub fn k_hu_p(k: [i64]) -> i64
+{ return hu_rec_p(k); }
+
+pub fn k_hu_a8(k: [i64]) -> i64
+{ return hu_rec_a8(k); }
+
+pub fn k_hu_f1(k: [i64]) -> i64
+{ return hu_rec_f1(k); }
+
+// ---- find / insert wrappers: hash, then the shared table code (U, P, A8: 1 header word; F1: 2) ----
+
+pub fn k_find_u_hu(t: [i64], k: [i64]) -> i64
+{ return tab_find(t, k, hu_rec_u(k), 1); }
+
+pub fn k_find_u_hw(t: [i64], k: [i64]) -> i64
+{ return tab_find(t, k, hash_w(k, 1), 1); }
+
+pub fn k_find_p_hu(t: [i64], k: [i64]) -> i64
+{ return tab_find(t, k, hu_rec_p(k), 1); }
+
+pub fn k_find_p_hw(t: [i64], k: [i64]) -> i64
+{ return tab_find(t, k, hash_w(k, 1), 1); }
+
+pub fn k_find_a8_hu(t: [i64], k: [i64]) -> i64
+{ return tab_find(t, k, hu_rec_a8(k), 1); }
+
+pub fn k_find_a8_hw(t: [i64], k: [i64]) -> i64
+{ return tab_find(t, k, hash_w(k, 1), 1); }
+
+pub fn k_find_f1_hu(t: [i64], k: [i64]) -> i64
+{ return tab_find(t, k, hu_rec_f1(k), 2); }
+
+pub fn k_find_f1_hw(t: [i64], k: [i64]) -> i64
+{ return tab_find(t, k, hash_w(k, 2), 2); }
+
+pub fn k_insert_u_hu(inout t: [i64], k: [i64]) -> i64
+{
+  let h: i64 = hu_rec_u(k);
+  return tab_insert(inout t, k, h, 1);
+}
+
+pub fn k_insert_u_hw(inout t: [i64], k: [i64]) -> i64
+{
+  let h: i64 = hash_w(k, 1);
+  return tab_insert(inout t, k, h, 1);
+}
+
+pub fn k_insert_p_hu(inout t: [i64], k: [i64]) -> i64
+{
+  let h: i64 = hu_rec_p(k);
+  return tab_insert(inout t, k, h, 1);
+}
+
+pub fn k_insert_p_hw(inout t: [i64], k: [i64]) -> i64
+{
+  let h: i64 = hash_w(k, 1);
+  return tab_insert(inout t, k, h, 1);
+}
+
+pub fn k_insert_a8_hu(inout t: [i64], k: [i64]) -> i64
+{
+  let h: i64 = hu_rec_a8(k);
+  return tab_insert(inout t, k, h, 1);
+}
+
+pub fn k_insert_a8_hw(inout t: [i64], k: [i64]) -> i64
+{
+  let h: i64 = hash_w(k, 1);
+  return tab_insert(inout t, k, h, 1);
+}
+
+pub fn k_insert_f1_hu(inout t: [i64], k: [i64]) -> i64
+{
+  let h: i64 = hu_rec_f1(k);
+  return tab_insert(inout t, k, h, 2);
+}
+
+pub fn k_insert_f1_hw(inout t: [i64], k: [i64]) -> i64
+{
+  let h: i64 = hash_w(k, 2);
+  return tab_insert(inout t, k, h, 2);
+}
