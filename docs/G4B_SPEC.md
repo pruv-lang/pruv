@@ -133,7 +133,8 @@ A package is a directory containing `pruv.json`. JSON is chosen because both com
 
 Rules (both compilers, same diagnostics):
 
-1. UTF-8 JSON object. Keys `name`, `version`, `root` are required; `dependencies` is optional (missing = `{}`). Any other
+1. UTF-8 JSON object. Keys `name`, `version`, `root` are required; `dependencies` is optional (missing = `{}`), and so is
+   `raw_entries` (rule 7). Any other
    key, a duplicate key, or a wrong type is `pkg/manifest_invalid` naming the key.
 2. `name`: `[a-z][a-z0-9_]*`, no `__`, not starting with `pruv_`, not `std`, not `crate`, not a reserved name.
 3. `version`: `MAJOR.MINOR.PATCH`, each a decimal without leading zeros, each at most 2^31 - 1. No pre-release or
@@ -144,6 +145,13 @@ Rules (both compilers, same diagnostics):
    `std`. An entry has exactly `path` (relative, `/` separators, `..` allowed, names a directory containing
    `pruv.json`) and `version` (a requirement, section 5).
 6. The manifest file is never written by the compiler.
+7. `raw_entries` (L3 P06, optional, program package only): how the generated raw host entries are exposed, `"crate"`
+   (`pub(crate)` behind a host adapter) or `"unsafe"` (a documented `pub unsafe fn`). A raw entry takes arbitrary
+   buffers, so a public safe raw entry is never an option: `"pub"`, `"public"` and `"safe"` are rejected with their own
+   message, any other value with `expected "crate" or "unsafe"`, a non-string with `expected a string`, and the key in a
+   dependency manifest with `only the program package chooses raw entry visibility` (all `pkg/manifest_invalid`).
+   Missing = today's output. P06 only records the choice (`Program.raw_entries`); codegen applies it in P09
+   (`docs/L3_RESTRUCTURE_SPEC.md` appendix P06).
 
 CLI: `--manifest PATH` names the program's own manifest. The positional input must be the same file as that manifest's
 `root` (canonical file identity), otherwise a usage error `--manifest root does not match the input file`. `--manifest`

@@ -1,0 +1,11 @@
+// P06 contract expansion accept: callee names (params, lets) never capture caller names
+pub fn gap(x: i64, y: i64) -> bool {
+  if x < -1000000 || x > 1000000 || y < -1000000 || y > 1000000 { return false; }
+  let x2: i64 = y - x;
+  return x2 >= 0;
+}
+
+pub fn order(x: i64, y: i64, x2: i64) -> i64
+  requires gap(y, x2) && gap(x, y)
+  ensures result <= x2
+{ return x; }

@@ -1,0 +1,12 @@
+// P06 contract expansion accept: a predicate takes a [bool] parameter
+pub fn flag0(a: [bool]) -> bool {
+  if len(a) == 0 { return false; }
+  return a[0];
+}
+
+pub fn need(a: [bool]) -> i64
+  requires flag0(a)
+{
+  if a[0] { return 1; }
+  return 0;
+}

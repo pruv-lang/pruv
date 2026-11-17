@@ -6,7 +6,8 @@
                             [--fuzz-count 200] [--mutations 3] [--save-dir DIR]
                             [--modes VT,Vt,vT,vt,B]
 
-Groups: must_reject examples runtime bench g9 g4 g4b edge fuzz mutate
+Groups: must_reject examples runtime bench g9 l3 g4 g4b edge fuzz mutate
+  l3 = tests/l3/frontend/*.pruv (L3 P06: user predicates expanded in contracts).
   g9 = tests/g9/frontend/*.pruv (until batch A2 both compilers must agree on the downstream guard diagnostic).
   g4b = manifest workspaces tests/g4b/projects/<name>/ (tests/g4b/projects.py): the program package app/ is loaded with its
        pruv.json (Python: manifest.load_graph + load_program(manifest=graph); Rust: `pruv-rust-dump --manifest M FILE`, one
@@ -63,9 +64,10 @@ GROUP_DIRS = [
     ("runtime", "tests/runtime"),
     ("bench", "bench/solutions/pruv_agg"),
     ("g9", "tests/g9/frontend"),
+    ("l3", "tests/l3/frontend"),
 ]
 CHECK_EDGE_DIR = "tests/check_edge"
-ALL_GROUPS = ["must_reject", "examples", "runtime", "bench", "g9", "g4", "g4b", "edge", "fuzz", "mutate"]
+ALL_GROUPS = ["must_reject", "examples", "runtime", "bench", "g9", "l3", "g4", "g4b", "edge", "fuzz", "mutate"]
 
 # (label, verified, trust_callers). B is handled separately.
 MODE_TABLE = collections.OrderedDict([

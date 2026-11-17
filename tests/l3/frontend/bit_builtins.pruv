@@ -1,0 +1,17 @@
+// P06 contract expansion accept: band/bor/bxor/ushr/wrapping_shl inside an expanded predicate
+pub fn pow2(s: i64) -> bool {
+  if s < 1 || s > 1073741824 { return false; }
+  return band(s, s - 1) == 0;
+}
+
+pub fn lowbits(x: i64, s: i64) -> i64
+  requires pow2(s) && x >= 0
+  ensures result >= 0 && result < s
+{ return band(x, s - 1); }
+
+pub fn byte1(x: i64) -> i64 { return band(ushr(x, 8), 255); }
+pub fn tagged(x: i64) -> i64 { return bxor(bor(wrapping_shl(byte1(x), 8), 1), 0); }
+
+pub fn tag(x: i64) -> i64
+  ensures result == tagged(x)
+{ return bxor(bor(wrapping_shl(band(ushr(x, 8), 255), 8), 1), 0); }

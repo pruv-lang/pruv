@@ -1,0 +1,6 @@
+// P06 contract expansion accept: len of an array parameter inside a predicate
+pub fn has(a: [i64], n: i64) -> bool { return n >= 0 && len(a) >= n; }
+
+pub fn first(a: [i64]) -> i64
+  requires has(a, 1)
+{ return a[0]; }

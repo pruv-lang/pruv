@@ -1,0 +1,1 @@
+{"stage": "verify", "code": "ensures", "line": 3, "col": 57, "message": "cannot prove postcondition (line 3) in f"}

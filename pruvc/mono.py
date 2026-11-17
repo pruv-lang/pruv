@@ -506,6 +506,7 @@ class _Mono:
         if prog.g9 is not None:
             program.g9 = self._g9_meta()      # explicit mode: the same metadata over the Rust stems
         program.explicit = self.explicit      # G4 A2: the code generator applies the explicit visibility rules
+        program.raw_entries = getattr(prog, "raw_entries", None)   # P06: raw entry visibility (applied in P09)
         return SpecPlan(prog, program, fn_specs, type_specs, root_names)
 
 

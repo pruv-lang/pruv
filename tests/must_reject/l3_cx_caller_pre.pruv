@@ -1,0 +1,4 @@
+// P06 contract expansion reject: the expanded requires binds callers
+fn pos(x: i64) -> bool { return x > 0; }
+fn f(x: i64) -> i64 requires pos(x) { return x; }
+fn g() -> i64 { return f(0); }

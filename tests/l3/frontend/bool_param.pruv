@@ -1,0 +1,10 @@
+// P06 contract expansion accept: a predicate takes a bool parameter
+pub fn pick_ok(f: bool, x: i64) -> bool {
+  if f { return x >= 0; }
+  return x <= 0;
+}
+
+pub fn pick(f: bool, x: i64) -> i64
+  requires pick_ok(f, x)
+  ensures pick_ok(f, result)
+{ return x; }

@@ -1,0 +1,7 @@
+// P06 contract expansion accept: the caller's guard makes an expanded call argument well-defined (short-circuit domain)
+pub fn pos(x: i64) -> bool { return x > 0; }
+
+pub fn h(a: [i64]) -> i64
+  requires len(a) > 0 && pos(a[0])
+  ensures pos(result)
+{ return a[0]; }

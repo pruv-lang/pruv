@@ -1,4 +1,5 @@
 """Pruv type / effect / structure checker. Fills Expr.ty."""
+import copy
 import re
 from vast import *
 from typeinfo import (TypeTable, BUILTIN_TYPE_NAMES, type_name, is_user_type, is_array, array_elem,  # G2 A5: array_elem
@@ -165,6 +166,10 @@ class Checker:
         s.active_roots = []       # root variable names of the enclosing match arms on extended scrutinees
         s.s5_errors = []
         s.par_groups = []         # G7 A0: (enclosing Function, Par statement, [branch Function]) of every checked group
+        s.x_raw = {}              # P06: function name -> reason it cannot be expanded (str) or its raw body
+        s.x_memo = {}             # P06: function name -> typed expansion template over its parameter names
+        s.x_busy = set()          # P06: templates being built (recursion)
+        s.x_pending = None        # P06: expansion replacing the Call node just checked
 
     def run(s):
         refine_expand(s.prog)  # STAGE1 A: validate refinement annotations, desugar them into contracts/asserts
@@ -181,6 +186,7 @@ class Checker:
         if s.prog.explicit:
             s.check_entries()      # G4 A0: host-entry signatures
         s.tt = TypeTable(s.prog)
+        s.x_prepare()          # P06: which functions a contract may expand, and their raw bodies
         for f in s.prog.functions:
             s.fn(f)
         s.check_fn_sccs()      # G9 A0: measures and stable type parameters of recursive call SCCs
@@ -1424,7 +1430,13 @@ class Checker:
             terr(e, "inout_argument", "the `inout` marker is only valid on an argument of a function whose parameter is inout",
                  "remove `inout`")
         if isinstance(e, Call):
-            return s.call(e, scope, c)
+            t = s.call(e, scope, c)
+            x = s.x_pending
+            if x is not None:     # P06: a contract call to a user function becomes its expansion, in place
+                s.x_pending = None
+                e.__class__ = x.__class__
+                e.__dict__ = x.__dict__
+            return t
         terr(e, "internal", "unknown expression")
 
     # ---- user type helpers ----
@@ -1659,6 +1671,59 @@ class Checker:
         e.old = {"param": arg.name, "index": [p.name for p in s.f.params].index(arg.name)}
         return arg.ty
 
+    # ---- P06: expanding user functions in contracts (docs/L3_RESTRUCTURE_SPEC.md appendix P06) ----
+    def x_prepare(s):
+        """the reason each function cannot be expanded in a contract, or a raw copy of its body when its signature
+        and statements allow it (checked before any body is typed, so every template starts from source)"""
+        for f in s.prog.functions:
+            r = x_sig_reason(f) or x_scan_block(f, f.body, 0, s.funcs)
+            s.x_raw[f.name] = r if r is not None else copy.deepcopy(f.body)
+
+    def x_expand(s, e, f):
+        """the expansion of the checked contract call e of the user function f"""
+        return x_instantiate(s.x_template(e, f), f, e)
+
+    def x_template(s, e, f):
+        n = f.name
+        t = s.x_memo.get(n)
+        if t is not None:
+            return t
+        raw = s.x_raw[n]
+        if isinstance(raw, str):
+            terr(e, "call_in_contract", X_MSG % (n, raw), X_FIX)
+        if n in s.x_busy:
+            terr(e, "call_in_contract", X_MSG % (n, "it is recursive"), X_FIX)
+        s.x_busy.add(n)
+        scope = {p.name: (p.type, False, "param") for p in f.params}
+        t = s.x_walk(e, f, raw, 0, scope, {})
+        s.x_busy.discard(n)
+        s.x_memo[n] = t
+        return t
+
+    def x_walk(s, site, f, stmts, i, scope, env):
+        """type the statements from stmts[i] in contract mode and fold them into one expression over the parameters"""
+        while True:
+            st = stmts[i]
+            if isinstance(st, Let):
+                if st.name in scope:
+                    terr(st, "shadow", "%s is already defined; shadowing is not allowed" % st.name, "use a new name")
+                s.expect(st.value, st.type, scope, True)
+                env[st.name] = x_sized(site, f, x_subst(st.value, env))
+                scope[st.name] = (st.type, False, "local")
+            elif isinstance(st, Return):
+                s.expect(st.value, f.ret, scope, True)
+                return x_sized(site, f, x_subst(st.value, env))
+            else:
+                s.expect(st.cond, BOOL, scope, True, op="a condition")
+                cond = x_sized(site, f, x_subst(st.cond, env))
+                t = s.x_walk(site, f, st.then, 0, dict(scope), dict(env))
+                if st.els:
+                    el = s.x_walk(site, f, st.els, 0, dict(scope), dict(env))
+                else:
+                    el = s.x_walk(site, f, stmts, i + 1, dict(scope), dict(env))
+                return x_sized(site, f, x_join(st, cond, t, el))
+            i += 1
+
     def call(s, e, scope, c):
         n, a = e.name, e.args
 
@@ -1794,13 +1859,179 @@ class Checker:
         if c and f.effects:
             terr(e, "effect_in_contract", "function %s has effects; not allowed in contracts" % n)
         if c:
-            terr(e, "call_in_contract", "calling functions in contracts is not supported in v0.1",
-                 "inline the property")
+            if s.ckind == "cost":
+                terr(e, "call_in_contract", "calling functions in contracts is not supported in v0.1",
+                     "inline the property")
+            s.x_pending = s.x_expand(e, f)    # P06: expand the call (docs/L3_RESTRUCTURE_SPEC.md appendix P06)
+            return substitute(f.ret, m)
         s.used_effects.update(f.effects)
         s.calls[s.f.name].add(n)
         if f.foreign is None:     # G9 A0: foreign calls are leaves of the call graph
             s.call_log.append((s.f, e, f))
         return substitute(f.ret, m)
+
+
+# ---- P06: contract expansion of user functions ----
+X_MSG = "function %s cannot be expanded in a contract: %s"
+X_FIX = ("keep it loop-free with no requires (immutable lets, if/return over i64, bool and array parameters), "
+         "or inline the property")
+X_MAX = 4096          # nodes in one template or one expansion
+X_PARAM_TYPES = (I64, BOOL, ARRAY, ARRAY_U8, ARRAY_BOOL)
+X_R_STMT = "its body has a statement other than an immutable i64 or bool let, if and return"
+X_R_EXPR = "its body has an expression other than literals, names, operators, indexing and calls"
+
+
+def x_sig_reason(f):
+    if f.tparams:
+        return "it is generic"
+    if any(p.mode is not None for p in f.params):
+        return "it has an inout parameter"
+    if any(p.type not in X_PARAM_TYPES for p in f.params):
+        return "its parameters are not all i64, bool or arrays of i64, u8 or bool"
+    if f.ret not in (I64, BOOL):
+        return "it does not return bool or i64"
+    if f.requires:
+        return "it has requires"
+    if f.decreases is not None:
+        return "it has decreases"
+    if f.cost is not None:
+        return "it has a cost clause"
+    return None
+
+
+def x_scan_block(f, stmts, i, funcs):
+    while i < len(stmts):
+        st = stmts[i]
+        if isinstance(st, Let):
+            if st.mutable or st.refine is not None or st.type not in (I64, BOOL):
+                return X_R_STMT
+            r = x_scan_expr(st.value, funcs)
+            if r is not None:
+                return r
+        elif isinstance(st, Return):
+            if st.value is None:
+                return X_R_STMT
+            return x_scan_expr(st.value, funcs)
+        elif isinstance(st, If):
+            if f.ret != BOOL:
+                return "it returns i64 through an if (only bool functions may branch)"
+            r = x_scan_expr(st.cond, funcs)
+            if r is None:
+                r = x_scan_block(f, st.then, 0, funcs)
+            if r is not None:
+                return r
+            return x_scan_block(f, st.els, 0, funcs) if st.els else x_scan_block(f, stmts, i + 1, funcs)
+        else:
+            return X_R_STMT
+        i += 1
+    return "an if branch does not end in return"
+
+
+def x_scan_expr(e, funcs):
+    if isinstance(e, (IntLit, BoolLit, Var)):
+        return None
+    if isinstance(e, Unary):
+        return x_scan_expr(e.operand, funcs)
+    if isinstance(e, Binary):
+        r = x_scan_expr(e.left, funcs)
+        return r if r is not None else x_scan_expr(e.right, funcs)
+    if isinstance(e, Index):
+        r = x_scan_expr(e.array, funcs)
+        return r if r is not None else x_scan_expr(e.index, funcs)
+    if isinstance(e, Call):
+        if e.name in funcs or e.name == "len" or e.name in BIT_BUILTINS or e.name == "load_be":
+            for a in e.args:
+                r = x_scan_expr(a, funcs)
+                if r is not None:
+                    return r
+            return None
+        return "it calls %s" % e.name
+    return X_R_EXPR
+
+
+def x_size(e):
+    if isinstance(e, Unary):
+        return 1 + x_size(e.operand)
+    if isinstance(e, Binary):
+        return 1 + x_size(e.left) + x_size(e.right)
+    if isinstance(e, Index):
+        return 1 + x_size(e.array) + x_size(e.index)
+    if isinstance(e, Call):
+        return 1 + sum(x_size(a) for a in e.args)
+    return 1
+
+
+def x_sized(site, f, e):
+    if x_size(e) > X_MAX:
+        terr(site, "call_in_contract", X_MSG % (f.name, "its expansion is too large"), X_FIX)
+    return e
+
+
+def x_map(e, leaf):
+    """a fresh copy of the expansion expression e; leaf(Var) gives the replacement of a name or None to copy it"""
+    if isinstance(e, Var):
+        r = leaf(e)
+        if r is not None:
+            return r
+    n = copy.copy(e)
+    if isinstance(e, Unary):
+        n.operand = x_map(e.operand, leaf)
+    elif isinstance(e, Binary):
+        n.left = x_map(e.left, leaf)
+        n.right = x_map(e.right, leaf)
+    elif isinstance(e, Index):
+        n.array = x_map(e.array, leaf)
+        n.index = x_map(e.index, leaf)
+    elif isinstance(e, Call):
+        n.args = [x_map(a, leaf) for a in e.args]
+    return n
+
+
+def x_subst(e, env):
+    """e with every let name replaced by its folded value"""
+    return x_map(e, lambda v: x_map(env[v.name], lambda _: None) if v.name in env else None)
+
+
+def x_join(st, c, t, el):
+    """if c { t } else { el } over bool values, short-circuit form"""
+    def mk(cls, *a):
+        n = cls(st.line, st.col, *a, ty=BOOL)
+        if st.file is not None:
+            n.file = st.file
+        return n
+    if isinstance(t, BoolLit) and not t.value:
+        return mk(Binary, "&&", mk(Unary, "!", c), el)
+    if isinstance(t, BoolLit) and t.value:
+        return mk(Binary, "||", c, el)
+    if isinstance(el, BoolLit) and not el.value:
+        return mk(Binary, "&&", c, t)
+    if isinstance(el, BoolLit) and el.value:
+        return mk(Binary, "||", mk(Unary, "!", c), t)
+    return mk(Binary, "||", mk(Binary, "&&", c, t), mk(Binary, "&&", mk(Unary, "!", x_map(c, lambda _: None)), el))
+
+
+def x_instantiate(tpl, f, site):
+    """the template with each parameter replaced by a copy of the checked argument; every template node takes the
+    call site's position (the arguments keep theirs)"""
+    args = {p.name: a for p, a in zip(f.params, site.args)}
+
+    def at(e):
+        if isinstance(e, Var) and e.name in args:
+            return x_map(args[e.name], lambda _: None)
+        n = copy.copy(e)
+        n.line, n.col = site.line, site.col
+        if site.file is not None or n.file is not None:
+            n.file = site.file
+        if isinstance(e, Unary):
+            n.operand = at(e.operand)
+        elif isinstance(e, Binary):
+            n.left, n.right = at(e.left), at(e.right)
+        elif isinstance(e, Index):
+            n.array, n.index = at(e.array), at(e.index)
+        elif isinstance(e, Call):
+            n.args = [at(a) for a in e.args]
+        return n
+    return x_sized(site, f, at(tpl))
 
 
 def check(prog, externs=()):

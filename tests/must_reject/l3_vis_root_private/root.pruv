@@ -1,0 +1,8 @@
+// P06 visibility reject: a public root function expands a private root function in its requires
+fn ok(x: i64) -> bool { return x >= 0; }
+
+pub fn go(x: i64) -> i64
+  requires ok(x)
+{
+  return x;
+}

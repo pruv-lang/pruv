@@ -509,3 +509,52 @@ Retire only product word layout/dispatch, repeated validation after proven owner
 - M10b/M12, integrated scenario execution, KD judge and native/hand/LLVM perf lanes remain completion dependencies. M10 lacks hand/TS baselines; replacing archived prefetch needs live query-order evidence and the SETTLE mutant.
 - Source-only MCP linearisation is proposed, not measured. JSON 6.3x is one parser cell; Q wall times are not throughput. Key layout selection, seed/probe/refusal policy and any conditional interning need measured lifecycle/complete-operation costs.
 - Fixed UUID fast paths require exact form/spelling. Snapshot versioning, source-span lifetimes, escaped-string materialization/unit lengths, and host allocation/destructor contracts need integration evidence without weakening external validation or lone-surrogate equivalence.
+
+## Appendix P06. Contract expansion and raw-entry visibility (design note for P07–P09)
+
+P06 lets a contract use an I0 header fact such as `valid(st)` (bench/l3/budget/bud_store.pruv) without opaque types (D9) and records the raw-entry visibility choice. User rules are in SPEC.md §6 ("User functions in contracts") and §6f; the manifest key is docs/G4B_SPEC.md §3 rule 7. P07–P09 reuse the representation below unchanged.
+
+### P06.1 Representation
+
+| Item | Representation (pruvc/check.py `x_*`, pruvc-rs check.rs `x_*`, same rules and messages) |
+|---|---|
+| Expandable function | Not generic, no `inout`, no `requires`/`decreases`/`cost`; params in {i64, bool, [i64], [u8], [bool]}; returns bool or i64. Body: immutable i64/bool lets without refinement, `if`, `return`; only bool functions branch; every branch returns. Expressions: literals, names, unary/binary, index, calls of `len`, bit builtins, `load_be` and other expandable user functions. |
+| Expansion | At check time a contract `Call` of a user function is replaced **in place** by the expansion (py swaps `__class__`/`__dict__`, rs overwrites the node). No new AST node: verify, both codegens and the runtime requires check see an ordinary expression. Every expanded node carries the call-site file/line/col. |
+| Lets and branches | Lets are substituted lazily at each use (their domain is needed only where used). `if c { return a; } rest` becomes `(c && a) \|\| (!c && rest)` (`x_join`), so the guard of an `if` guards later reads in contract-domain order. Arguments are copied at each parameter use (pure, so meaning is unchanged; runtime checks evaluate them more than once). |
+| Limits | Expansion size at most 4096 nodes (`X_MAX`). Recursion is impossible because a self/mutual call needs `decreases`, which already disqualifies; the "it is recursive" reason is a defensive guard. |
+| Errors | `type/call_in_contract` "function F cannot be expanded in a contract: REASON"; a call in a `cost` clause keeps the v0.1 message. A `pub` function's `requires`/`ensures`/`decreases`/`cost` that directly calls a private function is `type/public_interface` "public function P exposes the private function Q in its contract". |
+| Meaning | Contract arithmetic is mathematical. The callee's own body is verified with no assumptions (no `requires` allowed), so every code operation in it is total and its contract value equals its run-time value. Under `--no-verify` this is trusted, like every other contract. |
+| Raw entries | Manifest `raw_entries`: `"crate"` (pub(crate) behind a host adapter) or `"unsafe"` (documented `pub unsafe fn`); public safe values are rejected; only the program package may set it. Carried as `Program.raw_entries` (py attribute / rs `Option<String>`); missing means today's output. P06 does not change codegen. |
+
+### P06.2 Evidence manifest (C)
+
+Both compilers give the same acceptance, rejection, stage, code, line, col and message (run_all `--compiler py` and rs default), and the same `.rs` for every positive (diff_rust group `l3`).
+
+| Category | Files | Notes |
+|---|---|---|
+| Frontend positives (24) | tests/l3/frontend/*.pruv, run_all group `l3_frontend` | requires/ensures/invariant/assert/decreases, i64 and bool callees, nested and chained calls, let chains, if-join, short circuit, Euclidean `/` `%`, bit builtins, `load_be`, bool/u8 arrays, private callee in private fn, full bud_store `valid(st)` and a caller relying on it. |
+| Frontend rejects (40) | tests/must_reject/l3_cx_*.pruv | 26 `call_in_contract` reasons (generic, inout, requires, decreases, cost, param/ret types, let/statement/expression shapes, i64 branch, missing return, eq_range, too large, nested reasons, cost-clause call) plus type/arity/shadow/unknown/effect around expansion and 7 verify-stage meaning checks (false ensures, let/branch/header meaning, domain of `/` and index, caller precondition). |
+| Visibility misuse (5) | tests/must_reject/l3_vis_*/ (multi-file projects) | private callee in a pub `requires`, `ensures`, `decreases`, nested inside a pub callee argument, and in the root module. |
+| Manifest | tests/g4b/check_pkg.py | `raw_entries` crate/unsafe accepted; pub/public/safe, other strings, non-strings, and the key in a dependency rejected with exact messages. |
+
+Applicability mapping for categories P06 does not change:
+
+| C category | Why not new in P06 | Existing coverage / owner |
+|---|---|---|
+| Proof positives/negatives (24/20) | verify.py and RP unchanged; expansion yields ordinary expressions | Verify-stage rejects above; all g1–g10 proof groups. New I0 preservation proofs are P07, mirror P08. |
+| Codegen/visibility snapshots | Generated code is unchanged except for expanded requires checks | Identical `.rs` from both compilers (diff_rust `l3`, `edge`, `must_reject`). Visibility in codegen is P09. |
+| Runtime 24 / ABI 16 | No boundary changed; `raw_entries` is recorded only | P09 (adapter, trust-callers, poison), P10 (LLVM handle). |
+| Effects, shadowing, arity, types, unknown names in contracts | Rules unchanged, checked before expansion | check_edge `call_in_contract`, `effect_in_contract`; must_reject type groups; the l3_cx type rows confirm order. |
+| Recursion | Unreachable (decreases disqualifies) | l3_cx_mutual, l3_cx_decreases. |
+
+### P06.3 Notes for P07–P09
+
+| Package | Note |
+|---|---|
+| P07 | A code-level call does not know the callee body: `if small(x) { x + y }` does not bound `x`. Expose the body as an automatic ensures (`ensures result == <expansion>`) of expandable functions, or state facts with explicit ensures. Do not add a second expansion path; reuse the existing one (py `x_expand`, rs `x_template`/`x_instantiate`). |
+| P07 | Contract-domain rejects can be false when a guard sits behind `band` on an element (solver sees `band` as opaque); P07 frame/mutator proofs should state the needed bound directly. |
+| P07/P08 | Solver cost: nonlinear products with `band` and `result * 2 == st[4]`-style facts timed out in trials; keep header facts linear (offsets as sums/compares) and measure solver CPU for P08. |
+| P09 | Runtime requires checks print and evaluate the expanded expression with duplicated arguments; acceptable for O(1) headers, but P09 should keep raw-entry requires checks at the adapter only once. |
+| P09 | Apply `Program.raw_entries` in both Rust codegens and bindings: `"crate"` emits `pub(crate)` raw functions plus the adapter, `"unsafe"` emits documented `pub unsafe fn`. Consider making `--trust-callers` require one of them. No public safe arbitrary-Vec entry in any mode. |
+| P09 | Visibility checks only direct calls: a pub contract may expand pub `q` whose body calls private `r`, so `r`'s body is part of the public contract meaning. This is an interface-stability policy, not soundness (expansion happens in the defining package; other packages see an ordinary expression). Tighten to the whole expansion only if P09 publishes contracts across packages. |
+| Later | i64 functions cannot branch (no conditional expression in contracts); add one only if a header fact needs it. |

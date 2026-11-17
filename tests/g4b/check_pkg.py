@@ -164,6 +164,42 @@ def main(work, binary=None, py=None):
     bad_manifest("unknown dependency entry key",
                  man("app", root="app.pruv", deps={"json": {"path": "../json", "version": "0.1", "extra": 1}}),
                  "invalid manifest key dependencies.json.extra: unknown key", extra_files=jd)
+    # P06 raw entry visibility (docs/L3_RESTRUCTURE_SPEC.md appendix P06): never a public safe entry
+    for bad in ("pub", "public", "safe"):
+        bad_manifest("raw_entries " + bad, json.dumps(dict(good, raw_entries=bad)),
+                     "invalid manifest key raw_entries: a raw entry is never a public safe function "
+                     "(use \"crate\" or \"unsafe\")")
+    for bad in ("other", "", "Crate"):
+        bad_manifest("raw_entries %r" % bad, json.dumps(dict(good, raw_entries=bad)),
+                     "invalid manifest key raw_entries: expected \"crate\" or \"unsafe\"")
+    for bad in (1, None, True, ["crate"]):
+        bad_manifest("raw_entries %r" % (bad,), json.dumps(dict(good, raw_entries=bad)),
+                     "invalid manifest key raw_entries: expected a string")
+    for ok in ("crate", "unsafe"):
+        p = r.project({"app/pruv.json": json.dumps(dict(good, raw_entries=ok)), "app/app.pruv": APP_PLAIN})
+        rc, ds, txt, _ = app(p)
+        check("raw_entries " + ok + " accepted", rc == 0, "exit %d %s" % (rc, txt))
+    # only the program package chooses raw entry visibility
+    f = {"app/pruv.json": man("app", deps={"json": dep("../json")}), "app/app.pruv": APP_JSON,
+         "json/pruv.json": man("json", raw_entries="crate"), "json/json.pruv": INC}
+    p = r.project(f)
+    rc, ds, txt, _ = app(p)
+    check("raw_entries in a dependency",
+          pkg_diag(rc, ds, "manifest_invalid",
+                   "invalid manifest key raw_entries: only the program package chooses raw entry visibility",
+                   FIX3, "@pkg/json/pruv.json", (1, 1)) and no_path(p, txt), "exit %d %s" % (rc, txt))
+    # a public contract of a dependency cannot expose its private function (P06 visibility misuse)
+    f = {"app/pruv.json": man("app", deps={"json": dep("../json")}),
+         "app/app.pruv": "mod json;\npub fn f(x: i64) -> i64 { return crate::json::g(x); }\n"}
+    f.update(pkg_files("json", "json", "fn ok(x: i64) -> bool { return x >= 0; }\n"
+                                       "pub fn g(x: i64) -> i64\n  requires ok(x)\n{ return x; }\n"))
+    p = r.project(f)
+    rc, ds, txt, _ = app(p)
+    check("public contract exposes a private function of a dependency",
+          rc == 1 and len(ds) == 1 and code_of(ds[0]) == "public_interface"
+          and ds[0].get("file") == "@pkg/json/json.pruv" and (ds[0].get("line"), ds[0].get("col")) == (3, 12)
+          and ds[0].get("message") == "public function @json::g exposes the private function @json::ok in its contract"
+          and no_path(p, txt), "exit %d %s" % (rc, txt))
 
     # manifest_invalid inside a dependency reports @pkg/KEY/pruv.json
     f = {"app/pruv.json": man("app", deps={"json": dep("../json")}), "app/app.pruv": APP_JSON,

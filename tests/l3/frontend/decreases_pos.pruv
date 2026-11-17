@@ -1,0 +1,11 @@
+// P06 contract expansion accept: a decreases measure is a public i64 helper
+pub fn meas(n: i64) -> i64 { return n; }
+
+pub fn down(n: i64) -> i64
+  requires n >= 0
+  ensures result == 0
+  decreases meas(n)
+{
+  if n == 0 { return 0; }
+  return down(n - 1);
+}

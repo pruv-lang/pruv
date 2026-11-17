@@ -1,0 +1,1 @@
+{"stage": "verify", "code": "contract_domain", "line": 3, "col": 38, "message": "cannot prove partial operations (index, /, %, some_val/ok_val/err_val, max/min) in requires (line 3) are defined in f"}

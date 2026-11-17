@@ -1,0 +1,3 @@
+// P06 contract expansion reject: an Option parameter is not expandable
+fn p(o: Option<i64>) -> bool { return true; }
+fn f(o: Option<i64>) -> i64 requires p(o) { return 0; }

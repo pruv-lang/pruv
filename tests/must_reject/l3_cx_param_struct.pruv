@@ -1,0 +1,4 @@
+// P06 contract expansion reject: callee parameters must be i64, bool or [i64]/[u8]/[bool]
+struct P { x: i64 }
+fn p(v: P) -> bool { return v.x > 0; }
+fn f(v: P) -> i64 requires p(v) { return v.x; }

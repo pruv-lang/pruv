@@ -1,0 +1,8 @@
+// companion module of l3_vis_private_requires
+fn ok(x: i64) -> bool { return x >= 0; }
+
+pub fn g(x: i64) -> i64
+  requires ok(x)
+{
+  return x;
+}

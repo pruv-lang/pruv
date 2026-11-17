@@ -130,6 +130,8 @@ def load_program(path, libs=(), manifest=None):
         if _sniff_explicit(src):
             e.file = root_file
         raise
+    if graph is not None:
+        prog.raw_entries = graph.program.raw_entries   # P06: applied by codegen in P09
     if not (prog.mods or prog.has_pub):
         if graph is not None and graph.program.deps:
             raise PruvError("pkg", 1, 1, "unused_dependency",
@@ -414,6 +416,7 @@ class _Resolver:
         # aborts the check, so every public declaration visited by an earlier item has a closure without private
         # declarations and need not be walked again.
         s.iface_seen = set()
+        s.fn_by_id = {it.name: it for it in prog.items if isinstance(it, Function)}   # P06: contract calls
         for it in prog.items:
             if it.pub:
                 s.interface(it)
@@ -666,6 +669,11 @@ class _Resolver:
         r = s.private_in(names, seen)
         if r is not None:
             s.leak(e, item, r, "contract")
+        if isinstance(e, Call):     # P06: a public contract expands only public functions (their bodies are its meaning)
+            f = s.fn_by_id.get(e.name)
+            if f is not None and not f.pub:
+                _err(e, "public_interface", "public function %s exposes the private function %s in its contract" % (
+                    item.name, f.name), "make %s `pub`, or keep %s private" % (f.name, item.name))
         for t in getattr(e, "targs", None) or []:
             s.iface_type(t, e, item, "contract", seen)
         for k in _kids(e):

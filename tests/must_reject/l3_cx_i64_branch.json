@@ -1,0 +1,1 @@
+{"stage": "type", "code": "call_in_contract", "line": 3, "col": 30, "message": "function m cannot be expanded in a contract: it returns i64 through an if (only bool functions may branch)"}

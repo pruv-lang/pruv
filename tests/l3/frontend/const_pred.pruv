@@ -1,0 +1,7 @@
+// P06 contract expansion accept: a predicate with no parameters' effect beyond constants
+pub fn limit() -> i64 { return 4096; }
+
+pub fn under(x: i64) -> i64
+  requires x >= 0 && x < limit()
+  ensures result < limit()
+{ return x; }

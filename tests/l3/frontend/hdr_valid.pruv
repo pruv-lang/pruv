@@ -1,0 +1,38 @@
+// P06 contract expansion accept: an I0 header predicate (bud_store valid) expands in requires/ensures
+pub fn valid(st: [i64]) -> bool
+{
+  let l: i64 = len(st);
+  if l < 232 { return false; }
+  // len(st) >= 232 from here, so the header words 0..14 are read directly (hd would return the same values).
+  // s == layout_slots(l) without the doubling loop: a power of two in 8..2^32 with 54*(s/2)+16 <= l, and either
+  // s > 2^31 or 54*s+16 > l (the loop stops at exactly that s).
+  let s: i64 = st[4];
+  if s < 8 || s > 4294967296 { return false; }
+  if band(s, s - 1) != 0 { return false; }
+  if 54 * (s / 2) + 16 > l { return false; }
+  if s <= 2147483648 && 54 * s + 16 <= l { return false; }
+  let cap: i64 = s / 2;
+  if st[0] != 1112884307 || st[1] != 1 || st[2] != l { return false; }
+  if st[3] != 16 || st[4] != s || st[5] != 16 + s || st[6] != cap { return false; }
+  if st[9] != 16 + 11 * s || st[11] != l { return false; }
+  let top: i64 = st[7];
+  if top < 0 || top > cap { return false; }
+  let fh: i64 = st[8];
+  if fh < -1 || fh >= top { return false; }
+  let ab: i64 = st[9];
+  let at: i64 = st[10];
+  let ae: i64 = st[11];
+  if at < ab || at > ae { return false; }
+  if st[12] < 0 || st[13] < 0 || st[14] < 0 { return false; }
+  return true;
+}
+
+pub fn slots(st: [i64]) -> i64
+  requires valid(st)
+  ensures result >= 8 && result <= 4294967296
+{ return st[4]; }
+
+pub fn cap(st: [i64]) -> i64
+  requires valid(st)
+  ensures result == st[4] / 2 && result >= 4
+{ return st[6]; }

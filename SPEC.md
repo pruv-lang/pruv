@@ -149,6 +149,22 @@ Allowed only in `requires`, `ensures`, `invariant`, `assert`:
   This holds in `requires` (each clause from the earlier ones only: write `requires 0 <= i && i < len(a)` before
   `requires a[i] > 0`), `ensures`, `invariant` (earlier clauses of the same kind may guard later ones), `assert` and
   `decreases`.
+- User functions in contracts (L3 P06): a contract (`requires`, `ensures`, `invariant`, `assert`, `decreases`) may
+  call a user function whose body is a fixed-size formula, such as an O(1) header check `valid(st)`. The checker
+  replaces the call by the function's body, so the contract means exactly what the body computes:
+  - The function is not generic, has no `inout` parameter, no `requires`, `decreases` or `cost`, takes only `i64`,
+    `bool`, `[i64]`, `[u8]`, `[bool]` and returns `bool` or `i64`.
+  - Its body has only immutable `i64`/`bool` lets (no refinement), `if` and `return`; only a `bool` function may
+    branch, and every branch ends in `return`. Expressions are literals, names, operators, `a[i]`, and calls of
+    `len`, the bit builtins, `load_be` and other functions that follow these rules (no recursion).
+  - Lets are substituted into their uses and early returns become `&&`/`||`, so the result is one contract
+    expression placed at the call (its diagnostics point at the call). It is at most 4096 nodes.
+  - Contract domain and arithmetic apply to the result as to any contract (the guards of the body's own `if`s guard
+    its later reads); the function's code is verified separately with no assumptions, so its contract meaning and
+    its run-time value agree.
+  - Anything else is `type` error `call_in_contract` "function F cannot be expanded in a contract: REASON". A call in
+    a `cost` clause stays unsupported. A `pub` function's `requires`/`ensures`/`decreases` may expand only `pub`
+    functions (`type/public_interface`, section 6f), because the body becomes part of the public contract.
 - Aggregates (k ranges over lo <= k < hi, like `forall`):
   - `sum(k in lo..hi: e)` — sum of i64 `e`; 0 if the range is empty.
   - `count(k in lo..hi: c)` — number of k where bool `c` holds; 0 if empty.
@@ -405,6 +421,7 @@ pub fn bounded(x: i64) -> i64                requires 0 <= x && x <= 10
   in the same file, then builtins. There is no `use`, `self`, `super` or relative path.
 - **Visibility.** `pub` makes an item usable from every module. Fields and variants of a visible type are always
   visible. A public signature or contract may mention only public types and items (checked through field types too);
+  a function a public contract calls directly must be `pub` (section 6, user functions in contracts);
   private helpers are fine inside bodies. `pub trusted rust fn` is rejected: wrap it in a public Pruv function.
 - **Host entries.** Only root `pub`, non-generic functions are callable from Rust/C (`--rust-bindings`, LLVM
   `pruv_abi_<name>`). Their signatures must be plain values (no collections, recursive or buffer-field types:

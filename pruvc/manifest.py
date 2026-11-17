@@ -21,13 +21,14 @@ _FIX = "see docs/G4B_SPEC.md section 3"
 
 
 class Pkg:
-    def __init__(s, name, version, dir, root, deps, display):
+    def __init__(s, name, version, dir, root, deps, display, raw_entries=None):
         s.name = name
         s.version = version
         s.dir = dir                # canonical package directory
         s.root = root              # root file, relative to dir, `/` separators
         s.deps = deps              # [(mount key, canonical dir, requirement text)] in JSON key order
         s.display = display        # display of this package's manifest
+        s.raw_entries = raw_entries  # P06: None (host entries stay `pub fn`), "crate" or "unsafe" (program only)
         s.reqs = []                # [(requiring Pkg, mount key, requirement text)] in discovery order
         s.first = None             # (requiring Pkg, mount key) that first reached this directory; None = the program
 
@@ -94,7 +95,7 @@ def _read(pkgdir, mfile, display):
     if not isinstance(data, _Obj):
         raise PruvError("pkg", 1, 1, "manifest_invalid", "invalid manifest: not a UTF-8 JSON object", _FIX,
                         file=display)
-    _check_obj(data, "", ("name", "version", "root", "dependencies"), display)
+    _check_obj(data, "", ("name", "version", "root", "dependencies", "raw_entries"), display)
     for k in ("name", "version", "root"):
         if k not in data:
             _bad(display, k, "missing")
@@ -121,6 +122,19 @@ def _read(pkgdir, mfile, display):
         inside = False
     if not inside:
         _bad(display, "root", "root file is outside the package directory")
+    raw = data.get("raw_entries")
+    if raw is not None or "raw_entries" in data:
+        # P06 (docs/L3_RESTRUCTURE_SPEC.md appendix P06): visibility of the raw host entries.  A raw entry takes
+        # arbitrary buffers, so it is never a public safe Rust fn: pub(crate) behind a host adapter, or a
+        # documented `pub unsafe fn`.  Only the program package has host entries, so only it may choose.
+        if display.startswith("@pkg/"):
+            _bad(display, "raw_entries", "only the program package chooses raw entry visibility")
+        if not isinstance(raw, str):
+            _bad(display, "raw_entries", "expected a string")
+        if raw in ("pub", "public", "safe"):
+            _bad(display, "raw_entries", "a raw entry is never a public safe function (use \"crate\" or \"unsafe\")")
+        if raw not in ("crate", "unsafe"):
+            _bad(display, "raw_entries", "expected \"crate\" or \"unsafe\"")
     deps = []
     dd = data.get("dependencies", _Obj())
     if not isinstance(dd, _Obj):
@@ -150,7 +164,7 @@ def _read(pkgdir, mfile, display):
         if not _REQ_RE.match(req) or any(x > _MAX for x in _parts(req)):
             _bad(display, kp + ".version", "bad version requirement")
         deps.append((key, ddir, req))
-    return Pkg(name, version, pkgdir, root, deps, display)
+    return Pkg(name, version, pkgdir, root, deps, display, raw)
 
 
 def _line(v):

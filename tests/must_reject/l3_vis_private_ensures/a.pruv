@@ -1,0 +1,8 @@
+// companion module of l3_vis_private_ensures
+fn same(a: i64, b: i64) -> bool { return a == b; }
+
+pub fn g(x: i64) -> i64
+  ensures same(result, x)
+{
+  return x;
+}

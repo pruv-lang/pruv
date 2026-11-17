@@ -411,6 +411,7 @@ Program.items = None        # ordered items (Function / StructDecl / EnumDecl) o
 Program.mods = ()           # parse level: the ModDecl list of this file
 Program.has_pub = False     # parse level: this file has a valid top-level `pub`
 Program.explicit = False    # explicit visibility mode (root has `mod` or top-level `pub`)
+Program.raw_entries = None  # P06 manifest `raw_entries`: None, "crate" or "unsafe" (codegen applies it in P09)
 Program.modules = None      # explicit mode: [modules.Module] in root-first depth-first order
 Program.entries = None      # explicit mode, after resolution: identities of the host entries
 Program.main = None         # explicit mode, after resolution: identity of the root main (or None)

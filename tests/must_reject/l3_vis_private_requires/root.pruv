@@ -1,0 +1,4 @@
+// P06 visibility reject: a public function of module a expands a private function in its requires
+mod a;
+
+pub fn go() -> i64 { return 0; }

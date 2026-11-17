@@ -1,0 +1,10 @@
+// P06 contract expansion accept: a [u8] header predicate reads a big-endian word with load_be
+pub fn magic_ok(b: [u8]) -> bool {
+  if len(b) < 8 { return false; }
+  return load_be(b, 0, 4) == 1347573334;
+}
+
+pub fn body_len(b: [u8]) -> i64
+  requires magic_ok(b)
+  ensures result >= 0
+{ return load_be(b, 4, 4); }

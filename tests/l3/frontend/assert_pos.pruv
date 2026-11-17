@@ -1,0 +1,10 @@
+// P06 contract expansion accept: an assert statement uses an expanded predicate
+pub fn pos(x: i64) -> bool { return x > 0; }
+
+pub fn inc(x: i64) -> i64
+  requires x >= 0 && x < 1000
+{
+  let y: i64 = x + 1;
+  assert pos(y);
+  return y;
+}

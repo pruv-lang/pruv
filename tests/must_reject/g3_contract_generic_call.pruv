@@ -1,4 +1,4 @@
-// G3 A2 (6.2 contracts): user function calls stay forbidden in contracts, including generic ones
+// G3 A2 (6.2 contracts): a generic user function is never expanded in a contract (P06 keeps generic calls forbidden)
 fn id<T>(x: T) -> T {
   return x;
 }

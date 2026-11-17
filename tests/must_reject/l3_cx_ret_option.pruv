@@ -1,0 +1,3 @@
+// P06 contract expansion reject: the callee must return bool or i64
+fn p(x: i64) -> Option<i64> { return Some(x); }
+fn f(x: i64) -> i64 requires is_some(p(x)) { return x; }
