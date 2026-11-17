@@ -47,7 +47,7 @@
 //   A table must be filled and searched with the same hash kind; the driver builds one table per (layout, hash).
 //
 // Fixed call structure: every pub fn is a thin wrapper. k_find_* = hash, then tab_find (probe loop + ent_match:
-// stored hash, record word count, header word(s), eq_range over the data words). k_insert_* = hash, tab_find, then
+// stored hash, record word count, then a word loop over the whole record). k_insert_* = hash, tab_find, then
 // append. Only the hash function and the header word count differ between layouts. Equality is content equality,
 // never hash equality.
 //
@@ -410,11 +410,16 @@ fn ent_match(t: [i64], a: i64, k: [i64], h: i64, hw: i64) -> bool
   if t[a + 2] != kn { return false; }
   let off: i64 = t[a + 1];
   if off < 0 || off > len(t) - kn { return false; }
-  if t[off] != k[0] { return false; }
-  if hw == 2 {
-    if t[off + 1] != k[1] { return false; }
+  // A word loop, not eq_range: records are a few words, and the slice compare lowers to a bcmp call.
+  let mut j: i64 = 0;
+  while j < kn
+    invariant 0 <= j && j <= kn && kn == len(k) && 0 <= off && off <= len(t) - kn
+    decreases kn - j
+  {
+    if t[off + j] != k[j] { return false; }
+    j = j + 1;
   }
-  return eq_range(t, off + hw, k, hw, kn - hw);
+  return true;
 }
 
 // Id of the entry whose record equals k (looked up with hash h), or -1. The probe loop is bounded by the slot count.
@@ -424,27 +429,26 @@ fn tab_find(t: [i64], k: [i64], h: i64, hw: i64) -> i64
   let n: i64 = len(t);
   if len(k) < hw || n < 8 { return -1; }
   let slots: i64 = t[0];
+  let cap: i64 = t[3];
   let sb: i64 = t[4];
   let eb: i64 = t[5];
-  if slots < 1 || slots > 1073741824 { return -1; }
-  if sb < 0 || sb > 1099511627776 || eb < 0 || eb > 1099511627776 { return -1; }
+  // The header is checked once per call so that the probe loop needs no per-probe slot or entry range check:
+  // sb + slots <= n puts every probed slot in t, and eb + 3 * cap <= n puts every entry id in 1..cap in t.
+  if slots < 1 || slots > 1073741824 || cap < 0 || cap > 1073741824 { return -1; }
+  if sb < 0 || sb > n - slots || eb < 0 || eb > n - 3 * cap { return -1; }
   let mask: i64 = slots - 1;
   let mut i: i64 = 0;
   while i < slots
     invariant 0 <= i && i <= slots && 1 <= slots && slots <= 1073741824 && mask == slots - 1 && n == len(t)
-    invariant 0 <= sb && sb <= 1099511627776 && 0 <= eb && eb <= 1099511627776
+    invariant 0 <= sb && sb + slots <= n && 0 <= cap && cap <= 1073741824 && 0 <= eb && eb + 3 * cap <= n
     invariant (hw == 1 || hw == 2) && hw <= len(k)
     decreases slots - i
   {
     let p: i64 = sb + band(wrapping_add(h, i), mask);
-    let mut w: i64 = 0;
-    if p < n { w = t[p]; }
+    let w: i64 = t[p];
     if w == 0 { return -1; }
-    if w >= 1 && w <= 1073741824 {
-      let a: i64 = eb + 3 * (w - 1);
-      if a + 3 <= n {
-        if ent_match(t, a, k, h, hw) { return w - 1; }
-      }
+    if w >= 1 && w <= cap {
+      if ent_match(t, eb + 3 * (w - 1), k, h, hw) { return w - 1; }
     }
     i = i + 1;
   }
