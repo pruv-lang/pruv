@@ -4,6 +4,7 @@ mod access;
 mod lines;
 mod tail;
 mod packet;
+mod jstr;
 mod util;
 mod args;
 mod transport;
@@ -128,20 +129,9 @@ pub fn mcp_check(command: str, argv: str, cwd: str, timeout_ms: i64) -> [i64] ! 
                   if id < 7 { id=id+1; l=request(move l,slot,id,false,false,empty,ms); }
                 } else {
                   let result_id: i64 = crate::util::field(d,0,"result"); let tools: i64 = crate::util::field(d,result_id,"tools");
-                  let total: i64 = crate::access::array_length(d,tools); let mut t: i64 = 0;
-                  while t < total && t < 1048576 && objects < 500
-                    invariant 0 <= t && t <= 1048576 && 0 <= objects && objects <= 500 && 0 <= count && count <= 500
-                    invariant 5010 <= len(p) && len(p) <= 100000000
-                    decreases 1048576-t
-                  {
-                    let tool: i64 = crate::access::array_at(d,tools,t); t=t+1;
-                    if crate::access::kind(d,tool) == 6 {
-                      objects=objects+1; let name: crate::access::Units = crate::access::string_units(d,crate::util::field(d,tool,"name"));
-                      if name.status == 0 && crate::packet::usable(name.units) && count < 500 {
-                        p=crate::packet::tool(p,d,tool,count); count=count+1;
-                      }
-                    }
-                  }
+                  let pl: [i64] = crate::packet::plan(p,d,tools,count,objects);
+                  let admitted: i64 = pl[0]; count=pl[2]; objects=pl[3];
+                  if admitted > 0 { p=crate::packet::write(p,d,pl); }
                   if page < 5 { page=page+1; }
                   let cur: i64 = crate::util::field(d,result_id,"nextCursor"); let cu: crate::access::Units = crate::access::string_units(d,cur);
                   if page >= 5 || objects >= 500 || cu.status != 0 || len(cu.units) == 0 { p[0]=1; p[8]=count; done=true; }

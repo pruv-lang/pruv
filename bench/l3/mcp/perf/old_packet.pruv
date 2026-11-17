@@ -1,0 +1,64 @@
+// Absolute refs: UTF-16 strings; UTF-8 raw JSON and stderr.
+pub fn append(p: [i64], b: [i64]) -> [i64] ! alloc
+  requires len(p) <= 100000000 && len(b) <= 20000000
+  ensures len(result) == len(p)+len(b)
+{
+  let mut o: [i64] = alloc(len(p)+len(b),0); let mut i: i64 = 0;
+  while i < len(o) invariant 0 <= i && i <= len(o) && len(o) == len(p)+len(b) decreases len(o)-i
+  { if i < len(p) { o[i]=p[i]; } else { o[i]=b[i-len(p)]; } i=i+1; } return o;
+}
+pub fn usable(u: [i64]) -> bool
+  ensures result ==> 1 <= len(u) && len(u) <= 200
+  ensures result ==> forall k in 0..len(u): u[k] >= 32 && !(127 <= u[k] && u[k] <= 159) && u[k] != 8232 && u[k] != 8233
+{
+  if len(u) < 1 || len(u) > 200 { return false; } let mut i: i64 = 0;
+  while i < len(u)
+    invariant 0 <= i && i <= len(u)
+    invariant forall k in 0..i: u[k] >= 32 && !(127 <= u[k] && u[k] <= 159) && u[k] != 8232 && u[k] != 8233
+    decreases len(u)-i
+  { if u[i] < 32 || (127 <= u[i] && u[i] <= 159) || u[i] == 8232 || u[i] == 8233 { return false; } i=i+1; }
+  return true;
+}
+pub fn cut(u: [i64], cap: i64) -> i64
+  requires 0 <= cap
+  ensures 0 <= result && result <= len(u) && result <= cap
+{
+  let mut n: i64 = len(u); if n > cap { n=cap; }
+  if n > 0 && n < len(u) { if 55296 <= u[n-1] && u[n-1] <= 56319 && 56320 <= u[n] && u[n] <= 57343 { n=n-1; } }
+  return n;
+}
+pub fn tool(input: [i64], d: crate::json::JsonDocument, tool: i64, count: i64) -> [i64] ! alloc
+  requires 5010 <= len(input) && len(input) <= 100000000 && 0 <= count && count < 500
+  ensures 5010 <= len(result) && len(result) <= 100000000
+{
+  let mut p: [i64] = copy(input); let base: i64 = 10+10*count;
+  let mut f: i64 = 0;
+  while f < 3
+    invariant 0 <= f && f <= 3 && 5010 <= len(p) && len(p) <= 100000000
+    decreases 3-f
+  {
+    let mut key: str = "name"; if f == 1 { key="title"; } if f == 2 { key="description"; }
+    let u: crate::access::Units = crate::access::string_units(d,crate::util::field(d,tool,key));
+    p[base+2*f]=-1;
+    if u.status == 0 && (f != 1 || len(u.units) > 0) {
+      let mut cap: i64 = 16000000; if f == 2 { cap=65536; }
+      let n: i64 = cut(u.units,cap);
+      if len(p) <= 100000000-n {
+        let part: [i64] = truncate(u.units,n); p[base+2*f]=len(p); p[base+2*f+1]=n; p=append(p,part);
+      }
+    }
+    f=f+1;
+  }
+  let a: i64 = crate::util::field(d,tool,"annotations");
+  if crate::access::boolean(d,crate::util::field(d,a,"readOnlyHint")) == 1 { p[base+6]=1; }
+  p[base+7]=-1; let destructive: i64 = crate::access::boolean(d,crate::util::field(d,a,"destructiveHint"));
+  if destructive == 0 || destructive == 1 { p[base+7]=destructive; }
+  let r: [u8] = crate::util::raw(d,tool);
+  if len(r) <= 16000000 && len(p) <= 100000000-len(r) {
+    let mut w: [i64] = alloc(len(r),0); let mut i: i64 = 0;
+    while i < len(r) invariant 0 <= i && i <= len(r) && len(w) == len(r) decreases len(r)-i
+    { w[i]=r[i]; i=i+1; }
+    p[base+8]=len(p); p[base+9]=len(w); p=append(p,w);
+  }
+  return p;
+}

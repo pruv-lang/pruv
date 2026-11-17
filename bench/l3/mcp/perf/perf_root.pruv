@@ -1,0 +1,72 @@
+// P05M packet-core perf root. Two entries over one parsed tools/list page (a JsonDocument):
+//   core_old  the per-tool path (old_packet.pruv `tool` plus the root loop using array_at), a verbatim snapshot
+//   core_new  the planned path in bench/l3/mcp/packet.pruv (plan + write), a thin wrapper (see NEW-BEGIN/NEW-END)
+// Both take the current packet and the page, plus the running `count` and `objects` of the root loop, and return
+// the new packet. run_perf.py assembles perf/work/perf_root.pruv from this file (dropping the NEW block when
+// packet.pruv has no plan/write yet); modules resolve through --lib bench/l3/mcp --lib bench/l3/mcp/perf.
+mod json;
+mod access;
+mod lines;
+mod util;
+mod old_packet;
+// NEW-BEGIN
+mod jstr;
+mod packet;
+// NEW-END
+
+// The functions below stay private (struct-bearing parameters cannot be host entries); the driver is compiled in
+// the same Rust module as the generated code (include!), so it calls the emitted bodies directly. The `keep_*`
+// pub entries only make sure that the emitter keeps them. parse runs OUTSIDE the timed region.
+fn parse(b: [u8]) -> crate::json::JsonParse ! alloc
+{ return crate::lines::parse_range(b,0,len(b)); }
+
+fn core_old(p0: [i64], d: crate::json::JsonDocument, count0: i64, objects0: i64) -> [i64] ! alloc
+  requires 5010 <= len(p0) && len(p0) <= 100000000 && 0 <= count0 && count0 <= 500 && 0 <= objects0 && objects0 <= 500
+  ensures 5010 <= len(result) && len(result) <= 100000000
+{
+  let mut p: [i64] = copy(p0); let mut objects: i64 = objects0; let mut count: i64 = count0;
+  let result_id: i64 = crate::util::field(d,0,"result"); let tools: i64 = crate::util::field(d,result_id,"tools");
+  let total: i64 = crate::access::array_length(d,tools); let mut t: i64 = 0;
+  while t < total && t < 1048576 && objects < 500
+    invariant 0 <= t && t <= 1048576 && 0 <= objects && objects <= 500 && 0 <= count && count <= 500
+    invariant 5010 <= len(p) && len(p) <= 100000000
+    decreases 1048576-t
+  {
+    let tool: i64 = crate::access::array_at(d,tools,t); t=t+1;
+    if crate::access::kind(d,tool) == 6 {
+      objects=objects+1; let name: crate::access::Units = crate::access::string_units(d,crate::util::field(d,tool,"name"));
+      if name.status == 0 && crate::old_packet::usable(name.units) && count < 500 {
+        p=crate::old_packet::tool(p,d,tool,count); count=count+1;
+      }
+    }
+  }
+  return p;
+}
+
+// NEW-BEGIN
+// Thin wrapper over the planned path; the only part to adjust if the plan header layout changes.
+// Expected header: plan[0] admitted, plan[1] reservation, plan[2] new count, plan[3] new objects.
+fn core_new(p0: [i64], d: crate::json::JsonDocument, count0: i64, objects0: i64) -> [i64] ! alloc
+  requires 5010 <= len(p0) && len(p0) <= 100000000 && 0 <= count0 && count0 <= 500 && 0 <= objects0 && objects0 <= 500
+  ensures 5010 <= len(result) && len(result) <= 100000000
+{
+  let result_id: i64 = crate::util::field(d,0,"result"); let tools: i64 = crate::util::field(d,result_id,"tools");
+  let plan: [i64] = crate::packet::plan(p0,d,tools,count0,objects0);
+  if plan[0] > 0 { return crate::packet::write(p0,d,plan); }
+  return copy(p0);
+}
+// NEW-END
+pub fn keep_old(b: [u8], p: [i64]) -> i64 ! alloc
+  requires 5010 <= len(p) && len(p) <= 100000000
+{
+  match parse(b) { crate::json::JsonParse::Failed(e) => { return -1; }
+    crate::json::JsonParse::Parsed(d) => { let q: [i64] = core_old(p,d,0,0); return len(q); } }
+}
+// NEW-BEGIN
+pub fn keep_new(b: [u8], p: [i64]) -> i64 ! alloc
+  requires 5010 <= len(p) && len(p) <= 100000000
+{
+  match parse(b) { crate::json::JsonParse::Failed(e) => { return -1; }
+    crate::json::JsonParse::Parsed(d) => { let q: [i64] = core_new(p,d,0,0); return len(q); } }
+}
+// NEW-END
