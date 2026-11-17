@@ -194,11 +194,15 @@ pub fn amount_text(reason: i64, unlimited: bool, used: i64, limit: i64, lang: i6
 {
   let mut u: i64 = used;
   if reason == 0 { u = crate::bud_num::minutes_of(used); }
-  let ut: [i64] = int_text(u);
-  let slash: [i64] = crate::ent_u16::one(47);
-  let lt: [i64] = limit_text(unlimited, limit, lang);
-  let a: [i64] = crate::ent_u16::cat(ut, slash);
-  return crate::ent_u16::cat(a, lt);
+  // sized once and written in place (one allocation, like template below) instead of int_text + one + limit_text + 2 cats
+  let lu: i64 = int_len(u);
+  let mut ll: i64 = len_nl(lang);
+  if !unlimited { ll = int_len(limit); }
+  let mut o: [i64] = alloc(lu + 1 + ll, 0);
+  put_int(inout o, 0, u, lu);
+  crate::ent_u16::wr(inout o, lu, 47);
+  if unlimited { put_nl(inout o, lu + 1, lang); } else { put_int(inout o, lu + 1, limit, ll); }
+  return o;
 }
 
 // Cold reference forms of the two templates. They hold the template texts (the single source gen_text.py reads) and
