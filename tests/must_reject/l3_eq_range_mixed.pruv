@@ -1,0 +1,2 @@
+// eq_range: both arrays must have one element type
+fn f(a: [i64], b: [u8]) -> bool { return eq_range(a, 0, b, 0, 0); }
