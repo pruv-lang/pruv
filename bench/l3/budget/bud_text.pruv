@@ -1,0 +1,813 @@
+// L3-10 M6: request-budget text helpers (backend-request-budget.ts lines 60-160, engineText).
+// Strings are [i64] arrays of UTF-16 units. lang: 0 = ko, 1 = en. reason: 0 time, 1 delegations, 2 commands,
+// 3 reviews, 4 checks. Card error kind: 0 missing, 1 deliverable, 2 done, 3 targets, 4 verify, 5 conflicts, 6 state.
+// All texts are BMP only, so one UTF-8 character decodes to exactly one UTF-16 unit.
+
+// Byte i of s, 0 outside the string (total accessor).
+fn sb(s: str, i: i64) -> i64
+  ensures 0 <= result && result <= 255
+{
+  if i < 0 || i >= len(s) { return 0; }
+  return s[i];
+}
+
+// Decode a UTF-8 literal (BMP only) into UTF-16 units. Two linear passes: O(len(s)).
+fn dec(s: str) -> [i64] ! alloc
+{
+  let n: i64 = len(s);
+  let mut c: i64 = 0;
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(s) && 0 <= c && c <= i
+    decreases n - i
+  {
+    let b: i64 = s[i];
+    if b < 128 || b >= 192 { c = c + 1; }
+    i = i + 1;
+  }
+  let mut o: [i64] = crate::ent_u16::zeros(c);
+  i = 0;
+  let mut k: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(s) && 0 <= k && k <= i
+    decreases n - i
+  {
+    let b: i64 = s[i];
+    if b < 128 {
+      crate::ent_u16::wr(inout o, k, b);
+      k = k + 1;
+      i = i + 1;
+    } else {
+      if b >= 224 {
+        let b1: i64 = sb(s, i + 1);
+        let b2: i64 = sb(s, i + 2);
+        crate::ent_u16::wr(inout o, k, band(b, 15) * 4096 + band(b1, 63) * 64 + band(b2, 63));
+        k = k + 1;
+        i = i + 3;
+        if i > n { i = n; }
+      } else {
+        if b >= 192 {
+          let d1: i64 = sb(s, i + 1);
+          crate::ent_u16::wr(inout o, k, band(b, 31) * 64 + band(d1, 63));
+          k = k + 1;
+          i = i + 2;
+          if i > n { i = n; }
+        } else {
+          // stray continuation byte (cannot occur in valid UTF-8): skipped
+          i = i + 1;
+        }
+      }
+    }
+  }
+  return o;
+}
+
+// engineText(entry, lang) for the typed domain: absent -> ko; exactly "en" -> en; everything else -> ko.
+pub fn lang_of(present: bool, s: [i64]) -> i64
+  ensures result == 0 || result == 1
+{
+  if !present { return 0; }
+  if len(s) == 2 && s[0] == 101 && s[1] == 110 { return 1; }
+  return 0;
+}
+
+// s equals an Object.prototype property name: JS would return the inherited property (outside the ko/en domain).
+// Marked `! alloc` because the names are literals (a literal needs alloc in code).
+pub fn lang_excluded(s: [i64]) -> bool ! alloc
+{
+  let n: i64 = len(s);
+  if n < 7 || n > 20 { return false; }
+  if crate::ent_u16::eq_lit(s, "constructor") { return true; }
+  if crate::ent_u16::eq_lit(s, "__proto__") { return true; }
+  if crate::ent_u16::eq_lit(s, "hasOwnProperty") { return true; }
+  if crate::ent_u16::eq_lit(s, "isPrototypeOf") { return true; }
+  if crate::ent_u16::eq_lit(s, "propertyIsEnumerable") { return true; }
+  if crate::ent_u16::eq_lit(s, "toString") { return true; }
+  if crate::ent_u16::eq_lit(s, "valueOf") { return true; }
+  if crate::ent_u16::eq_lit(s, "toLocaleString") { return true; }
+  if crate::ent_u16::eq_lit(s, "__defineGetter__") { return true; }
+  if crate::ent_u16::eq_lit(s, "__defineSetter__") { return true; }
+  if crate::ent_u16::eq_lit(s, "__lookupGetter__") { return true; }
+  if crate::ent_u16::eq_lit(s, "__lookupSetter__") { return true; }
+  return false;
+}
+
+// number of units of String(x) for a safe integer (1..17: at most 16 digits plus a sign)
+fn int_len(x: i64) -> i64
+  requires -9007199254740991 <= x && x <= 9007199254740991
+  ensures 1 <= result && result <= 17
+{
+  let mut v: i64 = x;
+  if x < 0 { v = -x; }
+  let mut n: i64 = 1;
+  let mut t: i64 = v / 10;
+  while t > 0 && n < 16
+    invariant 1 <= n && n <= 16 && t >= 0
+    decreases 16 - n
+  {
+    n = n + 1;
+    t = t / 10;
+  }
+  if x < 0 { n = n + 1; }
+  return n;
+}
+
+// write String(x) (n = int_len(x) units) into o at at; digits go backwards from the end
+fn put_int(inout o: [i64], at: i64, x: i64, n: i64) -> ()
+  requires -9007199254740991 <= x && x <= 9007199254740991
+  requires 0 <= at && at <= 1000000 && 1 <= n && n <= 17
+  ensures len(o) == len(old(o))
+{
+  let mut v: i64 = x;
+  let mut nd: i64 = n;
+  if x < 0 {
+    v = -x;
+    nd = n - 1;
+    crate::ent_u16::wr(inout o, at, 45);
+  }
+  let mut t: i64 = v;
+  let mut k: i64 = 0;
+  while k < nd
+    invariant 0 <= k && k <= nd && nd <= 17 && t >= 0 && 0 <= at && at <= 1000000 && len(o) == len(old(o))
+    decreases nd - k
+  {
+    crate::ent_u16::wr(inout o, at + n - 1 - k, 48 + t % 10);
+    t = t / 10;
+    k = k + 1;
+  }
+}
+
+// String(x) for a safe integer, built in one allocation.
+pub fn int_text(x: i64) -> [i64] ! alloc
+  requires -9007199254740991 <= x && x <= 9007199254740991
+{
+  let n: i64 = int_len(x);
+  let mut o: [i64] = alloc(n, 0);
+  put_int(inout o, 0, x, n);
+  return o;
+}
+
+pub fn reason_name(reason: i64) -> [i64] ! alloc
+  requires 0 <= reason && reason <= 4
+{
+  if reason == 0 { return dec("time"); }
+  if reason == 1 { return dec("delegations"); }
+  if reason == 2 { return dec("commands"); }
+  if reason == 3 { return dec("reviews"); }
+  return dec("checks");
+}
+
+pub fn counter_name(reason: i64, lang: i64) -> [i64] ! alloc
+  requires 0 <= reason && reason <= 4
+  requires 0 <= lang && lang <= 1
+{
+  if lang == 1 { return reason_name(reason); }
+  if reason == 0 { return dec("시간"); }
+  if reason == 1 { return dec("위임"); }
+  if reason == 2 { return dec("빌드·명령"); }
+  if reason == 3 { return dec("감사"); }
+  return dec("실제 확인");
+}
+
+pub fn no_limit(lang: i64) -> [i64] ! alloc
+  requires 0 <= lang && lang <= 1
+{
+  if lang == 1 { return dec("no limit"); }
+  return dec("제한 없음");
+}
+
+pub fn limit_text(unlimited: bool, limit: i64, lang: i64) -> [i64] ! alloc
+  requires -9007199254740991 <= limit && limit <= 9007199254740991
+  requires 0 <= lang && lang <= 1
+{
+  if unlimited { return no_limit(lang); }
+  return int_text(limit);
+}
+
+// `${used}/${limitText}`. Time: used is activeMs, floored to minutes; limit is timeMinutes.
+pub fn amount_text(reason: i64, unlimited: bool, used: i64, limit: i64, lang: i64) -> [i64] ! alloc
+  requires 0 <= reason && reason <= 4
+  requires -9007199254740991 <= used && used <= 9007199254740991
+  requires -9007199254740991 <= limit && limit <= 9007199254740991
+  requires 0 <= lang && lang <= 1
+{
+  let mut u: i64 = used;
+  if reason == 0 { u = crate::bud_num::minutes_of(used); }
+  let ut: [i64] = int_text(u);
+  let slash: [i64] = crate::ent_u16::one(47);
+  let lt: [i64] = limit_text(unlimited, limit, lang);
+  let a: [i64] = crate::ent_u16::cat(ut, slash);
+  return crate::ent_u16::cat(a, lt);
+}
+
+// Cold reference forms of the two templates. They hold the template texts (the single source gen_text.py reads) and
+// are not on the hot path; refusal/continue_text below build the same text in one allocation from generated writers.
+// pre + counter + " " + amount + post
+fn frame(pre: [i64], counter: [i64], amount: [i64], post: [i64]) -> [i64] ! alloc
+{
+  let sp: [i64] = crate::ent_u16::one(32);
+  let a: [i64] = crate::ent_u16::cat(pre, counter);
+  let b: [i64] = crate::ent_u16::cat(a, sp);
+  let c: [i64] = crate::ent_u16::cat(b, amount);
+  return crate::ent_u16::cat(c, post);
+}
+
+fn refusal_cold(reason: i64, unlimited: bool, used: i64, limit: i64, lang: i64) -> [i64] ! alloc
+  requires 0 <= reason && reason <= 4
+  requires -9007199254740991 <= used && used <= 9007199254740991
+  requires -9007199254740991 <= limit && limit <= 9007199254740991
+  requires 0 <= lang && lang <= 1
+{
+  let counter: [i64] = counter_name(reason, lang);
+  let amount: [i64] = amount_text(reason, unlimited, used, limit, lang);
+  if lang == 1 {
+    let pre_en: [i64] = dec("The request budget limit (");
+    let post_en: [i64] = dec(") was reached, so work is paused until the user extends it or ends it. Do not try new delegations or commands; briefly report the results so far and what you could not verify.");
+    return frame(pre_en, counter, amount, post_en);
+  }
+  let pre: [i64] = dec("예산 한도(");
+  let post: [i64] = dec(")에 닿아 사용자가 늘리거나 끝내기를 고를 때까지 멈춘다. 새 위임·명령을 시도하지 않고 지금까지 결과와 확인하지 못한 것만 짧게 보고한다.");
+  return frame(pre, counter, amount, post);
+}
+
+fn continue_cold(reason: i64, unlimited: bool, used: i64, limit: i64, lang: i64) -> [i64] ! alloc
+  requires 0 <= reason && reason <= 4
+  requires -9007199254740991 <= used && used <= 9007199254740991
+  requires -9007199254740991 <= limit && limit <= 9007199254740991
+  requires 0 <= lang && lang <= 1
+{
+  let counter: [i64] = counter_name(reason, lang);
+  let amount: [i64] = amount_text(reason, unlimited, used, limit, lang);
+  if lang == 1 {
+    let pre_en: [i64] = dec("The user raised the request budget limit (");
+    let post_en: [i64] = dec("). The tool call that was cut off earlier was stopped by the app at this budget limit, not by the user. Continue from where you stopped.");
+    return frame(pre_en, counter, amount, post_en);
+  }
+  let pre: [i64] = dec("사용자가 예산 한도(");
+  let post: [i64] = dec(")를 늘렸다. 앞서 끊긴 도구 호출은 사용자 중단이 아니라 이 예산 한도에 닿아 앱이 멈춘 것이다. 멈춘 지점에서 이어 간다.");
+  return frame(pre, counter, amount, post);
+}
+
+fn put3(inout o: [i64], at: i64, w: i64) -> ()
+  requires 0 <= at && at <= 2000000 && 0 <= w
+  ensures len(o) == len(old(o))
+{
+  crate::ent_u16::wr(inout o, at, band(w, 65535));
+  crate::ent_u16::wr(inout o, at + 1, band(ushr(w, 16), 65535));
+  crate::ent_u16::wr(inout o, at + 2, ushr(w, 32));
+}
+
+// BEGIN GENERATED (m6_test/gen_text.py): template writers, do not edit by hand
+// '예산 한도(' (6 units)
+fn put_pre_0_0(inout o: [i64], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  put3(inout o, at + 0, 140671763976);
+  put3(inout o, at + 3, 174814713180);
+}
+// 'The request budget limit (' (26 units)
+fn put_pre_0_1(inout o: [i64], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  put3(inout o, at + 0, 433798512724);
+  put3(inout o, at + 3, 433799168032);
+  put3(inout o, at + 6, 433799364721);
+  put3(inout o, at + 9, 137446555763);
+  put3(inout o, at + 12, 429504397410);
+  put3(inout o, at + 15, 498222825575);
+  put3(inout o, at + 18, 450978644000);
+  put3(inout o, at + 21, 498223087725);
+  crate::ent_u16::wr(inout o, at + 24, 32);
+  crate::ent_u16::wr(inout o, at + 25, 40);
+}
+// ')에 닿아 사용자가 늘리거나 끝내기를 고를 때까지 멈춘다. 새 위임·명령을 시도하지 않고 지금까지 결과와 확인하지 못한 것만 짧게 보고한다.' (78 units)
+fn put_post_0_0(inout o: [i64], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  put3(inout o, at + 0, 140757696553);
+  put3(inout o, at + 3, 140748567295);
+  put3(inout o, at + 6, 219424622231724);
+  put3(inout o, at + 9, 196365906914304);
+  put3(inout o, at + 12, 194169774586284);
+  put3(inout o, at + 15, 194290099486752);
+  put3(inout o, at + 18, 140550909488);
+  put3(inout o, at + 21, 140550909152);
+  put3(inout o, at + 24, 221829395166540);
+  put3(inout o, at + 27, 226055844003872);
+  put3(inout o, at + 30, 137442013924);
+  put3(inout o, at + 33, 218819995943112);
+  put3(inout o, at + 36, 205080405460868);
+  put3(inout o, at + 39, 140782123065);
+  put3(inout o, at + 42, 234576949854940);
+  put3(inout o, at + 45, 216921620400576);
+  put3(inout o, at + 48, 221826473045216);
+  put3(inout o, at + 51, 221829395164680);
+  put3(inout o, at + 54, 190201228951584);
+  put3(inout o, at + 57, 235660562712128);
+  put3(inout o, at + 60, 221830050269048);
+  put3(inout o, at + 63, 234594246524960);
+  put3(inout o, at + 66, 204288718733344);
+  put3(inout o, at + 69, 189720682758176);
+  put3(inout o, at + 72, 190081242759200);
+  put3(inout o, at + 75, 200569836892);
+}
+// ') was reached, so work is paused until the user extends it or ends it. Do not try new delegations or commands; briefly report the results so far and what you could not verify.' (175 units)
+fn put_post_0_1(inout o: [i64], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  put3(inout o, at + 0, 511103205417);
+  put3(inout o, at + 3, 137446490209);
+  put3(inout o, at + 6, 416618446962);
+  put3(inout o, at + 9, 433798512739);
+  put3(inout o, at + 12, 137441837156);
+  put3(inout o, at + 15, 137446228083);
+  put3(inout o, at + 18, 489633546359);
+  put3(inout o, at + 21, 450973663339);
+  put3(inout o, at + 24, 481038434419);
+  put3(inout o, at + 27, 493928906849);
+  put3(inout o, at + 30, 137445507173);
+  put3(inout o, at + 33, 498223415413);
+  put3(inout o, at + 36, 137446031465);
+  put3(inout o, at + 39, 433798512756);
+  put3(inout o, at + 42, 493928906784);
+  put3(inout o, at + 45, 137446424677);
+  put3(inout o, at + 48, 498224070757);
+  put3(inout o, at + 51, 429503938661);
+  put3(inout o, at + 54, 450973663347);
+  put3(inout o, at + 57, 476743467124);
+  put3(inout o, at + 60, 433793794162);
+  put3(inout o, at + 63, 493927792750);
+  put3(inout o, at + 66, 498223087648);
+  put3(inout o, at + 69, 292059873326);
+  put3(inout o, at + 72, 472448499823);
+  put3(inout o, at + 75, 137446555759);
+  put3(inout o, at + 78, 519698514036);
+  put3(inout o, at + 81, 433798905888);
+  put3(inout o, at + 84, 429498826871);
+  put3(inout o, at + 87, 433798774885);
+  put3(inout o, at + 90, 498222563431);
+  put3(inout o, at + 93, 472453677161);
+  put3(inout o, at + 96, 476743467123);
+  put3(inout o, at + 99, 425203859570);
+  put3(inout o, at + 102, 468158578799);
+  put3(inout o, at + 105, 429503938657);
+  put3(inout o, at + 108, 137442820211);
+  put3(inout o, at + 111, 450979037282);
+  put3(inout o, at + 114, 463863152741);
+  put3(inout o, at + 117, 489628369017);
+  put3(inout o, at + 120, 476748709989);
+  put3(inout o, at + 123, 137446555762);
+  put3(inout o, at + 126, 433798512756);
+  put3(inout o, at + 129, 433799168032);
+  put3(inout o, at + 132, 463864135795);
+  put3(inout o, at + 135, 137446490228);
+  put3(inout o, at + 138, 137446228083);
+  put3(inout o, at + 141, 489632628838);
+  put3(inout o, at + 144, 472452759584);
+  put3(inout o, at + 147, 511103205476);
+  put3(inout o, at + 150, 498222563432);
+  put3(inout o, at + 153, 476749299744);
+  put3(inout o, at + 156, 425203859573);
+  put3(inout o, at + 159, 463864135791);
+  put3(inout o, at + 162, 472448499812);
+  put3(inout o, at + 165, 137446555759);
+  put3(inout o, at + 168, 489632890998);
+  put3(inout o, at + 171, 519697727593);
+  crate::ent_u16::wr(inout o, at + 174, 46);
+}
+// '사용자가 예산 한도(' (11 units)
+fn put_pre_1_0(inout o: [i64], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  put3(inout o, at + 0, 219424622231724);
+  put3(inout o, at + 3, 217737664179200);
+  put3(inout o, at + 6, 234591115854000);
+  crate::ent_u16::wr(inout o, at + 9, 46020);
+  crate::ent_u16::wr(inout o, at + 10, 40);
+}
+// 'The user raised the request budget limit (' (42 units)
+fn put_pre_1_1(inout o: [i64], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  put3(inout o, at + 0, 433798512724);
+  put3(inout o, at + 3, 493928906784);
+  put3(inout o, at + 6, 137446424677);
+  put3(inout o, at + 9, 450977923186);
+  put3(inout o, at + 12, 429503348851);
+  put3(inout o, at + 15, 446684200992);
+  put3(inout o, at + 18, 489628368997);
+  put3(inout o, at + 21, 502518579301);
+  put3(inout o, at + 24, 498223743077);
+  put3(inout o, at + 27, 502517596192);
+  put3(inout o, at + 30, 433798447204);
+  put3(inout o, at + 33, 463858565236);
+  put3(inout o, at + 36, 450978709609);
+  put3(inout o, at + 39, 171800789108);
+}
+// ')를 늘렸다. 앞서 끊긴 도구 호출은 사용자 중단이 아니라 이 예산 한도에 닿아 앱이 멈춘 것이다. 멈춘 지점에서 이어 간다.' (70 units)
+fn put_post_1_0(inout o: [i64], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  put3(inout o, at + 0, 140550864937);
+  put3(inout o, at + 3, 196695413011096);
+  put3(inout o, at + 6, 217007519694894);
+  put3(inout o, at + 9, 193831876215068);
+  put3(inout o, at + 12, 197654397103668);
+  put3(inout o, at + 15, 235536008654188);
+  put3(inout o, at + 18, 140781866396);
+  put3(inout o, at + 21, 219424622231724);
+  put3(inout o, at + 24, 196712875491360);
+  put3(inout o, at + 27, 216895850596212);
+  put3(inout o, at + 30, 140517356232);
+  put3(inout o, at + 33, 217737664186228);
+  put3(inout o, at + 36, 234591115854000);
+  put3(inout o, at + 39, 140757742532);
+  put3(inout o, at + 42, 140748567295);
+  put3(inout o, at + 45, 140785272177);
+  put3(inout o, at + 48, 140888291912);
+  put3(inout o, at + 51, 196695668599939);
+  put3(inout o, at + 54, 204818402508846);
+  put3(inout o, at + 57, 221826473053592);
+  put3(inout o, at + 60, 212329322039312);
+  put3(inout o, at + 63, 217380231053344);
+  put3(inout o, at + 66, 196695208230944);
+  crate::ent_u16::wr(inout o, at + 69, 46);
+}
+// '). The tool call that was cut off earlier was stopped by the app at this budget limit, not by the user. Continue from where you stopped.' (136 units)
+fn put_post_1_1(inout o: [i64], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  put3(inout o, at + 0, 137441968169);
+  put3(inout o, at + 3, 433798512724);
+  put3(inout o, at + 6, 476748972064);
+  put3(inout o, at + 9, 137446031471);
+  put3(inout o, at + 12, 463862825059);
+  put3(inout o, at + 15, 498218303596);
+  put3(inout o, at + 18, 498222563432);
+  put3(inout o, at + 21, 416619626528);
+  put3(inout o, at + 24, 425203859571);
+  put3(inout o, at + 27, 137446555765);
+  put3(inout o, at + 30, 438093348975);
+  put3(inout o, at + 33, 416618446880);
+  put3(inout o, at + 36, 450978644082);
+  put3(inout o, at + 39, 137446424677);
+  put3(inout o, at + 42, 493927596151);
+  put3(inout o, at + 45, 498223743008);
+  put3(inout o, at + 48, 481043677295);
+  put3(inout o, at + 51, 137445507173);
+  put3(inout o, at + 54, 137446883426);
+  put3(inout o, at + 57, 433798512756);
+  put3(inout o, at + 60, 481042694176);
+  put3(inout o, at + 63, 416613924976);
+  put3(inout o, at + 66, 498218303604);
+  put3(inout o, at + 69, 493928120424);
+  put3(inout o, at + 72, 502517596192);
+  put3(inout o, at + 75, 433798447204);
+  put3(inout o, at + 78, 463858565236);
+  put3(inout o, at + 81, 450978709609);
+  put3(inout o, at + 84, 137441837172);
+  put3(inout o, at + 87, 498223480942);
+  put3(inout o, at + 90, 519697465376);
+  put3(inout o, at + 93, 446684200992);
+  put3(inout o, at + 96, 502513270885);
+  put3(inout o, at + 99, 489632890995);
+  put3(inout o, at + 102, 287764906030);
+  put3(inout o, at + 105, 498223415407);
+  put3(inout o, at + 108, 502518382697);
+  put3(inout o, at + 111, 438088761445);
+  put3(inout o, at + 114, 468158709874);
+  put3(inout o, at + 117, 446684397600);
+  put3(inout o, at + 120, 433799168101);
+  put3(inout o, at + 123, 476749299744);
+  put3(inout o, at + 126, 493923336309);
+  put3(inout o, at + 129, 481043611764);
+  put3(inout o, at + 132, 429503348848);
+  crate::ent_u16::wr(inout o, at + 135, 46);
+}
+// '제한 없음' (5 units)
+fn put_nl_0(inout o: [i64], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  put3(inout o, at + 0, 141018581020);
+  crate::ent_u16::wr(inout o, at + 3, 50630);
+  crate::ent_u16::wr(inout o, at + 4, 51020);
+}
+// 'no limit' (8 units)
+fn put_nl_1(inout o: [i64], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  put3(inout o, at + 0, 137446228078);
+  put3(inout o, at + 3, 468158316652);
+  crate::ent_u16::wr(inout o, at + 6, 105);
+  crate::ent_u16::wr(inout o, at + 7, 116);
+}
+// '시간' (2 units)
+fn put_cn_0_0(inout o: [i64], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  crate::ent_u16::wr(inout o, at + 0, 49884);
+  crate::ent_u16::wr(inout o, at + 1, 44036);
+}
+// '위임' (2 units)
+fn put_cn_1_0(inout o: [i64], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  crate::ent_u16::wr(inout o, at + 0, 50948);
+  crate::ent_u16::wr(inout o, at + 1, 51076);
+}
+// '빌드·명령' (5 units)
+fn put_cn_2_0(inout o: [i64], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  put3(inout o, at + 0, 789013380684);
+  crate::ent_u16::wr(inout o, at + 3, 47749);
+  crate::ent_u16::wr(inout o, at + 4, 47161);
+}
+// '감사' (2 units)
+fn put_cn_3_0(inout o: [i64], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  crate::ent_u16::wr(inout o, at + 0, 44048);
+  crate::ent_u16::wr(inout o, at + 1, 49324);
+}
+// '실제 확인' (5 units)
+fn put_cn_4_0(inout o: [i64], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  put3(inout o, at + 0, 140796281572);
+  crate::ent_u16::wr(inout o, at + 3, 54869);
+  crate::ent_u16::wr(inout o, at + 4, 51064);
+}
+// 'time' (4 units)
+fn put_cn_0_1(inout o: [i64], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  put3(inout o, at + 0, 468158316660);
+  crate::ent_u16::wr(inout o, at + 3, 101);
+}
+// 'delegations' (11 units)
+fn put_cn_1_1(inout o: [i64], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  put3(inout o, at + 0, 463863087204);
+  put3(inout o, at + 3, 416618578021);
+  put3(inout o, at + 6, 476748251252);
+  crate::ent_u16::wr(inout o, at + 9, 110);
+  crate::ent_u16::wr(inout o, at + 10, 115);
+}
+// 'commands' (8 units)
+fn put_cn_2_1(inout o: [i64], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  put3(inout o, at + 0, 468158709859);
+  put3(inout o, at + 3, 472452759661);
+  crate::ent_u16::wr(inout o, at + 6, 100);
+  crate::ent_u16::wr(inout o, at + 7, 115);
+}
+// 'reviews' (7 units)
+fn put_cn_3_1(inout o: [i64], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  put3(inout o, at + 0, 506812760178);
+  put3(inout o, at + 3, 511107727465);
+  crate::ent_u16::wr(inout o, at + 6, 115);
+}
+// 'checks' (6 units)
+fn put_cn_4_1(inout o: [i64], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  put3(inout o, at + 0, 433798512739);
+  put3(inout o, at + 3, 493928251491);
+}
+fn len_pre(t: i64, lang: i64) -> i64
+  requires 0 <= t && t <= 1
+  requires 0 <= lang && lang <= 1
+  ensures 0 <= result && result <= 1000
+{
+  if t == 0 && lang == 0 { return 6; }
+  if t == 0 && lang == 1 { return 26; }
+  if t == 1 && lang == 0 { return 11; }
+  return 42;
+}
+fn put_pre(inout o: [i64], at: i64, t: i64, lang: i64) -> ()
+  requires 0 <= t && t <= 1
+  requires 0 <= lang && lang <= 1
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  if t == 0 && lang == 0 { put_pre_0_0(inout o, at); return; }
+  if t == 0 && lang == 1 { put_pre_0_1(inout o, at); return; }
+  if t == 1 && lang == 0 { put_pre_1_0(inout o, at); return; }
+  put_pre_1_1(inout o, at);
+}
+fn len_post(t: i64, lang: i64) -> i64
+  requires 0 <= t && t <= 1
+  requires 0 <= lang && lang <= 1
+  ensures 0 <= result && result <= 1000
+{
+  if t == 0 && lang == 0 { return 78; }
+  if t == 0 && lang == 1 { return 175; }
+  if t == 1 && lang == 0 { return 70; }
+  return 136;
+}
+fn put_post(inout o: [i64], at: i64, t: i64, lang: i64) -> ()
+  requires 0 <= t && t <= 1
+  requires 0 <= lang && lang <= 1
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  if t == 0 && lang == 0 { put_post_0_0(inout o, at); return; }
+  if t == 0 && lang == 1 { put_post_0_1(inout o, at); return; }
+  if t == 1 && lang == 0 { put_post_1_0(inout o, at); return; }
+  put_post_1_1(inout o, at);
+}
+fn len_nl(lang: i64) -> i64
+  requires 0 <= lang && lang <= 1
+  ensures 0 <= result && result <= 1000
+{
+  if lang == 0 { return 5; }
+  return 8;
+}
+fn put_nl(inout o: [i64], at: i64, lang: i64) -> ()
+  requires 0 <= lang && lang <= 1
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  if lang == 0 { put_nl_0(inout o, at); return; }
+  put_nl_1(inout o, at);
+}
+fn len_cn(reason: i64, lang: i64) -> i64
+  requires 0 <= reason && reason <= 4
+  requires 0 <= lang && lang <= 1
+  ensures 0 <= result && result <= 1000
+{
+  if reason == 0 && lang == 0 { return 2; }
+  if reason == 0 && lang == 1 { return 4; }
+  if reason == 1 && lang == 0 { return 2; }
+  if reason == 1 && lang == 1 { return 11; }
+  if reason == 2 && lang == 0 { return 5; }
+  if reason == 2 && lang == 1 { return 8; }
+  if reason == 3 && lang == 0 { return 2; }
+  if reason == 3 && lang == 1 { return 7; }
+  if reason == 4 && lang == 0 { return 5; }
+  return 6;
+}
+fn put_cn(inout o: [i64], at: i64, reason: i64, lang: i64) -> ()
+  requires 0 <= reason && reason <= 4
+  requires 0 <= lang && lang <= 1
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  if reason == 0 && lang == 0 { put_cn_0_0(inout o, at); return; }
+  if reason == 0 && lang == 1 { put_cn_0_1(inout o, at); return; }
+  if reason == 1 && lang == 0 { put_cn_1_0(inout o, at); return; }
+  if reason == 1 && lang == 1 { put_cn_1_1(inout o, at); return; }
+  if reason == 2 && lang == 0 { put_cn_2_0(inout o, at); return; }
+  if reason == 2 && lang == 1 { put_cn_2_1(inout o, at); return; }
+  if reason == 3 && lang == 0 { put_cn_3_0(inout o, at); return; }
+  if reason == 3 && lang == 1 { put_cn_3_1(inout o, at); return; }
+  if reason == 4 && lang == 0 { put_cn_4_0(inout o, at); return; }
+  put_cn_4_1(inout o, at);
+}
+// END GENERATED
+
+// pre + counter + " " + used + "/" + limit text + post in one allocation; t: 0 refusal, 1 continue.
+// Time: used is activeMs, floored to minutes; limit is timeMinutes.
+fn template(t: i64, reason: i64, unlimited: bool, used: i64, limit: i64, lang: i64) -> [i64] ! alloc
+  requires 0 <= t && t <= 1
+  requires 0 <= reason && reason <= 4
+  requires -9007199254740991 <= used && used <= 9007199254740991
+  requires -9007199254740991 <= limit && limit <= 9007199254740991
+  requires 0 <= lang && lang <= 1
+{
+  let mut u: i64 = used;
+  if reason == 0 { u = crate::bud_num::minutes_of(used); }
+  let lp: i64 = len_pre(t, lang);
+  let lc: i64 = len_cn(reason, lang);
+  let lu: i64 = int_len(u);
+  let mut ll: i64 = len_nl(lang);
+  if !unlimited { ll = int_len(limit); }
+  let lq: i64 = len_post(t, lang);
+  let mut o: [i64] = alloc(lp + lc + 1 + lu + 1 + ll + lq, 0);
+  let mut at: i64 = 0;
+  put_pre(inout o, at, t, lang);
+  at = at + lp;
+  put_cn(inout o, at, reason, lang);
+  at = at + lc;
+  crate::ent_u16::wr(inout o, at, 32);
+  at = at + 1;
+  put_int(inout o, at, u, lu);
+  at = at + lu;
+  crate::ent_u16::wr(inout o, at, 47);
+  at = at + 1;
+  if unlimited { put_nl(inout o, at, lang); } else { put_int(inout o, at, limit, ll); }
+  at = at + ll;
+  put_post(inout o, at, t, lang);
+  return o;
+}
+
+pub fn refusal(reason: i64, unlimited: bool, used: i64, limit: i64, lang: i64) -> [i64] ! alloc
+  requires 0 <= reason && reason <= 4
+  requires -9007199254740991 <= used && used <= 9007199254740991
+  requires -9007199254740991 <= limit && limit <= 9007199254740991
+  requires 0 <= lang && lang <= 1
+{
+  return template(0, reason, unlimited, used, limit, lang);
+}
+
+pub fn continue_text(reason: i64, unlimited: bool, used: i64, limit: i64, lang: i64) -> [i64] ! alloc
+  requires 0 <= reason && reason <= 4
+  requires -9007199254740991 <= used && used <= 9007199254740991
+  requires -9007199254740991 <= limit && limit <= 9007199254740991
+  requires 0 <= lang && lang <= 1
+{
+  return template(1, reason, unlimited, used, limit, lang);
+}
+
+pub fn card_missing(lang: i64) -> [i64] ! alloc
+  requires 0 <= lang && lang <= 1
+{
+  if lang == 1 { return dec("Before delegating, write the deliverable and the done conditions with the work_card tool."); }
+  return dec("위임 전에 work_card 도구로 산출물과 완료 조건을 먼저 적는다.");
+}
+
+fn card_error_ko(kind: i64) -> [i64] ! alloc
+  requires 0 <= kind && kind <= 6
+{
+  if kind == 0 { return dec("지금 예산을 찾을 수 없어 작업 카드를 저장하지 못했다."); }
+  if kind == 1 { return dec("deliverable 은 1~300자여야 한다."); }
+  if kind == 2 { return dec("done 은 각 300자 이하 1~5줄이어야 한다."); }
+  if kind == 3 { return dec("targets 의 수는 0 이상 정수여야 하고 note 는 300자 이하여야 한다."); }
+  if kind == 4 { return dec("verify 는 label 1~300자와 status(planned·done·skipped)를 가진 0~5개 항목이어야 한다."); }
+  if kind == 5 { return dec("conflicts 는 각 300자 이하 0~5줄이어야 한다."); }
+  return dec("state 는 working·done·waiting-user·blocked 중 하나여야 한다.");
+}
+
+fn card_error_en(kind: i64) -> [i64] ! alloc
+  requires 0 <= kind && kind <= 6
+{
+  if kind == 0 { return dec("The current budget was not found, so the work card was not saved."); }
+  if kind == 1 { return dec("deliverable must be 1–300 characters."); }
+  if kind == 2 { return dec("done must be 1–5 lines of at most 300 characters each."); }
+  if kind == 3 { return dec("targets counts must be non-negative integers and note at most 300 characters."); }
+  if kind == 4 { return dec("verify must be 0–5 items with a label of 1–300 characters and a status (planned, done or skipped)."); }
+  if kind == 5 { return dec("conflicts must be 0–5 lines of at most 300 characters each."); }
+  return dec("state must be one of working, done, waiting-user or blocked.");
+}
+
+pub fn card_error(kind: i64, lang: i64) -> [i64] ! alloc
+  requires 0 <= kind && kind <= 6
+  requires 0 <= lang && lang <= 1
+{
+  if lang == 1 { return card_error_en(kind); }
+  return card_error_ko(kind);
+}
+
+pub struct Wire { key: [i64], used: i64, limit: i64 }
+
+// {key: 'budget.refusal.' + reason, args: {used, limit}}; time used (activeMs) floored to minutes; limit as given.
+pub fn refusal_wire(reason: i64, used: i64, limit: i64) -> Wire ! alloc
+  requires 0 <= reason && reason <= 4
+  requires -9007199254740991 <= used && used <= 9007199254740991
+{
+  let prefix: [i64] = dec("budget.refusal.");
+  let name: [i64] = reason_name(reason);
+  let key: [i64] = crate::ent_u16::cat(prefix, name);
+  let mut u: i64 = used;
+  if reason == 0 { u = crate::bud_num::minutes_of(used); }
+  return Wire { key: copy(key), used: u, limit: limit };
+}
+
+// card validText: 1 <= trim(s).length <= 300 (UTF-16 units)
+pub fn text_len_ok(s: [i64]) -> bool ! alloc
+{
+  let t: [i64] = crate::ent_u16::trim(s);
+  let n: i64 = len(t);
+  return n >= 1 && n <= 300;
+}
+
+// targets.note: untrimmed length <= 300
+pub fn raw_len_ok(s: [i64]) -> bool
+{
+  return len(s) <= 300;
+}

@@ -1,0 +1,100 @@
+// L3-10 M6: new Date(ms).toISOString() over the full JS Date range (|ms| <= 8.64e15).
+// Years 0..9999 give 24 units "YYYY-MM-DDTHH:mm:ss.sssZ"; other years give sign + 6 digits (27 units).
+// Calendar: days are shifted by 700 whole 400-year cycles (700 * 146097 days = 8835946560000000 ms) so every division
+// is on a nonnegative number (the range is +-1e8 days < 700 cycles), then the March-based civil-from-days walk of time.pruv.
+
+pub fn date_min() -> i64
+  ensures result == -8640000000000000
+{
+  return -8640000000000000;
+}
+
+pub fn date_max() -> i64
+  ensures result == 8640000000000000
+{
+  return 8640000000000000;
+}
+
+pub fn date_ok(ms: i64) -> bool
+{
+  return ms >= -8640000000000000 && ms <= 8640000000000000;
+}
+
+// Writes "-MM-DDTHH:mm:ss.sssZ" (20 units) at position at.
+fn put_tail(inout o: [i64], at: i64, m: i64, d: i64, h: i64, mi: i64, sec: i64, f: i64) -> ()
+  requires 0 <= at && at <= 1000
+  requires 0 <= m && m <= 100 && 0 <= d && d <= 100 && 0 <= h && h <= 100
+  requires 0 <= mi && mi <= 100 && 0 <= sec && sec <= 100 && 0 <= f && f <= 1000
+  ensures len(o) == len(old(o))
+{
+  crate::ent_u16::wr(inout o, at, 45);
+  crate::ent_u16::wr(inout o, at + 1, 48 + (m / 10) % 10);
+  crate::ent_u16::wr(inout o, at + 2, 48 + m % 10);
+  crate::ent_u16::wr(inout o, at + 3, 45);
+  crate::ent_u16::wr(inout o, at + 4, 48 + (d / 10) % 10);
+  crate::ent_u16::wr(inout o, at + 5, 48 + d % 10);
+  crate::ent_u16::wr(inout o, at + 6, 84);
+  crate::ent_u16::wr(inout o, at + 7, 48 + (h / 10) % 10);
+  crate::ent_u16::wr(inout o, at + 8, 48 + h % 10);
+  crate::ent_u16::wr(inout o, at + 9, 58);
+  crate::ent_u16::wr(inout o, at + 10, 48 + (mi / 10) % 10);
+  crate::ent_u16::wr(inout o, at + 11, 48 + mi % 10);
+  crate::ent_u16::wr(inout o, at + 12, 58);
+  crate::ent_u16::wr(inout o, at + 13, 48 + (sec / 10) % 10);
+  crate::ent_u16::wr(inout o, at + 14, 48 + sec % 10);
+  crate::ent_u16::wr(inout o, at + 15, 46);
+  crate::ent_u16::wr(inout o, at + 16, 48 + (f / 100) % 10);
+  crate::ent_u16::wr(inout o, at + 17, 48 + (f / 10) % 10);
+  crate::ent_u16::wr(inout o, at + 18, 48 + f % 10);
+  crate::ent_u16::wr(inout o, at + 19, 90);
+}
+
+// Exactly new Date(ms).toISOString(). An empty array is returned only if the calendar walk left its guarded
+// ranges (a defect, never expected inside the date range).
+pub fn iso(ms: i64) -> [i64] ! alloc
+  requires -8640000000000000 <= ms && ms <= 8640000000000000
+{
+  let day: i64 = 86400000;
+  let shifted: i64 = ms + 8835946560000000;
+  let days: i64 = shifted / day;
+  let rem: i64 = shifted % day;
+  let z: i64 = days + 719468;
+  let era: i64 = z / 146097;
+  let doe: i64 = z - era * 146097;
+  let yoe: i64 = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  let doy: i64 = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  let mp: i64 = (5 * doy + 2) / 153;
+  let d: i64 = doy - (153 * mp + 2) / 5 + 1;
+  let mut m: i64 = mp + 3;
+  if mp >= 10 { m = mp - 9; }
+  let mut y: i64 = yoe + era * 400 - 280000;
+  if m <= 2 { y = y + 1; }
+  let h: i64 = rem / 3600000;
+  let mi: i64 = (rem / 60000) % 60;
+  let sec: i64 = (rem / 1000) % 60;
+  let f: i64 = rem % 1000;
+  if y < -300000 || y > 300000 || m < 1 || m > 12 || d < 1 || d > 31 || h < 0 || h > 23 {
+    return crate::ent_u16::empty();
+  }
+  if y >= 0 && y <= 9999 {
+    let mut o: [i64] = alloc(24, 0);
+    crate::ent_u16::wr(inout o, 0, 48 + (y / 1000) % 10);
+    crate::ent_u16::wr(inout o, 1, 48 + (y / 100) % 10);
+    crate::ent_u16::wr(inout o, 2, 48 + (y / 10) % 10);
+    crate::ent_u16::wr(inout o, 3, 48 + y % 10);
+    put_tail(inout o, 4, m, d, h, mi, sec, f);
+    return o;
+  }
+  let mut ay: i64 = y;
+  if y < 0 { ay = -y; }
+  let mut p: [i64] = alloc(27, 0);
+  if y < 0 { crate::ent_u16::wr(inout p, 0, 45); } else { crate::ent_u16::wr(inout p, 0, 43); }
+  crate::ent_u16::wr(inout p, 1, 48 + (ay / 100000) % 10);
+  crate::ent_u16::wr(inout p, 2, 48 + (ay / 10000) % 10);
+  crate::ent_u16::wr(inout p, 3, 48 + (ay / 1000) % 10);
+  crate::ent_u16::wr(inout p, 4, 48 + (ay / 100) % 10);
+  crate::ent_u16::wr(inout p, 5, 48 + (ay / 10) % 10);
+  crate::ent_u16::wr(inout p, 6, 48 + ay % 10);
+  put_tail(inout p, 7, m, d, h, mi, sec, f);
+  return p;
+}

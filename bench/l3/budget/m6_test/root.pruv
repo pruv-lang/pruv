@@ -1,0 +1,289 @@
+// L3-10 M6 test root: thin entries over bud_num / bud_text / bud_date so a Rust harness can call them with plain values.
+// Strings are [i64] UTF-16 units. Booleans travel as i64 0/1. Every entry repeats the callee bounds as plain integer comparisons
+// (safe ints are -9007199254740991..9007199254740991, reason 0..4, lang 0..1, dates +-8640000000000000) so that it verifies.
+// Compile with --lib bench/l3/lib (ent_u16 comes from there; bud_* sit next to this file in work/m6/src).
+mod ent_u16;
+mod bud_num;
+mod bud_text;
+mod bud_date;
+
+// ---------------------------------------------------------------- numbers
+
+// [count_class(bits), count_ok_bits(bits) as 0/1]
+pub fn t_class(bits: i64) -> [i64] ! alloc
+{
+  let mut out: [i64] = alloc(2, 0);
+  out[0] = crate::bud_num::count_class(bits);
+  if crate::bud_num::count_ok_bits(bits) { out[1] = 1; }
+  return out;
+}
+
+// count_ok_int(v) as 0/1
+pub fn t_okint(v: i64) -> i64
+  requires -9007199254740991 <= v && v <= 9007199254740991
+{
+  if crate::bud_num::count_ok_int(v) { return 1; }
+  return 0;
+}
+
+// is_safe(v) as 0/1 (any i64)
+pub fn t_issafe(v: i64) -> i64
+{
+  if crate::bud_num::is_safe(v) { return 1; }
+  return 0;
+}
+
+// o: 0 add_safe, 1 sub_safe, 2 mul_safe, 3 max2 -> [ok, v]; v is 0 when ok is 0
+pub fn t_arith(o: i64, a: i64, b: i64) -> [i64] ! alloc
+  requires 0 <= o && o <= 3
+  requires -9007199254740991 <= a && a <= 9007199254740991
+  requires -9007199254740991 <= b && b <= 9007199254740991
+{
+  let mut out: [i64] = alloc(2, 0);
+  if o == 3 {
+    out[0] = 1;
+    out[1] = crate::bud_num::max2(a, b);
+    return out;
+  }
+  let mut r: crate::bud_num::NumR = crate::bud_num::add_safe(a, b);
+  if o == 1 { r = crate::bud_num::sub_safe(a, b); }
+  if o == 2 { r = crate::bud_num::mul_safe(a, b); }
+  if r.ok {
+    out[0] = 1;
+    out[1] = r.v;
+  }
+  return out;
+}
+
+pub fn t_fdiv(a: i64, d: i64) -> i64
+  requires -9007199254740991 <= a && a <= 9007199254740991
+  requires 1 <= d && d <= 9007199254740991
+{
+  return crate::bud_num::floor_div(a, d);
+}
+
+pub fn t_minutes(ms: i64) -> i64
+  requires -9007199254740991 <= ms && ms <= 9007199254740991
+{
+  return crate::bud_num::minutes_of(ms);
+}
+
+pub fn t_int(x: i64) -> [i64] ! alloc
+  requires -9007199254740991 <= x && x <= 9007199254740991
+{
+  return crate::bud_text::int_text(x);
+}
+
+// ---------------------------------------------------------------- dates
+
+pub fn t_iso(ms: i64) -> [i64] ! alloc
+  requires -8640000000000000 <= ms && ms <= 8640000000000000
+{
+  return crate::bud_date::iso(ms);
+}
+
+// date_ok(ms) as 0/1
+pub fn t_dok(ms: i64) -> i64
+  requires -9007199254740991 <= ms && ms <= 9007199254740991
+{
+  if crate::bud_date::date_ok(ms) { return 1; }
+  return 0;
+}
+
+// ---------------------------------------------------------------- text helpers
+
+pub fn t_refusal(reason: i64, unlimited: i64, used: i64, limit: i64, lang: i64) -> [i64] ! alloc
+  requires 0 <= reason && reason <= 4
+  requires 0 <= unlimited && unlimited <= 1
+  requires -9007199254740991 <= used && used <= 9007199254740991
+  requires -9007199254740991 <= limit && limit <= 9007199254740991
+  requires 0 <= lang && lang <= 1
+{
+  let u: bool = unlimited != 0;
+  return crate::bud_text::refusal(reason, u, used, limit, lang);
+}
+
+pub fn t_continue(reason: i64, unlimited: i64, used: i64, limit: i64, lang: i64) -> [i64] ! alloc
+  requires 0 <= reason && reason <= 4
+  requires 0 <= unlimited && unlimited <= 1
+  requires -9007199254740991 <= used && used <= 9007199254740991
+  requires -9007199254740991 <= limit && limit <= 9007199254740991
+  requires 0 <= lang && lang <= 1
+{
+  let u: bool = unlimited != 0;
+  return crate::bud_text::continue_text(reason, u, used, limit, lang);
+}
+
+pub fn t_amount(reason: i64, unlimited: i64, used: i64, limit: i64, lang: i64) -> [i64] ! alloc
+  requires 0 <= reason && reason <= 4
+  requires 0 <= unlimited && unlimited <= 1
+  requires -9007199254740991 <= used && used <= 9007199254740991
+  requires -9007199254740991 <= limit && limit <= 9007199254740991
+  requires 0 <= lang && lang <= 1
+{
+  let u: bool = unlimited != 0;
+  return crate::bud_text::amount_text(reason, u, used, limit, lang);
+}
+
+pub fn t_limit(unlimited: i64, limit: i64, lang: i64) -> [i64] ! alloc
+  requires 0 <= unlimited && unlimited <= 1
+  requires -9007199254740991 <= limit && limit <= 9007199254740991
+  requires 0 <= lang && lang <= 1
+{
+  let u: bool = unlimited != 0;
+  return crate::bud_text::limit_text(u, limit, lang);
+}
+
+// key units followed by used, limit
+pub fn t_wire(reason: i64, used: i64, limit: i64) -> [i64] ! alloc
+  requires 0 <= reason && reason <= 4
+  requires -9007199254740991 <= used && used <= 9007199254740991
+  requires -9007199254740991 <= limit && limit <= 9007199254740991
+{
+  let w: crate::bud_text::Wire = crate::bud_text::refusal_wire(reason, used, limit);
+  let mut t: [i64] = alloc(2, 0);
+  t[0] = w.used;
+  t[1] = w.limit;
+  return crate::ent_u16::cat(w.key, t);
+}
+
+pub fn t_card_missing(lang: i64) -> [i64] ! alloc
+  requires 0 <= lang && lang <= 1
+{
+  return crate::bud_text::card_missing(lang);
+}
+
+pub fn t_card_error(kind: i64, lang: i64) -> [i64] ! alloc
+  requires 0 <= kind && kind <= 6
+  requires 0 <= lang && lang <= 1
+{
+  return crate::bud_text::card_error(kind, lang);
+}
+
+pub fn t_counter(reason: i64, lang: i64) -> [i64] ! alloc
+  requires 0 <= reason && reason <= 4
+  requires 0 <= lang && lang <= 1
+{
+  return crate::bud_text::counter_name(reason, lang);
+}
+
+pub fn t_nolimit(lang: i64) -> [i64] ! alloc
+  requires 0 <= lang && lang <= 1
+{
+  return crate::bud_text::no_limit(lang);
+}
+
+// lang_of(present, s) as the lang code 0/1
+pub fn t_lang(present: i64, s: [i64]) -> i64
+  requires 0 <= present && present <= 1
+{
+  let p: bool = present != 0;
+  return crate::bud_text::lang_of(p, s);
+}
+
+// lang_excluded(s) as 0/1
+pub fn t_lang_excl(s: [i64]) -> i64 ! alloc
+{
+  if crate::bud_text::lang_excluded(s) { return 1; }
+  return 0;
+}
+
+// [text_len_ok(s), raw_len_ok(s)] as 0/1
+pub fn t_len(s: [i64]) -> [i64] ! alloc
+{
+  let mut out: [i64] = alloc(2, 0);
+  if crate::bud_text::text_len_ok(s) { out[0] = 1; }
+  if crate::bud_text::raw_len_ok(s) { out[1] = 1; }
+  return out;
+}
+
+// ---------------------------------------------------------------- perf entries
+// Each loops n times over the helper with an input that alternates by +0/+1 (so the call cannot be hoisted) and returns
+// sum(len + parity of first+middle+last unit) as a checksum; node_ref.mjs consumes its strings the same way, so both
+// sides read the produced text and the checksums must agree.
+
+pub fn p_iso(n: i64, ms: i64) -> i64 ! alloc
+  requires 0 <= n && n <= 1000000
+  requires -8640000000000000 <= ms && ms <= 8639999999999999
+{
+  let mut i: i64 = 0;
+  let mut d: i64 = 0;
+  let mut acc: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && 0 <= d && d <= 1 && 0 <= acc && acc <= 1000000 * i
+    decreases n - i
+  {
+    let r: [i64] = crate::bud_date::iso(ms + d);
+    let mut l: i64 = len(r);
+    let mut c: i64 = 0;
+    if l > 0 {
+      if band(r[0], 1) != 0 { c = 1 - c; }
+      if band(r[l / 2], 1) != 0 { c = 1 - c; }
+      if band(r[l - 1], 1) != 0 { c = 1 - c; }
+    }
+    if l > 999999 { l = 999999; }
+    acc = acc + l + c;
+    d = 1 - d;
+    i = i + 1;
+  }
+  return acc;
+}
+
+pub fn p_refusal(n: i64, reason: i64, unlimited: i64, used: i64, limit: i64, lang: i64) -> i64 ! alloc
+  requires 0 <= n && n <= 1000000
+  requires 0 <= reason && reason <= 4
+  requires 0 <= unlimited && unlimited <= 1
+  requires -9007199254740991 <= used && used <= 9007199254740990
+  requires -9007199254740991 <= limit && limit <= 9007199254740991
+  requires 0 <= lang && lang <= 1
+{
+  let u: bool = unlimited != 0;
+  let mut i: i64 = 0;
+  let mut d: i64 = 0;
+  let mut acc: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && 0 <= d && d <= 1 && 0 <= acc && acc <= 1000000 * i
+    decreases n - i
+  {
+    let r: [i64] = crate::bud_text::refusal(reason, u, used + d, limit, lang);
+    let mut l: i64 = len(r);
+    let mut c: i64 = 0;
+    if l > 0 {
+      if band(r[0], 1) != 0 { c = 1 - c; }
+      if band(r[l / 2], 1) != 0 { c = 1 - c; }
+      if band(r[l - 1], 1) != 0 { c = 1 - c; }
+    }
+    if l > 999999 { l = 999999; }
+    acc = acc + l + c;
+    d = 1 - d;
+    i = i + 1;
+  }
+  return acc;
+}
+
+pub fn p_int(n: i64, x: i64) -> i64 ! alloc
+  requires 0 <= n && n <= 1000000
+  requires -9007199254740991 <= x && x <= 9007199254740990
+{
+  let mut i: i64 = 0;
+  let mut d: i64 = 0;
+  let mut acc: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && 0 <= d && d <= 1 && 0 <= acc && acc <= 1000000 * i
+    decreases n - i
+  {
+    let r: [i64] = crate::bud_text::int_text(x + d);
+    let mut l: i64 = len(r);
+    let mut c: i64 = 0;
+    if l > 0 {
+      if band(r[0], 1) != 0 { c = 1 - c; }
+      if band(r[l / 2], 1) != 0 { c = 1 - c; }
+      if band(r[l - 1], 1) != 0 { c = 1 - c; }
+    }
+    if l > 999999 { l = 999999; }
+    acc = acc + l + c;
+    d = 1 - d;
+    i = i + 1;
+  }
+  return acc;
+}
