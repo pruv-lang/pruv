@@ -50,10 +50,61 @@ contract (header validation on every entry, units 0..65535) and stay.
 
 Other checks:
 
-- Total accessors (`ent_u16::rd/wr`) compile to one bounds test plus an unchecked load; no double check.
+- Total accessors (`ent_u16::rd/wr`) compile to one bounds test plus an unchecked load; no double check. Their
+  cost is measured separately below.
 - Hash quality: simulated linear-probe length 1.13–1.38 slots per lookup at the measured fill (2048/4096 slots).
 - The remaining `find` cost is the multiply chain of the hash and the dependent loads slot → entry → arena key;
   header words (slot count, slot base, entry base, capacity) are re-read and clamped inside the probe loop. Hoisting
   them would save a few ns at most and is not needed for the verdict.
 
 No compiler change is needed for M4.
+
+## Range-check cost (cause candidate (a))
+
+What the generated code checks today (`work/m34/gen_m4.rs`, pruvc at main `ea1f146`):
+
+- Every index the verifier proved in range is emitted as `get_unchecked` / `get_unchecked_mut`. `otool -tV` on the
+  optimised driver finds **0** `panic_bounds_check` call sites in the generated module (the 45 in the binary are 1 in
+  the Rust driver and 44 in std). With plain `a[i]` in the two accessors instead (variant `safeidx`) the generated
+  module has 101.
+- The remaining range tests are the source-level guards of the total accessors `ent_u16::rd(a, i)` /
+  `ent_u16::wr(a, i, v)`: `if i < 0 || i >= len(a) { return 0 / return }`. They are library semantics (a total
+  function), not compiler bounds checks, and there are 96 call sites in the M4 module. Every store access in
+  `bud_store` / `bud_map` / `bud_world` goes through them.
+
+Variants (scratch only, same generated module otherwise, same driver):
+
+- `base`: as generated.
+- `noguard`: both guards removed (load/store through `get_unchecked` directly). This is the upper bound of a
+  compiler change that drops the guard at call sites where the index is proven in range.
+- `safeidx`: guards replaced by Rust `a[i]` (panicking bounds check), i.e. what plain checked indexing would cost.
+- `trap`: guards replaced by `abort()`; run on every perf axis and size, it never aborted, so on these runs `noguard`
+  executes the same accesses as `base`.
+
+All variants give the same checksum (`sink` of the result words) on every run. Wall time was unusable during this
+measurement (load average 46–128), so the table uses the process counters of `/usr/bin/time -l`, differenced between
+100000 and 500000 reps so prefill, encode and process start cancel out (driver patched to encode one op cycle only);
+median of 5.
+
+| axis | n | instr/op base | noguard | safeidx | cycles/op base | noguard | safeidx |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| sessions | 100 | 741.1 | 604.3 | 849.2 | 87.5 | 68.8 | 101.7 |
+| sessions | 1000 | 770.7 | 625.4 | 871.6 | 112.5 | 97.6 | 137.3 |
+| tools | 100 | 1064.2 | 815.6 | 1022.5 | 172.1 | 143.6 | 179.8 |
+| tools | 1000 | 1137.2 | 868.8 | 1084.1 | 211.7 | 172.8 | 198.3 |
+| clocks | 100 | 1180.0 | 908.1 | 1120.5 | 200.8 | 160.6 | 175.1 |
+| clocks | 1000 | 1169.2 | 899.7 | 1108.8 | 167.8 | 143.1 | 171.0 |
+
+Removing the accessor guards cuts 18–24% of the instructions and 13–21% of the cycles per op. Checked `a[i]` costs
+about the same as the guard (−5% to +14% instructions), so the guard is effectively a bounds check paid on every store
+access. Interleaved wall-time runs taken earlier at lower load agree in direction (paired median ratio noguard/base
+0.63–0.98) but are too noisy to quote.
+
+Options, none applied here (compiler untouched, M4 Pruv sources unchanged):
+
+1. Compiler: at a `rd`/`wr` call (or any total accessor of this shape) whose index the verifier has proven in
+   `0 <= i < len(a)`, emit the unchecked access instead of the guarded call. The gain is bounded by the `noguard`
+   column; how much of it is reachable depends on how many of the 96 call sites have the range fact in scope.
+2. Pruv source: in the hot paths (`find`, `entry_matches`, `slot_pos`, `valid`, the decoders) replace `rd`/`wr` by
+   direct `st[i]` where the bound can be proven; the compiler already emits those unchecked. This needs proof work
+   (header validity implying the region bounds) and is not needed for the M4 verdict.
