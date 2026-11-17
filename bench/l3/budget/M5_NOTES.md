@@ -192,3 +192,25 @@ allocation cuts brought the numbers to the following (medians of 5 alternating r
   - This is won't-fix: the encode is trace-only apparatus.
 
 Correctness after the change is still exact=300, unexplained=0, determinism identical.
+
+### 1.1× pass (bar tightened 2026-11-17: at most 1.1× hand Rust, trace-only is no exemption)
+
+Medians of 7 alternating rounds, ns per op, n = 100 / 500 / 1000 (Pruv / hand, ratio):
+
+| measure | n=100 | n=500 | n=1000 | before (ratio) |
+|---|---|---|---|---|
+| store_find (lookup + labelling + text frame) vs hand `store_find_text` | 67.1 / 69.6 (0.96) | 78.0 / 77.3 (1.01) | 80.4 / 77.2 (1.04) | 1.27–1.48 vs tree, 5.1–5.8 vs text |
+| store_find_enc (encode only) vs hand `store_find_enc_text` | 30.8 / 35.4 (0.87) | 37.0 / 38.8 (0.95) | 39.2 / 38.5 (1.02) | 1.11 / 1.21 / 1.15 vs tree |
+| store_find_lookup vs hand `store_find_core_u16` | 11.2 / 11.7 (0.96) | 9.6 / 12.7 (0.76) | 10.2 / 13.0 (0.78) | 1.18 / 1.21 / 1.29 |
+| store_save | 130.4 / 136.2 (0.96) | 128.6 / 128.9 (1.00) | 128.2 / 129.8 (0.99) | 1.30 / 1.35 / 1.32 |
+
+TS store_find: 671.3 / 1620.3 / 3392.0.
+
+- One text encoder (`Heap::enc_into`, output-only `J::Raw`) replaces the J tree encoder; there is no second encoder.
+- Labels are `Label::N(u64)` / `Label::T(String)`; the id index is byte-keyed and holds the handle; `u16s` allocates
+  exactly for ASCII; `num_of` folds up to 15 digits directly.
+- All budget decisions stay in the Pruv core; the host changes are allocation and representation only.
+- Correctness: `run_m5.py` exact=300, unexplained=0, driver violations 0, determinism identical;
+  `m34_test/run.py m4` 300/300.
+- Details: `perf_headroom/HOST.md`.
+

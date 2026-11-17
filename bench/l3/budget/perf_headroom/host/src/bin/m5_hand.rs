@@ -8,8 +8,8 @@
 //   store_find_text  n lookups by string id in an id index (std HashMap) and the find result encoded as the same JV
 //                    frame the host builds ({"sref":"sK","v":{"obj":[["id",..],["n",..]]}}, labels assigned on first
 //                    encode), written as JSON text into one reused String; the caller consumes its length.
-//   store_find_tree  same lookup, the frame built as an owned value tree (String keys, like serde_json::Value) and
-//                    dropped by the caller (what the host does with its J tree).
+//   store_find_enc_text  encode only: the frame of an already found session (labels assigned untimed) written as
+//                    JSON text into one reused String (the host's store_find_enc).
 //   store_find_core  lookup only: id -> &Session (the lookup step of a non-tracing find).
 //   store_find_core_u16  lookup only with JS string keys: id -> UTF-16 units in a stack buffer -> HashMap<Vec<u16>,_>.
 //   store_save       n program saves. Input: the same parsed program JV as harness.rs (an owned tree, built
@@ -106,26 +106,6 @@ fn val_text(v: &Val, out: &mut String) {
     }
 }
 
-// Owned tree form of the frame (String keys, numbers as f64, like serde_json::Value).
-#[allow(dead_code)] // built and dropped, never read (the measured work is building it)
-enum Tree {
-    Num(f64),
-    Str(String),
-    Arr(Vec<Tree>),
-    Obj(Vec<(String, Tree)>),
-}
-
-fn val_tree(v: &Val) -> Tree {
-    match v {
-        Val::Num(x) => Tree::Num(*x),
-        Val::Str(s) => Tree::Str(s.clone()),
-        Val::Obj(es) => Tree::Obj(vec![(
-            "obj".to_string(),
-            Tree::Arr(es.iter().map(|(k, x)| Tree::Arr(vec![Tree::Str(k.clone()), val_tree(x)])).collect()),
-        )]),
-    }
-}
-
 fn label_num(s: &str, p: char) -> Option<u64> {
     s.strip_prefix(p)?.parse().ok()
 }
@@ -205,6 +185,11 @@ impl Store {
                 return;
             }
         };
+        self.enc_text(h, out);
+    }
+
+    // The frame of a found session appended to `out` as JSON text (labels on first encode).
+    fn enc_text(&mut self, h: usize, out: &mut String) {
         let l = self.label_of(h);
         let _ = write!(out, "{{\"sref\":\"s{}\",\"v\":", l);
         out.push_str("{\"obj\":[");
@@ -219,24 +204,6 @@ impl Store {
             out.push(']');
         }
         out.push_str("]}}");
-    }
-
-    fn find_tree(&mut self, id: &str) -> Tree {
-        let h = match self.idx.get(id) {
-            Some(&h) => h,
-            None => return Tree::Obj(vec![("undef".to_string(), Tree::Num(1.0))]),
-        };
-        self.enc_tree(h)
-    }
-
-    // The frame of a found session as an owned tree (labels on first encode).
-    fn enc_tree(&mut self, h: usize) -> Tree {
-        let l = self.label_of(h);
-        let pairs: Vec<Tree> = self.sessions[h].fields.iter().map(|(k, x)| Tree::Arr(vec![Tree::Str(k.clone()), val_tree(x)])).collect();
-        Tree::Obj(vec![
-            ("sref".to_string(), Tree::Str(format!("s{}", l))),
-            ("v".to_string(), Tree::Obj(vec![("obj".to_string(), Tree::Arr(pairs))])),
-        ])
     }
 
     fn note_labels(&mut self, j: &Jv) {
@@ -351,30 +318,24 @@ fn perf(n: usize, reps: usize) {
     });
     line("store_find_text", n, reps, ns);
 
-    let ns = best(reps, || {
-        let mut s = filled(n, |i| i as f64);
-        let t = Instant::now();
-        for id in &ids {
-            black_box(s.find_tree(black_box(id)));
-        }
-        t.elapsed().as_nanos()
-    });
-    line("store_find_tree", n, reps, ns);
-
     // Encode only, like harness store_find_enc: labels assigned and handles found untimed.
     let ns = best(reps, || {
         let mut s = filled(n, |i| i as f64);
-        let hs: Vec<usize> = ids.iter().map(|id| s.idx[id.as_str()]).collect();
-        for &h in &hs {
+        // Label in store order, like harness `encode_all_sessions`, so both sides write the same labels.
+        for h in 0..n {
             s.label_of(h);
         }
+        let hs: Vec<usize> = ids.iter().map(|id| s.idx[id.as_str()]).collect();
+        let mut out = String::with_capacity(128);
         let t = Instant::now();
         for &h in &hs {
-            black_box(s.enc_tree(black_box(h)));
+            out.clear();
+            s.enc_text(black_box(h), &mut out);
+            black_box(out.len());
         }
         t.elapsed().as_nanos()
     });
-    line("store_find_enc_tree", n, reps, ns);
+    line("store_find_enc_text", n, reps, ns);
 
     let ns = best(reps, || {
         let s = filled(n, |i| i as f64);

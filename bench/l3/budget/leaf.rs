@@ -15,11 +15,17 @@ pub enum J {
     Str(Vec<u16>),
     Arr(Vec<J>),
     Obj(Vec<(Vec<u16>, J)>),
+    // JSON text written by the JV encoder (`Heap::enc_into`, `enc_str`, `enc_num`): output only, never read back.
+    Raw(String),
 }
 
 pub static JNULL: J = J::Null;
 
 pub fn u16s(s: &str) -> Vec<u16> {
+    if s.is_ascii() {
+        // One unit per byte; bytes() knows its length, so this is one exact allocation.
+        return s.bytes().map(u16::from).collect();
+    }
     s.encode_utf16().collect()
 }
 
@@ -64,23 +70,68 @@ pub fn nn(o: Option<&J>) -> Option<&J> {
 
 // ---- JSON writer -------------------------------------------------------------------------------------------------
 
+fn esc_char(c: char, out: &mut String) {
+    match c {
+        '"' => out.push_str("\\\""),
+        '\\' => out.push_str("\\\\"),
+        '\n' => out.push_str("\\n"),
+        '\r' => out.push_str("\\r"),
+        '\t' => out.push_str("\\t"),
+        '\u{8}' => out.push_str("\\b"),
+        '\u{c}' => out.push_str("\\f"),
+        c if (c as u32) < 0x20 => push_u4(c as u32, out),
+        c => out.push(c),
+    }
+}
+
+// "\\u" and four lowercase hex digits.
+fn push_u4(x: u32, out: &mut String) {
+    out.push_str("\\u");
+    for sh in [12, 8, 4, 0] {
+        out.push(char::from_digit((x >> sh) & 15, 16).unwrap_or('0'));
+    }
+}
+
+// A unit that is written as itself: printable ASCII other than '"' and '\\'.
+fn plain_unit(c: u16) -> bool {
+    (0x20..0x80).contains(&c) && c != 0x22 && c != 0x5c
+}
+
+fn push_ascii(u: &[u16], out: &mut String) {
+    out.reserve(u.len() + 2);
+    out.push('"');
+    for &c in u {
+        out.push(c as u8 as char);
+    }
+    out.push('"');
+}
+
 fn write_str(u: &[u16], out: &mut String) {
+    if u.iter().all(|&c| plain_unit(c)) {
+        return push_ascii(u, out);
+    }
     out.push('"');
     for r in char::decode_utf16(u.iter().copied()) {
         match r {
-            Ok(c) => match c {
-                '"' => out.push_str("\\\""),
-                '\\' => out.push_str("\\\\"),
-                '\n' => out.push_str("\\n"),
-                '\r' => out.push_str("\\r"),
-                '\t' => out.push_str("\\t"),
-                '\u{8}' => out.push_str("\\b"),
-                '\u{c}' => out.push_str("\\f"),
-                c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-                c => out.push(c),
-            },
-            Err(e) => out.push_str(&format!("\\u{:04x}", e.unpaired_surrogate())),
+            Ok(c) => esc_char(c, out),
+            Err(e) => push_u4(e.unpaired_surrogate() as u32, out),
         }
+    }
+    out.push('"');
+}
+
+// write_str of the UTF-16 units of `s`.
+fn write_s(s: &str, out: &mut String) {
+    if s.bytes().all(|b| plain_unit(b as u16)) {
+        out.reserve(s.len() + 2);
+        out.push('"');
+        out.push_str(s);
+        out.push('"');
+        return;
+    }
+    out.push('"');
+    for c in s.chars() {
+        esc_char(c, out);
     }
     out.push('"');
 }
@@ -91,6 +142,7 @@ pub fn write_json(j: &J, out: &mut String) {
         J::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
         J::Num(t) => out.push_str(t),
         J::Str(u) => write_str(u, out),
+        J::Raw(t) => out.push_str(t),
         J::Arr(a) => {
             out.push('[');
             for (i, x) in a.iter().enumerate() {
@@ -456,6 +508,16 @@ pub fn js_to_string(v: &V) -> Vec<u16> {
     }
 }
 
+// str::parse::<f64> of JSON number text. Up to 15 ASCII digits is an integer below 2^53, so the fold is exact and
+// gives the same value; anything else goes through the std parser.
+fn num_of(t: &str) -> Option<f64> {
+    let b = t.as_bytes();
+    if !b.is_empty() && b.len() <= 15 && b.iter().all(|c| c.is_ascii_digit()) {
+        return Some(b.iter().fold(0u64, |n, &c| n * 10 + (c - b'0') as u64) as f64);
+    }
+    t.parse::<f64>().ok()
+}
+
 fn to_u16(x: f64) -> u16 {
     if !x.is_finite() {
         return 0;
@@ -472,11 +534,12 @@ pub fn decode(j: &J, sess: &dyn Fn(&[u16]) -> Option<usize>) -> Result<V, String
     match j {
         J::Null => Ok(V::Null),
         J::Bool(b) => Ok(V::Bool(*b)),
-        J::Num(t) => match t.parse::<f64>() {
-            Ok(x) => Ok(V::Num(x)),
-            Err(_) => Err(format!("bad number {}", t)),
+        J::Num(t) => match num_of(t) {
+            Some(x) => Ok(V::Num(x)),
+            None => Err(format!("bad number {}", t)),
         },
         J::Str(u) => Ok(V::Str(u.clone())),
+        J::Raw(_) => Err("encoded text is not input".to_string()),
         J::Arr(a) => {
             let mut out = Vec::with_capacity(a.len());
             for x in a {
@@ -496,7 +559,7 @@ pub fn decode(j: &J, sess: &dyn Fn(&[u16]) -> Option<usize>) -> Result<V, String
                         J::Arr(a) => Ok(V::Str(
                             a.iter()
                                 .map(|x| match x {
-                                    J::Num(t) => to_u16(t.parse::<f64>().unwrap_or(0.0)),
+                                    J::Num(t) => to_u16(num_of(t).unwrap_or(0.0)),
                                     _ => 0,
                                 })
                                 .collect(),
@@ -568,21 +631,68 @@ pub fn decode(j: &J, sess: &dyn Fn(&[u16]) -> Option<usize>) -> Result<V, String
 }
 
 // ---- encoding ----------------------------------------------------------------------------------------------------
+//
+// enc() writes JSON text straight from the host values (one encoder; the J results of `enc`/`enc_str`/`enc_num` are
+// J::Raw text). Output is the same text the earlier J-tree encoder wrote through write_json.
 
-pub fn enc_str(u: &[u16]) -> J {
+// A JS string: as is when well formed, {"u16":[units]} when it holds a lone surrogate.
+pub fn enc_str_into(u: &[u16], out: &mut String) {
+    if u.iter().all(|&c| plain_unit(c)) {
+        return push_ascii(u, out);
+    }
     if char::decode_utf16(u.iter().copied()).all(|r| r.is_ok()) {
-        J::Str(u.to_vec())
+        return write_str(u, out);
+    }
+    out.push_str("{\"u16\":[");
+    for (i, &c) in u.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        push_int(c as i64, out);
+    }
+    out.push_str("]}");
+}
+
+fn push_int(n: i64, out: &mut String) {
+    if n < 0 {
+        out.push('-');
+    }
+    push_uint(n.unsigned_abs(), out);
+}
+
+fn push_uint(mut u: u64, out: &mut String) {
+    let mut buf = [0u8; 20];
+    let mut i = buf.len();
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (u % 10) as u8;
+        u /= 10;
+        if u == 0 {
+            break;
+        }
+    }
+    out.push_str(std::str::from_utf8(&buf[i..]).unwrap_or_default());
+}
+
+// A JS number: a safe integer (not -0) as decimal text, anything else as {"num":"<16 hex digits of the bits>"}.
+pub fn enc_num_into(x: f64, out: &mut String) {
+    if x.fract() == 0.0 && x.abs() <= 9007199254740991.0 && !(x == 0.0 && x.is_sign_negative()) {
+        push_int(x as i64, out);
     } else {
-        J::Obj(vec![(ku("u16"), J::Arr(u.iter().map(|x| J::int(*x as i64)).collect()))])
+        let _ = std::fmt::Write::write_fmt(out, format_args!("{{\"num\":\"{:016x}\"}}", x.to_bits()));
     }
 }
 
+pub fn enc_str(u: &[u16]) -> J {
+    let mut s = String::new();
+    enc_str_into(u, &mut s);
+    J::Raw(s)
+}
+
 pub fn enc_num(x: f64) -> J {
-    if x.fract() == 0.0 && x.abs() <= 9007199254740991.0 && !(x == 0.0 && x.is_sign_negative()) {
-        J::Num(format!("{}", x as i64))
-    } else {
-        J::Obj(vec![(ku("num"), J::s(&format!("{:016x}", x.to_bits())))])
-    }
+    let mut s = String::new();
+    enc_num_into(x, &mut s);
+    J::Raw(s)
 }
 
 // enc() of a plain JS object given already-encoded values: {"obj":[[k,v],...]}.
@@ -593,16 +703,72 @@ pub fn enc_obj(pairs: Vec<(&str, J)>) -> J {
 // An object with a stable identity: a session (stored or not) whose label is assigned on first encode.
 pub struct SObj {
     pub val: V,
-    pub label: Option<String>,
+    pub label: Option<Label>,
     // label of the budget object held under the key "budget"
-    pub bud: Option<String>,
+    pub bud: Option<Label>,
+}
+
+// A session ('s') or budget ('b') label. The text "<p><n>" with n in canonical decimal (every label the encoder
+// assigns) is kept as n; any other label text as is (from String::from_utf16_lossy, as before).
+#[derive(Clone)]
+pub enum Label {
+    N(u64),
+    T(String),
+}
+
+// n when `u` is p followed by the canonical decimal text of a u64 (no sign, no leading zero, no overflow).
+fn canon_num(u: &[u16], p: char) -> Option<u64> {
+    let d = match u.split_first() {
+        Some((&c, d)) if c as u32 == p as u32 && !d.is_empty() => d,
+        _ => return None,
+    };
+    if d.len() > 1 && d[0] == b'0' as u16 {
+        return None;
+    }
+    let mut n: u64 = 0;
+    for &c in d {
+        let x = c.wrapping_sub(b'0' as u16);
+        if x > 9 {
+            return None;
+        }
+        n = n.checked_mul(10)?.checked_add(x as u64)?;
+    }
+    Some(n)
+}
+
+fn label_of(u: &[u16], p: char) -> Label {
+    match canon_num(u, p) {
+        Some(n) => Label::N(n),
+        None => Label::T(String::from_utf16_lossy(u)),
+    }
+}
+
+fn push_label(l: &Label, p: char, out: &mut String) {
+    match l {
+        Label::N(n) => {
+            out.push('"');
+            out.push(p);
+            push_uint(*n, out);
+            out.push('"');
+        }
+        Label::T(t) => write_s(t, out),
+    }
+}
+
+fn label_text(l: &Label, p: char) -> String {
+    match l {
+        Label::N(n) => format!("{}{}", p, n),
+        Label::T(t) => t.clone(),
+    }
 }
 
 pub struct Heap {
     pub objs: Vec<SObj>,
     pub s_seq: u64,
     pub b_seq: u64,
-    by_label: std::collections::HashMap<String, usize>,
+    // session label -> handle: canonical labels by number, others by text
+    by_num: std::collections::HashMap<u64, usize>,
+    by_text: std::collections::HashMap<String, usize>,
 }
 
 // `p` then a u64 as str::parse::<u64> reads it (optional '+', ASCII digits, no overflow), straight from the UTF-16 units.
@@ -629,17 +795,6 @@ fn label_num(u: &[u16], p: char) -> Option<u64> {
     Some(n)
 }
 
-// A short ASCII label as &str in a stack buffer (labels are "sN"/"bN"); None for anything else.
-fn ascii_label<'a>(u: &[u16], buf: &'a mut [u8; 32]) -> Option<&'a str> {
-    if u.len() > buf.len() || u.iter().any(|&c| c >= 0x80) {
-        return None;
-    }
-    for (b, &c) in buf.iter_mut().zip(u) {
-        *b = c as u8;
-    }
-    std::str::from_utf8(&buf[..u.len()]).ok()
-}
-
 // The value of the "budget" pair inside an encoded {"obj":[...]} session, if any.
 fn budget_pair(v: &J) -> Option<&J> {
     if let J::Obj(es) = v {
@@ -663,7 +818,7 @@ fn budget_pair(v: &J) -> Option<&J> {
 }
 
 // Replace {"budget": {"bref"":"bJ","v":W}} inside an encoded {"obj":[...]} session by "budget": W and report bJ.
-fn strip_budget(v: &J, bud: &mut Option<String>) -> J {
+fn strip_budget(v: &J, bud: &mut Option<Label>) -> J {
     if let J::Obj(es) = v {
         if es.len() == 1 && k_eq(&es[0].0, "obj") {
             if let J::Arr(pairs) = &es[0].1 {
@@ -674,7 +829,7 @@ fn strip_budget(v: &J, bud: &mut Option<String>) -> J {
                         if kv.len() == 2 {
                             if let (J::Str(kk), J::Obj(be)) = (&kv[0], &kv[1]) {
                                 if k_eq(kk, "budget") {
-                                    let lab = be.iter().find(|e| k_eq(&e.0, "bref")).and_then(|e| e.1.text());
+                                    let lab = be.iter().find(|e| k_eq(&e.0, "bref")).and_then(|e| bref_label(&e.1));
                                     let inner = be.iter().find(|e| k_eq(&e.0, "v")).map(|e| e.1.clone());
                                     if let (Some(l), Some(i)) = (lab, inner) {
                                         *bud = Some(l);
@@ -696,9 +851,30 @@ fn strip_budget(v: &J, bud: &mut Option<String>) -> J {
     v.clone()
 }
 
+fn bref_label(j: &J) -> Option<Label> {
+    match j {
+        J::Str(u) => Some(label_of(u, 'b')),
+        _ => None,
+    }
+}
+
 impl Heap {
     pub fn new() -> Heap {
-        Heap { objs: Vec::new(), s_seq: 0, b_seq: 0, by_label: std::collections::HashMap::new() }
+        Heap { objs: Vec::new(), s_seq: 0, b_seq: 0, by_num: std::collections::HashMap::new(), by_text: std::collections::HashMap::new() }
+    }
+
+    fn find_label(&self, l: &Label) -> Option<usize> {
+        match l {
+            Label::N(n) => self.by_num.get(n).copied(),
+            Label::T(t) => self.by_text.get(t).copied(),
+        }
+    }
+
+    fn put_label(&mut self, l: Label, h: usize) {
+        match l {
+            Label::N(n) => self.by_num.insert(n, h),
+            Label::T(t) => self.by_text.insert(t, h),
+        };
     }
 
     pub fn alloc(&mut self, val: V) -> usize {
@@ -707,66 +883,92 @@ impl Heap {
     }
 
     pub fn enc(&mut self, v: &V) -> J {
+        let mut s = String::new();
+        self.enc_into(v, &mut s);
+        J::Raw(s)
+    }
+
+    // enc() of `v` appended to `out` as JSON text. Labels are assigned on first encode, in the order they are written.
+    pub fn enc_into(&mut self, v: &V, out: &mut String) {
         match v {
-            V::Undef => J::Obj(vec![(ku("undef"), J::int(1))]),
-            V::Null => J::Null,
-            V::Bool(b) => J::Bool(*b),
-            V::Str(u) => enc_str(u),
-            V::Num(x) => enc_num(*x),
+            V::Undef => out.push_str("{\"undef\":1}"),
+            V::Null => out.push_str("null"),
+            V::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+            V::Str(u) => enc_str_into(u, out),
+            V::Num(x) => enc_num_into(*x, out),
             V::Arr(a) => {
-                let mut out: Vec<J> = Vec::with_capacity(a.len());
-                for x in a {
-                    out.push(self.enc(x));
+                out.push('[');
+                for (i, x) in a.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    self.enc_into(x, out);
                 }
-                J::Arr(out)
+                out.push(']');
             }
-            V::Obj(es) => self.enc_plain(es),
-            V::Sess(h) => self.enc_session(*h),
+            V::Obj(es) => {
+                out.push_str("{\"obj\":[");
+                for (i, e) in es.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    out.push('[');
+                    enc_str_into(&e.0, out);
+                    out.push(',');
+                    self.enc_into(&e.1, out);
+                    out.push(']');
+                }
+                out.push_str("]}");
+            }
+            V::Sess(h) => self.enc_session(*h, out),
         }
     }
 
-    fn enc_plain(&mut self, es: &[(Vec<u16>, V)]) -> J {
-        let mut pairs: Vec<J> = Vec::with_capacity(es.len());
-        for e in es {
-            let k = enc_str(&e.0);
-            let x = self.enc(&e.1);
-            pairs.push(J::Arr(vec![k, x]));
-        }
-        J::Obj(vec![(ku("obj"), J::Arr(pairs))])
-    }
-
-    fn enc_session(&mut self, h: usize) -> J {
+    fn enc_session(&mut self, h: usize, out: &mut String) {
         if self.objs[h].label.is_none() {
             self.s_seq += 1;
-            let l = format!("s{}", self.s_seq);
-            self.by_label.insert(l.clone(), h);
-            self.objs[h].label = Some(l);
+            self.by_num.insert(self.s_seq, h);
+            self.objs[h].label = Some(Label::N(self.s_seq));
         }
-        let label = J::s(self.objs[h].label.as_deref().unwrap_or_default());
+        out.push_str("{\"sref\":");
+        if let Some(l) = &self.objs[h].label {
+            push_label(l, 's', out);
+        }
+        out.push_str(",\"v\":{\"obj\":[");
         // The value is taken out while encoding so that nested handles can borrow the heap mutably.
         let val = std::mem::replace(&mut self.objs[h].val, V::Undef);
-        let mut pairs: Vec<J> = Vec::with_capacity(match &val {
-            V::Obj(es) => es.len(),
-            _ => 0,
-        });
         if let V::Obj(es) = &val {
-            for e in es {
-                let ev = if k_eq(&e.0, "budget") && matches!(e.1, V::Obj(_)) { self.enc_budget(h, &e.1) } else { self.enc(&e.1) };
-                pairs.push(J::Arr(vec![enc_str(&e.0), ev]));
+            for (i, e) in es.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push('[');
+                enc_str_into(&e.0, out);
+                out.push(',');
+                if k_eq(&e.0, "budget") && matches!(e.1, V::Obj(_)) {
+                    self.enc_budget(h, &e.1, out);
+                } else {
+                    self.enc_into(&e.1, out);
+                }
+                out.push(']');
             }
         }
         self.objs[h].val = val;
-        J::Obj(vec![(ku("sref"), label), (ku("v"), J::Obj(vec![(ku("obj"), J::Arr(pairs))]))])
+        out.push_str("]}}");
     }
 
-    fn enc_budget(&mut self, h: usize, budget: &V) -> J {
+    fn enc_budget(&mut self, h: usize, budget: &V, out: &mut String) {
         if self.objs[h].bud.is_none() {
             self.b_seq += 1;
-            self.objs[h].bud = Some(format!("b{}", self.b_seq));
+            self.objs[h].bud = Some(Label::N(self.b_seq));
         }
-        let label = J::s(self.objs[h].bud.as_deref().unwrap_or_default());
-        let body = self.enc(budget);
-        J::Obj(vec![(ku("bref"), label), (ku("v"), body)])
+        out.push_str("{\"bref\":");
+        if let Some(l) = &self.objs[h].bud {
+            push_label(l, 'b', out);
+        }
+        out.push_str(",\"v\":");
+        self.enc_into(budget, out);
+        out.push('}');
     }
 
     // Raise the label counters over every sref / bref label found in program JV.
@@ -829,17 +1031,20 @@ impl Heap {
     // Program item bset: the core's budget attachment of the session labeled `label`. Some(b) sets the key "budget"
     // (in place, or appended as a new key, as in JS), None deletes it.
     pub fn set_budget(&mut self, label: &str, b: Option<&J>) -> Result<(), String> {
-        let h = match self.by_label.get(label) {
-            Some(&h) => h,
+        let h = match self.find_label(&label_of(&u16s(label), 's')) {
+            Some(h) => h,
             None => return Err(format!("program: bset on unknown session {}", label)),
         };
-        self.set_budget_h(h, label, b)
+        self.set_budget_h(h, b)
     }
 
-    fn set_budget_h(&mut self, h: usize, label: &str, b: Option<&J>) -> Result<(), String> {
+    fn set_budget_h(&mut self, h: usize, b: Option<&J>) -> Result<(), String> {
         let es = match &mut self.objs[h].val {
             V::Obj(es) => es,
-            _ => return Err(format!("program: bset on non-object session {}", label)),
+            _ => {
+                let l = self.objs[h].label.as_ref().map(|l| label_text(l, 's')).unwrap_or_default();
+                return Err(format!("program: bset on non-object session {}", l));
+            }
         };
         let pos = es.iter().position(|e| k_eq(&e.0, "budget"));
         match b {
@@ -852,9 +1057,9 @@ impl Heap {
             Some(bj) => {
                 // Decode the budget value directly: {"bref":L,"v":W} attaches label L and decodes W, anything else
                 // decodes as is (same result as decoding the one-pair object {"obj":[["budget", bj]]} after strip_budget).
-                let (bud, val): (Option<String>, V) = match bj {
+                let (bud, val): (Option<Label>, V) = match bj {
                     J::Obj(be) => {
-                        let lab = be.iter().find(|e| k_eq(&e.0, "bref")).and_then(|e| e.1.text());
+                        let lab = be.iter().find(|e| k_eq(&e.0, "bref")).and_then(|e| bref_label(&e.1));
                         let inner = be.iter().find(|e| k_eq(&e.0, "v"));
                         match (lab, inner) {
                             (Some(l), Some(i)) => (Some(l), decode(&i.1, &no_sess)?),
@@ -878,9 +1083,9 @@ impl Heap {
         match j {
             J::Arr(a) => J::Arr(a.iter().map(|x| self.host_view(x)).collect()),
             J::Obj(es) => {
-                let sref = es.iter().rev().find(|e| k_eq(&e.0, "sref")).and_then(|e| e.1.text());
-                if let Some(l) = sref {
-                    if let Some(&h) = self.by_label.get(&l) {
+                let sref = es.iter().rev().find(|e| k_eq(&e.0, "sref")).map(|e| &e.1);
+                if let Some(J::Str(u)) = sref {
+                    if let Some(h) = self.find_label(&label_of(u, 's')) {
                         return self.enc(&V::Sess(h));
                     }
                     return j.clone();
@@ -892,28 +1097,16 @@ impl Heap {
     }
 
     fn apply_sref(&mut self, label: &[u16], v: &J) -> Result<(), String> {
-        let mut buf = [0u8; 32];
-        let lab = match ascii_label(label, &mut buf) {
-            Some(a) => {
-                if let Some(&h) = self.by_label.get(a) {
-                    return self.set_budget_h(h, a, budget_pair(v));
-                }
-                a.to_string()
-            }
-            None => {
-                let lab = String::from_utf16_lossy(label);
-                if let Some(&h) = self.by_label.get(&lab) {
-                    return self.set_budget_h(h, &lab, budget_pair(v));
-                }
-                lab
-            }
-        };
-        let mut bud: Option<String> = None;
+        let lab = label_of(label, 's');
+        if let Some(h) = self.find_label(&lab) {
+            return self.set_budget_h(h, budget_pair(v));
+        }
+        let mut bud: Option<Label> = None;
         let vj = strip_budget(v, &mut bud);
         let val = decode(&vj, &no_sess)?;
         self.objs.push(SObj { val, label: Some(lab.clone()), bud });
         let h = self.objs.len() - 1;
-        self.by_label.insert(lab, h);
+        self.put_label(lab, h);
         Ok(())
     }
 }
