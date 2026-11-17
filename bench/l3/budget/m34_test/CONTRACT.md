@@ -142,17 +142,25 @@ A map is "the children of an owner entry", kept in insertion order by the prev/n
 JS `Map` semantics: setting an existing key keeps its position; delete then set appends at the tail.
 
 One open-addressing hash index (linear probing) over all non-root entries: slot word `0` empty, `-1` tombstone,
-`e + 1` entry `e`. The hash mixes owner, owner generation and the key units (FNV-1a style with `wrapping_mul`,
-`band` to the slot mask). `find` matches an entry only when its owner, owner generation (equal to the owner's current
-generation) and key all match; probing stops at an empty slot and is bounded by the slot count.
+`tag(h) * 2^32 + e + 1` entry `e` with hash `h`, where `tag(h)` is the top 30 bits of `h` (so a probe skips most
+non-matching entries without reading them). The hash mixes owner, owner generation and the key units (FNV-1a style
+with `wrapping_mul`, `band` to the slot mask). `find` matches an entry only when it is live and its hash, owner, owner
+generation (equal to the owner's current generation) and key all match; probing stops at an empty slot and is bounded
+by the slot count. A slot word may name a free entry, or an entry since reused for another key (see removal below);
+such a slot never matches and is not reused by inserts, so it behaves as a tombstone until the next rehash.
+Load policy: before an insert that fits, the index is rebuilt in place (dropping tombstones) when the used slots would
+pass half the slot count while the live entries take at most a quarter of it; before an insert that does not fit only
+because of the 3/4 used bound, likewise. Each rebuild is O(slots) and at least slots/4 inserts from the next.
 
 Removing an entry with children (e.g. `forgetTurn`) unlinks it and frees it with its children (one level; the world
-has no deeper maps): each gets a tombstone, its key/blob words leave the live count, its generation is bumped and it
-goes on the free list. Cost `O(key length + children)`, amortized O(1) per child insert. No ghosts remain.
+has no deeper maps): the entry's own slot gets a tombstone, the children's slots are left in place (lazy deletion,
+as above), every key/blob word leaves the live count, generations are bumped and the entries go on the free list.
+Cost `O(probe length + children)` with O(1) per child, amortized O(1) per child insert. No reachable ghosts remain:
+a free entry is never found, iterated or counted.
 
 `grow(prev, inout next)`: requires `valid(prev)` and `len(next) >= len(prev)`; writes a fresh layout for `len(next)`
 and copies every reachable entry (roots in order, each map in insertion order, children after their parent), key and
-blob into the new arena, rehashing. Tombstones and dead arena words are dropped. O(len(next)).
+blob into the new arena, rehashing. Tombstones, stale slots and dead arena words are dropped. O(len(next)).
 
 ### World operations (`bud_world`)
 
