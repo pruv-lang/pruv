@@ -11,7 +11,7 @@ first, allocates once, and writes each accepted tool once via `inout`.
 | `plan` | packet.pruv | One pure pass over the tools array. It applies the same caps and order as the old loop: 1048576 elements, objects < 500, count < 500, name usability. Output is `[admitted, reserve, count_after, objects_after]` plus 10 slots per accepted tool: name, title and description spans, the readOnly/destructive values and the raw span. `reserve` is an upper bound of the payload words: the units for each string (capped) plus the raw bytes. |
 | `fields4` / `key_is` | packet.pruv | One member walk answers `access::field` for up to 4 ASCII keys. It keeps `find_ascii` order and results: -4 for any malformed member, -3 for a bad id, -2 for a non-object, the last match wins, and keys compare like `jstr::ascii_equal`. A plain (no escape, ASCII) token is compared byte for byte; other tokens are decoded with `jstr::step`. |
 | `usable_span` | packet.pruv | A streaming form of `usable(string_units(..))`. It has an ASCII fast path and stops after 201 units. |
-| `write` | packet.pruv | `alloc(len(p)+reserve)` (clamped to 100000000), copies the prefix once, then for each descriptor calls `put_field` ×3, writes slots 6..9 and copies the raw bytes with `put_bytes`. It ends with `truncate(q, cursor)`. |
+| `write` | packet.pruv | `resize(p, len(p)+reserve, 0)` (clamped to 100000000; P05G): one allocation that copies the prefix once and zero-fills only the tail. Then for each descriptor calls `put_field` ×3, writes slots 6..9 and copies the raw bytes with `put_bytes`. It ends with `truncate(q, cursor)`. |
 | `put_field` | packet.pruv | Applies the cap, the pair-safe cut (same rule as `cut`), the nonempty title rule and the `len(p) <= 100000000 - n` guard. When the room is proven it decodes with `put_units_room`; otherwise it uses the checked `put_units`. |
 | root.pruv | root.pruv | `plan`, then `write` only when `admitted > 0`. The page storage (`d`) lives through `write`. |
 
@@ -59,6 +59,38 @@ and the rows' checksums must match before a number counts.
   packet + count/objects).
 - OLD: the pre-rewrite packet.pruv, kept as perf/old_packet.pruv.
 
+### After P05G (`write` uses `resize`)
+
+Generated Rust for the new `write` allocation (perf/work/gen.rs):
+
+```rust
+let mut q: Vec<i64> = { let pruv_a = p; let pruv_n: i64 = want; let pruv_v: i64 = 0i64;
+    let mut pruv_t = Vec::with_capacity(pruv_n as usize); pruv_t.extend_from_slice(pruv_a);
+    pruv_t.resize(pruv_n as usize, pruv_v); pruv_t };
+```
+
+This is the hand shape: malloc without a fill, one memcpy of the prefix, and a fill of the tail only. The oracle check
+gives 0 mismatches on 18 cases.
+
+| cell (accepted tools) | NEW ns | HAND ns | ns ratio | NEW instr | HAND instr | instr ratio |
+|---|---:|---:|---:|---:|---:|---:|
+| 0 | 667 | 666 | 1.00x | 10617 | 10093 | 1.05x |
+| 1 | 833 | 833 | 1.00x | 18095 | 19702 | 0.92x |
+| 10 | 4292 | 4417 | 0.97x | 83925 | 106151 | 0.79x |
+| 50 | 19750 | 21542 | 0.92x | 381498 | 495396 | 0.77x |
+| 100 | 37375 | 42166 | 0.89x | 753158 | 981854 | 0.77x |
+| 250 | 92750 | 105166 | 0.88x | 1881915 | 2457324 | 0.77x |
+| 500 | 187250 | 210542 | 0.89x | 3765450 | 4917593 | 0.77x |
+| chain 5 pages × 100 | 303708 | 321875 | 0.94x | 4965993 | 6115772 | 0.81x |
+
+- The ns floor (≤1.0x) holds in every cell. The instr floor holds everywhere except the 0-tool cell.
+- The 0-tool cell skips `write`, so `resize` cannot reach it. Its 1.05x instr (524 instructions) is the fixed setup
+  described below: the plan header allocation (alloc_count 2 vs 1) and the root/result walk.
+- The packet core target (≤0.95x ns) is met from 50 tools up and in the chain. 10 tools is 0.97x and 1 tool is 1.00x:
+  at those sizes the buffer is mostly the 5010-word prefix, and both sides now copy it with one memcpy.
+
+### Before P05G (P05M numbers)
+
 | cell (accepted tools) | NEW ns | HAND ns | ns ratio | NEW instr | HAND instr | instr ratio |
 |---|---:|---:|---:|---:|---:|---:|
 | 0 | 667 | 667 | 1.00x | 10625 | 10094 | 1.05x |
@@ -72,11 +104,11 @@ and the rows' checksums must match before a number counts.
 
 - OLD at 500 tools: 190.9 ms, which is about 960x slower than NEW.
 - In the steady state each tool costs about 7748 instructions in NEW and 9809 in HAND.
-- The packet core target (≤0.95x) is met from 100 tools up. The 1.0x floor fails in these cells:
+- The packet core target (≤0.95x) was met from 100 tools up. The 1.0x floor failed in these cells:
   - ns at 1 tool, 10 tools and the 5-page chain
   - instr at 0 tools and 1 tool
 
-### Why the >1.0x cells are slower, line by line
+### Why the >1.0x cells were slower before P05G, line by line
 
 Every remaining gap is in building the output buffer. The per-tool work is faster than hand (0.78–0.83x instr).
 
@@ -134,14 +166,26 @@ copy, no extra room) and `truncate`.
 So "a copy of `p` with room for `n` more words" can only be written as alloc + an element loop. The audit agreed
 with this.
 
-**Proposed fix (compiler package, outside P05M scope).** Choose one:
+**Fix (done in P05G).** Option 1 of the original proposal was taken, with no pattern fusion. SPEC.md now has the array
+builtin `resize(a, n, v)`:
 
-1. Add an array builtin such as `grow(a, n, v)`: a copy of `a` with `len(a)+n` words, the tail set to `v`. Emit it as
-   `with_capacity + extend_from_slice + resize`.
-2. Recognise `alloc(n, v)` followed by a full-prefix copy loop `q[i] = p[i]` for `i < len(p)`, and fuse them into
-   the same code.
+- result length `n`; elements below `len(a)` are copied from `a`, and the tail is `v`;
+- it requires `len(a) <= n`, carries `! alloc`, and costs `1 + n`;
+- the contracts give z3 the length, the prefix values and the tail values.
 
-Either change must go into both compilers (py, rs) and both backends (rust, llvm).
+It is in both compilers (py, rs) and both backends. The Rust backend emits `with_capacity + extend_from_slice +
+resize`. The LLVM backend calls the runtime helpers, which copy the prefix and fill only the tail.
+
+Other bench code with the same pattern (listed only, not changed in P05G; `bench/l3/budget` is excluded):
+
+| file:line | pattern | fit |
+|---|---|---|
+| `bench/perf/brainfuck/brainfuck.pruv:15` | `alloc(len(tape)*2)` + prefix copy loop | direct |
+| `bench/l3/claude/a1_root.pruv:33` | `lead + s` into a fresh buffer | partial (only the first part is a prefix) |
+| `bench/l3/mcp/root.pruv:23`, `bench/l3/codex/util.pruv:20` | `join`: one loop with an a/b branch | partial (needs the loop split first) |
+
+Full same-length copies and str→[u8] conversions do not fit, for example claude/a0_root:109, json/a4_root:40,
+qwen/root:47, qwen/q_root:47, supervisor/a1_root:39, the codex/grok/opencode util copies and mcp/root `to_bytes`.
 
 ### Hand baseline caveats (from the audit)
 
@@ -173,9 +217,10 @@ output is identical. The Q differential confirms it.
 
 | gate | result |
 |---|---|
-| `test_impl.py` (py/rust, py/llvm, rs/rust, rs/llvm) | 22/22 each |
+| `test_impl.py` (py/rust, py/llvm, rs/rust, rs/llvm) | 22/22 each (also after P05G) |
 | Q differential, 2040 cases × 4 pairs | identical to the pre-rewrite baseline: 2027 exact, 3 exact-decimal-id, 3 invalid-utf8, 3 byte-line-cap, 3 numeric-signal, 1 surrogate-safe-cut |
-| `q_mutants.py` | 12/12 killed. page-contract and tool-contract are rejected by the verifier; the other 10 are differential-killed. |
+| Q differential after P05G | identical to the same baseline in all 4 pairs |
+| `q_mutants.py` | 12/12 killed (also after P05G). page-contract and tool-contract are rejected by the verifier; the other 10 are differential-killed. |
 | jstr consumers (codex, grok, opencode) | pruvc verify ok |
 
 q_mutants anchors moved with the code:
@@ -194,6 +239,9 @@ python3 bench/l3/mcp/perf/run_perf.py check   # oracle check, all cases
 python3 bench/l3/mcp/perf/run_perf.py perf    # ns + instr table (NEW / HAND / OLD)
 python3 bench/l3/mcp/perf/run_perf.py all
 ```
+
+By default the harness uses the main checkout's pruvc. When testing a branch (for example a worktree with `resize`),
+pass `--pruvc <worktree>/pruvc-rs/target/release/pruvc`, or the build fails with "unknown function resize".
 
 The harness compiles perf_root.pruv with pruvc. It includes hand_packet.rs into perf_driver.rs and writes its build
 output under `perf/work/`, which is not committed.
