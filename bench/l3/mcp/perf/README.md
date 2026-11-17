@@ -50,14 +50,90 @@ were not touched). The output checksums equal the uninstrumented run.
 
 ## Performance
 
-`run_perf.py perf` runs on Apple M-series, release build (rustc -O). It reports the median ns and the instruction
-count (`instr` mode). Every row is checked against the Python oracle (`run_perf.py check`, 0 mismatches on 18 cases),
+`run_perf.py perf` runs on Apple M-series, release build (rustc -O). It reports the median ns, a trimmed mean ns
+(slowest 5% of calls dropped; the per-call median is quantized to the 41.67 ns timer tick, which hides small-cell
+differences) and the instruction count (`instr` mode). Every row is checked against the Python oracle (`run_perf.py check`, 0 mismatches on 18 cases),
 and the rows' checksums must match before a number counts.
 
 - NEW: the generated Rust of this package.
 - HAND: perf/hand_packet.rs, a single-pass Rust baseline with the same input boundary (source bytes + tape + current
   packet + count/objects).
 - OLD: the pre-rewrite packet.pruv, kept as perf/old_packet.pruv.
+
+### After P05N (`has_work` skips the plan when no tool can be looked at)
+
+`packet::has_work(d, tools, objects)` is `objects < 500 && array_length(d, tools) > 0`. When it is false, `plan`'s loop
+cannot run, so `plan` would return `[0, 0, count, objects]` and `write` would not be called; `root.pruv` and
+`perf_root.pruv` now skip both. The 0-tool cell loses the plan header allocation (alloc_count 2 → 1, like HAND).
+
+Generated vs HAND, step by step (cells 0 / 1 / 10):
+
+| step | NEW (perf/work/gen.rs) | HAND (hand_packet.rs) |
+|---|---|---|
+| `result`, `tools` lookup | `access::field` ×2: one member walk each, every member validated (kind 7, parent, next, span), plain keys compared by length then bytes | `field` ×2: one member walk each, span checked, plain keys compared as slices |
+| array size | `array_length`: O(1) tape read | kind + stop check, span → `reserve = 2 * array bytes` |
+| 0 tools, before | `plan`: `alloc(4, 0)` (malloc + free), checks, empty loop; then `copy(p0)` | `with_capacity(5010 + 4)` + `extend_from_slice(p0)` |
+| 0 tools, after | `has_work` false → `copy(p0)` | same as before |
+| member lookups per tool | `fields4`: 1 walk for name/title/description/annotations + 1 walk for the two hints | 6 walks (one per key) |
+| descriptors | `alloc(4 + 10 * sz, 0)`: a second, small allocation | none (decodes straight into the output) |
+| output buffer | `resize(p0, len + reserve, 0)`: malloc, memcpy of the prefix, **memset of the reserved tail** | `with_capacity(len + 2 * array bytes)`, memcpy of the prefix, tail left uninitialized |
+| strings | `put_units_room`: stores in bounds by proof, plain-byte fast path | `decode` with `Vec::push` (capacity test per unit), bounds-checked `src[p]` |
+| raw JSON | `put_bytes`: proven indices | `extend(raw.iter().map(..))` |
+| end | `truncate` (no copy) | nothing |
+
+Causes, in the order data representation → language gap → codegen:
+
+1. **Representation (fixed).** The 0-tool cell paid the plan header allocation for a plan that could not admit
+   anything (the +524-instruction gap). `has_work` removes it by structure; no check was weakened on either side.
+   A plan returned as a struct (scalar header + descriptor buffer) was tried and rejected: a buffer field must be a
+   fresh `alloc`/`copy`/call result (`type/array_alias`), so moving the filled descriptor local into the struct would
+   cost a copy.
+2. **Language gap (not fixable under bench/l3/mcp, proposal only).** `resize` must give a fully defined array, so the
+   reserved tail is zero-filled and then overwritten; HAND only reserves capacity and pushes. Measured by patching the
+   generated `resize` in a copy of gen.rs to `with_capacity + extend_from_slice + set_len` (unsound, measurement only),
+   7 alternating runs, trimmed mean ns:
+
+   | cell | NEW | NEW without tail fill | HAND |
+   |---|---:|---:|---:|
+   | 1 | 801 | 815 | 810 |
+   | 10 | 4064 | 3586 | 4275 |
+
+   Proposal for the compiler/SPEC owners: an append form for owned arrays (e.g. a move conversion `Vec<i64>` →
+   `[i64]`, both are `Vec<i64>` in Rust, so `vec_push` with a capacity hint could build the packet), or lowering
+   `resize` without the fill when every tail index is proven written before the first read. The descriptor buffer
+   (second allocation in the 1+ tool cells) would also go away with a move of a fresh local into a constructor field.
+3. **Codegen.** No difference found beyond the two above.
+
+Why the 1-tool cell stays at ~0.99x ns (same work): the 0-tool time (≈670 ns: the 5010-word prefix memcpy plus the two
+lookups, identical on both sides) is ≈80% of the 1-tool time. The per-tool part is NEW 8131 vs HAND 9596
+instructions (0.85x) and about equal in ns; the tail-fill experiment above shows no measurable 1-tool gain, so the
+remaining difference is inside timer noise. The HAND checks that proof can remove (per-unit capacity tests, `src[p]`
+bounds checks) are already gone from NEW. The prefix copy itself is required at this boundary (`&[i64]` in, new
+array out) for both sides; removing it needs in-place growth of an owned array (`p = write(p, ...)` in root.pruv), the
+same language gap as above.
+
+Results (`run_perf.py all --rounds 5 --time-ms 200`, oracle check 0 mismatches on 18 cases, checksums agree; load
+average ≈3.5 from other work, so cells were measured alternating rows). "Before" for 0/1/10 is this package's baseline
+run on 5fa5a38 (7 rounds, same machine state); the larger cells' "before" is the P05G table below.
+
+| cell | NEW ns before → after | HAND ns | ns ratio before → after (tmean) | NEW instr before → after | HAND instr | instr ratio before → after |
+|---|---:|---:|---:|---:|---:|---:|
+| 0 | 708 → 667 (671) | 667 (684) | 1.06x → 1.00x (0.98x) | 10611 → 10015 | 10094 | 1.05x → 0.99x |
+| 1 | 792 → 833 (828) | 833 (833) | 0.95x → 1.00x (0.99x) | 18095 → 18146 | 19690 | 0.92x → 0.92x |
+| 10 | 4250 → 4291 (4224) | 4416 (4372) | 0.96x → 0.97x (0.97x) | 83961 → 84597 | 106157 | 0.79x → 0.80x |
+| 50 | 19750 → 19750 | 21250 | 0.92x → 0.93x | 381498 → 384703 | 495341 | 0.77x → 0.78x |
+| 100 | 37375 → 37416 | 42250 | 0.89x → 0.89x | 753158 → 760148 | 982126 | 0.77x → 0.77x |
+| 250 | 92750 → 92958 | 105333 | 0.88x → 0.88x | 1881915 → 1898886 | 2456215 | 0.77x → 0.77x |
+| 500 | 187250 → 187375 | 211042 | 0.89x → 0.89x | 3765450 → 3799096 | 4917756 | 0.77x → 0.77x |
+| chain 5 × 100 | 303708 → 305875 | 324875 | 0.94x → 0.94x | 4965993 → 4999450 | 6115676 | 0.81x → 0.82x |
+
+- Every cell is now ≤1.0x in both ns and instructions (the 0-tool cell was the last instr cell above 1.0x).
+- The 1-tool median moves between 792 and 833 ns run to run (one timer tick); the trimmed mean is the stable figure.
+- 1 and 10 tools stay above the 0.95x packet-core target for the reasons above (shared prefix copy; tail fill).
+- HAND is unchanged.
+- NEW instructions in the 10+ tool cells are up to 0.9% higher than before (the per-tool code is unchanged; most
+  likely inlining/layout around the new wrapper, not investigated further). Every ratio stays ≤0.82x.
+- Gates: test_impl.py 22/22 in all four pairs, Q differential identical to the baseline below, q_mutants 12/12.
 
 ### After P05G (`write` uses `resize`)
 

@@ -209,7 +209,11 @@ fn main() {
             }
             let sum = fold(&call(row, &pages, &start));
             t.sort_unstable();
-            println!("{} {} {} {} {}", pct(&t, 50), t[0], t[t.len() - 1], t.len(), sum);
+            // Trimmed mean (slowest 5% dropped): sub-tick resolution for small cells, where the per-call median is
+            // quantized to the 41.67 ns timer tick (P05N).
+            let keep = &t[..(t.len() * 95 / 100).max(1)];
+            let tmean = keep.iter().map(|&x| x as f64).sum::<f64>() / keep.len() as f64;
+            println!("{} {} {} {} {} {:.1}", pct(&t, 50), t[0], t[t.len() - 1], t.len(), sum, tmean);
         }
         "instr" => {
             let row = row_of(&a[2]);

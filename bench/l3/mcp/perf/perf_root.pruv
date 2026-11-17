@@ -51,8 +51,10 @@ fn core_new(p0: [i64], d: crate::json::JsonDocument, count0: i64, objects0: i64)
   ensures 5010 <= len(result) && len(result) <= 100000000
 {
   let result_id: i64 = crate::util::field(d,0,"result"); let tools: i64 = crate::util::field(d,result_id,"tools");
-  let plan: [i64] = crate::packet::plan(p0,d,tools,count0,objects0);
-  if plan[0] > 0 { return crate::packet::write(p0,d,plan); }
+  if crate::packet::has_work(d,tools,objects0) {
+    let plan: [i64] = crate::packet::plan(p0,d,tools,count0,objects0);
+    if plan[0] > 0 { return crate::packet::write(p0,d,plan); }
+  }
   return copy(p0);
 }
 // NEW-END
