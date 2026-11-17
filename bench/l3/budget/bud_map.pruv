@@ -448,11 +448,16 @@ fn drop_entry(inout st: [i64], e: i64) -> ()
   let mut kw: i64 = 0;
   if b >= 0 {
     // gf on direct words, same order (bud_store::eb); the slot write may land anywhere on a corrupt buffer, so the
-    // key and blob lengths are read after it as before.
+    // key and blob lengths are read after it as before. A slot write onto header word 5 or 6 (only on a corrupt
+    // buffer) moves the entry base, so b is stale then and the lengths are read through gf.
     if st[b] != 1 { return; }
     let sl: i64 = slot_of(st, e, st[b + 6]);
     if sl >= 0 { crate::ent_u16::wr(inout st, sl, -1); }
-    kw = crate::bud_store::c32(st[b + 5]) + crate::bud_store::c40(st[b + 13]);
+    if sl == 5 || sl == 6 {
+      kw = crate::bud_store::c32(gf(st, e, 5)) + crate::bud_store::c40(gf(st, e, 13));
+    } else {
+      kw = crate::bud_store::c32(st[b + 5]) + crate::bud_store::c40(st[b + 13]);
+    }
   } else {
     if gf(st, e, 0) != 1 { return; }
     let sl: i64 = slot_of(st, e, gf(st, e, 6));

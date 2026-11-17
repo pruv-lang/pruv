@@ -496,12 +496,12 @@ Open, with line-level causes:
 
 | set | ret ns (100 / 500) | Pruv/sip | Pruv/fxmix | Pruv/oa | instr Pruv / oa (100) |
 |---|---|---|---|---|---|
-| sid | 6.96 / 7.21 | 0.50 / 0.52 | 1.14 / 1.31 | 1.08 / 1.14 | 159 / 149 |
-| nonascii | 7.09 / 7.49 | 0.51 / 0.55 | 1.27 / 1.36 | 1.11 / 1.08 | 161 / 152 |
-| surr | 7.07 / 7.65 | 0.51 / 0.55 | 1.16 / 1.31 | 1.11 / 1.10 | 161 / 151 |
-| uuid | 12.70 / 14.41 | 0.91 / 1.18 | 1.32 / 1.44 | 1.12 / 1.18 | 220 / 210 |
+| sid | 6.96 / 7.21 | 0.49 / 0.54 | 1.14 / 1.31 | 1.08 / 1.14 | 159 / 149 |
+| nonascii | 7.09 / 7.49 | 0.51 / 0.56 | 1.27 / 1.36 | 1.11 / 1.08 | 161 / 152 |
+| surr | 7.07 / 7.65 | 0.47 / 0.53 | 1.16 / 1.31 | 1.11 / 1.10 | 161 / 151 |
+| uuid | 12.70 / 14.41 | 0.62 / 0.70 | 1.32 / 1.44 | 1.12 / 1.18 | 220 / 210 |
 
-`raw` (re-encode on every call) is 1.08-1.10x of oa raw. `miss` is 1.09-1.18x of oa.
+`raw` (re-encode on every call) is 1.08-1.14x of oa raw. `miss` is 1.09-1.18x of oa.
 
 Open: the retained-key find is 1.08-1.18x of oa, about 10 instructions per lookup.
 
@@ -572,3 +572,35 @@ median moved from 125.9 to 117.9 ns between runs, so replace is now at 1.01-1.02
     hand. It is not attributed line by line yet. The hand compares a 36-unit id over u16 (72 B) with one `bcmp`,
     while Pruv stores one unit per i64 word, so it touches 288 B. Packing units 4 per word (the C1 P layout,
     P03-P05) is the expected fix.
+
+### P02 audit: open blocking findings (handoff)
+
+Fixed in P02: `drop_entry` read the key and blob lengths through the cached base after a slot write that, on a corrupt
+buffer, can land on header word 5 or 6. It now falls back to `gf` in that case. The PERF_HEADROOM key-bench
+Pruv/sip column and the raw range were also corrected against `work/p01_keys/p02_perf_after.txt`.
+
+Still open. Each item breaks the "same result on every buffer" rule or weakens the measurement:
+
+- **M8 hit-path key check (`c4d3a63`).** `valid(st)` checks only the header, and I1 (every stored key is in range) is
+  neither a `requires` nor proved from the inputs. A stored key unit changed to 65536, a stored state of 3, or a
+  word-14 mismatch is then accepted on the hit path, where the old path returned 2. This needs either I1 as a stated
+  resident precondition (P06 / P07) or the check restored at a measured cost.
+- **Key bench `tab_find` header check (`12c78a4`, `keys.pruv:437`).** It has no fallback to the old per-probe path.
+  A table with `t[3]` zeroed now misses keys that the old code found.
+- **`perf_budget.py`.**
+  - It accepts any JSON line, including `{}`, as a measured result and never checks results or checksums against
+    the oracle.
+  - It applies 100 / 500 to every axis, where the spec gives 10 / 50 for runs, delegations and clocks.
+  - It runs all TS reps before the implementations instead of alternating them, and it keeps only the minimum.
+- **M7 perf.** It has no Pruv / hand result-equality check per perf cell. The hand checksum covers only the final
+  state, and replace restores its record.
+- **`q.py` / `run_meta.py`.** They record `backend='rust'` and default flags for every `--impl`, whatever was actually
+  built.
+- **Kept-output noise.** M7 `rawcall` at n = 500 went from 4.9 to 9.1 ns between `p02_perf.txt` and `p02_perf2.txt`,
+  while the same cell at n = 100 went from 4.7 to 4.5 ns. A re-run is needed to tell noise from a regression.
+
+Non-blocking:
+
+- `run_keys.py` skips the comparison when a Pruv row is missing.
+- The key checksum is a sum, so it cannot see a permutation of the returned ids.
+- The diff harnesses can reuse a stale Pruv binary.
