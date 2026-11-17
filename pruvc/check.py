@@ -675,16 +675,10 @@ class Checker:
     def check_entries(s):
         """G4 A0 (explicit mode): a host entry (root `pub`, nongeneric, ordinary function) may not have a collection or an
         extended (G9) type in its signature; child `pub` functions and generic functions are not host entries.
-        G5 A0: it may not have an inout parameter either"""
+        Mutable host entries: an inout parameter ([i64], [u8], [bool], already enforced by check_modes) is allowed"""
         for f in s.prog.functions:
             if not f.host_entry:
                 continue
-            for p in f.params:
-                if p.mode is not None:
-                    terr(_mode_at(f, p), "entry_signature", "host entry %s cannot have the inout parameter %s" % (
-                        f.name, p.name),
-                         "make %s private or child `pub` and expose a root wrapper that copies the input into a "
-                         "`let mut` local" % f.name)
             for what, ty in [("parameter %s" % p.name, p.type) for p in f.params] + [("the result", f.ret)]:
                 if contains_collection(ty) or any(n in s.extended for n in dependencies(ty)):
                     terr(f, "entry_signature", "host entry %s cannot have the type %s in %s" % (

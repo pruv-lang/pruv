@@ -369,10 +369,12 @@ the borrowed array. Returning `copy(parameter)` remains an ordinary owned return
 
 ### 6.1 Entry policy
 
-G5 does not expose inout signatures to the host.
+G5 did not expose inout signatures to the host. `docs/RESIDENT_STATE_SPEC.md`
+later opened explicit-mode host entries; the rules below are G5's original scope.
 
 - In explicit G4 mode, a root public nongeneric function with any inout
-  parameter is rejected with `type/entry_signature`.
+  parameter was rejected with `type/entry_signature`. Superseded: it is now a
+  mutable host entry (`docs/RESIDENT_STATE_SPEC.md` §3–§4).
 - Private functions, child-public functions, and public generic Pruv APIs may
   use inout.
 - In legacy mode, a function with inout is automatically internal, like existing
@@ -387,8 +389,8 @@ in-place helpers, and return the local or a scalar result. This preserves existi
 host capabilities while eliminating repeated internal copy-and-return operations.
 
 Supporting mutable host entries would require another boundary contract for
-writable storage and overlap, including raw callers. Rejecting them is the
-cheaper sound G5 scope.
+writable storage and overlap, including raw callers. Rejecting them was the
+cheaper sound G5 scope; `docs/RESIDENT_STATE_SPEC.md` adds that contract.
 
 ### 6.2 Runtime checks
 
@@ -439,7 +441,8 @@ bounds and range behavior. No runtime or allocator ABI change is needed.
 
 Binding and ABI enumeration must exclude inout signatures independently of
 whether a requires wrapper exists. Test symbol inventories as well as runtime
-results. No `pruv_abi_*`, `__typed`, or host Rust wrapper may expose an inout helper.
+results. No `pruv_abi_*`, `__typed`, or host Rust wrapper may expose an inout helper
+(except an explicit-mode host entry, `docs/RESIDENT_STATE_SPEC.md` §4.4).
 
 Programs without inout preserve their prior IR and bindings byte-for-byte.
 Do not rewrite existing read-only signatures or regenerate their baselines.
@@ -468,7 +471,7 @@ Reuse these existing codes:
 | `type/foreign_move` | Attempt to move an array through G6 ownership syntax |
 | `type/recursive_borrow` | Mutable access while an applicable G9 root view is active |
 | `type/foreign_signature` | Inout on a trusted Rust declaration |
-| `type/entry_signature` | Inout on an explicit host entry |
+| `type/entry_signature` | Inout on an explicit host entry (G5 only; lifted by `docs/RESIDENT_STATE_SPEC.md`) |
 | `type/reserved` | Callable old declaration conflicting with the G5 builtin |
 | `verify/refinement_assign` | Modified local's refinement not established after a call |
 | `codegen/unsupported_type` | Temporary batch guard only |
@@ -761,8 +764,9 @@ Deferred:
 - Inout calls nested in arbitrary expressions, conditions, or store operands.
   These need defined guarded-state transitions and backend evaluation-order
   lowering, not just a relaxed checker.
-- Mutable host entries, safe Rust slice bindings for them, raw writable-buffer
-  ABI contracts, and trusted foreign inout declarations.
+- Trusted foreign inout declarations. (Mutable host entries, safe Rust slice
+  bindings for them and the raw writable-buffer ABI contract are now in
+  `docs/RESIDENT_STATE_SPEC.md`.)
 - Disjoint slices, field places, element places, splitting a single array into
   permissions, and range-based exclusivity proofs.
 - Mutable scalar, str, aggregate, recursive-value, and G6 collection parameters.

@@ -487,8 +487,8 @@ pub fn abi_of(f: &Function, tt: &TypeTable, target: AbiTarget, m: &mut Mod) -> R
 /// Python `abi_of(f, tt, m, target)`: `callee` is the internal function the wrapper calls, `entry` (checked, legacy) or
 /// `body` (G4 explicit mode when the host boundary needs no requires check). The representation checks run in every mode.
 pub fn abi_of_target(f: &Function, tt: &TypeTable, target: AbiTarget, m: &mut Mod, callee: &str) -> R<String> {
-    // G5 A3: defensive, an inout function is never host-visible
-    if crate::llvmgen::has_inout(f) || crate::llvmgen::is_internal_fn(f, tt) {
+    // G5 A3: defensive; an inout function is host-visible only as an explicit-mode host entry (the caller filters host)
+    if crate::llvmgen::has_ext_sig(f, tt) || (crate::llvmgen::has_inout(f) && !m.explicit) {
         return Err(format!("llvmgen: {} has no host ABI wrapper (inout or extended signature)", f.name));
     }
     let n = mangle(&f.name);
@@ -535,7 +535,72 @@ pub fn abi_of_target(f: &Function, tt: &TypeTable, target: AbiTarget, m: &mut Mo
     let rt = f.ret.as_str();
     let entry = format!("@{}__pruv_{}", n, callee);
     let argl = args.join(", ");
-    let mut body: Vec<String> = pre.iter().map(|x| format!("  {}", x)).collect();
+    let mut body: Vec<String> = Vec::new();
+    // Overlap check of an inout entry: the very first lines (before representation / enum checks, requires, body)
+    {
+        // pointer-carrying arguments in declaration order: (ptr, len, elem bytes, is inout); the result storage is last
+        let mut ptrs: Vec<(String, String, usize, bool)> = Vec::new();
+        for p in &f.params {
+            let q = mangle(&p.name);
+            let io = p.mode_pos.is_some();
+            if is_array_name(&p.ty) || p.ty == "str" {
+                let eb = if p.ty == "array_u8" || p.ty == "array_bool" || p.ty == "str" { 1 } else { 8 };
+                ptrs.push((format!("%a.{}.a", q), format!("%a.{}.n", q), eb, io));
+            } else if is_agg(&p.ty) {
+                ptrs.push((format!("%a.{}", q), (words(tt, &p.ty)? * 8).to_string(), 1, io));
+            }
+        }
+        if crate::llvmgen::has_inout(f) {
+            if is_array_name(rt) || rt == "str" {
+                ptrs.push(("%out".to_string(), "16".to_string(), 1, false));
+            } else if is_agg(rt) {
+                ptrs.push(("%out".to_string(), (words(tt, rt)? * 8).to_string(), 1, false));
+            } else if (rt == "option" || rt == "result") && target == AbiTarget::WinX64 {
+                // Windows x64 only: the 16-byte option/result is returned through the hidden `%sret` pointer, which is
+                // result storage just like `%out` (the two are mutually exclusive); Python has no Windows target
+                ptrs.push(("%sret".to_string(), "16".to_string(), 1, false));
+            }
+            if ptrs.len() == 1 {
+                // a lone inout region has no partner, but @pruv_overlap also rejects a negative length / size overflow of
+                // one side: check it against the empty sentinel region (an empty region never overlaps)
+                ptrs.push(("null".to_string(), "0".to_string(), 1, false));
+            }
+            let mut pairs: Vec<(usize, usize)> = Vec::new();
+            for i in 0..ptrs.len() {
+                for j in (i + 1)..ptrs.len() {
+                    if ptrs[i].3 || ptrs[j].3 {
+                        pairs.push((i, j));
+                    }
+                }
+            }
+            if !pairs.is_empty() {
+                // strings interned in Python order: function identity first, then the message
+                let disp = m.fn_disp.get(&f.name).cloned().unwrap_or_else(|| f.name.clone());
+                let msg_fn = m.string(&disp);
+                let msg = m.string("inout argument overlaps another argument");
+                m.overlap = true;
+                for (k, &(i, j)) in pairs.iter().enumerate() {
+                    let (a, b) = (&ptrs[i], &ptrs[j]);
+                    body.push(format!(
+                        "  %ov.{} = call i1 @pruv_overlap(ptr {}, i64 {}, i64 {}, ptr {}, i64 {}, i64 {})",
+                        k, a.0, a.1, a.2, b.0, b.1, b.2
+                    ));
+                }
+                let mut flag = "%ov.0".to_string();
+                for k in 1..pairs.len() {
+                    let nf = format!("%ov.or.{}", k);
+                    body.push(format!("  {} = or i1 {}, %ov.{}", nf, flag, k));
+                    flag = nf;
+                }
+                body.push(format!("  br i1 {}, label %ovl.bad, label %ovl.ok", flag));
+                body.push("ovl.bad:".to_string());
+                body.push(format!("  call void @pruv_panic_requires(ptr {}, ptr {})", msg_fn, msg));
+                body.push("  unreachable".to_string());
+                body.push("ovl.ok:".to_string());
+            }
+        }
+    }
+    body.extend(pre.iter().map(|x| format!("  {}", x)));
     for (k, (okv, wv, tname)) in w.checks.iter().enumerate() {
         // G3: an invalid nominal enum ordinal is rejected here, before the entry (requires) and the body run
         let msg = m.string(&format!("enum {}", tname));
@@ -703,5 +768,36 @@ mod tests {
         let t = abi_of(&opt_fn(), &tt, AbiTarget::WinX64, &mut Mod::new()).unwrap();
         assert!(t.starts_with("define void @pruv_abi_f(ptr sret({ i64, i64 }) align 8 %sret, i64 %a.x) {\nentry:\n"));
         assert!(t.contains("  store i64 %x0z, ptr %sl0, align 8\n  store i64 %x1, ptr %sl1, align 8\n  ret void\n}\n"));
+    }
+
+    /// `inout a: [i64]` host entry returning `ret` (explicit mode)
+    fn inout_arr_fn(ret: &str) -> Function {
+        let mut f = opt_fn();
+        f.params = vec![Param { name: "a".into(), ty: "array".into(), refine: None, take: false, mode_pos: Some((1, 1)) }];
+        f.ret = ret.into();
+        f
+    }
+
+    #[test]
+    fn abi_inout_win_sret_overlap() {
+        // Windows x64: the hidden %sret is result storage, so the lone inout region is checked against it
+        let tt = TypeTable::new(&[]);
+        let mut m = Mod::new();
+        m.explicit = true;
+        let t = abi_of(&inout_arr_fn("option"), &tt, AbiTarget::WinX64, &mut m).unwrap();
+        assert!(t.contains("@pruv_overlap(ptr %a.a.a, i64 %a.a.n, i64 8, ptr %sret, i64 16, i64 1)"));
+        assert!(!t.contains("ptr null"));
+    }
+
+    #[test]
+    fn abi_inout_lone_sentinel_overlap() {
+        // a lone inout region (no other pointer, i64 result) is validated against the empty sentinel region
+        let tt = TypeTable::new(&[]);
+        let mut m = Mod::new();
+        m.explicit = true;
+        let t = abi_of(&inout_arr_fn("i64"), &tt, AbiTarget::SysV, &mut m).unwrap();
+        assert!(t.contains("%ov.0 = call i1 @pruv_overlap(ptr %a.a.a, i64 %a.a.n, i64 8, ptr null, i64 0, i64 1)"));
+        assert!(t.contains("  br i1 %ov.0, label %ovl.bad, label %ovl.ok\n"));
+        assert!(m.overlap);
     }
 }

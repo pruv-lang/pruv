@@ -357,8 +357,9 @@ pub fn gen_bindings_with(prog: &Program, shim: Option<&str>, verified: bool) -> 
                 && !is_spec_fn(&f.name)
                 && f.foreign.is_none()
                 && !(f.params.iter().any(|p| crate::llvmgen::is_collection(&p.ty)) || crate::llvmgen::is_collection(&f.ret))
-                && !crate::llvmgen::has_inout(f)
-                && !crate::llvmgen::is_internal_fn(f, &tt)
+                && !crate::llvmgen::has_ext_sig(f, &tt)
+                // an inout entry has a binding only as an explicit-mode host entry (legacy inout fns stay internal)
+                && (!crate::llvmgen::has_inout(f) || (explicit && hosts.get(*i).copied().unwrap_or(false)))
         })
         .map(|(_, f)| f)
         .collect();
@@ -373,7 +374,13 @@ pub fn gen_bindings_with(prog: &Program, shim: Option<&str>, verified: bool) -> 
         }
         let mut ps: Vec<&str> = Vec::new();
         for p in &f.params {
-            if p.ty == "array_u8" || p.ty == "array_bool" || p.ty == "str" {
+            if p.mode_pos.is_some() && (p.ty == "array_u8" || p.ty == "array_bool") {
+                // inout [u8] / [bool]: *mut u8
+                ps.extend(["*mut u8", "i64"]);
+            } else if p.mode_pos.is_some() && p.ty == "array" {
+                // inout [i64]: *mut i64
+                ps.extend(["*mut i64", "i64"]);
+            } else if p.ty == "array_u8" || p.ty == "array_bool" || p.ty == "str" {
                 // G2 A5: bool is also *const u8 (G2 B2: so is str)
                 ps.extend(["*const u8", "i64"]);
             } else if p.ty == "array" {
@@ -421,13 +428,37 @@ pub fn gen_bindings_with(prog: &Program, shim: Option<&str>, verified: bool) -> 
     o.push(ALLOW.to_string());
     o.push(format!("extern \"C\" {{\n{}\n}}", decls.join("\n")));
     for f in &pubs {
-        let ps: Vec<String> = f.params.iter().map(|p| format!("{}: {}", p.name, rust_ty(&p.ty, true))).collect();
+        let ps: Vec<String> = f
+            .params
+            .iter()
+            .map(|p| {
+                if p.mode_pos.is_some() {
+                    // inout: a mutable slice (checked to be [i64] / [u8] / [bool])
+                    let el = match p.ty.as_str() {
+                        "array_u8" => "u8",
+                        "array_bool" => "bool",
+                        _ => "i64",
+                    };
+                    format!("{}: &mut [{}]", p.name, el)
+                } else {
+                    format!("{}: {}", p.name, rust_ty(&p.ty, true))
+                }
+            })
+            .collect();
         let ps = ps.join(", ");
         let ret = if f.ret == "unit" { String::new() } else { format!(" -> {}", rust_ty(&f.ret, false)) };
         let mut pre: Vec<String> = Vec::new();
         let mut args: Vec<String> = Vec::new();
         for p in &f.params {
-            if p.ty == "i64" {
+            if p.mode_pos.is_some() && (p.ty == "array" || p.ty == "array_u8" || p.ty == "array_bool") {
+                // inout slice: mutable pointer + length, no copy
+                if p.ty == "array_bool" {
+                    args.push(format!("{}.as_mut_ptr() as *mut u8", p.name));
+                } else {
+                    args.push(format!("{}.as_mut_ptr()", p.name));
+                }
+                args.push(format!("{}.len() as i64", p.name));
+            } else if p.ty == "i64" {
                 args.push(p.name.clone());
             } else if p.ty == "bool" {
                 args.push(format!("{} as i64", p.name));

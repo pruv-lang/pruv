@@ -514,7 +514,12 @@ pub fn has_inout(f: &Function) -> bool {
 /// G9: a function with an extended type in its signature has no raw ABI wrapper and no binding;
 /// G5 A3: neither has a function with an inout parameter (one host-eligibility rule)
 pub fn is_internal_fn(f: &Function, tt: &TypeTable) -> bool {
-    f.params.iter().any(|p| is_ext_t(tt, &p.ty)) || is_ext_t(tt, &f.ret) || has_inout(f)
+    has_ext_sig(f, tt) || has_inout(f)
+}
+
+/// An extended (G9) type in the signature (separate from the inout rule: an explicit host entry may have inout params)
+pub fn has_ext_sig(f: &Function, tt: &TypeTable) -> bool {
+    f.params.iter().any(|p| is_ext_t(tt, &p.ty)) || is_ext_t(tt, &f.ret)
 }
 
 /// internal LLVM result type: an extended (G9) aggregate result goes through explicit output storage
@@ -749,6 +754,8 @@ pub struct Mod {
     pub bswap: BTreeSet<u32>,
     /// P3: some external array-return wrapper normalizes cap to len with @pruv_shrink_v2
     pub shrink: bool,
+    /// some host wrapper of an inout entry calls @pruv_overlap (module gets DECLS_OVERLAP)
+    pub overlap: bool,
     /// P3-S1: the stack plan (set by gen_llvm; empty = every array on the heap)
     pub stack: crate::stack::StackPlan,
     /// P3-S1: some stack array calls @pruv_fill_v2
@@ -782,6 +789,7 @@ impl Mod {
             need_eq: BTreeSet::new(),
             bswap: BTreeSet::new(),
             shrink: false,
+            overlap: false,
             stack: crate::stack::StackPlan::default(),
             fill: false,
             tail_i64: false,
@@ -5879,10 +5887,54 @@ pub fn is_host_abi_fn(f: &Function, tt: &TypeTable, explicit: bool, host: bool) 
     f.foreign.is_none()
         && !crate::emit_common::is_spec_fn(&f.name)
         && !is_coll_fn(f)
-        && !has_inout(f)
-        && !is_internal_fn(f, tt)
+        && !has_ext_sig(f, tt)
         && (host || !explicit)
+        // an inout entry is exported only as an explicit-mode host entry (legacy inout fns stay internal)
+        && (!has_inout(f) || (explicit && host))
 }
+
+/// Overlap-check library (module text after the pruv_shrink_v2 slot; set by `Mod::overlap`)
+const DECLS_OVERLAP: &str = "declare { i64, i1 } @llvm.umul.with.overflow.i64(i64, i64)
+declare { i64, i1 } @llvm.uadd.with.overflow.i64(i64, i64)
+define internal i1 @pruv_overlap(ptr %a, i64 %an, i64 %ae, ptr %b, i64 %bn, i64 %be) nounwind {
+entry:
+  %an.neg = icmp slt i64 %an, 0
+  %bn.neg = icmp slt i64 %bn, 0
+  %neg = or i1 %an.neg, %bn.neg
+  br i1 %neg, label %bad, label %len
+len:
+  %am = call { i64, i1 } @llvm.umul.with.overflow.i64(i64 %an, i64 %ae)
+  %ab = extractvalue { i64, i1 } %am, 0
+  %ao = extractvalue { i64, i1 } %am, 1
+  %bm = call { i64, i1 } @llvm.umul.with.overflow.i64(i64 %bn, i64 %be)
+  %bb = extractvalue { i64, i1 } %bm, 0
+  %bo = extractvalue { i64, i1 } %bm, 1
+  %a0 = ptrtoint ptr %a to i64
+  %b0 = ptrtoint ptr %b to i64
+  %ax = call { i64, i1 } @llvm.uadd.with.overflow.i64(i64 %a0, i64 %ab)
+  %a1 = extractvalue { i64, i1 } %ax, 0
+  %axo = extractvalue { i64, i1 } %ax, 1
+  %bx = call { i64, i1 } @llvm.uadd.with.overflow.i64(i64 %b0, i64 %bb)
+  %b1 = extractvalue { i64, i1 } %bx, 0
+  %bxo = extractvalue { i64, i1 } %bx, 1
+  %o1 = or i1 %ao, %bo
+  %o2 = or i1 %o1, %axo
+  %o3 = or i1 %o2, %bxo
+  br i1 %o3, label %bad, label %cmp
+cmp:
+  %az = icmp eq i64 %ab, 0
+  %bz = icmp eq i64 %bb, 0
+  %z = or i1 %az, %bz
+  %c1 = icmp ult i64 %a0, %b1
+  %c2 = icmp ult i64 %b0, %a1
+  %c = and i1 %c1, %c2
+  %nz = xor i1 %z, true
+  %r = and i1 %c, %nz
+  ret i1 %r
+bad:
+  ret i1 true
+}
+";
 
 /// Generation with a chosen target ABI. SysV is byte-identical to gen_llvm.
 pub fn gen_llvm_for(prog: &Program, verified: bool, trust_callers: bool, budget: u64, target: AbiTarget) -> R<(String, String)> {
@@ -6174,7 +6226,7 @@ fn gen_llvm_body(
         }
     }
     let mut ir = format!(
-        "{}{}\n{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}\n{}",
+        "{}{}\n{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}\n{}",
         if target == AbiTarget::WinX64 { WIN_X64_HEADER } else { "" },
         m.render_strings(),
         type_defs(&tt),
@@ -6197,6 +6249,7 @@ fn gen_llvm_body(
         // P2 batch 4: llvm.bswap declarations of the widths used, ascending
         m.bswap.iter().map(|w| format!("declare i{w} @llvm.bswap.i{w}(i{w})\n", w = w)).collect::<String>(),
         if m.shrink { "declare ptr @pruv_shrink_v2(ptr, i64, i64, i64, i64) nounwind\n" } else { "" },
+        if m.overlap { DECLS_OVERLAP } else { "" },
         if m.fill { "declare void @pruv_fill_v2(ptr nocapture, i64, i64, i64) nounwind\n" } else { "" },
         if m.tail_i64 { DECLS_TAIL } else { "" },
         if m.tail_u8 { DECLS_TAIL_U8 } else { "" },
