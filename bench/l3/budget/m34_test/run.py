@@ -140,9 +140,10 @@ def check_stats(exp_line, act_line, prev_len):
     live, used, arena, L = [int(x) for x in p[1:]]
     ew = exp_line.split()
     want, ghosts = int(ew[1]), int(ew[2])
-    # header word 12 counts the three roots, the live entries and the ghosts not yet dropped by a grow
-    if not (want + 3 <= live <= want + 3 + ghosts):
-        return "allocated entries %d, model %d non-root + 3 roots + up to %d ghosts" % (live, want, ghosts), L
+    # header word 12 counts exactly the three roots and the live entries: remove frees the children at once, so the
+    # model's ghost count (an upper bound kept for reporting) is not allowed for
+    if live != want + 3:
+        return "allocated entries %d, model %d non-root + 3 roots (%d children cut off so far)" % (live, want, ghosts), L
     slots = layout_slots(L)
     if slots is None:
         return "len(st)=%d is below the minimum layout" % L, L

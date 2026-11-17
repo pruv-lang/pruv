@@ -852,8 +852,9 @@ The host owns the buffer's memory and nothing else. It does not inspect, edit or
 allocates a zeroed larger buffer on `Grow` (at least `max(N, 2·len)` words, `docs/RESIDENT_STATE_SPEC.md`), passes
 the old one to `grow` and drops it afterwards. Pruv re-validates the header (O(1)) on every entry and treats every
 index it reads as untrusted: all accesses are total, and an inconsistent header is `InvalidInput` with no write.
-Removed entries go to a free list; removed subtrees (e.g. `forgetTurn`) are cut off at the root in O(key length) and
-their storage, together with superseded arena records, is reclaimed by the next `grow`.
+Removed entries go to a free list and keep their key/blob regions for reuse; removing an entry also frees its
+children at once (e.g. `forgetTurn` frees its activities, O(children + key length)). Arena records outgrown by a
+longer key or blob are reclaimed by the next `grow`.
 
 ### 8.3 Test adapter (not product)
 
@@ -889,7 +890,7 @@ Let:
 - `U`: UTF-16 units actually read, validated, or formatted.
 - `O`: serialized observation words.
 
-Keyed-map operations are linear in key length with the radix representation. Fixed-sized field operations are constant, excluding key/string traversal and output.
+Keyed-map operations are linear in key length in expectation with the open-addressing hash index (tombstones are cleared by an amortized in-place rehash); the worst case of a probe is the slot count. Fixed-sized field operations are constant, excluding key/string traversal and output.
 
 | Flow | Bound, excluding output |
 |---|---|
@@ -902,7 +903,7 @@ Keyed-map operations are linear in key length with the radix representation. Fix
 | Rejected charge | halt bound |
 | noteFailure | `O(key length)` |
 | noteTool | `O(turnId + activityId + ref key lengths)`; no scan of A |
-| forgetTurn | Root removal in `O(turnId length)`; eventual reclamation linear in freed storage |
+| forgetTurn | `O(turnId length + A of that turn)`: the turn and its activities are freed at once |
 | runStarted/runWaiting/runEnded | `O(R + key lengths)` when REFRESH is reached |
 | REFRESH | `O(R + key lengths)` |
 | BEGIN/ARM/SETTLE/DROP/CLOSE | `O(key lengths + U)` absent synchronous FIRE |
@@ -1155,7 +1156,7 @@ These do not change the required normal-domain semantics:
 
 - **Arithmetic outside the integral domain:** determine whether a later extension needs arbitrary finite fractional budget values. The first implementation must report these as excluded-domain, not silently round them.
 - **Reentrant dependencies:** W can invoke service code whose broader reentrancy behavior is not established by this read-only class specification. Initial fakes are non-reentrant. Do not claim proof of live service reentrancy.
-- **Storage implementation:** confirm the proposed radix-map/storage operations fit the current Pruv verifier within each one-hour slice. A replacement data structure is acceptable only if it preserves the stated bounds and host split.
+- **Storage implementation:** confirm the hash-map/storage operations fit the current Pruv verifier within each one-hour slice. A replacement data structure is acceptable only if it preserves the stated bounds and host split.
 - **Native timer extremes:** the deterministic scheduler’s explicit integer-delay policy must be checked against the Node version used by the oracle. Do not rely on real wall-clock waits.
 - **Alias exposure:** current and setCard preserve identity, but arbitrary external mutation through retained returned aliases is outside the initial scenario language. A later alias-mutation extension must model it in Pruv rather than let Rust edit budgets directly.
 

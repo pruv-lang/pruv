@@ -420,7 +420,7 @@ fn rehash(inout st: [i64]) -> ()
   sh(inout st, 13, used);
 }
 
-// need() with tombstone recovery: when only the used-slot bound fails and the live entries would fit, the index is
+// need() with tombstone recovery: when only the used-slot bound fails and the live entries and words would fit, the index is
 // rebuilt in place first (amortized O(1): it runs after at least slots/4 - entries tombstones have accumulated).
 // Same result convention as bud_store::need.
 pub fn make_room(inout st: [i64], entries: i64, words: i64) -> i64
@@ -432,7 +432,12 @@ pub fn make_room(inout st: [i64], entries: i64, words: i64) -> i64
   let used: i64 = crate::bud_store::c32(hw(st, 13));
   let slots: i64 = crate::bud_store::c32(hw(st, 4));
   let cap: i64 = crate::bud_store::c32(hw(st, 6));
-  if used + ents > slots * 3 / 4 && live + ents <= cap {
+  let wds: i64 = crate::bud_store::c40(words);
+  let top: i64 = crate::bud_store::c40(hw(st, 10));
+  let ae: i64 = crate::bud_store::c40(hw(st, 11));
+  // Rehash only when the slot bound is the sole failure, so a Grow result never follows a state change (§8.1).
+  // After a rehash used <= live and live + ents <= cap = slots/2, so the second need() returns 0.
+  if used + ents > slots * 3 / 4 && live + ents <= cap && wds <= ae - top {
     rehash(inout st);
     return crate::bud_store::need(st, entries, words);
   }
