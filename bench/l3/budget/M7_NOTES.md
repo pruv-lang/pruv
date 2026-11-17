@@ -228,12 +228,21 @@ derived case reaches it.
 
 ## API for M10
 
-Made public with a visibility-only edit (`fn name` → `pub fn name`, signatures unchanged): `session_of`, `blob_at`,
-`blob_n`, `state_of`, `id_is`, `current_entry`, `str_at`, `str_len_in`, `put_str`, `blob_copy`, `rewrite`, `store`,
-`reserve`, `grow`, `view`, `view_in`, `close_rec`.
+Made public (`fn name` → `pub fn name`, signatures unchanged): `session_of`, `blob_at`, `blob_n`, `state_of`,
+`id_is`, `current_entry`, `str_at`, `str_len_in`, `put_str`, `blob_copy`, `rewrite`, `store`, `reserve`, `grow`,
+`view`, `view_in`, `close_rec`. Of these, 13 are visibility-only; `blob_at` and `blob_n` also dropped a redundant
+upper-bound check (`field_addr` already bounds the result, so behaviour is the same); `current_entry` is restored
+(below); `put_str` has the behaviour change below (confirmation audit, 2026-11-17).
 
 - `current_entry` was replaced inside M7 by `current_at` (returns the entry field address, one `field_addr` read);
   it is kept with its original signature and body so M10 can call it and the visibility edit merges.
 - Behaviour change without a signature change: `put_str` keeps the source offset to 40 bits (was 32).
 - New private helpers M10 may also want (still private): `entry_addr`, `at_off`, `at_n`, `current_at`, `clock_in`,
   `rec_bound`.
+
+## Confirmation audit (2026-11-17, Codex, static)
+
+No required findings on the four review fixes (replace blob bounds, current out length, put_str 40-bit offset, Grow
+reservation bounds). Two advisories, both applied: the maybeClose slow path copied the blob twice (once for
+`rec_bound`, once for `close_rec`); it now reuses the first copy, with the same effect order. The API note above now
+separates visibility-only helpers from the others.

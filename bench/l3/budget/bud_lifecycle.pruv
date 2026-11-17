@@ -633,11 +633,20 @@ pub fn maybe_close(inout st: [i64], sk: [i64], ss: i64, sn: i64, quiet: i64, now
   if quiet < 0 { return 5; }
   let in_place: bool = str_len_in(st, off, 2) == 0 && str_len_in(st, off, 3) == 0;
   if quiet != 0 && !in_place {
-    // Room for the rewritten record before the first effect, so a Grow writes nothing.
-    let b0: [i64] = blob_copy(st, se);
-    let rw: i64 = rec_bound(b0);
+    // Room for the rewritten record before the first effect, so a Grow writes nothing. The same blob copy feeds
+    // close_rec: reserve does not change the record, so it is not copied twice.
+    let b: [i64] = blob_copy(st, se);
+    let rw: i64 = rec_bound(b);
     let g: i64 = reserve(inout st, rw + 8);
     if g != 0 { return grow(g); }
+    push(inout fx, 23);
+    crate::ent_u16::wr(inout out, 0, 1);
+    let r: [i64] = close_rec(inout st, sk, ss, sn, b, 1, now, inout bv, inout fx);
+    let w: i64 = store(inout st, sk, ss, sn, r);
+    if w != 0 { return w; }
+    push(inout fx, 20);
+    crate::ent_u16::wr(inout out, 0, 2);
+    return 0;
   }
   push(inout fx, 23);
   crate::ent_u16::wr(inout out, 0, 1);
@@ -667,11 +676,5 @@ pub fn maybe_close(inout st: [i64], sk: [i64], ss: i64, sn: i64, quiet: i64, now
     crate::ent_u16::wr(inout out, 0, 2);
     return 0;
   }
-  let b: [i64] = blob_copy(st, se);
-  let r: [i64] = close_rec(inout st, sk, ss, sn, b, 1, now, inout bv, inout fx);
-  let w: i64 = store(inout st, sk, ss, sn, r);
-  if w != 0 { return w; }
-  push(inout fx, 20);
-  crate::ent_u16::wr(inout out, 0, 2);
-  return 0;
+  return 2;
 }
