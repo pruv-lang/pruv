@@ -1,0 +1,117 @@
+// L3-10 M8: activity accounting on a budget (spec §4.3 charge, noteFailure, the counting half of noteTool; §8, §9).
+// The run-time side (CURRENT, the tool dedup set, halt) is the caller's: bud_tools.pruv owns the dedup set and the
+// halt sub-operation (§4.5) is M10. Interface: bench/l3/budget/M8_NOTES.md, section "Sub-operation interface".
+//
+// Charge view frame `cv` (inout, >= 15 words, the caller's budget record until the M7 record exists):
+//   cv[0] current (1 when CURRENT(ref) found this budget, else 0), cv[1] state (0 open, 1 halted, 2 closed),
+//   cv[2] unlimited (1 truthy), cv[3] halt.reason (-1 absent, 0 time, 1 delegations, 2 commands, 3 reviews, 4 checks),
+//   cv[4..7] limits.{delegations, commands, reviews, checks}, cv[8..11] used.{same four},
+//   cv[12] used.tools, cv[13] used.failures, cv[14] used.retries.
+// Charge argument `what[ws..ws+10)`: [kind, value] for delegations, commands, reviews, checks, retries in that order;
+//   kind 0 = missing / undefined, 1 = null, 2 = number (value). `what[key] ?? 0` is applied here.
+//
+// charge status:
+//   0      {ok: true}, the amounts were added
+//   1      {ok: true}, nothing charged (no current budget, or a closed one)
+//   16 + r {ok: false, reason: r} for a halted budget (r = cv[3]; an absent halt reports 1 'delegations', the
+//          excluded-domain row §15 #27)
+//   32 + k over limit on key k (1..4): nothing is charged; the caller must run the halt sub-operation halt(ref, k)
+//          and then answer {ok: false, reason: k}
+//   5      ResourceBound(number): a counter would leave the safe-integer range; nothing written
+//   2      invalid frame
+
+fn rd(a: [i64], i: i64) -> i64
+{ return crate::ent_u16::rd(a, i); }
+
+fn wr(inout a: [i64], i: i64, v: i64) -> ()
+  ensures len(a) == len(old(a))
+{ crate::ent_u16::wr(inout a, i, v); }
+
+// `what[key] ?? 0` for key slot k (0..4)
+fn amount(what: [i64], ws: i64, k: i64) -> i64
+  requires 0 <= ws && ws + 10 <= len(what) && 0 <= k && k <= 4
+{
+  if what[ws + 2 * k] != 2 { return 0; }
+  return what[ws + 2 * k + 1];
+}
+
+// u + a when both and the sum are JS safe integers, else BAD (the ResourceBound signal)
+fn bad() -> i64 { return -4611686018427387904; }
+
+fn sum(u: i64, a: i64) -> i64
+{
+  if u < -9007199254740991 || u > 9007199254740991 { return bad(); }
+  if a < -9007199254740991 || a > 9007199254740991 { return bad(); }
+  let r: i64 = u + a;
+  if r < -9007199254740991 || r > 9007199254740991 { return bad(); }
+  return r;
+}
+
+pub fn charge(inout cv: [i64], what: [i64], ws: i64) -> i64
+  requires 0 <= ws && ws <= 1099511627776
+  ensures len(cv) == len(old(cv))
+{
+  if len(cv) < 15 || ws > len(what) - 10 { return 2; }
+  // len(cv) >= 15 and ws + 10 <= len(what) from here: cv and what are read with plain indexing
+  if cv[0] != 1 { return 1; }
+  let s: i64 = cv[1];
+  if s == 2 { return 1; }
+  if s == 1 {
+    let r: i64 = cv[3];
+    if r < 0 { return 17; }
+    if r > 4 { return 2; }
+    return 16 + r;
+  }
+  if s != 0 { return 2; }
+  let unl: bool = cv[2] == 1;
+  // each amount is read once; keys in BUDGET_COUNT_KEYS order, then retries
+  let a0: i64 = amount(what, ws, 0);
+  let a1: i64 = amount(what, ws, 1);
+  let a2: i64 = amount(what, ws, 2);
+  let a3: i64 = amount(what, ws, 3);
+  let a4: i64 = amount(what, ws, 4);
+  // limit checks: the first key over its limit refuses (33 + k); a ResourceBound on the way answers 5
+  if !unl {
+    if a0 > 0 { let t0: i64 = sum(cv[8], a0); if t0 == bad() { return 5; } if t0 > cv[4] { return 33; } }
+    if a1 > 0 { let t1: i64 = sum(cv[9], a1); if t1 == bad() { return 5; } if t1 > cv[5] { return 34; } }
+    if a2 > 0 { let t2: i64 = sum(cv[10], a2); if t2 == bad() { return 5; } if t2 > cv[6] { return 35; } }
+    if a3 > 0 { let t3: i64 = sum(cv[11], a3); if t3 == bad() { return 5; } if t3 > cv[7] { return 36; } }
+  }
+  // all sums first, then the writes (atomic: a ResourceBound leaves the record untouched)
+  let v0: i64 = sum(cv[8], a0);
+  let v1: i64 = sum(cv[9], a1);
+  let v2: i64 = sum(cv[10], a2);
+  let v3: i64 = sum(cv[11], a3);
+  let v4: i64 = sum(cv[14], a4);
+  if v0 == bad() || v1 == bad() || v2 == bad() || v3 == bad() || v4 == bad() { return 5; }
+  cv[8] = v0;
+  cv[9] = v1;
+  cv[10] = v2;
+  cv[11] = v3;
+  cv[14] = v4;
+  return 0;
+}
+
+// counter field f += 1 when the budget is current (any state: §15 #7); 0 done (or nothing to count), 5 ResourceBound,
+// 2 invalid frame.
+fn bump(inout cv: [i64], f: i64) -> i64
+  requires 12 <= f && f <= 14
+  ensures len(cv) == len(old(cv))
+{
+  if len(cv) < 15 { return 2; }
+  if cv[0] != 1 { return 0; }
+  let v: i64 = sum(cv[f], 1);
+  if v == bad() { return 5; }
+  cv[f] = v;
+  return 0;
+}
+
+// noteFailure(ref) after CURRENT: used.failures += 1.
+pub fn note_failure(inout cv: [i64]) -> i64
+  ensures len(cv) == len(old(cv))
+{ return bump(inout cv, 13); }
+
+// The counting half of noteTool, run after bud_tools::note_tool inserted a new activity and CURRENT: used.tools += 1.
+pub fn add_tool(inout cv: [i64]) -> i64
+  ensures len(cv) == len(old(cv))
+{ return bump(inout cv, 12); }

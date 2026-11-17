@@ -351,7 +351,8 @@ def ns_of(line):
 def perf(harness, runs):
     node = [NODE, '--experimental-strip-types', '--no-warnings', '--import', (BUDGET / 'reference-hooks.mjs').as_uri(),
             HERE / 'perf_ts.mjs']
-    items = [('A', u, max(200, 200000 // u)) for u in (100, 300, 1000)] + [('B', n, max(5, 20000 // n)) for n in (100, 500, 1000)] + \
+    # item A at size 1000 is the cheap error path (~20 ns): enough reps that one run is not a few microseconds of cold start
+    items = [('A', u, max(2000, 2000000 // u)) for u in (100, 300, 1000)] + [('B', n, max(5, 20000 // n)) for n in (100, 500, 1000)] + \
         [('C', n, max(5, 20000 // n)) for n in (100, 1000)]
     # the hand baseline must write the same result words as the Pruv entry (same work), incl. every optional field
     chk = sh([harness], data='handcheck\n').stdout.strip()
@@ -361,10 +362,16 @@ def perf(harness, runs):
     rows = []
     for item, size, reps in items:
         pv, hv, tv = [], [], []
-        for _ in range(runs):
-            out = sh([harness], data=f'perf{item} {size} {reps}\nhand{item} {size} {reps}\n').stdout.splitlines()
-            pv.append(ns_of(out[0]))
-            hv.append(ns_of(out[1]))
+        for r in range(runs):
+            # alternate which side runs first in the process, so neither always pays the cold start
+            if r % 2 == 0:
+                out = sh([harness], data=f'perf{item} {size} {reps}\nhand{item} {size} {reps}\n').stdout.splitlines()
+                pv.append(ns_of(out[0]))
+                hv.append(ns_of(out[1]))
+            else:
+                out = sh([harness], data=f'hand{item} {size} {reps}\nperf{item} {size} {reps}\n').stdout.splitlines()
+                hv.append(ns_of(out[0]))
+                pv.append(ns_of(out[1]))
             if item != 'C':
                 r = sh(node + [item, size, reps], cwd=BUDGET, env=TS_ENV())
                 tv.append(ns_of(r.stdout.strip() or 'TS failed: ' + r.stderr[-500:]))

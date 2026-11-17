@@ -1,0 +1,41 @@
+// L3-10 M8: the per-turn tool activity sets (spec §4.3 noteTool / forgetTurn, §9). toolSeen lives in the bud_map world:
+// root 2 holds one entry per turnId (in insertion order), whose children are the activityIds seen in that turn
+// (in insertion order). Keys are (array, start, length) and have been validated by the caller.
+//
+// note_tool status: 0 already seen (noteTool returns without CURRENT), 1 inserted (the caller runs CURRENT and then
+// bud_charge::add_tool), -N Grow(N) (nothing written; grow the buffer and retry), 2 invalid.
+// The turn entry is created together with its first activity, so a turn set is never left empty; a missing or stale
+// budget still consumes the dedup key (§15 #6).
+
+pub fn note_tool(inout st: [i64], tkey: [i64], tks: i64, tkn: i64, akey: [i64], aks: i64, akn: i64) -> i64
+{
+  let t: i64 = crate::bud_map::find(st, 2, tkey, tks, tkn);
+  let mut ents: i64 = 2;
+  let mut words: i64 = crate::bud_store::c32(tkn) + crate::bud_store::c32(akn);
+  if t >= 0 {
+    if crate::bud_map::find(st, t, akey, aks, akn) >= 0 { return 0; }
+    ents = 1;
+    words = crate::bud_store::c32(akn);
+  }
+  let nd: i64 = crate::bud_map::make_room(inout st, ents, words);
+  if nd != 0 {
+    if nd < 0 { return 2; }
+    return -nd;
+  }
+  let mut tt: i64 = t;
+  if tt < 0 { tt = crate::bud_map::add(inout st, 2, tkey, tks, tkn); }
+  if tt < 0 { return 2; }
+  let x: i64 = crate::bud_map::add(inout st, tt, akey, aks, akn);
+  if x < 0 { return 2; }
+  return 1;
+}
+
+// forgetTurn(turnId): removes the turn and frees its activities, O(turnId length + activities of the turn).
+// 1 removed, 0 absent.
+pub fn forget_turn(inout st: [i64], tkey: [i64], tks: i64, tkn: i64) -> i64
+{
+  let t: i64 = crate::bud_map::find(st, 2, tkey, tks, tkn);
+  if t < 0 { return 0; }
+  crate::bud_map::remove(inout st, t);
+  return 1;
+}
