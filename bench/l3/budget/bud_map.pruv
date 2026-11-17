@@ -395,20 +395,41 @@ fn put_key_h(inout st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, 
     crate::bud_store::entry_free(inout st, e);
     return -1;
   }
-  sf(inout st, e, 5, n);
-  sf(inout st, e, 6, h);
-  // append at the owner's tail
-  let t: i64 = gf(st, owner, 10);
-  sf(inout st, e, 7, t);
-  sf(inout st, e, 8, -1);
-  if t >= 0 {
-    sf(inout st, t, 8, e);
+  let be: i64 = crate::bud_store::eb(st, e);
+  let bo: i64 = crate::bud_store::eb(st, owner);
+  if be >= 0 && bo >= 0 {
+    // The gf/sf sequence below on direct words, same order (bud_store::eb; e, owner and t may alias on a corrupt
+    // buffer, which the ordered word accesses handle the same way).
+    st[be + 5] = n;
+    st[be + 6] = h;
+    let t: i64 = st[bo + 10];
+    st[be + 7] = t;
+    st[be + 8] = -1;
+    if t >= 0 {
+      let bt: i64 = crate::bud_store::eb(st, t);
+      if bt >= 0 { st[bt + 8] = e; } else { sf(inout st, t, 8, e); }
+    } else {
+      st[bo + 9] = e;
+    }
+    st[bo + 10] = e;
+    let oc: i64 = crate::bud_store::c32(st[bo + 11]);
+    st[bo + 11] = oc + 1;
   } else {
-    sf(inout st, owner, 9, e);
+    sf(inout st, e, 5, n);
+    sf(inout st, e, 6, h);
+    // append at the owner's tail
+    let t: i64 = gf(st, owner, 10);
+    sf(inout st, e, 7, t);
+    sf(inout st, e, 8, -1);
+    if t >= 0 {
+      sf(inout st, t, 8, e);
+    } else {
+      sf(inout st, owner, 9, e);
+    }
+    sf(inout st, owner, 10, e);
+    let oc: i64 = crate::bud_store::c32(gf(st, owner, 11));
+    sf(inout st, owner, 11, oc + 1);
   }
-  sf(inout st, owner, 10, e);
-  let oc: i64 = crate::bud_store::c32(gf(st, owner, 11));
-  sf(inout st, owner, 11, oc + 1);
   // index slot
   let old: i64 = crate::ent_u16::rd(st, slot);
   let used: i64 = crate::bud_store::c32(hw(st, 13));
@@ -423,10 +444,21 @@ fn drop_entry(inout st: [i64], e: i64) -> ()
 {
   let top: i64 = crate::bud_store::c32(hw(st, 7));
   if e < 3 || e >= top { return; }
-  if gf(st, e, 0) != 1 { return; }
-  let sl: i64 = slot_of(st, e, gf(st, e, 6));
-  if sl >= 0 { crate::ent_u16::wr(inout st, sl, -1); }
-  let kw: i64 = crate::bud_store::c32(gf(st, e, 5)) + crate::bud_store::c40(gf(st, e, 13));
+  let b: i64 = crate::bud_store::eb(st, e);
+  let mut kw: i64 = 0;
+  if b >= 0 {
+    // gf on direct words, same order (bud_store::eb); the slot write may land anywhere on a corrupt buffer, so the
+    // key and blob lengths are read after it as before.
+    if st[b] != 1 { return; }
+    let sl: i64 = slot_of(st, e, st[b + 6]);
+    if sl >= 0 { crate::ent_u16::wr(inout st, sl, -1); }
+    kw = crate::bud_store::c32(st[b + 5]) + crate::bud_store::c40(st[b + 13]);
+  } else {
+    if gf(st, e, 0) != 1 { return; }
+    let sl: i64 = slot_of(st, e, gf(st, e, 6));
+    if sl >= 0 { crate::ent_u16::wr(inout st, sl, -1); }
+    kw = crate::bud_store::c32(gf(st, e, 5)) + crate::bud_store::c40(gf(st, e, 13));
+  }
   let lw: i64 = crate::bud_store::c40(hw(st, 14));
   if lw > kw {
     sh(inout st, 14, lw - kw);
@@ -465,8 +497,11 @@ pub fn remove(inout st: [i64], e: i64) -> ()
     decreases b
   {
     b = b - 1;
-    let nc: i64 = gf(st, c, 8);
-    if gf(st, c, 1) == e { drop_entry(inout st, c); }
+    let bc: i64 = crate::bud_store::eb(st, c);
+    let mut nc: i64 = 0;
+    let mut co: i64 = 0;
+    if bc >= 0 { nc = st[bc + 8]; co = st[bc + 1]; } else { nc = gf(st, c, 8); co = gf(st, c, 1); }
+    if co == e { drop_entry(inout st, c); }
     c = nc;
   }
   drop_entry(inout st, e);
