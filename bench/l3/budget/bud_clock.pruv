@@ -1,0 +1,358 @@
+// L3-10 M9: the run clock (spec §5.1-§5.7, §8.1). Run methods (runStarted / runWaiting / runEnded) and the clock
+// sub-operations REFRESH, BEGIN, ARM, SETTLE, FIRE, DROP, CLOSE as named entries for lifecycle (M7) and halt/decide
+// (M10). Interface and frames: bench/l3/budget/M9_NOTES.md, section "Sub-operation interface".
+//
+// Clock state lives in the bud_map world (root 1 = clocks keyed by budgetId, blob = owning sessionId units):
+//   field 14 since-present (0/1), 15 since (ms), 16 armed (0/1: a timer is requested and not yet cleared or
+//   delivered), 17 deadline (now + effective delay; kept for the host / observation, not used by a judgment).
+// Runs are children of the clock entry keyed by runKey; field 14 = waiting (0/1).
+//
+// Budget view frame `bv` (inout, the caller's budget record until the M7 record exists):
+//   bv[0] current (1 when CURRENT(ref) found this budget, else 0), bv[1] state (0 open, 1 halted, 2 closed),
+//   bv[2] unlimited (1 true), bv[3] limits.timeMinutes, bv[4] used.activeMs,
+//   bv[5] activeSince (0 absent, 1 a persisted value the clock has not touched, 2 = ISO(bv[6]) set by BEGIN),
+//   bv[6] since ms for bv[5] == 2.
+// The caller formats activeSince text with bud_date when it writes the record back.
+//
+// Effect frame `fx` (inout): fx[0] = words used, records appended after it in order:
+//   [12, requested delay, effective delay] timerSet(budgetId)   (effective = 1 when requested > 2147483647)
+//   [13]                                   timerClear(budgetId)
+// The budgetId of every record is the addressed budget. One public sub-operation appends at most 3 words; it
+// returns 3 without any write unless fx[0] + 4 <= len(fx).
+//
+// Status of every public entry: 0 done, 4 done + HALT_TIME (the caller must run halt(ref, 'time'); SETTLE already
+// ran), 2 invalid (corrupt state), 3 fx too small, -N Grow(N) (nothing written; grow the buffer and retry).
+// Keys are (array, start, length) and have been validated by the caller.
+
+fn cl(x: i64) -> i64
+  ensures 0 <= result && result <= 4294967296
+{ return crate::bud_store::c32(x); }
+
+// x clamped into -2^53..2^53 (every clock number is a JS safe integer in the domain)
+fn sc(x: i64) -> i64
+  ensures -9007199254740992 <= result && result <= 9007199254740992
+{
+  if x < -9007199254740992 { return -9007199254740992; }
+  if x > 9007199254740992 { return 9007199254740992; }
+  return x;
+}
+
+fn bget(bv: [i64], i: i64) -> i64
+{ return crate::ent_u16::rd(bv, i); }
+
+fn bset(inout bv: [i64], i: i64, v: i64) -> ()
+{ crate::ent_u16::wr(inout bv, i, v); }
+
+fn ef(st: [i64], e: i64, f: i64) -> i64
+{ return crate::bud_store::ef(st, e, f); }
+
+// limits.timeMinutes * 60000 with timeMinutes clamped into -2^37..2^37 (a larger limit is never reached).
+fn limit_ms(bv: [i64]) -> i64
+  ensures -8246337208320000 <= result && result <= 8246337208320000
+{
+  let mut t: i64 = bget(bv, 3);
+  if t < -137438953472 { t = -137438953472; }
+  if t > 137438953472 { t = 137438953472; }
+  return t * 60000;
+}
+
+// ---- effect frame ----
+
+pub fn fx_ok(fx: [i64]) -> bool
+{
+  let p: i64 = crate::bud_store::c40(crate::ent_u16::rd(fx, 0));
+  return p + 4 <= len(fx);
+}
+
+fn push(inout fx: [i64], v: i64) -> ()
+{
+  let p: i64 = crate::bud_store::c40(crate::ent_u16::rd(fx, 0));
+  if p + 1 >= len(fx) { return; }
+  crate::ent_u16::wr(inout fx, p + 1, v);
+  crate::ent_u16::wr(inout fx, 0, p + 1);
+}
+
+fn grow_status(n: i64) -> i64
+{
+  return 0 - crate::bud_store::c40(n);
+}
+
+// ---- lookups ----
+
+// Clock entry of the budget, or -1.
+pub fn clock_of(st: [i64], bk: [i64], bs: i64, bn: i64) -> i64
+{ return crate::bud_map::find(st, 1, bk, bs, bn); }
+
+// Copies the owning sessionId of the budget's clock into dst (from 0) and returns its length; -1 without a clock.
+// The timer callback ref of FIRE is (this sessionId, budgetId): the clock owner is the session of the ref that
+// armed it (two current sessions never share a budgetId, §15.1 #10).
+pub fn clock_owner(st: [i64], bk: [i64], bs: i64, bn: i64, inout dst: [i64]) -> i64
+{
+  let ce: i64 = clock_of(st, bk, bs, bn);
+  if ce < 0 { return -1; }
+  let n: i64 = crate::bud_map::blob_len(st, ce);
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && n <= 1099511627776
+    decreases n - j
+  {
+    crate::ent_u16::wr(inout dst, j, crate::bud_map::blob_unit(st, ce, j));
+    j = j + 1;
+  }
+  return n;
+}
+
+// 1 when the budget's clock has an armed timer, else 0 (host-side stale-delivery check is not needed: FIRE does it).
+pub fn armed(st: [i64], bk: [i64], bs: i64, bn: i64) -> i64
+{
+  let ce: i64 = clock_of(st, bk, bs, bn);
+  if ce < 0 { return 0; }
+  if ef(st, ce, 16) == 1 { return 1; }
+  return 0;
+}
+
+// Does the clock's owner blob equal the sessionId key?
+fn owner_is(st: [i64], ce: i64, sk: [i64], ss: i64, sn: i64) -> bool
+{
+  let n: i64 = crate::bud_map::blob_len(st, ce);
+  if n != sn { return false; }
+  if ss < 0 || ss > 1099511627776 { return false; }
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && n <= 1099511627776
+    decreases n - j
+  {
+    if crate::bud_map::blob_unit(st, ce, j) != crate::ent_u16::rd(sk, ss + j) { return false; }
+    j = j + 1;
+  }
+  return true;
+}
+
+// Some run of the clock is not waiting (one pass over the runs, O(R)).
+// Same walk as head/next + ef(e, 14) (an entry index outside the capacity reads field 14 as -1, i.e. "not waiting"),
+// but the entry base is read from the header once instead of on every field access (perf, M9_NOTES "Perf").
+fn any_active(st: [i64], ce: i64) -> bool
+{
+  let lim: i64 = crate::bud_map::walk_limit(st);
+  let b0: i64 = crate::bud_store::field_addr(st, 0);
+  let mut steps: i64 = 0;
+  let mut e: i64 = crate::bud_map::head(st, ce);
+  if b0 < 0 { return e >= 0; }
+  while e >= 0 && steps < lim
+    invariant 0 <= steps && steps <= lim && lim <= 4294967296 && 0 <= b0 && b0 <= 1099511627776
+    decreases lim - steps
+  {
+    if e >= lim { return true; }
+    let a: i64 = b0 + e * 20;
+    if crate::ent_u16::rd(st, a + 14) != 1 { return true; }
+    steps = steps + 1;
+    e = crate::ent_u16::rd(st, a + 8);
+  }
+  return false;
+}
+
+// ---- sub-operations on a clock entry (ce from clock_of) ----
+
+// SETTLE (§5.4): adds the open consuming interval to used.activeMs, clears the timer. Returns the added ms.
+pub fn settle_at(inout st: [i64], ce: i64, sk: [i64], ss: i64, sn: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> i64
+{
+  if ce < 0 { return 0; }
+  if !owner_is(st, ce, sk, ss, sn) { return 0; }
+  if ef(st, ce, 16) == 1 { push(inout fx, 13); }
+  crate::bud_store::set_ef(inout st, ce, 16, 0);
+  crate::bud_store::set_ef(inout st, ce, 17, 0);
+  if ef(st, ce, 14) != 1 { return 0; }
+  let mut added: i64 = sc(now) - sc(ef(st, ce, 15));
+  if added < 0 { added = 0; }
+  crate::bud_store::set_ef(inout st, ce, 14, 0);
+  crate::bud_store::set_ef(inout st, ce, 15, 0);
+  bset(inout bv, 5, 0);
+  bset(inout bv, 6, 0);
+  let am: i64 = sc(bget(bv, 4));
+  bset(inout bv, 4, sc(am + added));
+  return added;
+}
+
+// BEGIN (§5.2): opens a consuming interval at now.
+pub fn begin_at(inout st: [i64], ce: i64, now: i64, inout bv: [i64]) -> ()
+{
+  if ce < 0 { return; }
+  crate::bud_store::set_ef(inout st, ce, 14, 1);
+  crate::bud_store::set_ef(inout st, ce, 15, sc(now));
+  bset(inout bv, 5, 2);
+  bset(inout bv, 6, sc(now));
+}
+
+// ARM (§5.3). Nonpositive left: the source's synchronous FIRE right after BEGIN always ends in SETTLE (adding 0)
+// followed by halt(ref, 'time') because activeMs >= limit; that is what this returns (status 4).
+pub fn arm_at(inout st: [i64], ce: i64, sk: [i64], ss: i64, sn: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> i64
+{
+  if ce < 0 { return 0; }
+  if bget(bv, 2) == 1 { return 0; }
+  let left: i64 = limit_ms(bv) - sc(bget(bv, 4));
+  if left <= 0 {
+    crate::bud_store::set_ef(inout st, ce, 16, 0);
+    let a: i64 = settle_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
+    return 4;
+  }
+  let mut eff: i64 = left;
+  if left > 2147483647 { eff = 1; }
+  push(inout fx, 12);
+  push(inout fx, left);
+  push(inout fx, eff);
+  crate::bud_store::set_ef(inout st, ce, 16, 1);
+  crate::bud_store::set_ef(inout st, ce, 17, sc(now) + eff);
+  return 0;
+}
+
+// REFRESH (§5.1): reacts only when the consuming predicate differs from since-present.
+pub fn refresh_at(inout st: [i64], ce: i64, sk: [i64], ss: i64, sn: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> i64
+{
+  if ce < 0 { return 0; }
+  if bget(bv, 0) != 1 { return 0; }
+  let consuming: bool = bget(bv, 1) == 0 && any_active(st, ce);
+  let has: bool = ef(st, ce, 14) == 1;
+  if consuming == has { return 0; }
+  if !consuming {
+    let a: i64 = settle_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
+    return 0;
+  }
+  begin_at(inout st, ce, now, inout bv);
+  return arm_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
+}
+
+// FIRE (§5.5, §8.1): the host's timer delivery. A delivery with no armed timer (unknown, cleared, already
+// delivered) is a no-op decided here (F06). Otherwise the timer is consumed first; a budget that is no longer
+// current, open and limited stops there; else SETTLE, then re-arm while time is left and runs exist, or HALT_TIME.
+pub fn fire_at(inout st: [i64], ce: i64, sk: [i64], ss: i64, sn: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> i64
+{
+  if ce < 0 { return 0; }
+  if ef(st, ce, 16) != 1 { return 0; }
+  crate::bud_store::set_ef(inout st, ce, 16, 0);
+  crate::bud_store::set_ef(inout st, ce, 17, 0);
+  if bget(bv, 0) != 1 || bget(bv, 1) != 0 || bget(bv, 2) == 1 { return 0; }
+  let a: i64 = settle_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
+  if sc(bget(bv, 4)) < limit_ms(bv) && crate::bud_map::count(st, ce) > 0 {
+    begin_at(inout st, ce, now, inout bv);
+    return arm_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
+  }
+  return 4;
+}
+
+// DROP (dropClock): clears an armed timer and removes the clock with its runs.
+pub fn drop_at(inout st: [i64], ce: i64, inout fx: [i64]) -> ()
+{
+  if ce < 0 { return; }
+  if ef(st, ce, 16) == 1 { push(inout fx, 13); }
+  crate::bud_map::remove(inout st, ce);
+}
+
+// ---- public entries by key ----
+
+pub fn refresh(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: i64, sn: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> i64
+{
+  if !fx_ok(fx) { return 3; }
+  let ce: i64 = clock_of(st, bk, bs, bn);
+  return refresh_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
+}
+
+pub fn settle(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: i64, sn: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> i64
+{
+  if !fx_ok(fx) { return 3; }
+  let ce: i64 = clock_of(st, bk, bs, bn);
+  let a: i64 = settle_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
+  return 0;
+}
+
+pub fn fire(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: i64, sn: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> i64
+{
+  if !fx_ok(fx) { return 3; }
+  let ce: i64 = clock_of(st, bk, bs, bn);
+  return fire_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
+}
+
+pub fn drop(inout st: [i64], bk: [i64], bs: i64, bn: i64, inout fx: [i64]) -> i64
+{
+  if !fx_ok(fx) { return 3; }
+  let ce: i64 = clock_of(st, bk, bs, bn);
+  drop_at(inout st, ce, inout fx);
+  return 0;
+}
+
+// CLOSE, clock part (§5.7): SETTLE, state closed, DROP. The caller writes `ended` and saves.
+pub fn close(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: i64, sn: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> i64
+{
+  if !fx_ok(fx) { return 3; }
+  let ce: i64 = clock_of(st, bk, bs, bn);
+  let a: i64 = settle_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
+  bset(inout bv, 1, 2);
+  drop_at(inout st, ce, inout fx);
+  return 0;
+}
+
+// runStarted (B:286): needs CURRENT(ref); creates the clock (owner = ref.sessionId) and the run if missing, sets the
+// run not waiting, then REFRESH. Space for both entries is reserved before the first write.
+pub fn run_started(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: i64, sn: i64, rk: [i64], rs: i64, rn: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> i64
+{
+  if !fx_ok(fx) { return 3; }
+  if bget(bv, 0) != 1 { return 0; }
+  let ce0: i64 = clock_of(st, bk, bs, bn);
+  let mut ents: i64 = 0;
+  let mut words: i64 = 0;
+  if ce0 < 0 {
+    ents = 2;
+    words = cl(bn) + cl(sn) + cl(rn);
+  } else {
+    if crate::bud_map::find(st, ce0, rk, rs, rn) < 0 {
+      ents = 1;
+      words = cl(rn);
+    }
+  }
+  if ents > 0 {
+    let nd: i64 = crate::bud_map::make_room(inout st, ents, words);
+    if nd != 0 { return grow_status(nd); }
+  }
+  let mut ce: i64 = ce0;
+  if ce < 0 {
+    ce = crate::bud_map::add(inout st, 1, bk, bs, bn);
+    if ce < 0 { return 2; }
+    let r: i64 = crate::bud_map::set_blob(inout st, ce, sk, ss, sn);
+    if r < 0 { return 2; }
+  }
+  let mut re: i64 = crate::bud_map::find(st, ce, rk, rs, rn);
+  if re < 0 {
+    re = crate::bud_map::add(inout st, ce, rk, rs, rn);
+    if re < 0 { return 2; }
+  }
+  crate::bud_store::set_ef(inout st, re, 14, 0);
+  return refresh_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
+}
+
+// runWaiting (B:292): no CURRENT check before the run update (a stale ref still flips the run; its REFRESH then
+// stops at CURRENT, §15.1). Unchanged waiting returns without REFRESH.
+pub fn run_waiting(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: i64, sn: i64, rk: [i64], rs: i64, rn: i64, waiting: bool, now: i64, inout bv: [i64], inout fx: [i64]) -> i64
+{
+  if !fx_ok(fx) { return 3; }
+  let ce: i64 = clock_of(st, bk, bs, bn);
+  if ce < 0 { return 0; }
+  let re: i64 = crate::bud_map::find(st, ce, rk, rs, rn);
+  if re < 0 { return 0; }
+  let was: bool = ef(st, re, 14) == 1;
+  if was == waiting { return 0; }
+  let mut w: i64 = 0;
+  if waiting { w = 1; }
+  crate::bud_store::set_ef(inout st, re, 14, w);
+  return refresh_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
+}
+
+// runEnded (B:299): removes the run; REFRESH only when a run was removed.
+pub fn run_ended(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: i64, sn: i64, rk: [i64], rs: i64, rn: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> i64
+{
+  if !fx_ok(fx) { return 3; }
+  let ce: i64 = clock_of(st, bk, bs, bn);
+  if ce < 0 { return 0; }
+  let re: i64 = crate::bud_map::find(st, ce, rk, rs, rn);
+  if re < 0 { return 0; }
+  crate::bud_map::remove(inout st, re);
+  return refresh_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
+}
