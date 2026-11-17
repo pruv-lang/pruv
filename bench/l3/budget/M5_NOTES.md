@@ -177,3 +177,18 @@ each run min of 5 reps. The table shows the median over the rounds.
 Audit (one, Codex gpt-6-astra ultra): no required finding. One advisory, applied: a `removeSession` that removed
 nothing rebuilt the index. It now rebuilds only when the store shrank.
 Builds: 3 (base, change, audit fix). The compiler was not rebuilt.
+
+## Perf headroom against hand-written Rust
+
+See `perf_headroom/HOST.md` for the hand Rust baselines, the store_find breakdown and the method. Host-side
+allocation cuts brought the numbers to the following (medians of 5 alternating rounds, ns per op, n = 100/500/1000):
+
+- store_save: 175 / 172 / 171, 1.30–1.35× hand Rust. Before: 307–330.
+- store_find_lookup (a new harness measure of the string-id lookup helper only): 13.8 / 15.0 / 16.2, 1.18–1.29× hand
+  Rust with UTF-16 keys. Before: 33 at n=1000.
+- store_find with the JV encode: 365 / 434 / 394.
+  - Against a hand frame built as an owned tree, it is 1.27–1.48×, and 1.11–1.21× for the encode alone.
+  - Against hand code that writes the frame as text, it is 5.1–5.8×.
+  - This is won't-fix: the encode is trace-only apparatus.
+
+Correctness after the change is still exact=300, unexplained=0, determinism identical.

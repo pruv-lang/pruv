@@ -186,12 +186,36 @@ impl World {
         self.idx = m;
     }
 
+    fn find_key(&self, u: &[u16]) -> Option<usize> {
+        self.idx.get(u).and_then(|&p| match self.stored[p] {
+            Slot::Obj(h) => Some(h),
+            _ => None,
+        })
+    }
+
+    // A string id as UTF-16 units in a stack buffer when it fits (no allocation per lookup).
+    fn find_str(&self, id: &str) -> Option<usize> {
+        let mut buf = [0u16; 64];
+        let mut k = 0;
+        let mut it = id.encode_utf16();
+        while let Some(c) = it.next() {
+            if k == buf.len() {
+                // Longer than the buffer: continue on the heap from where the buffer ends.
+                let mut v = Vec::with_capacity(id.len());
+                v.extend_from_slice(&buf);
+                v.push(c);
+                v.extend(it);
+                return self.find_key(&v);
+            }
+            buf[k] = c;
+            k += 1;
+        }
+        self.find_key(&buf[..k])
+    }
+
     fn find_h(&self, id: &V) -> Option<usize> {
         if let V::Str(u) = id {
-            return self.idx.get(u).and_then(|&p| match self.stored[p] {
-                Slot::Obj(h) => Some(h),
-                _ => None,
-            });
+            return self.find_key(u);
         }
         for s in &self.stored {
             if let Slot::Obj(h) = s {
@@ -482,9 +506,13 @@ impl World {
     }
 
     // findSession as a world query without trace (perf): the encoded result.
+    // Lookup only: the stored session's heap handle (the lookup step of a non-tracing find; perf breakdown).
+    pub fn find_session(&self, id: &str) -> Option<usize> {
+        self.find_str(id)
+    }
+
     pub fn find_session_enc(&mut self, id: &str) -> J {
-        let idv = V::Str(u16s(id));
-        match self.find_h(&idv) {
+        match self.find_str(id) {
             Some(h) => self.heap.enc(&V::Sess(h)),
             None => J::Obj(vec![(ku("undef"), J::int(1))]),
         }
