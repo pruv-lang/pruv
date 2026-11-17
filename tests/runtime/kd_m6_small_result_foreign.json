@@ -1,0 +1,1 @@
+{"backends": ["rust"], "flags_matrix": [[]], "exit": 0, "stdout_lines": ["3", "8"], "gen_contains": ["fn mkp__pruv_small(pruv_sb: &mut [i64; 8], n: i64) -> usize {"], "gen_absent": ["mkf__pruv_small", "pruv_sb_rf"]}

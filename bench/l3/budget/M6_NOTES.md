@@ -37,8 +37,9 @@ Interface notes:
 
 - **KD-M6-1**: arithmetic whose exact result leaves the safe integral domain -> excluded-domain in Pruv (JS rounds silently).
 - **KD-M6-2**: languages that are `Object.prototype` property names -> excluded-domain in Pruv (JS returns the inherited property).
-- **KD-M6-3** (performance, not behaviour): String(int) is above TS at n = 1000 (about 30 vs 24 ns); profiled: the
-  per-call result allocation and free are about 80% of the cost. See Performance.
+- **KD-M6-3** (performance, not behaviour), resolved 2026-11-17: String(int) was above TS at n = 1000 (about 30 vs
+  24 ns) because the per-call result allocation and free were about 80% of the cost. Short contract-bounded results
+  now live in a caller stack buffer (docs/SMALL_RESULT_SPEC.md): 15-18 ns at every size, below TS. See Performance.
 
 ## Open spec questions
 
@@ -120,4 +121,23 @@ generation features in both compilers, to be designed before implementing:
    call site does not let the result escape, pass a stack array instead of a `Vec`. This also helps single calls,
    but needs an escape check at the call site and a length bound in the contract.
 
-Until one of these lands, String(int) stays above TS at n = 1000 on this machine.
+Option 2 landed (docs/SMALL_RESULT_SPEC.md, RESULTS.md 143): `int_text` gained `ensures len(result) <= 17`, and in
+verified Rust mode both compilers emit an `int_text__pruv_small(&mut [i64; 17], x) -> usize` variant and rewrite the
+`p_int` loop binding and `amount_text`'s `ut` binding to a stack buffer (`limit_text`, which returns the call, stays
+on the heap). The table above is the run before the change. Same run, worktree compilers, 2026-11-17:
+
+| op | n = 100 / 500 / 1000 | py/rust | rs/rust | TS |
+|---|---|---|---|---|
+| iso | | 34.2 / 28.4 / 29.5 | 29.6 / 25.4 / 27.7 | 430 / 357 / 344 |
+| refusal | | 56.7 / 49.8 / 47.0 | 51.2 / 47.9 / 43.3 | 187 / 89 / 69 |
+| String(int) | | 17.1 / 14.9 / 16.8 | 18.8 / 15.2 / 17.5 | 52 / 53 / 23 |
+
+Every op is below TS at every size; correctness stays py/rust 300/300 and rs/rust 300/300. The hot `refusal` writes
+its digits with `put_int` directly and does not call `int_text`, so its row does not move.
+
+`amount_text` (a real budget flow, not in the perf ops) was measured outside this folder: a temporary copy of the M6
+driver with an extra `p_amt` loop over `amount_text(1, false, 12345 + d, 99999, 0)` (rs/rust, 60 cases exact each),
+compiled by the main-branch compiler and by the worktree compiler in the same session: 119.6 / 110.6 / 103.6 ns before,
+80.0 / 87.8 / 81.0 ns after (n = 100 / 500 / 1000). The remaining cost is the other allocations of this path
+(`one(47)`, `limit_text`, two `cat`s); its Node comparison was a plain `String(u) + "/" + String(limit)` (49 / 49 /
+15 ns), not a pinned helper, so it is no gate. Making that path single-allocation like `refusal` is a separate change.

@@ -1536,6 +1536,14 @@ class Gen:
         if s.g6:
             from foreign_codegen import ForeignGen
             s.fg = ForeignGen(s)
+        # KD-M6-3 (docs/SMALL_RESULT_SPEC.md): small array results on the stack, verified mode only
+        s.small, s.small_sites = {}, {}
+        s.small_o = None      # the local `o` while a __pruv_small variant is emitted
+        s.small_call = None   # the call being emitted as a rewritten call site, and the name of its binding
+        s.small_buf = None
+        if verified and not trust_callers and not s.cost_used:
+            from small import plan_small
+            s.small, s.small_sites = plan_small(prog, s.fmap, s.layout, s.stack)
 
     def emit(s, ind, line):
         s.out.append("    " * ind + line)
@@ -1686,6 +1694,8 @@ class Gen:
             s.emit(1, s.cost_check())
         s.emit(0, "}")
         s.emit(0, "")
+        if f.name in s.small:
+            s.small_fn(f, ps)
         if s.cost:
             # Use the requires evaluator on parameter views, including immutable views of inout.
             cps = ", ".join("%s: %s" % (p.name, s.rt(p.type, True)) for p in f.params)
@@ -1716,6 +1726,20 @@ class Gen:
                     s.entry(f, ps, ret, body_name, f.name + "__pruv_chk", False, True)
             else:
                 s.entry(f, ps, ret, body_name, f.name, False, True)
+
+    def small_fn(s, f, ps):
+        """KD-M6-3: the variant of a small function that writes its result into the caller's stack buffer"""
+        k, o = s.small[f.name]
+        s.emit(0, s.allow)
+        s.emit(0, "fn %s__pruv_small(pruv_sb: &mut [i64; %d]%s) -> usize {" % (f.name, k, ", " + ps if ps else ""))
+        saved = s.inouts
+        s.inouts = set(saved) | {o}
+        s.small_o = o
+        s.block(f.body, 1)
+        s.small_o = None
+        s.inouts = saved
+        s.emit(0, "}")
+        s.emit(0, "")
 
     @staticmethod
     def cost_add(units):
@@ -2600,6 +2624,22 @@ class Gen:
             s.emit(ind, "let %s%s: %s = %s;" % ("mut " if st.mutable else "", st.name, s.stack_type(st), s.stack_init(st)))
             s.vt[st.name] = st.type
             s.refs.discard(st.name)
+        elif isinstance(st, Let) and s.small_o is not None and st.name == s.small_o:
+            a = st.value.args
+            s.emit(ind, "let %s: &mut [i64] = { let pruv_n: i64 = %s; let pruv_v: i64 = %s; let pruv_s: &mut [i64] = "
+                        "&mut pruv_sb[..pruv_n as usize]; pruv_s.fill(pruv_v); pruv_s };" % (st.name, s.e(a[0]), s.e(a[1])))
+            s.vt[st.name] = st.type
+            s.refs.discard(st.name)
+        elif isinstance(st, Let) and id(st) in s.small_sites:
+            k = s.small_sites[id(st)][1]
+            s.small_call, s.small_buf = st.value, st.name
+            call = s.e(st.value)
+            s.small_call = None
+            s.emit(ind, "let mut pruv_sb_%s: [i64; %d] = [0i64; %d];" % (st.name, k, k))
+            s.emit(ind, "let pruv_sl_%s: usize = %s;" % (st.name, call))
+            s.emit(ind, "let %s: &[i64] = &pruv_sb_%s[..pruv_sl_%s];" % (st.name, st.name, st.name))
+            s.vt[st.name] = st.type
+            s.refs.discard(st.name)
         elif isinstance(st, Let):
             s.moving = s.last_copy(st)
             s.emit(ind, "let %s%s: %s = %s;" % ("mut " if st.mutable else "", st.name, s.rt(st.type, site=st), s.own_e(st.value)))
@@ -2656,6 +2696,8 @@ class Gen:
                 s.emit(ind + 1, s.cost_add("1"))
             s.block(st.body, ind + 1, loop=True)
             s.emit(ind, "}")
+        elif isinstance(st, Return) and s.small_o is not None and isinstance(st.value, Var) and st.value.name == s.small_o:
+            s.emit(ind, "return %s.len();" % s.small_o)
         elif isinstance(st, Return):
             s.moving = s.return_movable(st.value)
             if s.cost:
@@ -3030,6 +3072,8 @@ class Gen:
                     captured.append("let pruv_cost_arg_%d = %s;" % (i, arg))
                 args = ["pruv_cost_arg_%d" % i for i in range(len(args))]
                 captured.append(s.cost_call(n, args))
+            if e is s.small_call:
+                return "%s__pruv_small(&mut pruv_sb_%s%s)" % (n, s.small_buf, "".join(", " + x for x in args))
             if s.explicit:
                 n = s.callee(n)
             elif s.verified and n in s.has_req:

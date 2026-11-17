@@ -5247,7 +5247,7 @@ fn dummy_fn() -> Function {
         ret_refine: None,
         tparams: vec![],
         foreign: None,
-        cost: None, decreases: None,
+        cost: None, decreases: None, small_bound: None,
     }
 }
 
@@ -6335,7 +6335,7 @@ mod tests {
             ret_refine: None,
             tparams: vec![],
             foreign: None,
-            cost: None, decreases: None,
+            cost: None, decreases: None, small_bound: None,
         };
         let mut m = Mod::new();
         let mut g = FnGen::new(&mut m, &tt, &funcs, &f, false);
@@ -6362,7 +6362,7 @@ mod tests {
                 ret_refine: None,
                 tparams: vec![],
                 foreign: None,
-                cost: None, decreases: None,
+                cost: None, decreases: None, small_bound: None,
             }],
             refined: false,
             g9: None,

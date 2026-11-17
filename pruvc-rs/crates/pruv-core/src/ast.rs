@@ -278,6 +278,9 @@ pub struct Function {
     /// G9 A0: the `decreases Expr` clause of the function header (None = absent).
     pub decreases: Option<Expr>,
     pub cost: Option<Expr>,
+    /// KD-M6-3: K of the source `ensures len(result) <= K`, kept across specialization (Python `Function.small_bound`).
+    /// Not emitted in the dump.
+    pub small_bound: Option<i64>,
 }
 
 /// G9 A0: checker metadata recorded on the program and the type table, only when a G9 feature is present

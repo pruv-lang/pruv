@@ -47,6 +47,7 @@ from vast import *
 from typeinfo import (bind_args, decl_owner, encode, first_g3_use, format_type, spec_fn_stem, spec_type_stem,
                       substitute, COLLECTION_ARITY)
 from foreign import CATALOG   # G6: catalog calls keep their name (never specialized)
+from small import declared_bound   # KD-M6-3: the stack-result bound survives specialization
 from modules import encode_name, encode_stem, identity_components, safe_type   # G4 A2: shared symbol encoding
 
 
@@ -437,8 +438,9 @@ class _Mono:
                        body=self.cp(f.body), ret_refine=self.cp(f.ret_refine))
         if f.cost is not None:
             new.cost = self.cp(f.cost)
+        new.small_bound = declared_bound(f)
         new.private = private
-        new.file = f.file   # explicit mode: later codegen diagnostics keep the source file (Rust: the tagged line)
+        new.file = f.file  # explicit mode: later codegen diagnostics keep the source file (Rust: the tagged line)
         if f.foreign is not None:
             new.foreign = f.foreign
         return self._mark_fn(new, f, private)

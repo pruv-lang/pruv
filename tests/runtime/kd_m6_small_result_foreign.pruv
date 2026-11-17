@@ -1,0 +1,61 @@
+// KD-M6-3 rule 5: a body that reaches a trusted rust fn (here through clamp8) keeps its result on the heap, because
+// the contract of a trusted function is not proved and the bound at the alloc would rest on it.
+
+trusted rust fn rust_min(a: i64, b: i64) -> i64
+  ensures result <= a && result <= b
+  ensures result == a || result == b
+  = "::std::cmp::min";
+
+fn clamp8(n: i64) -> i64
+  requires 1 <= n
+  ensures 1 <= result && result <= 8
+{
+  return rust_min(n, 8);
+}
+
+fn fill_up(inout o: [i64], v: i64) -> ()
+  requires 0 <= v && v <= 1000
+  requires len(o) <= 100
+  ensures len(o) == len(old(o))
+{
+  let mut i: i64 = 0;
+  while i < len(o)
+    invariant 0 <= i && i <= len(o) && len(o) == len(old(o)) && len(o) <= 100 && 0 <= v && v <= 1000
+    decreases len(o) - i
+  {
+    o[i] = v + i;
+    i = i + 1;
+  }
+}
+
+fn mkf(n: i64) -> [i64] ! alloc
+  requires 1 <= n && n <= 20
+  ensures len(result) <= 8
+{
+  let m: i64 = clamp8(n);
+  let mut o: [i64] = alloc(m, 0);
+  fill_up(inout o, 1);
+  return o;
+}
+
+// the same body without the trusted call is a small function
+fn mkp(n: i64) -> [i64] ! alloc
+  requires 1 <= n && n <= 8
+  ensures len(result) <= 8
+{
+  let mut o: [i64] = alloc(n, 0);
+  fill_up(inout o, 1);
+  return o;
+}
+
+fn use_f(n: i64) -> () ! alloc, io
+  requires 1 <= n && n <= 20
+{
+  let rf: [i64] = mkf(n);
+  print(len(rf));
+}
+
+fn run() -> () ! alloc, io {
+  use_f(3);
+  use_f(20);
+}
