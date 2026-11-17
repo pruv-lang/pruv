@@ -588,7 +588,9 @@ fn load_source_full(
             }
         }
         set_files(Vec::new());
-        return Ok(Loaded { prog: first.prog, g4: None }); // legacy mode: untouched
+        let mut prog = first.prog;
+        prog.raw_entries = graph.and_then(|g| g.program().raw_entries.clone()); // P06: applied by codegen in P09
+        return Ok(Loaded { prog, g4: None }); // legacy mode: untouched
     }
     // explicit mode: the root is parsed again with its file tag
     let root = match crate::parser::parse_file(src, 1) {
@@ -673,6 +675,7 @@ fn load_source_full(
         all_items.extend(mitems);
     }
     let g4 = G4 { modules, items: all_items, fn_meta, ty_meta, entries: Vec::new(), main: None, resolved: false };
+    prog.raw_entries = graph.and_then(|g| g.program().raw_entries.clone()); // P06: applied by codegen in P09
     Ok(Loaded { prog, g4: Some(g4) })
 }
 
@@ -831,11 +834,14 @@ fn run(prog: &mut Program, g4: &mut G4) -> Res<()> {
     // one visited set for the whole program: the first leak aborts the check, so every public declaration visited by an
     // earlier item has a closure without private declarations and need not be walked again
     let mut iface_seen: HashSet<String> = HashSet::new();
+    // P06: function identity -> `pub` (a public contract may expand only public functions)
+    let fn_pub: HashMap<String, bool> =
+        prog.functions.iter().enumerate().map(|(i, f)| (f.name.clone(), g4.fn_meta[i].is_pub)).collect();
     for it in &items {
         match *it {
             Item::Fn(fi) => {
                 if g4.fn_meta[fi].is_pub {
-                    iface_fn(&type_by_id, &prog.functions[fi], &mut iface_seen)?;
+                    iface_fn(&type_by_id, &fn_pub, &prog.functions[fi], &mut iface_seen)?;
                 }
             }
             Item::Ty(ti) => {
@@ -1353,7 +1359,13 @@ fn kids(e: &Expr) -> Vec<&Expr> {
 }
 
 /// full syntax of a contract expression, unreachable short-circuit operands included
-fn iface_expr(types: &HashMap<String, TyIface>, e: &Expr, item_name: &str, seen: &mut HashSet<String>) -> Res<()> {
+fn iface_expr(
+    types: &HashMap<String, TyIface>,
+    fns: &HashMap<String, bool>,
+    e: &Expr,
+    item_name: &str,
+    seen: &mut HashSet<String>,
+) -> Res<()> {
     let (line, col) = (e.line(), e.col());
     let name: Option<&String> = match e {
         Expr::StructLit(x) => Some(&x.name),
@@ -1365,6 +1377,18 @@ fn iface_expr(types: &HashMap<String, TyIface>, e: &Expr, item_name: &str, seen:
     if let Some(n) = name {
         if let Some(r) = private_in(types, std::slice::from_ref(n), seen) {
             return Err(leak(line, col, true, item_name, r, "contract"));
+        }
+    }
+    if let Expr::Call(x) = e {
+        // P06: a public contract expands only public functions (their bodies are its meaning)
+        if fns.get(&x.name) == Some(&false) {
+            return Err(err(
+                line,
+                col,
+                "public_interface",
+                format!("public function {} exposes the private function {} in its contract", item_name, x.name),
+                format!("make {} `pub`, or keep {} private", x.name, item_name),
+            ));
         }
     }
     let targs: Option<&Vec<GType>> = match e {
@@ -1380,18 +1404,18 @@ fn iface_expr(types: &HashMap<String, TyIface>, e: &Expr, item_name: &str, seen:
         }
     }
     for k in kids(e) {
-        iface_expr(types, k, item_name, seen)?;
+        iface_expr(types, fns, k, item_name, seen)?;
     }
     Ok(())
 }
 
-fn iface_fn(types: &HashMap<String, TyIface>, f: &Function, seen: &mut HashSet<String>) -> Res<()> {
+fn iface_fn(types: &HashMap<String, TyIface>, fns: &HashMap<String, bool>, f: &Function, seen: &mut HashSet<String>) -> Res<()> {
     for p in &f.params {
         iface_type(types, &GType::from_key(&p.ty), f.line, f.col, true, &f.name, "signature", seen)?;
     }
     iface_type(types, &GType::from_key(&f.ret), f.line, f.col, true, &f.name, "signature", seen)?;
     for e in f.requires.iter().chain(f.ensures.iter()).chain(f.decreases.iter()).chain(f.cost.iter()) {
-        iface_expr(types, e, &f.name, seen)?;
+        iface_expr(types, fns, e, &f.name, seen)?;
     }
     Ok(())
 }

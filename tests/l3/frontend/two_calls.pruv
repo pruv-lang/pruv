@@ -1,0 +1,10 @@
+// P06 contract expansion accept: one template expanded twice with different arguments
+pub fn ok(a: [i64]) -> bool {
+  if len(a) < 2 { return false; }
+  return a[0] >= 0 && a[0] <= a[1] && a[1] <= 1000000;
+}
+
+pub fn both(a: [i64], b: [i64]) -> i64
+  requires ok(a) && ok(b)
+  ensures result <= a[1] + b[1]
+{ return a[0] + b[0]; }

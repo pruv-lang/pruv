@@ -1,0 +1,11 @@
+// P06 contract expansion accept: private functions may expand private predicates (no public leak)
+fn ok(x: i64) -> bool { return x >= 0; }
+
+fn g(x: i64) -> i64
+  requires ok(x)
+  ensures ok(result)
+{ return x; }
+
+pub fn go(x: i64) -> i64
+  requires x >= 0
+{ return g(x); }

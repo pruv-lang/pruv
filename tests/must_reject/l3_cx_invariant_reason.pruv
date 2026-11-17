@@ -1,0 +1,7 @@
+// P06 contract expansion reject: invariants use the same expansion rule
+fn p(x: i64) -> bool requires x >= 0 { return true; }
+fn f() -> i64 {
+  let mut i: i64 = 0;
+  while i < 3 invariant p(i) decreases 3 - i { i = i + 1; }
+  return i;
+}

@@ -1,0 +1,4 @@
+// P06 contract expansion reject: if/else folds to the body's meaning
+fn p(x: i64) -> bool { if x > 5 { return false; } return x > 0; }
+fn f(x: i64) -> i64 requires p(x) { return x; }
+fn g() -> i64 { return f(7); }

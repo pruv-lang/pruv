@@ -1,0 +1,12 @@
+// P06 contract expansion accept: immutable lets inside an expanded predicate
+pub fn mid_ok(a: i64, b: i64) -> bool {
+  if a < 0 || b > 1000000 || a > b { return false; }
+  let s: i64 = a + b;
+  let h: i64 = s / 2;
+  return h >= a && h <= b;
+}
+
+pub fn mid(a: i64, b: i64) -> i64
+  requires a >= 0 && a <= b && b <= 1000000
+  ensures mid_ok(a, b)
+{ return (a + b) / 2; }

@@ -1,0 +1,12 @@
+// P06 contract expansion accept: a function calls a callee whose requires is an expanded predicate
+pub fn ok(x: i64) -> bool { return x >= 0 && x <= 100; }
+
+pub fn inner(x: i64) -> i64
+  requires ok(x)
+  ensures ok(result)
+{ return x; }
+
+pub fn outer(x: i64) -> i64
+  requires ok(x)
+  ensures ok(result)
+{ return inner(inner(x)); }

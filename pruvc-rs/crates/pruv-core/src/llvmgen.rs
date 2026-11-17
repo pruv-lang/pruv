@@ -6574,6 +6574,7 @@ mod tests {
             g9: None,
             explicit: None,
             uses_inout: None,
+            raw_entries: None,
         }
     }
 

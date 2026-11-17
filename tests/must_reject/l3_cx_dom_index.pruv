@@ -1,0 +1,3 @@
+// P06 contract expansion reject: an unguarded index in the expansion is contract_domain
+fn ok(st: [i64]) -> bool { return st[3] > 0; }
+fn f(st: [i64]) -> i64 requires ok(st) { return 0; }

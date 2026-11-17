@@ -54,6 +54,8 @@ pub struct Pkg {
     pub deps: Vec<(String, PathBuf, String)>,
     /// display of this package's manifest
     pub display: String,
+    /// P06: None (host entries stay `pub fn`), "crate" or "unsafe" (program package only)
+    pub raw_entries: Option<String>,
     /// (requiring package index, mount key, requirement text) in discovery order
     pub reqs: Vec<(usize, String, String)>,
     /// (requiring package index, mount key) that first reached this directory; None = the program
@@ -613,7 +615,7 @@ fn read(pkgdir: &Path, mfile: &Path, display: &str) -> Res<Pkg> {
             ))
         }
     };
-    check_obj(&data, "", &["name", "version", "root", "dependencies"], display)?;
+    check_obj(&data, "", &["name", "version", "root", "dependencies", "raw_entries"], display)?;
     // presence and type of the three strings, in order (a missing or non-string `name` wins over a bad `version`)
     for k in ["name", "version", "root"] {
         str_of(&data, k, k, display)?;
@@ -649,6 +651,28 @@ fn read(pkgdir: &Path, mfile: &Path, display: &str) -> Res<Pkg> {
         Some(r) if r.starts_with(pkgdir) => {}
         _ => return bad(display, "root", "root file is outside the package directory"),
     }
+    let raw_entries: Option<String> = match data.get("raw_entries") {
+        None => None,
+        Some(v) => {
+            // P06 (docs/L3_RESTRUCTURE_SPEC.md appendix P06): visibility of the raw host entries.  A raw entry takes
+            // arbitrary buffers, so it is never a public safe Rust fn: pub(crate) behind a host adapter, or a
+            // documented `pub unsafe fn`.  Only the program package has host entries, so only it may choose.
+            if display.starts_with("@pkg/") {
+                return bad(display, "raw_entries", "only the program package chooses raw entry visibility");
+            }
+            let r = match v {
+                Jv::Str(r) => r.as_str(),
+                _ => return bad(display, "raw_entries", "expected a string"),
+            };
+            if matches!(r, "pub" | "public" | "safe") {
+                return bad(display, "raw_entries", "a raw entry is never a public safe function (use \"crate\" or \"unsafe\")");
+            }
+            if !matches!(r, "crate" | "unsafe") {
+                return bad(display, "raw_entries", "expected \"crate\" or \"unsafe\"");
+            }
+            Some(r.to_string())
+        }
+    };
     let mut deps: Vec<(String, PathBuf, String)> = Vec::new();
     match data.get("dependencies") {
         None => {}
@@ -702,6 +726,7 @@ fn read(pkgdir: &Path, mfile: &Path, display: &str) -> Res<Pkg> {
         root: root.to_string(),
         deps,
         display: display.to_string(),
+        raw_entries,
         reqs: Vec::new(),
         first: None,
     })

@@ -1,0 +1,1 @@
+{"stage": "type", "code": "call_in_contract", "line": 3, "col": 38, "message": "function p cannot be expanded in a contract: it does not return bool or i64"}

@@ -1,0 +1,4 @@
+// P06 visibility reject: a private helper used inside a public predicate argument still leaks
+mod a;
+
+pub fn go() -> i64 { return 0; }

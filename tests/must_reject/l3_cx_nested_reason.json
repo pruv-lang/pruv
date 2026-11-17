@@ -1,0 +1,1 @@
+{"stage": "type", "code": "call_in_contract", "line": 3, "col": 40, "message": "function q cannot be expanded in a contract: it has requires"}

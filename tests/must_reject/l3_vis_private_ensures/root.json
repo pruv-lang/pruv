@@ -1,0 +1,1 @@
+{"stage": "type", "code": "public_interface", "file": "a.pruv", "line": 5, "col": 11, "message": "public function crate::a::g exposes the private function crate::a::same in its contract"}

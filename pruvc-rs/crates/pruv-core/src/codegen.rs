@@ -4634,7 +4634,7 @@ mod tests {
             foreign: None,
             cost: None, decreases: None, small_bound: None,
         };
-        Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None }
+        Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None }
     }
 
     #[test]
@@ -4683,7 +4683,7 @@ mod tests {
             foreign: None,
             cost: None, decreases: None, small_bound: None,
         };
-        Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None }
+        Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None }
     }
 
     // L3-10: eq_range
@@ -4782,7 +4782,7 @@ mod tests {
                 Stmt::Return(Return { line: 1, col: 1, value: Some(call("len", vec![var("r", "array")], "i64")) }),
             ],
         );
-        Program { functions: vec![mk, g], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None }
+        Program { functions: vec![mk, g], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None }
     }
 
     #[test]

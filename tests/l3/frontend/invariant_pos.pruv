@@ -1,0 +1,16 @@
+// P06 contract expansion accept: a loop invariant uses an expanded predicate
+pub fn within(i: i64, n: i64) -> bool { return i >= 0 && i <= n; }
+
+pub fn count(n: i64) -> i64
+  requires n >= 0 && n <= 1000
+  ensures result == n
+{
+  let mut i: i64 = 0;
+  while i < n
+    invariant within(i, n)
+    decreases n - i
+  {
+    i = i + 1;
+  }
+  return i;
+}

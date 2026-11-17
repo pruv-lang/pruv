@@ -343,4 +343,6 @@ pub struct Program {
     pub g9: Option<G9Meta>,
     pub explicit: Option<Explicit>,
     pub uses_inout: Option<bool>,
+    /// P06: the manifest's `raw_entries` ("crate" or "unsafe"; None = host entries stay `pub fn`), applied in P09
+    pub raw_entries: Option<String>,
 }

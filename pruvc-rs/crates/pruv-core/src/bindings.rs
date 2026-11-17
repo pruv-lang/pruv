@@ -592,7 +592,7 @@ mod tests {
 
     #[test]
     fn simple_function() {
-        let prog = Program { functions: vec![func("f", vec![("x", "i64"), ("a", "array")], "bool")], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None };
+        let prog = Program { functions: vec![func("f", vec![("x", "i64"), ("a", "array")], "bool")], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None };
         let s = gen_bindings(&prog).unwrap();
         assert!(s.contains("    fn pruv_abi_f(p0: i64, p1: *const i64, p2: i64) -> i64;"));
         assert!(s.contains("pub fn f(x: i64, a: &[i64]) -> bool {"));
@@ -602,7 +602,7 @@ mod tests {
 
     #[test]
     fn mangling_error() {
-        let prog = Program { functions: vec![func("f\u{e9}", vec![], "unit")], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None };
+        let prog = Program { functions: vec![func("f\u{e9}", vec![], "unit")], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None };
         assert_eq!(
             gen_bindings(&prog).unwrap_err(),
             "llvmgen: function name f\u{e9} needs mangling; the bindings use the raw name"

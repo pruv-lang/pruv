@@ -1,0 +1,8 @@
+// P06 contract expansion accept: compound arguments (index, arithmetic) are substituted once at the call
+pub fn nonneg(x: i64) -> bool { return x >= 0; }
+
+pub fn sum2(a: [i64], i: i64) -> i64
+  requires i >= 0 && i + 1 < len(a) && nonneg(a[i]) && nonneg(a[i + 1])
+  requires nonneg(1000000 - a[i]) && nonneg(1000000 - a[i + 1])
+  ensures nonneg(result) && nonneg(2000000 - result)
+{ return a[i] + a[i + 1]; }

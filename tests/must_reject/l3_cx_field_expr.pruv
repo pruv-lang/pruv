@@ -1,0 +1,5 @@
+// P06 contract expansion reject: a field read is not an expandable expression
+struct P { x: i64 }
+fn mk(x: i64) -> P { return P { x: x }; }
+fn p(x: i64) -> bool { return mk(x).x > 0; }
+fn f(x: i64) -> i64 requires p(x) { return x; }

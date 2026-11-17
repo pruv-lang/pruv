@@ -1,5 +1,5 @@
 """Run all regression tests.
-python tests/run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4b_frontend|g4b_proof|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_async_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof]
+python tests/run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4b_frontend|g4b_proof|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_async_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof|l3_frontend]
                         [--backend rust|llvm|both]
 
 group s5_proof: tests/s5/proof/*.pruv verifies in default, trust-callers and infer modes
@@ -7,6 +7,9 @@ with byte-identical Rust, LLVM IR and bindings erasure checks (one row checks bo
 
 group g7_frontend / g7_proof: Rust rows generate and compile (run if main exists);
 LLVM and dual-emission rows produce IR and Rust bindings after successful verification.
+
+group l3_frontend (L3 P06; backend null rows): tests/l3/frontend/*.pruv (user predicates expanded in contracts) runs
+like g10_frontend: both backends generate code in default, no-verify, trust-callers and infer modes.
 
 group g10_frontend (G10 A0; backend null rows): tests/g10/frontend/*.pruv runs on both backends in
 default, no-verify, trust-callers and infer modes. File programs exit 0 on both backends.
@@ -368,7 +371,7 @@ def must_reject_jobs():
                         continue
                     if isinstance(d, dict):
                         diags.append(d)
-                ok = any(all(d.get(k) == want.get(k) for k in ("stage", "code", "line", "col") if k in want)
+                ok = any(all(d.get(k) == want.get(k) for k in ("stage", "code", "line", "col", "message") if k in want)
                          for d in diags)
                 detail = "expected stage=%s code=%s; got %s" % (
                     want.get("stage"), want.get("code"),
@@ -400,8 +403,9 @@ def g4_reject_jobs():
     expected stage/code come from the project's root.json."""
     jobs = []
     P = _g4()
-    # G5/G8 project rejections follow the same convention.
-    for f in sorted(glob.glob(os.path.join(ROOT, "tests/must_reject/g[458]_*/root.pruv"))):
+    # G5/G8 and L3 (P06 visibility misuse) project rejections follow the same convention.
+    for f in sorted(glob.glob(os.path.join(ROOT, "tests/must_reject/g[458]_*/root.pruv")) +
+                    glob.glob(os.path.join(ROOT, "tests/must_reject/l3_*/root.pruv"))):
         rel = rel_sample(f)
         name = "must_reject/" + rel[len("tests/must_reject/"):]
         proj = os.path.basename(os.path.dirname(f))
@@ -419,7 +423,7 @@ def g4_reject_jobs():
 
         def fn(f=f, proj=proj, want=want, flags=flags):
             root = P.copy_project(f, os.path.join(WORK, "g4mr_" + proj))
-            for backend in (("rust", "llvm") if proj.startswith("g8_") else ("rust",)):
+            for backend in (("rust", "llvm") if proj.startswith(("g8_", "l3_")) else ("rust",)):
                 c = pruvc(root, os.path.join(WORK, "g4mr_%s_%s.out" % (proj, backend)), flags, backend)
                 if c.returncode != 1:
                     return False, "exit %d (expected 1) %s" % (c.returncode, c.stdout + c.stderr)
@@ -432,7 +436,8 @@ def g4_reject_jobs():
                     if isinstance(d, dict):
                         diags.append(d)
                 ok = any(d.get("stage") == want.get("stage") and d.get("code") == want.get("code")
-                         and ("file" not in want or d.get("file") == want["file"]) for d in diags)
+                         and all(d.get(k) == want[k] for k in ("file", "line", "col", "message") if k in want)
+                         for d in diags)
                 detail = "expected stage=%s code=%s file=%s; got %s" % (
                     want.get("stage"), want.get("code"), want.get("file"),
                     [(d.get("stage"), d.get("code"), d.get("file")) for d in diags])
@@ -672,13 +677,13 @@ def g5_frontend_jobs(group="g5_frontend", modes=(("no-verify", ["--no-verify"]),
 
 
 
-def g10_frontend_jobs(group="g10_frontend", subdir="frontend", modes=None):
-    """G10 A3: both backends generate code, after verification for proof roots."""
+def g10_frontend_jobs(group="g10_frontend", subdir="frontend", modes=None, base="g10"):
+    """G10 A3: both backends generate code, after verification for proof roots (L3 P06 reuses it with base="l3")."""
     if modes is None:
         modes = (("default", []), ("no-verify", ["--no-verify"]),
                  ("trust-callers", ["--trust-callers"]), ("infer", ["--infer"]))
     jobs = []
-    for f in sorted(glob.glob(os.path.join(ROOT, "tests", "g10", subdir, "*.pruv"))):
+    for f in sorted(glob.glob(os.path.join(ROOT, "tests", base, subdir, "*.pruv"))):
         stem = os.path.splitext(os.path.basename(f))[0]
         for mode, flags in modes:
             name = "%s/%s [%s]" % (group, stem, mode)
@@ -1418,7 +1423,7 @@ def runtime_jobs(backend):
     return jobs
 
 
-USAGE = ("usage: run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4b_frontend|g4b_proof|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_async_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof] [--backend rust|llvm|both] "
+USAGE = ("usage: run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4b_frontend|g4b_proof|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_async_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof|l3_frontend] [--backend rust|llvm|both] "
          "[--sample-prefix PATH] [--compiler py|rs] [--compiler-path PATH] [--ir-tool PATH] [--list-rows [FILE]] [--compare-rows FILE]")
 
 
@@ -1511,7 +1516,7 @@ def main():
         i = sys.argv.index("--only")
         only = sys.argv[i + 1] if i + 1 < len(sys.argv) else None
         if only not in ("must_reject", "examples", "runtime", "g3_proof", "g6_frontend", "g6_proof", "g9_frontend",
-                        "g9_proof", "g4_frontend", "g4b_frontend", "g4b_proof", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_async_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "g8_proof"):
+                        "g9_proof", "g4_frontend", "g4b_frontend", "g4b_proof", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_async_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "g8_proof", "l3_frontend"):
             print(USAGE)
             return 2
     backend = "rust"
@@ -1550,6 +1555,8 @@ def main():
             jobs += g10_frontend_jobs()
         if only in (None, "g10_proof"):
             jobs += g10_frontend_jobs("g10_proof", "proof", (("default", []), ("infer", ["--infer"])))
+        if only in (None, "l3_frontend"):
+            jobs += g10_frontend_jobs("l3_frontend", "frontend", base="l3")
         if only in (None, "g10_proc_frontend"):
             jobs += g10_proc_frontend_jobs()
         if only in (None, "g10_proc_proof"):
@@ -1625,7 +1632,7 @@ def main():
         # scope comes from the arguments (--only/--backend), not from the rows that actually ran
         scope = set()
         null_backend = ("must_reject", "g3_proof", "g6_frontend", "g6_proof", "g9_frontend", "g9_proof", "g4_frontend",
-                        "g4b_frontend", "g4b_proof", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_async_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend")
+                        "g4b_frontend", "g4b_proof", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_async_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "l3_frontend")
         for g in null_backend + ("examples", "runtime", "g8_proof"):
             if only in (None, g):
                 # g8_proof always runs both backends (whatever --backend says) plus one backend-free bundle row.

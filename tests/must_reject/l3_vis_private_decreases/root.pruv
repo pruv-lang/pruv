@@ -1,0 +1,4 @@
+// P06 visibility reject: a public recursive function of module a expands a private function in its decreases
+mod a;
+
+pub fn go() -> i64 { return 0; }

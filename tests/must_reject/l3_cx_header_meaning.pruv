@@ -1,0 +1,8 @@
+// P06 contract expansion reject: a header predicate (bud_store valid style) means exactly its body
+fn valid(st: [i64]) -> bool {
+  if len(st) < 2 { return false; }
+  let cap: i64 = st[0];
+  if cap < 0 { return false; }
+  return st[1] >= 0 && st[1] <= cap;
+}
+fn used(st: [i64]) -> i64 requires valid(st) ensures result <= st[0] - 1 { return st[1]; }

@@ -1,0 +1,7 @@
+// P06 contract expansion reject: a callee with an inout parameter is not expanded
+fn p(inout a: [i64]) -> bool { return len(a) > 0; }
+fn f(n: i64) -> i64 ! alloc requires n >= 1 && n <= 10 {
+  let mut b: [i64] = alloc(n, 0);
+  assert p(inout b);
+  return 0;
+}

@@ -1,0 +1,1 @@
+{"stage": "type", "code": "call_in_contract", "line": 5, "col": 10, "message": "function p cannot be expanded in a contract: it has an inout parameter"}

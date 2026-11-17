@@ -1,0 +1,16 @@
+// P06 contract expansion accept: early returns in a bool predicate join into one contract formula
+pub fn in_band(x: i64, lo: i64, hi: i64) -> bool {
+  if lo > hi { return false; }
+  if x < lo { return false; }
+  if x > hi { return false; }
+  return true;
+}
+
+pub fn clamp(x: i64, lo: i64, hi: i64) -> i64
+  requires lo <= hi
+  ensures in_band(result, lo, hi)
+{
+  if x < lo { return lo; }
+  if x > hi { return hi; }
+  return x;
+}

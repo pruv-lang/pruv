@@ -1,0 +1,7 @@
+// P06 contract expansion accept: ensures passes result to a user predicate
+pub fn even(x: i64) -> bool { return x >= 0 && x % 2 == 0; }
+
+pub fn dbl(x: i64) -> i64
+  requires x >= 0 && x <= 1000000
+  ensures even(result)
+{ return 2 * x; }

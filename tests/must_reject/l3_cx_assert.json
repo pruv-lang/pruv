@@ -1,0 +1,1 @@
+{"stage": "type", "code": "call_in_contract", "line": 3, "col": 30, "message": "function p cannot be expanded in a contract: its body has a statement other than an immutable i64 or bool let, if and return"}

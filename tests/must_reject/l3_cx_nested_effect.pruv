@@ -1,0 +1,4 @@
+// P06 contract expansion reject: effects stay forbidden in contracts
+fn g() -> i64 ! io { return 1; }
+fn p(x: i64) -> bool ! io { return x > g(); }
+fn f(x: i64) -> i64 requires p(x) { return x; }

@@ -1,0 +1,3 @@
+// P06 contract expansion reject: every if branch must end in return
+fn p(x: i64) -> bool { if x > 0 { let y: i64 = x; } return true; }
+fn f(x: i64) -> i64 requires p(x) { return x; }

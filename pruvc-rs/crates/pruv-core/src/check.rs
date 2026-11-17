@@ -343,6 +343,15 @@ struct Checker {
     uses_inout: bool,
     /// G5: kind of the expression being checked: requires/ensures/decreases/invariant/assert/code
     ckind: &'static str,
+    // ---- P06: contract expansion of user functions (check.py x_*) ----
+    /// function name -> why a contract cannot expand it, or a raw copy of its body
+    x_raw: HashMap<String, Result<Vec<Stmt>, String>>,
+    /// function name -> its checked template (an expression over its parameters)
+    x_memo: HashMap<String, Expr>,
+    /// templates being built (recursion)
+    x_busy: HashSet<String>,
+    /// set by `call` on a contract call: the expansion that replaces the Call node
+    x_pending: Option<Expr>,
     /// G5: identity of the call allowed at the statement boundary of the statement being checked
     boundary: Option<usize>,
     /// G5 A0: parameter names of the function being checked
@@ -527,6 +536,10 @@ impl Checker {
             ckind: "code",
             boundary: None,
             cur_params: Vec::new(),
+            x_raw: HashMap::new(),
+            x_memo: HashMap::new(),
+            x_busy: HashSet::new(),
+            x_pending: None,
         })
     }
 
@@ -568,6 +581,7 @@ impl Checker {
             self.check_entries(prog)?; // G4 A0: host-entry signatures
         }
         self.tt = TypeTable::new(&prog.types);
+        self.x_prepare(prog); // P06: which functions a contract may expand, and their raw bodies
         for f in prog.functions.iter_mut() {
             self.fn_(f)?;
         }
@@ -2804,7 +2818,13 @@ impl Checker {
                     "remove `inout`",
                 ))
             }
-            Expr::Call(x) => self.call(x, scope, c),
+            Expr::Call(x) => {
+                let t = self.call(x, scope, c)?;
+                if let Some(xe) = self.x_pending.take() {
+                    *e = xe; // P06: a contract call to a user function becomes its expansion, in place
+                }
+                Ok(t)
+            }
         }
     }
 
@@ -3333,6 +3353,88 @@ impl Checker {
         Ok(entry.ty)
     }
 
+    // ---- P06: expanding user functions in contracts (docs/L3_RESTRUCTURE_SPEC.md appendix P06) ----
+    /// The reason each function cannot be expanded in a contract, or a raw copy of its body when its signature and
+    /// statements allow it (checked before any body is typed, so every template starts from source).
+    fn x_prepare(&mut self, prog: &Program) {
+        for f in &prog.functions {
+            let r = x_sig_reason(f).or_else(|| x_scan_block(f, &f.body, &self.funcs));
+            self.x_raw.insert(f.name.clone(), match r {
+                Some(r) => Err(r),
+                None => Ok(f.body.clone()),
+            });
+        }
+    }
+
+    fn x_template(&mut self, line: i64, col: i64, n: &str, f: &FuncInfo) -> Res<Expr> {
+        if let Some(t) = self.x_memo.get(n) {
+            return Ok(t.clone());
+        }
+        let mut raw = match self.x_raw.get(n) {
+            Some(Ok(b)) => b.clone(),
+            Some(Err(r)) => return Err(terr(line, col, "call_in_contract", format!("function {} cannot be expanded in a contract: {}", n, r), X_FIX)),
+            None => return Err(terr(line, col, "call_in_contract", format!("function {} cannot be expanded in a contract: it has no body", n), X_FIX)),
+        };
+        if self.x_busy.contains(n) {
+            return Err(terr(line, col, "call_in_contract", format!("function {} cannot be expanded in a contract: it is recursive", n), X_FIX));
+        }
+        self.x_busy.insert(n.to_string());
+        let scope: Scope = f.pnames.iter().zip(f.params.iter())
+            .map(|(p, t)| (p.clone(), Entry { ty: t.clone(), mutable: false, kind: "param" })).collect();
+        let t = self.x_walk(line, col, n, f, &mut raw, scope, HashMap::new())?;
+        self.x_busy.remove(n);
+        self.x_memo.insert(n.to_string(), t.clone());
+        Ok(t)
+    }
+
+    /// Type the statements in contract mode and fold them into one expression over the parameters.
+    #[allow(clippy::too_many_arguments)]
+    fn x_walk(&mut self, sl: i64, sc: i64, n: &str, f: &FuncInfo, stmts: &mut [Stmt], scope: Scope,
+              env: HashMap<String, Expr>) -> Res<Expr> {
+        let (mut scope, mut env) = (scope, env);
+        let mut i = 0;
+        loop {
+            let (head, rest) = stmts.split_at_mut(i + 1);
+            match &mut head[i] {
+                Stmt::Let(st) => {
+                    if scope.contains_key(&st.name) {
+                        return Err(terr(st.line, st.col, "shadow",
+                            format!("{} is already defined; shadowing is not allowed", st.name), "use a new name"));
+                    }
+                    let ty = GType::from_key(&st.ty);
+                    self.expect(&mut st.value, &ty, &scope, true, None)?;
+                    let v = x_subst(&st.value, &env);
+                    x_sized(sl, sc, n, &v)?;
+                    env.insert(st.name.clone(), v);
+                    scope.insert(st.name.clone(), Entry { ty, mutable: false, kind: "local" });
+                }
+                Stmt::Return(st) => {
+                    let v = st.value.as_mut().expect("x_scan_block: a return has a value");
+                    self.expect(v, &f.ret, &scope, true, None)?;
+                    let r = x_subst(v, &env);
+                    x_sized(sl, sc, n, &r)?;
+                    return Ok(r);
+                }
+                Stmt::If(st) => {
+                    self.expect(&mut st.cond, &boolt(), &scope, true, Some("a condition"))?;
+                    let cond = x_subst(&st.cond, &env);
+                    x_sized(sl, sc, n, &cond)?;
+                    let t = self.x_walk(sl, sc, n, f, &mut st.then, scope.clone(), env.clone())?;
+                    let el = if !st.els.is_empty() {
+                        self.x_walk(sl, sc, n, f, &mut st.els, scope.clone(), env.clone())?
+                    } else {
+                        self.x_walk(sl, sc, n, f, rest, scope.clone(), env.clone())?
+                    };
+                    let j = x_join(st.line, st.col, cond, t, el);
+                    x_sized(sl, sc, n, &j)?;
+                    return Ok(j);
+                }
+                _ => unreachable!("x_scan_block admits only let, if and return"),
+            }
+            i += 1;
+        }
+    }
+
     fn call(&mut self, e: &mut Call, scope: &Scope, c: bool) -> Res<GType> {
         let n = e.name.clone();
         let targs = e.targs.clone();
@@ -3628,13 +3730,21 @@ impl Checker {
             ));
         }
         if c {
-            return Err(terr(
-                line,
-                col,
-                "call_in_contract",
-                "calling functions in contracts is not supported in v0.1",
-                "inline the property",
-            ));
+            if self.ckind == "cost" {
+                return Err(terr(
+                    line,
+                    col,
+                    "call_in_contract",
+                    "calling functions in contracts is not supported in v0.1",
+                    "inline the property",
+                ));
+            }
+            // P06: expand the call (docs/L3_RESTRUCTURE_SPEC.md appendix P06)
+            let tpl = self.x_template(line, col, &n, &f)?;
+            let x = x_instantiate(&tpl, &f.pnames, &e.args, line, col);
+            x_sized(line, col, &n, &x)?;
+            self.x_pending = Some(x);
+            return Ok(substitute(&f.ret, &m));
         }
         self.used_effects.extend(f.effects.iter().cloned());
         if !f.foreign {
@@ -3642,6 +3752,180 @@ impl Checker {
             self.call_log.push((self.cur_name.clone(), line, col, targs.clone(), n.clone()));
         }
         Ok(substitute(&f.ret, &m))
+    }
+}
+
+// ---- P06: contract expansion of user functions (check.py X_* / x_*) ----
+const X_FIX: &str = "keep it loop-free with no requires (immutable lets, if/return over i64, bool and array parameters), or inline the property";
+/// nodes in one template or one expansion
+const X_MAX: usize = 4096;
+const X_R_STMT: &str = "its body has a statement other than an immutable i64 or bool let, if and return";
+const X_R_EXPR: &str = "its body has an expression other than literals, names, operators, indexing and calls";
+
+fn x_sig_reason(f: &Function) -> Option<String> {
+    if !f.tparams.is_empty() {
+        return Some("it is generic".into());
+    }
+    if f.params.iter().any(|p| p.mode_pos.is_some()) {
+        return Some("it has an inout parameter".into());
+    }
+    let ok = [i64t(), boolt(), GType::array(), GType::array_u8(), GType::array_bool()];
+    if f.params.iter().any(|p| !ok.contains(&GType::from_key(&p.ty))) {
+        return Some("its parameters are not all i64, bool or arrays of i64, u8 or bool".into());
+    }
+    let ret = GType::from_key(&f.ret);
+    if ret != i64t() && ret != boolt() {
+        return Some("it does not return bool or i64".into());
+    }
+    if !f.requires.is_empty() {
+        return Some("it has requires".into());
+    }
+    if f.decreases.is_some() {
+        return Some("it has decreases".into());
+    }
+    if f.cost.is_some() {
+        return Some("it has a cost clause".into());
+    }
+    None
+}
+
+fn x_scan_block(f: &Function, stmts: &[Stmt], funcs: &HashMap<String, Rc<FuncInfo>>) -> Option<String> {
+    for (i, st) in stmts.iter().enumerate() {
+        match st {
+            Stmt::Let(l) => {
+                let t = GType::from_key(&l.ty);
+                if l.mutable || l.refine.is_some() || (t != i64t() && t != boolt()) {
+                    return Some(X_R_STMT.into());
+                }
+                if let Some(r) = x_scan_expr(&l.value, funcs) {
+                    return Some(r);
+                }
+            }
+            Stmt::Return(r) => {
+                return match &r.value {
+                    None => Some(X_R_STMT.into()),
+                    Some(v) => x_scan_expr(v, funcs),
+                };
+            }
+            Stmt::If(x) => {
+                if GType::from_key(&f.ret) != boolt() {
+                    return Some("it returns i64 through an if (only bool functions may branch)".into());
+                }
+                if let Some(r) = x_scan_expr(&x.cond, funcs).or_else(|| x_scan_block(f, &x.then, funcs)) {
+                    return Some(r);
+                }
+                return if !x.els.is_empty() { x_scan_block(f, &x.els, funcs) } else { x_scan_block(f, &stmts[i + 1..], funcs) };
+            }
+            _ => return Some(X_R_STMT.into()),
+        }
+    }
+    Some("an if branch does not end in return".into())
+}
+
+fn x_scan_expr(e: &Expr, funcs: &HashMap<String, Rc<FuncInfo>>) -> Option<String> {
+    match e {
+        Expr::IntLit(_) | Expr::BoolLit(_) | Expr::Var(_) => None,
+        Expr::Unary(u) => x_scan_expr(&u.operand, funcs),
+        Expr::Binary(b) => x_scan_expr(&b.left, funcs).or_else(|| x_scan_expr(&b.right, funcs)),
+        Expr::Index(x) => x_scan_expr(&x.array, funcs).or_else(|| x_scan_expr(&x.index, funcs)),
+        Expr::Call(c) => {
+            if funcs.contains_key(&c.name) || c.name == "len" || is_bit_builtin(&c.name) || c.name == "load_be" {
+                c.args.iter().find_map(|a| x_scan_expr(a, funcs))
+            } else {
+                Some(format!("it calls {}", c.name))
+            }
+        }
+        _ => Some(X_R_EXPR.into()),
+    }
+}
+
+fn x_size(e: &Expr) -> usize {
+    match e {
+        Expr::Unary(u) => 1 + x_size(&u.operand),
+        Expr::Binary(b) => 1 + x_size(&b.left) + x_size(&b.right),
+        Expr::Index(x) => 1 + x_size(&x.array) + x_size(&x.index),
+        Expr::Call(c) => 1 + c.args.iter().map(x_size).sum::<usize>(),
+        _ => 1,
+    }
+}
+
+fn x_sized(line: i64, col: i64, n: &str, e: &Expr) -> Res<()> {
+    if x_size(e) > X_MAX {
+        return Err(terr(line, col, "call_in_contract",
+            format!("function {} cannot be expanded in a contract: its expansion is too large", n), X_FIX));
+    }
+    Ok(())
+}
+
+/// e with every let name replaced by its folded value
+fn x_subst(e: &Expr, env: &HashMap<String, Expr>) -> Expr {
+    match e {
+        Expr::Var(v) if env.contains_key(&v.name) => env[&v.name].clone(),
+        Expr::Unary(u) => Expr::Unary(Unary {
+            line: u.line, col: u.col, op: u.op.clone(), operand: Box::new(x_subst(&u.operand, env)), ty: u.ty.clone(),
+        }),
+        Expr::Binary(b) => Expr::Binary(Binary {
+            line: b.line, col: b.col, op: b.op.clone(),
+            left: Box::new(x_subst(&b.left, env)), right: Box::new(x_subst(&b.right, env)), ty: b.ty.clone(),
+        }),
+        Expr::Index(x) => Expr::Index(Index {
+            line: x.line, col: x.col, array: Box::new(x_subst(&x.array, env)), index: Box::new(x_subst(&x.index, env)),
+            ty: x.ty.clone(),
+        }),
+        Expr::Call(c) => Expr::Call(Call {
+            line: c.line, col: c.col, name: c.name.clone(), args: c.args.iter().map(|a| x_subst(a, env)).collect(),
+            ty: c.ty.clone(), targs: c.targs.clone(), inst: c.inst.clone(), old: c.old.clone(),
+        }),
+        _ => e.clone(),
+    }
+}
+
+/// if c { t } else { el } over bool values, short-circuit form (nodes at the if's position)
+fn x_join(line: i64, col: i64, c: Expr, t: Expr, el: Expr) -> Expr {
+    let b = Some(boolt().to_key());
+    let un = |x: Expr| Expr::Unary(Unary { line, col, op: "!".into(), operand: Box::new(x), ty: b.clone() });
+    let bin = |op: &str, l: Expr, r: Expr| Expr::Binary(Binary {
+        line, col, op: op.into(), left: Box::new(l), right: Box::new(r), ty: b.clone(),
+    });
+    match (&t, &el) {
+        (Expr::BoolLit(x), _) if !x.value => bin("&&", un(c), el),
+        (Expr::BoolLit(x), _) if x.value => bin("||", c, el),
+        (_, Expr::BoolLit(x)) if !x.value => bin("&&", c, t),
+        (_, Expr::BoolLit(x)) if x.value => bin("||", un(c), t),
+        _ => {
+            let c2 = c.clone();
+            bin("||", bin("&&", c, t), bin("&&", un(c2), el))
+        }
+    }
+}
+
+/// The template with each parameter replaced by a copy of the checked argument; every template node takes the call
+/// site's position (the arguments keep theirs).
+fn x_instantiate(tpl: &Expr, pnames: &[String], args: &[Expr], line: i64, col: i64) -> Expr {
+    match tpl {
+        Expr::Var(v) => match pnames.iter().position(|p| *p == v.name) {
+            Some(k) => args[k].clone(),
+            None => Expr::Var(Var { line, col, name: v.name.clone(), ty: v.ty.clone() }),
+        },
+        Expr::IntLit(x) => Expr::IntLit(IntLit { line, col, value: x.value.clone(), ty: x.ty.clone() }),
+        Expr::BoolLit(x) => Expr::BoolLit(BoolLit { line, col, value: x.value, ty: x.ty.clone() }),
+        Expr::Unary(u) => Expr::Unary(Unary {
+            line, col, op: u.op.clone(), operand: Box::new(x_instantiate(&u.operand, pnames, args, line, col)), ty: u.ty.clone(),
+        }),
+        Expr::Binary(b) => Expr::Binary(Binary {
+            line, col, op: b.op.clone(),
+            left: Box::new(x_instantiate(&b.left, pnames, args, line, col)),
+            right: Box::new(x_instantiate(&b.right, pnames, args, line, col)), ty: b.ty.clone(),
+        }),
+        Expr::Index(x) => Expr::Index(Index {
+            line, col, array: Box::new(x_instantiate(&x.array, pnames, args, line, col)),
+            index: Box::new(x_instantiate(&x.index, pnames, args, line, col)), ty: x.ty.clone(),
+        }),
+        Expr::Call(c) => Expr::Call(Call {
+            line, col, name: c.name.clone(), args: c.args.iter().map(|a| x_instantiate(a, pnames, args, line, col)).collect(),
+            ty: c.ty.clone(), targs: c.targs.clone(), inst: c.inst.clone(), old: c.old.clone(),
+        }),
+        _ => tpl.clone(),
     }
 }
 
