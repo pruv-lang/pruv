@@ -52,11 +52,11 @@ fn push(inout fx: [i64], v: i64) -> ()
 // ---- record access ----
 
 // Session entry for the key, -1 if absent.
-fn session_of(st: [i64], sk: [i64], ss: i64, sn: i64) -> i64
+pub fn session_of(st: [i64], sk: [i64], ss: i64, sn: i64) -> i64
 { return crate::bud_map::find(st, 0, sk, ss, sn); }
 
 // Arena offset and length of the session's blob.
-fn blob_at(st: [i64], se: i64) -> i64
+pub fn blob_at(st: [i64], se: i64) -> i64
   ensures 0 <= result && result <= 1099511627776
 {
   let a: i64 = crate::bud_store::field_addr(st, se);
@@ -64,7 +64,7 @@ fn blob_at(st: [i64], se: i64) -> i64
   return c40(rd(st, a + 12));
 }
 
-fn blob_n(st: [i64], se: i64) -> i64
+pub fn blob_n(st: [i64], se: i64) -> i64
   ensures 0 <= result && result <= 1099511627776
 {
   let a: i64 = crate::bud_store::field_addr(st, se);
@@ -73,7 +73,7 @@ fn blob_n(st: [i64], se: i64) -> i64
 }
 
 // State word of the session's budget, -1 without a budget (or a blob too short to be a record).
-fn state_of(st: [i64], off: i64, n: i64) -> i64
+pub fn state_of(st: [i64], off: i64, n: i64) -> i64
   requires 0 <= off && off <= 1099511627776
 {
   if n < 30 { return -1; }
@@ -83,7 +83,7 @@ fn state_of(st: [i64], off: i64, n: i64) -> i64
 }
 
 // Does the record's budgetId (string 0, at off + 24) equal k[ks..ks+kn)?  O(kn).
-fn id_is(st: [i64], off: i64, k: [i64], ks: i64, kn: i64) -> bool
+pub fn id_is(st: [i64], off: i64, k: [i64], ks: i64, kn: i64) -> bool
   requires 0 <= off && off <= 1099511627776
 {
   if kn < 0 || kn > 4294967296 || ks < 0 || ks > 1099511627776 { return false; }
@@ -112,7 +112,7 @@ fn id_is(st: [i64], off: i64, k: [i64], ks: i64, kn: i64) -> bool
 }
 
 // CURRENT(ref): the budget's session entry when the session has a budget whose id is ref.budgetId, else -1.
-fn current_entry(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64) -> i64
+pub fn current_entry(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64) -> i64
 {
   let se: i64 = session_of(st, sk, ss, sn);
   if se < 0 { return -1; }
@@ -124,7 +124,7 @@ fn current_entry(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn:
 }
 
 // Start (the length word) of string k (0..5) of a record held in b (header at 0).
-fn str_at(b: [i64], k: i64) -> i64
+pub fn str_at(b: [i64], k: i64) -> i64
   ensures 0 <= result && result <= 1099511627776
 {
   let mut p: i64 = 24;
@@ -140,7 +140,7 @@ fn str_at(b: [i64], k: i64) -> i64
 }
 
 // Length of string k (0..5) of the record stored in st at off (no copy). O(k).
-fn str_len_in(st: [i64], off: i64, k: i64) -> i64
+pub fn str_len_in(st: [i64], off: i64, k: i64) -> i64
   requires 0 <= off && off <= 1099511627776
   ensures 0 <= result && result <= 4294967296
 {
@@ -161,7 +161,7 @@ fn str_len(b: [i64], p: i64) -> i64
 { return c32(rd(b, p)); }
 
 // Writes `len, src[s..s+n)` at o[at]; returns the position after it.
-fn put_str(inout o: [i64], at: i64, src: [i64], s: i64, n: i64) -> i64
+pub fn put_str(inout o: [i64], at: i64, src: [i64], s: i64, n: i64) -> i64
   ensures len(o) == len(old(o)) && 0 <= result && result <= 1099511627776
 {
   let a: i64 = crate::ent_u16::clamp(at, 4294967295);
@@ -185,7 +185,7 @@ fn put_str(inout o: [i64], at: i64, src: [i64], s: i64, n: i64) -> i64
 }
 
 // Copy of the session's blob (O(blob)).
-fn blob_copy(st: [i64], se: i64) -> [i64] ! alloc
+pub fn blob_copy(st: [i64], se: i64) -> [i64] ! alloc
 {
   let off: i64 = blob_at(st, se);
   let n: i64 = blob_n(st, se);
@@ -194,7 +194,7 @@ fn blob_copy(st: [i64], se: i64) -> [i64] ! alloc
 
 // The record b with header h and string 3 (ended.at text) replaced by e[es..es+en) and string 2 (activeSince text)
 // dropped when drop_since. Strings 0, 1, 4, 5 are kept. O(record).
-fn rewrite(b: [i64], h: [i64], drop_since: bool, e: [i64], es: i64, en: i64) -> [i64] ! alloc
+pub fn rewrite(b: [i64], h: [i64], drop_since: bool, e: [i64], es: i64, en: i64) -> [i64] ! alloc
 {
   let p0: i64 = str_at(b, 0);
   let p1: i64 = str_at(b, 1);
@@ -229,7 +229,7 @@ fn rewrite(b: [i64], h: [i64], drop_since: bool, e: [i64], es: i64, en: i64) -> 
 }
 
 // Writes record r as the session's blob. Room was reserved by the caller, so a Grow here is a defect (status 2).
-fn store(inout st: [i64], sk: [i64], ss: i64, sn: i64, r: [i64]) -> i64 ! alloc
+pub fn store(inout st: [i64], sk: [i64], ss: i64, sn: i64, r: [i64]) -> i64 ! alloc
 {
   let mut t: [i64] = alloc(2, 0);
   let w: i64 = crate::bud_world::session_put(inout st, sk, ss, sn, r, 0, len(r), inout t);
@@ -238,10 +238,10 @@ fn store(inout st: [i64], sk: [i64], ss: i64, sn: i64, r: [i64]) -> i64 ! alloc
 }
 
 // Reserves room for a session blob of `words` words; 0, or the Grow size N.
-fn reserve(inout st: [i64], words: i64) -> i64
+pub fn reserve(inout st: [i64], words: i64) -> i64
 { return crate::bud_map::make_room(inout st, 0, c32(words)); }
 
-fn grow(n: i64) -> i64
+pub fn grow(n: i64) -> i64
 { return 0 - c40(n); }
 
 fn out_ok(out: [i64], words: i64) -> bool
@@ -249,7 +249,7 @@ fn out_ok(out: [i64], words: i64) -> bool
 
 // Budget view frame of bud_clock from record header h: bv[1] state, [2] unlimited, [3] timeMinutes, [4] activeMs,
 // [5] activeSince kind, [6] since ms.
-fn view(h: [i64], inout bv: [i64]) -> ()
+pub fn view(h: [i64], inout bv: [i64]) -> ()
 {
   crate::ent_u16::wr(inout bv, 0, 1);
   crate::ent_u16::wr(inout bv, 1, rd(h, 0));
@@ -263,7 +263,7 @@ fn view(h: [i64], inout bv: [i64]) -> ()
 }
 
 // view() of the header stored in st at off (no copy).
-fn view_in(st: [i64], off: i64, inout bv: [i64]) -> ()
+pub fn view_in(st: [i64], off: i64, inout bv: [i64]) -> ()
   requires 0 <= off && off <= 1099511627776
 {
   crate::ent_u16::wr(inout bv, 0, 1);
@@ -421,7 +421,7 @@ pub fn attach(inout st: [i64], sk: [i64], ss: i64, sn: i64, origin: i64, size: i
 
 // CLOSE (§5.7, B:233-238) of the session's budget record b: bud_clock's clock part (SETTLE, state closed, DROP),
 // then ended = {how, at: now}. Returns the new record; effects are bud_clock's. Room was reserved by the caller.
-fn close_rec(inout st: [i64], sk: [i64], ss: i64, sn: i64, b: [i64], how: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> [i64] ! alloc
+pub fn close_rec(inout st: [i64], sk: [i64], ss: i64, sn: i64, b: [i64], how: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> [i64] ! alloc
 {
   let mut h: [i64] = crate::ent_u16::slice(b, 0, 24);
   view(h, inout bv);
