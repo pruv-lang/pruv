@@ -28,6 +28,10 @@ pub fn ku(s: &str) -> Vec<u16> {
 }
 
 fn k_eq(k: &[u16], s: &str) -> bool {
+    if s.is_ascii() {
+        // One UTF-16 unit per byte: compare lengths first, then units (the keys here are ASCII literals).
+        return k.len() == s.len() && k.iter().zip(s.bytes()).all(|(&u, b)| u == b as u16);
+    }
     k.iter().copied().eq(s.encode_utf16())
 }
 
@@ -364,8 +368,22 @@ fn index_key(k: &[u16]) -> Option<u32> {
 // Object.fromEntries semantics: a duplicate key replaces the value and keeps the first position; then JS key order
 // (index keys ascending first, others in insertion order).
 pub fn build_obj(entries: Vec<(Vec<u16>, V)>) -> Vec<(Vec<u16>, V)> {
-    let mut out: Vec<(Vec<u16>, V)> = Vec::with_capacity(entries.len());
-    if entries.len() > 8 {
+    let mut out: Vec<(Vec<u16>, V)>;
+    if entries.len() <= 8 {
+        // Small objects dedup in place: a repeated key keeps its first position and takes the later value.
+        out = entries;
+        let mut i = 1;
+        while i < out.len() {
+            match out[..i].iter().position(|e| e.0 == out[i].0) {
+                Some(j) => {
+                    let (_, v) = out.remove(i);
+                    out[j].1 = v;
+                }
+                None => i += 1,
+            }
+        }
+    } else {
+        out = Vec::with_capacity(entries.len());
         let mut seen: std::collections::HashMap<Vec<u16>, usize> = std::collections::HashMap::new();
         for (k, v) in entries {
             match seen.get(&k) {
@@ -374,14 +392,6 @@ pub fn build_obj(entries: Vec<(Vec<u16>, V)>) -> Vec<(Vec<u16>, V)> {
                     seen.insert(k.clone(), out.len());
                     out.push((k, v));
                 }
-            }
-        }
-    } else {
-        for (k, v) in entries {
-            let pos = out.iter().position(|e| e.0 == k);
-            match pos {
-                Some(i) => out[i].1 = v,
-                None => out.push((k, v)),
             }
         }
     }
@@ -526,9 +536,13 @@ pub fn decode(j: &J, sess: &dyn Fn(&[u16]) -> Option<usize>) -> Result<V, String
                     for p in pairs {
                         match p {
                             J::Arr(kv) if kv.len() == 2 => {
-                                let kd = decode(&kv[0], sess)?;
+                                // A plain string key is its own String(key); anything else is decoded and converted.
+                                let k = match &kv[0] {
+                                    J::Str(u) => u.clone(),
+                                    kj => js_to_string(&decode(kj, sess)?),
+                                };
                                 let vd = decode(&kv[1], sess)?;
-                                ents.push((js_to_string(&kd), vd));
+                                ents.push((k, vd));
                             }
                             _ => return Err("bad {obj} pair".to_string()),
                         }
@@ -591,10 +605,39 @@ pub struct Heap {
     by_label: std::collections::HashMap<String, usize>,
 }
 
+// `p` then a u64 as str::parse::<u64> reads it (optional '+', ASCII digits, no overflow), straight from the UTF-16 units.
 fn label_num(u: &[u16], p: char) -> Option<u64> {
-    let s = String::from_utf16_lossy(u);
-    let rest = s.strip_prefix(p)?;
-    rest.parse::<u64>().ok()
+    let rest = match u.split_first() {
+        Some((&c, rest)) if c as u32 == p as u32 => rest,
+        _ => return None,
+    };
+    let digits = match rest.split_first() {
+        Some((&c, d)) if c == b'+' as u16 => d,
+        _ => rest,
+    };
+    if digits.is_empty() {
+        return None;
+    }
+    let mut n: u64 = 0;
+    for &c in digits {
+        let d = c.wrapping_sub(b'0' as u16);
+        if d > 9 {
+            return None;
+        }
+        n = n.checked_mul(10)?.checked_add(d as u64)?;
+    }
+    Some(n)
+}
+
+// A short ASCII label as &str in a stack buffer (labels are "sN"/"bN"); None for anything else.
+fn ascii_label<'a>(u: &[u16], buf: &'a mut [u8; 32]) -> Option<&'a str> {
+    if u.len() > buf.len() || u.iter().any(|&c| c >= 0x80) {
+        return None;
+    }
+    for (b, &c) in buf.iter_mut().zip(u) {
+        *b = c as u8;
+    }
+    std::str::from_utf8(&buf[..u.len()]).ok()
 }
 
 // The value of the "budget" pair inside an encoded {"obj":[...]} session, if any.
@@ -699,10 +742,13 @@ impl Heap {
             self.by_label.insert(l.clone(), h);
             self.objs[h].label = Some(l);
         }
-        let label = self.objs[h].label.clone().unwrap_or_default();
+        let label = J::s(self.objs[h].label.as_deref().unwrap_or_default());
         // The value is taken out while encoding so that nested handles can borrow the heap mutably.
         let val = std::mem::replace(&mut self.objs[h].val, V::Undef);
-        let mut pairs: Vec<J> = Vec::new();
+        let mut pairs: Vec<J> = Vec::with_capacity(match &val {
+            V::Obj(es) => es.len(),
+            _ => 0,
+        });
         if let V::Obj(es) = &val {
             for e in es {
                 let ev = if k_eq(&e.0, "budget") && matches!(e.1, V::Obj(_)) { self.enc_budget(h, &e.1) } else { self.enc(&e.1) };
@@ -710,7 +756,7 @@ impl Heap {
             }
         }
         self.objs[h].val = val;
-        J::Obj(vec![(ku("sref"), J::s(&label)), (ku("v"), J::Obj(vec![(ku("obj"), J::Arr(pairs))]))])
+        J::Obj(vec![(ku("sref"), label), (ku("v"), J::Obj(vec![(ku("obj"), J::Arr(pairs))]))])
     }
 
     fn enc_budget(&mut self, h: usize, budget: &V) -> J {
@@ -718,9 +764,9 @@ impl Heap {
             self.b_seq += 1;
             self.objs[h].bud = Some(format!("b{}", self.b_seq));
         }
-        let label = self.objs[h].bud.clone().unwrap_or_default();
+        let label = J::s(self.objs[h].bud.as_deref().unwrap_or_default());
         let body = self.enc(budget);
-        J::Obj(vec![(ku("bref"), J::s(&label)), (ku("v"), body)])
+        J::Obj(vec![(ku("bref"), label), (ku("v"), body)])
     }
 
     // Raise the label counters over every sref / bref label found in program JV.
@@ -787,6 +833,10 @@ impl Heap {
             Some(&h) => h,
             None => return Err(format!("program: bset on unknown session {}", label)),
         };
+        self.set_budget_h(h, label, b)
+    }
+
+    fn set_budget_h(&mut self, h: usize, label: &str, b: Option<&J>) -> Result<(), String> {
         let es = match &mut self.objs[h].val {
             V::Obj(es) => es,
             _ => return Err(format!("program: bset on non-object session {}", label)),
@@ -842,11 +892,22 @@ impl Heap {
     }
 
     fn apply_sref(&mut self, label: &[u16], v: &J) -> Result<(), String> {
-        let lab = String::from_utf16_lossy(label);
-        if self.by_label.contains_key(&lab) {
-            let b = budget_pair(v);
-            return self.set_budget(&lab, b);
-        }
+        let mut buf = [0u8; 32];
+        let lab = match ascii_label(label, &mut buf) {
+            Some(a) => {
+                if let Some(&h) = self.by_label.get(a) {
+                    return self.set_budget_h(h, a, budget_pair(v));
+                }
+                a.to_string()
+            }
+            None => {
+                let lab = String::from_utf16_lossy(label);
+                if let Some(&h) = self.by_label.get(&lab) {
+                    return self.set_budget_h(h, &lab, budget_pair(v));
+                }
+                lab
+            }
+        };
         let mut bud: Option<String> = None;
         let vj = strip_budget(v, &mut bud);
         let val = decode(&vj, &no_sess)?;

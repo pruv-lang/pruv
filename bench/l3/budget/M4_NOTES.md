@@ -108,3 +108,12 @@ Options, none applied here (compiler untouched, M4 Pruv sources unchanged):
 2. Pruv source: in the hot paths (`find`, `entry_matches`, `slot_pos`, `valid`, the decoders) replace `rd`/`wr` by
    direct `st[i]` where the bound can be proven; the compiler already emits those unchecked. This needs proof work
    (header validity implying the region bounds) and is not needed for the M4 verdict.
+
+## Against hand-written Rust (perf headroom)
+
+`perf_headroom/HOST.md` adds a std-only hand Rust port of the same `exec()` (`perf_headroom/host/src/bin/m4_hand.rs`),
+with the same timed loop as `driver_m4 perf`. Median Pruv/hand over 5 alternating rounds: sessions 1.51–1.60, tools
+0.69–0.75, clocks 0.86–0.98.
+
+Sessions is over the 1.5× bar. With the `rd`/`wr` accessor guards removed (the `noguard` variant above), it is 1.17–1.24×.
+So the cause is the guards, and the fix is compiler option 1. The host cannot remove them.

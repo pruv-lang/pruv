@@ -80,6 +80,35 @@ fn perf(n: usize, reps: usize) {
     });
     line("store_find", n, reps, ns, "");
 
+    // (c') store_find breakdown: lookup only (id -> UTF-16 key, index probe; the non-tracing path) and the JV encode
+    // of an already found session (labels assigned in an untimed pass first) plus dropping the J tree.
+    let ns = best(reps, || {
+        let mut w = World::new(false);
+        for i in 0..n {
+            w.put_session(session_v(&format!("s{}", i), i as f64)).expect("put");
+        }
+        let t = Instant::now();
+        for id in &ids {
+            black_box(w.find_session(black_box(id)));
+        }
+        t.elapsed().as_nanos()
+    });
+    line("store_find_lookup", n, reps, ns, "");
+    let ns = best(reps, || {
+        let mut w = World::new(false);
+        for i in 0..n {
+            w.put_session(session_v(&format!("s{}", i), i as f64)).expect("put");
+        }
+        black_box(w.encode_all_sessions());
+        let hs: Vec<usize> = ids.iter().map(|id| w.find_session(id).expect("stored")).collect();
+        let t = Instant::now();
+        for &h in &hs {
+            black_box(w.heap.enc(&budget_host::V::Sess(black_box(h))));
+        }
+        t.elapsed().as_nanos()
+    });
+    line("store_find_enc", n, reps, ns, "");
+
     // (d) store_save: n budget write-through saves (each sets a new budget) (labels s1..sn assigned by an untimed encode)
     let ns = best(reps, || {
         let mut w = World::new(false);
