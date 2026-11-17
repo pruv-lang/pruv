@@ -26,7 +26,7 @@ Not-implemented reasons in Q1: hasCard (M11) 32, halt (M10) 62, decide (M10) 93.
 as it reaches one of these; every request before that point is still compared.
 Compared requests in Q1: reopen 231, attach 415, replaceForUserMessage 445, maybeClose 79, current 32, isHalted 32.
 
-Byte identity: `run_m7.py same` → Python and Rust pruvc emit identical Rust (139309 bytes each).
+Byte identity: `run_m7.py same` → Python and Rust pruvc emit identical Rust (139485 bytes each, after the review fixes).
 
 ## Intent / bug / chosen accident
 
@@ -38,6 +38,11 @@ Only intent is compared with the oracle.
 - TS fake UUID: the oracle routes `node:crypto` to a counter stream (`fakes/node-crypto.ts`); the host takes ids from
   the same stream (fx 22), so ids match exactly. Not a difference, noted because the TS perf column also uses the
   counter (cheaper than node's real `randomUUID`).
+
+- KD-M7-2 (chosen bound): OPEN clamps each unit value to 2^53 − 1 (JS max safe integer) before multiplying by
+  the size factor (≤ 8). The reference multiplies JS numbers, so it is exact only while the product stays a safe
+  integer; above that the reference rounds and Pruv does not. The earlier 2^40 clamp cut values the reference keeps
+  exactly (review finding 1) and was raised. No Q case reaches either bound.
 
 No other bug or accident was found in the M7 surface.
 
@@ -144,5 +149,20 @@ the record build and the store copy; hand's `Budget` has the same fields but `St
 
 ## Review
 
-A Codex (gpt-6-astra, ultra) review of bud_lifecycle.pruv was requested; its result had not arrived when this was
-committed, so no review findings are folded in here.
+Codex (gpt-6-astra, ultra) reviewed bud_lifecycle.pruv. Findings and what was done:
+
+1. P2 — OPEN clamped unit values to 2^40 (reproduced: delegations 1099511627777 stored as 1099511627776).
+   Fixed: clamp raised to 2^53 − 1, see KD-M7-2.
+2. P3 — the `maybe_close` fast path did not set `bv[1] = 2` (closed) the way `bud_clock::close` does on the slow
+   path. Scratch frame only, not observed by the driver. Fixed: the fast path writes `bv[1] = 2` between SETTLE
+   and DROP, the same order as `close`.
+3. P3 — `maybe_close` wrote `out[0] = 1` before returning status 5 (Need), against the "nothing written" contract.
+   Fixed: `out[0]` is written only on the returning paths after the quiet check.
+
+Reviewed with no finding: reopen in-place patch, maybe_close settle/ended/timer/changed order, clock removal and
+re-lookup, `put_str` bounds and fallback, `id_is` / `current` direct indexing, attach reuse, schedule follows /
+carryHeld rules, fresh record init, the layout comment.
+
+After the fixes: Q1 113 / 0 / 187 / 0 (Rust and Python pruvc), derived 300 exact, byte-identical (139485 bytes).
+A perf rerun gave the same ratio band (the machine was loaded; TS and hand numbers rose with it), so the table
+above is kept.

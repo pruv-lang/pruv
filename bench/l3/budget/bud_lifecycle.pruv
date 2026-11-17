@@ -345,7 +345,7 @@ fn fresh(origin: i64, size: i64, unit: [i64], ut: i64, uk: [i64], us: i64, un: i
     invariant 0 <= i && i <= 5 && 1 <= times && times <= 8
     decreases 5 - i
   {
-    let u: i64 = crate::ent_u16::clamp(rd(unit, uo + i), 1099511627776);
+    let u: i64 = crate::ent_u16::clamp(rd(unit, uo + i), 9007199254740991);
     crate::ent_u16::wr(inout o, 3 + i, u * times);
     i = i + 1;
   }
@@ -527,11 +527,11 @@ pub fn maybe_close(inout st: [i64], sk: [i64], ss: i64, sn: i64, quiet: i64, now
   if se < 0 { return 2; }
   let off: i64 = blob_at(st, se);
   let n: i64 = blob_n(st, se);
-  crate::ent_u16::wr(inout out, 0, 1);
-  if state_of(st, off, n) != 0 { return 0; }
+  if state_of(st, off, n) != 0 { crate::ent_u16::wr(inout out, 0, 1); return 0; }
   let ce: i64 = crate::bud_clock::clock_of(st, st, c40(off + 25), c32(rd(st, off + 24)));
-  if ce >= 0 && crate::bud_map::count(st, ce) > 0 { return 0; }
+  if ce >= 0 && crate::bud_map::count(st, ce) > 0 { crate::ent_u16::wr(inout out, 0, 1); return 0; }
   if quiet < 0 { return 5; }
+  crate::ent_u16::wr(inout out, 0, 1);
   if quiet == 0 { return 0; }
   // No activeSince text and no ended.at text: CLOSE keeps the record length, so only the header changes. The clock
   // part is bud_clock::close on the clock entry ce found above (SETTLE, state closed, DROP), then the header words
@@ -539,6 +539,7 @@ pub fn maybe_close(inout st: [i64], sk: [i64], ss: i64, sn: i64, quiet: i64, now
   if str_len_in(st, off, 2) == 0 && str_len_in(st, off, 3) == 0 {
     view_in(st, off, inout bv);
     let a: i64 = crate::bud_clock::settle_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
+    crate::ent_u16::wr(inout bv, 1, 2);
     crate::bud_clock::drop_at(inout st, ce, inout fx);
     let mut o2: i64 = off;
     if ce >= 0 {
