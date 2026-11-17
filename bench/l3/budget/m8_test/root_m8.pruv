@@ -1,0 +1,199 @@
+mod ent_u16;
+mod bud_store;
+mod bud_map;
+mod bud_world;
+mod bud_charge;
+mod bud_tools;
+
+// L3-10 M8 test root (test only, not product): drives bud_charge / bud_tools over the M4 world.
+// PLACEHOLDER budget record: until M7 defines the record, a session's blob holds
+//   [state, unlimited, haltReason, limits x4, used x4, tools, failures, retries, budgetId length, budgetId units...]
+// (14 words + 1 + budgetId; state -1 = the session has no budget). CURRENT(ref) = the session exists, has a budget,
+// and its budgetId equals ref.budgetId; cv[1..14] is filled from blob words 0..13 and written back after the call.
+//
+// t_call op, key = `len, units...`:
+//   [1, sessionId key, budgetId key, what x10]   charge      (what as in bud_charge.pruv)
+//   [2, sessionId key, budgetId key]             noteFailure
+//   [3, sessionId key, budgetId key, turnId key, activityId key]   noteTool
+//   [4, turnId key]                              forgetTurn
+// Status: 0 done, 1 Grow (out of t_call: fx[0] = N... see below), 2 invalid, 3 fx small, 5 ResourceBound,
+//   6 HALT dispatched to a not-implemented sub-operation (M10): fx holds the halt frame and nothing was charged.
+// fx (inout, >= 4 words): fx[0] = words used after it; fx[1] = charge status (bud_charge codes) for charge, else 0;
+//   on status 6 the halt frame follows: [20, reason k, sessionId key, budgetId key] = the call halt(ref, k).
+// Grow: a negative status -N (nothing written; the host grows the buffer to at least N words and retries).
+// Scratch `cv` (>= 15 words) is caller-provided working memory; the host never reads it.
+
+fn key_end(op: [i64], p: i64) -> i64
+  requires 0 <= p
+  ensures result == -1 || (result > p && result <= len(op))
+{
+  let n: i64 = len(op);
+  if p >= n { return -1; }
+  let kn: i64 = crate::ent_u16::rd(op, p);
+  if kn < 0 || kn > n - p - 1 { return -1; }
+  return p + 1 + kn;
+}
+
+// Loads the charge view for ref (sk, bk) from the session blob into cv; cv[0] = 1 when current. Returns the session
+// entry when current, else -1.
+fn load_cv(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64, inout cv: [i64]) -> i64
+{
+  crate::ent_u16::wr(inout cv, 0, 0);
+  let se: i64 = crate::bud_map::find(st, 0, sk, ss, sn);
+  if se < 0 { return -1; }
+  let a: i64 = crate::bud_store::field_addr(st, se);
+  if a < 0 { return -1; }
+  let n: i64 = crate::bud_store::c40(crate::ent_u16::rd(st, a + 13));
+  let off: i64 = crate::bud_store::c40(crate::ent_u16::rd(st, a + 12));
+  if n < 15 { return -1; }
+  if bn < 0 || bn > 4294967296 || bs < 0 || bs > 1099511627776 { return -1; }
+  if crate::ent_u16::rd(st, off) < 0 { return -1; }
+  if crate::ent_u16::rd(st, off + 14) != bn || n != 15 + bn { return -1; }
+  let mut j: i64 = 0;
+  while j < bn
+    invariant 0 <= j && j <= bn && bn <= 4294967296 && 0 <= off && off <= 1099511627776 && 0 <= bs && bs <= 1099511627776
+    decreases bn - j
+  {
+    if crate::ent_u16::rd(st, off + 15 + j) != crate::ent_u16::rd(bk, bs + j) { return -1; }
+    j = j + 1;
+  }
+  let mut i: i64 = 0;
+  while i < 14
+    invariant 0 <= i && i <= 14 && 0 <= off && off <= 1099511627776
+    decreases 14 - i
+  {
+    crate::ent_u16::wr(inout cv, 1 + i, crate::ent_u16::rd(st, off + i));
+    i = i + 1;
+  }
+  crate::ent_u16::wr(inout cv, 0, 1);
+  return se;
+}
+
+// Writes the counters cv[8..14] back into blob words 7..13 (in place: same length).
+fn store_cv(inout st: [i64], se: i64, cv: [i64]) -> i64
+{
+  if se < 0 { return 0; }
+  let n: i64 = crate::bud_map::blob_len(st, se);
+  if n < 15 { return 2; }
+  let a: i64 = crate::bud_store::c40(crate::bud_store::ef(st, se, 12));
+  let mut i: i64 = 7;
+  while i < 14
+    invariant 7 <= i && i <= 14
+    decreases 14 - i
+  {
+    crate::ent_u16::wr(inout st, a + i, crate::ent_u16::rd(cv, 1 + i));
+    i = i + 1;
+  }
+  return 0;
+}
+
+pub fn t_init(inout st: [i64]) -> i64
+{ return crate::bud_store::init_store(inout st); }
+
+pub fn t_grow(prev: [i64], inout next: [i64]) -> i64
+{
+  if !crate::bud_store::valid(prev) { return 2; }
+  if len(next) < len(prev) { return 2; }
+  let r: i64 = crate::bud_map::grow_copy(prev, inout next);
+  if r != 0 { return 2; }
+  return 0;
+}
+
+// session put: [sessionId key, n, words...]; 0 ok, 1 Grow (out[0] = N), 2 invalid, 3 out small.
+pub fn t_put(inout st: [i64], op: [i64], inout out: [i64]) -> i64
+{
+  if !crate::bud_store::valid(st) { return 2; }
+  let e1: i64 = key_end(op, 0);
+  if e1 < 0 || e1 >= len(op) { return 2; }
+  let kn: i64 = crate::ent_u16::rd(op, 0);
+  let n: i64 = crate::ent_u16::rd(op, e1);
+  if n < 0 || n != len(op) - e1 - 1 { return 2; }
+  return crate::bud_world::session_put(inout st, op, 1, kn, op, e1 + 1, n, inout out);
+}
+
+// halt frame [20, k, sessionId key, budgetId key] into fx after the status word; 6, or 3 when fx is too small.
+fn halt_frame(op: [i64], e2: i64, k: i64, inout fx: [i64]) -> i64
+  requires 0 <= e2 && e2 <= len(op)
+{
+  if e2 < 1 || e2 > 4294967296 || len(fx) < e2 + 3 { return 3; }
+  crate::ent_u16::wr(inout fx, 2, 20);
+  crate::ent_u16::wr(inout fx, 3, k);
+  let mut i: i64 = 1;
+  while i < e2
+    invariant 1 <= i && i <= e2 && e2 <= 4294967296
+    decreases e2 - i
+  {
+    crate::ent_u16::wr(inout fx, 3 + i, crate::ent_u16::rd(op, i));
+    i = i + 1;
+  }
+  crate::ent_u16::wr(inout fx, 0, e2 + 2);
+  return 6;
+}
+
+pub fn t_call(inout st: [i64], op: [i64], inout cv: [i64], inout fx: [i64]) -> i64
+{
+  if !crate::bud_store::valid(st) { return 2; }
+  if len(op) < 2 || len(fx) < 2 || len(cv) < 15 { return 2; }
+  crate::ent_u16::wr(inout fx, 0, 1);
+  crate::ent_u16::wr(inout fx, 1, 0);
+  let code: i64 = crate::ent_u16::rd(op, 0);
+  let e1: i64 = key_end(op, 1);
+  if e1 < 0 { return 2; }
+  let sn: i64 = crate::ent_u16::rd(op, 1);
+  if code == 4 {
+    if e1 != len(op) { return 2; }
+    let fr: i64 = crate::bud_tools::forget_turn(inout st, op, 2, sn);
+    return 0;
+  }
+  let e2: i64 = key_end(op, e1);
+  if e2 < 0 { return 2; }
+  let bn: i64 = crate::ent_u16::rd(op, e1);
+  if code == 1 {
+    if e2 + 10 != len(op) { return 2; }
+    let se: i64 = load_cv(st, op, 2, sn, op, e1 + 1, bn, inout cv);
+    let r: i64 = crate::bud_charge::charge(inout cv, op, e2);
+    crate::ent_u16::wr(inout fx, 1, r);
+    if r == 2 || r == 5 { return r; }
+    if r >= 33 && r <= 36 {
+      let h: i64 = halt_frame(op, e2, r - 32, inout fx);
+      return h;
+    }
+    if r == 0 {
+      let w: i64 = store_cv(inout st, se, cv);
+      if w != 0 { return 2; }
+    }
+    return 0;
+  }
+  if code == 2 {
+    if e2 != len(op) { return 2; }
+    let se: i64 = load_cv(st, op, 2, sn, op, e1 + 1, bn, inout cv);
+    let r: i64 = crate::bud_charge::note_failure(inout cv);
+    if r != 0 { return r; }
+    let w: i64 = store_cv(inout st, se, cv);
+    if w != 0 { return 2; }
+    return 0;
+  }
+  if code == 3 {
+    let e3: i64 = key_end(op, e2);
+    if e3 < 0 { return 2; }
+    let e4: i64 = key_end(op, e3);
+    if e4 != len(op) { return 2; }
+    let tn: i64 = crate::ent_u16::rd(op, e2);
+    let an: i64 = crate::ent_u16::rd(op, e3);
+    let t: i64 = crate::bud_tools::note_tool(inout st, op, e2 + 1, tn, op, e3 + 1, an);
+    if t != 1 { return t; }
+    let se: i64 = load_cv(st, op, 2, sn, op, e1 + 1, bn, inout cv);
+    let r: i64 = crate::bud_charge::add_tool(inout cv);
+    if r != 0 { return r; }
+    let w: i64 = store_cv(inout st, se, cv);
+    if w != 0 { return 2; }
+    return 0;
+  }
+  return 2;
+}
+
+pub fn t_observe(st: [i64], inout out: [i64]) -> i64
+{
+  if !crate::bud_store::valid(st) { return 2; }
+  return crate::bud_world::observe(st, inout out);
+}
