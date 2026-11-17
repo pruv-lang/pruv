@@ -65,23 +65,25 @@ fn perf(n: usize, reps: usize) {
     });
     line("timer_fire", n, reps, ns, "");
 
-    // (c) store_find: n stored sessions, n lookups hitting different ids, result encoded and consumed
+    // (c) store_find: n stored sessions, n lookups hitting different ids, result encoded as text into a reused buffer
     let ids: Vec<String> = (0..n).map(|i| format!("s{}", (i * 7919) % n.max(1))).collect();
     let ns = best(reps, || {
         let mut w = World::new(false);
         for i in 0..n {
             w.put_session(session_v(&format!("s{}", i), i as f64)).expect("put");
         }
+        let mut out = String::with_capacity(128);
         let t = Instant::now();
         for id in &ids {
-            black_box(w.find_session_enc(black_box(id)));
+            w.find_session_text(black_box(id), &mut out);
+            black_box(out.len());
         }
         t.elapsed().as_nanos()
     });
     line("store_find", n, reps, ns, "");
 
     // (c') store_find breakdown: lookup only (id -> UTF-16 key, index probe; the lookup helper only, not the whole non-tracing exec_item) and the JV encode
-    // of an already found session (labels assigned in an untimed pass first) plus dropping the J tree.
+    // of an already found session as text into a reused buffer (labels assigned in an untimed pass first).
     let ns = best(reps, || {
         let mut w = World::new(false);
         for i in 0..n {
@@ -101,9 +103,12 @@ fn perf(n: usize, reps: usize) {
         }
         black_box(w.encode_all_sessions());
         let hs: Vec<usize> = ids.iter().map(|id| w.find_session(id).expect("stored")).collect();
+        let mut out = String::with_capacity(128);
         let t = Instant::now();
         for &h in &hs {
-            black_box(w.heap.enc(&budget_host::V::Sess(black_box(h))));
+            out.clear();
+            w.heap.enc_into(&budget_host::V::Sess(black_box(h)), &mut out);
+            black_box(out.len());
         }
         t.elapsed().as_nanos()
     });

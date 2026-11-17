@@ -68,8 +68,8 @@ pub struct World {
     key_tok: HashMap<String, u64>,
     timer_has_unref: bool,
     pub stored: Vec<Slot>,
-    // string id (u16 units) -> position in `stored` of the first Obj slot with that id
-    idx: HashMap<Vec<u16>, usize>,
+    // string id (as `idx_key` bytes) -> (position in `stored`, heap handle) of the first Obj slot with that id
+    idx: HashMap<Vec<u8>, (usize, usize)>,
     pub trace: Vec<J>,
     requests: Vec<J>,
     excluded: Vec<String>,
@@ -104,6 +104,20 @@ fn req_obj(id: &J, inst: &str, op: &str, terminal: &str, value: &J) -> J {
 // A fire segment without items (perf).
 pub fn empty_fire_seg(key: &str) -> J {
     J::Obj(vec![(ku("kind"), J::s("fire")), (ku("key"), J::s(key)), (ku("items"), J::Arr(Vec::new()))])
+}
+
+// Index key bytes of a UTF-16 string id: the units themselves when all are ASCII, else 0xFF and then each unit's two
+// bytes (little endian). ASCII keys never hold 0xFF, so two different ids never share a key.
+fn idx_key(u: &[u16]) -> Vec<u8> {
+    if u.iter().all(|&c| c < 0x80) {
+        return u.iter().map(|&c| c as u8).collect();
+    }
+    let mut v = Vec::with_capacity(1 + 2 * u.len());
+    v.push(0xFF);
+    for &c in u {
+        v.extend_from_slice(&c.to_le_bytes());
+    }
+    v
 }
 
 // A session object value {id, n} (perf).
@@ -175,42 +189,37 @@ impl World {
 
     // Rebuild the id index: string id -> position of the first Obj slot with that id (first wins).
     fn rebuild_idx(&mut self) {
-        let mut m: HashMap<Vec<u16>, usize> = HashMap::new();
+        let mut m: HashMap<Vec<u8>, (usize, usize)> = HashMap::new();
         for (pos, s) in self.stored.iter().enumerate() {
             if let Slot::Obj(h) = s {
                 if let Some(V::Str(u)) = field(&self.heap.objs[*h].val, "id") {
-                    m.entry(u.clone()).or_insert(pos);
+                    m.entry(idx_key(u)).or_insert((pos, *h));
                 }
             }
         }
         self.idx = m;
     }
 
+    #[inline]
     fn find_key(&self, u: &[u16]) -> Option<usize> {
-        self.idx.get(u).and_then(|&p| match self.stored[p] {
-            Slot::Obj(h) => Some(h),
-            _ => None,
-        })
+        if u.len() <= 64 && u.iter().all(|&c| c < 0x80) {
+            // An ASCII id is its own key: narrowed into a stack buffer (no allocation per lookup).
+            let mut buf = [0u8; 64];
+            for (b, &c) in buf.iter_mut().zip(u) {
+                *b = c as u8;
+            }
+            return self.idx.get(&buf[..u.len()]).map(|&(_, h)| h);
+        }
+        self.idx.get(idx_key(u).as_slice()).map(|&(_, h)| h)
     }
 
-    // A string id as UTF-16 units in a stack buffer when it fits (no allocation per lookup).
+    // A string id: an ASCII id probes the index with its own bytes; any other id goes through its UTF-16 units.
+    #[inline]
     fn find_str(&self, id: &str) -> Option<usize> {
-        let mut buf = [0u16; 64];
-        let mut k = 0;
-        let mut it = id.encode_utf16();
-        while let Some(c) = it.next() {
-            if k == buf.len() {
-                // Longer than the buffer: continue on the heap from where the buffer ends.
-                let mut v = Vec::with_capacity(id.len());
-                v.extend_from_slice(&buf);
-                v.push(c);
-                v.extend(it);
-                return self.find_key(&v);
-            }
-            buf[k] = c;
-            k += 1;
+        if id.is_ascii() {
+            return self.idx.get(id.as_bytes()).map(|&(_, h)| h);
         }
-        self.find_key(&buf[..k])
+        self.find_key(&u16s(id))
     }
 
     fn find_h(&self, id: &V) -> Option<usize> {
@@ -256,6 +265,7 @@ impl World {
     }
 
     // Program JV: raise the label counters, then write sref snapshots through to the shared objects.
+    #[inline]
     pub fn scan(&mut self, j: &J) -> Result<(), String> {
         self.heap.note_raw(j);
         self.heap.write_through(j)
@@ -490,16 +500,19 @@ impl World {
             other => self.heap.alloc(other),
         };
         // The id is a V::Str here (checked above); look the first match up in the index.
-        let key: Vec<u16> = match field(&self.heap.objs[h].val, "id") {
-            Some(V::Str(u)) => u.clone(),
+        let key: Vec<u8> = match field(&self.heap.objs[h].val, "id") {
+            Some(V::Str(u)) => idx_key(u),
             _ => Vec::new(),
         };
-        match self.idx.get(&key).copied() {
-            // Same id, same position: the index stays valid.
-            Some(i) => self.stored[i] = Slot::Obj(h),
+        match self.idx.get_mut(&key) {
+            // Same id, same position: only the handle changes.
+            Some(e) => {
+                self.stored[e.0] = Slot::Obj(h);
+                e.1 = h;
+            }
             None => {
                 self.stored.push(Slot::Obj(h));
-                self.idx.insert(key, self.stored.len() - 1);
+                self.idx.insert(key, (self.stored.len() - 1, h));
             }
         }
         Ok(h)
@@ -507,6 +520,7 @@ impl World {
 
     // findSession as a world query without trace (perf): the encoded result.
     // Lookup only: the stored session's heap handle (the lookup step of a non-tracing find; perf breakdown).
+    #[inline]
     pub fn find_session(&self, id: &str) -> Option<usize> {
         self.find_str(id)
     }
@@ -515,6 +529,15 @@ impl World {
         match self.find_str(id) {
             Some(h) => self.heap.enc(&V::Sess(h)),
             None => J::Obj(vec![(ku("undef"), J::int(1))]),
+        }
+    }
+
+    // find_session_enc written into `out` (cleared first) as JSON text.
+    pub fn find_session_text(&mut self, id: &str, out: &mut String) {
+        out.clear();
+        match self.find_str(id) {
+            Some(h) => self.heap.enc_into(&V::Sess(h), out),
+            None => out.push_str("{\"undef\":1}"),
         }
     }
 

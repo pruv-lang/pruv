@@ -22,10 +22,10 @@ Details, methods and raw numbers:
 | M4 resident state: sessions | 17.0-17.8 | 13.9-15.2 | 55-60 | 1.22 / 1.17 / 1.16 (was 1.40 / 1.30 / 1.30, 1.60 / 1.52 / 1.51) | `rd`/`wr` guards fixed by source fast paths (also `key_end`, decoders, `find`, `set_blob`, `blob_fits`, `session_get` on 2026-11-17). Left: rustc does not inline the generated call chain (all-`#[inline]` scratch build: 1.15 / 1.06 / 1.04) and the per-op `valid()` header check of the raw-buffer ABI (with it removed too: about 0.94-0.98); line-by-line in `perf_headroom/HOST.md` | open (> 1.1x), written reason: compiler inlining + ABI header check |
 | M4 resident state: tools | 36-40 | 53 | 60 | 0.69 / 0.75 / 0.74 | - | ok |
 | M4 resident state: clocks | 34-38 | 38-40 | 99-108 | 0.98 / 0.86 / 0.98 | - | ok |
-| M5 store_find, lookup only | 14-16 | 12-13 | - | 1.18 / 1.21 / 1.29 | was id conversion allocation | open (> 1.1x; was 33 -> 14-16) |
-| M5 store_find, JV encode only | - | - | - | 1.11 / 1.21 / 1.15 | - | open (> 1.1x) |
-| M5 store_find, lookup + JV tree encode | 369-409 | 289-300 (tree) / 68-77 (text) | 629 / 1594 / 3283 | 1.27-1.48 (tree) / 5.1-5.8 (text) | J tree building (about 12 allocations) | open (> 1.1x; the earlier won't-fix no longer holds under the tightened bar) |
-| M5 store_save | 163-172 | 126-132 | - | 1.30 / 1.35 / 1.32 | - | open (> 1.1x; was about 310 -> 168) |
+| M5 store_find, lookup only | 9.6-11.2 | 11.7-13.0 | - | 0.96 / 0.76 / 0.78 | was the UTF-16 key build and the handle read; now a byte-keyed index holding the handle | ok (was 1.18 / 1.21 / 1.29) |
+| M5 store_find, JV encode only | 31-39 | 35-39 | - | 0.87 / 0.95 / 1.02 | was the J tree; now one text encoder | ok (was 1.11 / 1.21 / 1.15 vs tree) |
+| M5 store_find, lookup + JV text encode | 67-80 | 70-77 (text) | 671 / 1620 / 3392 | 0.96 / 1.01 / 1.04 | was J tree building (about 12 allocations) and String labels; now text encoder and numeric labels | ok (was 1.27-1.48 vs tree, 5.1-5.8 vs text) |
+| M5 store_save | 128-130 | 129-136 | - | 0.96 / 1.00 / 0.99 | was `u16s` regrowth and String labels | ok (was 1.30 / 1.35 / 1.32) |
 | M6 String(int) `p_int` | 13.8-15.8 | 13.1-15.4 | 24-107 | 1.03 / 1.09 / 1.07 | - | ok (stack small results, KD-M6-3) |
 | M6 `p_iso` | 25-30 | 29-32 | 335-373 | 1.04 / 0.96 / 0.86 | - | ok |
 | M6 `p_ref` | 34-40 | 39-44 | 60-240 | 0.98 / 0.88 / 0.93 | - | ok |

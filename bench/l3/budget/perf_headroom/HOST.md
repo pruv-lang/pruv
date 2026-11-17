@@ -22,29 +22,35 @@ the order of the three sides.
 | M4 clocks (run_set + run_del) | 100 | 37.8 | 38.5 | 101.6 | 0.98 | same | — | within bar |
 | M4 clocks | 500 | 34.1 | 39.5 | 120.1 | 0.86 | same | — | within bar |
 | M4 clocks | 1000 | 38.4 | 39.3 | 94.4 | 0.98 | same | — | within bar |
-| M5 store_find (lookup + JV encode, trace path) | 100 | 365 | 64 (text) / 287 (tree) | 637 | 5.7 / 1.27 | `find_session_enc(&str)`: id lookup, first-encode labelling, result encoded as the JV frame `{"sref","v":{"obj":[..]}}` | allocation: the frame is an owned J tree, ~12 allocations | won't-fix (see below) |
-| M5 store_find | 500 | 434 | 75 / 294 | 1630 | 5.8 / 1.48 | same | same | won't-fix |
-| M5 store_find | 1000 | 394 | 78 / 297 | 3303 | 5.1 / 1.33 | same | same | won't-fix |
-| M5 store_find_enc (encode only) | 100 | 287 | 259 | — | 1.11 | encode + drop of a found, labelled session's frame tree. Labelling and lookup are untimed on both sides | — | within bar |
-| M5 store_find_enc | 500 | 328 | 271 | — | 1.21 | same | — | within bar |
-| M5 store_find_enc | 1000 | 304 | 264 | — | 1.15 | same | — | within bar |
-| M5 store_find_lookup (string-id lookup helper) | 100 | 13.8 | 11.7 | — | 1.18 | `find_session(&str)` only: id to UTF-16 units, index probe, slot to handle. It is not the whole non-trace `exec_item "find"` (see below) | (was 33 ns: per-lookup `Vec<u16>` allocation) | fixed |
-| M5 store_find_lookup | 500 | 15.0 | 12.4 | — | 1.21 | same | same | fixed |
-| M5 store_find_lookup | 1000 | 16.2 | 12.6 | — | 1.29 | same | same | fixed |
-| M5 store_save | 100 | 175 | 135 | n/a | 1.30 | `scan(program JV)`: label counter walk, sref resolve, budget pair, budget decode, set/append `budget` | (was ~310 ns: allocation and key-compare overhead) | fixed |
-| M5 store_save | 500 | 172 | 128 | n/a | 1.35 | same | same | fixed |
-| M5 store_save | 1000 | 171 | 130 | n/a | 1.32 | same | same | fixed |
+| M5 store_find (lookup + JV encode as text) | 100 | 67.1 | 69.6 | 671.3 | 0.96 | `find_session_text(&str, &mut String)`: id lookup, first-encode labelling, the JV frame `{"sref","v":{"obj":[..]}}` written as text into a reused `String` | was the owned J tree (~12 allocations) | fixed (was 365 / 1.27 vs tree, 5.7 vs text) |
+| M5 store_find | 500 | 78.0 | 77.3 | 1620.3 | 1.01 | same | same | fixed (was 434 / 5.8 vs text) |
+| M5 store_find | 1000 | 80.4 | 77.2 | 3392.0 | 1.04 | same | same | fixed (was 394 / 5.1 vs text) |
+| M5 store_find_enc (encode only) | 100 | 30.8 | 35.4 | — | 0.87 | `Heap::enc_into` of a found, labelled session into a reused `String` (hand `store_find_enc_text`). Labelling and lookup are untimed on both sides | was tree build + drop | fixed (was 1.11 vs tree) |
+| M5 store_find_enc | 500 | 37.0 | 38.8 | — | 0.95 | same | same | fixed (was 1.21) |
+| M5 store_find_enc | 1000 | 39.2 | 38.5 | — | 1.02 | same | same | fixed (was 1.15) |
+| M5 store_find_lookup (string-id lookup helper) | 100 | 11.2 | 11.7 | — | 0.96 | `find_session(&str)` only: index probe on the id, handle from the index entry. It is not the whole non-trace `exec_item "find"` | was the UTF-16 key build and the `stored[pos]` read for the handle | fixed (was 1.18) |
+| M5 store_find_lookup | 500 | 9.6 | 12.7 | — | 0.76 | same | same | fixed (was 1.21) |
+| M5 store_find_lookup | 1000 | 10.2 | 13.0 | — | 0.78 | same | same | fixed (was 1.29) |
+| M5 store_save | 100 | 130.4 | 136.2 | n/a | 0.96 | `scan(program JV)`: label counter walk, sref resolve, budget pair, budget decode, set/append `budget` | was `u16s` growing its vector several times, and text labels | fixed (was 1.30) |
+| M5 store_save | 500 | 128.6 | 128.9 | n/a | 1.00 | same | same | fixed (was 1.35) |
+| M5 store_save | 1000 | 128.2 | 129.8 | n/a | 0.99 | same | same | fixed (was 1.32) |
 
-Before the fixes (same runner and load, single alternations): store_find 405–466, store_find_lookup 33, store_save
-310–330 (M5_NOTES had 307–330).
+M5 rows are medians of 7 alternating rounds (`host/run.py --only m5 --rounds 7`). Before the 1.1× pass (same runner,
+n=1000): store_find 414, store_find_lookup 16, store_find_enc 299 (tree), store_save 174. Before the first fixes:
+store_find 405–466, store_find_lookup 33, store_save 310–330.
 
 How to read the comparison rows:
 
 - The TS `store_find` is `deps.findSession` on the oracle world. It is a linear `sessions.find` with no encode, so
   it is the TS counterpart of a lookup, not of the encode.
 - TS has no `store_save` measure (a TS save is a dep record on a shared object).
-- The `store_find` hand column is text / tree: hand code that writes the frame as JSON text, and hand code that builds
-  the same frame as an owned tree. Both include the lookup and first-encode labelling, like the Pruv side.
+- The `store_find` hand column is `store_find_text`: hand code that writes the frame as JSON text into a reused
+  `String`, including the lookup and first-encode labelling, like the Pruv side. The tree measures are gone: the host
+  has no tree encoder any more.
+- `store_find_lookup` against the hand `&str`-key core (`store_find_core`) is 1.17 / 1.22 / 1.24. That core is not the
+  same work (see the breakdown); the paired hand core is `store_find_core_u16`. That pair is close, not identical:
+  the hand core converts the id to UTF-16 units for its `HashMap<Vec<u16>,_>` and returns `&Session`, while the host
+  probes a byte key and returns a handle.
 
 ## M4 sessions: profile (was the one item over 1.5×)
 
@@ -154,38 +160,39 @@ Wall time (`host/run.py --only m4 --rounds 7`), ns per op:
 So the generated code matches the hand code once (1) is done in the compiler and (2) is accepted as the cost of
 the raw-buffer ABI. Neither can be fixed in the owned files.
 
-## Breakdown of store_find (n=1000, ns per op)
+## Breakdown of store_find (n=1000, ns per op, medians of 7 rounds)
 
 | step | Pruv | hand |
 |---|---:|---:|
-| lookup only (`store_find_lookup` / hand `store_find_core_u16`, UTF-16 keys) | 16.2 | 12.6 |
-| lookup only, hand with Rust `&str` keys (`store_find_core`) | — | 8.1 |
-| encode of a found, labelled session into an owned tree + drop (`store_find_enc` / hand `store_find_enc_tree`) | 304 | 264 |
-| lookup + labelling + frame written as JSON text into a reused `String` (hand `store_find_text`) | — | 78 |
+| lookup only (`store_find_lookup` / hand `store_find_core_u16`, UTF-16 keys) | 10.2 | 13.0 |
+| lookup only, hand with Rust `&str` keys (`store_find_core`) | — | 8.2 |
+| encode of a found, labelled session as text into a reused `String` (`store_find_enc` / hand `store_find_enc_text`) | 39.2 | 38.5 |
+| lookup + labelling + text encode (`store_find` / hand `store_find_text`) | 80.4 | 77.2 |
 
-Almost all of the ~400 ns is the J tree: about 12 heap allocations (pair arrays, UTF-16 key vectors for
-`sref`/`v`/`obj`/each key, the label, the number text) and their frees. The index probe on the string id is 16 ns.
-There is no frame decode and no host-boundary crossing in this measure. The harness overhead is the `black_box` and
-the drop, which are inside both the Pruv and the hand tree numbers.
+### What closed the store_find gap
 
-### Why store_find (encode) is won't-fix
-
-- The encode runs only when tracing is on. `exec_item "find"` without tracing does `dec` of the call arguments and
-  then `find_h` on the decoded id. The `store_find_lookup` row measures only the lookup helper on a Rust `&str`. The
-  full non-trace item also copies the id, scans the call JV and decodes the argument, and that string decode still
-  allocates. This path was not measured separately.
-- The final M13 boundary answers `findSession` with fact words, not JV trees, so the tree is apparatus (trace) cost.
-- Against the same output representation, an owned tree, the host is 1.11–1.21× hand Rust in encode only. The full
-  find is 1.27–1.48×. The 5× is the tree versus writing text directly.
-- Closing that gap means a second encoder that writes text and assigns labels, duplicating `Heap::enc` for trace
-  output only. That is a divergence risk for no product-path gain.
-- Lookup with JS string semantics needs UTF-16 keys (ids may hold lone surrogates). The hand `&str`-key core (8 ns)
-  is therefore not the same work. The UTF-16 hand core (12.6 ns) is.
+- There is one encoder. `Heap::enc_into` writes the JV text directly (frames `{"sref":"sN","v":..}`,
+  `{"bref":"bN","v":..}`, `{"undef":1}`, `{"u16":[..]}` for lone surrogates, `{"num":"<hex>"}` for non-safe-int
+  numbers). `Heap::enc` returns it as `J::Raw(text)`, an output-only J variant: `write_json` copies it as is and
+  `decode` rejects it. The tree encoder was removed, so there is no second encoder to drift.
+- Labels are `Label::N(u64)` for the canonical `<p><n>` form and `Label::T(String)` otherwise, in two maps
+  (`by_num`, `by_text`). Labelling on first encode no longer formats and hashes a `String`.
+- The id index is keyed by bytes (`idx_key`: an ASCII id is its own bytes, any other id is 0xFF followed by the LE
+  bytes of each UTF-16 unit; 0xFF never occurs in ASCII, so the key is injective). It stores the handle next to the
+  position, so a hit does not read `stored[pos]`. An ASCII `&str` probes with `id.as_bytes()` directly.
+- Lookup with JS string semantics still holds: non-ASCII ids, including lone surrogates, go through their UTF-16
+  units.
+- The trace-only argument of the earlier won't-fix no longer applies under the tightened bar, and is not needed: the
+  encode is now within the bar on its own.
 
 ## Fixes (host side only, no decision moved into the host)
 
 All in `leaf.rs` / `host.rs`. They remove allocations and repeated work only. Every budget decision is still made by
 the Pruv core.
+
+Items 1–7 are the first pass, kept as history. Items 8–11 (the 1.1× pass) replaced parts of them: the lookup now
+probes a byte-keyed index (no UTF-16 stack buffer for ASCII ids), labels are `Label` values in `by_num` / `by_text`
+(no 32-byte label buffer or `by_label`), and the encoders write text (no pairs vector).
 
 1. `find_session` / `find_session_enc` / `find_h`:
    - A string id probes the index through UTF-16 units in a 64-unit stack buffer. A longer id continues into a `Vec`
@@ -208,6 +215,10 @@ the Pruv core.
    iterator. Every key compare on the save path goes through it. All callers pass short literals.
 7. `enc_session` / `enc_budget`: the label is encoded from `&str` with no `String` clone first, and the pairs vector
    is sized up front. This gives a small gain on the trace path.
+8. One text encoder (`Heap::enc_into`, `J::Raw`) replaces the J tree encoder; see "What closed the store_find gap".
+9. `Label` enum with numeric labels, and the byte-keyed id index holding the handle (same section).
+10. `u16s` allocates exactly once for an ASCII string (it grew its vector several times on the save path).
+11. `num_of`: up to 15 digits are folded directly (exact in f64); longer text goes through `parse::<f64>`.
 
 ## Compiler requests (not done here; the compiler belongs to another sub)
 
@@ -238,7 +249,8 @@ the Pruv core.
 - M5 hand baseline (`host/src/bin/m5_hand.rs`):
   - Same n, the same id sequence `(i*7919)%n`, and the same session values `{id, n}`.
   - Labels are assigned on first encode, and store_save starts from s1..sn labelled.
-  - `store_find_enc_tree` labels all sessions and finds the handles untimed, like `harness` `store_find_enc`.
+  - `store_find_enc_text` labels all sessions and finds the handles untimed, like `harness` `store_find_enc`, then
+    writes each frame as text into a reused `String`. `store_find_text` does lookup, labelling and the text frame.
   - store_save gets the same program JV per save as `harness.rs`, as an owned tree built untimed. It does the same
     walk: label counters, sref resolve, the budget pair only, decode with `Object.fromEntries` duplicate semantics,
     then set or append `budget` and record the budget label.
@@ -248,12 +260,18 @@ the Pruv core.
     part of the host's boundary and is inside the Pruv number.
   - `m5_hand sample` prints the find frame and a saved session to check the shape:
     `{"sref":"s6","v":{"obj":[["id","s5"],["n",5]]}}`.
-- Pruv M5 breakdown rows (`store_find_lookup`, `store_find_enc`) are new `harness perf` measures.
+- Pruv M5 breakdown rows (`store_find_lookup`, `store_find_enc`) are `harness perf` measures. `store_find` and
+  `store_find_enc` write into a reused `String`, like the hand text measures.
+- `run.py` pairs: store_find/store_find_text, store_find_enc/store_find_enc_text,
+  store_find_lookup/store_find_core_u16 (and store_find_core for reference), store_save/store_save.
 - Correctness after the final changes:
   - `m5_test/run_m5.py`: exact=300, P6=0, unexplained=0, driver violations 0, determinism identical.
   - `m34_test/run.py m4`: 300/300 pass.
 - `bench/l3/lib`, `pruvc/` and `pruvc-rs/` are untouched. The M4 Pruv sources and the compiler binary (main checkout
   `pruvc-rs/target/release/pruvc`) are unchanged, so the M4 Pruv numbers differ from M4_NOTES only by load.
+- 1.1× pass audit (Codex gpt-6-astra ultra), two findings, both fixed: a `Label::N` above `i64::MAX` was written
+  as a negative number (now `push_uint`), and the hand `store_find_enc_text` labelled in lookup order, not store
+  order like the harness, so the frames differed (now store order).
 - One audit (Codex gpt-6-astra ultra) found no semantic change and no moved decision. It had six required findings,
   all applied:
   - compare encode with encode;
