@@ -1095,6 +1095,8 @@ To keep ownership disjoint, the build script generates a temporary dispatch root
 
 M0–M5 checks are explicitly oracle/apparatus/storage checks. They do not satisfy semantic implementation completion.
 
+M5 decision: the "generated effect programs" stand in for the missing core. They are derived from the oracle trace and carry only core-decided items (dependency calls with their arguments, timer arm/clear by an opaque key, terminal and value, and instance clocks/toolSeen). The host recomputes every host-owned value. TS mutates shared session objects in place. Programs model this with two conventions: sref write-through that applies only the budget attachment of a known session (every other session field stays host-owned), and `bset` items that carry a session's budget attachment before a host read. Both are test-program conventions, not the final boundary: in the final shape the attachment is core state (see `bench/l3/budget/M5_NOTES.md`).
+
 Semantic modules communicate through named Pruv sub-operation frames. The generated dispatch root resolves those names; the Rust host never implements a missing semantic operation. Milestone reports must list unimplemented dependent paths instead of substituting host decisions.
 
 No compiler-wide test suite is required for this piece unless compiler/shared-library code actually changes. Shared modules are expected to remain unchanged.

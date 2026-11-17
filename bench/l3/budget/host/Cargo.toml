@@ -1,0 +1,8 @@
+[package]
+name = "budget_host"
+version = "0.1.0"
+edition = "2021"
+[lib]
+path = "src/lib.rs"
+[dependencies]
+serde_json = { version = "1", features = ["raw_value"] }
