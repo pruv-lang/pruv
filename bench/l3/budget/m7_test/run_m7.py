@@ -517,17 +517,122 @@ def cmd_perf(args):
     return 0
 
 
+def instr_retired(cmd):
+    """Instructions retired by one run of cmd (`/usr/bin/time -l`, macOS)."""
+    r = subprocess.run(["/usr/bin/time", "-l"] + cmd, capture_output=True, text=True, cwd=HERE)
+    if r.returncode != 0:
+        sys.exit("%s failed:\n%s" % (cmd[0], r.stderr[-2000:]))
+    for l in r.stderr.splitlines():
+        if "instructions retired" in l:
+            return int(l.split()[0])
+    sys.exit("no instruction count from /usr/bin/time -l")
+
+
+B_ITEMS = ["current", "ishalted", "attach", "closereopen", "replace"]
+B_VARS = ["A", "B", "Bnv", "C", "prep", "observe"]
+B_PAIR = {"closereopen": 2}  # calls per rep; the closereopen rows are reported per pair (maybeClose + reopen)
+
+
+def cmd_boundary(args):
+    """P01 boundary experiment: A wrapper + packed root, B prepared packed root (t_call), Bnv B without valid(st),
+    C direct typed root, plus noop / prep / observe rows. Rounds alternate separate processes; the variant order
+    rotates every round and the size order reverses on odd rounds. ns and instructions are per call, except
+    closereopen which is per pair (2 calls per rep). Derived: A-B (wrapper), B-C (packed checks incl. valid),
+    B-Bnv (validation only, separate: not part of B-C's decomposition)."""
+    exe = build(args)
+    sizes = [int(x) for x in args.sizes.split(",")]
+    combos = [(i, B_VARS) for i in B_ITEMS] + [("noop", ["A", "B"])]
+    ns, al, ck = {}, {}, {}
+    for rd in range(args.rounds):
+        for size in (sizes if rd % 2 == 0 else sizes[::-1]):
+            for item, vs in combos:
+                k = rd % len(vs)
+                for var in vs[k:] + vs[:k]:
+                    r = subprocess.run([exe, "boundary", str(size), str(args.reps), item, var], capture_output=True,
+                                       text=True, cwd=HERE)
+                    if r.returncode != 0:
+                        sys.exit("boundary %s %s %d failed (rc %d):\n%s" % (item, var, size, r.returncode, r.stderr[-2000:]))
+                    for l in r.stdout.splitlines():
+                        it, v, sz, t, c, a = l.split()
+                        key_ = (it, int(sz), v)
+                        f = B_PAIR.get(it, 1)
+                        ns.setdefault(key_, []).append(float(t) * f)
+                        al[key_] = float(a) * f
+                        ck.setdefault(key_, set()).add(c)
+    instr = {}
+    if not args.no_instr:
+        for (item, size, var) in sorted(ns):
+            calls = B_PAIR.get(item, 1)  # calls per rep
+            r1, r2 = args.reps, 5 * args.reps
+            vals = []
+            for _ in range(3):
+                lo = instr_retired([exe, "boundary", str(size), str(r1), item, var])
+                hi = instr_retired([exe, "boundary", str(size), str(r2), item, var])
+                # per rep (= per call, or per pair for closereopen)
+                vals.append((hi - lo) / (r2 - r1))
+            instr[(item, size, var)] = statistics.median(vals)
+    # checksums must agree across A/B/Bnv/C of an item and size
+    bad = []
+    for (item, size, var), c in ck.items():
+        if len(c) != 1:
+            bad.append("%s %s %d: checksum varies across rounds %s" % (item, var, size, sorted(c)))
+        ref = ck.get((item, size, "A"))
+        if var in ("B", "Bnv", "C") and ref != c:
+            bad.append("%s %s %d: checksum %s != A %s" % (item, var, size, sorted(c), sorted(ref or [])))
+    stat = {}
+    for key_, v in ns.items():
+        m = statistics.median(v)
+        stat[key_] = {"median": m, "min": min(v), "max": max(v), "spread": (max(v) - min(v)) / m if m else 0.0,
+                      "allocs": al[key_], "instr": instr.get(key_), "checksum": sorted(ck[key_]), "raw_ns": v}
+    print("unit: ns / instructions per call; closereopen per pair (maybeClose + reopen)")
+    print("item | S | variant | median ns | min | max | spread | allocs | instr")
+    print("--- | --- | --- | --- | --- | --- | --- | --- | ---")
+    fi = lambda x: "-" if x is None else "%.0f" % x
+    for (item, size, var) in sorted(stat, key=lambda k: ((B_ITEMS + ["noop"]).index(k[0]), k[1], B_VARS.index(k[2]))):
+        s = stat[(item, size, var)]
+        print("%s | %d | %s | %.1f | %.1f | %.1f | %.2f | %.3f | %s" % (
+            item, size, var, s["median"], s["min"], s["max"], s["spread"], s["allocs"], fi(s["instr"])))
+    derived = []
+    print()
+    print("derived | S | what | ns | instr")
+    print("--- | --- | --- | --- | ---")
+    for item in B_ITEMS + ["noop"]:
+        for size in sizes:
+            for name, x, y in (("A-B wrapper", "A", "B"), ("B-C packed checks incl. valid", "B", "C"),
+                               ("B-Bnv validation only", "B", "Bnv")):
+                if (item, size, x) not in stat or (item, size, y) not in stat:
+                    continue
+                dn = stat[(item, size, x)]["median"] - stat[(item, size, y)]["median"]
+                di = None
+                if stat[(item, size, x)]["instr"] is not None and stat[(item, size, y)]["instr"] is not None:
+                    di = stat[(item, size, x)]["instr"] - stat[(item, size, y)]["instr"]
+                derived.append({"item": item, "size": size, "what": name, "ns": dn, "instr": di})
+                print("%s | %d | %s | %.1f | %s" % (item, size, name, dn, fi(di)))
+    os.makedirs(WORK, exist_ok=True)
+    with open(os.path.join(WORK, "boundary.json"), "w") as f:
+        json.dump({"rounds": args.rounds, "reps": args.reps, "sizes": sizes,
+                   "rows": [dict(item=k[0], size=k[1], variant=k[2], **v) for k, v in sorted(stat.items())],
+                   "derived": derived, "checksum_problems": bad}, f, indent=1)
+    for b in bad:
+        print("CHECKSUM MISMATCH", b)
+    return 1 if bad else 0
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["q", "perf", "derive", "same"])
+    ap.add_argument("cmd", choices=["q", "perf", "derive", "same", "boundary"])
+    ap.add_argument("--sizes", default="100,500")
+    ap.add_argument("--no-instr", action="store_true")
     ap.add_argument("--pruvc", default=PRUVC_DEFAULT)
     ap.add_argument("--py", action="store_true")
     ap.add_argument("--cases", default=os.path.join(WORK, "cases.jsonl"))
     ap.add_argument("--oracle", default=os.path.join(WORK, "oracle.jsonl"))
-    ap.add_argument("--rounds", type=int, default=5)
+    ap.add_argument("--rounds", type=int, default=None)  # perf 5, boundary 7
     ap.add_argument("--reps", type=int, default=200000)
     a = ap.parse_args()
-    sys.exit({"q": cmd_q, "perf": cmd_perf, "derive": cmd_derive, "same": cmd_same}[a.cmd](a))
+    if a.rounds is None:
+        a.rounds = 7 if a.cmd == "boundary" else 5
+    sys.exit({"q": cmd_q, "perf": cmd_perf, "derive": cmd_derive, "same": cmd_same, "boundary": cmd_boundary}[a.cmd](a))
 
 
 if __name__ == "__main__":

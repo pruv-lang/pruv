@@ -8,7 +8,11 @@ mod bud_tools;
 // L3-10 M8 test root (test only, not product): drives bud_charge / bud_tools over the M4 world.
 // PLACEHOLDER budget record: until M7 defines the record, a session's blob holds
 //   [state, unlimited, haltReason, limits x4, used x4, tools, failures, retries, budgetId length, budgetId units...]
-// (14 words + 1 + budgetId; state -1 = the session has no budget). CURRENT(ref) = the session exists, has a budget,
+// (14 words + 1 + budgetId; state -1 = the session has no budget).
+// Store invariant: every stored record passed t_put validation (n >= 15, state in -1..2, unlimited in 0..1, reason in
+// -1..4, word 14 == n - 15, every id unit in 0..65535; counters are not validated). Under it the range checks on
+// state / reason in load_cv and bud_charge are redundant; they are kept (total code) and not removed in this change.
+// CURRENT(ref) = the session exists, has a budget,
 // and its budgetId equals ref.budgetId; cv[1..14] is filled from blob words 0..13 and written back after the call.
 //
 // t_call op, key = `len, units...`:
@@ -23,6 +27,8 @@ mod bud_tools;
 // Grow: a negative status -N (nothing written; the host grows the buffer to at least N words and retries).
 // Scratch `cv` (>= 15 words) is caller-provided working memory; the host never reads it.
 
+// End position of the key `len, units...` that starts at p (units 0..65535, length within op), or -1. Same loop as
+// ../m34_test/root_m4.pruv key_end; applies to every key of t_put and t_call.
 fn key_end(op: [i64], p: i64) -> i64
   requires 0 <= p
   ensures result == -1 || (result > p && result <= len(op))
@@ -31,6 +37,15 @@ fn key_end(op: [i64], p: i64) -> i64
   if p >= n { return -1; }
   let kn: i64 = op[p];
   if kn < 0 || kn > n - p - 1 { return -1; }
+  let mut j: i64 = 0;
+  while j < kn
+    invariant 0 <= j && j <= kn && 0 <= p && p < n && kn <= n - p - 1 && n == len(op)
+    decreases kn - j
+  {
+    let u: i64 = op[p + 1 + j];
+    if u < 0 || u > 65535 { return -1; }
+    j = j + 1;
+  }
   return p + 1 + kn;
 }
 
@@ -154,6 +169,28 @@ pub fn t_put(inout st: [i64], op: [i64], inout out: [i64]) -> i64
   let kn: i64 = crate::ent_u16::rd(op, 0);
   let n: i64 = crate::ent_u16::rd(op, e1);
   if n < 0 || n != len(op) - e1 - 1 { return 2; }
+  // Ingress validation of the record words r = op[rs .. rs + n] (malformed host input -> InvalidInput, state
+  // unchanged: nothing has been written yet). Counter words (limits / used / tools / failures / retries) are not
+  // validated.
+  let rs: i64 = e1 + 1;
+  if n < 15 { return 2; }
+  let r0: i64 = crate::ent_u16::rd(op, rs);
+  if r0 < -1 || r0 > 2 { return 2; }
+  let r1: i64 = crate::ent_u16::rd(op, rs + 1);
+  if r1 < 0 || r1 > 1 { return 2; }
+  let r2: i64 = crate::ent_u16::rd(op, rs + 2);
+  if r2 < -1 || r2 > 4 { return 2; }
+  if crate::ent_u16::rd(op, rs + 14) != n - 15 { return 2; }
+  let m: i64 = n - 15;
+  let mut j: i64 = 0;
+  while j < m
+    invariant 0 <= j && j <= m && 1 <= rs && rs + 15 + m == len(op)
+    decreases m - j
+  {
+    let u: i64 = crate::ent_u16::rd(op, rs + 15 + j);
+    if u < 0 || u > 65535 { return 2; }
+    j = j + 1;
+  }
   return crate::bud_world::session_put(inout st, op, 1, kn, op, e1 + 1, n, inout out);
 }
 

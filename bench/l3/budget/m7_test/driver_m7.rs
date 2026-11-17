@@ -99,6 +99,12 @@ impl World {
     // One public call: body = [code, origin, size, unit x6, sessionId key, budgetId key]; the host inserts now, the
     // next isQuiet answer and the next UUID key.
     fn call(&mut self, body: &[i64]) -> i64 {
+        let (slot, op, quiet) = self.take_op(body);
+        self.call_with(slot, op, quiet)
+    }
+
+    // The host op build / cache lookup of `call` (returns the op taken out of its slot; give it back with put_op).
+    fn take_op(&mut self, body: &[i64]) -> (usize, Vec<i64>, i64) {
         let quiet = self.quiet.get(self.next_quiet).copied().unwrap_or(0);
         let k = (body.as_ptr() as usize, body.len(), quiet, self.next_uuid);
         let mut slot = usize::MAX;
@@ -124,6 +130,18 @@ impl World {
             }
         }
         op[1] = self.now;
+        (slot, op, quiet)
+    }
+
+    fn put_op(&mut self, slot: usize, op: Vec<i64>) {
+        if slot == usize::MAX {
+            self.op = op;
+        } else {
+            self.ops[slot].1 = op;
+        }
+    }
+
+    fn call_with(&mut self, slot: usize, op: Vec<i64>, quiet: i64) -> i64 {
         let mut r = 0;
         for _ in 0..8 {
             self.fx[0] = 0;
@@ -134,11 +152,7 @@ impl World {
             }
             break;
         }
-        if slot == usize::MAX {
-            self.op = op;
-        } else {
-            self.ops[slot].1 = op;
-        }
+        self.put_op(slot, op);
         let used = self.fx[0].max(0) as usize;
         if r != 0 {
             // A finished call that consulted isQuiet consumed the answer even when it failed afterwards.
@@ -410,10 +424,380 @@ fn run_perf(args: &[String]) {
     println!("replace {} {:.1}", size, t.elapsed().as_nanos() as f64 / reps as f64);
 }
 
+// ---- boundary <S> <reps> [item] [variant] (P01 boundary experiment, see run_m7.py cmd_boundary) ----
+//
+// Variants per item (current, ishalted, attach, closereopen, replace):
+//   A    World::call (host op build/cache + sol::t_call + effect handling)
+//   B    sol::t_call on the prepared op Vec (the words A builds), no wrapper
+//   Bnv  sol::t_call_nv: B without bud_store::valid(st)
+//   C    sol::c_* typed entries (separate key slices, no key_end parsing, no valid)
+//   prep the host op build of A only (no t_call)
+//   observe  result consumption only (checksum fold), on the result of one call
+// item noop: A and B with code 0 (unknown code, status 2).
+// Every timed variant resets next_uuid/next_quiet before each call and folds the full result (status, effect
+// words fx[1..=fx[0]], and the out / budget-view words) into a checksum; observe consumes the same.
+// Output line: `item variant S ns_per_call checksum allocs_per_call`.
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+struct Counting;
+static ALLOCS: AtomicU64 = AtomicU64::new(0);
+
+unsafe impl GlobalAlloc for Counting {
+    unsafe fn alloc(&self, l: Layout) -> *mut u8 {
+        ALLOCS.fetch_add(1, Ordering::Relaxed);
+        System.alloc(l)
+    }
+    unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
+        ALLOCS.fetch_add(1, Ordering::Relaxed);
+        System.alloc_zeroed(l)
+    }
+    unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
+        System.dealloc(p, l)
+    }
+    unsafe fn realloc(&self, p: *mut u8, l: Layout, n: usize) -> *mut u8 {
+        ALLOCS.fetch_add(1, Ordering::Relaxed);
+        System.realloc(p, l, n)
+    }
+}
+
+#[global_allocator]
+static GLOBAL: Counting = Counting;
+
+#[derive(Clone, Copy, PartialEq)]
+enum Var {
+    A,
+    B,
+    Bnv,
+    C,
+}
+
+// Prepared inputs of one call: the op A would build and the typed pieces C takes from it.
+struct Prep {
+    op: Vec<i64>,
+    code: i64,
+    now: i64,
+    quiet: i64,
+    origin: i64,
+    size: i64,
+    unit: Vec<i64>,
+    sk: Vec<i64>,
+    bk: Vec<i64>,
+    uk: Vec<i64>,
+}
+
+fn prep_of(w: &mut World, body: &[i64]) -> Prep {
+    w.next_uuid = 0;
+    w.next_quiet = 0;
+    let (slot, op, quiet) = w.take_op(body);
+    let p = op.clone();
+    w.put_op(slot, op);
+    let sn = p[11] as usize;
+    let e1 = 12 + sn;
+    let bn = p[e1] as usize;
+    let e2 = e1 + 1 + bn;
+    let un = p[e2] as usize;
+    Prep {
+        code: p[0],
+        now: p[1],
+        quiet,
+        origin: p[3],
+        size: p[4],
+        unit: p[5..11].to_vec(),
+        sk: p[12..12 + sn].to_vec(),
+        bk: p[e1 + 1..e1 + 1 + bn].to_vec(),
+        uk: p[e2 + 1..e2 + 1 + un].to_vec(),
+        op: p,
+    }
+}
+
+// Retry a call that answered Grow (-N), as World::call does.
+fn raw_call(w: &mut World, op: &Vec<i64>, nv: bool) -> i64 {
+    let mut r = 0;
+    for _ in 0..8 {
+        w.fx[0] = 0;
+        r = if nv {
+            sol::t_call_nv(&mut w.st, op, &mut w.bv, &mut w.fx, &mut w.out)
+        } else {
+            sol::t_call(&mut w.st, op, &mut w.bv, &mut w.fx, &mut w.out)
+        };
+        if r < 0 {
+            w.grow((-r) as usize);
+            continue;
+        }
+        break;
+    }
+    r
+}
+
+fn c_call(w: &mut World, p: &Prep) -> i64 {
+    let mut r = 0;
+    for _ in 0..8 {
+        w.fx[0] = 0;
+        r = match p.code {
+            1 => sol::c_current(&w.st, black_box(&p.sk), black_box(&p.bk), &mut w.out),
+            2 => sol::c_is_halted(&w.st, black_box(&p.sk), black_box(&p.bk), &mut w.out),
+            3 => sol::c_attach(&mut w.st, black_box(&p.sk), p.origin, p.size, &p.unit, black_box(&p.uk), p.now, &mut w.fx, &mut w.out),
+            4 => sol::c_replace(&mut w.st, black_box(&p.sk), p.origin, p.size, &p.unit, black_box(&p.uk), p.now, &mut w.bv, &mut w.fx, &mut w.out),
+            5 => sol::c_reopen(&mut w.st, black_box(&p.sk), black_box(&p.bk), &mut w.fx, &mut w.out),
+            6 => sol::c_maybe_close(&mut w.st, black_box(&p.sk), p.quiet, p.now, &mut w.bv, &mut w.fx, &mut w.out),
+            _ => 2,
+        };
+        if r < 0 {
+            w.grow((-r) as usize);
+            continue;
+        }
+        break;
+    }
+    r
+}
+
+// One call of variant v with the same reset of the host's UUID / isQuiet streams.
+fn one(v: Var, w: &mut World, body: &[i64], p: &Prep) -> i64 {
+    w.next_uuid = 0;
+    w.next_quiet = 0;
+    match v {
+        Var::A => w.call(black_box(body)),
+        Var::B => raw_call(w, black_box(&p.op), false),
+        Var::Bnv => raw_call(w, black_box(&p.op), true),
+        Var::C => c_call(w, p),
+    }
+}
+
+// Fold the full result into the checksum, identically for every variant (A, B, Bnv, C) and for observe:
+// the status; every effect word fx[1..=fx[0]] (effects are bare codes, they carry no payload words in fx; the
+// words they refer to live in out and are folded below), also after a failed call (fx is reset before each
+// call by all variants); and for status 0 a budget view (st[off..off+n)), a ref (out[..2+n], plus the carried
+// old id when effect [21] is held) or the tag.
+fn consume(w: &World, r: i64, sum: u64) -> u64 {
+    let mut s = sum.wrapping_mul(1000003).wrapping_add(r as u64);
+    let used = w.fx[0].max(0) as usize;
+    s = s.wrapping_mul(31).wrapping_add(used as u64);
+    for x in &w.fx[1..=used] {
+        s = s.wrapping_mul(31).wrapping_add(*x as u64);
+    }
+    if r != 0 {
+        return s;
+    }
+    let mut fold = |x: i64| s = s.wrapping_mul(31).wrapping_add(x as u64);
+    match w.out[0] {
+        4 => {
+            let n = w.out[1].max(0) as usize;
+            let off = w.out[2].max(0) as usize;
+            for x in &w.st[off..off + n] {
+                fold(*x);
+            }
+        }
+        3 => {
+            let used = w.fx[0].max(0) as usize;
+            let l = 2 + w.out[1].max(0) as usize;
+            let k = if w.fx[1..=used].contains(&21) { l + 1 + w.out[l].max(0) as usize } else { l };
+            for x in &w.out[..k] {
+                fold(*x);
+            }
+        }
+        x => fold(x),
+    }
+    s
+}
+
+struct Item {
+    name: &'static str,
+    bodies: Vec<Vec<i64>>,
+    state: i64,
+    quiet: Vec<i64>,
+    put: Option<Vec<i64>>,
+}
+
+fn run_boundary(args: &[String]) {
+    let size: usize = args[0].parse().unwrap();
+    let reps: usize = args[1].parse().unwrap();
+    let only_item = args.get(2).map(|s| s.as_str()).filter(|s| *s != "all");
+    let only_var = args.get(3).map(|s| s.as_str()).filter(|s| *s != "all");
+    let sids: Vec<String> = (0..size).map(|i| format!("s{:04}", i)).collect();
+    let bid = |i: usize| format!("{:08x}-0000-4000-8000-000000000001", i);
+    let unit = [120i64, 24, 3, 2, 1, 0];
+    let last = size - 1;
+    let setup = |it: &Item| -> World {
+        let mut w = World::new();
+        w.silent = true;
+        for (i, s) in sids.iter().enumerate() {
+            let mut op = key(s);
+            let r = rec(&bid(i), it.state, PERF_REST);
+            op.push(r.len() as i64);
+            op.extend(r);
+            w.put(&op);
+        }
+        w.uuids = vec![key("00000000-0000-4000-8000-0000000000aa")];
+        w.quiet = it.quiet.clone();
+        w
+    };
+    let body = |code: i64, origin: i64, sz: i64, b: &str| -> Vec<i64> {
+        let mut v = vec![code, origin, sz];
+        v.extend_from_slice(&unit);
+        v.extend(key(&sids[last]));
+        v.extend(key(b));
+        v
+    };
+    let mut put = key(&sids[last]);
+    let r = rec(&bid(last), 1, PERF_REST);
+    put.push(r.len() as i64);
+    put.extend(r);
+    let items = vec![
+        Item { name: "current", bodies: vec![body(1, -1, -1, &bid(last))], state: 0, quiet: vec![], put: None },
+        Item { name: "ishalted", bodies: vec![body(2, -1, -1, &bid(last))], state: 0, quiet: vec![], put: None },
+        Item { name: "attach", bodies: vec![body(3, 0, -1, "")], state: 0, quiet: vec![], put: None },
+        Item {
+            name: "closereopen",
+            bodies: vec![body(6, -1, -1, ""), body(5, -1, -1, &bid(last))],
+            state: 0,
+            quiet: vec![1],
+            put: None,
+        },
+        Item { name: "replace", bodies: vec![body(4, 0, 2, "")], state: 1, quiet: vec![], put: Some(put) },
+        Item { name: "noop", bodies: vec![body(0, -1, -1, &bid(last))], state: 0, quiet: vec![], put: None },
+    ];
+
+    // One sequence of an item (all its calls, then the put): used by the self-check and the timed loops.
+    let seq = |it: &Item, v: Var, w: &mut World, ps: &[Prep], sum: &mut u64| {
+        for (i, b) in it.bodies.iter().enumerate() {
+            let r = black_box(one(v, w, b, &ps[i]));
+            *sum = consume(w, r, *sum);
+        }
+        if let Some(p) = &it.put {
+            w.put(black_box(p));
+        }
+    };
+
+    // Self-check: each variant once on fresh state; call status, out, fx, bv and state words must equal A's.
+    for it in &items {
+        if only_item.map_or(false, |o| o != it.name) {
+            continue;
+        }
+        let vars: &[Var] = if it.name == "noop" { &[Var::A, Var::B] } else { &[Var::A, Var::B, Var::Bnv, Var::C] };
+        let mut want: Option<Vec<i64>> = None;
+        for &v in vars {
+            let mut w = setup(it);
+            let ps: Vec<Prep> = it.bodies.iter().map(|b| prep_of(&mut w, b)).collect();
+            let mut snap: Vec<i64> = Vec::new();
+            for (i, b) in it.bodies.iter().enumerate() {
+                let r = one(v, &mut w, b, &ps[i]);
+                let expect = if it.name == "noop" { 2 } else { 0 };
+                if r != expect {
+                    eprintln!("self-check: {} variant {} status {} (want {})", it.name, v as usize, r, expect);
+                    std::process::exit(2);
+                }
+                snap.push(r);
+                snap.extend_from_slice(&w.out);
+                snap.extend_from_slice(&w.fx);
+                snap.extend_from_slice(&w.bv);
+                snap.extend_from_slice(&w.st);
+            }
+            match &want {
+                None => want = Some(snap),
+                Some(x) => {
+                    if *x != snap {
+                        eprintln!("self-check: {} variant {} differs from A (out/fx/bv/state words)", it.name, v as usize);
+                        std::process::exit(2);
+                    }
+                }
+            }
+        }
+    }
+
+    for it in &items {
+        if only_item.map_or(false, |o| o != it.name) {
+            continue;
+        }
+        let names: &[&str] = if it.name == "noop" { &["A", "B"] } else { &["A", "B", "Bnv", "C", "prep", "observe"] };
+        for &vn in names {
+            if only_var.map_or(false, |o| o != vn) {
+                continue;
+            }
+            let mut w = setup(it);
+            let ps: Vec<Prep> = it.bodies.iter().map(|b| prep_of(&mut w, b)).collect();
+            let per = it.bodies.len();
+            let mut sum: u64 = 0;
+            let (ns, allocs);
+            match vn {
+                "prep" => {
+                    let mut once = |w: &mut World, sum: &mut u64| {
+                        for b in &it.bodies {
+                            w.next_uuid = 0;
+                            w.next_quiet = 0;
+                            let (slot, op, _q) = w.take_op(black_box(b));
+                            *sum = sum.wrapping_add(black_box(&op).len() as u64);
+                            w.put_op(slot, op);
+                        }
+                    };
+                    for _ in 0..1000 {
+                        once(&mut w, &mut sum);
+                    }
+                    sum = 0;
+                    let a0 = ALLOCS.load(Ordering::Relaxed);
+                    let t = Instant::now();
+                    for _ in 0..reps {
+                        once(&mut w, &mut sum);
+                    }
+                    ns = t.elapsed().as_nanos() as f64 / (reps * per) as f64;
+                    allocs = (ALLOCS.load(Ordering::Relaxed) - a0) as f64 / (reps * per) as f64;
+                }
+                "observe" => {
+                    // one call of A leaves the result words; only their consumption is timed
+                    let mut s0 = 0u64;
+                    let mut r = 0;
+                    for (i, b) in it.bodies.iter().enumerate() {
+                        r = one(Var::A, &mut w, b, &ps[i]);
+                    }
+                    s0 = consume(&w, r, s0);
+                    let _ = s0;
+                    for _ in 0..1000 {
+                        for _ in 0..per {
+                            sum = consume(black_box(&w), black_box(r), sum);
+                        }
+                    }
+                    sum = 0;
+                    let a0 = ALLOCS.load(Ordering::Relaxed);
+                    let t = Instant::now();
+                    for _ in 0..reps {
+                        for _ in 0..per {
+                            sum = consume(black_box(&w), black_box(r), sum);
+                        }
+                    }
+                    ns = t.elapsed().as_nanos() as f64 / (reps * per) as f64;
+                    allocs = (ALLOCS.load(Ordering::Relaxed) - a0) as f64 / (reps * per) as f64;
+                }
+                _ => {
+                    let v = match vn {
+                        "A" => Var::A,
+                        "B" => Var::B,
+                        "Bnv" => Var::Bnv,
+                        _ => Var::C,
+                    };
+                    for _ in 0..1000 {
+                        seq(it, v, &mut w, &ps, &mut sum);
+                    }
+                    sum = 0;
+                    let a0 = ALLOCS.load(Ordering::Relaxed);
+                    let t = Instant::now();
+                    for _ in 0..reps {
+                        seq(it, v, &mut w, &ps, &mut sum);
+                    }
+                    ns = t.elapsed().as_nanos() as f64 / (reps * per) as f64;
+                    allocs = (ALLOCS.load(Ordering::Relaxed) - a0) as f64 / (reps * per) as f64;
+                }
+            }
+            println!("{} {} {} {:.2} {} {:.3}", it.name, vn, size, ns, black_box(sum), allocs);
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 && args[1] == "perf" {
         run_perf(&args[2..]);
+    } else if args.len() > 1 && args[1] == "boundary" {
+        run_boundary(&args[2..]);
     } else {
         run_q();
     }
