@@ -1,0 +1,3237 @@
+[
+ {
+  "id": "N01",
+  "name": "all-counter-names-in-korean",
+  "rule": "B:68-74,131-133; spec 6.2 refusal",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": "\uc608\uc0b0 \ud55c\ub3c4(\uc2dc\uac04 2/120)\uc5d0 \ub2ff\uc544 \uc0ac\uc6a9\uc790\uac00 \ub298\ub9ac\uac70\ub098 \ub05d\ub0b4\uae30\ub97c \uace0\ub97c \ub54c\uae4c\uc9c0 \uba48\ucd98\ub2e4. \uc0c8 \uc704\uc784\u00b7\uba85\ub839\uc744 \uc2dc\ub3c4\ud558\uc9c0 \uc54a\uace0 \uc9c0\uae08\uae4c\uc9c0 \uacb0\uacfc\uc640 \ud655\uc778\ud558\uc9c0 \ubabb\ud55c \uac83\ub9cc \uc9e7\uac8c \ubcf4\uace0\ud55c\ub2e4."
+    },
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": "\uc608\uc0b0 \ud55c\ub3c4(\uc704\uc784 1/24)\uc5d0 \ub2ff\uc544 \uc0ac\uc6a9\uc790\uac00 \ub298\ub9ac\uac70\ub098 \ub05d\ub0b4\uae30\ub97c \uace0\ub97c \ub54c\uae4c\uc9c0 \uba48\ucd98\ub2e4. \uc0c8 \uc704\uc784\u00b7\uba85\ub839\uc744 \uc2dc\ub3c4\ud558\uc9c0 \uc54a\uace0 \uc9c0\uae08\uae4c\uc9c0 \uacb0\uacfc\uc640 \ud655\uc778\ud558\uc9c0 \ubabb\ud55c \uac83\ub9cc \uc9e7\uac8c \ubcf4\uace0\ud55c\ub2e4."
+    },
+    {
+     "req": "r3",
+     "terminal": "ok",
+     "value": "\uc608\uc0b0 \ud55c\ub3c4(\ube4c\ub4dc\u00b7\uba85\ub839 2/3)\uc5d0 \ub2ff\uc544 \uc0ac\uc6a9\uc790\uac00 \ub298\ub9ac\uac70\ub098 \ub05d\ub0b4\uae30\ub97c \uace0\ub97c \ub54c\uae4c\uc9c0 \uba48\ucd98\ub2e4. \uc0c8 \uc704\uc784\u00b7\uba85\ub839\uc744 \uc2dc\ub3c4\ud558\uc9c0 \uc54a\uace0 \uc9c0\uae08\uae4c\uc9c0 \uacb0\uacfc\uc640 \ud655\uc778\ud558\uc9c0 \ubabb\ud55c \uac83\ub9cc \uc9e7\uac8c \ubcf4\uace0\ud55c\ub2e4."
+    },
+    {
+     "req": "r4",
+     "terminal": "ok",
+     "value": "\uc608\uc0b0 \ud55c\ub3c4(\uac10\uc0ac 1/2)\uc5d0 \ub2ff\uc544 \uc0ac\uc6a9\uc790\uac00 \ub298\ub9ac\uac70\ub098 \ub05d\ub0b4\uae30\ub97c \uace0\ub97c \ub54c\uae4c\uc9c0 \uba48\ucd98\ub2e4. \uc0c8 \uc704\uc784\u00b7\uba85\ub839\uc744 \uc2dc\ub3c4\ud558\uc9c0 \uc54a\uace0 \uc9c0\uae08\uae4c\uc9c0 \uacb0\uacfc\uc640 \ud655\uc778\ud558\uc9c0 \ubabb\ud55c \uac83\ub9cc \uc9e7\uac8c \ubcf4\uace0\ud55c\ub2e4."
+    },
+    {
+     "req": "r5",
+     "terminal": "ok",
+     "value": "\uc608\uc0b0 \ud55c\ub3c4(\uc2e4\uc81c \ud655\uc778 0/1)\uc5d0 \ub2ff\uc544 \uc0ac\uc6a9\uc790\uac00 \ub298\ub9ac\uac70\ub098 \ub05d\ub0b4\uae30\ub97c \uace0\ub97c \ub54c\uae4c\uc9c0 \uba48\ucd98\ub2e4. \uc0c8 \uc704\uc784\u00b7\uba85\ub839\uc744 \uc2dc\ub3c4\ud558\uc9c0 \uc54a\uace0 \uc9c0\uae08\uae4c\uc9c0 \uacb0\uacfc\uc640 \ud655\uc778\ud558\uc9c0 \ubabb\ud55c \uac83\ub9cc \uc9e7\uac8c \ubcf4\uace0\ud55c\ub2e4."
+    }
+   ],
+   "counts": {
+    "now": 0,
+    "findSession": 0
+   }
+  },
+  "world": {
+   "sessions": [],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "refusal",
+    "args": [
+     "time",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "ko"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "refusal",
+    "args": [
+     "delegations",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "ko"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "refusal",
+    "args": [
+     "commands",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "ko"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r4",
+    "op": "refusal",
+    "args": [
+     "reviews",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "ko"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r5",
+    "op": "refusal",
+    "args": [
+     "checks",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "ko"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "N02",
+  "name": "all-counter-names-in-english",
+  "rule": "B:68-74,131-133; spec 6.2 refusal",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": "The request budget limit (time 2/120) was reached, so work is paused until the user extends it or ends it. Do not try new delegations or commands; briefly report the results so far and what you could not verify."
+    },
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": "The request budget limit (delegations 1/24) was reached, so work is paused until the user extends it or ends it. Do not try new delegations or commands; briefly report the results so far and what you could not verify."
+    },
+    {
+     "req": "r3",
+     "terminal": "ok",
+     "value": "The request budget limit (commands 2/3) was reached, so work is paused until the user extends it or ends it. Do not try new delegations or commands; briefly report the results so far and what you could not verify."
+    },
+    {
+     "req": "r4",
+     "terminal": "ok",
+     "value": "The request budget limit (reviews 1/2) was reached, so work is paused until the user extends it or ends it. Do not try new delegations or commands; briefly report the results so far and what you could not verify."
+    },
+    {
+     "req": "r5",
+     "terminal": "ok",
+     "value": "The request budget limit (checks 0/1) was reached, so work is paused until the user extends it or ends it. Do not try new delegations or commands; briefly report the results so far and what you could not verify."
+    }
+   ],
+   "counts": {
+    "now": 0
+   }
+  },
+  "world": {
+   "sessions": [],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "refusal",
+    "args": [
+     "time",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "en"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "refusal",
+    "args": [
+     "delegations",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "en"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "refusal",
+    "args": [
+     "commands",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "en"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r4",
+    "op": "refusal",
+    "args": [
+     "reviews",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "en"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r5",
+    "op": "refusal",
+    "args": [
+     "checks",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "en"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "N03",
+  "name": "omitted-and-undefined-language-default-to-korean",
+  "rule": "B:113,131,136,141; spec 6.1",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": "\uc608\uc0b0 \ud55c\ub3c4(\ube4c\ub4dc\u00b7\uba85\ub839 2/3)\uc5d0 \ub2ff\uc544 \uc0ac\uc6a9\uc790\uac00 \ub298\ub9ac\uac70\ub098 \ub05d\ub0b4\uae30\ub97c \uace0\ub97c \ub54c\uae4c\uc9c0 \uba48\ucd98\ub2e4. \uc0c8 \uc704\uc784\u00b7\uba85\ub839\uc744 \uc2dc\ub3c4\ud558\uc9c0 \uc54a\uace0 \uc9c0\uae08\uae4c\uc9c0 \uacb0\uacfc\uc640 \ud655\uc778\ud558\uc9c0 \ubabb\ud55c \uac83\ub9cc \uc9e7\uac8c \ubcf4\uace0\ud55c\ub2e4."
+    },
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": "\uc608\uc0b0 \ud55c\ub3c4(\ube4c\ub4dc\u00b7\uba85\ub839 2/3)\uc5d0 \ub2ff\uc544 \uc0ac\uc6a9\uc790\uac00 \ub298\ub9ac\uac70\ub098 \ub05d\ub0b4\uae30\ub97c \uace0\ub97c \ub54c\uae4c\uc9c0 \uba48\ucd98\ub2e4. \uc0c8 \uc704\uc784\u00b7\uba85\ub839\uc744 \uc2dc\ub3c4\ud558\uc9c0 \uc54a\uace0 \uc9c0\uae08\uae4c\uc9c0 \uacb0\uacfc\uc640 \ud655\uc778\ud558\uc9c0 \ubabb\ud55c \uac83\ub9cc \uc9e7\uac8c \ubcf4\uace0\ud55c\ub2e4."
+    },
+    {
+     "req": "r3",
+     "terminal": "ok",
+     "value": "\uc0ac\uc6a9\uc790\uac00 \uc608\uc0b0 \ud55c\ub3c4(\uc2e4\uc81c \ud655\uc778 0/1)\ub97c \ub298\ub838\ub2e4. \uc55e\uc11c \ub04a\uae34 \ub3c4\uad6c \ud638\ucd9c\uc740 \uc0ac\uc6a9\uc790 \uc911\ub2e8\uc774 \uc544\ub2c8\ub77c \uc774 \uc608\uc0b0 \ud55c\ub3c4\uc5d0 \ub2ff\uc544 \uc571\uc774 \uba48\ucd98 \uac83\uc774\ub2e4. \uba48\ucd98 \uc9c0\uc810\uc5d0\uc11c \uc774\uc5b4 \uac04\ub2e4."
+    },
+    {
+     "req": "r4",
+     "terminal": "ok",
+     "value": "\uc0ac\uc6a9\uc790\uac00 \uc608\uc0b0 \ud55c\ub3c4(\uc2e4\uc81c \ud655\uc778 0/1)\ub97c \ub298\ub838\ub2e4. \uc55e\uc11c \ub04a\uae34 \ub3c4\uad6c \ud638\ucd9c\uc740 \uc0ac\uc6a9\uc790 \uc911\ub2e8\uc774 \uc544\ub2c8\ub77c \uc774 \uc608\uc0b0 \ud55c\ub3c4\uc5d0 \ub2ff\uc544 \uc571\uc774 \uba48\ucd98 \uac83\uc774\ub2e4. \uba48\ucd98 \uc9c0\uc810\uc5d0\uc11c \uc774\uc5b4 \uac04\ub2e4."
+    },
+    {
+     "req": "r5",
+     "terminal": "ok",
+     "value": "\uc704\uc784 \uc804\uc5d0 work_card \ub3c4\uad6c\ub85c \uc0b0\ucd9c\ubb3c\uacfc \uc644\ub8cc \uc870\uac74\uc744 \uba3c\uc800 \uc801\ub294\ub2e4."
+    },
+    {
+     "req": "r6",
+     "terminal": "ok",
+     "value": "\uc704\uc784 \uc804\uc5d0 work_card \ub3c4\uad6c\ub85c \uc0b0\ucd9c\ubb3c\uacfc \uc644\ub8cc \uc870\uac74\uc744 \uba3c\uc800 \uc801\ub294\ub2e4."
+    },
+    {
+     "req": "r7",
+     "terminal": "ok",
+     "value": "\uc81c\ud55c \uc5c6\uc74c"
+    },
+    {
+     "req": "r8",
+     "terminal": "ok",
+     "value": "5"
+    }
+   ]
+  },
+  "world": {
+   "sessions": [],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "refusal",
+    "args": [
+     "commands",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "refusal",
+    "args": [
+     "commands",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     {
+      "undef": 1
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "continueText",
+    "args": [
+     "checks",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r4",
+    "op": "continueText",
+    "args": [
+     "checks",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     {
+      "undef": 1
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r5",
+    "op": "cardMissing",
+    "args": []
+   },
+   {
+    "ev": "call",
+    "req": "r6",
+    "op": "cardMissing",
+    "args": [
+     {
+      "undef": 1
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r7",
+    "op": "limitText",
+    "args": [
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      },
+      "unlimited": true
+     },
+     5
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r8",
+    "op": "limitText",
+    "args": [
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     5,
+     {
+      "undef": 1
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "N04",
+  "name": "minute-floor-boundaries",
+  "rule": "B:118-125; spec 6.2 amountText/refusalWire",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": {
+      "key": "budget.refusal.time",
+      "args": {
+       "used": 0,
+       "limit": 120
+      }
+     }
+    },
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": "The request budget limit (time 0/120) was reached, so work is paused until the user extends it or ends it. Do not try new delegations or commands; briefly report the results so far and what you could not verify."
+    },
+    {
+     "req": "r3",
+     "terminal": "ok",
+     "value": {
+      "key": "budget.refusal.time",
+      "args": {
+       "used": 0,
+       "limit": 120
+      }
+     }
+    },
+    {
+     "req": "r4",
+     "terminal": "ok",
+     "value": "The request budget limit (time 0/120) was reached, so work is paused until the user extends it or ends it. Do not try new delegations or commands; briefly report the results so far and what you could not verify."
+    },
+    {
+     "req": "r5",
+     "terminal": "ok",
+     "value": {
+      "key": "budget.refusal.time",
+      "args": {
+       "used": 1,
+       "limit": 120
+      }
+     }
+    },
+    {
+     "req": "r6",
+     "terminal": "ok",
+     "value": "The request budget limit (time 1/120) was reached, so work is paused until the user extends it or ends it. Do not try new delegations or commands; briefly report the results so far and what you could not verify."
+    },
+    {
+     "req": "r7",
+     "terminal": "ok",
+     "value": {
+      "key": "budget.refusal.time",
+      "args": {
+       "used": 1,
+       "limit": 120
+      }
+     }
+    },
+    {
+     "req": "r8",
+     "terminal": "ok",
+     "value": "The request budget limit (time 1/120) was reached, so work is paused until the user extends it or ends it. Do not try new delegations or commands; briefly report the results so far and what you could not verify."
+    },
+    {
+     "req": "r9",
+     "terminal": "ok",
+     "value": {
+      "key": "budget.refusal.time",
+      "args": {
+       "used": 2,
+       "limit": 120
+      }
+     }
+    },
+    {
+     "req": "r10",
+     "terminal": "ok",
+     "value": "The request budget limit (time 2/120) was reached, so work is paused until the user extends it or ends it. Do not try new delegations or commands; briefly report the results so far and what you could not verify."
+    }
+   ]
+  },
+  "world": {
+   "sessions": [],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "refusalWire",
+    "args": [
+     "time",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "refusal",
+    "args": [
+     "time",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "en"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "refusalWire",
+    "args": [
+     "time",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 59999,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r4",
+    "op": "refusal",
+    "args": [
+     "time",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 59999,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "en"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r5",
+    "op": "refusalWire",
+    "args": [
+     "time",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 60000,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r6",
+    "op": "refusal",
+    "args": [
+     "time",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 60000,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "en"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r7",
+    "op": "refusalWire",
+    "args": [
+     "time",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 119999,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r8",
+    "op": "refusal",
+    "args": [
+     "time",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 119999,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "en"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r9",
+    "op": "refusalWire",
+    "args": [
+     "time",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 120000,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r10",
+    "op": "refusal",
+    "args": [
+     "time",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 120000,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "en"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "N05",
+  "name": "unlimited-text-versus-numeric-wire-limit",
+  "rule": "B:113-128; spec 6.2",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": "\uc608\uc0b0 \ud55c\ub3c4(\ube4c\ub4dc\u00b7\uba85\ub839 2/\uc81c\ud55c \uc5c6\uc74c)\uc5d0 \ub2ff\uc544 \uc0ac\uc6a9\uc790\uac00 \ub298\ub9ac\uac70\ub098 \ub05d\ub0b4\uae30\ub97c \uace0\ub97c \ub54c\uae4c\uc9c0 \uba48\ucd98\ub2e4. \uc0c8 \uc704\uc784\u00b7\uba85\ub839\uc744 \uc2dc\ub3c4\ud558\uc9c0 \uc54a\uace0 \uc9c0\uae08\uae4c\uc9c0 \uacb0\uacfc\uc640 \ud655\uc778\ud558\uc9c0 \ubabb\ud55c \uac83\ub9cc \uc9e7\uac8c \ubcf4\uace0\ud55c\ub2e4."
+    },
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": "The request budget limit (commands 2/no limit) was reached, so work is paused until the user extends it or ends it. Do not try new delegations or commands; briefly report the results so far and what you could not verify."
+    },
+    {
+     "req": "r3",
+     "terminal": "ok",
+     "value": "\uc608\uc0b0 \ud55c\ub3c4(\uc2dc\uac04 2/\uc81c\ud55c \uc5c6\uc74c)\uc5d0 \ub2ff\uc544 \uc0ac\uc6a9\uc790\uac00 \ub298\ub9ac\uac70\ub098 \ub05d\ub0b4\uae30\ub97c \uace0\ub97c \ub54c\uae4c\uc9c0 \uba48\ucd98\ub2e4. \uc0c8 \uc704\uc784\u00b7\uba85\ub839\uc744 \uc2dc\ub3c4\ud558\uc9c0 \uc54a\uace0 \uc9c0\uae08\uae4c\uc9c0 \uacb0\uacfc\uc640 \ud655\uc778\ud558\uc9c0 \ubabb\ud55c \uac83\ub9cc \uc9e7\uac8c \ubcf4\uace0\ud55c\ub2e4."
+    },
+    {
+     "req": "r4",
+     "terminal": "ok",
+     "value": {
+      "key": "budget.refusal.commands",
+      "args": {
+       "used": 2,
+       "limit": 3
+      }
+     }
+    },
+    {
+     "req": "r5",
+     "terminal": "ok",
+     "value": "\uc81c\ud55c \uc5c6\uc74c"
+    },
+    {
+     "req": "r6",
+     "terminal": "ok",
+     "value": "no limit"
+    },
+    {
+     "req": "r7",
+     "terminal": "ok",
+     "value": "3"
+    },
+    {
+     "req": "r8",
+     "terminal": "ok",
+     "value": "0"
+    }
+   ]
+  },
+  "world": {
+   "sessions": [],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "refusal",
+    "args": [
+     "commands",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      },
+      "unlimited": true
+     },
+     "ko"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "refusal",
+    "args": [
+     "commands",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      },
+      "unlimited": true
+     },
+     "en"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "refusal",
+    "args": [
+     "time",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      },
+      "unlimited": true
+     },
+     "ko"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r4",
+    "op": "refusalWire",
+    "args": [
+     "commands",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      },
+      "unlimited": true
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r5",
+    "op": "limitText",
+    "args": [
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      },
+      "unlimited": true
+     },
+     3
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r6",
+    "op": "limitText",
+    "args": [
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      },
+      "unlimited": true
+     },
+     3,
+     "en"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r7",
+    "op": "limitText",
+    "args": [
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     3
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r8",
+    "op": "limitText",
+    "args": [
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     0
+    ]
+   }
+  ]
+ },
+ {
+  "id": "N06",
+  "name": "refusal-exact-bytes-and-wire-keys",
+  "rule": "B:77-79,123-133; spec 6.2",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": "\uc608\uc0b0 \ud55c\ub3c4(\uc2dc\uac04 2/120)\uc5d0 \ub2ff\uc544 \uc0ac\uc6a9\uc790\uac00 \ub298\ub9ac\uac70\ub098 \ub05d\ub0b4\uae30\ub97c \uace0\ub97c \ub54c\uae4c\uc9c0 \uba48\ucd98\ub2e4. \uc0c8 \uc704\uc784\u00b7\uba85\ub839\uc744 \uc2dc\ub3c4\ud558\uc9c0 \uc54a\uace0 \uc9c0\uae08\uae4c\uc9c0 \uacb0\uacfc\uc640 \ud655\uc778\ud558\uc9c0 \ubabb\ud55c \uac83\ub9cc \uc9e7\uac8c \ubcf4\uace0\ud55c\ub2e4."
+    },
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": "The request budget limit (time 2/120) was reached, so work is paused until the user extends it or ends it. Do not try new delegations or commands; briefly report the results so far and what you could not verify."
+    },
+    {
+     "req": "r3",
+     "terminal": "ok",
+     "value": {
+      "key": "budget.refusal.time",
+      "args": {
+       "used": 2,
+       "limit": 120
+      }
+     }
+    },
+    {
+     "req": "r4",
+     "terminal": "ok",
+     "value": {
+      "key": "budget.refusal.delegations",
+      "args": {
+       "used": 1,
+       "limit": 24
+      }
+     }
+    },
+    {
+     "req": "r5",
+     "terminal": "ok",
+     "value": {
+      "key": "budget.refusal.commands",
+      "args": {
+       "used": 2,
+       "limit": 3
+      }
+     }
+    },
+    {
+     "req": "r6",
+     "terminal": "ok",
+     "value": {
+      "key": "budget.refusal.reviews",
+      "args": {
+       "used": 1,
+       "limit": 2
+      }
+     }
+    },
+    {
+     "req": "r7",
+     "terminal": "ok",
+     "value": {
+      "key": "budget.refusal.checks",
+      "args": {
+       "used": 0,
+       "limit": 1
+      }
+     }
+    }
+   ]
+  },
+  "world": {
+   "sessions": [],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "refusal",
+    "args": [
+     "time",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "ko"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "refusal",
+    "args": [
+     "time",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "en"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "refusalWire",
+    "args": [
+     "time",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r4",
+    "op": "refusalWire",
+    "args": [
+     "delegations",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r5",
+    "op": "refusalWire",
+    "args": [
+     "commands",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r6",
+    "op": "refusalWire",
+    "args": [
+     "reviews",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r7",
+    "op": "refusalWire",
+    "args": [
+     "checks",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "N07",
+  "name": "continuation-exact-bytes",
+  "rule": "B:81-83,136-138; spec 6.2 continueText",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": "\uc0ac\uc6a9\uc790\uac00 \uc608\uc0b0 \ud55c\ub3c4(\uc2dc\uac04 2/120)\ub97c \ub298\ub838\ub2e4. \uc55e\uc11c \ub04a\uae34 \ub3c4\uad6c \ud638\ucd9c\uc740 \uc0ac\uc6a9\uc790 \uc911\ub2e8\uc774 \uc544\ub2c8\ub77c \uc774 \uc608\uc0b0 \ud55c\ub3c4\uc5d0 \ub2ff\uc544 \uc571\uc774 \uba48\ucd98 \uac83\uc774\ub2e4. \uba48\ucd98 \uc9c0\uc810\uc5d0\uc11c \uc774\uc5b4 \uac04\ub2e4."
+    },
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": "\uc0ac\uc6a9\uc790\uac00 \uc608\uc0b0 \ud55c\ub3c4(\uc704\uc784 1/24)\ub97c \ub298\ub838\ub2e4. \uc55e\uc11c \ub04a\uae34 \ub3c4\uad6c \ud638\ucd9c\uc740 \uc0ac\uc6a9\uc790 \uc911\ub2e8\uc774 \uc544\ub2c8\ub77c \uc774 \uc608\uc0b0 \ud55c\ub3c4\uc5d0 \ub2ff\uc544 \uc571\uc774 \uba48\ucd98 \uac83\uc774\ub2e4. \uba48\ucd98 \uc9c0\uc810\uc5d0\uc11c \uc774\uc5b4 \uac04\ub2e4."
+    },
+    {
+     "req": "r3",
+     "terminal": "ok",
+     "value": "\uc0ac\uc6a9\uc790\uac00 \uc608\uc0b0 \ud55c\ub3c4(\ube4c\ub4dc\u00b7\uba85\ub839 2/3)\ub97c \ub298\ub838\ub2e4. \uc55e\uc11c \ub04a\uae34 \ub3c4\uad6c \ud638\ucd9c\uc740 \uc0ac\uc6a9\uc790 \uc911\ub2e8\uc774 \uc544\ub2c8\ub77c \uc774 \uc608\uc0b0 \ud55c\ub3c4\uc5d0 \ub2ff\uc544 \uc571\uc774 \uba48\ucd98 \uac83\uc774\ub2e4. \uba48\ucd98 \uc9c0\uc810\uc5d0\uc11c \uc774\uc5b4 \uac04\ub2e4."
+    },
+    {
+     "req": "r4",
+     "terminal": "ok",
+     "value": "\uc0ac\uc6a9\uc790\uac00 \uc608\uc0b0 \ud55c\ub3c4(\uac10\uc0ac 1/2)\ub97c \ub298\ub838\ub2e4. \uc55e\uc11c \ub04a\uae34 \ub3c4\uad6c \ud638\ucd9c\uc740 \uc0ac\uc6a9\uc790 \uc911\ub2e8\uc774 \uc544\ub2c8\ub77c \uc774 \uc608\uc0b0 \ud55c\ub3c4\uc5d0 \ub2ff\uc544 \uc571\uc774 \uba48\ucd98 \uac83\uc774\ub2e4. \uba48\ucd98 \uc9c0\uc810\uc5d0\uc11c \uc774\uc5b4 \uac04\ub2e4."
+    },
+    {
+     "req": "r5",
+     "terminal": "ok",
+     "value": "\uc0ac\uc6a9\uc790\uac00 \uc608\uc0b0 \ud55c\ub3c4(\uc2e4\uc81c \ud655\uc778 0/1)\ub97c \ub298\ub838\ub2e4. \uc55e\uc11c \ub04a\uae34 \ub3c4\uad6c \ud638\ucd9c\uc740 \uc0ac\uc6a9\uc790 \uc911\ub2e8\uc774 \uc544\ub2c8\ub77c \uc774 \uc608\uc0b0 \ud55c\ub3c4\uc5d0 \ub2ff\uc544 \uc571\uc774 \uba48\ucd98 \uac83\uc774\ub2e4. \uba48\ucd98 \uc9c0\uc810\uc5d0\uc11c \uc774\uc5b4 \uac04\ub2e4."
+    },
+    {
+     "req": "r6",
+     "terminal": "ok",
+     "value": "The user raised the request budget limit (time 2/120). The tool call that was cut off earlier was stopped by the app at this budget limit, not by the user. Continue from where you stopped."
+    },
+    {
+     "req": "r7",
+     "terminal": "ok",
+     "value": "The user raised the request budget limit (delegations 1/24). The tool call that was cut off earlier was stopped by the app at this budget limit, not by the user. Continue from where you stopped."
+    },
+    {
+     "req": "r8",
+     "terminal": "ok",
+     "value": "The user raised the request budget limit (commands 2/3). The tool call that was cut off earlier was stopped by the app at this budget limit, not by the user. Continue from where you stopped."
+    },
+    {
+     "req": "r9",
+     "terminal": "ok",
+     "value": "The user raised the request budget limit (reviews 1/2). The tool call that was cut off earlier was stopped by the app at this budget limit, not by the user. Continue from where you stopped."
+    },
+    {
+     "req": "r10",
+     "terminal": "ok",
+     "value": "The user raised the request budget limit (checks 0/1). The tool call that was cut off earlier was stopped by the app at this budget limit, not by the user. Continue from where you stopped."
+    }
+   ]
+  },
+  "world": {
+   "sessions": [],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "continueText",
+    "args": [
+     "time",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "ko"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "continueText",
+    "args": [
+     "delegations",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "ko"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "continueText",
+    "args": [
+     "commands",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "ko"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r4",
+    "op": "continueText",
+    "args": [
+     "reviews",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "ko"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r5",
+    "op": "continueText",
+    "args": [
+     "checks",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "ko"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r6",
+    "op": "continueText",
+    "args": [
+     "time",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "en"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r7",
+    "op": "continueText",
+    "args": [
+     "delegations",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "en"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r8",
+    "op": "continueText",
+    "args": [
+     "commands",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "en"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r9",
+    "op": "continueText",
+    "args": [
+     "reviews",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "en"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r10",
+    "op": "continueText",
+    "args": [
+     "checks",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "en"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "N08",
+  "name": "card-missing-and-card-error-exact-bytes",
+  "rule": "B:84-107,141-143; spec 6.2",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": "\uc704\uc784 \uc804\uc5d0 work_card \ub3c4\uad6c\ub85c \uc0b0\ucd9c\ubb3c\uacfc \uc644\ub8cc \uc870\uac74\uc744 \uba3c\uc800 \uc801\ub294\ub2e4."
+    },
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": "Before delegating, write the deliverable and the done conditions with the work_card tool."
+    },
+    {
+     "req": "r3",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "\uc9c0\uae08 \uc608\uc0b0\uc744 \ucc3e\uc744 \uc218 \uc5c6\uc5b4 \uc791\uc5c5 \uce74\ub4dc\ub97c \uc800\uc7a5\ud558\uc9c0 \ubabb\ud588\ub2e4."
+     }
+    },
+    {
+     "req": "r4",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "deliverable \uc740 1~300\uc790\uc5ec\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r5",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "done \uc740 \uac01 300\uc790 \uc774\ud558 1~5\uc904\uc774\uc5b4\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r6",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "targets \uc758 \uc218\ub294 0 \uc774\uc0c1 \uc815\uc218\uc5ec\uc57c \ud558\uace0 note \ub294 300\uc790 \uc774\ud558\uc5ec\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r7",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "verify \ub294 label 1~300\uc790\uc640 status(planned\u00b7done\u00b7skipped)\ub97c \uac00\uc9c4 0~5\uac1c \ud56d\ubaa9\uc774\uc5b4\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r8",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "conflicts \ub294 \uac01 300\uc790 \uc774\ud558 0~5\uc904\uc774\uc5b4\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r9",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "state \ub294 working\u00b7done\u00b7waiting-user\u00b7blocked \uc911 \ud558\ub098\uc5ec\uc57c \ud55c\ub2e4."
+     }
+    },
+    {
+     "req": "r10",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "The current budget was not found, so the work card was not saved."
+     }
+    },
+    {
+     "req": "r11",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "deliverable must be 1\u2013300 characters."
+     }
+    },
+    {
+     "req": "r12",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "done must be 1\u20135 lines of at most 300 characters each."
+     }
+    },
+    {
+     "req": "r13",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "targets counts must be non-negative integers and note at most 300 characters."
+     }
+    },
+    {
+     "req": "r14",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "verify must be 0\u20135 items with a label of 1\u2013300 characters and a status (planned, done or skipped)."
+     }
+    },
+    {
+     "req": "r15",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "conflicts must be 0\u20135 lines of at most 300 characters each."
+     }
+    },
+    {
+     "req": "r16",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "error": "state must be one of working, done, waiting-user or blocked."
+     }
+    }
+   ],
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.card",
+     "absent": true
+    }
+   ]
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "cardMissing",
+    "args": [
+     "ko"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "cardMissing",
+    "args": [
+     "en"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "nope",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ]
+      ]
+     },
+     "ko"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r4",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        ""
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ]
+      ]
+     },
+     "ko"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r5",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": []
+        }
+       ]
+      ]
+     },
+     "ko"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r6",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "targets",
+        {
+         "obj": [
+          [
+           "confirmed",
+           -1
+          ],
+          [
+           "candidate",
+           0
+          ],
+          [
+           "unknown",
+           0
+          ]
+         ]
+        }
+       ]
+      ]
+     },
+     "ko"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r7",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "verify",
+        {
+         "arr": [
+          null
+         ]
+        }
+       ]
+      ]
+     },
+     "ko"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r8",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "conflicts",
+        {
+         "arr": [
+          ""
+         ]
+        }
+       ]
+      ]
+     },
+     "ko"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r9",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "state",
+        "idle"
+       ]
+      ]
+     },
+     "ko"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r10",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "nope",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ]
+      ]
+     },
+     "en"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r11",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        ""
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ]
+      ]
+     },
+     "en"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r12",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": []
+        }
+       ]
+      ]
+     },
+     "en"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r13",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "targets",
+        {
+         "obj": [
+          [
+           "confirmed",
+           -1
+          ],
+          [
+           "candidate",
+           0
+          ],
+          [
+           "unknown",
+           0
+          ]
+         ]
+        }
+       ]
+      ]
+     },
+     "en"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r14",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "verify",
+        {
+         "arr": [
+          null
+         ]
+        }
+       ]
+      ]
+     },
+     "en"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r15",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "conflicts",
+        {
+         "arr": [
+          ""
+         ]
+        }
+       ]
+      ]
+     },
+     "en"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r16",
+    "op": "setCard",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     {
+      "obj": [
+       [
+        "deliverable",
+        "Ship it"
+       ],
+       [
+        "done",
+        {
+         "arr": [
+          "one"
+         ]
+        }
+       ],
+       [
+        "state",
+        "idle"
+       ]
+      ]
+     },
+     "en"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "N09",
+  "name": "budgetUnitOf-absent-and-configured",
+  "rule": "B:156-160; spec 6.2 budgetUnitOf",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": {
+      "timeMinutes": 120,
+      "delegations": 24,
+      "commands": 3,
+      "reviews": 2,
+      "checks": 1,
+      "defaultUnlimited": true
+     },
+     "valueKeys": [
+      "timeMinutes",
+      "delegations",
+      "commands",
+      "reviews",
+      "checks",
+      "defaultUnlimited"
+     ]
+    },
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": {
+      "timeMinutes": 120,
+      "delegations": 24,
+      "commands": 3,
+      "reviews": 2,
+      "checks": 1,
+      "defaultUnlimited": true
+     },
+     "valueKeys": [
+      "timeMinutes",
+      "delegations",
+      "commands",
+      "reviews",
+      "checks",
+      "defaultUnlimited"
+     ]
+    },
+    {
+     "req": "r3",
+     "terminal": "ok",
+     "value": {
+      "timeMinutes": 120,
+      "delegations": 24,
+      "commands": 3,
+      "reviews": 2,
+      "checks": 1,
+      "defaultUnlimited": true
+     },
+     "valueKeys": [
+      "timeMinutes",
+      "delegations",
+      "commands",
+      "reviews",
+      "checks",
+      "defaultUnlimited"
+     ]
+    },
+    {
+     "req": "r4",
+     "terminal": "ok",
+     "value": {
+      "timeMinutes": 30,
+      "delegations": 5,
+      "commands": 2,
+      "reviews": 3,
+      "checks": 4
+     },
+     "valueKeys": [
+      "timeMinutes",
+      "delegations",
+      "commands",
+      "reviews",
+      "checks"
+     ]
+    },
+    {
+     "req": "r5",
+     "terminal": "ok",
+     "value": {
+      "timeMinutes": 30,
+      "delegations": 5,
+      "commands": 2,
+      "reviews": 3,
+      "checks": 4
+     },
+     "valueKeys": [
+      "timeMinutes",
+      "delegations",
+      "commands",
+      "reviews",
+      "checks"
+     ]
+    }
+   ],
+   "counts": {
+    "unit": 0
+   }
+  },
+  "world": {
+   "sessions": [],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "budgetUnitOf",
+    "args": []
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "budgetUnitOf",
+    "args": [
+     {
+      "undef": 1
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "budgetUnitOf",
+    "args": [
+     null
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r4",
+    "op": "budgetUnitOf",
+    "args": [
+     {
+      "obj": [
+       [
+        "timeMinutes",
+        30
+       ],
+       [
+        "delegations",
+        5
+       ],
+       [
+        "commands",
+        2
+       ],
+       [
+        "reviews",
+        3
+       ],
+       [
+        "checks",
+        4
+       ],
+       [
+        "extra",
+        "x"
+       ]
+      ]
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r5",
+    "op": "budgetUnitOf",
+    "args": [
+     {
+      "obj": [
+       [
+        "timeMinutes",
+        30
+       ],
+       [
+        "delegations",
+        5
+       ],
+       [
+        "commands",
+        2
+       ],
+       [
+        "reviews",
+        3
+       ],
+       [
+        "checks",
+        4
+       ],
+       [
+        "defaultUnlimited",
+        true
+       ]
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "N10",
+  "name": "helpers-do-not-consume-live-elapsed-time",
+  "rule": "B:110-138; spec 6.2 (no dependency call, no settle)",
+  "expect": {
+   "requests": [
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": "\uc608\uc0b0 \ud55c\ub3c4(\uc2dc\uac04 2/120)\uc5d0 \ub2ff\uc544 \uc0ac\uc6a9\uc790\uac00 \ub298\ub9ac\uac70\ub098 \ub05d\ub0b4\uae30\ub97c \uace0\ub97c \ub54c\uae4c\uc9c0 \uba48\ucd98\ub2e4. \uc0c8 \uc704\uc784\u00b7\uba85\ub839\uc744 \uc2dc\ub3c4\ud558\uc9c0 \uc54a\uace0 \uc9c0\uae08\uae4c\uc9c0 \uacb0\uacfc\uc640 \ud655\uc778\ud558\uc9c0 \ubabb\ud55c \uac83\ub9cc \uc9e7\uac8c \ubcf4\uace0\ud55c\ub2e4."
+    },
+    {
+     "req": "r3",
+     "terminal": "ok",
+     "value": {
+      "key": "budget.refusal.time",
+      "args": {
+       "used": 2,
+       "limit": 120
+      }
+     }
+    },
+    {
+     "req": "r4",
+     "terminal": "ok",
+     "value": "The user raised the request budget limit (time 2/120). The tool call that was cut off earlier was stopped by the app at this budget limit, not by the user. Continue from where you stopped."
+    },
+    {
+     "req": "r5",
+     "terminal": "ok",
+     "value": "120"
+    }
+   ],
+   "counts": {
+    "now": 1,
+    "timer.clear": 0,
+    "findSession": 2
+   },
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.used.activeMs",
+     "value": 0
+    },
+    {
+     "id": "s1",
+     "path": "budget.activeSince",
+     "value": "2023-11-14T22:13:20.000Z"
+    }
+   ]
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "runStarted",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     "k1"
+    ]
+   },
+   {
+    "ev": "advance",
+    "ms": 90000
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "refusal",
+    "args": [
+     "time",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "ko"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "refusalWire",
+    "args": [
+     "time",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r4",
+    "op": "continueText",
+    "args": [
+     "time",
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     "en"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r5",
+    "op": "limitText",
+    "args": [
+     {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 125000,
+       "delegations": 1,
+       "commands": 2,
+       "reviews": 1,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     },
+     120
+    ]
+   }
+  ]
+ }
+]

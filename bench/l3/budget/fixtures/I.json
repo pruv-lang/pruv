@@ -1,0 +1,1219 @@
+[
+ {
+  "id": "I01",
+  "name": "not-found",
+  "rule": "B:450-452; spec 4.6 decide steps 1-2",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "code": "not-found"
+     }
+    },
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "code": "not-found"
+     }
+    },
+    {
+     "req": "r3",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "code": "not-found"
+     }
+    }
+   ],
+   "counts": {
+    "findSession": 3,
+    "save": 0,
+    "changed": 0
+   },
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.state",
+     "value": "halted"
+    }
+   ]
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "halted",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      },
+      "halt": {
+       "reason": "commands",
+       "at": "2023-11-14T22:13:20.000Z",
+       "stoppedDelegationIds": []
+      }
+     }
+    },
+    {
+     "id": "s2"
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "decide",
+    "args": [
+     "nope",
+     "11111111-1111-4111-8111-000000000001",
+     "extend"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "decide",
+    "args": [
+     "s1",
+     "11111111-1111-4111-8111-000000000063",
+     "end"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "decide",
+    "args": [
+     "s2",
+     "11111111-1111-4111-8111-000000000002",
+     "extend"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "I02",
+  "name": "not-halted",
+  "rule": "B:453; spec 4.6 decide step 3",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "code": "not-halted"
+     }
+    },
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": {
+      "ok": false,
+      "code": "not-halted"
+     }
+    }
+   ],
+   "counts": {
+    "save": 0,
+    "unit": 0,
+    "dropHeld": 0
+   },
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.limits",
+     "value": {
+      "timeMinutes": 120,
+      "delegations": 24,
+      "commands": 3,
+      "reviews": 2,
+      "checks": 1
+     }
+    }
+   ]
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "open",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      }
+     }
+    },
+    {
+     "id": "s2",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000002",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "closed",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      },
+      "ended": {
+       "how": "quiet",
+       "at": "2023-11-14T22:13:20.000Z"
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "decide",
+    "args": [
+     "s1",
+     "11111111-1111-4111-8111-000000000001",
+     "extend"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "decide",
+    "args": [
+     "s2",
+     "11111111-1111-4111-8111-000000000002",
+     "end"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "I03",
+  "name": "default-extend-is-additive",
+  "rule": "B:459,461-469; spec 4.6 extend (killer M13)",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    }
+   ],
+   "counts": {
+    "unit": 1,
+    "save": 1,
+    "changed": 1,
+    "findSession": 2,
+    "queueContinue": 2,
+    "releaseHeld": 1
+   },
+   "order": [
+    [
+     "save",
+     "changed"
+    ],
+    [
+     "changed",
+     "queueContinue"
+    ],
+    [
+     "queueContinue",
+     "releaseHeld"
+    ]
+   ],
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.limits",
+     "value": {
+      "timeMinutes": 240,
+      "delegations": 48,
+      "commands": 6,
+      "reviews": 4,
+      "checks": 2
+     }
+    },
+    {
+     "id": "s1",
+     "path": "budget.state",
+     "value": "open"
+    },
+    {
+     "id": "s1",
+     "path": "budget.halt",
+     "absent": true
+    },
+    {
+     "id": "s1",
+     "path": "budget.used.commands",
+     "value": 3
+    }
+   ]
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "halted",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 3,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      },
+      "halt": {
+       "reason": "commands",
+       "at": "2023-11-14T22:13:20.000Z",
+       "stoppedDelegationIds": []
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "decide",
+    "args": [
+     "s1",
+     "11111111-1111-4111-8111-000000000001",
+     "extend"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "I04",
+  "name": "sizes-2-4-8-add-multiples-of-the-unit",
+  "rule": "B:459; spec 4.6 extend (killer M13)",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    },
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    },
+    {
+     "req": "r3",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    }
+   ],
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.limits",
+     "value": {
+      "timeMinutes": 30,
+      "delegations": 15,
+      "commands": 9,
+      "reviews": 6,
+      "checks": 3
+     }
+    },
+    {
+     "id": "s2",
+     "path": "budget.limits",
+     "value": {
+      "timeMinutes": 50,
+      "delegations": 25,
+      "commands": 15,
+      "reviews": 10,
+      "checks": 5
+     }
+    },
+    {
+     "id": "s3",
+     "path": "budget.limits",
+     "value": {
+      "timeMinutes": 90,
+      "delegations": 45,
+      "commands": 27,
+      "reviews": 18,
+      "checks": 9
+     }
+    }
+   ]
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "halted",
+      "limits": {
+       "timeMinutes": 10,
+       "delegations": 5,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      },
+      "halt": {
+       "reason": "commands",
+       "at": "2023-11-14T22:13:20.000Z",
+       "stoppedDelegationIds": []
+      }
+     }
+    },
+    {
+     "id": "s2",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000002",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "halted",
+      "limits": {
+       "timeMinutes": 10,
+       "delegations": 5,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      },
+      "halt": {
+       "reason": "commands",
+       "at": "2023-11-14T22:13:20.000Z",
+       "stoppedDelegationIds": []
+      }
+     }
+    },
+    {
+     "id": "s3",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000003",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "halted",
+      "limits": {
+       "timeMinutes": 10,
+       "delegations": 5,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      },
+      "halt": {
+       "reason": "commands",
+       "at": "2023-11-14T22:13:20.000Z",
+       "stoppedDelegationIds": []
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 10,
+    "delegations": 5,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "decide",
+    "args": [
+     "s1",
+     "11111111-1111-4111-8111-000000000001",
+     "extend",
+     2
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "decide",
+    "args": [
+     "s2",
+     "11111111-1111-4111-8111-000000000002",
+     "extend",
+     4
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r3",
+    "op": "decide",
+    "args": [
+     "s3",
+     "11111111-1111-4111-8111-000000000003",
+     "extend",
+     8
+    ]
+   }
+  ]
+ },
+ {
+  "id": "I05",
+  "name": "unlimited-extend-needs-no-unit",
+  "rule": "B:456; spec 4.6 extend step 2",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    }
+   ],
+   "counts": {
+    "unit": 0,
+    "save": 1,
+    "changed": 1
+   },
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.unlimited",
+     "value": true
+    },
+    {
+     "id": "s1",
+     "path": "budget.limits",
+     "value": {
+      "timeMinutes": 120,
+      "delegations": 24,
+      "commands": 3,
+      "reviews": 2,
+      "checks": 1
+     }
+    },
+    {
+     "id": "s1",
+     "path": "budget.state",
+     "value": "open"
+    },
+    {
+     "id": "s1",
+     "path": "budget.halt",
+     "absent": true
+    }
+   ]
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "halted",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      },
+      "halt": {
+       "reason": "commands",
+       "at": "2023-11-14T22:13:20.000Z",
+       "stoppedDelegationIds": []
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "decide",
+    "args": [
+     "s1",
+     "11111111-1111-4111-8111-000000000001",
+     "extend",
+     "unlimited"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "I06",
+  "name": "reason-and-release-true-does-not-wake",
+  "rule": "B:468-469; spec 4.6 extend steps 9-11 (killer M14)",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    }
+   ],
+   "counts": {
+    "queueContinue": 1,
+    "releaseHeld": 1
+   },
+   "order": [
+    [
+     "queueContinue",
+     "releaseHeld"
+    ]
+   ]
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "halted",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      },
+      "halt": {
+       "reason": "reviews",
+       "at": "2023-11-14T22:13:20.000Z",
+       "stoppedDelegationIds": []
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   },
+   "deps": {
+    "releaseHeld": [
+     true
+    ]
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "decide",
+    "args": [
+     "s1",
+     "11111111-1111-4111-8111-000000000001",
+     "extend"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "I07",
+  "name": "reason-and-release-false-wakes-once",
+  "rule": "B:469; spec 4.6 extend step 11 (killer M14)",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    }
+   ],
+   "counts": {
+    "queueContinue": 2,
+    "releaseHeld": 1
+   },
+   "order": [
+    [
+     "queueContinue",
+     "releaseHeld"
+    ]
+   ]
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "halted",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      },
+      "halt": {
+       "reason": "reviews",
+       "at": "2023-11-14T22:13:20.000Z",
+       "stoppedDelegationIds": []
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   },
+   "deps": {
+    "releaseHeld": [
+     false
+    ]
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "decide",
+    "args": [
+     "s1",
+     "11111111-1111-4111-8111-000000000001",
+     "extend"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "I08",
+  "name": "time-reason-with-both-release-results",
+  "rule": "B:455,468-469; spec 4.6 (replaces the excluded halt-without-reason case, 15.1 #16)",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    },
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    }
+   ],
+   "counts": {
+    "queueContinue": 3,
+    "releaseHeld": 2,
+    "save": 2
+   },
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.state",
+     "value": "open"
+    },
+    {
+     "id": "s2",
+     "path": "budget.state",
+     "value": "open"
+    }
+   ]
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "halted",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      },
+      "halt": {
+       "reason": "time",
+       "at": "2023-11-14T22:13:20.000Z",
+       "stoppedDelegationIds": []
+      }
+     }
+    },
+    {
+     "id": "s2",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000002",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "halted",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      },
+      "halt": {
+       "reason": "time",
+       "at": "2023-11-14T22:13:20.000Z",
+       "stoppedDelegationIds": []
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   },
+   "deps": {
+    "releaseHeld": [
+     true,
+     false
+    ]
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "decide",
+    "args": [
+     "s1",
+     "11111111-1111-4111-8111-000000000001",
+     "extend"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "decide",
+    "args": [
+     "s2",
+     "11111111-1111-4111-8111-000000000002",
+     "extend"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "I09",
+  "name": "user-end-closes-drops-and-saves",
+  "rule": "B:472-476; spec 4.6 end",
+  "expect": {
+   "requests": [
+    {
+     "req": "r1",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    }
+   ],
+   "counts": {
+    "dropHeld": 1,
+    "save": 1,
+    "changed": 1,
+    "releaseHeld": 0,
+    "queueContinue": 0
+   },
+   "order": [
+    [
+     "dropHeld",
+     "save"
+    ],
+    [
+     "save",
+     "changed"
+    ]
+   ],
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.state",
+     "value": "closed"
+    },
+    {
+     "id": "s1",
+     "path": "budget.ended.how",
+     "value": "user-end"
+    },
+    {
+     "id": "s1",
+     "path": "budget.ended.at",
+     "value": "2023-11-14T22:13:20.000Z"
+    },
+    {
+     "id": "s1",
+     "path": "budget.halt.reason",
+     "value": "commands"
+    }
+   ]
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "halted",
+      "limits": {
+       "timeMinutes": 120,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 0,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      },
+      "halt": {
+       "reason": "commands",
+       "at": "2023-11-14T22:13:20.000Z",
+       "stoppedDelegationIds": []
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 120,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "decide",
+    "args": [
+     "s1",
+     "11111111-1111-4111-8111-000000000001",
+     "end"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "I10",
+  "name": "retained-run-and-immediate-re-halt-after-refresh",
+  "rule": "B:466-469; spec 4.6 decide (no early return)",
+  "expect": {
+   "requests": [
+    {
+     "req": "r2",
+     "terminal": "ok",
+     "value": {
+      "ok": true
+     }
+    }
+   ],
+   "counts": {
+    "save": 2,
+    "announce": 1,
+    "queueContinue": 2,
+    "releaseHeld": 1
+   },
+   "order": [
+    [
+     "announce",
+     "queueContinue"
+    ],
+    [
+     "queueContinue",
+     "releaseHeld"
+    ]
+   ],
+   "session": [
+    {
+     "id": "s1",
+     "path": "budget.state",
+     "value": "halted"
+    },
+    {
+     "id": "s1",
+     "path": "budget.halt.reason",
+     "value": "time"
+    },
+    {
+     "id": "s1",
+     "path": "budget.limits.timeMinutes",
+     "value": 2
+    }
+   ]
+  },
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "budget": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "openedAt": "2023-11-14T22:13:20.000Z",
+      "origin": "user",
+      "state": "halted",
+      "limits": {
+       "timeMinutes": 1,
+       "delegations": 24,
+       "commands": 3,
+       "reviews": 2,
+       "checks": 1
+      },
+      "used": {
+       "activeMs": 120000,
+       "delegations": 0,
+       "commands": 0,
+       "reviews": 0,
+       "checks": 0,
+       "tools": 0,
+       "failures": 0,
+       "retries": 0
+      },
+      "halt": {
+       "reason": "commands",
+       "at": "2023-11-14T22:13:20.000Z",
+       "stoppedDelegationIds": []
+      }
+     }
+    }
+   ],
+   "unit": {
+    "timeMinutes": 1,
+    "delegations": 24,
+    "commands": 3,
+    "reviews": 2,
+    "checks": 1
+   }
+  },
+  "script": [
+   {
+    "ev": "call",
+    "req": "r1",
+    "op": "runStarted",
+    "args": [
+     {
+      "sessionId": "s1",
+      "budgetId": "11111111-1111-4111-8111-000000000001"
+     },
+     "k1"
+    ]
+   },
+   {
+    "ev": "call",
+    "req": "r2",
+    "op": "decide",
+    "args": [
+     "s1",
+     "11111111-1111-4111-8111-000000000001",
+     "extend"
+    ]
+   }
+  ]
+ }
+]
