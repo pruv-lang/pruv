@@ -1,0 +1,28 @@
+// L3-10 M3 test root: validate a flat encoding, then re-emit it through the writers (not a bulk copy).
+// Status: >= 0 words written (out[0..r) == inp); negative -(100*class + reason); -1 if out is too small.
+// Compile from the repo root:
+//   pruvc bench/l3/budget/m34_test/root_m3.pruv --lib bench/l3/budget --lib bench/l3/lib
+mod ent_u16;
+mod bud_api;
+mod bud_test_abi;
+
+pub fn m3_call(inp: [i64], inout out: [i64]) -> i64
+{
+  let r: i64 = crate::bud_test_abi::check_call(inp);
+  if r < 0 { return r; }
+  return crate::bud_test_abi::put_call(inout out, inp);
+}
+
+pub fn m3_resume(inp: [i64], inout out: [i64]) -> i64
+{
+  let r: i64 = crate::bud_test_abi::check_resume(inp);
+  if r < 0 { return r; }
+  return crate::bud_test_abi::put_resume(inout out, inp);
+}
+
+pub fn m3_outcome(inp: [i64], inout out: [i64]) -> i64
+{
+  let r: i64 = crate::bud_test_abi::check_outcome(inp);
+  if r < 0 { return r; }
+  return crate::bud_test_abi::put_outcome(inout out, inp);
+}

@@ -1,0 +1,501 @@
+// L3-10 M4: the budget world over the keyed maps (bud_map).
+//
+// Roots: 0 sessions (key sessionId, blob = opaque record words), 1 clocks (key budgetId, blob = owning sessionId
+// units, v0 since-present, v1 since, v2 armed, v3 deadline; children = runs keyed by runKey, v0 waiting),
+// 2 toolSeen (key turnId; children = activities keyed by activityId, a set). Scalars v0.. are entry fields 14...
+//
+// Every function returns a status: 0 ok (out[0] = number of result words, out[1..] the result), 1 Grow (out[0] = N,
+// no state word written), 2 invalid (corrupt state or arguments), 3 out too small. A state-changing operation
+// checks that `out` is large enough, then calls crate::bud_map::make_room with its worst case, and writes only after
+// that check succeeded. Keys are given as (array, start, length); the caller (root_m4) has validated them.
+
+fn cl(x: i64) -> i64
+  ensures 0 <= result && result <= 4294967296
+{ return crate::bud_store::c32(x); }
+
+fn fd(st: [i64], owner: i64, key: [i64], ks: i64, kn: i64) -> i64
+{ return crate::bud_map::find(st, owner, key, ks, kn); }
+
+// ---- result writing ----
+
+// Writes v at out[pos] (dropped if out of range) and returns pos + 1; saturates at 2^40.
+fn emit(inout out: [i64], pos: i64, v: i64) -> i64
+  requires 0 <= pos && pos <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776
+{
+  if pos >= 1099511627776 { return 1099511627776; }
+  crate::ent_u16::wr(inout out, pos, v);
+  return pos + 1;
+}
+
+// key of entry e as `len, units...`
+fn emit_key(st: [i64], inout out: [i64], pos: i64, e: i64) -> i64
+  requires 0 <= pos && pos <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776
+{
+  let n: i64 = crate::bud_map::key_len(st, e);
+  let mut p: i64 = emit(inout out, pos, n);
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && n <= 4294967296 && 0 <= p && p <= 1099511627776
+    decreases n - j
+  {
+    p = emit(inout out, p, crate::bud_map::key_unit(st, e, j));
+    j = j + 1;
+  }
+  return p;
+}
+
+// blob of entry e as `len, words...`
+fn emit_blob(st: [i64], inout out: [i64], pos: i64, e: i64) -> i64
+  requires 0 <= pos && pos <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776
+{
+  let n: i64 = crate::bud_map::blob_len(st, e);
+  let mut p: i64 = emit(inout out, pos, n);
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && n <= 1099511627776 && 0 <= p && p <= 1099511627776
+    decreases n - j
+  {
+    p = emit(inout out, p, crate::bud_map::blob_unit(st, e, j));
+    j = j + 1;
+  }
+  return p;
+}
+
+// Grow signal: out[0] = n.
+fn grow_sig(inout out: [i64], n: i64) -> i64
+{
+  if len(out) < 1 { return 3; }
+  crate::ent_u16::wr(inout out, 0, n);
+  return 1;
+}
+
+// One-word result [v].
+fn ret_one(inout out: [i64], v: i64) -> i64
+{
+  if len(out) < 2 { return 3; }
+  crate::ent_u16::wr(inout out, 0, 1);
+  crate::ent_u16::wr(inout out, 1, v);
+  return 0;
+}
+
+// Result `[count, key...]` for the children of owner (out[0] = words, out[1] = count, keys from out[2]).
+fn keys_of(st: [i64], inout out: [i64], owner: i64) -> i64
+{
+  let lim: i64 = crate::bud_map::walk_limit(st);
+  let mut pos: i64 = 2;
+  let mut c: i64 = 0;
+  let mut steps: i64 = 0;
+  let mut e: i64 = crate::bud_map::head(st, owner);
+  while e >= 0 && steps < lim
+    invariant 0 <= steps && steps <= lim && lim <= 4294967296 && 0 <= pos && pos <= 1099511627776 && 0 <= c && c <= steps
+    decreases lim - steps
+  {
+    pos = emit_key(st, inout out, pos, e);
+    c = c + 1;
+    steps = steps + 1;
+    e = crate::bud_map::next(st, e);
+  }
+  if pos > len(out) { return 3; }
+  crate::ent_u16::wr(inout out, 0, pos - 1);
+  crate::ent_u16::wr(inout out, 1, c);
+  return 0;
+}
+
+// ---- generic put / delete on a root map ----
+
+// Sets key -> blob in the map of `owner`. [1] new, [0] replaced (position kept).
+fn put_blob(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, blob: [i64], bs: i64, bn: i64, inout out: [i64]) -> i64
+{
+  if len(out) < 2 { return 3; }
+  let e: i64 = fd(st, owner, key, ks, kn);
+  let mut ents: i64 = 1;
+  let mut words: i64 = cl(kn) + cl(bn);
+  if e >= 0 {
+    ents = 0;
+    words = cl(bn);
+    if crate::bud_map::blob_fits(st, e, words) { words = 0; }
+  }
+  let nd: i64 = crate::bud_map::make_room(inout st, ents, words);
+  if nd != 0 { return grow_sig(inout out, nd); }
+  let mut x: i64 = e;
+  let mut fresh: i64 = 0;
+  if x < 0 {
+    x = crate::bud_map::add(inout st, owner, key, ks, kn);
+    fresh = 1;
+  }
+  if x < 0 { return 2; }
+  let r: i64 = crate::bud_map::set_blob(inout st, x, blob, bs, bn);
+  if r < 0 { return 2; }
+  return ret_one(inout out, fresh);
+}
+
+// Removes the key from the map of `owner` (children go with it). [1] removed, [0] absent.
+fn del_key(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, inout out: [i64]) -> i64
+{
+  if len(out) < 2 { return 3; }
+  let e: i64 = fd(st, owner, key, ks, kn);
+  if e < 0 { return ret_one(inout out, 0); }
+  crate::bud_map::remove(inout st, e);
+  return ret_one(inout out, 1);
+}
+
+// ---- sessions (root 0) ----
+
+pub fn session_put(inout st: [i64], key: [i64], ks: i64, kn: i64, blob: [i64], bs: i64, bn: i64, inout out: [i64]) -> i64
+{
+  return put_blob(inout st, 0, key, ks, kn, blob, bs, bn, inout out);
+}
+
+// [0] absent, or [1, n, words...]
+pub fn session_get(st: [i64], key: [i64], ks: i64, kn: i64, inout out: [i64]) -> i64
+{
+  let e: i64 = fd(st, 0, key, ks, kn);
+  if e < 0 { return ret_one(inout out, 0); }
+  let n: i64 = crate::bud_map::blob_len(st, e);
+  if n > len(out) - 3 { return 3; }
+  crate::ent_u16::wr(inout out, 0, n + 2);
+  crate::ent_u16::wr(inout out, 1, 1);
+  crate::ent_u16::wr(inout out, 2, n);
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && n <= 1099511627776
+    decreases n - j
+  {
+    crate::ent_u16::wr(inout out, 3 + j, crate::bud_map::blob_unit(st, e, j));
+    j = j + 1;
+  }
+  return 0;
+}
+
+pub fn session_del(inout st: [i64], key: [i64], ks: i64, kn: i64, inout out: [i64]) -> i64
+{
+  return del_key(inout st, 0, key, ks, kn, inout out);
+}
+
+pub fn session_keys(st: [i64], inout out: [i64]) -> i64
+{
+  return keys_of(st, inout out, 0);
+}
+
+// ---- clocks (root 1) and runs ----
+
+// [1] new, [0] existed (sessionId replaced, position kept)
+pub fn clock_put(inout st: [i64], bkey: [i64], bks: i64, bkn: i64, skey: [i64], sks: i64, skn: i64, inout out: [i64]) -> i64
+{
+  return put_blob(inout st, 1, bkey, bks, bkn, skey, sks, skn, inout out);
+}
+
+pub fn clock_del(inout st: [i64], key: [i64], ks: i64, kn: i64, inout out: [i64]) -> i64
+{
+  return del_key(inout st, 1, key, ks, kn, inout out);
+}
+
+// [1] ok, [0] no such clock
+pub fn clock_set(inout st: [i64], key: [i64], ks: i64, kn: i64, sp: i64, since: i64, armed: i64, dl: i64, inout out: [i64]) -> i64
+{
+  if len(out) < 2 { return 3; }
+  let e: i64 = fd(st, 1, key, ks, kn);
+  if e < 0 { return ret_one(inout out, 0); }
+  crate::bud_store::set_ef(inout st, e, 14, sp);
+  crate::bud_store::set_ef(inout st, e, 15, since);
+  crate::bud_store::set_ef(inout st, e, 16, armed);
+  crate::bud_store::set_ef(inout st, e, 17, dl);
+  return ret_one(inout out, 1);
+}
+
+// [0] or [1, sessionId (len, units), since_present, since, armed, deadline, run_count]
+pub fn clock_get(st: [i64], key: [i64], ks: i64, kn: i64, inout out: [i64]) -> i64
+{
+  let e: i64 = fd(st, 1, key, ks, kn);
+  if e < 0 { return ret_one(inout out, 0); }
+  let n: i64 = crate::bud_map::blob_len(st, e);
+  if n > len(out) - 8 { return 3; }
+  crate::ent_u16::wr(inout out, 0, n + 7);
+  crate::ent_u16::wr(inout out, 1, 1);
+  crate::ent_u16::wr(inout out, 2, n);
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && n <= 1099511627776
+    decreases n - j
+  {
+    crate::ent_u16::wr(inout out, 3 + j, crate::bud_map::blob_unit(st, e, j));
+    j = j + 1;
+  }
+  let b: i64 = 3 + n;
+  crate::ent_u16::wr(inout out, b, crate::bud_store::ef(st, e, 14));
+  crate::ent_u16::wr(inout out, b + 1, crate::bud_store::ef(st, e, 15));
+  crate::ent_u16::wr(inout out, b + 2, crate::bud_store::ef(st, e, 16));
+  crate::ent_u16::wr(inout out, b + 3, crate::bud_store::ef(st, e, 17));
+  crate::ent_u16::wr(inout out, b + 4, crate::bud_map::count(st, e));
+  return 0;
+}
+
+pub fn clock_keys(st: [i64], inout out: [i64]) -> i64
+{
+  return keys_of(st, inout out, 1);
+}
+
+// [2] no clock, [1] new run, [0] updated (position kept)
+pub fn run_set(inout st: [i64], bkey: [i64], bks: i64, bkn: i64, rkey: [i64], rks: i64, rkn: i64, waiting: i64, inout out: [i64]) -> i64
+{
+  if len(out) < 2 { return 3; }
+  let c: i64 = fd(st, 1, bkey, bks, bkn);
+  if c < 0 { return ret_one(inout out, 2); }
+  let r: i64 = fd(st, c, rkey, rks, rkn);
+  if r >= 0 {
+    crate::bud_store::set_ef(inout st, r, 14, waiting);
+    return ret_one(inout out, 0);
+  }
+  let nd: i64 = crate::bud_map::make_room(inout st, 1, cl(rkn));
+  if nd != 0 { return grow_sig(inout out, nd); }
+  let x: i64 = crate::bud_map::add(inout st, c, rkey, rks, rkn);
+  if x < 0 { return 2; }
+  crate::bud_store::set_ef(inout st, x, 14, waiting);
+  return ret_one(inout out, 1);
+}
+
+// [1] removed, [0] absent
+pub fn run_del(inout st: [i64], bkey: [i64], bks: i64, bkn: i64, rkey: [i64], rks: i64, rkn: i64, inout out: [i64]) -> i64
+{
+  if len(out) < 2 { return 3; }
+  let c: i64 = fd(st, 1, bkey, bks, bkn);
+  if c < 0 { return ret_one(inout out, 0); }
+  let r: i64 = fd(st, c, rkey, rks, rkn);
+  if r < 0 { return ret_one(inout out, 0); }
+  crate::bud_map::remove(inout st, r);
+  return ret_one(inout out, 1);
+}
+
+// [0] no clock, or [1, count, (key, waiting)...]
+pub fn run_list(st: [i64], key: [i64], ks: i64, kn: i64, inout out: [i64]) -> i64
+{
+  let c: i64 = fd(st, 1, key, ks, kn);
+  if c < 0 { return ret_one(inout out, 0); }
+  let lim: i64 = crate::bud_map::walk_limit(st);
+  let mut pos: i64 = 3;
+  let mut cnt: i64 = 0;
+  let mut steps: i64 = 0;
+  let mut r: i64 = crate::bud_map::head(st, c);
+  while r >= 0 && steps < lim
+    invariant 0 <= steps && steps <= lim && lim <= 4294967296 && 0 <= pos && pos <= 1099511627776 && 0 <= cnt && cnt <= steps
+    decreases lim - steps
+  {
+    pos = emit_key(st, inout out, pos, r);
+    pos = emit(inout out, pos, crate::bud_store::ef(st, r, 14));
+    cnt = cnt + 1;
+    steps = steps + 1;
+    r = crate::bud_map::next(st, r);
+  }
+  if pos > len(out) { return 3; }
+  crate::ent_u16::wr(inout out, 0, pos - 1);
+  crate::ent_u16::wr(inout out, 1, 1);
+  crate::ent_u16::wr(inout out, 2, cnt);
+  return 0;
+}
+
+// ---- toolSeen (root 2) ----
+
+// [1] new activity, [0] already seen. Looks only at the two keys; never scans the activity set.
+pub fn tool_note(inout st: [i64], tkey: [i64], tks: i64, tkn: i64, akey: [i64], aks: i64, akn: i64, inout out: [i64]) -> i64
+{
+  if len(out) < 2 { return 3; }
+  let t: i64 = fd(st, 2, tkey, tks, tkn);
+  let mut ents: i64 = 2;
+  let mut words: i64 = cl(tkn) + cl(akn);
+  if t >= 0 {
+    let a: i64 = fd(st, t, akey, aks, akn);
+    if a >= 0 { return ret_one(inout out, 0); }
+    ents = 1;
+    words = cl(akn);
+  }
+  let nd: i64 = crate::bud_map::make_room(inout st, ents, words);
+  if nd != 0 { return grow_sig(inout out, nd); }
+  let mut tt: i64 = t;
+  if tt < 0 { tt = crate::bud_map::add(inout st, 2, tkey, tks, tkn); }
+  if tt < 0 { return 2; }
+  let x: i64 = crate::bud_map::add(inout st, tt, akey, aks, akn);
+  if x < 0 { return 2; }
+  return ret_one(inout out, 1);
+}
+
+// Removes the turn and frees its activities: O(turn key length + activities), amortized O(1) per noted activity. [1] removed, [0] absent.
+pub fn tool_forget(inout st: [i64], key: [i64], ks: i64, kn: i64, inout out: [i64]) -> i64
+{
+  return del_key(inout st, 2, key, ks, kn, inout out);
+}
+
+// [count] (0 if no turn)
+pub fn tool_count(st: [i64], key: [i64], ks: i64, kn: i64, inout out: [i64]) -> i64
+{
+  let t: i64 = fd(st, 2, key, ks, kn);
+  if t < 0 { return ret_one(inout out, 0); }
+  return ret_one(inout out, crate::bud_map::count(st, t));
+}
+
+// [count, key...]
+pub fn tool_list(st: [i64], key: [i64], ks: i64, kn: i64, inout out: [i64]) -> i64
+{
+  let t: i64 = fd(st, 2, key, ks, kn);
+  return keys_of(st, inout out, t);
+}
+
+pub fn turn_keys(st: [i64], inout out: [i64]) -> i64
+{
+  return keys_of(st, inout out, 2);
+}
+
+// [live entries, used slots, live arena words, len(st)]
+pub fn stats(st: [i64], inout out: [i64]) -> i64
+{
+  if len(out) < 5 { return 3; }
+  crate::ent_u16::wr(inout out, 0, 4);
+  crate::ent_u16::wr(inout out, 1, crate::bud_store::hd(st, 12));
+  crate::ent_u16::wr(inout out, 2, crate::bud_store::hd(st, 13));
+  crate::ent_u16::wr(inout out, 3, crate::bud_store::hd(st, 14));
+  crate::ent_u16::wr(inout out, 4, len(st));
+  return 0;
+}
+
+// ---- whole-state observation (final observation only) ----
+
+fn obs_sessions(st: [i64], inout out: [i64], pos: i64) -> i64
+  requires 0 <= pos && pos <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776
+{
+  let lim: i64 = crate::bud_map::walk_limit(st);
+  let cp: i64 = pos;
+  let mut p: i64 = emit(inout out, pos, 0);
+  let mut n: i64 = 0;
+  let mut steps: i64 = 0;
+  let mut e: i64 = crate::bud_map::head(st, 0);
+  while e >= 0 && steps < lim
+    invariant 0 <= steps && steps <= lim && lim <= 4294967296 && 0 <= p && p <= 1099511627776 && 0 <= n && n <= steps
+    decreases lim - steps
+  {
+    p = emit_key(st, inout out, p, e);
+    p = emit_blob(st, inout out, p, e);
+    n = n + 1;
+    steps = steps + 1;
+    e = crate::bud_map::next(st, e);
+  }
+  crate::ent_u16::wr(inout out, cp, n);
+  return p;
+}
+
+// runs of clock c: `count, (key, waiting)...`
+fn obs_runs(st: [i64], inout out: [i64], pos: i64, c: i64) -> i64
+  requires 0 <= pos && pos <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776
+{
+  let lim: i64 = crate::bud_map::walk_limit(st);
+  let cp: i64 = pos;
+  let mut p: i64 = emit(inout out, pos, 0);
+  let mut n: i64 = 0;
+  let mut steps: i64 = 0;
+  let mut r: i64 = crate::bud_map::head(st, c);
+  while r >= 0 && steps < lim
+    invariant 0 <= steps && steps <= lim && lim <= 4294967296 && 0 <= p && p <= 1099511627776 && 0 <= n && n <= steps
+    decreases lim - steps
+  {
+    p = emit_key(st, inout out, p, r);
+    p = emit(inout out, p, crate::bud_store::ef(st, r, 14));
+    n = n + 1;
+    steps = steps + 1;
+    r = crate::bud_map::next(st, r);
+  }
+  crate::ent_u16::wr(inout out, cp, n);
+  return p;
+}
+
+fn obs_clocks(st: [i64], inout out: [i64], pos: i64) -> i64
+  requires 0 <= pos && pos <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776
+{
+  let lim: i64 = crate::bud_map::walk_limit(st);
+  let cp: i64 = pos;
+  let mut p: i64 = emit(inout out, pos, 0);
+  let mut n: i64 = 0;
+  let mut steps: i64 = 0;
+  let mut e: i64 = crate::bud_map::head(st, 1);
+  while e >= 0 && steps < lim
+    invariant 0 <= steps && steps <= lim && lim <= 4294967296 && 0 <= p && p <= 1099511627776 && 0 <= n && n <= steps
+    decreases lim - steps
+  {
+    p = emit_key(st, inout out, p, e);
+    p = emit_blob(st, inout out, p, e);
+    p = emit(inout out, p, crate::bud_store::ef(st, e, 14));
+    p = emit(inout out, p, crate::bud_store::ef(st, e, 15));
+    p = emit(inout out, p, crate::bud_store::ef(st, e, 16));
+    p = emit(inout out, p, crate::bud_store::ef(st, e, 17));
+    p = obs_runs(st, inout out, p, e);
+    n = n + 1;
+    steps = steps + 1;
+    e = crate::bud_map::next(st, e);
+  }
+  crate::ent_u16::wr(inout out, cp, n);
+  return p;
+}
+
+// activities of turn t: `turnId, count, activityId...`
+fn obs_acts(st: [i64], inout out: [i64], pos: i64, t: i64) -> i64
+  requires 0 <= pos && pos <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776
+{
+  let lim: i64 = crate::bud_map::walk_limit(st);
+  let mut p: i64 = emit_key(st, inout out, pos, t);
+  let cp: i64 = p;
+  p = emit(inout out, p, 0);
+  let mut n: i64 = 0;
+  let mut steps: i64 = 0;
+  let mut a: i64 = crate::bud_map::head(st, t);
+  while a >= 0 && steps < lim
+    invariant 0 <= steps && steps <= lim && lim <= 4294967296 && 0 <= p && p <= 1099511627776 && 0 <= n && n <= steps
+    decreases lim - steps
+  {
+    p = emit_key(st, inout out, p, a);
+    n = n + 1;
+    steps = steps + 1;
+    a = crate::bud_map::next(st, a);
+  }
+  crate::ent_u16::wr(inout out, cp, n);
+  return p;
+}
+
+fn obs_turns(st: [i64], inout out: [i64], pos: i64) -> i64
+  requires 0 <= pos && pos <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776
+{
+  let lim: i64 = crate::bud_map::walk_limit(st);
+  let cp: i64 = pos;
+  let mut p: i64 = emit(inout out, pos, 0);
+  let mut n: i64 = 0;
+  let mut steps: i64 = 0;
+  let mut t: i64 = crate::bud_map::head(st, 2);
+  while t >= 0 && steps < lim
+    invariant 0 <= steps && steps <= lim && lim <= 4294967296 && 0 <= p && p <= 1099511627776 && 0 <= n && n <= steps
+    decreases lim - steps
+  {
+    p = obs_acts(st, inout out, p, t);
+    n = n + 1;
+    steps = steps + 1;
+    t = crate::bud_map::next(st, t);
+  }
+  crate::ent_u16::wr(inout out, cp, n);
+  return p;
+}
+
+// [sessions count, (key, n, words)..., clocks count, (key, sessionId, since_present, since, armed, deadline,
+//  run count, (runKey, waiting)...)..., turns count, (turnId, count, activityId...)...]; out[0] = words that follow.
+pub fn observe(st: [i64], inout out: [i64]) -> i64
+{
+  let mut p: i64 = 1;
+  p = obs_sessions(st, inout out, p);
+  p = obs_clocks(st, inout out, p);
+  p = obs_turns(st, inout out, p);
+  if p > len(out) { return 3; }
+  crate::ent_u16::wr(inout out, 0, p - 1);
+  return 0;
+}

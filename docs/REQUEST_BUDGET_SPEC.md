@@ -23,6 +23,13 @@ evidence of what the budget is *meant* to do, not a byte contract to copy.
 Sections 7–16 below were written before this rule; where they say "byte-exact", "exact dependency trace" or
 "exception variants", read them through §0 and §15.
 
+**Resident-state amendment (2026-11-17, after `docs/RESIDENT_STATE_SPEC.md` landed).** `BudgetState` is no longer a
+value passed in and returned per call. It lives in one host-owned `[i64]` buffer that every root entry receives as
+`inout st`; Pruv validates the header and edits the buffer in place. Item 3's `(state, call, facts) -> (state', ...)`
+now reads `(inout st, call, facts) -> Done | Need | Grow`, where `Grow(N)` asks the adapter for a larger zeroed
+buffer, Pruv copies itself with `grow(prev, inout next)` and the same call is retried. No call encodes, decodes or
+copies the whole state; whole-state encoding happens only at the final observation (§8.1–§8.3, §9).
+
 ## 1. Scope and evidence
 
 Port `RequestBudgets` and its exported pure helpers into `bench/l3/budget/`. Compare the Pruv implementation against a Node oracle executing the pinned TypeScript, on:
@@ -794,13 +801,20 @@ The comparator checks the entire observation, not fixture expectation subsets.
 
 ### 8.1 Core transition
 
-The core is one Pruv module set with a single entry per public method. Each entry is a pure function:
+The core is one Pruv module set with a single root entry per public method. The budget state is resident: it lives
+in a host-owned `[i64]` buffer (`docs/RESIDENT_STATE_SPEC.md`) that every entry takes as `inout st` and edits in
+place.
 
 ```text
-step(state: BudgetState, call: Call, facts: Facts) -> Outcome
-Outcome = Done { state', effects: [Effect], result: Result }
-        | Need { state', effects: [Effect], query: Query, resume: Resume }
-resume(state, Resume, answer) -> Outcome      // at most one Need per public call
+init(inout st) -> Status                               // writes an empty state; Grow(N) if st is too small
+step(inout st, call: Call, facts: Facts, inout out) -> Outcome
+Outcome = Done { effects: [Effect], result: Result }
+        | Need { effects: [Effect], query: Query, resume: Resume }
+        | Grow { words: N }                            // st unchanged; adapter grows and retries the same call
+        | InvalidInput | ResourceBound(kind)            // st unchanged
+resume(inout st, Resume, answer, facts, inout out) -> Outcome   // at most one Need per public call (two for decide extend)
+grow(prev: [i64], inout next) -> Status                // copies, rehashes and compacts into a larger buffer
+observe(st, inout out) -> Status                       // final observation only
 ```
 
 - `Facts` is supplied by the host with every call: one `now` (ms) and one fresh UUID. Pruv uses the UUID only when it
@@ -808,13 +822,18 @@ resume(state, Resume, answer) -> Outcome      // at most one Need per public cal
 - `Effect` is an ordered list of host side effects: `save(sessionId)`, `changed`, `stopMain`, `stopDelegation`,
   `stopAttachedTurns`, `holdQueued`, `carryHeld`, `queueContinue`, `dropHeld`, `cancelRecovery`, `announce`,
   `timerSet(budgetId, delayMs)`, `timerClear(budgetId)`. The host executes them in order after receiving the outcome.
-  `save` carries the session id only; the host serializes the session record Pruv returned in `state'`.
+  `save` carries the session id and the session record words Pruv wrote into `out`; the host persists those words and
+  never reads budget fields from `st`.
 - `Query` is one of `runningDelegationIds(ref)` (halt), `isQuiet(sessionId)` (maybeClose),
   `releaseHeld(sessionId, budgetId)` (decide extend; a query because its boolean picks the wake fallback). The host
-  first executes `effects`, then answers the query, then calls `resume`.
+  first executes `effects`, then answers the query, then calls `resume`. `Resume` carries the pending sequence number
+  Pruv stored in the state header; a `resume` whose number does not match is `InvalidInput`.
 - A halt that happens inside another call (charge over limit, timer fire, decide re-halt after refresh) is the only
   nesting; it still costs one Need (`runningDelegationIds`). `decide` extend can need both a re-halt and
   `releaseHeld`; that call is allowed two Needs, in that order. No other call may exceed one.
+- `Grow` is not a Need: it is not a host decision and is not counted against the Need budget. A call reserves its
+  worst-case entry and arena words, derived from its input, before its first write, so a `Grow` outcome always leaves
+  `st` exactly as it was and the retry starts from the same state. `Need` and `Done` never follow a partial write.
 - Timers: Pruv keeps the deadline in its clock record and emits `timerSet`/`timerClear`. The host calls the public
   entry `fire(budgetId)` when a timer elapses. A stale delivery (no armed timer for that budget in Pruv state) is a
   no-op decided by Pruv.
@@ -823,21 +842,34 @@ resume(state, Resume, answer) -> Outcome      // at most one Need per public cal
 ### 8.2 State
 
 `BudgetState` holds the sessions' budget records (§2.1), clocks keyed by budget id (§2.2), and the per-turn
-tool-activity sets. Representation is chosen for the bounds in §9 (keyed maps; no whole-state copy per call). The
-host stores the state between calls as an opaque value; it does not inspect or edit budget fields.
+tool-activity sets, all inside the resident buffer: a fixed header (magic, version, total words, region bounds,
+counts, pending-Need sequence), one open-addressing hash index over all keyed entries, an entry table, and an
+append-only key/record arena. Every map keeps insertion order with links stored in its entries; nested maps (runs
+of a clock, activities of a turn) are owned by their parent entry. Representation is chosen for the bounds in §9:
+keyed-map operations are linear in key length, nothing scans or copies the whole state per call.
+
+The host owns the buffer's memory and nothing else. It does not inspect, edit or interpret its words; it only
+allocates a zeroed larger buffer on `Grow` (at least `max(N, 2·len)` words, `docs/RESIDENT_STATE_SPEC.md`), passes
+the old one to `grow` and drops it afterwards. Pruv re-validates the header (O(1)) on every entry and treats every
+index it reads as untrusted: all accesses are total, and an inconsistent header is `InvalidInput` with no write.
+Removed entries go to a free list and keep their key/blob regions for reuse; removing an entry also frees its
+children at once (e.g. `forgetTurn` frees its activities, O(children + key length)). Arena records outgrown by a
+longer key or blob are reclaimed by the next `grow`.
 
 ### 8.3 Test adapter (not product)
 
 `bud_test_abi.pruv` encodes `Call/Facts` and `Outcome` as flat `[i64]` words so the existing Rust/LLVM harness can
 drive the four pairs. It has a magic/version header, length fields and a call code; nothing else. No per-step digest,
-no ticket/generation machinery, no re-emission of earlier packets. The state stays resident in the Pruv process
-between calls; the adapter never encodes or decodes the whole `BudgetState` per call (that would make every call
-`O(S)` and break §9). Whole-state encoding is allowed only for the final observation.
+no ticket/generation machinery, no re-emission of earlier packets. The state is never part of the encoding: it stays
+in the resident buffer between calls, and the adapter encodes only the call arguments, facts and the outcome, whose
+size is linear in their own content and independent of S, C, R and A. Whole-state encoding (`observe`) is allowed
+only for the final observation.
 
 Performance gate per milestone (§9, AGENTS L3 rule 1): measure the TS class method in-process against the Pruv core
-call, excluding adapter encoding, at two or three sizes; report encoding time separately. The core must not be slower
-than TS at any measured size. If it is, find the cause before the next milestone. Its decode errors return `InvalidInput` without
-touching state.
+call on the resident buffer, excluding adapter encoding, at two or three sizes; report encoding time separately.
+Per-call cost must stay flat as the state grows (amortized `grow` reported separately), and the core must not be
+slower than TS at any measured size. If it is, find the cause before the next milestone. Decode errors return
+`InvalidInput` without touching state.
 
 ### 8.4 Bounds and refusal
 
@@ -858,7 +890,7 @@ Let:
 - `U`: UTF-16 units actually read, validated, or formatted.
 - `O`: serialized observation words.
 
-Keyed-map operations are linear in key length with the radix representation. Fixed-sized field operations are constant, excluding key/string traversal and output.
+Keyed-map operations are linear in key length in expectation with the open-addressing hash index (tombstones are cleared by an amortized in-place rehash); the worst case of a probe is the slot count. Fixed-sized field operations are constant, excluding key/string traversal and output.
 
 | Flow | Bound, excluding output |
 |---|---|
@@ -871,7 +903,7 @@ Keyed-map operations are linear in key length with the radix representation. Fix
 | Rejected charge | halt bound |
 | noteFailure | `O(key length)` |
 | noteTool | `O(turnId + activityId + ref key lengths)`; no scan of A |
-| forgetTurn | Root removal in `O(turnId length)`; eventual reclamation linear in freed storage |
+| forgetTurn | `O(turnId length + A of that turn)`: the turn and its activities are freed at once |
 | runStarted/runWaiting/runEnded | `O(R + key lengths)` when REFRESH is reached |
 | REFRESH | `O(R + key lengths)` |
 | BEGIN/ARM/SETTLE/DROP/CLOSE | `O(key lengths + U)` absent synchronous FIRE |
@@ -888,6 +920,8 @@ Keyed-map operations are linear in key length with the radix representation. Fix
 | dispose | `O(C)` control work plus linear storage reclamation |
 | Text helpers / budgetUnitOf | `O(U + output text length)` |
 | Final observation | `O(S+C+R_total+A+O)` |
+| grow (resident buffer) | `O(new buffer words)`; amortized `O(1)` words per reserved word because the buffer at least doubles |
+| Header validation per entry | `O(1)` |
 
 `runningDelegationIds`, `isQuiet`, queue operations, and attached-turn stopping are opaque dependency boundaries. Their real W implementations may scan application sessions; this piece claims no performance improvement for that external work.
 
@@ -1047,7 +1081,7 @@ To keep ownership disjoint, the build script generates a temporary dispatch root
 | M1 — corpus first | `q_gen.py`, `gen_fixtures.py`, `fixtures/*`, `common.py`, `SCENARIO.md`, `Q_README.md` | Generate all fixed groups and family definitions. Run 300 Q cases through the oracle twice; session/call-size oracle perf check. |
 | M2 — comparison and runners | `compare.py`, `q.py`, `check_oracle.py`, `perf_budget.py`, `test_impl.py` | Full-observation comparison, stable diff artifacts, selectable pair/group/Q counts, perf counters. Run 300 oracle repeat/codec cases and 100/500/1000-call measurement. |
 | M3 — core interface and test adapter | `bud_api.pruv`, `bud_test_abi.pruv`, `ABI.md` | `Call/Facts/Outcome/Need/Resume` types and the flat test encoding (§8). Run 300 generated encode/decode/rejection cases; encoded-size check. Not semantic Q passes. |
-| M4 — state storage | `bud_store.pruv`, `bud_world.pruv`, `bud_map.pruv` | Core-owned maps, insertion order, state value returned per call, bounds. Run 300 state-operation Q cases; S=100/500/1000 and activity growth checks. |
+| M4 — state storage | `bud_store.pruv`, `bud_world.pruv`, `bud_map.pruv` | Core-owned maps on the resident buffer, insertion order, in-place edits, capacity reservation and `grow`, bounds. Run 300 state-operation Q cases; S=100/500/1000 and activity growth checks. |
 | M5 — Rust mechanics | `host.rs`, `leaf.rs`, `harness.rs`, `host/Cargo.toml`, `host/src/lib.rs`, `dev_build.sh` | Storage, synchronous dispatch lane, effects, deterministic timers/IDs, JV observations. Run 300 adapter Q cases using generated effect programs; small timer/storage perf check. No budget decisions in these files. |
 | M6 — text and number/date helpers | `bud_text.pruv`, `bud_num.pruv`, `bud_date.pruv` | Exact text, ISO time, supported integral arithmetic, raw card Number classification. Run 300 Q8/K numeric-text cases against Node; 100/500/1000 formatting checks. |
 | M7 — lifecycle | `bud_lifecycle.pruv` | current, isHalted, OPEN, attach, replacement, reopen, CLOSE/maybeClose orchestration. Use clock sub-operation boundaries. Run 300 Q1 cases on implemented paths; session-size/attach perf check. |
@@ -1122,7 +1156,7 @@ These do not change the required normal-domain semantics:
 
 - **Arithmetic outside the integral domain:** determine whether a later extension needs arbitrary finite fractional budget values. The first implementation must report these as excluded-domain, not silently round them.
 - **Reentrant dependencies:** W can invoke service code whose broader reentrancy behavior is not established by this read-only class specification. Initial fakes are non-reentrant. Do not claim proof of live service reentrancy.
-- **Storage implementation:** confirm the proposed radix-map/storage operations fit the current Pruv verifier within each one-hour slice. A replacement data structure is acceptable only if it preserves the stated bounds and host split.
+- **Storage implementation:** confirm the hash-map/storage operations fit the current Pruv verifier within each one-hour slice. A replacement data structure is acceptable only if it preserves the stated bounds and host split.
 - **Native timer extremes:** the deterministic scheduler’s explicit integer-delay policy must be checked against the Node version used by the oracle. Do not rely on real wall-clock waits.
 - **Alias exposure:** current and setCard preserve identity, but arbitrary external mutation through retained returned aliases is outside the initial scenario language. A later alias-mutation extension must model it in Pruv rather than let Rust edit budgets directly.
 

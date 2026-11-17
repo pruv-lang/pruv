@@ -1,0 +1,144 @@
+mod ent_u16;
+mod bud_store;
+mod bud_map;
+mod bud_world;
+
+// L3-10 M4 test root: resident state entries over bud_store / bud_map / bud_world (CONTRACT.md, section "M4").
+// Status: 0 ok, 1 Grow (out[0] = N), 2 InvalidInput (bad op encoding or invalid header), 3 out too small.
+// Entry requires are empty (O(1)); the op table is validated in executable code with total reads.
+
+// End position of the key `len, units...` that starts at p (units 0..65535, length within op), or -1.
+fn key_end(op: [i64], p: i64) -> i64
+  requires 0 <= p
+  ensures result == -1 || (result > p && result <= len(op))
+{
+  let n: i64 = len(op);
+  if p >= n { return -1; }
+  let kn: i64 = crate::ent_u16::rd(op, p);
+  if kn < 0 || kn > n - p - 1 { return -1; }
+  let mut j: i64 = 0;
+  while j < kn
+    invariant 0 <= j && j <= kn && 0 <= p && p < n && kn <= n - p - 1 && n == len(op)
+    decreases kn - j
+  {
+    let u: i64 = crate::ent_u16::rd(op, p + 1 + j);
+    if u < 0 || u > 65535 { return -1; }
+    j = j + 1;
+  }
+  return p + 1 + kn;
+}
+
+// ops with no argument: 4 session_keys, 12 clock_keys, 17 turn_keys, 18 stats
+fn dec_none(st: [i64], op: [i64], inout out: [i64], code: i64) -> i64
+{
+  if len(op) != 1 { return 2; }
+  if code == 4 { return crate::bud_world::session_keys(st, inout out); }
+  if code == 12 { return crate::bud_world::clock_keys(st, inout out); }
+  if code == 17 { return crate::bud_world::turn_keys(st, inout out); }
+  if code == 18 { return crate::bud_world::stats(st, inout out); }
+  return 2;
+}
+
+// ops with one key: 2 session_get, 3 session_del, 6 clock_del, 8 clock_get, 11 run_list, 14 tool_forget,
+// 15 tool_count, 16 tool_list
+fn dec_key(inout st: [i64], op: [i64], inout out: [i64], code: i64) -> i64
+{
+  let e1: i64 = key_end(op, 1);
+  if e1 < 0 || e1 != len(op) { return 2; }
+  let kn: i64 = crate::ent_u16::rd(op, 1);
+  if code == 2 { return crate::bud_world::session_get(st, op, 2, kn, inout out); }
+  if code == 3 { return crate::bud_world::session_del(inout st, op, 2, kn, inout out); }
+  if code == 6 { return crate::bud_world::clock_del(inout st, op, 2, kn, inout out); }
+  if code == 8 { return crate::bud_world::clock_get(st, op, 2, kn, inout out); }
+  if code == 11 { return crate::bud_world::run_list(st, op, 2, kn, inout out); }
+  if code == 14 { return crate::bud_world::tool_forget(inout st, op, 2, kn, inout out); }
+  if code == 15 { return crate::bud_world::tool_count(st, op, 2, kn, inout out); }
+  if code == 16 { return crate::bud_world::tool_list(st, op, 2, kn, inout out); }
+  return 2;
+}
+
+// 1 session_put: key, n, n words
+fn dec_put(inout st: [i64], op: [i64], inout out: [i64]) -> i64
+{
+  let e1: i64 = key_end(op, 1);
+  if e1 < 0 || e1 >= len(op) { return 2; }
+  let kn: i64 = crate::ent_u16::rd(op, 1);
+  let n: i64 = crate::ent_u16::rd(op, e1);
+  if n < 0 || n != len(op) - e1 - 1 { return 2; }
+  return crate::bud_world::session_put(inout st, op, 2, kn, op, e1 + 1, n, inout out);
+}
+
+// ops with two keys: 5 clock_put, 9 run_set (+ waiting), 10 run_del, 13 tool_note
+fn dec_two(inout st: [i64], op: [i64], inout out: [i64], code: i64) -> i64
+{
+  let e1: i64 = key_end(op, 1);
+  if e1 < 0 { return 2; }
+  let e2: i64 = key_end(op, e1);
+  if e2 < 0 { return 2; }
+  let k1: i64 = crate::ent_u16::rd(op, 1);
+  let k2: i64 = crate::ent_u16::rd(op, e1);
+  if code == 9 {
+    if len(op) - e2 != 1 { return 2; }
+    let w: i64 = crate::ent_u16::rd(op, e2);
+    if w != 0 && w != 1 { return 2; }
+    return crate::bud_world::run_set(inout st, op, 2, k1, op, e1 + 1, k2, w, inout out);
+  }
+  if e2 != len(op) { return 2; }
+  if code == 5 { return crate::bud_world::clock_put(inout st, op, 2, k1, op, e1 + 1, k2, inout out); }
+  if code == 10 { return crate::bud_world::run_del(inout st, op, 2, k1, op, e1 + 1, k2, inout out); }
+  if code == 13 { return crate::bud_world::tool_note(inout st, op, 2, k1, op, e1 + 1, k2, inout out); }
+  return 2;
+}
+
+// 7 clock_set: key, since_present (0/1), since, armed (0/1), deadline
+fn dec_set(inout st: [i64], op: [i64], inout out: [i64]) -> i64
+{
+  let e1: i64 = key_end(op, 1);
+  if e1 < 0 { return 2; }
+  if len(op) - e1 != 4 { return 2; }
+  let kn: i64 = crate::ent_u16::rd(op, 1);
+  let sp: i64 = crate::ent_u16::rd(op, e1);
+  let since: i64 = crate::ent_u16::rd(op, e1 + 1);
+  let armed: i64 = crate::ent_u16::rd(op, e1 + 2);
+  let dl: i64 = crate::ent_u16::rd(op, e1 + 3);
+  if (sp != 0 && sp != 1) || (armed != 0 && armed != 1) { return 2; }
+  return crate::bud_world::clock_set(inout st, op, 2, kn, sp, since, armed, dl, inout out);
+}
+
+// Writes an empty state; 0, or the minimum number of words N > 0 if st is too small (nothing written).
+pub fn m4_init(inout st: [i64]) -> i64
+{
+  return crate::bud_store::init_store(inout st);
+}
+
+// Rebuilds prev into the fresh buffer next (len(next) >= len(prev)): 0 ok, 2 invalid prev or next too small.
+pub fn m4_grow(prev: [i64], inout next: [i64]) -> i64
+{
+  if !crate::bud_store::valid(prev) { return 2; }
+  if len(next) < len(prev) { return 2; }
+  let r: i64 = crate::bud_map::grow_copy(prev, inout next);
+  if r != 0 { return 2; }
+  return 0;
+}
+
+// One state operation; on 0, out[0] = number of result words and out[1..] the result.
+pub fn m4_op(inout st: [i64], op: [i64], inout out: [i64]) -> i64
+{
+  if !crate::bud_store::valid(st) { return 2; }
+  let code: i64 = crate::ent_u16::rd(op, 0);
+  if code == 1 { return dec_put(inout st, op, inout out); }
+  if code == 7 { return dec_set(inout st, op, inout out); }
+  if code == 4 || code == 12 || code == 17 || code == 18 { return dec_none(st, op, inout out, code); }
+  if code == 2 || code == 3 || code == 6 || code == 8 || code == 11 || code == 14 || code == 15 || code == 16 {
+    return dec_key(inout st, op, inout out, code);
+  }
+  if code == 5 || code == 9 || code == 10 || code == 13 { return dec_two(inout st, op, inout out, code); }
+  return 2;
+}
+
+// Whole-state dump for the final observation; 0 ok, 2 invalid header, 3 out too small.
+pub fn m4_observe(st: [i64], inout out: [i64]) -> i64
+{
+  if !crate::bud_store::valid(st) { return 2; }
+  return crate::bud_world::observe(st, inout out);
+}
