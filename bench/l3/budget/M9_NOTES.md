@@ -164,6 +164,20 @@ Bar (user decision 2026-11-17): parity with hand Rust. Anything above 1.1x must 
 
 Pruv is 10–18x faster than TS on every item.
 
+**Update (L3-10 perf pass 3, 2026-11-17): every row is now within 1.1x.** The two fixes the table below asks for
+are done: `bud_map::hash_key` packs 4 units per mix, the compiler emits `#[inline]`, and `entry_matches` compares
+keys with the new `eq_range` builtin (one bounds-proved slice `==`). `run_m9.py perf --rounds 5`, load average 5.7-6.0:
+
+| item | size | Pruv ns | hand Rust ns | TS ns | Pruv/hand |
+|---|---|---|---|---|---|
+| cycle | 1 | 156.9 | 168.1 | 3025.4 | 0.93 |
+| fire | 1 | 224.2 | 209.1 | 5505.9 | 1.07 |
+| refresh | 10 | 155.3 | 147.5 | 3096.7 | 1.05 |
+| refresh | 50 | 153.8 | 143.3 | 2897.3 | 1.07 |
+| refresh | 100 | 152.9 | 142.9 | 3259.9 | 1.07 |
+
+Q after the change: 26 / 0 / 274 / 0 (Q3) and 136 / 0 / 164 / 0 (clock cases). The tables below are the earlier state.
+
 ### What was fixed in M9's files (parity pass)
 
 Before the pass the ratios were cycle 1.51, fire 1.48, and refresh 10/50/100 at 1.76/1.97/2.21.

@@ -1819,6 +1819,14 @@ class FnVerifier:
                     "truncate length 0 <= m <= len(%s)" % av.name)
             s.spend(st, g, 1 + m)
             return mk_arr(av.a, m, "truncate", av.elem)
+        if n == "eq_range":     # L3-10: eq_range: five bounds obligations in order, then a fresh unconstrained bool
+            av, i, bv, j, cnt = args
+            s.prove(st, g, i >= 0, e, "index_oob", "eq_range start 0 <= i for %s" % av.name)
+            s.prove(st, g, j >= 0, e, "index_oob", "eq_range start 0 <= j for %s" % bv.name)
+            s.prove(st, g, cnt >= 0, e, "index_oob", "eq_range length 0 <= n")
+            s.prove(st, g, i + cnt <= av.n, e, "index_oob", "eq_range i + n <= len(%s)" % av.name)
+            s.prove(st, g, j + cnt <= bv.n, e, "index_oob", "eq_range j + n <= len(%s)" % bv.name)
+            return s.fresh("eq_range", BOOL)
         if n == "load_be":      # P2 batch 4: big-endian word of the n bytes a[i..i+n]
             av, i = args[0], args[1]
             nb = e.args[2].value

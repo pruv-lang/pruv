@@ -1,0 +1,4 @@
+// eq_range: i + n <= len(a) missing
+fn f(a: [i64], i: i64, b: [i64], j: i64, n: i64) -> bool
+  requires 0 <= i && 0 <= j && 0 <= n && j + n <= len(b)
+{ return eq_range(a, i, b, j, n); }

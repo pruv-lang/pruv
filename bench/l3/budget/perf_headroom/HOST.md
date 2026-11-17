@@ -160,6 +160,54 @@ Wall time (`host/run.py --only m4 --rounds 7`), ns per op:
 So the generated code matches the hand code once (1) is done in the compiler and (2) is accepted as the cost of
 the raw-buffer ABI. Neither can be fixed in the owned files.
 
+### Pass 3: compiler inline hints and `eq_range` (2026-11-17)
+
+Cause (1) is fixed in the compiler: both compilers emit `#[inline]` on every generated function (the two outputs stay
+byte-identical; M11 compile CPU +~7%, binary -0.4%). `bud_map::entry_matches` compares the key with the new
+`eq_range` builtin once both ranges are in bounds (verified code: one slice `==` through `get_unchecked`, the M4 binary now
+imports `memcmp`, which the earlier asm did not call; the total per-unit loop stays as the fallback). The build profile (`opt-level = 3`) was checked
+and left as is.
+
+`host/run.py --only m4`, 5 rounds, load average 5.5-5.8, ns per op:
+
+| n | Pruv | hand | TS | Pruv/hand (pass 2) |
+|---:|---:|---:|---:|---:|
+| 100 | 18.0 | 14.7 | 59.3 | 1.22 (1.22) |
+| 500 | 18.6 | 16.4 | 65.6 | 1.13 (1.17) |
+| 1000 | 18.5 | 16.2 | 65.3 | 1.14 (1.16) |
+
+Tools 0.69-0.74, clocks 0.92-1.04. The earlier inline-only run of the same pass gave 1.23 / 1.13 / 1.12. The scratch
+"all `#[inline]`" build (1.15 / 1.06 / 1.04) was a separate, lighter-load run; the n = 100 row is the noisiest.
+
+**Still above 1.1x: cause (2), the per-op `valid()`.** It already runs once per root call (`m4_op`, `t_call`): no
+sub-operation re-validates, so "once per root call" is the current state and saves nothing more. What is left is the
+check itself, about 2 ns. The hand side has none because its state is a typed `HashMap` that the host cannot corrupt.
+
+### Design: a typed resident-state handle (removes the per-call header check)
+
+Not implemented in this pass (a language/ABI change across both compilers, the ABI generator and every host). The
+goal is to keep the guarantee of `valid()` without re-checking a buffer the host cannot have changed.
+
+1. **Opaque state type.** A lib type, e.g. `Store`, that wraps the word buffer. Its words are not exported. The
+   generated ABI hands the host a `Store` value (a Rust newtype over `Vec<i64>` with a private field, an opaque
+   pointer on the C ABI). The host can hold, move and drop it, but cannot build one or write its words.
+2. **Only proven constructors.** `Store` is built only by Pruv functions that check or establish the layout:
+   `init_store` (writes a fresh header) and `from_words(words: [i64]) -> Option<Store>` (runs today's `valid()`
+   once, for a buffer that comes from outside, e.g. a snapshot). `grow_copy` returns a new `Store`.
+3. **Mutators keep the invariant, by proof.** Every function that takes `inout st: Store` gets
+   `requires valid(st)` and `ensures valid(st)` checked by the verifier. Today's code needs no such proof because
+   it re-checks; the proof is the cost of the design. `valid()` reads only header words 0-14, and the mutators write
+   the header only in `entry_alloc` / `entry_free` / arena bump / `rehash`, so the obligations are local to those
+   functions.
+4. **Root calls take the type.** `m4_op(inout st: Store, ...)` and `t_call` drop the `valid()` line. The status 2
+   "invalid header" stays only on `from_words`.
+5. **No trust in unchecked input.** The host never supplies words that skipped `valid()`: a buffer from outside
+   goes through `from_words`, and anything else came out of a proven mutator. A host that mutates the words through
+   unsafe code is outside the ABI contract, the same as corrupting a `HashMap`.
+
+Expected effect from the scratch build above: M4 sessions about 0.94-0.98x, M8 noteFailure -80 of 736
+instructions (`M8_NOTES.md`).
+
 ## Breakdown of store_find (n=1000, ns per op, medians of 7 rounds)
 
 | step | Pruv | hand |

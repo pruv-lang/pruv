@@ -1,0 +1,4 @@
+// eq_range is code only
+fn f(a: [i64], b: [i64]) -> bool
+  requires eq_range(a, 0, b, 0, 0)
+{ return true; }
