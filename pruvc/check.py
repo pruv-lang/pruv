@@ -21,7 +21,7 @@ BIT_BUILTINS = {"band": ("&", "and"), "bor": ("|", "or"), "bxor": ("^", "xor"),
                 "wrapping_add": ("wrapping_add", "add"), "wrapping_mul": ("wrapping_mul", "mul")}
 # P2 batch 4: byte-word access on [u8]: load_be(a, i, n) and the statement-only store_be(inout a, i, w, n)
 WORD_BUILTINS = ("load_be", "store_be")
-BUILTIN_FNS = ("len", "alloc", "copy", "print", "is_char_boundary", "substr", "truncate") + tuple(BIT_BUILTINS) + WORD_BUILTINS
+BUILTIN_FNS = ("len", "alloc", "copy", "print", "is_char_boundary", "substr", "truncate", "eq_range") + tuple(BIT_BUILTINS) + WORD_BUILTINS   # L3-10: eq_range
 RESERVED_TYPE_NAMES = ("Option", "Result", "Some", "None", "Ok", "Err")
 TYPE_NAME_RE = re.compile(r"[A-Z][A-Za-z0-9_]*\Z")
 FIELD_NAME_RE = re.compile(r"[a-z][A-Za-z0-9_]*\Z")
@@ -1699,6 +1699,18 @@ class Checker:
             return I64
         if n in WORD_BUILTINS:  # P2 batch 4
             return s.word_call(e, scope, c)
+        if n == "eq_range":     # L3-10: eq_range(a, i, b, j, n) -> bool, code only, a and b of one integer array type
+            if c: terr(e, "effect_in_contract", "eq_range is not allowed in contracts")
+            arity(5)
+            ta = s.expect_array(a[0], scope, c)
+            if ta not in (ARRAY, ARRAY_U8):
+                terr(a[0], "type_mismatch", "expected %s or %s, found %s" % (
+                    type_name(ARRAY), type_name(ARRAY_U8), type_name(ta)))
+            s.expect(a[1], I64, scope, c)
+            s.expect(a[2], ta, scope, c)
+            s.expect(a[3], I64, scope, c)
+            s.expect(a[4], I64, scope, c)
+            return BOOL
         if n == "substr":   # G2 B0
             if c: terr(e, "effect_in_contract", "substr not allowed in contracts")
             arity(3); s.expect(a[0], STR, scope, c); s.expect(a[1], I64, scope, c); s.expect(a[2], I64, scope, c)

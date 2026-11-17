@@ -2180,6 +2180,27 @@ impl<'a> FnVerifier<'a> {
                 let i = arg(1)?.try_ast()?;
                 return Ok(Val::Bool(self.str_boundary(sv, i)));
             }
+            "eq_range" => {
+                // L3-10: eq_range(a, i, b, j, n): five bounds obligations in math integers, the value is a fresh bool
+                let av = arg(0)?.try_arr()?.clone();
+                let i = arg(1)?.try_ast()?.clone();
+                let bv = arg(2)?.try_arr()?.clone();
+                let j = arg(3)?.try_ast()?.clone();
+                let cnt = arg(4)?.try_ast()?.clone();
+                if code {
+                    let obs: Vec<(Ast, String)> = vec![
+                        (i.ge_i(0), format!("eq_range start 0 <= i for {}", av.name)),
+                        (j.ge_i(0), format!("eq_range start 0 <= j for {}", bv.name)),
+                        (cnt.ge_i(0), "eq_range length 0 <= n".to_string()),
+                        (i.add(&cnt).le(&av.n), format!("eq_range i + n <= len({})", av.name)),
+                        (j.add(&cnt).le(&bv.n), format!("eq_range j + n <= len({})", bv.name)),
+                    ];
+                    for (ob, msg) in obs {
+                        self.prove_core(&st.env, &st.pc, g, &ob, pos(e), "index_oob", &msg, None);
+                    }
+                }
+                return Ok(self.fresh("eq_range", &Ty::Bool));
+            }
             "load_be" => {
                 // P2 batch 4: big-endian word of the nb bytes a[i..i+nb]
                 let av = arg(0)?.try_arr()?.clone();

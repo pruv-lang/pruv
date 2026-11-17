@@ -2396,6 +2396,9 @@ class FnGen:
                 ok = s.op("icmp ult i64 %s, 64" % y.a)
                 s.guard(ok, s.panic1("pruv_panic_arith", "shift count outside 0..64"), False)
             return V("i64", s.op("%s i64 %s, %s" % (BIT_LLVM[n], x.a, y.a)))
+        if n == "eq_range":  # L3-10: eq_range is rejected by the LLVM backend (no lowering)
+            raise PruvError("codegen", e.line, e.col, "unsupported_type", "eq_range is not supported by the llvm codegen layer yet",
+                            "compare the elements in a loop, or use the Rust backend")
         if n == "load_be":   # P2 batch 4: array, then index
             arr = s.ev(a[0])
             i = s.ev(a[1])

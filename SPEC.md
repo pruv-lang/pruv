@@ -113,6 +113,11 @@ it can never be silently dropped.
 - `store_be(inout a, i, w, n);`: a statement (a mutating call in the section 6g positions; `a` a mutable `[u8]`). It
   writes the low `8n` bits of `w: i64` big-endian into `a[i..i+n]` and leaves the other elements unchanged. `n` and the
   obligation are as for `load_be`. Not allowed in contracts.
+- `eq_range(a, i, b, j, n)`: `a` and `b` of one type, `[i64]` or `[u8]` (else `type_mismatch`); `i, j, n: i64`; a
+  `bool`, true iff `a[i+k] == b[j+k]` for every `k` in `0..n` (true for `n == 0`). Code only (`effect_in_contract` in a
+  contract), name reserved. The verifier must prove, in this order, `0 <= i`, `0 <= j`, `0 <= n`, `i + n <= len(a)`,
+  `j + n <= len(b)` (`verify` error `index_oob`); it knows nothing about the result. The Rust backend compares the two
+  slices in one call; the LLVM backend rejects it (`codegen` error `unsupported_type`).
 - Evaluation order: code evaluates left to right in source order, the same in every compile mode; call arguments left to right, and in `a[i] = v` the index is evaluated before the value.
 - Precedence (high to low): unary `- !`; `* / %`; `+ -`; comparisons (non-associative); `&&`; `||`; `==>`.
 

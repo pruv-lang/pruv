@@ -1684,6 +1684,8 @@ class Gen:
         else:
             vis = "" if (f.requires or s.private(f)) else "pub "   # G3: specializations are private
         s.emit(0, s.allow)
+        # Inline hint on every function body: without it rustc keeps the generated call chains as real calls.
+        s.emit(0, "#[inline]")
         s.emit(0, "%sfn %s(%s)%s {" % (vis, body_name, ps, ret))
         s.cost = not s.verified and f.cost is not None
         if s.cost:
@@ -3007,6 +3009,20 @@ class Gen:
                             "{ pruv_oob(pruv_m, pruv_a.len()) } pruv_a[..(pruv_m as usize)].to_vec() }" % (s.arr_ref(a[0]), s.e(a[1])))
                 return ("{ let pruv_a = %s; let pruv_m: i64 = %s; unsafe { pruv_a.get_unchecked(..(pruv_m as usize)) }.to_vec() }"
                         % (s.arr_ref(a[0]), s.e(a[1])))
+            if n == "eq_range":  # L3-10: eq_range: slice equality of a[i..i+n] and b[j..j+n]
+                ra, rb = s.arr_ref(a[0]), s.arr_ref(a[2])
+                # arr_ref may yield `&x` / `&*x`: parenthesize so `.len()` / `.get_unchecked` bind to the reference
+                ra = "(%s)" % ra if ra.startswith("&") else ra
+                rb = "(%s)" % rb if rb.startswith("&") else rb
+                head = "{ let pruv_i: i64 = %s; let pruv_j: i64 = %s; let pruv_n: i64 = %s; " % (s.e(a[1]), s.e(a[3]), s.e(a[4]))
+                ri = "(pruv_i as usize)..((pruv_i + pruv_n) as usize)"
+                rj = "(pruv_j as usize)..((pruv_j + pruv_n) as usize)"
+                if s.verified:
+                    return "%s(unsafe { %s.get_unchecked(%s) }) == (unsafe { %s.get_unchecked(%s) }) }" % (head, ra, ri, rb, rj)
+                # safe mode: the code-path out-of-range failure of plain indexing is pruv_oob (pruv_ud is contract-only)
+                return ("%sif pruv_i < 0 || pruv_j < 0 || pruv_n < 0 || pruv_i > (%s.len() as i64) - pruv_n "
+                        "|| pruv_j > (%s.len() as i64) - pruv_n { pruv_oob(pruv_i, %s.len()) } %s[%s] == %s[%s] }"
+                        % (head, ra, rb, ra, ra, ri, rb, rj))
             if n == "load_be":   # P2 batch 4: big-endian word of a[i..i+nb]; unchecked slice when verified
                 nb = a[2].value
                 chk = "" if s.verified else ("if pruv_i < 0 || (pruv_i as u64) + %d > (pruv_a.len() as u64) "

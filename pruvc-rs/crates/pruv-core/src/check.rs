@@ -461,7 +461,7 @@ impl Checker {
             if funcs.contains_key(&name) {
                 return Err(terr(f.line, f.col, "dup_fn", format!("function {} defined twice", name), ""));
             }
-            if matches!(name.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "truncate")
+            if matches!(name.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "truncate" | "eq_range")
                 || is_bit_builtin(&name)
                 || is_word_builtin(&name)
                 || contract_only(&name).is_some()
@@ -2122,7 +2122,7 @@ impl Checker {
                     format!("{} returns {}: a par branch must return ()", n, tn(&f.ret)),
                     "call a unit Pruv helper and pass results back through whole inout arrays"));
             }
-        } else if ["len", "alloc", "copy", "print", "is_char_boundary", "substr", "truncate"].contains(&n.as_str())
+        } else if ["len", "alloc", "copy", "print", "is_char_boundary", "substr", "truncate", "eq_range"].contains(&n.as_str())
             || is_bit_builtin(n)
             || is_word_builtin(n)
             || contract_only(n).is_some() || is_catalog(n) || (n == "old" && self.uses_inout)
@@ -3344,7 +3344,7 @@ impl Checker {
             }
             Ok(())
         };
-        let is_builtin = matches!(n.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "truncate")
+        let is_builtin = matches!(n.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "truncate" | "eq_range")
             || is_bit_builtin(&n)
             || is_word_builtin(&n);
         let is_old = n == "old" && self.uses_inout && !self.funcs.contains_key(&n); // G5 A0: contextual builtin
@@ -3415,6 +3415,24 @@ impl Checker {
             }
             // P2 batch 4: load_be / store_be
             _ if is_word_builtin(&n) => return self.word_call(e, scope, c),
+            // L3-10: eq_range(a: [T], i, b: [T], j, n) -> bool, code only, T an integer element type
+            "eq_range" => {
+                if c {
+                    return Err(terr(line, col, "effect_in_contract", "eq_range is not allowed in contracts", ""));
+                }
+                arity(5)?;
+                let at = self.expect_array(&mut e.args[0], scope, c, false)?;
+                // check.py: a must be [i64] or [u8]; b must have exactly a's type
+                if !(at.is_array() && matches!(at.array_elem(), Some(el) if el == i64t() || el == GType::u8())) {
+                    let (l0, c0) = (e.args[0].line(), e.args[0].col());
+                    return Err(terr(l0, c0, "type_mismatch", format!("expected [i64] or [u8], found {}", tn(&at)), ""));
+                }
+                self.expect(&mut e.args[1], &i64t(), scope, c, None)?;
+                self.expect(&mut e.args[2], &at, scope, c, None)?;
+                self.expect(&mut e.args[3], &i64t(), scope, c, None)?;
+                self.expect(&mut e.args[4], &i64t(), scope, c, None)?;
+                return Ok(boolt());
+            }
             "substr" => {
                 if c {
                     return Err(terr(line, col, "effect_in_contract", "substr not allowed in contracts", ""));
@@ -3641,6 +3659,33 @@ mod tests {
         assert_eq!(e.code, "missing_effect");
         assert_eq!(e.message, "function f uses effect `io` but does not declare it");
         assert_eq!(e.fix, "add `! io` after the return type");
+    }
+
+    // L3-10: eq_range
+    #[test]
+    fn eq_range_checks_in_code() {
+        assert!(run("fn f(a: [u8], b: [u8]) -> bool { return eq_range(a, 0, b, 1, 2); }").is_ok());
+        assert!(run("fn f(a: [i64], b: [i64]) -> bool { return eq_range(a, 0, b, 1, 2); }").is_ok());
+    }
+
+    // L3-10: eq_range
+    #[test]
+    fn eq_range_rejected_in_contracts() {
+        let e = run("fn f(a: [u8], b: [u8]) -> bool requires eq_range(a, 0, b, 0, 1) { return true; }").unwrap_err();
+        assert_eq!(e.message, "eq_range is not allowed in contracts");
+        let e = run("fn f(a: [u8], b: [u8]) -> bool ensures eq_range(a, 0, b, 0, 1) { return true; }").unwrap_err();
+        assert_eq!(e.message, "eq_range is not allowed in contracts");
+    }
+
+    // L3-10: eq_range
+    #[test]
+    fn eq_range_element_type_and_arity_errors() {
+        let e = run("fn f(a: [u8], b: [i64]) -> bool { return eq_range(a, 0, b, 0, 1); }").unwrap_err();
+        assert_eq!(e.code, "type_mismatch");
+        let e = run("fn f(a: [u8], b: [u8]) -> bool { return eq_range(a, 0, b, 0); }").unwrap_err();
+        assert_eq!(e.code, "arity");
+        let e = run("fn f(a: [bool], b: [bool]) -> bool { return eq_range(a, 0, b, 0, 1); }").unwrap_err();
+        assert_eq!(e.code, "type_mismatch");
     }
 
     #[test]

@@ -19,12 +19,17 @@
 // boundary that renders the record (same choice as bud_clock's activeSince).
 //
 // Results are written to `out`: out[0] = 0 undefined, 1 false, 2 true, 3 ref (out[1] = budgetId length, units
-// follow; the sessionId of the ref is the session argument), 4 budget (out[1] = blob length, blob words follow).
+// follow; the sessionId of the ref is the session argument), 4 budget view (out[1] = record length n, out[2] = its
+// arena offset: the record is st[out[2] .. out[2] + n), valid until the next call that changes st - the counterpart
+// of returning a reference to the stored budget, nothing is copied).
 // A carryHeld effect puts the old budgetId after the ref: out[2 + len] = old length, units follow.
 // Effects are appended to `fx` (bud_clock frame, fx[0] = words used): bud_clock's [13] timerClear, and
-//   [20] changed, [21] carryHeld (args: session, old id in out, the returned ref), [22] uuid (one id consumed).
-// Status: 0 done, 2 invalid, 3 out/fx too small, 5 Need isQuiet (nothing written; the host answers through the
-// `quiet` argument of the retried call), -N Grow (nothing written).
+//   [20] changed, [21] carryHeld (args: session, old id in out, the returned ref), [22] uuid (one id consumed),
+//   [23] isQuiet consulted (maybeClose used the host's `quiet` input; it is always the first effect of the call).
+// The host supplies the next isQuiet answer up front (like the next randomUUID value); it is consumed only when the
+// effects hold [23], so the host still decides nothing.
+// Status: 0 done, 2 invalid, 3 out/fx too small, 5 Need isQuiet (only when `quiet` is -1: nothing written; the host
+// answers through the `quiet` argument of the retried call), -N Grow (nothing written).
 
 fn rd(a: [i64], i: i64) -> i64
 { return crate::ent_u16::rd(a, i); }
@@ -54,6 +59,29 @@ fn push(inout fx: [i64], v: i64) -> ()
 // Session entry for the key, -1 if absent.
 pub fn session_of(st: [i64], sk: [i64], ss: i64, sn: i64) -> i64
 { return crate::bud_map::find(st, 0, sk, ss, sn); }
+
+// Field address of session entry se (bud_store::field_addr), -1 if out of range. The blob offset is at a + 12 and
+// its length at a + 13; callers read both through one address instead of one field_addr per word.
+fn entry_addr(st: [i64], se: i64) -> i64
+  ensures result >= -1 && result <= 1099511627776
+{
+  if se < 0 { return -1; }
+  return crate::bud_store::field_addr(st, se);
+}
+
+fn at_off(st: [i64], a: i64) -> i64
+  ensures 0 <= result && result <= 1099511627776
+{
+  if a < 0 || a > 1099511627776 { return 0; }
+  return c40(rd(st, a + 12));
+}
+
+fn at_n(st: [i64], a: i64) -> i64
+  ensures 0 <= result && result <= 1099511627776
+{
+  if a < 0 || a > 1099511627776 { return 0; }
+  return c40(rd(st, a + 13));
+}
 
 // Arena offset and length of the session's blob.
 pub fn blob_at(st: [i64], se: i64) -> i64
@@ -123,6 +151,26 @@ pub fn current_entry(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64,
   return se;
 }
 
+// CURRENT(ref): the field address (entry_addr) of the budget's session entry when the session has a budget whose
+// id is ref.budgetId, else -1. One map lookup, one address computation.
+fn current_at(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64) -> i64
+{
+  let a: i64 = entry_addr(st, session_of(st, sk, ss, sn));
+  if a < 0 { return -1; }
+  let off: i64 = at_off(st, a);
+  if state_of(st, off, at_n(st, a)) < 0 { return -1; }
+  if !id_is(st, off, bk, bs, bn) { return -1; }
+  return a;
+}
+
+// Clock entry of the budget whose id is st[s..s+n), -1 without one. An empty clock map (root 1 has no children)
+// answers -1 without hashing the id.
+fn clock_in(st: [i64], k: [i64], s: i64, n: i64) -> i64
+{
+  if crate::bud_map::count(st, 1) == 0 { return -1; }
+  return crate::bud_clock::clock_of(st, k, s, n);
+}
+
 // Start (the length word) of string k (0..5) of a record held in b (header at 0).
 pub fn str_at(b: [i64], k: i64) -> i64
   ensures 0 <= result && result <= 1099511627776
@@ -167,7 +215,7 @@ pub fn put_str(inout o: [i64], at: i64, src: [i64], s: i64, n: i64) -> i64
   let a: i64 = crate::ent_u16::clamp(at, 4294967295);
   let m: i64 = c32(n);
   crate::ent_u16::wr(inout o, a, m);
-  let ss: i64 = c32(s);
+  let ss: i64 = c40(s);
   if m <= 1073741824 && a + 1 + m <= len(o) && ss + m <= len(src) {
     // Whole range in bounds (checked once): direct indexing, no per-word range check.
     let mut k: i64 = 0;
@@ -180,8 +228,19 @@ pub fn put_str(inout o: [i64], at: i64, src: [i64], s: i64, n: i64) -> i64
     }
     return c40(a + 1 + m);
   }
-  let e: i64 = crate::ent_u16::put_range(inout o, a + 1, src, ss, m);
-  return c40(e);
+  // Per-unit fallback (ent_u16::put_range semantics; the source offset is kept to 40 bits, so a record above
+  // 2^32 in the arena is still read from its own place).
+  let mut mm: i64 = m;
+  if mm > 1073741824 { mm = 1073741824; }
+  let mut k: i64 = 0;
+  while k < mm
+    invariant 0 <= k && k <= mm && mm <= 1073741824 && 0 <= a && a <= 4294967295 && 0 <= ss && ss <= 1099511627776 && len(o) == len(old(o))
+    decreases mm - k
+  {
+    crate::ent_u16::wr(inout o, a + 1 + k, rd(src, ss + k));
+    k = k + 1;
+  }
+  return c40(a + 1 + mm);
 }
 
 // Copy of the session's blob (O(blob)).
@@ -190,6 +249,23 @@ pub fn blob_copy(st: [i64], se: i64) -> [i64] ! alloc
   let off: i64 = blob_at(st, se);
   let n: i64 = blob_n(st, se);
   return crate::ent_u16::slice(st, off, c40(off + n));
+}
+
+// Upper bound of len(rewrite(b, ...)) when the ended.at text is empty: 30 + the six declared string lengths (the
+// declared lengths count even when they run past the blob, as rewrite copies them).
+fn rec_bound(b: [i64]) -> i64
+  ensures 0 <= result && result <= 30000000000
+{
+  let mut t: i64 = 30;
+  let mut k: i64 = 0;
+  while k < 6
+    invariant 0 <= k && k <= 6 && 30 <= t && t <= 30 + k * 4294967296
+    decreases 6 - k
+  {
+    t = t + str_len(b, str_at(b, k));
+    k = k + 1;
+  }
+  return t;
 }
 
 // The record b with header h and string 3 (ended.at text) replaced by e[es..es+en) and string 2 (activeSince text)
@@ -279,30 +355,23 @@ pub fn view_in(st: [i64], off: i64, inout bv: [i64]) -> ()
 
 // ---- queries ----
 
-// current(ref): out = [4, n, blob] for CURRENT(ref), else [0].  O(key length + record).
+// current(ref): out = [4, n, off] (view of the stored record st[off..off+n)) for CURRENT(ref), else [0].
+// O(key length); the record is not copied (hand Rust returns `Option<&Budget>`).
 pub fn current(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64, inout out: [i64]) -> i64
 {
   if len(out) < 1 { return 3; }
-  let se: i64 = current_entry(st, sk, ss, sn, bk, bs, bn);
-  if se < 0 {
+  let a: i64 = current_at(st, sk, ss, sn, bk, bs, bn);
+  if a < 0 {
     crate::ent_u16::wr(inout out, 0, 0);
     return 0;
   }
-  let off: i64 = blob_at(st, se);
-  let n: i64 = c32(blob_n(st, se));
-  if n + 2 > len(out) { return 3; }
+  if len(out) < 3 { return 3; }
+  let off: i64 = at_off(st, a);
+  let n: i64 = at_n(st, a);
   if off + n > len(st) { return 2; }
   crate::ent_u16::wr(inout out, 0, 4);
   crate::ent_u16::wr(inout out, 1, n);
-  // Bounds are checked once above, so the copy indexes directly (no per-word range check).
-  let mut k: i64 = 0;
-  while k < n
-    invariant 0 <= k && k <= n && n + 2 <= len(out) && off + n <= len(st) && 0 <= off
-    decreases n - k
-  {
-    out[2 + k] = st[off + k];
-    k = k + 1;
-  }
+  crate::ent_u16::wr(inout out, 2, off);
   return 0;
 }
 
@@ -310,9 +379,9 @@ pub fn current(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i
 pub fn is_halted(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64, inout out: [i64]) -> i64
 {
   if len(out) < 1 { return 3; }
-  let se: i64 = current_entry(st, sk, ss, sn, bk, bs, bn);
+  let a: i64 = current_at(st, sk, ss, sn, bk, bs, bn);
   let mut r: i64 = 1;
-  if se >= 0 && rd(st, blob_at(st, se)) == 1 { r = 2; }
+  if a >= 0 && rd(st, at_off(st, a)) == 1 { r = 2; }
   crate::ent_u16::wr(inout out, 0, r);
   return 0;
 }
@@ -440,6 +509,9 @@ pub fn close_rec(inout st: [i64], sk: [i64], ss: i64, sn: i64, b: [i64], how: i6
 // replaceForUserMessage(session, size, origin) (B:192-200): a halted budget is closed ('user-message') and a new
 // one opened; unless origin is schedule the new budget follows the old id (set before `changed`, KD-2) and the old
 // id's held items are carried (effect [21]). Otherwise attach. origin -1 = absent (user).
+// The closed record is replaced by the new one in the same step, so it is never built: only CLOSE's clock part
+// (SETTLE, state closed, DROP; its effects and the bv frame) runs, then OPEN writes the new record, which is built
+// from the stored old id in place before anything changes. O(key length + U + record).
 pub fn replace(inout st: [i64], sk: [i64], ss: i64, sn: i64, origin: i64, size: i64, unit: [i64], ut: i64, uk: [i64], us: i64, un: i64, now: i64, inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc
 {
   let mut o: i64 = origin;
@@ -448,23 +520,48 @@ pub fn replace(inout st: [i64], sk: [i64], ss: i64, sn: i64, origin: i64, size: 
   if !valid_origin(o) || !valid_size(size) { return 2; }
   let se: i64 = session_of(st, sk, ss, sn);
   if se < 0 { return 2; }
-  let b: [i64] = blob_copy(st, se);
-  if rd(b, 0) != 1 || len(b) < 30 {
+  let a: i64 = entry_addr(st, se);
+  let n: i64 = at_n(st, a);
+  if n < 30 || rd(st, at_off(st, a)) != 1 {
     return attach(inout st, sk, ss, sn, o, size, unit, ut, uk, us, un, now, inout fx, inout out);
   }
-  let ol: i64 = str_len(b, 24);
-  if !out_ok(out, 3 + c32(un) + ol) { return 3; }
-  let g: i64 = reserve(inout st, open_words(b, un) + 64);
+  let ol: i64 = c32(rd(st, at_off(st, a) + 24));
+  let m: i64 = c32(un);
+  if !out_ok(out, 3 + m + ol) { return 3; }
+  // Room for the new record (30 + m + ol words, ol counted even when the id length word runs past the blob) plus the
+  // old reservation; store's put then fits without Grow. make_room keeps entries and blob offsets.
+  let g: i64 = reserve(inout st, 30 + m + ol + n + 64);
   if g != 0 { return grow(g); }
-  let closed: [i64] = close_rec(inout st, sk, ss, sn, b, 3, now, inout bv, inout fx);
+  let off: i64 = at_off(st, a);
   let mut fk: i64 = 1;
   if o == 1 { fk = 0; }
-  let w: i64 = open_in(inout st, sk, ss, sn, closed, o, size, unit, ut, uk, us, un, now, fk, b, 25, ol, inout fx);
+  // The old id is read in place when it lies inside the blob; otherwise from a copy of the blob, whose reads past
+  // the end give 0 (the same units the closed-record path read).
+  let mut r: [i64] = crate::ent_u16::zeros(0);
+  let mut ce: i64 = -1;
+  if 25 + ol <= n {
+    r = fresh(o, size, unit, ut, uk, us, un, now, fk, st, c40(off + 25), ol);
+    ce = clock_in(st, st, c40(off + 25), ol);
+  } else {
+    let b: [i64] = blob_copy(st, se);
+    r = fresh(o, size, unit, ut, uk, us, un, now, fk, b, 25, ol);
+    ce = clock_in(st, b, 25, ol);
+  }
+  // CLOSE's clock part on the old record (bud_clock::close without the fx re-check, which passed above).
+  view_in(st, off, inout bv);
+  let sa: i64 = crate::bud_clock::settle_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
+  crate::ent_u16::wr(inout bv, 1, 2);
+  crate::bud_clock::drop_at(inout st, ce, inout fx);
+  // OPEN (the old clock is gone, so OPEN's stale-clock DROP finds nothing).
+  push(inout fx, 22);
+  let w: i64 = store(inout st, sk, ss, sn, r);
   if w != 0 { return w; }
+  push(inout fx, 20);
   crate::ent_u16::wr(inout out, 0, 3);
   let e: i64 = put_str(inout out, 1, uk, c40(us), un);
   if o != 1 {
-    let e2: i64 = put_str(inout out, e, b, 25, ol);
+    // The old id is the new record's follows (string 4 at 28 + m: id, then three empty strings).
+    let e2: i64 = put_str(inout out, e, r, c40(29 + m), ol);
     push(inout fx, 21);
   }
   return 0;
@@ -476,12 +573,12 @@ pub fn reopen(inout st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, 
 {
   if !crate::bud_clock::fx_ok(fx) { return 3; }
   if len(out) < 1 { return 3; }
-  let se: i64 = current_entry(st, sk, ss, sn, bk, bs, bn);
-  if se < 0 {
+  let a: i64 = current_at(st, sk, ss, sn, bk, bs, bn);
+  if a < 0 {
     crate::ent_u16::wr(inout out, 0, 1);
     return 0;
   }
-  let off: i64 = blob_at(st, se);
+  let off: i64 = at_off(st, a);
   if rd(st, off) != 2 || rd(st, off + 18) != 1 {
     crate::ent_u16::wr(inout out, 0, 1);
     return 0;
@@ -496,6 +593,7 @@ pub fn reopen(inout st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, 
     crate::ent_u16::wr(inout out, 0, 2);
     return 0;
   }
+  let se: i64 = session_of(st, sk, ss, sn);
   let b: [i64] = blob_copy(st, se);
   if rd(b, 0) != 2 || rd(b, 18) != 1 {
     crate::ent_u16::wr(inout out, 0, 1);
@@ -517,28 +615,48 @@ pub fn reopen(inout st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, 
 }
 
 // maybeClose(session) (B:399-408): only an open budget with no runs on its clock closes, and only when the session
-// is quiet (quiet: -1 not asked yet -> status 5 with nothing written, 0 no, 1 yes). Closing is CLOSE('quiet') then
-// changed; out [2]. Otherwise [1]. O(key length + U).
+// is quiet (quiet: the host's isQuiet answer supplied up front, 0 no, 1 yes; consulting it pushes [23] first; -1 not
+// supplied -> status 5 with nothing written). Closing is CLOSE('quiet') then changed; out [2]. Otherwise [1].
+// O(key length + U).
 pub fn maybe_close(inout st: [i64], sk: [i64], ss: i64, sn: i64, quiet: i64, now: i64, inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc
 {
-  if !crate::bud_clock::fx_ok(fx) { return 3; }
+  // Room for [23] plus CLOSE's effects (bud_clock::fx_ok bound after one push).
+  if c40(rd(fx, 0)) + 6 > len(fx) { return 3; }
   if len(out) < 1 { return 3; }
   let se: i64 = session_of(st, sk, ss, sn);
   if se < 0 { return 2; }
-  let off: i64 = blob_at(st, se);
-  let n: i64 = blob_n(st, se);
-  if state_of(st, off, n) != 0 { crate::ent_u16::wr(inout out, 0, 1); return 0; }
-  let ce: i64 = crate::bud_clock::clock_of(st, st, c40(off + 25), c32(rd(st, off + 24)));
+  let a: i64 = entry_addr(st, se);
+  let off: i64 = at_off(st, a);
+  if state_of(st, off, at_n(st, a)) != 0 { crate::ent_u16::wr(inout out, 0, 1); return 0; }
+  let ce: i64 = clock_in(st, st, c40(off + 25), c32(rd(st, off + 24)));
   if ce >= 0 && crate::bud_map::count(st, ce) > 0 { crate::ent_u16::wr(inout out, 0, 1); return 0; }
   if quiet < 0 { return 5; }
+  let in_place: bool = str_len_in(st, off, 2) == 0 && str_len_in(st, off, 3) == 0;
+  if quiet != 0 && !in_place {
+    // Room for the rewritten record before the first effect, so a Grow writes nothing. The same blob copy feeds
+    // close_rec: reserve does not change the record, so it is not copied twice.
+    let b: [i64] = blob_copy(st, se);
+    let rw: i64 = rec_bound(b);
+    let g: i64 = reserve(inout st, rw + 8);
+    if g != 0 { return grow(g); }
+    push(inout fx, 23);
+    crate::ent_u16::wr(inout out, 0, 1);
+    let r: [i64] = close_rec(inout st, sk, ss, sn, b, 1, now, inout bv, inout fx);
+    let w: i64 = store(inout st, sk, ss, sn, r);
+    if w != 0 { return w; }
+    push(inout fx, 20);
+    crate::ent_u16::wr(inout out, 0, 2);
+    return 0;
+  }
+  push(inout fx, 23);
   crate::ent_u16::wr(inout out, 0, 1);
   if quiet == 0 { return 0; }
   // No activeSince text and no ended.at text: CLOSE keeps the record length, so only the header changes. The clock
   // part is bud_clock::close on the clock entry ce found above (SETTLE, state closed, DROP), then the header words
   // are written in place (the entry is found again only when DROP removed a clock entry).
-  if str_len_in(st, off, 2) == 0 && str_len_in(st, off, 3) == 0 {
+  if in_place {
     view_in(st, off, inout bv);
-    let a: i64 = crate::bud_clock::settle_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
+    let sa: i64 = crate::bud_clock::settle_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
     crate::ent_u16::wr(inout bv, 1, 2);
     crate::bud_clock::drop_at(inout st, ce, inout fx);
     let mut o2: i64 = off;
@@ -558,13 +676,5 @@ pub fn maybe_close(inout st: [i64], sk: [i64], ss: i64, sn: i64, quiet: i64, now
     crate::ent_u16::wr(inout out, 0, 2);
     return 0;
   }
-  let b: [i64] = blob_copy(st, se);
-  let g: i64 = reserve(inout st, len(b) + 8);
-  if g != 0 { return grow(g); }
-  let r: [i64] = close_rec(inout st, sk, ss, sn, b, 1, now, inout bv, inout fx);
-  let w: i64 = store(inout st, sk, ss, sn, r);
-  if w != 0 { return w; }
-  push(inout fx, 20);
-  crate::ent_u16::wr(inout out, 0, 2);
-  return 0;
+  return 2;
 }

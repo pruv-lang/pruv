@@ -145,6 +145,13 @@ The rest is no inlining of the generated call chain (compiler) plus the per-op `
 ABI). With both removed in a scratch build, it is at parity. Line-by-line diagnosis: `perf_headroom/HOST.md`, "M4
 sessions under the 1.1x bar".
 
+### Pass 3: inline hints and `eq_range` (2026-11-17)
+
+The compiler now emits `#[inline]` on generated functions and `bud_map::entry_matches` uses the new `eq_range`
+builtin (slice `==`, `memcmp` in the binary). Sessions 1.22 / 1.13 / 1.14x, tools 0.69-0.74, clocks 0.92-1.04.
+The rest is the per-op `valid()` of the raw-buffer ABI; the typed-handle design that removes it is in
+`perf_headroom/HOST.md`, "Design: a typed resident-state handle". Checks: 300/300, stats 1922/1922.
+
 ### Map hash, probe and key compare (2026-11-17, input from the M9 profile)
 
 M9 found `bud_map::find` at 37% of its clock calls. Its 36-unit budget ids went through one dependent multiply per

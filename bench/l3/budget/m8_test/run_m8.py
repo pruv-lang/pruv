@@ -3,7 +3,7 @@
 
   python3 bench/l3/budget/m8_test/run_m8.py q    [--pruvc PATH | --gen GEN.rs] [--cases F] [--oracle F]
   python3 bench/l3/budget/m8_test/run_m8.py derive  (writes work/m8/cases_acct.jsonl + oracle_acct.jsonl)
-  python3 bench/l3/budget/m8_test/run_m8.py perf [--pruvc PATH | --gen GEN.rs] [--rounds N]
+  python3 bench/l3/budget/m8_test/run_m8.py perf [--pruvc PATH | --gen GEN.rs] [--rounds N] [--reps N] [--no-instr]
 
 q: converts each Q2 case (work/m8/cases.jsonl) into the driver program, runs it, and compares with the oracle output
 (work/m8/oracle.jsonl). Compared per call: the return value of every charge ({ok} / {ok:false, reason}) and that the
@@ -363,8 +363,29 @@ def cmd_derive(args):
     return 0
 
 
+def instr_retired(cmd, env):
+    """Instructions retired by one run of cmd (`/usr/bin/time -l`, macOS)."""
+    r = subprocess.run(["/usr/bin/time", "-l"] + cmd, capture_output=True, text=True, env=env, cwd=HERE)
+    if r.returncode != 0:
+        sys.exit("%s failed:\n%s" % (cmd[0], r.stderr[-2000:]))
+    for l in r.stderr.splitlines():
+        if "instructions retired" in l:
+            return int(l.split()[0])
+    sys.exit("no instruction count from /usr/bin/time -l")
+
+
+def calls_of(item, size, reps):
+    return (max(1, reps // size) * size) if item == "toolgrow" else reps
+
+
+ITEMS = ("charge", "failure", "tooldup", "toolgrow")
+
+
 def cmd_perf(args):
-    """Alternates Pruv / hand Rust / TS runs per round and size; prints the median ns per call of each item."""
+    """Wall time: Pruv / hand Rust / TS runs alternate per round and size, and the side order rotates every round;
+    prints the median ns per call of each item. Instructions (Pruv and hand, unless --no-instr): one item per run
+    (the drivers' item argument), retired-instruction difference between --reps and 5 x --reps, divided by the extra
+    calls; median of 3. The instruction count does not depend on machine load."""
     sys.path.insert(0, BUD)
     from common import NODE, TS_ENV
     exe = build(args)
@@ -377,11 +398,13 @@ def cmd_perf(args):
     env.update(TS_ENV())
     ts = [NODE, "--experimental-strip-types", "--no-warnings", "--import", os.path.join(BUD, "reference-hooks.mjs"),
           os.path.join(HERE, "perf_ts.mjs")]
-    sides = {"pruv": [exe, "perf"], "hand": [hand], "ts": ts}
+    sides = [("pruv", [exe, "perf"]), ("hand", [hand]), ("ts", ts)]
+    sizes = (100, 500, 1000)
     res = {}
     for rd in range(args.rounds):
-        for size in (100, 500, 1000):
-            for side, cmd in sides.items():
+        order = sides[rd % 3:] + sides[:rd % 3]
+        for size in sizes:
+            for side, cmd in order:
                 r = subprocess.run(cmd + [str(size), str(args.reps)], capture_output=True, text=True, env=env,
                                    cwd=HERE)
                 if r.returncode != 0:
@@ -389,10 +412,26 @@ def cmd_perf(args):
                 for l in r.stdout.splitlines():
                     item, sz, ns = l.split()
                     res.setdefault((item, int(sz)), {}).setdefault(side, []).append(float(ns))
-    print("item | size | Pruv ns | hand Rust ns | TS ns | Pruv/hand")
-    for (item, sz), v in sorted(res.items()):
-        m = {k: statistics.median(x) for k, x in v.items()}
-        print("%s | %d | %.1f | %.1f | %.1f | %.2f" % (item, sz, m["pruv"], m["hand"], m["ts"], m["pruv"] / m["hand"]))
+    ins = {}
+    if not args.no_instr:
+        r1, r2 = args.reps, 5 * args.reps
+        for size in sizes:
+            for item in ITEMS:
+                for side, cmd in sides[:2]:
+                    d = []
+                    for _ in range(3):
+                        lo = instr_retired(cmd + [str(size), str(r1), item], env)
+                        hi = instr_retired(cmd + [str(size), str(r2), item], env)
+                        d.append((hi - lo) / (calls_of(item, size, r2) - calls_of(item, size, r1)))
+                    ins.setdefault((item, size), {})[side] = statistics.median(d)
+    print("item | size | Pruv ns | hand Rust ns | TS ns | Pruv/hand | Pruv/TS | Pruv instr | hand instr | instr ratio")
+    for item in ITEMS:
+        for sz in sizes:
+            m = {k: statistics.median(x) for k, x in res[(item, sz)].items()}
+            i = ins.get((item, sz), {})
+            ir = ("%.0f | %.0f | %.2f" % (i["pruv"], i["hand"], i["pruv"] / i["hand"])) if i else "- | - | -"
+            print("%s | %d | %.1f | %.1f | %.1f | %.2f | %.2f | %s" % (
+                item, sz, m["pruv"], m["hand"], m["ts"], m["pruv"] / m["hand"], m["pruv"] / m["ts"], ir))
 
 
 def main():
@@ -402,7 +441,8 @@ def main():
     ap.add_argument("--gen")
     ap.add_argument("--cases", default=os.path.join(WORK, "cases.jsonl"))
     ap.add_argument("--oracle", default=os.path.join(WORK, "oracle.jsonl"))
-    ap.add_argument("--rounds", type=int, default=5)
+    ap.add_argument("--rounds", type=int, default=7)
+    ap.add_argument("--no-instr", action="store_true")
     ap.add_argument("--reps", type=int, default=200000)
     a = ap.parse_args()
     sys.exit({"q": cmd_q, "perf": cmd_perf, "derive": cmd_derive}[a.cmd](a))

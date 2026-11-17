@@ -7,10 +7,12 @@
 //
 // Boundary rule: the host owns the state buffer and the scratch frames and supplies the inputs of a call (now, the
 // next randomUUID value, the isQuiet answer); it never reads state words and decides nothing. It reads the result
-// tag in out only to print the words. Effects: [20] changed, [21] carryHeld, [22] uuid consumed (the host advances
-// its UUID stream), [13] timerClear (no timers exist in M7 scenarios; logged). Need 5: the host asks isQuiet (next
-// queued answer, default false) and retries the same call with the answer. Grow -N: buffer of max(N, 2*len),
-// t_grow, retry.
+// tag in out only to print the words (a budget result is a view [4, n, off]: the host prints st[off..off+n), as a
+// caller reads through the returned reference). Effects: [20] changed, [21] carryHeld, [22] uuid consumed (the host
+// advances its UUID stream), [23] isQuiet consulted (the host advances its isQuiet answers; the answer, next queued
+// or default false, is supplied up front in the op like the next UUID), [13] timerClear (no timers exist in M7
+// scenarios; logged). Need 5 only answers a call made without an isQuiet input; this host always supplies one.
+// Grow -N: buffer of max(N, 2*len), t_grow, retry.
 use std::hint::black_box;
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
@@ -28,9 +30,9 @@ struct World {
     next_quiet: usize,
     log: Vec<String>,
     silent: bool,
-    // perf only (silent): the op built last, keyed by (body address, body length, quiet, uuid index). The perf bodies
-    // are fixed vectors, so a host that keeps its prepared arguments does not rebuild them on every call.
-    op_key: (usize, usize, i64, usize),
+    // perf only (silent): the ops built so far, keyed by (body address, body length, quiet, uuid index). The perf
+    // bodies are fixed vectors, so a host that keeps its prepared arguments does not rebuild them on every call.
+    ops: Vec<((usize, usize, i64, usize), Vec<i64>)>,
 }
 
 impl World {
@@ -57,7 +59,7 @@ impl World {
             next_quiet: 0,
             log: Vec::new(),
             silent: false,
-            op_key: (0, 0, 0, usize::MAX),
+            ops: Vec::new(),
         }
     }
 
@@ -95,79 +97,98 @@ impl World {
     }
 
     // One public call: body = [code, origin, size, unit x6, sessionId key, budgetId key]; the host inserts now, the
-    // isQuiet answer (-1 until asked) and the next UUID key.
+    // next isQuiet answer and the next UUID key.
     fn call(&mut self, body: &[i64]) -> i64 {
-        let mut quiet = -1i64;
+        let quiet = self.quiet.get(self.next_quiet).copied().unwrap_or(0);
+        let k = (body.as_ptr() as usize, body.len(), quiet, self.next_uuid);
+        let mut slot = usize::MAX;
+        if self.silent {
+            slot = match self.ops.iter().position(|(key, _)| *key == k) {
+                Some(i) => i,
+                None => {
+                    self.ops.push((k, Vec::new()));
+                    self.ops.len() - 1
+                }
+            };
+        }
+        let mut op = if slot == usize::MAX { std::mem::take(&mut self.op) } else { std::mem::take(&mut self.ops[slot].1) };
+        if op.is_empty() || slot == usize::MAX {
+            op.clear();
+            op.push(body[0]);
+            op.push(self.now);
+            op.push(quiet);
+            op.extend_from_slice(&body[1..]);
+            match self.uuids.get(self.next_uuid) {
+                Some(u) => op.extend_from_slice(u),
+                None => op.push(0),
+            }
+        }
+        op[1] = self.now;
         let mut r = 0;
         for _ in 0..8 {
-            let mut op = std::mem::take(&mut self.op);
-            let k = (body.as_ptr() as usize, body.len(), quiet, self.next_uuid);
-            if !self.silent || k != self.op_key {
-                op.clear();
-                op.push(body[0]);
-                op.push(self.now);
-                op.push(quiet);
-                op.extend_from_slice(&body[1..]);
-                match self.uuids.get(self.next_uuid) {
-                    Some(u) => op.extend_from_slice(u),
-                    None => op.push(0),
-                }
-                self.op_key = k;
-            }
-            op[1] = self.now;
             self.fx[0] = 0;
             r = sol::t_call(&mut self.st, &op, &mut self.bv, &mut self.fx, &mut self.out);
-            self.op = op;
             if r < 0 {
                 self.grow((-r) as usize);
                 continue;
             }
-            if r == 5 && quiet < 0 {
-                quiet = self.quiet.get(self.next_quiet).copied().unwrap_or(0);
+            break;
+        }
+        if slot == usize::MAX {
+            self.op = op;
+        } else {
+            self.ops[slot].1 = op;
+        }
+        let used = self.fx[0].max(0) as usize;
+        if r != 0 {
+            // A finished call that consulted isQuiet consumed the answer even when it failed afterwards.
+            if self.fx[1..=used].contains(&23) {
                 self.next_quiet += 1;
                 if !self.silent {
                     self.log.push(format!("E quiet {}", quiet));
                 }
-                continue;
             }
-            break;
-        }
-        if r != 0 {
             if !self.silent {
                 self.log.push(format!("X {}", r));
             }
             return r;
         }
-        let used = self.fx[0].max(0) as usize;
         for i in 1..=used {
             let e = self.fx[i];
             if e == 22 {
                 self.next_uuid += 1;
+            }
+            if e == 23 {
+                self.next_quiet += 1;
             }
             if !self.silent {
                 self.log.push(match e {
                     20 => "E changed".to_string(),
                     21 => "E carry".to_string(),
                     22 => "E uuid".to_string(),
+                    23 => format!("E quiet {}", quiet),
                     13 => "E clear".to_string(),
                     x => format!("X fx{}", x),
                 });
             }
         }
         if !self.silent {
-            let k = match self.out[0] {
+            let w: Vec<String> = match self.out[0] {
                 3 => {
                     let l = 2 + self.out[1].max(0) as usize;
-                    if self.fx[1..=used].contains(&21) {
-                        l + 1 + self.out[l].max(0) as usize
-                    } else {
-                        l
-                    }
+                    let k = if self.fx[1..=used].contains(&21) { l + 1 + self.out[l].max(0) as usize } else { l };
+                    self.out[..k].iter().map(|x| x.to_string()).collect()
                 }
-                4 => 2 + self.out[1].max(0) as usize,
-                _ => 1,
+                4 => {
+                    // budget view: the record is st[off..off+n)
+                    let n = self.out[1].max(0) as usize;
+                    let off = self.out[2].max(0) as usize;
+                    let mut v = vec!["4".to_string(), n.to_string()];
+                    v.extend(self.st[off..off + n].iter().map(|x| x.to_string()));
+                    v
+                }
+                x => vec![x.to_string()],
             };
-            let w: Vec<String> = self.out[..k].iter().map(|x| x.to_string()).collect();
             self.log.push(format!("V {}", w.join(" ")));
         }
         0

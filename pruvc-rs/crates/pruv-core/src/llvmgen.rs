@@ -28,6 +28,9 @@ fn g6_diag_err(line: i64, col: i64) -> String {
 /// travels like the G6 one: this prefix, then `line:col:what`; `gen_llvm_concrete_ex` turns it back into the diagnostic.
 const G9_DIAG_TAG: &str = "\u{0}g9diag:";
 
+/// L3-10: eq_range raised in the middle of a function body: this prefix, then `line:col`.
+const EQR_DIAG_TAG: &str = "\u{0}eqrdiag:";
+
 fn g9_diag_err(line: i64, col: i64, what: &str) -> String {
     format!("{}{}:{}:{}", G9_DIAG_TAG, line, col, what)
 }
@@ -3654,6 +3657,10 @@ impl<'a> FnGen<'a> {
             let r = self.op(format!("{} i64 {}, {}", ins, x.a, y.a))?;
             return Ok(V::new(Kind::I64, r));
         }
+        if n == "eq_range" {
+            // L3-10: eq_range has no LLVM lowering: codegen/unsupported_type (Python FnGen ev_call)
+            return Err(format!("{}{}:{}", EQR_DIAG_TAG, e.line, e.col));
+        }
         if n == "load_be" {
             // P2 batch 4: array, then index
             let arr = self.ev(arg(a, 0)?, false)?;
@@ -6061,7 +6068,23 @@ pub fn gen_llvm_concrete_ex(
                     "compare tags with is_variant and fields with variant_field, or move the check into the body",
                 ))
             }
-            None => GenError::Msg(s),
+            None => match s.strip_prefix(EQR_DIAG_TAG) {
+                // L3-10: eq_range is rejected by the LLVM backend
+                Some(rest) => {
+                    let mut it = rest.split(':');
+                    let line: i64 = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+                    let col: i64 = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+                    GenError::Diag(crate::diagnostic::PruvError::new(
+                        "codegen",
+                        line,
+                        col,
+                        "unsupported_type",
+                        "eq_range is not supported by the llvm codegen layer yet",
+                        "compare the elements in a loop, or use the Rust backend",
+                    ))
+                }
+                None => GenError::Msg(s),
+            },
         },
     })
 }

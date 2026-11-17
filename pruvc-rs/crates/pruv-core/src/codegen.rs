@@ -1648,6 +1648,8 @@ impl<'a> Gen<'a> {
         };
         let allow = self.allow;
         self.emit(0, allow);
+        // Inline hint on every function body: without it rustc keeps the generated call chains as real calls.
+        self.emit(0, "#[inline]");
         self.emit(0, &format!("{}fn {}({}){} {{", vis, body_name, ps, ret));
         self.cost = !self.verified && f.cost.is_some();
         if self.cost {
@@ -3967,6 +3969,27 @@ impl<'a> Gen<'a> {
                     };
                     return Ok(self.cost_buffer(result));
                 }
+                if n == "eq_range" {
+                    // L3-10: eq_range: slice equality of a[i..i+n] and b[j..j+n]; unchecked slices when verified
+                    let a0 = self.arr_ref(arg(a, 0)?)?;
+                    let i0 = self.e(arg(a, 1)?)?;
+                    let b0 = self.arr_ref(arg(a, 2)?)?;
+                    let j0 = self.e(arg(a, 3)?)?;
+                    let n0 = self.e(arg(a, 4)?)?;
+                    // a leading `&` would bind looser than `.len()`, `[..]` and `.get_unchecked`: parenthesize it
+                    let a0 = if a0.starts_with('&') { format!("({})", a0) } else { a0 };
+                    let b0 = if b0.starts_with('&') { format!("({})", b0) } else { b0 };
+                    if self.verified {
+                        return Ok(format!(
+                            "{{ let pruv_i: i64 = {}; let pruv_j: i64 = {}; let pruv_n: i64 = {}; (unsafe {{ {}.get_unchecked((pruv_i as usize)..((pruv_i + pruv_n) as usize)) }}) == (unsafe {{ {}.get_unchecked((pruv_j as usize)..((pruv_j + pruv_n) as usize)) }}) }}",
+                            i0, j0, n0, a0, b0
+                        ));
+                    }
+                    return Ok(format!(
+                        "{{ let pruv_i: i64 = {}; let pruv_j: i64 = {}; let pruv_n: i64 = {}; if pruv_i < 0 || pruv_j < 0 || pruv_n < 0 || pruv_i > ({}.len() as i64) - pruv_n || pruv_j > ({}.len() as i64) - pruv_n {{ pruv_oob(pruv_i, {}.len()) }} {}[(pruv_i as usize)..((pruv_i + pruv_n) as usize)] == {}[(pruv_j as usize)..((pruv_j + pruv_n) as usize)] }}",
+                        i0, j0, n0, a0, b0, a0, a0, b0
+                    ));
+                }
                 if n == "load_be" {
                     // P2 batch 4: big-endian word of a[i..i+nb]; unchecked slice when verified
                     let nb = crate::check::word_width(arg(a, 2)?).unwrap_or(0);
@@ -4451,7 +4474,7 @@ mod tests {
     #[test]
     fn verified_plain() {
         let s = gen_rust(&prog(vec![]), true, false, 1 << 30).unwrap();
-        assert_eq!(s, format!("{}\npub fn f(x: i64) -> i64 {{\n    return (x + 1i64);\n}}\n\n", ALLOW));
+        assert_eq!(s, format!("{}\n#[inline]\npub fn f(x: i64) -> i64 {{\n    return (x + 1i64);\n}}\n\n", ALLOW));
     }
 
     #[test]
@@ -4494,6 +4517,26 @@ mod tests {
             cost: None, decreases: None, small_bound: None,
         };
         Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None }
+    }
+
+    // L3-10: eq_range
+    #[test]
+    fn eq_range_emitted_rust() {
+        let src = "fn same(a: [u8], i: i64, b: [u8], j: i64, n: i64) -> bool { return eq_range(a, i, b, j, n); }";
+        let mut p = crate::parse(src).expect("parse");
+        crate::check::check(&mut p).expect("check");
+        let v = gen_rust(&p, true, false, 1 << 30).unwrap();
+        assert!(
+            v.contains("{ let pruv_i: i64 = i; let pruv_j: i64 = j; let pruv_n: i64 = n; (unsafe { a.get_unchecked((pruv_i as usize)..((pruv_i + pruv_n) as usize)) }) == (unsafe { b.get_unchecked((pruv_j as usize)..((pruv_j + pruv_n) as usize)) }) }"),
+            "{}",
+            v
+        );
+        let s = gen_rust(&p, false, false, 1 << 30).unwrap();
+        assert!(
+            s.contains("{ let pruv_i: i64 = i; let pruv_j: i64 = j; let pruv_n: i64 = n; if pruv_i < 0 || pruv_j < 0 || pruv_n < 0 || pruv_i > (a.len() as i64) - pruv_n || pruv_j > (b.len() as i64) - pruv_n { pruv_oob(pruv_i, a.len()) } a[(pruv_i as usize)..((pruv_i + pruv_n) as usize)] == b[(pruv_j as usize)..((pruv_j + pruv_n) as usize)] }"),
+            "{}",
+            s
+        );
     }
 
     #[test]
