@@ -321,11 +321,8 @@ pub fn write(p: [i64], d: crate::json::JsonDocument, plan: [i64]) -> [i64] ! all
   let adm: i64 = plan[0]; let c0: i64 = plan[2]-adm;
   let mut room: i64 = plan[1]; if room < 0 { room=0; } if room > 100000000 { room=100000000; }
   let mut want: i64 = len(p)+room; if want > 100000000 { want=100000000; }
-  let mut q: [i64] = alloc(want,0); let mut i: i64 = 0;
-  while i < len(p)
-    invariant 0 <= i && i <= len(p) && len(q) == want && len(p) <= want
-    decreases len(p)-i
-  { q[i]=p[i]; i=i+1; }
+  // One allocation of want words: the prefix is copied once and only the tail is zero-filled (P05G).
+  let mut q: [i64] = resize(p,want,0);
   let mut cursor: i64 = len(p); let mut k: i64 = 0;
   while k < adm
     invariant 0 <= k && k <= adm && len(q) == want && len(p) <= cursor && cursor <= want && want <= 100000000

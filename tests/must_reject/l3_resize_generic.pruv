@@ -1,0 +1,5 @@
+// type_mismatch(type): resize takes [i64], [u8] or [bool]; a generic [T] uses alloc and a copy loop
+fn f<T: Element>(a: [T], v: T) -> i64 ! alloc {
+  let t: [T] = resize(a, len(a), v);
+  return len(t);
+}

@@ -1819,6 +1819,16 @@ class FnVerifier:
                     "truncate length 0 <= m <= len(%s)" % av.name)
             s.spend(st, g, 1 + m)
             return mk_arr(av.a, m, "truncate", av.elem)
+        if n == "resize":       # P05G: a grown to length m; k < len(a) keeps a[k], len(a) <= k < m is v
+            av, m, v = args
+            s.prove(st, g, z3.And(av.n <= m, m <= MAX_LEN), e, "index_oob",
+                    "resize length len(%s) <= n <= 2^40" % av.name)
+            if av.elem == U8:
+                s.prove(st, g, z3.And(v >= 0, v <= 255), e, "elem_range",
+                        "u8 element range 0..=255 for the resize fill value")
+            s.spend(st, g, 1 + m)
+            k = z3.Int("resize_k")
+            return mk_arr(z3.Lambda([k], z3.If(k < av.n, av.a[k], v)), m, "resize", av.elem)
         if n == "eq_range":     # L3-10: eq_range: five bounds obligations in order, then a fresh unconstrained bool
             av, i, bv, j, cnt = args
             s.prove(st, g, i >= 0, e, "index_oob", "eq_range start 0 <= i for %s" % av.name)

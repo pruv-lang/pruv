@@ -1,0 +1,5 @@
+// type_mismatch(type): resize takes an array; a str is not grown in place
+fn f(s: str) -> i64 ! alloc {
+  let t: str = resize(s, len(s), 0);
+  return len(t);
+}

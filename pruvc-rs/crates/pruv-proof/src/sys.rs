@@ -365,6 +365,16 @@ impl Z3 {
             )))
         }
     }
+    /// z3py `Lambda(vs, body)` (P05G resize). The bound variables are constant ASTs, as in `quantifier`.
+    pub fn lambda(&self, bound: &[Ast], body: &Ast) -> Ast {
+        let c = self.raw();
+        // SAFETY: S1 S2 S3 — variables are constant ASTs of this context (`Z3_to_app` is an app view of the same
+        // pointer); the app array is borrowed only for the call.
+        unsafe {
+            let apps: Vec<RawApp> = bound.iter().map(|b| nn(z::Z3_to_app(c, b.raw))).collect();
+            self.wrap(nn(z::Z3_mk_lambda_const(c, apps.len() as c_uint, apps.as_ptr(), body.raw)))
+        }
+    }
 
     // ---- datatypes ----
     /// z3py `CreateDatatypes(d1, d2, ...)`: creates several sorts together with a single `Z3_mk_datatypes`.

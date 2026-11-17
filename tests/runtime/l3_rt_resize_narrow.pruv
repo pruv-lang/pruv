@@ -1,0 +1,33 @@
+// P05G: resize of a narrow-stored [i64 | lo..=hi] array, and an element read straight off resize.
+fn widen(a: [i64 | 0..=200], n: i64) -> [i64 | 0..=200] ! alloc
+  requires len(a) <= n && n <= 100
+  ensures len(result) == n
+  ensures forall i in 0..len(a): result[i] == a[i]
+  ensures forall i in len(a)..n: result[i] == 150
+{ return resize(a, n, 150); }
+// u16 storage: a nonzero tail takes the 16-bit store loop, a zero tail the memset
+fn widen16(a: [i64 | 0..=1000], n: i64, v: i64) -> [i64 | 0..=1000] ! alloc
+  requires len(a) <= n && n <= 100 && 0 <= v && v <= 1000
+  ensures len(result) == n
+  ensures forall i in 0..len(a): result[i] == a[i]
+  ensures forall i in len(a)..n: result[i] == v
+{ return resize(a, n, v); }
+// 999 is outside 0..=200 and no declaration checks it here, so this array must keep the i64 store
+fn peek(a: [i64 | 0..=200], n: i64) -> i64 ! alloc
+  requires len(a) < n && n <= 100
+  ensures result == 999
+{ return resize(a, n, 999)[n - 1]; }
+pub fn run() -> () ! io, alloc {
+  let a: [i64 | 0..=200] = alloc(2, 180);
+  let b: [i64 | 0..=200] = widen(a, 4);
+  print(len(b)); print(b[1]); print(b[3]);
+  let c: [i64 | 0..=200] = alloc(1, 7);
+  print(peek(c, 6));
+  let d: [i64 | 0..=1000] = alloc(3, 999);
+  let e: [i64 | 0..=1000] = widen16(d, 7, 700);
+  let f: [i64 | 0..=1000] = widen16(d, 5, 0);
+  let g: [i64 | 0..=1000] = widen16(d, 0 + len(d), 5);
+  print(len(e)); print(e[2]); print(e[3]); print(e[6]);
+  print(len(f)); print(f[2]); print(f[4]);
+  print(len(g)); print(g[2]);
+}

@@ -2964,7 +2964,7 @@ class Gen:
             return "%s.%s" % (s.e(e.base), e.field)
         if isinstance(e, Call):
             n, a = e.name, e.args
-            if s.cost and n in ("alloc", "copy", "truncate") and not getattr(e, "pruv_cost_wrapped", False):
+            if s.cost and n in ("alloc", "copy", "truncate", "resize") and not getattr(e, "pruv_cost_wrapped", False):
                 # Count the validated result length; nested argument calls still spend.
                 import copy
                 plain = copy.copy(e)
@@ -3010,6 +3010,26 @@ class Gen:
                             "{ pruv_oob(pruv_m, pruv_a.len()) } pruv_a[..(pruv_m as usize)].to_vec() }" % (s.arr_ref(a[0]), s.e(a[1])))
                 return ("{ let pruv_a = %s; let pruv_m: i64 = %s; unsafe { pruv_a.get_unchecked(..(pruv_m as usize)) }.to_vec() }"
                         % (s.arr_ref(a[0]), s.e(a[1])))
+            if n == "resize":  # P05G: one allocation of n, one memcpy of the prefix, one fill of the tail
+                bool_arr = is_bool_array(a[0].ty)
+                vty = "bool" if bool_arr else "i64"
+                if is_u8_array(a[0].ty):
+                    fill = "pruv_v as u8"
+                elif bool_arr or not s.verified or s.layout(e) == "i64":
+                    fill = "pruv_v"
+                else:
+                    fill = "pruv_v as %s" % s.layout(e)
+                chk = ""
+                if not s.verified:
+                    chk = ('if pruv_n < (pruv_a.len() as i64) || pruv_n > (1i64 << 40) '
+                           '{ pruv_ovf("resize length outside len..2^40") } ')
+                    if is_u8_array(a[0].ty):
+                        chk += "if pruv_v < 0 || pruv_v > 255 { pruv_elem_oor(pruv_v) } "
+                # source order: a, n, v
+                return ("{ let pruv_a = %s; let pruv_n: i64 = %s; let pruv_v: %s = %s; %s"
+                        "let mut pruv_t = ::std::vec::Vec::with_capacity(pruv_n as usize); pruv_t.extend_from_slice(pruv_a); "
+                        "pruv_t.resize(pruv_n as usize, %s); pruv_t }"
+                        % (s.arr_ref(a[0]), s.e(a[1]), vty, s.e(a[2]), chk, fill))
             if n == "eq_range":  # L3-10: eq_range: slice equality of a[i..i+n] and b[j..j+n]
                 ra, rb = s.arr_ref(a[0]), s.arr_ref(a[2])
                 # arr_ref may yield `&x` / `&*x`: parenthesize so `.len()` / `.get_unchecked` bind to the reference

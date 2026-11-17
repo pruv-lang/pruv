@@ -461,7 +461,7 @@ impl Checker {
             if funcs.contains_key(&name) {
                 return Err(terr(f.line, f.col, "dup_fn", format!("function {} defined twice", name), ""));
             }
-            if matches!(name.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "truncate" | "eq_range")
+            if matches!(name.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "truncate" | "eq_range" | "resize")
                 || is_bit_builtin(&name)
                 || is_word_builtin(&name)
                 || contract_only(&name).is_some()
@@ -2122,7 +2122,7 @@ impl Checker {
                     format!("{} returns {}: a par branch must return ()", n, tn(&f.ret)),
                     "call a unit Pruv helper and pass results back through whole inout arrays"));
             }
-        } else if ["len", "alloc", "copy", "print", "is_char_boundary", "substr", "truncate", "eq_range"].contains(&n.as_str())
+        } else if ["len", "alloc", "copy", "print", "is_char_boundary", "substr", "truncate", "eq_range", "resize"].contains(&n.as_str())
             || is_bit_builtin(n)
             || is_word_builtin(n)
             || contract_only(n).is_some() || is_catalog(n) || (n == "old" && self.uses_inout)
@@ -3344,7 +3344,7 @@ impl Checker {
             }
             Ok(())
         };
-        let is_builtin = matches!(n.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "truncate" | "eq_range")
+        let is_builtin = matches!(n.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "truncate" | "eq_range" | "resize")
             || is_bit_builtin(&n)
             || is_word_builtin(&n);
         let is_old = n == "old" && self.uses_inout && !self.funcs.contains_key(&n); // G5 A0: contextual builtin
@@ -3397,6 +3397,27 @@ impl Checker {
                     return Err(terr(l0, c0, "type_mismatch", "truncate takes an array, found str", "use substr(s, 0, m) for a str"));
                 }
                 self.expect(&mut e.args[1], &i64t(), scope, c, None)?;
+                self.used_effects.insert("alloc".to_string());
+                return Ok(at);
+            }
+            // P05G: a copy of a grown to length n, the new tail set to v (no prefix loop, one allocation)
+            "resize" => {
+                if c {
+                    return Err(terr(line, col, "effect_in_contract", "resize not allowed in contracts", ""));
+                }
+                arity(3)?;
+                let at = self.expect_array(&mut e.args[0], scope, c, false)?;
+                let (l0, c0) = (e.args[0].line(), e.args[0].col());
+                if at == strt() {
+                    return Err(terr(l0, c0, "type_mismatch", "resize takes an array, found str", "build a String with push for a str"));
+                }
+                if !at.args.is_empty() {
+                    return Err(terr(l0, c0, "type_mismatch",
+                        format!("resize takes [i64], [u8] or [bool], found {}", tn(&at)),
+                        "use alloc and a copy loop for other element types"));
+                }
+                self.expect(&mut e.args[1], &i64t(), scope, c, None)?;
+                self.expect(&mut e.args[2], &elem_type(&at), scope, c, None)?;
                 self.used_effects.insert("alloc".to_string());
                 return Ok(at);
             }
