@@ -113,7 +113,7 @@ def m5(args):
         for m in sorted({k[1] for k in med if k[0] == side}):
             print("| %s | %s | " % (side, m) + " | ".join("%.1f" % med.get((side, m, n), float("nan")) for n in SIZES) + " |")
     print()
-    pairs = [("store_find", "store_find_text"), ("store_find", "store_find_tree"), ("store_find_enc", "store_find_enc_tree"),
+    pairs = [("store_find", "store_find_text"), ("store_find_enc", "store_find_enc_text"),
              ("store_find_lookup", "store_find_core_u16"), ("store_find_lookup", "store_find_core"), ("store_save", "store_save")]
     print("| Pruv measure / hand measure | " + " | ".join("n=%d" % n for n in SIZES) + " |")
     print("|---|" + "---:|" * len(SIZES))
