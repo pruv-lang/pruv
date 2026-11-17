@@ -1,0 +1,642 @@
+// L3-10 M11: work cards (RequestBudgets.setCard / hasCard, reference/backend-request-budget.ts 140-160, 476-518;
+// REQUEST_BUDGET_SPEC §4.7, §9, §15 rows 18-21). Values are tagged V words (ABI.md): 1 undefined, 2 null, 3 false,
+// 4 true, 5 int [5,v], 6 string [6,n,units], 7 number bits [7,bits], 8 array [8,n,V..], 9 object [9,n,(kn,units,V)*].
+// Every read goes through crate::ent_u16::rd and every write through crate::ent_u16::wr, so all functions are total
+// whatever the words contain. No `mod` lines (the root declares ent_u16, bud_num, bud_text, bud_date).
+//
+// Named sub-operations (all pub):
+//   v_end(v, at) -> i64                     end offset of the value at `at`, -1 if malformed / out of range (depth <= 32)
+//   obj_get(v, at, key: str) -> i64         offset of the value of the LAST pair with key `key` in the object at `at`, else -1
+//   text_ok(v, at) -> bool                  validText: string whose trimmed length (UTF-16 units) is 1..300; no allocation
+//   lines_ok(v, at, min, max) -> bool       validLines: array, count in min..max (checked first), every element text_ok
+//   check_required(v, at) -> i64            0 ok, 1 deliverable, 2 done
+//   check_optional(v, at) -> i64            0 ok, else the first failing of 3 targets, 4 verify, 5 conflicts, 6 state
+//   validate(v, at) -> i64                  required then optional
+//   build(v, at, by, by_at, now_ms) -> [i64]  the stored card (deliverable, done, updatedAt, targets?, verify?, conflicts?, state?, by?)
+//   lang_code(v, at) -> i64                 1 iff the value is the string "en" (at < 0 = absent -> 0)
+//   truthy(v, at) -> bool                   JS truthiness of the value
+//   set_card(found, closed, v, at, lang, by, by_at, now_ms) -> SetCard
+//   has_card(budget, at) -> bool            Boolean(budget.card)
+//   put_card(budget, at, card) -> [i64]     budget object with "card" replaced in place, or appended at the end
+//
+// Helpers that would sit better elsewhere are marked "candidate for bud_text" / "candidate for ent_value".
+
+pub struct SetCard { kind: i64, used_now: bool, card: [i64], error: [i64] }
+
+fn rd(v: [i64], i: i64) -> i64
+{ return crate::ent_u16::rd(v, i); }
+
+// the word after the tag at `at` (0 if at is out of range)
+fn nx(v: [i64], at: i64) -> i64
+{
+  if at < 0 || at >= len(v) { return 0; }
+  return rd(v, at + 1);
+}
+
+// ================= structure =================
+
+fn v_end_d(v: [i64], at: i64, depth: i64) -> i64
+  requires 0 <= depth && depth <= 33
+  ensures result == -1 || (at < result && result <= len(v))
+  decreases 33 - depth
+{
+  if depth > 32 { return -1; }
+  let n: i64 = len(v);
+  if at < 0 || at >= n { return -1; }
+  let t: i64 = rd(v, at);
+  if t >= 1 && t <= 4 { return at + 1; }
+  if t == 5 || t == 7 {
+    if n - at < 2 { return -1; }
+    return at + 2;
+  }
+  if t == 6 {
+    if n - at < 2 { return -1; }
+    let c: i64 = nx(v, at);
+    if c < 0 || c > n - at - 2 { return -1; }
+    return at + 2 + c;
+  }
+  if t == 8 || t == 9 {
+    if n - at < 2 { return -1; }
+    let cnt: i64 = nx(v, at);
+    if cnt < 0 || cnt > n - at - 2 { return -1; }
+    let mut pos: i64 = at + 2;
+    let mut i: i64 = 0;
+    while i < cnt
+      invariant 0 <= i && i <= cnt && at < pos && pos <= n && n == len(v) && 0 <= at && at < n && 0 <= depth && depth <= 32
+      decreases cnt - i
+    {
+      let mut vs: i64 = pos;
+      if t == 9 {
+        if pos >= n { return -1; }
+        let kn: i64 = rd(v, pos);
+        if kn < 0 || kn > n - pos - 1 { return -1; }
+        vs = pos + 1 + kn;
+      }
+      let e: i64 = v_end_d(v, vs, depth + 1);
+      if e < 0 { return -1; }
+      if e <= pos { return -1; }
+      pos = e;
+      i = i + 1;
+    }
+    return pos;
+  }
+  return -1;
+}
+
+pub fn v_end(v: [i64], at: i64) -> i64
+  ensures result == -1 || (at < result && result <= len(v))
+{
+  return v_end_d(v, at, 1);
+}
+
+fn tag(v: [i64], at: i64) -> i64
+{
+  if at < 0 { return 0; }
+  return rd(v, at);
+}
+
+// the key `kn, units` at pos equals the ASCII literal s
+fn key_is(v: [i64], pos: i64, s: str) -> bool
+  requires 0 <= pos && pos <= 1099511627776
+{
+  let m: i64 = len(s);
+  if m > 1024 { return false; }
+  if rd(v, pos) != m { return false; }
+  let mut j: i64 = 0;
+  while j < m
+    invariant 0 <= j && j <= m && m == len(s) && m <= 1024 && 0 <= pos && pos <= 1099511627776
+    decreases m - j
+  {
+    if rd(v, pos + 1 + j) != s[j] { return false; }
+    j = j + 1;
+  }
+  return true;
+}
+
+// the value at `at` is the string equal to the ASCII literal s (candidate for ent_value)
+fn str_is(v: [i64], at: i64, s: str) -> bool
+{
+  if at < 0 || at >= 1099511627776 { return false; }
+  if rd(v, at) != 6 { return false; }
+  return key_is(v, at + 1, s);
+}
+
+pub fn obj_get(v: [i64], at: i64, key: str) -> i64
+  ensures result == -1 || (0 <= result && result < len(v))
+{
+  let n: i64 = len(v);
+  if n > 1099511627776 { return -1; }
+  if at < 0 || n - at < 2 { return -1; }
+  if rd(v, at) != 9 { return -1; }
+  let cnt: i64 = nx(v, at);
+  if cnt < 0 || cnt > n - at - 2 { return -1; }
+  let mut pos: i64 = at + 2;
+  let mut i: i64 = 0;
+  let mut found: i64 = -1;
+  while i < cnt
+    invariant 0 <= i && i <= cnt && at < pos && pos <= n && n == len(v) && n <= 1099511627776 && 0 <= at && (found == -1 || (0 <= found && found < n))
+    decreases cnt - i
+  {
+    if pos >= n { return -1; }
+    let kn: i64 = rd(v, pos);
+    if kn < 0 || kn > n - pos - 1 { return -1; }
+    let vs: i64 = pos + 1 + kn;
+    let e: i64 = v_end(v, vs);
+    if e < 0 { return -1; }
+    if key_is(v, pos, key) { found = vs; }
+    pos = e;
+    i = i + 1;
+  }
+  return found;
+}
+
+// present = the key exists and its value is not undefined (TS `input.x !== undefined`)
+fn present(v: [i64], p: i64) -> bool
+{
+  return p >= 0 && rd(v, p) != 1;
+}
+
+// ================= text =================
+
+// [s, e) of the trimmed units of the string at `at` (absolute offsets); s = e = 0 if not a well-formed string.
+// candidate for bud_text (trim bounds without allocation)
+fn trim_s(v: [i64], at: i64) -> i64
+  ensures 0 <= result
+{
+  let n: i64 = len(v);
+  if at < 0 || n - at < 2 { return 0; }
+  if rd(v, at) != 6 { return 0; }
+  let c: i64 = nx(v, at);
+  if c < 0 || c > n - at - 2 { return 0; }
+  let b: i64 = at + 2;
+  let end: i64 = b + c;
+  let mut s: i64 = b;
+  while s < end && crate::ent_u16::is_trim_unit(rd(v, s))
+    invariant b <= s && s <= end && end <= n && 0 <= b
+    decreases end - s
+  { s = s + 1; }
+  return s;
+}
+
+fn trim_e(v: [i64], at: i64, s: i64) -> i64
+  ensures 0 <= result
+{
+  let n: i64 = len(v);
+  if at < 0 || n - at < 2 || s < 0 { return 0; }
+  if rd(v, at) != 6 { return 0; }
+  let c: i64 = nx(v, at);
+  if c < 0 || c > n - at - 2 { return 0; }
+  let end: i64 = at + 2 + c;
+  if s > end { return 0; }
+  let mut e: i64 = end;
+  while e > s && crate::ent_u16::is_trim_unit(rd(v, e - 1))
+    invariant s <= e && e <= end && 0 <= s
+    decreases e - s
+  { e = e - 1; }
+  return e;
+}
+
+pub fn text_ok(v: [i64], at: i64) -> bool
+{
+  if tag(v, at) != 6 { return false; }
+  let s: i64 = trim_s(v, at);
+  let e: i64 = trim_e(v, at, s);
+  let m: i64 = e - s;
+  return m >= 1 && m <= 300;
+}
+
+pub fn lines_ok(v: [i64], at: i64, min: i64, max: i64) -> bool
+{
+  let n: i64 = len(v);
+  if at < 0 || n - at < 2 { return false; }
+  if rd(v, at) != 8 { return false; }
+  let cnt: i64 = nx(v, at);
+  if cnt < min || cnt > max { return false; }
+  if cnt < 0 || cnt > n - at - 2 { return false; }
+  let mut pos: i64 = at + 2;
+  let mut i: i64 = 0;
+  while i < cnt
+    invariant 0 <= i && i <= cnt && 0 <= pos && pos <= n && n == len(v)
+    decreases cnt - i
+  {
+    if !text_ok(v, pos) { return false; }
+    let e: i64 = v_end(v, pos);
+    if e < 0 { return false; }
+    pos = e;
+    i = i + 1;
+  }
+  return true;
+}
+
+// ================= validation =================
+
+pub fn check_required(v: [i64], at: i64) -> i64 ! alloc
+  ensures 0 <= result && result <= 2
+{
+  if !text_ok(v, obj_get(v, at, "deliverable")) { return 1; }
+  if !lines_ok(v, obj_get(v, at, "done"), 1, 5) { return 2; }
+  return 0;
+}
+
+// Number.isInteger(x) && x >= 0 for a count value
+fn count_ok(v: [i64], p: i64) -> bool
+{
+  let t: i64 = tag(v, p);
+  if t == 5 { return nx(v, p) >= 0; }
+  if t == 7 { return crate::bud_num::count_class(nx(v, p)) == 0; }
+  return false;
+}
+
+fn targets_ok(v: [i64], t: i64) -> bool ! alloc
+{
+  if tag(v, t) != 9 { return false; }
+  if !count_ok(v, obj_get(v, t, "confirmed")) { return false; }
+  if !count_ok(v, obj_get(v, t, "candidate")) { return false; }
+  if !count_ok(v, obj_get(v, t, "unknown")) { return false; }
+  let np: i64 = obj_get(v, t, "note");
+  if !present(v, np) { return true; }
+  if rd(v, np) != 6 { return false; }
+  let c: i64 = nx(v, np);
+  return c >= 0 && c <= 300;
+}
+
+fn status_ok(v: [i64], p: i64) -> bool ! alloc
+{
+  return str_is(v, p, "planned") || str_is(v, p, "done") || str_is(v, p, "skipped");
+}
+
+fn verify_ok(v: [i64], at: i64) -> bool ! alloc
+{
+  let n: i64 = len(v);
+  if at < 0 || n - at < 2 { return false; }
+  if rd(v, at) != 8 { return false; }
+  let cnt: i64 = nx(v, at);
+  if cnt > 5 { return false; }
+  if cnt < 0 || cnt > n - at - 2 { return false; }
+  let mut pos: i64 = at + 2;
+  let mut i: i64 = 0;
+  while i < cnt
+    invariant 0 <= i && i <= cnt && 0 <= pos && pos <= n && n == len(v)
+    decreases cnt - i
+  {
+    if rd(v, pos) != 9 { return false; }
+    if !text_ok(v, obj_get(v, pos, "label")) { return false; }
+    if !status_ok(v, obj_get(v, pos, "status")) { return false; }
+    let e: i64 = v_end(v, pos);
+    if e < 0 { return false; }
+    pos = e;
+    i = i + 1;
+  }
+  return true;
+}
+
+fn state_ok(v: [i64], p: i64) -> bool ! alloc
+{
+  return str_is(v, p, "working") || str_is(v, p, "done") || str_is(v, p, "waiting-user") || str_is(v, p, "blocked");
+}
+
+pub fn check_optional(v: [i64], at: i64) -> i64 ! alloc
+  ensures result == 0 || (3 <= result && result <= 6)
+{
+  let t: i64 = obj_get(v, at, "targets");
+  if present(v, t) && !targets_ok(v, t) { return 3; }
+  let vf: i64 = obj_get(v, at, "verify");
+  if present(v, vf) && !verify_ok(v, vf) { return 4; }
+  let cf: i64 = obj_get(v, at, "conflicts");
+  if present(v, cf) && !lines_ok(v, cf, 0, 5) { return 5; }
+  let sp: i64 = obj_get(v, at, "state");
+  if present(v, sp) && !state_ok(v, sp) { return 6; }
+  return 0;
+}
+
+pub fn validate(v: [i64], at: i64) -> i64 ! alloc
+  ensures 0 <= result && result <= 6
+{
+  let r: i64 = check_required(v, at);
+  if r != 0 { return r; }
+  return check_optional(v, at);
+}
+
+// ================= writing =================
+// Writers return the next position; positions saturate at 2^40 and out-of-range writes are dropped (wr), so the same
+// code is the size pass (into an empty array) and the write pass (into zeros(size)).
+
+fn put(inout o: [i64], p: i64, x: i64) -> i64
+  requires 0 <= p && p <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776 && len(o) == len(old(o))
+{
+  if p >= 1099511627776 { return 1099511627776; }
+  crate::ent_u16::wr(inout o, p, x);
+  return p + 1;
+}
+
+// key `len, units` of an ASCII literal
+fn put_key(inout o: [i64], p: i64, s: str) -> i64
+  requires 0 <= p && p <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776 && len(o) == len(old(o))
+{
+  let m: i64 = len(s);
+  let mut q: i64 = put(inout o, p, m);
+  let mut j: i64 = 0;
+  while j < m
+    invariant 0 <= j && j <= m && m == len(s) && 0 <= q && q <= 1099511627776 && len(o) == len(old(o))
+    decreases m - j
+  {
+    q = put(inout o, q, s[j]);
+    j = j + 1;
+  }
+  return q;
+}
+
+// words v[s..e)
+fn put_words(inout o: [i64], p: i64, v: [i64], s: i64, e: i64) -> i64
+  requires 0 <= p && p <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776 && len(o) == len(old(o))
+{
+  let mut i: i64 = s;
+  if i < 0 { i = 0; }
+  let mut hi: i64 = e;
+  if hi > len(v) { hi = len(v); }
+  let mut q: i64 = p;
+  if hi <= i { return q; }
+  let olen: i64 = len(o);
+  // fast path: the whole range fits, copy directly
+  if q + (hi - i) <= olen {
+    let mut k: i64 = 0;
+    let m: i64 = hi - i;
+    while k < m
+      invariant 0 <= k && k <= m && 0 <= i && i + m <= len(v) && 0 <= q && q + m <= olen && olen == len(o) && len(o) == len(old(o))
+      decreases m - k
+    {
+      o[q + k] = v[i + k];
+      k = k + 1;
+    }
+    return q + m;
+  }
+  // size pass (nothing fits from q on): only the position moves
+  if q >= olen {
+    if hi - i >= 1099511627776 - q { return 1099511627776; }
+    return q + (hi - i);
+  }
+  while i < hi
+    invariant 0 <= i && i <= hi && hi <= len(v) && 0 <= q && q <= 1099511627776 && len(o) == len(old(o))
+    decreases hi - i
+  {
+    q = put(inout o, q, v[i]);
+    i = i + 1;
+  }
+  return q;
+}
+
+// the whole value at `at` verbatim (undefined if at < 0 or malformed)
+fn put_value(inout o: [i64], p: i64, v: [i64], at: i64) -> i64
+  requires 0 <= p && p <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776 && len(o) == len(old(o))
+{
+  let e: i64 = v_end(v, at);
+  if e < 0 { return put(inout o, p, 1); }
+  return put_words(inout o, p, v, at, e);
+}
+
+// the string at `at`, trimmed
+fn put_trimmed(inout o: [i64], p: i64, v: [i64], at: i64) -> i64
+  requires 0 <= p && p <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776 && len(o) == len(old(o))
+{
+  let s: i64 = trim_s(v, at);
+  let e: i64 = trim_e(v, at, s);
+  let mut q: i64 = put(inout o, p, 6);
+  q = put(inout o, q, e - s);
+  return put_words(inout o, q, v, s, e);
+}
+
+// array of trimmed strings (the array at `at` was validated by lines_ok)
+fn put_lines(inout o: [i64], p: i64, v: [i64], at: i64) -> i64
+  requires 0 <= p && p <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776 && len(o) == len(old(o))
+{
+  let n: i64 = len(v);
+  let mut cnt: i64 = nx(v, at);
+  let mut pos: i64 = 0;
+  if at < 0 || n - at < 2 || cnt < 0 || cnt > n - at - 2 { cnt = 0; } else { pos = at + 2; }
+  let mut q: i64 = put(inout o, p, 8);
+  q = put(inout o, q, cnt);
+  let mut i: i64 = 0;
+  while i < cnt
+    invariant 0 <= i && i <= cnt && 0 <= q && q <= 1099511627776 && len(o) == len(old(o))
+    decreases cnt - i
+  {
+    q = put_trimmed(inout o, q, v, pos);
+    pos = v_end(v, pos);
+    i = i + 1;
+  }
+  return q;
+}
+
+fn put_verify(inout o: [i64], p: i64, v: [i64], at: i64) -> i64 ! alloc
+  requires 0 <= p && p <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776 && len(o) == len(old(o))
+{
+  let n: i64 = len(v);
+  let mut cnt: i64 = nx(v, at);
+  let mut pos: i64 = 0;
+  if at < 0 || n - at < 2 || cnt < 0 || cnt > n - at - 2 { cnt = 0; } else { pos = at + 2; }
+  let mut q: i64 = put(inout o, p, 8);
+  q = put(inout o, q, cnt);
+  let mut i: i64 = 0;
+  while i < cnt
+    invariant 0 <= i && i <= cnt && 0 <= q && q <= 1099511627776 && len(o) == len(old(o))
+    decreases cnt - i
+  {
+    q = put(inout o, q, 9);
+    q = put(inout o, q, 2);
+    q = put_key(inout o, q, "label");
+    q = put_trimmed(inout o, q, v, obj_get(v, pos, "label"));
+    q = put_key(inout o, q, "status");
+    q = put_value(inout o, q, v, obj_get(v, pos, "status"));
+    pos = v_end(v, pos);
+    i = i + 1;
+  }
+  return q;
+}
+
+fn put_targets(inout o: [i64], p: i64, v: [i64], t: i64) -> i64 ! alloc
+  requires 0 <= p && p <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776 && len(o) == len(old(o))
+{
+  let np: i64 = obj_get(v, t, "note");
+  let with_note: bool = tag(v, np) == 6 && nx(v, np) > 0;
+  let mut q: i64 = put(inout o, p, 9);
+  if with_note { q = put(inout o, q, 4); } else { q = put(inout o, q, 3); }
+  q = put_key(inout o, q, "confirmed");
+  q = put_value(inout o, q, v, obj_get(v, t, "confirmed"));
+  q = put_key(inout o, q, "candidate");
+  q = put_value(inout o, q, v, obj_get(v, t, "candidate"));
+  q = put_key(inout o, q, "unknown");
+  q = put_value(inout o, q, v, obj_get(v, t, "unknown"));
+  if with_note {
+    q = put_key(inout o, q, "note");
+    q = put_value(inout o, q, v, np);
+  }
+  return q;
+}
+
+fn put_by(inout o: [i64], p: i64, by: [i64], by_at: i64) -> i64 ! alloc
+  requires 0 <= p && p <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776 && len(o) == len(old(o))
+{
+  let mut q: i64 = put(inout o, p, 9);
+  q = put(inout o, q, 2);
+  q = put_key(inout o, q, "sessionId");
+  q = put_value(inout o, q, by, obj_get(by, by_at, "sessionId"));
+  q = put_key(inout o, q, "turnId");
+  q = put_value(inout o, q, by, obj_get(by, by_at, "turnId"));
+  return q;
+}
+
+// the whole card (validated) into o from position 0; returns the size
+fn put_card_words(inout o: [i64], v: [i64], at: i64, by: [i64], by_at: i64, iso: [i64]) -> i64 ! alloc
+  ensures 0 <= result && result <= 1099511627776 && len(o) == len(old(o))
+{
+  let tp: i64 = obj_get(v, at, "targets");
+  let vp: i64 = obj_get(v, at, "verify");
+  let cp: i64 = obj_get(v, at, "conflicts");
+  let sp: i64 = obj_get(v, at, "state");
+  let has_by: bool = by_at >= 0 && truthy(by, by_at);
+  let mut k: i64 = 3;
+  if present(v, tp) { k = k + 1; }
+  if present(v, vp) { k = k + 1; }
+  if present(v, cp) { k = k + 1; }
+  if present(v, sp) { k = k + 1; }
+  if has_by { k = k + 1; }
+  let mut q: i64 = put(inout o, 0, 9);
+  q = put(inout o, q, k);
+  q = put_key(inout o, q, "deliverable");
+  q = put_trimmed(inout o, q, v, obj_get(v, at, "deliverable"));
+  q = put_key(inout o, q, "done");
+  q = put_lines(inout o, q, v, obj_get(v, at, "done"));
+  q = put_key(inout o, q, "updatedAt");
+  q = put(inout o, q, 6);
+  q = put(inout o, q, len(iso));
+  q = put_words(inout o, q, iso, 0, len(iso));
+  if present(v, tp) {
+    q = put_key(inout o, q, "targets");
+    q = put_targets(inout o, q, v, tp);
+  }
+  if present(v, vp) {
+    q = put_key(inout o, q, "verify");
+    q = put_verify(inout o, q, v, vp);
+  }
+  if present(v, cp) {
+    q = put_key(inout o, q, "conflicts");
+    q = put_lines(inout o, q, v, cp);
+  }
+  if present(v, sp) {
+    q = put_key(inout o, q, "state");
+    q = put_value(inout o, q, v, sp);
+  }
+  if has_by {
+    q = put_key(inout o, q, "by");
+    q = put_by(inout o, q, by, by_at);
+  }
+  return q;
+}
+
+// The stored card for a card that passed validate. O(size of the card): size pass, then write pass.
+pub fn build(v: [i64], at: i64, by: [i64], by_at: i64, now_ms: i64) -> [i64] ! alloc
+  requires -8640000000000000 <= now_ms && now_ms <= 8640000000000000
+{
+  let iso: [i64] = crate::bud_date::iso(now_ms);
+  let mut dry: [i64] = crate::ent_u16::empty();
+  let size: i64 = put_card_words(inout dry, v, at, by, by_at, iso);
+  let mut o: [i64] = crate::ent_u16::zeros(size);
+  let w: i64 = put_card_words(inout o, v, at, by, by_at, iso);
+  return o;
+}
+
+// ================= small judgments =================
+
+pub fn truthy(v: [i64], at: i64) -> bool
+{
+  let t: i64 = tag(v, at);
+  if t == 4 || t == 8 || t == 9 { return true; }
+  if t == 5 { return nx(v, at) != 0; }
+  if t == 6 { return nx(v, at) > 0; }
+  if t == 7 {
+    let b: i64 = nx(v, at);
+    if band(b, 9223372036854775807) == 0 { return false; }
+    return crate::bud_num::count_class(b) != 3;
+  }
+  return false;
+}
+
+pub fn lang_code(v: [i64], at: i64) -> i64 ! alloc
+  ensures result == 0 || result == 1
+{
+  if str_is(v, at, "en") { return 1; }
+  return 0;
+}
+
+pub fn has_card(budget: [i64], at: i64) -> bool ! alloc
+{
+  return truthy(budget, obj_get(budget, at, "card"));
+}
+
+// The budget object at `at` with the value of "card" replaced in place, or the pair appended at the end.
+// A malformed budget gives an empty array.
+pub fn put_card(budget: [i64], at: i64, card: [i64]) -> [i64] ! alloc
+{
+  if len(budget) > 1099511627776 || len(card) > 1099511627776 { return crate::ent_u16::empty(); }
+  if at < 0 { return crate::ent_u16::empty(); }
+  let c0: i64 = nx(budget, at);
+  if c0 < 0 || c0 > 1099511627776 { return crate::ent_u16::empty(); }
+  let be: i64 = v_end(budget, at);
+  if be < 0 || rd(budget, at) != 9 { return crate::ent_u16::empty(); }
+  let cp: i64 = obj_get(budget, at, "card");
+  let mut size: i64 = 0;
+  let mut ce: i64 = 0;
+  if cp >= 0 {
+    ce = v_end(budget, cp);
+    if ce < 0 { return crate::ent_u16::empty(); }
+    size = (cp - at) + len(card) + (be - ce);
+  } else {
+    size = (be - at) + 5 + len(card);
+  }
+  if size < 0 || size > 1099511627776 { return crate::ent_u16::empty(); }
+  let mut o: [i64] = crate::ent_u16::zeros(size);
+  let mut q: i64 = 0;
+  if cp >= 0 {
+    q = put_words(inout o, q, budget, at, cp);
+    q = put_words(inout o, q, card, 0, len(card));
+    q = put_words(inout o, q, budget, ce, be);
+  } else {
+    q = put_words(inout o, q, budget, at, be);
+    crate::ent_u16::wr(inout o, 1, c0 + 1);
+    q = put_key(inout o, q, "card");
+    q = put_words(inout o, q, card, 0, len(card));
+  }
+  return o;
+}
+
+// ================= setCard =================
+
+// kind: -1 ok (card set), 0 missing (no session / stale ref / closed), 1..6 the first failing field.
+// used_now: deps.now() was read (KD-1, §15 row 18: right after `done` passes, before the optional fields).
+pub fn set_card(found: bool, closed: bool, v: [i64], at: i64, lang: i64, by: [i64], by_at: i64, now_ms: i64) -> SetCard ! alloc
+  requires 0 <= lang && lang <= 1
+  requires -8640000000000000 <= now_ms && now_ms <= 8640000000000000
+  ensures -1 <= result.kind && result.kind <= 6
+{
+  if !found || closed {
+    return SetCard { kind: 0, used_now: false, card: crate::ent_u16::empty(), error: crate::bud_text::card_error(0, lang) };
+  }
+  let r: i64 = check_required(v, at);
+  if r != 0 {
+    return SetCard { kind: r, used_now: false, card: crate::ent_u16::empty(), error: crate::bud_text::card_error(r, lang) };
+  }
+  let o: i64 = check_optional(v, at);
+  if o != 0 {
+    return SetCard { kind: o, used_now: true, card: crate::ent_u16::empty(), error: crate::bud_text::card_error(o, lang) };
+  }
+  return SetCard { kind: -1, used_now: true, card: build(v, at, by, by_at, now_ms), error: crate::ent_u16::empty() };
+}
