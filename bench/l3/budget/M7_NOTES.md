@@ -27,7 +27,7 @@ Not-implemented reasons in Q1: hasCard (M11) 32, halt (M10) 62, decide (M10) 93.
 as it reaches one of these; every request before that point is still compared.
 Compared requests in Q1: reopen 231, attach 415, replaceForUserMessage 445, maybeClose 79, current 32, isHalted 32.
 
-Byte identity: `run_m7.py same` → Python and Rust pruvc emit identical Rust (149080 bytes each, after the perf pass).
+Byte identity: `run_m7.py same` → Python and Rust pruvc emit identical Rust (151140 bytes each, after the perf pass and its review fixes).
 
 ## Intent / bug / chosen accident
 
@@ -186,6 +186,54 @@ above is kept.
 Post-fix check (Codex gpt-6-astra, ultra, static): all three fixes confirmed, no new defect. The early error returns
 2/3 (before the session lookup succeeds) still write nothing to out, as before.
 
-Perf pass (view contract, quiet up front, replace without the closed-record build): a Codex review (role review) of
-the protocol change was started; its result is recorded here when it arrives. Checks after the pass: Q1 113 / 0 /
-187 / 0 (Rust and Python pruvc), derived 300 exact, byte-identical (149080 bytes).
+Perf pass review (Codex gpt-6-astra, role review) of the protocol change. Findings and what was done:
+
+1. bug — `replace` read the old id in place from `st` even when the id length word runs past the blob (a malformed
+   record), so it picked up words of the next arena item where the closed-record path read 0 from the blob copy.
+   Fixed: the id is read in place only when `25 + ol <= n`; otherwise from `blob_copy` (same units as before), for
+   both `fresh` (follows / carryHeld) and the clock lookup.
+2. bug — `current` returned status 3 for `out` of length 1–2 even when the ref does not match (before: 0 and `[0]`).
+   Fixed: one word is checked first, three words only after the lookup succeeds.
+3. risk — `put_str` cut the source offset to 32 bits (`c32(s)`), so an in-place read of a record above 2^32 in the
+   arena would read the wrong place. Fixed: the offset is kept to 40 bits; the fallback copy is inlined because
+   `ent_u16::put_range` requires `s <= 2^32`.
+
+Reviewed with no finding: replace effect order `[13]? → 22 → 20 → 21`, schedule follows / carry omission, bv,
+the `n < 30` branch, reservation before the first effect, maybeClose `[23]` first and the fx room check, the
+driver's quiet consumption on errors, the perf op cache key.
+
+After the fixes: Q1 113 / 0 / 187 / 0 (Rust and Python pruvc), derived 300 exact, byte-identical (151140 bytes).
+Perf rerun (load ~16): attach 0.43–0.44, replace 0.65–0.66, closereopen 1.73–1.79, current 2.87–3.01, ishalted
+2.87–3.11, the same band as the table above.
+
+## Grow from inside `store` (M7 review note)
+
+`store` calls `bud_world::session_put` → `put_blob`, which can return Grow (`make_room` fails) after the caller has
+already written effects and changed `st` (SETTLE, DROP). `store` maps any non-zero result to 2, so a Grow there
+would surface as "invalid" after side effects. Every caller reserves first, before any change, with
+`reserve(st, W)` = `make_room(st, 0, W)`; `put_blob` on an existing session asks `make_room(st, 0, cl(len(r)))`
+(or 0 when the record fits in place); nothing between the two allocates arena words (SETTLE writes in place, DROP
+only frees), and `need` is monotone in the word count, so the second `make_room` returns 0 when `W >= len(r)`:
+
+- attach / OPEN: `W = 30 + un + len(b)`, record `30 + un` (no follows). OK.
+- reopen slow path: `W = len(r)` with `r` built first. OK.
+- replace: was `30 + m + n + 64`, record `30 + m + ol`; `ol > n + 64` is possible only for a malformed record whose
+  id length word runs past the blob. Real (malformed input only). Fixed: `W = 30 + m + ol + n + 64`.
+- maybeClose slow path: was `n + 8`, record = `rewrite` of the blob, whose length follows the six declared string
+  lengths, which can exceed `n` for the same malformed records. Real (malformed input only; the same reservation was
+  on main). Fixed: `W = rec_bound(blob_copy) + 8`, `rec_bound` = 30 + the six declared lengths ≥ len(rewrite).
+
+So the path is unreachable for well-formed records and, after these two fixes, for malformed ones as well. No Q or
+derived case reaches it.
+
+## API for M10
+
+Made public with a visibility-only edit (`fn name` → `pub fn name`, signatures unchanged): `session_of`, `blob_at`,
+`blob_n`, `state_of`, `id_is`, `current_entry`, `str_at`, `str_len_in`, `put_str`, `blob_copy`, `rewrite`, `store`,
+`reserve`, `grow`, `view`, `view_in`, `close_rec`.
+
+- `current_entry` was replaced inside M7 by `current_at` (returns the entry field address, one `field_addr` read);
+  it is kept with its original signature and body so M10 can call it and the visibility edit merges.
+- Behaviour change without a signature change: `put_str` keeps the source offset to 40 bits (was 32).
+- New private helpers M10 may also want (still private): `entry_addr`, `at_off`, `at_n`, `current_at`, `clock_in`,
+  `rec_bound`.
