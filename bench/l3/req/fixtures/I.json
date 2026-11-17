@@ -1,0 +1,1016 @@
+[
+ {
+  "id": "I01",
+  "name": "same-key-busy",
+  "rule": "3.10",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "defer": "rd",
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "settle",
+    "label": "rd"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    },
+    "r2": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.busy",
+     "message": "\uac19\uc740 \ud130\ubbf8\ub110 \ub300\ud654\ub97c \uc774\ubbf8 \uc5ec\ub294 \uc911\uc774\uc57c."
+    }
+   },
+   "counts": {
+    "reader": 1,
+    "createImported": 1
+   },
+   "openingOps": [
+    "has:claude:t1:false",
+    "add:claude:t1:true",
+    "has:claude:t1:true",
+    "delete:claude:t1:true"
+   ],
+   "opening": {
+    "A": []
+   }
+  }
+ },
+ {
+  "id": "I02",
+  "name": "known-before-busy",
+  "rule": "3.10",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "defer": "rd",
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "mutate",
+    "op": "add",
+    "session": {
+     "id": "s9",
+     "title": "",
+     "externalThread": {
+      "engine": "claude",
+      "source": "claude:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "settle",
+    "label": "rd"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "s9",
+      "existing": true
+     },
+     "keys": [
+      "sessionId",
+      "existing"
+     ]
+    },
+    "r2": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "s9",
+      "existing": true
+     },
+     "keys": [
+      "sessionId",
+      "existing"
+     ]
+    }
+   },
+   "created": 0,
+   "openingOps": [
+    "has:claude:t1:false",
+    "add:claude:t1:true",
+    "delete:claude:t1:true"
+   ],
+   "counts": {
+    "reader": 1
+   }
+  }
+ },
+ {
+  "id": "I03",
+  "name": "bind-during-read",
+  "rule": "3.10",
+  "killer": "M13",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "defer": "rd",
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "mutate",
+    "op": "add",
+    "session": {
+     "id": "s9",
+     "title": "",
+     "externalThread": {
+      "engine": "claude",
+      "source": "claude:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    }
+   },
+   {
+    "ev": "settle",
+    "label": "rd"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "s9",
+      "existing": true
+     },
+     "keys": [
+      "sessionId",
+      "existing"
+     ]
+    }
+   },
+   "counts": {
+    "createImported": 0,
+    "now": 0,
+    "uuid": 0,
+    "modelFor": 0
+   },
+   "created": 0,
+   "order": [
+    {
+     "c": "reader"
+    },
+    {
+     "c": "settle"
+    },
+    {
+     "c": "sessionList",
+     "a": {
+      "call": 2
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "I04",
+  "name": "bind-after-copy",
+  "rule": "3.10",
+  "world": {
+   "readers": {
+    "grok": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "copy": [
+    {
+     "ok": {
+      "path": "/grok/copy1",
+      "skipped": 0
+     },
+     "verify": true,
+     "defer": "cp"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "mutate",
+    "op": "add",
+    "session": {
+     "id": "s9",
+     "title": "",
+     "externalThread": {
+      "engine": "grok",
+      "source": "grok:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    }
+   },
+   {
+    "ev": "settle",
+    "label": "cp"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "s9",
+      "existing": true
+     },
+     "keys": [
+      "sessionId",
+      "existing"
+     ]
+    },
+    "r2": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.busy"
+    }
+   },
+   "counts": {
+    "rm": 1,
+    "createImported": 0,
+    "copy": 1
+   },
+   "openingOps": [
+    "has:grok:t1:false",
+    "add:grok:t1:true",
+    "has:grok:t1:true",
+    "delete:grok:t1:true"
+   ]
+  }
+ },
+ {
+  "id": "I05",
+  "name": "different-keys",
+  "rule": "3.10",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "defer": "rd",
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t2",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "settle",
+    "label": "rd#2"
+   },
+   {
+    "ev": "settle",
+    "label": "rd"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-2"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    },
+    "r2": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "counts": {
+    "opening.add": 2,
+    "opening.delete": 2,
+    "reader": 2
+   },
+   "opening": {
+    "A": []
+   }
+  }
+ },
+ {
+  "id": "I06",
+  "name": "different-folders-same-key",
+  "rule": "3.10",
+  "killer": "M08",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "defer": "rd",
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/p1",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/p2",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "settle",
+    "label": "rd"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    },
+    "r2": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.busy"
+    }
+   },
+   "counts": {
+    "reader": 1,
+    "createImported": 1
+   },
+   "has": [
+    {
+     "c": "createImported",
+     "a": {
+      "folder": "/p1"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "I07",
+  "name": "different-sources-same-key",
+  "rule": "3.10",
+  "world": {
+   "accounts": {
+    "claude": {
+     "ok": [
+      {
+       "id": "acc_0123456789abcdef",
+       "name": "Work"
+      }
+     ]
+    }
+   },
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "defer": "rd",
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    },
+    "codex": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "claude:acc_0123456789abcdef",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r3",
+    "op": "open",
+    "input": {
+     "source": "codex:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "settle",
+    "label": "rd"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-2"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    },
+    "r2": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.busy"
+    },
+    "r3": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "counts": {
+    "reader": 2
+   }
+  }
+ },
+ {
+  "id": "I08",
+  "name": "different-instances",
+  "rule": "3.10",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "defer": "rd",
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "instances": [
+   "A",
+   "B"
+  ],
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    },
+    "i": "A"
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    },
+    "i": "B"
+   },
+   {
+    "ev": "settle",
+    "label": "rd#2"
+   },
+   {
+    "ev": "settle",
+    "label": "rd"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1",
+      "existing": true
+     },
+     "keys": [
+      "sessionId",
+      "existing"
+     ]
+    },
+    "r2": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "created": 1,
+   "counts": {
+    "reader": 2
+   },
+   "opening": {
+    "A": [],
+    "B": []
+   }
+  }
+ },
+ {
+  "id": "I09",
+  "name": "release-after-failure",
+  "rule": "3.10",
+  "killer": "M09",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "reject": {
+        "class": "EngineImportError",
+        "ref": "e1",
+        "code": "read-failed"
+       }
+      },
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "errs": [
+    {
+     "class": "EngineImportError",
+     "ref": "e1",
+     "code": "read-failed"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.readFailed"
+    },
+    "r2": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "opening": {
+    "A": []
+   },
+   "openingOps": [
+    "has:claude:t1:false",
+    "add:claude:t1:true",
+    "delete:claude:t1:true",
+    "has:claude:t1:false",
+    "add:claude:t1:true",
+    "delete:claude:t1:true"
+   ]
+  }
+ },
+ {
+  "id": "I10",
+  "name": "no-release-without-acquire",
+  "rule": "3.10",
+  "world": {
+   "sessions": [
+    {
+     "id": "s4",
+     "title": "",
+     "externalThread": {
+      "engine": "claude",
+      "source": "claude:home",
+      "thread": "t2",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    }
+   ],
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "defer": "rd",
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r3",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r4",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t2",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "settle",
+    "label": "rd"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    },
+    "r2": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.busy"
+    },
+    "r3": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.busy"
+    },
+    "r4": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "s4",
+      "existing": true
+     },
+     "keys": [
+      "sessionId",
+      "existing"
+     ]
+    }
+   },
+   "openingOps": [
+    "has:claude:t1:false",
+    "add:claude:t1:true",
+    "has:claude:t1:true",
+    "has:claude:t1:true",
+    "delete:claude:t1:true"
+   ],
+   "opening": {
+    "A": []
+   }
+  }
+ }
+]

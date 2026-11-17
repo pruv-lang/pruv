@@ -1,0 +1,680 @@
+// L3-9 list handler data. Section 4 (W) of a request packet holds the handler's working set as 3-word slots:
+//   header (8 slots): 0 item count m, 1 session count n, 2 item index i, 3 session index j, 4 found source row, 5 folder string slot
+//   items (10 slots each, from word 24): 0 action (0 keep, 1 cut), 1 cut title, 2 title, 3 thread, 4 updatedAt, 5 size,
+//     6 messages, 7 path, 8 maybeOpen, 9 bound session id (tag 0 = unbound; open keeps the search index + 1 there)
+//   sessions (2 slots each, from word 24 + 30 m): id, title of the titles sessionList, added only by w_sess when the
+//     list finishes
+// Every string slot points into the request pool of the packet that carries W.
+//
+// A list keeps its items in host storage (ck 4, ABI.md 5.5) so a continuation carries one item, not all of them:
+//   block B (op 60) = T ++ record 0 ++ ... ++ record m-1, T = pack of the 2n title session slots, record k = pack of the
+//     10 item slots ++ [next offset, next length, next digest] (the digest chain starts in W, so every read is checked);
+//   the per-item W (93 words) = header (m = 1, i = 0) ++ the current item at word 24 ++ tail int slots from slot 18:
+//     18 block handle, 19..21 next record (offset, length, digest), 22 item index, 23 item count, 24 result chain handle,
+//     25 result chain digest, 26 base pool length, 27..29 T (offset, length, digest), 30 session count;
+//   each finished item is appended to the result chain (op 60 with prev), read back once at the finish (op 65).
+// A pack of count slots is [3 count slot words (string slots over the pack's own units), unit count, units].
+
+pub fn hget(w: [i64], k: i64) -> i64
+  requires 0 <= k && k <= 1000000000
+{ return crate::ent_u16::rd(w, 3 * k + 1); }
+
+pub fn hset(inout w: [i64], k: i64, v: i64) -> ()
+  requires 0 <= k && k <= 1000000000
+  ensures len(w) == len(old(w))
+{
+  crate::req_value::put(inout w, 3 * k, 4, v, 0);
+}
+
+// the first word of item k
+pub fn ib(k: i64) -> i64
+  requires 0 <= k && k <= 16777216
+  ensures 0 <= result && result <= 503316504
+{
+  return 24 + 30 * k;
+}
+
+// the first word of session s (m items before it)
+pub fn sb(m: i64, s: i64) -> i64
+  requires 0 <= m && m <= 16777216 && 0 <= s && s <= 16777216
+  ensures 0 <= result && result <= 603979800
+{
+  return 24 + 30 * m + 6 * s;
+}
+
+pub fn w_new(found: i64) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let mut w: [i64] = crate::ent_u16::zeros(24);
+  hset(inout w, 4, found);
+  return w;
+}
+
+// The working set after the child op 3: m items from the op 3 table tab (7-word rows [action, row ref, cut title]);
+// base moves the cut title offsets from the child done pool into the request pool.
+pub fn w_items(w: [i64], tab: [i64], m: i64, base: i64) -> [i64] ! alloc
+  requires 0 <= m && m <= 16777216
+  ensures len(result) >= 0
+{
+  let mut o: [i64] = crate::ent_u16::zeros(24 + 30 * m);
+  let a: i64 = crate::ent_u16::put_range(inout o, 0, w, 0, 24);
+  hset(inout o, 0, m);
+  let mut k: i64 = 0;
+  while k < m
+    invariant 0 <= k && k <= m && m <= 16777216
+    decreases m - k
+  {
+    let p: i64 = ib(k);
+    crate::req_value::put(inout o, p, 4, crate::ent_u16::rd(tab, 7 * k), 0);
+    crate::req_value::copy_slot_off(inout o, p + 3, tab, 7 * k + 4, base);
+    k = k + 1;
+  }
+  return o;
+}
+
+// The working set after the host read: the session count n of the titles sessionList and m items (21 words each:
+// title, thread, updatedAt, size, messages, path, maybeOpen slots) from the completion record crec = [0, n, ...];
+// base moves the completion pool offsets into the request pool.
+pub fn w_fill(w: [i64], crec: [i64], m: i64, n: i64, base: i64) -> [i64] ! alloc
+  requires 0 <= m && m <= 16777216 && 0 <= n && n <= 16777216
+  ensures len(result) >= 0
+{
+  let mut o: [i64] = crate::ent_u16::zeros(24 + 30 * m);
+  let a: i64 = crate::ent_u16::put_range(inout o, 0, w, 0, 24 + 30 * m);
+  hset(inout o, 1, n);
+  let mut k: i64 = 0;
+  while k < m
+    invariant 0 <= k && k <= m && m <= 16777216 && 0 <= n && n <= 16777216
+    decreases m - k
+  {
+    let p: i64 = ib(k);
+    let src: i64 = 2 + 21 * k;
+    let mut x: i64 = 0;
+    while x < 7
+      invariant 0 <= x && x <= 7 && 0 <= k && k < m && m <= 16777216 && 0 <= n && n <= 16777216
+      decreases 7 - x
+    {
+      crate::req_value::copy_slot_off(inout o, p + 6 + 3 * x, crec, src + 3 * x, base);
+      x = x + 1;
+    }
+    k = k + 1;
+  }
+  return o;
+}
+
+// The working set at the list finish: the n titles sessions (6 words each: id slot, title slot) of the T pack t appended
+// after the m items; base moves the T unit offsets into the request pool.
+pub fn w_sess(w: [i64], t: [i64], m: i64, n: i64, base: i64) -> [i64] ! alloc
+  requires 0 <= m && m <= 16777216 && 0 <= n && n <= 16777216
+  ensures len(result) >= 0
+{
+  let mut o: [i64] = crate::ent_u16::zeros(24 + 30 * m + 6 * n);
+  let a: i64 = crate::ent_u16::put_range(inout o, 0, w, 0, 24 + 30 * m);
+  let mut s: i64 = 0;
+  while s < n
+    invariant 0 <= s && s <= n && n <= 16777216 && m <= 16777216 && 0 <= m
+    decreases n - s
+  {
+    let q: i64 = sb(m, s);
+    crate::req_value::copy_slot_off(inout o, q, t, 6 * s, base);
+    crate::req_value::copy_slot_off(inout o, q + 3, t, 6 * s + 3, base);
+    s = s + 1;
+  }
+  return o;
+}
+
+// ---- storage records ----
+
+// the pack of count slots of w from word from (strings read from pool); empty when the units reach 2^30
+pub fn pack(pool: [i64], w: [i64], from: i64, count: i64) -> [i64] ! alloc
+  requires 0 <= from && from <= 850000000 && 0 <= count && count <= 33554432
+  ensures len(result) >= 0
+{
+  let mut tot: i64 = 0;
+  let mut k: i64 = 0;
+  while k < count
+    invariant 0 <= k && k <= count && count <= 33554432 && 0 <= from && from <= 850000000 && 0 <= tot && tot <= 1073741823
+    decreases count - k
+  {
+    let ul: i64 = crate::ent_u16::clamp(len(crate::req_value::units(pool, w, from + 3 * k)), 1073741823);
+    tot = crate::ent_u16::clamp(tot + ul, 1073741823);
+    k = k + 1;
+  }
+  if tot >= 1073741823 { return crate::ent_u16::empty(); }
+  let hd: i64 = 3 * count;
+  let mut o: [i64] = crate::ent_u16::zeros(hd + 1 + tot);
+  crate::ent_u16::wr(inout o, hd, tot);
+  let mut at: i64 = hd + 1;
+  k = 0;
+  while k < count
+    invariant 0 <= k && k <= count && count <= 33554432 && 0 <= from && from <= 850000000 && hd == 3 * count && 0 <= at && at <= 2147483647
+    decreases count - k
+  {
+    let q: i64 = from + 3 * k;
+    if crate::ent_u16::rd(w, q) == 6 {
+      let u: [i64] = crate::req_value::units(pool, w, q);
+      crate::req_value::put(inout o, 3 * k, 6, at - hd - 1, len(u));
+      let na: i64 = crate::ent_u16::put_all(inout o, at, u);
+      at = crate::ent_u16::clamp(na, 2147483647);
+    } else {
+      crate::req_value::copy_slot(inout o, 3 * k, w, q);
+    }
+    k = k + 1;
+  }
+  return o;
+}
+
+// The storage op 60 that creates block B for the m items of the full working set w (over pool) and the T pack tp:
+// [T offset, T length, T digest, record 0 offset, length, digest, 60, 0, B...]; empty when B reaches 2^30 words.
+pub fn blk(pool: [i64], w: [i64], m: i64, tp: [i64]) -> [i64] ! alloc
+  requires 0 <= m && m <= 16777216
+  ensures len(result) >= 0
+{
+  let lt: i64 = crate::ent_u16::clamp(len(tp), 1073741823);
+  let mut ln: [i64] = crate::ent_u16::zeros(m);
+  let mut tot: i64 = lt;
+  let mut k: i64 = 0;
+  while k < m
+    invariant 0 <= k && k <= m && m <= 16777216 && 0 <= tot && tot <= 1073741823
+    decreases m - k
+  {
+    let l: i64 = crate::ent_u16::clamp(len(pack(pool, w, ib(k), 10)) + 3, 1073741823);
+    crate::ent_u16::wr(inout ln, k, l);
+    tot = crate::ent_u16::clamp(tot + l, 1073741823);
+    k = k + 1;
+  }
+  if tot >= 1073741823 { return crate::ent_u16::empty(); }
+  let mut o: [i64] = crate::ent_u16::zeros(8 + tot);
+  crate::ent_u16::wr(inout o, 1, lt);
+  crate::ent_u16::wr(inout o, 2, crate::req_world::dig(tp, -1));
+  crate::ent_u16::wr(inout o, 6, 60);
+  let a: i64 = crate::ent_u16::put_all(inout o, 8, tp);
+  let mut off: [i64] = crate::ent_u16::zeros(m);
+  let mut at: i64 = lt;
+  k = 0;
+  while k < m
+    invariant 0 <= k && k <= m && m <= 16777216 && 0 <= at && at <= 1073741823
+    decreases m - k
+  {
+    crate::ent_u16::wr(inout off, k, at);
+    let b: i64 = crate::ent_u16::put_all(inout o, 8 + at, pack(pool, w, ib(k), 10));
+    at = crate::ent_u16::clamp(at + crate::ent_u16::clamp(crate::ent_u16::rd(ln, k), 1073741823), 1073741823);
+    k = k + 1;
+  }
+  // backward: every record ends with the place and digest of the next one
+  let mut noff: i64 = 0;
+  let mut nlen: i64 = 0;
+  let mut nd: i64 = 0;
+  k = m;
+  while k > 0
+    invariant 0 <= k && k <= m && m <= 16777216
+    decreases k
+  {
+    k = k - 1;
+    let ok: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(off, k), 1073741823);
+    let lk: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(ln, k), 1073741823);
+    let e: i64 = 8 + ok + lk;
+    crate::ent_u16::wr(inout o, e - 3, noff);
+    crate::ent_u16::wr(inout o, e - 2, nlen);
+    crate::ent_u16::wr(inout o, e - 1, nd);
+    nd = crate::req_world::dig(crate::ent_u16::slice(o, 8 + ok, e), -1);
+    noff = ok;
+    nlen = lk;
+  }
+  crate::ent_u16::wr(inout o, 3, noff);
+  crate::ent_u16::wr(inout o, 4, nlen);
+  crate::ent_u16::wr(inout o, 5, nd);
+  return o;
+}
+
+// the per-item W skeleton: the header of w with one item, the tail from the block info bi (blk words 0..5)
+pub fn w_one(w: [i64], bi: [i64], m: i64, n: i64, base: i64) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let mut o: [i64] = crate::ent_u16::zeros(93);
+  let a: i64 = crate::ent_u16::put_range(inout o, 0, w, 0, 24);
+  hset(inout o, 0, 1);
+  hset(inout o, 1, n);
+  hset(inout o, 2, 0);
+  hset(inout o, 3, 0);
+  hset(inout o, 19, crate::ent_u16::rd(bi, 3));
+  hset(inout o, 20, crate::ent_u16::rd(bi, 4));
+  hset(inout o, 21, crate::ent_u16::rd(bi, 5));
+  hset(inout o, 23, m);
+  hset(inout o, 26, base);
+  hset(inout o, 27, crate::ent_u16::rd(bi, 0));
+  hset(inout o, 28, crate::ent_u16::rd(bi, 1));
+  hset(inout o, 29, crate::ent_u16::rd(bi, 2));
+  hset(inout o, 30, n);
+  return o;
+}
+
+// the per-item W for record r (a pack of 10 slots ++ next): the item slots move up by base, the next words go to the tail
+pub fn w_load(w: [i64], r: [i64], base: i64) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let mut o: [i64] = copy(w);
+  let mut x: i64 = 0;
+  while x < 10
+    invariant 0 <= x && x <= 10
+    decreases 10 - x
+  {
+    crate::req_value::copy_slot_off(inout o, 24 + 3 * x, r, 3 * x, base);
+    x = x + 1;
+  }
+  let n: i64 = len(r);
+  hset(inout o, 2, 0);
+  hset(inout o, 3, 0);
+  hset(inout o, 19, crate::ent_u16::rd(r, n - 3));
+  hset(inout o, 20, crate::ent_u16::rd(r, n - 2));
+  hset(inout o, 21, crate::ent_u16::rd(r, n - 1));
+  return o;
+}
+
+// the units of a pack of count slots
+pub fn pack_units(r: [i64], count: i64) -> [i64] ! alloc
+  requires 0 <= count && count <= 33554432
+  ensures len(result) >= 0
+{
+  let u: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(r, 3 * count), 1073741823);
+  return crate::ent_u16::slice(r, 3 * count + 1, 3 * count + 1 + u);
+}
+
+// a record read back: [pack of 10 slots, next] with the pack's unit count matching its length
+pub fn rec_ok(r: [i64]) -> bool
+{
+  let n: i64 = len(r);
+  if n < 34 { return false; }
+  return crate::ent_u16::rd(r, 30) == n - 34;
+}
+
+// the result chain read back (op 65 reply [0, count, (len, element)...]): m elements of pack shape whose chain digest
+// (d = dig([d] ++ element) from 0) is d0
+pub fn chain_ok(crec: [i64], m: i64, d0: i64) -> bool ! alloc
+  requires 0 <= m && m <= 16777216
+{
+  if crate::ent_u16::rd(crec, 0) != 0 || crate::ent_u16::rd(crec, 1) != m { return false; }
+  let n: i64 = len(crec);
+  let mut pos: i64 = 2;
+  let mut d: i64 = 0;
+  let mut k: i64 = 0;
+  while k < m
+    invariant 0 <= k && k <= m && m <= 16777216 && 2 <= pos && pos <= n + 2
+    decreases m - k
+  {
+    if pos >= n { return false; }
+    let l: i64 = crate::ent_u16::rd(crec, pos);
+    if l < 31 || l > n - pos - 1 { return false; }
+    if crate::ent_u16::rd(crec, pos + 31) != l - 31 { return false; }
+    d = crate::req_world::dig(crate::ent_u16::cat(crate::ent_u16::one(d), crate::ent_u16::slice(crec, pos + 1, pos + 1 + l)), -1);
+    pos = pos + 1 + l;
+    k = k + 1;
+  }
+  return pos == n && d == d0;
+}
+
+// the next chain digest after element e
+pub fn chain_dig(d: i64, e: [i64]) -> i64 ! alloc
+{
+  return crate::req_world::dig(crate::ent_u16::cat(crate::ent_u16::one(d), e), -1);
+}
+
+// the full working set from the checked result chain: the header of w with m items, string slots after base
+pub fn w_full(w: [i64], crec: [i64], m: i64, base: i64) -> [i64] ! alloc
+  requires 0 <= m && m <= 16777216
+  ensures len(result) >= 0
+{
+  let mut o: [i64] = crate::ent_u16::zeros(24 + 30 * m);
+  let a: i64 = crate::ent_u16::put_range(inout o, 0, w, 0, 24);
+  hset(inout o, 0, m);
+  hset(inout o, 2, 0);
+  hset(inout o, 3, 0);
+  let mut pos: i64 = 2;
+  let mut ub: i64 = crate::ent_u16::clamp(base, 1073741823);
+  let mut k: i64 = 0;
+  while k < m
+    invariant 0 <= k && k <= m && m <= 16777216 && 0 <= pos && pos <= 999999000 && 0 <= ub && ub <= 1073741823
+    decreases m - k
+  {
+    let mut x: i64 = 0;
+    while x < 10
+      invariant 0 <= x && x <= 10 && 0 <= k && k < m && m <= 16777216 && 0 <= pos && pos <= 999999000 && 0 <= ub && ub <= 1073741823
+      decreases 10 - x
+    {
+      crate::req_value::copy_slot_off(inout o, ib(k) + 3 * x, crec, pos + 1 + 3 * x, ub);
+      x = x + 1;
+    }
+    ub = crate::ent_u16::clamp(ub + crate::ent_u16::clamp(crate::ent_u16::rd(crec, pos + 31), 1073741823), 1073741823);
+    pos = crate::ent_u16::clamp(pos + 1 + crate::ent_u16::clamp(crate::ent_u16::rd(crec, pos), 1073741823), 999999000);
+    k = k + 1;
+  }
+  return o;
+}
+
+// the units of the checked result chain, in element order
+pub fn chain_units(crec: [i64], m: i64) -> [i64] ! alloc
+  requires 0 <= m && m <= 16777216
+  ensures len(result) >= 0
+{
+  let mut tot: i64 = 0;
+  let mut pos: i64 = 2;
+  let mut k: i64 = 0;
+  while k < m
+    invariant 0 <= k && k <= m && m <= 16777216 && 0 <= pos && pos <= 999999000 && 0 <= tot && tot <= 1073741823
+    decreases m - k
+  {
+    tot = crate::ent_u16::clamp(tot + crate::ent_u16::clamp(crate::ent_u16::rd(crec, pos + 31), 1073741823), 1073741823);
+    pos = crate::ent_u16::clamp(pos + 1 + crate::ent_u16::clamp(crate::ent_u16::rd(crec, pos), 1073741823), 999999000);
+    k = k + 1;
+  }
+  let mut o: [i64] = crate::ent_u16::zeros(tot);
+  let mut at: i64 = 0;
+  pos = 2;
+  k = 0;
+  while k < m
+    invariant 0 <= k && k <= m && m <= 16777216 && 0 <= pos && pos <= 999999000 && 0 <= at && at <= 1073741823
+    decreases m - k
+  {
+    let u: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(crec, pos + 31), 1073741823);
+    let n1at: i64 = crate::ent_u16::put_range(inout o, at, crec, pos + 32, u);
+    at = crate::ent_u16::clamp(n1at, 1073741823);
+    pos = crate::ent_u16::clamp(pos + 1 + crate::ent_u16::clamp(crate::ent_u16::rd(crec, pos), 1073741823), 999999000);
+    k = k + 1;
+  }
+  return o;
+}
+
+// whether some item is bound (the list finish then reads the titles, host call 18)
+pub fn any_bound(w: [i64]) -> bool
+{
+  let m: i64 = crate::ent_u16::clamp(hget(w, 0), 16777216);
+  let mut k: i64 = 0;
+  while k < m
+    invariant 0 <= k && k <= m && m <= 16777216
+    decreases m - k
+  {
+    if has_bound(w, k) { return true; }
+    k = k + 1;
+  }
+  return false;
+}
+
+pub fn wset(inout w: [i64], p: i64, v: i64) -> ()
+  requires 0 <= p && p <= 1000000000
+  ensures len(w) == len(old(w))
+{
+  crate::req_value::put(inout w, p, 4, v, 0);
+}
+
+// ---- the done value {items: [...]} ----
+
+fn key(inout o: [i64], at: i64, kb: i64, off: i64, n: i64) -> ()
+  requires 0 <= kb && kb <= 1000000000 && 0 <= off && off <= 1000 && 0 <= n && n <= 1000
+  ensures len(o) == len(old(o))
+{
+  crate::req_value::put(inout o, at, 6, kb + off, n);
+}
+
+// the done pool: the request pool followed by the key literals
+pub fn fin_pool(pool: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  return crate::ent_u16::cat(pool, crate::ent_u16::lit("itemsthreadtitleupdatedAtsizemessagespathboundSessionIdmaybeOpen"));
+}
+
+// done record [0, V] with V = object slot over section 6
+pub fn fin_rec() -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let mut r: [i64] = crate::ent_u16::zeros(4);
+  crate::req_value::put(inout r, 1, 8, 6, 1);
+  return r;
+}
+
+// slot p of w is set (not undefined, not absent)
+fn present(w: [i64], p: i64) -> bool
+  requires 0 <= p && p <= 1000000000
+{
+  let t: i64 = crate::ent_u16::rd(w, p);
+  return t != 0 && t != 10;
+}
+
+// whether item k gets a boundSessionId entry
+fn has_bound(w: [i64], k: i64) -> bool
+  requires 0 <= k && k <= 16777216
+{
+  return crate::req_value::truthy(w, ib(k) + 27);
+}
+
+// entry count of the object of item k
+fn cnt(w: [i64], k: i64) -> i64
+  requires 0 <= k && k <= 16777216
+  ensures 2 <= result && result <= 9
+{
+  let p: i64 = ib(k);
+  let mut c: i64 = 2;
+  if present(w, p + 12) { c = c + 1; }
+  if present(w, p + 15) { c = c + 1; }
+  if present(w, p + 18) { c = c + 1; }
+  if present(w, p + 21) { c = c + 1; }
+  if has_bound(w, k) { c = c + 1; }
+  if crate::req_value::truthy(w, p + 24) { c = c + 1; }
+  return c;
+}
+
+pub fn fin_tl(w: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let m: i64 = crate::ent_u16::clamp(hget(w, 0), 16777216);
+  let mut t: [i64] = crate::ent_u16::zeros(2 + m);
+  crate::ent_u16::wr(inout t, 0, 6);
+  crate::ent_u16::wr(inout t, 1, 3 * m);
+  let mut k: i64 = 0;
+  while k < m
+    invariant 0 <= k && k <= m && m <= 16777216
+    decreases m - k
+  {
+    crate::ent_u16::wr(inout t, 2 + k, 6 * cnt(w, k));
+    k = k + 1;
+  }
+  return t;
+}
+
+// the order of two slots of w: by tag, strings by their units (lexicographic, a prefix first), others by their words;
+// 0 exactly when slot_eq holds
+fn scmp(pool: [i64], w: [i64], p: i64, q: i64) -> i64 ! alloc
+  requires 0 <= p && p <= 1000000000 && 0 <= q && q <= 1000000000
+  ensures -1 <= result && result <= 1
+{
+  let ta: i64 = crate::ent_u16::rd(w, p);
+  let tb: i64 = crate::ent_u16::rd(w, q);
+  if ta < tb { return -1; }
+  if ta > tb { return 1; }
+  if ta == 6 {
+    let u: [i64] = crate::req_value::units(pool, w, p);
+    let v: [i64] = crate::req_value::units(pool, w, q);
+    let nu: i64 = len(u);
+    let nv: i64 = len(v);
+    let mut i: i64 = 0;
+    while i < nu && i < nv
+      invariant 0 <= i && i <= nu && nu == len(u) && nv == len(v)
+      decreases nu - i
+    {
+      if u[i] < v[i] { return -1; }
+      if u[i] > v[i] { return 1; }
+      i = i + 1;
+    }
+    if nu < nv { return -1; }
+    if nu > nv { return 1; }
+    return 0;
+  }
+  let a1: i64 = crate::ent_u16::rd(w, p + 1);
+  let b1: i64 = crate::ent_u16::rd(w, q + 1);
+  if a1 < b1 { return -1; }
+  if a1 > b1 { return 1; }
+  let a2: i64 = crate::ent_u16::rd(w, p + 2);
+  let b2: i64 = crate::ent_u16::rd(w, q + 2);
+  if a2 < b2 { return -1; }
+  if a2 > b2 { return 1; }
+  return 0;
+}
+
+// the session indices sorted by their id slots, equal ids in session order (a stable bottom-up merge sort)
+pub fn sess_order(pool: [i64], w: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let m: i64 = crate::ent_u16::clamp(hget(w, 0), 16777216);
+  let n: i64 = crate::ent_u16::clamp(hget(w, 1), 16777216);
+  let mut a: [i64] = crate::ent_u16::zeros(n);
+  let mut s: i64 = 0;
+  while s < n
+    invariant 0 <= s && s <= n && n <= 16777216
+    decreases n - s
+  {
+    crate::ent_u16::wr(inout a, s, s);
+    s = s + 1;
+  }
+  let mut width: i64 = 1;
+  while width < n
+    invariant 1 <= width && width <= 33554432 && 0 <= n && n <= 16777216 && 0 <= m && m <= 16777216
+    decreases n - width
+  {
+    let mut b: [i64] = crate::ent_u16::zeros(n);
+    let mut lo: i64 = 0;
+    while lo < n
+      invariant 0 <= lo && lo <= n && 1 <= width && width < n && n <= 16777216 && 0 <= m && m <= 16777216
+      decreases n - lo
+    {
+      let mut mid: i64 = lo + width;
+      if mid > n { mid = n; }
+      let mut hi: i64 = lo + 2 * width;
+      if hi > n { hi = n; }
+      let mut i: i64 = lo;
+      let mut j: i64 = mid;
+      let mut k: i64 = lo;
+      while k < hi
+        invariant lo <= k && k <= hi && hi <= n && n <= 16777216 && 0 <= i && i <= 16777216 && 0 <= j && j <= 16777216 && 0 <= m && m <= 16777216
+        decreases hi - k
+      {
+        let si: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(a, i), 16777216);
+        let sj: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(a, j), 16777216);
+        // MUTANT M04: equal ids keep the later session first (the titles map becomes first-write-wins)
+        if i < mid && (j >= hi || scmp(pool, w, sb(m, si), sb(m, sj)) <= 0) {
+          crate::ent_u16::wr(inout b, k, si);
+          if i < 16777216 { i = i + 1; }
+        } else {
+          crate::ent_u16::wr(inout b, k, sj);
+          if j < 16777216 { j = j + 1; }
+        }
+        k = k + 1;
+      }
+      lo = hi;
+    }
+    a = copy(b);
+    width = 2 * width;
+  }
+  return a;
+}
+
+// the word position (in w) of the title slot of item k: the Lair title of the bound session (last session with that id
+// wins, found by binary search over ord = sess_order) when it is truthy, else the item's own title (the cut title when
+// the entry cut it)
+fn title_at(pool: [i64], w: [i64], ord: [i64], k: i64) -> i64 ! alloc
+  requires 0 <= k && k <= 16777216
+  ensures 0 <= result && result <= 700000000
+{
+  let p: i64 = ib(k);
+  let mut own: i64 = p + 6;
+  if crate::ent_u16::rd(w, p) == 4 && crate::ent_u16::rd(w, p + 1) == 1 { own = p + 3; }
+  if !has_bound(w, k) { return own; }
+  let m: i64 = crate::ent_u16::clamp(hget(w, 0), 16777216);
+  let n: i64 = crate::ent_u16::clamp(len(ord), 16777216);
+  // the first position whose id orders after the bound id
+  let mut lo: i64 = 0;
+  let mut hi: i64 = n;
+  while lo < hi
+    invariant 0 <= lo && lo <= hi && hi <= n && n <= 16777216 && 0 <= m && m <= 16777216
+    decreases hi - lo
+  {
+    let mid: i64 = lo + (hi - lo) / 2;
+    let sm: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(ord, mid), 16777216);
+    if scmp(pool, w, sb(m, sm), p + 27) <= 0 { lo = mid + 1; } else { hi = mid; }
+  }
+  if lo == 0 { return own; }
+  let best: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(ord, lo - 1), 16777216);
+  if scmp(pool, w, sb(m, best), p + 27) != 0 { return own; }
+  let tp: i64 = sb(m, best) + 3;
+  // MUTANT M05: the title fallback uses ?? instead of ||
+  if crate::req_value::truthy(w, tp) { return tp; }
+  return own;
+}
+
+pub fn fin_tabs(pool: [i64], w: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let m: i64 = crate::ent_u16::clamp(hget(w, 0), 16777216);
+  let mut total: i64 = 6 + 3 * m;
+  let mut k: i64 = 0;
+  while k < m
+    invariant 0 <= k && k <= m && m <= 16777216 && 0 <= total && total <= 6 + 3 * m + 54 * k
+    decreases m - k
+  {
+    total = total + 6 * cnt(w, k);
+    k = k + 1;
+  }
+  let mut o: [i64] = crate::ent_u16::zeros(total);
+  let kb: i64 = crate::ent_u16::clamp(len(pool), 1000000000);
+  key(inout o, 0, kb, 0, 5);
+  crate::req_value::put(inout o, 3, 7, 7, m);
+  let mut at: i64 = 6 + 3 * m;
+  let ord: [i64] = sess_order(pool, w);
+  let mut i: i64 = 0;
+  while i < m
+    invariant 0 <= i && i <= m && m <= 16777216 && 0 <= at && at <= 6 + 3 * m + 54 * i
+    decreases m - i
+  {
+    let p: i64 = ib(i);
+    let c: i64 = cnt(w, i);
+    crate::req_value::put(inout o, 6 + 3 * i, 8, 8 + i, c);
+    let mut q: i64 = at;
+    key(inout o, q, kb, 5, 6);
+    crate::req_value::copy_slot(inout o, q + 3, w, p + 9);
+    q = q + 6;
+    key(inout o, q, kb, 11, 5);
+    crate::req_value::copy_slot(inout o, q + 3, w, title_at(pool, w, ord, i));
+    q = q + 6;
+    if present(w, p + 12) {
+      key(inout o, q, kb, 16, 9);
+      crate::req_value::copy_slot(inout o, q + 3, w, p + 12);
+      q = q + 6;
+    }
+    if present(w, p + 15) {
+      key(inout o, q, kb, 25, 4);
+      crate::req_value::copy_slot(inout o, q + 3, w, p + 15);
+      q = q + 6;
+    }
+    if present(w, p + 18) {
+      key(inout o, q, kb, 29, 8);
+      crate::req_value::copy_slot(inout o, q + 3, w, p + 18);
+      q = q + 6;
+    }
+    if present(w, p + 21) {
+      key(inout o, q, kb, 37, 4);
+      crate::req_value::copy_slot(inout o, q + 3, w, p + 21);
+      q = q + 6;
+    }
+    if has_bound(w, i) {
+      key(inout o, q, kb, 41, 14);
+      crate::req_value::copy_slot(inout o, q + 3, w, p + 27);
+      q = q + 6;
+    }
+    if crate::req_value::truthy(w, p + 24) {
+      key(inout o, q, kb, 55, 9);
+      crate::req_value::put(inout o, q + 3, 3, 0, 0);
+      q = q + 6;
+    }
+    at = at + 6 * c;
+    i = i + 1;
+  }
+  return o;
+}

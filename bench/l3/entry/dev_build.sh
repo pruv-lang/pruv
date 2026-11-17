@@ -8,7 +8,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 OUT="$HERE/work/dev"
 mkdir -p "$OUT"
 cd "$HERE"
-/Users/spica4345/Projects/pruv/pruvc-rs/target/release/pruvc root.pruv -o "$OUT/sol.rs" --manifest pruv.json
+/Users/spica4345/Projects/pruv/pruvc-rs/target/release/pruvc root.pruv -o "$OUT/sol.rs" --lib "$HERE/../lib"
 [ "$1" = "--no-link" ] && exit 0
 cargo build --offline --locked --release --manifest-path host/Cargo.toml --target-dir "$OUT/host" -q
 DEPS="$OUT/host/release/deps"

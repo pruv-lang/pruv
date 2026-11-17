@@ -1,0 +1,159 @@
+// L3-9 request ABI v1 (ABI.md 3.2): the 32-word request-packet header, envelope validation and assembly.
+// Words: 0 magic, 1 version, 2 kind, 3 op, 4 instance, 5 request id, 6 seq, 7 world generation, 8 ticket, 9 phase,
+// 10 outstanding call kind, 11 frame, 12 child call id, 13 child op, 14 child seq, 15 mode, 16..23 checkpoint,
+// 24 nsec, 25 total words, 26..31 zero; then section lengths, then sections.
+
+pub fn m_req() -> i64 ensures result == 1381057841 { return 1381057841; }
+pub fn m_bundle() -> i64 ensures result == 1381057073 { return 1381057073; }
+
+pub fn rd(w: [i64], i: i64) -> i64 { return crate::ent_u16::rd(w, i); }
+
+pub fn nsec(w: [i64]) -> i64
+  ensures 0 <= result && result <= 1000000
+{
+  return crate::ent_u16::clamp(crate::ent_u16::rd(w, 24), 1000000);
+}
+
+pub fn sec_len(w: [i64], i: i64) -> i64
+  ensures 0 <= result && result <= 16777216
+{
+  if i < 0 || i >= nsec(w) { return 0; }
+  return crate::ent_u16::clamp(crate::ent_u16::rd(w, 32 + i), 16777216);
+}
+
+pub fn sec_start(w: [i64], i: i64) -> i64
+  ensures 0 <= result && result <= 33554432
+{
+  let ns: i64 = nsec(w);
+  let top: i64 = crate::ent_u16::clamp(i, ns);
+  let mut at: i64 = 32 + ns;
+  let mut j: i64 = 0;
+  while j < top
+    invariant 0 <= j && j <= top && top <= ns && ns <= 1000000 && 0 <= at && at <= 1000032 + 16777216 * j
+    decreases top - j
+  {
+    at = at + crate::ent_u16::clamp(crate::ent_u16::rd(w, 32 + j), 16777216);
+    j = j + 1;
+  }
+  return crate::ent_u16::clamp(at, 33554432);
+}
+
+pub fn sec(w: [i64], i: i64) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let s: i64 = sec_start(w, i);
+  return crate::ent_u16::slice(w, s, s + sec_len(w, i));
+}
+
+// structure: magic, version, header length, reserved words, section lengths cover the payload, pool units
+pub fn hdr_ok(w: [i64]) -> bool
+{
+  let n: i64 = len(w);
+  if n > 16777216 || n < 38 { return false; }
+  if crate::ent_u16::rd(w, 0) != 1381057841 || crate::ent_u16::rd(w, 1) != 1 { return false; }
+  if crate::ent_u16::rd(w, 25) != n { return false; }
+  let ns: i64 = crate::ent_u16::rd(w, 24);
+  if ns < 6 || ns > n - 32 { return false; }
+  let mut k: i64 = 26;
+  while k < 32
+    invariant 26 <= k && k <= 32
+    decreases 32 - k
+  {
+    if crate::ent_u16::rd(w, k) != 0 { return false; }
+    k = k + 1;
+  }
+  let mut rest: i64 = n - 32 - ns;
+  let mut i: i64 = 0;
+  while i < ns
+    invariant 0 <= i && i <= ns && ns <= n - 32 && n == len(w) && 0 <= rest
+    decreases ns - i
+  {
+    let l: i64 = crate::ent_u16::rd(w, 32 + i);
+    if l < 0 || l > rest { return false; }
+    rest = rest - l;
+    i = i + 1;
+  }
+  if rest != 0 { return false; }
+  let p0: i64 = sec_start(w, 0);
+  let l0: i64 = sec_len(w, 0);
+  let mut u: i64 = 0;
+  while u < l0
+    invariant 0 <= u && u <= l0 && 0 <= p0 && p0 <= 33554432 && l0 <= 16777216
+    decreases l0 - u
+  {
+    let x: i64 = crate::ent_u16::rd(w, p0 + u);
+    if x < 0 || x > 65535 { return false; }
+    u = u + 1;
+  }
+  return true;
+}
+
+// assemble: h = 32 header words (24/25 are rewritten); sections 0..5 then the tables. tlens has one entry per table.
+// Returns an empty array when the packet would exceed 16,777,216 words.
+pub fn mk(h: [i64], s0: [i64], s1: [i64], s2: [i64], s3: [i64], s4: [i64], s5: [i64], tabs: [i64], tlens: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let nt: i64 = crate::ent_u16::clamp(len(tlens), 1000000);
+  let ns: i64 = 6 + nt;
+  let l0: i64 = len(s0);
+  let l1: i64 = len(s1);
+  let l2: i64 = len(s2);
+  let l3: i64 = len(s3);
+  let l4: i64 = len(s4);
+  let l5: i64 = len(s5);
+  let lt: i64 = len(tabs);
+  if l0 > 16777216 || l1 > 16777216 || l2 > 16777216 || l3 > 16777216 || l4 > 16777216 || l5 > 16777216 || lt > 16777216 { return crate::ent_u16::empty(); }
+  let total: i64 = 32 + ns + l0 + l1 + l2 + l3 + l4 + l5 + lt;
+  if total > 16777216 { return crate::ent_u16::empty(); }
+  let mut o: [i64] = crate::ent_u16::zeros(total);
+  let r0: i64 = crate::ent_u16::put_range(inout o, 0, h, 0, 32);
+  crate::ent_u16::wr(inout o, 24, ns);
+  crate::ent_u16::wr(inout o, 25, total);
+  crate::ent_u16::wr(inout o, 32, l0);
+  crate::ent_u16::wr(inout o, 33, l1);
+  crate::ent_u16::wr(inout o, 34, l2);
+  crate::ent_u16::wr(inout o, 35, l3);
+  crate::ent_u16::wr(inout o, 36, l4);
+  crate::ent_u16::wr(inout o, 37, l5);
+  let mut j: i64 = 0;
+  while j < nt
+    invariant 0 <= j && j <= nt && nt <= 1000000
+    decreases nt - j
+  {
+    crate::ent_u16::wr(inout o, 38 + j, crate::ent_u16::rd(tlens, j));
+    j = j + 1;
+  }
+  let mut at: i64 = 32 + ns;
+  let a_s0: i64 = crate::ent_u16::put_all(inout o, at, s0);
+  at = crate::ent_u16::clamp(a_s0, 4294967296);
+  let a_s1: i64 = crate::ent_u16::put_all(inout o, at, s1);
+  at = crate::ent_u16::clamp(a_s1, 4294967296);
+  let a_s2: i64 = crate::ent_u16::put_all(inout o, at, s2);
+  at = crate::ent_u16::clamp(a_s2, 4294967296);
+  let a_s3: i64 = crate::ent_u16::put_all(inout o, at, s3);
+  at = crate::ent_u16::clamp(a_s3, 4294967296);
+  let a_s4: i64 = crate::ent_u16::put_all(inout o, at, s4);
+  at = crate::ent_u16::clamp(a_s4, 4294967296);
+  let a_s5: i64 = crate::ent_u16::put_all(inout o, at, s5);
+  at = crate::ent_u16::clamp(a_s5, 4294967296);
+  let a_tabs: i64 = crate::ent_u16::put_all(inout o, at, tabs);
+  at = crate::ent_u16::clamp(a_tabs, 4294967296);
+  return o;
+}
+
+// the bundle [magic, 1, world_words, packet_words, world..., packet...]
+pub fn bundle(world: [i64], pkt: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let lw: i64 = len(world);
+  let lp: i64 = len(pkt);
+  if lw > 1073741823 || lp > 1073741823 { return crate::ent_u16::empty(); }
+  let mut o: [i64] = crate::ent_u16::zeros(4 + lw + lp);
+  crate::ent_u16::wr(inout o, 0, 1381057073);
+  crate::ent_u16::wr(inout o, 1, 1);
+  crate::ent_u16::wr(inout o, 2, lw);
+  crate::ent_u16::wr(inout o, 3, lp);
+  let a: i64 = crate::ent_u16::put_all(inout o, 4, world);
+  let b: i64 = crate::ent_u16::put_all(inout o, 4 + lw, pkt);
+  return o;
+}

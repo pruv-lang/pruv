@@ -6,7 +6,7 @@ bound_session_index). The TypeScript original is pinned in `reference/` and run 
 spec: `docs/ENGINE_IMPORT_ENTRY_SPEC.md`. Results are in RESULTS.md section 140 (the lead fills them in).
 
 ## Files
-- `*.pruv`, `pruv.json`: the Pruv sources (root `root.pruv`). `host.rs`, `host/`, `harness.rs`: the Rust host crate and runner.
+- `root.pruv`, `pruv.json`: the thin Pruv root (forwards `entry_begin`/`entry_step` to `entry_api`); the verified modules moved to `bench/l3/lib/` as `ent_*.pruv` + `entry_api.pruv` (compile with `--lib bench/l3/lib`). `host.rs`, `host/`, `harness.rs`: the Rust host crate and runner.
 - `reference*.mjs`, `reference/`, `oracle.py`: the oracle. `fixtures/`, `gen_fixtures.py`: fixtures and their generator
   (also holds MUTANT_KILLERS). `common.py`: loaders and result comparison.
 - `test_impl.py`: fixtures x pairs. `integrate.py`: the I group. `q.py`: seeded generator (Q_README.md).

@@ -1,0 +1,762 @@
+[
+ {
+  "id": "A01",
+  "name": "same-home",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "same"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "counts": {
+    "fromAppAction": 1,
+    "createImported": 1
+   },
+   "order": [
+    {
+     "c": "fromAppAction"
+    },
+    {
+     "c": "reader"
+    },
+    {
+     "c": "createImported"
+    }
+   ],
+   "createdMeta": [
+    {
+     "seed": {
+      "engine": "claude",
+      "folder": "/proj"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "A02",
+  "name": "same-account-refused",
+  "rule": "3.4",
+  "world": {
+   "accounts": {
+    "claude": {
+     "ok": [
+      {
+       "id": "acc_0123456789abcdef",
+       "name": "Work"
+      }
+     ]
+    }
+   },
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:acc_0123456789abcdef",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "same"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.sameRefused",
+     "message": "\uc6d0\ub798 \ub300\ud654\uc5d0 \uadf8\ub300\ub85c \uc774\uc5b4 \uc4f0\uae30\ub294 \uae30\ubcf8 Claude\u00b7Codex\u00b7OpenCode\u00b7Qwen \uc5d0\uc11c\ub9cc \ub3fc."
+    }
+   },
+   "counts": {
+    "fromAppAction": 0,
+    "reader": 0,
+    "sessionList": 0,
+    "opening.add": 0
+   }
+  }
+ },
+ {
+  "id": "A03",
+  "name": "same-grok-refused",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "grok": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "copy": [
+    {
+     "ok": {
+      "path": "/grok/copy1",
+      "skipped": 0
+     },
+     "verify": true
+    }
+   ],
+   "grokAccounts": [
+    {
+     "id": "g1"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "same"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.sameRefused"
+    }
+   },
+   "counts": {
+    "fromAppAction": 0,
+    "grokAccounts": 0,
+    "reader": 0,
+    "sessionList": 0
+   }
+  }
+ },
+ {
+  "id": "A04",
+  "name": "same-ai-refused",
+  "rule": "3.4",
+  "killer": "M06",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "same"
+    },
+    "fromAppAction": true
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.sameByAi",
+     "message": "\uadf8\ub300\ub85c \uc774\uc5b4 \uc4f0\uae30\ub294 \uc0ac\ub78c\uc774 \ud655\uc778\ud574\uc57c \ud574\uc11c AI \ub294 \uc4f8 \uc218 \uc5c6\uc5b4."
+    }
+   },
+   "counts": {
+    "fromAppAction": 1,
+    "reader": 0,
+    "sessionList": 0,
+    "createImported": 0,
+    "opening.add": 0
+   }
+  }
+ },
+ {
+  "id": "A05",
+  "name": "fork-no-app-action",
+  "rule": "3.4",
+  "world": {
+   "fromAppAction": true,
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "counts": {
+    "fromAppAction": 0,
+    "createImported": 1
+   }
+  }
+ },
+ {
+  "id": "A06",
+  "name": "grok-target-valid",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "grok": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "copy": [
+    {
+     "ok": {
+      "path": "/grok/copy1",
+      "skipped": 0
+     },
+     "verify": true
+    }
+   ],
+   "grokAccounts": [
+    {
+     "id": "g1"
+    },
+    {
+     "id": "g2"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork",
+     "targetAccount": "g1"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "counts": {
+    "grokAccounts": 1
+   },
+   "has": [
+    {
+     "c": "grokHomeFor",
+     "a": [
+      "g1"
+     ]
+    },
+    {
+     "c": "modelFor",
+     "a": {
+      "engine": "grok",
+      "account": "g1"
+     }
+    }
+   ],
+   "createdMeta": [
+    {
+     "seed": {
+      "engine": "grok",
+      "account": "g1"
+     },
+     "seedKeys": [
+      "engine",
+      "account",
+      "model",
+      "folder",
+      "fill"
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "id": "A07",
+  "name": "grok-target-unknown",
+  "rule": "3.4",
+  "killer": "M07",
+  "world": {
+   "readers": {
+    "grok": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "copy": [
+    {
+     "ok": {
+      "path": "/grok/copy1",
+      "skipped": 0
+     },
+     "verify": true
+    }
+   ],
+   "grokAccounts": [
+    {
+     "id": "g1"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork",
+     "targetAccount": "nope"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.accountUnknown",
+     "message": "\uace0\ub978 Grok \uacc4\uc815\uc744 \ucc3e\uc744 \uc218 \uc5c6\uc5b4."
+    }
+   },
+   "counts": {
+    "grokAccounts": 1,
+    "reader": 0,
+    "sessionList": 0,
+    "opening.add": 0,
+    "createImported": 0
+   }
+  }
+ },
+ {
+  "id": "A08",
+  "name": "grok-default-target",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "grok": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "copy": [
+    {
+     "ok": {
+      "path": "/grok/copy1",
+      "skipped": 0
+     },
+     "verify": true
+    }
+   ],
+   "grokAccounts": [
+    {
+     "id": "g1"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork",
+     "targetAccount": "default"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t2",
+     "mode": "fork",
+     "targetAccount": ""
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    },
+    "r2": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-2"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "counts": {
+    "grokAccounts": 0
+   },
+   "createdMeta": [
+    {
+     "seedKeys": [
+      "engine",
+      "model",
+      "folder",
+      "fill"
+     ]
+    },
+    {
+     "seedKeys": [
+      "engine",
+      "model",
+      "folder",
+      "fill"
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "id": "A09",
+  "name": "nongrok-target-ignored",
+  "rule": "3.4",
+  "world": {
+   "accounts": {
+    "claude": {
+     "ok": [
+      {
+       "id": "acc_0123456789abcdef",
+       "name": "Work"
+      }
+     ]
+    }
+   },
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "grokAccounts": [
+    {
+     "id": "g1"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:acc_0123456789abcdef",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork",
+     "targetAccount": "g1"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "claude:acc_0123456789abcdef",
+     "folder": "/proj",
+     "thread": "t2",
+     "mode": "fork",
+     "targetAccount": "nope"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    },
+    "r2": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-2"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "counts": {
+    "grokAccounts": 0
+   },
+   "createdMeta": [
+    {
+     "seed": {
+      "engine": "claude",
+      "account": "acc_0123456789abcdef"
+     }
+    },
+    {
+     "seed": {
+      "engine": "claude",
+      "account": "acc_0123456789abcdef"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "A10",
+  "name": "account-before-known",
+  "rule": "3.4",
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "title": "",
+     "externalThread": {
+      "engine": "grok",
+      "source": "grok:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    }
+   ],
+   "grokAccounts": [
+    {
+     "id": "g1"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork",
+     "targetAccount": "nope"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.accountUnknown"
+    }
+   },
+   "counts": {
+    "sessionList": 0,
+    "reader": 0
+   }
+  }
+ }
+]

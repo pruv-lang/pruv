@@ -70,7 +70,7 @@ def build_pair(g, compiler, backend, host, reuse=False):
         if not Path(built['rs']).is_file():
             raise RuntimeError('run once without --reuse-verified first')
     else:
-        built = g.compile_pruv(compiler, str(ROOT), str(out), backend, ['--manifest', str(HERE / 'pruv.json')])
+        built = g.compile_pruv(compiler, str(ROOT), str(out), backend, ['--lib', str(HERE.parent / 'lib')])
     if built['rc']:
         raise RuntimeError('compile/verify failed: ' + str(built.get('errors') or built.get('stderr') or built))
     deps, lib = host

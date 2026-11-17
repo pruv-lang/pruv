@@ -1,0 +1,2029 @@
+[
+ {
+  "id": "X01",
+  "name": "empty-list-still-title-scan",
+  "rule": "3.5",
+  "world": {
+   "readers": {
+    "claude": {
+     "list": [
+      {
+       "ok": []
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "items": []
+     }
+    }
+   },
+   "counts": {
+    "sessionList": 1
+   }
+  }
+ },
+ {
+  "id": "X02",
+  "name": "title-scan-throws",
+  "rule": "3.5",
+  "world": {
+   "readers": {
+    "claude": {
+     "list": [
+      {
+       "ok": [
+        {
+         "thread": "t1",
+         "title": "Item"
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "sessionList": [
+    {
+     "throw": {
+      "class": "Error",
+      "ref": "e1",
+      "message": "scan failed"
+     }
+    }
+   ],
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "e1",
+     "message": "scan failed"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "thrown",
+     "ref": "e1"
+    }
+   }
+  }
+ },
+ {
+  "id": "X03",
+  "name": "item-scan-throws",
+  "rule": "3.5",
+  "world": {
+   "readers": {
+    "claude": {
+     "list": [
+      {
+       "ok": [
+        {
+         "thread": "t1",
+         "title": "Item"
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "sessionList": [
+    null,
+    {
+     "throw": {
+      "class": "Error",
+      "ref": "e1",
+      "message": "scan failed"
+     },
+     "throwAt": 0
+    }
+   ],
+   "sessions": [
+    {
+     "id": "s1",
+     "title": ""
+    }
+   ],
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "e1",
+     "message": "scan failed"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "thrown",
+     "ref": "e1"
+    }
+   }
+  }
+ },
+ {
+  "id": "X04",
+  "name": "app-action-throws",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "fromAppAction": {
+    "throw": {
+     "class": "Error",
+     "ref": "e1",
+     "message": "no human state"
+    }
+   },
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "e1",
+     "message": "no human state"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "same"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "thrown",
+     "ref": "e1"
+    }
+   },
+   "counts": {
+    "reader": 0,
+    "opening.add": 0,
+    "sessionList": 0
+   }
+  }
+ },
+ {
+  "id": "X05",
+  "name": "grok-accounts-throws",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "grok": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "copy": [
+    {
+     "ok": {
+      "path": "/grok/copy1",
+      "skipped": 0
+     },
+     "verify": true
+    }
+   ],
+   "grokAccounts": {
+    "throw": {
+     "class": "Error",
+     "ref": "e1",
+     "message": "accounts failed"
+    }
+   },
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "e1",
+     "message": "accounts failed"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork",
+     "targetAccount": "g1"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "thrown",
+     "ref": "e1"
+    }
+   },
+   "counts": {
+    "reader": 0,
+    "opening.add": 0,
+    "sessionList": 0
+   }
+  }
+ },
+ {
+  "id": "X06",
+  "name": "abort-name-before-eie-code",
+  "rule": "3.7",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "reject": {
+        "class": "EngineImportError",
+        "ref": "e1",
+        "code": "not-found",
+        "name": "AbortError"
+       }
+      }
+     ]
+    }
+   },
+   "errs": [
+    {
+     "class": "EngineImportError",
+     "ref": "e1",
+     "code": "not-found",
+     "name": "AbortError"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.timeout",
+     "message": "\ud130\ubbf8\ub110 \ub300\ud654\ub97c \uc77d\ub294 \ub370 \uc2dc\uac04\uc774 \ub108\ubb34 \uc624\ub798 \uac78\ub838\uc5b4."
+    }
+   }
+  }
+ },
+ {
+  "id": "X07",
+  "name": "more-than50-items",
+  "rule": "3.5",
+  "world": {
+   "readers": {
+    "claude": {
+     "list": [
+      {
+       "ok": [
+        {
+         "thread": "t0",
+         "title": "Title 0"
+        },
+        {
+         "thread": "t1",
+         "title": "Title 1"
+        },
+        {
+         "thread": "t2",
+         "title": "Title 2"
+        },
+        {
+         "thread": "t3",
+         "title": "Title 3"
+        },
+        {
+         "thread": "t4",
+         "title": "Title 4"
+        },
+        {
+         "thread": "t5",
+         "title": "Title 5"
+        },
+        {
+         "thread": "t6",
+         "title": "Title 6"
+        },
+        {
+         "thread": "t7",
+         "title": "Title 7"
+        },
+        {
+         "thread": "t8",
+         "title": "Title 8"
+        },
+        {
+         "thread": "t9",
+         "title": "Title 9"
+        },
+        {
+         "thread": "t10",
+         "title": "Title 10"
+        },
+        {
+         "thread": "t11",
+         "title": "Title 11"
+        },
+        {
+         "thread": "t12",
+         "title": "Title 12"
+        },
+        {
+         "thread": "t13",
+         "title": "Title 13"
+        },
+        {
+         "thread": "t14",
+         "title": "Title 14"
+        },
+        {
+         "thread": "t15",
+         "title": "Title 15"
+        },
+        {
+         "thread": "t16",
+         "title": "Title 16"
+        },
+        {
+         "thread": "t17",
+         "title": "Title 17"
+        },
+        {
+         "thread": "t18",
+         "title": "Title 18"
+        },
+        {
+         "thread": "t19",
+         "title": "Title 19"
+        },
+        {
+         "thread": "t20",
+         "title": "Title 20"
+        },
+        {
+         "thread": "t21",
+         "title": "Title 21"
+        },
+        {
+         "thread": "t22",
+         "title": "Title 22"
+        },
+        {
+         "thread": "t23",
+         "title": "Title 23"
+        },
+        {
+         "thread": "t24",
+         "title": "Title 24"
+        },
+        {
+         "thread": "t25",
+         "title": "Title 25"
+        },
+        {
+         "thread": "t26",
+         "title": "Title 26"
+        },
+        {
+         "thread": "t27",
+         "title": "Title 27"
+        },
+        {
+         "thread": "t28",
+         "title": "Title 28"
+        },
+        {
+         "thread": "t29",
+         "title": "Title 29"
+        },
+        {
+         "thread": "t30",
+         "title": "Title 30"
+        },
+        {
+         "thread": "t31",
+         "title": "Title 31"
+        },
+        {
+         "thread": "t32",
+         "title": "Title 32"
+        },
+        {
+         "thread": "t33",
+         "title": "Title 33"
+        },
+        {
+         "thread": "t34",
+         "title": "Title 34"
+        },
+        {
+         "thread": "t35",
+         "title": "Title 35"
+        },
+        {
+         "thread": "t36",
+         "title": "Title 36"
+        },
+        {
+         "thread": "t37",
+         "title": "Title 37"
+        },
+        {
+         "thread": "t38",
+         "title": "Title 38"
+        },
+        {
+         "thread": "t39",
+         "title": "Title 39"
+        },
+        {
+         "thread": "t40",
+         "title": "Title 40"
+        },
+        {
+         "thread": "t41",
+         "title": "Title 41"
+        },
+        {
+         "thread": "t42",
+         "title": "Title 42"
+        },
+        {
+         "thread": "t43",
+         "title": "Title 43"
+        },
+        {
+         "thread": "t44",
+         "title": "Title 44"
+        },
+        {
+         "thread": "t45",
+         "title": "Title 45"
+        },
+        {
+         "thread": "t46",
+         "title": "Title 46"
+        },
+        {
+         "thread": "t47",
+         "title": "Title 47"
+        },
+        {
+         "thread": "t48",
+         "title": "Title 48"
+        },
+        {
+         "thread": "t49",
+         "title": "Title 49"
+        },
+        {
+         "thread": "t50",
+         "title": "Title 50"
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "itemCount": 51
+    }
+   },
+   "counts": {
+    "sessionList": 52
+   }
+  }
+ },
+ {
+  "id": "X08",
+  "name": "more-than200-turns",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "Big",
+        "turns": [
+         {
+          "prompt": "p0",
+          "reply": "r0",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p2",
+          "reply": "r2",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p3",
+          "reply": "r3",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p4",
+          "reply": "r4",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p5",
+          "reply": "r5",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p6",
+          "reply": "r6",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p7",
+          "reply": "r7",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p8",
+          "reply": "r8",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p9",
+          "reply": "r9",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p10",
+          "reply": "r10",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p11",
+          "reply": "r11",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p12",
+          "reply": "r12",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p13",
+          "reply": "r13",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p14",
+          "reply": "r14",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p15",
+          "reply": "r15",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p16",
+          "reply": "r16",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p17",
+          "reply": "r17",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p18",
+          "reply": "r18",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p19",
+          "reply": "r19",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p20",
+          "reply": "r20",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p21",
+          "reply": "r21",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p22",
+          "reply": "r22",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p23",
+          "reply": "r23",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p24",
+          "reply": "r24",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p25",
+          "reply": "r25",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p26",
+          "reply": "r26",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p27",
+          "reply": "r27",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p28",
+          "reply": "r28",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p29",
+          "reply": "r29",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p30",
+          "reply": "r30",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p31",
+          "reply": "r31",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p32",
+          "reply": "r32",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p33",
+          "reply": "r33",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p34",
+          "reply": "r34",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p35",
+          "reply": "r35",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p36",
+          "reply": "r36",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p37",
+          "reply": "r37",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p38",
+          "reply": "r38",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p39",
+          "reply": "r39",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p40",
+          "reply": "r40",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p41",
+          "reply": "r41",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p42",
+          "reply": "r42",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p43",
+          "reply": "r43",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p44",
+          "reply": "r44",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p45",
+          "reply": "r45",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p46",
+          "reply": "r46",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p47",
+          "reply": "r47",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p48",
+          "reply": "r48",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p49",
+          "reply": "r49",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p50",
+          "reply": "r50",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p51",
+          "reply": "r51",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p52",
+          "reply": "r52",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p53",
+          "reply": "r53",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p54",
+          "reply": "r54",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p55",
+          "reply": "r55",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p56",
+          "reply": "r56",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p57",
+          "reply": "r57",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p58",
+          "reply": "r58",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p59",
+          "reply": "r59",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p60",
+          "reply": "r60",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p61",
+          "reply": "r61",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p62",
+          "reply": "r62",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p63",
+          "reply": "r63",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p64",
+          "reply": "r64",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p65",
+          "reply": "r65",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p66",
+          "reply": "r66",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p67",
+          "reply": "r67",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p68",
+          "reply": "r68",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p69",
+          "reply": "r69",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p70",
+          "reply": "r70",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p71",
+          "reply": "r71",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p72",
+          "reply": "r72",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p73",
+          "reply": "r73",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p74",
+          "reply": "r74",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p75",
+          "reply": "r75",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p76",
+          "reply": "r76",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p77",
+          "reply": "r77",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p78",
+          "reply": "r78",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p79",
+          "reply": "r79",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p80",
+          "reply": "r80",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p81",
+          "reply": "r81",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p82",
+          "reply": "r82",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p83",
+          "reply": "r83",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p84",
+          "reply": "r84",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p85",
+          "reply": "r85",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p86",
+          "reply": "r86",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p87",
+          "reply": "r87",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p88",
+          "reply": "r88",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p89",
+          "reply": "r89",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p90",
+          "reply": "r90",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p91",
+          "reply": "r91",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p92",
+          "reply": "r92",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p93",
+          "reply": "r93",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p94",
+          "reply": "r94",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p95",
+          "reply": "r95",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p96",
+          "reply": "r96",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p97",
+          "reply": "r97",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p98",
+          "reply": "r98",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p99",
+          "reply": "r99",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p100",
+          "reply": "r100",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p101",
+          "reply": "r101",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p102",
+          "reply": "r102",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p103",
+          "reply": "r103",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p104",
+          "reply": "r104",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p105",
+          "reply": "r105",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p106",
+          "reply": "r106",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p107",
+          "reply": "r107",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p108",
+          "reply": "r108",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p109",
+          "reply": "r109",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p110",
+          "reply": "r110",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p111",
+          "reply": "r111",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p112",
+          "reply": "r112",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p113",
+          "reply": "r113",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p114",
+          "reply": "r114",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p115",
+          "reply": "r115",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p116",
+          "reply": "r116",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p117",
+          "reply": "r117",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p118",
+          "reply": "r118",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p119",
+          "reply": "r119",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p120",
+          "reply": "r120",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p121",
+          "reply": "r121",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p122",
+          "reply": "r122",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p123",
+          "reply": "r123",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p124",
+          "reply": "r124",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p125",
+          "reply": "r125",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p126",
+          "reply": "r126",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p127",
+          "reply": "r127",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p128",
+          "reply": "r128",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p129",
+          "reply": "r129",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p130",
+          "reply": "r130",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p131",
+          "reply": "r131",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p132",
+          "reply": "r132",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p133",
+          "reply": "r133",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p134",
+          "reply": "r134",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p135",
+          "reply": "r135",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p136",
+          "reply": "r136",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p137",
+          "reply": "r137",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p138",
+          "reply": "r138",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p139",
+          "reply": "r139",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p140",
+          "reply": "r140",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p141",
+          "reply": "r141",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p142",
+          "reply": "r142",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p143",
+          "reply": "r143",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p144",
+          "reply": "r144",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p145",
+          "reply": "r145",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p146",
+          "reply": "r146",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p147",
+          "reply": "r147",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p148",
+          "reply": "r148",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p149",
+          "reply": "r149",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p150",
+          "reply": "r150",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p151",
+          "reply": "r151",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p152",
+          "reply": "r152",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p153",
+          "reply": "r153",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p154",
+          "reply": "r154",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p155",
+          "reply": "r155",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p156",
+          "reply": "r156",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p157",
+          "reply": "r157",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p158",
+          "reply": "r158",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p159",
+          "reply": "r159",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p160",
+          "reply": "r160",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p161",
+          "reply": "r161",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p162",
+          "reply": "r162",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p163",
+          "reply": "r163",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p164",
+          "reply": "r164",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p165",
+          "reply": "r165",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p166",
+          "reply": "r166",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p167",
+          "reply": "r167",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p168",
+          "reply": "r168",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p169",
+          "reply": "r169",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p170",
+          "reply": "r170",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p171",
+          "reply": "r171",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p172",
+          "reply": "r172",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p173",
+          "reply": "r173",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p174",
+          "reply": "r174",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p175",
+          "reply": "r175",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p176",
+          "reply": "r176",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p177",
+          "reply": "r177",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p178",
+          "reply": "r178",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p179",
+          "reply": "r179",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p180",
+          "reply": "r180",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p181",
+          "reply": "r181",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p182",
+          "reply": "r182",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p183",
+          "reply": "r183",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p184",
+          "reply": "r184",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p185",
+          "reply": "r185",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p186",
+          "reply": "r186",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p187",
+          "reply": "r187",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p188",
+          "reply": "r188",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p189",
+          "reply": "r189",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p190",
+          "reply": "r190",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p191",
+          "reply": "r191",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p192",
+          "reply": "r192",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p193",
+          "reply": "r193",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p194",
+          "reply": "r194",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p195",
+          "reply": "r195",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p196",
+          "reply": "r196",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p197",
+          "reply": "r197",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p198",
+          "reply": "r198",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p199",
+          "reply": "r199",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p200",
+          "reply": "r200",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "createdLen": [
+    [
+     0,
+     [
+      "turns"
+     ],
+     201
+    ]
+   ],
+   "counts": {
+    "uuid": 201,
+    "now": 1
+   }
+  }
+ },
+ {
+  "id": "X09",
+  "name": "duplicate-session-title-and-first-bound",
+  "rule": "3.5",
+  "world": {
+   "readers": {
+    "claude": {
+     "list": [
+      {
+       "ok": [
+        {
+         "thread": "t1",
+         "title": "Item"
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "sessions": [
+    {
+     "id": "s1",
+     "title": "T1a",
+     "externalThread": {
+      "engine": "claude",
+      "source": "claude:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    },
+    {
+     "id": "s2",
+     "title": "T2",
+     "externalThread": {
+      "engine": "claude",
+      "source": "claude:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    },
+    {
+     "id": "s1",
+     "title": "T1b"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "items": [
+       {
+        "thread": "t1",
+        "title": "T1b",
+        "boundSessionId": "s1"
+       }
+      ]
+     }
+    }
+   }
+  }
+ },
+ {
+  "id": "X10",
+  "name": "migrate-fork-cancel-contract",
+  "rule": "3.8",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "defer": "rd",
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       },
+       "onAbort": {
+        "class": "plain",
+        "ref": "ab",
+        "name": "AbortError"
+       }
+      }
+     ]
+    }
+   },
+   "errs": [
+    {
+     "class": "plain",
+     "ref": "ab",
+     "name": "AbortError"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "handle",
+    "name": "c1"
+   },
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    },
+    "cancel": "c1",
+    "remote": false,
+    "tempVisible": false
+   },
+   {
+    "ev": "cancel",
+    "handle": "c1"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "thrown",
+     "reason": "c1"
+    }
+   },
+   "has": [
+    {
+     "c": "abort",
+     "a": {
+      "signal": "c1",
+      "reason": {
+       "cancelReason": "c1"
+      }
+     }
+    }
+   ],
+   "counts": {
+    "createImported": 0,
+    "rm": 0
+   },
+   "opening": {
+    "A": []
+   },
+   "note": "The migration path aborts its signal with no reason: the request throws that DOMException (cancel.reason), not a wire error."
+  }
+ }
+]

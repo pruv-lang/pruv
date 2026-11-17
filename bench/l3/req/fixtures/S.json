@@ -1,0 +1,677 @@
+[
+ {
+  "id": "S01",
+  "name": "home-order",
+  "rule": "3.1",
+  "world": {},
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "sources"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sources": [
+       {
+        "source": "claude:home",
+        "engine": "claude",
+        "label": ""
+       },
+       {
+        "source": "codex:home",
+        "engine": "codex",
+        "label": ""
+       },
+       {
+        "source": "grok:home",
+        "engine": "grok",
+        "label": ""
+       },
+       {
+        "source": "opencode:home",
+        "engine": "opencode",
+        "label": ""
+       },
+       {
+        "source": "qwen:home",
+        "engine": "qwen",
+        "label": ""
+       }
+      ]
+     },
+     "keys": [
+      "sources"
+     ]
+    }
+   },
+   "counts": {
+    "timer.set": 0,
+    "checkFolder": 0,
+    "sessionList": 0
+   }
+  }
+ },
+ {
+  "id": "S02",
+  "name": "account-label",
+  "rule": "3.1",
+  "world": {
+   "accounts": {
+    "claude": {
+     "ok": [
+      {
+       "id": "acc_0123456789abcdef",
+       "name": "Work"
+      }
+     ]
+    },
+    "codex": {
+     "ok": [
+      {
+       "id": "acc_fedcba9876543210",
+       "name": "Personal"
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "sources"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sources": [
+       {
+        "source": "claude:home",
+        "engine": "claude",
+        "label": ""
+       },
+       {
+        "source": "claude:acc_0123456789abcdef",
+        "engine": "claude",
+        "account": "acc_0123456789abcdef",
+        "label": "Work"
+       },
+       {
+        "source": "codex:home",
+        "engine": "codex",
+        "label": ""
+       },
+       {
+        "source": "codex:acc_fedcba9876543210",
+        "engine": "codex",
+        "account": "acc_fedcba9876543210",
+        "label": "Personal"
+       },
+       {
+        "source": "grok:home",
+        "engine": "grok",
+        "label": ""
+       },
+       {
+        "source": "opencode:home",
+        "engine": "opencode",
+        "label": ""
+       },
+       {
+        "source": "qwen:home",
+        "engine": "qwen",
+        "label": ""
+       }
+      ]
+     }
+    }
+   }
+  }
+ },
+ {
+  "id": "S03",
+  "name": "nullish-label",
+  "rule": "3.1",
+  "world": {
+   "accounts": {
+    "claude": {
+     "ok": [
+      {
+       "id": "acc_0123456789abcdef",
+       "name": null
+      },
+      {
+       "id": "acc_1111111111111111",
+       "name": {
+        "undef": 1
+       }
+      },
+      {
+       "id": "acc_2222222222222222",
+       "name": ""
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "sources"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sources": [
+       {
+        "source": "claude:home",
+        "engine": "claude",
+        "label": ""
+       },
+       {
+        "source": "claude:acc_0123456789abcdef",
+        "engine": "claude",
+        "account": "acc_0123456789abcdef",
+        "label": ""
+       },
+       {
+        "source": "claude:acc_1111111111111111",
+        "engine": "claude",
+        "account": "acc_1111111111111111",
+        "label": ""
+       },
+       {
+        "source": "claude:acc_2222222222222222",
+        "engine": "claude",
+        "account": "acc_2222222222222222",
+        "label": ""
+       },
+       {
+        "source": "codex:home",
+        "engine": "codex",
+        "label": ""
+       },
+       {
+        "source": "grok:home",
+        "engine": "grok",
+        "label": ""
+       },
+       {
+        "source": "opencode:home",
+        "engine": "opencode",
+        "label": ""
+       },
+       {
+        "source": "qwen:home",
+        "engine": "qwen",
+        "label": ""
+       }
+      ]
+     }
+    }
+   }
+  }
+ },
+ {
+  "id": "S04",
+  "name": "duplicate-source-first",
+  "rule": "3.1",
+  "note": "Duplicates are kept in order; list/open take the first match (the first account name is not observable through list/open).",
+  "world": {
+   "accounts": {
+    "claude": {
+     "ok": [
+      {
+       "id": "acc_0123456789abcdef",
+       "name": "First"
+      },
+      {
+       "id": "acc_0123456789abcdef",
+       "name": "Second"
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "sources"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sources": [
+       {
+        "source": "claude:home",
+        "engine": "claude",
+        "label": ""
+       },
+       {
+        "source": "claude:acc_0123456789abcdef",
+        "engine": "claude",
+        "account": "acc_0123456789abcdef",
+        "label": "First"
+       },
+       {
+        "source": "claude:acc_0123456789abcdef",
+        "engine": "claude",
+        "account": "acc_0123456789abcdef",
+        "label": "Second"
+       },
+       {
+        "source": "codex:home",
+        "engine": "codex",
+        "label": ""
+       },
+       {
+        "source": "grok:home",
+        "engine": "grok",
+        "label": ""
+       },
+       {
+        "source": "opencode:home",
+        "engine": "opencode",
+        "label": ""
+       },
+       {
+        "source": "qwen:home",
+        "engine": "qwen",
+        "label": ""
+       }
+      ]
+     }
+    }
+   }
+  }
+ },
+ {
+  "id": "S05",
+  "name": "unknown-source",
+  "rule": "3.1",
+  "killer": "M01",
+  "world": {},
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "claude:nope",
+     "folder": "/proj"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.sourceUnknown",
+     "message": "\uace0\ub97c \uc218 \uc5c6\ub294 \ucd9c\ucc98\uc57c."
+    }
+   },
+   "counts": {
+    "reader": 0,
+    "checkFolder": 0,
+    "sessionList": 0,
+    "timer.set": 0,
+    "makeCodexRunDeps": 0
+   }
+  }
+ },
+ {
+  "id": "S06",
+  "name": "source-throw",
+  "rule": "3.1",
+  "world": {
+   "accounts": {
+    "claude": {
+     "throw": {
+      "class": "Error",
+      "ref": "e1",
+      "message": "accounts down"
+     }
+    }
+   },
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "e1",
+     "message": "accounts down"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "thrown",
+     "ref": "e1"
+    },
+    "r2": {
+     "terminal": "thrown",
+     "ref": "e1"
+    }
+   },
+   "counts": {
+    "checkFolder": 0,
+    "reader": 0,
+    "timer.set": 0,
+    "sessionList": 0,
+    "opening.add": 0
+   }
+  }
+ },
+ {
+  "id": "S07",
+  "name": "no-home-leak",
+  "rule": "3.1",
+  "world": {
+   "env": {
+    "CLAUDE_CONFIG_DIR": "/secret/claude",
+    "GROK_HOME": "/secret/grok"
+   },
+   "accounts": {
+    "claude": {
+     "ok": [
+      {
+       "id": "acc_0123456789abcdef",
+       "name": "W"
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "sources"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "keys": [
+      "sources"
+     ],
+     "notContains": [
+      "\"home\"",
+      "\"kind\"",
+      "\"accountName\"",
+      "/secret",
+      "engine-homes"
+     ]
+    }
+   }
+  }
+ },
+ {
+  "id": "S08",
+  "name": "fresh-per-request",
+  "rule": "3.1",
+  "note": "world.accounts is not a queue: freshness per request is visible only through the three accounts calls per engine.",
+  "world": {
+   "accounts": {
+    "claude": {
+     "ok": [
+      {
+       "id": "acc_0123456789abcdef",
+       "name": "W"
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "sources"
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "sources"
+   },
+   {
+    "ev": "start",
+    "req": "r3",
+    "op": "sources"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok"
+    },
+    "r2": {
+     "terminal": "ok"
+    },
+    "r3": {
+     "terminal": "ok"
+    }
+   },
+   "matchCounts": [
+    [
+     {
+      "c": "prim",
+      "a": [
+       "accounts",
+       "claude"
+      ]
+     },
+     3
+    ],
+    [
+     {
+      "c": "prim",
+      "a": [
+       "accounts",
+       "codex"
+      ]
+     },
+     3
+    ]
+   ]
+  }
+ },
+ {
+  "id": "S09",
+  "name": "ambient-codex-home",
+  "rule": "3.1",
+  "world": {
+   "ambient": {
+    "ok": "/data/engine-homes/codex/acc_fedcba9876543210"
+   },
+   "accounts": {
+    "codex": {
+     "ok": [
+      {
+       "id": "acc_fedcba9876543210",
+       "name": "Same as host"
+      },
+      {
+       "id": "acc_3333333333333333",
+       "name": "Other"
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "sources"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sources": [
+       {
+        "source": "claude:home",
+        "engine": "claude",
+        "label": ""
+       },
+       {
+        "source": "codex:home",
+        "engine": "codex",
+        "label": ""
+       },
+       {
+        "source": "codex:acc_3333333333333333",
+        "engine": "codex",
+        "account": "acc_3333333333333333",
+        "label": "Other"
+       },
+       {
+        "source": "grok:home",
+        "engine": "grok",
+        "label": ""
+       },
+       {
+        "source": "opencode:home",
+        "engine": "opencode",
+        "label": ""
+       },
+       {
+        "source": "qwen:home",
+        "engine": "qwen",
+        "label": ""
+       }
+      ]
+     }
+    }
+   },
+   "has": [
+    {
+     "c": "prim",
+     "a": [
+      "ambient",
+      "CODEX_HOME"
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "id": "S10",
+  "name": "invalid-account-skipped",
+  "rule": "3.1",
+  "world": {
+   "accounts": {
+    "claude": {
+     "ok": [
+      {
+       "id": "bad id",
+       "name": "x"
+      },
+      {
+       "id": "acc_0123456789abcdef",
+       "name": "ok"
+      }
+     ]
+    },
+    "codex": {
+     "ok": [
+      {
+       "id": "ACC_UPPER",
+       "name": "y"
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "sources"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sources": [
+       {
+        "source": "claude:home",
+        "engine": "claude",
+        "label": ""
+       },
+       {
+        "source": "claude:acc_0123456789abcdef",
+        "engine": "claude",
+        "account": "acc_0123456789abcdef",
+        "label": "ok"
+       },
+       {
+        "source": "codex:home",
+        "engine": "codex",
+        "label": ""
+       },
+       {
+        "source": "grok:home",
+        "engine": "grok",
+        "label": ""
+       },
+       {
+        "source": "opencode:home",
+        "engine": "opencode",
+        "label": ""
+       },
+       {
+        "source": "qwen:home",
+        "engine": "qwen",
+        "label": ""
+       }
+      ]
+     }
+    }
+   }
+  }
+ }
+]

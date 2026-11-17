@@ -2321,3 +2321,39 @@ python3 bench/l3/entry/judge_test.py
 ```
 
 **L3-8 implementation and default Q complete.**
+
+## 141. L3-9: engine-import request handlers in Pruv (implementation and Q, 2026-11-17)
+
+- **Design:** `docs/ENGINE_IMPORT_REQUEST_SPEC.md` and `bench/l3/req/ABI.md`. The request decisions of Lair's `engine-import-sources`, `engine-import-list` and `engine-import-open` handlers (pinned at Lair commit 17001ab3, `bench/l3/req/reference/`) are ported to `bench/l3/req/` as one Pruv state machine (`root.pruv` req_begin / req_step and the `req_*` modules). Pruv owns the source projection, folder preflight, routing, the bound-session search, titles, result construction, the 20,000 ms deadline and cancel composition, the 32-request instance limit, the shared `opening` guard across concurrent requests, the Grok copy, verify, create and rollback order, and the unwind of timers, read windows, the returned copy and the opening. The L3-8 entry modules it reuses moved to `bench/l3/lib/` (`ent_*.pruv`, plus `entry_api.pruv`), and `bench/l3/entry/` now compiles with `--lib`. The host (`host.rs`, `leaf.rs`) schedules requests, serves child entry packets, dependency calls and storage ops, and renders values; it makes no handler decision. Every step is checked: a 32-word header, the world packet sealed by a digest (word 11), the digest of the outstanding await in the active row, per-request block chains for finished list items (storage ops 60/61/65), and a call budget with reserved cleanup credits. No compiler or language changes.
+- **Reference:** `reference.mjs` runs the pinned handlers on Node 26.4.0 over `world.mjs` and the fakes in `fakes/`, with `reference-hooks.mjs` recording the same trace (dependency calls, timers, opening events, created sessions) that `host.rs` records.
+- **Implementation (`test_impl.py`):** 160 fixtures in 16 groups (sources, folder and preflight order, bound, list, mode and account, open basics, turn and origin, title, Grok, rollback, errors, cancel and time, engine options, concurrency, packets and limits, extra paths). Each compares the whole observation (terminals, values, created sessions, trace) with the oracle. py/rust, py/llvm, rs/rust and rs/llvm: 640 runs, **0 unexplained differences**. 639 are exact. P08 (33 concurrent opens) is P6 on every pair: the 33rd request ends with core InputTooLarge before any dependency call, as the spec's 32-request limit requires. Integration (`integrate.py`): the 12 spec 9.2 cases (injected readers, the Grok copy and load lifecycle, and one engine error through the real entry wrapper) are 12/12 exact. Claude is reported as a limit, because the L3-1 piece has no driver.
+- **Differential (`q.py`, seed 20261119):** 2,000 generated scenarios per pair in eight families (Q1 sources 200, Q2 preflight 200, Q3 list 300, Q4 open data 300, Q5 Grok stages 250, Q6 errors and cancel 250, Q7 concurrency 250, Q8 protocol and domain 250), compared exactly with no policy.
+
+| Pair | Cases | Exact | Unexplained |
+|---|---:|---:|---:|
+| py/rust | 2000 | 2000 | 0 |
+| py/llvm | 2000 | 2000 | 0 |
+| rs/rust | 2000 | 2000 | 0 |
+| rs/llvm | 2000 | 2000 | 0 |
+
+- **Packet integrity (`forge_test.py`):** 66/66 rows behave as required. 52 forgeries are rejected with InvalidPacket, with no new external effect and the observation equal to the reference rejection: header fields, replays, log and checkpoint edits, world and seal edits, storage ops (F41–F48), world budget words (F49–F50) and completion records the core used to accept (F51 a changed call-17 record, F52 a folder slot outside its pool). 6 budget rows (B01–B06) start from a resealed honest world near the 1,000,000-call bound and end with InputTooLarge after exactly the cleanup the request still owes. 8 honest controls are unchanged. The driver adopts a step only when it advances the world generation, so a stale or forged input never runs an effect.
+- **Mutants (`q_mutants.py`, rs/rust):** the spec's 16 single-bug mutants (14 Pruv edits, 2 in the host leaf), each with a killer fixture: **16 killed, 0 survived, 0 build errors** (about 2 min).
+- **Performance (`perf_req.py`, spec 13 grid, S 1000/5000/20000, M 1/10/50):** every finished list and open row grows linearly in S (local exponent 0.89–1.02). A searched session costs about 40 µs. S=20000 M=10 takes 8.2 s against 0.41 s on Node (about 20x), and open S=20000 takes at most 1.8 s. The no-match list at S=20000 M=50 needs 1,000,051 external calls, past the spec 7.2 bound, so Pruv ends it with core InputTooLarge after about 1,000,000 calls (20 s); Node has no bound. The call counts M+1 sessionList and M·S isTemporary hold for every other no-match list on both sides.
+- **Audit:** one read-only audit (Codex) with 8 required findings, all fixed: a rejection consumed state and ran cleanup; a bad world was resealed; the seal-0 exception was too broad; completion formats were not checked; the list path copied S·M² words; the titles had no integrity check; the call budget did not match the spec's unit; arbitrary 100,000 caps. The confirmation audit, limited to those findings, found 6 fixed and 2 partly fixed, both now fixed: the call-17 record and the folder slot were not checked (F51, F52), and a Grok copy that returned after a cancel was not removed when the budget then refused its cleanup (the refusal now unwinds with the rm, budget row B06, reproduced on R03 before the fix).
+- **Before commit:** compilers unchanged, so no compiler test run. Every `bench/l3/lib` consumer passes after the move (json run_a0–a5, mcp, qwen, supervisor test_a0–a3, entry 1,164 runs with 0 unexplained).
+- **Limits:** P5 (native error prose) is not compared. The Claude integration route is not run. The digest is a two-modulus polynomial hash: it catches edits and replays by an honest-but-buggy or replaying driver, not chosen collisions. Pruv is 4–26x slower than Node on long searches (more for larger M), because each step digests and re-emits its packets. Windows paths, the real engine binaries and outer cancellation are not exercised. This is differential evidence and local verification, not whole-program equivalence.
+
+Commands (from `bench/l3/req`):
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+export GROK_TS_TRANSPILER=/path/to/typescript
+python3 test_impl.py
+python3 q_gen.py && python3 q.py --impl work/build/rs_llvm/harness
+python3 q_mutants.py --jobs 4
+python3 integrate.py
+sh forge_build.sh && python3 forge_test.py
+python3 perf_req.py
+```
+
+**L3-9 implementation and default Q complete.**

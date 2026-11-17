@@ -1,0 +1,618 @@
+[
+ {
+  "id": "U01",
+  "name": "external-title",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "a   b\n  c\t d",
+        "turns": [
+         {
+          "prompt": "first prompt",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "createdAfter": [
+    {
+     "title": "a b c d"
+    }
+   ],
+   "createdMeta": [
+    {
+     "seed": {
+      "folder": "/proj"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "U02",
+  "name": "first-prompt",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "",
+        "turns": [
+         {
+          "prompt": "  hello   world ",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "createdAfter": [
+    {
+     "title": "hello world"
+    }
+   ],
+   "createdMeta": [
+    {
+     "seed": {
+      "folder": "/proj"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "U03",
+  "name": "empty-fallback",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "",
+        "turns": []
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "createdAfter": [
+    {
+     "title": "proj"
+    }
+   ],
+   "createdMeta": [
+    {
+     "seed": {
+      "folder": "/proj"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "U04",
+  "name": "whitespace-title-no-prompt-retry",
+  "rule": "3.4",
+  "note": "A whitespace-only title is truthy, so the first prompt is not tried; the fallback is the folder basename.",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "   ",
+        "turns": [
+         {
+          "prompt": "real prompt",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "createdAfter": [
+    {
+     "title": "proj"
+    }
+   ],
+   "createdMeta": [
+    {
+     "seed": {
+      "folder": "/proj"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "U05",
+  "name": "unicode-whitespace",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "\u00a0 a\u3000b\ufeff\u2028c  \u2029",
+        "turns": [
+         {
+          "prompt": "first prompt",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "createdAfter": [
+    {
+     "title": "a b c"
+    }
+   ],
+   "createdMeta": [
+    {
+     "seed": {
+      "folder": "/proj"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "U06",
+  "name": "nonwhitespace-0085-200b",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "a\u0085b\u200bc",
+        "turns": [
+         {
+          "prompt": "first prompt",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "createdAfter": [
+    {
+     "title": "a\u0085b\u200bc"
+    }
+   ],
+   "createdMeta": [
+    {
+     "seed": {
+      "folder": "/proj"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "U07",
+  "name": "utf16-split80",
+  "rule": "3.4",
+  "killer": "M15",
+  "note": "slice(0, 80) counts UTF-16 units: the astral character is cut to a lone high surrogate.",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ud83d\ude00zz",
+        "turns": [
+         {
+          "prompt": "first prompt",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "createdAfter": [
+    {
+     "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ud83d"
+    }
+   ],
+   "createdMeta": [
+    {
+     "seed": {
+      "folder": "/proj"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "U08",
+  "name": "basename-fallback",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "",
+        "turns": []
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/a/b/proj/",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "createdAfter": [
+    {
+     "title": "proj"
+    }
+   ],
+   "createdMeta": [
+    {
+     "seed": {
+      "folder": "/a/b/proj/"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "U09",
+  "name": "root-folder-fallback",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "",
+        "turns": []
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "createdAfter": [
+    {
+     "title": "/"
+    }
+   ],
+   "createdMeta": [
+    {
+     "seed": {
+      "folder": "/"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "U10",
+  "name": "long-folder-unclipped",
+  "rule": "3.4",
+  "note": "The folder fallback is neither collapsed nor clipped to 80.",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "",
+        "turns": []
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/p/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  cccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "createdAfter": [
+    {
+     "title": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  cccccccccccccccccccccccccccccccccccccccccccccccccc"
+    }
+   ],
+   "createdMeta": [
+    {
+     "seed": {
+      "folder": "/p/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  cccccccccccccccccccccccccccccccccccccccccccccccccc"
+     }
+    }
+   ]
+  }
+ }
+]

@@ -1,0 +1,624 @@
+[
+ {
+  "id": "E01",
+  "name": "not-found",
+  "rule": "3.7",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "reject": {
+        "class": "EngineImportError",
+        "ref": "e1",
+        "code": "not-found",
+        "message": "x"
+       }
+      }
+     ]
+    }
+   },
+   "errs": [
+    {
+     "class": "EngineImportError",
+     "ref": "e1",
+     "code": "not-found",
+     "message": "x"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.notFound"
+    }
+   },
+   "counts": {
+    "createImported": 0,
+    "opening.delete": 1
+   },
+   "opening": {
+    "A": []
+   }
+  }
+ },
+ {
+  "id": "E02",
+  "name": "codex-unsupported",
+  "rule": "3.7",
+  "world": {
+   "readers": {
+    "codex": {
+     "read": [
+      {
+       "reject": {
+        "class": "EngineImportError",
+        "ref": "e1",
+        "code": "codex-unsupported",
+        "message": "x"
+       }
+      }
+     ]
+    }
+   },
+   "errs": [
+    {
+     "class": "EngineImportError",
+     "ref": "e1",
+     "code": "codex-unsupported",
+     "message": "x"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "codex:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.codexUnsupported"
+    }
+   },
+   "counts": {
+    "createImported": 0,
+    "opening.delete": 1
+   },
+   "opening": {
+    "A": []
+   }
+  }
+ },
+ {
+  "id": "E03",
+  "name": "grok-exists",
+  "rule": "3.7",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "reject": {
+        "class": "EngineImportError",
+        "ref": "e1",
+        "code": "grok-exists",
+        "message": "x"
+       }
+      }
+     ]
+    }
+   },
+   "errs": [
+    {
+     "class": "EngineImportError",
+     "ref": "e1",
+     "code": "grok-exists",
+     "message": "x"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.grokExists"
+    }
+   },
+   "counts": {
+    "createImported": 0,
+    "opening.delete": 1
+   },
+   "opening": {
+    "A": []
+   }
+  }
+ },
+ {
+  "id": "E04",
+  "name": "grok-load-failed",
+  "rule": "3.7",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "reject": {
+        "class": "EngineImportError",
+        "ref": "e1",
+        "code": "grok-load-failed",
+        "message": "x"
+       }
+      }
+     ]
+    }
+   },
+   "errs": [
+    {
+     "class": "EngineImportError",
+     "ref": "e1",
+     "code": "grok-load-failed",
+     "message": "x"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.grokLoadFailed"
+    }
+   },
+   "counts": {
+    "createImported": 0,
+    "opening.delete": 1
+   },
+   "opening": {
+    "A": []
+   }
+  }
+ },
+ {
+  "id": "E05",
+  "name": "timeout",
+  "rule": "3.7",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "reject": {
+        "class": "EngineImportError",
+        "ref": "e1",
+        "code": "timeout",
+        "message": "x"
+       }
+      }
+     ]
+    }
+   },
+   "errs": [
+    {
+     "class": "EngineImportError",
+     "ref": "e1",
+     "code": "timeout",
+     "message": "x"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.timeout"
+    }
+   },
+   "counts": {
+    "createImported": 0,
+    "opening.delete": 1
+   },
+   "opening": {
+    "A": []
+   }
+  }
+ },
+ {
+  "id": "E06",
+  "name": "engine-missing",
+  "rule": "3.7",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "reject": {
+        "class": "EngineImportError",
+        "ref": "e1",
+        "code": "engine-missing",
+        "message": "x"
+       }
+      }
+     ]
+    }
+   },
+   "errs": [
+    {
+     "class": "EngineImportError",
+     "ref": "e1",
+     "code": "engine-missing",
+     "message": "x"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.engineMissing"
+    }
+   },
+   "counts": {
+    "createImported": 0,
+    "opening.delete": 1
+   },
+   "opening": {
+    "A": []
+   }
+  }
+ },
+ {
+  "id": "E07",
+  "name": "read-failed",
+  "rule": "3.7",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "reject": {
+        "class": "EngineImportError",
+        "ref": "e1",
+        "code": "read-failed"
+       }
+      },
+      {
+       "reject": {
+        "class": "Error",
+        "ref": "e2",
+        "message": "plain failure"
+       }
+      }
+     ]
+    }
+   },
+   "errs": [
+    {
+     "class": "EngineImportError",
+     "ref": "e1",
+     "code": "read-failed"
+    },
+    {
+     "class": "Error",
+     "ref": "e2",
+     "message": "plain failure"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t2",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.readFailed"
+    },
+    "r2": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.readFailed"
+    }
+   },
+   "counts": {
+    "createImported": 0
+   },
+   "note": "The entry (E) wraps a plain Error from a reader as EngineImportError read-failed."
+  }
+ },
+ {
+  "id": "E08",
+  "name": "plain-abort-name",
+  "rule": "3.7",
+  "killer": "M11",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "reject": {
+        "class": "plain",
+        "ref": "ab",
+        "name": "AbortError"
+       }
+      }
+     ]
+    }
+   },
+   "errs": [
+    {
+     "class": "plain",
+     "ref": "ab",
+     "name": "AbortError"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.timeout",
+     "message": "\ud130\ubbf8\ub110 \ub300\ud654\ub97c \uc77d\ub294 \ub370 \uc2dc\uac04\uc774 \ub108\ubb34 \uc624\ub798 \uac78\ub838\uc5b4."
+    }
+   },
+   "counts": {
+    "createImported": 0
+   }
+  }
+ },
+ {
+  "id": "E09",
+  "name": "unknown-eie-code",
+  "rule": "3.7",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "reject": {
+        "class": "EngineImportError",
+        "ref": "e1",
+        "code": "zzz",
+        "message": "odd"
+       }
+      }
+     ]
+    }
+   },
+   "errs": [
+    {
+     "class": "EngineImportError",
+     "ref": "e1",
+     "code": "zzz",
+     "message": "odd"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "thrown",
+     "ref": "e1"
+    }
+   },
+   "counts": {
+    "createImported": 0
+   },
+   "note": "An EngineImportError with an unmapped code is not converted to a wire error; it is rethrown as-is."
+  }
+ },
+ {
+  "id": "E10",
+  "name": "passthrough-value",
+  "rule": "3.7",
+  "world": {
+   "readers": {
+    "grok": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "copy": [
+    {
+     "reject": {
+      "class": "primitive",
+      "ref": "p1",
+      "value": "raw string"
+     }
+    },
+    {
+     "reject": {
+      "class": "plain",
+      "ref": "p2",
+      "code": 7
+     }
+    }
+   ],
+   "errs": [
+    {
+     "class": "primitive",
+     "ref": "p1",
+     "value": "raw string"
+    },
+    {
+     "class": "plain",
+     "ref": "p2",
+     "code": 7
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t2",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "thrown",
+     "ref": "p1"
+    },
+    "r2": {
+     "terminal": "thrown",
+     "ref": "p2"
+    }
+   },
+   "counts": {
+    "rm": 0,
+    "createImported": 0
+   }
+  }
+ }
+]

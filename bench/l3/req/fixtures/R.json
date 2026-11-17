@@ -1,0 +1,934 @@
+[
+ {
+  "id": "R01",
+  "name": "race-rm",
+  "rule": "3.6",
+  "killer": "M14",
+  "world": {
+   "readers": {
+    "grok": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "copy": [
+    {
+     "ok": {
+      "path": "/grok/copy1",
+      "skipped": 0
+     },
+     "verify": true,
+     "defer": "cp"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "mutate",
+    "op": "add",
+    "session": {
+     "id": "s9",
+     "title": "Raced",
+     "externalThread": {
+      "engine": "grok",
+      "source": "grok:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    }
+   },
+   {
+    "ev": "settle",
+    "label": "cp"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "s9",
+      "existing": true
+     },
+     "keys": [
+      "sessionId",
+      "existing"
+     ]
+    }
+   },
+   "counts": {
+    "rm": 1,
+    "createImported": 0,
+    "now": 0,
+    "uuid": 0,
+    "modelFor": 0
+   },
+   "has": [
+    {
+     "c": "rm",
+     "a": {
+      "path": "/grok/copy1",
+      "options": {
+       "recursive": true,
+       "force": true
+      }
+     }
+    }
+   ],
+   "created": 0,
+   "order": [
+    {
+     "c": "copy"
+    },
+    {
+     "c": "rm"
+    }
+   ]
+  }
+ },
+ {
+  "id": "R02",
+  "name": "race-rm-reject",
+  "rule": "3.6",
+  "world": {
+   "readers": {
+    "grok": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "copy": [
+    {
+     "ok": {
+      "path": "/grok/copy1",
+      "skipped": 0
+     },
+     "verify": true,
+     "defer": "cp"
+    }
+   ],
+   "rm": [
+    {
+     "reject": {
+      "class": "Error",
+      "ref": "e2",
+      "message": "rm failed"
+     }
+    }
+   ],
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "e2",
+     "message": "rm failed"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "mutate",
+    "op": "add",
+    "session": {
+     "id": "s9",
+     "title": "",
+     "externalThread": {
+      "engine": "grok",
+      "source": "grok:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    }
+   },
+   {
+    "ev": "settle",
+    "label": "cp"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "s9",
+      "existing": true
+     },
+     "keys": [
+      "sessionId",
+      "existing"
+     ]
+    }
+   },
+   "counts": {
+    "rm": 1,
+    "createImported": 0
+   }
+  }
+ },
+ {
+  "id": "R03",
+  "name": "cancel-after-copy",
+  "rule": "3.6",
+  "world": {
+   "readers": {
+    "grok": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "copy": [
+    {
+     "ok": {
+      "path": "/grok/copy1",
+      "skipped": 0
+     },
+     "verify": true,
+     "defer": "cp"
+    }
+   ],
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "R",
+     "message": "stop"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "handle",
+    "name": "c1"
+   },
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    },
+    "cancel": "c1"
+   },
+   {
+    "ev": "cancel",
+    "handle": "c1",
+    "reason": {
+     "class": "Error",
+     "ref": "R",
+     "message": "stop"
+    }
+   },
+   {
+    "ev": "settle",
+    "label": "cp"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "thrown",
+     "reason": "c1",
+     "ref": "R"
+    }
+   },
+   "counts": {
+    "rm": 1,
+    "createImported": 0,
+    "now": 0
+   },
+   "has": [
+    {
+     "c": "rm",
+     "a": {
+      "path": "/grok/copy1",
+      "options": {
+       "recursive": true,
+       "force": true
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "R04",
+  "name": "race-query-throws",
+  "rule": "3.6",
+  "world": {
+   "readers": {
+    "grok": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "copy": [
+    {
+     "ok": {
+      "path": "/grok/copy1",
+      "skipped": 0
+     },
+     "verify": true
+    }
+   ],
+   "sessionList": [
+    null,
+    {
+     "throw": {
+      "class": "Error",
+      "ref": "e1",
+      "message": "scan failed"
+     },
+     "throwAt": 0
+    }
+   ],
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "e1",
+     "message": "scan failed"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "thrown",
+     "ref": "e1"
+    }
+   },
+   "counts": {
+    "rm": 1,
+    "createImported": 0
+   },
+   "has": [
+    {
+     "c": "rm",
+     "a": {
+      "path": "/grok/copy1",
+      "options": {
+       "recursive": true,
+       "force": true
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "R05",
+  "name": "date-throws",
+  "rule": "3.6",
+  "world": {
+   "readers": {
+    "grok": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "copy": [
+    {
+     "ok": {
+      "path": "/grok/copy1",
+      "skipped": 0
+     },
+     "verify": true
+    }
+   ],
+   "clock": {
+    "throw": {
+     "class": "Error",
+     "ref": "e1",
+     "message": "clock broken"
+    }
+   },
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "e1",
+     "message": "clock broken"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "thrown",
+     "ref": "e1"
+    }
+   },
+   "counts": {
+    "rm": 1,
+    "createImported": 0
+   },
+   "has": [
+    {
+     "c": "rm",
+     "a": {
+      "path": "/grok/copy1",
+      "options": {
+       "recursive": true,
+       "force": true
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "R06",
+  "name": "uuid-throws",
+  "rule": "3.6",
+  "world": {
+   "readers": {
+    "grok": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "copy": [
+    {
+     "ok": {
+      "path": "/grok/copy1",
+      "skipped": 0
+     },
+     "verify": true
+    }
+   ],
+   "uuids": [
+    {
+     "throw": {
+      "class": "Error",
+      "ref": "e1",
+      "message": "uuid broken"
+     }
+    }
+   ],
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "e1",
+     "message": "uuid broken"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "thrown",
+     "ref": "e1"
+    }
+   },
+   "counts": {
+    "rm": 1,
+    "createImported": 0
+   },
+   "has": [
+    {
+     "c": "rm",
+     "a": {
+      "path": "/grok/copy1",
+      "options": {
+       "recursive": true,
+       "force": true
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "R07",
+  "name": "model-throws",
+  "rule": "3.6",
+  "world": {
+   "readers": {
+    "grok": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "copy": [
+    {
+     "ok": {
+      "path": "/grok/copy1",
+      "skipped": 0
+     },
+     "verify": true
+    }
+   ],
+   "modelFor": [
+    {
+     "throw": {
+      "class": "Error",
+      "ref": "e1",
+      "message": "model broken"
+     }
+    }
+   ],
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "e1",
+     "message": "model broken"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "thrown",
+     "ref": "e1"
+    }
+   },
+   "counts": {
+    "rm": 1,
+    "createImported": 0
+   },
+   "has": [
+    {
+     "c": "rm",
+     "a": {
+      "path": "/grok/copy1",
+      "options": {
+       "recursive": true,
+       "force": true
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "R08",
+  "name": "create-throws-after-fill",
+  "rule": "3.6",
+  "world": {
+   "readers": {
+    "grok": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "copy": [
+    {
+     "ok": {
+      "path": "/grok/copy1",
+      "skipped": 0
+     },
+     "verify": true
+    }
+   ],
+   "createImported": [
+    {
+     "mode": "fail-after-fill",
+     "throw": {
+      "class": "Error",
+      "ref": "e1",
+      "message": "after fill"
+     }
+    }
+   ],
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "e1",
+     "message": "after fill"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "thrown",
+     "ref": "e1"
+    }
+   },
+   "counts": {
+    "rm": 1,
+    "createImported": 1
+   },
+   "has": [
+    {
+     "c": "rm",
+     "a": {
+      "path": "/grok/copy1",
+      "options": {
+       "recursive": true,
+       "force": true
+      }
+     }
+    }
+   ],
+   "createdMeta": [
+    {
+     "outcome": "fail-after-fill"
+    }
+   ]
+  }
+ },
+ {
+  "id": "R09",
+  "name": "success-keeps-copy",
+  "rule": "3.6",
+  "world": {
+   "readers": {
+    "grok": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "copy": [
+    {
+     "ok": {
+      "path": "/grok/copy1",
+      "skipped": 0
+     },
+     "verify": true
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "counts": {
+    "rm": 0
+   },
+   "createdMeta": [
+    {
+     "outcome": "ok"
+    }
+   ]
+  }
+ },
+ {
+  "id": "R10",
+  "name": "catch-rm-reject",
+  "rule": "3.6",
+  "world": {
+   "readers": {
+    "grok": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "copy": [
+    {
+     "ok": {
+      "path": "/grok/copy1",
+      "skipped": 0
+     },
+     "verify": true
+    }
+   ],
+   "createImported": [
+    {
+     "mode": "fail-before-fill",
+     "throw": {
+      "class": "Error",
+      "ref": "e1",
+      "message": "create failed"
+     }
+    }
+   ],
+   "rm": [
+    {
+     "reject": {
+      "class": "Error",
+      "ref": "e2",
+      "message": "rm failed"
+     }
+    }
+   ],
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "e1",
+     "message": "create failed"
+    },
+    {
+     "class": "Error",
+     "ref": "e2",
+     "message": "rm failed"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "thrown",
+     "ref": "e1"
+    }
+   },
+   "counts": {
+    "rm": 1
+   },
+   "has": [
+    {
+     "c": "rm",
+     "a": {
+      "path": "/grok/copy1",
+      "options": {
+       "recursive": true,
+       "force": true
+      }
+     }
+    }
+   ]
+  }
+ }
+]

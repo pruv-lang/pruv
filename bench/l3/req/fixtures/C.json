@@ -1,0 +1,1051 @@
+[
+ {
+  "id": "C01",
+  "name": "preabort-unbound",
+  "rule": "3.8",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "handle",
+    "name": "c1"
+   },
+   {
+    "ev": "cancel",
+    "handle": "c1"
+   },
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    },
+    "cancel": "c1"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "thrown",
+     "reason": "c1"
+    }
+   },
+   "counts": {
+    "createImported": 0,
+    "now": 0,
+    "uuid": 0,
+    "rm": 0
+   },
+   "has": [
+    {
+     "c": "reader",
+     "a": {
+      "options": {
+       "aborted": true
+      }
+     }
+    }
+   ],
+   "created": 0,
+   "opening": {
+    "A": []
+   }
+  }
+ },
+ {
+  "id": "C02",
+  "name": "cancel-during-read",
+  "rule": "3.8",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "defer": "rd",
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       },
+       "onAbort": {
+        "class": "plain",
+        "ref": "ab",
+        "name": "AbortError"
+       }
+      }
+     ]
+    }
+   },
+   "errs": [
+    {
+     "class": "plain",
+     "ref": "ab",
+     "name": "AbortError"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "handle",
+    "name": "c1"
+   },
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    },
+    "cancel": "c1"
+   },
+   {
+    "ev": "cancel",
+    "handle": "c1"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "thrown",
+     "reason": "c1"
+    }
+   },
+   "has": [
+    {
+     "c": "abort",
+     "a": {
+      "signal": "c1",
+      "reason": {
+       "cancelReason": "c1"
+      }
+     }
+    },
+    {
+     "c": "abort",
+     "a": {
+      "signal": "sig1",
+      "reason": {
+       "domAbort": 1
+      }
+     }
+    }
+   ],
+   "counts": {
+    "createImported": 0
+   },
+   "opening": {
+    "A": []
+   }
+  }
+ },
+ {
+  "id": "C03",
+  "name": "deadline-read-reject",
+  "rule": "3.8",
+  "killer": "M10",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "defer": "rd",
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       },
+       "onAbort": {
+        "class": "plain",
+        "ref": "ab",
+        "name": "AbortError"
+       }
+      }
+     ]
+    }
+   },
+   "errs": [
+    {
+     "class": "plain",
+     "ref": "ab",
+     "name": "AbortError"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "advance",
+    "ms": 19999
+   },
+   {
+    "ev": "advance",
+    "ms": 1
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.timeout",
+     "message": "\ud130\ubbf8\ub110 \ub300\ud654\ub97c \uc77d\ub294 \ub370 \uc2dc\uac04\uc774 \ub108\ubb34 \uc624\ub798 \uac78\ub838\uc5b4."
+    }
+   },
+   "has": [
+    {
+     "c": "timer.set",
+     "a": {
+      "delay": 20000,
+      "due": 20000
+     }
+    },
+    {
+     "c": "timer.fire",
+     "a": {
+      "at": 20000
+     }
+    },
+    {
+     "c": "abort",
+     "a": {
+      "signal": "sig1"
+     }
+    }
+   ],
+   "order": [
+    {
+     "c": "advance",
+     "a": {
+      "ms": 19999
+     }
+    },
+    {
+     "c": "advance",
+     "a": {
+      "ms": 1
+     }
+    },
+    {
+     "c": "timer.fire"
+    }
+   ],
+   "noneBetween": [
+    [
+     {
+      "c": "timer.set"
+     },
+     {
+      "c": "advance",
+      "a": {
+       "ms": 1
+      }
+     },
+     {
+      "c": "timer.fire"
+     }
+    ]
+   ],
+   "counts": {
+    "timer.fire": 1
+   }
+  }
+ },
+ {
+  "id": "C04",
+  "name": "deadline-read-ignored",
+  "rule": "3.8",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "defer": "rd",
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "advance",
+    "ms": 20000
+   },
+   {
+    "ev": "settle",
+    "label": "rd"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "has": [
+    {
+     "c": "timer.fire"
+    },
+    {
+     "c": "abort",
+     "a": {
+      "signal": "sig1"
+     }
+    }
+   ],
+   "order": [
+    {
+     "c": "timer.fire"
+    },
+    {
+     "c": "settle"
+    },
+    {
+     "c": "createImported"
+    }
+   ]
+  }
+ },
+ {
+  "id": "C05",
+  "name": "deadline-options",
+  "rule": "3.8",
+  "world": {
+   "readers": {
+    "codex": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "makeCodexRunDeps": [
+    {
+     "ok": {
+      "ref": "codexRun"
+     },
+     "defer": "mk"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "codex:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "advance",
+    "ms": 20000
+   },
+   {
+    "ev": "settle",
+    "label": "mk"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "order": [
+    {
+     "c": "timer.set"
+    },
+    {
+     "c": "makeCodexRunDeps"
+    },
+    {
+     "c": "timer.fire"
+    },
+    {
+     "c": "settle"
+    },
+    {
+     "c": "reader"
+    }
+   ],
+   "has": [
+    {
+     "c": "reader",
+     "a": {
+      "engine": "codex",
+      "options": {
+       "aborted": true,
+       "keys": [
+        "signal",
+        "env",
+        "codex"
+       ]
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "C06",
+  "name": "verify-new-deadline",
+  "rule": "3.8",
+  "world": {
+   "readers": {
+    "grok": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "copy": [
+    {
+     "ok": {
+      "path": "/grok/copy1",
+      "skipped": 0
+     },
+     "verify": true,
+     "defer": "cp"
+    }
+   ],
+   "loadCheck": [
+    {
+     "defer": "lc",
+     "onAbort": {
+      "class": "plain",
+      "ref": "ab",
+      "name": "AbortError"
+     }
+    }
+   ],
+   "errs": [
+    {
+     "class": "plain",
+     "ref": "ab",
+     "name": "AbortError"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "advance",
+    "ms": 5000
+   },
+   {
+    "ev": "settle",
+    "label": "cp"
+   },
+   {
+    "ev": "advance",
+    "ms": 19999
+   },
+   {
+    "ev": "advance",
+    "ms": 1
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.timeout"
+    }
+   },
+   "has": [
+    {
+     "c": "timer.set",
+     "a": {
+      "id": 2,
+      "due": 25000
+     }
+    },
+    {
+     "c": "timer.fire",
+     "a": {
+      "id": 2,
+      "at": 25000
+     }
+    }
+   ],
+   "counts": {
+    "timer.set": 2,
+    "timer.fire": 1,
+    "rm": 0,
+    "createImported": 0
+   },
+   "order": [
+    {
+     "c": "timer.set",
+     "a": {
+      "id": 1
+     }
+    },
+    {
+     "c": "timer.clear",
+     "a": {
+      "id": 1
+     }
+    },
+    {
+     "c": "timer.set",
+     "a": {
+      "id": 2
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "C07",
+  "name": "cancel-reason-precedence",
+  "rule": "3.8",
+  "killer": "M12",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "defer": "rd",
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       },
+       "onAbort": {
+        "class": "plain",
+        "ref": "ab",
+        "name": "AbortError"
+       }
+      }
+     ]
+    }
+   },
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "R",
+     "message": "user stop"
+    },
+    {
+     "class": "plain",
+     "ref": "ab",
+     "name": "AbortError"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "handle",
+    "name": "c1"
+   },
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    },
+    "cancel": "c1"
+   },
+   {
+    "ev": "cancel",
+    "handle": "c1",
+    "reason": {
+     "class": "Error",
+     "ref": "R",
+     "message": "user stop"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "thrown",
+     "reason": "c1",
+     "ref": "R"
+    }
+   },
+   "counts": {
+    "createImported": 0
+   },
+   "has": [
+    {
+     "c": "abort",
+     "a": {
+      "signal": "sig1"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "C08",
+  "name": "cancel-during-race-rm",
+  "rule": "3.8",
+  "world": {
+   "readers": {
+    "grok": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "copy": [
+    {
+     "ok": {
+      "path": "/grok/copy1",
+      "skipped": 0
+     },
+     "verify": true,
+     "defer": "cp"
+    }
+   ],
+   "rm": [
+    {
+     "defer": "rmd"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "handle",
+    "name": "c1"
+   },
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    },
+    "cancel": "c1"
+   },
+   {
+    "ev": "mutate",
+    "op": "add",
+    "session": {
+     "id": "s9",
+     "title": "",
+     "externalThread": {
+      "engine": "grok",
+      "source": "grok:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    }
+   },
+   {
+    "ev": "settle",
+    "label": "cp"
+   },
+   {
+    "ev": "cancel",
+    "handle": "c1"
+   },
+   {
+    "ev": "settle",
+    "label": "rmd"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "s9",
+      "existing": true
+     },
+     "keys": [
+      "sessionId",
+      "existing"
+     ]
+    }
+   },
+   "counts": {
+    "rm": 1,
+    "createImported": 0
+   },
+   "order": [
+    {
+     "c": "rm"
+    },
+    {
+     "c": "abort"
+    },
+    {
+     "c": "settle"
+    }
+   ]
+  }
+ },
+ {
+  "id": "C09",
+  "name": "cancel-during-catch-rm",
+  "rule": "3.8",
+  "world": {
+   "readers": {
+    "grok": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "copy": [
+    {
+     "ok": {
+      "path": "/grok/copy1",
+      "skipped": 0
+     },
+     "verify": true
+    }
+   ],
+   "createImported": [
+    {
+     "mode": "fail-before-fill",
+     "throw": {
+      "class": "Error",
+      "ref": "e1",
+      "message": "create failed"
+     }
+    }
+   ],
+   "rm": [
+    {
+     "defer": "rmd"
+    }
+   ],
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "e1",
+     "message": "create failed"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "handle",
+    "name": "c1"
+   },
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    },
+    "cancel": "c1"
+   },
+   {
+    "ev": "cancel",
+    "handle": "c1"
+   },
+   {
+    "ev": "settle",
+    "label": "rmd"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "thrown",
+     "reason": "c1"
+    }
+   },
+   "counts": {
+    "rm": 1,
+    "createImported": 1
+   }
+  }
+ },
+ {
+  "id": "C10",
+  "name": "timer-listener-cleanup",
+  "rule": "3.8",
+  "world": {
+   "readers": {
+    "grok": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "copy": [
+    {
+     "ok": {
+      "path": "/grok/copy1",
+      "skipped": 0
+     },
+     "verify": true
+    }
+   ],
+   "createImported": [
+    {
+     "mode": "ok"
+    },
+    {
+     "mode": "fail-before-fill",
+     "throw": {
+      "class": "Error",
+      "ref": "e1",
+      "message": "create failed"
+     }
+    }
+   ],
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "e1",
+     "message": "create failed"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "handle",
+    "name": "c1"
+   },
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    },
+    "cancel": "c1"
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t2",
+     "mode": "fork"
+    },
+    "cancel": "c1"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    },
+    "r2": {
+     "terminal": "thrown",
+     "ref": "e1"
+    }
+   },
+   "matchCounts": [
+    [
+     {
+      "c": "timer.set"
+     },
+     4
+    ],
+    [
+     {
+      "c": "timer.clear"
+     },
+     4
+    ],
+    [
+     {
+      "c": "listener.add"
+     },
+     4
+    ],
+    [
+     {
+      "c": "listener.remove"
+     },
+     4
+    ]
+   ],
+   "timers": 0,
+   "listeners": {
+    "c1": 0
+   }
+  }
+ }
+]

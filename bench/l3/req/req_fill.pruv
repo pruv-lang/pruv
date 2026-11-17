@@ -1,0 +1,171 @@
+// L3-9 request ABI v1: the fill recipe of an opened session (ABI 4.8). Pruv decides the title, the turn flags, the bound
+// record flags (fork, lastTurnId, account) and the origin flags (omittedBefore, lastPlan) and the thread slot name; the host only
+// supplies time, a uuid per turn, modelFor and createImported and applies this recipe mechanically.
+//
+// View reply (host call 33), over its own pool: [0, title(3), omittedBefore(3), lastPlan(3), n, n x (prompt, reply, createdAt,
+// completedAt, tools, clipped)(18)], length 11 + 18 n.
+// Recipe (after the event block of call 32): ext slot(3), flags, slot name(3), title(3), lastPlan(3), source(3), thread(3),
+// mode(3), folder(3), engine(3), n, then 16 words per turn: flags, prompt(3), reply(3), createdAt(3), completedAt(3), tools(3).
+// Recipe flags: 1 account, 2 fork, 4 omittedBefore, 8 lastPlan, 16 lastTurnId. Turn flags: 1 createdAt is now, 2 completedAt, 4 tools, 8 clipped.
+
+pub fn view_ok(cr: [i64]) -> bool
+{
+  if len(cr) < 11 { return false; }
+  if crate::ent_u16::rd(cr, 0) != 0 { return false; }
+  let n: i64 = crate::ent_u16::rd(cr, 10);
+  if n < 0 || n > 16777216 { return false; }
+  return len(cr) == 11 + 18 * n;
+}
+
+// replace each run of JavaScript whitespace by one space
+pub fn collapse(a: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let n: i64 = len(a);
+  let mut o: [i64] = crate::ent_u16::zeros(n);
+  let mut k: i64 = 0;
+  let mut i: i64 = 0;
+  let mut inws: bool = false;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(a) && 0 <= k && k <= i
+    decreases n - i
+  {
+    let u: i64 = a[i];
+    if crate::ent_u16::is_trim_unit(u) {
+      if !inws {
+        crate::ent_u16::wr(inout o, k, 32);
+        k = k + 1;
+        inws = true;
+      }
+    } else {
+      crate::ent_u16::wr(inout o, k, u);
+      k = k + 1;
+      inws = false;
+    }
+    i = i + 1;
+  }
+  return crate::ent_u16::slice(o, 0, k);
+}
+
+// node path.basename (posix): the last segment after trailing slashes are dropped
+pub fn basename(a: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let n: i64 = len(a);
+  let mut e: i64 = n;
+  while e > 0 && a[e - 1] == 47
+    invariant 0 <= e && e <= n && n == len(a)
+    decreases e
+  { e = e - 1; }
+  let mut s: i64 = e;
+  while s > 0 && a[s - 1] != 47
+    invariant 0 <= s && s <= e && e <= n && n == len(a)
+    decreases s
+  { s = s - 1; }
+  return crate::ent_u16::slice(a, s, e);
+}
+
+// the title text source must be a string when it is truthy (a non-string would throw in the reference)
+pub fn title_ok(cr: [i64]) -> bool
+{
+  if crate::req_value::truthy(cr, 1) { return crate::ent_u16::rd(cr, 1) == 6; }
+  if crate::ent_u16::rd(cr, 10) > 0 && crate::req_value::truthy(cr, 11) { return crate::ent_u16::rd(cr, 11) == 6; }
+  return true;
+}
+
+// (external.title || turns[0]?.prompt || '').replace(/\s+/g,' ').trim().slice(0,80) || basename(folder) || folder
+pub fn title_pick(cpool: [i64], cr: [i64], folder: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let mut raw: [i64] = crate::ent_u16::empty();
+  if crate::req_value::truthy(cr, 1) {
+    raw = crate::req_value::units(cpool, cr, 1);
+  } else {
+    if crate::ent_u16::rd(cr, 10) > 0 && crate::req_value::truthy(cr, 11) {
+      raw = crate::req_value::units(cpool, cr, 11);
+    }
+  }
+  // MUTANT M15: a trailing high surrogate is dropped from the title cut
+  let t: [i64] = crate::ent_u16::slice(crate::ent_u16::trim(collapse(raw)), 0, 80);
+  if len(t) > 0 { return t; }
+  let b: [i64] = basename(folder);
+  if len(b) > 0 { return b; }
+  return copy(folder);
+}
+
+// the thread slot: engine, or engine ":" account for a non-empty account
+pub fn slot_name(p: [i64], rows: [i64], found: i64) -> [i64] ! alloc
+  requires 0 <= found && found <= 16777216
+  ensures len(result) >= 0
+{
+  let eng: [i64] = crate::req_value::units(p, rows, 18 * found + 3);
+  let acc: [i64] = crate::req_value::units(p, rows, 18 * found + 9);
+  // MUTANT M16: the thread slot name ignores the account
+  if len(acc) > 0 { return crate::ent_u16::cat(crate::ent_u16::cat(eng, crate::ent_u16::one(58)), acc); }
+  return eng;
+}
+
+// the number slot at p is greater than zero (other tags are not)
+fn gt0(w: [i64], p: i64) -> bool
+  requires 0 <= p && p <= 1000000000
+{
+  let t: i64 = crate::ent_u16::rd(w, p);
+  let lo: i64 = crate::ent_u16::rd(w, p + 1);
+  let hi: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 2), 4294967295);
+  if t == 4 { return lo > 0; }
+  if t == 5 {
+    if hi >= 2147483648 { return false; }
+    if crate::ent_value::is_zero_bits(lo, hi) { return false; }
+    if crate::ent_value::is_nan_bits(lo, hi) { return false; }
+    return true;
+  }
+  return false;
+}
+
+// the recipe: toff/tlen locate the title and soff/slen the slot name in the pool the call carries; base moves the view strings
+pub fn recipe(p: [i64], rec: [i64], rows: [i64], wk: [i64], found: i64, cr: [i64], toff: i64, tlen: i64, soff: i64, slen: i64, base: i64) -> [i64] ! alloc
+  requires 0 <= found && found <= 16777216
+  ensures len(result) >= 0
+{
+  let n: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(cr, 10), 16777216);
+  let mut o: [i64] = crate::ent_u16::zeros(29 + 16 * n);
+  crate::req_value::copy_slot(inout o, 0, wk, 21);
+  let mut fl: i64 = 0;
+  if crate::ent_u16::rd(rows, 18 * found + 9) == 6 && crate::ent_u16::rd(rows, 18 * found + 11) > 0 { fl = fl + 1; }
+  if crate::req_value::is_str_lit(p, rec, 33, "fork") && !crate::req_value::is_str_lit(p, rows, 18 * found + 3, "grok") { fl = fl + 2; }
+  if crate::req_value::truthy(cr, 4) { fl = fl + 4; }
+  if crate::req_value::truthy(cr, 7) { fl = fl + 8; }
+  if n > 0 { fl = fl + 16; }
+  crate::ent_u16::wr(inout o, 3, fl);
+  crate::req_value::put(inout o, 4, 6, soff, slen);
+  crate::req_value::put(inout o, 7, 6, toff, tlen);
+  crate::req_value::copy_slot_off(inout o, 10, cr, 7, base);
+  crate::req_value::copy_slot(inout o, 13, rec, 24);
+  crate::req_value::copy_slot(inout o, 16, rec, 30);
+  crate::req_value::copy_slot(inout o, 19, rec, 33);
+  crate::req_value::copy_slot(inout o, 22, wk, 15);
+  crate::req_value::copy_slot(inout o, 25, rows, 18 * found + 3);
+  crate::ent_u16::wr(inout o, 28, n);
+  let mut k: i64 = 0;
+  while k < n
+    invariant 0 <= k && k <= n && n <= 16777216
+    decreases n - k
+  {
+    let cb: i64 = 11 + 18 * k;
+    let tb: i64 = 29 + 16 * k;
+    let mut tf: i64 = 0;
+    if crate::req_value::nullish(cr, cb + 6) { tf = tf + 1; }
+    let ct: i64 = crate::ent_u16::rd(cr, cb + 9);
+    if ct != 0 && ct != 10 { tf = tf + 2; }
+    if gt0(cr, cb + 12) { tf = tf + 4; }
+    if crate::req_value::truthy(cr, cb + 15) { tf = tf + 8; }
+    crate::ent_u16::wr(inout o, tb, tf);
+    crate::req_value::copy_slot_off(inout o, tb + 1, cr, cb, base);
+    crate::req_value::copy_slot_off(inout o, tb + 4, cr, cb + 3, base);
+    crate::req_value::copy_slot_off(inout o, tb + 7, cr, cb + 6, base);
+    crate::req_value::copy_slot_off(inout o, tb + 10, cr, cb + 9, base);
+    crate::req_value::copy_slot_off(inout o, tb + 13, cr, cb + 12, base);
+    k = k + 1;
+  }
+  return o;
+}

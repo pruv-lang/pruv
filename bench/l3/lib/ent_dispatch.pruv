@@ -1,0 +1,185 @@
+// L3-8 entry: ops 2 find_source, 3 list_external, 4 read_external and the rethrow classification.
+// Each item is a replay function: crate::ent_state::Ctx in, Ctx out (see state.pruv for the observation API).
+
+// ---- op 2: first row whose source strictly equals the query ----
+pub fn find_item(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
+{
+  let r0: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx.blob, 1), 33554432);
+  let sec: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(cx.blob, r0 + 4), 8);
+  let cnt: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(cx.blob, r0 + 5), 16777216);
+  let base: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx.blob, sec), 33554432);
+  let mut found: i64 = 0 - 1;
+  let mut i: i64 = 0;
+  while i < cnt
+    invariant 0 <= i && i <= cnt && cnt <= 16777216 && 0 <= base && base <= 33554432 && 0 - 1 <= found && found < i
+    decreases cnt - i
+  {
+    if crate::ent_value::strict_eq(cx.blob, r0, cx.blob, base + 3 * i) {
+      // MUTANT M08: if found < 0 { found = i; } becomes found = i; (the last match wins)
+      if found < 0 { found = i; }
+    }
+    i = i + 1;
+  }
+  let mut rec: [i64] = crate::ent_u16::zeros(4);
+  crate::ent_u16::wr(inout rec, 0, 0);
+  if found >= 0 { crate::ent_packet::put_vs(inout rec, 1, 4, found, 0); }
+  let e: [i64] = crate::ent_u16::empty();
+  return crate::ent_state::set_done(cx, e, rec, e, 0);
+}
+
+// ---- route ----
+// 0 claude, 1 codex, 2 opencode, 3 qwen, else grok (4); the check order is fixed
+pub fn route(w: [i64], p: i64) -> i64 ! alloc
+  ensures 0 <= result && result <= 4
+{
+  if crate::ent_value::str_eq_lit(w, p, "claude") { return 0; }
+  if crate::ent_value::str_eq_lit(w, p, "codex") { return 1; }
+  if crate::ent_value::str_eq_lit(w, p, "opencode") { return 2; }
+  if crate::ent_value::str_eq_lit(w, p, "qwen") { return 3; }
+  // MUTANT M09: return 4; becomes return 1; (an unknown engine routes to codex)
+  return 4;
+}
+
+// invoke_engine request record: [9, route, opKind, source, folder, thread, options]; tp < 0 means thread absent (tag 10)
+fn req9(blob: [i64], rt: i64, opk: i64, sp: i64, fp: i64, tp: i64, op: i64) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let mut o: [i64] = crate::ent_u16::zeros(15);
+  crate::ent_u16::wr(inout o, 0, 9);
+  crate::ent_u16::wr(inout o, 1, rt);
+  crate::ent_u16::wr(inout o, 2, opk);
+  let a: i64 = crate::ent_u16::put_range(inout o, 3, blob, crate::ent_u16::clamp(sp, 4294967296), 3);
+  let b: i64 = crate::ent_u16::put_range(inout o, 6, blob, crate::ent_u16::clamp(fp, 4294967296), 3);
+  if tp < 0 {
+    crate::ent_packet::put_vs(inout o, 9, 10, 0, 0);
+  } else {
+    let c: i64 = crate::ent_u16::put_range(inout o, 9, blob, crate::ent_u16::clamp(tp, 4294967296), 3);
+  }
+  let d: i64 = crate::ent_u16::put_range(inout o, 12, blob, crate::ent_u16::clamp(op, 4294967296), 3);
+  return o;
+}
+
+// the input pool prefix (what the request's string slots refer to)
+pub fn blob_pool(blob: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let s: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(blob, 0), 33554432);
+  return crate::ent_u16::slice(blob, s, s + crate::ent_u16::clamp(crate::ent_packet::sec_len(blob, 0), 16777216));
+}
+
+// ---- rethrow: classification of the thrown value (E at record offset 1 of a throw answer) ----
+pub fn rethrow(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
+{
+  let rp: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx.ent, 1), 33554432);
+  let is_eie: bool = crate::ent_value::tag_at(cx.ent, rp + 4) == 3;
+  let is_err: bool = crate::ent_value::tag_at(cx.ent, rp + 7) == 3;
+  // MUTANT M11: AbortError passes through on name === 'AbortError' only; the mutant also requires is_err
+  let is_abort: bool = crate::ent_value::str_eq_lit(cx.ent, rp + 10, "AbortError");
+  let e: [i64] = crate::ent_u16::empty();
+  if is_eie || is_abort {
+    let mut rec: [i64] = crate::ent_u16::zeros(4);
+    crate::ent_u16::wr(inout rec, 0, 1);
+    let a: i64 = crate::ent_u16::put_range(inout rec, 1, cx.ent, rp + 1, 3);
+    return crate::ent_state::set_done(cx, e, rec, e, 0);
+  }
+  // MUTANT M12: has_detail is true (a non-Error detail is the stringified value "undefined")
+  let has_detail: bool = is_err;
+  let mut dl: i64 = 0;
+  if has_detail {
+    dl = 9;
+    if is_err { dl = crate::ent_value::str_len(cx.ent, rp + 13); }
+  }
+  let mut pool: [i64] = crate::ent_u16::zeros(11 + dl);
+  let p0: i64 = crate::ent_value::put_lit(inout pool, 0, "read-failed");
+  let mut rec: [i64] = crate::ent_u16::zeros(10);
+  crate::ent_u16::wr(inout rec, 0, 2);
+  crate::ent_packet::put_vs(inout rec, 1, 6, 0, 11);
+  if has_detail {
+    if is_err {
+      let q: i64 = crate::ent_u16::put_range(inout pool, 11, cx.ent, crate::ent_value::str_start(cx.ent, rp + 13), dl);
+    } else {
+      let q: i64 = crate::ent_value::put_lit(inout pool, 11, "undefined");
+    }
+    crate::ent_packet::put_vs(inout rec, 4, 6, 11, dl);
+  } else {
+    crate::ent_packet::put_vs(inout rec, 4, 0, 0, 0);
+  }
+  let c: i64 = crate::ent_u16::put_range(inout rec, 7, cx.ent, rp + 1, 3);
+  return crate::ent_state::set_done(cx, pool, rec, e, 0);
+}
+
+// ---- op 3: list_external ----
+fn list_recipe(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
+{
+  let rp: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx.ent, 1), 33554432);
+  let sec: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(cx.ent, rp + 2), 8);
+  let cnt: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(cx.ent, rp + 3), 16777216);
+  if cnt > 2396745 { return crate::ent_state::too_big(cx); }
+  let base: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx.ent, sec), 33554432);
+  let mut copies: i64 = 0;
+  let mut i: i64 = 0;
+  while i < cnt
+    invariant 0 <= i && i <= cnt && cnt <= 2396745 && 0 <= copies && copies <= i && 0 <= base && base <= 33554432
+    decreases cnt - i
+  {
+    if crate::ent_value::str_len(cx.ent, base + 6 * i + 3) > 200 { copies = copies + 1; }
+    i = i + 1;
+  }
+  if copies > 83886 { return crate::ent_state::too_big(cx); }
+  // title cut: exactly 200 UTF-16 units, so a trailing high surrogate may be kept
+  // MUTANT M10: the cut backs off a trailing high surrogate (199 units when unit 199 is a high surrogate)
+  let cut: i64 = 200;
+  let mut pool: [i64] = alloc(200 * copies, 0);
+  let mut tab: [i64] = alloc(7 * cnt, 0);
+  let mut k: i64 = 0;
+  let mut j: i64 = 0;
+  while j < cnt
+    invariant 0 <= j && j <= cnt && cnt <= 2396745 && 0 <= k && k <= j && copies <= 83886 && 0 <= base && base <= 33554432 && len(pool) == 200 * copies && len(tab) == 7 * cnt
+    decreases cnt - j
+  {
+    let rb: i64 = base + 6 * j;
+    let tb: i64 = 7 * j;
+    let a: i64 = crate::ent_u16::put_range(inout tab, tb + 1, cx.ent, rb, 3);
+    if crate::ent_value::str_len(cx.ent, rb + 3) > 200 {
+      crate::ent_u16::wr(inout tab, tb, 1);
+      crate::ent_packet::put_vs(inout tab, tb + 4, 6, 200 * k, cut);
+      let b: i64 = crate::ent_u16::put_range(inout pool, 200 * k, cx.ent, crate::ent_value::str_start(cx.ent, rb + 3), cut);
+      k = k + 1;
+    } else {
+      crate::ent_u16::wr(inout tab, tb, 0);
+    }
+    j = j + 1;
+  }
+  let mut rec: [i64] = crate::ent_u16::zeros(4);
+  crate::ent_u16::wr(inout rec, 0, 0);
+  crate::ent_packet::put_vs(inout rec, 1, 7, 4, cnt);
+  let e: [i64] = crate::ent_u16::empty();
+  return crate::ent_state::set_done(cx, pool, rec, tab, 1);
+}
+
+pub fn list_item(cx0: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
+{
+  let r0: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx0.blob, 1), 33554432);
+  let rq: [i64] = req9(cx0.blob, route(cx0.blob, r0), 0, r0 + 3, r0 + 6, 0 - 1, r0 + 9);
+  let e: [i64] = crate::ent_u16::empty();
+  let cx: crate::ent_state::Ctx = crate::ent_state::obs(cx0, 9, 0, blob_pool(cx0.blob), rq, e, 0);
+  if cx.stalled != 0 || cx.bad != 0 { return cx; }
+  if crate::ent_state::ent_r(cx, 0) == 1 { return rethrow(cx); }
+  return list_recipe(cx);
+}
+
+// ---- op 4: read_external ----
+pub fn read_item(cx0: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
+{
+  let r0: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx0.blob, 1), 33554432);
+  let rq: [i64] = req9(cx0.blob, route(cx0.blob, r0), 1, r0 + 3, r0 + 6, r0 + 9, r0 + 12);
+  let e: [i64] = crate::ent_u16::empty();
+  let cx: crate::ent_state::Ctx = crate::ent_state::obs(cx0, 9, 1, blob_pool(cx0.blob), rq, e, 0);
+  if cx.stalled != 0 || cx.bad != 0 { return cx; }
+  if crate::ent_state::ent_r(cx, 0) == 1 { return rethrow(cx); }
+  let mut rec: [i64] = crate::ent_u16::zeros(4);
+  crate::ent_u16::wr(inout rec, 0, 0);
+  let rp: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(cx.ent, 1), 33554432);
+  let a: i64 = crate::ent_u16::put_range(inout rec, 1, cx.ent, rp + 1, 3);
+  return crate::ent_state::set_done(cx, e, rec, e, 0);
+}

@@ -1,5 +1,7 @@
 # L3-8 engine-import common entry: implementation design
 
+> Path note (2026-11-17): the modules named below moved to `bench/l3/lib/` as `ent_<name>.pruv` (`crate::ent_<name>::`); the body of `root.pruv` is `bench/l3/lib/entry_api.pruv` and `root.pruv` only forwards. Compile with `--lib bench/l3/lib`. Older text below keeps the old file names.
+
 This implements `docs/ENGINE_IMPORT_ENTRY_SPEC.md`, and the specification wins on any conflict. The reference is
 `reference/backend-{engine-import,engine-import-bound,codex-home,accounts,engine-import-tail}.ts`, plus
 `../grok/reference/opencode.ts` (`opencodeDataDir`) and `reference/backend-engine-import-qwen.ts` (`qwenRuntimeDir`),

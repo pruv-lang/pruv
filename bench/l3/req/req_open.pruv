@@ -1,0 +1,71 @@
+// L3-9 request ABI v1: op 3 open handler helpers (ABI 4.7, 5.5). Pruv owns the opening registry decisions: the key,
+// has/add/busy/delete, and the release in the handler's finally. The host only receives the changes as OPENING_EVENT
+// observations (ABI 5.5 kind 70): an event block [n, (op, result, owner, key length, key units...)*] where op is
+// 0 has / 1 add / 2 delete.
+
+// engine ":" thread (UTF-16 units) of the open request: the engine of source row `found`, the thread at request slot 30
+pub fn key_of(p: [i64], rows: [i64], found: i64, rec: [i64]) -> [i64] ! alloc
+  requires 0 <= found && found <= 16777216
+  ensures len(result) >= 0
+{
+  return crate::ent_u16::cat(crate::ent_u16::cat(crate::req_value::units(p, rows, 18 * found + 3), crate::ent_u16::one(58)), crate::req_value::units(p, rec, 30));
+}
+
+// one event: [op, result, owner, klen, key...]
+pub fn ev(op: i64, res: i64, owner: i64, key: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let kl: i64 = crate::ent_u16::clamp(len(key), 16777216);
+  let mut o: [i64] = crate::ent_u16::zeros(4 + kl);
+  crate::ent_u16::wr(inout o, 0, op);
+  crate::ent_u16::wr(inout o, 1, res);
+  crate::ent_u16::wr(inout o, 2, owner);
+  crate::ent_u16::wr(inout o, 3, kl);
+  let c: i64 = crate::ent_u16::put_range(inout o, 4, key, 0, kl);
+  return o;
+}
+
+pub fn eb0() -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  return crate::ent_u16::zeros(1);
+}
+
+// an event block of n events from the concatenated event words
+pub fn eb(n: i64, evs: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  return crate::ent_u16::cat(crate::ent_u16::one(n), evs);
+}
+
+// the concatenation of two event blocks
+pub fn eb_cat(a: [i64], b: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let n: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(a, 0), 1000000) + crate::ent_u16::clamp(crate::ent_u16::rd(b, 0), 1000000);
+  return eb(n, crate::ent_u16::cat(crate::ent_u16::slice(a, 1, len(a)), crate::ent_u16::slice(b, 1, len(b))));
+}
+
+// the finally: the delete event of the opening request rid owns in the world (before the release), else an empty block
+pub fn rel_eb(world: [i64], rid: i64) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let k: i64 = crate::req_world::open_find_rid(world, rid);
+  // MUTANT M09: the finally no longer reports the opening delete event (shared by done_ev and open_fail)
+  if k < 0 { return eb0(); }
+  return eb(1, ev(2, 1, crate::req_world::open_word(world, k, 4), crate::req_world::open_key(world, k)));
+}
+
+// the acquire block of an open: has (false) then add
+pub fn acquire_eb(owner: i64, key: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  return eb(2, crate::ent_u16::cat(ev(0, 0, 0, key), ev(1, 1, owner, key)));
+}
+
+// a busy open: has (true)
+pub fn busy_eb(key: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  return eb(1, ev(0, 1, 0, key));
+}

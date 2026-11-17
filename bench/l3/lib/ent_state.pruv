@@ -8,10 +8,10 @@
 // exists; otherwise they stall the Ctx and record the request to emit. An item therefore looks like
 //
 //     pub fn my_item(cx0: Ctx) -> Ctx ! alloc {
-//       let cx1: Ctx = crate::state::ctx_cwd(cx0);            // observation (or ctx_accounts, ctx_stat, ...)
+//       let cx1: Ctx = crate::ent_state::ctx_cwd(cx0);            // observation (or ctx_accounts, ctx_stat, ...)
 //       if cx1.stalled != 0 || cx1.bad != 0 { return cx1; }    // MUST be checked after every observation
 //       ... read the answer with ent_r / ent_p over cx1.ent ...
-//       return crate::state::set_done(cx1, pool, rec, tab, ntab);
+//       return crate::ent_state::set_done(cx1, pool, rec, tab, ntab);
 //     }
 //
 // The input packet is cx.blob (kind 0, validated by packet::input_check, pool truncated to the referenced prefix).
@@ -34,18 +34,18 @@ pub fn repack(w: [i64], hi0: i64) -> [i64] ! alloc
   ensures len(result) >= 0
 {
   let n: i64 = len(w);
-  if n > 16777216 { return crate::u16::empty(); }
-  let hi: i64 = crate::u16::clamp(hi0, crate::packet::sec_len(w, 0));
-  let drop: i64 = crate::packet::sec_len(w, 0) - hi;
-  let hdr: i64 = 7 + crate::packet::nsec(w);
-  let s0: i64 = crate::packet::sec_start(w, 0);
-  let s1: i64 = crate::packet::sec_start(w, 1);
-  let mut o: [i64] = crate::u16::zeros(n - drop);
-  let a: i64 = crate::u16::put_range(inout o, 0, w, 0, hdr);
-  let b: i64 = crate::u16::put_range(inout o, crate::u16::clamp(a, 4294967296), w, s0, hi);
-  let c: i64 = crate::u16::put_range(inout o, crate::u16::clamp(b, 4294967296), w, s1, n - s1);
-  crate::u16::wr(inout o, 4, n - drop - 5);
-  crate::u16::wr(inout o, 7, hi);
+  if n > 16777216 { return crate::ent_u16::empty(); }
+  let hi: i64 = crate::ent_u16::clamp(hi0, crate::ent_packet::sec_len(w, 0));
+  let drop: i64 = crate::ent_packet::sec_len(w, 0) - hi;
+  let hdr: i64 = 7 + crate::ent_packet::nsec(w);
+  let s0: i64 = crate::ent_packet::sec_start(w, 0);
+  let s1: i64 = crate::ent_packet::sec_start(w, 1);
+  let mut o: [i64] = crate::ent_u16::zeros(n - drop);
+  let a: i64 = crate::ent_u16::put_range(inout o, 0, w, 0, hdr);
+  let b: i64 = crate::ent_u16::put_range(inout o, crate::ent_u16::clamp(a, 4294967296), w, s0, hi);
+  let c: i64 = crate::ent_u16::put_range(inout o, crate::ent_u16::clamp(b, 4294967296), w, s1, n - s1);
+  crate::ent_u16::wr(inout o, 4, n - drop - 5);
+  crate::ent_u16::wr(inout o, 7, hi);
   return o;
 }
 
@@ -69,17 +69,17 @@ pub fn log_ok(lg: [i64], op_id: i64) -> bool ! alloc
     invariant 0 <= pos && pos <= g && g == len(lg)
     decreases g - pos
   {
-    let n: i64 = crate::u16::rd(lg, pos);
+    let n: i64 = crate::ent_u16::rd(lg, pos);
     if n < 12 || n > g - pos { return false; }
-    let rc: i64 = crate::u16::rd(lg, pos + 1);
-    let ax: i64 = crate::u16::rd(lg, pos + 2);
+    let rc: i64 = crate::ent_u16::rd(lg, pos + 1);
+    let ax: i64 = crate::ent_u16::rd(lg, pos + 2);
     if rc < 1 || rc > 9 || ax < 0 || ax > 16777216 { return false; }
     if rc == 9 && ax > 1 { return false; }
-    let pk: [i64] = crate::u16::slice(lg, pos + 3, pos + n);
-    if crate::packet::env_check(pk) != 0 { return false; }
-    if crate::u16::rd(pk, 1) != 2 || crate::u16::rd(pk, 2) != op_id { return false; }
-    let hi: i64 = crate::packet::comp_check(pk, rc, ax);
-    if hi < 0 || hi != crate::packet::sec_len(pk, 0) { return false; }
+    let pk: [i64] = crate::ent_u16::slice(lg, pos + 3, pos + n);
+    if crate::ent_packet::env_check(pk) != 0 { return false; }
+    if crate::ent_u16::rd(pk, 1) != 2 || crate::ent_u16::rd(pk, 2) != op_id { return false; }
+    let hi: i64 = crate::ent_packet::comp_check(pk, rc, ax);
+    if hi < 0 || hi != crate::ent_packet::sec_len(pk, 0) { return false; }
     pos = pos + n;
   }
   return true;
@@ -92,13 +92,13 @@ pub fn log_append(lg: [i64], rc: i64, ax: i64, comp: [i64], hi: i64) -> [i64] ! 
   let pk: [i64] = repack(comp, hi);
   let a: i64 = len(lg);
   let b: i64 = len(pk);
-  if a > 16777216 || b > 16777216 { return crate::u16::zeros(16777217); }
-  let mut o: [i64] = crate::u16::zeros(a + b + 3);
-  let r1: i64 = crate::u16::put_all(inout o, 0, lg);
-  crate::u16::wr(inout o, a, b + 3);
-  crate::u16::wr(inout o, a + 1, rc);
-  crate::u16::wr(inout o, a + 2, ax);
-  let r2: i64 = crate::u16::put_all(inout o, crate::u16::clamp(a + 3, 4294967296), pk);
+  if a > 16777216 || b > 16777216 { return crate::ent_u16::zeros(16777217); }
+  let mut o: [i64] = crate::ent_u16::zeros(a + b + 3);
+  let r1: i64 = crate::ent_u16::put_all(inout o, 0, lg);
+  crate::ent_u16::wr(inout o, a, b + 3);
+  crate::ent_u16::wr(inout o, a + 1, rc);
+  crate::ent_u16::wr(inout o, a + 2, ax);
+  let r2: i64 = crate::ent_u16::put_all(inout o, crate::ent_u16::clamp(a + 3, 4294967296), pk);
   return o;
 }
 
@@ -108,37 +108,37 @@ pub fn encode_state(op: i64, code: i64, aux: i64, ck: [i64], blob: [i64], lg: [i
 {
   let lb: i64 = len(blob);
   let lgn: i64 = len(lg);
-  if lb > 16777216 || lgn > 16777216 { return crate::u16::zeros(16777217); }
+  if lb > 16777216 || lgn > 16777216 { return crate::ent_u16::zeros(16777217); }
   let total: i64 = 14 + lb + lgn;
-  if total > 16777216 { return crate::u16::zeros(16777217); }
-  let mut o: [i64] = crate::u16::zeros(total);
-  crate::u16::wr(inout o, 0, magic());
-  crate::u16::wr(inout o, 1, op);
-  crate::u16::wr(inout o, 2, code);
-  crate::u16::wr(inout o, 3, aux);
-  let r0: i64 = crate::u16::put_range(inout o, 4, ck, 0, 8);
-  crate::u16::wr(inout o, 12, lb);
-  crate::u16::wr(inout o, 13, lgn);
-  let r1: i64 = crate::u16::put_all(inout o, 14, blob);
-  let r2: i64 = crate::u16::put_all(inout o, 14 + lb, lg);
+  if total > 16777216 { return crate::ent_u16::zeros(16777217); }
+  let mut o: [i64] = crate::ent_u16::zeros(total);
+  crate::ent_u16::wr(inout o, 0, magic());
+  crate::ent_u16::wr(inout o, 1, op);
+  crate::ent_u16::wr(inout o, 2, code);
+  crate::ent_u16::wr(inout o, 3, aux);
+  let r0: i64 = crate::ent_u16::put_range(inout o, 4, ck, 0, 8);
+  crate::ent_u16::wr(inout o, 12, lb);
+  crate::ent_u16::wr(inout o, 13, lgn);
+  let r1: i64 = crate::ent_u16::put_all(inout o, 14, blob);
+  let r2: i64 = crate::ent_u16::put_all(inout o, 14 + lb, lg);
   return o;
 }
 
-pub fn st_code(st: [i64]) -> i64 { return crate::u16::rd(st, 2); }
-pub fn st_aux(st: [i64]) -> i64 { return crate::u16::rd(st, 3); }
-pub fn st_ck(st: [i64]) -> [i64] ! alloc ensures len(result) >= 0 { return crate::u16::slice(st, 4, 12); }
+pub fn st_code(st: [i64]) -> i64 { return crate::ent_u16::rd(st, 2); }
+pub fn st_aux(st: [i64]) -> i64 { return crate::ent_u16::rd(st, 3); }
+pub fn st_ck(st: [i64]) -> [i64] ! alloc ensures len(result) >= 0 { return crate::ent_u16::slice(st, 4, 12); }
 pub fn st_blob(st: [i64]) -> [i64] ! alloc
   ensures len(result) >= 0
 {
-  let l: i64 = crate::u16::clamp(crate::u16::rd(st, 12), 16777216);
-  return crate::u16::slice(st, 14, 14 + l);
+  let l: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(st, 12), 16777216);
+  return crate::ent_u16::slice(st, 14, 14 + l);
 }
 pub fn st_log(st: [i64]) -> [i64] ! alloc
   ensures len(result) >= 0
 {
-  let l: i64 = crate::u16::clamp(crate::u16::rd(st, 12), 16777216);
-  let g: i64 = crate::u16::clamp(crate::u16::rd(st, 13), 16777216);
-  return crate::u16::slice(st, 14 + l, 14 + l + g);
+  let l: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(st, 12), 16777216);
+  let g: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(st, 13), 16777216);
+  return crate::ent_u16::slice(st, 14 + l, 14 + l + g);
 }
 
 // the state of an await for (op, op_id) is well-formed; any violation is an InvalidPacket for the caller
@@ -161,11 +161,11 @@ pub fn state_ok(st: [i64], op: i64, op_id: i64) -> bool ! alloc
   if l < 13 || g < 0 || l > n || g > n { return false; }
   if 14 + l + g != n { return false; }
   let blob: [i64] = st_blob(st);
-  if crate::packet::env_check(blob) != 0 { return false; }
-  if crate::u16::rd(blob, 1) != 0 || crate::u16::rd(blob, 3) != 0 { return false; }
-  if crate::u16::rd(blob, 5) != op || crate::u16::rd(blob, 2) != op_id { return false; }
-  let hi: i64 = crate::packet::input_check(blob);
-  if hi < 0 || hi != crate::packet::sec_len(blob, 0) { return false; }
+  if crate::ent_packet::env_check(blob) != 0 { return false; }
+  if crate::ent_u16::rd(blob, 1) != 0 || crate::ent_u16::rd(blob, 3) != 0 { return false; }
+  if crate::ent_u16::rd(blob, 5) != op || crate::ent_u16::rd(blob, 2) != op_id { return false; }
+  let hi: i64 = crate::ent_packet::input_check(blob);
+  if hi < 0 || hi != crate::ent_packet::sec_len(blob, 0) { return false; }
   return log_ok(st_log(st), op_id);
 }
 
@@ -177,18 +177,18 @@ pub struct Ctx { op: i64, op_id: i64, pos: i64, stalled: i64, bad: i64, rcode: i
 
 pub fn ctx_new(op: i64, op_id: i64, blob: [i64], lg: [i64], ck: [i64]) -> Ctx ! alloc
 {
-  let e1: [i64] = crate::u16::empty();
-  let e2: [i64] = crate::u16::empty();
-  let e3: [i64] = crate::u16::empty();
-  let e4: [i64] = crate::u16::empty();
-  let e5: [i64] = crate::u16::empty();
-  let e6: [i64] = crate::u16::empty();
-  let e7: [i64] = crate::u16::empty();
-  let e8: [i64] = crate::u16::empty();
-  let e9: [i64] = crate::u16::empty();
-  let e10: [i64] = crate::u16::empty();
-  let mut k: [i64] = crate::u16::zeros(8);
-  let r: i64 = crate::u16::put_range(inout k, 0, ck, 0, 8);
+  let e1: [i64] = crate::ent_u16::empty();
+  let e2: [i64] = crate::ent_u16::empty();
+  let e3: [i64] = crate::ent_u16::empty();
+  let e4: [i64] = crate::ent_u16::empty();
+  let e5: [i64] = crate::ent_u16::empty();
+  let e6: [i64] = crate::ent_u16::empty();
+  let e7: [i64] = crate::ent_u16::empty();
+  let e8: [i64] = crate::ent_u16::empty();
+  let e9: [i64] = crate::ent_u16::empty();
+  let e10: [i64] = crate::ent_u16::empty();
+  let mut k: [i64] = crate::ent_u16::zeros(8);
+  let r: i64 = crate::ent_u16::put_range(inout k, 0, ck, 0, 8);
   return Ctx { op: op, op_id: op_id, pos: 0, stalled: 0, bad: 0, rcode: 0, raux: 0, rntab: 0, done: 0, ontab: 0,
                blob: copy(blob), lg: copy(lg), rpool: copy(e1), rrec: copy(e2), rtab: copy(e3), ent: copy(e4), ck: copy(k),
                opool: copy(e5), orec: copy(e6), otab: copy(e7),
@@ -201,11 +201,11 @@ pub fn obs(cx0: Ctx, code: i64, aux: i64, rpool: [i64], rrec: [i64], rtab: [i64]
   let mut cx: Ctx = cx0;
   if cx.stalled != 0 || cx.bad != 0 { return cx; }
   let g: i64 = len(cx.lg);
-  let pos: i64 = crate::u16::clamp(cx.pos, 4294967296);
+  let pos: i64 = crate::ent_u16::clamp(cx.pos, 4294967296);
   if pos < g {
-    let n: i64 = crate::u16::rd(cx.lg, pos);
-    let rc: i64 = crate::u16::rd(cx.lg, pos + 1);
-    let ax: i64 = crate::u16::rd(cx.lg, pos + 2);
+    let n: i64 = crate::ent_u16::rd(cx.lg, pos);
+    let rc: i64 = crate::ent_u16::rd(cx.lg, pos + 1);
+    let ax: i64 = crate::ent_u16::rd(cx.lg, pos + 2);
     if n < 12 || n > g - pos || rc != code || ax != aux {
       cx.bad = 1;
       return cx;
@@ -215,7 +215,7 @@ pub fn obs(cx0: Ctx, code: i64, aux: i64, rpool: [i64], rrec: [i64], rtab: [i64]
       cx.bad = 1;
       return cx;
     }
-    cx.ent = crate::u16::slice(cx.lg, pos + 3, pos + n);
+    cx.ent = crate::ent_u16::slice(cx.lg, pos + 3, pos + n);
     cx.pos = pos + n;
     return cx;
   }
@@ -237,19 +237,19 @@ pub fn obs(cx0: Ctx, code: i64, aux: i64, rpool: [i64], rrec: [i64], rtab: [i64]
 pub fn with_prev(cx0: Ctx, prev: [i64], exact: bool) -> Ctx ! alloc
 {
   let mut cx: Ctx = cx0;
-  let ns: i64 = crate::packet::nsec(prev);
-  let p0: i64 = crate::packet::sec_start(prev, 0);
-  let p1: i64 = crate::packet::sec_start(prev, 1);
+  let ns: i64 = crate::ent_packet::nsec(prev);
+  let p0: i64 = crate::ent_packet::sec_start(prev, 0);
+  let p1: i64 = crate::ent_packet::sec_start(prev, 1);
   cx.qon = 1;
   cx.qexact = 0;
   if exact { cx.qexact = 1; }
   cx.qns = ns;
-  cx.qpool = crate::u16::slice(prev, p0, p0 + crate::packet::sec_len(prev, 0));
-  cx.qrec = crate::u16::slice(prev, p1, p1 + crate::packet::sec_len(prev, 1));
-  cx.qtab = crate::u16::empty();
+  cx.qpool = crate::ent_u16::slice(prev, p0, p0 + crate::ent_packet::sec_len(prev, 0));
+  cx.qrec = crate::ent_u16::slice(prev, p1, p1 + crate::ent_packet::sec_len(prev, 1));
+  cx.qtab = crate::ent_u16::empty();
   if ns >= 5 {
-    let p4: i64 = crate::packet::sec_start(prev, 4);
-    cx.qtab = crate::u16::slice(prev, p4, p4 + crate::packet::sec_len(prev, 4));
+    let p4: i64 = crate::ent_packet::sec_start(prev, 4);
+    cx.qtab = crate::ent_u16::slice(prev, p4, p4 + crate::ent_packet::sec_len(prev, 4));
   }
   return cx;
 }
@@ -257,17 +257,17 @@ pub fn with_prev(cx0: Ctx, prev: [i64], exact: bool) -> Ctx ! alloc
 // the regenerated request (rpool, rrec, rtab, rntab) equals the one recorded by with_prev
 fn req_same(cx: Ctx, rpool: [i64], rrec: [i64], rtab: [i64], rntab: i64) -> bool ! alloc
 {
-  if !crate::u16::eq(cx.qrec, rrec) { return false; }
+  if !crate::ent_u16::eq(cx.qrec, rrec) { return false; }
   if cx.qexact != 0 {
-    if !crate::u16::eq(cx.qpool, rpool) { return false; }
+    if !crate::ent_u16::eq(cx.qpool, rpool) { return false; }
   } else {
     let lr: i64 = len(rpool);
     if len(cx.qpool) < lr { return false; }
-    if !crate::u16::eq(crate::u16::slice(cx.qpool, 0, lr), rpool) { return false; }
+    if !crate::ent_u16::eq(crate::ent_u16::slice(cx.qpool, 0, lr), rpool) { return false; }
   }
   if rntab != 0 {
     if cx.qns != 5 { return false; }
-    return crate::u16::eq(cx.qtab, rtab);
+    return crate::ent_u16::eq(cx.qtab, rtab);
   }
   return cx.qns == 4;
 }
@@ -289,11 +289,11 @@ pub fn log_cont(lg: [i64], op: i64, seq: i64, d: i64, s0: i64) -> bool ! alloc
     invariant 0 <= pos && pos <= g && g == len(lg) && 0 <= cnt && cnt <= pos && 0 <= ps && ps < seq
     decreases g - pos
   {
-    let n: i64 = crate::u16::rd(lg, pos);
+    let n: i64 = crate::ent_u16::rd(lg, pos);
     if n < 12 || n > g - pos { return false; }
-    let pk: [i64] = crate::u16::slice(lg, pos + 3, pos + n);
-    if crate::u16::rd(pk, 5) != op { return false; }
-    let s: i64 = crate::u16::rd(pk, 3);
+    let pk: [i64] = crate::ent_u16::slice(lg, pos + 3, pos + n);
+    if crate::ent_u16::rd(pk, 5) != op { return false; }
+    let s: i64 = crate::ent_u16::rd(pk, 3);
     if s <= ps || s >= seq { return false; }
     ps = s;
     cnt = cnt + 1;
@@ -306,11 +306,11 @@ pub fn log_cont(lg: [i64], op: i64, seq: i64, d: i64, s0: i64) -> bool ! alloc
 // ck7 = log entries dropped in total; every dropped level removed 1 or 2 entries)
 fn canon_ck_ok(ck: [i64]) -> bool
 {
-  let a: i64 = crate::u16::clamp(crate::u16::rd(ck, 3), 4294967296);
-  let b: i64 = crate::u16::clamp(crate::u16::rd(ck, 4), 4294967296);
-  let c: i64 = crate::u16::clamp(crate::u16::rd(ck, 5), 4294967296);
-  let d: i64 = crate::u16::clamp(crate::u16::rd(ck, 7), 4294967296);
-  if crate::u16::rd(ck, 6) != 0 { return false; }
+  let a: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(ck, 3), 4294967296);
+  let b: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(ck, 4), 4294967296);
+  let c: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(ck, 5), 4294967296);
+  let d: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(ck, 7), 4294967296);
+  if crate::ent_u16::rd(ck, 6) != 0 { return false; }
   if a > 33554432 || b > 33554432 || c > 33554432 || d > 4294967296 { return false; }
   let s: i64 = a + b + c;
   return s <= d && d <= 2 * s;
@@ -318,12 +318,12 @@ fn canon_ck_ok(ck: [i64]) -> bool
 
 fn ck_zero_from(ck: [i64], from: i64) -> bool
 {
-  let mut i: i64 = crate::u16::clamp(from, 8);
+  let mut i: i64 = crate::ent_u16::clamp(from, 8);
   while i < 8
     invariant 0 <= i && i <= 8
     decreases 8 - i
   {
-    if crate::u16::rd(ck, i) != 0 { return false; }
+    if crate::ent_u16::rd(ck, i) != 0 { return false; }
     i = i + 1;
   }
   return true;
@@ -337,13 +337,13 @@ pub fn ck_ok(op: i64, code: i64, ck: [i64]) -> bool
 {
   if len(ck) != 8 { return false; }
   if op == 6 {
-    if crate::u16::rd(ck, 0) != 0 || crate::u16::rd(ck, 1) != 0 || crate::u16::rd(ck, 2) != 0 { return false; }
+    if crate::ent_u16::rd(ck, 0) != 0 || crate::ent_u16::rd(ck, 1) != 0 || crate::ent_u16::rd(ck, 2) != 0 { return false; }
     return canon_ck_ok(ck);
   }
   if op != 1 { return ck_zero_from(ck, 0); }
-  let ph: i64 = crate::u16::clamp(crate::u16::rd(ck, 0), 4294967296) % 16;
-  let idx: i64 = crate::u16::rd(ck, 1);
-  let cnt: i64 = crate::u16::rd(ck, 2);
+  let ph: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(ck, 0), 4294967296) % 16;
+  let idx: i64 = crate::ent_u16::rd(ck, 1);
+  let cnt: i64 = crate::ent_u16::rd(ck, 2);
   if ph > 8 { return false; }
   let mut codes_ok: bool = false;
   if ph == 0 || ph == 6 || ph == 7 || ph == 8 { codes_ok = code == 4; }
@@ -365,15 +365,15 @@ pub fn ck_ok(op: i64, code: i64, ck: [i64]) -> bool
 pub fn st_s0(op: i64, ck: [i64]) -> i64
 {
   if op != 1 { return 1; }
-  return crate::u16::clamp(crate::u16::rd(ck, 0), 4294967296) / 16;
+  return crate::ent_u16::clamp(crate::ent_u16::rd(ck, 0), 4294967296) / 16;
 }
 
 // ck with word 0 reduced to the phase (the item start seq is carried separately by the op 1 driver)
 pub fn set_ck_arr0(ck: [i64]) -> [i64] ! alloc ensures len(result) >= 0
 {
-  let mut k: [i64] = crate::u16::zeros(8);
-  let r: i64 = crate::u16::put_range(inout k, 0, ck, 0, 8);
-  crate::u16::wr(inout k, 0, crate::u16::clamp(crate::u16::rd(ck, 0), 4294967296) % 16);
+  let mut k: [i64] = crate::ent_u16::zeros(8);
+  let r: i64 = crate::ent_u16::put_range(inout k, 0, ck, 0, 8);
+  crate::ent_u16::wr(inout k, 0, crate::ent_u16::clamp(crate::ent_u16::rd(ck, 0), 4294967296) % 16);
   return k;
 }
 
@@ -382,7 +382,7 @@ pub fn st_replay_ok(st: [i64], op: i64, seq: i64) -> bool ! alloc
 {
   let ck: [i64] = st_ck(st);
   if !ck_ok(op, st_code(st), ck) { return false; }
-  return log_cont(st_log(st), op, seq, crate::u16::rd(ck, 7), st_s0(op, ck));
+  return log_cont(st_log(st), op, seq, crate::ent_u16::rd(ck, 7), st_s0(op, ck));
 }
 
 // R3: remove the log entries [a, pos) (the ne entries consumed by a failed climb level), put the cursor at a, and count the
@@ -390,39 +390,39 @@ pub fn st_replay_ok(st: [i64], op: i64, seq: i64) -> bool ! alloc
 pub fn drop_level(cx0: Ctx, a: i64, slot: i64, ne: i64) -> Ctx ! alloc
 {
   let mut cx: Ctx = cx0;
-  let p: i64 = crate::u16::clamp(cx.pos, 4294967296);
-  let a1: i64 = crate::u16::clamp(a, p);
+  let p: i64 = crate::ent_u16::clamp(cx.pos, 4294967296);
+  let a1: i64 = crate::ent_u16::clamp(a, p);
   let g: i64 = len(cx.lg);
-  cx.lg = crate::u16::cat(crate::u16::slice(cx.lg, 0, a1), crate::u16::slice(cx.lg, p, g));
+  cx.lg = crate::ent_u16::cat(crate::ent_u16::slice(cx.lg, 0, a1), crate::ent_u16::slice(cx.lg, p, g));
   cx.pos = a1;
-  let c1: Ctx = set_ck(cx, slot, crate::u16::clamp(get_ck(cx, slot), 4294967296) + 1);
-  return set_ck(c1, 7, crate::u16::clamp(get_ck(c1, 7), 4294967296) + crate::u16::clamp(ne, 2));
+  let c1: Ctx = set_ck(cx, slot, crate::ent_u16::clamp(get_ck(cx, slot), 4294967296) + 1);
+  return set_ck(c1, 7, crate::ent_u16::clamp(get_ck(c1, 7), 4294967296) + crate::ent_u16::clamp(ne, 2));
 }
 
 pub fn ctx_accounts(cx: Ctx, eng: i64) -> Ctx ! alloc
 {
-  let mut r: [i64] = crate::u16::zeros(2);
-  crate::u16::wr(inout r, 0, 1);
-  crate::u16::wr(inout r, 1, eng);
-  let e: [i64] = crate::u16::empty();
+  let mut r: [i64] = crate::ent_u16::zeros(2);
+  crate::ent_u16::wr(inout r, 0, 1);
+  crate::ent_u16::wr(inout r, 1, eng);
+  let e: [i64] = crate::ent_u16::empty();
   return obs(cx, 1, 0, e, r, e, 0);
 }
 
 pub fn ctx_account_at(cx: Ctx, eng: i64, idx: i64) -> Ctx ! alloc
 {
-  let mut r: [i64] = crate::u16::zeros(3);
-  crate::u16::wr(inout r, 0, 2);
-  crate::u16::wr(inout r, 1, eng);
-  crate::u16::wr(inout r, 2, idx);
-  let e: [i64] = crate::u16::empty();
+  let mut r: [i64] = crate::ent_u16::zeros(3);
+  crate::ent_u16::wr(inout r, 0, 2);
+  crate::ent_u16::wr(inout r, 1, eng);
+  crate::ent_u16::wr(inout r, 2, idx);
+  let e: [i64] = crate::ent_u16::empty();
   return obs(cx, 2, 0, e, r, e, 0);
 }
 
 fn ctx_nullary(cx: Ctx, code: i64) -> Ctx ! alloc
 {
-  let mut r: [i64] = crate::u16::zeros(1);
-  crate::u16::wr(inout r, 0, code);
-  let e: [i64] = crate::u16::empty();
+  let mut r: [i64] = crate::ent_u16::zeros(1);
+  crate::ent_u16::wr(inout r, 0, code);
+  let e: [i64] = crate::ent_u16::empty();
   return obs(cx, code, 0, e, r, e, 0);
 }
 
@@ -432,12 +432,12 @@ pub fn ctx_cwd(cx: Ctx) -> Ctx ! alloc { return ctx_nullary(cx, 5); }
 
 fn ctx_path(cx: Ctx, code: i64, path: [i64]) -> Ctx ! alloc
 {
-  let mut r: [i64] = crate::u16::zeros(4);
-  crate::u16::wr(inout r, 0, code);
-  crate::u16::wr(inout r, 1, 6);
-  crate::u16::wr(inout r, 2, 0);
-  crate::u16::wr(inout r, 3, len(path));
-  let e: [i64] = crate::u16::empty();
+  let mut r: [i64] = crate::ent_u16::zeros(4);
+  crate::ent_u16::wr(inout r, 0, code);
+  crate::ent_u16::wr(inout r, 1, 6);
+  crate::ent_u16::wr(inout r, 2, 0);
+  crate::ent_u16::wr(inout r, 3, len(path));
+  let e: [i64] = crate::ent_u16::empty();
   return obs(cx, code, 0, path, r, e, 0);
 }
 
@@ -445,19 +445,19 @@ pub fn ctx_realpath(cx: Ctx, path: [i64]) -> Ctx ! alloc { return ctx_path(cx, 6
 pub fn ctx_stat(cx: Ctx, path: [i64]) -> Ctx ! alloc { return ctx_path(cx, 7, path); }
 
 // answer packet addressing: record word k, pool unit k, word k of section s
-pub fn ent_r(cx: Ctx, k: i64) -> i64 { return crate::u16::rd(cx.ent, crate::packet::sec_start(cx.ent, 1) + crate::u16::clamp(k, 4294967296)); }
-pub fn ent_p(cx: Ctx, k: i64) -> i64 { return crate::u16::rd(cx.ent, crate::packet::sec_start(cx.ent, 0) + crate::u16::clamp(k, 4294967296)); }
-pub fn ent_s(cx: Ctx, s: i64, k: i64) -> i64 { return crate::u16::rd(cx.ent, crate::packet::sec_start(cx.ent, s) + crate::u16::clamp(k, 4294967296)); }
+pub fn ent_r(cx: Ctx, k: i64) -> i64 { return crate::ent_u16::rd(cx.ent, crate::ent_packet::sec_start(cx.ent, 1) + crate::ent_u16::clamp(k, 4294967296)); }
+pub fn ent_p(cx: Ctx, k: i64) -> i64 { return crate::ent_u16::rd(cx.ent, crate::ent_packet::sec_start(cx.ent, 0) + crate::ent_u16::clamp(k, 4294967296)); }
+pub fn ent_s(cx: Ctx, s: i64, k: i64) -> i64 { return crate::ent_u16::rd(cx.ent, crate::ent_packet::sec_start(cx.ent, s) + crate::ent_u16::clamp(k, 4294967296)); }
 
 pub fn set_ck(cx0: Ctx, i: i64, v: i64) -> Ctx ! alloc
 {
   let mut cx: Ctx = cx0;
-  let mut k: [i64] = crate::u16::slice(cx.ck, 0, 8);
-  crate::u16::wr(inout k, i, v);
+  let mut k: [i64] = crate::ent_u16::slice(cx.ck, 0, 8);
+  crate::ent_u16::wr(inout k, i, v);
   cx.ck = copy(k);
   return cx;
 }
-pub fn get_ck(cx: Ctx, i: i64) -> i64 { return crate::u16::rd(cx.ck, i); }
+pub fn get_ck(cx: Ctx, i: i64) -> i64 { return crate::ent_u16::rd(cx.ck, i); }
 
 pub fn set_done(cx0: Ctx, pool: [i64], rec: [i64], tab: [i64], ntab: i64) -> Ctx ! alloc
 {
@@ -489,17 +489,17 @@ pub fn fail(cx0: Ctx) -> Ctx ! alloc
 pub fn finish(cx: Ctx, aseq: i64, dseq: i64) -> [i64] ! alloc
   ensures len(result) >= 0
 {
-  if cx.bad == 2 { return crate::packet::boundary(cx.op, cx.op_id, 1); }
-  if cx.bad != 0 { return crate::packet::boundary(cx.op, cx.op_id, 0); }
+  if cx.bad == 2 { return crate::ent_packet::boundary(cx.op, cx.op_id, 1); }
+  if cx.bad != 0 { return crate::ent_packet::boundary(cx.op, cx.op_id, 0); }
   // R1(c): the replay must have consumed the whole log; leftover entries are a protocol error
-  if crate::u16::clamp(cx.pos, 4294967296) != len(cx.lg) { return crate::packet::boundary(cx.op, cx.op_id, 0); }
-  let e: [i64] = crate::u16::empty();
+  if crate::ent_u16::clamp(cx.pos, 4294967296) != len(cx.lg) { return crate::ent_packet::boundary(cx.op, cx.op_id, 0); }
+  let e: [i64] = crate::ent_u16::empty();
   if cx.stalled != 0 {
     let st: [i64] = encode_state(cx.op, cx.rcode, cx.raux, cx.ck, cx.blob, cx.lg);
-    return crate::packet::mk_packet(1, cx.op_id, aseq, cx.op, cx.rpool, cx.rrec, st, e, cx.rtab, cx.rntab);
+    return crate::ent_packet::mk_packet(1, cx.op_id, aseq, cx.op, cx.rpool, cx.rrec, st, e, cx.rtab, cx.rntab);
   }
   if cx.done != 0 {
-    return crate::packet::mk_packet(3, cx.op_id, dseq, cx.op, cx.opool, cx.orec, e, e, cx.otab, cx.ontab);
+    return crate::ent_packet::mk_packet(3, cx.op_id, dseq, cx.op, cx.opool, cx.orec, e, e, cx.otab, cx.ontab);
   }
-  return crate::packet::boundary(cx.op, cx.op_id, 2);
+  return crate::ent_packet::boundary(cx.op, cx.op_id, 2);
 }

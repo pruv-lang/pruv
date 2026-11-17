@@ -1,0 +1,869 @@
+[
+ {
+  "id": "D01",
+  "name": "codex-list",
+  "rule": "3.9",
+  "world": {
+   "readers": {
+    "codex": {
+     "list": [
+      {
+       "ok": []
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "codex:home",
+     "folder": "/proj"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "items": []
+     }
+    }
+   },
+   "counts": {
+    "makeCodexRunDeps": 1
+   },
+   "has": [
+    {
+     "c": "makeCodexRunDeps",
+     "a": {
+      "source": "codex:home",
+      "dataDir": "/data"
+     }
+    },
+    {
+     "c": "reader",
+     "a": {
+      "engine": "codex",
+      "options": {
+       "keys": [
+        "signal",
+        "env",
+        "codex"
+       ],
+       "env": "deps.env"
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "D02",
+  "name": "codex-open",
+  "rule": "3.9",
+  "world": {
+   "readers": {
+    "codex": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "codex:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "counts": {
+    "makeCodexRunDeps": 1,
+    "locateAcp": 0,
+    "tempRoot": 0
+   },
+   "has": [
+    {
+     "c": "reader",
+     "a": {
+      "engine": "codex",
+      "options": {
+       "keys": [
+        "signal",
+        "env",
+        "codex"
+       ],
+       "env": "deps.env",
+       "codex": "@ref:codexRun"
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "D03",
+  "name": "codex-prepare-throw",
+  "rule": "3.9",
+  "world": {
+   "readers": {
+    "codex": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "makeCodexRunDeps": [
+    {
+     "reject": {
+      "class": "Error",
+      "ref": "e1",
+      "message": "no codex"
+     }
+    }
+   ],
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "e1",
+     "message": "no codex"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "codex:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "thrown",
+     "ref": "e1"
+    }
+   },
+   "counts": {
+    "reader": 0,
+    "createImported": 0
+   }
+  }
+ },
+ {
+  "id": "D04",
+  "name": "opencode-list-no-locate",
+  "rule": "3.9",
+  "world": {
+   "readers": {
+    "opencode": {
+     "list": [
+      {
+       "ok": []
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "opencode:home",
+     "folder": "/proj"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok"
+    }
+   },
+   "counts": {
+    "locateAcp": 0,
+    "tempRoot": 0
+   },
+   "has": [
+    {
+     "c": "reader",
+     "a": {
+      "engine": "opencode",
+      "options": {
+       "keys": [
+        "signal",
+        "env"
+       ],
+       "env": "deps.env"
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "D05",
+  "name": "opencode-open-binary",
+  "rule": "3.9",
+  "world": {
+   "readers": {
+    "opencode": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "opencode:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "counts": {
+    "locateAcp": 1,
+    "tempRoot": 1
+   },
+   "has": [
+    {
+     "c": "locateAcp",
+     "a": [
+      "opencode"
+     ]
+    },
+    {
+     "c": "reader",
+     "a": {
+      "engine": "opencode",
+      "options": {
+       "keys": [
+        "signal",
+        "env",
+        "opencode"
+       ],
+       "env": "deps.env",
+       "opencode": {
+        "binary": "/bin/opencode",
+        "tempRoot": "/tmp/lair-root"
+       }
+      }
+     }
+    }
+   ],
+   "order": [
+    {
+     "c": "locateAcp"
+    },
+    {
+     "c": "tempRoot"
+    },
+    {
+     "c": "reader"
+    }
+   ]
+  }
+ },
+ {
+  "id": "D06",
+  "name": "opencode-no-binary",
+  "rule": "3.9",
+  "world": {
+   "readers": {
+    "opencode": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "locateAcp": [
+    {
+     "ok": {
+      "binary": ""
+     }
+    },
+    {
+     "ok": {
+      "binary": {
+       "undef": 1
+      }
+     }
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "opencode:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "opencode:home",
+     "folder": "/proj",
+     "thread": "t2",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    },
+    "r2": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-2"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "counts": {
+    "locateAcp": 2,
+    "tempRoot": 0
+   },
+   "matchCounts": [
+    [
+     {
+      "c": "reader",
+      "a": {
+       "engine": "opencode",
+       "options": {
+        "keys": [
+         "signal",
+         "env"
+        ],
+        "env": "deps.env"
+       }
+      }
+     },
+     2
+    ]
+   ]
+  }
+ },
+ {
+  "id": "D07",
+  "name": "locate-reject",
+  "rule": "3.9",
+  "world": {
+   "readers": {
+    "opencode": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "locateAcp": [
+    {
+     "reject": {
+      "class": "Error",
+      "ref": "e1",
+      "message": "locate failed"
+     }
+    }
+   ],
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "e1",
+     "message": "locate failed"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "opencode:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "thrown",
+     "ref": "e1"
+    }
+   },
+   "counts": {
+    "reader": 0,
+    "tempRoot": 0
+   }
+  }
+ },
+ {
+  "id": "D08",
+  "name": "temp-root-reject",
+  "rule": "3.9",
+  "world": {
+   "readers": {
+    "opencode": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "tempRoot": [
+    {
+     "reject": {
+      "class": "Error",
+      "ref": "e1",
+      "message": "tmp failed"
+     }
+    }
+   ],
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "e1",
+     "message": "tmp failed"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "opencode:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "thrown",
+     "ref": "e1"
+    }
+   },
+   "counts": {
+    "reader": 0,
+    "locateAcp": 1
+   }
+  }
+ },
+ {
+  "id": "D09",
+  "name": "env-signal-identity",
+  "rule": "3.9",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ],
+     "list": [
+      {
+       "ok": []
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj"
+    }
+   },
+   {
+    "ev": "handle",
+    "name": "c1"
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    },
+    "cancel": "c1"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok"
+    },
+    "r2": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "matchCounts": [
+    [
+     {
+      "c": "reader",
+      "a": {
+       "op": "list",
+       "options": {
+        "signal": "sig1",
+        "env": "deps.env"
+       }
+      }
+     },
+     1
+    ],
+    [
+     {
+      "c": "reader",
+      "a": {
+       "op": "read",
+       "options": {
+        "signal": "sig2",
+        "env": "deps.env"
+       }
+      }
+     },
+     1
+    ],
+    [
+     {
+      "c": "reader",
+      "a": {
+       "options": {
+        "signal": "c1"
+       }
+      }
+     },
+     0
+    ]
+   ]
+  }
+ },
+ {
+  "id": "D10",
+  "name": "claude-qwen-no-preparation",
+  "rule": "3.9",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ],
+     "list": [
+      {
+       "ok": []
+      }
+     ]
+    },
+    "qwen": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ],
+     "list": [
+      {
+       "ok": []
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r3",
+    "op": "list",
+    "input": {
+     "source": "qwen:home",
+     "folder": "/proj"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r4",
+    "op": "open",
+    "input": {
+     "source": "qwen:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok"
+    },
+    "r2": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    },
+    "r3": {
+     "terminal": "ok"
+    },
+    "r4": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-2"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "matchCounts": [
+    [
+     {
+      "c": "reader",
+      "a": {
+       "engine": "claude",
+       "options": {
+        "keys": [
+         "signal",
+         "env"
+        ],
+        "env": "deps.env"
+       }
+      }
+     },
+     2
+    ],
+    [
+     {
+      "c": "reader",
+      "a": {
+       "engine": "qwen",
+       "options": {
+        "keys": [
+         "signal",
+         "env"
+        ],
+        "env": "deps.env"
+       }
+      }
+     },
+     2
+    ]
+   ],
+   "counts": {
+    "makeCodexRunDeps": 0,
+    "locateAcp": 0,
+    "tempRoot": 0
+   }
+  }
+ }
+]

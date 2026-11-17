@@ -1,0 +1,39 @@
+// L3-9 request ABI v1 (ABI.md 4.5): section 2 control state = 16-word block + 16-word frame rows.
+// block: 0 magic, 1 version, 2 owner token, 3 frame count, 4 next frame id, 5.. refs (unused in M1), 15 zero.
+// frame row: 0 frame id, 1 role, 2 pc, 3 return promise, 4 awaited promise, 5 parent, 6 child call id, 7 child op,
+// 8 child seq, 9 timer, 10 controller, 11 listener, 12 copy token, 13 callback token, 14 local data ref, 15 status.
+// M1 keeps one handler frame (role 1). pc: 0 source construction (child op 1), 1 source lookup (child op 2).
+
+pub fn m_ctl() -> i64 ensures result == 1381061425 { return 1381061425; }
+
+pub fn new_state(owner: i64, pc: i64, ccall: i64, cop: i64, cseq: i64, status: i64) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let mut s: [i64] = crate::ent_u16::zeros(32);
+  crate::ent_u16::wr(inout s, 0, 1381061425);
+  crate::ent_u16::wr(inout s, 1, 1);
+  crate::ent_u16::wr(inout s, 2, owner);
+  crate::ent_u16::wr(inout s, 3, 1);
+  crate::ent_u16::wr(inout s, 4, 2);
+  crate::ent_u16::wr(inout s, 16, 1);
+  crate::ent_u16::wr(inout s, 17, 1);
+  crate::ent_u16::wr(inout s, 18, pc);
+  crate::ent_u16::wr(inout s, 22, ccall);
+  crate::ent_u16::wr(inout s, 23, cop);
+  crate::ent_u16::wr(inout s, 24, cseq);
+  crate::ent_u16::wr(inout s, 31, status);
+  return s;
+}
+
+// structure of a state section written by new_state
+pub fn state_ok(s: [i64]) -> bool
+{
+  if len(s) != 32 { return false; }
+  if crate::ent_u16::rd(s, 0) != 1381061425 || crate::ent_u16::rd(s, 1) != 1 { return false; }
+  if crate::ent_u16::rd(s, 3) != 1 || crate::ent_u16::rd(s, 4) != 2 { return false; }
+  if crate::ent_u16::rd(s, 16) != 1 || crate::ent_u16::rd(s, 17) != 1 { return false; }
+  return true;
+}
+
+pub fn owner(s: [i64]) -> i64 { return crate::ent_u16::rd(s, 2); }
+pub fn pc(s: [i64]) -> i64 { return crate::ent_u16::rd(s, 18); }

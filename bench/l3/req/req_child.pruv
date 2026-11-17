@@ -1,0 +1,146 @@
+// L3-9 request ABI v1 (ABI.md 2.1, 6): child entry invocation. The parent allocates the child call id (= the child op_id):
+// 1 for op 1 (fresh sources), 2 for op 2 (first match). The child packet is the L3-8 entry packet (bench/l3/lib).
+// Rows in section 3 of each child packet are only that step's new rows; the parent accepts each once, in order.
+
+// op 1 input: pool, the 24-word record [dataDir, env x7]. The entry input envelope has exactly two sections (pool, record):
+// sections >= 2 are table sections and every one must be claimed by a slot.
+pub fn in1(pool: [i64], rec: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let r: [i64] = crate::ent_u16::slice(rec, 0, 24);
+  let lp: i64 = len(pool);
+  if lp > 16777216 { return crate::ent_packet::boundary(1, 1, 1); }
+  let total: i64 = 9 + lp + 24;
+  let mut o: [i64] = crate::ent_u16::zeros(total);
+  crate::ent_u16::wr(inout o, 0, 1);
+  crate::ent_u16::wr(inout o, 2, 1);
+  crate::ent_u16::wr(inout o, 4, total - 5);
+  crate::ent_u16::wr(inout o, 5, 1);
+  crate::ent_u16::wr(inout o, 6, 2);
+  crate::ent_u16::wr(inout o, 7, lp);
+  crate::ent_u16::wr(inout o, 8, 24);
+  let a: i64 = crate::ent_u16::put_all(inout o, 9, pool);
+  let b: i64 = crate::ent_u16::put_all(inout o, 9 + lp, r);
+  return o;
+}
+
+// op 2 input (envelope: pool, record, one table section): record [query slot, table slot], table = the source slot of every accumulated row (3-word rows)
+pub fn in2(pool: [i64], rec: [i64], rows: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let n: i64 = crate::ent_u16::clamp(len(rows), 16777216) / 18;
+  let mut tab: [i64] = crate::ent_u16::zeros(3 * n);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n <= 932067
+    decreases n - i
+  {
+    crate::req_value::copy_slot(inout tab, 3 * i, rows, 18 * i);
+    i = i + 1;
+  }
+  let mut r: [i64] = crate::ent_u16::zeros(6);
+  crate::req_value::copy_slot(inout r, 0, rec, 24);
+  crate::req_value::put(inout r, 3, 7, 2, n);
+  let lp: i64 = len(pool);
+  if lp > 16777216 || 3 * n > 16777216 { return crate::ent_packet::boundary(2, 2, 1); }
+  let total: i64 = 10 + lp + 6 + 3 * n;
+  let mut o: [i64] = crate::ent_u16::zeros(total);
+  crate::ent_u16::wr(inout o, 0, 1);
+  crate::ent_u16::wr(inout o, 2, 2);
+  crate::ent_u16::wr(inout o, 4, total - 5);
+  crate::ent_u16::wr(inout o, 5, 2);
+  crate::ent_u16::wr(inout o, 6, 3);
+  crate::ent_u16::wr(inout o, 7, lp);
+  crate::ent_u16::wr(inout o, 8, 6);
+  crate::ent_u16::wr(inout o, 9, 3 * n);
+  let a: i64 = crate::ent_u16::put_all(inout o, 10, pool);
+  let b: i64 = crate::ent_u16::put_all(inout o, 10 + lp, r);
+  let c: i64 = crate::ent_u16::put_all(inout o, 16 + lp, tab);
+  return o;
+}
+
+// op 3 input (list_item, envelope: pool + record): record [engine slot, source ref slot, folder slot, options ref slot]
+pub fn in3(pool: [i64], rec: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let r: [i64] = crate::ent_u16::slice(rec, 0, 12);
+  let lp: i64 = len(pool);
+  if lp > 16777216 { return crate::ent_packet::boundary(3, 3, 1); }
+  let total: i64 = 9 + lp + 12;
+  let mut o: [i64] = crate::ent_u16::zeros(total);
+  crate::ent_u16::wr(inout o, 0, 1);
+  crate::ent_u16::wr(inout o, 2, 3);
+  crate::ent_u16::wr(inout o, 4, total - 5);
+  crate::ent_u16::wr(inout o, 5, 3);
+  crate::ent_u16::wr(inout o, 6, 2);
+  crate::ent_u16::wr(inout o, 7, lp);
+  crate::ent_u16::wr(inout o, 8, 12);
+  let a: i64 = crate::ent_u16::put_all(inout o, 9, pool);
+  let b: i64 = crate::ent_u16::put_all(inout o, 9 + lp, r);
+  return o;
+}
+
+// op 4 input (read_item, envelope: pool + record): record [engine slot, source ref slot, folder slot, thread slot, options ref slot]
+pub fn in4(pool: [i64], rec: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let r: [i64] = crate::ent_u16::slice(rec, 0, 15);
+  let lp: i64 = len(pool);
+  if lp > 16777216 { return crate::ent_packet::boundary(4, 4, 1); }
+  let total: i64 = 9 + lp + 15;
+  let mut o: [i64] = crate::ent_u16::zeros(total);
+  crate::ent_u16::wr(inout o, 0, 1);
+  crate::ent_u16::wr(inout o, 2, 4);
+  crate::ent_u16::wr(inout o, 4, total - 5);
+  crate::ent_u16::wr(inout o, 5, 4);
+  crate::ent_u16::wr(inout o, 6, 2);
+  crate::ent_u16::wr(inout o, 7, lp);
+  crate::ent_u16::wr(inout o, 8, 15);
+  let a: i64 = crate::ent_u16::put_all(inout o, 9, pool);
+  let b: i64 = crate::ent_u16::put_all(inout o, 9 + lp, r);
+  return o;
+}
+
+pub fn kind(co: [i64]) -> i64 { return crate::ent_u16::rd(co, 1); }
+pub fn call_id(co: [i64]) -> i64 { return crate::ent_u16::rd(co, 2); }
+pub fn seq(co: [i64]) -> i64 { return crate::ent_u16::rd(co, 3); }
+pub fn op(co: [i64]) -> i64 { return crate::ent_u16::rd(co, 5); }
+
+fn sec(co: [i64], i: i64) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let s: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(co, i), 33554432);
+  return crate::ent_u16::slice(co, s, s + crate::ent_packet::sec_len(co, i));
+}
+
+// section k (>= 2) of a child packet: a table
+pub fn table(co: [i64], k: i64) -> [i64] ! alloc ensures len(result) >= 0 { return sec(co, k); }
+
+pub fn pool(co: [i64]) -> [i64] ! alloc ensures len(result) >= 0 { return sec(co, 0); }
+pub fn record(co: [i64]) -> [i64] ! alloc ensures len(result) >= 0 { return sec(co, 1); }
+pub fn rows(co: [i64]) -> [i64] ! alloc ensures len(result) >= 0 { return sec(co, 3); }
+
+// a child packet this parent accepts: structurally valid entry envelope, rows a multiple of 18 words
+pub fn ok(co: [i64]) -> bool
+{
+  if crate::ent_packet::env_check(co) != 0 { return false; }
+  let k: i64 = crate::ent_u16::rd(co, 1);
+  if k != 1 && k != 3 { return false; }
+  if crate::ent_packet::nsec(co) < 4 { return false; }
+  let l3: i64 = crate::ent_packet::sec_len(co, 3);
+  return (l3 / 18) * 18 == l3;
+}
+
+// a child packet of any op this parent accepts (ops 3, 7, 8): structurally valid envelope, kind await or done
+pub fn ok_any(co: [i64]) -> bool
+{
+  if crate::ent_packet::env_check(co) != 0 { return false; }
+  let k: i64 = crate::ent_u16::rd(co, 1);
+  return k == 1 || k == 3;
+}
+
+// the done tag word (record word 0)
+pub fn done_tag(co: [i64]) -> i64
+{
+  return crate::ent_u16::rd(co, crate::ent_u16::clamp(crate::ent_packet::sec_start(co, 1), 33554432));
+}

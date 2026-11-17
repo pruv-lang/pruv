@@ -2,7 +2,7 @@
 
   python3 q_mutants.py [--only M08,M09] [--jobs N]
 
-For a mutant: copy *.pruv + pruv.json to work/mut/Mxx/, apply the (file, old, new) edits (every old text must occur exactly
+For a mutant: copy root.pruv + pruv.json and a copy of bench/l3/lib to work/mut/Mxx/, apply the (file, old, new) edits to the lib copy (ent_*.pruv) (every old text must occur exactly
 once; the site also carries a `// MUTANT Mxx:` marker), verify + compile with the rs compiler, link harness.rs, run the
 killing fixtures (gen_fixtures MUTANT_KILLERS, selected through the `mutant` key of the loaded cases).
 Classes: killed (a killer differs from its expect, not by crash / InternalInvariant), verification-rejected (pruvc verify
@@ -24,48 +24,48 @@ MUT = WORK / 'mut'
 
 # mutant id -> list of (file, old text, new text); None = TODO entry (reported as site-missing)
 MUTANTS = {
-    'M01': [('u16.pruv', "  if u == 32 || u == 160 { return true; }\n", "  if u == 32 { return true; }\n"),
-            ('u16.pruv', "  if u == 5760 || u == 65279 { return true; }\n", ""),
-            ('u16.pruv', "  if u >= 8192 && u <= 8202 { return true; }\n", ""),
-            ('u16.pruv', "  if u == 8232 || u == 8233 || u == 8239 || u == 8287 || u == 12288 { return true; }\n", "")],
-    'M02': [('sources.pruv', '  let cx: crate::state::Ctx = crate::canon::host_home(cx0);\n  if crate::canon::early(cx) { return cx; }\n  return adv(home_row(cx, "codex:home"', '  let cx: crate::state::Ctx = env_or_home(cx0, 6, ".codex");\n  if crate::canon::early(cx) { return cx; }\n  return adv(home_row(cx, "codex:home"')],
-    'M03': [('sources.pruv', "  if len(xdg) > 0 && crate::u16::rd(xdg, 0) == 47 {", "  if len(xdg) > 0 {")],
-    'M04': [('state.pruv', "  if crate::u16::rd(ck, 6) != 0 { return false; }\n", ""),
-            ('sources.pruv', '  return adv(emit_row(cy, crate::u16::cat(crate::u16::lit("codex:"), id),',
+    'M01': [('ent_u16.pruv', "  if u == 32 || u == 160 { return true; }\n", "  if u == 32 { return true; }\n"),
+            ('ent_u16.pruv', "  if u == 5760 || u == 65279 { return true; }\n", ""),
+            ('ent_u16.pruv', "  if u >= 8192 && u <= 8202 { return true; }\n", ""),
+            ('ent_u16.pruv', "  if u == 8232 || u == 8233 || u == 8239 || u == 8287 || u == 12288 { return true; }\n", "")],
+    'M02': [('ent_sources.pruv', '  let cx: crate::ent_state::Ctx = crate::ent_canon::host_home(cx0);\n  if crate::ent_canon::early(cx) { return cx; }\n  return adv(home_row(cx, "codex:home"', '  let cx: crate::ent_state::Ctx = env_or_home(cx0, 6, ".codex");\n  if crate::ent_canon::early(cx) { return cx; }\n  return adv(home_row(cx, "codex:home"')],
+    'M03': [('ent_sources.pruv', "  if len(xdg) > 0 && crate::ent_u16::rd(xdg, 0) == 47 {", "  if len(xdg) > 0 {")],
+    'M04': [('ent_state.pruv', "  if crate::ent_u16::rd(ck, 6) != 0 { return false; }\n", ""),
+            ('ent_sources.pruv', '  return adv(emit_row(cy, crate::ent_u16::cat(crate::ent_u16::lit("codex:"), id),',
              '  let mut hh: i64 = 1;\n'
              '  let mut hi: i64 = 0;\n'
              '  while hi < len(id) && hi < 64\n'
              '    invariant 0 <= hi && hi <= 64 && 1 <= hh && hh <= 16777213\n'
              '    decreases 64 - hi\n'
              '  {\n'
-             '    hh = (hh * 31 + crate::u16::clamp(crate::u16::rd(id, hi), 65536)) % 16777212 + 1;\n'
+             '    hh = (hh * 31 + crate::ent_u16::clamp(crate::ent_u16::rd(id, hi), 65536)) % 16777212 + 1;\n'
              '    hi = hi + 1;\n'
              '  }\n'
-             '  if hh == crate::state::get_ck(cy, 6) { return crate::state::set_ck(skip(cy, 5, idx + 1, cnt), 6, hh); }\n'
-             '  return crate::state::set_ck(adv(emit_row(cy, crate::u16::cat(crate::u16::lit("codex:"), id),'),
-            ('sources.pruv', 'nu, expected), 5, idx + 1, cnt);', 'nu, expected), 5, idx + 1, cnt), 6, hh);')],
-    'M05': [('sources.pruv', '!crate::accounts::valid_account_id(cx.ent, rp + 2) { return skip(cx, 2, idx + 1, cnt); }', '!crate::accounts::valid_account_id(cx.ent, rp + 2) { return crate::state::fail(cx); }')],
-    'M06': [('canon.pruv', '    if !crate::value::str_eq_lit(cx.ent, rp + 16, "ENOENT") {', '    if true {')],
-    'M07': [('canon.pruv', "  if crate::u16::eq(target, dot) { return flag(cx, 1); }\n", "")],
-    'M08': [('dispatch.pruv', "      if found < 0 { found = i; }", "      found = i;")],
-    'M09': [('dispatch.pruv', "  return 4;\n", "  return 1;\n")],
-    'M10': [('dispatch.pruv', "  let cut: i64 = 200;\n", ""),
-            ('dispatch.pruv', "      crate::u16::wr(inout tab, tb, 1);\n",
-             "      crate::u16::wr(inout tab, tb, 1);\n"
-             "      let u199: i64 = crate::u16::rd(cx.ent, crate::value::str_start(cx.ent, rb + 3) + 199);\n"
+             '  if hh == crate::ent_state::get_ck(cy, 6) { return crate::ent_state::set_ck(skip(cy, 5, idx + 1, cnt), 6, hh); }\n'
+             '  return crate::ent_state::set_ck(adv(emit_row(cy, crate::ent_u16::cat(crate::ent_u16::lit("codex:"), id),'),
+            ('ent_sources.pruv', 'nu, expected), 5, idx + 1, cnt);', 'nu, expected), 5, idx + 1, cnt), 6, hh);')],
+    'M05': [('ent_sources.pruv', '!crate::ent_accounts::valid_account_id(cx.ent, rp + 2) { return skip(cx, 2, idx + 1, cnt); }', '!crate::ent_accounts::valid_account_id(cx.ent, rp + 2) { return crate::ent_state::fail(cx); }')],
+    'M06': [('ent_canon.pruv', '    if !crate::ent_value::str_eq_lit(cx.ent, rp + 16, "ENOENT") {', '    if true {')],
+    'M07': [('ent_canon.pruv', "  if crate::ent_u16::eq(target, dot) { return flag(cx, 1); }\n", "")],
+    'M08': [('ent_dispatch.pruv', "      if found < 0 { found = i; }", "      found = i;")],
+    'M09': [('ent_dispatch.pruv', "  return 4;\n", "  return 1;\n")],
+    'M10': [('ent_dispatch.pruv', "  let cut: i64 = 200;\n", ""),
+            ('ent_dispatch.pruv', "      crate::ent_u16::wr(inout tab, tb, 1);\n",
+             "      crate::ent_u16::wr(inout tab, tb, 1);\n"
+             "      let u199: i64 = crate::ent_u16::rd(cx.ent, crate::ent_value::str_start(cx.ent, rb + 3) + 199);\n"
              "      let mut cut: i64 = 200;\n"
              "      if u199 >= 55296 && u199 <= 56319 { cut = 199; }\n")],
-    'M11': [('dispatch.pruv', '"AbortError");\n  let e: [i64]', '"AbortError") && is_err;\n  let e: [i64]')],
-    'M12': [('dispatch.pruv', "  let has_detail: bool = is_err;", "  let has_detail: bool = true;")],
-    'M13': [('bound.pruv', "    if crate::value::nullish(w, p + 6) {", "    if !crate::value::truthy(w, p + 6) {")],
-    'M14': [('bound.pruv', "  let mut i: i64 = 0;\n  // MUTANT M14", "  let mut i: i64 = 0;\n  let mut last: i64 = n;\n  // MUTANT M14"),
-            ('bound.pruv', "    invariant 0 <= i && i <= n && n <= 16777216 && 0 <= s && s <= 67108864\n    decreases n - i\n  {\n    if crate::u16::rd(w, s + i) == 58 { return i; }",
-             "    invariant 0 <= i && i <= n && n <= 16777216 && 0 <= s && s <= 67108864 && 0 <= last && last <= n\n    decreases n - i\n  {\n    if crate::u16::rd(w, s + i) == 58 { last = i; }"),
-            ('bound.pruv', "  return n;\n}\n\n// om = packet::new_meta(w)", "  return last;\n}\n\n// om = packet::new_meta(w)")],
-    'M15': [('bound.pruv', "  return crate::value::tag_at(w, crate::u16::clamp(p, 4294967296) + 3) == 3;",
-             "  return crate::value::truthy(w, crate::u16::clamp(p, 4294967296) + 3);")],
-    'M16': [('bound.pruv', "      // MUTANT M16: a later write overwrites the stored session (last write wins)\n",
-             "      // MUTANT M16: a later write overwrites the stored session (last write wins)\n      crate::u16::wr(inout val, hit, crate::u16::rd(sp, f));\n")],
+    'M11': [('ent_dispatch.pruv', '"AbortError");\n  let e: [i64]', '"AbortError") && is_err;\n  let e: [i64]')],
+    'M12': [('ent_dispatch.pruv', "  let has_detail: bool = is_err;", "  let has_detail: bool = true;")],
+    'M13': [('ent_bound.pruv', "    if crate::ent_value::nullish(w, p + 6) {", "    if !crate::ent_value::truthy(w, p + 6) {")],
+    'M14': [('ent_bound.pruv', "  let mut i: i64 = 0;\n  // MUTANT M14", "  let mut i: i64 = 0;\n  let mut last: i64 = n;\n  // MUTANT M14"),
+            ('ent_bound.pruv', "    invariant 0 <= i && i <= n && n <= 16777216 && 0 <= s && s <= 67108864\n    decreases n - i\n  {\n    if crate::ent_u16::rd(w, s + i) == 58 { return i; }",
+             "    invariant 0 <= i && i <= n && n <= 16777216 && 0 <= s && s <= 67108864 && 0 <= last && last <= n\n    decreases n - i\n  {\n    if crate::ent_u16::rd(w, s + i) == 58 { last = i; }"),
+            ('ent_bound.pruv', "  return n;\n}\n\n// om = packet::new_meta(w)", "  return last;\n}\n\n// om = packet::new_meta(w)")],
+    'M15': [('ent_bound.pruv', "  return crate::ent_value::tag_at(w, crate::ent_u16::clamp(p, 4294967296) + 3) == 3;",
+             "  return crate::ent_value::truthy(w, crate::ent_u16::clamp(p, 4294967296) + 3);")],
+    'M16': [('ent_bound.pruv', "      // MUTANT M16: a later write overwrites the stored session (last write wins)\n",
+             "      // MUTANT M16: a later write overwrites the stored session (last write wins)\n      crate::ent_u16::wr(inout val, hit, crate::ent_u16::rd(sp, f));\n")],
 }
 
 
@@ -76,13 +76,13 @@ def apply(mid, d):
         return 'site-missing: TODO entry (no edit table yet)'
     texts = {}
     for fname, old, new in edits:
-        text = texts.get(fname) or (d / fname).read_text(encoding='utf-8')
+        text = texts.get(fname) or (d / 'lib' / fname).read_text(encoding='utf-8')
         n = text.count(old)
         if n != 1:
             return f'site-missing: {fname}: old text found {n} times: {old[:60]!r}'
         texts[fname] = text.replace(old, new)
     for fname, text in texts.items():
-        (d / fname).write_text(text, encoding='utf-8')
+        (d / 'lib' / fname).write_text(text, encoding='utf-8')
     return None
 
 
@@ -98,6 +98,7 @@ def run_one(mid, g, host, cases):
     for f in HERE.glob('*.pruv'):
         shutil.copy(f, d / f.name)
     shutil.copy(HERE / 'pruv.json', d / 'pruv.json')
+    shutil.copytree(HERE.parent / 'lib', d / 'lib')  # temporary lib copy: the mutant edits land here
     rec = {'id': mid, 'status': None, 'killers': [], 'detail': ''}
     why = apply(mid, d)
     if why:
@@ -111,7 +112,7 @@ def run_one(mid, g, host, cases):
     out = d / 'out'
     out.mkdir()
     try:
-        built = g.compile_pruv('rs', str(d / 'root.pruv'), str(out), 'rust', ['--manifest', str(d / 'pruv.json')])
+        built = g.compile_pruv('rs', str(d / 'root.pruv'), str(out), 'rust', ['--lib', str(d / 'lib')])
         if built['rc']:
             rec.update(status='verification-rejected', detail=str(built.get('errors') or built.get('stderr') or '')[:300])
             return rec

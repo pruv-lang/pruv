@@ -1,0 +1,1260 @@
+[
+ {
+  "id": "P01",
+  "name": "bad-version",
+  "rule": "3.11",
+  "layer": "packet",
+  "note": "Honest request for bad-version: the oracle runs the request handler only; the packet layer rejects a bad version before any handler.",
+  "world": {},
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "sources"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "keys": [
+      "sources"
+     ]
+    }
+   }
+  }
+ },
+ {
+  "id": "P02",
+  "name": "bad-kind",
+  "rule": "3.11",
+  "layer": "packet",
+  "note": "Honest request for bad-kind.",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   }
+  }
+ },
+ {
+  "id": "P03",
+  "name": "wrong-request-id",
+  "rule": "3.11",
+  "layer": "packet",
+  "note": "Honest request for wrong-request-id: the handler result is the same whatever id carries it.",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "defer": "rd",
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "settle",
+    "label": "rd"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   }
+  }
+ },
+ {
+  "id": "P04",
+  "name": "wrong-seq",
+  "rule": "3.11",
+  "layer": "packet",
+  "note": "Honest request for wrong-seq.",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "defer": "rd",
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "settle",
+    "label": "rd"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   }
+  }
+ },
+ {
+  "id": "P05",
+  "name": "wrong-call-kind",
+  "rule": "3.11",
+  "layer": "packet",
+  "note": "Honest request for wrong-call-kind.",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "defer": "rd",
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "settle",
+    "label": "rd"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   }
+  }
+ },
+ {
+  "id": "P06",
+  "name": "done-reentry",
+  "rule": "3.11",
+  "layer": "packet",
+  "note": "Honest request for done-reentry: one completion.",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "opening": {
+    "A": []
+   }
+  }
+ },
+ {
+  "id": "P07",
+  "name": "packet-too-large",
+  "rule": "3.11",
+  "layer": "packet",
+  "note": "Honest request for packet-too-large: list titles over 200 characters are cut by the entry reader wrapper.",
+  "world": {
+   "readers": {
+    "claude": {
+     "list": [
+      {
+       "ok": [
+        {
+         "thread": "t1",
+         "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+         "thread": "t2",
+         "title": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "items": [
+       {
+        "thread": "t1",
+        "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+       },
+       {
+        "thread": "t2",
+        "title": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+       }
+      ]
+     }
+    }
+   }
+  }
+ },
+ {
+  "id": "P08",
+  "name": "active-request-limit",
+  "rule": "3.11",
+  "layer": "packet",
+  "note": "Honest 33 concurrent opens for active-request-limit (the handler has no limit of its own).",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "defer": "r",
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "q1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q2",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t2",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q3",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t3",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q4",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t4",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q5",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t5",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q6",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t6",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q7",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t7",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q8",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t8",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q9",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t9",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q10",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t10",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q11",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t11",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q12",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t12",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q13",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t13",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q14",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t14",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q15",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t15",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q16",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t16",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q17",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t17",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q18",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t18",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q19",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t19",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q20",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t20",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q21",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t21",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q22",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t22",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q23",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t23",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q24",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t24",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q25",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t25",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q26",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t26",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q27",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t27",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q28",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t28",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q29",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t29",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q30",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t30",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q31",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t31",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q32",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t32",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "q33",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t33",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "settle",
+    "label": "r"
+   },
+   {
+    "ev": "settle",
+    "label": "r#2"
+   },
+   {
+    "ev": "settle",
+    "label": "r#3"
+   },
+   {
+    "ev": "settle",
+    "label": "r#4"
+   },
+   {
+    "ev": "settle",
+    "label": "r#5"
+   },
+   {
+    "ev": "settle",
+    "label": "r#6"
+   },
+   {
+    "ev": "settle",
+    "label": "r#7"
+   },
+   {
+    "ev": "settle",
+    "label": "r#8"
+   },
+   {
+    "ev": "settle",
+    "label": "r#9"
+   },
+   {
+    "ev": "settle",
+    "label": "r#10"
+   },
+   {
+    "ev": "settle",
+    "label": "r#11"
+   },
+   {
+    "ev": "settle",
+    "label": "r#12"
+   },
+   {
+    "ev": "settle",
+    "label": "r#13"
+   },
+   {
+    "ev": "settle",
+    "label": "r#14"
+   },
+   {
+    "ev": "settle",
+    "label": "r#15"
+   },
+   {
+    "ev": "settle",
+    "label": "r#16"
+   },
+   {
+    "ev": "settle",
+    "label": "r#17"
+   },
+   {
+    "ev": "settle",
+    "label": "r#18"
+   },
+   {
+    "ev": "settle",
+    "label": "r#19"
+   },
+   {
+    "ev": "settle",
+    "label": "r#20"
+   },
+   {
+    "ev": "settle",
+    "label": "r#21"
+   },
+   {
+    "ev": "settle",
+    "label": "r#22"
+   },
+   {
+    "ev": "settle",
+    "label": "r#23"
+   },
+   {
+    "ev": "settle",
+    "label": "r#24"
+   },
+   {
+    "ev": "settle",
+    "label": "r#25"
+   },
+   {
+    "ev": "settle",
+    "label": "r#26"
+   },
+   {
+    "ev": "settle",
+    "label": "r#27"
+   },
+   {
+    "ev": "settle",
+    "label": "r#28"
+   },
+   {
+    "ev": "settle",
+    "label": "r#29"
+   },
+   {
+    "ev": "settle",
+    "label": "r#30"
+   },
+   {
+    "ev": "settle",
+    "label": "r#31"
+   },
+   {
+    "ev": "settle",
+    "label": "r#32"
+   },
+   {
+    "ev": "settle",
+    "label": "r#33"
+   }
+  ],
+  "expect": {
+   "req": {
+    "q1": {
+     "terminal": "ok"
+    },
+    "q2": {
+     "terminal": "ok"
+    },
+    "q3": {
+     "terminal": "ok"
+    },
+    "q4": {
+     "terminal": "ok"
+    },
+    "q5": {
+     "terminal": "ok"
+    },
+    "q6": {
+     "terminal": "ok"
+    },
+    "q7": {
+     "terminal": "ok"
+    },
+    "q8": {
+     "terminal": "ok"
+    },
+    "q9": {
+     "terminal": "ok"
+    },
+    "q10": {
+     "terminal": "ok"
+    },
+    "q11": {
+     "terminal": "ok"
+    },
+    "q12": {
+     "terminal": "ok"
+    },
+    "q13": {
+     "terminal": "ok"
+    },
+    "q14": {
+     "terminal": "ok"
+    },
+    "q15": {
+     "terminal": "ok"
+    },
+    "q16": {
+     "terminal": "ok"
+    },
+    "q17": {
+     "terminal": "ok"
+    },
+    "q18": {
+     "terminal": "ok"
+    },
+    "q19": {
+     "terminal": "ok"
+    },
+    "q20": {
+     "terminal": "ok"
+    },
+    "q21": {
+     "terminal": "ok"
+    },
+    "q22": {
+     "terminal": "ok"
+    },
+    "q23": {
+     "terminal": "ok"
+    },
+    "q24": {
+     "terminal": "ok"
+    },
+    "q25": {
+     "terminal": "ok"
+    },
+    "q26": {
+     "terminal": "ok"
+    },
+    "q27": {
+     "terminal": "ok"
+    },
+    "q28": {
+     "terminal": "ok"
+    },
+    "q29": {
+     "terminal": "ok"
+    },
+    "q30": {
+     "terminal": "ok"
+    },
+    "q31": {
+     "terminal": "ok"
+    },
+    "q32": {
+     "terminal": "ok"
+    },
+    "q33": {
+     "terminal": "ok"
+    }
+   },
+   "created": 33,
+   "opening": {
+    "A": []
+   }
+  }
+ },
+ {
+  "id": "P09",
+  "name": "sequence-limit",
+  "rule": "3.11",
+  "layer": "packet",
+  "note": "Honest 20-turn request for sequence-limit.",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p0",
+          "reply": "r0",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p2",
+          "reply": "r2",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p3",
+          "reply": "r3",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p4",
+          "reply": "r4",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p5",
+          "reply": "r5",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p6",
+          "reply": "r6",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p7",
+          "reply": "r7",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p8",
+          "reply": "r8",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p9",
+          "reply": "r9",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p10",
+          "reply": "r10",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p11",
+          "reply": "r11",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p12",
+          "reply": "r12",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p13",
+          "reply": "r13",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p14",
+          "reply": "r14",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p15",
+          "reply": "r15",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p16",
+          "reply": "r16",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p17",
+          "reply": "r17",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p18",
+          "reply": "r18",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "p19",
+          "reply": "r19",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "createdLen": [
+    [
+     0,
+     [
+      "turns"
+     ],
+     20
+    ]
+   ]
+  }
+ },
+ {
+  "id": "P10",
+  "name": "resource-cleanup-after-copy",
+  "rule": "3.11",
+  "layer": "packet",
+  "note": "Honest request for resource-cleanup-after-copy: a failure after the copy removes the copy.",
+  "world": {
+   "readers": {
+    "grok": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "copy": [
+    {
+     "ok": {
+      "path": "/grok/copy1",
+      "skipped": 0
+     },
+     "verify": true
+    }
+   ],
+   "createImported": [
+    {
+     "mode": "fail-before-fill",
+     "throw": {
+      "class": "Error",
+      "ref": "e1",
+      "message": "create failed"
+     }
+    }
+   ],
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "e1",
+     "message": "create failed"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "thrown",
+     "ref": "e1"
+    }
+   },
+   "counts": {
+    "rm": 1
+   }
+  }
+ }
+]

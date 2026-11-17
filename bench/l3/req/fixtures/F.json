@@ -1,0 +1,618 @@
+[
+ {
+  "id": "F01",
+  "name": "folder-normalized",
+  "rule": "3.2",
+  "world": {
+   "readers": {
+    "claude": {
+     "list": [
+      {
+       "ok": []
+      }
+     ]
+    }
+   },
+   "checkFolder": {
+    "/p/./x": {
+     "ok": "/p/x"
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "claude:home",
+     "folder": "/p/./x"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "items": []
+     }
+    }
+   },
+   "counts": {
+    "checkFolder": 1
+   },
+   "has": [
+    {
+     "c": "checkFolder",
+     "a": [
+      "/p/./x"
+     ],
+     "o": {
+      "ok": "/p/x"
+     }
+    },
+    {
+     "c": "reader",
+     "a": {
+      "op": "list",
+      "folder": "/p/x"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "F02",
+  "name": "folder-error-message",
+  "rule": "3.2",
+  "world": {
+   "checkFolder": {
+    "*": {
+     "throw": {
+      "class": "Error",
+      "ref": "e1",
+      "message": "outside project"
+     }
+    }
+   },
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "e1",
+     "message": "outside project"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.folder",
+     "message": "outside project"
+    },
+    "r2": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.folder",
+     "message": "outside project"
+    }
+   },
+   "counts": {
+    "reader": 0,
+    "timer.set": 0,
+    "sessionList": 0
+   }
+  }
+ },
+ {
+  "id": "F03",
+  "name": "folder-empty-message",
+  "rule": "3.2",
+  "killer": "M02",
+  "note": "An empty Error message stays empty (no fallback text).",
+  "world": {
+   "checkFolder": {
+    "*": {
+     "throw": {
+      "class": "Error",
+      "ref": "e1",
+      "message": ""
+     }
+    }
+   },
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "e1",
+     "message": ""
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.folder",
+     "message": ""
+    },
+    "r2": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.folder",
+     "message": ""
+    }
+   },
+   "counts": {
+    "reader": 0
+   }
+  }
+ },
+ {
+  "id": "F04",
+  "name": "folder-nonerror",
+  "rule": "3.2",
+  "world": {
+   "checkFolder": {
+    "*": {
+     "throw": {
+      "class": "primitive",
+      "ref": "p1",
+      "value": "denied"
+     }
+    }
+   },
+   "errs": [
+    {
+     "class": "primitive",
+     "ref": "p1",
+     "value": "denied"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.folder",
+     "message": "\uc774 \ud3f4\ub354\ub294 \uc4f8 \uc218 \uc5c6\uc5b4."
+    },
+    "r2": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.folder",
+     "message": "\uc774 \ud3f4\ub354\ub294 \uc4f8 \uc218 \uc5c6\uc5b4."
+    }
+   },
+   "counts": {
+    "reader": 0
+   }
+  }
+ },
+ {
+  "id": "F05",
+  "name": "folder-abort-name",
+  "rule": "3.2",
+  "note": "The folder check is outside the open try: an AbortError-named value is a folder WireError, not a timeout.",
+  "world": {
+   "checkFolder": {
+    "*": {
+     "throw": {
+      "class": "plain",
+      "ref": "ab",
+      "name": "AbortError",
+      "message": "aborted"
+     }
+    }
+   },
+   "errs": [
+    {
+     "class": "plain",
+     "ref": "ab",
+     "name": "AbortError",
+     "message": "aborted"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.folder",
+     "message": "\uc774 \ud3f4\ub354\ub294 \uc4f8 \uc218 \uc5c6\uc5b4."
+    }
+   },
+   "counts": {
+    "reader": 0,
+    "opening.add": 0,
+    "timer.set": 0
+   }
+  }
+ },
+ {
+  "id": "F06",
+  "name": "source-before-folder",
+  "rule": "3.2",
+  "world": {
+   "checkFolder": {
+    "*": {
+     "throw": {
+      "class": "Error",
+      "ref": "e1",
+      "message": "never"
+     }
+    }
+   },
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "e1",
+     "message": "never"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "nope:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.sourceUnknown"
+    }
+   },
+   "counts": {
+    "checkFolder": 0
+   }
+  }
+ },
+ {
+  "id": "F07",
+  "name": "folder-before-same",
+  "rule": "3.2",
+  "world": {
+   "checkFolder": {
+    "*": {
+     "throw": {
+      "class": "Error",
+      "ref": "e1",
+      "message": "bad folder"
+     }
+    }
+   },
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "e1",
+     "message": "bad folder"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "same"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "same"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.folder",
+     "message": "bad folder"
+    },
+    "r2": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.folder",
+     "message": "bad folder"
+    }
+   },
+   "counts": {
+    "fromAppAction": 0,
+    "grokAccounts": 0,
+    "sessionList": 0
+   }
+  }
+ },
+ {
+  "id": "F08",
+  "name": "folder-before-known",
+  "rule": "3.2",
+  "world": {
+   "checkFolder": {
+    "*": {
+     "throw": {
+      "class": "Error",
+      "ref": "e1",
+      "message": "bad folder"
+     }
+    }
+   },
+   "sessions": [
+    {
+     "id": "s1",
+     "title": "",
+     "externalThread": {
+      "engine": "claude",
+      "source": "claude:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    }
+   ],
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "e1",
+     "message": "bad folder"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.folder",
+     "message": "bad folder"
+    }
+   },
+   "counts": {
+    "sessionList": 0,
+    "isTemporary": 0
+   }
+  }
+ },
+ {
+  "id": "F09",
+  "name": "list-folder-no-timer",
+  "rule": "3.2",
+  "world": {
+   "checkFolder": {
+    "*": {
+     "throw": {
+      "class": "Error",
+      "ref": "e1",
+      "message": "bad folder"
+     }
+    }
+   },
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "e1",
+     "message": "bad folder"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "codex:home",
+     "folder": "/proj"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "list",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.folder",
+     "message": "bad folder"
+    },
+    "r2": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.folder",
+     "message": "bad folder"
+    }
+   },
+   "counts": {
+    "timer.set": 0,
+    "timer.clear": 0,
+    "makeCodexRunDeps": 0,
+    "reader": 0,
+    "listener.add": 0
+   },
+   "timers": 0
+  }
+ },
+ {
+  "id": "F10",
+  "name": "open-folder-no-lock",
+  "rule": "3.2",
+  "world": {
+   "checkFolder": {
+    "*": {
+     "throw": {
+      "class": "Error",
+      "ref": "e1",
+      "message": "bad folder"
+     }
+    }
+   },
+   "errs": [
+    {
+     "class": "Error",
+     "ref": "e1",
+     "message": "bad folder"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t2",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.folder",
+     "message": "bad folder"
+    },
+    "r2": {
+     "terminal": "wire",
+     "key": "wireWork.engineImport.folder",
+     "message": "bad folder"
+    }
+   },
+   "counts": {
+    "opening.has": 0,
+    "opening.add": 0,
+    "opening.delete": 0
+   },
+   "opening": {
+    "A": []
+   },
+   "openingOps": []
+  }
+ }
+]

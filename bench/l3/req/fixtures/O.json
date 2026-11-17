@@ -1,0 +1,948 @@
+[
+ {
+  "id": "O01",
+  "name": "new-session",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "Hello",
+        "turns": [
+         {
+          "prompt": "hi",
+          "reply": "there",
+          "tools": 2,
+          "clipped": true,
+          "createdAt": "2023-01-01T00:00:00.000Z",
+          "completedAt": "2023-01-01T00:00:05.000Z"
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "created": 1,
+   "createdAfter": [
+    {
+     "id": "new-1",
+     "title": "Hello",
+     "turns": [
+      {
+       "id": "00000000-0000-4000-8000-000000000001",
+       "prompt": "hi",
+       "reply": "there",
+       "progress": "",
+       "status": "completed",
+       "usage": null,
+       "createdAt": "2023-01-01T00:00:00.000Z",
+       "completedAt": "2023-01-01T00:00:05.000Z",
+       "imported": {
+        "engine": "claude",
+        "tools": 2,
+        "clipped": true
+       }
+      }
+     ],
+     "externalThread": {
+      "engine": "claude",
+      "source": "claude:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     },
+     "engineThreads": {
+      "claude": {
+       "threadId": "t1",
+       "lastTurnId": "00000000-0000-4000-8000-000000000001",
+       "fork": true
+      }
+     }
+    }
+   ],
+   "createdKeys": [
+    [
+     0,
+     [
+      "turns",
+      0
+     ],
+     [
+      "id",
+      "prompt",
+      "reply",
+      "progress",
+      "status",
+      "usage",
+      "createdAt",
+      "completedAt",
+      "imported"
+     ]
+    ],
+    [
+     0,
+     [
+      "externalThread"
+     ],
+     [
+      "engine",
+      "source",
+      "thread",
+      "mode",
+      "importedAt"
+     ]
+    ],
+    [
+     0,
+     [
+      "engineThreads",
+      "claude"
+     ],
+     [
+      "threadId",
+      "lastTurnId",
+      "fork"
+     ]
+    ],
+    [
+     0,
+     [
+      "turns",
+      0,
+      "imported"
+     ],
+     [
+      "engine",
+      "tools",
+      "clipped"
+     ]
+    ]
+   ]
+  }
+ },
+ {
+  "id": "O02",
+  "name": "existing-session",
+  "rule": "3.4",
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "title": "",
+     "externalThread": {
+      "engine": "claude",
+      "source": "claude:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    }
+   ],
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "s1",
+      "existing": true
+     },
+     "keys": [
+      "sessionId",
+      "existing"
+     ]
+    }
+   },
+   "counts": {
+    "reader": 0,
+    "timer.set": 0,
+    "opening.add": 0,
+    "now": 0,
+    "uuid": 0,
+    "createImported": 0
+   },
+   "created": 0
+  }
+ },
+ {
+  "id": "O03",
+  "name": "existing-preaborted",
+  "rule": "3.4",
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "title": "",
+     "externalThread": {
+      "engine": "claude",
+      "source": "claude:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    }
+   ],
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "handle",
+    "name": "c1"
+   },
+   {
+    "ev": "cancel",
+    "handle": "c1"
+   },
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    },
+    "cancel": "c1"
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "s1",
+      "existing": true
+     },
+     "keys": [
+      "sessionId",
+      "existing"
+     ]
+    }
+   },
+   "counts": {
+    "reader": 0,
+    "listener.add": 0,
+    "timer.set": 0,
+    "createImported": 0
+   },
+   "note": "The initial bound check precedes cancel handling."
+  }
+ },
+ {
+  "id": "O04",
+  "name": "empty-turns",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "Empty",
+        "turns": []
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "counts": {
+    "uuid": 0,
+    "now": 1,
+    "createImported": 1
+   },
+   "createdAfter": [
+    {
+     "title": "Empty",
+     "turns": [],
+     "engineThreads": {
+      "claude": {
+       "threadId": "t1",
+       "fork": true
+      }
+     }
+    }
+   ],
+   "createdKeys": [
+    [
+     0,
+     [
+      "engineThreads",
+      "claude"
+     ],
+     [
+      "threadId",
+      "fork"
+     ]
+    ]
+   ]
+  }
+ },
+ {
+  "id": "O05",
+  "name": "same-no-fork",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "same"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "createdKeys": [
+    [
+     0,
+     [
+      "engineThreads",
+      "claude"
+     ],
+     [
+      "threadId",
+      "lastTurnId"
+     ]
+    ]
+   ],
+   "createdAfter": [
+    {
+     "externalThread": {
+      "mode": "same"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "O06",
+  "name": "nongrok-fork",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "codex": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "accounts": {
+    "codex": {
+     "ok": [
+      {
+       "id": "acc_fedcba9876543210",
+       "name": "C"
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "codex:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "codex:acc_fedcba9876543210",
+     "folder": "/proj",
+     "thread": "t2",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    },
+    "r2": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-2"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "createdKeys": [
+    [
+     0,
+     [
+      "engineThreads",
+      "codex"
+     ],
+     [
+      "threadId",
+      "lastTurnId",
+      "fork"
+     ]
+    ],
+    [
+     1,
+     [
+      "engineThreads",
+      "codex:acc_fedcba9876543210"
+     ],
+     [
+      "threadId",
+      "lastTurnId",
+      "fork"
+     ]
+    ]
+   ],
+   "matchCounts": [
+    [
+     {
+      "c": "reader",
+      "a": {
+       "engine": "codex",
+       "op": "read",
+       "options": {
+        "keys": [
+         "signal",
+         "env",
+         "codex"
+        ]
+       }
+      }
+     },
+     2
+    ]
+   ]
+  }
+ },
+ {
+  "id": "O07",
+  "name": "grok-no-fork",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "grok": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "copy": [
+    {
+     "ok": {
+      "path": "/grok/copy1",
+      "skipped": 0
+     },
+     "verify": true
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "grok:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "createdKeys": [
+    [
+     0,
+     [
+      "engineThreads",
+      "grok"
+     ],
+     [
+      "threadId",
+      "lastTurnId"
+     ]
+    ]
+   ],
+   "createdAfter": [
+    {
+     "externalThread": {
+      "engine": "grok",
+      "mode": "fork"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "O08",
+  "name": "seed-account",
+  "rule": "3.4",
+  "killer": "M16",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "accounts": {
+    "claude": {
+     "ok": [
+      {
+       "id": "acc_0123456789abcdef",
+       "name": "Work"
+      }
+     ]
+    }
+   },
+   "newSession": {
+    "title": "",
+    "turns": [],
+    "engineThreads": {
+     "claude": {
+      "threadId": "old"
+     }
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:acc_0123456789abcdef",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "createdBefore": [
+    {
+     "engineThreads": {
+      "claude": {
+       "threadId": "old"
+      }
+     }
+    }
+   ],
+   "createdAfter": [
+    {
+     "engineThreads": {
+      "claude": {
+       "threadId": "old"
+      },
+      "claude:acc_0123456789abcdef": {
+       "threadId": "t1"
+      }
+     }
+    }
+   ],
+   "createdKeys": [
+    [
+     0,
+     [
+      "engineThreads"
+     ],
+     [
+      "claude",
+      "claude:acc_0123456789abcdef"
+     ]
+    ]
+   ],
+   "createdMeta": [
+    {
+     "seed": {
+      "account": "acc_0123456789abcdef"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "O09",
+  "name": "model-wanted",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "M",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ],
+        "model": "opus-x"
+       }
+      }
+     ]
+    }
+   },
+   "modelFor": [
+    {
+     "ok": "mapped-model"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "has": [
+    {
+     "c": "modelFor",
+     "a": {
+      "engine": "claude",
+      "wanted": "opus-x"
+     },
+     "o": {
+      "ok": "mapped-model"
+     }
+    }
+   ],
+   "createdMeta": [
+    {
+     "seed": {
+      "model": "mapped-model"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "O10",
+  "name": "fill-preserve-slots",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "newSession": {
+    "title": "",
+    "turns": [],
+    "engineThreads": {
+     "codex": {
+      "threadId": "keep"
+     },
+     "claude:other": {
+      "threadId": "o2"
+     }
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "createdKeys": [
+    [
+     0,
+     [
+      "engineThreads"
+     ],
+     [
+      "codex",
+      "claude:other",
+      "claude"
+     ]
+    ]
+   ],
+   "createdAfter": [
+    {
+     "engineThreads": {
+      "codex": {
+       "threadId": "keep"
+      },
+      "claude:other": {
+       "threadId": "o2"
+      },
+      "claude": {
+       "threadId": "t1"
+      }
+     }
+    }
+   ]
+  }
+ }
+]

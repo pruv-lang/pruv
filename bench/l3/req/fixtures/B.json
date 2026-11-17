@@ -1,0 +1,770 @@
+[
+ {
+  "id": "B01",
+  "name": "external-original",
+  "rule": "3.3",
+  "world": {
+   "sessions": [
+    {
+     "id": "s0",
+     "title": ""
+    },
+    {
+     "id": "s1",
+     "title": "",
+     "externalThread": {
+      "engine": "claude",
+      "source": "claude:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "s1",
+      "existing": true
+     },
+     "keys": [
+      "sessionId",
+      "existing"
+     ]
+    }
+   },
+   "counts": {
+    "reader": 0
+   }
+  }
+ },
+ {
+  "id": "B02",
+  "name": "external-fork",
+  "rule": "3.3",
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "title": "",
+     "externalThread": {
+      "engine": "claude",
+      "source": "claude:home",
+      "thread": "orig",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z",
+      "forks": [
+       "f1",
+       "t1"
+      ]
+     }
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "s1",
+      "existing": true
+     },
+     "keys": [
+      "sessionId",
+      "existing"
+     ]
+    }
+   },
+   "counts": {
+    "reader": 0
+   }
+  }
+ },
+ {
+  "id": "B03",
+  "name": "terminal-default-codex",
+  "rule": "3.3",
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "title": "",
+     "terminal": {
+      "cliSession": "t1"
+     }
+    }
+   ],
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "codex:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "s1",
+      "existing": true
+     },
+     "keys": [
+      "sessionId",
+      "existing"
+     ]
+    },
+    "r2": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "counts": {
+    "reader": 1,
+    "createImported": 1
+   }
+  }
+ },
+ {
+  "id": "B04",
+  "name": "slot-account-prefix",
+  "rule": "3.3",
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "title": "",
+     "engineThreads": {
+      "claude:work": {
+       "threadId": "t1"
+      }
+     }
+    }
+   ],
+   "readers": {
+    "codex": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "codex:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "s1",
+      "existing": true
+     },
+     "keys": [
+      "sessionId",
+      "existing"
+     ]
+    },
+    "r2": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "counts": {
+    "reader": 1
+   }
+  }
+ },
+ {
+  "id": "B05",
+  "name": "first-session",
+  "rule": "3.3",
+  "killer": "M03",
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "title": "",
+     "externalThread": {
+      "engine": "claude",
+      "source": "claude:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    },
+    {
+     "id": "s2",
+     "title": "",
+     "externalThread": {
+      "engine": "claude",
+      "source": "claude:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "s1",
+      "existing": true
+     },
+     "keys": [
+      "sessionId",
+      "existing"
+     ]
+    }
+   },
+   "counts": {
+    "reader": 0,
+    "createImported": 0
+   }
+  }
+ },
+ {
+  "id": "B06",
+  "name": "temporary-literal-true",
+  "rule": "3.3",
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "title": "",
+     "externalThread": {
+      "engine": "claude",
+      "source": "claude:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     },
+     "temporary": true
+    },
+    {
+     "id": "s2",
+     "title": "",
+     "externalThread": {
+      "engine": "claude",
+      "source": "claude:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "s2",
+      "existing": true
+     },
+     "keys": [
+      "sessionId",
+      "existing"
+     ]
+    }
+   },
+   "counts": {
+    "isTemporary": 1
+   },
+   "has": [
+    {
+     "c": "isTemporary",
+     "a": [
+      "s2"
+     ]
+    }
+   ],
+   "absent": [
+    {
+     "c": "isTemporary",
+     "a": [
+      "s1"
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "id": "B07",
+  "name": "temporary-callback",
+  "rule": "3.3",
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "title": "",
+     "externalThread": {
+      "engine": "claude",
+      "source": "claude:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    },
+    {
+     "id": "s2",
+     "title": "",
+     "externalThread": {
+      "engine": "claude",
+      "source": "claude:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    }
+   ],
+   "isTemporary": {
+    "s1": true
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "s2",
+      "existing": true
+     },
+     "keys": [
+      "sessionId",
+      "existing"
+     ]
+    }
+   },
+   "counts": {
+    "isTemporary": 2
+   },
+   "order": [
+    {
+     "c": "isTemporary",
+     "a": [
+      "s1"
+     ],
+     "o": {
+      "ok": true
+     }
+    },
+    {
+     "c": "isTemporary",
+     "a": [
+      "s2"
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "id": "B08",
+  "name": "early-stop",
+  "rule": "3.3",
+  "world": {
+   "sessions": [
+    {
+     "id": "s1",
+     "title": "",
+     "externalThread": {
+      "engine": "claude",
+      "source": "claude:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    },
+    {
+     "id": "s2",
+     "title": ""
+    },
+    {
+     "id": "s3",
+     "title": ""
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "s1",
+      "existing": true
+     },
+     "keys": [
+      "sessionId",
+      "existing"
+     ]
+    }
+   },
+   "counts": {
+    "isTemporary": 1,
+    "sessionList": 1,
+    "sessionList.next": 1,
+    "sessionList.return": 1,
+    "sessionList.done": 0
+   },
+   "has": [
+    {
+     "c": "sessionList.return",
+     "a": {
+      "consumed": 1
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "B09",
+  "name": "fresh-list-per-item",
+  "rule": "3.3",
+  "world": {
+   "readers": {
+    "claude": {
+     "list": [
+      {
+       "ok": [
+        {
+         "thread": "t1",
+         "title": "A"
+        },
+        {
+         "thread": "t2",
+         "title": "B"
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "sessions": [
+    {
+     "id": "s1",
+     "title": "Lair A",
+     "externalThread": {
+      "engine": "claude",
+      "source": "claude:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    },
+    {
+     "id": "s2",
+     "title": "Lair B",
+     "externalThread": {
+      "engine": "claude",
+      "source": "claude:home",
+      "thread": "t2",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "items": [
+       {
+        "thread": "t1",
+        "title": "Lair A",
+        "boundSessionId": "s1"
+       },
+       {
+        "thread": "t2",
+        "title": "Lair B",
+        "boundSessionId": "s2"
+       }
+      ]
+     }
+    }
+   },
+   "counts": {
+    "sessionList": 3
+   },
+   "order": [
+    {
+     "c": "reader"
+    },
+    {
+     "c": "sessionList",
+     "a": {
+      "call": 1
+     }
+    },
+    {
+     "c": "sessionList",
+     "a": {
+      "call": 2
+     }
+    },
+    {
+     "c": "sessionList",
+     "a": {
+      "call": 3
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "B10",
+  "name": "empty-session-id",
+  "rule": "3.3",
+  "note": "An empty session id still stops the search but is falsy for the caller (initial search and race re-check).",
+  "world": {
+   "sessions": [
+    {
+     "id": "",
+     "title": "Empty id",
+     "externalThread": {
+      "engine": "claude",
+      "source": "claude:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    }
+   ],
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "counts": {
+    "reader": 1,
+    "createImported": 1,
+    "sessionList": 2,
+    "isTemporary": 2
+   },
+   "has": [
+    {
+     "c": "isTemporary",
+     "a": [
+      ""
+     ]
+    }
+   ]
+  }
+ }
+]

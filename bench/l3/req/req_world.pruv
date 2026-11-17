@@ -1,0 +1,422 @@
+// L3-9 request ABI v1 (ABI.md 3.3): the world packet. Header 16 words, pool, instance rows (2), active rows (10),
+// opening rows (6). 0 magic, 1 version, 2 generation, 3 next owner, 4 next ticket, 5 instances, 6 active, 7 openings,
+// 8 pool words, 9 external calls used, 10 cleanup credits, 11 seal, 12..15 zero.
+// active row: instance, request, owner, op, last seq, ticket, issued generation, owns opening, resource unwind,
+// digest of the issued await packet.
+// The seal (word 11) is dig of every other world word; only the host's initial world (generation 0, no active or opening
+// rows) may carry seal 0. dig is a two-modulus polynomial hash: it detects edits and replays, not chosen collisions.
+
+pub fn m_world() -> i64 ensures result == 1381062449 { return 1381062449; }
+
+fn cnt(w: [i64], i: i64) -> i64
+  ensures 0 <= result && result <= 1000000
+{
+  return crate::ent_u16::clamp(crate::ent_u16::rd(w, i), 1000000);
+}
+
+pub fn wgen(w: [i64]) -> i64
+  ensures 0 <= result && result <= 4503599627370496
+{ return crate::ent_u16::clamp(crate::ent_u16::rd(w, 2), 4503599627370496); }
+pub fn next_owner(w: [i64]) -> i64
+  ensures 0 <= result && result <= 1000000000000
+{
+  return crate::ent_u16::clamp(crate::ent_u16::rd(w, 3), 1000000000000);
+}
+pub fn next_ticket(w: [i64]) -> i64
+  ensures 0 <= result && result <= 1000000000000
+{
+  return crate::ent_u16::clamp(crate::ent_u16::rd(w, 4), 1000000000000);
+}
+
+pub fn world_ok(w: [i64]) -> bool
+{
+  let n: i64 = len(w);
+  if n < 16 || n > 16777216 { return false; }
+  if crate::ent_u16::rd(w, 0) != 1381062449 || crate::ent_u16::rd(w, 1) != 1 { return false; }
+  let g: i64 = crate::ent_u16::rd(w, 2);
+  if g < 0 || g >= 4503599627370496 { return false; }
+  if crate::ent_u16::rd(w, 3) < 1 || crate::ent_u16::rd(w, 4) < 1 { return false; }
+  let ni: i64 = crate::ent_u16::rd(w, 5);
+  let na: i64 = crate::ent_u16::rd(w, 6);
+  let no: i64 = crate::ent_u16::rd(w, 7);
+  let np: i64 = crate::ent_u16::rd(w, 8);
+  if ni < 0 || ni > 1000000 || na < 0 || na > 1000000 || no < 0 || no > 1000000 || np < 0 || np > 16777216 { return false; }
+  if 16 + np + 2 * ni + 10 * na + 6 * no != n { return false; }
+  // ABI 10: external calls used and cleanup credits reserved stay within the scenario budget of 1,000,000
+  let cu: i64 = crate::ent_u16::rd(w, 9);
+  let cr: i64 = crate::ent_u16::rd(w, 10);
+  if cu < 0 || cr < 0 || cu > 1000000 || cr > 1000000 - cu { return false; }
+  let mut k: i64 = 12;
+  while k < 16
+    invariant 12 <= k && k <= 16
+    decreases 16 - k
+  {
+    if crate::ent_u16::rd(w, k) != 0 { return false; }
+    k = k + 1;
+  }
+  let sl: i64 = crate::ent_u16::rd(w, 11);
+  if sl == 0 { return g == 0 && na == 0 && no == 0 && initial_ok(w, ni); }
+  return sl == dig(w, 11);
+}
+
+// the host's unsealed initial world exactly: no pool, no budget used, next owner and ticket 1, instance rows (i+1, 0)
+fn initial_ok(w: [i64], ni: i64) -> bool
+  requires 0 <= ni && ni <= 1000000
+{
+  if len(w) != 16 + 2 * ni { return false; }
+  if crate::ent_u16::rd(w, 3) != 1 || crate::ent_u16::rd(w, 4) != 1 { return false; }
+  if crate::ent_u16::rd(w, 8) != 0 || crate::ent_u16::rd(w, 9) != 0 || crate::ent_u16::rd(w, 10) != 0 { return false; }
+  let mut i: i64 = 0;
+  while i < ni
+    invariant 0 <= i && i <= ni
+    decreases ni - i
+  {
+    if crate::ent_u16::rd(w, 16 + 2 * i) != i + 1 || crate::ent_u16::rd(w, 17 + 2 * i) != 0 { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+// two-modulus polynomial hash of every word of a except index skip (skip < 0: all words); result >= 1
+pub fn dig(a: [i64], skip: i64) -> i64
+  ensures 1 <= result
+{
+  let n: i64 = len(a);
+  let mut h1: i64 = 1;
+  let mut h2: i64 = 7;
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && 0 <= h1 && h1 < 2147483629 && 0 <= h2 && h2 < 2147483587
+    decreases n - i
+  {
+    if i != skip {
+      let x: i64 = a[i];
+      let mut u: i64 = x;
+      let mut sg: i64 = 0;
+      if x < 0 { u = -(x + 1); sg = 1; }
+      h1 = (h1 * 1000003 + 2 * (u % 2147483629) + sg) % 2147483629;
+      h2 = (h2 * 999983 + 2 * (u % 2147483587) + sg) % 2147483587;
+    }
+    i = i + 1;
+  }
+  h1 = (h1 * 1000003 + n) % 2147483629;
+  return h1 * 2147483648 + h2 + 1;
+}
+
+// the world with its seal (word 11) set
+pub fn seal(w: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let mut o: [i64] = copy(w);
+  crate::ent_u16::wr(inout o, 11, dig(w, 11));
+  return o;
+}
+
+// the world with word f of the active row of rid set to v (unchanged when rid is not active)
+pub fn act_set(w: [i64], rid: i64, f: i64, v: i64) -> [i64] ! alloc
+  requires 0 <= f && f <= 9
+  ensures len(result) >= 0
+{
+  let mut o: [i64] = copy(w);
+  let r: i64 = act_find(w, rid);
+  if r < 0 { return o; }
+  crate::ent_u16::wr(inout o, act_at(w) + 10 * r + f, v);
+  return o;
+}
+
+fn inst_at(w: [i64]) -> i64
+  ensures 0 <= result && result <= 20000016
+{
+  return 16 + crate::ent_u16::clamp(crate::ent_u16::rd(w, 8), 16777216);
+}
+
+fn act_at(w: [i64]) -> i64
+  ensures 0 <= result && result <= 40000016
+{
+  return inst_at(w) + 2 * cnt(w, 5);
+}
+
+fn open_at(w: [i64]) -> i64
+  ensures 0 <= result && result <= 60000016
+{
+  return act_at(w) + 10 * cnt(w, 6);
+}
+
+// row index of instance id, or -1
+pub fn inst_find(w: [i64], id: i64) -> i64
+  ensures result >= -1
+{
+  let n: i64 = cnt(w, 5);
+  let p: i64 = inst_at(w);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n <= 1000000 && 0 <= p && p <= 20000016
+    decreases n - i
+  {
+    if crate::ent_u16::rd(w, p + 2 * i) == id { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+// the active request count of instance id (instance row word 1), 0 when the instance is unknown
+pub fn inst_active(w: [i64], id: i64) -> i64
+  ensures 0 <= result && result <= 1000000000
+{
+  let i: i64 = inst_find(w, id);
+  if i < 0 { return 0; }
+  return crate::ent_u16::clamp(crate::ent_u16::rd(w, inst_at(w) + 2 * crate::ent_u16::clamp(i, 1000000) + 1), 1000000000);
+}
+
+// row index of the active request rid, or -1
+pub fn act_find(w: [i64], rid: i64) -> i64
+  ensures result >= -1 && result < 1000000
+{
+  let n: i64 = cnt(w, 6);
+  let p: i64 = act_at(w);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n <= 1000000 && 0 <= p && p <= 40000016
+    decreases n - i
+  {
+    if crate::ent_u16::rd(w, p + 10 * i + 1) == rid { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+// word f (0..9) of active row r
+pub fn act_word(w: [i64], r: i64, f: i64) -> i64
+  requires 0 <= f && f <= 9
+{
+  return crate::ent_u16::rd(w, act_at(w) + 10 * crate::ent_u16::clamp(r, 1000000) + f);
+}
+
+// The world after one valid transition (generation + 1).
+//   isnew: the request is not yet active (begin); done: the request ends here (no further await).
+//   A fresh owner token is taken only when a new request stays active; a fresh ticket only when an await is emitted.
+//   For an existing request the active row is updated (last seq, ticket, issued generation) or removed.
+pub fn apply(w: [i64], inst: i64, rid: i64, op: i64, isnew: bool, done: bool, seq: i64) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let ni: i64 = cnt(w, 5);
+  let na: i64 = cnt(w, 6);
+  let no: i64 = cnt(w, 7);
+  let np: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, 8), 16777216);
+  let ip: i64 = inst_at(w);
+  let ap: i64 = act_at(w);
+  let op0: i64 = open_at(w);
+  let ng: i64 = wgen(w) + 1;
+  let r: i64 = act_find(w, rid);
+  let ii: i64 = inst_find(w, inst);
+  let mut delta: i64 = 0;       // active-row count change
+  if isnew && !done { delta = 1; }
+  if !isnew && done { delta = -1; }
+  let nna: i64 = na + delta;
+  if nna < 0 { return crate::ent_u16::empty(); }
+  let total: i64 = 16 + np + 2 * ni + 10 * nna + 6 * no;
+  let mut o: [i64] = crate::ent_u16::zeros(total);
+  let h: i64 = crate::ent_u16::put_range(inout o, 0, w, 0, 16);
+  crate::ent_u16::wr(inout o, 2, ng);
+  crate::ent_u16::wr(inout o, 6, nna);
+  let mut owner: i64 = crate::ent_u16::rd(w, 3);
+  if !isnew && r >= 0 { owner = act_word(w, r, 2); }
+  let mut nown: i64 = next_owner(w);
+  if isnew && !done { nown = nown + 1; }
+  let mut ntick: i64 = next_ticket(w);
+  if !done { ntick = ntick + 1; }
+  crate::ent_u16::wr(inout o, 3, nown);
+  crate::ent_u16::wr(inout o, 4, ntick);
+  let a: i64 = crate::ent_u16::put_range(inout o, 16, w, 16, np);
+  // instance rows
+  let mut i: i64 = 0;
+  while i < ni
+    invariant 0 <= i && i <= ni && ni <= 1000000 && 0 <= ip && ip <= 20000016
+    decreases ni - i
+  {
+    crate::ent_u16::wr(inout o, ip + 2 * i, crate::ent_u16::rd(w, ip + 2 * i));
+    let mut c: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, ip + 2 * i + 1), 1000000000);
+    if i == ii { c = c + delta; }
+    crate::ent_u16::wr(inout o, ip + 2 * i + 1, c);
+    i = i + 1;
+  }
+  // active rows: copy all but a removed one; update the changed one; append a new one
+  let mut k: i64 = 0;
+  let mut out: i64 = 0;
+  while k < na
+    invariant 0 <= k && k <= na && na <= 1000000 && 0 <= out && out <= k && 0 <= ap && ap <= 40000016
+    decreases na - k
+  {
+    if !(k == r && done) {
+      let base: i64 = ap + 10 * out;
+      let b: i64 = crate::ent_u16::put_range(inout o, base, w, ap + 10 * k, 10);
+      if k == r {
+        crate::ent_u16::wr(inout o, base + 4, seq);
+        crate::ent_u16::wr(inout o, base + 5, crate::ent_u16::rd(w, 4));
+        crate::ent_u16::wr(inout o, base + 6, ng);
+      }
+      out = out + 1;
+    }
+    k = k + 1;
+  }
+  if isnew && !done {
+    let base: i64 = ap + 10 * out;
+    crate::ent_u16::wr(inout o, base, inst);
+    crate::ent_u16::wr(inout o, base + 1, rid);
+    crate::ent_u16::wr(inout o, base + 2, owner);
+    crate::ent_u16::wr(inout o, base + 3, op);
+    crate::ent_u16::wr(inout o, base + 4, seq);
+    crate::ent_u16::wr(inout o, base + 5, crate::ent_u16::rd(w, 4));
+    crate::ent_u16::wr(inout o, base + 6, ng);
+  }
+  let q: i64 = ap + 10 * nna;
+  let c2: i64 = crate::ent_u16::put_range(inout o, q, w, op0, 6 * no);
+  return o;
+}
+
+// ---- opening rows (ABI 3.3, 3.4): Pruv keeps the opening Set in the world and decides has, add, busy and delete itself ----
+
+pub fn pool_len(w: [i64]) -> i64
+  ensures 0 <= result && result <= 16777216
+{
+  return crate::ent_u16::clamp(crate::ent_u16::rd(w, 8), 16777216);
+}
+
+fn key_eq(w: [i64], off: i64, n: i64, key: [i64]) -> bool
+  requires 0 <= off && off <= 16777216
+{
+  if n != len(key) { return false; }
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && n == len(key) && 0 <= off && off <= 16777216
+    decreases n - j
+  {
+    if crate::ent_u16::rd(w, 16 + off + j) != crate::ent_u16::rd(key, j) { return false; }
+    j = j + 1;
+  }
+  return true;
+}
+
+// row index of the opening (instance, key), or -1 (Set.has)
+pub fn open_find(w: [i64], inst: i64, key: [i64]) -> i64
+  ensures result >= -1 && result < 1000000
+{
+  let n: i64 = cnt(w, 7);
+  let p: i64 = open_at(w);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n <= 1000000 && 0 <= p && p <= 60000016
+    decreases n - i
+  {
+    if crate::ent_u16::rd(w, p + 6 * i) == inst {
+      let off: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 6 * i + 1), 16777216);
+      let n2: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 6 * i + 2), 16777216);
+      if key_eq(w, off, n2, key) { return i; }
+    }
+    i = i + 1;
+  }
+  return -1;
+}
+
+// field f (0..5) of opening row r
+pub fn open_word(w: [i64], r: i64, f: i64) -> i64
+  requires 0 <= f && f <= 5
+{
+  return crate::ent_u16::rd(w, open_at(w) + 6 * crate::ent_u16::clamp(r, 1000000) + f);
+}
+
+// Set.add: the key is appended to the world pool and the row to the end of the opening rows; the request's active row owns it.
+// Returns an empty world when the request has no active row or already owns an opening.
+pub fn open_add(w: [i64], inst: i64, rid: i64, owner: i64, key: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let ni: i64 = cnt(w, 5);
+  let na: i64 = cnt(w, 6);
+  let no: i64 = cnt(w, 7);
+  let np: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, 8), 16777216);
+  let kl: i64 = crate::ent_u16::clamp(len(key), 16777216);
+  let r: i64 = act_find(w, rid);
+  if r < 0 { return crate::ent_u16::empty(); }
+  if act_word(w, r, 7) != 0 { return crate::ent_u16::empty(); }
+  let total: i64 = 16 + np + kl + 2 * ni + 10 * na + 6 * (no + 1);
+  let mut o: [i64] = crate::ent_u16::zeros(total);
+  let a: i64 = crate::ent_u16::put_range(inout o, 0, w, 0, 16);
+  crate::ent_u16::wr(inout o, 7, no + 1);
+  crate::ent_u16::wr(inout o, 8, np + kl);
+  let b: i64 = crate::ent_u16::put_range(inout o, 16, w, 16, np);
+  let c: i64 = crate::ent_u16::put_range(inout o, 16 + np, key, 0, kl);
+  let ip: i64 = inst_at(w);
+  let d: i64 = crate::ent_u16::put_range(inout o, 16 + np + kl, w, ip, 2 * ni + 10 * na);
+  crate::ent_u16::wr(inout o, 16 + np + kl + 2 * ni + 10 * r + 7, 1);
+  let q: i64 = 16 + np + kl + 2 * ni + 10 * na;
+  let e: i64 = crate::ent_u16::put_range(inout o, q, w, open_at(w), 6 * no);
+  crate::ent_u16::wr(inout o, q + 6 * no, inst);
+  crate::ent_u16::wr(inout o, q + 6 * no + 1, np);
+  crate::ent_u16::wr(inout o, q + 6 * no + 2, kl);
+  crate::ent_u16::wr(inout o, q + 6 * no + 3, rid);
+  crate::ent_u16::wr(inout o, q + 6 * no + 4, owner);
+  crate::ent_u16::wr(inout o, q + 6 * no + 5, wgen(w));
+  return o;
+}
+
+// Set.delete by the owner: the row of (inst, key) must belong to (rid, owner). Returns an empty world otherwise.
+pub fn open_del(w: [i64], inst: i64, rid: i64, owner: i64, key: [i64]) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let ni: i64 = cnt(w, 5);
+  let na: i64 = cnt(w, 6);
+  let no: i64 = cnt(w, 7);
+  let np: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, 8), 16777216);
+  let k: i64 = open_find(w, inst, key);
+  if k < 0 || k >= no { return crate::ent_u16::empty(); }
+  if open_word(w, k, 3) != rid || open_word(w, k, 4) != owner { return crate::ent_u16::empty(); }
+  let r: i64 = act_find(w, rid);
+  if r < 0 { return crate::ent_u16::empty(); }
+  let total: i64 = 16 + np + 2 * ni + 10 * na + 6 * (no - 1);
+  let mut o: [i64] = crate::ent_u16::zeros(total);
+  let a: i64 = crate::ent_u16::put_range(inout o, 0, w, 0, 16);
+  crate::ent_u16::wr(inout o, 7, no - 1);
+  let b: i64 = crate::ent_u16::put_range(inout o, 16, w, 16, np + 2 * ni + 10 * na);
+  crate::ent_u16::wr(inout o, 16 + np + 2 * ni + 10 * r + 7, 0);
+  let q: i64 = 16 + np + 2 * ni + 10 * na;
+  let c: i64 = crate::ent_u16::put_range(inout o, q, w, open_at(w), 6 * k);
+  let d: i64 = crate::ent_u16::put_range(inout o, q + 6 * k, w, open_at(w) + 6 * (k + 1), 6 * (no - 1 - k));
+  return o;
+}
+
+// row index of the opening owned by request rid, or -1
+pub fn open_find_rid(w: [i64], rid: i64) -> i64
+  ensures result >= -1 && result < 1000000
+{
+  let n: i64 = cnt(w, 7);
+  let p: i64 = open_at(w);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n <= 1000000 && 0 <= p && p <= 60000016
+    decreases n - i
+  {
+    if crate::ent_u16::rd(w, p + 6 * i + 3) == rid { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+// the key units of opening row r
+pub fn open_key(w: [i64], r: i64) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let off: i64 = crate::ent_u16::clamp(open_word(w, r, 1), 16777216);
+  let n: i64 = crate::ent_u16::clamp(open_word(w, r, 2), 16777216);
+  return crate::ent_u16::slice(w, 16 + off, 16 + off + n);
+}
+
+// the finally of the handler: the world without the opening of request rid (a copy when it owns none)
+pub fn rel_world(w: [i64], rid: i64) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let k: i64 = open_find_rid(w, rid);
+  if k < 0 { return copy(w); }
+  let r: [i64] = open_del(w, open_word(w, k, 0), rid, open_word(w, k, 4), open_key(w, k));
+  if len(r) == 0 { return copy(w); }
+  return r;
+}

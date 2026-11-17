@@ -1,0 +1,68 @@
+// L3-8 entry API (shared lib module): packet layer and the simple ops. See ent_state.pruv for the replay architecture.
+// The root (bench/l3/entry/root.pruv) forwards entry_begin / entry_step here.
+
+fn bad_pkt(w: [i64], code: i64) -> [i64] ! alloc
+{
+  let mut c: i64 = 0;
+  if code == 2 { c = 1; }
+  return crate::ent_packet::boundary(crate::ent_u16::rd(w, 5), crate::ent_u16::rd(w, 2), c);
+}
+
+fn run_item(cx: crate::ent_state::Ctx) -> crate::ent_state::Ctx ! alloc
+{
+  if cx.op == 2 { return crate::ent_dispatch::find_item(cx); }
+  if cx.op == 3 { return crate::ent_dispatch::list_item(cx); }
+  if cx.op == 4 { return crate::ent_dispatch::read_item(cx); }
+  if cx.op == 7 { return crate::ent_bound::threads_item(cx); }
+  if cx.op == 8 { return crate::ent_bound::excluded_item(cx); }
+  if cx.op == 9 { return crate::ent_bound::index_item(cx); }
+  return crate::ent_state::fail(cx);
+}
+
+pub fn entry_begin(input: [i64]) -> [i64] ! alloc
+{
+  let ec: i64 = crate::ent_packet::env_check(input);
+  if ec != 0 { return bad_pkt(input, ec); }
+  let op: i64 = crate::ent_u16::rd(input, 5);
+  let id: i64 = crate::ent_u16::rd(input, 2);
+  if crate::ent_u16::rd(input, 1) != 0 || crate::ent_u16::rd(input, 3) != 0 { return bad_pkt(input, 1); }
+  if op == 1 { return crate::ent_sources::import_begin(input); }
+  if op == 5 { return crate::ent_accounts::account_home_begin(input); }
+  if op == 6 { return crate::ent_canon::codex_folder_begin(input); }
+  let hi: i64 = crate::ent_packet::input_check(input);
+  if hi < 0 { return bad_pkt(input, 1); }
+  let blob: [i64] = crate::ent_state::repack(input, hi);
+  let cx0: crate::ent_state::Ctx = crate::ent_state::ctx_new(op, id, blob, crate::ent_u16::empty(), crate::ent_u16::zeros(8));
+  let cx: crate::ent_state::Ctx = run_item(cx0);
+  return crate::ent_state::finish(cx, 1, 0);
+}
+
+pub fn entry_step(prev: [i64], completion: [i64]) -> [i64] ! alloc
+{
+  let e1: i64 = crate::ent_packet::env_check(prev);
+  if e1 != 0 { return bad_pkt(prev, e1); }
+  let e2: i64 = crate::ent_packet::env_check(completion);
+  if e2 != 0 { return bad_pkt(prev, e2); }
+  let op: i64 = crate::ent_u16::rd(prev, 5);
+  let id: i64 = crate::ent_u16::rd(prev, 2);
+  let seq: i64 = crate::ent_u16::rd(prev, 3);
+  if crate::ent_u16::rd(prev, 1) != 1 || crate::ent_u16::rd(completion, 1) != 2 { return bad_pkt(prev, 1); }
+  if crate::ent_u16::rd(completion, 2) != id || crate::ent_u16::rd(completion, 3) != seq || crate::ent_u16::rd(completion, 5) != op { return bad_pkt(prev, 1); }
+  if seq >= 9007199254740992 { return bad_pkt(prev, 1); }
+  if op == 1 { return crate::ent_sources::import_step(prev, completion); }
+  if op == 6 { return crate::ent_canon::codex_folder_step(prev, completion); }
+  if op == 2 || op == 5 || op == 7 { return bad_pkt(prev, 1); }
+  let s2: i64 = crate::ent_u16::clamp(crate::ent_packet::sec_start(prev, 2), 33554432);
+  let st: [i64] = crate::ent_u16::slice(prev, s2, s2 + crate::ent_u16::clamp(crate::ent_packet::sec_len(prev, 2), 16777216));
+  if !crate::ent_state::state_ok(st, op, id) { return bad_pkt(prev, 1); }
+  if !crate::ent_state::st_replay_ok(st, op, seq) { return bad_pkt(prev, 1); }
+  let code: i64 = crate::ent_state::st_code(st);
+  let aux: i64 = crate::ent_state::st_aux(st);
+  let hi: i64 = crate::ent_packet::comp_check(completion, code, aux);
+  if hi < 0 { return bad_pkt(prev, 1); }
+  let lg: [i64] = crate::ent_state::log_append(crate::ent_state::st_log(st), code, aux, completion, hi);
+  if len(lg) > 16777216 { return bad_pkt(prev, 2); }
+  let cx0: crate::ent_state::Ctx = crate::ent_state::with_prev(crate::ent_state::ctx_new(op, id, crate::ent_state::st_blob(st), lg, crate::ent_state::st_ck(st)), prev, true);
+  let cx: crate::ent_state::Ctx = run_item(cx0);
+  return crate::ent_state::finish(cx, seq + 1, seq);
+}

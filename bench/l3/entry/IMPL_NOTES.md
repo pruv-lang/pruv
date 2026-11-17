@@ -1,5 +1,7 @@
 # L3-8 implementation notes
 
+> Path note (2026-11-17): the modules named below moved to `bench/l3/lib/` as `ent_<name>.pruv` (`crate::ent_<name>::`); the body of `root.pruv` is `bench/l3/lib/entry_api.pruv` and `root.pruv` only forwards. Compile with `--lib bench/l3/lib`. Older text below keeps the old file names.
+
 Worker notes from the implementation passes, merged in order. Each section keeps the worker's text; the lead's
 resolutions of the open points they raised come first.
 

@@ -1,0 +1,690 @@
+[
+ {
+  "id": "L01",
+  "name": "unbound-title",
+  "rule": "3.5",
+  "world": {
+   "readers": {
+    "claude": {
+     "list": [
+      {
+       "ok": [
+        {
+         "thread": "t1",
+         "title": "Item A"
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "sessions": []
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "items": [
+       {
+        "thread": "t1",
+        "title": "Item A"
+       }
+      ]
+     },
+     "itemKeys": [
+      [
+       "thread",
+       "title"
+      ]
+     ]
+    }
+   },
+   "counts": {
+    "sessionList": 2
+   }
+  }
+ },
+ {
+  "id": "L02",
+  "name": "bound-title",
+  "rule": "3.5",
+  "world": {
+   "readers": {
+    "claude": {
+     "list": [
+      {
+       "ok": [
+        {
+         "thread": "t1",
+         "title": "Item A"
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "sessions": [
+    {
+     "id": "s1",
+     "title": "Lair title",
+     "externalThread": {
+      "engine": "claude",
+      "source": "claude:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "items": [
+       {
+        "thread": "t1",
+        "title": "Lair title",
+        "boundSessionId": "s1"
+       }
+      ]
+     },
+     "itemKeys": [
+      [
+       "thread",
+       "title",
+       "boundSessionId"
+      ]
+     ]
+    }
+   }
+  }
+ },
+ {
+  "id": "L03",
+  "name": "duplicate-title-last",
+  "rule": "3.5",
+  "killer": "M04",
+  "world": {
+   "readers": {
+    "claude": {
+     "list": [
+      {
+       "ok": [
+        {
+         "thread": "t1",
+         "title": "Item A"
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "sessions": [
+    {
+     "id": "s1",
+     "title": "first",
+     "externalThread": {
+      "engine": "claude",
+      "source": "claude:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    },
+    {
+     "id": "s1",
+     "title": "second"
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "items": [
+       {
+        "thread": "t1",
+        "title": "second",
+        "boundSessionId": "s1"
+       }
+      ]
+     }
+    }
+   }
+  }
+ },
+ {
+  "id": "L04",
+  "name": "empty-title-fallback",
+  "rule": "3.5",
+  "killer": "M05",
+  "world": {
+   "readers": {
+    "claude": {
+     "list": [
+      {
+       "ok": [
+        {
+         "thread": "t1",
+         "title": "Item A"
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "sessions": [
+    {
+     "id": "s1",
+     "title": "",
+     "externalThread": {
+      "engine": "claude",
+      "source": "claude:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "items": [
+       {
+        "thread": "t1",
+        "title": "Item A",
+        "boundSessionId": "s1"
+       }
+      ]
+     }
+    }
+   }
+  }
+ },
+ {
+  "id": "L05",
+  "name": "temporary-title-in-map",
+  "rule": "3.5",
+  "note": "The title map includes temporary sessions (last write wins) although the bound search excludes them.",
+  "world": {
+   "readers": {
+    "claude": {
+     "list": [
+      {
+       "ok": [
+        {
+         "thread": "t1",
+         "title": "Item A"
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "sessions": [
+    {
+     "id": "dup",
+     "title": "Real",
+     "externalThread": {
+      "engine": "claude",
+      "source": "claude:home",
+      "thread": "t1",
+      "mode": "fork",
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    },
+    {
+     "id": "dup",
+     "title": "Temp title",
+     "temporary": true
+    }
+   ]
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "items": [
+       {
+        "thread": "t1",
+        "title": "Temp title",
+        "boundSessionId": "dup"
+       }
+      ]
+     }
+    }
+   }
+  }
+ },
+ {
+  "id": "L06",
+  "name": "zero-metadata",
+  "rule": "3.5",
+  "world": {
+   "readers": {
+    "claude": {
+     "list": [
+      {
+       "ok": [
+        {
+         "thread": "t1",
+         "title": "Z",
+         "updatedAt": 0,
+         "size": 0,
+         "messages": 0,
+         "path": ""
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "sessions": []
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "items": [
+       {
+        "thread": "t1",
+        "title": "Z",
+        "updatedAt": 0,
+        "size": 0,
+        "messages": 0,
+        "path": ""
+       }
+      ]
+     },
+     "itemKeys": [
+      [
+       "thread",
+       "title",
+       "updatedAt",
+       "size",
+       "messages",
+       "path"
+      ]
+     ]
+    }
+   }
+  }
+ },
+ {
+  "id": "L07",
+  "name": "undefined-metadata",
+  "rule": "3.5",
+  "world": {
+   "readers": {
+    "claude": {
+     "list": [
+      {
+       "ok": [
+        {
+         "thread": "t1",
+         "title": "U",
+         "updatedAt": {
+          "undef": 1
+         },
+         "size": {
+          "undef": 1
+         },
+         "messages": {
+          "undef": 1
+         },
+         "path": {
+          "undef": 1
+         }
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "sessions": []
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "itemKeys": [
+      [
+       "thread",
+       "title"
+      ]
+     ]
+    }
+   }
+  }
+ },
+ {
+  "id": "L08",
+  "name": "null-metadata",
+  "rule": "3.5",
+  "world": {
+   "readers": {
+    "claude": {
+     "list": [
+      {
+       "ok": [
+        {
+         "thread": "t1",
+         "title": "N",
+         "updatedAt": null,
+         "size": null,
+         "messages": null,
+         "path": null
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "sessions": []
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "items": [
+       {
+        "thread": "t1",
+        "title": "N",
+        "updatedAt": null,
+        "size": null,
+        "messages": null,
+        "path": null
+       }
+      ]
+     },
+     "itemKeys": [
+      [
+       "thread",
+       "title",
+       "updatedAt",
+       "size",
+       "messages",
+       "path"
+      ]
+     ]
+    }
+   }
+  }
+ },
+ {
+  "id": "L09",
+  "name": "drop-extra-fields",
+  "rule": "3.5",
+  "world": {
+   "readers": {
+    "claude": {
+     "list": [
+      {
+       "ok": [
+        {
+         "thread": "t1",
+         "title": "E",
+         "entrypoint": "cli",
+         "origin": "x",
+         "foo": 1,
+         "kind": "k",
+         "boundSessionId": "fake"
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "sessions": []
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "items": [
+       {
+        "thread": "t1",
+        "title": "E"
+       }
+      ]
+     },
+     "itemKeys": [
+      [
+       "thread",
+       "title"
+      ]
+     ]
+    }
+   }
+  }
+ },
+ {
+  "id": "L10",
+  "name": "truthy-maybeopen",
+  "rule": "3.5",
+  "world": {
+   "readers": {
+    "claude": {
+     "list": [
+      {
+       "ok": [
+        {
+         "thread": "t1",
+         "title": "A",
+         "maybeOpen": true
+        },
+        {
+         "thread": "t2",
+         "title": "B",
+         "maybeOpen": false
+        },
+        {
+         "thread": "t3",
+         "title": "C",
+         "maybeOpen": 1
+        },
+        {
+         "thread": "t4",
+         "title": "D",
+         "maybeOpen": "yes"
+        },
+        {
+         "thread": "t5",
+         "title": "E",
+         "maybeOpen": 0
+        },
+        {
+         "thread": "t6",
+         "title": "F",
+         "maybeOpen": {
+          "undef": 1
+         }
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "sessions": []
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "list",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "itemKeys": [
+      [
+       "thread",
+       "title",
+       "maybeOpen"
+      ],
+      [
+       "thread",
+       "title"
+      ],
+      [
+       "thread",
+       "title",
+       "maybeOpen"
+      ],
+      [
+       "thread",
+       "title",
+       "maybeOpen"
+      ],
+      [
+       "thread",
+       "title"
+      ],
+      [
+       "thread",
+       "title"
+      ]
+     ],
+     "value": {
+      "items": [
+       {
+        "maybeOpen": true
+       },
+       {
+        "thread": "t2"
+       },
+       {
+        "maybeOpen": true
+       },
+       {
+        "maybeOpen": true
+       },
+       {
+        "thread": "t5"
+       },
+       {
+        "thread": "t6"
+       }
+      ]
+     }
+    }
+   }
+  }
+ }
+]

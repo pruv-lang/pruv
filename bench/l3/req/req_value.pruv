@@ -1,0 +1,149 @@
+// L3-9 request ABI v1 (ABI.md 3.1): 3-word value slots over [i64] rows and a UTF-16 pool.
+// tags: 0 undef, 1 null, 2/3 bool, 4 protocol int, 5 number, 6 string (pool offset, units), 7 array (section, count),
+// 8 object (section, count), 9 opaque ref, 10 absent, 11 inspected marker.
+
+pub fn tag_at(w: [i64], p: i64) -> i64 { return crate::ent_u16::rd(w, p); }
+
+// undefined, null or absent
+pub fn nullish(w: [i64], p: i64) -> bool
+{
+  let t: i64 = crate::ent_u16::rd(w, p);
+  return t == 0 || t == 1 || t == 10;
+}
+
+pub fn put(inout o: [i64], at: i64, tag: i64, a: i64, b: i64) -> ()
+  ensures len(o) == len(old(o))
+{
+  crate::ent_packet::put_vs(inout o, at, tag, a, b);
+}
+
+// copy slot p of src to slot q of o
+pub fn copy_slot(inout o: [i64], q: i64, src: [i64], p: i64) -> ()
+  requires 0 <= q && q <= 1000000000 && 0 <= p && p <= 1000000000
+  ensures len(o) == len(old(o))
+{
+  crate::ent_packet::put_vs(inout o, q, crate::ent_u16::rd(src, p), crate::ent_u16::rd(src, p + 1), crate::ent_u16::rd(src, p + 2));
+}
+
+// the units of the string slot at p of w, read from pool (empty when the slot is not a string slot)
+pub fn units(pool: [i64], w: [i64], p: i64) -> [i64] ! alloc
+  requires 0 <= p && p <= 1000000000
+  ensures len(result) >= 0
+{
+  if crate::ent_u16::rd(w, p) != 6 { return crate::ent_u16::empty(); }
+  let a: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 1), 1073741823);
+  let n: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 2), 1073741823);
+  return crate::ent_u16::slice(pool, a, a + n);
+}
+
+// the slot at p is a string slot equal to the ASCII literal s
+pub fn is_str_lit(pool: [i64], w: [i64], p: i64, s: str) -> bool ! alloc
+  requires 0 <= p && p <= 1000000000
+{
+  if crate::ent_u16::rd(w, p) != 6 { return false; }
+  return crate::ent_u16::eq_lit(units(pool, w, p), s);
+}
+
+// rows of 3-word slots grouped as 18-word rows (6 slots): every string slot moves up by base
+pub fn rebase(rows: [i64], base: i64) -> [i64] ! alloc
+  ensures len(result) >= 0
+{
+  let mut o: [i64] = crate::ent_u16::slice(rows, 0, len(rows));
+  let n: i64 = len(o);
+  let b: i64 = crate::ent_u16::clamp(base, 1073741823);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n + 2 && n == len(o) && 0 <= b && b <= 1073741823
+    decreases n + 2 - i
+  {
+    if crate::ent_u16::rd(o, i) == 6 {
+      let nv: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(o, i + 1), 1073741823) + b;
+      crate::ent_u16::wr(inout o, i + 1, nv);
+    }
+    i = i + 3;
+  }
+  return o;
+}
+
+// copy slot p of src to slot q of o; a string slot moves up by base
+pub fn copy_slot_off(inout o: [i64], q: i64, src: [i64], p: i64, base: i64) -> ()
+  requires 0 <= q && q <= 1000000000 && 0 <= p && p <= 1000000000
+  ensures len(o) == len(old(o))
+{
+  let t: i64 = crate::ent_u16::rd(src, p);
+  let mut a: i64 = crate::ent_u16::rd(src, p + 1);
+  if t == 6 { a = crate::ent_u16::clamp(a, 1073741823) + crate::ent_u16::clamp(base, 1073741823); }
+  crate::ent_packet::put_vs(inout o, q, t, a, crate::ent_u16::rd(src, p + 2));
+}
+
+// JavaScript truthiness of the slot at p (tag 5: not +0, -0 or NaN; tag 6: not empty; objects, arrays, refs true)
+pub fn truthy(w: [i64], p: i64) -> bool
+  requires 0 <= p && p <= 1000000000
+{
+  let t: i64 = crate::ent_u16::rd(w, p);
+  let a: i64 = crate::ent_u16::rd(w, p + 1);
+  let b: i64 = crate::ent_u16::clamp(crate::ent_u16::rd(w, p + 2), 4294967295);
+  if t == 3 { return true; }
+  if t == 4 { return a != 0; }
+  if t == 5 {
+    // bits = b:a. +-0: (b & 0x7fffffff) == 0 && a == 0. NaN: exponent all ones and mantissa non-zero.
+    let hi: i64 = b % 2147483648;
+    if hi == 0 && a == 0 { return false; }
+    if hi / 1048576 == 2047 && (hi % 1048576 != 0 || a != 0) { return false; }
+    return true;
+  }
+  if t == 6 { return b > 0; }
+  if t == 7 || t == 8 || t == 9 || t == 11 { return true; }
+  return false;
+}
+
+// two slots hold the same value (strings by their units, numbers and others by their words)
+pub fn slot_eq(pa: [i64], a: [i64], ia: i64, pb: [i64], b: [i64], ib: i64) -> bool ! alloc
+  requires 0 <= ia && ia <= 1000000000 && 0 <= ib && ib <= 1000000000
+{
+  let ta: i64 = crate::ent_u16::rd(a, ia);
+  if ta != crate::ent_u16::rd(b, ib) { return false; }
+  if ta == 6 { return crate::ent_u16::eq(units(pa, a, ia), units(pb, b, ib)); }
+  return crate::ent_u16::rd(a, ia + 1) == crate::ent_u16::rd(b, ib + 1) && crate::ent_u16::rd(a, ia + 2) == crate::ent_u16::rd(b, ib + 2);
+}
+
+// a well-formed host value slot over a pool of plen units: the tags the host emits, with their words in range
+// (tag 10, absent, only where the field may be missing)
+pub fn slot_ok(plen: i64, w: [i64], p: i64, absent: bool) -> bool
+  requires 0 <= p && p <= 1000000000
+{
+  if p + 3 > len(w) { return false; }
+  let t: i64 = crate::ent_u16::rd(w, p);
+  let a: i64 = crate::ent_u16::rd(w, p + 1);
+  let b: i64 = crate::ent_u16::rd(w, p + 2);
+  if t == 0 || t == 1 || t == 2 || t == 3 { return a == 0 && b == 0; }
+  if t == 10 { return absent && a == 0 && b == 0; }
+  if t == 4 { return b == 0; }
+  if t == 5 { return 0 <= a && a <= 4294967295 && 0 <= b && b <= 4294967295; }
+  if t == 6 { return 0 <= a && 0 <= b && a <= plen && b <= plen - a; }
+  if t == 9 { return a > 0 && b == 0; }
+  return false;
+}
+
+// count well-formed slots from word `from`
+pub fn slots_ok(plen: i64, w: [i64], from: i64, count: i64, absent: bool) -> bool
+  requires 0 <= from && from <= 1000000000 && 0 <= count && count <= 100000000
+{
+  if from + 3 * count > len(w) || from + 3 * count > 1000000000 { return false; }
+  let mut k: i64 = 0;
+  while k < count
+    invariant 0 <= k && k <= count && count <= 100000000 && from + 3 * count <= 1000000000
+    decreases count - k
+  {
+    if !slot_ok(plen, w, from + 3 * k, absent) { return false; }
+    k = k + 1;
+  }
+  return true;
+}
+
+// a well-formed string slot
+pub fn str_ok(plen: i64, w: [i64], p: i64) -> bool
+  requires 0 <= p && p <= 1000000000
+{
+  return crate::ent_u16::rd(w, p) == 6 && slot_ok(plen, w, p, false);
+}

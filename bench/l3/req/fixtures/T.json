@@ -1,0 +1,1085 @@
+[
+ {
+  "id": "T01",
+  "name": "uuid-order",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "a",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "b",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "c",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "counts": {
+    "uuid": 3
+   },
+   "createdAfter": [
+    {
+     "turns": [
+      {
+       "id": "00000000-0000-4000-8000-000000000001",
+       "prompt": "a"
+      },
+      {
+       "id": "00000000-0000-4000-8000-000000000002",
+       "prompt": "b"
+      },
+      {
+       "id": "00000000-0000-4000-8000-000000000003",
+       "prompt": "c"
+      }
+     ],
+     "engineThreads": {
+      "claude": {
+       "lastTurnId": "00000000-0000-4000-8000-000000000003"
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "T02",
+  "name": "single-now",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "a",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "b",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "counts": {
+    "now": 1,
+    "uuid": 2
+   },
+   "order": [
+    {
+     "c": "now"
+    },
+    {
+     "c": "uuid"
+    },
+    {
+     "c": "uuid"
+    },
+    {
+     "c": "createImported"
+    }
+   ],
+   "createdAfter": [
+    {
+     "turns": [
+      {
+       "createdAt": "2023-11-14T22:13:20.000Z"
+      },
+      {
+       "createdAt": "2023-11-14T22:13:20.000Z"
+      }
+     ],
+     "externalThread": {
+      "importedAt": "2023-11-14T22:13:20.000Z"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "T03",
+  "name": "created-missing",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "a",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false,
+          "createdAt": "2020-05-05T05:05:05.000Z"
+         },
+         {
+          "prompt": "b",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "createdAfter": [
+    {
+     "turns": [
+      {
+       "createdAt": "2020-05-05T05:05:05.000Z"
+      },
+      {
+       "createdAt": "2023-11-14T22:13:20.000Z"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "id": "T04",
+  "name": "created-empty",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "a",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false,
+          "createdAt": ""
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "createdAfter": [
+    {
+     "turns": [
+      {
+       "createdAt": ""
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "id": "T05",
+  "name": "created-null",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "a",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false,
+          "createdAt": null
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "createdAfter": [
+    {
+     "turns": [
+      {
+       "createdAt": "2023-11-14T22:13:20.000Z"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "id": "T06",
+  "name": "completed-present",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "a",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false,
+          "completedAt": "2020-01-01T00:00:00.000Z"
+         },
+         {
+          "prompt": "b",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false,
+          "completedAt": ""
+         },
+         {
+          "prompt": "c",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false,
+          "completedAt": null
+         },
+         {
+          "prompt": "d",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "createdAfter": [
+    {
+     "turns": [
+      {
+       "completedAt": "2020-01-01T00:00:00.000Z"
+      },
+      {
+       "completedAt": ""
+      },
+      {
+       "completedAt": null
+      },
+      {
+       "prompt": "d"
+      }
+     ]
+    }
+   ],
+   "createdKeys": [
+    [
+     0,
+     [
+      "turns",
+      0
+     ],
+     [
+      "id",
+      "prompt",
+      "reply",
+      "progress",
+      "status",
+      "usage",
+      "createdAt",
+      "completedAt",
+      "imported"
+     ]
+    ],
+    [
+     0,
+     [
+      "turns",
+      1
+     ],
+     [
+      "id",
+      "prompt",
+      "reply",
+      "progress",
+      "status",
+      "usage",
+      "createdAt",
+      "completedAt",
+      "imported"
+     ]
+    ],
+    [
+     0,
+     [
+      "turns",
+      2
+     ],
+     [
+      "id",
+      "prompt",
+      "reply",
+      "progress",
+      "status",
+      "usage",
+      "createdAt",
+      "completedAt",
+      "imported"
+     ]
+    ],
+    [
+     0,
+     [
+      "turns",
+      3
+     ],
+     [
+      "id",
+      "prompt",
+      "reply",
+      "progress",
+      "status",
+      "usage",
+      "createdAt",
+      "imported"
+     ]
+    ]
+   ]
+  }
+ },
+ {
+  "id": "T07",
+  "name": "tools-zero-positive",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "a",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "b",
+          "reply": "r1",
+          "tools": -1,
+          "clipped": false
+         },
+         {
+          "prompt": "c",
+          "reply": "r1",
+          "tools": 3,
+          "clipped": false
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "createdKeys": [
+    [
+     0,
+     [
+      "turns",
+      0,
+      "imported"
+     ],
+     [
+      "engine"
+     ]
+    ],
+    [
+     0,
+     [
+      "turns",
+      1,
+      "imported"
+     ],
+     [
+      "engine"
+     ]
+    ],
+    [
+     0,
+     [
+      "turns",
+      2,
+      "imported"
+     ],
+     [
+      "engine",
+      "tools"
+     ]
+    ]
+   ],
+   "createdAfter": [
+    {
+     "turns": [
+      {},
+      {},
+      {
+       "imported": {
+        "engine": "claude",
+        "tools": 3
+       }
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "id": "T08",
+  "name": "clipped-truthy",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "a",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": true
+         },
+         {
+          "prompt": "b",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         },
+         {
+          "prompt": "c",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": 1
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "createdKeys": [
+    [
+     0,
+     [
+      "turns",
+      0,
+      "imported"
+     ],
+     [
+      "engine",
+      "clipped"
+     ]
+    ],
+    [
+     0,
+     [
+      "turns",
+      1,
+      "imported"
+     ],
+     [
+      "engine"
+     ]
+    ],
+    [
+     0,
+     [
+      "turns",
+      2,
+      "imported"
+     ],
+     [
+      "engine",
+      "clipped"
+     ]
+    ]
+   ],
+   "createdAfter": [
+    {
+     "turns": [
+      {
+       "imported": {
+        "clipped": true
+       }
+      },
+      {},
+      {
+       "imported": {
+        "clipped": true
+       }
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "id": "T09",
+  "name": "omitted-before",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ],
+        "omittedBefore": true
+       }
+      },
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ],
+        "omittedBefore": false
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t2",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    },
+    "r2": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-2"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "createdKeys": [
+    [
+     0,
+     [
+      "externalThread"
+     ],
+     [
+      "engine",
+      "source",
+      "thread",
+      "mode",
+      "importedAt",
+      "omittedBefore"
+     ]
+    ],
+    [
+     1,
+     [
+      "externalThread"
+     ],
+     [
+      "engine",
+      "source",
+      "thread",
+      "mode",
+      "importedAt"
+     ]
+    ]
+   ],
+   "createdAfter": [
+    {
+     "externalThread": {
+      "omittedBefore": true
+     }
+    },
+    {}
+   ]
+  }
+ },
+ {
+  "id": "T10",
+  "name": "last-plan-preserved",
+  "rule": "3.4",
+  "world": {
+   "readers": {
+    "claude": {
+     "read": [
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ],
+        "lastPlan": "step one"
+       }
+      },
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ],
+        "lastPlan": ""
+       }
+      },
+      {
+       "ok": {
+        "title": "T",
+        "turns": [
+         {
+          "prompt": "p1",
+          "reply": "r1",
+          "tools": 0,
+          "clipped": false
+         }
+        ],
+        "lastPlan": {
+         "steps": [
+          1,
+          2
+         ]
+        }
+       }
+      }
+     ]
+    }
+   }
+  },
+  "script": [
+   {
+    "ev": "start",
+    "req": "r1",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t1",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r2",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t2",
+     "mode": "fork"
+    }
+   },
+   {
+    "ev": "start",
+    "req": "r3",
+    "op": "open",
+    "input": {
+     "source": "claude:home",
+     "folder": "/proj",
+     "thread": "t3",
+     "mode": "fork"
+    }
+   }
+  ],
+  "expect": {
+   "req": {
+    "r1": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-1"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    },
+    "r2": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-2"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    },
+    "r3": {
+     "terminal": "ok",
+     "value": {
+      "sessionId": "new-3"
+     },
+     "keys": [
+      "sessionId"
+     ]
+    }
+   },
+   "createdKeys": [
+    [
+     0,
+     [
+      "externalThread"
+     ],
+     [
+      "engine",
+      "source",
+      "thread",
+      "mode",
+      "importedAt",
+      "lastPlan"
+     ]
+    ],
+    [
+     1,
+     [
+      "externalThread"
+     ],
+     [
+      "engine",
+      "source",
+      "thread",
+      "mode",
+      "importedAt"
+     ]
+    ],
+    [
+     2,
+     [
+      "externalThread"
+     ],
+     [
+      "engine",
+      "source",
+      "thread",
+      "mode",
+      "importedAt",
+      "lastPlan"
+     ]
+    ]
+   ],
+   "createdAfter": [
+    {
+     "externalThread": {
+      "lastPlan": "step one"
+     }
+    },
+    null,
+    {
+     "externalThread": {
+      "lastPlan": {
+       "steps": [
+        1,
+        2
+       ]
+      }
+     }
+    }
+   ]
+  }
+ }
+]
