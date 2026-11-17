@@ -195,7 +195,7 @@ def prefix_ok(r):
     """Mirror of bud_halt.pruv prefix_len: True iff the units r start with a well-formed halt prefix (otherwise the
     whole rest is JSON-opaque). Raw values, nothing is normalized."""
     n = len(r)
-    if n < 6 or r[0] != -2:
+    if n < 6 or r[0] != -2 or n > 4294967296:
         return False
     if not 0 <= r[1] <= 4 or r[2] not in (1, 2):
         return False
@@ -445,9 +445,16 @@ def oracle_fx(o, req):
     return ev
 
 
-def oracle_between(o):
-    """Effects outside any request (timer fires between requests and what they emit), in trace order."""
-    return [oracle_ev(t, True) for t in o["trace"] if t.get("r") is None and t["c"] in FX]
+def oracle_between(o, stop=None):
+    """Effects outside any request (timer fires between requests and what they emit), in trace order. With stop set,
+    only those before the first trace entry of request stop."""
+    out = []
+    for t in o["trace"]:
+        if stop is not None and t.get("r") == stop:
+            break
+        if t.get("r") is None and t["c"] in FX:
+            out.append(oracle_ev(t, True))
+    return out
 
 
 def mine_effect(f, sid):
@@ -591,11 +598,11 @@ def classify(case, o, run, cut):
             return "fail", "%s %s effects %r != %r" % (r, e["op"], got, wfx)
         if ("runningDelegationIds",) in got:
             STATS["halts"] += 1
-    if cut:
-        return "not-implemented", "%s (%s)" % (cut[1], OWNER.get(cut[1], "?"))
-    wb = oracle_between(o)
+    wb = oracle_between(o, cut[0] if cut else None)
     if run["between"] != wb:
         return "fail", "between effects %r != %r" % (run["between"], wb)
+    if cut:
+        return "not-implemented", "%s (%s)" % (cut[1], OWNER.get(cut[1], "?"))
     d = compare_final(o, run["obs"])
     if d:
         return "fail", d

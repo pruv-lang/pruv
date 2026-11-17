@@ -44,6 +44,10 @@
 5. a missing request still gave exact → requests ran must equal the expected call list.
 6. decode_budget took negative reasons via Python negative indexing → `prefix_ok` gate and ValueError on bad fields.
 
+Confirmation audit (Codex, fixes required, all fixed): `rec_ok_in` now also requires off + n <= len(st) (out-of-range
+`rd` reads 0, so an empty array passed); between-request effects are also compared in cut cases, up to the cut
+request's first trace entry; `prefix_ok` adds prefix_len's l <= 2^32 bound so the mirror is exact.
+
 ## Known differences / spec notes
 - **KD-M10-1 (spec note, §8.1)**: the Need/resume pattern (return a Need status with nothing written, host answers,
   call again) does not fit a query that comes after a write. In halt, SETTLE (which may already clear the timer)
@@ -57,7 +61,8 @@
 Q (`python3 bench/l3/budget/m10_test/run_m10.py q`, work/m10, 300 cases Q4 150 / Q5 150). Rust rows use the pruvc-rs
 release built in this worktree after merging main (db2474a, aedd5ab), passed with --pruvc. Besides per-request value
 and effects, a case is exact only if the requests that ran equal the script's calls (up to the cut) and the effects
-outside requests (timer fires between requests) equal the oracle's (none fire in either set).
+outside requests (timer fires between requests, up to the cut in not-implemented cases) equal the oracle's (none
+fire in either set).
 
 | set | compiler | exact | not-implemented | fail | halts compared |
 |---|---|---|---|---|---|
@@ -71,7 +76,7 @@ Compared requests (derived set): halt 452, charge 292, maybeClose 266, runStarte
 reopen 51, current 22, isHalted 16. A mutation check (wrong reason table, altered halt.at) produced failures, so the
 comparison is live.
 
-`same`: Rust and Python pruvc output byte-identical (182995 bytes, after the review fixes).
+`same`: Rust and Python pruvc output byte-identical (183064 bytes, after the review and audit fixes).
 
 Perf (Pruv only, `perf --rounds 3 --reps 20000`, after the review fixes, one session, halt with D running
 delegations; the loop also puts the record back open, `putback` times that put alone): halt D=10 3.3 µs, D=50

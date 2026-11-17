@@ -76,10 +76,11 @@ fn prefix_len(b: [i64], u: i64, l: i64) -> i64
 }
 
 // True iff the n words of the record stored in st at off form a well-formed record frame: n >= 30 and the six
-// strings (raw length words, never clamped) starting at off + 24 end exactly at off + n.
+// strings (raw length words, never clamped) starting at off + 24 end exactly at off + n. The frame must lie inside st.
 pub fn rec_ok_in(st: [i64], off: i64, n: i64) -> bool
 {
   if n < 30 || off < 0 || off > 1099511627776 || n > 1099511627776 { return false; }
+  if off + n > len(st) { return false; }
   let end: i64 = off + n;
   let mut p: i64 = off + 24;
   let mut i: i64 = 0;
