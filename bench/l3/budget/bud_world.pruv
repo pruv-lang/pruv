@@ -135,13 +135,16 @@ fn keys_of(st: [i64], inout out: [i64], owner: i64) -> i64
 
 // ---- generic put / delete on a root map ----
 
-// Sets key -> blob in the map of `owner`. [1] new, [0] replaced (position kept).
-fn put_blob(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, blob: [i64], bs: i64, bn: i64, inout out: [i64]) -> i64
+// Sets key -> blob in the map of `owner`. [1] new, [0] replaced (position kept). packed: the key is the words(kn)
+// packed words key[ks ..] (else kn unit words, packed on insert). Both store words(kn) arena words per key, so that
+// is what make_room reserves.
+fn put_blob(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, blob: [i64], bs: i64, bn: i64, packed: bool, inout out: [i64]) -> i64
 {
   if len(out) < 2 { return 3; }
-  let e: i64 = fd(st, owner, key, ks, kn);
+  let mut e: i64 = -1;
+  if packed { e = crate::bud_map::find_w(st, owner, key, ks, kn); } else { e = fd(st, owner, key, ks, kn); }
   let mut ents: i64 = 1;
-  let mut words: i64 = cl(kn) + cl(bn);
+  let mut words: i64 = crate::bud_keys::words(kn) + cl(bn);
   if e >= 0 {
     ents = 0;
     words = cl(bn);
@@ -152,7 +155,8 @@ fn put_blob(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, blob: [i6
   let mut x: i64 = e;
   let mut fresh: i64 = 0;
   if x < 0 {
-    x = crate::bud_map::add(inout st, owner, key, ks, kn);
+    if packed { x = crate::bud_map::add_w(inout st, owner, key, ks, kn); }
+    else { x = crate::bud_map::add(inout st, owner, key, ks, kn); }
     fresh = 1;
   }
   if x < 0 { return 2; }
@@ -175,7 +179,13 @@ fn del_key(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, inout out:
 
 pub fn session_put(inout st: [i64], key: [i64], ks: i64, kn: i64, blob: [i64], bs: i64, bn: i64, inout out: [i64]) -> i64
 {
-  return put_blob(inout st, 0, key, ks, kn, blob, bs, bn, inout out);
+  return put_blob(inout st, 0, key, ks, kn, blob, bs, bn, false, inout out);
+}
+
+// session_put for a packed session key: key[ks .. ks+words(kn)) canonical (caller contract, bud_keys::slice_ok).
+pub fn session_put_w(inout st: [i64], key: [i64], ks: i64, kn: i64, blob: [i64], bs: i64, bn: i64, inout out: [i64]) -> i64
+{
+  return put_blob(inout st, 0, key, ks, kn, blob, bs, bn, true, inout out);
 }
 
 // [0] absent, or [1, n, words...]
@@ -231,7 +241,7 @@ pub fn session_keys(st: [i64], inout out: [i64]) -> i64
 // [1] new, [0] existed (sessionId replaced, position kept)
 pub fn clock_put(inout st: [i64], bkey: [i64], bks: i64, bkn: i64, skey: [i64], sks: i64, skn: i64, inout out: [i64]) -> i64
 {
-  return put_blob(inout st, 1, bkey, bks, bkn, skey, sks, skn, inout out);
+  return put_blob(inout st, 1, bkey, bks, bkn, skey, sks, skn, false, inout out);
 }
 
 pub fn clock_del(inout st: [i64], key: [i64], ks: i64, kn: i64, inout out: [i64]) -> i64
@@ -288,7 +298,7 @@ pub fn run_set(inout st: [i64], bkey: [i64], bks: i64, bkn: i64, rkey: [i64], rk
     crate::bud_store::set_ef(inout st, r, 14, waiting);
     return ret_one(inout out, 0);
   }
-  let nd: i64 = crate::bud_map::make_room(inout st, 1, cl(rkn));
+  let nd: i64 = crate::bud_map::make_room(inout st, 1, crate::bud_keys::words(rkn));
   if nd != 0 { return grow_sig(inout out, nd); }
   let x: i64 = crate::bud_map::add(inout st, c, rkey, rks, rkn);
   if x < 0 { return 2; }
@@ -343,12 +353,12 @@ pub fn tool_note(inout st: [i64], tkey: [i64], tks: i64, tkn: i64, akey: [i64], 
   if len(out) < 2 { return 3; }
   let t: i64 = fd(st, 2, tkey, tks, tkn);
   let mut ents: i64 = 2;
-  let mut words: i64 = cl(tkn) + cl(akn);
+  let mut words: i64 = crate::bud_keys::words(tkn) + crate::bud_keys::words(akn);
   if t >= 0 {
     let a: i64 = fd(st, t, akey, aks, akn);
     if a >= 0 { return ret_one(inout out, 0); }
     ents = 1;
-    words = cl(akn);
+    words = crate::bud_keys::words(akn);
   }
   let nd: i64 = crate::bud_map::make_room(inout st, ents, words);
   if nd != 0 { return grow_sig(inout out, nd); }

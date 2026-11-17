@@ -110,6 +110,46 @@ fn entry_matches(st: [i64], e: i64, owner: i64, og: i64, h: i64, key: [i64], ks:
   return true;
 }
 
+// Packed-key twin of entry_matches: the key is the words(kn) packed words key[ks ..], kn units. Same header tests;
+// the key compare is one word-slice compare (memcmp) in range, a per-word total fallback otherwise. Both read the
+// same words, so the result does not depend on the path. Equal n and equal words == equal units (one encoding per key).
+fn entry_matches_w(st: [i64], e: i64, owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn: i64) -> bool
+{
+  let a: i64 = crate::bud_store::field_addr(st, e);
+  if a < 0 { return false; }
+  let n: i64 = crate::bud_store::c32(kn);
+  let mut ko: i64 = 0;
+  if a + 7 <= len(st) {
+    if st[a + 6] != h { return false; }
+    if st[a] != 1 { return false; }
+    if st[a + 1] != owner || st[a + 2] != og { return false; }
+    if st[a + 5] != n { return false; }
+    ko = crate::bud_store::c40(st[a + 4]);
+  } else {
+    if crate::ent_u16::rd(st, a + 6) != h { return false; }
+    if crate::ent_u16::rd(st, a) != 1 { return false; }
+    if crate::ent_u16::rd(st, a + 1) != owner || crate::ent_u16::rd(st, a + 2) != og { return false; }
+    if crate::ent_u16::rd(st, a + 5) != n { return false; }
+    ko = crate::bud_store::c40(crate::ent_u16::rd(st, a + 4));
+  }
+  let s0: i64 = crate::bud_store::c40(ks);
+  if n > 1073741824 { return false; }
+  let m: i64 = crate::bud_keys::words(n);
+  if ko + m <= len(st) && s0 + m <= len(key) {
+    // eq_range obligations: ko >= 0, s0 >= 0 (c40), m >= 0 (words), ko + m <= len(st), s0 + m <= len(key)
+    return eq_range(st, ko, key, s0, m);
+  }
+  let mut j: i64 = 0;
+  while j < m
+    invariant 0 <= j && j <= m && m <= 268435456 && 0 <= ko && ko <= 1099511627776 && 0 <= s0 && s0 <= 1099511627776
+    decreases m - j
+  {
+    if crate::ent_u16::rd(st, ko + j) != crate::ent_u16::rd(key, s0 + j) { return false; }
+    j = j + 1;
+  }
+  return true;
+}
+
 // Entry of the map owned by `owner` with key key[ks..ks+kn), or -1.
 pub fn find(st: [i64], owner: i64, key: [i64], ks: i64, kn: i64) -> i64
 {
@@ -153,6 +193,61 @@ fn find_h(st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn: i64) 
     if w == 0 { return -1; }
     if w > 0 {
       if entry_matches(st, w - 1, owner, og, h, key, ks, kn) { return w - 1; }
+    }
+    i = i + 1;
+  }
+  return -1;
+}
+
+// Hash of a packed key (words(kn) words at key[ks ..], kn units) with the same seed as hash_key. It equals hash_key on
+// the same units (P03: hash == hash_units), so stored hashes are shared by the unit API, the packed API and grow_copy.
+pub fn hash_words(owner: i64, ogen: i64, key: [i64], ks: i64, kn: i64) -> i64
+{
+  return crate::bud_keys::hash(mix(1469598103934665603,
+    wrapping_add(owner, wrapping_mul(ogen,4294967296))),key,ks,kn);
+}
+
+// find() for a packed key. Caller contract: key[ks .. ks+words(kn)) is canonical (bud_keys::slice_ok); the function
+// is total on any input (a non-canonical or out-of-range key can only miss or compare clamped words).
+pub fn find_w(st: [i64], owner: i64, key: [i64], ks: i64, kn: i64) -> i64
+{
+  let og: i64 = gf(st, owner, 3);
+  let h: i64 = hash_words(owner, og, key, ks, kn);
+  return find_h_w(st, owner, og, h, key, ks, kn);
+}
+
+// find_h() with the packed compare (entry_matches_w); probe loop identical.
+fn find_h_w(st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn: i64) -> i64
+{
+  let slots: i64 = crate::bud_store::c32(hw(st, 4));
+  let mut i: i64 = 0;
+  if len(st) >= 5 && slots >= 1 {
+    let sb: i64 = crate::bud_store::c32(st[3]);
+    let mask: i64 = slots - 1;
+    let n: i64 = len(st);
+    while i < slots
+      invariant 0 <= i && i <= slots && slots <= 4294967296 && n == len(st)
+      decreases slots - i
+    {
+      let p: i64 = sb + band(wrapping_add(h, i), mask);
+      let mut w: i64 = 0;
+      if p >= 0 && p < n { w = st[p]; }
+      if w == 0 { return -1; }
+      if w > 0 {
+        if entry_matches_w(st, w - 1, owner, og, h, key, ks, kn) { return w - 1; }
+      }
+      i = i + 1;
+    }
+    return -1;
+  }
+  while i < slots
+    invariant 0 <= i && i <= slots && slots <= 4294967296
+    decreases slots - i
+  {
+    let w: i64 = crate::ent_u16::rd(st, slot_pos(st, h, i));
+    if w == 0 { return -1; }
+    if w > 0 {
+      if entry_matches_w(st, w - 1, owner, og, h, key, ks, kn) { return w - 1; }
     }
     i = i + 1;
   }
@@ -315,14 +410,21 @@ fn put_key_units(inout st: [i64], e: i64, src: [i64], s0: i64, n: i64) -> i64
   if !reuse { off = crate::bud_store::c40(hw(st,10)); }
   let ae: i64 = crate::bud_store::c40(hw(st,11));
   if off + m > len(st) || (!reuse && (ae > len(st) || off + m > ae)) { return -1; }
+  // s0 + n <= len(src) was checked above, so the full words read src directly (no per-word range or tail test, as
+  // units_word did in P04) and the last 1-3 units go through one tail_word.
   let mut i: i64 = 0;
-  while i < m
+  let mut j: i64 = 0;
+  while j + 4 <= n && i < m
     invariant 0 <= i && i <= m && m <= 268435456 && 0 <= off && off + m <= len(st)
-    invariant 0 <= s0 && s0 <= 1099511627776 && 0 <= n && n <= 1073741824
+    invariant j == 4 * i && 0 <= s0 && s0 + n <= len(src) && 0 <= n && n <= 1073741824
     decreases m - i
   {
-    st[off+i] = crate::bud_keys::units_word(src,s0,n,4*i);
+    st[off+i] = crate::bud_keys::pack4(src[s0+j], src[s0+j+1], src[s0+j+2], src[s0+j+3]);
     i = i + 1;
+    j = j + 4;
+  }
+  if j < n && i < m {
+    st[off+i] = crate::bud_keys::tail_word(src, s0, n, j);
   }
   if !reuse {
     sh(inout st,10,off+m);
@@ -344,6 +446,16 @@ pub fn insert(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64) -> i64
 // the first empty or tombstone slot and compares no keys. Used by bud_world after its find and by grow (unique keys).
 pub fn add(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64) -> i64
 { return put_key(inout st, owner, key, ks, kn, true); }
+
+// add() for a packed key (caller contract as find_w: canonical words; total otherwise). The key is stored by a plain
+// word copy (put_key_h with packed = true).
+pub fn add_w(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64) -> i64
+{
+  if gf(st, owner, 0) != 1 { return -1; }
+  let og: i64 = gf(st, owner, 3);
+  let h: i64 = hash_words(owner, og, key, ks, kn);
+  return put_key_h(inout st, owner, og, h, key, ks, kn, true, true);
+}
 
 fn put_key(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, absent: bool) -> i64
 {
@@ -378,7 +490,11 @@ fn put_key_h(inout st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, 
         if slot < 0 { slot = p; }
         if absent { i = slots - 1; }
       } else if w > 0 && !absent {
-        if entry_matches(st, w - 1, owner, og, h, key, ks, kn) { return w - 1; }
+        if packed {
+          if entry_matches_w(st, w - 1, owner, og, h, key, ks, kn) { return w - 1; }
+        } else {
+          if entry_matches(st, w - 1, owner, og, h, key, ks, kn) { return w - 1; }
+        }
       }
       i = i + 1;
     }
@@ -669,21 +785,23 @@ pub fn add_absent(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, ent
   return 1;
 }
 
-// True when every unit a[s..s+n) is in 0..65535. A unit u is in 0..65535 iff band(u, -65536) == 0, and OR preserves
-// that over all units (any bit outside the low 16 in any unit survives in the OR). No early exit, so it vectorizes.
-pub fn units_ok(a: [i64], s: i64, n: i64) -> bool
-  requires 0 <= s && 0 <= n && s + n <= len(a)
+// add_absent() for a packed key: key[ks .. ks+words(kn)) canonical (caller contract, bud_keys::slice_ok); total
+// otherwise. `words` is the arena words to reserve (the key takes bud_keys::words(kn), plus any blob).
+// 0 already present, 1 added, -N Grow(N) (nothing written), 2 invalid or the add failed.
+pub fn add_absent_w(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, entries: i64, words: i64) -> i64
 {
-  let mut acc: i64 = 0;
-  let mut j: i64 = 0;
-  while j < n
-    invariant 0 <= j && j <= n && 0 <= s && s + n <= len(a)
-    decreases n - j
-  {
-    acc = bor(acc, a[s + j]);
-    j = j + 1;
+  let og: i64 = gf(st, owner, 3);
+  let h: i64 = hash_words(owner, og, key, ks, kn);
+  if find_h_w(st, owner, og, h, key, ks, kn) >= 0 { return 0; }
+  let nd: i64 = make_room(inout st, entries, words);
+  if nd != 0 {
+    if nd < 0 { return 2; }
+    return -nd;
   }
-  return band(acc, -65536) == 0;
+  if gf(st, owner, 0) != 1 { return 2; }
+  let x: i64 = put_key_h(inout st, owner, og, h, key, ks, kn, true, true);
+  if x < 0 { return 2; }
+  return 1;
 }
 
 // ---- grow ----
