@@ -895,6 +895,25 @@ outside i64 to `wrapping_shl`/`ushr` panics with `pruv: requires undefined: shif
 or i64 overflow), and `/` `%` use the verifier's domain (divisor > 0 and dividend >= 0, otherwise panic).
 `--trust-callers` makes the public entry skip the `requires` checks (for benchmarking; callers must be trusted).
 
+### Inline policy (generated Rust)
+Every generated Rust fn carries an inline hint. The Python and Rust compilers choose it with the same pass over the
+finished Rust text, so their output stays byte-identical:
+- A fn is recursive if it can reach itself through calls (directly or through other fns). Recursive fns keep
+  `#[inline]`.
+- The size of a fn is its number of body lines (1 for a one-line fn). Its inclusive size `incl` is its size plus, for
+  each call to another fn that gets `#[inline(always)]`, that fn's `incl`. Calls to fns that keep `#[inline]` add
+  nothing.
+- Call sites are counted textually over the whole output: a fn name followed by `(`, not after `.` and not in its own
+  `fn name(` header.
+- A non-recursive fn gets `#[inline(always)]` when `incl <= 8`, when it has at most one call site, or when
+  `incl * (call sites - 1) <= 1500` (the extra copies inlining adds). Every other fn keeps `#[inline]` and is left to
+  rustc's heuristics.
+
+Measured on the request-budget milestones (`bench/l3/budget/M8_NOTES.md`, "Inline policy"). This policy kept the M8
+gains of `#[inline(always)]` on every fn and improved M7, M9, M4 and M11 too. Always-on-every-fn grew rustc time 3-4x
+and binaries by up to 38%. Size thresholds and single-call-site rules alone did not reach the M8 gains. The LLVM
+backend is unchanged.
+
 ## 7a. Refinement types (STAGE 1, bundle A)
 A refinement is an annotation on a type that the compiler expands into the contracts of section 6; it adds no new
 type. `Type` and ABI stay `i64` / `[i64]`, and a program without annotations is compiled byte for byte as before.
