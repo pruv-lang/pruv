@@ -183,6 +183,30 @@ pub fn session_get(st: [i64], key: [i64], ks: i64, kn: i64, inout out: [i64]) ->
 {
   let e: i64 = fd(st, 0, key, ks, kn);
   if e < 0 { return ret_one(inout out, 0); }
+  let a: i64 = crate::bud_store::field_addr(st, e);
+  if a >= 0 && a + 20 <= len(st) {
+    // fields 12, 13 in range: read directly (blob_len / blob_off give the same words); the region copy is the fast
+    // path of blob_out, with the per-unit fallback when the region is not inside st
+    let n0: i64 = crate::bud_store::c40(st[a + 13]);
+    if n0 > len(out) - 3 { return 3; }
+    out[0] = n0 + 2;
+    out[1] = 1;
+    out[2] = n0;
+    let bo: i64 = crate::bud_store::c40(st[a + 12]);
+    if bo + n0 <= len(st) {
+      let mut i: i64 = 0;
+      while i < n0
+        invariant 0 <= i && i <= n0 && n0 + 3 <= len(out) && 0 <= bo && bo + n0 <= len(st) && len(out) == len(old(out))
+        decreases n0 - i
+      {
+        out[3 + i] = st[bo + i];
+        i = i + 1;
+      }
+      return 0;
+    }
+    blob_out(st, e, inout out, n0);
+    return 0;
+  }
   let n: i64 = crate::bud_map::blob_len(st, e);
   if n > len(out) - 3 { return 3; }
   out[0] = n + 2;

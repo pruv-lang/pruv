@@ -136,3 +136,11 @@ with the same timed loop as `driver_m4 perf`. Median Pruv/hand over 5 alternatin
 
 Sessions is over the 1.5× bar. With the `rd`/`wr` accessor guards removed (the `noguard` variant above), it is 1.17–1.24×.
 So the cause is the guards, and the fix is compiler option 1. The host cannot remove them.
+
+### Under the 1.1x bar (2026-11-17)
+
+More fast paths in `root_m4.pruv` (`key_end`, decoders), `bud_map` (`find`, `set_blob`, `blob_fits`) and
+`bud_world::session_get` brought sessions to 1.22 / 1.17 / 1.16x (n = 100 / 500 / 1000), from 1.40 / 1.30 / 1.30.
+The rest is no inlining of the generated call chain (compiler) plus the per-op `valid()` header check (raw-buffer
+ABI). With both removed in a scratch build, it is at parity. Line-by-line diagnosis: `perf_headroom/HOST.md`, "M4
+sessions under the 1.1x bar".

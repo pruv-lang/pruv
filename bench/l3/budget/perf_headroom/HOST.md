@@ -91,6 +91,69 @@ What is left:
   measured run, no separate warm-up runs, the same per-op capacity check, and `black_box` on the result. Before that,
   the sessions ratio was 1.30–1.37×.
 
+### M4 sessions under the 1.1x bar (2026-11-17)
+
+More source fast paths, same pattern (one range check, plain proven indexing, the old total code as the fallback;
+public signatures unchanged):
+
+- `root_m4.pruv`: `key_end` reads `op[p]` and `op[p + 1 + j]`; `dec_key` / `dec_put` read `op[1]` / `op[e1]`.
+- `bud_map::find`: reads slot base and mask once and the slot word directly. It no longer calls `slot_pos` and
+  `rd` per probe.
+- `bud_map::set_blob`: one `field_addr`. When the old region takes the blob and lies apart from the header and the
+  fields, it does the in-place copy and the field 13 / word 14 updates with plain indexing.
+- `bud_map::blob_fits`: one `field_addr`, then fields 12 and 19 read directly.
+- `bud_world::session_get`: one `field_addr` for fields 12 and 13, then the region copy.
+
+Wall time (`host/run.py --only m4 --rounds 7`), ns per op:
+
+| n | Pruv | hand | TS | Pruv/hand (was) |
+|---:|---:|---:|---:|---:|
+| 100 | 17.0 | 13.9 | 55.4 | 1.22 (1.40) |
+| 500 | 17.8 | 15.2 | 59.6 | 1.17 (1.30) |
+| 1000 | 17.6 | 15.2 | 58.0 | 1.16 (1.30) |
+
+**Still above 1.1x.** The remaining gap has two causes, separated with scratch builds of the generated
+`work/m34/gen_m4.rs` (`/tmp`, not in the repo; same driver; 7 alternating runs, then 5):
+
+| build | n=100 | n=500 | n=1000 |
+|---|---:|---:|---:|
+| generated as is | 1.25 | 1.19 | 1.17 |
+| every generated `fn` given `#[inline]` | 1.15 | 1.06 | 1.04 |
+| plus `valid()` short-circuited to `true` | about 0.98 | - | about 0.94 |
+
+1. **Inlining (compiler).**
+   - The generated code is a chain of plain `fn`s with no inline hint. One put goes
+     `m4_op -> dec_put -> session_put -> put_blob -> fd -> find -> {gf -> ef -> ea, hash_key, entry_matches ->
+     field_addr -> ea} -> blob_fits -> make_room -> need -> set_blob -> field_addr -> ea -> fits_region`.
+   - rustc keeps most of these as real calls. In the hand version, `HashMap::get_mut` and `decode_key` are inlined
+     into `exec`.
+   - Generated:
+     ```rust
+     fn pruv_m_f_2_9_bud_store_2_ea(st: &[i64], e: i64, f: i64) -> i64 {
+         if ((st.len() as i64) < 7i64) { return (-1i64); }
+         let cap: i64 = pruv_m_f_2_9_bud_store_3_c32((unsafe { *st.get_unchecked((6i64) as usize) }));
+         ...
+     ```
+     This is called 3-4 times per op, each time as a real call.
+   - Hand: `self.sessions.get_mut(&self.k1[..])`, all inlined.
+   - Pruv source has no way to ask for inlining. The fix belongs in the compiler: `#[inline]` on small
+     non-recursive functions in `pruv-core/src/codegen.rs`.
+   - Manual flattening in source would mean copying `ea` / `find` bodies into every caller in `bud_world`. That
+     would duplicate the validated layout arithmetic, so it was not done.
+2. **The per-op header check (contract).**
+   - `m4_op` starts with `if (!pruv_m_f_2_9_bud_store_5_valid(&*st)) { return 2i64; }`. That is about 25 header
+     compares on every op, about 2 ns of the 2-3 ns that remain after inlining.
+   - The hand `exec` has no header: `HashMap` is typed state that cannot be corrupt.
+   - Pruv receives `st` as a raw word buffer from the host on every call. The contract (status 2 on an invalid
+     header) and "judgments in Pruv, host does side effects" mean the check cannot move to the host or be cached:
+     the host could hand over any buffer.
+   - `valid` already reads the header with plain indexing after one `len >= 232` check, so there is nothing left to
+     cut in source.
+   - Removing it needs a typed resident-state handle in the language or lib, a lib/compiler change.
+
+So the generated code matches the hand code once (1) is done in the compiler and (2) is accepted as the cost of
+the raw-buffer ABI. Neither can be fixed in the owned files.
+
 ## Breakdown of store_find (n=1000, ns per op)
 
 | step | Pruv | hand |

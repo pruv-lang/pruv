@@ -19,7 +19,7 @@ Details, methods and raw numbers:
 
 | item | Pruv | hand Rust | TS | Pruv/hand | cause | status |
 |---|---|---|---|---|---|---|
-| M4 resident state: sessions | 19.0-19.7 | 13.6-15.1 | 54-60 | 1.40 / 1.30 / 1.30 (was 1.60 / 1.52 / 1.51) | was the `ent_u16::rd`/`wr` total-function guard (about 23%); fixed by source fast paths (one range check, plain proven indexing, total fallback). Left: op-decode guards in root_m4 and the word-buffer layout | open (> 1.1x) |
+| M4 resident state: sessions | 17.0-17.8 | 13.9-15.2 | 55-60 | 1.22 / 1.17 / 1.16 (was 1.40 / 1.30 / 1.30, 1.60 / 1.52 / 1.51) | `rd`/`wr` guards fixed by source fast paths (also `key_end`, decoders, `find`, `set_blob`, `blob_fits`, `session_get` on 2026-11-17). Left: rustc does not inline the generated call chain (all-`#[inline]` scratch build: 1.15 / 1.06 / 1.04) and the per-op `valid()` header check of the raw-buffer ABI (with it removed too: about 0.94-0.98); line-by-line in `perf_headroom/HOST.md` | open (> 1.1x), written reason: compiler inlining + ABI header check |
 | M4 resident state: tools | 36-40 | 53 | 60 | 0.69 / 0.75 / 0.74 | - | ok |
 | M4 resident state: clocks | 34-38 | 38-40 | 99-108 | 0.98 / 0.86 / 0.98 | - | ok |
 | M5 store_find, lookup only | 14-16 | 12-13 | - | 1.18 / 1.21 / 1.29 | was id conversion allocation | open (> 1.1x; was 33 -> 14-16) |
@@ -37,7 +37,9 @@ is free, while in the M4 state code the guards sit on long dependent chains of r
 now avoids most of them in source: one range check per run of state accesses, plain proven indexing inside, and the
 total accessor as the fallback (`perf_headroom/HOST.md`, M4 sessions profile).
 
-M11 work cards (from `M11_NOTES.md`): A validate+build 1.02 / 1.09, A error path 1.41, B successive setCard 1.40-1.41
-(stand-in store copies the budget per unit), C = B without the stand-in 1.02-1.03. A error path and B are open (> 1.1x).
+M11 work cards (from `M11_NOTES.md`): A validate+build 0.79 / 0.96, A error path 0.96 (was 1.41), B successive setCard
+0.89-0.90 (was 1.40-1.41), C = B without the stand-in 0.80. All are ok. The fixes: the runner (A reps scale with size,
+alternating run order), plain proven V-word reads plus one `obj_get` pass in `bud_card.pruv`, and whole-region copies
+in `blob_of` / `emit_all`.
 
 New budget milestones (M7-M14) report the same three columns in their notes and meet the same bar.

@@ -121,6 +121,27 @@ pub fn find(st: [i64], owner: i64, key: [i64], ks: i64, kn: i64) -> i64
   let h: i64 = hash_key(owner, og, key, ks, kn);
   let slots: i64 = crate::bud_store::c32(hw(st, 4));
   let mut i: i64 = 0;
+  if len(st) >= 5 && slots >= 1 {
+    // header words 3, 4 in range: slot base and mask read once (same probe addresses as slot_pos), and a probe
+    // address inside st is read directly (rd gives the same word)
+    let sb: i64 = crate::bud_store::c32(st[3]);
+    let mask: i64 = slots - 1;
+    let n: i64 = len(st);
+    while i < slots
+      invariant 0 <= i && i <= slots && slots <= 4294967296 && n == len(st)
+      decreases slots - i
+    {
+      let p: i64 = sb + band(wrapping_add(h, i), mask);
+      let mut w: i64 = 0;
+      if p >= 0 && p < n { w = st[p]; }
+      if w == 0 { return -1; }
+      if w > 0 {
+        if entry_matches(st, w - 1, owner, og, h, key, ks, kn) { return w - 1; }
+      }
+      i = i + 1;
+    }
+    return -1;
+  }
   while i < slots
     invariant 0 <= i && i <= slots && slots <= 4294967296
     decreases slots - i
@@ -408,11 +429,47 @@ pub fn remove(inout st: [i64], e: i64) -> ()
 // arena. 0 ok, -1 failure (nothing changed).
 pub fn set_blob(inout st: [i64], e: i64, src: [i64], s: i64, n: i64) -> i64
 {
+  let s0: i64 = crate::bud_store::c40(s);
+  let m: i64 = crate::bud_store::c32(n);
+  let a: i64 = crate::bud_store::field_addr(st, e);
+  let l: i64 = len(st);
+  if l >= 15 && a >= 15 && a + 20 <= l {
+    // header word 7 and field 0 read directly (hw / gf give the same words here)
+    let top0: i64 = crate::bud_store::c32(st[7]);
+    if e < 0 || e >= top0 { return -1; }
+    if st[a] != 1 { return -1; }
+  }
+  if l >= 15 && a >= 15 && a + 20 <= l && s0 + m <= len(src) {
+    // In-place rewrite with the header (0..14) and the entry's fields in range. When the old region takes the blob
+    // and lies apart from the header and from the fields, the writes cannot change any word read below (field
+    // address, word 14, field 13), so this gives exactly the words of the general path that follows.
+    let off: i64 = st[a + 12];
+    let o: i64 = crate::bud_store::c40(off);
+    if fits_region(st, off, st[a + 19], m) && o >= 15 && o + m <= l && (o + m <= a || o >= a + 20) {
+      let ob0: i64 = crate::bud_store::c40(st[a + 13]);
+      let mut k: i64 = 0;
+      while k < m
+        invariant 0 <= k && k <= m && 0 <= o && o + m <= l && l == len(st) && 0 <= s0 && s0 + m <= len(src)
+        decreases m - k
+      {
+        st[o + k] = src[s0 + k];
+        k = k + 1;
+      }
+      let lw0: i64 = crate::bud_store::c40(st[14]) + m;
+      st[14] = lw0;
+      st[a + 13] = m;
+      let lw1: i64 = crate::bud_store::c40(lw0);
+      if lw1 > ob0 {
+        st[14] = lw1 - ob0;
+      } else {
+        st[14] = 0;
+      }
+      return 0;
+    }
+  }
   let top: i64 = crate::bud_store::c32(hw(st, 7));
   if e < 0 || e >= top { return -1; }
   if gf(st, e, 0) != 1 { return -1; }
-  let s0: i64 = crate::bud_store::c40(s);
-  let m: i64 = crate::bud_store::c32(n);
   let ob: i64 = crate::bud_store::c40(gf(st, e, 13));
   let rb: i64 = put_units(inout st, e, 12, 19, src, s0, m);
   if rb < 0 { return -1; }
@@ -428,7 +485,12 @@ pub fn set_blob(inout st: [i64], e: i64, src: [i64], s: i64, n: i64) -> i64
 
 // Would `words` more arena words for entry e's blob fit in its current blob region?
 pub fn blob_fits(st: [i64], e: i64, words: i64) -> bool
-{ return fits_region(st, gf(st, e, 12), gf(st, e, 19), words); }
+{
+  // fields 12, 19 read directly when the entry's fields are in range (gf gives the same words)
+  let a: i64 = crate::bud_store::field_addr(st, e);
+  if a >= 0 && a + 20 <= len(st) { return fits_region(st, st[a + 12], st[a + 19], words); }
+  return fits_region(st, gf(st, e, 12), gf(st, e, 19), words);
+}
 
 // ---- index maintenance ----
 
