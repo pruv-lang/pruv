@@ -37,19 +37,18 @@ Details, methods and raw numbers:
 | M7 isHalted | 27.0-27.6 | 9.9-10.0 | 24-25 | 2.76 / 2.73 / 2.74 (was 2.90 / 2.83 / 2.96) | same | open |
 | M7 maybeClose + reopen | 29.5-30.0 | 17.6-18.3 | 275-281 | 1.61 / 1.68 / 1.70 (was 1.74 / 1.79 / 1.78) | same, two root calls per pair | open |
 | M7 attach / replace | 21 / 124 | 53 / 205-212 | 6-9 / 1134-1166 | 0.40 / 0.58-0.61 (was 0.41-0.45 / 0.58-0.65) | - | ok |
-| M8 charge | 34.6-41.3 | 17.5-19.0 | 138-158 | 1.84 / 2.36 / 2.17 (main before this pass: 2.29 / 2.39 / 2.39) | see "M8" below | open (> 1.1x), outside this pass's files |
-| M8 noteFailure | 24.9-33.3 | 14.2-18.5 | 30-36 | 1.35 / 2.25 / 2.07 (was 1.93 / 2.37 / 2.05) | same | open |
-| M8 noteTool dedup hit | 33.9-48.7 | 25.4-28.5 | 13-16 | 1.19 / 1.92 / 1.76 (was 1.30 / 1.86 / 1.81) | same | open |
-| M8 noteTool grow + forgetTurn | 93-112 | 86-92 | 57-61 | 1.01 / 1.25 / 1.30 (was 1.24 / 1.31 / 1.33) | same | open |
+| M8 charge | 33.7-40.9 | 16.0-17.3 | 128-138 | 2.11 / 2.34 / 2.43 (instr 2.33-2.36; pass 2: 1.84 / 2.36 / 2.17) | i64-per-unit key and id width (hash, compare, bid), `valid()` boundary, call frames; line by line in `M8_NOTES.md` "Perf pass 3" | open (> 1.1x), written reason |
+| M8 noteFailure | 25.4-31.7 | 13.5-15.4 | 28-33 | 1.88 / 2.15 / 2.06 (instr 2.40-2.45) | same | open (> 1.1x), written reason |
+| M8 noteTool dedup hit | 27.4-39.7 | 24.3-26.0 | 12-14 | 1.05 / 1.63 / 1.61 (instr 1.46-1.53, was ~1.65) | same; TS wins with V8's cached string hashes | open (> 1.1x), written reason |
+| M8 noteTool grow + forgetTurn | 84-102 | 77-83 | 54-58 | 1.09 / 1.20 / 1.23 (instr 1.13 / 1.07 / 1.08, was ~1.19) | hash once per new activity (`bud_map::add_absent`); rest is key width | instr within 1.1x at n = 500 / 1000; ns open |
 
-M8 rows are `m8_test/run_m8.py perf --rounds 5` with the compiler of this pass (load average 7.7-14.7) and with the
-compiler and `bud_map` of main before it (load average 17-22). Only the n = 100 rows moved (by 0.1-0.6); n = 500 / 1000 are within the noise. M8's calls are short
-keys (13-unit session ids), where the packed hash and `eq_range` save little. Its remaining gap, from the line-by-line
-table in `M8_NOTES.md`, sits in `m8_test/root_m8.pruv` (`load_cv` copies the PLACEHOLDER record into `cv` and
-`store_cv` writes it back, about 20-30 instructions; the hand side reads a struct field) and in the `t_call`
-boundary `valid()` (about 80 of 736 instructions). Neither is in this pass's files (`m8_test/` belongs to M8, and the
-record layout waits for M7). A find-or-slot API in `bud_map` would only save the second `hash_key` of a new
-activity's 2-5 word key in toolgrow (estimated at a few tens of the 2206 instructions per toolgrow call in `M8_NOTES.md`; not measured), so it was not added.
+M8 rows are pass 3: `m8_test/run_m8.py perf` with per-item processes, rotated order, 7 rounds and an instruction
+column (load average ~4.3). `note_tool` now hashes the activity key once (`bud_map::add_absent`), which took
+toolgrow from ~2075 to ~1870 instructions and tooldup from ~760 to ~700. Charge and failure stay at ~2.4x
+instructions. The line-by-line table in `M8_NOTES.md` puts the gap in the key and id width (one i64 per UTF-16 unit:
+hash, key compare and the 36-word budget-id compare, about 300 of 694 instructions), the `valid()` boundary (about
+70) and call frames (a scratch compiler with `#[inline(always)]` on every fn saves 107-139; not committed, needs an
+M11 evaluation). The PLACEHOLDER record copy measured at about 0.
 
 The guard result differs between `p_wr` (no cost) and M4 sessions (about 23%): in a tight loop the always-taken branch
 is free, while in the M4 state code the guards sit on long dependent chains of reads and block other work. M4 sessions

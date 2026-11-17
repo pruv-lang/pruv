@@ -148,6 +148,71 @@ Next steps (outside M8's files): the M9 `bud_map::hash_key` / `entry_matches` ch
 compare); a `find`-returns-slot / `add_at` API so `note_tool` hashes once; a cheaper per-call `valid` (or one check per
 batch); inline hints from the compiler; after M7, read the counters in place instead of copying `cv`.
 
+### Perf pass 3 (L3-10 M8, after the compiler `#[inline]` / `eq_range` pass)
+
+Measurement first (`40f83aa`): `run_m8.py perf` now runs each item in its own process (`driver_m8` / `hand_m8` take an
+item name; setup always runs), rotates the order per round, takes 7 rounds and adds an instruction column
+(`/usr/bin/time -l`, (instr(1M reps) - instr(200k reps)) / 800k, so setup cancels). Instructions are the load-robust
+column; ns of the "before" run were taken at load average 18-22 and are not comparable.
+
+Fix (`159a1be`): `note_tool` hashed the activity key twice on a new activity (`find`, then `add`). `bud_map` gets
+`find_h` / `put_key_h` (the old bodies, taking the hash) and `add_absent(st, owner, key, ..)`: one `hash_key`, then
+probe, `make_room`, insert with the same hash (rehash rewrites only the index, so the hash stays valid). Codes:
+0 present, 1 added, -N Grow, 2 invalid. `find` / `add` / `insert` keep their API and behaviour (M7 / M10 untouched).
+
+After, load average ~4.3, 7 rounds, median:
+
+| item | size | Pruv ns | hand ns | TS ns | Pruv/hand | Pruv/TS | Pruv instr | hand instr | instr ratio | instr before |
+|---|---|---|---|---|---|---|---|---|---|---|
+| charge | 100 | 33.7 | 16.0 | 127.7 | 2.11 | 0.26 | 817 | 351 | 2.33 | 821-824 |
+| charge | 500 | 40.4 | 17.3 | 132.2 | 2.34 | 0.31 | 825 | 351 | 2.35 | |
+| charge | 1000 | 40.9 | 16.8 | 137.7 | 2.43 | 0.30 | 825 | 350 | 2.36 | |
+| failure | 100 | 25.4 | 13.5 | 28.5 | 1.88 | 0.89 | 688 | 286 | 2.40 | 693-697 |
+| failure | 500 | 31.2 | 14.5 | 31.4 | 2.15 | 0.99 | 696 | 284 | 2.45 | |
+| failure | 1000 | 31.7 | 15.4 | 32.8 | 2.06 | 0.97 | 697 | 284 | 2.45 | |
+| tooldup | 100 | 27.4 | 26.0 | 12.0 | 1.05 | 2.28 | 674 | 461 | 1.46 | 751-767 |
+| tooldup | 500 | 39.7 | 24.3 | 12.8 | 1.63 | 3.10 | 706 | 460 | 1.53 | |
+| tooldup | 1000 | 39.3 | 24.4 | 13.9 | 1.61 | 2.83 | 699 | 460 | 1.52 | |
+| toolgrow | 100 | 83.6 | 76.9 | 53.7 | 1.09 | 1.56 | 1853 | 1643 | 1.13 | 2069-2085 |
+| toolgrow | 500 | 99.8 | 83.0 | 56.8 | 1.20 | 1.76 | 1875 | 1752 | 1.07 | |
+| toolgrow | 1000 | 101.9 | 83.1 | 57.8 | 1.23 | 1.76 | 1873 | 1737 | 1.08 | |
+
+The hash-once fix took toolgrow from ~2075 to ~1870 instructions (-10%) and tooldup from ~760 to ~700 (the dedup
+hit now hashes and probes through one frame). Charge and failure do not go through `note_tool` and did not move.
+Tests: m7 q / derive / same, m8 q / acct, m9, m34 m3 / m4, m11 pairs, all green; Python and Rust `pruvc` output
+identical.
+
+Attribution, failure N = 1000 (694 instructions; scratch builds in which one piece is stubbed, plus counted code):
+
+| step | hand Rust | generated Rust | instr | why Pruv cannot emit the hand code today |
+|---|---|---|---|---|
+| driver | loop, `black_box` | loop, `black_box`, op build | ~14 | same on both sides |
+| boundary check | none | `bud_store::valid(st)` per `t_call` (header words, index geometry) | ~70 | the root takes an untrusted `[i64]`; only the typed-handle ABI in `perf_headroom/HOST.md` can drop it (language / ABI change) |
+| op parsing | typed `&Ref` | `key_end` x2, length checks on the flat op | ~68 | the test root's wire format is a flat `[i64]`; hand gets a struct |
+| lookup frame | SipHash + SwissTable probe | `find` frame, owner gen, slot probe | ~80 | open-addressing index over the i64 store |
+| hash | SipHash over 13 bytes | `hash_key` over 13 i64 units (pack4 + mix + fin) | ~100 | keys are one i64 per UTF-16 unit (8x the bytes of hand's UTF-8) |
+| key compare | `memcmp` 13 bytes | `entry_matches` + `eq_range` (`memcmp` 104 bytes) | ~90 | same: 8x wider key words |
+| CURRENT budget id | `memcmp` 36 bytes (`String ==`) | OR-xor over 36 i64 words | ~110 | 36 words vs 36 bytes; `eq_range` (`memcmp` 288 bytes) measured worse (749 vs 694) |
+| record + rest | struct field `+= 1` | `field_addr`, blob checks, 14-word copy, `note_failure`, 7-word store | ~130 | PLACEHOLDER record until M7; stubbing the copy saves ~0 (it is not the cost), the checks are |
+
+Experiments that did not help (scratch, not committed): `eq_range` for the bid (749, worse); xor-accumulate or
+early-exit loop in `entry_matches` (no change); `#[inline(always)]` on loop-free fns only (no change).
+`#[inline(always)]` on every generated fn (compiler scratch) gives failure 587 (-107), charge 697 (-128), tooldup
+622 (-139): real, but a compiler-wide change that needs its own M11 compile-time / binary-size evaluation, and it
+still leaves failure at ~2.1x. Not committed in this pass.
+
+Rows still above 1.1x, and why:
+- charge / failure (2.3-2.45x instr): the table above. The gap is the i64-per-unit key and id width (hash, compare,
+  bid ~300 instr), the `valid` boundary check (~70) and call frames (~110 with `inline(always)`). None is in an M8 file
+  except the PLACEHOLDER record, which costs ~0 measured.
+- tooldup (1.5x instr, and slower than TS): two `find`s over i64-unit keys plus `valid`, vs two SipHash lookups;
+  V8 keeps a cached hash on each string, so TS hashes nothing per call.
+- toolgrow (1.07-1.13x instr, 1.09-1.23x ns): within 1.1x on instructions at n = 500 / 1000; the ns gap at larger n
+  is the 8x wider key words in the store (cache footprint), same cause as above.
+
+Next steps (outside this pass): compiler `#[inline(always)]` with an M11 evaluation; the typed-handle ABI to drop
+`valid`; a byte-packed key layout in `bud_map` (the M5 store already moved to byte keys and reached parity).
+
 ## Complexity bound check (§9)
 
 Expected normal path; Grow (host copy, rare) and rehash (amortized) are storage upkeep.
