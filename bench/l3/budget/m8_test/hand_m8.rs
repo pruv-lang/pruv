@@ -4,6 +4,8 @@
 //   hand_m8 <N> <reps>   prints `item size ns_per_call`
 // No `chk` lines: this baseline keeps UTF-8 String keys and typed fields with no observe word format, so it cannot
 // produce the Pruv observe words cheaply; run_m8.py compares chk only between Pruv and hand_m8_u16.
+// Wire note (P05, packed-u16 keys): this baseline never parses wire words (it builds its String keys directly at
+// setup), so the packed wire format does not touch it and nothing was changed.
 use std::collections::{HashMap, HashSet};
 use std::hint::black_box;
 use std::time::Instant;
