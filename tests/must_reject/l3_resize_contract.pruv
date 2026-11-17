@@ -1,0 +1,6 @@
+// effect_in_contract(type): resize allocates, so it is not allowed in a contract
+fn f(a: [i64]) -> i64
+  requires len(resize(a, len(a), 0)) == len(a)
+{
+  return len(a);
+}

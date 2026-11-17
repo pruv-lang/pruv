@@ -7,7 +7,8 @@ ordinal), ('expr', function, expression ordinal). Ordinals start at zero per
 function. Object identity is an auxiliary lookup only, never an ordering key.
 Lexical scopes resolve variables. Union-find attaches larger root to smaller.
 Connect init/reassignment, argument/formal, return/result, call/result and
-copy/truncate/old source/result. Allocation inherits its consumer's component.
+copy/truncate/old/resize source/result. Allocation inherits its consumer's component.
+An index read straight off resize (also under copy/truncate) pins: its fill value met no declaration.
 Declarations contribute inclusive ranges; missing bounds pin i64. Aggregate
 fields/payloads, unknown flows, foreign calls, host signatures and inout pin i64.
 Generic [T] becomes an unrefined declaration after mono and therefore pins.
@@ -85,6 +86,10 @@ def plan_storage(program_after_mono, verified=True):
             pin(a); pin(b); return
         a, b = root(a), root(b)
         parent[max(a, b)] = min(a, b)
+    def grown(e):
+        # resize, possibly under copy/truncate: an array whose elements no declaration has checked yet
+        while isinstance(e, Call) and e.name in ('copy', 'truncate') and e.args: e = e.args[0]
+        return isinstance(e, Call) and e.name == 'resize'
     fmap = {f.name: f for f in prog.functions}
     ext = (prog.g9 or {}).get('extended', ())
     for f in prog.functions:
@@ -127,7 +132,7 @@ def plan_storage(program_after_mono, verified=True):
                 if children: pin(children[0])
                 if n is not None: join(n, children[0])
             elif isinstance(e, Call):
-                if e.name in ('copy', 'truncate', 'old'):
+                if e.name in ('copy', 'truncate', 'old', 'resize'):
                     if n is not None: join(n, children[0])
                 elif e.name == 'alloc': pass
                 elif e.name in fmap:
@@ -142,6 +147,9 @@ def plan_storage(program_after_mono, verified=True):
                 for c in children: pin(c)
             elif isinstance(e, (Index, Quant, Unary, IntLit, BoolLit, StrLit)):
                 pin(n)
+                # P05G: a resize fill value is range-checked only by the declaration that receives the array; an
+                # element read straight off the call skips that check, so the component stays i64.
+                if isinstance(e, Index) and grown(e.array): pin(children[0])
             else:
                 pin(n)
                 for c in children: pin(c)

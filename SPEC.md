@@ -90,6 +90,14 @@ it can never be silently dropped.
 - `truncate(a, m)`: new array holding the first m elements of `a` (`0 <= m <= len(a)` must be proven, `verify`
   error `index_oob`). Needs `alloc`. Arrays only (`str` is a type error). When `a` is a local at its last use the
   generated code (Rust and LLVM) shortens it in place instead of copying; this is not observable.
+- `resize(a, n, v)`: new array of length n whose first `len(a)` elements are those of `a` and whose remaining
+  `n - len(a)` elements are v. `len(a) <= n <= 2^40` must be proven (`verify` error `index_oob`); for `[u8]` also
+  `0 <= v <= 255` (`elem_range`, even when `n == len(a)`). The verifier knows `len(result) == n`,
+  `result[k] == a[k]` for `k < len(a)` and `result[k] == v` for `len(a) <= k < n`. Needs `alloc`, code only
+  (`effect_in_contract` in a contract). `a` is `[i64]`, `[u8]` or `[bool]` and the result has the type of `a`; v has
+  its element type. Generic `[T]` and `str` are type errors. Arguments are evaluated a, n, v. The generated code makes
+  one allocation of n, copies the prefix once and fills only the tail, so every element is written once. An element read
+  directly off the call (`resize(a, n, v)[k]`, also through `copy`/`truncate`) keeps the array's storage at i64.
 - `band(a, b)`, `bor(a, b)`, `bxor(a, b)`: `(i64, i64) -> i64`, bitwise and/or/xor on the 64-bit two's-complement
   representation. Negative operands are allowed (`band(-1, 255) == 255`); the complement of `x` is `bxor(x, -1)`
   (`== -x - 1`). No overflow obligation on the result. Pure, allowed in code and contracts; the names are reserved
@@ -621,7 +629,8 @@ appear only in `invariant` and `assert` of a function with `cost`. `cost` and
 
 Units: each `while` iteration adds 1 before the body; a call `f(args)` adds
 `1 + C_f` evaluated on the actual arguments (the callee's stated bound, not its
-real spending); `alloc(n, v)` adds `1 + n`; `copy(a)` adds `1 + len(a)`; `truncate(a, m)` adds `1 + m`; `par`
+real spending); `alloc(n, v)` adds `1 + n`; `copy(a)` adds `1 + len(a)`; `truncate(a, m)` adds `1 + m`;
+`resize(a, n, v)` adds `1 + n`; `par`
 adds every branch's call units once at group entry from the captured arguments.
 Everything else costs 0. Every return must satisfy `spent <= C`, where `C` is the
 bound at entry. A function without `cost` is unchanged.

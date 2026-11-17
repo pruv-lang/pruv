@@ -83,7 +83,7 @@ impl Analysis {
             Expr::Move(x) => { if n.is_some() { self.join(n, scope.get(&x.name).copied().flatten()); } }
             Expr::InoutArg(_) => { self.pin(children[0]); if n.is_some() { self.join(n, children[0]); } }
             Expr::Call(x) => match x.name.as_str() {
-                "copy" | "truncate" | "old" => { if n.is_some() { self.join(n, children[0]); } }
+                "copy" | "truncate" | "old" | "resize" => { if n.is_some() { self.join(n, children[0]); } }
                 "alloc" => {},
                 name if self.functions.contains(name) => {
                     for (j, c) in children.iter().enumerate() { if c.is_some() {
@@ -94,7 +94,13 @@ impl Analysis {
                 "len" => {},
                 _ => { self.pin(n); for c in children { self.pin(c); } }
             },
-            Expr::Index(_) | Expr::Quant(_) | Expr::Unary(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StrLit(_) => self.pin(n),
+            Expr::Index(x) => {
+                self.pin(n);
+                // P05G: a resize fill value is range-checked only by the declaration that receives the array; an
+                // element read straight off the call skips that check, so the component stays i64.
+                if grown(&x.array) { self.pin(children[0]); }
+            }
+            Expr::Quant(_) | Expr::Unary(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StrLit(_) => self.pin(n),
             _ => { self.pin(n); for c in children { self.pin(c); } }
         }
         n
@@ -167,6 +173,14 @@ pub fn plan_storage(prog: &Program, verified: bool) -> StoragePlan {
         if !pins.contains(&r) { if let Some(&rg) = ranges.get(&r) { a.out.ranges.insert(a.keys[i].clone(), rg); } }
     }
     a.out
+}
+
+/// resize, possibly under copy/truncate: an array whose elements no declaration has checked yet (storage.py `grown`).
+fn grown(mut e: &Expr) -> bool {
+    while let Expr::Call(c) = e {
+        if matches!(c.name.as_str(), "copy" | "truncate") && !c.args.is_empty() { e = &c.args[0]; } else { break; }
+    }
+    matches!(e, Expr::Call(c) if c.name == "resize")
 }
 
 fn expr_ty(e: &Expr) -> &Option<String> {

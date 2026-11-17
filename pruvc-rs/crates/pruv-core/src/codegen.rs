@@ -3970,6 +3970,35 @@ impl<'a> Gen<'a> {
                     };
                     return Ok(self.cost_buffer(result));
                 }
+                if n == "resize" {
+                    // P05G: one allocation of n, one memcpy of the prefix, one fill of the tail
+                    let aty = expr_ty(arg(a, 0)?).as_deref();
+                    let (u8a, boola) = (aty == Some("array_u8"), aty == Some("array_bool"));
+                    let vty = if boola { "bool" } else { "i64" };
+                    let fill = if u8a {
+                        "pruv_v as u8".to_string()
+                    } else if boola || !self.verified || self.layout(e) == "i64" {
+                        "pruv_v".to_string()
+                    } else {
+                        format!("pruv_v as {}", self.layout(e))
+                    };
+                    let mut chk = String::new();
+                    if !self.verified {
+                        chk.push_str("if pruv_n < (pruv_a.len() as i64) || pruv_n > (1i64 << 40) { pruv_ovf(\"resize length outside len..2^40\") } ");
+                        if u8a {
+                            chk.push_str("if pruv_v < 0 || pruv_v > 255 { pruv_elem_oor(pruv_v) } ");
+                        }
+                    }
+                    // source order: a, n, v
+                    let a0 = self.arr_ref(arg(a, 0)?)?;
+                    let n0 = self.e(arg(a, 1)?)?;
+                    let v0 = self.e(arg(a, 2)?)?;
+                    let result = format!(
+                        "{{ let pruv_a = {}; let pruv_n: i64 = {}; let pruv_v: {} = {}; {}let mut pruv_t = ::std::vec::Vec::with_capacity(pruv_n as usize); pruv_t.extend_from_slice(pruv_a); pruv_t.resize(pruv_n as usize, {}); pruv_t }}",
+                        a0, n0, vty, v0, chk, fill
+                    );
+                    return Ok(self.cost_buffer(result));
+                }
                 if n == "eq_range" {
                     // L3-10: eq_range: slice equality of a[i..i+n] and b[j..j+n]; unchecked slices when verified
                     let a0 = self.arr_ref(arg(a, 0)?)?;

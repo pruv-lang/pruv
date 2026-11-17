@@ -1,0 +1,7 @@
+// index_oob(verify): resize(a, n, v) needs len(a) <= n <= 2^40; n is only known to be non-negative here
+fn f(a: [i64], n: i64) -> i64 ! alloc
+  requires 0 <= n && n <= 1000
+{
+  let t: [i64] = resize(a, n, 0);
+  return len(t);
+}

@@ -177,7 +177,7 @@ class Uses:
         for j, a in enumerate(e.args):
             ok = False
             if (not deny and callee is not None and callee.foreign is None and j < len(callee.params)
-                    and e.name not in ("len", "alloc", "copy", "truncate", "print")):
+                    and e.name not in ("len", "alloc", "copy", "truncate", "resize", "print")):
                 p = callee.params[j]
                 array = p.type in (ARRAY, ARRAY_U8, ARRAY_BOOL, STR)
                 if array and not p.take:

@@ -183,7 +183,7 @@ impl<'a> Uses<'a> {
             if !deny {
                 if let Some(c) = callee {
                     if c.foreign.is_none() && j < c.params.len()
-                        && !matches!(e.name.as_str(), "len" | "alloc" | "copy" | "truncate" | "print") {
+                        && !matches!(e.name.as_str(), "len" | "alloc" | "copy" | "truncate" | "resize" | "print") {
                         let p = &c.params[j];
                         let array = matches!(p.ty.as_str(), "array" | "array_u8" | "array_bool" | "str");
                         if array && !p.take {

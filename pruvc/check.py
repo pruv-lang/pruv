@@ -21,7 +21,7 @@ BIT_BUILTINS = {"band": ("&", "and"), "bor": ("|", "or"), "bxor": ("^", "xor"),
                 "wrapping_add": ("wrapping_add", "add"), "wrapping_mul": ("wrapping_mul", "mul")}
 # P2 batch 4: byte-word access on [u8]: load_be(a, i, n) and the statement-only store_be(inout a, i, w, n)
 WORD_BUILTINS = ("load_be", "store_be")
-BUILTIN_FNS = ("len", "alloc", "copy", "print", "is_char_boundary", "substr", "truncate", "eq_range") + tuple(BIT_BUILTINS) + WORD_BUILTINS   # L3-10: eq_range
+BUILTIN_FNS = ("len", "alloc", "copy", "print", "is_char_boundary", "substr", "truncate", "eq_range", "resize") + tuple(BIT_BUILTINS) + WORD_BUILTINS   # L3-10: eq_range
 RESERVED_TYPE_NAMES = ("Option", "Result", "Some", "None", "Ok", "Err")
 TYPE_NAME_RE = re.compile(r"[A-Z][A-Za-z0-9_]*\Z")
 FIELD_NAME_RE = re.compile(r"[a-z][A-Za-z0-9_]*\Z")
@@ -1690,6 +1690,16 @@ class Checker:
             if at == STR:
                 terr(a[0], "type_mismatch", "truncate takes an array, found str", "use substr(s, 0, m) for a str")
             s.expect(a[1], I64, scope, c)
+            s.used_effects.add("alloc"); return at
+        if n == "resize":   # P05G: a copy of a grown to length n, the new tail set to v (no prefix loop, one allocation)
+            if c: terr(e, "effect_in_contract", "resize not allowed in contracts")
+            arity(3); at = s.expect_array(a[0], scope, c)
+            if at == STR:
+                terr(a[0], "type_mismatch", "resize takes an array, found str", "build a String with push for a str")
+            if at.args:
+                terr(a[0], "type_mismatch", "resize takes [i64], [u8] or [bool], found %s" % type_name(at),
+                     "use alloc and a copy loop for other element types")
+            s.expect(a[1], I64, scope, c); s.expect(a[2], s.elem_type(at), scope, c)
             s.used_effects.add("alloc"); return at
         if n == "is_char_boundary":   # G2 B0
             arity(2); s.expect(a[0], STR, scope, c); s.expect(a[1], I64, scope, c)

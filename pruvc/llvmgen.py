@@ -281,6 +281,130 @@ part:
 """
 DECLS_MINMAX = "declare i64 @llvm.smax.i64(i64, i64)\ndeclare i64 @llvm.smin.i64(i64, i64)\n"
 
+# P05G: only emitted when resize is lowered.  resize(a, n, v) with m = len(a) <= n: one uninitialized block of n
+# elements, one memcpy of the m-element prefix, then the n - m tail is set to v (a memset when v is 0 or the
+# elements are bytes).  Every element is written before the block is returned.  n <= 0 gives NULL like pruv_alloc.
+DECLS_RESIZE = """\
+define internal noalias ptr @pruv_resize(ptr nocapture readonly %s, i64 %m, i64 %n, i64 %v) alwaysinline nounwind {
+entry:
+  %e = icmp sle i64 %n, 0
+  br i1 %e, label %none, label %chk
+none:
+  ret ptr null
+chk:
+  %big = icmp ugt i64 %n, 1152921504606846975
+  br i1 %big, label %fail, label %ok
+fail:
+  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)
+  unreachable
+ok:
+  %q = call ptr @pruv_raw_alloc_v3(i64 %n, i64 8, i64 8)
+  %b = shl nuw nsw i64 %m, 3
+  call void @llvm.memcpy.p0.p0.i64(ptr %q, ptr %s, i64 %b, i1 false)
+  %t = getelementptr inbounds i64, ptr %q, i64 %m
+  %r = sub nuw nsw i64 %n, %m
+  %z = icmp eq i64 %v, 0
+  br i1 %z, label %zero, label %fill
+zero:
+  %rb = shl nuw nsw i64 %r, 3
+  call void @llvm.memset.p0.i64(ptr %t, i8 0, i64 %rb, i1 false)
+  ret ptr %q
+fill:
+  %w = icmp eq i64 %r, 0
+  br i1 %w, label %done, label %loop
+loop:
+  %i = phi i64 [ 0, %fill ], [ %i1, %loop ]
+  %g = getelementptr inbounds i64, ptr %t, i64 %i
+  store i64 %v, ptr %g
+  %i1 = add nuw nsw i64 %i, 1
+  %d = icmp eq i64 %i1, %r
+  br i1 %d, label %done, label %loop
+done:
+  ret ptr %q
+}
+"""
+DECLS_RESIZE_U8 = """\
+define internal noalias ptr @pruv_resize_u8(ptr nocapture readonly %s, i64 %m, i64 %n, i64 %v) alwaysinline nounwind {
+entry:
+  %e = icmp sle i64 %n, 0
+  br i1 %e, label %none, label %chk
+none:
+  ret ptr null
+chk:
+  %big = icmp ugt i64 %n, 1099511627776
+  br i1 %big, label %fail, label %ok
+fail:
+  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)
+  unreachable
+ok:
+  %q = call ptr @pruv_raw_alloc_v3(i64 %n, i64 1, i64 1)
+  call void @llvm.memcpy.p0.p0.i64(ptr %q, ptr %s, i64 %m, i1 false)
+  %t = getelementptr inbounds i8, ptr %q, i64 %m
+  %r = sub nuw nsw i64 %n, %m
+  %b = trunc i64 %v to i8
+  call void @llvm.memset.p0.i64(ptr %t, i8 %b, i64 %r, i1 false)
+  ret ptr %q
+}
+"""
+# P05G: resize of a narrow (u8/i8/u16/i16/u32/i32) storage layout, size/align are the element's constant byte width
+# (1, 2 or 4) so the branches fold after inlining.  Same shape as pruv_resize: one uninitialized block, one memcpy
+# of the prefix, the tail set once (a memset for 0 or byte elements, else one store loop).  n <= 2^40 is proved
+# (narrow layouts exist only in verified builds); the check mirrors pruv_resize_u8.
+DECLS_RESIZE_NARROW = """\
+define internal noalias ptr @pruv_resize_narrow(ptr nocapture readonly %s, i64 %m, i64 %n, i64 %v, i64 %size, i64 %align) alwaysinline nounwind {
+entry:
+  %e = icmp sle i64 %n, 0
+  br i1 %e, label %none, label %chk
+none:
+  ret ptr null
+chk:
+  %big = icmp ugt i64 %n, 1099511627776
+  br i1 %big, label %fail, label %ok
+fail:
+  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)
+  unreachable
+ok:
+  %q = call ptr @pruv_raw_alloc_v3(i64 %n, i64 %size, i64 %align)
+  %b = mul nuw nsw i64 %m, %size
+  call void @llvm.memcpy.p0.p0.i64(ptr %q, ptr %s, i64 %b, i1 false)
+  %t = getelementptr inbounds i8, ptr %q, i64 %b
+  %r = sub nuw nsw i64 %n, %m
+  %z = icmp eq i64 %v, 0
+  %one = icmp eq i64 %size, 1
+  %set = or i1 %z, %one
+  br i1 %set, label %bytes, label %wide
+bytes:
+  %rb = mul nuw nsw i64 %r, %size
+  %vb = trunc i64 %v to i8
+  call void @llvm.memset.p0.i64(ptr %t, i8 %vb, i64 %rb, i1 false)
+  ret ptr %q
+wide:
+  %w = icmp eq i64 %r, 0
+  br i1 %w, label %done, label %pick
+pick:
+  %two = icmp eq i64 %size, 2
+  %v16 = trunc i64 %v to i16
+  %v32 = trunc i64 %v to i32
+  br i1 %two, label %loop16, label %loop32
+loop16:
+  %i = phi i64 [ 0, %pick ], [ %i1, %loop16 ]
+  %g = getelementptr inbounds i16, ptr %t, i64 %i
+  store i16 %v16, ptr %g
+  %i1 = add nuw nsw i64 %i, 1
+  %d = icmp eq i64 %i1, %r
+  br i1 %d, label %done, label %loop16
+loop32:
+  %j = phi i64 [ 0, %pick ], [ %j1, %loop32 ]
+  %h = getelementptr inbounds i32, ptr %t, i64 %j
+  store i32 %v32, ptr %h
+  %j1 = add nuw nsw i64 %j, 1
+  %c = icmp eq i64 %j1, %r
+  br i1 %c, label %done, label %loop32
+done:
+  ret ptr %q
+}
+"""
+
 # G9 A3: only emitted when the program has a recursive (boxed) edge.  The marker global is kept alive through
 # @llvm.used, so linking a runtime without pruv_runtime_nodes_v1 fails even when no node helper survives inlining.
 DECLS_NODE = ("declare noalias ptr @pruv_node_alloc_v1(i64, i64) nounwind\n"
@@ -586,6 +710,7 @@ class Mod:
         s.stack = None          # P3-S1: StackPlan (set by gen_llvm)
         s.fill = False          # P3-S1: some stack array calls @pruv_fill_v2
         s.tail = set()          # P3: tail-filled alloc helpers used ("i64" -> pruv_alloc_tail, "u8" -> _u8)
+        s.resize = set()        # P05G: resize helpers used ("i64" -> pruv_resize, "u8" -> pruv_resize_u8, "narrow")
         s.range_nodes = {}      # P3 batch 2: `iW a, iW b` body -> !N number (first-use order)
         s.explicit = False      # G4 A3: explicit visibility mode (set by gen_llvm); Pruv calls use the Rust-backend routing
 
@@ -2278,7 +2403,7 @@ class FnGen:
 
     def ev_call(s, e, owned):
         n, a = e.name, e.args
-        if s.cost and n in ("alloc", "copy", "truncate") and not getattr(e, "pruv_cost_wrapped", False):
+        if s.cost and n in ("alloc", "copy", "truncate", "resize") and not getattr(e, "pruv_cost_wrapped", False):
             import copy
             plain = copy.copy(e)
             plain.pruv_cost_wrapped = True
@@ -2384,6 +2509,36 @@ class FnGen:
                 return s.temp_arr(V("arr", p, m.a, src.ty, layout=src.layout, rng=src.rng), owned)
             p = s.op("call ptr @pruv_copy(ptr %s, i64 %s)" % (src.a, m.a))
             return s.temp_arr(V("arr", p, m.a, rng=src.rng), owned)
+        if n == "resize":       # P05G: a grown copy: source order a, n, v; one allocation, prefix memcpy, tail fill
+            src = s.ev(a[0])
+            cnt = s.ev(a[1])
+            v = s.ev(a[2])
+            if not s.verified:
+                lo = s.op("icmp sle i64 %s, %s" % (src.b, cnt.a))
+                hi = s.op("icmp ule i64 %s, 1099511627776" % cnt.a)
+                ok = s.op("and i1 %s, %s" % (lo, hi))
+                s.guard(ok, s.panic1("pruv_panic_arith", "resize length outside len..2^40"), False)
+                if src.ty is not None and src.ty.name == "array_u8":
+                    ok = s.op("icmp ule i64 %s, 255" % v.a)
+                    s.guard(ok, s.panic_elem(v.a), False)
+            if src.ty is not None and src.ty.name == "array_bool":
+                z = s.op("zext i1 %s to i64" % v.a)
+                s.m.resize.add("u8")
+                p = s.op("call ptr @pruv_resize_u8(ptr %s, i64 %s, i64 %s, i64 %s)" % (src.a, src.b, cnt.a, z))
+                return s.temp_arr(V("arr", p, cnt.a, ARRAY_BOOL), owned)
+            if src.ty is not None and src.ty.name == "array_u8":
+                s.m.resize.add("u8")
+                p = s.op("call ptr @pruv_resize_u8(ptr %s, i64 %s, i64 %s, i64 %s)" % (src.a, src.b, cnt.a, v.a))
+                return s.temp_arr(V("arr", p, cnt.a, ARRAY_U8), owned)
+            if src.layout != "i64":
+                # a narrow layout: the same single pass at the element's width (prefix memcpy, tail fill)
+                s.m.resize.add("narrow")
+                p = s.op("call ptr @pruv_resize_narrow(ptr %s, i64 %s, i64 %s, i64 %s, i64 %d, i64 %d)" %
+                         (src.a, src.b, cnt.a, v.a, elem_size(src.layout), alignment(src.layout)))
+                return s.temp_arr(V("arr", p, cnt.a, src.ty, layout=src.layout, rng=src.rng), owned)
+            s.m.resize.add("i64")
+            p = s.op("call ptr @pruv_resize(ptr %s, i64 %s, i64 %s, i64 %s)" % (src.a, src.b, cnt.a, v.a))
+            return s.temp_arr(V("arr", p, cnt.a, rng=src.rng), owned)
         if n == "is_char_boundary":  # G2 B2: s then i
             sv = s.ev(a[0])
             iv = s.ev(a[1])
@@ -4750,6 +4905,9 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
         DECLS_TAIL if "i64" in m.tail else "") + (
         DECLS_TAIL_U8 if "u8" in m.tail else "") + (
         DECLS_MINMAX if m.tail else "") + (
+        DECLS_RESIZE if "i64" in m.resize else "") + (
+        DECLS_RESIZE_U8 if "u8" in m.resize else "") + (
+        DECLS_RESIZE_NARROW if "narrow" in m.resize else "") + (
         g6decls + "\n" + "\n".join(chunks))  # G2 A5/B2, G3, G6 A3, G9 A3; P2 batch 4: llvm.bswap when used
     if m.par_trampolines:
         ir = "%pruv_g7_job = type { ptr, ptr }\n" + "\n".join(m.par_types) + "\n" + ir

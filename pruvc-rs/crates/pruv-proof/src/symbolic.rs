@@ -2174,6 +2174,41 @@ impl<'a> FnVerifier<'a> {
                 self.spend(st, g, self.z.int(1).add(&m));
                 return Ok(Val::Arr(av.like(av.a.clone(), m, "truncate")));
             }
+            "resize" => {
+                // P05G: a grown to length m; k < len(a) keeps a[k], len(a) <= k < m is v
+                let av = arg(0)?.try_arr()?.clone();
+                let m = arg(1)?.try_ast()?.clone();
+                let v = arg(2)?.try_ast()?.clone();
+                let ob = self.z.and(&[av.n.le(&m), m.le_i(MAX_LEN)]);
+                self.prove_core(
+                    &st.env,
+                    &st.pc,
+                    g,
+                    &ob,
+                    pos(e),
+                    "index_oob",
+                    &format!("resize length len({}) <= n <= 2^40", av.name),
+                    None,
+                );
+                if av.elem == Elem::U8 {
+                    let ob = self.z.and(&[v.ge_i(0), v.le_i(255)]);
+                    self.prove_core(
+                        &st.env,
+                        &st.pc,
+                        g,
+                        &ob,
+                        pos(e),
+                        "elem_range",
+                        "u8 element range 0..=255 for the resize fill value",
+                        None,
+                    );
+                }
+                self.spend(st, g, self.z.int(1).add(&m));
+                let k = self.z.int_const("resize_k");
+                let body = self.z.ite(&k.lt(&av.n), &av.a.select(&k), &v);
+                let lam = self.z.lambda(&[k], &body);
+                return Ok(Val::Arr(av.like(lam, m, "resize")));
+            }
             "is_char_boundary" => {
                 // G2 B1: no obligations or assumptions.
                 let sv = arg(0)?.try_arr()?;

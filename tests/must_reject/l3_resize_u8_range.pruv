@@ -1,0 +1,7 @@
+// elem_range(verify): the resize fill value of a [u8] must be in 0..=255
+fn f(b: [u8], v: i64) -> i64 ! alloc
+  requires len(b) <= 10
+{
+  let t: [u8] = resize(b, 10, v);
+  return len(t);
+}

@@ -279,6 +279,129 @@ pub const DECLS_TAIL_U8: &str = concat!(
     "}\n",
 );
 pub const DECLS_MINMAX: &str = "declare i64 @llvm.smax.i64(i64, i64)\ndeclare i64 @llvm.smin.i64(i64, i64)\n";
+/// P05G: only emitted when resize is lowered.  resize(a, n, v) with m = len(a) <= n: one uninitialized block of n
+/// elements, one memcpy of the m-element prefix, then the n - m tail is set to v (a memset when v is 0 or the
+/// elements are bytes).  Every element is written before the block is returned.  n <= 0 gives NULL like pruv_alloc.
+pub const DECLS_RESIZE: &str = concat!(
+    "define internal noalias ptr @pruv_resize(ptr nocapture readonly %s, i64 %m, i64 %n, i64 %v) alwaysinline nounwind {\n",
+    "entry:\n",
+    "  %e = icmp sle i64 %n, 0\n",
+    "  br i1 %e, label %none, label %chk\n",
+    "none:\n",
+    "  ret ptr null\n",
+    "chk:\n",
+    "  %big = icmp ugt i64 %n, 1152921504606846975\n",
+    "  br i1 %big, label %fail, label %ok\n",
+    "fail:\n",
+    "  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)\n",
+    "  unreachable\n",
+    "ok:\n",
+    "  %q = call ptr @pruv_raw_alloc_v3(i64 %n, i64 8, i64 8)\n",
+    "  %b = shl nuw nsw i64 %m, 3\n",
+    "  call void @llvm.memcpy.p0.p0.i64(ptr %q, ptr %s, i64 %b, i1 false)\n",
+    "  %t = getelementptr inbounds i64, ptr %q, i64 %m\n",
+    "  %r = sub nuw nsw i64 %n, %m\n",
+    "  %z = icmp eq i64 %v, 0\n",
+    "  br i1 %z, label %zero, label %fill\n",
+    "zero:\n",
+    "  %rb = shl nuw nsw i64 %r, 3\n",
+    "  call void @llvm.memset.p0.i64(ptr %t, i8 0, i64 %rb, i1 false)\n",
+    "  ret ptr %q\n",
+    "fill:\n",
+    "  %w = icmp eq i64 %r, 0\n",
+    "  br i1 %w, label %done, label %loop\n",
+    "loop:\n",
+    "  %i = phi i64 [ 0, %fill ], [ %i1, %loop ]\n",
+    "  %g = getelementptr inbounds i64, ptr %t, i64 %i\n",
+    "  store i64 %v, ptr %g\n",
+    "  %i1 = add nuw nsw i64 %i, 1\n",
+    "  %d = icmp eq i64 %i1, %r\n",
+    "  br i1 %d, label %done, label %loop\n",
+    "done:\n",
+    "  ret ptr %q\n",
+    "}\n",
+);
+pub const DECLS_RESIZE_U8: &str = concat!(
+    "define internal noalias ptr @pruv_resize_u8(ptr nocapture readonly %s, i64 %m, i64 %n, i64 %v) alwaysinline nounwind {\n",
+    "entry:\n",
+    "  %e = icmp sle i64 %n, 0\n",
+    "  br i1 %e, label %none, label %chk\n",
+    "none:\n",
+    "  ret ptr null\n",
+    "chk:\n",
+    "  %big = icmp ugt i64 %n, 1099511627776\n",
+    "  br i1 %big, label %fail, label %ok\n",
+    "fail:\n",
+    "  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)\n",
+    "  unreachable\n",
+    "ok:\n",
+    "  %q = call ptr @pruv_raw_alloc_v3(i64 %n, i64 1, i64 1)\n",
+    "  call void @llvm.memcpy.p0.p0.i64(ptr %q, ptr %s, i64 %m, i1 false)\n",
+    "  %t = getelementptr inbounds i8, ptr %q, i64 %m\n",
+    "  %r = sub nuw nsw i64 %n, %m\n",
+    "  %b = trunc i64 %v to i8\n",
+    "  call void @llvm.memset.p0.i64(ptr %t, i8 %b, i64 %r, i1 false)\n",
+    "  ret ptr %q\n",
+    "}\n",
+);
+/// P05G: resize of a narrow (u8/i8/u16/i16/u32/i32) storage layout, size/align are the element's constant byte width
+/// (1, 2 or 4) so the branches fold after inlining.  Same shape as pruv_resize: one uninitialized block, one memcpy
+/// of the prefix, the tail set once (a memset for 0 or byte elements, else one store loop).  n <= 2^40 is proved
+/// (narrow layouts exist only in verified builds); the check mirrors pruv_resize_u8.
+pub const DECLS_RESIZE_NARROW: &str = concat!(
+    "define internal noalias ptr @pruv_resize_narrow(ptr nocapture readonly %s, i64 %m, i64 %n, i64 %v, i64 %size, i64 %align) alwaysinline nounwind {\n",
+    "entry:\n",
+    "  %e = icmp sle i64 %n, 0\n",
+    "  br i1 %e, label %none, label %chk\n",
+    "none:\n",
+    "  ret ptr null\n",
+    "chk:\n",
+    "  %big = icmp ugt i64 %n, 1099511627776\n",
+    "  br i1 %big, label %fail, label %ok\n",
+    "fail:\n",
+    "  call void @pruv_panic_arith(ptr @pruv_alloc_failed_msg)\n",
+    "  unreachable\n",
+    "ok:\n",
+    "  %q = call ptr @pruv_raw_alloc_v3(i64 %n, i64 %size, i64 %align)\n",
+    "  %b = mul nuw nsw i64 %m, %size\n",
+    "  call void @llvm.memcpy.p0.p0.i64(ptr %q, ptr %s, i64 %b, i1 false)\n",
+    "  %t = getelementptr inbounds i8, ptr %q, i64 %b\n",
+    "  %r = sub nuw nsw i64 %n, %m\n",
+    "  %z = icmp eq i64 %v, 0\n",
+    "  %one = icmp eq i64 %size, 1\n",
+    "  %set = or i1 %z, %one\n",
+    "  br i1 %set, label %bytes, label %wide\n",
+    "bytes:\n",
+    "  %rb = mul nuw nsw i64 %r, %size\n",
+    "  %vb = trunc i64 %v to i8\n",
+    "  call void @llvm.memset.p0.i64(ptr %t, i8 %vb, i64 %rb, i1 false)\n",
+    "  ret ptr %q\n",
+    "wide:\n",
+    "  %w = icmp eq i64 %r, 0\n",
+    "  br i1 %w, label %done, label %pick\n",
+    "pick:\n",
+    "  %two = icmp eq i64 %size, 2\n",
+    "  %v16 = trunc i64 %v to i16\n",
+    "  %v32 = trunc i64 %v to i32\n",
+    "  br i1 %two, label %loop16, label %loop32\n",
+    "loop16:\n",
+    "  %i = phi i64 [ 0, %pick ], [ %i1, %loop16 ]\n",
+    "  %g = getelementptr inbounds i16, ptr %t, i64 %i\n",
+    "  store i16 %v16, ptr %g\n",
+    "  %i1 = add nuw nsw i64 %i, 1\n",
+    "  %d = icmp eq i64 %i1, %r\n",
+    "  br i1 %d, label %done, label %loop16\n",
+    "loop32:\n",
+    "  %j = phi i64 [ 0, %pick ], [ %j1, %loop32 ]\n",
+    "  %h = getelementptr inbounds i32, ptr %t, i64 %j\n",
+    "  store i32 %v32, ptr %h\n",
+    "  %j1 = add nuw nsw i64 %j, 1\n",
+    "  %c = icmp eq i64 %j1, %r\n",
+    "  br i1 %c, label %done, label %loop32\n",
+    "done:\n",
+    "  ret ptr %q\n",
+    "}\n",
+);
 
 /// G2 A5: declarations appended after DECLS_U8 only for programs that use `[bool]`.
 pub const DECLS_BOOL: &str = "declare void @pruv_check_bool(ptr nocapture readonly, i64) nounwind\n";
@@ -766,6 +889,10 @@ pub struct Mod {
     /// P3: tail-filled alloc helpers used (pruv_alloc_tail, pruv_alloc_tail_u8)
     pub tail_i64: bool,
     pub tail_u8: bool,
+    /// P05G: resize helpers used (pruv_resize, pruv_resize_u8, pruv_resize_narrow)
+    pub resize_i64: bool,
+    pub resize_u8: bool,
+    pub resize_narrow: bool,
     /// P3 batch 2: `!range` node bodies in first-use order (index = metadata number)
     pub range_nodes: Vec<String>,
     /// G4 A3: explicit visibility mode (Pruv calls use the Rust-backend routing)
@@ -797,6 +924,9 @@ impl Mod {
             fill: false,
             tail_i64: false,
             tail_u8: false,
+            resize_i64: false,
+            resize_u8: false,
+            resize_narrow: false,
             range_nodes: Vec::new(),
             explicit: false,
             fn_disp: HashMap::new(),
@@ -3438,7 +3568,7 @@ impl<'a> FnGen<'a> {
 
     pub fn ev_call(&mut self, e: &Call, owned: bool, layout: &'static str, rng: Option<(i128, i128)>) -> R<V> {
         let result = self.ev_call_inner(e, owned, layout, rng)?;
-        if self.cost && matches!(e.name.as_str(), "alloc" | "copy" | "truncate") {
+        if self.cost && matches!(e.name.as_str(), "alloc" | "copy" | "truncate" | "resize") {
             let length = self.op(format!("zext i64 {} to i128", result.b))?;
             let units = self.op(format!("add i128 {}, 1", length))?;
             self.cost_add(&units)?;
@@ -3620,6 +3750,56 @@ impl<'a> FnGen<'a> {
             }
             let p = self.op(format!("call ptr @pruv_copy(ptr {}, i64 {})", src.a, m.a))?;
             let mut rv = V::with_b(Kind::Arr, p, m.a.clone());
+            rv.rng = src.rng;
+            return self.temp_arr(rv, owned);
+        }
+        if n == "resize" {
+            // P05G: a grown copy: source order a, n, v; one allocation, prefix memcpy, tail fill
+            let src = self.ev(arg(a, 0)?, false)?;
+            let cnt = self.ev(arg(a, 1)?, false)?;
+            let v = self.ev(arg(a, 2)?, false)?;
+            let u8a = src.ty.as_deref() == Some(ARRAY_U8);
+            if !self.verified {
+                let lo = self.op(format!("icmp sle i64 {}, {}", src.b, cnt.a))?;
+                let hi = self.op(format!("icmp ule i64 {}, 1099511627776", cnt.a))?;
+                let ok = self.op(format!("and i1 {}, {}", lo, hi))?;
+                self.guard(&ok, Fail::Panic1("pruv_panic_arith", "resize length outside len..2^40".to_string()), false)?;
+                if u8a {
+                    let ok2 = self.op(format!("icmp ule i64 {}, 255", v.a))?;
+                    self.guard(&ok2, Fail::Elem(v.a.clone(), "u8 0..=255"), false)?;
+                }
+            }
+            if src.ty.as_deref() == Some(ARRAY_BOOL) {
+                let z = self.op(format!("zext i1 {} to i64", v.a))?;
+                self.m.resize_u8 = true;
+                let p = self.op(format!("call ptr @pruv_resize_u8(ptr {}, i64 {}, i64 {}, i64 {})", src.a, src.b, cnt.a, z))?;
+                let mut rv = V::with_b(Kind::Arr, p, cnt.a.clone());
+                rv.ty = Some(ARRAY_BOOL.to_string());
+                return self.temp_arr(rv, owned);
+            }
+            if u8a {
+                self.m.resize_u8 = true;
+                let p = self.op(format!("call ptr @pruv_resize_u8(ptr {}, i64 {}, i64 {}, i64 {})", src.a, src.b, cnt.a, v.a))?;
+                let mut rv = V::with_b(Kind::Arr, p, cnt.a.clone());
+                rv.ty = Some(ARRAY_U8.to_string());
+                return self.temp_arr(rv, owned);
+            }
+            if src.layout != "i64" {
+                // a narrow layout: the same single pass at the element's width (prefix memcpy, tail fill)
+                self.m.resize_narrow = true;
+                let p = self.op(format!(
+                    "call ptr @pruv_resize_narrow(ptr {}, i64 {}, i64 {}, i64 {}, i64 {}, i64 {})",
+                    src.a, src.b, cnt.a, v.a, elem_size(src.layout), alignment(src.layout)
+                ))?;
+                let mut rv = V::with_b(Kind::Arr, p, cnt.a.clone());
+                rv.ty = src.ty.clone();
+                rv.layout = src.layout;
+                rv.rng = src.rng;
+                return self.temp_arr(rv, owned);
+            }
+            self.m.resize_i64 = true;
+            let p = self.op(format!("call ptr @pruv_resize(ptr {}, i64 {}, i64 {}, i64 {})", src.a, src.b, cnt.a, v.a))?;
+            let mut rv = V::with_b(Kind::Arr, p, cnt.a.clone());
             rv.rng = src.rng;
             return self.temp_arr(rv, owned);
         }
@@ -6249,7 +6429,7 @@ fn gen_llvm_body(
         }
     }
     let mut ir = format!(
-        "{}{}\n{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}\n{}",
+        "{}{}\n{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}\n{}",
         if target == AbiTarget::WinX64 { WIN_X64_HEADER } else { "" },
         m.render_strings(),
         type_defs(&tt),
@@ -6277,6 +6457,9 @@ fn gen_llvm_body(
         if m.tail_i64 { DECLS_TAIL } else { "" },
         if m.tail_u8 { DECLS_TAIL_U8 } else { "" },
         if m.tail_i64 || m.tail_u8 { DECLS_MINMAX } else { "" },
+        if m.resize_i64 { DECLS_RESIZE } else { "" },
+        if m.resize_u8 { DECLS_RESIZE_U8 } else { "" },
+        if m.resize_narrow { DECLS_RESIZE_NARROW } else { "" },
         g6decls,
         chunks.join("\n")
     );

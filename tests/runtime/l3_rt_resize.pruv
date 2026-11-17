@@ -1,0 +1,52 @@
+// resize(a, n, v): a copy of a with length n; element k is a[k] for k < len(a) and v for len(a) <= k < n.
+// One allocation, one prefix copy, one tail fill: the Rust backend emits with_capacity + extend_from_slice + resize.
+fn grow(p: [i64], extra: i64) -> [i64] ! alloc
+  requires 0 <= extra && extra <= 1000 && len(p) <= 1000
+  ensures len(result) == len(p) + extra
+  ensures forall i in 0..len(p): result[i] == p[i]
+  ensures forall i in len(p)..len(p) + extra: result[i] == 0
+{ return resize(p, len(p) + extra, 0); }
+fn fill7(p: [i64], n: i64) -> [i64] ! alloc
+  requires len(p) <= n && n <= 1000
+  ensures len(result) == n
+  ensures forall i in len(p)..n: result[i] == 7
+{ return resize(p, n, 7); }
+fn bytes(b: [u8], n: i64) -> [u8] ! alloc
+  requires len(b) <= n && n <= 1000
+  ensures len(result) == n
+  ensures forall i in 0..len(b): result[i] == b[i]
+  ensures forall i in len(b)..n: result[i] == 200
+{ return resize(b, n, 200); }
+fn flags(f: [bool], n: i64) -> [bool] ! alloc
+  requires len(f) <= n && n <= 1000
+  ensures len(result) == n
+  ensures forall i in 0..len(f): result[i] == f[i]
+  ensures forall i in len(f)..n: result[i]
+{ return resize(f, n, true); }
+// the proven length lets the store after resize go unchecked
+fn put(p: [i64]) -> [i64] ! alloc
+  requires len(p) <= 100
+  ensures len(result) == len(p) + 1 && result[len(p)] == 5
+{
+  let mut q: [i64] = resize(p, len(p) + 1, 0);
+  q[len(p)] = 5;
+  return q;
+}
+fn run() -> () ! io, alloc {
+  let a: [i64] = alloc(3, 4);
+  let b: [i64] = grow(a, 2);
+  print(len(b)); print(b[0] + b[2]); print(b[4]);
+  let z: [i64] = alloc(0, 0);
+  let c: [i64] = fill7(z, 3);
+  print(c[0] + c[1] + c[2]);
+  let d: [i64] = fill7(a, 3);
+  print(d[2]);
+  let e0: [u8] = alloc(2, 9);
+  let e: [u8] = bytes(e0, 4);
+  print(e[1]); print(e[3]);
+  let f0: [bool] = alloc(1, false);
+  let f: [bool] = flags(f0, 3);
+  print(f[0]); print(f[2]);
+  let g: [i64] = put(a);
+  print(g[3]); print(len(a));
+}
