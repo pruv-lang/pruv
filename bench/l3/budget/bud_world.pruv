@@ -18,6 +18,35 @@ fn fd(st: [i64], owner: i64, key: [i64], ks: i64, kn: i64) -> i64
 
 // ---- result writing ----
 
+// out[3 + j] = blob_unit(st, e, j) for j in 0..n, where n is blob_len(st, e) and n + 3 <= len(out). When the blob
+// region lies inside st (always, on a valid store) the words are copied with one range check for the whole loop
+// instead of the per-unit total accessors; otherwise the per-unit path gives the same words.
+fn blob_out(st: [i64], e: i64, inout out: [i64], n: i64) -> ()
+  requires 0 <= n && n <= 1099511627776 && n + 3 <= len(out)
+  ensures len(out) == len(old(out))
+{
+  let bo: i64 = crate::bud_map::blob_off(st, e);
+  if bo + n <= len(st) {
+    let mut i: i64 = 0;
+    while i < n
+      invariant 0 <= i && i <= n && n + 3 <= len(out) && 0 <= bo && bo + n <= len(st) && len(out) == len(old(out))
+      decreases n - i
+    {
+      out[3 + i] = st[bo + i];
+      i = i + 1;
+    }
+    return;
+  }
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && n <= 1099511627776 && len(out) == len(old(out))
+    decreases n - j
+  {
+    crate::ent_u16::wr(inout out, 3 + j, crate::bud_map::blob_unit(st, e, j));
+    j = j + 1;
+  }
+}
+
 // Writes v at out[pos] (dropped if out of range) and returns pos + 1; saturates at 2^40.
 fn emit(inout out: [i64], pos: i64, v: i64) -> i64
   requires 0 <= pos && pos <= 1099511627776
@@ -76,8 +105,8 @@ fn grow_sig(inout out: [i64], n: i64) -> i64
 fn ret_one(inout out: [i64], v: i64) -> i64
 {
   if len(out) < 2 { return 3; }
-  crate::ent_u16::wr(inout out, 0, 1);
-  crate::ent_u16::wr(inout out, 1, v);
+  out[0] = 1;
+  out[1] = v;
   return 0;
 }
 
@@ -156,17 +185,10 @@ pub fn session_get(st: [i64], key: [i64], ks: i64, kn: i64, inout out: [i64]) ->
   if e < 0 { return ret_one(inout out, 0); }
   let n: i64 = crate::bud_map::blob_len(st, e);
   if n > len(out) - 3 { return 3; }
-  crate::ent_u16::wr(inout out, 0, n + 2);
-  crate::ent_u16::wr(inout out, 1, 1);
-  crate::ent_u16::wr(inout out, 2, n);
-  let mut j: i64 = 0;
-  while j < n
-    invariant 0 <= j && j <= n && n <= 1099511627776
-    decreases n - j
-  {
-    crate::ent_u16::wr(inout out, 3 + j, crate::bud_map::blob_unit(st, e, j));
-    j = j + 1;
-  }
+  out[0] = n + 2;
+  out[1] = 1;
+  out[2] = n;
+  blob_out(st, e, inout out, n);
   return 0;
 }
 
@@ -216,14 +238,7 @@ pub fn clock_get(st: [i64], key: [i64], ks: i64, kn: i64, inout out: [i64]) -> i
   crate::ent_u16::wr(inout out, 0, n + 7);
   crate::ent_u16::wr(inout out, 1, 1);
   crate::ent_u16::wr(inout out, 2, n);
-  let mut j: i64 = 0;
-  while j < n
-    invariant 0 <= j && j <= n && n <= 1099511627776
-    decreases n - j
-  {
-    crate::ent_u16::wr(inout out, 3 + j, crate::bud_map::blob_unit(st, e, j));
-    j = j + 1;
-  }
+  blob_out(st, e, inout out, n);
   let b: i64 = 3 + n;
   crate::ent_u16::wr(inout out, b, crate::bud_store::ef(st, e, 14));
   crate::ent_u16::wr(inout out, b + 1, crate::bud_store::ef(st, e, 15));
