@@ -1,8 +1,13 @@
 # Request-budget piece: performance headroom against hand-written Rust
 
 Rule (2026-11-17): beating TS is not the bar. Each hot item is measured against a same-work, hand-written, idiomatic
-Rust baseline (release build, same inputs, same result consumption, alternating runs, medians under load). Anything
-above 1.5x hand Rust is profiled, classified and fixed, or the reason it cannot be fixed is recorded here.
+Rust baseline (release build, same inputs, same result consumption, alternating runs, medians under load).
+
+Bar (tightened 2026-11-17, replaces the earlier 1.5x): Pruv compiles to Rust, so the target is parity (1.0x). Anything
+above 1.1x hand Rust must be fixed, in source, lib, host or compiler. 1.0-1.1x is treated as measurement noise, but its
+cause is still recorded. "Test-only path" and "trace-only path" are not exemptions. An item may stay above 1.1x only if
+the notes show, line by line, the difference between the hand Rust and the generated Rust and why Pruv cannot emit the
+hand code.
 
 Details, methods and raw numbers:
 
@@ -14,13 +19,13 @@ Details, methods and raw numbers:
 
 | item | Pruv | hand Rust | TS | Pruv/hand | cause | status |
 |---|---|---|---|---|---|---|
-| M4 resident state: sessions | 19.0-19.7 | 13.6-15.1 | 54-60 | 1.40 / 1.30 / 1.30 (was 1.60 / 1.52 / 1.51) | was the `ent_u16::rd`/`wr` total-function guard (about 23%); fixed by source fast paths (one range check, plain proven indexing, total fallback). Left: op-decode guards in root_m4 and the word-buffer layout | within bar |
+| M4 resident state: sessions | 19.0-19.7 | 13.6-15.1 | 54-60 | 1.40 / 1.30 / 1.30 (was 1.60 / 1.52 / 1.51) | was the `ent_u16::rd`/`wr` total-function guard (about 23%); fixed by source fast paths (one range check, plain proven indexing, total fallback). Left: op-decode guards in root_m4 and the word-buffer layout | open (> 1.1x) |
 | M4 resident state: tools | 36-40 | 53 | 60 | 0.69 / 0.75 / 0.74 | - | ok |
 | M4 resident state: clocks | 34-38 | 38-40 | 99-108 | 0.98 / 0.86 / 0.98 | - | ok |
-| M5 store_find, lookup only | 14-16 | 12-13 | - | 1.18 / 1.21 / 1.29 | was id conversion allocation | fixed (33 -> 14-16) |
-| M5 store_find, JV encode only | - | - | - | 1.11 / 1.21 / 1.15 | - | ok |
-| M5 store_find, lookup + JV tree encode | 369-409 | 289-300 (tree) / 68-77 (text) | 629 / 1594 / 3283 | 1.27-1.48 (tree) / 5.1-5.8 (text) | J tree building (about 12 allocations) | won't fix: trace-only path; the product answer is fact words, and a second text encoder would duplicate `Heap::enc` |
-| M5 store_save | 163-172 | 126-132 | - | 1.30 / 1.35 / 1.32 | - | fixed (about 310 -> 168) |
+| M5 store_find, lookup only | 14-16 | 12-13 | - | 1.18 / 1.21 / 1.29 | was id conversion allocation | open (> 1.1x; was 33 -> 14-16) |
+| M5 store_find, JV encode only | - | - | - | 1.11 / 1.21 / 1.15 | - | open (> 1.1x) |
+| M5 store_find, lookup + JV tree encode | 369-409 | 289-300 (tree) / 68-77 (text) | 629 / 1594 / 3283 | 1.27-1.48 (tree) / 5.1-5.8 (text) | J tree building (about 12 allocations) | open (> 1.1x; the earlier won't-fix no longer holds under the tightened bar) |
+| M5 store_save | 163-172 | 126-132 | - | 1.30 / 1.35 / 1.32 | - | open (> 1.1x; was about 310 -> 168) |
 | M6 String(int) `p_int` | 13.8-15.8 | 13.1-15.4 | 24-107 | 1.03 / 1.09 / 1.07 | - | ok (stack small results, KD-M6-3) |
 | M6 `p_iso` | 25-30 | 29-32 | 335-373 | 1.04 / 0.96 / 0.86 | - | ok |
 | M6 `p_ref` | 34-40 | 39-44 | 60-240 | 0.98 / 0.88 / 0.93 | - | ok |
@@ -32,4 +37,7 @@ is free, while in the M4 state code the guards sit on long dependent chains of r
 now avoids most of them in source: one range check per run of state accesses, plain proven indexing inside, and the
 total accessor as the fallback (`perf_headroom/HOST.md`, M4 sessions profile).
 
-New budget milestones (M7-M14) report the same three columns in their notes.
+M11 work cards (from `M11_NOTES.md`): A validate+build 1.02 / 1.09, A error path 1.41, B successive setCard 1.40-1.41
+(stand-in store copies the budget per unit), C = B without the stand-in 1.02-1.03. A error path and B are open (> 1.1x).
+
+New budget milestones (M7-M14) report the same three columns in their notes and meet the same bar.
