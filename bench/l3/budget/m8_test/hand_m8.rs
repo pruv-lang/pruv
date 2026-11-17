@@ -113,6 +113,9 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let n: usize = args[1].parse().unwrap();
     let reps: usize = args[2].parse().unwrap();
+    // optional item name: only that item's timed loop runs (setup always runs), as in driver_m8.rs
+    let only = args.get(3).map(|s| s.as_str());
+    let on = |item: &str| only.map_or(true, |o| o == item);
     let mut w = World { sessions: HashMap::new(), tool_seen: HashMap::new() };
     for i in 0..n {
         w.sessions.insert(
@@ -135,37 +138,45 @@ fn main() {
     for i in 0..1000 {
         w.charge(&refs[i % n], &what);
     }
-    let t = Instant::now();
-    for i in 0..reps {
-        black_box(w.charge(black_box(&refs[i % n]), black_box(&what)));
+    if on("charge") {
+        let t = Instant::now();
+        for i in 0..reps {
+            black_box(w.charge(black_box(&refs[i % n]), black_box(&what)));
+        }
+        println!("charge {} {:.1}", n, t.elapsed().as_nanos() as f64 / reps as f64);
     }
-    println!("charge {} {:.1}", n, t.elapsed().as_nanos() as f64 / reps as f64);
-    let t = Instant::now();
-    for i in 0..reps {
-        w.note_failure(black_box(&refs[i % n]));
+    if on("failure") {
+        let t = Instant::now();
+        for i in 0..reps {
+            w.note_failure(black_box(&refs[i % n]));
+        }
+        println!("failure {} {:.1}", n, t.elapsed().as_nanos() as f64 / reps as f64);
     }
-    println!("failure {} {:.1}", n, t.elapsed().as_nanos() as f64 / reps as f64);
     let acts: Vec<String> = (0..n).map(|j| format!("activity-{:05}", j)).collect();
     for a in &acts {
         w.note_tool(&refs[0], "turn-1", a);
     }
-    let t = Instant::now();
-    for i in 0..reps {
-        w.note_tool(black_box(&refs[0]), black_box("turn-1"), black_box(&acts[i % n]));
+    if on("tooldup") {
+        let t = Instant::now();
+        for i in 0..reps {
+            w.note_tool(black_box(&refs[0]), black_box("turn-1"), black_box(&acts[i % n]));
+        }
+        println!("tooldup {} {:.1}", n, t.elapsed().as_nanos() as f64 / reps as f64);
     }
-    println!("tooldup {} {:.1}", n, t.elapsed().as_nanos() as f64 / reps as f64);
     for a in &acts {
         w.note_tool(&refs[0], "turn-2", a);
     }
     w.forget_turn("turn-2");
-    let rounds = std::cmp::max(1, reps / n);
-    let t = Instant::now();
-    for _ in 0..rounds {
-        for a in &acts {
-            w.note_tool(black_box(&refs[0]), black_box("turn-2"), black_box(a));
+    if on("toolgrow") {
+        let rounds = std::cmp::max(1, reps / n);
+        let t = Instant::now();
+        for _ in 0..rounds {
+            for a in &acts {
+                w.note_tool(black_box(&refs[0]), black_box("turn-2"), black_box(a));
+            }
+            w.forget_turn(black_box("turn-2"));
         }
-        w.forget_turn(black_box("turn-2"));
+        println!("toolgrow {} {:.1}", n, t.elapsed().as_nanos() as f64 / (rounds * n) as f64);
     }
-    println!("toolgrow {} {:.1}", n, t.elapsed().as_nanos() as f64 / (rounds * n) as f64);
     black_box(&w.sessions);
 }
