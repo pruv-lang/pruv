@@ -4,6 +4,9 @@ mod bud_keys;
 // P03 test root: thin entries over bud_keys for the keys lane (driver_keys.rs, gen_keys.py, run.py keys).
 // Entry requires are empty: every input is arbitrary and the functions are total.
 
+pub fn kc_words(n: i64) -> i64
+{ return crate::bud_keys::words(n); }
+
 pub fn kc_rec_end(k: [i64], p: i64) -> i64
 { return crate::bud_keys::rec_end(k, p); }
 

@@ -28,6 +28,9 @@
 
 fn c30(x: i64) -> i64
   ensures 0 <= result && result <= 1073741824
+  ensures (0 <= x && x <= 1073741824) ==> result == x
+  ensures x < 0 ==> result == 0
+  ensures x > 1073741824 ==> result == 1073741824
 {
   if x < 0 { return 0; }
   if x > 1073741824 { return 1073741824; }
@@ -71,11 +74,13 @@ pub fn max_units() -> i64
   ensures result == 1073741824
 { return 1073741824; }
 
-// Data words of a key with n units: ceil(n / 4).
+// Data words of a key with n units: ceil(n / 4). Total: n is clamped to 0 .. 2^30 first (negative -> 0 words).
 pub fn words(n: i64) -> i64
-  requires 0 <= n && n <= 1073741824
-  ensures result == ushr(n + 3, 2) && 0 <= result && result <= 1073741827
-{ return ushr(n + 3, 2); }
+  ensures 0 <= result && result <= 268435456
+  ensures (0 <= n && n <= 1073741824) ==> result == ushr(n + 3, 2)
+  ensures n < 0 ==> result == 0
+  ensures n > 1073741824 ==> result == 268435456
+{ let c: i64 = c30(n); return ushr(c + 3, 2); }
 
 // Is k[ks .. ks + words(n)) a canonical key of n units: n in 0..2^30, the words inside k, and the lanes past n in the
 // last word zero (lane mask ushr(-1, 16 * r) covers the lanes r..3 of the last word, r = n mod 4)?

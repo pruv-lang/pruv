@@ -64,6 +64,10 @@ fn main() {
         }
         let g = groups(&toks[1..]);
         match toks[0] {
+            "words" => {
+                need(&g, 1, 0, "words");
+                writeln!(w, "{}", sol::kc_words(g[0][0])).unwrap();
+            }
             "rec" => {
                 need(&g, 1, 0, "rec");
                 let h = &g[0];

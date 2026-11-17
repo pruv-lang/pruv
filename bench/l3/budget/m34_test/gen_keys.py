@@ -178,6 +178,10 @@ def c_hash(seed, k, ks, n, cat):
     return ("hash %d %d %d %s" % (seed, ks, n, ws(k)), str(o_hash(seed, k, ks, n)), cat)
 
 
+def c_words(n, cat):
+    return ("words %d" % n, str(words_of(c30(n))), cat)
+
+
 def c_eq(a, sa, b, sb, n, cat):
     return ("eq %d %d %d | %s | %s" % (sa, sb, n, ws(a), ws(b)), "1" if o_eq(a, sa, b, sb, n) else "0", cat)
 
@@ -312,6 +316,22 @@ def fixed_named():
         out.append(c_ok(w4, ks, 4, "fixed-neg"))
         out.append(c_ok(w4, ks, 0, "fixed-neg"))
         out.append(c_unit(w4, ks, 4, 0, "fixed-neg"))
+    # words is total: negative -> 0, above 2^30 -> words(2^30)
+    for n in (-1, -(1 << 40), -(1 << 62), 0, 1, 4, 5, 1 << 30, (1 << 30) + 1, (1 << 40), (1 << 62)):
+        out.append(c_words(n, "fixed-words"))
+    # cmp / eq fallback and clamp paths: short buffers, negative lengths, negative or > 2^40 starts
+    out.append(c_cmp([0], 4, 0, [0], 4, 1, "fixed-cmp-neg"))      # both starts past the end
+    out.append(c_cmp([0], 8, 0, [1], 8, 1, "fixed-cmp-neg"))
+    out.append(c_cmp([1], 0, 4, [1, 0], 0, 8, "fixed-cmp-neg"))   # b longer, a has no second word
+    out.append(c_cmp([1, 0], 0, 8, [1], 0, 4, "fixed-cmp-neg"))
+    for na, nb in ((-1, 0), (0, -1), (-5, -7), (-(1 << 40), 4), (4, 1 << 40), ((1 << 62), (1 << 62))):
+        out.append(c_cmp(w4, 0, na, w4, 0, nb, "fixed-cmp-neg"))
+    for sa, sb in ((-1, 0), (0, -1), (1 << 41, 0), (0, 1 << 41), (-(1 << 41), 1 << 62), (1, 1)):
+        out.append(c_cmp(w4, sa, 4, w4, sb, 4, "fixed-cmp-neg"))
+        out.append(c_eq(w4, sa, w4, sb, 4, "fixed-eq-neg"))
+    for n in (-1, -(1 << 40), 5, 8, 1 << 30, (1 << 62)):
+        out.append(c_eq(w4, 0, w4, 0, n, "fixed-eq-neg"))
+        out.append(c_eq(w4, 0, [w4[0], 7], 0, n, "fixed-eq-neg"))
     out.append(c_ok(w4, 1, 0, "fixed-neg"))                     # empty key at the end of the buffer: fine
     out.append(c_ok(w4, 2, 0, "fixed-neg"))                     # one past the end: not
     # pack negatives

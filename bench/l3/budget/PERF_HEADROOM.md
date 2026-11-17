@@ -688,23 +688,28 @@ Non-blocking:
 New source-only module, no language extension. A key of n UTF-16 code units (0..65535; NUL and lone surrogates are
 ordinary units, 0 <= n <= 2^30) is m = ceil(n / 4) i64 words, big-endian lanes (unit 4i in bits 48..63 of word i),
 zero tail. Record form `[n, w0 .. w(m-1)]`. Public functions: `max_units`, `words`, `slice_ok`, `rec_end`, `unit`,
-`mix`, `fin`, `hash(seed, k, ks, n)`, `eq`, `cmp`, `pack_units`, `unpack_units`. Every function is total (clamps and
-0-reads outside the buffer, as in `ent_u16`), so callers need no preconditions.
+`mix`, `fin`, `hash(seed, k, ks, n)`, `eq`, `cmp`, `pack_units`, `unpack_units`. Every public function is total
+(clamps and 0-reads outside the buffer, as in `ent_u16`), so callers need no preconditions. `words(n)` clamps n to
+0..2^30 first (negative -> 0, above the cap -> words(2^30)); its contract states the exact value in range and both
+clamp results. `eq(a, sa, b, sb, n)` is an equal-length helper: it compares the words(n) words only, and the caller
+compares both unit counts first.
 
 What the layout removes, by representation rather than by a check:
 
 - **Per-unit range check.** Every 16-bit lane is a valid code unit, so `units_ok` (one band test per unit) has no
   counterpart. Canonicality of an external key is O(1): n range, slice range and the lanes past n in the last word
   (`slice_ok` / `rec_end`). The old `key_end` in `root_m4.pruv` loops over every unit.
-- **Per-unit hash / compare loops.** Hash mixes once per word, then `fin(bxor(h, n))`; equality is `eq_range` over m
-  words plus n; unsigned word compare equals code-unit order, ties broken by n. `"a"` and `"a\0"` have equal words, so
+- **Per-unit hash / compare loops.** Hash mixes once per word, then `fin(bxor(h, n))`; equality is the caller's n compare
+  plus `eq` over m words; unsigned word compare equals code-unit order, ties broken by n. `"a"` and `"a\0"` have equal words, so
   n is always compared.
 
-Gate (`m34_test/run.py keys --seed 20261117 --count 300`, Pruv binary vs Python oracle): **4848 / 4848 pass**.
+Gate (`m34_test/run.py keys --seed 20261117 --count 300`, Pruv binary vs Python oracle): **4893 / 4893 pass**
+(4848 at 0f3df19; the audit-fix commit added the `words` op and the cmp / eq fallback and clamp rows).
 Fixed negatives: NUL at start / middle / end and `"a"` vs `"a\0"`, lone high / low surrogates and reversed pairs,
 astral pairs, 0x8000 vs 0x41 (unit order against signed word order), all-0xFFFF, tail lengths n mod 4 = 0..3,
 nonzero lanes past n (canonicality negatives for r = 1, 2, 3), out-of-range units in `pack_units` (status 1, dst
-untouched), bad slice ranges (status 2), and n clamps. Random rows: 300 seeds over hash / eq / cmp / ok / rec / unit /
+untouched), bad slice ranges (status 2), n clamps, `words` on negative / in-range / above-cap n, and cmp / eq with
+short buffers (fallback reads), negative lengths and negative or > 2^40 starts. Random rows: one seed, 300 random rows over hash / eq / cmp / ok / rec / unit /
 pack / unpack, with word compare asserted equal to unit-list compare on canonical keys.
 
 Regression gates (product source unchanged in P03, so these confirm nothing else moved): Q2 (`run_m8.py q`, 300):
@@ -729,25 +734,33 @@ M7 (S = 100 / 500, Pruv/hand16 ns; instructions Pruv vs hand16): attach 1.73 / 1
 1.87 / 1.98 (893 vs 350), current 1.56 / 1.55 (727 vs 332), ishalted 1.58 / 1.60 (729 vs 336), replace 0.93 / 0.97
 (3283 vs 2974). All cells above 1.0x stay open with the causes listed in the P02 section.
 
-Erased checks in P03: none in the product yet. Inside the codec, the verifier proves every array access of the fast
-paths in range, so the codec has no runtime bounds checks beyond its one entry range test per call.
+Erased checks in P03: none in the product yet. Inside the codec, the verifier proves every array access of the
+fast-path loops in range, so those loops carry no runtime bounds checks; each call does one entry range test to pick
+the fast path. The fallback path (slice partly outside the buffer) reads through `ent_u16::rd`, which keeps its range
+branch per read.
 
 ### I1 finding (applies to P03-P05; input for P06 / P07 / P11)
 
 I1 (per-entry spans and key encodings valid for every live entry) cannot be carried by the current language, so the
 per-call `valid()` scan (~60-70 instructions) and the M8 record state / reason / word-14 checks stay. Precise gaps:
 
-1. Contracts cannot call functions (`pruvc` `check.rs:3613` rejects a call in `requires` / `ensures` /
-   `invariant`), so "every live entry satisfies `slice_ok`" cannot be stated over the store.
-2. No field refinements or type invariants: a struct cannot carry "this buffer is a valid store" across entry calls,
-   and there is no `[u16]` type, so the key representation has to be re-proved from `[i64]`.
-3. Collections are not allowed in entry signatures, so the resident state is an `[i64]` that the host can hand in
-   arbitrarily; `--trust-callers` leaves the public safe fn accepting arbitrary buffers (no visibility / private
-   adapter mechanism: P06 / P09).
-4. After an `inout` call only the callee's `ensures` are known (`verify.py` `inout_finals`), so any I1 fact would
-   need a forall frame clause in every mutator: the quantifier support is there but the frames are not.
-5. The result of `eq_range` is unconstrained in the proof (`verify.py:1822-1829`), so "a hit means the stored key
-   equals the checked external key" is not provable; it holds by the code's construction.
+1. User-defined predicates cannot be called in contracts: `pruvc/check.py:1785-1788` rejects a user function call
+   in `requires` / `ensures` / `invariant` ("not supported in v0.1", hint "inline the property"), and
+   `pruvc-rs/crates/pruv-core/src/check.rs:3613` raises the same `call_in_contract`. Builtins (`len`, `ushr`, ...)
+   and `forall` are allowed, so I1 could only be written by inlining `slice_ok` as a forall over live entries with a
+   variable-offset tail mask per entry; that is the missing piece (a named, reusable predicate), not quantifiers.
+2. No type invariants or field refinements: nothing carries "this buffer is a valid store" from one entry call to
+   the next, and there is no `[u16]`. Canonicality (O(1) per key with packing) is a separate fact from the per-unit
+   range, which packing already removed by representation.
+3. Observed ABI, not a language limit by itself: each entry is a public safe fn that takes an arbitrary `[i64]` from
+   the host, so the callee must assume nothing about it. Restricting who may call with an unchecked buffer
+   (visibility / private adapter) is the P06 / P09 work.
+4. After an `inout` call the verifier knows fresh same-length contents plus only the callee's `ensures`
+   (`pruvc/verify.py:1958`, `inout_finals`), so an I1 fact would need a frame clause in every mutator's `ensures`.
+5. `eq_range` returns a fresh unconstrained bool in the proof (`pruvc/verify.py:1822-1829`), so "a hit means the
+   stored key equals the external key" is not provable; it holds by the code's construction.
+
+The core blocker: every entry call receives an unproven host buffer, so `valid()` has to re-check it on each call.
 
 Not patched around: no host-side flag or cached "valid" bit was added. What P03-P05 can erase without I1 is the
 per-unit work (representation), not the per-call validity scan.
