@@ -68,9 +68,22 @@ def units(s):
     return [b[i] | (b[i + 1] << 8) for i in range(0, len(b), 2)]
 
 
+def pack(u):
+    """Packed-u16 words (bud_keys.pruv): word i = u[4i]<<48 | u[4i+1]<<32 | u[4i+2]<<16 | u[4i+3], as a two's-complement
+    i64 (u[4i] >= 0x8000 gives a negative word); lanes past len(u) are zero."""
+    out = []
+    for i in range(0, len(u), 4):
+        x = 0
+        for l in range(4):
+            x = (x << 16) | (u[i + l] if i + l < len(u) else 0)
+        out.append(x - (1 << 64) if x >= (1 << 63) else x)
+    return out
+
+
 def key(s):
+    """Wire key, packed once here at ingress: `n, words(n) packed words`."""
     u = units(s)
-    return [len(u)] + u
+    return [len(u)] + pack(u)
 
 
 def obj(v):
@@ -87,15 +100,15 @@ def truthy(v):
 
 
 def budget_rec(b):
-    """PLACEHOLDER record words (root_m9.pruv) for a session's budget value."""
+    """PLACEHOLDER record words (root_m9.pruv) for a session's budget value; the budget id is packed (word 6 = its
+    unit count, then words(n) packed words)."""
     if b is None:
         return [-1, 0, 0, 0, 0, 0, 0]
     lim = obj(b["limits"])
     used = obj(b["used"])
-    bid = units(b["id"])
     kind = 1 if "activeSince" in b else 0
-    return [STATE[b["state"]], 1 if truthy(b.get("unlimited")) else 0, lim["timeMinutes"], used["activeMs"], kind, 0,
-            len(bid)] + bid
+    return [STATE[b["state"]], 1 if truthy(b.get("unlimited")) else 0, lim["timeMinutes"], used["activeMs"], kind, 0
+            ] + key(b["id"])
 
 
 # ---- driver program ----

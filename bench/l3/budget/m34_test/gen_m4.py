@@ -11,7 +11,7 @@ gen_programs(seed, count=300) -> list of {"lines": [...], "expected": [...], "in
               `ok <result words>` | `invalid`
               `stats <live non-root entries>`   (only that count and len(st) are compared; see run.py)
               `observe <n> <words>`
-Keys are `len, units...`, in ops and in results. Python 3.9, standard library only.
+Keys are `len, units...` in results and expected outputs; in op input lines they are packed (`n, ceil(n/4) words`). Python 3.9, standard library only.
 """
 import random
 
@@ -27,6 +27,23 @@ BASE_KEYS = [u16(s) for s in ["a", "b", "ab", "ba", "aa", "", "é", "日本", "\
 
 def kw(k):
     return [len(k)] + list(k)
+
+
+def pack(u):
+    """Packed-u16 words (bud_keys.pruv): word i = u[4i]<<48 | u[4i+1]<<32 | u[4i+2]<<16 | u[4i+3] as a two's-complement
+    i64 (u[4i] >= 0x8000 gives a negative word); lanes past len(u) are zero."""
+    out = []
+    for i in range(0, len(u), 4):
+        x = 0
+        for l in range(4):
+            x = (x << 16) | (u[i + l] if i + l < len(u) else 0)
+        out.append(x - (1 << 64) if x >= (1 << 63) else x)
+    return out
+
+
+def kwp(k):
+    """Wire (input) form of a key: `n, packed words`. Results and expected outputs keep kw (units)."""
+    return [len(k)] + pack(k)
 
 
 def klist(keys):
@@ -150,18 +167,19 @@ class Model:
 
 def encode(code, p):
     w = [code]
+    # Input keys are packed once here (the host ingress); the session blob words are plain i64 words.
     if code == 1:
-        w += kw(p[0]) + [len(p[1])] + list(p[1])
+        w += kwp(p[0]) + [len(p[1])] + list(p[1])
     elif code in (2, 3, 6, 8, 11, 14, 15, 16):
-        w += kw(p[0])
+        w += kwp(p[0])
     elif code in (4, 12, 17, 18):
         pass
     elif code in (5, 10, 13):
-        w += kw(p[0]) + kw(p[1])
+        w += kwp(p[0]) + kwp(p[1])
     elif code == 7:
-        w += kw(p[0]) + [p[1], p[2], p[3], p[4]]
+        w += kwp(p[0]) + [p[1], p[2], p[3], p[4]]
     elif code == 9:
-        w += kw(p[0]) + kw(p[1]) + [p[2]]
+        w += kwp(p[0]) + kwp(p[1]) + [p[2]]
     else:
         raise ValueError(code)
     return w

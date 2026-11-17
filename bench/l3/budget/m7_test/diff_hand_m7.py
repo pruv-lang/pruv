@@ -15,23 +15,29 @@ final `O` observation of the stored session records):
     id), `adv` / `now` / `put` over an existing key / `del` + re-put (observation order).
 After the random cases (numbered 0..count-1, seed 20261117) a fixed set of deterministic CONTROLS is appended:
   * edge-key programs (one per fixed edge key, every call kind);
-  * malformed frames: short body, missing keys, trailing word, key length overrun / negative, unknown code, a frame that
-    swallows the uuid key as an extra "key", invalid origin / size, `del` with a malformed key (`X del 2`), maybeClose
-    with quiet -1 (`X 5`), call keys with a unit outside 0..65535 (see DOMAIN below), absent sessions;
+  * malformed frames: short body, missing keys, trailing word, key length overrun / negative / above 2^30, unknown
+    code, a frame that swallows the uuid key as an extra "key", invalid origin / size, `del` with a malformed or
+    non-canonical key (`X del 2`), maybeClose with quiet -1 (`X 5`), non-canonical packed call keys (nonzero tail lanes
+    in the last word of a session, budget or uuid key: `X 2`), absent sessions;
   * out-buffer limits: budget / uuid ids of 4094 and 4095 units (status 3 above 4096 result words);
   * fatal driver inputs, each in its own process (compared on exit status and stdout, plus stderr for status 2): put
-    with n too big / too small / negative, key length overrun / negative, no n word, no words; an unknown command;
-    `call` with no request id / no body, `now` without a number, `uuids` with a key running past the line.
+    with n too big / too small / negative, key length overrun / negative, a non-canonical session key, no n word, no
+    words; an unknown command; `call` with no request id / no body, `now` without a number, `uuids` with a key running
+    past the line.
 Besides byte equality of the two sides, the frame controls have an EXPECTED Pruv log (ABI: malformed host input is
 status 2, the case goes on; the driver prints `X 2`).
+
+Wire format (P05b): every key is a packed u16 key `n, words(n) packed words` (bud_keys layout, run_m7.pack), and the
+records hold the budget id (string 0) and follows (string 4) packed the same way (bud_lifecycle.pruv header). Every
+word is 4 valid u16 lanes, so the old "unit outside 0..65535" controls have no packed counterpart; their place is
+taken by non-canonical keys (nonzero lanes past n), which both sides must reject with status 2.
 
 Finally the hand is run over work/m7/cases.jsonl through `run_m7.py q --hand16` (the same oracle classification as the
 Pruv root); 0 fail is required. `--no-q` skips that step.
 
-DOMAIN (documented difference, not tested for equality): the hand stores keys as UTF-16 units and refuses (exit 3) a put
-or uuid with a unit outside 0..65535 and a budget record with state 0..2 and >= 30 words that is not canonical; the Pruv
-store keeps raw words. A CALL key with such a unit can match nothing in either implementation; the hand answers it as a
-miss and the controls "call key unit" check that (the Pruv answer is not assumed by an expectation, only compared).
+DOMAIN (documented difference, not tested for equality): the hand stores keys as UTF-16 units and refuses (exit 3) a
+budget record with state 0..2 and >= 30 words that is not canonical (including a non-canonical packed id or follows);
+the Pruv store keeps raw words.
 
   python3 bench/l3/budget/m7_test/diff_hand_m7.py [--count 300] [--seed 20261117] [--rebuild] [--no-q]
 Builds work/m7/driver_m7 (when missing or --rebuild) and work/m7/hand_m7_u16 through run_m7.py. Exit status 1 on any
@@ -56,8 +62,12 @@ NOWS = [1700000000000, 0, 1, 99, 2 ** 53, 2 ** 53 + 1, 2 ** 62, 1234567890123, -
 DEF_UNIT = (120, 24, 3, 2, 1, 0)
 
 
+pack = run_m7.pack
+
+
 def kw(u):
-    return [len(u)] + list(u)
+    """Wire key: `n, words(n) packed words`."""
+    return [len(u)] + pack(list(u))
 
 
 def key_units(rng):
@@ -88,8 +98,8 @@ def stamp_text(rng):
 
 def rec(bid, state=0, origin=0, unl=0, limits=(120, 24, 3, 2, 1), used=(0,) * 8, since=None, ended=None,
         opened=("ms", 1700000000000), follows=None, rest=()):
-    """Canonical record words (bud_lifecycle.pruv header comment). since / opened: None | ("t", units) | ("ms", n);
-    ended: None | (how 1..3, ("t", units) | ("ms", n)); follows: None | "other" | units."""
+    """Canonical record words (bud_lifecycle.pruv header comment; strings 0 and 4 packed). since / opened: None |
+    ("t", units) | ("ms", n); ended: None | (how 1..3, ("t", units) | ("ms", n)); follows: None | "other" | units."""
     h = [0] * 24
     strs = [list(bid), [], [], [], [], list(rest)]
     h[0], h[1], h[2] = state, origin, unl
@@ -118,8 +128,8 @@ def rec(bid, state=0, origin=0, unl=0, limits=(120, 24, 3, 2, 1), used=(0,) * 8,
         else:
             h[23], strs[4] = 1, list(follows)
     w = list(h)
-    for s in strs:
-        w += [len(s)] + s
+    for i, s in enumerate(strs):
+        w += [len(s)] + (pack(s) if i in run_m7.PACKED_STRS else s)
     return w
 
 
@@ -236,7 +246,14 @@ SK = [115]  # session "s"
 BID = [98, 99]  # budget id "bc"
 EDGE_KEYS = [[], [0], [0, 0], [97], [0xD83D, 0xDE00], [0xD800], [0xDC00], [0xDC00, 0xD800], [0xFFFF], [97] * 7,
              [0xD83D], [0xDE00], [0, 97, 0], [0xFFFF, 0xD800, 0xDC00]]
-UU3 = [3, 97, 98, 99]  # uuid key "abc"
+UU3 = kw([97, 98, 99])  # uuid key "abc" (packed: [3, one word])
+
+
+def noncanon(u, lane=3, v=1):
+    """Packed key of units u (len(u) % 4 != 0) with a nonzero value v in a tail lane (past n) of the last word."""
+    w = pack(list(u))
+    w[-1] |= v << (16 * (3 - lane))
+    return [len(u)] + w
 
 
 def base(cid, state=0, extra=(), quiet="1 1 1", uuids=UU3 + UU3, bid=BID, **kw_):
@@ -271,15 +288,21 @@ def controls():
     # malformed frames (non-fatal): `X 2`, the case goes on
     U = list(DEF_UNIT)
     s_, b_ = kw(SK), kw(BID)
+    w115, w98 = pack([115])[0], pack([98])[0]
     frame = [
         ("short body", [1]),
         ("no keys", [1, -1, -1] + U),
         ("only session key", [1, -1, -1] + U + s_),
         ("trailing word", [1, -1, -1] + U + s_ + b_ + [0]),
-        ("session key length overrun", [1, -1, -1] + U + [50, 115] + b_),
-        ("session key length negative", [1, -1, -1] + U + [-1, 115] + b_),
-        ("budget key length overrun", [1, -1, -1] + U + s_ + [50, 98]),
-        ("budget key length negative", [1, -1, -1] + U + s_ + [-2, 98]),
+        ("session key length overrun", [1, -1, -1] + U + [50, w115] + b_),
+        ("session key length negative", [1, -1, -1] + U + [-1, w115] + b_),
+        ("session key length above 2^30", [1, -1, -1] + U + [2 ** 30 + 1, w115] + b_),
+        ("budget key length overrun", [1, -1, -1] + U + s_ + [50, w98]),
+        ("budget key length negative", [1, -1, -1] + U + s_ + [-2, w98]),
+        ("session key non-canonical lane 1", [1, -1, -1] + U + noncanon(SK, 1) + b_),
+        ("session key non-canonical lane 3", [1, -1, -1] + U + noncanon(SK, 3, 0xFFFF) + b_),
+        ("budget key non-canonical", [2, -1, -1] + U + s_ + noncanon(BID, 2, 0x8000)),
+        ("budget key 3 units non-canonical", [5, -1, -1] + U + s_ + noncanon([98, 99, 100], 3)),
         ("unknown code 0", [0, -1, -1] + U + s_ + b_),
         ("unknown code 7", [7, -1, -1] + U + s_ + b_),
         ("unknown code -1", [-1, -1, -1] + U + s_ + b_),
@@ -303,11 +326,18 @@ def controls():
     p = base("frame", 0, uuids=[])
     p.call_words([1, -1, -1] + U + s_)
     add("frame only session key, uuids exhausted", p.end(), ["@ r0", "X 2"])
-    # a frame that swallows the uuid key as an extra "key" is well formed: the new budget id is the 4 swallowed words
+    # a frame that swallows the uuid key as an extra "key" is well formed: an 8-unit key takes the 2 words `3, W` of the
+    # uuid key "abc" (units 0,0,0,3, 97,98,99,0; n % 4 == 0, so there are no tail lanes) as the new budget id
     for code, st in ((3, 2), (4, 1), (3, 0)):
         p = base("swallow", st, ended=(1, ("ms", 7)) if st == 2 else None)
-        p.call_words([code, 0, 2 if code == 4 else -1] + U + s_ + b_ + [4])
+        p.call_words([code, 0, 2 if code == 4 else -1] + U + s_ + b_ + [8])
         add("frame swallows the uuid key (code %d, state %d)" % (code, st), p.end())
+    # a uuid key with a nonzero tail lane makes every call `X 2` (all keys are checked before dispatch)
+    for code in (1, 3, 6):
+        p = base("badtail", 2 if code == 3 else 0, uuids=noncanon([97, 98, 99], 3) + UU3,
+                 ended=(1, ("ms", 7)) if code == 3 else None)
+        p.call(code, SK, BID, 0 if code == 3 else -1)
+        add("uuid key non-canonical, code %d" % code, p.end(), ["@ r0", "X 2"])
     # session absent
     for code in (1, 2, 3, 4, 5, 6):
         p = Prog("absent")
@@ -324,13 +354,17 @@ def controls():
         p = base("mcq", 0, quiet=qv)
         p.call(6, SK).call(5, SK, BID).call(6, SK).call(5, SK, BID).call(6, SK)
         add("maybeClose quiet queue %s" % qv, p.end())
-    # del with a malformed key frame logs `X del 2` and the case goes on; trailing words are ignored
+    # del with a malformed or non-canonical key frame logs `X del 2` and the case goes on; trailing words are ignored
+    ks = " ".join(map(str, kw(SK)))
     for name, line in (("no words", "del"), ("key length overrun", "del 5 1"), ("key length negative", "del -1"),
-                       ("trailing words ignored", "del 1 115 999 999"), ("valid", "del 1 115")):
+                       ("key non-canonical", "del " + " ".join(map(str, noncanon(SK, 2)))),
+                       ("key unit in the wrong lane", "del 1 115"),
+                       ("trailing words ignored", "del %s 999 999" % ks), ("valid", "del " + ks)):
         p = base("del", 0, extra=[line])
         p.call(1, SK, BID)
         exp = None
-        if name in ("no words", "key length overrun", "key length negative"):
+        if name in ("no words", "key length overrun", "key length negative", "key non-canonical",
+                    "key unit in the wrong lane"):
             exp = ["X del 2", "@ r0", "V 4"]  # V 4 line is the record; compared by prefix below
         add("del %s" % name, p.end(), exp)
     # delete + re-put moves the session to the end of the observation; put over an existing key keeps its place
@@ -340,19 +374,20 @@ def controls():
         p.add(put_line(k, rec([100 + k[0]])))
     p.add("del " + " ".join(map(str, kw([97])))).add(put_line([97], rec([1]))).add(put_line([98], rec([2], 1)))
     add("observation order after del / re-put", p.end())
-    # call keys with a unit outside 0..65535 (domain note: both sides must answer a miss)
-    for u in (-1, 65536, 70000):
-        bad = [2, 115, u]  # key words `len, units...` with one unit outside 0..65535
+    # call keys whose last word carries a unit in a tail lane (the packed counterpart of the old "unit outside
+    # 0..65535" controls: a key no canonical key can equal); both sides must answer status 2 before any lookup
+    for lane, v in ((2, 1), (3, 0xFFFF), (2, 0x8000)):
+        bad = noncanon([115, 116], lane, v)
         for code in (1, 2, 5):
             for which in ("session", "budget"):
-                p = base("badunit", 0, quiet="1")
+                p = base("badtail", 0, quiet="1")
                 sk, bk = (bad, kw(BID)) if which == "session" else (kw(SK), bad)
                 p.call_words([code, -1, -1] + U + sk + bk)
-                add("call key unit %d, %s key, code %d" % (u, which, code), p.end())
+                add("call key tail lane %d = %d, %s key, code %d" % (lane, v, which, code), p.end(), ["@ r0", "X 2"])
         for code in (3, 4, 6):
-            p = base("badunit", 1, quiet="1")
+            p = base("badtail", 1, quiet="1")
             p.call_words([code, 0, 2 if code == 4 else -1] + U + bad + kw(BID))
-            add("call key unit %d, session key, code %d" % (u, code), p.end())
+            add("call key tail lane %d = %d, session key, code %d" % (lane, v, code), p.end(), ["@ r0", "X 2"])
     # out-buffer limits: results of more than 4096 words answer status 3
     for il, exp in ((4094, "V 3"), (4095, "X 3")):
         p = base("outbig", 0, bid=[97] * il)
@@ -387,13 +422,16 @@ def fatal_controls():
     def prog(*lines):
         return "\n".join(lines) + "\n"
 
+    w115 = pack([115])[0]
     for name, line in (
         ("put n too big", put_line(SK, g, len(g) + 1)),
         ("put n too small", put_line(SK, g, len(g) - 1)),
         ("put n negative", put_line(SK, g, -1)),
-        ("put key length overrun", "put " + " ".join(map(str, [5, 115, 98, len(g)] + g))),
-        ("put key length negative", "put " + " ".join(map(str, [-1, 115, len(g)] + g))),
-        ("put no n word", "put 1 115"),
+        # words(n) = len(g) + 3 data words, more than the rest of the op
+        ("put key length overrun", "put " + " ".join(map(str, [4 * (len(g) + 3), w115, len(g)] + g))),
+        ("put key length negative", "put " + " ".join(map(str, [-1, w115, len(g)] + g))),
+        ("put key non-canonical", "put " + " ".join(map(str, noncanon(SK, 1) + [len(g)] + g))),
+        ("put no n word", "put 1 %d" % w115),
         ("put no words", "put"),
     ):
         out.append((name, prog("case f", line, "end"), 2))
@@ -402,7 +440,8 @@ def fatal_controls():
     out.append(("call without body", prog("case f", "call r0"), 101))
     out.append(("now without number", prog("case f", "now"), 101))
     out.append(("now not a number", prog("case f", "now x"), 101))
-    out.append(("uuids key past the line", prog("case f", "uuids 5 1 2"), 101))
+    # n = 9 needs 3 packed words after the frame word; only 2 are on the line
+    out.append(("uuids key past the line", prog("case f", "uuids 9 1 2"), 101))
     out.append(("quiet not a number", prog("case f", "quiet 1 x"), 101))
     return out
 

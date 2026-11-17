@@ -20,11 +20,17 @@
 // instants as Stamp / At variants). encode() writes the identical record words back (header comment of
 // bud_lifecycle.pruv), which q mode prints for `V 4 ...` and `O`.
 //
+// Input format (P05b): every key on the wire is a packed u16 key `n, words(n) packed words` (bud_keys layout: four
+// big-endian lanes per word, tail lanes zero), and the record strings 0 (id) and 4 (follows) are packed the same way.
+// Only the INPUT and the record words change: keys are checked like root.pruv's bud_keys::rec_end (n in 0..2^30, the
+// words inside the op, zero tail lanes; else status 2 / `X del 2` / `t_put status 2`) and unpacked once into the
+// Box<[u16]> keys the algorithm below has always used; encode() writes ids packed again. Result words name ids in
+// units, as before.
+//
 // Domain of this baseline (differences from the Pruv words machine, all fatal, exit status 3, never silent):
-//  * a stored key or uuid with a unit outside 0..65535 (the Pruv store keeps the raw word) is not representable;
-//    a call key with such a unit can never match a stored key and is answered as a miss.
 //  * a session record with state 0..2 and >= 30 words that is not canonical (unused header words nonzero, string
-//    lengths not adding up to the word count, unit out of range, header enum out of range) is not representable.
+//    lengths not adding up to the word count, unit out of range, a packed id / follows with nonzero tail lanes,
+//    header enum out of range) is not representable.
 //    Records with state outside 0..2 or fewer than 30 words are kept as opaque words (Pruv's CURRENT never matches
 //    them; attach / replace open over them, or answer 2 when the word count is below 30 and state >= 0).
 //  * clocks: the M9 clock map exists (HashMap, empty: the q protocol has no way to fill it), consulted where Pruv
@@ -132,11 +138,84 @@ fn u16s(s: &str) -> Key {
     s.encode_utf16().collect()
 }
 
+// ---- packed keys (bud_keys layout) ----
+
+const MAX_KEY_UNITS: i64 = 1 << 30;
+
+// Data words of a packed key of n units, None outside 0..=2^30.
+fn words_of(n: i64) -> Option<usize> {
+    if (0..=MAX_KEY_UNITS).contains(&n) {
+        Some((n as usize + 3) / 4)
+    } else {
+        None
+    }
+}
+
+// The unused tail lanes of the last word of an n-unit key (n % 4 != 0) must be zero (canonical form).
+fn tail_ok(n: i64, last: i64) -> bool {
+    let r = (n & 3) as u32;
+    r == 0 || (last as u64) & ((1u64 << (16 * (4 - r))) - 1) == 0
+}
+
+// O(1) canonical check of a packed key of n units held in exactly `w`.
+fn packed_ok(n: i64, w: &[i64]) -> bool {
+    words_of(n) == Some(w.len()) && (w.is_empty() || tail_ok(n, w[w.len() - 1]))
+}
+
+// The n units of packed words `w` (already checked by packed_ok).
+fn unpack_key(n: i64, w: &[i64]) -> Key {
+    let n = n as usize;
+    let mut v: Vec<u16> = Vec::with_capacity(n);
+    for (i, &x) in w.iter().enumerate() {
+        for l in 0..4 {
+            if 4 * i + l < n {
+                v.push(((x as u64) >> (48 - 16 * l)) as u16);
+            }
+        }
+    }
+    v.into_boxed_slice()
+}
+
+fn pack_u16(u: &[u16]) -> Vec<i64> {
+    u.chunks(4)
+        .map(|c| {
+            let mut x: u64 = 0;
+            for l in 0..4 {
+                x = (x << 16) | u64::from(c.get(l).copied().unwrap_or(0));
+            }
+            x as i64
+        })
+        .collect()
+}
+
+// root.pruv's bud_keys::rec_end: the end of the packed key record `n, words(n)` at op[p], None when n is outside
+// 0..2^30, the words run past the op, or a tail lane is nonzero.
+fn rec_end(op: &[i64], p: usize) -> Option<usize> {
+    let n = *op.get(p)?;
+    let m = words_of(n)?;
+    let end = (p + 1).checked_add(m)?;
+    if end > op.len() || !packed_ok(n, &op[p + 1..end]) {
+        return None;
+    }
+    Some(end)
+}
+
+// The key of the packed record that rec_end(op, p) accepted.
+fn key_at(op: &[i64], p: usize, end: usize) -> Key {
+    unpack_key(op[p], &op[p + 1..end])
+}
+
 // ---- record words <-> typed Budget ----
 
 fn push_str(v: &mut Vec<i64>, s: &[u16]) {
     v.push(s.len() as i64);
     v.extend(s.iter().map(|&u| u as i64));
+}
+
+// A framed packed key `n, words(n)` (record strings 0 and 4).
+fn push_key(v: &mut Vec<i64>, s: &[u16]) {
+    v.push(s.len() as i64);
+    v.extend(pack_u16(s));
 }
 
 fn encode(b: &Budget) -> Vec<i64> {
@@ -190,11 +269,11 @@ fn encode(b: &Budget) -> Vec<i64> {
     h[23] = fk;
     let mut v: Vec<i64> = Vec::with_capacity(30 + b.id.len() + b.rest.len() + st.len() + et.len() + ot.len() + ft.len());
     v.extend_from_slice(&h);
-    push_str(&mut v, &b.id);
+    push_key(&mut v, &b.id);
     push_str(&mut v, ot);
     push_str(&mut v, st);
     push_str(&mut v, et);
-    push_str(&mut v, ft);
+    push_key(&mut v, ft);
     push_str(&mut v, &b.rest);
     v
 }
@@ -211,25 +290,36 @@ fn how_n(h: How) -> i64 {
 fn canonical(w: &[i64]) -> Option<Budget> {
     let empty_w: &[i64] = &[];
     let mut strs = [empty_w; 6];
+    let mut lens = [0i64; 6];
     let mut p = 24usize;
-    for s in strs.iter_mut() {
+    for (i, s) in strs.iter_mut().enumerate() {
         let len = *w.get(p)?;
         if len < 0 {
             return None;
         }
-        let end = p.checked_add(1)?.checked_add(usize::try_from(len).ok()?)?;
+        // strings 0 (id) and 4 (follows) are packed keys: words(len) data words
+        let dw = if i == 0 || i == 4 { words_of(len)? } else { usize::try_from(len).ok()? };
+        let end = p.checked_add(1)?.checked_add(dw)?;
         if end > w.len() {
             return None;
         }
         *s = &w[p + 1..end];
+        lens[i] = len;
         p = end;
     }
     if p != w.len() {
         return None;
     }
     let mut t: Vec<Key> = Vec::with_capacity(6);
-    for s in &strs {
-        t.push(key_of(s)?);
+    for (i, s) in strs.iter().enumerate() {
+        if i == 0 || i == 4 {
+            if !packed_ok(lens[i], s) {
+                return None;
+            }
+            t.push(unpack_key(lens[i], s));
+        } else {
+            t.push(key_of(s)?);
+        }
     }
     let empty = |i: usize| strs[i].is_empty();
     let state = match w[0] {
@@ -579,20 +669,7 @@ impl World {
 
 // ---- q mode: the driver_m7.rs program protocol ----
 
-// root.pruv key_end: the end of the key `len, units...` at p (length within op; units are not checked here).
-fn key_end(op: &[i64], p: usize) -> Option<usize> {
-    let n = op.len();
-    if p >= n {
-        return None;
-    }
-    let kn = op[p];
-    if kn < 0 || kn > (n - p - 1) as i64 {
-        return None;
-    }
-    Some(p + 1 + kn as usize)
-}
-
-// t_call's op: [code, now, quiet, origin, size, unit x6, sessionId key, budgetId key, uuid key]
+// t_call's op: [code, now, quiet, origin, size, unit x6, sessionId key, budgetId key, uuid key] (packed keys)
 struct Call {
     code: i64,
     now: i64,
@@ -605,11 +682,13 @@ struct Call {
     uk: Option<Key>,
 }
 
-// root.pruv t_call's frame checks; Err = status 2. A key with a unit outside 0..65535 decodes to None (never matches).
+// root.pruv t_call's frame checks (bud_keys::rec_end on all three keys before anything else); Err = status 2. The
+// packed keys are unpacked here, once, into the unit keys the algorithm uses (every packed lane is a valid unit, so
+// each key decodes to Some).
 fn decode_call(op: &[i64]) -> Result<Call, i64> {
-    let e1 = key_end(op, 11).ok_or(2)?;
-    let e2 = key_end(op, e1).ok_or(2)?;
-    let e3 = key_end(op, e2).ok_or(2)?;
+    let e1 = rec_end(op, 11).ok_or(2)?;
+    let e2 = rec_end(op, e1).ok_or(2)?;
+    let e3 = rec_end(op, e2).ok_or(2)?;
     if e3 != op.len() {
         return Err(2);
     }
@@ -622,9 +701,9 @@ fn decode_call(op: &[i64]) -> Result<Call, i64> {
         origin: op[3],
         size: op[4],
         unit,
-        sk: key_of(&op[12..e1]),
-        bk: key_of(&op[e1 + 1..e2]),
-        uk: key_of(&op[e2 + 1..e3]),
+        sk: Some(key_at(op, 11, e1)),
+        bk: Some(key_at(op, e1, e2)),
+        uk: Some(key_at(op, e2, e3)),
     })
 }
 
@@ -725,9 +804,10 @@ impl Host {
         Host { w: World::new(), now: 1700000000000, uuids: Vec::new(), next_uuid: 0, quiet: Vec::new(), next_quiet: 0, log: Vec::new() }
     }
 
-    // t_put: [sessionId key, n, record words...]; a malformed frame stops the driver (status 2), like driver_m7.
+    // t_put: [sessionId key (packed), n, record words...]; a malformed frame or a non-canonical key stops the driver
+    // (status 2), like driver_m7.
     fn put(&mut self, op: &[i64]) {
-        let framed = match key_end(op, 0) {
+        let framed = match rec_end(op, 0) {
             Some(e1) if e1 < op.len() => {
                 let n = op[e1];
                 if n >= 0 && n == (op.len() - e1 - 1) as i64 {
@@ -742,20 +822,16 @@ impl Host {
             eprintln!("t_put status 2");
             std::process::exit(2);
         };
-        let Some(key) = key_of(&op[1..e1]) else { unsupported("session key unit outside 0..65535") };
+        let key = key_at(op, 0, e1);
         let slot = decode(&op[e1 + 1..]);
         self.w.put(&key, slot);
     }
 
-    // t_del: [sessionId key]; a malformed key frame logs `X del 2` and the case goes on.
+    // t_del: [sessionId key (packed)]; a malformed or non-canonical key frame logs `X del 2` and the case goes on.
     fn del(&mut self, op: &[i64]) {
-        match key_end(op, 0) {
+        match rec_end(op, 0) {
             None => self.log.push("X del 2".to_string()),
-            Some(e1) => {
-                if let Some(k) = key_of(&op[1..e1]) {
-                    self.w.del(&k);
-                }
-            }
+            Some(e1) => self.w.del(&key_at(op, 0, e1)),
         }
     }
 
@@ -821,14 +897,14 @@ fn nums(it: &[&str]) -> Vec<i64> {
     it.iter().map(|x| x.parse::<i64>().unwrap()).collect()
 }
 
-// A run of keys `len, units...` into separate keys (as driver_m7.rs keys).
+// A run of packed keys `n, words(n) packed words` into separate keys with their frame word (as driver_m7.rs keys).
 fn keys(w: &[i64]) -> Vec<Vec<i64>> {
     let mut v = Vec::new();
     let mut p = 0;
     while p < w.len() {
-        let n = w[p] as usize;
-        v.push(w[p..p + 1 + n].to_vec());
-        p += 1 + n;
+        let m = (w[p].max(0) as usize + 3) / 4;
+        v.push(w[p..p + 1 + m].to_vec());
+        p += 1 + m;
     }
     v
 }

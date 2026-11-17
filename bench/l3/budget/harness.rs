@@ -146,9 +146,17 @@ fn perf(n: usize, reps: usize) {
     // (e) lane: n session_put ops through ResidentState over the M4 Pruv entries, starting small so that Grow happens
     let ops: Vec<Vec<i64>> = (0..n)
         .map(|i| {
+            // wire key `n, packed words(n)`: four big-endian u16 lanes per i64 word, zero tail lanes (bud_keys.pruv);
+            // packed once here (the host ingress). The key is ASCII, so each byte is one unit.
             let key = format!("s{}", i);
             let mut v: Vec<i64> = vec![1, key.len() as i64];
-            v.extend(key.bytes().map(|b| b as i64));
+            v.extend(key.as_bytes().chunks(4).map(|c| {
+                let mut x: u64 = 0;
+                for l in 0..4 {
+                    x = (x << 16) | (c.get(l).copied().unwrap_or(0) as u64);
+                }
+                x as i64
+            }));
             v.push(8);
             v.extend_from_slice(&[11, 22, 33, 44, 55, 66, 77, 88]);
             v

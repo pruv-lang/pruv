@@ -117,9 +117,32 @@ def text(u):
     return b"".join(bytes([x & 0xff, x >> 8]) for x in u).decode("utf-16-le", "surrogatepass")
 
 
+def pack(u):
+    """Packed-u16 words (bud_keys.pruv): word i = u[4i]<<48 | u[4i+1]<<32 | u[4i+2]<<16 | u[4i+3], as a two's-complement
+    i64 (u[4i] >= 0x8000 gives a negative word); lanes past len(u) are zero."""
+    out = []
+    for i in range(0, len(u), 4):
+        x = 0
+        for l in range(4):
+            x = (x << 16) | (u[i + l] if i + l < len(u) else 0)
+        out.append(x - (1 << 64) if x >= (1 << 63) else x)
+    return out
+
+
+def unpack(words, n):
+    """Inverse of pack: the n u16 units of packed words."""
+    return [(words[i // 4] >> (48 - 16 * (i % 4))) & 0xFFFF for i in range(n)]
+
+
+def nwords(n):
+    """Data words of a packed key of n units: ceil(n / 4)."""
+    return (max(n, 0) + 3) // 4
+
+
 def key(s):
+    """Wire key, packed once here at ingress: `n, words(n) packed words`."""
     u = units(s)
-    return [len(u)] + u
+    return [len(u)] + pack(u)
 
 
 def iso(ms):
@@ -132,6 +155,9 @@ def is_str(v):
 
 
 # ---- record codec (bud_lifecycle.pruv header comment) ----
+PACKED_STRS = (0, 4)  # record strings stored as framed packed keys: 0 id, 4 follows
+
+
 def encode_budget(b):
     """Budget (decoded python dict, or None/UNDEF) -> record words. Fields the record has no header slot for (or holds
     with a value the header cannot carry) go into the opaque rest text as canonical JV JSON."""
@@ -178,21 +204,31 @@ def encode_budget(b):
             raise ValueError("budget field %s not representable: %r" % (k, b.get(k)))
     strs[5] = units(json.dumps(jv_encode(rest), ensure_ascii=False, separators=(",", ":"))) if rest else []
     w = list(h)
-    for s in strs:
-        w += [len(s)] + s
+    for i, s in enumerate(strs):
+        w += [len(s)] + (pack(s) if i in PACKED_STRS else s)
     return w
+
+
+def decode_strs(w):
+    """The six record strings as unit lists (strings 0 and 4 unpacked from their packed words) and the end position."""
+    p = 24
+    strs = []
+    for i in range(6):
+        n = w[p]
+        if i in PACKED_STRS:
+            strs.append(unpack(w[p + 1:p + 1 + nwords(n)], n))
+            p += 1 + nwords(n)
+        else:
+            strs.append(w[p + 1:p + 1 + n])
+            p += 1 + n
+    return strs, p
 
 
 def decode_budget(w):
     if w[0] == -1:
         return None
     h = w[:24]
-    p = 24
-    strs = []
-    for _ in range(6):
-        n = w[p]
-        strs.append(w[p + 1:p + 1 + n])
-        p += 1 + n
+    strs, _ = decode_strs(w)
     rest = jv_decode(json.loads(text(strs[5]))) if strs[5] else {}
     b = {"id": text(strs[0]), "state": STATE_N.get(h[0], h[0]), "origin": ORIGIN_N.get(h[1], h[1])}
     b["openedAt"] = text(strs[1]) if h[20] == 1 else iso(h[21])
@@ -220,7 +256,7 @@ def put_words(sess):
 
 # ---- driver program ----
 def call_body(op, args, unit):
-    """[code, origin, size, unit x6, sessionId key, budgetId key]."""
+    """[code, origin, size, unit x6, sessionId key, budgetId key] (keys packed)."""
     a = [jv_decode(x) if not (isinstance(x, dict) and "sess" in x) else x for x in args]
     origin, size, sid, bid = -1, -1, None, ""
     if op in ("current", "isHalted", "reopen"):

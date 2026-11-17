@@ -100,9 +100,40 @@ def text(u):
     return b"".join(bytes([x & 0xff, x >> 8]) for x in u).decode("utf-16-le", "surrogatepass")
 
 
+def pack(u):
+    """Packed-u16 words (bud_keys.pruv): word i = u[4i]<<48 | u[4i+1]<<32 | u[4i+2]<<16 | u[4i+3], as a two's-complement
+    i64 (u[4i] >= 0x8000 gives a negative word); lanes past len(u) are zero."""
+    out = []
+    for i in range(0, len(u), 4):
+        x = 0
+        for l in range(4):
+            x = (x << 16) | (u[i + l] if i + l < len(u) else 0)
+        out.append(x - (1 << 64) if x >= (1 << 63) else x)
+    return out
+
+
+def unpack(words, n):
+    """Inverse of pack: the n u16 units of packed words."""
+    return [(words[i // 4] >> (48 - 16 * (i % 4))) & 0xFFFF for i in range(n)]
+
+
+def nwords(n):
+    """Data words of a packed key of n units: ceil(n / 4)."""
+    return (max(n, 0) + 3) // 4
+
+
+def canonical(words, n):
+    """bud_keys canonical form of a packed key of n units held in exactly `words`: zero lanes past n."""
+    if len(words) != nwords(n) or n < 0 or n > 2 ** 30:
+        return False
+    r = n % 4
+    return r == 0 or not words or (words[-1] & ((1 << (16 * (4 - r))) - 1)) == 0
+
+
 def key(s):
+    """Wire key, packed once here at ingress: `n, words(n) packed words`."""
     u = units(s)
-    return [len(u)] + u
+    return [len(u)] + pack(u)
 
 
 def iso(ms):
@@ -119,8 +150,12 @@ def truthy(v):
 
 
 # ---- record codec (bud_lifecycle.pruv header + bud_halt.pruv halt section) ----
+PACKED_STRS = (0, 4)  # record strings stored as framed packed keys: 0 id, 4 follows
+
+
 def halt_prefix(h):
-    """A well-formed halt object -> the binary prefix of `rest` (atKind 1, stored text), else None (stays JSON)."""
+    """A well-formed halt object -> the binary prefix of `rest` (atKind 1, stored text), else None (stays JSON). The
+    stopped delegation ids are framed packed keys (bud_halt.pruv header)."""
     if not isinstance(h, dict) or set(h) != {"reason", "at", "stoppedDelegationIds"}:
         return None
     if h["reason"] not in REASONS or not is_str(h["at"]) or not isinstance(h["stoppedDelegationIds"], list):
@@ -186,14 +221,15 @@ def encode_budget(b):
     js = units(json.dumps(jv_encode(rest), ensure_ascii=False, separators=(",", ":"))) if rest else []
     strs[5] = pre + js
     w = list(h)
-    for s in strs:
-        w += [len(s)] + s
+    for i, s in enumerate(strs):
+        w += [len(s)] + (pack(s) if i in PACKED_STRS else s)
     return w
 
 
 def prefix_ok(r):
-    """Mirror of bud_halt.pruv prefix_len: True iff the units r start with a well-formed halt prefix (otherwise the
-    whole rest is JSON-opaque). Raw values, nothing is normalized."""
+    """Mirror of bud_halt.pruv prefix_len: True iff the words r start with a well-formed halt prefix (otherwise the
+    whole rest is JSON-opaque). Raw values, nothing is normalized; each stopped id is a canonical packed key
+    (bud_halt ids_words -> bud_keys::rec_end)."""
     n = len(r)
     if n < 6 or r[0] != -2 or n > 4294967296:
         return False
@@ -211,9 +247,9 @@ def prefix_ok(r):
         if p >= n:
             return False
         ln = r[p]
-        if ln < 0 or ln > n - p - 1:
+        if ln < 0 or ln > 2 ** 30 or p + 1 + nwords(ln) > n or not canonical(r[p + 1:p + 1 + nwords(ln)], ln):
             return False
-        p += 1 + ln
+        p += 1 + nwords(ln)
     return p <= n
 
 
@@ -223,10 +259,14 @@ def decode_budget(w):
     h = w[:24]
     p = 24
     strs = []
-    for _ in range(6):
+    for i in range(6):
         n = w[p]
-        strs.append(w[p + 1:p + 1 + n])
-        p += 1 + n
+        if i in PACKED_STRS:
+            strs.append(unpack(w[p + 1:p + 1 + nwords(n)], n))
+            p += 1 + nwords(n)
+        else:
+            strs.append(w[p + 1:p + 1 + n])
+            p += 1 + n
     r = strs[5]
     halt = None
     if prefix_ok(r):
@@ -242,10 +282,11 @@ def decode_budget(w):
             if q + 1 >= len(r):
                 raise ValueError("halt prefix id past the end")
             n = r[q + 1]
-            if n < 0 or q + 2 + n > len(r):
+            m = nwords(n)
+            if n < 0 or q + 2 + m > len(r):
                 raise ValueError("halt prefix id length past the end")
-            ids.append(text(r[q + 2:q + 2 + n]))
-            q += 1 + n
+            ids.append(text(unpack(r[q + 2:q + 2 + m], n)))
+            q += 1 + m
         halt = {"reason": REASONS[reason], "at": at, "stoppedDelegationIds": ids}
         r = r[q + 1:]
     rest = jv_decode(json.loads(text(r))) if r else {}

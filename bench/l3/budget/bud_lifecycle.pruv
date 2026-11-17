@@ -12,17 +12,24 @@
 //                19 ended.at kind (1 stored text, 2 instant in word 22)
 //                20 openedAt kind (1 stored text, 2 instant in word 21), 21 openedAt ms, 22 ended.at ms
 //                23 follows (0 key absent, 1 string, 2 key present with a non-string value, kept as stored)
-//   then six strings, each `len, units`: 0 id, 1 openedAt text, 2 activeSince text, 3 ended.at text, 4 follows,
-//   5 rest (the other budget properties - halt, card, autoContinue, ... - as an opaque unit string this module never
-//   reads; it is kept on every in-place change and dropped when OPEN replaces the budget).
+//   then six strings: 0 id, 1 openedAt text, 2 activeSince text, 3 ended.at text, 4 follows, 5 rest (the other budget
+//   properties - halt, card, autoContinue, ... - as an opaque unit string this module never reads; it is kept on every
+//   in-place change and dropped when OPEN replaces the budget).
+//   Strings 0 (id) and 4 (follows) are budget ids used as lookup keys (clock map, CURRENT compare, the next record's
+//   follows), so they are stored as framed PACKED keys `n, words(n) packed words` (bud_keys layout: n units, four
+//   big-endian lanes per word, tail lanes zero): a lookup or compare reads them in place with no re-packing.
+//   Strings 1, 2, 3, 5 are plain text and stay `len, units` (one unit per word). The stride of string i is therefore
+//   1 + str_words(i, len) (str_at / str_len_in).
+// Keys passed in (sessionId, budgetId, uuid) are packed: (array, start, unit count n) names words(n) packed words,
+// canonical (the caller validated them with bud_keys::rec_end / slice_ok at ingress).
 // Instants this module writes are stored as numbers (kind 2); formatting them with toISOString is left to the
 // boundary that renders the record (same choice as bud_clock's activeSince).
 //
 // Results are written to `out`: out[0] = 0 undefined, 1 false, 2 true, 3 ref (out[1] = budgetId length, units
-// follow; the sessionId of the ref is the session argument), 4 budget view (out[1] = record length n, out[2] = its
+// follow - unpacked from the packed id; the sessionId of the ref is the session argument), 4 budget view (out[1] = record length n, out[2] = its
 // arena offset: the record is st[out[2] .. out[2] + n), valid until the next call that changes st - the counterpart
 // of returning a reference to the stored budget, nothing is copied).
-// A carryHeld effect puts the old budgetId after the ref: out[2 + len] = old length, units follow.
+// A carryHeld effect puts the old budgetId after the ref: out[2 + len] = old length, units follow (unpacked).
 // Effects are appended to `fx` (bud_clock frame, fx[0] = words used): bud_clock's [13] timerClear, and
 //   [20] changed, [21] carryHeld (args: session, old id in out, the returned ref), [22] uuid (one id consumed),
 //   [23] isQuiet consulted (maybeClose used the host's `quiet` input; it is always the first effect of the call).
@@ -58,7 +65,16 @@ fn push(inout fx: [i64], v: i64) -> ()
 
 // Session entry for the key, -1 if absent.
 pub fn session_of(st: [i64], sk: [i64], ss: i64, sn: i64) -> i64
-{ return crate::bud_map::find(st, 0, sk, ss, sn); }
+{ return crate::bud_map::find_w(st, 0, sk, ss, sn); }
+
+// Data words of record string i whose length word is l: words(l) for the packed id strings 0 (id) and 4 (follows),
+// else l (one unit per word), l clamped into 0..2^32.
+pub fn str_words(i: i64, l: i64) -> i64
+  ensures 0 <= result && result <= 4294967296
+{
+  if i == 0 || i == 4 { return crate::bud_keys::words(l); }
+  return c32(l);
+}
 
 // Field address of session entry se (bud_store::field_addr), -1 if out of range. The blob offset is at a + 12 and
 // its length at a + 13; callers read both through one address instead of one field_addr per word.
@@ -110,31 +126,23 @@ pub fn state_of(st: [i64], off: i64, n: i64) -> i64
   return s;
 }
 
-// Does the record's budgetId (string 0, at off + 24) equal k[ks..ks+kn)?  O(kn).
+// Does the record's budgetId (string 0: unit count at off + 24, packed words from off + 25) equal the packed key
+// (k, ks, kn)? Equal unit counts and equal words(kn) words (one encoding per key). O(words(kn)).
 pub fn id_is(st: [i64], off: i64, k: [i64], ks: i64, kn: i64) -> bool
   requires 0 <= off && off <= 1099511627776
 {
-  if kn < 0 || kn > 4294967296 || ks < 0 || ks > 1099511627776 { return false; }
+  if kn < 0 || kn > 1073741824 || ks < 0 || ks > 1099511627776 { return false; }
   if rd(st, off + 24) != kn { return false; }
-  if off + 25 + kn <= len(st) && ks + kn <= len(k) {
-    // Both ranges in bounds (checked once): direct indexing. The words are or-folded by their xor without an early
-    // exit, so the loop has no data-dependent branch and the backend vectorizes it (the hand's slice == is a bcmp);
-    // the answer is the same (all words equal iff the fold is 0).
-    let mut d: i64 = 0;
-    let mut i: i64 = 0;
-    while i < kn
-      invariant 0 <= i && i <= kn && off + 25 + kn <= len(st) && ks + kn <= len(k) && 0 <= off && 0 <= ks
-      decreases kn - i
-    {
-      d = bor(d, bxor(st[off + 25 + i], k[ks + i]));
-      i = i + 1;
-    }
-    return d == 0;
+  let m: i64 = crate::bud_keys::words(kn);
+  if off + 25 + m <= len(st) && ks + m <= len(k) {
+    // Both ranges in bounds (checked once): one slice compare (memcmp). eq_range obligations: off + 25 >= 0, ks >= 0,
+    // m >= 0, both ranges in bounds.
+    return eq_range(st, off + 25, k, ks, m);
   }
   let mut j: i64 = 0;
-  while j < kn
-    invariant 0 <= j && j <= kn && kn <= 4294967296 && 0 <= off && off <= 1099511627776 && 0 <= ks && ks <= 1099511627776
-    decreases kn - j
+  while j < m
+    invariant 0 <= j && j <= m && m <= 268435456 && 0 <= off && off <= 1099511627776 && 0 <= ks && ks <= 1099511627776
+    decreases m - j
   {
     if rd(st, off + 25 + j) != rd(k, ks + j) { return false; }
     j = j + 1;
@@ -174,7 +182,8 @@ fn clock_in(st: [i64], k: [i64], s: i64, n: i64) -> i64
   return crate::bud_clock::clock_of(st, k, s, n);
 }
 
-// Start (the length word) of string k (0..5) of a record held in b (header at 0).
+// Start (the length word) of string k (0..5) of a record held in b (header at 0). Strings 0 and 4 are packed keys
+// (stride 1 + words(len)), the others unit strings (stride 1 + len).
 pub fn str_at(b: [i64], k: i64) -> i64
   ensures 0 <= result && result <= 1099511627776
 {
@@ -184,13 +193,13 @@ pub fn str_at(b: [i64], k: i64) -> i64
     invariant 0 <= i && i <= 6 && 0 <= p && p <= 1099511627776
     decreases 6 - i
   {
-    p = c40(p + 1 + c32(rd(b, p)));
+    p = c40(p + 1 + str_words(i, rd(b, p)));
     i = i + 1;
   }
   return p;
 }
 
-// Length of string k (0..5) of the record stored in st at off (no copy). O(k).
+// Length word of string k (0..5) of the record stored in st at off (no copy): the unit count. O(k).
 pub fn str_len_in(st: [i64], off: i64, k: i64) -> i64
   requires 0 <= off && off <= 1099511627776
   ensures 0 <= result && result <= 4294967296
@@ -201,7 +210,7 @@ pub fn str_len_in(st: [i64], off: i64, k: i64) -> i64
     invariant 0 <= i && i <= 6 && 0 <= p && p <= 1099511627776
     decreases 6 - i
   {
-    p = c40(p + 1 + c32(rd(st, p)));
+    p = c40(p + 1 + str_words(i, rd(st, p)));
     i = i + 1;
   }
   return c32(rd(st, p));
@@ -211,39 +220,83 @@ fn str_len(b: [i64], p: i64) -> i64
   ensures 0 <= result && result <= 4294967296
 { return c32(rd(b, p)); }
 
-// Writes `len, src[s..s+n)` at o[at]; returns the position after it.
+// Copies src[s .. s + m) to o[at ..] (m clamped into 0..2^30, s into 0..2^40; a word outside src reads 0, a write
+// outside o is dropped); returns at + m. One range check and direct indexing when both ranges are in bounds, else the
+// per-word total path (ent_u16::put_range semantics; the source offset is kept to 40 bits, so a record above 2^32 in
+// the arena is still read from its own place). Both paths write the same words.
+fn copy_words(inout o: [i64], at: i64, src: [i64], s: i64, m: i64) -> i64
+  requires 0 <= at && at <= 4294967296
+  ensures len(o) == len(old(o)) && 0 <= result && result <= 1099511627776
+{
+  let mut mm: i64 = c32(m);
+  if mm > 1073741824 { mm = 1073741824; }
+  let ss: i64 = c40(s);
+  if at + mm <= len(o) && ss + mm <= len(src) {
+    let mut k: i64 = 0;
+    while k < mm
+      invariant 0 <= k && k <= mm && at + mm <= len(o) && ss + mm <= len(src) && 0 <= at && 0 <= ss && len(o) == len(old(o))
+      decreases mm - k
+    {
+      o[at + k] = src[ss + k];
+      k = k + 1;
+    }
+    return at + mm;
+  }
+  let mut j: i64 = 0;
+  while j < mm
+    invariant 0 <= j && j <= mm && mm <= 1073741824 && 0 <= at && at <= 4294967296 && 0 <= ss && ss <= 1099511627776 && len(o) == len(old(o))
+    decreases mm - j
+  {
+    crate::ent_u16::wr(inout o, at + j, rd(src, ss + j));
+    j = j + 1;
+  }
+  return at + mm;
+}
+
+// Writes the unit string `len, src[s..s+n)` at o[at]; returns the position after it.
 pub fn put_str(inout o: [i64], at: i64, src: [i64], s: i64, n: i64) -> i64
   ensures len(o) == len(old(o)) && 0 <= result && result <= 1099511627776
 {
   let a: i64 = crate::ent_u16::clamp(at, 4294967295);
   let m: i64 = c32(n);
   crate::ent_u16::wr(inout o, a, m);
+  return copy_words(inout o, a + 1, src, s, m);
+}
+
+// Writes the framed packed key `n, k[s .. s + words(n))` at o[at] (n clamped into 0..2^30); returns the position
+// after it. A packed-to-packed copy: no unit is looked at.
+pub fn put_key(inout o: [i64], at: i64, k: [i64], s: i64, n: i64) -> i64
+  ensures len(o) == len(old(o)) && 0 <= result && result <= 1099511627776
+{
+  let a: i64 = crate::ent_u16::clamp(at, 4294967295);
+  let mut nn: i64 = c32(n);
+  if nn > 1073741824 { nn = 1073741824; }
+  crate::ent_u16::wr(inout o, a, nn);
+  return copy_words(inout o, a + 1, k, s, crate::bud_keys::words(nn));
+}
+
+// Writes the packed key (k, s, n) as a unit string `n, units...` at o[at] (n clamped into 0..2^30): results name keys
+// in units. bud_keys::unpack_units when both ranges are in bounds, else per unit through bud_keys::unit (total: a word
+// outside k reads 0); both give the same units. Returns the position after it.
+pub fn put_units_of(inout o: [i64], at: i64, k: [i64], s: i64, n: i64) -> i64
+  ensures len(o) == len(old(o)) && 0 <= result && result <= 1099511627776
+{
+  let a: i64 = crate::ent_u16::clamp(at, 4294967295);
+  let mut nn: i64 = c32(n);
+  if nn > 1073741824 { nn = 1073741824; }
+  crate::ent_u16::wr(inout o, a, nn);
   let ss: i64 = c40(s);
-  if m <= 1073741824 && a + 1 + m <= len(o) && ss + m <= len(src) {
-    // Whole range in bounds (checked once): direct indexing, no per-word range check.
-    let mut k: i64 = 0;
-    while k < m
-      invariant 0 <= k && k <= m && a + 1 + m <= len(o) && ss + m <= len(src) && 0 <= a && 0 <= ss && len(o) == len(old(o))
-      decreases m - k
-    {
-      o[a + 1 + k] = src[ss + k];
-      k = k + 1;
-    }
-    return c40(a + 1 + m);
-  }
-  // Per-unit fallback (ent_u16::put_range semantics; the source offset is kept to 40 bits, so a record above
-  // 2^32 in the arena is still read from its own place).
-  let mut mm: i64 = m;
-  if mm > 1073741824 { mm = 1073741824; }
-  let mut k: i64 = 0;
-  while k < mm
-    invariant 0 <= k && k <= mm && mm <= 1073741824 && 0 <= a && a <= 4294967295 && 0 <= ss && ss <= 1099511627776 && len(o) == len(old(o))
-    decreases mm - k
+  let ur: i64 = crate::bud_keys::unpack_units(inout o, a + 1, k, ss, nn);
+  if ur == 0 { return a + 1 + nn; }
+  let mut j: i64 = 0;
+  while j < nn
+    invariant 0 <= j && j <= nn && nn <= 1073741824 && 0 <= a && a <= 4294967295 && len(o) == len(old(o))
+    decreases nn - j
   {
-    crate::ent_u16::wr(inout o, a + 1 + k, rd(src, ss + k));
-    k = k + 1;
+    crate::ent_u16::wr(inout o, a + 1 + j, crate::bud_keys::unit(k, ss, nn, j));
+    j = j + 1;
   }
-  return c40(a + 1 + mm);
+  return a + 1 + nn;
 }
 
 // Copy of the session's blob (O(blob)).
@@ -254,8 +307,8 @@ pub fn blob_copy(st: [i64], se: i64) -> [i64] ! alloc
   return crate::ent_u16::slice(st, off, c40(off + n));
 }
 
-// Upper bound of len(rewrite(b, ...)) when the ended.at text is empty: 30 + the six declared string lengths (the
-// declared lengths count even when they run past the blob, as rewrite copies them).
+// Upper bound of len(rewrite(b, ...)) when the ended.at text is empty: 30 + the six declared strings' data words
+// (str_words; the declared lengths count even when they run past the blob, as rewrite copies them).
 fn rec_bound(b: [i64]) -> i64
   ensures 0 <= result && result <= 30000000000
 {
@@ -265,14 +318,14 @@ fn rec_bound(b: [i64]) -> i64
     invariant 0 <= k && k <= 6 && 30 <= t && t <= 30 + k * 4294967296
     decreases 6 - k
   {
-    t = t + str_len(b, str_at(b, k));
+    t = t + str_words(k, str_len(b, str_at(b, k)));
     k = k + 1;
   }
   return t;
 }
 
 // The record b with header h and string 3 (ended.at text) replaced by e[es..es+en) and string 2 (activeSince text)
-// dropped when drop_since. Strings 0, 1, 4, 5 are kept. O(record).
+// dropped when drop_since. Strings 0, 1, 4, 5 are kept (0 and 4 as packed keys: words(len) data words). O(record).
 pub fn rewrite(b: [i64], h: [i64], drop_since: bool, e: [i64], es: i64, en: i64) -> [i64] ! alloc
 {
   let p0: i64 = str_at(b, 0);
@@ -287,7 +340,7 @@ pub fn rewrite(b: [i64], h: [i64], drop_since: bool, e: [i64], es: i64, en: i64)
   let l4: i64 = str_len(b, p4);
   let l5: i64 = str_len(b, p5);
   let m3: i64 = c32(en);
-  let total: i64 = 30 + l0 + l1 + l2 + m3 + l4 + l5;
+  let total: i64 = 30 + crate::bud_keys::words(l0) + l1 + l2 + m3 + crate::bud_keys::words(l4) + l5;
   let mut o: [i64] = crate::ent_u16::zeros(total);
   let mut j: i64 = 0;
   while j < 24
@@ -298,20 +351,21 @@ pub fn rewrite(b: [i64], h: [i64], drop_since: bool, e: [i64], es: i64, en: i64)
     j = j + 1;
   }
   let mut at: i64 = 24;
-  at = put_str(inout o, at, b, c40(p0 + 1), l0);
+  at = put_key(inout o, at, b, c40(p0 + 1), l0);
   at = put_str(inout o, at, b, c40(p1 + 1), l1);
   at = put_str(inout o, at, b, c40(p2 + 1), l2);
   at = put_str(inout o, at, e, c40(es), m3);
-  at = put_str(inout o, at, b, c40(p4 + 1), l4);
+  at = put_key(inout o, at, b, c40(p4 + 1), l4);
   at = put_str(inout o, at, b, c40(p5 + 1), l5);
   return o;
 }
 
-// Writes record r as the session's blob. Room was reserved by the caller, so a Grow here is a defect (status 2).
+// Writes record r as the session's blob (packed session key). Room was reserved by the caller, so a Grow here is a
+// defect (status 2).
 pub fn store(inout st: [i64], sk: [i64], ss: i64, sn: i64, r: [i64]) -> i64 ! alloc
 {
   let mut t: [i64] = alloc(2, 0);
-  let w: i64 = crate::bud_world::session_put(inout st, sk, ss, sn, r, 0, len(r), inout t);
+  let w: i64 = crate::bud_world::session_put_w(inout st, sk, ss, sn, r, 0, len(r), inout t);
   if w != 0 { return 2; }
   return 0;
 }
@@ -391,8 +445,9 @@ pub fn is_halted(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn:
 
 // ---- OPEN ----
 
-// The record of a fresh budget (B:203-219): id = uk[us..us+un), openedAt = now, origin, state open, limits =
-// unit * times, unlimited when size is unlimited, used all 0, follows = f[fs..fs+fn) when fk == 1.
+// The record of a fresh budget (B:203-219): id = the packed key (uk, us, un), openedAt = now, origin, state open,
+// limits = unit * times, unlimited when size is unlimited, used all 0, follows = the packed key (f, fs, fl) when
+// fk == 1. Both ids are copied as packed words (put_key).
 // size: -1 absent (unit default), 0 unlimited, else the bundle count; unit[ut..ut+6) = [5 limits, defaultUnlimited].
 fn fresh(origin: i64, size: i64, unit: [i64], ut: i64, uk: [i64], us: i64, un: i64, now: i64, fk: i64, f: [i64], fs: i64, fl: i64) -> [i64] ! alloc
 {
@@ -405,9 +460,9 @@ fn fresh(origin: i64, size: i64, unit: [i64], ut: i64, uk: [i64], us: i64, un: i
   let mut times: i64 = chosen;
   if chosen == 0 { times = 1; }
   if times > 8 { times = 8; }
-  let m: i64 = c32(un);
+  let m: i64 = crate::bud_keys::words(c32(un));
   let mut g: i64 = 0;
-  if fk == 1 { g = c32(fl); }
+  if fk == 1 { g = crate::bud_keys::words(c32(fl)); }
   let mut o: [i64] = crate::ent_u16::zeros(30 + m + g);
   crate::ent_u16::wr(inout o, 0, 0);
   crate::ent_u16::wr(inout o, 1, origin);
@@ -424,9 +479,10 @@ fn fresh(origin: i64, size: i64, unit: [i64], ut: i64, uk: [i64], us: i64, un: i
   crate::ent_u16::wr(inout o, 20, 2);
   crate::ent_u16::wr(inout o, 21, now);
   crate::ent_u16::wr(inout o, 23, fk);
-  let mut at: i64 = put_str(inout o, 24, uk, c40(us), m);
+  let mut at: i64 = put_key(inout o, 24, uk, c40(us), un);
+  // strings 1..3 are empty (their length words are the zeros of o)
   at = c40(at + 3);
-  at = put_str(inout o, at, f, c40(fs), g);
+  if fk == 1 { at = put_key(inout o, at, f, c40(fs), fl); }
   return o;
 }
 
@@ -475,7 +531,7 @@ pub fn attach(inout st: [i64], sk: [i64], ss: i64, sn: i64, origin: i64, size: i
     let il: i64 = c32(rd(st, off + 24));
     if !out_ok(out, 2 + il) { return 3; }
     crate::ent_u16::wr(inout out, 0, 3);
-    let e: i64 = put_str(inout out, 1, st, c40(off + 25), il);
+    let e: i64 = put_units_of(inout out, 1, st, c40(off + 25), il);
     return 0;
   }
   let b: [i64] = blob_copy(st, se);
@@ -485,7 +541,7 @@ pub fn attach(inout st: [i64], sk: [i64], ss: i64, sn: i64, origin: i64, size: i
   let w: i64 = open_in(inout st, sk, ss, sn, b, origin, size, unit, ut, uk, us, un, now, 0, b, 0, 0, inout fx);
   if w != 0 { return w; }
   crate::ent_u16::wr(inout out, 0, 3);
-  let e: i64 = put_str(inout out, 1, uk, c40(us), un);
+  let e: i64 = put_units_of(inout out, 1, uk, c40(us), un);
   return 0;
 }
 
@@ -529,20 +585,23 @@ pub fn replace(inout st: [i64], sk: [i64], ss: i64, sn: i64, origin: i64, size: 
     return attach(inout st, sk, ss, sn, o, size, unit, ut, uk, us, un, now, inout fx, inout out);
   }
   let ol: i64 = c32(rd(st, at_off(st, a) + 24));
+  let ow: i64 = crate::bud_keys::words(ol);
   let m: i64 = c32(un);
+  let mw: i64 = crate::bud_keys::words(m);
   if !out_ok(out, 3 + m + ol) { return 3; }
-  // Room for the new record (30 + m + ol words, ol counted even when the id length word runs past the blob) plus the
-  // old reservation; store's put then fits without Grow. make_room keeps entries and blob offsets.
-  let g: i64 = reserve(inout st, 30 + m + ol + n + 64);
+  // Room for the new record (30 + words(un) + words(ol) words, ol counted even when the old id's length word runs
+  // past the blob) plus the old reservation; store's put then fits without Grow. make_room keeps entries and blob
+  // offsets.
+  let g: i64 = reserve(inout st, 30 + mw + ow + n + 64);
   if g != 0 { return grow(g); }
   let off: i64 = at_off(st, a);
   let mut fk: i64 = 1;
   if o == 1 { fk = 0; }
-  // The old id is read in place when it lies inside the blob; otherwise from a copy of the blob, whose reads past
-  // the end give 0 (the same units the closed-record path read).
+  // The old (packed) id is read in place when its words lie inside the blob; otherwise from a copy of the blob, whose
+  // reads past the end give 0 (the same words the closed-record path read).
   let mut r: [i64] = crate::ent_u16::zeros(0);
   let mut ce: i64 = -1;
-  if 25 + ol <= n {
+  if 25 + ow <= n {
     r = fresh(o, size, unit, ut, uk, us, un, now, fk, st, c40(off + 25), ol);
     ce = clock_in(st, st, c40(off + 25), ol);
   } else {
@@ -561,10 +620,11 @@ pub fn replace(inout st: [i64], sk: [i64], ss: i64, sn: i64, origin: i64, size: 
   if w != 0 { return w; }
   push(inout fx, 20);
   crate::ent_u16::wr(inout out, 0, 3);
-  let e: i64 = put_str(inout out, 1, uk, c40(us), un);
+  let e: i64 = put_units_of(inout out, 1, uk, c40(us), un);
   if o != 1 {
-    // The old id is the new record's follows (string 4 at 28 + m: id, then three empty strings).
-    let e2: i64 = put_str(inout out, e, r, c40(29 + m), ol);
+    // The old id is the new record's follows (string 4 at 28 + words(un): the packed id, then three empty strings),
+    // written to out in units.
+    let e2: i64 = put_units_of(inout out, e, r, c40(29 + mw), ol);
     push(inout fx, 21);
   }
   return 0;

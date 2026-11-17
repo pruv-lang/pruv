@@ -255,7 +255,7 @@ pub fn put_card(budget: &[i64], card: &[i64]) -> Vec<i64> {
     }
 }
 
-/// Sessions keyed by session-id units; value = budget V words.
+/// Sessions keyed by the framed packed session-id key `n, words(n)` (packed u16 lanes, see bud_keys); value = budget V words.
 pub struct Store {
     pub sessions: HashMap<Vec<i64>, Vec<i64>>,
 }
@@ -264,14 +264,24 @@ fn units(v: &[i64], p: usize) -> &[i64] {
     &v[p + 2..p + 2 + v[p + 1] as usize]
 }
 
+/// The framed packed key `k` = [n, words(n) words] is canonical: n in 0..=2^30, len == 1 + ceil(n/4), zero tail lanes
+/// (the same test as bud_keys::rec_end over the whole slice).
+fn packed_framed_ok(k: &[i64]) -> bool {
+    let n = match k.first() { Some(&n) if (0..=1 << 30).contains(&n) => n as usize, _ => return false };
+    let m = (n + 3) / 4;
+    if k.len() != 1 + m { return false; }
+    let r = n & 3;
+    r == 0 || m == 0 || (k[m] as u64) & (u64::MAX >> (16 * r)) == 0
+}
+
 impl Store {
     /// setCard on the stored budget; returns the error kind (-1 ok) and stores the new budget on success.
+    /// `sid` = the framed packed key of ref.sessionId (packed once by the caller; empty = the ref has none).
     /// Same work as root.pruv m11_set_card: input shape checks, and on success the result words
     /// [k, used_now, saved, changed, findSession, {ok: true, budget}] written into `out`.
-    pub fn set_card(&mut self, rf: &[i64], card: &[i64], now_ms: i64, out: &mut Vec<i64>) -> i64 {
+    pub fn set_card(&mut self, rf: &[i64], sid: &[i64], card: &[i64], now_ms: i64, out: &mut Vec<i64>) -> i64 {
         if v_end(rf, 0) != Some(rf.len()) || v_end(card, 0) != Some(card.len()) { return 0; }
-        let sp = match obj_get(rf, 0, "sessionId") { Some(p) if rf[p] == 6 => p, _ => return 0 };
-        let sid = units(rf, sp);
+        if !sid.is_empty() && !packed_framed_ok(sid) { return 0; }
         let budget = match self.sessions.get(sid) { Some(b) if !b.is_empty() => b, _ => return 0 };
         let same = match (obj_get(budget, 0, "id"), obj_get(rf, 0, "budgetId")) {
             (Some(a), Some(b)) if budget[a] == 6 && rf[b] == 6 => units(budget, a) == units(rf, b),
@@ -289,7 +299,7 @@ impl Store {
         out.push(4);
         key(out, "budget");
         out.extend_from_slice(&nb);
-        self.sessions.insert(sid.to_vec(), nb);
+        self.sessions.insert(sid.to_vec(), nb); // sid is non-empty here: the lookup above found it
         -1
     }
 }

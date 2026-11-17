@@ -2,7 +2,8 @@
 // sub-operations REFRESH, BEGIN, ARM, SETTLE, FIRE, DROP, CLOSE as named entries for lifecycle (M7) and halt/decide
 // (M10). Interface and frames: bench/l3/budget/M9_NOTES.md, section "Sub-operation interface".
 //
-// Clock state lives in the bud_map world (root 1 = clocks keyed by budgetId, blob = owning sessionId units):
+// Clock state lives in the bud_map world (root 1 = clocks keyed by budgetId, blob = owning sessionId as a framed
+// packed key `n, words(n) packed words`, the same format bud_world::clock_put stores and owner_n / emit_owner read):
 //   field 14 since-present (0/1), 15 since (ms), 16 armed (0/1: a timer is requested and not yet cleared or
 //   delivered), 17 active runs (the number of runs with waiting = 0, kept by the run methods; REFRESH reads it
 //   instead of scanning the runs).
@@ -26,11 +27,9 @@
 //
 // Status of every public entry: 0 done, 4 done + HALT_TIME (the caller must run halt(ref, 'time'); SETTLE already
 // ran), 2 invalid (corrupt state), 3 fx too small, -N Grow(N) (nothing written; grow the buffer and retry).
-// Keys are (array, start, length) and have been validated by the caller.
-
-fn cl(x: i64) -> i64
-  ensures 0 <= result && result <= 4294967296
-{ return crate::bud_store::c32(x); }
+// Keys are packed (bud_keys): (array, start, unit count n) names the words(n) packed words at array[start ..], canonical
+// (validated by the caller with bud_keys::rec_end / slice_ok at ingress). run_started also needs the sessionId FRAMED:
+// sk[ss - 1] == sn, because the frame `sn, words...` is stored as the clock's owner blob (status 2 otherwise).
 
 // x clamped into -2^53..2^53 (every clock number is a JS safe integer in the domain)
 fn sc(x: i64) -> i64
@@ -121,21 +120,38 @@ fn grow_status(n: i64) -> i64
 
 // Clock entry of the budget, or -1.
 pub fn clock_of(st: [i64], bk: [i64], bs: i64, bn: i64) -> i64
-{ return crate::bud_map::find(st, 1, bk, bs, bn); }
+{ return crate::bud_map::find_w(st, 1, bk, bs, bn); }
 
-// Copies the owning sessionId of the budget's clock into dst (from 0) and returns its length; -1 without a clock.
-// (Observation helper. FIRE takes the ref its timer captured from the host, not this owner.)
+// Unit count of the framed owner key stored as the blob of the clock at base ca: blob word 0 when the blob is exactly
+// 1 + words(n) words, else 0 (a corrupt blob names the empty key; same rule as bud_world::owner_n).
+fn owner_len(st: [i64], ca: i64) -> i64
+  requires -1 <= ca && ca <= 1099511627776
+  ensures 0 <= result && result <= 1073741824
+{
+  if ca < 0 { return 0; }
+  let bl: i64 = crate::bud_store::c40(rf(st, ca, 13));
+  if bl < 1 { return 0; }
+  let n: i64 = crate::ent_u16::rd(st, crate::bud_store::c40(rf(st, ca, 12)));
+  if n < 0 || n > 1073741824 { return 0; }
+  if crate::bud_keys::words(n) != bl - 1 { return 0; }
+  return n;
+}
+
+// Copies the owning sessionId of the budget's clock into dst (from 0) as units and returns its unit count; -1 without
+// a clock. (Observation helper. FIRE takes the ref its timer captured from the host, not this owner.)
 pub fn clock_owner(st: [i64], bk: [i64], bs: i64, bn: i64, inout dst: [i64]) -> i64
 {
   let ce: i64 = clock_of(st, bk, bs, bn);
   if ce < 0 { return -1; }
-  let n: i64 = crate::bud_map::blob_len(st, ce);
+  let ca: i64 = fa(st, ce);
+  let n: i64 = owner_len(st, ca);
+  let ko: i64 = crate::bud_map::blob_off(st, ce) + 1;
   let mut j: i64 = 0;
   while j < n
-    invariant 0 <= j && j <= n && n <= 1099511627776
+    invariant 0 <= j && j <= n && n <= 1073741824
     decreases n - j
   {
-    crate::ent_u16::wr(inout dst, j, crate::bud_map::blob_unit(st, ce, j));
+    crate::ent_u16::wr(inout dst, j, crate::bud_keys::unit(st, ko, n, j));
     j = j + 1;
   }
   return n;
@@ -150,22 +166,30 @@ pub fn armed(st: [i64], bk: [i64], bs: i64, bn: i64) -> i64
   return 0;
 }
 
-// Does the clock's owner blob equal the sessionId key?
-// (Same compare as bud_map::blob_unit per unit, with the blob offset read once.)
+// Does the clock's owner blob (framed packed key `n, words(n)`) equal the packed sessionId key (sk, ss, sn)?
+// Blob length 1 + words(sn), frame word sn, then the words(sn) words: one slice compare when both ranges are inside
+// their buffers, a per-word total compare otherwise (both read the same words). Equal n and equal words are equal
+// units (one encoding per key).
 fn owner_is(st: [i64], ca: i64, sk: [i64], ss: i64, sn: i64) -> bool
   requires -1 <= ca && ca <= 1099511627776
 {
   if ca < 0 { return false; }
-  let n: i64 = crate::bud_store::c40(rf(st, ca, 13));
-  if n != sn { return false; }
+  if sn < 0 || sn > 1073741824 { return false; }
   if ss < 0 || ss > 1099511627776 { return false; }
+  let m: i64 = crate::bud_keys::words(sn);
+  if crate::bud_store::c40(rf(st, ca, 13)) != 1 + m { return false; }
   let off: i64 = crate::bud_store::c40(rf(st, ca, 12));
+  if crate::ent_u16::rd(st, off) != sn { return false; }
+  if off + 1 + m <= len(st) && ss + m <= len(sk) {
+    // eq_range obligations: off + 1 >= 0, ss >= 0, m >= 0, both ranges in bounds
+    return eq_range(st, off + 1, sk, ss, m);
+  }
   let mut j: i64 = 0;
-  while j < n
-    invariant 0 <= j && j <= n && n <= 1099511627776 && 0 <= off && off <= 1099511627776
-    decreases n - j
+  while j < m
+    invariant 0 <= j && j <= m && m <= 268435456 && 0 <= off && off <= 1099511627776 && 0 <= ss && ss <= 1099511627776
+    decreases m - j
   {
-    if crate::ent_u16::rd(st, off + j) != crate::ent_u16::rd(sk, ss + j) { return false; }
+    if crate::ent_u16::rd(st, off + 1 + j) != crate::ent_u16::rd(sk, ss + j) { return false; }
     j = j + 1;
   }
   return true;
@@ -318,7 +342,8 @@ pub fn close(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: i64, s
 }
 
 // runStarted (B:286): needs CURRENT(ref); creates the clock (owner = ref.sessionId) and the run if missing, sets the
-// run not waiting, then REFRESH. Space for both entries is reserved before the first write.
+// run not waiting, then REFRESH. Space for both entries is reserved before the first write. The sessionId must be
+// framed (sk[ss - 1] == sn): the frame is the owner blob of a new clock (checked before anything is written; 2).
 pub fn run_started(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: i64, sn: i64, rk: [i64], rs: i64, rn: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> i64
 {
   if !fx_ok(fx) { return 3; }
@@ -328,13 +353,16 @@ pub fn run_started(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: 
   let mut ents: i64 = 0;
   let mut words: i64 = 0;
   if ce0 < 0 {
+    if ss < 1 || ss > len(sk) { return 2; }
+    if sk[ss - 1] != sn { return 2; }
     ents = 2;
-    words = cl(bn) + cl(sn) + cl(rn);
+    // packed key words of the clock and the run, plus the framed owner blob
+    words = crate::bud_keys::words(bn) + 1 + crate::bud_keys::words(sn) + crate::bud_keys::words(rn);
   } else {
-    re = crate::bud_map::find(st, ce0, rk, rs, rn);
+    re = crate::bud_map::find_w(st, ce0, rk, rs, rn);
     if re < 0 {
       ents = 1;
-      words = cl(rn);
+      words = crate::bud_keys::words(rn);
     }
   }
   if ents > 0 {
@@ -343,16 +371,16 @@ pub fn run_started(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: 
   }
   let mut ce: i64 = ce0;
   if ce < 0 {
-    ce = crate::bud_map::add(inout st, 1, bk, bs, bn);
+    ce = crate::bud_map::add_w(inout st, 1, bk, bs, bn);
     if ce < 0 { return 2; }
-    let r: i64 = crate::bud_map::set_blob(inout st, ce, sk, ss, sn);
+    let r: i64 = crate::bud_map::set_blob(inout st, ce, sk, ss - 1, 1 + crate::bud_keys::words(sn));
     if r < 0 { return 2; }
   }
   // The run is absent exactly when ents > 0 (a new clock has no runs), so it is added without a second lookup;
   // make_room keeps entry numbers, so a run found before it stays valid.
   let mut became: bool = false;
   if re < 0 {
-    re = crate::bud_map::add(inout st, ce, rk, rs, rn);
+    re = crate::bud_map::add_w(inout st, ce, rk, rs, rn);
     if re < 0 { return 2; }
     became = true;
   }
@@ -371,7 +399,7 @@ pub fn run_waiting(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: 
   if !fx_ok(fx) { return 3; }
   let ce: i64 = clock_of(st, bk, bs, bn);
   if ce < 0 { return 0; }
-  let re: i64 = crate::bud_map::find(st, ce, rk, rs, rn);
+  let re: i64 = crate::bud_map::find_w(st, ce, rk, rs, rn);
   if re < 0 { return 0; }
   let ra: i64 = fa(st, re);
   let was: bool = rf(st, ra, 14) == 1;
@@ -391,7 +419,7 @@ pub fn run_ended(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: i6
   if !fx_ok(fx) { return 3; }
   let ce: i64 = clock_of(st, bk, bs, bn);
   if ce < 0 { return 0; }
-  let re: i64 = crate::bud_map::find(st, ce, rk, rs, rn);
+  let re: i64 = crate::bud_map::find_w(st, ce, rk, rs, rn);
   if re < 0 { return 0; }
   let ca: i64 = fa(st, ce);
   if ef(st, re, 14) != 1 { add_active(inout st, ca, -1); }

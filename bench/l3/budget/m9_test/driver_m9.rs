@@ -18,8 +18,11 @@ use std::hint::black_box;
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
 
+// Op keys are packed u16 keys `n, words(n) packed words` (bud_keys layout), packed once by the encoder (run_m9.py, or
+// pack_u16 below for perf and the timer callback).
 // Scheduler keys hold the op's key units in the byte form hand_m9.rs keys its Strings by (each unit as its UTF-8
-// style 1-3 byte sequence, an injective encoding; ASCII keys are one byte per unit, the same bytes as the String).
+// style 1-3 byte sequence, an injective encoding; ASCII keys are one byte per unit, the same bytes as the String):
+// the host unpacks the op key's units (reused scratch) and byte-encodes them; packed words never reach the scheduler.
 // The host never interprets them. A key is encoded into a reused scratch buffer and lookups borrow it; a key is
 // copied only when a timer captures its ref or a budget gets its first map slot, the same allocations as hand_m9.rs
 // (which clones the ref's two Strings and inserts the budget key the same way).
@@ -80,15 +83,48 @@ struct World {
     by_bid: HashMap<Vec<u8>, u64>,
     known: HashMap<u64, (Vec<u8>, Vec<u8>)>,
     cb: Vec<i64>,
+    cu: Vec<i64>,
     kb: Vec<u8>,
     ks: Vec<u8>,
     log: Vec<String>,
     quiet: bool,
 }
 
-fn key_at(op: &[i64], p: usize) -> (usize, usize) {
-    let n = op[p] as usize;
-    (p + 1, p + 1 + n)
+// Data words of a packed key of n units: ceil(n / 4).
+fn words(n: i64) -> usize {
+    (n.max(0) as usize + 3) / 4
+}
+
+// The packed key record at op[p]: (unit count, first word, end).
+fn key_at(op: &[i64], p: usize) -> (usize, usize, usize) {
+    let n = op[p].max(0) as usize;
+    (n, p + 1, p + 1 + words(op[p]))
+}
+
+// Appends the n units of packed words `w` to out.
+fn unpack_into(n: usize, w: &[i64], out: &mut Vec<i64>) {
+    for j in 0..n {
+        out.push(((w[j / 4] as u64) >> (48 - 16 * (j % 4))) as i64 & 0xffff);
+    }
+}
+
+// Packed-u16 words (bud_keys layout) of units, appended to out.
+fn pack_into(units: &[i64], out: &mut Vec<i64>) {
+    for c in units.chunks(4) {
+        let mut x: u64 = 0;
+        for l in 0..4 {
+            x = (x << 16) | (c.get(l).copied().unwrap_or(0) as u64 & 0xffff);
+        }
+        out.push(x as i64);
+    }
+}
+
+// Byte form (enc) of the packed key at op[p], through the reused unit scratch `cu`.
+fn enc_key(op: &[i64], p: usize, cu: &mut Vec<i64>, out: &mut Vec<u8>) {
+    let (n, s, e) = key_at(op, p);
+    cu.clear();
+    unpack_into(n, &op[s..e], cu);
+    enc(&cu[..], out);
 }
 
 impl World {
@@ -114,6 +150,7 @@ impl World {
             by_bid: HashMap::new(),
             known: HashMap::new(),
             cb: Vec::with_capacity(64),
+            cu: Vec::with_capacity(64),
             kb: Vec::with_capacity(64),
             ks: Vec::with_capacity(64),
             log: Vec::new(),
@@ -169,12 +206,12 @@ impl World {
         if used == 0 {
             return self.halt_log(op, r);
         }
-        // ref of the call (scheduler key and captured ref), encoded into the scratch keys
-        let (ss, se) = key_at(op, 1);
-        let (bs, be) = key_at(op, 2 + op[1] as usize);
+        // ref of the call (scheduler key and captured ref), unpacked and encoded into the scratch keys
+        let bp = 2 + words(op[1]);
         let mut kb = std::mem::take(&mut self.kb);
         let mut ks = std::mem::take(&mut self.ks);
-        enc(&op[bs..be], &mut kb);
+        let mut cu = std::mem::take(&mut self.cu);
+        enc_key(op, bp, &mut cu, &mut kb);
         let bid = &kb[..];
         let mut i = 1;
         while i <= used {
@@ -184,7 +221,7 @@ impl World {
                     let eff = self.fx[i + 2];
                     // like `clock.timer = setTimeout(..)`: a previous handle is overwritten, not cancelled
                     self.seq += 1;
-                    enc(&op[ss..se], &mut ks);
+                    enc_key(op, 1, &mut cu, &mut ks);
                     let sid = &ks[..];
                     let t = Timer { token: self.seq, due: self.now + eff, sid: sid.to_vec(), bid: bid.to_vec() };
                     match self.by_bid.get_mut(bid) {
@@ -216,14 +253,17 @@ impl World {
         }
         self.kb = kb;
         self.ks = ks;
+        self.cu = cu;
         self.halt_log(op, r)
     }
 
     fn halt_log(&mut self, op: &[i64], r: i64) -> i64 {
         if r == 4 && !self.quiet {
-            // HALT_TIME: when and for which session (the caller's halt(ref, 'time') is M10)
-            let (ss, se) = key_at(op, 1);
-            let u: Vec<String> = op[ss..se].iter().map(|x| x.to_string()).collect();
+            // HALT_TIME: when and for which session (the caller's halt(ref, 'time') is M10), in units
+            let (n, s, e) = key_at(op, 1);
+            let mut units = Vec::new();
+            unpack_into(n, &op[s..e], &mut units);
+            let u: Vec<String> = units.iter().map(|x| x.to_string()).collect();
             self.log.push(format!("H {} {}", self.now, u.join(",")));
         }
         r
@@ -246,23 +286,27 @@ impl World {
     }
 
     // The timer callback `() => this.fire(ref)` with its captured ref.
-    // The op is built in a reused scratch buffer (no allocation per delivery).
+    // The op is built in reused scratch buffers (no allocation per delivery): the captured byte keys are decoded to
+    // units and packed into the op's key records.
     fn run_callback(&mut self, token: u64, sid: &[u8], bid: &[u8]) -> i64 {
         if !self.quiet {
             self.log.push(format!("F t{}", token));
         }
         let mut op = std::mem::take(&mut self.cb);
+        let mut cu = std::mem::take(&mut self.cu);
         op.clear();
         op.push(4i64);
+        cu.clear();
+        dec(sid, &mut cu);
+        op.push(cu.len() as i64);
+        pack_into(&cu, &mut op);
+        cu.clear();
+        dec(bid, &mut cu);
+        op.push(cu.len() as i64);
+        pack_into(&cu, &mut op);
         op.push(0);
-        dec(sid, &mut op);
-        op[1] = (op.len() - 2) as i64;
-        let p = op.len();
         op.push(0);
-        dec(bid, &mut op);
-        op[p] = (op.len() - p - 1) as i64;
-        op.push(0);
-        op.push(0);
+        self.cu = cu;
         let r = self.call(&op);
         self.cb = op;
         r
@@ -420,16 +464,19 @@ fn run_q() {
 fn run_perf(args: &[String]) {
     let rsz: usize = args[0].parse().unwrap();
     let reps: usize = args[1].parse().unwrap();
+    // wire key `n, packed words(n)`
     let key = |s: &str| -> Vec<i64> {
-        let mut v = vec![s.len() as i64];
-        v.extend(s.encode_utf16().map(|u| u as i64));
+        let u: Vec<i64> = s.encode_utf16().map(|u| u as i64).collect();
+        let mut v = vec![u.len() as i64];
+        pack_into(&u, &mut v);
         v
     };
     let sid = key("session-perf");
     let bid = key("99b568f7-0000-4000-8000-000000000001");
     let mut put = sid.clone();
-    let mut rec = vec![0i64, 0, 1000000, 0, 0, 0, (bid.len() - 1) as i64];
-    rec.extend_from_slice(&bid[1..]);
+    // record word 6 = bn, then the packed id words
+    let mut rec = vec![0i64, 0, 1000000, 0, 0, 0];
+    rec.extend_from_slice(&bid);
     put.push(rec.len() as i64);
     put.extend(rec);
     let mk = |code: i64, rk: &Vec<i64>, flag: i64| -> Vec<i64> {

@@ -16,6 +16,9 @@
 // or default false, is supplied up front in the op like the next UUID), [13] timerClear (no timers exist in M7
 // scenarios; logged). Need 5 only answers a call made without an isQuiet input; this host always supplies one.
 // Grow -N: buffer of max(N, 2*len), t_grow, retry.
+// Wire keys are packed u16 keys `n, words(n) packed words` (bud_keys layout), packed once by the encoder (run_m7.py
+// for q mode, key() below for perf / boundary); the records hold the budget id and follows packed the same way
+// (bud_lifecycle.pruv header). Result words still name ids as `len, units...`.
 use std::hint::black_box;
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
@@ -234,14 +237,19 @@ fn nums(it: &[&str]) -> Vec<i64> {
     it.iter().map(|x| x.parse::<i64>().unwrap()).collect()
 }
 
-// A run of keys `len, units...` into separate keys.
+// Data words of a packed key of n units: ceil(n / 4).
+fn words(n: i64) -> usize {
+    (n.max(0) as usize + 3) / 4
+}
+
+// A run of packed keys `n, words(n) packed words` into separate keys (each with its frame word).
 fn keys(w: &[i64]) -> Vec<Vec<i64>> {
     let mut v = Vec::new();
     let mut p = 0;
     while p < w.len() {
-        let n = w[p] as usize;
-        v.push(w[p..p + 1 + n].to_vec());
-        p += 1 + n;
+        let m = words(w[p]);
+        v.push(w[p..p + 1 + m].to_vec());
+        p += 1 + m;
     }
     v
 }
@@ -295,6 +303,7 @@ fn run_q() {
 //   reopen_S  : maybeClose(quiet) then reopen on the last session (2 calls per rep)
 //   attach_S  : attach on an open budget of the last session (ref result)
 // prints `item size ns_per_call`.
+// Record words (bud_lifecycle.pruv header): the id (string 0) and follows (string 4, empty here) are packed keys.
 fn rec(id: &str, state: i64, rest: &str) -> Vec<i64> {
     let mut h = vec![0i64; 24];
     h[0] = state;
@@ -310,18 +319,34 @@ fn rec(id: &str, state: i64, rest: &str) -> Vec<i64> {
         v.push(u.len() as i64);
         v.extend(u);
     };
-    s(id, &mut v);
+    v.extend(key(id));
     s("2023-11-14T22:13:20.000Z", &mut v);
     s("", &mut v);
     s("", &mut v);
-    s("", &mut v);
+    v.extend(key(""));
     s(rest, &mut v);
     v
 }
 
+// Packed-u16 words (bud_keys layout): four big-endian lanes per word, tail lanes zero.
+fn pack_u16(units: &[u16]) -> Vec<i64> {
+    units
+        .chunks(4)
+        .map(|c| {
+            let mut x: u64 = 0;
+            for l in 0..4 {
+                x = (x << 16) | (c.get(l).copied().unwrap_or(0) as u64);
+            }
+            x as i64
+        })
+        .collect()
+}
+
+// Wire key: `n, packed words(n)` (1 + ceil(n/4) words).
 fn key(s: &str) -> Vec<i64> {
-    let mut v = vec![s.encode_utf16().count() as i64];
-    v.extend(s.encode_utf16().map(|u| u as i64));
+    let u: Vec<u16> = s.encode_utf16().collect();
+    let mut v = vec![u.len() as i64];
+    v.extend(pack_u16(&u));
     v
 }
 
@@ -565,9 +590,13 @@ struct Prep {
     origin: i64,
     size: i64,
     unit: Vec<i64>,
+    // packed key words (no frame word) and unit counts
     sk: Vec<i64>,
+    sn: i64,
     bk: Vec<i64>,
+    bn: i64,
     uk: Vec<i64>,
+    un: i64,
 }
 
 fn prep_of(w: &mut World, body: &[i64]) -> Prep {
@@ -576,11 +605,11 @@ fn prep_of(w: &mut World, body: &[i64]) -> Prep {
     let (slot, op, quiet) = w.take_op(body);
     let p = op.clone();
     w.put_op(slot, op);
-    let sn = p[11] as usize;
-    let e1 = 12 + sn;
-    let bn = p[e1] as usize;
-    let e2 = e1 + 1 + bn;
-    let un = p[e2] as usize;
+    let sn = p[11];
+    let e1 = 12 + words(sn);
+    let bn = p[e1];
+    let e2 = e1 + 1 + words(bn);
+    let un = p[e2];
     Prep {
         code: p[0],
         now: p[1],
@@ -588,9 +617,12 @@ fn prep_of(w: &mut World, body: &[i64]) -> Prep {
         origin: p[3],
         size: p[4],
         unit: p[5..11].to_vec(),
-        sk: p[12..12 + sn].to_vec(),
-        bk: p[e1 + 1..e1 + 1 + bn].to_vec(),
-        uk: p[e2 + 1..e2 + 1 + un].to_vec(),
+        sk: p[12..e1].to_vec(),
+        sn,
+        bk: p[e1 + 1..e2].to_vec(),
+        bn,
+        uk: p[e2 + 1..e2 + 1 + words(un)].to_vec(),
+        un,
         op: p,
     }
 }
@@ -619,12 +651,12 @@ fn c_call(w: &mut World, p: &Prep) -> i64 {
     for _ in 0..8 {
         w.fx[0] = 0;
         r = match p.code {
-            1 => sol::c_current(&w.st, black_box(&p.sk), black_box(&p.bk), &mut w.out),
-            2 => sol::c_is_halted(&w.st, black_box(&p.sk), black_box(&p.bk), &mut w.out),
-            3 => sol::c_attach(&mut w.st, black_box(&p.sk), p.origin, p.size, &p.unit, black_box(&p.uk), p.now, &mut w.fx, &mut w.out),
-            4 => sol::c_replace(&mut w.st, black_box(&p.sk), p.origin, p.size, &p.unit, black_box(&p.uk), p.now, &mut w.bv, &mut w.fx, &mut w.out),
-            5 => sol::c_reopen(&mut w.st, black_box(&p.sk), black_box(&p.bk), &mut w.fx, &mut w.out),
-            6 => sol::c_maybe_close(&mut w.st, black_box(&p.sk), p.quiet, p.now, &mut w.bv, &mut w.fx, &mut w.out),
+            1 => sol::c_current(&w.st, black_box(&p.sk), p.sn, black_box(&p.bk), p.bn, &mut w.out),
+            2 => sol::c_is_halted(&w.st, black_box(&p.sk), p.sn, black_box(&p.bk), p.bn, &mut w.out),
+            3 => sol::c_attach(&mut w.st, black_box(&p.sk), p.sn, p.origin, p.size, &p.unit, black_box(&p.uk), p.un, p.now, &mut w.fx, &mut w.out),
+            4 => sol::c_replace(&mut w.st, black_box(&p.sk), p.sn, p.origin, p.size, &p.unit, black_box(&p.uk), p.un, p.now, &mut w.bv, &mut w.fx, &mut w.out),
+            5 => sol::c_reopen(&mut w.st, black_box(&p.sk), p.sn, black_box(&p.bk), p.bn, &mut w.fx, &mut w.out),
+            6 => sol::c_maybe_close(&mut w.st, black_box(&p.sk), p.sn, p.quiet, p.now, &mut w.bv, &mut w.fx, &mut w.out),
             _ => 2,
         };
         if r < 0 {
