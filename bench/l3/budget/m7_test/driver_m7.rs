@@ -434,7 +434,8 @@ fn run_perf(args: &[String]) {
 //   prep the host op build of A only (no t_call)
 //   observe  result consumption only (checksum fold), on the result of one call
 // item noop: A and B with code 0 (unknown code, status 2).
-// Every timed variant resets next_uuid/next_quiet before each call and folds the result words into a checksum.
+// Every timed variant resets next_uuid/next_quiet before each call and folds the full result (status, effect
+// words fx[1..=fx[0]], and the out / budget-view words) into a checksum; observe consumes the same.
 // Output line: `item variant S ns_per_call checksum allocs_per_call`.
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -563,10 +564,18 @@ fn one(v: Var, w: &mut World, body: &[i64], p: &Prep) -> i64 {
     }
 }
 
-// Fold the result words into the checksum: status; for status 0 a budget view (st[off..off+n)), a ref
-// (out[..2+n], plus the carried old id when effect [21] is held) or the tag.
+// Fold the full result into the checksum, identically for every variant (A, B, Bnv, C) and for observe:
+// the status; every effect word fx[1..=fx[0]] (effects are bare codes, they carry no payload words in fx; the
+// words they refer to live in out and are folded below), also after a failed call (fx is reset before each
+// call by all variants); and for status 0 a budget view (st[off..off+n)), a ref (out[..2+n], plus the carried
+// old id when effect [21] is held) or the tag.
 fn consume(w: &World, r: i64, sum: u64) -> u64 {
     let mut s = sum.wrapping_mul(1000003).wrapping_add(r as u64);
+    let used = w.fx[0].max(0) as usize;
+    s = s.wrapping_mul(31).wrapping_add(used as u64);
+    for x in &w.fx[1..=used] {
+        s = s.wrapping_mul(31).wrapping_add(*x as u64);
+    }
     if r != 0 {
         return s;
     }

@@ -16,7 +16,9 @@ count (must be 0).
 
 perf: builds (pruvc, then rustc -C opt-level=3 for the driver and the hand lane; with --inline-variant also a driver
 from gen.rs with every `#[inline(always)]` replaced by `#[inline]`), runs every (set, size, layout or hand) in a
-separate process with the side order rotated every round, and reports median/min/max ns per op per
+separate process with the side order rotated every round (the hand lane runs twice, `hand sip` with std SipHash
+and `hand fx` with an inline FxHasher, as separate sides and separate rows; /hand is relative to hand sip; the enc
+row of the driver folds every word of the produced buffer), and reports median/min/max ns per op per
 (set, L, H, row, N). Instructions per op (`/usr/bin/time -l`, macOS) for the ret and raw rows: one (row, L, H) per
 run, retired-instruction difference between --instr-reps and 5x --instr-reps, divided by the extra operations.
 Raw JSON goes to bench/l3/budget/work/p01_keys/.
@@ -365,27 +367,30 @@ def cmd_perf(args):
     exes = build(args, hand=True, inline=args.inline_variant)
     sizes = [int(x) for x in args.sizes.split(",")]
     sets = args.sets.split(",")
-    # side: (label, command prefix, layout or None for hand)
-    sides = [(L, [exes["drv"], "perf"], L) for L in LAYS] + [("hand", [exes["hand"]], None)]
+    # side: (label, command prefix, layout or None for hand, hasher for hand or None); the hand lane runs twice
+    # (sip, fx), each as its own side in the rotation, and is reported as rows `hand sip` / `hand fx`
+    sides = [(L, [exes["drv"], "perf"], L, None) for L in LAYS]
+    sides += [("hand", [exes["hand"]], None, "sip"), ("hand", [exes["hand"]], None, "fx")]
     if args.inline_variant:
-        sides += [(L + "+inl", [exes["inl"], "perf"], L) for L in LAYS]
+        sides += [(L + "+inl", [exes["inl"], "perf"], L, None) for L in LAYS]
 
     def cmd_for(side, s, N, reps, row="all", H="all"):
-        label, base, L = side
+        label, base, L, hs = side
         if L is None:
-            return base + [s, str(N), str(reps), row]
+            return base + [s, str(N), str(reps), row, hs]
         return base + [s, str(N), str(reps), row, L, H]
 
     res, cks, words, runs = {}, {}, {}, []
     t0 = time.time()
     for rd in range(args.rounds):
         k = rd % len(sides)
-        order = sides[k:] + sides[:k]
+        order = sides[k:] + sides[:k]  # (hand sip and hand fx are separate sides)
         for s in sets:
             for N in sizes:
                 for side in order:
                     out = run_proc(cmd_for(side, s, N, args.reps))
-                    runs.append({"round": rd, "set": s, "N": N, "side": side[0], "stdout": out})
+                    runs.append({"round": rd, "set": s, "N": N,
+                                 "side": side[0] if side[3] is None else "%s-%s" % (side[0], side[3]), "stdout": out})
                     for line in out.splitlines():
                         f = line.split()
                         if len(f) != 9:
@@ -404,7 +409,7 @@ def cmd_perf(args):
             for N in sizes:
                 for side in sides:
                     for row in ("ret", "raw"):
-                        for H in (["sip"] if side[2] is None else ["u", "w"]):
+                        for H in ([side[3]] if side[2] is None else ["u", "w"]):
                             vals = []
                             for _ in range(args.instr_samples):
                                 lo = instr_retired(cmd_for(side, s, N, r1, row, H))

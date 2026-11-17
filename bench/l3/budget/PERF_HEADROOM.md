@@ -111,31 +111,38 @@ Variants run the same M7 code on the same state and keys, per opcode:
 - prep / observe: building the op, and consuming the view words; present in every variant.
 
 A driver self-check exits 2 if any variant differs in result, state or effects; all runs passed (checksums equal).
+Every variant's checksum folds the full result: the status, the effect count `fx[0]` and every effect word
+`fx[1..=used]` (before the early return on a non-zero status), plus the observed view words.
 Allocations are 0 per call except `replace` (1, the stored record).
 Control: M7 Q1 300 cases (Unicode and numeric), exact 113 / not implemented 187 / fail 0 (`m7_test/run_m7.py`).
 
+Full-result run (`work/m7/boundary_p01b.txt`, 7 rounds, S = 100 / 500; the table shows S = 100, S = 500 instructions
+are within 1):
+
 | item | A instr | B instr | Bnv instr | C instr | A ns (100) | B ns | Bnv ns | C ns |
 |---|---|---|---|---|---|---|---|---|
-| current | 1905 | 1760 | 1702 | 1604 | 105.7 | 102.6 | 101.3 | 99.3 |
-| isHalted | 930 | 826 | 767 | 666 | 26.8 | 23.8 | 22.2 | 20.3 |
-| attach | 982 | 875 | 807 | 757 | 32.3 | 28.6 | 26.8 | 25.9 |
-| close + reopen (pair) | 2056 | 1767 | 1631 | 1526 | 59.6 | 48.7 | 46.8 | 42.5 |
-| replace | 3739 | 3576 | 3508 | 3458 | 142.3 | 136.8 | 136.0 | 133.6 |
-| noop | 329 | 221 | - | - | 9.1 | 6.3 | - | - |
+| current | 1917 | 1772 | 1714 | 1615 | 105.1 | 101.3 | 100.8 | 98.9 |
+| isHalted | 942 | 838 | 779 | 679 | 27.6 | 23.9 | 22.5 | 20.8 |
+| attach | 986 | 880 | 812 | 762 | 32.3 | 29.1 | 27.3 | 26.0 |
+| close + reopen (pair) | 2099 | 1810 | 1674 | 1568 | 60.2 | 49.9 | 48.2 | 44.0 |
+| replace | 3761 | 3598 | 3529 | 3479 | 140.7 | 137.8 | 133.5 | 132.2 |
+| noop | 341 | 233 | - | - | 9.7 | 6.7 | - | - |
 
-Most spreads are at most 0.12. The exceptions in `work/m7/boundary.md` include current A at 100 (1.00) and 500 (0.47),
-current B at 100 (0.25), attach Bnv at 500 (0.25), noop B at 500 (1.27) and close+reopen prep (1.07). Those cells are
-reported but not used for a decision; the instruction counts are used instead.
+Consuming every effect word adds 4-43 instructions per item, the same within a few instructions for every variant of that item (the earlier run read only part of the
+effects); no difference between variants moved by more than a few instructions, so no variant was being eliminated.
+Most spreads are at most 0.2. The exceptions include current A at 100 (0.73), attach Bnv at 100 (0.28), closereopen
+C at 500 (0.92), replace C at 100 (0.42) / B at 500 (0.38) and replace prep at 500 (0.75). Those cells are reported
+but not used for a decision; the instruction counts are used instead.
 
 Decomposition (per call; close+reopen per pair):
 
-- A - B, wrapper: 104-163 instructions, 2-6 ns (pair: 289 instructions, ~11 ns). A no-op call alone costs 108.
-- B - C, packed decode and checks including `valid`: 118-160 instructions, 0.4-3.5 ns (pair: 242).
-- B - Bnv, `valid` only: 58-68 instructions, 0.5-1.8 ns (pair: 136). It is part of B - C and is not added to it.
-- observe (reading the result view) is 974 of current's 1905 instructions and is in every variant.
+- A - B, wrapper: 104-163 instructions, 2.9-7.4 ns (pair: 289 instructions, 9-10 ns). A no-op call alone costs 108.
+- B - C, packed decode and checks including `valid`: 118-160 instructions, 0.8-5.6 ns (pair: 242, ~6 ns).
+- B - Bnv, `valid` only: 58-68 instructions, 0.5-4.3 ns (pair: 136). It is part of B - C and is not added to it.
+- observe (reading the result view) is 986 of current's 1917 instructions and is in every variant.
 
-Result: removing the whole boundary (A -> C) saves 225-301 instructions and 6.4-8.7 ns per call (pair: 530
-instructions, 17.1 ns).
+Result: removing the whole boundary (A -> C) saves 224-302 instructions and 6.2-8.5 ns per call (pair: 531
+instructions, 16.2 ns).
 It is a real C3/C4 cost, but it is not the main M7 gap. The historical "~12 of 18 ns is the boundary" reading is
 replaced by these matched numbers.
 
@@ -144,41 +151,87 @@ replaced by these matched numbers.
 `hand_m8_u16` keeps the Pruv semantics: `Box<[u16]>` keys in std `HashMap` (lone surrogates preserved, exact unit
 equality), safe-integer checks on operands and results (+-(2^53 - 1), `checked_add`), the `bud_charge.pruv` refusal
 order (no budget / closed -> 1; halted -> 16 + reason; per key in order: unsafe operand or sum -> 5, over limit ->
-32 + k; then all writes, atomic), noteTool insert-then-check order, and malformed records stored as opaque words.
+32 + k; then all writes, atomic), noteTool insert-then-check order, and the same ingress rejection of malformed input (below); a stored record with
+state -1 (no budget) is kept as opaque words.
 The old `hand_m8.rs` (UTF-8 String keys, plain `+=`) stays as an informational row only.
 
-Controls: Q2 300 cases, Pruv and hand16 both exact 63 / not implemented 237 / fail 0; derived 300 cases, both exact
-222 / fail 0; `m8_test/diff_hand16.py` 300 edge programs (empty / NUL / astral / lone high and low surrogate keys,
-near-miss budget ids, 0, +-1, +-M, +-(M + 1), 2^53, 1e12), byte-identical output, 0 mismatching cases (outcome lines:
-R 816, H 14, X 5 185).
+Malformed external input (P01 follow-up). Policy: ABI.md (units 0..65535) and REQUEST_BUDGET_SPEC §12 (malformed host
+input -> InvalidInput, status 2, state unchanged). Before, the sides disagreed: a matching record with state 3 charged
+`X 2` in Pruv and `R 1` in hand16 (hand16 kept it opaque); unlimited 2 counted a failure in Pruv only; a key unit 65536
+was `R -` in Pruv and a fatal exit in hand16. Now both sides validate once at ingress:
 
-`m8_test/run_m8.py perf --rounds 7 --sizes 100,500` (load average not controlled; 4 sides rotated):
+- `t_put` (and hand16 `put_words`): record n >= 15, state in -1..2, unlimited in 0..1, reason in -1..4,
+  word 14 == n - 15, every id unit in 0..65535; otherwise status 2 before any write. Counter words are not validated
+  (the safe-number checks of `bud_charge` cover them).
+- `key_end` (both sides, every key of `t_put` and `t_call`): length within the op and every unit in 0..65535
+  (the `m34_test/root_m4.pruv` loop).
+- The q drivers print `P X <status>` for a rejected put and continue; perf setup puts stay fatal. hand16's old
+  fail-open path (malformed record -> opaque) is removed.
+
+Proof removal: every stored record has passed the `t_put` check (store invariant, stated in the `root_m8.pruv`
+header). Under it the state / reason range checks in `load_cv` and `bud_charge` re-check what ingress already
+proved and can be removed by proof once the invariant is carried by the resident-state contracts (C3); they are kept
+in this pass (total code, no product change). The key-unit check on every `t_call` key stays: those keys are external
+input on each call.
+
+Controls (re-run in this pass, outputs in `work/p01b/`): Q2 300 cases, Pruv and hand16 both exact 63 / not
+implemented 237 / fail 0; derived 300 cases (`cases_acct.jsonl`), both exact 222 / not implemented 78 / fail 0;
+`m8_test/diff_hand16.py --count 300 --seed 20261117`: 300 random edge programs (empty / NUL / astral / lone high and
+low surrogate keys, near-miss budget ids, 0, +-1, +-M, +-(M + 1), 2^53, 1e12), 0 mismatching cases, then 69 fixed
+malformed controls (record state 3 / -2, unlimited 2 / -1, reason 5 / -2, n 0 / 14, word 14 too big / too small, id
+unit 65536 / -1; key units -1 / 65536 / 70000 in the put key and in every call key position; put framing errors),
+each with an expected Pruv log: 0 mismatches between sides, 0 expectation failures. Outcome lines (Pruv, random +
+controls): R 984, H 14, X 5 185, X 2 27, P X 42.
+
+Compiler agreement and versions: Python `pruvc/pruvc.py --backend rust` and Rust `pruvc-rs` (release, pruv repo
+commit c9a4900) give byte-identical Rust for `root_m8.pruv` (112267 bytes) and `root_m7.pruv` (`run_m7.py same`,
+161256 bytes). rustc 1.99.1 (58cf8f9c3 2026-10-13), `-C opt-level=3 --edition 2021`, every driver and hand file. Seeds:
+Q2 / derived cases 20261117, `diff_hand16.py` 20261117, `run_keys.py check` 20261117.
+
+`m8_test/run_m8.py perf --rounds 7 --sizes 100,500` after the ingress checks (load average not controlled; 4 sides
+rotated; output `work/p01b/m8_perf.txt`). Each timed loop is followed, outside the timing, by a final-state checksum
+(`chk`, the `t_observe` words folded); 56 (item, size, round) checksums are equal between Pruv and hand16:
 
 | item | n | Pruv ns | hand16 ns | old hand ns | TS ns | Pruv/hand16 (bar) | Pruv/old hand | Pruv instr | hand16 instr | old hand instr | instr Pruv/hand16 |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| charge | 100 | 30.7 | 20.6 | 14.8 | 123.5 | 1.49 | 2.07 | 695 | 509 | 351 | 1.36 |
-| charge | 500 | 35.4 | 23.5 | 16.0 | 127.4 | 1.51 | 2.21 | 698 | 508 | 350 | 1.37 |
-| failure | 100 | 22.8 | 15.9 | 12.9 | 26.7 | 1.43 | 1.77 | 581 | 358 | 286 | 1.62 |
-| failure | 500 | 26.6 | 17.6 | 13.4 | 31.3 | 1.51 | 1.99 | 584 | 357 | 285 | 1.63 |
-| tooldup | 100 | 24.4 | 25.1 | 24.4 | 11.4 | 0.97 | 1.00 | 596 | 557 | 462 | 1.07 |
-| tooldup | 500 | 33.1 | 24.3 | 23.1 | 12.1 | 1.36 | 1.43 | 610 | 556 | 460 | 1.10 |
-| toolgrow | 100 | 77.9 | 89.3 | 74.4 | 50.8 | 0.87 | 1.05 | 1666 | 1957 | 1642 | 0.85 |
-| toolgrow | 500 | 88.9 | 100.7 | 81.4 | 54.6 | 0.88 | 1.09 | 1680 | 2083 | 1751 | 0.81 |
+| charge | 100 | 40.4 | 19.2 | 15.2 | 123.4 | 2.10 | 2.66 | 988 | 496 | 352 | 1.99 |
+| charge | 500 | 44.5 | 21.7 | 16.1 | 126.0 | 2.05 | 2.76 | 990 | 495 | 350 | 2.00 |
+| failure | 100 | 33.4 | 16.1 | 12.8 | 26.8 | 2.07 | 2.61 | 884 | 364 | 287 | 2.42 |
+| failure | 500 | 37.4 | 17.3 | 13.0 | 30.8 | 2.16 | 2.88 | 887 | 363 | 284 | 2.44 |
+| tooldup | 100 | 41.5 | 31.9 | 24.1 | 11.6 | 1.30 | 1.72 | 1031 | 528 | 462 | 1.95 |
+| tooldup | 500 | 51.4 | 30.2 | 23.0 | 12.1 | 1.70 | 2.23 | 1043 | 528 | 460 | 1.98 |
+| toolgrow | 100 | 90.9 | 92.0 | 74.8 | 51.3 | 0.99 | 1.22 | 2092 | 1902 | 1642 | 1.10 |
+| toolgrow | 500 | 97.1 | 101.2 | 81.2 | 54.3 | 0.96 | 1.20 | 2105 | 2029 | 1751 | 1.04 |
+
+Before the ingress checks (same command, same machine) Pruv was charge 695 / 698, failure 581 / 584, tooldup 596 /
+610, toolgrow 1666 / 1680 instructions, hand16 509 / 508, 358 / 357, 557 / 556, 1957 / 2083; Pruv/hand16 was 1.36,
+1.62, 1.07-1.10 and 0.81-0.85 in instructions. **The checks are a measured Pruv regression:** +293 (charge), +303
+(failure), +435 / +433 (tooldup), +426 (toolgrow) instructions per call, about 6 per key unit (charge / failure read
+one ref of 13 + 36 units, noteTool four keys of 69 units). The cause is the new unit loop in `root_m8.pruv` `key_end`
+(scalar, early exit, one compare pair and branch per unit), which runs on every key of every call. hand16 did not get
+slower: its keys were already converted with `u16::try_from` per unit, so the range check was part of the work it
+already did. The 1.36x tooldup ns at n = 500 of the earlier run is now 1.70x with 1.98x instructions, so it is no
+longer an unexplained timing outlier but this regression.
+
+Root fix (P02, not done here): the check is needed only for keys that do not hit a stored key. A lookup hit means the
+key equals a stored key, and every stored key passed `t_put` (store invariant), so its units are already in range.
+Checking units on the miss / insert path only (and once at `t_put`) keeps the rejection semantics (malformed -> 2)
+and removes the per-unit loop from the hit path of charge, failure and tooldup; this needs a proof that a hit implies
+the range, not a new check. Until then the M8 ratios above are the honest numbers.
 
 Re-split of the old gap (instructions at n = 100, Pruv - old hand = semantics part + remaining part; at n = 500 the
-remaining part is charge 190, failure 227, tooldup 54):
+remaining part is charge 495, failure 524, tooldup 515):
 
 | item | old gap | equal semantics (hand16 - old hand) | remaining (Pruv - hand16) |
 |---|---|---|---|
-| charge | 344 | 158 (46%) | 186 |
-| failure | 295 | 72 (24%) | 223 |
-| tooldup | 134 | 95 (71%) | 39 |
-| toolgrow | 24 / -71 | 315 / 332 | -291 / -403 (Pruv ahead) |
+| charge | 636 | 144 (23%) | 492 |
+| failure | 597 | 77 (13%) | 520 |
+| tooldup | 569 | 66 (12%) | 503 |
+| toolgrow | 450 / 354 | 260 / 278 | 190 / 76 |
 
-So C6 (safe-number work) and the UTF-16 key representation together explain about half of the old charge gap and a
-quarter of failure. Against the equal-semantics bar charge (1.36x instr, ~1.5x ns) and failure (1.62x instr, ~1.5x ns)
-stay open; tooldup is 1.07-1.10x instr (the 1.36x ns at n = 500 is not matched by instructions and needs a re-run
-before it counts); toolgrow is ahead of hand16.
+Without the key-unit loop (the pre-check run) the remaining part was charge 186, failure 223, tooldup 39; about 300 /
+300 / 460 of today's remaining part is the loop. Against the equal-semantics bar all four items are now open
+(charge 2.0x, failure 2.4x, tooldup 2.0x instructions; toolgrow 1.04-1.10x).
 
 ### Key representation (`p01_keys/`, 7 rounds rotated, N = 100 / 500)
 
@@ -243,13 +296,48 @@ The factors, each measured with the others fixed:
   base in 251 of 288 cells, so the layout and hash gains are not inlining effects. The 37 other cells include sid P chk
   (0.74), F1 cmp and F1/u ret (0.80-0.92, the F1 unit decode), and uuid N = 500 U raw / enc (0.42-0.67). The base runs of those
   uuid cells are bimodal (min 29.4 vs median 68.5 ns), so they are noise and not used.
-- Retained vs raw: on retained keys every packed layout beats hand (P/w 0.52-0.61x). Raw keys pay the host encoder,
+- Retained vs raw: on retained keys every packed layout beats the SipHash hand (P/w 0.52-0.61x; not the Fx hand,
+  see below). Raw keys pay the host encoder,
   and no layout reaches hand: P/w raw is 1.12 / 1.38 / 1.22 / 1.13x at N = 100 (sid / uuid / nonascii / surr), up to 1.43x at N = 500 (uuid).
 - Host encode vs Pruv check: chk + ret below is a sum of separately measured medians, not a measured combined lane
   (enc + chk + ret does not reproduce raw exactly, e.g. nonascii P/w 14.8 vs 17.2 ns). The Pruv part (chk + ret) for P/w is 9.1 / 13.2 / 9.0 /
   8.6 ns, which is 0.58-0.67x of the hand find. The rest is the host encoder (5.7-13.8 ns for P). That encoder is a
   plain per-unit shift loop over `chunks(4)` and is slower than the U copy (6.0 ns on uuid). No faster encoder was
   measured.
+
+#### Full-result re-run and the fast-hash hand row (P01 follow-up, `work/p01_keys/perf_p01b.txt`)
+
+Changes: the `enc` row now folds the whole encoded buffer (`fold_words`: s = len, then s = s * 31 + w per word;
+before, it observed only the length and the last word). `ret` / `miss` / `raw` / `chk` / `cmp` already read the full
+result. `hand_keys.rs` takes a hasher argument (`sip` = std default, `fx` = an inline FxHasher, the rustc-hash 1.x
+`(rotl(h, 5) ^ w) * 0x517cc1b727220a95` over 8 / 4 / 2 / 1-byte chunks); `run_keys.py` runs hand sip and hand fx as
+two sides in the rotation and puts fx in the checksum groups. 7 rounds, N = 100 / 500, all sets; checksum groups
+disagreeing: none.
+
+enc, full fold (ns, N = 100 / 500): sid P 6.93 / 6.73, U 7.45 / 7.47; uuid P 16.27 / 16.12, U 14.52 / 14.10;
+nonascii P 6.94 / 6.76, U 7.47 / 7.28; surr P 8.04 / 7.95, U 8.42 / 8.40. enc now measures encoding plus a fold of the whole
+buffer inside the timing, so its cost grows with the word count of each layout (U 14 words and P 5 words for a
+13-unit sid) and the order can change: sid was U 3.64 < P 5.73 before the fold and is P 6.93 < U 7.45 with it.
+
+ret / miss / raw, P/w against both hand hashers (median ns; instructions for ret):
+
+| set | N | P/w ret | hand fx ret | hand sip ret | P/w / sip | P/w / fx | P/w miss | fx miss | P/w raw | fx raw |
+|---|---|---|---|---|---|---|---|---|---|---|
+| sid | 100 | 7.68, 186 i | 5.68, 122 i | 13.97, 291 i | 0.55 | 1.35 | 4.72 | 4.38 | 15.24 | 5.92 |
+| sid | 500 | 7.76, 191 i | 5.73, 130 i | 13.30, 291 i | 0.58 | 1.35 | 5.71 | 4.19 | 17.42 | 5.95 |
+| nonascii | 100 | 7.85, 189 i | 5.01, 122 i | 13.98, 291 i | 0.56 | 1.57 | 4.76 | 3.20 | 16.77 | 5.25 |
+| nonascii | 500 | 8.48, 191 i | 4.66, 120 i | 13.28, 290 i | 0.64 | 1.82 | 5.83 | 3.53 | 17.69 | 4.89 |
+| surr | 100 | 7.77, 189 i | 5.10, 122 i | 14.57, 302 i | 0.53 | 1.52 | 5.24 | 3.33 | 17.39 | 5.40 |
+| surr | 500 | 8.08, 192 i | 4.83, 121 i | 14.02, 301 i | 0.58 | 1.67 | 5.59 | 3.55 | 17.88 | 5.16 |
+| uuid | 100 | 12.45, 237 i | 14.36, 277 i | 20.76, 406 i | 0.60 | 0.87 | 7.09 | 14.08 | 27.97 | 13.67 |
+| uuid | 500 | 13.52, 238 i | 41.02, 717 i | 20.87, 405 i | 0.65 | 0.33 | 7.27 | 54.61 | 30.23 | 32.32 |
+
+Result (§5 D12): **the packed-u16 lead over hand comes from SipHash.** Against a fast-hash hand map with the same
+`Box<[u16]>` keys, P/w ret is 1.35-1.82x slower on sid / nonascii / surr (61-71 more instructions per lookup), miss is
+1.08-1.65x and raw is 2.6-3.6x. P/w is ahead only on uuid, where Fx degrades: the 36-unit keys differ only in the last
+digits, and at N = 500 hand fx ret costs 717 instructions and miss 54.6 ns, which points to collisions of the 1.x Fx
+fold on such keys (the mechanism was not isolated). That is a weakness of this hasher, not a P/w win; a fast hash with a final
+mix (or FxHash 2.x) was not measured. The 0.52-0.61x "beats hand" figures above are therefore against SipHash only.
 
 **Chosen representation: packed-u16 (P) with the word hash.** Reasons, from the tables:
 
@@ -280,7 +368,7 @@ A8 stays a possible later ASCII fast path; it was not chosen because of the seco
 
 | rank | cause | P01 evidence | note |
 |---|---|---|---|
-| 1 | C1 key / id width | Key bench: U/u -> P/w ret saves 3.8-7.0 ns and 84-178 instructions per lookup. Against hand16, M8 charge has 186 and failure 223 instructions left (n = 100) | The M8 effect of P is expected but not measured; it needs the P03-P05 port |
+| 1 | C1 key / id width | Key bench: U/u -> P/w ret saves 3.8-7.0 ns and 84-178 instructions per lookup. Against hand16, M8 charge has 492 and failure 520 instructions left (n = 100), of which about 300 each is the new key-unit loop | The M8 effect of P is expected but not measured; it needs the P03-P05 port |
 | 2 | C4 packed argument / result boundary | M7 B - C 118-160 instructions, 0.4-3.5 ns (pair 242); wrapper A - B 104-163 | The A - B wrapper is in the driver and host, not in Pruv code |
 | 3 | C3 `valid` re-check | M7 B - Bnv 58-68 instructions, 0.5-1.8 ns (pair 136) | Inside B - C; not counted twice |
 | 4 | C2 accessor re-check / record | Not isolated in P01. M7 observe (view consumption) is 974 of current's 1905 instructions in every variant | Needs its own ablation before any claim |
@@ -289,9 +377,11 @@ A8 stays a possible later ASCII fast path; it was not chosen because of the seco
 
 **Can the chosen layout reach 1.0x?** For the retained-key lookup, measured yes: P/w ret is 0.52-0.61x of the SipHash
 hand map. With the external check added, the sum of separate medians is 0.58-0.67x; a combined check + find lane was
-not measured, so this part is an estimate. Whole M8 ops are not shown at 1.0x
-yet. Charge and failure need C1 (P port) plus C4 / C3 to close 186 / 223 instructions (n = 100), and only the C1 part has a
-measured per-lookup saving. Raw keys re-encoded on every call stay at 1.12-1.43x unless the host keeps packed records.
+not measured, so this part is an estimate. Against the Fx hand row the same lookup is 1.35-1.82x (sid / nonascii /
+surr): a hand map with a fast hash is not reached by the layout alone. Whole M8 ops are not shown at 1.0x
+yet. Charge and failure need the key-unit loop off the hit path (about 300 instructions each, see the M8 section), then
+C1 (P port) plus C4 / C3 for the remaining 186 / 223 instructions (n = 100); only the C1 part has a measured
+per-lookup saving. Raw keys re-encoded on every call stay at 1.12-1.43x unless the host keeps packed records.
 
 **Which checks proofs can remove:**
 
@@ -300,21 +390,29 @@ measured per-lookup saving. Raw keys re-encoded on every call stay at 1.12-1.43x
   saving inside a combined lane was not measured.
 - The external-key `k_check_p` stays, as required.
 - No bounds-check share inside find was isolated, so no figure is claimed for it.
-- Caveat: hand rows use std SipHash. A hand row with a faster non-default hasher was not measured.
+- Caveat: the 1.0x statements above are against std SipHash. Against the Fx hand row P/w ret is 1.35-1.82x
+  (sid / nonascii / surr), see the full-result re-run above.
 
-### Open items after the P01 audit
+### Open items after the P01 follow-up (handoff to P02)
 
-- Blocker for "equal semantics": on malformed external input, hand16 and the Pruv M8 side disagree. hand16 turns a
-  record with state, unlimited or reason out of range into an opaque record and rejects key units outside 0..65535;
-  `m8_test/root_m8.pruv` (`load_cv`, `t_call`) checks neither. Examples: charge on a matching record with state 3 is
-  `X 2` in Pruv and `R 1` in hand16; `call 2 1 65536 0` on an empty state is `R -` in Pruv and `X 2` in hand16. The
-  controls above cover well-formed input only. Fix: add the missing range checks on the Pruv side (external-input
-  validation is required), then add malformed fixed controls to `diff_hand16.py`.
-- Result consumption: the key bench `enc` row observes only the length and last word of the buffer, M8 does not
-  compare a full final-state checksum between sides, and the M7 driver does not consume every effect word. No DCE was
-  observed, but the rows should consume the full result.
-- Not produced in P01: a typed / same-packet hand comparator for M7, an optimized hand with the same data structure,
-  full-result S / M runs, the compiler agreement and exact version record, explicit "unavailable" marks for
-  allocation / probe counters, and a hand row with a non-default hasher.
-- Kept outputs: Q2 63 / 222 and the edge outcome counts (816 / 14 / 185) come from runs whose outputs are not kept in
-  the repo; re-run before relying on them.
+Closed in the follow-up: the malformed-input blocker (both sides reject with status 2, 69 fixed controls), full-result
+consumption (key `enc` folds the whole buffer, M8 perf compares a final-state checksum between Pruv and hand16, M7
+folds every effect word), the re-runs with kept outputs (`work/p01b/`, `work/m7/boundary_p01b.txt`,
+`work/p01_keys/perf_p01b.txt`), the compiler agreement and version record, and the fast-hash hand row.
+
+Still open:
+
+- **First P02 item: the M8 key-unit regression.** The `key_end` unit loop costs about 6 instructions per key unit on
+  every call (charge 695 -> 988, tooldup 596 -> 1031 instructions; Pruv/hand16 now 2.0-2.4x). Move the range check off
+  the lookup-hit path (a hit equals a stored key, which `t_put` already checked) and prove it, then re-run
+  `run_m8.py perf` and the 69 controls.
+- M7 typed / same-packet hand comparator: deferred to P02. `hand_m7.rs` has no q mode and no differential check against
+  the Pruv driver, so its numbers would not show equal semantics; P02 needs a hand16-style M7 hand with q mode and a
+  `diff_hand16.py`-style edge + malformed diff before an M7 ratio counts.
+- Native / hand lane apparatus for P02: a hand map with a fast hash and a final mix (the Fx 1.x row collides on uuid
+  keys), and an optimized hand with the same data structure as Pruv (open addressing over packed records), so the bar
+  is not set by the hasher choice.
+- hand_m8.rs (old UTF-8 row) prints no checksum; it stays informational only.
+- Proof removal of the `load_cv` / `bud_charge` state and reason checks under the store invariant, and of `valid` on
+  trusted resident state (C3): not done, no saving measured inside M8.
+- Explicit "unavailable" marks for allocation / probe counters in the key bench and M8 tables.

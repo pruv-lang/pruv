@@ -2,8 +2,11 @@
 // (bud_charge.pruv + bud_tools.pruv + root_m8.pruv behind driver_m8.rs), replacing hand_m8.rs as the parity bar
 // (hand_m8.rs stays as an informational row: UTF-8 String keys, no safe-integer refusal).
 //
-//   hand_m8_u16 perf <N> <reps> [item]   prints `item size ns_per_call`   (same items/shapes as driver_m8.rs run_perf)
-//   hand_m8_u16 q                        stdin program as driver_m8.rs run_q, byte-identical output lines
+//   hand_m8_u16 perf <N> <reps> [item]   prints `item size ns_per_call` and, after each item, `chk item size value`
+//                                        (same items/shapes as driver_m8.rs run_perf; chk = full observed state folded
+//                                        as s = s*31 + w, equal to driver_m8's)
+//   hand_m8_u16 q                        stdin program as driver_m8.rs run_q, byte-identical output lines (a rejected
+//                                        put prints `P X 2`, state unchanged, the case continues)
 //
 // Differences from hand_m8.rs:
 //  * keys (sessionId, budgetId, turnId, activityId) are UTF-16 code units: Box<[u16]> in HashMaps with the std default
@@ -59,58 +62,46 @@ struct Budget {
     retries: i64,
 }
 
-// A session's record: a typed budget, or the words of a record that is not a current-capable budget (state -1 =
-// "no budget", or malformed). Pruv stores any blob opaquely and its CURRENT never matches such a record, so it is
-// kept as words and printed back unchanged.
+// A session's record: a typed budget, or the words of a record with state -1 ("no budget"), kept as words and printed
+// back unchanged (Pruv's CURRENT never matches it). Malformed records never get here: put_words rejects them.
 enum Slot {
     Budget(Budget),
     Opaque(Box<[i64]>),
 }
 
-// Decodes PLACEHOLDER record words [state, unlimited, haltReason, limits x4, used x4, tools, failures, retries,
-// idLen, id units...] into the typed form; anything that load_cv (root_m8.pruv) would not treat as a well-formed
-// current-capable record stays Opaque.
+// The ingress check of root_m8.pruv t_put on record words [state, unlimited, haltReason, limits x4, used x4, tools,
+// failures, retries, idLen, id units...]: n >= 15; state in -1..2; unlimited in 0..1; reason in -1..4;
+// w[14] == n - 15; every id unit in 0..65535. Counter words are not validated.
+fn valid_record(w: &[i64]) -> bool {
+    w.len() >= 15
+        && (-1..=2).contains(&w[0])
+        && (0..=1).contains(&w[1])
+        && (-1..=4).contains(&w[2])
+        && w[14] == (w.len() - 15) as i64
+        && w[15..].iter().all(|&u| u16::try_from(u).is_ok())
+}
+
+// Decodes a record that passed valid_record: state -1 -> Opaque (no budget), else the typed Budget.
 fn decode_record(w: &[i64]) -> Slot {
-    let typed = (|| {
-        if w.len() < 15 {
-            return None;
-        }
-        let state = match w[0] {
+    debug_assert!(valid_record(w));
+    if w[0] == -1 {
+        return Slot::Opaque(w.into());
+    }
+    Slot::Budget(Budget {
+        id: w[15..].iter().map(|&u| u as u16).collect(),
+        state: match w[0] {
             0 => State::Open,
             1 => State::Halted,
-            2 => State::Closed,
-            _ => return None,
-        };
-        let unlimited = match w[1] {
-            0 => false,
-            1 => true,
-            _ => return None,
-        };
-        let halt_reason = match w[2] {
-            -1 => None,
-            r @ 0..=4 => Some(r as u8),
-            _ => return None,
-        };
-        if w[14] != (w.len() - 15) as i64 {
-            return None;
-        }
-        let id: Option<Box<[u16]>> = w[15..].iter().map(|&u| u16::try_from(u).ok()).collect();
-        Some(Budget {
-            id: id?,
-            state,
-            unlimited,
-            halt_reason,
-            limits: [w[3], w[4], w[5], w[6]],
-            used: [w[7], w[8], w[9], w[10]],
-            tools: w[11],
-            failures: w[12],
-            retries: w[13],
-        })
-    })();
-    match typed {
-        Some(b) => Slot::Budget(b),
-        None => Slot::Opaque(w.into()),
-    }
+            _ => State::Closed,
+        },
+        unlimited: w[1] == 1,
+        halt_reason: if w[2] < 0 { None } else { Some(w[2] as u8) },
+        limits: [w[3], w[4], w[5], w[6]],
+        used: [w[7], w[8], w[9], w[10]],
+        tools: w[11],
+        failures: w[12],
+        retries: w[13],
+    })
 }
 
 fn record_words(s: &Slot) -> Vec<i64> {
@@ -293,6 +284,14 @@ impl World {
     }
 }
 
+impl World {
+    // Folds the full observed state (observe() words, the same words q mode prints after `O` and driver_m8.rs
+    // World::checksum folds) as s = s*31 + w (wrapping u64). Called after a timed loop, outside the timing.
+    fn checksum(&self) -> u64 {
+        self.observe().iter().fold(0u64, |s, &x| s.wrapping_mul(31).wrapping_add(x as u64))
+    }
+}
+
 impl Turn {
     // true when the activity was new
     fn add(&mut self, act: &[u16]) -> bool {
@@ -316,7 +315,7 @@ enum Op {
     Forget { turn: Vec<u16> },
 }
 
-// root_m8.pruv key_end: the end of the key `len, units...` at p
+// root_m8.pruv key_end: the end of the key `len, units...` at p (length within op, every unit in 0..65535)
 fn key_end(op: &[i64], p: usize) -> Option<usize> {
     let n = op.len();
     if p >= n {
@@ -326,7 +325,11 @@ fn key_end(op: &[i64], p: usize) -> Option<usize> {
     if kn < 0 || kn as u64 > (n - p - 1) as u64 {
         return None;
     }
-    Some(p + 1 + kn as usize)
+    let end = p + 1 + kn as usize;
+    if !op[p + 1..end].iter().all(|&u| (0..=65535).contains(&u)) {
+        return None;
+    }
+    Some(end)
 }
 
 fn units(w: &[i64]) -> Result<Vec<u16>, i64> {
@@ -434,9 +437,9 @@ fn nums(it: &[&str]) -> Vec<i64> {
     it.iter().map(|x| x.parse::<i64>().unwrap()).collect()
 }
 
-// session put words: [sessionId key, n, record words...] (root_m8.pruv t_put); malformed framing = status 2, which
-// the Pruv driver treats as fatal.
-fn put_words(w: &mut World, op: &[i64]) {
+// session put words: [sessionId key, n, record words...] (root_m8.pruv t_put); returns the status: 0 stored, 2 for
+// malformed framing / key units / record words (state unchanged, as the Pruv driver prints `P X 2` and continues).
+fn put_words(w: &mut World, op: &[i64]) -> i64 {
     let framed = (|| {
         let e1 = key_end(op, 0)?;
         if e1 >= op.len() {
@@ -450,10 +453,13 @@ fn put_words(w: &mut World, op: &[i64]) {
         Some((key, e1 + 1))
     })();
     let Some((key, rs)) = framed else {
-        eprintln!("t_put status 2");
-        std::process::exit(2);
+        return 2;
     };
+    if !valid_record(&op[rs..]) {
+        return 2;
+    }
     w.put(&key, decode_record(&op[rs..]));
+    0
 }
 
 fn run_q() {
@@ -474,7 +480,12 @@ fn run_q() {
                 stopped = false;
                 writeln!(o, "case {}", p[1]).unwrap();
             }
-            "put" => put_words(&mut w, &nums(&p[1..])),
+            "put" => {
+                let r = put_words(&mut w, &nums(&p[1..]));
+                if r != 0 {
+                    writeln!(o, "P X {}", r).unwrap();
+                }
+            }
             "step" => {
                 if !stopped {
                     writeln!(o, "@ {}", p[1]).unwrap();
@@ -559,7 +570,9 @@ fn run_perf(args: &[String]) {
             let r = black_box(&refs[i % n]);
             black_box(w.charge(&r.session, &r.budget, black_box(&what)));
         }
-        println!("charge {} {:.1}", n, t.elapsed().as_nanos() as f64 / reps as f64);
+        let ns = t.elapsed().as_nanos() as f64 / reps as f64;
+        println!("charge {} {:.1}", n, ns);
+        println!("chk charge {} {}", n, w.checksum()); // outside the timing
     }
     if on("failure") {
         let t = Instant::now();
@@ -567,7 +580,9 @@ fn run_perf(args: &[String]) {
             let r = black_box(&refs[i % n]);
             let _ = black_box(w.note_failure(&r.session, &r.budget));
         }
-        println!("failure {} {:.1}", n, t.elapsed().as_nanos() as f64 / reps as f64);
+        let ns = t.elapsed().as_nanos() as f64 / reps as f64;
+        println!("failure {} {:.1}", n, ns);
+        println!("chk failure {} {}", n, w.checksum());
     }
     let turn1 = u16s("turn-1");
     let turn2 = u16s("turn-2");
@@ -582,7 +597,9 @@ fn run_perf(args: &[String]) {
             let a = black_box(&acts[i % n]);
             let _ = black_box(w.note_tool(&r0.session, &r0.budget, black_box(&turn1), a));
         }
-        println!("tooldup {} {:.1}", n, t.elapsed().as_nanos() as f64 / reps as f64);
+        let ns = t.elapsed().as_nanos() as f64 / reps as f64;
+        println!("tooldup {} {:.1}", n, ns);
+        println!("chk tooldup {} {}", n, w.checksum());
     }
     for a in &acts {
         let _ = w.note_tool(&r0.session, &r0.budget, &turn2, a);
@@ -597,7 +614,9 @@ fn run_perf(args: &[String]) {
             }
             w.forget_turn(black_box(&turn2));
         }
-        println!("toolgrow {} {:.1}", n, t.elapsed().as_nanos() as f64 / (rounds * n) as f64);
+        let ns = t.elapsed().as_nanos() as f64 / (rounds * n) as f64;
+        println!("toolgrow {} {:.1}", n, ns);
+        println!("chk toolgrow {} {}", n, w.checksum());
     }
     black_box(&w.sessions);
 }

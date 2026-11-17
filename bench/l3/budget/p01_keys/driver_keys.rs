@@ -8,8 +8,10 @@
 //       L: U P A8 F1; H: u (unit hash) w (word hash).
 //       rows (per L and H): ret  find of a retained (pre-encoded) record, cycling over all N keys (hits)
 //                           miss find of a retained record of an absent key
-//                           raw  host encode from &[u16] + k_check + find (hits)
-//            (per L, H "-"): enc  host encode only
+//                           raw  host encode from &[u16] + k_check + find (hits); k_check and find read the
+//                                whole buffer, so the encode result is fully consumed
+//            (per L, H "-"): enc  host encode + a full-buffer fold (s = s*31 + w over EVERY word of the produced
+//                                buffer, same fold for every layout; the fold cost is part of the row)
 //                           chk  k_check only (pre-encoded records)
 //                           cmp  k_cmp of neighbours (key j vs key j+1, cyclic)
 //       reps = timed operations per row (keys are cycled), after a 1000-operation warm-up. Inputs go through
@@ -208,6 +210,17 @@ fn emit(c: &Ctx, l: &str, h: &str, row: &str, r: (f64, i64), wpk: f64) {
     println!("{} {} {} {} {} {:.3} {} {:.2} {:.2}", c.set, l, h, row, c.n, r.0, r.1, wpk, wpk * 8.0);
 }
 
+// Full-buffer fold for the enc row: every produced word goes into the result (s = s * 31 + w), so no layout can skip
+// work; the same fold for every layout.
+#[inline(always)]
+fn fold_words(buf: &[i64]) -> i64 {
+    let mut s: i64 = buf.len() as i64;
+    for &w in buf {
+        s = s.wrapping_mul(31).wrapping_add(w);
+    }
+    s
+}
+
 fn encode_all<E: Fn(&[u16], &mut Vec<i64>)>(keys: &[Vec<u16>], enc: &E) -> Vec<Vec<i64>> {
     keys.iter()
         .map(|k| {
@@ -297,7 +310,7 @@ where
         let mut buf: Vec<i64> = Vec::with_capacity(64);
         let r = bench(n, c.reps, |j| {
             enc(black_box(&keys[j][..]), &mut buf);
-            (buf.len() as i64).wrapping_add(buf[buf.len() - 1])
+            fold_words(&buf[..])
         });
         emit(c, l, "-", "enc", r, wpk);
     }

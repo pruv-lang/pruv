@@ -8,7 +8,9 @@
 // nothing. Per call it prints what Pruv returned: `R <charge status>` (fx[1]) or `R -` for the void methods. On status 6
 // (a HALT dispatch the root does not implement yet, M10) it prints `H <halt frame words>` and stops the case: the halt
 // sub-operation would run next and nothing after it is executed or filled. Any other non-zero status prints
-// `X <status>` and stops the case. Grow: status -N -> buffer of max(N, 2*len), t_grow, retry.
+// `X <status>` and stops the case. A put the root rejects (malformed input, status 2) prints `P X <status>`, leaves the
+// state unchanged and the case continues (perf-mode puts stay fatal). perf also prints `chk <item> <size> <value>`
+// after each item's timed loop: the t_observe words folded as s = s*31 + w (wrapping u64). Grow: status -N -> buffer of max(N, 2*len), t_grow, retry.
 use std::hint::black_box;
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
@@ -44,20 +46,40 @@ impl World {
         self.st = fresh;
     }
 
-    fn put(&mut self, op: &[i64]) {
+    // One session put; returns the status after Grow retries (0 = stored, 2 = rejected malformed input with the
+    // state unchanged). The caller decides what a non-zero status means.
+    fn put(&mut self, op: &[i64]) -> i64 {
+        let mut r = 0;
         for _ in 0..4 {
-            let r = sol::t_put(&mut self.st, op, &mut self.out);
-            if r == 0 {
-                return;
-            }
+            r = sol::t_put(&mut self.st, op, &mut self.out);
             if r == 1 {
                 let n = self.out[0].max(0) as usize;
                 self.grow(n);
                 continue;
             }
-            eprintln!("t_put status {}", r);
+            return r;
+        }
+        r
+    }
+
+    // Folds the full observed final state (the t_observe words, same words as q mode prints after `O`) into a u64.
+    // Used by perf after a timed loop, outside the timing.
+    fn checksum(&mut self) -> u64 {
+        let need = std::cmp::max(4096, 2 * self.st.len());
+        if self.out.len() < need {
+            self.out.resize(need, 0);
+        }
+        let r = sol::t_observe(&self.st, &mut self.out);
+        if r != 0 {
+            eprintln!("t_observe status {}", r);
             std::process::exit(2);
         }
+        let n = self.out[0].max(0) as usize;
+        let mut s: u64 = 0;
+        for &x in &self.out[1..1 + n] {
+            s = s.wrapping_mul(31).wrapping_add(x as u64);
+        }
+        s
     }
 
     // One Pruv call; returns the status after Grow retries.
@@ -114,7 +136,13 @@ fn run_q() {
                 stopped = false;
                 writeln!(o, "case {}", p[1]).unwrap();
             }
-            "put" => w.put(&nums(&p[1..])),
+            "put" => {
+                // a rejected put (malformed input) leaves the state unchanged and the case continues
+                let r = w.put(&nums(&p[1..]));
+                if r != 0 {
+                    writeln!(o, "P X {}", r).unwrap();
+                }
+            }
             "step" => {
                 if !stopped {
                     writeln!(o, "@ {}", p[1]).unwrap();
@@ -175,7 +203,11 @@ fn world_n(n: usize) -> World {
         rec.extend_from_slice(&bid);
         put.push(rec.len() as i64);
         put.extend(rec);
-        w.put(&put);
+        let r = w.put(&put);
+        if r != 0 {
+            eprintln!("t_put status {}", r);
+            std::process::exit(2);
+        }
     }
     w
 }
@@ -215,7 +247,9 @@ fn run_perf(args: &[String]) {
         for i in 0..reps {
             black_box(w.call(black_box(&ops[i % n])));
         }
-        println!("charge {} {:.1}", n, t.elapsed().as_nanos() as f64 / reps as f64);
+        let ns = t.elapsed().as_nanos() as f64 / reps as f64;
+        println!("charge {} {:.1}", n, ns);
+        println!("chk charge {} {}", n, w.checksum()); // outside the timing
     }
     let fo: Vec<Vec<i64>> = (0..n)
         .map(|i| {
@@ -229,7 +263,9 @@ fn run_perf(args: &[String]) {
         for i in 0..reps {
             black_box(w.call(black_box(&fo[i % n])));
         }
-        println!("failure {} {:.1}", n, t.elapsed().as_nanos() as f64 / reps as f64);
+        let ns = t.elapsed().as_nanos() as f64 / reps as f64;
+        println!("failure {} {:.1}", n, ns);
+        println!("chk failure {} {}", n, w.checksum());
     }
     let tool = |turn: &str, j: usize| -> Vec<i64> {
         let mut op = vec![3];
@@ -247,7 +283,9 @@ fn run_perf(args: &[String]) {
         for i in 0..reps {
             black_box(w.call(black_box(&dup[i % n])));
         }
-        println!("tooldup {} {:.1}", n, t.elapsed().as_nanos() as f64 / reps as f64);
+        let ns = t.elapsed().as_nanos() as f64 / reps as f64;
+        println!("tooldup {} {:.1}", n, ns);
+        println!("chk tooldup {} {}", n, w.checksum());
     }
     let grow: Vec<Vec<i64>> = (0..n).map(|j| tool("turn-2", j)).collect();
     let mut forget = vec![4];
@@ -265,7 +303,9 @@ fn run_perf(args: &[String]) {
             }
             black_box(w.call(black_box(&forget)));
         }
-        println!("toolgrow {} {:.1}", n, t.elapsed().as_nanos() as f64 / (rounds * n) as f64);
+        let ns = t.elapsed().as_nanos() as f64 / (rounds * n) as f64;
+        println!("toolgrow {} {:.1}", n, ns);
+        println!("chk toolgrow {} {}", n, w.checksum());
     }
 }
 

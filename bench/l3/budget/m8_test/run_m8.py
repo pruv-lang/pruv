@@ -36,6 +36,7 @@ KEYS = ["delegations", "commands", "reviews", "checks"]
 OWN = {"charge": 1, "noteFailure": 2, "noteTool": 3, "forgetTurn": 4}
 OUT_OF_SCOPE = ("reopen", "halt", "current", "isHalted", "hasCard")
 HALT_CHECKED = [0]
+CHK_OK = [0]
 CALLS = {}
 
 
@@ -264,6 +265,8 @@ def classify(case, o, run, steps, cut):
     log = run["log"]
     cur = None
     for l in log:
+        if l.startswith("P X"):  # a Q2 case's put was rejected as malformed input: never expected
+            return "fail", "put rejected: %s" % l
         if l.startswith("@ "):
             cur = steps[int(l[2:])]
             continue
@@ -396,7 +399,9 @@ ITEMS = ("charge", "failure", "tooldup", "toolgrow")
 
 def cmd_perf(args):
     """Wall time: Pruv / hand Rust / TS runs alternate per round and size, and the side order rotates every round;
-    prints the median ns per call of each item. Instructions (Pruv and hand, unless --no-instr): one item per run
+    prints the median ns per call of each item. Pruv and hand16 also print `chk <item> <size> <value>` (the full
+    observed final state folded into a u64); the same size and reps go to every side and a chk difference between
+    Pruv and hand16 aborts the run. Instructions (Pruv and hand, unless --no-instr): one item per run
     (the drivers' item argument), retired-instruction difference between --reps and 5 x --reps, divided by the extra
     calls; median of 3. The instruction count does not depend on machine load."""
     sys.path.insert(0, BUD)
@@ -415,14 +420,29 @@ def cmd_perf(args):
         k = rd % len(sides)
         order = sides[k:] + sides[:k]
         for size in sizes:
+            chks = {}  # side -> {(item, size): value} of this run; every side gets the same size and reps
             for side, cmd in order:
                 r = subprocess.run(cmd + [str(size), str(args.reps)], capture_output=True, text=True, env=env,
                                    cwd=HERE)
                 if r.returncode != 0:
                     sys.exit("%s perf failed:\n%s" % (side, r.stderr[-2000:]))
                 for l in r.stdout.splitlines():
-                    item, sz, ns = l.split()
+                    f = l.split()
+                    if f[0] == "chk":  # chk <item> <size> <value>: full final-state checksum (pruv, hand16 only)
+                        chks.setdefault(side, {})[(f[1], int(f[2]))] = f[3]
+                        continue
+                    item, sz, ns = f
                     res.setdefault((item, int(sz)), {}).setdefault(side, []).append(float(ns))
+            # the full observed final state must be identical between Pruv and the hand UTF-16 baseline
+            a, b = chks.get("pruv", {}), chks.get("hand16", {})
+            if not a or a.keys() != b.keys():
+                sys.exit("CHK MISMATCH (round %d, size %d, reps %d): item sets differ: pruv %r hand16 %r"
+                         % (rd, size, args.reps, sorted(a), sorted(b)))
+            for k in a:
+                if a[k] != b[k]:
+                    sys.exit("CHK MISMATCH (round %d, item %s, size %d, reps %d): pruv %s != hand16 %s"
+                             % (rd, k[0], k[1], args.reps, a[k], b[k]))
+            CHK_OK[0] += len(a)
     ins = {}
     if not args.no_instr:
         r1, r2 = args.reps, 5 * args.reps
@@ -435,6 +455,7 @@ def cmd_perf(args):
                         hi = instr_retired(cmd + [str(size), str(r2), item], env)
                         d.append((hi - lo) / (calls_of(item, size, r2) - calls_of(item, size, r1)))
                     ins.setdefault((item, size), {})[side] = statistics.median(d)
+    print("chk: %d (item, size, round) checksums equal between Pruv and hand16 (hand / TS print no chk)" % CHK_OK[0])
     print("item | size | Pruv ns | hand16 ns | hand(old) ns | TS ns | Pruv/hand16 (bar) | Pruv/hand (info) | Pruv/TS"
           " | Pruv instr | hand16 instr | hand instr | instr Pruv/hand16 | instr Pruv/hand")
     for item in ITEMS:
