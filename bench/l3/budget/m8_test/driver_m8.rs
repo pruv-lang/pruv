@@ -191,9 +191,13 @@ fn refk(i: usize) -> Vec<i64> {
 //   failure  : noteFailure(ref_i) round-robin over N sessions
 //   tooldup  : noteTool(ref_0, t1, a_j) on a turn that already holds N activities (dedup hit, no CURRENT)
 //   toolgrow : noteTool(ref_0, t2, a_j) for N new activities, then forgetTurn(t2); ns per noteTool (forget included)
+// An optional third argument names one item: only that item's timed loop runs (the setup of every item still runs),
+// so `/usr/bin/time -l` instruction counts at two rep counts give the instructions per call of that item alone.
 fn run_perf(args: &[String]) {
     let n: usize = args[0].parse().unwrap();
     let reps: usize = args[1].parse().unwrap();
+    let only = args.get(2).map(|s| s.as_str());
+    let on = |item: &str| only.map_or(true, |o| o == item);
     let mut w = world_n(n);
     let ops: Vec<Vec<i64>> = (0..n)
         .map(|i| {
@@ -206,11 +210,13 @@ fn run_perf(args: &[String]) {
     for i in 0..1000 {
         w.call(&ops[i % n]);
     }
-    let t = Instant::now();
-    for i in 0..reps {
-        black_box(w.call(black_box(&ops[i % n])));
+    if on("charge") {
+        let t = Instant::now();
+        for i in 0..reps {
+            black_box(w.call(black_box(&ops[i % n])));
+        }
+        println!("charge {} {:.1}", n, t.elapsed().as_nanos() as f64 / reps as f64);
     }
-    println!("charge {} {:.1}", n, t.elapsed().as_nanos() as f64 / reps as f64);
     let fo: Vec<Vec<i64>> = (0..n)
         .map(|i| {
             let mut op = vec![2];
@@ -218,11 +224,13 @@ fn run_perf(args: &[String]) {
             op
         })
         .collect();
-    let t = Instant::now();
-    for i in 0..reps {
-        black_box(w.call(black_box(&fo[i % n])));
+    if on("failure") {
+        let t = Instant::now();
+        for i in 0..reps {
+            black_box(w.call(black_box(&fo[i % n])));
+        }
+        println!("failure {} {:.1}", n, t.elapsed().as_nanos() as f64 / reps as f64);
     }
-    println!("failure {} {:.1}", n, t.elapsed().as_nanos() as f64 / reps as f64);
     let tool = |turn: &str, j: usize| -> Vec<i64> {
         let mut op = vec![3];
         op.extend(refk(0));
@@ -234,11 +242,13 @@ fn run_perf(args: &[String]) {
     for d in &dup {
         w.call(d);
     }
-    let t = Instant::now();
-    for i in 0..reps {
-        black_box(w.call(black_box(&dup[i % n])));
+    if on("tooldup") {
+        let t = Instant::now();
+        for i in 0..reps {
+            black_box(w.call(black_box(&dup[i % n])));
+        }
+        println!("tooldup {} {:.1}", n, t.elapsed().as_nanos() as f64 / reps as f64);
     }
-    println!("tooldup {} {:.1}", n, t.elapsed().as_nanos() as f64 / reps as f64);
     let grow: Vec<Vec<i64>> = (0..n).map(|j| tool("turn-2", j)).collect();
     let mut forget = vec![4];
     forget.extend(key("turn-2"));
@@ -246,15 +256,17 @@ fn run_perf(args: &[String]) {
         w.call(d);
     }
     w.call(&forget);
-    let rounds = std::cmp::max(1, reps / n);
-    let t = Instant::now();
-    for _ in 0..rounds {
-        for d in &grow {
-            black_box(w.call(black_box(d)));
+    if on("toolgrow") {
+        let rounds = std::cmp::max(1, reps / n);
+        let t = Instant::now();
+        for _ in 0..rounds {
+            for d in &grow {
+                black_box(w.call(black_box(d)));
+            }
+            black_box(w.call(black_box(&forget)));
         }
-        black_box(w.call(black_box(&forget)));
+        println!("toolgrow {} {:.1}", n, t.elapsed().as_nanos() as f64 / (rounds * n) as f64);
     }
-    println!("toolgrow {} {:.1}", n, t.elapsed().as_nanos() as f64 / (rounds * n) as f64);
 }
 
 fn main() {
