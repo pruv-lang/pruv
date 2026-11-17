@@ -800,16 +800,18 @@ impl Heap {
                 self.objs[h].bud = None;
             }
             Some(bj) => {
-                let mut bud: Option<String> = None;
-                let pair = J::Obj(vec![(ku("obj"), J::Arr(vec![J::Arr(vec![J::s("budget"), bj.clone()])]))]);
-                let stripped = strip_budget(&pair, &mut bud);
-                let val = match decode(&stripped, &no_sess)? {
-                    V::Obj(mut one) if one.len() == 1 => one.pop().map(|e| e.1).unwrap_or(V::Undef),
-                    _ => return Err("program: bad bset value".to_string()),
-                };
-                let es = match &mut self.objs[h].val {
-                    V::Obj(es) => es,
-                    _ => unreachable!(),
+                // Decode the budget value directly: {"bref":L,"v":W} attaches label L and decodes W, anything else
+                // decodes as is (same result as decoding the one-pair object {"obj":[["budget", bj]]} after strip_budget).
+                let (bud, val): (Option<String>, V) = match bj {
+                    J::Obj(be) => {
+                        let lab = be.iter().find(|e| k_eq(&e.0, "bref")).and_then(|e| e.1.text());
+                        let inner = be.iter().find(|e| k_eq(&e.0, "v"));
+                        match (lab, inner) {
+                            (Some(l), Some(i)) => (Some(l), decode(&i.1, &no_sess)?),
+                            _ => (None, decode(bj, &no_sess)?),
+                        }
+                    }
+                    _ => (None, decode(bj, &no_sess)?),
                 };
                 match pos {
                     Some(p) => es[p].1 = val,

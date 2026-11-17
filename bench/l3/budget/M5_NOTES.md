@@ -135,3 +135,45 @@ replaced whole sessions that had no budget.
 - Build budget was 3; the compiler build plus rebuilds after the audit used 6 build commands.
 - Write-through and `bset` belong to the test program, not to the final boundary. The final shape is the core-owned
   attachment noted in the table above.
+
+## M5 perf follow-up
+
+Two host-only changes. No budget decision moved into the host, no compiler or `.pruv` change.
+
+1. **Id index for the session store** (`host.rs`). `World.idx` maps a string id to the position in `stored` of the
+   first object slot with that id. `init_world` builds it (first wins, so duplicate initial ids keep first-match
+   order). `put_session` replaces in place, which keeps the position, or appends and indexes the new position.
+   `removeSession` rebuilds the index after its `retain` only when something was removed (removal was already
+   linear). `find_h` uses the index for
+   string queries. Other query types keep the linear `strict_eq` scan: a stored string id never strict-equals them.
+   Heap object ids never change after allocation, because write-through and `bset` write only `budget`. The index
+   therefore returns the same handle as the old scan.
+2. **Direct budget decode in `set_budget`** (`leaf.rs`). A `{"bref": L, "v": W}` value attaches label `L` and decodes
+   `W`. Any other value decodes as is. The old path wrapped the value into a one-pair object, ran `strip_budget` and
+   decoded that, which gives the same result: the key `budget` is not index-like, so `build_obj` keeps it, and decode
+   errors are the same.
+
+Correctness after the change (seed 20261117, 300 cases): exact=300, unexplained=0, driver violations 0,
+determinism identical. The negative control (every `tset` delay +1) still gives exact=260, unexplained=40.
+
+Perf: ns per op, Apple silicon, high machine load. Base (b59fd23), new host and TS ran alternately for 5 rounds,
+each run min of 5 reps. The table shows the median over the rounds.
+
+| Measure | Base n=100 | n=500 | n=1000 | New n=100 | n=500 | n=1000 | TS n=100 | n=500 | n=1000 | New n=1000 / n=100 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| store_find | 738 | 1892 | 3248 | 423 | 450 | 453 | 630 | 1643 | 3337 | 1.07 |
+| store_save | 1022 | 1028 | 1042 | 324 | 330 | 325 | n/a | n/a | n/a | 1.00 |
+| timer_cycle | 128 | 121 | 121 | 124 | 129 | 130 | 365 | 118 | 123 | 1.05 |
+| timer_fire | 95 | 99 | 96 | 86 | 96 | 99 | 492 | 542 | 1069 | 1.15 |
+| lane | 94 | 86 | 86 | 92 | 87 | 86 | n/a | n/a | n/a | 0.93 |
+
+- `store_find` is flat and faster than TS at every n. The rest of its cost is the encoding of each result. TS
+  returns an object reference and encodes nothing.
+- `store_save` is 3.1x faster and still flat.
+- Timer and lane changes are within run-to-run noise. Their code is unchanged.
+- After the audit fix, a second 3-round alternation gave the same picture: find 409 / 435 / 442 (TS 635 / 1559 / 3231),
+  save 307 / 316 / 319.
+
+Audit (one, Codex gpt-6-astra ultra): no required finding. One advisory, applied: a `removeSession` that removed
+nothing rebuilt the index. It now rebuilds only when the store shrank.
+Builds: 3 (base, change, audit fix). The compiler was not rebuilt.

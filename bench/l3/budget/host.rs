@@ -68,6 +68,8 @@ pub struct World {
     key_tok: HashMap<String, u64>,
     timer_has_unref: bool,
     pub stored: Vec<Slot>,
+    // string id (u16 units) -> position in `stored` of the first Obj slot with that id
+    idx: HashMap<Vec<u16>, usize>,
     pub trace: Vec<J>,
     requests: Vec<J>,
     excluded: Vec<String>,
@@ -127,6 +129,7 @@ impl World {
             key_tok: HashMap::new(),
             timer_has_unref: true,
             stored: Vec::new(),
+            idx: HashMap::new(),
             trace: Vec::new(),
             requests: Vec::new(),
             excluded: Vec::new(),
@@ -170,7 +173,26 @@ impl World {
         }
     }
 
+    // Rebuild the id index: string id -> position of the first Obj slot with that id (first wins).
+    fn rebuild_idx(&mut self) {
+        let mut m: HashMap<Vec<u16>, usize> = HashMap::new();
+        for (pos, s) in self.stored.iter().enumerate() {
+            if let Slot::Obj(h) = s {
+                if let Some(V::Str(u)) = field(&self.heap.objs[*h].val, "id") {
+                    m.entry(u.clone()).or_insert(pos);
+                }
+            }
+        }
+        self.idx = m;
+    }
+
     fn find_h(&self, id: &V) -> Option<usize> {
+        if let V::Str(u) = id {
+            return self.idx.get(u).and_then(|&p| match self.stored[p] {
+                Slot::Obj(h) => Some(h),
+                _ => None,
+            });
+        }
         for s in &self.stored {
             if let Slot::Obj(h) = s {
                 if self.id_is(*h, id) {
@@ -242,6 +264,7 @@ impl World {
             }
         }
         self.stored = sessions;
+        self.rebuild_idx();
         self.unit = match world.get("unit") {
             Some(u) => self.dec(u)?,
             None => V::Undef,
@@ -381,6 +404,7 @@ impl World {
             "removeSession" => {
                 let id = self.dec_opt(step.get("id"))?;
                 let heap = &self.heap;
+                let before = self.stored.len();
                 self.stored.retain(|s| match s {
                     Slot::Obj(h) => !match field(&heap.objs[*h].val, "id") {
                         Some(x) => strict_eq(x, &id),
@@ -388,6 +412,10 @@ impl World {
                     },
                     Slot::Plain(_) => true,
                 });
+                // Positions shift only when something was removed.
+                if self.stored.len() != before {
+                    self.rebuild_idx();
+                }
                 if self.tracing {
                     let e = self.heap.enc(&id);
                     self.push_trace("removeSession", Some(enc_obj(vec![("id", e)])), None);
@@ -437,22 +465,18 @@ impl World {
             V::Sess(h) => h,
             other => self.heap.alloc(other),
         };
-        let id = match field(&self.heap.objs[h].val, "id") {
-            Some(x) => x.clone(),
-            None => V::Undef,
+        // The id is a V::Str here (checked above); look the first match up in the index.
+        let key: Vec<u16> = match field(&self.heap.objs[h].val, "id") {
+            Some(V::Str(u)) => u.clone(),
+            _ => Vec::new(),
         };
-        let mut at: Option<usize> = None;
-        for (i, s) in self.stored.iter().enumerate() {
-            if let Slot::Obj(o) = s {
-                if self.id_is(*o, &id) {
-                    at = Some(i);
-                    break;
-                }
-            }
-        }
-        match at {
+        match self.idx.get(&key).copied() {
+            // Same id, same position: the index stays valid.
             Some(i) => self.stored[i] = Slot::Obj(h),
-            None => self.stored.push(Slot::Obj(h)),
+            None => {
+                self.stored.push(Slot::Obj(h));
+                self.idx.insert(key, self.stored.len() - 1);
+            }
         }
         Ok(h)
     }
