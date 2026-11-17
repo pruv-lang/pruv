@@ -10,7 +10,7 @@
 //                    encode), written as JSON text into one reused String; the caller consumes its length.
 //   store_find_tree  same lookup, the frame built as an owned value tree (String keys, like serde_json::Value) and
 //                    dropped by the caller (what the host does with its J tree).
-//   store_find_core  lookup only: id -> &Session (the non-tracing host path does only this).
+//   store_find_core  lookup only: id -> &Session (the lookup step of a non-tracing find).
 //   store_find_core_u16  lookup only with JS string keys: id -> UTF-16 units in a stack buffer -> HashMap<Vec<u16>,_>.
 //   store_save       n program saves. Input: the same parsed program JV as harness.rs (an owned tree, built
 //                    untimed): {"sref":"s<i+1>","v":{"obj":[["id","s<i>"],["budget",{"bref":"b<i+1>","v":{"obj":

@@ -506,7 +506,7 @@ impl World {
     }
 
     // findSession as a world query without trace (perf): the encoded result.
-    // Lookup only: the stored session's heap handle (the non-tracing find path; perf breakdown).
+    // Lookup only: the stored session's heap handle (the lookup step of a non-tracing find; perf breakdown).
     pub fn find_session(&self, id: &str) -> Option<usize> {
         self.find_str(id)
     }

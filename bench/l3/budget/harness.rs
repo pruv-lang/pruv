@@ -80,7 +80,7 @@ fn perf(n: usize, reps: usize) {
     });
     line("store_find", n, reps, ns, "");
 
-    // (c') store_find breakdown: lookup only (id -> UTF-16 key, index probe; the non-tracing path) and the JV encode
+    // (c') store_find breakdown: lookup only (id -> UTF-16 key, index probe; the lookup helper only, not the whole non-tracing exec_item) and the JV encode
     // of an already found session (labels assigned in an untimed pass first) plus dropping the J tree.
     let ns = best(reps, || {
         let mut w = World::new(false);

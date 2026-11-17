@@ -141,8 +141,10 @@ the Pruv core.
     harness through `dev_build.sh`.
   - It runs the `m4_hand` and `perf_ts.mjs` selftests, then the rotating rounds.
 - M4 hand baseline (`host/src/bin/m4_hand.rs`) is a std-only port of `perf_ts.mjs` `exec()`.
-  - The timed loop has the same shape as `driver_m4 perf`: a cyclic replay of one op period; per op an output
-    capacity check, the call, and a `black_box` on the op and on the result. There is one measured run on fresh state
+  - The timed loop matches `driver_m4 perf` in work and shape, not expression for expression: a cyclic replay of one
+    op period, and per op an output capacity check, the call, and a `black_box` on the op and on the result. The
+    differences are that the hand check is against a fixed 4096 words where the driver's depends on the state size,
+    and the hand sink is `out[0]+out[1]` where the driver's is `out[0]+max(out[0],0)`. There is one measured run on fresh state
     after an untimed prefill, with no separate warm-up runs.
   - The driver's grow retry never fires in these runs: `grow_ns` is subtracted, and it is 0 at steady state.
   - Keys are rebuilt from units into scratch buffers on every call, as Pruv and TS do.
