@@ -2,7 +2,8 @@
 
 Scope: `current`, `isHalted`, OPEN, `attach`, `replaceForUserMessage`, `reopen`, CLOSE / `maybeClose`.
 All decisions are in Pruv (`bud_lifecycle.pruv`); the host (`m7_test/driver_m7.rs`) only runs side effects
-(fx frame: 13 timer clear, 20 changed, 21 carryHeld, 22 uuid) and answers the `isQuiet` question (status 5).
+(fx frame: 13 timer clear, 20 changed, 21 carryHeld, 22 uuid, 23 isQuiet consulted) and supplies the `isQuiet`
+answer up front in the op (status 5 only when it is not known). Protocol rows: `ABI.md` "M7 test host protocol".
 Not implemented here (reported per case as `not-implemented`, never filled in by the host):
 M8 charge, M10 halt / raise / decide, M11 hasCard / setCard, M12.
 
@@ -26,7 +27,7 @@ Not-implemented reasons in Q1: hasCard (M11) 32, halt (M10) 62, decide (M10) 93.
 as it reaches one of these; every request before that point is still compared.
 Compared requests in Q1: reopen 231, attach 415, replaceForUserMessage 445, maybeClose 79, current 32, isHalted 32.
 
-Byte identity: `run_m7.py same` → Python and Rust pruvc emit identical Rust (139485 bytes each, after the review fixes).
+Byte identity: `run_m7.py same` → Python and Rust pruvc emit identical Rust (149080 bytes each, after the perf pass).
 
 ## Intent / bug / chosen accident
 
@@ -48,89 +49,104 @@ No other bug or accident was found in the M7 surface.
 
 ## Performance (ns per call, median, `run_m7.py perf`)
 
-| item | S | Pruv | hand Rust | TS | Pruv/hand |
-|---|---|---|---|---|---|
-| attach | 100 | 21.2 | 56.4 | 8.1 | 0.38 |
-| attach | 500 | 21.0 | 53.2 | 9.3 | 0.39 |
-| attach | 1000 | 21.1 | 53.4 | 6.6 | 0.40 |
-| current | 100 | 40.8 | 10.0 | 24.9 | 4.08 |
-| current | 500 | 40.5 | 10.1 | 24.7 | 4.01 |
-| current | 1000 | 41.0 | 9.9 | 24.9 | 4.14 |
-| ishalted | 100 | 27.3 | 12.1 | 25.4 | 2.26 |
-| ishalted | 500 | 27.4 | 10.0 | 24.8 | 2.74 |
-| ishalted | 1000 | 27.7 | 9.9 | 25.1 | 2.80 |
-| closereopen | 100 | 71.7 | 18.1 | 275.3 | 3.96 |
-| closereopen | 500 | 71.0 | 17.6 | 288.7 | 4.03 |
-| closereopen | 1000 | 71.6 | 17.7 | 273.8 | 4.05 |
-| replace | 100 | 312.4 | 209.1 | 1134.8 | 1.49 |
-| replace | 500 | 316.8 | 213.1 | 1156.2 | 1.49 |
-| replace | 1000 | 318.0 | 208.6 | 1165.4 | 1.52 |
-| dispatch (probe) | 100/500/1000 | 7.4 / 7.6 / 7.5 | – | – | – |
-| rawcall (probe) | 100/500/1000 | 5.0 / 4.9 / 4.8 | – | – | – |
+Before = this milestone's first commit (main at 41a6d0b); after = the perf pass. Machine load ~16 during both
+after-runs, so hand numbers moved too; ratios are per run.
 
-Only `attach` meets the 1.1x bar. The other four items do not; the causes are below. They were not fixed in this
-milestone: two are in `bud_map` (owned by another worker), one is the result contract, one is the quiet protocol.
+| item | S | before Pruv/hand | after Pruv | after hand | after Pruv/hand |
+|---|---|---|---|---|---|
+| attach | 100 | 0.38 | 35.3 | 57.7 | 0.61 |
+| attach | 500 | 0.39 | 24.1 | 55.7 | 0.43 |
+| attach | 1000 | 0.40 | 24.2 | 58.4 | 0.41 |
+| current | 100 | 4.08 | 32.8 | 11.8 | 2.78 |
+| current | 500 | 4.01 | 30.4 | 10.3 | 2.95 |
+| current | 1000 | 4.14 | 29.5 | 10.0 | 2.95 |
+| ishalted | 100 | 2.26 | 35.0 | 11.9 | 2.94 |
+| ishalted | 500 | 2.74 | 29.4 | 10.7 | 2.75 |
+| ishalted | 1000 | 2.80 | 30.1 | 10.2 | 2.95 |
+| closereopen | 100 | 3.96 | 36.1 | 19.2 | 1.88 |
+| closereopen | 500 | 4.03 | 32.2 | 18.9 | 1.70 |
+| closereopen | 1000 | 4.05 | 32.5 | 18.4 | 1.77 |
+| replace | 100 | 1.49 | 170.7 | 216.8 | 0.79 |
+| replace | 500 | 1.49 | 137.5 | 214.5 | 0.64 |
+| replace | 1000 | 1.52 | 135.0 | 218.0 | 0.62 |
+| dispatch (probe) | 100/500/1000 | – | 9.5 / 8.2 / 8.0 | – | – |
+| rawcall (probe) | 100/500/1000 | – | 5.8 / 4.9 / 4.9 | – | – |
+
+attach and replace meet the 1.1x bar. current, ishalted and closereopen do not; the reason is the same for all
+three (below) and is outside the files M7 owns.
 
 Probes: `dispatch` is the driver's request dispatch with an empty request (code 0); `rawcall` is one `sol::t_call`
-with a prepared op. Together they are the fixed per-request host cost (~5–8 ns) that every Pruv item pays and the
-hand baseline does not. In silent (perf) mode the driver caches the built op when (body ptr, len, quiet, next_uuid)
-match and only rewrites `op[1] = now`, so op building is not in the numbers.
+with a prepared op. Together they are the fixed per-request host cost that every Pruv item pays and the hand
+baseline does not. In silent (perf) mode the driver caches built ops per (body ptr, len, quiet, next_uuid) and only
+rewrites `op[1] = now`, so op building is not in the numbers.
 
 ### Done in this milestone
 
-- `current`: copy loop `out[2+k] = st[off+k]` after one bound check (generated as `get_unchecked`), was ~130 ns.
-- `reopen`: when `ended.at` is a number (string 3 empty), the record is patched in place (state, how, at kind, at ms)
-  instead of blob_copy → rewrite → store.
-- `maybeClose`: same in-place patch when activeSince and ended.at strings are empty (`view_in`, settle_at, drop_at,
-  then 7 header words). closereopen went ~300 → ~72 ns.
-- `attach` ref path: reads state and id from the stored record in place (`put_str` from `st`), copies only on OPEN.
-  ~67 → ~21 ns, now faster than hand (hand clones the id `String` and the session id).
-- unit passed as `(op, 5)` instead of `slice(op, 5, 11)`: one heap alloc less per attach/replace.
-- `put_str` / `id_is`: one range check, then direct indexing; fallback to `rd`/`put_range` otherwise.
+- `current`: returns a view `[4, n, off]` into `st` instead of copying the ~130-word record (protocol change,
+  `ABI.md`). Was ~41 ns with the copy, ~130 ns before the first pass.
+- `isQuiet` is supplied up front (op word 2) and consumed only when the effects hold `[23]`; `maybeClose` is one
+  `t_call` instead of two. Status 5 stays for quiet = -1.
+- Session entry field address is read once per call (`entry_addr` / `at_off` / `at_n` / `current_at`) instead of
+  `blob_at` + `blob_n` each calling `field_addr`.
+- `clock_in`: the clock map lookup is skipped when the clock map (owner 1) is empty (`bud_map::count`).
+- `replace`: the halted record is closed and replaced without building the closed record (`blob_copy` →
+  `close_rec` → store); `fresh` copies the old id from the stored record into
+  follows, and carryHeld is written from that follows string. 1.5x → 0.6–0.8x.
+- `reopen`: in-place patch when `ended.at` is a number; `maybeClose`: in-place patch when activeSince and ended.at
+  strings are empty; `attach` ref path reads in place (first pass).
+- Driver: per-body op cache in silent mode (test host only, not in Pruv's numbers before either).
 
-### Line-by-line: current (4.1x)
+Hand fairness, checked both ways: hand `attach` allocates (`sid.to_string`, id clone), which favours Pruv; hand
+`clocks` is empty like Pruv's clock map; hand `replace` puts the halted budget back with `halted.clone()` (allocs),
+Pruv puts it back with `t_put` (alloc + copy), comparable; hand `maybeClose` gets `isQuiet` as an inline closure, Pruv
+now gets it in the same call. No hand change was needed.
+
+### Line-by-line: current / isHalted (2.8–3.0x)
 
 hand (`hand_m7.rs` `World::current`):
 ```
-match self.sessions.get(&r.session_id) {            // SipHash-1-3 of 5 bytes, one probe
+match self.sessions.get(&r.session_id) {            // hashbrown: SipHash of 5 bytes, SIMD 7-bit tag group
     Some(Session { budget: Some(b) }) if b.id == r.budget_id => Some(b),   // memcmp 36 bytes
-    _ => None }                                      // returns &Budget, no copy
+    _ => None }                                      // &Budget, no call boundary
 ```
-generated (`work/m7/gen.rs`, `bud_lifecycle::current` → `current_entry` → `bud_map::find`):
+generated (`work/m7/gen.rs`):
 ```
-hash_key(owner, og, key)          // FNV mix per u16 unit + gf(st, owner, 3) owner-generation read
-loop: rd(st, slot_pos(st,h,i))    // checked rd on the slot word, slot_pos re-reads header words 3,4
-  entry_matches(...)              // field_addr(st,e) + 5 header compares + unit compare loop
-blob_at / blob_n                  // field_addr again + checked rd
-state_of, id_is                   // state word + 36-unit compare (direct after one bound check)
-wr(out,0,4); wr(out,1,n)          // checked writes
-while k < n { out[2+k] = st[off+k] }   // ~130-word copy: the contract returns the record by value
+t_call: bud_store::valid(st) + 3 key_end scans + 8 rd   // per-call entry checks (~5 ns, rawcall probe)
+current_at -> session_of -> bud_map::find:
+  hash_key(owner, og, key)        // FNV per u16 unit + owner generation read
+  loop: rd(st, slot_pos(st,h,i))  // the slot word holds only the entry index
+    entry_matches(...)            // field_addr(st,e) + hash/owner/len compares + unit loop, per probed slot
+  field_addr once; state_of; id_is (36 units, direct after one bound check)
+wr(out,0,4); wr(out,1,n); wr(out,2,off)
 ```
-Split (measured by the probes and ishalted): ~5–8 ns host call, ~15 ns `bud_map::find` (≈2x a std HashMap
-lookup: FNV over u16 units plus owner/generation words plus `field_addr` per probe, versus SipHash over bytes and
-one pointer compare), ~13 ns for the record copy. `ishalted` (27 ns, 2.7x) is the same path without the copy, so the
-copy is the difference between the two. Not fixable inside M7: the lookup is in `bud_map` (not owned; record for
-the bud_map owner), and the copy is the `current` contract (out = the budget). A borrowed-view contract would
-remove it but changes the host interface.
+Split: host call ~5–8 ns (dispatch/rawcall probes), `bud_map::find` hit ~15–25 ns (probe: find-hit on owner 0 ≈ 25 ns
+over dispatch, find-miss on the empty owner 1 ≈ 10 ns), the rest a few ns. Hand is ~10 ns in total. Why Pruv
+cannot emit the hand code from M7: the call boundary is the test ABI (hand has none), and the lookup is
+`bud_map::find`, whose index slot stores only the entry index, so every probed candidate costs an
+`entry_matches` call that reads entry memory, where hashbrown rejects candidates on the 7-bit tag without touching
+the entry. Both are in `bud_map` / the compiler (not owned here); see "Requests to other owners".
 
-### Line-by-line: closereopen (4.0x)
+### Line-by-line: closereopen (1.7–1.9x)
 
-hand: `maybe_close` = one `get_mut`, one `clocks.get`, the `is_quiet` closure inline, field writes; `reopen` = one
+hand: `maybe_close` = one `get_mut`, one `clocks.get` (empty map), inline `is_quiet`, field writes; `reopen` = one
 `get_mut`, id compare, two field writes.
-generated: `maybeClose` is two `t_call` round trips (first call returns status 5 to ask `isQuiet`, the host answers
-and calls again — the spec's quiet protocol keeps the decision in Pruv), each with `bud_map::find` for the session
-plus a `bud_clock` lookup of the budget's clock; then the in-place patch. `reopen` is one call with find + id compare
-+ 4-word patch. So per close+reopen the Pruv side does 3 host calls and 4 map finds where hand does 3 HashMap ops
-and no calls; 3 × ~6 ns + 4 × ~15 ns ≈ the measured 72×2 ns pair.
+generated: `maybeClose` = one `t_call` (was two), `bud_map::find` for the session, clock lookup skipped (empty clock
+map), in-place patch of 7 header words, fx `[23, 20]`; `reopen` = one `t_call`, find, id compare, 4-word patch,
+fx `[20]`. Per pair: 2 host calls (~2 × 6 ns) + 2 finds (~2 × 15–20 ns) ≈ 65 ns = 2 × 32.5 ns. The remainder over hand
+is the same call boundary + find cost as `current`; the patches themselves are a few ns.
 
-### Line-by-line: replace (1.5x)
+### Requests to other owners
 
-hand: close fields in place, `mem::take` the id, build the new `Budget` struct, one `String` clone for follows, push
-effects, then the bench puts back a cloned halted `Budget`.
-generated: find + view + settle/drop (as CLOSE), `fresh` builds a new record vector (header + 6 strings) and
-`rewrite`/store allocate the record through `bud_store` (alloc + copy), carryHeld pushes the old id units into fx,
-then the host puts the halted record back through the store (`put` = alloc + copy of ~130 words). The extra time is
-the record build and the store copy; hand's `Budget` has the same fields but `String`s are moved, not copied.
+For the `bud_map` / `bud_store` / compiler owners (not edited in M7):
+
+1. `bud_map` index: store hash tag bits in the slot word (e.g. `idx + 1 | (h >> 32) << 32`) so `find` rejects
+   candidates without `field_addr` + `entry_matches`. This is the main remaining gap for current / isHalted /
+   closereopen.
+2. `bud_store::valid`: a cheaper check once per root call (it runs on every `t_call`).
+3. `#[inline]` on small helpers (`rd`, `c32`, `c40`, `clamp`, `mix`, `field_addr`); the generated crate builds with
+   `rustc -C opt-level=3` and default codegen units, and a `codegen-units=1` run was inconclusive under load.
+4. Slice equality (`memcmp`) for the unit compare loops in `entry_matches` and `id_is`-style compares once bounds
+   are proven.
 
 ## §9 complexity (`docs/REQUEST_BUDGET_SPEC.md`)
 
@@ -169,3 +185,7 @@ above is kept.
 
 Post-fix check (Codex gpt-6-astra, ultra, static): all three fixes confirmed, no new defect. The early error returns
 2/3 (before the session lookup succeeds) still write nothing to out, as before.
+
+Perf pass (view contract, quiet up front, replace without the closed-record build): a Codex review (role review) of
+the protocol change was started; its result is recorded here when it arrives. Checks after the pass: Q1 113 / 0 /
+187 / 0 (Rust and Python pruvc), derived 300 exact, byte-identical (149080 bytes).
