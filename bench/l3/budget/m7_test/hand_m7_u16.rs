@@ -4,11 +4,16 @@
 //   hand_m7_u16 q                        stdin program as driver_m7.rs run_q, byte-identical output lines
 //   hand_m7_u16 perf <S> <reps> [item]   prints `item size ns_per_call` for ishalted, current, attach, closereopen,
 //                                        replace (same items / shapes as driver_m7.rs run_perf; dispatch and rawcall
-//                                        are Pruv-only probes) and, after each item, `chk item size value`
+//                                        are Pruv-only probes) and, after each item, `chk item size value` and
+//                                        `rchk item size value`
 //
 // chk (hand only): the full observed final state (the words q mode prints after `O`) folded as s = s*31 + w (wrapping
-// u64), computed outside the timing. driver_m7 has no checksum, so Pruv/hand state equality is checked in q mode
-// (diff_hand_m7.py compares the `O` observation byte for byte); chk only shows that the perf runs are deterministic.
+// u64), computed outside the timing; it shows that the perf runs are deterministic.
+// rchk <item> <size> <value>: per-op result checksum of an untimed verification pass run after each item's timed loop
+// (fresh setup identical to the timed one, same ops and per-iteration resets, V = min(reps, 2000) iterations). Per op
+// it folds s = s*31 + w over: the status, the effect count, the effect codes (13 timerClear, 20 changed, 21 carryHeld,
+// 22 uuid, 23 isQuiet) and, for status 0, res_words (the words q mode prints after `V `; ishalted: [1] / [2]). driver_m7
+// prints the identical encoding from the Pruv-generated code and run_m7.py perf compares the two per cell.
 //
 // Typing: keys (sessionId, budgetId, follows, uuids) are UTF-16 code units, Box<[u16]> in std HashMaps, looked up by
 // &[u16]; the session records are decoded once at put time into a typed Budget (enums for state / origin / how, the
@@ -901,11 +906,47 @@ fn rec(id: &str, state: State) -> Budget {
     }
 }
 
+fn fx_code(e: &Effect) -> i64 {
+    match e {
+        Effect::TimerClear => 13,
+        Effect::Changed => 20,
+        Effect::CarryHeld => 21,
+        Effect::Uuid => 22,
+        Effect::Quiet => 23,
+    }
+}
+
+// Words of one call's result for rchk: (status, result words); the borrow of the world ends here.
+fn digest(r: Result<Res<'_>, i64>) -> (i64, Vec<i64>) {
+    match r {
+        Ok(r) => (0, res_words(&r)),
+        Err(s) => (s, Vec::new()),
+    }
+}
+
+// rchk fold of one op: status, effect count, effect codes, result words (only for status 0), as s = s*31 + w.
+fn rchk_fold(sum: u64, status: i64, words: &[i64], fx: &[Effect]) -> u64 {
+    let mut s = sum;
+    let mut fold = |x: i64| s = s.wrapping_mul(31).wrapping_add(x as u64);
+    fold(status);
+    fold(fx.len() as i64);
+    for e in fx {
+        fold(fx_code(e));
+    }
+    if status == 0 {
+        for &x in words {
+            fold(x);
+        }
+    }
+    s
+}
+
 fn run_perf(args: &[String]) {
     let size: usize = args[0].parse().unwrap();
     let reps: usize = args[1].parse().unwrap();
     let only = args.get(2).map(|s| s.as_str());
     let on = |item: &str| only.map_or(true, |o| o == item);
+    let vn = reps.min(2000); // iterations of each untimed rchk verification pass
     let sids: Vec<Key> = (0..size).map(|i| u16s(&format!("s{:04}", i))).collect();
     let bid = |i: usize| format!("{:08x}-0000-4000-8000-000000000001", i);
     let unit = [120i64, 24, 3, 2, 1, 0];
@@ -935,6 +976,13 @@ fn run_perf(args: &[String]) {
         }
         println!("ishalted {} {:.1}", size, t.elapsed().as_nanos() as f64 / reps as f64);
         println!("chk ishalted {} {}", size, w.checksum());
+        let w = setup(State::Open);
+        let mut s = 0u64;
+        for _ in 0..vn {
+            let words = [if w.is_halted(sid, lbid) { 2 } else { 1 }];
+            s = rchk_fold(s, 0, &words, &w.fx);
+        }
+        println!("rchk ishalted {} {}", size, s);
     }
 
     if on("current") {
@@ -948,6 +996,17 @@ fn run_perf(args: &[String]) {
         }
         println!("current {} {:.1}", size, t.elapsed().as_nanos() as f64 / reps as f64);
         println!("chk current {} {}", size, w.checksum());
+        let w = setup(State::Open);
+        let mut s = 0u64;
+        for _ in 0..vn {
+            let r: Result<Res, i64> = Ok(match w.current(sid, lbid) {
+                Some(b) => Res::View(b),
+                None => Res::Undef,
+            });
+            let (st, ws) = digest(r);
+            s = rchk_fold(s, st, &ws, &w.fx);
+        }
+        println!("rchk current {} {}", size, s);
     }
 
     if on("attach") {
@@ -965,6 +1024,14 @@ fn run_perf(args: &[String]) {
         }
         println!("attach {} {:.1}", size, t.elapsed().as_nanos() as f64 / reps as f64);
         println!("chk attach {} {}", size, w.checksum());
+        let mut w = setup(State::Open);
+        let mut s = 0u64;
+        for _ in 0..vn {
+            w.fx.clear();
+            let (st, ws) = digest(w.attach(sid, Origin::User, Size::Absent, &unit, uuid, now));
+            s = rchk_fold(s, st, &ws, &w.fx);
+        }
+        println!("rchk attach {} {}", size, s);
     }
 
     if on("closereopen") {
@@ -984,6 +1051,17 @@ fn run_perf(args: &[String]) {
         }
         println!("closereopen {} {:.1}", size, t.elapsed().as_nanos() as f64 / (2 * reps) as f64);
         println!("chk closereopen {} {}", size, w.checksum());
+        let mut w = setup(State::Open);
+        let mut s = 0u64;
+        for _ in 0..vn {
+            w.fx.clear();
+            let (st, ws) = digest(w.maybe_close(sid, 1, now));
+            s = rchk_fold(s, st, &ws, &w.fx);
+            w.fx.clear();
+            let (st, ws) = digest(w.reopen(sid, lbid));
+            s = rchk_fold(s, st, &ws, &w.fx);
+        }
+        println!("rchk closereopen {} {}", size, s);
     }
 
     if on("replace") {
@@ -1003,6 +1081,15 @@ fn run_perf(args: &[String]) {
         }
         println!("replace {} {:.1}", size, t.elapsed().as_nanos() as f64 / reps as f64);
         println!("chk replace {} {}", size, w.checksum());
+        let mut w = setup(State::Halted);
+        let mut s = 0u64;
+        for _ in 0..vn {
+            w.fx.clear();
+            let (st, ws) = digest(w.replace(sid, Origin::User, Size::Times(2), &unit, uuid, now));
+            s = rchk_fold(s, st, &ws, &w.fx);
+            w.put(sid, Slot::Budget(halted.clone()));
+        }
+        println!("rchk replace {} {}", size, s);
     }
 }
 

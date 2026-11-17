@@ -57,27 +57,60 @@ def rustc():
     return shutil.which("rustc") or os.path.expanduser("~/.cargo/bin/rustc")
 
 
-def compile_gen(pruvc, gen):
-    c = subprocess.run([pruvc, ROOT_PRUV, "-o", gen] + LIBS, cwd=ROOT, capture_output=True, text=True)
+def compile_gen(pruvc, gen, root_pruv=ROOT_PRUV):
+    if os.path.exists(gen):
+        os.remove(gen)  # a stale gen.rs must never pass for a fresh compile
+    c = subprocess.run([pruvc, root_pruv, "-o", gen] + LIBS, cwd=ROOT, capture_output=True, text=True)
     if c.returncode != 0 or not os.path.exists(gen):
         sys.exit("pruvc failed:\n" + c.stdout[-4000:] + c.stderr[-4000:])
 
 
-def rustc_build(src, exe):
-    c = subprocess.run([rustc(), "-C", "opt-level=3", "--edition", "2021", "-o", exe, src], capture_output=True,
-                       text=True)
+RUSTC_FLAGS_USED = None  # argv flags of the last rustc_build (recorded in run_meta)
+RUSTC_BUILT_FROM_PRUV = False  # True once a binary of this run was built by rustc from Pruv Rust output
+
+
+def rustc_build(src, exe, from_pruv=False):
+    global RUSTC_FLAGS_USED, RUSTC_BUILT_FROM_PRUV
+    flags = ["-C", "opt-level=3", "--edition", "2021"]
+    c = subprocess.run([rustc()] + flags + ["-o", exe, src], capture_output=True, text=True)
     if c.returncode != 0:
         sys.exit("rustc failed (%s):\n%s" % (os.path.basename(src), c.stderr[-6000:]))
+    RUSTC_FLAGS_USED = flags
+    if from_pruv:
+        RUSTC_BUILT_FROM_PRUV = True
 
 
-def build_driver(gen_name, exe_name):
-    main = os.path.join(WORK, exe_name + ".rs")
+def build_driver(gen_name, exe_name, work=None):
+    work = work or WORK
+    main = os.path.join(work, exe_name + ".rs")
     with open(main, "w") as f:
         f.write(HEADER % gen_name)
         f.write(open(os.path.join(HERE, "driver_keys.rs"), encoding="utf-8").read())
-    exe = os.path.join(WORK, exe_name)
-    rustc_build(main, exe)
+    exe = os.path.join(work, exe_name)
+    rustc_build(main, exe, from_pruv=True)
     return exe
+
+
+OLD_REV = "12c78a4^"
+
+
+def build_old(args):
+    """keys.pruv from git rev 12c78a4^ (before the once-per-call header check), same pruvc and driver, separate dir."""
+    old_dir = os.path.join(WORK, "old_src")
+    rel = ROOT_PRUV
+    dst = os.path.join(old_dir, rel)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    r = subprocess.run(["git", "-C", ROOT, "show", "%s:%s" % (OLD_REV, rel)], capture_output=True, text=True)
+    if r.returncode != 0 or not r.stdout.strip():
+        sys.exit("git show %s:%s failed:\n%s" % (OLD_REV, rel, r.stderr[-2000:]))
+    with open(dst, "w", encoding="utf-8") as f:
+        f.write(r.stdout)
+    # keys.pruv has no imports; the shared libs (--lib bench/l3/budget, bench/l3/lib) come from the current tree
+    work = os.path.join(WORK, "old")
+    os.makedirs(work, exist_ok=True)
+    gen = os.path.join(work, "gen.rs")
+    compile_gen(args.pruvc, gen, os.path.relpath(dst, ROOT))
+    return build_driver("gen.rs", "driver_keys_old", work)
 
 
 def build(args, hand=False, inline=False):
@@ -97,6 +130,47 @@ def build(args, hand=False, inline=False):
         rustc_build(os.path.join(HERE, "hand_keys.rs"), exe)
         exes["hand"] = exe
     return exes
+
+
+# ---- corrupt-header controls (new keys.pruv vs keys.pruv at 12c78a4^) ----
+HDR_CORRUPTIONS = [
+    ("t3=0", [["3", "0"]]), ("t3=1", [["3", "1"]]), ("t3=cap-1", [["3", "cap-1"]]), ("t3=-1", [["3", "-1"]]),
+    ("t3=2^31", [["3", "2147483648"]]), ("t4=len", [["4", "len"]]), ("t4=-1", [["4", "-1"]]),
+    ("t5=len", [["5", "len"]]), ("t5=-1", [["5", "-1"]]), ("t0=0", [["0", "0"]]),
+    ("t0=slots*2", [["0", "slots*2"]]), ("slot=cap+1", [["slot0", "cap+1"]]),
+]
+
+
+def header_controls(exe_new, exe_old):
+    keys = [[ord(c) for c in "key-%d-%s" % (i, "é" if i % 2 else "x")] for i in range(6)]
+    probes = [[ord(c) for c in "new-key-a"], [ord(c) for c in "key-0-x-missing"]]
+    lines, meta = [], {}
+    for L in LAYS:
+        for H in ("u", "w"):
+            for name, sets in [("positive (no corruption)", [])] + HDR_CORRUPTIONS:
+                cid = "hdr-%s-%s-%s" % (L, H, name)
+                meta[cid] = name
+                lines.append(json.dumps({"id": cid, "L": L, "H": H, "keys": keys, "probes": probes, "set": sets}))
+    inp = "\n".join(lines) + "\n"
+    outs = []
+    for exe in (exe_new, exe_old):
+        r = subprocess.run([exe, "hdr"], input=inp, capture_output=True, text=True)
+        if r.returncode != 0:
+            sys.exit("driver hdr failed (%s):\n%s" % (os.path.basename(exe), r.stderr[-3000:]))
+        outs.append({o["id"]: o["res"] for o in map(json.loads, filter(str.strip, r.stdout.splitlines()))})
+    mism, rows = [], []
+    for cid in meta:
+        a, b = outs[0].get(cid), outs[1].get(cid)
+        rows.append("%s new=%s old=%s" % (cid, a, b))
+        if a is None or b is None or a != b:
+            mism.append("%s: new=%s old=%s" % (cid, a, b))
+    # the positive control must find every stored key (guards against a driver that finds nothing)
+    for L in LAYS:
+        for H in ("u", "w"):
+            res = outs[0].get("hdr-%s-%s-positive (no corruption)" % (L, H))
+            if res is None or res[:len(keys)] != list(range(len(keys))):
+                mism.append("positive control %s/%s: finds %r" % (L, H, None if res is None else res[:len(keys)]))
+    return len(meta), mism, rows
 
 
 # ---- Python model of the layouts ----
@@ -343,18 +417,23 @@ def cmd_check(args):
             mism.append("%s (%s, %s): k_check got %r want %d, rec=%r" % (n["id"], n["neg"], n["why"],
                                                                          None if g is None else g["chk"], want,
                                                                          n["rec"]))
+    exe_old = build_old(args)
+    n_hdr, hdr_mism, hdr_rows = header_controls(exes["drv"], exe_old)
     tails = sorted({len(c["a"]) % 8 for c in cases} | {len(c["b"]) % 8 for c in cases})
-    summary = {"cases": len(cases), "negatives": sum(1 for n in negs if "want" not in n),
+    summary = {"header_controls": n_hdr, "header_mismatches": len(hdr_mism), "cases": len(cases), "negatives": sum(1 for n in negs if "want" not in n),
                "controls": sum(1 for n in negs if "want" in n), "seed": args.seed, "tails_mod8": tails,
                "mismatches": len(mism)}
     os.makedirs(WORK, exist_ok=True)
     with open(os.path.join(WORK, "check.json"), "w") as f:
-        json.dump({"summary": summary, "mismatches": mism[:200]}, f, indent=1, ensure_ascii=False)
+        json.dump({"summary": summary, "mismatches": mism[:200], "header_mismatches": hdr_mism[:200],
+                   "header_rows": hdr_rows}, f, indent=1, ensure_ascii=False)
     print(json.dumps(summary))
     for m in mism[:20]:
         print("MISMATCH", m[:600])
-    print("mismatches: %d" % len(mism))
-    return 1 if mism else 0
+    for m in hdr_mism[:20]:
+        print("HEADER MISMATCH", m[:600])
+    print("mismatches: %d, header_mismatches: %d of %d controls" % (len(mism), len(hdr_mism), n_hdr))
+    return 1 if (mism or hdr_mism) else 0
 
 
 # ---- perf ----
@@ -410,7 +489,8 @@ def cmd_collide(args):
                              "distinct": float(f[6]), "max_probe": f[7], "mean_probe": f[8]})
                 print(" | ".join(f[1:]))
     with open(os.path.join(WORK, "collide_latest.json"), "w") as fh:
-        json.dump({"run_meta": run_meta(pruvc=None, rustc=rustc(), seed=args.seed, profile=pick_sizes(args)[1],
+        json.dump({"run_meta": run_meta(pruvc=None, backend="unknown", flags=RUSTC_FLAGS_USED, rustc=rustc(),
+                                        seed=args.seed, profile=pick_sizes(args)[1],
                                         lanes=["fx", "fxmix", "pruvw", "pruvu"]), "rows": rows}, fh, indent=1)
     return 0
 
@@ -478,6 +558,12 @@ def cmd_perf(args):
     # every hand hasher must have produced every row (a lane that printed nothing must not pass as "equal")
     cs_missing = sorted("%s/%d/%s/hand-%s" % (s, N, row, h) for s in sets for N in sizes
                         for row in ("ret", "miss", "raw", "cmp") for h in HANDS if (s, "hand", h, row, N) not in cks)
+    # every Pruv row must exist too: a missing Pruv row is an error, never a skipped comparison
+    pruv_missing = sorted("%s/%d/%s/%s/%s" % (s, N, L, "-" if row == "cmp" else H, row) for s in sets for N in sizes
+                          for L in LAYS for row in ("ret", "miss", "raw", "cmp") for H in (["-"] if row == "cmp" else ["u", "w"])
+                          if (s, L, H, row, N) not in cks)
+    if pruv_missing:
+        print("ERROR: Pruv rows missing: %s" % ", ".join(pruv_missing), file=sys.stderr)
     summary = []
     unav_instr = args.no_instr
     print("set | N | L | H | row | median ns | min | max | instr/op | words/key | bytes/key | checksum | "
@@ -520,7 +606,7 @@ def cmd_perf(args):
             for row in ("ret", "miss", "raw", "cmp"):
                 pk = (s, "P", "-" if row == "cmp" else "w", row, N)
                 if pk not in res:
-                    continue
+                    continue  # already reported in pruv_missing (non-zero exit at the end)
                 p_ns = statistics.median(res[pk])
                 h_ns = {h: statistics.median(res[(s, "hand", h, row, N)]) if (s, "hand", h, row, N) in res else None
                         for h in HANDS}
@@ -550,7 +636,8 @@ def cmd_perf(args):
     print("hand rows missing: %s" % (", ".join(cs_missing) if cs_missing else "none"))
     os.makedirs(WORK, exist_ok=True)
     lanes = ["P/u", "P/w", "U", "A8", "F1"] + ["hand-" + h for h in HANDS]
-    meta = run_meta(pruvc=args.pruvc, backend="rust", rustc=rustc(), seed=args.seed, profile=profile, lanes=lanes,
+    meta = run_meta(pruvc=args.pruvc, backend="rust" if RUSTC_BUILT_FROM_PRUV else "unknown", flags=RUSTC_FLAGS_USED,
+                    rustc=rustc(), seed=args.seed, profile=profile, lanes=lanes,
                     extra={"rounds": args.rounds, "sizes": sizes, "sets": sets, "reps": args.reps,
                            "instr_reps": UNAVAILABLE if args.no_instr else args.instr_reps,
                            "instr_samples": args.instr_samples,
@@ -558,14 +645,14 @@ def cmd_perf(args):
                            "inline_variant": args.inline_variant,
                            "inline_always_replaced": exes.get("inline_always_replaced"),
                            "time": time.strftime("%Y-%m-%dT%H:%M:%S"), "checksum_disagreements": cs_bad,
-                           "hand_rows_missing": cs_missing})
+                           "hand_rows_missing": cs_missing, "pruv_rows_missing": pruv_missing})
     out = {"run_meta": meta, "meta": meta, "summary": summary, "pw_vs_hands": pw, "runs": runs}
     stamp = time.strftime("%Y%m%d-%H%M%S")
     for name in ("perf_%s.json" % stamp, "perf_latest.json"):
         with open(os.path.join(WORK, name), "w") as f:
             json.dump(out, f, indent=1, ensure_ascii=False)
     print("raw JSON: %s" % os.path.join(WORK, "perf_latest.json"))
-    return 1 if (cs_bad or cs_missing) else 0
+    return 1 if (cs_bad or cs_missing or pruv_missing) else 0
 
 
 def main():

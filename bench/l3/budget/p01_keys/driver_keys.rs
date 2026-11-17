@@ -597,13 +597,136 @@ fn run_check() {
     }
 }
 
+// ---- hdr: corrupt-header controls ----
+// Symbolic header values, evaluated on the table BEFORE any corruption of that case is applied:
+//   len, cap, slots, sb, eb, plain integers, and cap-1, cap+1, slots*2, 2^31 (as the integer), slot0 (index of the
+//   first non-empty slot word, i.e. the slot of an inserted key).
+fn hdr_sym(t: &[i64], s: &str) -> i64 {
+    let (slots, cap, sb, eb) = (t[0], t[3], t[4], t[5]);
+    match s {
+        "len" => t.len() as i64,
+        "cap" => cap,
+        "slots" => slots,
+        "sb" => sb,
+        "eb" => eb,
+        "cap-1" => cap - 1,
+        "cap+1" => cap + 1,
+        "slots*2" => slots * 2,
+        "slot0" => {
+            let mut p = sb as usize;
+            while t[p] == 0 {
+                p += 1;
+            }
+            p as i64
+        }
+        other => other.parse::<i64>().unwrap_or_else(|_| {
+            eprintln!("bad hdr symbol {}", other);
+            std::process::exit(2);
+        }),
+    }
+}
+
+fn hdr_layout<E, I, F>(enc: E, ins: I, find: F, keys: &[Vec<u16>], probes: &[Vec<u16>], sets: &[(String, String)])
+    -> String
+where
+    E: Fn(&[u16], &mut Vec<i64>),
+    I: Fn(&mut [i64], &[i64]) -> i64,
+    F: Fn(&[i64], &[i64]) -> i64,
+{
+    let enc1 = |u: &Vec<u16>| {
+        let mut v = Vec::new();
+        enc(&u[..], &mut v);
+        v
+    };
+    let kr: Vec<Vec<i64>> = keys.iter().map(&enc1).collect();
+    let pr: Vec<Vec<i64>> = probes.iter().map(&enc1).collect();
+    let arena: usize = kr.iter().chain(pr.iter()).map(|r| r.len()).sum();
+    // room for every probe key too, so a healthy table accepts the new-key insert
+    let mut t = new_table(kr.len() + pr.len(), arena);
+    for r in &kr {
+        ins(&mut t[..], &r[..]);
+    }
+    let resolved: Vec<(usize, i64)> =
+        sets.iter().map(|(i, v)| (hdr_sym(&t[..], i) as usize, hdr_sym(&t[..], v))).collect();
+    for (i, v) in resolved {
+        t[i] = v;
+    }
+    let mut out: Vec<i64> = Vec::new();
+    for r in kr.iter().chain(pr.iter()) {
+        out.push(find(&t[..], &r[..]));
+    }
+    // insert: a stored key (hit) and a new key, each followed by finds of every key
+    for r in [kr.first(), pr.first()].into_iter().flatten() {
+        out.push(ins(&mut t[..], &r[..]));
+        for q in kr.iter().chain(pr.iter()) {
+            out.push(find(&t[..], &q[..]));
+        }
+    }
+    out.extend_from_slice(&t[..8]);
+    jl(&out)
+}
+
+// Input line: {"id", "L", "H", "keys": [[units]], "probes": [[units]], "set": [["idx", "value"], ..]}
+// (idx / value are strings holding an integer or a hdr_sym symbol). Output: {"id", "res": [..]}: finds of every key
+// and probe on the corrupted table, then insert(first key) + all finds, insert(first probe) + all finds, then t[0..8].
+// Command (one JSON line per case): driver_keys hdr
+fn run_hdr() {
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    let mut o = io::BufWriter::new(stdout.lock());
+    for line in stdin.lock().lines() {
+        let line = line.unwrap();
+        if line.trim().is_empty() {
+            continue;
+        }
+        let j = Pj { s: line.as_bytes(), i: 0 }.val();
+        let id = text(get(&j, "id"));
+        let l = text(get(&j, "L"));
+        let h = text(get(&j, "H"));
+        let lists = |k: &str| -> Vec<Vec<u16>> {
+            match get(&j, k) {
+                Some(J::Arr(v)) => v.iter().map(|x| units16(&ints(Some(x)))).collect(),
+                _ => panic!("expected an array of unit lists"),
+            }
+        };
+        let keys = lists("keys");
+        let probes = lists("probes");
+        let sets: Vec<(String, String)> = match get(&j, "set") {
+            Some(J::Arr(v)) => v
+                .iter()
+                .map(|p| match p {
+                    J::Arr(q) if q.len() == 2 => (text(Some(&q[0])), text(Some(&q[1]))),
+                    _ => panic!("set entries are [idx, value]"),
+                })
+                .collect(),
+            _ => panic!("expected set array"),
+        };
+        let r = match (l.as_str(), h.as_str()) {
+            ("U", "u") => hdr_layout(enc_u, sol::k_insert_u_hu, sol::k_find_u_hu, &keys, &probes, &sets),
+            ("U", "w") => hdr_layout(enc_u, sol::k_insert_u_hw, sol::k_find_u_hw, &keys, &probes, &sets),
+            ("P", "u") => hdr_layout(enc_p, sol::k_insert_p_hu, sol::k_find_p_hu, &keys, &probes, &sets),
+            ("P", "w") => hdr_layout(enc_p, sol::k_insert_p_hw, sol::k_find_p_hw, &keys, &probes, &sets),
+            ("A8", "u") => hdr_layout(enc_a8, sol::k_insert_a8_hu, sol::k_find_a8_hu, &keys, &probes, &sets),
+            ("A8", "w") => hdr_layout(enc_a8, sol::k_insert_a8_hw, sol::k_find_a8_hw, &keys, &probes, &sets),
+            ("F1", "u") => hdr_layout(enc_f1, sol::k_insert_f1_hu, sol::k_find_f1_hu, &keys, &probes, &sets),
+            ("F1", "w") => hdr_layout(enc_f1, sol::k_insert_f1_hw, sol::k_find_f1_hw, &keys, &probes, &sets),
+            _ => {
+                eprintln!("bad layout/hash {} {}", l, h);
+                std::process::exit(2);
+            }
+        };
+        writeln!(o, "{{\"id\":\"{}\",\"res\":{}}}", id, r).unwrap();
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(|s| s.as_str()) {
         Some("perf") => run_perf(&args[2..]),
         Some("check") => run_check(),
+        Some("hdr") => run_hdr(),
         _ => {
-            eprintln!("usage: driver_keys perf <set> <N> <reps> [row|all] [L|all] [H|all] | driver_keys check");
+            eprintln!("usage: driver_keys perf <set> <N> <reps> [row|all] [L|all] [H|all] | driver_keys check | driver_keys hdr");
             std::process::exit(2);
         }
     }

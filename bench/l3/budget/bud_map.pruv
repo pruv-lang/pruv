@@ -686,27 +686,6 @@ pub fn units_ok(a: [i64], s: i64, n: i64) -> bool
   return band(acc, -65536) == 0;
 }
 
-// add_absent() that also checks the key units (0..65535) on the absent path only: a key found by find_h equals a
-// stored key and needs no check. The check runs after the miss and before make_room or any write; a bad key or a
-// key range outside the array answers 2 with nothing written. Same return codes as add_absent.
-pub fn add_absent_ck(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, entries: i64, words: i64) -> i64
-{
-  let og: i64 = gf(st, owner, 3);
-  let h: i64 = hash_key(owner, og, key, ks, kn);
-  if find_h(st, owner, og, h, key, ks, kn) >= 0 { return 0; }
-  if ks < 0 || kn < 0 || ks > len(key) || kn > len(key) - ks { return 2; }
-  if !units_ok(key, ks, kn) { return 2; }
-  let nd: i64 = make_room(inout st, entries, words);
-  if nd != 0 {
-    if nd < 0 { return 2; }
-    return -nd;
-  }
-  if gf(st, owner, 0) != 1 { return 2; }
-  let x: i64 = put_key_h(inout st, owner, og, h, key, ks, kn, true);
-  if x < 0 { return 2; }
-  return 1;
-}
-
 // ---- grow ----
 
 // Copies entry pe of prev (key, blob, scalars) as a new child of nowner in nxt. New entry index or -1.

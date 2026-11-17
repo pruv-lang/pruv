@@ -46,7 +46,7 @@
 //   hw  word hash: one mix per stored data word, then fin(bxor(h, header word 0)).
 //   A table must be filled and searched with the same hash kind; the driver builds one table per (layout, hash).
 //
-// Fixed call structure: every pub fn is a thin wrapper. k_find_* = hash, then tab_find (probe loop + ent_match:
+// Fixed call structure: every pub fn is a thin wrapper. k_find_* = hash, then tab_find (once-per-call header test, unchecked probe loop, checked fallback loop on a corrupt header; + ent_match:
 // stored hash, record word count, then a word loop over the whole record). k_insert_* = hash, tab_find, then
 // append. Only the hash function and the header word count differ between layouts. Equality is content equality,
 // never hash equality.
@@ -422,7 +422,44 @@ fn ent_match(t: [i64], a: i64, k: [i64], h: i64, hw: i64) -> bool
   return true;
 }
 
+// Reference probe loop with per-probe range checks. Defines the result of tab_find on EVERY table, corrupt or not.
+fn tab_find_checked(t: [i64], k: [i64], h: i64, hw: i64) -> i64
+  requires hw == 1 || hw == 2
+{
+  let n: i64 = len(t);
+  if len(k) < hw || n < 8 { return -1; }
+  let slots: i64 = t[0];
+  let sb: i64 = t[4];
+  let eb: i64 = t[5];
+  if slots < 1 || slots > 1073741824 { return -1; }
+  if sb < 0 || sb > 1099511627776 || eb < 0 || eb > 1099511627776 { return -1; }
+  let mask: i64 = slots - 1;
+  let mut i: i64 = 0;
+  while i < slots
+    invariant 0 <= i && i <= slots && 1 <= slots && slots <= 1073741824 && mask == slots - 1 && n == len(t)
+    invariant 0 <= sb && sb <= 1099511627776 && 0 <= eb && eb <= 1099511627776
+    invariant (hw == 1 || hw == 2) && hw <= len(k)
+    decreases slots - i
+  {
+    let p: i64 = sb + band(wrapping_add(h, i), mask);
+    let mut w: i64 = 0;
+    if p < n { w = t[p]; }
+    if w == 0 { return -1; }
+    if w >= 1 && w <= 1073741824 {
+      let a: i64 = eb + 3 * (w - 1);
+      if a + 3 <= n {
+        if ent_match(t, a, k, h, hw) { return w - 1; }
+      }
+    }
+    i = i + 1;
+  }
+  return -1;
+}
+
 // Id of the entry whose record equals k (looked up with hash h), or -1. The probe loop is bounded by the slot count.
+// Result is identical to tab_find_checked on every table. The header is tested once per call and only selects the
+// path: a valid header runs the unchecked fast loop; any other header (or a stored id above cap, seen mid-loop)
+// runs tab_find_checked for the whole call. Slot count out of 1..2^30 returns -1 in both.
 fn tab_find(t: [i64], k: [i64], h: i64, hw: i64) -> i64
   requires hw == 1 || hw == 2
 {
@@ -432,10 +469,10 @@ fn tab_find(t: [i64], k: [i64], h: i64, hw: i64) -> i64
   let cap: i64 = t[3];
   let sb: i64 = t[4];
   let eb: i64 = t[5];
-  // The header is checked once per call so that the probe loop needs no per-probe slot or entry range check:
+  if slots < 1 || slots > 1073741824 { return -1; }
   // sb + slots <= n puts every probed slot in t, and eb + 3 * cap <= n puts every entry id in 1..cap in t.
-  if slots < 1 || slots > 1073741824 || cap < 0 || cap > 1073741824 { return -1; }
-  if sb < 0 || sb > n - slots || eb < 0 || eb > n - 3 * cap { return -1; }
+  if cap < 0 || cap > 1073741824 { return tab_find_checked(t, k, h, hw); }
+  if sb < 0 || sb > n - slots || eb < 0 || eb > n - 3 * cap { return tab_find_checked(t, k, h, hw); }
   let mask: i64 = slots - 1;
   let mut i: i64 = 0;
   while i < slots
@@ -447,7 +484,9 @@ fn tab_find(t: [i64], k: [i64], h: i64, hw: i64) -> i64
     let p: i64 = sb + band(wrapping_add(h, i), mask);
     let w: i64 = t[p];
     if w == 0 { return -1; }
-    if w >= 1 && w <= cap {
+    if w >= 1 {
+      // w > cap only on a corrupt table: the checked loop decides (it accepts ids up to 2^30 with a + 3 <= n).
+      if w > cap { return tab_find_checked(t, k, h, hw); }
       if ent_match(t, eb + 3 * (w - 1), k, h, hw) { return w - 1; }
     }
     i = i + 1;

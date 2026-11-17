@@ -11,22 +11,15 @@ mod bud_tools;
 // (14 words + 1 + budgetId; state -1 = the session has no budget).
 // Validation split: t_put is the ingress. It checks framing, the session key units, and the record (n >= 15, state in
 // -1..2, unlimited in 0..1, reason in -1..4, word 14 == n - 15, every id unit in 0..65535; counters are not validated).
-// t_call checks framing only (key_span, O(1)) and validates key units just for keys that are not admitted: the miss
-// and insert paths (session / budget keys when load_cv finds no current budget, the turn key of an absent forgetTurn,
-// the turn and activity keys that noteTool inserts) and the noteTool session / budget refs (never looked up on the
-// dedup path). A hit needs no unit check.
-// Store invariant I1: every stored key and every stored record passed t_put validation (key units in 0..65535, record
-// as above). Proof by writer of keys / records into st:
-//   t_put          validates the session key units and the record before session_put writes anything;
-//   note_tool_v    inserts turn / activity keys only after units_ok on them (add_absent_ck, or the explicit check on
-//                  the new-turn path), before make_room or any write;
-//   t_grow         copies stored keys and records unchanged (grow_copy), so I1 carries over;
-//   store_cv       writes counter words 7..13 only; state (0), unlimited (1), reason (2) and word 14 are untouched;
-//   forget_turn    only removes entries.
-// Hit paths: the session key equals a stored key (compared unit by unit in bud_map entry_matches) and the budget id
-// equals the stored id (compared word by word in load_cv, d == 0), so I1 gives their units in range. The checks on
-// state / reason in bud_charge::charge_admitted and the word-14 compare in load_cv are dropped under I1.
-// Machine-checking I1 needs the resident-state contracts (spec P06/P07/P11) and is not done here.
+// t_call checks the framing of its keys (key_span, O(1)) and then the units of EVERY key of the op on EVERY call,
+// before anything is written: one OR-fold pass over op[2 .. end) (the key length words are inside that range), and
+// only if that quick test fails an exact per-key test (keys_ok_*). Any bad key answers 2 with nothing written.
+// t_call also keeps the state / reason checks (bud_charge::charge) and the word-14 compare in load_cv.
+// These checks stay because the store invariant I1 (every stored key and every stored record passed t_put
+// validation) is NOT a checked invariant: st is a resident buffer the host may hand back in any content, and nothing
+// in the code proves or re-validates I1 on entry. Erasing the per-call unit checks, the state / reason rechecks or the
+// word-14 compare needs I1 as a checked resident invariant (spec P06/P07/P11 and the typed-state representation of
+// P03-P05); until then every input, including a corrupt st, gets the same answer as the fully checked code.
 // CURRENT(ref) = the session exists, has a budget,
 // and its budgetId equals ref.budgetId; cv[1..14] is filled from blob words 0..13 and written back after the call.
 //
@@ -43,7 +36,7 @@ mod bud_tools;
 // Scratch `cv` (>= 15 words) is caller-provided working memory; the host never reads it.
 
 // End position of the key `len, units...` that starts at p (framing only: p < len(op), 0 <= op[p] <= n - p - 1), or
-// -1. O(1): the key units are op[p+1 .. result) and are checked separately (units_ok) where a key is not admitted.
+// -1. O(1): the key units are op[p+1 .. result) and are checked by keys_ok_* before t_call writes anything.
 fn key_span(op: [i64], p: i64) -> i64
   requires 0 <= p
   ensures result == -1 || (result > p && result <= len(op) && result == p + 1 + op[p] && op[p] >= 0)
@@ -55,35 +48,35 @@ fn key_span(op: [i64], p: i64) -> i64
   return p + 1 + kn;
 }
 
-// Units of the session key (op[2 .. e1)) and of the budget key (op[e1+1 .. e2)) in 0..65535.
-fn refs_ok(op: [i64], e1: i64, e2: i64) -> bool
+// Code 4: the turn key op[2 .. e1) has every unit in 0..65535. One pass; it is already exact (the range holds no
+// length word).
+fn keys_ok_1(op: [i64], e1: i64) -> bool
+  requires 2 <= e1 && e1 <= len(op)
+{
+  return crate::bud_map::units_ok(op, 2, e1 - 2);
+}
+
+// Codes 1 and 2: session key op[2 .. e1) and budget key op[e1+1 .. e2). Quick test: one OR-fold over op[2 .. e2),
+// which also holds the budget key length word op[e1]; all in 0..65535 means every unit is. If it fails (a unit out of
+// range, or only the length word above 65535) the exact per-key test decides.
+fn keys_ok_2(op: [i64], e1: i64, e2: i64) -> bool
   requires 2 <= e1 && e1 < e2 && e2 <= len(op)
 {
+  if crate::bud_map::units_ok(op, 2, e2 - 2) { return true; }
   if !crate::bud_map::units_ok(op, 2, e1 - 2) { return false; }
   return crate::bud_map::units_ok(op, e1 + 1, e2 - e1 - 1);
 }
 
-// bud_tools::note_tool with the key units validated where a key is new: the known-turn path checks the activity key
-// only when it is absent (add_absent_ck); the new-turn path checks both keys before make_room or any write.
-// Same return codes as note_tool.
-fn note_tool_v(inout st: [i64], op: [i64], ts: i64, tn: i64, ast: i64, an: i64) -> i64
-  requires 0 <= ts && 0 <= tn && ts + tn <= len(op) && 0 <= ast && 0 <= an && ast + an <= len(op)
+// Code 3: session key op[2 .. e1), budget key op[e1+1 .. e2), turn key op[e2+1 .. e3), activity key op[e3+1 .. e4).
+// Quick test: one OR-fold over op[2 .. e4) (it also holds the three key length words); else the exact per-key test.
+fn keys_ok_4(op: [i64], e1: i64, e2: i64, e3: i64, e4: i64) -> bool
+  requires 2 <= e1 && e1 < e2 && e2 < e3 && e3 < e4 && e4 <= len(op)
 {
-  let t: i64 = crate::bud_map::find(st, 2, op, ts, tn);
-  if t >= 0 { return crate::bud_map::add_absent_ck(inout st, t, op, ast, an, 1, crate::bud_store::c32(an)); }
-  if !crate::bud_map::units_ok(op, ts, tn) { return 2; }
-  if !crate::bud_map::units_ok(op, ast, an) { return 2; }
-  let words: i64 = crate::bud_store::c32(tn) + crate::bud_store::c32(an);
-  let nd: i64 = crate::bud_map::make_room(inout st, 2, words);
-  if nd != 0 {
-    if nd < 0 { return 2; }
-    return -nd;
-  }
-  let tt: i64 = crate::bud_map::add(inout st, 2, op, ts, tn);
-  if tt < 0 { return 2; }
-  let x: i64 = crate::bud_map::add(inout st, tt, op, ast, an);
-  if x < 0 { return 2; }
-  return 1;
+  if crate::bud_map::units_ok(op, 2, e4 - 2) { return true; }
+  if !crate::bud_map::units_ok(op, 2, e1 - 2) { return false; }
+  if !crate::bud_map::units_ok(op, e1 + 1, e2 - e1 - 1) { return false; }
+  if !crate::bud_map::units_ok(op, e2 + 1, e3 - e2 - 1) { return false; }
+  return crate::bud_map::units_ok(op, e3 + 1, e4 - e3 - 1);
 }
 
 // Loads the charge view for ref (sk, bk) from the session blob into cv; cv[0] = 1 when current. Returns the blob
@@ -109,9 +102,10 @@ fn load_cv(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64, 
   if bn < 0 || bn > 4294967296 || bs < 0 || bs > 1099511627776 { return -1; }
   if off + n <= len(st) && bs + bn <= len(bk) && len(cv) >= 15 {
     // the whole blob, the budget id and cv in range: one check, then plain indexing. n == 15 + bn (with bn >= 0)
-    // gives n >= 15; under I1 word 14 == n - 15, so n == 15 + bn also implies st[off + 14] == bn (not compared).
+    // gives n >= 15. st is not assumed valid: word 14 is compared with bn too, folded into one test with the state
+    // word (both are 0 exactly when word 14 == bn and the state is not negative).
     if n != 15 + bn { return -1; }
-    if st[off] < 0 { return -1; }
+    if bor(bxor(st[off + 14], bn), band(st[off], -9223372036854775807 - 1)) != 0 { return -1; }
     // id compare without an early exit: d is 0 exactly when every unit is equal (the loop vectorizes)
     let mut d: i64 = 0;
     let mut q: i64 = 0;
@@ -256,9 +250,9 @@ pub fn t_call(inout st: [i64], op: [i64], inout cv: [i64], inout fx: [i64]) -> i
   let sn: i64 = op[1];
   if code == 4 {
     if e1 != len(op) { return 2; }
+    // every key unit is checked before anything is written
+    if !keys_ok_1(op, e1) { return 2; }
     let fr: i64 = crate::bud_tools::forget_turn(inout st, op, 2, sn);
-    // absent (nothing written): the turn key is unadmitted external input
-    if fr == 0 && !crate::bud_map::units_ok(op, 2, e1 - 2) { return 2; }
     return 0;
   }
   let e2: i64 = key_span(op, e1);
@@ -266,12 +260,9 @@ pub fn t_call(inout st: [i64], op: [i64], inout cv: [i64], inout fx: [i64]) -> i
   let bn: i64 = crate::ent_u16::rd(op, e1);
   if code == 1 {
     if e2 + 10 != len(op) { return 2; }
+    if !keys_ok_2(op, e1, e2) { return 2; }
     let bo: i64 = load_cv(st, op, 2, sn, op, e1 + 1, bn, inout cv);
-    // bo >= 0: no unit check. The session key equals a stored key (compared unit by unit in bud_map entry_matches),
-    // the budget id equals the stored id (compared word by word in load_cv, d == 0), and every stored key / id
-    // passed t_put's units_ok (store invariant I1, see the header).
-    if bo < 0 && !refs_ok(op, e1, e2) { return 2; }
-    let r: i64 = crate::bud_charge::charge_admitted(inout cv, op, e2);
+    let r: i64 = crate::bud_charge::charge(inout cv, op, e2);
     crate::ent_u16::wr(inout fx, 1, r);
     if r == 2 || r == 5 { return r; }
     if r >= 33 && r <= 36 {
@@ -286,9 +277,8 @@ pub fn t_call(inout st: [i64], op: [i64], inout cv: [i64], inout fx: [i64]) -> i
   }
   if code == 2 {
     if e2 != len(op) { return 2; }
+    if !keys_ok_2(op, e1, e2) { return 2; }
     let bo: i64 = load_cv(st, op, 2, sn, op, e1 + 1, bn, inout cv);
-    // bo >= 0: keys equal stored (admitted) keys, so no unit check (same argument as code 1, store invariant I1)
-    if bo < 0 && !refs_ok(op, e1, e2) { return 2; }
     let r: i64 = crate::bud_charge::note_failure(inout cv);
     if r != 0 { return r; }
     let w: i64 = store_cv(inout st, bo, cv);
@@ -300,10 +290,10 @@ pub fn t_call(inout st: [i64], op: [i64], inout cv: [i64], inout fx: [i64]) -> i
     if e3 < 0 { return 2; }
     let e4: i64 = key_span(op, e3);
     if e4 != len(op) { return 2; }
-    // the session and budget refs are not looked up on the dedup path: unadmitted input, checked up front
-    if !refs_ok(op, e1, e2) { return 2; }
+    // all four keys are checked before note_tool writes anything
+    if !keys_ok_4(op, e1, e2, e3, e4) { return 2; }
     // turn key op[e2+1 .. e3), activity key op[e3+1 .. e4)
-    let t: i64 = note_tool_v(inout st, op, e2 + 1, e3 - e2 - 1, e3 + 1, e4 - e3 - 1);
+    let t: i64 = crate::bud_tools::note_tool(inout st, op, e2 + 1, e3 - e2 - 1, op, e3 + 1, e4 - e3 - 1);
     if t != 1 { return t; }
     let bo: i64 = load_cv(st, op, 2, sn, op, e1 + 1, bn, inout cv);
     let r: i64 = crate::bud_charge::add_tool(inout cv);

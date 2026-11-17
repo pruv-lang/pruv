@@ -2,6 +2,10 @@
 //
 //   driver_m8 q              program on stdin, one case after another:
 //                              case <id> | put <words...> | step <i> | call <op words...> | end
+//                              | poke <k> <p1> ... <pk> <delta> <value>
+//                              poke corrupts the resident buffer for tests (see corrupt_resident.py): the first index i
+//                              with st[i..i+k] == [p1..pk] gets st[i+delta] = value (when in range); prints `Z <i>`, or
+//                              `Z -` when the pattern is absent. It calls no sol:: function.
 //   driver_m8 perf <N> <reps> perf items, see run_perf below
 //
 // Boundary rule: the host owns the state buffer and the scratch frames but never reads state words and decides
@@ -168,6 +172,30 @@ fn run_q() {
                 }
             }
             "call" => {}
+            "poke" => {
+                // poke <k> <p1> ... <pk> <delta> <value>: test-only corruption of the resident buffer (calls no sol::
+                // function). Finds the first i (scanning st from 0) with st[i..i+k] == [p1..pk]; if found, sets
+                // st[i+delta] = value (only when that index is in range) and prints `Z <i>`, else prints `Z -`.
+                let k: usize = p[1].parse().unwrap();
+                let pat = nums(&p[2..2 + k]);
+                let delta: i64 = p[2 + k].parse().unwrap();
+                let value: i64 = p[3 + k].parse().unwrap();
+                let found = if k == 0 || w.st.len() < k {
+                    None
+                } else {
+                    (0..=w.st.len() - k).find(|&i| w.st[i..i + k] == pat[..])
+                };
+                match found {
+                    Some(i) => {
+                        let t = i as i64 + delta;
+                        if t >= 0 && (t as usize) < w.st.len() {
+                            w.st[t as usize] = value;
+                        }
+                        writeln!(o, "Z {}", i).unwrap();
+                    }
+                    None => writeln!(o, "Z -").unwrap(),
+                }
+            }
             "end" => {
                 let ob = w.observe();
                 writeln!(o, "{}", ob).unwrap();

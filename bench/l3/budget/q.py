@@ -1,6 +1,8 @@
 """L3-10 Q runner (spec 11): generate cases with q_gen.gen, run the Node oracle twice, check it, optionally compare an implementation.
   python3 q.py [--seed 20261117] [--families 1,2,...,8] [--per-family 250] [--count N] [--batch 500] [--impl PATH [ARGS...]]
-                [--impl-arg ARG ...] [--lane native|hand|ts] [--profile S|M|SM] [--pruvc P] [--rustc R] [--json OUT]
+                [--impl-arg ARG ...] [--lane native|hand|ts] [--profile S|M|SM] [--pruvc P] [--rustc R] [--backend B] [--build-flags "F"] [--json OUT]
+--backend / --build-flags describe how the --impl binary was built (default: lane ts -> "ts-oracle" / "n/a", else <impl>.build.json,
+else "unknown"); the metadata never assumes a backend or flags.
 Exit status: 0 only when an implementation ran and every case was compared and matched; 1 = any failure (unexplained difference, oracle
 failure, non-zero implementation exit status, extra output lines, uncompared cases); 3 = no implementation (oracle determinism only,
 the last line is "RESULT oracle-only" and is never a Pruv success). Every run ends with a "RESULT <pass|fail|oracle-only>" line; the
@@ -16,6 +18,7 @@ import sys
 sys.dont_write_bytecode = True
 import argparse
 import json
+import shlex
 import shutil
 import subprocess
 import time
@@ -27,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import compare as compare_mod  # noqa: E402
 from common import HERE, strip_case  # noqa: E402
 from oracle import run_oracle  # noqa: E402
-from run_meta import PROFILES, SEED, impl_argv, run_meta  # noqa: E402
+from run_meta import PROFILES, SEED, UNKNOWN, impl_argv, run_meta  # noqa: E402
 
 WORK = HERE / 'work' / 'q'
 FAIL_DIR = WORK / 'fail'
@@ -70,11 +73,50 @@ def add_common_args(ap):
     ap.add_argument('--profile', choices=sorted(PROFILES), help='S=100, M=500, SM=both (recorded in the metadata)')
     ap.add_argument('--pruvc', help='path of the Pruv compiler used to build the implementation (recorded)')
     ap.add_argument('--rustc', help='rustc path (recorded; default: rustc on PATH)')
+    ap.add_argument('--backend', help='backend the --impl binary was built with (recorded as given; default: read <impl>.build.json, else "unknown")')
+    ap.add_argument('--build-flags', help='build flags of the --impl binary, one string split with shlex (write --build-flags="-C opt-level=3")')
+
+
+def _sidecar_build_info(argv):
+    """-> (backend, flags) read from `<file>.build.json` next to the first argv element that has one, else (None, None).
+    The JSON needs the keys backend / flags (flags: list or one string)."""
+    for item in argv or []:
+        side = Path(str(item) + '.build.json')
+        if not side.is_file():
+            continue
+        try:
+            info = json.loads(side.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        if isinstance(info, dict) and info.get('backend') is not None and info.get('flags') is not None:
+            flags = info['flags']
+            return str(info['backend']), shlex.split(flags) if isinstance(flags, str) else [str(f) for f in flags]
+    return None, None
+
+
+def resolve_build(args):
+    """-> (backend, flags) describing how the implementation was built. Explicit --backend / --build-flags win; lane ts is the
+    oracle ("ts-oracle", "n/a"); otherwise <impl>.build.json; anything still missing is UNKNOWN (never guessed)."""
+    backend = getattr(args, 'backend', None)
+    text = getattr(args, 'build_flags', None)
+    flags = shlex.split(text) if text is not None else None
+    if getattr(args, 'lane', None) == 'ts':
+        return backend if backend is not None else 'ts-oracle', flags if flags is not None else 'n/a'
+    if backend is None or flags is None:
+        try:
+            argv = impl_from_args(getattr(args, 'impl', None), getattr(args, 'impl_arg', None))
+        except ValueError:
+            argv = None
+        side_backend, side_flags = _sidecar_build_info(argv)
+        backend = backend if backend is not None else side_backend
+        flags = flags if flags is not None else side_flags
+    return (backend if backend is not None else UNKNOWN), (flags if flags is not None else UNKNOWN)
 
 
 def build_meta(args, seed=SEED, extra=None):
-    return run_meta(pruvc=getattr(args, 'pruvc', None), backend='rust', rustc=getattr(args, 'rustc', None) or shutil.which('rustc'),
-                    seed=seed, profile=getattr(args, 'profile', None), lanes=[args.lane], extra=extra)
+    backend, flags = resolve_build(args)
+    return run_meta(pruvc=getattr(args, 'pruvc', None), backend=backend, rustc=getattr(args, 'rustc', None) or shutil.which('rustc'),
+                    flags=flags, seed=seed, profile=getattr(args, 'profile', None), lanes=[args.lane], extra=extra)
 
 
 def run_impl(cmd, cases, size):

@@ -40,6 +40,7 @@ OUT_OF_SCOPE = ("reopen", "halt", "current", "isHalted", "hasCard")
 HALT_CHECKED = [0]
 CHK_OK = [0]
 CALLS = {}
+BUILDS = {}  # binary name -> the rustc argv that built it in this run (recorded into the perf meta)
 
 
 def rustc():
@@ -61,10 +62,11 @@ def build(args):
         f.write('#![allow(dead_code, unused_imports, unused_variables, unused_mut)]\n#[path = "gen.rs"] mod sol;\n')
         f.write(open(os.path.join(HERE, "driver_m8.rs")).read())
     exe = os.path.join(WORK, "driver_m8")
-    c = subprocess.run([rustc(), "-C", "opt-level=3", "--edition", "2021", "-o", exe, main], capture_output=True,
-                       text=True)
+    argv = [rustc(), "-C", "opt-level=3", "--edition", "2021", "-o", exe, main]
+    c = subprocess.run(argv, capture_output=True, text=True)
     if c.returncode != 0:
         sys.exit("rustc failed:\n" + c.stderr[-4000:])
+    BUILDS[os.path.basename(exe)] = argv
     return exe
 
 
@@ -92,11 +94,11 @@ def build_hand(name):
     src, extra = HANDS[name]
     os.makedirs(WORK, exist_ok=True)
     exe = os.path.join(WORK, name)
-    c = subprocess.run([rustc(), "-C", "opt-level=3", "--edition", "2021"] + extra + ["-o", exe,
-                                                                                       os.path.join(HERE, src)],
-                       capture_output=True, text=True)
+    argv = [rustc(), "-C", "opt-level=3", "--edition", "2021"] + extra + ["-o", exe, os.path.join(HERE, src)]
+    c = subprocess.run(argv, capture_output=True, text=True)
     if c.returncode != 0:
         sys.exit("rustc failed (%s):\n%s" % (name, c.stderr[-3000:]))
+    BUILDS[name] = argv
     return exe
 
 
@@ -549,7 +551,7 @@ def cmd_perf(args):
                            "instr_unavailable": unavail or [],
                            "lane_cmds": {s: [os.path.basename(c) for c in cmd[:2]] for s, cmd in sides[:-1]},
                            "fxmix_extra_flags": HANDS["hand_m8_fx"][1], "chk_lanes": CHK_LANES,
-                           "chk_checked": CHK_OK[0]})
+                           "chk_checked": CHK_OK[0], "builds": BUILDS})
     os.makedirs(WORK, exist_ok=True)
     with open(os.path.join(WORK, "perf_meta.json"), "w") as f:
         json.dump(meta, f, indent=2, ensure_ascii=False)

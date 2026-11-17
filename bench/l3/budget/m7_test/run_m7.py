@@ -9,6 +9,8 @@
 q --hand16 runs hand_m7_u16.rs (typed UTF-16 hand Rust, q mode) on the same program instead of the Pruv driver, through the
 same classification. perf lanes: pruv (driver_m7), hand16 (hand_m7_u16), hand (hand_m7, UTF-8 String, informational), ts.
 perf also writes work/m7/perf.json with run_meta.run_meta(...) and the rows (ns, retired instructions, ratios).
+perf compares per cell the per-op result checksum `rchk` of pruv and hand16 (untimed verification pass in both lanes); a
+mismatch or missing rchk fails the cell (no ratio) and the exit status.
 If work/m7/cases.jsonl / oracle.jsonl are missing the read-only source SRC_WORK is read instead.
 
 q: each Q1 case (work/m7/cases.jsonl) becomes a driver program; per request the driver prints the M7 effects in order
@@ -539,9 +541,13 @@ def cmd_perf(args):
     """Rotates Pruv / hand16 / hand / TS per round and size; prints the median ns per call of each item, retired
     instructions per call (Pruv, hand16) and Pruv/hand16 (the bar). Writes work/m7/perf.json with run_meta.
 
-    The hand16 lane prints `chk item size value` (final observed state folded); the Pruv driver has no checksum (it is
-    outside this folder's remit), so state equality Pruv vs hand16 is checked by diff_hand_m7.py through the q-mode
-    observation; chk here only has to be identical across rounds.
+    The hand16 lane prints `chk item size value` (final observed state folded); chk only has to be identical across
+    rounds (state equality Pruv vs hand16 is checked by diff_hand_m7.py through the q-mode observation).
+    Both pruv and hand16 print `rchk item size value`: a checksum of every op's status, effect words and result words
+    from an untimed verification pass (fresh identical setup, min(reps, 2000) iterations). Per cell the two must be
+    equal; a missing or different value (or one that varies across rounds) marks the cell `RCHK MISSING` /
+    `RCHK MISMATCH`, drops its ratios, is recorded in perf.json and makes the command exit non-zero. dispatch and
+    rawcall (pruv only) print rchk too but are not compared. Last line: `result checks: N cells compared, M mismatches`.
 
     Instructions: driver_m7 `perf` runs every item in one process (no item argument), so its per-item instructions are
     taken from `driver_m7 boundary S reps item A` (the same World::call path and bodies as perf) minus the same item's
@@ -558,7 +564,7 @@ def cmd_perf(args):
           os.path.join(HERE, "perf_ts.mjs")]
     sides = [("pruv", [exe, "perf"]), ("hand16", [hand16, "perf"]), ("hand", [hand]), ("ts", ts)]
     sizes = perf_sizes(args)
-    res, chk = {}, {}
+    res, chk, rchk = {}, {}, {}
     for rd in range(args.rounds):
         for size in (sizes if rd % 2 == 0 else sizes[::-1]):
             k = rd % len(sides)  # rotate the lane order every round
@@ -572,9 +578,27 @@ def cmd_perf(args):
                     if f[0] == "chk":  # chk <item> <size> <value> (hand16 only)
                         chk.setdefault((f[1], int(f[2])), set()).add(f[3])
                         continue
+                    if f[0] == "rchk":  # rchk <item> <size> <value> (pruv and hand16; per-op results, untimed pass)
+                        rchk.setdefault((f[1], int(f[2])), {}).setdefault(side, set()).add(f[3])
+                        continue
                     item, sz, ns = f
                     res.setdefault((item, int(sz)), {}).setdefault(side, []).append(float(ns))
     bad = ["chk %s %d varies across rounds: %s" % (i, s, sorted(v)) for (i, s), v in sorted(chk.items()) if len(v) != 1]
+    # Per-cell result check: Pruv vs hand16 rchk of every item both lanes run. A missing value on either lane, a value
+    # that varies across rounds, or a different value is a FAIL cell (no ratio is reported for it).
+    cell_status, n_cmp, n_bad = {}, 0, 0
+    for (item, sz) in sorted(res):
+        if item not in PERF_ITEMS:
+            continue
+        n_cmp += 1
+        r = rchk.get((item, sz), {})
+        p, h = r.get("pruv", set()), r.get("hand16", set())
+        if not p or not h:
+            cell_status[(item, sz)] = "RCHK MISSING"
+        elif len(p) != 1 or len(h) != 1 or p != h:
+            cell_status[(item, sz)] = "RCHK MISMATCH"
+        if (item, sz) in cell_status:
+            n_bad += 1
     instr = {}
     if not args.no_instr:
         for size in sizes:
@@ -599,13 +623,21 @@ def cmd_perf(args):
         ip, ih = instr.get(("pruv", item, sz)), instr.get(("hand16", item, sz))
         ir = (ip / ih) if ip is not None and ih else None
         fr = lambda x: "-" if x is None else "%.2f" % x
-        print("%s | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s" % (
+        fail = cell_status.get((item, sz))
+        if fail:  # no ratio of a cell whose per-op results are unchecked or differ
+            rt = lambda a, b: None
+            ir = None
+        print("%s | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s%s" % (
             item, sz, f("pruv"), f("hand16"), f("hand"), f("ts"), fr(rt("pruv", "hand16")), fr(rt("pruv", "hand")),
             fi(ip) if item in PERF_ITEMS and not args.no_instr else "-",
-            fi(ih) if item in PERF_ITEMS and not args.no_instr else "-", fr(ir)))
+            fi(ih) if item in PERF_ITEMS and not args.no_instr else "-", fr(ir),
+            " | FAIL " + fail if fail else ""))
+        rc = rchk.get((item, sz), {})
         rows.append({
             "item": item, "size": sz,
             "ns": {k: m[k] for k in m}, "raw_ns": v,
+            "rchk": {s_: sorted(x) for s_, x in rc.items()} or "unavailable",
+            "rchk_status": fail or ("ok" if item in PERF_ITEMS else "not compared (pruv only)"),
             "pruv_over_hand16": num(rt("pruv", "hand16")), "pruv_over_hand_old": num(rt("pruv", "hand")),
             "instr_pruv": num(ip), "instr_hand16": num(ih), "instr_pruv_over_hand16": num(ir),
             "instr_pruv_boundary_A": num(instr.get(("pruv_A", item, sz))),
@@ -616,12 +648,18 @@ def cmd_perf(args):
                     seed=SEED, profile=args.profile or "custom:" + ",".join(map(str, sizes)),
                     lanes=[s for s, _ in sides],
                     extra={"rounds": args.rounds, "reps": args.reps, "sizes": sizes, "instr_enabled": not args.no_instr,
-                           "pruv_checksum": "unavailable (driver_m7 has no chk; state equality via diff_hand_m7.py q)"})
+                           "pruv_checksum": "rchk per op (driver_m7), compared with hand16 per cell"})
     with open(os.path.join(WORK, "perf.json"), "w") as f:
-        json.dump({"meta": meta, "rows": rows, "checksum_problems": bad}, f, indent=1)
+        json.dump({"meta": meta, "rows": rows, "checksum_problems": bad,
+                   "result_checks": {"compared": n_cmp, "mismatches": n_bad,
+                                     "failed_cells": ["%s %d: %s" % (i, s_, t) for (i, s_), t in sorted(cell_status.items())]}},
+                  f, indent=1)
     for b in bad:
         print("CHK NONDETERMINISTIC", b)
-    return 1 if bad else 0
+    for (i, s_), t in sorted(cell_status.items()):
+        print("FAIL %s %d: %s" % (i, s_, t))
+    print("result checks: %d cells compared, %d mismatches" % (n_cmp, n_bad))
+    return 1 if bad or n_bad else 0
 
 
 def instr_retired(cmd, soft=False):
