@@ -29,13 +29,14 @@ fn key_end(op: [i64], p: i64) -> i64
 {
   let n: i64 = len(op);
   if p >= n { return -1; }
-  let kn: i64 = crate::ent_u16::rd(op, p);
+  let kn: i64 = op[p];
   if kn < 0 || kn > n - p - 1 { return -1; }
   return p + 1 + kn;
 }
 
-// Loads the charge view for ref (sk, bk) from the session blob into cv; cv[0] = 1 when current. Returns the session
-// entry when current, else -1.
+// Loads the charge view for ref (sk, bk) from the session blob into cv; cv[0] = 1 when current. Returns the blob
+// offset of the session's budget record when current, else -1 (store_cv writes the counters back there; the state
+// does not change between load_cv and store_cv).
 fn load_cv(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64, inout cv: [i64]) -> i64
 {
   crate::ent_u16::wr(inout cv, 0, 0);
@@ -43,10 +44,45 @@ fn load_cv(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64, 
   if se < 0 { return -1; }
   let a: i64 = crate::bud_store::field_addr(st, se);
   if a < 0 { return -1; }
-  let n: i64 = crate::bud_store::c40(crate::ent_u16::rd(st, a + 13));
-  let off: i64 = crate::bud_store::c40(crate::ent_u16::rd(st, a + 12));
+  let mut n: i64 = 0;
+  let mut off: i64 = 0;
+  if a + 14 <= len(st) {
+    // fields 12, 13 in range: read directly (rd gives the same words)
+    n = crate::bud_store::c40(st[a + 13]);
+    off = crate::bud_store::c40(st[a + 12]);
+  } else {
+    n = crate::bud_store::c40(crate::ent_u16::rd(st, a + 13));
+    off = crate::bud_store::c40(crate::ent_u16::rd(st, a + 12));
+  }
   if n < 15 { return -1; }
   if bn < 0 || bn > 4294967296 || bs < 0 || bs > 1099511627776 { return -1; }
+  if off + n <= len(st) && bs + bn <= len(bk) && len(cv) >= 15 {
+    // the whole blob, the budget id and cv in range: one check, then plain indexing (same tests and words as the
+    // total path below)
+    if st[off] < 0 { return -1; }
+    if n != 15 + bn || st[off + 14] != bn { return -1; }
+    // id compare without an early exit: d is 0 exactly when every unit is equal (the loop vectorizes)
+    let mut d: i64 = 0;
+    let mut q: i64 = 0;
+    while q < bn
+      invariant 0 <= q && q <= bn && 0 <= off && off + 15 + bn <= len(st) && 0 <= bs && bs + bn <= len(bk)
+      decreases bn - q
+    {
+      d = bor(d, bxor(st[off + 15 + q], bk[bs + q]));
+      q = q + 1;
+    }
+    if d != 0 { return -1; }
+    let mut c: i64 = 0;
+    while c < 14
+      invariant 0 <= c && c <= 14 && 0 <= off && off + 15 <= len(st) && len(cv) >= 15
+      decreases 14 - c
+    {
+      cv[1 + c] = st[off + c];
+      c = c + 1;
+    }
+    cv[0] = 1;
+    return off;
+  }
   if crate::ent_u16::rd(st, off) < 0 { return -1; }
   if crate::ent_u16::rd(st, off + 14) != bn || n != 15 + bn { return -1; }
   let mut j: i64 = 0;
@@ -66,22 +102,32 @@ fn load_cv(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64, 
     i = i + 1;
   }
   crate::ent_u16::wr(inout cv, 0, 1);
-  return se;
+  return off;
 }
 
-// Writes the counters cv[8..14] back into blob words 7..13 (in place: same length).
-fn store_cv(inout st: [i64], se: i64, cv: [i64]) -> i64
+// Writes the counters cv[8..14] back into blob words 7..13 at the offset load_cv returned (in place: same length).
+fn store_cv(inout st: [i64], off: i64, cv: [i64]) -> i64
 {
-  if se < 0 { return 0; }
-  let n: i64 = crate::bud_map::blob_len(st, se);
-  if n < 15 { return 2; }
-  let a: i64 = crate::bud_store::c40(crate::bud_store::ef(st, se, 12));
+  if off < 0 { return 0; }
+  if off <= 1099511627776 && off + 14 <= len(st) && len(cv) >= 15 {
+    // words off+7..off+13 and cv[8..14] in range: plain indexing (same writes as the total path below)
+    let mut k: i64 = 7;
+    while k < 14
+      invariant 7 <= k && k <= 14 && 0 <= off && off + 14 <= len(st) && len(cv) >= 15
+      decreases 14 - k
+    {
+      st[off + k] = cv[1 + k];
+      k = k + 1;
+    }
+    return 0;
+  }
+  if off > 1099511627776 { return 2; }
   let mut i: i64 = 7;
   while i < 14
-    invariant 7 <= i && i <= 14
+    invariant 7 <= i && i <= 14 && 0 <= off && off <= 1099511627776
     decreases 14 - i
   {
-    crate::ent_u16::wr(inout st, a + i, crate::ent_u16::rd(cv, 1 + i));
+    crate::ent_u16::wr(inout st, off + i, crate::ent_u16::rd(cv, 1 + i));
     i = i + 1;
   }
   return 0;
@@ -134,12 +180,12 @@ pub fn t_call(inout st: [i64], op: [i64], inout cv: [i64], inout fx: [i64]) -> i
 {
   if !crate::bud_store::valid(st) { return 2; }
   if len(op) < 2 || len(fx) < 2 || len(cv) < 15 { return 2; }
-  crate::ent_u16::wr(inout fx, 0, 1);
-  crate::ent_u16::wr(inout fx, 1, 0);
-  let code: i64 = crate::ent_u16::rd(op, 0);
+  fx[0] = 1;
+  fx[1] = 0;
+  let code: i64 = op[0];
   let e1: i64 = key_end(op, 1);
   if e1 < 0 { return 2; }
-  let sn: i64 = crate::ent_u16::rd(op, 1);
+  let sn: i64 = op[1];
   if code == 4 {
     if e1 != len(op) { return 2; }
     let fr: i64 = crate::bud_tools::forget_turn(inout st, op, 2, sn);
@@ -150,7 +196,7 @@ pub fn t_call(inout st: [i64], op: [i64], inout cv: [i64], inout fx: [i64]) -> i
   let bn: i64 = crate::ent_u16::rd(op, e1);
   if code == 1 {
     if e2 + 10 != len(op) { return 2; }
-    let se: i64 = load_cv(st, op, 2, sn, op, e1 + 1, bn, inout cv);
+    let bo: i64 = load_cv(st, op, 2, sn, op, e1 + 1, bn, inout cv);
     let r: i64 = crate::bud_charge::charge(inout cv, op, e2);
     crate::ent_u16::wr(inout fx, 1, r);
     if r == 2 || r == 5 { return r; }
@@ -159,17 +205,17 @@ pub fn t_call(inout st: [i64], op: [i64], inout cv: [i64], inout fx: [i64]) -> i
       return h;
     }
     if r == 0 {
-      let w: i64 = store_cv(inout st, se, cv);
+      let w: i64 = store_cv(inout st, bo, cv);
       if w != 0 { return 2; }
     }
     return 0;
   }
   if code == 2 {
     if e2 != len(op) { return 2; }
-    let se: i64 = load_cv(st, op, 2, sn, op, e1 + 1, bn, inout cv);
+    let bo: i64 = load_cv(st, op, 2, sn, op, e1 + 1, bn, inout cv);
     let r: i64 = crate::bud_charge::note_failure(inout cv);
     if r != 0 { return r; }
-    let w: i64 = store_cv(inout st, se, cv);
+    let w: i64 = store_cv(inout st, bo, cv);
     if w != 0 { return 2; }
     return 0;
   }
@@ -182,10 +228,10 @@ pub fn t_call(inout st: [i64], op: [i64], inout cv: [i64], inout fx: [i64]) -> i
     let an: i64 = crate::ent_u16::rd(op, e3);
     let t: i64 = crate::bud_tools::note_tool(inout st, op, e2 + 1, tn, op, e3 + 1, an);
     if t != 1 { return t; }
-    let se: i64 = load_cv(st, op, 2, sn, op, e1 + 1, bn, inout cv);
+    let bo: i64 = load_cv(st, op, 2, sn, op, e1 + 1, bn, inout cv);
     let r: i64 = crate::bud_charge::add_tool(inout cv);
     if r != 0 { return r; }
-    let w: i64 = store_cv(inout st, se, cv);
+    let w: i64 = store_cv(inout st, bo, cv);
     if w != 0 { return 2; }
     return 0;
   }
