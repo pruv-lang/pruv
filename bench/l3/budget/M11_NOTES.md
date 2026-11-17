@@ -87,28 +87,51 @@ reported as fails; this was not re-run for these notes.
 Before timing, `handcheck` asserts that `hand.rs` writes exactly the same result words as the Pruv entry (a minimal
 card and a card with every optional field, three successive calls each); `run_m11.py --perf` aborts otherwise.
 
-| item | size | Pruv ns | hand Rust ns | TS ns | Pruv/hand |
+| item | size | Pruv ns | hand Rust ns | TS ns | Pruv/hand (before 2026-11-17) |
 |---|---|---|---|---|---|
-| A validate+build, U units | 100 | 536.8 | 524.2 | 841.5 | 1.02 |
-| A | 300 | 663.7 | 609.5 | 1292.9 | 1.09 |
-| A (deliverable > 300: error path) | 1000 | 29.0 | 20.6 | 804.6 | 1.41 |
-| B n successive setCard, one budget | 100 | 1075.0 | 762.7 | 638.6 | 1.41 |
-| B | 500 | 1070.0 | 761.8 | 651.9 | 1.40 |
-| B | 1000 | 1079.7 | 763.5 | 656.0 | 1.41 |
-| C = B without stand-in store / out words | 100 | 607.0 | 589.6 | - | 1.03 |
-| C | 1000 | 604.0 | 590.7 | - | 1.02 |
+| A validate+build, U units | 100 | 433.6 | 550.3 | 631.1 | 0.79 (1.02) |
+| A | 300 | 591.9 | 614.3 | 729.8 | 0.96 (1.09-1.17) |
+| A (deliverable > 300: error path) | 1000 | 19.9 | 20.7 | 191.4 | 0.96 (1.41) |
+| B n successive setCard, one budget | 100 | 683.3 | 766.6 | 643.2 | 0.89 (1.41) |
+| B | 500 | 679.4 | 760.9 | 654.5 | 0.89 (1.40) |
+| B | 1000 | 687.0 | 765.0 | 654.7 | 0.90 (1.41) |
+| C = B without stand-in store / out words | 100 | 485.5 | 608.8 | - | 0.80 (1.03) |
+| C | 1000 | 490.3 | 612.4 | - | 0.80 (1.02) |
 
-All items are within 1.5x of hand Rust. Before fixing `put_words` (its size pass walked word by word instead of
-advancing the position), item A was 1.66-2.59x; it is now 1.02-1.41x.
+All items are within the 1.1x bar (tightened 2026-11-17).
 
-**Item B is slower than TS (about 1.7x).** Cause: measurement scope. TS mutates the budget object inside a live
-`Map`; Pruv B (and hand B) go through the M7 **stand-in** store: input checks, `blob_of` (copies the budget word by
-word via `bud_map::blob_unit`), `session_put` of the new budget, and writing the result words. Item C removes the
-stand-in and is 604-607 ns, i.e. about 0.93-0.95x the TS B time, and 1.02-1.03x hand Rust. The hand baseline B
-writes the same result words and is itself slower than TS (762 vs 639-656 ns); the remaining Pruv-over-hand gap in B
-(about 310 ns) is the stand-in's per-unit `blob_of` copy, which hand Rust does as one borrowed slice. The M7 store is specified to keep the budget resident (§8.2/§8.3), so the stand-in cost is not part of the product path. Request to the `bud_map`/`bud_world` owner: a
-whole-blob read (slice) instead of per-unit `blob_unit`, which would also shorten B. Per-call time is flat in n at all
-three sizes (no growth with repeated cards).
+Before fixing `put_words`, item A was 1.66-2.59x. Its size pass walked word by word instead of advancing the
+position.
+
+What changed for the 1.1x bar (results unchanged: Q6 exact 213, prefix-ok 87, `handcheck` same words):
+
+- **Runner (`run_m11.py --perf`).**
+  - A runs `max(2000, 2000000 // U)` reps instead of a fixed count. At U = 1000 the old 200 reps of a 20 ns call
+    timed mostly cold start.
+  - Successive runs alternate the order of the Pruv and hand binaries. Pruv always ran first before, while caches
+    and the clock were still cold.
+  - These two changes alone moved A1000 from 1.41 to about 1.15.
+- **A error path and A300 (`bud_card.pruv`).**
+  - The steady-state gap was the generated `v_end_d` / `obj_get` / `key_is` / `trim_*` doing every V-word read
+    through the total `rd`, and recursing into `v_end_d` for every array element.
+  - The hand code reads the slice directly in one inlined loop.
+  - Now: one range check, then plain proven reads (the old `rd` code is the fallback), and string elements are
+    skipped inline in the element loop.
+  - `build` did the six `obj_get` walks twice (size pass and write pass). The new `card_at` does them once and
+    `put_card_words` takes the offsets.
+  - A scratch build with `#[inline(always)]` on the generated `obj_get` / `text_ok` / `check_required` also reached
+    parity. So the original residue was rustc not inlining the generated non-inline functions, and the source
+    changes above remove the need for it.
+- **B (`m11_test/root.pruv`).**
+  - `blob_of` copied the budget word by word through `bud_map::blob_unit` (field lookups per unit). It now reads
+    `blob_off` once and copies the region with one range check.
+  - `emit_all` wrote each result word through the per-word `emit`. It now copies with one range check when the
+    words fit.
+  - The per-unit path stays as the fallback in both.
+
+Item B is now 0.89-0.90x hand Rust and about 1.05x TS. The TS figure mutates the budget inside a live `Map` with no
+stand-in store, so it does less work. C (no stand-in) is 0.75x TS. Per-call time is flat in n at all three sizes
+(no growth with repeated cards).
 
 ## Complexity check against §9
 
