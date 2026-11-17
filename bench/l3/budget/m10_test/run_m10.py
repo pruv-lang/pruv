@@ -191,6 +191,32 @@ def encode_budget(b):
     return w
 
 
+def prefix_ok(r):
+    """Mirror of bud_halt.pruv prefix_len: True iff the units r start with a well-formed halt prefix (otherwise the
+    whole rest is JSON-opaque). Raw values, nothing is normalized."""
+    n = len(r)
+    if n < 6 or r[0] != -2:
+        return False
+    if not 0 <= r[1] <= 4 or r[2] not in (1, 2):
+        return False
+    al = r[4]
+    if al < 0 or al > n - 6:
+        return False
+    q = 5 + al
+    cnt = r[q]
+    if cnt < 0 or cnt > n:
+        return False
+    p = q + 1
+    for _ in range(cnt):
+        if p >= n:
+            return False
+        ln = r[p]
+        if ln < 0 or ln > n - p - 1:
+            return False
+        p += 1 + ln
+    return p <= n
+
+
 def decode_budget(w):
     if w[0] == -1:
         return None
@@ -203,13 +229,21 @@ def decode_budget(w):
         p += 1 + n
     r = strs[5]
     halt = None
-    if r and r[0] == -2:
+    if prefix_ok(r):
         reason, kind, ms, al = r[1], r[2], r[3], r[4]
+        if reason not in range(5) or kind not in (1, 2) or al < 0 or 5 + al >= len(r):
+            raise ValueError("bad halt prefix %r" % (r[:5],))
         at = text(r[5:5 + al]) if kind == 1 else iso(ms)
         q = 5 + al
+        if r[q] < 0:
+            raise ValueError("bad halt prefix id count")
         ids = []
         for _ in range(r[q]):
+            if q + 1 >= len(r):
+                raise ValueError("halt prefix id past the end")
             n = r[q + 1]
+            if n < 0 or q + 2 + n > len(r):
+                raise ValueError("halt prefix id length past the end")
             ids.append(text(r[q + 2:q + 2 + n]))
             q += 1 + n
         halt = {"reason": REASONS[reason], "at": at, "stoppedDelegationIds": ids}
@@ -310,7 +344,7 @@ def parse_driver(t):
     r = None
     for line in t.splitlines():
         if line.startswith("case "):
-            cur = {"reqs": {}, "order": [], "obs": None, "x": []}
+            cur = {"reqs": {}, "order": [], "obs": None, "x": [], "between": []}
             res[line[5:]] = cur
             r = None
         elif line == "end":
@@ -327,9 +361,12 @@ def parse_driver(t):
         elif line.startswith("F "):
             if r != "-":
                 cur["x"].append((r, "fire inside a request " + line))
+            else:
+                cur["between"].append(("timer.fire", line[2:].strip()))
         elif line.startswith("E "):
             if r == "-":
-                continue  # effects of a timer fire between requests (none in this data: no timer.fire traces)
+                cur["between"].append(mine_effect(line[2:].split(), None))  # effect of a timer fire between requests
+                continue
             cur["reqs"][r]["fx"].append(line[2:].split())
         elif line.startswith("V "):
             cur["reqs"][r]["v"] = list(map(int, line[2:].split()))
@@ -375,6 +412,23 @@ def parse_obs(line):
 
 
 # ---- compare ----
+def oracle_ev(t, between=False):
+    """One oracle trace entry (c in FX) -> effect tuple. Outside a request (between) stopDelegation carries no session."""
+    c = t["c"]
+    a = t.get("a")
+    if c == "carryHeld":
+        sess = jv_decode(a[0]["v"]) if isinstance(a[0], dict) and "v" in a[0] else jv_decode(a[0])
+        return ("carryHeld", sess["id"], jv_decode(a[1]), jv_decode(a[2])["budgetId"])
+    if c == "isQuiet":
+        return ("isQuiet", 1 if jv_decode(t.get("o")) else 0)
+    if c == "stopDelegation":
+        return ("stopDelegation", None if between else tuple(units(a[0])), tuple(units(a[1])))
+    if c in ("timer.set", "timer.clear", "timer.fire"):
+        d = jv_decode(a)
+        return (c, d["token"]) + ((d["delay"],) if c == "timer.set" else ())
+    return (c,)
+
+
 def oracle_fx(o, req):
     ev = []
     on = False
@@ -387,20 +441,32 @@ def oracle_fx(o, req):
         elif c == "call.end":
             break
         elif on and c in FX:
-            a = t.get("a")
-            if c == "carryHeld":
-                sess = jv_decode(a[0]["v"]) if isinstance(a[0], dict) and "v" in a[0] else jv_decode(a[0])
-                ev.append(("carryHeld", sess["id"], jv_decode(a[1]), jv_decode(a[2])["budgetId"]))
-            elif c == "isQuiet":
-                ev.append(("isQuiet", 1 if jv_decode(t.get("o")) else 0))
-            elif c == "stopDelegation":
-                ev.append(("stopDelegation", tuple(units(a[0])), tuple(units(a[1]))))
-            elif c in ("timer.set", "timer.clear", "timer.fire"):
-                d = jv_decode(a)
-                ev.append((c, d["token"]) + ((d["delay"],) if c == "timer.set" else ()))
-            else:
-                ev.append((c,))
+            ev.append(oracle_ev(t))
     return ev
+
+
+def oracle_between(o):
+    """Effects outside any request (timer fires between requests and what they emit), in trace order."""
+    return [oracle_ev(t, True) for t in o["trace"] if t.get("r") is None and t["c"] in FX]
+
+
+def mine_effect(f, sid):
+    """Driver effect words (f = split `E` line) -> effect tuple; sid = the request's session id units, None outside a
+    request."""
+    if f[0] == "quiet":
+        return ("isQuiet", int(f[1]))
+    if f[0] == "set":
+        return ("timer.set", f[1], int(f[3]))
+    if f[0] == "clear":
+        return ("timer.clear", f[1])
+    if f[0] == "stopDel":
+        u = tuple(int(x) for x in f[1].split(",")) if len(f) > 1 else ()
+        return ("stopDelegation", None if sid is None else tuple(units(sid)), u)
+    if f[0] == "carry":
+        return ("carryHeld",)
+    if f[0] in MINE_FX:
+        return (MINE_FX[f[0]],)
+    return ("?" + f[0],)
 
 
 def unwrap(v):
@@ -495,6 +561,15 @@ def classify(case, o, run, cut):
         return "fail", "driver %r" % (run["x"][0],)
     req_o = {r["id"]: r for r in o["requests"]}
     calls = {e["req"]: e for e in case["script"] if e["ev"] == "call"}
+    expected = []
+    for e in case["script"]:
+        if e["ev"] != "call":
+            continue
+        if cut and e["req"] == cut[0]:
+            break
+        expected.append(e["req"])
+    if run["order"] != expected:
+        return "fail", "requests ran %r != expected %r" % (run["order"], expected)
     for r in run["order"]:
         mine = run["reqs"][r]
         e = calls[r]
@@ -510,23 +585,7 @@ def classify(case, o, run, cut):
                 return "fail", "%s value %r != %r" % (r, v, wv)
         elif not same(v, wv):
             return "fail", "%s %s value %r != %r" % (r, e["op"], v, wv)
-        got = []
-        for f in mine["fx"]:
-            if f[0] == "quiet":
-                got.append(("isQuiet", int(f[1])))
-            elif f[0] == "set":
-                got.append(("timer.set", f[1], int(f[3])))
-            elif f[0] == "clear":
-                got.append(("timer.clear", f[1]))
-            elif f[0] == "stopDel":
-                u = tuple(int(x) for x in f[1].split(",")) if len(f) > 1 else ()
-                got.append(("stopDelegation", tuple(units(sid)), u))
-            elif f[0] == "carry":
-                got.append(("carryHeld",))
-            elif f[0] in MINE_FX:
-                got.append((MINE_FX[f[0]],))
-            else:
-                got.append(("?" + f[0],))
+        got = [mine_effect(f, sid) for f in mine["fx"]]
         wfx = oracle_fx(o, r)
         if got != wfx:
             return "fail", "%s %s effects %r != %r" % (r, e["op"], got, wfx)
@@ -534,6 +593,9 @@ def classify(case, o, run, cut):
             STATS["halts"] += 1
     if cut:
         return "not-implemented", "%s (%s)" % (cut[1], OWNER.get(cut[1], "?"))
+    wb = oracle_between(o)
+    if run["between"] != wb:
+        return "fail", "between effects %r != %r" % (run["between"], wb)
     d = compare_final(o, run["obs"])
     if d:
         return "fail", d

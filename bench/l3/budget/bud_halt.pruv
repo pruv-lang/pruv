@@ -60,15 +60,40 @@ pub fn ids_words(a: [i64], s: i64) -> i64
 fn prefix_len(b: [i64], u: i64, l: i64) -> i64
   ensures 0 <= result && result <= 1099511627776
 {
-  if l < 6 || u < 0 || u > 1099511627776 { return 0; }
+  if l < 6 || l > 4294967296 || u < 0 || u > 1099511627776 { return 0; }
   if rd(b, u) != -2 { return 0; }
-  let al: i64 = c32(rd(b, u + 4));
-  let q: i64 = u + 5 + al;
-  let w: i64 = ids_words(b, q);
+  let reason: i64 = rd(b, u + 1);
+  if reason < 0 || reason > 4 { return 0; }
+  let kind: i64 = rd(b, u + 2);
+  if kind != 1 && kind != 2 { return 0; }
+  let al: i64 = rd(b, u + 4);
+  if al < 0 || al > l - 6 { return 0; }
+  let w: i64 = ids_words(b, u + 5 + al);
   if w < 0 { return 0; }
-  let t: i64 = q + w - u;
+  let t: i64 = 5 + al + w;
   if t > l { return 0; }
   return c40(t);
+}
+
+// True iff the n words of the record stored in st at off form a well-formed record frame: n >= 30 and the six
+// strings (raw length words, never clamped) starting at off + 24 end exactly at off + n.
+pub fn rec_ok_in(st: [i64], off: i64, n: i64) -> bool
+{
+  if n < 30 || off < 0 || off > 1099511627776 || n > 1099511627776 { return false; }
+  let end: i64 = off + n;
+  let mut p: i64 = off + 24;
+  let mut i: i64 = 0;
+  while i < 6
+    invariant 0 <= i && i <= 6 && off + 24 <= p && p <= end
+    decreases 6 - i
+  {
+    if p >= end { return false; }
+    let l: i64 = rd(st, p);
+    if l < 0 || l > end - p - 1 { return false; }
+    p = p + 1 + l;
+    i = i + 1;
+  }
+  return p == end;
 }
 
 // Start (length word) of string 5 (rest) of the record stored in st at off.
@@ -177,6 +202,7 @@ pub fn halt(inout st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn
   if se < 0 { return 0; }
   let off: i64 = crate::bud_lifecycle::blob_at(st, se);
   if rd(st, off) != 0 { return 0; }
+  if !rec_ok_in(st, off, crate::bud_lifecycle::blob_n(st, se)) { return 2; }
   let hw: i64 = halt_words(st, se, ids, is);
   let g: i64 = crate::bud_lifecycle::reserve(inout st, hw);
   if g != 0 { return crate::bud_lifecycle::grow(g); }

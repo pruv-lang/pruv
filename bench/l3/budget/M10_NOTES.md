@@ -17,8 +17,12 @@
 2. halt effect order in fx (B:381-397): SETTLE (bud_clock, may emit timerClear 13) → 30 runningDelegationIds
    consumed → state halted + halt section → 31 cancelRecovery → 32 stopMain → [33, i] stopDelegation of id i (list
    order, duplicates kept) → 34 stopAttachedTurns → 35 holdQueued → 36 save → 20 changed → 37 announce.
-   Status: 0 (also when nothing halts: no current / not open), 2 invalid, 3 fx too small (fx[0] + 12 + 2·D > len),
-   -N Grow (nothing written; `halt_words` lets a caller that already wrote reserve first).
+   Status: 0 (also when nothing halts: no current / not open), 2 invalid (bad reason / ids, or the record frame fails
+   `rec_ok_in`: six raw string lengths must end exactly at the blob end), 3 fx too small (fx[0] + 12 + 2·D > len),
+   -N Grow (nothing written; `halt_words` lets a caller that already wrote reserve first). All checks run before the
+   first write; root_m10 run_op also checks the nested halt's fx room and `rec_ok_in` before its clock writes.
+   `prefix_len` accepts a halt prefix only with reason 0..4, atKind 1/2, raw 0 <= atLen <= l-6 and well-formed ids;
+   otherwise rest is opaque JSON (the runner's `prefix_ok` mirrors it).
 3. Helpers: the 17 record helpers of bud_lifecycle.pruv are `pub` on main since the M7 perf pass (d28b52c, see
    M7_NOTES 'API for M10'; M10a's identical visibility edit merged into it) and are used directly. M10a is built on
    the M7 host protocol from that pass: isQuiet is prefetched in op slot 2 and consumed by effect [23]; current
@@ -32,6 +36,14 @@
    sessions as JV objects (key order not compared), clocks the M9 way, active timers (token, due). save snapshots
    are not compared.
 
+## Review (Codex, fixes required, 6 P2, all fixed)
+1. corrupt string length could make halt write past its reservation → `rec_ok_in` before any write (status 2).
+2. run_op wrote clock state before checking the nested halt's fx room → fx room and record checked first.
+3. `prefix_len` clamped a negative atLen → raw range checks on reason / atKind / atLen / ids.
+4. effects between requests were dropped by the comparison → compared (`between`).
+5. a missing request still gave exact → requests ran must equal the expected call list.
+6. decode_budget took negative reasons via Python negative indexing → `prefix_ok` gate and ValueError on bad fields.
+
 ## Known differences / spec notes
 - **KD-M10-1 (spec note, §8.1)**: the Need/resume pattern (return a Need status with nothing written, host answers,
   call again) does not fit a query that comes after a write. In halt, SETTLE (which may already clear the timer)
@@ -42,7 +54,10 @@
   only when the host passes -1). Spec §8.1 should name this prefetched-answer query form.
 
 ## Results (M10a)
-Q (`python3 bench/l3/budget/m10_test/run_m10.py q`, work/m10, 300 cases Q4 150 / Q5 150):
+Q (`python3 bench/l3/budget/m10_test/run_m10.py q`, work/m10, 300 cases Q4 150 / Q5 150). Rust rows use the pruvc-rs
+release built in this worktree after merging main (db2474a, aedd5ab), passed with --pruvc. Besides per-request value
+and effects, a case is exact only if the requests that ran equal the script's calls (up to the cut) and the effects
+outside requests (timer fires between requests) equal the oracle's (none fire in either set).
 
 | set | compiler | exact | not-implemented | fail | halts compared |
 |---|---|---|---|---|---|
@@ -56,11 +71,11 @@ Compared requests (derived set): halt 452, charge 292, maybeClose 266, runStarte
 reopen 51, current 22, isHalted 16. A mutation check (wrong reason table, altered halt.at) produced failures, so the
 comparison is live.
 
-`same`: Rust and Python pruvc output byte-identical (181364 bytes, after `git merge main`).
+`same`: Rust and Python pruvc output byte-identical (182995 bytes, after the review fixes).
 
-Perf (Pruv only, `perf --rounds 3 --reps 20000`, after `git merge main`, one session, halt with D running
-delegations; the loop also puts the record back open, `putback` times that put alone): halt D=10 3.2 µs, D=50
-14.4 µs, D=100 30.6 µs (~0.3 µs per id, linear); putback ~31 ns. Not compared with hand Rust / TS yet (M10b).
+Perf (Pruv only, `perf --rounds 3 --reps 20000`, after the review fixes, one session, halt with D running
+delegations; the loop also puts the record back open, `putback` times that put alone): halt D=10 3.3 µs, D=50
+14.6 µs, D=100 29.5 µs (~0.3 µs per id, linear); putback ~32 ns. Not compared with hand Rust / TS yet (M10b).
 
 ## M10b still needs
 - `bud_decide.pruv`: raise (limits / unlimited; unlimited clears an armed timer, then changed) and decide (extend:
