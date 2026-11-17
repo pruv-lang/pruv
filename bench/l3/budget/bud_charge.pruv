@@ -92,6 +92,49 @@ pub fn charge(inout cv: [i64], what: [i64], ws: i64) -> i64
   return 0;
 }
 
+// charge() for a cv that comes from an admitted record (m8 root load_cv): state is in -1..2 and reason in -1..4 by
+// t_put validation, and cv[0] == 1 implies state >= 0 because load_cv rejects state < 0. So after the s == 2 and
+// s == 1 cases s == 0, and the `s != 0` and `r > 4` rechecks of charge() are dropped. `16 + band(r, 7)` is a cheap
+// total form (identical to 16 + r for r in 0..4) that keeps the arithmetic in range without the removed check.
+pub fn charge_admitted(inout cv: [i64], what: [i64], ws: i64) -> i64
+  requires 0 <= ws && ws <= 1099511627776
+  ensures len(cv) == len(old(cv))
+{
+  if len(cv) < 15 || ws > len(what) - 10 { return 2; }
+  if cv[0] != 1 { return 1; }
+  let s: i64 = cv[1];
+  if s == 2 { return 1; }
+  if s == 1 {
+    let r: i64 = cv[3];
+    if r < 0 { return 17; }
+    return 16 + band(r, 7);
+  }
+  let unl: bool = cv[2] == 1;
+  let a0: i64 = amount(what, ws, 0);
+  let a1: i64 = amount(what, ws, 1);
+  let a2: i64 = amount(what, ws, 2);
+  let a3: i64 = amount(what, ws, 3);
+  let a4: i64 = amount(what, ws, 4);
+  if !unl {
+    if a0 > 0 { let t0: i64 = sum(cv[8], a0); if t0 == bad() { return 5; } if t0 > cv[4] { return 33; } }
+    if a1 > 0 { let t1: i64 = sum(cv[9], a1); if t1 == bad() { return 5; } if t1 > cv[5] { return 34; } }
+    if a2 > 0 { let t2: i64 = sum(cv[10], a2); if t2 == bad() { return 5; } if t2 > cv[6] { return 35; } }
+    if a3 > 0 { let t3: i64 = sum(cv[11], a3); if t3 == bad() { return 5; } if t3 > cv[7] { return 36; } }
+  }
+  let v0: i64 = sum(cv[8], a0);
+  let v1: i64 = sum(cv[9], a1);
+  let v2: i64 = sum(cv[10], a2);
+  let v3: i64 = sum(cv[11], a3);
+  let v4: i64 = sum(cv[14], a4);
+  if v0 == bad() || v1 == bad() || v2 == bad() || v3 == bad() || v4 == bad() { return 5; }
+  cv[8] = v0;
+  cv[9] = v1;
+  cv[10] = v2;
+  cv[11] = v3;
+  cv[14] = v4;
+  return 0;
+}
+
 // counter field f += 1 when the budget is current (any state: §15 #7); 0 done (or nothing to count), 5 ResourceBound,
 // 2 invalid frame.
 fn bump(inout cv: [i64], f: i64) -> i64
