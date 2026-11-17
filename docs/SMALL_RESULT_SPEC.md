@@ -8,8 +8,8 @@ verified program, its obligations and the proof cache are unchanged.
 `int_text(x) -> [i64]` (bench/l3/budget/bud_text.pruv) builds `String(x)` in one `alloc(n, 0)` of at most 17 units.
 Profiling (bench/l3/budget/M6_NOTES.md, KD-M6-3) shows the heap allocation and free of that `Vec` are about 80% of
 the per-call cost on macOS (27-32 ns vs 21-25 ns for V8's `String(n)`). The same pattern (a short text built once,
-read, then dropped) is the common shape of the budget text helpers: `amount_text` builds `int_text(u)` and only reads
-it through `cat`. A hand-edited copy of the generated Rust in the shape below measured 13.7-14.0 ns per call at
+read, then dropped) is the common shape of the budget text helpers: `amount_text` built `int_text(u)` and only read
+it through `cat` (it was later rewritten to a single allocation, bench/l3/budget/perf_headroom/compiler/COMPILER.md). A hand-edited copy of the generated Rust in the shape below measured 13.7-14.0 ns per call at
 n = 1000 (same checksum), so the shape reaches the target; the compiler output is measured again in RESULTS.md.
 
 ## Rule
@@ -56,8 +56,8 @@ callee that returns its parameter must `copy` it, so such a callee cannot keep `
 Not rewritten: calls in other positions (`return f(x)`, `g(f(x))`, `a = f(x)`), `let mut`, `r` passed `inout`,
 written, returned, assigned, put in a struct or passed to a builtin such as `copy`; call sites inside functions that
 are part of a recursion cycle; and further call sites in a function once its rewritten buffers would exceed 4096
-bytes (source order). `limit_text` (returns `int_text(..)`) stays on the heap; `amount_text` and the perf loop are
-rewritten.
+bytes (source order). `limit_text` (returns `int_text(..)`) stays on the heap; `amount_text` and the perf loop were
+rewritten (`amount_text` later stopped calling `int_text`, see perf_headroom/compiler/COMPILER.md).
 
 ### Cost bound
 

@@ -141,3 +141,12 @@ compiled by the main-branch compiler and by the worktree compiler in the same se
 80.0 / 87.8 / 81.0 ns after (n = 100 / 500 / 1000). The remaining cost is the other allocations of this path
 (`one(47)`, `limit_text`, two `cat`s); its Node comparison was a plain `String(u) + "/" + String(limit)` (49 / 49 /
 15 ns), not a pinned helper, so it is no gate. Making that path single-allocation like `refusal` is a separate change.
+
+That change landed (perf_headroom part B, 2026-11-17): `amount_text` now sizes its result once (`int_len(u)`, `/`,
+`int_len(limit)` or `len_nl(lang)`) and writes it in place with `put_int`/`put_nl`, one allocation like `refusal`,
+instead of `int_text` + `one(47)` + `limit_text` + two `cat`s. Measured by
+`perf_headroom/compiler/run_compiler_perf.py` (5 rounds, median of min-of-3, alternating Pruv/hand Rust/Node):
+py/rust 32.9 / 28.5 / 29.8 and rs/rust 29.6 / 28.2 / 26.2 ns (n = 100 / 500 / 1000), down from about 80; hand Rust
+writing the same fresh `Vec<i64>` 33.8 / 29.3 / 30.4, `format!` 62 / 56 / 56, Node template literal 52 / 29 / 27.
+Correctness: `run_m6.py` py/rust and rs/rust 300/300 (sol.rs identical) and 3000/3000 with `--count 3000`. The same
+run for the M6 ops: iso 25-30, refusal 35-40, String(int) 14-16 ns; table and causes in perf_headroom/compiler/COMPILER.md.

@@ -1,0 +1,62 @@
+
+// ---------------------------------------------------------------- perf_headroom/compiler extra entries
+// run_compiler_perf.py appends this to a copy of m6_test/root.pruv. Same loop and checksum shape as p_int there.
+
+// amount_text(1, false, x + d, limit, 0): "used/limit", the M6_NOTES amount_text measurement.
+pub fn p_amt(n: i64, x: i64, limit: i64) -> i64 ! alloc
+  requires 0 <= n && n <= 1000000
+  requires -9007199254740991 <= x && x <= 9007199254740990
+  requires -9007199254740991 <= limit && limit <= 9007199254740991
+{
+  let mut i: i64 = 0;
+  let mut d: i64 = 0;
+  let mut acc: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && 0 <= d && d <= 1 && 0 <= acc && acc <= 1000000 * i
+    decreases n - i
+  {
+    let r: [i64] = crate::bud_text::amount_text(1, false, x + d, limit, 0);
+    let mut l: i64 = len(r);
+    let mut c: i64 = 0;
+    if l > 0 {
+      if band(r[0], 1) != 0 { c = 1 - c; }
+      if band(r[l / 2], 1) != 0 { c = 1 - c; }
+      if band(r[l - 1], 1) != 0 { c = 1 - c; }
+    }
+    if l > 999999 { l = 999999; }
+    acc = acc + l + c;
+    d = 1 - d;
+    i = i + 1;
+  }
+  return acc;
+}
+
+// ent_u16 hot loop: per iteration copy a 64-unit text into a 64-unit buffer with put_all (rd/wr per unit), read one
+// unit back, then change one source unit so the copy cannot be hoisted.
+pub fn p_wr(n: i64, x: i64) -> i64 ! alloc
+  requires 0 <= n && n <= 1000000
+  requires 0 <= x && x <= 65535
+{
+  let mut src: [i64] = alloc(64, 0);
+  let mut k: i64 = 0;
+  while k < 64
+    invariant 0 <= k && k <= 64 && len(src) == 64
+    decreases 64 - k
+  {
+    src[k] = band(x + k, 65535);
+    k = k + 1;
+  }
+  let mut o: [i64] = alloc(64, 0);
+  let mut i: i64 = 0;
+  let mut acc: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && 0 <= acc && acc <= 2 * i && len(o) == 64 && len(src) == 64
+    decreases n - i
+  {
+    let e: i64 = crate::ent_u16::put_all(inout o, 0, src);
+    acc = acc + band(o[(i * 7) % 64], 1) + 1;
+    src[i % 64] = band(band(src[i % 64], 65535) + 1, 65535);
+    i = i + 1;
+  }
+  return acc;
+}
