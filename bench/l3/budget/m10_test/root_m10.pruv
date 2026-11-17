@@ -18,7 +18,7 @@ mod bud_halt;
 //   11 FIRE (the ref the delivered timer captured when it was armed), 12 halt(ref, reason = flag).
 //   what[3..13) = bud_charge's [kind, value] x5 (delegations, commands, reviews, checks, retries).
 // out: lifecycle's tags (0 undef, 1 false, 2 true, 4 budget), charge [5, ok (1 false, 2 true), reason (0..4)].
-// Status: 0 done, 2 invalid, 3 out/fx small, 5 Need isQuiet, -N Grow (nothing written).
+// Status: 0 done, 2 invalid, 3 out/fx small, 5 Need isQuiet (only quiet = -1; the driver always prefetches), -N Grow (nothing written).
 
 fn rd(a: [i64], i: i64) -> i64
 { return crate::ent_u16::rd(a, i); }

@@ -19,7 +19,10 @@
    order, duplicates kept) → 34 stopAttachedTurns → 35 holdQueued → 36 save → 20 changed → 37 announce.
    Status: 0 (also when nothing halts: no current / not open), 2 invalid, 3 fx too small (fx[0] + 12 + 2·D > len),
    -N Grow (nothing written; `halt_words` lets a caller that already wrote reserve first).
-3. Helpers: the 17 record helpers in bud_lifecycle.pruv were made `pub` (visibility only) and are used directly.
+3. Helpers: the 17 record helpers of bud_lifecycle.pruv are `pub` on main since the M7 perf pass (d28b52c, see
+   M7_NOTES 'API for M10'; M10a's identical visibility edit merged into it) and are used directly. M10a is built on
+   the M7 host protocol from that pass: isQuiet is prefetched in op slot 2 and consumed by effect [23]; current
+   returns the view `[4, n, off]`.
 4. Driver: M7 World + M9 timer scheduler (token counter, due = now + effective, by_bid; advance fires due timers in
    (due, token) order through FIRE; on HALT_TIME the root runs halt reason time itself).
 5. Comparison per request: value (charge {ok, reason}, current's budget as JV, booleans, undefined) and the effect
@@ -35,8 +38,8 @@
   precedes `runningDelegationIds(ref)`, and FIRE → HALT_TIME has already written state before halt runs; decide's
   `releaseHeld` is in the same position. Adopted: the host prefetches the next answer into the op (deps queue head,
   default []) and Pruv emits a "consumed" marker effect (fx 30) at the exact query position; the host advances its
-  queue and logs the query there. isQuiet keeps M7's status-5 Need retry (it comes before any write). Spec §8.1
-  should name this second query form.
+  queue and logs the query there. M7's perf pass moved isQuiet to the same form (op slot 2, consumed by [23]; status 5
+  only when the host passes -1). Spec §8.1 should name this prefetched-answer query form.
 
 ## Results (M10a)
 Q (`python3 bench/l3/budget/m10_test/run_m10.py q`, work/m10, 300 cases Q4 150 / Q5 150):
@@ -53,12 +56,11 @@ Compared requests (derived set): halt 452, charge 292, maybeClose 266, runStarte
 reopen 51, current 22, isHalted 16. A mutation check (wrong reason table, altered halt.at) produced failures, so the
 comparison is live.
 
-`same`: Rust and Python pruvc output byte-identical (174871 bytes).
+`same`: Rust and Python pruvc output byte-identical (181364 bytes, after `git merge main`).
 
-Perf (Pruv only, `perf --rounds 3 --reps 20000`, one session, halt with D running delegations; the loop also puts
-the record back open, `putback` times that put alone): halt D=10 5.0 µs, D=50 58.8 µs, D=100 121.8 µs; putback
-~90 ns. Not compared with hand Rust / TS yet (M10b). The per-id cost grows from ~0.5 µs to ~1.2 µs between D=10 and
-D=50; not investigated yet (the stopDelegation fx and the record rewrite are both O(D)).
+Perf (Pruv only, `perf --rounds 3 --reps 20000`, after `git merge main`, one session, halt with D running
+delegations; the loop also puts the record back open, `putback` times that put alone): halt D=10 3.2 µs, D=50
+14.4 µs, D=100 30.6 µs (~0.3 µs per id, linear); putback ~31 ns. Not compared with hand Rust / TS yet (M10b).
 
 ## M10b still needs
 - `bud_decide.pruv`: raise (limits / unlimited; unlimited clears an armed timer, then changed) and decide (extend:

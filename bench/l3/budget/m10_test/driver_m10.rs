@@ -15,7 +15,8 @@
 // [20] changed, [37] announce, [21] carryHeld, [22] uuid, [12, req, eff] timerSet, [13] timerClear, [14] timerForget.
 // Timers (M9): timerSet registers token t<n> due at now + eff with the call's ref (the callback's captured ref) and
 // makes it the budget's timer; timerClear cancels the budget's timer; timerForget drops the budget's handle. adv fires
-// due timers in (due, token) order through FIRE (code 11) with now = due. Need 5: isQuiet answer (default false), retry.
+// due timers in (due, token) order through FIRE (code 11) with now = due. isQuiet: the next answer (default false) is prefetched in op[2]
+// and consumed when the effects hold [23].
 // Grow -N: buffer of max(N, 2*len), t_grow, retry.
 use std::collections::HashMap;
 use std::hint::black_box;
@@ -120,35 +121,35 @@ impl World {
         }
     }
 
-    // One public call (or FIRE); returns the status after the Grow / Need retries, then performs the effects.
+    // One public call (or FIRE); returns the status after the Grow retries, then performs the effects.
     fn call(&mut self, body: &[i64]) -> i64 {
-        let mut quiet = -1i64;
+        let quiet = self.quiet.get(self.next_quiet).copied().unwrap_or(0);
         let mut r = 0;
         let empty = vec![0i64];
         let ids: Vec<i64> = self.rdi.get(self.next_rdi).cloned().unwrap_or(empty);
         let mut op = std::mem::take(&mut self.op);
+        op.clear();
+        op.push(body[0]);
+        op.push(self.now);
+        op.push(quiet);
+        op.extend_from_slice(&body[1..]);
+        op.extend_from_slice(&ids);
         for _ in 0..8 {
-            op.clear();
-            op.push(body[0]);
-            op.push(self.now);
-            op.push(quiet);
-            op.extend_from_slice(&body[1..]);
-            op.extend_from_slice(&ids);
             self.fx[0] = 0;
             r = sol::t_call(&mut self.st, &op, &mut self.bv, &mut self.fx, &mut self.out);
             if r < 0 {
                 self.grow((-r) as usize);
                 continue;
             }
-            if r == 5 && quiet < 0 {
-                quiet = self.quiet.get(self.next_quiet).copied().unwrap_or(0);
-                self.next_quiet += 1;
-                self.note(format!("E quiet {}", quiet));
-                continue;
-            }
             break;
         }
         if r != 0 {
+            // a finished call that consulted isQuiet ([23]) consumed the answer even when it failed afterwards
+            let used = self.fx[0].max(0) as usize;
+            if self.fx[1..=used].contains(&23) {
+                self.next_quiet += 1;
+                self.note(format!("E quiet {}", quiet));
+            }
             self.op = op;
             self.note(format!("X {}", r));
             return r;
@@ -187,6 +188,10 @@ impl World {
                 14 => {
                     self.by_bid.remove(&bid);
                 }
+                23 => {
+                    self.next_quiet += 1;
+                    self.note(format!("E quiet {}", quiet));
+                }
                 30 => {
                     self.next_rdi += 1;
                     self.note("E rdi".to_string());
@@ -222,12 +227,18 @@ impl World {
         }
         self.op = op;
         if !self.silent {
-            let k = match self.out[0] {
-                4 => 2 + self.out[1].max(0) as usize,
-                5 => 3,
-                _ => 1,
+            let w: Vec<String> = match self.out[0] {
+                4 => {
+                    // budget view: the record is st[off..off+n)
+                    let n = self.out[1].max(0) as usize;
+                    let off = self.out[2].max(0) as usize;
+                    let mut v = vec!["4".to_string(), n.to_string()];
+                    v.extend(self.st[off..off + n].iter().map(|x| x.to_string()));
+                    v
+                }
+                5 => self.out[..3].iter().map(|x| x.to_string()).collect(),
+                _ => vec![self.out[0].to_string()],
             };
-            let w: Vec<String> = self.out[..k].iter().map(|x| x.to_string()).collect();
             self.log.push(format!("V {}", w.join(" ")));
         }
         0
