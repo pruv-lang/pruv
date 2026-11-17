@@ -109,6 +109,25 @@ Options, none applied here (compiler untouched, M4 Pruv sources unchanged):
    direct `st[i]` where the bound can be proven; the compiler already emits those unchecked. This needs proof work
    (header validity implying the region bounds) and is not needed for the M4 verdict.
 
+### Source fast paths (L3-10 follow-up)
+
+The hot state code now takes one range check per run of accesses and uses plain `a[i]` inside it. The verifier
+proves those accesses, so they compile to `get_unchecked`. When the check fails, the original `rd`/`wr` code runs, so
+every buffer (short or corrupt included) gives the same result as before. The pattern:
+
+```
+if o + n <= len(st) && s0 + n <= len(src) {
+  while k < n invariant 0 <= k && k <= n && 0 <= o && o + n <= len(st) && 0 <= s0 && s0 + n <= len(src) ... {
+    st[o + k] = src[s0 + k]; k = k + 1;
+  }
+} else { /* original wr/rd loop */ }
+```
+
+Sites: `hash_key`, `entry_matches`, `write_at`, `slot_pos`, `fits_region`, `blob_off` (`bud_map`), `blob_out`,
+`ret_one`, `session_get` (`bud_world`), `ea`, `need`, `valid` (`bud_store`). Sessions went from 739/768 to 645/668
+instructions per op (n = 100/1000) and from 1.51–1.60× to 1.30–1.40× hand Rust in wall time
+(`perf_headroom/HOST.md`). No compiler change.
+
 ## Against hand-written Rust (perf headroom)
 
 `perf_headroom/HOST.md` adds a std-only hand Rust port of the same `exec()` (`perf_headroom/host/src/bin/m4_hand.rs`),

@@ -14,7 +14,7 @@ Details, methods and raw numbers:
 
 | item | Pruv | hand Rust | TS | Pruv/hand | cause | status |
 |---|---|---|---|---|---|---|
-| M4 resident state: sessions | 21.7-23.0 | 13.6-15.1 | 54-59 | 1.60 / 1.52 / 1.51 | `ent_u16::rd`/`wr` total-function guard, about 23% of time (1.17-1.24x without it) | open: guard removal at proven sites |
+| M4 resident state: sessions | 19.0-19.7 | 13.6-15.1 | 54-60 | 1.40 / 1.30 / 1.30 (was 1.60 / 1.52 / 1.51) | was the `ent_u16::rd`/`wr` total-function guard (about 23%); fixed by source fast paths (one range check, plain proven indexing, total fallback). Left: op-decode guards in root_m4 and the word-buffer layout | within bar |
 | M4 resident state: tools | 36-40 | 53 | 60 | 0.69 / 0.75 / 0.74 | - | ok |
 | M4 resident state: clocks | 34-38 | 38-40 | 99-108 | 0.98 / 0.86 / 0.98 | - | ok |
 | M5 store_find, lookup only | 14-16 | 12-13 | - | 1.18 / 1.21 / 1.29 | was id conversion allocation | fixed (33 -> 14-16) |
@@ -28,8 +28,8 @@ Details, methods and raw numbers:
 | `ent_u16` guard, simple write loop `p_wr` | 6.5-7.1 | 6.1-7.1 | 92-154 | 1.00 / 0.99 / 1.08 | guard branch is predicted; no cost in a tight loop | ok |
 
 The guard result differs between `p_wr` (no cost) and M4 sessions (about 23%): in a tight loop the always-taken branch
-is free, while in the M4 state code the guards sit on long dependent chains of reads and block other work. The open
-item is tracked as the next headroom step: at call sites where the verifier already proves `0 <= i < len(a)`, the
-read or write should compile to a plain (unchecked) access without the guard.
+is free, while in the M4 state code the guards sit on long dependent chains of reads and block other work. M4 sessions
+now avoids most of them in source: one range check per run of state accesses, plain proven indexing inside, and the
+total accessor as the fallback (`perf_headroom/HOST.md`, M4 sessions profile).
 
 New budget milestones (M7-M14) report the same three columns in their notes.

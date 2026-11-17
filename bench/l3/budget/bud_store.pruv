@@ -58,26 +58,27 @@ pub fn valid(st: [i64]) -> bool
 {
   let l: i64 = len(st);
   if l < 232 { return false; }
+  // len(st) >= 232 from here, so the header words 0..14 are read directly (hd would return the same values).
   // s == layout_slots(l) without the doubling loop: a power of two in 8..2^32 with 54*(s/2)+16 <= l, and either
   // s > 2^31 or 54*s+16 > l (the loop stops at exactly that s).
-  let s: i64 = hd(st, 4);
+  let s: i64 = st[4];
   if s < 8 || s > 4294967296 { return false; }
   if band(s, s - 1) != 0 { return false; }
   if 54 * (s / 2) + 16 > l { return false; }
   if s <= 2147483648 && 54 * s + 16 <= l { return false; }
   let cap: i64 = s / 2;
-  if hd(st, 0) != 1112884307 || hd(st, 1) != 1 || hd(st, 2) != l { return false; }
-  if hd(st, 3) != 16 || hd(st, 4) != s || hd(st, 5) != 16 + s || hd(st, 6) != cap { return false; }
-  if hd(st, 9) != 16 + 11 * s || hd(st, 11) != l { return false; }
-  let top: i64 = hd(st, 7);
+  if st[0] != 1112884307 || st[1] != 1 || st[2] != l { return false; }
+  if st[3] != 16 || st[4] != s || st[5] != 16 + s || st[6] != cap { return false; }
+  if st[9] != 16 + 11 * s || st[11] != l { return false; }
+  let top: i64 = st[7];
   if top < 0 || top > cap { return false; }
-  let fh: i64 = hd(st, 8);
+  let fh: i64 = st[8];
   if fh < -1 || fh >= top { return false; }
-  let ab: i64 = hd(st, 9);
-  let at: i64 = hd(st, 10);
-  let ae: i64 = hd(st, 11);
+  let ab: i64 = st[9];
+  let at: i64 = st[10];
+  let ae: i64 = st[11];
   if at < ab || at > ae { return false; }
-  if hd(st, 12) < 0 || hd(st, 13) < 0 || hd(st, 14) < 0 { return false; }
+  if st[12] < 0 || st[13] < 0 || st[14] < 0 { return false; }
   return true;
 }
 
@@ -87,9 +88,11 @@ pub fn valid(st: [i64]) -> bool
 fn ea(st: [i64], e: i64, f: i64) -> i64
   ensures result >= -1 && result <= 1099511627776
 {
-  let cap: i64 = c32(hd(st, 6));
+  // len(st) < 7 reads header words 5, 6 as 0 through hd (cap 0, so -1); otherwise both are in range.
+  if len(st) < 7 { return -1; }
+  let cap: i64 = c32(st[6]);
   if e < 0 || e >= cap || f < 0 || f >= 20 { return -1; }
-  return c32(hd(st, 5)) + e * 20 + f;
+  return c32(st[5]) + e * 20 + f;
 }
 
 // Address of field 0 of entry e (fields 0..19 follow it); -1 if e is outside the entry capacity.
@@ -205,13 +208,21 @@ pub fn need(st: [i64], entries: i64, words: i64) -> i64
 {
   let ents: i64 = c32(entries);
   let wds: i64 = c40(words);
-  let live: i64 = c32(hd(st, 12));
-  let used: i64 = c32(hd(st, 13));
-  let lw: i64 = c40(hd(st, 14));
-  let cap: i64 = c32(hd(st, 6));
-  let slots: i64 = c32(hd(st, 4));
-  let top: i64 = c40(hd(st, 10));
-  let ae: i64 = c40(hd(st, 11));
+  // Header words 4..14 are in range when len(st) >= 15; shorter buffers read them as 0 through hd.
+  let mut live: i64 = 0;
+  let mut used: i64 = 0;
+  let mut lw: i64 = 0;
+  let mut cap: i64 = 0;
+  let mut slots: i64 = 0;
+  let mut top: i64 = 0;
+  let mut ae: i64 = 0;
+  if len(st) >= 15 {
+    live = c32(st[12]); used = c32(st[13]); lw = c40(st[14]); cap = c32(st[6]);
+    slots = c32(st[4]); top = c40(st[10]); ae = c40(st[11]);
+  } else {
+    live = c32(hd(st, 12)); used = c32(hd(st, 13)); lw = c40(hd(st, 14)); cap = c32(hd(st, 6));
+    slots = c32(hd(st, 4)); top = c40(hd(st, 10)); ae = c40(hd(st, 11));
+  }
   if live + ents <= cap && used + ents <= slots * 3 / 4 && wds <= ae - top { return 0; }
   let mut n: i64 = c40(len(st));
   if n < 232 { n = 232; }

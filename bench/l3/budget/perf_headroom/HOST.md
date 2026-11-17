@@ -13,9 +13,9 @@ the order of the three sides.
 
 | item | n | Pruv ns | hand Rust ns | TS ns | Pruv/hand | scope | cause | status |
 |---|---:|---:|---:|---:|---:|---|---|---|
-| M4 sessions (get + put) | 100 | 21.7 | 13.6 | 54.4 | 1.60 | one `m4_op` call through the driver's `World::exec`: output capacity check, decode + validate op words, keys from units, map op, result words into `out`, `black_box` on the result | bounds/total guard: the `rd`/`wr` accessor guards, ~23% of the Pruv time (profiled below; 1.24× without them) | open: compiler request 1 (the host can't remove them) |
-| M4 sessions | 500 | 23.0 | 15.1 | 58.6 | 1.52 | same | same | open: compiler request 1 |
-| M4 sessions | 1000 | 22.8 | 15.1 | 57.2 | 1.51 | same | same (1.17× without them) | open: compiler request 1 |
+| M4 sessions (get + put) | 100 | 19.0 | 13.6 | 54.4 | 1.40 | one `m4_op` call through the driver's `World::exec`: output capacity check, decode + validate op words, keys from units, map op, result words into `out`, `black_box` on the result | word-buffer layout plus the op-decode guards left in `m34_test/root_m4.pruv` (profiled below) | within bar (was 1.60; source fast paths, see profile) |
+| M4 sessions | 500 | 19.7 | 15.1 | 59.5 | 1.30 | same | same | within bar (was 1.52) |
+| M4 sessions | 1000 | 19.7 | 15.1 | 56.7 | 1.30 | same | same | within bar (was 1.51) |
 | M4 tools (note seen, note new, forget) | 100 | 35.8 | 51.7 | 59.0 | 0.69 | same | — | within bar |
 | M4 tools | 500 | 40.1 | 53.7 | 60.8 | 0.75 | same | — | within bar |
 | M4 tools | 1000 | 39.2 | 53.1 | 57.6 | 0.74 | same | — | within bar |
@@ -46,24 +46,47 @@ How to read the comparison rows:
 - The `store_find` hand column is text / tree: hand code that writes the frame as JSON text, and hand code that builds
   the same frame as an owned tree. Both include the lookup and first-encode labelling, like the Pruv side.
 
-## M4 sessions: profile (the one item over 1.5×)
+## M4 sessions: profile (was the one item over 1.5×)
 
-Variants: the generated module as is, and a scratch copy with the two `ent_u16::rd`/`wr` guard lines removed (the
-`noguard` variant of M4_NOTES). The driver is the same, and so is the hand binary. 7 alternating runs, medians, ns per
-op:
+Before: 1.51–1.60× hand Rust. Cause: the `ent_u16::rd`/`wr` total accessors, which check `0 <= i < len(a)` on every
+state-word access (~23% of the time; 1.17–1.24× with the guards removed in a scratch copy). The sessions op is almost
+only state-word reads and writes (map probe, key compare, blob copy in and out). The other axes spend more of their
+time in key decoding and map work.
 
-| n | Pruv | Pruv, accessor guards removed | hand | Pruv/hand | no-guard/hand |
-|---:|---:|---:|---:|---:|---:|
-| 100 | 21.8 | 16.8 | 13.6 | 1.60 | 1.24 |
-| 1000 | 22.8 | 17.6 | 15.1 | 1.51 | 1.17 |
+Fix (source only; compiler, lib and host unchanged). The state-word indices come from buffer contents, so no single
+access can be proven in range. Instead each hot run of accesses gets one range check up front. Inside it, plain
+`a[i]` is proven and compiles to `get_unchecked`. Outside it, the original total-accessor code runs, so results are
+the same for every buffer, including corrupt or short ones:
 
-- Cause: bounds/total guard. The total accessors check `0 <= i < len(a)` on every state-word access. The sessions op
-  is almost only state-word reads and writes (map probe, blob copy in and out), so the guard is ~23% of its time. The
-  other axes spend more of their time in key decoding and map work, which is why they stay under the bar.
-- This can't be fixed on the host side. The guards are inside the generated core, and removing them is a compiler
-  change: compiler request 1 below. The scratch variant was deleted after the measurement.
-- What is left without the guards (1.17–1.24×) is the word-buffer state layout (open addressing over i64 words with
-  per-unit key compare) against `HashMap<Box<[u16]>, Vec<i64>>`. It is within the bar.
+- `bud_map`: `hash_key`, `entry_matches` (entry fields and key compare), `write_at` (blob copy in), `slot_pos`,
+  `fits_region`; new `blob_off`.
+- `bud_world`: new `blob_out` (blob copy out for `session_get` / `clock_get`); `ret_one` and the `session_get`
+  header words use plain writes after the existing `len(out)` checks.
+- `bud_store`: `ea` and `need` (one `len(st)` check, then plain header reads); `valid` reads the header plainly after
+  its `len(st) >= 232` check (LLVM had already folded these, so no measurable change there).
+
+Instructions per op (retired-instruction difference between 100k and 500k reps, median of 5, scratch drivers that
+encode one cycle):
+
+| n | before | after | after, remaining guards removed | hand |
+|---:|---:|---:|---:|---:|
+| 100 | 739 | 645 | 587 | 401 |
+| 1000 | 768 | 668 | 608 | 418 |
+
+Wall time (`host/run.py --only m4 --rounds 7`, two runs, same both times): 1.40 / 1.30 / 1.30× at n = 100 / 500 /
+1000.
+
+What is left:
+
+- About 58 instructions per op of guards remain. Most are op decoding in `m34_test/root_m4.pruv` (`key_end` reads
+  each key unit through `rd`, about 7.5 guarded `op` reads per op), plus single reads in `find` (`gf(owner, 3)`,
+  header word 4, the slot word) and the `gf`/`sf` field accesses in `set_blob` / `put_units`.
+  - `root_m4.pruv` was out of scope for this change.
+  - The same pattern applies there: `key_end` already checks `kn <= n - p - 1`, so its loop can read `op[p + 1 + j]`
+    directly.
+  - Expected: about −20 instructions per op, which should bring n = 100 to about 1.3×.
+- The rest is the word-buffer layout (open addressing over i64 words with a per-unit key compare) against
+  `HashMap<Box<[u16]>, Vec<i64>>`.
 - Hand numbers moved from 16–18 to 13.6–15.1 ns after the audit aligned the hand loop with the driver loop: one
   measured run, no separate warm-up runs, the same per-op capacity check, and `black_box` on the result. Before that,
   the sessions ratio was 1.30–1.37×.
@@ -125,13 +148,12 @@ the Pruv core.
 
 ## Compiler requests (not done here; the compiler belongs to another sub)
 
-1. **Total accessor guards** (M4_NOTES "Range-check cost").
-   - Today `ent_u16::rd(a, i)` / `wr(a, i, v)` each compile to `if i < 0 || i >= len(a) { return 0 }` around a
-     `get_unchecked`. There are 96 call sites in the M4 module.
-   - Request: where the verifier has `0 <= i < len(a)` in scope at the call, emit the unchecked access directly,
-     `*a.get_unchecked(i as usize)`, instead of `ent_u16::rd(a, i)`.
-   - Measured upper bound (all guards removed): −18–24% instructions and −13–21% cycles per op (M4_NOTES). In wall time,
-     M4 sessions goes from 1.51–1.60× to 1.17–1.24× hand Rust. This is the only item over the 1.5× bar.
+1. **Total accessor guards** (M4_NOTES "Range-check cost"). Done at source level, no compiler change; see the M4
+   sessions profile.
+   - Indices come from buffer contents, so per-call proofs aren't possible. A verifier-driven guard drop at the call
+     site would find nothing to drop at the hot sites.
+   - The source fix (one range check per run of accesses, plain proven indexing inside, the total accessor as the
+     fallback) brings M4 sessions from 1.51–1.60× to 1.30–1.40×.
 
 ## Method
 
