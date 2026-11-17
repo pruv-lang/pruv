@@ -8,19 +8,29 @@ driver programs aimed at those edges and diffs the two executables' output byte 
   * numbers: counters and amounts at 0, +-1, +-(2^53-1), +-2^53, limits at the boundary, negative amounts, unlimited;
   * states open / halted (every reason, absent reason) / closed; noteTool dedup, forgetTurn, failures at the edge.
 
+Wire (P05): every key is the packed-u16 form `n, packed words(n)` (4 UTF-16 units per i64 word, u[4i] in the top
+lane, a two's-complement word, unused tail lanes zero), and a put record is [state, unlimited, haltReason, limits x4,
+used x4, tools, failures, retries, bn, packed budgetId words(bn)]. There is no per-unit range check any more: any word
+is 4 valid lanes. The only key validity check is O(1): n in 0..=2^30, the ceil(n/4) words inside the op, unused tail
+lanes of the last word zero (canonical).
+
 After the random cases (same seed / stream as before, numbered 0..count-1) a fixed set of deterministic MALFORMED
 controls is appended (numbered count..): records with state 3 / -2, unlimited 2 / -1, reason 5 / -2, n 0 / 14 words,
-word 14 != n-15 (too big / too small), id unit 65536 / -1; key units -1 / 65536 / 70000 in the put session key, the
-call session / budget key, the noteTool turn / activity key and the forgetTurn turn key; put framing (n mismatch,
-n negative, key length overrun / negative, missing n). Each bad put is run twice (no session / a valid record
-present) followed by charge, noteFailure, noteTool on that ref, a valid put on the same key and a charge. Besides
-byte equality of the two sides, each control has an EXPECTED Pruv log (malformed put -> `P X 2`, state unchanged;
-malformed call key -> `X 2`). Policy (ABI.md, REQUEST_BUDGET_SPEC section 12): malformed host input is InvalidInput.
+bn whose word count does not match the record (bn too big by 3 / bn too small so the tail lane is non-zero / bn
+negative / bn > 2^30), a non-canonical id tail lane (lane 2 set / lane 3 = 0xFFFF); malformed packed keys (tail lane 1
+non-zero, tail lane 3 = 0xFFFF, n negative, n > 2^30) in the put session key, the call session / budget key, the
+noteTool turn / activity key and the forgetTurn turn key; put framing (n mismatch, n negative, key length overrun /
+negative, missing n). Each bad put is run twice (no session / a valid record present) followed by charge,
+noteFailure, noteTool on that ref, a valid put on the same key and a charge. Besides byte equality of the two sides,
+each control has an EXPECTED Pruv log (malformed put -> `P X 2`, state unchanged; malformed call key -> `X 2`).
+Meaning change vs the pre-P05 controls: the old "unit 65536 / -1 / 70000" cases are impossible to express now (a
+word cannot hold an out-of-range lane), so they became the non-canonical / out-of-range packed-key cases above.
+Policy (ABI.md, REQUEST_BUDGET_SPEC section 12): malformed host input is InvalidInput.
 
   python3 bench/l3/budget/m8_test/diff_hand16.py [--count 300] [--seed 20261117] [--hand hand_m8_u16]
 --hand names the hand baseline diffed against the Pruv driver: hand_m8_u16 (default, alias hand16), hand_m8_fx (fxmix),
 hand_m8_oa (oa); it is (re)built with run_m8.build_hand before the run. The Pruv side is work/m8/driver_m8 from
-`run_m8.py q`. The same 300 random cases and 69 malformed controls run for every hand.
+`run_m8.py q`. The same 300 random cases and 84 malformed controls run for every hand.
 Prints: random cases + mismatches; malformed controls + mismatches between sides + expectation failures; the outcome
 tally (R / H / X 5 / X 2 / X 3 / P X). Exit status 1 on any mismatch or expectation failure.
 """
@@ -58,8 +68,21 @@ def key_units(rng):
     return [rng.randrange(0, 65536) for _ in range(n)]
 
 
+def pack(u):
+    """Packed-u16 words (bud_keys.pruv): word i = u[4i]<<48 | u[4i+1]<<32 | u[4i+2]<<16 | u[4i+3] as a two's-complement
+    i64; lanes past len(u) are zero."""
+    out = []
+    for i in range(0, len(u), 4):
+        x = 0
+        for l in range(4):
+            x = (x << 16) | (u[i + l] if i + l < len(u) else 0)
+        out.append(x - (1 << 64) if x >= (1 << 63) else x)
+    return out
+
+
 def kw(u):
-    return [len(u)] + u
+    """Wire key `n, packed words(n)`."""
+    return [len(u)] + pack(u)
 
 
 def record(rng, bid):
@@ -119,15 +142,25 @@ BID = [98, 99]  # budget id "bc"
 TURN = [116]
 ACT = [97]
 WHAT = [0, 0, 2, 1, 0, 0, 0, 0, 0, 0]  # charge commands 1
-BAD_UNITS = [-1, 65536, 70000]
+W_S = pack(SK)[0]  # the one packed word of the session key "s"
+# Malformed packed keys standing in for the old out-of-range-unit keys: (name, key words). The first two are
+# non-canonical (n = 1 but a tail lane of the single word is non-zero); the last two have an invalid n (negative /
+# above 2^30, so the words cannot fit inside any op). A middle-of-frame n that merely "overruns" is avoided on
+# purpose: it could swallow the following keys and parse as something else.
+BAD_KEYS = [
+    ("tail lane 1 nonzero", [1, W_S | (1 << 32)]),
+    ("tail lane 3 = 0xFFFF", [1, W_S | 0xFFFF]),
+    ("n negative", [-1, W_S]),
+    ("n above 2^30", [(1 << 30) + 1, W_S]),
+]
 
 
 def good_rec(bid=BID):
-    return [0, 0, -1] + [10 ** 12] * 4 + [0] * 7 + [len(bid)] + bid
+    return [0, 0, -1] + [10 ** 12] * 4 + [0] * 7 + kw(bid)  # kw(bid) = [bn] + packed id words
 
 
 def put_line(skw, rec, n=None):
-    """skw = the session key words `len, units...`; n = the record word count word (default len(rec))."""
+    """skw = the session key words `n, packed words`; n = the record word count word (default len(rec))."""
     return "put " + " ".join(map(str, skw + [len(rec) if n is None else n] + rec))
 
 
@@ -171,25 +204,30 @@ def controls():
         ("unlimited 2", rec_with(1, 2)), ("unlimited -1", rec_with(1, -1)),
         ("reason 5", rec_with(2, 5)), ("reason -2", rec_with(2, -2)),
         ("n 0", []), ("n 14", g[:14]),
-        ("idLen too big", rec_with(14, len(BID) + 1)), ("idLen too small", rec_with(14, len(BID) - 1)),
-        ("id unit 65536", g[:15] + [98, 65536]), ("id unit -1", g[:15] + [98, -1]),
+        # bn (word 14) must give len == 15 + ceil(bn/4) and a canonical id. bn = 3 with one word would still be valid
+        # (lane 2 .. 3 zero), so "too big" uses +3 (needs 2 words); "too small" (bn = 1) leaves lane 1 non-zero.
+        ("idLen too big", rec_with(14, len(BID) + 3)), ("idLen too small", rec_with(14, len(BID) - 1)),
+        ("idLen negative", rec_with(14, -1)), ("idLen above 2^30", rec_with(14, (1 << 30) + 1)),
+        # was "id unit 65536 / -1"; now a non-canonical tail lane of the id word
+        ("id tail lane 2 nonzero", g[:15] + [g[15] | (1 << 16)]), ("id tail lane 3 = 0xFFFF", g[:15] + [g[15] | 0xFFFF]),
     ]
     for name, r in bad_recs:
         out += bad_put_controls("record " + name, put_line(SKW, r))
-    # key units of the put session key
-    for u in BAD_UNITS:
-        out += bad_put_controls("put session key unit %d" % u, put_line([2, 115, u], g))
+    # malformed packed put session key (was: out-of-range key units)
+    for kname, bk in BAD_KEYS:
+        out += bad_put_controls("put session key " + kname, put_line(bk, g))
     # framing
     out += bad_put_controls("framing n too big", put_line(SKW, g, len(g) + 1))
     out += bad_put_controls("framing n too small", put_line(SKW, g, len(g) - 1))
     out += bad_put_controls("framing n negative", put_line(SKW, g, -1))
-    out += bad_put_controls("framing key length overrun", "put " + " ".join(map(str, [5, 115, 98] + [len(g)] + g)))
-    out += bad_put_controls("framing key length negative", "put " + " ".join(map(str, [-1, 115] + [len(g)] + g)))
-    out += bad_put_controls("framing no n word", "put 1 115")
+    # key length overrun: n = 2^30 needs 2^28 words, far more than the op holds
+    out += bad_put_controls("framing key length overrun", "put " + " ".join(map(str, [1 << 30, W_S] + [len(g)] + g)))
+    out += bad_put_controls("framing key length negative", "put " + " ".join(map(str, [-1, W_S] + [len(g)] + g)))
+    out += bad_put_controls("framing no n word", "put " + " ".join(map(str, SKW)))
     # call keys: a valid session exists, the call must answer X 2 and stop the case
     valid = put_line(SKW, g)
-    for u in BAD_UNITS:
-        bk = [2, 115, u]  # a malformed key `len, units...` (the unit u is out of 0..65535)
+    for kname, bk in BAD_KEYS:  # a malformed packed key `n, word` (non-canonical tail lane or invalid n)
+        u = kname
         calls = [
             ("call session key charge", [1] + bk + kw(BID) + WHAT),
             ("call session key noteFailure", [2] + bk + kw(BID)),
@@ -202,7 +240,7 @@ def controls():
             ("forgetTurn turn key", [4] + bk),
         ]
         for name, op in calls:
-            out.append(("%s unit %d" % (name, u), [valid, "step 0", call_line(op), "end"], ["@ 0", "X 2"]))
+            out.append(("%s %s" % (name, u), [valid, "step 0", call_line(op), "end"], ["@ 0", "X 2"]))
     return out
 
 

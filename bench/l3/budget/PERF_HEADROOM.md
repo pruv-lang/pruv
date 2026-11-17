@@ -682,3 +682,293 @@ Non-blocking:
 - (fixed) `run_keys.py` skipped the comparison when a Pruv row was missing.
 - The key checksum is a sum, so it cannot see a permutation of the returned ids.
 - The diff harnesses can reuse a stale Pruv binary.
+
+## P03: packed-u16 key codec `bud_keys.pruv` (2026-11-18)
+
+New source-only module, no language extension. A key of n UTF-16 code units (0..65535; NUL and lone surrogates are
+ordinary units, 0 <= n <= 2^30) is m = ceil(n / 4) i64 words, big-endian lanes (unit 4i in bits 48..63 of word i),
+zero tail. Record form `[n, w0 .. w(m-1)]`. Public functions: `max_units`, `words`, `slice_ok`, `rec_end`, `unit`,
+`mix`, `fin`, `hash(seed, k, ks, n)`, `eq`, `cmp`, `pack_units`, `unpack_units`. Every public function is total
+(clamps and 0-reads outside the buffer, as in `ent_u16`), so callers need no preconditions. `words(n)` clamps n to
+0..2^30 first (negative -> 0, above the cap -> words(2^30)); its contract states the exact value in range and both
+clamp results. `eq(a, sa, b, sb, n)` is an equal-length helper: it compares the words(n) words only, and the caller
+compares both unit counts first.
+
+What the layout removes, by representation rather than by a check:
+
+- **Per-unit range check.** Every 16-bit lane is a valid code unit, so `units_ok` (one band test per unit) has no
+  counterpart. Canonicality of an external key is O(1): n range, slice range and the lanes past n in the last word
+  (`slice_ok` / `rec_end`). The old `key_end` in `root_m4.pruv` loops over every unit.
+- **Per-unit hash / compare loops.** Hash mixes once per word, then `fin(bxor(h, n))`; equality is the caller's n compare
+  plus `eq` over m words; unsigned word compare equals code-unit order, ties broken by n. `"a"` and `"a\0"` have equal words, so
+  n is always compared.
+
+Gate (`m34_test/run.py keys --seed 20261117 --count 300`, Pruv binary vs Python oracle): **4893 / 4893 pass**
+(4848 at 0f3df19; the audit-fix commit added the `words` op and the cmp / eq fallback and clamp rows).
+Fixed negatives: NUL at start / middle / end and `"a"` vs `"a\0"`, lone high / low surrogates and reversed pairs,
+astral pairs, 0x8000 vs 0x41 (unit order against signed word order), all-0xFFFF, tail lengths n mod 4 = 0..3,
+nonzero lanes past n (canonicality negatives for r = 1, 2, 3), out-of-range units in `pack_units` (status 1, dst
+untouched), bad slice ranges (status 2), n clamps, `words` on negative / in-range / above-cap n, and cmp / eq with
+short buffers (fallback reads), negative lengths and negative or > 2^40 starts. Random rows: one seed, 300 random rows over hash / eq / cmp / ok / rec / unit /
+pack / unpack, with word compare asserted equal to unit-list compare on canonical keys.
+
+Regression gates (product source unchanged in P03, so these confirm nothing else moved): Q2 (`run_m8.py q`, 300):
+exact 63, not-implemented 237, fail 0, same as P02. Q6 (`run_m11.py --pairs rs`, 300): exact 213, prefix-ok 87, same
+as P02. Q8 (`run_m6.py --pairs rs`, 300): 300 / 300 exact.
+
+Per-op S/M: unchanged by construction (no root links `bud_keys` yet). The P02-end numbers (`work/base/`, commit
+`793fff6`) are the "before" column for P04 and P05:
+
+| M8 item | n | Pruv ns | /hand16 | /fxmix | /oa | Pruv instr | /hand16 | /fxmix | /oa |
+|---|---|---|---|---|---|---|---|---|---|
+| charge | 100 | 32.9 | 1.55 | 2.35 | 2.19 | 787 | 1.55 | 2.09 | 1.98 |
+| charge | 500 | 37.8 | 1.57 | 2.29 | 2.10 | 790 | 1.55 | 2.10 | 1.97 |
+| failure | 100 | 25.5 | 1.56 | 2.50 | 2.28 | 671 | 1.87 | 2.73 | 2.54 |
+| failure | 500 | 30.3 | 1.67 | 2.68 | 2.42 | 674 | 1.88 | 2.75 | 2.52 |
+| tooldup | 100 | 29.1 | 1.08 | 2.05 | 2.51 | 711 | 1.27 | 1.93 | 2.40 |
+| tooldup | 500 | 40.1 | 1.62 | 3.08 | 3.23 | 727 | 1.31 | 2.00 | 2.43 |
+| toolgrow | 100 | 73.2 | 0.81 | 1.15 | 2.07 | 1592 | 0.81 | 1.15 | 2.17 |
+| toolgrow | 500 | 85.2 | 0.85 | 1.35 | 2.66 | 1608 | 0.77 | 1.13 | 2.39 |
+
+M7 (S = 100 / 500, Pruv/hand16 ns; instructions Pruv vs hand16): attach 1.73 / 1.93 (740 vs 300), closereopen
+1.87 / 1.98 (893 vs 350), current 1.56 / 1.55 (727 vs 332), ishalted 1.58 / 1.60 (729 vs 336), replace 0.93 / 0.97
+(3283 vs 2974). All cells above 1.0x stay open with the causes listed in the P02 section.
+
+Erased checks in P03: none in the product yet. Inside the codec, the verifier proves every array access of the
+fast-path loops in range, so those loops carry no runtime bounds checks; each call does one entry range test to pick
+the fast path. The fallback path (slice partly outside the buffer) reads through `ent_u16::rd`, which keeps its range
+branch per read.
+
+### I1 finding (applies to P03-P05; input for P06 / P07 / P11)
+
+I1 (per-entry spans and key encodings valid for every live entry) cannot be carried by the current language, so the
+per-call `valid()` scan (~60-70 instructions) and the M8 record state / reason / word-14 checks stay. Precise gaps:
+
+1. User-defined predicates cannot be called in contracts: `pruvc/check.py:1785-1788` rejects a user function call
+   in `requires` / `ensures` / `invariant` ("not supported in v0.1", hint "inline the property"), and
+   `pruvc-rs/crates/pruv-core/src/check.rs:3613` raises the same `call_in_contract`. Builtins (`len`, `ushr`, ...)
+   and `forall` are allowed, so I1 could only be written by inlining `slice_ok` as a forall over live entries with a
+   variable-offset tail mask per entry; that is the missing piece (a named, reusable predicate), not quantifiers.
+2. No type invariants or field refinements: nothing carries "this buffer is a valid store" from one entry call to
+   the next, and there is no `[u16]`. Canonicality (O(1) per key with packing) is a separate fact from the per-unit
+   range, which packing already removed by representation.
+3. Observed ABI, not a language limit by itself: each entry is a public safe fn that takes an arbitrary `[i64]` from
+   the host, so the callee must assume nothing about it. Restricting who may call with an unchecked buffer
+   (visibility / private adapter) is the P06 / P09 work.
+4. After an `inout` call the verifier knows fresh same-length contents plus only the callee's `ensures`
+   (`pruvc/verify.py:1958`, `inout_finals`), so an I1 fact would need a frame clause in every mutator's `ensures`.
+5. `eq_range` returns a fresh unconstrained bool in the proof (`pruvc/verify.py:1822-1829`), so "a hit means the
+   stored key equals the external key" is not provable; it holds by the code's construction.
+
+The core blocker: every entry call receives an unproven host buffer, so `valid()` has to re-check it on each call.
+
+Not patched around: no host-side flag or cached "valid" bit was added. What P03-P05 can erase without I1 is the
+per-unit work (representation), not the per-call validity scan.
+
+## P04: packed keys inside `bud_map.pruv` (2026-11-18)
+
+Scope (spec §6.2 row P04): map storage, hash and equality move to the P03 codec; the wire, id blobs, roots' wire
+decoding, drivers and hand baselines are unchanged (P05 owns them). No new interner, no language extension.
+
+What changed:
+- Arena keys are packed words (`bud_keys` big-endian lanes, zero tail). Entry field 5 keeps the unit count n; field 18
+  (key region capacity), header word 14 (live words) and `drop_entry` count `words(n)`. A freed entry's key region is
+  reused when `words(n)` fits.
+- `hash_key` = `bud_keys::hash_units(seed', units)`: the units are hashed exactly as their packed form (one mix per
+  word, then `fin(bxor(h, n))`), so the stored hash (field 6) is the word hash of the stored key.
+- `entry_matches` compares the stored words against `pack4` of the caller units (in-range fast path, `tail_word` for
+  the last 1-3 units) and falls back to `units_word` / `rd` when either range is short. n > 2^30 never matches.
+- `copy_node` (grow / compaction) copies the packed words directly and reuses the stored hash when owner and owner
+  generation are unchanged; otherwise it rehashes the stored words with `bud_keys::hash`. The old path re-hashed the
+  key units of every copied entry.
+- `key_unit` extracts a lane (`bud_keys::unit`). Unit values outside 0..65535 keep their low 16 bits on write; the wire
+  decoders already reject them, so no gate input reaches that path.
+- Roots m4 / m7 / m8 / m9 / m10 / m11 now declare `mod bud_keys;` (and `run_m11.py` copies it); the codec has one
+  copy. `bud_keys` gained `pack4`, `units_word`, `tail_word`, `hash_units` and a `words(n) == (n + 3) / 4` ensures
+  (the loop bound proof in `entry_matches` uses division).
+
+Gates (seed 20261117, 300 cases): keys 5823 / 5823 (adds 630 `hash_units` rows equal to hash-of-pack and 300 random);
+M4 300 / 300 (grow formula 1887 / 1887); Q2 `run_m8.py q` exact 63 / not-impl 237 / fail 0; Q1 `run_m7.py q` 113 /
+187 / 0; Q3 `run_m9.py q` 26 / 274 / 0; `run_m10.py q` 78 / 222 / 0; Q6 `run_m11.py --pairs rs` exact 213 /
+prefix-ok 87. All equal to P03. M8 perf: 56 / 56 checksums equal across hand16 / fxmix / oa and their w lanes.
+
+### M8 after P04 (`run_m8.py perf`, 7 rounds, n = 100 / 500)
+
+| M8 item | n | Pruv ns | /hand16 | /fxmix | /oa | Pruv instr | /hand16 | /fxmix | /oa | instr before (P03) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| charge | 100 | 32.0 | 1.51 | 2.29 | 2.13 | 844 | 1.66 | 2.24 | 2.12 | 787 |
+| charge | 500 | 35.8 | 1.46 | 2.20 | 2.00 | 846 | 1.67 | 2.24 | 2.11 | 790 |
+| failure | 100 | 25.0 | 1.53 | 2.38 | 2.19 | 729 | 2.03 | 2.96 | 2.75 | 671 |
+| failure | 500 | 28.5 | 1.52 | 2.50 | 2.30 | 731 | 2.04 | 2.98 | 2.73 | 674 |
+| tooldup | 100 | 31.2 | 1.19 | 2.20 | 2.71 | 804 | 1.44 | 2.19 | 2.72 | 711 |
+| tooldup | 500 | 39.3 | 1.55 | 3.02 | 3.14 | 807 | 1.45 | 2.23 | 2.70 | 727 |
+| toolgrow | 100 | 76.8 | 0.84 | 1.19 | 2.21 | 1773 | 0.91 | 1.28 | 2.42 | 1592 |
+| toolgrow | 500 | 86.8 | 0.86 | 1.36 | 2.76 | 1758 | 0.84 | 1.24 | 2.61 | 1608 |
+
+M7 (S = 100 / 500, Pruv/hand16 ns; Pruv instr): attach 1.75 / 1.79 (744 / 740), closereopen 1.81 / 1.83 (895 / 894),
+current 1.53 / 1.49 (727), ishalted 1.55 / 1.55 (729), replace 0.95 / 0.95 (3283). Instructions equal to P03 within
+4; ns within run noise. M4 core (n = 100 / 500 / 1000): sessions 13.3 / 13.6 / 14.3 (P03 13.7 / 13.6 / 13.6), tools
+29.5 / 34.7 / 33.6 (P03 28.6 / 31.8 / 30.8), clocks 26.4 / 24.5 / 25.9 (P03 27.7 / 30.2 / 27.5); verdict FLAT, NOT
+SLOWER than TS.
+
+### Open: P04 regression on the unit wire (blocking until P05)
+
+M8 instructions rose 57-63 per call on charge / failure, 80-93 on tooldup and 150-181 on toolgrow; ns stayed within
+noise except tooldup 100 (+7%) and toolgrow (+2-5%); M4 tools core +3-9%. Line-level cause (generated Rust in
+`work/m8/gen.rs`, `bud_keys_10_hash_units`, `bud_map_13_entry_matches`):
+- The wire still carries one i64 per unit, so every lookup packs the caller key twice: once in `hash_units` and again
+  in `entry_matches`. Each packed word is 4 loads + 4 `& 0xFFFF` + 3 shifts + 3 ors (`bud_keys.pruv` `pack4`). P02
+  hashed with an unmasked mul/add pack and compared with one `eq_range` slice compare (memcmp on units).
+- The four masks are needed for total semantics (units outside 0..65535 must not corrupt neighbouring lanes); the
+  units were validated by the wire decoder in the same call, but no contract can carry "every unit of this slice is
+  in 0..65535" into `bud_map` (I1 gaps 1, 2 in the P03 section: no named predicate in contracts, no refined slice type).
+- toolgrow also writes keys through `put_key_units` (pack per word) instead of a unit copy.
+- `tail_word` (in-range tail, no `rd`) removed 5-17 of the extra instructions; the rest is the representation mismatch.
+- The compare-side packing runs only on candidates whose stored hash, owner and length match, not on every probe.
+- P04 audit: `put_key_units` already checked the whole source range, yet `units_word` re-checks range and tail per
+  word; a full-word direct-read loop plus one `tail_word` removes that with existing features. Not done in P04
+  because P05 deletes the unit insert path entirely; if P05 slips, this is the first partial fix.
+- P04 audit: `bud_tools.pruv` / `bud_world.pruv` reserve key room in units, so Grow can be asked for more than the
+  packed words need (over-reservation only, accounting is exact). P05 switches the key reservation to `words(n)`.
+
+Root fix: P05 moves the wire and id blobs to packed keys. Lookups then hash the caller words directly (`bud_keys::hash`,
+one mix per word, no packing, no masks) and compare with `bud_keys::eq` (one word-slice compare over ceil(n/4)
+words), which is below both the P03 baseline and the per-unit hand16 key compare. These cells stay open until P05
+lands and is measured; P04 alone does not meet the "no regression" bar on instructions.
+
+### Threat model and probe budget
+
+- Hash: fixed seed 1469598103934665603 mixed with owner and owner generation, one 64-bit multiply mix per packed word,
+  splitmix64 / murmur3 finalizer. It is not keyed: a caller who controls key text can precompute colliding keys and
+  push one owner's lookups to O(entries in the index). Keys come from the app's own session / tool / delegation ids,
+  not from remote input, so this is accepted for the budget store; a keyed seed (per-store random word in the header)
+  is the fix if keys ever become remote-controlled. Concrete construction (P04 audit, reproduced with 128 distinct
+  keys): for an owner start hash H, any two packed words `x, mix(H, x)` of length 8 reach the same state, so every
+  such key hashes to `fin(8)`. The exposure is CPU time only (no memory growth beyond the normal entry cost, no
+  wrong answers): the trust boundary is "whoever can choose key text for one owner can slow that owner's map".
+- Probe budget: every single probe loop in `find_h` / `put_key_h` / `slot_of` is bounded by the slot count S
+  (termination does not depend on contents). This bounds one search, not one operation: `add_absent` is a lookup
+  plus an insert search plus a possible rebuild, and a rebuild reinserts every live entry, so under a colliding key
+  set one operation is O(S + E x S), not O(S). Rebuilding never resolves collisions (same seed, same hashes); only a
+  keyed seed would.
+- Load: header[13] counts live slots plus tombstones; `make_room` rebuilds when used + new entries > 3S/4 (and also
+  when entry or arena room runs out), so load including tombstones stays <= 0.75. For random keys the expected
+  linear-probe lengths at alpha = 0.75 are about 2.5 (hit) and 8.5 (miss) slots. Each probe compares the stored hash
+  first; the key words are read only on a full 64-bit hash match.
+- Packing does not change collision behaviour: equal packed words imply equal unit lists for valid units, and n is
+  compared separately (`"a"` vs `"a\0"`).
+
+### Checks erased and added in P04
+
+Erased by proof: the per-unit `rd` range branch in the hash and compare fast paths (both now one entry range test,
+then unchecked loads), and the per-unit `rd` in the in-range tail (`tail_word`). Grow copies no longer re-read and
+re-hash every key unit (stored hash reused). Added: `n > 2^30` reject in `entry_matches` / `put_key_units`, the
+packed region range test (`ko + words(n) <= len(st)`), and the arena-end test for a new key region. The per-call
+`valid()` scan and record checks are unchanged (I1).
+
+## P05: packed wire and id blobs on the M8 lane (2026-11-18)
+
+Scope (spec §6.2 row P05, M8 lane): the M8 wire key and the session record's budget id become packed-u16 words; the
+driver / runner pack once at ingress. Pruv hashes the words directly (`bud_keys::hash`, one mix per word, no pack, no
+masks) and compares one word slice (`eq_range` over `words(n)` words). The hand baselines change only their input
+format. Other roots (M4 / M7 / M9 / M10 / M11) keep the unit API; see "Open" below.
+
+What changed:
+- Wire (`m8_test/root_m8.pruv`, `driver_m8.rs`, `run_m8.py`): a key is `[n] + packed words(n)`; a budget record is
+  14 words + `[bn] + packed(bid)`, so its length is `15 + words(bn)`. Halt frames copy the stored packed id raw;
+  `run_m8.py` `ref_words` packs too, so the halt comparison is word for word.
+- `bud_map.pruv`: `hash_words`, `find_w` / `find_h_w`, `entry_matches_w` (header tests, then one `eq_range` over the
+  stored and caller words, total `rd` fallback when either range is short), `add_w`, `add_absent_w`; `put_key_h` gained
+  `packed` and stores a packed key with `put_units` (one range test, then a plain word copy). `units_ok` is gone.
+- `bud_world.pruv` `put_blob(packed)` / `session_put_w`; `bud_tools.pruv` uses the `_w` functions. Key reservation in
+  `put_blob`, `run_set`, `tool_note` and `bud_tools` is `bud_keys::words(n)` (P04 audit item).
+- `bud_store.pruv` `arena_put` copies with plain indexing under one range proof.
+- `bud_map.pruv` `put_key_units` (unit path, still used by the other roots): full words read the source directly and
+  the last 1-3 units go through one `tail_word` (P04 audit item; was `units_word` with a range and tail test per word).
+- Hands (`hand_m8_u16.rs`, also built as fxmix, and `hand_m8_oa.rs`): `key_span` is the O(1) canonical test (n in
+  0..2^30, words inside the op, zero tail lanes) and keys are unpacked into the reused scratch; the per-unit
+  `u16::try_from` test is gone because no wire word can carry an out-of-range unit. Maps, hashers, key types and timed
+  loops are unchanged. `record_words` re-emits the id packed, so `chk` stays comparable.
+
+Gates (seed 20261117, 300 cases): keys 5823 / 5823; M4 300 / 300 (grow formula 1887 / 1887, also after the
+`put_key_units` change); Q2 `run_m8.py q` exact 63 / not-impl 237 / fail 0 for Pruv and for each of hand16 / fxmix /
+oa; Q1 `run_m7.py q` 113 / 187 / 0; Q3 `run_m9.py q` 26 / 274 / 0; `run_m10.py q` 78 / 222 / 0; Q6 `run_m11.py --pairs
+rs` exact 213 / prefix-ok 87. All equal to P04. `diff_hand16.py` (hand16, fxmix, oa): 300 random cases and 84 malformed
+controls, 0 mismatches each. `corrupt_resident.py`: 387 controls, 0 poke-not-found, no panic (see the note on the OLD
+side below). M8 perf: 56 / 56 checksums equal across hand16 / fxmix / oa and their w lanes.
+
+### M8 after P05 (`run_m8.py perf`, 7 rounds, n = 100 / 500; output `work/p05/m8.txt`)
+
+`w` lanes take the same packed op words Pruv takes (matched boundary, the gate). Un-suffixed lanes take pre-decoded
+typed keys (no ingress work at all), listed for reference.
+
+| M8 item | n | Pruv ns | /hand16w | /fxmixw | /oaw | Pruv instr | /hand16w | /fxmixw | /oaw | P03 instr | P04 instr |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| charge | 100 | 21.3 | 0.60 | 0.74 | 0.71 | 567 | 0.66 | 0.78 | 0.74 | 787 | 844 |
+| charge | 500 | 26.8 | 0.71 | 0.86 | 0.85 | 572 | 0.66 | 0.78 | 0.75 | 790 | 846 |
+| failure | 100 | 17.1 | 0.55 | 0.76 | 0.72 | 449 | 0.64 | 0.78 | 0.74 | 671 | 729 |
+| failure | 500 | 20.9 | 0.61 | 0.83 | 0.77 | 455 | 0.65 | 0.79 | 0.75 | 674 | 731 |
+| tooldup | 100 | 23.5 | 0.48 | 0.65 | 0.74 | 539 | 0.48 | 0.58 | 0.61 | 711 | 804 |
+| tooldup | 500 | 26.9 | 0.54 | 0.73 | 0.74 | 542 | 0.48 | 0.58 | 0.61 | 727 | 807 |
+| toolgrow | 100 | 63.8 | 0.56 | 0.75 | **1.12** | 1312 | 0.52 | 0.67 | 0.99 | 1592 | 1773 |
+| toolgrow | 500 | 67.3 | 0.54 | 0.79 | **1.25** | 1300 | 0.49 | 0.65 | **1.03** | 1608 | 1758 |
+
+Unmatched lanes (ns): Pruv/hand16 1.00 / 1.12, 1.04 / 1.15, 0.87 / 1.03, 0.68 / 0.68; Pruv/fxmix 1.50-2.04 except
+toolgrow 0.97 / 1.06; Pruv/oa 1.42-2.19. These lanes skip the ingress check and decode that Pruv must run on every call
+(the C4 boundary item from P02); they are not same-boundary numbers.
+
+Against P03 the instructions dropped 220 (charge), 222 (failure), 172-185 (tooldup) and 280-308 (toolgrow) per call;
+the P04 regression is gone. ns dropped 10-23 % on every item against P04.
+
+M7 (S = 100 / 500, `work/p05/m7.txt`): instructions equal to P04 (attach 739, closereopen 895 / 894, current 727,
+ishalted 729; replace 3569), result checks 10 / 10. M7 still uses the unit wire. M4 core (`work/p05/m4.txt`, n = 100 /
+500 / 1000): sessions 14.9 / 14.8 / 15.6, tools 30.5 / 35.3 / 34.4, clocks 26.4 / 24.8 / 26.1; verdict FLAT, NOT
+SLOWER than TS.
+
+### Open cells above 1.0x (matched boundary), line-level causes
+
+- **toolgrow vs oaw (1.12 / 1.25 ns, 0.99 / 1.03 instructions).** Instructions are at parity; the ns gap grows with n,
+  so it is mostly memory traffic. Causes, in `bud_map.pruv`:
+  - `remove` (line 594) walks the turn's children and calls `drop_entry` (line 559) per child, and `drop_entry`
+    re-probes the index with `slot_of` (line 570) to tombstone each child's slot. The oa hand forgets a turn by bumping a
+    generation, O(1). This is the layout choice already listed in P02; proof does not remove it, a generation-tagged
+    child set in `bud_map` would.
+  - `add_absent_w` (line 791) probes twice: `find_h_w` (line 795), then `put_key_h(absent = true)` (line 802) walks
+    the same chain again to find the first free slot. The hand keeps the probe position. Returning it needs a two-value
+    result from `find_h_w` (C4 item).
+  - Entries are 20 words (160 B) against the oa hand's 12 B slot record plus arena; at n = 500 the turn's children
+    no longer share cache lines the way the hand's do.
+- No other matched cell is above 1.0x.
+
+### Checks erased in P05 and their proofs
+
+- Per-unit range checks on wire keys (`key_span`, `keys_ok_1/2/4`, `bud_map::units_ok` OR-folds in `root_m8.pruv`
+  `t_put` / `t_call`): erased. Proof: every i64 word is four valid u16 lanes, so a unit range check has nothing left to
+  test. What remains is framing plus canonical form (n in 0..2^30, `words(n)` words inside the op, zero tail lanes),
+  done in O(1) by `bud_keys::rec_end` / `slice_ok`; that is the whole per-key check and it is still run on every key.
+- Per-word pack and mask in the compare (`entry_matches` on units): replaced by `eq_range` over `words(n)` words in
+  `entry_matches_w`. Proof: one canonical encoding per unit list, n compared first (field 5), so equal words imply equal
+  keys. A non-canonical stored word (corrupt buffer) only makes the compare fail, as a fully checked compare would.
+- Per-unit id compare in `load_cv`: replaced by `eq_range` over `words(bn)` after `word 14 == bn` and `n == 15 +
+  words(bn)`. Same proof as above.
+- Per-word `rd` / `wr` in `bud_store::arena_put`: plain indexing. Proof: `top = c40(..) >= 0`, `aend <= len(st)` and
+  `n <= aend - top` give `top + n <= len(st)`; `s >= 0`, `e <= len(src)` and `n == e - s` give `s + n <= len(src)`.
+- Per-word range and tail tests in `put_key_units` (`units_word`): full words read the source directly. Proof:
+  `s0 + n <= len(src)` is tested once at entry; the loop invariant `j == 4 * i`, `j + 4 <= n` bounds each read, and the
+  last 1-3 units use `tail_word`, whose precondition is the same entry test.
+- Unit-sized key reservation: now `words(n)`, the exact number of arena words a packed key takes.
+
+Kept (not provable without I1 as a checked resident invariant): the per-call `valid(st)` scan, the stored record
+state / reason / word-14 / length checks in `load_cv`, and the `c32` / `c40` clamps on words read from the state. The
+I1 gaps listed in the P03 section are unchanged.
+
+### Notes and open items
+
+- `corrupt_resident.py` default `--old-rev c4d3a63^` predates the packed wire, so the P05 run built both sides from
+  the working tree: it shows every poke lands (0 poke-not-found) and no corrupt buffer panics, but it is not a NEW vs OLD
+  semantic diff. The load_cv record checks it targets are unchanged in P05; the first post-P05 commit is the OLD
+  reference for later packages.
+- `bud_clock.pruv` still reserves key room as `cl(n)` units: over-reservation only, accounting is exact.
+- The unit API (`find`, `add`, `add_absent`, `entry_matches`, `put_key_units`, `hash_units`) stays for the roots that
+  still use a unit wire (M4 / M7 / M9 / M10 / M11). Moving them to packed keys and deleting the unit API is P05b or a
+  later package; M7's attach / current / ishalted (1.5-1.7x vs hand16) are the next candidates for the same change.

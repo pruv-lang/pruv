@@ -209,9 +209,26 @@ fn run_q() {
     }
 }
 
+// Packed-u16 key codec (bud_keys.pruv): word i = (u[4i] << 48) | (u[4i+1] << 32) | (u[4i+2] << 16) | u[4i+3] as a
+// two's-complement i64; lanes past n are zero. A pure ingress encoding, no validation.
+fn pack_u16(units: &[u16]) -> Vec<i64> {
+    units
+        .chunks(4)
+        .map(|c| {
+            let mut x: u64 = 0;
+            for l in 0..4 {
+                x = (x << 16) | (c.get(l).copied().unwrap_or(0) as u64);
+            }
+            x as i64
+        })
+        .collect()
+}
+
+// Wire key: `n, packed words(n)` (1 + ceil(n/4) words).
 fn key(s: &str) -> Vec<i64> {
-    let mut v = vec![s.encode_utf16().count() as i64];
-    v.extend(s.encode_utf16().map(|u| u as i64));
+    let u: Vec<u16> = s.encode_utf16().collect();
+    let mut v = vec![u.len() as i64];
+    v.extend(pack_u16(&u));
     v
 }
 
@@ -228,7 +245,7 @@ fn world_n(n: usize) -> World {
         let mut rec = vec![0i64, 0, -1];
         rec.extend_from_slice(&[1_000_000_000_000i64; 4]);
         rec.extend_from_slice(&[0i64; 7]);
-        rec.extend_from_slice(&bid);
+        rec.extend_from_slice(&bid); // [bn] + packed budgetId words, so rec.len() == 14 + 1 + ceil(bn/4)
         put.push(rec.len() as i64);
         put.extend(rec);
         let r = w.put(&put);

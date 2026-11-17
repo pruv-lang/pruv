@@ -1,0 +1,41 @@
+mod ent_u16;
+mod bud_keys;
+
+// P03 test root: thin entries over bud_keys for the keys lane (driver_keys.rs, gen_keys.py, run.py keys).
+// Entry requires are empty: every input is arbitrary and the functions are total.
+
+pub fn kc_words(n: i64) -> i64
+{ return crate::bud_keys::words(n); }
+
+pub fn kc_rec_end(k: [i64], p: i64) -> i64
+{ return crate::bud_keys::rec_end(k, p); }
+
+pub fn kc_slice_ok(k: [i64], ks: i64, n: i64) -> i64
+{
+  if crate::bud_keys::slice_ok(k, ks, n) { return 1; }
+  return 0;
+}
+
+pub fn kc_unit(k: [i64], ks: i64, n: i64, j: i64) -> i64
+{ return crate::bud_keys::unit(k, ks, n, j); }
+
+pub fn kc_hash(seed: i64, k: [i64], ks: i64, n: i64) -> i64
+{ return crate::bud_keys::hash(seed, k, ks, n); }
+
+pub fn kc_eq(a: [i64], sa: i64, b: [i64], sb: i64, n: i64) -> i64
+{
+  if crate::bud_keys::eq(a, sa, b, sb, n) { return 1; }
+  return 0;
+}
+
+pub fn kc_cmp(a: [i64], sa: i64, na: i64, b: [i64], sb: i64, nb: i64) -> i64
+{ return crate::bud_keys::cmp(a, sa, na, b, sb, nb); }
+
+pub fn kc_pack(inout dst: [i64], d: i64, src: [i64], s: i64, n: i64) -> i64
+{ return crate::bud_keys::pack_units(inout dst, d, src, s, n); }
+
+pub fn kc_unpack(inout dst: [i64], d: i64, k: [i64], ks: i64, n: i64) -> i64
+{ return crate::bud_keys::unpack_units(inout dst, d, k, ks, n); }
+
+pub fn kc_hash_units(seed: i64, src: [i64], s: i64, n: i64) -> i64
+{ return crate::bud_keys::hash_units(seed, src, s, n); }

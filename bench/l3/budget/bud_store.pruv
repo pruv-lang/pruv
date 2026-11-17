@@ -274,12 +274,16 @@ pub fn arena_put(inout st: [i64], src: [i64], s: i64, e: i64) -> i64
   let aend: i64 = c40(hd(st, 11));
   if aend > len(st) { return -1; }
   if n > aend - top { return -1; }
+  // Proof that the per-word rd/wr is redundant: top = c40(..) >= 0; the check above gives aend <= len(st) and
+  // n <= aend - top, so top + n <= aend <= len(st); and s >= 0, e <= len(src), n == e - s give s + n == e <= len(src).
+  // Every st[top + k] and src[s + k] with 0 <= k < n is therefore in range.
   let mut k: i64 = 0;
   while k < n
-    invariant 0 <= k && k <= n && n == e - s && 0 <= s && s <= e && e <= len(src) && 0 <= top && top <= 1099511627776 && n <= 1099511627776
+    invariant 0 <= k && k <= n && n == e - s && 0 <= s && s <= e && e <= len(src) && 0 <= top && top + n <= len(st)
+    invariant len(st) == len(old(st))
     decreases n - k
   {
-    crate::ent_u16::wr(inout st, top + k, crate::ent_u16::rd(src, s + k));
+    st[top + k] = src[s + k];
     k = k + 1;
   }
   let lw: i64 = c40(hd(st, 14));

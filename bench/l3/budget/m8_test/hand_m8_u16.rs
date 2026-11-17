@@ -9,9 +9,10 @@
 //                                        World::charge / note_failure / note_tool / forget_turn directly.
 //   hand_m8_u16 perfw <N> <reps> [item]  MATCHED wire boundary: the timed loop takes exactly the i64 op words that
 //                                        driver_m8.rs run_perf builds and does what a careful hand host must: frame
-//                                        checks (key spans, lengths), u16::try_from range check of every unit (status
-//                                        2 on failure) into a reused scratch Vec<u16> (no allocation per call after the
-//                                        first), then the same World methods. Same chk checksums.
+//                                        checks (key spans, O(1) canonical packed-key check: n range, words inside the
+//                                        op, zero tail lanes; status 2 on failure), then unpacks the packed-u16 words
+//                                        (4 lanes per i64 word) into a reused scratch Vec<u16> (no allocation per call
+//                                        after the first), then the same World methods. Same chk checksums.
 //   hand_m8_u16 q                        stdin program as driver_m8.rs run_q, byte-identical output lines (a rejected
 //                                        put prints `P X 2`, state unchanged, the case continues). q mode runs through
 //                                        the same call_wire as perfw, so the malformed-frame controls test it.
@@ -144,16 +145,67 @@ enum Slot {
     Opaque(Box<[i64]>),
 }
 
+// ---- packed-u16 key codec (bud_keys.pruv) ----
+// n UTF-16 units (0..=2^30) are m = ceil(n/4) i64 words; word i = u[4i]<<48 | u[4i+1]<<32 | u[4i+2]<<16 | u[4i+3]
+// (two's complement); lanes past n are zero. Any word is 4 valid u16 lanes, so there is no per-unit range check.
+
+const MAX_KEY_UNITS: i64 = 1 << 30;
+
+// m = ceil(n/4) for n in 0..=2^30, else None.
+#[inline]
+fn words_of(n: i64) -> Option<usize> {
+    if (0..=MAX_KEY_UNITS).contains(&n) {
+        Some((n as usize + 3) / 4)
+    } else {
+        None
+    }
+}
+
+// The unused tail lanes of the last word of an n-unit key (n % 4 != 0) must be zero (canonical form).
+#[inline]
+fn tail_ok(n: i64, last: i64) -> bool {
+    let r = (n & 3) as u32;
+    r == 0 || (last as u64) & ((1u64 << (16 * (4 - r))) - 1) == 0
+}
+
+// O(1) canonical check of a packed key of n units held in exactly `w`.
+#[inline]
+fn packed_ok(n: i64, w: &[i64]) -> bool {
+    words_of(n) == Some(w.len()) && (w.is_empty() || tail_ok(n, w[w.len() - 1]))
+}
+
+// Unpacks the n units of packed words `w` (the words already passed the canonical check) onto the end of `sc`.
+#[inline]
+fn unpack_units(sc: &mut Vec<u16>, n: usize, w: &[i64]) {
+    for &x in w {
+        let u = x as u64;
+        sc.extend_from_slice(&[(u >> 48) as u16, (u >> 32) as u16, (u >> 16) as u16, u as u16]);
+    }
+    sc.truncate(sc.len() - (4 * w.len() - n));
+}
+
+// Inverse of unpack_units (used to re-emit packed words, e.g. a record's budget id in record_words).
+fn pack_u16(u: &[u16]) -> Vec<i64> {
+    u.chunks(4)
+        .map(|c| {
+            let mut x: u64 = 0;
+            for l in 0..4 {
+                x = (x << 16) | u64::from(c.get(l).copied().unwrap_or(0));
+            }
+            x as i64
+        })
+        .collect()
+}
+
 // The ingress check of root_m8.pruv t_put on record words [state, unlimited, haltReason, limits x4, used x4, tools,
-// failures, retries, idLen, id units...]: n >= 15; state in -1..2; unlimited in 0..1; reason in -1..4;
-// w[14] == n - 15; every id unit in 0..65535. Counter words are not validated.
+// failures, retries, bn, packed id words(bn)...]: n >= 15; state in -1..2; unlimited in 0..1; reason in -1..4;
+// len == 15 + ceil(bn/4) with bn in 0..=2^30 and a canonical id (zero tail lanes). Counter words are not validated.
 fn valid_record(w: &[i64]) -> bool {
     w.len() >= 15
         && (-1..=2).contains(&w[0])
         && (0..=1).contains(&w[1])
         && (-1..=4).contains(&w[2])
-        && w[14] == (w.len() - 15) as i64
-        && w[15..].iter().all(|&u| u16::try_from(u).is_ok())
+        && packed_ok(w[14], &w[15..])
 }
 
 // Decodes a record that passed valid_record: state -1 -> Opaque (no budget), else the typed Budget.
@@ -162,8 +214,10 @@ fn decode_record(w: &[i64]) -> Slot {
     if w[0] == -1 {
         return Slot::Opaque(w.into());
     }
+    let mut id = Vec::with_capacity(w[14] as usize);
+    unpack_units(&mut id, w[14] as usize, &w[15..]);
     Slot::Budget(Budget {
-        id: w[15..].iter().map(|&u| u as u16).collect(),
+        id: id.into(),
         state: match w[0] {
             0 => State::Open,
             1 => State::Halted,
@@ -192,7 +246,7 @@ fn record_words(s: &Slot) -> Vec<i64> {
             v.extend_from_slice(&b.limits);
             v.extend_from_slice(&b.used);
             v.extend_from_slice(&[b.tools, b.failures, b.retries, b.id.len() as i64]);
-            v.extend(b.id.iter().map(|&u| u as i64));
+            v.extend(pack_u16(&b.id)); // the id is re-emitted as packed words, like the record that was put
             v
         }
     }
@@ -391,30 +445,29 @@ struct Fr {
     e2: usize,
 }
 
-// root_m8.pruv key_span: the end of the key `len, units...` at p (the length word fits inside op). Units are NOT
-// checked here: the conversion to u16 below is the range check.
+// root_m8.pruv key_span: the end of the packed key `n, packed words(n)` at p: O(1) canonical check (n in 0..=2^30,
+// the ceil(n/4) words fit inside op, unused tail lanes of the last word zero). No per-unit range check exists.
 #[inline]
 fn key_span(op: &[i64], p: usize) -> Option<usize> {
     if p >= op.len() {
         return None;
     }
     let kn = op[p];
-    if kn < 0 || kn as u64 > (op.len() - p - 1) as u64 {
+    let m = words_of(kn)?;
+    if m > op.len() - p - 1 {
         return None;
     }
-    Some(p + 1 + kn as usize)
+    let end = p + 1 + m;
+    if m > 0 && !tail_ok(kn, op[end - 1]) {
+        return None;
+    }
+    Some(end)
 }
 
-// Converts the words to u16 units appended to the scratch buffer; false when a unit is outside 0..=65535.
+// Unpacks the key at p (already validated by key_span, end e) to u16 units appended to the scratch buffer.
 #[inline]
-fn push_units(sc: &mut Vec<u16>, w: &[i64]) -> bool {
-    // One branch-free range check over the key (vectorizes), then one bulk narrowing copy: no per-unit try_from or
-    // push capacity check on the wire path.
-    if !w.iter().fold(true, |ok, &u| ok & ((u as u64) < 65536)) {
-        return false;
-    }
-    sc.extend(w.iter().map(|&u| u as u16));
-    true
+fn push_key(sc: &mut Vec<u16>, op: &[i64], p: usize, e: usize) {
+    unpack_units(sc, op[p] as usize, &op[p + 1..e]);
 }
 
 fn what_of(w: &[i64]) -> What {
@@ -425,7 +478,7 @@ fn what_of(w: &[i64]) -> What {
 impl World {
     // One call on the wire words, status as Pruv's t_call returns it: 0 done, 2 invalid input, 3 halt frame does not
     // fit fx, 5 ResourceBound, 6 halt dispatch (over-limit charge). `sc` is the reused scratch buffer of converted
-    // units: it is cleared, never shrunk, so a call allocates only while the buffer is still growing.
+    // units (unpacked from the packed wire keys): it is cleared, never shrunk, so a call allocates only while the buffer is still growing.
     fn call_wire(&mut self, op: &[i64], sc: &mut Vec<u16>, fr: &mut Fr) -> i64 {
         if op.len() < 2 {
             return 2;
@@ -436,19 +489,19 @@ impl World {
             return 2;
         };
         if code == 4 {
-            if e1 != op.len() || !push_units(sc, &op[2..e1]) {
+            if e1 != op.len() {
                 return 2;
             }
+            push_key(sc, op, 1, e1);
             self.forget_turn(sc);
             return 0;
         }
         let Some(e2) = key_span(op, e1) else {
             return 2;
         };
-        if !push_units(sc, &op[2..e1]) || !push_units(sc, &op[e1 + 1..e2]) {
-            return 2;
-        }
-        let sn = e1 - 2;
+        push_key(sc, op, 1, e1);
+        push_key(sc, op, e1, e2);
+        let sn = op[1] as usize; // session unit count
         match code {
             1 => {
                 if e2 + 10 != op.len() {
@@ -498,11 +551,10 @@ impl World {
                 if key_span(op, e3) != Some(op.len()) {
                     return 2;
                 }
-                if !push_units(sc, &op[e2 + 1..e3]) || !push_units(sc, &op[e3 + 1..]) {
-                    return 2;
-                }
-                let bn = e2 - e1 - 1;
-                let tn = e3 - e2 - 1;
+                push_key(sc, op, e2, e3);
+                push_key(sc, op, e3, op.len());
+                let bn = op[e1] as usize;
+                let tn = op[e2] as usize;
                 let (s, rest) = sc.split_at(sn);
                 let (b, rest) = rest.split_at(bn);
                 let (t, a) = rest.split_at(tn);
@@ -518,26 +570,17 @@ impl World {
 
 // ---- q mode: the driver_m8.rs program protocol ----
 
-// root_m8.pruv key_end: the end of the key `len, units...` at p (length within op, every unit in 0..65535); used by the
-// put framing only (calls go through call_wire).
+// root_m8.pruv key_end: the end of the packed key `n, packed words(n)` at p (same O(1) canonical check as key_span);
+// used by the put framing only (calls go through call_wire).
 fn key_end(op: &[i64], p: usize) -> Option<usize> {
-    let n = op.len();
-    if p >= n {
-        return None;
-    }
-    let kn = op[p];
-    if kn < 0 || kn as u64 > (n - p - 1) as u64 {
-        return None;
-    }
-    let end = p + 1 + kn as usize;
-    if !op[p + 1..end].iter().all(|&u| (0..=65535).contains(&u)) {
-        return None;
-    }
-    Some(end)
+    key_span(op, p)
 }
 
-fn units(w: &[i64]) -> Result<Vec<u16>, i64> {
-    w.iter().map(|&u| u16::try_from(u).map_err(|_| 2)).collect()
+// The units of the (validated) packed key at p..e.
+fn units(op: &[i64], p: usize, e: usize) -> Vec<u16> {
+    let mut v = Vec::with_capacity(op[p] as usize);
+    push_key(&mut v, op, p, e);
+    v
 }
 
 // What the driver prints for one call.
@@ -581,7 +624,7 @@ fn put_words(w: &mut World, op: &[i64]) -> i64 {
         if n < 0 || n as usize != op.len() - e1 - 1 {
             return None;
         }
-        let key = units(&op[1..e1]).ok()?;
+        let key = units(op, 0, e1);
         Some((key, e1 + 1))
     })();
     let Some((key, rs)) = framed else {
@@ -756,9 +799,11 @@ fn run_perf(args: &[String]) {
 
 // ---- perfw: matched wire boundary (same op words as driver_m8.rs run_perf) ----
 
+// Wire key `n, packed words(n)` (built at setup, outside the timed loops).
 fn key_words(s: &str) -> Vec<i64> {
-    let mut v = vec![s.encode_utf16().count() as i64];
-    v.extend(s.encode_utf16().map(|u| u as i64));
+    let u: Vec<u16> = s.encode_utf16().collect();
+    let mut v = vec![u.len() as i64];
+    v.extend(pack_u16(&u));
     v
 }
 

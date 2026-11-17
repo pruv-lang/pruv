@@ -110,9 +110,26 @@ def units(s):
     return [b[i] | (b[i + 1] << 8) for i in range(0, len(b), 2)]
 
 
+def pack(u):
+    """Packed-u16 words (bud_keys.pruv): word i = u[4i]<<48 | u[4i+1]<<32 | u[4i+2]<<16 | u[4i+3], as a two's-complement
+    i64 (u[4i] >= 0x8000 gives a negative word); lanes past len(u) are zero."""
+    out = []
+    for i in range(0, len(u), 4):
+        x = 0
+        for l in range(4):
+            x = (x << 16) | (u[i + l] if i + l < len(u) else 0)
+        out.append(x - (1 << 64) if x >= (1 << 63) else x)
+    return out
+
+
+def unpack(words, n):
+    """Inverse of pack: the n u16 units of packed words."""
+    return [(words[i // 4] >> (48 - 16 * (i % 4))) & 0xFFFF for i in range(n)]
+
+
 def key(s):
     u = units(s)
-    return [len(u)] + u
+    return [len(u)] + pack(u)
 
 
 def obj(v):
@@ -141,7 +158,7 @@ def budget_rec(b):
     h = obj(b.get("halt")) if b.get("halt") is not None else None
     reason = REASONS.index(text(h["reason"])) if h and h.get("reason") is not None else -1
     return ([STATE[b["state"]], 1 if truthy(b.get("unlimited")) else 0, reason] + [lim[k] for k in KEYS]
-            + [used[k] for k in KEYS] + [used["tools"], used["failures"], used["retries"], len(bid)] + bid)
+            + [used[k] for k in KEYS] + [used["tools"], used["failures"], used["retries"], len(bid)] + pack(bid))
 
 
 def what_words(w):
@@ -302,7 +319,7 @@ def classify(case, o, run, steps, cut):
             return "fail", "driver status %s at %s" % (l, cur)
         if l.startswith("H "):
             f = list(map(int, l[2:].split()))
-            # [20, k, sessionId key, budgetId key]
+            # [20, k, sessionId key, budgetId key]: both keys raw, i.e. in packed form (n, packed words), as ref_words
             if f[0] != 20:
                 return "fail", "halt frame %r" % f
             k = f[1]
@@ -436,8 +453,8 @@ def cmd_perf(args):
     """Wall time: every lane runs once per round and size, and the lane order rotates every round; prints the median ns
     per call of each item. Lanes (LANES): pruv = driver_m8 (i64 op words, frame parsed per call); hand16 / fxmix / oa =
     the three hand implementations with pre-decoded keys (UNMATCHED boundary); hand16w / fxmixw / oaw = the same with
-    the matched wire boundary (`perfw`: the driver's i64 op words, frame checks and u16::try_from per unit into a
-    reused scratch buffer); hand = hand_m8 (old UTF-8 String keys, informational); ts = the TS oracle. Every lane except
+    the matched wire boundary (`perfw`: the driver's i64 op words in packed-u16 form, O(1) canonical key checks and a
+    lane unpack into a reused scratch buffer); hand = hand_m8 (old UTF-8 String keys, informational); ts = the TS oracle. Every lane except
     hand and ts also prints `chk <item> <size> <value>` (the full observed final state folded into a u64); the same size
     and reps go to every lane and any chk difference from Pruv aborts the run. Instructions (every lane except ts,
     unless --no-instr): one item per run (the drivers' item argument), retired-instruction difference between --reps

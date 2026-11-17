@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Harness for the L3-10 M3/M4 milestones.
 
-  python3 bench/l3/budget/m34_test/run.py m3|m4|perf [--pruvc PATH] [--seed N] [--count N]
+  python3 bench/l3/budget/m34_test/run.py m3|m4|perf|keys [--pruvc PATH] [--seed N] [--count N]
+
+`keys` (P03) builds root_keys.pruv / driver_keys.rs and compares every output line with the gen_keys.py oracle.
 
 Builds root_m3.pruv / root_m4.pruv (this directory) with pruvc into bench/l3/budget/work/m34/, compiles the Rust
 drivers against the generated modules, runs them on deterministic generated cases and compares with the Python
@@ -26,6 +28,7 @@ LIBS = ["--lib", "bench/l3/budget", "--lib", "bench/l3/lib"]
 sys.path.insert(0, HERE)
 import gen_m3   # noqa: E402
 import gen_m4   # noqa: E402
+import gen_keys  # noqa: E402
 
 
 class ToolError(Exception):
@@ -208,9 +211,38 @@ def cmd_m4(args):
     return 0 if not bad else 1
 
 
+# ---- keys -----------------------------------------------------------------------------------------------------------
+
+def cmd_keys(args):
+    exe = build(args.pruvc, "keys")
+    cases = gen_keys.make_cases(args.seed, args.count)
+    c = run([exe], inp="\n".join(x[0] for x in cases) + "\n", timeout=900)
+    if c.returncode != 0:
+        raise ToolError("driver_keys exit %d: %s" % (c.returncode, tail(c)))
+    lines = c.stdout.splitlines()
+    if len(lines) != len(cases):
+        raise ToolError("driver_keys printed %d lines for %d cases" % (len(lines), len(cases)))
+    bad = []
+    percat = {}
+    for i, ((line, exp, cat), got) in enumerate(zip(cases, lines)):
+        pc = percat.setdefault(cat, [0, 0])
+        pc[1] += 1
+        if got.split() == exp.split():
+            pc[0] += 1
+        else:
+            bad.append((i, cat, line, exp, got))
+    print("keys: %d/%d pass (seed %d)" % (len(cases) - len(bad), len(cases), args.seed))
+    print("keys: by category: " + ", ".join("%s %d/%d" % (k, v[0], v[1]) for k, v in sorted(percat.items())))
+    for i, cat, line, exp, got in bad[:5]:
+        print("MISMATCH case %d cat=%s: %s" % (i, cat, line[:300]))
+        print("  expected: %s" % exp[:300])
+        print("  got     : %s" % got[:300])
+    return 0 if not bad else 1
+
+
 # ---- perf -----------------------------------------------------------------------------------------------------------
 
-KV = re.compile(r"(\w+)=(\S+)")
+KV =re.compile(r"(\w+)=(\S+)")
 
 
 def parse_kv(text):
@@ -304,7 +336,7 @@ def cmd_perf(args):
 
 def main():
     ap = argparse.ArgumentParser(description="L3-10 M3/M4 test harness")
-    ap.add_argument("mode", choices=["m3", "m4", "perf"])
+    ap.add_argument("mode", choices=["m3", "m4", "perf", "keys"])
     ap.add_argument("--pruvc", default=PRUVC_DEFAULT)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--count", type=int, default=300)
@@ -312,7 +344,7 @@ def main():
     ap.add_argument("--axes", default="sessions,tools", help="perf: comma list of sessions,tools,clocks")
     args = ap.parse_args()
     try:
-        return {"m3": cmd_m3, "m4": cmd_m4, "perf": cmd_perf}[args.mode](args)
+        return {"m3": cmd_m3, "m4": cmd_m4, "perf": cmd_perf, "keys": cmd_keys}[args.mode](args)
     except ToolError as e:
         print("error: %s" % e, file=sys.stderr)
         return 2

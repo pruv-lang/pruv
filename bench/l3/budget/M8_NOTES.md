@@ -10,6 +10,14 @@ Files:
 
 All decisions are in Pruv. The host owns the buffers, grows on `-N`, and prints what Pruv returned. It never reads state words and never fills a missing path.
 
+## Wire (P05: packed-u16 keys)
+
+- Key = `n, packed words(n)`: n UTF-16 units (0..2^30) as m = ceil(n/4) i64 words; word i = `u[4i]<<48 | u[4i+1]<<32 | u[4i+2]<<16 | u[4i+3]` (two's complement, so `u[4i] >= 0x8000` gives a negative word); lanes past n are zero. Any word is 4 valid u16 lanes, so there is no per-unit range check; the only key check is O(1): n in 0..=2^30, the m words inside the op, tail lanes of the last word zero (canonical).
+- put: `[sessionId key, len, record...]`, record = `[state, unlimited, haltReason, limits x4, used x4, tools, failures, retries, bn, packed budgetId words(bn)]`, so `len == 15 + ceil(bn/4)`.
+- calls: `[1, sk, bk, what x10]` charge; `[2, sk, bk]` noteFailure; `[3, sk, bk, turnId key, activityId key]` noteTool; `[4, turnId key]` forgetTurn. Halt frame `H 20 k <op[1..e2) raw>` carries both keys in packed form.
+- observe (`O ...`): map keys are printed unpacked (`n, units...`); a session blob is its raw record words, so its budgetId part is `bn, packed words`.
+- Hand baselines (`hand_m8_u16`, `hand_m8_fx`, `hand_m8_oa`) decode the packed words at ingress (canonical check, then lane unpack into the reused scratch buffer) with algorithms unchanged and re-emit the id packed for observe/`chk`. `hand_m8.rs` (String keys) and `perf_ts.mjs` never touch the wire and are unchanged.
+
 ## Sub-operation interface
 
 - `charge(inout cv, what, ws)` statuses: 0 charged `{ok:true}`; 1 `{ok:true}` with nothing charged (no current budget, or closed); 16+r `{ok:false, reason:r}` for a halted budget; 32+k over limit on key k (1..4 = delegations, commands, reviews, checks), nothing charged; 5 ResourceBound; 2 invalid frame.

@@ -17,14 +17,23 @@ Controls (deterministic, no rng), each a q-mode case: put one session, optional 
 sequence (charge, noteFailure, noteTool new turn / same turn new activity / duplicate / existing activity, forgetTurn,
 charge, end) as ONE case, and every call alone as its own case (a rejected call stops a case, so the alone cases keep the
 later calls covered):
-  a  stored session-key unit = 65536 / -1 / 70000; op with the same corrupt unit (would hit) and with the original key
-  b  stored budget-id unit = 65536 / -1; op budget key with the same value, and the original
+  a  stored session key word corrupted: a non-zero tail lane (NON-CANONICAL stored key; op with the original key), and
+     a different valid word (positive twin: the op with the matching key hits, plus the original key)
+  b  stored budget-id word corrupted, same two kinds (the id words are record words 15, 16 of a 5-unit id)
   c  record state 3 / -2; reason 5 / -2 / 7 with state 1, reason 7 with state 0 and 2; unlimited 2
-  d  stored word 14 = n-15+1, n-15-1, 0 (non-empty id)
-  e  stored turn-key / activity-key unit (after noteTool) = 65536 / -1; noteTool and forgetTurn with the same corrupt
-     key (dedup hit) and with the original
+  d  stored word 14 (bn) = len+1, len-1, 0, len+4 (word count mismatch)
+  e  stored turn-key / activity-key word (after noteTool) corrupted, same two kinds; noteTool and forgetTurn with the
+     matching key (dedup hit) and with the original
   f  positive twins: no poke, and pokes that write the value already there
 Every poke must print `Z <i>`; `Z -` is a control error.
+
+P05 meaning change: keys are packed-u16 words (4 lanes per i64 word, bud_keys.pruv), so the old "unit = 65536 / -1 /
+70000" corruptions cannot be represented (every word is 4 valid lanes). The same store invariant ("every stored key
+passed ingress") is now violated by a NON-CANONICAL tail lane, which no wire key can reproduce, so those cases run the
+original key only; "different valid word" cases replace the old "same corrupt unit would hit" variants. Pokes anchor on
+the packed words (an arena key is stored packed, a record id is its raw packed words). NOTE: the default --old-rev
+(c4d3a63^) predates the packed wire and cannot run these programs; pass --old-rev with a revision that already has the
+packed wire (and the checks under test removed or added) for the NEW vs OLD comparison to be meaningful.
 
   python3 bench/l3/budget/m8_test/corrupt_resident.py [--pruvc PATH] [--old-rev REV] [--new-rev REV]
 Prints: controls N, mismatches M, poke-not-found P, how many controls bite on the OLD side, and per mismatch the case
@@ -89,8 +98,8 @@ def build(label, pruvc, rev):
 
 
 # ---- controls ----
-SK = [7001, 7002, 7003, 7004]  # session key units (occur nowhere else in the buffer)
-BID = [8101, 8102, 8103, 8104, 8105]  # budget id
+SK = [7001, 7002, 7003, 7004, 7005, 7006]  # session key units (6 units = 2 packed words, 2 tail lanes in the last)
+BID = [8101, 8102, 8103, 8104, 8105]  # budget id (5 units = 2 packed words, 3 tail lanes in the last)
 LIM = [777000001, 777000002, 777000003, 777000004]  # limits: record words 3..6, the poke anchor
 TURN = [5551, 5552, 5553]
 ACT = [6661, 6662]
@@ -100,7 +109,8 @@ WHAT = [0, 0, 2, 1, 0, 0, 0, 0, 2, 1]  # commands 1, retries 1
 
 
 def kw(u):
-    return [len(u)] + list(u)
+    """Wire key `n, packed words(n)`."""
+    return [len(u)] + run_m8.pack(list(u))
 
 
 def line(tag, words):
@@ -125,10 +135,11 @@ def rec_poke(word, value):
     return poke(LIM, word - 3, value)
 
 
-def with_unit(u, j, v):
-    u = list(u)
-    u[j] = v
-    return u
+def pk(u):
+    return run_m8.pack(list(u))
+
+
+ALT4 = [65535, 1, 0x8000, 2]  # four lanes with the top lane >= 0x8000: a negative packed word
 
 
 def ops_of(sk, bk, t, a):
@@ -153,16 +164,18 @@ SETUP = [line("call", [3] + kw(SK) + kw(BID) + kw(TURN) + kw(ACT)),
 def scenarios():
     """Yields (name, setup lines, poke lines, variants); variant = (label, sk, bk, t, a)."""
     orig = ("orig", SK, BID, TURN, ACT)
-    # a) session-key unit
-    for v in (65536, -1, 70000):
-        for j in range(len(SK)):
-            sk = with_unit(SK, j, v)
-            yield ("a-sk%d-u%d" % (v, j), [], [poke(SK, j, v)], [("hit", sk, BID, TURN, ACT), orig])
-    # b) budget-id unit
-    for v in (65536, -1):
-        for j in range(len(BID)):
-            bk = with_unit(BID, j, v)
-            yield ("b-bid%d-u%d" % (v, j), [], [rec_poke(15 + j, v)], [("hit", SK, bk, TURN, ACT), orig])
+    SKP, BP, TP, AP = pk(SK), pk(BID), pk(TURN), pk(ACT)
+    # a) session-key words (arena key, packed): a different valid word (twin, the matching key hits) and non-zero tail
+    #    lanes of the last word (non-canonical stored key: no wire key matches it, original key only)
+    yield ("a-sk-w0-valid", [], [poke(SKP, 0, pk(ALT4)[0])], [("hit", ALT4 + SK[4:], BID, TURN, ACT), orig])
+    yield ("a-sk-w1-valid", [], [poke(SKP, 1, pk([40000, 41000])[0])], [("hit", SK[:4] + [40000, 41000], BID, TURN, ACT), orig])
+    yield ("a-sk-tail2", [], [poke(SKP, 1, SKP[1] | (1 << 16))], [orig])
+    yield ("a-sk-tail3", [], [poke(SKP, 1, SKP[1] | 0xFFFF)], [orig])
+    # b) budget-id words (record words 15, 16)
+    yield ("b-bid-w0-valid", [], [rec_poke(15, pk(ALT4)[0])], [("hit", SK, ALT4 + BID[4:], TURN, ACT), orig])
+    yield ("b-bid-w1-valid", [], [rec_poke(16, pk([9999])[0])], [("hit", SK, BID[:4] + [9999], TURN, ACT), orig])
+    yield ("b-bid-tail1", [], [rec_poke(16, BP[1] | (1 << 32))], [orig])
+    yield ("b-bid-tail3", [], [rec_poke(16, BP[1] | 0xFFFF)], [orig])
     # c) state / unlimited / reason
     for v in (3, -2):
         yield ("c-state%d" % v, [], [rec_poke(0, v)], [orig])
@@ -171,18 +184,16 @@ def scenarios():
     for s in (0, 2):
         yield ("c-st%d-reason7" % s, [], [rec_poke(0, s), rec_poke(2, 7)], [orig])
     yield ("c-unl2", [], [rec_poke(1, 2)], [orig])
-    # d) word 14
-    n = 15 + len(BID)
-    for v in (n - 15 + 1, n - 15 - 1, 0):
+    # d) word 14 (bn); the record holds 2 id words. bn = len+1 / len-1 keep the word count (len+1 stays canonical
+    #    for these words, len-1 does not); len+4 and 0 break the word count.
+    for v in (len(BID) + 1, len(BID) - 1, 0, len(BID) + 4):
         yield ("d-w14-%d" % v, [], [rec_poke(14, v)], [orig])
-    # e) turn / activity key units after noteTool
-    for v in (65536, -1):
-        for j in range(len(TURN)):
-            t = with_unit(TURN, j, v)
-            yield ("e-turn%d-u%d" % (v, j), SETUP, [poke(TURN, j, v)], [("hit", SK, BID, t, ACT), orig])
-        for j in range(len(ACT)):
-            a = with_unit(ACT, j, v)
-            yield ("e-act%d-u%d" % (v, j), SETUP, [poke(ACT, j, v)], [("hit", SK, BID, TURN, a), orig])
+    # e) turn / activity key words after noteTool (TURN: 3 units, tail lane 3; ACT: 2 units, tail lanes 2, 3)
+    yield ("e-turn-valid", SETUP, [poke(TP, 0, pk([65535, 5552, 5553])[0])], [("hit", SK, BID, [65535, 5552, 5553], ACT), orig])
+    yield ("e-turn-tail3", SETUP, [poke(TP, 0, TP[0] | 0xFFFF)], [orig])
+    yield ("e-act-valid", SETUP, [poke(AP, 0, pk([9999, 1])[0])], [("hit", SK, BID, TURN, [9999, 1]), orig])
+    yield ("e-act-tail2", SETUP, [poke(AP, 0, AP[0] | (1 << 16))], [orig])
+    yield ("e-act-tail3", SETUP, [poke(AP, 0, AP[0] | 0xFFFF)], [orig])
     # f) positive twins: no poke, and pokes writing the value already there
     yield ("f-none", [], [], [orig])
     yield ("f-none-tools", SETUP, [], [orig])
@@ -190,12 +201,12 @@ def scenarios():
     yield ("f-same-reason", [], [rec_poke(2, -1)], [orig])
     yield ("f-same-unl", [], [rec_poke(1, 0)], [orig])
     yield ("f-same-w14", [], [rec_poke(14, len(BID))], [orig])
-    for j in range(len(SK)):
-        yield ("f-same-sk-u%d" % j, [], [poke(SK, j, SK[j])], [orig])
-    for j in range(len(BID)):
-        yield ("f-same-bid-u%d" % j, [], [rec_poke(15 + j, BID[j])], [orig])
-    yield ("f-same-turn-u0", SETUP, [poke(TURN, 0, TURN[0])], [orig])
-    yield ("f-same-act-u0", SETUP, [poke(ACT, 0, ACT[0])], [orig])
+    for j in range(len(SKP)):
+        yield ("f-same-sk-w%d" % j, [], [poke(SKP, j, SKP[j])], [orig])
+    for j in range(len(BP)):
+        yield ("f-same-bid-w%d" % j, [], [rec_poke(15 + j, BP[j])], [orig])
+    yield ("f-same-turn-w0", SETUP, [poke(TP, 0, TP[0])], [orig])
+    yield ("f-same-act-w0", SETUP, [poke(AP, 0, AP[0])], [orig])
 
 
 def build_program():
