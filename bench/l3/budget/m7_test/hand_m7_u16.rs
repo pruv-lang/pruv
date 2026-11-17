@@ -2,10 +2,15 @@
 // (bud_lifecycle.pruv + root.pruv behind driver_m7.rs). hand_m7.rs (UTF-8 String keys) stays as an informational row.
 //
 //   hand_m7_u16 q                        stdin program as driver_m7.rs run_q, byte-identical output lines
-//   hand_m7_u16 perf <S> <reps> [item]   prints `item size ns_per_call` for ishalted, current, attach, closereopen,
+//   hand_m7_u16 perf <S> <reps> [item] [lane]
+//                                        prints `item size ns_per_call` for ishalted, current, attach, closereopen,
 //                                        replace (same items / shapes as driver_m7.rs run_perf; dispatch and rawcall
 //                                        are Pruv-only probes) and, after each item, `chk item size value` and
-//                                        `rchk item size value`
+//                                        `rchk item size value` (typed lane: typed method calls on pre-decoded keys);
+//                                        the wire lane prints `w item size ns_per_call` and `rchk_w item size value`
+//                                        (Host::call_quiet: op build into a cached Vec, decode_call, dispatch, effect
+//                                        bookkeeping; no logging, no result words in the timed loop).
+//                                        lane: typed | wire | all (default all); item: an item name or `all`.
 //
 // chk (hand only): the full observed final state (the words q mode prints after `O`) folded as s = s*31 + w (wrapping
 // u64), computed outside the timing; it shows that the perf runs are deterministic.
@@ -20,11 +25,17 @@
 // instants as Stamp / At variants). encode() writes the identical record words back (header comment of
 // bud_lifecycle.pruv), which q mode prints for `V 4 ...` and `O`.
 //
+// Input format (P05b): every key on the wire is a packed u16 key `n, words(n) packed words` (bud_keys layout: four
+// big-endian lanes per word, tail lanes zero), and the record strings 0 (id) and 4 (follows) are packed the same way.
+// Only the INPUT and the record words change: keys are checked like root.pruv's bud_keys::rec_end (n in 0..2^30, the
+// words inside the op, zero tail lanes; else status 2 / `X del 2` / `t_put status 2`) and unpacked once into the
+// Box<[u16]> keys the algorithm below has always used; encode() writes ids packed again. Result words name ids in
+// units, as before.
+//
 // Domain of this baseline (differences from the Pruv words machine, all fatal, exit status 3, never silent):
-//  * a stored key or uuid with a unit outside 0..65535 (the Pruv store keeps the raw word) is not representable;
-//    a call key with such a unit can never match a stored key and is answered as a miss.
 //  * a session record with state 0..2 and >= 30 words that is not canonical (unused header words nonzero, string
-//    lengths not adding up to the word count, unit out of range, header enum out of range) is not representable.
+//    lengths not adding up to the word count, unit out of range, a packed id / follows with nonzero tail lanes,
+//    header enum out of range) is not representable.
 //    Records with state outside 0..2 or fewer than 30 words are kept as opaque words (Pruv's CURRENT never matches
 //    them; attach / replace open over them, or answer 2 when the word count is below 30 and state >= 0).
 //  * clocks: the M9 clock map exists (HashMap, empty: the q protocol has no way to fill it), consulted where Pruv
@@ -132,11 +143,101 @@ fn u16s(s: &str) -> Key {
     s.encode_utf16().collect()
 }
 
+// ---- packed keys (bud_keys layout) ----
+
+const MAX_KEY_UNITS: i64 = 1 << 30;
+
+// Data words of a packed key of n units, None outside 0..=2^30.
+fn words_of(n: i64) -> Option<usize> {
+    if (0..=MAX_KEY_UNITS).contains(&n) {
+        Some((n as usize + 3) / 4)
+    } else {
+        None
+    }
+}
+
+// Words of the packed form of an n-unit key (result keys are packed: `n, words(n)`).
+fn packed_words(n: usize) -> usize {
+    (n + 3) / 4
+}
+
+// The unused tail lanes of the last word of an n-unit key (n % 4 != 0) must be zero (canonical form).
+fn tail_ok(n: i64, last: i64) -> bool {
+    let r = (n & 3) as u32;
+    r == 0 || (last as u64) & ((1u64 << (16 * (4 - r))) - 1) == 0
+}
+
+// O(1) canonical check of a packed key of n units held in exactly `w`.
+fn packed_ok(n: i64, w: &[i64]) -> bool {
+    words_of(n) == Some(w.len()) && (w.is_empty() || tail_ok(n, w[w.len() - 1]))
+}
+
+// The n units of packed words `w` (already checked by packed_ok).
+fn unpack_key(n: i64, w: &[i64]) -> Key {
+    let n = n as usize;
+    let mut v: Vec<u16> = Vec::with_capacity(n);
+    for (i, &x) in w.iter().enumerate() {
+        for l in 0..4 {
+            if 4 * i + l < n {
+                v.push(((x as u64) >> (48 - 16 * l)) as u16);
+            }
+        }
+    }
+    v.into_boxed_slice()
+}
+
+fn pack_u16(u: &[u16]) -> Vec<i64> {
+    u.chunks(4)
+        .map(|c| {
+            let mut x: u64 = 0;
+            for l in 0..4 {
+                x = (x << 16) | u64::from(c.get(l).copied().unwrap_or(0));
+            }
+            x as i64
+        })
+        .collect()
+}
+
+// root.pruv's bud_keys::rec_end: the end of the packed key record `n, words(n)` at op[p], None when n is outside
+// 0..2^30, the words run past the op, or a tail lane is nonzero.
+fn rec_end(op: &[i64], p: usize) -> Option<usize> {
+    let n = *op.get(p)?;
+    let m = words_of(n)?;
+    let end = (p + 1).checked_add(m)?;
+    if end > op.len() || !packed_ok(n, &op[p + 1..end]) {
+        return None;
+    }
+    Some(end)
+}
+
+// The key of the packed record that rec_end(op, p) accepted.
+fn key_at(op: &[i64], p: usize, end: usize) -> Key {
+    unpack_key(op[p], &op[p + 1..end])
+}
+
+// The same unpack into a reused scratch buffer (call keys: no per-call allocation once the buffer has grown).
+fn key_into(op: &[i64], p: usize, end: usize, v: &mut Vec<u16>) {
+    let w = &op[p + 1..end];
+    v.clear();
+    v.resize(4 * w.len(), 0);
+    for (d, &x) in v.chunks_exact_mut(4).zip(w) {
+        let x = x as u64;
+        d.copy_from_slice(&[(x >> 48) as u16, (x >> 32) as u16, (x >> 16) as u16, x as u16]);
+    }
+    v.truncate(op[p] as usize);
+}
+
 // ---- record words <-> typed Budget ----
 
 fn push_str(v: &mut Vec<i64>, s: &[u16]) {
     v.push(s.len() as i64);
     v.extend(s.iter().map(|&u| u as i64));
+}
+
+// A framed packed key `n, words(n)` (record strings 0 and 4).
+fn push_key(v: &mut Vec<i64>, s: &[u16]) {
+    v.push(s.len() as i64);
+    v.extend(pack_u16(s));
 }
 
 fn encode(b: &Budget) -> Vec<i64> {
@@ -190,11 +291,11 @@ fn encode(b: &Budget) -> Vec<i64> {
     h[23] = fk;
     let mut v: Vec<i64> = Vec::with_capacity(30 + b.id.len() + b.rest.len() + st.len() + et.len() + ot.len() + ft.len());
     v.extend_from_slice(&h);
-    push_str(&mut v, &b.id);
+    push_key(&mut v, &b.id);
     push_str(&mut v, ot);
     push_str(&mut v, st);
     push_str(&mut v, et);
-    push_str(&mut v, ft);
+    push_key(&mut v, ft);
     push_str(&mut v, &b.rest);
     v
 }
@@ -211,25 +312,36 @@ fn how_n(h: How) -> i64 {
 fn canonical(w: &[i64]) -> Option<Budget> {
     let empty_w: &[i64] = &[];
     let mut strs = [empty_w; 6];
+    let mut lens = [0i64; 6];
     let mut p = 24usize;
-    for s in strs.iter_mut() {
+    for (i, s) in strs.iter_mut().enumerate() {
         let len = *w.get(p)?;
         if len < 0 {
             return None;
         }
-        let end = p.checked_add(1)?.checked_add(usize::try_from(len).ok()?)?;
+        // strings 0 (id) and 4 (follows) are packed keys: words(len) data words
+        let dw = if i == 0 || i == 4 { words_of(len)? } else { usize::try_from(len).ok()? };
+        let end = p.checked_add(1)?.checked_add(dw)?;
         if end > w.len() {
             return None;
         }
         *s = &w[p + 1..end];
+        lens[i] = len;
         p = end;
     }
     if p != w.len() {
         return None;
     }
     let mut t: Vec<Key> = Vec::with_capacity(6);
-    for s in &strs {
-        t.push(key_of(s)?);
+    for (i, s) in strs.iter().enumerate() {
+        if i == 0 || i == 4 {
+            if !packed_ok(lens[i], s) {
+                return None;
+            }
+            t.push(unpack_key(lens[i], s));
+        } else {
+            t.push(key_of(s)?);
+        }
     }
     let empty = |i: usize| strs[i].is_empty();
     let state = match w[0] {
@@ -390,13 +502,13 @@ fn attach_slot<'a>(
     let live = matches!(&*slot, Slot::Budget(b) if b.state != State::Closed);
     if live {
         let Slot::Budget(b) = slot else { unreachable!() };
-        if 2 + b.id.len() > OUT_LEN {
+        if 2 + packed_words(b.id.len()) > OUT_LEN {
             return Err(3);
         }
         return Ok(Res::Ref(&b.id, None));
     }
     let Some(uuid) = uuid else { unsupported("uuid key unit outside 0..65535") };
-    if 2 + uuid.len() > OUT_LEN {
+    if 2 + packed_words(uuid.len()) > OUT_LEN {
         return Err(3);
     }
     if !clocks.is_empty() {
@@ -488,7 +600,7 @@ impl World {
         }
         let Slot::Budget(old) = slot else { unreachable!() };
         let Some(uuid) = uuid else { unsupported("uuid key unit outside 0..65535") };
-        if 3 + uuid.len() + old.id.len() > OUT_LEN {
+        if 3 + packed_words(uuid.len()) + packed_words(old.id.len()) > OUT_LEN {
             return Err(3);
         }
         // CLOSE's clock part (SETTLE adds nothing without runs; DROP removes the clock)
@@ -579,20 +691,7 @@ impl World {
 
 // ---- q mode: the driver_m7.rs program protocol ----
 
-// root.pruv key_end: the end of the key `len, units...` at p (length within op; units are not checked here).
-fn key_end(op: &[i64], p: usize) -> Option<usize> {
-    let n = op.len();
-    if p >= n {
-        return None;
-    }
-    let kn = op[p];
-    if kn < 0 || kn > (n - p - 1) as i64 {
-        return None;
-    }
-    Some(p + 1 + kn as usize)
-}
-
-// t_call's op: [code, now, quiet, origin, size, unit x6, sessionId key, budgetId key, uuid key]
+// t_call's op: [code, now, quiet, origin, size, unit x6, sessionId key, budgetId key, uuid key] (packed keys)
 struct Call {
     code: i64,
     now: i64,
@@ -600,21 +699,27 @@ struct Call {
     origin: i64,
     size: i64,
     unit: [i64; 6],
-    sk: Option<Key>,
-    bk: Option<Key>,
-    uk: Option<Key>,
 }
 
-// root.pruv t_call's frame checks; Err = status 2. A key with a unit outside 0..65535 decodes to None (never matches).
-fn decode_call(op: &[i64]) -> Result<Call, i64> {
-    let e1 = key_end(op, 11).ok_or(2)?;
-    let e2 = key_end(op, e1).ok_or(2)?;
-    let e3 = key_end(op, e2).ok_or(2)?;
+// The three call keys (sessionId, budgetId, uuid) as u16 units, decoded by decode_call into buffers the host reuses.
+type CallKeys = [Vec<u16>; 3];
+
+// root.pruv t_call's frame checks (bud_keys::rec_end on all three keys before anything else); Err = status 2. The
+// packed keys are unpacked here, once, into the unit keys the algorithm uses (every packed lane is a valid unit), in
+// the caller's reused scratch buffers.
+fn decode_call(op: &[i64], keys: &mut CallKeys) -> Result<Call, i64> {
+    let e1 = rec_end(op, 11).ok_or(2)?;
+    let e2 = rec_end(op, e1).ok_or(2)?;
+    let e3 = rec_end(op, e2).ok_or(2)?;
     if e3 != op.len() {
         return Err(2);
     }
     let mut unit = [0i64; 6];
     unit.copy_from_slice(&op[5..11]);
+    let [sk, bk, uk] = keys;
+    key_into(op, 11, e1, sk);
+    key_into(op, e1, e2, bk);
+    key_into(op, e2, e3, uk);
     Ok(Call {
         code: op[0],
         now: op[1],
@@ -622,9 +727,6 @@ fn decode_call(op: &[i64]) -> Result<Call, i64> {
         origin: op[3],
         size: op[4],
         unit,
-        sk: key_of(&op[12..e1]),
-        bk: key_of(&op[e1 + 1..e2]),
-        uk: key_of(&op[e2 + 1..e3]),
     })
 }
 
@@ -647,40 +749,25 @@ fn size_of(z: i64) -> Option<Size> {
     }
 }
 
-fn dispatch<'a>(w: &'a mut World, c: &Call) -> Result<Res<'a>, i64> {
-    let sk = c.sk.as_deref();
-    let bk = c.bk.as_deref();
+fn dispatch<'a>(w: &'a mut World, c: &Call, keys: &CallKeys) -> Result<Res<'a>, i64> {
+    let [s, b, u] = keys;
     match c.code {
-        1 => Ok(match (sk, bk) {
-            (Some(s), Some(b)) => match w.current(s, b) {
-                Some(x) => Res::View(x),
-                None => Res::Undef,
-            },
-            _ => Res::Undef,
+        1 => Ok(match w.current(s, b) {
+            Some(x) => Res::View(x),
+            None => Res::Undef,
         }),
-        2 => Ok(Res::Bool(match (sk, bk) {
-            (Some(s), Some(b)) => w.is_halted(s, b),
-            _ => false,
-        })),
-        5 => match (sk, bk) {
-            (Some(s), Some(b)) => w.reopen(s, b),
-            _ => Ok(Res::Bool(false)),
-        },
-        6 => match sk {
-            Some(s) => w.maybe_close(s, c.quiet, c.now),
-            None => Err(2),
-        },
+        2 => Ok(Res::Bool(w.is_halted(s, b))),
+        5 => w.reopen(s, b),
+        6 => w.maybe_close(s, c.quiet, c.now),
         3 => {
             let origin = origin_of(c.origin).ok_or(2)?;
             let size = size_of(c.size).ok_or(2)?;
-            let s = sk.ok_or(2)?;
-            w.attach(s, origin, size, &c.unit, c.uk.as_deref(), c.now)
+            w.attach(s, origin, size, &c.unit, Some(u), c.now)
         }
         4 => {
             let origin = origin_of(if c.origin < 0 { 0 } else { c.origin }).ok_or(2)?;
             let size = size_of(c.size).ok_or(2)?;
-            let s = sk.ok_or(2)?;
-            w.replace(s, origin, size, &c.unit, c.uk.as_deref(), c.now)
+            w.replace(s, origin, size, &c.unit, Some(u), c.now)
         }
         _ => Err(2),
     }
@@ -718,16 +805,97 @@ struct Host {
     quiet: Vec<i64>,
     next_quiet: usize,
     log: Vec<String>,
+    // perf wire lane only: the ops built so far, keyed by (body address, body length, quiet, uuid index), as
+    // driver_m7 World::take_op caches them in silent mode; a cached op only gets its `now` word refreshed.
+    ops: Vec<((usize, usize, i64, usize), Vec<i64>)>,
+    // decode_call's key buffers, reused across calls
+    keys: CallKeys,
 }
 
 impl Host {
     fn new() -> Host {
-        Host { w: World::new(), now: 1700000000000, uuids: Vec::new(), next_uuid: 0, quiet: Vec::new(), next_quiet: 0, log: Vec::new() }
+        Host {
+            w: World::new(),
+            now: 1700000000000,
+            uuids: Vec::new(),
+            next_uuid: 0,
+            quiet: Vec::new(),
+            next_quiet: 0,
+            log: Vec::new(),
+            ops: Vec::new(),
+            keys: [Vec::new(), Vec::new(), Vec::new()],
+        }
     }
 
-    // t_put: [sessionId key, n, record words...]; a malformed frame stops the driver (status 2), like driver_m7.
+    // Silent variant of `call` (perf wire lane): the same op build (cached Vec, no per-call allocation), decode_call,
+    // dispatch and effect-driven next_uuid / next_quiet bookkeeping, but no log lines. Returns the status. The result
+    // is only black_boxed, unless `words` is given: then the result words are stored there (status 0; else empty).
+    fn run_quiet(&mut self, body: &[i64], mut words: Option<&mut Vec<i64>>) -> i64 {
+        let quiet = self.quiet.get(self.next_quiet).copied().unwrap_or(0);
+        let k = (body.as_ptr() as usize, body.len(), quiet, self.next_uuid);
+        let slot = match self.ops.iter().position(|(key, _)| *key == k) {
+            Some(i) => i,
+            None => {
+                self.ops.push((k, Vec::new()));
+                self.ops.len() - 1
+            }
+        };
+        if self.ops[slot].1.is_empty() {
+            let op = &mut self.ops[slot].1;
+            op.push(body[0]);
+            op.push(self.now);
+            op.push(quiet);
+            op.extend_from_slice(&body[1..]);
+            match self.uuids.get(self.next_uuid) {
+                Some(u) => op.extend_from_slice(u),
+                None => op.push(0),
+            }
+        }
+        self.ops[slot].1[1] = self.now;
+        if let Some(v) = words.as_deref_mut() {
+            v.clear();
+        }
+        self.w.fx.clear();
+        let status = match decode_call(&self.ops[slot].1, &mut self.keys) {
+            Err(s) => s,
+            Ok(c) => match dispatch(&mut self.w, &c, &self.keys) {
+                Ok(r) => {
+                    match words.as_deref_mut() {
+                        Some(v) => v.extend(res_words(&r)),
+                        None => {
+                            black_box(&r);
+                        }
+                    }
+                    0
+                }
+                Err(s) => s,
+            },
+        };
+        if status != 0 {
+            // A finished call that consulted isQuiet consumed the answer even when it failed afterwards.
+            if self.w.fx.iter().any(|e| matches!(e, Effect::Quiet)) {
+                self.next_quiet += 1;
+            }
+            return status;
+        }
+        for e in &self.w.fx {
+            match e {
+                Effect::Uuid => self.next_uuid += 1,
+                Effect::Quiet => self.next_quiet += 1,
+                _ => {}
+            }
+        }
+        status
+    }
+
+    fn call_quiet(&mut self, body: &[i64]) -> i64 {
+        self.run_quiet(body, None)
+    }
+
+    // t_put: [sessionId key (packed), n, record words...]; a malformed frame or a non-canonical key stops the driver
+    // (status 2), like driver_m7.
     fn put(&mut self, op: &[i64]) {
-        let framed = match key_end(op, 0) {
+        let framed = match rec_end(op, 0) {
             Some(e1) if e1 < op.len() => {
                 let n = op[e1];
                 if n >= 0 && n == (op.len() - e1 - 1) as i64 {
@@ -742,20 +910,16 @@ impl Host {
             eprintln!("t_put status 2");
             std::process::exit(2);
         };
-        let Some(key) = key_of(&op[1..e1]) else { unsupported("session key unit outside 0..65535") };
+        let key = key_at(op, 0, e1);
         let slot = decode(&op[e1 + 1..]);
         self.w.put(&key, slot);
     }
 
-    // t_del: [sessionId key]; a malformed key frame logs `X del 2` and the case goes on.
+    // t_del: [sessionId key (packed)]; a malformed or non-canonical key frame logs `X del 2` and the case goes on.
     fn del(&mut self, op: &[i64]) {
-        match key_end(op, 0) {
+        match rec_end(op, 0) {
             None => self.log.push("X del 2".to_string()),
-            Some(e1) => {
-                if let Some(k) = key_of(&op[1..e1]) {
-                    self.w.del(&k);
-                }
-            }
+            Some(e1) => self.w.del(&key_at(op, 0, e1)),
         }
     }
 
@@ -773,9 +937,9 @@ impl Host {
             None => op.push(0),
         }
         self.w.fx.clear();
-        let (status, words) = match decode_call(&op) {
+        let (status, words) = match decode_call(&op, &mut self.keys) {
             Err(s) => (s, Vec::new()),
-            Ok(c) => match dispatch(&mut self.w, &c) {
+            Ok(c) => match dispatch(&mut self.w, &c, &self.keys) {
                 Ok(r) => (0, res_words(&r)),
                 Err(s) => (s, Vec::new()),
             },
@@ -821,14 +985,14 @@ fn nums(it: &[&str]) -> Vec<i64> {
     it.iter().map(|x| x.parse::<i64>().unwrap()).collect()
 }
 
-// A run of keys `len, units...` into separate keys (as driver_m7.rs keys).
+// A run of packed keys `n, words(n) packed words` into separate keys with their frame word (as driver_m7.rs keys).
 fn keys(w: &[i64]) -> Vec<Vec<i64>> {
     let mut v = Vec::new();
     let mut p = 0;
     while p < w.len() {
-        let n = w[p] as usize;
-        v.push(w[p..p + 1 + n].to_vec());
-        p += 1 + n;
+        let m = (w[p].max(0) as usize + 3) / 4;
+        v.push(w[p..p + 1 + m].to_vec());
+        p += 1 + m;
     }
     v
 }
@@ -945,7 +1109,14 @@ fn run_perf(args: &[String]) {
     let size: usize = args[0].parse().unwrap();
     let reps: usize = args[1].parse().unwrap();
     let only = args.get(2).map(|s| s.as_str());
-    let on = |item: &str| only.map_or(true, |o| o == item);
+    let lane = args.get(3).map(|s| s.as_str()).unwrap_or("all");
+    if !matches!(lane, "typed" | "wire" | "all") {
+        eprintln!("hand_m7_u16: lane must be typed|wire|all, got {}", lane);
+        std::process::exit(2);
+    }
+    let typed = lane != "wire";
+    let wire = lane != "typed";
+    let on = |item: &str| only.map_or(true, |o| o == "all" || o == item);
     let vn = reps.min(2000); // iterations of each untimed rchk verification pass
     let sids: Vec<Key> = (0..size).map(|i| u16s(&format!("s{:04}", i))).collect();
     let bid = |i: usize| format!("{:08x}-0000-4000-8000-000000000001", i);
@@ -965,7 +1136,7 @@ fn run_perf(args: &[String]) {
     let lbid = u16s(&bid(last));
     let lbid: &[u16] = &lbid;
 
-    if on("ishalted") {
+    if typed && on("ishalted") {
         let w = setup(State::Open);
         for _ in 0..1000 {
             black_box(w.is_halted(black_box(sid), black_box(lbid)));
@@ -985,7 +1156,7 @@ fn run_perf(args: &[String]) {
         println!("rchk ishalted {} {}", size, s);
     }
 
-    if on("current") {
+    if typed && on("current") {
         let w = setup(State::Open);
         for _ in 0..1000 {
             black_box(w.current(black_box(sid), black_box(lbid)));
@@ -1009,7 +1180,7 @@ fn run_perf(args: &[String]) {
         println!("rchk current {} {}", size, s);
     }
 
-    if on("attach") {
+    if typed && on("attach") {
         let mut w = setup(State::Open);
         let mut go = |w: &mut World| {
             w.fx.clear();
@@ -1034,7 +1205,7 @@ fn run_perf(args: &[String]) {
         println!("rchk attach {} {}", size, s);
     }
 
-    if on("closereopen") {
+    if typed && on("closereopen") {
         let mut w = setup(State::Open);
         let mut go = |w: &mut World| {
             w.fx.clear();
@@ -1064,7 +1235,7 @@ fn run_perf(args: &[String]) {
         println!("rchk closereopen {} {}", size, s);
     }
 
-    if on("replace") {
+    if typed && on("replace") {
         let mut w = setup(State::Halted);
         let halted = rec(&bid(last), State::Halted);
         let mut go = |w: &mut World| {
@@ -1091,6 +1262,116 @@ fn run_perf(args: &[String]) {
         }
         println!("rchk replace {} {}", size, s);
     }
+
+    if wire {
+        // Wire lane: the same bodies and setups as driver_m7.rs run_perf, through Host::run_quiet (op build into a cached
+        // Vec, decode_call, dispatch, effect bookkeeping; no logging). Per call next_uuid / next_quiet are reset to 0.
+        let wbody = |code: i64, origin: i64, sz: i64, b: &str| -> Vec<i64> {
+            let mut v = vec![code, origin, sz];
+            v.extend_from_slice(&unit);
+            v.extend(wkey(sid));
+            v.extend(wkey(&u16s(b)));
+            v
+        };
+        let wsetup = |state: State, quiet: Vec<i64>| -> Host {
+            let mut h = Host::new();
+            for (i, s) in sids.iter().enumerate() {
+                h.w.put(s, Slot::Budget(rec(&bid(i), state)));
+            }
+            h.uuids = vec![wkey(&uuid_key)];
+            h.quiet = quiet;
+            h
+        };
+        // timed loop of one item's ops (per = calls per rep)
+        let wtime = |h: &mut Host, ops: &[Vec<i64>], per: usize| -> f64 {
+            for _ in 0..1000 {
+                for op in ops {
+                    h.next_uuid = 0;
+                    h.next_quiet = 0;
+                    h.run_quiet(op, None);
+                }
+            }
+            let t = Instant::now();
+            for _ in 0..reps {
+                for op in ops {
+                    h.next_uuid = 0;
+                    h.next_quiet = 0;
+                    black_box(h.call_quiet(black_box(op)));
+                }
+            }
+            t.elapsed().as_nanos() as f64 / (reps * per) as f64
+        };
+        // untimed verification: fresh identical setup, the same ops and resets, vn iterations, rchk_fold of every call
+        let wverify = |h: &mut Host, ops: &[Vec<i64>]| -> u64 {
+            let mut s = 0u64;
+            let mut words: Vec<i64> = Vec::new();
+            for _ in 0..vn {
+                for op in ops {
+                    h.next_uuid = 0;
+                    h.next_quiet = 0;
+                    let st = h.run_quiet(op, Some(&mut words));
+                    s = rchk_fold(s, st, &words, &h.w.fx);
+                }
+            }
+            s
+        };
+        let blast = bid(last);
+        let items: [(&str, State, Vec<i64>, Vec<Vec<i64>>); 4] = [
+            ("ishalted", State::Open, vec![], vec![wbody(2, -1, -1, &blast)]),
+            ("current", State::Open, vec![], vec![wbody(1, -1, -1, &blast)]),
+            ("attach", State::Open, vec![], vec![wbody(3, 0, -1, "")]),
+            ("closereopen", State::Open, vec![1], vec![wbody(6, -1, -1, ""), wbody(5, -1, -1, &blast)]),
+        ];
+        for (name, state, quiet, ops) in &items {
+            if !on(name) {
+                continue;
+            }
+            let per = ops.len();
+            let mut h = wsetup(*state, quiet.clone());
+            println!("w {} {} {:.1}", name, size, wtime(&mut h, ops, per));
+            let mut h = wsetup(*state, quiet.clone());
+            println!("rchk_w {} {} {}", name, size, wverify(&mut h, ops));
+        }
+        if on("replace") {
+            // replace on a halted budget, then the halted record is put back through Host::put (wire frame: sessionId
+            // key, record length, record words), timed together as in driver_m7
+            let rp = wbody(4, 0, 2, "");
+            let r = encode(&rec(&bid(last), State::Halted));
+            let mut put = wkey(sid);
+            put.push(r.len() as i64);
+            put.extend(r);
+            let mut h = wsetup(State::Halted, vec![]);
+            for _ in 0..1000 {
+                h.next_uuid = 0;
+                h.run_quiet(&rp, None);
+                h.put(&put);
+            }
+            let t = Instant::now();
+            for _ in 0..reps {
+                h.next_uuid = 0;
+                black_box(h.call_quiet(black_box(&rp)));
+                h.put(black_box(&put));
+            }
+            println!("w replace {} {:.1}", size, t.elapsed().as_nanos() as f64 / reps as f64);
+            let mut h = wsetup(State::Halted, vec![]);
+            let mut s = 0u64;
+            let mut words: Vec<i64> = Vec::new();
+            for _ in 0..vn {
+                h.next_uuid = 0;
+                let st = h.run_quiet(&rp, Some(&mut words));
+                s = rchk_fold(s, st, &words, &h.w.fx);
+                h.put(&put);
+            }
+            println!("rchk_w replace {} {}", size, s);
+        }
+    }
+}
+
+// Wire key `n, packed words(n)` of a unit key (as driver_m7.rs key).
+fn wkey(u: &[u16]) -> Vec<i64> {
+    let mut v = vec![u.len() as i64];
+    v.extend(pack_u16(u));
+    v
 }
 
 fn main() {

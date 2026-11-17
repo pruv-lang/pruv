@@ -9,7 +9,7 @@ mod bud_world;
 mod bud_card;
 
 // L3-10 M11 test root. STAND-IN for the session table of the real app (deps.findSession / deps.save): sessions live in
-// the resident store st via bud_world::session_put / bud_map lookups; key = session id units, blob = the budget V of
+// the resident store st via bud_world::session_put_w / bud_map::find_w; key = session id as a packed key, blob = the budget V of
 // the session (an empty blob = a session without a budget). All judgments (CURRENT, closed, validation, the card,
 // the stored budget, the result value) are made here or in bud_card; the Rust host only moves words.
 //
@@ -110,14 +110,19 @@ fn str_eq(a: [i64], pa: i64, b: [i64], pb: i64) -> bool
   return true;
 }
 
-// the session entry for the string value at sp, or -1
-fn session_entry(st: [i64], rf: [i64], sp: i64) -> i64
+// The session entry for the packed key sid (framed `n, words(n) packed words`), or -1. An empty sid = the ref has no
+// string sessionId (nothing to look up: -1, like the old non-string case).
+// Design (ref IDs): the V string "sessionId" inside the ref is `6, n, units` (one unit per word) and is NOT a map key
+// format, so it is never handed to bud_map. The host packs the ref's sessionId once at ingress and passes it as a
+// separate packed argument `sid` next to the ref V (same split as the M8 lane: V words stay V words, IDs used as
+// lookup keys are packed keys). The root checks sid's framing and canonical form (rec_end, O(1)) and then trusts that
+// it is the packed form of ref.sessionId (host contract, exercised by the oracle comparison). budgetId is only compared
+// against the stored budget's id as V strings (str_eq), so it needs no packed form.
+fn session_entry(st: [i64], sid: [i64]) -> i64
 {
-  if sp < 0 || sp > 1099511627776 { return -1; }
-  if rd(rf, sp) != 6 { return -1; }
-  let n: i64 = rd(rf, sp + 1);
-  if n < 0 || n > len(rf) - sp - 2 { return -1; }
-  return crate::bud_map::find(st, 0, rf, sp + 2, n);
+  if len(sid) == 0 { return -1; }
+  if crate::bud_keys::rec_end(sid, 0) != len(sid) { return -1; }
+  return crate::bud_map::find_w(st, 0, sid, 1, rd(sid, 0));
 }
 
 fn blob_of(st: [i64], e: i64) -> [i64] ! alloc
@@ -149,9 +154,9 @@ fn blob_of(st: [i64], e: i64) -> [i64] ! alloc
 
 // CURRENT(ref): findSession(ref.sessionId)?.budget, kept only if budget.id === ref.budgetId (both strings).
 // Returns the budget V, or an empty array when there is no such current budget.
-fn current_of(st: [i64], rf: [i64]) -> [i64] ! alloc
+fn current_of(st: [i64], rf: [i64], sid: [i64]) -> [i64] ! alloc
 {
-  let e: i64 = session_entry(st, rf, crate::bud_card::obj_get(rf, 0, "sessionId"));
+  let e: i64 = session_entry(st, sid);
   if e < 0 { return crate::ent_u16::empty(); }
   let b: [i64] = blob_of(st, e);
   if len(b) == 0 { return b; }
@@ -187,36 +192,31 @@ pub fn m11_grow(prev: [i64], inout next: [i64]) -> i64
   return 0;
 }
 
-// world setup: session `key` (UTF-16 units) with budget V `blob` (empty = no budget). out = [1, fresh].
+// world setup: session `key` (a framed packed key `n, words(n) packed words`, packed once by the host) with budget V
+// `blob` (empty = no budget). out = [1, fresh]. rec_end is the whole key check (framing + canonical form); packed
+// lanes are always valid u16 units, so the old per-unit 0..65535 loop is gone.
 pub fn m11_load(inout st: [i64], key: [i64], blob: [i64], inout out: [i64]) -> i64
 {
   if !crate::bud_store::valid(st) { return 2; }
-  let n: i64 = len(key);
-  if n > 4294967296 { return 2; }
-  let mut j: i64 = 0;
-  while j < n
-    invariant 0 <= j && j <= n && n == len(key)
-    decreases n - j
-  {
-    if key[j] < 0 || key[j] > 65535 { return 2; }
-    j = j + 1;
-  }
+  if crate::bud_keys::rec_end(key, 0) != len(key) { return 2; }
   if len(blob) > 0 && crate::bud_card::v_end(blob, 0) != len(blob) { return 2; }
-  return crate::bud_world::session_put(inout st, key, 0, n, blob, 0, len(blob), inout out);
+  return crate::bud_world::session_put_w(inout st, key, 1, rd(key, 0), blob, 0, len(blob), inout out);
 }
 
 // ---- requests ----
 
-// setCard(ref, card, lang?, by?). out = [k, used_now, saved, changed, findSession, result V...] (k = 4 + |V|).
-pub fn m11_set_card(inout st: [i64], rf: [i64], card: [i64], lang: [i64], by: [i64], now_ms: i64, inout out: [i64]) -> i64 ! alloc
+// setCard(ref, card, lang?, by?). sid = packed key of ref.sessionId (empty = ref has none). out = [k, used_now, saved,
+// changed, findSession, result V...] (k = 4 + |V|).
+pub fn m11_set_card(inout st: [i64], rf: [i64], sid: [i64], card: [i64], lang: [i64], by: [i64], now_ms: i64, inout out: [i64]) -> i64 ! alloc
 {
   if !crate::bud_store::valid(st) { return 2; }
   if now_ms < -8640000000000000 || now_ms > 8640000000000000 { return 2; }
   if len(rf) == 0 || crate::bud_card::v_end(rf, 0) != len(rf) { return 2; }
+  if len(sid) > 0 && crate::bud_keys::rec_end(sid, 0) != len(sid) { return 2; }
   if len(card) > 0 && crate::bud_card::v_end(card, 0) != len(card) { return 2; }
   if len(lang) > 0 && crate::bud_card::v_end(lang, 0) != len(lang) { return 2; }
   if len(by) > 0 && crate::bud_card::v_end(by, 0) != len(by) { return 2; }
-  let cb: [i64] = current_of(st, rf);
+  let cb: [i64] = current_of(st, rf, sid);
   let found: bool = len(cb) > 0;
   let closed: bool = found && str_is(cb, crate::bud_card::obj_get(cb, 0, "state"), "closed");
   let lc: i64 = crate::bud_card::lang_code(lang, at_of(lang));
@@ -244,10 +244,9 @@ pub fn m11_set_card(inout st: [i64], rf: [i64], card: [i64], lang: [i64], by: [i
   if len(nb) == 0 { return 2; }
   let need2: i64 = 5 + 13 + len(nb);
   if len(out) < need2 { return 3; }
-  let sp: i64 = crate::bud_card::obj_get(rf, 0, "sessionId");
-  if sp < 0 || sp > 1099511627776 { return 2; }
-  let kn: i64 = rd(rf, sp + 1);
-  let s: i64 = crate::bud_world::session_put(inout st, rf, sp + 2, kn, nb, 0, len(nb), inout out);
+  // found (cb non-empty) implies sid is a non-empty canonical packed key (session_entry), so it is the re-put key
+  if len(sid) == 0 { return 2; }
+  let s: i64 = crate::bud_world::session_put_w(inout st, sid, 1, rd(sid, 0), nb, 0, len(nb), inout out);
   if s != 0 { return s; }
   let mut q: i64 = emit(inout out, 0, need2 - 1);
   q = emit(inout out, q, 1);
@@ -263,13 +262,15 @@ pub fn m11_set_card(inout st: [i64], rf: [i64], card: [i64], lang: [i64], by: [i
   return 0;
 }
 
-// op 1 current -> budget V or undefined; 2 isHalted -> bool; 3 hasCard -> bool. out = [k, findSession, V...].
-pub fn m11_query(st: [i64], op: i64, rf: [i64], inout out: [i64]) -> i64 ! alloc
+// op 1 current -> budget V or undefined; 2 isHalted -> bool; 3 hasCard -> bool. sid as in m11_set_card.
+// out = [k, findSession, V...].
+pub fn m11_query(st: [i64], op: i64, rf: [i64], sid: [i64], inout out: [i64]) -> i64 ! alloc
 {
   if !crate::bud_store::valid(st) { return 2; }
   if op < 1 || op > 3 { return 2; }
   if len(rf) == 0 || crate::bud_card::v_end(rf, 0) != len(rf) { return 2; }
-  let cb: [i64] = current_of(st, rf);
+  if len(sid) > 0 && crate::bud_keys::rec_end(sid, 0) != len(sid) { return 2; }
+  let cb: [i64] = current_of(st, rf, sid);
   let mut v: [i64] = crate::ent_u16::zeros(1);
   crate::ent_u16::wr(inout v, 0, 1);
   if op == 1 {

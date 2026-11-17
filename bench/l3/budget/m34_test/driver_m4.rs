@@ -1,6 +1,6 @@
 // M4 driver (appended to a main file that already declares `mod sol;`, see run.py).
 //
-//   driver_m4 q                      program on stdin: `init <L>` | `op <w...>` | `observe`
+//   driver_m4 q                      program on stdin: `init <L>` | `op <w...>` | `observe` (op keys already packed)
 //   driver_m4 perf <axis> <n> <reps> axis = sessions | tools | clocks
 //
 // Boundary rule: the host owns the state buffer `st` but never reads or writes its words. It allocates, calls the
@@ -161,11 +161,28 @@ fn q_mode() {
 
 // ---- perf mode -------------------------------------------------------------------------------------------------
 
+// Packed-u16 key codec (bud_keys.pruv): word i = (u[4i] << 48) | (u[4i+1] << 32) | (u[4i+2] << 16) | u[4i+3] as a
+// two's-complement i64; lanes past n are zero. A pure ingress encoding, no validation.
+// Wire key `n, packed words(n)`, packed once at ingress straight from the UTF-16 units (no unit or word scratch).
+// (q mode reads op lines that gen_m4.py already packed.)
 fn key(v: &mut Vec<i64>, s: &str) {
-    v.push(s.len() as i64);
-    for b in s.bytes() {
-        v.push(b as i64);
+    let np = v.len();
+    v.push(0);
+    let (mut x, mut k, mut n) = (0u64, 0u32, 0i64);
+    for c in s.encode_utf16() {
+        x = (x << 16) | c as u64;
+        k += 1;
+        n += 1;
+        if k == 4 {
+            v.push(x as i64);
+            x = 0;
+            k = 0;
+        }
     }
+    if k > 0 {
+        v.push((x << (16 * (4 - k))) as i64);
+    }
+    v[np] = n;
 }
 
 fn op_session_put(k: &str, blob: &[i64]) -> Vec<i64> {

@@ -5,9 +5,11 @@
 //
 // Input lines (decimal words; `|` separates arguments; an empty argument = absent):
 //   init                               fresh world
-//   load <key units> | <budget V>      session with that budget (empty V = no budget)
-//   set <now> | <ref> | <card> | <lang> | <by>
-//   q <op> | <ref>                     op 1 current, 2 isHalted, 3 hasCard
+//   load <key> | <budget V>            session with that budget (empty V = no budget); key = packed `n, words(n)`
+//   set <now> | <ref> | <sid> | <card> | <lang> | <by>   sid = packed key of ref.sessionId (empty = none)
+//   q <op> | <ref> | <sid>             op 1 current, 2 isHalted, 3 hasCard
+// Keys are packed u16 (bud_keys): word i = u[4i]<<48 | u[4i+1]<<32 | u[4i+2]<<16 | u[4i+3], tail lanes zero; the driver
+// (run_m11.py pack) packs each key once, the host never packs or unpacks inside a call.
 //   dump
 //   perfA <U> <reps> | perfB <n> <reps> | perfC <n> <reps> | handA / handB / handC (same args)   ->  `ns <ns per call> <checksum>`
 // Output: `ok <words>` (the entry's out[1..1+out[0]]), `err <status>`, or `PANIC <msg>`.
@@ -84,6 +86,27 @@ fn args(rest: &str) -> Vec<Vec<i64>> {
 
 // ---- perf inputs (host builds input words; no judgment) ----
 
+// packed-u16 words of units (same layout as run_m11.py pack / driver_m8.rs pack_u16)
+fn pack_u16(units: &[u16]) -> Vec<i64> {
+    units
+        .chunks(4)
+        .map(|c| {
+            let mut x: u64 = 0;
+            for l in 0..4 {
+                x = (x << 16) | (c.get(l).copied().unwrap_or(0) as u64);
+            }
+            x as i64
+        })
+        .collect()
+}
+// framed packed key `n, words(n)` of a string
+fn pkey(s: &str) -> Vec<i64> {
+    let u: Vec<u16> = s.encode_utf16().collect();
+    let mut v = vec![u.len() as i64];
+    v.extend(pack_u16(&u));
+    v
+}
+
 fn key(o: &mut Vec<i64>, k: &str) {
     o.push(k.len() as i64);
     o.extend(k.bytes().map(|b| b as i64));
@@ -156,18 +179,19 @@ fn full_card() -> Vec<i64> {
 // hand.rs must produce the same result words as the Pruv entry (same work); prints `same` or `differ ...`
 fn hand_check() -> String {
     let rf = perf_ref();
+    let sid = pkey("s1");
     let mut lines = Vec::new();
     for card in [perf_card(20), full_card()] {
         let mut w = World::new();
-        let k: Vec<i64> = vec![115, 49];
+        let k: Vec<i64> = pkey("s1");
         let b = perf_budget();
         w.call(&|st, out| sol::m11_load(st, &k, &b, out)).unwrap();
         let mut s = hand::Store { sessions: std::collections::HashMap::new() };
-        s.sessions.insert(vec![115, 49], perf_budget());
+        s.sessions.insert(pkey("s1"), perf_budget());
         let mut ho: Vec<i64> = Vec::new();
         for i in 0..3 {
-            let p = w.call(&|st, out| sol::m11_set_card(st, &rf, &card, &[], &[], NOW0 + i, out)).unwrap().to_vec();
-            let hk = s.set_card(&rf, &card, NOW0 + i, &mut ho);
+            let p = w.call(&|st, out| sol::m11_set_card(st, &rf, &sid, &card, &[], &[], NOW0 + i, out)).unwrap().to_vec();
+            let hk = s.set_card(&rf, &sid, &card, NOW0 + i, &mut ho);
             if hk != -1 || ho.len() != p.len() + 1 || ho[0] as usize != p.len() || ho[1..] != p[..] {
                 lines.push(format!("differ card={} call={} pruv={} hand={}", card.len(), i, words(&p), words(&ho)));
             }
@@ -200,29 +224,30 @@ fn perf(op: &str, a: usize, reps: usize) -> String {
         "perfB" | "handB" => {
             // reps rounds of n successive setCard calls on one budget; ns per call over all rounds
             let rf = perf_ref();
+            let sid = pkey("s1");
             let card = perf_card(20);
             let mut total = 0u128;
             let mut sum = 0i64;
             for _ in 0..reps {
                 if op == "perfB" {
                     let mut w = World::new();
-                    let key: Vec<i64> = vec![115, 49];
+                    let key: Vec<i64> = pkey("s1");
                     let b = perf_budget();
                     w.call(&|st, out| sol::m11_load(st, &key, &b, out)).unwrap();
                     let t = Instant::now();
                     for i in 0..a {
                         let now = NOW0 + i as i64;
-                        let r = w.call(&|st, out| sol::m11_set_card(st, &rf, &card, &[], &[], now, out)).unwrap();
+                        let r = w.call(&|st, out| sol::m11_set_card(st, &rf, &sid, &card, &[], &[], now, out)).unwrap();
                         sum = sum.wrapping_add(black_box(r.len() as i64 + r[2]));
                     }
                     total += t.elapsed().as_nanos();
                 } else {
                     let mut s = hand::Store { sessions: std::collections::HashMap::new() };
-                    s.sessions.insert(vec![115, 49], perf_budget());
+                    s.sessions.insert(pkey("s1"), perf_budget());
                     let mut out: Vec<i64> = Vec::with_capacity(4096);
                     let t = Instant::now();
                     for i in 0..a {
-                        let k = s.set_card(black_box(&rf), &card, NOW0 + i as i64, &mut out);
+                        let k = s.set_card(black_box(&rf), &sid, &card, NOW0 + i as i64, &mut out);
                         sum = sum.wrapping_add(black_box(k + out.len() as i64 + out[2]));
                     }
                     total += t.elapsed().as_nanos();
@@ -286,13 +311,13 @@ fn main() {
                     let a = args(&rest);
                     let now = a[0][0];
                     let w = world.as_mut().unwrap();
-                    res(w.call(&|st, out| sol::m11_set_card(st, &a[1], &a[2], &a[3], &a[4], now, out)))
+                    res(w.call(&|st, out| sol::m11_set_card(st, &a[1], &a[2], &a[3], &a[4], &a[5], now, out)))
                 }
                 "q" => {
                     let a = args(&rest);
                     let w = world.as_mut().unwrap();
                     let op = a[0][0];
-                    res(w.call(&|st, out| sol::m11_query(st, op, &a[1], out)))
+                    res(w.call(&|st, out| sol::m11_query(st, op, &a[1], &a[2], out)))
                 }
                 "dump" => {
                     let w = world.as_mut().unwrap();

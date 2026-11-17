@@ -4,8 +4,12 @@
 // halt is stored as a binary prefix of that string, before the JSON units (units are 0..65535, so -2 cannot start
 // a JSON text):
 //   [-2, reason (0 time, 1 delegations, 2 commands, 3 reviews, 4 checks), atKind (1 stored text, 2 instant in
-//    atMs), atMs, atLen, atUnits..., nIds, (len, units)* stoppedDelegationIds]
+//    atMs), atMs, atLen, atUnits..., nIds, (n, words(n) packed words)* stoppedDelegationIds]
+// The stopped delegation ids are delegation keys, so they are kept as framed PACKED keys (bud_keys layout), exactly as
+// the host delivered them (packed once at ingress); a later lookup by one of them needs no re-packing. The prefix words
+// are therefore not units (like the leading -2); the record codecs read the prefix by this layout.
 // halt writes atKind 2 (at = now; toISOString is left to the boundary that renders the record, like M7's instants).
+// Record strings 0 (id) and 4 (follows) are packed keys (bud_lifecycle.pruv header): stride 1 + words(len).
 //
 // halt(ref, reason): only a CURRENT open budget halts (B:383-384). Order (B:385-396):
 //   SETTLE (bud_clock: may emit [13] timerClear), runningDelegationIds(ref) ([30] consumed: the host prefetched the
@@ -34,7 +38,8 @@ fn push(inout fx: [i64], v: i64) -> ()
   crate::ent_u16::wr(inout fx, 0, p + 1);
 }
 
-// Words of the id list `n, (len, units)*` at a[s]: 1 + sum(1 + len), or -1 when it does not fit in a.
+// Words of the packed id list `n, (len, words(len) packed words)*` at a[s]: 1 + sum(1 + words(len)), or -1 when it
+// does not fit in a or an id is not a canonical packed key (bud_keys::rec_end per id: framing + canonical form, O(1)).
 pub fn ids_words(a: [i64], s: i64) -> i64
   ensures result == -1 || (1 <= result && result <= 1099511627776)
 {
@@ -47,9 +52,9 @@ pub fn ids_words(a: [i64], s: i64) -> i64
     invariant 0 <= i && i <= n && s + 1 <= p && p <= len(a) && len(a) <= 1099511627776
     decreases n - i
   {
-    let l: i64 = rd(a, p);
-    if l < 0 || l > len(a) - p - 1 { return -1; }
-    p = p + 1 + l;
+    let e: i64 = crate::bud_keys::rec_end(a, p);
+    if e < 0 { return -1; }
+    p = e;
     i = i + 1;
   }
   return p - s;
@@ -76,7 +81,9 @@ fn prefix_len(b: [i64], u: i64, l: i64) -> i64
 }
 
 // True iff the n words of the record stored in st at off form a well-formed record frame: n >= 30 and the six
-// strings (raw length words, never clamped) starting at off + 24 end exactly at off + n. The frame must lie inside st.
+// strings (raw length words, never clamped) starting at off + 24 end exactly at off + n, strings 0 and 4 being
+// canonical packed keys (bud_keys::slice_ok; data words words(len)), the others len data words. The frame must lie
+// inside st.
 pub fn rec_ok_in(st: [i64], off: i64, n: i64) -> bool
 {
   if n < 30 || off < 0 || off > 1099511627776 || n > 1099511627776 { return false; }
@@ -90,8 +97,14 @@ pub fn rec_ok_in(st: [i64], off: i64, n: i64) -> bool
   {
     if p >= end { return false; }
     let l: i64 = rd(st, p);
-    if l < 0 || l > end - p - 1 { return false; }
-    p = p + 1 + l;
+    if l < 0 { return false; }
+    let mut w: i64 = l;
+    if i == 0 || i == 4 {
+      if !crate::bud_keys::slice_ok(st, p + 1, l) { return false; }
+      w = crate::bud_keys::words(l);
+    }
+    if w > end - p - 1 { return false; }
+    p = p + 1 + w;
     i = i + 1;
   }
   return p == end;
@@ -108,7 +121,7 @@ fn rest_in(st: [i64], off: i64) -> i64
     invariant 0 <= i && i <= 5 && 0 <= p && p <= 1099511627776
     decreases 5 - i
   {
-    p = c40(p + 1 + c32(rd(st, p)));
+    p = c40(p + 1 + crate::bud_lifecycle::str_words(i, rd(st, p)));
     i = i + 1;
   }
   return p;
@@ -152,7 +165,7 @@ fn halted(b: [i64], h: [i64], keep_since: bool, reason: i64, now: i64, ids: [i64
   let tail: i64 = c32(l5 - old_pre);
   let w: i64 = c32(iw);
   let rl: i64 = 5 + w + tail;
-  let total: i64 = 30 + l0 + l1 + l2 + l3 + l4 + rl;
+  let total: i64 = 30 + crate::bud_keys::words(l0) + l1 + l2 + l3 + crate::bud_keys::words(l4) + rl;
   let mut o: [i64] = crate::ent_u16::zeros(total);
   let mut j: i64 = 0;
   while j < 24
@@ -163,11 +176,11 @@ fn halted(b: [i64], h: [i64], keep_since: bool, reason: i64, now: i64, ids: [i64
     j = j + 1;
   }
   let mut at: i64 = 24;
-  at = put(inout o, at, b, c40(p0 + 1), l0);
+  at = crate::bud_lifecycle::put_key(inout o, at, b, c40(p0 + 1), l0);
   at = put(inout o, at, b, c40(p1 + 1), l1);
   at = put(inout o, at, b, c40(p2 + 1), l2);
   at = put(inout o, at, b, c40(p3 + 1), l3);
-  at = put(inout o, at, b, c40(p4 + 1), l4);
+  at = crate::bud_lifecycle::put_key(inout o, at, b, c40(p4 + 1), l4);
   crate::ent_u16::wr(inout o, at, rl);
   crate::ent_u16::wr(inout o, at + 1, -2);
   crate::ent_u16::wr(inout o, at + 2, reason);
@@ -190,7 +203,8 @@ pub fn halt_words(st: [i64], se: i64, ids: [i64], is: i64) -> i64
   return c40(crate::bud_lifecycle::blob_n(st, se) + 8 + ww);
 }
 
-// halt(ref, reason) (B:381-397). ids[is..] = the prefetched runningDelegationIds(ref) answer `n, (len, units)*`.
+// halt(ref, reason) (B:381-397). ids[is..] = the prefetched runningDelegationIds(ref) answer
+// `n, (len, words(len) packed words)*` (validated by ids_words). Keys (sk, bk) are packed.
 pub fn halt(inout st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64, reason: i64, now: i64, ids: [i64], is: i64, inout bv: [i64], inout fx: [i64]) -> i64 ! alloc
 {
   if reason < 0 || reason > 4 { return 2; }

@@ -6,6 +6,13 @@
 //                              poke corrupts the resident buffer for tests (see corrupt_resident.py): the first index i
 //                              with st[i..i+k] == [p1..pk] gets st[i+delta] = value (when in range); prints `Z <i>`, or
 //                              `Z -` when the pattern is absent. It calls no sol:: function.
+//                              | rekey <k> <p1> ... <pk> <delta> <value>
+//                              rekey is poke on a STORED MAP KEY word that keeps the index consistent, so a lookup with
+//                              the new key really takes the hit path: it finds the live entry whose packed key words
+//                              cover st[i+delta], checks that the stored hash (field 6) equals the bud_keys::hash mirror
+//                              below for the OLD words, writes the word, stores the hash of the NEW words in field 6 and
+//                              forces one grow (t_grow rebuilds the slot table from field 6). Prints `Z <i>`, or `Z -`
+//                              when the pattern is absent, no live entry covers the word or the hash mirror disagrees.
 //   driver_m8 perf <N> <reps> perf items, see run_perf below
 //
 // Boundary rule: the host owns the state buffer and the scratch frames but never reads state words and decides
@@ -38,6 +45,45 @@ impl World {
             }
         }
         World { st, out: vec![0; 4096], cv: vec![0; 16], fx: vec![0; 256] }
+    }
+
+    // Test-only (rekey line): st[t] = value where t is a packed key word of a live map entry, keeping the stored hash
+    // and the slot table consistent with the new key. Reads the bud_store layout (header word 5 entry base, 6 entry
+    // cap, 7 top; entry = 20 words: 0 live, 1 owner, 2 owner generation, 4 key offset, 5 unit count, 6 hash), which
+    // is the same in every revision corrupt_resident.py compares. None when no live entry covers t or the stored hash
+    // differs from the mirror (the mirror would then be wrong, a control error).
+    fn rekey(&mut self, t: i64, value: i64) -> Option<()> {
+        let st = &self.st;
+        if st.len() < 16 || t < 0 || t as usize >= st.len() {
+            return None;
+        }
+        let base = st[5];
+        let top = st[7].min(st[6]);
+        for e in 0..top.max(0) {
+            let b = base + 20 * e;
+            if b < 16 || (b + 20) as usize > st.len() {
+                return None;
+            }
+            let b = b as usize;
+            if st[b] != 1 {
+                continue;
+            }
+            let (owner, ogen, koff, n) = (st[b + 1], st[b + 2], st[b + 4], st[b + 5]);
+            let m = (n.clamp(0, 1 << 30) + 3) >> 2;
+            if t < koff || t >= koff + m {
+                continue;
+            }
+            let seed = key_mix(1469598103934665603, owner.wrapping_add(ogen.wrapping_mul(4294967296)));
+            if key_hash(seed, st, koff, n) != st[b + 6] {
+                return None;
+            }
+            self.st[t as usize] = value;
+            self.st[b + 6] = key_hash(seed, &self.st, koff, n);
+            let l = self.st.len();
+            self.grow(l);
+            return Some(());
+        }
+        None
     }
 
     fn grow(&mut self, n: usize) {
@@ -196,6 +242,21 @@ fn run_q() {
                     None => writeln!(o, "Z -").unwrap(),
                 }
             }
+            "rekey" => {
+                let k: usize = p[1].parse().unwrap();
+                let pat = nums(&p[2..2 + k]);
+                let delta: i64 = p[2 + k].parse().unwrap();
+                let value: i64 = p[3 + k].parse().unwrap();
+                let found = if k == 0 || w.st.len() < k {
+                    None
+                } else {
+                    (0..=w.st.len() - k).find(|&i| w.st[i..i + k] == pat[..])
+                };
+                match found.and_then(|i| w.rekey(i as i64 + delta, value).map(|_| i)) {
+                    Some(i) => writeln!(o, "Z {}", i).unwrap(),
+                    None => writeln!(o, "Z -").unwrap(),
+                }
+            }
             "end" => {
                 let ob = w.observe();
                 writeln!(o, "{}", ob).unwrap();
@@ -222,6 +283,28 @@ fn pack_u16(units: &[u16]) -> Vec<i64> {
             x as i64
         })
         .collect()
+}
+
+// Test-only mirror of bud_keys::hash and bud_map::hash_words (rekey line only): seed = mix(FNV basis,
+// owner + ogen * 2^32); mix each of the ceil(n/4) packed words (0 past the state end); fin(h ^ n).
+fn key_mix(h: i64, v: i64) -> i64 {
+    (h ^ v).wrapping_mul(-7046029254386353131)
+}
+
+fn key_fin(h: i64) -> i64 {
+    let a = h ^ ((h as u64) >> 33) as i64;
+    let b = a.wrapping_mul(-49064778989728563);
+    b ^ ((b as u64) >> 33) as i64
+}
+
+fn key_hash(seed: i64, st: &[i64], ks: i64, n: i64) -> i64 {
+    let nc = n.clamp(0, 1 << 30);
+    let mut h = seed;
+    for i in 0..(nc + 3) >> 2 {
+        let a = ks + i;
+        h = key_mix(h, if a >= 0 && (a as usize) < st.len() { st[a as usize] } else { 0 });
+    }
+    key_fin(h ^ nc)
 }
 
 // Wire key: `n, packed words(n)` (1 + ceil(n/4) words).

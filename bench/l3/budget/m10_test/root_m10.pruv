@@ -11,9 +11,14 @@ mod bud_halt;
 // L3-10 M10a test root (test only, not product): drives halt (bud_halt.pruv) and the calls that reach it (charge over
 // limit, the run methods and FIRE through HALT_TIME) over the M7 record and the M9 clock.
 //
-// t_call op: [code, now, quiet, what x10, flag, sessionId key, budgetId key, runKey key, ids], key = `len, units...`,
-// ids = the host's next runningDelegationIds answer `n, (len, units)*` (queue head, n = 0 when the queue is empty);
-// it is consumed only when the effects hold [30] (M10_NOTES.md KD-M10-1).
+// t_call op: [code, now, quiet, what x10, flag, sessionId key, budgetId key, runKey key, ids], key = `n, words(n)
+// packed words` (bud_keys layout; the host packs every key once at ingress), ids = the host's next
+// runningDelegationIds answer `n, (len, words(len) packed words)*` (queue head, n = 0 when the queue is empty); it is
+// consumed only when the effects hold [30] (M10_NOTES.md KD-M10-1).
+// Every key, and every id of the answer (bud_halt::ids_words), is checked with bud_keys::rec_end (framing + canonical
+// form, O(1) per key) before anything is read or written; a bad one answers 2. The sessionId stays framed in the op
+// (op[14] = sn), which run_started needs for the clock's owner blob. Records hold the budget id and follows packed
+// (bud_lifecycle.pruv header) and the stopped delegation ids packed (bud_halt.pruv header).
 //   code 1 current(ref), 2 isHalted(ref), 5 reopen(ref), 6 maybeClose(session), 7 charge(ref, what),
 //   8 runStarted(ref, runKey), 9 runWaiting(ref, runKey, flag == 1), 10 runEnded(ref, runKey),
 //   11 FIRE (the ref the delivered timer captured when it was armed), 12 halt(ref, reason = flag).
@@ -31,17 +36,6 @@ fn c32(x: i64) -> i64
   ensures 0 <= result && result <= 4294967296
 { return crate::bud_store::c32(x); }
 
-fn key_end(op: [i64], p: i64) -> i64
-  requires 0 <= p
-  ensures result == -1 || (result > p && result <= len(op))
-{
-  let n: i64 = len(op);
-  if p >= n { return -1; }
-  let kn: i64 = crate::ent_u16::rd(op, p);
-  if kn < 0 || kn > n - p - 1 { return -1; }
-  return p + 1 + kn;
-}
-
 pub fn t_init(inout st: [i64]) -> i64
 { return crate::bud_store::init_store(inout st); }
 
@@ -54,23 +48,24 @@ pub fn t_grow(prev: [i64], inout next: [i64]) -> i64
   return 0;
 }
 
-// session put: [sessionId key, n, words...]; 0 ok, 1 Grow (out[0] = N), 2 invalid, 3 out small.
+// session put: [sessionId key, n, words...] (key packed; the record words are stored as they are); 0 ok, 1 Grow
+// (out[0] = N), 2 invalid, 3 out small.
 pub fn t_put(inout st: [i64], op: [i64], inout out: [i64]) -> i64
 {
   if !crate::bud_store::valid(st) { return 2; }
-  let e1: i64 = key_end(op, 0);
+  let e1: i64 = crate::bud_keys::rec_end(op, 0);
   if e1 < 0 || e1 >= len(op) { return 2; }
   let kn: i64 = crate::ent_u16::rd(op, 0);
   let n: i64 = crate::ent_u16::rd(op, e1);
   if n < 0 || n != len(op) - e1 - 1 { return 2; }
-  return crate::bud_world::session_put(inout st, op, 1, kn, op, e1 + 1, n, inout out);
+  return crate::bud_world::session_put_w(inout st, op, 1, kn, op, e1 + 1, n, inout out);
 }
 
 // session remove: [sessionId key].
 pub fn t_del(inout st: [i64], op: [i64], inout out: [i64]) -> i64
 {
   if !crate::bud_store::valid(st) { return 2; }
-  let e1: i64 = key_end(op, 0);
+  let e1: i64 = crate::bud_keys::rec_end(op, 0);
   if e1 < 0 { return 2; }
   let kn: i64 = crate::ent_u16::rd(op, 0);
   return crate::bud_world::session_del(inout st, op, 1, kn, inout out);
@@ -166,7 +161,8 @@ fn run_op(inout st: [i64], op: [i64], code: i64, sn: i64, bs: i64, bn: i64, rs: 
     k0 = rd(st, off0 + 16);
     hw = crate::bud_halt::halt_words(st, se, op, is);
   }
-  let nd: i64 = crate::bud_map::make_room(inout st, 2, c32(bn) + c32(sn) + c32(rn) + hw);
+  // a new clock and run: their packed key words, the framed owner blob (1 + words(sn)), and halt's room
+  let nd: i64 = crate::bud_map::make_room(inout st, 2, crate::bud_keys::words(bn) + 1 + crate::bud_keys::words(sn) + crate::bud_keys::words(rn) + hw);
   if nd != 0 { return crate::bud_lifecycle::grow(nd); }
   let mut r: i64 = 2;
   if code == 8 { r = crate::bud_clock::run_started(inout st, op, bs, bn, op, 15, sn, op, rs, rn, now, inout bv, inout fx); }
@@ -200,11 +196,11 @@ fn run_op(inout st: [i64], op: [i64], code: i64, sn: i64, bs: i64, bn: i64, rs: 
 pub fn t_call(inout st: [i64], op: [i64], inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc
 {
   if !crate::bud_store::valid(st) { return 2; }
-  let e1: i64 = key_end(op, 14);
+  let e1: i64 = crate::bud_keys::rec_end(op, 14);
   if e1 < 0 { return 2; }
-  let e2: i64 = key_end(op, e1);
+  let e2: i64 = crate::bud_keys::rec_end(op, e1);
   if e2 < 0 { return 2; }
-  let e3: i64 = key_end(op, e2);
+  let e3: i64 = crate::bud_keys::rec_end(op, e2);
   if e3 < 0 { return 2; }
   let iw: i64 = crate::bud_halt::ids_words(op, e3);
   if iw < 0 || e3 + iw != len(op) { return 2; }
@@ -236,7 +232,7 @@ pub fn t_call(inout st: [i64], op: [i64], inout bv: [i64], inout fx: [i64], inou
 pub fn t_get(st: [i64], op: [i64], inout out: [i64]) -> i64
 {
   if !crate::bud_store::valid(st) { return 2; }
-  let e1: i64 = key_end(op, 0);
+  let e1: i64 = crate::bud_keys::rec_end(op, 0);
   if e1 < 0 { return 2; }
   let kn: i64 = crate::ent_u16::rd(op, 0);
   return crate::bud_world::session_get(st, op, 1, kn, inout out);

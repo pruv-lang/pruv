@@ -21,7 +21,7 @@ check: generates `count` deterministic cases (pairs of UTF-16 unit lists: empty,
 differ-in-last-unit pairs, form transitions) plus fixed noncanonical records per layout, runs `driver_keys check`
 and compares with a Python oracle: Python's own encoding of every layout, k_check 0 on encodings and 1 on the
 negatives, find/insert hit/miss by list equality (both hash kinds), k_cmp by Python list order (= UTF-16 code-unit
-order), and the unit hash equal across layouts and equal to a Python port of bud_map::hash_key. Prints the mismatch
+order), and the unit hash equal across layouts and equal to a Python port of bud_map::hash_words. Prints the mismatch
 count (must be 0).
 
 perf: builds (pruvc, then rustc -C opt-level=3 for the driver and the hand lane; with --inline-variant also a driver
@@ -223,7 +223,7 @@ def finu(h):
 
 
 def py_hash_u(u):
-    """bud_map::hash_key(owner 0, generation 0, units)."""
+    """bud_map::hash_words(owner 0, generation 0, units)."""
     h = mixu(1469598103934665603, 0)
     n = len(u)
     for j in range(0, n, 4):

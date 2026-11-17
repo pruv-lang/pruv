@@ -3,8 +3,8 @@
 // Mirrors: `exec()` in bench/l3/budget/m34_test/perf_ts.mjs (the spec for validation and result words) and the timed
 // loop of `perf()` in bench/l3/budget/m34_test/driver_m4.rs (cyclic replay of one op period, black_box on op and sink).
 //
-// Measured scope: decode + validate the op words, build the keys from the units (into reusable scratch buffers, no
-// caching between calls), apply the map/set operation, write the result words into `out`. Prefill and op encoding
+// Measured scope: decode + validate the op words (keys are packed u16 on the wire: O(1) canonical check, then a lane
+// unpack), build the keys from the units (into reusable scratch buffers, no caching between calls), apply the map/set operation, write the result words into `out`. Prefill and op encoding
 // are untimed.
 //
 //   m4_hand <sessions|tools|clocks> ... is invoked as:  m4_hand perf <axis> <n> <reps>
@@ -39,25 +39,36 @@ struct State {
     k2: Vec<u16>,
 }
 
-/// Decodes the key `len, units...` at `p` into `buf`. Returns the end position or None if invalid.
+/// Decodes the packed key `n, ceil(n/4) words` at `p` (packed-u16 wire, bud_keys.pruv: big-endian 16-bit lanes, four
+/// per i64 word, zero tail lanes) into the unit scratch `buf`. Returns the end position or None if invalid: n outside
+/// 0..=2^30, the words past the end of the op, or a nonzero lane past n in the last word. Every word is 4 valid u16
+/// lanes, so there is no per-unit range check.
 fn decode_key(op: &[i64], p: usize, buf: &mut Vec<u16>) -> Option<usize> {
-    let n = op.len();
-    if p >= n {
+    let len = op.len();
+    if p >= len {
         return None;
     }
     let kn = op[p];
-    if kn < 0 || kn > (n - p - 1) as i64 {
+    if !(0..=(1i64 << 30)).contains(&kn) {
         return None;
     }
     let kn = kn as usize;
-    buf.clear();
-    for &u in &op[p + 1..p + 1 + kn] {
-        if !(0..=65535).contains(&u) {
-            return None;
-        }
-        buf.push(u as u16);
+    let m = (kn + 3) / 4;
+    if m > len - p - 1 {
+        return None;
     }
-    Some(p + 1 + kn)
+    let words = &op[p + 1..p + 1 + m];
+    let r = (kn & 3) as u32;
+    if r != 0 && (words[m - 1] as u64) & ((1u64 << (16 * (4 - r))) - 1) != 0 {
+        return None;
+    }
+    buf.clear();
+    for &x in words {
+        let u = x as u64;
+        buf.extend_from_slice(&[(u >> 48) as u16, (u >> 32) as u16, (u >> 16) as u16, u as u16]);
+    }
+    buf.truncate(kn);
+    Some(p + 1 + m)
 }
 
 fn boxed(k: &[u16]) -> Key {
@@ -198,9 +209,22 @@ impl State {
 
 // ---- op encoding (untimed) ----------------------------------------------------------------------------------------
 
+// Wire key `n, packed words(n)`: word i = u[4i]<<48 | u[4i+1]<<32 | u[4i+2]<<16 | u[4i+3], zero tail lanes.
 fn key(v: &mut Vec<i64>, s: &str) {
-    v.push(s.len() as i64);
-    v.extend(s.bytes().map(|b| b as i64));
+    let u: Vec<u16> = s.encode_utf16().collect();
+    v.push(u.len() as i64);
+    v.extend(u.chunks(4).map(|c| {
+        let mut x: u64 = 0;
+        for l in 0..4 {
+            x = (x << 16) | (c.get(l).copied().unwrap_or(0) as u64);
+        }
+        x as i64
+    }));
+}
+
+// A one-unit ASCII key as a packed word (selftest helper).
+fn pk1(c: u8) -> i64 {
+    (c as i64) << 48
 }
 
 fn op_session_put(k: &str, blob: &[i64]) -> Vec<i64> {
@@ -358,16 +382,17 @@ fn selftest() {
         ("tool_forget present", op_k(14, "t"), 0, Some(vec![1])),
         ("tool_forget absent", op_k(14, "t"), 0, Some(vec![0])),
         ("tool_note after forget", op_kk(13, "t", "a"), 0, Some(vec![1])),
-        ("key unit 70000", vec![2, 1, 70000], 2, None),
-        ("key unit -1", vec![2, 1, -1], 2, None),
-        ("key length beyond op", vec![2, 1, 97, 5], 2, None),
-        ("wrong length: trailing word", vec![2, 1, 97, 7], 2, None),
-        ("wrong length: tool_note trailing", vec![13, 1, 97, 1, 98, 7], 2, None),
-        ("wrong length: tool_note missing key", vec![13, 1, 97], 2, None),
-        ("run_set waiting 2", vec![9, 1, 97, 1, 98, 2], 2, None),
-        ("run_set missing waiting", vec![9, 1, 97, 1, 98], 2, None),
-        ("session_put n mismatch", vec![1, 1, 97, 3, 1], 2, None),
-        ("session_put missing n", vec![1, 1, 97], 2, None),
+        ("bad tail lane", vec![2, 1, pk1(b'a') | (1i64 << 32)], 2, None),
+        ("key n negative", vec![2, -1], 2, None),
+        ("key n beyond op words", vec![2, 5, pk1(b'a')], 2, None),
+        ("key n above 2^30", vec![2, (1i64 << 30) + 1, pk1(b'a')], 2, None),
+        ("wrong length: trailing word", vec![2, 1, pk1(b'a'), 7], 2, None),
+        ("wrong length: tool_note trailing", vec![13, 1, pk1(b'a'), 1, pk1(b'b'), 7], 2, None),
+        ("wrong length: tool_note missing key", vec![13, 1, pk1(b'a')], 2, None),
+        ("run_set waiting 2", vec![9, 1, pk1(b'a'), 1, pk1(b'b'), 2], 2, None),
+        ("run_set missing waiting", vec![9, 1, pk1(b'a'), 1, pk1(b'b')], 2, None),
+        ("session_put n mismatch", vec![1, 1, pk1(b'a'), 3, 1], 2, None),
+        ("session_put missing n", vec![1, 1, pk1(b'a')], 2, None),
         ("unknown code", vec![99], 2, None),
         ("empty op", vec![], 2, None),
     ];

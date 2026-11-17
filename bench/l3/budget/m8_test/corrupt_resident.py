@@ -27,6 +27,13 @@ later calls covered):
   f  positive twins: no poke, and pokes that write the value already there
 Every poke must print `Z <i>`; `Z -` is a control error.
 
+The "different valid word" variants of the map keys (a-sk-*-valid, e-turn-valid, e-act-valid) use the driver `rekey`
+line instead of `poke`: a bare poke changes the stored key words but leaves the stored hash (entry word 6) and the slot
+table at the old key, so the "hit" op would miss and never reach the hit path. rekey checks that the stored hash equals
+a Rust mirror of bud_keys::hash for the old words (`Z -` otherwise), writes the word, stores the new key's hash and
+forces one grow, which rebuilds the slot table from word 6, so the matching key really hits. The b-bid variants change
+record words, not map keys, and keep poke.
+
 P05 meaning change: keys are packed-u16 words (4 lanes per i64 word, bud_keys.pruv), so the old "unit = 65536 / -1 /
 70000" corruptions cannot be represented (every word is 4 valid lanes). The same store invariant ("every stored key
 passed ingress") is now violated by a NON-CANONICAL tail lane, which no wire key can reproduce, so those cases run the
@@ -130,6 +137,11 @@ def poke(pattern, delta, value):
     return line("poke", [len(pattern)] + list(pattern) + [delta, value])
 
 
+def rekey(pattern, delta, value):
+    """poke on a stored map-key word that also stores the new key's hash and rebuilds the slots (driver `rekey`)."""
+    return line("rekey", [len(pattern)] + list(pattern) + [delta, value])
+
+
 # word offsets from the first limit word (record word 3)
 def rec_poke(word, value):
     return poke(LIM, word - 3, value)
@@ -167,8 +179,8 @@ def scenarios():
     SKP, BP, TP, AP = pk(SK), pk(BID), pk(TURN), pk(ACT)
     # a) session-key words (arena key, packed): a different valid word (twin, the matching key hits) and non-zero tail
     #    lanes of the last word (non-canonical stored key: no wire key matches it, original key only)
-    yield ("a-sk-w0-valid", [], [poke(SKP, 0, pk(ALT4)[0])], [("hit", ALT4 + SK[4:], BID, TURN, ACT), orig])
-    yield ("a-sk-w1-valid", [], [poke(SKP, 1, pk([40000, 41000])[0])], [("hit", SK[:4] + [40000, 41000], BID, TURN, ACT), orig])
+    yield ("a-sk-w0-valid", [], [rekey(SKP, 0, pk(ALT4)[0])], [("hit", ALT4 + SK[4:], BID, TURN, ACT), orig])
+    yield ("a-sk-w1-valid", [], [rekey(SKP, 1, pk([40000, 41000])[0])], [("hit", SK[:4] + [40000, 41000], BID, TURN, ACT), orig])
     yield ("a-sk-tail2", [], [poke(SKP, 1, SKP[1] | (1 << 16))], [orig])
     yield ("a-sk-tail3", [], [poke(SKP, 1, SKP[1] | 0xFFFF)], [orig])
     # b) budget-id words (record words 15, 16)
@@ -189,9 +201,9 @@ def scenarios():
     for v in (len(BID) + 1, len(BID) - 1, 0, len(BID) + 4):
         yield ("d-w14-%d" % v, [], [rec_poke(14, v)], [orig])
     # e) turn / activity key words after noteTool (TURN: 3 units, tail lane 3; ACT: 2 units, tail lanes 2, 3)
-    yield ("e-turn-valid", SETUP, [poke(TP, 0, pk([65535, 5552, 5553])[0])], [("hit", SK, BID, [65535, 5552, 5553], ACT), orig])
+    yield ("e-turn-valid", SETUP, [rekey(TP, 0, pk([65535, 5552, 5553])[0])], [("hit", SK, BID, [65535, 5552, 5553], ACT), orig])
     yield ("e-turn-tail3", SETUP, [poke(TP, 0, TP[0] | 0xFFFF)], [orig])
-    yield ("e-act-valid", SETUP, [poke(AP, 0, pk([9999, 1])[0])], [("hit", SK, BID, TURN, [9999, 1]), orig])
+    yield ("e-act-valid", SETUP, [rekey(AP, 0, pk([9999, 1])[0])], [("hit", SK, BID, TURN, [9999, 1]), orig])
     yield ("e-act-tail2", SETUP, [poke(AP, 0, AP[0] | (1 << 16))], [orig])
     yield ("e-act-tail3", SETUP, [poke(AP, 0, AP[0] | 0xFFFF)], [orig])
     # f) positive twins: no poke, and pokes writing the value already there

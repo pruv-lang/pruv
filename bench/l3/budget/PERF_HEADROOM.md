@@ -33,14 +33,14 @@ Details, methods and raw numbers:
 | `ent_u16` guard, simple write loop `p_wr` | 6.5-7.1 | 6.1-7.1 | 92-154 | 1.00 / 0.99 / 1.08 | guard branch is predicted; no cost in a tight loop | ok |
 | M9 clock refresh R = 10 / 50 / 100 | 153-155 | 143-148 | 2900-3260 | 1.05 / 1.07 / 1.07 (was 1.10-1.11 after the map hash; 1.39-1.44 before) | `#[inline]` hints and `eq_range` key compare in `bud_map::entry_matches` | ok |
 | M9 cycle / fire | 157 / 224 | 168 / 209 | 3025 / 5506 | 0.93 / 1.07 | same | ok |
-| M7 current | 27.5-28.4 | 10.0-12.4 | 24-25 | 2.22 / 2.80 / 2.84 (main before this pass: 2.88 / 3.02 / 2.96) | root-call overhead of the M7 harness: dispatch 7.6 ns + raw call 4.6 ns, then `valid()` and one `bud_map::find` (see "M7" below) | open (> 1.1x), ABI / harness |
-| M7 isHalted | 27.0-27.6 | 9.9-10.0 | 24-25 | 2.76 / 2.73 / 2.74 (was 2.90 / 2.83 / 2.96) | same | open |
-| M7 maybeClose + reopen | 29.5-30.0 | 17.6-18.3 | 275-281 | 1.61 / 1.68 / 1.70 (was 1.74 / 1.79 / 1.78) | same, two root calls per pair | open |
-| M7 attach / replace | 21 / 124 | 53 / 205-212 | 6-9 / 1134-1166 | 0.40 / 0.58-0.61 (was 0.41-0.45 / 0.58-0.65) | - | ok |
-| M8 charge | 33.7-40.9 | 16.0-17.3 | 128-138 | 2.11 / 2.34 / 2.43 (instr 1.97-1.99 with the inline policy, was 2.33-2.36; pass 2: 1.84 / 2.36 / 2.17) | i64-per-unit key and id width (hash, compare, bid), `valid()` boundary; call frames removed by the compiler inline policy; line by line in `M8_NOTES.md` "Perf pass 3" and "Inline policy" | open (> 1.1x), written reason |
-| M8 noteFailure | 25.4-31.7 | 13.5-15.4 | 28-33 | 1.88 / 2.15 / 2.06 (instr 2.03-2.05 with the inline policy, was 2.40-2.45) | same | open (> 1.1x), written reason |
-| M8 noteTool dedup hit | 27.4-39.7 | 24.3-26.0 | 12-14 | 1.05 / 1.63 / 1.61 (instr 1.29-1.33 with the inline policy, was 1.46-1.53, ~1.65) | same; TS wins with V8's cached string hashes | open (> 1.1x), written reason |
-| M8 noteTool grow + forgetTurn | 84-102 | 77-83 | 54-58 | 1.09 / 1.20 / 1.23; with the inline policy 0.99 / 1.04 / 1.08 (instr 1.01 / 0.96 / 0.97, was 1.13 / 1.07 / 1.08, ~1.19) | hash once per new activity (`bud_map::add_absent`), inline policy; rest is key width | ok (within 1.1x on ns and instr) |
+| M7 current | 11.6-11.8 typed / 17.9-18.0 wire | 12.5-12.6 typed (hand16) / 33.5-33.6 wire (hand16w) | 23 | P05b matched: typed 0.93-0.94, wire 0.53-0.54 (unmatched Pruv wire / hand16 typed 1.43; before P05b 2.22-2.84 unmatched) | packed keys at the M7 root (P05b); left: I1 bounds on resident reads, see "P05b" | ok (matched) |
+| M7 isHalted | 12.6-12.9 typed / 17.7-18.1 wire | 12.4 typed / 32.5-32.8 wire | 24 | P05b matched: typed 1.02-1.04, wire 0.54-0.55 | same as current; 1.0-1.1x noise band, cause recorded (I1 state range test) in "P05b" | ok (noise band), I1 recorded |
+| M7 maybeClose + reopen | 14.0 typed / 21.9-22.0 wire | 12.9 typed / 31.9-32.0 wire | 266 | P05b matched: typed 1.09, wire 0.68-0.69 (was typed 1.21-1.23 before the no-clock fast path) | I1 header bounds + variable-length string walk (data representation), line by line in "P05b" | open (1.0-1.1x), written reason |
+| M7 attach / replace | 12.8 / 93.7-93.8 typed; 18.4-18.6 / 100-102 wire | 11.5 / 119 typed; 30.2 / 554-563 wire | 5-8 / 1091-1098 | P05b matched typed 1.11 / 0.79, wire 0.61-0.62 / 0.18 | attach: the id is copied into `out` (hand returns a borrow) plus I1; see "P05b" | attach typed open (1.11), written reason; replace ok |
+| M8 charge | 33.7-40.9 | 16.0-17.3 | 128-138 | 2.11 / 2.34 / 2.43 (instr 1.97-1.99 with the inline policy, was 2.33-2.36; pass 2: 1.84 / 2.36 / 2.17) | i64-per-unit key and id width (hash, compare, bid), `valid()` boundary; call frames removed by the compiler inline policy; line by line in `M8_NOTES.md` "Perf pass 3" and "Inline policy" | ok; P05b matched wire: 0.60 / 0.67 vs hand16w, 0.70 / 0.78 vs oaw (the other columns are pre-P05) |
+| M8 noteFailure | 25.4-31.7 | 13.5-15.4 | 28-33 | 1.88 / 2.15 / 2.06 (instr 2.03-2.05 with the inline policy, was 2.40-2.45) | same | ok; P05b matched wire: 0.57 / 0.64 vs hand16w, 0.71 / 0.78 vs oaw (the other columns are pre-P05) |
+| M8 noteTool dedup hit | 27.4-39.7 | 24.3-26.0 | 12-14 | 1.05 / 1.63 / 1.61 (instr 1.29-1.33 with the inline policy, was 1.46-1.53, ~1.65) | same; TS wins with V8's cached string hashes | ok; P05b matched wire: 0.48 / 0.51 vs hand16w, 0.74 / 0.71 vs oaw (the other columns are pre-P05) |
+| M8 noteTool grow + forgetTurn | 84-102 | 77-83 | 54-58 | 1.09 / 1.20 / 1.23; with the inline policy 0.99 / 1.04 / 1.08 (instr 1.01 / 0.96 / 0.97, was 1.13 / 1.07 / 1.08, ~1.19) | hash once per new activity (`bud_map::add_absent`), inline policy; rest is key width | ok; P05b matched wire: 0.42 / 0.41 vs hand16w, 0.87 / 0.99 vs oaw (was 1.12 / 1.25 after P05) |
 
 M8 rows are pass 3: `m8_test/run_m8.py perf` with per-item processes, rotated order, 7 rounds and an instruction
 column (load average ~4.3). `note_tool` now hashes the activity key once (`bud_map::add_absent`), which took
@@ -972,3 +972,215 @@ I1 gaps listed in the P03 section are unchanged.
 - The unit API (`find`, `add`, `add_absent`, `entry_matches`, `put_key_units`, `hash_units`) stays for the roots that
   still use a unit wire (M4 / M7 / M9 / M10 / M11). Moving them to packed keys and deleting the unit API is P05b or a
   later package; M7's attach / current / ishalted (1.5-1.7x vs hand16) are the next candidates for the same change.
+
+## P05b: toolgrow vs oa, packed keys at every root, matched M7 columns (2026-11-18)
+
+Scope (spec §6.2, P05b): close the P05 open items. (1) toolgrow at or under the oa hand. (2) Packed keys at the M4 / M7
+/ M9 / M10 / M11 roots and deletion of the `bud_map` unit API. (3) M7 against hand16 on matched boundaries, with every
+cell above 1.0x classified (data representation, then language gap, then codegen) and fixed where a proof or a
+redundant step allows it. (4) The `corrupt_resident.py` hit variants.
+
+What changed:
+- `bud_map.pruv` (item 1): slot words carry the top 30 hash bits (`tag(h) * 2^32 + e + 1`) and probes compare the tag
+  before reading an entry. `add_absent_w` probes once (`probe_w`) and inserts at the found slot (`put_at`). `room()`
+  rehashes early when the index would pass half full while live entries take at most a quarter of the slots.
+  `remove()` frees a turn's children without probing for their slots: stale slots never match, are not reused and
+  are dropped by the next rehash. `m34_test/CONTRACT.md` documents the slot encoding and the load policy.
+- Item 2: every root packs keys once at ingress (`[n, words(n)]`) and calls `find_w` / `add_w` / `add_absent_w`.
+  `bud_world`, `bud_clock`, `bud_halt` and `bud_lifecycle` store ids packed. `hash_key`, `entry_matches`, `find`,
+  `find_h`, `insert`, `add`, `put_key`, `put_key_units` and `add_absent` are deleted. Hands change only their input
+  format.
+- Item 4: `m8_test/driver_m8.rs` gained a `rekey` line. It rewrites the stored key word together with the stored hash
+  (Rust mirror of `bud_keys::hash`) and forces one grow, so the slots are rebuilt and the `hit` op of
+  `a-sk-*-valid`, `e-turn-valid` and `e-act-valid` takes the real hit path.
+- Item 3, M7 out: the ref out stays packed, `[3, n, words(n)]` plus `[m, words(m)]` for the old id when effect 21 is
+  set (`ABI.md`). The `out_ok` bounds count words. `put_units_of` (the unpack into units) is deleted. `attach` reads
+  the entry address once (`entry_addr` / `at_off` / `at_n`, as `current` does).
+- Item 3, M7 `maybeClose`: the in-place test walks the record strings once (`str_pos_in`). With string 2 empty,
+  string 3's length word is the next word, so `str_len_in(st, off, 3) == c32(rd(st, c40(p2 + 1)))`. That is exact,
+  because `str_words(2, l) == c32(l)`. When no clock entry exists (`ce < 0`), the in-place close writes state, closed,
+  how and the end stamp directly. Before, it loaded the `bv` view, ran SETTLE and DROP (both return at once for
+  `ce < 0`), re-probed the session and rewrote amount / spent words with their stored values. `bv` is a scratch frame
+  that nothing reads on this path, and Q compares only st / fx / out.
+- Item 3, M7 harness (`run_m7.py`, `driver_m7.rs`, `hand_m7_u16.rs`, `diff_hand_m7.py`): there are two matched pairs
+  now. Pruv wire is compared with `hand16w` (the hand builds the same op words, then `decode_call` and dispatch). Pruv
+  typed (`sol::c_*` entries, no framing, no `valid`) is compared with hand16 typed. The old Pruv wire vs hand16 typed
+  column stays and is labelled unmatched. The typed lane makes one direct typed call per op (`c_direct`), as the hand
+  typed lane does, and falls back to the Grow retry loop only on a Grow answer. The hand wire lane unpacks keys into
+  reused u16 scratch (`key_into`, one shift per lane). rchk, rchk_t, rchk_w and the hand rchk must be one value per
+  cell. The `diff_hand_m7.py` out-buffer controls moved to the packed edge (16376 / 16377 units; replace 16368 /
+  16369).
+
+Gates (seed 20261117, 300 cases). After item 2 and item 4 (whole tree): keys 5823 / 5823, M4 300 / 300 (size formula
+1922 / 1922), M9 `run_m9.py q` 26 / 274 / 0, M11 `run_m11.py --pairs py,rs` exact 213 / prefix-ok 87 for both
+compilers, M8 `diff_hand16.py` 300 cases + 84 controls, 0 mismatches, and `corrupt_resident.py --old-rev e75ca68`
+387 controls, 0 mismatches, 0 poke-not-found. After the item 3 changes (they touch only `bud_lifecycle.pruv`, which
+only the M7 and M10 roots import, through `bud_halt` for M10): M7 `run_m7.py q` 113 / 187 / 0, `diff_hand_m7.py`
+0 mismatches (hand16 q 113 / 187 / 0), M10 `run_m10.py q` 78 / 222 / 0 (194 maybeClose requests compared).
+
+### M8 after P05b (`run_m8.py perf --rounds 5 --no-instr`, n = 100 / 500; instructions from a 3-round run)
+
+| M8 item | n | Pruv ns | /hand16w | /fxmixw | /oaw | Pruv instr | instr /hand16w | instr /oaw | P05 /oaw ns |
+|---|---|---|---|---|---|---|---|---|---|
+| charge | 100 | 20.7 | 0.60 | 0.73 | 0.70 | 574 | 0.66 | 0.75 | 0.71 |
+| charge | 500 | 24.9 | 0.67 | 0.80 | 0.78 | 577 | 0.67 | 0.75 | 0.85 |
+| failure | 100 | 17.1 | 0.57 | 0.75 | 0.71 | 454 | 0.64 | 0.75 | 0.72 |
+| failure | 500 | 21.3 | 0.64 | 0.85 | 0.78 | 458 | 0.65 | 0.75 | 0.77 |
+| tooldup | 100 | 23.3 | 0.48 | 0.63 | 0.74 | 575 | 0.51 | 0.65 | 0.74 |
+| tooldup | 500 | 25.8 | 0.51 | 0.72 | 0.71 | 577 | 0.51 | 0.65 | 0.74 |
+| toolgrow | 100 | 49.2 | 0.42 | 0.58 | 0.87 | 1275 | 0.50 | 0.96 | 1.12 |
+| toolgrow | 500 | 53.6 | 0.41 | 0.64 | 0.99 | 1251 | 0.47 | 0.99 | 1.25 |
+
+Checksums: 40 / 40 equal across hand16 / fxmix / oa and their w lanes. toolgrow went from 63.8 / 67.3 ns (P05) to
+49.2 / 53.6. Instructions went from 1312 / 1300 to 1275 / 1251. Every matched M8 cell is now at or below 1.0x. The
+3-round run had one noisy round at n = 100 (tooldup 40.9 ns, toolgrow 71.7 ns), and the 5-round medians above
+replace it.
+
+### M7 after P05b (`run_m7.py perf --profile SM`, 5 rounds, S = 100 / 500; output `/tmp/p05b_perf_sm3.txt`)
+
+| item | S | Pruv wire | hand16w | wire ratio | Pruv typed | hand16 typed | typed ratio | instr wire ratio | instr typed (Pruv / hand16) |
+|---|---|---|---|---|---|---|---|---|---|
+| attach | 100 | 18.6 | 30.2 | 0.62 | 12.8 | 11.5 | **1.11** | 0.80 | 437 / 306 |
+| attach | 500 | 18.4 | 30.2 | 0.61 | 12.8 | 11.5 | **1.11** | 0.80 | 437 / 306 |
+| closereopen | 100 | 21.9 | 32.0 | 0.68 | 14.0 | 12.9 | **1.09** | 0.82 | 506 / 342 |
+| closereopen | 500 | 22.0 | 31.9 | 0.69 | 14.0 | 12.9 | **1.09** | 0.86 | 506 / 342 |
+| current | 100 | 18.0 | 33.6 | 0.54 | 11.8 | 12.6 | 0.94 | 0.66 | 401 / 345 |
+| current | 500 | 17.9 | 33.5 | 0.53 | 11.6 | 12.5 | 0.93 | 0.66 | 401 / 348 |
+| ishalted | 100 | 18.1 | 32.8 | 0.55 | 12.9 | 12.4 | **1.04** | 0.65 | 398 / 337 |
+| ishalted | 500 | 17.7 | 32.5 | 0.54 | 12.6 | 12.4 | **1.02** | 0.65 | 398 / 339 |
+| replace | 100 | 100.0 | 562.7 | 0.18 | 93.7 | 119.0 | 0.79 | 0.20 | 2645 / 2991 |
+| replace | 500 | 102.3 | 553.6 | 0.18 | 93.8 | 119.2 | 0.79 | 0.20 | 2645 / 2992 |
+
+Result checks: 10 cells, 0 mismatches. The unmatched Pruv wire / hand16 typed column is 1.43-1.71 for attach,
+closereopen, current and ishalted, against 1.5-2.8 before P05b. How the typed ratios moved:
+
+| item | before the item-3 fixes | `c_direct` typed lane | + `key_into`, one-walk in-place test | + no-clock in-place close |
+|---|---|---|---|---|
+| attach | (typed lane retried through `c_call`) | 1.04 / 1.10 | 1.09 / 1.11 | 1.11 / 1.11 |
+| closereopen | same | 1.14 / 1.23 | 1.23 / 1.21 | 1.09 / 1.09 |
+| current | same | 0.92 / 0.94 | 0.94 / 0.94 | 0.94 / 0.93 |
+| ishalted | same | 1.09 / 0.98 | 1.01 / 1.00 | 1.04 / 1.02 |
+
+The wire pair is the gate (it is the boundary Pruv code runs behind) and every wire cell is 0.18-0.69. The hand wire
+lane spends about 600 instructions per op above its typed lane: a linear search of the op cache, 3 `key_span`
+tests, 3 unpacks, the dispatch loop and effect bookkeeping. Pruv's wire path adds about 250 above typed (`valid`,
+3 `rec_end`, if-chain dispatch). The typed pair compares only the work after decoding, and four cells there are
+above 1.0x.
+
+### Typed cells above 1.0x, line by line (generated Rust vs hand)
+
+Classification order: data representation, then language gap, then codegen. "I1" is the gap recorded in the P03
+section. No store invariant carries `off + n <= len(st)` for a stored record, so every `rd` / `wr` at `off + k` is
+bounds-checked, and record well-formedness tests (length >= 30, state in 0..=2, string lengths clamped) stay. They
+are not worked around here.
+
+**current / ishalted** (`c_current` -> `bud_lifecycle::current_at`; hand `World::current`):
+
+| step | generated Rust | hand Rust | kind | removable by |
+|---|---|---|---|---|
+| owner generation | `find_w`: `gf(st, 0, 3)` -> `ea` (len >= 7, `c32(cap)`, e/f range, `c32(base)`) | none (one HashMap per map) | layout | layout (P07) |
+| hash | `hash_words`: owner / og seed, one xor-mul per word (36-unit sid = 9 words), `fin` | SipHash-1-3 over 72 bytes | algorithm | none (Pruv is cheaper) |
+| probe | `find_h_w`: `c32(slots)`, tag compare, `p in 0..len` per probe, `slot_entry` | hashbrown group probe, h2 byte match | bounds on a stored slot word | I1 (slot table inside `st`) |
+| entry header | `entry_matches_w`: `field_addr` -> `ea` again; 5 header compares (h, used, owner, og, n); `c40(ko)`; `n > 2^30`; two range tests; `eq_range` over 9 words | `**k == *key` (length compare + memcmp of 72 B) | I1 (entry span) + layout (owner / og) | I1 for the range tests; owner / og belong to the shared-index layout (P07) |
+| entry address | `entry_addr` -> `field_addr` -> `ea` (third `ea` on the same e; LLVM merges it after inlining, no store between) | `Some(Slot::Budget(b))` pointer | I1 | I1 |
+| record offset | `at_off`: `a in 0..2^40`, bounds on `rd(a + 12)`, `c40` | `b.id` is a Box field | I1 (record span) | I1 |
+| record length | `at_n`: the same three tests on `a + 13` | none | I1 | I1 |
+| state | `state_of`: `n < 30`, bounds on `rd(off)`, `0..=2` range | enum match (`Slot::Budget`), `b.state == Halted` | I1 (record well-formed) | I1 / typed record (P11) |
+| id compare | `id_is`: `kn` / `ks` range, `rd(off + 24) == kn`, `words(kn)`, two range tests, `eq_range` | `*b.id == *bid` | kn / ks: caller frame; the rest I1 | kn / ks: a `requires` on `id_is` / `current_at` plus an ensures on `rec_end` (expressible today; in `t_call` `rec_end` already proves it, but no contract carries it to `c_*`); the spans need I1 |
+
+current ends at 0.93-0.94 because the hash is cheaper. isHalted adds one more state read (`rd(off)` bounds + range),
+which gives 1.02-1.04, inside the 1.0-1.1 band. The cause is I1.
+
+**closereopen** (`c_maybe_close` then `c_reopen`, no clock map; hand `maybe_close` then `reopen`):
+
+| step | generated Rust | hand Rust | kind | removable by |
+|---|---|---|---|---|
+| room tests | `c40(rd(fx, 0)) + 6 > len(fx)`, `len(out) < 1` (twice: both calls) | `Vec::push` grows | ABI (caller-sized buffers) | none (the raw-buffer ABI; typed handle P11) |
+| lookup | `session_of` = hash + probe + entry header (current_at's first 5 rows), twice | `get_mut` (SipHash), twice | as current | as current |
+| record header | `entry_addr` / `at_off` / `at_n` / `state_of`; reopen `rd(off) != 2`, `rd(off + 18) != 1` (bounds-checked) | enum match, `b.state`, `b.ended` | I1 | I1 |
+| clock check | `clock_in`: `count(st, 1) == 0` (owner header read, bounds) | `clocks.is_empty()` | I1 (owner header in `st`) | I1 |
+| in-place test | `str_pos_in(off, 2)`: walk strings 0 and 1 (2 length reads + `str_words` + `c40` each), then 2 reads | none: `ended` is an `Option` field and activeSince has no length | data representation (variable-length strings in one flat record) | fixed slot for the two strings in the record layout (P07) or a typed record (P11) |
+| reopen in-place test | `str_len_in(off, 3)`: walk strings 0..2 | none (`b.ended = None`) | data representation | as above |
+| header writes | 4 + 4 `wr` at `off + k` (each bounds-checked) | 2 + 2 field stores | I1 | I1 |
+| effects / out | `push(fx, ..)` (bound proved by the room test), `wr(out, 0, ..)` | `fx.push`, `Res::Bool` | ABI | none |
+
+Before this pass the walk ran twice in `maybeClose` (`str_len_in(.., 2)` and `str_len_in(.., 3)`), and the no-clock
+close loaded `bv` and re-probed the session. These steps were redundant (not checks) and are gone. 1.21-1.23 became
+1.09. What is left is I1 bounds on about 20 header reads and writes, plus the string walk (representation).
+
+**attach** (`c_attach`, ref path; hand `attach_slot` on an open budget):
+
+| step | generated Rust | hand Rust | kind | removable by |
+|---|---|---|---|---|
+| lookup and header | as closereopen (one lookup, `entry_addr` / `at_off` / `at_n`, `n < 30`, state) | `get_mut` + enum match | as above | as above |
+| origin / size | `valid_origin`, `valid_size` (range tests on host words) | typed enums (decoded by the caller) | ABI (host input) | none (unproven host input) |
+| result | `out_ok(out, 2 + words(il))`, then `put_key`: `wr(out, 0, 3)`, `wr(out, 1, n)`, `copy_words` of 9 words (one range test, plain copy) | `Ok(Res::Ref(&b.id, None))`: returns a borrow, copies nothing | data representation / API: Pruv returns by writing into the caller's buffer, the hand returns a reference into its own state | a borrowed-slice result (a language feature Pruv does not have; P11 typed handle) |
+
+The id copy (about 9 words plus its range test) and I1 on the record header make up the 437 vs 306 instructions. The
+hand's borrow is free only because the hand's result type borrows the world. A host that sends the id out has to copy
+it on the hand side too, which is what the wire pair shows (0.61-0.62).
+
+### Checks erased and kept in P05b
+
+- Erased by proof: none in P05b. What was removed is redundant work, each item with an equality argument:
+  - the second string walk in `maybeClose` (`str_words(2, 0) == 0`);
+  - the no-op SETTLE / DROP, the `bv` load and the session re-probe when `ce < 0` (both functions return at once
+    for `ce < 0`, and the amount / spent words would be rewritten with the values just read);
+  - `add_absent_w`'s second probe (insert at the probed slot, re-probe only after a rehash);
+  - child slot probes in `remove` (lazy deletion; a stale slot fails the tag or entry test on every lookup).
+- Deleted with their callers: the unit API checks in `bud_map` (per-unit pack and range in `put_key_units`, the
+  unit `entry_matches`) and `put_units_of`'s per-unit fallback, because no caller is left.
+- Kept, because they are unprovable without I1 or they test host input: `valid(st)` per root call, `rec_end` on each
+  wire key in `t_call`, `valid_origin` / `valid_size`, record well-formedness (`n < 30`, state range, `c32` / `c40`
+  clamps), and every bounds check on `st` reads and writes at record offsets.
+
+### M9 / M10 / M4 / M11 after P05b, against P05 (`e75ca68`)
+
+Each pair below alternates the P05b binary with the same driver built from `e75ca68` (same compiler), run after run.
+
+A first pass found two host-side regressions from item 2, and one baseline change that flattered Pruv. All three are
+fixed in the drivers. The Pruv sources are not touched by these fixes.
+- M9 fire went from 205 to 227 ns, against hand 207 (0.99x to 1.10x). Since item 2 the scheduler keeps byte keys and
+  the op carries packed keys, and `driver_m9.rs` converted bytes to units to packed (and back, for the ARM effect)
+  through a unit scratch Vec. Now `enc_key` writes the bytes straight from the packed words (four ASCII bytes per
+  word when every lane is below 0x80), and `dec_packed` decodes bytes straight into packed words. A 300 000-case
+  randomized test (ASCII, 2-byte and 3-byte units, n = 0..22) gives byte-for-byte and word-for-word the same output
+  as the old `enc(unpack(..))` and `pack(dec(..))`.
+- M10 halt at D = 100 read 3% above P05 (D = 10 equal). In the perf run, `driver_m10.rs` still formatted every
+  `stopDel` log line, unpacking each id and walking to the k-th id from the start (D^2 / 2 steps). Silent runs now
+  skip that, because the log is its only consumer. The table applies the same guard to the P05 driver, so it compares
+  Pruv time only.
+- M4: b0cd96e had moved `perf_ts.mjs` to packed keys as BigInt words. That made the TS loop 1.4-2.2x slower and
+  pushed the core / TS ratios down to 0.13-0.27. The TS baseline is back to its P05 form (`len, units` Numbers, the
+  cheapest JS decode of the same key content), and the reason is now in its header. The perf-only `key()` in
+  `driver_m4.rs` packs from `encode_utf16` with no temporary Vecs. The tools encode column had gone up to 157 ns/op;
+  it is now 64-66 / 86-88 ns/op (sessions / tools), against 100-108 / 82-94 at P05.
+
+| root | item | P05b | P05 | P05b / P05 | hand or TS | P05b / hand or TS |
+|---|---|---|---|---|---|---|
+| M9 (`driver_m9 perf 10 200000`, 6 runs, median ns) | refresh | 110 | 134 | 0.82 | hand 136 | 0.81 |
+| | cycle | 113 | 134 | 0.84 | hand 158 | 0.72 |
+| | fire | 159 | 196 | 0.81 | hand 198 | 0.80 |
+| M10 (`driver_m10 perf D 100000`, 9 runs, median ns per halt, log guard in both) | halt D = 10 | 663 | 687 | 0.97 | (no hand yet, M10b) | |
+| | halt D = 50 | 1047 | 1170 | 0.89 | | |
+| | halt D = 100 | 1424 | 1717 | 0.83 | | |
+| | putback | 24.8 | 32.4 | 0.77 | | |
+| M4 (`run.py perf --axes sessions,tools,clocks`, core ns/op, two runs) | sessions n = 100 / 500 / 1000 | 13.2 / 12.8 / 13.3 | 14.9 / 14.9 / 15.6 | 0.86-0.89 | TS 55-65 | 0.20-0.24 |
+| | tools n = 100 / 500 / 1000 | 30.8 / 34.0 / 33.3 | 31.0 / 36.0 / 34.3 | 0.94-0.99 | TS 59-66 | 0.50-0.56 |
+| | clocks n = 100 / 500 / 1000 | 24.9 / 24.4 / 25.0 | 26.8 / 25.7 / 26.4 | 0.93-0.95 | TS 101-118 | 0.21-0.25 |
+| M11 (`run_m11.py --pairs rs --perf`, two runs each) | A U = 100 / 300 / 1000 | 413 / 553 / 17.0 | 409 / 553 / 17.0 | 1.00-1.01 | hand 553 / 625-660 / 21.5 | 0.74-0.95 |
+| | B n = 100 / 500 / 1000 | 683 / 679 / 673 | 694 / 684 / 683 | 0.98-0.99 | hand 757-803 | 0.85-0.88 |
+| | C n = 100 / 1000 | 452 / 452 | 457 / 454 | 0.99-1.00 | hand 588-606 | 0.74-0.76 |
+
+M11 A at U = 300 read 591 vs 574 in the runner's two runs. Nine alternating `perfA 300 200000` runs of the two
+harness binaries gave medians of 553.6 vs 552.9, so that difference was noise. `bud_card.pruv` and
+`m11_perf_card` are unchanged in P05b. Gates after these driver fixes: M9 26 / 274 / 0, M10 78 / 222 / 0 (D = 100
+halts compared as before), M4 300 / 300 (1922 / 1922), M11 exact 213 / prefix-ok 87, `perf_ts.mjs selftest` ok.
+
+### Notes and open items
+
+- The P05 note about the unit API is closed: no unit callers are left (item 2).
+- The `corrupt_resident.py` OLD reference for P05b is `e75ca68` (the P03-P05 merge).
+- Open, written reason: the M7 typed attach (1.11), closereopen (1.09) and isHalted (1.02-1.04) cells. Causes are I1
+  (P06 / P07), the variable-length string walk (P07 layout or P11 typed record) and the borrow vs copy result (P11).
+  Every matched wire cell in M7 and M8 is at or below 1.0x.

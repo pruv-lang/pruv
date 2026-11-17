@@ -9,7 +9,7 @@
 q --hand16 runs hand_m7_u16.rs (typed UTF-16 hand Rust, q mode) on the same program instead of the Pruv driver, through the
 same classification. perf lanes: pruv (driver_m7), hand16 (hand_m7_u16), hand (hand_m7, UTF-8 String, informational), ts.
 perf also writes work/m7/perf.json with run_meta.run_meta(...) and the rows (ns, retired instructions, ratios).
-perf compares per cell the per-op result checksum `rchk` of pruv and hand16 (untimed verification pass in both lanes); a
+perf compares per cell the per-op result checksums rchk, rchk_t (pruv) and rchk, rchk_w (hand16) (untimed passes); a
 mismatch or missing rchk fails the cell (no ratio) and the exit status.
 If work/m7/cases.jsonl / oracle.jsonl are missing the read-only source SRC_WORK is read instead.
 
@@ -117,9 +117,32 @@ def text(u):
     return b"".join(bytes([x & 0xff, x >> 8]) for x in u).decode("utf-16-le", "surrogatepass")
 
 
+def pack(u):
+    """Packed-u16 words (bud_keys.pruv): word i = u[4i]<<48 | u[4i+1]<<32 | u[4i+2]<<16 | u[4i+3], as a two's-complement
+    i64 (u[4i] >= 0x8000 gives a negative word); lanes past len(u) are zero."""
+    out = []
+    for i in range(0, len(u), 4):
+        x = 0
+        for l in range(4):
+            x = (x << 16) | (u[i + l] if i + l < len(u) else 0)
+        out.append(x - (1 << 64) if x >= (1 << 63) else x)
+    return out
+
+
+def unpack(words, n):
+    """Inverse of pack: the n u16 units of packed words."""
+    return [(words[i // 4] >> (48 - 16 * (i % 4))) & 0xFFFF for i in range(n)]
+
+
+def nwords(n):
+    """Data words of a packed key of n units: ceil(n / 4)."""
+    return (max(n, 0) + 3) // 4
+
+
 def key(s):
+    """Wire key, packed once here at ingress: `n, words(n) packed words`."""
     u = units(s)
-    return [len(u)] + u
+    return [len(u)] + pack(u)
 
 
 def iso(ms):
@@ -132,6 +155,9 @@ def is_str(v):
 
 
 # ---- record codec (bud_lifecycle.pruv header comment) ----
+PACKED_STRS = (0, 4)  # record strings stored as framed packed keys: 0 id, 4 follows
+
+
 def encode_budget(b):
     """Budget (decoded python dict, or None/UNDEF) -> record words. Fields the record has no header slot for (or holds
     with a value the header cannot carry) go into the opaque rest text as canonical JV JSON."""
@@ -178,21 +204,31 @@ def encode_budget(b):
             raise ValueError("budget field %s not representable: %r" % (k, b.get(k)))
     strs[5] = units(json.dumps(jv_encode(rest), ensure_ascii=False, separators=(",", ":"))) if rest else []
     w = list(h)
-    for s in strs:
-        w += [len(s)] + s
+    for i, s in enumerate(strs):
+        w += [len(s)] + (pack(s) if i in PACKED_STRS else s)
     return w
+
+
+def decode_strs(w):
+    """The six record strings as unit lists (strings 0 and 4 unpacked from their packed words) and the end position."""
+    p = 24
+    strs = []
+    for i in range(6):
+        n = w[p]
+        if i in PACKED_STRS:
+            strs.append(unpack(w[p + 1:p + 1 + nwords(n)], n))
+            p += 1 + nwords(n)
+        else:
+            strs.append(w[p + 1:p + 1 + n])
+            p += 1 + n
+    return strs, p
 
 
 def decode_budget(w):
     if w[0] == -1:
         return None
     h = w[:24]
-    p = 24
-    strs = []
-    for _ in range(6):
-        n = w[p]
-        strs.append(w[p + 1:p + 1 + n])
-        p += 1 + n
+    strs, _ = decode_strs(w)
     rest = jv_decode(json.loads(text(strs[5]))) if strs[5] else {}
     b = {"id": text(strs[0]), "state": STATE_N.get(h[0], h[0]), "origin": ORIGIN_N.get(h[1], h[1])}
     b["openedAt"] = text(strs[1]) if h[20] == 1 else iso(h[21])
@@ -220,7 +256,7 @@ def put_words(sess):
 
 # ---- driver program ----
 def call_body(op, args, unit):
-    """[code, origin, size, unit x6, sessionId key, budgetId key]."""
+    """[code, origin, size, unit x6, sessionId key, budgetId key] (keys packed)."""
     a = [jv_decode(x) if not (isinstance(x, dict) and "sess" in x) else x for x in args]
     origin, size, sid, bid = -1, -1, None, ""
     if op in ("current", "isHalted", "reopen"):
@@ -549,10 +585,20 @@ def cmd_perf(args):
     `RCHK MISMATCH`, drops its ratios, is recorded in perf.json and makes the command exit non-zero. dispatch and
     rawcall (pruv only) print rchk too but are not compared. Last line: `result checks: N cells compared, M mismatches`.
 
+    Matched lanes (same boundary on both sides): driver_m7 `perf` additionally prints `t <item> <size> <ns>` and
+    `rchk_t <item> <size> <value>` (Pruv typed lane: sol::c_* entries, no wire framing, no valid) and hand_m7_u16 `perf`
+    prints `w <item> <size> <ns>` and `rchk_w <item> <size> <value>` (hand16 wire lane: Host op build + decode_call +
+    dispatch, no logging). They form the extra lanes pruv_t and hand16w. Columns: `Pruv/hand16w` = Pruv wire vs
+    hand16 wire (matched), `Pruv typed/hand16` = Pruv typed vs hand16 typed (matched); the old `Pruv/hand16` (Pruv wire
+    vs hand16 typed) stays but is UNMATCHED. Per cell rchk, rchk_t (pruv) and rchk, rchk_w (hand16) must be one
+    identical value in every round; a missing one (including rchk_t) is RCHK MISSING.
+
     Instructions: driver_m7 `perf` runs every item in one process (no item argument), so its per-item instructions are
     taken from `driver_m7 boundary S reps item A` (the same World::call path and bodies as perf) minus the same item's
     `observe` row (boundary variants additionally fold the result words into a checksum; observe is that fold alone).
-    hand16 uses `hand_m7_u16 perf S reps item`. Both: (instr(5 reps) - instr(reps)) / (4 reps x calls per rep).
+    Pruv typed instr = boundary variant C minus observe. hand16 typed instr uses `hand_m7_u16 perf S reps item typed`,
+    hand16w instr `... item wire`. All: (instr(5 reps) - instr(reps)) / (4 reps x calls per rep). Instr ratios:
+    Pruv/hand16w (wire), Pruv typed/hand16 (typed), Pruv/hand16 (unmatched).
     No retired-instruction counter (no /usr/bin/time -l line) -> 'unavailable', never 0."""
     from common import NODE, TS_ENV
     exe = build(args)
@@ -578,9 +624,17 @@ def cmd_perf(args):
                     if f[0] == "chk":  # chk <item> <size> <value> (hand16 only)
                         chk.setdefault((f[1], int(f[2])), set()).add(f[3])
                         continue
-                    if f[0] == "rchk":  # rchk <item> <size> <value> (pruv and hand16; per-op results, untimed pass)
-                        # kept per run (one list entry per process run), so a value missing from one round is seen
-                        rchk.setdefault((f[1], int(f[2])), {}).setdefault(side, {}).setdefault(rd, []).append(f[3])
+                    if f[0] in ("rchk", "rchk_t", "rchk_w"):
+                        # rchk <item> <size> <value> (pruv and hand16 typed lane; per-op results, untimed pass);
+                        # rchk_t (pruv typed lane) and rchk_w (hand16 wire lane) go to their own lane key
+                        # (pruv_t / hand16w); kept per run (one list entry per process run), so a value missing from
+                        # one round is seen
+                        lk = {"rchk": side, "rchk_t": "pruv_t", "rchk_w": "hand16w"}[f[0]]
+                        rchk.setdefault((f[1], int(f[2])), {}).setdefault(lk, {}).setdefault(rd, []).append(f[3])
+                        continue
+                    if f[0] in ("t", "w"):  # t <item> <size> <ns> (pruv typed lane), w <item> <size> <ns> (hand16 wire)
+                        res.setdefault((f[1], int(f[2])), {}).setdefault("pruv_t" if f[0] == "t" else "hand16w", []).append(
+                            float(f[3]))
                         continue
                     item, sz, ns = f
                     res.setdefault((item, int(sz)), {}).setdefault(side, []).append(float(ns))
@@ -594,10 +648,12 @@ def cmd_perf(args):
             continue
         n_cmp += 1
         r = rchk.get((item, sz), {})
-        pr, hr = r.get("pruv", {}), r.get("hand16", {})
-        if any(len(pr.get(rd, [])) != 1 or len(hr.get(rd, [])) != 1 for rd in range(args.rounds)):
+        # four lanes must each print exactly one value in every round, all identical: pruv rchk, pruv typed rchk_t,
+        # hand16 rchk, hand16 wire rchk_w
+        lanes = [r.get(k, {}) for k in ("pruv", "pruv_t", "hand16", "hand16w")]
+        if any(len(ln.get(rd, [])) != 1 for ln in lanes for rd in range(args.rounds)):
             cell_status[(item, sz)] = "RCHK MISSING"
-        elif len({v for vs in pr.values() for v in vs} | {v for vs in hr.values() for v in vs}) != 1:
+        elif len({v for ln in lanes for vs in ln.values() for v in vs}) != 1:
             cell_status[(item, sz)] = "RCHK MISMATCH"
         if (item, sz) in cell_status:
             n_bad += 1
@@ -611,28 +667,43 @@ def cmd_perf(args):
                 instr[("pruv_A", item, size)] = a
                 instr[("pruv_observe", item, size)] = o
                 instr[("pruv", item, size)] = None if a is None or o is None else a - o
+                # typed lane of Pruv: boundary variant C (sol::c_* typed entries) minus observe
+                c = instr_per_call(lambda r: [exe, "boundary", str(size), str(r), item, "C"], args.reps, calls)
+                instr[("pruv_C", item, size)] = c
+                instr[("pruv_t", item, size)] = None if c is None or o is None else c - o
                 instr[("hand16", item, size)] = instr_per_call(
-                    lambda r: [hand16, "perf", str(size), str(r), item], args.reps, calls)
+                    lambda r: [hand16, "perf", str(size), str(r), item, "typed"], args.reps, calls)
+                instr[("hand16w", item, size)] = instr_per_call(
+                    lambda r: [hand16, "perf", str(size), str(r), item, "wire"], args.reps, calls)
     fi = lambda x: "unavailable" if x is None else "%.0f" % x
     print("rounds %d, reps %d, sizes %s; ns and instructions per call" % (args.rounds, args.reps, sizes))
-    print("item | S | Pruv ns | hand16 ns | hand(old UTF-8) ns | TS ns | Pruv/hand16 | Pruv/hand(old) | Pruv instr"
-          " | hand16 instr | instr Pruv/hand16")
+    print("Matched pairs: Pruv/hand16w (wire vs wire), Pruv typed/hand16 (typed vs typed). Pruv/hand16 is UNMATCHED "
+          "(Pruv wire vs hand16 typed).")
+    print("item | S | Pruv ns | hand16 ns | hand(old UTF-8) ns | TS ns | Pruv typed ns | hand16w ns"
+          " | Pruv/hand16 (unmatched: wire vs typed) | Pruv/hand16w (wire) | Pruv typed/hand16 (typed) | Pruv/hand(old)"
+          " | Pruv instr | hand16 instr | instr Pruv/hand16 (unmatched) | Pruv typed instr | hand16w instr"
+          " | instr Pruv/hand16w | instr Pruv typed/hand16")
     rows = []
     for (item, sz), v in sorted(res.items(), key=lambda kv: (kv[0][1], kv[0][0])):
         m = {k: statistics.median(x) for k, x in v.items()}
         f = lambda k: ("%.1f" % m[k]) if k in m else "-"
         rt = lambda a, b: (m[a] / m[b]) if a in m and b in m and m[b] else None
         ip, ih = instr.get(("pruv", item, sz)), instr.get(("hand16", item, sz))
+        ipt, ihw = instr.get(("pruv_t", item, sz)), instr.get(("hand16w", item, sz))
         ir = (ip / ih) if ip is not None and ih else None
+        irw = (ip / ihw) if ip is not None and ihw else None  # wire vs wire
+        irt = (ipt / ih) if ipt is not None and ih else None  # typed vs typed
         fr = lambda x: "-" if x is None else "%.2f" % x
         fail = cell_status.get((item, sz))
         if fail:  # no ratio of a cell whose per-op results are unchecked or differ
             rt = lambda a, b: None
-            ir = None
-        print("%s | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s%s" % (
-            item, sz, f("pruv"), f("hand16"), f("hand"), f("ts"), fr(rt("pruv", "hand16")), fr(rt("pruv", "hand")),
-            fi(ip) if item in PERF_ITEMS and not args.no_instr else "-",
-            fi(ih) if item in PERF_ITEMS and not args.no_instr else "-", fr(ir),
+            ir = irw = irt = None
+        ci = item in PERF_ITEMS and not args.no_instr
+        print("%s | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s%s" % (
+            item, sz, f("pruv"), f("hand16"), f("hand"), f("ts"), f("pruv_t"), f("hand16w"),
+            fr(rt("pruv", "hand16")), fr(rt("pruv", "hand16w")), fr(rt("pruv_t", "hand16")), fr(rt("pruv", "hand")),
+            fi(ip) if ci else "-", fi(ih) if ci else "-", fr(ir),
+            fi(ipt) if ci else "-", fi(ihw) if ci else "-", fr(irw), fr(irt),
             " | FAIL " + fail if fail else ""))
         rc = rchk.get((item, sz), {})
         rows.append({
@@ -641,16 +712,21 @@ def cmd_perf(args):
             "rchk": {s_: sorted(x) for s_, x in rc.items()} or "unavailable",
             "rchk_status": fail or ("ok" if item in PERF_ITEMS else "not compared (pruv only)"),
             "pruv_over_hand16": num(rt("pruv", "hand16")), "pruv_over_hand_old": num(rt("pruv", "hand")),
+            "pruv_over_hand16w": num(rt("pruv", "hand16w")), "pruv_typed_over_hand16": num(rt("pruv_t", "hand16")),
+            "pruv_over_hand16_matched": False,  # Pruv wire vs hand16 typed: unmatched boundaries
             "instr_pruv": num(ip), "instr_hand16": num(ih), "instr_pruv_over_hand16": num(ir),
+            "instr_pruv_typed": num(ipt), "instr_hand16w": num(ihw),
+            "instr_pruv_over_hand16w": num(irw), "instr_pruv_typed_over_hand16": num(irt),
+            "instr_pruv_boundary_C": num(instr.get(("pruv_C", item, sz))),
             "instr_pruv_boundary_A": num(instr.get(("pruv_A", item, sz))),
             "instr_pruv_boundary_observe": num(instr.get(("pruv_observe", item, sz))),
             "hand16_chk": sorted(chk.get((item, sz), [])) or "unavailable"})
     os.makedirs(WORK, exist_ok=True)
     meta = run_meta(pruvc=PRUVC_PY if args.py else args.pruvc, backend="rust", rustc=rustc(), flags=RUSTC_FLAGS,
                     seed=SEED, profile=args.profile or "custom:" + ",".join(map(str, sizes)),
-                    lanes=[s for s, _ in sides],
+                    lanes=[s for s, _ in sides] + ["pruv_t", "hand16w"],
                     extra={"rounds": args.rounds, "reps": args.reps, "sizes": sizes, "instr_enabled": not args.no_instr,
-                           "pruv_checksum": "rchk per op (driver_m7), compared with hand16 per cell"})
+                           "pruv_checksum": "rchk + rchk_t per op (driver_m7), compared with hand16 rchk + rchk_w per cell"})
     with open(os.path.join(WORK, "perf.json"), "w") as f:
         json.dump({"meta": meta, "rows": rows, "checksum_problems": bad,
                    "result_checks": {"compared": n_cmp, "mismatches": n_bad,

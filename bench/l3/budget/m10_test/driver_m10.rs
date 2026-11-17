@@ -18,11 +18,16 @@
 // due timers in (due, token) order through FIRE (code 11) with now = due. isQuiet: the next answer (default false) is prefetched in op[2]
 // and consumed when the effects hold [23].
 // Grow -N: buffer of max(N, 2*len), t_grow, retry.
+// Keys on the wire (op keys, the runningDelegationIds answers `n, (len, words(len))*`) are packed u16 keys
+// `n, words(n) packed words` (bud_keys layout), packed once by the encoder (run_m10.py; key() below for perf). The
+// scheduler keeps a timer's captured ref as those framed packed keys (passed back verbatim to FIRE); the log and the
+// observation print ids in units (unpacked here).
 use std::collections::HashMap;
 use std::hint::black_box;
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
 
+// sid / bid: framed packed keys `n, words(n)` of the captured ref
 struct Timer {
     token: u64,
     due: i64,
@@ -48,14 +53,20 @@ struct World {
     silent: bool,
 }
 
-// key at op[p] (`len, units`): (start, end) of the units.
-fn key_at(op: &[i64], p: usize) -> (usize, usize) {
-    let n = op[p] as usize;
-    (p + 1, p + 1 + n)
+// Data words of a packed key of n units: ceil(n / 4).
+fn words(n: i64) -> usize {
+    (n.max(0) as usize + 3) / 4
 }
 
-fn units_str(u: &[i64]) -> String {
-    let v: Vec<String> = u.iter().map(|x| x.to_string()).collect();
+// End of the framed packed key record `n, words(n)` at op[p].
+fn rec_end(op: &[i64], p: usize) -> usize {
+    p + 1 + words(op[p])
+}
+
+// The units of the framed packed key k = `n, words(n)...`, comma separated.
+fn key_units_str(k: &[i64]) -> String {
+    let n = k[0].max(0) as usize;
+    let v: Vec<String> = (0..n).map(|j| ((((k[1 + j / 4] as u64) >> (48 - 16 * (j % 4))) & 0xffff) as i64).to_string()).collect();
     v.join(",")
 }
 
@@ -154,11 +165,11 @@ impl World {
             self.note(format!("X {}", r));
             return r;
         }
-        // the call's ref: scheduler key and captured ref
-        let (ss, se) = key_at(&op, 14);
-        let (bs, be) = key_at(&op, se);
-        let sid = op[ss..se].to_vec();
-        let bid = op[bs..be].to_vec();
+        // the call's ref (framed packed keys): scheduler key and captured ref
+        let se = rec_end(&op, 14);
+        let be = rec_end(&op, se);
+        let sid = op[14..se].to_vec();
+        let bid = op[se..be].to_vec();
         let used = self.fx[0].max(0) as usize;
         let mut i = 1;
         while i <= used {
@@ -197,13 +208,17 @@ impl World {
                     self.note("E rdi".to_string());
                 }
                 33 => {
-                    let k = self.fx[i + 1].max(0) as usize;
-                    let mut p = 1;
-                    for _ in 0..k {
-                        p += 1 + ids[p] as usize;
+                    // the k-th id of the answer passed in (`n, (len, words(len))*`), printed in units; the log is
+                    // the only consumer, so a silent (perf) run skips the walk and the formatting
+                    if !self.silent {
+                        let k = self.fx[i + 1].max(0) as usize;
+                        let mut p = 1;
+                        for _ in 0..k {
+                            p = rec_end(&ids, p);
+                        }
+                        let s = format!("E stopDel {}", key_units_str(&ids[p..rec_end(&ids, p)]));
+                        self.note(s);
                     }
-                    let s = format!("E stopDel {}", units_str(&ids[p + 1..p + 1 + ids[p] as usize]));
-                    self.note(s);
                     i += 2;
                     continue;
                 }
@@ -250,9 +265,7 @@ impl World {
         self.note(format!("F t{}", t.token));
         let mut body = vec![11i64];
         body.extend(std::iter::repeat(0).take(11));
-        body.push(t.sid.len() as i64);
         body.extend_from_slice(&t.sid);
-        body.push(t.bid.len() as i64);
         body.extend_from_slice(&t.bid);
         body.push(0);
         let silent = self.silent;
@@ -315,7 +328,7 @@ impl World {
         s.push_str(" | T");
         for t in &self.active {
             let own = self.by_bid.get(&t.bid) == Some(&t.token);
-            s.push_str(&format!(" t{}:{}:{}:{}", t.token, t.due, units_str(&t.bid), own as i32));
+            s.push_str(&format!(" t{}:{}:{}:{}", t.token, t.due, key_units_str(&t.bid), own as i32));
         }
         s
     }
@@ -371,12 +384,28 @@ fn run_q() {
 
 // perf <D> <reps>: one session with an open budget; halt(ref, 'delegations') with D running delegation ids, then the
 // record is put back open (both inside the timed loop; `putback` times the put alone). prints `item D ns_per_call`.
+// Wire key: `n, packed words(n)` (bud_keys layout: four big-endian lanes per word, tail lanes zero).
 fn key(s: &str) -> Vec<i64> {
+    let u: Vec<u16> = s.encode_utf16().collect();
+    let mut v = vec![u.len() as i64];
+    for c in u.chunks(4) {
+        let mut x: u64 = 0;
+        for l in 0..4 {
+            x = (x << 16) | (c.get(l).copied().unwrap_or(0) as u64);
+        }
+        v.push(x as i64);
+    }
+    v
+}
+
+// A unit string `len, units...`.
+fn ustr(s: &str) -> Vec<i64> {
     let mut v = vec![s.encode_utf16().count() as i64];
     v.extend(s.encode_utf16().map(|u| u as i64));
     v
 }
 
+// Record words (bud_lifecycle.pruv header): strings 0 (id) and 4 (follows, empty) packed, the others units.
 fn rec(id: &str, rest: &str) -> Vec<i64> {
     let mut h = vec![0i64; 24];
     h[3] = 120;
@@ -386,9 +415,12 @@ fn rec(id: &str, rest: &str) -> Vec<i64> {
     h[7] = 1;
     h[20] = 1;
     let mut v = h;
-    for t in [id, "2023-11-14T22:13:20.000Z", "", "", "", rest] {
-        v.extend(key(t));
+    v.extend(key(id));
+    for t in ["2023-11-14T22:13:20.000Z", "", ""] {
+        v.extend(ustr(t));
     }
+    v.extend(key(""));
+    v.extend(ustr(rest));
     v
 }
 

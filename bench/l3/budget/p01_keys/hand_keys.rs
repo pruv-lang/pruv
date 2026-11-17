@@ -187,7 +187,7 @@ fn hash_w(k: &[i64]) -> u64 {
     pfin(h ^ n0 as u64)
 }
 
-// hu_rec_p: bud_map::hash_key over the units (4 units per mix, lanes repacked little-endian), only used by `stats`.
+// hu_rec_p: bud_map::hash_words over the units (4 units per mix, lanes repacked little-endian), only used by `stats`.
 fn hash_u(units: &[u16]) -> u64 {
     let mut h = pseed();
     for ch in units.chunks(4) {

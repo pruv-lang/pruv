@@ -80,6 +80,15 @@ with a prepared op. Together they are the fixed per-request host cost that every
 baseline does not. In silent (perf) mode the driver caches built ops per (body ptr, len, quiet, next_uuid) and only
 rewrites `op[1] = now`, so op building is not in the numbers.
 
+P05b update (2026-11-18; numbers, matched columns and the line-by-line tables in `PERF_HEADROOM.md`, "P05b"): keys
+on the M7 wire are packed (`[n, words(n)]`) and the ref out is packed too (`[3, n, words(n)]`, plus `[m, words(m)]`
+for the old id when effect 21 is set; `ABI.md`). The table above compares Pruv wire against hand typed (no wire),
+which is an unmatched pair. `run_m7.py perf` now prints two matched pairs: Pruv wire vs `hand16w` (the hand decodes
+the same op words) and Pruv typed (`sol::c_*` entries) vs hand16 typed. At S = 100 / 500 the wire pair is 0.18-0.69
+on every item. The typed pair is 0.79 (replace) and 0.93-0.94 (current), with attach (1.11), closereopen (1.09) and
+isHalted (1.02-1.04) above 1.0. `maybeClose` with no clock entry now writes the four header words directly (no
+`view_in`, no-op SETTLE / DROP or re-probe), and its in-place test walks the record strings once (`str_pos_in`).
+
 ### Done in this milestone
 
 - `current`: returns a view `[4, n, off]` into `st` instead of copying the ~130-word record (protocol change,

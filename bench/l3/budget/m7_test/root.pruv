@@ -7,27 +7,19 @@ mod bud_clock;
 mod bud_lifecycle;
 
 // L3-10 M7 test root (test only, not product): drives bud_lifecycle over the M4 world.
-// Session blobs hold the M7 budget record (bud_lifecycle.pruv header comment).
+// Session blobs hold the M7 budget record (bud_lifecycle.pruv header comment; strings 0 id and 4 follows are framed
+// packed keys).
 //
 // t_call op: [code, now, quiet, origin, size, unit x5, defaultUnlimited, sessionId key, budgetId key, uuid key],
-// key = `len, units...`.
+// key = `n, words(n) packed words` (bud_keys layout; the host packs every key once at ingress).
 //   code 1 current(ref), 2 isHalted(ref), 3 attach(session, origin, size), 4 replaceForUserMessage(session, size,
 //   origin), 5 reopen(ref), 6 maybeClose(session).
 //   quiet: -1 not known yet, 0/1 the host's isQuiet answer. origin: 0 user, 1 schedule, 2 direct, 3 release, -1
 //   absent. size: -1 absent, 0 unlimited, else 1/2/4/8. uuid: the id randomUUID would return next (consumed only
 //   when the effects hold [22]).
+// Every key of an op is checked with bud_keys::rec_end (framing + canonical form, O(1) per key; every word is 4 valid
+// u16 lanes, so no unit range check exists) before anything is read or written; a bad key answers 2.
 // Status: bud_lifecycle's (0 done, 2 invalid, 3 out/fx small, 5 Need isQuiet, -N Grow).
-
-fn key_end(op: [i64], p: i64) -> i64
-  requires 0 <= p
-  ensures result == -1 || (result > p && result <= len(op))
-{
-  let n: i64 = len(op);
-  if p >= n { return -1; }
-  let kn: i64 = crate::ent_u16::rd(op, p);
-  if kn < 0 || kn > n - p - 1 { return -1; }
-  return p + 1 + kn;
-}
 
 pub fn t_init(inout st: [i64]) -> i64
 { return crate::bud_store::init_store(inout st); }
@@ -41,23 +33,25 @@ pub fn t_grow(prev: [i64], inout next: [i64]) -> i64
   return 0;
 }
 
-// session put: [sessionId key, n, words...]; 0 ok, 1 Grow (out[0] = N), 2 invalid, 3 out small.
+// session put: [sessionId key, n, words...] (key packed; the record words are stored as they are); 0 ok, 1 Grow
+// (out[0] = N), 2 invalid, 3 out small.
 pub fn t_put(inout st: [i64], op: [i64], inout out: [i64]) -> i64
 {
   if !crate::bud_store::valid(st) { return 2; }
-  let e1: i64 = key_end(op, 0);
+  // ingress: framing and canonical form of the session key in one O(1) test
+  let e1: i64 = crate::bud_keys::rec_end(op, 0);
   if e1 < 0 || e1 >= len(op) { return 2; }
   let kn: i64 = crate::ent_u16::rd(op, 0);
   let n: i64 = crate::ent_u16::rd(op, e1);
   if n < 0 || n != len(op) - e1 - 1 { return 2; }
-  return crate::bud_world::session_put(inout st, op, 1, kn, op, e1 + 1, n, inout out);
+  return crate::bud_world::session_put_w(inout st, op, 1, kn, op, e1 + 1, n, inout out);
 }
 
 // session remove: [sessionId key].
 pub fn t_del(inout st: [i64], op: [i64], inout out: [i64]) -> i64
 {
   if !crate::bud_store::valid(st) { return 2; }
-  let e1: i64 = key_end(op, 0);
+  let e1: i64 = crate::bud_keys::rec_end(op, 0);
   if e1 < 0 { return 2; }
   let kn: i64 = crate::ent_u16::rd(op, 0);
   return crate::bud_world::session_del(inout st, op, 1, kn, inout out);
@@ -66,11 +60,11 @@ pub fn t_del(inout st: [i64], op: [i64], inout out: [i64]) -> i64
 pub fn t_call(inout st: [i64], op: [i64], inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc
 {
   if !crate::bud_store::valid(st) { return 2; }
-  let e1: i64 = key_end(op, 11);
+  let e1: i64 = crate::bud_keys::rec_end(op, 11);
   if e1 < 0 { return 2; }
-  let e2: i64 = key_end(op, e1);
+  let e2: i64 = crate::bud_keys::rec_end(op, e1);
   if e2 < 0 { return 2; }
-  let e3: i64 = key_end(op, e2);
+  let e3: i64 = crate::bud_keys::rec_end(op, e2);
   if e3 < 0 || e3 != len(op) { return 2; }
   let code: i64 = crate::ent_u16::rd(op, 0);
   let now: i64 = crate::ent_u16::rd(op, 1);
@@ -94,11 +88,11 @@ pub fn t_call(inout st: [i64], op: [i64], inout bv: [i64], inout fx: [i64], inou
 // Validation-only ablation: identical to t_call except that it skips crate::bud_store::valid(st).
 pub fn t_call_nv(inout st: [i64], op: [i64], inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc
 {
-  let e1: i64 = key_end(op, 11);
+  let e1: i64 = crate::bud_keys::rec_end(op, 11);
   if e1 < 0 { return 2; }
-  let e2: i64 = key_end(op, e1);
+  let e2: i64 = crate::bud_keys::rec_end(op, e1);
   if e2 < 0 { return 2; }
-  let e3: i64 = key_end(op, e2);
+  let e3: i64 = crate::bud_keys::rec_end(op, e2);
   if e3 < 0 || e3 != len(op) { return 2; }
   let code: i64 = crate::ent_u16::rd(op, 0);
   let now: i64 = crate::ent_u16::rd(op, 1);
@@ -117,32 +111,33 @@ pub fn t_call_nv(inout st: [i64], op: [i64], inout bv: [i64], inout fx: [i64], i
   return 2;
 }
 
-// Direct typed roots: the same bud_lifecycle calls as t_call, with separate key slices (units only, no length
-// prefix; offset 0, length len(key)) and scalars. No key_end parsing, no bud_store::valid(st).
+// Direct typed roots: the same bud_lifecycle calls as t_call, with separate packed key slices (the words(n) packed
+// words only, no frame word; offset 0) plus each key's unit count, and scalars. No rec_end, no bud_store::valid(st):
+// the caller hands canonical keys (the host packed them once).
 // unit: the 6 words [5 limits, defaultUnlimited] (t_call passes `op, 5`; here offset 0).
-pub fn c_current(st: [i64], sk: [i64], bk: [i64], inout out: [i64]) -> i64
-{ return crate::bud_lifecycle::current(st, sk, 0, len(sk), bk, 0, len(bk), inout out); }
+pub fn c_current(st: [i64], sk: [i64], sn: i64, bk: [i64], bn: i64, inout out: [i64]) -> i64
+{ return crate::bud_lifecycle::current(st, sk, 0, sn, bk, 0, bn, inout out); }
 
-pub fn c_is_halted(st: [i64], sk: [i64], bk: [i64], inout out: [i64]) -> i64
-{ return crate::bud_lifecycle::is_halted(st, sk, 0, len(sk), bk, 0, len(bk), inout out); }
+pub fn c_is_halted(st: [i64], sk: [i64], sn: i64, bk: [i64], bn: i64, inout out: [i64]) -> i64
+{ return crate::bud_lifecycle::is_halted(st, sk, 0, sn, bk, 0, bn, inout out); }
 
-pub fn c_attach(inout st: [i64], sk: [i64], origin: i64, size: i64, unit: [i64], uk: [i64], now: i64, inout fx: [i64], inout out: [i64]) -> i64 ! alloc
-{ return crate::bud_lifecycle::attach(inout st, sk, 0, len(sk), origin, size, unit, 0, uk, 0, len(uk), now, inout fx, inout out); }
+pub fn c_attach(inout st: [i64], sk: [i64], sn: i64, origin: i64, size: i64, unit: [i64], uk: [i64], un: i64, now: i64, inout fx: [i64], inout out: [i64]) -> i64 ! alloc
+{ return crate::bud_lifecycle::attach(inout st, sk, 0, sn, origin, size, unit, 0, uk, 0, un, now, inout fx, inout out); }
 
-pub fn c_replace(inout st: [i64], sk: [i64], origin: i64, size: i64, unit: [i64], uk: [i64], now: i64, inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc
-{ return crate::bud_lifecycle::replace(inout st, sk, 0, len(sk), origin, size, unit, 0, uk, 0, len(uk), now, inout bv, inout fx, inout out); }
+pub fn c_replace(inout st: [i64], sk: [i64], sn: i64, origin: i64, size: i64, unit: [i64], uk: [i64], un: i64, now: i64, inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc
+{ return crate::bud_lifecycle::replace(inout st, sk, 0, sn, origin, size, unit, 0, uk, 0, un, now, inout bv, inout fx, inout out); }
 
-pub fn c_reopen(inout st: [i64], sk: [i64], bk: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc
-{ return crate::bud_lifecycle::reopen(inout st, sk, 0, len(sk), bk, 0, len(bk), inout fx, inout out); }
+pub fn c_reopen(inout st: [i64], sk: [i64], sn: i64, bk: [i64], bn: i64, inout fx: [i64], inout out: [i64]) -> i64 ! alloc
+{ return crate::bud_lifecycle::reopen(inout st, sk, 0, sn, bk, 0, bn, inout fx, inout out); }
 
-pub fn c_maybe_close(inout st: [i64], sk: [i64], quiet: i64, now: i64, inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc
-{ return crate::bud_lifecycle::maybe_close(inout st, sk, 0, len(sk), quiet, now, inout bv, inout fx, inout out); }
+pub fn c_maybe_close(inout st: [i64], sk: [i64], sn: i64, quiet: i64, now: i64, inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc
+{ return crate::bud_lifecycle::maybe_close(inout st, sk, 0, sn, quiet, now, inout bv, inout fx, inout out); }
 
 // Session blob read for the observation: [0] absent, or [1, n, words...].
 pub fn t_get(st: [i64], op: [i64], inout out: [i64]) -> i64
 {
   if !crate::bud_store::valid(st) { return 2; }
-  let e1: i64 = key_end(op, 0);
+  let e1: i64 = crate::bud_keys::rec_end(op, 0);
   if e1 < 0 { return 2; }
   let kn: i64 = crate::ent_u16::rd(op, 0);
   return crate::bud_world::session_get(st, op, 1, kn, inout out);

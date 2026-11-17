@@ -97,6 +97,24 @@ def units(s):
     return [struct.unpack_from('<H', raw, i)[0] for i in range(0, len(raw), 2)]
 
 
+def pack(u):
+    """Packed-u16 words (bud_keys.pruv): word i = u[4i]<<48 | u[4i+1]<<32 | u[4i+2]<<16 | u[4i+3], as a two's-complement
+    i64 (u[4i] >= 0x8000 gives a negative word); lanes past len(u) are zero."""
+    out = []
+    for i in range(0, len(u), 4):
+        x = 0
+        for l in range(4):
+            x = (x << 16) | (u[i + l] if i + l < len(u) else 0)
+        out.append(x - (1 << 64) if x >= (1 << 63) else x)
+    return out
+
+
+def pkey(s):
+    """Wire key `n, packed words(n)` of a string (packed once here; the harness and the root only move words)."""
+    u = units(s)
+    return [len(u)] + pack(u)
+
+
 def from_units(u):
     return b''.join(struct.pack('<H', x) for x in u).decode('utf-16-le', errors='surrogatepass')
 
@@ -198,6 +216,13 @@ def canon(x):
     return json.dumps(jv_encode(x), sort_keys=False, ensure_ascii=False)
 
 
+def sid_of(ref):
+    """Packed key of ref.sessionId (the lookup key of the session table), packed once at ingress; [] when the ref is not an
+    object with a string sessionId (then there is nothing to look up)."""
+    s = ref.get('sessionId') if isinstance(ref, dict) else None
+    return pkey(s) if isinstance(s, str) else []
+
+
 # ---- one case ----------------------------------------------------------------------------------------------------------
 def case_lines(case):
     """Harness input lines for one case, and per call the bookkeeping to read the answers back."""
@@ -206,7 +231,7 @@ def case_lines(case):
     for s in world.get('sessions', []):
         sess = jv_decode(s)
         b = sess.get('budget', UNDEF)
-        lines.append(wline(units(sess['id']), [] if b is UNDEF else V(b)))
+        lines.append(wline(pkey(sess['id']), [] if b is UNDEF else V(b)))
         lines[-1] = 'load ' + lines[-1]
     now = world.get('clockStart', 1700000000000)
     calls = []
@@ -225,9 +250,9 @@ def case_lines(case):
             pad = args + [None] * 4
             lang = [] if len(args) < 3 else V(args[2])
             by = [] if len(args) < 4 else V(args[3])
-            lines.append('set ' + wline([now], V(args[0]), V(args[1]), lang, by))
+            lines.append('set ' + wline([now], V(args[0]), sid_of(args[0]), V(args[1]), lang, by))
         elif ev['op'] in QUERY:
-            lines.append('q ' + wline([QUERY[ev['op']]], V(args[0])))
+            lines.append('q ' + wline([QUERY[ev['op']]], V(args[0]), sid_of(args[0])))
         else:
             calls.append({'req': ev['req'], 'op': ev['op'], 'unsupported': True})
             continue

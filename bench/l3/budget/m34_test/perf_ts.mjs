@@ -13,6 +13,11 @@
 // (sessions period 1 rep, tools period n reps, clocks period 4 reps); only that period is materialised here, which
 // yields the identical op stream.
 //
+// Keys stay `len, units...` here although the Pruv root takes packed u16 keys `n, ceil(n/4) words` since P05b. A JS
+// Number cannot hold an i64 word, so packed words would have to be BigInt, and decoding BigInt lanes made this loop
+// 1.4-2.2x slower (P05b measurement). The unit form is the cheapest decode JS has for the same key content, so it is
+// the stricter baseline.
+//
 // `out` is a Float64Array: it holds any JS integer word exactly (like the i64 words on the Rust side), element reads
 // and writes stay unboxed numbers, and it is preallocated once (4096 words, as the Rust driver's minimum).
 

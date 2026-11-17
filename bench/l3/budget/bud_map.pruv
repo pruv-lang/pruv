@@ -2,8 +2,9 @@
 //
 // A map is the set of children of an owner entry, kept in insertion order by prev/next links (entry fields 7, 8)
 // and head/tail/count in the owner (fields 9, 10, 11). One open-addressing hash index (linear probing, slot word 0
-// empty, -1 tombstone, e+1 entry e) covers all non-root entries. The hash mixes owner, owner generation and the
-// packed key words. Removing an entry frees its children too; make_room rebuilds the index when tombstones pile up.
+// empty, -1 tombstone, tag(h) * 2^32 + e + 1 entry e with stored hash h; see slot_word) covers all non-root entries.
+// The hash mixes owner, owner generation and the packed key words. Removing an entry frees its children too;
+// make_room rebuilds the index when tombstones pile up.
 //
 // Entry fields: 0 state, 1 owner, 2 owner generation, 3 generation, 4 key off, 5 key len, 6 hash, 7 prev, 8 next,
 // 9 child head, 10 child tail, 11 child count, 12 blob off, 13 blob len, 14..17 scalars v0..v3, 18 key region
@@ -42,13 +43,6 @@ fn fin(h: i64) -> i64
   return bxor(b, ushr(b, 33));
 }
 
-// Hash unit input exactly like its packed arena representation.
-pub fn hash_key(owner: i64, ogen: i64, key: [i64], ks: i64, kn: i64) -> i64
-{
-  return crate::bud_keys::hash_units(mix(1469598103934665603,
-    wrapping_add(owner, wrapping_mul(ogen,4294967296))),key,ks,kn);
-}
-
 // Absolute address of probe position i for hash h; -1 if the slot count is 0.
 fn slot_pos(st: [i64], h: i64, i: i64) -> i64
 {
@@ -60,58 +54,28 @@ fn slot_pos(st: [i64], h: i64, i: i64) -> i64
   return sb + band(wrapping_add(h, i), slots - 1);
 }
 
+// Slot tag of hash h: its top 30 bits (bits 34..63), so a tagged slot word stays positive.
+fn tag(h: i64) -> i64
+  ensures 0 <= result && result <= 1073741823
+{ return ushr(h, 34); }
+
+// Slot word of entry e with stored hash h: tag(h) above e + 1 (e < cap <= 2^31 on a valid buffer, so e + 1 fits the
+// low 32 bits). A probe compares ushr(w, 32) with tag(h) before it reads the entry: every slot word is written from
+// the entry's stored hash (put_key_h, rehash), so a different tag means a different stored hash, which
+// entry_matches_w rejects anyway. The filter keeps unsuccessful probes off other entries' fields.
+fn slot_word(e: i64, h: i64) -> i64
+  requires 0 <= e && e <= 4294967296
+  ensures result > 0
+{ return tag(h) * 4294967296 + e + 1; }
+
+// Entry of a positive slot word (its low 32 bits minus one).
+fn slot_entry(w: i64) -> i64
+{ return band(w, 4294967295) - 1; }
+
 // ---- lookup ----
 
-fn entry_matches(st: [i64], e: i64, owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn: i64) -> bool
-{
-  let a: i64 = crate::bud_store::field_addr(st, e);
-  if a < 0 { return false; }
-  let n: i64 = crate::bud_store::c32(kn);
-  let mut ko: i64 = 0;
-  if a + 7 <= len(st) {
-    // fields 0..6 in range: one check (same tests as the total path below)
-    if st[a + 6] != h { return false; }
-    if st[a] != 1 { return false; }
-    if st[a + 1] != owner || st[a + 2] != og { return false; }
-    if st[a + 5] != n { return false; }
-    ko = crate::bud_store::c40(st[a + 4]);
-  } else {
-    if crate::ent_u16::rd(st, a + 6) != h { return false; }
-    if crate::ent_u16::rd(st, a) != 1 { return false; }
-    if crate::ent_u16::rd(st, a + 1) != owner || crate::ent_u16::rd(st, a + 2) != og { return false; }
-    if crate::ent_u16::rd(st, a + 5) != n { return false; }
-    ko = crate::bud_store::c40(crate::ent_u16::rd(st, a + 4));
-  }
-  let s0: i64 = crate::bud_store::c40(ks);
-  if n > 1073741824 { return false; }
-  let m: i64 = crate::bud_keys::words(n);
-  let mut j: i64 = 0;
-  if ko + m <= len(st) && s0 + n <= len(key) {
-    while j + 4 <= n
-      invariant 0 <= j && j <= n && n <= 1073741824 && 0 <= ko && ko + m <= len(st)
-      invariant m == (n + 3) / 4 && 0 <= s0 && s0 + n <= len(key)
-      decreases n - j
-    {
-      if st[ko + j / 4] != crate::bud_keys::pack4(key[s0+j],key[s0+j+1],key[s0+j+2],key[s0+j+3]) { return false; }
-      j = j + 4;
-    }
-    if j < n {
-      if st[ko + j / 4] != crate::bud_keys::tail_word(key,s0,n,j) { return false; }
-    }
-    return true;
-  }
-  while j < n
-    invariant 0 <= j && j <= n + 3 && n <= 1073741824 && 0 <= ko && ko <= 1099511627776 && 0 <= s0 && s0 <= 1099511627776
-    decreases n - j
-  {
-    if crate::ent_u16::rd(st,ko + j / 4) != crate::bud_keys::units_word(key,s0,n,j) { return false; }
-    j = j + 4;
-  }
-  return true;
-}
-
-// Packed-key twin of entry_matches: the key is the words(kn) packed words key[ks ..], kn units. Same header tests;
-// the key compare is one word-slice compare (memcmp) in range, a per-word total fallback otherwise. Both read the
+// Entry e is live and matches (owner, og, h) and the packed key (the words(kn) packed words key[ks ..], kn units).
+// The key compare is one word-slice compare (memcmp) in range, a per-word total fallback otherwise. Both read the
 // same words, so the result does not depend on the path. Equal n and equal words == equal units (one encoding per key).
 fn entry_matches_w(st: [i64], e: i64, owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn: i64) -> bool
 {
@@ -150,65 +114,17 @@ fn entry_matches_w(st: [i64], e: i64, owner: i64, og: i64, h: i64, key: [i64], k
   return true;
 }
 
-// Entry of the map owned by `owner` with key key[ks..ks+kn), or -1.
-pub fn find(st: [i64], owner: i64, key: [i64], ks: i64, kn: i64) -> i64
-{
-  let og: i64 = gf(st, owner, 3);
-  let h: i64 = hash_key(owner, og, key, ks, kn);
-  return find_h(st, owner, og, h, key, ks, kn);
-}
-
-// find() with og = gf(st, owner, 3) and h = hash_key(owner, og, key, ks, kn) already computed. A wrong h can only
-// miss (entry_matches compares the stored hash and the key), never return another key's entry.
-fn find_h(st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn: i64) -> i64
-{
-  let slots: i64 = crate::bud_store::c32(hw(st, 4));
-  let mut i: i64 = 0;
-  if len(st) >= 5 && slots >= 1 {
-    // header words 3, 4 in range: slot base and mask read once (same probe addresses as slot_pos), and a probe
-    // address inside st is read directly (rd gives the same word)
-    let sb: i64 = crate::bud_store::c32(st[3]);
-    let mask: i64 = slots - 1;
-    let n: i64 = len(st);
-    while i < slots
-      invariant 0 <= i && i <= slots && slots <= 4294967296 && n == len(st)
-      decreases slots - i
-    {
-      let p: i64 = sb + band(wrapping_add(h, i), mask);
-      let mut w: i64 = 0;
-      if p >= 0 && p < n { w = st[p]; }
-      if w == 0 { return -1; }
-      if w > 0 {
-        if entry_matches(st, w - 1, owner, og, h, key, ks, kn) { return w - 1; }
-      }
-      i = i + 1;
-    }
-    return -1;
-  }
-  while i < slots
-    invariant 0 <= i && i <= slots && slots <= 4294967296
-    decreases slots - i
-  {
-    let w: i64 = crate::ent_u16::rd(st, slot_pos(st, h, i));
-    if w == 0 { return -1; }
-    if w > 0 {
-      if entry_matches(st, w - 1, owner, og, h, key, ks, kn) { return w - 1; }
-    }
-    i = i + 1;
-  }
-  return -1;
-}
-
-// Hash of a packed key (words(kn) words at key[ks ..], kn units) with the same seed as hash_key. It equals hash_key on
-// the same units (P03: hash == hash_units), so stored hashes are shared by the unit API, the packed API and grow_copy.
+// Hash of a packed key (words(kn) words at key[ks ..], kn units), seeded with owner and owner generation. It equals
+// bud_keys::hash_units on the same units with the same seed (P03), so the stored hash is independent of the layout.
 pub fn hash_words(owner: i64, ogen: i64, key: [i64], ks: i64, kn: i64) -> i64
 {
   return crate::bud_keys::hash(mix(1469598103934665603,
     wrapping_add(owner, wrapping_mul(ogen,4294967296))),key,ks,kn);
 }
 
-// find() for a packed key. Caller contract: key[ks .. ks+words(kn)) is canonical (bud_keys::slice_ok); the function
-// is total on any input (a non-canonical or out-of-range key can only miss or compare clamped words).
+// Entry of the map owned by `owner` with the packed key, or -1. Caller contract: key[ks .. ks+words(kn)) is canonical
+// (bud_keys::slice_ok); the function is total on any input (a non-canonical or out-of-range key can only miss or
+// compare clamped words).
 pub fn find_w(st: [i64], owner: i64, key: [i64], ks: i64, kn: i64) -> i64
 {
   let og: i64 = gf(st, owner, 3);
@@ -216,10 +132,12 @@ pub fn find_w(st: [i64], owner: i64, key: [i64], ks: i64, kn: i64) -> i64
   return find_h_w(st, owner, og, h, key, ks, kn);
 }
 
-// find_h() with the packed compare (entry_matches_w); probe loop identical.
+// find_w() with og = gf(st, owner, 3) and h = hash_words(..) already computed. A wrong h can only miss
+// (entry_matches_w compares the stored hash and the key), never return another key's entry.
 fn find_h_w(st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn: i64) -> i64
 {
   let slots: i64 = crate::bud_store::c32(hw(st, 4));
+  let ht: i64 = tag(h);
   let mut i: i64 = 0;
   if len(st) >= 5 && slots >= 1 {
     let sb: i64 = crate::bud_store::c32(st[3]);
@@ -233,8 +151,9 @@ fn find_h_w(st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn: i64
       let mut w: i64 = 0;
       if p >= 0 && p < n { w = st[p]; }
       if w == 0 { return -1; }
-      if w > 0 {
-        if entry_matches_w(st, w - 1, owner, og, h, key, ks, kn) { return w - 1; }
+      if w > 0 && ushr(w, 32) == ht {
+        let e: i64 = slot_entry(w);
+        if entry_matches_w(st, e, owner, og, h, key, ks, kn) { return e; }
       }
       i = i + 1;
     }
@@ -246,8 +165,9 @@ fn find_h_w(st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn: i64
   {
     let w: i64 = crate::ent_u16::rd(st, slot_pos(st, h, i));
     if w == 0 { return -1; }
-    if w > 0 {
-      if entry_matches_w(st, w - 1, owner, og, h, key, ks, kn) { return w - 1; }
+    if w > 0 && ushr(w, 32) == ht {
+      let e: i64 = slot_entry(w);
+      if entry_matches_w(st, e, owner, og, h, key, ks, kn) { return e; }
     }
     i = i + 1;
   }
@@ -271,11 +191,12 @@ fn free_slot(st: [i64], h: i64) -> i64
   return -1;
 }
 
-// Absolute address of the slot that holds entry e (word e+1) on the probe path of h, or -1.
+// Absolute address of the slot that holds entry e (word slot_word(e, h)) on the probe path of h, or -1.
 fn slot_of(st: [i64], e: i64, h: i64) -> i64
   requires 0 <= e && e <= 4294967296
 {
   let slots: i64 = crate::bud_store::c32(hw(st, 4));
+  let sw: i64 = slot_word(e, h);
   let mut i: i64 = 0;
   while i < slots
     invariant 0 <= i && i <= slots && slots <= 4294967296
@@ -283,7 +204,7 @@ fn slot_of(st: [i64], e: i64, h: i64) -> i64
   {
     let p: i64 = slot_pos(st, h, i);
     let w: i64 = crate::ent_u16::rd(st, p);
-    if w == e + 1 { return p; }
+    if w == sw { return p; }
     if w == 0 { return -1; }
     i = i + 1;
   }
@@ -398,82 +319,25 @@ fn put_units(inout st: [i64], e: i64, fo: i64, fc: i64, src: [i64], s0: i64, n: 
   return 0;
 }
 
-// Pack into the arena without scratch. Callers validate units; total semantics
-// for unvalidated input retain low 16 bits. Lengths above the codec limit reject.
-fn put_key_units(inout st: [i64], e: i64, src: [i64], s0: i64, n: i64) -> i64
-  requires 0 <= s0 && s0 <= 1099511627776 && 0 <= n && n <= 4294967296
-{
-  if n > 1073741824 || s0 + n > len(src) { return -1; }
-  let m: i64 = crate::bud_keys::words(n);
-  let mut off: i64 = crate::bud_store::c40(gf(st,e,4));
-  let reuse: bool = fits_region(st,off,gf(st,e,18),m);
-  if !reuse { off = crate::bud_store::c40(hw(st,10)); }
-  let ae: i64 = crate::bud_store::c40(hw(st,11));
-  if off + m > len(st) || (!reuse && (ae > len(st) || off + m > ae)) { return -1; }
-  // s0 + n <= len(src) was checked above, so the full words read src directly (no per-word range or tail test, as
-  // units_word did in P04) and the last 1-3 units go through one tail_word.
-  let mut i: i64 = 0;
-  let mut j: i64 = 0;
-  while j + 4 <= n && i < m
-    invariant 0 <= i && i <= m && m <= 268435456 && 0 <= off && off + m <= len(st)
-    invariant j == 4 * i && 0 <= s0 && s0 + n <= len(src) && 0 <= n && n <= 1073741824
-    decreases m - i
-  {
-    st[off+i] = crate::bud_keys::pack4(src[s0+j], src[s0+j+1], src[s0+j+2], src[s0+j+3]);
-    i = i + 1;
-    j = j + 4;
-  }
-  if j < n && i < m {
-    st[off+i] = crate::bud_keys::tail_word(src, s0, n, j);
-  }
-  if !reuse {
-    sh(inout st,10,off+m);
-    sf(inout st,e,4,off);
-    sf(inout st,e,18,m);
-  }
-  let lw: i64 = crate::bud_store::c40(hw(st,14));
-  sh(inout st,14,lw+m);
-  return 0;
-}
-
-// Existing entry for the key, or a new entry appended at the owner's tail (key stored in the entry's old region or
-// the arena, hashed into the index). One probe pass finds the match or the first reusable slot. The caller has
-// reserved capacity with make_room(); -1 on failure (nothing usable was added).
-pub fn insert(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64) -> i64
-{ return put_key(inout st, owner, key, ks, kn, false); }
-
-// insert() for a key the caller has just seen absent (find() returned -1 with no change since): the probe stops at
-// the first empty or tombstone slot and compares no keys. Used by bud_world after its find and by grow (unique keys).
-pub fn add(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64) -> i64
-{ return put_key(inout st, owner, key, ks, kn, true); }
-
-// add() for a packed key (caller contract as find_w: canonical words; total otherwise). The key is stored by a plain
-// word copy (put_key_h with packed = true).
+// Adds a packed key the caller knows is absent (caller contract as find_w: canonical words; total otherwise). Used
+// by bud_world after its find_w and by grow (unique keys). Entry index, or -1 (nothing usable was added).
 pub fn add_w(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64) -> i64
 {
   if gf(st, owner, 0) != 1 { return -1; }
   let og: i64 = gf(st, owner, 3);
   let h: i64 = hash_words(owner, og, key, ks, kn);
-  return put_key_h(inout st, owner, og, h, key, ks, kn, true, true);
+  return put_key_h(inout st, owner, og, h, key, ks, kn);
 }
 
-fn put_key(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, absent: bool) -> i64
-{
-  if gf(st, owner, 0) != 1 { return -1; }
-  let og: i64 = gf(st, owner, 3);
-  let h: i64 = hash_key(owner, og, key, ks, kn);
-  return put_key_h(inout st, owner, og, h, key, ks, kn, absent, false);
-}
-
-// put_key() with og = gf(st, owner, 3) and h = hash_key(owner, og, key, ks, kn) already computed (owner is live).
-fn put_key_h(inout st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn: i64, absent: bool, packed: bool) -> i64
+// add_w() with og = gf(st, owner, 3) and h = hash_words(owner, og, key, ks, kn) already computed (owner is live):
+// the probe stops at the first empty or tombstone slot and compares no keys, then put_at() stores the entry there.
+fn put_key_h(inout st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn: i64) -> i64
 {
   let slots: i64 = crate::bud_store::c32(hw(st, 4));
   // header words 3, 4 in range: slot base and mask read once (the same addresses slot_pos gives)
   let fast: bool = len(st) >= 5 && slots >= 1;
   let mut sb: i64 = 0;
   if fast { sb = crate::bud_store::c32(st[3]); }
-  let mut slot: i64 = -1;
   let mut i: i64 = 0;
   while i < slots
     invariant 0 <= i && i <= slots && slots <= 4294967296
@@ -482,31 +346,22 @@ fn put_key_h(inout st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, 
     let mut p: i64 = -1;
     if fast { p = sb + band(wrapping_add(h, i), slots - 1); } else { p = slot_pos(st, h, i); }
     let w: i64 = crate::ent_u16::rd(st, p);
-    if w == 0 {
-      if slot < 0 { slot = p; }
-      i = slots;
-    } else {
-      if w == -1 {
-        if slot < 0 { slot = p; }
-        if absent { i = slots - 1; }
-      } else if w > 0 && !absent {
-        if packed {
-          if entry_matches_w(st, w - 1, owner, og, h, key, ks, kn) { return w - 1; }
-        } else {
-          if entry_matches(st, w - 1, owner, og, h, key, ks, kn) { return w - 1; }
-        }
-      }
-      i = i + 1;
-    }
+    if w == 0 || w == -1 { return put_at(inout st, owner, og, h, key, ks, kn, p); }
+    i = i + 1;
   }
-  if slot < 0 { return -1; }
+  return -1;
+}
+
+// The insert half of put_key_h(): a new entry for the packed key in index slot `slot` (absolute address, the first
+// empty or tombstone slot on h's probe path). The key words are stored by a plain word copy. Entry index, or -1
+// (nothing linked or indexed).
+fn put_at(inout st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn: i64, slot: i64) -> i64
+{
   let e: i64 = crate::bud_store::entry_alloc(inout st, owner, og);
   if e < 0 { return -1; }
   let n: i64 = crate::bud_store::c32(kn);
   let s0: i64 = crate::bud_store::c40(ks);
-  let mut rk: i64 = -1;
-  if packed { rk = put_units(inout st,e,4,18,key,s0,crate::bud_keys::words(n)); }
-  else { rk = put_key_units(inout st,e,key,s0,n); }
+  let rk: i64 = put_units(inout st,e,4,18,key,s0,crate::bud_keys::words(n));
   if rk < 0 {
     crate::bud_store::entry_free(inout st, e);
     return -1;
@@ -549,7 +404,7 @@ fn put_key_h(inout st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, 
   // index slot
   let old: i64 = crate::ent_u16::rd(st, slot);
   let used: i64 = crate::bud_store::c32(hw(st, 13));
-  crate::ent_u16::wr(inout st, slot, crate::bud_store::c32(e) + 1);
+  crate::ent_u16::wr(inout st, slot, slot_word(crate::bud_store::c32(e), h));
   if old == 0 { sh(inout st, 13, used + 1); }
   return e;
 }
@@ -590,7 +445,8 @@ fn drop_entry(inout st: [i64], e: i64) -> ()
 }
 
 // Unlinks entry e from its owner and frees it together with its children (one level: the world's maps are at most
-// two levels below the roots). O(key length + probe length + children). Roots are never removed.
+// two levels below the roots). O(probe length + children): e's own slot is cleared, the children's slots are left
+// for the next rehash (drop_child). Roots are never removed.
 pub fn remove(inout st: [i64], e: i64) -> ()
 {
   let top: i64 = crate::bud_store::c32(hw(st, 7));
@@ -613,8 +469,11 @@ pub fn remove(inout st: [i64], e: i64) -> ()
   if oc > 0 { sf(inout st, owner, 11, oc - 1); }
   let mut b: i64 = walk_limit(st);
   let mut c: i64 = gf(st, e, 9);
+  // Arena words of the children dropped by drop_child() whose word-14 update is still pending (saturated at 2^41).
+  let mut pend: i64 = 0;
+  let mut any: bool = false;
   while c >= 0 && b > 0
-    invariant 0 <= b && b <= 4294967296
+    invariant 0 <= b && b <= 4294967296 && 0 <= pend && pend <= 2199023255552
     decreases b
   {
     b = b - 1;
@@ -622,10 +481,59 @@ pub fn remove(inout st: [i64], e: i64) -> ()
     let mut nc: i64 = 0;
     let mut co: i64 = 0;
     if bc >= 0 { nc = st[bc + 8]; co = st[bc + 1]; } else { nc = gf(st, c, 8); co = gf(st, c, 1); }
-    if co == e { drop_entry(inout st, c); }
+    if co == e {
+      let kw: i64 = drop_child(inout st, c);
+      if kw >= 0 {
+        pend = pend + kw;
+        if pend > 2199023255552 { pend = 2199023255552; }
+        any = true;
+      } else if kw == -1 {
+        if any { take_words(inout st, pend); pend = 0; any = false; }
+        drop_entry(inout st, c);
+      }
+    }
     c = nc;
   }
+  if any { take_words(inout st, pend); }
   drop_entry(inout st, e);
+}
+
+// Word 14 (live arena words) minus kw, saturating at 0: drop_entry's update. Applying it once with the sum of several
+// drops gives the same word as applying it per drop (each kw >= 0; after the first write the word is in 0..2^40, so
+// c40 is the identity, and a sum saturated at 2^41 > 2^40 still yields 0).
+fn take_words(inout st: [i64], kw: i64) -> ()
+  requires 0 <= kw
+{
+  let lw: i64 = crate::bud_store::c40(hw(st, 14));
+  if lw > kw {
+    sh(inout st, 14, lw - kw);
+  } else {
+    sh(inout st, 14, 0);
+  }
+}
+
+// drop_entry(c) for a child of an entry being removed, without its slot write and its word-14 update (the caller,
+// remove, applies the latter afterwards with take_words): the returned arena words (>= 0), or -2 if drop_entry would
+// have done nothing, or -1 (nothing written) when e has no fast base (the caller then applies the pending update and
+// calls drop_entry).
+// The slot is left in place (lazy deletion, as an open-addressing table with generation-stamped entries does): a
+// slot word that names a free entry, or an entry reused for another key, owner or owner generation, never matches a
+// lookup (state, owner, owner generation, hash and key are compared), is not reused by inserts, and is dropped by the
+// next rehash, so it costs what a tombstone costs. A match therefore still names the live entry for the key, which is
+// unique per owner. entry_free writes header words 8 and 12 and entry fields past word 16 (eb), never word 14, and
+// nothing here reads word 14, so deferring its update leaves every other word as drop_entry would, except the slot.
+fn drop_child(inout st: [i64], c: i64) -> i64
+  ensures -2 <= result && result <= 1099780063232
+{
+  let b: i64 = crate::bud_store::eb(st, c);
+  if b < 0 { return -1; }
+  // b >= 16 and b + 20 <= len(st), so header word 7 is in range
+  let top: i64 = crate::bud_store::c32(st[7]);
+  if c < 3 || c >= top { return -2; }
+  if st[b] != 1 { return -2; }
+  let kw: i64 = crate::bud_keys::words(crate::bud_store::c32(st[b + 5])) + crate::bud_store::c40(st[b + 13]);
+  crate::bud_store::entry_free(inout st, c);
+  return kw;
 }
 
 // Replaces the blob of entry e by src[s..s+n), written over the old blob region when it fits, else appended to the
@@ -728,7 +636,7 @@ fn rehash(inout st: [i64]) -> ()
       {
         let p: i64 = slot_pos(st, h, j);
         if crate::ent_u16::rd(st, p) == 0 {
-          crate::ent_u16::wr(inout st, p, e + 1);
+          crate::ent_u16::wr(inout st, p, slot_word(e, h));
           placed = true;
           j = slots;
         } else {
@@ -747,12 +655,31 @@ fn rehash(inout st: [i64]) -> ()
 // Same result convention as bud_store::need.
 pub fn make_room(inout st: [i64], entries: i64, words: i64) -> i64
 {
+  let r: i64 = room(inout st, entries, words);
+  if r == -1 { return 0; }
+  return r;
+}
+
+// make_room() that tells whether it rehashed: 0 fits (nothing written), -1 rehashed and fits now, otherwise need()'s
+// N > 0 (after a rehash too, which the comment below rules out).
+fn room(inout st: [i64], entries: i64, words: i64) -> i64
+{
   let r: i64 = crate::bud_store::need(st, entries, words);
-  if r == 0 { return 0; }
   let ents: i64 = crate::bud_store::c32(entries);
   let live: i64 = crate::bud_store::c32(hw(st, 12));
   let used: i64 = crate::bud_store::c32(hw(st, 13));
   let slots: i64 = crate::bud_store::c32(hw(st, 4));
+  if r == 0 {
+    // Load policy: while the live entries take at most a quarter of the slots, tombstones are dropped as soon as the
+    // index would pass half full, so probes stay short. A rehash costs O(slots + entry top) = O(slots) and leaves
+    // used = live, so the next one is at least slots/4 inserts away (amortized O(1)). It only lowers word 13, so the
+    // fit just computed by need() still holds.
+    if used + ents > slots / 2 && live + ents <= slots / 4 {
+      rehash(inout st);
+      return -1;
+    }
+    return 0;
+  }
   let cap: i64 = crate::bud_store::c32(hw(st, 6));
   let wds: i64 = crate::bud_store::c40(words);
   let top: i64 = crate::bud_store::c40(hw(st, 10));
@@ -761,47 +688,73 @@ pub fn make_room(inout st: [i64], entries: i64, words: i64) -> i64
   // After a rehash used <= live and live + ents <= cap = slots/2, so the second need() returns 0.
   if used + ents > slots * 3 / 4 && live + ents <= cap && wds <= ae - top {
     rehash(inout st);
-    return crate::bud_store::need(st, entries, words);
+    let r2: i64 = crate::bud_store::need(st, entries, words);
+    if r2 == 0 { return -1; }
+    return r2;
   }
   return r;
 }
 
-// find(), and when the key is absent make_room(entries, words) and add(), hashing the key once: the hash depends only
-// on owner, the owner's generation (field 3) and the key, and make_room() (a possible rehash) rewrites only the index.
+// find_w(), and when the key is absent room(entries, words) and the insert, hashing the key once.
+// key[ks .. ks+words(kn)) canonical (caller contract, bud_keys::slice_ok); total otherwise. `words` is the arena
+// words to reserve (the key takes bud_keys::words(kn), plus any blob).
 // 0 already present, 1 added, -N Grow(N) (nothing written), 2 invalid or the add failed.
-pub fn add_absent(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, entries: i64, words: i64) -> i64
-{
-  let og: i64 = gf(st, owner, 3);
-  let h: i64 = hash_key(owner, og, key, ks, kn);
-  if find_h(st, owner, og, h, key, ks, kn) >= 0 { return 0; }
-  let nd: i64 = make_room(inout st, entries, words);
-  if nd != 0 {
-    if nd < 0 { return 2; }
-    return -nd;
-  }
-  if gf(st, owner, 0) != 1 { return 2; }
-  let x: i64 = put_key_h(inout st, owner, og, h, key, ks, kn, true, false);
-  if x < 0 { return 2; }
-  return 1;
-}
-
-// add_absent() for a packed key: key[ks .. ks+words(kn)) canonical (caller contract, bud_keys::slice_ok); total
-// otherwise. `words` is the arena words to reserve (the key takes bud_keys::words(kn), plus any blob).
-// 0 already present, 1 added, -N Grow(N) (nothing written), 2 invalid or the add failed.
+// One probe pass serves both the lookup and the insert: probe_w() yields the slot put_key_h() would pick,
+// and room() writes nothing unless it rehashes, in which case the insert probes the rebuilt index again.
 pub fn add_absent_w(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, entries: i64, words: i64) -> i64
 {
   let og: i64 = gf(st, owner, 3);
   let h: i64 = hash_words(owner, og, key, ks, kn);
-  if find_h_w(st, owner, og, h, key, ks, kn) >= 0 { return 0; }
-  let nd: i64 = make_room(inout st, entries, words);
-  if nd != 0 {
-    if nd < 0 { return 2; }
-    return -nd;
-  }
+  let slot: i64 = probe_w(st, owner, og, h, key, ks, kn);
+  if slot == -2 { return 0; }
+  let nd: i64 = room(inout st, entries, words);
+  if nd > 0 { return -nd; }
+  if nd < -1 { return 2; }
   if gf(st, owner, 0) != 1 { return 2; }
-  let x: i64 = put_key_h(inout st, owner, og, h, key, ks, kn, true, true);
+  let mut x: i64 = -1;
+  if nd == -1 {
+    x = put_key_h(inout st, owner, og, h, key, ks, kn);
+  } else if slot >= 0 {
+    x = put_at(inout st, owner, og, h, key, ks, kn, slot);
+  }
   if x < 0 { return 2; }
   return 1;
+}
+
+// find_h_w() and put_key_h()'s slot choice in one probe pass: -2 if the key is
+// present, else the first empty or tombstone slot on h's probe path (absolute address, >= 0), or -1 if there is none.
+// Up to the first empty slot both loops read the same words; find_h_w stops there, put_key_h stops at the first free
+// slot. With fewer than 5 words or no slots both see slot count 0 (hw reads 0), so neither probes.
+fn probe_w(st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn: i64) -> i64
+{
+  let slots: i64 = crate::bud_store::c32(hw(st, 4));
+  if len(st) < 5 || slots < 1 { return -1; }
+  let ht: i64 = tag(h);
+  let sb: i64 = crate::bud_store::c32(st[3]);
+  let mask: i64 = slots - 1;
+  let n: i64 = len(st);
+  let mut free: i64 = -1;
+  let mut i: i64 = 0;
+  while i < slots
+    invariant 0 <= i && i <= slots && slots <= 4294967296 && n == len(st)
+    decreases slots - i
+  {
+    let p: i64 = sb + band(wrapping_add(h, i), mask);
+    let mut w: i64 = 0;
+    if p >= 0 && p < n { w = st[p]; }
+    if w == 0 {
+      if free < 0 { free = p; }
+      return free;
+    }
+    if w == -1 {
+      if free < 0 { free = p; }
+    } else if w > 0 && ushr(w, 32) == ht {
+      let e: i64 = slot_entry(w);
+      if entry_matches_w(st, e, owner, og, h, key, ks, kn) { return -2; }
+    }
+    i = i + 1;
+  }
+  return free;
 }
 
 // ---- grow ----
@@ -818,7 +771,7 @@ fn copy_node(prev: [i64], inout nxt: [i64], pe: i64, nowner: i64) -> i64
     h = crate::bud_keys::hash(mix(1469598103934665603,
       wrapping_add(nowner,wrapping_mul(og,4294967296))),prev,koff,klen);
   }
-  let ne: i64 = put_key_h(inout nxt,nowner,og,h,prev,koff,klen,true,true);
+  let ne: i64 = put_key_h(inout nxt,nowner,og,h,prev,koff,klen);
   if ne < 0 { return -1; }
   let boff: i64 = crate::bud_store::c40(gf(prev, pe, 12));
   let blen: i64 = crate::bud_store::c32(gf(prev, pe, 13));

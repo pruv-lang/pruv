@@ -1,20 +1,55 @@
 // L3-10 M4: the budget world over the keyed maps (bud_map).
 //
 // Roots: 0 sessions (key sessionId, blob = opaque record words), 1 clocks (key budgetId, blob = owning sessionId
-// units, v0 since-present, v1 since, v2 armed, v3 deadline; children = runs keyed by runKey, v0 waiting),
-// 2 toolSeen (key turnId; children = activities keyed by activityId, a set). Scalars v0.. are entry fields 14...
+// as a framed packed key `n, words(n) packed words`, v0 since-present, v1 since, v2 armed, v3 deadline; children =
+// runs keyed by runKey, v0 waiting), 2 toolSeen (key turnId; children = activities keyed by activityId, a set).
+// Scalars v0.. are entry fields 14...
 //
 // Every function returns a status: 0 ok (out[0] = number of result words, out[1..] the result), 1 Grow (out[0] = N,
 // no state word written), 2 invalid (corrupt state or arguments), 3 out too small. A state-changing operation
 // checks that `out` is large enough, then calls crate::bud_map::make_room with its worst case, and writes only after
-// that check succeeded. Keys are given as (array, start, length); the caller (root_m4) has validated them.
+// that check succeeded. Keys are packed (bud_keys): (array, start, unit count n) names the words(n) packed words
+// key[start ..], canonical (caller contract, bud_keys::slice_ok); the host packs each key once at ingress. Results
+// still name keys as `len, units...` (unpacked from the resident packed words).
 
 fn cl(x: i64) -> i64
   ensures 0 <= result && result <= 4294967296
 { return crate::bud_store::c32(x); }
 
 fn fd(st: [i64], owner: i64, key: [i64], ks: i64, kn: i64) -> i64
-{ return crate::bud_map::find(st, owner, key, ks, kn); }
+{ return crate::bud_map::find_w(st, owner, key, ks, kn); }
+
+// Unit count of the framed owner key stored as the blob of clock e: blob word 0 when the blob is exactly
+// 1 + words(n) words, else 0 (a corrupt blob names the empty key).
+fn owner_n(st: [i64], e: i64) -> i64
+  ensures 0 <= result && result <= 1073741824
+{
+  let bl: i64 = crate::bud_map::blob_len(st, e);
+  if bl < 1 { return 0; }
+  let n: i64 = crate::ent_u16::rd(st, crate::bud_map::blob_off(st, e));
+  if n < 0 || n > 1073741824 { return 0; }
+  if crate::bud_keys::words(n) != bl - 1 { return 0; }
+  return n;
+}
+
+// owner key of clock e as `len, units...`
+fn emit_owner(st: [i64], inout out: [i64], pos: i64, e: i64) -> i64
+  requires 0 <= pos && pos <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776
+{
+  let n: i64 = owner_n(st, e);
+  let ko: i64 = crate::bud_map::blob_off(st, e) + 1;
+  let mut p: i64 = emit(inout out, pos, n);
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && n <= 1073741824 && 0 <= p && p <= 1099511627776
+    decreases n - j
+  {
+    p = emit(inout out, p, crate::bud_keys::unit(st, ko, n, j));
+    j = j + 1;
+  }
+  return p;
+}
 
 // ---- result writing ----
 
@@ -135,14 +170,12 @@ fn keys_of(st: [i64], inout out: [i64], owner: i64) -> i64
 
 // ---- generic put / delete on a root map ----
 
-// Sets key -> blob in the map of `owner`. [1] new, [0] replaced (position kept). packed: the key is the words(kn)
-// packed words key[ks ..] (else kn unit words, packed on insert). Both store words(kn) arena words per key, so that
-// is what make_room reserves.
-fn put_blob(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, blob: [i64], bs: i64, bn: i64, packed: bool, inout out: [i64]) -> i64
+// Sets key -> blob in the map of `owner`. [1] new, [0] replaced (position kept). A new key takes words(kn) arena
+// words, so that is what make_room reserves.
+fn put_blob(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, blob: [i64], bs: i64, bn: i64, inout out: [i64]) -> i64
 {
   if len(out) < 2 { return 3; }
-  let mut e: i64 = -1;
-  if packed { e = crate::bud_map::find_w(st, owner, key, ks, kn); } else { e = fd(st, owner, key, ks, kn); }
+  let e: i64 = fd(st, owner, key, ks, kn);
   let mut ents: i64 = 1;
   let mut words: i64 = crate::bud_keys::words(kn) + cl(bn);
   if e >= 0 {
@@ -155,8 +188,7 @@ fn put_blob(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, blob: [i6
   let mut x: i64 = e;
   let mut fresh: i64 = 0;
   if x < 0 {
-    if packed { x = crate::bud_map::add_w(inout st, owner, key, ks, kn); }
-    else { x = crate::bud_map::add(inout st, owner, key, ks, kn); }
+    x = crate::bud_map::add_w(inout st, owner, key, ks, kn);
     fresh = 1;
   }
   if x < 0 { return 2; }
@@ -177,15 +209,9 @@ fn del_key(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, inout out:
 
 // ---- sessions (root 0) ----
 
-pub fn session_put(inout st: [i64], key: [i64], ks: i64, kn: i64, blob: [i64], bs: i64, bn: i64, inout out: [i64]) -> i64
-{
-  return put_blob(inout st, 0, key, ks, kn, blob, bs, bn, false, inout out);
-}
-
-// session_put for a packed session key: key[ks .. ks+words(kn)) canonical (caller contract, bud_keys::slice_ok).
 pub fn session_put_w(inout st: [i64], key: [i64], ks: i64, kn: i64, blob: [i64], bs: i64, bn: i64, inout out: [i64]) -> i64
 {
-  return put_blob(inout st, 0, key, ks, kn, blob, bs, bn, true, inout out);
+  return put_blob(inout st, 0, key, ks, kn, blob, bs, bn, inout out);
 }
 
 // [0] absent, or [1, n, words...]
@@ -238,10 +264,15 @@ pub fn session_keys(st: [i64], inout out: [i64]) -> i64
 
 // ---- clocks (root 1) and runs ----
 
-// [1] new, [0] existed (sessionId replaced, position kept)
+// [1] new, [0] existed (sessionId replaced, position kept). The sessionId is passed framed: skey[sks - 1] == skn
+// and its packed words follow; the frame `skn, words...` is stored as the clock blob. [2] when the frame word is
+// missing or differs.
 pub fn clock_put(inout st: [i64], bkey: [i64], bks: i64, bkn: i64, skey: [i64], sks: i64, skn: i64, inout out: [i64]) -> i64
 {
-  return put_blob(inout st, 1, bkey, bks, bkn, skey, sks, skn, false, inout out);
+  if len(out) < 2 { return 3; }
+  if sks < 1 || sks > len(skey) { return 2; }
+  if skey[sks - 1] != skn { return 2; }
+  return put_blob(inout st, 1, bkey, bks, bkn, skey, sks - 1, 1 + crate::bud_keys::words(skn), inout out);
 }
 
 pub fn clock_del(inout st: [i64], key: [i64], ks: i64, kn: i64, inout out: [i64]) -> i64
@@ -267,13 +298,11 @@ pub fn clock_get(st: [i64], key: [i64], ks: i64, kn: i64, inout out: [i64]) -> i
 {
   let e: i64 = fd(st, 1, key, ks, kn);
   if e < 0 { return ret_one(inout out, 0); }
-  let n: i64 = crate::bud_map::blob_len(st, e);
+  let n: i64 = owner_n(st, e);
   if n > len(out) - 8 { return 3; }
   crate::ent_u16::wr(inout out, 0, n + 7);
   crate::ent_u16::wr(inout out, 1, 1);
-  crate::ent_u16::wr(inout out, 2, n);
-  blob_out(st, e, inout out, n);
-  let b: i64 = 3 + n;
+  let b: i64 = emit_owner(st, inout out, 2, e);
   crate::ent_u16::wr(inout out, b, crate::bud_store::ef(st, e, 14));
   crate::ent_u16::wr(inout out, b + 1, crate::bud_store::ef(st, e, 15));
   crate::ent_u16::wr(inout out, b + 2, crate::bud_store::ef(st, e, 16));
@@ -300,7 +329,7 @@ pub fn run_set(inout st: [i64], bkey: [i64], bks: i64, bkn: i64, rkey: [i64], rk
   }
   let nd: i64 = crate::bud_map::make_room(inout st, 1, crate::bud_keys::words(rkn));
   if nd != 0 { return grow_sig(inout out, nd); }
-  let x: i64 = crate::bud_map::add(inout st, c, rkey, rks, rkn);
+  let x: i64 = crate::bud_map::add_w(inout st, c, rkey, rks, rkn);
   if x < 0 { return 2; }
   crate::bud_store::set_ef(inout st, x, 14, waiting);
   return ret_one(inout out, 1);
@@ -363,9 +392,9 @@ pub fn tool_note(inout st: [i64], tkey: [i64], tks: i64, tkn: i64, akey: [i64], 
   let nd: i64 = crate::bud_map::make_room(inout st, ents, words);
   if nd != 0 { return grow_sig(inout out, nd); }
   let mut tt: i64 = t;
-  if tt < 0 { tt = crate::bud_map::add(inout st, 2, tkey, tks, tkn); }
+  if tt < 0 { tt = crate::bud_map::add_w(inout st, 2, tkey, tks, tkn); }
   if tt < 0 { return 2; }
-  let x: i64 = crate::bud_map::add(inout st, tt, akey, aks, akn);
+  let x: i64 = crate::bud_map::add_w(inout st, tt, akey, aks, akn);
   if x < 0 { return 2; }
   return ret_one(inout out, 1);
 }
@@ -474,7 +503,7 @@ fn obs_clocks(st: [i64], inout out: [i64], pos: i64) -> i64
     decreases lim - steps
   {
     p = emit_key(st, inout out, p, e);
-    p = emit_blob(st, inout out, p, e);
+    p = emit_owner(st, inout out, p, e);
     p = emit(inout out, p, crate::bud_store::ef(st, e, 14));
     p = emit(inout out, p, crate::bud_store::ef(st, e, 15));
     p = emit(inout out, p, crate::bud_store::ef(st, e, 16));

@@ -7,49 +7,50 @@ mod bud_clock;
 
 // L3-10 M9 test root (test only, not product): drives bud_clock over the M4 world.
 // PLACEHOLDER budget record: until M7 defines the record, a session's blob holds
-//   [state, unlimited, timeMinutes, activeMs, activeSince kind, since, budgetId length, budgetId units...]
-// (state -1 = the session has no budget). CURRENT(ref) = the session exists, has a budget, and its budgetId equals
-// ref.budgetId; the budget view frame of bud_clock is filled from that blob and written back after the call.
+//   [state, unlimited, timeMinutes, activeMs, activeSince kind, since, bn, budgetId words(bn) packed words...]
+// (state -1 = the session has no budget; n == 7 + words(bn)). CURRENT(ref) = the session exists, has a budget, and its
+// budgetId equals ref.budgetId; the budget view frame of bud_clock is filled from that blob and written back after
+// the call.
 //
-// t_call op: [code, sessionId key, budgetId key, runKey key, flag], key = `len, units...`.
+// t_call op: [code, sessionId key, budgetId key, runKey key, flag], key = `n, words(n) packed words` (bud_keys
+// layout; the host packs every key once at ingress).
 //   code 1 runStarted, 2 runWaiting (flag = waiting), 3 runEnded, 4 FIRE (the ref the delivered timer captured when it was
 //   armed), 5 DROP, 6 CLOSE (clock part), 7 REFRESH.
+// Every key is checked with bud_keys::rec_end (framing + canonical form, O(1)) before anything is read or written. The
+// sessionId stays framed in the op (op[1] = sn), which run_started needs for the clock's owner blob.
 // Status: bud_clock's (0 done, 4 HALT_TIME, 2 invalid, 3 fx small, -N Grow), plus 2 for a bad op.
 // Scratch `bv` (>= 8 words) and `tmp` (unused since FIRE takes the captured ref) are caller-provided working memory; the host never reads them.
-
-fn key_end(op: [i64], p: i64) -> i64
-  requires 0 <= p
-  ensures result == -1 || (result > p && result <= len(op))
-{
-  let n: i64 = len(op);
-  if p >= n { return -1; }
-  let kn: i64 = crate::ent_u16::rd(op, p);
-  if kn < 0 || kn > n - p - 1 { return -1; }
-  return p + 1 + kn;
-}
 
 // Loads the budget view for ref (sk, bk) from the session blob into bv; bv[0] = 1 when current.
 // The blob offset and length are read once (the same words bud_map::blob_len / blob_unit read per unit).
 fn load_bv(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64, inout bv: [i64]) -> i64
 {
   crate::ent_u16::wr(inout bv, 0, 0);
-  let se: i64 = crate::bud_map::find(st, 0, sk, ss, sn);
+  let se: i64 = crate::bud_map::find_w(st, 0, sk, ss, sn);
   if se < 0 { return -1; }
   let a: i64 = crate::bud_store::field_addr(st, se);
   if a < 0 { return -1; }
   let n: i64 = crate::bud_store::c40(crate::ent_u16::rd(st, a + 13));
   let off: i64 = crate::bud_store::c40(crate::ent_u16::rd(st, a + 12));
   if n < 7 { return -1; }
-  if bn < 0 || bn > 4294967296 || bs < 0 || bs > 1099511627776 { return -1; }
+  if bn < 0 || bn > 1073741824 || bs < 0 || bs > 1099511627776 { return -1; }
   if crate::ent_u16::rd(st, off) < 0 { return -1; }
-  if crate::ent_u16::rd(st, off + 6) != bn || n != 7 + bn { return -1; }
-  let mut j: i64 = 0;
-  while j < bn
-    invariant 0 <= j && j <= bn && bn <= 4294967296 && 0 <= off && off <= 1099511627776 && 0 <= bs && bs <= 1099511627776
-    decreases bn - j
-  {
-    if crate::ent_u16::rd(st, off + 7 + j) != crate::ent_u16::rd(bk, bs + j) { return -1; }
-    j = j + 1;
+  // stored id: unit count word 6 == bn and exactly words(bn) packed words after it; equal n and equal words are equal
+  // units (one encoding per key)
+  let bm: i64 = crate::bud_keys::words(bn);
+  if crate::ent_u16::rd(st, off + 6) != bn || n != 7 + bm { return -1; }
+  if off + 7 + bm <= len(st) && bs + bm <= len(bk) {
+    // eq_range obligations: off + 7 >= 0, bs >= 0, bm >= 0, both ranges in bounds
+    if !eq_range(st, off + 7, bk, bs, bm) { return -1; }
+  } else {
+    let mut j: i64 = 0;
+    while j < bm
+      invariant 0 <= j && j <= bm && bm <= 268435456 && 0 <= off && off <= 1099511627776 && 0 <= bs && bs <= 1099511627776
+      decreases bm - j
+    {
+      if crate::ent_u16::rd(st, off + 7 + j) != crate::ent_u16::rd(bk, bs + j) { return -1; }
+      j = j + 1;
+    }
   }
   let mut i: i64 = 0;
   while i < 6
@@ -93,27 +94,35 @@ pub fn t_grow(prev: [i64], inout next: [i64]) -> i64
   return 0;
 }
 
-// session put: [sessionId key, n, words...]; 0 ok, 1 Grow (out[0] = N), 2 invalid, 3 out small.
+// session put: [sessionId key, n, words...] (key packed, record as in the header); 0 ok, 1 Grow (out[0] = N),
+// 2 invalid, 3 out small. Ingress: the session key (rec_end) and the record's id frame (word 6 = bn in 0..2^30,
+// n == 7 + words(bn), the id words canonical) are checked before anything is written.
 pub fn t_put(inout st: [i64], op: [i64], inout out: [i64]) -> i64
 {
   if !crate::bud_store::valid(st) { return 2; }
-  let e1: i64 = key_end(op, 0);
+  let e1: i64 = crate::bud_keys::rec_end(op, 0);
   if e1 < 0 || e1 >= len(op) { return 2; }
   let kn: i64 = crate::ent_u16::rd(op, 0);
   let n: i64 = crate::ent_u16::rd(op, e1);
   if n < 0 || n != len(op) - e1 - 1 { return 2; }
-  return crate::bud_world::session_put(inout st, op, 1, kn, op, e1 + 1, n, inout out);
+  let rs: i64 = e1 + 1;
+  if n < 7 { return 2; }
+  let bn: i64 = crate::ent_u16::rd(op, rs + 6);
+  if bn < 0 || bn > 1073741824 { return 2; }
+  if n != 7 + crate::bud_keys::words(bn) { return 2; }
+  if !crate::bud_keys::slice_ok(op, rs + 7, bn) { return 2; }
+  return crate::bud_world::session_put_w(inout st, op, 1, kn, op, rs, n, inout out);
 }
 
 pub fn t_call(inout st: [i64], op: [i64], now: i64, inout bv: [i64], inout tmp: [i64], inout fx: [i64]) -> i64
 {
   if !crate::bud_store::valid(st) { return 2; }
   let code: i64 = crate::ent_u16::rd(op, 0);
-  let e1: i64 = key_end(op, 1);
+  let e1: i64 = crate::bud_keys::rec_end(op, 1);
   if e1 < 0 { return 2; }
-  let e2: i64 = key_end(op, e1);
+  let e2: i64 = crate::bud_keys::rec_end(op, e1);
   if e2 < 0 { return 2; }
-  let e3: i64 = key_end(op, e2);
+  let e3: i64 = crate::bud_keys::rec_end(op, e2);
   if e3 < 0 || e3 + 1 != len(op) { return 2; }
   let sn: i64 = crate::ent_u16::rd(op, 1);
   let bn: i64 = crate::ent_u16::rd(op, e1);
