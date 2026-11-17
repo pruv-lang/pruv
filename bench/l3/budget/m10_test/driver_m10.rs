@@ -208,14 +208,17 @@ impl World {
                     self.note("E rdi".to_string());
                 }
                 33 => {
-                    // the k-th id of the answer passed in (`n, (len, words(len))*`), printed in units
-                    let k = self.fx[i + 1].max(0) as usize;
-                    let mut p = 1;
-                    for _ in 0..k {
-                        p = rec_end(&ids, p);
+                    // the k-th id of the answer passed in (`n, (len, words(len))*`), printed in units; the log is
+                    // the only consumer, so a silent (perf) run skips the walk and the formatting
+                    if !self.silent {
+                        let k = self.fx[i + 1].max(0) as usize;
+                        let mut p = 1;
+                        for _ in 0..k {
+                            p = rec_end(&ids, p);
+                        }
+                        let s = format!("E stopDel {}", key_units_str(&ids[p..rec_end(&ids, p)]));
+                        self.note(s);
                     }
-                    let s = format!("E stopDel {}", key_units_str(&ids[p..rec_end(&ids, p)]));
-                    self.note(s);
                     i += 2;
                     continue;
                 }

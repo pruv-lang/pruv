@@ -4,15 +4,19 @@
 // Prints one line: axis=.. n=.. ts_ns_per_op=..
 //
 // Work boundary (same as `sol::m4_op(&mut st, op, &mut out)` in the Rust driver): every op is a plain JS array of
-// integers `[code, args...]` with keys encoded as packed u16 keys `n, ceil(n/4) words` (the words are BigInt, since a
-// JS Number cannot hold an i64). The timed loop calls exec(op, out) once per op; exec
-// decodes and validates the words (key n and words in range, zero tail lanes, exact op length per code, waiting 0/1,
-// session_put n == remaining words), builds the key strings from the units on every call (no string caching between calls),
+// integers `[code, args...]` with keys encoded `len, units...`. The timed loop calls exec(op, out) once per op; exec
+// decodes and validates the words (key lengths, units 0..65535, exact op length per code, waiting 0/1, session_put
+// n == remaining words), builds the key strings from the units on every call (no string caching between calls),
 // applies the operation to JS Map/Set state and writes the CONTRACT result words into `out` (out[0] = number of
 // result words, out[1..] = result). Op encoding (prefill and timed op list) is outside the timed region, like the
 // Rust driver's prefill and encode phases. As in Rust, the timed loop replays one period of the op list cyclically
 // (sessions period 1 rep, tools period n reps, clocks period 4 reps); only that period is materialised here, which
 // yields the identical op stream.
+//
+// Keys stay `len, units...` here although the Pruv root takes packed u16 keys `n, ceil(n/4) words` since P05b. A JS
+// Number cannot hold an i64 word, so packed words would have to be BigInt, and decoding BigInt lanes made this loop
+// 1.4-2.2x slower (P05b measurement). The unit form is the cheapest decode JS has for the same key content, so it is
+// the stricter baseline.
 //
 // `out` is a Float64Array: it holds any JS integer word exactly (like the i64 words on the Rust side), element reads
 // and writes stay unboxed numbers, and it is preallocated once (4096 words, as the Rust driver's minimum).
@@ -33,36 +37,21 @@ function newState() {
 // ---- decoding -----------------------------------------------------------------------------------------------------
 let keyStr = "";
 
-// Decodes the packed key `n, ceil(n/4) words` starting at p into keyStr. Returns the end position, or -1 if invalid
-// (n not an integer in 0..2^30, words beyond the op, a word that is not a BigInt, or a nonzero lane past n in the last
-// word). A JS Number cannot hold an i64 word, so packed words are BigInt (big-endian 16-bit lanes, 4 per word); the
-// other op words (codes, counts, flags, blob words) stay Numbers.
+// Decodes the key `len, units...` starting at p into keyStr. Returns the end position, or -1 if invalid
+// (length not an integer in range / beyond the op, or a unit that is not an integer in 0..65535).
 function decodeKey(op, p) {
   const n = op.length;
   if (p >= n) return -1;
   const kn = op[p];
-  if (!Number.isInteger(kn) || kn < 0 || kn > 1073741824) return -1;
-  const m = (kn + 3) >> 2;
-  if (m > n - p - 1) return -1;
-  const r = kn & 3;
-  if (r !== 0) {
-    const last = op[p + m];
-    if (typeof last !== "bigint" || BigInt.asUintN(16 * (4 - r), last) !== 0n) return -1;
-  }
+  if (!Number.isInteger(kn) || kn < 0 || kn > n - p - 1) return -1;
   let s = "";
-  for (let i = 0; i < m; i++) {
-    const w = op[p + 1 + i];
-    if (typeof w !== "bigint") return -1;
-    const hi = Number(BigInt.asUintN(32, w >> 32n));
-    const lo = Number(BigInt.asUintN(32, w));
-    const base = i * 4;
-    s += String.fromCharCode(hi >>> 16);
-    if (base + 1 < kn) s += String.fromCharCode(hi & 0xffff);
-    if (base + 2 < kn) s += String.fromCharCode(lo >>> 16);
-    if (base + 3 < kn) s += String.fromCharCode(lo & 0xffff);
+  for (let j = 0; j < kn; j++) {
+    const u = op[p + 1 + j];
+    if (!Number.isInteger(u) || u < 0 || u > 65535) return -1;
+    s += String.fromCharCode(u);
   }
   keyStr = s;
-  return p + 1 + m;
+  return p + 1 + kn;
 }
 
 // Executes one op. Returns 0 ok, 2 invalid, 3 out too small (result words are in out).
@@ -164,15 +153,7 @@ function exec(op, out) {
 // ---- op encoding (outside the timed region) -----------------------------------------------------------------------
 function pushKey(v, s) {
   v.push(s.length);
-  for (let i = 0; i < s.length; i += 4) {
-    const u = (j) => (i + j < s.length ? BigInt(s.charCodeAt(i + j)) : 0n);
-    v.push(BigInt.asIntN(64, (u(0) << 48n) | (u(1) << 32n) | (u(2) << 16n) | u(3)));
-  }
-}
-
-// One-unit ASCII key as a packed word (selftest helper).
-function pk1(c) {
-  return BigInt(c.charCodeAt(0)) << 48n;
+  for (let i = 0; i < s.length; i++) v.push(s.charCodeAt(i));
 }
 
 function opSessionPut(k, blob) {
@@ -314,18 +295,16 @@ function selftest() {
     ["tool_forget present", opK(14, "t"), 0, [1]],
     ["tool_forget absent", opK(14, "t"), 0, [0]],
     ["tool_note after forget", opKK(13, "t", "a"), 0, [1]],
-    ["bad tail lane", [2, 1, pk1("a") | (1n << 32n)], 2, null],
-    ["key n negative", [2, -1], 2, null],
-    ["key n beyond op words", [2, 5, pk1("a")], 2, null],
-    ["key n above 2^30", [2, 1073741825, pk1("a")], 2, null],
-    ["key word not a packed word", [2, 1, 97], 2, null],
-    ["wrong length: trailing word", [2, 1, pk1("a"), 7], 2, null],
-    ["wrong length: tool_note trailing", [13, 1, pk1("a"), 1, pk1("b"), 7], 2, null],
-    ["wrong length: tool_note missing key", [13, 1, pk1("a")], 2, null],
-    ["run_set waiting 2", [9, 1, pk1("a"), 1, pk1("b"), 2], 2, null],
-    ["run_set missing waiting", [9, 1, pk1("a"), 1, pk1("b")], 2, null],
-    ["session_put n mismatch", [1, 1, pk1("a"), 3, 1], 2, null],
-    ["session_put missing n", [1, 1, pk1("a")], 2, null],
+    ["key unit 70000", [2, 1, 70000], 2, null],
+    ["key unit -1", [2, 1, -1], 2, null],
+    ["key length beyond op", [2, 1, 97, 5], 2, null],
+    ["wrong length: trailing word", [2, 1, 97, 7], 2, null],
+    ["wrong length: tool_note trailing", [13, 1, 97, 1, 98, 7], 2, null],
+    ["wrong length: tool_note missing key", [13, 1, 97], 2, null],
+    ["run_set waiting 2", [9, 1, 97, 1, 98, 2], 2, null],
+    ["run_set missing waiting", [9, 1, 97, 1, 98], 2, null],
+    ["session_put n mismatch", [1, 1, 97, 3, 1], 2, null],
+    ["session_put missing n", [1, 1, 97], 2, null],
     ["unknown code", [99], 2, null],
     ["empty op", [], 2, null],
   ];

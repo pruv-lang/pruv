@@ -83,7 +83,6 @@ struct World {
     by_bid: HashMap<Vec<u8>, u64>,
     known: HashMap<u64, (Vec<u8>, Vec<u8>)>,
     cb: Vec<i64>,
-    cu: Vec<i64>,
     kb: Vec<u8>,
     ks: Vec<u8>,
     log: Vec<String>,
@@ -119,12 +118,74 @@ fn pack_into(units: &[i64], out: &mut Vec<i64>) {
     }
 }
 
-// Byte form (enc) of the packed key at op[p], through the reused unit scratch `cu`.
-fn enc_key(op: &[i64], p: usize, cu: &mut Vec<i64>, out: &mut Vec<u8>) {
+// Byte form of the packed key at op[p]: the bytes enc() gives for its units, read straight from the packed words (no
+// unit scratch). When every lane is below 0x80 (the zero tail lanes too) each unit is one byte, four per word.
+fn enc_key(op: &[i64], p: usize, out: &mut Vec<u8>) {
     let (n, s, e) = key_at(op, p);
-    cu.clear();
-    unpack_into(n, &op[s..e], cu);
-    enc(&cu[..], out);
+    let w = &op[s..e];
+    out.clear();
+    if w.iter().all(|&x| (x as u64) & 0xff80_ff80_ff80_ff80 == 0) {
+        for &x in w {
+            let x = x as u64;
+            out.extend_from_slice(&[(x >> 48) as u8, (x >> 32) as u8, (x >> 16) as u8, x as u8]);
+        }
+        out.truncate(n);
+        return;
+    }
+    for j in 0..n {
+        let u = (((w[j / 4] as u64) >> (48 - 16 * (j % 4))) & 0xffff) as u32;
+        if u < 0x80 {
+            out.push(u as u8);
+        } else if u < 0x800 {
+            out.push(0xc0 | (u >> 6) as u8);
+            out.push(0x80 | (u & 0x3f) as u8);
+        } else {
+            out.push(0xe0 | (u >> 12) as u8);
+            out.push(0x80 | ((u >> 6) & 0x3f) as u8);
+            out.push(0x80 | (u & 0x3f) as u8);
+        }
+    }
+}
+
+// dec() of b packed straight into words (pack_into of the decoded units, no unit scratch), appended to out; returns
+// the unit count. ASCII bytes are one unit each, four per word.
+fn dec_packed(b: &[u8], out: &mut Vec<i64>) -> i64 {
+    if b.is_ascii() {
+        for c in b.chunks(4) {
+            let mut x: u64 = 0;
+            for l in 0..4 {
+                x = (x << 16) | c.get(l).copied().unwrap_or(0) as u64;
+            }
+            out.push(x as i64);
+        }
+        return b.len() as i64;
+    }
+    let (mut x, mut k, mut n, mut i) = (0u64, 0u32, 0i64, 0usize);
+    while i < b.len() {
+        let c = b[i] as u64;
+        let u = if c < 0x80 {
+            i += 1;
+            c
+        } else if c < 0xe0 {
+            i += 2;
+            ((c & 0x1f) << 6) | (b[i - 1] as u64 & 0x3f)
+        } else {
+            i += 3;
+            ((c & 0x0f) << 12) | ((b[i - 2] as u64 & 0x3f) << 6) | (b[i - 1] as u64 & 0x3f)
+        };
+        x = (x << 16) | (u & 0xffff);
+        k += 1;
+        n += 1;
+        if k == 4 {
+            out.push(x as i64);
+            x = 0;
+            k = 0;
+        }
+    }
+    if k > 0 {
+        out.push((x << (16 * (4 - k))) as i64);
+    }
+    n
 }
 
 impl World {
@@ -150,7 +211,6 @@ impl World {
             by_bid: HashMap::new(),
             known: HashMap::new(),
             cb: Vec::with_capacity(64),
-            cu: Vec::with_capacity(64),
             kb: Vec::with_capacity(64),
             ks: Vec::with_capacity(64),
             log: Vec::new(),
@@ -206,12 +266,11 @@ impl World {
         if used == 0 {
             return self.halt_log(op, r);
         }
-        // ref of the call (scheduler key and captured ref), unpacked and encoded into the scratch keys
+        // ref of the call (scheduler key and captured ref), encoded straight from the packed words into the scratch keys
         let bp = 2 + words(op[1]);
         let mut kb = std::mem::take(&mut self.kb);
         let mut ks = std::mem::take(&mut self.ks);
-        let mut cu = std::mem::take(&mut self.cu);
-        enc_key(op, bp, &mut cu, &mut kb);
+        enc_key(op, bp, &mut kb);
         let bid = &kb[..];
         let mut i = 1;
         while i <= used {
@@ -221,7 +280,7 @@ impl World {
                     let eff = self.fx[i + 2];
                     // like `clock.timer = setTimeout(..)`: a previous handle is overwritten, not cancelled
                     self.seq += 1;
-                    enc_key(op, 1, &mut cu, &mut ks);
+                    enc_key(op, 1, &mut ks);
                     let sid = &ks[..];
                     let t = Timer { token: self.seq, due: self.now + eff, sid: sid.to_vec(), bid: bid.to_vec() };
                     match self.by_bid.get_mut(bid) {
@@ -253,7 +312,6 @@ impl World {
         }
         self.kb = kb;
         self.ks = ks;
-        self.cu = cu;
         self.halt_log(op, r)
     }
 
@@ -286,27 +344,23 @@ impl World {
     }
 
     // The timer callback `() => this.fire(ref)` with its captured ref.
-    // The op is built in reused scratch buffers (no allocation per delivery): the captured byte keys are decoded to
-    // units and packed into the op's key records.
+    // The op is built in reused scratch buffers (no allocation per delivery): the captured byte keys are decoded
+    // straight into the op's packed key records.
     fn run_callback(&mut self, token: u64, sid: &[u8], bid: &[u8]) -> i64 {
         if !self.quiet {
             self.log.push(format!("F t{}", token));
         }
         let mut op = std::mem::take(&mut self.cb);
-        let mut cu = std::mem::take(&mut self.cu);
         op.clear();
         op.push(4i64);
-        cu.clear();
-        dec(sid, &mut cu);
-        op.push(cu.len() as i64);
-        pack_into(&cu, &mut op);
-        cu.clear();
-        dec(bid, &mut cu);
-        op.push(cu.len() as i64);
-        pack_into(&cu, &mut op);
+        for k in [sid, bid] {
+            let np = op.len();
+            op.push(0);
+            let n = dec_packed(k, &mut op);
+            op[np] = n;
+        }
         op.push(0);
         op.push(0);
-        self.cu = cu;
         let r = self.call(&op);
         self.cb = op;
         r

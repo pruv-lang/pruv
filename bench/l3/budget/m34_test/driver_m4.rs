@@ -163,24 +163,26 @@ fn q_mode() {
 
 // Packed-u16 key codec (bud_keys.pruv): word i = (u[4i] << 48) | (u[4i+1] << 32) | (u[4i+2] << 16) | u[4i+3] as a
 // two's-complement i64; lanes past n are zero. A pure ingress encoding, no validation.
-fn pack_u16(units: &[u16]) -> Vec<i64> {
-    units
-        .chunks(4)
-        .map(|c| {
-            let mut x: u64 = 0;
-            for l in 0..4 {
-                x = (x << 16) | (c.get(l).copied().unwrap_or(0) as u64);
-            }
-            x as i64
-        })
-        .collect()
-}
-
-// Wire key `n, packed words(n)`, packed once at ingress. (q mode reads op lines that gen_m4.py already packed.)
+// Wire key `n, packed words(n)`, packed once at ingress straight from the UTF-16 units (no unit or word scratch).
+// (q mode reads op lines that gen_m4.py already packed.)
 fn key(v: &mut Vec<i64>, s: &str) {
-    let u: Vec<u16> = s.encode_utf16().collect();
-    v.push(u.len() as i64);
-    v.extend(pack_u16(&u));
+    let np = v.len();
+    v.push(0);
+    let (mut x, mut k, mut n) = (0u64, 0u32, 0i64);
+    for c in s.encode_utf16() {
+        x = (x << 16) | c as u64;
+        k += 1;
+        n += 1;
+        if k == 4 {
+            v.push(x as i64);
+            x = 0;
+            k = 0;
+        }
+    }
+    if k > 0 {
+        v.push((x << (16 * (4 - k))) as i64);
+    }
+    v[np] = n;
 }
 
 fn op_session_put(k: &str, blob: &[i64]) -> Vec<i64> {
