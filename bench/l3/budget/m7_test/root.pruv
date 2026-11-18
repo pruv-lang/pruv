@@ -10,16 +10,17 @@ mod bud_lifecycle;
 // Session blobs hold the M7 budget record (bud_lifecycle.pruv header comment; strings 0 id and 4 follows are framed
 // packed keys).
 //
-// t_call op: [code, now, quiet, origin, size, unit x5, defaultUnlimited, sessionId key, budgetId key, uuid key],
+// t_call op: [code, now, 0, origin, size, unit x5, defaultUnlimited, sessionId key, budgetId key, uuid key],
 // key = `n, words(n) packed words` (bud_keys layout; the host packs every key once at ingress).
 //   code 1 current(ref), 2 isHalted(ref), 3 attach(session, origin, size), 4 replaceForUserMessage(session, size,
 //   origin), 5 reopen(ref), 6 maybeClose(session).
-//   quiet: -1 not known yet, 0/1 the host's isQuiet answer. origin: 0 user, 1 schedule, 2 direct, 3 release, -1
+//   op[2] is reserved (the host writes 0; it held the prefetched isQuiet answer before P19, which made isQuiet a
+//   synchronous host fact: bud_lifecycle::is_quiet, crate bud_facts). origin: 0 user, 1 schedule, 2 direct, 3 release, -1
 //   absent. size: -1 absent, 0 unlimited, else 1/2/4/8. uuid: the id randomUUID would return next (consumed only
 //   when the effects hold [22]).
 // Every key of an op is checked with bud_keys::rec_end (framing + canonical form, O(1) per key; every word is 4 valid
 // u16 lanes, so no unit range check exists) before anything is read or written; a bad key answers 2.
-// Status: bud_lifecycle's (0 done, 2 invalid, 3 out/fx small, 5 Need isQuiet, -N Grow).
+// Status: bud_lifecycle's (0 done, 2 invalid, 3 out/fx small, -N Grow).
 
 pub fn t_init(inout st: [i64]) -> i64
 { return crate::bud_store::init_store(inout st); }
@@ -57,7 +58,7 @@ pub fn t_del(inout st: [i64], op: [i64], inout out: [i64]) -> i64
   return crate::bud_world::session_del(inout st, op, 1, kn, inout out);
 }
 
-pub fn t_call(inout st: [i64], op: [i64], inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc
+pub fn t_call(inout st: [i64], op: [i64], inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc, io
 {
   if !crate::bud_store::valid(st) { return 2; }
   let e1: i64 = crate::bud_keys::rec_end(op, 11);
@@ -68,7 +69,6 @@ pub fn t_call(inout st: [i64], op: [i64], inout bv: [i64], inout fx: [i64], inou
   if e3 < 0 || e3 != len(op) { return 2; }
   let code: i64 = crate::ent_u16::rd(op, 0);
   let now: i64 = crate::ent_u16::rd(op, 1);
-  let quiet: i64 = crate::ent_u16::rd(op, 2);
   let origin: i64 = crate::ent_u16::rd(op, 3);
   let size: i64 = crate::ent_u16::rd(op, 4);
   let sn: i64 = crate::ent_u16::rd(op, 11);
@@ -77,7 +77,7 @@ pub fn t_call(inout st: [i64], op: [i64], inout bv: [i64], inout fx: [i64], inou
   if code == 1 { return crate::bud_lifecycle::current(st, op, 12, sn, op, e1 + 1, bn, inout out); }
   if code == 2 { return crate::bud_lifecycle::is_halted(st, op, 12, sn, op, e1 + 1, bn, inout out); }
   if code == 5 { return crate::bud_lifecycle::reopen(inout st, op, 12, sn, op, e1 + 1, bn, inout fx, inout out); }
-  if code == 6 { return crate::bud_lifecycle::maybe_close(inout st, op, 12, sn, quiet, now, inout bv, inout fx, inout out); }
+  if code == 6 { return crate::bud_lifecycle::maybe_close(inout st, op, 12, sn, now, inout bv, inout fx, inout out); }
   if code == 3 { return crate::bud_lifecycle::attach(inout st, op, 12, sn, origin, size, op, 5, op, e2 + 1, un, now, inout fx, inout out); }
   if code == 4 { return crate::bud_lifecycle::replace(inout st, op, 12, sn, origin, size, op, 5, op, e2 + 1, un, now, inout bv, inout fx, inout out); }
   return 2;
@@ -86,7 +86,7 @@ pub fn t_call(inout st: [i64], op: [i64], inout bv: [i64], inout fx: [i64], inou
 // ---- P01 boundary experiment (test only; see driver_m7.rs `boundary`) ----
 
 // Validation-only ablation: identical to t_call except that it skips crate::bud_store::valid(st).
-pub fn t_call_nv(inout st: [i64], op: [i64], inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc
+pub fn t_call_nv(inout st: [i64], op: [i64], inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc, io
 {
   let e1: i64 = crate::bud_keys::rec_end(op, 11);
   if e1 < 0 { return 2; }
@@ -96,7 +96,6 @@ pub fn t_call_nv(inout st: [i64], op: [i64], inout bv: [i64], inout fx: [i64], i
   if e3 < 0 || e3 != len(op) { return 2; }
   let code: i64 = crate::ent_u16::rd(op, 0);
   let now: i64 = crate::ent_u16::rd(op, 1);
-  let quiet: i64 = crate::ent_u16::rd(op, 2);
   let origin: i64 = crate::ent_u16::rd(op, 3);
   let size: i64 = crate::ent_u16::rd(op, 4);
   let sn: i64 = crate::ent_u16::rd(op, 11);
@@ -105,7 +104,7 @@ pub fn t_call_nv(inout st: [i64], op: [i64], inout bv: [i64], inout fx: [i64], i
   if code == 1 { return crate::bud_lifecycle::current(st, op, 12, sn, op, e1 + 1, bn, inout out); }
   if code == 2 { return crate::bud_lifecycle::is_halted(st, op, 12, sn, op, e1 + 1, bn, inout out); }
   if code == 5 { return crate::bud_lifecycle::reopen(inout st, op, 12, sn, op, e1 + 1, bn, inout fx, inout out); }
-  if code == 6 { return crate::bud_lifecycle::maybe_close(inout st, op, 12, sn, quiet, now, inout bv, inout fx, inout out); }
+  if code == 6 { return crate::bud_lifecycle::maybe_close(inout st, op, 12, sn, now, inout bv, inout fx, inout out); }
   if code == 3 { return crate::bud_lifecycle::attach(inout st, op, 12, sn, origin, size, op, 5, op, e2 + 1, un, now, inout fx, inout out); }
   if code == 4 { return crate::bud_lifecycle::replace(inout st, op, 12, sn, origin, size, op, 5, op, e2 + 1, un, now, inout bv, inout fx, inout out); }
   return 2;
@@ -130,8 +129,8 @@ pub fn c_replace(inout st: [i64], sk: [i64], sn: i64, origin: i64, size: i64, un
 pub fn c_reopen(inout st: [i64], sk: [i64], sn: i64, bk: [i64], bn: i64, inout fx: [i64], inout out: [i64]) -> i64 ! alloc
 { return crate::bud_lifecycle::reopen(inout st, sk, 0, sn, bk, 0, bn, inout fx, inout out); }
 
-pub fn c_maybe_close(inout st: [i64], sk: [i64], sn: i64, quiet: i64, now: i64, inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc
-{ return crate::bud_lifecycle::maybe_close(inout st, sk, 0, sn, quiet, now, inout bv, inout fx, inout out); }
+pub fn c_maybe_close(inout st: [i64], sk: [i64], sn: i64, now: i64, inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc, io
+{ return crate::bud_lifecycle::maybe_close(inout st, sk, 0, sn, now, inout bv, inout fx, inout out); }
 
 // Session blob read for the observation: [0] absent, or [1, n, words...].
 pub fn t_get(st: [i64], op: [i64], inout out: [i64]) -> i64

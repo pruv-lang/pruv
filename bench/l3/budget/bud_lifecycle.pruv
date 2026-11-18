@@ -31,12 +31,11 @@
 // of returning a reference to the stored budget, nothing is copied).
 // A carryHeld effect puts the old budgetId after the ref: out[2 + len] = old length, units follow (unpacked).
 // Effects are appended to `fx` (bud_clock frame, fx[0] = words used): bud_clock's [13] timerClear, and
-//   [20] changed, [21] carryHeld (args: session, old id in out, the returned ref), [22] uuid (one id consumed),
-//   [23] isQuiet consulted (maybeClose used the host's `quiet` input; it is always the first effect of the call).
-// The host supplies the next isQuiet answer up front (like the next randomUUID value); it is consumed only when the
-// effects hold [23], so the host still decides nothing.
-// Status: 0 done, 2 invalid, 3 out/fx too small, 5 Need isQuiet (only when `quiet` is -1: nothing written; the host
-// answers through the `quiet` argument of the retried call), -N Grow (nothing written).
+//   [20] changed, [21] carryHeld (args: session, old id in out, the returned ref), [22] uuid (one id consumed).
+// isQuiet is a synchronous host fact (is_quiet, called by maybe_close at the spec's point; P19 retired the prefetched
+// `quiet` input, the [23] effect and status 5).
+// Status: 0 done, 2 invalid (including an isQuiet answer other than 0/1), 3 out/fx too small, -N Grow (nothing
+// written).
 
 fn rd(a: [i64], i: i64) -> i64
 { return crate::ent_u16::rd(a, i); }
@@ -691,14 +690,21 @@ pub fn reopen(inout st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, 
   return 0;
 }
 
+// isQuiet(session) (B:399-408), a synchronous host fact (P10H): the host answers 0 (no) or 1 (yes) for the session
+// named by the packed key k[ks .. ks + words(kn)); any other answer is invalid (maybe_close: status 2, nothing
+// written). Test host: crate bud_facts (m7_test/bud_facts.rs), linked with --rust-extern.
+trusted rust fn is_quiet(k: [i64], ks: i64, kn: i64) -> i64 ! io
+  ensures true
+  = "::bud_facts::is_quiet";
+
 // maybeClose(session) (B:399-408): only an open budget with no runs on its clock closes, and only when the session
-// is quiet (quiet: the host's isQuiet answer supplied up front, 0 no, 1 yes; consulting it pushes [23] first; -1 not
-// supplied -> status 5 with nothing written). Closing is CLOSE('quiet') then changed; out [2]. Otherwise [1].
-// O(key length + U).
-pub fn maybe_close(inout st: [i64], sk: [i64], ss: i64, sn: i64, quiet: i64, now: i64, inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc
+// is quiet. isQuiet(session) is called here, synchronously, after the state and runs checks and before CLOSE (the
+// spec's order; a closed, halted or running budget never queries). Closing is CLOSE('quiet') then changed; out [2].
+// Otherwise [1]. Room for a rewritten record is reserved before the query, so a Grow (nothing written) never follows
+// a query and the retried call queries once. O(key length + U).
+pub fn maybe_close(inout st: [i64], sk: [i64], ss: i64, sn: i64, now: i64, inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc, io
 {
-  // Room for [23] plus CLOSE's effects (bud_clock::fx_ok bound after one push).
-  if c40(rd(fx, 0)) + 6 > len(fx) { return 3; }
+  if !crate::bud_clock::fx_ok(fx) { return 3; }
   if len(out) < 1 { return 3; }
   let se: i64 = session_of(st, sk, ss, sn);
   if se < 0 { return 2; }
@@ -707,20 +713,23 @@ pub fn maybe_close(inout st: [i64], sk: [i64], ss: i64, sn: i64, quiet: i64, now
   if state_of(st, off, at_n(st, a)) != 0 { crate::ent_u16::wr(inout out, 0, 1); return 0; }
   let ce: i64 = clock_in(st, st, c40(off + 25), c32(rd(st, off + 24)));
   if ce >= 0 && crate::bud_map::count(st, ce) > 0 { crate::ent_u16::wr(inout out, 0, 1); return 0; }
-  if quiet < 0 { return 5; }
   // activeSince (string 2) and ended.at (string 3) both empty, from one walk: with string 2 empty, string 3's length
   // word is the next word (str_len_in(st, off, 3) == c32(rd(st, c40(p2 + 1))) when string 2 has length 0).
   let p2: i64 = str_pos_in(st, off, 2);
   let in_place: bool = c32(rd(st, p2)) == 0 && c32(rd(st, c40(p2 + 1))) == 0;
-  if quiet != 0 && !in_place {
-    // Room for the rewritten record before the first effect, so a Grow writes nothing. The same blob copy feeds
-    // close_rec: reserve does not change the record, so it is not copied twice.
-    let b: [i64] = blob_copy(st, se);
-    let rw: i64 = rec_bound(b);
-    let g: i64 = reserve(inout st, rw + 8);
+  let mut b: [i64] = crate::ent_u16::zeros(0);
+  if !in_place {
+    // Room for the rewritten record before the query. The same blob copy feeds close_rec: reserve does not change
+    // the record, so it is not copied twice.
+    b = blob_copy(st, se);
+    let g: i64 = reserve(inout st, rec_bound(b) + 8);
     if g != 0 { return grow(g); }
-    push(inout fx, 23);
-    crate::ent_u16::wr(inout out, 0, 1);
+  }
+  let q: i64 = is_quiet(sk, ss, sn);
+  if q != 0 && q != 1 { return 2; }
+  crate::ent_u16::wr(inout out, 0, 1);
+  if q == 0 { return 0; }
+  if !in_place {
     let r: [i64] = close_rec(inout st, sk, ss, sn, b, 1, now, inout bv, inout fx);
     let w: i64 = store(inout st, sk, ss, sn, r);
     if w != 0 { return w; }
@@ -728,41 +737,35 @@ pub fn maybe_close(inout st: [i64], sk: [i64], ss: i64, sn: i64, quiet: i64, now
     crate::ent_u16::wr(inout out, 0, 2);
     return 0;
   }
-  push(inout fx, 23);
-  crate::ent_u16::wr(inout out, 0, 1);
-  if quiet == 0 { return 0; }
   // No activeSince text and no ended.at text: CLOSE keeps the record length, so only the header changes. The clock
   // part is bud_clock::close on the clock entry ce found above (SETTLE, state closed, DROP), then the header words
   // are written in place (the entry is found again after DROP, which may move entries).
-  if in_place {
-    if ce < 0 {
-      // No clock entry: SETTLE and DROP do nothing and amounts / spent stay as stored, so only state, closed and the
-      // end stamp change. The bv scratch frame is not loaded (nothing reads it on this path; Q compares st/fx/out).
-      crate::ent_u16::wr(inout st, off, 2);
-      crate::ent_u16::wr(inout st, off + 18, 1);
-      crate::ent_u16::wr(inout st, off + 19, 2);
-      crate::ent_u16::wr(inout st, off + 22, now);
-      push(inout fx, 20);
-      crate::ent_u16::wr(inout out, 0, 2);
-      return 0;
-    }
-    view_in(st, off, inout bv);
-    let sa: i64 = crate::bud_clock::settle_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
-    crate::ent_u16::wr(inout bv, 1, 2);
-    crate::bud_clock::drop_at(inout st, ce, inout fx);
-    let se2: i64 = session_of(st, sk, ss, sn);
-    if se2 < 0 { return 2; }
-    let o2: i64 = blob_at(st, se2);
-    crate::ent_u16::wr(inout st, o2, 2);
-    crate::ent_u16::wr(inout st, o2 + 8, rd(bv, 4));
-    crate::ent_u16::wr(inout st, o2 + 16, rd(bv, 5));
-    crate::ent_u16::wr(inout st, o2 + 17, rd(bv, 6));
-    crate::ent_u16::wr(inout st, o2 + 18, 1);
-    crate::ent_u16::wr(inout st, o2 + 19, 2);
-    crate::ent_u16::wr(inout st, o2 + 22, now);
+  if ce < 0 {
+    // No clock entry: SETTLE and DROP do nothing and amounts / spent stay as stored, so only state, closed and the
+    // end stamp change. The bv scratch frame is not loaded (nothing reads it on this path; Q compares st/fx/out).
+    crate::ent_u16::wr(inout st, off, 2);
+    crate::ent_u16::wr(inout st, off + 18, 1);
+    crate::ent_u16::wr(inout st, off + 19, 2);
+    crate::ent_u16::wr(inout st, off + 22, now);
     push(inout fx, 20);
     crate::ent_u16::wr(inout out, 0, 2);
     return 0;
   }
-  return 2;
+  view_in(st, off, inout bv);
+  let sa: i64 = crate::bud_clock::settle_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
+  crate::ent_u16::wr(inout bv, 1, 2);
+  crate::bud_clock::drop_at(inout st, ce, inout fx);
+  let se2: i64 = session_of(st, sk, ss, sn);
+  if se2 < 0 { return 2; }
+  let o2: i64 = blob_at(st, se2);
+  crate::ent_u16::wr(inout st, o2, 2);
+  crate::ent_u16::wr(inout st, o2 + 8, rd(bv, 4));
+  crate::ent_u16::wr(inout st, o2 + 16, rd(bv, 5));
+  crate::ent_u16::wr(inout st, o2 + 17, rd(bv, 6));
+  crate::ent_u16::wr(inout st, o2 + 18, 1);
+  crate::ent_u16::wr(inout st, o2 + 19, 2);
+  crate::ent_u16::wr(inout st, o2 + 22, now);
+  push(inout fx, 20);
+  crate::ent_u16::wr(inout out, 0, 2);
+  return 0;
 }
