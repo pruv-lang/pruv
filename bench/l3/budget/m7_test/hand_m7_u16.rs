@@ -1235,6 +1235,33 @@ fn run_perf(args: &[String]) {
         println!("rchk closereopen {} {}", size, s);
     }
 
+    // reopen on an open budget: CURRENT lookup + state test, answers false, changes nothing (reopen's lookup alone;
+    // the closereopen pair also holds maybeClose)
+    if typed && on("reopenmiss") {
+        let mut w = setup(State::Open);
+        let mut go = |w: &mut World| {
+            w.fx.clear();
+            black_box(matches!(w.reopen(black_box(sid), black_box(lbid)), Ok(Res::Bool(true))));
+        };
+        for _ in 0..1000 {
+            go(&mut w);
+        }
+        let t = Instant::now();
+        for _ in 0..reps {
+            go(&mut w);
+        }
+        println!("reopenmiss {} {:.1}", size, t.elapsed().as_nanos() as f64 / reps as f64);
+        println!("chk reopenmiss {} {}", size, w.checksum());
+        let mut w = setup(State::Open);
+        let mut s = 0u64;
+        for _ in 0..vn {
+            w.fx.clear();
+            let (st, ws) = digest(w.reopen(sid, lbid));
+            s = rchk_fold(s, st, &ws, &w.fx);
+        }
+        println!("rchk reopenmiss {} {}", size, s);
+    }
+
     if typed && on("replace") {
         let mut w = setup(State::Halted);
         let halted = rec(&bid(last), State::Halted);
@@ -1316,11 +1343,12 @@ fn run_perf(args: &[String]) {
             s
         };
         let blast = bid(last);
-        let items: [(&str, State, Vec<i64>, Vec<Vec<i64>>); 4] = [
+        let items: [(&str, State, Vec<i64>, Vec<Vec<i64>>); 5] = [
             ("ishalted", State::Open, vec![], vec![wbody(2, -1, -1, &blast)]),
             ("current", State::Open, vec![], vec![wbody(1, -1, -1, &blast)]),
             ("attach", State::Open, vec![], vec![wbody(3, 0, -1, "")]),
             ("closereopen", State::Open, vec![1], vec![wbody(6, -1, -1, ""), wbody(5, -1, -1, &blast)]),
+            ("reopenmiss", State::Open, vec![], vec![wbody(5, -1, -1, &blast)]),
         ];
         for (name, state, quiet, ops) in &items {
             if !on(name) {

@@ -549,7 +549,7 @@ def cmd_same(args):
     return 0 if x == y else 1
 
 
-PERF_ITEMS = ["ishalted", "current", "attach", "closereopen", "replace"]  # items the Pruv driver and hand16 both run
+PERF_ITEMS = ["ishalted", "current", "attach", "closereopen", "reopenmiss", "replace"]  # items the Pruv driver and hand16 both run
 PERF_CALLS = {"closereopen": 2}  # calls per rep (ns and instructions are reported per call)
 
 
@@ -756,7 +756,7 @@ def instr_retired(cmd, soft=False):
     sys.exit("no instruction count from /usr/bin/time -l")
 
 
-B_ITEMS = ["current", "ishalted", "attach", "closereopen", "replace"]
+B_ITEMS = ["current", "ishalted", "attach", "closereopen", "reopenmiss", "replace"]
 B_VARS = ["A", "B", "Bnv", "C", "prep", "observe"]
 B_PAIR = {"closereopen": 2}  # calls per rep; the closereopen rows are reported per pair (maybeClose + reopen)
 
