@@ -15,22 +15,58 @@ checked in every mode (`vec_get`, `string_byte`).  `all` spends the contract bud
 or entry, a fresh budget per helper call; exhaustion -> `pruv: foreign contract undefined: NAME: budget`.
 """
 import json
+import re
 
 from vast import *
 from typeinfo import encode, format_type, is_collection
 from codegen import rty, cty, conv, show, rstr
+from codegen import (CONTRACT_PRELUDE, CONTRACT_PRELUDE_U8, CONTRACT_PRELUDE_BOOL, CONTRACT_PRELUDE_STR,
+                     CONTRACT_LOAD_HELPER, BIT_RUST)
 from modules import safe_type     # G4: nominal identities in helper names use their [0-9A-Za-z_] encoding
 
 
 # op families that do I/O: their helpers are not inlined
 _IO_OP_PREFIXES = ("file_", "proc_", "ev_", "net_")
 
-# calls that reach pruv_ud (the only reader of PRUV_CTX): pruv_ud itself, the budget charge, the contract tick,
-# the checked arithmetic / index helpers of codegen.py, and the contract accessors of the proc/net/loop runtimes
-_UD_CALLS = ("pruv_ud(", "pruv_g6_charge(", "pruv_g9_tick(",
-             "pruv_cidx(", "pruv_cadd(", "pruv_csub(", "pruv_cmul(", "pruv_cneg(", "pruv_cdiv(", "pruv_crem(",
-             "pruv_cidx_u8(", "pruv_cidx_bool(", "pruv_cidx_str(", "pruv_cload_be(",
+# calls that reach pruv_ud (the only reader of PRUV_CTX), DERIVED from the runtime prelude text of codegen.py:
+#   (1) every `fn pruv_X(` of the contract prelude constants whose function text calls pruv_ud(  (a function runs from
+#       its `fn pruv_` line to the next line starting with `fn `);
+#   (2) pruv_c<n> for every n in BIT_RUST (the templated band/bor/bxor/wrapping_* helpers all call pruv_ud);
+#   (3) fixed roots: pruv_ud, the budget charge and the contract tick (G6_PRELUDE / loop bodies), and the contract
+#       accessors of the proc/net/loop runtimes, which are kept listed because they live in the large
+#       PROC/NET/ASYNC preludes (many other functions there are not contract helpers).
+# The hand list formerly missed 7 helpers: pruv_cband, pruv_cbor, pruv_cbxor, pruv_cwrapping_shl, pruv_cushr,
+# pruv_cwrapping_add, pruv_cwrapping_mul (from (2)).  The Rust twin (foreign_codegen.rs ud_calls) derives the same set.
+_UD_ROOTS = ("pruv_ud(", "pruv_g6_charge(", "pruv_g9_tick(",
              "pruv_cproc_buf(", "pruv_cproc_eof(", "pruv_cproc_byte(", "pruv_cnet_byte(", "pruv_cev_slot(")
+
+
+def _derive_ud_calls():
+    out = list(_UD_ROOTS)
+    for text in (CONTRACT_PRELUDE, CONTRACT_PRELUDE_U8, CONTRACT_PRELUDE_BOOL, CONTRACT_PRELUDE_STR,
+                 CONTRACT_LOAD_HELPER):
+        chunks = []
+        for line in text.split("\n"):
+            if line.startswith("fn "):
+                chunks.append([line])
+            elif chunks:
+                chunks[-1].append(line)
+        for chunk in chunks:
+            m = re.match(r"fn (pruv_\w+)\s*\(", chunk[0])
+            if m is None:
+                continue
+            body = "\n".join(chunk).replace(m.group(0), "", 1)    # the signature's own name is not a call
+            c = m.group(1) + "("
+            if "pruv_ud(" in body and c not in out:
+                out.append(c)
+    for n in BIT_RUST:
+        c = "pruv_c" + n + "("
+        if c not in out:
+            out.append(c)
+    return tuple(out)
+
+
+_UD_CALLS = _derive_ud_calls()
 
 
 def _budget_line(n):
@@ -545,6 +581,7 @@ class ForeignGen:
         K = rty(kt)
         keyconv = "i64::try_from(pruv_kk).ok()" if kt == I64 else "Some(pruv_kk)"
         L = [s.g.allow,
+             "#[inline(always)]",
              "fn %s(pruv_after: &%s, pruv_before: &%s, pruv_kk: %s, pruv_vv: %s, pruv_budget: &mut i64) -> bool {" % (
                  name, M, M, cty(kt), cty(vt)),
              "    let pruv_nk: %s = match %s { Some(pruv_x) => pruv_x, None => return false };" % (K, keyconv),

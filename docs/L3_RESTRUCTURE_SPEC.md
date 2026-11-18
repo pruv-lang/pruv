@@ -1016,3 +1016,107 @@ Audit findings, closed:
 - **P11.** The per-call `valid` (P10.4) and `m4raw/m4` (1.12x to 1.13x on sessions, P10.3) are unchanged by P10H.
 - **Batch API.** Keep `pruv_hb_` for callers that already hold a batch; it is not a performance lever while the body
   crosses the LLVM boundary.
+
+## Appendix P11 (import admission I0+I1, compiler list fix, writer preservation measured)
+
+### P11.1 What landed
+
+- **Admission (`bench/l3/budget/bud_admit.pruv`, new lib module).** `admit(st, inout cnt)` checks a store handed in
+  from outside and returns the live count (roots included) or a negative code: -1 header (`bud_store::valid`, I0),
+  -2 roots / top, -3 entry state, -4 owner (live, not a root, below top), -5 key span or padding (offset inside the
+  arena, `words(kn) <= key cap`, unused u16 lanes zero), -6 blob span (`len <= cap`, span inside the arena), -7 links
+  (`f7..f10` in `-1..top-1`, child count `>= 0`), -8 free list (walk bounded by top, ends at -1, `free + live == top`),
+  -9 slot word (entry index in `0..top-1`; a slot naming a free or reused entry or with a stale tag is accepted,
+  because removal frees descendants without clearing their slots and `entry_matches_w` re-checks hash, state, owner, owner generation and key),
+  -10 counts (word 12 live, word 13 used slots, word 14 in
+  `0..at-ab`). Work is linear: one pass over `top` entries, one bounded free walk, one pass over the slots;
+  `cnt` returns the three visit counts. It lives in its own module so roots that do not import (`root_m4`, `root_m8`,
+  `root_m9`) do not carry its proof.
+- **Gate P test (`m34_test/root_admit.pruv`, `driver_admit.rs`, `run.py admit`).** A clean store (10 live, top 11, one
+  freed entry, one blob), 17 single-word corruptions (one or more per check above), and 3 valid stores admit must
+  accept: a stale slot tag (case 14), entry 3 removed with its children 9, 10 leaving their slots (case 19, live 7),
+  and then two keys added (reusing entries 3 and 10, 10 under its stale slot) and entry 3 removed again (case 20,
+  live 8). Then the clean store at 1024, 4096
+  and 65536 words: entries visited 11 and free steps 1 at every length, slots visited exactly 32 / 128 / 2048. The
+  harness checks the exact 23 `(case, len)` rows; 23/23 pass on both compilers.
+- **Compiler (both emitters).** `_UD_CALLS` / `UD_CALLS` are derived from the runtime prelude (every helper whose body
+  reads `pruv_ud`, plus listed roots for the large PROC/NET/ASYNC preludes); the 7 helpers named in P10H.5 (a) are now
+  covered. `map_updated` is `#[inline(always)]` (P10H.5 (b)). `tests/diff_rust.py --fuzz-count 20` all same;
+  `g8_frontend` 27/27 (py) and 39/39 (rs).
+
+### P11.2 Writer preservation: measured, not landed
+
+`valid(old(st)) ==> valid(st)` was proved for the bud_map header writers and helpers (`sf`, `sh` for words 13/14 with
+`v >= 0`, `write_at` for `o >= 16`, `put_units`, `take_words`, `drop_entry`, `drop_child`, `set_blob`; `set_ef` in
+bud_store with header equality). It does not remove any runtime check yet: the per-call `valid` in `m4_op` /
+`m4_observe` stays until the big mutators (`put_at`, `put_key_h`, `remove`, `rehash`, `add_absent_w`, and through them
+`add_w`, `room`, `make_room`) also preserve it, and those proofs time out at the default limit. The cost lands on every
+root that imports bud_map (Python compiler, user CPU s, `root_m8`; HEAD on the same machine 15.0):
+
+| variant | root_m8 | main growth |
+|---|---:|---|
+| all writers above | 28.7 | `remove` +3.9, `set_blob` +3.0, `drop_entry` +2.8 (callers expand `valid` at each `sf` call) |
+| without `sf`, `drop_entry`, `drop_child`, `set_blob` (`put_units` calls `set_ef` directly) | 17.8 | `write_at`, `put_units`, `set_ef`, `sh`, `take_words` ~0.3–0.7 each |
+| also without `write_at`, `put_units` | 16.7 | `sh`, `take_words`, `set_ef` |
+| `set_ef` ensures only | 15.7 | `set_ef` |
+
+Because P11 forbids proof-time growth and the preservation buys no runtime work yet, bud_map.pruv and bud_store.pruv
+are unchanged by P11. The proved variants are kept outside the tree for P12 (see P11.5).
+
+### P11.3 Proof time (user CPU s, one run each, same machine, quiet)
+
+| root | Python HEAD | Python P11 | Rust P11 |
+|---|---:|---:|---:|
+| m34_test/root_m4 | 13.9 | 14.2 | 23.9 |
+| m8_test/root_m8 | 15.0 | 14.7 | 24.6 |
+| m9_test/root_m9 | 14.5 | 14.7 | 24.6 |
+| m34_test/root_admit (new) | n/a | 14.2 | 24.0 |
+
+The 25–27 s figures taken at the start of P11 were measured under load (real 45 s for 27 s user) and are not used.
+The Rust column was measured with the P11 compiler only (the HEAD binary had been rebuilt); bud_map/bud_store are
+HEAD, so it is the HEAD proof workload. Rust times above were taken while another proof ran, so they are upper bounds.
+
+### P11.4 Performance (core ns/op, median of 5, 200000 reps, Rust backend)
+
+| axis | n | m4 | m4nv | m4raw | m4raw code, Plain store | m4raw/m4 | m4raw − m4 | of which poison flag |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| sessions | 100 | 13.3 | 12.0 | 15.0 | 14.1 | 1.13 | 1.7 | 0.9 |
+| sessions | 500 | 13.0 | 11.9 | 14.7 | 13.0 | 1.13 | 1.7 | 1.7 |
+| sessions | 1000 | 13.1 | 12.1 | 15.1 | 13.2 | 1.15 | 2.0 | 1.9 |
+| tools | 100 | 30.3 | 29.7 | 31.9 | 30.6 | 1.05 | 1.6 | 1.3 |
+| tools | 500 | 33.9 | 33.3 | 35.7 | 34.0 | 1.05 | 1.8 | 1.7 |
+| tools | 1000 | 32.7 | 33.0 | 34.4 | 33.3 | 1.05 | 1.7 | 1.1 |
+| clocks | 100 | 25.4 | 23.9 | 27.1 | 25.6 | 1.07 | 1.7 | 1.5 |
+| clocks | 500 | 24.9 | 23.0 | 26.7 | 24.4 | 1.07 | 1.8 | 2.3 |
+| clocks | 1000 | 25.9 | 24.2 | 28.0 | 26.1 | 1.08 | 2.1 | 1.9 |
+
+"m4raw code, Plain store" is the m4raw build (manifest package, `raw_entries "crate"`) with the driver's `Store`
+type switched from `sol::pruv_raw::PruvStore` to the local no-poison `Plain`; nothing else differs. The difference
+to m4raw is the `PruvStore::with` poison flag (a store before and after each call plus the `Err` branch): 0.9 to 2.3 ns
+of the 1.6 to 2.1 ns gap, the rest (0 to 0.9 ns) is run noise at this size. `m4 − m4nv` (0.6 to 1.9 ns) is the
+per-call `valid`. Cells above 1.1x: `m4raw/m4` sessions n=100/500/1000 (1.13, 1.13, 1.15), attributed to the poison
+flag. `m4` itself is unchanged by P11 (P10H: same cells).
+
+### P11.5 Notes for P12 and P13
+
+- **Big-mutator preservation (P12).** Prove `valid(old(st)) ==> valid(st)` for `put_at`, `put_key_h`, `remove`,
+  `rehash`, `add_absent_w` (then `add_w`, `room`, `make_room`) and for the bud_clock / lifecycle / world / tools / halt
+  mutators, then drop the per-call `valid` in `m4_op` / `m4_observe` (keep the init-returned-0 word, P10.4). Keep
+  proof time flat: state preservation through a helper whose body is not unfolded at each `sf` call (the measured
+  cost above is the callers re-expanding `valid` per call), or prove it once per mutator over the words it writes
+  (7, 8, 10, 12, 13, 14) instead of through every field writer. Reproduction files from P11:
+  `work/p11_preservation/` (not committed; `bud_map_full.pruv`, `bud_map_writers.pruv`, `bud_store_set_ef.pruv`).
+- **Poison flag (P12/P13).** The `m4raw/m4` cells above 1.1x are the `PruvStore` poison flag. A proved body cannot
+  panic except through the runtime's abort paths; if the adapter can rely on that (panic = abort for raw entries), the
+  flag and its two stores go away and `m4raw` meets `m4`.
+- **Admission contract (audit).** `admit` returns codes but has no `ensures` giving I0 / I1 on success, so callers
+  cannot yet drop checks on its result. P12: state `result >= 0 ==> valid(st) && (forall live e: entry_ok(st, e))`
+  (or the subset a raw entry needs) and prove it from the loop invariants. Also: the linearity test grows the buffer only; a case
+  that grows top and the free list with it should be added with the contract.
+- **I1 vs I2 (audit).** Spans may overlap inside the arena (in bounds, so I1 holds), but a blob write can then change
+  another key's padding; preserving I1 under `set_blob` needs a frame / no-alias fact. Excess child count, owner
+  generation mismatch, link order and cycles, slots naming roots, duplicate or missing slots are I2 (clamps, dynamic
+  compares and step budgets keep them safe) and stay out of admission. `cap = 0` with any offset and the stale
+  lengths of free entries are accepted, so no unchecked access may rely on them.
+- **Admission at the boundary.** `admit` is not yet called by an entry; wiring it into the import path of the C / raw
+  adapter (once per handed-in buffer, not per call) is what lets the per-call `valid` go once P12 lands.

@@ -959,7 +959,7 @@ fn contract_arith(op: &str) -> Option<&'static str> {
 
 /// P2: bit builtin -> Rust operator (Python BIT_RUST, same order); later batches add entries. The contract helper
 /// pruv_c<name> is emitted only when a contract uses the builtin.
-const BIT_RUST: [(&str, &str); 7] = [
+pub(crate) const BIT_RUST: [(&str, &str); 7] = [
     ("band", "&"),
     ("bor", "|"),
     ("bxor", "^"),
@@ -987,7 +987,7 @@ fn bit_rust(n: &str) -> Option<&'static str> {
 }
 
 /// P2 batch 4: Python CONTRACT_LOAD_HELPER (load_be in a runtime contract, included only when used)
-const CONTRACT_LOAD_HELPER: &str = "#[allow(dead_code)]\n#[inline]\nfn pruv_cload_be(a: &[u8], i: i128, n: usize) -> i128 { if i < 0 || i > (a.len() as i128) - (n as i128) { pruv_ud(\"array index out of range\") } let mut w: u64 = 0; for k in 0..n { w = (w << 8) | (a[(i as usize) + k] as u64); } ((w as i64) as i128) }\n";
+pub(crate) const CONTRACT_LOAD_HELPER: &str = "#[allow(dead_code)]\n#[inline]\nfn pruv_cload_be(a: &[u8], i: i128, n: usize) -> i128 { if i < 0 || i > (a.len() as i128) - (n as i128) { pruv_ud(\"array index out of range\") } let mut w: u64 = 0; for k in 0..n { w = (w << 8) | (a[(i as usize) + k] as u64); } ((w as i64) as i128) }\n";
 
 /// P2 batch 2: --no-verify helper name of a shift builtin (Python SHIFT_SAFE); None for the other bit builtins.
 fn shift_safe(n: &str) -> Option<&'static str> {
