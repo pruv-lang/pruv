@@ -508,7 +508,7 @@ def g4b_frontend_jobs():
         return c.returncode == 0, c.stdout + c.stderr
     def trust_checks():
         c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/g4b/check_trust.py"), WORK] +
-                           ["--rs" if _driver().kind == "rs" else "--py", _driver().path],
+                           (["--rs", _driver().path] if _driver().kind == "rs" else []),
                            capture_output=True, text=True, timeout=1200)
         return c.returncode == 0, c.stdout + c.stderr
     return [safe("g4b_frontend/pkg", pkg_checks,
