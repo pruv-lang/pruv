@@ -5,15 +5,16 @@
 //
 // Boundary rule: the host owns the state buffer `st` but never reads or writes its words. It allocates, calls the
 // entries, and on status 1 (Grow, N = out[0]) allocates a zeroed buffer of exactly N (sized in Pruv, N >= 2*len), calls m4_grow, swaps the
-// buffers and retries the same op (at most 3 retries).
+// buffers and retries the same op (at most 3 retries). State buffers are the product host's StateBuf (bench/l3/budget/
+// state_buf.rs, included by run.py in front of this file): large ones are mapped pages, returned at once on drop (L3 P13c).
 use std::hint::black_box;
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
 
-// Allocation count (L3 P13b memory gate): every alloc / alloc_zeroed / realloc of the whole process, printed as
-// allocs=N on the perf line; perf_headroom/host/run.py compares it with the other side's count (same accounting).
+// Allocation count (L3 P13b memory gate): every alloc / alloc_zeroed / realloc of the whole process plus every mapped
+// state buffer (STATE_MAPS, one per buffer like an allocator call), printed as allocs=N on the perf line; perf_headroom/host/run.py compares it with the other side's count (same accounting).
 struct CountingAlloc;
-static ALLOC_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static ALLOC_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 unsafe impl std::alloc::GlobalAlloc for CountingAlloc {
     unsafe fn alloc(&self, l: std::alloc::Layout) -> *mut u8 {
         ALLOC_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -33,25 +34,6 @@ unsafe impl std::alloc::GlobalAlloc for CountingAlloc {
 }
 #[global_allocator]
 static GLOBAL_ALLOC: CountingAlloc = CountingAlloc;
-
-// Fallible zeroed buffer of exactly n words: None on allocation failure (the caller keeps the old state). Uses
-// alloc_zeroed like `vec![0; n]`, so fresh pages stay lazily zeroed (no write pass, no extra resident memory).
-#[allow(dead_code)]
-fn try_zeroed(n: usize) -> Option<Vec<i64>> {
-    if n == 0 {
-        return Some(Vec::new());
-    }
-    let layout = std::alloc::Layout::array::<i64>(n).ok()?;
-    // SAFETY: layout has non-zero size; the pointer comes from the global allocator with this exact layout, so the
-    // Vec owns it with length = capacity = n, and all-zero bytes are valid i64 values.
-    unsafe {
-        let p = std::alloc::alloc_zeroed(layout) as *mut i64;
-        if p.is_null() {
-            return None;
-        }
-        Some(Vec::from_raw_parts(p, n, n))
-    }
-}
 
 // LANE-WORLD-BEGIN (run.py replaces everything up to LANE-WORLD-END with driver_m4c.rs for the m4c lane)
 // Every call on the resident state goes through a store with the PruvStore API (`new`, `with`). run.py puts one line
@@ -80,11 +62,11 @@ impl<T> Plain<T> {
     }
 }
 
-type St = Store<Vec<i64>>;
+type St = Store<StateBuf>;
 
 // One state call. A poisoned store cannot happen in this driver (no panic is caught); exit loudly if it does.
 #[inline(always)]
-fn call<R>(st: &mut St, f: impl FnOnce(&mut Vec<i64>) -> R) -> R {
+fn call<R>(st: &mut St, f: impl FnOnce(&mut StateBuf) -> R) -> R {
     match st.with(f) {
         Ok(r) => r,
         Err(_) => {
@@ -111,13 +93,13 @@ struct World {
 
 impl World {
     fn new(l: usize) -> World {
-        let mut st: St = Store::new(vec![0i64; l]);
+        let mut st: St = Store::new(StateBuf::zeroed_or_abort(l));
         let mut len = l;
         let r = call(&mut st, |s| sol::m4_init(s));
         if r > 0 {
             len = r as usize;
             let r2 = call(&mut st, |s| {
-                *s = vec![0i64; len];
+                *s = StateBuf::zeroed_or_abort(len);
                 sol::m4_init(s)
             });
             if r2 != 0 {
@@ -190,7 +172,11 @@ impl World {
                         return R::GrowFailed;
                     }
                     attempt += 1;
-                    let n = self.out[0].max(0) as usize;
+                    // An N that does not fit usize (32-bit targets) is refused like an allocation failure.
+                    let n = match usize::try_from(self.out[0].max(0)) {
+                        Ok(v) => v,
+                        Err(_) => return R::GrowFailed,
+                    };
                     let t = Instant::now();
                     let want = n; // N from Pruv (bud_store::need, N >= 2*len): the host makes no sizing choice (L3 P13b)
                     // An N that does not grow the buffer (need at its 2^40 cap) or an allocator refusal fails the op
@@ -198,7 +184,7 @@ impl World {
                     if want <= self.len {
                         return R::GrowFailed;
                     }
-                    let mut fresh = match try_zeroed(want) {
+                    let mut fresh = match StateBuf::zeroed(want) {
                         Some(v) => v,
                         None => return R::GrowFailed,
                     };
@@ -495,7 +481,7 @@ fn perf(axis: &str, n: usize, reps: usize) {
         w.grow_ns,
         w.grows,
         nops,
-        ALLOC_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+        ALLOC_COUNT.load(std::sync::atomic::Ordering::Relaxed) + STATE_MAPS.load(std::sync::atomic::Ordering::Relaxed)
     );
 }
 

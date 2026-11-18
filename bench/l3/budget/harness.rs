@@ -10,16 +10,16 @@ use budget_host::{empty_fire_seg, enc_obj, session_v, Core, ResidentState, World
 
 struct G;
 impl Core for G {
-    fn init(&self, st: &mut Vec<i64>) -> i64 {
+    fn init(&self, st: &mut [i64]) -> i64 {
         sol::m4_init(st)
     }
-    fn grow(&self, prev: &Vec<i64>, next: &mut Vec<i64>) -> i64 {
+    fn grow(&self, prev: &[i64], next: &mut [i64]) -> i64 {
         sol::m4_grow(prev, next)
     }
-    fn op(&self, st: &mut Vec<i64>, inp: &[i64], out: &mut Vec<i64>) -> i64 {
+    fn op(&self, st: &mut [i64], inp: &[i64], out: &mut [i64]) -> i64 {
         sol::m4_op(st, inp, out)
     }
-    fn copied(&self, st: &Vec<i64>) -> i64 {
+    fn copied(&self, st: &[i64]) -> i64 {
         sol::m4_copied(st)
     }
 }

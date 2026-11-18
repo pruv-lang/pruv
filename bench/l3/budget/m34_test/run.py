@@ -252,6 +252,9 @@ def build(pruvc, tag):
     main = os.path.join(WORK, "main_%s.rs" % tag)
     with open(main, "w") as fh:
         fh.write('#![allow(dead_code, unused_imports)]\n#[path = "%s"] mod sol;\n' % gen.replace("\\", "/"))
+        if base == "m4":
+            # the product host's state buffer (StateBuf, L3 P13c); driver_m4.rs and its World lanes use it
+            fh.write('include!("%s");\n' % os.path.join(os.path.dirname(HERE), "state_buf.rs").replace("\\", "/"))
         if lane and tag not in WORLD_LANES:
             fh.write("type Store<T> = %s;\n" % ("sol::pruv_raw::PruvStore<T>" if lane["raw"] == "crate" else "Plain<T>"))
         fh.write(driver)

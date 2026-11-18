@@ -1135,29 +1135,32 @@ pub fn run_q(prog_path: &str) -> Result<(), String> {
 
 // ---- resident state (M4 protocol) ----------------------------------------------------------------------------------------
 // The host owns the state buffer but never reads or writes its words: it allocates, calls the entries, and on Grow
-// (status 1, N = out[0]) allocates a zeroed buffer of exactly N words, calls grow, drops the old buffer and retries the
+// (status 1, N = out[0]) allocates a zeroed buffer of exactly N words (StateBuf, state_buf.rs: large buffers are mapped
+// pages, so the dropped old buffer leaves resident memory at once, L3 P13c), calls grow, drops the old buffer and retries the
 // same op (at most 3 retries). N is decided in Pruv (bud_store::need: N >= 2*len, the geometric step), so the host
 // makes no sizing choice (L3 P13b). A Grow status means the op wrote nothing, and grow reads prev only, so every failure
-// on the grow path (allocation refused, grow status != 0, retry limit) returns Err with the old buffer kept: the state
-// observes exactly as before the call. The entries are proved Pruv (no panic) and the allocation is fallible
+// on the grow path (allocation refused, grow status != 0, retry limit) returns Err with the buffer of that attempt kept.
+// Scope: this holds per grow attempt. If one op grows, retries and then needs a second grow that fails, the first grow's
+// buffer and counters stay; that state is valid and observes exactly as before the call (grow preserves every
+// observation), so the op fails with no observable change. The Err string is a small allocation; if even that fails
+// the process aborts as any Rust allocation does. The entries are proved Pruv (no panic) and the allocation is fallible
 // (alloc_zeroed with a null check), so no call can unwind out of `step` with a half-replaced buffer and there is no poison flag
-// (the P13a.10 no-unwind store, here for the Rust host lane). The slice types are Vec references so that the generated
-// entries (whichever of `&mut [i64]` / `&mut Vec<i64>` the Pruv compiler emits for `inout [i64]`) accept the
-// arguments unchanged.
+// (the P13a.10 no-unwind store, here for the Rust host lane). Both Pruv compilers emit `&[i64]` / `&mut [i64]` for
+// `[i64]` / `inout [i64]`, so the entries take the state and out buffers as slices.
 
 pub trait Core {
-    fn init(&self, st: &mut Vec<i64>) -> i64;
-    fn grow(&self, prev: &Vec<i64>, next: &mut Vec<i64>) -> i64;
-    fn op(&self, st: &mut Vec<i64>, inp: &[i64], out: &mut Vec<i64>) -> i64;
+    fn init(&self, st: &mut [i64]) -> i64;
+    fn grow(&self, prev: &[i64], next: &mut [i64]) -> i64;
+    fn op(&self, st: &mut [i64], inp: &[i64], out: &mut [i64]) -> i64;
     // Words the last grow copied into st (entries and arena), computed in Pruv from st's header; -1 if unknown.
-    fn copied(&self, _st: &Vec<i64>) -> i64 {
+    fn copied(&self, _st: &[i64]) -> i64 {
         -1
     }
 }
 
 pub struct ResidentState<C: Core> {
     core: C,
-    st: Vec<i64>,
+    st: StateBuf,
     out: Vec<i64>,
     pub grows: u64,
     pub grow_ns: u128,
@@ -1184,10 +1187,11 @@ pub const GROW_ALLOC_ERR: &str = "grow allocation failed";
 
 impl<C: Core> ResidentState<C> {
     pub fn new(core: C, initial_len: usize) -> Result<ResidentState<C>, String> {
-        let mut st = vec![0i64; initial_len];
+        let mut st = StateBuf::zeroed_or_abort(initial_len);
         let r = core.init(&mut st);
         if r > 0 {
-            st = vec![0i64; r as usize];
+            let n = usize::try_from(r).map_err(|_| format!("init asked for {} words, above usize", r))?;
+            st = StateBuf::zeroed_or_abort(n);
             let r2 = core.init(&mut st);
             if r2 != 0 {
                 return Err(format!("init failed twice (status {})", r2));
@@ -1225,26 +1229,13 @@ impl<C: Core> ResidentState<C> {
     }
 
     // A zeroed buffer of n words, or None when the allocator refuses (or the injection hook says so).
-    fn alloc_zeroed(&mut self, n: usize) -> Option<Vec<i64>> {
+    fn alloc_zeroed(&mut self, n: usize) -> Option<StateBuf> {
         if self.fail_allocs > 0 {
             self.fail_allocs -= 1;
             return None;
         }
-        if n == 0 {
-            return Some(Vec::new());
-        }
-        // alloc_zeroed like `vec![0; n]` (fresh pages stay lazily zeroed, no write pass), but a null result is a
-        // reported failure instead of an abort.
-        let layout = std::alloc::Layout::array::<i64>(n).ok()?;
-        // SAFETY: non-zero size; the pointer comes from the global allocator with this exact layout, so the Vec owns
-        // it with length = capacity = n, and all-zero bytes are valid i64 values.
-        unsafe {
-            let p = std::alloc::alloc_zeroed(layout) as *mut i64;
-            if p.is_null() {
-                return None;
-            }
-            Some(Vec::from_raw_parts(p, n, n))
-        }
+        // Lazily zeroed pages (no write pass); a refusal is a reported failure instead of an abort.
+        StateBuf::zeroed(n)
     }
 
     // The op loop; Ok(k) = status 0 with k result words at out[1..].
@@ -1267,7 +1258,11 @@ impl<C: Core> ResidentState<C> {
                     }
                     retries += 1;
                     let t = std::time::Instant::now();
-                    let n = self.out[0].max(0) as usize;
+                    // An N that does not fit usize (32-bit targets) is refused like an allocation failure.
+                    let n = match usize::try_from(self.out[0].max(0)) {
+                        Ok(v) => v,
+                        Err(_) => return Err(GROW_ALLOC_ERR.to_string()),
+                    };
                     // need caps N at 2^40; an N that does not grow the buffer would retry at the same size, so it fails
                     // here before any allocation and the old state stays (L3 P13b).
                     if n <= self.st.len() {
