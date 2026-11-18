@@ -3540,6 +3540,7 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "g9_proof", "mode": "default", "sample": "tests/g9/proof/p36_ctor_payload_operand.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g9_proof", "mode": "default", "sample": "tests/g9/proof/p37_payload_subfield_read.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g9_proof", "mode": "default", "sample": "tests/g9/proof/p38_spec_tree_count.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "l3_abi", "mode": "raw_entries", "sample": "tests/l3/abi/check_raw_entries.py"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "l3_frontend", "mode": "default", "sample": "tests/l3/frontend/arg_exprs.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "l3_frontend", "mode": "default", "sample": "tests/l3/frontend/assert_pos.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "l3_frontend", "mode": "default", "sample": "tests/l3/frontend/bit_builtins.pruv"}
@@ -4291,6 +4292,9 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_hf_grow.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_hf_refusal.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_hf_result_param.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_p09_nested_call.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_p09_old_param.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_p09_result_param.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_resize_contract.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_resize_generic.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_resize_short.pruv"}
