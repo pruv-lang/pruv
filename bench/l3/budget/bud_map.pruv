@@ -3,8 +3,9 @@
 // A map is the set of children of an owner entry, kept in insertion order by prev/next links (entry fields 7, 8)
 // and head/tail/count in the owner (fields 9, 10, 11). One open-addressing hash index (linear probing, slot word 0
 // empty, -1 tombstone, tag(h) * 2^32 + e + 1 entry e with stored hash h; see slot_word) covers all non-root entries.
-// The hash mixes owner, owner generation and the packed key words. Removing an entry frees its subtree too;
-// make_room rebuilds the index when tombstones pile up.
+// The hash mixes owner, owner generation and the packed key words. remove frees a subtree eagerly. M8 forget
+// leaves state-1 children of its free turn dead until allocation reclaims them. They count toward arena words
+// (14) until reclaimed, while word 12 counts only live entries. make_room rebuilds the index to discard stale slots.
 //
 // Entry fields: 0 state, 1 owner, 2 owner generation, 3 generation, 4 key off, 5 key len, 6 hash, 7 prev, 8 next,
 // 9 child head, 10 child tail, 11 child count, 12 blob off, 13 blob len, 14..17 scalars v0..v3, 18 key region
@@ -403,12 +404,74 @@ fn link_fast(inout st: [i64], e: i64, n: i64, h: i64, be: i64, bo: i64) -> ()
   reveal crate::bud_store::dyn_ok;
 }
 
+// A pending child of f. Its free-list link must be writable, so a truncated row cannot strand f.
+fn reclaimable(st: [i64], f: i64, c: i64, top: i64) -> bool
+{
+  if c < 3 || c >= top || gf(st, c, 0) != 1 || gf(st, c, 1) != f ||
+    gf(st, c, 2) == gf(st, f, 3) { return false; }
+  let b: i64 = crate::bud_store::field_addr(st, c);
+  return b >= 16 && b + 8 < len(st);
+}
+
+// Exclude a newly dead child list from the live-entry count, saturating at zero.
+fn uncount_children(inout st: [i64], e: i64) -> ()
+  ensures crate::bud_store::kept(st, old(st))
+  ensures len(st) >= 15 ==> crate::bud_store::hdr_same(st, old(st), 12)
+{
+  let live: i64 = crate::bud_store::c32(hw(st, 12));
+  let kids: i64 = crate::bud_store::c32(gf(st, e, 11));
+  if live > kids { sh(inout st, 12, live - kids); }
+  else { sh(inout st, 12, 0); }
+}
+
+// Make a pending descendant available to entry_alloc, leaving its former owner on the free list.
+// Fuel bounds the descent even on a malformed child list.
+fn reclaim_head(inout st: [i64]) -> ()
+  ensures crate::bud_store::kept(st, old(st))
+{
+  let top: i64 = crate::bud_store::c32(hw(st, 7));
+  let cap: i64 = crate::bud_store::c32(hw(st, 6));
+  let mut fuel: i64 = top + 1;
+  while fuel > 0
+    invariant 0 <= fuel && fuel <= 4294967297 && 0 <= top && top <= 4294967296
+    invariant crate::bud_store::kept(st, old(st))
+    invariant len(st) < 15 || st[7] == old(st)[7]
+    decreases fuel
+  {
+    let f: i64 = hw(st, 8);
+    if f < 3 || f >= top || f >= cap || gf(st, f, 0) != 0 { return; }
+    let c: i64 = gf(st, f, 9);
+    if !reclaimable(st, f, c, top) { return; }
+    // A header shorter than 15 cannot have an in-range non-root entry.
+    if len(st) < 15 || c < 3 || c >= st[7] || c >= cap { return; }
+    let mut n: i64 = gf(st, c, 8);
+    if n < 0 || n >= top { n = -1; }
+    sf(inout st, f, 9, n);
+    if n == -1 { sf(inout st, f, 10, -1); }
+    let nc: i64 = crate::bud_store::c32(gf(st, f, 11));
+    if nc > 0 { sf(inout st, f, 11, nc - 1); }
+    let kw: i64 = crate::bud_keys::words(crate::bud_store::c32(gf(st, c, 5))) +
+      crate::bud_store::c40(gf(st, c, 13));
+    take_words(inout st, kw);
+    // c was already excluded from word 12. Only its own children can become newly dead.
+    sf(inout st, c, 0, 0);
+    let next_gen: i64 = wrapping_add(gf(st, c, 3), 1);
+    sf(inout st, c, 3, next_gen);
+    sf(inout st, c, 8, f);
+    sh(inout st, 8, c);
+    if gf(st, c, 9) < 0 { return; }
+    uncount_children(inout st, c);
+    fuel = fuel - 1;
+  }
+}
+
 // The insert half of put_key_h(): a new entry for the packed key in index slot `slot` (absolute address, the first
 // empty or tombstone slot on h's probe path). The key words are stored by a plain word copy. Entry index, or -1
 // (nothing linked or indexed).
 fn put_at(inout st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn: i64, slot: i64) -> i64
   ensures crate::bud_store::kept(st, old(st))
 {
+  reclaim_head(inout st);
   let e: i64 = crate::bud_store::entry_alloc(inout st, owner, og);
   if e < 0 { return -1; }
   let n: i64 = crate::bud_store::c32(kn);
@@ -478,23 +541,10 @@ fn drop_entry(inout st: [i64], e: i64) -> ()
   crate::bud_store::entry_free(inout st, e);
 }
 
-// Unlinks entry e from its owner and frees it with its whole subtree (any depth), in post order without a stack: the
-// walk descends to the head child while it is a live entry owned by the current node, frees a leaf and moves to its
-// next sibling, and climbs to the owner (freeing it) when a list ends. On a store whose child lists are well formed
-// (complete, mutually linked, acyclic: I2, which every store this module builds has and admission I0 + I1 does not
-// check), every entry of the subtree is entered at most once and freed once, so the walk takes at most
-// 2 * (subtree size) + 1 steps; there no live entry is left with a freed owner (admission class -4), and no freed
-// entry stays on the live count (word 12), which need() charges against the capacity. On any other buffer the
-// 2 * walk_limit + 2 step budget bounds the walk and every access stays total, but the walk may end a list early
-// (a candidate not owned by u ends it) and leave entries behind. O(probe length + subtree): e's own slot is cleared,
-// the descendants' slots are left for the next rehash (drop_child). Roots are never removed.
-pub fn remove(inout st: [i64], e: i64) -> ()
+// Unlinks e from the ordered child list of owner.
+fn unlink(inout st: [i64], e: i64, owner: i64) -> ()
   ensures crate::bud_store::kept(st, old(st))
 {
-  let top: i64 = crate::bud_store::c32(hw(st, 7));
-  if e < 3 || e >= top { return; }
-  if gf(st, e, 0) != 1 { return; }
-  let owner: i64 = gf(st, e, 1);
   let p: i64 = gf(st, e, 7);
   let n: i64 = gf(st, e, 8);
   if p >= 0 {
@@ -509,6 +559,41 @@ pub fn remove(inout st: [i64], e: i64) -> ()
   }
   let oc: i64 = gf(st, owner, 11);
   if oc > 0 { sf(inout st, owner, 11, oc - 1); }
+}
+
+// M8 forgets a turn under root 2. Its activities become dead when the generation is bumped, and allocation
+// reclaims them from the preserved child list. Work is independent of the number of activities.
+pub fn forget_turn_entry(inout st: [i64], e: i64) -> ()
+  ensures crate::bud_store::kept(st, old(st))
+{
+  let top: i64 = crate::bud_store::c32(hw(st, 7));
+  if e < 3 || e >= top || gf(st, e, 0) != 1 { return; }
+  unlink(inout st, e, 2);
+  uncount_children(inout st, e);
+  drop_entry(inout st, e);
+}
+
+// Unlinks entry e from its owner and frees it with its whole subtree (any depth), in post order without a stack: the
+// walk descends to the head child while it is a live entry owned by the current node, frees a leaf and moves to its
+// next sibling, and climbs to the owner (freeing it) when a list ends. On a store whose child lists are well formed
+// (complete, mutually linked, acyclic: I2, which every store this module builds has and admission I0 + I1 does not
+// check), every entry of the subtree is entered at most once and freed once, so the walk takes at most
+// 2 * (subtree size) + 1 steps. Eager remove leaves no state-1 entry with a newly freed owner. M8 forget
+// deliberately leaves dead children, excluded from word 12. On any other buffer the
+// 2 * walk_limit + 2 step budget bounds the walk and every access stays total, but the walk may end a list early
+// (a candidate not owned by u ends it) and leave entries behind. O(probe length + subtree): e's own slot is cleared,
+// the descendants' slots are left for the next rehash (drop_child). Roots are never removed.
+pub fn remove(inout st: [i64], e: i64) -> ()
+  ensures crate::bud_store::kept(st, old(st))
+{
+  let top: i64 = crate::bud_store::c32(hw(st, 7));
+  if e < 3 || e >= top { return; }
+  if gf(st, e, 0) != 1 { return; }
+  let owner: i64 = gf(st, e, 1);
+  // A dead child of a forgotten M8 turn (its owner freed or reused) is already off word 12; removing it again would
+  // count it twice. Callers reach entries by key lookup, which never returns one; this guards a stale index.
+  if owner >= 3 && (gf(st, owner, 0) != 1 || gf(st, e, 2) != gf(st, owner, 3)) { return; }
+  unlink(inout st, e, owner);
   let mut b: i64 = 2 * walk_limit(st) + 2;
   // u: the node whose list is walked (e or a live descendant not yet freed); c: the next candidate child of u.
   let mut u: i64 = e;
@@ -587,6 +672,7 @@ fn drop_desc(inout st: [i64], c: i64, pend: i64) -> i64
 fn take_words(inout st: [i64], kw: i64) -> ()
   requires 0 <= kw
   ensures crate::bud_store::kept(st, old(st))
+  ensures len(st) >= 15 ==> crate::bud_store::hdr_same(st, old(st), 14)
 {
   let lw: i64 = crate::bud_store::c40(hw(st, 14));
   if lw > kw {
@@ -601,7 +687,8 @@ fn take_words(inout st: [i64], kw: i64) -> ()
 // have done nothing, or -1 (nothing written) when e has no fast base (the caller then applies the pending update and
 // calls drop_entry).
 // The slot is left in place (lazy deletion, as an open-addressing table with generation-stamped entries does): a
-// slot word that names a free entry, or an entry reused for another key, owner or owner generation, never matches a
+// slot word that names a free entry, a dead child of a forgotten turn, or an entry reused for another key, owner
+// or owner generation never matches a
 // lookup (state, owner, owner generation, hash and key are compared), is not reused by inserts, and is dropped by the
 // next rehash, so it costs what a tombstone costs. A match therefore still names the live entry for the key, which is
 // unique per owner. entry_free writes header words 8 and 12 and entry fields past word 16 (eb), never word 14, and
@@ -696,7 +783,7 @@ pub fn blob_fits(st: [i64], e: i64, words: i64) -> bool
 
 // ---- index maintenance ----
 
-// Clears the slot table and reinserts every live non-root entry by its stored hash (drops all tombstones).
+// Clears the slot table and reinserts live non-root entries by their stored hash, dropping tombstones and dead entries.
 // O(slots + entry top).
 fn rehash(inout st: [i64]) -> ()
   ensures crate::bud_store::kept(st, old(st))
@@ -722,7 +809,8 @@ fn rehash(inout st: [i64]) -> ()
     invariant crate::bud_store::kept(st, old(st))
     decreases 4294967297 - e
   {
-    if gf(st, e, 0) == 1 {
+    // Reinsert live entries only: a dead child (state 1, owner freed) would make used exceed live.
+    if gf(st, e, 0) == 1 && (gf(st, e, 1) < 3 || gf(st, gf(st, e, 1), 0) == 1) {
       let h: i64 = gf(st, e, 6);
       let mut j: i64 = 0;
       let mut placed: bool = false;
@@ -772,7 +860,7 @@ fn room(inout st: [i64], entries: i64, words: i64) -> i64
   if r == 0 {
     // Load policy: while the live entries take at most a quarter of the slots, tombstones are dropped as soon as the
     // index would pass half full, so probes stay short. A rehash costs O(slots + entry top) = O(slots) and leaves
-    // used = live, so the next one is at least slots/4 inserts away (amortized O(1)). It only lowers word 13, so the
+    // used <= live, so the next one is at least slots/4 inserts away (amortized O(1)). It only lowers word 13, so the
     // fit just computed by need() still holds.
     if used + ents > slots / 2 && live + ents <= slots / 4 {
       rehash(inout st);
@@ -785,7 +873,10 @@ fn room(inout st: [i64], entries: i64, words: i64) -> i64
   let top: i64 = crate::bud_store::c40(hw(st, 10));
   let ae: i64 = crate::bud_store::c40(hw(st, 11));
   // Rehash only when the slot bound is the sole failure, so a Grow result never follows a state change (§8.1).
-  // After a rehash used <= live and live + ents <= cap = slots/2, so the second need() returns 0.
+  // On a store with a valid layout (cap = slots/2, as bud_store::valid checks) whose word 12 counts its
+  // live entries, rehash skips dead entries, so used <= live, and with
+  // live + ents <= cap = slots/2 the second need() returns 0. On any other buffer a Grow can follow the rehash
+  // (the index was rebuilt with the same key set); room_w states the same scope.
   if used + ents > slots * 3 / 4 && live + ents <= cap && wds <= ae - top {
     rehash(inout st);
     let r2: i64 = crate::bud_store::need(st, entries, words);
@@ -1020,7 +1111,7 @@ pub fn seek_w(st: [i64], owner: i64, key: [i64], ks: i64, kn: i64) -> Seek
 
 // room() for callers outside this module: 0 fits (nothing written), -1 the index was rebuilt and it fits now (every
 // slot from an earlier seek_w is stale), otherwise N > 0: Grow(N); nothing written on a store whose header matches
-// its tables (room's rehash leaves used <= live, so the second need() returns 0); on a broken buffer the index may
+// its tables (room's rehash omits dead entries, so the second need() returns 0); on a broken buffer the index may
 // have been rebuilt first.
 pub fn room_w(inout st: [i64], entries: i64, words: i64) -> i64
   ensures crate::bud_store::kept(st, old(st))
@@ -1040,11 +1131,9 @@ pub fn put_seek_w(inout st: [i64], owner: i64, s: Seek, key: [i64], ks: i64, kn:
   return put_at(inout st, owner, s.og, s.h, key, ks, kn, s.slot);
 }
 
-// Read-only, O(1): true when k (1 or 2) successive bud_store::entry_alloc calls would each return an entry. It mirrors
-// entry_alloc's choice exactly (free head if 3 <= fh < top and fh < cap, else the entry top if top < cap; the next free
-// head is normalized the same way). need() only checks live + entries <= cap, which a store whose header counters
-// disagree with its entry table (entry top high, free list empty) can pass; callers ask this before their first write
-// so an insert that needs k entries is refused whole instead of failing after the first one was linked. k <= 0: true.
+// Read-only, O(1): predicts whether the next one or two entry allocations can return entries. A reclaimed
+// descendant leaves the old head available behind it. Otherwise use entry_alloc's free-head and top rules.
+// k <= 0: true.
 pub fn alloc_ok(st: [i64], k: i64) -> bool
 {
   if k <= 0 { return true; }
@@ -1053,14 +1142,12 @@ pub fn alloc_ok(st: [i64], k: i64) -> bool
   let fh: i64 = hw(st, 8);
   if fh >= 3 && fh < top && fh < cap {
     if k < 2 { return true; }
-    let mut nx: i64 = gf(st, fh, 8);
-    if nx < -1 || nx >= top { nx = -1; }
-    if nx >= 3 && nx < top && nx < cap { return true; }
-    return top < cap;
+    let c: i64 = gf(st, fh, 9);
+    if len(st) >= 15 && gf(st, fh, 0) == 0 && c < cap && reclaimable(st, fh, c, top) { return true; }
+    let nx: i64 = gf(st, fh, 8);
+    return (nx >= 3 && nx < top && nx < cap) || top < cap;
   }
-  if top < cap {
-    if k < 2 { return true; }
-    return top + 1 < cap;
-  }
-  return false;
+  if top >= cap { return false; }
+  // On malformed buffers the top write can be out of range, or the old head can become eligible.
+  return k < 2 || len(st) <= 7 || top + 1 < cap || (fh >= 3 && fh == top);
 }

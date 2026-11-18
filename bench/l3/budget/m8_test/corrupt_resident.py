@@ -27,6 +27,9 @@ later calls covered):
   f  positive twins: no poke, and pokes that write the value already there
 Every poke must print `Z <i>`; `Z -` is a control error.
 
+Separate P21a expectations exercise a high entry top, a record overlapping the header, and reuse after lazy
+forget. These check NEW against the expected status and observation instead of comparing with OLD.
+
 The "different valid word" variants of the map keys (a-sk-*-valid, e-turn-valid, e-act-valid) use the driver `rekey`
 line instead of `poke`: a bare poke changes the stored key words but leaves the stored hash (entry word 6) and the slot
 table at the old key, so the "hit" op would miss and never reach the hit path. rekey checks that the stored hash equals
@@ -126,13 +129,13 @@ def line(tag, words):
     return tag + " " + " ".join(map(str, words))
 
 
-def record():
-    return [0, 0, -1] + LIM + [0] * 4 + [0, 0, 0] + kw(BID)
+def record(bid):
+    return [0, 0, -1] + LIM + [0] * 4 + [0, 0, 0] + kw(bid)
 
 
-def put_line():
-    r = record()
-    return line("put", kw(SK) + [len(r)] + r)
+def put_line(sk=SK, bid=BID):
+    r = record(bid)
+    return line("put", kw(sk) + [len(r)] + r)
 
 
 def poke(pattern, delta, value):
@@ -258,6 +261,96 @@ def split_cases(text):
     return res
 
 
+def run_cases(exe, program):
+    r = run([exe, "q"], input=program, text=True)
+    return split_cases(r.stdout)
+
+
+def p21a_controls(exe):
+    """Check NEW outcomes independently of the revision used for the a-f differential."""
+    hand = run_m8.build_hand("hand_m8_u16")
+    second_session = put_line([7007])
+    two_sessions = [put_line(), second_session]
+    # Two sessions force the 256-word initial store to 512 words (16 slots, 8 entries, top 5).
+    # Anchoring on all nine header words checks that the fixed offsets used by both pokes are correct.
+    header = [1112884307, 1, 512, 16, 16, 32, 8, 5, -1]
+    first_session_blob_off = header[5] + 20 * 3 + 12
+    add = SETUP[0]
+    # Use an empty budget ID so header word 15 (pending-Need, 0) matches the record's ID length at offset 1.
+    overlap = [put_line(bid=[]), second_session, poke(header, first_session_blob_off, 1)]
+    overlap_call = line("call", [3] + kw(SK) + kw([]) + kw(TURN) + kw(ACT))
+    # Fill all eight entries before forgetting. Reinsert the same keys, including a duplicate, to expose stale hits.
+    extra = line("call", [3] + kw(SK) + kw(BID) + kw(TURN) + kw(ACT_N1))
+    reuse = [put_line(), *SETUP, extra, line("call", [4] + kw(TURN)), *SETUP, extra, add]
+
+    def program(cases):
+        return "".join("\n".join(["case " + name, *body, "end", ""]) for name, body in cases.items())
+
+    got = run_cases(exe, program({
+        "a-high-top": [*two_sessions, poke(header, 7, header[6] - 1), add],
+        "b-header-blob": [*overlap, overlap_call],
+        "b-before-call": overlap,
+        "c-reuse": reuse,
+    }))
+    # The hand driver has no resident header. The clean equivalent gives the expected call log and state.
+    r = run([hand], input=program({"a-high-top": [*two_sessions, add], "c-reuse": reuse}), text=True)
+    ref = split_cases(r.stdout)
+    before = got["b-before-call"]
+    expected = {
+        "a-high-top": ["Z 0", *ref["a-high-top"]],
+        "b-header-blob": ["Z 0", "X 2", *before[1:]],
+        "c-reuse": ref["c-reuse"],
+    }
+    failed = 0
+    for name, want in expected.items():
+        ok = got[name] == want
+        if name == "b-header-blob":
+            ok = ok and len(before) == 3 and before[0] == "Z 0" and before[1].startswith("O ") and before[1] != "O X 2"
+        print("P21a %s: %s" % (name, "pass" if ok else "FAIL"))
+        if not ok:
+            print("  expected", want)
+            print("  got     ", got[name])
+            failed += 1
+    # Header views (driver `hdr`: buffer length, then header words 4..14) separate a reclaim from a Grow, which
+    # the logical observation above cannot: the driver retries Grow internally and `O` serializes reachable state.
+    hdr = "hdr"
+    reuse_g = [put_line(), *SETUP, extra, hdr, line("call", [4] + kw(TURN)), hdr, *SETUP, extra, hdr]
+    g = run_cases(exe, program({
+        "a-high-top": [*two_sessions, hdr, poke(header, 7, header[6] - 1), hdr, add, hdr],
+        "b-header-blob": [*overlap, hdr, overlap_call, hdr],
+        "c-reuse": reuse_g,
+    }))
+
+    def views(name):
+        return [list(map(int, l.split()[1:])) for l in g[name] if l.startswith("G ") and l != "G -"]
+
+    def word(v, i):  # header word i (4 <= i <= 14) of a view
+        return v[1 + i - 4]
+
+    checks = {}
+    v = views("a-high-top")
+    # the poke raises only word 7 (to cap - 1); the insert then needs two entries and must Grow, not fail
+    checks["a-high-top grows"] = (len(v) == 3 and v[1][0] == v[0][0] and word(v[1], 7) == header[6] - 1 and
+                                 [x for i, x in enumerate(v[1]) if i != 1 + 7 - 4] ==
+                                 [x for i, x in enumerate(v[0]) if i != 1 + 7 - 4] and v[2][0] > v[1][0])
+    v = views("b-header-blob")
+    checks["b-header-blob header words 4..14 unchanged"] = len(v) == 2 and v[0] == v[1]
+    v = views("c-reuse")
+    # before forget, after forget, after reinserting the same keys: no Grow, no new entries past the top, and the
+    # live entries (12) and live arena words (14) return to their values before the forget
+    checks["c-reuse reclaims"] = (len(v) == 3 and v[0][0] == v[1][0] == v[2][0] and
+                                  word(v[2], 7) == word(v[0], 7) and word(v[1], 12) < word(v[0], 12) and
+                                  word(v[2], 12) == word(v[0], 12) and word(v[2], 14) == word(v[0], 14))
+    for name, ok in checks.items():
+        print("P21a %s: %s" % (name, "pass" if ok else "FAIL"))
+        if not ok:
+            print("  views", views(name.split()[0]))
+            failed += 1
+    total = len(expected) + len(checks)
+    print("P21a expectations %d/%d" % (total - failed, total))
+    return failed
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pruvc", default=run_m8.PRUVC_DEFAULT)
@@ -267,12 +360,7 @@ def main():
     new_exe = build("new", a.pruvc, a.new_rev)
     old_exe = build("old", a.pruvc, a.old_rev)
     prog, pokes = build_program()
-    outs = {}
-    for label, exe in (("new", new_exe), ("old", old_exe)):
-        r = subprocess.run([exe, "q"], input=prog, capture_output=True, text=True)
-        if r.returncode != 0:
-            sys.exit("%s driver failed:\n%s" % (label, r.stderr[-3000:]))
-        outs[label] = split_cases(r.stdout)
+    outs = {"new": run_cases(new_exe, prog), "old": run_cases(old_exe, prog)}
     mism, notfound, bite_x2, bite_any = [], [], 0, 0
     for name in pokes:
         o, n = outs["old"].get(name), outs["new"].get(name)
@@ -301,7 +389,8 @@ def main():
         print("  old:")
         for l in outs["old"][name][:20]:
             print("    " + l)
-    return 1 if mism or notfound else 0
+    failed = p21a_controls(new_exe)
+    return 1 if mism or notfound or failed else 0
 
 
 if __name__ == "__main__":
