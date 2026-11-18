@@ -33,6 +33,9 @@ LIBS = ["--lib", "bench/l3/budget", "--lib", "bench/l3/lib"]
 sys.path.insert(0, BUD)
 from compare import jv_decode, jv_encode, UNDEF  # noqa: E402
 
+sys.path.insert(0, os.path.join(BUD, "m7_test"))
+from q_gate import failures as gate_failures, required_exact  # noqa: E402
+
 STATE = {"open": 0, "halted": 1, "closed": 2}
 STATE_N = {v: k for k, v in STATE.items()}
 ORIGIN = {"user": 0, "schedule": 1, "direct": 2, "release": 3}
@@ -331,7 +334,7 @@ def put_words(sess):
 
 # ---- driver program ----
 def call_body(op, args):
-    """[code, what x10, flag, sessionId key, budgetId key, runKey key] (the driver inserts now and quiet after the code
+    """[code, what x10, flag, sessionId key, budgetId key, runKey key] (the driver inserts now and a reserved zero after the code
     and appends its next runningDelegationIds answer)."""
     a = [x if (isinstance(x, dict) and "sess" in x) else jv_decode(x) for x in args]
     what = [0] * 10
@@ -515,7 +518,7 @@ def mine_effect(f, sid):
     """Driver effect words (f = split `E` line) -> effect tuple; sid = the request's session id units, None outside a
     request."""
     if f[0] == "quiet":
-        return ("isQuiet", int(f[1]))
+        return ("isQuiet", int(f[1]), tuple(map(int, f[2:-1])), f[-1])
     if f[0] == "set":
         return ("timer.set", f[1], int(f[3]))
     if f[0] == "clear":
@@ -647,7 +650,7 @@ def classify(case, o, run, cut):
         elif not same(v, wv):
             return "fail", "%s %s value %r != %r" % (r, e["op"], v, wv)
         got = [mine_effect(f, sid) for f in mine["fx"]]
-        wfx = oracle_fx(o, r)
+        wfx = [f + (tuple(key(sid)), "@0") if f[0] == "isQuiet" else f for f in oracle_fx(o, r)]
         if got != wfx:
             return "fail", "%s %s effects %r != %r" % (r, e["op"], got, wfx)
         if ("runningDelegationIds",) in got:
@@ -664,7 +667,10 @@ def classify(case, o, run, cut):
 
 
 def run_q(args, cases_f, oracle_f):
+    required = required_exact(HERE, cases_f)
     exe = build(args)
+    from lifecycle_controls import check_grow
+    check_grow(exe, m10=True)
     cases = [json.loads(l) for l in open(cases_f)]
     oracle = {}
     for l in open(oracle_f):
@@ -681,20 +687,25 @@ def run_q(args, cases_f, oracle_f):
     runs = parse_driver(r.stdout)
     count = {"exact": 0, "not-implemented": 0, "fail": 0}
     why, ops, fails = {}, {}, []
+    exact = set()
     STATS["halts"] = 0
     for c in cases:
         run = runs[c["id"]]
         for rq in run["order"]:
-            op = [e["op"] for e in c["script"] if e["ev"] == "call" and e["req"] == rq][0]
+            op = [e["op"] for e in c["script"] if e["ev"] == "call" and e["req"] == rq]
+            op = op[0] if op else "<unexpected>"
             ops[op] = ops.get(op, 0) + 1
         cls, note = classify(c, oracle[c["id"]], run, cuts[c["id"]])
         count[cls] += 1
+        if cls == "exact":
+            exact.add(c["id"])
         if cls == "not-implemented":
             why[note] = why.get(note, 0) + 1
         if cls == "fail":
             fails.append((c["id"], note))
     print(json.dumps({"cases": len(cases), "count": count, "reasons": why, "compared_requests": ops,
                       "halts_compared": STATS["halts"]}, ensure_ascii=False))
+    fails.extend(gate_failures(count, exact, required))
     for i, n in fails[:12]:
         print("FAIL", i, n[:900])
     return 1 if fails else 0
@@ -706,7 +717,7 @@ def cmd_q(args):
 
 def cmd_replay(args):
     """No replay across Grow (L3 P13b): run the q program from the smallest start (t_init's N, so calls hit Grow) and
-    from a start big enough that no call grows. isQuiet is called after reserve, and effect processing consumes
+    from a start big enough that no call grows. isQuiet is called after the room check, and effect processing consumes
     runningDelegationIds only after a successful attempt. Both runs must print the same log (effects, answers
     consumed, errors) and observation byte for byte; the small run must grow."""
     exe = build(args)

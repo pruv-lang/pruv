@@ -266,6 +266,10 @@ def base(cid, state=0, extra=(), quiet="1 1 1", uuids=UU3 + UU3, bid=BID, **kw_)
     return p
 
 
+def quiet_line(answer, sk):
+    return "E quiet " + " ".join(map(str, [answer] + kw(sk))) + " @0"
+
+
 def controls():
     out = []
 
@@ -346,8 +350,14 @@ def controls():
         p.call(code, SK, BID, 0 if code in (3, 4) else -1, 2 if code == 4 else -1)
         exp = {1: ["@ r0", "V 0"], 2: ["@ r0", "V 1"], 5: ["@ r0", "V 1"]}.get(code, ["@ r0", "X 2"])
         add("session absent code %d" % code, p.end(), exp)
+    other = [116, 117, 118, 119, 120]
+    p = base("quiet_keys", quiet="0 1")
+    p.add(put_line(other, rec([99])))
+    p.call(6, SK).call(6, other)
+    add("maybeClose two session keys", p.end(),
+        ["@ r0", quiet_line(0, SK), "V 1", "@ r1", quiet_line(1, other), "E changed", "V 2"])
     # maybeClose: quiet -1 on an open budget logs `E quiet -1` then `X 2`, on halted / closed / no-budget it is `V 1` (not asked)
-    for st, exp in ((0, ["@ r0", "E quiet -1", "X 2"]), (1, ["@ r0", "V 1"]), (2, ["@ r0", "V 1"])):
+    for st, exp in ((0, ["@ r0", quiet_line(-1, SK), "X 2"]), (1, ["@ r0", "V 1"]), (2, ["@ r0", "V 1"])):
         p = base("mcq", st, quiet="-1", ended=(1, ("ms", 7)) if st == 2 else None)
         p.call(6, SK)
         add("maybeClose quiet -1 state %d" % st, p.end(), exp)
@@ -545,6 +555,13 @@ def main():
         print(r.stdout[-1500:], end="" if r.stdout.endswith("\n") else "\n")
         if r.returncode != 0:
             print(r.stderr[-1500:])
+            rc = 1
+    from lifecycle_controls import check_attach, check_grow, check_tombstones
+    for check in (check_attach, check_tombstones, check_grow):
+        try:
+            check(drv)
+        except AssertionError as err:
+            print("FAIL", check.__name__, err)
             rc = 1
     return rc
 

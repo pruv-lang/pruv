@@ -57,6 +57,7 @@ struct World {
     by_bid: HashMap<Vec<i64>, u64>,
     log: Vec<String>,
     silent: bool,
+    audit: bool,
 }
 
 // Data words of a packed key of n units: ceil(n / 4).
@@ -104,6 +105,7 @@ impl World {
             by_bid: HashMap::new(),
             log: Vec::new(),
             silent: false,
+            audit: false,
         }
     }
 
@@ -158,7 +160,13 @@ impl World {
         for _ in 0..8 {
             self.fx[0] = 0;
             ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let snapshot = self.audit.then(|| (self.st.clone(), self.fx.clone(), self.out.clone(), bud_facts::calls()));
             r = sol::t_call(&mut self.st, &op, &mut self.bv, &mut self.fx, &mut self.out);
+            if let Some((st, fx, out, before)) = snapshot {
+                self.log.push(format!("A {} {} {} {} {} {} {:?}",
+                    r, bud_facts::calls() - before, self.st == st, self.fx == fx,
+                    self.out == out, self.out[0], &self.fx[1..1 + self.fx[0] as usize]));
+            }
             if r < 0 {
                 self.grow((-r) as usize);
                 grew = true;
@@ -169,7 +177,7 @@ impl World {
         let after = bud_facts::calls();
         if !self.silent {
             for i in before..after {
-                self.log.push(format!("E quiet {}", bud_facts::answer(i)));
+                self.log.push(bud_facts::quiet_log(i));
             }
         }
         if grew && r == 0 && self.fx[0] > 0 {
@@ -363,11 +371,19 @@ fn run_q() {
         match p[0] {
             "case" => {
                 w = World::new();
+                bud_facts::record_queries();
                 bud_facts::set_answers(&[], 0);
                 bud_facts::set_calls(0);
                 writeln!(o, "case {}", p[1]).unwrap();
             }
             "now" => w.now = p[1].parse().unwrap(),
+            "audit" => {
+                w.audit = true;
+                w.out.fill(-99);
+                w.fx[1..].fill(-99);
+            }
+            // Test-only: consume the remaining arena with unreferenced padding.
+            "fill_arena" => w.st[10] = w.st[11],
             "quiet" => bud_facts::set_answers(&nums(&p[1..]), 0),
             "rdi" => w.rdi.push(nums(&p[1..])),
             "put" => w.put(&nums(&p[1..])),

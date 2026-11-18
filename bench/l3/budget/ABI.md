@@ -82,15 +82,17 @@ Rows for the M7 lifecycle test entry only; the M3 encoding above is unchanged.
 
 | row | words |
 |---|---|
-| op | `[code, now, quiet, origin, size, unit x5, defaultUnlimited, sessionId key, budgetId key, uuid key]`, key = `n, words(n) packed words` (packed-u16: `ceil(n/4)` i64 words, big-endian u16 lanes, zero tail lanes; P05b) |
+| op | `[code, now, reserved, origin, size, unit x5, defaultUnlimited, sessionId key, budgetId key, uuid key]`, key = `n, words(n) packed words` (packed-u16: `ceil(n/4)` i64 words, big-endian u16 lanes, zero tail lanes; P05b) |
 | code | 1 current, 2 isHalted, 3 attach, 4 replaceForUserMessage, 5 reopen, 6 maybeClose |
-| quiet | the host's `isQuiet()` answer, supplied up front on every call: 0 / 1; -1 = not known |
-| fx | `fx[0]` = words used; effects 13 timerClear, 20 changed, 21 carryHeld (the old id is in out), 22 uuid consumed, 23 isQuiet consulted (maybeClose only, always the first effect) |
+| reserved | the host writes 0 to `op[2]` |
+| fx | `fx[0]` = words used; effects 13 timerClear, 20 changed, 21 carryHeld (the old id is in out), 22 uuid consumed |
 | out tag 3 | `[3, n, words(n) packed words]` budget id ref; replaceForUserMessage with effect 21 appends the old id `[m, words(m) packed words]` (P05b: ids stay packed, the host unpacks at egress) |
 | out tag 4 | `[4, n, off]` budget view (current): the record is `st[off..off+n)`, valid until the next call that changes `st` |
-| status | 0 done, 2 invalid, 3 out / fx too small, 5 Need isQuiet (only when quiet = -1), -N Grow (grow to N words, call again) |
+| status | 0 done, 2 invalid, 3 out / fx too small, -N Grow (grow to N words, call again) |
 
-The host consumes its next `isQuiet` answer only when the effects hold `[23]` (also on a non-zero status), so the
-call count on the host side matches the reference, which consults `isQuiet` once and only after the session, state
-and clock checks pass. Before this change `maybeClose` returned 5 to ask and the host called again, and `current`
-copied the record into `out` as `[4, n, words...]`.
+Inside `maybeClose`, `is_quiet(k, ks, kn, fxn)` synchronously queries the session.
+The key starts at word `ks`, has `kn` u16 units, and occupies `ceil(kn/4)` packed words.
+The host answers 0 (false) or 1 (true). Any other answer returns status 2 without writing
+state, effects, or the result. The drivers log each query as
+`E quiet <answer> <kn> <packed words...> @<fxn>`, where `fxn` counts effects at query time
+and is 0 for `maybeClose`.

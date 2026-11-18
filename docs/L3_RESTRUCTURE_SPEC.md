@@ -346,7 +346,7 @@ python3 bench/l3/budget/perf_headroom/host/run.py --only m4
 python3 bench/l3/budget/perf_headroom/compiler/run_compiler_perf.py --rounds 7
 ```
 
-Repeat generate/oracle/runner for M8=Q2/work/m8, M9=Q3/work/m9, M10=Q4,Q5/work/m10; run derive/same where supported, with fresh oracle for derived cases. M11 uses `PRUVC_RS="$PWD/pruvc-rs/target/release/pruvc" python3 bench/l3/budget/m11_test/run_m11.py --pairs rs --count 300 --seed 20261117`. Quote paths individually inside --impl; new runners use argv. These commands are templates, not execution results.
+Repeat generate/oracle/runner for M8=Q2/work/m8, M9=Q3/work/m9, M10=Q4,Q5/work/m10 (M10 exactly: `q_gen.py --families Q4,Q5 --per-family 150 --out bench/l3/budget/work/m10/cases.jsonl`; its `cases.exact.json` sha256 pins that file, and `run_m10.py derive` writes `cases_halt.jsonl` from it, pinned by `cases_halt.exact.json`); run derive/same where supported, with fresh oracle for derived cases. M11 uses `PRUVC_RS="$PWD/pruvc-rs/target/release/pruvc" python3 bench/l3/budget/m11_test/run_m11.py --pairs rs --count 300 --seed 20261117`. Quote paths individually inside --impl; new runners use argv. These commands are templates, not execution results.
 
 S/M are proposed profile names, not current CLI flags: S=100 sessions/calls,10 runs/delegations/clocks; M=500 sessions/calls,50 runs/delegations/clocks. Vary state size and call count independently. Existing M4/M7/M8 grids are 100/500/1000; M9/M10 10/50/100: run/extract those. M11 A=100/300/1000,B=100/500/1000,C=100/1000 (`B/m11_test/run_m11.py:355-356`); add 500 for A/C before uniform S/M claims. Do not invent --sizes for milestone runners. `perf_budget.py --axes sessions,calls --sizes 100,500 --repeat 5` is TS-only (`B/perf_budget.py:20-28`); add native/hand lanes. Final grids: `docs/REQUEST_BUDGET_SPEC.md:940-946`.
 
@@ -3488,3 +3488,183 @@ One package audit (Codex gpt-6.2-astra, ultra) on the merged tree, one confirm o
 
 Proof/encoding judgement, the fixes, the gates, perf, RSS and proof-time measurement were done directly
 (Claude Opus 5.5).
+
+## Appendix P19a (row B/bud_lifecycle.pruv, bud_map.pruv, m7_test, m10_test, ABI.md: P19 audit R1-R6, O1)
+
+Commits 7c71eec (R1), 3ceb82c (R2-R6, O1) and the commit with this appendix (package-audit fixes); base e8acbf9
+(main, P21b + P22; unchanged, no merge needed). Changed files: `bench/l3/budget/{bud_map.pruv,bud_lifecycle.pruv,ABI.md}`,
+`bench/l3/budget/m7_test/{bud_facts.rs,driver_m7.rs,hand_m7_u16.rs,diff_hand_m7.py,run_m7.py,q_gate.py,
+q_gate_control.py,lifecycle_controls.py,mutant_quiet.py,cases.exact.json,cases_life.exact.json}`,
+`bench/l3/budget/m10_test/{driver_m10.rs,run_m10.py,cases.exact.json,cases_halt.exact.json}`. No compiler file,
+`bud_clock.pruv` or `m9_test` change. Raw logs: `work/p19a/` (not committed).
+
+### P19a.1 Change
+
+- R1: `bud_map::room` splits into `room_plan` (decision only, no writes) and `room_apply` (`ensures p != -1 ==>`
+  `st` unchanged word for word). `maybe_close` plans before `is_quiet` and rebuilds the slot table only after
+  answer 1, before the first `out` write. Answer 0 or an invalid answer (status 2) leaves raw `st` unchanged
+  (`docs/REQUEST_BUDGET_SPEC.md:813`). A positive Grow returns before the query.
+- R2: `lifecycle_controls.py` adds an attach fixture. The id is declared past the end of its record, a neighbour
+  session follows, and the fixture expects status 2 with `st`, `fx` and `out` unchanged.
+- R3: `is_quiet(k, ks, kn, fxn)` also takes the effect count so far (`fx[0]`). `bud_facts` logs each query with the
+  packed session key, its length and the effect count, on both the Pruv and hand16 sides. `mutant_quiet.py` builds
+  three mutants: effect before the query, wrong (empty) key, and rehash before the query.
+- R4: the M7 and M10 drivers check each attempt over a forced Grow.
+  - The first attempt must return a negative status with 0 queries and `st/fx/out` unchanged.
+  - The retry with answer 0, 1 or 2 must make exactly 1 query and give the exact result and effects. With answer 2
+    the `out` marker must also be kept.
+- R5: `q_gate.py` pins the required exact case ids to the corpus sha256 in `*.exact.json`. Q fails when every
+  case is not-implemented, and it also fails when the expected request order is reversed. `q_gate_control.py`
+  checks both runners.
+- R6: a standalone CLOSE lane on both sides. The reset runs outside timing, and both sides consume the same
+  `(status, tag)` per call.
+- O1: `ABI.md` describes `isQuiet` as a synchronous host call (`op[2]` is reserved 0) and states the packed key
+  span, status 2 on an invalid answer, and the effect count in the query log.
+- Package-audit fixes (this commit; harness and spec only, no Pruv change):
+  - R5 manifest: a missing manifest for a canonical corpus (`cases`, `cases_life`, `cases_halt`) is a failure
+    (`FAIL Q ... required-id manifest ... is missing`). Before, it meant "no required ids", so 1 exact and 299
+    not-implemented passed. Other corpora still get an empty set.
+  - R5 reproducibility: §M10 now states the exact generator command (`--families Q4,Q5 --per-family 150`; the
+    sha256 of `--count 300` differs because it interleaves the two families) and says that `run_m10.py derive`
+    makes `cases_halt.jsonl` from that file. Regenerated corpora match all four manifests (sha `c0bec614...` for
+    M10).
+  - R6 count: CLOSE `prep` and `observe` now run exactly `reps` ops, cycling `k % size`, and are divided by `reps`
+    like A and C. Before, they ran `reps x size` ops.
+  - R6 restore: the instruction counts of `perf` and `boundary` skip `close` (`NO_INSTR_ITEMS`; boundary prints `-`). The per-batch restore is
+    outside the ns timer but inside the process instruction counter, and it differs by side: Pruv copies raw
+    `st`, while hand16 calls `put(rec.clone())` for each session. The time asymmetry is measured in P19a.3.
+  - R6 key: hand16 wire passes the verified packed key span of the original op (`op[12..sk_end]`) straight to
+    `is_quiet`, as Pruv does. The typed path packs the key into a 64-word stack buffer, with a heap fallback above
+    256 units. No bench key reaches the heap path.
+  - R6 self-check: `run_boundary` steps the reference world and the candidate world in lockstep and compares
+    `(out, fx, bv, st)` after each call, in linear space. Before, it kept a snapshot of every call (quadratic).
+
+### P19a.2 Gates (Rust and Python compilers, Rust backend; all rc 0)
+
+- Verify (`work/p19a/gates_final.log`): all 7 roots (m8, m4, admit, m7, m9, m10, m11) pass on both compilers,
+  rc 0. The audit fixes do not touch Pruv sources.
+- Post-audit rerun (`work/p19a/q2.sh` -> `q2.log`, `ALL fail=0`):
+
+| gate | rs | py | hand16 |
+|---|---|---|---|
+| M7 Q (exact / not-implemented / fail) | 113/187/0 | same | same |
+| M7 life | 300/0/0 | same | same |
+| diff_hand_m7 --rebuild | mismatches 0 | - | - |
+| mutant_quiet | 3/3 caught | - | - |
+| lifecycle_controls (R1, R2, R4) | rc 0 | - | - |
+| q_gate_control | rc 0 | - | - |
+| M10 Q | 78/222/0, Grow answers 0/1/2: queries 0 then 1 | same | - |
+| M10 halt | 300/0/0 | same | - |
+| replay `same` | M7 257341 B identical, M10 275398 B identical | - | - |
+| boundary SM | checksum problems none, close allocs 0 on every variant | - | - |
+
+### P19a.3 Time (Rust backend, ns per op, interleaved rounds, floor 1.0x)
+
+Rounds alternate the four lanes (`work/p19a/close_ab.py`, `item_ab.py`). A difference counts as noise only when
+the interquartile ranges overlap.
+
+| cell | Pruv (IQR) | hand16 (IQR) | ratio | verdict |
+|---|---:|---:|---:|---|
+| close wire, size 100, 21 rounds | 57.9 (57.2-59.1) | 57.4 (56.5-58.5) | 1.009 | overlap, noise |
+| close typed, size 100, 21 rounds | 30.3 (29.9-30.6) | 26.8 (26.5-27.4) | 1.131 | no overlap, explained below |
+| close typed, size 100, hand with matched restore, 15 rounds | 31.3 (30.5-32.1) | 30.9 (30.2-36.2) | 1.013 | overlap, noise |
+| close wire, size 500, 15 rounds | 125.2 (118.1-127.1) | 119.4 (118.3-121.6) | 1.049 | overlap, noise |
+| close typed, size 500, 15 rounds | 30.9 | 30.6 | 1.010 | overlap, noise |
+| current typed, size 100, 15 rounds | 13.1 (12.8-13.2) | 12.6 (12.5-13.0) | 1.040 | overlap, noise |
+| current wire, size 100 / 500 | - | - | 0.647 / 0.640 | below 1.0x |
+| current typed, size 500 | - | - | 1.008 | overlap, noise |
+
+Close typed at size 100 explained line by line (`work/p19a/close_evict.log`):
+
+- Before each batch of `size` calls, outside the ns span, the lane restores the state.
+  - Pruv copies raw `st`: 32768 words (256 KiB) at size 100, 131072 words at size 500.
+  - hand16 rewrites only its few small session records.
+  - So Pruv evicts the cache lines that the next batch reads, and hand16 does not.
+- Matched control: hand16 copies a 32768-word buffer on each restore (`EVW=32768`). Alternated with Pruv, it gives
+  30.9 vs 31.3 (1.013, overlap).
+- Without the copy, hand16 itself also rises from 26.8 (size 100) to 30.6 (size 500), while Pruv stays flat. The
+  gap is the harness restore, not the close path.
+- The close path itself does one `room_plan`, one `is_quiet` and, on answer 1, `room_apply`, with no allocation.
+
+The P19 cells attach, closereopen and reopenmiss are not touched by P19a. Their earlier measurements stay as P19
+records them.
+
+### P19a.4 Hand vs generated
+
+The two sides make the same host call. hand16 wire passes the original packed key span as Pruv does, and typed
+hand16 packs onto the stack. Pruv's close runs on the flat store, with one span check per entry and the write-free
+plan. hand16 uses a hash map of structs. The two close paths are within noise of each other once the restore
+traffic is matched.
+
+### P19a.5 RSS and allocations
+
+Allocations: close is 0 per call on every Pruv variant and on hand16 (boundary log, hand count), and close does
+not grow `st`.
+
+Peak RSS in bytes (`/usr/bin/time -l`). The earlier note of 950272 B came from a different setup, could not be
+reproduced this way, and is replaced:
+
+| process | Pruv driver | hand16 |
+|---|---:|---:|
+| baseline (noop B / perf none) | 2981888 | 1638400 |
+| close, size 100, reps 1 | 4046848 | 2097152 |
+| close, size 100, reps 200000 | 3309568 (C), 3768320 (A) | 2097152 (typed), 2179072 (wire) |
+| close, size 500, reps 200000 | 6864896 | 3375104 |
+
+- The excess is flat in reps.
+- It grows with the session count, because the store layout keeps one i64 per UTF-16 unit and a power-of-two
+  arena: at 100 sessions, `st` is 256 KiB for about 112 KiB of live data.
+- Every M7 lane shares this layout, so it is not new in P19a. The driver also has a higher fixed baseline, which
+  is code size (P13d).
+- Queued (P19a.7).
+
+### P19a.6 Proof time
+
+Verify times on all 7 roots stay within run-to-run spread of P19 (`gates_final.log`).
+- `room_plan`/`room_apply` adds one function pair with frame `ensures`.
+- No `assume` or `trusted` was added except the existing host `is_quiet`, which gains the `fxn` argument.
+
+### P19a.6a Audit
+
+One package audit (Codex gpt-6.2-astra, ultra) on `git diff e8acbf9`.
+
+- Passed: R1, R2, R3, R4 and O1. The rehash conditions are kept, an invalid answer returns before any write, the
+  mutants change the logged key or effect count, the Grow attempts are checked per attempt, and the ABI text
+  matches the code.
+- REQUIRED, all fixed as P19a.1 "package-audit fixes":
+  - R5 missing manifest.
+  - R5 M10 generator command.
+  - R6 `observe` count (`reps x size`).
+  - R6 restore in the instruction count.
+  - R6 hand16 wire key repack.
+  - R6 quadratic self-check snapshot.
+  - R6 `prep` count.
+- The audit did not run perf. The P19a.3 numbers were taken after the count fixes.
+- Confirm audit (Codex gpt-6.2-astra, ultra) on the fixes: 6 of 7 resolved, none introduced a new required
+  issue. The open one was the restore in the instruction count: `perf` skipped `close`, but `boundary` still
+  reported its process-count difference per call. `boundary` now skips `close` too (checked: close rows and their
+  derived rows print `-`, the other items keep their counts, rc 0).
+
+### P19a.7 Queued rows
+
+- M7 store layout: Pruv peak RSS on the M7 lanes is 1.82x (baseline) to 2.03x (size 500 close) of hand16.
+  - Causes: one i64 per UTF-16 unit, a power-of-two arena, and code size (P13d/P13e).
+  - It belongs to a `bud_store` layout row, not to this lifecycle row.
+- CLOSE lane restore: the per-batch restore differs by side (raw `st` copy vs record puts).
+  - Today `close` is excluded from the instruction decomposition, and the time cells are explained by a matched
+    restore control.
+  - A restore that costs the same on both sides (or a per-op undo) would remove the control.
+- The CLOSE lane at a large `size` keeps `size` sessions live, so it measures a cold slot table. A warm-cache
+  variant is not measured.
+
+### P19a.8 Delegation
+
+| work | model |
+|---|---|
+| harness research (R3-R6 options) | Codex gpt-6.2-astra, high |
+| harness write (R2-R6, O1, R1 control, mutants) | Codex gpt-6.2-sol |
+| package audit | Codex gpt-6.2-astra, ultra |
+| confirm audit | Codex gpt-6.2-astra, ultra |
+
+R1 (`room_plan`/`room_apply` and the proofs) was done directly (Claude Opus 5.5). So were applying and fixing the
+delegated harness, the hand16 key path, the audit fixes, the gates, and the perf, RSS and allocation measurements.

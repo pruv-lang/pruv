@@ -33,6 +33,7 @@ struct World {
     next_uuid: usize,
     log: Vec<String>,
     silent: bool,
+    audit: bool,
     // perf only (silent): the ops built so far, keyed by (body address, body length, uuid index). The perf
     // bodies are fixed vectors, so a host that keeps its prepared arguments does not rebuild them on every call.
     ops: Vec<((usize, usize, usize), Vec<i64>)>,
@@ -60,6 +61,7 @@ impl World {
             next_uuid: 0,
             log: Vec::new(),
             silent: false,
+            audit: false,
             ops: Vec::new(),
         }
     }
@@ -146,7 +148,13 @@ impl World {
         let before = bud_facts::calls();
         for _ in 0..8 {
             self.fx[0] = 0;
+            let snapshot = self.audit.then(|| (self.st.clone(), self.fx.clone(), self.out.clone(), bud_facts::calls()));
             r = sol::t_call(&mut self.st, &op, &mut self.bv, &mut self.fx, &mut self.out);
+            if let Some((st, fx, out, before)) = snapshot {
+                self.log.push(format!("A {} {} {} {} {} {} {:?}",
+                    r, bud_facts::calls() - before, self.st == st, self.fx == fx,
+                    self.out == out, self.out[0], &self.fx[1..1 + self.fx[0] as usize]));
+            }
             if r < 0 {
                 self.grow((-r) as usize);
                 continue;
@@ -156,7 +164,7 @@ impl World {
         let after = bud_facts::calls();
         if !self.silent {
             for i in before..after {
-                self.log.push(format!("E quiet {}", bud_facts::answer(i)));
+                self.log.push(bud_facts::quiet_log(i));
             }
         }
         self.put_op(slot, op);
@@ -286,12 +294,34 @@ fn run_q() {
         match p[0] {
             "case" => {
                 w = World::new();
+                bud_facts::record_queries();
                 bud_facts::set_answers(&[], 0);
                 bud_facts::set_calls(0);
                 writeln!(o, "case {}", p[1]).unwrap();
             }
             "now" => w.now = p[1].parse().unwrap(),
             "uuids" => w.uuids = keys(&nums(&p[1..])),
+            "audit" => {
+                w.audit = true;
+                w.out.fill(-99);
+                w.fx[1..].fill(-99);
+            }
+            // Test-only: consume the remaining arena with unreferenced padding.
+            "fill_arena" => w.st[10] = w.st[11],
+            "dump" => w.log.push(format!("S {:?}", w.st)),
+            "tombstones" => {
+                // Turn unused slots into tombstones without moving any live entry.
+                let slots = w.st[4];
+                assert!(w.st[12] <= slots * 3 / 8);
+                for i in 16..16 + slots as usize {
+                    if w.st[i] == 0 && w.st[13] <= slots / 2 {
+                        w.st[i] = -1;
+                        w.st[13] += 1;
+                    }
+                }
+                assert_eq!(w.st[13], slots / 2 + 1);
+                assert!(w.st[11] - w.st[10] >= 64);
+            }
             "quiet" => bud_facts::set_answers(&nums(&p[1..]), 0),
             "put" => w.put(&nums(&p[1..])),
             "del" => w.del(&nums(&p[1..])),
@@ -522,6 +552,51 @@ fn run_perf(args: &[String]) {
     println!("attach {} {:.1}", size, time(&mut w, &ops, 1));
     println!("rchk attach {} {}", size, verify(&mut setup(0), &ops));
     typed("attach", 0, &ops, 1, None);
+    let close: Vec<_> = sids.iter().map(|sid| {
+        let mut v = vec![6, -1, -1];
+        v.extend(unit);
+        v.extend(key(sid));
+        v.push(0);
+        v
+    }).collect();
+    for direct in [false, true] {
+        let mut w = setup(0);
+        let open = w.st.clone();
+        let ps: Vec<_> = close.iter().map(|b| prep_of(&mut w, b)).collect();
+        let call = |w: &mut World, i: usize| {
+            if direct { c_direct(w, &ps[i]) } else { w.call(black_box(&close[i])) }
+        };
+        for i in 0..size {
+            assert_eq!(call(&mut w, i), 0);
+        }
+        let mut elapsed = std::time::Duration::ZERO;
+        for start in (0..reps).step_by(size) {
+            w.st.copy_from_slice(&open);
+            let t = Instant::now();
+            for i in 0..size.min(reps - start) {
+                let r = call(&mut w, i);
+                black_box((r, w.out[0]));
+            }
+            elapsed += t.elapsed();
+        }
+        let mut sum = 0;
+        for start in (0..vn).step_by(size) {
+            w.st.copy_from_slice(&open);
+            for i in 0..size.min(vn - start) {
+                let r = call(&mut w, i);
+                assert_eq!((r, w.out[0], &w.fx[..2]), (0, 2, &[1, 20][..]));
+                sum = rchk_fold(&w, r, sum);
+            }
+        }
+        let ns = elapsed.as_nanos() as f64 / reps as f64;
+        if direct {
+            println!("t close {} {:.1}", size, ns);
+            println!("rchk_t close {} {}", size, sum);
+        } else {
+            println!("close {} {:.1}", size, ns);
+            println!("rchk close {} {}", size, sum);
+        }
+    }
     // close + reopen cycle: maybeClose (quiet) then reopen
     let mut w = setup(0);
     let ops = vec![body(6, -1, -1, ""), body(5, -1, -1, &bid(last))];
@@ -847,6 +922,13 @@ fn run_boundary(args: &[String]) {
     let r = rec(&bid(last), 1, PERF_REST);
     put.push(r.len() as i64);
     put.extend(r);
+    let close = sids.iter().map(|sid| {
+        let mut v = vec![6, -1, -1];
+        v.extend(unit);
+        v.extend(key(sid));
+        v.push(0);
+        v
+    }).collect();
     let items = vec![
         Item { name: "current", bodies: vec![body(1, -1, -1, &bid(last))], state: 0, put: None },
         Item { name: "ishalted", bodies: vec![body(2, -1, -1, &bid(last))], state: 0, put: None },
@@ -857,6 +939,7 @@ fn run_boundary(args: &[String]) {
             state: 0,
             put: None,
         },
+        Item { name: "close", bodies: close, state: 0, put: None },
         Item { name: "reopenmiss", bodies: vec![body(5, -1, -1, &bid(last))], state: 0, put: None },
         Item { name: "replace", bodies: vec![body(4, 0, 2, "")], state: 1, put: Some(put) },
         Item { name: "noop", bodies: vec![body(0, -1, -1, &bid(last))], state: 0, put: None },
@@ -873,37 +956,29 @@ fn run_boundary(args: &[String]) {
         }
     };
 
-    // Self-check: each variant once on fresh state; call status, out, fx, bv and state words must equal A's.
+    // Self-check: each variant once on fresh state, in lockstep with A; after every call the status, out, fx, bv and
+    // state words must equal A's (compared per step, so memory stays linear in the state size).
     for it in &items {
         if only_item.map_or(false, |o| o != it.name) {
             continue;
         }
-        let vars: &[Var] = if it.name == "noop" { &[Var::A, Var::B] } else { &[Var::A, Var::B, Var::Bnv, Var::C] };
-        let mut want: Option<Vec<i64>> = None;
+        let vars: &[Var] = if it.name == "noop" { &[Var::B] } else { &[Var::B, Var::Bnv, Var::C] };
+        let expect = if it.name == "noop" { 2 } else { 0 };
         for &v in vars {
-            let mut w = setup(it);
-            let ps: Vec<Prep> = it.bodies.iter().map(|b| prep_of(&mut w, b)).collect();
-            let mut snap: Vec<i64> = Vec::new();
+            let mut wa = setup(it);
+            let mut wv = setup(it);
+            let pa: Vec<Prep> = it.bodies.iter().map(|b| prep_of(&mut wa, b)).collect();
+            let pv: Vec<Prep> = it.bodies.iter().map(|b| prep_of(&mut wv, b)).collect();
             for (i, b) in it.bodies.iter().enumerate() {
-                let r = one(v, &mut w, b, &ps[i]);
-                let expect = if it.name == "noop" { 2 } else { 0 };
-                if r != expect {
-                    eprintln!("self-check: {} variant {} status {} (want {})", it.name, v as usize, r, expect);
+                let ra = one(Var::A, &mut wa, b, &pa[i]);
+                let rv = one(v, &mut wv, b, &pv[i]);
+                if ra != expect || rv != expect {
+                    eprintln!("self-check: {} step {} status A {} variant {} {} (want {})", it.name, i, ra, v as usize, rv, expect);
                     std::process::exit(2);
                 }
-                snap.push(r);
-                snap.extend_from_slice(&w.out);
-                snap.extend_from_slice(&w.fx);
-                snap.extend_from_slice(&w.bv);
-                snap.extend_from_slice(&w.st);
-            }
-            match &want {
-                None => want = Some(snap),
-                Some(x) => {
-                    if *x != snap {
-                        eprintln!("self-check: {} variant {} differs from A (out/fx/bv/state words)", it.name, v as usize);
-                        std::process::exit(2);
-                    }
+                if (&wa.out, &wa.fx, &wa.bv, &wa.st) != (&wv.out, &wv.fx, &wv.bv, &wv.st) {
+                    eprintln!("self-check: {} step {} variant {} differs from A (out/fx/bv/state words)", it.name, i, v as usize);
+                    std::process::exit(2);
                 }
             }
         }
@@ -923,6 +998,61 @@ fn run_boundary(args: &[String]) {
             let per = it.bodies.len();
             let mut sum: u64 = 0;
             let (ns, allocs);
+            if it.name == "close" && matches!(vn, "prep" | "observe") {
+                // exactly reps operations, cycling the sessions as the timed close loop does (one close per op)
+                let mut r = 0;
+                if vn == "observe" {
+                    r = one(Var::A, &mut w, &it.bodies[0], &ps[0]);
+                }
+                let mut op_k = |w: &mut World, k: usize, sum: &mut u64| {
+                    if vn == "prep" {
+                        let b = &it.bodies[k % size];
+                        w.next_uuid = 0;
+                        bud_facts::set_calls(0);
+                        let (slot, op) = w.take_op(black_box(b));
+                        *sum = sum.wrapping_add(black_box(&op).len() as u64);
+                        w.put_op(slot, op);
+                    } else {
+                        *sum = consume(black_box(w), black_box(r), *sum);
+                    }
+                };
+                for k in 0..1000 {
+                    op_k(&mut w, k, &mut sum);
+                }
+                sum = 0;
+                let a0 = ALLOCS.load(Ordering::Relaxed);
+                let t = Instant::now();
+                for k in 0..reps {
+                    op_k(&mut w, k, &mut sum);
+                }
+                ns = t.elapsed().as_nanos() as f64 / reps as f64;
+                allocs = (ALLOCS.load(Ordering::Relaxed) - a0) as f64 / reps as f64;
+                println!("{} {} {} {:.2} {} {:.3}", it.name, vn, size, ns, black_box(sum), allocs);
+                continue;
+            }
+            if it.name == "close" && matches!(vn, "A" | "B" | "Bnv" | "C") {
+                let v = match vn { "A" => Var::A, "B" => Var::B, "Bnv" => Var::Bnv, _ => Var::C };
+                let open = w.st.clone();
+                seq(it, v, &mut w, &ps, &mut sum);
+                sum = 0;
+                let mut elapsed = std::time::Duration::ZERO;
+                let mut allocated = 0;
+                for start in (0..reps).step_by(size) {
+                    w.st.copy_from_slice(&open);
+                    let a0 = ALLOCS.load(Ordering::Relaxed);
+                    let t = Instant::now();
+                    for i in 0..size.min(reps - start) {
+                        let r = one(v, &mut w, &it.bodies[i], &ps[i]);
+                        sum = consume(&w, r, sum);
+                    }
+                    elapsed += t.elapsed();
+                    allocated += ALLOCS.load(Ordering::Relaxed) - a0;
+                }
+                ns = elapsed.as_nanos() as f64 / reps as f64;
+                allocs = allocated as f64 / reps as f64;
+                println!("{} {} {} {:.2} {} {:.3}", it.name, vn, size, ns, black_box(sum), allocs);
+                continue;
+            }
             match vn {
                 "prep" => {
                     let mut once = |w: &mut World, sum: &mut u64| {
