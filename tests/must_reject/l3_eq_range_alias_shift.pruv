@@ -1,0 +1,5 @@
+// P16 must reject: one array compared with itself at a shifted start is not always true
+pub fn f(a: [i64], n: i64) -> bool
+  requires 0 <= n && n + 1 <= len(a)
+  ensures result
+{ return eq_range(a, 0, a, 1, n); }
