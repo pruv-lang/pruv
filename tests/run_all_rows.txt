@@ -1435,6 +1435,7 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_a02_option_find.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_a03_result_half.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_a04_slice_str.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_guard_names.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_liar_ensures_all.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_liar_panic.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--foreign-checks", "all"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_m01_i64_basic.pruv"}
@@ -1489,6 +1490,7 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--foreign-checks", "off"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_a02_option_find.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--foreign-checks", "off"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_a03_result_half.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--foreign-checks", "off"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_a04_slice_str.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--foreign-checks", "off"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_guard_names.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--foreign-checks", "off"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_liar_ensures_quiet.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--foreign-checks", "off"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_liar_panic.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--foreign-checks", "off"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_m01_i64_basic.pruv"}
@@ -1987,6 +1989,7 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_a02_option_find.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_a03_result_half.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_a04_slice_str.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_guard_names.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_liar_ensures_quiet.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_liar_panic.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_m01_i64_basic.pruv"}
@@ -2615,6 +2618,7 @@
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_a02_option_find.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_a03_result_half.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_a04_slice_str.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_guard_names.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_liar_ensures_quiet.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_liar_panic.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/g6_m01_i64_basic.pruv"}
