@@ -399,6 +399,8 @@ def judge(case, exp, answers, calls, halted):
         for b in brefs:
             if final_brefs.get(sid) != b:
                 problems.append(f"{c['req']}: bref {b} is not the budget of session {sid!r}")
+        if end != len(w):
+            problems.append(f"{c['req']}: result V ends at word {end} of {len(w)}")
         if canon(got) != canon(want):
             problems.append(f"{c['req']}: value\n   want {canon(want)[:400]}\n   got  {canon(got)[:400]}")
         ec = counts.get(c['req'], {k: 0 for k in COUNTED})

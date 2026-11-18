@@ -142,6 +142,11 @@ pub fn admit(b: &[u8]) -> bool {
     skip(b, 0, 1) == Some(b.len())
 }
 
+/// Admission of a packet whose top value sits at depth `d` of the stored / returned V words (depth <= 32 overall).
+pub fn admit_at(b: &[u8], d: u32) -> bool {
+    skip(b, 0, d) == Some(b.len())
+}
+
 // ---- JB access (all of it assumes an admitted packet) ----
 
 fn end(b: &[u8], at: usize) -> usize {
@@ -575,8 +580,11 @@ impl Store {
     /// Same work as root.pruv m11_set_card: admission of card / lang / by, shape checks, then on success the result words
     /// [k, used_now, saved, changed, findSession, {ok: true, budget}] written into `out`.
     pub fn set_card(&mut self, rf: &[i64], sid: &[i64], card: &[u8], lang: &[u8], by: &[u8], now_ms: i64, out: &mut Vec<i64>) -> i64 {
-        if v_end(rf, 0) != Some(rf.len()) || card.is_empty() { return 0; }
-        if !admit(card) || (!lang.is_empty() && !admit(lang)) || (!by.is_empty() && !admit(by)) { return -2; }
+        if v_end(rf, 0) != Some(rf.len()) { return 0; }
+        // by is stored at budget.card.by and returned one level deeper: its top value sits at depth 4
+        if (!card.is_empty() && !admit(card)) || (!lang.is_empty() && !admit(lang)) || (!by.is_empty() && !admit_at(by, 4)) {
+            return -2;
+        }
         if !sid.is_empty() && !packed_framed_ok(sid) { return 0; }
         let budget = match self.sessions.get(sid) { Some(b) if !b.is_empty() => b, _ => return 0 };
         let same = match (obj_get(budget, 0, "id"), obj_get(rf, 0, "budgetId")) {
@@ -584,7 +592,7 @@ impl Store {
             _ => false,
         };
         if !same || str_is_v(budget, obj_get(budget, 0, "state"), "closed") { return 0; }
-        let k = validate(card);
+        let k = if card.is_empty() { 1 } else { validate(card) }; // absent card: deliverable
         if k != 0 {
             let _lang = lang_code(lang); // selects the error text; the baseline only returns the kind
             return k;

@@ -4135,3 +4135,209 @@ Confirm audit `3cf22123` (same model): hold, 2 must-fix.
 | e8a7ec4d | write | Codex gpt-6.2-sol | gen_stale, dc, mutants, perf rows (one candidate, taken in by hand and fixed) |
 | e0269b0b | audit | Codex gpt-6.2-astra ultra | package audit |
 | 3cf22123 | confirm | Codex gpt-6.2-astra ultra | confirm audit |
+
+## Appendix P25 (row B/bud_card.pruv: card validation and projection on JB packets)
+
+The commit with this appendix; base 22332cd (main, P19c). Main did not move during P25. Changed files:
+`bench/l3/budget/bud_card.pruv` and `bench/l3/budget/m11_test/{root.pruv,harness.rs,hand.rs,run_m11.py}`. No compiler
+file, `bud_halt.pruv`, `m10_test` or `bud_map`/`bud_store`/`bud_world`/`bud_admit` layout change. Raw logs: `work/p25/`
+(not committed).
+
+### P25.1 Change
+
+- `bud_card.pruv` reads the card, `lang` and `by` arguments of setCard as JB byte packets (`[u8]`, big-endian: tags
+  1-4, 7 + f64, 6 + u32 + WTF-8, 8 + u32 count, 9 + u32 count + (u32 klen, key, value); depth <= 32; empty = absent).
+  The stored budget, `ref` and the result stay in the old V-word ABI.
+  - `j_ok` admits the whole packet once (structure, depth, canonical WTF-8 per string; a lead surrogate directly
+    followed by a trail surrogate is rejected). `card_at` scans the card object once (last duplicate key wins, as
+    `JSON.parse`) and `validate` judges the fields in the B order (kinds 1-6).
+  - Text fields use ECMAScript trim (`ws_at`/`ws_before`: TAB-CR, SP, NBSP, U+1680, U+2000-200A, U+2028/2029, U+202F,
+    U+205F, U+3000, BOM) and `1 <= units <= 300` UTF-16 units after the trim. `targets.note` uses the raw, untrimmed
+    length `<= 300` (spec line 96). Counts are JS Numbers: finite, integral, >= 0, `-0` accepted; `safe_int` projects
+    a safe integer, the rest keep the raw bits.
+  - `units(b, s, e, cap)` counts UTF-16 units by lead bytes (+1 for c < 128 or c >= 192, +1 more for c >= 240) and stops
+    once the count passes `cap`, so a bound failure short-circuits. `text_ok` does not trim first: `cut(b, ts, e, 300)`
+    returns the first unit start `q` where the count would pass 300; the text is too long iff `q < e` and a
+    non-whitespace byte follows `q` (`tr_s(b, q, e) < e`), else valid iff `tr_e(b, ts, q) > ts`. A long text with a
+    long whitespace tail is refused after 301 units and one more character, not after the whole tail (audit item 3). `put_units` writes exactly `u` words (surrogate
+    pairs for 4-byte sequences, lone surrogates as themselves).
+  - `build` runs a size pass into an empty array and a write pass into `zeros(size)`: one allocation per card.
+  - ASCII fast paths: `ascii8` (one 8-byte load and a `0x80..80` mask) and `ascii32` (four loads OR-ed, one test) in
+    `wtf8_ok`; `ascii8` in both `units` loops and in `put_units` (eight word stores per step). Each inner loop carries
+    `i0 <= i` (the entry position) so the outer `decreases e - i` still proves.
+  - Types: `[u8]` packets, `i64` UTF-16 words in the V output; no per-unit `i64` packet and no flat record arrays.
+- `m11_test/root.pruv`: `m11_set_card`, `m11_perf_card` and `m11_perf_chain` take `[u8]` packets and admit them with
+  `j_ok` before any judgment. `by` is admitted with `j_ok_at(by, 4)`: it is stored at V depth 4 inside the setCard
+  result (`{ok, budget}` 1, budget 2, card 3, `by` 4), so its packet depth is at most 29; a deeper `by` is refused
+  (status 2) before any state change (audit item 1). The error result `{ok: false, error}` needs `5 + 14 + n` words,
+  not `5 + 15 + n` (audit item 2, present since 22332cd).
+- `m11_test/run_m11.py`: `to_b`/`from_b` JB codec (WTF-8 of JS strings, lone surrogates kept), `--selftest-b`;
+  `judge` reports a result V that does not end at its last word.
+- `m11_test/hand.rs`: the hand Rust baseline on JB packets (`admit`, `validate`, `build`, `put_card`, `Store::set_card`)
+  with `is_ascii` fast paths; `harness.rs`: JB argument lines, perf items A/B/C on packets, and an `hdiff` command
+  (hand vs Pruv on one card, kind and output words).
+
+### P25.2 Gates (Rust and Python compilers, Rust backend; all rc 0)
+
+`work/p25/gates.sh`, log `work/p25/gates_audit.log`, `FAIL=0`, after the audit fixes:
+
+| root | rs | py |
+|---|---|---|
+| m8_test/root_m8 | ok 7.5 s | ok 12.8 s |
+| m34_test/root_m4 | ok 8.2 s | ok 13.6 s |
+| m34_test/root_admit | ok 6.8 s | ok 12.5 s |
+| m7_test/root (`--rust-extern bud_facts`) | ok 7.7 s | ok 13.7 s |
+| m9_test/root_m9 | ok 7.7 s | ok 12.8 s |
+| m10_test/root_m10 (`--rust-extern bud_facts`) | ok 8.7 s | ok 15.0 s |
+| m11_test/root | ok 9.8 s | ok 18.0 s |
+
+| gate | rs | py | hand |
+|---|---|---|---|
+| Q6 (300, seed 20261117) vs TS oracle | exact 213, prefix-ok 87, fail 0 | same | - |
+| K (10) vs TS oracle | exact 10 | same | - |
+| pairs identical (py vs rs outputs) | True | | |
+| hdiff (hand vs Pruv, 10,711 cards) | differ 0 | differ 0 | reference |
+| mutants (`work/p25/mut.py`, 34 + control) | 34 caught (1 by the proof only), control clean, 0 build failures | - | - |
+
+- hdiff items: Q6/K setCard cards over several seeds, crafted UTF-16 edges (300/301 units after trim, 4-byte
+  sequences at the cap, lone surrogates, every trim code point incl. VT/FF/CR at both ends), number edges (`-0`,
+  2^53, 2^53 + 2, fractions, NaN/Inf bits), raw-note lengths, duplicate keys, refusal order, random byte mutations of
+  valid cards, a fixed random UTF-8 injection inside string bodies, and 25 encoding sequences (overlongs,
+  surrogate pairs as two 3-byte sequences, > U+10FFFF, truncations) injected into the deliverable, a done line, the
+  note and the `by`/`lang` packets; after the audit, 96 `cut` cards (heads of 298-301 units with ASCII, CJK and
+  astral characters at the cap, tails of 5,000 spaces, 400 U+3000 + BOM, inner text after spaces, U+2028 and lone
+  surrogates) and `by` depths 30-33 at the depth-4 boundary. hdiff now compares two successive setCard calls on both
+  sides, including refused `lang`/`by` (status 2 vs hand -2), invalid and absent cards (Pruv `{ok: false, error}` with
+  saved/changed 0 vs the hand kind), and the hand side validates an empty card like Pruv. Logs
+  `work/p25/hdiff_{rs,py}.confirm.log`, mutants `work/p25/mut_confirm.log` (34 caught, same as before the confirm fix).
+- Known differences, classified:
+  - Intent: the hand `Store::set_card` returns only the error kind; the error text (selected by `lang`) and
+    `used_now` are compared only against the TS oracle (Q6/K). The `lang_code` and `used_now` mutants are caught
+    there, not by hdiff.
+  - No bug or accident difference is left: the first campaign missed 5 mutants (VT/FF trim, surrogate pair, E0
+    overlong, `lang_code`, `used_now`) because the injection hit a key, not a string body; the harness was fixed
+    (encoding set, VT/FF/CR, oracle stage) and all were caught after.
+- Mutants of the new paths (all caught): units lead-byte rule and 4-byte count; `ascii8` first byte unmasked,
+  `ascii32` last word unchecked, the 32-byte step skipping 8 bytes (also rejected by the proof), the 8-byte units
+  path counting 7, the 8-byte `put_units` path copying a wrong byte; text 301/empty; trim code points (U+202F, BOM,
+  VT/FF, NBSP before), no leading/trailing trim; surrogate pair and E0 overlong accepted; note 301, trimmed note,
+  empty note kept; `safe_int` 2^53, `-0`, fractions; first duplicate wins; lines max + 1 (proof rejects); verify 6
+  items; low surrogate off by one; `lang_code`; `used_now`. After the audit the two old `text_ok` mutants were
+  replaced by `cut`/`text_ok` ones (cap 301, empty text kept, no tail check, cut one unit early, astral counted 1,
+  the 8-byte cut path overshooting the cap — rejected by the proof only, since an all-ASCII run cannot reach the
+  overshooting count) and a root mutant (`by` admitted at depth 3); `mut.py` reports a build failure as `BUILD-FAIL`,
+  not as caught. Log `work/p25/mut_audit.log`.
+
+### P25.3 Time (Rust backend, ns per call, 15 interleaved rounds base/P25/hand, one process per measurement)
+
+`work/p25/perf.py 15`, log `work/p25/perf_final.log`, load average 6-7; A and C re-measured after the audit fixes
+(`perf.py 15 AC`, `work/p25/perf_audit.log`): new `text_ok`, and C with the hand card admitted once outside the loop
+like the Pruv side, outside the timer (audit item 4 and its confirm). The C rows are the confirm run
+(`perf.py 21 C`, `work/p25/perf_confirm2.log`) under load average 18-22, so both ranges are wide. A = admit + validate + build of one card
+(deliverable and 5 done lines of `"  " + "a" * U + "  "`), U = 1000 is the > 300 refusal; B = n successive setCard
+calls through the store; C = the bud_card part of B (set_card + put_card on one in-memory budget). Overlap compares the
+P25 and hand min-max ranges.
+
+| cell | base | P25 | hand | P25/hand median | P25/hand min | overlap |
+|---|---:|---:|---:|---:|---:|---|
+| A U = 100 | 421.4 | 478.3 | 750.6 | 0.64 | 0.62 | yes (one P25 outlier 972) |
+| A U = 300 | 573.3 | 822.3 | 1628.1 | 0.51 | 0.50 | no (Pruv faster) |
+| A U = 1000 | 17.8 | 133.7 | 227.7 | 0.59 | 0.58 | no (Pruv faster) |
+| B n = 100 | 634.2 | 578.2 | 659.9 | 0.88 | 0.87 | no (Pruv faster) |
+| B n = 500 | 669.1 | 613.8 | 688.7 | 0.89 | 0.89 | no (Pruv faster) |
+| B n = 1000 | 634.8 | 583.4 | 657.3 | 0.89 | 0.89 | no (Pruv faster) |
+| C n = 100 | 496.2 | 481.4 | 626.5 | 0.77 | 0.74 | yes (load 18-22, both ranges wide) |
+| C n = 1000 | 648.1 | 488.7 | 637.8 | 0.77 | 0.72 | yes (load 18-22, both ranges wide) |
+
+- Base reads V words whose strings already carry their UTF-16 length, so its A cells skip admission and its U = 1000
+  refusal reads one length word (15.6 ns). P25 and hand take bytes and must admit the whole ~6 KB packet first
+  (canonical WTF-8), so A grows over base by the O(V) admission and the unit count; both sides pay it, P25 at
+  0.49-0.60x hand.
+- Before the ASCII fast paths (`work/p25/perf1.log`, 9 rounds) A was 1.43x / 1.92x / 8.08x hand: `wtf8_ok` and
+  `units` went byte by byte where hand calls `is_ascii`. With `ascii8` only (`perf2.log`) A U = 1000 was still
+  1.28x; `ascii32` in `wtf8_ok` brought it to 0.60x.
+- Cost bound: setCard = the P19c cost + O(V + U). `j_ok` visits each packet byte once (strings by word, keys once),
+  `card_at` scans each object's keys once, `validate` counts units with `cap = 300` (early exit; a > 300 text field
+  stops after 300 units and one more character, whatever its whitespace tail), `build` is two passes over the kept fields (size, write). A bound failure
+  returns at the first failing field in the B order.
+
+### P25.4 Hand vs generated
+
+All cells are under 1.0x (medians 0.51-0.89x); in the overlapping cells (A U = 100, C n = 100 and 1000) the overlap
+comes from outlier rounds on both sides, while the P25 median and minimum stay below hand. The hand baseline still trims before counting (O(tail) on an over-long text); the cost bound is for
+the generated code, the baseline is kept as the obvious hand version. Where P25 gains:
+- Admission: hand calls `is_ascii` per string; P25 `ascii32` tests 32 bytes per step.
+- Validation: hand `trim` re-matches slice patterns per code point then `units_upto` counts per byte; P25 finds the
+  trim bounds by index and counts 8 ASCII bytes per step with the cap.
+- Build: hand pushes into `Vec::with_capacity` with per-push capacity checks; P25 sizes exactly and writes with
+  proven indexes (`get_unchecked`), 8 words per step on ASCII.
+- Runtime checks left in the generated card code: none on indexes; the 8-byte loads keep a
+  `TryFrom<&[u8]> for [u8; 8]` `unwrap()` on a constant-length slice, which LLVM folds. No further check for the proofs
+  to remove was found.
+
+### P25.5 RSS and allocations
+
+- Peak RSS KiB (`/usr/bin/time -l`, P25 / hand): A U = 300 1760 / 1808, A U = 1000 1744 / 1792, B n = 1000 2000 / 1968
+  (+32 KiB, the store buffer the host grows; hand keeps a `HashMap`), C n = 1000 1872 / 1888.
+- Hand admission does not allocate, so the C fix does not change these numbers.
+- Allocations per call (counting allocator, two rep counts; `work/p25/alloc/`; base / P25 / hand):
+  - A U = 100 and 300: 2.0 / 2.0 / 4.0; A U = 1000 (refusal): 0 / 0 / 0;
+  - B n = 100: 4.12 / 4.12 / 6.14;
+  - C n = 100: 3.07 / 3.07 / 5.08.
+  (The base hand column is the base V-word hand: 7.0 / 9.14 / 8.08.)
+
+### P25.6 Proof time (real s, m11 root)
+
+| run | rs | py |
+|---|---|---|
+| quiet (load ~6): base -> P25 | 9.4 -> 9.8-10.4 | 54.6-58.7 -> 18.3-18.7 |
+| interleaved under load 12-19, 3 rounds | base 35.0 / 22.4 / 17.9, P25 39.9 / 19.8 / 16.8 | - |
+
+The rs proof time is unchanged within noise; the py verifier takes about a third of the base time on the packet
+code. `work/p25/pt/`.
+
+### P25.7 Audit
+
+Package audit 2d7348ef (Codex gpt-6.2-astra ultra, read-only, on the P25 tree before the fixes). Each finding, its
+class and the fix:
+
+| # | level | finding | class | fix |
+|---|---|---|---|---|
+| 1 | must | a `by` packet of depth 32 was admitted by `j_ok` and stored at V depth 34 inside the result, breaking later reads | bug | `j_ok_at(by, 4)` in the root and `admit_at(by, 4)` in hand: depth <= 29, refused with status 2 before any state change; hdiff `by` depths 30-33, root mutant |
+| 2 | must | the error result `{ok: false, error}` asked for one word more than it writes (`5 + 15 + n`) | bug (since 22332cd) | `5 + 14 + n`; `run_m11.py` `judge` now flags a result V that does not end at its last word |
+| 3 | must | `text_ok` trimmed the whole trailing whitespace before counting, so an over-long text with a long tail was refused in O(tail), against the short-circuit bound | bug (cost) | `cut` + tail check (P25.1); 96 `cut` hdiff cards, 6 `cut`/`text_ok` mutants |
+| 4 | must | perf C admitted the card every iteration on the hand side only | accident (harness) | hand admits once before the loop; C re-measured |
+| 5 | should | hdiff returned "same" early for refused `lang`/`by`, and hand refused an empty card before validating it | accident (harness) | both sides run two setCard calls, refusals compared (2 vs -2), empty card validated |
+| 6 | should | the hdiff encoding injection could hit the key `"d"` instead of the string value | accident (harness) | injection looks up the value string (`6, len, tag`) |
+| 7 | should | `mut.py` counted a mutant that failed to build as caught | accident (harness) | reported as `BUILD-FAIL`; 0 in the final campaign |
+| 8 | note | the `put_units` proofs cover index safety only, not the written values | intent | output content is checked by hdiff (hand words) and the oracle (Q6/K); noted here |
+
+Confirm audit ddb8e411 (Codex gpt-6.2-astra ultra, read-only, on the fixed tree): items 1, 2, 6 and 7 fixed; 3, 4 and
+5 partial:
+- 3: validity is correct (astral pair across 300, lone surrogate 1 unit, whitespace-only tail accepted, non-whitespace
+  after `q` refused), but `"a" * 300 + " " * N + "b"` still reads the N spaces before refusing. Intent: deciding
+  that text is over-long needs a non-whitespace byte after unit 300, and a whitespace run may hide one anywhere, so an
+  exact trim judgment cannot have a constant bound there. The bound kept is: no byte after the first deciding
+  non-whitespace character is read, and a text whose unit 301 is non-whitespace stops at it.
+- 4: the hand card was admitted once per round inside the timer, the Pruv chain not at all. Fixed: the hand admission
+  moved before the timer; C re-measured (P25.3).
+- 5: an empty card still returned early in `hand_diff` on the `-102` kind, so its setCard path was not compared.
+  Fixed: no early return; refused, invalid and absent cards go through two setCard calls on both sides.
+No new must-fix after these; the second fix round (harness only) was rechecked by reruns (m11 oracle, hdiff,
+mutants, perf C), not by a third audit.
+
+### P25.8 Queued rows
+
+- The stored budget, `ref` and the result are still V words; a JB result/`ref` would remove the boundary `v_end`
+  pass (outside the row; P13d/P13e layouts).
+- The hand `Store::set_card` does not build the error text or `used_now`; a hand error path would let hdiff compare
+  them directly instead of the oracle only.
+
+### P25.9 Delegation
+
+| id | mode | engine / model | use |
+|---|---|---|---|
+| 6fbfb4d5 | research | Codex gpt-6.2-astra | P25 research before the rewrite (B setCard semantics, test plan) |
+| 88a1ca4b | write | Claude sonnet | m11_test harness/hand/run_m11 on JB packets (one candidate; scheduled apply cancelled, files taken in by hand and extended with `hdiff`) |
+| 2d7348ef | audit | Codex gpt-6.2-astra ultra | package audit |
+| ddb8e411 | audit | Codex gpt-6.2-astra ultra | confirm audit of the fixes (P25.7) |

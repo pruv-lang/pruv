@@ -217,7 +217,8 @@ pub fn m11_set_card(inout st: [i64], rf: [i64], sid: [i64], card: [u8], lang: [u
   // card, lang, by: JB packets (empty = absent), admitted whole before any judgment
   if len(card) > 0 && !crate::bud_card::j_ok(card) { return 2; }
   if len(lang) > 0 && !crate::bud_card::j_ok(lang) { return 2; }
-  if len(by) > 0 && !crate::bud_card::j_ok(by) { return 2; }
+  // by is stored at budget.card.by (depth 3) and returned one level deeper: its top value sits at depth 4 of the result
+  if len(by) > 0 && !crate::bud_card::j_ok_at(by, 4) { return 2; }
   let cb: [i64] = current_of(st, rf, sid);
   let found: bool = len(cb) > 0;
   let closed: bool = found && str_is(cb, crate::bud_card::obj_get(cb, 0, "state"), "closed");
@@ -225,7 +226,7 @@ pub fn m11_set_card(inout st: [i64], rf: [i64], sid: [i64], card: [u8], lang: [u
   let r: crate::bud_card::SetCard = crate::bud_card::set_card(found, closed, card, at_b(card), lc, by, at_b(by), now_ms);
   if r.kind >= 0 {
     // {ok: false, error}
-    let need: i64 = 5 + 15 + len(r.error);
+    let need: i64 = 5 + 14 + len(r.error);
     if len(out) < need { return 3; }
     let mut p: i64 = emit(inout out, 0, need - 1);
     p = emit(inout out, p, b01(r.used_now));

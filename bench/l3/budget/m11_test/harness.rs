@@ -307,13 +307,15 @@ fn perf(op: &str, a: usize, reps: usize) -> String {
             let mut sum = 0i64;
             for _ in 0..reps {
                 let b = perf_budget();
+                // admitted once outside the timer on both sides: the Pruv chain is handed an admitted card
+                if op == "handC" && !hand::admit(black_box(&card)) { return "bad".to_string(); }
                 let t = Instant::now();
                 if op == "perfC" {
                     sum = sum.wrapping_add(black_box(sol::m11_perf_chain(black_box(&b), &card, a as i64, NOW0)));
                 } else {
                     let mut cur = b;
                     for i in 0..a {
-                        if !hand::admit(black_box(&card)) || hand::validate(&card) != 0 { break; }
+                        if hand::validate(black_box(&card)) != 0 { break; }
                         let c = hand::build(&card, &[], NOW0 + i as i64);
                         cur = hand::put_card(&cur, &c);
                     }
@@ -340,7 +342,6 @@ fn hand_diff(card: &[u8], lang: &[u8], by: &[u8]) -> String {
         }
     };
     if pk != hk { return format!("differ kind pruv={} hand={}", pk, hk); }
-    if pk < 0 || (!lang.is_empty() && !hand::admit(lang)) || (!by.is_empty() && !hand::admit(by)) { return format!("same {}", pk); }
     let rf = perf_ref();
     let sid = pkey("s1");
     let mut w = World::new();
@@ -349,12 +350,19 @@ fn hand_diff(card: &[u8], lang: &[u8], by: &[u8]) -> String {
     let mut s = hand::Store { sessions: std::collections::HashMap::new() };
     s.sessions.insert(pkey("s1"), perf_budget());
     let mut ho: Vec<i64> = Vec::new();
-    let p = w.call(&|st, out| sol::m11_set_card(st, &rf, &sid, card, lang, by, NOW0, out)).unwrap().to_vec();
-    let hk = s.set_card(&rf, &sid, card, lang, by, NOW0, &mut ho);
-    if hk != -1 || ho.len() != p.len() + 1 || ho[0] as usize != p.len() || ho[1..] != p[..] {
-        return format!("differ words pruv={} hand={}", words(&p), words(&ho));
+    // twice: the second call reads the budget the first one stored (a stored card must stay readable)
+    for i in 0..2 {
+        let p = w.call(&|st, out| sol::m11_set_card(st, &rf, &sid, card, lang, by, NOW0 + i, out)).map(|x| x.to_vec());
+        let hk = s.set_card(&rf, &sid, card, lang, by, NOW0 + i, &mut ho);
+        match p {
+            Err(2) if hk == -2 => return if pk < 0 { format!("same {}", pk) } else { "same refused-entry".to_string() },
+            // invalid or absent card: Pruv writes {ok: false, error} (saved 0, changed 0), hand returns the kind
+            Ok(p) if hk > 0 && p.len() > 4 && p[1] == 0 && p[2] == 0 && (pk < 0 || card.is_empty()) => {}
+            Ok(p) if hk == -1 && ho.len() == p.len() + 1 && ho[0] as usize == p.len() && ho[1..] == p[..] => {}
+            p => return format!("differ words call={} pruv={:?} hand={} {}", i, p.map(|x| words(&x)), hk, words(&ho)),
+        }
     }
-    "same ok".to_string()
+    if pk < 0 { format!("same {}", pk) } else { "same ok".to_string() }
 }
 
 fn main() {
