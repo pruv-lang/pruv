@@ -152,11 +152,13 @@ Load policy: before an insert that fits, the index is rebuilt in place (dropping
 pass half the slot count while the live entries take at most a quarter of it; before an insert that does not fit only
 because of the 3/4 used bound, likewise. Each rebuild is O(slots) and at least slots/4 inserts from the next.
 
-Removing an entry with children (e.g. `forgetTurn`) unlinks it and frees it with its children (one level; the world
-has no deeper maps): the entry's own slot gets a tombstone, the children's slots are left in place (lazy deletion,
-as above), every key/blob word leaves the live count, generations are bumped and the entries go on the free list.
-Cost `O(probe length + children)` with O(1) per child, amortized O(1) per child insert. No reachable ghosts remain:
-a free entry is never found, iterated or counted.
+Removing an entry with children (e.g. `forgetTurn`) unlinks it and frees it with its whole subtree, at any depth
+(post order without a stack; the world itself has at most one level below an entry): the entry's own slot gets a
+tombstone, the descendants' slots are left in place (lazy deletion, as above), every key/blob word leaves the live
+count, generations are bumped and the entries go on the free list. Cost `O(probe length + subtree)` with O(1) per
+descendant, amortized O(1) per insert. This holds on stores with well-formed child lists (I2), which every store the
+module builds has; admission (I0 + I1) does not check I2, and on other buffers removal stays in bounds and terminates
+but may leave entries behind. No reachable ghosts remain: a free entry is never found, iterated or counted.
 
 `grow(prev, inout next)`: requires `valid(prev)` and `len(next) >= len(prev)`; writes a fresh layout for `len(next)`
 and copies every reachable entry (roots in order, each map in insertion order, children after their parent), key and

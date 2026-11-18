@@ -424,11 +424,13 @@ def cmd_keys(args):
 
 # Expected admit result per case of root_admit.pruv (14, 19, 20 are valid stores: stale tag, slots left by removal,
 # reused entry under a stale slot), the exact (case, len) rows driver_admit.rs prints, and the slot count per length.
-ADMIT_EXPECT = [10, -1, -2, -3, -4, -5, -5, -5, -6, -7, -8, -9, -10, -10, 10, -10, -4, -8, -7, 7, 8, 74, 266]
-ADMIT_ROWS = [(c, 1024) for c in range(21)] + [(0, 4096), (0, 65536), (21, 65536), (22, 65536)]
+ADMIT_EXPECT = [10, -1, -2, -3, -4, -5, -5, -5, -6, -7, -8, -9, -10, -10, 10, -10, -4, -8, -7, 7, 8, 74, 266, 70]
+ADMIT_ROWS = [(c, 1024) for c in range(21)] + [(0, 4096), (0, 65536), (21, 65536), (22, 65536), (23, 65536)]
 # Linearity cases 21 and 22 (P12): 2n entries added under root 0, n removed (root_admit.pruv grow). Visits must be
 # top (= live + free) / free entries / slots.
 ADMIT_GROW = {21: 64, 22: 256}
+# Depth case 23 (P13a): a 128-deep chain with its middle removed and a sibling leaf after an internal node (root_admit.pruv chain); every entry is live or free.
+ADMIT_CHAIN = {23}
 ADMIT_SLOTS = {1024: 32, 4096: 128, 65536: 2048}
 
 
@@ -453,6 +455,8 @@ def cmd_admit(args):
         if g is not None and (ce != r + cf or cf < g - 4 or cs != ADMIT_SLOTS.get(n)):
             bad.append("case %d len %d: visited %d entries / %d free steps / %d slots, expected %d + free / >= %d / %s"
                        % (case, n, ce, cf, cs, r, g - 4, ADMIT_SLOTS.get(n)))
+        if case in ADMIT_CHAIN and ce != r + cf:
+            bad.append("case %d len %d: visited %d entries, expected live %d + free %d" % (case, n, ce, r, cf))
         print("admit case %2d len %6d -> %4d  (entries %d, free %d, slots %d)" % (case, n, r, ce, cf, cs))
     for b in bad:
         print("MISMATCH " + b)

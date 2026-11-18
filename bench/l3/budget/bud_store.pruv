@@ -63,8 +63,16 @@ pub fn layout_slots(l: i64) -> i64
   return s;
 }
 
-// O(1) header check against layout(len(st)).
+// O(1) header check against layout(len(st)): the shape of the fixed header words and the linear conditions on the
+// words the mutators write (L3 P13a). Mutators export "shape words unchanged" (shape_same) and dyn_ok preservation,
+// so their callers never expand shape (its power-of-two term is the costly one); valid follows by congruence.
 pub fn valid(st: [i64]) -> bool
+{
+  return shape(st) && dyn_ok(st);
+}
+
+// Fixed header words 0..6, 9, 11 against layout(len(st)); no mutator writes them.
+pub fn shape(st: [i64]) -> bool
 {
   let l: i64 = len(st);
   if l < 232 { return false; }
@@ -80,16 +88,62 @@ pub fn valid(st: [i64]) -> bool
   if st[0] != 1112884307 || st[1] != 1 || st[2] != l { return false; }
   if st[3] != 16 || st[4] != s || st[5] != 16 + s || st[6] != cap { return false; }
   if st[9] != 16 + 11 * s || st[11] != l { return false; }
+  return true;
+}
+
+// Linear conditions on the header words the mutators write: entry top 7, free head 8, arena top 10, live entries 12,
+// used slots 13, live words 14 (against the fixed words 6, 9, 11).
+pub fn dyn_ok(st: [i64]) -> bool
+{
+  if len(st) < 15 { return false; }
   let top: i64 = st[7];
-  if top < 0 || top > cap { return false; }
+  if top < 0 || top > st[6] { return false; }
   let fh: i64 = st[8];
   if fh < -1 || fh >= top { return false; }
-  let ab: i64 = st[9];
-  let at: i64 = st[10];
-  let ae: i64 = st[11];
-  if at < ab || at > ae { return false; }
+  if st[10] < st[9] || st[10] > st[11] { return false; }
   if st[12] < 0 || st[13] < 0 || st[14] < 0 { return false; }
   return true;
+}
+
+// Header words 0..14 of a and b are equal except word w (w = -1: all of them); false if either is shorter than 15.
+pub fn hdr_same(a: [i64], b: [i64], w: i64) -> bool
+{
+  if len(a) < 15 || len(b) < 15 { return false; }
+  return (w == 0 || a[0] == b[0]) && (w == 1 || a[1] == b[1]) && (w == 2 || a[2] == b[2]) &&
+    (w == 3 || a[3] == b[3]) && (w == 4 || a[4] == b[4]) && (w == 5 || a[5] == b[5]) &&
+    (w == 6 || a[6] == b[6]) && (w == 7 || a[7] == b[7]) && (w == 8 || a[8] == b[8]) &&
+    (w == 9 || a[9] == b[9]) && (w == 10 || a[10] == b[10]) && (w == 11 || a[11] == b[11]) &&
+    (w == 12 || a[12] == b[12]) && (w == 13 || a[13] == b[13]) && (w == 14 || a[14] == b[14]);
+}
+
+// The shape words (0..6, 9, 11) and the length of a and b are equal; false if either is shorter than 15.
+pub fn shape_same(a: [i64], b: [i64]) -> bool
+{
+  if len(a) < 15 || len(a) != len(b) { return false; }
+  return a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3] && a[4] == b[4] && a[5] == b[5] &&
+    a[6] == b[6] && a[9] == b[9] && a[11] == b[11];
+}
+
+// st after a mutator applied to o: the same length and shape words, and dyn_ok(o) carried over to st. With it, valid(o)
+// gives valid(st) by congruence (shape reads only the length and the shape words).
+pub fn kept(st: [i64], o: [i64]) -> bool
+{
+  if len(st) != len(o) { return false; }
+  if len(o) < 15 { return true; }
+  return shape_same(st, o) && (!dyn_ok(o) || dyn_ok(st));
+}
+
+// st[p] = v when p is past the 16 header words and in range, else nothing (ent_u16::wr with the header excluded). The
+// index slot writers use it: on a valid store every slot address is >= 16, so the low bound only matters on a buffer
+// that is not valid, and it gives the header frame on any buffer. Same cost as wr (two compares).
+pub fn wr16(inout st: [i64], p: i64, v: i64) -> ()
+  ensures len(st) == len(old(st))
+  ensures (16 <= p && p < len(st)) ==> st[p] == v
+  ensures forall k in 0..len(old(st)): k == p || st[k] == old(st)[k]
+  ensures len(old(st)) >= 15 ==> hdr_same(st, old(st), -1)
+{
+  if p < 16 || p >= len(st) { return; }
+  st[p] = v;
 }
 
 // ---- entry fields ----
@@ -134,11 +188,14 @@ pub fn ef(st: [i64], e: i64, f: i64) -> i64
   return crate::ent_u16::rd(st, a);
 }
 
+// Writes past the 16 header words only (ea is >= 16 on a valid store; a lower address is skipped like -1), so the
+// header frame holds on any buffer.
 pub fn set_ef(inout st: [i64], e: i64, f: i64, v: i64) -> ()
   ensures len(st) == len(old(st))
+  ensures len(old(st)) >= 15 ==> hdr_same(st, old(st), -1)
 {
   let a: i64 = ea(st, e, f);
-  if a < 0 { return; }
+  if a < 16 { return; }
   crate::ent_u16::wr(inout st, a, v);
 }
 
@@ -147,7 +204,7 @@ pub fn set_ef(inout st: [i64], e: i64, f: i64, v: i64) -> ()
 // blob that fits is written back into its old region (no arena growth under steady churn).
 fn fill_entry(inout st: [i64], e: i64, owner: i64, ogen: i64, egen: i64, fresh: bool) -> ()
   ensures len(st) == len(old(st))
-  ensures valid(old(st)) ==> (valid(st) && forall k in 0..16: st[k] == old(st)[k])
+  ensures len(old(st)) >= 15 ==> hdr_same(st, old(st), -1)
 {
   let b: i64 = eb(st, e);
   if b >= 0 {
@@ -160,7 +217,8 @@ fn fill_entry(inout st: [i64], e: i64, owner: i64, ogen: i64, egen: i64, fresh: 
     return;
   }
   let a: i64 = ea(st, e, 0);
-  if a < 0 { return; }
+  // below 16 only on a buffer that is not valid (see set_ef): skipped so the header frame holds on any buffer
+  if a < 16 { return; }
   crate::ent_u16::wr(inout st, a, 1);
   crate::ent_u16::wr(inout st, a + 1, owner);
   crate::ent_u16::wr(inout st, a + 2, ogen);
@@ -286,25 +344,28 @@ pub fn need(st: [i64], entries: i64, words: i64) -> i64
 // ---- arena ----
 
 // Appends src[s..e) to the arena. Returns its absolute offset, or -1 (nothing written) if the range is invalid or the
-// arena is full. Adds the words to the live count.
+// arena is full. Adds the words to the live count. The arena top and end are checked against 16 <= top <= end <=
+// len(st) (true on a valid store), so the copy never reaches the header and the new top stays in the arena bounds.
 pub fn arena_put(inout st: [i64], src: [i64], s: i64, e: i64) -> i64
   ensures len(st) == len(old(st))
-  ensures valid(old(st)) ==> valid(st)
+  ensures len(old(st)) >= 15 ==> (shape_same(st, old(st)) && st[7] == old(st)[7] && st[8] == old(st)[8] &&
+    st[12] == old(st)[12] && st[13] == old(st)[13])
+  ensures dyn_ok(old(st)) ==> dyn_ok(st)
 {
   if s < 0 || e < s || e > len(src) { return -1; }
   let n: i64 = e - s;
-  let top: i64 = c40(hd(st, 10));
-  let aend: i64 = c40(hd(st, 11));
-  if aend > len(st) { return -1; }
+  let top: i64 = hd(st, 10);
+  let aend: i64 = hd(st, 11);
+  if top < 16 || aend > len(st) || top > aend { return -1; }
   if n > aend - top { return -1; }
-  // Proof that the per-word rd/wr is redundant: top = c40(..) >= 0; the check above gives aend <= len(st) and
+  // Proof that the per-word rd/wr is redundant: the checks above give 16 <= top <= aend <= len(st) and
   // n <= aend - top, so top + n <= aend <= len(st); and s >= 0, e <= len(src), n == e - s give s + n == e <= len(src).
-  // Every st[top + k] and src[s + k] with 0 <= k < n is therefore in range.
+  // Every st[top + k] and src[s + k] with 0 <= k < n is therefore in range, and past the header words.
   let mut k: i64 = 0;
   while k < n
-    invariant 0 <= k && k <= n && n == e - s && 0 <= s && s <= e && e <= len(src) && 0 <= top && top + n <= len(st)
+    invariant 0 <= k && k <= n && n == e - s && 0 <= s && s <= e && e <= len(src) && 16 <= top && top + n <= len(st)
     invariant len(st) == len(old(st))
-    invariant valid(old(st)) ==> (valid(st) && 16 <= top && forall j in 0..16: st[j] == old(st)[j])
+    invariant forall j in 0..16: st[j] == old(st)[j]
     decreases n - k
   {
     st[top + k] = src[s + k];
@@ -322,7 +383,9 @@ pub fn arena_put(inout st: [i64], src: [i64], s: i64, e: i64) -> i64
 // generation of a reused entry is kept, a fresh one starts at 1). Returns the entry index or -1 if the table is full.
 pub fn entry_alloc(inout st: [i64], owner: i64, ogen: i64) -> i64
   ensures len(st) == len(old(st))
-  ensures valid(old(st)) ==> valid(st)
+  ensures len(old(st)) >= 15 ==> (shape_same(st, old(st)) && st[10] == old(st)[10] && st[13] == old(st)[13] &&
+    st[14] == old(st)[14])
+  ensures dyn_ok(old(st)) ==> dyn_ok(st)
 {
   let cap: i64 = c32(hd(st, 6));
   let top: i64 = c32(hd(st, 7));
@@ -352,7 +415,9 @@ pub fn entry_alloc(inout st: [i64], owner: i64, ogen: i64) -> i64
 // key and blob regions (fields 4/18, 12/19) stay with the entry for reuse.
 pub fn entry_free(inout st: [i64], e: i64) -> ()
   ensures len(st) == len(old(st))
-  ensures valid(old(st)) ==> valid(st)
+  ensures len(old(st)) >= 15 ==> (shape_same(st, old(st)) && st[7] == old(st)[7] && st[10] == old(st)[10] &&
+    st[13] == old(st)[13] && st[14] == old(st)[14])
+  ensures dyn_ok(old(st)) ==> dyn_ok(st)
 {
   if e < 3 { return; }
   let top: i64 = c32(hd(st, 7));
