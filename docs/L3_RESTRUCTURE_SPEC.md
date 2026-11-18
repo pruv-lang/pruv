@@ -3652,14 +3652,14 @@ attach and reopenmiss differences (0.0-0.1 ns) are layout noise (no wrapper on t
 
 ### P19c.6 Gates
 
-Final, on the tree merged with main e8acbf9 and the lock-free guard: `cargo test --release` 0 failures;
-diff_rust `--fuzz-count 20` all same; diff_compilers `--only runtime` 1976/1976 same (8 more than before from
-`g6_guard_names`); `bridge/node/regen.py --check` ok (only `decode_bytes_gen.rs` has a trusted call and changed);
-rs groups runtime 1136/1136, g6_frontend 25/25, g6_proof 25/25, g4b_frontend 2/2, g8_frontend 39/39, l3_abi 2/2,
-check_generated 1/1. Budget gates (`work/p19c/gates.sh`, every lane on this worktree's compilers: the M7/M10 `--py`
+Final, on the tree merged with main a7f7e68 (P19a, P16+P17a) and the `/dev/stderr` guard: `cargo test --release` 0 failures;
+diff_rust `--fuzz-count 20` all same; diff_compilers `--only runtime` 1986/1986 same (includes the 8
+`g6_guard_names` rows and main's P16 rows); `bridge/node/regen.py --check` ok (only `decode_bytes_gen.rs` has a trusted call and changed);
+rs groups runtime 1141/1141, g6_frontend 25/25, g6_proof 25/25, g4b_frontend 2/2, g8_frontend 39/39, l3_abi 2/2,
+check_generated 1/1; py g8_frontend 27/27. Budget gates (`work/p19c/gates.sh`, every lane on this worktree's compilers: the M7/M10 `--py`
 and `diff_hand_m7` scripts hardcode the main checkout's compiler paths, so `work/p19c/with_wt.py` points them here):
 run_m7 q 113 exact / 0 fail on both, life 300/300, diff_hand_m7 113 exact, run_m10 q 78 exact / 0 fail, halt
-300/300, m34 admit 26/26, m3 all categories, lanes 1922/1922 and 300/300. Python full suite: FULLSUITE. The g8
+300/300, m34 admit 26/26, m3 all categories, lanes 1922/1922 and 300/300. Python full suite 3129/3129 (before the `/dev/stderr` form it was 3115/3116: the raw `write(2, ...)` put `unsafe` into the `--no-verify` output of `examples/g6_min_clamp`). The g8
 compatibility samples have no trusted fn, so their hashes are unchanged.
 
 ### P19c.7 Delegation
