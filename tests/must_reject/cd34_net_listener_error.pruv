@@ -1,0 +1,5 @@
+fn bad(l: Listener) -> i64
+  ensures result != net_listener_error(l)
+{
+  return net_listener_error(l);
+}

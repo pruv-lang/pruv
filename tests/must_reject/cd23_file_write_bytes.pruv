@@ -1,0 +1,5 @@
+fn bad(take f: File, d: [u8]) -> File ! fs
+  requires !file_writable(f)
+{
+  return file_write_bytes(move f, d);
+}

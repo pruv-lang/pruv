@@ -1,0 +1,5 @@
+fn bad(take a: ProcessArgs, x: str) -> ProcessArgs ! alloc
+  requires proc_args_len(a) == 1099511627776
+{
+  return proc_args_push(move a, x);
+}

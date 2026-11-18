@@ -1,0 +1,5 @@
+fn bad(take p: Process, d: [u8]) -> Process ! proc, alloc
+  requires proc_ok(p) && !proc_stdin_open(p)
+{
+  return proc_write_bytes(move p, d);
+}

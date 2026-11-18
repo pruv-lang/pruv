@@ -1,0 +1,5 @@
+fn bad(take s: Socket, d: [u8]) -> Socket ! net, alloc
+  requires net_ok(s) && !net_write_open(s)
+{
+  return net_write_bytes(move s, d);
+}
