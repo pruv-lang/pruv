@@ -261,6 +261,11 @@ def build_and_run(sol_path, pid, workdir, llvm_path=None, rlib=None, opt="-O"):
             out["first_failure"] = p[1][:400]
     if out.get("tests_passed") != out.get("tests_total") or "tests_passed" not in out:
         out["status"] = "wrong"
+    # P19c: the Rust backend's trusted-call drop guard writes `pruv: foreign panic: NAME` to stderr while the host's own
+    # payload propagates; the grader catches that panic and exits 0, so keep the last such line whatever the exit code
+    fl = [ln for ln in r.stderr.splitlines() if "pruv: foreign" in ln]
+    if fl:
+        out["foreign_stderr"] = fl[-1][:300]
     if r.returncode != 0:
         out["status"] = "wrong"        # on LLVM a foreign panic / failed boundary check ends the process with exit 101
         out["exit_code"] = r.returncode

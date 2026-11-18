@@ -3751,7 +3751,7 @@ impl<'a> Gen<'a> {
         Ok(format!("{}({})", name, args.join(", ")))
     }
 
-    /// private helper `NAME` of a `trusted rust fn`: selected requires, catch_unwind around the Rust call, selected
+    /// private helper `NAME` of a `trusted rust fn`: selected requires, a cold drop guard around the Rust call, selected
     /// ensures. Emitted once, on first use.
     fn trusted_helper(&mut self, f: &Function) -> R<()> {
         if self.fg_mut()?.has_item(&f.name) {
@@ -3803,13 +3803,17 @@ impl<'a> Gen<'a> {
             Some(i) => i.path.as_str(),
             None => return Err("'NoneType' object is not subscriptable".to_string()),
         };
+        // P19c: no catch_unwind frame on the happy path. On an unwind out of the foreign call the guard's Drop
+        // prints the Pruv line and the unwind continues unchanged (exit 101 from main; PruvStore stays
+        // poisoned; the C adapter guard still catches it). Under panic=abort nothing changes.
+        body.push("struct pruv_ForeignGuard;".to_string());
         body.push(format!(
-            "let result: {} = match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {}({}))) {{",
-            rt, path, args
+            "impl ::std::ops::Drop for pruv_ForeignGuard {{ #[cold] fn drop(&mut self) {{ let _ = ::std::io::Write::write_all(&mut ::std::io::stderr(), {}.as_bytes()); }} }}",
+            rstr(&format!("pruv: foreign panic: {}\n", disp))
         ));
-        body.push("    Ok(pruv_r) => pruv_r,".to_string());
-        body.push(format!("    Err(_) => panic!({}),", rstr(&format!("pruv: foreign panic: {}", disp))));
-        body.push("};".to_string());
+        body.push("let pruv_fg = pruv_ForeignGuard;".to_string());
+        body.push(format!("let result: {} = {}({});", rt, path, args));
+        body.push("::std::mem::forget(pruv_fg);".to_string());
         if key_is_collection(&f.ret) {
             // G6b: an owned result's length fits the 2^40 model in every check mode
             body.push(format!(

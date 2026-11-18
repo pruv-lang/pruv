@@ -3,28 +3,29 @@
 #[inline(never)]
 fn pruv_ud(what: &str) -> ! { panic!("pruv: requires undefined: {}", what) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cidx(a: &[i64], i: i128) -> i128 { if i >= 0 && i < (a.len() as i128) { a[i as usize] as i128 } else { pruv_ud("array index out of range") } }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cadd(a: i128, b: i128) -> i128 { a.checked_add(b).unwrap_or_else(|| pruv_ud("i128 overflow in +")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_csub(a: i128, b: i128) -> i128 { a.checked_sub(b).unwrap_or_else(|| pruv_ud("i128 overflow in -")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cmul(a: i128, b: i128) -> i128 { a.checked_mul(b).unwrap_or_else(|| pruv_ud("i128 overflow in *")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cneg(a: i128) -> i128 { a.checked_neg().unwrap_or_else(|| pruv_ud("i128 overflow in unary -")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cdiv(a: i128, b: i128) -> i128 { if b == 0 { pruv_ud("division by zero in /") } a.checked_div_euclid(b).unwrap_or_else(|| pruv_ud("i128 overflow in /")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_crem(a: i128, b: i128) -> i128 { if b == 0 { pruv_ud("division by zero in %") } a.checked_rem_euclid(b).unwrap_or_else(|| pruv_ud("i128 overflow in %")) }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_3_bit__pruv_body(given: i64, k: i64) -> i64 {
     let mut g: i64 = given;
     if (k >= 1i64) {
@@ -40,6 +41,7 @@ fn pruv_m_f_1_3_bit__pruv_body(given: i64, k: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn window_start__pruv_body(v: i64, present: i64) -> i64 {
     if (present == 0i64) {
         return 1i64;
@@ -51,7 +53,7 @@ fn window_start__pruv_body(v: i64, present: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline]
+#[inline(always)]
 pub fn window_start(v: i64, present: i64) -> i64 {
     let mut pruv_budget: i64 = 1_073_741_824;
     if !((((-9007199254740991i128) <= (v as i128)) && ((v as i128) <= 9007199254740991i128))) { panic!("{}", "pruv: requires violated: crate::window_start: ((-9007199254740991 <= v) && (v <= 9007199254740991))"); }
@@ -59,6 +61,7 @@ pub fn window_start(v: i64, present: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn window_count__pruv_body(total: i64, start: i64, want: i64, present: i64, cap: i64, def: i64) -> i64 {
     let mut w: i64 = def;
     if (present != 0i64) {
@@ -82,7 +85,7 @@ fn window_count__pruv_body(total: i64, start: i64, want: i64, present: i64, cap:
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline]
+#[inline(always)]
 pub fn window_count(total: i64, start: i64, want: i64, present: i64, cap: i64, def: i64) -> i64 {
     let mut pruv_budget: i64 = 1_073_741_824;
     if !(((0i128 <= (total as i128)) && ((total as i128) <= 1000000000000i128))) { panic!("{}", "pruv: requires violated: crate::window_count: ((0 <= total) && (total <= 1000000000000))"); }
@@ -93,6 +96,7 @@ pub fn window_count(total: i64, start: i64, want: i64, present: i64, cap: i64, d
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn sheet_range__pruv_body(total_rows: i64, total_cols: i64, row: i64, col: i64, rows: i64, cols: i64, given: i64) -> ::std::vec::Vec<i64> {
     let r: i64 = window_start__pruv_body(row, pruv_m_f_1_3_bit__pruv_body(given, 0i64));
     let c: i64 = window_start__pruv_body(col, pruv_m_f_1_3_bit__pruv_body(given, 1i64));
@@ -105,7 +109,7 @@ fn sheet_range__pruv_body(total_rows: i64, total_cols: i64, row: i64, col: i64, 
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline]
+#[inline(always)]
 pub fn sheet_range(total_rows: i64, total_cols: i64, row: i64, col: i64, rows: i64, cols: i64, given: i64) -> ::std::vec::Vec<i64> {
     let mut pruv_budget: i64 = 1_073_741_824;
     if !(((0i128 <= (total_rows as i128)) && ((total_rows as i128) <= 1000000000000i128))) { panic!("{}", "pruv: requires violated: crate::sheet_range: ((0 <= total_rows) && (total_rows <= 1000000000000))"); }

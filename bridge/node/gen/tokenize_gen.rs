@@ -1,5 +1,5 @@
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_str_boundary(a: &str, i: i64) -> bool { i >= 0 && (i as u64) <= (a.len() as u64) && a.is_char_boundary(i as usize) }
 
 #[allow(dead_code)]
@@ -7,35 +7,36 @@ fn pruv_str_boundary(a: &str, i: i64) -> bool { i >= 0 && (i as u64) <= (a.len()
 #[inline(never)]
 fn pruv_ud(what: &str) -> ! { panic!("pruv: requires undefined: {}", what) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cidx(a: &[i64], i: i128) -> i128 { if i >= 0 && i < (a.len() as i128) { a[i as usize] as i128 } else { pruv_ud("array index out of range") } }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cadd(a: i128, b: i128) -> i128 { a.checked_add(b).unwrap_or_else(|| pruv_ud("i128 overflow in +")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_csub(a: i128, b: i128) -> i128 { a.checked_sub(b).unwrap_or_else(|| pruv_ud("i128 overflow in -")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cmul(a: i128, b: i128) -> i128 { a.checked_mul(b).unwrap_or_else(|| pruv_ud("i128 overflow in *")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cneg(a: i128) -> i128 { a.checked_neg().unwrap_or_else(|| pruv_ud("i128 overflow in unary -")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cdiv(a: i128, b: i128) -> i128 { if b == 0 { pruv_ud("division by zero in /") } a.checked_div_euclid(b).unwrap_or_else(|| pruv_ud("i128 overflow in /")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_crem(a: i128, b: i128) -> i128 { if b == 0 { pruv_ud("division by zero in %") } a.checked_rem_euclid(b).unwrap_or_else(|| pruv_ud("i128 overflow in %")) }
 
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cidx_str(a: &str, i: i128) -> i128 { if i >= 0 && i < (a.len() as i128) { a.as_bytes()[i as usize] as i128 } else { pruv_ud("array index out of range") } }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cboundary(a: &str, i: i128) -> bool { i >= 0 && i <= (a.len() as i128) && a.is_char_boundary(i as usize) }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_4_clen__pruv_body(s: &str, i: i64, b: i64) -> i64 {
     let x: i64 = ((unsafe { *s.as_bytes().get_unchecked((i) as usize) }) as i64);
     let mut l: i64 = 1i64;
@@ -55,6 +56,7 @@ fn pruv_m_f_1_4_clen__pruv_body(s: &str, i: i64, b: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_5_cp_at__pruv_body(s: &str, i: i64, l: i64) -> i64 {
     let x: i64 = ((unsafe { *s.as_bytes().get_unchecked((i) as usize) }) as i64);
     if (l == 1i64) {
@@ -77,6 +79,7 @@ fn pruv_m_f_1_5_cp_at__pruv_body(s: &str, i: i64, l: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_3_put__pruv_body(out: &mut [i64], p: i64, v: i64) -> i64 {
     if (p < (out.len() as i64)) {
         { let pruv_i: i64 = p; let pruv_x: i64 = v; unsafe { *out.get_unchecked_mut(pruv_i as usize) = pruv_x; } }
@@ -88,6 +91,7 @@ fn pruv_m_f_1_3_put__pruv_body(out: &mut [i64], p: i64, v: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_3_set(out: &mut [i64], at: i64, v: i64) {
     if ((0i64 <= at) && (at < (out.len() as i64))) {
         { let pruv_i: i64 = at; let pruv_x: i64 = v; unsafe { *out.get_unchecked_mut(pruv_i as usize) = pruv_x; } }
@@ -95,6 +99,7 @@ fn pruv_m_f_1_3_set(out: &mut [i64], at: i64, v: i64) {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_12_cased_before__pruv_body(u: &[i64], i: i64) -> bool {
     let mut j: i64 = (i - 1i64);
     let mut r: i64 = 2i64;
@@ -106,6 +111,7 @@ fn pruv_m_f_1_12_cased_before__pruv_body(u: &[i64], i: i64) -> bool {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_11_cased_after__pruv_body(u: &[i64], i: i64, m: i64) -> bool {
     let mut j: i64 = (i + 1i64);
     let mut r: i64 = 2i64;
@@ -117,6 +123,7 @@ fn pruv_m_f_1_11_cased_after__pruv_body(u: &[i64], i: i64, m: i64) -> bool {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_4_push__pruv_body(w: &[i64], a: i64, b: i64, out: &mut [i64], q0: i64) -> i64 {
     let mut q: i64 = pruv_m_f_1_3_put__pruv_body(&mut *out, q0, (b - a));
     let mut k: i64 = a;
@@ -128,6 +135,7 @@ fn pruv_m_f_1_4_push__pruv_body(w: &[i64], a: i64, b: i64, out: &mut [i64], q0: 
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_7_run_end__pruv_body(w: &[i64], a: i64, b: i64, k: i64) -> i64 {
     let mut e: i64 = (a + 1i64);
     while ((e < b) && (pruv_m_f_1_2_wc((unsafe { *w.get_unchecked((e) as usize) })) == k)) {
@@ -137,6 +145,7 @@ fn pruv_m_f_1_7_run_end__pruv_body(w: &[i64], a: i64, b: i64, k: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_4_word__pruv_body(w: &[i64], a: i64, b: i64, out: &mut [i64], q: &mut [i64]) {
     let mut p: i64 = (unsafe { *q.get_unchecked((0i64) as usize) });
     let mut cnt: i64 = (unsafe { *q.get_unchecked((1i64) as usize) });
@@ -172,8 +181,9 @@ fn pruv_m_f_1_4_word__pruv_body(w: &[i64], a: i64, b: i64, out: &mut [i64], q: &
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_4_emit__pruv_body(w: &[i64], m: i64, out: &mut [i64]) -> i64 {
-    let mut q: ::std::vec::Vec<i64> = { let pruv_n: i64 = 2i64; let pruv_v: i64 = 0i64; vec![pruv_v; pruv_n as usize] };
+    let mut q: [i64; 2] = { let pruv_v: i64 = 0i64; [pruv_v; 2] };
     { let pruv_i: i64 = 0i64; let pruv_x: i64 = 1i64; unsafe { *q.get_unchecked_mut(pruv_i as usize) = pruv_x; } }
     let mut i: i64 = 0i64;
     while (i < m) {
@@ -193,6 +203,7 @@ fn pruv_m_f_1_4_emit__pruv_body(w: &[i64], m: i64, out: &mut [i64]) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn tokenize__pruv_body(s: &str) -> ::std::vec::Vec<i64> {
     let n: i64 = (s.len() as i64);
     let mut u: ::std::vec::Vec<i64> = { let pruv_n: i64 = (n + 1i64); let pruv_v: i64 = 0i64; vec![pruv_v; pruv_n as usize] };
@@ -226,7 +237,7 @@ fn tokenize__pruv_body(s: &str) -> ::std::vec::Vec<i64> {
         }
         k = (k + 1i64);
     }
-    let mut none: ::std::vec::Vec<i64> = { let pruv_n: i64 = 0i64; let pruv_v: i64 = 0i64; vec![pruv_v; pruv_n as usize] };
+    let mut none: [i64; 0] = { let pruv_v: i64 = 0i64; [pruv_v; 0] };
     let t: i64 = pruv_m_f_1_4_emit__pruv_body(&w, m, &mut none);
     if (t > 1099511627776i64) {
         let bad: ::std::vec::Vec<i64> = { let pruv_n: i64 = 1i64; let pruv_v: i64 = (-1i64); vec![pruv_v; pruv_n as usize] };
@@ -238,14 +249,17 @@ fn tokenize__pruv_body(s: &str) -> ::std::vec::Vec<i64> {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline]
+#[inline(always)]
 pub fn tokenize(s: &str) -> ::std::vec::Vec<i64> {
+    #[cold] #[inline(never)] fn pruv_len_slow(s: usize) -> ! { if (s as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", s) } unreachable!() }
+    if ((s.len() as u64) > (1u64 << 40)) { pruv_len_slow(s.len()) }
     let mut pruv_budget: i64 = 1_073_741_824;
     if !(((s.len() as i128) <= 274877906944i128)) { panic!("{}", "pruv: requires violated: crate::tokenize: (len(s) <= 274877906944)"); }
     tokenize__pruv_body(s)
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline]
 fn pruv_m_f_1_2_wc(c: i64) -> i64 {
     if (c < 44032i64) {
         if (c < 4702i64) {
@@ -4952,6 +4966,7 @@ fn pruv_m_f_1_2_wc(c: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline]
 fn pruv_m_f_1_2_ct(c: i64) -> i64 {
     if (c < 42786i64) {
         if (c < 4193i64) {
@@ -8506,6 +8521,7 @@ fn pruv_m_f_1_2_ct(c: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_3_lw1(c: i64) -> i64 {
     if (c < 7360i64) {
         if (c < 544i64) {

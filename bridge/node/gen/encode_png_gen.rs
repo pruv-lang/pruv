@@ -3,32 +3,33 @@
 #[inline(never)]
 fn pruv_ud(what: &str) -> ! { panic!("pruv: requires undefined: {}", what) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cidx(a: &[i64], i: i128) -> i128 { if i >= 0 && i < (a.len() as i128) { a[i as usize] as i128 } else { pruv_ud("array index out of range") } }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cadd(a: i128, b: i128) -> i128 { a.checked_add(b).unwrap_or_else(|| pruv_ud("i128 overflow in +")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_csub(a: i128, b: i128) -> i128 { a.checked_sub(b).unwrap_or_else(|| pruv_ud("i128 overflow in -")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cmul(a: i128, b: i128) -> i128 { a.checked_mul(b).unwrap_or_else(|| pruv_ud("i128 overflow in *")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cneg(a: i128) -> i128 { a.checked_neg().unwrap_or_else(|| pruv_ud("i128 overflow in unary -")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cdiv(a: i128, b: i128) -> i128 { if b == 0 { pruv_ud("division by zero in /") } a.checked_div_euclid(b).unwrap_or_else(|| pruv_ud("i128 overflow in /")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_crem(a: i128, b: i128) -> i128 { if b == 0 { pruv_ud("division by zero in %") } a.checked_rem_euclid(b).unwrap_or_else(|| pruv_ud("i128 overflow in %")) }
 
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cidx_u8(a: &[u8], i: i128) -> i128 { if i >= 0 && i < (a.len() as i128) { a[i as usize] as i128 } else { pruv_ud("array index out of range") } }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn png_step__pruv_body(width: i64, height: i64, max_pixels: i64) -> i64 {
     let wh: i64 = (width * height);
     if (wh <= max_pixels) {
@@ -43,7 +44,7 @@ fn png_step__pruv_body(width: i64, height: i64, max_pixels: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline]
+#[inline(always)]
 pub fn png_step(width: i64, height: i64, max_pixels: i64) -> i64 {
     let mut pruv_budget: i64 = 1_073_741_824;
     if !(((((1i128 <= (width as i128)) && (1i128 <= (height as i128))) && ((width as i128) <= 1099511627776i128)) && ((height as i128) <= 1099511627776i128))) { panic!("{}", "pruv: requires violated: crate::png_step: ((((1 <= width) && (1 <= height)) && (width <= 1099511627776)) && (height <= 1099511627776))"); }
@@ -53,6 +54,7 @@ pub fn png_step(width: i64, height: i64, max_pixels: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_6_bit_at__pruv_body(b: i64, bit: i64) -> i64 {
     let mut v: i64 = b;
     let mut k: i64 = (7i64 - bit);
@@ -64,12 +66,14 @@ fn pruv_m_f_1_6_bit_at__pruv_body(b: i64, bit: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_5_blend__pruv_body(c: i64, a: i64) -> i64 {
     let n: i64 = ((c * a) + (255i64 * (255i64 - a)));
     return (((2i64 * n) + 255i64) / 510i64);
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_8_png_fill__pruv_body(data: &[u8], width: i64, kind: i64, step: i64, out_w: i64, raw: &mut [u8]) -> i64 {
     let mut ch: i64 = 3i64;
     if (kind == 1i64) {
@@ -149,6 +153,7 @@ fn pruv_m_f_1_8_png_fill__pruv_body(data: &[u8], width: i64, kind: i64, step: i6
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_10_png_invert__pruv_body(raw: &mut [u8], out_w: i64) {
     let row_bytes: i64 = (1i64 + out_w);
     let mut row: i64 = 0i64;
@@ -164,6 +169,7 @@ fn pruv_m_f_1_10_png_invert__pruv_body(raw: &mut [u8], out_w: i64) {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn png_scanlines__pruv_body(data: &[u8], width: i64, height: i64, kind: i64, max_pixels: i64) -> ::std::vec::Vec<u8> {
     let step: i64 = png_step__pruv_body(width, height, max_pixels);
     let out_w: i64 = (width / step);
@@ -188,8 +194,10 @@ fn png_scanlines__pruv_body(data: &[u8], width: i64, height: i64, kind: i64, max
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline]
+#[inline(always)]
 pub fn png_scanlines(data: &[u8], width: i64, height: i64, kind: i64, max_pixels: i64) -> ::std::vec::Vec<u8> {
+    #[cold] #[inline(never)] fn pruv_len_slow(data: usize) -> ! { if (data as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", data) } unreachable!() }
+    if ((data.len() as u64) > (1u64 << 40)) { pruv_len_slow(data.len()) }
     let mut pruv_budget: i64 = 1_073_741_824;
     if !(((((1i128 <= (width as i128)) && (1i128 <= (height as i128))) && ((width as i128) <= 1099511627776i128)) && ((height as i128) <= 1099511627776i128))) { panic!("{}", "pruv: requires violated: crate::png_scanlines: ((((1 <= width) && (1 <= height)) && (width <= 1099511627776)) && (height <= 1099511627776))"); }
     if !((pruv_cmul((width as i128), (height as i128)) <= 1099511627776i128)) { panic!("{}", "pruv: requires violated: crate::png_scanlines: ((width * height) <= 1099511627776)"); }

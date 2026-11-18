@@ -1,5 +1,5 @@
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_str_boundary(a: &str, i: i64) -> bool { i >= 0 && (i as u64) <= (a.len() as u64) && a.is_char_boundary(i as usize) }
 
 ::std::thread_local! { static PRUV_CTX: ::std::cell::Cell<&'static str> = ::std::cell::Cell::new(""); }
@@ -16,32 +16,32 @@ fn pruv_ud(what: &str) -> ! {
     if c.is_empty() { panic!("pruv: requires undefined: {}", what) } else { panic!("pruv: foreign contract undefined: {}: {}", c, what) }
 }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cidx(a: &[i64], i: i128) -> i128 { if i >= 0 && i < (a.len() as i128) { a[i as usize] as i128 } else { pruv_ud("array index out of range") } }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cadd(a: i128, b: i128) -> i128 { a.checked_add(b).unwrap_or_else(|| pruv_ud("i128 overflow in +")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_csub(a: i128, b: i128) -> i128 { a.checked_sub(b).unwrap_or_else(|| pruv_ud("i128 overflow in -")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cmul(a: i128, b: i128) -> i128 { a.checked_mul(b).unwrap_or_else(|| pruv_ud("i128 overflow in *")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cneg(a: i128) -> i128 { a.checked_neg().unwrap_or_else(|| pruv_ud("i128 overflow in unary -")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cdiv(a: i128, b: i128) -> i128 { if b == 0 { pruv_ud("division by zero in /") } a.checked_div_euclid(b).unwrap_or_else(|| pruv_ud("i128 overflow in /")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_crem(a: i128, b: i128) -> i128 { if b == 0 { pruv_ud("division by zero in %") } a.checked_rem_euclid(b).unwrap_or_else(|| pruv_ud("i128 overflow in %")) }
 
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cidx_str(a: &str, i: i128) -> i128 { if i >= 0 && i < (a.len() as i128) { a.as_bytes()[i as usize] as i128 } else { pruv_ud("array index out of range") } }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cboundary(a: &str, i: i128) -> bool { i >= 0 && i <= (a.len() as i128) && a.is_char_boundary(i as usize) }
 
 #[allow(dead_code)]
@@ -57,32 +57,33 @@ fn pruv_g6_ens(name: &str, what: &str) -> ! { panic!("pruv: foreign ensures viol
 #[inline(never)]
 fn pruv_g6_repr(what: &str) -> ! { panic!("pruv: invalid representation: {}", what) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_g6_charge(budget: &mut i64, n: usize) { let n: i64 = if n > (i64::MAX as usize) { i64::MAX } else { n as i64 }; *budget = budget.saturating_sub(n); if *budget < 0 { pruv_ud("budget") } }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
+#[inline(always)]
 fn pruv_g6_string_new() -> ::std::string::String {
-    let pruv_g = pruv_ctx("string_new");
     let pruv_r: ::std::string::String = ::std::string::String::new();
     pruv_r
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
+#[inline(always)]
 fn pruv_g6_string_push_str(mut s: ::std::string::String, text: &str) -> ::std::string::String {
-    let pruv_g = pruv_ctx("string_push_str");
     if !((s.len() as u64) + (text.len() as u64) <= (1u64 << 40)) { pruv_g6_req("string_push_str", "len(s) + len(text) <= 2^40"); }
     s.push_str(text);
     s
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
+#[inline(always)]
 fn pruv_g6_string_to_str(s: &::std::string::String) -> ::std::string::String {
-    let pruv_g = pruv_ctx("string_to_str");
     let pruv_r: ::std::string::String = s.clone();
     pruv_r
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
+#[inline(always)]
 fn pruv_m_f_1_6_digits__pruv_body(n: i64) -> ::std::string::String {
     let ten: ::std::string::String = ::std::string::String::from("0123456789");
     let mut out: ::std::string::String = pruv_g6_string_new();
@@ -102,10 +103,11 @@ fn pruv_m_f_1_6_digits__pruv_body(n: i64) -> ::std::string::String {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
+#[inline(always)]
 fn pruv_m_f_1_3_num__pruv_body(n: i64) -> ::std::string::String {
     let mut out: ::std::string::String = pruv_g6_string_new();
     if (n < 0i64) {
-        out = pruv_g6_string_push_str(out, &::std::string::String::from("-"));
+        out = pruv_g6_string_push_str(out, "-");
         out = pruv_g6_string_push_str(out, &pruv_m_f_1_6_digits__pruv_body((-n)));
     } else {
         out = pruv_g6_string_push_str(out, &pruv_m_f_1_6_digits__pruv_body(n));
@@ -114,6 +116,7 @@ fn pruv_m_f_1_3_num__pruv_body(n: i64) -> ::std::string::String {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
+#[inline(always)]
 fn number_ranges__pruv_body(numbers: &[i64]) -> ::std::string::String {
     let mut full: ::std::string::String = pruv_g6_string_new();
     let mut kept: ::std::string::String = pruv_g6_string_new();
@@ -127,18 +130,18 @@ fn number_ranges__pruv_body(numbers: &[i64]) -> ::std::string::String {
         let mut part: ::std::string::String = pruv_g6_string_new();
         part = pruv_g6_string_push_str(part, &pruv_m_f_1_3_num__pruv_body((unsafe { *numbers.get_unchecked((i) as usize) })));
         if (j > i) {
-            part = pruv_g6_string_push_str(part, &::std::string::String::from("-"));
+            part = pruv_g6_string_push_str(part, "-");
             part = pruv_g6_string_push_str(part, &pruv_m_f_1_3_num__pruv_body((unsafe { *numbers.get_unchecked((j) as usize) })));
         }
         let p: ::std::string::String = pruv_g6_string_to_str(&part);
         let had: bool = ((full.len() as i64) > 0i64);
         if had {
-            full = pruv_g6_string_push_str(full, &::std::string::String::from(", "));
+            full = pruv_g6_string_push_str(full, ", ");
         }
         full = pruv_g6_string_push_str(full, &p);
         if (((full.len() as i64) + 3i64) <= 400i64) {
             if had {
-                kept = pruv_g6_string_push_str(kept, &::std::string::String::from(", "));
+                kept = pruv_g6_string_push_str(kept, ", ");
             }
             kept = pruv_g6_string_push_str(kept, &p);
         }
@@ -150,15 +153,17 @@ fn number_ranges__pruv_body(numbers: &[i64]) -> ::std::string::String {
     if (!over) {
         return pruv_g6_string_to_str(&full);
     }
-    kept = pruv_g6_string_push_str(kept, &::std::string::String::from(", \u{2026}"));
+    kept = pruv_g6_string_push_str(kept, ", \u{2026}");
     return pruv_g6_string_to_str(&kept);
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
-#[inline]
+#[inline(always)]
 pub fn number_ranges(numbers: &[i64]) -> ::std::string::String {
+    #[cold] #[inline(never)] fn pruv_len_slow(numbers: usize) -> ! { if (numbers as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", numbers) } unreachable!() }
+    if ((numbers.len() as u64) > (1u64 << 40)) { pruv_len_slow(numbers.len()) }
     let mut pruv_budget: i64 = 1_073_741_824;
-    if !({ let pruv_lo1: i128 = 0i128; let pruv_hi1: i128 = (numbers.len() as i128); let mut pruv_k1: i128 = pruv_lo1; let mut pruv_r1 = true; while pruv_k1 < pruv_hi1 { pruv_budget -= 1; if pruv_budget < 0 { pruv_ud("contract iteration budget exceeded"); } let k: i128 = pruv_k1; if !((((-1000000000000000i128) <= pruv_cidx(numbers, k)) && (pruv_cidx(numbers, k) <= 1000000000000000i128))) { pruv_r1 = false; break; } pruv_k1 += 1; } pruv_r1 }) { panic!("{}", "pruv: requires violated: crate::number_ranges: forall k in 0..len(numbers): ((-1000000000000000 <= numbers[k]) && (numbers[k] <= 1000000000000000))"); }
+    if !({ let pruv_lo1: i128 = 0i128; let pruv_hi1: i128 = (numbers.len() as i128); let mut pruv_k1: i128 = pruv_lo1; let mut pruv_r1 = true; if !(pruv_lo1 >= pruv_hi1 || (pruv_lo1 >= -9223372036854775808i128 && pruv_hi1 <= 9223372036854775807i128 && pruv_hi1 - pruv_lo1 <= (pruv_budget as i128) && pruv_lo1 >= 0i128 && pruv_hi1 <= (numbers.len() as i128) && { let mut pruv_a1 = true; let mut pruv_j1: i64 = pruv_lo1 as i64; let pruv_e1: i64 = pruv_hi1 as i64; while pruv_j1 < pruv_e1 { let k: i128 = pruv_j1 as i128; pruv_a1 &= (((-1000000000000000i128) <= ((unsafe { *numbers.get_unchecked(pruv_j1 as usize) }) as i128)) & (((unsafe { *numbers.get_unchecked(pruv_j1 as usize) }) as i128) <= 1000000000000000i128)); pruv_j1 += 1; } pruv_a1 })) { while pruv_k1 < pruv_hi1 { pruv_budget -= 1; if pruv_budget < 0 { pruv_ud("contract iteration budget exceeded"); } let k: i128 = pruv_k1; if !((((-1000000000000000i128) <= pruv_cidx(numbers, k)) && (pruv_cidx(numbers, k) <= 1000000000000000i128))) { pruv_r1 = false; break; } pruv_k1 += 1; } } else if pruv_hi1 > pruv_lo1 { let pruv_b = &mut pruv_budget; *pruv_b -= (pruv_hi1 - pruv_lo1) as i64; } pruv_r1 }) { panic!("{}", "pruv: requires violated: crate::number_ranges: forall k in 0..len(numbers): ((-1000000000000000 <= numbers[k]) && (numbers[k] <= 1000000000000000))"); }
     number_ranges__pruv_body(numbers)
 }
 

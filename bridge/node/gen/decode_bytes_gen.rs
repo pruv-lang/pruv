@@ -1,5 +1,5 @@
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_str_boundary(a: &str, i: i64) -> bool { i >= 0 && (i as u64) <= (a.len() as u64) && a.is_char_boundary(i as usize) }
 
 ::std::thread_local! { static PRUV_CTX: ::std::cell::Cell<&'static str> = ::std::cell::Cell::new(""); }
@@ -16,36 +16,36 @@ fn pruv_ud(what: &str) -> ! {
     if c.is_empty() { panic!("pruv: requires undefined: {}", what) } else { panic!("pruv: foreign contract undefined: {}: {}", c, what) }
 }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cidx(a: &[i64], i: i128) -> i128 { if i >= 0 && i < (a.len() as i128) { a[i as usize] as i128 } else { pruv_ud("array index out of range") } }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cadd(a: i128, b: i128) -> i128 { a.checked_add(b).unwrap_or_else(|| pruv_ud("i128 overflow in +")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_csub(a: i128, b: i128) -> i128 { a.checked_sub(b).unwrap_or_else(|| pruv_ud("i128 overflow in -")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cmul(a: i128, b: i128) -> i128 { a.checked_mul(b).unwrap_or_else(|| pruv_ud("i128 overflow in *")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cneg(a: i128) -> i128 { a.checked_neg().unwrap_or_else(|| pruv_ud("i128 overflow in unary -")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cdiv(a: i128, b: i128) -> i128 { if b == 0 { pruv_ud("division by zero in /") } a.checked_div_euclid(b).unwrap_or_else(|| pruv_ud("i128 overflow in /")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_crem(a: i128, b: i128) -> i128 { if b == 0 { pruv_ud("division by zero in %") } a.checked_rem_euclid(b).unwrap_or_else(|| pruv_ud("i128 overflow in %")) }
 
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cidx_u8(a: &[u8], i: i128) -> i128 { if i >= 0 && i < (a.len() as i128) { a[i as usize] as i128 } else { pruv_ud("array index out of range") } }
 
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cidx_str(a: &str, i: i128) -> i128 { if i >= 0 && i < (a.len() as i128) { a.as_bytes()[i as usize] as i128 } else { pruv_ud("array index out of range") } }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cboundary(a: &str, i: i128) -> bool { i >= 0 && i <= (a.len() as i128) && a.is_char_boundary(i as usize) }
 
 #[allow(dead_code)]
@@ -61,67 +61,72 @@ fn pruv_g6_ens(name: &str, what: &str) -> ! { panic!("pruv: foreign ensures viol
 #[inline(never)]
 fn pruv_g6_repr(what: &str) -> ! { panic!("pruv: invalid representation: {}", what) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_g6_charge(budget: &mut i64, n: usize) { let n: i64 = if n > (i64::MAX as usize) { i64::MAX } else { n as i64 }; *budget = budget.saturating_sub(n); if *budget < 0 { pruv_ud("budget") } }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
+#[inline(always)]
 fn utf8_lossy(data: &[u8], from: i64) -> ::std::string::String {
     let pruv_g = pruv_ctx("utf8_lossy");
     let mut pruv_budget: i64 = 1_073_741_824;
     if !(((0i128 <= (from as i128)) && ((from as i128) <= (data.len() as i128)))) { pruv_g6_req("utf8_lossy", "((0 <= from) && (from <= len(data)))"); }
-    let result: ::std::string::String = match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| ::pruv_decode::utf8_lossy(data, from))) {
-        Ok(pruv_r) => pruv_r,
-        Err(_) => panic!("pruv: foreign panic: utf8_lossy"),
-    };
+    struct pruv_ForeignGuard;
+    impl ::std::ops::Drop for pruv_ForeignGuard { #[cold] fn drop(&mut self) { let _ = ::std::io::Write::write_all(&mut ::std::io::stderr(), "pruv: foreign panic: utf8_lossy\u{a}".as_bytes()); } }
+    let pruv_fg = pruv_ForeignGuard;
+    let result: ::std::string::String = ::pruv_decode::utf8_lossy(data, from);
+    ::std::mem::forget(pruv_fg);
     if (result.len() as u128) > (1u128 << 40) { pruv_g6_repr("utf8_lossy: result length"); }
     result
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
+#[inline(always)]
 fn pruv_g6_string_to_str(s: &::std::string::String) -> ::std::string::String {
-    let pruv_g = pruv_ctx("string_to_str");
     let pruv_r: ::std::string::String = s.clone();
     pruv_r
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
+#[inline(always)]
 fn utf16(data: &[u8], from: i64, big: bool) -> ::std::string::String {
     let pruv_g = pruv_ctx("utf16");
     let mut pruv_budget: i64 = 1_073_741_824;
     if !(((0i128 <= (from as i128)) && ((from as i128) <= (data.len() as i128)))) { pruv_g6_req("utf16", "((0 <= from) && (from <= len(data)))"); }
-    let result: ::std::string::String = match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| ::pruv_decode::utf16(data, from, big))) {
-        Ok(pruv_r) => pruv_r,
-        Err(_) => panic!("pruv: foreign panic: utf16"),
-    };
+    struct pruv_ForeignGuard;
+    impl ::std::ops::Drop for pruv_ForeignGuard { #[cold] fn drop(&mut self) { let _ = ::std::io::Write::write_all(&mut ::std::io::stderr(), "pruv: foreign panic: utf16\u{a}".as_bytes()); } }
+    let pruv_fg = pruv_ForeignGuard;
+    let result: ::std::string::String = ::pruv_decode::utf16(data, from, big);
+    ::std::mem::forget(pruv_fg);
     if (result.len() as u128) > (1u128 << 40) { pruv_g6_repr("utf16: result length"); }
     result
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
+#[inline(always)]
 fn utf8_copy(data: &[u8]) -> ::std::string::String {
-    let pruv_g = pruv_ctx("utf8_copy");
-    let mut pruv_budget: i64 = 1_073_741_824;
-    let result: ::std::string::String = match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| ::pruv_decode::utf8_copy(data))) {
-        Ok(pruv_r) => pruv_r,
-        Err(_) => panic!("pruv: foreign panic: utf8_copy"),
-    };
+    struct pruv_ForeignGuard;
+    impl ::std::ops::Drop for pruv_ForeignGuard { #[cold] fn drop(&mut self) { let _ = ::std::io::Write::write_all(&mut ::std::io::stderr(), "pruv: foreign panic: utf8_copy\u{a}".as_bytes()); } }
+    let pruv_fg = pruv_ForeignGuard;
+    let result: ::std::string::String = ::pruv_decode::utf8_copy(data);
+    ::std::mem::forget(pruv_fg);
     if (result.len() as u128) > (1u128 << 40) { pruv_g6_repr("utf8_copy: result length"); }
     result
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
+#[inline(always)]
 fn euc_kr(data: &[u8]) -> ::std::string::String {
-    let pruv_g = pruv_ctx("euc_kr");
-    let mut pruv_budget: i64 = 1_073_741_824;
-    let result: ::std::string::String = match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| ::pruv_decode::euc_kr(data))) {
-        Ok(pruv_r) => pruv_r,
-        Err(_) => panic!("pruv: foreign panic: euc_kr"),
-    };
+    struct pruv_ForeignGuard;
+    impl ::std::ops::Drop for pruv_ForeignGuard { #[cold] fn drop(&mut self) { let _ = ::std::io::Write::write_all(&mut ::std::io::stderr(), "pruv: foreign panic: euc_kr\u{a}".as_bytes()); } }
+    let pruv_fg = pruv_ForeignGuard;
+    let result: ::std::string::String = ::pruv_decode::euc_kr(data);
+    ::std::mem::forget(pruv_fg);
     if (result.len() as u128) > (1u128 << 40) { pruv_g6_repr("euc_kr: result length"); }
     result
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
+#[inline(always)]
 fn utf8_ok__pruv_body(a: &[u8]) -> bool {
     let mut i: i64 = 0i64;
     while (i < (a.len() as i64)) {
@@ -178,14 +183,17 @@ fn utf8_ok__pruv_body(a: &[u8]) -> bool {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
-#[inline]
+#[inline(always)]
 pub fn utf8_ok(a: &[u8]) -> bool {
+    #[cold] #[inline(never)] fn pruv_len_slow(a: usize) -> ! { if (a as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", a) } unreachable!() }
+    if ((a.len() as u64) > (1u64 << 40)) { pruv_len_slow(a.len()) }
     let mut pruv_budget: i64 = 1_073_741_824;
     if !(((a.len() as i128) <= 1000000000000i128)) { panic!("{}", "pruv: requires violated: utf8_ok: (len(a) <= 1000000000000)"); }
     utf8_ok__pruv_body(a)
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
+#[inline(always)]
 fn decode_kind__pruv_body(data: &[u8]) -> i64 {
     if (((((data.len() as i64) >= 3i64) && (((unsafe { *data.get_unchecked((0i64) as usize) }) as i64) == 239i64)) && (((unsafe { *data.get_unchecked((1i64) as usize) }) as i64) == 187i64)) && (((unsafe { *data.get_unchecked((2i64) as usize) }) as i64) == 191i64)) {
         return 0i64;
@@ -203,14 +211,17 @@ fn decode_kind__pruv_body(data: &[u8]) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
-#[inline]
+#[inline(always)]
 pub fn decode_kind(data: &[u8]) -> i64 {
+    #[cold] #[inline(never)] fn pruv_len_slow(data: usize) -> ! { if (data as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", data) } unreachable!() }
+    if ((data.len() as u64) > (1u64 << 40)) { pruv_len_slow(data.len()) }
     let mut pruv_budget: i64 = 1_073_741_824;
     if !(((data.len() as i128) <= 1000000000000i128)) { panic!("{}", "pruv: requires violated: decode_kind: (len(data) <= 1000000000000)"); }
     decode_kind__pruv_body(data)
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
+#[inline(always)]
 fn decode_text__pruv_body(data: &[u8]) -> ::std::string::String {
     let k: i64 = decode_kind__pruv_body(data);
     if (k == 0i64) {
@@ -230,14 +241,17 @@ fn decode_text__pruv_body(data: &[u8]) -> ::std::string::String {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
-#[inline]
+#[inline(always)]
 pub fn decode_text(data: &[u8]) -> ::std::string::String {
+    #[cold] #[inline(never)] fn pruv_len_slow(data: usize) -> ! { if (data as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", data) } unreachable!() }
+    if ((data.len() as u64) > (1u64 << 40)) { pruv_len_slow(data.len()) }
     let mut pruv_budget: i64 = 1_073_741_824;
     if !(((data.len() as i128) <= 1000000000000i128)) { panic!("{}", "pruv: requires violated: decode_text: (len(data) <= 1000000000000)"); }
     decode_text__pruv_body(data)
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
+#[inline(always)]
 fn looks_binary__pruv_body(data: &[u8]) -> bool {
     let mut i: i64 = 0i64;
     while ((i < (data.len() as i64)) && (i < 8192i64)) {
@@ -250,8 +264,10 @@ fn looks_binary__pruv_body(data: &[u8]) -> bool {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
-#[inline]
+#[inline(always)]
 pub fn looks_binary(data: &[u8]) -> bool {
+    #[cold] #[inline(never)] fn pruv_len_slow(data: usize) -> ! { if (data as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", data) } unreachable!() }
+    if ((data.len() as u64) > (1u64 << 40)) { pruv_len_slow(data.len()) }
     let mut pruv_budget: i64 = 1_073_741_824;
     if !(((data.len() as i128) <= 1000000000000i128)) { panic!("{}", "pruv: requires violated: looks_binary: (len(data) <= 1000000000000)"); }
     looks_binary__pruv_body(data)
