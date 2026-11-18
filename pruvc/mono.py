@@ -47,6 +47,7 @@ from vast import *
 from typeinfo import (bind_args, decl_owner, encode, format_type, spec_fn_stem, spec_type_stem,
                       substitute, COLLECTION_ARITY)
 from foreign import CATALOG   # G6: catalog calls keep their name (never specialized)
+from shared_data import load   # shared tables (pruvc/data/*.json)
 from small import declared_bound   # KD-M6-3: the stack-result bound survives specialization
 from modules import encode_name, encode_stem, identity_components, safe_type   # G4 A2: shared symbol encoding
 
@@ -57,10 +58,12 @@ def ident_key(name):
         return "p" + encode_name(name[1:].split("::"))
     return encode_name(identity_components(name))
 
-MAX_FN_SPECS = 4096
-MAX_TYPE_APPS = 4096
-MAX_DEPTH = 128
-MAX_TYPE_NODES = 1 << 16
+# Shared with pruvc-rs (pruvc/data/mono_limits.json, tools/gen_shared.py).
+_LIMITS = load("mono_limits")
+MAX_FN_SPECS = _LIMITS["MAX_FN_SPECS"]
+MAX_TYPE_APPS = _LIMITS["MAX_TYPE_APPS"]
+MAX_DEPTH = _LIMITS["MAX_DEPTH"]
+MAX_TYPE_NODES = _LIMITS["MAX_TYPE_NODES"]
 
 
 # ---------------------------------------------------------------------------
