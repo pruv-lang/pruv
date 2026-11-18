@@ -31,7 +31,6 @@ use crate::gtype::{
     spec_type_stem, substitute, GType, Mapping, ParamId,
 };
 use crate::modules::{encode_name, encode_stem, ident_key, safe_type, G4};
-use crate::typeinfo::first_g3_use;
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 
@@ -48,11 +47,6 @@ pub enum MonoError {
 }
 
 type MR<T> = Result<T, MonoError>;
-
-/// The programs that use G3 anywhere.
-pub fn is_generic_program(prog: &Program) -> bool {
-    first_g3_use(prog).is_some()
-}
 
 /// One specialization of a generic function (the concrete Function is taken out when the plan is assembled).
 struct FnSpec {

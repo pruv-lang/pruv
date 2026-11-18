@@ -507,20 +507,6 @@ pub fn first_g3_use(prog: &Program) -> Option<(i64, i64, String)> {
     best
 }
 
-/// PruvError (unsupported_type) for the first G3 construct, or None. Run after type checking, before the verifier,
-/// so that --no-verify and every back end reject generics explicitly instead of crashing.
-pub fn g3_unimplemented_error(prog: &Program, stage: &str) -> Option<crate::diagnostic::PruvError> {
-    let (line, col, what) = first_g3_use(prog)?;
-    Some(crate::diagnostic::PruvError::new(
-        stage,
-        line,
-        col,
-        "unsupported_type",
-        format!("generics are not supported yet ({}): the verify and codegen layers are not implemented", what),
-        "avoid type parameters and type arguments for now",
-    ))
-}
-
 // ---------------------------------------------------------------------------
 // G9 A0 staging guard: the verifier and both code generators do not support recursion, decreases, size,
 // recursive types or aggregate buffer fields yet (G9_SPEC 10, 11-13 replace this guard batch by batch).
