@@ -175,13 +175,16 @@ blob into the new arena, rehashing. Tombstones, stale slots and dead arena words
 
 Status codes: 0 ok, 1 Grow (`out[0] = N`), 2 InvalidInput (bad op encoding; `m4_grow`: invalid prev), 3 `out` too small.
 
-`st` passed to `m4_op` / `m4_observe` must come from `m4_init`, `m4_grow` or an earlier `m4_op` (since L3 P13a.9 the
-proved `valid(old) ==> valid(st)` ensures replaces the per-call header check). On any other buffer these calls stay
+`st` passed to `m4_op` / `m4_observe` must come from `m4_init`, `m4_grow`, an earlier `m4_op` or an `m4_import` that
+returned 0 (since L3 P13a.9 the proved `valid(old) ==> valid(st)` ensures replaces the per-call header check). On any other buffer these calls stay
 memory-safe and terminate, but their answers are unspecified.
 
 - `pub fn m4_init(inout st: [i64]) -> i64` — writes an empty state (header, three roots); returns 0, or the minimum
   number of words `N > 0` if `st` is too small (nothing written).
 - `pub fn m4_grow(prev: [i64], inout next: [i64]) -> i64` — 0 ok, 2 invalid prev or `next` too small.
+- `pub fn m4_import(st: [i64], inout cnt: [i64]) -> i64` — import admission (`bud_admit::admit`, L3 P13a.10) of a buffer
+  handed in from outside the entries; 0 if it is a valid state with I1 on every entry, else 2. `cnt` (>= 3 words) gets
+  the entries, free-list steps and slots visited.
 - `pub fn m4_op(inout st: [i64], op: [i64], inout out: [i64]) -> i64` — one state operation; on 0, `out[0]` is the
   number of result words and `out[1..]` the result.
 - `pub fn m4_observe(st: [i64], inout out: [i64]) -> i64` — whole-state dump (final observation only); 0 ok, 3 `out` too small.

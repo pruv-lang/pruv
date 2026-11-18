@@ -1524,6 +1524,7 @@ class Gen:
         s.need_eq = set()
         s.need_bits = set()  # P2: band/bor/bxor used in a runtime contract (filled while contracts are generated)
         s.need_shift = set()  # P2 batch 2: shifts used in code under --no-verify (pruv_shl / pruv_ushr helpers)
+        s.printed = False  # P13a.10: print lowers to println!, which panics when stdout fails (raw_unwind_free)
         s.need_load_be = False  # P2 batch 4: load_be used in a runtime contract (pruv_cload_be helper)
         # G6 (section 12): only a program that uses G6 gets any of the following
         from foreign import first_g6_use, first_proc_use, first_net_use, first_async_use, uses_files
@@ -3080,6 +3081,7 @@ class Gen:
                 return ("{ let pruv_i: i64 = %s; let pruv_w: i64 = %s; %s%s.copy_from_slice(&(pruv_w as u64).to_be_bytes()[%d..]); }"
                         % (s.e(a[1]), s.e(a[2]), chk, dst, 8 - nb))
             if n == "print":
+                s.printed = True
                 return 'println!("{}", %s)' % s.e(a[0])
             if n == "is_char_boundary":  # G2 B2
                 return "pruv_str_boundary(%s, %s)" % (s.arr_ref(a[0]), s.e(a[1]))
@@ -3201,6 +3203,38 @@ RAW_STORE = """\
         }
     }"""
 
+# P13a.10: the store of a program whose entries cannot unwind (raw_unwind_free). Same API, no poison flag: a verified
+# entry either panics in its entry requires check, before it writes anything, or returns normally, so the state in the
+# store is always the result of complete entry calls.
+RAW_STORE_FREE = """\
+    /// Never produced for this program: its entries cannot unwind (kept so adapters written against the poisoning
+    /// store compile unchanged).
+    #[derive(Debug)]
+    pub struct PruvPoisoned {}
+    /// Owns resident state for the raw entries. Every call runs through `with`. This program was verified and calls
+    /// no foreign or runtime code, so an entry either panics in its entry `requires` check, before it writes, or
+    /// returns normally: the state is always the result of complete entry calls and the store has no poison flag
+    /// (`with` always runs the closure, `is_poisoned` is always false). Two rules the types cannot enforce are the
+    /// adapter's: `T` owns the state (no reference or shared handle to it outside the store), and the closure changes
+    /// `T` only through the entries (a host write followed by a host panic is not caught here).
+    pub struct PruvStore<T> {
+        data: T,
+    }
+    impl<T> PruvStore<T> {
+        #[inline(always)]
+        pub fn new(data: T) -> Self {
+            PruvStore { data }
+        }
+        #[inline(always)]
+        pub fn is_poisoned(&self) -> bool {
+            false
+        }
+        #[inline(always)]
+        pub fn with<R>(&mut self, f: impl FnOnce(&mut T) -> R) -> Result<R, PruvPoisoned> {
+            Ok(f(&mut self.data))
+        }
+    }"""
+
 RAW_FORWARD = """\
         /// Raw entry `%s` (manifest raw_entries = "unsafe").
         ///
@@ -3216,23 +3250,38 @@ RAW_FORWARD = """\
         }"""
 
 
-def raw_module(mode, items):
+def raw_module(mode, items, unwind_free=False):
     """P09: the pruv_raw module of a program with manifest raw_entries = mode ("crate" or "unsafe"), without a
-    trailing newline. items: (name, params text, return text, parameter names) of the host entries' public items in emission order."""
+    trailing newline. items: (name, params text, return text, parameter names) of the host entries' public items in emission order.
+    unwind_free (P13a.10, raw_unwind_free): the entries cannot unwind, so the store carries no poison flag."""
+    store = RAW_STORE_FREE if unwind_free else RAW_STORE
     if mode == "crate":
         head = ['// P09: manifest raw_entries = "crate": the host entries above are pub(crate); a host adapter in this crate keeps',
-                "// resident state in pruv_raw::PruvStore, which refuses every reuse after a panic.",
+                ("// resident state in pruv_raw::PruvStore; the entries cannot unwind, so the store has no poison flag."
+                 if unwind_free else "// resident state in pruv_raw::PruvStore, which refuses every reuse after a panic."),
                 "#[allow(dead_code)]", "pub mod pruv_raw {"]
-        return "\n".join(head + [RAW_STORE, "}"])
+        return "\n".join(head + [store, "}"])
     head = ['// P09: manifest raw_entries = "unsafe": the host entries above are pub(crate) and exported only as the documented',
-            "// pub unsafe fn forwarders in pruv_raw; resident state lives in pruv_raw::PruvStore, which refuses reuse after a panic.",
+            ("// pub unsafe fn forwarders in pruv_raw; resident state lives in pruv_raw::PruvStore (no poison flag: no unwind)."
+             if unwind_free else
+             "// pub unsafe fn forwarders in pruv_raw; resident state lives in pruv_raw::PruvStore, which refuses reuse after a panic."),
             "#[allow(dead_code)]", "pub mod pruv_raw {"]
     # the forwarders sit in a private child module so the program's own type names (which the glob import brings in)
     # never meet PruvStore, PruvPoisoned or the prelude names the store uses
     mid = ["    #[allow(unused_imports)]", "    pub use self::entries::*;", "    mod entries {",
            "        #[allow(unused_imports)]", "        use super::super::*;"]
     fwd = [RAW_FORWARD % (n, n, ps, ret, n, ", ".join(names)) for n, ps, ret, names in items]
-    return "\n".join(head + [RAW_STORE] + mid + fwd + ["    }", "}"])
+    return "\n".join(head + [store] + mid + fwd + ["    }", "}"])
+
+
+def raw_unwind_free(g):
+    """P13a.10: no host entry of the program can unwind after it starts writing. Verified explicit mode erases every
+    check inside bodies (Pruv callers call f__pruv_body, the caller proved requires; no cost counters) and every
+    operation the verifier accepted is total on the proved domain (get_unchecked, plain arithmetic, lengths <= 2^40),
+    so the only panic left is the entry's own requires check, which runs before the body. Foreign code (G6 boundary
+    checks, trusted Rust), print (println! panics when stdout fails), the G10 file / process / socket / event runtimes
+    and par groups (threads, locks) keep the poisoning store."""
+    return bool(g.verified and not g.printed and not g.g6 and not g.g10 and not g.proc and not g.net and not g.ev and not g.par_callees)
 
 
 def inline_policy(text):
@@ -3370,7 +3419,7 @@ def gen_rust_ex(prog, verified=True, trust_callers=False, budget=1 << 30, plan=N
         trust_out["fg"] = g.fg if g.g6 else None
     text = inline_policy("\n".join(g.out) + "\n")
     if g.raw:   # P09: after inline_policy, so the module never changes an inlining decision
-        text += raw_module(g.raw, g.raw_items) + "\n"
+        text += raw_module(g.raw, g.raw_items, raw_unwind_free(g)) + "\n"
     return text, manifest
 
 ASYNC_PRELUDE = r"""#[derive(Clone, Default)]

@@ -1209,6 +1209,8 @@ struct Gen<'a> {
     need_bits: HashSet<String>,
     /// P2 batch 2: shifts used in code under --no-verify (pruv_shl / pruv_ushr helpers)
     need_shift: HashSet<String>,
+    /// P13a.10: print lowers to println!, which panics when stdout fails (raw_unwind_free).
+    printed: bool,
     /// P2 batch 4: load_be used in a runtime contract (pruv_cload_be helper)
     need_load_be: bool,
     /// G9 A2: the diagnostic raised by g9_unsupported (the R error is only a marker)
@@ -1345,6 +1347,7 @@ impl<'a> Gen<'a> {
             need_eq: HashSet::new(),
             need_bits: HashSet::new(),
             need_shift: HashSet::new(),
+            printed: false,
             need_load_be: false,
             diag: None,
         }
@@ -4118,6 +4121,7 @@ impl<'a> Gen<'a> {
                     ));
                 }
                 if n == "print" {
+                    self.printed = true;
                     return Ok(format!("println!(\"{{}}\", {})", self.e(arg(a, 0)?)?));
                 }
                 if n == "is_char_boundary" {
@@ -4486,7 +4490,7 @@ fn gen_rust_concrete_core(
     let mut text = inline_policy(s);
     if let Some(raw) = &g.raw {
         // P09: after inline_policy, so the module never changes an inlining decision
-        text.push_str(&raw_module(raw, &g.raw_items));
+        text.push_str(&raw_module_with(raw, &g.raw_items, raw_unwind_free(&g)));
         text.push('\n');
     }
     Ok((text, manifest, trust))
@@ -4525,6 +4529,47 @@ const RAW_STORE: &str = "    /// The store was poisoned by a panic inside `PruvS
         }
     }";
 
+/// P13a.10: the store of a program whose entries cannot unwind (`raw_unwind_free`). Same API, no poison flag: a
+/// verified entry either panics in its entry requires check, before it writes anything, or returns normally, so the
+/// state in the store is always the result of complete entry calls.
+const RAW_STORE_FREE: &str = "    /// Never produced for this program: its entries cannot unwind (kept so adapters written against the poisoning
+    /// store compile unchanged).
+    #[derive(Debug)]
+    pub struct PruvPoisoned {}
+    /// Owns resident state for the raw entries. Every call runs through `with`. This program was verified and calls
+    /// no foreign or runtime code, so an entry either panics in its entry `requires` check, before it writes, or
+    /// returns normally: the state is always the result of complete entry calls and the store has no poison flag
+    /// (`with` always runs the closure, `is_poisoned` is always false). Two rules the types cannot enforce are the
+    /// adapter's: `T` owns the state (no reference or shared handle to it outside the store), and the closure changes
+    /// `T` only through the entries (a host write followed by a host panic is not caught here).
+    pub struct PruvStore<T> {
+        data: T,
+    }
+    impl<T> PruvStore<T> {
+        #[inline(always)]
+        pub fn new(data: T) -> Self {
+            PruvStore { data }
+        }
+        #[inline(always)]
+        pub fn is_poisoned(&self) -> bool {
+            false
+        }
+        #[inline(always)]
+        pub fn with<R>(&mut self, f: impl FnOnce(&mut T) -> R) -> Result<R, PruvPoisoned> {
+            Ok(f(&mut self.data))
+        }
+    }";
+
+/// P13a.10: no host entry of the program can unwind after it starts writing. Verified explicit mode erases every
+/// check inside bodies (Pruv callers call f__pruv_body, the caller proved requires; no cost counters) and every
+/// operation the verifier accepted is total on the proved domain (get_unchecked, plain arithmetic, lengths <= 2^40),
+/// so the only panic left is the entry's own requires check, which runs before the body. Foreign code (G6 boundary
+/// checks, trusted Rust), print (println! panics when stdout fails), the G10 file / process / socket / event runtimes
+/// and par groups (threads, locks) keep the poisoning store. Same rule as the Python generator's raw_unwind_free.
+fn raw_unwind_free(g: &Gen) -> bool {
+    g.verified && !g.printed && !g.g6 && !g.g10 && !g.proc && !g.net && !g.ev && g.par_callees.is_empty()
+}
+
 /// `RAW_FORWARD` of the Python generator with its `%s` slots: name, name, params, return, name, argument names.
 fn raw_forward(name: &str, ps: &str, ret: &str, names: &[String]) -> String {
     format!(
@@ -4550,22 +4595,36 @@ fn raw_forward(name: &str, ps: &str, ret: &str, names: &[String]) -> String {
 /// P09: the pruv_raw module of a program with manifest raw_entries = mode ("crate" or "unsafe"), without a trailing
 /// newline. items: (name, params text, return text, parameter names) of the host entries' public items in emission order.
 pub fn raw_module(mode: &str, items: &[(String, String, String, Vec<String>)]) -> String {
+    raw_module_with(mode, items, false)
+}
+
+/// `raw_module` with the P13a.10 choice: unwind_free (raw_unwind_free) emits the store without a poison flag.
+pub fn raw_module_with(mode: &str, items: &[(String, String, String, Vec<String>)], unwind_free: bool) -> String {
+    let store = if unwind_free { RAW_STORE_FREE } else { RAW_STORE };
     let mut parts: Vec<String> = Vec::new();
     if mode == "crate" || mode == "c" {
         // P10: "c" is "crate" on the Rust backend (the pruv_c adapter exists only in the LLVM bindings)
         parts.push("// P09: manifest raw_entries = \"crate\": the host entries above are pub(crate); a host adapter in this crate keeps".to_string());
-        parts.push("// resident state in pruv_raw::PruvStore, which refuses every reuse after a panic.".to_string());
+        parts.push(if unwind_free {
+            "// resident state in pruv_raw::PruvStore; the entries cannot unwind, so the store has no poison flag."
+        } else {
+            "// resident state in pruv_raw::PruvStore, which refuses every reuse after a panic."
+        }.to_string());
         parts.push("#[allow(dead_code)]".to_string());
         parts.push("pub mod pruv_raw {".to_string());
-        parts.push(RAW_STORE.to_string());
+        parts.push(store.to_string());
         parts.push("}".to_string());
         return parts.join("\n");
     }
     parts.push("// P09: manifest raw_entries = \"unsafe\": the host entries above are pub(crate) and exported only as the documented".to_string());
-    parts.push("// pub unsafe fn forwarders in pruv_raw; resident state lives in pruv_raw::PruvStore, which refuses reuse after a panic.".to_string());
+    parts.push(if unwind_free {
+        "// pub unsafe fn forwarders in pruv_raw; resident state lives in pruv_raw::PruvStore (no poison flag: no unwind)."
+    } else {
+        "// pub unsafe fn forwarders in pruv_raw; resident state lives in pruv_raw::PruvStore, which refuses reuse after a panic."
+    }.to_string());
     parts.push("#[allow(dead_code)]".to_string());
     parts.push("pub mod pruv_raw {".to_string());
-    parts.push(RAW_STORE.to_string());
+    parts.push(store.to_string());
     // the forwarders sit in a private child module so the program's own type names (which the glob import brings in)
     // never meet PruvStore, PruvPoisoned or the prelude names the store uses
     for l in [
@@ -4766,6 +4825,17 @@ mod tests {
         assert!(t.contains("        /// Raw entry `put` (manifest raw_entries = \"unsafe\").\n        ///\n        /// # Safety\n"));
         assert!(t.contains("        #[inline(always)]\n        pub unsafe fn put(st: &mut [i64], i: i64) -> i64 {\n            super::super::put(st, i)\n        }\n    }\n}"));
         assert!(!t.contains("\n    use super::*;"));
+    }
+
+    #[test]
+    fn raw_module_unwind_free_text() {
+        let t = raw_module_with("crate", &[], true);
+        assert!(t.contains("// resident state in pruv_raw::PruvStore; the entries cannot unwind, so the store has no poison flag.\n#[allow(dead_code)]\npub mod pruv_raw {\n    /// Never produced"));
+        assert!(t.ends_with("            Ok(f(&mut self.data))\n        }\n    }\n}"));
+        assert!(!t.contains("poisoned: bool"));
+        let u = raw_module_with("unsafe", &[], true);
+        assert!(u.contains("(no poison flag: no unwind)."));
+        assert!(!u.contains("poisoned: bool"));
     }
 
     #[test]

@@ -1,15 +1,6 @@
 // L3 P11: import admission for the resident budget store (bud_store layout, bud_map slot words).
 // Separate module so that roots which never import a buffer (root_m4) do not carry its proof.
 
-// A region of cap words at off lies inside the arena [ab, at) (cap 0 needs no place: nothing is ever written there).
-fn span_ok(off: i64, cap: i64, ab: i64, at: i64) -> bool
-  requires 0 <= ab && ab <= at && at <= 1099511627776
-{
-  if cap == 0 { return true; }
-  if cap < 0 || cap > 4294967296 { return false; }
-  return ab <= off && off <= at && cap <= at - off;
-}
-
 // A link field: -1 (none) or an entry below top.
 fn link_ok(v: i64, top: i64) -> bool
 { return v >= -1 && v < top; }
@@ -27,37 +18,87 @@ fn key_pad_ok(st: [i64], off: i64, kn: i64) -> bool
   return band(w, 65535) == 0;
 }
 
-// One entry of admit(): 1 live, 0 free, or admit's negative class code.
+// A region of cap words at off lies inside the arena [ab, at) (cap 0 needs no place: nothing is ever written there).
+// No requires, so that ent_i1 can use it in a contract; the bounds on ab and at are tested first.
+fn span_w(off: i64, cap: i64, ab: i64, at: i64) -> bool
+{
+  return cap == 0 || (cap > 0 && cap <= 4294967296 && 0 <= ab && at <= 1099511627776 && ab <= off && off <= at &&
+    cap <= at - off);
+}
+
+// I1 of entry e as a ground predicate on its words, field f at st[c32(st[5]) + 20 * e + f], bud_store::ea's address
+// (a valid store has st[5] = 16 + slots <= 2^32 + 16; the base is clamped to 2^32 as ea clamps it): state 0 (free) or
+// 1 (live); roots 0..2 live with owner -1; key span (words 4, 18) and blob span (12, 19) inside the arena [ab, at); a
+// free entry's next link (8) is -1 or below top; a live entry
+// (past the roots) has its owner (1) below top, its key length (5) in 0..2^30 and in its key span (words(kn) <= cap,
+// i.e. kn <= 4 * cap), its blob length (13) in 0..blob cap, its links (7..10) -1 or below top and word 11 >= 0. Opaque,
+// so a caller that only passes admit's ensures along does not expand it; under a quantifier it is expanded in place
+// (P13o), so admit reveals it in its entry loop. Not stated (entry_ok still checks them): the owner's state and the key
+// padding (L3 P13a.10).
+pub opaque fn ent_i1(st: [i64], e: i64, top: i64, ab: i64, at: i64) -> bool
+{
+  if len(st) < 16 || e < 0 || e > 4294967296 || st[5] < 0 || st[5] > 4294967312 { return false; }
+  if st[5] > 4294967296 { return ent_w(st, 4294967296 + 20 * e, e, top, ab, at); }
+  return ent_w(st, st[5] + 20 * e, e, top, ab, at);
+}
+
+// ent_i1's word tests for entry e whose words start at b.
+pub fn ent_w(st: [i64], b: i64, e: i64, top: i64, ab: i64, at: i64) -> bool
+{
+  if b < 16 || b > len(st) - 20 { return false; }
+  let f0: i64 = st[b];
+  if f0 != 0 && f0 != 1 { return false; }
+  if e < 3 && (f0 != 1 || st[b + 1] != -1) { return false; }
+  if !span_w(st[b + 4], st[b + 18], ab, at) || !span_w(st[b + 12], st[b + 19], ab, at) { return false; }
+  if f0 == 0 { return link_ok(st[b + 8], top); }
+  if e >= 3 && (st[b + 1] < 0 || st[b + 1] >= top) { return false; }
+  if st[b + 5] < 0 || st[b + 5] > 1073741824 || st[b + 5] > 4 * st[b + 18] { return false; }
+  if st[b + 13] < 0 || st[b + 13] > st[b + 19] { return false; }
+  return link_ok(st[b + 7], top) && link_ok(st[b + 8], top) && link_ok(st[b + 9], top) && link_ok(st[b + 10], top) &&
+    st[b + 11] >= 0;
+}
+
+// One entry of admit(): 1 live, 0 free, or admit's negative class code; on 0 and 1 ent_i1 holds. Reads the entry
+// words at c32(st[5]) + 20 * e directly (ef's address; admit checked 0 <= st[5] <= 2^32 + 16; e < top <= st[6] on a
+// valid store, so the entry lies in st and the -3 range test never fires there).
 fn entry_ok(st: [i64], e: i64, top: i64, ab: i64, at: i64) -> i64
   requires 0 <= ab && ab <= at && at <= 1099511627776
+  requires 0 <= e && e < top && top <= 4294967296
   ensures result <= 1
+  ensures result >= 0 ==> ent_i1(st, e, top, ab, at)
 {
-  let f0: i64 = crate::bud_store::ef(st, e, 0);
+  reveal ent_i1;
+  if len(st) < 16 || st[5] < 0 || st[5] > 4294967312 { return -3; }
+  let mut eb: i64 = st[5];
+  if eb > 4294967296 { eb = 4294967296; }    // c32(st[5]), ef's base
+  let b: i64 = eb + 20 * e;
+  if b < 16 || b > len(st) - 20 { return -3; }
+  let f0: i64 = st[b];
   if f0 != 0 && f0 != 1 { return -3; }
-  if e < 3 && (f0 != 1 || crate::bud_store::ef(st, e, 1) != -1) { return -2; }
-  let kc: i64 = crate::bud_store::ef(st, e, 18);
-  let ko: i64 = crate::bud_store::ef(st, e, 4);
-  if !span_ok(ko, kc, ab, at) { return -5; }
-  let bc: i64 = crate::bud_store::ef(st, e, 19);
-  if !span_ok(crate::bud_store::ef(st, e, 12), bc, ab, at) { return -6; }
+  if e < 3 && (f0 != 1 || st[b + 1] != -1) { return -2; }
+  let kc: i64 = st[b + 18];
+  let ko: i64 = st[b + 4];
+  if !span_w(ko, kc, ab, at) { return -5; }
+  if !span_w(st[b + 12], st[b + 19], ab, at) { return -6; }
   if f0 == 0 {
-    if !link_ok(crate::bud_store::ef(st, e, 8), top) { return -8; }
+    if !link_ok(st[b + 8], top) { return -8; }
     return 0;
   }
   if e >= 3 {
-    let ow: i64 = crate::bud_store::ef(st, e, 1);
+    let ow: i64 = st[b + 1];
     if ow < 0 || ow >= top { return -4; }
-    if crate::bud_store::ef(st, ow, 0) != 1 { return -4; }
+    let bo: i64 = eb + 20 * ow;
+    if bo < 16 || bo > len(st) - 20 || st[bo] != 1 { return -4; }
   }
-  let kn: i64 = crate::bud_store::ef(st, e, 5);
+  let kn: i64 = st[b + 5];
   if kn < 0 || kn > 1073741824 { return -5; }
-  if crate::bud_keys::words(kn) > kc { return -5; }
+  if kn > 4 * kc { return -5; }    // words(kn) > kc
   if kn > 0 && !key_pad_ok(st, ko, kn) { return -5; }
-  let bl: i64 = crate::bud_store::ef(st, e, 13);
-  if bl < 0 || bl > bc { return -6; }
-  if !link_ok(crate::bud_store::ef(st, e, 7), top) || !link_ok(crate::bud_store::ef(st, e, 8), top) { return -7; }
-  if !link_ok(crate::bud_store::ef(st, e, 9), top) || !link_ok(crate::bud_store::ef(st, e, 10), top) { return -7; }
-  if crate::bud_store::ef(st, e, 11) < 0 { return -7; }
+  let bl: i64 = st[b + 13];
+  if bl < 0 || bl > st[b + 19] { return -6; }
+  if !link_ok(st[b + 7], top) || !link_ok(st[b + 8], top) { return -7; }
+  if !link_ok(st[b + 9], top) || !link_ok(st[b + 10], top) { return -7; }
+  if st[b + 11] < 0 { return -7; }
   return 1;
 }
 
@@ -67,8 +108,14 @@ fn entry_ok(st: [i64], e: i64, top: i64, ab: i64, at: i64) -> i64
 // -8 free list, -9 slot word, -10 header counts (words 12, 13, 14). cnt[0..3] gets the entries, free-list steps and
 // slots visited (admission work is linear in top + slots). Functional properties (I2: index completeness, child
 // lists, key uniqueness) are model tests, not admission.
+//
+// On success the header words admit bounds by are plain words (0 <= st[5] <= 2^32 + 16, top = st[7] <= 2^32,
+// 0 <= st[9] <= st[10] <= 2^40) and every entry below top meets ent_i1 against them (I1, L3 P13a.10).
 pub fn admit(st: [i64], inout cnt: [i64]) -> i64
   ensures result >= 0 ==> (crate::bud_store::valid(st) && result <= 4294967296)
+  ensures result >= 0 ==> (len(st) >= 232 && 0 <= st[5] && st[5] <= 4294967312 && 3 <= st[7] && st[7] <= 4294967296 &&
+    0 <= st[9] && st[9] <= st[10] && st[10] <= 1099511627776)
+  ensures result >= 0 ==> (forall e in 0..st[7]: ent_i1(st, e, st[7], st[9], st[10]))
 {
   crate::ent_u16::wr(inout cnt, 0, 0);
   crate::ent_u16::wr(inout cnt, 1, 0);
@@ -76,20 +123,25 @@ pub fn admit(st: [i64], inout cnt: [i64]) -> i64
   if !crate::bud_store::valid(st) { return -1; }
   let s: i64 = crate::bud_store::c32(crate::bud_store::hd(st, 4));
   let sb: i64 = crate::bud_store::c32(crate::bud_store::hd(st, 3));
-  let top: i64 = crate::bud_store::c32(crate::bud_store::hd(st, 7));
-  let ab: i64 = crate::bud_store::c40(crate::bud_store::hd(st, 9));
-  let mut at: i64 = crate::bud_store::c40(crate::bud_store::hd(st, 10));
-  if at < ab { at = ab; }
+  // valid gives len(st) >= 232 and these bounds (shape_w, dyn_ok); they are tested here as plain words so that the
+  // ensures can name them without revealing either predicate. No valid store fails them.
+  let top: i64 = st[7];
+  let ab: i64 = st[9];
+  let at: i64 = st[10];
+  if st[5] < 0 || st[5] > 4294967312 || top > 4294967296 || ab < 0 || at < ab || at > 1099511627776 { return -1; }
   if top < 3 { return -2; }
   let mut live: i64 = 0;
   let mut e: i64 = 0;
   while e < top
     invariant 0 <= e && e <= top && top <= 4294967296 && 0 <= live && live <= e
     invariant 0 <= ab && ab <= at && at <= 1099511627776
+    invariant forall j in 0..e: ent_i1(st, j, top, ab, at)
     decreases top - e
   {
     let r: i64 = entry_ok(st, e, top, ab, at);
     if r < 0 { return r; }
+    // entry_ok's ensures gives ent_i1 at e as the opaque symbol; the invariant's forall expands it, so equate the two
+    reveal ent_i1;
     if r == 1 { live = live + 1; }
     e = e + 1;
   }

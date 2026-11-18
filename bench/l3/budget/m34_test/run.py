@@ -70,7 +70,8 @@ def pruvc_cmd(pruvc):
 
 # m4raw modules (root_m4.pruv's `mod` lines), copied from the --lib dirs into the manifest package directory.
 M4RAW_MODS = [("bench/l3/lib", "ent_u16"), ("bench/l3/budget", "bud_keys"), ("bench/l3/budget", "bud_store"),
-              ("bench/l3/budget", "bud_map"), ("bench/l3/budget", "bud_world")]
+              ("bench/l3/budget", "bud_map"), ("bench/l3/budget", "bud_world"),
+              ("bench/l3/budget", "bud_admit")]
 
 
 # m4 lanes (all drive root_m4.pruv with driver_m4.rs; the q-mode check is the same for every lane):
@@ -355,6 +356,7 @@ def cmd_m4(args, tag="m4"):
     with_grow = 0
     stats_checks = 0
     stats_bad = 0
+    import_checks = 0
     for pi, pr in enumerate(progs):
         c = run([exe, "q"], inp="\n".join(pr["lines"]) + "\n", timeout=300)
         if c.returncode != 0:
@@ -362,10 +364,22 @@ def cmd_m4(args, tag="m4"):
             continue
         out = c.stdout.splitlines()
         g = 0
-        while out and (out[-1].startswith("grows ") or out[-1].startswith("final_len ")):
+        imps = [x for x in out if x.startswith("import ")]
+        while out and (out[-1].startswith("grows ") or out[-1].startswith("final_len ") or out[-1].startswith("import ")):
             if out[-1].startswith("grows "):
                 g = int(out[-1].split()[1])
             out.pop()
+        # m4_import (L3 P13a.10): exactly one import line per program; 0 with at least the 3 roots visited; the
+        # corrupt copy (entry 0's state word broken) 2 on the Rust lanes, "-" on the C lanes (no host buffer there)
+        want_bad = "-" if tag in WORLD_LANES else "2"
+        if len(imps) != 1:
+            bad.append((pi, -1, "(import)", "one import line", "%d import lines" % len(imps)))
+        else:
+            imp = imps[0].split()
+            if len(imp) != 4 or imp[1] != "0" or int(imp[2]) < 3 or imp[3] != want_bad:
+                bad.append((pi, -1, "(import)", "import 0 >=3 " + want_bad, imps[0]))
+            else:
+                import_checks += 1
         grows_total += g
         with_grow += 1 if g else 0
         if len(out) != len(pr["expected"]):
@@ -387,6 +401,7 @@ def cmd_m4(args, tag="m4"):
     print("%s: %d/%d pass (seed %d)" % (tag, ok_progs, len(progs), args.seed))
     print("%s: grows total %d across %d/%d programs" % (tag, grows_total, with_grow, len(progs)))
     print("%s: size formula / header-bound checks on stats lines: %d/%d ok" % (tag, stats_checks - stats_bad, stats_checks))
+    print("%s: import admission checks: %d/%d programs" % (tag, import_checks, len(progs)))
     if grows_total == 0:
         print("%s: WARNING no grow was exercised" % tag)
     for pi, li, inp, e, a in bad[:5]:

@@ -4,7 +4,8 @@ usage: check_raw_entries.py WORK [--rs PATH] [--py PATH]
   --rs PATH: the Rust driver (default: the Python compiler); every generated file must also be byte-identical to the
              Python compiler's output
   --py PATH: the pruvc.py to run (default: pruvc/pruvc.py of this repository)
-Checks (a) text facts for key x flags x backend, (b) compile-time rejection with rustc, (c) panic injection with a host
+Checks (a) text facts for key x flags x backend (incl. P13a.10: poison flag only under --no-verify or llvm, and for a
+par / foreign / printing program), (b) compile-time rejection with rustc, (c) panic injection with a host
 binary, (d) a user `struct PruvStore` next to a no-requires entry (names must not collide with pruv_raw's own items).
 Prints one FAIL line per failing case; exit 0 only if every case passes. Needs rustc (PATH, else ~/.cargo/bin)."""
 from pathlib import Path
@@ -42,6 +43,22 @@ SRC_PANIC = SRC_OK + ("\n"
                       "pub fn put_far(inout st: [i64], i: i64) -> ()\n"
                       "  requires len(st) >= 1\n"
                       "{\n  st[0] = 9;\n  st[i] = 1;\n}\n")
+
+# P13a.10: an entry that reaches foreign code may unwind inside its body (G6 boundary checks, trusted Rust), so the store
+# keeps its poison flag even in a verified build
+SRC_FOREIGN = ("trusted rust fn rust_min(a: i64, b: i64) -> i64\n"
+               "  ensures result <= a && result <= b\n"
+               "  ensures result == a || result == b\n"
+               "  = \"::std::cmp::min\";\n"
+               "\n"
+               "pub fn put_min(inout st: [i64], x: i64) -> ()\n"
+               "  requires len(st) >= 1\n"
+               "{\n  st[0] = rust_min(st[0], x);\n}\n")
+
+# P13a.10 (audit): print lowers to println!, which panics when stdout fails, so a printing program keeps the flag
+SRC_PRINT = ("pub fn put_print(inout st: [i64], x: i64) -> () ! io\n"
+             "  requires len(st) >= 1\n"
+             "{\n  st[0] = x;\n  print(x);\n}\n")
 
 FLAGS = (("default", []), ("trust", ["--trust-callers"]), ("noverify", ["--no-verify"]))
 KEYS = (None, "crate", "unsafe")
@@ -130,6 +147,11 @@ def main(work, rs=None, py=None):
                     check(label + ": pub(crate) fn " + n, re.search(r"^pub\(crate\) fn %s\(" % n, t, re.M) is not None)
                 check(label + ": pub mod pruv_raw", re.search(r"^pub mod pruv_raw \{", t, re.M) is not None)
                 check(label + ": PruvStore", "pub struct PruvStore<T>" in t and "pub struct PruvPoisoned" in t)
+                # P13a.10: a verified Rust-backend program with no foreign or runtime code cannot unwind inside an entry
+                # body, so its store has no poison flag; --no-verify and the LLVM backend keep the flag
+                want_flag = fname == "noverify" or backend == "llvm"
+                check(label + ": poison flag " + ("kept" if want_flag else "dropped"),
+                      ("poisoned: bool" in t) == want_flag and ("Ok(f(&mut self.data))" in t) != want_flag)
                 unsafe_fns = re.findall(r"^        pub unsafe fn (\w+)\(", t, re.M)
                 safety = t.count("/// # Safety")
                 if key == "unsafe":
@@ -137,6 +159,13 @@ def main(work, rs=None, py=None):
                     check(label + ": # Safety per entry", safety == len(ENTRIES), safety)
                 else:
                     check(label + ": no unsafe forwarders", not unsafe_fns and safety == 0, unsafe_fns)
+
+    for key in ("crate", "unsafe"):
+        for what, src in (("foreign", SRC_FOREIGN), ("print", SRC_PRINT)):
+            label = "text %s %s" % (what, key)
+            path, _ = build(label, src, key, [], "rust")
+            if path is not None:
+                check(label + ": poison flag kept", "poisoned: bool" in path.read_text())
 
     # ---- (b) compile-time rejection ---------------------------------------------------------------------------------
     def rustc(args):

@@ -3,6 +3,7 @@ mod bud_keys;
 mod bud_store;
 mod bud_map;
 mod bud_world;
+mod bud_admit;
 
 // L3-10 M4 test root: resident state entries over bud_store / bud_map / bud_world (CONTRACT.md, section "M4").
 // Status: 0 ok, 1 Grow (out[0] = N), 2 InvalidInput (bad op encoding; m4_grow: invalid prev), 3 out too small.
@@ -112,8 +113,20 @@ pub fn m4_grow(prev: [i64], inout next: [i64]) -> i64
   return 0;
 }
 
-// One state operation; on 0, out[0] = number of result words and out[1..] the result. st is a store m4_init or
-// m4_grow returned 0 for, changed only by m4_op since: valid holds there (init_store, grow_copy) and every op keeps it
+// Admits a buffer the host hands in (built elsewhere, or read back from storage) before its first m4_op: 0 ok, 2
+// rejected. Import admission (bud_admit::admit: I0 and the per-entry I1 words, linear in entries + slots) runs once per
+// handed-in buffer, not per call; on 0, valid(st) holds, so st may go to m4_op like a store m4_init returned 0 for.
+// cnt[0..3] gets admit's visit counts (entries, free-list steps, slots; words past len(cnt) are skipped).
+pub fn m4_import(st: [i64], inout cnt: [i64]) -> i64
+  ensures result == 0 ==> crate::bud_store::valid(st)
+{
+  let r: i64 = crate::bud_admit::admit(st, inout cnt);
+  if r < 0 { return 2; }
+  return 0;
+}
+
+// One state operation; on 0, out[0] = number of result words and out[1..] the result. st is a store m4_init, m4_grow
+// or m4_import returned 0 for, changed only by m4_op since: valid holds there (init_store, grow_copy) and every op keeps it
 // (the ensures), so there is no per-call header check (L3 P13a.9). On any other buffer the op is still memory-safe and
 // terminates (every read is bounds-checked, every loop bounded by a header capacity), but its answers are unspecified.
 pub fn m4_op(inout st: [i64], op: [i64], inout out: [i64]) -> i64
