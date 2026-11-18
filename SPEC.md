@@ -941,6 +941,16 @@ No mode has a public safe entry taking an arbitrary array. `requires` are checke
 The crate is the trust boundary: code in the crate is the adapter and may call entries directly. The adapter keeps two
 rules the types cannot enforce: `T` owns the state (no reference or shared handle to it outside the store), and the
 closure given to `with` never catches a panic (`catch_unwind` inside it would clear the flag).
+No-unwind store (L3 P13a.10): on the Rust backend, a verified build (not `--no-verify`) of a program with no foreign
+code (G6), no `print` (`println!` panics when stdout fails), no G10 file / process / socket / event runtime and no
+`par` group emits `PruvStore` without the poison flag:
+same API, `with` always runs `f` and returns `Ok`, `is_poisoned` is always false. In such a program every check inside
+a body is erased (callers proved `requires`, no cost counters) and every remaining operation is total on the proved
+domain, so an entry panics only in its own entry `requires` check, before it writes; the state in the store is always
+the result of complete entry calls. Allocation failure and stack overflow abort, they do not unwind. `--no-verify`,
+the LLVM backend and programs outside that rule keep the poisoning store. The store no longer catches a host panic
+inside `with`, so the adapter rule becomes: the closure changes `T` only through the entries (it already had to, since
+the entries' state must come from the entries).
 `--trust-callers` does not require `raw_entries`; without it a trust-callers entry is safe only if every caller is
 trusted, and `raw_entries` enforces that by visibility.
 `"c"`: the Rust backend output is identical to `"crate"` (it never contains `extern "C"`). LLVM bindings get the

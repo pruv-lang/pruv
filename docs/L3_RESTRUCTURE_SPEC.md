@@ -1771,3 +1771,160 @@ contract change is the removed per-call check, stated in P13a.9.3.
   ensures would shrink the loop query.
 - M7 `attach`/`closereopen` and M8 `failure` n=500 are above 1.0x hand on HEAD too; they need their own row audit
   (§4.1).
+
+## Appendix P13a.10 (P13a steps 4 and 5: no poison flag on a no-unwind store; admit proves I1, `m4_import`)
+
+### P13a.10.1 Method
+
+Step 4 (no poison flag). The `PruvStore` poison flag (P11.4) exists because an entry that panics halfway through its
+writes leaves the state half-updated. In a verified Rust-backend program that is impossible except at one place:
+every check inside a body is erased (Pruv callers call `f__pruv_body`, the caller proved `requires`, no cost counters),
+and every operation the verifier accepted is total on the proved domain (unchecked indexing, plain arithmetic, lengths
+bounded by 2^40). The only panic left is the entry's own `requires` check, which runs before the body writes. So the
+judgment "the state is the result of complete entry calls" is a consequence of the proof, and the host keeps only the
+side effect (owning `T`). Both compilers compute the same predicate, `raw_unwind_free`:
+
+    verified && !printed && !g6 && !g10 && !proc && !net && !ev && par callees empty
+
+and then emit `RAW_STORE_FREE` instead of `RAW_STORE`: the same API (`new`, `with`, `is_poisoned`, `PruvPoisoned`), so
+adapters compile unchanged, but `with` is `Ok(f(&mut self.data))` and `is_poisoned` is `false`. Excluded, keeping the
+flag: `--no-verify` (bodies keep checks), `print` (`println!` panics when stdout fails, mid-body), foreign code (G6
+boundary checks and trusted Rust may panic), the G10
+file / process / socket / event runtimes, `par` groups (threads, locks), and the LLVM backend and the C adapter (their
+store is a separate text; unchanged in this package). Allocation failure and stack overflow abort and do not unwind.
+SPEC.md "No-unwind store" states the rule, and one adapter rule the types cannot enforce: the `with` closure changes
+`T` only through the entries (a host write to `T` followed by a host panic inside `with` is no longer caught). No
+language change, so no must_reject rows.
+
+Step 5 (I1 as ensures). P13a.8 left admit's I1 facts as runtime checks without a stated contract. They are now a
+ground predicate on raw words:
+
+- `ent_i1(st, e, top, ab, at)` (`pub opaque fn`, bool, no requires) states for entry e, at
+  `st[c32(st[5]) + 20 * e + f]`, bud_store::ea's address (a valid store has `st[5] = 16 + slots <= 2^32 + 16`; the base
+  is clamped to 2^32 as `c32` clamps it; an opaque body allows only immutable lets, so the two base cases call the
+  plain bool `ent_w(st, b, ...)`): state 0 or 1; roots 0..2 live with owner -1; key span
+  (words 4, 18) and blob span (12, 19) inside the arena `[ab, at)`; a free entry's next link -1 or below top; a live
+  non-root entry's owner below top; key length in `0..2^30` and `kn <= 4 * kcap` (`words(kn) <= kcap`); blob length
+  within its cap; links 7..10 -1 or below top; word 11 >= 0.
+- `span_w` replaces `span_ok`: the same test without `requires` (it tests the arena bounds first), because a function
+  with `requires` is not expanded into a contract.
+- `entry_ok` reads the words directly instead of through `ef`/`words` (both have `requires`, so their bodies are
+  invisible to the ensures), returns the same codes in the same order (-3, -2, -5, -6, -8, -4, -5, -6, -7), and
+  `ensures result >= 0 ==> ent_i1(st, e, top, ab, at)`.
+- admit tests the header words it bounds by as plain words (`0 <= st[5] <= 2^32 + 16`, `top = st[7] <= 2^32`,
+  `0 <= st[9] <= st[10] <= 2^40`; every valid store passes, else -1) and its entry loop carries
+  `forall j in 0..e: ent_i1(st, j, top, ab, at)`.
+
+One encoding fact matters here (P13o): an opaque call is the uninterpreted `opq!F` symbol, but under a quantifier
+whose bound variable reaches an argument it is expanded to its body. entry_ok's ensures gives the symbol at `e`; the
+invariant's forall needs the body at `j = e`. The loop therefore says `reveal ent_i1;` after the entry check, which
+ties the two. Callers of admit see only the symbol form unless they reveal it.
+
+Adapter wiring (P11.5): `root_m4.pruv` gets `m4_import(st, inout cnt) -> i64`,
+`ensures result == 0 ==> bud_store::valid(st)`, for a buffer handed in from outside the entries (2 on any admit
+failure). The Rust-store drivers (`m4`, `m4raw`, `m4nv`, `m4eq`, `m4llvm*`) load it as an adapter would load a host
+buffer: right before the program's `observe` they copy the state into a fresh store, admit it (must return 0 with at
+least the three roots visited), check that its observation equals the old store's, and swap it in, so the observation
+checked against the model runs on the imported store; a copy whose entry 0 state word is 7 must return 2 and is never
+served from. The C-handle lanes (`m4c`, `m4cb`) have no host buffer and admit the handle's own state (last field
+`-`). `run.py` requires exactly one `import` line per program with those values and prints
+`import admission checks: N/N programs`.
+
+### P13a.10.2 Changed contracts
+
+| function | before | after |
+|---|---|---|
+| `bud_admit::admit` | `result >= 0 ==> valid(st) && result <= 2^32` | adds the header bounds above and `forall e in 0..st[7]: ent_i1(st, e, st[7], st[9], st[10])`; header words out of those bounds now return -1 (no valid store has them) |
+| `bud_admit::entry_ok` | none | `requires 0 <= ab <= at <= 2^40`, `0 <= e < top <= 2^32`; `ensures result <= 1`, `result >= 0 ==> ent_i1(...)` |
+| `bud_admit::ent_i1` | (new) | opaque predicate, above |
+| `bud_admit::ent_w` | (new) | ent_i1's word tests at a given base, no requires |
+| `bud_admit::span_ok` | span test with requires | removed; `span_w` (no requires) |
+| `root_m4::m4_import` | (new) | `result == 0 ==> valid(st)` |
+| `PruvStore` (Rust backend, raw entries) | poison flag always | no flag when `raw_unwind_free`; same API |
+
+Not stated by `ent_i1` (entry_ok still checks them at run time): the owner's live state and the key padding
+(`key_pad_ok` reads through `ent_u16::rd`, which returns i64 through a branch and cannot appear in a contract).
+
+### P13a.10.3 Proof time (wall s, `/usr/bin/time -p`, two runs each, same machine and session)
+
+HEAD (4a1018b) bench sources against this package's final sources (after the audit fixes, P13a.10.7), both with the
+worktree compilers (the compiler change is codegen only):
+
+| root | Rust HEAD | Rust P13a.10 | ratio | Python HEAD | Python P13a.10 | ratio |
+|---|---:|---:|---:|---:|---:|---:|
+| m34_test/root_admit | 5.21, 5.21 | 5.75, 5.58 | 1.07 to 1.10 | 8.61, 8.56 | 10.17, 10.26 | 1.19 |
+| m34_test/root_m4 | 5.34, 5.34 | 6.16, 5.93 | 1.11 to 1.15 | 9.48, 9.58 | 10.56, 10.58 | 1.11 |
+| m8_test/root_m8 | 5.99, 5.97 | 6.07, 6.04 | 1.01 | 9.83, 9.91 | 9.93, 10.24 | 1.01 to 1.04 |
+
+Gate (root_m8 <= 1.2x of Rust 6.0 s, Python 9.8 s): met, 1.01x Rust and 1.04x Python at most (root_m8 does not import
+bud_admit, so its spread is noise). The added cost on root_admit and root_m4 is admit's entry loop (the per-entry
+forall and its reveal), entry_ok's ensures and the two base cases of ent_i1 (the c32 clamp); before the clamp it was
+1.03 to 1.09x.
+
+### P13a.10.4 Performance (Rust backend)
+
+`bench/l3/budget/perf_headroom/host/run.py --only m4 --lanes m4nv --rounds 5`, ns per op, median of 7 alternating
+rounds, after step 5:
+
+| axis | n | hand | m4 | m4raw | m4nv | m4/hand | m4raw/hand | m4raw/m4 (P13a.9) | m4raw/m4 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| sessions | 100 | 14.7 | 11.6 | 11.8 | 12.1 | 0.79 | 0.80 | 1.13 | 1.02 |
+| sessions | 500 | 15.7 | 11.3 | 11.4 | 11.3 | 0.72 | 0.73 | 1.12 | 1.01 |
+| sessions | 1000 | 15.5 | 11.9 | 11.8 | 11.7 | 0.77 | 0.76 | 1.12 | 0.99 |
+| tools | 100 | 52.6 | 29.9 | 30.0 | 30.3 | 0.57 | 0.57 | 1.06 | 1.00 |
+| tools | 500 | 53.8 | 33.3 | 33.2 | 32.9 | 0.62 | 0.62 | 1.06 | 1.00 |
+| tools | 1000 | 53.1 | 32.1 | 32.4 | 32.4 | 0.60 | 0.61 | 1.06 | 1.01 |
+| clocks | 100 | 37.8 | 24.6 | 24.4 | 24.4 | 0.65 | 0.65 | 1.21 | 0.99 |
+| clocks | 500 | 39.0 | 23.6 | 23.7 | 24.4 | 0.61 | 0.61 | 1.15 | 1.00 |
+| clocks | 1000 | 39.2 | 24.8 | 24.8 | 24.6 | 0.63 | 0.63 | 1.17 | 1.00 |
+
+Gate (`m4raw/m4 <= 1.1x`): met, 0.99 to 1.02x (P13a.9: 1.06 to 1.21x). A run after step 4 alone gave 0.98 to 1.02x.
+Every cell is at or under 0.80x hand Rust. `m4_import` is not on the op path.
+
+### P13a.10.5 Gates
+
+Both compilers (Rust: worktree release build; Python: `pruvc/pruvc.py`):
+- `run.py admit`: 26/26 (codes unchanged);
+- `run.py m3 --count 300`: 300/300;
+- `run.py lanes --count 300`: all 9 lanes 300/300, stats checks 1922/1922, import admission checks 300/300;
+- `cargo test --release`, `tests/diff_rust.py --fuzz-count 20` (all same), `run_all.py --only g8_frontend` (27/27
+  Python, 39/39 Rust) and `--only l3_abi` (2/2) on both compilers (check_raw_entries asserts the flag is dropped
+  exactly when verified on the Rust backend and kept for `--no-verify`, LLVM, a foreign program and a printing
+  program), then the full `run_all.py` on both compilers.
+
+### P13a.10.6 Remaining work
+
+- The LLVM backend store and the C adapter keep the flag; the same rule could drop it there.
+- host.rs `ResidentState` keeps its own flag (not generated code).
+- A handle that receives a buffer the entries did not produce must go through `m4_import` first; nothing in the types
+  forces it (op-before-init and foreign buffers are adapter rules). The C adapter has no import of a host buffer;
+  its `m4_import` admits the handle's own state.
+- `ent_i1` omits the owner's live state and the key padding; stating them needs an i64 word read usable in contracts.
+- A quantified opaque call is expanded, so a loop invariant over an opaque predicate needs `reveal`; a quantifier
+  form that keeps the symbol would avoid it.
+- Python proof time on `remove` (P13a.9.7): the helper with its own `kept` ensures was not done in this package.
+- check_raw_entries has no `par` or G10 runtime program case (the predicate excludes them; only foreign and print are
+  exercised).
+- `m4_import` forwards only `valid(st)`; it could also forward admit's `forall ... ent_i1` for a caller that reveals it.
+
+### P13a.10.7 Audit
+
+One review (Codex, delegate role review) of the package diff. Required findings and what was done:
+
+1. `print` lowers to `println!`, which panics when stdout fails, after body writes: a verified printing program could
+   leave a half-written state under the flag-free store. Fixed: `printed` joins the predicate in both compilers;
+   check_raw_entries gains a printing program that must keep the flag.
+2. A host closure that writes `T` and then panics inside `with` is no longer caught. Not a code change: such a write
+   already breaks the adapter rule (state changes only through the entries) and the forwarders' safety text; SPEC.md
+   now states the rule next to the store.
+3. At the largest layout (`st[5] = 2^32 + 16`) admit returned -1 where HEAD returned -2, and ent_i1's base differed
+   from `ea`'s clamped base. Fixed: the bound is `2^32 + 16` and the base is `c32(st[5])` in ent_i1 and entry_ok.
+4. `m4_import` was called on the final state only, so no op or observation ran on an imported store. Fixed: the Rust
+   drivers import a copy before `observe`, compare and swap it in (P13a.10.1).
+5. run.py passed a program with no `import` line and accepted `-` on every lane. Fixed: exactly one line, `2` on the
+   Rust lanes and `-` only on the C-handle lanes.
+
+Optional findings (left as remaining work above): par / runtime cases in check_raw_entries; forwarding the I1 ensures
+through `m4_import`. A confirmation review of the five fixes found 1, 2, 3 and 5 done; on 4, a second `init` in the
+same `q` session kept the first world's import result. Fixed: `init` resets it, so each world is imported before its
+own `observe` (checked by hand with `init 232, observe, init 232, observe`; generated programs have one `init`). Findings and decisions: `work/p13a45/audit_findings.md` (not committed).

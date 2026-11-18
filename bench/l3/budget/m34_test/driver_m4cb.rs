@@ -36,6 +36,7 @@ struct Fns {
     op: OpF,
     batch: BatchF,
     obs: ObsF,
+    imp: ObsF,
     grow: GrowF,
 }
 
@@ -88,6 +89,7 @@ impl World {
             op: black_box::<OpF>(sol::pruv_c::m4cb__pruv_h_m4_op),
             batch: black_box::<BatchF>(sol::pruv_c::m4cb__pruv_hb_m4_op),
             obs: black_box::<ObsF>(sol::pruv_c::m4cb__pruv_h_m4_observe),
+            imp: black_box::<ObsF>(sol::pruv_c::m4cb__pruv_h_m4_import),
             grow: black_box::<GrowF>(sol::pruv_c::m4cb__pruv_hr_m4_grow),
         };
         let mut h = World::handle(&f, l);
@@ -114,6 +116,15 @@ impl World {
         let mut ret = 0i64;
         chk(unsafe { (self.f.obs)(self.h, out.as_mut_ptr(), out.len() as i64, &mut ret) }, "pruv_h_m4_observe");
         ret
+    }
+
+    // Import admission (m4_import, L3 P13a.10) on the handle's state: (status, entries visited, "-"). The host never
+    // sees the words here, so there is no corrupted copy (driver_m4.rs checks that one).
+    fn import_check(&mut self) -> (i64, i64, String) {
+        let mut cnt = vec![0i64; 3];
+        let mut ret = 0i64;
+        chk(unsafe { (self.f.imp)(self.h, cnt.as_mut_ptr(), cnt.len() as i64, &mut ret) }, "pruv_h_m4_import");
+        (ret, cnt[0], "-".to_string())
     }
 
     // Grows the state to hold `n` words (at least twice the current length), as the single-call path does.

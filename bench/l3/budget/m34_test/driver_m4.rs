@@ -92,6 +92,37 @@ impl World {
         call(&mut self.st, |s| sol::m4_observe(s, out))
     }
 
+    // Import admission (m4_import, L3 P13a.10) as an adapter would load a host buffer: the host copies the state into a
+    // fresh store, admits it, and only on 0 serves from it. Returns (status of the admitted copy, entries visited,
+    // status of a corrupt copy). The admitted copy is then swapped in as the live store, so every later op and the
+    // final observation run on imported state (q mode imports right before the program's observe); before the swap
+    // its observation must match the old store's. The
+    // corrupt copy (entry 0's state word, at st[5], set to 7) is never served from.
+    fn import_check(&mut self) -> (i64, i64, String) {
+        let buf = call(&mut self.st, |s| s.clone());
+        let mut bad_buf = buf.clone();
+        let b = bad_buf[5] as usize;
+        bad_buf[b] = 7;
+        let mut fresh: St = Store::new(buf);
+        let mut cnt = vec![0i64; 3];
+        let r = call(&mut fresh, |s| sol::m4_import(s, &mut cnt));
+        if r == 0 {
+            let mut o1 = vec![0i64; std::cmp::max(4096, 4 * self.len)];
+            let mut o2 = o1.clone();
+            let r1 = self.observe(&mut o1);
+            let r2 = call(&mut fresh, |s| sol::m4_observe(s, &mut o2));
+            if r1 != r2 || o1 != o2 {
+                eprintln!("imported copy observes differently: {} vs {}", r1, r2);
+                std::process::exit(2);
+            }
+            self.st = fresh;
+        }
+        let mut cs: St = Store::new(bad_buf);
+        let mut c2 = vec![0i64; 3];
+        let bad = call(&mut cs, |s| sol::m4_import(s, &mut c2));
+        (r, cnt[0], bad.to_string())
+    }
+
     fn exec(&mut self, op: &[i64]) -> R {
         for attempt in 0..4 {
             let need = std::cmp::max(4096, 4 * self.len);
@@ -147,6 +178,7 @@ fn q_mode() {
     let stdout = io::stdout();
     let mut w = io::BufWriter::new(stdout.lock());
     let mut world: Option<World> = None;
+    let mut imported: Option<(i64, i64, String)> = None;
     let mut total_grows = 0u64;
     for line in stdin.lock().lines() {
         let line = line.unwrap();
@@ -162,6 +194,7 @@ fn q_mode() {
                     total_grows += old.grows;
                 }
                 world = Some(World::new(l));
+                imported = None; // a new world is imported afresh before its own observe
                 writeln!(w, "init ok").unwrap();
             }
             "op" => {
@@ -188,6 +221,9 @@ fn q_mode() {
             }
             "observe" => {
                 let wd = world.as_mut().expect("observe before init");
+                if imported.is_none() {
+                    imported = Some(wd.import_check());
+                }
                 let mut out = vec![0i64; std::cmp::max(4096, 4 * wd.len)];
                 let s = wd.observe(&mut out);
                 if s != 0 {
@@ -203,6 +239,13 @@ fn q_mode() {
                 std::process::exit(2);
             }
         }
+    }
+    if let Some(wd) = &mut world {
+        let (r, entries, bad) = match imported.take() {
+            Some(t) => t,
+            None => wd.import_check(),
+        };
+        writeln!(w, "import {} {} {}", r, entries, bad).unwrap();
     }
     if let Some(wd) = &world {
         total_grows += wd.grows;
