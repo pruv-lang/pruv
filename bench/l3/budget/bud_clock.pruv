@@ -35,8 +35,8 @@
 // Proven indexing (P22): every clock and run access goes through one entry base from bud_store::eb, whose ensures
 // gives 16 <= a && a + 20 <= len(st); fields are then read and written as st[a + f] with no further check. eb is -1
 // only for an entry outside the capacity or the buffer (never a live entry of a valid store); such an entry is
-// treated as absent. The budget view frame needs len(bv) >= 7: the public entries test it once, and a shorter frame
-// reads as "not current" (the base read its words as 0). The active count (field 17, I2) is only a number here: no
+// treated as absent. The budget view frame needs len(bv) >= 7: every public entry that takes bv tests it (after the fx
+// room check) before any write and returns 0 with nothing changed on a shorter frame. The active count (field 17, I2) is only a number here: no
 // access depends on it, and I2 is checked by the functional model test of m9_test (t_i2), never assumed by a proof.
 
 // x clamped into -2^53..2^53 (every clock number is a JS safe integer in the domain)
@@ -61,17 +61,18 @@ fn add_active(inout st: [i64], ca: i64, d: i64) -> ()
   st[ca + 17] = n;
 }
 
-// limits.timeMinutes * 60000 with timeMinutes clamped into -150119987580..150119987580. 150119987579 * 60000 is the
-// largest product <= 2^53, so every limit that a clocked activeMs (at most 2^53) can reach is exact; a clamped limit
-// is above 2^53 (below -2^53) like the source's, so the halt and re-arm decisions are the same. Only the requested
-// delay of the timerSet record differs from the source's rounded float there (the effective delay is 1 either way).
+// limits.timeMinutes * 60000 with timeMinutes clamped into -150000000000000..150000000000000 (product at most 9e18,
+// and limit - activeMs stays inside i64 for activeMs in -2^53..2^53). Below the clamp the limit and every delay
+// limit - activeMs are exact, so each delay that is a JS safe integer equals the source's; a clamped limit leaves a
+// delay above 9e18 - 2^53 (no safe integer, effective delay 1 like the source's), and the halt and re-arm decisions
+// (activeMs against the limit) are the same.
 fn limit_ms(bv: [i64]) -> i64
   requires len(bv) >= 7
-  ensures -9007199254800000 <= result && result <= 9007199254800000
+  ensures -9000000000000000000 <= result && result <= 9000000000000000000
 {
   let mut t: i64 = bv[3];
-  if t < -150119987580 { t = -150119987580; }
-  if t > 150119987580 { t = 150119987580; }
+  if t < -150000000000000 { t = -150000000000000; }
+  if t > 150000000000000 { t = 150000000000000; }
   return t * 60000;
 }
 
@@ -262,6 +263,9 @@ fn refresh_in(inout st: [i64], ca: i64, sk: [i64], ss: i64, sn: i64, now: i64, i
 }
 
 // ---- sub-operations on a clock entry (ce from clock_of; -1 = no clock) ----
+// arm_at, refresh_at and fire_at (which may append a 3-word timerSet record) return 3 without any write unless
+// fx_ok(fx). settle_at (returns the added ms) and drop_at (no status) append at most one word and need the caller's
+// fx_ok check (bud_lifecycle and the by-key entries make it before the call); without room they drop the record.
 
 pub fn settle_at(inout st: [i64], ce: i64, sk: [i64], ss: i64, sn: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> i64
 {
@@ -281,6 +285,7 @@ pub fn begin_at(inout st: [i64], ce: i64, now: i64, inout bv: [i64]) -> ()
 
 pub fn arm_at(inout st: [i64], ce: i64, sk: [i64], ss: i64, sn: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> i64
 {
+  if !fx_ok(fx) { return 3; }
   if len(bv) < 7 { return 0; }
   let ca: i64 = crate::bud_store::eb(st, ce);
   if ca < 0 { return 0; }
@@ -289,7 +294,8 @@ pub fn arm_at(inout st: [i64], ce: i64, sk: [i64], ss: i64, sn: i64, now: i64, i
 
 pub fn refresh_at(inout st: [i64], ce: i64, sk: [i64], ss: i64, sn: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> i64
 {
-  if len(bv) < 7 { return 0; }
+  if !fx_ok(fx) { return 3; }
+  if len(bv) < 7 || bv[0] != 1 { return 0; }
   let ca: i64 = crate::bud_store::eb(st, ce);
   if ca < 0 { return 0; }
   return refresh_in(inout st, ca, sk, ss, sn, now, inout bv, inout fx);
@@ -303,12 +309,13 @@ pub fn refresh_at(inout st: [i64], ce: i64, sk: [i64], ss: i64, sn: i64, now: i6
 // is gone).
 pub fn fire_at(inout st: [i64], ce: i64, sk: [i64], ss: i64, sn: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> i64
 {
+  if !fx_ok(fx) { return 3; }
+  if len(bv) < 7 { return 0; }
   let ca: i64 = crate::bud_store::eb(st, ce);
   if ca >= 0 {
     if st[ca + 16] == 1 { push(inout fx, 14); }
     st[ca + 16] = 0;
   }
-  if len(bv) < 7 { return 0; }
   if bv[0] != 1 || bv[1] != 0 || bv[2] == 1 { return 0; }
   if ca < 0 { return 4; }
   let a: i64 = settle_in(inout st, ca, sk, ss, sn, now, inout bv, inout fx);
@@ -334,7 +341,6 @@ pub fn drop_at(inout st: [i64], ce: i64, inout fx: [i64]) -> ()
 
 pub fn refresh(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: i64, sn: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> i64
 {
-  if !fx_ok(fx) { return 3; }
   let ce: i64 = clock_of(st, bk, bs, bn);
   return refresh_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
 }
@@ -349,7 +355,6 @@ pub fn settle(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: i64, 
 
 pub fn fire(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: i64, sn: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> i64
 {
-  if !fx_ok(fx) { return 3; }
   let ce: i64 = clock_of(st, bk, bs, bn);
   return fire_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
 }
@@ -366,9 +371,10 @@ pub fn drop(inout st: [i64], bk: [i64], bs: i64, bn: i64, inout fx: [i64]) -> i6
 pub fn close(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: i64, sn: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> i64
 {
   if !fx_ok(fx) { return 3; }
+  if len(bv) < 7 { return 0; }
   let ce: i64 = clock_of(st, bk, bs, bn);
   let a: i64 = settle_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
-  if len(bv) >= 7 { bv[1] = 2; }
+  bv[1] = 2;
   drop_at(inout st, ce, inout fx);
   return 0;
 }
@@ -433,6 +439,7 @@ pub fn run_started(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: 
 pub fn run_waiting(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: i64, sn: i64, rk: [i64], rs: i64, rn: i64, waiting: bool, now: i64, inout bv: [i64], inout fx: [i64]) -> i64
 {
   if !fx_ok(fx) { return 3; }
+  if len(bv) < 7 { return 0; }
   let ce: i64 = clock_of(st, bk, bs, bn);
   if ce < 0 { return 0; }
   let re: i64 = crate::bud_map::find_w(st, ce, rk, rs, rn);
@@ -448,7 +455,6 @@ pub fn run_waiting(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: 
   let ca: i64 = crate::bud_store::eb(st, ce);
   if ca < 0 { return 0; }
   add_active(inout st, ca, d);
-  if len(bv) < 7 { return 0; }
   return refresh_in(inout st, ca, sk, ss, sn, now, inout bv, inout fx);
 }
 
@@ -457,6 +463,7 @@ pub fn run_waiting(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: 
 pub fn run_ended(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: i64, sn: i64, rk: [i64], rs: i64, rn: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> i64
 {
   if !fx_ok(fx) { return 3; }
+  if len(bv) < 7 { return 0; }
   let ce: i64 = clock_of(st, bk, bs, bn);
   if ce < 0 { return 0; }
   let re: i64 = crate::bud_map::find_w(st, ce, rk, rs, rn);
@@ -468,6 +475,5 @@ pub fn run_ended(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: i6
   if ca >= 0 && w != 1 { add_active(inout st, ca, -1); }
   crate::bud_map::remove(inout st, re);
   if ca < 0 { return 0; }
-  if len(bv) < 7 { return 0; }
   return refresh_in(inout st, ca, sk, ss, sn, now, inout bv, inout fx);
 }

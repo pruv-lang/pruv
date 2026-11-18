@@ -24,7 +24,8 @@ ACTIVE_UPDATE = (
 )
 GUARDED_UPDATE = rf"\bif\s+[^{{}};]+\{{\s*({ACTIVE_UPDATE})\s*\}}"
 MUTANTS = (
-    ("waiting_no_dec", ACTIVE_UPDATE, ""),
+    # Keep the increment (waiting -> active) and drop only the decrement (active -> waiting).
+    ("waiting_no_dec", ACTIVE_UPDATE, r"if !waiting { \g<0> }"),
     ("started_no_inc", GUARDED_UPDATE, ""),
     ("ended_no_dec", GUARDED_UPDATE, ""),
     # Drop only the waiting test; the base bound (ca >= 0) stays so the mutant still proves.

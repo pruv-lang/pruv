@@ -235,6 +235,9 @@ impl<const CHECK_I2: bool> World<CHECK_I2> {
     fn put(&mut self, op: &[i64]) {
         for _ in 0..4 {
             let r = sol::t_put(&mut self.st, op, &mut self.out);
+            if CHECK_I2 {
+                self.check_i2();
+            }
             if r == 0 {
                 return;
             }
@@ -246,6 +249,8 @@ impl<const CHECK_I2: bool> World<CHECK_I2> {
             eprintln!("t_put status {}", r);
             std::process::exit(2);
         }
+        eprintln!("t_put still Grow after 4 tries");
+        std::process::exit(2);
     }
 
     fn check_i2(&mut self) {
@@ -480,10 +485,8 @@ fn run_q() {
                 halted = false;
                 writeln!(o, "case {}", p[1]).unwrap();
             }
-            "put" => {
-                w.put(&nums(&p[1..]));
-                w.check_i2();
-            }
+            // After a halt the script stops (the observation is the one at the halt), so later puts are skipped.
+            "put" if !halted => w.put(&nums(&p[1..])),
             "now" => w.now = p[1].parse().unwrap(),
             "step" => {
                 if !halted {

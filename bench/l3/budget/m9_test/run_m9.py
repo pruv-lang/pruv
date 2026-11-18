@@ -230,6 +230,21 @@ def parse_obs(line):
     return sessions, clocks, timers
 
 
+def last_put(case, sk):
+    # The session record the driver last stored for sk: the last putSession before the cut (compare_final runs only
+    # without a halt, so every such put ran), else the initial world session.
+    rec = None
+    for x in case["world"]["sessions"]:
+        if tuple(units(obj(x)["id"])) == sk:
+            rec = obj(x)
+    for e in case["script"]:
+        if e["ev"] == "call" and e["op"] not in ("runStarted", "runWaiting", "runEnded"):
+            break
+        if e["ev"] == "putSession" and tuple(units(obj(e["session"])["id"])) == sk:
+            rec = obj(e["session"])
+    return rec
+
+
 def compare_final(case, o, obs):
     sessions, clocks, timers = parse_obs(obs)
     diffs = []
@@ -255,8 +270,7 @@ def compare_final(case, o, obs):
         if mine[4] == 0:
             got = None
         elif mine[4] == 1:
-            init = [obj(x) for x in case["world"]["sessions"] if tuple(units(obj(x)["id"])) == sk][0]
-            got = obj(init["budget"]).get("activeSince")
+            got = obj(last_put(case, sk)["budget"]).get("activeSince")
         else:
             got = iso(mine[5])
         if want is not None:
