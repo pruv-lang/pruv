@@ -2353,3 +2353,156 @@ Equal within run spread, as expected with no `.pruv` change; the generated outpu
 - The mapping path ran only on macOS arm64 here. `state_buf.rs` type-checks for `x86_64-pc-windows-gnu` (fallback
   path, `rustc --emit=metadata`); Linux was not built (no Linux std installed) and nothing ran on Linux or Windows.
 - The `m4c` C-runtime lanes keep `runtime.c` allocation (P17).
+
+## Appendix P18 (row B/bud_lifecycle.pruv: current/isHalted/reopen lookups by proven indexing)
+
+Commits 123ae15 (step 1, source) and 81979b2 (step 2, perf item), base 6aa266a. Changed files:
+`bench/l3/budget/bud_lifecycle.pruv`, `bench/l3/budget/m7_test/{driver_m7.rs,hand_m7_u16.rs,run_m7.py}`. No
+compiler file, `SPEC.md`, `tests/run_all_rows.txt` or `bud_charge.pruv` change. Raw logs: `work/p18/` (not
+committed).
+
+### P18.1 Change
+
+- `found_at(st, se, bk, bs, bn)` (new): one `bud_store::eb` entry address, one blob span check
+  (`0 <= off && off <= len(st) - n`, `n >= 30`), the state range check (0..2) and the identity check (`id_at`). Its
+  `ensures` gives callers `16 <= a, a + 20 <= len(st)`, the span in `st` and the state in 0..2; `-2` is returned
+  only when the span lies outside `st`.
+- `id_at(st, off, n, k, ks, kn)` (new): `requires` the record span; reads the id length word `st[off + 24]` directly
+  and compares the packed id words with one `eq_range` when they lie inside the record and inside `k` (one dynamic
+  check each); otherwise falls back to `id_is` (same reads as before).
+- `current_entry`, `current_at`: now `found_at`. `current`, `is_halted`: read `st[a + 12]`, `st[a + 13]` and the
+  state word `st[st[a + 12]]` directly and write `out[0..3)` directly (lengths already tested).
+- `reopen`: the header reads `st[off]`, `st[off + 18]` and the in-place writes of words 0, 18, 19, 22 are direct.
+  The rewrite path (`ended.at` text present) is unchanged.
+
+Checks removed by proofs (each was a dynamic bounds or field check in the base):
+
+| removed check | where | discharged by |
+|---|---|---|
+| entry field reads a+12 (blob offset), a+13 (blob length) | `current_at`, `current`, `is_halted`, `reopen` | `eb` ensures `16 <= a, a + 20 <= len(st)` |
+| `field_addr`/`entry_addr` checked address | `current_at` | `eb` |
+| state word read `st[off]` | `found_at`, `is_halted`, `reopen` | span check `off <= len(st) - n`, `n >= 30` |
+| id length word `st[off + 24]` | `id_at` | span + `30 <= n` |
+| per-word id compare bounds | `id_at` | one range test, then `eq_range` |
+| header reads/writes off+18, +19, +22 in `reopen` | `reopen` in-place path | `found_at` ensures through `current_at` |
+| `ent_u16::wr` checked output writes | `current`, `is_halted`, `reopen` | `len(out)` tests already in the function |
+
+Kept dynamic: the blob span check, the state range check and the identity check (unit count and words); the
+`bud_map` hash in `find_w` is outside this row. Behaviour change on corrupt stores only: a blob span outside `st`
+now makes `current` answer status 2 (the base answered 2 only after the state read succeeded); an admitted store
+(I1) never has such a span, and every Q/B gate below is unchanged.
+
+### P18.2 Gates (Rust and Python compilers, Rust backend; all rc 0)
+
+| gate | rs | py |
+|---|---|---|
+| M7 Q1 (`run_m7.py q`, 300 cases) | exact 113, not-implemented 187 (M10/M11 reasons), fail 0 | same |
+| M7 life (`q --life`, 300) | exact 300, fail 0 | exact 300, fail 0 |
+| M7 diff_hand (`q --hand16`, 300 + 188 fixed controls + 15 fatal controls) | mismatches 0, expectation failures 0, fatal failures 0 | - |
+| M10 Q (300) | exact 78, not-implemented 222 (M10b/M11), fail 0 | same |
+| M10 halt (`bud_halt`, 300) | exact 300, fail 0, 97 halts compared | same |
+| m34 admit | 26/26 | - |
+| m3 | 300/300 | - |
+| lanes (`m4llvmnv`) | 300/300, size/header checks 1922/1922 | - |
+| perf result checks (`rchk`) | 12 cells, 0 mismatches | - |
+
+LLVM-backend cells (the other two of the four pairs) are **pending P17** per §6.1 and are not counted as run.
+
+### P18.3 Lookup time (Rust backend, Pruv typed / hand16 typed, floor 1.0x)
+
+`run_m7.py perf --rounds 7 --profile SM --no-instr`, rounds interleaved, median ns per call (`work/p18/s2_perf.log`,
+load average about 3-5). Base columns: same command on 6aa266a in an earlier session (`work/p18/base_perf.log`);
+its hand16 ran 11.6-13.3 ns on these items, so compare the ratio columns, each taken against hand in its own run.
+
+| item | S | base Pruv | P18 Pruv | hand16 | P18/hand16 | base/hand16 |
+|---|---:|---:|---:|---:|---:|---:|
+| current | 100 | 11.9 | 11.9 | 13.1 | 0.91 | 0.94 |
+| current | 500 | 11.9 | 11.9 | 13.1 | 0.91 | 0.94 |
+| ishalted | 100 | 12.8 | 12.1 | 13.1 | 0.92 | 1.01 |
+| ishalted | 500 | 12.6 | 12.3 | 12.9 | 0.95 | 0.98 |
+| reopenmiss (new) | 100 | - | 13.4 | 13.1 | **1.02** | - |
+| reopenmiss (new) | 500 | - | 13.4 | 12.9 | **1.04** | - |
+| closereopen (incl. P19 maybeClose) | 100 | 14.3 | 13.9 | 13.7 | 1.01 | 1.08 |
+| closereopen (incl. P19 maybeClose) | 500 | 14.1 | 13.9 | 13.4 | 1.04 | 1.07 |
+| attach (P19) | 100 | 13.0 | 13.0 | 12.1 | 1.07 | 1.12 |
+| attach (P19) | 500 | 12.9 | 13.1 | 11.4 | 1.15 | 1.10 |
+| replace | 100 | 92.2 | 93.6 | 123.3 | 0.76 | 0.77 |
+| replace | 500 | 95.7 | 94.4 | 118.5 | 0.80 | 0.78 |
+
+`current` and `isHalted` meet the floor at S and M. `reopen`'s lookup (`reopenmiss`) does **not**: 1.02/1.04, open
+(P18.4). Two later 15-round runs (`work/p18/s4_perf15_{1,2}.log`) and one 7-round run (`s4_perf.log`) were taken
+while another session's build drove the load average to 17-34; their cells spread from 0.3x to 1.7x and are not
+used.
+
+### P18.4 reopen lookup above 1.0x: compiler gap (open, not worked around in source)
+
+`reopen` is emitted as a separate `#[inline]` function and not inlined into the dispatch. Its prologue builds a
+320-byte frame and saves 12 registers, because the rewrite path (`blob_copy`, a `Vec`) is in the same body; the miss
+path pays that cost. `find_w` is a call in both `current` and `reopen`. Experiments (S = 100, interleaved with
+hand):
+
+| experiment | result |
+|---|---|
+| drop the `fx_ok` check | about -0.2 ns, still above hand |
+| split the rewrite path into a source function `reopen_text` | the inline policy marks the single-caller function `#[inline(always)]` and folds it back; worse, 1.05/1.09; reverted |
+| hand-edited generated Rust: `reopen` `#[inline(always)]` | worse, about 17 ns |
+| hand-edited generated Rust: `reopen_text` `#[cold] #[inline(never)]` | about base, 13.0-13.5 vs hand 12.2-13.9; does not reach 1.0 reliably |
+
+Source has no cold/no-inline control, and `codegen.rs` inlines every function with one caller
+(`calls <= 1`, `pruvc-rs/crates/pruv-core/src/codegen.rs:4778`). This is recorded for the queued inline-policy split
+(T5) and the part is stopped here; the source keeps the single-body `reopen`.
+
+### P18.5 Peak RSS and allocations
+
+`driver_m7 boundary SIZE REPS ITEM A` and `hand_m7_u16`, 7 interleaved rounds, median KiB
+(`work/p18/s3_rss_med.log`). Pages are 16 KiB.
+
+| item | S | P13c base | P18 | hand16 | P18 - base | P18/hand16 |
+|---|---:|---:|---:|---:|---:|---:|
+| current | 100 | 3152 | 3216 | 2304 | +4 pages | 1.40 |
+| current | 500 | 7056 | 7120 | 3792 | +4 pages | 1.88 |
+| ishalted | 100 | 3136 | 3184 | 2304 | +3 pages | 1.38 |
+| ishalted | 500 | 7056 | 7120 | 3776 | +4 pages | 1.89 |
+| reopenmiss | 100 | 3152 | 3200 | 2304 | +3 pages | 1.39 |
+| reopenmiss | 500 | 7056 | 7104 | 3808 | +3 pages | 1.87 |
+| closereopen | 100 | 3760 | 3824 | 2304 | +4 pages | 1.66 |
+| closereopen | 500 | 9344 | 9376 | 3792 | +2 pages | 2.47 |
+
+Allocations per call: 0.000 for base, P18 and hand on all four items; checksums identical.
+
+Peak RSS is above hand on every cell (already so at P13c: entry layout P13e, code size P13d) and 2-4 pages above
+P13c: **open**. The extra pages appear at `reps = 1` too (7072 vs 7088-7120 KiB, page reclaims 606 vs 609-611), so
+they come from setup or binary layout, not from the lookup loop; `__text` is smaller in P18 (378172 vs 379068
+bytes) and `__DATA` is equal. The cause was not isolated.
+
+### P18.6 Proof time (touched roots, `/usr/bin/time -p`, s, two runs each)
+
+`work/p18/proof_time.sh`; worktree (81979b2) first, then main (6aa266a), not interleaved. Rust compiler
+`pruvc-rs/target/release/pruvc`; Python compiler `pruvc/pruvc.py --backend rust` (venv). real / user:
+
+| root | compiler | main 6aa266a | P18 |
+|---|---|---|---|
+| `m7_test/root.pruv` | Rust | 7.31/7.09, 6.99/6.76 | 7.04/6.95, 7.36/7.27 |
+| `m7_test/root.pruv` | Python | 11.64/11.42, 11.81/11.62 | 12.44/12.18, 13.04/12.81 |
+| `m10_test/root_m10.pruv` (bud_halt) | Rust | 8.77/8.45, 7.69/7.63 | 7.99/7.85, 7.84/7.70 |
+| `m10_test/root_m10.pruv` (bud_halt) | Python | 13.87/13.62, 13.40/13.19 | 13.19/12.95, 13.07/12.86 |
+
+Rust: equal within spread on both roots. Python: m7 about +7-10% (two new `ensures` with nested reads in
+`found_at`/`current_at`), m10 slightly lower; the runs were sequential on a shared machine, so the m7 Python
+difference is within what load can move and was not re-measured interleaved.
+
+### P18.7 Delegation
+
+- Proof-time runs (P18.6): a command delegation (`work/p18/proof_time.sh`), so the 16 compiler runs went in the
+  background while the RSS work went on.
+- Package audit: one review delegation to Codex gpt-6.2-astra (ultra), findings in `work/p18/audit_findings.md`.
+- Proof and encoding decisions, the inline-policy experiments and the perf/RSS measurements were done in this
+  session.
+
+### P18.8 Remaining work
+
+- `reopen` lookup 1.02/1.04x of hand (P18.4): needs the inline-policy split (T5, compiler) or a source-level cold
+  marker; then re-measure `reopenmiss` and `closereopen`.
+- Peak RSS 2-4 pages above P13c on the M7 items, cause not isolated (P18.5); RSS above hand stays with P13d/P13e.
+- `attach` 1.07/1.15 and `closereopen`'s `maybeClose` share are P19's rows.
+- LLVM cells pending P17.
