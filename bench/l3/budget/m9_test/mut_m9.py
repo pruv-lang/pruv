@@ -27,7 +27,8 @@ MUTANTS = (
     ("waiting_no_dec", ACTIVE_UPDATE, ""),
     ("started_no_inc", GUARDED_UPDATE, ""),
     ("ended_no_dec", GUARDED_UPDATE, ""),
-    ("ended_always_dec", GUARDED_UPDATE, r"\1"),
+    # Drop only the waiting test; the base bound (ca >= 0) stays so the mutant still proves.
+    ("ended_always_dec", r"\s*&&\s*w\s*!=\s*1\b", ""),
 )
 
 
