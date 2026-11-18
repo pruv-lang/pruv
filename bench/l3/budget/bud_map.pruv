@@ -992,9 +992,21 @@ pub fn make_room(inout st: [i64], entries: i64, words: i64) -> i64
 }
 
 // make_room() that tells whether it rehashed: 0 fits (nothing written), -1 rehashed and fits now, otherwise need()'s
-// N > 0 (after a rehash too, only on a buffer outside the premise stated below).
+// N > 0 (after a rehash too, only on a buffer outside the premise stated in room_plan). room_plan() decides, then
+// room_apply() rehashes only when the plan says so.
 fn room(inout st: [i64], entries: i64, words: i64) -> i64
   ensures crate::bud_store::kept(st, old(st))
+{
+  let p: i64 = room_plan(st, entries, words);
+  return room_apply(inout st, p, entries, words);
+}
+
+// room()'s decision, write-free (P19a): 0 fits as the store is, -1 room() rebuilds the index first (then it fits on
+// a store with a valid layout whose word 12 counts its live entries, see below), otherwise need()'s N > 0: Grow(N)
+// with nothing rebuilt. A caller that must not change st before a later step (bud_lifecycle::maybe_close before its
+// isQuiet answer) asks the plan first and passes it to room_apply() afterwards, on the unchanged st.
+pub fn room_plan(st: [i64], entries: i64, words: i64) -> i64
+  ensures result == 0 || result == -1 || (464 <= result && result <= 1099511627776)
 {
   let r: i64 = crate::bud_store::need(st, entries, words);
   let ents: i64 = crate::bud_store::c32(entries);
@@ -1008,14 +1020,9 @@ fn room(inout st: [i64], entries: i64, words: i64) -> i64
     // O(slots + entry top) passes (probe lengths depend on the hash spread) and, on a store with a valid layout whose
     // word 12 counts its live entries, leaves used = live - 3 (the roots are not in the index), so used + ents <=
     // 3/8 of the slots and the next early rehash is at least slots/8 inserts away (amortized O(1) in frequency).
-    // On any other buffer the rehash can raise word 13 (P21b audit), so need() is asked again and a Grow can follow
-    // the rehash (same key set), as in the branch below.
-    if used + ents > slots / 2 && live + ents <= slots * 3 / 8 {
-      rehash(inout st);
-      let r1: i64 = crate::bud_store::need(st, entries, words);
-      if r1 == 0 { return -1; }
-      return r1;
-    }
+    // On any other buffer the rehash can raise word 13 (P21b audit), so room_apply asks need() again and a Grow can
+    // follow the rehash (same key set), as in the branch below.
+    if used + ents > slots / 2 && live + ents <= slots * 3 / 8 { return -1; }
     return 0;
   }
   let cap: i64 = crate::bud_store::c32(hw(st, 6));
@@ -1027,13 +1034,22 @@ fn room(inout st: [i64], entries: i64, words: i64) -> i64
   // live entries, rehash skips dead entries, so used <= live, and with
   // live + ents <= cap = slots/2 the second need() returns 0. On any other buffer a Grow can follow the rehash
   // (the index was rebuilt with the same key set); room_w states the same scope.
-  if used + ents > slots * 3 / 4 && live + ents <= cap && wds <= ae - top {
-    rehash(inout st);
-    let r2: i64 = crate::bud_store::need(st, entries, words);
-    if r2 == 0 { return -1; }
-    return r2;
-  }
+  if used + ents > slots * 3 / 4 && live + ents <= cap && wds <= ae - top { return -1; }
   return r;
+}
+
+// Carries out plan p = room_plan(st, entries, words) of the same st (P19a): p != -1 writes nothing and returns p
+// (word for word the same st); p == -1 rebuilds the index and returns -1 when need() then fits, else need()'s N > 0.
+// The first ensures is what lets maybe_close skip this call when p == 0 and leave st untouched before its answer.
+pub fn room_apply(inout st: [i64], p: i64, entries: i64, words: i64) -> i64
+  ensures p != -1 ==> (result == p && len(st) == len(old(st)) && (forall k in 0..len(old(st)): st[k] == old(st)[k]))
+  ensures crate::bud_store::kept(st, old(st))
+{
+  if p != -1 { return p; }
+  rehash(inout st);
+  let r1: i64 = crate::bud_store::need(st, entries, words);
+  if r1 == 0 { return -1; }
+  return r1;
 }
 
 // find_w(), and when the key is absent room(entries, words) and the insert, hashing the key once.

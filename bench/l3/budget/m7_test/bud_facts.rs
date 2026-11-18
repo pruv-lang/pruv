@@ -5,14 +5,14 @@
 //!
 //! Test setup is thread-local: an answer stream (`set_answers`, the case's `quiet` line) with a default for answers
 //! past its end (0 in q mode: isQuiet defaults to false; perf lanes use an empty stream with default 1), and a call
-//! counter (`calls` / `set_calls`) that the drivers read before and after each call to log `E quiet <answer>` for each
-//! answer actually taken, in call order. The hand baseline (hand_m7_u16.rs) calls the same function at the same point,
-//! so both sides pay the same host work.
+//! counter (`calls` / `set_calls`). Q records the packed session key and effect count with each answer, in call
+//! order. The hand baseline (hand_m7_u16.rs) calls the same function at the same point.
 use std::cell::{Cell, RefCell};
 
 thread_local! {
     static ANSWERS: RefCell<Vec<i64>> = const { RefCell::new(Vec::new()) };
     static DEFAULT: Cell<i64> = const { Cell::new(0) };
+    static QUERIES: RefCell<Option<Vec<Query>>> = const { RefCell::new(None) };
     static CALLS: Cell<usize> = const { Cell::new(0) };
 }
 
@@ -33,6 +33,11 @@ pub fn calls() -> usize {
 
 pub fn set_calls(n: usize) {
     CALLS.with(|c| c.set(n));
+    QUERIES.with(|q| {
+        if let Some(q) = q.borrow_mut().as_mut() {
+            q.truncate(n);
+        }
+    });
 }
 
 /// The answer the i-th call takes (for the drivers' `E quiet` log line).
@@ -41,14 +46,46 @@ pub fn answer(i: usize) -> i64 {
     ANSWERS.with(|a| a.borrow().get(i).copied()).unwrap_or_else(|| DEFAULT.with(|d| d.get()))
 }
 
-/// isQuiet(session): the session is the packed key k[ks .. ks + words(kn)) (bud_keys layout). The test host's answer
-/// does not depend on it; a real host would look the session up. Returns the next answer of the stream.
+#[derive(Clone)]
+pub struct Query {
+    pub index: usize,
+    pub answer: i64,
+    pub kn: i64,
+    pub key: Vec<i64>,
+    pub fxn: i64,
+}
+
+pub fn record_queries() {
+    QUERIES.with(|q| *q.borrow_mut() = Some(Vec::new()));
+}
+
+pub fn query(index: usize) -> Query {
+    QUERIES.with(|q| q.borrow().as_ref().unwrap()[index].clone())
+}
+
+pub fn quiet_log(index: usize) -> String {
+    use std::fmt::Write;
+    let q = query(index);
+    let mut line = format!("E quiet {} {}", q.answer, q.kn);
+    for word in q.key {
+        write!(line, " {}", word).unwrap();
+    }
+    write!(line, " @{}", q.fxn).unwrap();
+    line
+}
+
+/// Answer the next query and record its arguments in q mode.
 #[inline(always)]
-pub fn is_quiet(_k: &[i64], _ks: i64, _kn: i64) -> i64 {
-    let i = CALLS.with(|c| {
-        let i = c.get();
-        c.set(i + 1);
-        i
+pub fn is_quiet(k: &[i64], ks: i64, kn: i64, fxn: i64) -> i64 {
+    let index = calls();
+    CALLS.with(|c| c.set(index + 1));
+    let answer = answer(index);
+    QUERIES.with(|q| {
+        if let Some(q) = q.borrow_mut().as_mut() {
+            let start = ks as usize;
+            let end = start + (kn as usize).div_ceil(4);
+            q.push(Query { index, answer, kn, key: k[start..end].to_vec(), fxn });
+        }
     });
-    answer(i)
+    answer
 }

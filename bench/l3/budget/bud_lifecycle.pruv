@@ -707,16 +707,21 @@ pub fn reopen(inout st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, 
 
 // isQuiet(session) (B:399-408), a synchronous host fact (P10H): the host answers 0 (no) or 1 (yes) for the session
 // named by the packed key k[ks .. ks + words(kn)); any other answer is invalid (maybe_close: status 2, nothing
-// written). Test host: crate bud_facts (m7_test/bud_facts.rs), linked with --rust-extern.
-trusted rust fn is_quiet(k: [i64], ks: i64, kn: i64) -> i64 ! io
+// written). fxn is the number of effects this call has recorded so far (fx[0]); a real host ignores it, the test host
+// logs it with the key so the harness checks the query's session argument and its position among the effects (P19a
+// R3). Test host: crate bud_facts (m7_test/bud_facts.rs), linked with --rust-extern.
+trusted rust fn is_quiet(k: [i64], ks: i64, kn: i64, fxn: i64) -> i64 ! io
   ensures true
   = "::bud_facts::is_quiet";
 
 // maybeClose(session) (B:399-408): only an open budget with no runs on its clock closes, and only when the session
 // is quiet. isQuiet(session) is called here, synchronously, after the state and runs checks and before CLOSE (the
 // spec's order; a closed, halted or running budget never queries). Closing is CLOSE('quiet') then changed; out [2].
-// Otherwise [1]. Room for a rewritten record is reserved before the query, so a Grow (nothing written) never follows
-// a query and the retried call queries once. O(key length + U).
+// Otherwise [1]. Room for a rewritten record is planned before the query without writing (bud_map::room_plan), so a
+// Grow (nothing written) never follows a query and the retried call queries once, and an invalid answer (status 2)
+// or answer 0 leaves st word for word as it was (P19a R1). A rehash the plan asks for runs only after answer 1
+// (bud_map::room_apply); on a store with a valid layout it then fits, so a Grow after the query is only possible on
+// a buffer outside that premise (room_plan's comment). O(key length + U).
 pub fn maybe_close(inout st: [i64], sk: [i64], ss: i64, sn: i64, now: i64, inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc, io
 {
   if !crate::bud_clock::fx_ok(fx) { return 3; }
@@ -733,15 +738,22 @@ pub fn maybe_close(inout st: [i64], sk: [i64], ss: i64, sn: i64, now: i64, inout
   let p2: i64 = str_pos_in(st, off, 2);
   let in_place: bool = c32(rd(st, p2)) == 0 && c32(rd(st, c40(p2 + 1))) == 0;
   let mut b: [i64] = crate::ent_u16::zeros(0);
+  let mut wd: i64 = 0;
+  let mut p: i64 = 0;
   if !in_place {
-    // Room for the rewritten record before the query. The same blob copy feeds close_rec: reserve does not change
-    // the record, so it is not copied twice.
+    // Room for the rewritten record is planned before the query, write-free. The same blob copy feeds close_rec:
+    // room_apply does not change the record, so it is not copied twice.
     b = blob_copy(st, se);
-    let g: i64 = reserve(inout st, rec_bound(b) + 8);
-    if g != 0 { return grow(g); }
+    wd = c32(rec_bound(b) + 8);
+    p = crate::bud_map::room_plan(st, 0, wd);
+    if p > 0 { return grow(p); }
   }
-  let q: i64 = is_quiet(sk, ss, sn);
+  let q: i64 = is_quiet(sk, ss, sn, rd(fx, 0));
   if q != 0 && q != 1 { return 2; }
+  if q == 1 && p == -1 {
+    let g: i64 = crate::bud_map::room_apply(inout st, p, 0, wd);
+    if g > 0 { return grow(g); }
+  }
   crate::ent_u16::wr(inout out, 0, 1);
   if q == 0 { return 0; }
   if !in_place {
