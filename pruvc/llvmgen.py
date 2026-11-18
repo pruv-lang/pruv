@@ -4514,6 +4514,314 @@ def entry_type_closure(prog, tt):
     return seen
 
 
+C_HEAD = """\
+// P10: manifest raw_entries = "c": pruv_c is the C adapter. One opaque handle owns the resident state in a
+// pruv_raw::PruvStore; every extern "C" function catches a Rust panic (no unwind crosses into C) and returns a status.
+// A poisoned handle refuses every call but is still freed. Only the LLVM bindings carry this module.
+#[allow(dead_code, unexpected_cfgs)]
+pub mod pruv_c {
+    //! Caller contract of every `pub unsafe extern "C" fn` below (the adapter cannot check what it cannot see):
+    //! - the handle comes from pruv_handle_new and has not been freed;
+    //! - no concurrent or reentrant use of one handle;
+    //! - each (pointer, length) pair with length > 0 points to `length` initialized elements inside one live
+    //!   allocation, readable (writable for an inout parameter) and not accessed by anyone else for the duration
+    //!   of the call;
+    //! - ret points to a writable i64.
+    //!
+    //! The adapter checks null, sign, alignment, size, address overflow and overlap among the call's buffers and
+    //! the handle, but it cannot check allocation size or provenance.
+    /// Statuses of every pruv_h_* / pruv_hr_* call: 0 ok, 1 poisoned (refused before any argument is read, nothing
+    /// ran), 2 bad arguments (refused, nothing ran), 3 a Rust panic unwound to the adapter (if it happened inside the
+    /// store it poisoned the handle). Checked failures inside LLVM-compiled code (range, arithmetic, requires) and G6
+    /// host-callback failures end the process (exit 101); they never return a status.
+    pub const PRUV_OK: i32 = 0;
+    pub const PRUV_POISONED: i32 = 1;
+    pub const PRUV_BAD_ARGS: i32 = 2;
+    pub const PRUV_PANICKED: i32 = 3;
+    /// Opaque to C (one pointer). Owns the resident state; the C side never sees the state buffer.
+    pub struct PruvHandle {
+        store: super::pruv_raw::PruvStore<::std::vec::Vec<i64>>,
+    }
+    // A C (pointer, length) pair as a slice: None for a negative or oversized length, or for a null or misaligned
+    // pointer with a nonzero length, or whose end address overflows. Length 0 never reads the pointer.
+    #[inline(always)]
+    unsafe fn ro<'a, T>(p: *const T, n: i64) -> Option<&'a [T]> {
+        if n == 0 {
+            return Some(&[]);
+        }
+        if n < 0 || n as u64 > (isize::MAX as u64) / (::std::mem::size_of::<T>() as u64)
+            || (p as usize).checked_add(n as usize * ::std::mem::size_of::<T>()).is_none() || p.is_null()
+            || (p as usize) % ::std::mem::align_of::<T>() != 0 {
+            return None;
+        }
+        Some(unsafe { ::std::slice::from_raw_parts(p, n as usize) })
+    }
+    #[inline(always)]
+    unsafe fn mt<'a, T>(p: *mut T, n: i64) -> Option<&'a mut [T]> {
+        if n == 0 {
+            return Some(&mut []);
+        }
+        if n < 0 || n as u64 > (isize::MAX as u64) / (::std::mem::size_of::<T>() as u64)
+            || (p as usize).checked_add(n as usize * ::std::mem::size_of::<T>()).is_none() || p.is_null()
+            || (p as usize) % ::std::mem::align_of::<T>() != 0 {
+            return None;
+        }
+        Some(unsafe { ::std::slice::from_raw_parts_mut(p, n as usize) })
+    }
+    // Byte range of a (pointer, length) pair; empty for a length <= 0.
+    #[inline(always)]
+    fn span<T>(p: *const T, n: i64) -> (usize, usize) {
+        let s = p as usize;
+        (s, s.saturating_add((n.max(0) as usize).saturating_mul(::std::mem::size_of::<T>())))
+    }
+    // Empty ranges never overlap.
+    #[inline(always)]
+    fn apart(a: (usize, usize), b: (usize, usize)) -> bool {
+        !(a.0 < a.1 && b.0 < b.1 && a.0 < b.1 && b.0 < a.1)
+    }
+    #[inline(always)]
+    fn bools(s: &[u8]) -> Option<&[bool]> {
+        if s.iter().all(|b| *b <= 1) { Some(unsafe { &*(s as *const [u8] as *const [bool]) }) } else { None }
+    }
+    #[inline(always)]
+    fn bools_mut(s: &mut [u8]) -> Option<&mut [bool]> {
+        if s.iter().all(|b| *b <= 1) { Some(unsafe { &mut *(s as *mut [u8] as *mut [bool]) }) } else { None }
+    }
+    // Runs one C call; a caught panic becomes PRUV_PANICKED (its payload is leaked, never dropped across C).
+    #[inline(always)]
+    fn guard(f: impl FnOnce() -> i32) -> i32 {
+        match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(f)) {
+            Ok(s) => s,
+            Err(e) => {
+                ::std::mem::forget(e);
+                PRUV_PANICKED
+            }
+        }
+    }
+    /// A new handle whose state is `len` zero words (call the program's init entry next); null for a negative or
+    /// oversized length. Free it with pruv_handle_free.
+    #[no_mangle]
+    pub extern "C" fn pruv_handle_new(len: i64) -> *mut PruvHandle {
+        if len < 0 || len as u64 > (isize::MAX as u64) / 8 {
+            return ::std::ptr::null_mut();
+        }
+        match ::std::panic::catch_unwind(|| {
+            ::std::boxed::Box::into_raw(::std::boxed::Box::new(PruvHandle {
+                store: super::pruv_raw::PruvStore::new(::std::vec![0i64; len as usize]),
+            }))
+        }) {
+            Ok(p) => p,
+            Err(e) => {
+                ::std::mem::forget(e);
+                ::std::ptr::null_mut()
+            }
+        }
+    }
+    /// Frees a handle and its state, poisoned or not; null is ignored. The handle must come from pruv_handle_new and
+    /// is never used again: without a registry a double free or a later call cannot be detected.
+    /// # Safety
+    /// The pruv_c caller contract (module docs) holds.
+    #[no_mangle]
+    pub unsafe extern "C" fn pruv_handle_free(h: *mut PruvHandle) {
+        if h.is_null() {
+            return;
+        }
+        let _ = guard(|| {
+            drop(unsafe { ::std::boxed::Box::from_raw(h) });
+            PRUV_OK
+        });
+    }
+    /// 1 if a panic poisoned the handle, 0 if not, PRUV_BAD_ARGS for null.
+    /// # Safety
+    /// The pruv_c caller contract (module docs) holds.
+    #[no_mangle]
+    pub unsafe extern "C" fn pruv_handle_poisoned(h: *const PruvHandle) -> i32 {
+        match unsafe { h.as_ref() } {
+            Some(h) => h.store.is_poisoned() as i32,
+            None => PRUV_BAD_ARGS,
+        }
+    }
+    /// Probe builds only (rustc --cfg pruv_c_probe): panics inside the store with a payload whose Drop itself
+    /// panics, as a failing call would; guard must never drop the payload.
+    /// # Safety
+    /// The pruv_c caller contract (module docs) holds.
+    #[cfg(pruv_c_probe)]
+    #[no_mangle]
+    pub unsafe extern "C" fn pruv_handle_probe_panic(h: *mut PruvHandle) -> i32 {
+        struct Bomb;
+        impl Drop for Bomb {
+            fn drop(&mut self) {
+                panic!("pruv_c probe payload dropped")
+            }
+        }
+        guard(|| {
+            let hd = match unsafe { h.as_mut() } {
+                Some(h) => h,
+                None => return PRUV_BAD_ARGS,
+            };
+            match hd.store.with(|_| -> () { ::std::panic::panic_any(Bomb) }) {
+                Ok(()) => PRUV_OK,
+                Err(_) => PRUV_POISONED,
+            }
+        })
+    }"""
+
+_C_ARRAY_KINDS = ("ro_i64", "ro_u8", "ro_bool", "str", "mt_i64", "mt_u8", "mt_bool")
+_C_PTR = {"ro_i64": "*const i64", "ro_u8": "*const u8", "ro_bool": "*const u8", "str": "*const u8",
+          "mt_i64": "*mut i64", "mt_u8": "*mut u8", "mt_bool": "*mut u8"}
+_C_CONV = {"ro_i64": "ro(%s, %s_len)", "ro_u8": "ro(%s, %s_len)",
+           "str": "ro(%s, %s_len).and_then(|b| ::std::str::from_utf8(b).ok())",
+           "ro_bool": "ro(%s, %s_len).and_then(bools)", "mt_i64": "mt(%s, %s_len)", "mt_u8": "mt(%s, %s_len)",
+           "mt_bool": "mt(%s, %s_len).and_then(bools_mut)"}
+_C_KIND_DOC = {"i64": "i64", "bool": "bool, 0/1 as i64", "ro_i64": "[i64] pointer, length",
+               "ro_u8": "[u8] pointer, length", "ro_bool": "[bool] pointer, length; bytes 0/1",
+               "str": "str pointer, length; UTF-8", "mt_i64": "inout [i64] pointer, length",
+               "mt_u8": "inout [u8] pointer, length", "mt_bool": "inout [bool] pointer, length; bytes 0/1"}
+
+
+def c_param_kind(p):
+    """P10: the C kind of one parameter (i64, bool, ro_i64, ro_u8, ro_bool, str, mt_i64, mt_u8, mt_bool) or None"""
+    inout = p.mode == "inout"
+    if p.type == ARRAY:
+        return "mt_i64" if inout else "ro_i64"
+    if p.type.name in ("array_u8", "array_bool"):
+        k = p.type.name[6:]
+        return ("mt_" if inout else "ro_") + k
+    if inout:
+        return None
+    if p.type.name == "str":
+        return "str"
+    if p.type == I64:
+        return "i64"
+    if p.type == BOOL:
+        return "bool"
+    return None
+
+
+def c_entries(pubs):
+    """P10: the entries of `pubs` that get a pruv_h_ function: (name, state mode "mt"/"ro", [(param, kind)], ret kind)"""
+    out = []
+    for f in pubs:
+        if not f.params or f.params[0].type != ARRAY:
+            continue
+        kinds = [c_param_kind(p) for p in f.params[1:]]
+        if any(k is None for k in kinds):
+            continue
+        rk = "i64" if f.ret == I64 else ("bool" if f.ret == BOOL else ("unit" if f.ret == UNIT else None))
+        if rk is None:
+            continue
+        out.append((f.name, "mt" if f.params[0].mode == "inout" else "ro",
+                    [(p.name, k) for p, k in zip(f.params[1:], kinds)], rk))
+    return out
+
+
+def c_module(entries):
+    """P10: the pruv_c module text (no trailing newline). entries: (name, state mode "mt"/"ro", [(param name, kind)],
+    ret kind "i64"/"bool"/"unit"), each already eligible (c_entries)."""
+    I12, I16 = " " * 12, " " * 16
+    parts = [C_HEAD]
+    for name, smode, uparams, rk in entries:
+        # no user parameter name is a Rust identifier below: the i-th parameter after the state is a{i}
+        params = [("a%d" % i, k) for i, (_, k) in enumerate(uparams)]
+        sig = ["h: *mut PruvHandle"]
+        for x, k in params:
+            if k == "i64" or k == "bool":
+                sig.append("%s: i64" % x)
+            else:
+                sig += ["%s: %s" % (x, _C_PTR[k]), "%s_len: i64" % x]
+        if rk != "unit":
+            sig.append("ret: *mut i64")
+        doc = "    /// C entry for `%s`" % name
+        if uparams:
+            doc += ": " + ", ".join("a%d = `%s` (%s)" % (i, un, _C_KIND_DOC[k]) for i, (un, k) in enumerate(uparams))
+        doc += "; the handle's state is its first argument."
+        if rk != "unit":
+            doc += " On PRUV_OK the result is in *ret."
+        L = [doc, "    /// # Safety", "    /// The pruv_c caller contract (module docs) holds.", "    #[no_mangle]",
+             '    pub unsafe extern "C" fn pruv_h_%s(%s) -> i32 {' % (name, ", ".join(sig)),
+             "        guard(|| unsafe {",
+             I12 + "let hd = match h.as_mut() {", I16 + "Some(h) => h,", I16 + "None => return PRUV_BAD_ARGS,",
+             I12 + "};",
+             I12 + "if hd.store.is_poisoned() {", I16 + "return PRUV_POISONED;", I12 + "}"]
+        if rk != "unit":
+            L += [I12 + "if ret.is_null() || (ret as usize) % ::std::mem::align_of::<i64>() != 0 || (ret as usize).checked_add(::std::mem::size_of::<i64>()).is_none() {",
+                  I16 + "return PRUV_BAD_ARGS;", I12 + "}"]
+        for x, k in params:
+            if k == "bool":
+                L += [I12 + "if %s != 0 && %s != 1 {" % (x, x), I16 + "return PRUV_BAD_ARGS;", I12 + "}"]
+        # Each byte range is computed once (P10.3: recomputing it per pair cost ~1 ns a call).
+        b = [("sp_%s" % x, "span(%s, %s_len)" % (x, x), k.startswith("mt_")) for x, k in params if k in _C_ARRAY_KINDS]
+        if rk != "unit":
+            b.append(("sp_ret", "span(ret, 1)", True))
+        b.append(("sp_h", "span(h as *const PruvHandle, 1)", True))
+        pairs = ["apart(%s, %s)" % (b[i][0], b[j][0]) for i in range(len(b)) for j in range(i + 1, len(b))
+                 if b[i][2] or b[j][2]]
+        if pairs:
+            L += [I12 + "let (%s) = (%s);" % (", ".join(v[0] for v in b), ", ".join(v[1] for v in b)),
+                  I12 + "if !(%s) {" % " && ".join(pairs), I16 + "return PRUV_BAD_ARGS;", I12 + "}"]
+        args = ["&mut st[..]" if smode == "mt" else "&st[..]"]
+        for x, k in params:
+            if k in _C_ARRAY_KINDS:
+                L += [I12 + "let %s = match %s {" % (x, _C_CONV[k] % (x, x)), I16 + "Some(v) => v,",
+                      I16 + "None => return PRUV_BAD_ARGS,", I12 + "};"]
+                args.append(x)
+            elif k == "bool":
+                args.append("%s != 0" % x)
+            else:
+                args.append(x)
+        L.append(I12 + "match hd.store.with(|st| super::%s(%s)) {" % (name, ", ".join(args)))
+        if rk == "unit":
+            L.append(I16 + "Ok(()) => PRUV_OK,")
+        else:
+            L += [I16 + "Ok(v) => {", I16 + "    *ret = %s;" % ("v" if rk == "i64" else "v as i64"),
+                  I16 + "    PRUV_OK", I16 + "}"]
+        L += [I16 + "Err(_) => PRUV_POISONED,", I12 + "}", "        })", "    }"]
+        parts.append("\n".join(L))
+        if smode == "ro" and len(params) == 1 and params[0][1] == "mt_i64" and rk == "i64":
+            parts.append("""\
+    /// C rebuild for `%s`: runs it from the handle's state into a fresh zeroed buffer of new_len words and, when
+    /// it returns 0, makes that buffer the handle's state (the old one is freed); otherwise the state is unchanged.
+    /// # Safety
+    /// The pruv_c caller contract (module docs) holds.
+    #[no_mangle]
+    pub unsafe extern "C" fn pruv_hr_%s(h: *mut PruvHandle, new_len: i64, ret: *mut i64) -> i32 {
+        guard(|| unsafe {
+            let hd = match h.as_mut() {
+                Some(h) => h,
+                None => return PRUV_BAD_ARGS,
+            };
+            if hd.store.is_poisoned() {
+                return PRUV_POISONED;
+            }
+            if ret.is_null() || (ret as usize) %% ::std::mem::align_of::<i64>() != 0 || (ret as usize).checked_add(::std::mem::size_of::<i64>()).is_none() {
+                return PRUV_BAD_ARGS;
+            }
+            if new_len < 0 || new_len as u64 > (isize::MAX as u64) / 8 {
+                return PRUV_BAD_ARGS;
+            }
+            if !apart(span(ret, 1), span(h as *const PruvHandle, 1)) {
+                return PRUV_BAD_ARGS;
+            }
+            match hd.store.with(|st| {
+                let mut next = ::std::vec![0i64; new_len as usize];
+                let r = super::%s(&st[..], &mut next[..]);
+                if r == 0 {
+                    *st = next;
+                }
+                r
+            }) {
+                Ok(v) => {
+                    *ret = v;
+                    PRUV_OK
+                }
+                Err(_) => PRUV_POISONED,
+            }
+        })
+    }""" % (name, name, name))
+    parts.append("}")
+    return "\n".join(parts)
+
+
 def gen_bindings(prog, shim=None, verified=True):
     """shim: the `mod pruv_g6_shim` text of a G6 program (foreign_shim.build_shim); None for every other program"""
     tt = new_tt(prog)
@@ -4736,7 +5044,9 @@ pub unsafe extern "C" fn pruv_host_realloc_v2(data: *mut u8, len: i64, m: i64, s
         if raw:
             raw_items.append((f.name, ps, ret, [p.name for p in f.params]))
     if raw:   # P09: manifest raw_entries; the wrappers above are pub(crate)
-        o.append(codegen.raw_module(raw, raw_items))
+        o.append(codegen.raw_module("crate" if raw == "c" else raw, raw_items))
+    if raw == "c":   # P10: the C adapter module, after pruv_raw and before the G6 shim
+        o.append(c_module(c_entries(pubs)))
     if shim is not None:   # G6 A3: the bridge shim module, exactly once, last
         o.append(shim.rstrip("\n"))
     return "\n".join(o) + "\n"

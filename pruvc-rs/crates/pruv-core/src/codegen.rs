@@ -4547,7 +4547,8 @@ fn raw_forward(name: &str, ps: &str, ret: &str, names: &[String]) -> String {
 /// newline. items: (name, params text, return text, parameter names) of the host entries' public items in emission order.
 pub fn raw_module(mode: &str, items: &[(String, String, String, Vec<String>)]) -> String {
     let mut parts: Vec<String> = Vec::new();
-    if mode == "crate" {
+    if mode == "crate" || mode == "c" {
+        // P10: "c" is "crate" on the Rust backend (the pruv_c adapter exists only in the LLVM bindings)
         parts.push("// P09: manifest raw_entries = \"crate\": the host entries above are pub(crate); a host adapter in this crate keeps".to_string());
         parts.push("// resident state in pruv_raw::PruvStore, which refuses every reuse after a panic.".to_string());
         parts.push("#[allow(dead_code)]".to_string());

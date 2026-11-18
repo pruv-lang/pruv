@@ -576,7 +576,13 @@ pub fn gen_bindings_with(prog: &Program, shim: Option<&str>, verified: bool) -> 
     }
     if let Some(mode) = &raw {
         // P09: manifest raw_entries; the wrappers above are pub(crate)
-        o.push(crate::codegen::raw_module(mode, &raw_items));
+        // P10: "c" emits the "crate" module, then the pruv_c adapter (before the G6 shim)
+        let is_c = mode == "c";
+        o.push(crate::codegen::raw_module(if is_c { "crate" } else { mode }, &raw_items));
+        if is_c {
+            let entries: Vec<CEntry> = pubs.iter().filter_map(|f| c_entry(f)).collect();
+            o.push(c_module(&entries));
+        }
     }
     if let Some(sh) = shim {
         // G6 A3: the bridge shim module, exactly once, last (Python shim.rstrip("\n"))
@@ -585,6 +591,450 @@ pub fn gen_bindings_with(prog: &Program, shim: Option<&str>, verified: bool) -> 
     let mut s = o.join("\n");
     s.push('\n');
     Ok(s)
+}
+
+/// P10: kind of a non-state parameter of a C entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CKind {
+    I64,
+    Bool,
+    RoI64,
+    RoU8,
+    RoBool,
+    Str,
+    MutI64,
+    MutU8,
+    MutBool,
+}
+
+/// P10: return kind of a C entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CRet {
+    I64,
+    Bool,
+    Unit,
+}
+
+/// P10: what `c_module` needs of one eligible host entry.
+#[derive(Clone, Debug)]
+pub struct CEntry {
+    pub name: String,
+    pub state_mut: bool,
+    pub params: Vec<(String, CKind)>,
+    pub ret: CRet,
+    pub rebuild: bool,
+}
+
+/// P10: the C entry of a host function; None when it is not eligible (no pruv_h_ function).
+pub fn c_entry(f: &Function) -> Option<CEntry> {
+    let first = f.params.first()?;
+    if first.ty != "array" {
+        return None;
+    }
+    let mut params: Vec<(String, CKind)> = Vec::new();
+    for p in &f.params[1..] {
+        let inout = p.mode_pos.is_some();
+        let k = match (p.ty.as_str(), inout) {
+            ("i64", false) => CKind::I64,
+            ("bool", false) => CKind::Bool,
+            ("array", false) => CKind::RoI64,
+            ("array_u8", false) => CKind::RoU8,
+            ("array_bool", false) => CKind::RoBool,
+            ("str", false) => CKind::Str,
+            ("array", true) => CKind::MutI64,
+            ("array_u8", true) => CKind::MutU8,
+            ("array_bool", true) => CKind::MutBool,
+            _ => return None,
+        };
+        params.push((p.name.clone(), k));
+    }
+    let ret = match f.ret.as_str() {
+        "i64" => CRet::I64,
+        "bool" => CRet::Bool,
+        "unit" => CRet::Unit,
+        _ => return None,
+    };
+    let rebuild = f.params.len() == 2
+        && first.mode_pos.is_none()
+        && ret == CRet::I64
+        && params.len() == 1
+        && params[0].1 == CKind::MutI64;
+    Some(CEntry { name: f.name.clone(), state_mut: first.mode_pos.is_some(), params, ret, rebuild })
+}
+
+const C_HEAD: &str = r##"// P10: manifest raw_entries = "c": pruv_c is the C adapter. One opaque handle owns the resident state in a
+// pruv_raw::PruvStore; every extern "C" function catches a Rust panic (no unwind crosses into C) and returns a status.
+// A poisoned handle refuses every call but is still freed. Only the LLVM bindings carry this module.
+#[allow(dead_code, unexpected_cfgs)]
+pub mod pruv_c {
+    //! Caller contract of every `pub unsafe extern "C" fn` below (the adapter cannot check what it cannot see):
+    //! - the handle comes from pruv_handle_new and has not been freed;
+    //! - no concurrent or reentrant use of one handle;
+    //! - each (pointer, length) pair with length > 0 points to `length` initialized elements inside one live
+    //!   allocation, readable (writable for an inout parameter) and not accessed by anyone else for the duration
+    //!   of the call;
+    //! - ret points to a writable i64.
+    //!
+    //! The adapter checks null, sign, alignment, size, address overflow and overlap among the call's buffers and
+    //! the handle, but it cannot check allocation size or provenance.
+    /// Statuses of every pruv_h_* / pruv_hr_* call: 0 ok, 1 poisoned (refused before any argument is read, nothing
+    /// ran), 2 bad arguments (refused, nothing ran), 3 a Rust panic unwound to the adapter (if it happened inside the
+    /// store it poisoned the handle). Checked failures inside LLVM-compiled code (range, arithmetic, requires) and G6
+    /// host-callback failures end the process (exit 101); they never return a status.
+    pub const PRUV_OK: i32 = 0;
+    pub const PRUV_POISONED: i32 = 1;
+    pub const PRUV_BAD_ARGS: i32 = 2;
+    pub const PRUV_PANICKED: i32 = 3;
+    /// Opaque to C (one pointer). Owns the resident state; the C side never sees the state buffer.
+    pub struct PruvHandle {
+        store: super::pruv_raw::PruvStore<::std::vec::Vec<i64>>,
+    }
+    // A C (pointer, length) pair as a slice: None for a negative or oversized length, or for a null or misaligned
+    // pointer with a nonzero length, or whose end address overflows. Length 0 never reads the pointer.
+    #[inline(always)]
+    unsafe fn ro<'a, T>(p: *const T, n: i64) -> Option<&'a [T]> {
+        if n == 0 {
+            return Some(&[]);
+        }
+        if n < 0 || n as u64 > (isize::MAX as u64) / (::std::mem::size_of::<T>() as u64)
+            || (p as usize).checked_add(n as usize * ::std::mem::size_of::<T>()).is_none() || p.is_null()
+            || (p as usize) % ::std::mem::align_of::<T>() != 0 {
+            return None;
+        }
+        Some(unsafe { ::std::slice::from_raw_parts(p, n as usize) })
+    }
+    #[inline(always)]
+    unsafe fn mt<'a, T>(p: *mut T, n: i64) -> Option<&'a mut [T]> {
+        if n == 0 {
+            return Some(&mut []);
+        }
+        if n < 0 || n as u64 > (isize::MAX as u64) / (::std::mem::size_of::<T>() as u64)
+            || (p as usize).checked_add(n as usize * ::std::mem::size_of::<T>()).is_none() || p.is_null()
+            || (p as usize) % ::std::mem::align_of::<T>() != 0 {
+            return None;
+        }
+        Some(unsafe { ::std::slice::from_raw_parts_mut(p, n as usize) })
+    }
+    // Byte range of a (pointer, length) pair; empty for a length <= 0.
+    #[inline(always)]
+    fn span<T>(p: *const T, n: i64) -> (usize, usize) {
+        let s = p as usize;
+        (s, s.saturating_add((n.max(0) as usize).saturating_mul(::std::mem::size_of::<T>())))
+    }
+    // Empty ranges never overlap.
+    #[inline(always)]
+    fn apart(a: (usize, usize), b: (usize, usize)) -> bool {
+        !(a.0 < a.1 && b.0 < b.1 && a.0 < b.1 && b.0 < a.1)
+    }
+    #[inline(always)]
+    fn bools(s: &[u8]) -> Option<&[bool]> {
+        if s.iter().all(|b| *b <= 1) { Some(unsafe { &*(s as *const [u8] as *const [bool]) }) } else { None }
+    }
+    #[inline(always)]
+    fn bools_mut(s: &mut [u8]) -> Option<&mut [bool]> {
+        if s.iter().all(|b| *b <= 1) { Some(unsafe { &mut *(s as *mut [u8] as *mut [bool]) }) } else { None }
+    }
+    // Runs one C call; a caught panic becomes PRUV_PANICKED (its payload is leaked, never dropped across C).
+    #[inline(always)]
+    fn guard(f: impl FnOnce() -> i32) -> i32 {
+        match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(f)) {
+            Ok(s) => s,
+            Err(e) => {
+                ::std::mem::forget(e);
+                PRUV_PANICKED
+            }
+        }
+    }
+    /// A new handle whose state is `len` zero words (call the program's init entry next); null for a negative or
+    /// oversized length. Free it with pruv_handle_free.
+    #[no_mangle]
+    pub extern "C" fn pruv_handle_new(len: i64) -> *mut PruvHandle {
+        if len < 0 || len as u64 > (isize::MAX as u64) / 8 {
+            return ::std::ptr::null_mut();
+        }
+        match ::std::panic::catch_unwind(|| {
+            ::std::boxed::Box::into_raw(::std::boxed::Box::new(PruvHandle {
+                store: super::pruv_raw::PruvStore::new(::std::vec![0i64; len as usize]),
+            }))
+        }) {
+            Ok(p) => p,
+            Err(e) => {
+                ::std::mem::forget(e);
+                ::std::ptr::null_mut()
+            }
+        }
+    }
+    /// Frees a handle and its state, poisoned or not; null is ignored. The handle must come from pruv_handle_new and
+    /// is never used again: without a registry a double free or a later call cannot be detected.
+    /// # Safety
+    /// The pruv_c caller contract (module docs) holds.
+    #[no_mangle]
+    pub unsafe extern "C" fn pruv_handle_free(h: *mut PruvHandle) {
+        if h.is_null() {
+            return;
+        }
+        let _ = guard(|| {
+            drop(unsafe { ::std::boxed::Box::from_raw(h) });
+            PRUV_OK
+        });
+    }
+    /// 1 if a panic poisoned the handle, 0 if not, PRUV_BAD_ARGS for null.
+    /// # Safety
+    /// The pruv_c caller contract (module docs) holds.
+    #[no_mangle]
+    pub unsafe extern "C" fn pruv_handle_poisoned(h: *const PruvHandle) -> i32 {
+        match unsafe { h.as_ref() } {
+            Some(h) => h.store.is_poisoned() as i32,
+            None => PRUV_BAD_ARGS,
+        }
+    }
+    /// Probe builds only (rustc --cfg pruv_c_probe): panics inside the store with a payload whose Drop itself
+    /// panics, as a failing call would; guard must never drop the payload.
+    /// # Safety
+    /// The pruv_c caller contract (module docs) holds.
+    #[cfg(pruv_c_probe)]
+    #[no_mangle]
+    pub unsafe extern "C" fn pruv_handle_probe_panic(h: *mut PruvHandle) -> i32 {
+        struct Bomb;
+        impl Drop for Bomb {
+            fn drop(&mut self) {
+                panic!("pruv_c probe payload dropped")
+            }
+        }
+        guard(|| {
+            let hd = match unsafe { h.as_mut() } {
+                Some(h) => h,
+                None => return PRUV_BAD_ARGS,
+            };
+            match hd.store.with(|_| -> () { ::std::panic::panic_any(Bomb) }) {
+                Ok(()) => PRUV_OK,
+                Err(_) => PRUV_POISONED,
+            }
+        })
+    }"##;
+
+const C_RET_CHECK: [&str; 3] = [
+    "            if ret.is_null() || (ret as usize) % ::std::mem::align_of::<i64>() != 0 || (ret as usize).checked_add(::std::mem::size_of::<i64>()).is_none() {",
+    "                return PRUV_BAD_ARGS;",
+    "            }",
+];
+
+fn c_kind_doc(k: &CKind) -> &'static str {
+    match k {
+        CKind::I64 => "i64",
+        CKind::Bool => "bool, 0/1 as i64",
+        CKind::RoI64 => "[i64] pointer, length",
+        CKind::RoU8 => "[u8] pointer, length",
+        CKind::RoBool => "[bool] pointer, length; bytes 0/1",
+        CKind::Str => "str pointer, length; UTF-8",
+        CKind::MutI64 => "inout [i64] pointer, length",
+        CKind::MutU8 => "inout [u8] pointer, length",
+        CKind::MutBool => "inout [bool] pointer, length; bytes 0/1",
+    }
+}
+
+fn c_entry_text(e: &CEntry) -> String {
+    let has_ret = e.ret != CRet::Unit;
+    let mut l: Vec<String> = Vec::new();
+    let mut doc = format!("    /// C entry for `{}`", e.name);
+    if !e.params.is_empty() {
+        let items: Vec<String> = e
+            .params
+            .iter()
+            .enumerate()
+            .map(|(i, (un, k))| format!("a{} = `{}` ({})", i, un, c_kind_doc(k)))
+            .collect();
+        doc.push_str(": ");
+        doc.push_str(&items.join(", "));
+    }
+    doc.push_str("; the handle's state is its first argument.");
+    if has_ret {
+        doc.push_str(" On PRUV_OK the result is in *ret.");
+    }
+    l.push(doc);
+    l.push("    /// # Safety".to_string());
+    l.push("    /// The pruv_c caller contract (module docs) holds.".to_string());
+    l.push("    #[no_mangle]".to_string());
+    // no user parameter name is a Rust identifier below: the i-th parameter after the state is a{i}
+    let params: Vec<(String, CKind)> = e.params.iter().enumerate().map(|(i, (_, k))| (format!("a{}", i), *k)).collect();
+    let mut sig: Vec<String> = vec!["h: *mut PruvHandle".to_string()];
+    for (n, k) in &params {
+        match k {
+            CKind::I64 | CKind::Bool => sig.push(format!("{}: i64", n)),
+            CKind::RoI64 => sig.push(format!("{n}: *const i64, {n}_len: i64", n = n)),
+            CKind::RoU8 | CKind::RoBool | CKind::Str => sig.push(format!("{n}: *const u8, {n}_len: i64", n = n)),
+            CKind::MutI64 => sig.push(format!("{n}: *mut i64, {n}_len: i64", n = n)),
+            CKind::MutU8 | CKind::MutBool => sig.push(format!("{n}: *mut u8, {n}_len: i64", n = n)),
+        }
+    }
+    if has_ret {
+        sig.push("ret: *mut i64".to_string());
+    }
+    l.push(format!("    pub unsafe extern \"C\" fn pruv_h_{}({}) -> i32 {{", e.name, sig.join(", ")));
+    l.push("        guard(|| unsafe {".to_string());
+    for s in [
+        "            let hd = match h.as_mut() {",
+        "                Some(h) => h,",
+        "                None => return PRUV_BAD_ARGS,",
+        "            };",
+        "            if hd.store.is_poisoned() {",
+        "                return PRUV_POISONED;",
+        "            }",
+    ] {
+        l.push(s.to_string());
+    }
+    if has_ret {
+        l.extend(C_RET_CHECK.iter().map(|s| s.to_string()));
+    }
+    for (n, k) in &params {
+        if *k == CKind::Bool {
+            l.push(format!("            if {n} != 0 && {n} != 1 {{", n = n));
+            l.push("                return PRUV_BAD_ARGS;".to_string());
+            l.push("            }".to_string());
+        }
+    }
+    // overlap check: (local, span text, mutable); each byte range is computed once (P10.3: recomputing it per
+    // pair cost ~1 ns a call).
+    let mut b: Vec<(String, String, bool)> = Vec::new();
+    for (n, k) in &params {
+        match k {
+            CKind::RoI64 | CKind::RoU8 | CKind::RoBool | CKind::Str => {
+                b.push((format!("sp_{}", n), format!("span({n}, {n}_len)", n = n), false))
+            }
+            CKind::MutI64 | CKind::MutU8 | CKind::MutBool => {
+                b.push((format!("sp_{}", n), format!("span({n}, {n}_len)", n = n), true))
+            }
+            _ => {}
+        }
+    }
+    if has_ret {
+        b.push(("sp_ret".to_string(), "span(ret, 1)".to_string(), true));
+    }
+    b.push(("sp_h".to_string(), "span(h as *const PruvHandle, 1)".to_string(), true));
+    let mut pairs: Vec<String> = Vec::new();
+    for i in 0..b.len() {
+        for j in (i + 1)..b.len() {
+            if b[i].2 || b[j].2 {
+                pairs.push(format!("apart({}, {})", b[i].0, b[j].0));
+            }
+        }
+    }
+    if !pairs.is_empty() {
+        let names: Vec<&str> = b.iter().map(|v| v.0.as_str()).collect();
+        let spans: Vec<&str> = b.iter().map(|v| v.1.as_str()).collect();
+        l.push(format!("            let ({}) = ({});", names.join(", "), spans.join(", ")));
+        l.push(format!("            if !({}) {{", pairs.join(" && ")));
+        l.push("                return PRUV_BAD_ARGS;".to_string());
+        l.push("            }".to_string());
+    }
+    let mut args: Vec<String> = vec![if e.state_mut { "&mut st[..]".to_string() } else { "&st[..]".to_string() }];
+    for (n, k) in &params {
+        let expr = match k {
+            CKind::I64 => {
+                args.push(n.clone());
+                continue;
+            }
+            CKind::Bool => {
+                args.push(format!("{} != 0", n));
+                continue;
+            }
+            CKind::RoI64 | CKind::RoU8 => format!("ro({n}, {n}_len)", n = n),
+            CKind::Str => format!("ro({n}, {n}_len).and_then(|b| ::std::str::from_utf8(b).ok())", n = n),
+            CKind::RoBool => format!("ro({n}, {n}_len).and_then(bools)", n = n),
+            CKind::MutI64 | CKind::MutU8 => format!("mt({n}, {n}_len)", n = n),
+            CKind::MutBool => format!("mt({n}, {n}_len).and_then(bools_mut)", n = n),
+        };
+        l.push(format!("            let {} = match {} {{", n, expr));
+        l.push("                Some(v) => v,".to_string());
+        l.push("                None => return PRUV_BAD_ARGS,".to_string());
+        l.push("            };".to_string());
+        args.push(n.clone());
+    }
+    l.push(format!("            match hd.store.with(|st| super::{}({})) {{", e.name, args.join(", ")));
+    match e.ret {
+        CRet::Unit => l.push("                Ok(()) => PRUV_OK,".to_string()),
+        r => {
+            l.push("                Ok(v) => {".to_string());
+            l.push(if r == CRet::Bool { "                    *ret = v as i64;" } else { "                    *ret = v;" }.to_string());
+            l.push("                    PRUV_OK".to_string());
+            l.push("                }".to_string());
+        }
+    }
+    l.push("                Err(_) => PRUV_POISONED,".to_string());
+    l.push("            }".to_string());
+    l.push("        })".to_string());
+    l.push("    }".to_string());
+    l.join("\n")
+}
+
+fn c_rebuild_text(name: &str) -> String {
+    let mut l: Vec<String> = Vec::new();
+    l.push(format!(
+        "    /// C rebuild for `{}`: runs it from the handle's state into a fresh zeroed buffer of new_len words and, when",
+        name
+    ));
+    l.push("    /// it returns 0, makes that buffer the handle's state (the old one is freed); otherwise the state is unchanged.".to_string());
+    l.push("    /// # Safety".to_string());
+    l.push("    /// The pruv_c caller contract (module docs) holds.".to_string());
+    l.push("    #[no_mangle]".to_string());
+    l.push(format!("    pub unsafe extern \"C\" fn pruv_hr_{}(h: *mut PruvHandle, new_len: i64, ret: *mut i64) -> i32 {{", name));
+    l.push("        guard(|| unsafe {".to_string());
+    for s in [
+        "            let hd = match h.as_mut() {",
+        "                Some(h) => h,",
+        "                None => return PRUV_BAD_ARGS,",
+        "            };",
+        "            if hd.store.is_poisoned() {",
+        "                return PRUV_POISONED;",
+        "            }",
+    ] {
+        l.push(s.to_string());
+    }
+    l.extend(C_RET_CHECK.iter().map(|s| s.to_string()));
+    for s in [
+        "            if new_len < 0 || new_len as u64 > (isize::MAX as u64) / 8 {",
+        "                return PRUV_BAD_ARGS;",
+        "            }",
+        "            if !apart(span(ret, 1), span(h as *const PruvHandle, 1)) {",
+        "                return PRUV_BAD_ARGS;",
+        "            }",
+        "            match hd.store.with(|st| {",
+        "                let mut next = ::std::vec![0i64; new_len as usize];",
+    ] {
+        l.push(s.to_string());
+    }
+    l.push(format!("                let r = super::{}(&st[..], &mut next[..]);", name));
+    for s in [
+        "                if r == 0 {",
+        "                    *st = next;",
+        "                }",
+        "                r",
+        "            }) {",
+        "                Ok(v) => {",
+        "                    *ret = v;",
+        "                    PRUV_OK",
+        "                }",
+        "                Err(_) => PRUV_POISONED,",
+        "            }",
+        "        })",
+        "    }",
+    ] {
+        l.push(s.to_string());
+    }
+    l.join("\n")
+}
+
+/// P10: the `pruv_c` module text (manifest raw_entries = "c"), without a trailing newline.
+pub fn c_module(entries: &[CEntry]) -> String {
+    let mut parts: Vec<String> = vec![C_HEAD.to_string()];
+    for e in entries {
+        parts.push(c_entry_text(e));
+        if e.rebuild {
+            parts.push(c_rebuild_text(&e.name));
+        }
+    }
+    parts.push("}".to_string());
+    parts.join("\n")
 }
 
 #[cfg(test)]
@@ -598,6 +1048,65 @@ mod tests {
             ret: ret.into(), effects: vec![], requires: vec![], ensures: vec![], body: vec![], ret_refine: None, tparams: vec![],
             foreign: None, cost: None, decreases: None, small_bound: None, x_auto: None,
         }
+    }
+
+    fn inout(mut f: Function, idx: usize) -> Function {
+        f.params[idx].mode_pos = Some((1, 1));
+        f
+    }
+
+    #[test]
+    fn c_entry_eligibility() {
+        let op = inout(inout(func("m4_op", vec![("st", "array"), ("op", "array"), ("out", "array")], "i64"), 0), 2);
+        let e = c_entry(&op).unwrap();
+        assert!(e.state_mut && !e.rebuild);
+        assert_eq!(e.params, vec![("op".to_string(), CKind::RoI64), ("out".to_string(), CKind::MutI64)]);
+        let grow = inout(func("m4_grow", vec![("prev", "array"), ("next", "array")], "i64"), 1);
+        assert!(c_entry(&grow).unwrap().rebuild);
+        assert!(c_entry(&func("f", vec![("x", "i64")], "i64")).is_none());
+        assert!(c_entry(&func("f", vec![("st", "array")], "option")).is_none());
+        assert!(c_entry(&func("f", vec![("st", "array"), ("o", "option")], "i64")).is_none());
+    }
+
+    #[test]
+    fn c_module_entry_text() {
+        let op = inout(inout(func("m4_op", vec![("st", "array"), ("op", "array"), ("out", "array")], "i64"), 0), 2);
+        let t = c_module(&[c_entry(&op).unwrap()]);
+        assert!(t.starts_with("// P10: manifest raw_entries = \"c\": pruv_c is the C adapter."));
+        assert!(t.ends_with("    }\n}"));
+        assert!(t.contains("    /// C entry for `m4_op`: a0 = `op` ([i64] pointer, length), a1 = `out` (inout [i64] pointer, length); the handle's state is its first argument. On PRUV_OK the result is in *ret.\n    /// # Safety\n    /// The pruv_c caller contract (module docs) holds.\n    #[no_mangle]\n    pub unsafe extern \"C\" fn pruv_h_m4_op(h: *mut PruvHandle, a0: *const i64, a0_len: i64, a1: *mut i64, a1_len: i64, ret: *mut i64) -> i32 {\n        guard(|| unsafe {\n            let hd = match h.as_mut() {\n                Some(h) => h,\n                None => return PRUV_BAD_ARGS,\n            };\n            if hd.store.is_poisoned() {\n                return PRUV_POISONED;\n            }\n            if ret.is_null()"));
+        assert!(t.contains("            let (sp_a0, sp_a1, sp_ret, sp_h) = (span(a0, a0_len), span(a1, a1_len), span(ret, 1), span(h as *const PruvHandle, 1));\n            if !(apart(sp_a0, sp_a1) && apart(sp_a0, sp_ret) && apart(sp_a0, sp_h) && apart(sp_a1, sp_ret) && apart(sp_a1, sp_h) && apart(sp_ret, sp_h)) {\n"));
+        assert!(t.contains("            match hd.store.with(|st| super::m4_op(&mut st[..], a0, a1)) {\n                Ok(v) => {\n                    *ret = v;\n                    PRUV_OK\n                }\n                Err(_) => PRUV_POISONED,\n            }\n        })\n    }\n}"));
+        assert!(!t.contains("fn pruv_hr_"));
+        assert!(!t.contains("op_len") && !t.contains("out_len") && !t.contains("fn pruv_h_m4_op(h: *mut PruvHandle, op"));
+    }
+
+    #[test]
+    fn c_module_bool_unit_and_rebuild() {
+        let f = func("put", vec![("st", "array"), ("b", "bool"), ("s", "str")], "unit");
+        let t = c_module(&[c_entry(&f).unwrap()]);
+        assert!(t.contains("    /// C entry for `put`: a0 = `b` (bool, 0/1 as i64), a1 = `s` (str pointer, length; UTF-8); the handle's state is its first argument.\n"));
+        assert!(t.contains("fn pruv_h_put(h: *mut PruvHandle, a0: i64, a1: *const u8, a1_len: i64) -> i32 {"));
+        assert!(t.contains("            if hd.store.is_poisoned() {\n                return PRUV_POISONED;\n            }\n            if a0 != 0 && a0 != 1 {\n                return PRUV_BAD_ARGS;\n            }\n"));
+        assert!(t.contains("            let (sp_a1, sp_h) = (span(a1, a1_len), span(h as *const PruvHandle, 1));\n            if !(apart(sp_a1, sp_h)) {\n"));
+        assert!(t.contains("            let a1 = match ro(a1, a1_len).and_then(|b| ::std::str::from_utf8(b).ok()) {"));
+        assert!(t.contains("super::put(&st[..], a0 != 0, a1)) {\n                Ok(()) => PRUV_OK,\n"));
+        assert!(!t.contains("apart(sp_a1, sp_a"));
+        let g = inout(func("m4_grow", vec![("prev", "array"), ("next", "array")], "i64"), 1);
+        let t = c_module(&[c_entry(&g).unwrap()]);
+        assert!(t.contains("pruv_hr_m4_grow(h: *mut PruvHandle, new_len: i64, ret: *mut i64) -> i32 {"));
+        assert!(t.contains("let r = super::m4_grow(&st[..], &mut next[..]);"));
+        assert!(t.contains("            if hd.store.is_poisoned() {\n                return PRUV_POISONED;\n            }\n            if ret.is_null()"));
+        assert!(t.contains("            }\n            if !apart(span(ret, 1), span(h as *const PruvHandle, 1)) {\n                return PRUV_BAD_ARGS;\n            }\n            match hd.store.with(|st| {\n"));
+    }
+
+    #[test]
+    fn raw_entries_c_order() {
+        let mut prog = Program { functions: vec![func("f", vec![("x", "i64")], "i64")], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: Some("c".into()) };
+        // not explicit: raw_entries is ignored, so no pruv_c
+        assert!(!gen_bindings(&prog).unwrap().contains("pub mod pruv_c"));
+        prog.raw_entries = None;
+        assert!(!gen_bindings(&prog).unwrap().contains("pub mod pruv_c"));
     }
 
     #[test]

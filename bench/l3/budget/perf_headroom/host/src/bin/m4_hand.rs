@@ -7,8 +7,10 @@
 // unpack), build the keys from the units (into reusable scratch buffers, no caching between calls), apply the map/set operation, write the result words into `out`. Prefill and op encoding
 // are untimed.
 //
-//   m4_hand <sessions|tools|clocks> ... is invoked as:  m4_hand perf <axis> <n> <reps>
-//   m4_hand selftest
+//   m4_hand perf  <axis> <n> <reps>   in-process calls
+//   m4_hand perfc <axis> <n> <reps>   same loop, State behind an opaque extern "C" handle (hand_h_*), called through
+//                                     black_box'd function pointers: the matched baseline for the m4c lane
+//   m4_hand selftest                  (also runs every step through the C API)
 // Prints one line: axis=.. n=.. hand_ns_per_op=..
 
 use std::collections::{HashMap, HashSet};
@@ -256,37 +258,187 @@ fn op_run_set(c: &str, rk: &str, w: i64) -> Vec<i64> {
     v
 }
 
+// ---- extern "C" handle (the matched baseline for the m4c lane) ----------------------------------------------------
+//
+// The hand State behind an opaque handle, doing per call the same work as the generated pruv_h_m4_op: handle check,
+// poison check, ret check, overlap check, slice conversion, poison set/clear around the call, `*ret = result`.
+
+pub struct HandHandle {
+    st: State,
+    poisoned: bool,
+}
+
+type NewF = extern "C" fn() -> *mut HandHandle;
+type FreeF = unsafe extern "C" fn(*mut HandHandle);
+type ExecF = unsafe extern "C" fn(*mut HandHandle, *const i64, i64, *mut i64, i64, *mut i64) -> i32;
+
+#[derive(Clone, Copy)]
+struct CFns {
+    new: NewF,
+    free: FreeF,
+    exec: ExecF,
+}
+
+#[no_mangle]
+pub extern "C" fn hand_h_new() -> *mut HandHandle {
+    Box::into_raw(Box::new(HandHandle { st: State::default(), poisoned: false }))
+}
+
+/// # Safety
+/// `h` must be null or a pointer returned by `hand_h_new` that has not been freed.
+#[no_mangle]
+pub unsafe extern "C" fn hand_h_free(h: *mut HandHandle) {
+    if !h.is_null() {
+        drop(Box::from_raw(h));
+    }
+}
+
+/// Byte span [p, p + 8*len) with saturating arithmetic (an invalid length is rejected by ro/mt afterwards anyway).
+fn span(p: usize, len: i64) -> (usize, usize) {
+    (p, p.saturating_add((len.max(0) as usize).saturating_mul(8)))
+}
+
+/// Empty spans never overlap.
+fn spans_overlap(a: (usize, usize), b: (usize, usize)) -> bool {
+    a.0 < a.1 && b.0 < b.1 && a.0 < b.1 && b.0 < a.1
+}
+
+unsafe fn ro<'a>(p: *const i64, len: i64) -> Option<&'a [i64]> {
+    if len == 0 {
+        return Some(&[]);
+    }
+    if len < 0
+        || len as u64 > (isize::MAX as u64) / 8
+        || p.is_null()
+        || (p as usize) % std::mem::align_of::<i64>() != 0
+        || (p as usize).checked_add(len as usize * 8).is_none()
+    {
+        return None;
+    }
+    Some(std::slice::from_raw_parts(p, len as usize))
+}
+
+unsafe fn mt<'a>(p: *mut i64, len: i64) -> Option<&'a mut [i64]> {
+    if len == 0 {
+        return Some(&mut []);
+    }
+    if len < 0
+        || len as u64 > (isize::MAX as u64) / 8
+        || p.is_null()
+        || (p as usize) % std::mem::align_of::<i64>() != 0
+        || (p as usize).checked_add(len as usize * 8).is_none()
+    {
+        return None;
+    }
+    Some(std::slice::from_raw_parts_mut(p, len as usize))
+}
+
+/// # Safety
+/// Pointers must be null or valid for the stated lengths, as for any C entry point.
+#[no_mangle]
+pub unsafe extern "C" fn hand_h_exec(
+    h: *mut HandHandle,
+    op: *const i64,
+    op_len: i64,
+    out: *mut i64,
+    out_len: i64,
+    ret: *mut i64,
+) -> i32 {
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> i32 {
+        if h.is_null() {
+            return 2;
+        }
+        if (*h).poisoned {
+            return 1;
+        }
+        if ret.is_null()
+            || (ret as usize) % std::mem::align_of::<i64>() != 0
+            || (ret as usize).checked_add(std::mem::size_of::<i64>()).is_none()
+        {
+            return 2;
+        }
+        let s_op = span(op as usize, op_len);
+        let s_out = span(out as usize, out_len);
+        let s_ret = span(ret as usize, 1);
+        let s_h = (h as usize, (h as usize).saturating_add(std::mem::size_of::<HandHandle>()));
+        // Pairwise disjoint where at least one side is writable: op is read-only, the other three are written.
+        if spans_overlap(s_op, s_out)
+            || spans_overlap(s_op, s_ret)
+            || spans_overlap(s_op, s_h)
+            || spans_overlap(s_out, s_ret)
+            || spans_overlap(s_out, s_h)
+            || spans_overlap(s_ret, s_h)
+        {
+            return 2;
+        }
+        let Some(op_s) = ro(op, op_len) else { return 2 };
+        let Some(out_s) = mt(out, out_len) else { return 2 };
+        (*h).poisoned = true;
+        let status = (*h).st.exec(op_s, out_s);
+        (*h).poisoned = false;
+        *ret = status as i64;
+        0
+    }));
+    match r {
+        Ok(s) => s,
+        Err(payload) => {
+            std::mem::forget(payload);
+            3
+        }
+    }
+}
+
 // ---- perf ---------------------------------------------------------------------------------------------------------
 
-fn run_check(st: &mut State, op: &[i64], out: &mut [i64], what: &str) {
-    let s = st.exec(op, out);
+fn run_check(exec: &mut dyn FnMut(&[i64], &mut [i64]) -> i32, op: &[i64], out: &mut [i64], what: &str) {
+    let s = exec(op, out);
     if s != 0 {
         eprintln!("perf: {} failed with status {}", what, s);
         std::process::exit(1);
     }
 }
 
-/// One full run on fresh state. Returns (elapsed ns, ops, sink).
-fn run_once(axis: &str, n: usize, reps: usize) -> (u128, usize, i64) {
+/// One full run on fresh state. Returns (elapsed ns, ops, sink). `c`: the State sits behind the opaque extern "C"
+/// handle (`perfc`), reached through black_box'd function pointers; otherwise it is called in-process (`perf`).
+fn run_once(axis: &str, n: usize, reps: usize, c: bool) -> (u128, usize, i64) {
     let mut st = State::default();
+    let f = CFns {
+        new: black_box::<NewF>(hand_h_new),
+        free: black_box::<FreeF>(hand_h_free),
+        exec: black_box::<ExecF>(hand_h_exec),
+    };
+    let h: *mut HandHandle = if c { (f.new)() } else { std::ptr::null_mut() };
     let mut out: Vec<i64> = vec![0; OUT_WORDS];
     let blob: Vec<i64> = vec![11, 22, 33, 44, 55, 66, 77, 88];
 
-    // Prefill (not timed).
+    // Prefill (not timed). The closure returns the op status (C mode: handle status, else the status in *ret).
+    let mut pre = |op: &[i64], o: &mut [i64]| -> i32 {
+        if c {
+            let mut ret = 0i64;
+            let s = unsafe { (f.exec)(h, op.as_ptr(), op.len() as i64, o.as_mut_ptr(), o.len() as i64, &mut ret) };
+            if s != 0 {
+                100 + s
+            } else {
+                ret as i32
+            }
+        } else {
+            st.exec(op, o)
+        }
+    };
     match axis {
         "sessions" => {
             for i in 0..n {
-                run_check(&mut st, &op_session_put(&format!("s{}", i), &blob), &mut out, "prefill session_put");
+                run_check(&mut pre, &op_session_put(&format!("s{}", i), &blob), &mut out, "prefill session_put");
             }
         }
         "tools" => {
             for i in 0..n {
-                run_check(&mut st, &op_kk(13, "t0", &format!("a{}", i)), &mut out, "prefill tool_note");
+                run_check(&mut pre, &op_kk(13, "t0", &format!("a{}", i)), &mut out, "prefill tool_note");
             }
         }
         "clocks" => {
             for i in 0..n {
-                run_check(&mut st, &op_kk(5, &format!("c{}", i), "s0"), &mut out, "prefill clock_put");
+                run_check(&mut pre, &op_kk(5, &format!("c{}", i), "s0"), &mut out, "prefill clock_put");
             }
         }
         _ => {
@@ -343,15 +495,28 @@ fn run_once(axis: &str, n: usize, reps: usize) -> (u128, usize, i64) {
         if out.len() < OUT_WORDS {
             out.resize(OUT_WORDS, 0);
         }
-        let s = st.exec(black_box(op), &mut out);
-        if s != 0 {
-            eprintln!("perf: op failed in timed loop (status {})", s);
-            std::process::exit(1);
+        if c {
+            let op = black_box(op);
+            let mut ret = 0i64;
+            let s = unsafe { (f.exec)(h, op.as_ptr(), op.len() as i64, out.as_mut_ptr(), out.len() as i64, &mut ret) };
+            if s != 0 || ret != 0 {
+                eprintln!("perfc: op failed in timed loop (status {}, ret {})", s, ret);
+                std::process::exit(1);
+            }
+        } else {
+            let s = st.exec(black_box(op), &mut out);
+            if s != 0 {
+                eprintln!("perf: op failed in timed loop (status {})", s);
+                std::process::exit(1);
+            }
         }
         sink = sink.wrapping_add(black_box(out[0] + out[1]));
     }
     let ns = t0.elapsed().as_nanos();
     black_box(sink);
+    if c {
+        unsafe { (f.free)(h) };
+    }
     (ns, nops, sink)
 }
 
@@ -396,11 +561,10 @@ fn selftest() {
         ("unknown code", vec![99], 2, None),
         ("empty op", vec![], 2, None),
     ];
-    for (what, op, want_status, want_res) in &steps {
-        out.fill(0);
-        let s = st.exec(op, &mut out);
-        if s != *want_status {
-            println!("selftest mismatch: {}: status {}, expected {}", what, s, want_status);
+    // Checks status and result words; `via` names the path (in-process or C API) in the message.
+    let check = |via: &str, what: &str, s: i32, out: &[i64], want_status: i32, want_res: &Option<Vec<i64>>| {
+        if s != want_status {
+            println!("selftest mismatch ({}): {}: status {}, expected {}", via, what, s, want_status);
             std::process::exit(1);
         }
         if let Some(want) = want_res {
@@ -412,18 +576,75 @@ fn selftest() {
             };
             if cnt != want.len() as i64 || &got != want {
                 println!(
-                    "selftest mismatch: {}: result {:?} (out[0]={}), expected {:?}",
-                    what, got, cnt, want
+                    "selftest mismatch ({}): {}: result {:?} (out[0]={}), expected {:?}",
+                    via, what, got, cnt, want
                 );
                 std::process::exit(1);
             }
         }
+    };
+    for (what, op, want_status, want_res) in &steps {
+        out.fill(0);
+        let s = st.exec(op, &mut out);
+        check("in-process", what, s, &out, *want_status, want_res);
+    }
+
+    // The same steps through the extern "C" handle: the status is in *ret, the call itself returns 0.
+    let h = hand_h_new();
+    let mut cout: Vec<i64> = vec![0; OUT_WORDS];
+    for (what, op, want_status, want_res) in &steps {
+        cout.fill(0);
+        let mut ret = -1i64;
+        let s = unsafe { hand_h_exec(h, op.as_ptr(), op.len() as i64, cout.as_mut_ptr(), cout.len() as i64, &mut ret) };
+        if s != 0 {
+            println!("selftest mismatch (C API): {}: call status {}, expected 0", what, s);
+            std::process::exit(1);
+        }
+        check("C API", what, ret as i32, &cout, *want_status, want_res);
+    }
+
+    // C API argument checks.
+    let fail = |what: &str, s: i32| {
+        if s != 2 {
+            println!("selftest mismatch (C API): {}: status {}, expected 2", what, s);
+            std::process::exit(1);
+        }
+    };
+    let op = op_k(2, "ab");
+    let mut ret = -1i64;
+    unsafe {
+        fail(
+            "null handle",
+            hand_h_exec(std::ptr::null_mut(), op.as_ptr(), op.len() as i64, cout.as_mut_ptr(), cout.len() as i64, &mut ret),
+        );
+        fail(
+            "null ret",
+            hand_h_exec(h, op.as_ptr(), op.len() as i64, cout.as_mut_ptr(), cout.len() as i64, std::ptr::null_mut()),
+        );
+        // out overlapping op: both inside one buffer.
+        let mut buf: Vec<i64> = vec![0; OUT_WORDS];
+        buf[..op.len()].copy_from_slice(&op);
+        let p = buf.as_mut_ptr();
+        fail("out overlaps op", hand_h_exec(h, p as *const i64, op.len() as i64, p, OUT_WORDS as i64, &mut ret));
+        // ret inside the handle object.
+        fail(
+            "ret inside handle",
+            hand_h_exec(h, op.as_ptr(), op.len() as i64, cout.as_mut_ptr(), cout.len() as i64, h as *mut i64),
+        );
+        // The handle must still work (no poison left behind by the rejected calls).
+        cout.fill(0);
+        let s = hand_h_exec(h, op.as_ptr(), op.len() as i64, cout.as_mut_ptr(), cout.len() as i64, &mut ret);
+        if s != 0 || ret != 0 {
+            println!("selftest mismatch (C API): call after rejected calls: status {}, ret {}", s, ret);
+            std::process::exit(1);
+        }
+        hand_h_free(h);
     }
     println!("selftest ok");
 }
 
 fn usage() -> ! {
-    eprintln!("usage: m4_hand perf <sessions|tools|clocks> <n> <reps> | selftest");
+    eprintln!("usage: m4_hand perf|perfc <sessions|tools|clocks> <n> <reps> | selftest");
     std::process::exit(2);
 }
 
@@ -431,7 +652,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(|s| s.as_str()) {
         Some("selftest") if args.len() == 2 => selftest(),
-        Some("perf") if args.len() == 5 => {
+        Some(mode @ ("perf" | "perfc")) if args.len() == 5 => {
             let axis = args[2].as_str();
             if !matches!(axis, "sessions" | "tools" | "clocks") {
                 usage();
@@ -442,7 +663,7 @@ fn main() {
                 usage();
             }
             // One measured run on fresh state, no separate warm-up (driver_m4 perf has none either).
-            let (ns, ops, sink) = run_once(axis, n, reps);
+            let (ns, ops, sink) = run_once(axis, n, reps, mode == "perfc");
             eprintln!("sink={}", sink);
             println!("axis={} n={} hand_ns_per_op={:.1}", axis, n, ns as f64 / ops as f64);
         }

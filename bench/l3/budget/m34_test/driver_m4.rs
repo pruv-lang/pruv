@@ -10,6 +10,7 @@ use std::hint::black_box;
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
 
+// LANE-WORLD-BEGIN (run.py replaces everything up to LANE-WORLD-END with driver_m4c.rs for the m4c lane)
 // Every call on the resident state goes through a store with the PruvStore API (`new`, `with`). run.py puts one line
 // in front of this file, `type Store<T> = ...;`: `Plain<T>` (below, no poison flag; default build "m4") or
 // `sol::pruv_raw::PruvStore<T>` (manifest raw_entries = "crate", tag "m4raw"). The driver code is the same for both.
@@ -130,6 +131,7 @@ impl World {
         &self.out[1..hi]
     }
 }
+// LANE-WORLD-END
 
 fn words_line(prefix: &str, ws: &[i64]) -> String {
     let mut s = String::from(prefix);
@@ -367,7 +369,8 @@ fn perf(axis: &str, n: usize, reps: usize) {
             j = 0;
         }
         match w.exec(black_box(op)) {
-            R::Ok(k) => sink = sink.wrapping_add(black_box(w.out[0] + k as i64)),
+            // Same sink as m4_hand: out[0] + out[1] (out always has >= 4096 words).
+            R::Ok(_) => sink = sink.wrapping_add(black_box(w.out[0] + w.out[1])),
             _ => {
                 eprintln!("perf: op failed in timed loop");
                 std::process::exit(1);
@@ -378,11 +381,12 @@ fn perf(axis: &str, n: usize, reps: usize) {
     black_box(sink);
     let core = total.saturating_sub(w.grow_ns);
     println!(
-        "axis={} n={} encode_ns_per_op={:.1} core_ns_per_op={:.1} grow_ns_total={} grows={} ops={}",
+        "axis={} n={} encode_ns_per_op={:.1} core_ns_per_op={:.1} total_ns_per_op={:.1} grow_ns_total={} grows={} ops={}",
         axis,
         n,
         enc_ns as f64 / nops as f64,
         core as f64 / nops as f64,
+        total as f64 / nops as f64,
         w.grow_ns,
         w.grows,
         nops

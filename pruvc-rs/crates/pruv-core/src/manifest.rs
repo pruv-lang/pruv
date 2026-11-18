@@ -665,10 +665,10 @@ fn read(pkgdir: &Path, mfile: &Path, display: &str) -> Res<Pkg> {
                 _ => return bad(display, "raw_entries", "expected a string"),
             };
             if matches!(r, "pub" | "public" | "safe") {
-                return bad(display, "raw_entries", "a raw entry is never a public safe function (use \"crate\" or \"unsafe\")");
+                return bad(display, "raw_entries", "a raw entry is never a public safe function (use \"crate\", \"unsafe\" or \"c\")");
             }
-            if !matches!(r, "crate" | "unsafe") {
-                return bad(display, "raw_entries", "expected \"crate\" or \"unsafe\"");
+            if !matches!(r, "crate" | "unsafe" | "c") {
+                return bad(display, "raw_entries", "expected \"crate\", \"unsafe\" or \"c\"");
             }
             Some(r.to_string())
         }
