@@ -166,4 +166,10 @@ by byte-identical output and run by group, with the full test suite once before 
     scope review: decide how much of the Python compiler to keep (reference, test oracle, or frozen), with
     an adversarial debate, before the R12/P36 freeze decision in "Not in this package".
 
+11. **T2 follow-up (queued at the T2 merge, 95f734b).** The 13 total-operation rejects (`cd20`-`cd22`,
+    `cd24`, `cd25`, `cd27`, `cd30`, `cd32`-`cd34`, `cd38`-`cd40`) compare an operation result with the same
+    operation, so they check contract consistency only. Add paired accept tests on independent values
+    (for example `ev_event_slot == -1` right after `ev_new(1)`) so a wrong state-field link is caught. Also run
+    the satisfied-precondition accept twin for `ev_proc_write`, `ev_proc_close_stdin`, `ev_proc_wait`.
+
 Order after the review: T0①–⑥ → T3 → T1 → T2 → T4 → P16, P17a → T5 (inline policy) → T6.
