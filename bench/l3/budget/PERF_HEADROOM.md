@@ -983,7 +983,8 @@ redundant step allows it. (4) The `corrupt_resident.py` hit variants.
 What changed:
 - `bud_map.pruv` (item 1): slot words carry the top 30 hash bits (`tag(h) * 2^32 + e + 1`) and probes compare the tag
   before reading an entry. `add_absent_w` probes once (`probe_w`) and inserts at the found slot (`put_at`). `room()`
-  rehashes early when the index would pass half full while live entries take at most a quarter of the slots.
+  rehashes early when the index would pass half full while live entries take at most 3/8 of the slots
+  (`slots * 3 / 8`; P21b raised it from `slots / 4`, and folded the lazy-forget reclaim into `entry_alloc`).
   `remove()` frees a turn's children without probing for their slots: stale slots never match, are not reused and
   are dropped by the next rehash. `m34_test/CONTRACT.md` documents the slot encoding and the load policy.
 - Item 2: every root packs keys once at ingress (`[n, words(n)]`) and calls `find_w` / `add_w` / `add_absent_w`.
