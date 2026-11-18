@@ -378,7 +378,7 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P12 | Same: local I1 mutator frames and guard removal one accessor at a time | C proof negatives if verifier changed; P Q2/Q3 churn/stale handles. Keep total accessors/step budgets until each local bound proved. |
 | P13 | Same + B/host.rs: reserve/grow/failure | P Q2/Q3 growth, no replay of effects/queries, old state valid or terminal poison; byte/copy accounting. |
 | P13c | B/host.rs: M4 peak RSS at or below hand (P13b.8) | P: peak RSS split by component (entry words, slot table, arena slack, old + new buffer at a grow) on the 9 M4 cells; every cell <= 1.0x hand by peak RSS and allocation count, time not worse than P13b; Q2/Q3 growth gates unchanged. Done in part (Appendix P13c): old buffers mapped by the host; 7 of 9 cells still above hand, split into P13d, P13e and one page of undetermined cause. |
-| P13d | Both codegens (pruvc / pruvc-rs): generated code size of the M4 driver (Appendix P13c.8) | P: resident `__TEXT` of the M4 Pruv binary at or below hand's (P13c: +80 KiB, measured before the P13c change, assumed unchanged after), with both sides built with the same flags; time not worse than P13c; no Pruv-only build flags. Measured (Appendix P13d): not met without time loss, no compiler change; size split by line and queued as P13h/P13e/P13f. |
+| P13d | Both codegens (pruvc / pruvc-rs): generated code size of the M4 driver (Appendix P13c.8) | P: resident `__TEXT` of the M4 Pruv binary at or below hand's (P13c: +80 KiB, measured before the P13c change, assumed unchanged after), with both sides built with the same flags; time not worse than P13c; no Pruv-only build flags. Measured (Appendix P13d): not met without time loss, no compiler change; size split by line and queued as P13h/P13e/P13f. T5 adds M7: every inline promotion of the P19c bodies grows `__text` (Appendix T5.2). |
 | P13e | B/bud_map.pruv, bud_store.pruv, bud_world.pruv, bud_admit.pruv: entry layout (Appendix P13c.8) | P: smaller per-entry words (P13c: 20 words) so tools peak RSS reaches hand after P13d (also P21: tooldup at M = 500, 3120 vs oaw 3040 KiB); proofs and M10 replay counters kept; time not worse than P13c. |
 | P13f | B/driver_m4.rs and the M4 bench adapter: length bound from T0 (TIDY_SPEC §4.10) | P: the bench adapter's allocations get the `2^40` bound (T0 audit finding 1), and the per-entry length check added by T0 is hoisted out of the timed loop where the driver already holds the length; m4 sessions back to the pre-T0 time (T0: +1-2%, outside A/A noise) and every M4 cell <= 1.0x hand. |
 | P13g | Both codegens: small helper inlining gap found by P20 (Appendix P20) | P: `find_w` in the bud_charge hot path is inlined (P20 attribution: about 25 instructions per call not inlined), output parity on both compilers, and the P20 unmatched hand16 lane (keys pre-parsed, 1.13-1.17x) re-measured after P13f and this row; any remaining gap above 1.0x is fixed or explained line by line (wire parsing is about 100 instructions of it). LLVM pairs for P20 wait for P17. |
@@ -393,10 +393,11 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P17b | Budget milestone/scenario drivers and bindings: LLVM build/transport/result lane | C ABI lifetime/layout probes plus P narrow Q on all four pairs; separately label old py,rs defaults. |
 | P17c | Budget perf runners: LLVM matched A/B/C, direct and adapter lane | P S/M core/boundary/complete timing, wrapper poison/overlap/shim cost and full consumption. No four-pair parity inference from Rust numbers. |
 | P18 | B/bud_lifecycle.pruv: current/isHalted/reopen | P Q1+B, lookup S/M <=1.0; retain dynamic identity checks. |
-| P18b | M7 host shim/ABI result path and inline policy: P18 lookup floor (Appendix P18.8) | P: first an isolating measurement (register-return variant of the host shim vs the `out` buffer store + reload), then the fix in the layer it names; `current` (0.99-1.03), `isHalted` (1.02-1.12) and `reopenmiss` (1.04-1.06 of hand16) each <= 1.0x hand at S/M, or a line-by-line hand vs generated Rust difference showing why Pruv cannot emit it. Peak RSS 2-4 pages above P13c re-measured and attributed. Runs with or after P19 (same files). |
+| P18b | M7 host shim/ABI result path and inline policy: P18 lookup floor (Appendix P18.8) | P: first an isolating measurement (register-return variant of the host shim vs the `out` buffer store + reload), then the fix in the layer it names; `current` (0.99-1.03), `isHalted` (1.02-1.12) and `reopenmiss` (1.04-1.06 of hand16) each <= 1.0x hand at S/M, or a line-by-line hand vs generated Rust difference showing why Pruv cannot emit it. Peak RSS 2-4 pages above P13c re-measured and attributed. Runs with or after P19 (same files). T5: inlining is not a no-loss route here (Appendix T5.2); the result path hypothesis stays. |
 | P19 | Same: OPEN/attach/replace/CLOSE/maybeClose | P Q1/Q4+B/G, synchronous query/effect order after P10H; close <=1.0. |
 | P19a | B/bud_lifecycle.pruv, bud_map.pruv, m7_test, m10_test, ABI.md: P19 audit R1, R3-R6, O1 (Appendix P19.6a, P19.7) | P: invalid answer leaves `st` word-for-word unchanged (write-free `bud_map` room plan before the query, rehash after a valid answer, `ensures` linking the two; tombstone-heavy control); R2 regression fixture; session argument and effect order logged on both sides with a mutant; per-attempt query counts over forced Grow; required case ids and request order in M7/M10 Q; standalone CLOSE lane with matched consumption <= 1.0x hand. Starts after P21a (shares bud_map.pruv). |
-| P19c | Both codegens: foreign (trusted rust) call wrapper and cross-rlib inlining (Appendix P19.4) | P: `catch_unwind(AssertUnwindSafe(..))` around every trusted rust call and the non-inlined callee `LocalKey::with` removed or made free where sound (for example crates built with `panic = abort`, or the poison rule of P10 kept by another path), with the soundness argument written and audited; output parity on both compilers; P19 `closereopen` (1.14-1.15) and `attach` (1.12-1.13) re-measured, the wrapper share attributed, the rest left to T5/P18b by line. Done (Appendix P19c): drop guard (`pruv_ForeignGuard`) in place of `catch_unwind`, `__rust_try` and the catch frame gone; the foreign path now equals a plain call (closereopen `guard` = `direct` within 0.1 ns, 61 rounds); the diagnostic goes through a fresh `/dev/stderr` handle, not std's stderr lock, on unix; `LocalKey::with` is the caller's LLVM inline decision, present with no wrapper and gone when inlined; the rest (attach 1.13x, closereopen 1.11-1.12x, reopenmiss 1.05-1.08x vs hand16) is the inline policy (T5, measured: 1.02-1.06x with the four lifecycle/map bodies forced inline) and the result path (P18b, hypothesis). |
+| P19c | Both codegens: foreign (trusted rust) call wrapper and cross-rlib inlining (Appendix P19.4) | P: `catch_unwind(AssertUnwindSafe(..))` around every trusted rust call and the non-inlined callee `LocalKey::with` removed or made free where sound (for example crates built with `panic = abort`, or the poison rule of P10 kept by another path), with the soundness argument written and audited; output parity on both compilers; P19 `closereopen` (1.14-1.15) and `attach` (1.12-1.13) re-measured, the wrapper share attributed, the rest left to T5/P18b by line. Done (Appendix P19c): drop guard (`pruv_ForeignGuard`) in place of `catch_unwind`, `__rust_try` and the catch frame gone; the foreign path now equals a plain call (closereopen `guard` = `direct` within 0.1 ns, 61 rounds); the diagnostic goes through a fresh `/dev/stderr` handle, not std's stderr lock, on unix; `LocalKey::with` is the caller's LLVM inline decision, present with no wrapper and gone when inlined; the rest (attach 1.13x, closereopen 1.11-1.12x, reopenmiss 1.05-1.08x vs hand16) is the inline policy (T5, measured: 1.02-1.06x with the four lifecycle/map bodies forced inline) and the result path (P18b, hypothesis). T5 (Appendix T5): no inline rule ships; every promotion grows `__text` (find_w + attach +40 %, the four +116 %) for 2-13 % fewer instructions; queued as T5a. |
+| T5a | Both codegens and B/bud_map.pruv, bud_lifecycle.pruv: M7 lookup and lifecycle gap without code growth (Appendix T5.3) | P: `attach`, `closereopen`, `reopenmiss`, `current`, `isHalted` <= 1.0x hand16 with M7 `__text` and peak RSS not above the T5 base (405,180 B); the inline-only route is ruled out (T5.2). Candidates: cut the always callees of `find_w` (P13h specialization or hot/cold split), the P19c entry/record re-validation and id copies; output parity on both compilers. |
 | P20 | B/bud_charge.pruv,m8_test: counters/sums/bounds | P Q2+C/D, equal safe-number baseline; negative/boundary atomic refusal and charge/failure <=1.0. |
 | P21 | B/bud_tools.pruv,key helpers: stored hash/dedup | P Q2+D; dup/new/forget separately <=1.0, missing-budget dedup. Interning only as measured follow-up. |
 | P22 | B/bud_clock.pruv: runs/refresh/begin/settle/arm | P Q3+E/F, active-count functional model, R/timer cycle; do not treat I2 as an unchecked proof assumption. |
@@ -4269,3 +4270,109 @@ generated by the Python compiler from this checkout (base 22332cd) with the poli
 ### P13d.9 Delegation
 
 None.
+
+## Appendix T5 (both codegens: inline policy module, the P19c inline question)
+
+### T5.1 Change
+
+- Step 1 (fb1216d): the inline policy pass moved out of `codegen.py` / `codegen.rs` into its own module,
+  `pruvc/inline_policy.py` and `pruvc-rs/crates/pruv-core/src/inline_policy.rs`. Pure move: the generated Rust for
+  M4, M7, M8 and M10 is byte-identical between the pre-move Python compiler, the new Python compiler and the new Rust
+  compiler.
+- Step 2 (e0690f0): the rule is kept (`incl<=8 | sites<=1 | incl*(sites-1)<=1500`). Accept/reject pairs at the spec
+  thresholds (8/9 lines, budget 1500/1501), written with the spec values and not read from the JSON, were added to
+  `tests/check_generated.py` (Python) and `inline_policy_thresholds` (pruvc-rs). This closes TIDY_SPEC section 4 item 12
+  for the inline thresholds; the `MAX_TYPE_APPS`/`MAX_TYPE_NODES` pairs of that item are not part of T5.
+- Generated output is unchanged on every root, so `tests/g8/compatibility.json` keeps its hashes. M4, M8 and M10
+  binaries are the same as before T5 and were not re-timed.
+
+### T5.2 Why no rule ships (M7, `work/t5/s2/`)
+
+Every rule that makes the P19c bodies inline buys instructions with code pages. The AGENTS.md section 5 rule
+(2026-11-19) forbids trading a large loss on one axis for a small gain on the other, so none of these ships.
+
+Variants were built from the shipped M7 output by flipping `#[inline]` to `#[inline(always)]` on the named fns:
+- `f` = find_w.
+- `a` = attach.
+- `fa` = find_w + attach.
+- `r` = reopen + maybe_close.
+- `inl` = the four P19c fns.
+- `cand` = a rule experiment that replaced call sites with "the most copies one entry fn (a `pub fn` or a fn that is
+  not `#[inline]`) can hold through inline paths". It promoted maybe_close, reopen and replace. It did not promote
+  attach (3 copies, incl 964) or find_w (23 copies).
+
+Instructions per op are `(I(5R) - I(R)) / 4R`, with R = 20000, S = 100, median of 3 runs. They come from
+`/usr/bin/time -l`, on `driver boundary 100 R ITEM C` and on `hand_m7_u16 perf 100 R ITEM typed`. The hand column
+includes no driver variant loop, so compare across Pruv columns only. `__text` is from `size -m`.
+
+| item | base | f | a | fa | r | inl | hand16 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| current | 1297 | 1270 | 1301 | 1260 | 1300 | 1264 | 333 |
+| ishalted | 498 | 469 | 498 | 465 | 498 | 465 | 338 |
+| attach | 620 | 626 | 575 | 541 | 623 | 543 | 320 |
+| close | 1256 | 1258 | 1259 | 1258 | 1252 | 1232 | 2435 |
+| closereopen | 1378 | 1354 | 1382 | 1356 | 1339 | 1285 | 890 |
+| reopenmiss | 553 | 526 | 555 | 525 | 520 | 482 | 334 |
+| replace | 3028 | 2991 | 3043 | 2969 | 3033 | 2975 | 3064 |
+| `__text` B | 405,180 | 434,876 | 508,284 | 568,764 | 651,324 | 873,660 | 311,484 |
+
+How each rule trades:
+- `cand` (the per-entry copies rule) gives 1-6 % fewer instructions for 759,100 B of `__text`.
+- `f` is the cheapest point: 2-6 % fewer instructions on lookups for +29.7 KB (+7 %).
+- The attach saving (−13 %) needs `fa`: +40 % text.
+- `inl` costs +116 % text.
+
+Resident text is fixed-share memory (code pages, independent of data size, P13d.2). The M7 Pruv binary is already
+above hand16 there: 405 vs 311 KB of `__text`. Peak RSS (`perf 100 100000`, 3 runs) is 4.9-5.4 MB for base, f, fa and
+inl alike, against 2.7 MB for hand16. So the proportional share, state, is the larger excess (P13e). The inline
+variants do not change it beyond the spread.
+
+Wall-clock timing was too noisy to read (load average about 10, ranges overlapping on every item; raw run in
+`work/t5/s2/m7_run1.txt`). Only instructions and sizes are used above.
+
+### T5.3 What remains of the P19c gap
+
+The gap to hand16 is mostly not inlining. Even with `inl`, attach is 543 against 320, and P19c's attribution names
+other sources:
+- entry and length checks;
+- record re-validation;
+- id copies;
+- the closereopen field walk.
+
+The find_w share comes from its always callees (own body 3 lines, incl 440). Inlining find_w copies those 440 lines
+again into each caller. A no-loss fix has to cut that body, for example the P13h call-site specialization or a
+hot/cold split, rather than add copies. Queued as row T5a.
+
+### T5.4 Gates
+
+- Step 1: byte compare on 4 roots × 3 compilers.
+- Step 1: `tests/diff_rust.py` with the default fuzz, all same.
+- Step 1: `tools/gen_shared.py --check`, exit 0.
+- Step 1: g8_frontend, py 27/27 and rs 39/39.
+- Step 2: `tests/check_generated.py` ok. A mutated INLINE_SMALL = 9 / INLINE_BUDGET = 1501 fails the 9 and 1501 pairs,
+  as intended.
+- Step 2: `cargo test --release -p pruv-core inline_policy`, 2 passed.
+- The full suites and the 7 budget roots are not re-run for this appendix (see T5.6).
+
+### T5.5 Queued rows
+
+- T5a (new): the M7 lookup and lifecycle gap without code growth. See T5.3.
+- Step 3 of the T5 package is queued unjudged:
+  - re-judging the remaining splits (TIDY_SPEC review note 7);
+  - the check graph;
+  - proof trace `verify.py` → `proof_trace.py`;
+  - symbolic `catalog_io`;
+  - LLVM G9.
+
+### T5.6 Delegation and stop
+
+| work | to | mode |
+|---|---|---|
+| step 1 pure move, both compilers | Claude sonnet | write |
+| measurement harness survey (M4/M7/M8/M10 runners, hand pairing) | Codex gpt-6.2-astra | research |
+
+Measurement, the rule experiments and step 2 were done directly. The package stopped after step 2 on its time cap.
+Still open:
+- step 3;
+- the role audit;
+- the full-suite run.
