@@ -150,29 +150,56 @@ pub fn id_is(st: [i64], off: i64, k: [i64], ks: i64, kn: i64) -> bool
   return true;
 }
 
+// id_is for a record whose span st[off .. off + n) is known to lie in st (n >= 30): the id length word is read
+// directly, and when the packed id lies inside the record and the key range inside k (one dynamic check each) the
+// words are compared by one slice compare. An id whose declared words run past the record falls back to id_is (the
+// same total reads as before). The unit-count compare and the word compare are the identity check; only the range
+// checks are proved away.
+fn id_at(st: [i64], off: i64, n: i64, k: [i64], ks: i64, kn: i64) -> bool
+  requires 0 <= off && 30 <= n && off <= len(st) - n
+{
+  if kn < 0 || kn > 1073741824 || ks < 0 { return false; }
+  if st[off + 24] != kn { return false; }
+  let m: i64 = crate::bud_keys::words(kn);
+  if 25 + m <= n && ks <= len(k) - m {
+    return eq_range(st, off + 25, k, ks, m);
+  }
+  return id_is(st, off, k, ks, kn);
+}
+
+// CURRENT(ref) on session entry se: the entry's field address (bud_store::eb, so fields 0..19 lie in st) when the
+// session has a budget (state 0..2 in a blob of >= 30 words) whose id is (bk, bs, bn); -1 when it has none or the id
+// differs; -2 when the blob span st[off .. off + n) does not lie in st (a store that breaks I1; never for an admitted
+// store). After one span check every header and id word is read by proven direct indexing; the state and identity
+// checks stay dynamic.
+fn found_at(st: [i64], se: i64, bk: [i64], bs: i64, bn: i64) -> i64
+  ensures result == -1 || result == -2 || (16 <= result && result + 20 <= len(st) && 0 <= st[result + 12] && 30 <= st[result + 13] && st[result + 12] <= len(st) - st[result + 13] && 0 <= st[st[result + 12]] && st[st[result + 12]] <= 2)
+{
+  if se < 0 { return -1; }
+  let a: i64 = crate::bud_store::eb(st, se);
+  if a < 0 { return -1; }
+  let off: i64 = st[a + 12];
+  let n: i64 = st[a + 13];
+  if n < 30 { return -1; }
+  if off < 0 || off > len(st) - n { return -2; }
+  let s: i64 = st[off];
+  if s < 0 || s > 2 { return -1; }
+  if !id_at(st, off, n, bk, bs, bn) { return -1; }
+  return a;
+}
+
 // CURRENT(ref): the budget's session entry when the session has a budget whose id is ref.budgetId, else -1.
 pub fn current_entry(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64) -> i64
 {
   let se: i64 = session_of(st, sk, ss, sn);
-  if se < 0 { return -1; }
-  let off: i64 = blob_at(st, se);
-  let n: i64 = blob_n(st, se);
-  if state_of(st, off, n) < 0 { return -1; }
-  if !id_is(st, off, bk, bs, bn) { return -1; }
+  if found_at(st, se, bk, bs, bn) < 0 { return -1; }
   return se;
 }
 
-// CURRENT(ref): the field address (entry_addr) of the budget's session entry when the session has a budget whose
-// id is ref.budgetId, else -1. One map lookup, one address computation.
+// CURRENT(ref): found_at of the session's entry. One map lookup, one address computation.
 fn current_at(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64) -> i64
-{
-  let a: i64 = entry_addr(st, session_of(st, sk, ss, sn));
-  if a < 0 { return -1; }
-  let off: i64 = at_off(st, a);
-  if state_of(st, off, at_n(st, a)) < 0 { return -1; }
-  if !id_is(st, off, bk, bs, bn) { return -1; }
-  return a;
-}
+  ensures result == -1 || result == -2 || (16 <= result && result + 20 <= len(st) && 0 <= st[result + 12] && 30 <= st[result + 13] && st[result + 12] <= len(st) - st[result + 13] && 0 <= st[st[result + 12]] && st[st[result + 12]] <= 2)
+{ return found_at(st, session_of(st, sk, ss, sn), bk, bs, bn); }
 
 // Clock entry of the budget whose id is st[s..s+n), -1 without one. An empty clock map (root 1 has no children)
 // answers -1 without hashing the id.
@@ -400,17 +427,15 @@ pub fn current(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i
 {
   if len(out) < 1 { return 3; }
   let a: i64 = current_at(st, sk, ss, sn, bk, bs, bn);
+  if a == -2 { return 2; }
   if a < 0 {
-    crate::ent_u16::wr(inout out, 0, 0);
+    out[0] = 0;
     return 0;
   }
   if len(out) < 3 { return 3; }
-  let off: i64 = at_off(st, a);
-  let n: i64 = at_n(st, a);
-  if off + n > len(st) { return 2; }
-  crate::ent_u16::wr(inout out, 0, 4);
-  crate::ent_u16::wr(inout out, 1, n);
-  crate::ent_u16::wr(inout out, 2, off);
+  out[0] = 4;
+  out[1] = st[a + 13];
+  out[2] = st[a + 12];
   return 0;
 }
 
@@ -420,8 +445,8 @@ pub fn is_halted(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn:
   if len(out) < 1 { return 3; }
   let a: i64 = current_at(st, sk, ss, sn, bk, bs, bn);
   let mut r: i64 = 1;
-  if a >= 0 && rd(st, at_off(st, a)) == 1 { r = 2; }
-  crate::ent_u16::wr(inout out, 0, r);
+  if a >= 0 && st[st[a + 12]] == 1 { r = 2; }
+  out[0] = r;
   return 0;
 }
 
@@ -626,19 +651,21 @@ pub fn reopen(inout st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, 
     crate::ent_u16::wr(inout out, 0, 1);
     return 0;
   }
-  let off: i64 = at_off(st, a);
-  if rd(st, off) != 2 || rd(st, off + 18) != 1 {
-    crate::ent_u16::wr(inout out, 0, 1);
+  // current_at proved the record span st[off .. off + n) in st with n >= 30: header reads and writes are direct.
+  let off: i64 = st[a + 12];
+  let n: i64 = st[a + 13];
+  if st[off] != 2 || st[off + 18] != 1 {
+    out[0] = 1;
     return 0;
   }
   // No ended.at text: deleting `ended` keeps the record length, so the header words are rewritten in place.
   if str_len_in(st, off, 3) == 0 {
-    crate::ent_u16::wr(inout st, off, 0);
-    crate::ent_u16::wr(inout st, off + 18, 0);
-    crate::ent_u16::wr(inout st, off + 19, 0);
-    crate::ent_u16::wr(inout st, off + 22, 0);
+    st[off] = 0;
+    st[off + 18] = 0;
+    st[off + 19] = 0;
+    st[off + 22] = 0;
     push(inout fx, 20);
-    crate::ent_u16::wr(inout out, 0, 2);
+    out[0] = 2;
     return 0;
   }
   let se: i64 = session_of(st, sk, ss, sn);
