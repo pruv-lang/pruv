@@ -6,7 +6,8 @@
 // Input lines (decimal words; `|` separates arguments; an empty argument = absent):
 //   init                               fresh world
 //   load <key> | <budget V>            session with that budget (empty V = no budget); key = packed `n, words(n)`
-//   set <now> | <ref> | <sid> | <card> | <lang> | <by>   sid = packed key of ref.sessionId (empty = none)
+//   set <now> | <ref> | <sid> | <card> | <lang> | <by>   sid = packed key of ref.sessionId (empty = none);
+//       card / lang / by = JB byte packets as decimal words 0..255 (hand.rs header; empty = absent)
 //   q <op> | <ref> | <sid>             op 1 current, 2 isHalted, 3 hasCard
 // Keys are packed u16 (bud_keys): word i = u[4i]<<48 | u[4i+1]<<32 | u[4i+2]<<16 | u[4i+3], tail lanes zero; the driver
 // (run_m11.py pack) packs each key once, the host never packs or unpacks inside a call.
@@ -116,15 +117,37 @@ fn sv(o: &mut Vec<i64>, s: &str) {
     o.push(s.encode_utf16().count() as i64);
     o.extend(s.encode_utf16().map(|u| u as i64));
 }
-fn perf_card(u: usize) -> Vec<i64> {
+// ---- JB byte packets (big-endian; see hand.rs header): 6 str, 7 f64 bits, 8 array, 9 object ----
+fn bkey(o: &mut Vec<u8>, k: &str) {
+    o.extend_from_slice(&(k.len() as u32).to_be_bytes());
+    o.extend_from_slice(k.as_bytes());
+}
+fn bstr(o: &mut Vec<u8>, s: &str) {
+    o.push(6);
+    bkey(o, s);
+}
+fn bnum(o: &mut Vec<u8>, x: f64) {
+    o.push(7);
+    o.extend_from_slice(&x.to_be_bytes());
+}
+fn bhead(o: &mut Vec<u8>, tag: u8, n: u32) {
+    o.push(tag);
+    o.extend_from_slice(&n.to_be_bytes());
+}
+// the harness input words of a byte argument: each word must be 0..255
+fn bytes_of(w: &[i64]) -> Vec<u8> {
+    w.iter().map(|&x| u8::try_from(x).expect("byte word outside 0..255")).collect()
+}
+fn perf_card(u: usize) -> Vec<u8> {
     let line = format!("  {}  ", "a".repeat(u));
-    let mut o = vec![9, 2];
-    key(&mut o, "deliverable");
-    sv(&mut o, &line);
-    key(&mut o, "done");
-    o.extend_from_slice(&[8, 5]);
+    let mut o = Vec::new();
+    bhead(&mut o, 9, 2);
+    bkey(&mut o, "deliverable");
+    bstr(&mut o, &line);
+    bkey(&mut o, "done");
+    bhead(&mut o, 8, 5);
     for _ in 0..5 {
-        sv(&mut o, &line);
+        bstr(&mut o, &line);
     }
     o
 }
@@ -149,30 +172,50 @@ fn perf_budget() -> Vec<i64> {
 const NOW0: i64 = 1_700_000_000_000;
 
 // a card with every optional field, for the hand-vs-Pruv word equality check
-fn full_card() -> Vec<i64> {
-    let mut o = perf_card(5);
-    o[1] = 6;
-    key(&mut o, "targets");
-    o.extend_from_slice(&[9, 4]);
-    key(&mut o, "confirmed");
-    o.extend_from_slice(&[5, 1]);
-    key(&mut o, "candidate");
-    o.extend_from_slice(&[5, 2]);
-    key(&mut o, "unknown");
-    o.extend_from_slice(&[5, 0]);
-    key(&mut o, "note");
-    sv(&mut o, " n ");
-    key(&mut o, "verify");
-    o.extend_from_slice(&[8, 1, 9, 2]);
-    key(&mut o, "label");
-    sv(&mut o, " x ");
-    key(&mut o, "status");
-    sv(&mut o, "done");
-    key(&mut o, "conflicts");
-    o.extend_from_slice(&[8, 1]);
-    sv(&mut o, " c ");
-    key(&mut o, "state");
-    sv(&mut o, "working");
+fn full_card() -> Vec<u8> {
+    let line = format!("  {}  ", "a".repeat(5));
+    let mut o = Vec::new();
+    bhead(&mut o, 9, 6);
+    bkey(&mut o, "deliverable");
+    bstr(&mut o, &line);
+    bkey(&mut o, "done");
+    bhead(&mut o, 8, 5);
+    for _ in 0..5 {
+        bstr(&mut o, &line);
+    }
+    bkey(&mut o, "targets");
+    bhead(&mut o, 9, 4);
+    bkey(&mut o, "confirmed");
+    bnum(&mut o, 1.0);
+    bkey(&mut o, "candidate");
+    bnum(&mut o, 2.0);
+    bkey(&mut o, "unknown");
+    bnum(&mut o, 0.0);
+    bkey(&mut o, "note");
+    bstr(&mut o, " n ");
+    bkey(&mut o, "verify");
+    bhead(&mut o, 8, 1);
+    bhead(&mut o, 9, 2);
+    bkey(&mut o, "label");
+    bstr(&mut o, " x ");
+    bkey(&mut o, "status");
+    bstr(&mut o, "done");
+    bkey(&mut o, "conflicts");
+    bhead(&mut o, 8, 1);
+    bstr(&mut o, " c ");
+    bkey(&mut o, "state");
+    bstr(&mut o, "working");
+    o
+}
+
+// a `by` object {sessionId: "s1", turnId: 7}
+fn perf_by() -> Vec<u8> {
+    let mut o = Vec::new();
+    bhead(&mut o, 9, 2);
+    bkey(&mut o, "sessionId");
+    bstr(&mut o, "s1");
+    bkey(&mut o, "turnId");
+    bnum(&mut o, 7.0);
     o
 }
 
@@ -181,7 +224,9 @@ fn hand_check() -> String {
     let rf = perf_ref();
     let sid = pkey("s1");
     let mut lines = Vec::new();
-    for card in [perf_card(20), full_card()] {
+    let none: Vec<u8> = Vec::new();
+    let en: Vec<u8> = { let mut o = Vec::new(); bstr(&mut o, "en"); o };
+    for (card, lang, by) in [(perf_card(20), none.clone(), none.clone()), (full_card(), none.clone(), none.clone()), (full_card(), en, perf_by())] {
         let mut w = World::new();
         let k: Vec<i64> = pkey("s1");
         let b = perf_budget();
@@ -190,8 +235,8 @@ fn hand_check() -> String {
         s.sessions.insert(pkey("s1"), perf_budget());
         let mut ho: Vec<i64> = Vec::new();
         for i in 0..3 {
-            let p = w.call(&|st, out| sol::m11_set_card(st, &rf, &sid, &card, &[], &[], NOW0 + i, out)).unwrap().to_vec();
-            let hk = s.set_card(&rf, &sid, &card, NOW0 + i, &mut ho);
+            let p = w.call(&|st, out| sol::m11_set_card(st, &rf, &sid, &card, &lang, &by, NOW0 + i, out)).unwrap().to_vec();
+            let hk = s.set_card(&rf, &sid, &card, &lang, &by, NOW0 + i, &mut ho);
             if hk != -1 || ho.len() != p.len() + 1 || ho[0] as usize != p.len() || ho[1..] != p[..] {
                 lines.push(format!("differ card={} call={} pruv={} hand={}", card.len(), i, words(&p), words(&ho)));
             }
@@ -210,9 +255,9 @@ fn perf(op: &str, a: usize, reps: usize) -> String {
                 let c = if op == "perfA" {
                     sol::m11_perf_card(black_box(&card), NOW0 + i as i64)
                 } else {
-                    let k = hand::validate(black_box(&card), 0);
+                    let k = if hand::admit(black_box(&card)) { hand::validate(&card) } else { 2 };
                     if k != 0 { -k } else {
-                        let w = hand::build(&card, 0, None, NOW0 + i as i64);
+                        let w = hand::build(&card, &[], NOW0 + i as i64);
                         let n = w.len();
                         n as i64 + (w[n - 1] & 1023) + (w[n / 2] & 1023)
                     }
@@ -247,7 +292,7 @@ fn perf(op: &str, a: usize, reps: usize) -> String {
                     let mut out: Vec<i64> = Vec::with_capacity(4096);
                     let t = Instant::now();
                     for i in 0..a {
-                        let k = s.set_card(black_box(&rf), &sid, &card, NOW0 + i as i64, &mut out);
+                        let k = s.set_card(black_box(&rf), &sid, &card, &[], &[], NOW0 + i as i64, &mut out);
                         sum = sum.wrapping_add(black_box(k + out.len() as i64 + out[2]));
                     }
                     total += t.elapsed().as_nanos();
@@ -268,8 +313,8 @@ fn perf(op: &str, a: usize, reps: usize) -> String {
                 } else {
                     let mut cur = b;
                     for i in 0..a {
-                        if hand::validate(black_box(&card), 0) != 0 { break; }
-                        let c = hand::build(&card, 0, None, NOW0 + i as i64);
+                        if !hand::admit(black_box(&card)) || hand::validate(&card) != 0 { break; }
+                        let c = hand::build(&card, &[], NOW0 + i as i64);
                         cur = hand::put_card(&cur, &c);
                     }
                     sum = sum.wrapping_add(black_box(cur.len() as i64));
@@ -280,6 +325,36 @@ fn perf(op: &str, a: usize, reps: usize) -> String {
         }
         _ => "bad".to_string(),
     }
+}
+
+// hand-vs-Pruv on one card: the admission / validation kind (or the stored-card checksum) of m11_perf_card against
+// hand admit + validate + build, then for a valid card the whole setCard result words with the given lang and by.
+fn hand_diff(card: &[u8], lang: &[u8], by: &[u8]) -> String {
+    let pk = sol::m11_perf_card(card, NOW0);
+    let hk = if !hand::admit(card) { -102 } else {
+        let k = hand::validate(card);
+        if k != 0 { -k } else {
+            let w = hand::build(card, &[], NOW0);
+            let n = w.len();
+            n as i64 + (w[n - 1] & 1023) + (w[n / 2] & 1023)
+        }
+    };
+    if pk != hk { return format!("differ kind pruv={} hand={}", pk, hk); }
+    if pk < 0 || (!lang.is_empty() && !hand::admit(lang)) || (!by.is_empty() && !hand::admit(by)) { return format!("same {}", pk); }
+    let rf = perf_ref();
+    let sid = pkey("s1");
+    let mut w = World::new();
+    let b = perf_budget();
+    w.call(&|st, out| sol::m11_load(st, &sid, &b, out)).unwrap();
+    let mut s = hand::Store { sessions: std::collections::HashMap::new() };
+    s.sessions.insert(pkey("s1"), perf_budget());
+    let mut ho: Vec<i64> = Vec::new();
+    let p = w.call(&|st, out| sol::m11_set_card(st, &rf, &sid, card, lang, by, NOW0, out)).unwrap().to_vec();
+    let hk = s.set_card(&rf, &sid, card, lang, by, NOW0, &mut ho);
+    if hk != -1 || ho.len() != p.len() + 1 || ho[0] as usize != p.len() || ho[1..] != p[..] {
+        return format!("differ words pruv={} hand={}", words(&p), words(&ho));
+    }
+    "same ok".to_string()
 }
 
 fn main() {
@@ -311,7 +386,8 @@ fn main() {
                     let a = args(&rest);
                     let now = a[0][0];
                     let w = world.as_mut().unwrap();
-                    res(w.call(&|st, out| sol::m11_set_card(st, &a[1], &a[2], &a[3], &a[4], &a[5], now, out)))
+                    let (card, lang, by) = (bytes_of(&a[3]), bytes_of(&a[4]), bytes_of(&a[5]));
+                    res(w.call(&|st, out| sol::m11_set_card(st, &a[1], &a[2], &card, &lang, &by, now, out)))
                 }
                 "q" => {
                     let a = args(&rest);
@@ -324,6 +400,10 @@ fn main() {
                     res(w.call(&|st, out| sol::m11_dump(st, out)))
                 }
                 "handcheck" => hand_check(),
+                "hdiff" => {
+                    let a = args(&rest);
+                    hand_diff(&bytes_of(&a[0]), &bytes_of(&a[1]), &bytes_of(&a[2]))
+                }
                 p => {
                     let a = args(&rest);
                     perf(p, a[0][0] as usize, a[0][1] as usize)
