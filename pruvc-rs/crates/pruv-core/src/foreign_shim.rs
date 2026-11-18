@@ -265,38 +265,15 @@ fn collect<'a>(prog: &'a Program) -> R<(Cats, Colls, HashMap<String, &'a Functio
                                     observers.push((c.name.clone(), low.clone()));
                                 }
                                 cats.entry(h).or_insert((c.name.clone(), low));
-                                if c.name == "file_byte" {
-                                    let size = "pruv_g6_file_size".to_string();
-                                    if !cats.contains_key(&size) {
-                                        observers.push(("file_size".to_string(), vec![]));
+                                // helper edges (incl. G10 proc/net A3 bounds guards): pruvc/data/shim_edges.json
+                                for (caller, bound) in crate::shared_tables::shim_edges::SHIM_EDGES {
+                                    if c.name == *caller {
+                                        let bh = format!("pruv_g6_{}", bound);
+                                        if !cats.contains_key(&bh) {
+                                            observers.push((bound.to_string(), vec![]));
+                                        }
+                                        cats.entry(bh).or_insert((bound.to_string(), vec![]));
                                     }
-                                    cats.entry(size).or_insert(("file_size".to_string(), vec![]));
-                                }
-                                if c.name == "proc_byte" {
-                                    // G10 proc A3: the contract bounds guard of proc_byte reads proc_size
-                                    let size = "pruv_g6_proc_size".to_string();
-                                    if !cats.contains_key(&size) {
-                                        observers.push(("proc_size".to_string(), vec![]));
-                                    }
-                                    cats.entry(size).or_insert(("proc_size".to_string(), vec![]));
-                                }
-                                if matches!(c.name.as_str(), "ev_kind" | "ev_eof" | "ev_write_open") {
-                                    let cap = "pruv_g6_ev_cap".to_string();
-                                    if !cats.contains_key(&cap) { observers.push(("ev_cap".to_string(), vec![])); }
-                                    cats.entry(cap).or_insert(("ev_cap".to_string(), vec![]));
-                                }
-                                if c.name == "ev_byte" {
-                                    let size = "pruv_g6_ev_size".to_string();
-                                    if !cats.contains_key(&size) { observers.push(("ev_size".to_string(), vec![])); }
-                                    cats.entry(size).or_insert(("ev_size".to_string(), vec![]));
-                                }
-                                if c.name == "net_byte" {
-                                    // G10 net A3: the contract bounds guard of net_byte reads net_size
-                                    let size = "pruv_g6_net_size".to_string();
-                                    if !cats.contains_key(&size) {
-                                        observers.push(("net_size".to_string(), vec![]));
-                                    }
-                                    cats.entry(size).or_insert(("net_size".to_string(), vec![]));
                                 }
                             }
                             Err(e2) => {

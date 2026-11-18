@@ -1,0 +1,6 @@
+// T4 shim edge: file_byte -> file_size (LLVM runtime requires check)
+fn b(f: File, i: i64) -> i64
+  requires file_byte(f, i) >= 0
+{
+  return 0;
+}

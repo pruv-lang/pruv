@@ -3309,6 +3309,7 @@
 {"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "s5_proof", "mode": "trust-callers", "sample": "tests/s5/proof/sum.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "s5_proof", "mode": "trust-callers", "sample": "tests/s5/proof/unbounded.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "s5_proof", "mode": "trust-callers", "sample": "tests/s5/proof/zero.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "check_generated", "mode": "trace", "sample": "tests/check_generated.py"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_frontend", "mode": "default", "sample": "tests/g10_async/frontend/async_only.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_frontend", "mode": "default", "sample": "tests/g10_async/frontend/both_branch.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_frontend", "mode": "default", "sample": "tests/g10_async/frontend/catalog_updates.pruv"}
@@ -4486,4 +4487,5 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "s5_proof", "mode": "default", "sample": "tests/s5/proof/sum.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "s5_proof", "mode": "default", "sample": "tests/s5/proof/unbounded.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "s5_proof", "mode": "default", "sample": "tests/s5/proof/zero.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "shim_edges", "mode": "trace", "sample": "tests/shim_edges.py"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "spec_trace", "mode": "trace", "sample": "tests/spec_trace.py"}

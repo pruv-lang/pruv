@@ -1,0 +1,6 @@
+// T4 shim edge: proc_byte -> proc_size (LLVM runtime requires check)
+fn b(p: Process, i: i64) -> i64
+  requires proc_byte(p, 1, i) >= 0
+{
+  return 0;
+}

@@ -1,0 +1,6 @@
+// T4 shim edge: ev_write_open -> ev_cap (LLVM runtime requires check)
+fn b(l: Loop, i: i64) -> i64
+  requires ev_write_open(l, i)
+{
+  return 0;
+}

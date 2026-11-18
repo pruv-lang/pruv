@@ -153,8 +153,10 @@ generation (equal to the owner's current generation) and key all match; probing 
 by the slot count. A slot word may name a dead or free entry, or an entry since reused for another key;
 such a slot never matches and is not reused by inserts, so it behaves as a tombstone until the next rehash.
 Load policy: before an insert that fits, the index is rebuilt in place (dropping tombstones) when the used slots would
-pass half the slot count while the live entries take at most a quarter of it; before an insert that does not fit only
-because of the 3/4 used bound, likewise. Each rebuild is O(slots) and at least slots/4 inserts from the next.
+pass half the slot count while the live entries take at most 3/8 of it (P21b; was a quarter); before an insert that
+does not fit only because of the 3/4 used bound, likewise. After either rebuild the size check is asked again, so a
+Grow can follow a rebuild on a buffer whose counters are wrong. On a valid store each rebuild is O(slots) passes and
+the early one is at least slots/8 inserts from the next.
 
 Eager removal (e.g. M4 `tool_forget`) unlinks an entry and frees it with its whole subtree, at any depth
 (post order without a stack; the world itself has at most one level below an entry): the entry's own slot gets a

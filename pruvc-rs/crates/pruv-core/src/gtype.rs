@@ -356,24 +356,9 @@ pub fn param_id(ty: &GType) -> Option<ParamId> {
 // ---------- printing ----------
 
 fn builtin_print(name: &str) -> &str {
-    match name {
-        "i64" => "i64",
-        "bool" => "bool",
-        "unit" => "()",
-        "array" => "[i64]",
-        "option" => "Option<i64>",
-        "result" => "Result<i64>",
-        "array_u8" => "[u8]",
-        "array_bool" => "[bool]",
-        "str" => "str",
-        "string" => "String", // G6 A0
-        "file" => "File",     // G10 A0
-        "process" => "Process", // G10 proc A0
-        "process_args" => "ProcessArgs",
-        "socket" => "Socket", // G10 net A0
-        "listener" => "Listener",
-        "loop" => "Loop",
-        other => other,
+    match crate::shared_tables::builtin_types::BUILTIN_PRINT.iter().find(|(k, _)| *k == name) {
+        Some((_, v)) => v,
+        None => name,
     }
 }
 

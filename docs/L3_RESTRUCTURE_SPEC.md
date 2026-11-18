@@ -383,7 +383,7 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P13f | B/driver_m4.rs and the M4 bench adapter: length bound from T0 (TIDY_SPEC §4.10) | P: the bench adapter's allocations get the `2^40` bound (T0 audit finding 1), and the per-entry length check added by T0 is hoisted out of the timed loop where the driver already holds the length; m4 sessions back to the pre-T0 time (T0: +1-2%, outside A/A noise) and every M4 cell <= 1.0x hand. |
 | P13g | Both codegens: small helper inlining gap found by P20 (Appendix P20) | P: `find_w` in the bud_charge hot path is inlined (P20 attribution: about 25 instructions per call not inlined), output parity on both compilers, and the P20 unmatched hand16 lane (keys pre-parsed, 1.13-1.17x) re-measured after P13f and this row; any remaining gap above 1.0x is fixed or explained line by line (wire parsing is about 100 instructions of it). LLVM pairs for P20 wait for P17. |
 | P21a | B/bud_map.pruv, bud_tools.pruv: O(1) forgetTurn (Appendix P21.4) | P: forgetTurn of a turn holding N activities <= 1.0x oaw at S/M in time, peak RSS and allocations (P21: 8.9x / 37.9x; oa forgets by generation, Pruv frees each child), with the toolnew and tooldup cells kept <= 1.0x and the reclaim cost measured where it lands; plus a corrupt control that pokes header words (entry top = cap - 1, low live) for the P21.7 counterexample. Done (Appendix P21a): forget 0.99 / 0.95x oaw (overlap), RSS and allocations below; reclaim cost in toolnew queued as P21b. |
-| P21b | B/bud_map.pruv, bud_store.pruv: reclaim cost of the lazy forget (Appendix P21a.3) | P: toolnew <= 1.0x oaw at S/M by median and distribution (P21a: 0.93 / 1.08x, overlapping) and the toolgrow cycle <= 1.0x oaw in instructions (P21a: 1.05 / 1.08x), with toolforget, tooldup and memory kept; e.g. fold reclaim_head into entry_alloc. Same gates as P21a. |
+| P21b | B/bud_map.pruv, bud_store.pruv: reclaim cost of the lazy forget (Appendix P21a.3) | P: toolnew <= 1.0x oaw at S/M by median and distribution (P21a: 0.93 / 1.08x, overlapping) and the toolgrow cycle <= 1.0x oaw in instructions (P21a: 1.05 / 1.08x), with toolforget, tooldup and memory kept; e.g. fold reclaim_head into entry_alloc. Same gates as P21a. Done (Appendix P21b): toolnew 0.87 / 0.97x oaw (Pruv max below oaw min), toolgrow 0.93 / 0.98x oaw instructions; cause was index load at M (early rehash bound slots/4 -> 3/8) plus the reclaim push/pop and repeated row bases. |
 | P13o | Both checkers/verifiers: `opaque fn` and `reveal F;` (Appendix P13o) | C: positive reveal/congruence/loop-scope cases; negatives for a missing reveal, false facts through the opaque symbol, totality, signature and reveal-target misuse; framework rows equal on both compilers. Unblocks P13a step 2 (Appendix P13a.3), which lands separately. |
 | P14 (deferred) | Both checkers/verifiers: aggregate/field mutation, only if residual profile requires L2 | New C manifest and estimates before activation; alias/frame proof cannot be replaced by Q. |
 | P15 (deferred) | Both codegens/ABI: P14 lowering | C four-pair ownership/ABI probes, then touched P gates; no assumed budget gain. |
@@ -3171,6 +3171,181 @@ rerun as a plain code review) and one fix-check.
   oaw instructions). Fold `reclaim_head` into `entry_alloc` or short-cut the empty case, then re-measure toolnew,
   toolforget and toolgrow interleaved.
 - P13e (tooldup peak RSS at M = 500), LLVM pairs (P17a-c) unchanged.
+
+## Appendix P21b (B/bud_map.pruv: the reclaim cost of the lazy forget)
+
+Status: gate met on the Rust and Python compilers (gates on both; perf from `run_m8.py perf`'s own build). toolnew is
+0.87 / 0.97x oaw at S / M by median, with Pruv's max below oaw's min at both sizes, and the toolgrow cycle is 0.93 /
+0.98x oaw in instructions. On top of 2b04d95 (P21a). Changed: `bud_map.pruv`, `M8_NOTES.md` and the load-policy paragraph of `m34_test/CONTRACT.md`. `bud_store.pruv`,
+`bud_tools.pruv`, the m8 drivers and roots, `bud_clock.pruv`, M7/M9/M10 and compiler sources are unchanged. Raw logs
+are in `work/p21b/` (not committed).
+
+### P21b.1 Cause, in the order data representation -> language gap -> codegen
+
+- Data representation (the M cell). The P21b header dump at M = 500 (words 4..14) reads 4096 slots, cap 2048,
+  1505 live entries and 2502 used slots. `room()` rehashed early only when `live + ents <= slots / 4` (1024). With
+  1505 live entries that never held, so tombstones built up until the `used > slots * 3 / 4` grow-or-rehash point.
+  The index ran between 0.37 and 0.75 load, and every new activity's unsuccessful probe got longer. At S (305 live
+  in 1024 slots) the bound held, which is why only M was above oaw.
+- Language gap: none. The fixes use existing Pruv features: direct row writes proved with
+  `kept(st, old(st))` (`len` equal, header shape and `dyn_ok` kept), and the `eb(st, e)` fast base.
+- Codegen (both sizes). P21a's `reclaim_head` freed the dead child, pushed it on the free list, and then
+  `entry_alloc` popped it back. Each step re-read the free head and recomputed the row bases through `field_addr`.
+  `put_at` also recomputed the entry base for the key store and for the link.
+
+### P21b.2 What changed (`bud_map.pruv`)
+
+- `alloc_entry(st, owner, og)` replaces `reclaim_head; entry_alloc`.
+  - Fast path. The free head f is a free row whose head child c is pending dead: state 1, owner f, og != gen(f), and
+    no children of its own. Both rows must have a fast base. In that case c is detached from f's list
+    (`detach_fast`), its key and blob words come off word 14, and c is filled in place as the new entry (`fill_fast`,
+    generation + 1). Word 12 gains one. There is no free-list push or pop, and the free head stays f.
+  - Any other case takes the old `reclaim_head; entry_alloc` path.
+  - The audit proved the two paths equal on every input (P21b.6).
+- `put_at`:
+  - It computes `be = eb(st, e)` once.
+  - On a fast base it stores the key with `put_key_fast`: it reuses the old key region when the key fits, else it
+    calls `arena_put` and `set_key_region`. Otherwise it uses `put_units` as before.
+  - The same `be` is passed to `link_fast`.
+- `rehash`:
+  - It clears the slot range on direct words when `16 <= sb` and `sb + slots <= len(st)`, else through `wr16` as
+    before.
+  - `rehash_hash` reads state, owner, the owner's state and the stored hash on direct words and returns -1 for an
+    entry that is not reinserted. When the stored hash itself is -1, the caller asks `reinsert` (the old `gf`
+    test), so the reinserted set is unchanged.
+- `room()`'s early tombstone rehash now runs when `used + ents > slots / 2` and `live + ents <= slots * 3 / 8`.
+  - It was `slots / 4`.
+  - Amortization still holds: after the rehash, used = live <= 3/8 of the slots, so the next early rehash is at
+    least slots/8 inserts away.
+  - The grow point and the rehash-before-grow rule are unchanged.
+  - After the early rehash `need()` is asked again, as the 3/4 branch already did (audit pass 2, P21b.6). On a valid
+    store it is 0; on a buffer with wrong counters a Grow can now follow the rehash instead of a false fit.
+  - The `room()` and `make_room` comments say so.
+
+### P21b.3 Gates (final tree after the audit fix; `work/p21b/gates2.log`, same as `gates.log` before it)
+
+The P21a gates, with one adaptation of `gates.sh`: P19, merged alongside P21a, made the m7 and m10 roots import the
+`bud_facts` Rust crate. The script builds `m7_test/bud_facts.rs` as an rlib and passes `--rust-extern bud_facts=...`
+for those two roots.
+
+| gate | Rust compiler | Python compiler |
+|---|---|---|
+| verify root_m8, m34 root_m4 and root_admit, m7, m9, m10, m11 roots | ok | ok |
+| controls N01-N25 | 25/25 | 25/25 |
+| C/D fixtures | 17 / 3 (halt dispatch, M10) / 0 | same |
+| Q2 300 cases (seed 20261117) | 63 exact / 237 not-implemented / 0 fail | same |
+| diff_hand16 (u16 and oa hands) | 300 random + 84 malformed controls, 0 mismatches | - |
+| corrupt resident vs 46db894 | P21a controls 6/6 | - |
+| m34 admit / m4 | 26/26 / 300/300 (922 grows, 1922/1922 size checks) | - |
+| m7, m10 same (rs vs py output) | identical | identical |
+| m11 py,rs | rc 0, pairs identical | rc 0 |
+
+### P21b.4 Performance, S = 100 and M = 500
+
+One interleaved run on the final tree: 9 rounds, reps 200000, memory over 5 runs (`work/p21b/perf_final.log`).
+The command was `m8_test/run_m8.py perf --only hand16w,oaw,fxmixw --sizes 100,500 --rounds 9 --reps 200000
+--mem-runs 5`. chk: 90 (item, size, round) checksums are equal between Pruv and hand16w, fxmixw and oaw. Verdict:
+Pruv's max against the lane's min over rounds (overlap = noise).
+
+| item | n | Pruv ns [min-max] | oaw ns [min-max] | /hand16w | /oaw | /fxmixw | verdict hand16w, oaw | P21a Pruv ns |
+|---|---|---|---|---|---|---|---|---|
+| toolnew | 100 | 52.8 [52.2-53.8] | 60.7 [60.0-62.0] | 0.37 | 0.87 | 0.59 | below, below | 58.3 |
+| toolnew | 500 | 55.5 [54.7-56.0] | 57.0 [56.7-58.1] | 0.36 | **0.97** | 0.62 | below, below | 62.8 |
+| toolforget | 100 | 31.8 [26.2-39.3] | 34.6 [32.7-35.7] | 0.03 | 0.92 | 0.03 | below, overlap | 34.3 |
+| toolforget | 500 | 34.9 [33.3-36.3] | 36.6 [34.2-44.2] | 0.01 | 0.95 | 0.01 | below, overlap | 36.8 |
+| tooldup | 100 | 23.2 [23.1-23.7] | 34.4 [33.9-38.2] | 0.42 | 0.67 | 0.65 | below, below | 23.6 |
+| tooldup | 500 | 25.0 [24.6-25.5] | 39.2 [38.3-42.5] | 0.44 | 0.64 | 0.72 | below, below | 25.4 |
+
+charge and failure stay below every matched lane (0.63-0.83x).
+
+Instructions per call (Pruv, then / hand16w, / oaw, / fxmixw; P21a in parentheses):
+- toolgrow (one new plus its share of the forget): 1361 / 1364; 0.41-0.42, **0.93 / 0.98**, 0.55-0.56 (1528 / 1502,
+  1.05 / 1.08 vs oaw).
+- tooldup: 585 / 587; 0.53-0.54, 0.66, 0.64 (584 / 587).
+
+Rerun after the audit fix (`work/p21b/perf_final2.log`, 9 rounds, same command, chk 90 equal): instructions are the
+same (toolgrow 1361 / 1364, tooldup 584 / 587), RSS and allocations the same; toolnew 52.9 [51.3-54.3] vs oaw 61.0
+[59.7-62.5] at S (0.87, below) and 56.8 [55.4-60.8] vs 57.6 [56.2-60.2] at M (0.99, overlap). The fix adds one
+`need()` call per early rehash only, off the insert's normal path; the M median moved with the run (toolforget and
+oaw moved too), so the table above stays the reference and the M cell is <= 1.0x by median in both runs.
+
+Progression at M (toolnew ns Pruv vs oaw, toolgrow instructions), each step measured interleaved:
+- P21a: 62.8 vs 58.2, 1502.
+- `alloc_entry` fold: 58.1 vs 57.2, 1360.
+- Base reuse and direct rehash reads: 58.1 vs 57.7, 1340.
+- `slots * 3 / 8` bound: 55.8 vs 57.8, 1365.
+- Final run: 55.5 vs 57.0, 1364.
+
+The fold and base reuse removed about 140-160 instructions per cycle at both sizes. The rehash bound took toolnew at
+M from 1.00x to 0.97x. It adds about 25 instructions per cycle at M (1340 to 1365) in rehash work, and the shorter
+probe saves more time than that costs (not split further by counters).
+
+Peak RSS KiB and allocations (median of 5 [min-max]); toolgrow covers toolnew and toolforget:
+
+| item | n | Pruv KiB | Pruv allocs | hand16w KiB | oaw KiB | oaw allocs | P21a Pruv KiB |
+|---|---|---|---|---|---|---|---|
+| tooldup | 100 | 2192 [2192-2192] | 40 | 2288 | 2256 | 12409 | 2192 |
+| tooldup | 500 | **3120 [3104-3120]** | 44 | 3392 | 3104 [3072-3104] | 61635 | 3152 |
+| toolgrow | 100 | 2112 [2096-2112] | 40 | 2432 | 2528 | 23852 | 2128 |
+| toolgrow | 500 | 3168 [3152-3168] | 45 | 3536 | 3376 [3360-3408] | 66323 | 3200 |
+
+- Allocation counts are the same as P21a's.
+- RSS is the same or lower in every cell.
+- tooldup RSS at M stays at or just above oaw (3120 [3104-3120] vs 3104 [3072-3104], overlapping). That is the open
+  P13e cell, which P21b does not touch.
+
+Proof time (root_m8, Rust compiler, wall seconds under load 17-26) was 8.2-32.7 s for the new tree and 21.6 s for
+2b04d95. That is within the load noise; no new proof hotspot was seen.
+
+### P21b.5 Checks the proofs removed or changed
+
+- `detach_fast`, `fill_fast`, `set_key_region` and `alloc_entry` carry `ensures kept(st, old(st))`. Their direct
+  writes are proved inside the row (`16 <= b`, `b + 20 <= len(st)` from `eb`). The `fields_ok`/`dyn_ok` header facts
+  are re-established by `assert len(st) == len(old(st)) && hdr_same(st, old(st), -1); reveal dyn_ok`.
+- The rehash slot clear proves each `sb + i` inside `[16, len(st))` from the branch guard. Slots outside it still go
+  through `wr16`.
+- `alloc_entry`'s equivalence to `reclaim_head; entry_alloc` is a static audit result (P21b.6), not a machine-checked
+  postcondition. Like `alloc_ok` in P21a.4, it is covered by the c-reuse control and the Q2/controls gates.
+- `room()`'s amortization is a comment premise (a valid layout whose word 12 counts its live entries), as `room_w`
+  states in P21a.4.
+
+### P21b.6 Audit
+
+Static review, Codex gpt-6.2-astra (ultra), in two passes.
+- Pass 1 (`alloc_entry`, `detach_fast` and the first `put_at` change): no must-fix and no should-fix findings.
+  - `alloc_entry` returns the same value and leaves every store word identical to `reclaim_head; entry_alloc` on
+    every input, including corrupted stores.
+  - The guards imply both rows lie past the header and below cap; f != c.
+  - The old path's loop ends on its first turn for the same c.
+  - Words 8, 12 and 14 and the generation (`wrapping_add`) end equal.
+  - The key-word sum stays below 2^41.
+- Pass 2 (`fill_fast`, `put_key_fast` / `set_key_region`, base reuse, `rehash_hash` / `reinsert` and the direct slot
+  clear, the `slots * 3 / 8` bound): items 1-4 equal to the paths they replace on every input; one must-fix in item 5.
+  - taken (must-fix): the early branch returned "rehashed, fits" without asking `need()` again. On a corrupted store
+    (rows in state 1 not counted in word 12, e.g. 16 slots, live 5, used 9, 16 reinsertable rows) the rehash fills
+    the index and the insert then fails with 2. Under the old `slots / 4` bound the same shape needed a smaller live
+    count, so the gap predates P21b but the wider bound reaches more buffers. Fixed: `need()` again after the rehash,
+    Grow if it fails (P21b.2). Gates and perf rerun (P21b.3, P21b.4).
+  - taken (should-fix): the amortization comment now states its premise (valid layout, exact word 12; the roots are
+    not indexed, so used = live - 3) and calls the rehash O(slots) passes with probe lengths that depend on the hash
+    spread, not a worst-case time bound.
+  - taken (should-fix): `m34_test/CONTRACT.md`'s load policy now states 3/8, the re-ask and slots/8. The other two
+    places that cite `slots / 4` are records of earlier packages (PERF_HEADROOM.md, P22's file; the P19.6a / P21a
+    appendix text) and stay as written.
+  - recorded: on a corrupted store the early rehash can repeat on every call with no insert in between (each call
+    ends; frequency is amortized only on a valid store). Same class as the 3/4 branch; not changed.
+  - No fix-check pass: the request's audit budget (one audit, one follow-up) was used by passes 1 and 2. The fix
+    mirrors the existing 3/4 branch line for line and is covered by the rerun gates.
+
+### P21b.7 Remaining
+
+- `bench/l3/budget/PERF_HEADROOM.md` (P22 owns it) cites the old `slots / 4` bound in its P19/P21a record; P22 may add
+  a pointer to P21b.
+- A fix-check of the P21b.2 `need()` re-ask in the next audited package that touches `room()`.
+- The `gates.sh` scripts of later packages need the `bud_facts` rlib and `--rust-extern` for the m7 and m10 roots
+  (P21b.3).
+- From P21a.6, unchanged: the ops 1/2 arena guard; the admission og == gen(owner) check for live owners; P13e
+  (tooldup peak RSS at M); the LLVM pairs (P17a-c).
 
 ## Appendix P22 (row P/bud_clock.pruv: runs, refresh, begin, settle, arm; active count; R/timer cycle)
 

@@ -172,4 +172,11 @@ by byte-identical output and run by group, with the full test suite once before 
     (for example `ev_event_slot == -1` right after `ev_new(1)`) so a wrong state-field link is caught. Also run
     the satisfied-precondition accept twin for `ev_proc_write`, `ev_proc_close_stdin`, `ev_proc_wait`.
 
+12. **T4 follow-up (queued at the T4 merge, 4b8be7f).** T4 shared four tables (`pruvc/data/`: inline policy,
+    monomorphization limits, builtin type names, G6 shim edges) and derived the Python bit tables from
+    `check.BIT_BUILTINS`. Not yet shared across the two compilers: bit/word builtins, contract-only and
+    observer classes, and the 95-entry foreign catalog declarations. The shared values also have no boundary
+    tests: add accept/reject pairs at `MAX_TYPE_APPS`/`MAX_TYPE_NODES` and at the inline thresholds (8/9 and
+    1500/1501), on both compilers, so a wrong value in the JSON is caught.
+
 Order after the review: T0①–⑥ → T3 → T1 → T2 → T4 → P16, P17a → T5 (inline policy) → T6.
