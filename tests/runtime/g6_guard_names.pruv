@@ -1,0 +1,25 @@
+// P19c regression: the trusted-call drop guard must not clash with user names. A user type named Drop, a trusted
+// rust fn parameter named PruvForeignGuard, and two trusted calls in one Pruv fn (two guards in one generated fn scope chain)
+struct Drop {
+  v: i64,
+}
+
+trusted rust fn guard_add(PruvForeignGuard: i64, y: i64) -> i64
+  ensures true
+  = "::g6_guard_names::guard_add";
+
+trusted rust fn guard_boom(PruvForeignGuard: i64) -> i64
+  ensures true
+  = "::g6_guard_names::guard_boom";
+
+fn call_two(x: i64) -> i64 {
+  let d: Drop = Drop { v: x };
+  let a: i64 = guard_add(d.v, 1);
+  let b: i64 = guard_add(a, 2);
+  return b;
+}
+
+fn call_boom(x: i64) -> i64 {
+  let a: i64 = guard_add(x, 1);
+  return guard_boom(a);
+}

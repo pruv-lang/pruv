@@ -395,7 +395,7 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P18b | M7 host shim/ABI result path and inline policy: P18 lookup floor (Appendix P18.8) | P: first an isolating measurement (register-return variant of the host shim vs the `out` buffer store + reload), then the fix in the layer it names; `current` (0.99-1.03), `isHalted` (1.02-1.12) and `reopenmiss` (1.04-1.06 of hand16) each <= 1.0x hand at S/M, or a line-by-line hand vs generated Rust difference showing why Pruv cannot emit it. Peak RSS 2-4 pages above P13c re-measured and attributed. Runs with or after P19 (same files). |
 | P19 | Same: OPEN/attach/replace/CLOSE/maybeClose | P Q1/Q4+B/G, synchronous query/effect order after P10H; close <=1.0. |
 | P19a | B/bud_lifecycle.pruv, bud_map.pruv, m7_test, m10_test, ABI.md: P19 audit R1, R3-R6, O1 (Appendix P19.6a, P19.7) | P: invalid answer leaves `st` word-for-word unchanged (write-free `bud_map` room plan before the query, rehash after a valid answer, `ensures` linking the two; tombstone-heavy control); R2 regression fixture; session argument and effect order logged on both sides with a mutant; per-attempt query counts over forced Grow; required case ids and request order in M7/M10 Q; standalone CLOSE lane with matched consumption <= 1.0x hand. Starts after P21a (shares bud_map.pruv). |
-| P19c | Both codegens: foreign (trusted rust) call wrapper and cross-rlib inlining (Appendix P19.4) | P: `catch_unwind(AssertUnwindSafe(..))` around every trusted rust call and the non-inlined callee `LocalKey::with` removed or made free where sound (for example crates built with `panic = abort`, or the poison rule of P10 kept by another path), with the soundness argument written and audited; output parity on both compilers; P19 `closereopen` (1.14-1.15) and `attach` (1.12-1.13) re-measured, the wrapper share attributed, the rest left to T5/P18b by line. |
+| P19c | Both codegens: foreign (trusted rust) call wrapper and cross-rlib inlining (Appendix P19.4) | P: `catch_unwind(AssertUnwindSafe(..))` around every trusted rust call and the non-inlined callee `LocalKey::with` removed or made free where sound (for example crates built with `panic = abort`, or the poison rule of P10 kept by another path), with the soundness argument written and audited; output parity on both compilers; P19 `closereopen` (1.14-1.15) and `attach` (1.12-1.13) re-measured, the wrapper share attributed, the rest left to T5/P18b by line. Done (Appendix P19c): drop guard (`pruv_ForeignGuard`) in place of `catch_unwind`, `__rust_try` and the catch frame gone; the foreign path now equals a plain call (closereopen `guard` = `direct` within 0.1 ns, 61 rounds); the diagnostic goes through a fresh `/dev/stderr` handle, not std's stderr lock, on unix; `LocalKey::with` is the caller's LLVM inline decision, present with no wrapper and gone when inlined; the rest (attach 1.13x, closereopen 1.11-1.12x, reopenmiss 1.05-1.08x vs hand16) is the inline policy (T5, measured: 1.02-1.06x with the four lifecycle/map bodies forced inline) and the result path (P18b, hypothesis). |
 | P20 | B/bud_charge.pruv,m8_test: counters/sums/bounds | P Q2+C/D, equal safe-number baseline; negative/boundary atomic refusal and charge/failure <=1.0. |
 | P21 | B/bud_tools.pruv,key helpers: stored hash/dedup | P Q2+D; dup/new/forget separately <=1.0, missing-budget dedup. Interning only as measured follow-up. |
 | P22 | B/bud_clock.pruv: runs/refresh/begin/settle/arm | P Q3+E/F, active-count functional model, R/timer cycle; do not treat I2 as an unchecked proof assumption. |
@@ -3488,6 +3488,186 @@ One package audit (Codex gpt-6.2-astra, ultra) on the merged tree, one confirm o
 
 Proof/encoding judgement, the fixes, the gates, perf, RSS and proof-time measurement were done directly
 (Claude Opus 5.5).
+
+## Appendix P19c (both codegens: foreign call wrapper, cross-rlib inlining)
+
+### P19c.1 Change
+
+Every `trusted rust fn` wrapper (`pruvc/foreign_codegen.py` `trusted_helper`, `pruvc-rs/.../codegen.rs`
+`trusted_text`) emitted
+
+```rust
+let result: T = match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| path(args))) {
+    Ok(pruv_r) => pruv_r,
+    Err(_) => panic!("pruv: foreign panic: NAME"),
+};
+```
+
+It now emits a local drop guard and no unwind frame:
+
+```rust
+struct pruv_ForeignGuard;
+impl ::std::ops::Drop for pruv_ForeignGuard { #[cold] fn drop(&mut self) { let m: &str = "pruv: foreign panic: NAME\u{a}"; #[cfg(unix)] { if let Ok(mut f) = ::std::fs::OpenOptions::new().append(true).open("/dev/stderr") { let _ = ::std::io::Write::write_all(&mut f, m.as_bytes()); return; } } let _ = ::std::io::Write::write_all(&mut ::std::io::stderr(), m.as_bytes()); } }
+let pruv_fg = pruv_ForeignGuard;
+let result: T = path(args);
+::std::mem::forget(pruv_fg);
+```
+
+The guard type and binding use the reserved `pruv_` prefix (`pruvc/codegen.py:22`: user identifiers may not start
+with `pruv_` or contain `__`), and `Drop` is written by path, so a user type named `Drop` or a parameter named
+`PruvForeignGuard` cannot clash (`tests/runtime/g6_guard_names`: both, plus two trusted calls in one fn). Each
+wrapper is its own fn, so the item is local to it and two trusted calls never share a scope.
+
+The checks before and after the call (G6_SPEC 12.3 `requires`/`ensures`, owned-result checks) are unchanged.
+On unix the guard writes the line through a fresh `/dev/stderr` handle, not through `std::io::stderr()`: std's
+stderr is a lock (reentrant on the same thread), and while another thread holds it, for example a host thread that
+keeps a `StderrLock` until this call finishes, a `Drop` through `stderr()` waits on it for ever and the unwind never
+ends (found by the confirm audit). A raw `write(2, ...)` was tried first and dropped: it needs `unsafe`, and
+`--no-verify` Rust output must contain none (`tests/run_all.py` examples check, `g6_min_clamp`). The handle is opened
+with `append`, so a regular file on fd 2 is not overwritten. If the open fails (for example fd 2 is a socket on
+Linux, where `/dev/stderr` cannot be reopened) the guard falls back to `std::io::stderr()`, and on non-unix targets it
+always uses it; only those cases can still wait on the lock. Checked standalone (`work/p19c/lock/lockcheck.rs`, a
+second thread holds the lock until the panicking call has unwound): the old text stays blocked after 3 s; the new
+text prints the line and the unwind finishes, with fd 2 on a tty, a pipe and a regular file (prior content kept). The
+panic hook itself already writes without that lock.
+`docs/G6_SPEC.md:536` describes the new form, and G6_SPEC 13.2 now says the LLVM adapter guard is a separate
+path and that the helper's `Drop`, not the adapter, prints the trusted-panic line. Both compilers emit the same text (diff_rust, diff_compilers).
+
+### P19c.2 Soundness
+
+What the old wrapper gave, and how each is kept:
+
+| property | old (`catch_unwind` + `panic!`) | new (drop guard) |
+|---|---|---|
+| a foreign panic never returns a value to Pruv code | the `Err` arm panics again | the unwind continues through the wrapper; `result` is never bound |
+| the process prints `pruv: foreign panic: NAME` | message of the second panic | the guard's `Drop` runs during the unwind and writes the line (`tests/runtime/g6_liar_panic.json`: exit 101, stderr contains the line) |
+| exit status of a standalone program | 101 (panic out of `main`) | 101 (same unwind out of `main`) |
+| Rust backend: P09 `PruvStore::with` poison | the flag is set before the call and cleared only on a normal return; an unwind (second panic) leaves it set | the same flag, the same code; the original panic unwinds through `with` and leaves it set |
+| P10 C adapter (`llvmgen.py` `guard`, status 3 `PRUV_PANICKED`) | emitted only in LLVM bindings; a foreign panic never reaches it (the G6 shim adapter exits first, next row), and the Rust backend has no adapter on this path | unchanged: the same, it plays no part in a foreign panic |
+| LLVM backend: G6 trusted calls (`foreign_shim.py` `pruv_g6_guard`, G6_SPEC 13.2) | the shim adapter catches the second panic, `fflush(NULL)`, exit 101 | the helper's guard prints the line, then the same adapter catches the original panic, `fflush(NULL)`, exit 101; this path never reaches a P10 adapter |
+| `panic = abort` crates | abort in the foreign fn (no unwind to catch) | the same abort |
+| unwind safety (`AssertUnwindSafe`) | asserted by the wrapper | not needed: nothing is caught here, so no state is observed after a panic in this frame |
+
+Differences, none observable by Pruv code: the panic payload is the foreign one, not the Pruv message. The
+adapters and the poison flag never read the payload (any panic maps to status 3, exit 101 or a set flag). One
+tool did: the bench/g6 grader (`bench/g6/run.py`) catches the panic in the generated Rust grader and exits 0, and
+`foreign_panic()` in `bench/g6/mutate_ops.py` looked for the Pruv string in the payload, so mutant m60 would have
+been graded `wrong_but_verified` on the Rust backend. The grader now keeps the last `pruv: foreign` stderr line as
+`foreign_stderr` whatever the exit code, and `foreign_panic()`/`brief()` read it (self-test case added). The panic
+hook prints the foreign message before the guard line (both on stderr; the runtime tests check containment). A
+panic inside the guard's `Drop` during an unwind would abort; the open and `write_all` return errors instead of
+panicking, the result is discarded, and on unix the normal case takes no lock. `mem::forget` of a zero-sized value on the normal path emits no code.
+Checked standalone (`work/p19c`): unwind exits 101 with the line, an outer `catch_unwind` catches it,
+`panic = abort` exits 134 as before.
+
+What the change removes and what it keeps: `__rust_try` and the catch frame (the closure, the `Result` match and
+the re-panic) are gone from every trusted call. A cleanup landing pad remains (the guard's `Drop` call and
+`_Unwind_Resume`), off the normal path in the unwind tables; there is no instruction for it on the normal path.
+
+`LocalKey::with` (P19.4): `maybe_close` has one `bl` to `LocalKey::with` (the `bud_facts::answer` closure over
+`ANSWERS`, reached through `is_quiet`) in `cur`, `guard` and `direct` (a plain call with no wrapper at all), and 0
+in hand16. In `inl` it is 0 in `maybe_close` and appears in its 8 callers instead. The `direct` control shows it
+does not depend on the wrapper: it is LLVM's inline decision for the generated caller, not the foreign call path.
+A control, `hand_bl` (hand16 with the whole `is_quiet` host call outlined behind an `#[inline(never)]` fn,
+`work/p19c/exp/hand_bl.rs`, experiment only), 21 interleaved rounds at S 100, ns/call median [min-max]:
+closereopen 14.10 [13.40-40.90] vs hand16 14.10 [13.60-41.40]; attach 12.50 vs 12.30 and reopenmiss 13.80 vs 14.00
+(neither reaches `is_quiet`). No difference was detected in this control; it outlines a different call than the
+generated one, so it does not bound the cost of the generated `LocalKey::with` `bl`. `bud_facts.rs` is the host and
+is not changed.
+
+The guard is kept although its time effect is within spread (P19c.3): it removes `__rust_try` and the catch frame
+from every trusted call, and needs no `AssertUnwindSafe`.
+
+### P19c.3 Measurement (M7 typed lanes, interleaved, 61 rounds, ns per call, `work/p19c/exp.py`)
+
+Final run on the tree merged with main e8acbf9 (P21b, P22). Variants are built from the current compiler output
+(`gen_guard.rs` is byte-identical to `pruvc.py` output): `cur` = the old `catch_unwind` wrapper put back, `guard` =
+this change, `direct` = a plain `let result = path(args);` with no wrapper at all (control), `inl` = guard plus
+`#[inline]` -> `#[inline(always)]` on `bud_map::find_w`, `bud_lifecycle::attach`, `reopen`, `maybe_close`
+(experiment only, not emitted). Lane order rotates every round and sizes alternate; load 7-11 (other sessions were
+measuring). Every value is ns per call: attach and reopenmiss time one call per iteration, and closereopen time is
+divided by 2 x reps, so a close/reopen pair costs twice the closereopen value (guard 31.20 ns per pair). Median
+[min-max]:
+
+| item | S | cur | guard | direct | inl | hand16 | cur/h | guard/h | direct/h | inl/h |
+|---|---|---|---|---|---|---|---|---|---|---|
+| attach | 100 | 13.20 [13.00-19.70] | 13.30 [13.20-15.90] | 13.10 [13.00-25.00] | 12.20 [11.90-37.00] | 11.70 [11.60-20.00] | 1.128 | 1.137 | 1.120 | 1.043 |
+| attach | 500 | 13.20 [12.80-14.90] | 13.30 [13.20-17.80] | 13.20 [13.00-17.00] | 12.30 [12.00-17.20] | 11.70 [11.50-29.80] | 1.128 | 1.137 | 1.128 | 1.051 |
+| closereopen | 100 | 15.60 [15.20-32.10] | 15.60 [15.20-17.70] | 15.50 [15.20-36.90] | 14.50 [13.90-32.50] | 14.00 [13.60-30.70] | 1.114 | 1.114 | 1.107 | 1.036 |
+| closereopen | 500 | 15.60 [15.10-16.90] | 15.60 [15.10-20.60] | 15.60 [15.20-38.70] | 14.50 [13.70-27.00] | 13.90 [13.60-35.10] | 1.122 | 1.122 | 1.122 | 1.043 |
+| reopenmiss | 100 | 13.70 [13.40-32.20] | 13.70 [13.40-24.50] | 13.70 [13.40-27.40] | 13.30 [12.70-44.50] | 13.00 [12.70-38.00] | 1.054 | 1.054 | 1.054 | 1.023 |
+| reopenmiss | 500 | 13.60 [13.40-14.90] | 13.70 [13.20-23.10] | 13.70 [13.40-50.00] | 13.50 [12.70-19.20] | 12.70 [12.50-20.60] | 1.071 | 1.079 | 1.079 | 1.063 |
+
+On closereopen, the only item that runs the trusted call, `guard` equals `direct` (no wrapper) within 0.1 ns at both
+sizes; on attach and reopenmiss, which never execute the wrapper, guard and direct differ by up to 0.2 ns (attach S 100)
+with overlapping ranges, which is layout. What is left of the foreign call path costs nothing measurable, so nothing
+in it can close the gap to hand16. An earlier 31-round run at load 5-8 (pre-merge)
+gave guard 1.11-1.13 and inl 1.01-1.03 on attach/closereopen, the same picture with smaller inl residue.
+
+Instructions per iteration (`boundary 100 R item C`, (instr(5R) - instr(R)) / 4R, R = 20000; an attach or
+reopenmiss iteration is one call, a closereopen iteration is a close/reopen pair, two calls). Only closereopen runs
+the trusted `is_quiet` call (in `maybe_close`); attach and reopenmiss never execute the wrapper, so their cur/guard
+difference is layout, not the wrapper:
+
+| item | unit | cur | guard | inl |
+|---|---|---|---|---|
+| attach | call | 567 | 561 | 496 |
+| closereopen | pair | 1217 | 1221 | 1127 |
+| reopenmiss | call | 534 | 523 | 454 |
+
+The instruction counts are from the pre-merge source (P21a); the merge changes no compiler code and no
+lifecycle path these items run except through `bud_map` (P21b), so they are kept as the per-path split, and the
+timing above is the final evidence.
+
+Observed wrapper difference: closereopen guard - cur = 0.0 ns per call in the final run (15.60 both sizes) and
+-0.5 ns per call in the earlier run, with overlapping ranges, so no time gain is claimed beyond the removed `__rust_try`;
+attach and reopenmiss differences (0.0-0.1 ns) are layout noise (no wrapper on their path).
+
+### P19c.4 Line-by-line attribution of the rest (guard vs hand16, `hand_m7_u16.rs:486-660`)
+
+| line | hand16 | generated | instr | class | owner |
+|---|---|---|---|---|---|
+| foreign wrapper (frame, `#[inline]` on the helper, guard) | direct `is_quiet` | guard + direct call; the helper is already `#[inline(always)]` and has no symbol of its own (only the cold guard `Drop` does) | 0: on closereopen `guard` = `direct` (no wrapper) within 0.1 ns (P19c.3) | codegen, foreign call path | done here |
+| `LocalKey::with` (`answer` closure) | inlined (0 `bl`) | 1 `bl` in `maybe_close`, also with no wrapper (`direct`) | not isolated: the `hand_bl` control (P19c.2) shows no difference but does not bound this call | codegen: LLVM inline decision in the caller, not the wrapper (present with no wrapper, `direct`) | T5 (gone in `inl`, so part of the inl saving) |
+| frame: `find_w` | `HashMap::get_mut` inlined | `#[inline]`, real `bl`, 192-byte frame; its body is ~35 instr below the hash map | part of the inl saving (attach 65 per call, closereopen 94 per close/reopen pair = 47 per call) | codegen: inline policy | T5 |
+| frame: `attach`/`reopen`/`maybe_close` | inlined into dispatch | separate `#[inline]` bodies (12 callee-saved registers each), the policy keeps them because incl * (sites - 1) > `INLINE_BUDGET` 1500 (`attach` 50 lines / 5 sites, `reopen` 48 / 3, `maybe_close` 77 / 3, `find_w` 6 sites) | same saving as the row above | codegen: inline policy | T5 |
+| record re-lookup / field re-validation after the lookup | borrow of `b` | `st[off]` reads re-checked per field (+34 attach, ~+95 per close/reopen pair, static) | mostly folded once inlined (part of the inl saving) | data representation | T5 (by inlining); residue P18b |
+| public entry length bound (2^40, TIDY T0 step 4) | none | 14 checks attach, 12 per close/reopen entry | ~1 per check | policy (T0) | kept |
+| `attach` id result | `Res::Ref(&b.id)` borrow | id words copied to `out` (72-byte copy, ~+20) | in inl residue | data representation / ABI result | P18b |
+| empty-clock check | `clocks.is_empty()` | `bud_map::count(st, 1) == 0` (~+20) | in inl residue | data representation | P18b |
+| `reopenmiss` | lookup hit, state check rejects (budget is Open), result in registers | hit through `find_w`, state reject, status + `out` write | inl residue (P19c.3) | hypothesis: ABI result path (status + out buffer vs register return); not isolated here | P18b (its register-return measurement decides) |
+
+`room`, `put_at`, `settle_at` are not on these paths (0).
+
+### P19c.5 Queued
+
+- **T5 (inline policy):** with `find_w` and the three lifecycle bodies `#[inline(always)]`, attach goes 1.13 -> 1.04-1.05x
+  (1.02-1.03x in the quieter pre-merge run) and closereopen 1.11-1.12 -> 1.04x (1.01-1.03x), the ranges overlapping
+  hand16; 65 fewer instructions per attach call and 94 per close/reopen pair (47 per call). Evidence that it is not
+  the foreign path: `guard` = `direct`, so the gap is the same with no foreign wrapper at all.
+  The policy is shared by both compilers (`pruvc/data/inline_policy.json`, text-size rule) and changes every program,
+  so it is T5's, not the foreign call path's; measure the policy change against the M4/M7/M8/M10 lanes there.
+- **P18b:** `reopenmiss` 1.02-1.06x with inl (hypothesis: the status + out-buffer result vs a register return), the `attach` id copy and the
+  empty-clock count, with the register-return isolating measurement of that row.
+
+### P19c.6 Gates
+
+Final, on the tree merged with main a7f7e68 (P19a, P16+P17a) and the `/dev/stderr` guard: `cargo test --release` 0 failures;
+diff_rust `--fuzz-count 20` all same; diff_compilers `--only runtime` 1986/1986 same (includes the 8
+`g6_guard_names` rows and main's P16 rows); `bridge/node/regen.py --check` ok (only `decode_bytes_gen.rs` has a trusted call and changed);
+rs groups runtime 1141/1141, g6_frontend 25/25, g6_proof 25/25, g4b_frontend 2/2, g8_frontend 39/39, l3_abi 2/2,
+check_generated 1/1; py g8_frontend 27/27. Budget gates (`work/p19c/gates.sh`, every lane on this worktree's compilers: the M7/M10 `--py`
+and `diff_hand_m7` scripts hardcode the main checkout's compiler paths, so `work/p19c/with_wt.py` points them here):
+run_m7 q 113 exact / 0 fail on both, life 300/300, diff_hand_m7 113 exact, run_m10 q 78 exact / 0 fail, halt
+300/300, m34 admit 26/26, m3 all categories, lanes 1922/1922 and 300/300. Python full suite 3129/3129 (before the `/dev/stderr` form it was 3115/3116: the raw `write(2, ...)` put `unsafe` into the `--no-verify` output of `examples/g6_min_clamp`). The g8
+compatibility samples have no trusted fn, so their hashes are unchanged.
+
+### P19c.7 Delegation
+
+Research and attribution: Codex gpt-6.2-astra. Implementation (both compilers, G6_SPEC line): Claude sonnet (write).
+Tests, gates and timing: command delegations. Encoding decision, the stderr-lock fix and final measurement: this
+session. Audit and confirm audit: Codex gpt-6.2-astra ultra (the confirm audit's six required items are fixed here:
+lock-free diagnostic, gates on this worktree's compilers, panic-path rows, units, the `hand_bl` claim, these gates).
 
 ## Appendix P19a (row B/bud_lifecycle.pruv, bud_map.pruv, m7_test, m10_test, ABI.md: P19 audit R1-R6, O1)
 
