@@ -62,8 +62,10 @@ Shared frames, described in full in the header of `bud_clock.pruv`:
 - `fx` (inout) is the effect frame:
   - `fx[0]` counts the words used, and records follow;
   - one public sub-operation appends at most 4 words (FIRE: timerForget then timerSet);
-  - it returns 3 with nothing written unless `fx[0] + 5 <= len(fx)`.
-- `limit_ms` clamps timeMinutes to ±150119987580 (result within ±9007199254800000). 150119987579 × 60000 is the largest product ≤ 2^53, so every reachable limit is exact. Above that the limit is still above 2^53, so the halt decision equals B's. Only the requested delay recorded in a timerSet above 2^53 differs from B's rounded float; the effective delay is 1 either way.
+  - it returns 3 with nothing written unless `fx[0] + 5 <= len(fx)` (`settle_at` and `drop_at` leave that test to the caller: bud_lifecycle and the key forms make it).
+- `limit_ms` clamps timeMinutes to ±150000000000000 (result within ±9e18, exact in i64), so every delay `limit - activeMs` with safe inputs is the exact integer (P22, audit C1: the old ±150119987580 clamp gave 59009 where B gives 119009).
+- A limit product or a settled activeMs above 2^53 leaves the safe integral domain (spec §2.3, §8.4): B rounds the double, the clock keeps the exact i64 delay and saturates activeMs (`sc`). Such cases are KD-M6-1 (excluded domain); `run_m9.py` classifies an oracle record holding a `{num}` value as known-difference. The clock does not yet refuse them with `ResourceBound(number)` (queued, Appendix P22.7).
+- Every public entry taking `bv` tests `len(bv) >= 7` before any write and returns 0 with nothing changed.
 - Status codes:
   - `0` done;
   - `4` done + HALT_TIME: the caller must run `halt(ref, 'time')` (M10), and SETTLE has already run;
@@ -76,12 +78,12 @@ Shared frames, described in full in the header of `bud_clock.pruv`:
 | `clock_of(st, bk,bs,bn) -> ce` | read | entry or −1 | locate once, then use the `_at` forms |
 | `clock_owner(st, bk,bs,bn, inout dst) -> n` | read | length or −1 | observation only (FIRE uses the captured ref) |
 | `armed(st, bk,bs,bn) -> 0/1` | read | | observation only |
-| `refresh_at(inout st, ce, sk,ss,sn, now, inout bv, inout fx)` | | 0 / 4 | M10 decide-extend, M5 raise |
+| `refresh_at(inout st, ce, sk,ss,sn, now, inout bv, inout fx)` | | 0 / 3 / 4 | M10 decide-extend, M5 raise |
 | `begin_at(inout st, ce, now, inout bv)` | | – | |
-| `arm_at(inout st, ce, sk,ss,sn, now, inout bv, inout fx)` | | 0 / 4 | 4 = sync FIRE ended in halt |
-| `settle_at(inout st, ce, sk,ss,sn, now, inout bv, inout fx) -> added ms` | | | M10 halt, M7 close |
-| `fire_at(inout st, ce, sk,ss,sn, now, inout bv, inout fx)` | | 0 / 4 | host timer delivery with the captured ref; `ce` may be −1 (no clock → HALT_TIME, as B) |
-| `drop_at(inout st, ce, inout fx)` | | – | dropClock (M7 reopen/forget/dispose) |
+| `arm_at(inout st, ce, sk,ss,sn, now, inout bv, inout fx)` | | 0 / 3 / 4 | 4 = sync FIRE ended in halt |
+| `settle_at(inout st, ce, sk,ss,sn, now, inout bv, inout fx) -> added ms` | | caller checks `fx_ok` | M10 halt, M7 close |
+| `fire_at(inout st, ce, sk,ss,sn, now, inout bv, inout fx)` | | 0 / 3 / 4 | host timer delivery with the captured ref; `ce` may be −1 (no clock → HALT_TIME, as B) |
+| `drop_at(inout st, ce, inout fx)` | | caller checks `fx_ok` | dropClock (M7 reopen/forget/dispose) |
 | `refresh / settle / fire / drop / close(... bk,bs,bn ...)` | key forms | 0/2/3/4/−N | same, with the clock lookup and the fx check |
 | `run_started / run_waiting / run_ended(...)` | key forms + `rk,rs,rn` | 0/2/3/4/−N | B:286/292/299 |
 

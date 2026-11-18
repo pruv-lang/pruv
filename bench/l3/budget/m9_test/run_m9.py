@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """L3-10 M9 runner: clock paths of the request budget (bud_clock.pruv) against the TS oracle.
 
-  python3 bench/l3/budget/m9_test/run_m9.py q    [--pruvc PATH | --gen GEN.rs] [--cases F] [--oracle F]
+  python3 bench/l3/budget/m9_test/run_m9.py q    [--pruvc PATH | --gen GEN.rs] [--budlib DIR] [--cases F] [--oracle F]
   python3 bench/l3/budget/m9_test/run_m9.py derive  (writes work/m9/cases_clock.jsonl + oracle_clock.jsonl)
   python3 bench/l3/budget/m9_test/run_m9.py perf [--pruvc PATH | --gen GEN.rs] [--rounds N]
 
@@ -17,17 +17,18 @@ Classes:
                   (when no raise/charge call follows, the oracle's final values of that budget are the ones at the
                   halt: later clock-only steps cannot change a halted budget). The rest is not counted. Nothing
                   after the cut is filled by host code.
-  known-difference none in M9 (the class is kept for the table).
+  known-difference KD-M6-1: the oracle holds a number outside the safe integral range (JS rounded it); excluded
+                  domain (spec §8.4), not compared.
   fail            anything else.
 """
-import argparse, datetime, json, os, shutil, statistics, subprocess, sys
+import argparse, datetime, json, os, re, shutil, statistics, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BUD = os.path.dirname(HERE)
 ROOT = os.path.abspath(os.path.join(BUD, "..", "..", ".."))
 WORK = os.path.join(BUD, "work", "m9")
+BUDLIB_WORK = os.path.join(WORK, "budlib")
 PRUVC_DEFAULT = os.path.join(ROOT, "pruvc-rs", "target", "release", "pruvc")
-LIBS = ["--lib", "bench/l3/budget", "--lib", "bench/l3/lib"]
 STATE = {"open": 0, "halted": 1, "closed": 2}
 HALT_MARK = ("runningDelegationIds", "cancelRecovery", "stopMain")
 COMPARED = {}
@@ -39,20 +40,22 @@ def rustc():
 
 
 def build(args):
-    os.makedirs(WORK, exist_ok=True)
-    gen = os.path.join(WORK, "gen.rs")
+    work = WORK if args.budlib is None else BUDLIB_WORK
+    os.makedirs(work, exist_ok=True)
+    gen = os.path.join(work, "gen.rs")
     if args.gen:
         shutil.copyfile(args.gen, gen)
     else:
-        c = subprocess.run([args.pruvc, "bench/l3/budget/m9_test/root_m9.pruv", "-o", gen] + LIBS, cwd=ROOT,
-                           capture_output=True, text=True)
+        c = subprocess.run([args.pruvc, "bench/l3/budget/m9_test/root_m9.pruv", "-o", gen,
+                            "--lib", args.budlib or "bench/l3/budget", "--lib", "bench/l3/lib"],
+                           cwd=ROOT, capture_output=True, text=True)
         if c.returncode != 0:
             sys.exit("pruvc failed:\n" + c.stdout[-2000:] + c.stderr[-2000:])
-    main = os.path.join(WORK, "main_m9.rs")
+    main = os.path.join(work, "main_m9.rs")
     with open(main, "w") as f:
         f.write('#![allow(dead_code, unused_imports, unused_variables, unused_mut)]\n#[path = "gen.rs"] mod sol;\n')
         f.write(open(os.path.join(HERE, "driver_m9.rs")).read())
-    exe = os.path.join(WORK, "driver_m9")
+    exe = os.path.join(work, "driver_m9")
     c = subprocess.run([rustc(), "-C", "opt-level=3", "--edition", "2021", "-o", exe, main], capture_output=True,
                        text=True)
     if c.returncode != 0:
@@ -112,13 +115,17 @@ def budget_rec(b):
 
 
 # ---- driver program ----
+def put_line(s):
+    d = obj(s)
+    rec = budget_rec(obj(d.get("budget")) if d.get("budget") is not None else None)
+    return "put " + " ".join(map(str, key(d["id"]) + [len(rec)] + rec))
+
+
 def program(case):
     """Returns (lines, cut) where cut is None or ('call', req) for the first raise/charge call."""
     out = ["case " + case["id"]]
     for s in case["world"]["sessions"]:
-        d = obj(s)
-        rec = budget_rec(obj(d.get("budget")) if d.get("budget") is not None else None)
-        out.append("put " + " ".join(map(str, key(d["id"]) + [len(rec)] + rec)))
+        out.append(put_line(s))
     out.append("now %d" % case["world"].get("clockStart", 1700000000000))
     cut = None
     for i, e in enumerate(case["script"]):
@@ -130,6 +137,8 @@ def program(case):
             out.append("settime %d" % e["now"])
         elif ev == "deliverTimer":
             out.append("deliver %s %d" % (e["token"], 1 if e.get("captured") else 0))
+        elif ev == "putSession":
+            out.append(put_line(e["session"]))
         elif ev == "call":
             op = e["op"]
             if op not in ("runStarted", "runWaiting", "runEnded"):
@@ -222,6 +231,21 @@ def parse_obs(line):
     return sessions, clocks, timers
 
 
+def last_put(case, sk):
+    # The session record the driver last stored for sk: the last putSession before the cut (compare_final runs only
+    # without a halt, so every such put ran), else the initial world session.
+    rec = None
+    for x in case["world"]["sessions"]:
+        if tuple(units(obj(x)["id"])) == sk:
+            rec = obj(x)
+    for e in case["script"]:
+        if e["ev"] == "call" and e["op"] not in ("runStarted", "runWaiting", "runEnded"):
+            break
+        if e["ev"] == "putSession" and tuple(units(obj(e["session"])["id"])) == sk:
+            rec = obj(e["session"])
+    return rec
+
+
 def compare_final(case, o, obs):
     sessions, clocks, timers = parse_obs(obs)
     diffs = []
@@ -247,12 +271,12 @@ def compare_final(case, o, obs):
         if mine[4] == 0:
             got = None
         elif mine[4] == 1:
-            init = [obj(x) for x in case["world"]["sessions"] if tuple(units(obj(x)["id"])) == sk][0]
-            got = obj(init["budget"]).get("activeSince")
+            got = obj(last_put(case, sk)["budget"]).get("activeSince")
         else:
             got = iso(mine[5])
-        if want is not None:
-            want = "".join(chr(u) for u in units(want)) if isinstance(want, dict) else want
+        # both sides as text: a lone surrogate arrives as {u16: [...]} from the oracle and from the stored put
+        got = text(got) if got is not None else None
+        want = text(want) if want is not None else None
         if got != want:
             diffs.append("activeSince %r %r" % (got, want))
     tok_of = {t[2]: t[0] for t in timers if t[3]}
@@ -314,8 +338,33 @@ def compare_halt(case, o, obs, h):
     return ["halted session missing"]
 
 
+def unsafe_number(v):
+    """True if the oracle record holds a number outside the safe integral range (encoded {num: bits})."""
+    if isinstance(v, dict):
+        return "num" in v or any(unsafe_number(x) for x in v.values())
+    if isinstance(v, list):
+        return any(unsafe_number(x) for x in v)
+    return False
+
+
+def put_after_call(case, sk):
+    """True if the script stores session sk again after its first call (the oracle's final state then is not the
+    one at a halt during the calls)."""
+    called = False
+    for e in case["script"]:
+        if e["ev"] == "call":
+            called = True
+        elif called and e["ev"] == "putSession" and tuple(units(obj(e["session"])["id"])) == sk:
+            return True
+    return False
+
+
 def classify(case, o, run, cut):
-    mine = [l for l in run["log"] if not l.startswith("@")]
+    if unsafe_number(o):
+        # KD-M6-1: JS rounds arithmetic that leaves the safe range; Pruv keeps exact i64 (requested delay) or
+        # saturates (activeMs). Spec §8.4 makes it excluded-domain, so it is not compared.
+        return "known-difference", "KD-M6-1 unsafe arithmetic"
+    mine = [l for l in run["log"] if not l.startswith(("@", "I2 "))]
     xs = [l for l in mine if l.startswith("X")]
     if xs:
         return "fail", "driver status %s" % xs[0]
@@ -327,7 +376,7 @@ def classify(case, o, run, cut):
         h = ev.index("H")
         if want[:h + 1] != ev[:h + 1]:
             return "fail", "events %r != %r" % (ev, want[:h + 2])
-        if not cut:
+        if not cut and not put_after_call(case, tuple(int(x) for x in mine[h].split(" ")[2].split(",") if x)):
             d = compare_halt(case, o, run["obs"], mine[h])
             HALT_CHECKED[0] += 1
             if d:
@@ -356,8 +405,12 @@ def cmd_q(args):
         prog += lines
         cuts[c["id"]] = cut
     r = subprocess.run([exe, "q"], input="\n".join(prog) + "\n", capture_output=True, text=True)
-    if r.returncode != 0:
+    if r.returncode not in (0, 3):
         sys.exit("driver failed:\n" + r.stderr[-3000:])
+    i2_summary = re.search(r"^i2_checks=(\d+) i2_bad=(\d+)$", r.stderr, re.MULTILINE)
+    if i2_summary is None:
+        sys.exit("driver missing I2 summary:\n" + r.stderr[-3000:])
+    i2_checks, i2_bad = map(int, i2_summary.groups())
     runs = parse_driver(r.stdout)
     count = {"exact": 0, "known-difference": 0, "not-implemented": 0, "fail": 0}
     why = {}
@@ -371,10 +424,17 @@ def cmd_q(args):
             why[k] = why.get(k, 0) + 1
         if cls == "fail":
             fails.append((c["id"], note))
-    print(json.dumps({"cases": len(cases), "count": count, "reasons": why, "compared_events": COMPARED, "halt_state_checked": HALT_CHECKED[0]}, ensure_ascii=False))
+    print(json.dumps({"cases": len(cases), "count": count, "reasons": why, "compared_events": COMPARED,
+                      "halt_state_checked": HALT_CHECKED[0], "i2_checks": i2_checks, "i2_bad": i2_bad},
+                     ensure_ascii=False))
+    if r.returncode == 3:
+        for case_id, run in runs.items():
+            for line in run["log"]:
+                if line.startswith("I2 "):
+                    print("I2 FAIL", case_id, line[3:])
     for i, n in fails[:15]:
         print("FAIL", i, n[:600])
-    return 1 if fails else 0
+    return 1 if fails or r.returncode == 3 else 0
 
 
 def cmd_derive(args):
@@ -437,6 +497,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["q", "perf", "derive"])
     ap.add_argument("--pruvc", default=PRUVC_DEFAULT)
+    ap.add_argument("--budlib")
     ap.add_argument("--gen")
     ap.add_argument("--cases", default=os.path.join(WORK, "cases.jsonl"))
     ap.add_argument("--oracle", default=os.path.join(WORK, "oracle.jsonl"))
