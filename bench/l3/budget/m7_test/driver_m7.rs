@@ -535,6 +535,12 @@ fn run_perf(args: &[String]) {
         println!("rchk closereopen {} {}", size, verify(&mut w, &ops));
     }
     typed("closereopen", 0, &[1], &ops, 2, None);
+    // reopen on an open budget: CURRENT lookup + state test, answers [1], changes nothing (reopen's lookup alone)
+    let mut w = setup(0);
+    let ops = vec![body(5, -1, -1, &bid(last))];
+    println!("reopenmiss {} {:.1}", size, time(&mut w, &ops, 1));
+    println!("rchk reopenmiss {} {}", size, verify(&mut setup(0), &ops));
+    typed("reopenmiss", 0, &[], &ops, 1, None);
     // replace on a halted budget (CLOSE + OPEN + follows + carryHeld), then put the halted record back
     let mut w = setup(1);
     let rp = body(4, 0, 2, "");
@@ -607,7 +613,7 @@ fn rchk_fold(w: &World, r: i64, sum: u64) -> u64 {
 
 // ---- boundary <S> <reps> [item] [variant] (P01 boundary experiment, see run_m7.py cmd_boundary) ----
 //
-// Variants per item (current, ishalted, attach, closereopen, replace):
+// Variants per item (current, ishalted, attach, closereopen, reopenmiss, replace):
 //   A    World::call (host op build/cache + sol::t_call + effect handling)
 //   B    sol::t_call on the prepared op Vec (the words A builds), no wrapper
 //   Bnv  sol::t_call_nv: B without bud_store::valid(st)
@@ -861,6 +867,7 @@ fn run_boundary(args: &[String]) {
             quiet: vec![1],
             put: None,
         },
+        Item { name: "reopenmiss", bodies: vec![body(5, -1, -1, &bid(last))], state: 0, quiet: vec![], put: None },
         Item { name: "replace", bodies: vec![body(4, 0, 2, "")], state: 1, quiet: vec![], put: Some(put) },
         Item { name: "noop", bodies: vec![body(0, -1, -1, &bid(last))], state: 0, quiet: vec![], put: None },
     ];

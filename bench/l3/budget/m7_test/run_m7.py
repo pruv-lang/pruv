@@ -549,7 +549,7 @@ def cmd_same(args):
     return 0 if x == y else 1
 
 
-PERF_ITEMS = ["ishalted", "current", "attach", "closereopen", "replace"]  # items the Pruv driver and hand16 both run
+PERF_ITEMS = ["ishalted", "current", "attach", "closereopen", "reopenmiss", "replace"]  # items the Pruv driver and hand16 both run
 PERF_CALLS = {"closereopen": 2}  # calls per rep (ns and instructions are reported per call)
 
 
