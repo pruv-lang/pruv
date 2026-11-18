@@ -403,8 +403,8 @@ fn world_n(n: usize, t: &mut Text) -> World {
 //   failure  : noteFailure(ref_i) round-robin over N sessions
 //   tooldup  : noteTool(ref_0, t1, a_j) on a turn that already holds N activities (dedup hit, no CURRENT)
 //   toolgrow : noteTool(ref_0, t2, a_j) for N new activities, then forgetTurn(t2); ns per noteTool (forget included)
-// An optional third argument names one item: only that item's timed loop runs (the setup of every item still runs),
-// so `/usr/bin/time -l` instruction counts at two rep counts give the instructions per call of that item alone.
+// An optional third argument names one item: only that item's timed loop runs (the setup of every item timed before it
+// still runs; charge and failure stop before the tool setup, as every hand lane does), so `/usr/bin/time -l` instruction counts at two rep counts give the instructions per call of that item alone.
 fn run_perf(args: &[String]) {
     let n: usize = args[0].parse().unwrap();
     let reps: usize = args[1].parse().unwrap();
@@ -445,6 +445,11 @@ fn run_perf(args: &[String]) {
         let ns = t.elapsed().as_nanos() as f64 / reps as f64;
         println!("failure {} {:.1}", n, ns);
         println!("chk failure {} {}", n, w.checksum());
+    }
+    // charge and failure are timed before any tool setup runs, so a run that names one of them stops here; the tool
+    // setup below would only add its own state to that item's peak RSS (in every lane alike).
+    if matches!(only, Some("charge") | Some("failure")) {
+        return;
     }
     let tools = |turn: &str, t: &mut Text| -> Ops {
         let mut o = Ops::new(n, 32);

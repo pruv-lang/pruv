@@ -765,6 +765,11 @@ fn run_perf(args: &[String]) {
         println!("failure {} {:.1}", n, ns);
         println!("chk failure {} {}", n, w.checksum());
     }
+    // charge and failure are timed before any tool setup runs, so a run that names one of them stops here; the tool
+    // setup below would only add its own state to that item's peak RSS (in every lane alike).
+    if matches!(only, Some("charge") | Some("failure")) {
+        return;
+    }
     let turn1 = u16s("turn-1");
     let turn2 = u16s("turn-2");
     let acts: Vec<Box<[u16]>> = (0..n).map(|j| u16s(&format!("activity-{:05}", j))).collect();
@@ -880,6 +885,11 @@ fn run_perfw(args: &[String]) {
         let ns = t.elapsed().as_nanos() as f64 / reps as f64;
         println!("failure {} {:.1}", n, ns);
         println!("chk failure {} {}", n, w.checksum());
+    }
+    // charge and failure are timed before any tool setup runs, so a run that names one of them stops here; the tool
+    // setup below would only add its own state to that item's peak RSS (in every lane alike).
+    if matches!(only, Some("charge") | Some("failure")) {
+        return;
     }
     let tool = |turn: &str, j: usize| -> Vec<i64> {
         let mut op = vec![3];
