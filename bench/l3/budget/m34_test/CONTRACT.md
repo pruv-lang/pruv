@@ -5,8 +5,11 @@ Fixed interface between `bud_api.pruv` / `bud_test_abi.pruv` (M3), `bud_store.pr
 resident state: `docs/RESIDENT_STATE_SPEC.md`.
 
 Boundary rule: every decision is in Pruv. The Rust host only allocates buffers, calls entries, reads/writes files and
-measures time. On `Grow` it allocates a zeroed buffer of `max(N, 2*len)` words, calls the grow entry, drops the old
-buffer and retries the same call. It never reads or writes words of the state buffer.
+measures time. On `Grow` it allocates a zeroed buffer of exactly `N` words (Pruv sizes it: `bud_store::need` proves
+`N >= 2*len` below 2^40 words, so growth is geometric without a host choice), calls the grow entry, drops the old
+buffer and retries the same call. If the allocation fails it keeps the old buffer, which is still valid and unchanged
+(an op that returns `Grow` has written nothing), and reports the failure; there is no poison state (L3 P13b). It never
+reads or writes words of the state buffer.
 
 ## Build
 

@@ -26,6 +26,7 @@ import json
 import os
 import shutil
 import statistics
+import re
 import subprocess
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -44,6 +45,15 @@ def sh(cmd, env=None, cwd=BUD):
     if c.returncode != 0:
         sys.exit("failed (%d): %s\n%s%s" % (c.returncode, " ".join(cmd), c.stdout[-2000:], c.stderr[-2000:]))
     return c.stdout
+
+
+def sh_mem(cmd):
+    """sh() under /usr/bin/time -l: (stdout, peak RSS bytes of the process) (L3 P13b memory gate; macOS reports bytes)."""
+    c = subprocess.run(["/usr/bin/time", "-l"] + cmd, cwd=BUD, capture_output=True, text=True)
+    if c.returncode != 0:
+        sys.exit("failed (%d): %s\n%s%s" % (c.returncode, " ".join(cmd), c.stdout[-2000:], c.stderr[-2000:]))
+    m = re.search(r"(\d+)\s+maximum resident set size", c.stderr)
+    return c.stdout, int(m.group(1)) if m else -1
 
 
 def kv(line):
@@ -86,6 +96,7 @@ def rotate(xs, r):
 def m4(args, exe4):
     reps = 200000
     vals = {}  # (axis, n, side) -> [ns]
+    mem = {}   # (axis, n, side) -> [(peak RSS bytes, allocation count)], Pruv and hand sides
     for r in range(args.rounds):
         for axis in ("sessions", "tools", "clocks"):
             for n in SIZES:
@@ -95,7 +106,13 @@ def m4(args, exe4):
                     ("ts", ["node", os.path.join(BUD, "m34_test", "perf_ts.mjs"), axis, str(n), str(reps)], "ts_ns_per_op"),
                 ]
                 for side, cmd, key in rotate(sides, r):
-                    v = float(kv(sh(cmd).strip().splitlines()[-1])[key])
+                    if side == "ts":
+                        v = float(kv(sh(cmd).strip().splitlines()[-1])[key])
+                    else:
+                        out, rss = sh_mem(cmd)
+                        d = kv(out.strip().splitlines()[-1])
+                        v = float(d[key])
+                        mem.setdefault((axis, n, side), []).append((rss, int(d.get("allocs", -1))))
                     vals.setdefault((axis, n, side), []).append(v)
     print("### M4 resident-state calls (ns per op, median of %d alternating runs, 200000 reps each)" % args.rounds)
     print("| axis | n | Pruv | hand Rust | TS | Pruv/hand | Pruv/TS |")
@@ -104,6 +121,21 @@ def m4(args, exe4):
         for n in SIZES:
             p, h, t = (statistics.median(vals[(axis, n, s)]) for s in ("pruv", "hand", "ts"))
             print("| %s | %d | %.1f | %.1f | %.1f | %.2f | %.2f |" % (axis, n, p, h, t, p / h, p / t))
+    print()
+    # Memory (L3 P13b): peak RSS of the whole process (/usr/bin/time -l) and allocation count (counting global allocator
+    # in driver_m4 and m4_hand, whole process). Same runs as the table above; [min-max] over rounds.
+    print("### M4 memory (whole process, median of %d runs, [min-max]; same runs as above)" % args.rounds)
+    print("| axis | n | Pruv peak RSS KiB | hand peak RSS KiB | RSS Pruv/hand | Pruv allocs | hand allocs | allocs Pruv/hand |")
+    print("|---|---:|---:|---:|---:|---:|---:|---:|")
+    for axis in ("sessions", "tools", "clocks"):
+        for n in SIZES:
+            pr, hr = ([m[0] for m in mem[(axis, n, s)]] for s in ("pruv", "hand"))
+            pa, ha = ([m[1] for m in mem[(axis, n, s)]] for s in ("pruv", "hand"))
+            f = lambda v: "%d [%d-%d]" % (statistics.median(v) // 1024, min(v) // 1024, max(v) // 1024)
+            g = lambda v: "%d [%d-%d]" % (statistics.median(v), min(v), max(v))
+            print("| %s | %d | %s | %s | %.2f | %s | %s | %.2f |" % (axis, n, f(pr), f(hr),
+                  statistics.median(pr) / statistics.median(hr), g(pa), g(ha),
+                  statistics.median(pa) / max(statistics.median(ha), 1)))
     print()
 
 

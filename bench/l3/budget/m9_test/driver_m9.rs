@@ -12,7 +12,7 @@
 // the budget own no timer without cancelling it (FIRE dropped its handle). An elapsed timer leaves the schedule and
 // calls FIRE (op code 4) with its captured ref and now = due, in (due, registration) order. deliver runs an active
 // token the same way; an inactive one (cancelled or already run) runs its captured callback only with captured = 1,
-// otherwise the script is invalid (X deliver). Grow: status -N -> buffer of max(N, 2*len), t_grow, retry.
+// otherwise the script is invalid (X deliver). Grow: status -N -> buffer of exactly N (Pruv sizes it, N >= 2*len), t_grow, retry.
 use std::collections::HashMap;
 use std::hint::black_box;
 use std::io::{self, BufRead, Write};
@@ -219,7 +219,7 @@ impl World {
     }
 
     fn grow(&mut self, n: usize) {
-        let want = std::cmp::max(n, 2 * self.st.len());
+        let want = n; // N from Pruv (bud_store::need, N >= 2*len): the host makes no sizing choice (L3 P13b)
         let mut fresh = vec![0i64; want];
         if sol::t_grow(&self.st, &mut fresh) != 0 {
             eprintln!("t_grow failed");

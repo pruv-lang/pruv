@@ -338,8 +338,13 @@ fn fits_fresh(n: i64, live: i64, used: i64, lw: i64, ents: i64, wds: i64) -> boo
 }
 
 // 0 if `entries` more entries and `words` more arena words fit now; otherwise the smallest N (doubling from
-// 2*len(st), at least 464) whose fresh layout fits the counts.
+// 2*len(st), at least 464) whose fresh layout fits the counts, capped at 2^40 words (the array length bound, SPEC
+// arrays). The growth size is decided here: the host allocates exactly N words (L3 P13b); the ensures give the
+// geometric step (N >= 2*len below 2^39 words) that makes growth amortized linear. At the cap a layout that still
+// does not fit makes grow_copy return 2 (or the host refuse N <= len), so the op fails with the old state kept.
 pub fn need(st: [i64], entries: i64, words: i64) -> i64
+  ensures result == 0 || (464 <= result && result <= 1099511627776)
+  ensures result == 0 || len(st) > 549755813888 || result >= 2 * len(st)
 {
   let ents: i64 = c32(entries);
   let wds: i64 = c40(words);
@@ -363,12 +368,26 @@ pub fn need(st: [i64], entries: i64, words: i64) -> i64
   if n < 232 { n = 232; }
   n = n * 2;
   while n < 1099511627776 && !fits_fresh(n, live, used, lw, ents, wds)
-    invariant 232 <= n && n <= 2199023255552
+    invariant 464 <= n && n <= 2199023255552
+    invariant len(st) > 1099511627776 || n >= 2 * len(st)
     decreases 2199023255552 - n
   {
     n = n * 2;
   }
+  if n > 1099511627776 { n = 1099511627776; }
   return n;
+}
+
+// Words a grow copy wrote into a fresh store (copy accounting, L3 P13b): 20 per entry up to the entry top plus the
+// arena words in use. Read from the header only (0 for a buffer shorter than the header); O(1).
+pub fn copy_words(st: [i64]) -> i64
+  ensures 0 <= result
+{
+  if len(st) < 15 { return 0; }
+  let a: i64 = c40(st[10]) - c40(st[9]);
+  let mut w: i64 = 20 * c32(st[7]);
+  if a > 0 { w = w + a; }
+  return w;
 }
 
 // ---- arena ----

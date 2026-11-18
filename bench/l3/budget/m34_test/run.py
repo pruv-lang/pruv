@@ -457,8 +457,23 @@ def cmd_admit(args):
     c = run([exe])
     if c.returncode != 0:
         raise ToolError("driver_admit exit %d: %s" % (c.returncode, tail(c)))
-    rows = [[int(x) for x in l.split()] for l in c.stdout.split("\n") if l.strip()]
+    lines = [l for l in c.stdout.split("\n") if l.strip()]
+    rows = [[int(x) for x in l.split()] for l in lines if not l.startswith("grow ")]
+    grows = [[int(x) for x in l.split()[1:]] for l in lines if l.startswith("grow ")]
     bad = []
+    # Grow after admission (L3 P13b): a 0 result keeps every live entry; a tree deeper than grow_copy copies fails
+    # with 2 (old state kept) instead of dropping entries. Case 0 (entries 9, 10 under entry 3 under root 0) must fail;
+    # case 19 (entry 3 and its children removed, flat) must succeed.
+    gby = {}
+    for case, g, lp, ln in grows:
+        gby[case] = g
+        if g == 0 and lp != ln:
+            bad.append("grow case %d: result 0 but live %d -> %d" % (case, lp, ln))
+        if g not in (0, 2):
+            bad.append("grow case %d: result %d" % (case, g))
+        print("admit grow case %2d -> %d  (live %d -> %d)" % (case, g, lp, ln))
+    if gby.get(0) != 2 or gby.get(19) != 0:
+        bad.append("grow: case 0 -> %s (expected 2), case 19 -> %s (expected 0)" % (gby.get(0), gby.get(19)))
     if [(r[0], r[1]) for r in rows] != ADMIT_ROWS:
         bad.append("rows: got %s, expected %s" % ([(r[0], r[1]) for r in rows], ADMIT_ROWS))
     for case, n, r, ce, cf, cs in rows:

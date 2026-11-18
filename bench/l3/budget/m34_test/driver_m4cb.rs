@@ -130,7 +130,7 @@ impl World {
     // Grows the state to hold `n` words (at least twice the current length), as the single-call path does.
     fn grow_to(&mut self, n: usize) -> bool {
         let t = Instant::now();
-        let want = std::cmp::max(n, 2 * self.len);
+        let want = n; // N from Pruv (bud_store::need, N >= 2*len): the host makes no sizing choice (L3 P13b)
         let mut g = 0i64;
         chk(unsafe { (self.f.grow)(self.h, want as i64, &mut g) }, "pruv_hr_m4_grow");
         if g != 0 {

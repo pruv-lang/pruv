@@ -8,7 +8,7 @@ M5 is an apparatus check. It does not count as semantic implementation (§14).
 | File | Contents |
 |---|---|
 | `leaf.rs` | Order- and number-text-preserving JSON reader/writer `J`, JS value `V`, JV decode/encode (u16/undef/num/arr/obj/sess markers, `{sref}`/`{bref}` labels), `Heap` of identity objects with budget-only write-through, `set_budget` and `host_view` |
-| `host.rs` | `World`: clock, UUID stream, fake timers (`(due, seq)` order, delay clamp to 1..2147483647), session store (put replaces in place or appends, remove), dep reply queues and scripted throws, trace, observation; program consumer; `run_q`; `Core` trait and `ResidentState<C>` lane (Grow to `max(N, 2·len)`, at most 3 retries, out-too-small doubling) |
+| `host.rs` | `World`: clock, UUID stream, fake timers (`(due, seq)` order, delay clamp to 1..2147483647), session store (put replaces in place or appends, remove), dep reply queues and scripted throws, trace, observation; program consumer; `run_q`; `Core` trait and `ResidentState<C>` lane (Grow to exactly N, which Pruv proves is at least `2·len`; fallible allocation keeps the old state, no poison; at most 3 retries, out-too-small doubling; L3 P13b) |
 | `harness.rs` | `Core` over the generated M4 entries (`m4_init`/`m4_grow`/`m4_op`), `harness q --prog <programs.jsonl>` (scenarios on stdin, observations on stdout), `harness perf <n> <reps>` |
 | `host/` | crate `budget_host` (`include!` of `host.rs`, `leaf.rs`), `--offline --locked` |
 | `dev_build.sh` | pruvc `m34_test/root_m4.pruv` -> `work/m5build/sol.rs`, cargo build of the host crate, rustc of the harness -> `work/m5build/harness`. `PRUVC` overrides the compiler (default: this checkout's `pruvc-rs/target/release/pruvc`) |
@@ -89,7 +89,7 @@ Per-op ns, min of 5 reps after warm-up. Apple silicon (this Mac). Host: `harness
 | lane: M4 session_put via ResidentState | 90 | 86 | 85 | n/a | n/a | n/a | 0.95 |
 
 Lane counters: grows 5 / 7 / 8 and final state length 8192 / 32768 / 65536 words at n = 100 / 500 / 1000. That is
-logarithmic in n, as `max(N, 2·len)` implies.
+logarithmic in n, as `N >= 2·len` (bud_store::need, L3 P13b) implies.
 
 - Timers, save and the lane are flat (n=1000 ≤ 1.5× n=100), and the timers are not slower than TS.
 - `store_find` is not flat. Both sides scan the session list linearly, because oracle `findSession` is
@@ -193,7 +193,11 @@ allocation cuts brought the numbers to the following (medians of 5 alternating r
 
 Correctness after the change is still exact=300, unexplained=0, determinism identical.
 
-### 1.1× pass (bar tightened 2026-11-17: at most 1.1× hand Rust, trace-only is no exemption)
+### Hand-ratio pass of 2026-11-17 (historical)
+
+Superseded 2026-11-18: there is no 1.1× line. The floor is hand Rust 1.0×; a cell above 1.0× is a defect unless
+interleaved repeated runs overlap with hand, and is reported with its numbers and cause (L3 spec, Appendix P13b). The
+cells below above 1.00 (store_find n=500/1000, store_find_enc n=1000) are open under that rule.
 
 Medians of 7 alternating rounds, ns per op, n = 100 / 500 / 1000 (Pruv / hand, ratio):
 

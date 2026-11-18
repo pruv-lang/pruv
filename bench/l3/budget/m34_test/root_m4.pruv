@@ -113,6 +113,12 @@ pub fn m4_grow(prev: [i64], inout next: [i64]) -> i64
   return 0;
 }
 
+// Copy accounting for the host (L3 P13b): the words m4_grow copied into st (entries and arena), from the header.
+pub fn m4_copied(st: [i64]) -> i64
+{
+  return crate::bud_store::copy_words(st);
+}
+
 // Admits a buffer the host hands in (built elsewhere, or read back from storage) before its first m4_op: 0 ok, 2
 // rejected. Import admission (bud_admit::admit: I0 and the per-entry I1 words, linear in entries + slots) runs once per
 // handed-in buffer, not per call; on 0, valid(st) holds, so st may go to m4_op like a store m4_init returned 0 for.

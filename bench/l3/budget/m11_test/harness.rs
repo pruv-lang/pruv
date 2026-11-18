@@ -37,7 +37,7 @@ impl World {
     }
     fn grow(&mut self) -> bool {
         let n = self.out[0].max(0) as usize;
-        let mut fresh = vec![0i64; n.max(2 * self.st.len())];
+        let mut fresh = vec![0i64; n]; // N from Pruv (bud_store::need, N >= 2*len), L3 P13b
         if sol::m11_grow(&self.st, &mut fresh) != 0 {
             return false;
         }
