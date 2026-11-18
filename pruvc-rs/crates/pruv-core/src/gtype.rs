@@ -98,11 +98,6 @@ impl GType {
         GType::new("array_bool", Vec::new())
     }
 
-    /// Whether this is a bound type parameter.
-    pub fn is_param(&self) -> bool {
-        self.owner.is_some()
-    }
-
     /// G6 A0: Vec / HashMap / String (internal names vec / hashmap / string), never a bound parameter.
     pub fn is_collection(&self) -> bool {
         self.owner.is_none() && collection_arity(&self.name).is_some()
@@ -356,11 +351,6 @@ pub fn fn_owner(name: &str) -> String {
 /// Identity of a bound parameter; None when `ty` is not a parameter.
 pub fn param_id(ty: &GType) -> Option<ParamId> {
     ty.owner.as_ref().map(|o| (o.clone(), ty.index))
-}
-
-/// Structural equality; parameters are equal iff owner and index are equal.
-pub fn type_eq(a: &GType, b: &GType) -> bool {
-    a == b
 }
 
 // ---------- printing ----------

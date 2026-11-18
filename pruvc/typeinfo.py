@@ -82,18 +82,9 @@ def fn_owner(name: str) -> str:
     return "fn:" + name
 
 
-def is_param(ty: Type) -> bool:
-    return ty.owner is not None
-
-
 def param_id(ty: Type):
     """Identity of a bound parameter: (declaration owner, index)."""
     return (ty.owner, ty.index)
-
-
-def type_eq(a: Type, b: Type) -> bool:
-    """Structural equality; parameters are equal iff owner and index are equal."""
-    return a == b
 
 
 def format_type(ty: Type) -> str:
@@ -428,18 +419,6 @@ def first_g3_use(prog):
         _g3_candidates(fn.ensures, cands)
         _g3_candidates(fn.body, cands)
     return min(cands, key=lambda c: (c[0], c[1])) if cands else None
-
-
-def g3_unimplemented_error(prog, stage="codegen"):
-    """PruvError (unsupported_type) for the first G3 construct, or None. Run after type checking, before the
-    verifier, so that --no-verify and every back end reject generics explicitly instead of crashing."""
-    hit = first_g3_use(prog)
-    if hit is None:
-        return None
-    line, col, what = hit
-    return PruvError(stage, line, col, "unsupported_type",
-                     "generics are not supported yet (%s): the verify and codegen layers are not implemented" % what,
-                     "avoid type parameters and type arguments for now")
 
 
 # ---------------------------------------------------------------------------

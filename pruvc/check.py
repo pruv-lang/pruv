@@ -119,7 +119,6 @@ def _cycle_through(start, adj, members):
             if w not in members:
                 continue
             if w == start:
-                path = [start]
                 x = v
                 chain = []
                 while x is not None:

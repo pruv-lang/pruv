@@ -44,7 +44,7 @@ not bound its size).
 from collections import deque
 
 from vast import *
-from typeinfo import (bind_args, decl_owner, encode, first_g3_use, format_type, spec_fn_stem, spec_type_stem,
+from typeinfo import (bind_args, decl_owner, encode, format_type, spec_fn_stem, spec_type_stem,
                       substitute, COLLECTION_ARITY)
 from foreign import CATALOG   # G6: catalog calls keep their name (never specialized)
 from small import declared_bound   # KD-M6-3: the stack-result bound survives specialization
@@ -61,23 +61,6 @@ MAX_FN_SPECS = 4096
 MAX_TYPE_APPS = 4096
 MAX_DEPTH = 128
 MAX_TYPE_NODES = 1 << 16
-
-
-def is_generic_program(prog):
-    """True when the program uses G3 anywhere (a type parameter, a type application, or Option<X>/Result<X>)."""
-    return first_g3_use(prog) is not None
-
-
-def llvm_unsupported_error(prog):
-    """codegen/unsupported_type for a generic program on the LLVM backend (until A4); None for other programs.
-    The message names "the llvm codegen layer" (tests/run_all.py llvm_pending rows check for it)."""
-    hit = first_g3_use(prog)
-    if hit is None:
-        return None
-    line, col, what = hit
-    return PruvError("codegen", line, col, "unsupported_type",
-                     "generics are not supported yet (%s): the llvm codegen layer is not implemented" % what,
-                     "use --backend rust for generic programs for now")
 
 
 # ---------------------------------------------------------------------------
