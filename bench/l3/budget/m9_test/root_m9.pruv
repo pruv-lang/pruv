@@ -183,3 +183,10 @@ pub fn t_i2(st: [i64]) -> i64
   if ce >= 0 { bad = bad + 1; }
   return bad;
 }
+
+// Read the store's live-entry total, including the roots.
+pub fn t_live(st: [i64]) -> i64
+{
+  if !crate::bud_store::valid(st) { return -1; }
+  return crate::bud_store::c32(crate::bud_store::hd(st, 12));
+}

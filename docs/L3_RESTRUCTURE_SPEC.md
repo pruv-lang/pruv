@@ -3770,3 +3770,188 @@ Threshold history (why 4 elements, not the planned 32 bytes):
 
 - §3.1/§6 text that says LLVM rejects `eq_range` is history from before P17a.
 - `SPEC.md` eq_range bullet updated (verifier result, LLVM lowering).
+
+## Appendix P23 (row B/bud_clock.pruv + m9_test: FIRE, DROP, CLOSE and stale timers)
+
+The commit with this appendix; base 82be91b (main, P19a), main a7f7e68 (P16/P17a) merged before the final gates.
+Changed files: `bench/l3/budget/m9_test/{driver_m9.rs,hand_m9.rs,mut_m9.py,root_m9.pruv,run_m9.py,gen_stale.py}`
+and `bench/l3/budget/M9_NOTES.md`. No compiler file, `bud_clock.pruv`, `bud_map.pruv` or `bud_lifecycle.pruv`
+change: the FIRE, DROP and CLOSE paths P22 left in `bud_clock.pruv` already met the row once it was tested. Raw
+logs: `work/p23/` (not committed).
+
+### P23.1 Change
+
+- `root_m9::t_live` returns the store's live-entry total (header word 12), so the harness can count reclaimed
+  entries.
+- `run_m9.py`:
+  - `derive --family q4` builds a clock-only Q4 set (raise/charge calls removed, TS oracle rerun).
+  - `dc` runs 300 random build/DROP/CLOSE programs (R = 0..12) and 13 reclaim programs (20 build/DROP cycles each).
+    At each checkpoint it compares budget, clocks, timers and C/F events with a Python model. It also checks that
+    DROP/CLOSE reclaim exactly R + 1 entries, that capacity does not grow over the cycles, and that a FIRE after
+    DROP or CLOSE does nothing.
+  - `q` fails when a non-empty case set ran no I2 check.
+  - `--out` puts the generated Rust and binaries in a chosen directory. A `--budlib` build without `--out` gets a
+    fresh directory under `work/m9/budlib`.
+  - `perf` adds the rows drop, close (R = 10/50/100), stale and staleu. It rejects `--rounds`/`--reps` below 1,
+    fails on a missing item, and prints `HOLD` and fails for a median above 1.0x hand whose distributions do not
+    overlap.
+- `gen_stale.py`: 300 seeded FIRE scenarios (budget replaced, unlimited, halted, closed, null session, waiting,
+  ended, mixed) with the TS oracle.
+- `mut_m9.py`: six new timer mutants (m5-m10) besides the four I2 mutants. `--jobs N` runs mutants in parallel.
+  Each campaign gets a fresh directory under `work/m9/mut`, and each mutant its own lib copy and build directory
+  inside it, so neither parallel mutants nor concurrent campaigns share a binary (P22.7 H6).
+- `driver_m9.rs`:
+  - a timer captures its FIRE op (code 4, sessionId record, budgetId record) and its bid bytes when it is set;
+  - delivery, including a stale delivery, replays that op with the stored bid. It no longer decodes and re-encodes
+    keys per callback, and the captured ids are the ones from set time, as in B;
+  - the drop/close perf rows time only the DROP or CLOSE call, with a time limit under the host timer cap; the fire
+    row uses a time limit over the cap so no rep count spends the budget (P23.6a).
+- `hand_m9.rs`: the same rows (drop, close, stale, staleu) in hand Rust. `run_started` clones the budget id only when
+  it creates the clock.
+
+### P23.2 Gates (Rust and Python compilers, Rust backend; all rc 0)
+
+`work/p23/gates.sh g2` after the main merge and the audit fixes, logs `work/p23/g2/`, `FAIL=0`. Counts equal the
+pre-audit run g1:
+
+| gate | rs | py |
+|---|---|---|
+| M9 Q3 | exact 26, not-implemented 274, fail 0; i2 1835/0 | same |
+| M9 clock | 136/164/0; i2 2541/0 | same |
+| M9 E/F | 15/5/0; i2 95/0 | same |
+| M9 Q4 | 0/300/0 (non-run call 245, raise/charge 54, time halt 1); i2 905/0 | same |
+| M9 Q4 clock | 293/7/0; i2 1487/0 | same |
+| M9 stale | 300/0/0; F 600; i2 3698/0 | same |
+| M9 dc | 313 ok, 0 fail; build 560, drop 416, deletion 560, close 144, closed delivery 144, reclaim 247 | same |
+| M7 q / life / diff_hand | 113/187/0, 300/0/0, ok | same |
+| M10 q / halt / G | 78/222/0, 300/0/0, 9/1/0 | same |
+| mut_m9 | control CLEAN; 10 mutants KILLED (I2 four, m5 drop_no_clear, m6 fire_clear, m7 fire_late_forget, m8 close_no_settle, m9 drop_no_remove, m10 fire_active_count) | - |
+
+- Raw Q4 has no exact case by design: every Q4 script reaches a non-run call, so only prefixes are compared. FIRE is
+  covered by the stale set (600 F compared), the Q4 clock and clock sets, and dc; G runs through M10 (`m10g`).
+- Timer order: the driver delivers by (due, token). Q4 clock, stale and dc compare the S/C/F order on every case.
+- Deletion bound: dc checks the exact R + 1 reclaimed entries after each DROP and CLOSE. The work is linear in R
+  (P23.3): `bud_map::remove` visits each run once and stops at the clock; `2 * walk_limit + 2` is proof fuel only.
+  The `2(R + 1) + 1` bound is on the subtree walk; each removal's hash probe (`drop_entry -> slot_of`) adds an
+  expected, not worst-case, cost. dc does not count walk steps (P23.6a, item 4).
+
+### P23.3 Time (Rust backend, ns, 15 interleaved rounds base/P23/hand, 20,000 reps, load average 4-8)
+
+`work/p23/perf.py`, log `work/p23/perf_f3.log` (after the confirm-audit FIRE fix; `perf_f2.log` before it gave the
+same ratios within 0.03). Base is main's driver and generated code, which have no drop, close or stale rows.
+drop/close time only the DROP or CLOSE call. Overlap compares the P23 and hand min-max ranges.
+
+| cell | base | P23 | hand | P23/hand median | P23/hand min | overlap |
+|---|---:|---:|---:|---:|---:|---|
+| drop R = 10 | - | 137.0 | 180.0 | 0.76 | 0.78 | no (Pruv faster) |
+| drop R = 50 | - | 259.4 | 500.7 | 0.52 | 0.52 | no (Pruv faster) |
+| drop R = 100 | - | 382.3 | 929.5 | 0.41 | 0.41 | no (Pruv faster) |
+| close R = 10 | - | 139.0 | 226.2 | 0.61 | 0.62 | no (Pruv faster) |
+| close R = 50 | - | 259.8 | 555.6 | 0.47 | 0.47 | no (Pruv faster) |
+| close R = 100 | - | 386.9 | 976.6 | 0.40 | 0.39 | no (Pruv faster) |
+| fire | 160.9 | 129.8 | 204.4 | 0.64 | 0.63 | no (Pruv faster) |
+| cycle | 118.5 | 117.0 | 159.9 | 0.73 | 0.74 | no (Pruv faster) |
+| refresh R = 10 | 112.5 | 111.5 | 140.5 | 0.79 | 0.79 | no (Pruv faster) |
+| refresh R = 50 | 114.1 | 112.2 | 140.1 | 0.80 | 0.80 | no (Pruv faster) |
+| refresh R = 100 | 115.0 | 115.0 | 142.0 | 0.81 | 0.81 | no (Pruv faster) |
+| stale | - | 71.4 | 63.0 | 1.13 | 1.11 | no |
+| staleu | - | 74.0 | 67.5 | 1.10 | 1.10 | no |
+
+- Per-flow cost: DROP and CLOSE are linear in R, about 2.8 ns per run (hand Rust about 8.4). This is the subtree
+  walk; `drop_entry -> slot_of` probes the hash table linearly, so the expected cost per removed entry also
+  depends on probe-chain length (load factor), not only on R. fire is flat. Stale
+  FIRE does no settle and no re-arm.
+- The fire row (base, P23 and hand) arms with a time limit above the host cap, so the delay is 1 ms and the budget
+  (10^6 minutes) is never spent by any `--reps`. With the 60-minute limit of the drop/close rows, FIRE spent 1 ms
+  per rep and both sides panicked at 3,600,001 reps (confirm audit). Rerun at 3,600,001 reps: both exit 0.
+- Stale and staleu are the rows above 1.0 without overlap. `run_m9.py perf` reports them as `HOLD`; P23.4 explains
+  them line by line.
+- The pre-audit run (`perf_f1.log`) timed the R-run build with the DROP and let advance(1) deliver the timer before
+  CLOSE (P23.6a). Before the driver fix in P23.1, stale was 1.47-1.56x: the host decoded the captured key per
+  callback and re-encoded the bid.
+
+### P23.4 Hand vs generated
+
+DROP and CLOSE are faster than hand Rust. Hand Rust frees R `String` run keys from per-clock maps one at a time,
+while Pruv's `bud_map::remove` frees the entries inside one flat store. fire and cycle keep the P22 gap.
+
+Stale FIRE, line by line (P23 71.4 vs hand 63.0 ns):
+- Boundary. Hand Rust has none: its arguments are typed `&str`. `t_call` checks `valid(st)` (header and dynamic
+  part), `rec_end` + `slice_ok` for 3 records, `fx_ok` and `len(bv)`. About 4 ns.
+- CURRENT. Hand Rust does `sessions.get` and a `budget_id` compare. `load_bv` does the same find and unit compare,
+  plus field-address checks.
+- Effects. Hand Rust has no effect step. The host reads the fx frame (Grow retry loop, fx scan, scratch key
+  take/restore, halt log). About 5 ns.
+- Timer map. Both sides do the same `by_bid.remove` (SipHash), about 24 ns.
+
+Pruv cannot emit the hand code without a typed entry: the boundary check is what makes the flat `[i64]` op safe to
+index. Queued (P23.7).
+
+### P23.5 RSS and allocations
+
+- Peak RSS KiB (base / P23 / hand): R = 10 1888 / 1952 / 1728 (1.13x), R = 50 1968 / 2064 / 1744 (1.18x), R = 100
+  2048 / 2192 / 1760 (1.25x), `perf_f3.log`.
+  - The ratio to hand is P22's (1.16-1.26x, queued P13d/P13e).
+  - The 64-128 KiB over base is the larger perf binary and the R live entries the new drop/close rows build.
+- Allocations per repetition (counting allocator, two rep counts, build included; `work/p23/allocs_f2.log`):
+  - refresh, cycle, fire: 3 / 3 / 3, equal to base;
+  - drop 3 vs hand 18 / 60 / 111;
+  - close 3 vs hand 20 / 62 / 113;
+  - stale and staleu 3 vs hand 11.
+
+### P23.6 Proof time (real s)
+
+| root | rs | py |
+|---|---|---|
+| m9 (base -> P23, median of 3, before the merge) | 7.68 -> 7.36 | 13.27 -> 12.93 |
+| m9 after the main merge (median of 3) | 6.85 | 12.12 |
+| m7 | 7.96 | 15.51 |
+| m10 | 10.02 | 16.71 |
+
+`work/p23/proof_time.log`, `work/p23/proof_time2.log`. Both compilers emit identical Rust after the merge. The
+libraries are unchanged, so m7 and m10 have no base delta; they verify again in g2 (`run_m7`/`run_m10`). Run 1
+before the merge had load spikes (m7 py 73.8 s, m10 rs 38.1 s).
+
+### P23.6a Audit
+
+Package audit `e0269b0b` (Codex gpt-6.2-astra, ultra): hold, 7 must-fix, 1 advisory.
+
+| # | must-fix | outcome |
+|---|---|---|
+| 1 | CLOSE perf: time limit 10^6 min exceeded the host cap, the 1 ms delay let FIRE settle before CLOSE | fixed: 60 min (3,600,000 ms, in cap); both sides assert the timer is alive before CLOSE, hand asserts 1 ms settled |
+| 2 | DROP/CLOSE perf timed the R-run build; hand cloned the budget id per `run_started` | fixed: build outside the timer; hand clones only on create |
+| 3 | `perf` exited 0 above 1.0x, accepted `--rounds 0` | fixed: rounds/reps >= 1, missing cell fails, `HOLD` (median > 1.0 without overlap) exits 1 |
+| 4 | dc `deletion` checks the reclaimed count, not the work | answered: count + capacity checks stay; the walk bound is the proved loop in `bud_map::remove` (stops at the clock, fuel only); no step counter added (needs a `bud_map` test hook) |
+| 5 | host timer ops are linear in the number of timers | answered: driver-only host scheduler, one timer per budget in M9; queued (P23.7) |
+| 6 | Q4/G/I2 could pass vacuously | fixed: `q` fails on cases with 0 I2 checks; clock-only Q4 set (293 exact) and stale set (600 F) carry FIRE; raw Q4 stays prefix-only by design |
+| 7 | H6 isolation only inside one `--jobs` run | fixed: per-campaign directory, per-mutant lib/build dirs; `--budlib` without `--out` gets a fresh dir |
+
+Confirm audit `3cf22123` (same model): hold, 2 must-fix.
+- A. FIRE perf panicked at `--reps 3600001` on both sides (60-minute budget spent 1 ms per FIRE, then an empty timer
+  vec). Fixed after the confirm: the fire row uses a 10^6-minute budget on both sides (P23.3); rerun at 3,600,001
+  reps, both binaries exit 0. No audit left in the budget for a third pass.
+- B. Perf numbers in the docs predated the fixes. The audit read the docs before the perf_f2 update; P23.3 now has
+  perf_f3, measured after both fixes.
+- Advisories (not done): compare the timer token before and after `advance(1)` for CLOSE; hand `run_started` still
+  does `contains_key` + `get_mut` (two lookups, cycle row); the overlap column does not catch a cell missing in some
+  rounds only; the hash-probe caveat (added to P23.2/P23.3); the host scheduler is linear and cannot judge
+  multi-timer hosts; campaign directories accumulate under `work/m9/mut`. Package-audit advisory: a stale case
+  where a later-set timer is due first, and a check that fx 14 empties the owning token.
+
+### P23.7 Queued rows
+
+- Typed captured-ref FIRE entry (or a lighter boundary check) to bring stale/staleu under 1.0x (P23.4).
+- RSS 1.13-1.25x hand: P13d/P13e.
+- Host scheduler: token-indexed clear/deliver and a multi-timer perf row (audit item 5).
+- `bud_lifecycle.pruv` settle_at/drop_at fx-room requires (not touched in P23).
+- Deletion walk-step counter in a `bud_map` test build (audit item 4).
+- Mutant campaign directory cleanup; overlap column per-round presence; the stale ordering/forget negative controls.
+
+### P23.8 Delegation
+
+| id | mode | engine / model | use |
+|---|---|---|---|
+| c977a5ea | research | Codex gpt-6.2-astra | P22 state, B FIRE/DROP/CLOSE semantics, test plan |
+| e8a7ec4d | write | Codex gpt-6.2-sol | gen_stale, dc, mutants, perf rows (one candidate, taken in by hand and fixed) |
+| e0269b0b | audit | Codex gpt-6.2-astra ultra | package audit |
+| 3cf22123 | confirm | Codex gpt-6.2-astra ultra | confirm audit |

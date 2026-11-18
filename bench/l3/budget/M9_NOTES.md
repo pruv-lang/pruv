@@ -240,6 +240,83 @@ All of these are either M4 layout or the same per-unit codegen cause.
 - FIRE checks are constant: field 16 (forget), `bv`, and `count` (O(1), see M9-3), plus SETTLE/ARM. The halt work (`D`) is M10.
 - No call copies the world or replays history. The cycle and fire items stay flat at about 210 and 270 ns over 200k calls.
 
+## P23: FIRE, DROP, CLOSE and stale timers
+
+The clock library is unchanged in P23. The package adds tests and perf rows for the timer paths.
+
+New gate sets (`run_m9.py`, both compilers give the same counts):
+
+| set | source | exact | not-implemented | fail | note |
+|---|---|---:|---:|---:|---|
+| Q4 (300) | `q_gen.py --families Q4` | 0 | 300 (non-run call 245, raise/charge 54, time halt 1) | 0 | prefixes compared, i2 905/0 |
+| Q4 clock-only (300) | `derive --family q4` | 293 | 7 (time halt) | 0 | i2 1487/0 |
+| E/F (20) | `fixtures` E and F groups | 15 | 5 | 0 | i2 95/0 |
+| stale FIRE (300) | `gen_stale.py` (replaced, unlimited, halted, closed, null, waiting, ended, mixed) | 300 | 0 | 0 | F 600, i2 3698/0 |
+| dc (313) | `run_m9.py dc` | 313 ok | - | 0 | 300 random + 13 reclaim cases (R = 0..12, 20 build/DROP cycles each) |
+
+The dc gate builds R runs and then DROPs or CLOSEs. At each checkpoint it compares the budget record, the clocks,
+the active timers and the clear/fire events with a Python model. It also checks the store:
+- after DROP or CLOSE, the live-entry count (`root_m9::t_live`) falls by exactly R + 1 (the clock and its runs);
+- over 20 build/DROP cycles the store capacity does not grow, so freed entries are reused;
+- a FIRE delivered after DROP or CLOSE finds no clock and returns without settling or re-arming.
+
+Timer order: the host scheduler delivers timers by due time, then by token. Q4 clock, stale and dc compare the
+S/C/F event order with the TS oracle (or the model) on every case.
+
+Mutants (`mut_m9.py --jobs N`, each run in its own build directory): control clean; `waiting_no_dec`,
+`started_no_inc`, `ended_no_dec`, `ended_always_dec` (I2), `m5_drop_no_clear`, `m6_fire_clear`,
+`m7_fire_late_forget`, `m8_close_no_settle`, `m9_drop_no_remove`, `m10_fire_active_count` are all killed.
+
+Per-flow cost (§9), confirmed by the perf rows below:
+- FIRE: `O(key lengths)` to find the clock, then constant clock checks (field 16, CURRENT, state, unlimited), then
+  SETTLE and ARM. The fire row is flat at about 130 ns.
+- Stale FIRE (another budget id, an unlimited budget, a closed or missing clock): `O(key lengths)`, with no settle
+  and no re-arm. The stale rows are about 72 ns.
+- DROP and CLOSE: `O(key lengths + R)`. `bud_map::remove` walks the clock's subtree: each run is visited once to
+  descend or free it, and the walk stops when it returns to the clock (`2 * walk_limit + 2` is only the proof's fuel,
+  not the work). The dc gate checks the exact R + 1 reclaimed entries. Measured on the DROP or CLOSE call alone:
+  about 2.8 ns per run (drop 137 / 259 / 382 ns at R = 10 / 50 / 100; hand Rust about 8.4 ns per run). The bound
+  is on the walk: each removal also probes the hash table (`drop_entry -> slot_of`, linear probing), whose cost is
+  expected, not worst case, and grows with the probe chains (load factor).
+
+Perf (`work/p23/perf.py`, `perf_f3.log`, 15 interleaved rounds, 20,000 repetitions, load average 4-8, ns). Only the DROP or CLOSE
+call is timed; the R runStarted calls, the 1 ms advance before CLOSE and the budget reset are outside. The perf
+budget has timeMinutes 60, so the armed timer (3,600,000 ms) stays under the host's 2^31-1 ms cap: the advance does
+not fire it, and CLOSE settles the 1 ms itself (both sides assert this). The fire row uses timeMinutes 10^6 instead:
+the delay is capped to 1 ms and each FIRE spends 1 ms, so a 60-minute budget would run out at 3,600,000 reps (the
+confirm audit's panic); with 10^6 minutes no rep count reaches it (rerun at 3,600,001 reps: both sides exit 0).
+
+| item | R | Pruv median | hand median | Pruv/hand median | Pruv/hand min | overlap |
+|---|---:|---:|---:|---:|---:|---|
+| drop | 10 / 50 / 100 | 137 / 259 / 382 | 180 / 501 / 930 | 0.76 / 0.52 / 0.41 | 0.78 / 0.52 / 0.41 | Pruv faster |
+| close | 10 / 50 / 100 | 139 / 260 / 387 | 226 / 556 / 977 | 0.61 / 0.47 / 0.40 | 0.62 / 0.47 / 0.39 | Pruv faster |
+| fire | 1 | 130 | 204 | 0.64 | 0.63 | Pruv faster |
+| cycle | 1 | 117 | 160 | 0.73 | 0.74 | Pruv faster |
+| refresh | 10 / 50 / 100 | 112 / 112 / 115 | 141 / 140 / 142 | 0.79 / 0.80 / 0.81 | 0.79 / 0.80 / 0.81 | Pruv faster |
+| stale | 1 | 71.4 | 63.0 | 1.13 | 1.11 | no |
+| staleu | 1 | 74.0 | 67.5 | 1.10 | 1.10 | no |
+
+`run_m9.py perf` fails on a missing item and prints `HOLD` for a median above 1.0x whose distributions do not
+overlap. It holds on stale and staleu, the explained rows below.
+
+Allocations per repetition (build included): drop 3 vs hand 18 / 60 / 111, close 3 vs 20 / 62 / 113, stale 3 vs 11.
+Hand Rust stores runs as `String` keys in per-clock maps, so it allocates and frees them one by one. Pruv uses
+entries inside one flat store.
+
+Stale FIRE is the one row above hand Rust (1.10-1.13x, no overlap). Both sides do very little work here (hand Rust
+does three map lookups), so the fixed cost of the Pruv entry shows. Line by line, for one stale delivery:
+
+| step | hand Rust | Pruv (`t_call`) | why |
+|---|---|---|---|
+| boundary | none: typed `&str` arguments | `valid(st)` header and dynamic-part check, `rec_end` + `slice_ok` for 3 records, `fx_ok`, `len(bv)` | the flat `[i64]` op has to be proven well formed before indexing; about 4 ns |
+| CURRENT | `sessions.get(sid)`, `budget_id == bid` | `load_bv`: session `find`, field-address checks, unit compare of the bid | same work, plus the address checks |
+| effects | none | host reads the fx frame: Grow retry loop, fx scan, scratch key take/restore, halt log | the host interface of the generated root; about 5 ns |
+| timer map | `by_bid.remove` (SipHash) | same `by_bid.remove` (SipHash) | equal, about 24 ns |
+
+Pruv cannot emit the hand code here without a typed entry: the hand path skips the boundary check because its
+arguments are Rust types. Queued: a typed captured-ref FIRE entry (or a lighter boundary check for a store that the
+host has not changed since the last valid call).
+
 ## Not done in M9 (owned elsewhere)
 
 - The budget record, CURRENT and the ISO activeSince text (M7). This is replaced by the placeholder `load_bv`/`store_bv`.

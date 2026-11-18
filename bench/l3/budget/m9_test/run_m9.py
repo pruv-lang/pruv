@@ -2,7 +2,8 @@
 """L3-10 M9 runner: clock paths of the request budget (bud_clock.pruv) against the TS oracle.
 
   python3 bench/l3/budget/m9_test/run_m9.py q    [--pruvc PATH | --gen GEN.rs] [--budlib DIR] [--cases F] [--oracle F]
-  python3 bench/l3/budget/m9_test/run_m9.py derive  (writes work/m9/cases_clock.jsonl + oracle_clock.jsonl)
+  python3 bench/l3/budget/m9_test/run_m9.py derive [--family q3|q4] [--cases F]
+  python3 bench/l3/budget/m9_test/run_m9.py dc [--count N] [--seed S]
   python3 bench/l3/budget/m9_test/run_m9.py perf [--pruvc PATH | --gen GEN.rs] [--rounds N]
 
 q: converts each Q3 case (work/m9/cases.jsonl) into the driver program, runs it, and compares with the oracle output
@@ -11,8 +12,8 @@ halt), then for cases that run to the end the final budget clock fields (activeM
 (owner, runs in order with waiting, since, timer token) and the active timers (token, delay due).
 Classes:
   exact           whole case ran and everything matched
-  not-implemented the case reaches a path owned by another milestone: a raise/charge call (M5/M6 charge, M7
-                  lifecycle) or a time halt (M10). The event prefix before that point is compared and must match;
+  not-implemented the case reaches a non-run call (e.g. charge, raise or lifecycle) or a time halt (M10).
+                  The event prefix before that point must match;
                   at a time halt the halt instant and the halted session's activeMs / activeSince are compared too
                   (when no raise/charge call follows, the oracle's final values of that budget are the ones at the
                   halt: later clock-only steps cannot change a halted budget). The rest is not counted. Nothing
@@ -20,8 +21,10 @@ Classes:
   known-difference KD-M6-1: the oracle holds a number outside the safe integral range (JS rounded it); excluded
                   domain (spec §8.4), not compared.
   fail            anything else.
+
+dc checks --count randomized DROP/CLOSE cases plus one 20-cycle reclamation case for each run count from 0 to 12.
 """
-import argparse, datetime, json, os, re, shutil, statistics, subprocess, sys
+import argparse, datetime, json, os, random, re, shutil, statistics, subprocess, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BUD = os.path.dirname(HERE)
@@ -30,9 +33,8 @@ WORK = os.path.join(BUD, "work", "m9")
 BUDLIB_WORK = os.path.join(WORK, "budlib")
 PRUVC_DEFAULT = os.path.join(ROOT, "pruvc-rs", "target", "release", "pruvc")
 STATE = {"open": 0, "halted": 1, "closed": 2}
+RUN_OPS = {"runStarted": 1, "runWaiting": 2, "runEnded": 3}
 HALT_MARK = ("runningDelegationIds", "cancelRecovery", "stopMain")
-COMPARED = {}
-HALT_CHECKED = [0]
 
 
 def rustc():
@@ -40,11 +42,19 @@ def rustc():
 
 
 def build(args):
-    work = WORK if args.budlib is None else BUDLIB_WORK
+    if args.out:
+        work = os.path.abspath(args.out)
+    elif args.budlib is None:
+        work = os.path.abspath(WORK)
+    else:
+        # a --budlib build without --out gets its own directory, so concurrent campaigns never share binaries (P23 H6)
+        os.makedirs(BUDLIB_WORK, exist_ok=True)
+        work = tempfile.mkdtemp(prefix="run-", dir=BUDLIB_WORK)
     os.makedirs(work, exist_ok=True)
     gen = os.path.join(work, "gen.rs")
     if args.gen:
-        shutil.copyfile(args.gen, gen)
+        if os.path.abspath(args.gen) != gen:
+            shutil.copyfile(args.gen, gen)
     else:
         c = subprocess.run([args.pruvc, "bench/l3/budget/m9_test/root_m9.pruv", "-o", gen,
                             "--lib", args.budlib or "bench/l3/budget", "--lib", "bench/l3/lib"],
@@ -122,7 +132,7 @@ def put_line(s):
 
 
 def program(case):
-    """Returns (lines, cut) where cut is None or ('call', req) for the first raise/charge call."""
+    """Return the driver lines and the first unsupported call, if any."""
     out = ["case " + case["id"]]
     for s in case["world"]["sessions"]:
         out.append(put_line(s))
@@ -141,11 +151,11 @@ def program(case):
             out.append(put_line(e["session"]))
         elif ev == "call":
             op = e["op"]
-            if op not in ("runStarted", "runWaiting", "runEnded"):
-                cut = ("call", e["req"])
+            if op not in RUN_OPS:
+                cut = ("call", e["req"], op)
                 break
             r = obj(e["args"][0])
-            code = {"runStarted": 1, "runWaiting": 2, "runEnded": 3}[op]
+            code = RUN_OPS[op]
             flag = 1 if (op == "runWaiting" and e["args"][2]) else 0
             w = [code] + key(r["sessionId"]) + key(r["budgetId"]) + key(e["args"][1]) + [flag]
             out.append("call " + " ".join(map(str, w)))
@@ -239,7 +249,7 @@ def last_put(case, sk):
         if tuple(units(obj(x)["id"])) == sk:
             rec = obj(x)
     for e in case["script"]:
-        if e["ev"] == "call" and e["op"] not in ("runStarted", "runWaiting", "runEnded"):
+        if e["ev"] == "call" and e["op"] not in RUN_OPS:
             break
         if e["ev"] == "putSession" and tuple(units(obj(e["session"])["id"])) == sk:
             rec = obj(e["session"])
@@ -294,7 +304,9 @@ def compare_final(case, o, obs):
         # field 17 is the active-run count REFRESH reads; it must equal the runs with waiting = 0
         if act != sum(1 for _, wv in runs if wv == 0):
             diffs.append("active count %s for %r" % (act, runs))
-        got_clocks.append((k, owner, since if sp else None, tok_of.get(k) if armed else None, runs))
+        # The delivered timer may already be absent from the scheduler. Check the clock's flag independently.
+        timer = tok_of.get(k, "<armed without a pending timer>") if armed else None
+        got_clocks.append((k, owner, since if sp else None, timer, runs))
     if got_clocks != want_clocks:
         diffs.append("clocks %r != %r" % (got_clocks, want_clocks))
     want_t = sorted((t["token"], t["due"]) for t in o["activeTimers"])
@@ -359,7 +371,7 @@ def put_after_call(case, sk):
     return False
 
 
-def classify(case, o, run, cut):
+def classify(case, o, run, cut, compared, halt_checked):
     if unsafe_number(o):
         # KD-M6-1: JS rounds arithmetic that leaves the safe range; Pruv keeps exact i64 (requested delay) or
         # saturates (activeMs). Spec §8.4 makes it excluded-domain, so it is not compared.
@@ -371,21 +383,22 @@ def classify(case, o, run, cut):
     want = oracle_events(o, cut)
     ev = ["H" if l.startswith("H") else l for l in mine]
     for l in ev[:ev.index("H") + 1] if "H" in ev else ev:
-        COMPARED[l[0]] = COMPARED.get(l[0], 0) + 1
+        compared[l[0]] = compared.get(l[0], 0) + 1
     if "H" in ev:
         h = ev.index("H")
         if want[:h + 1] != ev[:h + 1]:
             return "fail", "events %r != %r" % (ev, want[:h + 2])
         if not cut and not put_after_call(case, tuple(int(x) for x in mine[h].split(" ")[2].split(",") if x)):
             d = compare_halt(case, o, run["obs"], mine[h])
-            HALT_CHECKED[0] += 1
+            halt_checked[0] += 1
             if d:
                 return "fail", "at halt: " + "; ".join(d)
         return "not-implemented", "time halt (M10)"
     if ev != want:
         return "fail", "events %r != %r" % (ev, want)
     if cut:
-        return "not-implemented", "raise/charge call %s" % cut[1]
+        reason = "raise/charge call" if cut[2] in ("raise", "charge") else "non-run call"
+        return "not-implemented", reason
     d = compare_final(case, o, run["obs"])
     if d:
         return "fail", "; ".join(d)
@@ -393,7 +406,10 @@ def classify(case, o, run, cut):
 
 
 def cmd_q(args):
-    exe = build(args)
+    return check_q(args, build(args))
+
+
+def check_q(args, exe, report=print):
     cases = [json.loads(l) for l in open(args.cases)]
     oracle = {}
     for l in open(args.oracle):
@@ -411,48 +427,226 @@ def cmd_q(args):
     if i2_summary is None:
         sys.exit("driver missing I2 summary:\n" + r.stderr[-3000:])
     i2_checks, i2_bad = map(int, i2_summary.groups())
+    if cases and i2_checks == 0:
+        sys.exit("driver ran no I2 checks on a non-empty case set")
     runs = parse_driver(r.stdout)
     count = {"exact": 0, "known-difference": 0, "not-implemented": 0, "fail": 0}
+    compared, halt_checked = {}, [0]
     why = {}
     fails = []
     for c in cases:
-        cls, note = classify(c, oracle[c["id"]], runs[c["id"]], cuts[c["id"]])
+        cls, note = classify(c, oracle[c["id"]], runs[c["id"]], cuts[c["id"]], compared, halt_checked)
         count[cls] += 1
         if cls in ("known-difference", "not-implemented"):
-            k = note.split(" r")[0].split(" at ")[0] if cls == "not-implemented" else note
-            k = "raise/charge call" if note.startswith("raise/charge") else k
-            why[k] = why.get(k, 0) + 1
+            why[note] = why.get(note, 0) + 1
         if cls == "fail":
             fails.append((c["id"], note))
-    print(json.dumps({"cases": len(cases), "count": count, "reasons": why, "compared_events": COMPARED,
-                      "halt_state_checked": HALT_CHECKED[0], "i2_checks": i2_checks, "i2_bad": i2_bad},
+    report(json.dumps({"cases": len(cases), "count": count, "reasons": why, "compared_events": compared,
+                      "halt_state_checked": halt_checked[0], "i2_checks": i2_checks, "i2_bad": i2_bad},
                      ensure_ascii=False))
     if r.returncode == 3:
         for case_id, run in runs.items():
             for line in run["log"]:
                 if line.startswith("I2 "):
-                    print("I2 FAIL", case_id, line[3:])
+                    report(f"I2 FAIL {case_id} {line[3:]}")
     for i, n in fails[:15]:
-        print("FAIL", i, n[:600])
+        report(f"FAIL {i} {n[:600]}")
     return 1 if fails or r.returncode == 3 else 0
 
 
+def dc_program(case_id, rng, size, closing=False, cycles=1):
+    """Script and expected checkpoints for a single limited budget."""
+    sid, bid = rng.choice(("session", "s-é", "s-한글")), "budget"
+    owner, clock_key = tuple(units(sid)), tuple(units(bid))
+    initial_ms = rng.randrange(100)
+    now = rng.randrange(1000)
+    rec = [0, 0, 1, initial_ms, 0, 0] + key(bid)
+    lines = [f"case {case_id}", "put " + " ".join(map(str, key(sid) + [len(rec)] + rec)), f"now {now}"]
+    expected = []
+    seq = 0
+    used, since = initial_ms, None
+    runs = {}
+
+    def call(code, run="", flag=0):
+        lines.append("call " + " ".join(map(str, [code] + key(sid) + key(bid) + key(run) + [flag])))
+
+    def advance(ms):
+        nonlocal now
+        lines.append(f"adv {ms}")
+        now += ms
+
+    def checkpoint(events, state, has_clock, timer, kind):
+        lines.append("inspect")
+        budget = [state, 0, 1, used, 2 if since is not None else 0, since or 0]
+        clock = [(clock_key, owner, since, int(timer is not None), sorted(runs.items()))] if has_clock else []
+        timers = [(timer, due, clock_key, True)] if timer else []
+        expected.append((events, budget, clock, timers, 4 + (len(runs) + 1 if has_clock else 0), kind))
+
+    for cycle in range(cycles):
+        events = []
+        # Starting at least one run also creates the empty clock tested at R=0.
+        for n in range(max(1, size)):
+            run = f"run-{n:02}"
+            call(1, run)
+            runs[tuple(units(run))] = 0
+        seq += 1
+        timer = f"t{seq}"
+        since = now
+        due = now + 60000 - used
+        events.append(f"S {timer} {due - now}")
+        advance(rng.randint(1, 20))
+        if cycles == 1 and rng.choice((True, False)):
+            # Early delivery settles and re-arms with the remaining delay.
+            lines.append(f"deliver {timer} 0")
+            events.append(f"F {timer}")
+            used += now - since
+            since = now
+            seq += 1
+            timer = f"t{seq}"
+            due = now + 60000 - used
+            events.append(f"S {timer} {due - now}")
+        last_timer = timer
+        if size == 0:
+            call(3, "run-00")
+            runs.clear()
+        else:
+            wait = rng.randrange(size + 1) if cycles == 1 else 0
+            for n in range(wait):
+                run = f"run-{n:02}"
+                call(2, run, 1)
+                runs[tuple(units(run))] = 1
+        if all(runs.values()):
+            used += now - since
+            since = None
+            events.append(f"C {timer}")
+            timer = None
+        if cycle == 0 and cycles == 1 and rng.choice((True, False)):
+            # Cover CLOSE with an interval whose start lies in the future.
+            now -= rng.randint(1, 25)
+            lines.append(f"settime {now}")
+        else:
+            advance(rng.randint(1, 20))
+        checkpoint(events, 0, True, timer, "build")
+        call(6 if closing else 5)
+        if closing and since is not None:
+            used += max(0, now - since)
+            since = None
+        checkpoint([f"C {timer}"] if timer else [], 2 if closing else 0, False, None,
+                   "close" if closing else "drop")
+        runs.clear()
+
+    lines.append(f"deliver {last_timer} 1")
+    events = [f"F {last_timer}"]
+    if not closing:
+        events.append(f"H {now} " + ",".join(map(str, owner)))
+    expected.append((events, [2 if closing else 0, 0, 1, used, 2 if since is not None else 0, since or 0],
+                     [], [], None, "closed_delivery" if closing else "open_delivery"))
+    lines.append("end")
+    return lines, expected
+
+
+def check_dc(args, exe, report=print):
+    rng = random.Random(args.seed)
+    lines, model = [], {}
+    for index in range(args.count + 13):
+        reclaim = index >= args.count
+        size = index - args.count if reclaim else index % 13
+        closing = not reclaim and (index // 13) % 2 == 1
+        case_id = f"dc-{index}"
+        script, model[case_id] = dc_program(case_id, rng, size, closing, 20 if reclaim else 1)
+        lines.extend(script)
+    result = subprocess.run([exe, "q"], input="\n".join(lines) + "\n", capture_output=True, text=True)
+    summary = re.search(r"^i2_checks=(\d+) i2_bad=(\d+)$", result.stderr, re.MULTILINE)
+    if result.returncode not in (0, 3) or summary is None:
+        sys.exit("dc driver failed:\n" + result.stderr[-3000:])
+    i2_checks, i2_bad = map(int, summary.groups())
+    observed = parse_driver(result.stdout)
+    checks, failures = {}, {}
+    for case_id, expected in model.items():
+        run = observed[case_id]
+        events, snapshots, live = [], [], None
+        for line in run["log"]:
+            if line.startswith("L "):
+                live = tuple(map(int, line.split()[1:]))
+            elif line.startswith("V "):
+                snapshots.append((events, live, line[2:]))
+                events, live = [], None
+            else:
+                events.append(line)
+        snapshots.append((events, None, run["obs"]))
+        errors = []
+        if len(snapshots) != len(expected):
+            errors.append(f"checkpoints {len(snapshots)} != {len(expected)}")
+        first_capacity = None
+        before = None
+        for step, (got, want) in enumerate(zip(snapshots, expected)):
+            events, live, obs = got
+            want_events, budget, clocks, timers, count, kind = want
+            checks[kind] = checks.get(kind, 0) + 1
+            if events != want_events:
+                errors.append(f"{step} {kind} events {events!r} != {want_events!r}")
+            if not obs or obs.startswith("O X"):
+                errors.append(f"{step} {kind} invalid observation {obs!r}")
+                continue
+            sessions, entries, active = parse_obs(obs)
+            actual = [(k, owner, since if sp else None, armed, sorted(runs))
+                      for k, owner, sp, since, armed, _, runs in entries]
+            budgets = [rec[:6] for rec in sessions.values()]
+            if (budgets, actual, active) != ([budget], clocks, timers):
+                errors.append(f"{step} {kind} observation {(budgets, actual, active)!r}"
+                              f" != {([budget], clocks, timers)!r}")
+            if count is not None and (live is None or live[0] != count):
+                errors.append(f"{step} {kind} live entries {live!r}, expected {count}")
+            if kind == "build":
+                before = live
+                if first_capacity is not None:
+                    checks["reclaim"] = checks.get("reclaim", 0) + 1
+                    if live is None or live[1] != first_capacity:
+                        errors.append(f"{step} store capacity grew: {live!r} vs {first_capacity}")
+            elif kind in ("drop", "close"):
+                checks["deletion"] = checks.get("deletion", 0) + 1
+                removed = len(expected[step - 1][2][0][-1]) + 1
+                if before is None or live is None or before[0] - live[0] != removed:
+                    errors.append(f"{step} expected {removed} reclaimed entries: {before!r} -> {live!r}")
+                if live is not None:
+                    if first_capacity is None:
+                        first_capacity = live[1]
+                    elif live[1] != first_capacity:
+                        errors.append(f"{step} store capacity grew: {live[1]} vs {first_capacity}")
+        if errors:
+            failures[case_id] = errors
+    report(json.dumps({"cases": len(model), "ok": len(model) - len(failures), "fail": len(failures),
+                      "checks": checks, "i2_checks": i2_checks, "i2_bad": i2_bad}))
+    for case_id, errors in list(failures.items())[:15]:
+        report(f"FAIL {case_id} " + "\n  ".join(errors[:3]))
+    return int(bool(failures or i2_bad))
+
+
+def cmd_dc(args):
+    return check_dc(args, build(args))
+
+
 def cmd_derive(args):
-    """Clock-only variant of each Q3 case: the same world and script without the raise/charge calls (ids get a
-    '-clock' suffix), run through the TS oracle so every remaining step is a clock path."""
+    """Filter the script to clock paths and run it through the TS oracle."""
     sys.path.insert(0, BUD)
     from oracle import run_oracle
     cases = []
     for l in open(args.cases):
         c = json.loads(l)
         c["id"] += "-clock"
-        c["script"] = [e for e in c["script"] if not (e["ev"] == "call" and e["op"] in ("raise", "charge"))]
+        if args.family == "q4":
+            c["script"] = [e for e in c["script"] if e["ev"] in ("advance", "setTime", "deliverTimer", "putSession")
+                           or (e["ev"] == "call" and e["op"] in RUN_OPS)]
+        else:
+            c["script"] = [e for e in c["script"] if not (e["ev"] == "call" and e["op"] in ("raise", "charge"))]
         cases.append(c)
     obs = run_oracle(cases)
-    with open(os.path.join(WORK, "cases_clock.jsonl"), "w") as f:
+    os.makedirs(WORK, exist_ok=True)
+    suffix = "q4clock" if args.family == "q4" else "clock"
+    with open(os.path.join(WORK, f"cases_{suffix}.jsonl"), "w") as f:
         for c in cases:
             f.write(json.dumps(c, ensure_ascii=False) + "\n")
-    with open(os.path.join(WORK, "oracle_clock.jsonl"), "w") as f:
+    with open(os.path.join(WORK, f"oracle_{suffix}.jsonl"), "w") as f:
         for o in obs:
             f.write(json.dumps(o, ensure_ascii=False) + "\n")
     print("derived %d cases" % len(cases))
@@ -461,10 +655,12 @@ def cmd_derive(args):
 
 def cmd_perf(args):
     """Alternates Pruv / hand Rust / TS runs per round and size; prints the median ns per call of each item."""
+    if args.rounds < 1 or args.reps < 1:
+        sys.exit("perf needs --rounds >= 1 and --reps >= 1")
     sys.path.insert(0, BUD)
     from common import NODE, TS_ENV
     exe = build(args)
-    hand = os.path.join(WORK, "hand_m9")
+    hand = os.path.join(os.path.dirname(exe), "hand_m9")
     c = subprocess.run([rustc(), "-C", "opt-level=3", "--edition", "2021", "-o", hand, os.path.join(HERE, "hand_m9.rs")],
                        capture_output=True, text=True)
     if c.returncode != 0:
@@ -484,27 +680,53 @@ def cmd_perf(args):
                     sys.exit("%s perf failed:\n%s" % (side, r.stderr[-2000:]))
                 for l in r.stdout.splitlines():
                     item, sz, ns = l.split()
-                    if item != "refresh" and size != 10:
+                    if item not in ("refresh", "drop", "close") and size != 10:
                         continue
                     res.setdefault((item, int(sz)), {}).setdefault(side, []).append(float(ns))
-    print("item | size | Pruv ns | hand Rust ns | TS ns | Pruv/hand")
+    # every item must be measured on both sides; a median above 1.0x hand whose Pruv and hand distributions do not
+    # overlap (min Pruv above max hand) is a hold and makes the command fail (P23 audit)
+    want = {(i, s) for i in ("refresh", "drop", "close") for s in (10, 50, 100)}
+    want |= {(i, 1) for i in ("cycle", "fire", "stale", "staleu")}
+    missing = sorted(k for k in want if not {"pruv", "hand"} <= set(res.get(k, {})))
+    holds = []
+    print("item | size | Pruv ns | hand Rust ns | TS ns | Pruv/hand | overlap")
     for (item, sz), v in sorted(res.items()):
+        if not {"pruv", "hand"} <= set(v):
+            continue
         m = {k: statistics.median(x) for k, x in v.items()}
-        print("%s | %d | %.1f | %.1f | %.1f | %.2f" % (item, sz, m["pruv"], m["hand"], m["ts"], m["pruv"] / m["hand"]))
+        ts_ns = f'{m["ts"]:.1f}' if "ts" in m else "n/a"
+        ratio = m["pruv"] / m["hand"]
+        overlap = min(v["pruv"]) <= max(v["hand"])
+        if ratio > 1.0 and not overlap:
+            holds.append((item, sz))
+        print("%s | %d | %.1f | %.1f | %s | %.2f | %s" % (item, sz, m["pruv"], m["hand"], ts_ns, ratio,
+                                                         "yes" if overlap else "no"))
+    if missing:
+        print("MISSING " + " ".join("%s/%d" % k for k in missing))
+    if holds:
+        print("HOLD " + " ".join("%s/%d" % k for k in holds))
+    return 1 if missing or holds else 0
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["q", "perf", "derive"])
+    ap.add_argument("cmd", choices=["q", "perf", "derive", "dc"])
     ap.add_argument("--pruvc", default=PRUVC_DEFAULT)
     ap.add_argument("--budlib")
+    ap.add_argument("--out", help="directory for generated Rust and driver binaries")
+    ap.add_argument("--family", choices=["q3", "q4"], default="q3")
+    ap.add_argument("--count", type=int, default=300, help="number of randomized dc cases")
+    ap.add_argument("--seed", type=int, default=20261117)
     ap.add_argument("--gen")
-    ap.add_argument("--cases", default=os.path.join(WORK, "cases.jsonl"))
+    ap.add_argument("--cases")
     ap.add_argument("--oracle", default=os.path.join(WORK, "oracle.jsonl"))
     ap.add_argument("--rounds", type=int, default=5)
     ap.add_argument("--reps", type=int, default=200000)
     a = ap.parse_args()
-    sys.exit({"q": cmd_q, "perf": cmd_perf, "derive": cmd_derive}[a.cmd](a))
+    if a.cases is None:
+        filename = "cases_q4.jsonl" if a.cmd == "derive" and a.family == "q4" else "cases.jsonl"
+        a.cases = os.path.join(WORK, filename)
+    sys.exit({"q": cmd_q, "perf": cmd_perf, "derive": cmd_derive, "dc": cmd_dc}[a.cmd](a))
 
 
 if __name__ == "__main__":
