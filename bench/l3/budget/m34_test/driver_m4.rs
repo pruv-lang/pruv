@@ -4,11 +4,54 @@
 //   driver_m4 perf <axis> <n> <reps> axis = sessions | tools | clocks
 //
 // Boundary rule: the host owns the state buffer `st` but never reads or writes its words. It allocates, calls the
-// entries, and on status 1 (Grow, N = out[0]) allocates a zeroed buffer of max(N, 2*len), calls m4_grow, swaps the
+// entries, and on status 1 (Grow, N = out[0]) allocates a zeroed buffer of exactly N (sized in Pruv, N >= 2*len), calls m4_grow, swaps the
 // buffers and retries the same op (at most 3 retries).
 use std::hint::black_box;
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
+
+// Allocation count (L3 P13b memory gate): every alloc / alloc_zeroed / realloc of the whole process, printed as
+// allocs=N on the perf line; perf_headroom/host/run.py compares it with the other side's count (same accounting).
+struct CountingAlloc;
+static ALLOC_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+unsafe impl std::alloc::GlobalAlloc for CountingAlloc {
+    unsafe fn alloc(&self, l: std::alloc::Layout) -> *mut u8 {
+        ALLOC_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::alloc::System.alloc(l)
+    }
+    unsafe fn alloc_zeroed(&self, l: std::alloc::Layout) -> *mut u8 {
+        ALLOC_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::alloc::System.alloc_zeroed(l)
+    }
+    unsafe fn dealloc(&self, p: *mut u8, l: std::alloc::Layout) {
+        std::alloc::System.dealloc(p, l)
+    }
+    unsafe fn realloc(&self, p: *mut u8, l: std::alloc::Layout, n: usize) -> *mut u8 {
+        ALLOC_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::alloc::System.realloc(p, l, n)
+    }
+}
+#[global_allocator]
+static GLOBAL_ALLOC: CountingAlloc = CountingAlloc;
+
+// Fallible zeroed buffer of exactly n words: None on allocation failure (the caller keeps the old state). Uses
+// alloc_zeroed like `vec![0; n]`, so fresh pages stay lazily zeroed (no write pass, no extra resident memory).
+#[allow(dead_code)]
+fn try_zeroed(n: usize) -> Option<Vec<i64>> {
+    if n == 0 {
+        return Some(Vec::new());
+    }
+    let layout = std::alloc::Layout::array::<i64>(n).ok()?;
+    // SAFETY: layout has non-zero size; the pointer comes from the global allocator with this exact layout, so the
+    // Vec owns it with length = capacity = n, and all-zero bytes are valid i64 values.
+    unsafe {
+        let p = std::alloc::alloc_zeroed(layout) as *mut i64;
+        if p.is_null() {
+            return None;
+        }
+        Some(Vec::from_raw_parts(p, n, n))
+    }
+}
 
 // LANE-WORLD-BEGIN (run.py replaces everything up to LANE-WORLD-END with driver_m4c.rs for the m4c lane)
 // Every call on the resident state goes through a store with the PruvStore API (`new`, `with`). run.py puts one line
@@ -123,24 +166,42 @@ impl World {
         (r, cnt[0], bad.to_string())
     }
 
+    // The out buffer starts at 4096 words and doubles on status 3 up to 4·len (L3 P13b; before, it was sized 4·len up
+    // front, which made it the largest resident buffer). The retry replays nothing: every bud_world mutator checks
+    // len(out) >= 2 before its first write, so with >= 4096 words only the read-only ops (gets, key and run lists)
+    // can return 3, and they take st by value.
     fn exec(&mut self, op: &[i64]) -> R {
-        for attempt in 0..4 {
-            let need = std::cmp::max(4096, 4 * self.len);
-            if self.out.len() < need {
-                self.out.resize(need, 0);
-            }
+        if self.out.len() < 4096 {
+            self.out.resize(4096, 0);
+        }
+        let mut attempt = 0;
+        while attempt < 4 {
             let out = &mut self.out;
             let s = call(&mut self.st, |st| sol::m4_op(st, op, out));
             match s {
                 0 => return R::Ok(self.out[0].max(0) as usize),
+                3 if self.out.len() < 4 * self.len => {
+                    let n = (2 * self.out.len()).min(4 * self.len);
+                    self.out.resize(n, 0);
+                    continue;
+                }
                 1 => {
                     if attempt == 3 {
                         return R::GrowFailed;
                     }
+                    attempt += 1;
                     let n = self.out[0].max(0) as usize;
                     let t = Instant::now();
-                    let want = std::cmp::max(n, 2 * self.len);
-                    let mut fresh = vec![0i64; want];
+                    let want = n; // N from Pruv (bud_store::need, N >= 2*len): the host makes no sizing choice (L3 P13b)
+                    // An N that does not grow the buffer (need at its 2^40 cap) or an allocator refusal fails the op
+                    // with the old state kept; the allocation is fallible so it cannot abort mid-op.
+                    if want <= self.len {
+                        return R::GrowFailed;
+                    }
+                    let mut fresh = match try_zeroed(want) {
+                        Some(v) => v,
+                        None => return R::GrowFailed,
+                    };
                     let g = call(&mut self.st, |st| sol::m4_grow(st, &mut fresh));
                     if g != 0 {
                         return R::GrowFailed;
@@ -352,30 +413,42 @@ fn perf(axis: &str, n: usize, reps: usize) {
     w.grows = 0;
     w.grow_ns = 0;
 
-    // Build every op vector first; this loop is the "encode" time.
+    // The op sequence repeats with period `per` reps (tools: r % n, clocks: r % 4, sessions: 1), so only the first
+    // period's op vectors are built (this loop is the "encode" time) and the timed loop replays them in order, like
+    // m4_hand's cycle and the TS loop's few prebuilt key strings. Building all reps first and truncating (before
+    // L3 P13b) cost ~1M allocations and ~35 MiB of peak RSS that the hand baseline does not pay.
+    let per = match axis {
+        "tools" => n.max(1),
+        "clocks" => 4,
+        _ => 1,
+    }
+    .min(reps.max(1));
     let t_enc = Instant::now();
-    let mut ops: Vec<Vec<i64>> = Vec::with_capacity(reps * 3);
+    let mut ops: Vec<Vec<i64>> = Vec::with_capacity(per * 3);
+    let mut width = 0usize;
     match axis {
         "sessions" => {
             let k = format!("s{}", n / 2);
-            for _ in 0..reps {
+            for _ in 0..per {
                 ops.push(op_k(2, &k));
                 ops.push(op_session_put(&k, &blob));
             }
+            width = 2;
         }
         "tools" => {
             // Per rep: note an already-seen activity, note a new activity (fresh turn "x"), forget that turn.
             // The prefilled turn keeps exactly n activities throughout.
-            for r in 0..reps {
+            for r in 0..per {
                 ops.push(op_kk(13, "t0", &format!("a{}", r % n.max(1))));
                 ops.push(op_kk(13, "x", "y"));
                 ops.push(op_k(14, "x"));
             }
+            width = 3;
         }
         _ => {
             // clocks: run_set / run_del on one clock.
             let c = format!("c{}", n / 2);
-            for r in 0..reps {
+            for r in 0..per {
                 let rk = format!("r{}", r % 4);
                 let mut set = vec![9];
                 key(&mut set, &c);
@@ -384,22 +457,11 @@ fn perf(axis: &str, n: usize, reps: usize) {
                 ops.push(set);
                 ops.push(op_kk(10, &c, &rk));
             }
+            width = 2;
         }
     }
     let enc_ns = t_enc.elapsed().as_nanos();
-    let nops = ops.len().max(1);
-
-    // The op sequence repeats with period `per` reps (tools: r % n, clocks: r % 4, sessions: 1), so the timed loop
-    // replays the first period's op vectors in the same order. Like the TS loop, which reuses a few prebuilt key
-    // strings, it then reads ops from cache instead of streaming the whole encoded list from memory.
-    let per = match axis {
-        "tools" => n.max(1),
-        "clocks" => 4,
-        _ => 1,
-    }
-    .min(reps.max(1));
-    let width = ops.len() / reps.max(1);
-    ops.truncate(per * width);
+    let nops = (reps * width).max(1);
     let cycle = ops;
 
     let t0 = Instant::now();
@@ -424,7 +486,7 @@ fn perf(axis: &str, n: usize, reps: usize) {
     black_box(sink);
     let core = total.saturating_sub(w.grow_ns);
     println!(
-        "axis={} n={} encode_ns_per_op={:.1} core_ns_per_op={:.1} total_ns_per_op={:.1} grow_ns_total={} grows={} ops={}",
+        "axis={} n={} encode_ns_per_op={:.1} core_ns_per_op={:.1} total_ns_per_op={:.1} grow_ns_total={} grows={} ops={} allocs={}",
         axis,
         n,
         enc_ns as f64 / nops as f64,
@@ -432,7 +494,8 @@ fn perf(axis: &str, n: usize, reps: usize) {
         total as f64 / nops as f64,
         w.grow_ns,
         w.grows,
-        nops
+        nops,
+        ALLOC_COUNT.load(std::sync::atomic::Ordering::Relaxed)
     );
 }
 

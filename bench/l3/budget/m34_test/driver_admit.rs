@@ -1,6 +1,7 @@
 // P11 admission driver (appended to a main file that already declares `mod sol;`, see run.py admit).
 // Prints `case len result entries_visited free_steps slots_visited` for each case of root_admit.pruv, then the clean
-// case on larger buffers (admission work grows with top + slots only).
+// case on larger buffers (admission work grows with top + slots only). Then, for every admitted case at len 1024,
+// `grow case result live_prev live_next` from admit_grow (grow into a 2048-word buffer, L3 P13b).
 fn main() {
     // keys: one packed word each, all four u16 lanes non-zero (kn = 4)
     let keys: Vec<i64> = (0..8i64).map(|i| 0x0001_0002_0003_0004 + (i << 16)).collect();
@@ -10,6 +11,16 @@ fn main() {
         let mut cnt = vec![0i64; 3];
         let r = sol::admit_case(&mut st, &keys, case, &mut cnt);
         lines.push(format!("{} {} {} {} {} {}", case, len, r, cnt[0], cnt[1], cnt[2]));
+    }
+    for (case, len) in (0..21i64).map(|c| (c, 1024usize)).chain([(21i64, 65536usize), (22, 65536), (23, 65536)]) {
+        let mut st = vec![0i64; len];
+        let mut nxt = vec![0i64; 2 * len];
+        let mut cnt = vec![0i64; 3];
+        let mut live = vec![0i64; 2];
+        let g = sol::admit_grow(&mut st, &keys, case, &mut nxt, &mut cnt, &mut live);
+        if g != -1000 {
+            lines.push(format!("grow {} {} {} {}", case, g, live[0], live[1]));
+        }
     }
     println!("{}", lines.join("\n"));
 }

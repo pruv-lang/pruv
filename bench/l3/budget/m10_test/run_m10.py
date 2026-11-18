@@ -19,7 +19,7 @@ Classes:
                    The requests before it are compared and must match; nothing after the cut is filled by host code.
   fail             anything else
 """
-import argparse, datetime, json, os, shutil, statistics, subprocess, sys
+import argparse, datetime, json, os, re, shutil, statistics, subprocess, sys
 
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -691,6 +691,36 @@ def cmd_q(args):
     return run_q(args, args.cases, args.oracle)
 
 
+def cmd_replay(args):
+    """No replay across Grow (L3 P13b): run the q program from the smallest start (t_init's N, so calls hit Grow) and
+    from a start big enough that no call grows. Query answers are prefetched into the op and effects are performed only
+    after a successful attempt, so both runs must print the same log (effects, answers consumed, errors) and the same
+    observation byte for byte; the small run must grow."""
+    exe = build(args)
+    prog = []
+    for l in open(args.cases):
+        prog += program(json.loads(l))[0]
+    data = "\n".join(prog) + "\n"
+    res = {}
+    for name, n in (("small", 1), ("big", 1 << 20)):
+        env = dict(os.environ, M10_INIT_LEN=str(n))
+        r = subprocess.run([exe, "q"], input=data, capture_output=True, text=True, env=env)
+        if r.returncode != 0:
+            sys.exit("driver failed:\n" + r.stderr[-3000:])
+        m = re.search(r"m10 host grows (\d+) attempts (\d+) calls (\d+) grown_calls (\d+)", r.stderr)
+        res[name] = (r.stdout, int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4)))
+    same = res["small"][0] == res["big"][0]
+    effects = sum(1 for l in res["small"][0].splitlines() if l.startswith("E "))
+    s, b = res["small"], res["big"]
+    # The small run must send at least one public call with effects or query answers through Grow (attempts > calls,
+    # grown_calls > 0), so the identical logs show that call's effects ran once; the big run grows nowhere.
+    ok = (same and effects > 0 and s[1] > 0 and s[3] > 0 and s[2] > s[3] and s[4] > 0
+          and b[1] == 0 and b[2] == b[3] and b[3] == s[3])
+    print(json.dumps({"identical": same, "effect_lines": effects, "small_grows": s[1], "small_attempts": s[2],
+                      "calls": s[3], "grown_calls": s[4], "big_grows": b[1], "big_attempts": b[2], "ok": ok}))
+    return 0 if ok else 1
+
+
 def cmd_derive(args):
     """Halt-path variant of each case: the same world and script without decide / raise / hasCard / setCard calls (ids
     get a '-halt' suffix), run through the TS oracle so every remaining call is an M7 / M8 / M9 / M10a path."""
@@ -744,7 +774,7 @@ def cmd_perf(args):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["q", "perf", "derive", "same"])
+    ap.add_argument("cmd", choices=["q", "perf", "derive", "same", "replay"])
     ap.add_argument("--pruvc", default=PRUVC_DEFAULT)
     ap.add_argument("--py", action="store_true")
     ap.add_argument("--cases", default=os.path.join(WORK, "cases.jsonl"))
@@ -752,7 +782,7 @@ def main():
     ap.add_argument("--rounds", type=int, default=5)
     ap.add_argument("--reps", type=int, default=100000)
     a = ap.parse_args()
-    sys.exit({"q": cmd_q, "perf": cmd_perf, "derive": cmd_derive, "same": cmd_same}[a.cmd](a))
+    sys.exit({"q": cmd_q, "perf": cmd_perf, "derive": cmd_derive, "same": cmd_same, "replay": cmd_replay}[a.cmd](a))
 
 
 if __name__ == "__main__":

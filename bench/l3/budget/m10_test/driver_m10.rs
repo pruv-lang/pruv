@@ -17,7 +17,7 @@
 // makes it the budget's timer; timerClear cancels the budget's timer; timerForget drops the budget's handle. adv fires
 // due timers in (due, token) order through FIRE (code 11) with now = due. isQuiet: the next answer (default false) is prefetched in op[2]
 // and consumed when the effects hold [23].
-// Grow -N: buffer of max(N, 2*len), t_grow, retry.
+// Grow -N: buffer of exactly N (Pruv sizes it, N >= 2*len), t_grow, retry.
 // Keys on the wire (op keys, the runningDelegationIds answers `n, (len, words(len))*`) are packed u16 keys
 // `n, words(n) packed words` (bud_keys layout), packed once by the encoder (run_m10.py; key() below for perf). The
 // scheduler keeps a timer's captured ref as those framed packed keys (passed back verbatim to FIRE); the log and the
@@ -34,6 +34,14 @@ struct Timer {
     sid: Vec<i64>,
     bid: Vec<i64>,
 }
+
+// Host-side counts for run_m10.py replay (printed to stderr at the end of q): grows (all, puts included), public
+// t_call attempts, public calls, and grown calls: public calls that hit Grow at least once, then finished with status
+// 0 and carried effects or consumed query answers (the calls a replay would duplicate).
+static GROWS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static ATTEMPTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static GROWN_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 struct World {
     st: Vec<i64>,
@@ -72,7 +80,10 @@ fn key_units_str(k: &[i64]) -> String {
 
 impl World {
     fn new() -> World {
-        let mut st = vec![0i64; 256];
+        // M10_INIT_LEN: start length of the state buffer (run_m10.py replay runs the same program from a small and a
+        // big start: Grow retries must not change any effect, answer or observation, L3 P13b)
+        let init: usize = std::env::var("M10_INIT_LEN").ok().and_then(|s| s.parse().ok()).unwrap_or(256);
+        let mut st = vec![0i64; init];
         let r = sol::t_init(&mut st);
         if r > 0 {
             st = vec![0i64; r as usize];
@@ -101,7 +112,8 @@ impl World {
     }
 
     fn grow(&mut self, n: usize) {
-        let want = std::cmp::max(n, 2 * self.st.len());
+        let want = n; // N from Pruv (bud_store::need, N >= 2*len): the host makes no sizing choice (L3 P13b)
+        GROWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut fresh = vec![0i64; want];
         if sol::t_grow(&self.st, &mut fresh) != 0 {
             eprintln!("t_grow failed");
@@ -145,14 +157,21 @@ impl World {
         op.push(quiet);
         op.extend_from_slice(&body[1..]);
         op.extend_from_slice(&ids);
+        CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut grew = false;
         for _ in 0..8 {
             self.fx[0] = 0;
+            ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             r = sol::t_call(&mut self.st, &op, &mut self.bv, &mut self.fx, &mut self.out);
             if r < 0 {
                 self.grow((-r) as usize);
+                grew = true;
                 continue;
             }
             break;
+        }
+        if grew && r == 0 && self.fx[0] > 0 {
+            GROWN_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         if r != 0 {
             // a finished call that consulted isQuiet ([23]) consumed the answer even when it failed afterwards
@@ -380,6 +399,14 @@ fn run_q() {
             }
         }
     }
+    drop(o);
+    eprintln!(
+        "m10 host grows {} attempts {} calls {} grown_calls {}",
+        GROWS.load(std::sync::atomic::Ordering::Relaxed),
+        ATTEMPTS.load(std::sync::atomic::Ordering::Relaxed),
+        CALLS.load(std::sync::atomic::Ordering::Relaxed),
+        GROWN_CALLS.load(std::sync::atomic::Ordering::Relaxed)
+    );
 }
 
 // perf <D> <reps>: one session with an open budget; halt(ref, 'delegations') with D running delegation ids, then the

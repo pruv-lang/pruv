@@ -21,7 +21,7 @@
 // sub-operation would run next and nothing after it is executed or filled. Any other non-zero status prints
 // `X <status>` and stops the case. A put the root rejects (malformed input, status 2) prints `P X <status>`, leaves the
 // state unchanged and the case continues (perf-mode puts stay fatal). perf also prints `chk <item> <size> <value>`
-// after each item's timed loop: the t_observe words folded as s = s*31 + w (wrapping u64). Grow: status -N -> buffer of max(N, 2*len), t_grow, retry.
+// after each item's timed loop: the t_observe words folded as s = s*31 + w (wrapping u64). Grow: status -N -> buffer of exactly N (Pruv sizes it, N >= 2*len), t_grow, retry.
 use std::hint::black_box;
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
@@ -87,7 +87,7 @@ impl World {
     }
 
     fn grow(&mut self, n: usize) {
-        let want = std::cmp::max(n, 2 * self.st.len());
+        let want = n; // N from Pruv (bud_store::need, N >= 2*len): the host makes no sizing choice (L3 P13b)
         let mut fresh = vec![0i64; want];
         if sol::t_grow(&self.st, &mut fresh) != 0 {
             eprintln!("t_grow failed");

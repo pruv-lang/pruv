@@ -1233,7 +1233,7 @@ one-line `admit` ensures above.
   `add_absent_w`, `add_w`, `room`, `make_room`) and the clock / lifecycle / world / tools / halt mutators. Finally
   drop the per-call `valid` in `m4_op` / `m4_observe`.
 - **Poison flag.** Once the per-call `valid` is gone, rely on panic = abort in the raw / C adapter and remove the
-  `PruvStore` flag. Target: `m4raw/m4` ≤ 1.1x.
+  `PruvStore` flag. Target: `m4raw/m4` at 1.0x (equal to `m4`; no 1.1x line, P13b).
 - **Admission I1 ensures.** State the `entry_ok` subset a raw entry needs, as a ground predicate on the entry words.
   Then wire `admit` into the adapter import path (P11.5).
 - **`remove` depth (observed, not analysed).** Removing the middle of a 2n-deep chain left a store that admission
@@ -1453,7 +1453,7 @@ both compilers, and root_admit proves in 7.83 s (Python) and 6.88 s (Rust).
 - Step 2 is ready to land as soon as the verifier keeps a ground predicate opaque (P13a.3). The archived diff (local, outside the tree) is the
   starting point; bud_world's 11 mutators follow the same pattern. Landed with step 3 in P13a.9.
 - Steps 3 to 5 follow, in the original order: drop the per-call `valid` (m4 should meet m4nv), remove the poison flag
-  (m4raw/m4 <= 1.1x), then I1 ensures and adapter wiring.
+  (m4raw/m4 at 1.0x), then I1 ensures and adapter wiring.
 - The reference for proof time is now P13a.4, not 13.25 s.
 
 ## Appendix P13o (opaque ground predicates: `opaque fn` and `reveal F;`)
@@ -1878,7 +1878,8 @@ rounds, after step 5:
 | clocks | 500 | 39.0 | 23.6 | 23.7 | 24.4 | 0.61 | 0.61 | 1.15 | 1.00 |
 | clocks | 1000 | 39.2 | 24.8 | 24.8 | 24.6 | 0.63 | 0.63 | 1.17 | 1.00 |
 
-Gate (`m4raw/m4 <= 1.1x`): met, 0.99 to 1.02x (P13a.9: 1.06 to 1.21x). A run after step 4 alone gave 0.98 to 1.02x.
+`m4raw/m4`: 0.99 to 1.02x, equal to `m4` within run spread (P13a.9: 1.06 to 1.21x; the 1.1x line used then is
+withdrawn, P13b). A run after step 4 alone gave 0.98 to 1.02x.
 Every cell is at or under 0.80x hand Rust. `m4_import` is not on the op path.
 
 ### P13a.10.5 Gates
@@ -1928,3 +1929,172 @@ Optional findings (left as remaining work above): par / runtime cases in check_r
 through `m4_import`. A confirmation review of the five fixes found 1, 2, 3 and 5 done; on 4, a second `init` in the
 same `q` session kept the first world's import result. Fixed: `init` resets it, so each world is imported before its
 own `observe` (checked by hand with `init 232, observe, init 232, observe`; generated programs have one `init`). Findings and decisions: `work/p13a45/audit_findings.md` (not committed).
+
+## Appendix P13b (row P13 B/host.rs: reserve, grow, failure; byte and copy accounting)
+
+### P13b.1 Method
+
+Growth protocol (unchanged in shape, now proved and sized in Pruv). An op that cannot fit returns status 1 (Grow) with
+`N = out[0]` before any write: every bud_world mutator calls `bud_map::make_room` / `room` (bud_store::need on the
+entries and arena words it will add) first, and room writes nothing unless it rehashes the index in place (same
+observation); its rehash-then-Grow branch is unreachable for resident states (audit note, not proved), so a Grow
+status means the op made no observable change. The host allocates a zeroed buffer of exactly `N`
+words, calls the grow entry (`m4_grow` / `grow_copy`), drops the old buffer and retries the same op, at most 3 times.
+Nothing is replayed: the retry is the same single call on the copied state, and an op that returned Grow emitted no
+effect and answered no query (checked by the M10 replay counters, P13b.5).
+
+Every decision stays in Pruv:
+- `bud_store::need` decides N. It doubles from `2*len(st)` (at least 464) until the fresh layout fits, is capped at
+  2^40 words (the array length bound), and states `result == 0 || 464 <= result <= 2^40` and
+  `result == 0 || len(st) > 2^39 || result >= 2*len(st)`. The geometric step is a proved fact, so growth is amortized
+  linear without a host choice; the host's former `max(N, 2*len)` is gone (host.rs, driver_m4).
+- `grow_copy` proves `len(nxt) == len(old(nxt))` and `result != 0 || valid(nxt)` with no exit check: `init_store`
+  proves `valid(nxt)`, and `copy_node`, `copy_leaves` and `copy_kids` now state `kept(nxt, old(nxt))` (the P13a.9
+  writer preservation), so the root loop carries `valid(nxt)` as an invariant. The former O(1) exit `valid` check is
+  removed.
+- `grow_copy` copies the shapes the world builds (root 0 flat, roots 1 and 2 two levels). Admission accepts deeper
+  trees; their deeper entries used to be dropped silently. Now a live count of nxt that differs from prev's returns
+  2 (old state kept), so a grow never loses entries.
+- `bud_store::copy_words(st)` (new, O(1), header only) gives the copy accounting: 20 words per entry up to the entry
+  top (roots included) plus the arena words in use; the header is not counted. `root_m4::m4_copied` forwards it.
+
+Failure semantics (no poison flag, P13a.10). `grow_copy` reads prev only, so every failure on the grow path leaves the
+old buffer valid and unchanged and the op reports failure:
+- allocation refused: host.rs `alloc_zeroed` and driver_m4 `try_zeroed` call `std::alloc::alloc_zeroed` and return
+  None on a null pointer (no abort, no unwind); `vec![0; n]` aborted. The zeroed allocation keeps fresh pages lazily
+  zeroed, like `vec![0; n]` (a `try_reserve_exact` + `resize` version written first touched every page and raised peak
+  RSS by about 0.5 MiB at n = 1000; replaced in this package);
+- `N <= len` (need at its cap with a layout that still does not fit): the host refuses before allocating;
+- grow status != 0 (unsupported shape, invalid prev) or the retry limit: Err, old buffer kept.
+host.rs `step_inner` runs under a `NoUnwind` guard that aborts on unwind: `Core` is a public trait, so an
+implementation other than the proved entries could change st and then panic; the guard keeps the no-unwind premise of
+the flag-free store for any implementation.
+
+### P13b.2 Changed contracts
+
+| function | before | after |
+|---|---|---|
+| `bud_store::need` | none | `result == 0 \|\| 464 <= result <= 2^40`; `result == 0 \|\| len(st) > 2^39 \|\| result >= 2*len(st)`; capped at 2^40 |
+| `bud_store::copy_words` | (new) | `0 <= result` |
+| `bud_map::copy_node`, `copy_leaves`, `copy_kids` | budget bounds only | add `kept(nxt, old(nxt))` |
+| `bud_map::grow_copy` | `result != 0 \|\| valid(nxt)` through an exit check | same ensures proved (no check), plus `len(nxt) == len(old(nxt))`; 2 when the live counts differ |
+| `root_m4::m4_copied` | (new) | forwards `copy_words` |
+
+No language change, so no must_reject rows; neither compiler changed.
+
+### P13b.3 Proof time (root_m8, `/usr/bin/time -p`, CPU = user + sys including solver children, s)
+
+Base = main 4126096 bench sources, new = this package; rounds interleaved (base, new) on the same machine. The machine
+was shared with other builds (load 4 to 10), so CPU time is the gate number; round 2 of new Rust ran during a load
+spike (real 24.1 s, CPU 11.78 s) and is shown but not used for the median.
+
+| compiler | base CPU | new CPU | median ratio | gate (<= 1.2x) |
+|---|---|---|---:|---|
+| Rust | 6.12, 6.38, 7.46 | 6.20, (11.78), 6.42 | 1.01 (6.42 / 6.38) | met |
+| Python | 10.06, 10.73, 10.19 | 11.34, 11.91, 10.91 | 1.11 (11.34 / 10.19) | met |
+
+The Python increase is the added `kept` invariants in the copy loops and need's two ensures, which root_m8 imports.
+
+### P13b.4 Byte and copy accounting (`harness grow N`, host.rs, Q2 then Q3 puts)
+
+Q2 = n puts of 8 record words, Q3 = n puts of `40 + (i % 80)` words on the same keys; ops = 2n; the state starts at
+256 words. `alloc_words` is the sum of the N the host allocated, `copy_words` the sum of `m4_copied` over grows.
+
+| n | ops | Q2 grows | grows | final len | alloc words | copy words | alloc/op | copy/op |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 128 | 256 | 6 | 6 | 16384 | 32256 | 7146 | 126.0 | 27.9 |
+| 300 | 600 | 7 | 8 | 65536 | 130560 | 40133 | 217.6 | 66.9 |
+| 3000 | 6000 | 10 | 11 | 524288 | 1048064 | 337028 | 174.7 | 56.2 |
+
+Checks (fails 0 at all three sizes): each grow at least doubles; one buffer per grow; the installed lengths sum to the
+requested N exactly; Q2 grows; Q3 grows whenever its record words exceed the post-Q2 buffer (at n = 128 they fit);
+alloc and copy words each at most 2 x final length (amortized linear: a doubling sequence sums below twice its last
+term, and a copy is bounded by the old length); the fresh store copies exactly 60 words (3 roots x 20, empty arena);
+each further put of one shape adds the same count, at least 20 + its record words; copy words >= 60 per grow. With
+an allocation failure injected before every op, exactly the clean run's grow points fail with `GROW_ALLOC_ERR`, the
+state words and the observation equal the pre-op snapshot, the retry succeeds, and the run ends in the clean state.
+
+### P13b.5 Tests
+
+- `harness grow N` (above): Q2/Q3 growth, exact N, accounting, allocation-failure injection.
+- `m10_test/run_m10.py replay`: the same program on a small start buffer (456 grows) and on a big one (0 grows) gives
+  identical effect and query logs (726 effect lines); public calls 981 in both; small run 1093 attempts > 981 calls, and
+  24 public calls hit Grow and then completed with effects or query answers; big run attempts = calls. So a grown call
+  emits its effects once (no replay).
+- `m34_test/run.py admit`: `admit_grow` grows every admitted case into 2 x len; a 0 result must keep the live count
+  (cases 19 to 22), and the nested-tree cases (0, 14, 23) return 2 with the old state kept.
+- m34 `lanes`: 922 grows across 300 programs on every lane, size formula checks 1922/1922.
+
+### P13b.6 Gates
+
+Both compilers (Rust release build, Python `pruvc/pruvc.py`), all rc 0: `run.py m3 --count 300` 300/300; `admit`
+26/26; `lanes --count 300` all lanes 300/300, stats 1922/1922, import 300/300; M8 q (300, fail 0); M9 q (300, fail 0);
+M10 q (300, fail 0); M10 replay (above); M10 same (Rust and Python output byte-identical, 226467 bytes); M11
+(213 exact, 87 prefix-ok, fail 0). No compiler change, so cargo test, diff_rust and g8_frontend were not rerun.
+
+### P13b.7 Performance and memory (Rust backend, against hand Rust; floor 1.0x)
+
+`perf_headroom/host/run.py --only m4 --lanes m4nv --rounds 5`, ns per op, median of 5 alternating runs (adapter lanes:
+7), 200000 reps. Below = the Pruv range lies under the hand range.
+
+| axis | n | Pruv | hand | Pruv/hand | m4 [range] | hand [range] | m4raw/m4 | vs hand |
+|---|---:|---:|---:|---:|---|---|---:|---|
+| sessions | 100 | 12.6 | 14.9 | 0.85 | 13.0 [12.3-13.2] | 14.8 [14.5-15.3] | 0.95 | below |
+| sessions | 500 | 12.3 | 16.2 | 0.76 | 12.5 [12.3-13.1] | 15.9 [15.1-16.7] | 0.98 | below |
+| sessions | 1000 | 12.7 | 16.1 | 0.79 | 12.7 [12.5-13.2] | 16.0 [15.2-16.1] | 1.00 | below |
+| tools | 100 | 30.9 | 52.5 | 0.59 | 30.4 [30.0-30.6] | 52.2 [51.1-52.9] | 1.00 | below |
+| tools | 500 | 33.6 | 54.3 | 0.62 | 33.6 [33.0-34.1] | 53.8 [53.2-54.8] | 1.00 | below |
+| tools | 1000 | 32.7 | 54.8 | 0.60 | 32.4 [32.0-32.9] | 53.8 [53.2-55.7] | 1.01 | below |
+| clocks | 100 | 25.9 | 40.3 | 0.64 | 26.1 [25.3-27.0] | 40.0 [38.6-40.5] | 0.99 | below |
+| clocks | 500 | 25.6 | 40.8 | 0.63 | 25.5 [25.4-26.1] | 40.8 [40.4-41.4] | 1.00 | below |
+| clocks | 1000 | 26.2 | 41.1 | 0.64 | 26.2 [25.9-26.4] | 41.1 [40.8-41.7] | 1.00 | below |
+
+Memory, whole process: peak RSS from `/usr/bin/time -l`, allocations from a counting global allocator in both
+binaries (same accounting), median [min-max] of 5 runs:
+
+| axis | n | Pruv RSS KiB | hand RSS KiB | RSS Pruv/hand | vs hand | Pruv allocs | hand allocs | allocs Pruv/hand |
+|---|---:|---|---|---:|---|---:|---:|---:|
+| sessions | 100 | 1808 [1792-1808] | 1712 [1696-1728] | 1.06 | above | 512 | 820 | 0.62 |
+| sessions | 500 | 2048 [2032-2048] | 1872 [1856-1872] | 1.09 | above | 2514 | 4023 | 0.62 |
+| sessions | 1000 | 2304 [2304-2304] | 2016 [2000-2016] | 1.14 | above | 5015 | 8024 | 0.62 |
+| tools | 100 | 1824 [1824-1840] | 1728 [1712-1744] | 1.06 | above | 1495 | 602304 | 0.00 |
+| tools | 500 | 2096 [2080-2192] | 1920 [1904-1920] | 1.09 | above | 7497 | 611507 | 0.01 |
+| tools | 1000 | 2400 [2384-2416] | 2096 [2096-2128] | 1.15 | above | 14998 | 623008 | 0.02 |
+| clocks | 100 | 1792 [1792-1808] | 1696 [1696-1712] | 1.06 | above | 535 | 200959 | 0.00 |
+| clocks | 500 | 2016 [2016-2032] | 1984 [1984-2000] | 1.02 | above | 2537 | 204562 | 0.01 |
+| clocks | 1000 | 2240 [2224-2240] | 2272 [2240-2272] | 0.99 | equal (overlapping) | 5038 | 209063 | 0.02 |
+
+Time: every cell below hand. Allocations: every cell below hand. Peak RSS: 8 of 9 cells above hand (1.02 to 1.15x),
+a defect under the 1.0x floor, left open (P13b.8). Cause, as far as measured: the excess is about 100 KiB at n = 100
+and grows with n (about 0.3 KiB per entry at n = 1000), so it is per-entry state, not code size. The Pruv store keeps
+20 words (160 bytes) per entry plus the slot table and the arena with doubling slack, and during a grow the old and
+the new buffer are resident together (the hand map rehashes in place, slot by slot). Not yet split by component. A
+first version of the fallible allocation (`try_reserve_exact` + `resize`) touched every page of each new buffer and
+raised Pruv RSS to 1.22 to 1.42x; the `alloc_zeroed` version above restored the earlier level (P13b.1).
+
+### P13b.8 Remaining work
+
+- Peak RSS above hand on 8 of 9 M4 cells (1.02 to 1.15x): split the excess by component (entry words, slot table,
+  slack, old + new buffer at a grow) and shrink it; candidates are a smaller entry layout and a lower grow overlap.
+- `grow_copy` copies only the shapes the world builds; deeper admitted trees now fail the grow (2) instead of losing
+  entries. Either copy any depth or make admission reject them.
+- No proof that the retry after a grow fits (the host's 3-retry limit covers it at run time).
+- The out-buffer size (start 4096, doubling on status 3) is a host choice, not decided in Pruv.
+- LLVM backend and C adapter: the poison flag and the growth path there are unchanged (P17).
+- `m4_import` forwards only `valid(st)`, not admit's I1 forall (P13a.10.6).
+- The rehash-then-Grow branch of `room` is unreachable for resident states but not proved so.
+- `harness grow 30000` is slow (the injected run takes a snapshot at each grow point and the observation is linear);
+  only up to n = 3000 is in the gate.
+- M5_NOTES: store_find (n = 500, 1000) and store_find_enc (n = 1000) are above 1.0x hand, open.
+
+### P13b.9 Audit
+
+One review (Codex, review role) of the package diff, seven required findings, all fixed: (1) grow_copy dropped
+entries of deeper admitted trees: live-count check returns 2, tested by admit_grow; (2) the public `Core` trait could
+unwind after changing st: NoUnwind guard; (3) need could return up to 2^41, above the array bound, and a retry at the
+same size was possible: cap at 2^40 with ensures, host refuses `N <= len`; (4) driver_m4 allocated with
+`vec![0; n]` (aborts): fallible zeroed allocation; (5) copy accounting was only upper-bounded: exact-N and known-state
+copy checks (P13b.4); (6) M10 replay passed with no public call through Grow: call and grown-call counters;
+(7) `grow 128` required Q3 growth unconditionally: required only when Q3's record words exceed the post-Q2 buffer.
+A confirmation review closed 1 to 6; on 7 it found that the count used whole op lengths, fixed to record words only.
+Findings: `work/audit_findings.md` (not committed).

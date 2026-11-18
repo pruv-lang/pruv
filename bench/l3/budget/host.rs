@@ -1135,14 +1135,24 @@ pub fn run_q(prog_path: &str) -> Result<(), String> {
 
 // ---- resident state (M4 protocol) ----------------------------------------------------------------------------------------
 // The host owns the state buffer but never reads or writes its words: it allocates, calls the entries, and on Grow
-// (status 1, N = out[0]) allocates a zeroed buffer of max(N, 2*len), calls grow, drops the old buffer and retries the
-// same op (at most 3 retries). The slice types are Vec references so that the generated entries (whichever of
-// `&mut [i64]` / `&mut Vec<i64>` the Pruv compiler emits for `inout [i64]`) accept the arguments unchanged.
+// (status 1, N = out[0]) allocates a zeroed buffer of exactly N words, calls grow, drops the old buffer and retries the
+// same op (at most 3 retries). N is decided in Pruv (bud_store::need: N >= 2*len, the geometric step), so the host
+// makes no sizing choice (L3 P13b). A Grow status means the op wrote nothing, and grow reads prev only, so every failure
+// on the grow path (allocation refused, grow status != 0, retry limit) returns Err with the old buffer kept: the state
+// observes exactly as before the call. The entries are proved Pruv (no panic) and the allocation is fallible
+// (alloc_zeroed with a null check), so no call can unwind out of `step` with a half-replaced buffer and there is no poison flag
+// (the P13a.10 no-unwind store, here for the Rust host lane). The slice types are Vec references so that the generated
+// entries (whichever of `&mut [i64]` / `&mut Vec<i64>` the Pruv compiler emits for `inout [i64]`) accept the
+// arguments unchanged.
 
 pub trait Core {
     fn init(&self, st: &mut Vec<i64>) -> i64;
     fn grow(&self, prev: &Vec<i64>, next: &mut Vec<i64>) -> i64;
     fn op(&self, st: &mut Vec<i64>, inp: &[i64], out: &mut Vec<i64>) -> i64;
+    // Words the last grow copied into st (entries and arena), computed in Pruv from st's header; -1 if unknown.
+    fn copied(&self, _st: &Vec<i64>) -> i64 {
+        -1
+    }
 }
 
 pub struct ResidentState<C: Core> {
@@ -1151,15 +1161,26 @@ pub struct ResidentState<C: Core> {
     out: Vec<i64>,
     pub grows: u64,
     pub grow_ns: u128,
+    // Byte/copy accounting (L3 P13b): words allocated for grown buffers and words the grow copies wrote.
+    pub grow_alloc_words: u64,
+    pub grow_copy_words: u64,
     pub outsmall: u64,
-    // Poison flag (same semantics as pruv_raw::PruvStore): checked once at the start of each public call, set before
-    // any core call or allocation, cleared only when the call returns normally (Ok or Err). A panic inside a call
-    // (core or allocation) that is caught by the caller leaves it set.
-    poisoned: bool,
+    // Test hook: refuse the next `fail_allocs` grow allocations (allocation-failure injection).
+    pub fail_allocs: u32,
 }
 
-// Err value `step` returns on a poisoned state (no state is touched). Distinct from every other step error.
-pub const POISONED_ERR: &str = "resident state poisoned";
+// Aborts the process if dropped while unwinding (see step_inner).
+struct NoUnwind;
+impl Drop for NoUnwind {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            std::process::abort();
+        }
+    }
+}
+
+// Err value `step` returns when a grow allocation is refused (the old state is kept).
+pub const GROW_ALLOC_ERR: &str = "grow allocation failed";
 
 impl<C: Core> ResidentState<C> {
     pub fn new(core: C, initial_len: usize) -> Result<ResidentState<C>, String> {
@@ -1174,32 +1195,64 @@ impl<C: Core> ResidentState<C> {
         } else if r < 0 {
             return Err(format!("init returned {}", r));
         }
-        Ok(ResidentState { core, st, out: vec![0i64; 4096], grows: 0, grow_ns: 0, outsmall: 0, poisoned: false })
+        Ok(ResidentState {
+            core,
+            st,
+            out: vec![0i64; 4096],
+            grows: 0,
+            grow_ns: 0,
+            grow_alloc_words: 0,
+            grow_copy_words: 0,
+            outsmall: 0,
+            fail_allocs: 0,
+        })
     }
 
     pub fn st_len(&self) -> usize {
         self.st.len()
     }
 
-    pub fn is_poisoned(&self) -> bool {
-        self.poisoned
+    // Read-only view of the state words (tests compare observations through the core, not these words).
+    pub fn state(&self) -> &[i64] {
+        &self.st
     }
 
-    // One op. Ok(result words) for status 0 (out[0] = k words follow). On a poisoned state: Err(POISONED_ERR), nothing touched.
+    // One op. Ok(result words) for status 0 (out[0] = k words follow).
     pub fn step(&mut self, inp: &[i64]) -> Result<&[i64], String> {
-        if self.poisoned {
-            return Err(POISONED_ERR.to_string());
-        }
-        self.poisoned = true;
-        let r = self.step_inner(inp);
-        self.poisoned = false;
-        let k = r?;
+        let k = self.step_inner(inp)?;
         let hi = (1 + k).min(self.out.len());
         Ok(&self.out[1..hi])
     }
 
+    // A zeroed buffer of n words, or None when the allocator refuses (or the injection hook says so).
+    fn alloc_zeroed(&mut self, n: usize) -> Option<Vec<i64>> {
+        if self.fail_allocs > 0 {
+            self.fail_allocs -= 1;
+            return None;
+        }
+        if n == 0 {
+            return Some(Vec::new());
+        }
+        // alloc_zeroed like `vec![0; n]` (fresh pages stay lazily zeroed, no write pass), but a null result is a
+        // reported failure instead of an abort.
+        let layout = std::alloc::Layout::array::<i64>(n).ok()?;
+        // SAFETY: non-zero size; the pointer comes from the global allocator with this exact layout, so the Vec owns
+        // it with length = capacity = n, and all-zero bytes are valid i64 values.
+        unsafe {
+            let p = std::alloc::alloc_zeroed(layout) as *mut i64;
+            if p.is_null() {
+                return None;
+            }
+            Some(Vec::from_raw_parts(p, n, n))
+        }
+    }
+
     // The op loop; Ok(k) = status 0 with k result words at out[1..].
     fn step_inner(&mut self, inp: &[i64]) -> Result<usize, String> {
+        // `Core` is a public trait, so an implementation other than the proved Pruv entries could change st and then
+        // panic. The guard turns any unwind out of this loop into an abort, so no caller can catch it and step again on
+        // a half-changed state (L3 P13b; the no-unwind store needs no poison flag only if nothing can unwind).
+        let _no_unwind = NoUnwind;
         let mut retries = 0u32;
         let mut doublings = 0u32;
         loop {
@@ -1215,8 +1268,15 @@ impl<C: Core> ResidentState<C> {
                     retries += 1;
                     let t = std::time::Instant::now();
                     let n = self.out[0].max(0) as usize;
-                    let want = std::cmp::max(n, 2 * self.st.len());
-                    let mut fresh = vec![0i64; want];
+                    // need caps N at 2^40; an N that does not grow the buffer would retry at the same size, so it fails
+                    // here before any allocation and the old state stays (L3 P13b).
+                    if n <= self.st.len() {
+                        return Err(GROW_ALLOC_ERR.to_string());
+                    }
+                    let mut fresh = match self.alloc_zeroed(n) {
+                        Some(v) => v,
+                        None => return Err(GROW_ALLOC_ERR.to_string()),
+                    };
                     let g = self.core.grow(&self.st, &mut fresh);
                     if g != 0 {
                         return Err(format!("grow failed (status {})", g));
@@ -1224,6 +1284,8 @@ impl<C: Core> ResidentState<C> {
                     self.st = fresh;
                     self.grows += 1;
                     self.grow_ns += t.elapsed().as_nanos();
+                    self.grow_alloc_words += n as u64;
+                    self.grow_copy_words += self.core.copied(&self.st).max(0) as u64;
                 }
                 2 => return Err("invalid op".to_string()),
                 3 => {

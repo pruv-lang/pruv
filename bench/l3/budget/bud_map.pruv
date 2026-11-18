@@ -862,6 +862,7 @@ fn probe_w(st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn: i64)
 
 // Copies entry pe of prev (key, blob, scalars) as a new child of nowner in nxt. New entry index or -1.
 fn copy_node(prev: [i64], inout nxt: [i64], pe: i64, nowner: i64) -> i64
+  ensures crate::bud_store::kept(nxt, old(nxt))
 {
   let koff: i64 = crate::bud_store::c40(gf(prev, pe, 4));
   let klen: i64 = crate::bud_store::c32(gf(prev, pe, 5));
@@ -881,6 +882,7 @@ fn copy_node(prev: [i64], inout nxt: [i64], pe: i64, nowner: i64) -> i64
   let mut f: i64 = 14;
   while f < 18
     invariant 14 <= f && f <= 18
+    invariant crate::bud_store::kept(nxt, old(nxt))
     decreases 18 - f
   {
     sf(inout nxt, ne, f, gf(prev, pe, f));
@@ -893,11 +895,13 @@ fn copy_node(prev: [i64], inout nxt: [i64], pe: i64, nowner: i64) -> i64
 fn copy_leaves(prev: [i64], inout nxt: [i64], pe: i64, ne: i64, budget: i64) -> i64
   requires 0 <= budget && budget <= 4294967296
   ensures result >= -1 && result <= budget
+  ensures crate::bud_store::kept(nxt, old(nxt))
 {
   let mut b: i64 = budget;
   let mut c: i64 = gf(prev, pe, 9);
   while c >= 0 && b > 0
     invariant 0 <= b && b <= budget
+    invariant crate::bud_store::kept(nxt, old(nxt))
     decreases b
   {
     b = b - 1;
@@ -913,11 +917,13 @@ fn copy_leaves(prev: [i64], inout nxt: [i64], pe: i64, ne: i64, budget: i64) -> 
 fn copy_kids(prev: [i64], inout nxt: [i64], pr: i64, nr: i64, budget: i64, deep: bool) -> i64
   requires 0 <= budget && budget <= 4294967296
   ensures result >= -1 && result <= budget
+  ensures crate::bud_store::kept(nxt, old(nxt))
 {
   let mut b: i64 = budget;
   let mut c: i64 = gf(prev, pr, 9);
   while c >= 0 && b > 0
     invariant 0 <= b && b <= budget
+    invariant crate::bud_store::kept(nxt, old(nxt))
     decreases b
   {
     b = b - 1;
@@ -937,10 +943,12 @@ fn copy_kids(prev: [i64], inout nxt: [i64], pr: i64, nr: i64, budget: i64, deep:
 // new arena; a stored hash is reused when owner and generation are unchanged and recomputed from the packed words
 // otherwise; tombstones and dead arena words are dropped. O(len(prev) + len(nxt)) with short probes; a colliding key
 // set (see PERF_HEADROOM P04 threat model) can push reinsertion to O(entries x slots). 0 ok, 2 invalid prev,
-// nxt too small, or nxt cannot hold the copy.
-// A 0 result leaves the I0 header fact valid(nxt) (L3 P07). The copy loop writes through the bud_map header writers,
-// which do not carry valid-preservation contracts yet (L3 P11..P13), so the grow exit closes with one O(1) check.
+// nxt too small, nxt cannot hold the copy, or prev holds entries outside those levels (live counts differ).
+// A 0 result leaves the I0 header fact valid(nxt) (L3 P07): init_store proves valid(nxt) and every later write goes
+// through writers that keep shape and dyn_ok (kept, L3 P13a.9), so the exit needs no check (L3 P13b). prev is read
+// only, so any nonzero result (or a failed allocation of nxt in the host) leaves the old state valid and unchanged.
 pub fn grow_copy(prev: [i64], inout nxt: [i64]) -> i64
+  ensures len(nxt) == len(old(nxt))
   ensures result != 0 || crate::bud_store::valid(nxt)
 {
   if !crate::bud_store::valid(prev) { return 2; }
@@ -952,12 +960,16 @@ pub fn grow_copy(prev: [i64], inout nxt: [i64]) -> i64
   let mut r: i64 = 0;
   while r < 3
     invariant 0 <= r && r <= 3 && 0 <= b && b <= 4294967296
+    invariant crate::bud_store::valid(nxt)
     decreases 3 - r
   {
     b = copy_kids(prev, inout nxt, r, r, b, r != 0);
     if b < 0 { return 2; }
     r = r + 1;
   }
-  if !crate::bud_store::valid(nxt) { return 2; }
+  // The copy covers the shapes the world builds (root 0 flat, roots 1 and 2 two levels). Admission (bud_admit) also
+  // accepts deeper trees; their extra entries would be dropped, so a live count that differs from prev's fails the
+  // grow instead (2: the old state stays valid and unchanged, nothing is lost silently; L3 P13b).
+  if hw(nxt, 12) != hw(prev, 12) { return 2; }
   return 0;
 }

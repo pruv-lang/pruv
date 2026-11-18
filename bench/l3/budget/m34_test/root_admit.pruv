@@ -136,6 +136,19 @@ fn chain(inout st: [i64], keys: [i64], n: i64) -> i64
   return 0;
 }
 
+// Grow after admission (L3 P13b): builds and admits case into st, then grow_copy into nxt. live[0..2] gets the live
+// counts of st and nxt. Returns grow_copy's result, or -1000 if admission rejected st. A 0 result must keep every
+// live entry; a tree deeper than grow_copy copies (entries 9, 10 under entry 3 under root 0) must give 2.
+pub fn admit_grow(inout st: [i64], keys: [i64], case: i64, inout nxt: [i64], inout cnt: [i64], inout live: [i64]) -> i64
+{
+  let a: i64 = admit_case(inout st, keys, case, inout cnt);
+  if a < 0 { return -1000; }
+  let g: i64 = crate::bud_map::grow_copy(st, inout nxt);
+  crate::ent_u16::wr(inout live, 0, crate::bud_store::hd(st, 12));
+  crate::ent_u16::wr(inout live, 1, crate::bud_store::hd(nxt, 12));
+  return g;
+}
+
 pub fn admit_case(inout st: [i64], keys: [i64], case: i64, inout cnt: [i64]) -> i64
 {
   let b: i64 = build(inout st, keys);

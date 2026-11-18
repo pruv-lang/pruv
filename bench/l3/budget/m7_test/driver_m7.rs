@@ -15,7 +15,7 @@
 // advances its UUID stream), [23] isQuiet consulted (the host advances its isQuiet answers; the answer, next queued
 // or default false, is supplied up front in the op like the next UUID), [13] timerClear (no timers exist in M7
 // scenarios; logged). Need 5 only answers a call made without an isQuiet input; this host always supplies one.
-// Grow -N: buffer of max(N, 2*len), t_grow, retry.
+// Grow -N: buffer of exactly N (Pruv sizes it, N >= 2*len), t_grow, retry.
 // Wire keys are packed u16 keys `n, words(n) packed words` (bud_keys layout), packed once by the encoder (run_m7.py
 // for q mode, key() below for perf / boundary); the records hold the budget id and follows packed the same way
 // (bud_lifecycle.pruv header). A ref result keeps its ids packed too ([3, n, words(n) words (, m, words(m) words)]);
@@ -71,7 +71,7 @@ impl World {
     }
 
     fn grow(&mut self, n: usize) {
-        let want = std::cmp::max(n, 2 * self.st.len());
+        let want = n; // N from Pruv (bud_store::need, N >= 2*len): the host makes no sizing choice (L3 P13b)
         let mut fresh = vec![0i64; want];
         if sol::t_grow(&self.st, &mut fresh) != 0 {
             eprintln!("t_grow failed");

@@ -20,6 +20,30 @@ use std::collections::{HashMap, HashSet};
 use std::hint::black_box;
 use std::time::Instant;
 
+// Allocation count (L3 P13b memory gate): every alloc / alloc_zeroed / realloc of the whole process, printed as
+// allocs=N on the perf line; perf_headroom/host/run.py compares it with the other side's count (same accounting).
+struct CountingAlloc;
+static ALLOC_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+unsafe impl std::alloc::GlobalAlloc for CountingAlloc {
+    unsafe fn alloc(&self, l: std::alloc::Layout) -> *mut u8 {
+        ALLOC_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::alloc::System.alloc(l)
+    }
+    unsafe fn alloc_zeroed(&self, l: std::alloc::Layout) -> *mut u8 {
+        ALLOC_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::alloc::System.alloc_zeroed(l)
+    }
+    unsafe fn dealloc(&self, p: *mut u8, l: std::alloc::Layout) {
+        std::alloc::System.dealloc(p, l)
+    }
+    unsafe fn realloc(&self, p: *mut u8, l: std::alloc::Layout, n: usize) -> *mut u8 {
+        ALLOC_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::alloc::System.realloc(p, l, n)
+    }
+}
+#[global_allocator]
+static GLOBAL_ALLOC: CountingAlloc = CountingAlloc;
+
 const OUT_WORDS: usize = 4096;
 
 type Key = Box<[u16]>;
@@ -892,7 +916,8 @@ fn main() {
             // One measured run on fresh state, no separate warm-up (driver_m4 perf has none either).
             let (ns, ops, sink) = run_once(axis, n, reps, mode == "perfc", mode == "perfcb");
             eprintln!("sink={}", sink);
-            println!("axis={} n={} hand_ns_per_op={:.1}", axis, n, ns as f64 / ops as f64);
+            println!("axis={} n={} hand_ns_per_op={:.1} allocs={}", axis, n, ns as f64 / ops as f64,
+                     ALLOC_COUNT.load(std::sync::atomic::Ordering::Relaxed));
         }
         _ => usage(),
     }
