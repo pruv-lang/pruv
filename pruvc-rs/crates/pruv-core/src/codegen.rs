@@ -1219,6 +1219,10 @@ struct Gen<'a> {
     /// trust_callers the entry's pub wrapper skips the checks and an extra private checked wrapper `<entry>__pruv_chk`
     /// serves the Pruv callers.
     explicit: bool,
+    /// P09: manifest raw_entries ("crate" / "unsafe"), only in explicit mode
+    raw: Option<String>,
+    /// P09: (name, params text, return text, parameter names) of each host entry's public item, in emission order
+    raw_items: Vec<(String, String, String, Vec<String>)>,
     /// G4 A2: the host entries (Rust names)
     entries: HashSet<String>,
     /// G4 A2: some function needs the runtime contract helpers (explicit mode)
@@ -1286,6 +1290,8 @@ impl<'a> Gen<'a> {
             function_name: String::new(),
             prog,
             explicit,
+            raw: if explicit { prog.raw_entries.clone() } else { None },
+            raw_items: Vec::new(),
             entries,
             checks_needed,
             fmarks,
@@ -1640,7 +1646,19 @@ impl<'a> Gen<'a> {
         // without a checked wrapper are `pub`
         let host = self.entries.contains(&f.name);
         let vis = if self.explicit {
-            if host && !has { "pub " } else { "" }
+            if host && !has {
+                if self.raw.is_some() {
+                    self.raw_items.push((
+                        f.name.clone(),
+                        ps.clone(),
+                        ret.clone(),
+                        f.params.iter().map(|p| p.name.clone()).collect(),
+                    ));
+                }
+                self.pub_vis()
+            } else {
+                ""
+            }
         } else if has || self.private(f) {
             ""
         } else {
@@ -1714,6 +1732,11 @@ impl<'a> Gen<'a> {
             }
         }
         Ok(())
+    }
+
+    /// P09: the visibility of a host entry's public item
+    fn pub_vis(&self) -> &'static str {
+        if self.raw.is_some() { "pub(crate) " } else { "pub " }
     }
 
     /// KD-M6-3: the variant of a small function that writes its result into the caller's stack buffer
@@ -1825,8 +1848,16 @@ impl<'a> Gen<'a> {
         let allow = self.allow;
         self.emit(0, allow);
         self.emit(0, "#[inline]");
-        let vis = if is_pub { "pub " } else { "" };
+        let vis = if is_pub { self.pub_vis() } else { "" };
         self.emit(0, &format!("{}fn {}({}){} {{", vis, name, ps, ret));
+        if is_pub && self.explicit && self.raw.is_some() {
+            self.raw_items.push((
+                name.to_string(),
+                ps.to_string(),
+                ret.to_string(),
+                f.params.iter().map(|p| p.name.clone()).collect(),
+            ));
+        }
         if checked {
             let (conversions, checks) = self.req_checks(f)?;
             for line in &conversions {
@@ -4448,7 +4479,105 @@ fn gen_rust_concrete_core(
     }
     let mut s = g.out.join("\n");
     s.push('\n');
-    Ok((inline_policy(s), manifest, trust))
+    let mut text = inline_policy(s);
+    if let Some(raw) = &g.raw {
+        // P09: after inline_policy, so the module never changes an inlining decision
+        text.push_str(&raw_module(raw, &g.raw_items));
+        text.push('\n');
+    }
+    Ok((text, manifest, trust))
+}
+
+const RAW_STORE: &str = "    /// The store was poisoned by a panic inside `PruvStore::with`; its state is never observed or reused.
+    #[derive(Debug)]
+    pub struct PruvPoisoned {}
+    /// Owns resident state for the raw entries. Every call runs through `with`: the poison flag is set before the
+    /// call and cleared only when it returns normally, so a caught panic leaves the store poisoned and every later
+    /// `with` refuses without touching the state. Dropping a poisoned store only releases its buffers.
+    /// Two rules the types cannot enforce are the adapter's: `T` owns the state (no reference or shared handle to it
+    /// outside the store), and the closure given to `with` never catches a panic (no `catch_unwind` inside it).
+    pub struct PruvStore<T> {
+        data: T,
+        poisoned: bool,
+    }
+    impl<T> PruvStore<T> {
+        #[inline(always)]
+        pub fn new(data: T) -> Self {
+            PruvStore { data, poisoned: false }
+        }
+        #[inline(always)]
+        pub fn is_poisoned(&self) -> bool {
+            self.poisoned
+        }
+        #[inline(always)]
+        pub fn with<R>(&mut self, f: impl FnOnce(&mut T) -> R) -> Result<R, PruvPoisoned> {
+            if self.poisoned {
+                return Err(PruvPoisoned {});
+            }
+            self.poisoned = true;
+            let r = f(&mut self.data);
+            self.poisoned = false;
+            Ok(r)
+        }
+    }";
+
+/// `RAW_FORWARD` of the Python generator with its `%s` slots: name, name, params, return, name, argument names.
+fn raw_forward(name: &str, ps: &str, ret: &str, names: &[String]) -> String {
+    format!(
+        "        /// Raw entry `{n}` (manifest raw_entries = \"unsafe\").
+        ///
+        /// # Safety
+        ///
+        /// The caller upholds every precondition of the entry: its `requires` (checked at run time unless the
+        /// program was built with --trust-callers), and every array that carries resident state was produced by this
+        /// program's entries and was not changed by other code since. A state that was being changed when a panic
+        /// unwound must never be passed again; keep it in a `PruvStore`, which refuses reuse after a panic.
+        #[inline(always)]
+        pub unsafe fn {n}({ps}){ret} {{
+            super::super::{n}({args})
+        }}",
+        n = name,
+        ps = ps,
+        ret = ret,
+        args = names.join(", ")
+    )
+}
+
+/// P09: the pruv_raw module of a program with manifest raw_entries = mode ("crate" or "unsafe"), without a trailing
+/// newline. items: (name, params text, return text, parameter names) of the host entries' public items in emission order.
+pub fn raw_module(mode: &str, items: &[(String, String, String, Vec<String>)]) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if mode == "crate" {
+        parts.push("// P09: manifest raw_entries = \"crate\": the host entries above are pub(crate); a host adapter in this crate keeps".to_string());
+        parts.push("// resident state in pruv_raw::PruvStore, which refuses every reuse after a panic.".to_string());
+        parts.push("#[allow(dead_code)]".to_string());
+        parts.push("pub mod pruv_raw {".to_string());
+        parts.push(RAW_STORE.to_string());
+        parts.push("}".to_string());
+        return parts.join("\n");
+    }
+    parts.push("// P09: manifest raw_entries = \"unsafe\": the host entries above are pub(crate) and exported only as the documented".to_string());
+    parts.push("// pub unsafe fn forwarders in pruv_raw; resident state lives in pruv_raw::PruvStore, which refuses reuse after a panic.".to_string());
+    parts.push("#[allow(dead_code)]".to_string());
+    parts.push("pub mod pruv_raw {".to_string());
+    parts.push(RAW_STORE.to_string());
+    // the forwarders sit in a private child module so the program's own type names (which the glob import brings in)
+    // never meet PruvStore, PruvPoisoned or the prelude names the store uses
+    for l in [
+        "    #[allow(unused_imports)]",
+        "    pub use self::entries::*;",
+        "    mod entries {",
+        "        #[allow(unused_imports)]",
+        "        use super::super::*;",
+    ] {
+        parts.push(l.to_string());
+    }
+    for (n, ps, ret, names) in items {
+        parts.push(raw_forward(n, ps, ret, names));
+    }
+    parts.push("    }".to_string());
+    parts.push("}".to_string());
+    parts.join("\n")
 }
 
 // Inline policy (SPEC "Inline policy"; Python `inline_policy`): a pass over the finished Rust text, so the Python and Rust
@@ -4496,7 +4625,13 @@ fn inline_policy(text: String) -> String {
             continue;
         }
         let h = lines[i + 1];
-        let p = if h.starts_with("pub fn ") { 4 } else { 0 };
+        let p = if h.starts_with("pub fn ") {
+            4
+        } else if h.starts_with("pub(crate) fn ") {
+            11
+        } else {
+            0
+        };
         if !h[p..].starts_with("fn ") {
             continue;
         }
@@ -4608,6 +4743,33 @@ fn g9_charge(n: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raw_module_crate_text() {
+        let t = raw_module("crate", &[]);
+        assert!(t.starts_with("// P09: manifest raw_entries = \"crate\": the host entries above are pub(crate); a host adapter in this crate keeps\n// resident state in pruv_raw::PruvStore, which refuses every reuse after a panic.\n#[allow(dead_code)]\npub mod pruv_raw {\n    /// The store was poisoned"));
+        assert!(t.ends_with("            Ok(r)\n        }\n    }\n}"));
+        assert!(!t.contains("pub unsafe fn"));
+    }
+
+    #[test]
+    fn raw_module_unsafe_text() {
+        let items = vec![("put".to_string(), "st: &mut [i64], i: i64".to_string(), " -> i64".to_string(), vec!["st".to_string(), "i".to_string()])];
+        let t = raw_module("unsafe", &items);
+        assert!(t.contains("#[allow(dead_code)]\npub mod pruv_raw {\n    /// The store was poisoned"));
+        assert!(t.contains("    }\n    #[allow(unused_imports)]\n    pub use self::entries::*;\n    mod entries {\n        #[allow(unused_imports)]\n        use super::super::*;\n        /// Raw entry `put`"));
+        assert!(t.contains("        /// Raw entry `put` (manifest raw_entries = \"unsafe\").\n        ///\n        /// # Safety\n"));
+        assert!(t.contains("        #[inline(always)]\n        pub unsafe fn put(st: &mut [i64], i: i64) -> i64 {\n            super::super::put(st, i)\n        }\n    }\n}"));
+        assert!(!t.contains("\n    use super::*;"));
+    }
+
+    #[test]
+    fn inline_policy_pub_crate_upgrade() {
+        let a = inline_policy("#[inline]\npub fn f(x: i64) -> i64 {\n    x\n}\n".to_string());
+        let b = inline_policy("#[inline]\npub(crate) fn f(x: i64) -> i64 {\n    x\n}\n".to_string());
+        assert_eq!(a, "#[inline(always)]\npub fn f(x: i64) -> i64 {\n    x\n}\n");
+        assert_eq!(b, "#[inline(always)]\npub(crate) fn f(x: i64) -> i64 {\n    x\n}\n");
+    }
 
     fn var(n: &str, ty: &str) -> Expr {
         Expr::Var(Var { line: 1, col: 1, name: n.into(), ty: Some(ty.into()) })

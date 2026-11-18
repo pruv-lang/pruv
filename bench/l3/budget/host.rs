@@ -1152,7 +1152,14 @@ pub struct ResidentState<C: Core> {
     pub grows: u64,
     pub grow_ns: u128,
     pub outsmall: u64,
+    // Poison flag (same semantics as pruv_raw::PruvStore): checked once at the start of each public call, set before
+    // any core call or allocation, cleared only when the call returns normally (Ok or Err). A panic inside a call
+    // (core or allocation) that is caught by the caller leaves it set.
+    poisoned: bool,
 }
+
+// Err value `step` returns on a poisoned state (no state is touched). Distinct from every other step error.
+pub const POISONED_ERR: &str = "resident state poisoned";
 
 impl<C: Core> ResidentState<C> {
     pub fn new(core: C, initial_len: usize) -> Result<ResidentState<C>, String> {
@@ -1167,24 +1174,39 @@ impl<C: Core> ResidentState<C> {
         } else if r < 0 {
             return Err(format!("init returned {}", r));
         }
-        Ok(ResidentState { core, st, out: vec![0i64; 4096], grows: 0, grow_ns: 0, outsmall: 0 })
+        Ok(ResidentState { core, st, out: vec![0i64; 4096], grows: 0, grow_ns: 0, outsmall: 0, poisoned: false })
     }
 
     pub fn st_len(&self) -> usize {
         self.st.len()
     }
 
-    // One op. Ok(result words) for status 0 (out[0] = k words follow).
+    pub fn is_poisoned(&self) -> bool {
+        self.poisoned
+    }
+
+    // One op. Ok(result words) for status 0 (out[0] = k words follow). On a poisoned state: Err(POISONED_ERR), nothing touched.
     pub fn step(&mut self, inp: &[i64]) -> Result<&[i64], String> {
+        if self.poisoned {
+            return Err(POISONED_ERR.to_string());
+        }
+        self.poisoned = true;
+        let r = self.step_inner(inp);
+        self.poisoned = false;
+        let k = r?;
+        let hi = (1 + k).min(self.out.len());
+        Ok(&self.out[1..hi])
+    }
+
+    // The op loop; Ok(k) = status 0 with k result words at out[1..].
+    fn step_inner(&mut self, inp: &[i64]) -> Result<usize, String> {
         let mut retries = 0u32;
         let mut doublings = 0u32;
         loop {
             let s = self.core.op(&mut self.st, inp, &mut self.out);
             match s {
                 0 => {
-                    let k = self.out[0].max(0) as usize;
-                    let hi = (1 + k).min(self.out.len());
-                    return Ok(&self.out[1..hi]);
+                    return Ok(self.out[0].max(0) as usize);
                 }
                 1 => {
                     if retries >= 3 {

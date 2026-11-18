@@ -617,3 +617,79 @@ Same machine, same run, new compiler on new sources vs HEAD compiler (87e142b) o
 | M4 perf | clocks | 0.65 / 0.61 / 0.62 | 0.66 / 0.61 / 0.62 | |
 
 Lesson: an earlier P07 draft wrote `c32`, `c40`, `hd`, `set_hd` inline instead of calling ent_u16. That changed helper body sizes, so the text-size inline policy (codegen `inline_policy`, INLINE_SMALL 8, INLINE_BUDGET 1500) moved `#[inline(always)]` from `bud_world::put_blob` to `make_room`, and M4 sessions rose to 1.03x at n = 100 (from 0.89x). Keeping the bodies and putting the exact `ensures` on the shared lib helpers kept the generated code equal to HEAD except the two constructor checks. Contract-only changes should not rewrite bodies on hot paths.
+
+## Appendix P09. Raw-entry visibility and the poison store
+
+P09 applies the manifest key `raw_entries` (docs/G4B_SPEC.md §3 rule 7, recorded as `Program.raw_entries` in P06) in both Rust-producing paths of both compilers: the Rust backend (pruvc/codegen.py, pruvc-rs codegen.rs) and the safe wrappers of the LLVM backend's Rust bindings (pruvc/llvmgen.py `gen_bindings`, pruvc-rs bindings.rs). It closes D6 (§2.3) for Rust hosts: resident state lives in a store that refuses every reuse after a panic. With the key missing, every output is byte-identical to before (diff_rust, g8 compatibility hashes and all `.rs` snapshots unchanged). User rules: SPEC.md "Raw entries (manifest `raw_entries`)".
+
+### P09.1 Design
+
+| Item | Rule |
+|---|---|
+| Visibility | With `raw_entries` set, every item that was emitted as `pub fn <host entry>` is emitted as `pub(crate) fn <host entry>`: the explicit host entry without `requires`, the checked wrapper of an entry with `requires` (its body `e__pruv_body` and, under `--trust-callers`, `__pruv_chk` stay private), and the safe wrapper in LLVM bindings. Nothing else changes. Non-explicit programs ignore the key (a manifest program is always explicit). |
+| Inline policy | `inline_policy` (py and rs) treats a `pub(crate) fn ` header exactly like `pub fn `, so inline hints match the `pub` build. The `pruv_raw` module is appended after `inline_policy` ran and never changes inlining. |
+| `pruv_raw` module | Appended at the end of the Rust backend output, and in bindings after the last safe wrapper and before the G6 shim (the shim stays last). It holds `PruvPoisoned` and `PruvStore<T>` (private fields `data`, `poisoned`; `new`, `is_poisoned`, `with`) and, in `"crate"` mode, nothing else; it has no glob import, so a user item named `PruvStore`, `Result` or `entries` cannot collide with it. In `"unsafe"` mode the forwarders live in a private child module `pruv_raw::entries` (`use super::super::*;`, bodies call `super::super::NAME(..)`) re-exported by `pub use self::entries::*;`, so forwarder signatures resolve user types exactly as the entries do. |
+| Poison (D6) | `PruvStore::with(f)` refuses with `Err(PruvPoisoned)` if poisoned, otherwise sets the flag, runs `f(&mut data)`, clears the flag and returns `Ok`. The flag is cleared only on normal return: a panic inside `f` (partial write, allocation-size overflow, host panic) unwinds past the clear, so a caught panic leaves the store poisoned and every later `with`, mutating or observing, is refused without running its closure. There is no other accessor to `data`, so poisoned state is never observed or reused. Drop only releases the buffers (`Vec<i64>`/`Vec<u8>` drop never reads element values), so dropping a poisoned store is safe. |
+| Trust boundary | The crate is the trust boundary: code in the same crate can call a `pub(crate)` entry with any array, exactly as it could call today's `pub fn`; that code is the adapter and is trusted. What the key removes is safe access from outside the crate (strictly tighter than without the key). |
+| Adapter contract | Two rules the types cannot enforce, stated in the `PruvStore` doc comment of both compilers: `T` owns the state (no reference, `Rc` or other shared handle to it outside the store), and the closure given to `with` never catches a panic (a `catch_unwind` inside it would return normally and clear the flag; the same contract shape as std `Mutex` poisoning). |
+| `"crate"` | Entries are `pub(crate)`; a host adapter in the same crate (the module next to the generated file, as in bench/l3/budget/host.rs) owns the store and calls entries only inside `with`. Code outside the crate cannot name any entry (E0603). |
+| `"unsafe"` | Same, plus one `pub unsafe fn NAME` forwarder per host entry inside `pruv_raw` (program function order, same parameter and return text as the entry), each with a `# Safety` section: the caller upholds the entry's `requires` (checked at run time unless `--trust-callers`), passes only state produced by this program's entries and not changed since, and never passes again a state that was being changed when a panic unwound (keep it in a `PruvStore`). |
+| No safe arbitrary-buffer entry | In no mode does the output contain a `pub` safe function that takes a caller-supplied array: the only `pub` safe items are the generic `PruvStore` methods, which never call an entry. Without the key, today's `pub fn` entries remain (G4B compatibility); a program that wants the guarantee sets the key. |
+| Requires run once | Without `--trust-callers` the `pub(crate)` checked wrapper checks `requires` once per call; the adapter does not re-check. The P06.3 note about duplicated arguments in expanded requires therefore costs one evaluation per call, at the entry. |
+| `--trust-callers` | Does not require `raw_entries`: single-file builds (no manifest) and about 40 tests and benchmarks use it. SPEC.md states that a trust-callers entry is safe only when every caller is trusted; `raw_entries` is how a package makes that enforced by visibility. |
+| No unwind into C | The Rust backend emits no `extern "C"` item. LLVM bindings call the C object, which never unwinds (host callbacks abort on allocation failure). A C-facing adapter with `catch_unwind` is P10. |
+| Line-559 note (P06.3) | Kept as is: P09 publishes no contract across packages, so visibility of expansions stays an interface-stability policy. |
+
+### P09.2 Evidence (C)
+
+| Category | Files | Result |
+|---|---|---|
+| Text facts | tests/l3/abi/check_raw_entries.py (a): keys none/`crate`/`unsafe` × flags default/`--trust-callers`/`--no-verify` × backends rust/llvm | No key: `pub fn` entries, no `pruv_raw`. With a key: no top-level `pub fn`, `pub(crate) fn` per entry, `pub mod pruv_raw`, `PruvStore`/`PruvPoisoned`; `unsafe` has exactly one `pub unsafe fn` and one `# Safety` per entry, `crate` none. With `--rs`, every `.rs`/`.ll` is byte-identical to the Python compiler's. |
+| Compile-time rejection | (b): generated code built as an rlib, consumer crates compiled against it | Calling an entry from outside: `crate`/`unsafe` E0603 (no key: compiles); `pruv_raw::put` without `unsafe`: E0133 (`unsafe`), E0425 (`crate`); inside `unsafe {}`: compiles (`unsafe`), E0425 (`crate`); reading `PruvStore.data`: E0616. |
+| Panic injection | (c) tests/l3/abi/raw_host.rs, `crate`, `--no-verify` package with `put_far` (writes `st[0]`, then indexes out of range) | Partial write, allocation failure (capacity overflow; a real OOM aborts and cannot unwind), host panic after an entry wrote: each is caught, the store is poisoned, a later mutating `with` and a later observing `with` are refused without running, the store is dropped. Normal calls on a fresh store never poison. |
+| Name clash | (d): a package with a user `pub struct PruvStore { x: i64 }`, an entry `read(v: PruvStore)` without `requires` and an entry with `requires`; keys `crate`/`unsafe` × rust/llvm | Generated code compiles as an rlib in every case; `unsafe` has forwarders `read`, `get` and a consumer calls both (`gen::pruv_raw::read(gen::PruvStore { x: 3 })`). |
+| Runner | tests/run_all.py group `l3_abi` (one row; passes the selected compiler as `--rs` or `--py`) | PASS on py and rs; direct `--rs` run: every output identical to py. |
+| Rejects | tests/must_reject/l3_p09_result_param (expandable callee with a parameter `result: i64`; the automatic body fact keeps the argument value, so `a[bump(1)]` is index 2 of a length-2 array), l3_p09_old_param (the same with a parameter named `old`), l3_p09_nested_call (`a[inc(inc(1))]`, length 3: each nested call carries its own body fact) | verify/index_oob at 8:11 on both compilers; must_reject 852/852 on both. |
+| Bench adapter | bench/l3/budget/host.rs (ResidentState poisons on entry and clears on normal exit, `is_poisoned`), m34_test/driver_m4.rs + run.py (`m4raw`: the M4 driver over a `raw_entries = "crate"` package with `pruv_raw::PruvStore`) | m34 keys 5823/5823, m3 300/300, m4 300/300, m4raw 300/300 on both compilers. |
+
+Gates (both compilers unless noted): no-key byte identity against the HEAD Python compiler for every bench/l3/budget root, m34 root and example, rust and llvm (160/160 identical); `cargo test --release`; diff_rust `--fuzz-count 20` all same; `--only g8_frontend` py 27/27, rs 39/39; list-rows/compare-rows; budget roots root_keys, root_m3, root_m4, root_m8, root_m9 verify with identical `.rs`; L3 lib slices json a0–a5, mcp, qwen, supervisor a0–a3; run_m7 q 113 exact / 0 fail, run_m10 q 78 exact / 0 fail, run_m6, run_m11 (213 exact, 87 prefix-ok).
+
+### P09.3 Perf (P)
+
+Rust driver, `perf_headroom/host/run.py --only m4` (load average about 3, so cells move by a few percent between runs). The M4 driver changed in P09: every state call now goes through a store with the `PruvStore` API (m34_test/driver_m4.rs). The default build `m4` uses `Plain<T>`, which has no poison flag and inlines to a direct call, so the first table measures the same work as P07.4. (bench/l3/budget/host.rs `ResidentState`, used by the other budget hosts, also gained a poison flag; M4 does not use it.)
+
+| axis | n | Pruv ns | hand ns | Pruv/hand | P07.4 |
+|---|---:|---:|---:|---:|---:|
+| sessions | 100 / 500 / 1000 | 12.9 / 12.6 / 13.1 | 14.4 / 15.7 / 15.7 | 0.90 / 0.80 / 0.83 | 0.87 / 0.80 / 0.80 |
+| tools | 100 / 500 / 1000 | 30.4 / 33.2 / 32.4 | 52.3 / 52.7 / 53.3 | 0.58 / 0.63 / 0.61 | 0.56 / 0.62 / 0.60 |
+| clocks | 100 / 500 / 1000 | 25.9 / 24.6 / 25.1 | 37.5 / 38.9 / 39.2 | 0.69 / 0.63 / 0.64 | 0.66 / 0.61 / 0.62 |
+
+Poison cost (median of 7 alternating rounds; m4 = the plain driver, m4raw = the same calls through a `raw_entries = "crate"` package and one `pruv_raw::PruvStore::with` per call):
+
+| axis | n | hand | m4 | m4raw | m4/hand | m4raw/hand | m4raw/m4 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| sessions | 100 | 14.6 | 12.8 | 14.6 | 0.88 | 1.00 | 1.141 |
+| sessions | 500 | 15.6 | 12.6 | 14.3 | 0.81 | 0.92 | 1.135 |
+| sessions | 1000 | 16.0 | 13.0 | 15.1 | 0.81 | 0.94 | 1.162 |
+| tools | 100 | 52.9 | 30.5 | 31.8 | 0.58 | 0.60 | 1.043 |
+| tools | 500 | 54.3 | 33.6 | 35.9 | 0.62 | 0.66 | 1.068 |
+| tools | 1000 | 54.7 | 32.4 | 35.3 | 0.59 | 0.65 | 1.090 |
+| clocks | 100 | 37.6 | 25.5 | 26.7 | 0.68 | 0.71 | 1.047 |
+| clocks | 500 | 40.3 | 24.9 | 26.4 | 0.62 | 0.66 | 1.060 |
+| clocks | 1000 | 39.2 | 25.2 | 26.9 | 0.64 | 0.69 | 1.067 |
+
+Every cell is at or under 1.0x hand Rust, so no cell above 1.1x needs an explanation. The poison store costs 1.2 to 2.9 ns per call (two flag stores and the `Result` check around one call). It is 13 to 16 % on sessions, whose call is only about 13 ns, and 4 to 9 % elsewhere. Even with that cost the worst cell (sessions n=100) is 1.00x hand. The hand side has no poison store; the m4raw/hand column therefore compares a poisoning Pruv adapter with a non-poisoning hand loop. Correctness of these drivers is m34 m4raw 300/300 (the perf driver only keeps a sink so the work is not optimized away).
+
+### P09.4 Audit
+
+One audit (Codex) found ten items. Fixed: the unsafe-mode glob import that could collide with user types (now the `entries` child module), `raw_items` collected without the key (now only with it, all six sites), the run_all row ignoring a Python compiler path, no test for a no-requires entry or a user `PruvStore` (probe (d)), rustc taken only from ~/.cargo/bin (now PATH first). Documented: the crate as the trust boundary, and the two adapter rules (`T` owns the state; no `catch_unwind` inside `with`). Unchanged by design: an entry that returns a refusal status does not poison the host's store, because a status is a normal return of verified code and its invariants hold on refusal exits; poisoning is for panics. A confirmation audit of the three code fixes (adapter-rule docs, `entries` child module, guarded `raw_items`) found them fixed and no new must-fix item.
+
+### P09.5 Notes for P10/P10H
+
+| Package | Note |
+|---|---|
+| P10 | The C-facing adapter: an opaque handle that owns a `PruvStore` (or its LLVM equivalent), `extern "C"` functions that wrap every call in `catch_unwind` and return an error code, and a poisoned handle that refuses every call but still frees. Rust-backend output has no `extern "C"` today; keep it that way and put the boundary in the adapter. |
+| P10 | LLVM backend: bindings now get `pub(crate)` wrappers and `pruv_raw`; the handle should own the C-side state so that a C caller never passes an arbitrary buffer. Host callbacks must keep aborting (never unwinding) on allocation failure. |
+| P10 | Per-call `valid(st)` at raw entries stays until the handle owns the store (P07.3): only then can construction establish the header fact once. |
+| P10H | `PruvStore::with` costs one flag store before and after the call (P09.3). If a hot adapter batches many calls, run the batch inside one `with` instead of one `with` per call. |
+| P10H | `"unsafe"` forwarders are `#[inline(always)]` and add no code; if P10H exposes a typed handle API, prefer `"crate"` and keep the `unsafe` forwarders for hosts that manage state themselves. |
