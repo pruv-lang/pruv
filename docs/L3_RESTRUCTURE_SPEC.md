@@ -2099,3 +2099,77 @@ copy checks (P13b.4); (6) M10 replay passed with no public call through Grow: ca
 (7) `grow 128` required Q3 growth unconditionally: required only when Q3's record words exceed the post-Q2 buffer.
 A confirmation review closed 1 to 6; on 7 it found that the count used whole op lengths, fixed to record words only.
 Findings: `work/audit_findings.md` (not committed).
+
+## Appendix P13c: M4 peak RSS split by component (step 1, stopped for decisions)
+
+Status: step 1 (measure) done; steps 2 and 3 not started. No code is changed in this package yet. Step 1 ran over
+its hour, and the two largest terms need decisions (below), so the package stops here and reports.
+
+Machine: macOS arm64, 16 KiB pages. Code: main e92b471, Rust compiler (`pruvc-rs`), driver built by
+`m34_test/run.py build` (`rustc -C opt-level=3`), hand built by cargo release (`opt-level = 3`). Peak RSS from
+`/usr/bin/time -l`, `perf <axis> <n> 200000`. Per-region numbers from `vmmap` on a paused copy of each binary; phase
+numbers from `getrusage` / `task_info` probes in an instrumented copy (all in `work/p13c/`, not committed).
+
+### P13c.1 Facts measured
+
+- Process start (before `World::new`) is equal on both sides: about 1504-1520 KiB.
+- Resident `__TEXT` of the executable: Pruv 304 KiB, hand 224 KiB in every cell (+80 KiB fixed). `__text` is
+  338 KiB vs 282 KiB; the extra is mostly generated code (`World::exec` with `m4_op` inlined is 55 KB; `import_check`,
+  `observe`, `bud_map::remove`, `put_at` 4-7 KB each).
+- The peak is at the end of the prefill, not at a grow: current RSS never drops after a grow (phase probes:
+  sessions 1000 goes 1632 -> 1792 -> 1872 -> 1984 -> 2176 KiB over its four grows, 2272 at the end of the prefill;
+  `grows=0` in the timed loop).
+- Freed state buffers stay in resident size. They are medium-zone malloc blocks (32-512 KiB); macOS keeps freed
+  medium pages resident (reusable), and the next, larger buffer cannot reuse them. `malloc_zone_pressure_relief`
+  after each grow does not lower the peak (measured, no change).
+- `alloc_zeroed` of 64 KiB and more is lazy (untouched pages are not resident); 32 KiB is touched. So the untouched
+  arena slack of the final buffer costs nothing.
+- Grow history: n = 100 one grow (4096 -> 8192), n = 500 three (to 32768), n = 1000 four (to 65536), on all axes.
+- Final buffer, sessions 1000: slots 2048, entry top 1003, arena top 31544 of 65536, so 31544 words (246 KiB) are
+  touched; the entry table alone is 1003 x 20 words = 157 KiB. Clocks 1000: arena top 25544 (200 KiB). Hand's whole
+  malloc heap (vmmap, allocated) is 217 KiB (sessions 1000), 343 KiB (tools 1000), 315 KiB (clocks 1000).
+
+### P13c.2 Component table (KiB, Pruv minus hand peak RSS)
+
+"Old buffers" is measured by ablation: the same driver with allocations of 64 KiB and more served by `mmap` and
+returned by `munmap` (so a freed state buffer leaves resident size at once), 3 runs each. Pruv and ablation are
+means of 3 runs; hand is the P13b.7 value.
+
+| cell | Pruv | hand | excess | text | old buffers | rest (heap: entries, slots, arena) |
+|---|---|---|---|---|---|---|
+| sessions 100 | 1813 | 1712 | +101 | +80 | 21 | 0 |
+| sessions 500 | 2037 | 1872 | +165 | +80 | 122 | -37 |
+| sessions 1000 | 2288 | 2016 | +272 | +80 | 245 | -53 |
+| tools 100 | 1856 | 1728 | +128 | +80 | 43 | +5 |
+| tools 500 | 2096 | 1920 | +176 | +80 | 69 | +27 |
+| tools 1000 | 2395 | 2096 | +299 | +80 | 150 | +69 |
+| clocks 100 | 1808 | 1696 | +112 | +80 | 21 | +11 |
+| clocks 500 | 2032 | 1984 | +48 | +80 | 128 | -160 |
+| clocks 1000 | 2229 | 2272 | -43 | +80 | 229 | -352 |
+
+Reading: the two largest terms are the abandoned grow buffers (up to 245 KiB at n = 1000) and the fixed +80 KiB of
+resident code. "Old + new alive together at a grow" is not a separate peak (the peak is after the prefill); its cost
+is the old buffers staying resident. Arena slack is zero (lazy pages). The entry layout (20 words) shows up only in
+the rest column, which is above hand on tools (+5/+27/+69) and below hand elsewhere.
+
+### P13c.3 Candidates and the decisions they need
+
+1. Old buffers. Ablation result (KiB, 3 runs): sessions 1792/1915/2043, tools 1813/2027/2245,
+   clocks 1787/1904/2000. Below hand only on clocks 500/1000; the rest still carry the +80 KiB text.
+   Options: (a) the host maps state buffers directly (mmap/munmap for state-sized allocations; a host allocation
+   choice, decisions stay in Pruv; each map is still counted in `allocs=`); (b) a Pruv in-place grow (realloc the
+   buffer, then move the regions inside it with a proved relocation), which removes the abandoned buffer at the root
+   but is a larger change to `bud_store` / `bud_map` and their proofs. Decision needed: is (a) an admissible host
+   choice for the 1.0x comparison (hand keeps the default allocator), or is (b) required.
+2. Text +80 KiB. It is generated code size, so the root fix is in codegen (pruvc / pruvc-rs), which this package may
+   not change without stopping first. Measured build-flag effects on the driver (n = 100 peak, sessions / tools):
+   default 1808/1808, `codegen-units=1` 1792/1808, `panic=abort` 1776/1824, `lto=fat` + `codegen-units=1`
+   1712/1760 (`__text` 326 KiB; tools 1000 core time 36.0 vs 36.8 ns/op). Building only the Pruv side with LTO is
+   a toolchain choice the hand side does not get; decision needed on whether it is admissible, or whether the
+   codegen size work goes to a compiler package.
+3. Entries (tools rest +5/+27/+69). After 1 and 2, tools 500 and 1000 would still be above hand. A smaller entry
+   layout (for example two 32-bit fields per word) touches `bud_map`, `bud_store`, `bud_world`, `bud_admit`, their
+   proofs and the M10 replay counters; it is its own step.
+
+Open: steps 2 and 3 (shrink, re-run memory, time and root_m8 proof time with both compilers) wait on the decisions
+above. The Python compiler's generated code was not measured in this step.
