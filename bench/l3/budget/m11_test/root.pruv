@@ -164,9 +164,10 @@ fn current_of(st: [i64], rf: [i64], sid: [i64]) -> [i64] ! alloc
   return b;
 }
 
-fn at_of(w: [i64]) -> i64
+// value position of a JB packet (empty = absent)
+fn at_b(b: [u8]) -> i64
 {
-  if len(w) == 0 { return -1; }
+  if len(b) == 0 { return -1; }
   return 0;
 }
 
@@ -207,23 +208,25 @@ pub fn m11_load(inout st: [i64], key: [i64], blob: [i64], inout out: [i64]) -> i
 
 // setCard(ref, card, lang?, by?). sid = packed key of ref.sessionId (empty = ref has none). out = [k, used_now, saved,
 // changed, findSession, result V...] (k = 4 + |V|).
-pub fn m11_set_card(inout st: [i64], rf: [i64], sid: [i64], card: [i64], lang: [i64], by: [i64], now_ms: i64, inout out: [i64]) -> i64 ! alloc
+pub fn m11_set_card(inout st: [i64], rf: [i64], sid: [i64], card: [u8], lang: [u8], by: [u8], now_ms: i64, inout out: [i64]) -> i64 ! alloc
 {
   if !crate::bud_store::valid(st) { return 2; }
   if now_ms < -8640000000000000 || now_ms > 8640000000000000 { return 2; }
   if len(rf) == 0 || crate::bud_card::v_end(rf, 0) != len(rf) { return 2; }
   if len(sid) > 0 && crate::bud_keys::rec_end(sid, 0) != len(sid) { return 2; }
-  if len(card) > 0 && crate::bud_card::v_end(card, 0) != len(card) { return 2; }
-  if len(lang) > 0 && crate::bud_card::v_end(lang, 0) != len(lang) { return 2; }
-  if len(by) > 0 && crate::bud_card::v_end(by, 0) != len(by) { return 2; }
+  // card, lang, by: JB packets (empty = absent), admitted whole before any judgment
+  if len(card) > 0 && !crate::bud_card::j_ok(card) { return 2; }
+  if len(lang) > 0 && !crate::bud_card::j_ok(lang) { return 2; }
+  // by is stored at budget.card.by (depth 3) and returned one level deeper: its top value sits at depth 4 of the result
+  if len(by) > 0 && !crate::bud_card::j_ok_at(by, 4) { return 2; }
   let cb: [i64] = current_of(st, rf, sid);
   let found: bool = len(cb) > 0;
   let closed: bool = found && str_is(cb, crate::bud_card::obj_get(cb, 0, "state"), "closed");
-  let lc: i64 = crate::bud_card::lang_code(lang, at_of(lang));
-  let r: crate::bud_card::SetCard = crate::bud_card::set_card(found, closed, card, at_of(card), lc, by, at_of(by), now_ms);
+  let lc: i64 = crate::bud_card::lang_code(lang);
+  let r: crate::bud_card::SetCard = crate::bud_card::set_card(found, closed, card, at_b(card), lc, by, at_b(by), now_ms);
   if r.kind >= 0 {
     // {ok: false, error}
-    let need: i64 = 5 + 15 + len(r.error);
+    let need: i64 = 5 + 14 + len(r.error);
     if len(out) < need { return 3; }
     let mut p: i64 = emit(inout out, 0, need - 1);
     p = emit(inout out, p, b01(r.used_now));
@@ -334,14 +337,17 @@ pub fn m11_dump(st: [i64], inout out: [i64]) -> i64
   return 0;
 }
 
-// perf item A: validate + build one card; returns a checksum of the stored card (or -kind on a validation error).
-pub fn m11_perf_card(card: [i64], now_ms: i64) -> i64 ! alloc
+// perf item A: admit + validate + build one card (JB packet); returns a checksum of the stored card (or -kind on a
+// validation error, -102 if the packet is not admitted).
+pub fn m11_perf_card(card: [u8], now_ms: i64) -> i64 ! alloc
 {
   if now_ms < -8640000000000000 || now_ms > 8640000000000000 { return -100; }
-  let k: i64 = crate::bud_card::validate(card, 0);
+  if !crate::bud_card::j_ok(card) { return -102; }
+  let f: crate::bud_card::Keys = crate::bud_card::card_at(card, 0);
+  let k: i64 = crate::bud_card::validate(card, f);
   if k != 0 { return 0 - k; }
-  let none: [i64] = crate::ent_u16::empty();
-  let w: [i64] = crate::bud_card::build(card, 0, none, -1, now_ms);
+  let none: [u8] = alloc(0, 0);
+  let w: [i64] = crate::bud_card::build(card, f, none, -1, now_ms);
   let n: i64 = len(w);
   if n > 1099511627776 { return -101; }
   return n + band(rd(w, n - 1), 1023) + band(rd(w, n / 2), 1023);
@@ -349,10 +355,10 @@ pub fn m11_perf_card(card: [i64], now_ms: i64) -> i64 ! alloc
 
 // perf item C (diagnostic split of B): n successive setCard judgments on one in-memory budget, no store and no out:
 // set_card + put_card only, i.e. the bud_card part of B. Returns the final budget length (or < 0 on an error).
-pub fn m11_perf_chain(budget: [i64], card: [i64], n: i64, now0: i64) -> i64 ! alloc
+pub fn m11_perf_chain(budget: [i64], card: [u8], n: i64, now0: i64) -> i64 ! alloc
 {
   if now0 < 0 || now0 > 8000000000000000 || n < 0 || n > 1000000 { return -100; }
-  let none: [i64] = crate::ent_u16::empty();
+  let none: [u8] = alloc(0, 0);
   let mut b: [i64] = copy(budget);
   let mut i: i64 = 0;
   while i < n

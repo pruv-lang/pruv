@@ -195,6 +195,92 @@ def V(x):
     return to_v(x, [])
 
 
+# ---- JB byte packets (card / lang / by; big-endian, see hand.rs header) --------------------------------------------------
+def wtf8(s):
+    """WTF-8 of a JS string held as a Python str (lone surrogates allowed): valid pairs join into 4-byte sequences."""
+    return s.encode('utf-16-le', 'surrogatepass').decode('utf-16-le', 'surrogatepass').encode('utf-8', 'surrogatepass')
+
+
+def _to_b(x, o):
+    if x is UNDEF:
+        o.append(1)
+    elif x is None:
+        o.append(2)
+    elif x is False:
+        o.append(3)
+    elif x is True:
+        o.append(4)
+    elif isinstance(x, (int, float)):
+        o.append(7)
+        o += struct.pack('>d', float(x))
+    elif isinstance(x, str):
+        s = wtf8(x)
+        o.append(6)
+        o += struct.pack('>I', len(s)) + s
+    elif isinstance(x, list):
+        o.append(8)
+        o += struct.pack('>I', len(x))
+        for e in x:
+            _to_b(e, o)
+    elif isinstance(x, dict):
+        o.append(9)
+        o += struct.pack('>I', len(x))
+        for k, e in x.items():
+            s = wtf8(k)
+            o += struct.pack('>I', len(s)) + s
+            _to_b(e, o)
+    else:
+        raise TypeError(type(x))
+    return o
+
+
+def to_b(x):
+    """JB packet of a JS value as a list of byte words (0..255)."""
+    return list(_to_b(x, bytearray()))
+
+
+def from_b(b, p=0):
+    """Inverse of to_b (self-check only): (value, next position)."""
+    t = b[p]
+    if t == 1:
+        return UNDEF, p + 1
+    if t in (2, 3, 4):
+        return (None, False, True)[t - 2], p + 1
+    if t == 7:
+        return struct.unpack('>d', bytes(b[p + 1:p + 9]))[0], p + 9
+    if t == 6:
+        n = struct.unpack('>I', bytes(b[p + 1:p + 5]))[0]
+        return bytes(b[p + 5:p + 5 + n]).decode('utf-8', 'surrogatepass'), p + 5 + n
+    if t in (8, 9):
+        n, q = struct.unpack('>I', bytes(b[p + 1:p + 5]))[0], p + 5
+        out = [] if t == 8 else {}
+        for _ in range(n):
+            if t == 8:
+                e, q = from_b(b, q)
+                out.append(e)
+            else:
+                kn = struct.unpack('>I', bytes(b[q:q + 4]))[0]
+                k = bytes(b[q + 4:q + 4 + kn]).decode('utf-8', 'surrogatepass')
+                out[k], q = from_b(b, q + 4 + kn)
+        return out, q
+    raise ValueError(f'bad tag {t} at {p}')
+
+
+def selftest_b():
+    cases = [UNDEF, None, True, False, 0, -0.0, 1.5, 2 ** 53, {'a': [1, 'x', None], 'b': {'c': ' é '}},
+             '\U0001F600', '\ud83d', '\ude00', '\ud83d\ud83d', '\ude00\ud83d', {'k\ud800': 1}]
+    for c in cases:
+        b = to_b(c)
+        assert all(0 <= w < 256 for w in b)
+        got, end = from_b(b)
+        assert end == len(b)
+        assert canon(got) == canon(c), (c, got)
+    assert to_b('😀') == [6, 0, 0, 0, 4, 0xF0, 0x9F, 0x98, 0x80]   # pair joined to one 4-byte sequence
+    assert to_b('\ud83d') == [6, 0, 0, 0, 3, 0xED, 0xA0, 0xBD]               # lone surrogate stays 3 bytes
+    assert to_b(True) == [4] and to_b(1) == [7, 0x3F, 0xF0, 0, 0, 0, 0, 0, 0]
+    print('to_b selftest ok')
+
+
 def wline(*parts):
     return ' | '.join(' '.join(str(x) for x in p) for p in parts)
 
@@ -248,9 +334,10 @@ def case_lines(case):
         args = [jv_decode(a) for a in ev['args']]
         if ev['op'] == 'setCard':
             pad = args + [None] * 4
-            lang = [] if len(args) < 3 else V(args[2])
-            by = [] if len(args) < 4 else V(args[3])
-            lines.append('set ' + wline([now], V(args[0]), sid_of(args[0]), V(args[1]), lang, by))
+            card = to_b(args[1]) if len(args) > 1 else []
+            lang = [] if len(args) < 3 else to_b(args[2])
+            by = [] if len(args) < 4 else to_b(args[3])
+            lines.append('set ' + wline([now], V(args[0]), sid_of(args[0]), card, lang, by))
         elif ev['op'] in QUERY:
             lines.append('q ' + wline([QUERY[ev['op']]], V(args[0]), sid_of(args[0])))
         else:
@@ -312,6 +399,8 @@ def judge(case, exp, answers, calls, halted):
         for b in brefs:
             if final_brefs.get(sid) != b:
                 problems.append(f"{c['req']}: bref {b} is not the budget of session {sid!r}")
+        if end != len(w):
+            problems.append(f"{c['req']}: result V ends at word {end} of {len(w)}")
         if canon(got) != canon(want):
             problems.append(f"{c['req']}: value\n   want {canon(want)[:400]}\n   got  {canon(got)[:400]}")
         ec = counts.get(c['req'], {k: 0 for k in COUNTED})
@@ -415,7 +504,11 @@ def main():
     ap.add_argument('--perf', action='store_true')
     ap.add_argument('--runs', type=int, default=5)
     ap.add_argument('--no-build', action='store_true')
+    ap.add_argument('--selftest-b', action='store_true', help='check the to_b codec and exit')
     a = ap.parse_args()
+    if a.selftest_b:
+        selftest_b()
+        return
     WORK.mkdir(parents=True, exist_ok=True)
     pairs = [p.strip() for p in a.pairs.split(',') if p.strip()]
     root = prepare_sources()
