@@ -20,13 +20,26 @@ fn gf(st: [i64], e: i64, f: i64) -> i64
 { return crate::bud_store::ef(st, e, f); }
 
 fn sf(inout st: [i64], e: i64, f: i64, v: i64) -> ()
+  ensures len(st) == len(old(st))
+  ensures len(old(st)) >= 15 ==> crate::bud_store::hdr_same(st, old(st), -1)
+  ensures crate::bud_store::kept(st, old(st))
 { crate::bud_store::set_ef(inout st, e, f, v); }
 
 fn hw(st: [i64], i: i64) -> i64
 { return crate::bud_store::hd(st, i); }
 
 fn sh(inout st: [i64], i: i64, v: i64) -> ()
-{ crate::bud_store::set_hd(inout st, i, v); }
+  ensures len(st) == len(old(st))
+  ensures (0 <= i && i < len(st)) ==> st[i] == v
+  ensures forall k in 0..len(old(st)): k == i || st[k] == old(st)[k]
+  ensures len(old(st)) >= 15 ==> crate::bud_store::hdr_same(st, old(st), i)
+  ensures crate::bud_store::wok(old(st), i, v) ==> crate::bud_store::kept(st, old(st))
+{
+  crate::bud_store::set_hd(inout st, i, v);
+  // the header frame first, so the revealed bodies compare equal words
+  assert len(old(st)) < 15 || crate::bud_store::hdr_same(st, old(st), i);
+  reveal crate::bud_store::dyn_ok;
+}
 
 // ---- hashing ----
 
@@ -277,23 +290,32 @@ fn fits_region(st: [i64], off: i64, cap: i64, n: i64) -> bool
 // Writes src[s0..s0+n) at absolute offset o (a region checked by fits_region) and adds n to the live arena words.
 fn write_at(inout st: [i64], o: i64, src: [i64], s0: i64, n: i64) -> ()
   requires 0 <= o && o <= 1099511627776 && 0 <= s0 && s0 <= 1099511627776 && 0 <= n && n <= 4294967296
+  ensures crate::bud_store::kept(st, old(st))
 {
   let mut k: i64 = 0;
-  if o + n <= len(st) && s0 + n <= len(src) {
+  // o >= 16 on a valid store (the region lies in the arena); a lower o, only on a buffer that is not valid, takes the
+  // total path, whose wr16 skips the header words.
+  if o >= 16 && o + n <= len(st) && s0 + n <= len(src) {
     // both ranges in bounds: one check for the loop (same writes as the total path below)
     while k < n
-      invariant 0 <= k && k <= n && n <= 4294967296 && 0 <= o && o + n <= len(st) && 0 <= s0 && s0 + n <= len(src)
+      invariant 0 <= k && k <= n && n <= 4294967296 && 16 <= o && o + n <= len(st) && 0 <= s0 && s0 + n <= len(src)
+      invariant len(st) == len(old(st)) && (len(st) < 15 || crate::bud_store::hdr_same(st, old(st), -1))
+      invariant crate::bud_store::kept(st, old(st))
       decreases n - k
     {
+      // one word past the header: dyn_ok reads only header words (this iteration only)
+      reveal crate::bud_store::dyn_ok;
       st[o + k] = src[s0 + k];
       k = k + 1;
     }
   } else {
     while k < n
       invariant 0 <= k && k <= n && n <= 4294967296 && 0 <= o && o <= 1099511627776 && 0 <= s0 && s0 <= 1099511627776
+      invariant len(st) == len(old(st)) && (len(st) < 15 || crate::bud_store::hdr_same(st, old(st), -1))
+      invariant crate::bud_store::kept(st, old(st))
       decreases n - k
     {
-      crate::ent_u16::wr(inout st, o + k, crate::ent_u16::rd(src, s0 + k));
+      crate::bud_store::wr16(inout st, o + k, crate::ent_u16::rd(src, s0 + k));
       k = k + 1;
     }
   }
@@ -305,6 +327,7 @@ fn write_at(inout st: [i64], o: i64, src: [i64], s0: i64, n: i64) -> ()
 // appended to the arena (and the region becomes the new words). Sets field fo to the offset. 0 ok, -1 failure.
 fn put_units(inout st: [i64], e: i64, fo: i64, fc: i64, src: [i64], s0: i64, n: i64) -> i64
   requires 0 <= s0 && s0 <= 1099511627776 && 0 <= n && n <= 4294967296
+  ensures crate::bud_store::kept(st, old(st))
 {
   let off: i64 = gf(st, e, fo);
   if s0 + n > len(src) { return -1; }
@@ -322,6 +345,7 @@ fn put_units(inout st: [i64], e: i64, fo: i64, fc: i64, src: [i64], s0: i64, n: 
 // Adds a packed key the caller knows is absent (caller contract as find_w: canonical words; total otherwise). Used
 // by bud_world after its find_w and by grow (unique keys). Entry index, or -1 (nothing usable was added).
 pub fn add_w(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64) -> i64
+  ensures crate::bud_store::kept(st, old(st))
 {
   if gf(st, owner, 0) != 1 { return -1; }
   let og: i64 = gf(st, owner, 3);
@@ -332,6 +356,7 @@ pub fn add_w(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64) -> i64
 // add_w() with og = gf(st, owner, 3) and h = hash_words(owner, og, key, ks, kn) already computed (owner is live):
 // the probe stops at the first empty or tombstone slot and compares no keys, then put_at() stores the entry there.
 fn put_key_h(inout st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn: i64) -> i64
+  ensures crate::bud_store::kept(st, old(st))
 {
   let slots: i64 = crate::bud_store::c32(hw(st, 4));
   // header words 3, 4 in range: slot base and mask read once (the same addresses slot_pos gives)
@@ -341,6 +366,7 @@ fn put_key_h(inout st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, 
   let mut i: i64 = 0;
   while i < slots
     invariant 0 <= i && i <= slots && slots <= 4294967296
+    invariant crate::bud_store::kept(st, old(st))
     decreases slots - i
   {
     let mut p: i64 = -1;
@@ -352,10 +378,36 @@ fn put_key_h(inout st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, 
   return -1;
 }
 
+// put_at()'s field writes on direct words when e and owner have fast bases be, bo: the gf/sf sequence of put_at's
+// general path, same order (bud_store::eb; e, owner and t may alias on a corrupt buffer, which the ordered word
+// accesses handle the same way). Every word written is an entry field past the header, so the store is kept.
+fn link_fast(inout st: [i64], e: i64, n: i64, h: i64, be: i64, bo: i64) -> ()
+  requires 16 <= be && be + 20 <= len(st) && 16 <= bo && bo + 20 <= len(st)
+  ensures crate::bud_store::kept(st, old(st))
+{
+  st[be + 5] = n;
+  st[be + 6] = h;
+  let t: i64 = st[bo + 10];
+  st[be + 7] = t;
+  st[be + 8] = -1;
+  if t >= 0 {
+    let bt: i64 = crate::bud_store::eb(st, t);
+    if bt >= 0 { st[bt + 8] = e; } else { sf(inout st, t, 8, e); }
+  } else {
+    st[bo + 9] = e;
+  }
+  st[bo + 10] = e;
+  let oc: i64 = crate::bud_store::c32(st[bo + 11]);
+  st[bo + 11] = oc + 1;
+  assert len(st) == len(old(st)) && crate::bud_store::hdr_same(st, old(st), -1);
+  reveal crate::bud_store::dyn_ok;
+}
+
 // The insert half of put_key_h(): a new entry for the packed key in index slot `slot` (absolute address, the first
 // empty or tombstone slot on h's probe path). The key words are stored by a plain word copy. Entry index, or -1
 // (nothing linked or indexed).
 fn put_at(inout st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn: i64, slot: i64) -> i64
+  ensures crate::bud_store::kept(st, old(st))
 {
   let e: i64 = crate::bud_store::entry_alloc(inout st, owner, og);
   if e < 0 { return -1; }
@@ -369,22 +421,7 @@ fn put_at(inout st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn:
   let be: i64 = crate::bud_store::eb(st, e);
   let bo: i64 = crate::bud_store::eb(st, owner);
   if be >= 0 && bo >= 0 {
-    // The gf/sf sequence below on direct words, same order (bud_store::eb; e, owner and t may alias on a corrupt
-    // buffer, which the ordered word accesses handle the same way).
-    st[be + 5] = n;
-    st[be + 6] = h;
-    let t: i64 = st[bo + 10];
-    st[be + 7] = t;
-    st[be + 8] = -1;
-    if t >= 0 {
-      let bt: i64 = crate::bud_store::eb(st, t);
-      if bt >= 0 { st[bt + 8] = e; } else { sf(inout st, t, 8, e); }
-    } else {
-      st[bo + 9] = e;
-    }
-    st[bo + 10] = e;
-    let oc: i64 = crate::bud_store::c32(st[bo + 11]);
-    st[bo + 11] = oc + 1;
+    link_fast(inout st, e, n, h, be, bo);
   } else {
     sf(inout st, e, 5, n);
     sf(inout st, e, 6, h);
@@ -404,7 +441,7 @@ fn put_at(inout st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn:
   // index slot
   let old: i64 = crate::ent_u16::rd(st, slot);
   let used: i64 = crate::bud_store::c32(hw(st, 13));
-  crate::ent_u16::wr(inout st, slot, slot_word(crate::bud_store::c32(e), h));
+  crate::bud_store::wr16(inout st, slot, slot_word(crate::bud_store::c32(e), h));
   if old == 0 { sh(inout st, 13, used + 1); }
   return e;
 }
@@ -412,27 +449,24 @@ fn put_at(inout st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn:
 // Tombstones the slot of entry e, takes its key and blob off the live arena count and frees it (its arena regions
 // stay with the entry for reuse). Links are the caller's.
 fn drop_entry(inout st: [i64], e: i64) -> ()
+  ensures crate::bud_store::kept(st, old(st))
 {
   let top: i64 = crate::bud_store::c32(hw(st, 7));
   if e < 3 || e >= top { return; }
   let b: i64 = crate::bud_store::eb(st, e);
   let mut kw: i64 = 0;
   if b >= 0 {
-    // gf on direct words, same order (bud_store::eb); the slot write may land anywhere on a corrupt buffer, so the
-    // key and blob lengths are read after it as before. A slot write onto header word 5 or 6 (only on a corrupt
-    // buffer) moves the entry base, so b is stale then and the lengths are read through gf.
+    // gf on direct words, same order (bud_store::eb); the slot write may land on the entry's own fields on a corrupt
+    // buffer, so the key and blob lengths are read after it as before. It never lands on the header (wr16), so b
+    // stays the entry base.
     if st[b] != 1 { return; }
     let sl: i64 = slot_of(st, e, st[b + 6]);
-    if sl >= 0 { crate::ent_u16::wr(inout st, sl, -1); }
-    if sl == 5 || sl == 6 {
-      kw = crate::bud_keys::words(crate::bud_store::c32(gf(st, e, 5))) + crate::bud_store::c40(gf(st, e, 13));
-    } else {
-      kw = crate::bud_keys::words(crate::bud_store::c32(st[b + 5])) + crate::bud_store::c40(st[b + 13]);
-    }
+    if sl >= 0 { crate::bud_store::wr16(inout st, sl, -1); }
+    kw = crate::bud_keys::words(crate::bud_store::c32(st[b + 5])) + crate::bud_store::c40(st[b + 13]);
   } else {
     if gf(st, e, 0) != 1 { return; }
     let sl: i64 = slot_of(st, e, gf(st, e, 6));
-    if sl >= 0 { crate::ent_u16::wr(inout st, sl, -1); }
+    if sl >= 0 { crate::bud_store::wr16(inout st, sl, -1); }
     kw = crate::bud_keys::words(crate::bud_store::c32(gf(st, e, 5))) + crate::bud_store::c40(gf(st, e, 13));
   }
   let lw: i64 = crate::bud_store::c40(hw(st, 14));
@@ -455,6 +489,7 @@ fn drop_entry(inout st: [i64], e: i64) -> ()
 // (a candidate not owned by u ends it) and leave entries behind. O(probe length + subtree): e's own slot is cleared,
 // the descendants' slots are left for the next rehash (drop_child). Roots are never removed.
 pub fn remove(inout st: [i64], e: i64) -> ()
+  ensures crate::bud_store::kept(st, old(st))
 {
   let top: i64 = crate::bud_store::c32(hw(st, 7));
   if e < 3 || e >= top { return; }
@@ -483,6 +518,7 @@ pub fn remove(inout st: [i64], e: i64) -> ()
   let mut pend: i64 = -1;
   while b > 0
     invariant 0 <= b && b <= 8589934594 && -1 <= pend && pend <= 2199023255552
+    invariant crate::bud_store::kept(st, old(st))
     decreases b
   {
     b = b - 1;
@@ -528,6 +564,7 @@ pub fn remove(inout st: [i64], e: i64) -> ()
 fn drop_desc(inout st: [i64], c: i64, pend: i64) -> i64
   requires -1 <= pend && pend <= 2199023255552
   ensures -1 <= result && result <= 2199023255552
+  ensures crate::bud_store::kept(st, old(st))
 {
   let kw: i64 = drop_child(inout st, c);
   if kw >= 0 {
@@ -549,6 +586,7 @@ fn drop_desc(inout st: [i64], c: i64, pend: i64) -> i64
 // c40 is the identity, and a sum saturated at 2^41 > 2^40 still yields 0).
 fn take_words(inout st: [i64], kw: i64) -> ()
   requires 0 <= kw
+  ensures crate::bud_store::kept(st, old(st))
 {
   let lw: i64 = crate::bud_store::c40(hw(st, 14));
   if lw > kw {
@@ -570,6 +608,7 @@ fn take_words(inout st: [i64], kw: i64) -> ()
 // nothing here reads word 14, so deferring its update leaves every other word as drop_entry would, except the slot.
 fn drop_child(inout st: [i64], c: i64) -> i64
   ensures -2 <= result && result <= 1099780063232
+  ensures crate::bud_store::kept(st, old(st))
 {
   let b: i64 = crate::bud_store::eb(st, c);
   if b < 0 { return -1; }
@@ -585,6 +624,7 @@ fn drop_child(inout st: [i64], c: i64) -> i64
 // Replaces the blob of entry e by src[s..s+n), written over the old blob region when it fits, else appended to the
 // arena. 0 ok, -1 failure (nothing changed).
 pub fn set_blob(inout st: [i64], e: i64, src: [i64], s: i64, n: i64) -> i64
+  ensures crate::bud_store::kept(st, old(st))
 {
   let s0: i64 = crate::bud_store::c40(s);
   let m: i64 = crate::bud_store::c32(n);
@@ -597,18 +637,21 @@ pub fn set_blob(inout st: [i64], e: i64, src: [i64], s: i64, n: i64) -> i64
     if st[a] != 1 { return -1; }
   }
   if l >= 15 && a >= 15 && a + 20 <= l && s0 + m <= len(src) {
-    // In-place rewrite with the header (0..14) and the entry's fields in range. When the old region takes the blob
+    // In-place rewrite with the header (0..15) and the entry's fields in range. When the old region takes the blob
     // and lies apart from the header and from the fields, the writes cannot change any word read below (field
     // address, word 14, field 13), so this gives exactly the words of the general path that follows.
     let off: i64 = st[a + 12];
     let o: i64 = crate::bud_store::c40(off);
-    if fits_region(st, off, st[a + 19], m) && o >= 15 && o + m <= l && (o + m <= a || o >= a + 20) {
+    if fits_region(st, off, st[a + 19], m) && o >= 16 && o + m <= l && (o + m <= a || o >= a + 20) {
       let ob0: i64 = crate::bud_store::c40(st[a + 13]);
       let mut k: i64 = 0;
       while k < m
-        invariant 0 <= k && k <= m && 0 <= o && o + m <= l && l == len(st) && 0 <= s0 && s0 + m <= len(src)
+        invariant 0 <= k && k <= m && 16 <= o && o + m <= l && l == len(st) && 0 <= s0 && s0 + m <= len(src)
+        invariant len(st) == len(old(st)) && crate::bud_store::hdr_same(st, old(st), -1)
+        invariant crate::bud_store::kept(st, old(st))
         decreases m - k
       {
+        reveal crate::bud_store::dyn_ok;
         st[o + k] = src[s0 + k];
         k = k + 1;
       }
@@ -621,6 +664,8 @@ pub fn set_blob(inout st: [i64], e: i64, src: [i64], s: i64, n: i64) -> i64
       } else {
         st[14] = 0;
       }
+      // word 14 >= 0 and field 13 past the header: dyn_ok carried over from the copy loop
+      reveal crate::bud_store::dyn_ok;
       return 0;
     }
   }
@@ -654,6 +699,7 @@ pub fn blob_fits(st: [i64], e: i64, words: i64) -> bool
 // Clears the slot table and reinserts every live non-root entry by its stored hash (drops all tombstones).
 // O(slots + entry top).
 fn rehash(inout st: [i64]) -> ()
+  ensures crate::bud_store::kept(st, old(st))
 {
   let slots: i64 = crate::bud_store::c32(hw(st, 4));
   let sb: i64 = crate::bud_store::c32(hw(st, 3));
@@ -661,15 +707,19 @@ fn rehash(inout st: [i64]) -> ()
   let mut i: i64 = 0;
   while i < slots
     invariant 0 <= i && i <= slots && slots <= 4294967296 && 0 <= sb && sb <= 4294967296
+    invariant len(st) == len(old(st)) && (len(st) < 15 || crate::bud_store::hdr_same(st, old(st), -1))
+    invariant crate::bud_store::kept(st, old(st))
     decreases slots - i
   {
-    crate::ent_u16::wr(inout st, sb + i, 0);
+    crate::bud_store::wr16(inout st, sb + i, 0);
     i = i + 1;
   }
   let mut used: i64 = 0;
   let mut e: i64 = 3;
   while e < top
     invariant 3 <= e && e <= 4294967297 && 0 <= used && used <= e && top <= 4294967296
+    invariant len(st) == len(old(st)) && (len(st) < 15 || crate::bud_store::hdr_same(st, old(st), -1))
+    invariant crate::bud_store::kept(st, old(st))
     decreases 4294967297 - e
   {
     if gf(st, e, 0) == 1 {
@@ -678,11 +728,13 @@ fn rehash(inout st: [i64]) -> ()
       let mut placed: bool = false;
       while j < slots
         invariant 0 <= j && j <= slots && slots <= 4294967296
+        invariant len(st) == len(old(st)) && (len(st) < 15 || crate::bud_store::hdr_same(st, old(st), -1))
+        invariant crate::bud_store::kept(st, old(st))
         decreases slots - j
       {
         let p: i64 = slot_pos(st, h, j);
         if crate::ent_u16::rd(st, p) == 0 {
-          crate::ent_u16::wr(inout st, p, slot_word(e, h));
+          crate::bud_store::wr16(inout st, p, slot_word(e, h));
           placed = true;
           j = slots;
         } else {
@@ -700,6 +752,7 @@ fn rehash(inout st: [i64]) -> ()
 // rebuilt in place first (amortized O(1): it runs after at least slots/4 - entries tombstones have accumulated).
 // Same result convention as bud_store::need.
 pub fn make_room(inout st: [i64], entries: i64, words: i64) -> i64
+  ensures crate::bud_store::kept(st, old(st))
 {
   let r: i64 = room(inout st, entries, words);
   if r == -1 { return 0; }
@@ -709,6 +762,7 @@ pub fn make_room(inout st: [i64], entries: i64, words: i64) -> i64
 // make_room() that tells whether it rehashed: 0 fits (nothing written), -1 rehashed and fits now, otherwise need()'s
 // N > 0 (after a rehash too, which the comment below rules out).
 fn room(inout st: [i64], entries: i64, words: i64) -> i64
+  ensures crate::bud_store::kept(st, old(st))
 {
   let r: i64 = crate::bud_store::need(st, entries, words);
   let ents: i64 = crate::bud_store::c32(entries);
@@ -748,6 +802,7 @@ fn room(inout st: [i64], entries: i64, words: i64) -> i64
 // One probe pass serves both the lookup and the insert: probe_w() yields the slot put_key_h() would pick,
 // and room() writes nothing unless it rehashes, in which case the insert probes the rebuilt index again.
 pub fn add_absent_w(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, entries: i64, words: i64) -> i64
+  ensures crate::bud_store::kept(st, old(st))
 {
   let og: i64 = gf(st, owner, 3);
   let h: i64 = hash_words(owner, og, key, ks, kn);

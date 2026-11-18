@@ -5,7 +5,7 @@ mod bud_map;
 mod bud_world;
 
 // L3-10 M4 test root: resident state entries over bud_store / bud_map / bud_world (CONTRACT.md, section "M4").
-// Status: 0 ok, 1 Grow (out[0] = N), 2 InvalidInput (bad op encoding or invalid header), 3 out too small.
+// Status: 0 ok, 1 Grow (out[0] = N), 2 InvalidInput (bad op encoding; m4_grow: invalid prev), 3 out too small.
 // Entry requires are empty (O(1)); the op table is validated in executable code with total reads.
 
 // Keys on the wire are packed u16 keys (bud_keys layout): `n, words(n) packed words`. Every word is 4 valid u16 lanes,
@@ -27,6 +27,7 @@ fn dec_none(st: [i64], op: [i64], inout out: [i64], code: i64) -> i64
 // ops with one key: 2 session_get, 3 session_del, 6 clock_del, 8 clock_get, 11 run_list, 14 tool_forget,
 // 15 tool_count, 16 tool_list
 fn dec_key(inout st: [i64], op: [i64], inout out: [i64], code: i64) -> i64
+  ensures crate::bud_store::kept(st, old(st))
 {
   let e1: i64 = crate::bud_keys::rec_end(op, 1);
   if e1 < 0 || e1 != len(op) { return 2; }
@@ -44,6 +45,7 @@ fn dec_key(inout st: [i64], op: [i64], inout out: [i64], code: i64) -> i64
 
 // 1 session_put: key, n, n words
 fn dec_put(inout st: [i64], op: [i64], inout out: [i64]) -> i64
+  ensures crate::bud_store::kept(st, old(st))
 {
   let e1: i64 = crate::bud_keys::rec_end(op, 1);
   if e1 < 0 || e1 >= len(op) { return 2; }
@@ -56,6 +58,7 @@ fn dec_put(inout st: [i64], op: [i64], inout out: [i64]) -> i64
 
 // ops with two keys: 5 clock_put, 9 run_set (+ waiting), 10 run_del, 13 tool_note
 fn dec_two(inout st: [i64], op: [i64], inout out: [i64], code: i64) -> i64
+  ensures crate::bud_store::kept(st, old(st))
 {
   let e1: i64 = crate::bud_keys::rec_end(op, 1);
   if e1 < 0 { return 2; }
@@ -79,6 +82,7 @@ fn dec_two(inout st: [i64], op: [i64], inout out: [i64], code: i64) -> i64
 
 // 7 clock_set: key, since_present (0/1), since, armed (0/1), deadline
 fn dec_set(inout st: [i64], op: [i64], inout out: [i64]) -> i64
+  ensures crate::bud_store::kept(st, old(st))
 {
   let e1: i64 = crate::bud_keys::rec_end(op, 1);
   if e1 < 0 { return 2; }
@@ -108,10 +112,13 @@ pub fn m4_grow(prev: [i64], inout next: [i64]) -> i64
   return 0;
 }
 
-// One state operation; on 0, out[0] = number of result words and out[1..] the result.
+// One state operation; on 0, out[0] = number of result words and out[1..] the result. st is a store m4_init or
+// m4_grow returned 0 for, changed only by m4_op since: valid holds there (init_store, grow_copy) and every op keeps it
+// (the ensures), so there is no per-call header check (L3 P13a.9). On any other buffer the op is still memory-safe and
+// terminates (every read is bounds-checked, every loop bounded by a header capacity), but its answers are unspecified.
 pub fn m4_op(inout st: [i64], op: [i64], inout out: [i64]) -> i64
+  ensures crate::bud_store::valid(old(st)) ==> crate::bud_store::valid(st)
 {
-  if !crate::bud_store::valid(st) { return 2; }
   let code: i64 = crate::ent_u16::rd(op, 0);
   if code == 1 { return dec_put(inout st, op, inout out); }
   if code == 7 { return dec_set(inout st, op, inout out); }
@@ -123,9 +130,8 @@ pub fn m4_op(inout st: [i64], op: [i64], inout out: [i64]) -> i64
   return 2;
 }
 
-// Whole-state dump for the final observation; 0 ok, 2 invalid header, 3 out too small.
+// Whole-state dump for the final observation (st as for m4_op); 0 ok, 3 out too small.
 pub fn m4_observe(st: [i64], inout out: [i64]) -> i64
 {
-  if !crate::bud_store::valid(st) { return 2; }
   return crate::bud_world::observe(st, inout out);
 }
