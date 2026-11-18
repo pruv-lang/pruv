@@ -581,10 +581,14 @@ fn run_perf(args: &[String]) {
     }
     let ns = t.elapsed().as_nanos() as f64 / (2 * reps) as f64;
     println!("cycle {} {:.1}", 1, ns);
-    // fire (early delivery re-arm)
+    // fire (early delivery re-arm). Each FIRE spends 1 ms of budget, so a 60-minute budget would run out after
+    // 3,600,000 reps and leave no timer to fire (P23 confirm audit). timeMinutes 1000000 gives a delay over the host
+    // cap (capped to 1 ms) and a budget no rep count reaches.
+    let mut put_fire = put.clone();
+    put_fire[sid.len() + 1 + 2] = 1000000;
     let mut w = World::<false>::new();
     w.quiet = true;
-    w.put(&put);
+    w.put(&put_fire);
     w.call(&st);
     let t = Instant::now();
     for _ in 0..reps {

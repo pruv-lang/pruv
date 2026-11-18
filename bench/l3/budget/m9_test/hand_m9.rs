@@ -298,8 +298,9 @@ fn main() {
         black_box(w.run_ended(black_box(&r), black_box(&k0)));
     }
     println!("cycle 1 {:.1}", t.elapsed().as_nanos() as f64 / (2 * reps) as f64);
-    // fire
+    // fire: same budget as the driver's fire item (timeMinutes 1000000, delay capped to 1 ms, never exhausted)
     let (mut w, r) = world();
+    w.sessions.get_mut(&r.session_id).unwrap().time_minutes = 1000000;
     w.run_started(&r, &k0);
     let t = Instant::now();
     for _ in 0..reps {

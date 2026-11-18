@@ -272,26 +272,39 @@ Per-flow cost (§9), confirmed by the perf rows below:
   SETTLE and ARM. The fire row is flat at about 130 ns.
 - Stale FIRE (another budget id, an unlimited budget, a closed or missing clock): `O(key lengths)`, with no settle
   and no re-arm. The stale rows are about 72 ns.
-- DROP and CLOSE: `O(key lengths + R)`. `bud_map::remove` frees the clock and its R runs (at most 2(R + 1) + 1
-  probe steps), and the dc gate checks the exact R + 1 reclaimed entries. Measured: about 94 ns per run (drop
-  939 / 4898 / 9541 ns at R = 10 / 50 / 100).
+- DROP and CLOSE: `O(key lengths + R)`. `bud_map::remove` walks the clock's subtree: each run is visited once to
+  descend or free it, and the walk stops when it returns to the clock (`2 * walk_limit + 2` is only the proof's fuel,
+  not the work). The dc gate checks the exact R + 1 reclaimed entries. Measured on the DROP or CLOSE call alone:
+  about 2.8 ns per run (drop 137 / 259 / 382 ns at R = 10 / 50 / 100; hand Rust about 8.4 ns per run). The bound
+  is on the walk: each removal also probes the hash table (`drop_entry -> slot_of`, linear probing), whose cost is
+  expected, not worst case, and grows with the probe chains (load factor).
 
-Perf (`work/p23/perf.py`, 15 interleaved rounds, 20,000 repetitions, load average 5-8, ns):
+Perf (`work/p23/perf.py`, `perf_f3.log`, 15 interleaved rounds, 20,000 repetitions, load average 4-8, ns). Only the DROP or CLOSE
+call is timed; the R runStarted calls, the 1 ms advance before CLOSE and the budget reset are outside. The perf
+budget has timeMinutes 60, so the armed timer (3,600,000 ms) stays under the host's 2^31-1 ms cap: the advance does
+not fire it, and CLOSE settles the 1 ms itself (both sides assert this). The fire row uses timeMinutes 10^6 instead:
+the delay is capped to 1 ms and each FIRE spends 1 ms, so a 60-minute budget would run out at 3,600,000 reps (the
+confirm audit's panic); with 10^6 minutes no rep count reaches it (rerun at 3,600,001 reps: both sides exit 0).
 
-| item | R | Pruv median | hand median | Pruv/hand median | Pruv/hand min |
-|---|---:|---:|---:|---:|---:|
-| drop | 10 / 50 / 100 | 939 / 4898 / 9541 | 1580 / 7437 / 21214 | 0.59 / 0.66 / 0.45 | 0.63 / 0.57 / 0.56 |
-| close | 10 / 50 / 100 | 1295 / 4595 / 13361 | 1979 / 12125 / 29868 | 0.65 / 0.38 / 0.45 | 0.64 / 0.55 / 0.56 |
-| fire | 1 | 132 | 210 | 0.63 | 0.62 |
-| stale | 1 | 72.3 | 64.7 | 1.12 | 1.15 |
-| staleu | 1 | 74.1 | 91.7 | 0.81 | 1.11 |
+| item | R | Pruv median | hand median | Pruv/hand median | Pruv/hand min | overlap |
+|---|---:|---:|---:|---:|---:|---|
+| drop | 10 / 50 / 100 | 137 / 259 / 382 | 180 / 501 / 930 | 0.76 / 0.52 / 0.41 | 0.78 / 0.52 / 0.41 | Pruv faster |
+| close | 10 / 50 / 100 | 139 / 260 / 387 | 226 / 556 / 977 | 0.61 / 0.47 / 0.40 | 0.62 / 0.47 / 0.39 | Pruv faster |
+| fire | 1 | 130 | 204 | 0.64 | 0.63 | Pruv faster |
+| cycle | 1 | 117 | 160 | 0.73 | 0.74 | Pruv faster |
+| refresh | 10 / 50 / 100 | 112 / 112 / 115 | 141 / 140 / 142 | 0.79 / 0.80 / 0.81 | 0.79 / 0.80 / 0.81 | Pruv faster |
+| stale | 1 | 71.4 | 63.0 | 1.13 | 1.11 | no |
+| staleu | 1 | 74.0 | 67.5 | 1.10 | 1.10 | no |
 
-Allocations per repetition: drop 3 vs hand 27 / 109 / 210, close 6 vs 32 / 114 / 215, stale 3 vs 11. Hand Rust
-stores runs as `String` keys in per-clock maps, so it frees them one by one. Pruv frees entries inside one flat store.
+`run_m9.py perf` fails on a missing item and prints `HOLD` for a median above 1.0x whose distributions do not
+overlap. It holds on stale and staleu, the explained rows below.
 
-Stale FIRE is the one row where the minima stay above hand Rust (1.11-1.15). The medians and distributions overlap,
-but both sides do very little work here (hand Rust does two map lookups), so the fixed cost of the Pruv entry
-shows. Line by line, for one stale delivery (about 55 vs 46 ns net of the shared scheduler work):
+Allocations per repetition (build included): drop 3 vs hand 18 / 60 / 111, close 3 vs 20 / 62 / 113, stale 3 vs 11.
+Hand Rust stores runs as `String` keys in per-clock maps, so it allocates and frees them one by one. Pruv uses
+entries inside one flat store.
+
+Stale FIRE is the one row above hand Rust (1.10-1.13x, no overlap). Both sides do very little work here (hand Rust
+does three map lookups), so the fixed cost of the Pruv entry shows. Line by line, for one stale delivery:
 
 | step | hand Rust | Pruv (`t_call`) | why |
 |---|---|---|---|
