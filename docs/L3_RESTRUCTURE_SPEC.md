@@ -2356,8 +2356,9 @@ Equal within run spread, as expected with no `.pruv` change; the generated outpu
 
 ## Appendix P18 (row B/bud_lifecycle.pruv: current/isHalted/reopen lookups by proven indexing)
 
-Commits 123ae15 (step 1, source), 81979b2 (step 2, perf item), 5fe70f0 (step 3, this appendix) and 06c3426
-(step 4, audit fixes), base 6aa266a. Changed files:
+Commits 123ae15 (step 1, source), 81979b2 (step 2, perf item), 5fe70f0 (step 3, this appendix), 06c3426
+(step 4, audit fixes), 12e67a0 (step 5, appendix) and cb217c2 (step 6, result-tag harness and `found_at` order),
+base 6aa266a. Changed files:
 `bench/l3/budget/bud_lifecycle.pruv`, `bench/l3/budget/m7_test/{driver_m7.rs,hand_m7_u16.rs,run_m7.py}`. No
 compiler file, `SPEC.md`, `tests/run_all_rows.txt` or `bud_charge.pruv` change. Raw logs: `work/p18/` (not
 committed).
@@ -2373,6 +2374,10 @@ committed).
   check each); otherwise falls back to `id_is` (same reads as before).
 - `current_entry`, `current_at`: now `found_at`. `current`, `is_halted`: read `st[a + 12]`, `st[a + 13]` and the
   state word `st[st[a + 12]]` directly and write `out[0..3)` directly (lengths already tested).
+- `found_at` order (step 6, cb217c2): the state word is read and range-checked after `id_at`, not before it. Same
+  checks and answers; read first, `is_halted`'s own read of the same word paid a reload chain (P18.3).
+- Perf harness (step 6, `driver_m7.rs`): the Pruv typed lane consumes `(status, out[0])` in one `black_box` per
+  call, matching the hand typed lane's `black_box` of its `Res` (confirm audit, P18.6a).
 - `reopen`: the header reads `st[off]`, `st[off + 18]` and the in-place writes of words 0, 18, 19, 22 are direct.
   The rewrite path (`ended.at` text present) is unchanged.
 
@@ -2415,31 +2420,60 @@ After step 4 (06c3426) the M7 q/life/diff_hand and M10 q/halt rows were re-run o
 Rust pruvc rebuilt after T0 (`work/p18/s5_*.log`): same counts as above, all rc 0. Admit, m3 and lanes are the
 step-1 runs; step 4 only removed a dead `let` in `reopen`.
 
+After step 6 (cb217c2) every row above was re-run on both compilers, admit, m3 and lanes included
+(`work/p18/s7_*.log`): same counts, all rc 0.
+
 ### P18.3 Lookup time (Rust backend, Pruv typed / hand16 typed, floor 1.0x)
 
-`run_m7.py perf --rounds 7 --profile SM --no-instr`, rounds interleaved, median ns per call (`work/p18/s2_perf.log`,
-load average about 3-5). Base columns: same command on 6aa266a in an earlier session (`work/p18/base_perf.log`);
-its hand16 ran 11.6-13.3 ns on these items, so compare the ratio columns, each taken against hand in its own run.
+Harness (step 6, cb217c2, from the confirm audit): the Pruv typed lane now `black_box`es `(status, out[0])` once
+per call, as the hand typed lane `black_box`es its `Res`; before, Pruv consumed only the status and the result tag
+was read only by the untimed rchk run. Every number below uses that harness; the step-2 numbers (`s2_perf.log`,
+current 0.91, isHalted 0.92/0.95, reopenmiss 1.02/1.04) did not observe the result and are superseded.
 
-| item | S | base Pruv | P18 Pruv | hand16 | P18/hand16 | base/hand16 |
+Final: `run_m7.py perf --rounds 15 --profile SM --no-instr`, two runs (`work/p18/s7_perf15_{1,2}.log`, load
+average 4-6), median ns per call, Pruv typed / hand16 typed in the same run. Base: 6aa266a's `bud_lifecycle.pruv`
+with the same harness and compiler, one 15-round run (`work/p18/s6_base_perf15.log`, load 4-9).
+
+| item | S | P18 run 1 | P18 run 2 | P18/hand16 (1, 2) | base | base/hand16 |
 |---|---:|---:|---:|---:|---:|---:|
-| current | 100 | 11.9 | 11.9 | 13.1 | 0.91 | 0.94 |
-| current | 500 | 11.9 | 11.9 | 13.1 | 0.91 | 0.94 |
-| ishalted | 100 | 12.8 | 12.1 | 13.1 | 0.92 | 1.01 |
-| ishalted | 500 | 12.6 | 12.3 | 12.9 | 0.95 | 0.98 |
-| reopenmiss (new) | 100 | - | 13.4 | 13.1 | **1.02** | - |
-| reopenmiss (new) | 500 | - | 13.4 | 12.9 | **1.04** | - |
-| closereopen (incl. P19 maybeClose) | 100 | 14.3 | 13.9 | 13.7 | 1.01 | 1.08 |
-| closereopen (incl. P19 maybeClose) | 500 | 14.1 | 13.9 | 13.4 | 1.04 | 1.07 |
-| attach (P19) | 100 | 13.0 | 13.0 | 12.1 | 1.07 | 1.12 |
-| attach (P19) | 500 | 12.9 | 13.1 | 11.4 | 1.15 | 1.10 |
-| replace | 100 | 92.2 | 93.6 | 123.3 | 0.76 | 0.77 |
-| replace | 500 | 95.7 | 94.4 | 118.5 | 0.80 | 0.78 |
+| current | 100 | 13.0 | 13.1 | **1.01, 0.99** | 13.7 | 1.04 |
+| current | 500 | 12.9 | 13.0 | **1.02, 1.03** | 14.2 | 1.11 |
+| ishalted | 100 | 13.2 | 14.0 | **1.04, 1.12** | 12.5 | 0.86 |
+| ishalted | 500 | 12.7 | 13.0 | **1.02, 1.04** | 12.9 | 1.01 |
+| reopenmiss | 100 | 13.3 | 13.5 | **1.04, 1.05** | 14.0 | 1.05 |
+| reopenmiss | 500 | 13.4 | 13.4 | **1.06, 1.05** | 13.9 | 1.06 |
+| closereopen (incl. P19 maybeClose) | 100 | 13.9 | 13.9 | 1.05, 1.04 | 16.2 | 1.16 |
+| closereopen (incl. P19 maybeClose) | 500 | 14.0 | 14.2 | 1.06, 1.08 | 16.0 | 1.19 |
+| attach (P19) | 100 | 13.2 | 13.3 | 1.10, 1.10 | 13.6 | 1.11 |
+| attach (P19) | 500 | 13.2 | 13.4 | 1.10, 1.14 | 13.4 | 1.11 |
+| replace | 100 | 92.1 | 93.2 | 0.77, 0.79 | 96.1 | 0.74 |
+| replace | 500 | 93.4 | 95.0 | 0.74, 0.79 | 100.3 | 0.80 |
 
-`current` and `isHalted` meet the floor at S and M. `reopen`'s lookup (`reopenmiss`) does **not**: 1.02/1.04, open
-(P18.4). Two later 15-round runs (`work/p18/s4_perf15_{1,2}.log`) and one 7-round run (`s4_perf.log`) were taken
-while another session's build drove the load average to 17-34; their cells spread from 0.3x to 1.7x and are not
-used.
+Result checks: 12 cells, 0 mismatches in each run.
+
+Base against P18 directly, same harness, the two driver binaries and hand interleaved 10-12 times per size
+(`work/p18/s6_ab2.log`, 10 runs each; first pass `work/p18/s6_ab_ishalted.log`; median ns, S / M):
+
+| item | base | P18 before step 6 (state read before `id_at`) | P18 (cb217c2) |
+|---|---|---|---|
+| current | 12.35 / 12.3 | 12.35 / 12.25 | 12.15 / 12.05 |
+| ishalted | 12.9 / 12.25 | **14.1 / 13.75** | 13.05 / 12.1 |
+| reopenmiss | 13.4 / 13.75 | 13.7 / 13.8 | 13.5 / 13.45 |
+
+Once the result is observed, the step-1 `found_at` made `isHalted` 1.2-1.5 ns slower than base: it read the state word
+before the `id_at` compare and `is_halted` read it again after, a two-load reload chain. Step 6 reads the state
+after `id_at` (same checks, same answers); `isHalted` is back to base and `current` is slightly below it.
+
+**Floor not met**: with the result observed, `current` is 0.99-1.03, `isHalted` 1.02-1.12 and `reopenmiss`
+1.04-1.06 of hand16. P18 is not slower than base on these items (base 1.04/1.11, 0.86/1.01, 1.05/1.06), so the
+gap is not introduced by this row; the lookups now carry no removable bounds check (P18.1). The remaining
+difference is in how the result reaches the caller and in the call shape: hand returns `Result<Res>` in registers,
+Pruv stores the tag in `out` and the host reads it back, and `reopen` is a separate non-inlined body (P18.4). The
+store/reload share was not isolated by a measurement; it is recorded as a lead, not a finding (P18.8).
+
+The step-4 era runs (`s4_perf.log`, `s4_perf15_{1,2}.log`) were taken at load 17-34 and spread 0.3-1.7x; unused.
+`s6_perf.log`, `s6_perf2.log`, `s6_perf15_{1,2}.log` are the intermediate harness variants (two `black_box`es per
+call, then before the step-6 source change) and are kept only as the record of the isHalted finding.
 
 ### P18.4 reopen lookup above 1.0x: compiler gap (open, not worked around in source)
 
@@ -2498,6 +2532,17 @@ Rust: equal within spread on both roots. Python: m7 about +7-10% (two new `ensur
 `found_at`/`current_at`), m10 slightly lower; the runs were sequential on a shared machine, so the m7 Python
 difference is within what load can move and was not re-measured interleaved.
 
+After step 6 (cb217c2), same script, same machine (`work/p18/s7_proof_time.log`):
+
+| root | compiler | P18 cb217c2 |
+|---|---|---|
+| `m7_test/root.pruv` | Rust | 6.76/6.63, 6.60/6.52 |
+| `m7_test/root.pruv` | Python | 11.24/11.11, 11.55/11.38 |
+| `m10_test/root_m10.pruv` | Rust | 7.22/7.15, 7.71/7.56 |
+| `m10_test/root_m10.pruv` | Python | 12.66/12.53, 12.94/12.75 |
+
+Every cell is at or below the main runs above; the earlier m7 Python +7-10% was load.
+
 ### P18.6a Audit
 
 One package audit (diff 6aa266a..81979b2): no behaviour regression on valid stores, no proof gap. Findings and
@@ -2511,18 +2556,30 @@ decisions (`work/p18/audit_findings.md`):
 - NOTE: unused `let n = st[a + 13]` in `reopen` removed; corrupt-blob behaviour recorded in P18.1; checksums
   agree on all four paths.
 
+Confirm audit (after the must-fix, diff up to 12e67a0): the hand Bool fix and the `B_ITEMS` boundary
+`reopenmiss` check passed. New MUST-FIX: the Pruv typed lane still did not observe the result tag `out[0]` (only the
+status), so the step-2 ratios measured Pruv without its result. Fixed in cb217c2 (one `black_box((status,
+out[0]))` per call). Re-measuring with it exposed the `isHalted` reload regression against base (14.1 vs 12.9 ns),
+fixed in the same commit by the `found_at` order (P18.1, P18.3). The audit budget (one audit + one confirm) is used.
+
 ### P18.7 Delegation
 
 - Proof-time runs (P18.6): a command delegation (`work/p18/proof_time.sh`), so the 16 compiler runs went in the
   background while the RSS work went on.
-- Package audit: one review delegation to Codex gpt-6.2-astra (ultra), findings in `work/p18/audit_findings.md`.
+- Package audit and confirm audit: two review delegations to Codex gpt-6.2-astra (ultra) on the Codex 2 account,
+  per the main session's rule (audits to astra ultra on Codex 2; the default account was at its weekly limit);
+  findings in `work/p18/audit_findings.md` and P18.6a.
 - Proof and encoding decisions, the inline-policy experiments and the perf/RSS measurements were done in this
   session.
 
 ### P18.8 Remaining work
 
-- `reopen` lookup 1.02/1.04x of hand (P18.4): needs the inline-policy split (T5, compiler) or a source-level cold
-  marker; then re-measure `reopenmiss` and `closereopen`.
-- Peak RSS 2-4 pages above P13c on the M7 items, cause not isolated (P18.5); RSS above hand stays with P13d/P13e.
-- `attach` 1.07/1.15 and `closereopen`'s `maybeClose` share are P19's rows.
+- **Lookup floor not met** with the result observed (P18.3): `current` 0.99-1.03, `isHalted` 1.02-1.12,
+  `reopenmiss` 1.04-1.06 of hand16, none slower than base. Leads, both compiler/ABI side, neither proven:
+  the `out`-buffer result path (store + host reload vs hand's register `Res`), and for `reopen` the inline-policy
+  split (T5, P18.4). Needs an isolating measurement (e.g. a register-return variant of the host shim) before any
+  source change.
+- Peak RSS 2-4 pages above P13c on the M7 items, cause not isolated, not re-measured after step 6 (P18.5); RSS above
+  hand stays with P13d/P13e.
+- `attach` (1.10-1.14) and `closereopen`'s `maybeClose` share and hand `is_ok()` are P19's rows.
 - LLVM cells pending P17.
