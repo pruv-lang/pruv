@@ -59,30 +59,43 @@ def rustc():
     return shutil.which("rustc") or os.path.expanduser("~/.cargo/bin/rustc")
 
 
-def compile_gen(which, gen):
+def build_facts():
+    os.makedirs(WORK, exist_ok=True)
+    rlib = os.path.join(WORK, "libbud_facts.rlib")
+    src = os.path.join(BUD, "m7_test", "bud_facts.rs")
+    c = subprocess.run([rustc(), "-O", "--edition", "2021", "--crate-type", "rlib",
+                        "--crate-name", "bud_facts", src, "-o", rlib], capture_output=True, text=True)
+    if c.returncode != 0:
+        sys.exit("rustc failed (bud_facts):\n" + c.stderr)
+    return rlib
+
+
+def compile_gen(which, gen, rlib=None):
+    if rlib is None:
+        rlib = build_facts()
     root = "bench/l3/budget/m10_test/root_m10.pruv"
     if which == "py":
         cmd = [PY_DEFAULT, PRUVC_PY, root, "-o", gen, "--backend", "rust"] + LIBS
     else:
         cmd = [which, root, "-o", gen] + LIBS
-    c = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+    c = subprocess.run(cmd + ["--rust-extern", f"bud_facts={rlib}"], cwd=ROOT, capture_output=True, text=True)
     if c.returncode != 0 or not os.path.exists(gen):
-        sys.exit("pruvc failed:\n" + c.stdout[-2000:] + c.stderr[-2000:])
+        sys.exit("pruvc failed:\n" + c.stdout + c.stderr)
 
 
 def build(args):
-    os.makedirs(WORK, exist_ok=True)
+    rlib = build_facts()
     gen = os.path.join(WORK, "gen.rs")
     if os.path.exists(gen):
         os.remove(gen)
-    compile_gen("py" if args.py else args.pruvc, gen)
+    compile_gen("py" if args.py else args.pruvc, gen, rlib)
     main = os.path.join(WORK, "main_m10.rs")
     with open(main, "w") as f:
         f.write('#![allow(dead_code, unused_imports, unused_variables, unused_mut)]\n#[path = "gen.rs"] mod sol;\n')
         f.write(open(os.path.join(HERE, "driver_m10.rs")).read())
     exe = os.path.join(WORK, "driver_m10")
-    c = subprocess.run([rustc(), "-C", "opt-level=3", "--edition", "2021", "-o", exe, main], capture_output=True,
-                       text=True)
+    c = subprocess.run([rustc(), "-C", "opt-level=3", "--edition", "2021", "--extern", f"bud_facts={rlib}",
+                        "-o", exe, main], capture_output=True, text=True)
     if c.returncode != 0:
         sys.exit("rustc failed:\n" + c.stderr[-4000:])
     return exe
@@ -693,9 +706,9 @@ def cmd_q(args):
 
 def cmd_replay(args):
     """No replay across Grow (L3 P13b): run the q program from the smallest start (t_init's N, so calls hit Grow) and
-    from a start big enough that no call grows. Query answers are prefetched into the op and effects are performed only
-    after a successful attempt, so both runs must print the same log (effects, answers consumed, errors) and the same
-    observation byte for byte; the small run must grow."""
+    from a start big enough that no call grows. isQuiet is called after reserve, and effect processing consumes
+    runningDelegationIds only after a successful attempt. Both runs must print the same log (effects, answers
+    consumed, errors) and observation byte for byte; the small run must grow."""
     exe = build(args)
     prog = []
     for l in open(args.cases):

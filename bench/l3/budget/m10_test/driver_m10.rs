@@ -7,16 +7,16 @@
 //   driver_m10 perf <D> <reps>   perf program, see run_m10.py (cmd_perf)
 //
 // Boundary rule (M7 + M9): the host owns the state buffer and the scratch frames, supplies the inputs of a call (now,
-// the isQuiet answer, the next runningDelegationIds answer) and performs the effects in order; it never reads state
+// the next runningDelegationIds answer) and performs the effects in order; it never reads state
 // words and decides nothing. Body = [code, what x10, flag, sessionId key, budgetId key, runKey key]; the host inserts
-// now and quiet after the code and appends the head of its runningDelegationIds queue (`n, keys`, n = 0 when empty).
+// now and a reserved zero word after the code and appends the head of its runningDelegationIds queue (`n, keys`, n = 0 when empty).
 // Effects: [30] runningDelegationIds consumed (the host pops its queue), [31] cancelRecovery, [32] stopMain,
 // [33, i] stopDelegation of the i-th id of the answer passed in, [34] stopAttachedTurns, [35] holdQueued, [36] save,
 // [20] changed, [37] announce, [21] carryHeld, [22] uuid, [12, req, eff] timerSet, [13] timerClear, [14] timerForget.
 // Timers (M9): timerSet registers token t<n> due at now + eff with the call's ref (the callback's captured ref) and
 // makes it the budget's timer; timerClear cancels the budget's timer; timerForget drops the budget's handle. adv fires
-// due timers in (due, token) order through FIRE (code 11) with now = due. isQuiet: the next answer (default false) is prefetched in op[2]
-// and consumed when the effects hold [23].
+// due timers in (due, token) order through FIRE (code 11) with now = due.
+// isQuiet takes the next answer synchronously (default false).
 // Grow -N: buffer of exactly N (Pruv sizes it, N >= 2*len), t_grow, retry.
 // Keys on the wire (op keys, the runningDelegationIds answers `n, (len, words(len))*`) are packed u16 keys
 // `n, words(n) packed words` (bud_keys layout), packed once by the encoder (run_m10.py; key() below for perf). The
@@ -50,8 +50,6 @@ struct World {
     fx: Vec<i64>,
     op: Vec<i64>,
     now: i64,
-    quiet: Vec<i64>,
-    next_quiet: usize,
     rdi: Vec<Vec<i64>>,
     next_rdi: usize,
     seq: u64,
@@ -99,8 +97,6 @@ impl World {
             fx: vec![0; 4096],
             op: Vec::with_capacity(256),
             now: 1700000000000,
-            quiet: Vec::new(),
-            next_quiet: 0,
             rdi: Vec::new(),
             next_rdi: 0,
             seq: 0,
@@ -146,7 +142,6 @@ impl World {
 
     // One public call (or FIRE); returns the status after the Grow retries, then performs the effects.
     fn call(&mut self, body: &[i64]) -> i64 {
-        let quiet = self.quiet.get(self.next_quiet).copied().unwrap_or(0);
         let mut r = 0;
         let empty = vec![0i64];
         let ids: Vec<i64> = self.rdi.get(self.next_rdi).cloned().unwrap_or(empty);
@@ -154,11 +149,12 @@ impl World {
         op.clear();
         op.push(body[0]);
         op.push(self.now);
-        op.push(quiet);
+        op.push(0);
         op.extend_from_slice(&body[1..]);
         op.extend_from_slice(&ids);
         CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut grew = false;
+        let before = bud_facts::calls();
         for _ in 0..8 {
             self.fx[0] = 0;
             ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -170,16 +166,16 @@ impl World {
             }
             break;
         }
+        let after = bud_facts::calls();
+        if !self.silent {
+            for i in before..after {
+                self.log.push(format!("E quiet {}", bud_facts::answer(i)));
+            }
+        }
         if grew && r == 0 && self.fx[0] > 0 {
             GROWN_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         if r != 0 {
-            // a finished call that consulted isQuiet ([23]) consumed the answer even when it failed afterwards
-            let used = self.fx[0].max(0) as usize;
-            if self.fx[1..=used].contains(&23) {
-                self.next_quiet += 1;
-                self.note(format!("E quiet {}", quiet));
-            }
             self.op = op;
             self.note(format!("X {}", r));
             return r;
@@ -217,10 +213,6 @@ impl World {
                 }
                 14 => {
                     self.by_bid.remove(&bid);
-                }
-                23 => {
-                    self.next_quiet += 1;
-                    self.note(format!("E quiet {}", quiet));
                 }
                 30 => {
                     self.next_rdi += 1;
@@ -371,10 +363,12 @@ fn run_q() {
         match p[0] {
             "case" => {
                 w = World::new();
+                bud_facts::set_answers(&[], 0);
+                bud_facts::set_calls(0);
                 writeln!(o, "case {}", p[1]).unwrap();
             }
             "now" => w.now = p[1].parse().unwrap(),
-            "quiet" => w.quiet = nums(&p[1..]),
+            "quiet" => bud_facts::set_answers(&nums(&p[1..]), 0),
             "rdi" => w.rdi.push(nums(&p[1..])),
             "put" => w.put(&nums(&p[1..])),
             "adv" => {
@@ -454,6 +448,8 @@ fn rec(id: &str, rest: &str) -> Vec<i64> {
 pub const PERF_REST: &str = "{\"card\":{\"deliverable\":\"d\",\"done\":[\"x\"],\"state\":\"done\",\"updatedAt\":\"2023-11-14T22:13:20.000Z\"}}";
 
 fn run_perf(args: &[String]) {
+    bud_facts::set_answers(&[], 1);
+    bud_facts::set_calls(0);
     let d: usize = args[0].parse().unwrap();
     let reps: usize = args[1].parse().unwrap();
     let bid = "99b568f7-0000-4000-8000-000000000001";

@@ -65,27 +65,40 @@ def rustc():
     return shutil.which("rustc") or os.path.expanduser("~/.cargo/bin/rustc")
 
 
-def compile_gen(which, gen):
+def build_facts():
+    os.makedirs(WORK, exist_ok=True)
+    rlib = os.path.join(WORK, "libbud_facts.rlib")
+    src = os.path.join(HERE, "bud_facts.rs")
+    c = subprocess.run([rustc(), "-O", "--edition", "2021", "--crate-type", "rlib",
+                        "--crate-name", "bud_facts", src, "-o", rlib], capture_output=True, text=True)
+    if c.returncode != 0:
+        sys.exit("rustc failed (bud_facts):\n" + c.stderr)
+    return rlib
+
+
+def compile_gen(which, gen, rlib=None):
+    if rlib is None:
+        rlib = build_facts()
     root = "bench/l3/budget/m7_test/root.pruv"
     if which == "py":
         cmd = [PY_DEFAULT, PRUVC_PY, root, "-o", gen, "--backend", "rust"] + LIBS
     else:
         cmd = [which, root, "-o", gen] + LIBS
-    c = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+    c = subprocess.run(cmd + ["--rust-extern", f"bud_facts={rlib}"], cwd=ROOT, capture_output=True, text=True)
     if c.returncode != 0 or not os.path.exists(gen):
-        sys.exit("pruvc failed:\n" + c.stdout[-2000:] + c.stderr[-2000:])
+        sys.exit("pruvc failed:\n" + c.stdout + c.stderr)
 
 
 def build(args):
-    os.makedirs(WORK, exist_ok=True)
+    rlib = build_facts()
     gen = os.path.join(WORK, "gen.rs")
-    compile_gen("py" if args.py else args.pruvc, gen)
+    compile_gen("py" if args.py else args.pruvc, gen, rlib)
     main = os.path.join(WORK, "main_m7.rs")
     with open(main, "w") as f:
         f.write('#![allow(dead_code, unused_imports, unused_variables, unused_mut)]\n#[path = "gen.rs"] mod sol;\n')
         f.write(open(os.path.join(HERE, "driver_m7.rs")).read())
     exe = os.path.join(WORK, "driver_m7")
-    c = subprocess.run([rustc()] + RUSTC_FLAGS + ["-o", exe, main], capture_output=True, text=True)
+    c = subprocess.run([rustc()] + RUSTC_FLAGS + ["--extern", f"bud_facts={rlib}", "-o", exe, main], capture_output=True, text=True)
     if c.returncode != 0:
         sys.exit("rustc failed:\n" + c.stderr[-4000:])
     return exe
@@ -93,9 +106,10 @@ def build(args):
 
 def build_hand(src, name):
     """Compile a hand Rust file of this folder to work/m7/<name> with the shared rustc flags."""
-    os.makedirs(WORK, exist_ok=True)
+    rlib = build_facts()
     exe = os.path.join(WORK, name)
-    c = subprocess.run([rustc()] + RUSTC_FLAGS + ["-o", exe, os.path.join(HERE, src)], capture_output=True, text=True)
+    c = subprocess.run([rustc()] + RUSTC_FLAGS + ["--extern", f"bud_facts={rlib}",
+                                            "-o", exe, os.path.join(HERE, src)], capture_output=True, text=True)
     if c.returncode != 0:
         sys.exit("rustc failed (%s):\n%s" % (src, c.stderr[-4000:]))
     return exe

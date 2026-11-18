@@ -11,7 +11,7 @@ mod bud_halt;
 // L3-10 M10a test root (test only, not product): drives halt (bud_halt.pruv) and the calls that reach it (charge over
 // limit, the run methods and FIRE through HALT_TIME) over the M7 record and the M9 clock.
 //
-// t_call op: [code, now, quiet, what x10, flag, sessionId key, budgetId key, runKey key, ids], key = `n, words(n)
+// t_call op: [code, now, reserved zero, what x10, flag, sessionId key, budgetId key, runKey key, ids], key = `n, words(n)
 // packed words` (bud_keys layout; the host packs every key once at ingress), ids = the host's next
 // runningDelegationIds answer `n, (len, words(len) packed words)*` (queue head, n = 0 when the queue is empty); it is
 // consumed only when the effects hold [30] (M10_NOTES.md KD-M10-1).
@@ -23,8 +23,9 @@ mod bud_halt;
 //   8 runStarted(ref, runKey), 9 runWaiting(ref, runKey, flag == 1), 10 runEnded(ref, runKey),
 //   11 FIRE (the ref the delivered timer captured when it was armed), 12 halt(ref, reason = flag).
 //   what[3..13) = bud_charge's [kind, value] x5 (delegations, commands, reviews, checks, retries).
+// maybeClose consults isQuiet synchronously.
 // out: lifecycle's tags (0 undef, 1 false, 2 true, 4 budget), charge [5, ok (1 false, 2 true), reason (0..4)].
-// Status: 0 done, 2 invalid, 3 out/fx small, 5 Need isQuiet (only quiet = -1; the driver always prefetches), -N Grow (nothing written).
+// Status: 0 done, 2 invalid, 3 out/fx small, -N Grow (nothing written).
 
 fn rd(a: [i64], i: i64) -> i64
 { return crate::ent_u16::rd(a, i); }
@@ -193,7 +194,7 @@ fn run_op(inout st: [i64], op: [i64], code: i64, sn: i64, bs: i64, bn: i64, rs: 
   return 0;
 }
 
-pub fn t_call(inout st: [i64], op: [i64], inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc
+pub fn t_call(inout st: [i64], op: [i64], inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc, io
 {
   if !crate::bud_store::valid(st) { return 2; }
   let e1: i64 = crate::bud_keys::rec_end(op, 14);
@@ -206,7 +207,6 @@ pub fn t_call(inout st: [i64], op: [i64], inout bv: [i64], inout fx: [i64], inou
   if iw < 0 || e3 + iw != len(op) { return 2; }
   let code: i64 = rd(op, 0);
   let now: i64 = rd(op, 1);
-  let quiet: i64 = rd(op, 2);
   let flag: i64 = rd(op, 13);
   let sn: i64 = rd(op, 14);
   let bn: i64 = rd(op, e1);
@@ -215,7 +215,7 @@ pub fn t_call(inout st: [i64], op: [i64], inout bv: [i64], inout fx: [i64], inou
   if code == 1 { return crate::bud_lifecycle::current(st, op, 15, sn, op, bs, bn, inout out); }
   if code == 2 { return crate::bud_lifecycle::is_halted(st, op, 15, sn, op, bs, bn, inout out); }
   if code == 5 { return crate::bud_lifecycle::reopen(inout st, op, 15, sn, op, bs, bn, inout fx, inout out); }
-  if code == 6 { return crate::bud_lifecycle::maybe_close(inout st, op, 15, sn, quiet, now, inout bv, inout fx, inout out); }
+  if code == 6 { return crate::bud_lifecycle::maybe_close(inout st, op, 15, sn, now, inout bv, inout fx, inout out); }
   if code == 7 { return charge(inout st, op, sn, bs, bn, now, e3, inout bv, inout fx, inout out); }
   if code >= 8 && code <= 11 { return run_op(inout st, op, code, sn, bs, bn, e2 + 1, rn, flag, now, e3, inout bv, inout fx, inout out); }
   if code == 12 {

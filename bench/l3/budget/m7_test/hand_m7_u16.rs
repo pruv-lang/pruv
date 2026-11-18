@@ -17,7 +17,7 @@
 // rchk <item> <size> <value>: per-op result checksum of an untimed verification pass run after each item's timed loop
 // (fresh setup identical to the timed one, same ops and per-iteration resets, V = min(reps, 2000) iterations). Per op
 // it folds s = s*31 + w over: the status, the effect count, the effect codes (13 timerClear, 20 changed, 21 carryHeld,
-// 22 uuid, 23 isQuiet) and, for status 0, res_words (the words q mode prints after `V `; ishalted: [1] / [2]). driver_m7
+// 22 uuid) and, for status 0, res_words (the words q mode prints after `V `; ishalted: [1] / [2]). driver_m7
 // prints the identical encoding from the Pruv-generated code and run_m7.py perf compares the two per cell.
 //
 // Typing: keys (sessionId, budgetId, follows, uuids) are UTF-16 code units, Box<[u16]> in std HashMaps, looked up by
@@ -429,7 +429,6 @@ enum Effect {
     Changed,    // [20]
     CarryHeld,  // [21]
     Uuid,       // [22] one id consumed
-    Quiet,      // [23] isQuiet consulted
 }
 
 // A call's result, borrowing the stored data (nothing is copied; q mode renders the words from it).
@@ -638,8 +637,8 @@ impl World {
     }
 
     // maybeClose (B:399-408): an open budget with no runs on its clock closes when the host says the session is quiet
-    // (quiet: 0 no, otherwise yes, -1 not supplied -> status 5). Consulting the answer pushes Quiet first.
-    fn maybe_close(&mut self, sid: &[u16], quiet: i64, now: i64) -> Result<Res<'_>, i64> {
+    // (0 no, 1 yes, other answers are invalid).
+    fn maybe_close(&mut self, sid: &[u16], now: i64) -> Result<Res<'_>, i64> {
         let b = match self.sessions.get_mut(sid) {
             None => return Err(2),
             Some(Slot::Budget(b)) if b.state == State::Open => b,
@@ -648,12 +647,10 @@ impl World {
         if !self.clocks.is_empty() && self.clocks.get(&*b.id).copied().unwrap_or(0) > 0 {
             return Ok(Res::Bool(false));
         }
-        if quiet < 0 {
-            return Err(5);
-        }
-        self.fx.push(Effect::Quiet);
-        if quiet == 0 {
-            return Ok(Res::Bool(false));
+        match bud_facts::is_quiet(&[], 0, 0) {
+            0 => return Ok(Res::Bool(false)),
+            1 => {}
+            _ => return Err(2),
         }
         // CLOSE('quiet'): clock part, state closed, ended = {how, at: now}
         if !self.clocks.is_empty() && self.clocks.remove(&*b.id).is_some() {
@@ -691,11 +688,10 @@ impl World {
 
 // ---- q mode: the driver_m7.rs program protocol ----
 
-// t_call's op: [code, now, quiet, origin, size, unit x6, sessionId key, budgetId key, uuid key] (packed keys)
+// t_call's op: [code, now, reserved zero, origin, size, unit x6, sessionId key, budgetId key, uuid key] (packed keys)
 struct Call {
     code: i64,
     now: i64,
-    quiet: i64,
     origin: i64,
     size: i64,
     unit: [i64; 6],
@@ -723,7 +719,6 @@ fn decode_call(op: &[i64], keys: &mut CallKeys) -> Result<Call, i64> {
     Ok(Call {
         code: op[0],
         now: op[1],
-        quiet: op[2],
         origin: op[3],
         size: op[4],
         unit,
@@ -758,7 +753,7 @@ fn dispatch<'a>(w: &'a mut World, c: &Call, keys: &CallKeys) -> Result<Res<'a>, 
         }),
         2 => Ok(Res::Bool(w.is_halted(s, b))),
         5 => w.reopen(s, b),
-        6 => w.maybe_close(s, c.quiet, c.now),
+        6 => w.maybe_close(s, c.now),
         3 => {
             let origin = origin_of(c.origin).ok_or(2)?;
             let size = size_of(c.size).ok_or(2)?;
@@ -802,12 +797,10 @@ struct Host {
     now: i64,
     uuids: Vec<Vec<i64>>, // keys `len, units...`
     next_uuid: usize,
-    quiet: Vec<i64>,
-    next_quiet: usize,
     log: Vec<String>,
-    // perf wire lane only: the ops built so far, keyed by (body address, body length, quiet, uuid index), as
+    // perf wire lane only: the ops built so far, keyed by (body address, body length, uuid index), as
     // driver_m7 World::take_op caches them in silent mode; a cached op only gets its `now` word refreshed.
-    ops: Vec<((usize, usize, i64, usize), Vec<i64>)>,
+    ops: Vec<((usize, usize, usize), Vec<i64>)>,
     // decode_call's key buffers, reused across calls
     keys: CallKeys,
 }
@@ -819,8 +812,6 @@ impl Host {
             now: 1700000000000,
             uuids: Vec::new(),
             next_uuid: 0,
-            quiet: Vec::new(),
-            next_quiet: 0,
             log: Vec::new(),
             ops: Vec::new(),
             keys: [Vec::new(), Vec::new(), Vec::new()],
@@ -828,11 +819,10 @@ impl Host {
     }
 
     // Silent variant of `call` (perf wire lane): the same op build (cached Vec, no per-call allocation), decode_call,
-    // dispatch and effect-driven next_uuid / next_quiet bookkeeping, but no log lines. Returns the status. The result
+    // dispatch and effect-driven UUID bookkeeping, but no log lines. Returns the status. The result
     // is only black_boxed, unless `words` is given: then the result words are stored there (status 0; else empty).
     fn run_quiet(&mut self, body: &[i64], mut words: Option<&mut Vec<i64>>) -> i64 {
-        let quiet = self.quiet.get(self.next_quiet).copied().unwrap_or(0);
-        let k = (body.as_ptr() as usize, body.len(), quiet, self.next_uuid);
+        let k = (body.as_ptr() as usize, body.len(), self.next_uuid);
         let slot = match self.ops.iter().position(|(key, _)| *key == k) {
             Some(i) => i,
             None => {
@@ -844,7 +834,7 @@ impl Host {
             let op = &mut self.ops[slot].1;
             op.push(body[0]);
             op.push(self.now);
-            op.push(quiet);
+            op.push(0);
             op.extend_from_slice(&body[1..]);
             match self.uuids.get(self.next_uuid) {
                 Some(u) => op.extend_from_slice(u),
@@ -872,16 +862,11 @@ impl Host {
             },
         };
         if status != 0 {
-            // A finished call that consulted isQuiet consumed the answer even when it failed afterwards.
-            if self.w.fx.iter().any(|e| matches!(e, Effect::Quiet)) {
-                self.next_quiet += 1;
-            }
             return status;
         }
         for e in &self.w.fx {
             match e {
                 Effect::Uuid => self.next_uuid += 1,
-                Effect::Quiet => self.next_quiet += 1,
                 _ => {}
             }
         }
@@ -923,20 +908,20 @@ impl Host {
         }
     }
 
-    // One public call: body = [code, origin, size, unit x6, sessionId key, budgetId key]; the host inserts now, the next
-    // isQuiet answer and the next UUID key (an empty key when none is left), exactly as driver_m7.rs World::take_op.
+    // One public call: body = [code, origin, size, unit x6, sessionId key, budgetId key]; the host inserts now, a reserved
+    // zero word, and the next UUID key (an empty key when none is left), exactly as driver_m7.rs World::take_op.
     fn call(&mut self, body: &[i64]) {
-        let quiet = self.quiet.get(self.next_quiet).copied().unwrap_or(0);
         let mut op: Vec<i64> = Vec::with_capacity(body.len() + 48);
         op.push(body[0]);
         op.push(self.now);
-        op.push(quiet);
+        op.push(0);
         op.extend_from_slice(&body[1..]);
         match self.uuids.get(self.next_uuid) {
             Some(u) => op.extend_from_slice(u),
             None => op.push(0),
         }
         self.w.fx.clear();
+        let before = bud_facts::calls();
         let (status, words) = match decode_call(&op, &mut self.keys) {
             Err(s) => (s, Vec::new()),
             Ok(c) => match dispatch(&mut self.w, &c, &self.keys) {
@@ -944,26 +929,22 @@ impl Host {
                 Err(s) => (s, Vec::new()),
             },
         };
+        for i in before..bud_facts::calls() {
+            self.log.push(format!("E quiet {}", bud_facts::answer(i)));
+        }
         if status != 0 {
-            // A finished call that consulted isQuiet consumed the answer even when it failed afterwards.
-            if self.w.fx.iter().any(|e| matches!(e, Effect::Quiet)) {
-                self.next_quiet += 1;
-                self.log.push(format!("E quiet {}", quiet));
-            }
             self.log.push(format!("X {}", status));
             return;
         }
         for e in &self.w.fx {
             match e {
                 Effect::Uuid => self.next_uuid += 1,
-                Effect::Quiet => self.next_quiet += 1,
                 _ => {}
             }
             self.log.push(match e {
                 Effect::Changed => "E changed".to_string(),
                 Effect::CarryHeld => "E carry".to_string(),
                 Effect::Uuid => "E uuid".to_string(),
-                Effect::Quiet => format!("E quiet {}", quiet),
                 Effect::TimerClear => "E clear".to_string(),
             });
         }
@@ -1011,11 +992,13 @@ fn run_q() {
         match p[0] {
             "case" => {
                 h = Host::new();
+                bud_facts::set_answers(&[], 0);
+                bud_facts::set_calls(0);
                 writeln!(o, "case {}", p[1]).unwrap();
             }
             "now" => h.now = p[1].parse().unwrap(),
             "uuids" => h.uuids = keys(&nums(&p[1..])),
-            "quiet" => h.quiet = nums(&p[1..]),
+            "quiet" => bud_facts::set_answers(&nums(&p[1..]), 0),
             "put" => h.put(&nums(&p[1..])),
             "del" => h.del(&nums(&p[1..])),
             "adv" => h.now += p[1].parse::<i64>().unwrap(),
@@ -1047,8 +1030,8 @@ fn run_q() {
 //   closereopen : maybeClose(quiet) then reopen on the last session (2 calls per rep)
 //   replace     : replaceForUserMessage on a halted budget of the last session (CLOSE + OPEN + carryHeld), then the
 //                 halted record is put back (timed together, both sides)
-// Per call the hosts reset the UUID / isQuiet streams (here: the constants passed) and clear the effect list, as
-// driver_m7 resets next_uuid / next_quiet / fx[0]. Keys are encoded once at setup (the Pruv driver prepares its ops
+// The host fact defaults to true. The wire hosts reset the UUID index and the host fact counter per call.
+// Each call starts with an empty effect list. Keys are encoded once at setup (the Pruv driver prepares its ops
 // once). The put-back of `replace` clones a prepared typed record (3 allocations), where Pruv copies words into the
 // state buffer; that is what restoring a typed record costs.
 
@@ -1076,7 +1059,6 @@ fn fx_code(e: &Effect) -> i64 {
         Effect::Changed => 20,
         Effect::CarryHeld => 21,
         Effect::Uuid => 22,
-        Effect::Quiet => 23,
     }
 }
 
@@ -1106,6 +1088,8 @@ fn rchk_fold(sum: u64, status: i64, words: &[i64], fx: &[Effect]) -> u64 {
 }
 
 fn run_perf(args: &[String]) {
+    bud_facts::set_answers(&[], 1);
+    bud_facts::set_calls(0);
     let size: usize = args[0].parse().unwrap();
     let reps: usize = args[1].parse().unwrap();
     let only = args.get(2).map(|s| s.as_str());
@@ -1184,7 +1168,7 @@ fn run_perf(args: &[String]) {
         let mut w = setup(State::Open);
         let mut go = |w: &mut World| {
             w.fx.clear();
-            black_box(w.attach(black_box(sid), Origin::User, Size::Absent, &unit, uuid, now).is_ok());
+            let _ = black_box(w.attach(black_box(sid), Origin::User, Size::Absent, &unit, uuid, now));
         };
         for _ in 0..1000 {
             go(&mut w);
@@ -1209,9 +1193,9 @@ fn run_perf(args: &[String]) {
         let mut w = setup(State::Open);
         let mut go = |w: &mut World| {
             w.fx.clear();
-            black_box(w.maybe_close(black_box(sid), black_box(1), now).is_ok());
+            let _ = black_box(w.maybe_close(black_box(sid), now));
             w.fx.clear();
-            black_box(w.reopen(black_box(sid), black_box(lbid)).is_ok());
+            let _ = black_box(w.reopen(black_box(sid), black_box(lbid)));
         };
         for _ in 0..1000 {
             go(&mut w);
@@ -1226,7 +1210,7 @@ fn run_perf(args: &[String]) {
         let mut s = 0u64;
         for _ in 0..vn {
             w.fx.clear();
-            let (st, ws) = digest(w.maybe_close(sid, 1, now));
+            let (st, ws) = digest(w.maybe_close(sid, now));
             s = rchk_fold(s, st, &ws, &w.fx);
             w.fx.clear();
             let (st, ws) = digest(w.reopen(sid, lbid));
@@ -1267,7 +1251,7 @@ fn run_perf(args: &[String]) {
         let halted = rec(&bid(last), State::Halted);
         let mut go = |w: &mut World| {
             w.fx.clear();
-            black_box(w.replace(black_box(sid), Origin::User, Size::Times(2), &unit, uuid, now).is_ok());
+            let _ = black_box(w.replace(black_box(sid), Origin::User, Size::Times(2), &unit, uuid, now));
             w.put(black_box(sid), Slot::Budget(halted.clone()));
         };
         for _ in 0..1000 {
@@ -1292,7 +1276,7 @@ fn run_perf(args: &[String]) {
 
     if wire {
         // Wire lane: the same bodies and setups as driver_m7.rs run_perf, through Host::run_quiet (op build into a cached
-        // Vec, decode_call, dispatch, effect bookkeeping; no logging). Per call next_uuid / next_quiet are reset to 0.
+        // Vec, decode_call, dispatch, effect bookkeeping; no logging). Per call the UUID index and host fact counter reset to 0.
         let wbody = |code: i64, origin: i64, sz: i64, b: &str| -> Vec<i64> {
             let mut v = vec![code, origin, sz];
             v.extend_from_slice(&unit);
@@ -1300,13 +1284,12 @@ fn run_perf(args: &[String]) {
             v.extend(wkey(&u16s(b)));
             v
         };
-        let wsetup = |state: State, quiet: Vec<i64>| -> Host {
+        let wsetup = |state: State| -> Host {
             let mut h = Host::new();
             for (i, s) in sids.iter().enumerate() {
                 h.w.put(s, Slot::Budget(rec(&bid(i), state)));
             }
             h.uuids = vec![wkey(&uuid_key)];
-            h.quiet = quiet;
             h
         };
         // timed loop of one item's ops (per = calls per rep)
@@ -1314,7 +1297,7 @@ fn run_perf(args: &[String]) {
             for _ in 0..1000 {
                 for op in ops {
                     h.next_uuid = 0;
-                    h.next_quiet = 0;
+                    bud_facts::set_calls(0);
                     h.run_quiet(op, None);
                 }
             }
@@ -1322,7 +1305,7 @@ fn run_perf(args: &[String]) {
             for _ in 0..reps {
                 for op in ops {
                     h.next_uuid = 0;
-                    h.next_quiet = 0;
+                    bud_facts::set_calls(0);
                     black_box(h.call_quiet(black_box(op)));
                 }
             }
@@ -1335,7 +1318,7 @@ fn run_perf(args: &[String]) {
             for _ in 0..vn {
                 for op in ops {
                     h.next_uuid = 0;
-                    h.next_quiet = 0;
+                    bud_facts::set_calls(0);
                     let st = h.run_quiet(op, Some(&mut words));
                     s = rchk_fold(s, st, &words, &h.w.fx);
                 }
@@ -1343,21 +1326,21 @@ fn run_perf(args: &[String]) {
             s
         };
         let blast = bid(last);
-        let items: [(&str, State, Vec<i64>, Vec<Vec<i64>>); 5] = [
-            ("ishalted", State::Open, vec![], vec![wbody(2, -1, -1, &blast)]),
-            ("current", State::Open, vec![], vec![wbody(1, -1, -1, &blast)]),
-            ("attach", State::Open, vec![], vec![wbody(3, 0, -1, "")]),
-            ("closereopen", State::Open, vec![1], vec![wbody(6, -1, -1, ""), wbody(5, -1, -1, &blast)]),
-            ("reopenmiss", State::Open, vec![], vec![wbody(5, -1, -1, &blast)]),
+        let items: [(&str, State, Vec<Vec<i64>>); 5] = [
+            ("ishalted", State::Open, vec![wbody(2, -1, -1, &blast)]),
+            ("current", State::Open, vec![wbody(1, -1, -1, &blast)]),
+            ("attach", State::Open, vec![wbody(3, 0, -1, "")]),
+            ("closereopen", State::Open, vec![wbody(6, -1, -1, ""), wbody(5, -1, -1, &blast)]),
+            ("reopenmiss", State::Open, vec![wbody(5, -1, -1, &blast)]),
         ];
-        for (name, state, quiet, ops) in &items {
+        for (name, state, ops) in &items {
             if !on(name) {
                 continue;
             }
             let per = ops.len();
-            let mut h = wsetup(*state, quiet.clone());
+            let mut h = wsetup(*state);
             println!("w {} {} {:.1}", name, size, wtime(&mut h, ops, per));
-            let mut h = wsetup(*state, quiet.clone());
+            let mut h = wsetup(*state);
             println!("rchk_w {} {} {}", name, size, wverify(&mut h, ops));
         }
         if on("replace") {
@@ -1368,7 +1351,7 @@ fn run_perf(args: &[String]) {
             let mut put = wkey(sid);
             put.push(r.len() as i64);
             put.extend(r);
-            let mut h = wsetup(State::Halted, vec![]);
+            let mut h = wsetup(State::Halted);
             for _ in 0..1000 {
                 h.next_uuid = 0;
                 h.run_quiet(&rp, None);
@@ -1381,7 +1364,7 @@ fn run_perf(args: &[String]) {
                 h.put(black_box(&put));
             }
             println!("w replace {} {:.1}", size, t.elapsed().as_nanos() as f64 / reps as f64);
-            let mut h = wsetup(State::Halted, vec![]);
+            let mut h = wsetup(State::Halted);
             let mut s = 0u64;
             let mut words: Vec<i64> = Vec::new();
             for _ in 0..vn {
