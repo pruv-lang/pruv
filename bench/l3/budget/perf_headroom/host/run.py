@@ -54,7 +54,11 @@ def build(args):
     if "selftest ok" not in out:
         sys.exit("perf_ts.mjs selftest failed:\n%s" % out)
     exe4 = m34.build(args.pruvc, "m4")
-    if not args.no_build:
+    args.exe4raw = m34.build(args.pruvc, "m4raw") if args.only in (None, "m4") else None   # P09 poison lanes
+    if args.only == "m4" and args.pruvc.endswith(".py"):
+        print("note: dev_build.sh (M5 harness) skipped: it runs PRUVC directly and %s is a Python script" % args.pruvc,
+              file=sys.stderr)
+    elif not args.no_build:
         sh(["sh", os.path.join(BUD, "dev_build.sh")], env=dict(env, PRUVC=args.pruvc))
     return exe4
 
@@ -85,6 +89,41 @@ def m4(args, exe4):
         for n in SIZES:
             p, h, t = (statistics.median(vals[(axis, n, s)]) for s in ("pruv", "hand", "ts"))
             print("| %s | %d | %.1f | %.1f | %.1f | %.2f | %.2f |" % (axis, n, p, h, t, p / h, p / t))
+    print()
+
+
+def m4_poison(args, exe4):
+    """P09 poison adapter lanes: hand (m4_hand), pruv m4 (Plain store, no poison), pruv m4raw (pruv_raw::PruvStore).
+    Separate rounds from the lanes above (those are unchanged); the three sides rotate order each round; >= 7 rounds."""
+    reps = 200000
+    rounds = max(args.rounds, 7)
+    hand = os.path.join(HAND, "release", "m4_hand")
+    vals = {}  # (axis, n, side) -> [ns]
+    for r in range(rounds):
+        for axis in ("sessions", "tools", "clocks"):
+            for n in SIZES:
+                sides = [
+                    ("m4", [exe4, "perf", axis, str(n), str(reps)], "core_ns_per_op"),
+                    ("m4raw", [args.exe4raw, "perf", axis, str(n), str(reps)], "core_ns_per_op"),
+                    ("hand", [hand, "perf", axis, str(n), str(reps)], "hand_ns_per_op"),
+                ]
+                for side, cmd, key in rotate(sides, r):
+                    v = float(kv(sh(cmd).strip().splitlines()[-1])[key])
+                    vals.setdefault((axis, n, side), []).append(v)
+    print("### M4 poison adapter (ns per op, median of %d alternating runs, 200000 reps each; [min-max] = spread over rounds)" % rounds)
+    print("| axis | n | hand Rust | Pruv m4 (Plain) | Pruv m4raw (PruvStore) | m4/hand | m4raw/hand | poison cost m4raw/m4 |")
+    print("|---|---:|---:|---:|---:|---:|---:|---:|")
+    for axis in ("sessions", "tools", "clocks"):
+        for n in SIZES:
+            cells = []
+            med = {}
+            for s in ("hand", "m4", "m4raw"):
+                v = vals[(axis, n, s)]
+                med[s] = statistics.median(v)
+                cells.append("%.1f [%.1f-%.1f]" % (med[s], min(v), max(v)))
+            print("| %s | %d | %s | %s | %s | %.2f | %.2f | %.3f |" % (
+                axis, n, cells[0], cells[1], cells[2], med["m4"] / med["hand"], med["m4raw"] / med["hand"],
+                med["m4raw"] / med["m4"]))
     print()
 
 
@@ -135,6 +174,7 @@ def main():
     exe4 = build(args)
     if args.only in (None, "m4"):
         m4(args, exe4)
+        m4_poison(args, exe4)
     if args.only in (None, "m5"):
         m5(args)
 

@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Harness for the L3-10 M3/M4 milestones.
 
-  python3 bench/l3/budget/m34_test/run.py m3|m4|perf|keys [--pruvc PATH] [--seed N] [--count N]
+  python3 bench/l3/budget/m34_test/run.py m3|m4|m4raw|perf|keys [--pruvc PATH] [--seed N] [--count N]
+
+`--pruvc` may be pruvc/pruvc.py (the Python compiler; run under this interpreter).
+`m4raw` (P09) builds root_m4 as a manifest package (work/m34/pkg_m4raw, raw_entries "crate") and drives it through
+sol::pruv_raw::PruvStore; `m4` drives the same calls through the local no-poison Plain store. Same driver checks.
 
 `keys` (P03) builds root_keys.pruv / driver_keys.rs and compares every output line with the gen_keys.py oracle.
 
@@ -53,9 +57,38 @@ def find_rustc():
                                      if os.path.exists(os.path.expanduser("~/.cargo/bin/rustc")) else None)
 
 
+def pruvc_cmd(pruvc):
+    """The compiler command prefix: a .py path (the Python compiler) runs under this interpreter."""
+    return [sys.executable, pruvc] if pruvc.endswith(".py") else [pruvc]
+
+
+# m4raw modules (root_m4.pruv's `mod` lines), copied from the --lib dirs into the manifest package directory.
+M4RAW_MODS = [("bench/l3/lib", "ent_u16"), ("bench/l3/budget", "bud_keys"), ("bench/l3/budget", "bud_store"),
+              ("bench/l3/budget", "bud_map"), ("bench/l3/budget", "bud_world")]
+
+
+def prepare_m4raw_pkg():
+    """work/m34/pkg_m4raw/: root_m4.pruv + its modules + pruv.json with raw_entries = "crate". Returns (manifest, root)."""
+    pkg = os.path.join(WORK, "pkg_m4raw")
+    os.makedirs(pkg, exist_ok=True)
+    shutil.copyfile(os.path.join(HERE, "root_m4.pruv"), os.path.join(pkg, "root_m4.pruv"))
+    for d, m in M4RAW_MODS:
+        src = os.path.join(ROOT, *d.split("/"), m + ".pruv")
+        if not os.path.exists(src):
+            raise ToolError("missing module %s" % src)
+        shutil.copyfile(src, os.path.join(pkg, m + ".pruv"))
+    manifest = os.path.join(pkg, "pruv.json")
+    with open(manifest, "w") as fh:
+        fh.write('{"name": "m4raw", "version": "0.1.0", "root": "root_m4.pruv", "raw_entries": "crate"}\n')
+    return manifest, os.path.join(pkg, "root_m4.pruv")
+
+
 def build(pruvc, tag):
-    """tag m3|m4: pruvc root_<tag>.pruv -> gen_<tag>.rs, then rustc main_<tag>.rs + driver_<tag>.rs. Returns the exe."""
-    root_rel = "bench/l3/budget/m34_test/root_%s.pruv" % tag
+    """tag m3|m4|keys|m4raw: pruvc root_<tag>.pruv -> gen_<tag>.rs, then rustc main_<tag>.rs + driver_<tag>.rs.
+    m4raw is root_m4 built as a manifest package with raw_entries "crate" (driver_m4.rs over sol::pruv_raw::PruvStore);
+    m4 uses the local no-poison Plain store. Returns the exe."""
+    base = "m4" if tag == "m4raw" else tag
+    root_rel = "bench/l3/budget/m34_test/root_%s.pruv" % base
     if not os.path.exists(os.path.join(ROOT, root_rel)):
         raise ToolError("missing %s (written by the Pruv-side workers)" % root_rel)
     if not os.path.exists(pruvc):
@@ -65,13 +98,19 @@ def build(pruvc, tag):
         raise ToolError("rustc not found")
     os.makedirs(WORK, exist_ok=True)
     gen = os.path.join(WORK, "gen_%s.rs" % tag)
-    c = run([pruvc, root_rel, "-o", gen] + LIBS, cwd=ROOT)
+    if tag == "m4raw":
+        manifest, root = prepare_m4raw_pkg()
+        c = run(pruvc_cmd(pruvc) + [root, "-o", gen, "--manifest", manifest], cwd=ROOT)
+    else:
+        c = run(pruvc_cmd(pruvc) + [root_rel, "-o", gen] + LIBS, cwd=ROOT)
     if c.returncode != 0:
         raise ToolError("pruvc failed on %s (exit %d):\n%s" % (root_rel, c.returncode, tail(c)))
     main = os.path.join(WORK, "main_%s.rs" % tag)
     with open(main, "w") as fh:
         fh.write('#![allow(dead_code, unused_imports)]\n#[path = "%s"] mod sol;\n' % gen.replace("\\", "/"))
-        with open(os.path.join(HERE, "driver_%s.rs" % tag)) as d:
+        if base == "m4":
+            fh.write("type Store<T> = %s;\n" % ("sol::pruv_raw::PruvStore<T>" if tag == "m4raw" else "Plain<T>"))
+        with open(os.path.join(HERE, "driver_%s.rs" % base)) as d:
             fh.write(d.read())
     exe = os.path.join(WORK, "driver_%s_bin" % tag + (".exe" if os.name == "nt" else ""))
     c = run([rustc, "-C", "opt-level=3", "--edition", "2021", "-o", exe, main])
@@ -162,8 +201,12 @@ def check_stats(exp_line, act_line, prev_len):
     return None, L
 
 
-def cmd_m4(args):
-    exe = build(args.pruvc, "m4")
+def cmd_m4raw(args):
+    return cmd_m4(args, "m4raw")
+
+
+def cmd_m4(args, tag="m4"):
+    exe = build(args.pruvc, tag)
     progs = gen_m4.gen_programs(args.seed, args.count)
     bad = []
     grows_total = 0
@@ -199,11 +242,11 @@ def cmd_m4(args):
                 bad.append((pi, li, inp, e, a))
                 break
     ok_progs = len(progs) - len(set(b[0] for b in bad))
-    print("m4: %d/%d pass (seed %d)" % (ok_progs, len(progs), args.seed))
-    print("m4: grows total %d across %d/%d programs" % (grows_total, with_grow, len(progs)))
-    print("m4: size formula / header-bound checks on stats lines: %d/%d ok" % (stats_checks - stats_bad, stats_checks))
+    print("%s: %d/%d pass (seed %d)" % (tag, ok_progs, len(progs), args.seed))
+    print("%s: grows total %d across %d/%d programs" % (tag, grows_total, with_grow, len(progs)))
+    print("%s: size formula / header-bound checks on stats lines: %d/%d ok" % (tag, stats_checks - stats_bad, stats_checks))
     if grows_total == 0:
-        print("m4: WARNING no grow was exercised")
+        print("%s: WARNING no grow was exercised" % tag)
     for pi, li, inp, e, a in bad[:5]:
         print("MISMATCH program %d line %d: %s" % (pi, li, inp[:200]))
         print("  expected: %s" % e[:600])
@@ -336,7 +379,7 @@ def cmd_perf(args):
 
 def main():
     ap = argparse.ArgumentParser(description="L3-10 M3/M4 test harness")
-    ap.add_argument("mode", choices=["m3", "m4", "perf", "keys"])
+    ap.add_argument("mode", choices=["m3", "m4", "m4raw", "perf", "keys"])
     ap.add_argument("--pruvc", default=PRUVC_DEFAULT)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--count", type=int, default=300)
@@ -344,7 +387,7 @@ def main():
     ap.add_argument("--axes", default="sessions,tools", help="perf: comma list of sessions,tools,clocks")
     args = ap.parse_args()
     try:
-        return {"m3": cmd_m3, "m4": cmd_m4, "perf": cmd_perf, "keys": cmd_keys}[args.mode](args)
+        return {"m3": cmd_m3, "m4": cmd_m4, "m4raw": cmd_m4raw, "perf": cmd_perf, "keys": cmd_keys}[args.mode](args)
     except ToolError as e:
         print("error: %s" % e, file=sys.stderr)
         return 2

@@ -1,0 +1,9 @@
+// P09: bump is expanded in the contract world; its parameter is named result, so the expansion must
+// keep the argument value: bump(1) is 2, the index is out of bounds for len 2.
+fn bump(result: i64) -> i64 { return result + 1; }
+
+pub fn bad(a: [i64]) -> i64
+  requires len(a) == 2
+{
+  return a[bump(1)];
+}

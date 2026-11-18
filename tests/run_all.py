@@ -1,6 +1,10 @@
 """Run all regression tests.
-python tests/run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4b_frontend|g4b_proof|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_async_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof|l3_frontend|l3_proof]
+python tests/run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4b_frontend|g4b_proof|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_async_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof|l3_frontend|l3_proof|l3_abi]
                         [--backend rust|llvm|both]
+
+group l3_abi (L3 P09; one backend null row): tests/l3/abi/check_raw_entries.py WORK --rs|--py PATH checks manifest
+raw_entries ("crate" / "unsafe"): text facts, rustc visibility / unsafe / privacy errors, panic poisoning of
+pruv_raw::PruvStore. The l3_p09_* roots are ordinary must_reject rows.
 
 group s5_proof: tests/s5/proof/*.pruv verifies in default, trust-callers and infer modes
 with byte-identical Rust, LLVM IR and bindings erasure checks (one row checks both backends).
@@ -486,7 +490,7 @@ def g4_frontend_jobs(group="g4_frontend", modes=(("no-verify", ["--no-verify"]),
     if group == "g4_frontend":
         def lib_checks():
             c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/g4/check_lib.py"), WORK] +
-                               (["--rs", _driver().path] if _driver().kind == "rs" else []),
+                               ["--rs" if _driver().kind == "rs" else "--py", _driver().path],
                                capture_output=True, text=True, timeout=300)
             return c.returncode == 0, c.stdout + c.stderr
         jobs.append(safe("g4_frontend/lib", lib_checks,
@@ -499,12 +503,12 @@ def g4b_frontend_jobs():
     """G4b-1 (docs/G4B_SPEC.md 8): tests/g4b/check_pkg.py, one row; backend null."""
     def pkg_checks():
         c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/g4b/check_pkg.py"), WORK] +
-                           (["--rs", _driver().path] if _driver().kind == "rs" else []),
+                           ["--rs" if _driver().kind == "rs" else "--py", _driver().path],
                            capture_output=True, text=True, timeout=1200)
         return c.returncode == 0, c.stdout + c.stderr
     def trust_checks():
         c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/g4b/check_trust.py"), WORK] +
-                           (["--rs", _driver().path] if _driver().kind == "rs" else []),
+                           ["--rs" if _driver().kind == "rs" else "--py", _driver().path],
                            capture_output=True, text=True, timeout=1200)
         return c.returncode == 0, c.stdout + c.stderr
     return [safe("g4b_frontend/pkg", pkg_checks,
@@ -515,11 +519,24 @@ def g4b_frontend_jobs():
                   "mode": "trust", "group": "g4b_frontend"})]
 
 
+def l3_abi_jobs():
+    """L3 P09: tests/l3/abi/check_raw_entries.py (manifest raw_entries: visibility, pruv_raw, panic poisoning), one row;
+    backend null."""
+    def raw_checks():
+        c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/l3/abi/check_raw_entries.py"), WORK] +
+                           ["--rs" if _driver().kind == "rs" else "--py", _driver().path],
+                           capture_output=True, text=True, timeout=1800)
+        return c.returncode == 0, c.stdout + c.stderr
+    return [safe("l3_abi/raw_entries", raw_checks,
+                 {"sample": "tests/l3/abi/check_raw_entries.py", "backend": None, "flags": [],
+                  "mode": "raw_entries", "group": "l3_abi"})]
+
+
 def g4b_proof_jobs():
     """G4b-3 (docs/G4B_SPEC.md 8): tests/g4b/check_cache.py, one row; backend null."""
     def cache_checks():
         c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/g4b/check_cache.py"), WORK] +
-                           (["--rs", _driver().path] if _driver().kind == "rs" else []),
+                           ["--rs" if _driver().kind == "rs" else "--py", _driver().path],
                            capture_output=True, text=True, timeout=1800)
         return c.returncode == 0, c.stdout + c.stderr
     return [safe("g4b_proof/cache", cache_checks,
@@ -951,7 +968,7 @@ def g8_frontend_jobs():
                       "mode": "resources", "group": "g8_frontend"}))
     def codegen_checks():
         c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/g8/check_codegen.py"), WORK] +
-                           (["--rs", _driver().path] if _driver().kind == "rs" else []),
+                           ["--rs" if _driver().kind == "rs" else "--py", _driver().path],
                            capture_output=True, text=True, timeout=120)
         return c.returncode == 0, c.stdout + c.stderr
     jobs.append(safe("g8_frontend/codegen", codegen_checks,
@@ -959,7 +976,7 @@ def g8_frontend_jobs():
                       "mode": "codegen", "group": "g8_frontend"}))
     def llvm_checks():
         c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/g8/check_llvm.py"), WORK] +
-                           (["--rs", _driver().path] if _driver().kind == "rs" else []),
+                           ["--rs" if _driver().kind == "rs" else "--py", _driver().path],
                            capture_output=True, text=True, timeout=600)
         return c.returncode == 0, c.stdout + c.stderr
     jobs.append(safe("g8_frontend/llvm", llvm_checks,
@@ -1427,7 +1444,7 @@ def runtime_jobs(backend):
     return jobs
 
 
-USAGE = ("usage: run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4b_frontend|g4b_proof|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_async_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof|l3_frontend|l3_proof] [--backend rust|llvm|both] "
+USAGE = ("usage: run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4b_frontend|g4b_proof|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_async_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof|l3_frontend|l3_proof|l3_abi] [--backend rust|llvm|both] "
          "[--sample-prefix PATH] [--compiler py|rs] [--compiler-path PATH] [--ir-tool PATH] [--list-rows [FILE]] [--compare-rows FILE]")
 
 
@@ -1520,7 +1537,7 @@ def main():
         i = sys.argv.index("--only")
         only = sys.argv[i + 1] if i + 1 < len(sys.argv) else None
         if only not in ("must_reject", "examples", "runtime", "g3_proof", "g6_frontend", "g6_proof", "g9_frontend",
-                        "g9_proof", "g4_frontend", "g4b_frontend", "g4b_proof", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_async_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "g8_proof", "l3_frontend", "l3_proof"):
+                        "g9_proof", "g4_frontend", "g4b_frontend", "g4b_proof", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_async_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "g8_proof", "l3_frontend", "l3_proof", "l3_abi"):
             print(USAGE)
             return 2
     backend = "rust"
@@ -1553,6 +1570,8 @@ def main():
             jobs += g4b_frontend_jobs()
         if only in (None, "g4b_proof"):
             jobs += g4b_proof_jobs()
+        if only in (None, "l3_abi"):
+            jobs += l3_abi_jobs()
         if only in (None, "g4_proof"):
             jobs += g4_proof_jobs()
         if only in (None, "g10_frontend"):
@@ -1639,7 +1658,7 @@ def main():
         # scope comes from the arguments (--only/--backend), not from the rows that actually ran
         scope = set()
         null_backend = ("must_reject", "g3_proof", "g6_frontend", "g6_proof", "g9_frontend", "g9_proof", "g4_frontend",
-                        "g4b_frontend", "g4b_proof", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_async_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "l3_frontend", "l3_proof")
+                        "g4b_frontend", "g4b_proof", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_async_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "l3_frontend", "l3_proof", "l3_abi")
         for g in null_backend + ("examples", "runtime", "g8_proof"):
             if only in (None, g):
                 # g8_proof always runs both backends (whatever --backend says) plus one backend-free bundle row.

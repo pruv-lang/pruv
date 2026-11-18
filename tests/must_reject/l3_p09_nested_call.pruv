@@ -1,0 +1,9 @@
+// P09: nested expandable calls: inc(inc(1)) is 3, the index is out of bounds for len 3.
+// Each call carries its own automatic body fact.
+fn inc(x: i64) -> i64 { return x + 1; }
+
+pub fn bad(a: [i64]) -> i64
+  requires len(a) == 3
+{
+  return a[inc(inc(1))];
+}

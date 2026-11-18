@@ -10,6 +10,46 @@ use std::hint::black_box;
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
 
+// Every call on the resident state goes through a store with the PruvStore API (`new`, `with`). run.py puts one line
+// in front of this file, `type Store<T> = ...;`: `Plain<T>` (below, no poison flag; default build "m4") or
+// `sol::pruv_raw::PruvStore<T>` (manifest raw_entries = "crate", tag "m4raw"). The driver code is the same for both.
+#[derive(Debug)]
+struct PlainNever {}
+
+struct Plain<T> {
+    data: T,
+}
+
+impl<T> Plain<T> {
+    #[inline(always)]
+    fn new(data: T) -> Self {
+        Plain { data }
+    }
+    #[inline(always)]
+    #[allow(dead_code)]
+    fn is_poisoned(&self) -> bool {
+        false
+    }
+    #[inline(always)]
+    fn with<R>(&mut self, f: impl FnOnce(&mut T) -> R) -> Result<R, PlainNever> {
+        Ok(f(&mut self.data))
+    }
+}
+
+type St = Store<Vec<i64>>;
+
+// One state call. A poisoned store cannot happen in this driver (no panic is caught); exit loudly if it does.
+#[inline(always)]
+fn call<R>(st: &mut St, f: impl FnOnce(&mut Vec<i64>) -> R) -> R {
+    match st.with(f) {
+        Ok(r) => r,
+        Err(_) => {
+            eprintln!("resident state poisoned");
+            std::process::exit(3);
+        }
+    }
+}
+
 enum R {
     Ok(usize),
     Invalid,
@@ -18,7 +58,8 @@ enum R {
 }
 
 struct World {
-    st: Vec<i64>,
+    st: St,
+    len: usize, // len(st), kept by the host (the host never reads the words)
     out: Vec<i64>,
     grows: u64,
     grow_ns: u128,
@@ -26,11 +67,15 @@ struct World {
 
 impl World {
     fn new(l: usize) -> World {
-        let mut st = vec![0i64; l];
-        let r = sol::m4_init(&mut st);
+        let mut st: St = Store::new(vec![0i64; l]);
+        let mut len = l;
+        let r = call(&mut st, |s| sol::m4_init(s));
         if r > 0 {
-            st = vec![0i64; r as usize];
-            let r2 = sol::m4_init(&mut st);
+            len = r as usize;
+            let r2 = call(&mut st, |s| {
+                *s = vec![0i64; len];
+                sol::m4_init(s)
+            });
             if r2 != 0 {
                 eprintln!("m4_init failed twice (status {})", r2);
                 std::process::exit(2);
@@ -39,16 +84,21 @@ impl World {
             eprintln!("m4_init returned {}", r);
             std::process::exit(2);
         }
-        World { st, out: Vec::new(), grows: 0, grow_ns: 0 }
+        World { st, len, out: Vec::new(), grows: 0, grow_ns: 0 }
+    }
+
+    fn observe(&mut self, out: &mut Vec<i64>) -> i64 {
+        call(&mut self.st, |s| sol::m4_observe(s, out))
     }
 
     fn exec(&mut self, op: &[i64]) -> R {
         for attempt in 0..4 {
-            let need = std::cmp::max(4096, 4 * self.st.len());
+            let need = std::cmp::max(4096, 4 * self.len);
             if self.out.len() < need {
                 self.out.resize(need, 0);
             }
-            let s = sol::m4_op(&mut self.st, op, &mut self.out);
+            let out = &mut self.out;
+            let s = call(&mut self.st, |st| sol::m4_op(st, op, out));
             match s {
                 0 => return R::Ok(self.out[0].max(0) as usize),
                 1 => {
@@ -57,13 +107,14 @@ impl World {
                     }
                     let n = self.out[0].max(0) as usize;
                     let t = Instant::now();
-                    let want = std::cmp::max(n, 2 * self.st.len());
+                    let want = std::cmp::max(n, 2 * self.len);
                     let mut fresh = vec![0i64; want];
-                    let g = sol::m4_grow(&self.st, &mut fresh);
+                    let g = call(&mut self.st, |st| sol::m4_grow(st, &mut fresh));
                     if g != 0 {
                         return R::GrowFailed;
                     }
-                    self.st = fresh;
+                    call(&mut self.st, |st| *st = fresh);
+                    self.len = want;
                     self.grows += 1;
                     self.grow_ns += t.elapsed().as_nanos();
                 }
@@ -119,7 +170,7 @@ fn q_mode() {
                         let res: Vec<i64> = wd.result(k).to_vec();
                         if !op.is_empty() && op[0] == 18 {
                             // stats: [live entries, used slots, live arena words, len(st)]; the host knows len(st).
-                            if res.len() == 4 && res[3] == wd.st.len() as i64 {
+                            if res.len() == 4 && res[3] == wd.len as i64 {
                                 writeln!(w, "{}", words_line("stats", &res)).unwrap();
                             } else {
                                 writeln!(w, "{}", words_line("stats-bad", &res)).unwrap();
@@ -134,9 +185,9 @@ fn q_mode() {
                 }
             }
             "observe" => {
-                let wd = world.as_ref().expect("observe before init");
-                let mut out = vec![0i64; std::cmp::max(4096, 4 * wd.st.len())];
-                let s = sol::m4_observe(&wd.st, &mut out);
+                let wd = world.as_mut().expect("observe before init");
+                let mut out = vec![0i64; std::cmp::max(4096, 4 * wd.len)];
+                let s = wd.observe(&mut out);
                 if s != 0 {
                     writeln!(w, "observe-fail {}", s).unwrap();
                 } else {
@@ -153,7 +204,7 @@ fn q_mode() {
     }
     if let Some(wd) = &world {
         total_grows += wd.grows;
-        writeln!(w, "final_len {}", wd.st.len()).unwrap();
+        writeln!(w, "final_len {}", wd.len).unwrap();
     }
     writeln!(w, "grows {}", total_grows).unwrap();
     w.flush().unwrap();

@@ -928,6 +928,22 @@ outside i64 to `wrapping_shl`/`ushr` panics with `pruv: requires undefined: shif
 or i64 overflow), and `/` `%` use the verifier's domain (divisor > 0 and dividend >= 0, otherwise panic).
 `--trust-callers` makes the public entry skip the `requires` checks (for benchmarking; callers must be trusted).
 
+### Raw entries (manifest `raw_entries`)
+A program package may set `raw_entries` in its manifest (docs/G4B_SPEC.md §3 rule 7). Missing: output is unchanged and
+host entries are `pub fn`. `"crate"`: every host entry (and the safe wrapper of LLVM bindings) is `pub(crate) fn`, and
+the output ends with `pub mod pruv_raw` holding `PruvStore<T>`: `with(f)` refuses with `PruvPoisoned` once poisoned,
+otherwise sets the poison flag, runs `f` on the state and clears the flag only when `f` returns normally, so a caught
+panic leaves the store poisoned and its state is never observed or reused; dropping a poisoned store is safe. A host
+adapter in the same crate keeps resident state in a `PruvStore` and calls entries only inside `with`. `"unsafe"`: the
+same, plus one documented `pub unsafe fn` forwarder per entry in `pruv_raw` (`# Safety`: the caller upholds the
+`requires`, passes only state produced by this program and unchanged since, and never reuses state a panic interrupted).
+No mode has a public safe entry taking an arbitrary array. `requires` are checked once, in the `pub(crate)` entry.
+The crate is the trust boundary: code in the crate is the adapter and may call entries directly. The adapter keeps two
+rules the types cannot enforce: `T` owns the state (no reference or shared handle to it outside the store), and the
+closure given to `with` never catches a panic (`catch_unwind` inside it would clear the flag).
+`--trust-callers` does not require `raw_entries`; without it a trust-callers entry is safe only if every caller is
+trusted, and `raw_entries` enforces that by visibility.
+
 ### Inline policy (generated Rust)
 Every generated Rust fn carries an inline hint. The Python and Rust compilers choose it with the same pass over the
 finished Rust text, so their output stays byte-identical:

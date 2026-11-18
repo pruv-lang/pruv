@@ -1487,6 +1487,10 @@ class Gen:
         # `<entry>__pruv_chk` serves the Pruv callers.
         s.explicit = bool(getattr(prog, "explicit", False))
         s.entries = {f.name for f in prog.functions if f.host_entry}
+        # P09: manifest raw_entries ("crate" / "unsafe"): host entries become pub(crate) and the pruv_raw module is
+        # appended (raw_module); None keeps today's output byte for byte
+        s.raw = getattr(prog, "raw_entries", None) if s.explicit else None
+        s.raw_items = []    # (name, params text, return text, parameter names) of each host entry's public item, in emission order
         s.checks_needed = s.explicit and any(
             f.requires and f.foreign is None and (not verified or (f.host_entry and not trust_callers))
             for f in prog.functions)
@@ -1680,7 +1684,9 @@ class Gen:
         ret = "" if f.ret == UNIT else " -> " + s.rt(f.ret, site=f)
         body_name = f.name + "__pruv_body" if f.requires else f.name
         if s.explicit:
-            vis = "pub " if (f.host_entry and not f.requires) else ""
+            vis = s.pub_vis() if (f.host_entry and not f.requires) else ""
+            if vis and s.raw:
+                s.raw_items.append((f.name, ps, ret, [p.name for p in f.params]))
         else:
             vis = "" if (f.requires or s.private(f)) else "pub "   # G3: specializations are private
         s.emit(0, s.allow)
@@ -1729,6 +1735,10 @@ class Gen:
                     s.entry(f, ps, ret, body_name, f.name + "__pruv_chk", False, True)
             else:
                 s.entry(f, ps, ret, body_name, f.name, False, True)
+
+    def pub_vis(s):
+        """P09: the visibility of a host entry's public item"""
+        return "pub(crate) " if s.raw else "pub "
 
     def small_fn(s, f, ps):
         """KD-M6-3: the variant of a small function that writes its result into the caller's stack buffer"""
@@ -1790,7 +1800,9 @@ class Gen:
         checked = (not s.trust) if checked is None else checked
         s.emit(0, s.allow)
         s.emit(0, "#[inline]")
-        s.emit(0, "%sfn %s(%s)%s {" % ("pub " if pub else "", name, ps, ret))
+        s.emit(0, "%sfn %s(%s)%s {" % (s.pub_vis() if pub else "", name, ps, ret))
+        if pub and s.explicit and s.raw:
+            s.raw_items.append((name, ps, ret, [p.name for p in f.params]))
         if checked:
             conversions, checks = s.req_checks(f)
             for line in conversions:
@@ -3153,6 +3165,74 @@ def _calls(text, names):
     return got
 
 
+RAW_STORE = """\
+    /// The store was poisoned by a panic inside `PruvStore::with`; its state is never observed or reused.
+    #[derive(Debug)]
+    pub struct PruvPoisoned {}
+    /// Owns resident state for the raw entries. Every call runs through `with`: the poison flag is set before the
+    /// call and cleared only when it returns normally, so a caught panic leaves the store poisoned and every later
+    /// `with` refuses without touching the state. Dropping a poisoned store only releases its buffers.
+    /// Two rules the types cannot enforce are the adapter's: `T` owns the state (no reference or shared handle to it
+    /// outside the store), and the closure given to `with` never catches a panic (no `catch_unwind` inside it).
+    pub struct PruvStore<T> {
+        data: T,
+        poisoned: bool,
+    }
+    impl<T> PruvStore<T> {
+        #[inline(always)]
+        pub fn new(data: T) -> Self {
+            PruvStore { data, poisoned: false }
+        }
+        #[inline(always)]
+        pub fn is_poisoned(&self) -> bool {
+            self.poisoned
+        }
+        #[inline(always)]
+        pub fn with<R>(&mut self, f: impl FnOnce(&mut T) -> R) -> Result<R, PruvPoisoned> {
+            if self.poisoned {
+                return Err(PruvPoisoned {});
+            }
+            self.poisoned = true;
+            let r = f(&mut self.data);
+            self.poisoned = false;
+            Ok(r)
+        }
+    }"""
+
+RAW_FORWARD = """\
+        /// Raw entry `%s` (manifest raw_entries = "unsafe").
+        ///
+        /// # Safety
+        ///
+        /// The caller upholds every precondition of the entry: its `requires` (checked at run time unless the
+        /// program was built with --trust-callers), and every array that carries resident state was produced by this
+        /// program's entries and was not changed by other code since. A state that was being changed when a panic
+        /// unwound must never be passed again; keep it in a `PruvStore`, which refuses reuse after a panic.
+        #[inline(always)]
+        pub unsafe fn %s(%s)%s {
+            super::super::%s(%s)
+        }"""
+
+
+def raw_module(mode, items):
+    """P09: the pruv_raw module of a program with manifest raw_entries = mode ("crate" or "unsafe"), without a
+    trailing newline. items: (name, params text, return text, parameter names) of the host entries' public items in emission order."""
+    if mode == "crate":
+        head = ['// P09: manifest raw_entries = "crate": the host entries above are pub(crate); a host adapter in this crate keeps',
+                "// resident state in pruv_raw::PruvStore, which refuses every reuse after a panic.",
+                "#[allow(dead_code)]", "pub mod pruv_raw {"]
+        return "\n".join(head + [RAW_STORE, "}"])
+    head = ['// P09: manifest raw_entries = "unsafe": the host entries above are pub(crate) and exported only as the documented',
+            "// pub unsafe fn forwarders in pruv_raw; resident state lives in pruv_raw::PruvStore, which refuses reuse after a panic.",
+            "#[allow(dead_code)]", "pub mod pruv_raw {"]
+    # the forwarders sit in a private child module so the program's own type names (which the glob import brings in)
+    # never meet PruvStore, PruvPoisoned or the prelude names the store uses
+    mid = ["    #[allow(unused_imports)]", "    pub use self::entries::*;", "    mod entries {",
+           "        #[allow(unused_imports)]", "        use super::super::*;"]
+    fwd = [RAW_FORWARD % (n, n, ps, ret, n, ", ".join(names)) for n, ps, ret, names in items]
+    return "\n".join(head + [RAW_STORE] + mid + fwd + ["    }", "}"])
+
+
 def inline_policy(text):
     lines = text.split("\n")
     fns = []    # (attribute line, name, size, body text)
@@ -3160,7 +3240,7 @@ def inline_policy(text):
         if lines[i] != "#[inline]":
             continue
         h = lines[i + 1]
-        p = 4 if h.startswith("pub fn ") else 0
+        p = 4 if h.startswith("pub fn ") else (11 if h.startswith("pub(crate) fn ") else 0)   # P09: pub(crate)
         if not h.startswith("fn ", p):
             continue
         e = p + 3
@@ -3284,7 +3364,10 @@ def gen_rust_ex(prog, verified=True, trust_callers=False, budget=1 << 30, plan=N
     if trust_out is not None:
         trust_out["program"] = prog
         trust_out["fg"] = g.fg if g.g6 else None
-    return inline_policy("\n".join(g.out) + "\n"), manifest
+    text = inline_policy("\n".join(g.out) + "\n")
+    if g.raw:   # P09: after inline_policy, so the module never changes an inlining decision
+        text += raw_module(g.raw, g.raw_items) + "\n"
+    return text, manifest
 
 ASYNC_PRELUDE = r"""#[derive(Clone, Default)]
 struct PruvEvPublic { kind: i64, open: bool, eof: bool, failed: bool, ends: [bool;2] }

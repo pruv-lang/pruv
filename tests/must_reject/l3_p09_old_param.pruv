@@ -1,0 +1,9 @@
+// P09: the same shape with a parameter named old (no inout in the program, so old is an ordinary name):
+// the expansion keeps the argument value, bump(1) is 2, the index is out of bounds for len 2.
+fn bump(old: i64) -> i64 { return old + 1; }
+
+pub fn bad(a: [i64]) -> i64
+  requires len(a) == 2
+{
+  return a[bump(1)];
+}
