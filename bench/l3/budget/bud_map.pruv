@@ -1019,7 +1019,9 @@ pub fn seek_w(st: [i64], owner: i64, key: [i64], ks: i64, kn: i64) -> Seek
 }
 
 // room() for callers outside this module: 0 fits (nothing written), -1 the index was rebuilt and it fits now (every
-// slot from an earlier seek_w is stale), otherwise need()'s N > 0 (nothing written).
+// slot from an earlier seek_w is stale), otherwise N > 0: Grow(N); nothing written on a store whose header matches
+// its tables (room's rehash leaves used <= live, so the second need() returns 0); on a broken buffer the index may
+// have been rebuilt first.
 pub fn room_w(inout st: [i64], entries: i64, words: i64) -> i64
   ensures crate::bud_store::kept(st, old(st))
 { return room(inout st, entries, words); }
@@ -1036,4 +1038,29 @@ pub fn put_seek_w(inout st: [i64], owner: i64, s: Seek, key: [i64], ks: i64, kn:
   if rehashed { return put_key_h(inout st, owner, s.og, s.h, key, ks, kn); }
   if s.slot < 0 { return -1; }
   return put_at(inout st, owner, s.og, s.h, key, ks, kn, s.slot);
+}
+
+// Read-only, O(1): true when k (1 or 2) successive bud_store::entry_alloc calls would each return an entry. It mirrors
+// entry_alloc's choice exactly (free head if 3 <= fh < top and fh < cap, else the entry top if top < cap; the next free
+// head is normalized the same way). need() only checks live + entries <= cap, which a store whose header counters
+// disagree with its entry table (entry top high, free list empty) can pass; callers ask this before their first write
+// so an insert that needs k entries is refused whole instead of failing after the first one was linked. k <= 0: true.
+pub fn alloc_ok(st: [i64], k: i64) -> bool
+{
+  if k <= 0 { return true; }
+  let cap: i64 = crate::bud_store::c32(hw(st, 6));
+  let top: i64 = crate::bud_store::c32(hw(st, 7));
+  let fh: i64 = hw(st, 8);
+  if fh >= 3 && fh < top && fh < cap {
+    if k < 2 { return true; }
+    let mut nx: i64 = gf(st, fh, 8);
+    if nx < -1 || nx >= top { nx = -1; }
+    if nx >= 3 && nx < top && nx < cap { return true; }
+    return top < cap;
+  }
+  if top < cap {
+    if k < 2 { return true; }
+    return top + 1 < cap;
+  }
+  return false;
 }

@@ -1,7 +1,7 @@
 // Hand-written idiomatic Rust baseline for the M8 perf items: the same accounting work as bud_charge.pruv +
 // bud_tools.pruv + driver_m8.rs (session lookup + budget id check, the four limit checks, the counter writes; the
 // per-turn activity sets as a map of sets). Same items and shapes as driver_m8.rs run_perf.
-//   hand_m8 <N> <reps>   prints `item size ns_per_call`
+//   hand_m8 [perf] <N> <reps> [item]   prints `item size ns_per_call`
 // No `chk` lines: this baseline keeps UTF-8 String keys and typed fields with no observe word format, so it cannot
 // produce the Pruv observe words cheaply; run_m8.py compares chk only between Pruv and hand_m8_u16.
 // Wire note (P05, packed-u16 keys): this baseline never parses wire words (it builds its String keys directly at
@@ -115,10 +115,11 @@ fn refk(i: usize) -> Ref {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args[1].parse().unwrap();
-    let reps: usize = args[2].parse().unwrap();
+    let args = if args.get(1).map(String::as_str) == Some("perf") { &args[2..] } else { &args[1..] };
+    let n: usize = args[0].parse().unwrap();
+    let reps: usize = args[1].parse().unwrap();
     // optional item name: only that item's timed loop runs (setup always runs), as in driver_m8.rs
-    let only = args.get(3).map(|s| s.as_str());
+    let only = args.get(2).map(|s| s.as_str());
     let on = |item: &str| only.map_or(true, |o| o == item);
     let mut w = World { sessions: HashMap::new(), tool_seen: HashMap::new() };
     for i in 0..n {
@@ -175,16 +176,33 @@ fn main() {
         w.note_tool(&refs[0], "turn-2", a);
     }
     w.forget_turn("turn-2");
-    if on("toolgrow") {
+    if on("toolnew") || on("toolforget") || only == Some("toolgrow") {
         let rounds = std::cmp::max(1, reps / n);
-        let t = Instant::now();
+        let mut t_new = 0;
+        let mut t_forget = 0;
         for _ in 0..rounds {
+            let start = Instant::now();
             for a in &acts {
                 w.note_tool(black_box(&refs[0]), black_box("turn-2"), black_box(a));
             }
+            let after_new = Instant::now();
             w.forget_turn(black_box("turn-2"));
+            let after_forget = Instant::now();
+            t_new += (after_new - start).as_nanos();
+            t_forget += (after_forget - after_new).as_nanos();
         }
-        println!("toolgrow {} {:.1}", n, t.elapsed().as_nanos() as f64 / (rounds * n) as f64);
+        if only == Some("toolgrow") {
+            let ns = (t_new + t_forget) as f64 / (rounds * n) as f64;
+            println!("toolgrow {} {:.1}", n, ns);
+        }
+        if on("toolnew") {
+            let ns = t_new as f64 / (rounds * n) as f64;
+            println!("toolnew {} {:.1}", n, ns);
+        }
+        if on("toolforget") {
+            let ns = t_forget as f64 / rounds as f64;
+            println!("toolforget {} {:.1}", n, ns);
+        }
     }
     black_box(&w.sessions);
 }

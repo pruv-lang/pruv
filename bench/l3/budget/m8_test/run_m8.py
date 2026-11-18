@@ -493,6 +493,20 @@ def controls():
         ctl("N22-tool-negative-min", [ctl_session(used={"tools": -MAX})],
             [("noteTool", [REF(), "t1", "a1"])], ["R -"], [0, 0, 0, 0, -MAX + 1, 0, 0], turns=1,
             acts=[("t1", ["a1"])]),
+        # missing budget (§15 #6): the dedup key is consumed without a current budget, so the later call with the
+        # real budget is a dedup hit and charges nothing (P21)
+        ctl("N23-no-budget-consumes-key", [ctl_session(), {"id": "s2"}],
+            [("noteTool", [REF(sid="s2"), "t1", "a1"]), ("noteTool", [REF(sid="s2"), "t1", "a1"]),
+             ("noteTool", [REF(), "t1", "a1"])], ["R -", "R -", "R -"], z, turns=1, acts=[("t1", ["a1"])]),
+        # stale budget id: same, the key is consumed and the real ref then dedups
+        ctl("N24-stale-budget-consumes-key", [ctl_session()],
+            [("noteTool", [REF(bid="11111111-1111-4111-8111-000000000063"), "t1", "a1"]),
+             ("noteTool", [REF(), "t1", "a1"])], ["R -", "R -"], z, turns=1, acts=[("t1", ["a1"])]),
+        # no budget, new activity on an existing turn (the known-turn insert path without a counter)
+        ctl("N25-no-budget-existing-turn", [ctl_session(), {"id": "s2"}],
+            [("noteTool", [REF(), "t1", "a1"]), ("noteTool", [REF(sid="s2"), "t1", "a2"]),
+             ("noteTool", [REF(), "t1", "a2"])], ["R -", "R -", "R -"], [0, 0, 0, 0, 1, 0, 0], turns=1,
+            acts=[("t1", ["a1", "a2"])]),
     ]
 
 
@@ -634,7 +648,8 @@ def mem_pass(sizes, reps, runs, items=("charge", "failure")):
         xs = [x / scale for x in xs]
         return "%.0f [%.0f-%.0f]" % (statistics.median(xs), min(xs), max(xs))
 
-    print("memory (%d runs, reps %d): peak RSS KiB and allocation count, median [min-max]" % (runs, reps))
+    print("memory (%d runs, reps %d): peak RSS KiB and allocation count, median [min-max]"
+          " (toolgrow covers toolnew and toolforget)" % (runs, reps))
     print("item | size | " + " | ".join("%s RSS KiB | %s allocs" % (l, l) for l, _, _ in MEM_LANES))
     for (item, size), d in sorted(res.items(), key=lambda x: (x[0][0], x[0][1])):
         print("%s | %d | %s" % (item, size, " | ".join("%s | %s" % (mm(d[l][0], 1024), mm(d[l][1])) for l, _, _ in
@@ -729,7 +744,8 @@ def calls_of(item, size, reps):
     return (max(1, reps // size) * size) if item == "toolgrow" else reps
 
 
-ITEMS = ("charge", "failure", "tooldup", "toolgrow")
+TIME_ITEMS = ("charge", "failure", "tooldup", "toolnew", "toolforget")
+INSTR_ITEMS = ("charge", "failure", "tooldup", "toolgrow")
 CHK_LANES = ["pruv", "hand16", "hand16w", "fxmix", "fxmixw", "oa", "oaw"]  # lanes that print chk lines
 
 
@@ -804,7 +820,7 @@ def cmd_perf(args):
     if not args.no_instr:
         r1, r2 = args.reps, 5 * args.reps
         for size in sizes:
-            for item in ITEMS:
+            for item in INSTR_ITEMS:
                 for side, cmd in sides:
                     if side == "ts":
                         continue
@@ -831,7 +847,7 @@ def cmd_perf(args):
     print("ns per call (median of rounds)")
     print("item | size | " + " | ".join(l + " ns" for l in lanes) + " | " + " | ".join("Pruv/" + l for l in lanes[1:]))
     ns_rows = {}
-    for item in ITEMS:
+    for item in TIME_ITEMS:
         for sz in sizes:
             m = {k: statistics.median(x) for k, x in res[(item, sz)].items()}
             ns_rows[(item, sz)] = m
@@ -840,7 +856,7 @@ def cmd_perf(args):
     dl = [l for l in ["pruv", "hand16", "hand16w", "oaw"] if l in lanes]
     print("ns per call distribution, median [min-max] over rounds (interleaved; overlap = noise)")
     print("item | size | " + " | ".join(dl) + " | pruv max <= lane min")
-    for item in ITEMS:
+    for item in TIME_ITEMS:
         for sz in sizes:
             x = res[(item, sz)]
             print("%s | %d | %s | %s" % (item, sz, " | ".join("%.1f [%.1f-%.1f]" % (statistics.median(x[l]), min(x[l]),
@@ -849,12 +865,12 @@ def cmd_perf(args):
                                                               ("above" if min(x["pruv"]) > max(x[l]) else "overlap"))
                                                    for l in dl[1:])))
     if not args.no_mem:
-        mem_pass(sizes, args.reps, args.mem_runs)
+        mem_pass(sizes, args.reps, args.mem_runs, items=INSTR_ITEMS)
     print("retired instructions per call (/usr/bin/time -l, difference of two rep counts)" +
           (" -- skipped (--no-instr)" if args.no_instr else ""))
     print("item | size | " + " | ".join(l + " instr" for l in lanes) + " | " +
           " | ".join("Pruv/" + l for l in lanes[1:]))
-    for item in ITEMS:
+    for item in INSTR_ITEMS:
         for sz in sizes:
             i = ins.get((item, sz), {})
             print("%s | %d | %s | %s" % (item, sz, " | ".join(fmt(i.get(l), "%.0f") for l in lanes),
