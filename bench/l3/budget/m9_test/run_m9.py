@@ -17,7 +17,8 @@ Classes:
                   (when no raise/charge call follows, the oracle's final values of that budget are the ones at the
                   halt: later clock-only steps cannot change a halted budget). The rest is not counted. Nothing
                   after the cut is filled by host code.
-  known-difference none in M9 (the class is kept for the table).
+  known-difference KD-M6-1: the oracle holds a number outside the safe integral range (JS rounded it); excluded
+                  domain (spec §8.4), not compared.
   fail            anything else.
 """
 import argparse, datetime, json, os, re, shutil, statistics, subprocess, sys
@@ -273,8 +274,9 @@ def compare_final(case, o, obs):
             got = obj(last_put(case, sk)["budget"]).get("activeSince")
         else:
             got = iso(mine[5])
-        if want is not None:
-            want = "".join(chr(u) for u in units(want)) if isinstance(want, dict) else want
+        # both sides as text: a lone surrogate arrives as {u16: [...]} from the oracle and from the stored put
+        got = text(got) if got is not None else None
+        want = text(want) if want is not None else None
         if got != want:
             diffs.append("activeSince %r %r" % (got, want))
     tok_of = {t[2]: t[0] for t in timers if t[3]}
@@ -336,7 +338,32 @@ def compare_halt(case, o, obs, h):
     return ["halted session missing"]
 
 
+def unsafe_number(v):
+    """True if the oracle record holds a number outside the safe integral range (encoded {num: bits})."""
+    if isinstance(v, dict):
+        return "num" in v or any(unsafe_number(x) for x in v.values())
+    if isinstance(v, list):
+        return any(unsafe_number(x) for x in v)
+    return False
+
+
+def put_after_call(case, sk):
+    """True if the script stores session sk again after its first call (the oracle's final state then is not the
+    one at a halt during the calls)."""
+    called = False
+    for e in case["script"]:
+        if e["ev"] == "call":
+            called = True
+        elif called and e["ev"] == "putSession" and tuple(units(obj(e["session"])["id"])) == sk:
+            return True
+    return False
+
+
 def classify(case, o, run, cut):
+    if unsafe_number(o):
+        # KD-M6-1: JS rounds arithmetic that leaves the safe range; Pruv keeps exact i64 (requested delay) or
+        # saturates (activeMs). Spec §8.4 makes it excluded-domain, so it is not compared.
+        return "known-difference", "KD-M6-1 unsafe arithmetic"
     mine = [l for l in run["log"] if not l.startswith(("@", "I2 "))]
     xs = [l for l in mine if l.startswith("X")]
     if xs:
@@ -349,7 +376,7 @@ def classify(case, o, run, cut):
         h = ev.index("H")
         if want[:h + 1] != ev[:h + 1]:
             return "fail", "events %r != %r" % (ev, want[:h + 2])
-        if not cut:
+        if not cut and not put_after_call(case, tuple(int(x) for x in mine[h].split(" ")[2].split(",") if x)):
             d = compare_halt(case, o, run["obs"], mine[h])
             HALT_CHECKED[0] += 1
             if d:

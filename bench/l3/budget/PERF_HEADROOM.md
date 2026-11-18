@@ -31,8 +31,8 @@ Details, methods and raw numbers:
 | M6 `p_ref` | 34-40 | 39-44 | 60-240 | 0.98 / 0.88 / 0.93 | - | ok |
 | amount_text `p_amt` | 26-33 | 29-34 | 27-52 | 0.97 / 0.97 / 0.98 | was 4 heap vectors and 2 copies per call | fixed in `bud_text.pruv` (about 80 -> 26-33) |
 | `ent_u16` guard, simple write loop `p_wr` | 6.5-7.1 | 6.1-7.1 | 92-154 | 1.00 / 0.99 / 1.08 | guard branch is predicted; no cost in a tight loop | ok |
-| M9 clock refresh R = 10 / 50 / 100 | 153-155 | 143-148 | 2900-3260 | 1.05 / 1.07 / 1.07 (was 1.10-1.11 after the map hash; 1.39-1.44 before) | `#[inline]` hints and `eq_range` key compare in `bud_map::entry_matches` | ok |
-| M9 cycle / fire | 157 / 224 | 168 / 209 | 3025 / 5506 | 0.93 / 1.07 | same | ok |
+| M9 clock refresh R = 10 / 50 / 100 | 112-115 | 140-143 | 2900-3260 | 0.78-0.82 (P22, 9 interleaved rounds; was 1.05 / 1.07 / 1.07, 1.10-1.11 after the map hash, 1.39-1.44 before) | P22 proven indexing (`bud_store::eb` base + direct `st[a + f]`), active count field 17 instead of a run scan. Peak RSS 1.16 / 1.20 / 1.25x hand (P13d / P13e, Appendix P22.5) | ok (time); RSS open |
+| M9 cycle / fire | 118 / 162-164 | 164-168 / 207-208 | 3025 / 5506 | 0.70-0.72 / 0.78-0.79 (P22; was 0.93 / 1.07) | same | ok (time); RSS open |
 | M7 current | 11.6-11.8 typed / 17.9-18.0 wire | 12.5-12.6 typed (hand16) / 33.5-33.6 wire (hand16w) | 23 | P05b matched: typed 0.93-0.94, wire 0.53-0.54 (unmatched Pruv wire / hand16 typed 1.43; before P05b 2.22-2.84 unmatched) | packed keys at the M7 root (P05b); left: I1 bounds on resident reads, see "P05b" | ok (matched) |
 | M7 isHalted | 12.6-12.9 typed / 17.7-18.1 wire | 12.4 typed / 32.5-32.8 wire | 24 | P05b matched: typed 1.02-1.04, wire 0.54-0.55 | same as current; 1.0-1.1x noise band, cause recorded (I1 state range test) in "P05b" | ok (noise band), I1 recorded |
 | M7 maybeClose + reopen | 14.0 typed / 21.9-22.0 wire | 12.9 typed / 31.9-32.0 wire | 266 | P05b matched: typed 1.09, wire 0.68-0.69 (was typed 1.21-1.23 before the no-clock fast path) | I1 header bounds + variable-length string walk (data representation), line by line in "P05b" | open (1.0-1.1x), written reason |
