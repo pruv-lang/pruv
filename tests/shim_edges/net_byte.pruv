@@ -1,0 +1,6 @@
+// T4 shim edge: net_byte -> net_size (LLVM runtime requires check)
+fn b(s: Socket, i: i64) -> i64
+  requires net_byte(s, i) >= 0
+{
+  return 0;
+}

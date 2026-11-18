@@ -1,0 +1,6 @@
+// T4 shim edge: ev_kind -> ev_cap (LLVM runtime requires check)
+fn b(l: Loop, i: i64) -> i64
+  requires ev_kind(l, i) >= 0
+{
+  return 0;
+}

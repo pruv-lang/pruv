@@ -4487,4 +4487,5 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "s5_proof", "mode": "default", "sample": "tests/s5/proof/sum.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "s5_proof", "mode": "default", "sample": "tests/s5/proof/unbounded.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "s5_proof", "mode": "default", "sample": "tests/s5/proof/zero.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "shim_edges", "mode": "trace", "sample": "tests/shim_edges.py"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "spec_trace", "mode": "trace", "sample": "tests/spec_trace.py"}

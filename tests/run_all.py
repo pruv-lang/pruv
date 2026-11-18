@@ -1,5 +1,5 @@
 """Run all regression tests.
-python tests/run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4b_frontend|g4b_proof|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_async_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof|l3_frontend|l3_proof|l3_abi|spec_trace|check_generated]
+python tests/run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4b_frontend|g4b_proof|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_async_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof|l3_frontend|l3_proof|l3_abi|spec_trace|check_generated|shim_edges]
                         [--backend rust|llvm|both]
 
 group l3_abi (L3 P09; one backend null row): tests/l3/abi/check_raw_entries.py WORK --rs|--py PATH checks manifest
@@ -12,6 +12,9 @@ every SPEC.md rule ID has passing accept/reject tests under tests/spec and every
 
 group check_generated (one backend null row): tests/check_generated.py fails when a generated shared-table file
 (pruvc-rs/crates/pruv-core/src/shared_tables.rs, from pruvc/data/*.json by tools/gen_shared.py) is stale.
+
+group shim_edges (T4; one backend null row): tests/shim_edges.py --only-py|--only-rs --py|--rs PATH links, per edge, the
+LLVM IR and Rust bindings of tests/shim_edges/*.pruv (the 7 G6 shim helper edges) with rustc -C link-dead-code.
 
 group s5_proof: tests/s5/proof/*.pruv verifies in default, trust-callers and infer modes
 with byte-identical Rust, LLVM IR and bindings erasure checks (one row checks both backends).
@@ -583,6 +586,19 @@ def check_generated_jobs():
     return [safe("check_generated/tables", generated_checks,
                  {"sample": "tests/check_generated.py", "backend": None, "flags": [],
                   "mode": "trace", "group": "check_generated"})]
+
+
+def shim_edges_jobs():
+    """tests/shim_edges.py: each G6 shim helper edge links (LLVM IR + Rust bindings); one row; backend null."""
+    def shim_checks():
+        k = _driver().kind
+        c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/shim_edges.py"), "--only-" + k,
+                            "--" + k, _driver().path, "--work", os.path.join(WORK, "shim_edges")],
+                           capture_output=True, text=True, timeout=1800)
+        return c.returncode == 0, c.stdout + c.stderr
+    return [safe("shim_edges/link", shim_checks,
+                 {"sample": "tests/shim_edges.py", "backend": None, "flags": [],
+                  "mode": "trace", "group": "shim_edges"})]
 
 
 def g4_proof_jobs():
@@ -1485,7 +1501,7 @@ def runtime_jobs(backend):
     return jobs
 
 
-USAGE = ("usage: run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4b_frontend|g4b_proof|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_async_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof|l3_frontend|l3_proof|l3_abi|spec_trace|check_generated] [--backend rust|llvm|both] "
+USAGE = ("usage: run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4b_frontend|g4b_proof|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_async_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof|l3_frontend|l3_proof|l3_abi|spec_trace|check_generated|shim_edges] [--backend rust|llvm|both] "
          "[--sample-prefix PATH] [--compiler py|rs] [--compiler-path PATH] [--ir-tool PATH] [--list-rows [FILE]] [--compare-rows FILE]")
 
 
@@ -1578,7 +1594,7 @@ def main():
         i = sys.argv.index("--only")
         only = sys.argv[i + 1] if i + 1 < len(sys.argv) else None
         if only not in ("must_reject", "examples", "runtime", "g3_proof", "g6_frontend", "g6_proof", "g9_frontend",
-                        "g9_proof", "g4_frontend", "g4b_frontend", "g4b_proof", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_async_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "g8_proof", "l3_frontend", "l3_proof", "l3_abi", "spec_trace", "check_generated"):
+                        "g9_proof", "g4_frontend", "g4b_frontend", "g4b_proof", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_async_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "g8_proof", "l3_frontend", "l3_proof", "l3_abi", "spec_trace", "check_generated", "shim_edges"):
             print(USAGE)
             return 2
     backend = "rust"
@@ -1617,6 +1633,8 @@ def main():
             jobs += spec_trace_jobs()
         if only in (None, "check_generated"):
             jobs += check_generated_jobs()
+        if only in (None, "shim_edges"):
+            jobs += shim_edges_jobs()
         if only in (None, "g4_proof"):
             jobs += g4_proof_jobs()
         if only in (None, "g10_frontend"):
@@ -1703,7 +1721,7 @@ def main():
         # scope comes from the arguments (--only/--backend), not from the rows that actually ran
         scope = set()
         null_backend = ("must_reject", "g3_proof", "g6_frontend", "g6_proof", "g9_frontend", "g9_proof", "g4_frontend",
-                        "g4b_frontend", "g4b_proof", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_async_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "l3_frontend", "l3_proof", "l3_abi", "spec_trace", "check_generated")
+                        "g4b_frontend", "g4b_proof", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_async_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "l3_frontend", "l3_proof", "l3_abi", "spec_trace", "check_generated", "shim_edges")
         for g in null_backend + ("examples", "runtime", "g8_proof"):
             if only in (None, g):
                 # g8_proof always runs both backends (whatever --backend says) plus one backend-free bundle row.
