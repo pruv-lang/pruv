@@ -25,18 +25,27 @@ pub fn min_words() -> i64
 // x clamped into 0..2^32
 pub fn c32(x: i64) -> i64
   ensures 0 <= result && result <= 4294967296
+  ensures (0 <= x && x <= 4294967296) ==> result == x
+  ensures x > 4294967296 ==> result == 4294967296
 { return crate::ent_u16::clamp(x, 4294967296); }
 
 // x clamped into 0..2^40
 pub fn c40(x: i64) -> i64
   ensures 0 <= result && result <= 1099511627776
+  ensures (0 <= x && x <= 1099511627776) ==> result == x
+  ensures x > 1099511627776 ==> result == 1099511627776
 { return crate::ent_u16::clamp(x, 1099511627776); }
 
+// Header word i (0 out of range).
 pub fn hd(st: [i64], i: i64) -> i64
+  ensures (0 <= i && i < len(st)) ==> result == st[i]
 { return crate::ent_u16::rd(st, i); }
 
+// st[i] = v when i is in range; every other word keeps its value.
 pub fn set_hd(inout st: [i64], i: i64, v: i64) -> ()
   ensures len(st) == len(old(st))
+  ensures (0 <= i && i < len(st)) ==> st[i] == v
+  ensures forall k in 0..len(old(st)): k == i || st[k] == old(st)[k]
 { crate::ent_u16::wr(inout st, i, v); }
 
 // Number of hash slots of layout(l): the largest power of two s >= 8 with 16 + 27*s <= l; 0 if l < 232.
@@ -88,6 +97,8 @@ pub fn valid(st: [i64]) -> bool
 // Absolute word address of field f of entry e; -1 if e is outside the entry capacity or f is not in 0..20.
 fn ea(st: [i64], e: i64, f: i64) -> i64
   ensures result >= -1 && result <= 1099511627776
+  ensures (valid(st) && 0 <= e && e < st[6] && 0 <= f && f < 20) ==> (16 <= result && result - f + 20 <= len(st))
+  ensures (valid(st) && !(0 <= e && e < st[6] && 0 <= f && f < 20)) ==> result == -1
 {
   // len(st) < 7 reads header words 5, 6 as 0 through hd (cap 0, so -1); otherwise both are in range.
   if len(st) < 7 { return -1; }
@@ -108,6 +119,7 @@ pub fn field_addr(st: [i64], e: i64) -> i64
 // it). Callers use it for one range check per run of field accesses and keep the ef/set_ef code as the fallback.
 pub fn eb(st: [i64], e: i64) -> i64
   ensures result == -1 || (16 <= result && result + 20 <= len(st))
+  ensures (valid(st) && 0 <= e && e < st[6]) ==> result >= 16
 {
   let a: i64 = ea(st, e, 0);
   if a < 16 || a > len(st) - 20 { return -1; }
@@ -135,6 +147,7 @@ pub fn set_ef(inout st: [i64], e: i64, f: i64, v: i64) -> ()
 // blob that fits is written back into its old region (no arena growth under steady churn).
 fn fill_entry(inout st: [i64], e: i64, owner: i64, ogen: i64, egen: i64, fresh: bool) -> ()
   ensures len(st) == len(old(st))
+  ensures valid(old(st)) ==> (valid(st) && forall k in 0..16: st[k] == old(st)[k])
 {
   let b: i64 = eb(st, e);
   if b >= 0 {
@@ -176,7 +189,14 @@ fn fill_entry(inout st: [i64], e: i64, owner: i64, ogen: i64, egen: i64, fresh: 
 
 // Writes an empty state (header, slot table cleared, roots 0..2). Returns 0, or min_words() if st is too small
 // (nothing written).
+// Writes an empty state (header, slot table cleared, roots 0..2). Returns 0, or min_words() if st is too small
+// (nothing written). A 0 result establishes the I0 header fact valid(st) (L3 P07). The power-of-two test on header
+// word 4 is a bit operation the solver does not decide for a symbolic s, so the constructor closes with one O(1)
+// valid check (never false for s = layout_slots(l); it runs once per store, not per call).
 pub fn init_store(inout st: [i64]) -> i64
+  ensures len(st) == len(old(st))
+  ensures result == 0 || result == 232
+  ensures result != 0 || valid(st)
 {
   let l: i64 = len(st);
   let s: i64 = layout_slots(l);
@@ -200,7 +220,7 @@ pub fn init_store(inout st: [i64]) -> i64
   set_hd(inout st, 15, 0);
   let mut i: i64 = 0;
   while i < s
-    invariant 0 <= i && i <= s && s <= 4294967296
+    invariant 0 <= i && i <= s && s <= 4294967296 && len(st) == l
     decreases s - i
   {
     crate::ent_u16::wr(inout st, 16 + i, 0);
@@ -209,6 +229,7 @@ pub fn init_store(inout st: [i64]) -> i64
   fill_entry(inout st, 0, -1, 0, 0, true);
   fill_entry(inout st, 1, -1, 0, 0, true);
   fill_entry(inout st, 2, -1, 0, 0, true);
+  if !valid(st) { return 232; }
   return 0;
 }
 
@@ -267,6 +288,8 @@ pub fn need(st: [i64], entries: i64, words: i64) -> i64
 // Appends src[s..e) to the arena. Returns its absolute offset, or -1 (nothing written) if the range is invalid or the
 // arena is full. Adds the words to the live count.
 pub fn arena_put(inout st: [i64], src: [i64], s: i64, e: i64) -> i64
+  ensures len(st) == len(old(st))
+  ensures valid(old(st)) ==> valid(st)
 {
   if s < 0 || e < s || e > len(src) { return -1; }
   let n: i64 = e - s;
@@ -281,6 +304,7 @@ pub fn arena_put(inout st: [i64], src: [i64], s: i64, e: i64) -> i64
   while k < n
     invariant 0 <= k && k <= n && n == e - s && 0 <= s && s <= e && e <= len(src) && 0 <= top && top + n <= len(st)
     invariant len(st) == len(old(st))
+    invariant valid(old(st)) ==> (valid(st) && 16 <= top && forall j in 0..16: st[j] == old(st)[j])
     decreases n - k
   {
     st[top + k] = src[s + k];
@@ -297,6 +321,8 @@ pub fn arena_put(inout st: [i64], src: [i64], s: i64, e: i64) -> i64
 // Takes an entry from the free list or the entry top and fills it (live, owner, owner generation, zero fields; the
 // generation of a reused entry is kept, a fresh one starts at 1). Returns the entry index or -1 if the table is full.
 pub fn entry_alloc(inout st: [i64], owner: i64, ogen: i64) -> i64
+  ensures len(st) == len(old(st))
+  ensures valid(old(st)) ==> valid(st)
 {
   let cap: i64 = c32(hd(st, 6));
   let top: i64 = c32(hd(st, 7));
@@ -325,6 +351,8 @@ pub fn entry_alloc(inout st: [i64], owner: i64, ogen: i64) -> i64
 // Puts a live non-root entry on the free list and bumps its generation (bud_map::remove frees the children first). The
 // key and blob regions (fields 4/18, 12/19) stay with the entry for reuse.
 pub fn entry_free(inout st: [i64], e: i64) -> ()
+  ensures len(st) == len(old(st))
+  ensures valid(old(st)) ==> valid(st)
 {
   if e < 3 { return; }
   let top: i64 = c32(hd(st, 7));

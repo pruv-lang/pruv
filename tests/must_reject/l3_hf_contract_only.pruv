@@ -1,0 +1,7 @@
+// P07 reject: the automatic fact describes the call's own result; it says nothing about a different argument
+fn ok(a: [i64], i: i64) -> bool { return 0 <= i && i < len(a); }
+fn get(a: [i64], i: i64) -> i64
+{
+  if ok(a, i) { return a[i + 1]; }
+  return 0;
+}

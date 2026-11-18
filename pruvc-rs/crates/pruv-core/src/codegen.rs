@@ -4632,7 +4632,7 @@ mod tests {
             ret_refine: None,
             tparams: vec![],
             foreign: None,
-            cost: None, decreases: None, small_bound: None,
+            cost: None, decreases: None, small_bound: None, x_auto: None,
         };
         Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None }
     }
@@ -4681,7 +4681,7 @@ mod tests {
             ret_refine: None,
             tparams: vec![],
             foreign: None,
-            cost: None, decreases: None, small_bound: None,
+            cost: None, decreases: None, small_bound: None, x_auto: None,
         };
         Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None }
     }
@@ -4741,7 +4741,7 @@ mod tests {
             foreign: None,
             cost: None,
             decreases: None,
-            small_bound: None,
+            small_bound: None, x_auto: None,
         }
     }
 

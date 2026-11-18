@@ -1,0 +1,14 @@
+// P07 header fact reject: a bound placed on an array element whose index the header fact does not keep in range
+// (top may equal the capacity, so 4 + top may be len(st)) is a false contract domain
+fn valid(st: [i64]) -> bool
+{
+  let l: i64 = len(st);
+  if l < 4 { return false; }
+  if st[0] != 77 || st[1] != l || st[2] != l - 4 { return false; }
+  let t: i64 = st[3];
+  if t < 0 || t > st[2] { return false; }
+  return true;
+}
+fn top_entry(st: [i64]) -> i64
+  requires valid(st) && st[4 + st[3]] >= 0
+{ return 0; }

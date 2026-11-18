@@ -558,3 +558,62 @@ Applicability mapping for categories P06 does not change:
 | P09 | Apply `Program.raw_entries` in both Rust codegens and bindings: `"crate"` emits `pub(crate)` raw functions plus the adapter, `"unsafe"` emits documented `pub unsafe fn`. Consider making `--trust-callers` require one of them. No public safe arbitrary-Vec entry in any mode. |
 | P09 | Visibility checks only direct calls: a pub contract may expand pub `q` whose body calls private `r`, so `r`'s body is part of the public contract meaning. This is an interface-stability policy, not soundness (expansion happens in the defining package; other packages see an ordinary expression). Tighten to the whole expansion only if P09 publishes contracts across packages. |
 | Later | i64 functions cannot branch (no conditional expression in contracts); add one only if a header fact needs it. |
+
+## Appendix P07. Header facts as contract facts (P07 Python, P08 Rust mirror)
+
+P07 makes the I0 header fact `valid(st)` (bench/l3/budget/bud_store.pruv) a contract fact that constructors establish and mutators preserve, and lets code calls of expandable functions use their bodies. P08 mirrors the verifier change in pruvc-rs; both compilers give the same acceptance, rejections (stage, code, line, col, message) and `.rs`. No I2 graph gate, no new syntax, no opaque types. User rule: SPEC.md §6 "Code calls know the body too".
+
+### P07.1 Design
+
+| Item | Rule (pruvc/check.py `x_auto`, pruvc-rs check.rs `x_auto`; pruvc/verify.py call path, RP symbolic.rs `call_contract`) |
+|---|---|
+| Automatic body fact | After the checker's last pass, every expandable function (Appendix P06.1) stores its expansion template in `x_auto`. At a **code** call the verifier assumes `result == <template at the call's arguments>` next to the written `ensures`; the template is evaluated over the arguments before `result` is bound, so a parameter named `result` keeps its argument value. The template is the existing P06 expansion (py `x_expand`, rs `x_template`); there is no second expansion path. Contract calls are already expanded in place and do not use it. |
+| Why it is sound | An expandable function has no `requires`, no `inout`, no effects and no loops; its body is verified with no assumptions, so its run-time value equals its mathematical value for every argument, and the arguments are evaluated once before the call (the assumption is over their values). Under `--no-verify` it is trusted like every other contract. |
+| Bit builtins | An `i64` function whose template calls a bit builtin gets no `x_auto`: bit-vector terms in every caller's path made existing proofs time out (p2_rt_kernels). `bool` predicates always get it, so `if valid(st)` bounds the reads it guards. Callers that need an `i64` bit helper's value state it with an `ensures` (l3_hf_bit_i64 shows the reject). |
+| Header fact | `valid(st)` is linear except the power-of-two test `band(s, s - 1) == 0` on word 4. z3 does not decide that for a symbolic `s`, so the constructors `init_store` and `bud_map::grow_copy` close with one O(1) run-time `valid` check (never false for `s = layout_slots(l)`; once per store or grow, not per call). |
+| Store contracts | `ea`/`eb` state the entry offset bounds under `valid(st)`; `fill_entry`, `arena_put`, `entry_alloc`, `entry_free` ensure `valid(old(st)) ==> valid(st)` (fill_entry also keeps words 0..15); `init_store` ensures `result != 0 \|\| valid(st)`; `grow_copy` ensures the same for `nxt`. `c32`, `c40`, `hd`, `set_hd` keep their bodies (calls to bench/l3/lib/ent_u16 `clamp`, `rd`, `wr`) and gain exact `ensures`; `clamp`, `rd`, `wr` gain the matching exact `ensures` (value in range, element read, element written plus a frame over the other elements), so callers know the header words. Refusal exits keep the fact (hf_stack `push` proves it with a whole-array frame). |
+| Generated code | The only change in the generated `.rs` is the two constructor checks (root_m4 diff vs HEAD: two lines). Inline attributes are unchanged; see P07.4 for why the helper bodies were not rewritten. |
+
+### P07.2 Evidence (C)
+
+| Category | Files | Result (py and rs identical) |
+|---|---|---|
+| Proof positives | tests/l3/proof/hf_auto.pruv (i64 and bool callees, `len` helper, guard predicate, bit predicate), hf_stack.pruv (linear header: constructor, push with refusal and normal exits, grow returning a new array, checked read) | run_all group `l3_proof`, default and `--infer`: 4/4 rows on both compilers; diff_rust group `l3` covers tests/l3/proof (same `.rs`). |
+| Proof negatives | tests/must_reject/l3_hf_frame (mutator changes a header word: verify/ensures), l3_hf_refusal (refusal exit breaks the fact: verify/ensures), l3_hf_grow (grow forgets a header word: verify/ensures), l3_hf_elem_domain (a `requires` bound on the element at `4 + top`, which the header fact lets reach `len(st)`: verify/contract_domain), l3_hf_bit_i64 (i64 bit helper gives no body fact: verify/index_oob), l3_hf_contract_only (predicate guarding a different index: verify/index_oob), l3_hf_result_param (a parameter named `result` keeps its argument value in the body fact; audit finding: verify/index_oob) | 7 rejects; same stage, code, line, col and message on both compilers. |
+| Budget roots | m34_test/root_keys, root_m3, root_m4, m8_test/root_m8, m9_test/root_m9 | Verify on both compilers; `.rs` identical. Slices json a0–a5, mcp, qwen, supervisor a0–a3, budget m6, m7 q, m10 q, m11 pass. |
+
+Compiler CPU (user seconds, idle machine, HEAD compiler on HEAD sources vs new compiler on new sources; z3 is most of it):
+
+| Root | rs HEAD | rs new | py HEAD | py new |
+|---|---|---|---|---|
+| root_keys | 2.88 | 2.86 | 3.34 | 3.85 |
+| root_m3 | 0.44 | 0.38 | 0.72 | 0.64 |
+| root_m4 | 4.20 | 11.25 | 5.56 | 13.15 |
+| root_m8 | 5.23 | 12.03 | 7.06 | 14.31 |
+| root_m9 | 4.55 | 12.16 | 6.67 | 13.85 |
+
+The added ~6–7 s per budget root is the new store obligations; the largest single ones (py) are `entry_alloc` ensures 0.76 s, `fill_entry` ensures 0.81 s and `entry_alloc` contract_domain 0.47 s. All are far below the 8 s query timeout on an idle machine.
+
+### P07.3 Notes for P09–P13
+
+| Package | Note |
+|---|---|
+| P09 | The adapter can now rely on `valid(st)` after `init_store`/`grow_copy` and across the store mutators; per-call `valid` at raw entries is still needed until the handle owns the store. |
+| P11 | The bud_map header writers (`sh`/`sf` at bud_map.pruv lines ~301, 408, 440, 442 and the entry/link writes) and the mutators in bud_clock, bud_lifecycle, bud_world, bud_tools, bud_halt do not carry `valid(old(st)) ==> valid(st)` yet. Add them one writer at a time, stating the touched word's bound directly (header words 7, 8, 10, 12–14). |
+| P12/P13 | Once grow_copy's copy loop preserves the fact, its closing run-time `valid` check can go; the constructor check stays until the power-of-two fact has a non-`band` form (for example, carry `s == layout_slots(l)` or a log2 word in the header). |
+| P08+ | Solver cost: keep new header facts linear. Each `valid(old(st)) ==> valid(st)` ensures costs about 0.3–0.8 s; prefer frame facts on the header words (`forall k in 0..16`) over re-proving `valid` from scratch. |
+| Perf | See P07.4. |
+
+### P07.4 Perf (D)
+
+Same machine, same run, new compiler on new sources vs HEAD compiler (87e142b) on HEAD sources; ns per call, ratio to hand Rust.
+
+| Run | Cell | HEAD | New | Note |
+|---|---|---|---|---|
+| m7 perf (`run_m7.py perf`) | attach, closereopen, current, ishalted, replace, n = 100/500/1000 | Pruv instructions 684, 800, 650, 644, 2951 | 683–685, 800–801, 649–650, 644, 2951–2952 | Instruction counts equal; result checks 15 cells, 0 mismatches on both. Wire ratios (Pruv/hand16w) 0.17–0.86 on both. |
+| m7 perf | typed attach / closereopen (Pruv typed/hand16) | 1.09–1.11 / 1.06–1.09 | 1.11–1.13 / 1.06–1.09 | Unchanged cells, already open with a written reason in PERF_HEADROOM.md; not caused by P07. |
+| M4 perf (`perf_headroom/host/run.py --only m4`) | sessions n = 100/500/1000 | 0.85 / 0.78 / 0.79 | 0.87 / 0.80 / 0.80 | |
+| M4 perf | tools | 0.57 / 0.62 / 0.61 | 0.56 / 0.62 / 0.60 | |
+| M4 perf | clocks | 0.65 / 0.61 / 0.62 | 0.66 / 0.61 / 0.62 | |
+
+Lesson: an earlier P07 draft wrote `c32`, `c40`, `hd`, `set_hd` inline instead of calling ent_u16. That changed helper body sizes, so the text-size inline policy (codegen `inline_policy`, INLINE_SMALL 8, INLINE_BUDGET 1500) moved `#[inline(always)]` from `bud_world::put_blob` to `make_room`, and M4 sessions rose to 1.03x at n = 100 (from 0.89x). Keeping the bodies and putting the exact `ensures` on the shared lib helpers kept the generated code equal to HEAD except the two constructor checks. Contract-only changes should not rewrite bodies on hot paths.

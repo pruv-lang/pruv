@@ -1,0 +1,8 @@
+// P07: the automatic body fact is evaluated over the arguments, so a parameter named
+// result keeps its argument value; flip(true) is false, not a contradiction.
+fn flip(result: bool) -> bool { return !result; }
+
+pub fn bad(a: [i64]) -> i64 {
+  let b: bool = flip(true);
+  return a[len(a)];
+}

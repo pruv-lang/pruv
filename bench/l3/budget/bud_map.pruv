@@ -837,7 +837,10 @@ fn copy_kids(prev: [i64], inout nxt: [i64], pr: i64, nr: i64, budget: i64, deep:
 // otherwise; tombstones and dead arena words are dropped. O(len(prev) + len(nxt)) with short probes; a colliding key
 // set (see PERF_HEADROOM P04 threat model) can push reinsertion to O(entries x slots). 0 ok, 2 invalid prev,
 // nxt too small, or nxt cannot hold the copy.
+// A 0 result leaves the I0 header fact valid(nxt) (L3 P07). The copy loop writes through the bud_map header writers,
+// which do not carry valid-preservation contracts yet (L3 P11..P13), so the grow exit closes with one O(1) check.
 pub fn grow_copy(prev: [i64], inout nxt: [i64]) -> i64
+  ensures result != 0 || crate::bud_store::valid(nxt)
 {
   if !crate::bud_store::valid(prev) { return 2; }
   if len(nxt) < len(prev) { return 2; }
@@ -854,5 +857,6 @@ pub fn grow_copy(prev: [i64], inout nxt: [i64]) -> i64
     if b < 0 { return 2; }
     r = r + 1;
   }
+  if !crate::bud_store::valid(nxt) { return 2; }
   return 0;
 }

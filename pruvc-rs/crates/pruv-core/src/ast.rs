@@ -281,6 +281,9 @@ pub struct Function {
     /// KD-M6-3: K of the source `ensures len(result) <= K`, kept across specialization (Python `Function.small_bound`).
     /// Not emitted in the dump.
     pub small_bound: Option<i64>,
+    /// P07 (docs/L3_RESTRUCTURE_SPEC.md appendix P07): the contract expansion template of an expandable function, set
+    /// by the checker (Python `Function.x_auto`); a code call assumes `result == template`. Not emitted in the dump.
+    pub x_auto: Option<Expr>,
 }
 
 /// G9 A0: checker metadata recorded on the program and the type table, only when a G9 feature is present

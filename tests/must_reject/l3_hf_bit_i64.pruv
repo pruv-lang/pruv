@@ -1,0 +1,5 @@
+// P07 reject: an i64 function whose body uses a bit builtin gets no automatic result == expansion at code calls
+fn low3(x: i64) -> i64 { return band(x, 7); }
+fn at(a: [i64], x: i64) -> i64
+  requires len(a) == 8
+{ return a[low3(x)]; }

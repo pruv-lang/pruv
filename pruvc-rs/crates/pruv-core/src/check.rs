@@ -589,7 +589,37 @@ impl Checker {
         self.check_par_eligibility(&prog.functions)?; // G7 A0: effects, foreign calls, then nested groups
         self.check_costs(prog)?;
         self.record_g9(prog);
+        self.x_auto(prog); // P07: code calls of an expandable function know its body (result == expansion)
         Ok(())
+    }
+
+    /// P07 (docs/L3_RESTRUCTURE_SPEC.md appendix P07, check.py `x_auto`): every function whose body expands as a
+    /// contract keeps its template as `x_auto`, so the verifier can assume result == expansion at each code call. A
+    /// function whose template cannot be built gets None (never an error); so does an i64 function whose template uses a
+    /// bit builtin (its value would put a bit-vector term into every later query of the caller).
+    fn x_auto(&mut self, prog: &mut Program) {
+        for f in prog.functions.iter_mut() {
+            f.x_auto = None;
+            if !matches!(self.x_raw.get(&f.name), Some(Ok(_))) {
+                continue;
+            }
+            let fi = match self.funcs.get(&f.name) {
+                Some(fi) => fi.clone(),
+                None => continue,
+            };
+            self.cur_name = f.name.clone();
+            self.enter(&fn_owner(&f.name), &f.tparams);
+            self.ckind = "ensures";
+            match self.x_template(f.line, f.col, &f.name, &fi) {
+                Ok(xa) => {
+                    if fi.ret == boolt() || !x_has_bit(&xa) {
+                        f.x_auto = Some(xa);
+                    }
+                }
+                Err(_) => self.x_busy.clear(),
+            }
+            self.ckind = "code";
+        }
     }
 
     fn check_costs(&mut self, prog: &mut Program) -> Res<()> {
@@ -3756,6 +3786,15 @@ impl Checker {
 }
 
 // ---- P06: contract expansion of user functions (check.py X_* / x_*) ----
+/// P07: does the expression call a bit builtin anywhere (check.py `x_has_bit`)
+fn x_has_bit(e: &Expr) -> bool {
+    if let Expr::Call(c) = e {
+        if BIT_BUILTINS.contains(&c.name.as_str()) {
+            return true;
+        }
+    }
+    crate::refine::kids(e).into_iter().any(x_has_bit)
+}
 const X_FIX: &str = "keep it loop-free with no requires (immutable lets, if/return over i64, bool and array parameters), or inline the property";
 /// nodes in one template or one expansion
 const X_MAX: usize = 4096;
