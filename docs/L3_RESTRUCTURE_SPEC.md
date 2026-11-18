@@ -693,3 +693,167 @@ One audit (Codex) found ten items. Fixed: the unsafe-mode glob import that could
 | P10 | Per-call `valid(st)` at raw entries stays until the handle owns the store (P07.3): only then can construction establish the header fact once. |
 | P10H | `PruvStore::with` costs one flag store before and after the call (P09.3). If a hot adapter batches many calls, run the batch inside one `with` instead of one `with` per call. |
 | P10H | `"unsafe"` forwarders are `#[inline(always)]` and add no code; if P10H exposes a typed handle API, prefer `"crate"` and keep the `unsafe` forwarders for hosts that manage state themselves. |
+
+## Appendix P10. C adapter handle
+
+P10 adds the third value of the manifest key `raw_entries`, `"c"` (pruvc/manifest.py, pruvc-rs manifest.rs, docs/G4B_SPEC.md §3 rule 7). It closes D6/D7 (§2.3) for C hosts: a C caller holds one opaque pointer, never sees or passes the resident state buffer, and no unwind crosses into C. The Rust backend output for `"c"` is byte-identical to `"crate"` and has no `extern "C"`; the C boundary exists only in the LLVM backend's Rust bindings (pruvc/llvmgen.py `c_param_kind`/`c_entries`/`c_module`, pruvc-rs bindings.rs `CKind`/`CEntry`/`c_module`). With the key missing or `"crate"`/`"unsafe"`, every output is unchanged. User rules: SPEC.md "Raw entries (manifest `raw_entries`)".
+
+### P10.1 Design
+
+| Item | Rule |
+|---|---|
+| Module | LLVM bindings with `"c"` end with the `"crate"` output (`pub(crate)` safe wrappers, `pruv_raw`) followed by `pub mod pruv_c`, before the G6 shim. Both compilers emit it from the same text (`C_HEAD` plus one block per entry); the module is appended after `inline_policy`, so it never changes inlining of program code. |
+| Handle | `PruvHandle { store: pruv_raw::PruvStore<Vec<i64>> }`, opaque to C (one pointer, `Box::into_raw`). `pruv_handle_new(len)` makes `len` zero words (null for `len < 0` or `len * 8 > isize::MAX`, or if allocation panics); the program's init entry runs next as an ordinary `pruv_h_` call. `pruv_handle_free(h)` drops the box whether or not the store is poisoned (a `Vec<i64>` drop never reads the words); null is ignored. `pruv_handle_poisoned(h)` is 1/0, 2 for null. |
+| Entries | Every host entry whose first parameter is `[i64]` (`in` or `inout`; the handle's state), whose other parameters are `i64`, `bool`, `str`, `[i64]`, `[u8]` or `[bool]` (`in` or `inout`), and whose result is `i64`, `bool` or unit gets `pruv_h_NAME(h, …) -> i32`. Arrays are (pointer, length) pairs, `bool` is an `i64` that must be 0 or 1, and an `i64`/`bool` result is written to `*ret` only on `PRUV_OK`. Each function has a fixed parameter count: no registry, no variadic call, no SoA public entry. Entries outside this shape get no C function (they stay reachable from Rust through the `pub(crate)` wrapper). C parameters are named by position (`a0`, `a1`+`a1_len`, …; the handle is `h`, the result pointer `ret`), so no user parameter name is a Rust identifier in the adapter and none can shadow `h`, `ret`, the closure's state or a helper; the doc comment maps each `aN` to the user's name. |
+| Rebuild | An entry `(prev: [i64], inout next: [i64]) -> i64` (M4's `m4_grow`) also gets `pruv_hr_NAME(h, new_len, ret)`: inside one `with`, it allocates `new_len` zero words, runs the entry from the state into them, and replaces the state only when the entry returns 0 (the old buffer is freed); any other result leaves the state unchanged. C never holds either buffer, so a grow cannot alias or leak the state. |
+| Statuses | 0 `PRUV_OK`; 1 `PRUV_POISONED` (refused right after the null-handle check, before any other argument is read; nothing ran); 2 `PRUV_BAD_ARGS` (refused, nothing ran: null handle or `ret`, misaligned `ret`, a `ret` whose end address overflows, negative length, a length whose byte size exceeds `isize::MAX`, null or misaligned pointer with a nonzero length, a range whose end address overflows, a `bool` other than 0/1, a `[bool]` byte other than 0/1, invalid UTF-8 in `str`, two byte ranges that overlap where at least one is written, including `ret` and the handle object itself; for `pruv_hr_` a negative or oversized `new_len`); 3 `PRUV_PANICKED` (a Rust panic unwound to the adapter; inside the store it also poisoned the handle). A refusal status returned by the program itself is a normal `PRUV_OK` result in `*ret` (P09.4: statuses do not poison). |
+| No unwind (D7) | Every `extern "C"` body runs inside `guard` (`catch_unwind` + `AssertUnwindSafe`); a caught payload is `mem::forget`-ed, so its destructor (which could itself panic) never runs. The entry call runs inside `PruvStore::with`, so a Rust panic that unwinds out of it poisons the store before `guard` catches it. `pruv_handle_new` catches allocation panics too. Not every failure is a status: a checked failure inside LLVM-compiled code (range, arithmetic, `requires` at a callee) and a G6 host-callback failure call the runtime's exit path (`exit(101)`), and a real OOM aborts (Rust `handle_alloc_error`, runtime.c host callbacks). Those end the process; they never unwind and never return a status. Status 3 therefore means a recoverable Rust unwind only. |
+| Poison (D6) | A poisoned handle refuses every `pruv_h_`/`pruv_hr_` call with status 1 before checking or touching any other argument (a bad `bool`, invalid UTF-8, a null `ret` or a bad `new_len` on a poisoned handle is still 1), without running the entry, and still frees. There is no reset: a C host that sees status 3 or 1 frees the handle and builds a new one. |
+| Provenance | Argument slices are built only after every check passed; length 0 never reads the pointer. `ro`/`mt` reject a range whose end address `p + len * size_of::<T>()` overflows (`checked_add`). Every argument buffer and `ret` must also be apart from the handle object (`span(h, 1)`, counted as written), so a C buffer cannot alias the store's `Vec` header or poison flag; the state words live in the handle's own heap buffer, which C never receives. Each byte range (`span`, `saturating_add`) is computed once into a local (`sp_aN`, `sp_ret`, `sp_h`) and `apart` compares two ranges by address; empty ranges never overlap. |
+| Caller contract | The adapter checks what it can see: null, sign, alignment, byte size, address overflow and overlap among one call's buffers and the handle. It cannot see allocation size, initialization or provenance. The `pruv_c` module docs state the contract and every `extern "C"` function has a `# Safety` section pointing at it: `h` came from `pruv_handle_new` and was not freed; one handle is not used from two threads at once or reentered from a callback; each (pointer, length) with length > 0 points to `length` initialized elements inside one live allocation, readable (writable for `inout`) and not accessed by anyone else during the call; `ret` points to a writable `int64_t`. |
+| Misuse not checked | A double free, a call after free, or a pointer that never came from `pruv_handle_new` is undefined behaviour the adapter cannot detect without a registry (a registry would add a lookup to every call and a lock for threads). A C caller must not call one handle from two threads at once (each call takes `&mut` of the handle; same rule as any unsynchronized C object); different handles are independent. Symbols are global (`pruv_h_NAME`), so one `"c"` program per linked image. |
+| Rust backend | `"c"` maps to `"crate"` in both codegens: no `extern "C"`, no `pruv_c`. A Rust host keeps using `PruvStore` directly (P09). |
+
+### P10.2 Evidence (C)
+
+| Category | Files | Result |
+|---|---|---|
+| Text facts and identity | tests/l3/abi/check_c_handle.py (keys `crate` and `c`) | LLVM bindings: `crate` has no `pruv_c` and no `extern "C" fn pruv_h_`; `c` has `pub mod pruv_c`, `pruv_handle_new/free/poisoned`, one `pruv_h_` per eligible entry, `pruv_hr_grow`, and still `pub mod pruv_raw` (the `//!` caller contract and the `# Safety` sections are emitted but not asserted by the script). Rust backend: the script also compiles the program with `--manifest` for both keys; the `.rs` for `c` equals `crate` and has 0 `extern "C"`. With `--rs`, the LLVM-backend program `.ll` and bindings `.rs` are byte-identical to the Python compiler's; the Rust-backend check is `c` == `crate` within the selected compiler only. |
+| C probe | tests/l3/abi/c_probe.c, linked against the bindings staticlib (`rustc --cfg pruv_c_probe`), the program `.ll` object and runtime.c | ABI: every function called from C with its declared prototype; `new(-1)`/`new(INT64_MAX)` null; zero-state call before init. Names: `clash(state, st, h, ret, ro, ro_len)` uses every generated name as a user parameter and returns the exact value built from the outer `st[0]` (not the resident state). Types: `[u8]` sum and `str` length, both with length 0 and a NULL pointer; `inout [bool]` flipped in place. Provenance: in the groups that check them (op, clash, `[u8]`/`str`, the BAD_ARGS table, rebuild), sentinel words before and after the out buffers and `ret` stay unchanged on refusal and `in` buffers do not change. Lifetime: state persists across calls; rebuild with an entry result ≠ 0 keeps the state, with 0 commits it, the state length read back by an entry goes 4 → 8 and the values carry over; a second handle is independent; free of a poisoned handle and of null. BAD_ARGS: null handle/`ret`, misaligned `ret`/arrays, negative lengths, null pointer with length 1, four overlap shapes (in = out, partial, out = `ret`, in = `ret`), adjacent ranges accepted, end-address overflow (`i64`, `u8`, `str`), `i64` length above `INT64_MAX/8`, every buffer and `ret` overlapping the handle object, `bool` 2 and −1, a `[bool]` byte 2 (in and inout), invalid and truncated UTF-8, rebuild `new_len` −1/`INT64_MAX`/`INT64_MIN`/above `INT64_MAX/8` and `ret` null/misaligned/inside the handle; none poisons. Poison: `pruv_handle_probe_panic` panics inside `with` with a payload whose `Drop` panics → status 3 (payload forgotten, no abort), `poisoned()` 1; then a mutating entry, a query, a unit entry and a rebuild each return 1, and so do these bad-argument shapes: bad `bool`/`[bool]`, invalid UTF-8, null `ret`, handle overlap, bad `new_len`, each leaving its buffers untouched. Not probed: a zero-length NULL `i64` array (no eligible entry of the probe takes an `i64` array that may be empty; `ro`/`mt` share the length-0 branch with `[u8]`/`str`). |
+| Runner | tests/run_all.py group `l3_abi`, row `l3_abi/c_handle` (passes the selected compiler as `--rs` or `--py`) | PASS on py and rs. |
+| Bench adapter | bench/l3/budget/m34_test/driver_m4c.rs + run.py lane `m4c` (the M4 World over `pruv_c` symbols, called through `black_box`-ed function pointers so each call is a real C call) | m34 `m4c` 300/300 (922 grows, 1922/1922 stats checks), same as `m4`, `m4raw`, `m4llvm`, `m4llvmraw`. |
+
+### P10.3 Perf (LLVM path)
+
+M4 host (`bench/l3/budget/perf_headroom/host/run.py --only m4 --rounds 7`), Apple M-series, median of 7 alternating rounds of 200000 reps, ns per op. Every lane reports `total_ns_per_op` (grows included) and consumes the same sink `out[0]+out[1]`. Rust is `rustc -C opt-level=3`, the LLVM object is `clang -O2`. The numbers were taken before the `ret` end-address check (P10.5, confirmation audit) was added; that check is one compare added to both `m4c` and `handc`. Baselines:
+
+- `hand`: hand Rust, state and `exec` called in-process. Matched baseline of every in-process lane.
+- `handc`: the same hand Rust behind its own `extern "C"` handle (`hand_h_new/exec/free` in bench/l3/budget/perf_headroom/host/src/bin/m4_hand.rs): null handle, poison flag, `ret` null/alignment/end address overflow, the six pairwise overlap checks of op/out/`ret`/handle, `ro`/`mt` slice checks, `catch_unwind`, called through `black_box`-ed function pointers like `m4c`. Matched baseline of `m4c`.
+
+| lane | backend | raw_entries | per-call `valid` | eq_range | matched to |
+|---|---|---|---|---|---|
+| `m4` | Rust | none (plain store) | yes | builtin | hand |
+| `m4raw` | Rust | `"crate"` (PruvStore) | yes | builtin | hand |
+| `m4eq` | Rust | none | yes | loop `eqr_p10` | hand |
+| `m4nv` | Rust | none | no | builtin | hand |
+| `m4llvm` | LLVM | none | yes | loop | hand |
+| `m4llvmraw` | LLVM | `"crate"` | yes | loop | hand |
+| `m4c` | LLVM | `"c"`, driver calls `pruv_h_*` through the handle | yes | loop | handc |
+| `m4llvmnv` | LLVM | none | no | loop | hand |
+
+The LLVM backend rejects `eq_range` until P17a, so every LLVM lane (and `m4eq`, the like-for-like Rust lane) uses a verified loop in its place.
+
+| axis | n | hand | handc | m4 | m4raw | m4eq | m4nv | m4llvm | m4llvmraw | m4c | m4llvmnv | m4c/handc (matched) | m4c/hand (unmatched, info) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| sessions | 100 | 14.7 | 16.5 | 12.9 | 14.5 | 11.8 | 11.8 | 20.5 (1.39) | 20.3 (1.38) | 24.7 | 17.4 (1.18) | **1.50** | 1.68 |
+| sessions | 500 | 16.1 | 18.1 | 12.6 | 14.2 | 11.4 | 11.7 | 20.3 (1.26) | 20.3 (1.26) | 24.4 | 17.3 (1.07) | **1.35** | 1.52 |
+| sessions | 1000 | 16.3 | 18.0 | 13.0 | 14.7 | 11.9 | 12.1 | 20.7 (1.27) | 20.5 (1.26) | 24.9 | 17.8 (1.09) | **1.38** | 1.53 |
+| tools | 100 | 52.8 | 55.9 | 29.9 | 31.5 | 27.9 | 29.6 | 40.2 | 40.4 | 44.6 | 37.2 | 0.80 | 0.84 |
+| tools | 500 | 53.1 | 55.9 | 33.4 | 34.9 | 31.9 | 32.7 | 43.4 | 43.5 | 47.7 | 40.5 | 0.85 | 0.90 |
+| tools | 1000 | 52.8 | 55.7 | 32.3 | 34.2 | 31.2 | 31.5 | 42.6 | 42.5 | 46.9 | 39.6 | 0.84 | 0.89 |
+| clocks | 100 | 37.2 | 41.4 | 25.2 | 27.3 | 22.8 | 23.9 | 38.1 (1.02) | 37.3 (1.00) | 42.1 | 34.7 | 1.02 | 1.13 |
+| clocks | 500 | 38.7 | 42.0 | 24.5 | 26.5 | 22.5 | 23.0 | 35.6 | 35.6 | 40.5 | 32.9 | 0.96 | 1.05 |
+| clocks | 1000 | 38.9 | 41.9 | 25.0 | 27.0 | 21.2 | 23.8 | 38.8 | 38.7 | 43.0 | 36.2 | 1.03 | 1.11 |
+
+Ratios of in-process lanes to `hand` are shown only at or above 1.0x; every Rust-backend lane is below hand (0.53x to 0.99x; `m4raw/m4` 1.04x to 1.13x). Matched cells above 1.1x: `m4c/handc` sessions (1.35x to 1.50x), and in-process `m4llvm`/`m4llvmraw` sessions (1.26x to 1.39x) and `m4llvmnv` sessions n=100 (1.18x). No clocks or tools cell is above 1.1x matched.
+
+**Decomposition of `m4c - handc`.** `m4c - handc = (m4eq - hand) + (m4llvmraw - m4eq) + (m4c - m4llvmraw) - (handc - hand)`: Pruv work on the Rust backend, the LLVM path, the generated C crossing, minus the hand C crossing. Every term is a difference of two table cells, so each row sums exactly:
+
+| axis | n | m4c - handc | m4eq - hand | m4llvmraw - m4eq (LLVM path) | m4c - m4llvmraw (generated crossing) | handc - hand (hand crossing) | generated - hand crossing |
+|---|---|---|---|---|---|---|---|
+| sessions | 100 | +8.2 | −2.9 | +8.5 | +4.4 | 1.8 | +2.6 |
+| sessions | 500 | +6.3 | −4.7 | +8.9 | +4.1 | 2.0 | +2.1 |
+| sessions | 1000 | +6.9 | −4.4 | +8.6 | +4.4 | 1.7 | +2.7 |
+| tools | 100 | −11.3 | −24.9 | +12.5 | +4.2 | 3.1 | +1.1 |
+| tools | 500 | −8.2 | −21.2 | +11.6 | +4.2 | 2.8 | +1.4 |
+| tools | 1000 | −8.8 | −21.6 | +11.3 | +4.4 | 2.9 | +1.5 |
+| clocks | 100 | +0.7 | −14.4 | +14.5 | +4.8 | 4.2 | +0.6 |
+| clocks | 500 | −1.5 | −16.2 | +13.1 | +4.9 | 3.3 | +1.6 |
+| clocks | 1000 | +1.1 | −17.7 | +17.5 | +4.3 | 3.0 | +1.3 |
+
+(sessions n=500: −4.7 + 8.9 + 4.1 − 2.0 = 6.3 = 24.4 − 18.1.)
+
+**Sessions `m4c/handc` 1.35x to 1.50x, explained term by term.**
+
+- **LLVM path, +8.5 to +8.9 ns (the largest term; not P10 code).** The same lane without any C adapter, `m4llvmraw`, is already 1.26x to 1.38x of hand on sessions. This term changes three things at once: the code generator (LLVM IR vs Rust), the optimizer (`clang -O2` vs `rustc -C opt-level=3`), and the call boundary (a separate object behind a non-inlinable Rust → C call with each slice as a pointer/length pair, no LTO, where hand Rust and `m4eq` inline into the caller). The split between them is not measured; that the call boundary dominates on sessions (the least work per op, 12 to 16 ns) is a hypothesis. It predates P10; the control that separates it (the same `.ll` linked with `-C linker-plugin-lto`) is P17 work (P10.6).
+- **Generated crossing minus hand crossing, +2.1 to +2.7 ns (P10 code).** Both crossings run the same steps in the same order. Hand (`hand_h_exec`) against generated (`pruv_h_m4_op`), line by line:
+
+| step | hand | generated |
+|---|---|---|
+| panic boundary | `catch_unwind(AssertUnwindSafe(\|\| …))` | `guard(\|\| …)` = the same `catch_unwind`, payload `mem::forget` |
+| handle | `if h.is_null() { return 2 }` | `match h.as_mut() { None => return PRUV_BAD_ARGS }` |
+| poison | `if (*h).poisoned { return 1 }` | `if hd.store.is_poisoned() { return PRUV_POISONED }` |
+| `ret` | `ret.is_null() \|\| ret % 8 != 0 \|\| ret + 8` overflows | same text |
+| ranges | `span(p, len)` once per buffer, `+ len.max(0) * 8` saturating | `let (sp_a0, sp_a1, sp_ret, sp_h) = (span(..), ..)`: same formula, `size_of::<T>()` |
+| overlap | six `spans_overlap(a, b)` joined by `\|\|` | six `apart(a, b)` (`!spans_overlap`) joined by `&&` |
+| slices | `ro(op, op_len)`, `mt(out, out_len)` | `ro(a0, a0_len)`, `mt(a1, a1_len)`: same checks, generic over `T` |
+| call | `(*h).poisoned = true; st.exec(op, out); (*h).poisoned = false` | `hd.store.with(\|st\| super::m4_op(&mut st[..], a0, a1))`: same flag writes |
+| result | `*ret = status; 0` | `*ret = v; PRUV_OK` |
+
+  The one structural difference is the callee: hand's `exec` is Rust in the same crate, `m4_op` is the LLVM object behind a second non-inlinable call (the same boundary as the LLVM-path term). Variant builds of `m4c` (bench/l3/budget/work/m34/gen_m4c.rs edited and relinked against the same `.o`; median of 7 alternating rounds; sessions n=500 / clocks n=1000, ns):
+
+| variant | sessions 500 | clocks 1000 |
+|---|---|---|
+| generated as before P10.3 (spans recomputed per pair) | 24.4 | 42.6 |
+| `guard` replaced by a plain call (no `catch_unwind`) | 24.3 | 42.5 |
+| no overlap checks, no `ro`/`mt` checks (slices straight from the pointers) | 20.4 | 38.8 |
+| spans computed once, hand-form `apart` (adopted) | 23.3 | 41.6 |
+| `m4llvmraw` (no adapter) | 19.6 | 37.5 |
+| `handc` / `handc` without overlap and slice checks | 17.6 / 16.4 | 40.6 / 39.7 |
+| same with hand `exec` `#[inline(never)]` | 17.6 / 16.3 | — |
+
+  So the panic boundary costs nothing and the adapter frame without checks costs +0.8 to +1.3 ns over `m4llvmraw`. The no-check rows are not matched: the generated variant also dropped the `ret` check, the hand variant kept it, so "about 3 to 4 ns of checks generated against about 1 ns hand" is indicative only. Recomputing each range per pair was a real inefficiency (`pruv_h_m4_op` was 194 lines of arm64 assembly against 102 for `hand_h_exec`); computing each range once (both emitters, P10.1 Provenance) cut it to 114 lines and about 1 ns. Further forms measured within noise of that: branch-free `&` of `apart`, and validating each array into a `checked_add` range before the overlap test. The remaining 2.1 to 2.7 ns (generated minus hand crossing) has the same checks in the same order as hand; the one structural difference is the LLVM callee, but no measurement attributes the residual to it, so its cause is open.
+- **Pruv work, −2.9 to −4.7 ns.** The program itself is faster than hand on the Rust backend on every cell (`m4eq/hand` 0.53x to 0.80x).
+
+Clocks n=100 and n=1000 are 1.13x and 1.11x unmatched (`m4c/hand`) and 1.02x and 1.03x matched; tools is below 1.0x either way.
+
+- **`m4llvm`/`m4llvmraw` sessions (1.26x to 1.39x).** The LLVM-path term above; no P10 code. `m4llvmraw - m4llvm` is −0.8 to +0.2 ns on all nine cells, so the poison store costs nothing measurable on the LLVM path (on the Rust path `m4raw - m4` is +1.5 to +2.1 ns, still below hand).
+- **`m4llvmnv` sessions n=100 (1.18x).** The LLVM-path cost minus the per-call `valid` (`m4llvm - m4llvmnv` is 2.6 to 3.4 ns; `m4 - m4nv` on Rust is 0.3 to 1.5 ns; see P10.4).
+
+Per-op work in M4 is 12 to 50 ns, so a fixed per-call cost shows up as a ratio. **Open:** sessions `m4c/handc` 1.35x to 1.50x is above the 1.1x floor. The measured terms are the LLVM-path term (+8.5 to +8.9 ns, backend and call boundary not yet separated) and the generated-over-hand crossing (+2.1 to +2.7 ns, residual not attributed). Both go to P10H/P17 with the controls in P10.6; the C path also benefits from crossing less often (several operations inside one `with`, P10.6).
+
+### P10.4 Item 4: per-call `valid(st)` stays
+
+The spec allowed dropping the per-call `valid(st)` check at raw entries if the handle makes it safe. It does not, so the check stays:
+
+- A handle starts as `len` zero words, which are not `valid` (word 0 is not the magic); it becomes valid only after the program's init entry returns 0. A C caller may call any entry before init, after a failed init, or after a rebuild the program refused. The entry-side check is what makes those calls return the program's own status instead of reading garbage.
+- None of the 38 `pub` entries with `inout st` in the budget libs ensures `valid(st)` on exit (bud_map 0/5, bud_world 0/9, bud_clock 0/14, bud_lifecycle 0/7, bud_tools 0/2, bud_halt 0/1). Without that fact (P07.3, P11), the handle cannot carry validity from one call to the next.
+- `pruv_hr_` commits any buffer the entry returns 0 for. For M4's `m4_grow` that buffer is already valid: `grow_copy` ensures `result != 0 || valid(nxt)`, so a committed rebuild keeps validity. Rebuild is not the reason the check stays; the two reasons are the ones above: nothing records that init returned 0, and general mutators have no `valid(old(st)) ==> valid(st)` contract.
+
+Cost of keeping it: lanes `m4nv` (Rust backend, no per-call `valid`) and `m4llvmnv` (LLVM, no per-call `valid`) in P10.3. The check can go when P11 adds `valid(old(st)) ==> valid(st)` to every mutator and the handle records "init returned 0" (a word the C side cannot set).
+
+### P10.5 Audit
+
+First audit (Codex gpt-6-astra, ultra): not approvable as first submitted. Both emitters agreed, so every defect was shared. Each finding and its fix:
+
+| Finding | Fix |
+|---|---|
+| M1 Generated names (`h`, `ret`, `st`, `NAME_len`, `ro`) could collide with user parameter names; `probe(state, st)` passed the resident state instead of the outer array | C parameters are positional (`aN`, `aN_len`) in both emitters; probe entry `clash(state, st, h, ret, ro, ro_len)` (P10.1 Entries, P10.2) |
+| M2 A poisoned handle checked `bool`, UTF-8, `new_len` and `ret` before refusing, so it answered 2 instead of 1 | `is_poisoned()` right after the null-handle check in every `pruv_h_`/`pruv_hr_`; the probe repeats every bad-argument shape on a poisoned handle (P10.1 Poison) |
+| M3 The spec said a callee failure gives status 3 and poisons, but LLVM range/arithmetic/`requires` failures and G6 callback failures call `exit(101)` | P10.1 No unwind separates a recoverable Rust unwind (status 3) from process exit and abort |
+| M4 No end-address overflow check, no overlap check against the handle object, no caller contract | `checked_add` in `ro`/`mt`; every buffer and `ret` must be apart from `span(h, 1)`; `//!` caller contract and `# Safety` on every `extern "C"` function (P10.1 Provenance, Caller contract) |
+| M5 m4c above 1.1x of hand with wrong explanation numbers, and the runner dropped a failing requested lane silently | Matched baseline `handc` (hand Rust across the same C boundary), per-cell decomposition with exact deltas, span-once overlap check (P10.3); a requested lane that fails to build or run is a hard error |
+| M6 Pruv lanes summed `out[0]+k` and excluded grow time; hand summed `out[0]+out[1]` | Every lane reports `total_ns_per_op` (grow included) with the sink `out[0]+out[1]` |
+| S1 P10.2 overclaimed (no Rust `c == crate` compile, no `[u8]`/`str`/`inout [bool]`, zero-length NULL, byte-size overflow, oversized rebuild, panicking payload `Drop`, `ret` sentinels, rebuild length) | Probe and script extended; P10.2 lists what is probed and what is not. The confirmation audit narrowed it again (below) |
+| S2 Per-call `valid` rationale cited rebuild, but `grow_copy` already ensures `result != 0 \|\| valid(nxt)` | P10.4 rewritten: no init tracking and no preservation contract on general mutators |
+
+Confirmed OK by the first audit: Python/Rust parity of `c_entries`/`c_entry` and `C_HEAD`; Rust backend `"c"` → `"crate"`; length/alignment/null, `bool` and UTF-8 checks; catchable panic with the payload forgotten; rebuild and free semantics; a real C ABI link; Linux `native-static-libs`; rows and manifest.
+
+Confirmation audit (Codex gpt-6-astra, ultra): not confirmed as submitted. Findings and fixes:
+
+| Finding | Fix |
+|---|---|
+| M4 `ret` had no end-address overflow check (SPEC.md requires BAD_ARGS for an overflowing range) | `ret` check adds `checked_add(size_of::<i64>())` in every `pruv_h_` and `pruv_hr_` (both emitters, byte-identical); `handc` gets the same compare; c_probe.c passes `UINTPTR_MAX - 7` as `ret` to `pruv_h_op` and `pruv_hr_grow` (BAD_ARGS, state unchanged) |
+| M5 Attribution of the sessions cells above 1.1x was asserted, not measured; the no-check variants were unmatched; two ranges were wrong | Ranges corrected (`m4raw/m4` 1.04x to 1.13x, `m4llvmraw - m4llvm` −0.8 to +0.2 ns); the LLVM-path term is stated as backend + optimizer + call boundary, not separated; the no-check rows are marked indicative; sessions `m4c/handc` 1.35x to 1.50x is recorded as open (P10.6, P17) |
+| S1 P10.2 still claimed more than the script and probe assert | The `//!`/`# Safety` text is not asserted, `--rs` identity covers the LLVM `.ll` and bindings `.rs` only, sentinel claims are limited to the probed groups |
+
+Confirmed OK by the confirmation audit: the first-audit fixes for M1, M2, M3 and M6, S2, emitter parity, all 54 decomposition deltas exact, and `handc` mirroring the generated checks.
+
+### P10.6 Notes for P10H and P17
+
+- **Crossing cost.** The handle adds a fixed +4.1 to +4.9 ns per call over `"crate"` on the LLVM path (`m4c - m4llvmraw`, P10.3), of which the hand C crossing of the same checks is 1.7 to 4.2 ns. P10H should offer an entry that runs several operations inside one `with` (one crossing, one `catch_unwind`) rather than shaving per-call checks.
+- **LLVM call boundary (P17).** `m4llvmraw` is +8.5 to +17.5 ns per call over the same program on the Rust backend (`m4eq`); it is the largest term of the sessions cells above 1.1x of hand, but backend, optimizer and call boundary are not separated yet. Inline or LTO the LLVM object into the Rust host, or measure with `-C linker-plugin-lto`, before comparing backends.
+- **`eq_range` lowering (P17a).** On the Rust backend the builtin `eq_range` (`memcmp`) is 1.1 to 3.8 ns slower per op than the verified loop for the short ranges in M4 (`m4 - m4eq`). Lower short ranges to an inline loop.
+- **Per-call `valid`.** Costs 2.6 to 3.4 ns per call on LLVM (`m4llvm - m4llvmnv`) and 0.3 to 1.5 ns on Rust (`m4 - m4nv`). It can go once P11 gives every mutator `valid(old(st)) ==> valid(st)` and the handle keeps an "init returned 0" word (P10.4).
+- **Global symbols.** `pruv_handle_*` and `pruv_h_*` are unprefixed global C symbols, so two Pruv programs linked into one C binary collide. P10H should add a per-program prefix.
+- **Misuse.** Double free, use after free and cross-thread use are not checked (no registry, by design). A C wrapper that wants them checked keeps its own table.

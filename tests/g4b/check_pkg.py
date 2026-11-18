@@ -168,14 +168,14 @@ def main(work, binary=None, py=None):
     for bad in ("pub", "public", "safe"):
         bad_manifest("raw_entries " + bad, json.dumps(dict(good, raw_entries=bad)),
                      "invalid manifest key raw_entries: a raw entry is never a public safe function "
-                     "(use \"crate\" or \"unsafe\")")
+                     "(use \"crate\", \"unsafe\" or \"c\")")
     for bad in ("other", "", "Crate"):
         bad_manifest("raw_entries %r" % bad, json.dumps(dict(good, raw_entries=bad)),
-                     "invalid manifest key raw_entries: expected \"crate\" or \"unsafe\"")
+                     "invalid manifest key raw_entries: expected \"crate\", \"unsafe\" or \"c\"")
     for bad in (1, None, True, ["crate"]):
         bad_manifest("raw_entries %r" % (bad,), json.dumps(dict(good, raw_entries=bad)),
                      "invalid manifest key raw_entries: expected a string")
-    for ok in ("crate", "unsafe"):
+    for ok in ("crate", "unsafe", "c"):
         p = r.project({"app/pruv.json": json.dumps(dict(good, raw_entries=ok)), "app/app.pruv": APP_PLAIN})
         rc, ds, txt, _ = app(p)
         check("raw_entries " + ok + " accepted", rc == 0, "exit %d %s" % (rc, txt))

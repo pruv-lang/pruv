@@ -2,6 +2,8 @@
 """Harness for the L3-10 M3/M4 milestones.
 
   python3 bench/l3/budget/m34_test/run.py m3|m4|m4raw|perf|keys [--pruvc PATH] [--seed N] [--count N]
+  python3 bench/l3/budget/m34_test/run.py m4 --only m4llvm|m4llvmraw|m4c|m4nv|m4llvmnv   (or the lane name as the mode;
+                                                  mode `lanes` runs every lane; see M4_LANES for what each builds)
 
 `--pruvc` may be pruvc/pruvc.py (the Python compiler; run under this interpreter).
 `m4raw` (P09) builds root_m4 as a manifest package (work/m34/pkg_m4raw, raw_entries "crate") and drives it through
@@ -67,27 +69,108 @@ M4RAW_MODS = [("bench/l3/lib", "ent_u16"), ("bench/l3/budget", "bud_keys"), ("be
               ("bench/l3/budget", "bud_map"), ("bench/l3/budget", "bud_world")]
 
 
-def prepare_m4raw_pkg():
-    """work/m34/pkg_m4raw/: root_m4.pruv + its modules + pruv.json with raw_entries = "crate". Returns (manifest, root)."""
-    pkg = os.path.join(WORK, "pkg_m4raw")
+# m4 lanes (all drive root_m4.pruv with driver_m4.rs; the q-mode check is the same for every lane):
+#   backend: "rust" (Rust source) or "llvm" (LLVM IR + Rust bindings, linked through clang + runtime.c);
+#   raw:     manifest raw_entries (None = no manifest, "crate" = pruv_raw::PruvStore, "c" = pruv_c extern "C" adapter);
+#   nv:      root_m4.pruv with the leading `valid(st)` checks of m4_op / m4_observe removed (temp copy);
+#   eq:      the package copies of the modules call a verified element loop (EQ_HELPER) instead of eq_range. The LLVM
+#            backend rejects eq_range until P17a lowers it, so every LLVM lane needs this; m4eq is the Rust lane with the
+#            same substitution, the like-for-like reference for the LLVM lanes. These are preliminary (P10) lanes: P17c
+#            measures the real LLVM path with eq_range.
+M4_LANES = {
+    "m4":        dict(backend="rust", raw=None,    nv=False, eq=False),
+    "m4raw":     dict(backend="rust", raw="crate", nv=False, eq=False),
+    "m4nv":      dict(backend="rust", raw=None,    nv=True,  eq=False),
+    "m4eq":      dict(backend="rust", raw=None,    nv=False, eq=True),
+    "m4llvm":    dict(backend="llvm", raw=None,    nv=False, eq=True),
+    "m4llvmraw": dict(backend="llvm", raw="crate", nv=False, eq=True),
+    "m4c":       dict(backend="llvm", raw="c",     nv=False, eq=True),
+    "m4llvmnv":  dict(backend="llvm", raw=None,    nv=True,  eq=True),
+}
+EQ_CALL = re.compile(r"\beq_range\(")
+EQ_HELPER = """
+// P10 bench lane (run.py, eq lanes): eq_range as a verified element loop; same five bounds as eq_range's obligations.
+fn eqr_p10(a: [i64], i: i64, b: [i64], j: i64, n: i64) -> bool
+  requires 0 <= i && 0 <= j && 0 <= n && i + n <= len(a) && j + n <= len(b)
+{
+  let mut k: i64 = 0;
+  while k < n
+    invariant 0 <= k && k <= n
+    decreases n - k
+  {
+    if a[i + k] != b[j + k] { return false; }
+    k = k + 1;
+  }
+  return true;
+}
+"""
+NV_CHECK = re.compile(r"^[ \t]*if !crate::bud_store::valid\(st\) \{ return 2; \}[ \t]*\r?\n", re.M)
+CLANG = shutil.which("clang") or "/usr/bin/clang"
+RUNTIME_C = os.path.join(ROOT, "pruvc", "runtime.c")
+WORLD_BEGIN = "// LANE-WORLD-BEGIN"
+WORLD_END = "// LANE-WORLD-END"
+
+
+def root_text(nv):
+    with open(os.path.join(HERE, "root_m4.pruv")) as fh:
+        text = fh.read()
+    if nv:
+        text, n = NV_CHECK.subn("", text)
+        if n != 2:    # m4_op and m4_observe (m4_grow checks `prev`, which stays)
+            raise ToolError("nv: expected 2 `valid(st)` checks in root_m4.pruv, found %d" % n)
+    return text
+
+
+def prepare_m4_pkg(tag, raw, nv, eq=False):
+    """work/m34/pkg_<tag>/: root_m4.pruv (nv: checks removed) + its modules (eq: eq_range -> eqr_p10) + pruv.json with
+    raw_entries = raw (no key for None). Returns (manifest, root)."""
+    pkg = os.path.join(WORK, "pkg_" + tag)
     os.makedirs(pkg, exist_ok=True)
-    shutil.copyfile(os.path.join(HERE, "root_m4.pruv"), os.path.join(pkg, "root_m4.pruv"))
+    with open(os.path.join(pkg, "root_m4.pruv"), "w") as fh:
+        fh.write(root_text(nv))
     for d, m in M4RAW_MODS:
         src = os.path.join(ROOT, *d.split("/"), m + ".pruv")
         if not os.path.exists(src):
             raise ToolError("missing module %s" % src)
-        shutil.copyfile(src, os.path.join(pkg, m + ".pruv"))
+        with open(src) as fh:
+            text = fh.read()
+        if eq and EQ_CALL.search(text):
+            text = EQ_CALL.sub("eqr_p10(", text) + EQ_HELPER
+        with open(os.path.join(pkg, m + ".pruv"), "w") as fh:
+            fh.write(text)
     manifest = os.path.join(pkg, "pruv.json")
     with open(manifest, "w") as fh:
-        fh.write('{"name": "m4raw", "version": "0.1.0", "root": "root_m4.pruv", "raw_entries": "crate"}\n')
+        fh.write('{"name": "%s", "version": "0.1.0", "root": "root_m4.pruv"%s}\n'
+                 % (tag, ', "raw_entries": "%s"' % raw if raw else ""))
     return manifest, os.path.join(pkg, "root_m4.pruv")
 
 
+def prepare_m4_root_nv(tag):
+    """Manifest-less nv lanes: the edited root alone in work/m34/pkg_<tag>/ (modules come from LIBS). Returns its path."""
+    pkg = os.path.join(WORK, "pkg_" + tag)
+    os.makedirs(pkg, exist_ok=True)
+    root = os.path.join(pkg, "root_m4.pruv")
+    with open(root, "w") as fh:
+        fh.write(root_text(True))
+    return root
+
+
+def build_runtime():
+    """runtime.c -> work/m34/runtime.o (LLVM lanes link it; -DPRUV_RUST_ALLOCATOR as bench/g5/perf.py does)."""
+    rt = os.path.join(WORK, "runtime.o")
+    c = run([CLANG, "-O2", "-std=c11", "-DPRUV_RUST_ALLOCATOR", "-c", RUNTIME_C, "-o", rt], timeout=300)
+    if c.returncode != 0:
+        raise ToolError("clang (runtime.c) failed:\n%s" % tail(c))
+    return rt
+
+
 def build(pruvc, tag):
-    """tag m3|m4|keys|m4raw: pruvc root_<tag>.pruv -> gen_<tag>.rs, then rustc main_<tag>.rs + driver_<tag>.rs.
-    m4raw is root_m4 built as a manifest package with raw_entries "crate" (driver_m4.rs over sol::pruv_raw::PruvStore);
-    m4 uses the local no-poison Plain store. Returns the exe."""
-    base = "m4" if tag == "m4raw" else tag
+    """tag m3|keys|<m4 lane, see M4_LANES>: pruvc root -> gen_<tag>.rs (llvm lanes: gen_<tag>.ll + bindings gen_<tag>.rs,
+    clang -> .o, linked with runtime.o), then rustc main_<tag>.rs + driver. m4raw/m4llvmraw: manifest raw_entries "crate"
+    (driver over sol::pruv_raw::PruvStore); m4c: raw_entries "c" (driver_m4c.rs world calls sol::pruv_c extern "C" symbols);
+    m4/m4nv/m4llvm/m4llvmnv use the local no-poison Plain store. Returns the exe."""
+    lane = M4_LANES.get(tag)
+    base = "m4" if lane else tag
     root_rel = "bench/l3/budget/m34_test/root_%s.pruv" % base
     if not os.path.exists(os.path.join(ROOT, root_rel)):
         raise ToolError("missing %s (written by the Pruv-side workers)" % root_rel)
@@ -98,22 +181,43 @@ def build(pruvc, tag):
         raise ToolError("rustc not found")
     os.makedirs(WORK, exist_ok=True)
     gen = os.path.join(WORK, "gen_%s.rs" % tag)
-    if tag == "m4raw":
-        manifest, root = prepare_m4raw_pkg()
-        c = run(pruvc_cmd(pruvc) + [root, "-o", gen, "--manifest", manifest], cwd=ROOT)
+    llvm = bool(lane) and lane["backend"] == "llvm"
+    ll = os.path.join(WORK, "gen_%s.ll" % tag)
+    if lane and (lane["raw"] or lane["eq"]):
+        manifest, root = prepare_m4_pkg(tag, lane["raw"], lane["nv"], lane["eq"])
+        args = [root, "-o", ll if llvm else gen, "--manifest", manifest]
+    elif lane and lane["nv"]:
+        args = [prepare_m4_root_nv(tag), "-o", ll if llvm else gen] + LIBS
     else:
-        c = run(pruvc_cmd(pruvc) + [root_rel, "-o", gen] + LIBS, cwd=ROOT)
+        args = [root_rel, "-o", ll if llvm else gen] + LIBS
+    if llvm:
+        args += ["--backend", "llvm", "--rust-bindings", gen]
+    c = run(pruvc_cmd(pruvc) + args, cwd=ROOT)
     if c.returncode != 0:
-        raise ToolError("pruvc failed on %s (exit %d):\n%s" % (root_rel, c.returncode, tail(c)))
+        raise ToolError("pruvc failed on %s (%s, exit %d):\n%s" % (root_rel, tag, c.returncode, tail(c)))
+    link = []
+    if llvm:
+        obj = os.path.join(WORK, "gen_%s.o" % tag)
+        c = run([CLANG, "-O2", "-Wno-override-module", "-c", ll, "-o", obj], timeout=300)
+        if c.returncode != 0:
+            raise ToolError("clang (%s .ll) failed:\n%s" % (tag, tail(c)))
+        link = ["-C", "link-arg=" + obj, "-C", "link-arg=" + build_runtime()]
+    with open(os.path.join(HERE, "driver_%s.rs" % base)) as d:
+        driver = d.read()
+    if tag == "m4c":
+        b, e = driver.find(WORLD_BEGIN), driver.find(WORLD_END)
+        if b < 0 or e < b:
+            raise ToolError("driver_m4.rs: LANE-WORLD markers missing")
+        with open(os.path.join(HERE, "driver_m4c.rs")) as w:
+            driver = driver[:b] + w.read() + driver[e:]
     main = os.path.join(WORK, "main_%s.rs" % tag)
     with open(main, "w") as fh:
         fh.write('#![allow(dead_code, unused_imports)]\n#[path = "%s"] mod sol;\n' % gen.replace("\\", "/"))
-        if base == "m4":
-            fh.write("type Store<T> = %s;\n" % ("sol::pruv_raw::PruvStore<T>" if tag == "m4raw" else "Plain<T>"))
-        with open(os.path.join(HERE, "driver_%s.rs" % base)) as d:
-            fh.write(d.read())
+        if lane and tag != "m4c":
+            fh.write("type Store<T> = %s;\n" % ("sol::pruv_raw::PruvStore<T>" if lane["raw"] == "crate" else "Plain<T>"))
+        fh.write(driver)
     exe = os.path.join(WORK, "driver_%s_bin" % tag + (".exe" if os.name == "nt" else ""))
-    c = run([rustc, "-C", "opt-level=3", "--edition", "2021", "-o", exe, main])
+    c = run([rustc, "-C", "opt-level=3", "--edition", "2021", "-o", exe, main] + link)
     if c.returncode != 0:
         raise ToolError("rustc failed (%s):\n%s" % (tag, tail(c)))
     return exe
@@ -379,7 +483,9 @@ def cmd_perf(args):
 
 def main():
     ap = argparse.ArgumentParser(description="L3-10 M3/M4 test harness")
-    ap.add_argument("mode", choices=["m3", "m4", "m4raw", "perf", "keys"])
+    ap.add_argument("mode", choices=["m3", "perf", "keys", "lanes"] + sorted(M4_LANES))
+    ap.add_argument("--only", choices=sorted(M4_LANES), default=None,
+                    help="m4 mode: run only this lane (same as giving the lane name as the mode); mode `lanes` runs all")
     ap.add_argument("--pruvc", default=PRUVC_DEFAULT)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--count", type=int, default=300)
@@ -387,7 +493,14 @@ def main():
     ap.add_argument("--axes", default="sessions,tools", help="perf: comma list of sessions,tools,clocks")
     args = ap.parse_args()
     try:
-        return {"m3": cmd_m3, "m4": cmd_m4, "m4raw": cmd_m4raw, "perf": cmd_perf, "keys": cmd_keys}[args.mode](args)
+        if args.mode in M4_LANES:
+            return cmd_m4(args, args.only or args.mode)
+        if args.mode == "lanes":
+            rc = 0
+            for tag in ([args.only] if args.only else list(M4_LANES)):
+                rc = max(rc, cmd_m4(args, tag))
+            return rc
+        return {"m3": cmd_m3, "perf": cmd_perf, "keys": cmd_keys}[args.mode](args)
     except ToolError as e:
         print("error: %s" % e, file=sys.stderr)
         return 2

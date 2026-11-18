@@ -146,12 +146,13 @@ Rules (both compilers, same diagnostics):
    `pruv.json`) and `version` (a requirement, section 5).
 6. The manifest file is never written by the compiler.
 7. `raw_entries` (L3 P06, optional, program package only): how the generated raw host entries are exposed, `"crate"`
-   (`pub(crate)` behind a host adapter) or `"unsafe"` (a documented `pub unsafe fn`). A raw entry takes arbitrary
+   (`pub(crate)` behind a host adapter), `"unsafe"` (a documented `pub unsafe fn`) or `"c"` (`"crate"` plus, in LLVM
+   bindings, the C handle adapter `pruv_c`, L3 P10). A raw entry takes arbitrary
    buffers, so a public safe raw entry is never an option: `"pub"`, `"public"` and `"safe"` are rejected with their own
-   message, any other value with `expected "crate" or "unsafe"`, a non-string with `expected a string`, and the key in a
+   message, any other value with `expected "crate", "unsafe" or "c"`, a non-string with `expected a string`, and the key in a
    dependency manifest with `only the program package chooses raw entry visibility` (all `pkg/manifest_invalid`).
    Missing = today's output. P06 records the choice (`Program.raw_entries`); P09 applies it in both Rust codegens and
-   bindings (SPEC.md "Raw entries", `docs/L3_RESTRUCTURE_SPEC.md` appendix P09).
+   bindings (SPEC.md "Raw entries", `docs/L3_RESTRUCTURE_SPEC.md` appendices P09 and P10).
 
 CLI: `--manifest PATH` names the program's own manifest. The positional input must be the same file as that manifest's
 `root` (canonical file identity), otherwise a usage error `--manifest root does not match the input file`. `--manifest`

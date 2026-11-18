@@ -132,9 +132,9 @@ def _read(pkgdir, mfile, display):
         if not isinstance(raw, str):
             _bad(display, "raw_entries", "expected a string")
         if raw in ("pub", "public", "safe"):
-            _bad(display, "raw_entries", "a raw entry is never a public safe function (use \"crate\" or \"unsafe\")")
-        if raw not in ("crate", "unsafe"):
-            _bad(display, "raw_entries", "expected \"crate\" or \"unsafe\"")
+            _bad(display, "raw_entries", "a raw entry is never a public safe function (use \"crate\", \"unsafe\" or \"c\")")
+        if raw not in ("crate", "unsafe", "c"):
+            _bad(display, "raw_entries", "expected \"crate\", \"unsafe\" or \"c\"")
     deps = []
     dd = data.get("dependencies", _Obj())
     if not isinstance(dd, _Obj):

@@ -1490,6 +1490,8 @@ class Gen:
         # P09: manifest raw_entries ("crate" / "unsafe"): host entries become pub(crate) and the pruv_raw module is
         # appended (raw_module); None keeps today's output byte for byte
         s.raw = getattr(prog, "raw_entries", None) if s.explicit else None
+        if s.raw == "c":   # P10: the Rust backend treats "c" exactly as "crate" (no extern "C")
+            s.raw = "crate"
         s.raw_items = []    # (name, params text, return text, parameter names) of each host entry's public item, in emission order
         s.checks_needed = s.explicit and any(
             f.requires and f.foreign is None and (not verified or (f.host_entry and not trust_callers))

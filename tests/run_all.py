@@ -4,7 +4,8 @@ python tests/run_all.py [--only must_reject|examples|runtime|g3_proof|g6_fronten
 
 group l3_abi (L3 P09; one backend null row): tests/l3/abi/check_raw_entries.py WORK --rs|--py PATH checks manifest
 raw_entries ("crate" / "unsafe"): text facts, rustc visibility / unsafe / privacy errors, panic poisoning of
-pruv_raw::PruvStore. The l3_p09_* roots are ordinary must_reject rows.
+pruv_raw::PruvStore. The l3_p09_* roots are ordinary must_reject rows. Row l3_abi/c_handle (L3 P10):
+tests/l3/abi/check_c_handle.py WORK --rs|--py PATH checks raw_entries "c" (pruv_c text, rs == py, C probe c_probe.c).
 
 group s5_proof: tests/s5/proof/*.pruv verifies in default, trust-callers and infer modes
 with byte-identical Rust, LLVM IR and bindings erasure checks (one row checks both backends).
@@ -527,9 +528,17 @@ def l3_abi_jobs():
                            ["--rs" if _driver().kind == "rs" else "--py", _driver().path],
                            capture_output=True, text=True, timeout=1800)
         return c.returncode == 0, c.stdout + c.stderr
+    def c_checks():
+        c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/l3/abi/check_c_handle.py"), WORK] +
+                           ["--rs" if _driver().kind == "rs" else "--py", _driver().path],
+                           capture_output=True, text=True, timeout=1800)
+        return c.returncode == 0, c.stdout + c.stderr
     return [safe("l3_abi/raw_entries", raw_checks,
                  {"sample": "tests/l3/abi/check_raw_entries.py", "backend": None, "flags": [],
-                  "mode": "raw_entries", "group": "l3_abi"})]
+                  "mode": "raw_entries", "group": "l3_abi"}),
+            safe("l3_abi/c_handle", c_checks,
+                 {"sample": "tests/l3/abi/check_c_handle.py", "backend": None, "flags": [],
+                  "mode": "c_handle", "group": "l3_abi"})]
 
 
 def g4b_proof_jobs():

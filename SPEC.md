@@ -943,6 +943,30 @@ rules the types cannot enforce: `T` owns the state (no reference or shared handl
 closure given to `with` never catches a panic (`catch_unwind` inside it would clear the flag).
 `--trust-callers` does not require `raw_entries`; without it a trust-callers entry is safe only if every caller is
 trusted, and `raw_entries` enforces that by visibility.
+`"c"`: the Rust backend output is identical to `"crate"` (it never contains `extern "C"`). LLVM bindings get the
+`"crate"` output plus `pub mod pruv_c`, the C adapter. `PruvHandle` is opaque to C (one pointer) and owns the resident
+state (`i64` words) in a `PruvStore`; C never sees the state buffer. `pruv_handle_new(len)` returns a handle whose state
+is `len` zero words (null for a negative or oversized length); call the program's init entry next.
+`pruv_handle_free(h)` frees a handle, poisoned or not (null is ignored); `pruv_handle_poisoned(h)` returns 1/0 (2 for
+null). Every entry whose first parameter is `[i64]` (`in` or `inout`), whose other parameters are `i64`, `bool`, `str`
+or arrays of `i64`/`u8`/`bool`, and whose result is `i64`, `bool` or unit gets
+`pruv_h_NAME(h, args..., ret) -> i32`: the handle's state is the first argument, an array is a (pointer, length) pair,
+`bool` is an `i64` 0/1, and an `i64`/`bool` result goes to `*ret` on success. An entry `(prev: [i64], inout next:
+[i64]) -> i64` also gets `pruv_hr_NAME(h, new_len, ret)`: it runs the entry from the state into a fresh zeroed buffer
+of `new_len` words and makes that buffer the state only when the entry returns 0. Every call runs inside
+`catch_unwind` and `PruvStore::with` and returns a status: 0 ok, 1 poisoned (checked right after the null handle,
+before any other argument; nothing ran), 2 bad arguments (null handle or `ret`; negative, oversized, null or
+misaligned array; a range whose end address overflows; a `bool` byte other than 0/1; invalid UTF-8; overlapping
+ranges where one is written, including `ret` and the handle object; refused, nothing ran), 3 a Rust panic unwound to
+the adapter (inside the store it also poisoned the handle). No unwind crosses into C. Checked failures inside
+LLVM-compiled code (range, arithmetic, `requires`) and G6 host-callback failures exit the process with 101 and never
+return a status. C parameter names are positional (`a0`, `a1`/`a1_len`, ...), so user parameter names cannot collide
+with the adapter's own. The `pruv_c` module docs state the caller contract (each `# Safety` section points to it):
+`h` came from `pruv_handle_new` and is live, one handle is never used concurrently or reentrantly, and each
+(pointer, length) with length > 0 names that many initialized elements in one live allocation that nobody else
+touches during the call. Each function has a fixed parameter count; there is no registry, so a double free or a call
+after free is undefined behaviour the adapter cannot detect, and symbol names are global (one `"c"` program per linked
+image).
 
 ### Inline policy (generated Rust)
 Every generated Rust fn carries an inline hint. The Python and Rust compilers choose it with the same pass over the
