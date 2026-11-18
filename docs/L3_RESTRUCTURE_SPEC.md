@@ -3668,3 +3668,122 @@ One package audit (Codex gpt-6.2-astra, ultra) on `git diff e8acbf9`.
 
 R1 (`room_plan`/`room_apply` and the proofs) was done directly (Claude Opus 5.5). So were applying and fixing the
 delegated harness, the hand16 key path, the audit fixes, the gates, and the perf, RSS and allocation measurements.
+
+## Appendix P23 (row B/bud_clock.pruv + m9_test: FIRE, DROP, CLOSE and stale timers)
+
+The commit with this appendix; base 82be91b (main, P19a). Changed files:
+`bench/l3/budget/m9_test/{driver_m9.rs,hand_m9.rs,mut_m9.py,root_m9.pruv,run_m9.py,gen_stale.py}` and
+`bench/l3/budget/M9_NOTES.md`. No compiler file, `bud_clock.pruv`, `bud_map.pruv` or `bud_lifecycle.pruv` change:
+the FIRE, DROP and CLOSE paths P22 left in `bud_clock.pruv` already met the row once it was tested. Raw logs:
+`work/p23/` (not committed).
+
+### P23.1 Change
+
+- `root_m9::t_live` returns the store's live-entry total (header word 12), so the harness can count reclaimed
+  entries.
+- `run_m9.py`:
+  - `derive --family q4` builds a clock-only Q4 set (raise/charge calls removed, TS oracle rerun).
+  - `dc` runs 300 random build/DROP/CLOSE programs (R = 0..12) and 13 reclaim programs (20 build/DROP cycles each).
+    At each checkpoint it compares budget, clocks, timers and C/F events with a Python model. It also checks that
+    DROP/CLOSE reclaim exactly R + 1 entries, that capacity does not grow over the cycles, and that a FIRE after
+    DROP or CLOSE does nothing.
+  - `--out` puts the generated Rust and binaries in a chosen directory, and `perf` adds the rows drop, close
+    (R = 10/50/100), stale and staleu.
+- `gen_stale.py`: 300 seeded FIRE scenarios (budget replaced, unlimited, halted, closed, null session, waiting,
+  ended, mixed) with the TS oracle.
+- `mut_m9.py`: six new timer mutants (m5-m10) besides the four I2 mutants. `--jobs N` runs mutants in parallel,
+  each with its own lib copy and build directory (P22.7 H6).
+- `driver_m9.rs`:
+  - a timer captures its FIRE op (code 4, sessionId record, budgetId record) and its bid bytes when it is set;
+  - delivery, including a stale delivery, replays that op with the stored bid. It no longer decodes and re-encodes
+    keys per callback, and the captured ids are the ones from set time, as in B.
+- `hand_m9.rs`: the same rows (drop, close, stale, staleu) in hand Rust.
+
+### P23.2 Gates (Rust and Python compilers, Rust backend; all rc 0)
+
+`work/p23/gates.sh g1`, logs `work/p23/g1/`, `FAIL=0`:
+
+| gate | rs | py |
+|---|---|---|
+| M9 Q3 | exact 26, not-implemented 274, fail 0; i2 1835/0 | same |
+| M9 clock | 136/164/0; i2 2541/0 | same |
+| M9 E/F | 15/5/0; i2 95/0 | same |
+| M9 Q4 | 0/300/0 (non-run call 245, raise/charge 54, time halt 1); i2 905/0 | same |
+| M9 Q4 clock | 293/7/0; i2 1487/0 | same |
+| M9 stale | 300/0/0; F 600; i2 3698/0 | same |
+| M9 dc | 313 ok, 0 fail; build 560, drop 416, deletion 560, close 144, closed delivery 144, reclaim 247 | same |
+| M7 q / life / diff_hand | 113/187/0, 300/0/0, ok | same |
+| M10 q / halt / G | 78/222/0, 300/0/0, 9/1/0 | same |
+| mut_m9 | control CLEAN; 10 mutants KILLED (I2 four, m5 drop_no_clear, m6 fire_clear, m7 fire_late_forget, m8 close_no_settle, m9 drop_no_remove, m10 fire_active_count) | - |
+
+Timer order: the driver delivers by (due, token). Q4 clock, stale and dc compare the S/C/F order on every case.
+Deletion bound: dc checks the exact R + 1 reclaimed entries after each DROP and CLOSE.
+
+### P23.3 Time (Rust backend, ns, 15 interleaved rounds base/P23/hand, 20,000 reps, load average 5-8)
+
+`work/p23/perf.py`, log `work/p23/perf_f1.log`. Base is main's driver and generated code, which have no drop,
+close or stale rows.
+
+| cell | base | P23 | hand | P23/hand median | P23/hand min | overlap |
+|---|---:|---:|---:|---:|---:|---|
+| drop R = 10 | - | 939 | 1580 | 0.59 | 0.63 | no (Pruv faster) |
+| drop R = 50 | - | 4898 | 7437 | 0.66 | 0.57 | yes |
+| drop R = 100 | - | 9541 | 21214 | 0.45 | 0.56 | yes |
+| close R = 10 | - | 1295 | 1979 | 0.65 | 0.64 | yes |
+| close R = 50 | - | 4595 | 12125 | 0.38 | 0.55 | yes |
+| close R = 100 | - | 13361 | 29868 | 0.45 | 0.56 | yes |
+| fire | 160.7 | 132.0 | 209.9 | 0.63 | 0.62 | yes |
+| cycle | 124.3 | 120.2 | 163.1 | 0.74 | 0.75 | yes |
+| refresh R = 10 | 208.6 | 207.8 | 208.2 | 1.00 | 0.79 | yes |
+| refresh R = 50 | 208.2 | 149.9 | 141.2 | 1.06 | 0.80 | yes |
+| refresh R = 100 | 192.6 | 162.9 | 146.7 | 1.11 | 0.82 | yes |
+| stale | - | 72.3 | 64.7 | 1.12 | 1.15 | yes |
+| staleu | - | 74.1 | 91.7 | 0.81 | 1.11 | yes |
+
+- Per-flow cost: drop and close are linear in R (about 94 ns per run). fire is flat. Stale FIRE does no settle and
+  no re-arm.
+- The refresh medians above 1.0 are load noise. The clock code is unchanged, P23 is at or below base in every
+  refresh cell, and the minima are 0.79-0.82 (P22.3 measured 0.80-0.82).
+- Stale FIRE is the one row with minima above 1.0 (P23.4).
+- Before the driver fix (P23.1), stale was 1.47-1.56x: the host decoded the captured key per callback and
+  re-encoded the bid.
+
+### P23.4 Hand vs generated
+
+DROP and CLOSE are faster than hand Rust. Hand Rust frees R `String` run keys from per-clock maps one at a time,
+while Pruv's `bud_map::remove` frees the entries inside one flat store. fire and cycle keep the P22 gap.
+
+Stale FIRE, line by line (about 55 vs 46 ns net of the shared scheduler work):
+- Boundary. Hand Rust has none: its arguments are typed `&str`. `t_call` checks `valid(st)` (header and dynamic
+  part), `rec_end` + `slice_ok` for 3 records, `fx_ok` and `len(bv)`. About 4 ns.
+- CURRENT. Hand Rust does `sessions.get` and a `budget_id` compare. `load_bv` does the same find and unit compare,
+  plus field-address checks.
+- Effects. Hand Rust has no effect step. The host reads the fx frame (Grow retry loop, fx scan, scratch key
+  take/restore, halt log). About 5 ns.
+- Timer map. Both sides do the same `by_bid.remove` (SipHash), about 24 ns.
+
+Pruv cannot emit the hand code without a typed entry: the boundary check is what makes the flat `[i64]` op safe to
+index. The distributions overlap (P23 70.2-165.7 ns, hand 61.2-87.1 ns). Queued (P23.7).
+
+### P23.5 RSS and allocations
+
+- Peak RSS KiB (base / P23 / hand): R = 10 1904 / 1968 / 1728 (1.14x), R = 50 1984 / 2080 / 1744 (1.19x), R = 100
+  2064 / 2208 / 1760 (1.25x).
+  - The ratio to hand is P22's (1.16-1.26x, queued P13d/P13e).
+  - The 64-144 KiB over base is the larger perf binary and the R live entries the new drop/close rows build.
+- Allocations per repetition (counting allocator, two rep counts):
+  - refresh, cycle, fire: 3 / 3 / 3, equal to base;
+  - drop 3 vs hand 27 / 109 / 210;
+  - close 6 vs hand 32 / 114 / 215;
+  - stale and staleu 3 vs hand 11.
+
+### P23.6 Proof time (real s, median of 3, under load)
+
+| root | rs | py |
+|---|---|---|
+| m9 (base -> P23) | 7.68 -> 7.36 | 13.27 -> 12.93 |
+| m7 | 7.96 | 15.51 |
+| m10 | 10.02 | 16.71 |
+
+`work/p23/proof_time.log`. The libraries are unchanged, so m7 and m10 have no base delta. Run 1 had load spikes
+(m7 py 73.8 s, m10 rs 38.1 s). The medians are near P22.6.

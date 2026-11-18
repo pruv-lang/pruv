@@ -3,7 +3,11 @@
 // scheduler: a timer list plus a budget -> token map, keys copied only when a timer captures its ref or a budget gets
 // its first map slot). activeSince is kept as the begin instant (no ISO string), like the Pruv
 // side, which stores the instant and leaves formatting to the boundary.
-//   hand_m9 <R> <reps>   prints `item size ns_per_call` for refresh, cycle, fire (see driver_m9.rs run_perf)
+// hand_m9 <R> <reps> prints `item size ns` for refresh, cycle, fire, and the following items:
+//   drop: start R runs, then clear the timer and remove the clock and its run map.
+//   close: start R runs, advance 1 ms, settle and close the budget, then remove the clock.
+//          Reset the budget outside the timing of each repetition.
+//   stale/staleu: deliver a captured callback after replacing the budget id or making the budget unlimited.
 use std::collections::HashMap;
 use std::hint::black_box;
 use std::time::Instant;
@@ -77,13 +81,17 @@ impl World {
         if !self.current(r) {
             return false;
         }
-        let c = self.clocks.entry(r.budget_id.clone()).or_insert_with(|| Clock {
-            session_id: r.session_id.clone(),
-            runs: HashMap::new(),
-            active: 0,
-            since: None,
-            timer: None,
-        });
+        // borrowed-key lookup; the budget id is cloned only when the clock is created
+        if !self.clocks.contains_key(&r.budget_id) {
+            self.clocks.insert(r.budget_id.clone(), Clock {
+                session_id: r.session_id.clone(),
+                runs: HashMap::new(),
+                active: 0,
+                since: None,
+                timer: None,
+            });
+        }
+        let c = self.clocks.get_mut(&r.budget_id).unwrap();
         match c.runs.get_mut(key) {
             Some(w) => {
                 if *w {
@@ -205,6 +213,35 @@ impl World {
         added
     }
 
+    fn drop_clock(&mut self, r: &Ref) {
+        if self.clocks.remove(&r.budget_id).is_some_and(|clock| clock.timer.is_some()) {
+            self.clear(&r.budget_id);
+        }
+    }
+
+    fn close(&mut self, r: &Ref) {
+        if self.current(r) {
+            self.settle(r);
+            self.sessions.get_mut(&r.session_id).unwrap().open = false;
+            self.drop_clock(r);
+        }
+    }
+
+    fn advance(&mut self, ms: i64) -> bool {
+        let target = self.now + ms;
+        while let Some((i, timer)) = self.timers.iter().enumerate()
+            .filter(|(_, timer)| timer.due <= target)
+            .min_by_key(|(_, timer)| (timer.due, timer.token))
+        {
+            self.now = timer.due;
+            if self.deliver(i) {
+                return true;
+            }
+        }
+        self.now = target;
+        false
+    }
+
     // host delivery of the active timer at index i (driver_m9 fire_token): the callback runs with its captured ref
     fn deliver(&mut self, i: usize) -> bool {
         let t = self.timers.remove(i);
@@ -212,17 +249,14 @@ impl World {
     }
 }
 
+fn budget(id: String, unlimited: bool) -> Budget {
+    Budget { id, open: true, unlimited, time_minutes: 60, active_ms: 0, active_since: None }
+}
+
 fn world() -> (World, Ref) {
     let r = Ref { session_id: "session-perf".to_string(), budget_id: "99b568f7-0000-4000-8000-000000000001".to_string() };
     let mut sessions = HashMap::new();
-    sessions.insert(r.session_id.clone(), Budget {
-        id: r.budget_id.clone(),
-        open: true,
-        unlimited: false,
-        time_minutes: 1000000,
-        active_ms: 0,
-        active_since: None,
-    });
+    sessions.insert(r.session_id.clone(), budget(r.budget_id.clone(), false));
     (World { sessions, clocks: HashMap::new(), timers: Vec::new(), by_bid: HashMap::new(), seq: 0, now: 1700000000000 },
      r)
 }
@@ -274,4 +308,54 @@ fn main() {
         black_box(w.deliver(i));
     }
     println!("fire 1 {:.1}", t.elapsed().as_nanos() as f64 / reps as f64);
+
+    for (item, closing) in [("drop", false), ("close", true)] {
+        let (mut w, r) = world();
+        let mut elapsed = std::time::Duration::ZERO;
+        for _ in 0..reps {
+            for key in &keys {
+                black_box(w.run_started(black_box(&r), black_box(key)));
+            }
+            if closing {
+                w.advance(1);
+            }
+            assert!(w.timers.len() == 1 && w.timers[0].due > w.now, "{}: timer not alive", item);
+            let t = Instant::now();
+            if closing {
+                black_box(w.close(black_box(&r)));
+            } else {
+                black_box(w.drop_clock(black_box(&r)));
+            }
+            elapsed += t.elapsed();
+            assert!(w.timers.is_empty(), "{}: timer not cleared", item);
+            if closing {
+                assert!(w.sessions[&r.session_id].active_ms == 1, "close: settled ms");
+                w.sessions.insert(r.session_id.clone(), budget(r.budget_id.clone(), false));
+            }
+        }
+        println!("{} {} {:.1}", item, rsz, elapsed.as_nanos() as f64 / reps as f64);
+    }
+    if rsz == 10 {
+        for (item, unlimited) in [("stale", false), ("staleu", true)] {
+            let (mut w, r) = world();
+            let changed_id = if unlimited {
+                r.budget_id.clone()
+            } else {
+                format!("{}2", &r.budget_id[..r.budget_id.len() - 1])
+            };
+            let mut elapsed = std::time::Duration::ZERO;
+            for _ in 0..reps {
+                w.sessions.insert(r.session_id.clone(), budget(r.budget_id.clone(), false));
+                w.run_started(&r, &k0);
+                w.sessions.insert(r.session_id.clone(), budget(changed_id.clone(), unlimited));
+                let captured = w.timers.pop().unwrap();
+                let captured_ref = Ref { session_id: captured.sid, budget_id: captured.bid };
+                let t = Instant::now();
+                black_box(w.fire(black_box(&captured_ref)));
+                elapsed += t.elapsed();
+                w.drop_clock(&r);
+            }
+            println!("{} 1 {:.1}", item, elapsed.as_nanos() as f64 / reps as f64);
+        }
+    }
 }

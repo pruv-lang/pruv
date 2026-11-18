@@ -2,7 +2,7 @@
 //
 //   driver_m9 q        program on stdin, one case after another:
 //                        case <id> | put <words...> | now <ms> | step <i> | call <op words...> | adv <ms> | settime <ms>
-//                        | deliver <token> <captured 0/1> | end
+//                        | deliver <token> <captured 0/1> | inspect | end
 //   driver_m9 perf     perf program, see run_m9.py (cmd_perf)
 //
 // Boundary rule: the host owns the state buffer and the scratch frames but never reads state words. It is the
@@ -29,8 +29,10 @@ use std::time::Instant;
 struct Timer {
     token: u64,
     due: i64,
-    sid: Vec<u8>,
     bid: Vec<u8>,
+    // the captured ref as the FIRE op it delivers: `4, sessionId record, budgetId record, 0, 0` (packed words, the
+    // form t_call takes, like the hand side keeps the ref's Strings)
+    cap: Vec<i64>,
 }
 
 fn enc(units: &[i64], out: &mut Vec<u8>) {
@@ -81,10 +83,8 @@ struct World<const CHECK_I2: bool> {
     seq: u64,
     active: Vec<Timer>,
     by_bid: HashMap<Vec<u8>, u64>,
-    known: HashMap<u64, (Vec<u8>, Vec<u8>)>,
-    cb: Vec<i64>,
+    known: HashMap<u64, (Vec<i64>, Vec<u8>)>,
     kb: Vec<u8>,
-    ks: Vec<u8>,
     log: Vec<String>,
     quiet: bool,
     i2_checks: usize,
@@ -149,47 +149,6 @@ fn enc_key(op: &[i64], p: usize, out: &mut Vec<u8>) {
     }
 }
 
-// dec() of b packed straight into words (pack_into of the decoded units, no unit scratch), appended to out; returns
-// the unit count. ASCII bytes are one unit each, four per word.
-fn dec_packed(b: &[u8], out: &mut Vec<i64>) -> i64 {
-    if b.is_ascii() {
-        for c in b.chunks(4) {
-            let mut x: u64 = 0;
-            for l in 0..4 {
-                x = (x << 16) | c.get(l).copied().unwrap_or(0) as u64;
-            }
-            out.push(x as i64);
-        }
-        return b.len() as i64;
-    }
-    let (mut x, mut k, mut n, mut i) = (0u64, 0u32, 0i64, 0usize);
-    while i < b.len() {
-        let c = b[i] as u64;
-        let u = if c < 0x80 {
-            i += 1;
-            c
-        } else if c < 0xe0 {
-            i += 2;
-            ((c & 0x1f) << 6) | (b[i - 1] as u64 & 0x3f)
-        } else {
-            i += 3;
-            ((c & 0x0f) << 12) | ((b[i - 2] as u64 & 0x3f) << 6) | (b[i - 1] as u64 & 0x3f)
-        };
-        x = (x << 16) | (u & 0xffff);
-        k += 1;
-        n += 1;
-        if k == 4 {
-            out.push(x as i64);
-            x = 0;
-            k = 0;
-        }
-    }
-    if k > 0 {
-        out.push((x << (16 * (4 - k))) as i64);
-    }
-    n
-}
-
 impl<const CHECK_I2: bool> World<CHECK_I2> {
     fn new() -> Self {
         let mut st = vec![0i64; 256];
@@ -212,9 +171,7 @@ impl<const CHECK_I2: bool> World<CHECK_I2> {
             active: Vec::new(),
             by_bid: HashMap::new(),
             known: HashMap::new(),
-            cb: Vec::with_capacity(64),
             kb: Vec::with_capacity(64),
-            ks: Vec::with_capacity(64),
             log: Vec::new(),
             quiet: false,
             i2_checks: 0,
@@ -264,6 +221,12 @@ impl<const CHECK_I2: bool> World<CHECK_I2> {
 
     // One Pruv call; returns the status after Grow retries, then runs the effects.
     fn call(&mut self, op: &[i64]) -> i64 {
+        self.call_k(op, None)
+    }
+
+    // `key`: the budgetId bytes of op when the host already has them (a timer callback keeps its captured ref's
+    // scheduler key); otherwise they are encoded from the op's packed record.
+    fn call_k(&mut self, op: &[i64], key: Option<&[u8]>) -> i64 {
         let mut r = 0;
         for _ in 0..4 {
             self.fx[0] = 0;
@@ -287,12 +250,18 @@ impl<const CHECK_I2: bool> World<CHECK_I2> {
         if used == 0 {
             return self.halt_log(op, r);
         }
-        // ref of the call (scheduler key and captured ref), encoded straight from the packed words into the scratch keys
+        // ref of the call: the scheduler key (budgetId bytes, encoded into a scratch buffer) and the captured ref (the
+        // op's sessionId and budgetId records, op[1..be])
         let bp = 2 + words(op[1]);
+        let be = key_at(op, bp).2;
         let mut kb = std::mem::take(&mut self.kb);
-        let mut ks = std::mem::take(&mut self.ks);
-        enc_key(op, bp, &mut kb);
-        let bid = &kb[..];
+        let bid = match key {
+            Some(k) => k,
+            None => {
+                enc_key(op, bp, &mut kb);
+                &kb[..]
+            }
+        };
         let mut i = 1;
         while i <= used {
             match self.fx[i] {
@@ -301,9 +270,11 @@ impl<const CHECK_I2: bool> World<CHECK_I2> {
                     let eff = self.fx[i + 2];
                     // like `clock.timer = setTimeout(..)`: a previous handle is overwritten, not cancelled
                     self.seq += 1;
-                    enc_key(op, 1, &mut ks);
-                    let sid = &ks[..];
-                    let t = Timer { token: self.seq, due: self.now + eff, sid: sid.to_vec(), bid: bid.to_vec() };
+                    let mut cap = Vec::with_capacity(be + 2);
+                    cap.push(4i64);
+                    cap.extend_from_slice(&op[1..be]);
+                    cap.push(0);
+                    cap.push(0);
                     match self.by_bid.get_mut(bid) {
                         Some(v) => *v = self.seq,
                         None => {
@@ -311,10 +282,10 @@ impl<const CHECK_I2: bool> World<CHECK_I2> {
                         }
                     }
                     if !self.quiet {
-                        self.known.insert(self.seq, (sid.to_vec(), bid.to_vec()));
+                        self.known.insert(self.seq, (cap.clone(), bid.to_vec()));
                         self.log.push(format!("S t{} {}", self.seq, req));
                     }
-                    self.active.push(t);
+                    self.active.push(Timer { token: self.seq, due: self.now + eff, bid: bid.to_vec(), cap });
                     i += 3;
                 }
                 13 => {
@@ -332,7 +303,6 @@ impl<const CHECK_I2: bool> World<CHECK_I2> {
             }
         }
         self.kb = kb;
-        self.ks = ks;
         self.halt_log(op, r)
     }
 
@@ -361,30 +331,15 @@ impl<const CHECK_I2: bool> World<CHECK_I2> {
 
     fn fire_token(&mut self, idx: usize) -> i64 {
         let t = self.active.remove(idx);
-        self.run_callback(t.token, &t.sid, &t.bid)
+        self.run_callback(t.token, &t.cap, &t.bid)
     }
 
-    // The timer callback `() => this.fire(ref)` with its captured ref.
-    // The op is built in reused scratch buffers (no allocation per delivery): the captured byte keys are decoded
-    // straight into the op's packed key records.
-    fn run_callback(&mut self, token: u64, sid: &[u8], bid: &[u8]) -> i64 {
+    // The timer callback `() => this.fire(ref)` with its captured ref, kept as the FIRE op since the timer was set.
+    fn run_callback(&mut self, token: u64, cap: &[i64], bid: &[u8]) -> i64 {
         if !self.quiet {
             self.log.push(format!("F t{}", token));
         }
-        let mut op = std::mem::take(&mut self.cb);
-        op.clear();
-        op.push(4i64);
-        for k in [sid, bid] {
-            let np = op.len();
-            op.push(0);
-            let n = dec_packed(k, &mut op);
-            op[np] = n;
-        }
-        op.push(0);
-        op.push(0);
-        let r = self.call(&op);
-        self.cb = op;
-        r
+        self.call_k(cap, Some(bid))
     }
 
     fn advance(&mut self, ms: i64) -> bool {
@@ -423,7 +378,7 @@ impl<const CHECK_I2: bool> World<CHECK_I2> {
             return self.fire_token(i);
         }
         match self.known.get(&tok).cloned() {
-            Some((sid, bid)) if captured => self.run_callback(tok, &sid, &bid),
+            Some((cap, bid)) if captured => self.run_callback(tok, &cap, &bid),
             _ => {
                 self.log.push(format!("X deliver t{}", tok));
                 0
@@ -519,6 +474,11 @@ fn run_q() {
                     halted = true;
                 }
             }
+            "inspect" => {
+                w.log.push(format!("L {} {}", sol::t_live(&w.st), w.st.len()));
+                let snapshot = w.observe();
+                w.log.push(format!("V {}", snapshot));
+            }
             "end" => {
                 for l in w.log.drain(..) {
                     writeln!(o, "{}", l).unwrap();
@@ -547,7 +507,9 @@ fn run_q() {
 //                call reaches REFRESH (O(1) via the active-run count) and a SETTLE / BEGIN+ARM transition (2 calls per rep)
 //   cycle      : timer cycle with one run: runStarted (BEGIN+ARM, timerSet), runEnded (SETTLE, timerClear) (2 calls)
 //   fire       : early delivery: ARM then FIRE with time left (SETTLE + BEGIN + ARM re-arm) (1 fire per rep)
-// prints `item size ns_per_call`.
+//   drop/close : build R runs, then DROP or advance 1 ms and CLOSE (ns per repetition)
+//   stale/u    : captured FIRE after a budget id change or an unlimited budget replacement
+// prints `item size ns`.
 fn run_perf(args: &[String]) {
     let rsz: usize = args[0].parse().unwrap();
     let reps: usize = args[1].parse().unwrap();
@@ -562,7 +524,9 @@ fn run_perf(args: &[String]) {
     let bid = key("99b568f7-0000-4000-8000-000000000001");
     let mut put = sid.clone();
     // record word 6 = bn, then the packed id words
-    let mut rec = vec![0i64, 0, 1000000, 0, 0, 0];
+    // timeMinutes 60 keeps the timer delay (3,600,000 ms) under the 2^31-1 ms host cap, so advance(1) before CLOSE
+    // does not deliver the timer and CLOSE settles the 1 ms itself (P23 audit)
+    let mut rec = vec![0i64, 0, 60, 0, 0, 0];
     rec.extend_from_slice(&bid);
     put.push(rec.len() as i64);
     put.extend(rec);
@@ -630,6 +594,63 @@ fn run_perf(args: &[String]) {
     }
     let ns = t.elapsed().as_nanos() as f64 / reps as f64;
     println!("fire {} {:.1}", 1, ns);
+
+    // Measure DROP/CLOSE of a clock with R runs. The R runStarted calls, the 1 ms advance before CLOSE and the host
+    // budget reset are outside the timed interval; only the DROP or CLOSE call is timed (P23 audit).
+    let starts: Vec<_> = keys.iter().map(|k| mk(1, k, 0)).collect();
+    for (item, code) in [("drop", 5), ("close", 6)] {
+        let op = mk(code, &vec![0], 0);
+        let mut w = World::<false>::new();
+        w.quiet = true;
+        w.put(&put);
+        let mut elapsed = std::time::Duration::ZERO;
+        for _ in 0..reps {
+            for start in &starts {
+                black_box(w.call(black_box(start)));
+            }
+            if code == 6 {
+                w.advance(1);
+            }
+            // the armed timer t1 is alive (not delivered by the advance) when DROP/CLOSE runs
+            assert!(w.active.len() == 1 && w.active[0].due > w.now, "{}: timer not alive", item);
+            let t = Instant::now();
+            black_box(w.call(black_box(&op)));
+            elapsed += t.elapsed();
+            assert!(w.active.is_empty(), "{}: timer not cleared", item);
+            if code == 6 {
+                w.put(&put);
+            }
+        }
+        println!("{} {} {:.1}", item, rsz, elapsed.as_nanos() as f64 / reps as f64);
+    }
+
+    // Prepare an armed clock and capture its callback before changing the session budget.
+    if rsz == 10 {
+        for (item, unlimited) in [("stale", false), ("staleu", true)] {
+            let mut changed = put.clone();
+            let record = sid.len() + 1;
+            if unlimited {
+                changed[record + 1] = 1;
+            } else {
+                changed[record + 6..].copy_from_slice(&key("99b568f7-0000-4000-8000-000000000002"));
+            }
+            let drop = mk(5, &vec![0], 0);
+            let mut w = World::<false>::new();
+            w.quiet = true;
+            let mut elapsed = std::time::Duration::ZERO;
+            for _ in 0..reps {
+                w.put(&put);
+                w.call(&st);
+                w.put(&changed);
+                let captured = w.active.pop().unwrap();
+                let t = Instant::now();
+                black_box(w.run_callback(captured.token, &captured.cap, &captured.bid));
+                elapsed += t.elapsed();
+                w.call(&drop);
+            }
+            println!("{} 1 {:.1}", item, elapsed.as_nanos() as f64 / reps as f64);
+        }
+    }
 }
 
 fn main() {

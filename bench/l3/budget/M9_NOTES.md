@@ -240,6 +240,70 @@ All of these are either M4 layout or the same per-unit codegen cause.
 - FIRE checks are constant: field 16 (forget), `bv`, and `count` (O(1), see M9-3), plus SETTLE/ARM. The halt work (`D`) is M10.
 - No call copies the world or replays history. The cycle and fire items stay flat at about 210 and 270 ns over 200k calls.
 
+## P23: FIRE, DROP, CLOSE and stale timers
+
+The clock library is unchanged in P23. The package adds tests and perf rows for the timer paths.
+
+New gate sets (`run_m9.py`, both compilers give the same counts):
+
+| set | source | exact | not-implemented | fail | note |
+|---|---|---:|---:|---:|---|
+| Q4 (300) | `q_gen.py --families Q4` | 0 | 300 (non-run call 245, raise/charge 54, time halt 1) | 0 | prefixes compared, i2 905/0 |
+| Q4 clock-only (300) | `derive --family q4` | 293 | 7 (time halt) | 0 | i2 1487/0 |
+| E/F (20) | `fixtures` E and F groups | 15 | 5 | 0 | i2 95/0 |
+| stale FIRE (300) | `gen_stale.py` (replaced, unlimited, halted, closed, null, waiting, ended, mixed) | 300 | 0 | 0 | F 600, i2 3698/0 |
+| dc (313) | `run_m9.py dc` | 313 ok | - | 0 | 300 random + 13 reclaim cases (R = 0..12, 20 build/DROP cycles each) |
+
+The dc gate builds R runs and then DROPs or CLOSEs. At each checkpoint it compares the budget record, the clocks,
+the active timers and the clear/fire events with a Python model. It also checks the store:
+- after DROP or CLOSE, the live-entry count (`root_m9::t_live`) falls by exactly R + 1 (the clock and its runs);
+- over 20 build/DROP cycles the store capacity does not grow, so freed entries are reused;
+- a FIRE delivered after DROP or CLOSE finds no clock and returns without settling or re-arming.
+
+Timer order: the host scheduler delivers timers by due time, then by token. Q4 clock, stale and dc compare the
+S/C/F event order with the TS oracle (or the model) on every case.
+
+Mutants (`mut_m9.py --jobs N`, each run in its own build directory): control clean; `waiting_no_dec`,
+`started_no_inc`, `ended_no_dec`, `ended_always_dec` (I2), `m5_drop_no_clear`, `m6_fire_clear`,
+`m7_fire_late_forget`, `m8_close_no_settle`, `m9_drop_no_remove`, `m10_fire_active_count` are all killed.
+
+Per-flow cost (§9), confirmed by the perf rows below:
+- FIRE: `O(key lengths)` to find the clock, then constant clock checks (field 16, CURRENT, state, unlimited), then
+  SETTLE and ARM. The fire row is flat at about 130 ns.
+- Stale FIRE (another budget id, an unlimited budget, a closed or missing clock): `O(key lengths)`, with no settle
+  and no re-arm. The stale rows are about 72 ns.
+- DROP and CLOSE: `O(key lengths + R)`. `bud_map::remove` frees the clock and its R runs (at most 2(R + 1) + 1
+  probe steps), and the dc gate checks the exact R + 1 reclaimed entries. Measured: about 94 ns per run (drop
+  939 / 4898 / 9541 ns at R = 10 / 50 / 100).
+
+Perf (`work/p23/perf.py`, 15 interleaved rounds, 20,000 repetitions, load average 5-8, ns):
+
+| item | R | Pruv median | hand median | Pruv/hand median | Pruv/hand min |
+|---|---:|---:|---:|---:|---:|
+| drop | 10 / 50 / 100 | 939 / 4898 / 9541 | 1580 / 7437 / 21214 | 0.59 / 0.66 / 0.45 | 0.63 / 0.57 / 0.56 |
+| close | 10 / 50 / 100 | 1295 / 4595 / 13361 | 1979 / 12125 / 29868 | 0.65 / 0.38 / 0.45 | 0.64 / 0.55 / 0.56 |
+| fire | 1 | 132 | 210 | 0.63 | 0.62 |
+| stale | 1 | 72.3 | 64.7 | 1.12 | 1.15 |
+| staleu | 1 | 74.1 | 91.7 | 0.81 | 1.11 |
+
+Allocations per repetition: drop 3 vs hand 27 / 109 / 210, close 6 vs 32 / 114 / 215, stale 3 vs 11. Hand Rust
+stores runs as `String` keys in per-clock maps, so it frees them one by one. Pruv frees entries inside one flat store.
+
+Stale FIRE is the one row where the minima stay above hand Rust (1.11-1.15). The medians and distributions overlap,
+but both sides do very little work here (hand Rust does two map lookups), so the fixed cost of the Pruv entry
+shows. Line by line, for one stale delivery (about 55 vs 46 ns net of the shared scheduler work):
+
+| step | hand Rust | Pruv (`t_call`) | why |
+|---|---|---|---|
+| boundary | none: typed `&str` arguments | `valid(st)` header and dynamic-part check, `rec_end` + `slice_ok` for 3 records, `fx_ok`, `len(bv)` | the flat `[i64]` op has to be proven well formed before indexing; about 4 ns |
+| CURRENT | `sessions.get(sid)`, `budget_id == bid` | `load_bv`: session `find`, field-address checks, unit compare of the bid | same work, plus the address checks |
+| effects | none | host reads the fx frame: Grow retry loop, fx scan, scratch key take/restore, halt log | the host interface of the generated root; about 5 ns |
+| timer map | `by_bid.remove` (SipHash) | same `by_bid.remove` (SipHash) | equal, about 24 ns |
+
+Pruv cannot emit the hand code here without a typed entry: the hand path skips the boundary check because its
+arguments are Rust types. Queued: a typed captured-ref FIRE entry (or a lighter boundary check for a store that the
+host has not changed since the last valid call).
+
 ## Not done in M9 (owned elsewhere)
 
 - The budget record, CURRENT and the ISO activeSince text (M7). This is replaced by the placeholder `load_bv`/`store_bv`.
