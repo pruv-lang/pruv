@@ -557,7 +557,7 @@ fn file_contracts(name: &str) -> (Vec<Expr>, Vec<Expr>) {
     fn var(n: &str, t: &str) -> Expr { Expr::Var(Var { line: 0, col: 0, name: n.into(), ty: Some(t.into()) }) }
     fn obs(n: &str, v: Expr) -> Expr {
         Expr::Call(Call { line: 0, col: 0, name: format!("file_{}", n), args: vec![v],
-            ty: Some(if n == "size" { "i64" } else { "bool" }.into()), targs: None, inst: None, old: None })
+            ty: Some(if n == "size" { "i64" } else { "bool" }.into()), targs: None, inst: None, old: None, opaque_c: false })
     }
     fn bin(op: &str, a: Expr, b: Expr) -> Expr {
         Expr::Binary(Binary { line: 0, col: 0, op: op.into(), left: Box::new(a), right: Box::new(b), ty: Some("bool".into()) })

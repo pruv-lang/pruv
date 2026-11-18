@@ -2861,6 +2861,7 @@
 {"backend": null, "compiler": "rs", "flags": ["--infer"], "group": "l3_frontend", "mode": "infer", "sample": "tests/l3/frontend/u8_load_be.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--infer"], "group": "l3_proof", "mode": "infer", "sample": "tests/l3/proof/hf_auto.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--infer"], "group": "l3_proof", "mode": "infer", "sample": "tests/l3/proof/hf_stack.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--infer"], "group": "l3_proof", "mode": "infer", "sample": "tests/l3/proof/opaque_reveal.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--infer"], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g2a_bad_store_call_inf.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--infer"], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g2a_bad_store_in_loop_inf.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--infer"], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g2a_bad_store_loop_exit_inf.pruv"}
@@ -3568,6 +3569,7 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "l3_frontend", "mode": "default", "sample": "tests/l3/frontend/u8_load_be.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "l3_proof", "mode": "default", "sample": "tests/l3/proof/hf_auto.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "l3_proof", "mode": "default", "sample": "tests/l3/proof/hf_stack.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "l3_proof", "mode": "default", "sample": "tests/l3/proof/opaque_reveal.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/cd01_requires_index.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/cd02_requires_order.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/cd03_div_zero.pruv"}
@@ -4293,6 +4295,15 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_hf_grow.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_hf_refusal.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_hf_result_param.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_opq_false.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_opq_loop_scope.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_opq_no_reveal.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_opq_range.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_opq_reveal_target.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_opq_signature.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_opq_sym_false.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_opq_total.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_opq_unknown_reveal.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_p09_nested_call.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_p09_old_param.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_p09_result_param.pruv"}

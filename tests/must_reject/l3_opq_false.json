@@ -1,0 +1,1 @@
+{"stage": "verify", "code": "ensures", "line": 10, "col": 3, "message": "cannot prove postcondition (line 7) in crate::next"}

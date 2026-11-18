@@ -605,7 +605,7 @@ impl<'a> Mono<'a> {
                 } else if let Some(r) = self.rfns.get(&x.name) {
                     name = r.clone(); // G4 A2: a nongeneric user function -> its Rust stem
                 }
-                Expr::Call(Call { line: x.line, col: x.col, name, args, ty, targs: None, inst: new_inst, old: x.old.clone() })
+                Expr::Call(Call { line: x.line, col: x.col, name, args, ty, targs: None, inst: new_inst, old: x.old.clone(), opaque_c: x.opaque_c })
             }
             Expr::Index(x) => {
                 let array = self.bx(&x.array)?;
@@ -794,6 +794,7 @@ impl<'a> Mono<'a> {
                 cond: self.cp_e(&x.cond)?,
                 origin_code: x.origin_code.clone(),
                 origin_what: x.origin_what.clone(),
+                reveal: x.reveal.clone(),
             }),
             Stmt::Par(x) => Stmt::Par(Par { line: x.line, col: x.col, calls: x.calls.iter().map(|c| self.cp_e(c)).collect::<Result<_, _>>()? }),
             Stmt::ExprStmt(x) => Stmt::ExprStmt(ExprStmt { line: x.line, col: x.col, expr: self.cp_e(&x.expr)? }),
@@ -868,7 +869,7 @@ impl<'a> Mono<'a> {
             foreign: f.foreign.clone(),
             cost: f.cost.as_ref().map(|e| self.cp_e(e)).transpose()?, decreases: None, // G9 A0: G9 programs are rejected before specialization
             small_bound,
-            x_auto: None,
+            x_auto: None, opaque: false,
         })
     }
 

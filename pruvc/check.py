@@ -914,6 +914,12 @@ class Checker:
                 if is_array(f.ret) or f.ret == STR:
                     s.array_source(st, st.value, scope, allow_local_var=True)
                 s.own(st.value)
+        elif isinstance(st, Assert) and st.reveal is not None:     # P13o: `reveal F;` names an opaque function
+            rf = s.funcs.get(st.reveal.name)
+            if rf is None or not rf.opaque:
+                terr(st.reveal, "reveal_target", "reveal %s: %s" % (
+                    st.reveal.name, "unknown function" if rf is None else "the function is not opaque"),
+                     "reveal names an `opaque fn`; a function without `opaque` is always transparent")
         elif isinstance(st, Assert):
             s.ckind = "assert"
             s.expect(st.cond, BOOL, scope, contract=True)
@@ -1686,6 +1692,10 @@ class Checker:
         for f in s.prog.functions:
             r = x_sig_reason(f) or x_scan_block(f, f.body, 0, s.funcs)
             s.x_raw[f.name] = r if r is not None else copy.deepcopy(f.body)
+            if f.opaque and (r is not None or f.ret != BOOL):   # P13o: an opaque function is an expandable predicate
+                terr(f, "opaque_signature", "opaque function %s %s" % (
+                    f.name, "must return bool" if r is None else "must expand in a contract: " + r),
+                     "keep `opaque` for a bool predicate that a contract may expand (" + X_FIX + ")")
 
     def x_auto(s):
         """P07 (docs/L3_RESTRUCTURE_SPEC.md appendix P07): every function whose body expands as a contract keeps its
@@ -1706,6 +1716,8 @@ class Checker:
                 f.x_auto = xa if f.ret == BOOL or not x_has_bit(xa) else None
             except PruvError:
                 s.x_busy = set()
+                if f.opaque:        # P13o: an opaque body is its definition, so it must build
+                    raise
             s.ckind = "code"
 
     def x_expand(s, e, f):
@@ -1891,6 +1903,9 @@ class Checker:
             if s.ckind == "cost":
                 terr(e, "call_in_contract", "calling functions in contracts is not supported in v0.1",
                      "inline the property")
+            if f.opaque:        # P13o: an opaque call stays a call; the verifier applies its uninterpreted symbol
+                e.opaque_c = True   # code generation inlines it (opaque_inline)
+                return substitute(f.ret, m)
             s.x_pending = s.x_expand(e, f)    # P06: expand the call (docs/L3_RESTRUCTURE_SPEC.md appendix P06)
             return substitute(f.ret, m)
         s.used_effects.update(f.effects)
@@ -2061,6 +2076,61 @@ def x_instantiate(tpl, f, site):
             n.args = [at(a) for a in e.args]
         return n
     return x_sized(site, f, at(tpl))
+
+
+def opaque_inline(prog):
+    """P13o (appendix P13o.1): after verification, every contract application of an opaque function becomes its
+    expansion, so the code generators see what P06 would have produced (a run-time contract check evaluates the
+    body). Idempotent: an inlined program has no opaque contract call left."""
+    funcs = {f.name: f for f in prog.functions}
+    if not any(f.opaque for f in prog.functions):
+        return
+    seen = set()
+
+    def inline(c):
+        f = funcs[c.name]
+        args = {p.name: walk_e(a) for p, a in zip(f.params, c.args)}
+        return walk_e(x_map(f.x_auto, lambda v: x_map(args[v.name], lambda _: None) if v.name in args else None))
+
+    def walk_e(e):
+        if isinstance(e, Call) and getattr(e, "opaque_c", False):
+            return inline(e)
+        walk(e)
+        return e
+
+    def walk(o):
+        if id(o) in seen or isinstance(o, (Type, Function)):
+            return
+        seen.add(id(o))
+        for k, v in list(vars(o).items()):
+            if k in ("x_auto", "x_raw", "ty"):
+                continue
+            if isinstance(v, Expr):
+                setattr(o, k, walk_e(v))
+            elif isinstance(v, list):
+                for i, x in enumerate(v):
+                    if isinstance(x, Expr):
+                        v[i] = walk_e(x)
+                    elif hasattr(x, "__dict__") and not isinstance(x, (Type, Function)):
+                        walk(x)
+            elif hasattr(v, "__dict__") and not isinstance(v, (Type, Function)) and type(v).__module__ == "vast":
+                walk(v)
+
+    for f in prog.functions:
+        seen.add(id(f))
+        for k, v in list(vars(f).items()):
+            if k in ("x_auto", "x_raw"):
+                continue
+            if isinstance(v, Expr):
+                setattr(f, k, walk_e(v))
+            elif isinstance(v, list):
+                for i, x in enumerate(v):
+                    if isinstance(x, Expr):
+                        v[i] = walk_e(x)
+                    elif hasattr(x, "__dict__"):
+                        walk(x)
+            elif hasattr(v, "__dict__") and type(v).__module__ == "vast" and not isinstance(v, Type):
+                walk(v)
 
 
 def check(prog, externs=()):

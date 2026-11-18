@@ -1,0 +1,7 @@
+// P13o: without reveal the symbol is uninterpreted: good(a, i) does not follow from nothing
+pub opaque fn good(a: [i64], i: i64) -> bool
+{ return 0 <= i && i < len(a) && a[i] > 0; }
+
+pub fn claim(a: [i64], i: i64) -> i64
+  ensures good(a, i)
+{ return 0; }

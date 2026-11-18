@@ -400,6 +400,8 @@ for _cls in (Expr, Stmt, FieldDecl, VariantDecl, FieldInit, MatchArm, Refinement
              TypeParam):
     _cls.file = None
 Function.pub = False        # `pub fn`
+Function.opaque = False     # P13o: `opaque fn`
+Assert.reveal = None        # P13o: `reveal F;` -> Assert(true) with reveal = Call(F, []) (the name only)
 Program.uses_inout = None   # G5 A0: set by the checker (program_uses_inout); None = not checked yet
 TypeDecl.pub = False        # `pub struct` / `pub enum`
 Function.src_name = None    # explicit mode: the name as written; Function.name then holds the resolved identity

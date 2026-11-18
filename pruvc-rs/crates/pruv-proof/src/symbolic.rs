@@ -678,12 +678,24 @@ pub struct State {
     pub pc: Vec<Ast>,
     /// G9 A1 (verify.py `State.obs`): ids of the recursive-value facts already in `pc` (immutable, shared by forks).
     pub obs: std::rc::Rc<HashSet<u32>>,
+    /// P13o (verify.py `State.rev`): names of the opaque functions revealed on this path.
+    pub rev: std::rc::Rc<BTreeSet<String>>,
+    /// P13o (verify.py `State.apps`): (function, application term, argument values) met on this path, in order.
+    pub apps: std::rc::Rc<Vec<(String, Ast, Vec<Val>)>>,
+    pub app_ids: std::rc::Rc<HashSet<u32>>,
 }
 
 impl State {
     /// A fresh state (empty `obs`).
     pub fn new(env: Env, pc: Vec<Ast>) -> State {
-        State { env, pc, obs: std::rc::Rc::new(HashSet::new()) }
+        State {
+            env,
+            pc,
+            obs: std::rc::Rc::new(HashSet::new()),
+            rev: std::rc::Rc::new(BTreeSet::new()),
+            apps: std::rc::Rc::new(Vec::new()),
+            app_ids: std::rc::Rc::new(HashSet::new()),
+        }
     }
 
     /// verify.py `State.fork` (line 146).
@@ -692,8 +704,40 @@ impl State {
         if let Some(e) = extra {
             pc.push(e);
         }
-        State { env: self.env.clone(), pc, obs: std::rc::Rc::clone(&self.obs) }
+        State {
+            env: self.env.clone(),
+            pc,
+            obs: std::rc::Rc::clone(&self.obs),
+            rev: std::rc::Rc::clone(&self.rev),
+            apps: std::rc::Rc::clone(&self.apps),
+            app_ids: std::rc::Rc::clone(&self.app_ids),
+        }
     }
+}
+
+/// P13o (verify.py `_opq_parts`): the argument encodings of an opaque application: an array is its contents and its length.
+fn opq_parts(args: &[Val]) -> R<Vec<Ast>> {
+    let mut out = Vec::new();
+    for a in args {
+        match a {
+            Val::Arr(x) => {
+                out.push(x.a.clone());
+                out.push(x.n.clone());
+            }
+            Val::Map(m) => {
+                out.push(m.d.clone());
+                out.push(m.a.clone());
+                out.push(m.n.clone());
+            }
+            v => out.push(v.try_ast()?.clone()),
+        }
+    }
+    Ok(out)
+}
+
+/// P13o: the argument values of a call, read back from the callee environment in parameter order.
+fn args_of(cenv: &Env, f: &ast::Function) -> Vec<Val> {
+    f.params.iter().map(|p| cenv.get(&p.name).clone()).collect()
 }
 
 /// verify.py `_expr_text`: source-like text of a contract expression (used to name measures in messages).
@@ -763,6 +807,8 @@ pub struct FnVerifier<'a> {
     pub k: u32,
     pub(crate) seen: HashSet<(u32, u32, String, Option<String>)>,
     pub qstack: Vec<Ast>,
+    /// P13o: opaque function name -> its uninterpreted symbol `opq!F`.
+    pub(crate) opq_fns: HashMap<String, FuncDecl>,
     /// `s.aggs`: (kind, Tc.sexpr(), len(outer)) → F. Insertion order preserved (`len(aggs)` goes into the F name).
     pub(crate) aggs: Vec<((String, String, usize), FuncDecl)>,
     pub lemmas: Vec<Ast>,
@@ -845,6 +891,7 @@ impl<'a> FnVerifier<'a> {
             k: 0,
             seen: HashSet::new(),
             qstack: Vec::new(),
+            opq_fns: HashMap::new(),
             aggs: Vec::new(),
             lemmas: Vec::new(),
             lemma_fn_keys: HashSet::new(),
@@ -1835,7 +1882,7 @@ impl<'a> FnVerifier<'a> {
                 }
                 if code {
                     let ob = in_range(&self.z, &v.neg());
-                    self.prove_core(&st.env, &st.pc, g, &ob, pos(e), "overflow", "no overflow in unary -", None);
+                    self.prove_core(&st, g, &ob, pos(e), "overflow", "no overflow in unary -", None);
                 }
                 Ok(Val::Int(v.neg()))
             }
@@ -1864,7 +1911,7 @@ impl<'a> FnVerifier<'a> {
                     "/" | "%" => {
                         if code {
                             let ob = self.z.and(&[r.gt_i(0), l.ge_i(0)]);
-                            self.prove_core(&st.env, &st.pc, g, &ob, pos(e), "div", "divisor > 0 and dividend >= 0", None);
+                            self.prove_core(&st, g, &ob, pos(e), "div", "divisor > 0 and dividend >= 0", None);
                         }
                         return Ok(Val::Int(if op == "/" { l.div(&r) } else { l.modulo(&r) }));
                     }
@@ -1879,7 +1926,7 @@ impl<'a> FnVerifier<'a> {
                 };
                 if code {
                     let ob = in_range(&self.z, &res);
-                    self.prove_core(&st.env, &st.pc, g, &ob, pos(e), "overflow", &format!("no i64 overflow in `{}`", op), None);
+                    self.prove_core(&st, g, &ob, pos(e), "overflow", &format!("no i64 overflow in `{}`", op), None);
                 }
                 Ok(Val::Int(res))
             }
@@ -1891,8 +1938,7 @@ impl<'a> FnVerifier<'a> {
                     // `i >= 0` is with a Python int, `i < arr.n` is between z3 expressions (reflection rule)
                     let ob = self.z.and(&[i.ge_i(0), i.lt(&arr.n)]);
                     self.prove_core(
-                        &st.env,
-                        &st.pc,
+                        &st,
                         g,
                         &ob,
                         pos(e),
@@ -2105,7 +2151,7 @@ impl<'a> FnVerifier<'a> {
                 let a0 = arg(0)?.try_ast()?.clone();
                 let a1 = arg(1)?.try_ast()?.clone();
                 let ob = self.z.and(&[a0.ge_i(0), a0.le_i(MAX_LEN)]);
-                self.prove_core(&st.env, &st.pc, g, &ob, pos(e), "alloc_negative", "alloc length in 0..2^40", None);
+                self.prove_core(&st, g, &ob, pos(e), "alloc_negative", "alloc length in 0..2^40", None);
                 // the element kind comes from the unsubstituted type name (verify.py `tname`), then a structured [T] overrides it
                 let tname: Option<String> =
                     x.ty.as_deref().and_then(|k| GType::try_from_key(k).ok()).map(|g| g.name);
@@ -2133,8 +2179,7 @@ impl<'a> FnVerifier<'a> {
                 if aelem == Elem::U8 {
                     let ob = self.z.and(&[a1.ge_i(0), a1.le_i(255)]);
                     self.prove_core(
-                        &st.env,
-                        &st.pc,
+                        &st,
                         g,
                         &ob,
                         pos(e),
@@ -2162,8 +2207,7 @@ impl<'a> FnVerifier<'a> {
                 let m = arg(1)?.try_ast()?.clone();
                 let ob = self.z.and(&[m.ge_i(0), m.le(&av.n)]);
                 self.prove_core(
-                    &st.env,
-                    &st.pc,
+                    &st,
                     g,
                     &ob,
                     pos(e),
@@ -2181,8 +2225,7 @@ impl<'a> FnVerifier<'a> {
                 let v = arg(2)?.try_ast()?.clone();
                 let ob = self.z.and(&[av.n.le(&m), m.le_i(MAX_LEN)]);
                 self.prove_core(
-                    &st.env,
-                    &st.pc,
+                    &st,
                     g,
                     &ob,
                     pos(e),
@@ -2193,8 +2236,7 @@ impl<'a> FnVerifier<'a> {
                 if av.elem == Elem::U8 {
                     let ob = self.z.and(&[v.ge_i(0), v.le_i(255)]);
                     self.prove_core(
-                        &st.env,
-                        &st.pc,
+                        &st,
                         g,
                         &ob,
                         pos(e),
@@ -2231,7 +2273,7 @@ impl<'a> FnVerifier<'a> {
                         (j.add(&cnt).le(&bv.n), format!("eq_range j + n <= len({})", bv.name)),
                     ];
                     for (ob, msg) in obs {
-                        self.prove_core(&st.env, &st.pc, g, &ob, pos(e), "index_oob", &msg, None);
+                        self.prove_core(&st, g, &ob, pos(e), "index_oob", &msg, None);
                     }
                 }
                 return Ok(self.fresh("eq_range", &Ty::Bool));
@@ -2244,8 +2286,7 @@ impl<'a> FnVerifier<'a> {
                 if code {
                     let ob = self.z.and(&[i.ge_i(0), i.add_i(nb).le(&av.n)]);
                     self.prove_core(
-                        &st.env,
-                        &st.pc,
+                        &st,
                         g,
                         &ob,
                         pos(e),
@@ -2279,8 +2320,7 @@ impl<'a> FnVerifier<'a> {
                 let nb = lit_width(&x.args[3]);
                 let ob = self.z.and(&[i.ge_i(0), i.add_i(nb).le(&av.n)]);
                 self.prove_core(
-                    &st.env,
-                    &st.pc,
+                    &st,
                     g,
                     &ob,
                     pos(e),
@@ -2330,7 +2370,7 @@ impl<'a> FnVerifier<'a> {
                 if code && (n == "wrapping_shl" || n == "ushr") {
                     // shift count must be in 0..64
                     let ob = self.z.and(&[y0.ge_i(0), y0.lt_i(64)]);
-                    self.prove_core(&st.env, &st.pc, g, &ob, pos(e), "shift_range", "shift count in 0..64", None);
+                    self.prove_core(&st, g, &ob, pos(e), "shift_range", "shift count in 0..64", None);
                 }
                 if code {
                     let f = self.z.and(&[r.ge_i(i64::MIN), r.le_i(i64::MAX)]);
@@ -2380,8 +2420,7 @@ impl<'a> FnVerifier<'a> {
                 let hi = arg(2)?.try_ast()?.clone();
                 let ob = self.z.and(&[lo.ge_i(0), lo.le(&hi), hi.le(&sv.n)]);
                 self.prove_core(
-                    &st.env,
-                    &st.pc,
+                    &st,
                     g,
                     &ob,
                     pos(e),
@@ -2391,8 +2430,7 @@ impl<'a> FnVerifier<'a> {
                 );
                 let ob = self.z.and(&[self.str_boundary(&sv, &lo), self.str_boundary(&sv, &hi)]);
                 self.prove_core(
-                    &st.env,
-                    &st.pc,
+                    &st,
                     g,
                     &ob,
                     pos(e),
@@ -2441,6 +2479,10 @@ impl<'a> FnVerifier<'a> {
             Some(f) => f,
             None => return Err(format!("'{}'", n)),
         };
+        if f.opaque && !code {
+            // P13o: a contract application of an opaque function is its symbol
+            return Ok(Val::Bool(self.opq(f, &args, st)?));
+        }
         let mut cenv = Env::default();
         for (p, a) in f.params.iter().zip(args.iter()) {
             cenv.set(&p.name, a.clone());
@@ -2463,6 +2505,70 @@ impl<'a> FnVerifier<'a> {
         r
     }
 
+    /// P13o (appendix P13o.1, verify.py `opq`): the application of the opaque function f to the argument values: the
+    /// uninterpreted `opq!F` over the argument encodings (an array is its contents and its length). Under a quantifier
+    /// whose bound variable reaches an argument the application is expanded in place instead (a reveal equation cannot
+    /// mention a bound variable). A new application is recorded on the path; if F is revealed on the path its equation
+    /// is appended to pc at once.
+    fn opq(&mut self, f: &'a ast::Function, args: &[Val], st: &mut State) -> R<Ast> {
+        let parts = opq_parts(args)?;
+        if !self.qstack.is_empty() && parts.iter().any(|t| self.qstack.iter().any(|c| t.occurs(c))) {
+            return self.opq_body(f, args, st);
+        }
+        if !self.opq_fns.contains_key(&f.name) {
+            let dom: Vec<Sort> = parts.iter().map(|t| t.sort()).collect();
+            let fd = self.z.func_decl(&format!("opq!{}", f.name), &dom, &self.z.bool_sort());
+            self.opq_fns.insert(f.name.clone(), fd);
+        }
+        let app = self.opq_fns[&f.name].apply(&parts);
+        let i = app.id();
+        if !st.app_ids.contains(&i) {
+            std::rc::Rc::make_mut(&mut st.apps).push((f.name.clone(), app.clone(), args.to_vec()));
+            std::rc::Rc::make_mut(&mut st.app_ids).insert(i);
+            if st.rev.contains(&f.name) {
+                let b = self.opq_body(f, args, st)?;
+                st.pc.push(app.eq(&b));
+            }
+        }
+        Ok(app)
+    }
+
+    /// P13o: the body of the opaque f over the argument values (its contract template; opaque calls in it stay
+    /// symbols, so a reveal does not cascade).
+    fn opq_body(&mut self, f: &'a ast::Function, args: &[Val], st: &mut State) -> R<Ast> {
+        let xa = f.x_auto.as_ref().ok_or_else(|| format!("opaque {} has no contract expansion", f.name))?;
+        let mut cenv = Env::default();
+        for (p, a) in f.params.iter().zip(args.iter()) {
+            cenv.set(&p.name, a.clone());
+        }
+        self.ev_ast(xa, st, &[], false, &cenv)
+    }
+
+    /// P13o: `reveal F;` makes F transparent on the rest of this path: the equation of every application already
+    /// met, in the order met; later applications add theirs when met (`opq`).
+    fn reveal(&mut self, name: &str, st: &State) -> R<State> {
+        let mut st = st.fork(None);
+        if st.rev.contains(name) {
+            return Ok(st);
+        }
+        std::rc::Rc::make_mut(&mut st.rev).insert(name.to_string());
+        let apps = std::rc::Rc::clone(&st.apps);
+        for (fname, app, args) in apps.iter() {
+            if fname == name {
+                let f: &'a ast::Function = self.funcs[fname.as_str()];
+                let b = self.opq_body(f, args, &mut st)?;
+                st.pc.push(app.eq(&b));
+            }
+        }
+        Ok(st)
+    }
+
+    /// P13o: the opaque functions applied on this path and not revealed, sorted.
+    pub(crate) fn hidden(&self, st: &State) -> Vec<String> {
+        let s: BTreeSet<&String> = st.apps.iter().map(|(n, _, _)| n).filter(|n| !st.rev.contains(*n)).collect();
+        s.into_iter().cloned().collect()
+    }
+
     /// The part of `call` that runs under the callee's substitution (verify.py `try:` body): requires, fresh result, ensures.
     fn call_contract(&mut self, e: &Expr, f: &'a ast::Function, st: &mut State, g: &[Ast], code: bool, mut cenv: Env) -> R<Val> {
         let n = f.name.as_str();
@@ -2471,8 +2577,7 @@ impl<'a> FnVerifier<'a> {
             for r in &f.requires {
                 let ob = self.ev_ast(r, st, g, false, &cenv)?;
                 self.prove_core(
-                    &st.env,
-                    &st.pc,
+                    &st,
                     g,
                     &ob,
                     pos(e),
@@ -2547,6 +2652,8 @@ impl<'a> FnVerifier<'a> {
         // the result equals the template over the arguments. Evaluated before "result" is bound, so a parameter
         // named result keeps its argument value.
         let xv = match (code, &f.x_auto) {
+            // P13o: the result is the symbol; its body is known only where F is revealed
+            (true, _) if f.opaque => Some(self.opq(f, &args_of(&cenv, f), st)?),
             (true, Some(xa)) => Some(self.ev_ast(xa, st, g, false, &cenv)?),
             _ => None,
         };
@@ -2599,7 +2706,7 @@ impl<'a> FnVerifier<'a> {
             let r = (|| -> R<()> {
                 for req in &f.requires {
                     let ob = self.ev_ast(req, &mut st, &[], false, cenv)?;
-                    self.prove_core(&st.env, &st.pc, &[], &ob, pos(e), "call_requires",
+                    self.prove_core(&st, &[], &ob, pos(e), "call_requires",
                         &format!("precondition of {} (line {})", f.name, pruv_core::diagnostic::plain_line(req.line())), None);
                 }
                 self.termination(e, f, &mut st, &[], cenv)?;
@@ -2721,12 +2828,12 @@ impl<'a> FnVerifier<'a> {
         self.check_dom_e(st, &[], &s.cond, spos, "variant_field lookups in assertion are defined", None)?;
         let ob = self.ev0_ast(&s.cond, st, &[], false)?;
         match &s.origin_code {
-            None => self.prove_core(&st.env, &st.pc, &[], &ob, spos, "assert", "assertion", None),
+            None => self.prove_core(&st, &[], &ob, spos, "assert", "assertion", None),
             Some(code) => {
                 // An assert synthesized by refine.rs: its own code and the source description. The description also goes into the duplicate-suppression key,
                 // so multiple points of one annotation are all reported.
                 let what = s.origin_what.as_deref().unwrap_or("");
-                self.prove_core(&st.env, &st.pc, &[], &ob, spos, code, what, Some(what));
+                self.prove_core(&st, &[], &ob, spos, code, what, Some(what));
             }
         }
         Ok(ob)
@@ -2745,7 +2852,7 @@ impl<'a> FnVerifier<'a> {
 
     fn cost_value(&mut self, expr: &Expr, st: &mut State, g: &[Ast], node: Pos, env: &Env) -> R<Ast> {
         if let Some(domain) = self.dom(expr, st, g, env, PKind::All)? {
-            self.prove_core(&st.env, &st.pc, g, &domain, node, "contract_domain",
+            self.prove_core(&st, g, &domain, node, "contract_domain",
                 &format!("cost `{}` is defined", expr_text(expr)), None);
         }
         self.ev_ast(expr, st, g, false, env)
@@ -2789,8 +2896,7 @@ impl<'a> FnVerifier<'a> {
         };
         let ob = mg.ge_i(0);
         self.prove_core(
-            &st.env,
-            &st.pc,
+            &st,
             g,
             &ob,
             pos(e),
@@ -2800,8 +2906,7 @@ impl<'a> FnVerifier<'a> {
         );
         let ob = mg.lt(&m0);
         self.prove_core(
-            &st.env,
-            &st.pc,
+            &st,
             g,
             &ob,
             pos(e),
@@ -2818,7 +2923,7 @@ impl<'a> FnVerifier<'a> {
     /// One `call_requires` obligation of a catalog operation (verify.py proc_call `need`): in code only.
     fn proc_need(&mut self, st: &State, g: &[Ast], e: &Expr, code: bool, what: &str, ob: Ast) {
         if code {
-            self.prove_core(&st.env, &st.pc, g, &ob, pos(e), "call_requires", what, None);
+            self.prove_core(&st, g, &ob, pos(e), "call_requires", what, None);
         }
     }
 
@@ -3359,7 +3464,7 @@ impl<'a> FnVerifier<'a> {
                 "file_size" => Val::Int(f.buf.n.clone()),
                 "file_byte" => {
                     let i = argv(1)?.try_ast()?;
-                    if code { self.prove_core(&st.env, &st.pc, g, &z.and(&[i.ge_i(0), i.lt(&f.buf.n)]), pos(e), "call_requires", &what, None); }
+                    if code { self.prove_core(&st, g, &z.and(&[i.ge_i(0), i.lt(&f.buf.n)]), pos(e), "call_requires", &what, None); }
                     let r = f.buf.a.select(i);
                     if code { self.assume(st, g, z.and(&[r.ge_i(0), r.le_i(255)])); }
                     Val::Int(r)
@@ -3376,7 +3481,7 @@ impl<'a> FnVerifier<'a> {
             for (p, a) in f.params.iter().zip(args) { cenv.set(p.name, a.clone()); }
             for req in &f.requires {
                 let ob = self.ev_ast(req, st, g, false, &cenv)?;
-                if code { self.prove_core(&st.env, &st.pc, g, &ob, pos(e), "call_requires", &what, None); }
+                if code { self.prove_core(&st, g, &ob, pos(e), "call_requires", &what, None); }
             }
             let rt = rty.ok_or_else(|| "fresh: None".to_string())?;
             let res = self.try_fresh(n, &rt)?;
@@ -3406,7 +3511,7 @@ impl<'a> FnVerifier<'a> {
                 let xv = argv(1)?.try_ast()?.clone();
                 if code {
                     let ob = v.n.lt_i(MAX_LEN);
-                    self.prove_core(&st.env, &st.pc, g, &ob, pos(e), "call_requires", &what, None);
+                    self.prove_core(&st, g, &ob, pos(e), "call_requires", &what, None);
                 }
                 Ok(Val::Arr(v.like(v.a.store(&v.n, &xv), v.n.add_i(1), n)))
             }
@@ -3415,7 +3520,7 @@ impl<'a> FnVerifier<'a> {
                 let i = argv(1)?.try_ast()?.clone();
                 if code {
                     let ob = z.and(&[i.ge_i(0), i.lt(&v.n)]);
-                    self.prove_core(&st.env, &st.pc, g, &ob, pos(e), "call_requires", &what, None);
+                    self.prove_core(&st, g, &ob, pos(e), "call_requires", &what, None);
                 }
                 let r = v.a.select(&i);
                 match v.elem {
@@ -3443,7 +3548,7 @@ impl<'a> FnVerifier<'a> {
                 let has = m.d.select(&k);
                 if code {
                     let ob = z.or(&[has.clone(), m.n.lt_i(MAX_LEN)]);
-                    self.prove_core(&st.env, &st.pc, g, &ob, pos(e), "call_requires", &what, None);
+                    self.prove_core(&st, g, &ob, pos(e), "call_requires", &what, None);
                 }
                 let nn = m.n.add(&z.ite(&has, &z.int(0), &z.int(1)));
                 Ok(Val::Map(MapV {
@@ -3473,7 +3578,7 @@ impl<'a> FnVerifier<'a> {
                 let t = argv(1)?.try_arr()?.clone();
                 if code {
                     let ob = sv.n.add(&t.n).le_i(MAX_LEN);
-                    self.prove_core(&st.env, &st.pc, g, &ob, pos(e), "call_requires", &what, None);
+                    self.prove_core(&st, g, &ob, pos(e), "call_requires", &what, None);
                 }
                 let res_v = self.try_fresh(n, &Ty::User("string".to_string()))?;
                 let res = res_v.try_arr()?.clone();
@@ -3743,7 +3848,7 @@ impl<'a> FnVerifier<'a> {
                     "partial operations (index, /, %, some_val/ok_val/err_val, max/min)",
                 )
             };
-            self.prove_core_cand(&st.env, &st.pc, g, d, node, code, &w, cand, cand);
+            self.prove_core_cand(&st, g, d, node, code, &w, cand, cand);
         }
         Ok(obs.into_iter().map(|(d, _)| d).collect())
     }
@@ -3757,7 +3862,7 @@ impl<'a> FnVerifier<'a> {
         let f = self.f.ok_or_else(|| "no function".to_string())?;
         if let Some(cost) = &f.cost {
             let ob = st.env.get("spent").ast().le(self.cost0.as_ref().ok_or_else(|| "no entry cost".to_string())?);
-            self.prove_core(&st.env, &st.pc, &[], &ob, node, "cost_bound",
+            self.prove_core(&st, &[], &ob, node, "cost_bound",
                 &format!("spent <= cost `{}` (C at entry)", expr_text(cost)), None);
         }
         let mut env = st.env.clone();
@@ -3783,7 +3888,7 @@ impl<'a> FnVerifier<'a> {
             let ds = self.check_dom_e(st, &prev, en, node, &what, Some(&env))?;
             prev.extend(ds);
             let ob = self.ev_ast(en, st, &[], false, &env)?;
-            self.prove_core(&st.env, &st.pc, &[], &ob, node, "ensures", &format!("postcondition (line {})", pruv_core::diagnostic::plain_line(en.line())), None);
+            self.prove_core(&st, &[], &ob, node, "ensures", &format!("postcondition (line {})", pruv_core::diagnostic::plain_line(en.line())), None);
             prev.push(ob);
         }
         Ok(())
@@ -3838,8 +3943,7 @@ impl<'a> FnVerifier<'a> {
                 let v = self.ev0_ast(&s.value, &mut st, &[], true)?;
                 let ob = self.z.and(&[i.ge_i(0), i.lt(&arr.n)]);
                 self.prove_core(
-                    &st.env,
-                    &st.pc,
+                    &st,
                     &[],
                     &ob,
                     spos,
@@ -3850,8 +3954,7 @@ impl<'a> FnVerifier<'a> {
                 if arr.elem == Elem::U8 {
                     let ob = self.z.and(&[v.ge_i(0), v.le_i(255)]);
                     self.prove_core(
-                        &st.env,
-                        &st.pc,
+                        &st,
                         &[],
                         &ob,
                         spos,
@@ -3865,7 +3968,7 @@ impl<'a> FnVerifier<'a> {
                     let lo: i64 = lo.parse().map_err(|_| format!("refinement bound '{}'", lo))?;
                     let hi: i64 = hi.parse().map_err(|_| format!("refinement bound '{}'", hi))?;
                     let ob = self.z.and(&[v.ge_i(lo), v.le_i(hi)]);
-                    self.prove_core(&st.env, &st.pc, &[], &ob, spos, "refinement_assign", what.as_str(), Some(what.as_str()));
+                    self.prove_core(&st, &[], &ob, spos, "refinement_assign", what.as_str(), Some(what.as_str()));
                 }
                 st.env.set(&s.name, Val::Arr(arr.like(arr.a.store(&i, &v), arr.n.clone(), &s.name)));
                 Ok(vec![st])
@@ -3984,6 +4087,10 @@ impl<'a> FnVerifier<'a> {
                 self.ensures_ok(&mut st, v, spos)?;
                 Ok(Vec::new())
             }
+            Stmt::Assert(s) if s.reveal.is_some() => {
+                // P13o: proof-only, no query
+                Ok(vec![self.reveal(&s.reveal.as_ref().unwrap().0, &st)?])
+            }
             Stmt::Assert(s) => {
                 let mut st = st;
                 let ob = self.check_assert(s, &mut st)?;
@@ -4044,7 +4151,7 @@ impl<'a> FnVerifier<'a> {
             let ds = self.check_dom_cand(st, &prev, inv, pos(inv), &w_dom, None, cid)?;
             prev.extend(ds);
             let ob = self.ev0_ast(inv, st, &[], false)?;
-            self.prove_core_cand(&st.env, &st.pc, &[], &ob, pos(inv), "invariant_entry", &w_ob, cid, cid);
+            self.prove_core_cand(&st, &[], &ob, pos(inv), "invariant_entry", &w_ob, cid, cid);
             prev.push(ob);
         }
         let mut names: BTreeSet<String> = BTreeSet::new();
@@ -4076,7 +4183,7 @@ impl<'a> FnVerifier<'a> {
         self.check_dom_e(&mut b, &[], &w.decreases, dpos, "variant_field lookups in decreases are defined", None)?;
         let d0 = self.ev0_ast(&w.decreases, &mut b, &[], false)?;
         let ob = d0.ge_i(0);
-        self.prove_core(&b.env, &b.pc, &[], &ob, dpos, "decreases_nonneg", "decreases >= 0", None);
+        self.prove_core(&b, &[], &ob, dpos, "decreases_nonneg", "decreases >= 0", None);
         self.spend(&mut b, &[], self.z.int(1));
         for mut end in self.exec_block(&w.body, b)? {
             let mut prev: Vec<Ast> = Vec::new();
@@ -4085,7 +4192,7 @@ impl<'a> FnVerifier<'a> {
                 let ds = self.check_dom_cand(&mut end, &prev, inv, pos(inv), &w_dom, None, cid)?;
                 prev.extend(ds);
                 let ob = self.ev0_ast(inv, &mut end, &[], false)?;
-                self.prove_core_cand(&end.env, &end.pc, &[], &ob, pos(inv), "invariant_preserved", &w_ob, cid, cid);
+                self.prove_core_cand(&end, &[], &ob, pos(inv), "invariant_preserved", &w_ob, cid, cid);
                 prev.push(ob);
             }
             if has_vf(&w.decreases, PKind::All) {
@@ -4110,7 +4217,7 @@ impl<'a> FnVerifier<'a> {
             }
             let dv = self.ev0_ast(&w.decreases, &mut end, &[], false)?;
             let ob = dv.lt(&d0);
-            self.prove_core(&end.env, &end.pc, &[], &ob, dpos, "decreases_decrease", "decreases strictly decreases", None);
+            self.prove_core(&end, &[], &ob, dpos, "decreases_decrease", "decreases strictly decreases", None);
         }
         // After the loop
         let mut a = self.havoc_set(st, &names, &keep)?;
@@ -4174,14 +4281,18 @@ impl<'a> FnVerifier<'a> {
         let f = self.f.ok_or_else(|| "no function".to_string())?;
         let mut env = Env::default();
         let mut pc: Vec<Ast> = Vec::new();
+        // P13o: the facts every value of the parameter types meets in a contract too
+        let mut shape: Vec<Ast> = Vec::new();
         for p in &f.params {
             let pty = Ty::from_name(&p.ty);
             let v = self.try_fresh(&p.name, &pty)?;
             match &v {
                 Val::Arr(a) => {
                     pc.push(self.z.and(&[a.n.ge_i(0), a.n.le_i(MAX_LEN)]));
+                    shape.push(pc[pc.len() - 1].clone());
                     if a.elem == Elem::U8 {
                         pc.push(self.u8_dom(a));
+                        shape.push(pc[pc.len() - 1].clone());
                     }
                 }
                 Val::File(f) => pc.push(self.wf_file(f)),
@@ -4190,7 +4301,11 @@ impl<'a> FnVerifier<'a> {
                 Val::Loop(p) => pc.push(self.wf_loop(p)),
                 Val::Lis(l) => pc.push(self.wf_lis(l)),
                 Val::PArgs(a) => pc.push(self.wf_pargs(a)),
-                Val::Map(m) => pc.push(self.z.and(&[m.n.ge_i(0), m.n.le_i(MAX_LEN)])), // G6 A1
+                Val::Map(m) => {
+                    // G6 A1
+                    pc.push(self.z.and(&[m.n.ge_i(0), m.n.le_i(MAX_LEN)]));
+                    shape.push(pc[pc.len() - 1].clone());
+                }
                 other => {
                     if let Some(w) = self.try_wf(&pty, other.try_ast()?)? {
                         pc.push(w);
@@ -4208,7 +4323,19 @@ impl<'a> FnVerifier<'a> {
             .filter(|p| p.mode_pos.is_some())
             .map(|p| (p.name.clone(), env.get(&p.name).clone()))
             .collect());
-        let mut st = State::new(env, pc);
+        let mut st = State::new(env.clone(), pc);
+        if let (true, Some(xa)) = (f.opaque, &f.x_auto) {
+            // P13o (P13o.1 totality): the body is defined for every argument, proven once here, so a reveal equation
+            // never stands on an undefined body. Contract arithmetic is unbounded, so a contract may apply F to a
+            // scalar outside i64 (or to an array element, which has no i64 fact): the proof assumes only the array and
+            // map shape facts, never the i64 range of a scalar parameter (audit P13o.9)
+            let mut st0 = State::new(env, shape);
+            let envo = st0.env.clone();
+            let what = format!("the body of opaque {} is defined for every argument", f.name);
+            for (d, _) in self.dom_obligations(xa, &mut st0, &[], &envo)? {
+                self.prove_core(&st0, &[], &d, mk_pos(f.line, f.col), "opaque_total", &what, None);
+            }
+        }
         for r in &f.requires {
             // D(r) is proved from the preceding requires only, then D(r) && r is assumed in declaration order
             let what = format!(
@@ -4237,7 +4364,7 @@ impl<'a> FnVerifier<'a> {
             let ob = m0.ge_i(0);
             self.m0 = Some(m0);
             let what = format!("decreases measure `{}` >= 0 at function entry", expr_text(d));
-            self.prove_core(&st.env, &st.pc, &[], &ob, pos(d), "recursive_nonneg", &what, None);
+            self.prove_core(&st, &[], &ob, pos(d), "recursive_nonneg", &what, None);
         }
         if f.foreign.is_some() {
             // G6 A1 (11.4): a trusted declaration has no body and no ensures proof

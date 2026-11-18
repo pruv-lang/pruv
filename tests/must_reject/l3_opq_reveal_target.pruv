@@ -1,0 +1,9 @@
+// P13o: reveal names an opaque function
+pub fn good(a: [i64], i: i64) -> bool
+{ return 0 <= i && i < len(a); }
+
+pub fn f(a: [i64], i: i64) -> i64
+{
+  reveal good;
+  return 0;
+}

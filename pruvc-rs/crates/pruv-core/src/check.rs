@@ -294,6 +294,8 @@ struct FuncInfo {
     tparams: Vec<TParam>,
     /// G6: a `trusted rust fn` (cannot be called in a contract)
     foreign: bool,
+    /// P13o: an `opaque fn` (a contract call stays an uninterpreted application until `reveal`)
+    opaque: bool,
 }
 
 struct Checker {
@@ -502,6 +504,7 @@ impl Checker {
                     effects: f.effects.clone(),
                     tparams: f.tparams.clone(),
                     foreign: f.foreign.is_some(),
+                    opaque: f.opaque,
                 }),
             );
         }
@@ -581,7 +584,7 @@ impl Checker {
             self.check_entries(prog)?; // G4 A0: host-entry signatures
         }
         self.tt = TypeTable::new(&prog.types);
-        self.x_prepare(prog); // P06: which functions a contract may expand, and their raw bodies
+        self.x_prepare(prog)?; // P06: which functions a contract may expand, and their raw bodies
         for f in prog.functions.iter_mut() {
             self.fn_(f)?;
         }
@@ -589,7 +592,7 @@ impl Checker {
         self.check_par_eligibility(&prog.functions)?; // G7 A0: effects, foreign calls, then nested groups
         self.check_costs(prog)?;
         self.record_g9(prog);
-        self.x_auto(prog); // P07: code calls of an expandable function know its body (result == expansion)
+        self.x_auto(prog)?; // P07: code calls of an expandable function know its body (result == expansion)
         Ok(())
     }
 
@@ -597,7 +600,7 @@ impl Checker {
     /// contract keeps its template as `x_auto`, so the verifier can assume result == expansion at each code call. A
     /// function whose template cannot be built gets None (never an error); so does an i64 function whose template uses a
     /// bit builtin (its value would put a bit-vector term into every later query of the caller).
-    fn x_auto(&mut self, prog: &mut Program) {
+    fn x_auto(&mut self, prog: &mut Program) -> Res<()> {
         for f in prog.functions.iter_mut() {
             f.x_auto = None;
             if !matches!(self.x_raw.get(&f.name), Some(Ok(_))) {
@@ -616,10 +619,17 @@ impl Checker {
                         f.x_auto = Some(xa);
                     }
                 }
-                Err(_) => self.x_busy.clear(),
+                Err(err) => {
+                    self.x_busy.clear();
+                    if f.opaque {
+                        // P13o: an opaque body is its definition, so it must build
+                        return Err(err);
+                    }
+                }
             }
             self.ckind = "code";
         }
+        Ok(())
     }
 
     fn check_costs(&mut self, prog: &mut Program) -> Res<()> {
@@ -2066,6 +2076,24 @@ impl Checker {
                     }
                 }
             }
+            Stmt::Assert(s) if s.reveal.is_some() => {
+                // P13o: `reveal F;` names an opaque function
+                let (rn, rl, rc) = s.reveal.clone().unwrap();
+                let why = match self.funcs.get(&rn) {
+                    Some(rf) if rf.opaque => None,
+                    Some(_) => Some("the function is not opaque"),
+                    None => Some("unknown function"),
+                };
+                if let Some(why) = why {
+                    return Err(terr(
+                        rl,
+                        rc,
+                        "reveal_target",
+                        format!("reveal {}: {}", rn, why),
+                        "reveal names an `opaque fn`; a function without `opaque` is always transparent",
+                    ));
+                }
+            }
             Stmt::Assert(s) => {
                 self.ckind = "assert";
                 self.expect(&mut s.cond, &boolt(), scope, true, None)?;
@@ -3386,14 +3414,30 @@ impl Checker {
     // ---- P06: expanding user functions in contracts (docs/L3_RESTRUCTURE_SPEC.md appendix P06) ----
     /// The reason each function cannot be expanded in a contract, or a raw copy of its body when its signature and
     /// statements allow it (checked before any body is typed, so every template starts from source).
-    fn x_prepare(&mut self, prog: &Program) {
+    fn x_prepare(&mut self, prog: &Program) -> Res<()> {
         for f in &prog.functions {
             let r = x_sig_reason(f).or_else(|| x_scan_block(f, &f.body, &self.funcs));
+            let not_bool = GType::from_key(&f.ret) != boolt();
+            if f.opaque && (r.is_some() || not_bool) {
+                // P13o: an opaque function is an expandable predicate
+                let why = match &r {
+                    None => "must return bool".to_string(),
+                    Some(r) => format!("must expand in a contract: {}", r),
+                };
+                return Err(terr(
+                    f.line,
+                    f.col,
+                    "opaque_signature",
+                    format!("opaque function {} {}", f.name, why),
+                    format!("keep `opaque` for a bool predicate that a contract may expand ({})", X_FIX),
+                ));
+            }
             self.x_raw.insert(f.name.clone(), match r {
                 Some(r) => Err(r),
                 None => Ok(f.body.clone()),
             });
         }
+        Ok(())
     }
 
     fn x_template(&mut self, line: i64, col: i64, n: &str, f: &FuncInfo) -> Res<Expr> {
@@ -3702,6 +3746,7 @@ impl Checker {
                 effects: cf.effects.clone(),
                 tparams: cf.tparams.clone(),
                 foreign: false,
+                opaque: false,
             })
         } else {
             match self.funcs.get(&n) {
@@ -3768,6 +3813,12 @@ impl Checker {
                     "calling functions in contracts is not supported in v0.1",
                     "inline the property",
                 ));
+            }
+            if f.opaque {
+                // P13o: an opaque call stays a call; the verifier applies its uninterpreted symbol (code generation
+                // inlines it: opaque_inline)
+                e.opaque_c = true;
+                return Ok(substitute(&f.ret, &m));
             }
             // P06: expand the call (docs/L3_RESTRUCTURE_SPEC.md appendix P06)
             let tpl = self.x_template(line, col, &n, &f)?;
@@ -3913,7 +3964,7 @@ fn x_subst(e: &Expr, env: &HashMap<String, Expr>) -> Expr {
         }),
         Expr::Call(c) => Expr::Call(Call {
             line: c.line, col: c.col, name: c.name.clone(), args: c.args.iter().map(|a| x_subst(a, env)).collect(),
-            ty: c.ty.clone(), targs: c.targs.clone(), inst: c.inst.clone(), old: c.old.clone(),
+            ty: c.ty.clone(), targs: c.targs.clone(), inst: c.inst.clone(), old: c.old.clone(), opaque_c: c.opaque_c,
         }),
         _ => e.clone(),
     }
@@ -3962,9 +4013,123 @@ fn x_instantiate(tpl: &Expr, pnames: &[String], args: &[Expr], line: i64, col: i
         }),
         Expr::Call(c) => Expr::Call(Call {
             line, col, name: c.name.clone(), args: c.args.iter().map(|a| x_instantiate(a, pnames, args, line, col)).collect(),
-            ty: c.ty.clone(), targs: c.targs.clone(), inst: c.inst.clone(), old: c.old.clone(),
+            ty: c.ty.clone(), targs: c.targs.clone(), inst: c.inst.clone(), old: c.old.clone(), opaque_c: c.opaque_c,
         }),
         _ => tpl.clone(),
+    }
+}
+
+/// P13o (docs/L3_RESTRUCTURE_SPEC.md appendix P13o.1, check.py `opaque_inline`): after verification, every contract
+/// application of an opaque function becomes its expansion, so the code generators see what P06 would have produced
+/// (a run-time contract check evaluates the body). Idempotent: an inlined program has no opaque contract call left.
+pub fn opaque_inline(prog: &mut Program) {
+    if !prog.functions.iter().any(|f| f.opaque) {
+        return;
+    }
+    let defs: HashMap<String, (Vec<String>, Option<Expr>)> = prog
+        .functions
+        .iter()
+        .filter(|f| f.opaque)
+        .map(|f| (f.name.clone(), (f.params.iter().map(|p| p.name.clone()).collect(), f.x_auto.clone())))
+        .collect();
+    fn ex(e: &mut Expr, d: &HashMap<String, (Vec<String>, Option<Expr>)>) {
+        if let Expr::Call(c) = e {
+            if c.opaque_c {
+                if let Some((pn, Some(tpl))) = d.get(&c.name) {
+                    for a in c.args.iter_mut() {
+                        ex(a, d);
+                    }
+                    let env: HashMap<String, Expr> = pn.iter().cloned().zip(c.args.iter().cloned()).collect();
+                    let mut n = x_subst(tpl, &env);
+                    ex(&mut n, d);
+                    *e = n;
+                    return;
+                }
+            }
+        }
+        match e {
+            Expr::InoutArg(x) => {
+                ex(&mut x.expr, d);
+                for a in x.post_refine.iter_mut() {
+                    ex(&mut a.cond, d);
+                }
+            }
+            Expr::Unary(x) => ex(&mut x.operand, d),
+            Expr::Binary(x) => {
+                ex(&mut x.left, d);
+                ex(&mut x.right, d);
+            }
+            Expr::Call(x) => x.args.iter_mut().for_each(|a| ex(a, d)),
+            Expr::Index(x) => {
+                ex(&mut x.array, d);
+                ex(&mut x.index, d);
+            }
+            Expr::Ctor(x) => {
+                if let Some(a) = x.arg.as_mut() {
+                    ex(a, d);
+                }
+            }
+            Expr::Quant(x) => {
+                ex(&mut x.lo, d);
+                ex(&mut x.hi, d);
+                ex(&mut x.body, d);
+            }
+            Expr::StructLit(x) => x.fields.iter_mut().for_each(|f| ex(&mut f.value, d)),
+            Expr::EnumCtor(x) => x.args.iter_mut().for_each(|a| ex(a, d)),
+            Expr::FieldAccess(x) => ex(&mut x.base, d),
+            Expr::IsVariant(x) => ex(&mut x.value, d),
+            Expr::VariantField(x) => ex(&mut x.value, d),
+            Expr::Spent(_) | Expr::Move(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StrLit(_) | Expr::Var(_) => {}
+        }
+    }
+    fn st(ss: &mut [Stmt], d: &HashMap<String, (Vec<String>, Option<Expr>)>) {
+        for s in ss.iter_mut() {
+            match s {
+                Stmt::Par(x) => x.calls.iter_mut().for_each(|a| ex(a, d)),
+                Stmt::Let(x) => ex(&mut x.value, d),
+                Stmt::Assign(x) => ex(&mut x.value, d),
+                Stmt::IndexAssign(x) => {
+                    ex(&mut x.index, d);
+                    ex(&mut x.value, d);
+                }
+                Stmt::If(x) => {
+                    ex(&mut x.cond, d);
+                    st(&mut x.then, d);
+                    st(&mut x.els, d);
+                }
+                Stmt::While(x) => {
+                    ex(&mut x.cond, d);
+                    x.invariants.iter_mut().for_each(|a| ex(a, d));
+                    ex(&mut x.decreases, d);
+                    st(&mut x.body, d);
+                }
+                Stmt::Return(x) => {
+                    if let Some(v) = x.value.as_mut() {
+                        ex(v, d);
+                    }
+                }
+                Stmt::Assert(x) => ex(&mut x.cond, d),
+                Stmt::ExprStmt(x) => ex(&mut x.expr, d),
+                Stmt::FieldAssign(x) => ex(&mut x.value, d),
+                Stmt::Match(x) => {
+                    ex(&mut x.scrutinee, d);
+                    for a in x.arms.iter_mut() {
+                        st(&mut a.body, d);
+                    }
+                }
+            }
+        }
+    }
+    for f in prog.functions.iter_mut() {
+        f.requires.iter_mut().for_each(|e| ex(e, &defs));
+        f.ensures.iter_mut().for_each(|e| ex(e, &defs));
+        if let Some(e) = f.decreases.as_mut() {
+            ex(e, &defs);
+        }
+        if let Some(e) = f.cost.as_mut() {
+            ex(e, &defs);
+        }
+        st(&mut f.body, &defs);
     }
 }
 

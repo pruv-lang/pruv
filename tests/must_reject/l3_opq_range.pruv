@@ -1,0 +1,11 @@
+// P13o audit: contract arithmetic is unbounded, so an opaque body must be defined on every integer, not only on
+// i64: here x = 2^63 with len(a) == 0 reads a[0], so the definition fails opaque_total.
+pub opaque fn p(a: [i64], x: i64) -> bool {
+    return x <= 9223372036854775807 || a[0] == 0;
+}
+
+pub fn test(a: [i64]) -> i64
+    requires p(a, 9223372036854775807 + 1)
+{
+    return 0;
+}

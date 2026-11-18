@@ -5229,6 +5229,8 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
     from typeinfo import g2_unimplemented_error, first_g3_use
     if foreign_checks not in ("requires", "all", "off"):
         raise ValueError("foreign_checks must be requires, all or off")
+    from check import opaque_inline
+    opaque_inline(prog)     # P13o: contract applications of opaque functions become their bodies
     if plan is None and (first_g3_use(prog) is not None or prog.explicit):   # G4 A3: explicit mode names via mono
         from mono import specialize
         plan = specialize(prog)

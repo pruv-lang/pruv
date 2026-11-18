@@ -867,6 +867,7 @@ impl Bld {
             targs: None,
             inst: None,
             old: None,
+            opaque_c: false,
         })
     }
     fn index(&self, a: &str, i: Expr) -> Expr {
@@ -946,6 +947,7 @@ impl Bld {
                 targs: x.targs.clone(),
                 inst: x.inst.clone(),
                 old: None,
+                opaque_c: false,
             }),
             // G5 A0: never reaches the proof layer (the driver's A0 guard stops the program earlier)
             Expr::InoutArg(x) => Expr::InoutArg(ast::InoutArg {

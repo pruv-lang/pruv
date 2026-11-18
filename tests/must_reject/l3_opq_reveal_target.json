@@ -1,0 +1,1 @@
+{"stage": "type", "code": "reveal_target", "line": 7, "col": 10, "message": "reveal crate::good: the function is not opaque"}

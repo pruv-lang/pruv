@@ -4799,7 +4799,7 @@ mod tests {
             ret_refine: None,
             tparams: vec![],
             foreign: None,
-            cost: None, decreases: None, small_bound: None, x_auto: None,
+            cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false,
         };
         Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None, pkg_name: None }
     }
@@ -4848,7 +4848,7 @@ mod tests {
             ret_refine: None,
             tparams: vec![],
             foreign: None,
-            cost: None, decreases: None, small_bound: None, x_auto: None,
+            cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false,
         };
         Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None, pkg_name: None }
     }
@@ -4889,7 +4889,7 @@ mod tests {
     }
 
     fn call(name: &str, args: Vec<Expr>, ty: &str) -> Expr {
-        Expr::Call(Call { line: 1, col: 1, name: name.into(), args, ty: Some(ty.into()), targs: None, inst: None, old: None })
+        Expr::Call(Call { line: 1, col: 1, name: name.into(), args, ty: Some(ty.into()), targs: None, inst: None, old: None, opaque_c: false })
     }
 
     fn small_func(name: &str, ret: &str, ensures: Vec<Expr>, body: Vec<Stmt>) -> Function {
@@ -4908,7 +4908,7 @@ mod tests {
             foreign: None,
             cost: None,
             decreases: None,
-            small_bound: None, x_auto: None,
+            small_bound: None, x_auto: None, opaque: false,
         }
     }
 
