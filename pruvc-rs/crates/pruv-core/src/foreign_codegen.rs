@@ -21,14 +21,79 @@ type R<T> = Result<T, String>;
 /// op families that do I/O: their helpers are not inlined
 const IO_OP_PREFIXES: [&str; 4] = ["file_", "proc_", "ev_", "net_"];
 
-/// calls that reach pruv_ud (the only reader of PRUV_CTX): pruv_ud itself, the budget charge, the contract tick,
-/// the checked arithmetic / index helpers of codegen, and the contract accessors of the proc/net/loop runtimes
-const UD_CALLS: [&str; 19] = [
+/// calls that reach pruv_ud (the only reader of PRUV_CTX), DERIVED from the runtime prelude text of codegen.rs
+/// (Python foreign_codegen._derive_ud_calls, same set and order):
+///   (1) every `fn pruv_X(` of the contract prelude constants whose function text calls pruv_ud( (a function runs from
+///       its `fn ` line to the next line starting with `fn `);
+///   (2) pruv_c<n> for every n in BIT_RUST (the templated helpers all call pruv_ud);
+///   (3) fixed roots: pruv_ud, the budget charge, the contract tick, and the contract accessors of the proc/net/loop
+///       runtimes, kept listed because they live in the large PROC/NET/ASYNC preludes.
+/// The hand list formerly missed 7 helpers: pruv_cband, pruv_cbor, pruv_cbxor, pruv_cwrapping_shl, pruv_cushr,
+/// pruv_cwrapping_add, pruv_cwrapping_mul (from (2)).
+const UD_ROOTS: [&str; 8] = [
     "pruv_ud(", "pruv_g6_charge(", "pruv_g9_tick(",
-    "pruv_cidx(", "pruv_cadd(", "pruv_csub(", "pruv_cmul(", "pruv_cneg(", "pruv_cdiv(", "pruv_crem(",
-    "pruv_cidx_u8(", "pruv_cidx_bool(", "pruv_cidx_str(", "pruv_cload_be(",
     "pruv_cproc_buf(", "pruv_cproc_eof(", "pruv_cproc_byte(", "pruv_cnet_byte(", "pruv_cev_slot(",
 ];
+
+fn ud_calls() -> &'static Vec<String> {
+    static CELL: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    CELL.get_or_init(|| {
+        let mut out: Vec<String> = UD_ROOTS.iter().map(|s| s.to_string()).collect();
+        let texts: [&str; 5] = [
+            crate::codegen::CONTRACT_PRELUDE,
+            crate::codegen::CONTRACT_PRELUDE_U8,
+            crate::codegen::CONTRACT_PRELUDE_BOOL,
+            crate::codegen::CONTRACT_PRELUDE_STR,
+            crate::codegen::CONTRACT_LOAD_HELPER,
+        ];
+        for text in texts.iter() {
+            let mut chunks: Vec<Vec<&str>> = Vec::new();
+            for line in text.split('\n') {
+                if line.starts_with("fn ") {
+                    chunks.push(vec![line]);
+                } else if let Some(last) = chunks.last_mut() {
+                    last.push(line);
+                }
+            }
+            for chunk in chunks {
+                // `fn (pruv_\w+)\s*\(`
+                let rest = match chunk[0].strip_prefix("fn ") {
+                    Some(r) => r,
+                    None => continue,
+                };
+                if !rest.starts_with("pruv_") {
+                    continue;
+                }
+                let name_len = rest
+                    .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+                    .unwrap_or(rest.len());
+                let name = &rest[..name_len];
+                if !rest[name_len..].trim_start().starts_with('(') {
+                    continue;
+                }
+                // the signature's own name is not a call: drop the first `fn NAME` + whitespace + `(` match
+                let first = &rest[name_len..];
+                let after_paren = &first.trim_start()[1..];
+                let mut body = String::from(after_paren);
+                for l in &chunk[1..] {
+                    body.push('\n');
+                    body.push_str(l);
+                }
+                let c = format!("{}(", name);
+                if body.contains("pruv_ud(") && !out.contains(&c) {
+                    out.push(c);
+                }
+            }
+        }
+        for (n, _) in crate::codegen::BIT_RUST.iter() {
+            let c = format!("pruv_c{}(", n);
+            if !out.contains(&c) {
+                out.push(c);
+            }
+        }
+        out
+    })
+}
 
 fn budget_line(n: u64) -> String {
     format!("let mut pruv_budget: i64 = {};", fmt_underscore(n))
@@ -174,7 +239,7 @@ impl ForeignGen {
         };
         l.push(format!("fn {}({}){} {{", name, params, arrow));
         // the ctx guard (two thread-local writes) only serves pruv_ud, so emit it only when pruv_ud is reachable (P10H)
-        if self.req && (self.ens || body.iter().any(|x| UD_CALLS.iter().any(|c| x.contains(c)))) {
+        if self.req && (self.ens || body.iter().any(|x| ud_calls().iter().any(|c| x.contains(c.as_str())))) {
             l.push(format!("    let pruv_g = pruv_ctx({});", rstr(&self.op)));
         }
         if self.ens {
@@ -924,6 +989,7 @@ impl ForeignGen {
         let keyconv = if *kt == GType::i64() { "i64::try_from(pruv_kk).ok()" } else { "Some(pruv_kk)" };
         let l: Vec<String> = vec![
             ALLOW_G6.to_string(),
+            "#[inline(always)]".to_string(),
             format!(
                 "fn {}(pruv_after: &{}, pruv_before: &{}, pruv_kk: {}, pruv_vv: {}, pruv_budget: &mut i64) -> bool {{",
                 name,

@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Harness for the L3-10 M3/M4 milestones.
 
-  python3 bench/l3/budget/m34_test/run.py m3|m4|m4raw|perf|keys [--pruvc PATH] [--seed N] [--count N]
+  python3 bench/l3/budget/m34_test/run.py m3|m4|m4raw|perf|keys|admit [--pruvc PATH] [--seed N] [--count N]
   python3 bench/l3/budget/m34_test/run.py m4 --only m4llvm|m4llvmraw|m4c|m4cb|m4nv|m4llvmnv   (or the lane name as the mode;
                                                   mode `lanes` runs every lane; see M4_LANES for what each builds)
 
 `--pruvc` may be pruvc/pruvc.py (the Python compiler; run under this interpreter).
 `m4raw` (P09) builds root_m4 as a manifest package (work/m34/pkg_m4raw, raw_entries "crate") and drives it through
 sol::pruv_raw::PruvStore; `m4` drives the same calls through the local no-poison Plain store. Same driver checks.
+
+`admit` (P11) builds root_admit.pruv / driver_admit.rs: bud_admit::admit on a clean store and on one corruption per
+check (header, roots, state, owner, key span/padding, blob span, links, free list, slot word, counts), then the clean store
+at larger lengths (visit counts must stay linear: entries == top, free steps == free entries, slots == slot count).
 
 `keys` (P03) builds root_keys.pruv / driver_keys.rs and compares every output line with the gen_keys.py oracle.
 
@@ -418,6 +422,37 @@ def cmd_keys(args):
     return 0 if not bad else 1
 
 
+# Expected admit result per case of root_admit.pruv (14, 19, 20 are valid stores: stale tag, slots left by removal,
+# reused entry under a stale slot), the exact (case, len) rows driver_admit.rs prints, and the slot count per length.
+ADMIT_EXPECT = [10, -1, -2, -3, -4, -5, -5, -5, -6, -7, -8, -9, -10, -10, 10, -10, -4, -8, -7, 7, 8]
+ADMIT_ROWS = [(c, 1024) for c in range(21)] + [(0, 4096), (0, 65536)]
+ADMIT_SLOTS = {1024: 32, 4096: 128, 65536: 2048}
+
+
+def cmd_admit(args):
+    exe = build(args.pruvc, "admit")
+    c = run([exe])
+    if c.returncode != 0:
+        raise ToolError("driver_admit exit %d: %s" % (c.returncode, tail(c)))
+    rows = [[int(x) for x in l.split()] for l in c.stdout.split("\n") if l.strip()]
+    bad = []
+    if [(r[0], r[1]) for r in rows] != ADMIT_ROWS:
+        bad.append("rows: got %s, expected %s" % ([(r[0], r[1]) for r in rows], ADMIT_ROWS))
+    for case, n, r, ce, cf, cs in rows:
+        exp = ADMIT_EXPECT[case] if 0 <= case < len(ADMIT_EXPECT) else None
+        if r != exp:
+            bad.append("case %d len %d: result %d, expected %s" % (case, n, r, exp))
+        if case == 0 and (ce, cf, cs) != (11, 1, ADMIT_SLOTS.get(n)):
+            bad.append("case 0 len %d: visited %d entries / %d free steps / %d slots, expected 11 / 1 / %s"
+                       % (n, ce, cf, cs, ADMIT_SLOTS.get(n)))
+        print("admit case %2d len %6d -> %4d  (entries %d, free %d, slots %d)" % (case, n, r, ce, cf, cs))
+    for b in bad:
+        print("MISMATCH " + b)
+    npass = len(rows) - len(set(b.split(":")[0] for b in bad if b.startswith("case")))
+    print("admit: %d/%d pass" % (npass if len(rows) == len(ADMIT_ROWS) else 0, len(ADMIT_ROWS)))
+    return 0 if not bad else 1
+
+
 # ---- perf -----------------------------------------------------------------------------------------------------------
 
 KV =re.compile(r"(\w+)=(\S+)")
@@ -514,7 +549,7 @@ def cmd_perf(args):
 
 def main():
     ap = argparse.ArgumentParser(description="L3-10 M3/M4 test harness")
-    ap.add_argument("mode", choices=["m3", "perf", "keys", "lanes"] + sorted(M4_LANES))
+    ap.add_argument("mode", choices=["m3", "perf", "keys", "admit", "lanes"] + sorted(M4_LANES))
     ap.add_argument("--only", choices=sorted(M4_LANES), default=None,
                     help="m4 mode: run only this lane (same as giving the lane name as the mode); mode `lanes` runs all")
     ap.add_argument("--pruvc", default=PRUVC_DEFAULT)
@@ -531,7 +566,7 @@ def main():
             for tag in ([args.only] if args.only else list(M4_LANES)):
                 rc = max(rc, cmd_m4(args, tag))
             return rc
-        return {"m3": cmd_m3, "perf": cmd_perf, "keys": cmd_keys}[args.mode](args)
+        return {"m3": cmd_m3, "perf": cmd_perf, "keys": cmd_keys, "admit": cmd_admit}[args.mode](args)
     except ToolError as e:
         print("error: %s" % e, file=sys.stderr)
         return 2

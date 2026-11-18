@@ -1,0 +1,133 @@
+// L3 P11: import admission for the resident budget store (bud_store layout, bud_map slot words).
+// Separate module so that roots which never import a buffer (root_m4) do not carry its proof.
+
+// A region of cap words at off lies inside the arena [ab, at) (cap 0 needs no place: nothing is ever written there).
+fn span_ok(off: i64, cap: i64, ab: i64, at: i64) -> bool
+  requires 0 <= ab && ab <= at && at <= 1099511627776
+{
+  if cap == 0 { return true; }
+  if cap < 0 || cap > 4294967296 { return false; }
+  return ab <= off && off <= at && cap <= at - off;
+}
+
+// A link field: -1 (none) or an entry below top.
+fn link_ok(v: i64, top: i64) -> bool
+{ return v >= -1 && v < top; }
+
+// The packed key of a live entry: kn units in words(kn) words at off, lanes past kn in the last word zero.
+fn key_pad_ok(st: [i64], off: i64, kn: i64) -> bool
+  requires 0 <= kn && kn <= 1073741824
+{
+  if off < 0 || off > 1099511627776 { return false; }
+  let r: i64 = kn - (kn / 4) * 4;
+  if r == 0 { return true; }
+  let w: i64 = crate::ent_u16::rd(st, off + crate::bud_keys::words(kn) - 1);
+  if r == 1 { return band(w, 281474976710655) == 0; }
+  if r == 2 { return band(w, 4294967295) == 0; }
+  return band(w, 65535) == 0;
+}
+
+// One entry of admit(): 1 live, 0 free, or admit's negative class code.
+fn entry_ok(st: [i64], e: i64, top: i64, ab: i64, at: i64) -> i64
+  requires 0 <= ab && ab <= at && at <= 1099511627776
+  ensures result <= 1
+{
+  let f0: i64 = crate::bud_store::ef(st, e, 0);
+  if f0 != 0 && f0 != 1 { return -3; }
+  if e < 3 && (f0 != 1 || crate::bud_store::ef(st, e, 1) != -1) { return -2; }
+  let kc: i64 = crate::bud_store::ef(st, e, 18);
+  let ko: i64 = crate::bud_store::ef(st, e, 4);
+  if !span_ok(ko, kc, ab, at) { return -5; }
+  let bc: i64 = crate::bud_store::ef(st, e, 19);
+  if !span_ok(crate::bud_store::ef(st, e, 12), bc, ab, at) { return -6; }
+  if f0 == 0 {
+    if !link_ok(crate::bud_store::ef(st, e, 8), top) { return -8; }
+    return 0;
+  }
+  if e >= 3 {
+    let ow: i64 = crate::bud_store::ef(st, e, 1);
+    if ow < 0 || ow >= top { return -4; }
+    if crate::bud_store::ef(st, ow, 0) != 1 { return -4; }
+  }
+  let kn: i64 = crate::bud_store::ef(st, e, 5);
+  if kn < 0 || kn > 1073741824 { return -5; }
+  if crate::bud_keys::words(kn) > kc { return -5; }
+  if kn > 0 && !key_pad_ok(st, ko, kn) { return -5; }
+  let bl: i64 = crate::bud_store::ef(st, e, 13);
+  if bl < 0 || bl > bc { return -6; }
+  if !link_ok(crate::bud_store::ef(st, e, 7), top) || !link_ok(crate::bud_store::ef(st, e, 8), top) { return -7; }
+  if !link_ok(crate::bud_store::ef(st, e, 9), top) || !link_ok(crate::bud_store::ef(st, e, 10), top) { return -7; }
+  if crate::bud_store::ef(st, e, 11) < 0 { return -7; }
+  return 1;
+}
+
+// Import admission: I0 (bud_store::valid) and the I1 per-entry facts the accessors rely on, in one linear pass over
+// the entries, the free list and the slot table. Returns the number of live entries (roots included), or the first
+// failed class: -1 header, -2 roots/top, -3 entry state, -4 owner, -5 key span/padding, -6 blob span, -7 links,
+// -8 free list, -9 slot word, -10 header counts (words 12, 13, 14). cnt[0..3] gets the entries, free-list steps and
+// slots visited (admission work is linear in top + slots). Functional properties (I2: index completeness, child
+// lists, key uniqueness) are model tests, not admission.
+pub fn admit(st: [i64], inout cnt: [i64]) -> i64
+{
+  crate::ent_u16::wr(inout cnt, 0, 0);
+  crate::ent_u16::wr(inout cnt, 1, 0);
+  crate::ent_u16::wr(inout cnt, 2, 0);
+  if !crate::bud_store::valid(st) { return -1; }
+  let s: i64 = crate::bud_store::c32(crate::bud_store::hd(st, 4));
+  let sb: i64 = crate::bud_store::c32(crate::bud_store::hd(st, 3));
+  let top: i64 = crate::bud_store::c32(crate::bud_store::hd(st, 7));
+  let ab: i64 = crate::bud_store::c40(crate::bud_store::hd(st, 9));
+  let mut at: i64 = crate::bud_store::c40(crate::bud_store::hd(st, 10));
+  if at < ab { at = ab; }
+  if top < 3 { return -2; }
+  let mut live: i64 = 0;
+  let mut e: i64 = 0;
+  while e < top
+    invariant 0 <= e && e <= top && top <= 4294967296 && 0 <= live && live <= e
+    invariant 0 <= ab && ab <= at && at <= 1099511627776
+    decreases top - e
+  {
+    let r: i64 = entry_ok(st, e, top, ab, at);
+    if r < 0 { return r; }
+    if r == 1 { live = live + 1; }
+    e = e + 1;
+  }
+  crate::ent_u16::wr(inout cnt, 0, top);
+  let mut free: i64 = 0;
+  let mut f: i64 = crate::bud_store::hd(st, 8);
+  while f >= 0
+    invariant 0 <= free && free <= top && top <= 4294967296
+    decreases top - free
+  {
+    if free >= top || f < 3 || f >= top { return -8; }
+    if crate::bud_store::ef(st, f, 0) != 0 { return -8; }
+    free = free + 1;
+    f = crate::bud_store::ef(st, f, 8);
+  }
+  crate::ent_u16::wr(inout cnt, 1, free);
+  if f != -1 || free + live != top { return -8; }
+  let mut used: i64 = 0;
+  let mut i: i64 = 0;
+  while i < s
+    invariant 0 <= i && i <= s && s <= 4294967296 && 0 <= used && used <= i && 0 <= sb && sb <= 4294967296
+    decreases s - i
+  {
+    let w: i64 = crate::ent_u16::rd(st, sb + i);
+    if w != 0 {
+      used = used + 1;
+      if w != -1 {
+        if w < 0 { return -9; }
+        let se: i64 = band(w, 4294967295) - 1;
+        // Only the entry index is an I1 fact. A slot may name a free or reused entry or carry a stale tag: removal
+        // frees descendants without clearing their slots (bud_map::drop_child), and lookups re-check hash, state,
+        // owner and key on the entry (bud_map::entry_matches_w), so those slots only cost a probe.
+        if se < 0 || se >= top { return -9; }
+      }
+    }
+    i = i + 1;
+  }
+  crate::ent_u16::wr(inout cnt, 2, s);
+  if crate::bud_store::hd(st, 12) != live || crate::bud_store::hd(st, 13) != used { return -10; }
+  if crate::bud_store::hd(st, 14) < 0 || crate::bud_store::hd(st, 14) > at - ab { return -10; }
+  return live;
+}
