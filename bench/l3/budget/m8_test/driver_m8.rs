@@ -22,12 +22,14 @@
 // `X <status>` and stops the case. A put the root rejects (malformed input, status 2) prints `P X <status>`, leaves the
 // state unchanged and the case continues (perf-mode puts stay fatal). perf also prints `chk <item> <size> <value>`
 // after each item's timed loop: the t_observe words folded as s = s*31 + w (wrapping u64). Grow: status -N -> buffer of exactly N (Pruv sizes it, N >= 2*len), t_grow, retry.
+// The state buffer is the product host's StateBuf (bench/l3/budget/state_buf.rs, included by run_m8.py in front of
+// this file): large buffers are mapped pages, returned at once on drop (L3 P13c).
 use std::hint::black_box;
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
 
 struct World {
-    st: Vec<i64>,
+    st: StateBuf,
     out: Vec<i64>,
     cv: Vec<i64>,
     fx: Vec<i64>,
@@ -35,16 +37,16 @@ struct World {
 
 impl World {
     fn new() -> World {
-        let mut st = vec![0i64; 256];
+        let mut st = StateBuf::zeroed_or_abort(256);
         let r = sol::t_init(&mut st);
         if r > 0 {
-            st = vec![0i64; r as usize];
+            st = StateBuf::zeroed_or_abort(r as usize);
             if sol::t_init(&mut st) != 0 {
                 eprintln!("t_init failed");
                 std::process::exit(2);
             }
         }
-        World { st, out: vec![0; 4096], cv: vec![0; 16], fx: vec![0; 256] }
+        World { st, out: vec![0; 256], cv: vec![0; 16], fx: vec![0; 256] }
     }
 
     // Test-only (rekey line): st[t] = value where t is a packed key word of a live map entry, keeping the stored hash
@@ -88,7 +90,7 @@ impl World {
 
     fn grow(&mut self, n: usize) {
         let want = n; // N from Pruv (bud_store::need, N >= 2*len): the host makes no sizing choice (L3 P13b)
-        let mut fresh = vec![0i64; want];
+        let mut fresh = StateBuf::zeroed_or_abort(want);
         if sol::t_grow(&self.st, &mut fresh) != 0 {
             eprintln!("t_grow failed");
             std::process::exit(2);
@@ -112,14 +114,23 @@ impl World {
         r
     }
 
+    // t_observe into `out`; on status 3 (out too short) the buffer doubles and observe runs again, like the growth of
+    // the Vec a hand observe builds (no host size guess from the state length).
+    fn observe_words(&mut self) -> i64 {
+        loop {
+            let r = sol::t_observe(&self.st, &mut self.out);
+            if r != 3 {
+                return r;
+            }
+            let l = self.out.len();
+            self.out.resize(2 * l, 0);
+        }
+    }
+
     // Folds the full observed final state (the t_observe words, same words as q mode prints after `O`) into a u64.
     // Used by perf after a timed loop, outside the timing.
     fn checksum(&mut self) -> u64 {
-        let need = std::cmp::max(4096, 2 * self.st.len());
-        if self.out.len() < need {
-            self.out.resize(need, 0);
-        }
-        let r = sol::t_observe(&self.st, &mut self.out);
+        let r = self.observe_words();
         if r != 0 {
             eprintln!("t_observe status {}", r);
             std::process::exit(2);
@@ -146,11 +157,7 @@ impl World {
     }
 
     fn observe(&mut self) -> String {
-        let need = std::cmp::max(4096, 2 * self.st.len());
-        if self.out.len() < need {
-            self.out.resize(need, 0);
-        }
-        let r = sol::t_observe(&self.st, &mut self.out);
+        let r = self.observe_words();
         if r != 0 {
             return format!("O X {}", r);
         }
@@ -270,21 +277,6 @@ fn run_q() {
     }
 }
 
-// Packed-u16 key codec (bud_keys.pruv): word i = (u[4i] << 48) | (u[4i+1] << 32) | (u[4i+2] << 16) | u[4i+3] as a
-// two's-complement i64; lanes past n are zero. A pure ingress encoding, no validation.
-fn pack_u16(units: &[u16]) -> Vec<i64> {
-    units
-        .chunks(4)
-        .map(|c| {
-            let mut x: u64 = 0;
-            for l in 0..4 {
-                x = (x << 16) | (c.get(l).copied().unwrap_or(0) as u64);
-            }
-            x as i64
-        })
-        .collect()
-}
-
 // Test-only mirror of bud_keys::hash and bud_map::hash_words (rekey line only): seed = mix(FNV basis,
 // owner + ogen * 2^32); mix each of the ceil(n/4) packed words (0 past the state end); fin(h ^ n).
 fn key_mix(h: i64, v: i64) -> i64 {
@@ -307,30 +299,96 @@ fn key_hash(seed: i64, st: &[i64], ks: i64, n: i64) -> i64 {
     key_fin(h ^ nc)
 }
 
-// Wire key: `n, packed words(n)` (1 + ceil(n/4) words).
-fn key(s: &str) -> Vec<i64> {
-    let u: Vec<u16> = s.encode_utf16().collect();
-    let mut v = vec![u.len() as i64];
-    v.extend(pack_u16(&u));
-    v
+// Appends `s` as a wire key `n, packed words(n)` (1 + ceil(n/4) words; bud_keys.pruv codec: word i = (u[4i] << 48) |
+// (u[4i+1] << 32) | (u[4i+2] << 16) | u[4i+3] as a two's-complement i64, lanes past n zero), with no intermediate
+// buffer.
+fn push_key(v: &mut Vec<i64>, s: &str) {
+    let at = v.len();
+    v.push(0);
+    let (mut n, mut x, mut l) = (0i64, 0u64, 0u32);
+    for u in s.encode_utf16() {
+        x = (x << 16) | u as u64;
+        n += 1;
+        l += 1;
+        if l == 4 {
+            v.push(x as i64);
+            x = 0;
+            l = 0;
+        }
+    }
+    if l > 0 {
+        v.push((x << (16 * (4 - l))) as i64);
+    }
+    v[at] = n;
 }
 
-fn bid_of(i: usize) -> String {
-    format!("99b568f7-0000-4000-8000-{:012}", i)
+// Perf text keys, formatted into one reused String.
+struct Text(String);
+
+impl Text {
+    fn session(&mut self, i: usize) -> &str {
+        use std::fmt::Write as _;
+        self.0.clear();
+        let _ = write!(self.0, "session-{:05}", i);
+        &self.0
+    }
+    fn bid(&mut self, i: usize) -> &str {
+        use std::fmt::Write as _;
+        self.0.clear();
+        let _ = write!(self.0, "99b568f7-0000-4000-8000-{:012}", i);
+        &self.0
+    }
+    fn activity(&mut self, j: usize) -> &str {
+        use std::fmt::Write as _;
+        self.0.clear();
+        let _ = write!(self.0, "activity-{:05}", j);
+        &self.0
+    }
+}
+
+// Perf op frames, all in one word buffer: op i is w[at[i]..at[i + 1]].
+struct Ops {
+    w: Vec<i64>,
+    at: Vec<usize>,
+}
+
+impl Ops {
+    fn new(n: usize, words: usize) -> Ops {
+        let mut at = Vec::with_capacity(n + 1);
+        at.push(0);
+        Ops { w: Vec::with_capacity(n * words), at }
+    }
+    fn end(&mut self) {
+        self.at.push(self.w.len());
+    }
+    #[inline]
+    fn get(&self, i: usize) -> &[i64] {
+        &self.w[self.at[i]..self.at[i + 1]]
+    }
+    fn len(&self) -> usize {
+        self.at.len() - 1
+    }
+}
+
+fn push_ref(v: &mut Vec<i64>, t: &mut Text, i: usize) {
+    push_key(v, t.session(i));
+    push_key(v, t.bid(i));
 }
 
 // N sessions `session-<i>` with an open budget (limits 10^12, so charges never reach a limit).
-fn world_n(n: usize) -> World {
+fn world_n(n: usize, t: &mut Text) -> World {
     let mut w = World::new();
+    let mut put: Vec<i64> = Vec::with_capacity(64);
     for i in 0..n {
-        let mut put = key(&format!("session-{:05}", i));
-        let bid = key(&bid_of(i));
-        let mut rec = vec![0i64, 0, -1];
-        rec.extend_from_slice(&[1_000_000_000_000i64; 4]);
-        rec.extend_from_slice(&[0i64; 7]);
-        rec.extend_from_slice(&bid); // [bn] + packed budgetId words, so rec.len() == 14 + 1 + ceil(bn/4)
-        put.push(rec.len() as i64);
-        put.extend(rec);
+        put.clear();
+        push_key(&mut put, t.session(i));
+        let rl = put.len();
+        put.push(0);
+        put.extend_from_slice(&[0i64, 0, -1]);
+        put.extend_from_slice(&[1_000_000_000_000i64; 4]);
+        put.extend_from_slice(&[0i64; 7]);
+        push_key(&mut put, t.bid(i)); // [bn] + packed budgetId words, so the record is 14 + 1 + ceil(bn/4) words
+        put[rl] = (put.len() - rl - 1) as i64;
         let r = w.put(&put);
         if r != 0 {
             eprintln!("t_put status {}", r);
@@ -340,94 +398,96 @@ fn world_n(n: usize) -> World {
     w
 }
 
-fn refk(i: usize) -> Vec<i64> {
-    let mut v = key(&format!("session-{:05}", i));
-    v.extend(key(&bid_of(i)));
-    v
-}
-
 // perf <N> <reps>, prints `item size ns_per_call`:
 //   charge   : charge(ref_i, {commands: 1, retries: 1}) round-robin over N sessions (successful charge)
 //   failure  : noteFailure(ref_i) round-robin over N sessions
 //   tooldup  : noteTool(ref_0, t1, a_j) on a turn that already holds N activities (dedup hit, no CURRENT)
 //   toolgrow : noteTool(ref_0, t2, a_j) for N new activities, then forgetTurn(t2); ns per noteTool (forget included)
-// An optional third argument names one item: only that item's timed loop runs (the setup of every item still runs),
-// so `/usr/bin/time -l` instruction counts at two rep counts give the instructions per call of that item alone.
+// An optional third argument names one item: only that item's timed loop runs (the setup of every item timed before it
+// still runs; charge and failure stop before the tool setup, as every hand lane does), so `/usr/bin/time -l` instruction counts at two rep counts give the instructions per call of that item alone.
 fn run_perf(args: &[String]) {
     let n: usize = args[0].parse().unwrap();
     let reps: usize = args[1].parse().unwrap();
     let only = args.get(2).map(|s| s.as_str());
     let on = |item: &str| only.map_or(true, |o| o == item);
-    let mut w = world_n(n);
-    let ops: Vec<Vec<i64>> = (0..n)
-        .map(|i| {
-            let mut op = vec![1];
-            op.extend(refk(i));
-            op.extend_from_slice(&[0, 0, 2, 1, 0, 0, 0, 0, 2, 1]);
-            op
-        })
-        .collect();
+    let mut t = Text(String::with_capacity(64));
+    let mut w = world_n(n, &mut t);
+    let mut ops = Ops::new(n, 32);
+    for i in 0..n {
+        ops.w.push(1);
+        push_ref(&mut ops.w, &mut t, i);
+        ops.w.extend_from_slice(&[0, 0, 2, 1, 0, 0, 0, 0, 2, 1]);
+        ops.end();
+    }
     for i in 0..1000 {
-        w.call(&ops[i % n]);
+        w.call(ops.get(i % n));
     }
     if on("charge") {
         let t = Instant::now();
         for i in 0..reps {
-            black_box(w.call(black_box(&ops[i % n])));
+            black_box(w.call(black_box(ops.get(i % n))));
         }
         let ns = t.elapsed().as_nanos() as f64 / reps as f64;
         println!("charge {} {:.1}", n, ns);
         println!("chk charge {} {}", n, w.checksum()); // outside the timing
     }
-    let fo: Vec<Vec<i64>> = (0..n)
-        .map(|i| {
-            let mut op = vec![2];
-            op.extend(refk(i));
-            op
-        })
-        .collect();
+    let mut fo = Ops::new(n, 20);
+    for i in 0..n {
+        fo.w.push(2);
+        push_ref(&mut fo.w, &mut t, i);
+        fo.end();
+    }
     if on("failure") {
         let t = Instant::now();
         for i in 0..reps {
-            black_box(w.call(black_box(&fo[i % n])));
+            black_box(w.call(black_box(fo.get(i % n))));
         }
         let ns = t.elapsed().as_nanos() as f64 / reps as f64;
         println!("failure {} {:.1}", n, ns);
         println!("chk failure {} {}", n, w.checksum());
     }
-    let tool = |turn: &str, j: usize| -> Vec<i64> {
-        let mut op = vec![3];
-        op.extend(refk(0));
-        op.extend(key(turn));
-        op.extend(key(&format!("activity-{:05}", j)));
-        op
+    // charge and failure are timed before any tool setup runs, so a run that names one of them stops here; the tool
+    // setup below would only add its own state to that item's peak RSS (in every lane alike).
+    if matches!(only, Some("charge") | Some("failure")) {
+        return;
+    }
+    let tools = |turn: &str, t: &mut Text| -> Ops {
+        let mut o = Ops::new(n, 32);
+        for j in 0..n {
+            o.w.push(3);
+            push_ref(&mut o.w, t, 0);
+            push_key(&mut o.w, turn);
+            push_key(&mut o.w, t.activity(j));
+            o.end();
+        }
+        o
     };
-    let dup: Vec<Vec<i64>> = (0..n).map(|j| tool("turn-1", j)).collect();
-    for d in &dup {
-        w.call(d);
+    let dup = tools("turn-1", &mut t);
+    for j in 0..dup.len() {
+        w.call(dup.get(j));
     }
     if on("tooldup") {
         let t = Instant::now();
         for i in 0..reps {
-            black_box(w.call(black_box(&dup[i % n])));
+            black_box(w.call(black_box(dup.get(i % n))));
         }
         let ns = t.elapsed().as_nanos() as f64 / reps as f64;
         println!("tooldup {} {:.1}", n, ns);
         println!("chk tooldup {} {}", n, w.checksum());
     }
-    let grow: Vec<Vec<i64>> = (0..n).map(|j| tool("turn-2", j)).collect();
+    let grow = tools("turn-2", &mut t);
     let mut forget = vec![4];
-    forget.extend(key("turn-2"));
-    for d in &grow {
-        w.call(d);
+    push_key(&mut forget, "turn-2");
+    for j in 0..grow.len() {
+        w.call(grow.get(j));
     }
     w.call(&forget);
     if on("toolgrow") {
         let rounds = std::cmp::max(1, reps / n);
         let t = Instant::now();
         for _ in 0..rounds {
-            for d in &grow {
-                black_box(w.call(black_box(d)));
+            for j in 0..grow.len() {
+                black_box(w.call(black_box(grow.get(j))));
             }
             black_box(w.call(black_box(&forget)));
         }

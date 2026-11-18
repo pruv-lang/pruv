@@ -13,7 +13,7 @@
 //     with fin = (h ^ h>>33) * -49064778989728563, then ^ >>33. The owner / generation words differ from Pruv's entry
 //     numbers (sessions owner 0, turns owner 2, generation 0; activities owner = turn index, generation = turn
 //     generation): hash values are not observable.
-//   * semantics identical to hand_m8_u16.rs (safe-integer refusal, atomic charge, dedup key consumed before CURRENT,
+//   * semantics identical to hand_m8_u16.rs (safe-integer refusal, atomic charge and noteTool refusal,
 //     malformed ingress = status 2). Table growth is internal: no status -N / Grow retry exists here, which is not
 //     observable in q output.
 //
@@ -611,19 +611,29 @@ impl World {
         Ok(())
     }
 
-    // the activity key is consumed first (even with a missing or stale budget), then CURRENT, then tools += 1
+    // a seen activity returns at once (before CURRENT); a new one is recorded even with a missing or stale budget,
+    // unless the current budget's used.tools is at the safe-integer bound: that ResourceBound refuses before anything
+    // is written (KD-M8-1), as hand_m8_u16.rs / root_m8.pruv
     fn note_tool(&mut self, session: &[u16], budget: &[u16], turn: &[u16], act: &[u16]) -> Result<(), ResourceBound> {
         let th = hash_key(2, 0, turn);
-        let ti = match self.t.find_turn(th, turn) {
-            Some((_, i)) => i,
+        let found = self.t.find_turn(th, turn).map(|(_, i)| i);
+        if let Some(ti) = found {
+            let gen = self.t.recs[ti].gen;
+            if self.t.find_act(hash_key(ti as i64, gen as i64, act), idx32(ti), gen, act) {
+                return Ok(());
+            }
+        }
+        let cur = self.s.current(session, budget);
+        if let Some(i) = cur {
+            safe_add(self.s.recs[i].tools, 1).ok_or(ResourceBound)?;
+        }
+        let ti = match found {
+            Some(i) => i,
             None => self.t.add_turn(th, turn),
         };
-        if !self.t.add_act(ti, act) {
-            return Ok(());
-        }
-        if let Some(i) = self.s.current(session, budget) {
-            let b = &mut self.s.recs[i];
-            b.tools = safe_add(b.tools, 1).ok_or(ResourceBound)?;
+        self.t.add_act(ti, act);
+        if let Some(i) = cur {
+            self.s.recs[i].tools += 1;
         }
         Ok(())
     }
@@ -1005,6 +1015,11 @@ fn run_perf(args: &[String]) {
         println!("failure {} {:.1}", n, ns);
         println!("chk failure {} {}", n, w.checksum());
     }
+    // charge and failure are timed before any tool setup runs, so a run that names one of them stops here; the tool
+    // setup below would only add its own state to that item's peak RSS (in every lane alike).
+    if matches!(only, Some("charge") | Some("failure")) {
+        return;
+    }
     let turn1 = u16s("turn-1");
     let turn2 = u16s("turn-2");
     let acts: Vec<Box<[u16]>> = (0..n).map(|j| u16s(&format!("activity-{:05}", j))).collect();
@@ -1086,6 +1101,11 @@ fn run_perfw(args: &[String]) {
         let ns = t.elapsed().as_nanos() as f64 / reps as f64;
         println!("failure {} {:.1}", n, ns);
         println!("chk failure {} {}", n, w.checksum());
+    }
+    // charge and failure are timed before any tool setup runs, so a run that names one of them stops here; the tool
+    // setup below would only add its own state to that item's peak RSS (in every lane alike).
+    if matches!(only, Some("charge") | Some("failure")) {
+        return;
     }
     let tool = |turn: &str, j: usize| -> Vec<i64> {
         let mut op = vec![3];

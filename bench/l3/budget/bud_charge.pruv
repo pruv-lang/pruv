@@ -47,23 +47,23 @@ fn sum(u: i64, a: i64) -> i64
   return r;
 }
 
-pub fn charge(inout cv: [i64], what: [i64], ws: i64) -> i64
-  requires 0 <= ws && ws <= 1099511627776
-  ensures len(cv) == len(old(cv))
+// Record view: w[b + i] is word i of a CURRENT budget record (0 state, 1 unlimited, 2 halt.reason, 3..6 limits,
+// 7..10 used, 11 tools, 12 failures, 13 retries), i.e. cv[1 + i]. The *_at functions work on that view in place (the
+// caller's store, or cv with b = 1); the cv functions below are the frame interface and call them.
+pub fn charge_at(inout w: [i64], b: i64, what: [i64], ws: i64) -> i64
+  requires 0 <= b && b + 14 <= len(w) && 0 <= ws && ws + 10 <= len(what)
+  ensures len(w) == len(old(w))
 {
-  if len(cv) < 15 || ws > len(what) - 10 { return 2; }
-  // len(cv) >= 15 and ws + 10 <= len(what) from here: cv and what are read with plain indexing
-  if cv[0] != 1 { return 1; }
-  let s: i64 = cv[1];
+  let s: i64 = w[b];
   if s == 2 { return 1; }
   if s == 1 {
-    let r: i64 = cv[3];
+    let r: i64 = w[b + 2];
     if r < 0 { return 17; }
     if r > 4 { return 2; }
     return 16 + r;
   }
   if s != 0 { return 2; }
-  let unl: bool = cv[2] == 1;
+  let unl: bool = w[b + 1] == 1;
   // each amount is read once; keys in BUDGET_COUNT_KEYS order, then retries
   let a0: i64 = amount(what, ws, 0);
   let a1: i64 = amount(what, ws, 1);
@@ -72,46 +72,92 @@ pub fn charge(inout cv: [i64], what: [i64], ws: i64) -> i64
   let a4: i64 = amount(what, ws, 4);
   // limit checks: the first key over its limit refuses (33 + k); a ResourceBound on the way answers 5
   if !unl {
-    if a0 > 0 { let t0: i64 = sum(cv[8], a0); if t0 == bad() { return 5; } if t0 > cv[4] { return 33; } }
-    if a1 > 0 { let t1: i64 = sum(cv[9], a1); if t1 == bad() { return 5; } if t1 > cv[5] { return 34; } }
-    if a2 > 0 { let t2: i64 = sum(cv[10], a2); if t2 == bad() { return 5; } if t2 > cv[6] { return 35; } }
-    if a3 > 0 { let t3: i64 = sum(cv[11], a3); if t3 == bad() { return 5; } if t3 > cv[7] { return 36; } }
+    if a0 > 0 { let t0: i64 = sum(w[b + 7], a0); if t0 == bad() { return 5; } if t0 > w[b + 3] { return 33; } }
+    if a1 > 0 { let t1: i64 = sum(w[b + 8], a1); if t1 == bad() { return 5; } if t1 > w[b + 4] { return 34; } }
+    if a2 > 0 { let t2: i64 = sum(w[b + 9], a2); if t2 == bad() { return 5; } if t2 > w[b + 5] { return 35; } }
+    if a3 > 0 { let t3: i64 = sum(w[b + 10], a3); if t3 == bad() { return 5; } if t3 > w[b + 6] { return 36; } }
   }
   // all sums first, then the writes (atomic: a ResourceBound leaves the record untouched)
-  let v0: i64 = sum(cv[8], a0);
-  let v1: i64 = sum(cv[9], a1);
-  let v2: i64 = sum(cv[10], a2);
-  let v3: i64 = sum(cv[11], a3);
-  let v4: i64 = sum(cv[14], a4);
+  let v0: i64 = sum(w[b + 7], a0);
+  let v1: i64 = sum(w[b + 8], a1);
+  let v2: i64 = sum(w[b + 9], a2);
+  let v3: i64 = sum(w[b + 10], a3);
+  let v4: i64 = sum(w[b + 13], a4);
   if v0 == bad() || v1 == bad() || v2 == bad() || v3 == bad() || v4 == bad() { return 5; }
-  cv[8] = v0;
-  cv[9] = v1;
-  cv[10] = v2;
-  cv[11] = v3;
-  cv[14] = v4;
+  w[b + 7] = v0;
+  w[b + 8] = v1;
+  w[b + 9] = v2;
+  w[b + 10] = v3;
+  w[b + 13] = v4;
   return 0;
 }
 
-// counter field f += 1 when the budget is current (any state: §15 #7); 0 done (or nothing to count), 5 ResourceBound,
-// 2 invalid frame.
-fn bump(inout cv: [i64], f: i64) -> i64
-  requires 12 <= f && f <= 14
+pub fn charge(inout cv: [i64], what: [i64], ws: i64) -> i64
+  requires 0 <= ws && ws <= 1099511627776
+  ensures len(cv) == len(old(cv))
+{
+  if len(cv) < 15 || ws > len(what) - 10 { return 2; }
+  if cv[0] != 1 { return 1; }
+  return charge_at(inout cv, 1, what, ws);
+}
+
+// counter word f (11 tools, 12 failures) += 1 in place: 0 done, 5 ResourceBound (nothing written). One range test
+// gives the same answers as sum(u, 1): u in [-MAX, MAX - 1].
+fn bump_at(inout w: [i64], b: i64, f: i64) -> i64
+  requires 0 <= b && b + 14 <= len(w) && 11 <= f && f <= 12
+  ensures len(w) == len(old(w))
+{
+  let u: i64 = w[b + f];
+  if u < -9007199254740991 || u >= 9007199254740991 { return 5; }
+  w[b + f] = u + 1;
+  return 0;
+}
+
+// noteFailure(ref) after CURRENT on the record view: used.failures += 1; 0 or 5.
+pub fn note_failure_at(inout w: [i64], b: i64) -> i64
+  requires 0 <= b && b + 14 <= len(w)
+  ensures len(w) == len(old(w))
+{ return bump_at(inout w, b, 12); }
+
+// noteFailure on the frame: used.failures += 1 when the budget is current (any state: §15 #7); 0 done (or nothing to
+// count), 5 ResourceBound, 2 invalid frame.
+pub fn note_failure(inout cv: [i64]) -> i64
   ensures len(cv) == len(old(cv))
 {
   if len(cv) < 15 { return 2; }
   if cv[0] != 1 { return 0; }
-  let v: i64 = sum(cv[f], 1);
-  if v == bad() { return 5; }
-  cv[f] = v;
+  return bump_at(inout cv, 1, 12);
+}
+
+// noteTool's bound, checked on CURRENT before bud_tools::note_tool inserts a new activity: 5 ResourceBound when
+// used.tools + 1 would leave the safe-integer range (the refusal comes before any write, so the dedup set is
+// unchanged: KD-M8-1), else 0.
+pub fn tool_room_at(w: [i64], b: i64) -> i64
+  requires 0 <= b && b + 14 <= len(w)
+{
+  let u: i64 = w[b + 11];
+  if u < -9007199254740991 || u >= 9007199254740991 { return 5; }
   return 0;
 }
 
-// noteFailure(ref) after CURRENT: used.failures += 1.
-pub fn note_failure(inout cv: [i64]) -> i64
-  ensures len(cv) == len(old(cv))
-{ return bump(inout cv, 13); }
+// tool_room on the frame: 2 invalid frame, 0 when the budget is not current.
+pub fn tool_room(cv: [i64]) -> i64
+{
+  if len(cv) < 15 { return 2; }
+  if cv[0] != 1 { return 0; }
+  return tool_room_at(cv, 1);
+}
 
 // The counting half of noteTool, run after bud_tools::note_tool inserted a new activity and CURRENT: used.tools += 1.
+pub fn add_tool_at(inout w: [i64], b: i64) -> i64
+  requires 0 <= b && b + 14 <= len(w)
+  ensures len(w) == len(old(w))
+{ return bump_at(inout w, b, 11); }
+
 pub fn add_tool(inout cv: [i64]) -> i64
   ensures len(cv) == len(old(cv))
-{ return bump(inout cv, 12); }
+{
+  if len(cv) < 15 { return 2; }
+  if cv[0] != 1 { return 0; }
+  return bump_at(inout cv, 1, 11);
+}

@@ -156,6 +156,10 @@ fn main() {
         }
         println!("failure {} {:.1}", n, t.elapsed().as_nanos() as f64 / reps as f64);
     }
+    // charge and failure stop before the tool setup, as in driver_m8.rs and the other hand lanes
+    if matches!(only, Some("charge") | Some("failure")) {
+        return;
+    }
     let acts: Vec<String> = (0..n).map(|j| format!("activity-{:05}", j)).collect();
     for a in &acts {
         w.note_tool(&refs[0], "turn-1", a);
