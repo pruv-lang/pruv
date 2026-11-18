@@ -186,6 +186,19 @@ fn unpack_key(n: i64, w: &[i64]) -> Key {
     v.into_boxed_slice()
 }
 
+#[inline(always)]
+fn pack_u16_into<'a>(u: &[u16], out: &'a mut [i64]) -> &'a [i64] {
+    let n = u.len().div_ceil(4);
+    for (i, c) in u.chunks(4).enumerate() {
+        let mut x: u64 = 0;
+        for l in 0..4 {
+            x = (x << 16) | u64::from(c.get(l).copied().unwrap_or(0));
+        }
+        out[i] = x as i64;
+    }
+    &out[..n]
+}
+
 fn pack_u16(u: &[u16]) -> Vec<i64> {
     u.chunks(4)
         .map(|c| {
@@ -647,7 +660,17 @@ impl World {
         if !self.clocks.is_empty() && self.clocks.get(&*b.id).copied().unwrap_or(0) > 0 {
             return Ok(Res::Bool(false));
         }
-        match bud_facts::is_quiet(&[], 0, 0, 0) {
+        // The host takes the packed session key (bud_keys layout). Pack it on the stack; keys past 64 words (256 code
+        // units) take the cold heap path.
+        let mut kbuf = [0i64; 64];
+        let heap;
+        let k: &[i64] = if sid.len() <= 4 * kbuf.len() {
+            pack_u16_into(sid, &mut kbuf)
+        } else {
+            heap = pack_u16(sid);
+            &heap
+        };
+        match bud_facts::is_quiet(k, 0, sid.len() as i64, self.fx.len() as i64) {
             0 => return Ok(Res::Bool(false)),
             1 => {}
             _ => return Err(2),
@@ -821,7 +844,12 @@ impl Host {
     // Silent variant of `call` (perf wire lane): the same op build (cached Vec, no per-call allocation), decode_call,
     // dispatch and effect-driven UUID bookkeeping, but no log lines. Returns the status. The result
     // is only black_boxed, unless `words` is given: then the result words are stored there (status 0; else empty).
-    fn run_quiet(&mut self, body: &[i64], mut words: Option<&mut Vec<i64>>) -> i64 {
+    fn run_quiet(&mut self, body: &[i64], words: Option<&mut Vec<i64>>) -> i64 {
+        self.run_wire::<false>(body, words).0
+    }
+
+    fn run_wire<const CLOSE: bool>(&mut self, body: &[i64], mut words: Option<&mut Vec<i64>>) -> (i64, i64) {
+        let mut tag = 0;
         let k = (body.as_ptr() as usize, body.len(), self.next_uuid);
         let slot = match self.ops.iter().position(|(key, _)| *key == k) {
             Some(i) => i,
@@ -852,6 +880,7 @@ impl Host {
                 Ok(r) => {
                     match words.as_deref_mut() {
                         Some(v) => v.extend(res_words(&r)),
+                        None if CLOSE => tag = close_tag(r),
                         None => {
                             black_box(&r);
                         }
@@ -862,7 +891,7 @@ impl Host {
             },
         };
         if status != 0 {
-            return status;
+            return (status, tag);
         }
         for e in &self.w.fx {
             match e {
@@ -870,7 +899,7 @@ impl Host {
                 _ => {}
             }
         }
-        status
+        (status, tag)
     }
 
     fn call_quiet(&mut self, body: &[i64]) -> i64 {
@@ -930,7 +959,7 @@ impl Host {
             },
         };
         for i in before..bud_facts::calls() {
-            self.log.push(format!("E quiet {}", bud_facts::answer(i)));
+            self.log.push(bud_facts::quiet_log(i));
         }
         if status != 0 {
             self.log.push(format!("X {}", status));
@@ -992,6 +1021,7 @@ fn run_q() {
         match p[0] {
             "case" => {
                 h = Host::new();
+                bud_facts::record_queries();
                 bud_facts::set_answers(&[], 0);
                 bud_facts::set_calls(0);
                 writeln!(o, "case {}", p[1]).unwrap();
@@ -1085,6 +1115,30 @@ fn rchk_fold(sum: u64, status: i64, words: &[i64], fx: &[Effect]) -> u64 {
         }
     }
     s
+}
+
+fn close_tag(r: Res<'_>) -> i64 {
+    match r {
+        Res::Bool(true) => 2,
+        Res::Bool(false) => 1,
+        _ => unreachable!("unexpected maybeClose result"),
+    }
+}
+
+fn close_batch<T>(
+    world: &mut T, size: usize, reps: usize,
+    mut reset: impl FnMut(&mut T), mut call: impl FnMut(&mut T, usize),
+) -> f64 {
+    let mut elapsed = std::time::Duration::ZERO;
+    for start in (0..reps).step_by(size) {
+        reset(world);
+        let t = Instant::now();
+        for i in 0..size.min(reps - start) {
+            call(world, i);
+        }
+        elapsed += t.elapsed();
+    }
+    elapsed.as_nanos() as f64 / reps as f64
 }
 
 fn run_perf(args: &[String]) {
@@ -1187,6 +1241,41 @@ fn run_perf(args: &[String]) {
             s = rchk_fold(s, st, &ws, &w.fx);
         }
         println!("rchk attach {} {}", size, s);
+    }
+
+    if typed && on("close") {
+        let records: Vec<_> = (0..size).map(|i| rec(&bid(i), State::Open)).collect();
+        let mut w = setup(State::Open);
+        for sid in &sids {
+            w.fx.clear();
+            assert_eq!(close_tag(w.maybe_close(sid, now).unwrap()), 2);
+        }
+        let reset = |w: &mut World| {
+            for (sid, rec) in sids.iter().zip(&records) {
+                w.put(sid, Slot::Budget(rec.clone()));
+            }
+        };
+        let ns = close_batch(&mut w, size, reps, reset, |w, i| {
+            w.fx.clear();
+            let pair = match w.maybe_close(black_box(&sids[i]), now) {
+                Ok(r) => (0, close_tag(r)),
+                Err(status) => (status, 0),
+            };
+            black_box(pair);
+        });
+        let mut sum = 0;
+        for start in (0..vn).step_by(size) {
+            reset(&mut w);
+            for sid in &sids[..size.min(vn - start)] {
+                w.fx.clear();
+                let tag = close_tag(w.maybe_close(sid, now).unwrap());
+                assert_eq!(tag, 2);
+                assert!(matches!(w.fx.as_slice(), [Effect::Changed]));
+                sum = rchk_fold(sum, 0, &[tag], &w.fx);
+            }
+        }
+        println!("close {} {:.1}", size, ns);
+        println!("rchk close {} {}", size, sum);
     }
 
     if typed && on("closereopen") {
@@ -1325,6 +1414,40 @@ fn run_perf(args: &[String]) {
             }
             s
         };
+        if on("close") {
+            let records: Vec<_> = (0..size).map(|i| rec(&bid(i), State::Open)).collect();
+            let ops: Vec<_> = sids.iter().map(|sid| {
+                let mut v = vec![6, -1, -1];
+                v.extend(unit);
+                v.extend(wkey(sid));
+                v.push(0);
+                v
+            }).collect();
+            let mut h = wsetup(State::Open);
+            for op in &ops {
+                assert_eq!(h.run_wire::<true>(op, None), (0, 2));
+            }
+            let reset = |h: &mut Host| {
+                for (sid, rec) in sids.iter().zip(&records) {
+                    h.w.put(sid, Slot::Budget(rec.clone()));
+                }
+            };
+            let ns = close_batch(&mut h, size, reps, reset, |h, i| {
+                black_box(h.run_wire::<true>(black_box(&ops[i]), None));
+            });
+            let mut sum = 0;
+            for start in (0..vn).step_by(size) {
+                reset(&mut h);
+                for op in &ops[..size.min(vn - start)] {
+                    let (status, tag) = h.run_wire::<true>(op, None);
+                    assert_eq!((status, tag), (0, 2));
+                    assert!(matches!(h.w.fx.as_slice(), [Effect::Changed]));
+                    sum = rchk_fold(sum, status, &[tag], &h.w.fx);
+                }
+            }
+            println!("w close {} {:.1}", size, ns);
+            println!("rchk_w close {} {}", size, sum);
+        }
         let blast = bid(last);
         let items: [(&str, State, Vec<Vec<i64>>); 5] = [
             ("ishalted", State::Open, vec![wbody(2, -1, -1, &blast)]),

@@ -41,6 +41,7 @@ SRC_WORK = "/Users/spica4345/Projects/pruv/bench/l3/budget/work/m7"  # read-only
 sys.path.insert(0, BUD)
 from compare import jv_decode, jv_encode, UNDEF  # noqa: E402
 from run_meta import run_meta, num, PROFILES, RUSTC_FLAGS, SEED  # noqa: E402
+from q_gate import failures as gate_failures, required_exact  # noqa: E402
 
 
 def input_path(name):
@@ -443,6 +444,15 @@ def classify(case, o, run, cut):
         return "fail", "driver %r" % (run["x"][0],)
     req_o = {r["id"]: r for r in o["requests"]}
     calls = {e["req"]: e for e in case["script"] if e["ev"] == "call"}
+    expected = []
+    for e in case["script"]:
+        if e["ev"] != "call":
+            continue
+        if cut and e["req"] == cut[0]:
+            break
+        expected.append(e["req"])
+    if run["order"] != expected:
+        return "fail", "requests ran %r != expected %r" % (run["order"], expected)
     for r in run["order"]:
         mine = run["reqs"][r]
         e = calls[r]
@@ -463,12 +473,12 @@ def classify(case, o, run, cut):
             if f[0] == "carry":
                 got.append(("carryHeld", sid, old, v["budgetId"]))
             elif f[0] == "quiet":
-                got.append(("isQuiet", int(f[1])))
+                got.append(("isQuiet", int(f[1]), tuple(map(int, f[2:-1])), f[-1]))
             elif f[0] == "clear":
                 got.append(("timer.clear",))
             else:
                 got.append((f[0],))
-        wfx = oracle_fx(o, r)
+        wfx = [f + (tuple(key(sid)), "@0") if f[0] == "isQuiet" else f for f in oracle_fx(o, r)]
         if got != wfx:
             return "fail", "%s effects %r != %r" % (r, got, wfx)
     if cut:
@@ -498,6 +508,7 @@ def classify(case, o, run, cut):
 def cmd_q(args):
     # --hand16: the typed UTF-16 hand Rust (hand_m7_u16.rs q mode) instead of the Pruv driver; same protocol, same
     # classification (the hand is judged against the oracle exactly like the Pruv root).
+    required = required_exact(HERE, args.cases)
     exe = build_hand16() if args.hand16 else build(args)
     cases = [json.loads(l) for l in open(args.cases)]
     oracle = {}
@@ -515,19 +526,24 @@ def cmd_q(args):
     runs = parse_driver(r.stdout)
     count = {"exact": 0, "known-difference": 0, "not-implemented": 0, "fail": 0}
     why, ops, fails = {}, {}, []
+    exact = set()
     for c in cases:
         run = runs[c["id"]]
         for rq in run["order"]:
-            op = [e["op"] for e in c["script"] if e["ev"] == "call" and e["req"] == rq][0]
+            op = [e["op"] for e in c["script"] if e["ev"] == "call" and e["req"] == rq]
+            op = op[0] if op else "<unexpected>"
             ops[op] = ops.get(op, 0) + 1
         cls, note = classify(c, oracle[c["id"]], run, cuts[c["id"]])
         count[cls] += 1
+        if cls == "exact":
+            exact.add(c["id"])
         if cls in ("known-difference", "not-implemented"):
             why[note] = why.get(note, 0) + 1
         if cls == "fail":
             fails.append((c["id"], note))
     print(json.dumps({"cases": len(cases), "count": count, "reasons": why, "compared_requests": ops},
                      ensure_ascii=False))
+    fails.extend(gate_failures(count, exact, required))
     for i, n in fails[:12]:
         print("FAIL", i, n[:700])
     return 1 if fails else 0
@@ -563,7 +579,7 @@ def cmd_same(args):
     return 0 if x == y else 1
 
 
-PERF_ITEMS = ["ishalted", "current", "attach", "closereopen", "reopenmiss", "replace"]  # items the Pruv driver and hand16 both run
+PERF_ITEMS = ["ishalted", "current", "attach", "close", "closereopen", "reopenmiss", "replace"]  # items the Pruv driver and hand16 both run
 PERF_CALLS = {"closereopen": 2}  # calls per rep (ns and instructions are reported per call)
 
 
@@ -770,7 +786,7 @@ def instr_retired(cmd, soft=False):
     sys.exit("no instruction count from /usr/bin/time -l")
 
 
-B_ITEMS = ["current", "ishalted", "attach", "closereopen", "reopenmiss", "replace"]
+B_ITEMS = ["current", "ishalted", "attach", "close", "closereopen", "reopenmiss", "replace"]
 B_VARS = ["A", "B", "Bnv", "C", "prep", "observe"]
 B_PAIR = {"closereopen": 2}  # calls per rep; the closereopen rows are reported per pair (maybeClose + reopen)
 
