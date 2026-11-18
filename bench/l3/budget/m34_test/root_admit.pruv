@@ -7,7 +7,7 @@ mod bud_admit;
 // L3 P11 test root: import admission (bud_admit::admit, I0 + I1) on a built store and on one corruption per case
 // (driver_admit.rs, run.py admit). Case 0 is the clean store; every other case breaks one header word, offset, link,
 // key or count and expects admit's class code; 14, 19 and 20 are stores admit must accept (stale tag, slots left
-// by removal, reused entry under a stale slot). Functional (I2) properties are not part of these cases.
+// by removal, reused entry under a stale slot); 21 and 22 grow top and the free list (grow). Functional (I2) properties are not part of these cases.
 
 fn fa(st: [i64], e: i64, f: i64) -> i64
   requires 0 <= f && f < 20
@@ -83,6 +83,32 @@ fn val_of(st: [i64], case: i64) -> i64
   return 0;
 }
 
+// Linearity case (L3 P12): 2n new entries under root 0 (key 0; add_w compares no keys, and key uniqueness is I2,
+// not admission), then the entries 10+n..10+2n-1 removed. live 10 + n; top and the free list grow by about n each
+// (the first adds reuse the free list), and run.py checks visits == top == live + free.
+fn grow(inout st: [i64], keys: [i64], n: i64) -> i64
+  requires 0 <= n && n <= 4096
+{
+  let mut j: i64 = 0;
+  while j < 2 * n
+    invariant 0 <= j && j <= 2 * n
+    decreases 2 * n - j
+  {
+    let r: i64 = crate::bud_map::add_w(inout st, 0, keys, 0, 4);
+    if r < 0 { return -105; }
+    j = j + 1;
+  }
+  j = n;
+  while j < 2 * n
+    invariant n <= j && j <= 2 * n
+    decreases 2 * n - j
+  {
+    crate::bud_map::remove(inout st, 10 + j);
+    j = j + 1;
+  }
+  return 0;
+}
+
 pub fn admit_case(inout st: [i64], keys: [i64], case: i64, inout cnt: [i64]) -> i64
 {
   let b: i64 = build(inout st, keys);
@@ -98,6 +124,12 @@ pub fn admit_case(inout st: [i64], keys: [i64], case: i64, inout cnt: [i64]) -> 
       if r1 != 3 || r2 != 10 { return -104; }
       crate::bud_map::remove(inout st, 3);
     }
+  }
+  if case == 21 || case == 22 {
+    let mut n: i64 = 64;
+    if case == 22 { n = 256; }
+    let g: i64 = grow(inout st, keys, n);
+    if g != 0 { return g; }
   }
   let a: i64 = addr_of(st, case);
   let v: i64 = val_of(st, case);

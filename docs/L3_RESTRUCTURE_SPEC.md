@@ -1120,3 +1120,118 @@ flag. `m4` itself is unchanged by P11 (P10H: same cells).
   lengths of free entries are accepted, so no unchecked access may rely on them.
 - **Admission at the boundary.** `admit` is not yet called by an entry; wiring it into the import path of the C / raw
   adapter (once per handed-in buffer, not per call) is what lets the per-call `valid` go once P12 lands.
+
+## Appendix P12 (admission ensures and linearity case; big-mutator preservation measured, deferred to P13)
+
+### P12.1 What landed
+
+- `bud_admit::admit` has `ensures result >= 0 ==> (bud_store::valid(st) && result <= 4294967296)`, which gives I0 on
+  every success code. `st` is read-only in `admit`, so the success paths carry the `valid(st)` check at the top through
+  every loop and no extra loop invariant is needed. The per-entry I1 conjunct (`forall` live e: `entry_ok`) is not
+  stated: `entry_ok` reads fields through `ef` and the bound checks, so stating it means quantifying over a function
+  with a body in an ensures. That waits for the opaque-helper work in P12.2.
+- Two admission linearity cases are added in `m34_test/root_admit.pruv` (`grow`, `driver_admit.rs`, `run.py admit`).
+  Cases 21 and 22 run on a 65536-word store. Each adds 2n entries under root 0 (n = 64, 256) and then removes n, so
+  top and the free list grow together, not only the buffer. `run.py` checks:
+  - the result is live (74, 266);
+  - entries visited == top == live + free (135 = 74 + 61, 519 = 266 + 253);
+  - free steps ≥ n − 4;
+  - slots visited == the slot count (2048).
+
+  The cases build a flat layout because `remove` frees only one level: a chain of nested entries would leave orphans
+  whose owner is free (class -4). `admit: 25/25` passes on both compilers.
+
+bud_map.pruv, bud_store.pruv and the runtime adapters are unchanged by P12. P12.2 explains why.
+
+### P12.2 Big-mutator preservation: measured, not landed
+
+The plan was to prove `valid(old(st)) ==> valid(st)` for the mid writers first (`put_units`, `drop_entry`,
+`drop_child`, `set_blob`), then for the big mutators and the bud_clock / lifecycle / world / tools / halt mutators. To
+keep the per-write cost low, the field writers export ground frames:
+- `hdr_same(a, b, w)`: header words 0..14 are equal except w;
+- `set_ef`, `sf`, `sh`, the new `slot_wr`, `write_at` and `take_words` say which header words they keep;
+- `ea` and the slot helpers return ≥ 16, and `fits_region` takes the clamped offset.
+
+All of this proves, but the time is not flat (Python, root_m8, user CPU s):
+
+| variant | root_m8 | top functions (s) |
+|---|---:|---|
+| HEAD | 13.25 | `set_blob` ≈0, `drop_entry` 0.19, `remove` 0.89 |
+| + `sf` / `set_ef` ground frames | 13.26 | |
+| + frames on the small writers (`write_at`, `take_words`, `sh`, `slot_wr`) | 13.52 | |
+| + `valid` preservation on the 4 mid writers | 22.8 | `set_blob` 4.3, `drop_entry` 3.4, `remove` 1.7 |
+| same, `band(s, s-1)` dropped from `valid` (unsound, experiment only) | 14.6 | |
+| same, power of two as a 30-way linear disjunction | 19.9 | `set_blob` 3.7, `drop_entry` 2.7 |
+
+Two facts come out of these runs:
+- **The cost is not the frames.** Ground header frames are free (13.26). The cost is that every `valid(...)` in an
+  assumed or proved ensures is expanded syntactically (check.py `x_expand`), so each callee's
+  `valid(old) ==> valid(st)` puts a full 15-check copy into the caller's query.
+- **The bit-vector `band(s, s-1)` is most of that copy.** A linear disjunction removes the bit-vector term but still
+  costs about 6.6 s.
+
+The remaining path is a split:
+- `valid = shape(st) && dyn_ok(st)`.
+- `shape` covers words 0..6, 9 and 11 plus `len`, and is the only part that holds the power-of-two test.
+- `dyn_ok` is the linear part over the words the mutators write (7, 8, 10, 12, 13, 14).
+- Mutators export a ground "shape words unchanged" plus `dyn_ok(old) ==> dyn_ok(st)`. `valid` is then re-derived only at
+  `m4_op` by congruence.
+
+The catch is that the store mutators the mid writers call (`entry_alloc`, `entry_free`, `arena_put`, `fill_entry`)
+already state `valid(old) ==> valid(st)` in HEAD. All of them would have to move to the split form first. That is the
+bud_store-wide refactor P13 starts with. An alternative is a verifier feature in both compilers: an opaque predicate
+whose body is revealed only where it is asked for (AGENTS principle 5). The proved P12 variants are kept outside the
+tree: `work/p12_wip_frames.diff` and `work/p12_bud_store_lineardisj.pruv`.
+
+Because the preservation did not land, the per-call `valid` in `m4_op` / `m4_observe` stays. So does the
+`PruvStore` poison flag: with `valid` still a runtime check and the mutators not yet proved to keep it, a C or raw
+caller can still hit the `Err` path. Relying on panic = abort is deferred together with the preservation.
+
+### P12.3 Proof time (user CPU s, one run each, same machine, quiet)
+
+| root | Python HEAD | Python P12 | Rust HEAD | Rust P12 |
+|---|---:|---:|---:|---:|
+| m34_test/root_m4 | 12.57 | 12.57 | 10.58 | 10.58 |
+| m8_test/root_m8 | 13.25 | 13.30 | 11.56 | 11.56 |
+| m9_test/root_m9 | 13.35 | 13.35 | 11.08 | 11.08 |
+| m34_test/root_admit | 12.91 | 13.36 | 10.82 | 10.82 |
+
+- root_m4, root_m8 and root_m9 have the same sources at HEAD and P12, so they were measured once (root_m8 Python HEAD
+  was also measured separately as 13.25).
+- root_admit Python grows by +0.45 s. The new `grow` test function accounts for that: `admit` alone was 12.41 against
+  12.36 at HEAD.
+- The Rust compiler is the HEAD source (`b67b4ff`), built in the main checkout, and P12 does not change it. The P11
+  Rust column (≈24 s) was taken under load.
+
+### P12.4 Performance
+
+No runtime code changed. The new ensures generates no code, and the root_admit cases are test-only, so the P11.4 table
+stands as is. The cells above 1.1x are the same: `m4raw/m4` sessions 1.13 to 1.15, from the poison flag (P12.2).
+
+Gates run:
+- `run.py admit` 25/25 with both compilers;
+- `run.py lanes --count 300`: all lanes 300/300, size and header checks ok.
+
+Gates not run, because their trigger did not apply:
+- `cargo test --release` and `diff_rust.py` (no compiler change);
+- `g8_frontend` and `--compare-rows` (no codegen or row change);
+- the lib user tests (bench/l3/lib unchanged).
+
+The external audit was not run because no new verification encoding landed. The only new contract is the
+one-line `admit` ensures above.
+
+### P12.5 Notes for P13
+
+- **valid split (first).** Introduce `shape` / `dyn_ok` in bud_store and move `entry_alloc`, `entry_free`,
+  `arena_put` and `fill_entry` to "shape words unchanged + `dyn_ok` preserved". Then reapply `work/p12_wip_frames.diff`
+  (the frames and the `fits_region(o)` signature) with the split form on the mid writers. Measure root_m8 against
+  13.25 s after each step. Then do the big mutators (`put_at` via `slot_wr`, `put_key_h`, `remove`, `rehash`,
+  `add_absent_w`, `add_w`, `room`, `make_room`) and the clock / lifecycle / world / tools / halt mutators. Finally
+  drop the per-call `valid` in `m4_op` / `m4_observe`.
+- **Poison flag.** Once the per-call `valid` is gone, rely on panic = abort in the raw / C adapter and remove the
+  `PruvStore` flag. Target: `m4raw/m4` ≤ 1.1x.
+- **Admission I1 ensures.** State the `entry_ok` subset a raw entry needs, as a ground predicate on the entry words.
+  Then wire `admit` into the adapter import path (P11.5).
+- **`remove` depth (observed, not analysed).** Removing the middle of a 2n-deep chain left a store that admission
+  rejects with -4: an owner is not live, so deeper descendants keep a freed owner. Check whether this is intended lazy
+  deletion. If it is not, `remove` needs a work-list free before admission can be relied on after removals.

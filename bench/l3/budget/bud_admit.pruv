@@ -68,6 +68,7 @@ fn entry_ok(st: [i64], e: i64, top: i64, ab: i64, at: i64) -> i64
 // slots visited (admission work is linear in top + slots). Functional properties (I2: index completeness, child
 // lists, key uniqueness) are model tests, not admission.
 pub fn admit(st: [i64], inout cnt: [i64]) -> i64
+  ensures result >= 0 ==> (crate::bud_store::valid(st) && result <= 4294967296)
 {
   crate::ent_u16::wr(inout cnt, 0, 0);
   crate::ent_u16::wr(inout cnt, 1, 0);
