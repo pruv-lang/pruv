@@ -1,0 +1,5 @@
+// P16 must reject: the empty range is true, so ensures !result is false
+pub fn f(a: [i64], i: i64, b: [i64], j: i64) -> bool
+  requires 0 <= i && i <= len(a) && 0 <= j && j <= len(b)
+  ensures !result
+{ return eq_range(a, i, b, j, 0); }

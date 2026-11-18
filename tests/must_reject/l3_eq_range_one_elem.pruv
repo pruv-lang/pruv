@@ -1,0 +1,6 @@
+// P16 must reject: a[0] == b[0] alone does not make eq_range over two elements true
+pub fn f(a: [i64], b: [i64], n: i64) -> bool
+  requires n == 2 && n <= len(a) && n <= len(b)
+  requires a[0] == b[0]
+  ensures result
+{ return eq_range(a, 0, b, 0, n); }

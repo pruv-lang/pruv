@@ -52,8 +52,12 @@ fn g6_diag_err(line: i64, col: i64) -> String {
 /// travels like the G6 one: this prefix, then `line:col:what`; `gen_llvm_concrete_ex` turns it back into the diagnostic.
 const G9_DIAG_TAG: &str = "\u{0}g9diag:";
 
-/// L3-10: eq_range raised in the middle of a function body: this prefix, then `line:col`.
+/// P17a: an eq_range the LLVM backend does not lower (Python FnGen ev_call raises codegen/unsupported_type):
+/// this prefix, then `line:col:what` (the operand or layout that is not lowered).
 const EQR_DIAG_TAG: &str = "\u{0}eqrdiag:";
+
+/// P17a: a dynamic-length eq_range below this many elements uses the inline loop, else memcmp (Python EQR_LOOP_MAX).
+const EQR_LOOP_MAX: i64 = 4;
 
 fn g9_diag_err(line: i64, col: i64, what: &str) -> String {
     format!("{}{}:{}:{}", G9_DIAG_TAG, line, col, what)
@@ -919,6 +923,8 @@ pub struct Mod {
     pub resize_i64: bool,
     pub resize_u8: bool,
     pub resize_narrow: bool,
+    /// P17a: some eq_range lowers to a memcmp call (declare i32 @memcmp)
+    pub memcmp: bool,
     /// P3 batch 2: `!range` node bodies in first-use order (index = metadata number)
     pub range_nodes: Vec<String>,
     /// G4 A3: explicit visibility mode (Pruv calls use the Rust-backend routing)
@@ -954,6 +960,7 @@ impl Mod {
             resize_i64: false,
             resize_u8: false,
             resize_narrow: false,
+            memcmp: false,
             range_nodes: Vec::new(),
             explicit: false,
             fn_disp: HashMap::new(),
@@ -3295,6 +3302,39 @@ impl<'a> FnGen<'a> {
         self.op(format!("getelementptr inbounds i8, ptr {}, i64 {}", a.a, i.a))
     }
 
+    /// P17a: one memcmp of n * sz bytes; returns the i1 result
+    fn eqr_mem(&mut self, pa: &str, pb: &str, cnt: &str, sz: i64) -> R<String> {
+        self.m.memcmp = true;
+        let nb = if sz == 1 { cnt.to_string() } else { self.op(format!("mul nuw nsw i64 {}, {}", cnt, sz))? };
+        let rc = self.op(format!("call i32 @memcmp(ptr {}, ptr {}, i64 {})", pa, pb, nb))?;
+        self.op(format!("icmp eq i32 {}, 0", rc))
+    }
+
+    /// P17a: the eq_range element loop with early exit; 0 <= n is known; returns the i1 result in the end block
+    fn eqr_loop(&mut self, ty: &str, pa: &str, pb: &str, cnt: &str) -> R<String> {
+        let pre = self.cur.clone();
+        let head = self.label("eqr.head");
+        let body = self.label("eqr.body");
+        let end = self.label("eqr.end");
+        let k = self.tmp();
+        let k1 = self.tmp();
+        self.br(&head)?;
+        self.place(&head);
+        self.ins(format!("{} = phi i64 [ 0, %{} ], [ {}, %{} ]", k, pre, k1, body))?;
+        let d = self.op(format!("icmp eq i64 {}, {}", k, cnt))?;
+        self.condbr(&d, &end, &body)?;
+        self.place(&body);
+        let ga = self.op(format!("getelementptr inbounds {}, ptr {}, i64 {}", ty, pa, k))?;
+        let gb = self.op(format!("getelementptr inbounds {}, ptr {}, i64 {}", ty, pb, k))?;
+        let x = self.op(format!("load {}, ptr {}", ty, ga))?;
+        let y = self.op(format!("load {}, ptr {}", ty, gb))?;
+        let ne = self.op(format!("icmp ne {} {}, {}", ty, x, y))?;
+        self.ins(format!("{} = add nuw nsw i64 {}, 1", k1, k))?;
+        self.condbr(&ne, &end, &head)?;
+        self.place(&end);
+        self.op(format!("phi i1 [ true, %{} ], [ false, %{} ]", head, body))
+    }
+
     fn bswap(&mut self, bits: u32, x: &str) -> R<String> {
         self.m.bswap.insert(bits);
         self.op(format!("call i{b} @llvm.bswap.i{b}(i{b} {x})", b = bits, x = x))
@@ -3868,8 +3908,68 @@ impl<'a> FnGen<'a> {
             return Ok(V::new(Kind::I64, r));
         }
         if n == "eq_range" {
-            // L3-10: eq_range has no LLVM lowering: codegen/unsupported_type (Python FnGen ev_call)
-            return Err(format!("{}{}:{}", EQR_DIAG_TAG, e.line, e.col));
+            // P17a: a[i..i+n] == b[j..j+n]; source order a, i, b, j, n
+            let av = self.ev(arg(a, 0)?, false)?;
+            let iv = self.ev(arg(a, 1)?, false)?;
+            let bv = self.ev(arg(a, 2)?, false)?;
+            let jv = self.ev(arg(a, 3)?, false)?;
+            let cnt = self.ev(arg(a, 4)?, false)?;
+            if av.k != Kind::Arr || bv.k != Kind::Arr {
+                return Err(format!("{}{}:{}:operand", EQR_DIAG_TAG, e.line, e.col));
+            }
+            if !self.verified {
+                // one combined check: i < 0 || j < 0 || n < 0 || i > len(a) - n || j > len(b) - n
+                let ta = self.op(format!("sub i64 {}, {}", av.b, cnt.a))?;
+                let tb = self.op(format!("sub i64 {}, {}", bv.b, cnt.a))?;
+                let c1 = self.op(format!("icmp slt i64 {}, 0", iv.a))?;
+                let c2 = self.op(format!("icmp slt i64 {}, 0", jv.a))?;
+                let c3 = self.op(format!("icmp slt i64 {}, 0", cnt.a))?;
+                let c4 = self.op(format!("icmp sgt i64 {}, {}", iv.a, ta))?;
+                let c5 = self.op(format!("icmp sgt i64 {}, {}", jv.a, tb))?;
+                let o = self.op(format!("or i1 {}, {}", c1, c2))?;
+                let o = self.op(format!("or i1 {}, {}", o, c3))?;
+                let o = self.op(format!("or i1 {}, {}", o, c4))?;
+                let o = self.op(format!("or i1 {}, {}", o, c5))?;
+                self.guard(&o, Fail::Oob(iv.a.clone(), av.b.clone()), true)?;
+            }
+            let tya = elem_ir(&av);
+            let tyb = elem_ir(&bv);
+            if !((is_bytes_ty(&av.ty) && is_bytes_ty(&bv.ty)) || (tya == "i64" && tyb == "i64")) {
+                // the storage plan pins eq_range operands to i64 or bytes; any other pair is not lowered
+                return Err(format!("{}{}:{}:array layout", EQR_DIAG_TAG, e.line, e.col));
+            }
+            if matches!(arg(a, 4)?, Expr::IntLit(_)) && cnt.a == "0" {
+                // an empty range is equal; alloc(0) may give a null data pointer, and memcmp(null, null, 0) is UB
+                return Ok(V::new(Kind::I1, "true".to_string()));
+            }
+            let pa = self.op(format!("getelementptr inbounds {}, ptr {}, i64 {}", tya, av.a, iv.a))?;
+            let pb = self.op(format!("getelementptr inbounds {}, ptr {}, i64 {}", tyb, bv.a, jv.a))?;
+            let sz: i64 = if tya == "i8" { 1 } else { 8 };
+            // Measured against hand Rust slice == (work/p16/perf, docs/L3_RESTRUCTURE_SPEC.md Appendix P16/P17a):
+            // a literal n is a constant-size memcmp, which LLVM expands into wide loads; a dynamic n below
+            // EQR_LOOP_MAX elements takes the inline loop, otherwise memcmp.
+            let r;
+            if matches!(arg(a, 4)?, Expr::IntLit(_)) {
+                r = self.eqr_mem(&pa, &pb, &cnt.a, sz)?;
+            } else {
+                // the memcmp block is the taken successor: with the loop first, the in-loop memcmp
+                // path measured 1.2x hand Rust (block layout around the call)
+                let big = self.op(format!("icmp uge i64 {}, {}", cnt.a, EQR_LOOP_MAX))?;
+                let lmem = self.label("eqr.mem");
+                let lsmall = self.label("eqr.small");
+                let ljoin = self.label("eqr.join");
+                self.condbr(&big, &lmem, &lsmall)?;
+                self.place(&lmem);
+                let rm = self.eqr_mem(&pa, &pb, &cnt.a, sz)?;
+                self.br(&ljoin)?;
+                self.place(&lsmall);
+                let rl = self.eqr_loop(tya, &pa, &pb, &cnt.a)?;
+                let lend = self.cur.clone();
+                self.br(&ljoin)?;
+                self.place(&ljoin);
+                r = self.op(format!("phi i1 [ {}, %{} ], [ {}, %{} ]", rm, lmem, rl, lend))?;
+            }
+            return Ok(V::new(Kind::I1, r));
         }
         if n == "load_be" {
             // P2 batch 4: array, then index
@@ -6279,17 +6379,17 @@ pub fn gen_llvm_concrete_ex(
                 ))
             }
             None => match s.strip_prefix(EQR_DIAG_TAG) {
-                // L3-10: eq_range is rejected by the LLVM backend
                 Some(rest) => {
-                    let mut it = rest.split(':');
+                    let mut it = rest.splitn(3, ':');
                     let line: i64 = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
                     let col: i64 = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+                    let what = it.next().unwrap_or("");
                     GenError::Diag(crate::diagnostic::PruvError::new(
                         "codegen",
                         line,
                         col,
                         "unsupported_type",
-                        "eq_range is not supported by the llvm codegen layer yet",
+                        &format!("eq_range is not supported by the llvm codegen layer for this {} yet", what),
                         "compare the elements in a loop, or use the Rust backend",
                     ))
                 }
@@ -6462,7 +6562,7 @@ fn gen_llvm_body(
         }
     }
     let mut ir = format!(
-        "{}{}\n{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}\n{}",
+        "{}{}\n{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}\n{}",
         if target == AbiTarget::WinX64 { WIN_X64_HEADER } else { "" },
         m.render_strings(),
         type_defs(&tt),
@@ -6493,6 +6593,7 @@ fn gen_llvm_body(
         if m.resize_i64 { DECLS_RESIZE } else { "" },
         if m.resize_u8 { DECLS_RESIZE_U8 } else { "" },
         if m.resize_narrow { DECLS_RESIZE_NARROW } else { "" },
+        if m.memcmp { "declare i32 @memcmp(ptr nocapture, ptr nocapture, i64) nounwind readonly\n" } else { "" }, // P17a
         g6decls,
         chunks.join("\n")
     );

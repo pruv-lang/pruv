@@ -699,6 +699,9 @@
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g9_r28_ctor_scalar_select.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g9_r29_ret_move_position.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_eq_range.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_eq_range_edges.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_eq_range_nv_oob.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_eq_range_order.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_resize.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_truncate.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p2_rt_bits.pruv"}
@@ -1319,6 +1322,8 @@
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/g9_r26_ctor_payload_select.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/g9_r28_ctor_scalar_select.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_eq_range.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_eq_range_edges.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_eq_range_order.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_resize.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_resize_narrow.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_truncate.pruv"}
@@ -2087,6 +2092,9 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g9_r28_ctor_scalar_select.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/g9_r29_ret_move_position.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_eq_range.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_eq_range_edges.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_eq_range_nv_oob.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_eq_range_order.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_resize.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_truncate.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/runtime/p2_rt_bits.pruv"}
@@ -2709,6 +2717,8 @@
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/kd_m6_small_result.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/kd_m6_small_result_foreign.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_eq_range.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_eq_range_edges.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_eq_range_order.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_resize.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_resize_narrow.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_truncate.pruv"}
@@ -2883,6 +2893,7 @@
 {"backend": null, "compiler": "rs", "flags": ["--infer"], "group": "l3_frontend", "mode": "infer", "sample": "tests/l3/frontend/short_circuit.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--infer"], "group": "l3_frontend", "mode": "infer", "sample": "tests/l3/frontend/two_calls.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--infer"], "group": "l3_frontend", "mode": "infer", "sample": "tests/l3/frontend/u8_load_be.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--infer"], "group": "l3_proof", "mode": "infer", "sample": "tests/l3/proof/eq_range_content.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--infer"], "group": "l3_proof", "mode": "infer", "sample": "tests/l3/proof/hf_auto.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--infer"], "group": "l3_proof", "mode": "infer", "sample": "tests/l3/proof/hf_stack.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--infer"], "group": "l3_proof", "mode": "infer", "sample": "tests/l3/proof/opaque_reveal.pruv"}
@@ -3592,6 +3603,7 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "l3_frontend", "mode": "default", "sample": "tests/l3/frontend/short_circuit.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "l3_frontend", "mode": "default", "sample": "tests/l3/frontend/two_calls.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "l3_frontend", "mode": "default", "sample": "tests/l3/frontend/u8_load_be.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "l3_proof", "mode": "default", "sample": "tests/l3/proof/eq_range_content.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "l3_proof", "mode": "default", "sample": "tests/l3/proof/hf_auto.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "l3_proof", "mode": "default", "sample": "tests/l3/proof/hf_stack.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "l3_proof", "mode": "default", "sample": "tests/l3/proof/opaque_reveal.pruv"}
@@ -4326,14 +4338,20 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_cx_too_large.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_cx_unknown.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_cx_while.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_eq_range_alias_shift.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_eq_range_bool.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_eq_range_contract.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_eq_range_empty_false.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_eq_range_false_true.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_eq_range_frame.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_eq_range_i.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_eq_range_ia.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_eq_range_j.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_eq_range_jb.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_eq_range_mixed.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_eq_range_n.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_eq_range_one_elem.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_eq_range_past_end.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_hf_bit_i64.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_hf_contract_only.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/l3_hf_elem_domain.pruv"}

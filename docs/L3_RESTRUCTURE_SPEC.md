@@ -3488,3 +3488,105 @@ One package audit (Codex gpt-6.2-astra, ultra) on the merged tree, one confirm o
 
 Proof/encoding judgement, the fixes, the gates, perf, RSS and proof-time measurement were done directly
 (Claude Opus 5.5).
+
+## Appendix P16/P17a (both verifiers: eq_range content and frames; both LLVM emitters: eq_range lowering)
+
+### P16/P17a.1 Verifier encoding (P16)
+
+`pruvc/verify.py` and `pruvc-rs/crates/pruv-proof/src/symbolic.rs`, the `eq_range` call:
+
+- The five bounds obligations stay as they were, in order: `0 <= i`, `0 <= j`, `0 <= n`, `i + n <= len(a)`,
+  `j + n <= len(b)` (`index_oob`, same messages).
+- Then a fresh bool `r` (`eq_range!N`) and a fresh bound variable `k` (`eq_range!q<N>`), and on the call's path
+  `assume r == ForAll k. (0 <= k && k < n) ==> a[i+k] == b[j+k]`.
+- `a` and `b` are the array terms at the call, so a later write to either array does not change `r` (frame). `r` is
+  fresh, so the assumption is a definition and cannot make the path inconsistent.
+- The quantifier has the shape of a contract `forall k in 0..n: a[i+k] == b[j+k]`, so user contracts in that form
+  match it directly. No patterns are given; both z3 bindings pick the same default triggers.
+
+Tests: `tests/l3/proof/eq_range_content.pruv` (both directions for `[i64]` and `[u8]`, a point fact in the true
+branch, empty range, same array at the same start, a constant array against itself shifted, frame after a store
+outside the range; default and `--infer` rows). Must reject (both compilers, same code and position):
+`l3_eq_range_false_true` (bounds alone do not make it true), `l3_eq_range_empty_false` (`n == 0` is true),
+`l3_eq_range_alias_shift` (a shifted self-compare is not always true), `l3_eq_range_frame` (a store inside the
+compared range after the call), `l3_eq_range_one_elem` (one equal element is not two), `l3_eq_range_past_end`
+(nothing is known about `a[n]`). The existing bounds negatives (`l3_eq_range_i`, `_ia`, `_j`, `_jb`, `_n`, `_mixed`,
+`_bool`, `_contract`, `l3_cx_calls_eq_range`) are unchanged.
+
+### P16/P17a.2 Solver cost (P16)
+
+`work/p16/solver_cost.py` (not committed): HEAD before P16 (`old`) against P16 (`new`), both compilers, default
+flags (the proof cache is opt-in, so every run verifies from scratch), 5 interleaved rounds with alternating order,
+wall seconds p10 / p50 / p90 and peak RSS. Another package was measuring on the same machine at the same time, so
+single p90 values carry outliers (m8 `py_new` 36.6 s, `rs_old` 28.3 s); judge by the overlap of p10..p50.
+
+| workload | py old p10/p50/p90 | py new | rs old | rs new | RSS MB py old/new, rs old/new |
+|---|---|---|---|---|---|
+| m8 budget root | 12.46 / 13.26 / 24.75 | 11.68 / 13.47 / 36.60 | 6.72 / 7.84 / 28.29 | 6.65 / 7.63 / 8.65 | 132 / 131, 126 / 127 |
+| m9 budget root | 11.60 / 12.89 / 13.80 | 12.01 / 13.77 / 14.85 | 6.54 / 7.29 / 7.82 | 6.54 / 7.36 / 7.58 | 128 / 140, 135 / 133 |
+| m11 budget root | 16.33 / 17.69 / 18.59 | 16.34 / 17.15 / 18.32 | 9.17 / 9.66 / 10.49 | 8.96 / 9.87 / 10.57 | 140 / 142, 139 / 138 |
+| `l3_rt_eq_range` | 0.098 / 0.105 / 0.114 | 0.098 / 0.104 / 0.107 | 0.030 / 0.047 / 0.111 | 0.030 / 0.034 / 0.127 | 55 / 55, 46 / 46 |
+| `l3_rt_eq_range_edges` | 0.130 / 0.136 / 0.139 | 0.130 / 0.142 / 0.164 | 0.044 / 0.050 / 0.058 | 0.046 / 0.047 / 0.052 | 55 / 56, 47 / 47 |
+| `eq_range_content` | rejected (rc 1) | 0.145 / 0.157 / 0.209 | rejected (rc 1) | 0.073 / 0.080 / 0.084 | 57 / 57, 48 / 49 |
+
+Every old/new pair overlaps, in time and RSS. The content proofs cost about 10 ms over the bounds-only verifier
+(which rejects that file). The budget roots verify modules that call `eq_range` (`bud_keys`, `bud_map`, `bud_clock`, the m8/m9 roots), and the
+added quantified assumptions leave their verification time and memory unchanged.
+
+### P16/P17a.3 LLVM lowering (P17a)
+
+`pruvc/llvmgen.py` and `pruvc-rs/crates/pruv-core/src/llvmgen.rs` emit byte-identical IR (checked on
+`l3_rt_eq_range`, `l3_rt_eq_range_edges`, `eq_range_content` and the perf module, default and `--no-verify`).
+
+- Arguments are evaluated left to right. Under `--no-verify` one combined check (`0 <= i`, `0 <= j`, `0 <= n`,
+  `i + n <= len a`, `j + n <= len b`) calls `pruv_panic_oob(i, len a)`.
+- Layout guard: both operands `[u8]` bytes, or both 64-bit element storage. Anything else is `codegen` error
+  `unsupported_type` ("eq_range is not supported by the llvm codegen layer for this array layout yet"; a non-array
+  operand: "... for this operand yet"). A `[u8]` operand is stored as bytes, and the storage plan keeps an `[i64]`
+  operand as 64-bit elements even when it is refined, so a `[i64 | lo..=hi]` operand takes the i64 path (`same_nw` in
+  the edges test) and the guard is not reached today.
+- Literal `n == 0`: `true`, with no compare (after the `--no-verify` check). `alloc(0)` may give a null data pointer,
+  and `memcmp(null, null, 0)` is undefined behaviour. A dynamic `n == 0` takes the loop, which does no loads.
+- Literal `n > 0`: `memcmp(pa, pb, n * sz) == 0` with a constant size (LLVM expands small constant sizes into wide loads).
+- Dynamic `n`: `n >= 4` (`EQR_LOOP_MAX`) branches to `memcmp`, else an inline early-exit element loop; a phi joins
+  them. The `memcmp` block is the taken successor of the branch.
+- `tests/llvm_pending.txt` no longer lists `l3_rt_eq_range`; `tests/runtime/l3_rt_eq_range_edges` (empty range at the
+  end, full range, first/last element differs, same array, overlapping shift, 100-byte and 40-element ranges, literal
+  3/64, refined against plain) runs on both backends, both compilers, default and `--no-verify`.
+- `tests/runtime/l3_rt_eq_range_order` (each argument prints a tag: the five arguments are evaluated once each, in
+  source order, on both backends; a literal 0 over empty `[i64]` and `[u8]` arrays is true) and
+  `tests/runtime/l3_rt_eq_range_nv_oob` (`--no-verify`, `i` near i64 max so `i + n` would overflow: `pruv_oob`).
+- The Rust source backend (`pruvc/codegen.py`, `pruvc-rs/crates/pruv-core/src/codegen.rs`) used to bind `i, j, n`
+  before the arrays, and its `--no-verify` form repeated the array expressions; it now binds `a, i, b, j, n` once each,
+  in source order (`let pruv_ea = ...; let pruv_i = ...; ...`).
+
+### P16/P17a.4 Perf against hand Rust (P17a)
+
+`work/p16/perf/` (not committed): a pruv search-count loop (`eq_range(h, p, nd, 0, n)` at every position of a 4096
+haystack) compiled with `--backend llvm`, linked into a Rust driver against the same loop over hand Rust
+`h[p..p+n] == nd[..n]`; 41 interleaved rounds, median and p10/p90 in ns per position, random and all-equal data.
+Arm64, `clang -O2 -mcpu=native`, `rustc -C opt-level=3 -C target-cpu=native`.
+
+| case | pruv/hand (median) | distributions |
+|---|---|---|
+| `[u8]` dynamic n = 1, 2 | 0.27-0.39 | pruv faster |
+| `[i64]` dynamic n = 1, 2, 3 | 0.36-0.90 | pruv faster |
+| `[u8]` dynamic n = 4 .. 256 | 1.000-1.009 | overlap |
+| `[i64]` dynamic n = 4, 8, 32 | 0.997-1.027 | overlap |
+| literal `[u8]` 8, 64; literal `[i64]` 2 | 0.977-1.000 | overlap |
+
+Peak RSS of the two drivers: pruv 14270464 / 14286848 bytes, hand 14254080 / 14270464 bytes (at most one 16 KiB page
+apart, inside the run-to-run spread of either driver).
+
+Threshold history (why 4 elements, not the planned 32 bytes):
+- A 32-byte threshold with a loop for literal counts: literal loops 5-6x hand, `[u8]` dynamic 8-24 bytes on
+  all-equal data up to 5.7x hand (a byte loop against a wide-load compare). So literal counts always use `memcmp`, and
+  the loop is kept only below 4 elements, where it beats hand Rust's `memcmp` call.
+- With the loop block as the taken successor, the dynamic `memcmp` path measured 1.2x hand; making `memcmp` the
+  taken target removes it (all n >= 4 cells overlap).
+- Apple clang does not turn `memcmp` into `bcmp`; hand Rust also calls `_memcmp` on this target.
+
+### P16/P17a.5 Notes
+
+- §3.1/§6 text that says LLVM rejects `eq_range` is history from before P17a.
+- `SPEC.md` eq_range bullet updated (verifier result, LLVM lowering).

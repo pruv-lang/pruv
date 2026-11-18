@@ -1,0 +1,25 @@
+// eq_range evaluates its five arguments once each, in source order a, i, b, j, n (each argument prints its tag),
+// and a literal count 0 over empty arrays is true (LLVM: no memcmp on a possibly null data pointer).
+fn arr(t: i64) -> [i64] ! io, alloc
+  ensures len(result) == 4
+{
+  print(t);
+  return alloc(4, 1);
+}
+fn tick(t: i64, v: i64) -> i64 ! io
+  ensures result == v
+{
+  print(t);
+  return v;
+}
+fn bit(x: bool) -> i64 {
+  if x { return 1; }
+  return 0;
+}
+fn run() -> () ! io, alloc {
+  print(bit(eq_range(arr(1), tick(2, 0), arr(3), tick(4, 0), tick(5, 4))));
+  let e: [i64] = alloc(0, 0);
+  let f: [u8] = alloc(0, 0);
+  print(bit(eq_range(e, 0, e, 0, 0)));
+  print(bit(eq_range(f, 0, f, 0, 0)));
+}
