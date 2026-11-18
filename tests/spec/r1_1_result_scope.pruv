@@ -1,0 +1,5 @@
+// spec: R-1-1 reject
+// inside requires there is no result value yet
+fn f(x: i64) -> i64
+  requires result == 0
+{ return 0; }

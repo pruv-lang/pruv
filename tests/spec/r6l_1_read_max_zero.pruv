@@ -1,0 +1,6 @@
+// spec: R-6l-1 reject
+fn read(take p: Process) -> Process ! proc, alloc
+  requires proc_ok(p)
+{
+  return proc_read(move p, 1, 0);
+}

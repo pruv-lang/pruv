@@ -1,0 +1,7 @@
+// spec: R-6l-1 accept
+fn read(take p: Process, large: bool) -> Process ! proc, alloc
+  requires proc_ok(p)
+{
+  if large { return proc_read(move p, 1, 1099511627776); }
+  return proc_read(move p, 1, 1);
+}

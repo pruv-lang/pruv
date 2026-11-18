@@ -1,0 +1,4 @@
+// spec: R-6l-2 reject
+fn extend(take a: ProcessArgs, x: str) -> ProcessArgs ! alloc {
+  return proc_args_push(move a, x);
+}

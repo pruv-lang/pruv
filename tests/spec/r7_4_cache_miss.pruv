@@ -1,0 +1,7 @@
+// spec: R-7-4 reject
+fn check(x: i64) -> i64
+  requires 0 <= x && x < 8
+{
+  assert x <= 7;
+  return x;
+}

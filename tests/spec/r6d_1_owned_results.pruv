@@ -1,0 +1,17 @@
+// spec: R-6d-1 accept
+// trusted foreign results may be owned String and Vec<i64>; the call needs alloc
+trusted rust fn greeting() -> String ! alloc
+  ensures len(result) == 6
+  = "::std::string::String::new";
+
+trusted rust fn numbers(text: str) -> Vec<i64> ! alloc, io
+  ensures len(result) == 2
+  = "::std::vec::Vec::new";
+
+fn total(text: str) -> i64 ! alloc, io
+  ensures result == 8
+{
+  let v: Vec<i64> = numbers(text);
+  let s: String = greeting();
+  return len(v) + len(s);
+}

@@ -1,0 +1,2 @@
+// spec: R-7-5 reject
+fn f() -> i64 { return 1; }

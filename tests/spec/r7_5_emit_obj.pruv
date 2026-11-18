@@ -1,0 +1,2 @@
+// spec: R-7-5 accept
+fn main() -> () {}

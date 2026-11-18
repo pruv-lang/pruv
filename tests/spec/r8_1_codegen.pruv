@@ -1,0 +1,9 @@
+// spec: R-8-1 reject
+struct B { a: [i64] }
+struct W { b: B }
+
+fn f(b: B) -> i64
+  requires size(W { b: b }) == 2
+{
+  return 1;
+}

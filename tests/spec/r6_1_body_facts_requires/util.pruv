@@ -1,0 +1,4 @@
+// with a requires clause the body is not expanded at the call site; only ensures speak for it
+pub fn five(x: i64) -> i64
+  requires x >= 0
+{ return 5; }

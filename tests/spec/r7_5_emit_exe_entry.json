@@ -1,0 +1,1 @@
+{"backend":"none","flags":["--emit","exe"],"stage":"link","code":"exe_entry","py":{"exit":2,"stage":null,"code":null,"out_contains":["unrecognized arguments: --emit exe"]}}

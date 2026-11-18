@@ -1,0 +1,10 @@
+// spec: R-6-1 accept
+mod util;
+
+pub fn f(x: i64) -> i64
+  requires 0 <= x && x <= 10
+{
+  let r: i64 = crate::util::five(x);
+  assert r == 5;
+  return r;
+}

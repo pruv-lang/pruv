@@ -1,0 +1,6 @@
+// spec: R-6m-1 reject
+fn read(take s: Socket) -> Socket ! net, alloc
+  requires net_ok(s)
+{
+  return net_read(move s, 0);
+}

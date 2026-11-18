@@ -1,0 +1,13 @@
+// spec: R-7-3 reject
+fn down(n: i64) -> i64
+  requires 0 <= n
+  ensures result == 0
+  decreases n
+{
+  if n == 0 { return 0; }
+  return down(n - 1);
+}
+
+fn main() -> () ! io {
+  print(down(2));
+}

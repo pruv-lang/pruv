@@ -1,0 +1,5 @@
+// spec: R-1-2 accept
+// underscores separate digits; repeated underscores are allowed
+fn f() -> i64
+  ensures result == 1010
+{ return 1__0 + 1_000; }

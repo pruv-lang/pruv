@@ -1,0 +1,10 @@
+// spec: R-7-3 accept
+fn twice(x: i64) -> i64
+  requires -1000 <= x && x <= 1000
+{
+  return x + x;
+}
+
+fn main() -> () ! io {
+  print(twice(2));
+}
