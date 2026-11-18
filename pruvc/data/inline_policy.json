@@ -1,0 +1,1 @@
+{"doc": "Inline policy thresholds (#[inline(always)] for small callees or copies within the budget).", "rust_module": "inline_policy", "items": [{"name": "INLINE_SMALL", "rust_type": "u64", "value": 8}, {"name": "INLINE_BUDGET", "rust_type": "u64", "value": 1500}]}

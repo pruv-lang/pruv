@@ -2157,15 +2157,20 @@ class FnVerifier:
         s.prove(st, g, mg < s.m0, e, "recursive_decrease",
                 "decreases measure of %s (`%s`) < decreases measure of %s at its entry (`%s`)" % (f.name, tg, s.f.name, tf))
 
+    def catalog_need(s, st, g, e, code, n):
+        """need(ob) for a catalog call n (fs, proc, async, net): ob is a `call_requires` obligation, only in code."""
+        def need(ob):
+            if code:
+                s.prove(st, g, ob, e, "call_requires", "precondition of %s (catalog)" % n)
+        return need
+
     def catalog_call(s, e, args, st, g, code):
         """G6 A1 (G6_SPEC 11.3): the standard catalog; every requires is a `call_requires` obligation
         (only in code), then an exact term is the result. G10 fs calls return fresh values with catalog ensures."""
         n = e.name
         rty = s.T(e.ty)
 
-        def need(ob):
-            if code:
-                s.prove(st, g, ob, e, "call_requires", "precondition of %s (catalog)" % n)
+        need = s.catalog_need(st, g, e, code, n)
 
         if n.startswith("proc_"):
             return s.proc_call(n, e, args, st, g, code, rty)
@@ -2253,9 +2258,7 @@ class FnVerifier:
         its well-formedness and the ensures facts below. The argument builder and the observers are exact terms.
         Parameter observers in the ensures denote the values at call entry (the actuals in args). Two identical calls
         are never equated: every effect result is a fresh symbol."""
-        def need(ob):
-            if code:
-                s.prove(st, g, ob, e, "call_requires", "precondition of %s (catalog)" % n)
+        need = s.catalog_need(st, g, e, code, n)
 
         # ProcessArgs: argc only
         if n == "proc_args_new":
@@ -2338,9 +2341,7 @@ class FnVerifier:
 
     def async_call(s, n, e, args, st, g, code, rty):
         """G10 async section 4: requires, fresh snapshot, well-formedness, transitions."""
-        def need(ob):
-            if code:
-                s.prove(st, g, ob, e, "call_requires", "precondition of %s (catalog)" % n)
+        need = s.catalog_need(st, g, e, code, n)
         if n != "ev_new": p = args[0]
         if n in ('ev_ok',):
             return p.error == 0
@@ -2497,9 +2498,7 @@ class FnVerifier:
         observers in the ensures denote the values at call entry (the actuals in args). Two identical connects or
         accepts are never equated: every effect result is a fresh symbol. net_accept borrows its listener: the
         listener value is not touched."""
-        def need(ob):
-            if code:
-                s.prove(st, g, ob, e, "call_requires", "precondition of %s (catalog)" % n)
+        need = s.catalog_need(st, g, e, code, n)
 
         # observers: field reads and array selects
         if n == "net_ok":

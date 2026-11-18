@@ -34,10 +34,8 @@ use crate::modules::{encode_name, encode_stem, ident_key, safe_type, G4};
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 
-pub const MAX_FN_SPECS: usize = 4096;
-pub const MAX_TYPE_APPS: usize = 4096;
-pub const MAX_DEPTH: u64 = 128;
-pub const MAX_TYPE_NODES: u64 = 1 << 16;
+// Shared with pruvc (pruvc/data/mono_limits.json, tools/gen_shared.py).
+pub use crate::shared_tables::mono_limits::{MAX_DEPTH, MAX_FN_SPECS, MAX_TYPE_APPS, MAX_TYPE_NODES};
 
 /// Failure of `specialize`: a limit diagnostic (exit 1) or an internal defect (exit 3).
 #[derive(Debug, Clone)]

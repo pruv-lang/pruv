@@ -24,6 +24,9 @@ from typeinfo import encode, is_collection, uses_array_type, uses_str
 from codegen import (Gen, rty, CONTRACT_PRELUDE_G6, CONTRACT_PRELUDE_U8, CONTRACT_PRELUDE_BOOL,
                      CONTRACT_PRELUDE_STR, G6_PRELUDE, FILE_PRELUDE, proc_prelude, net_prelude, async_prelude, async_proc_prelude)
 from foreign import CATALOG, CATALOG_CONTRACT_ONLY, FILE_OBSERVERS, PROC_OBSERVERS, NET_OBSERVERS, ASYNC_OBSERVERS
+from shared_data import load
+
+SHIM_EDGES = load("shim_edges")["SHIM_EDGES"]
 
 PREFIX = "pruv_g6_v1_"
 BRIDGE_SYM = "pruv_g6_bridge_v1"
@@ -110,16 +113,10 @@ def collect(prog):
             if n.name in CATALOG and n.name not in CATALOG_CONTRACT_ONLY:
                 low, src = inst_types(n)
                 cats.setdefault(helper_name(n.name, src), (n.name, low))
-                if n.name == "file_byte":
-                    cats.setdefault(helper_name("file_size", ()), ("file_size", ()))
-                if n.name == "proc_byte":   # G10 proc A3: the contract bounds guard of proc_byte reads proc_size
-                    cats.setdefault(helper_name("proc_size", ()), ("proc_size", ()))
-                if n.name in ("ev_kind", "ev_eof", "ev_write_open"):
-                    cats.setdefault(helper_name("ev_cap", ()), ("ev_cap", ()))
-                if n.name == "ev_byte":
-                    cats.setdefault(helper_name("ev_size", ()), ("ev_size", ()))
-                if n.name == "net_byte":    # G10 net A3: the contract bounds guard of net_byte reads net_size
-                    cats.setdefault(helper_name("net_size", ()), ("net_size", ()))
+                # helper edges (incl. G10 proc/net A3 bounds guards) live in pruvc/data/shim_edges.json
+                for caller, bound in SHIM_EDGES:
+                    if n.name == caller:
+                        cats.setdefault(helper_name(bound, ()), (bound, ()))
             else:
                 f = fmap.get(n.name)
                 if f is not None and f.foreign is not None:

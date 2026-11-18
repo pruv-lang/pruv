@@ -41,6 +41,7 @@ pub mod pyjson;
 pub mod pyrepr;
 pub mod pyrepr_table;
 pub mod refine;
+pub mod shared_tables;
 pub mod small;
 pub mod stack;
 pub mod storage;
