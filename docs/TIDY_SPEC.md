@@ -95,7 +95,7 @@ re-exports moved names; one split per commit.
 ### T6 health tooling
 
 `tools/health.py` prints the AGENTS.md light-check numbers (line counts, top files, proof time, rustc time
-and binary size for budget m4, >1.1x items from PERF_HEADROOM) as one row for `docs/notes/health_log.md`.
+and binary size for budget m4, items slower than hand Rust (above 1.0x beyond measured noise) from PERF_HEADROOM) as one row for `docs/notes/health_log.md`.
 Later the top-15 branchy functions get a short invariant note each (GHC "Note" style) before anyone edits
 them; no rewrite in this package.
 
