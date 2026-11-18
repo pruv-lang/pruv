@@ -3,32 +3,33 @@
 #[inline(never)]
 fn pruv_ud(what: &str) -> ! { panic!("pruv: requires undefined: {}", what) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cidx(a: &[i64], i: i128) -> i128 { if i >= 0 && i < (a.len() as i128) { a[i as usize] as i128 } else { pruv_ud("array index out of range") } }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cadd(a: i128, b: i128) -> i128 { a.checked_add(b).unwrap_or_else(|| pruv_ud("i128 overflow in +")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_csub(a: i128, b: i128) -> i128 { a.checked_sub(b).unwrap_or_else(|| pruv_ud("i128 overflow in -")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cmul(a: i128, b: i128) -> i128 { a.checked_mul(b).unwrap_or_else(|| pruv_ud("i128 overflow in *")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cneg(a: i128) -> i128 { a.checked_neg().unwrap_or_else(|| pruv_ud("i128 overflow in unary -")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cdiv(a: i128, b: i128) -> i128 { if b == 0 { pruv_ud("division by zero in /") } a.checked_div_euclid(b).unwrap_or_else(|| pruv_ud("i128 overflow in /")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_crem(a: i128, b: i128) -> i128 { if b == 0 { pruv_ud("division by zero in %") } a.checked_rem_euclid(b).unwrap_or_else(|| pruv_ud("i128 overflow in %")) }
 
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cidx_u8(a: &[u8], i: i128) -> i128 { if i >= 0 && i < (a.len() as i128) { a[i as usize] as i128 } else { pruv_ud("array index out of range") } }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_9_whole_end__pruv_body(b: &[u8], s: i64, e: i64) -> i64 {
     let mut back: i64 = 0i64;
     let mut stop: i64 = 0i64;
@@ -66,6 +67,7 @@ fn pruv_m_f_1_9_whole_end__pruv_body(b: &[u8], s: i64, e: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_13_first_newline__pruv_body(b: &[u8], s: i64, e: i64) -> i64 {
     let mut i: i64 = s;
     while (i < e) {
@@ -79,6 +81,7 @@ fn pruv_m_f_1_13_first_newline__pruv_body(b: &[u8], s: i64, e: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_12_last_newline__pruv_body(b: &[u8], s: i64, e: i64) -> i64 {
     let mut i: i64 = e;
     while (i > s) {
@@ -92,6 +95,7 @@ fn pruv_m_f_1_12_last_newline__pruv_body(b: &[u8], s: i64, e: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_14_count_newlines__pruv_body(b: &[u8], s: i64, e: i64) -> i64 {
     let mut c: i64 = 0i64;
     let mut i: i64 = s;
@@ -106,6 +110,7 @@ fn pruv_m_f_1_14_count_newlines__pruv_body(b: &[u8], s: i64, e: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_13_after_newline__pruv_body(b: &[u8], k: i64) -> i64 {
     let n: i64 = (b.len() as i64);
     let mut c: i64 = 0i64;
@@ -124,6 +129,7 @@ fn pruv_m_f_1_13_after_newline__pruv_body(b: &[u8], k: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn around_plan__pruv_body(buf: &[u8], target: i64, before: i64, after: i64, max_bytes: i64) -> ::std::vec::Vec<i64> {
     let n: i64 = (buf.len() as i64);
     let mut from: i64 = (target - before);
@@ -183,8 +189,10 @@ fn around_plan__pruv_body(buf: &[u8], target: i64, before: i64, after: i64, max_
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline]
+#[inline(always)]
 pub fn around_plan(buf: &[u8], target: i64, before: i64, after: i64, max_bytes: i64) -> ::std::vec::Vec<i64> {
+    #[cold] #[inline(never)] fn pruv_len_slow(buf: usize) -> ! { if (buf as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (array length)", buf) } unreachable!() }
+    if ((buf.len() as u64) > (1u64 << 40)) { pruv_len_slow(buf.len()) }
     let mut pruv_budget: i64 = 1_073_741_824;
     if !(((buf.len() as i128) <= 1099511627776i128)) { panic!("{}", "pruv: requires violated: crate::around_plan: (len(buf) <= 1099511627776)"); }
     if !(((1i128 <= (target as i128)) && ((target as i128) <= 1000000000000000i128))) { panic!("{}", "pruv: requires violated: crate::around_plan: ((1 <= target) && (target <= 1000000000000000))"); }
@@ -195,6 +203,7 @@ pub fn around_plan(buf: &[u8], target: i64, before: i64, after: i64, max_bytes: 
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_6_window__pruv_body(buf: &[u8], start_offset: i64, target_start: i64, target_end: i64, end: i64, max_bytes: i64, total: i64, shown: i64) -> ::std::vec::Vec<i64> {
     let target_bytes: i64 = (target_end - target_start);
     let mut cut: i64 = 0i64;
@@ -257,6 +266,7 @@ fn pruv_m_f_1_6_window__pruv_body(buf: &[u8], start_offset: i64, target_start: i
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_12_split_budget__pruv_body(rest: i64, before_need: i64, after_need: i64) -> ::std::vec::Vec<i64> {
     let mut before_budget: i64 = (rest / 2i64);
     let mut after_budget: i64 = (rest - before_budget);

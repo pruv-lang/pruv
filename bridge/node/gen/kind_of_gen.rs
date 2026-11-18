@@ -1,5 +1,5 @@
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_str_boundary(a: &str, i: i64) -> bool { i >= 0 && (i as u64) <= (a.len() as u64) && a.is_char_boundary(i as usize) }
 
 #[allow(dead_code)]
@@ -7,35 +7,36 @@ fn pruv_str_boundary(a: &str, i: i64) -> bool { i >= 0 && (i as u64) <= (a.len()
 #[inline(never)]
 fn pruv_ud(what: &str) -> ! { panic!("pruv: requires undefined: {}", what) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cidx(a: &[i64], i: i128) -> i128 { if i >= 0 && i < (a.len() as i128) { a[i as usize] as i128 } else { pruv_ud("array index out of range") } }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cadd(a: i128, b: i128) -> i128 { a.checked_add(b).unwrap_or_else(|| pruv_ud("i128 overflow in +")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_csub(a: i128, b: i128) -> i128 { a.checked_sub(b).unwrap_or_else(|| pruv_ud("i128 overflow in -")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cmul(a: i128, b: i128) -> i128 { a.checked_mul(b).unwrap_or_else(|| pruv_ud("i128 overflow in *")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cneg(a: i128) -> i128 { a.checked_neg().unwrap_or_else(|| pruv_ud("i128 overflow in unary -")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cdiv(a: i128, b: i128) -> i128 { if b == 0 { pruv_ud("division by zero in /") } a.checked_div_euclid(b).unwrap_or_else(|| pruv_ud("i128 overflow in /")) }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_crem(a: i128, b: i128) -> i128 { if b == 0 { pruv_ud("division by zero in %") } a.checked_rem_euclid(b).unwrap_or_else(|| pruv_ud("i128 overflow in %")) }
 
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cidx_str(a: &str, i: i128) -> i128 { if i >= 0 && i < (a.len() as i128) { a.as_bytes()[i as usize] as i128 } else { pruv_ud("array index out of range") } }
 #[allow(dead_code)]
-#[inline]
+#[inline(always)]
 fn pruv_cboundary(a: &str, i: i128) -> bool { i >= 0 && i <= (a.len() as i128) && a.is_char_boundary(i as usize) }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_8_ext_from(name: &str) -> i64 {
     let mut base: i64 = 0i64;
     let mut dot: i64 = (-1i64);
@@ -59,6 +60,7 @@ fn pruv_m_f_1_8_ext_from(name: &str) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_8_units_to__pruv_body(name: &str, end: i64) -> i64 {
     let mut n: i64 = 0i64;
     let mut i: i64 = 0i64;
@@ -76,6 +78,7 @@ fn pruv_m_f_1_8_units_to__pruv_body(name: &str, end: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn extension_at__pruv_body(name: &str) -> i64 {
     let at: i64 = pruv_m_f_1_8_ext_from(name);
     if (at < 0i64) {
@@ -85,14 +88,17 @@ fn extension_at__pruv_body(name: &str) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline]
+#[inline(always)]
 pub fn extension_at(name: &str) -> i64 {
+    #[cold] #[inline(never)] fn pruv_len_slow(name: usize) -> ! { if (name as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", name) } unreachable!() }
+    if ((name.len() as u64) > (1u64 << 40)) { pruv_len_slow(name.len()) }
     let mut pruv_budget: i64 = 1_073_741_824;
     if !(((name.len() as i128) <= 1000000000000i128)) { panic!("{}", "pruv: requires violated: crate::extension_at: (len(name) <= 1000000000000)"); }
     extension_at__pruv_body(name)
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_4_word(w: &str) -> i64 {
     let mut k: i64 = 0i64;
     let mut cap: i64 = 1i64;
@@ -110,6 +116,7 @@ fn pruv_m_f_1_4_word(w: &str) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_7_ext_key__pruv_body(name: &str, at: i64) -> i64 {
     let mut k: i64 = 0i64;
     let mut cap: i64 = 1i64;
@@ -140,21 +147,25 @@ fn pruv_m_f_1_7_ext_key__pruv_body(name: &str, at: i64) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_8_is_image(k: i64) -> bool {
-    return ((((((((k == pruv_m_f_1_4_word(&::std::string::String::from("png"))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("jpg")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("jpeg")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("webp")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("gif")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("bmp")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("tif")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("tiff"))));
+    return ((((((((k == pruv_m_f_1_4_word("png")) || (k == pruv_m_f_1_4_word("jpg"))) || (k == pruv_m_f_1_4_word("jpeg"))) || (k == pruv_m_f_1_4_word("webp"))) || (k == pruv_m_f_1_4_word("gif"))) || (k == pruv_m_f_1_4_word("bmp"))) || (k == pruv_m_f_1_4_word("tif"))) || (k == pruv_m_f_1_4_word("tiff")));
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_7_is_text(k: i64) -> bool {
-    return ((((((((((((((((((((((((((((((((((((((((((((((k == pruv_m_f_1_4_word(&::std::string::String::from("txt"))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("md")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("markdown")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("log")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("json")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("jsonl")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("yaml")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("yml")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("xml")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("html")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("htm")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("css")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("ini")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("toml")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("cfg")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("conf")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("env")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("rst")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("tex")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("srt")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("vtt")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("js")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("mjs")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("cjs")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("ts")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("tsx")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("jsx")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("py")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("rb")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("go")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("rs")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("java")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("kt")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("swift")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("c")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("h")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("cc")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("cpp")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("hpp")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("cs")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("php")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("sh")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("bat")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("ps1")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("sql")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("svg"))));
+    return ((((((((((((((((((((((((((((((((((((((((((((((k == pruv_m_f_1_4_word("txt")) || (k == pruv_m_f_1_4_word("md"))) || (k == pruv_m_f_1_4_word("markdown"))) || (k == pruv_m_f_1_4_word("log"))) || (k == pruv_m_f_1_4_word("json"))) || (k == pruv_m_f_1_4_word("jsonl"))) || (k == pruv_m_f_1_4_word("yaml"))) || (k == pruv_m_f_1_4_word("yml"))) || (k == pruv_m_f_1_4_word("xml"))) || (k == pruv_m_f_1_4_word("html"))) || (k == pruv_m_f_1_4_word("htm"))) || (k == pruv_m_f_1_4_word("css"))) || (k == pruv_m_f_1_4_word("ini"))) || (k == pruv_m_f_1_4_word("toml"))) || (k == pruv_m_f_1_4_word("cfg"))) || (k == pruv_m_f_1_4_word("conf"))) || (k == pruv_m_f_1_4_word("env"))) || (k == pruv_m_f_1_4_word("rst"))) || (k == pruv_m_f_1_4_word("tex"))) || (k == pruv_m_f_1_4_word("srt"))) || (k == pruv_m_f_1_4_word("vtt"))) || (k == pruv_m_f_1_4_word("js"))) || (k == pruv_m_f_1_4_word("mjs"))) || (k == pruv_m_f_1_4_word("cjs"))) || (k == pruv_m_f_1_4_word("ts"))) || (k == pruv_m_f_1_4_word("tsx"))) || (k == pruv_m_f_1_4_word("jsx"))) || (k == pruv_m_f_1_4_word("py"))) || (k == pruv_m_f_1_4_word("rb"))) || (k == pruv_m_f_1_4_word("go"))) || (k == pruv_m_f_1_4_word("rs"))) || (k == pruv_m_f_1_4_word("java"))) || (k == pruv_m_f_1_4_word("kt"))) || (k == pruv_m_f_1_4_word("swift"))) || (k == pruv_m_f_1_4_word("c"))) || (k == pruv_m_f_1_4_word("h"))) || (k == pruv_m_f_1_4_word("cc"))) || (k == pruv_m_f_1_4_word("cpp"))) || (k == pruv_m_f_1_4_word("hpp"))) || (k == pruv_m_f_1_4_word("cs"))) || (k == pruv_m_f_1_4_word("php"))) || (k == pruv_m_f_1_4_word("sh"))) || (k == pruv_m_f_1_4_word("bat"))) || (k == pruv_m_f_1_4_word("ps1"))) || (k == pruv_m_f_1_4_word("sql"))) || (k == pruv_m_f_1_4_word("svg")));
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn pruv_m_f_1_14_is_unsupported(k: i64) -> bool {
-    return (((((((((((((((k == pruv_m_f_1_4_word(&::std::string::String::from("pptx"))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("ppt")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("hwp")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("hwpx")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("doc")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("xls")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("odt")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("ods")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("odp")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("rtf")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("pages")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("numbers")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("key")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("zip")))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("epub"))));
+    return (((((((((((((((k == pruv_m_f_1_4_word("pptx")) || (k == pruv_m_f_1_4_word("ppt"))) || (k == pruv_m_f_1_4_word("hwp"))) || (k == pruv_m_f_1_4_word("hwpx"))) || (k == pruv_m_f_1_4_word("doc"))) || (k == pruv_m_f_1_4_word("xls"))) || (k == pruv_m_f_1_4_word("odt"))) || (k == pruv_m_f_1_4_word("ods"))) || (k == pruv_m_f_1_4_word("odp"))) || (k == pruv_m_f_1_4_word("rtf"))) || (k == pruv_m_f_1_4_word("pages"))) || (k == pruv_m_f_1_4_word("numbers"))) || (k == pruv_m_f_1_4_word("key"))) || (k == pruv_m_f_1_4_word("zip"))) || (k == pruv_m_f_1_4_word("epub")));
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
+#[inline(always)]
 fn kind_of__pruv_body(name: &str) -> i64 {
     let at: i64 = pruv_m_f_1_8_ext_from(name);
     if (at < 0i64) {
@@ -164,16 +175,16 @@ fn kind_of__pruv_body(name: &str) -> i64 {
     if (k < 0i64) {
         return 0i64;
     }
-    if (k == pruv_m_f_1_4_word(&::std::string::String::from("pdf"))) {
+    if (k == pruv_m_f_1_4_word("pdf")) {
         return 1i64;
     }
-    if (k == pruv_m_f_1_4_word(&::std::string::String::from("docx"))) {
+    if (k == pruv_m_f_1_4_word("docx")) {
         return 2i64;
     }
-    if (k == pruv_m_f_1_4_word(&::std::string::String::from("xlsx"))) {
+    if (k == pruv_m_f_1_4_word("xlsx")) {
         return 3i64;
     }
-    if ((k == pruv_m_f_1_4_word(&::std::string::String::from("csv"))) || (k == pruv_m_f_1_4_word(&::std::string::String::from("tsv")))) {
+    if ((k == pruv_m_f_1_4_word("csv")) || (k == pruv_m_f_1_4_word("tsv"))) {
         return 4i64;
     }
     if pruv_m_f_1_8_is_image(k) {
@@ -189,8 +200,10 @@ fn kind_of__pruv_body(name: &str) -> i64 {
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow)]
-#[inline]
+#[inline(always)]
 pub fn kind_of(name: &str) -> i64 {
+    #[cold] #[inline(never)] fn pruv_len_slow(name: usize) -> ! { if (name as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (str length)", name) } unreachable!() }
+    if ((name.len() as u64) > (1u64 << 40)) { pruv_len_slow(name.len()) }
     let mut pruv_budget: i64 = 1_073_741_824;
     if !(((name.len() as i128) <= 1000000000000i128)) { panic!("{}", "pruv: requires violated: crate::kind_of: (len(name) <= 1000000000000)"); }
     kind_of__pruv_body(name)

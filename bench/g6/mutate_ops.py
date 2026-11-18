@@ -278,14 +278,15 @@ def verdict(comp, path, extra, work):
 
 
 def foreign_panic(r):
-    return bool(r) and "pruv: foreign" in ((r.get("first_panic") or "") + (r.get("stderr") or ""))
+    return bool(r) and "pruv: foreign" in ((r.get("first_panic") or "") + (r.get("stderr") or "")
+                                           + (r.get("foreign_stderr") or ""))
 
 
 def brief(r):
     if r is None:
         return None
     keys = ("status", "tests_passed", "tests_total", "panics", "first_panic", "first_failure", "compile_error",
-            "exit_code")
+            "exit_code", "foreign_stderr")
     return {k: r[k] for k in keys if k in r}
 
 
@@ -431,7 +432,8 @@ def self_test():
     for r0, r1, want in (({"status": "wrong"}, {"status": "wrong"}, WV), ({"status": "wrong"}, {"status": "ok"}, WV),
                          ({"status": "ok"}, {"status": "wrong"}, WV), ({"status": "ok"}, {"status": "timeout"}, "crash"),
                          ({"status": "ok"}, {"status": "wrong", "first_panic": "pruv: foreign x"}, CA),
-                         ({"status": "wrong"}, {"status": "wrong", "stderr": "pruv: foreign x"}, CA)):
+                         ({"status": "wrong"}, {"status": "wrong", "stderr": "pruv: foreign x"}, CA),
+                         ({"status": "wrong"}, {"status": "wrong", "foreign_stderr": "pruv: foreign panic: x"}, CA)):
         got = exec_class(fk, r0, r1)[0]
         if got != want:
             bad += 1

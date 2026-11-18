@@ -604,7 +604,7 @@ class ForeignGen:
 
     # ------------------------------------------------------------------ trusted rust fn
     def trusted_helper(s, f):
-        """private helper `NAME`: selected requires, catch_unwind around the Rust call, selected ensures"""
+        """private helper `NAME`: selected requires, a cold drop guard around the Rust call, selected ensures"""
         name = f.name
         if name in s.items:
             return name
@@ -624,11 +624,22 @@ class ForeignGen:
                     checks += 1
             args = ", ".join(p.name for p in f.params)
             rt = rty(f.ret)
-            body.append("let result: %s = match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| %s(%s))) {" % (
-                rt, f.foreign["path"], args))
-            body.append("    Ok(pruv_r) => pruv_r,")
-            body.append("    Err(_) => panic!(%s)," % rstr("pruv: foreign panic: " + disp))
-            body.append("};")
+            # P19c: no catch_unwind frame on the happy path. On an unwind out of the foreign call the guard's Drop
+            # prints the Pruv line and the unwind continues unchanged (Rust backend: exit 101 from main, PruvStore
+            # stays poisoned; LLVM G6: the shim's pruv_g6_guard exits 101). On unix the line goes through a fresh
+            # /dev/stderr handle, not std's stderr lock, so another thread holding that lock cannot block the unwind
+            # (safe code only: --no-verify output has no `unsafe`); if the open fails it falls back to stderr().
+            # Under panic=abort nothing changes.
+            body.append("struct pruv_ForeignGuard;")
+            body.append("impl ::std::ops::Drop for pruv_ForeignGuard { #[cold] fn drop(&mut self) { "
+                        "let m: &str = %s; "
+                        "#[cfg(unix)] { if let Ok(mut f) = ::std::fs::OpenOptions::new().append(true).open(\"/dev/stderr\") { "
+                        "let _ = ::std::io::Write::write_all(&mut f, m.as_bytes()); return; } } "
+                        "let _ = ::std::io::Write::write_all(&mut ::std::io::stderr(), m.as_bytes()); } }"
+                        % rstr("pruv: foreign panic: " + disp + "\n"))
+            body.append("let pruv_fg = pruv_ForeignGuard;")
+            body.append("let result: %s = %s(%s);" % (rt, f.foreign["path"], args))
+            body.append("::std::mem::forget(pruv_fg);")
             if is_collection(f.ret):    # G6b: an owned result's length fits the 2^40 model in every check mode
                 body.append("if (result.len() as u128) > (1u128 << 40) { pruv_g6_repr(%s); }"
                             % rstr(disp + ": result length"))
