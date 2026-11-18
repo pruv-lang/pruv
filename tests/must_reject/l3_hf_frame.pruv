@@ -1,0 +1,14 @@
+// P07 header fact reject: a mutator that changes the capacity word breaks valid on its normal exit
+fn valid(st: [i64]) -> bool
+{
+  let l: i64 = len(st);
+  if l < 4 { return false; }
+  if st[0] != 77 || st[1] != l || st[2] != l - 4 { return false; }
+  let t: i64 = st[3];
+  if t < 0 || t > st[2] { return false; }
+  return true;
+}
+fn shrink(inout st: [i64]) -> ()
+  requires valid(st)
+  ensures valid(st)
+{ st[2] = 0; }

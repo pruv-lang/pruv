@@ -1,0 +1,86 @@
+// P07 header facts: a stack stored in one array. Words 0..3 are the header (magic, length, capacity, top) and
+// entries live at 4..len. valid(st) is the header fact; init establishes it, push keeps it on its refusal and normal exits, grow
+// establishes it on the larger array.
+pub fn valid(st: [i64]) -> bool
+{
+  let l: i64 = len(st);
+  if l < 4 { return false; }
+  if st[0] != 77 || st[1] != l || st[2] != l - 4 { return false; }
+  let t: i64 = st[3];
+  if t < 0 || t > st[2] { return false; }
+  return true;
+}
+
+// constructor: establishes valid(st) whenever the array is big enough
+pub fn init(inout st: [i64]) -> i64
+  ensures len(st) == len(old(st))
+  ensures result == 0 || result == 1
+  ensures result != 0 || valid(st)
+{
+  let l: i64 = len(st);
+  if l < 4 { return 1; }
+  st[0] = 77;
+  st[1] = l;
+  st[2] = l - 4;
+  st[3] = 0;
+  return 0;
+}
+
+// mutator with a refusal exit (full: st is unchanged) and a normal exit (one entry stored); both keep valid(st)
+pub fn push(inout st: [i64], v: i64) -> i64
+  requires valid(st)
+  ensures len(st) == len(old(st))
+  ensures valid(st)
+  ensures result != 1 || forall k in 0..len(st): st[k] == old(st)[k]
+{
+  let t: i64 = st[3];
+  if t == st[2] { return 1; }
+  st[4 + t] = v;
+  st[3] = t + 1;
+  return 0;
+}
+
+// grow exit: a full stack moves to an array twice as long; the length and capacity words are rewritten, the top and
+// the entries are kept, so valid holds on the new array
+pub fn grow(st: [i64]) -> [i64] ! alloc
+  requires valid(st) && len(st) <= 1000000
+  ensures valid(result)
+  ensures result[3] == st[3]
+{
+  let n: i64 = 2 * len(st);
+  let mut g: [i64] = resize(st, n, 0);
+  g[1] = n;
+  g[2] = n - 4;
+  return g;
+}
+
+// a reader: valid(st) bounds the top entry, so the read is unchecked
+pub fn peek(st: [i64]) -> i64
+  requires valid(st)
+{
+  let t: i64 = st[3];
+  if t == 0 { return 0; }
+  return st[3 + t];
+}
+
+// a caller chains the contracts: init, push twice, grow, then peek both arrays
+pub fn demo(inout st: [i64]) -> i64 ! alloc
+  requires len(st) <= 1000
+{
+  let r: i64 = init(inout st);
+  if r != 0 { return -1; }
+  let a: i64 = push(inout st, 5);
+  let b: i64 = push(inout st, 6);
+  let g: [i64] = grow(st);
+  if a == 1 || b == 1 || peek(st) != peek(g) { return -2; }
+  return st[3] + g[3];
+}
+
+// a code call of valid guards the reads: after `if !valid(st)` the caller knows the expanded header fact
+pub fn checked_peek(st: [i64]) -> i64
+{
+  if !valid(st) { return 0; }
+  let t: i64 = st[3];
+  if t == 0 { return 0; }
+  return st[3 + t];
+}

@@ -162,6 +162,13 @@ Allowed only in `requires`, `ensures`, `invariant`, `assert`:
   - Contract domain and arithmetic apply to the result as to any contract (the guards of the body's own `if`s guard
     its later reads); the function's code is verified separately with no assumptions, so its contract meaning and
     its run-time value agree.
+  - Code calls know the body too (L3 P07): at a call of such a function in code, the verifier assumes
+    `result == <expansion of the body at the call's arguments>`, as if the function had that `ensures`. So
+    `if in_range(a, i) { a[i] }` needs no `ensures` on `in_range`, and a header predicate `valid(st)` checked in code
+    bounds the reads after it. The fact uses the same expansion as contracts. An `i64` function whose body calls a
+    bit builtin (`band`, `bor`, `bxor`, `wrapping_shl`, `ushr`, `wrapping_add`, `wrapping_mul`) gets no such fact,
+    because it would bring bit-vector terms into every later query of the caller; give it an explicit `ensures`
+    instead. `bool` functions always get it. A function that cannot be expanded keeps only its written `ensures`.
   - Anything else is `type` error `call_in_contract` "function F cannot be expanded in a contract: REASON". A call in
     a `cost` clause stays unsupported. A `pub` function's `requires`/`ensures`/`decreases` may expand only `pub`
     functions (`type/public_interface`, section 6f), because the body becomes part of the public contract.

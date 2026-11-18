@@ -1956,9 +1956,16 @@ class FnVerifier:
                 w = s.wf(rty, res)
                 if w is not None:
                     s.assume(st, g, w)
+            xa = getattr(f, "x_auto", None)
+            # P07: the callee's body is its contract expansion (no requires, so its code proof covers every
+            # argument): the result equals the template over the arguments. Evaluated before "result" is bound,
+            # so a parameter named result keeps its argument value.
+            xv = s.ev(xa, st, g, False, cenv) if code and xa is not None else None
             cenv["result"] = res
             for en in f.ensures:
                 s.assume(st, g, s.ev(en, st, g, False, cenv))
+            if xv is not None:
+                s.assume(st, g, res == xv)
             if ios:
                 s.post_refine(e, ios, st, g)
             return res

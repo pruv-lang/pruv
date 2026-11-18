@@ -2543,10 +2543,21 @@ impl<'a> FnVerifier<'a> {
         } else if let Some(w) = self.try_wf(&rty, res.try_ast()?)? {
             self.assume(st, g, w);
         }
+        // P07: the callee's body is its contract expansion (no requires, so its code proof covers every argument):
+        // the result equals the template over the arguments. Evaluated before "result" is bound, so a parameter
+        // named result keeps its argument value.
+        let xv = match (code, &f.x_auto) {
+            (true, Some(xa)) => Some(self.ev_ast(xa, st, g, false, &cenv)?),
+            _ => None,
+        };
         cenv.set("result", res.clone());
         for en in &f.ensures {
             let v = self.ev_ast(en, st, g, false, &cenv)?;
             self.assume(st, g, v);
+        }
+        if let Some(v) = xv {
+            let eq = res.try_ast()?.eq(&v);
+            self.assume(st, g, eq);
         }
         if !ios.is_empty() {
             self.post_refine(e, &ios, st, g)?;

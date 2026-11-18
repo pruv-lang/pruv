@@ -1,0 +1,23 @@
+// P07 header fact reject: the refusal exit marks the stack before returning and breaks valid
+fn valid(st: [i64]) -> bool
+{
+  let l: i64 = len(st);
+  if l < 4 { return false; }
+  if st[0] != 77 || st[1] != l || st[2] != l - 4 { return false; }
+  let t: i64 = st[3];
+  if t < 0 || t > st[2] { return false; }
+  return true;
+}
+fn push(inout st: [i64], v: i64) -> i64
+  requires valid(st)
+  ensures valid(st)
+{
+  let t: i64 = st[3];
+  if t == st[2] {
+    st[3] = -1;
+    return 1;
+  }
+  st[4 + t] = v;
+  st[3] = t + 1;
+  return 0;
+}

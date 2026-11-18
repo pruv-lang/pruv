@@ -20,6 +20,13 @@ CONTRACT_ONLY = {"is_some": ("option", BOOL), "some_val": ("option", "payload"),
 BIT_BUILTINS = {"band": ("&", "and"), "bor": ("|", "or"), "bxor": ("^", "xor"),
                 "wrapping_shl": ("<<", "shl"), "ushr": (">>", "lshr"),
                 "wrapping_add": ("wrapping_add", "add"), "wrapping_mul": ("wrapping_mul", "mul")}
+def x_has_bit(e):
+    """P07: does the expression call a bit builtin anywhere"""
+    if isinstance(e, Call) and e.name in BIT_BUILTINS:
+        return True
+    return any(x_has_bit(k) for k in expr_kids(e))
+
+
 # P2 batch 4: byte-word access on [u8]: load_be(a, i, n) and the statement-only store_be(inout a, i, w, n)
 WORD_BUILTINS = ("load_be", "store_be")
 BUILTIN_FNS = ("len", "alloc", "copy", "print", "is_char_boundary", "substr", "truncate", "eq_range", "resize") + tuple(BIT_BUILTINS) + WORD_BUILTINS   # L3-10: eq_range
@@ -193,6 +200,7 @@ class Checker:
         s.check_par_eligibility()   # G7 A0: transitive eligibility of every par branch (effects, foreign, nesting)
         s.check_costs()
         s.record_g9()
+        s.x_auto()             # P07: code calls of an expandable function know its body (result == expansion)
 
     def check_costs(s):
         """Ordinary typing wins, followed by cost/spent diagnostics and direct call effects."""
@@ -1678,6 +1686,27 @@ class Checker:
         for f in s.prog.functions:
             r = x_sig_reason(f) or x_scan_block(f, f.body, 0, s.funcs)
             s.x_raw[f.name] = r if r is not None else copy.deepcopy(f.body)
+
+    def x_auto(s):
+        """P07 (docs/L3_RESTRUCTURE_SPEC.md appendix P07): every function whose body expands as a contract keeps its
+        template as f.x_auto, so the verifier can assume result == expansion at each code call. A function whose
+        template cannot be built (not expandable, too large, calls a function that cannot be expanded) gets None;
+        that is never an error, the function simply keeps its written contract only. An i64 function whose template
+        uses a bit builtin also gets None: its value would put a bit-vector term into every later query of the caller
+        (the P2 kernels time out), while a bool predicate only adds its case split."""
+        for f in s.prog.functions:
+            f.x_auto = None
+            if isinstance(s.x_raw.get(f.name), str) or f.name not in s.x_raw:
+                continue
+            s.f = f
+            s.enter(fn_owner(f.name), f.tparams)
+            s.ckind = "ensures"
+            try:
+                xa = s.x_template(f, f)
+                f.x_auto = xa if f.ret == BOOL or not x_has_bit(xa) else None
+            except PruvError:
+                s.x_busy = set()
+            s.ckind = "code"
 
     def x_expand(s, e, f):
         """the expansion of the checked contract call e of the user function f"""
