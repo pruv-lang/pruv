@@ -15,3 +15,7 @@ Apply with `patch -p1 < bench/g5/faults/NAME.diff` from the repository root of a
 
 The g5_proof group carries the --infer rows of the proof-reject roots; their default-mode rows are must_reject rows.
 `check_attr.sh` compiles `examples/g5_reverse.pruv` with the llvm backend and inspects the definition of `swap_at`.
+
+TIDY T0.3 reuses f2: with `f2_old_current.diff` applied to a copy, `tests/vacuity/run.py --compiler py
+--compiler-path COPY/pruvc/pruvc.py` fails 2/24: pair/old_increment_accept (the entry-value increment
+`a[k] == old(a)[k] + 1` no longer verifies) and reach/g5_old_after_two_calls (its original stops verifying).

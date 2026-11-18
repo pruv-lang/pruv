@@ -14,6 +14,7 @@
  *   slen(state, s: str) -> i64              len(s)
  *   bflip(state, inout b: [bool]) -> ()     b[i] = !b[i] for all i (needs len >= 1)
  *   stlen(state) -> i64                     len(state)
+ *   sthen(state, s: str, b: [u8]) -> i64    len(s) + len(b) (a UTF-8 scan before another array)
  *
  * Every global symbol of the generated pruv_c module carries the manifest package name as a prefix ("app__", see
  * check_c_handle.py). The object-like macros below map the short names used in this file to the real symbols.
@@ -27,14 +28,18 @@
  * Not tested on purpose: double free and use after free. Without a registry they cannot be detected (undefined
  * behaviour), so the API only documents them.
  */
+/* MAP_ANON under -std=c11 on glibc */
+#define _DEFAULT_SOURCE
 #include <stdint.h>
 #include <stdio.h>
 #include <stddef.h>
+#include <sys/mman.h>
 
 #define pruv_handle_new app__pruv_handle_new
 #define pruv_handle_free app__pruv_handle_free
 #define pruv_handle_poisoned app__pruv_handle_poisoned
 #define pruv_handle_probe_panic app__pruv_handle_probe_panic
+#define pruv_handle_probe_len app__pruv_handle_probe_len
 #define pruv_h_setup app__pruv_h_setup
 #define pruv_h_op app__pruv_h_op
 #define pruv_h_big app__pruv_h_big
@@ -46,6 +51,7 @@
 #define pruv_h_bsum app__pruv_h_bsum
 #define pruv_h_slen app__pruv_h_slen
 #define pruv_h_bflip app__pruv_h_bflip
+#define pruv_h_sthen app__pruv_h_sthen
 #define pruv_h_stlen app__pruv_h_stlen
 #define pruv_hb_op app__pruv_hb_op
 
@@ -55,6 +61,8 @@ PruvHandle *pruv_handle_new(int64_t len);
 void pruv_handle_free(PruvHandle *h);
 int32_t pruv_handle_poisoned(const PruvHandle *h);
 int32_t pruv_handle_probe_panic(PruvHandle *h);
+/* the adapter's length predicate (probe builds): 1 if a length n of elem-byte elements is accepted */
+int32_t pruv_handle_probe_len(int64_t n, int64_t elem);
 
 int32_t pruv_h_setup(PruvHandle *h);
 int32_t pruv_h_op(PruvHandle *h, const int64_t *a, int64_t a_len, int64_t *out, int64_t out_len, int64_t *ret);
@@ -69,6 +77,7 @@ int32_t pruv_h_clash(PruvHandle *h, const int64_t *st, int64_t st_len, int64_t h
 int32_t pruv_h_bsum(PruvHandle *h, const uint8_t *b, int64_t b_len, int64_t *ret);
 int32_t pruv_h_slen(PruvHandle *h, const uint8_t *s, int64_t s_len, int64_t *ret);
 int32_t pruv_h_bflip(PruvHandle *h, uint8_t *b, int64_t b_len);
+int32_t pruv_h_sthen(PruvHandle *h, const uint8_t *s, int64_t s_len, const uint8_t *b, int64_t b_len, int64_t *ret);
 int32_t pruv_h_stlen(PruvHandle *h, int64_t *ret);
 /* batch of op: a is a table of n ro pointers (a_len: n lengths), out a table of n inout pointers (out_len: n lengths),
  * ret n results, *done = items that ran */
@@ -78,6 +87,8 @@ int32_t pruv_hb_op(PruvHandle *h, int64_t n, const int64_t *const *a, const int6
 enum { PRUV_OK = 0, PRUV_POISONED = 1, PRUV_BAD_ARGS = 2, PRUV_PANICKED = 3 };
 
 #define SENT ((int64_t)0x5EA15EA15EA15EA1LL)
+/* the Pruv array length bound (SPEC section 7 item 6): every outside length is at most 2^40 */
+#define LIM ((int64_t)1 << 40)
 static int fails = 0;
 #define CHECK(c, msg)                                                                  \
     do {                                                                               \
@@ -104,6 +115,13 @@ int main(void) {
     /* ---- handle basics ---- */
     CHECK(pruv_handle_new(-1) == NULL, "new(-1) is NULL");
     CHECK(pruv_handle_new(INT64_MAX) == NULL, "new(INT64_MAX) is NULL");
+    CHECK(pruv_handle_new(LIM + 1) == NULL, "new(2^40 + 1) is NULL");
+    /* the bound itself is accepted: tested on the predicate (allocating 2^40 words is not an option) */
+    CHECK(pruv_handle_probe_len(LIM, 8) == 1 && pruv_handle_probe_len(LIM, 1) == 1, "len_ok(2^40) for i64 and u8");
+    CHECK(pruv_handle_probe_len(LIM + 1, 8) == 0 && pruv_handle_probe_len(LIM + 1, 1) == 0, "len_ok(2^40 + 1) refused");
+    CHECK(pruv_handle_probe_len(0, 8) == 1 && pruv_handle_probe_len(-1, 8) == 0 && pruv_handle_probe_len(-1, 1) == 0,
+          "len_ok(0) accepted, len_ok(-1) refused");
+    CHECK(pruv_handle_probe_len(INT64_MAX, 1) == 0 && pruv_handle_probe_len(INT64_MIN, 1) == 0, "len_ok extremes refused");
     pruv_handle_free(NULL); /* ignored */
     CHECK(pruv_handle_poisoned(NULL) == 2, "poisoned(NULL) == 2");
     PruvHandle *h = pruv_handle_new(4);
@@ -243,6 +261,31 @@ int main(void) {
         BAD(pruv_h_op(h, a, INT64_MAX / 8 + 1, out, 1, &r), "ro length > INT64_MAX/8");
         BAD(pruv_h_op(h, a, 1, out, INT64_MAX / 8 + 1, &r), "inout length > INT64_MAX/8");
         BAD(pruv_h_op(h, a, INT64_MAX, out, 1, &r), "ro length INT64_MAX");
+        /* above the Pruv bound 2^40 (still far below isize::MAX / 8): refused before proved code sees the slice */
+        BAD(pruv_h_op(h, a, LIM + 1, out, 1, &r), "ro length 2^40 + 1");
+        BAD(pruv_h_op(h, a, 1, out, LIM + 1, &r), "inout length 2^40 + 1");
+        {
+            uint8_t b1[1] = {1};
+            BAD(pruv_h_bsum(h, b1, LIM + 1, &r), "[u8] length 2^40 + 1");
+            BAD(pruv_h_slen(h, b1, LIM + 1, &r), "str length 2^40 + 1");
+            BAD(pruv_h_flag0(h, b1, LIM + 1, &r), "[bool] length 2^40 + 1");
+            CHECK(pruv_h_bflip(h, b1, LIM + 1) == PRUV_BAD_ARGS && b1[0] == 1, "inout [bool] length 2^40 + 1, untouched");
+            /* a later oversized length is refused before the str UTF-8 scan reads the earlier buffer: s points at
+             * an unreadable page, so a scan would crash the probe */
+            {
+                uint8_t *nr = mmap(NULL, 4096, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+                CHECK(nr != MAP_FAILED, "mmap PROT_NONE page");
+                if (nr != MAP_FAILED) {
+                    /* b starts past both the handle and ret so the overlap check passes and only the length check
+                     * can refuse; b is never read */
+                    uintptr_t top = (uintptr_t)h > (uintptr_t)&r ? (uintptr_t)h : (uintptr_t)&r;
+                    const uint8_t *far = (const uint8_t *)(top + 4096);
+                    BAD(pruv_h_sthen(h, nr, 1, far, LIM + 1, &r), "str then [u8] length 2^40 + 1, str never read");
+                    munmap(nr, 4096);
+                }
+                CHECK(pruv_h_sthen(h, b1, 1, b1, 1, &r) == PRUV_OK && r == 2, "str then [u8] in bound");
+            }
+        }
         /* any buffer or ret overlapping the handle object itself */
         BAD(pruv_h_op(h, (const int64_t *)h, 1, out, 1, &r), "ro overlaps the handle");
         BAD(pruv_h_op(h, a, 1, (int64_t *)h, 1, &r), "inout overlaps the handle");
@@ -300,6 +343,7 @@ int main(void) {
         CHECK(pruv_hr_grow(h, INT64_MAX, &r) == PRUV_BAD_ARGS && r == SENT, "rebuild new_len INT64_MAX");
         CHECK(pruv_hr_grow(h, INT64_MAX / 8 + 1, &r) == PRUV_BAD_ARGS && r == SENT, "rebuild new_len > INT64_MAX/8");
         CHECK(pruv_hr_grow(h, INT64_MIN, &r) == PRUV_BAD_ARGS && r == SENT, "rebuild new_len INT64_MIN");
+        CHECK(pruv_hr_grow(h, LIM + 1, &r) == PRUV_BAD_ARGS && r == SENT, "rebuild new_len 2^40 + 1");
         CHECK(pruv_hr_grow(h, 16, (int64_t *)h) == PRUV_BAD_ARGS, "rebuild ret overlaps the handle");
         CHECK(pruv_h_stlen(h, &r) == PRUV_OK && r == 8, "stlen unchanged (8) after refused rebuilds");
         CHECK(pruv_h_big(h, 20, &r) == PRUV_OK && r == 1, "state intact after refused rebuilds");
@@ -507,13 +551,15 @@ int main(void) {
             int64_t al7[2] = {1, 1};
             int64_t o7[2] = {SENT, SENT}, r7[2] = {SENT, SENT};
             int c;
-            /* item 1 broken in five ways: inout over the ret table, inout over done, misaligned ro, negative inout
-             * length, inout over the handle */
-            for (c = 0; c < 5; c++) {
+            /* item 1 broken in seven ways: inout over the ret table, inout over done, misaligned ro, negative inout
+             * length, inout over the handle, inout length 2^40 + 1, ro length 2^40 + 1 (the Pruv bound holds for every
+             * slice inside a batch item; the item count n itself is only an adapter loop count) */
+            for (c = 0; c < 7; c++) {
                 PruvHandle *g = fresh();
                 const int64_t *a7[2] = {&av7[0], &av7[1]};
                 int64_t *o7t[2] = {&o7[0], &o7[1]};
                 int64_t ol[2] = {1, 1};
+                int64_t al[2] = {al7[0], al7[1]};
                 int64_t d7 = SENT;
                 if (!g) {
                     CHECK(0, "batch bad item: fresh handle");
@@ -526,7 +572,9 @@ int main(void) {
                 if (c == 2) a7[1] = (const int64_t *)((const char *)&av7[1] + 1);
                 if (c == 3) ol[1] = -1;
                 if (c == 4) o7t[1] = (int64_t *)g;
-                CHECK(pruv_hb_op(g, 2, a7, al7, o7t, ol, r7, &d7) == PRUV_BAD_ARGS, "batch bad item status");
+                if (c == 5) ol[1] = LIM + 1;
+                if (c == 6) al[1] = LIM + 1;
+                CHECK(pruv_hb_op(g, 2, a7, al, o7t, ol, r7, &d7) == PRUV_BAD_ARGS, "batch bad item status");
                 CHECK(d7 == 1, "batch bad item: done == 1");
                 CHECK(r7[0] == 0 && o7[0] == -10, "batch bad item: item 0 effects visible");
                 CHECK(r7[1] == SENT && o7[1] == SENT, "batch bad item: item 1 wrote nothing");
@@ -571,6 +619,8 @@ int main(void) {
             CHECK(pruv_h_op(h, a, 1, (int64_t *)h, 1, (int64_t *)h) == PRUV_POISONED, "poisoned: handle overlap -> 1");
             CHECK(pruv_hr_grow(h, -1, &r) == PRUV_POISONED && r == SENT, "poisoned: hr_grow(-1) -> 1");
             CHECK(pruv_hr_grow(h, INT64_MAX, &r) == PRUV_POISONED && r == SENT, "poisoned: hr_grow(INT64_MAX) -> 1");
+            CHECK(pruv_hr_grow(h, LIM + 1, &r) == PRUV_POISONED && r == SENT, "poisoned: hr_grow(2^40 + 1) -> 1");
+            CHECK(pruv_h_op(h, a, LIM + 1, &o[1], 1, &r) == PRUV_POISONED && r == SENT, "poisoned: ro 2^40 + 1 -> 1");
             CHECK(pruv_hr_grow(h, 8, NULL) == PRUV_POISONED, "poisoned: hr_grow ret NULL -> 1");
             CHECK(o[0] == SENT && o[1] == SENT && o[2] == SENT && a[0] == 7, "poisoned: nothing touched");
         }

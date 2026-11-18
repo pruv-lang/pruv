@@ -22,10 +22,14 @@ Modes (two independent axes):
 Generated names (reserved: the parser rejects any user identifier that starts with `pruv_`
 or contains `__`, error code reserved_name, so user names never collide with these):
   f                 public function, same name/params/return type as the Pruv function
-                    (`#[inline]` wrapper when f has requires, otherwise the real body).
-  f__pruv_body       private unchecked body, only for functions with requires.
+                    (`#[inline]` wrapper when f has requires or is a public function with an
+                    array / str parameter, otherwise the real body).  Every public wrapper first
+                    checks each array / str parameter length <= 2^40 (TIDY T0 step 4,
+                    "pruv: invalid representation: n (array length)" / "(str length)"), also
+                    under trust_callers, then the requires.
+  f__pruv_body       private unchecked body, only for those wrapped functions (Gen.body_named).
                     Verified mode: calls inside Pruv code go straight to f__pruv_body
-                    (the caller proved requires).  Safe mode: inner
+                    (the caller proved requires and the length bound).  Safe mode: inner
                     calls go to the checked entry f.
   pruv_*             helper functions emitted once at the top of the file (only the ones
                     needed): pruv_idx pruv_oob pruv_get pruv_set pruv_ovf pruv_add pruv_sub
@@ -244,6 +248,31 @@ fn pruv_cboundary(a: &str, i: i128) -> bool { i >= 0 && i <= (a.len() as i128) &
 
 def is_str(t):
     return t is not None and t.name == "str"
+
+
+def len_params(f):
+    """T0: the parameters whose length the public entry checks against 2^40 (arrays, including inout arrays, and str)"""
+    return [p for p in f.params if p.type is not None and (is_array(p.type) or is_str(p.type))]
+
+
+def len_guard(f):
+    """T0: the length guard lines of a public entry (SPEC section 7 item 6). The fast path is one branch on the
+    non-short-circuit OR (`|`) of one compare per array / str length against 2^40, so it is taken exactly when some
+    length is above 2^40; it calls a cold, never-inlined, diverging local fn that takes only the lengths and panics on
+    the first parameter above 2^40, in parameter order, with the LLVM ABI wrapper's message (`array length` /
+    `str length`). The slow fn must diverge: a returning one leaves the optimizer no length bound after the guard and
+    measured +9-18% on the budget M4 default lane (an OR of the lengths, whose false positives such as 2^40 and 1 force
+    a returning slow fn). Manifest raw_entries = "crate" leaves the check to the same-crate adapter."""
+    ps = len_params(f)
+    if not ps:
+        return []
+    names = [p.name for p in ps]
+    checks = " ".join('if (%s as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (%s)", %s) }'
+                      % (p.name, "str length" if is_str(p.type) else "array length", p.name) for p in ps)
+    big = " | ".join("((%s.len() as u64) > (1u64 << 40))" % n for n in names)
+    return ['#[cold] #[inline(never)] fn pruv_len_slow(%s) -> ! { %s unreachable!() }'
+            % (", ".join("%s: usize" % n for n in names), checks),
+            'if %s { pruv_len_slow(%s) }' % (big, ", ".join("%s.len()" % n for n in names))]
 
 
 def str_lit(bs):
@@ -1490,6 +1519,8 @@ class Gen:
         # P09: manifest raw_entries ("crate" / "unsafe"): host entries become pub(crate) and the pruv_raw module is
         # appended (raw_module); None keeps today's output byte for byte
         s.raw = getattr(prog, "raw_entries", None) if s.explicit else None
+        # T0: only manifest "crate" delegates the 2^40 length check to the same-crate host adapter ("c" keeps it)
+        s.raw_crate = s.raw == "crate"
         if s.raw == "c":   # P10: the Rust backend treats "c" exactly as "crate" (no extern "C")
             s.raw = "crate"
         s.raw_items = []    # (name, params text, return text, parameter names) of each host entry's public item, in emission order
@@ -1526,6 +1557,16 @@ class Gen:
         s.need_shift = set()  # P2 batch 2: shifts used in code under --no-verify (pruv_shl / pruv_ushr helpers)
         s.printed = False  # P13a.10: print lowers to println!, which panics when stdout fails (raw_unwind_free)
         s.need_load_be = False  # P2 batch 4: load_be used in a runtime contract (pruv_cload_be helper)
+        # T0 (TIDY_SPEC 4.8 item 4): `lg` = functions without a requires whose public Rust item takes an array or str
+        # (legacy: every non-private function; explicit mode: host entries). Like a function with a requires, such a
+        # function has a private body f__pruv_body and a public wrapper f that checks every array / str length against
+        # 2^40 (SPEC section 7 item 6) and is not waived by trust_callers; verified Pruv callers call the body, so the
+        # check runs once at the host boundary and never on an internal call (TIDY_SPEC 4.3).
+        # Manifest raw_entries = "crate" has no length check (the same-crate adapter owns it), so no extra split.
+        s.lg = set() if s.raw_crate else {f.name for f in prog.functions
+                if f.foreign is None and not f.requires and len_params(f)
+                and (f.host_entry if s.explicit else not s.private(f))}
+        s.body_named = s.has_req | s.lg
         # G6 (section 12): only a program that uses G6 gets any of the following
         from foreign import first_g6_use, first_proc_use, first_net_use, first_async_use, uses_files
         s.ev = first_async_use(prog) is not None
@@ -1685,13 +1726,13 @@ class Gen:
         else:
             ps = ", ".join("%s: %s" % (p.name, s.rt(p.type, not p.take, p)) for p in f.params)
         ret = "" if f.ret == UNIT else " -> " + s.rt(f.ret, site=f)
-        body_name = f.name + "__pruv_body" if f.requires else f.name
+        body_name = f.name + "__pruv_body" if f.name in s.body_named else f.name
         if s.explicit:
-            vis = s.pub_vis() if (f.host_entry and not f.requires) else ""
+            vis = s.pub_vis() if (f.host_entry and f.name not in s.body_named) else ""
             if vis and s.raw:
                 s.raw_items.append((f.name, ps, ret, [p.name for p in f.params]))
         else:
-            vis = "" if (f.requires or s.private(f)) else "pub "   # G3: specializations are private
+            vis = "" if (f.name in s.body_named or s.private(f)) else "pub "   # G3: specializations are private
         s.emit(0, s.allow)
         # Inline hint on every function body: without it rustc keeps the generated call chains as real calls.
         # inline_policy raises it to #[inline(always)] where the measured policy says so.
@@ -1738,6 +1779,8 @@ class Gen:
                     s.entry(f, ps, ret, body_name, f.name + "__pruv_chk", False, True)
             else:
                 s.entry(f, ps, ret, body_name, f.name, False, True)
+        elif f.name in s.lg:
+            s.entry(f, ps, ret, body_name, f.name, True, False)   # T0: only the length guard
 
     def pub_vis(s):
         """P09: the visibility of a host entry's public item"""
@@ -1774,7 +1817,7 @@ class Gen:
     def callee(s, n):
         """explicit mode: the Rust name a Pruv call of the function n invokes (see Gen.__init__)"""
         if n not in s.has_req:
-            return n
+            return n + "__pruv_body" if (s.verified and n in s.lg) else n   # T0: past the entry's length guard
         if s.verified:
             return n + "__pruv_body"     # the caller proved requires
         return n + "__pruv_chk" if (s.trust and n in s.entries) else n
@@ -1806,6 +1849,11 @@ class Gen:
         s.emit(0, "%sfn %s(%s)%s {" % (s.pub_vis() if pub else "", name, ps, ret))
         if pub and s.explicit and s.raw:
             s.raw_items.append((name, ps, ret, [p.name for p in f.params]))
+        if pub and not s.raw_crate:
+            # T0: every public entry checks its array / str lengths first, also under trust_callers. Under manifest
+            # raw_entries = "crate" the entries are pub(crate) and the host adapter in the crate owns the check (SPEC 7)
+            for line in len_guard(f):
+                s.emit(1, line)
         if checked:
             conversions, checks = s.req_checks(f)
             for line in conversions:
@@ -2824,10 +2872,10 @@ class Gen:
                 s.emit(d, "let %s: %s = %s;" % (n, ty, val))
                 args.append(n)
             n = s.callee(call.name) if s.explicit else call.name
-            if not s.explicit and call.name in s.has_req:
+            if not s.explicit and call.name in s.body_named:
                 if s.verified:
                     n += "__pruv_body"
-                elif s.trust and not any(isinstance(x, InoutArg) for x in call.args):
+                elif call.name in s.has_req and s.trust and not any(isinstance(x, InoutArg) for x in call.args):
                     n += "__pruv_par_chk"
             if s.cost:
                 s.emit(d, s.cost_call(call.name, args))
@@ -3129,8 +3177,8 @@ class Gen:
                 return "%s__pruv_small(&mut pruv_sb_%s%s)" % (n, s.small_buf, "".join(", " + x for x in args))
             if s.explicit:
                 n = s.callee(n)
-            elif s.verified and n in s.has_req:
-                n = n + "__pruv_body"   # caller proved requires
+            elif s.verified and n in s.body_named:
+                n = n + "__pruv_body"   # caller proved requires (T0: or passes the length guard)
             call = "%s(%s)" % (n, ", ".join(args))
             return "{ %s %s }" % (" ".join(captured), call) if captured else call
         raise Exception("codegen: contract-only expression in code: %r" % e)
@@ -3204,7 +3252,7 @@ RAW_STORE = """\
     }"""
 
 # P13a.10: the store of a program whose entries cannot unwind (raw_unwind_free). Same API, no poison flag: a verified
-# entry either panics in its entry requires check, before it writes anything, or returns normally, so the state in the
+# entry either panics in its entry length or requires checks, before it writes anything, or returns normally, so the state in the
 # store is always the result of complete entry calls.
 RAW_STORE_FREE = """\
     /// Never produced for this program: its entries cannot unwind (kept so adapters written against the poisoning
@@ -3212,8 +3260,8 @@ RAW_STORE_FREE = """\
     #[derive(Debug)]
     pub struct PruvPoisoned {}
     /// Owns resident state for the raw entries. Every call runs through `with`. This program was verified and calls
-    /// no foreign or runtime code, so an entry either panics in its entry `requires` check, before it writes, or
-    /// returns normally: the state is always the result of complete entry calls and the store has no poison flag
+    /// no foreign or runtime code, so an entry either panics in its entry length or `requires` checks, before it
+    /// writes, or returns normally: the state is always the result of complete entry calls and the store has no poison flag
     /// (`with` always runs the closure, `is_poisoned` is always false). Two rules the types cannot enforce are the
     /// adapter's: `T` owns the state (no reference or shared handle to it outside the store), and the closure changes
     /// `T` only through the entries (a host write followed by a host panic is not caught here).
@@ -3241,7 +3289,7 @@ RAW_FORWARD = """\
         /// # Safety
         ///
         /// The caller upholds every precondition of the entry: its `requires` (checked at run time unless the
-        /// program was built with --trust-callers), and every array that carries resident state was produced by this
+        /// program was built with --trust-callers; array and str lengths above 2^40 are always rejected), and every array that carries resident state was produced by this
         /// program's entries and was not changed by other code since. A state that was being changed when a panic
         /// unwound must never be passed again; keep it in a `PruvStore`, which refuses reuse after a panic.
         #[inline(always)]
@@ -3250,16 +3298,20 @@ RAW_FORWARD = """\
         }"""
 
 
-def raw_module(mode, items, unwind_free=False):
+def raw_module(mode, items, unwind_free=False, adapter_len=False):
     """P09: the pruv_raw module of a program with manifest raw_entries = mode ("crate" or "unsafe"), without a
     trailing newline. items: (name, params text, return text, parameter names) of the host entries' public items in emission order.
-    unwind_free (P13a.10, raw_unwind_free): the entries cannot unwind, so the store carries no poison flag."""
+    unwind_free (P13a.10, raw_unwind_free): the entries cannot unwind, so the store carries no poison flag.
+    adapter_len (T0): the Rust backend under manifest "crate" (not "c"): the entries have no length check and the
+    header states the adapter's length obligation."""
     store = RAW_STORE_FREE if unwind_free else RAW_STORE
     if mode == "crate":
         head = ['// P09: manifest raw_entries = "crate": the host entries above are pub(crate); a host adapter in this crate keeps',
                 ("// resident state in pruv_raw::PruvStore; the entries cannot unwind, so the store has no poison flag."
-                 if unwind_free else "// resident state in pruv_raw::PruvStore, which refuses every reuse after a panic."),
-                "#[allow(dead_code)]", "pub mod pruv_raw {"]
+                 if unwind_free else "// resident state in pruv_raw::PruvStore, which refuses every reuse after a panic.")]
+        if adapter_len:
+            head += ["// T0: these entries do not check array / str lengths. The adapter passes only arrays whose element count, and str", "// values whose byte length, is in 0..=2^40; breaking that is undefined behavior (SPEC section 7, host length bound)."]
+        head += ["#[allow(dead_code)]", "pub mod pruv_raw {"]
         return "\n".join(head + [store, "}"])
     head = ['// P09: manifest raw_entries = "unsafe": the host entries above are pub(crate) and exported only as the documented',
             ("// pub unsafe fn forwarders in pruv_raw; resident state lives in pruv_raw::PruvStore (no poison flag: no unwind)."
@@ -3278,7 +3330,7 @@ def raw_unwind_free(g):
     """P13a.10: no host entry of the program can unwind after it starts writing. Verified explicit mode erases every
     check inside bodies (Pruv callers call f__pruv_body, the caller proved requires; no cost counters) and every
     operation the verifier accepted is total on the proved domain (get_unchecked, plain arithmetic, lengths <= 2^40),
-    so the only panic left is the entry's own requires check, which runs before the body. Foreign code (G6 boundary
+    so the only panics left are the entry's own length and requires checks, which run before the body. Foreign code (G6 boundary
     checks, trusted Rust), print (println! panics when stdout fails), the G10 file / process / socket / event runtimes
     and par groups (threads, locks) keep the poisoning store."""
     return bool(g.verified and not g.printed and not g.g6 and not g.g10 and not g.proc and not g.net and not g.ev and not g.par_callees)
@@ -3419,7 +3471,7 @@ def gen_rust_ex(prog, verified=True, trust_callers=False, budget=1 << 30, plan=N
         trust_out["fg"] = g.fg if g.g6 else None
     text = inline_policy("\n".join(g.out) + "\n")
     if g.raw:   # P09: after inline_policy, so the module never changes an inlining decision
-        text += raw_module(g.raw, g.raw_items, raw_unwind_free(g)) + "\n"
+        text += raw_module(g.raw, g.raw_items, raw_unwind_free(g), g.raw_crate) + "\n"
     return text, manifest
 
 ASYNC_PRELUDE = r"""#[derive(Clone, Default)]

@@ -678,8 +678,9 @@ pub mod pruv_c {
     //!   of the call;
     //! - ret points to a writable i64.
     //!
-    //! The adapter checks null, sign, alignment, size, address overflow and overlap among the call's buffers and
-    //! the handle, but it cannot check allocation size or provenance.
+    //! The adapter checks null, sign, alignment, size (every array, new state and rebuilt state has at most 2^40
+    //! elements, the Pruv array bound), address overflow and overlap among the call's buffers and the handle, but it
+    //! cannot check allocation size or provenance.
     /// Statuses of every @P@pruv_h_* / @P@pruv_hr_* / @P@pruv_hb_* call: 0 ok, 1 poisoned (refused before any argument
     /// is read, nothing ran), 2 bad arguments (refused, nothing ran), 3 a Rust panic unwound to the adapter (if it
     /// happened inside the store it poisoned the handle). A batch (`hb`) answers 1 and 2 for the whole call before any
@@ -694,14 +695,21 @@ pub mod pruv_c {
     pub struct PruvHandle {
         store: super::pruv_raw::PruvStore<::std::vec::Vec<i64>>,
     }
-    // A C (pointer, length) pair as a slice: None for a negative or oversized length, or for a null or misaligned
+    // The Pruv array length bound (SPEC section 7 item 6, assumed by the verifier for every array parameter):
+    // 0 <= n <= min(2^40, isize::MAX / size_of::<T>()). Checked once where a C buffer or a new or rebuilt state
+    // enters proved code; never inside the entries.
+    #[inline(always)]
+    fn len_ok<T>(n: i64) -> bool {
+        n >= 0 && n as u64 <= ((isize::MAX as u64) / (::std::mem::size_of::<T>() as u64)).min(1u64 << 40)
+    }
+    // A C (pointer, length) pair as a slice: None for a length outside len_ok, or for a null or misaligned
     // pointer with a nonzero length, or whose end address overflows. Length 0 never reads the pointer.
     #[inline(always)]
     unsafe fn ro<'a, T>(p: *const T, n: i64) -> Option<&'a [T]> {
         if n == 0 {
             return Some(&[]);
         }
-        if n < 0 || n as u64 > (isize::MAX as u64) / (::std::mem::size_of::<T>() as u64)
+        if !len_ok::<T>(n)
             || (p as usize).checked_add(n as usize * ::std::mem::size_of::<T>()).is_none() || p.is_null()
             || (p as usize) % ::std::mem::align_of::<T>() != 0 {
             return None;
@@ -713,7 +721,7 @@ pub mod pruv_c {
         if n == 0 {
             return Some(&mut []);
         }
-        if n < 0 || n as u64 > (isize::MAX as u64) / (::std::mem::size_of::<T>() as u64)
+        if !len_ok::<T>(n)
             || (p as usize).checked_add(n as usize * ::std::mem::size_of::<T>()).is_none() || p.is_null()
             || (p as usize) % ::std::mem::align_of::<T>() != 0 {
             return None;
@@ -758,11 +766,11 @@ pub mod pruv_c {
             }
         }
     }
-    /// A new handle whose state is `len` zero words (call the program's init entry next); null for a negative or
-    /// oversized length. Free it with @P@pruv_handle_free.
+    /// A new handle whose state is `len` zero words (call the program's init entry next); null for a length
+    /// outside 0..=2^40. Free it with @P@pruv_handle_free.
     #[no_mangle]
     pub extern "C" fn @P@pruv_handle_new(len: i64) -> *mut PruvHandle {
-        if len < 0 || len as u64 > (isize::MAX as u64) / 8 {
+        if !len_ok::<i64>(len) {
             return ::std::ptr::null_mut();
         }
         match ::std::panic::catch_unwind(|| {
@@ -824,6 +832,12 @@ pub mod pruv_c {
                 Err(_) => PRUV_POISONED,
             }
         })
+    }
+    /// Probe builds only: the length predicate len_ok for `elem` = 1 (u8 elements) or 8 (i64 elements); 1 if accepted.
+    #[cfg(pruv_c_probe)]
+    #[no_mangle]
+    pub extern "C" fn @P@pruv_handle_probe_len(n: i64, elem: i64) -> i32 {
+        (if elem == 1 { len_ok::<u8>(n) } else { len_ok::<i64>(n) }) as i32
     }"##;
 
 const C_RET_CHECK: [&str; 3] = [
@@ -940,6 +954,11 @@ fn c_entry_text(e: &CEntry) -> String {
         l.push("                return PRUV_BAD_ARGS;".to_string());
         l.push("            }".to_string());
     }
+    if let Some(lf) = c_len_first(&params) {
+        l.push(format!("            if !({}) {{", lf));
+        l.push("                return PRUV_BAD_ARGS;".to_string());
+        l.push("            }".to_string());
+    }
     let mut args: Vec<String> = vec![if e.state_mut { "&mut st[..]".to_string() } else { "&st[..]".to_string() }];
     for (n, k) in &params {
         let expr = match k {
@@ -1005,7 +1024,7 @@ fn c_rebuild_text(name: &str) -> String {
     }
     l.extend(C_RET_CHECK.iter().map(|s| s.to_string()));
     for s in [
-        "            if new_len < 0 || new_len as u64 > (isize::MAX as u64) / 8 {",
+        "            if !len_ok::<i64>(new_len) {",
         "                return PRUV_BAD_ARGS;",
         "            }",
         "            if !apart(span(ret, 1), span(h as *const PruvHandle, 1)) {",
@@ -1054,6 +1073,25 @@ fn c_is_array(k: &CKind) -> bool {
 
 fn c_is_mut(k: &CKind) -> bool {
     matches!(k, CKind::MutI64 | CKind::MutU8 | CKind::MutBool)
+}
+
+/// T0: when a UTF-8 / bool scan (str, [bool]) comes before another array parameter, the condition that every
+/// slice length is in len_ok, checked before any conversion so no buffer is read when a later length is oversized
+/// (SPEC section 7, C adapter); None when no scan precedes another array (the conversions already check in order).
+fn c_len_first(params: &[(String, CKind)]) -> Option<String> {
+    let arrs: Vec<&(String, CKind)> = params.iter().filter(|(_, k)| c_is_array(k)).collect();
+    let first_scan = arrs.iter().position(|(_, k)| matches!(k, CKind::Str | CKind::RoBool | CKind::MutBool))?;
+    if first_scan == arrs.len() - 1 {
+        return None;
+    }
+    let parts: Vec<String> = arrs
+        .iter()
+        .map(|(x, k)| {
+            let t = if matches!(k, CKind::RoI64 | CKind::MutI64) { "i64" } else { "u8" };
+            format!("len_ok::<{}>({}_len)", t, x)
+        })
+        .collect();
+    Some(parts.join(" && "))
 }
 
 /// Conversion of an array-like parameter `n` (pointer `n`, length `n_len`) to its Rust slice option.
@@ -1168,6 +1206,11 @@ fn c_batch_text(e: &CEntry) -> String {
         let spans: Vec<&str> = bb[..own_n].iter().map(|v| v.1.as_deref().unwrap_or("")).collect();
         l.push(format!("{}let ({}{}) = ({}{});", i20, names.join(", "), tc, spans.join(", "), tc));
         l.push(format!("{}if !({}) {{", i20, pairsb.join(" && ")));
+        l.push(format!("{}    return (i, PRUV_BAD_ARGS);", i20));
+        l.push(format!("{}}}", i20));
+    }
+    if let Some(lf) = c_len_first(&params) {
+        l.push(format!("{}if !({}) {{", i20, lf));
         l.push(format!("{}    return (i, PRUV_BAD_ARGS);", i20));
         l.push(format!("{}}}", i20));
     }

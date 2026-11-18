@@ -1149,6 +1149,11 @@ struct Gen<'a> {
     cost: bool,
     cost_used: bool,
     has_req: HashSet<String>,
+    /// T0 (TIDY_SPEC 4.8 item 4): functions without a requires whose public Rust item takes an array or str; they get a
+    /// private body `f__pruv_body` and a public wrapper `f` that only checks the lengths (see Gen::new)
+    lg: HashSet<String>,
+    /// has_req and lg: the functions whose body is `f__pruv_body`
+    body_named: HashSet<String>,
     par_callees: HashSet<String>,
     par_hook: String,
     /// During the requires entry check: user-type parameters already converted -> type
@@ -1282,7 +1287,7 @@ impl<'a> Gen<'a> {
         } else {
             Default::default()
         };
-        Gen {
+        let mut g = Gen {
             storage,
             stack,
             small,
@@ -1350,7 +1355,30 @@ impl<'a> Gen<'a> {
             printed: false,
             need_load_be: false,
             diag: None,
-        }
+            lg: HashSet::new(),
+            body_named: HashSet::new(),
+        };
+        // T0 (TIDY_SPEC 4.8 item 4): `lg` = functions without a requires whose public Rust item takes an array or str
+        // (legacy: every non-private function; explicit mode: host entries). Like a function with a requires, such a
+        // function has a private body f__pruv_body and a public wrapper f that checks every array / str length against
+        // 2^40 (SPEC section 7 item 6) and is not waived by trust_callers; verified Pruv callers call the body, so the
+        // check runs once at the host boundary and never on an internal call (TIDY_SPEC 4.3).
+        let lg: HashSet<String> = prog
+            .functions
+            .iter()
+            .filter(|f| {
+                // manifest raw_entries = "crate" has no length check (the same-crate adapter owns it), so no extra split
+                g.raw.as_deref() != Some("crate")
+                    && f.foreign.is_none()
+                    && f.requires.is_empty()
+                    && !len_params(f).is_empty()
+                    && (if g.explicit { g.entries.contains(&f.name) } else { !g.private(f) })
+            })
+            .map(|f| f.name.clone())
+            .collect();
+        g.body_named = g.has_req.union(&lg).cloned().collect();
+        g.lg = lg;
+        g
     }
 
     /// G9: some struct field / enum payload has the internal type `name` (array_u8, array_bool, str)
@@ -1644,12 +1672,13 @@ impl<'a> Gen<'a> {
         });
         let ret = if f.ret == "unit" { String::new() } else { format!(" -> {}", self.rt_width(&f.ret, false, self.storage.layout_of(f))) };
         let has = !f.requires.is_empty();
-        let body_name = if has { format!("{}__pruv_body", f.name) } else { f.name.clone() };
+        let named = self.body_named.contains(&f.name);
+        let body_name = if named { format!("{}__pruv_body", f.name) } else { f.name.clone() };
         // G3: generic specializations (and G6 collection-bearing functions) are private items; G4 A2: only host entries
         // without a checked wrapper are `pub`
         let host = self.entries.contains(&f.name);
         let vis = if self.explicit {
-            if host && !has {
+            if host && !named {
                 if self.raw.is_some() {
                     self.raw_items.push((
                         f.name.clone(),
@@ -1662,7 +1691,7 @@ impl<'a> Gen<'a> {
             } else {
                 ""
             }
-        } else if has || self.private(f) {
+        } else if named || self.private(f) {
             ""
         } else {
             "pub "
@@ -1733,6 +1762,9 @@ impl<'a> Gen<'a> {
             } else {
                 self.entry(f, &ps, &ret, &body_name, Some(f.name.as_str()), Some(false), Some(true))?;
             }
+        } else if self.lg.contains(&f.name) {
+            // T0: only the length guard
+            self.entry(f, &ps, &ret, &body_name, Some(f.name.as_str()), Some(true), Some(false))?;
         }
         Ok(())
     }
@@ -1793,7 +1825,8 @@ impl<'a> Gen<'a> {
     /// explicit mode: the Rust name a Pruv call of the function `n` invokes (see Gen::new)
     fn callee(&self, n: &str) -> String {
         if !self.has_req.contains(n) {
-            return n.to_string();
+            // T0: past the entry's length guard
+            return if self.verified && self.lg.contains(n) { format!("{}__pruv_body", n) } else { n.to_string() };
         }
         if self.verified {
             return format!("{}__pruv_body", n); // the caller proved requires
@@ -1860,6 +1893,13 @@ impl<'a> Gen<'a> {
                 ret.to_string(),
                 f.params.iter().map(|p| p.name.clone()).collect(),
             ));
+        }
+        if is_pub && self.raw.as_deref() != Some("crate") {
+            // T0: every public entry checks its array / str lengths first, also under trust_callers. Under manifest
+            // raw_entries = "crate" the entries are pub(crate) and the host adapter in the crate owns the check (SPEC 7)
+            for line in len_guard(f) {
+                self.emit(1, &line);
+            }
         }
         if checked {
             let (conversions, checks) = self.req_checks(f)?;
@@ -3592,10 +3632,10 @@ impl<'a> Gen<'a> {
                 args.push(n);
             }
             let mut n = if self.explicit { self.callee(&call.name) } else { call.name.clone() };
-            if !self.explicit && self.has_req.contains(&call.name) {
+            if !self.explicit && self.body_named.contains(&call.name) {
                 if self.verified {
                     n.push_str("__pruv_body");
-                } else if self.trust && !call.args.iter().any(|x| matches!(x, Expr::InoutArg(_))) {
+                } else if self.has_req.contains(&call.name) && self.trust && !call.args.iter().any(|x| matches!(x, Expr::InoutArg(_))) {
                     n.push_str("__pruv_par_chk");
                 }
             }
@@ -4218,8 +4258,8 @@ impl<'a> Gen<'a> {
                 let mut name = n.to_string();
                 if self.explicit {
                     name = self.callee(&name); // G4 A2
-                } else if self.verified && self.has_req.contains(&name) {
-                    name.push_str("__pruv_body"); // the caller proved the requires
+                } else if self.verified && self.body_named.contains(&name) {
+                    name.push_str("__pruv_body"); // the caller proved the requires (T0: or passes the length guard)
                 }
                 let call = format!("{}({})", name, args.join(", "));
                 Ok(if captured.is_empty() { call } else { format!("{{ {} {} }}", captured.join(" "), call) })
@@ -4490,7 +4530,7 @@ fn gen_rust_concrete_core(
     let mut text = inline_policy(s);
     if let Some(raw) = &g.raw {
         // P09: after inline_policy, so the module never changes an inlining decision
-        text.push_str(&raw_module_with(raw, &g.raw_items, raw_unwind_free(&g)));
+        text.push_str(&raw_module_with(raw, &g.raw_items, raw_unwind_free(&g), raw == "crate"));
         text.push('\n');
     }
     Ok((text, manifest, trust))
@@ -4530,15 +4570,15 @@ const RAW_STORE: &str = "    /// The store was poisoned by a panic inside `PruvS
     }";
 
 /// P13a.10: the store of a program whose entries cannot unwind (`raw_unwind_free`). Same API, no poison flag: a
-/// verified entry either panics in its entry requires check, before it writes anything, or returns normally, so the
+/// verified entry either panics in its entry length or requires checks, before it writes anything, or returns normally, so the
 /// state in the store is always the result of complete entry calls.
 const RAW_STORE_FREE: &str = "    /// Never produced for this program: its entries cannot unwind (kept so adapters written against the poisoning
     /// store compile unchanged).
     #[derive(Debug)]
     pub struct PruvPoisoned {}
     /// Owns resident state for the raw entries. Every call runs through `with`. This program was verified and calls
-    /// no foreign or runtime code, so an entry either panics in its entry `requires` check, before it writes, or
-    /// returns normally: the state is always the result of complete entry calls and the store has no poison flag
+    /// no foreign or runtime code, so an entry either panics in its entry length or `requires` checks, before it
+    /// writes, or returns normally: the state is always the result of complete entry calls and the store has no poison flag
     /// (`with` always runs the closure, `is_poisoned` is always false). Two rules the types cannot enforce are the
     /// adapter's: `T` owns the state (no reference or shared handle to it outside the store), and the closure changes
     /// `T` only through the entries (a host write followed by a host panic is not caught here).
@@ -4563,7 +4603,7 @@ const RAW_STORE_FREE: &str = "    /// Never produced for this program: its entri
 /// P13a.10: no host entry of the program can unwind after it starts writing. Verified explicit mode erases every
 /// check inside bodies (Pruv callers call f__pruv_body, the caller proved requires; no cost counters) and every
 /// operation the verifier accepted is total on the proved domain (get_unchecked, plain arithmetic, lengths <= 2^40),
-/// so the only panic left is the entry's own requires check, which runs before the body. Foreign code (G6 boundary
+/// so the only panics left are the entry's own length and requires checks, which run before the body. Foreign code (G6 boundary
 /// checks, trusted Rust), print (println! panics when stdout fails), the G10 file / process / socket / event runtimes
 /// and par groups (threads, locks) keep the poisoning store. Same rule as the Python generator's raw_unwind_free.
 fn raw_unwind_free(g: &Gen) -> bool {
@@ -4578,7 +4618,7 @@ fn raw_forward(name: &str, ps: &str, ret: &str, names: &[String]) -> String {
         /// # Safety
         ///
         /// The caller upholds every precondition of the entry: its `requires` (checked at run time unless the
-        /// program was built with --trust-callers), and every array that carries resident state was produced by this
+        /// program was built with --trust-callers; array and str lengths above 2^40 are always rejected), and every array that carries resident state was produced by this
         /// program's entries and was not changed by other code since. A state that was being changed when a panic
         /// unwound must never be passed again; keep it in a `PruvStore`, which refuses reuse after a panic.
         #[inline(always)]
@@ -4595,11 +4635,13 @@ fn raw_forward(name: &str, ps: &str, ret: &str, names: &[String]) -> String {
 /// P09: the pruv_raw module of a program with manifest raw_entries = mode ("crate" or "unsafe"), without a trailing
 /// newline. items: (name, params text, return text, parameter names) of the host entries' public items in emission order.
 pub fn raw_module(mode: &str, items: &[(String, String, String, Vec<String>)]) -> String {
-    raw_module_with(mode, items, false)
+    raw_module_with(mode, items, false, false)
 }
 
 /// `raw_module` with the P13a.10 choice: unwind_free (raw_unwind_free) emits the store without a poison flag.
-pub fn raw_module_with(mode: &str, items: &[(String, String, String, Vec<String>)], unwind_free: bool) -> String {
+/// adapter_len (T0): the Rust backend under manifest "crate" (not "c"): the entries have no length check and the header
+/// states the adapter's length obligation.
+pub fn raw_module_with(mode: &str, items: &[(String, String, String, Vec<String>)], unwind_free: bool, adapter_len: bool) -> String {
     let store = if unwind_free { RAW_STORE_FREE } else { RAW_STORE };
     let mut parts: Vec<String> = Vec::new();
     if mode == "crate" || mode == "c" {
@@ -4610,6 +4652,10 @@ pub fn raw_module_with(mode: &str, items: &[(String, String, String, Vec<String>
         } else {
             "// resident state in pruv_raw::PruvStore, which refuses every reuse after a panic."
         }.to_string());
+        if adapter_len {
+            parts.push("// T0: these entries do not check array / str lengths. The adapter passes only arrays whose element count, and str".to_string());
+            parts.push("// values whose byte length, is in 0..=2^40; breaking that is undefined behavior (SPEC section 7, host length bound).".to_string());
+        }
         parts.push("#[allow(dead_code)]".to_string());
         parts.push("pub mod pruv_raw {".to_string());
         parts.push(store.to_string());
@@ -4654,6 +4700,50 @@ const INLINE_BUDGET: u64 = 1500;
 
 fn ident_byte(c: u8) -> bool {
     c.is_ascii_alphanumeric() || c == b'_'
+}
+
+/// T0: the parameters whose length the public entry checks against 2^40 (arrays, including inout arrays, and str)
+fn len_params(f: &Function) -> Vec<&Param> {
+    f.params.iter().filter(|p| is_array_name(&p.ty) || p.ty == "str").collect()
+}
+
+/// T0: the length guard lines of a public entry (SPEC section 7 item 6). The fast path is one branch on the
+/// non-short-circuit OR (`|`) of one compare per array / str length against 2^40, so it is taken exactly when some length
+/// is above 2^40; it calls a cold, never-inlined, diverging local fn that takes only the lengths and panics on the first
+/// parameter above 2^40, in parameter order, with the LLVM ABI wrapper's message (`array length` / `str length`). The
+/// slow fn must diverge: a returning one leaves the optimizer no length bound after the guard and measured +9-18% on the
+/// budget M4 default lane (an OR of the lengths, whose false positives such as 2^40 and 1 force a returning slow fn).
+/// Manifest raw_entries = "crate" leaves the check to the same-crate adapter.
+fn len_guard(f: &Function) -> Vec<String> {
+    let ps = len_params(f);
+    if ps.is_empty() {
+        return Vec::new();
+    }
+    let checks: Vec<String> = ps
+        .iter()
+        .map(|p| {
+            format!(
+                "if ({n} as u64) > (1u64 << 40) {{ panic!(\"pruv: invalid representation: {{}} ({k})\", {n}) }}",
+                n = p.name,
+                k = if p.ty == "str" { "str length" } else { "array length" }
+            )
+        })
+        .collect();
+    let big = ps
+        .iter()
+        .map(|p| format!("(({}.len() as u64) > (1u64 << 40))", p.name))
+        .collect::<Vec<String>>()
+        .join(" | ");
+    let decl: Vec<String> = ps.iter().map(|p| format!("{}: usize", p.name)).collect();
+    let args: Vec<String> = ps.iter().map(|p| format!("{}.len()", p.name)).collect();
+    vec![
+        format!(
+            "#[cold] #[inline(never)] fn pruv_len_slow({}) -> ! {{ {} unreachable!() }}",
+            decl.join(", "),
+            checks.join(" ")
+        ),
+        format!("if {} {{ pruv_len_slow({}) }}", big, args.join(", ")),
+    ]
 }
 
 /// fn index -> number of call tokens in text: an identifier of names followed by '(', not after '.' or 'fn '
@@ -4829,11 +4919,11 @@ mod tests {
 
     #[test]
     fn raw_module_unwind_free_text() {
-        let t = raw_module_with("crate", &[], true);
+        let t = raw_module_with("crate", &[], true, false);
         assert!(t.contains("// resident state in pruv_raw::PruvStore; the entries cannot unwind, so the store has no poison flag.\n#[allow(dead_code)]\npub mod pruv_raw {\n    /// Never produced"));
         assert!(t.ends_with("            Ok(f(&mut self.data))\n        }\n    }\n}"));
         assert!(!t.contains("poisoned: bool"));
-        let u = raw_module_with("unsafe", &[], true);
+        let u = raw_module_with("unsafe", &[], true, false);
         assert!(u.contains("(no poison flag: no unwind)."));
         assert!(!u.contains("poisoned: bool"));
     }

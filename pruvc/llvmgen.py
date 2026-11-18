@@ -4241,6 +4241,44 @@ def overlap_lines(f, tt, m):
     return out
 
 
+LEN_MAX = 1 << 40  # the Pruv array length bound (SPEC section 7 item 6), assumed by the verifier for every array parameter
+
+
+def len_lines(f, m):
+    """T0: every array/str parameter of a host ABI wrapper (both pruv_abi_* and __typed) is rejected unless its length is
+    in 0..=2^40, before the representation checks (which read the buffer), requires and the body. One unsigned compare
+    covers a negative length. With two or more such parameters the fast path is one compare on the OR of the lengths
+    (a negative length sets the top bit); only when it fails are the lengths checked one by one, in parameter order,
+    and a slow path that finds none above 2^40 (one is exactly 2^40) goes on. The message names the parameter kind:
+    `str length` keeps the old negative-length text."""
+    ps = [p for p in f.params if is_arr(p.type)]
+    if not ps:
+        return []
+    out = []
+    if len(ps) > 1:
+        acc = "%%a.%s.n" % mangle(ps[0].name)
+        for k, p in enumerate(ps[1:]):
+            out.append("  %%ln.or.%d = or i64 %s, %%a.%s.n" % (k, acc, mangle(p.name)))
+            acc = "%%ln.or.%d" % k
+        out += ["  %%ln.any = icmp ugt i64 %s, %d" % (acc, LEN_MAX),
+                "  br i1 %ln.any, label %len.slow, label %len.ok",
+                "len.slow:"]
+    # names use the parameter's position, not its name: a parameter called `any` or `or` must not collide
+    for i, p in enumerate(ps):
+        q = mangle(p.name)
+        msg = m.string("str length" if p.type.name == "str" else "array length")
+        m.uses_repr = True
+        out += ["  %%ln.p%d = icmp ugt i64 %%a.%s.n, %d" % (i, q, LEN_MAX),
+                "  br i1 %%ln.p%d, label %%len.bad.%d, label %%len.ok.%d" % (i, i, i),
+                "len.bad.%d:" % i,
+                "  call void @pruv_panic_repr(i64 %%a.%s.n, ptr %s)" % (q, msg),
+                "  unreachable",
+                "len.ok.%d:" % i]
+    if len(ps) > 1:
+        out += ["  br label %len.ok", "len.ok:"]
+    return out
+
+
 def abi_of(f, tt, m=None, target="entry"):
     """target: which internal function the wrapper calls, `entry` (checked, legacy) or `body` (G4 explicit mode when the
     host boundary needs no requires check). The representation checks below run in every mode."""
@@ -4279,7 +4317,7 @@ def abi_of(f, tt, m=None, target="entry"):
             args.append("%s %%c.%s.g" % (OPT, q))
     rt = f.ret
     entry = "@%s__pruv_%s" % (n, target)
-    body = overlap_lines(f, tt, m) + ["  " + x for x in pre]
+    body = overlap_lines(f, tt, m) + len_lines(f, m) + ["  " + x for x in pre]
     for k, (okv, wv, tname) in enumerate(w.checks):
         # G3: an invalid nominal enum ordinal is rejected here, before the entry (requires) and the body run
         msg = m.string("enum " + tname)
@@ -4541,8 +4579,9 @@ pub mod pruv_c {
     //!   of the call;
     //! - ret points to a writable i64.
     //!
-    //! The adapter checks null, sign, alignment, size, address overflow and overlap among the call's buffers and
-    //! the handle, but it cannot check allocation size or provenance.
+    //! The adapter checks null, sign, alignment, size (every array, new state and rebuilt state has at most 2^40
+    //! elements, the Pruv array bound), address overflow and overlap among the call's buffers and the handle, but it
+    //! cannot check allocation size or provenance.
     /// Statuses of every @P@pruv_h_* / @P@pruv_hr_* / @P@pruv_hb_* call: 0 ok, 1 poisoned (refused before any argument
     /// is read, nothing ran), 2 bad arguments (refused, nothing ran), 3 a Rust panic unwound to the adapter (if it
     /// happened inside the store it poisoned the handle). A batch (`hb`) answers 1 and 2 for the whole call before any
@@ -4557,14 +4596,21 @@ pub mod pruv_c {
     pub struct PruvHandle {
         store: super::pruv_raw::PruvStore<::std::vec::Vec<i64>>,
     }
-    // A C (pointer, length) pair as a slice: None for a negative or oversized length, or for a null or misaligned
+    // The Pruv array length bound (SPEC section 7 item 6, assumed by the verifier for every array parameter):
+    // 0 <= n <= min(2^40, isize::MAX / size_of::<T>()). Checked once where a C buffer or a new or rebuilt state
+    // enters proved code; never inside the entries.
+    #[inline(always)]
+    fn len_ok<T>(n: i64) -> bool {
+        n >= 0 && n as u64 <= ((isize::MAX as u64) / (::std::mem::size_of::<T>() as u64)).min(1u64 << 40)
+    }
+    // A C (pointer, length) pair as a slice: None for a length outside len_ok, or for a null or misaligned
     // pointer with a nonzero length, or whose end address overflows. Length 0 never reads the pointer.
     #[inline(always)]
     unsafe fn ro<'a, T>(p: *const T, n: i64) -> Option<&'a [T]> {
         if n == 0 {
             return Some(&[]);
         }
-        if n < 0 || n as u64 > (isize::MAX as u64) / (::std::mem::size_of::<T>() as u64)
+        if !len_ok::<T>(n)
             || (p as usize).checked_add(n as usize * ::std::mem::size_of::<T>()).is_none() || p.is_null()
             || (p as usize) % ::std::mem::align_of::<T>() != 0 {
             return None;
@@ -4576,7 +4622,7 @@ pub mod pruv_c {
         if n == 0 {
             return Some(&mut []);
         }
-        if n < 0 || n as u64 > (isize::MAX as u64) / (::std::mem::size_of::<T>() as u64)
+        if !len_ok::<T>(n)
             || (p as usize).checked_add(n as usize * ::std::mem::size_of::<T>()).is_none() || p.is_null()
             || (p as usize) % ::std::mem::align_of::<T>() != 0 {
             return None;
@@ -4621,11 +4667,11 @@ pub mod pruv_c {
             }
         }
     }
-    /// A new handle whose state is `len` zero words (call the program's init entry next); null for a negative or
-    /// oversized length. Free it with @P@pruv_handle_free.
+    /// A new handle whose state is `len` zero words (call the program's init entry next); null for a length
+    /// outside 0..=2^40. Free it with @P@pruv_handle_free.
     #[no_mangle]
     pub extern "C" fn @P@pruv_handle_new(len: i64) -> *mut PruvHandle {
-        if len < 0 || len as u64 > (isize::MAX as u64) / 8 {
+        if !len_ok::<i64>(len) {
             return ::std::ptr::null_mut();
         }
         match ::std::panic::catch_unwind(|| {
@@ -4687,6 +4733,12 @@ pub mod pruv_c {
                 Err(_) => PRUV_POISONED,
             }
         })
+    }
+    /// Probe builds only: the length predicate len_ok for `elem` = 1 (u8 elements) or 8 (i64 elements); 1 if accepted.
+    #[cfg(pruv_c_probe)]
+    #[no_mangle]
+    pub extern "C" fn @P@pruv_handle_probe_len(n: i64, elem: i64) -> i32 {
+        (if elem == 1 { len_ok::<u8>(n) } else { len_ok::<i64>(n) }) as i32
     }"""
 
 _C_ARRAY_KINDS = ("ro_i64", "ro_u8", "ro_bool", "str", "mt_i64", "mt_u8", "mt_bool")
@@ -4700,6 +4752,17 @@ _C_KIND_DOC = {"i64": "i64", "bool": "bool, 0/1 as i64", "ro_i64": "[i64] pointe
                "ro_u8": "[u8] pointer, length", "ro_bool": "[bool] pointer, length; bytes 0/1",
                "str": "str pointer, length; UTF-8", "mt_i64": "inout [i64] pointer, length",
                "mt_u8": "inout [u8] pointer, length", "mt_bool": "inout [bool] pointer, length; bytes 0/1"}
+
+
+def c_len_first(params):
+    """T0: when a UTF-8 / bool scan (str, [bool]) comes before another array parameter, the condition that every
+    slice length is in len_ok, checked before any conversion so no buffer is read when a later length is oversized
+    (SPEC section 7, C adapter); None when no scan precedes another array (the conversions already check in order)."""
+    arrs = [(x, k) for x, k in params if k in _C_ARRAY_KINDS]
+    scans = [i for i, (_, k) in enumerate(arrs) if k in ("str", "ro_bool", "mt_bool")]
+    if not scans or scans[0] == len(arrs) - 1:
+        return None
+    return " && ".join("len_ok::<%s>(%s_len)" % ("i64" if k.endswith("i64") else "u8", x) for x, k in arrs)
 
 
 def c_param_kind(p):
@@ -4785,6 +4848,9 @@ def c_module(entries, pkg):
         if pairs:
             L += [I12 + "let (%s) = (%s);" % (", ".join(v[0] for v in b), ", ".join(v[1] for v in b)),
                   I12 + "if !(%s) {" % " && ".join(pairs), I16 + "return PRUV_BAD_ARGS;", I12 + "}"]
+        lf = c_len_first(params)
+        if lf:
+            L += [I12 + "if !(%s) {" % lf, I16 + "return PRUV_BAD_ARGS;", I12 + "}"]
         args = ["&mut st[..]" if smode == "mt" else "&st[..]"]
         for x, k in params:
             if k in _C_ARRAY_KINDS:
@@ -4866,6 +4932,9 @@ def c_module(entries, pkg):
                 LB.append(I20 + "let (%s%s) = (%s%s);" % (", ".join(own), tc,
                                                           ", ".join(v[1] for v in bb[:len(own)]), tc))
                 LB += [I20 + "if !(%s) {" % " && ".join(pairsb), I20 + "    return (i, PRUV_BAD_ARGS);", I20 + "}"]
+            lf = c_len_first(params)
+            if lf:
+                LB += [I20 + "if !(%s) {" % lf, I20 + "    return (i, PRUV_BAD_ARGS);", I20 + "}"]
             argsb = ["&mut st[..]"]
             for x, k in params:
                 if k in _C_ARRAY_KINDS:
@@ -4901,7 +4970,7 @@ def c_module(entries, pkg):
             if ret.is_null() || (ret as usize) %% ::std::mem::align_of::<i64>() != 0 || (ret as usize).checked_add(::std::mem::size_of::<i64>()).is_none() {
                 return PRUV_BAD_ARGS;
             }
-            if new_len < 0 || new_len as u64 > (isize::MAX as u64) / 8 {
+            if !len_ok::<i64>(new_len) {
                 return PRUV_BAD_ARGS;
             }
             if !apart(span(ret, 1), span(h as *const PruvHandle, 1)) {

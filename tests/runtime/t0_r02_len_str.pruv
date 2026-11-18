@@ -1,0 +1,5 @@
+// T0 (TIDY_SPEC 4.8 item 4): the public entry rejects a str longer than 2^40 bytes, also under --trust-callers
+fn g(t: str) -> i64
+{
+  return len(t);
+}

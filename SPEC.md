@@ -252,8 +252,13 @@ return a parameter with `copy`). Refinements: `[u8 | L..=U; <=N]` with `0 <= L <
 `pruv: element out of range: v (u8 0..=255)`, `pruv: string slice out of bounds: lo..hi (len n)`,
 `pruv: UTF-8 boundary error: lo..hi (len n)` (range is checked before boundaries). Raw `--rust-bindings` entries check
 `str` UTF-8 and `[bool]` 0/1 bytes before the body (`pruv: invalid representation`) in both modes, also with
-`--trust-callers`. Raw `[i64]`/`[u8]`/`[bool]` entries do not check for a negative length or a null pointer (the caller's
-duty); raw `str` entries do.
+`--trust-callers`. Before those checks every raw array or `str` parameter must have a length in `0..=2^40` (bytes for
+`str`): a negative length or one above 2^40 stops the program with exit 101 and `pruv: invalid representation: n (array
+length)` (`(str length)` for `str`), on both the `pruv_abi_*` and the `__typed` symbols, in every mode (section 7,
+"Length bound at host boundaries"). When an `inout` array is present the overlap check runs before this one and
+also rejects a negative length of any array it compares (for example `dst_len = 0`, `src_len = -1`), so the overlap
+`requires` message can come first; whichever check fails first decides the message, and either way the body never
+runs. A null pointer with a positive length is the caller's duty.
 
 ## 6c. Generics (G3)
 Full contract: `docs/G3_SPEC.md`. Examples: `examples/g3_*.pruv`.
@@ -896,7 +901,8 @@ fn timer() -> i64 ! async, net, proc, alloc {
 5. Loop invariants hold on entry and are preserved; `decreases` is >= 0 at each iteration start and strictly decreases.
    For a recursive call, the callee's `decreases` (evaluated on the arguments) is >= 0 and strictly below the caller's
    value at entry (section 6e).
-6. Array parameters have `0 <= len(a) <= 2^40` and elements in i64 range (assumed; guaranteed for Pruv callers because every alloc is proven <= 2^40).
+6. Array parameters have `0 <= len(a) <= 2^40` and elements in i64 range (assumed; guaranteed for Pruv callers because every alloc is proven <= 2^40;
+   for host callers every boundary checks the length at run time, see "Length bound at host boundaries" below).
 Variables not assigned in a loop keep their values across it; assigned ones are only known through invariants.
 A variable counts as assigned if the loop body assigns it, stores into its elements, or passes it as an `inout`
 argument (section 6g); an `inout` array keeps only its length across the loop.
@@ -927,6 +933,49 @@ outside i64 to `wrapping_shl`/`ushr` panics with `pruv: requires undefined: shif
 `--no-verify` emits safe mode: no proof exists, so indexing and arithmetic are checked (panic on out-of-range index
 or i64 overflow), and `/` `%` use the verifier's domain (divisor > 0 and dividend >= 0, otherwise panic).
 `--trust-callers` makes the public entry skip the `requires` checks (for benchmarking; callers must be trusted).
+It never skips the length bound below.
+
+### Length bound at host boundaries
+The verifier assumes every array (and `Map`) parameter, every buffer field and every `str` has a length (byte length
+for `str`) in `0..=2^40` (item 6 above). Every place where a host buffer first enters proved code checks that bound
+before the representation checks, the `requires` and the body, in both compilers and in every mode, including
+`--trust-callers` and `--no-verify`. The one exception is manifest `raw_entries = "crate"` on the Rust backend (below):
+- Generated Rust (every output form): every public function that takes an array or `str` (including an `inout` array)
+  starts with one check per such parameter, `pruv: invalid representation: n (array length)` / `(str length)`, exit
+  101 when not caught. A public function without `requires` that has such a parameter is emitted like one with
+  `requires`: a private body `f__pruv_body` and the public `f` that runs the checks and calls it. Verified Pruv callers
+  call the body (the caller proved the bound), so the check runs once per host call and never on an internal call;
+  under `--no-verify` internal calls go through `f` as they do for `requires`. A `raw_entries = "unsafe"` or `"c"`
+  entry checks it in its `pub(crate)` item, so the `pruv_raw` forwarders get the same check. Under manifest
+  `raw_entries = "crate"` (exactly that value) the Rust backend's `pub(crate)` entries do not check it: only code in
+  the same crate can call them, and that host adapter takes over the obligation below. The check runs before
+  the entry writes anything, so the no-unwind store rule below still holds (an entry panics only in its length or
+  `requires` checks).
+- LLVM ABI symbols (`pruv_abi_*` and `__typed`): section 6b, "Run time"; a negative length is rejected by the same
+  unsigned compare.
+- C adapter (`pruv_c`): an array or `str` length, a `pruv_handle_new` length and the `new_len` of `pruv_hr_*` are
+  "oversized" above `min(2^40, isize::MAX / element size)`. `pruv_handle_new` returns null for such a length; a call
+  or rebuild with one is status 2 and nothing runs, unless an earlier check fails first (a poisoned handle is status
+  1 before any length is looked at). A failed rebuild keeps the old state. Every length of a call (or
+  of a batch item) is checked before a UTF-8 or `[bool]` scan reads any of its buffers. Each slice inside a batch item
+  is checked the same way when that item runs; the batch count `n` itself has no Pruv bound (it only has to be
+  nonnegative and its tables valid).
+Caller obligation under `raw_entries = "crate"` (Rust backend): the host adapter in the crate passes only arrays
+(including `inout` arrays) whose element count, and `str` values whose byte length, is in `0..=2^40`. Resident
+state can be checked once when it is created or replaced; every per-call input and output buffer must meet the bound
+too. `--trust-callers` does not waive this obligation. Every other boundary (default and legacy `pub` entries, the
+`"unsafe"` forwarders' target, `"c"`, C batch items, the LLVM ABI symbols) keeps its check. Breaking this
+obligation is undefined behavior, not a panic: a verified body runs with its checks erased (`get_unchecked`,
+unchecked arithmetic) and the no-unwind store has no poison flag, so nothing detects it. The adapter bounds every
+length where it is fixed, before the buffer is passed: sizes from configuration or input, sizes an entry returns or
+implies (a growth request can exceed 2^40), and every slice its own `pub` functions forward from outside the crate.
+An adapter that cannot do this must not use `"crate"`; `"unsafe"`, `"c"` and default entries check on every call.
+The generated `pruv_raw` module of a `"crate"` program repeats this obligation in its header comment.
+Caller obligations that no check can cover remain the host's: a buffer passed as a Rust slice / `&str` is a valid Rust
+value; a raw (pointer, length) pair with length > 0 names that many initialized elements in one live allocation that
+nobody else touches during the call; resident state passed to an entry came from this program's entries. Apart from
+the `raw_entries = "crate"` adapter obligation above, no trusted path (`--trust-callers`, `raw_entries = "unsafe"` /
+`"c"`, the `pruv_raw` forwarders, the C adapter) waives the length bound.
 
 ### Raw entries (manifest `raw_entries`)
 A program package may set `raw_entries` in its manifest (docs/G4B_SPEC.md §3 rule 7). Missing: output is unchanged and
@@ -947,13 +996,14 @@ code (G6), no `print` (`println!` panics when stdout fails), no G10 file / proce
 same API, `with` always runs `f` and returns `Ok`, `is_poisoned` is always false. In such a program every check inside
 a body is erased (callers proved `requires`, no cost counters) and every remaining operation is total on the proved
 domain, so an entry panics only in its own entry `requires` check, before it writes; the state in the store is always
-the result of complete entry calls. Allocation failure and stack overflow abort, they do not unwind. `--no-verify`,
+the result of complete entry calls (the length checks above also run before any write). Allocation failure and stack overflow abort, they do not unwind. `--no-verify`,
 the LLVM backend and programs outside that rule keep the poisoning store. The store no longer catches a host panic
 inside `with`, so the adapter rule becomes: the closure changes `T` only through the entries (it already had to, since
 the entries' state must come from the entries).
 `--trust-callers` does not require `raw_entries`; without it a trust-callers entry is safe only if every caller is
 trusted, and `raw_entries` enforces that by visibility.
-`"c"`: the Rust backend output is identical to `"crate"` (it never contains `extern "C"`). LLVM bindings get the
+`"c"`: the Rust backend output is the `"crate"` output (it never contains `extern "C"`), except that the entries
+keep their length checks (the host length bound above). LLVM bindings get the
 `"crate"` output plus `pub mod pruv_c`, the C adapter. `PruvHandle` is opaque to C (one pointer) and owns the resident
 state (`i64` words) in a `PruvStore`; C never sees the state buffer. Every global C symbol of `pruv_c` carries the
 manifest package name as a prefix, `<pkg>__` (`pkg` = the manifest `name`): `<pkg>__pruv_handle_new`,

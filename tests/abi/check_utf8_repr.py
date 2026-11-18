@@ -20,6 +20,9 @@ Cases (per compiler, for the default build and the --trust-callers build):
   repr_first    78 FF        -> the representation error comes first (K=1, no `requires violated`)
   neg_len       length -1    -> 101, `invalid representation: -1 (str length)` (added after the audit)
   null_data     (NULL, 1)    -> 101, `invalid representation: 1 (str NULL data)`
+  big_len       length 2^40 + 1 -> 101, `invalid representation: 1099511627777 (str length)` (T0: the Pruv array bound,
+                checked before the buffer is read); min_len INT64_MIN the same; typed_big the same through
+                `pruv_abi_tlen__typed` (the typed entry drops only the UTF-8 check, never the length bound)
   trust_*       the same cases with a --trust-callers build (the representation check is independent of trust)
   requires_x    78 (representation is valid, requires is false) -> 101, `requires violated`; empty_req (no bytes) is the same
 For each case, one line `ok <compiler>/<name>` / `FAIL <compiler>/<name>: reason`, and `N/N ok` at the end.
@@ -52,10 +55,23 @@ CALLER = """#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 extern int64_t pruv_abi_tlen(const uint8_t *a, int64_t n);
+extern int64_t pruv_abi_tlen__typed(const uint8_t *a, int64_t n);
 int main(int argc, char **argv) {
     uint8_t buf[32];
     if (argc == 2 && argv[1][0] == 'n' && argv[1][1] == 'e') { /* "neg": negative length */
         printf("%lld\\n", (long long)pruv_abi_tlen(buf, -1));
+        return 0;
+    }
+    if (argc == 2 && argv[1][0] == 'b') { /* "big": 2^40 + 1 (T0 length bound; the buffer must not be read) */
+        printf("%lld\\n", (long long)pruv_abi_tlen(buf, ((int64_t)1 << 40) + 1));
+        return 0;
+    }
+    if (argc == 2 && argv[1][0] == 'm') { /* "min": INT64_MIN */
+        printf("%lld\\n", (long long)pruv_abi_tlen(buf, INT64_MIN));
+        return 0;
+    }
+    if (argc == 2 && argv[1][0] == 't') { /* "typed": 2^40 + 1 through the typed entry */
+        printf("%lld\\n", (long long)pruv_abi_tlen__typed(buf, ((int64_t)1 << 40) + 1));
         return 0;
     }
     if (argc == 2 && argv[1][0] == 'n' && argv[1][1] == 'u') { /* "null": NULL data with length 1 */
@@ -109,6 +125,10 @@ for trust in (False, True):
     CASES.append((pre + "repr_first", trust, ["78", "FF"], 101, "", REPR_MSG % 1, "requires violated"))
     CASES.append((pre + "neg_len", trust, ["neg"], 101, "", "pruv: invalid representation: -1 (str length)",
                   "requires violated"))
+    for nm, arg, v in (("big_len", "big", 1099511627777), ("min_len", "min", -9223372036854775808),
+                       ("typed_big", "typed", 1099511627777)):
+        CASES.append((pre + nm, trust, [arg], 101, "", "pruv: invalid representation: %d (str length)" % v,
+                      "requires violated"))
     CASES.append((pre + "null_data", trust, ["null"], 101, "", "pruv: invalid representation: 1 (str NULL data)",
                   "requires violated"))
 CASES.append(("requires_x", False, ["78"], 101, "", "requires violated", "invalid representation"))
