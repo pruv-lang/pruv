@@ -22,6 +22,17 @@ from codegen import rty, cty, conv, show, rstr
 from modules import safe_type     # G4: nominal identities in helper names use their [0-9A-Za-z_] encoding
 
 
+# op families that do I/O: their helpers are not inlined
+_IO_OP_PREFIXES = ("file_", "proc_", "ev_", "net_")
+
+# calls that reach pruv_ud (the only reader of PRUV_CTX): pruv_ud itself, the budget charge, the contract tick,
+# the checked arithmetic / index helpers of codegen.py, and the contract accessors of the proc/net/loop runtimes
+_UD_CALLS = ("pruv_ud(", "pruv_g6_charge(", "pruv_g9_tick(",
+             "pruv_cidx(", "pruv_cadd(", "pruv_csub(", "pruv_cmul(", "pruv_cneg(", "pruv_cdiv(", "pruv_crem(",
+             "pruv_cidx_u8(", "pruv_cidx_bool(", "pruv_cidx_str(", "pruv_cload_be(",
+             "pruv_cproc_buf(", "pruv_cproc_eof(", "pruv_cproc_byte(", "pruv_cnet_byte(", "pruv_cev_slot(")
+
+
 def _budget_line(n):
     return "let mut pruv_budget: i64 = %s;" % format(n, "_")
 
@@ -67,8 +78,13 @@ class ForeignGen:
     def _fn(s, name, params, ret, body):
         """text of `fn name(params) -> ret { guard; budget; body }`; body: lines (already without indentation)"""
         g = s.g
-        L = [g.allow, "fn %s(%s)%s {" % (name, params, "" if ret is None else " -> " + ret)]
-        if s.req:
+        L = [g.allow]
+        # pure data accessors are inlined into the caller (P10H); I/O families keep a real call
+        if not s.op.startswith(_IO_OP_PREFIXES):
+            L.append("#[inline(always)]")
+        L.append("fn %s(%s)%s {" % (name, params, "" if ret is None else " -> " + ret))
+        # the ctx guard (two thread-local writes) only serves pruv_ud, so emit it only when pruv_ud is reachable (P10H)
+        if s.req and (s.ens or any(c in x for x in body for c in _UD_CALLS)):
             L.append("    let pruv_g = pruv_ctx(%s);" % rstr(s.op))
         if s.ens:
             L.append("    " + _budget_line(g.budget))
@@ -564,9 +580,11 @@ class ForeignGen:
         g.cp, g.bound, g.tmp, g.borrowed = None, [], 0, set()
         try:
             body = []
+            checks = 0      # requires/ensures lines: only they can reach pruv_ud, the one reader of the ctx
             if s.req:
                 for r in f.requires:
                     body.append("if !(%s) { pruv_g6_req(%s, %s); }" % (g.c(r), rstr(disp), rstr(show(r))))
+                    checks += 1
             args = ", ".join(p.name for p in f.params)
             rt = rty(f.ret)
             body.append("let result: %s = match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| %s(%s))) {" % (
@@ -580,18 +598,21 @@ class ForeignGen:
             if s.ens:
                 for x in f.ensures:
                     body.append("if !(%s) { pruv_g6_ens(%s, %s); }" % (g.c(x), rstr(disp), rstr(show(x))))
+                    checks += 1
             body.append("result")
             ps = ", ".join("%s: %s" % (p.name, rty(p.type, True)) for p in f.params)
-            text = s._fn_trusted(name, ps, None if f.ret == UNIT else rt, body, disp)
+            text = s._fn_trusted(name, ps, None if f.ret == UNIT else rt, body, disp, checks > 0)
         finally:
             g.params, g.vt, g.cp, g.bound, g.tmp, g.borrowed = saved
         s.items[name] = text
         return name
 
-    def _fn_trusted(s, name, params, ret, body, disp=None):
+    def _fn_trusted(s, name, params, ret, body, disp=None, checks=True):
         g = s.g
-        L = [g.allow, "fn %s(%s)%s {" % (name, params, "" if ret is None else " -> " + ret)]
-        if s.req:
+        # inlined into its caller: one host call is one call, not a shim call plus the host call (P10H)
+        L = [g.allow, "#[inline(always)]", "fn %s(%s)%s {" % (name, params, "" if ret is None else " -> " + ret)]
+        # the ctx guard (two thread-local writes) and the budget only serve contract checks (P10H)
+        if s.req and checks:
             L.append("    let pruv_g = pruv_ctx(%s);" % rstr(name if disp is None else disp))
             L.append("    " + _budget_line(g.budget))   # shared by requires and ensures of one call
         L.extend("    " + x for x in body)

@@ -132,6 +132,7 @@ def load_program(path, libs=(), manifest=None):
         raise
     if graph is not None:
         prog.raw_entries = graph.program.raw_entries   # P06: applied by codegen in P09
+        prog.pkg_name = graph.program.name   # P10H: prefix of every global C symbol
     if not (prog.mods or prog.has_pub):
         if graph is not None and graph.program.deps:
             raise PruvError("pkg", 1, 1, "unused_dependency",

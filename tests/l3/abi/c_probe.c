@@ -15,12 +15,39 @@
  *   bflip(state, inout b: [bool]) -> ()     b[i] = !b[i] for all i (needs len >= 1)
  *   stlen(state) -> i64                     len(state)
  *
+ * Every global symbol of the generated pruv_c module carries the manifest package name as a prefix ("app__", see
+ * check_c_handle.py). The object-like macros below map the short names used in this file to the real symbols.
+ *
+ * Batch entry (only for entries whose state is inout [i64] and whose return is i64, here: op):
+ *   app__pruv_hb_op(h, n, a, a_len, out, out_len, ret, done)  runs items 0..n in order inside one store access and
+ *   stops after the first item whose result is nonzero; *done = number of items that ran (status 0 or 2). An
+ *   up-front status 2 writes *done = 0 when done is itself usable (non-null, aligned, clear of the handle object and
+ *   of the ret table), else leaves it alone; a NULL or poisoned handle never writes it.
+ *
  * Not tested on purpose: double free and use after free. Without a registry they cannot be detected (undefined
  * behaviour), so the API only documents them.
  */
 #include <stdint.h>
 #include <stdio.h>
 #include <stddef.h>
+
+#define pruv_handle_new app__pruv_handle_new
+#define pruv_handle_free app__pruv_handle_free
+#define pruv_handle_poisoned app__pruv_handle_poisoned
+#define pruv_handle_probe_panic app__pruv_handle_probe_panic
+#define pruv_h_setup app__pruv_h_setup
+#define pruv_h_op app__pruv_h_op
+#define pruv_h_big app__pruv_h_big
+#define pruv_h_flagset app__pruv_h_flagset
+#define pruv_h_setflag app__pruv_h_setflag
+#define pruv_h_flag0 app__pruv_h_flag0
+#define pruv_hr_grow app__pruv_hr_grow
+#define pruv_h_clash app__pruv_h_clash
+#define pruv_h_bsum app__pruv_h_bsum
+#define pruv_h_slen app__pruv_h_slen
+#define pruv_h_bflip app__pruv_h_bflip
+#define pruv_h_stlen app__pruv_h_stlen
+#define pruv_hb_op app__pruv_hb_op
 
 typedef struct PruvHandle PruvHandle;
 
@@ -43,6 +70,10 @@ int32_t pruv_h_bsum(PruvHandle *h, const uint8_t *b, int64_t b_len, int64_t *ret
 int32_t pruv_h_slen(PruvHandle *h, const uint8_t *s, int64_t s_len, int64_t *ret);
 int32_t pruv_h_bflip(PruvHandle *h, uint8_t *b, int64_t b_len);
 int32_t pruv_h_stlen(PruvHandle *h, int64_t *ret);
+/* batch of op: a is a table of n ro pointers (a_len: n lengths), out a table of n inout pointers (out_len: n lengths),
+ * ret n results, *done = items that ran */
+int32_t pruv_hb_op(PruvHandle *h, int64_t n, const int64_t *const *a, const int64_t *a_len, int64_t *const *out,
+                   const int64_t *out_len, int64_t *ret, int64_t *done);
 
 enum { PRUV_OK = 0, PRUV_POISONED = 1, PRUV_BAD_ARGS = 2, PRUV_PANICKED = 3 };
 
@@ -55,6 +86,16 @@ static int fails = 0;
             fails++;                                                                   \
         }                                                                              \
     } while (0)
+
+/* a new handle with the setup state [10, 20, 0, 0] */
+static PruvHandle *fresh(void) {
+    PruvHandle *p = pruv_handle_new(4);
+    if (p && pruv_h_setup(p) != PRUV_OK) {
+        pruv_handle_free(p);
+        return NULL;
+    }
+    return p;
+}
 
 /* one op call on a fresh sentinel-guarded output buffer: ob = {SENT, SENT, SENT}, out = &ob[1] (1 word) */
 int main(void) {
@@ -264,6 +305,238 @@ int main(void) {
         CHECK(pruv_h_big(h, 20, &r) == PRUV_OK && r == 1, "state intact after refused rebuilds");
     }
 
+    /* ---- batch entry: items run in order in one store access, stop after the first nonzero result ---- */
+    {
+        /* op returns st[2] + st[0] and st[0] is 10 after setup, so an item returns 0 exactly while the running st[2]
+         * is -10: av = {-10, 0, 0} keeps every result 0 (the batch runs to the end), a later nonzero stops it */
+        int64_t av[3] = {-10, 0, 0};
+        const int64_t *at[3] = {&av[0], &av[1], &av[2]};
+        int64_t alen[3] = {1, 1, 1}, olen[3] = {1, 1, 1};
+        int64_t ov[3] = {SENT, SENT, SENT}, rt[3] = {SENT, SENT, SENT};
+        int64_t *ot[3] = {&ov[0], &ov[1], &ov[2]};
+        int64_t dn = SENT, r = SENT;
+        PruvHandle *hb = fresh(), *tw = fresh();
+        CHECK(hb != NULL && tw != NULL, "batch: fresh handles");
+        if (hb && tw) {
+            /* (i) n = 3 all-zero results == three single calls on a twin handle, done = 3 */
+            CHECK(pruv_hb_op(hb, 3, at, alen, ot, olen, rt, &dn) == PRUV_OK, "batch n=3 status");
+            CHECK(dn == 3, "batch n=3 done == 3");
+            {
+                int64_t ov2[3] = {SENT, SENT, SENT}, rt2[3] = {SENT, SENT, SENT};
+                int i;
+                for (i = 0; i < 3; i++)
+                    CHECK(pruv_h_op(tw, &av[i], 1, &ov2[i], 1, &rt2[i]) == PRUV_OK, "twin single op status");
+                for (i = 0; i < 3; i++) {
+                    CHECK(rt[i] == rt2[i] && rt[i] == 0, "batch ret equals single-call ret");
+                    CHECK(ov[i] == ov2[i] && ov[i] == -10, "batch out equals single-call out");
+                }
+                CHECK(pruv_h_big(hb, -11, &r) == PRUV_OK && r == 1 && pruv_h_big(tw, -11, &r) == PRUV_OK && r == 1,
+                      "batch and twin state agree (st[2] == -10)");
+            }
+            CHECK(av[0] == -10 && av[1] == 0 && av[2] == 0, "batch ro items unchanged");
+        }
+        pruv_handle_free(hb);
+        pruv_handle_free(tw);
+
+        /* (ii) stop at the first nonzero result: done = index + 1, later ret/out slots untouched, later items not run */
+        {
+            int64_t av2[3] = {-10, 5, 100};
+            const int64_t *at2[3] = {&av2[0], &av2[1], &av2[2]};
+            int64_t ov3[3] = {SENT, SENT, SENT}, rt3[3] = {SENT, SENT, SENT};
+            int64_t *ot3[3] = {&ov3[0], &ov3[1], &ov3[2]};
+            PruvHandle *g = fresh();
+            dn = SENT;
+            CHECK(g != NULL, "batch stop: fresh handle");
+            if (g) {
+                CHECK(pruv_hb_op(g, 3, at2, alen, ot3, olen, rt3, &dn) == PRUV_OK, "batch stop status");
+                CHECK(dn == 2, "batch stop done == 2");
+                CHECK(rt3[0] == 0 && rt3[1] == 5 && rt3[2] == SENT, "batch stop ret: item 2 slot untouched");
+                CHECK(ov3[0] == -10 && ov3[1] == -5 && ov3[2] == SENT, "batch stop out: item 2 slot untouched");
+                CHECK(pruv_h_big(g, 50, &r) == PRUV_OK && r == 0, "batch stop: item 2 did not run (st[2] == -5)");
+                CHECK(pruv_h_big(g, -6, &r) == PRUV_OK && r == 1, "batch stop: items 0 and 1 committed");
+                pruv_handle_free(g);
+            }
+            /* the very first item already nonzero: done = 1 */
+            g = fresh();
+            if (g) {
+                int64_t av4[2] = {7, 1};
+                const int64_t *at4[2] = {&av4[0], &av4[1]};
+                int64_t ov4[2] = {SENT, SENT}, rt4[2] = {SENT, SENT};
+                int64_t *ot4[2] = {&ov4[0], &ov4[1]};
+                dn = SENT;
+                CHECK(pruv_hb_op(g, 2, at4, alen, ot4, olen, rt4, &dn) == PRUV_OK && dn == 1, "batch first item stops: done 1");
+                CHECK(rt4[0] == 17 && rt4[1] == SENT && ov4[0] == 7 && ov4[1] == SENT, "batch first item stops: slots");
+                pruv_handle_free(g);
+            }
+        }
+
+        /* (iii) n = 0: status 0, done = 0, nothing else touched (tables may be NULL) */
+        {
+            PruvHandle *g = fresh();
+            int64_t rz = SENT;
+            dn = SENT;
+            CHECK(g != NULL, "batch n=0: fresh handle");
+            if (g) {
+                CHECK(pruv_hb_op(g, 0, at, alen, ot, olen, &rz, &dn) == PRUV_OK, "batch n=0 status");
+                CHECK(dn == 0 && rz == SENT, "batch n=0: done 0, ret untouched");
+                dn = SENT;
+                CHECK(pruv_hb_op(g, 0, NULL, NULL, NULL, NULL, &rz, &dn) == PRUV_OK && dn == 0, "batch n=0 with NULL tables");
+                CHECK(pruv_h_big(g, -1, &r) == PRUV_OK && r == 1, "batch n=0 left the state alone (st[2] == 0)");
+                pruv_handle_free(g);
+            }
+        }
+
+        /* (iv) bad tables up front: NULL with n > 0, n < 0: status 2, nothing ran */
+        {
+            PruvHandle *g = fresh();
+            int64_t o5[3] = {SENT, SENT, SENT}, r5[3] = {SENT, SENT, SENT};
+            int64_t *ot5[2] = {&o5[0], &o5[1]};
+            int64_t av5[2] = {-10, 0};
+            const int64_t *at5[2] = {&av5[0], &av5[1]};
+            CHECK(g != NULL, "batch bad tables: fresh handle");
+            if (g) {
+                dn = SENT;
+                CHECK(pruv_hb_op(g, 2, NULL, alen, ot5, olen, r5, &dn) == PRUV_BAD_ARGS, "batch NULL ro table");
+                CHECK(pruv_hb_op(g, 2, at5, NULL, ot5, olen, r5, &dn) == PRUV_BAD_ARGS, "batch NULL ro length table");
+                CHECK(pruv_hb_op(g, 2, at5, alen, NULL, olen, r5, &dn) == PRUV_BAD_ARGS, "batch NULL inout table");
+                CHECK(pruv_hb_op(g, 2, at5, alen, ot5, NULL, r5, &dn) == PRUV_BAD_ARGS, "batch NULL inout length table");
+                CHECK(pruv_hb_op(g, 2, at5, alen, ot5, olen, NULL, &dn) == PRUV_BAD_ARGS, "batch NULL ret table");
+                CHECK(pruv_hb_op(g, 2, at5, alen, ot5, olen, r5, NULL) == PRUV_BAD_ARGS, "batch NULL done");
+                CHECK(pruv_hb_op(NULL, 2, at5, alen, ot5, olen, r5, &dn) == PRUV_BAD_ARGS, "batch NULL handle");
+                CHECK(pruv_hb_op(g, -1, at5, alen, ot5, olen, r5, &dn) == PRUV_BAD_ARGS, "batch n = -1");
+                CHECK(pruv_hb_op(g, INT64_MIN, at5, alen, ot5, olen, r5, &dn) == PRUV_BAD_ARGS, "batch n = INT64_MIN");
+                CHECK(pruv_hb_op(g, 2, (const int64_t *const *)((char *)at5 + 1), alen, ot5, olen, r5, &dn) == PRUV_BAD_ARGS,
+                      "batch misaligned ro table");
+                CHECK(pruv_hb_op(g, 2, at5, alen, ot5, olen, (int64_t *)((char *)r5 + 1), &dn) == PRUV_BAD_ARGS,
+                      "batch misaligned ret table");
+                CHECK(pruv_hb_op(g, 2, at5, alen, ot5, olen, r5, (int64_t *)((char *)&dn + 1)) == PRUV_BAD_ARGS,
+                      "batch misaligned done");
+                CHECK(r5[0] == SENT && r5[1] == SENT && o5[0] == SENT && o5[1] == SENT, "batch bad tables: slots untouched");
+                CHECK(av5[0] == -10 && av5[1] == 0, "batch bad tables: ro untouched");
+                CHECK(pruv_h_big(g, -1, &r) == PRUV_OK && r == 1, "batch bad tables: state untouched (st[2] == 0)");
+                CHECK(pruv_handle_poisoned(g) == 0, "batch BAD_ARGS never poisons");
+                pruv_handle_free(g);
+            }
+        }
+
+        /* (v) ret table overlapping done / the handle: status 2 up front, nothing ran */
+        {
+            PruvHandle *g = fresh();
+            int64_t rd[2] = {SENT, SENT};
+            int64_t o6[2] = {SENT, SENT};
+            int64_t av6[2] = {-10, 0};
+            const int64_t *at6[2] = {&av6[0], &av6[1]};
+            int64_t *ot6[2] = {&o6[0], &o6[1]};
+            CHECK(g != NULL, "batch overlap: fresh handle");
+            if (g) {
+                CHECK(pruv_hb_op(g, 2, at6, alen, ot6, olen, rd, &rd[1]) == PRUV_BAD_ARGS, "batch ret table overlaps done");
+                CHECK(pruv_hb_op(g, 1, at6, alen, ot6, olen, rd, &rd[0]) == PRUV_BAD_ARGS, "batch ret == done");
+                CHECK(pruv_hb_op(g, 2, at6, alen, ot6, olen, (int64_t *)g, &dn) == PRUV_BAD_ARGS, "batch ret table overlaps the handle");
+                CHECK(pruv_hb_op(g, 2, at6, alen, ot6, olen, rd, (int64_t *)g) == PRUV_BAD_ARGS, "batch done overlaps the handle");
+                CHECK(rd[0] == SENT && rd[1] == SENT && o6[0] == SENT && o6[1] == SENT, "batch overlap: slots untouched");
+                CHECK(pruv_h_big(g, -1, &r) == PRUV_OK && r == 1, "batch overlap: state untouched (st[2] == 0)");
+                pruv_handle_free(g);
+            }
+        }
+
+        /* (v-b) an up-front refusal writes *done = 0 when done is itself a usable slot (non-null, aligned, clear of the
+         * handle object and of the ret table); it is left alone when done is the bad argument; NULL handle and poisoned
+         * handle never write it */
+        {
+            PruvHandle *g = fresh();
+            int64_t o9[3] = {SENT, SENT, SENT}, r9[3] = {SENT, SENT, SENT};
+            int64_t *ot9[2] = {&o9[0], &o9[1]};
+            int64_t av9[2] = {-10, 0};
+            const int64_t *at9[2] = {&av9[0], &av9[1]};
+            int64_t d9 = 77;
+            CHECK(g != NULL, "batch done on refusal: fresh handle");
+            if (g) {
+                /* n = -1 with done preset to 77 -> status 2 and done == 0 */
+                d9 = 77;
+                CHECK(pruv_hb_op(g, -1, at9, alen, ot9, olen, r9, &d9) == PRUV_BAD_ARGS, "batch n = -1 status (done)");
+                CHECK(d9 == 0, "batch n = -1: done == 0");
+                /* a NULL ro table with n = 1 -> status 2 and done == 0 */
+                d9 = 77;
+                CHECK(pruv_hb_op(g, 1, NULL, alen, ot9, olen, r9, &d9) == PRUV_BAD_ARGS, "batch NULL items status (done)");
+                CHECK(d9 == 0, "batch NULL items with n = 1: done == 0");
+                /* a NULL ret table (n > 0) is a refusal too; done is a different, valid slot */
+                d9 = 77;
+                CHECK(pruv_hb_op(g, 2, at9, alen, ot9, olen, NULL, &d9) == PRUV_BAD_ARGS, "batch NULL ret status (done)");
+                CHECK(d9 == 0, "batch NULL ret: done == 0");
+                /* a misaligned ret table: done is still a valid slot clear of it */
+                d9 = 77;
+                CHECK(pruv_hb_op(g, 2, at9, alen, ot9, olen, (int64_t *)((char *)r9 + 1), &d9) == PRUV_BAD_ARGS,
+                      "batch misaligned ret status (done)");
+                CHECK(d9 == 0, "batch misaligned ret: done == 0");
+                /* INT64_MIN: n < 0 */
+                d9 = 77;
+                CHECK(pruv_hb_op(g, INT64_MIN, at9, alen, ot9, olen, r9, &d9) == PRUV_BAD_ARGS, "batch n = INT64_MIN status (done)");
+                CHECK(d9 == 0, "batch n = INT64_MIN: done == 0");
+                /* done is the bad argument: NULL (nothing to write), misaligned (the bytes are left alone) */
+                {
+                    int64_t two[2] = {77, 77};
+                    CHECK(pruv_hb_op(g, 1, at9, alen, ot9, olen, r9, (int64_t *)((char *)&two[0] + 1)) == PRUV_BAD_ARGS,
+                          "batch misaligned done status");
+                    CHECK(two[0] == 77 && two[1] == 77, "batch misaligned done: not written");
+                    CHECK(pruv_hb_op(g, 1, at9, alen, ot9, olen, r9, NULL) == PRUV_BAD_ARGS, "batch NULL done status");
+                }
+                /* done inside the ret table: not written (the slot stays as it was) */
+                {
+                    int64_t rr[2] = {SENT, 77};
+                    CHECK(pruv_hb_op(g, 2, at9, alen, ot9, olen, rr, &rr[1]) == PRUV_BAD_ARGS, "batch done inside ret status");
+                    CHECK(rr[0] == SENT && rr[1] == 77, "batch done inside ret: not written");
+                }
+                /* done on the handle object: not written (that would corrupt the handle), the handle still works */
+                {
+                    CHECK(pruv_hb_op(g, 1, at9, alen, ot9, olen, r9, (int64_t *)g) == PRUV_BAD_ARGS, "batch done on handle status");
+                    CHECK(pruv_h_big(g, -1, &r) == PRUV_OK && r == 1, "batch done on handle: the handle is intact");
+                }
+                /* a NULL handle never writes done */
+                d9 = 77;
+                CHECK(pruv_hb_op(NULL, 1, at9, alen, ot9, olen, r9, &d9) == PRUV_BAD_ARGS, "batch NULL handle status (done)");
+                CHECK(d9 == 77, "batch NULL handle: done not written");
+                CHECK(r9[0] == SENT && r9[1] == SENT && o9[0] == SENT && o9[1] == SENT, "batch done on refusal: slots untouched");
+                CHECK(av9[0] == -10 && av9[1] == 0, "batch done on refusal: ro untouched");
+                pruv_handle_free(g);
+            }
+        }
+
+        /* (vi) a bad item i answers 2 with done = i; the effects of items 0..i are visible, item i did nothing */
+        {
+            int64_t av7[2] = {-10, 0};
+            int64_t al7[2] = {1, 1};
+            int64_t o7[2] = {SENT, SENT}, r7[2] = {SENT, SENT};
+            int c;
+            /* item 1 broken in five ways: inout over the ret table, inout over done, misaligned ro, negative inout
+             * length, inout over the handle */
+            for (c = 0; c < 5; c++) {
+                PruvHandle *g = fresh();
+                const int64_t *a7[2] = {&av7[0], &av7[1]};
+                int64_t *o7t[2] = {&o7[0], &o7[1]};
+                int64_t ol[2] = {1, 1};
+                int64_t d7 = SENT;
+                if (!g) {
+                    CHECK(0, "batch bad item: fresh handle");
+                    continue;
+                }
+                o7[0] = o7[1] = SENT;
+                r7[0] = r7[1] = SENT;
+                if (c == 0) o7t[1] = &r7[1];
+                if (c == 1) o7t[1] = &d7;
+                if (c == 2) a7[1] = (const int64_t *)((const char *)&av7[1] + 1);
+                if (c == 3) ol[1] = -1;
+                if (c == 4) o7t[1] = (int64_t *)g;
+                CHECK(pruv_hb_op(g, 2, a7, al7, o7t, ol, r7, &d7) == PRUV_BAD_ARGS, "batch bad item status");
+                CHECK(d7 == 1, "batch bad item: done == 1");
+                CHECK(r7[0] == 0 && o7[0] == -10, "batch bad item: item 0 effects visible");
+                CHECK(r7[1] == SENT && o7[1] == SENT, "batch bad item: item 1 wrote nothing");
+                CHECK(pruv_h_big(g, -11, &r) == PRUV_OK && r == 1, "batch bad item: item 0 committed (st[2] == -10)");
+                CHECK(pruv_handle_poisoned(g) == 0, "batch bad item never poisons");
+                pruv_handle_free(g);
+            }
+        }
+    }
+
     /* ---- poison: a caught panic poisons the handle; later calls refuse and touch nothing ---- */
     {
         int64_t o[3] = {SENT, SENT, SENT};
@@ -274,6 +547,17 @@ int main(void) {
         CHECK(r == SENT && o[0] == SENT && o[1] == SENT && o[2] == SENT, "poisoned op left out buffers untouched");
         CHECK(a[0] == 7, "poisoned op left ro buffer unchanged");
         CHECK(pruv_h_big(h, 0, &r) == PRUV_POISONED && r == SENT, "query on poisoned handle returns 1");
+        /* (vii) batch entry on a poisoned handle: status 1, ret and out slots untouched, nothing ran */
+        {
+            int64_t av8[2] = {-10, 0}, al8[2] = {1, 1}, ol8[2] = {1, 1};
+            const int64_t *at8[2] = {&av8[0], &av8[1]};
+            int64_t o8[2] = {SENT, SENT}, r8[2] = {SENT, SENT};
+            int64_t *ot8[2] = {&o8[0], &o8[1]};
+            int64_t d8 = SENT;
+            CHECK(pruv_hb_op(h, 2, at8, al8, ot8, ol8, r8, &d8) == PRUV_POISONED, "batch on poisoned handle returns 1");
+            CHECK(r8[0] == SENT && r8[1] == SENT && o8[0] == SENT && o8[1] == SENT, "poisoned batch left slots untouched");
+            CHECK(av8[0] == -10 && av8[1] == 0, "poisoned batch left ro items unchanged");
+        }
         CHECK(pruv_h_setflag(h, 1) == PRUV_POISONED, "unit entry on poisoned handle returns 1");
         CHECK(pruv_hr_grow(h, 8, &r) == PRUV_POISONED && r == SENT, "rebuild on poisoned handle returns 1");
         /* poisoned refusal comes BEFORE any argument check: invalid arguments still give 1 and touch nothing */

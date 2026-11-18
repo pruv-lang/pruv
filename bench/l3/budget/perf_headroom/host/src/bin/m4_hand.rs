@@ -10,7 +10,10 @@
 //   m4_hand perf  <axis> <n> <reps>   in-process calls
 //   m4_hand perfc <axis> <n> <reps>   same loop, State behind an opaque extern "C" handle (hand_h_*), called through
 //                                     black_box'd function pointers: the matched baseline for the m4c lane
-//   m4_hand selftest                  (also runs every step through the C API)
+//   m4_hand perfcb <axis> <n> <reps>  as perfc, but on the sessions axis each rep's get + put is ONE call of the batch
+//                                     entry hand_hb_exec (one catch_unwind, one store access, same per-item checks):
+//                                     the matched baseline for the m4cb lane; the other axes are identical to perfc
+//   m4_hand selftest                  (also runs every step through the C API, single and batch)
 // Prints one line: axis=.. n=.. hand_ns_per_op=..
 
 use std::collections::{HashMap, HashSet};
@@ -271,12 +274,24 @@ pub struct HandHandle {
 type NewF = extern "C" fn() -> *mut HandHandle;
 type FreeF = unsafe extern "C" fn(*mut HandHandle);
 type ExecF = unsafe extern "C" fn(*mut HandHandle, *const i64, i64, *mut i64, i64, *mut i64) -> i32;
+// batch: (h, n, op table, op lens, out table, out lens, ret[n], done)
+type BatchF = unsafe extern "C" fn(
+    *mut HandHandle,
+    i64,
+    *const *const i64,
+    *const i64,
+    *const *mut i64,
+    *const i64,
+    *mut i64,
+    *mut i64,
+) -> i32;
 
 #[derive(Clone, Copy)]
 struct CFns {
     new: NewF,
     free: FreeF,
     exec: ExecF,
+    batch: BatchF,
 }
 
 #[no_mangle]
@@ -388,6 +403,101 @@ pub unsafe extern "C" fn hand_h_exec(
     }
 }
 
+/// True if `p` is a usable table of `n` elements of T: non-null, aligned, end address does not overflow.
+fn table_ok<T>(p: *const T, n: usize) -> bool {
+    !p.is_null()
+        && (p as usize) % std::mem::align_of::<T>() == 0
+        && n.checked_mul(std::mem::size_of::<T>()).and_then(|b| (p as usize).checked_add(b)).is_some()
+}
+
+/// The batch entry (mirror of the generated <pkg>__pruv_hb_NAME): runs items 0..n in order inside ONE catch_unwind and
+/// ONE store access (one poison set/clear) and stops after the first item whose status is nonzero. `ret[i]` is item i's
+/// status (as hand_h_exec's *ret); `*done` = items that ran. The call returns 0 OK, 1 poisoned, 2 bad args (up-front for
+/// bad tables / n < 0 / ret, done, h overlap; per item i with `*done = i`), 3 panicked.
+///
+/// # Safety
+/// Pointers must be null or valid for the stated lengths, as for any C entry point.
+#[no_mangle]
+pub unsafe extern "C" fn hand_hb_exec(
+    h: *mut HandHandle,
+    n: i64,
+    ops: *const *const i64,
+    op_lens: *const i64,
+    outs: *const *mut i64,
+    out_lens: *const i64,
+    ret: *mut i64,
+    done: *mut i64,
+) -> i32 {
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> i32 {
+        if h.is_null() {
+            return 2;
+        }
+        if (*h).poisoned {
+            return 1;
+        }
+        if n < 0 || (n as u64) > (isize::MAX as u64) / 64 {
+            return 2;
+        }
+        let nu = n as usize;
+        if !table_ok(done as *const i64, 1)
+            || (nu > 0
+                && !(table_ok(ops, nu)
+                    && table_ok(op_lens, nu)
+                    && table_ok(outs, nu)
+                    && table_ok(out_lens, nu)
+                    && table_ok(ret as *const i64, nu)))
+        {
+            return 2;
+        }
+        let s_ret = span(ret as usize, n);
+        let s_done = span(done as usize, 1);
+        let s_h = (h as usize, (h as usize).saturating_add(std::mem::size_of::<HandHandle>()));
+        if spans_overlap(s_ret, s_done) || spans_overlap(s_ret, s_h) || spans_overlap(s_done, s_h) {
+            return 2;
+        }
+        (*h).poisoned = true;
+        for i in 0..nu {
+            let op = *ops.add(i);
+            let op_len = *op_lens.add(i);
+            let out = *outs.add(i);
+            let out_len = *out_lens.add(i);
+            // Same per-item checks as hand_h_exec: op is read-only, out/ret slot/done/h are written.
+            let s_op = span(op as usize, op_len);
+            let s_out = span(out as usize, out_len);
+            let bad = spans_overlap(s_op, s_out)
+                || spans_overlap(s_op, s_ret)
+                || spans_overlap(s_op, s_done)
+                || spans_overlap(s_op, s_h)
+                || spans_overlap(s_out, s_ret)
+                || spans_overlap(s_out, s_done)
+                || spans_overlap(s_out, s_h);
+            let (Some(op_s), Some(out_s)) = (if bad { None } else { ro(op, op_len) }, if bad { None } else { mt(out, out_len) })
+            else {
+                *done = i as i64;
+                (*h).poisoned = false;
+                return 2;
+            };
+            let status = (*h).st.exec(op_s, out_s);
+            *ret.add(i) = status as i64;
+            if status != 0 {
+                *done = (i + 1) as i64;
+                (*h).poisoned = false;
+                return 0;
+            }
+        }
+        *done = n;
+        (*h).poisoned = false;
+        0
+    }));
+    match r {
+        Ok(s) => s,
+        Err(payload) => {
+            std::mem::forget(payload);
+            3
+        }
+    }
+}
+
 // ---- perf ---------------------------------------------------------------------------------------------------------
 
 fn run_check(exec: &mut dyn FnMut(&[i64], &mut [i64]) -> i32, op: &[i64], out: &mut [i64], what: &str) {
@@ -400,12 +510,15 @@ fn run_check(exec: &mut dyn FnMut(&[i64], &mut [i64]) -> i32, op: &[i64], out: &
 
 /// One full run on fresh state. Returns (elapsed ns, ops, sink). `c`: the State sits behind the opaque extern "C"
 /// handle (`perfc`), reached through black_box'd function pointers; otherwise it is called in-process (`perf`).
-fn run_once(axis: &str, n: usize, reps: usize, c: bool) -> (u128, usize, i64) {
+/// `cb` (`perfcb`, implies `c`): on the sessions axis each rep's [get, put] pair is one hand_hb_exec call.
+fn run_once(axis: &str, n: usize, reps: usize, c: bool, cb: bool) -> (u128, usize, i64) {
+    let c = c || cb;
     let mut st = State::default();
     let f = CFns {
         new: black_box::<NewF>(hand_h_new),
         free: black_box::<FreeF>(hand_h_free),
         exec: black_box::<ExecF>(hand_h_exec),
+        batch: black_box::<BatchF>(hand_hb_exec),
     };
     let h: *mut HandHandle = if c { (f.new)() } else { std::ptr::null_mut() };
     let mut out: Vec<i64> = vec![0; OUT_WORDS];
@@ -485,7 +598,45 @@ fn run_once(axis: &str, n: usize, reps: usize, c: bool) -> (u128, usize, i64) {
     let t0 = Instant::now();
     let mut sink = 0i64;
     let mut j = 0usize;
-    for _ in 0..nops {
+    // perfcb, sessions axis: one batch call per rep (item 0 -> out, item 1 -> out2), same sink as two single ops.
+    let batched = cb && axis == "sessions" && clen == 2;
+    if batched {
+        let mut out2: Vec<i64> = vec![0; OUT_WORDS];
+        for _ in 0..nops / 2 {
+            if out.len() < OUT_WORDS {
+                out.resize(OUT_WORDS, 0);
+            }
+            if out2.len() < OUT_WORDS {
+                out2.resize(OUT_WORDS, 0);
+            }
+            let (a, b) = (black_box(&cycle[0]), black_box(&cycle[1]));
+            let op_ptrs: [*const i64; 2] = [a.as_ptr(), b.as_ptr()];
+            let op_lens: [i64; 2] = [a.len() as i64, b.len() as i64];
+            let out_ptrs: [*mut i64; 2] = [out.as_mut_ptr(), out2.as_mut_ptr()];
+            let out_lens: [i64; 2] = [out.len() as i64, out2.len() as i64];
+            let mut ret = [0i64; 2];
+            let mut done = 0i64;
+            let s = unsafe {
+                (f.batch)(
+                    h,
+                    2,
+                    op_ptrs.as_ptr(),
+                    op_lens.as_ptr(),
+                    out_ptrs.as_ptr(),
+                    out_lens.as_ptr(),
+                    ret.as_mut_ptr(),
+                    &mut done,
+                )
+            };
+            if s != 0 || done != 2 || ret[0] != 0 || ret[1] != 0 {
+                eprintln!("perfcb: batch failed in timed loop (status {}, done {}, ret {:?})", s, done, ret);
+                std::process::exit(1);
+            }
+            sink = sink.wrapping_add(black_box(out[0] + out[1]));
+            sink = sink.wrapping_add(black_box(out2[0] + out2[1]));
+        }
+    }
+    for _ in 0..(if batched { 0 } else { nops }) {
         let op = &cycle[j];
         j += 1;
         if j == clen {
@@ -639,12 +790,88 @@ fn selftest() {
             std::process::exit(1);
         }
         hand_h_free(h);
+
+        // Batch entry on a fresh handle: [session_put, session_get] in one call.
+        let hb = hand_h_new();
+        let put = op_session_put("ab", &[5, 6]);
+        let get = op_k(2, "ab");
+        let bad_op: Vec<i64> = vec![99];
+        let mut o1: Vec<i64> = vec![0; OUT_WORDS];
+        let mut o2: Vec<i64> = vec![0; OUT_WORDS];
+        let mut rt = [-1i64; 2];
+        let mut done = -1i64;
+        let bfail = |what: &str, s: i32, want: i32| {
+            if s != want {
+                println!("selftest mismatch (batch): {}: status {}, expected {}", what, s, want);
+                std::process::exit(1);
+            }
+        };
+        {
+            let ops: [*const i64; 2] = [put.as_ptr(), get.as_ptr()];
+            let lens: [i64; 2] = [put.len() as i64, get.len() as i64];
+            let outs: [*mut i64; 2] = [o1.as_mut_ptr(), o2.as_mut_ptr()];
+            let olens: [i64; 2] = [OUT_WORDS as i64, OUT_WORDS as i64];
+            bfail(
+                "put+get",
+                hand_hb_exec(hb, 2, ops.as_ptr(), lens.as_ptr(), outs.as_ptr(), olens.as_ptr(), rt.as_mut_ptr(), &mut done),
+                0,
+            );
+            if done != 2 || rt != [0, 0] || o1[..2] != [1, 1] || o2[..5] != [4, 1, 2, 5, 6] {
+                println!("selftest mismatch (batch): put+get: done {}, ret {:?}, out {:?} / {:?}", done, rt, &o1[..2], &o2[..5]);
+                std::process::exit(1);
+            }
+            // n = 0: done = 0, nothing else touched.
+            done = -1;
+            bfail("n=0", hand_hb_exec(hb, 0, ops.as_ptr(), lens.as_ptr(), outs.as_ptr(), olens.as_ptr(), rt.as_mut_ptr(), &mut done), 0);
+            if done != 0 {
+                println!("selftest mismatch (batch): n=0: done {}", done);
+                std::process::exit(1);
+            }
+            // Up-front refusals: n < 0, NULL table, ret overlapping done.
+            bfail("n<0", hand_hb_exec(hb, -1, ops.as_ptr(), lens.as_ptr(), outs.as_ptr(), olens.as_ptr(), rt.as_mut_ptr(), &mut done), 2);
+            bfail("null table", hand_hb_exec(hb, 2, std::ptr::null(), lens.as_ptr(), outs.as_ptr(), olens.as_ptr(), rt.as_mut_ptr(), &mut done), 2);
+            let rp = rt.as_mut_ptr();
+            bfail("ret overlaps done", hand_hb_exec(hb, 2, ops.as_ptr(), lens.as_ptr(), outs.as_ptr(), olens.as_ptr(), rp, rp.add(1)), 2);
+        }
+        {
+            // Stop rule: the first item fails (status 2), the second must not run.
+            let ops: [*const i64; 2] = [bad_op.as_ptr(), get.as_ptr()];
+            let lens: [i64; 2] = [bad_op.len() as i64, get.len() as i64];
+            let outs: [*mut i64; 2] = [o1.as_mut_ptr(), o2.as_mut_ptr()];
+            let olens: [i64; 2] = [OUT_WORDS as i64, OUT_WORDS as i64];
+            rt = [-1; 2];
+            o2.fill(0);
+            bfail(
+                "stop",
+                hand_hb_exec(hb, 2, ops.as_ptr(), lens.as_ptr(), outs.as_ptr(), olens.as_ptr(), rt.as_mut_ptr(), &mut done),
+                0,
+            );
+            if done != 1 || rt != [2, -1] || o2[0] != 0 {
+                println!("selftest mismatch (batch): stop rule: done {}, ret {:?}, out2[0] {}", done, rt, o2[0]);
+                std::process::exit(1);
+            }
+            // Bad item: item 1's out buffer is the ret table: status 2, done = 1, item 0 (a get) ran.
+            let outs2: [*mut i64; 2] = [o1.as_mut_ptr(), rt.as_mut_ptr()];
+            let ops2: [*const i64; 2] = [get.as_ptr(), get.as_ptr()];
+            let lens2: [i64; 2] = [get.len() as i64, get.len() as i64];
+            rt = [-1; 2];
+            bfail(
+                "bad item",
+                hand_hb_exec(hb, 2, ops2.as_ptr(), lens2.as_ptr(), outs2.as_ptr(), olens.as_ptr(), rt.as_mut_ptr(), &mut done),
+                2,
+            );
+            if done != 1 || rt != [0, -1] {
+                println!("selftest mismatch (batch): bad item: done {}, ret {:?}", done, rt);
+                std::process::exit(1);
+            }
+        }
+        hand_h_free(hb);
     }
     println!("selftest ok");
 }
 
 fn usage() -> ! {
-    eprintln!("usage: m4_hand perf|perfc <sessions|tools|clocks> <n> <reps> | selftest");
+    eprintln!("usage: m4_hand perf|perfc|perfcb <sessions|tools|clocks> <n> <reps> | selftest");
     std::process::exit(2);
 }
 
@@ -652,7 +879,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(|s| s.as_str()) {
         Some("selftest") if args.len() == 2 => selftest(),
-        Some(mode @ ("perf" | "perfc")) if args.len() == 5 => {
+        Some(mode @ ("perf" | "perfc" | "perfcb")) if args.len() == 5 => {
             let axis = args[2].as_str();
             if !matches!(axis, "sessions" | "tools" | "clocks") {
                 usage();
@@ -663,7 +890,7 @@ fn main() {
                 usage();
             }
             // One measured run on fresh state, no separate warm-up (driver_m4 perf has none either).
-            let (ns, ops, sink) = run_once(axis, n, reps, mode == "perfc");
+            let (ns, ops, sink) = run_once(axis, n, reps, mode == "perfc", mode == "perfcb");
             eprintln!("sink={}", sink);
             println!("axis={} n={} hand_ns_per_op={:.1}", axis, n, ns as f64 / ops as f64);
         }
