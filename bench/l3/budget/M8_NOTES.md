@@ -293,10 +293,29 @@ Toolgrow is now within 1.1x on both ns and instructions. Charge, failure and too
 policy removed the call-frame share, about 110-130 instructions. What is left is the key and id width and the
 `valid` boundary, as listed in the table above.
 
+### P21b: the insert after the lazy forget
+
+P21a moved each forgotten activity's free into the next insert, so toolnew at M = 500 reached 1.08x oaw. P21b
+(Appendix P21b in docs/L3_RESTRUCTURE_SPEC.md) took the cost apart in this order:
+- Data representation: at M the store holds 1505 live entries in 4096 slots. The early tombstone rehash in `room()`
+  needed `live + ents <= slots / 4` (1024), so it never fired and the index ran between 0.37 and 0.75 load, which
+  lengthened the unsuccessful probe of every new activity. The bound is now `slots * 3 / 8`. After that rehash
+  used = live <= 3/8 of the slots and the next one is at least slots/8 inserts away, so the cost stays amortized.
+- Language gap: none needed. Every change is existing Pruv (direct row writes under `kept`, `eb` bases).
+- Codegen: `alloc_entry` takes the reclaimable head child of the free head straight into the new entry (no free-list
+  push and pop, the free head is read once). `put_at` computes the entry base once and fills the row and the key
+  region on direct words. `rehash` clears slots and reads the reinsert fields on direct words.
+
+Result (9 interleaved rounds, `work/p21b/perf_final.log`): toolnew 52.8 / 55.5 ns vs oaw 60.7 / 57.0 (0.87 / 0.97x,
+Pruv max below oaw min at both sizes), toolgrow 1361 / 1364 instructions vs oaw 1458 / 1391 (0.93 / 0.98x),
+toolforget 0.92 / 0.95x (overlap), tooldup 0.67 / 0.64x. RSS and allocation counts are unchanged from P21a or lower.
+After the audit fix (`room()` asks `need()` again after the early rehash, off the normal path) the rerun has the same
+instructions and memory, toolnew 0.87 / 0.99x (S below, M overlapping).
+
 ## Complexity bound check (§9)
 
 Expected normal path; Grow (host copy, rare) and rehash (amortized) are storage upkeep.
 - charge: O(sessionId + budgetId length): one `find`, the bid compare, constant field work. Measured flat in N: 63.6 / 76.1 / 72.0 ns at N = 100 / 500 / 1000.
 - noteFailure: O(key length); flat: 53.4 / 65.1 / 65.9 ns.
 - noteTool: O(turnId + activityId + ref key lengths), no scan of the turn's activities: dedup hit on a turn of N activities is flat: 50.9 / 65.8 / 55.4 ns.
-- forgetTurn: O(probe length + turn key length), independent of the activity count. Unlinking the turn and bumping its generation invalidate its activities, which allocation reclaims later.
+- forgetTurn: O(probe length + turn key length), independent of the activity count. Unlinking the turn and bumping its generation invalidate its activities, which allocation reclaims later: each insert reclaims at most one dead child, in O(1), inside `alloc_entry` (P21b).
