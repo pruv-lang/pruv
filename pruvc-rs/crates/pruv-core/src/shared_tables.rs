@@ -14,3 +14,8 @@ pub mod builtin_types {
     pub const BUILTIN_TYPE_NAMES: &[&str] = &["i64", "bool", "unit", "array", "option", "result", "array_u8", "array_bool", "str", "vec", "hashmap", "string", "file", "process", "process_args", "socket", "listener", "loop"];
     pub const BUILTIN_PRINT: &[(&str, &str)] = &[("i64", "i64"), ("bool", "bool"), ("unit", "()"), ("array", "[i64]"), ("option", "Option<i64>"), ("result", "Result<i64>"), ("array_u8", "[u8]"), ("array_bool", "[bool]"), ("str", "str"), ("string", "String"), ("file", "File"), ("process", "Process"), ("process_args", "ProcessArgs"), ("socket", "Socket"), ("listener", "Listener"), ("loop", "Loop")];
 }
+
+/// G6 shim helper edges: an LLVM runtime contract check of the caller observer also calls the bound observer, so the Rust shim must emit both.
+pub mod shim_edges {
+    pub const SHIM_EDGES: &[(&str, &str)] = &[("file_byte", "file_size"), ("proc_byte", "proc_size"), ("ev_kind", "ev_cap"), ("ev_eof", "ev_cap"), ("ev_write_open", "ev_cap"), ("ev_byte", "ev_size"), ("net_byte", "net_size")];
+}

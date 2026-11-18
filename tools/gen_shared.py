@@ -7,7 +7,7 @@ import json
 import os
 import sys
 
-TABLES = ["mono_limits", "builtin_types"]   # ordered; add new tables at the end
+TABLES = ["mono_limits", "builtin_types", "shim_edges"]   # ordered; add new tables at the end
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = "pruvc-rs/crates/pruv-core/src/shared_tables.rs"
