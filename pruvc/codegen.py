@@ -86,6 +86,7 @@ from collections import namedtuple
 from vast import *
 from typeinfo import TypeTable, is_user_type, is_array, uses_array_type, uses_str, is_collection, dependencies
 from foreign import CATALOG
+from shared_data import load
 from refine import _kids as expr_kids, _stmt_names, _expr_names
 
 ALLOW = ("#[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, "
@@ -3189,8 +3190,9 @@ class Gen:
 # calls) gets `#[inline(always)]` when its inclusive size (own body lines plus, once per call, the inclusive size of
 # each callee that gets always) is at most INLINE_SMALL, when it has at most one call site, or when the copies it adds
 # beyond one, incl * (call sites - 1), fit INLINE_BUDGET. The rest keep `#[inline]` and rustc's own heuristics.
-INLINE_SMALL = 8
-INLINE_BUDGET = 1500
+_INLINE = load("inline_policy")   # shared with pruvc-rs (pruvc/data/inline_policy.json, tools/gen_shared.py)
+INLINE_SMALL = _INLINE["INLINE_SMALL"]
+INLINE_BUDGET = _INLINE["INLINE_BUDGET"]
 
 
 def _ident_byte(c):

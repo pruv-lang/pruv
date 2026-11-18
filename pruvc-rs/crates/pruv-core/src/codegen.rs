@@ -4695,8 +4695,7 @@ pub fn raw_module_with(mode: &str, items: &[(String, String, String, Vec<String>
 // calls) gets `#[inline(always)]` when its inclusive size (own body lines plus, once per call, the inclusive size of
 // each callee that gets always) is at most INLINE_SMALL, when it has at most one call site, or when the copies it adds
 // beyond one, incl * (call sites - 1), fit INLINE_BUDGET. The rest keep `#[inline]` and rustc's own heuristics.
-const INLINE_SMALL: u64 = 8;
-const INLINE_BUDGET: u64 = 1500;
+use crate::shared_tables::inline_policy::{INLINE_BUDGET, INLINE_SMALL}; // shared with pruvc (pruvc/data/inline_policy.json, tools/gen_shared.py)
 
 fn ident_byte(c: u8) -> bool {
     c.is_ascii_alphanumeric() || c == b'_'
