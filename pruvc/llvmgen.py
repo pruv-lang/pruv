@@ -65,8 +65,7 @@ def sym_prefix(pkg):
     return pkg + "__" if pkg else ""
 
 SIGNED_MIN128 = -170141183460469231731687303715884105728
-BIT_LLVM = {"band": "and", "bor": "or", "bxor": "xor", "wrapping_shl": "shl", "ushr": "lshr",
-             "wrapping_add": "add", "wrapping_mul": "mul"}   # P2: bit builtin -> LLVM instruction; later batches add entries
+BIT_LLVM = {n: llvm for n, (_rust, llvm) in codegen.BIT_BUILTINS.items()}   # P2: bit builtin -> LLVM instruction (from check.BIT_BUILTINS)
 OPT = "{ i1, i64 }"
 COPT = "{ i1, i128 }"       # Option/Result stored inside a contract aggregate (%pruv_c_*)
 ARR = "{ ptr, i64, i64 }"   # P3: owned buffer inside the module: { data, len, cap }; cap = allocated element count

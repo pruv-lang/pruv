@@ -87,6 +87,7 @@ from vast import *
 from typeinfo import TypeTable, is_user_type, is_array, uses_array_type, uses_str, is_collection, dependencies
 from foreign import CATALOG
 from shared_data import load
+from check import BIT_BUILTINS
 from refine import _kids as expr_kids, _stmt_names, _expr_names
 
 ALLOW = ("#[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, "
@@ -290,12 +291,11 @@ def str_lit(bs):
 
 SAFE_ARITH = {"+": "pruv_add", "-": "pruv_sub", "*": "pruv_mul", "/": "pruv_div", "%": "pruv_rem"}
 CONTRACT_ARITH = {"+": "pruv_cadd", "-": "pruv_csub", "*": "pruv_cmul", "/": "pruv_cdiv", "%": "pruv_crem"}
-# P2: bit builtin -> Rust operator (same names as check.BIT_BUILTINS); later batches add entries. The contract helper
+# P2: bit builtin -> Rust operator, derived from check.BIT_BUILTINS (add entries there). The contract helper
 # pruv_c<name> is emitted only when a contract uses the builtin.
-BIT_RUST = {"band": "&", "bor": "|", "bxor": "^", "wrapping_shl": "<<", "ushr": ">>",
-            "wrapping_add": "wrapping_add", "wrapping_mul": "wrapping_mul"}
-# P2 batch 3: wrapping arithmetic is an i64 method call instead of an operator
-WRAP_RUST = ("wrapping_add", "wrapping_mul")
+BIT_RUST = {n: rust for n, (rust, _llvm) in BIT_BUILTINS.items()}
+# P2 batch 3: wrapping arithmetic is an i64 method call (an identifier in BIT_BUILTINS) instead of an operator
+WRAP_RUST = tuple(n for n, rust in BIT_RUST.items() if rust.isidentifier())
 CONTRACT_WRAP_HELPER = (
     "#[allow(dead_code)]\n"
     "#[inline]\n"
@@ -310,7 +310,7 @@ CONTRACT_LOAD_HELPER = (
     "{ pruv_ud(\"array index out of range\") } let mut w: u64 = 0; "
     "for k in 0..n { w = (w << 8) | (a[(i as usize) + k] as u64); } ((w as i64) as i128) }\n")
 # P2 batch 2: shifts need 0 <= k < 64; --no-verify uses these helpers (included only when used, table order)
-SHIFT_SAFE = {"wrapping_shl": "pruv_shl", "ushr": "pruv_ushr"}
+SHIFT_SAFE = {n: {"<<": "pruv_shl", ">>": "pruv_ushr"}[rust] for n, rust in BIT_RUST.items() if rust in ("<<", ">>")}
 SAFE_SHIFT_HELPER = (
     "#[allow(dead_code)]\n"
     "#[inline]\n"
