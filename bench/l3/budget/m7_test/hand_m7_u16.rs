@@ -647,7 +647,7 @@ impl World {
         if !self.clocks.is_empty() && self.clocks.get(&*b.id).copied().unwrap_or(0) > 0 {
             return Ok(Res::Bool(false));
         }
-        match bud_facts::is_quiet(&[], 0, 0) {
+        match bud_facts::is_quiet(&[], 0, 0, 0) {
             0 => return Ok(Res::Bool(false)),
             1 => {}
             _ => return Err(2),

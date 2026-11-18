@@ -44,7 +44,7 @@ pub fn answer(i: usize) -> i64 {
 /// isQuiet(session): the session is the packed key k[ks .. ks + words(kn)) (bud_keys layout). The test host's answer
 /// does not depend on it; a real host would look the session up. Returns the next answer of the stream.
 #[inline(always)]
-pub fn is_quiet(_k: &[i64], _ks: i64, _kn: i64) -> i64 {
+pub fn is_quiet(_k: &[i64], _ks: i64, _kn: i64, _fxn: i64) -> i64 {
     let i = CALLS.with(|c| {
         let i = c.get();
         c.set(i + 1);
