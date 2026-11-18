@@ -973,3 +973,94 @@ pub fn grow_copy(prev: [i64], inout nxt: [i64]) -> i64
   if hw(nxt, 12) != hw(prev, 12) { return 2; }
   return 0;
 }
+
+// ---- seek: one hash and one probe for a lookup that may become an insert (L3 P21) ----
+
+// A packed key looked up under owner, with what an insert of the same key needs: og = gf(st, owner, 3) and
+// h = hash_words(owner, og, key, ks, kn) (computed once), e = the key's entry or -1, and, when e < 0, slot = the
+// slot put_key_h() would pick (the first tombstone or empty slot on h's probe path, absolute address) or -1.
+pub struct Seek { og: i64, h: i64, e: i64, slot: i64 }
+
+// find_w() and probe_w() in one pass that keeps the entry: e is find_h_w()'s result (both loops read the same words up
+// to the first empty slot, find_h_w returns at a match or there), slot is probe_w()'s when the key is absent. Caller
+// contract as find_w (canonical key words); total on any input.
+pub fn seek_w(st: [i64], owner: i64, key: [i64], ks: i64, kn: i64) -> Seek
+{
+  let og: i64 = gf(st, owner, 3);
+  let h: i64 = hash_words(owner, og, key, ks, kn);
+  let slots: i64 = crate::bud_store::c32(hw(st, 4));
+  if len(st) < 5 || slots < 1 { return Seek { og: og, h: h, e: -1, slot: -1 }; }
+  let ht: i64 = tag(h);
+  let sb: i64 = crate::bud_store::c32(st[3]);
+  let mask: i64 = slots - 1;
+  let n: i64 = len(st);
+  let mut free: i64 = -1;
+  let mut i: i64 = 0;
+  while i < slots
+    invariant 0 <= i && i <= slots && slots <= 4294967296 && n == len(st)
+    decreases slots - i
+  {
+    let p: i64 = sb + band(wrapping_add(h, i), mask);
+    let mut w: i64 = 0;
+    if p >= 0 && p < n { w = st[p]; }
+    if w == 0 {
+      if free < 0 { free = p; }
+      return Seek { og: og, h: h, e: -1, slot: free };
+    }
+    if w == -1 {
+      if free < 0 { free = p; }
+    } else if w > 0 && ushr(w, 32) == ht {
+      let e: i64 = slot_entry(w);
+      if entry_matches_w(st, e, owner, og, h, key, ks, kn) { return Seek { og: og, h: h, e: e, slot: -1 }; }
+    }
+    i = i + 1;
+  }
+  return Seek { og: og, h: h, e: -1, slot: free };
+}
+
+// room() for callers outside this module: 0 fits (nothing written), -1 the index was rebuilt and it fits now (every
+// slot from an earlier seek_w is stale), otherwise N > 0: Grow(N); nothing written on a store whose header matches
+// its tables (room's rehash leaves used <= live, so the second need() returns 0); on a broken buffer the index may
+// have been rebuilt first.
+pub fn room_w(inout st: [i64], entries: i64, words: i64) -> i64
+  ensures crate::bud_store::kept(st, old(st))
+{ return room(inout st, entries, words); }
+
+// Inserts the absent key that s = seek_w(st, owner, key, ks, kn) looked up, reusing s.og, s.h and s.slot. Caller
+// contract: st changed since that seek_w only by room_w(), and rehashed says whether room_w() returned -1 (then the
+// index is probed again with s.h, as add_absent_w does). Entry index, or -1 (nothing usable was added). Total on
+// any input: a broken contract can only store an entry its later lookups miss (a stale og or h) or write a slot
+// through wr16, never outside the store's non-header words.
+pub fn put_seek_w(inout st: [i64], owner: i64, s: Seek, key: [i64], ks: i64, kn: i64, rehashed: bool) -> i64
+  ensures crate::bud_store::kept(st, old(st))
+{
+  if gf(st, owner, 0) != 1 { return -1; }
+  if rehashed { return put_key_h(inout st, owner, s.og, s.h, key, ks, kn); }
+  if s.slot < 0 { return -1; }
+  return put_at(inout st, owner, s.og, s.h, key, ks, kn, s.slot);
+}
+
+// Read-only, O(1): true when k (1 or 2) successive bud_store::entry_alloc calls would each return an entry. It mirrors
+// entry_alloc's choice exactly (free head if 3 <= fh < top and fh < cap, else the entry top if top < cap; the next free
+// head is normalized the same way). need() only checks live + entries <= cap, which a store whose header counters
+// disagree with its entry table (entry top high, free list empty) can pass; callers ask this before their first write
+// so an insert that needs k entries is refused whole instead of failing after the first one was linked. k <= 0: true.
+pub fn alloc_ok(st: [i64], k: i64) -> bool
+{
+  if k <= 0 { return true; }
+  let cap: i64 = crate::bud_store::c32(hw(st, 6));
+  let top: i64 = crate::bud_store::c32(hw(st, 7));
+  let fh: i64 = hw(st, 8);
+  if fh >= 3 && fh < top && fh < cap {
+    if k < 2 { return true; }
+    let mut nx: i64 = gf(st, fh, 8);
+    if nx < -1 || nx >= top { nx = -1; }
+    if nx >= 3 && nx < top && nx < cap { return true; }
+    return top < cap;
+  }
+  if top < cap {
+    if k < 2 { return true; }
+    return top + 1 < cap;
+  }
+  return false;
+}

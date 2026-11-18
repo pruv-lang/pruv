@@ -982,7 +982,10 @@ fn refk(i: usize) -> Ref {
     Ref { session: u16s(&format!("session-{:05}", i)), budget: u16s(&bid_of(i)) }
 }
 
-// perf <N> <reps> [item]: items as driver_m8.rs run_perf (charge / failure / tooldup / toolgrow), keys pre-decoded
+// perf <N> <reps> [item]: items as driver_m8.rs run_perf, keys pre-decoded
+//   toolnew   : noteTool(ref_0, t2, a_j) for N new activities; ns per noteTool
+//   toolforget: forgetTurn(t2) on a turn holding N activities; ns per forgetTurn
+//   toolgrow  : instruction item; same loop, ns per noteTool with forget included
 fn run_perf(args: &[String]) {
     let n: usize = args[0].parse().unwrap();
     let reps: usize = args[1].parse().unwrap();
@@ -1041,18 +1044,37 @@ fn run_perf(args: &[String]) {
         let _ = w.note_tool(&r0.session, &r0.budget, &turn2, a);
     }
     w.forget_turn(&turn2);
-    if on("toolgrow") {
+    if on("toolnew") || on("toolforget") || only == Some("toolgrow") {
         let rounds = std::cmp::max(1, reps / n);
-        let t = Instant::now();
+        let mut t_new = 0;
+        let mut t_forget = 0;
         for _ in 0..rounds {
+            let start = Instant::now();
             for a in &acts {
                 let _ = black_box(w.note_tool(&r0.session, &r0.budget, black_box(&turn2), black_box(a)));
             }
+            let after_new = Instant::now();
             w.forget_turn(black_box(&turn2));
+            let after_forget = Instant::now();
+            t_new += (after_new - start).as_nanos();
+            t_forget += (after_forget - after_new).as_nanos();
         }
-        let ns = t.elapsed().as_nanos() as f64 / (rounds * n) as f64;
-        println!("toolgrow {} {:.1}", n, ns);
-        println!("chk toolgrow {} {}", n, w.checksum());
+        let checksum = w.checksum();
+        if only == Some("toolgrow") {
+            let ns = (t_new + t_forget) as f64 / (rounds * n) as f64;
+            println!("toolgrow {} {:.1}", n, ns);
+            println!("chk toolgrow {} {}", n, checksum);
+        }
+        if on("toolnew") {
+            let ns = t_new as f64 / (rounds * n) as f64;
+            println!("toolnew {} {:.1}", n, ns);
+            println!("chk toolnew {} {}", n, checksum);
+        }
+        if on("toolforget") {
+            let ns = t_forget as f64 / rounds as f64;
+            println!("toolforget {} {:.1}", n, ns);
+            println!("chk toolforget {} {}", n, checksum);
+        }
     }
     black_box(&w.s.recs);
 }
@@ -1134,18 +1156,37 @@ fn run_perfw(args: &[String]) {
         w.call_wire(d, &mut sc, &mut fr);
     }
     w.call_wire(&forget, &mut sc, &mut fr);
-    if on("toolgrow") {
+    if on("toolnew") || on("toolforget") || only == Some("toolgrow") {
         let rounds = std::cmp::max(1, reps / n);
-        let t = Instant::now();
+        let mut t_new = 0;
+        let mut t_forget = 0;
         for _ in 0..rounds {
+            let start = Instant::now();
             for d in &grow {
                 black_box(w.call_wire(black_box(d), &mut sc, &mut fr));
             }
+            let after_new = Instant::now();
             black_box(w.call_wire(black_box(&forget), &mut sc, &mut fr));
+            let after_forget = Instant::now();
+            t_new += (after_new - start).as_nanos();
+            t_forget += (after_forget - after_new).as_nanos();
         }
-        let ns = t.elapsed().as_nanos() as f64 / (rounds * n) as f64;
-        println!("toolgrow {} {:.1}", n, ns);
-        println!("chk toolgrow {} {}", n, w.checksum());
+        let checksum = w.checksum();
+        if only == Some("toolgrow") {
+            let ns = (t_new + t_forget) as f64 / (rounds * n) as f64;
+            println!("toolgrow {} {:.1}", n, ns);
+            println!("chk toolgrow {} {}", n, checksum);
+        }
+        if on("toolnew") {
+            let ns = t_new as f64 / (rounds * n) as f64;
+            println!("toolnew {} {:.1}", n, ns);
+            println!("chk toolnew {} {}", n, checksum);
+        }
+        if on("toolforget") {
+            let ns = t_forget as f64 / rounds as f64;
+            println!("toolforget {} {:.1}", n, ns);
+            println!("chk toolforget {} {}", n, checksum);
+        }
     }
     black_box(&w.s.recs);
 }

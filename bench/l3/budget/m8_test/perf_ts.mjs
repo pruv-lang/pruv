@@ -1,9 +1,11 @@
 // TS side of the M8 perf items (same shapes as driver_m8.rs run_perf / hand_m8.rs), on the pinned reference class.
-//   node --experimental-strip-types --no-warnings --import ../reference-hooks.mjs perf_ts.mjs <N> <reps>
+//   node --experimental-strip-types --no-warnings --import ../reference-hooks.mjs perf_ts.mjs <N> <reps> [item]
 import * as B from '../reference/backend-request-budget.ts';
 
 const N = Number(process.argv[2]);
 const REPS = Number(process.argv[3]);
+const only = process.argv[4];
+const on = (item) => only === undefined || only === item;
 const pad = (i, w) => String(i).padStart(w, '0');
 const bidOf = (i) => '99b568f7-0000-4000-8000-' + pad(i, 12);
 
@@ -38,19 +40,38 @@ function time(fn, calls) {
 }
 
 for (let i = 0; i < 20000; i++) b.charge(refs[i % N], what);
-let ns = time(() => { for (let i = 0; i < REPS; i++) b.charge(refs[i % N], what); }, REPS);
-console.log(`charge ${N} ${ns.toFixed(1)}`);
-ns = time(() => { for (let i = 0; i < REPS; i++) b.noteFailure(refs[i % N]); }, REPS);
-console.log(`failure ${N} ${ns.toFixed(1)}`);
+if (on('charge')) {
+  const ns = time(() => { for (let i = 0; i < REPS; i++) b.charge(refs[i % N], what); }, REPS);
+  console.log(`charge ${N} ${ns.toFixed(1)}`);
+}
+if (on('failure')) {
+  const ns = time(() => { for (let i = 0; i < REPS; i++) b.noteFailure(refs[i % N]); }, REPS);
+  console.log(`failure ${N} ${ns.toFixed(1)}`);
+}
+if (only === 'charge' || only === 'failure') process.exit(0);
 const acts = Array.from({ length: N }, (_, j) => 'activity-' + pad(j, 5));
 for (const a of acts) b.noteTool(refs[0], 'turn-1', a);
-ns = time(() => { for (let i = 0; i < REPS; i++) b.noteTool(refs[0], 'turn-1', acts[i % N]); }, REPS);
-console.log(`tooldup ${N} ${ns.toFixed(1)}`);
+if (on('tooldup')) {
+  const ns = time(() => { for (let i = 0; i < REPS; i++) b.noteTool(refs[0], 'turn-1', acts[i % N]); }, REPS);
+  console.log(`tooldup ${N} ${ns.toFixed(1)}`);
+}
 for (const a of acts) b.noteTool(refs[0], 'turn-2', a);
 b.forgetTurn('turn-2');
-const rounds = Math.max(1, Math.floor(REPS / N));
-ns = time(() => {
-  for (let r = 0; r < rounds; r++) { for (const a of acts) b.noteTool(refs[0], 'turn-2', a); b.forgetTurn('turn-2'); }
-}, rounds * N);
-console.log(`toolgrow ${N} ${ns.toFixed(1)}`);
+if (on('toolnew') || on('toolforget') || only === 'toolgrow') {
+  const rounds = Math.max(1, Math.floor(REPS / N));
+  let tNew = 0;
+  let tForget = 0;
+  for (let r = 0; r < rounds; r++) {
+    const start = performance.now();
+    for (const a of acts) b.noteTool(refs[0], 'turn-2', a);
+    const afterNew = performance.now();
+    b.forgetTurn('turn-2');
+    const afterForget = performance.now();
+    tNew += afterNew - start;
+    tForget += afterForget - afterNew;
+  }
+  if (only === 'toolgrow') console.log(`toolgrow ${N} ${((tNew + tForget) * 1e6 / (rounds * N)).toFixed(1)}`);
+  if (on('toolnew')) console.log(`toolnew ${N} ${(tNew * 1e6 / (rounds * N)).toFixed(1)}`);
+  if (on('toolforget')) console.log(`toolforget ${N} ${(tForget * 1e6 / rounds).toFixed(1)}`);
+}
 process.exit(0);

@@ -4,25 +4,55 @@
 // array[start ..] hold the key. The caller has validated each key with bud_keys::rec_end / slice_ok (canonical form);
 // these functions stay total on any input.
 //
-// note_tool status: 0 already seen (noteTool returns without CURRENT), 1 inserted (the caller runs CURRENT and then
-// bud_charge::add_tool), -N Grow(N) (nothing written; grow the buffer and retry), 2 invalid.
-// The turn entry is created together with its first activity, so a turn set is never left empty; a missing or stale
-// budget still consumes the dedup key (§15 #6).
+// noteTool is split in a read-only check and a write so the caller can make every refusal before the first write
+// (commit at end, L3 P21): seen() looks both keys up, hashing each once, and keeps the hashes and the slots an insert
+// would take; note_new() inserts what seen() found absent, reusing them.
+// A missing or stale budget still consumes the dedup key (§15 #6): the caller runs note_new() whatever CURRENT says.
 // Arena reservation counts words(n) per key (the arena stores keys packed), not n units.
 
-pub fn note_tool(inout st: [i64], tkey: [i64], tks: i64, tkn: i64, akey: [i64], aks: i64, akn: i64) -> i64
+// t: the turnId under root 2. a: the activityId under turn t.e when the turn exists (else e = slot = -1).
+pub struct Seen { t: crate::bud_map::Seek, a: crate::bud_map::Seek }
+
+pub fn seen(st: [i64], tkey: [i64], tks: i64, tkn: i64, akey: [i64], aks: i64, akn: i64) -> Seen
 {
-  let t: i64 = crate::bud_map::find_w(st, 2, tkey, tks, tkn);
-  // known turn: one hash of the activity key for both the lookup and the insert
-  if t >= 0 { return crate::bud_map::add_absent_w(inout st, t, akey, aks, akn, 1, crate::bud_keys::words(akn)); }
-  // new turn: the turn and its first activity together
-  let words: i64 = crate::bud_keys::words(tkn) + crate::bud_keys::words(akn);
-  let nd: i64 = crate::bud_map::make_room(inout st, 2, words);
-  if nd != 0 {
-    if nd < 0 { return 2; }
-    return -nd;
+  let t: crate::bud_map::Seek = crate::bud_map::seek_w(st, 2, tkey, tks, tkn);
+  if t.e < 0 {
+    return Seen { t: t, a: crate::bud_map::Seek { og: 0, h: 0, e: -1, slot: -1 } };
   }
-  let tt: i64 = crate::bud_map::add_w(inout st, 2, tkey, tks, tkn);
+  return Seen { t: t, a: crate::bud_map::seek_w(st, t.e, akey, aks, akn) };
+}
+
+// The activity is new in its turn (s = seen(st, ...) on the same keys, s.a.e < 0, st unchanged since): records it,
+// creating the turn together with its first activity (on a store whose header matches its tables a turn set is never
+// left empty).
+// 1 inserted, -N Grow(N) (nothing written; grow the buffer and retry), 2 invalid. Every 2 found by the checks
+// (room_w's r < -1, alloc_ok, the owner liveness test in put_seek_w) comes before the first key, entry or link write;
+// alloc_ok runs after room_w so a full table answers Grow, and on a store whose header matches its tables it always
+// holds there; on a broken buffer only room_w's index rebuild (same key set) can precede that 2. The remaining
+// 2-after-write paths need a store whose index or arena contradicts its header
+// beyond what valid() and alloc_ok read (no free slot after a rehash, a reused entry's key region not fitting); they
+// are scoped as broken buffers. Total on any input; a stale s can only mis-index (see bud_map::put_seek_w).
+pub fn note_new(inout st: [i64], s: Seen, tkey: [i64], tks: i64, tkn: i64, akey: [i64], aks: i64, akn: i64) -> i64
+  ensures crate::bud_store::kept(st, old(st))
+{
+  if s.t.e >= 0 {
+    // known turn: the activity's hash and slot from seen(); after the fit, one entry must be allocatable
+    let r: i64 = crate::bud_map::room_w(inout st, 1, crate::bud_keys::words(akn));
+    if r > 0 { return -r; }
+    if r < -1 { return 2; }
+    if !crate::bud_map::alloc_ok(st, 1) { return 2; }
+    let x: i64 = crate::bud_map::put_seek_w(inout st, s.t.e, s.a, akey, aks, akn, r == -1);
+    if x < 0 { return 2; }
+    return 1;
+  }
+  // new turn: the turn's hash and slot from seen(); the activity hashes under the new turn's generation
+  let words: i64 = crate::bud_keys::words(tkn) + crate::bud_keys::words(akn);
+  let r: i64 = crate::bud_map::room_w(inout st, 2, words);
+  if r > 0 { return -r; }
+  if r < -1 { return 2; }
+  // after the fit (a full table is Grow, not 2), both entries (turn and activity) must be allocatable
+  if !crate::bud_map::alloc_ok(st, 2) { return 2; }
+  let tt: i64 = crate::bud_map::put_seek_w(inout st, 2, s.t, tkey, tks, tkn, r == -1);
   if tt < 0 { return 2; }
   let x: i64 = crate::bud_map::add_w(inout st, tt, akey, aks, akn);
   if x < 0 { return 2; }

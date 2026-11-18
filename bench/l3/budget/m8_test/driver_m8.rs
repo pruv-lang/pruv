@@ -402,7 +402,9 @@ fn world_n(n: usize, t: &mut Text) -> World {
 //   charge   : charge(ref_i, {commands: 1, retries: 1}) round-robin over N sessions (successful charge)
 //   failure  : noteFailure(ref_i) round-robin over N sessions
 //   tooldup  : noteTool(ref_0, t1, a_j) on a turn that already holds N activities (dedup hit, no CURRENT)
-//   toolgrow : noteTool(ref_0, t2, a_j) for N new activities, then forgetTurn(t2); ns per noteTool (forget included)
+//   toolnew   : noteTool(ref_0, t2, a_j) for N new activities; ns per noteTool
+//   toolforget: forgetTurn(t2) on a turn holding N activities; ns per forgetTurn
+//   toolgrow  : instruction item; same loop, ns per noteTool with forget included
 // An optional third argument names one item: only that item's timed loop runs (the setup of every item timed before it
 // still runs; charge and failure stop before the tool setup, as every hand lane does), so `/usr/bin/time -l` instruction counts at two rep counts give the instructions per call of that item alone.
 fn run_perf(args: &[String]) {
@@ -482,18 +484,37 @@ fn run_perf(args: &[String]) {
         w.call(grow.get(j));
     }
     w.call(&forget);
-    if on("toolgrow") {
+    if on("toolnew") || on("toolforget") || only == Some("toolgrow") {
         let rounds = std::cmp::max(1, reps / n);
-        let t = Instant::now();
+        let mut t_new = 0;
+        let mut t_forget = 0;
         for _ in 0..rounds {
+            let start = Instant::now();
             for j in 0..grow.len() {
                 black_box(w.call(black_box(grow.get(j))));
             }
+            let after_new = Instant::now();
             black_box(w.call(black_box(&forget)));
+            let after_forget = Instant::now();
+            t_new += (after_new - start).as_nanos();
+            t_forget += (after_forget - after_new).as_nanos();
         }
-        let ns = t.elapsed().as_nanos() as f64 / (rounds * n) as f64;
-        println!("toolgrow {} {:.1}", n, ns);
-        println!("chk toolgrow {} {}", n, w.checksum());
+        let checksum = w.checksum();
+        if only == Some("toolgrow") {
+            let ns = (t_new + t_forget) as f64 / (rounds * n) as f64;
+            println!("toolgrow {} {:.1}", n, ns);
+            println!("chk toolgrow {} {}", n, checksum);
+        }
+        if on("toolnew") {
+            let ns = t_new as f64 / (rounds * n) as f64;
+            println!("toolnew {} {:.1}", n, ns);
+            println!("chk toolnew {} {}", n, checksum);
+        }
+        if on("toolforget") {
+            let ns = t_forget as f64 / rounds as f64;
+            println!("toolforget {} {:.1}", n, ns);
+            println!("chk toolforget {} {}", n, checksum);
+        }
     }
 }
 

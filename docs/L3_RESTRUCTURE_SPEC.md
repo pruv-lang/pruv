@@ -379,9 +379,10 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P13 | Same + B/host.rs: reserve/grow/failure | P Q2/Q3 growth, no replay of effects/queries, old state valid or terminal poison; byte/copy accounting. |
 | P13c | B/host.rs: M4 peak RSS at or below hand (P13b.8) | P: peak RSS split by component (entry words, slot table, arena slack, old + new buffer at a grow) on the 9 M4 cells; every cell <= 1.0x hand by peak RSS and allocation count, time not worse than P13b; Q2/Q3 growth gates unchanged. Done in part (Appendix P13c): old buffers mapped by the host; 7 of 9 cells still above hand, split into P13d, P13e and one page of undetermined cause. |
 | P13d | Both codegens (pruvc / pruvc-rs): generated code size of the M4 driver (Appendix P13c.8) | P: resident `__TEXT` of the M4 Pruv binary at or below hand's (P13c: +80 KiB, measured before the P13c change, assumed unchanged after), with both sides built with the same flags; time not worse than P13c; no Pruv-only build flags. |
-| P13e | B/bud_map.pruv, bud_store.pruv, bud_world.pruv, bud_admit.pruv: entry layout (Appendix P13c.8) | P: smaller per-entry words (P13c: 20 words) so tools peak RSS reaches hand after P13d; proofs and M10 replay counters kept; time not worse than P13c. |
+| P13e | B/bud_map.pruv, bud_store.pruv, bud_world.pruv, bud_admit.pruv: entry layout (Appendix P13c.8) | P: smaller per-entry words (P13c: 20 words) so tools peak RSS reaches hand after P13d (also P21: tooldup at M = 500, 3120 vs oaw 3040 KiB); proofs and M10 replay counters kept; time not worse than P13c. |
 | P13f | B/driver_m4.rs and the M4 bench adapter: length bound from T0 (TIDY_SPEC §4.10) | P: the bench adapter's allocations get the `2^40` bound (T0 audit finding 1), and the per-entry length check added by T0 is hoisted out of the timed loop where the driver already holds the length; m4 sessions back to the pre-T0 time (T0: +1-2%, outside A/A noise) and every M4 cell <= 1.0x hand. |
 | P13g | Both codegens: small helper inlining gap found by P20 (Appendix P20) | P: `find_w` in the bud_charge hot path is inlined (P20 attribution: about 25 instructions per call not inlined), output parity on both compilers, and the P20 unmatched hand16 lane (keys pre-parsed, 1.13-1.17x) re-measured after P13f and this row; any remaining gap above 1.0x is fixed or explained line by line (wire parsing is about 100 instructions of it). LLVM pairs for P20 wait for P17. |
+| P21a | B/bud_map.pruv, bud_tools.pruv: O(1) forgetTurn (Appendix P21.4) | P: forgetTurn of a turn holding N activities <= 1.0x oaw at S/M in time, peak RSS and allocations (P21: 8.9x / 37.9x; oa forgets by generation, Pruv frees each child), with the toolnew and tooldup cells kept <= 1.0x and the reclaim cost measured where it lands; plus a corrupt control that pokes header words (entry top = cap - 1, low live) for the P21.7 counterexample. |
 | P13o | Both checkers/verifiers: `opaque fn` and `reveal F;` (Appendix P13o) | C: positive reveal/congruence/loop-scope cases; negatives for a missing reveal, false facts through the opaque symbol, totality, signature and reveal-target misuse; framework rows equal on both compilers. Unblocks P13a step 2 (Appendix P13a.3), which lands separately. |
 | P14 (deferred) | Both checkers/verifiers: aggregate/field mutation, only if residual profile requires L2 | New C manifest and estimates before activation; alias/frame proof cannot be replaced by Q. |
 | P15 (deferred) | Both codegens/ABI: P14 lowering | C four-pair ownership/ABI probes, then touched P gates; no assumed budget gain. |
@@ -2706,3 +2707,139 @@ fixed in the same commit by the `found_at` order (P18.1, P18.3). The audit budge
   hand stays with P13d/P13e.
 - `attach` (1.10-1.14) and `closereopen`'s `maybeClose` share and hand `is_ok()` are P19's rows.
 - LLVM cells pending P17.
+
+## Appendix P21 (B/bud_tools.pruv + key helpers: stored hash, dedup, commit at end)
+
+Status: done on the Rust and Python compilers (2 of the 4 pairs; LLVM waits for P17a-c), except the forget cell
+against oaw and one peak-RSS cell, queued below (P21a, P13e). Commits a23b9ff (step 1), 570c635 (step 2, audit fixes
+and perf split), on top of 85dd936. Changed: `bud_tools.pruv`, `bud_map.pruv` (additions at the end only, plus one
+comment), `m8_test/` (root, driver, three hand lanes, TS lane, runner). No compiler, `SPEC.md`, `tests/run_all_rows*`,
+`bud_store.pruv`, `bud_lifecycle.pruv`, `bud_clock.pruv` or `bud_charge.pruv` change. Machine: macOS arm64, shared
+(load average 5-9 during the final run). Raw logs in `work/p21/` (not committed).
+
+### P21.1 What changed
+
+- noteTool is split in a read-only `seen()` and a writing `note_new()`. `seen()` hashes each key once (`seek_w`) and
+  keeps the hash, generation and slot that an insert would take; `note_new()` reuses them (`room_w`, `put_seek_w`),
+  so a new activity hashes its key once instead of twice (lookup, then insert), and a dup hit stops after one hash.
+- Commit at end (P20.7 carry-over): every refusal of `note_new()` (Grow from `room_w`, `room_w`'s invalid answer, the
+  new `bud_map::alloc_ok`, the owner liveness test in `put_seek_w`) comes before the first key, entry or link write
+  on a store whose header agrees with its tables. `alloc_ok` mirrors `entry_alloc` (free-list head, then `top < cap`,
+  the second allocation after the first) and runs after `room_w`, so a full but consistent table still answers Grow.
+  Scoped, not made atomic: two paths need a buffer whose index or arena contradicts its header beyond what `valid()`
+  and `alloc_ok` read (no free slot after a rehash; a reused entry's key region not fitting); only `room_w`'s index
+  rebuild (same key set) can precede a 2 there. The root's op 3 makes the tools-counter write last.
+- A missing or stale budget still consumes the dedup key (spec §15 #6): `note_new()` runs whatever CURRENT says.
+- root_m8 op 3 fast path only when the record lies inside the arena (`st[9] <= b0`, `b0 + 14 <= st[10]`);
+  `load_cv_at` is shared with the fallback, which no longer looks CURRENT up twice.
+- Perf: the old toolgrow timing is split into toolnew (ns per new activity) and toolforget (ns per forgetTurn of a
+  turn holding N activities) on every lane; toolgrow stays as the instruction and memory item.
+
+### P21.2 Gates (final tree 570c635)
+
+| gate | Rust compiler | Python compiler |
+|---|---|---|
+| Q2 300 cases | 63 exact / 237 not-implemented (other milestones) / 0 fail | same |
+| C/D fixtures | 17 / 3 (halt dispatch, M10) / 0 | same |
+| controls N01-N25 | 25/25 (also hand16 and oa: 25/25) | 25/25 |
+| diff_hand16 (u16 and oa hands) | 300 random + 84 malformed controls, 0 mismatches | - |
+| corrupt resident vs 85dd936 | 387 controls, 0 mismatches | - |
+
+Missing-budget dedup: N23 (no budget: the key is consumed, a later call with a budget is a dup), N24 (stale budget id,
+same), N25 (no budget on an existing turn: the activity joins the turn, counters unchanged).
+
+### P21.3 Performance, S = 100 and M = 500
+
+One interleaved run, 7 rounds, reps 200000, memory 5 runs (`work/p21/final_perf.txt`); baseline at 85dd936 in
+`work/p21/baseline_perf.txt` (5 rounds, toolgrow not yet split). chk: 70 (item, size, round) checksums equal between
+Pruv and all six Rust lanes. Matched wire boundary lanes: hand16w, oaw, fxmixw. Verdict: Pruv max vs lane min over
+rounds (overlap = noise).
+
+| item | n | Pruv ns | /hand16w | /oaw | /fxmixw | verdict hand16w, oaw | baseline Pruv ns |
+|---|---|---|---|---|---|---|---|
+| tooldup | 100 | 22.0 | 0.40 | 0.65 | 0.60 | below, below | 27.6 |
+| tooldup | 500 | 24.2 | 0.42 | 0.61 | 0.69 | below, below | 29.3 |
+| toolnew | 100 | 48.0 | 0.34 | 0.80 | 0.53 | below, below | (toolgrow 74.0) |
+| toolnew | 500 | 50.8 | 0.32 | 0.88 | 0.56 | below, below | (toolgrow 77.6) |
+| toolforget | 100 | 298.9 | 0.28 | **8.90** | 0.27 | below, **above** | - |
+| toolforget | 500 | 1486.1 | 0.26 | **37.91** | 0.26 | below, **above** | - |
+
+Instructions per call (Pruv / hand16w, / oaw, / fxmixw): tooldup 576-578, 0.52-0.53, 0.65, 0.63 (baseline 665-666,
+0.75 vs oaw); toolgrow (new + forget per activity) 1346 / 1320, 0.39-0.42, 0.92-0.95, 0.53-0.55 (baseline 2024 /
+1997, 1.39-1.44 vs oaw). Time of a full new + forget cycle per activity: Pruv 51.0 / 53.8 ns, oaw 60.4 / 57.7 ns.
+
+Peak RSS KiB and allocations (median of 5): tooldup Pruv 2192 / 3120, 40 / 44 allocations; hand16w 2256 / 3344
+(12766 / 63580); oaw 2256 / 3040 (12409 / 61635). toolgrow Pruv 2112 / 2912 (40 / 44); hand16w 2336 / 3424; oaw
+2448 / 3280. Allocations are below every lane on every cell. **tooldup at M = 500 is 3120 vs oaw 3040 KiB (1.03x,
+non-overlapping: Pruv 3120-3120, oaw 3024-3040)**; every other RSS cell is below the matched lanes.
+
+Unmatched lanes (hand16, fxmix, oa: keys decoded before the timer) are not <= 1.0x cells (P20.3): tooldup instructions
+1.09-1.10x hand16 (P20.4 wire framing applies), time 0.67-0.74x hand16.
+
+### P21.4 Attribution and the cells above 1.0x
+
+- dup: one hash and one probe per key (`seen()`), then the counter path; the stored hash in entry word 6 is compared
+  before any key words. 89 instructions fewer than the baseline per call.
+- new: the key is hashed once (`seek_w` result reused by `put_seek_w`); about 680 instructions per toolgrow call less
+  than the baseline, below oaw.
+- forget vs oaw, line by line (hand `hand_m8_oa.rs` `Turns::forget` vs generated `bud_tools::forget_turn` ->
+  `bud_map::remove`):
+
+  | step | hand oa | Pruv |
+  |---|---|---|
+  | find the turn | `find_turn(h, key)`: hash + probe | `find_w(st, 2, key)`: hash + probe (same) |
+  | unlink the turn | `slots[slot] = 1` (tombstone), `alive = false` | prev/next relink (entry words 7, 8), owner head/tail (9, 10), owner count (11) |
+  | activities | `gen += 1`: all N activities become dead in O(1); their pool slots, slot-table entries and key units stay until a later rebuild (`dead_units`) | walk all N children: free each entry, tombstone its slot, return its arena words (word-14 update batched in `pend`) |
+  | key words | `dead_units += key_len` | arena words returned per entry |
+
+  The gap is the algorithm, not codegen: oa forgets lazily by generation (O(1) per forget, cost moved to the next
+  rebuild and to memory: oaw toolgrow holds 23325-63790 allocations against Pruv's 40-44), Pruv frees eagerly
+  (O(activities), 3.0 ns per activity, the bound `forget_turn` documents). An O(1) forget needs generation-tagged
+  children in `bud_map` (entry layout and every child walk), outside P21's bounds (bud_map additions only). Queued as
+  P21a.
+- tooldup RSS at M (1.03x oaw, 80 KiB): not attributed in this package. Candidates: the 20-word entry (P13e) and the
+  slack of the Pruv-sized grow (`bud_store::need`, N >= 2*len). Added to P13e.
+
+### P21.5 Checks the proofs removed
+
+- `put_seek_w` takes the slot and hash from `seen()` and does not probe again: the slot's emptiness and the key's
+  absence are carried by `Seen` (a stale `Seen` can only mis-index, still total and `kept`).
+- `room_w` answers fit once for both entries and the key words of both keys; `alloc_ok` and the inserts index the
+  header and entry words without rechecks (from `kept(st, old(st))` and `valid()`).
+- op 3 fast path: one arena-bounds test admits plain indexing of record words `b0 .. b0 + 14`.
+
+### P21.6 Proof time (root_m8, wall seconds)
+
+Rust compiler: step 1 6.90, final 7.61 (P20: 6.83-6.95). Python compiler: step 1 11.38, final 13.02 (P20:
+11.00-11.42). One run each; the final tree adds `alloc_ok` and `load_cv_at`.
+
+### P21.7 Audit
+
+One package audit (static, on a23b9ff) and one fix-check (on 570c635).
+
+- high (taken): a store passing `valid()` with entry top = cap - 1 and few live entries: `need()` passes, the second
+  entry allocation fails, so the new turn was inserted empty and noteTool answered 2. Fix: `alloc_ok` before the
+  first write (P21.1). A first placement before `room_w` turned a full consistent table's Grow into 2 (N19, N21, N22,
+  N24 failed in the Pruv lanes only); moved after `room_w`. No regression control for the counterexample:
+  `corrupt_resident.py` pokes anchor on key patterns, not header words (P21a).
+- medium (taken): a stale record offset in the header let op 3's fast path write outside the arena. Fixed by the
+  arena-bounds guard.
+- low (taken): the fallback looked CURRENT up twice (`load_cv_at`); `room_w` comment premise reworded.
+- Fix-check (static, on 570c635): on a store whose header agrees with its tables, `alloc_ok` predicts `entry_alloc`
+  exactly, no valid Grow or insert becomes 2, and no 2 follows a key, entry or link write; the op 3 guard and the
+  `load_cv_at` fallback are equivalent to before. Not changed, recorded:
+  - medium (broken buffer only): a session blob offset that points into the header and passes `cur_off` skips the
+    fast path, and the fallback's `store_cv` writes back the 7 counters copied before the insert (for `b0 = 1` this
+    restores the arena top `st[10]`). Same fallback as before P21; the broken-buffer contract stays byte equality
+    with the old revision (387/0). Queued with P21a.
+  - low: the toolnew / toolforget chk is taken after the forget, so the activity list right after the inserts is not
+    checked independently (the q-mode gates and controls cover it); the old hand and TS lanes print no chk, and TS
+    runs 20000 warm-up charges against Rust's 1000. Reference lanes only.
+
+### P21.8 Remaining
+
+- P21a (queued): O(1) forgetTurn by turn generation, a header-poke control for the P21.7 counterexample, and the
+  op 3 fallback write-back on a header-pointing blob offset (P21.7 fix-check medium).
+- P13e: tooldup peak RSS at M = 500 (1.03x oaw).
+- Interning (measured follow-up only): not started; dup and new are below every matched lane without it.
+- LLVM pairs (P17a-c).

@@ -95,6 +95,13 @@ fn load_cv(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64, 
 {
   crate::ent_u16::wr(inout cv, 0, 0);
   let off: i64 = cur_off(st, sk, ss, sn, bk, bs, bn);
+  return load_cv_at(st, off, inout cv);
+}
+
+// load_cv for a caller that already ran cur_off: off is its result (-1 or a blob offset), so CURRENT runs once.
+fn load_cv_at(st: [i64], off: i64, inout cv: [i64]) -> i64
+  requires -1 <= off && off <= 1099511627776
+{
   if off < 0 { return -1; }
   let mut i: i64 = 0;
   while i < 14
@@ -259,36 +266,47 @@ pub fn t_call(inout st: [i64], op: [i64], inout cv: [i64], inout fx: [i64]) -> i
     if e3 < 0 { return 2; }
     let e4: i64 = crate::bud_keys::rec_end(op, e3);
     if e4 != len(op) { return 2; }
-    // all four keys are canonical (rec_end) before note_tool writes anything
+    // all four keys are canonical (rec_end) before anything is written
     // turn key (op, e2+1, op[e2]), activity key (op, e3+1, op[e3])
     let tn: i64 = crate::ent_u16::rd(op, e2);
     let an: i64 = crate::ent_u16::rd(op, e3);
-    // a seen activity returns at once (the reference's seen.has, before CURRENT)
-    let tt: i64 = crate::bud_map::find_w(st, 2, op, e2 + 1, tn);
-    if tt >= 0 && crate::bud_map::find_w(st, tt, op, e3 + 1, an) >= 0 { return 0; }
-    // a new activity: the ResourceBound refusal comes before the insert, so nothing is written (KD-M8-1)
+    // a seen activity returns at once (the reference's seen.has, before CURRENT); seen() keeps each key's hash and
+    // slot for the insert
+    let s: crate::bud_tools::Seen = crate::bud_tools::seen(st, op, e2 + 1, tn, op, e3 + 1, an);
+    if s.t.e >= 0 && s.a.e >= 0 { return 0; }
+    // A new activity: commit at end (L3 P21). CURRENT runs once, every refusal (ResourceBound, KD-M8-1; Grow;
+    // invalid) comes before the first write, and the tools counter is written last from the value read here. The
+    // insert never moves session blobs on a well-formed store (room() only rebuilds the index, and a Grow result is
+    // returned before any write), so b0 still addresses the record afterwards.
     let b0: i64 = cur_off(st, op, 2, sn, op, e1 + 1, bn);
-    if b0 >= 0 {
-      let mut room: i64 = 0;
-      if b0 + 14 <= len(st) {
-        room = crate::bud_charge::tool_room_at(st, b0);
-      } else {
-        let b1: i64 = load_cv(st, op, 2, sn, op, e1 + 1, bn, inout cv);
-        room = crate::bud_charge::tool_room(cv);
-      }
-      if room != 0 { return room; }
+    // in place only when the record lies in the arena below the arena top read now (new key words go at or above
+    // st[10]); anything else, e.g. an offset inside the header of a corrupt buffer, takes the cv path below
+    if b0 >= 0 && b0 + 14 <= len(st) && len(st) >= 15 && b0 >= st[9] && b0 + 14 <= st[10] {
+      let u: i64 = st[b0 + 11];
+      if u < -9007199254740991 || u >= 9007199254740991 { return 5; }
+      let t: i64 = crate::bud_tools::note_new(inout st, s, op, e2 + 1, tn, op, e3 + 1, an);
+      if t != 1 { return t; }
+      // kept(): same length, so the record words are still in range
+      st[b0 + 11] = u + 1;
+      return 0;
     }
-    let t: i64 = crate::bud_tools::note_tool(inout st, op, e2 + 1, tn, op, e3 + 1, an);
+    if b0 >= 0 {
+      // out-of-range record: the counters through the frame view, loaded before the insert
+      let b1: i64 = load_cv_at(st, b0, inout cv);
+      let room: i64 = crate::bud_charge::tool_room(cv);
+      if room != 0 { return room; }
+      let t: i64 = crate::bud_tools::note_new(inout st, s, op, e2 + 1, tn, op, e3 + 1, an);
+      if t != 1 { return t; }
+      // cv is the view tool_room() just passed, so add_tool() and store_cv() (b1 <= 2^40) cannot refuse
+      let r: i64 = crate::bud_charge::add_tool(inout cv);
+      if r != 0 { return r; }
+      let w: i64 = store_cv(inout st, b1, cv);
+      if w != 0 { return 2; }
+      return 0;
+    }
+    // no current budget: the dedup key is still consumed (§15 #6)
+    let t: i64 = crate::bud_tools::note_new(inout st, s, op, e2 + 1, tn, op, e3 + 1, an);
     if t != 1 { return t; }
-    // CURRENT again after the insert (the insert may move entries)
-    let bo: i64 = cur_off(st, op, 2, sn, op, e1 + 1, bn);
-    if bo < 0 { return 0; }
-    if bo + 14 <= len(st) { return crate::bud_charge::add_tool_at(inout st, bo); }
-    let b2: i64 = load_cv(st, op, 2, sn, op, e1 + 1, bn, inout cv);
-    let r: i64 = crate::bud_charge::add_tool(inout cv);
-    if r != 0 { return r; }
-    let w: i64 = store_cv(inout st, b2, cv);
-    if w != 0 { return 2; }
     return 0;
   }
   return 2;
