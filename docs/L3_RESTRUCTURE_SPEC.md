@@ -2356,7 +2356,8 @@ Equal within run spread, as expected with no `.pruv` change; the generated outpu
 
 ## Appendix P18 (row B/bud_lifecycle.pruv: current/isHalted/reopen lookups by proven indexing)
 
-Commits 123ae15 (step 1, source) and 81979b2 (step 2, perf item), base 6aa266a. Changed files:
+Commits 123ae15 (step 1, source), 81979b2 (step 2, perf item), 5fe70f0 (step 3, this appendix) and 06c3426
+(step 4, audit fixes), base 6aa266a. Changed files:
 `bench/l3/budget/bud_lifecycle.pruv`, `bench/l3/budget/m7_test/{driver_m7.rs,hand_m7_u16.rs,run_m7.py}`. No
 compiler file, `SPEC.md`, `tests/run_all_rows.txt` or `bud_charge.pruv` change. Raw logs: `work/p18/` (not
 committed).
@@ -2389,8 +2390,10 @@ Checks removed by proofs (each was a dynamic bounds or field check in the base):
 
 Kept dynamic: the blob span check, the state range check and the identity check (unit count and words); the
 `bud_map` hash in `find_w` is outside this row. Behaviour change on corrupt stores only: a blob span outside `st`
-now makes `current` answer status 2 (the base answered 2 only after the state read succeeded); an admitted store
-(I1) never has such a span, and every Q/B gate below is unchanged.
+(`n >= 30` but `off + n > len(st)`) makes `found_at` answer -2 first, so `current` answers status 2 and `is_halted`
+and `reopen` answer false (the base answered `current` 2 only after the state read succeeded, and the base
+`is_halted` could answer true from the state word); an admitted store (I1, `bud_admit.pruv:52-56`) never has such
+a span, and every Q/B gate below is unchanged.
 
 ### P18.2 Gates (Rust and Python compilers, Rust backend; all rc 0)
 
@@ -2407,6 +2410,10 @@ now makes `current` answer status 2 (the base answered 2 only after the state re
 | perf result checks (`rchk`) | 12 cells, 0 mismatches | - |
 
 LLVM-backend cells (the other two of the four pairs) are **pending P17** per §6.1 and are not counted as run.
+
+After step 4 (06c3426) the M7 q/life/diff_hand and M10 q/halt rows were re-run on both compilers with the main
+Rust pruvc rebuilt after T0 (`work/p18/s5_*.log`): same counts as above, all rc 0. Admit, m3 and lanes are the
+step-1 runs; step 4 only removed a dead `let` in `reopen`.
 
 ### P18.3 Lookup time (Rust backend, Pruv typed / hand16 typed, floor 1.0x)
 
@@ -2490,6 +2497,19 @@ bytes) and `__DATA` is equal. The cause was not isolated.
 Rust: equal within spread on both roots. Python: m7 about +7-10% (two new `ensures` with nested reads in
 `found_at`/`current_at`), m10 slightly lower; the runs were sequential on a shared machine, so the m7 Python
 difference is within what load can move and was not re-measured interleaved.
+
+### P18.6a Audit
+
+One package audit (diff 6aa266a..81979b2): no behaviour regression on valid stores, no proof gap. Findings and
+decisions (`work/p18/audit_findings.md`):
+
+- MUST-FIX, bench fairness: the hand `reopenmiss` loop consumed only `is_ok()`, not the Bool. Fixed in 06c3426
+  (hand now `black_box`es `matches!(.., Ok(Res::Bool(true)))`). The Pruv side's `c_direct` dispatch `match` and
+  status-only consumption are the shared typed-path convention of every item and only add work on the Pruv side;
+  unchanged. `closereopen`'s hand loop has the same `is_ok()` pattern and is left to P19 (its row).
+- SHOULD-FIX: `run_m7.py` `B_ITEMS` lacked `reopenmiss`; added.
+- NOTE: unused `let n = st[a + 13]` in `reopen` removed; corrupt-blob behaviour recorded in P18.1; checksums
+  agree on all four paths.
 
 ### P18.7 Delegation
 
