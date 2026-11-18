@@ -16,6 +16,10 @@ Links the .ll that both compilers (py, rs) emit for the same [bool]-argument fun
   trust_ok      --trust-callers build, bytes 1 0 1 -> exit 0, stdout 2
   repr_first    bytes 0 2 (requires is also false) -> the representation error comes first (`requires violated` must be absent)
   requires_ok   bytes 0 1 (representation is valid, requires is false) -> exit 101, stderr `requires violated`
+  big_len       length 2^40 + 1 -> exit 101, `pruv: invalid representation: 1099511627777 (array length)` (T0: the Pruv
+                array bound, checked before the buffer is read); neg_len -1 the same; typed_big 2^40 + 1 through
+                `pruv_abi_tcount__typed` (the typed entry drops only the 0/1 check, never the length bound); trust_big
+                the same under --trust-callers
 For each case, one line `ok <compiler>/<name>` / `FAIL <compiler>/<name>: reason`, and `N/N ok` at the end.
 Exit: 0 all pass / 1 some fail / 2 tool or input missing.
 """
@@ -33,6 +37,7 @@ REPO = HERE.parent.parent
 RUNTIME = REPO / "pruvc" / "runtime.c"
 CPU_FLAG = "-mcpu=native" if platform.machine().lower() in ("arm64", "aarch64") else "-march=native"
 REPR_MSG = "pruv: invalid representation: %d (bool 0..=1)"
+LEN_MSG = "pruv: invalid representation: %d (array length)"
 
 SOURCE = """// For the [bool] raw ABI representation check: counts the true values (requires reads a [bool] element)
 fn tcount(a: [bool]) -> i64
@@ -59,8 +64,21 @@ CALLER = """#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 extern int64_t pruv_abi_tcount(const uint8_t *a, int64_t n);
+extern int64_t pruv_abi_tcount__typed(const uint8_t *a, int64_t n);
 int main(int argc, char **argv) {
     uint8_t buf[32];
+    if (argc == 2 && argv[1][0] == 'b') { /* "big": 2^40 + 1 (T0 length bound; the buffer must not be read) */
+        printf("%lld\\n", (long long)pruv_abi_tcount(buf, ((int64_t)1 << 40) + 1));
+        return 0;
+    }
+    if (argc == 2 && argv[1][0] == 'n') { /* "neg": -1 */
+        printf("%lld\\n", (long long)pruv_abi_tcount(buf, -1));
+        return 0;
+    }
+    if (argc == 2 && argv[1][0] == 't') { /* "typed": 2^40 + 1 through the typed entry */
+        printf("%lld\\n", (long long)pruv_abi_tcount__typed(buf, ((int64_t)1 << 40) + 1));
+        return 0;
+    }
     int n = argc - 1;
     if (n > 32) n = 32;
     for (int k = 0; k < n; k++) buf[k] = (uint8_t)atoi(argv[k + 1]);
@@ -79,6 +97,10 @@ CASES = [
     ("trust_ok", True, [1, 0, 1], 0, "2", None, None),
     ("repr_first", False, [0, 2], 101, "", REPR_MSG % 2, "requires violated"),
     ("requires_ok", False, [0, 1], 101, "", "requires violated", "invalid representation"),
+    ("big_len", False, ["big"], 101, "", LEN_MSG % 1099511627777, "requires violated"),
+    ("neg_len", False, ["neg"], 101, "", LEN_MSG % -1, "requires violated"),
+    ("typed_big", False, ["typed"], 101, "", LEN_MSG % 1099511627777, "requires violated"),
+    ("trust_big", True, ["big"], 101, "", LEN_MSG % 1099511627777, "requires violated"),
 ]
 
 

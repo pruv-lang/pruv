@@ -1,0 +1,34 @@
+{
+  "comment": "TIDY T0 step 6 (docs/TIDY_SPEC.md 2 T0.2-T0.3, review change 4). Each reach case inserts `assert false; ` into a proved source just before the text `before` on line `line`; a concrete input reaches that point, so both verifiers must reject the variant with verify/assert at that line (and column) while the original verifies. contradiction cases are intended dead points (contradictory requires, a branch the requires rule out): the variant must still verify. pair cases are accept/reject sources checked as they are; a reject expects the given stage, code and message text.",
+  "reach": [
+    {"name": "bsearch_first", "src": "examples/bsearch.pruv", "line": 8, "before": "let mut lo", "witness": "any a (sorted), any x"},
+    {"name": "bsearch_loop", "src": "examples/bsearch.pruv", "line": 17, "before": "if a[mid] < x", "witness": "a = [0], x = 0"},
+    {"name": "bsearch_found", "src": "examples/bsearch.pruv", "line": 24, "before": "return Some(lo)", "witness": "a = [0], x = 0"},
+    {"name": "g1_kept_after_loop", "src": "examples/g1_counter.pruv", "line": 24, "before": "assert p.y == 7", "witness": "no input"},
+    {"name": "g1_count_to_return", "src": "examples/g1_counter.pruv", "line": 39, "before": "return c", "witness": "n = 0"},
+    {"name": "g2_count_true_branch", "src": "examples/g2a_bool_count.pruv", "line": 15, "before": "c = c + 1", "witness": "a = [true]"},
+    {"name": "g3_generic_first", "src": "tests/g3/proof/p06_array_first_last.pruv", "line": 6, "before": "return a[0]", "witness": "a = [0]"},
+    {"name": "g5_store_frame_after_calls", "src": "tests/g5/proof/p01_i64_store_frame.pruv", "line": 17, "before": "return data[0]", "witness": "no input"},
+    {"name": "g5_old_after_two_calls", "src": "tests/g5/proof/p07_old_across_calls.pruv", "line": 17, "before": "assert a[0]", "witness": "a = [0]"},
+    {"name": "g7_par_else_arm", "src": "tests/g7/proof/if_join.pruv", "line": 21, "before": "par {", "witness": "x = 0, p = [0], q = [0]"},
+    {"name": "g9_sum_base", "src": "tests/g9/proof/p05_sum_suffix.pruv", "line": 9, "before": "return 0", "witness": "a = [], i = 0"},
+    {"name": "g9_sum_step", "src": "tests/g9/proof/p05_sum_suffix.pruv", "line": 10, "before": "return a[i]", "witness": "a = [0], i = 0"},
+    {"name": "g9_search_hit", "src": "tests/g9/proof/p07_linear_search.pruv", "line": 9, "before": "return true", "witness": "a = [0], i = 0, x = 0"},
+    {"name": "s5_cost_branch", "src": "tests/s5/proof/early.pruv", "line": 2, "before": "return leaf()", "witness": "b = true"},
+    {"name": "s5_cost_loop", "src": "tests/s5/proof/loop_calls.pruv", "line": 5, "before": "tick();", "witness": "n = 1"},
+    {"name": "l3_helper_guard", "src": "tests/l3/proof/hf_auto.pruv", "line": 24, "before": "return a[i]", "witness": "a = [0], i = 0"},
+    {"name": "g6_vec_return", "src": "tests/g6/proof/p02_vec_push.pruv", "line": 9, "before": "return move v", "witness": "no input"},
+    {"name": "g10_unreadable_file", "src": "tests/g10/proof/checksum.pruv", "line": 22, "before": "return -1", "witness": "path of a missing file"},
+    {"name": "g10_sum_return", "src": "tests/g10/proof/checksum.pruv", "line": 14, "before": "return s", "witness": "an empty file"}
+  ],
+  "contradiction": [
+    {"name": "contradictory_requires", "src": "tests/vacuity/contradictions.pruv", "line": 5, "before": "return x", "why": "requires x > 0 && x < 0 has no model"},
+    {"name": "branch_excluded_by_requires", "src": "tests/vacuity/contradictions.pruv", "line": 12, "before": "return 0", "why": "requires 0 <= x rules out the x < 0 branch"},
+    {"name": "after_return", "src": "tests/vacuity/contradictions.pruv", "line": 20, "before": "return x", "why": "the branch returns on both arms, so the end of the body is dead"}
+  ],
+  "pair": [
+    {"name": "old_increment_accept", "src": "tests/vacuity/old_increment_accept.pruv", "expect": "accept"},
+    {"name": "old_increment_reject", "src": "tests/vacuity/old_increment_reject.pruv", "expect": "reject",
+     "stage": "verify", "code": "ensures", "message": "cannot prove postcondition (line 4) in inc"}
+  ]
+}

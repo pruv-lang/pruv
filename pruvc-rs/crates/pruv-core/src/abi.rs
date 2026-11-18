@@ -600,6 +600,39 @@ pub fn abi_of_target(f: &Function, tt: &TypeTable, target: AbiTarget, m: &mut Mo
             }
         }
     }
+    // T0: every array/str parameter (both pruv_abi_* and __typed) is rejected unless its length is in 0..=2^40 (the
+    // verifier's array bound, SPEC section 7 item 6), before the representation checks (which read the buffer), requires
+    // and the body; one unsigned compare covers a negative length. With two or more such parameters the fast path is
+    // one compare on the OR of the lengths (a negative length sets the top bit); only when it fails are the lengths
+    // checked one by one, in parameter order, and a slow path that finds none above 2^40 (one is exactly 2^40) goes on.
+    // `str length` keeps the old negative-length text.
+    let lps: Vec<&Param> = f.params.iter().filter(|p| is_array_name(&p.ty) || p.ty == "str").collect();
+    if lps.len() > 1 {
+        let mut acc = format!("%a.{}.n", mangle(&lps[0].name));
+        for (k, p) in lps[1..].iter().enumerate() {
+            body.push(format!("  %ln.or.{} = or i64 {}, %a.{}.n", k, acc, mangle(&p.name)));
+            acc = format!("%ln.or.{}", k);
+        }
+        body.push(format!("  %ln.any = icmp ugt i64 {}, {}", acc, 1u64 << 40));
+        body.push("  br i1 %ln.any, label %len.slow, label %len.ok".to_string());
+        body.push("len.slow:".to_string());
+    }
+    // names use the parameter's position, not its name: a parameter called `any` or `or` must not collide
+    for (i, p) in lps.iter().enumerate() {
+        let q = mangle(&p.name);
+        let msg = m.string(if p.ty == "str" { "str length" } else { "array length" });
+        m.uses_repr = true;
+        body.push(format!("  %ln.p{} = icmp ugt i64 %a.{}.n, {}", i, q, 1u64 << 40));
+        body.push(format!("  br i1 %ln.p{}, label %len.bad.{}, label %len.ok.{}", i, i, i));
+        body.push(format!("len.bad.{}:", i));
+        body.push(format!("  call void @pruv_panic_repr(i64 %a.{}.n, ptr {})", q, msg));
+        body.push("  unreachable".to_string());
+        body.push(format!("len.ok.{}:", i));
+    }
+    if lps.len() > 1 {
+        body.push("  br label %len.ok".to_string());
+        body.push("len.ok:".to_string());
+    }
     body.extend(pre.iter().map(|x| format!("  {}", x)));
     for (k, (okv, wv, tname)) in w.checks.iter().enumerate() {
         // G3: an invalid nominal enum ordinal is rejected here, before the entry (requires) and the body run

@@ -137,6 +137,12 @@ def main(work, rs=None, py=None):
                     continue
                 t = path.read_text()
                 top_pub = re.findall(r"^pub fn \w+", t, re.M)
+                if backend == "rust":
+                    # T0 (SPEC 7, host length bound): only manifest "crate" leaves the 2^40 length check to the
+                    # same-crate adapter; every other mode keeps it in each entry, also under --trust-callers
+                    want_guard = key != "crate"
+                    check(label + ": length check " + ("kept" if want_guard else "left to the adapter"),
+                          t.count("fn pruv_len_slow(") == (len(ENTRIES) if want_guard else 0), t.count("fn pruv_len_slow("))
                 if key is None:
                     for n in ENTRIES:
                         check(label + ": pub fn " + n, re.search(r"^pub fn %s\(" % n, t, re.M) is not None)
@@ -159,6 +165,15 @@ def main(work, rs=None, py=None):
                     check(label + ": # Safety per entry", safety == len(ENTRIES), safety)
                 else:
                     check(label + ": no unsafe forwarders", not unsafe_fns and safety == 0, unsafe_fns)
+
+    # T0: "c" shares the "crate" Rust output except the length checks, which stay in every entry
+    for fname, flags in FLAGS:
+        label = "text c/%s/rust" % fname
+        path, _ = build(label, SRC_OK, "c", flags, "rust")
+        if path is not None:
+            t = path.read_text()
+            check(label + ": length check kept", t.count("fn pruv_len_slow(") == len(ENTRIES), t.count("fn pruv_len_slow("))
+            check(label + ": pub(crate) entries", all(re.search(r"^pub\(crate\) fn %s\(" % n, t, re.M) for n in ENTRIES))
 
     for key in ("crate", "unsafe"):
         for what, src in (("foreign", SRC_FOREIGN), ("print", SRC_PRINT)):

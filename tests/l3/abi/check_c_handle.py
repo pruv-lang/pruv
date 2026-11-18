@@ -10,7 +10,7 @@ with the Rust backend (no --backend flag, -o out.rs) for raw_entries "crate" and
 and contain no extern "C", (3) build libpruv_b.a = rustc --crate-type staticlib --cfg pruv_c_probe B.rs, the .ll object
 and the runtime object with clang, (4) link tests/l3/abi/c_probe.c with them and run it (prints OK). The probe covers
 ABI/lifetime, ret slots between sentinels, positional parameter names (h, ret, st, ro, ro + ro_len), [u8]/str/[bool]
-arguments, zero-length NULL, BAD_ARGS (misaligned, overlap, address overflow, length > INT64_MAX/8, overlap with the
+arguments, zero-length NULL, BAD_ARGS (misaligned, overlap, address overflow, length > INT64_MAX/8 and > 2^40 (the Pruv array bound; the 2^40 case itself on the probe predicate), overlap with the
 handle object, invalid UTF-8, bad bool bytes, rebuild new_len negative/oversized), rebuild observed via stlen, and
 poisoning (the probe panic, whose payload Drop panics, returns 3 without aborting; a poisoned handle returns 1 before
 any argument check), and the batch entry app__pruv_hb_op (order, stop rule, done, up-front and per-item BAD_ARGS, poison).
@@ -78,6 +78,10 @@ SRC = ("pub fn setup(inout st: [i64]) -> ()\n"
        "\n"
        "pub fn slen(st: [i64], s: str) -> i64\n"
        "{\n  return len(s);\n}\n"
+       "\n"
+       # T0: a UTF-8 scan before another array: every length is checked before the scan reads anything
+       "pub fn sthen(st: [i64], s: str, b: [u8]) -> i64\n"
+       "{\n  return len(s) + len(b);\n}\n"
        "\n"
        "pub fn bflip(st: [i64], inout b: [bool]) -> ()\n"
        "  requires len(b) >= 1\n"
@@ -157,11 +161,12 @@ def main(work, rs=None, py=None):
                 "app__pruv_handle_probe_panic", "app__pruv_h_setup", "app__pruv_h_op", "app__pruv_h_big",
                 "app__pruv_h_flagset", "app__pruv_h_setflag", "app__pruv_h_flag0", "app__pruv_hr_grow",
                 "app__pruv_h_clash", "app__pruv_h_bsum", "app__pruv_h_slen", "app__pruv_h_bflip", "app__pruv_h_stlen",
-                "app__pruv_hb_op"):
+                "app__pruv_h_sthen", "app__pruv_hb_op"):
         check("c: B.rs has " + sym, sym in t)
     for sym in ("app__pruv_hb_setup", "app__pruv_hb_big", "app__pruv_hb_flagset", "app__pruv_hb_setflag",
                 "app__pruv_hb_flag0", "app__pruv_hb_clash", "app__pruv_hb_bsum", "app__pruv_hb_slen",
-                "app__pruv_hb_bflip", "app__pruv_hb_stlen", "app__pruv_hb_grow", "app__pruv_hr_op"):
+                "app__pruv_hb_bflip", "app__pruv_hb_stlen", "app__pruv_hb_grow", "app__pruv_hr_op",
+                "app__pruv_hb_sthen"):
         check("c: B.rs has no " + sym, sym not in t)
     # no unprefixed definition of a pruv_c global is left
     import re
@@ -196,7 +201,13 @@ def main(work, rs=None, py=None):
         if check("rust backend raw_entries=%s: compile" % key, rc == 0, "exit %d %s" % (rc, txt)):
             rust_out[key] = out.read_bytes()
     if len(rust_out) == 2:
-        check("rust backend: raw_entries c output == crate output", rust_out["c"] == rust_out["crate"], "differs")
+        # T0: "c" is the "crate" output except that "c" keeps the entry length checks (SPEC 7, host length bound)
+        check("rust backend: raw_entries c keeps the length checks, crate leaves them to the adapter",
+              b"fn pruv_len_slow(" in rust_out["c"] and b"fn pruv_len_slow(" not in rust_out["crate"],
+              "length checks: c %s, crate %s" % (b"fn pruv_len_slow(" in rust_out["c"], b"fn pruv_len_slow(" in rust_out["crate"]))
+        check("rust backend: crate header states the adapter length obligation",
+              b"// T0: these entries do not check array / str lengths." in rust_out["crate"]
+              and b"// T0: these entries do not check" not in rust_out["c"], "header")
         check("rust backend: no extern \"C\"", all(b'extern "C"' not in v for v in rust_out.values()),
               "extern \"C\" in Rust-backend output")
 
@@ -244,7 +255,7 @@ def main(work, rs=None, py=None):
         print(line)
     if fails:
         return 1
-    print("c_handle: two programs (packages twoa, twob; same entry name, same G6 builtins) in one binary, pruv_c text facts, Rust backend c == crate without extern \"C\", staticlib + C probe (ABI, provenance, "
+    print("c_handle: two programs (packages twoa, twob; same entry name, same G6 builtins) in one binary, pruv_c text facts, Rust backend c == crate except length checks, without extern \"C\", staticlib + C probe (ABI, provenance, "
           "lifetime, positional parameter names, [u8]/str/[bool] args, zero-length NULL, BAD_ARGS incl. address overflow, "
           "length limit, handle overlap, rebuild new_len, poison-before-argument-checks, panic with panicking payload "
           "Drop)%s: OK" % (", rs == py" if rs else ""))

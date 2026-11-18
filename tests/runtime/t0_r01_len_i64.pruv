@@ -1,0 +1,6 @@
+// T0 (TIDY_SPEC 4.8 item 4): the public entry rejects an array longer than 2^40 (SPEC section 7 item 6), also under
+// --trust-callers; the driver passes 2^40 + 1 elements of reserved, never read memory
+fn f(a: [i64]) -> i64
+{
+  return len(a);
+}

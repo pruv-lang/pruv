@@ -1,0 +1,17 @@
+// T0 (TIDY_SPEC 4.8 item 4): exactly 2^40 elements is inside the bound; a verified Pruv caller passes the length guard
+// once (the callee h is called through its body)
+fn h(a: [u8]) -> i64
+{
+  return len(a);
+}
+fn k(a: [u8]) -> i64
+  requires len(a) > 0
+{
+  return h(a);
+}
+// a parameter named `any` next to a second array (the LLVM wrapper's length names must not collide), and lengths
+// (2^40, 1) whose OR is above 2^40 though each is in bound: the slow path must return, not reject
+fn two(any: [u8], b: [u8]) -> i64
+{
+  return len(any) + len(b);
+}
