@@ -2258,7 +2258,7 @@ impl<'a> FnVerifier<'a> {
                 return Ok(Val::Bool(self.str_boundary(sv, i)));
             }
             "eq_range" => {
-                // L3-10: eq_range(a, i, b, j, n): five bounds obligations in math integers, the value is a fresh bool
+                // P16: five bounds obligations in order, then a fresh bool r with r == forall k in 0..n: a[i+k] == b[j+k] assumed on the call's path (the arrays as they are at the call)
                 let av = arg(0)?.try_arr()?.clone();
                 let i = arg(1)?.try_ast()?.clone();
                 let bv = arg(2)?.try_arr()?.clone();
@@ -2276,7 +2276,15 @@ impl<'a> FnVerifier<'a> {
                         self.prove_core(&st, g, &ob, pos(e), "index_oob", &msg, None);
                     }
                 }
-                return Ok(self.fresh("eq_range", &Ty::Bool));
+                let r = self.fresh("eq_range", &Ty::Bool);
+                let r_ast = r.ast().clone();
+                self.k += 1;
+                let k = self.z.int_const(&format!("eq_range!q{}", self.k));
+                let rng = self.z.and(&[k.ge_i(0), k.lt(&cnt)]);
+                let body = av.a.select(&i.add(&k)).eq(&bv.a.select(&j.add(&k)));
+                let fa = self.z.forall(std::slice::from_ref(&k), &rng.implies(&body), &[]);
+                self.assume(st, g, r_ast.eq(&fa));
+                return Ok(r);
             }
             "load_be" => {
                 // P2 batch 4: big-endian word of the nb bytes a[i..i+nb]

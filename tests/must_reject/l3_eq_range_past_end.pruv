@@ -1,0 +1,7 @@
+// P16 must reject: equality of the first n elements says nothing about a[n] and b[n]
+pub fn f(a: [i64], b: [i64], n: i64) -> i64
+  requires 0 <= n && n < len(a) && n < len(b)
+{
+  if eq_range(a, 0, b, 0, n) { assert a[n] == b[n]; }
+  return 0;
+}

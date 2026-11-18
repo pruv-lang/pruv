@@ -126,8 +126,13 @@ it can never be silently dropped.
 - `eq_range(a, i, b, j, n)`: `a` and `b` of one type, `[i64]` or `[u8]` (else `type_mismatch`); `i, j, n: i64`; a
   `bool`, true iff `a[i+k] == b[j+k]` for every `k` in `0..n` (true for `n == 0`). Code only (`effect_in_contract` in a
   contract), name reserved. The verifier must prove, in this order, `0 <= i`, `0 <= j`, `0 <= n`, `i + n <= len(a)`,
-  `j + n <= len(b)` (`verify` error `index_oob`); it knows nothing about the result. The Rust backend compares the two
-  slices in one call; the LLVM backend rejects it (`codegen` error `unsupported_type`).
+  `j + n <= len(b)` (`verify` error `index_oob`). It then knows the result exactly: `r == forall k in 0..n: a[i+k] ==
+  b[j+k]`, over the array values at the call (later writes do not change `r`). Both backends evaluate the five
+  arguments once each, in source order. The Rust backend compares the two slices in one call; the LLVM backend
+  compares bytes with `memcmp` (a literal `n > 0`, or a dynamic `n >= 4`) or an inline early-exit loop (a dynamic
+  `n < 4`); a literal `n == 0` is `true` without a compare. An operand layout other than `[u8]` bytes or 64-bit
+  elements is `codegen` error `unsupported_type` (today a `[u8]` operand is stored as bytes and the storage plan keeps
+  an `[i64]` operand, refined or not, as 64-bit elements, so it is not reached).
 - Evaluation order: code evaluates left to right in source order, the same in every compile mode; call arguments left to right, and in `a[i] = v` the index is evaluated before the value.
 - Precedence (high to low): unary `- !`; `* / %`; `+ -`; comparisons (non-associative); `&&`; `||`; `==>`.
 

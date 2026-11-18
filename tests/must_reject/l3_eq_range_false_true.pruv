@@ -1,0 +1,5 @@
+// P16 must reject: ensures result for eq_range(a, 0, b, 0, n) with only bounds required (the arrays may differ)
+pub fn f(a: [i64], b: [i64], n: i64) -> bool
+  requires 0 <= n && n <= len(a) && n <= len(b)
+  ensures result
+{ return eq_range(a, 0, b, 0, n); }
