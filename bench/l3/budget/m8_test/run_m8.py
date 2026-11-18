@@ -424,13 +424,14 @@ def REF(sid="s1", bid=BID):
     return {"sessionId": sid, "budgetId": bid}
 
 
-def ctl(cid, sessions, calls, logs, counters_, turns=0):
+def ctl(cid, sessions, calls, logs, counters_, turns=0, acts=None):
     """A control: script of (op, args); `logs` = the driver lines expected per call ("R 0", "R -", "X 5", "H 20 k"
     prefix); `counters_` = s1's final [delegations, commands, reviews, checks, tools, failures, retries]; `turns` =
-    the number of toolSeen turns at the end."""
+    the number of toolSeen turns at the end; `acts` (optional) = the recorded activity keys at the end, as
+    [(turn, [activity, ...]), ...] in observe order. A rejected call stops the case (later calls do not run)."""
     script = [{"ev": "call", "req": "r%d" % (i + 1), "op": op, "args": enc(a)} for i, (op, a) in enumerate(calls)]
     return {"id": cid, "world": {"sessions": enc(sessions)}, "script": script, "logs": logs, "counters": counters_,
-            "turns": turns}
+            "turns": turns, "acts": acts}
 
 
 def controls():
@@ -484,6 +485,14 @@ def controls():
         # a refused noteTool leaves the dedup set untouched too (the activity is not recorded)
         ctl("N20-tool-at-max-new-activity", [ctl_session(used={"tools": MAX})],
             [("noteTool", [REF(), "t1", "a1"])], ["X 5"], [0, 0, 0, 0, MAX, 0, 0], turns=0),
+        # a refused NEW activity on an EXISTING turn: the turn keeps only a1 (a2 is not recorded)
+        ctl("N21-tool-at-max-existing-turn", [ctl_session(used={"tools": MAX - 1})],
+            [("noteTool", [REF(), "t1", "a1"]), ("noteTool", [REF(), "t1", "a2"])], ["R -", "X 5"],
+            [0, 0, 0, 0, MAX, 0, 0], turns=1, acts=[("t1", ["a1"])]),
+        # negative stored tools counter: the -MAX side of the single range test, mirrored from N17
+        ctl("N22-tool-negative-min", [ctl_session(used={"tools": -MAX})],
+            [("noteTool", [REF(), "t1", "a1"])], ["R -"], [0, 0, 0, 0, -MAX + 1, 0, 0], turns=1,
+            acts=[("t1", ["a1"])]),
     ]
 
 
@@ -508,9 +517,10 @@ def cmd_controls(args):
                                                   for g, w in zip(got, c["logs"]))
         sessions, turns = parse_obs(run["obs"])
         cnt = mine_counters(sessions[tuple(units("s1"))])
-        if not ok or cnt != c["counters"] or len(turns) != c["turns"]:
-            fails.append("%s: lines %r want %r; counters %r want %r; turns %d want %d"
-                         % (c["id"], got, c["logs"], cnt, c["counters"], len(turns), c["turns"]))
+        acts = None if c["acts"] is None else [(tuple(units(t)), [tuple(units(a)) for a in al]) for t, al in c["acts"]]
+        if not ok or cnt != c["counters"] or len(turns) != c["turns"] or (acts is not None and turns != acts):
+            fails.append("%s: lines %r want %r; counters %r want %r; turns %r want %d / %r"
+                         % (c["id"], got, c["logs"], cnt, c["counters"], turns, c["turns"], acts))
     print(json.dumps({"controls": len(cs), "pass": len(cs) - len(fails), "fail": len(fails)}))
     for f in fails:
         print("FAIL", f)
@@ -815,7 +825,7 @@ def cmd_perf(args):
         return UNAVAILABLE if a is None or b is None or b <= 0 else "%.2f" % (a / b)
 
     print("chk: %d (item, size, round) checksums equal between Pruv and each of %s (hand / TS print no chk)"
-          % (CHK_OK[0], ", ".join(CHK_LANES[1:])))
+          % (CHK_OK[0], ", ".join(l for l in CHK_LANES[1:] if l in lanes)))
     print("rounds %d, reps %d, sizes %s; Pruv/lane = Pruv / lane (>1.0x: Pruv is slower); w = matched wire boundary"
           % (args.rounds, args.reps, ",".join(map(str, sizes))))
     print("ns per call (median of rounds)")
