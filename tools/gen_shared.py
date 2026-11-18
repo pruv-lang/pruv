@@ -7,7 +7,7 @@ import json
 import os
 import sys
 
-TABLES = ["mono_limits"]   # ordered; add new tables at the end
+TABLES = ["mono_limits", "builtin_types"]   # ordered; add new tables at the end
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = "pruvc-rs/crates/pruv-core/src/shared_tables.rs"
@@ -20,6 +20,10 @@ def _literal(value):
         return str(value)
     if isinstance(value, str):
         return json.dumps(value, ensure_ascii=False)
+    if (isinstance(value, list) and all(isinstance(v, list) and len(v) == 2 and all(isinstance(s, str) for s in v)
+                                        for v in value)):
+        return "&[" + ", ".join("(%s, %s)" % (json.dumps(a, ensure_ascii=False), json.dumps(b, ensure_ascii=False))
+                                for a, b in value) + "]"
     if isinstance(value, list) and all(isinstance(v, str) for v in value):
         return "&[" + ", ".join(json.dumps(v, ensure_ascii=False) for v in value) + "]"
     raise ValueError("unsupported value kind: %r" % (value,))

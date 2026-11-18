@@ -6,10 +6,8 @@ use crate::gtype::{dependencies, format_type, is_g3_key, GType};
 use std::collections::{HashMap, HashSet};
 
 /// G6 A0: also the internal names of the owned collection types (vec / hashmap / string).
-pub const BUILTIN_TYPE_NAMES: [&str; 18] = [
-    "i64", "bool", "unit", "array", "option", "result", "array_u8", "array_bool", "str", "vec", "hashmap", "string", "file",
-    "process", "process_args", "socket", "listener", "loop",
-];
+/// Shared with pruvc (pruvc/data/builtin_types.json, tools/gen_shared.py).
+pub use crate::shared_tables::builtin_types::BUILTIN_TYPE_NAMES;
 
 /// A name that is not built in is a user type (whether or not it is declared).
 pub fn is_user_type(ty: &str) -> bool {
@@ -43,24 +41,9 @@ pub fn array_of_elem_name(e: &str) -> Option<&'static str> {
 
 /// Source-level spelling. A user type keeps its own name.
 pub fn type_name(ty: &str) -> String {
-    match ty {
-        "i64" => "i64".to_string(),
-        "bool" => "bool".to_string(),
-        "str" => "str".to_string(),
-        "unit" => "()".to_string(),
-        "array" => "[i64]".to_string(),
-        "array_u8" => "[u8]".to_string(),
-        "array_bool" => "[bool]".to_string(),
-        "option" => "Option<i64>".to_string(),
-        "result" => "Result<i64>".to_string(),
-        "string" => "String".to_string(), // G6 A0
-        "file" => "File".to_string(),     // G10 A0
-        "process" => "Process".to_string(), // G10 proc A0
-        "process_args" => "ProcessArgs".to_string(),
-        "socket" => "Socket".to_string(), // G10 net A0
-        "listener" => "Listener".to_string(),
-        "loop" => "Loop".to_string(),
-        other => other.to_string(),
+    match crate::shared_tables::builtin_types::BUILTIN_PRINT.iter().find(|(k, _)| *k == ty) {
+        Some((_, v)) => v.to_string(),
+        None => ty.to_string(),
     }
 }
 
