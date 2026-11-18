@@ -4135,3 +4135,173 @@ Confirm audit `3cf22123` (same model): hold, 2 must-fix.
 | e8a7ec4d | write | Codex gpt-6.2-sol | gen_stale, dc, mutants, perf rows (one candidate, taken in by hand and fixed) |
 | e0269b0b | audit | Codex gpt-6.2-astra ultra | package audit |
 | 3cf22123 | confirm | Codex gpt-6.2-astra ultra | confirm audit |
+
+## Appendix P24 (row B/bud_halt.pruv + m10_test: synchronous halt and its effects)
+
+The commit with this appendix; base 00aa88e (main, P23), main 22332cd (P19c) merged before the final gates (cb3d79c;
+P19c touches no `bench/l3/budget` file). Changed files: `bench/l3/budget/bud_halt.pruv`,
+`bench/l3/budget/m10_test/{driver_m10.rs,hand_m10.rs,mutant_halt.py,root_m10.pruv,run_m10.py}`,
+`bench/l3/budget/m7_test/bud_facts.rs` (the `running_ids` host fact), `bench/l3/budget/{M10_NOTES.md,ABI.md}`. No
+compiler file and no `bud_lifecycle.pruv` change. Raw logs: `work/p24/` (not committed).
+
+### P24.1 Change
+
+- `bud_halt::halt` asks `runningDelegationIds` itself, synchronously, after SETTLE (KD-M10-1 retired: the op no longer
+  carries a prefetched answer and the `[30]` marker is gone). Order inside one call:
+  1. record frame check (`rec_ok_in`), then `reserve(halt_words)` with `halt_words = blob_n + 8 + QUERY_ROOM`
+     (QUERY_ROOM = 256 words); a shortfall returns -N Grow with no effect and no query;
+  2. re-read the record offset and re-check its frame (`blob_n` unchanged, `rec_ok_in`), view, clock, `settle_at`
+     (may push 13 timerClear);
+  3. `running_ids` (trusted Rust host fact in `bud_facts.rs`), answer size `iw`; a malformed answer returns 2 with
+     only SETTLE's effects; an answer that does not fit fx (`fx[0] + 8 + 2D`) or the store returns 6;
+  4. the second `reserve(n + 8 + iw)` (inside QUERY_ROOM it can only rehash in place; any other result returns 6),
+     re-read and re-check the record, then `halted` writes the halted record in place and the effects 31, 32,
+     [33, i]..., 34, 35, 36, 20, 37 follow.
+- Status 6 (terminal): halt's answer does not fit fx or the store room. fx is valid on every status >= 0.
+- Every return after SETTLE goes through `fail_settled`, which first calls `keep_settled`: SETTLE's record change is
+  stored even when halt then fails (words 8 activeMs / 16 activeSince kind / 17 since from the view, and, when SETTLE
+  ended an active clock (`k0 == 1`, view kind no longer 1), the record is rewritten without the activeSince string, as
+  `root_m10::run_op` does). So on 2 / 6 the store and SETTLE's timerClear in fx agree. A failed keep returns 2.
+- Store offsets are 40-bit (`c40`): `rec_ok_in` ensures `off <= 2^40`, `halted`/`put_vec`/`copy_in` take offsets up to
+  2^40 (`copy_in` falls back to word puts above 2^32). `reserve` truncates its argument to 32 bits, so halt returns 6
+  when `halt_words` or `n + 8 + iw` exceeds 2^32, and 3 when the view has fewer than 7 words.
+- `halted(st, base, ...)` reads the old record in place from `st` (`copy_in` block copy for the 24-word head, then
+  words 0/8/16/17, `put_key`/`put` from `st`, the id list, the tail via `copy_in`); no intermediate record copy.
+  `str_pos` walks the record's strings from `c40(base + 24)` with `bud_lifecycle::str_words`.
+- `root_m10`: the op is `[code, now, 0, what x10, flag, sessionId, budgetId, runKey]` (no answer); `run_op` reserves
+  halt's room without the id list and checks only the fixed fx part; status 6 is passed through.
+- `bud_facts.rs::running_ids`: the host's queue head as `n, (len, words)*`; the query record keeps the answer actually
+  returned. The driver logs each query as an `rdi` event at its effect position with that answer, preceded by
+  `X armed` when the budget's timer is still armed at query time (a query before SETTLE); q fails on `X armed`.
+- `driver_m10.rs` effect 33 resolves each stopped id from the answer (id start positions built in one pass), so the
+  perf lane names every stop as the hand lane does (`black_box(id)` when silent).
+- `run_m10.py`:
+  - q compares the query itself: `runningDelegationIds` must come after SETTLE's timerClear with the ref's sessionId and
+    budgetId, and the stops must carry that answer; `halts` counts queries;
+  - `build --budlib/--out` (mutant library and its own build directory);
+  - `perf` interleaves Pruv and `hand_m10.rs` per round and D, rejects rounds/reps < 1 and fails with `HOLD` for a
+    median above 1.0x hand without overlap.
+- `driver_m10.rs`: borrows sid/bid (no per-call key clone), silent arm for the perf loop.
+- `hand_m10.rs` (new): hand Rust halt and put-back, perf lane only.
+- `mutant_halt.py` (new): control, 12 mutants and the G fixtures (G1 answer order with 2 and 0 ids, G2 malformed answer,
+  G3 answer too big for fx, G3b too big for the store room, G4 a forced Grow before the query). G2/G3/G3b check the
+  exact terminal log (`clear`, `rdi`, `X s`), that the session is not halted and that the record's words
+  (0, 8, 16, 17) equal the settled values of the control's halt (the fixture asserts SETTLE changed them). G4 fills the
+  arena so the first call returns -N with 0 queries and `st`/fx unchanged; the retry returns 0 with exactly one query.
+  `query_before_settle` must build and be killed by q (not only by G); a mutant that fails rustc counts as BROKEN.
+
+### P24.2 Gates (Rust and Python compilers, Rust backend; all rc 0)
+
+Logs `work/p24/` (`q_*.log`, `replay_*.log`, `same.log`, `mutant_halt.log`, `roots/`, `m9/`, `m7/`), after the main
+merge (compilers at 22332cd) and the audit fixes.
+
+| gate | rs | py |
+|---|---|---|
+| 8 budget roots (m3, keys, admit, m4, m7, m8, m9, m10) | all verify | all verify |
+| M10 q cases.jsonl (Q4/Q5) | 78 exact / 222 not-implemented / 0 fail, 59 queries compared | same |
+| M10 q cases_halt.jsonl (derived cuts) | 300 / 0 / 0, 97 queries compared | same |
+| M10 replay cases / cases_halt | identical, 981 / 1687 calls, 47 / 76 grown | same |
+| M10 same | 285353 bytes identical | - |
+| mutant_halt (campaign-7096p5u3) | control CLEAN; 12/12 KILLED: query_before_settle, no_settle, query_budget_as_session, query_session_as_budget, bad_answer_ok, bad_answer_drops_settle, big_answer_drops_settle, no_stop_loop, stop_reversed, cancel_after_stopmain, no_save, big_answer_continues | - |
+| M9 Q3 / clock / E/F | 26/274/0, 136/164/0, 15/5/0 | same |
+| M9 Q4 / Q4 clock / stale | 0/300/0, 293/7/0, 300/0/0 | same |
+| M9 dc | 313/313 ok | same |
+| M7 q | 113/187/0 | same |
+
+- The query trace is the actual one: the driver logs the answer `running_ids` returned, at the effect count of the
+  call, and `X armed` if the timer was still armed. The query-before-SETTLE mutant moves `running_ids` above
+  `settle_at`; it verifies and builds, and q kills it (`X armed` at Q4-20261117-32 r10, and the query precedes
+  timerClear); cases_halt and G fail on it too.
+- `bad_answer_drops_settle` / `big_answer_drops_settle` return 2 / 6 without `keep_settled`; G2 / G3b kill them on the
+  record words. Most other mutants die in q; G kills `bad_answer_ok` (G2) and `big_answer_continues` (G3/G3b).
+- The two Grow fixtures in q print `queries 0 then 1`.
+- M7 life and diff_hand were not rerun: `work/m7/cases_life.jsonl` is not in this worktree. P24 does not change
+  `bud_lifecycle.pruv`; the m7 root verifies on both compilers.
+
+### P24.3 Time (Rust backend, ns, 7 interleaved rounds Pruv/hand, 50,000 reps)
+
+`run_m10.py perf --rounds 7 --reps 50000`, log `work/p24/perf_s5.log` (after the audit fixes). Base (00aa88e) has no
+hand lane and a different op (prefetched answer), so there is no base column. Overlap compares the min-max ranges.
+
+| cell | Pruv | hand | Pruv/hand median | Pruv min-max | hand min-max | overlap |
+|---|---:|---:|---:|---|---|---|
+| halt D = 10 | 315.6 | 331.7 | 0.95 | 309.3-695.9 | 324.2-666.0 | yes |
+| halt D = 50 | 680.2 | 1119.3 | 0.61 | 668.0-785.2 | 1109.9-1181.6 | no (Pruv faster) |
+| halt D = 100 | 1027.3 | 2131.1 | 0.48 | 1019.9-1098.0 | 2092.5-2183.1 | no (Pruv faster) |
+| putback D = 10 | 28.8 | 74.6 | 0.39 | 28.5-44.1 | 73.5-110.9 | no (Pruv faster) |
+| putback D = 50 | 28.8 | 76.4 | 0.38 | 28.4-29.6 | 73.0-78.9 | no (Pruv faster) |
+| putback D = 100 | 28.6 | 72.7 | 0.39 | 28.0-29.1 | 71.0-82.6 | no (Pruv faster) |
+
+- Cost bound per flow:
+  - halt: CURRENT + SETTLE + O(record words + D + id words). Two reserves (the second rehashes in place at most), one
+    in-place record write, 2D + 8 effect words. A failure after SETTLE adds one record rewrite (`keep_settled`).
+  - putback: O(record words), flat in D.
+- Measured halt slope about 7 ns per id (680 -> 1027 over 50 ids). The driver now names each stopped id (effect 33)
+  as the hand lane does, so D = 50/100 are slower than `perf_s4` (546 / 796): `perf_s4` timed a driver that skipped
+  that work.
+- D = 10 history:
+  - 1.88x (`perf_s1`, record copied through a scratch vec);
+  - 1.73x (`perf_s2`, `copy_in` block copy);
+  - 1.13x (`perf_s3`, driver borrows sid/bid and arms silently, as the hand lane);
+  - 0.97 (`perf_s4`, record read in place from `st`);
+  - 0.95 (`perf_s5`, after the audit fixes).
+- Profiles of s2/s3 picked each step.
+
+### P24.4 Hand vs generated
+
+- halt at D = 10 is within noise of hand Rust (the ranges overlap).
+- At D = 50/100 Pruv is about 1.6-2x faster:
+  - Hand Rust gets the host answer as D owned `String` ids and pushes each into the stopped list and the effects.
+  - Pruv writes the answer's packed words once into the flat store and the fx frame.
+- Answer preparation differs:
+  - The hand lane's per-rep `host.answer = ids.clone()` clones D `String`s. This is the host side of the query, as
+    `running_ids` is for Pruv, and it is counted in the hand time.
+  - Pruv's host moves a prebuilt word vector out and back.
+- putback:
+  - Hand Rust clones the open `Budget` struct (its `String` fields) back into the map.
+  - Pruv puts the open record back into the flat store without allocating.
+
+### P24.5 RSS and allocations
+
+- Allocations per repetition (counting `GlobalAlloc`; 40,000 reps minus 20,000 reps; `work/p24/mem/allocs2.log`,
+  rebuilt with the fixed driver):
+  - Pruv: 4 at D = 10/50/100;
+  - hand: 17 / 57 / 107 (the D id clones of the host answer are part of the hand lane).
+- Peak RSS KiB (50,000 reps, 3 runs, `work/p24/mem/rss2.log`), about 1.09-1.12x hand (the P13d/P13e range, queued):
+
+  | D | Pruv | hand |
+  |---|---|---|
+  | 10 | 1840-1856 | 1680 |
+  | 50 | 1856 | 1696 |
+  | 100 | 1872-1888 | 1680-1696 |
+
+### P24.6 Proof time (real s, root_m10, median of 3)
+
+| tree | rs | py |
+|---|---|---|
+| base 22332cd | 8.33 | 14.94 |
+| P24 (with the audit fixes) | 8.47 | 15.92 |
+
+- Logs: `work/p24/proof_time.log` and `proof_time2.log` (load average about 4-7).
+- The added time comes from the new `halted`/`str_pos`/`keep_settled` frame obligations and the two reserve re-checks.
+- All 8 roots on both compilers (parallel 4): 0.8-15.3 s rs, 1.2-23.5 s py (`work/p24/roots/summary.log`).
+
+### P24.6a Audit
+
+AUDIT_PLACEHOLDER
+
+### P24.7 Queued rows
+
+- In-call store growth for halt: an answer above QUERY_ROOM plus the free words of an in-place rehash returns 6 instead
+  of growing (ABI.md, M10 halt host protocol).
+- RSS 1.09-1.12x hand: P13d/P13e.
+- `bud_lifecycle.pruv` settle_at/drop_at fx-room requires (not touched in P24).
+- A hand Rust Q lane for M10 (hand_m10.rs is a perf lane only, as in M10a).
+- Mutant campaign directory cleanup under `work/m10`.
+
+### P24.8 Delegation
+
+| id | mode | engine / model | use |
+|---|---|---|---|
+| 1961cfdf | research | Codex gpt-6.2-astra | M10a halt state, host query order in B, gate plan |
+| 282acd5d | audit | Codex gpt-6.2-astra ultra | package audit |

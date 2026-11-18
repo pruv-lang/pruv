@@ -161,6 +161,8 @@ fn run_op(inout st: [i64], op: [i64], code: i64, sn: i64, bs: i64, bn: i64, rs: 
     crate::bud_lifecycle::view_in(st, off0, inout bv);
     k0 = rd(st, off0 + 16);
     hw = crate::bud_halt::halt_words(st, se);
+    // a settled text activeSince is rewritten (at most the record's words) before a nested halt reserves its room
+    if k0 == 1 { hw = crate::bud_store::c40(hw + crate::bud_lifecycle::blob_n(st, se)); }
   }
   // a new clock and run: their packed key words, the framed owner blob (1 + words(sn)), and halt's room
   let nd: i64 = crate::bud_map::make_room(inout st, 2, crate::bud_keys::words(bn) + 1 + crate::bud_keys::words(sn) + crate::bud_keys::words(rn) + hw);
@@ -177,12 +179,8 @@ fn run_op(inout st: [i64], op: [i64], code: i64, sn: i64, bs: i64, bn: i64, rs: 
   wr(inout st, off + 8, rd(bv, 4));
   wr(inout st, off + 16, rd(bv, 5));
   wr(inout st, off + 17, rd(bv, 6));
-  if r == 4 {
-    let h: i64 = crate::bud_halt::halt(inout st, op, 15, sn, op, bs, bn, 0, now, inout bv, inout fx);
-    if h == 6 { return 6; }
-    if h != 0 { return 2; }
-    return 0;
-  }
+  // SETTLE's record change is complete (activeSince text dropped) before a nested halt, so a halt that fails after
+  // its own SETTLE keeps a consistent record (its k0 is this op's settled kind).
   if k0 == 1 && rd(bv, 5) != 1 {
     let b: [i64] = crate::bud_lifecycle::blob_copy(st, se);
     let h: [i64] = crate::ent_u16::slice(b, 0, 24);
@@ -191,6 +189,12 @@ fn run_op(inout st: [i64], op: [i64], code: i64, sn: i64, bs: i64, bn: i64, rs: 
     let nb: [i64] = crate::bud_lifecycle::rewrite(b, h, true, b, crate::bud_store::c40(p3 + 1), l3);
     let w: i64 = crate::bud_lifecycle::store(inout st, op, 15, sn, nb);
     if w != 0 { return 2; }
+  }
+  if r == 4 {
+    let h: i64 = crate::bud_halt::halt(inout st, op, 15, sn, op, bs, bn, 0, now, inout bv, inout fx);
+    if h == 6 { return 6; }
+    if h != 0 { return 2; }
+    return 0;
   }
   return 0;
 }

@@ -14,11 +14,13 @@ The control must pass everything (CLEAN); every mutant must fail something (KILL
 
 G fixtures (each starts from a corpus halt whose request clears a timer before the query):
   G1 answer  the answer the host gave is the one the stops carry, in order (2 ids, 0 ids)
-  G2 bad     a malformed answer (count says 2, one key) after SETTLE: status 2, the query was asked once, after the
-             clear, no stop or save effect, and the session is not halted (isHalted false)
-  G3 big     an answer whose stops do not fit fx (2100 ids): status 6, query once after the clear, no stops
-  G3b long   an answer that fits fx but not the store room left after the query (1000 ids x 64 units): status 6
-  G4 once    a halt that hits Grow on the first attempt still asks exactly once (driver audit, small start)
+  G2 bad     a malformed answer (count says 2, one key) after SETTLE: the log is exactly clear, rdi, X 2; the session
+             is not halted (isHalted false) and its record keeps SETTLE's result (words 8, 16, 17 as the halted control)
+  G3 big     an answer whose stops do not fit fx (2100 ids): the same with status 6
+  G3b long   an answer that fits fx but not the store room left after the query (1000 ids x 64 units): the same, 6
+  G4 once    the halt request itself hits Grow (arena filled just before it, driver audit): the Grow attempt asks
+             nothing and changes nothing, the retry asks exactly once
+query_before_settle must build and fail q (the trace order); a variant that does not build (rustc) is BROKEN.
 """
 
 import argparse
@@ -43,6 +45,9 @@ RUN = str(HERE / "run_m10.py")
 QUERY = "  let v: Vec<i64> = running_ids(sk, ss, sn, bk, bs, bn, rd(fx, 0));\n"
 SETTLE = re.compile(r"  let _a: i64 = crate::bud_clock::settle_at\([^\n]*\);\n")
 
+# Mutants that must build (pass the verifier) and fail the q trace against the oracle.
+MUST_BUILD = {"query_before_settle"}
+
 # (name, pattern, replacement); each pattern must match exactly once inside fn halt.
 MUTANTS = (
     # the query moved before SETTLE: the trace must show runningDelegationIds before timer.clear
@@ -51,13 +56,16 @@ MUTANTS = (
     ("no_settle", r"  let _a: i64 = crate::bud_clock::settle_at\([^\n]*\);\n", ""),
     ("query_budget_as_session", r"running_ids\(sk, ss, sn, bk, bs, bn,", "running_ids(bk, bs, bn, bk, bs, bn,"),
     ("query_session_as_budget", r"running_ids\(sk, ss, sn, bk, bs, bn,", "running_ids(sk, ss, sn, sk, ss, sn,"),
-    ("bad_answer_ok", r"  if iw < 0 \{ return 2; \}\n", "  if iw < 0 { return 0; }\n"),
+    ("bad_answer_ok", r"  if iw < 0 \{ return fail_settled\([^\n]*\); \}\n", "  if iw < 0 { return 0; }\n"),
+    # a terminal status after SETTLE that drops SETTLE's result (the P24 audit's MF1)
+    ("bad_answer_drops_settle", r"  if iw < 0 \{ return fail_settled\([^\n]*\); \}\n", "  if iw < 0 { return 2; }\n"),
+    ("big_answer_drops_settle", r"  if g2 != 0 \{ return fail_settled\([^\n]*\); \}\n", "  if g2 != 0 { return 6; }\n"),
     ("no_stop_loop", r"    push\(inout fx, 33\);\n    push\(inout fx, i\);\n", ""),
     ("stop_reversed", r"    push\(inout fx, i\);\n", "    push(inout fx, d - 1 - i);\n"),
     ("cancel_after_stopmain", r"  push\(inout fx, 31\);\n  push\(inout fx, 32\);\n",
      "  push(inout fx, 32);\n  push(inout fx, 31);\n"),
     ("no_save", r"  push\(inout fx, 36\);\n", ""),
-    ("big_answer_continues", r"  if g2 != 0 \{ return 6; \}\n", "  if g2 != 0 { return 0; }\n"),
+    ("big_answer_continues", r"  if g2 != 0 \{ return fail_settled\([^\n]*\); \}\n", "  if g2 != 0 { return 0; }\n"),
 )
 
 
@@ -111,12 +119,32 @@ def halt_call(lines, rq):
     return next(x for x in lines if x.startswith("call %s " % rq))
 
 
-def is_halted_after(lines, rq):
-    """The program cut after the halt request, plus isHalted (code 2) on the same ref."""
+def is_halted_after(lines, rq, code=2, before=False):
+    """The program cut after (before) the halt request, plus a call `code` (2 isHalted, 1 current) on the same ref."""
     call = halt_call(lines, rq).split()
     i = lines.index(" ".join(call))
-    probe = ["call", "rq"] + ["2"] + call[3:]
-    return lines[:i + 1] + [" ".join(probe), "end"]
+    probe = ["call", "rq"] + [str(code)] + call[3:]
+    return lines[:i + (0 if before else 1)] + [" ".join(probe), "end"]
+
+
+def record_after(exe, lines, rq, before=False):
+    """The budget record (current, code 1) on the halt's ref after (before) the halt request: its words."""
+    v = blocks(drive(exe, is_halted_after(lines, rq, 1, before))[0])["rq"]
+    assert len(v) == 1 and v[0].startswith("V 4 "), f"current {v}"
+    return [int(x) for x in v[0].split()[3:]]
+
+
+def terminal_after_settle(exe, prog, rq, status, settled, tag):
+    """A halt ending with `status` after SETTLE: the log is exactly clear, rdi, X status; the session is not halted
+    and the record keeps SETTLE's result (activeMs word 8, activeSince kind 16 and ms 17 as the halted control)."""
+    b = blocks(drive(exe, prog)[0])[rq]
+    assert len(b) == 3 and b[0].startswith("E clear") and b[1].startswith("E rdi") and b[2] == f"X {status}", \
+        f"{tag} {b[:4]} .. {b[-1:]}"
+    probe = blocks(drive(exe, is_halted_after(prog, rq))[0])["rq"]
+    assert probe == ["V 1"], f"{tag} isHalted {probe}"  # out [1] = not halted, [2] = halted
+    r = record_after(exe, prog, rq)
+    got = (r[0], r[8], r[16], r[17])
+    assert got == (0,) + settled, f"{tag} record (halted, activeMs, kind, since) {got} != {(0,) + settled}"
 
 
 def check_fixtures(exe):
@@ -132,36 +160,34 @@ def check_fixtures(exe):
         assert stops == want, f"G1 stops {stops} != {want}"
         assert b[0].startswith("E clear") and b[1].startswith("E rdi"), f"G1 order {b[:2]}"
         assert sum(x.startswith("E rdi") for x in b) == 1, "G1 asked more than once"
-    # G2: malformed answer after SETTLE -> 2, nothing written
-    bad = with_answer(lines, [2] + key_x)
-    b = blocks(drive(exe, bad)[0])[rq]
-    assert b[0].startswith("E clear") and b[1].startswith("E rdi") and b[-1] == "X 2", f"G2 {b}"
-    assert not any(x.split()[1] in ("cancel", "stopMain", "stopDel", "save", "announce") for x in b[2:-1]), f"G2 {b}"
-    probe = blocks(drive(exe, is_halted_after(bad, rq))[0])["rq"]
-    assert probe == ["V 1"], f"G2 isHalted {probe}"  # out [1] = not halted, [2] = halted
+    # SETTLE's result: the halted control's words 8, 16, 17; the fixture must change them (a running clock)
+    done = record_after(exe, lines, rq)
+    pre = record_after(exe, lines, rq, before=True)
+    assert done[0] == 1, f"control not halted {done[:1]}"
+    settled = (done[8], done[16], done[17])
+    assert settled != (pre[8], pre[16], pre[17]), f"SETTLE changed nothing {settled}"
     good = blocks(drive(exe, is_halted_after(lines, rq))[0])["rq"]
     assert good == ["V 2"], f"G2 control isHalted {good}"
-    # G3: 2100 ids cannot fit -> 6, nothing written
-    big = with_answer(lines, [2100] + key_x * 2100)
-    b = blocks(drive(exe, big)[0])[rq]
-    assert b[0].startswith("E clear") and b[1].startswith("E rdi") and b[-1] == "X 6", f"G3 {b[:3]} .. {b[-1:]}"
-    assert len(b) == 3, f"G3 wrote effects {b[2:5]}"
-    probe = blocks(drive(exe, is_halted_after(big, rq))[0])["rq"]
-    assert probe == ["V 1"], f"G3 isHalted {probe}"
-    # G3b: 1000 ids of 64 units fit fx (8 + 2000 words) but not the store room left after the query: 6, nothing written
+    # G2: malformed answer after SETTLE (count says 2, one key) -> 2
+    terminal_after_settle(exe, with_answer(lines, [2] + key_x), rq, 2, settled, "G2")
+    # G3: 2100 ids cannot fit fx -> 6
+    terminal_after_settle(exe, with_answer(lines, [2100] + key_x * 2100), rq, 6, settled, "G3")
+    # G3b: 1000 ids of 64 units fit fx (8 + 2000 words) but not the store room left after the query -> 6
     long_key = [64] + [(120 << 48) | (120 << 32) | (120 << 16) | 120] * 16
-    st_big = with_answer(lines, [1000] + long_key * 1000)
-    b = blocks(drive(exe, st_big)[0])[rq]
-    assert b[0].startswith("E clear") and b[1].startswith("E rdi") and b[-1] == "X 6", f"G3b {b[:3]} .. {b[-1:]}"
-    assert len(b) == 3, f"G3b wrote effects {b[2:5]}"
-    probe = blocks(drive(exe, is_halted_after(st_big, rq))[0])["rq"]
-    assert probe == ["V 1"], f"G3b isHalted {probe}"
-    # G4: from the smallest start the halt grows and still asks once
-    out, err = drive(exe, lines, {"M10_INIT_LEN": "1"})
-    b = blocks(out)[rq]
+    terminal_after_settle(exe, with_answer(lines, [1000] + long_key * 1000), rq, 6, settled, "G3b")
+    # G4: the halt request itself hits Grow (arena filled just before it): the first attempt returns Grow with no
+    # query, no effect and the store unchanged; the retry asks exactly once and halts
+    call = halt_call(lines, rq)
+    assert call.split()[2] == "12", f"G4 halt is not a direct halt call: {call[:40]}"
+    i = lines.index(call)
+    grown = lines[:i] + ["fill_arena", "audit"] + lines[i:]
+    b = blocks(drive(exe, grown)[0])[rq]
+    att = [x.split() for x in b if x.startswith("A ")]
+    assert len(att) >= 2 and int(att[0][1]) < 0, f"G4 halt did not Grow: {att[:1]}"
+    assert att[0][2:5] == ["0", "true", "true"], f"G4 Grow attempt asked or wrote: {att[0][:6]}"
+    assert all(int(x[1]) < 0 and x[2] == "0" for x in att[:-1]), f"G4 attempts {att}"
+    assert int(att[-1][1]) == 0 and att[-1][2] == "1", f"G4 retry {att[-1][:6]}"
     assert sum(x.startswith("E rdi") for x in b) == 1, f"G4 {b}"
-    m = re.search(r"grown_calls (\d+)", err)
-    assert m and int(m[1]) > 0, "G4 no call grew"
     return "G1-G4,G3b"
 
 
@@ -173,6 +199,8 @@ def q(budlib, out, cases, oracle, pruvc):
     (out / f"{cases.stem}.log").write_text(r.stdout + r.stderr, encoding="utf-8")
     if "pruvc failed" in r.stderr:
         return "rejected", r.stderr
+    if "rustc failed" in r.stderr:
+        return "broken", r.stderr[-160:]
     if r.returncode == 0:
         return "pass", ""
     lines = [x for x in (r.stdout + r.stderr).splitlines() if x.strip()]
@@ -190,13 +218,20 @@ def check_variant(name, source, campaign, pruvc):
     for cases in ("cases", "cases_halt"):
         oracle = "oracle" + cases[len("cases"):]
         res[cases] = q(lib, out, WORK / f"{cases}.jsonl", WORK / f"{oracle}.jsonl", pruvc)
+        if res[cases][0] == "broken":  # a variant that does not build is no result: neither killed nor clean
+            return (name, "-", "-", "-", "BROKEN  # " + res[cases][1].replace("\n", " "))
         if res[cases][0] == "rejected":
+            if name in MUST_BUILD:
+                return (name, "-", "-", "-", "SURVIVED  # rejected by proof but must build and fail its run")
             return (name, "-", "-", "-", "REJECTED" if name != "control" else "DIRTY")
     try:
         g = ("pass", check_fixtures(str(out / "driver_m10")))
     except AssertionError as e:
         g = ("fail", str(e)[:160])
     caught = any(r[0] == "fail" for r in (*res.values(), g))
+    if name in MUST_BUILD:  # must fail the oracle trace on the query order itself: not only a G fixture, and not a
+        # driver crash or a Grow control (the reason names the query: 'X armed' or a runningDelegationIds mismatch)
+        caught = any(r[0] == "fail" and ("X armed" in r[1] or "runningDelegationIds" in r[1]) for r in res.values())
     verdict = ("DIRTY" if caught else "CLEAN") if name == "control" else ("KILLED" if caught else "SURVIVED")
     why = next((r[1] for r in (*res.values(), g) if r[0] == "fail"), "")
     return (name, res["cases"][0], res["cases_halt"][0], g[0], verdict + (("  # " + why) if why else ""))
@@ -226,7 +261,7 @@ def main():
         for f in futs:
             row = f.result()
             print(*row, flush=True)
-            failed |= row[-1].startswith(("DIRTY", "SURVIVED"))
+            failed |= row[-1].startswith(("DIRTY", "SURVIVED", "BROKEN"))
     return int(failed)
 
 

@@ -102,6 +102,8 @@ pub struct RunningQuery {
     pub sid: Vec<i64>,
     pub bid: Vec<i64>,
     pub fxn: i64,
+    /// The answer this call returned (`[status, n, keys...]`), as the host gave it.
+    pub answer: Vec<i64>,
 }
 
 thread_local! {
@@ -154,16 +156,18 @@ fn framed(k: &[i64], ks: i64, kn: i64) -> Vec<i64> {
     v
 }
 
-/// Answer the next runningDelegationIds query and record its ref in q mode. The answer is moved out of the stream
-/// (each answer is taken once), so the host cost is the call and the move, no copy.
+/// Answer the next runningDelegationIds query and record its ref and the answer it returns in q mode. The answer is
+/// moved out of the stream (each answer is taken once), so the host cost is the call and the move, no copy (q mode
+/// also clones it into the record).
 #[inline(always)]
 pub fn running_ids(k: &[i64], ks: i64, kn: i64, bk: &[i64], bs: i64, bn: i64, fxn: i64) -> Vec<i64> {
     let index = running_calls();
     RCALLS.with(|c| c.set(index + 1));
+    let a = RUNNING.with(|a| a.borrow_mut().get_mut(index).map(std::mem::take)).unwrap_or_else(|| vec![0, 0]);
     RQUERIES.with(|q| {
         if let Some(q) = q.borrow_mut().as_mut() {
-            q.push(RunningQuery { sid: framed(k, ks, kn), bid: framed(bk, bs, bn), fxn });
+            q.push(RunningQuery { sid: framed(k, ks, kn), bid: framed(bk, bs, bn), fxn, answer: a.clone() });
         }
     });
-    RUNNING.with(|a| a.borrow_mut().get_mut(index).map(std::mem::take)).unwrap_or_else(|| vec![0, 0])
+    a
 }

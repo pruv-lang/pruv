@@ -1,4 +1,4 @@
-# L3-10 M10 — halt and decisions (status: M10a halt done, M10b raise / decide not started)
+# L3-10 M10 — halt and decisions (status: M10a halt done, synchronous halt query P24, M10b raise / decide not started)
 
 ## Scope (REQUEST_BUDGET_SPEC.md §14 M10)
 - M10a (this commit): `bud_halt.pruv` (halt section codec in the record's `rest`, halt with ordered effects),
@@ -14,13 +14,18 @@
    writes atKind 2 (at = now); the runner renders it with toISOString semantics. The runner codec moves a
    well-formed `halt` object (exactly reason / at / stoppedDelegationIds, valid reason, string ids) between JSON and
    the prefix; any other `halt` value stays JSON. `halt_reason(st, off)` reads it for M8's halted-charge reason.
-2. halt effect order in fx (B:381-397): SETTLE (bud_clock, may emit timerClear 13) → 30 runningDelegationIds
-   consumed → state halted + halt section → 31 cancelRecovery → 32 stopMain → [33, i] stopDelegation of id i (list
-   order, duplicates kept) → 34 stopAttachedTurns → 35 holdQueued → 36 save → 20 changed → 37 announce.
-   Status: 0 (also when nothing halts: no current / not open), 2 invalid (bad reason / ids, or the record frame fails
-   `rec_ok_in`: six raw string lengths must end exactly at the blob end), 3 fx too small (fx[0] + 12 + 2·D > len),
-   -N Grow (nothing written; `halt_words` lets a caller that already wrote reserve first). All checks run before the
-   first write; root_m10 run_op also checks the nested halt's fx room and `rec_ok_in` before its clock writes.
+2. halt effect order in fx (B:381-397): SETTLE (bud_clock, may emit timerClear 13) → runningDelegationIds(ref),
+   asked synchronously by Pruv at this position (`bud_halt::running_ids`, a trusted host fact; P24) → state halted +
+   halt section → 31 cancelRecovery → 32 stopMain → [33, i] stopDelegation of id i of the answer (list order,
+   duplicates kept) → 34 stopAttachedTurns → 35 holdQueued → 36 save → 20 changed → 37 announce.
+   Status (P24): 0 (also when nothing halts: no current / not open), 2 invalid (bad reason, the record frame fails
+   `rec_ok_in`: six raw string lengths must end exactly at the blob end, or an invalid answer after SETTLE), 3 fx too
+   small for the fixed part (fx[0] + 12 > len, nothing written), 6 the answer does not fit (fx: fx[0] + 8 + 2·D >
+   len; store: more id words than QUERY_ROOM = 256 plus the free words a rehash finds; terminal, SETTLE applied),
+   -N Grow (nothing written). Room for the record without its id list plus QUERY_ROOM is reserved before SETTLE
+   (`halt_words`), so Grow comes before any write; the second reserve after the query can only rehash in place.
+   On 2 / 6 after SETTLE, fx holds SETTLE's timerClear and the host applies it as on status 0. The record is read
+   in place from the store (no copy); its frame is checked again after each reserve.
    `prefix_len` accepts a halt prefix only with reason 0..4, atKind 1/2, raw 0 <= atLen <= l-6 and well-formed ids;
    otherwise rest is opaque JSON (the runner's `prefix_ok` mirrors it).
 3. Helpers: the 17 record helpers of bud_lifecycle.pruv are `pub` on main since the M7 perf pass (d28b52c, see
@@ -49,13 +54,12 @@ Confirmation audit (Codex, fixes required, all fixed): `rec_ok_in` now also requ
 request's first trace entry; `prefix_ok` adds prefix_len's l <= 2^32 bound so the mirror is exact.
 
 ## Known differences / spec notes
-- **KD-M10-1 (spec note, §8.1)**: the Need/resume pattern (return a Need status with nothing written, host answers,
-  call again) does not fit a query that comes after a write. In halt, SETTLE (which may already clear the timer)
-  precedes `runningDelegationIds(ref)`, and FIRE → HALT_TIME has already written state before halt runs; decide's
-  `releaseHeld` is in the same position. Adopted: the host prefetches the next answer into the op (deps queue head,
-  default []) and Pruv emits a "consumed" marker effect (fx 30) at the exact query position; the host advances its
-  queue and logs the query there. M7's perf pass moved isQuiet to the same form (op slot 2, consumed by [23]; status 5
-  only when the host passes -1). Spec §8.1 should name this prefetched-answer query form.
+- **KD-M10-1 (retired in P24)**: M10a's Need/resume workaround. The host prefetched the next runningDelegationIds
+  answer into the op and Pruv emitted a "consumed" marker (fx 30) at the query position. The marker did not prove
+  when the host computed the answer, so P24 replaced it with a synchronous query (`running_ids`) that Pruv calls
+  after SETTLE. The test host logs the query with the effect count at call time; q checks it comes after SETTLE's
+  timerClear, and the query-before-SETTLE mutant is killed (P24 results below). M7's isQuiet already used the
+  synchronous form (`is_quiet`); decide's releaseHeld (M10b, P31) must use it too.
 
 ## Results (M10a)
 Q (`python3 bench/l3/budget/m10_test/run_m10.py q`, work/m10, 300 cases Q4 150 / Q5 150). Rust rows use the pruvc-rs
@@ -82,13 +86,36 @@ Perf (Pruv only, `perf --rounds 3 --reps 20000`, after the review fixes, one ses
 delegations; the loop also puts the record back open, `putback` times that put alone): halt D=10 3.3 µs, D=50
 14.6 µs, D=100 29.5 µs (~0.3 µs per id, linear); putback ~32 ns. Not compared with hand Rust / TS yet (M10b).
 
+## Results (P24: synchronous halt)
+Gates after P24 (Rust and Python pruvc, byte-identical Rust; raw logs `work/p24/`, not committed):
+
+| gate | rs | py |
+|---|---|---|
+| q cases.jsonl (Q4/Q5) | 78 exact / 222 not-implemented / 0 fail, 59 queries compared | same |
+| q cases_halt.jsonl (derived cuts) | 300 / 0 / 0, halts compared 97 | same |
+| replay (cases / cases_halt) | identical, 981 / 1687 calls, 47 / 76 grown | same |
+| mutant_halt.py | control CLEAN, 12/12 mutants KILLED (query_before_settle, no_settle, query_budget_as_session, query_session_as_budget, bad_answer_ok, bad_answer_drops_settle, big_answer_drops_settle, no_stop_loop, stop_reversed, cancel_after_stopmain, no_save, big_answer_continues) | - |
+
+The q comparison now includes the query itself, as it happened: the driver logs the answer `running_ids` actually
+returned, at the effect count of the call, and `X armed` when the budget's timer was still armed (a query before
+SETTLE). runningDelegationIds must follow SETTLE's timerClear with the ref's sessionId and budgetId, and the stops must
+carry that answer. G fixtures (mutant_halt.py): G1 answer order (2 ids, 0 ids); G2 malformed answer → status 2,
+G3 an answer too big for fx → 6, G3b an answer too big for the store room → 6, each with exactly SETTLE's timerClear,
+the query and nothing else, the session not halted and the record holding SETTLE's result (`keep_settled`); G4 a
+forced Grow: the first call returns -N with no query and `st`/fx unchanged, the retry queries once.
+
+Perf (`run_m10.py perf --rounds 7 --reps 50000`, interleaved with `hand_m10.rs`, ns; the driver names each stopped
+id as the hand lane does): halt D=10 315.6 vs 331.7 (0.95, overlap), D=50 680.2 vs 1119.3 (0.61), D=100 1027.3 vs
+2131.1 (0.48); putback 28.6-28.8 vs 72.7-76.4 (0.38-0.39). Allocations per rep: Pruv 4, hand 17 / 57 / 107.
+Details: L3_RESTRUCTURE_SPEC.md Appendix P24.
+
 ## M10b still needs
 - `bud_decide.pruv`: raise (limits / unlimited; unlimited clears an armed timer, then changed) and decide (extend:
   remove the halt section, save, changed, REFRESH with a possible re-halt, queueContinue / releaseHeld with the
   captured reason; end: CLOSE('user-end'), dropHeld, save, changed).
-- releaseHeld prefetched answer in the op + consumed marker (KD-M10-1), effect codes for queueContinue / releaseHeld
+- releaseHeld as a synchronous host query at its position (as halt's runningDelegationIds, P24), effect codes for queueContinue / releaseHeld
   / dropHeld, root codes for raise / decide, runner value / effect mapping for them.
-- hand_m10.rs and perf_ts.mjs, perf against them; then q on cases.jsonl should leave only hasCard (M11) as
+- hand_m10.rs covers halt (P24); raise / decide rows in it and perf_ts.mjs; then q on cases.jsonl should leave only hasCard (M11) as
   not-implemented.
 
 ## Requests to other owners

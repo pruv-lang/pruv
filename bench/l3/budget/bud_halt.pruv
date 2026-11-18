@@ -93,6 +93,7 @@ fn prefix_len(b: [i64], u: i64, l: i64) -> i64
 // canonical packed keys (bud_keys::slice_ok; data words words(len)), the others len data words. The frame must lie
 // inside st.
 pub fn rec_ok_in(st: [i64], off: i64, n: i64) -> bool
+  ensures result ==> (0 <= off && off <= 1099511627776)
 {
   if n < 30 || off < 0 || off > 1099511627776 || n > 1099511627776 { return false; }
   if off + n > len(st) { return false; }
@@ -153,9 +154,10 @@ fn put(inout o: [i64], at: i64, src: [i64], s: i64, n: i64) -> i64
 { return crate::bud_lifecycle::put_str(inout o, at, src, s, n); }
 
 // Copies src[s .. s + m) to o[at ..); returns at + m (m clamped into 0..2^30). With both ranges in bounds the loop
-// indexes directly (no per-word range test, so it lowers to a block copy); otherwise ent_u16::put_range (total).
+// indexes directly (no per-word range test, so it lowers to a block copy); otherwise ent_u16::put_range (total),
+// whose 32-bit position bound is not met only by a range that is out of bounds anyway (then nothing is copied).
 fn copy_in(inout o: [i64], at: i64, src: [i64], s: i64, m: i64) -> i64
-  requires 0 <= at && at <= 4294967296 && 0 <= s && s <= 4294967296
+  requires 0 <= at && at <= 1099511627776 && 0 <= s && s <= 1099511627776
   ensures len(o) == len(old(o)) && 0 <= result && result <= 1099511627776
 {
   let mut mm: i64 = m;
@@ -172,6 +174,7 @@ fn copy_in(inout o: [i64], at: i64, src: [i64], s: i64, m: i64) -> i64
     }
     return at + mm;
   }
+  if at > 4294967296 || s > 4294967296 { return c40(at + mm); }
   return crate::ent_u16::put_range(inout o, at, src, s, mm);
 }
 
@@ -198,7 +201,7 @@ fn str_pos(st: [i64], base: i64, k: i64) -> i64
 // string 2 (activeSince text) dropped unless keep_since, and string 5 = [halt prefix: reason, at = now, the id list
 // v[1 .. 1 + iw)] + the old rest without its old halt prefix. O(record + ids).
 fn halted(st: [i64], base: i64, am: i64, k: i64, since: i64, keep_since: bool, reason: i64, now: i64, v: Vec<i64>, iw: i64) -> [i64] ! alloc
-  requires 1 <= iw && iw + 1 == len(v) && iw <= 1099511627776 && 0 <= base && base <= 4294967296
+  requires 1 <= iw && iw + 1 == len(v) && iw <= 1099511627776 && 0 <= base && base <= 1099511627776
 {
   let p0: i64 = str_pos(st, base, 0);
   let p1: i64 = str_pos(st, base, 1);
@@ -237,8 +240,8 @@ fn halted(st: [i64], base: i64, am: i64, k: i64, since: i64, keep_since: bool, r
   crate::ent_u16::wr(inout o, at + 3, 2);
   crate::ent_u16::wr(inout o, at + 4, now);
   crate::ent_u16::wr(inout o, at + 5, 0);
-  let e: i64 = put_vec(inout o, c32(at + 6), v, w);
-  let f: i64 = copy_in(inout o, c32(e), st, c32(p5 + 1 + old_pre), tail);
+  let e: i64 = put_vec(inout o, c40(at + 6), v, w);
+  let f: i64 = copy_in(inout o, c40(e), st, c40(p5 + 1 + old_pre), tail);
   return o;
 }
 
@@ -313,7 +316,7 @@ fn answer_words(v: Vec<i64>) -> i64
 
 // Writes v[1 .. 1 + m) at o[at..); returns at + m.
 fn put_vec(inout o: [i64], at: i64, v: Vec<i64>, m: i64) -> i64
-  requires 0 <= at && at <= 4294967296 && 0 <= m && m + 1 <= len(v) && m <= 1099511627776
+  requires 0 <= at && at <= 1099511627776 && 0 <= m && m + 1 <= len(v) && m <= 1099511627776
   ensures len(o) == len(old(o)) && result == at + m
 {
   let mut k: i64 = 0;
@@ -327,6 +330,38 @@ fn put_vec(inout o: [i64], at: i64, v: Vec<i64>, m: i64) -> i64
   return at + m;
 }
 
+// A halt that ends with status 2 or 6 after SETTLE keeps SETTLE's result, as the other clock ops do (root run_op):
+// header words 8, 16, 17 of the record at entry se take activeMs and activeSince (kind, ms) from bv, and a record
+// whose activeSince was a text (k0 == 1) and no longer is drops string 2. The record is not halted. Returns 0, or
+// 2 when the frame is no longer valid or the rewrite cannot be stored (the room halt reserved before SETTLE covers
+// it: the rewrite is not longer than the record).
+fn keep_settled(inout st: [i64], se: i64, sk: [i64], ss: i64, sn: i64, k0: i64, bv: [i64]) -> i64 ! alloc
+{
+  let off: i64 = crate::bud_lifecycle::blob_at(st, se);
+  if !rec_ok_in(st, off, crate::bud_lifecycle::blob_n(st, se)) { return 2; }
+  crate::ent_u16::wr(inout st, off + 8, rd(bv, 4));
+  crate::ent_u16::wr(inout st, off + 16, rd(bv, 5));
+  crate::ent_u16::wr(inout st, off + 17, rd(bv, 6));
+  if k0 == 1 && rd(bv, 5) != 1 {
+    let b: [i64] = crate::bud_lifecycle::blob_copy(st, se);
+    let h: [i64] = crate::ent_u16::slice(b, 0, 24);
+    let p3: i64 = crate::bud_lifecycle::str_at(b, 3);
+    let l3: i64 = c32(rd(b, p3));
+    let nb: [i64] = crate::bud_lifecycle::rewrite(b, h, true, b, c40(p3 + 1), l3);
+    let w: i64 = crate::bud_lifecycle::store(inout st, sk, ss, sn, nb);
+    if w != 0 { return 2; }
+  }
+  return 0;
+}
+
+// Status s (2 or 6) after SETTLE: keep SETTLE's result (keep_settled), then s; 2 if that fails.
+fn fail_settled(inout st: [i64], se: i64, sk: [i64], ss: i64, sn: i64, k0: i64, bv: [i64], s: i64) -> i64 ! alloc
+{
+  let w: i64 = keep_settled(inout st, se, sk, ss, sn, k0, bv);
+  if w != 0 { return 2; }
+  return s;
+}
+
 // halt(ref, reason) (B:381-397). Keys (sk, bk) are packed. Room for the record without the id list is reserved before
 // SETTLE (Grow: nothing written); the id list's room is reserved after the query, which can only rehash in place.
 // Cost: current + SETTLE + O(record + nIds + id words) (one rec_end per id, one copy of the list), exactly nIds
@@ -335,12 +370,16 @@ pub fn halt(inout st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn
 {
   if reason < 0 || reason > 4 { return 2; }
   if c40(rd(fx, 0)) + 12 > len(fx) { return 3; }
+  if len(bv) < 7 { return 3; }
   let se: i64 = crate::bud_lifecycle::current_entry(st, sk, ss, sn, bk, bs, bn);
   if se < 0 { return 0; }
   let off: i64 = crate::bud_lifecycle::blob_at(st, se);
   if rd(st, off) != 0 { return 0; }
   let n: i64 = crate::bud_lifecycle::blob_n(st, se);
   if !rec_ok_in(st, off, n) { return 2; }
+  // the record copies (copy_in, bud_lifecycle copy_words) move at most 2^30 words per string; a larger record cannot
+  // be rewritten whole, so halt refuses it before any write (status 6, nothing written)
+  if n > 1073741824 { return 6; }
   let hw: i64 = halt_words(st, se);
   let g: i64 = crate::bud_lifecycle::reserve(inout st, hw);
   if g != 0 { return crate::bud_lifecycle::grow(g); }
@@ -350,17 +389,20 @@ pub fn halt(inout st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn
   let o1: i64 = crate::bud_lifecycle::blob_at(st, se);
   if crate::bud_lifecycle::blob_n(st, se) != n || !rec_ok_in(st, o1, n) { return 2; }
   crate::bud_lifecycle::view_in(st, o1, inout bv);
+  let k0: i64 = rd(bv, 5);
   let ce: i64 = crate::bud_clock::clock_of(st, st, c40(o1 + 25), c32(rd(st, o1 + 24)));
   let _a: i64 = crate::bud_clock::settle_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
   let v: Vec<i64> = running_ids(sk, ss, sn, bk, bs, bn, rd(fx, 0));
   let iw: i64 = answer_words(v);
-  if iw < 0 { return 2; }
+  if iw < 0 { return fail_settled(inout st, se, sk, ss, sn, k0, bv, 2); }
   let d: i64 = c32(vec_get::<i64>(v, 1));
-  if c40(rd(fx, 0)) + 8 + 2 * d > len(fx) { return 6; }
-  let g2: i64 = crate::bud_lifecycle::reserve(inout st, c40(n + 8 + iw));
-  if g2 != 0 { return 6; }
+  if c40(rd(fx, 0)) + 8 + 2 * d > len(fx) { return fail_settled(inout st, se, sk, ss, sn, k0, bv, 6); }
+  // reserve takes a 32-bit word count
+  if n + 8 + iw > 4294967296 { return fail_settled(inout st, se, sk, ss, sn, k0, bv, 6); }
+  let g2: i64 = crate::bud_lifecycle::reserve(inout st, n + 8 + iw);
+  if g2 != 0 { return fail_settled(inout st, se, sk, ss, sn, k0, bv, 6); }
   let o2: i64 = crate::bud_lifecycle::blob_at(st, se);
-  if crate::bud_lifecycle::blob_n(st, se) != n || o2 > 4294967296 || !rec_ok_in(st, o2, n) { return 2; }
+  if crate::bud_lifecycle::blob_n(st, se) != n || !rec_ok_in(st, o2, n) { return fail_settled(inout st, se, sk, ss, sn, k0, bv, 2); }
   let k: i64 = rd(bv, 5);
   let r: [i64] = halted(st, o2, rd(bv, 4), k, rd(bv, 6), k == 1, reason, now, v, iw);
   crate::ent_u16::wr(inout bv, 1, 1);

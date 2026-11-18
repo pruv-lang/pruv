@@ -59,6 +59,9 @@ struct World {
     by_bid: HashMap<Vec<i64>, u64>,
     log: Vec<String>,
     silent: bool,
+    // perf: the answer the host gives (wire form `n, keys`) and the id starts of the current call's answer
+    host_ids: Vec<i64>,
+    pos: Vec<usize>,
     audit: bool,
 }
 
@@ -106,6 +109,8 @@ impl World {
             by_bid: HashMap::new(),
             log: Vec::new(),
             silent: false,
+            host_ids: vec![0],
+            pos: Vec::new(),
             audit: false,
         }
     }
@@ -187,12 +192,16 @@ impl World {
         if !self.silent {
             for i in rbefore..rafter {
                 let q = bud_facts::running_query(i);
-                let a = self.rdi.get(i).cloned().unwrap_or_else(|| vec![0]);
+                // the answer the query actually returned, in the wire form `n, keys` (an answer without one: no ids)
+                let a = if q.answer.len() >= 2 { q.answer[1..].to_vec() } else { vec![0] };
                 let line = format!("E rdi s:{} b:{}", key_units_str(&q.sid), key_units_str(&q.bid));
                 rq.push((q.fxn.max(0) as usize, line, a));
             }
         }
-        let mut ids: Vec<i64> = vec![0];
+        // the answer the stops name: the logged one in q mode, the host's own copy in a silent (perf) run
+        let mut ids: Vec<i64> = if self.silent { std::mem::take(&mut self.host_ids) } else { vec![0] };
+        let mut pos = std::mem::take(&mut self.pos);
+        pos.clear();
         let mut nq = 0;
         if grew && r == 0 && self.fx[0] > 0 {
             GROWN_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -202,6 +211,10 @@ impl World {
         // must apply too. A Grow never carries effects (every reserve precedes the first write).
         if r < 0 {
             self.op = op;
+            if self.silent {
+                self.host_ids = ids;
+            }
+            self.pos = pos;
             for (_, line, _) in rq.drain(..) {
                 self.note(line);
             }
@@ -220,6 +233,14 @@ impl World {
             while nq < rq.len() && rq[nq].0 + 1 <= i {
                 let line = rq[nq].1.clone();
                 ids = rq[nq].2.clone();
+                pos.clear();
+                // the host performs fx[1..fxn] before it answers (timerClear included): a timer of this budget still
+                // armed when the query is answered means the query came before SETTLE's clear. The effects are replayed
+                // after the call up to the query's fxn, so this checks the host-visible order (fx[1..fxn) vs the query),
+                // not the order of Pruv's store writes inside the call, which the host cannot observe
+                if self.by_bid.contains_key(bid) {
+                    self.note("X armed".to_string());
+                }
                 self.note(line);
                 nq += 1;
             }
@@ -250,15 +271,24 @@ impl World {
                     self.by_bid.remove(bid);
                 }
                 33 => {
-                    // the k-th id of the last answer taken (`n, (len, words(len))*`), printed in units; the log is
-                    // the only consumer, so a silent (perf) run skips the walk and the formatting
-                    if !self.silent {
-                        let k = self.fx[i + 1].max(0) as usize;
+                    // the k-th id of the answer (`n, (len, words(len))*`): the id starts are found in one pass on the
+                    // first stop (O(id words) per call); q mode prints it in units, a silent (perf) run names it
+                    // (black_box) as the hand baseline does
+                    if pos.is_empty() {
+                        let n = ids[0].max(0) as usize;
                         let mut p = 1;
-                        for _ in 0..k {
+                        pos.push(p);
+                        for _ in 0..n {
                             p = rec_end(&ids, p);
+                            pos.push(p);
                         }
-                        let s = format!("E stopDel {}", key_units_str(&ids[p..rec_end(&ids, p)]));
+                    }
+                    let k = self.fx[i + 1].max(0) as usize;
+                    let id = &ids[pos[k]..pos[k + 1]];
+                    if self.silent {
+                        black_box(id);
+                    } else {
+                        let s = format!("E stopDel {}", key_units_str(id));
                         self.note(s);
                     }
                     i += 2;
@@ -285,10 +315,17 @@ impl World {
         }
         while nq < rq.len() {
             let line = rq[nq].1.clone();
+            if self.by_bid.contains_key(bid) {
+                self.note("X armed".to_string());
+            }
             self.note(line);
             nq += 1;
         }
         self.op = op;
+        if self.silent {
+            self.host_ids = ids;
+        }
+        self.pos = pos;
         if r != 0 {
             self.note(format!("X {}", r));
             return r;
@@ -527,6 +564,7 @@ fn run_perf(args: &[String]) {
     body.push(0);
     let mut w = World::new();
     w.silent = true;
+    w.host_ids = ids[1..].to_vec();
     w.put(&put);
     let mut go = |w: &mut World| {
         // the host builds its answer for the one query of the call (the hand baseline does the same)
