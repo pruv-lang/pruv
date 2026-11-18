@@ -151,4 +151,28 @@ mod tests {
         assert_eq!(a, "#[inline(always)]\npub fn f(x: i64) -> i64 {\n    x\n}\n");
         assert_eq!(b, "#[inline(always)]\npub(crate) fn f(x: i64) -> i64 {\n    x\n}\n");
     }
+
+    /// One `#[inline]` fn of `lines` body lines, called `sites` times from a plain fn; true when it gets always.
+    fn inline_case(lines: usize, sites: usize) -> bool {
+        let mut t = String::from("#[inline]\nfn f(x: i64) -> i64 {\n");
+        for i in 0..lines - 1 {
+            t.push_str(&format!("    let _ = x + {};\n", i));
+        }
+        t.push_str("    x\n}\nfn main() {\n");
+        for _ in 0..sites {
+            t.push_str("    f(0);\n");
+        }
+        t.push_str("}\n");
+        inline_policy(t).starts_with("#[inline(always)]\n")
+    }
+
+    /// Spec thresholds, not the JSON values, so a wrong pruvc/data/inline_policy.json is caught
+    /// (tests/check_generated.py has the same pairs for the Python compiler).
+    #[test]
+    fn inline_policy_thresholds() {
+        assert!(inline_case(8, 300), "INLINE_SMALL 8 accepts");
+        assert!(!inline_case(9, 300), "9 lines reject");
+        assert!(inline_case(1500, 2), "INLINE_BUDGET 1500 accepts");
+        assert!(!inline_case(1501, 2), "1501 rejects");
+    }
 }
