@@ -3804,11 +3804,14 @@ impl<'a> Gen<'a> {
             None => return Err("'NoneType' object is not subscriptable".to_string()),
         };
         // P19c: no catch_unwind frame on the happy path. On an unwind out of the foreign call the guard's Drop
-        // prints the Pruv line and the unwind continues unchanged (exit 101 from main; PruvStore stays
-        // poisoned; the C adapter guard still catches it). Under panic=abort nothing changes.
+        // prints the Pruv line and the unwind continues unchanged (Rust backend: exit 101 from main, PruvStore
+        // stays poisoned; LLVM G6: the shim's pruv_g6_guard exits 101). On unix the line goes through a fresh
+        // /dev/stderr handle, not std's stderr lock, so another thread holding that lock cannot block the unwind
+        // (safe code only: --no-verify output has no `unsafe`); if the open fails it falls back to stderr().
+        // Under panic=abort nothing changes.
         body.push("struct pruv_ForeignGuard;".to_string());
         body.push(format!(
-            "impl ::std::ops::Drop for pruv_ForeignGuard {{ #[cold] fn drop(&mut self) {{ let _ = ::std::io::Write::write_all(&mut ::std::io::stderr(), {}.as_bytes()); }} }}",
+            "impl ::std::ops::Drop for pruv_ForeignGuard {{ #[cold] fn drop(&mut self) {{ let m: &str = {}; #[cfg(unix)] {{ if let Ok(mut f) = ::std::fs::OpenOptions::new().append(true).open(\"/dev/stderr\") {{ let _ = ::std::io::Write::write_all(&mut f, m.as_bytes()); return; }} }} let _ = ::std::io::Write::write_all(&mut ::std::io::stderr(), m.as_bytes()); }} }}",
             rstr(&format!("pruv: foreign panic: {}\n", disp))
         ));
         body.push("let pruv_fg = pruv_ForeignGuard;".to_string());

@@ -71,7 +71,7 @@ fn utf8_lossy(data: &[u8], from: i64) -> ::std::string::String {
     let mut pruv_budget: i64 = 1_073_741_824;
     if !(((0i128 <= (from as i128)) && ((from as i128) <= (data.len() as i128)))) { pruv_g6_req("utf8_lossy", "((0 <= from) && (from <= len(data)))"); }
     struct pruv_ForeignGuard;
-    impl ::std::ops::Drop for pruv_ForeignGuard { #[cold] fn drop(&mut self) { let _ = ::std::io::Write::write_all(&mut ::std::io::stderr(), "pruv: foreign panic: utf8_lossy\u{a}".as_bytes()); } }
+    impl ::std::ops::Drop for pruv_ForeignGuard { #[cold] fn drop(&mut self) { let m: &str = "pruv: foreign panic: utf8_lossy\u{a}"; #[cfg(unix)] { if let Ok(mut f) = ::std::fs::OpenOptions::new().append(true).open("/dev/stderr") { let _ = ::std::io::Write::write_all(&mut f, m.as_bytes()); return; } } let _ = ::std::io::Write::write_all(&mut ::std::io::stderr(), m.as_bytes()); } }
     let pruv_fg = pruv_ForeignGuard;
     let result: ::std::string::String = ::pruv_decode::utf8_lossy(data, from);
     ::std::mem::forget(pruv_fg);
@@ -93,7 +93,7 @@ fn utf16(data: &[u8], from: i64, big: bool) -> ::std::string::String {
     let mut pruv_budget: i64 = 1_073_741_824;
     if !(((0i128 <= (from as i128)) && ((from as i128) <= (data.len() as i128)))) { pruv_g6_req("utf16", "((0 <= from) && (from <= len(data)))"); }
     struct pruv_ForeignGuard;
-    impl ::std::ops::Drop for pruv_ForeignGuard { #[cold] fn drop(&mut self) { let _ = ::std::io::Write::write_all(&mut ::std::io::stderr(), "pruv: foreign panic: utf16\u{a}".as_bytes()); } }
+    impl ::std::ops::Drop for pruv_ForeignGuard { #[cold] fn drop(&mut self) { let m: &str = "pruv: foreign panic: utf16\u{a}"; #[cfg(unix)] { if let Ok(mut f) = ::std::fs::OpenOptions::new().append(true).open("/dev/stderr") { let _ = ::std::io::Write::write_all(&mut f, m.as_bytes()); return; } } let _ = ::std::io::Write::write_all(&mut ::std::io::stderr(), m.as_bytes()); } }
     let pruv_fg = pruv_ForeignGuard;
     let result: ::std::string::String = ::pruv_decode::utf16(data, from, big);
     ::std::mem::forget(pruv_fg);
@@ -105,7 +105,7 @@ fn utf16(data: &[u8], from: i64, big: bool) -> ::std::string::String {
 #[inline(always)]
 fn utf8_copy(data: &[u8]) -> ::std::string::String {
     struct pruv_ForeignGuard;
-    impl ::std::ops::Drop for pruv_ForeignGuard { #[cold] fn drop(&mut self) { let _ = ::std::io::Write::write_all(&mut ::std::io::stderr(), "pruv: foreign panic: utf8_copy\u{a}".as_bytes()); } }
+    impl ::std::ops::Drop for pruv_ForeignGuard { #[cold] fn drop(&mut self) { let m: &str = "pruv: foreign panic: utf8_copy\u{a}"; #[cfg(unix)] { if let Ok(mut f) = ::std::fs::OpenOptions::new().append(true).open("/dev/stderr") { let _ = ::std::io::Write::write_all(&mut f, m.as_bytes()); return; } } let _ = ::std::io::Write::write_all(&mut ::std::io::stderr(), m.as_bytes()); } }
     let pruv_fg = pruv_ForeignGuard;
     let result: ::std::string::String = ::pruv_decode::utf8_copy(data);
     ::std::mem::forget(pruv_fg);
@@ -117,7 +117,7 @@ fn utf8_copy(data: &[u8]) -> ::std::string::String {
 #[inline(always)]
 fn euc_kr(data: &[u8]) -> ::std::string::String {
     struct pruv_ForeignGuard;
-    impl ::std::ops::Drop for pruv_ForeignGuard { #[cold] fn drop(&mut self) { let _ = ::std::io::Write::write_all(&mut ::std::io::stderr(), "pruv: foreign panic: euc_kr\u{a}".as_bytes()); } }
+    impl ::std::ops::Drop for pruv_ForeignGuard { #[cold] fn drop(&mut self) { let m: &str = "pruv: foreign panic: euc_kr\u{a}"; #[cfg(unix)] { if let Ok(mut f) = ::std::fs::OpenOptions::new().append(true).open("/dev/stderr") { let _ = ::std::io::Write::write_all(&mut f, m.as_bytes()); return; } } let _ = ::std::io::Write::write_all(&mut ::std::io::stderr(), m.as_bytes()); } }
     let pruv_fg = pruv_ForeignGuard;
     let result: ::std::string::String = ::pruv_decode::euc_kr(data);
     ::std::mem::forget(pruv_fg);

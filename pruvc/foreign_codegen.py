@@ -625,11 +625,17 @@ class ForeignGen:
             args = ", ".join(p.name for p in f.params)
             rt = rty(f.ret)
             # P19c: no catch_unwind frame on the happy path. On an unwind out of the foreign call the guard's Drop
-            # prints the Pruv line and the unwind continues unchanged (exit 101 from main; PruvStore stays
-            # poisoned; the C adapter guard still catches it). Under panic=abort nothing changes.
+            # prints the Pruv line and the unwind continues unchanged (Rust backend: exit 101 from main, PruvStore
+            # stays poisoned; LLVM G6: the shim's pruv_g6_guard exits 101). On unix the line goes through a fresh
+            # /dev/stderr handle, not std's stderr lock, so another thread holding that lock cannot block the unwind
+            # (safe code only: --no-verify output has no `unsafe`); if the open fails it falls back to stderr().
+            # Under panic=abort nothing changes.
             body.append("struct pruv_ForeignGuard;")
             body.append("impl ::std::ops::Drop for pruv_ForeignGuard { #[cold] fn drop(&mut self) { "
-                        "let _ = ::std::io::Write::write_all(&mut ::std::io::stderr(), %s.as_bytes()); } }"
+                        "let m: &str = %s; "
+                        "#[cfg(unix)] { if let Ok(mut f) = ::std::fs::OpenOptions::new().append(true).open(\"/dev/stderr\") { "
+                        "let _ = ::std::io::Write::write_all(&mut f, m.as_bytes()); return; } } "
+                        "let _ = ::std::io::Write::write_all(&mut ::std::io::stderr(), m.as_bytes()); } }"
                         % rstr("pruv: foreign panic: " + disp + "\n"))
             body.append("let pruv_fg = pruv_ForeignGuard;")
             body.append("let result: %s = %s(%s);" % (rt, f.foreign["path"], args))
