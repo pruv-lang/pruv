@@ -66,6 +66,7 @@ def sym_prefix(pkg):
 
 SIGNED_MIN128 = -170141183460469231731687303715884105728
 BIT_LLVM = {n: llvm for n, (_rust, llvm) in codegen.BIT_BUILTINS.items()}   # P2: bit builtin -> LLVM instruction (from check.BIT_BUILTINS)
+EQR_LOOP_MAX = 4   # P17a: a dynamic-length eq_range below this many elements uses the inline loop, else memcmp
 OPT = "{ i1, i64 }"
 COPT = "{ i1, i128 }"       # Option/Result stored inside a contract aggregate (%pruv_c_*)
 ARR = "{ ptr, i64, i64 }"   # P3: owned buffer inside the module: { data, len, cap }; cap = allocated element count
@@ -718,6 +719,7 @@ class Mod:
         s.stack = None          # P3-S1: StackPlan (set by gen_llvm)
         s.fill = False          # P3-S1: some stack array calls @pruv_fill_v2
         s.tail = set()          # P3: tail-filled alloc helpers used ("i64" -> pruv_alloc_tail, "u8" -> _u8)
+        s.memcmp = False        # P17a: some eq_range lowers to a memcmp call (declare i32 @memcmp)
         s.resize = set()        # P05G: resize helpers used ("i64" -> pruv_resize, "u8" -> pruv_resize_u8, "narrow")
         s.range_nodes = {}      # P3 batch 2: `iW a, iW b` body -> !N number (first-use order)
         s.explicit = False      # G4 A3: explicit visibility mode (set by gen_llvm); Pruv calls use the Rust-backend routing
@@ -2561,9 +2563,90 @@ class FnGen:
                 ok = s.op("icmp ult i64 %s, 64" % y.a)
                 s.guard(ok, s.panic1("pruv_panic_arith", "shift count outside 0..64"), False)
             return V("i64", s.op("%s i64 %s, %s" % (BIT_LLVM[n], x.a, y.a)))
-        if n == "eq_range":  # L3-10: eq_range is rejected by the LLVM backend (no lowering)
-            raise PruvError("codegen", e.line, e.col, "unsupported_type", "eq_range is not supported by the llvm codegen layer yet",
-                            "compare the elements in a loop, or use the Rust backend")
+        if n == "eq_range":  # P17a: a[i..i+n] == b[j..j+n]; source order a, i, b, j, n
+            av = s.ev(a[0])
+            iv = s.ev(a[1])
+            bv = s.ev(a[2])
+            jv = s.ev(a[3])
+            cnt = s.ev(a[4])
+            if av.k != "arr" or bv.k != "arr":
+                raise PruvError("codegen", e.line, e.col, "unsupported_type",
+                                "eq_range is not supported by the llvm codegen layer for this operand yet",
+                                "compare the elements in a loop, or use the Rust backend")
+            if not s.verified:
+                # one combined check: i < 0 || j < 0 || n < 0 || i > len(a) - n || j > len(b) - n
+                ta = s.op("sub i64 %s, %s" % (av.b, cnt.a))
+                tb = s.op("sub i64 %s, %s" % (bv.b, cnt.a))
+                c1 = s.op("icmp slt i64 %s, 0" % iv.a)
+                c2 = s.op("icmp slt i64 %s, 0" % jv.a)
+                c3 = s.op("icmp slt i64 %s, 0" % cnt.a)
+                c4 = s.op("icmp sgt i64 %s, %s" % (iv.a, ta))
+                c5 = s.op("icmp sgt i64 %s, %s" % (jv.a, tb))
+                o = s.op("or i1 %s, %s" % (c1, c2))
+                o = s.op("or i1 %s, %s" % (o, c3))
+                o = s.op("or i1 %s, %s" % (o, c4))
+                o = s.op("or i1 %s, %s" % (o, c5))
+                s.guard(o, lambda: s.ins("call void @pruv_panic_oob(i64 %s, i64 %s)" % (iv.a, av.b)), True)
+            tya, tyb = storage_ty(av), storage_ty(bv)
+            if not ((is_bytes(av) and is_bytes(bv)) or (tya == "i64" and tyb == "i64")):
+                # the storage plan pins eq_range operands to i64 or bytes; any other pair is not lowered
+                raise PruvError("codegen", e.line, e.col, "unsupported_type",
+                                "eq_range is not supported by the llvm codegen layer for this array layout yet",
+                                "compare the elements in a loop, or use the Rust backend")
+            if isinstance(a[4], IntLit) and cnt.a == "0":
+                # an empty range is equal; alloc(0) may give a null data pointer, and memcmp(null, null, 0) is UB
+                return V("i1", "true")
+            pa = s.op("getelementptr inbounds %s, ptr %s, i64 %s" % (tya, av.a, iv.a))
+            pb = s.op("getelementptr inbounds %s, ptr %s, i64 %s" % (tyb, bv.a, jv.a))
+            sz = 1 if tya == "i8" else 8
+
+            def eqr_mem():      # one memcmp of n * sz bytes
+                s.m.memcmp = True
+                nb = cnt.a if sz == 1 else s.op("mul nuw nsw i64 %s, %d" % (cnt.a, sz))
+                rc = s.op("call i32 @memcmp(ptr %s, ptr %s, i64 %s)" % (pa, pb, nb))
+                return s.op("icmp eq i32 %s, 0" % rc)
+
+            def eqr_loop():     # element loop with early exit; 0 <= n is known
+                pre = s.cur
+                head, body, end = s.label("eqr.head"), s.label("eqr.body"), s.label("eqr.end")
+                k, k1 = s.tmp(), s.tmp()
+                s.br(head)
+                s.place(head)
+                s.ins("%s = phi i64 [ 0, %%%s ], [ %s, %%%s ]" % (k, pre, k1, body))
+                d = s.op("icmp eq i64 %s, %s" % (k, cnt.a))
+                s.condbr(d, end, body)
+                s.place(body)
+                ga = s.op("getelementptr inbounds %s, ptr %s, i64 %s" % (tya, pa, k))
+                gb = s.op("getelementptr inbounds %s, ptr %s, i64 %s" % (tya, pb, k))
+                x = s.op("load %s, ptr %s" % (tya, ga))
+                y = s.op("load %s, ptr %s" % (tya, gb))
+                ne = s.op("icmp ne %s %s, %s" % (tya, x, y))
+                s.ins("%s = add nuw nsw i64 %s, 1" % (k1, k))
+                s.condbr(ne, end, head)
+                s.place(end)
+                return s.op("phi i1 [ true, %%%s ], [ false, %%%s ]" % (head, body))
+
+            # Measured against hand Rust slice == (work/p16/perf, docs/L3_RESTRUCTURE_SPEC.md Appendix P16/P17a):
+            # a literal n is a constant-size memcmp, which LLVM expands into wide loads; a dynamic n below
+            # EQR_LOOP_MAX elements takes the inline loop, otherwise memcmp.
+            if isinstance(a[4], IntLit):
+                r = eqr_mem()
+            else:
+                # the memcmp block is the taken successor: with the loop first, the in-loop memcmp
+                # path measured 1.2x hand Rust (block layout around the call)
+                big = s.op("icmp uge i64 %s, %d" % (cnt.a, EQR_LOOP_MAX))
+                lmem, lsmall, ljoin = s.label("eqr.mem"), s.label("eqr.small"), s.label("eqr.join")
+                s.condbr(big, lmem, lsmall)
+                s.place(lmem)
+                rm = eqr_mem()
+                s.br(ljoin)
+                s.place(lsmall)
+                rl = eqr_loop()
+                lend = s.cur
+                s.br(ljoin)
+                s.place(ljoin)
+                r = s.op("phi i1 [ %s, %%%s ], [ %s, %%%s ]" % (rm, lmem, rl, lend))
+            return V("i1", r)
         if n == "load_be":   # P2 batch 4: array, then index
             arr = s.ev(a[0])
             i = s.ev(a[1])
@@ -5401,6 +5484,7 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
         DECLS_RESIZE if "i64" in m.resize else "") + (
         DECLS_RESIZE_U8 if "u8" in m.resize else "") + (
         DECLS_RESIZE_NARROW if "narrow" in m.resize else "") + (
+        "declare i32 @memcmp(ptr nocapture, ptr nocapture, i64) nounwind readonly\n" if m.memcmp else "") + (
         g6decls + "\n" + "\n".join(chunks))  # G2 A5/B2, G3, G6 A3, G9 A3; P2 batch 4: llvm.bswap when used
     if m.par_trampolines:
         ir = "%pruv_g7_job = type { ptr, ptr }\n" + "\n".join(m.par_types) + "\n" + ir

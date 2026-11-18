@@ -1853,14 +1853,19 @@ class FnVerifier:
             s.spend(st, g, 1 + m)
             k = z3.Int("resize_k")
             return mk_arr(z3.Lambda([k], z3.If(k < av.n, av.a[k], v)), m, "resize", av.elem)
-        if n == "eq_range":     # L3-10: eq_range: five bounds obligations in order, then a fresh unconstrained bool
+        if n == "eq_range":     # P16: five bounds obligations in order, then a fresh bool r with r == forall k in 0..n: a[i+k] == b[j+k] assumed on the call's path (the arrays as they are at the call)
             av, i, bv, j, cnt = args
             s.prove(st, g, i >= 0, e, "index_oob", "eq_range start 0 <= i for %s" % av.name)
             s.prove(st, g, j >= 0, e, "index_oob", "eq_range start 0 <= j for %s" % bv.name)
             s.prove(st, g, cnt >= 0, e, "index_oob", "eq_range length 0 <= n")
             s.prove(st, g, i + cnt <= av.n, e, "index_oob", "eq_range i + n <= len(%s)" % av.name)
             s.prove(st, g, j + cnt <= bv.n, e, "index_oob", "eq_range j + n <= len(%s)" % bv.name)
-            return s.fresh("eq_range", BOOL)
+            r = s.fresh("eq_range", BOOL)
+            s.k += 1
+            k = z3.Int("eq_range!q%d" % s.k)
+            s.assume(st, g, r == z3.ForAll([k], z3.Implies(z3.And(k >= 0, k < cnt),
+                                                         z3.Select(av.a, i + k) == z3.Select(bv.a, j + k))))
+            return r
         if n == "load_be":      # P2 batch 4: big-endian word of the n bytes a[i..i+n]
             av, i = args[0], args[1]
             nb = e.args[2].value

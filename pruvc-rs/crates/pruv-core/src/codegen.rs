@@ -4086,23 +4086,25 @@ impl<'a> Gen<'a> {
                 }
                 if n == "eq_range" {
                     // L3-10: eq_range: slice equality of a[i..i+n] and b[j..j+n]; unchecked slices when verified
+                    // the five arguments are bound once each, in source order a, i, b, j, n (SPEC.md eq_range)
                     let a0 = self.arr_ref(arg(a, 0)?)?;
                     let i0 = self.e(arg(a, 1)?)?;
                     let b0 = self.arr_ref(arg(a, 2)?)?;
                     let j0 = self.e(arg(a, 3)?)?;
                     let n0 = self.e(arg(a, 4)?)?;
-                    // a leading `&` would bind looser than `.len()`, `[..]` and `.get_unchecked`: parenthesize it
-                    let a0 = if a0.starts_with('&') { format!("({})", a0) } else { a0 };
-                    let b0 = if b0.starts_with('&') { format!("({})", b0) } else { b0 };
+                    let head = format!(
+                        "{{ let pruv_ea = {}; let pruv_i: i64 = {}; let pruv_eb = {}; let pruv_j: i64 = {}; let pruv_n: i64 = {}; ",
+                        a0, i0, b0, j0, n0
+                    );
                     if self.verified {
                         return Ok(format!(
-                            "{{ let pruv_i: i64 = {}; let pruv_j: i64 = {}; let pruv_n: i64 = {}; (unsafe {{ {}.get_unchecked((pruv_i as usize)..((pruv_i + pruv_n) as usize)) }}) == (unsafe {{ {}.get_unchecked((pruv_j as usize)..((pruv_j + pruv_n) as usize)) }}) }}",
-                            i0, j0, n0, a0, b0
+                            "{}(unsafe {{ pruv_ea.get_unchecked((pruv_i as usize)..((pruv_i + pruv_n) as usize)) }}) == (unsafe {{ pruv_eb.get_unchecked((pruv_j as usize)..((pruv_j + pruv_n) as usize)) }}) }}",
+                            head
                         ));
                     }
                     return Ok(format!(
-                        "{{ let pruv_i: i64 = {}; let pruv_j: i64 = {}; let pruv_n: i64 = {}; if pruv_i < 0 || pruv_j < 0 || pruv_n < 0 || pruv_i > ({}.len() as i64) - pruv_n || pruv_j > ({}.len() as i64) - pruv_n {{ pruv_oob(pruv_i, {}.len()) }} {}[(pruv_i as usize)..((pruv_i + pruv_n) as usize)] == {}[(pruv_j as usize)..((pruv_j + pruv_n) as usize)] }}",
-                        i0, j0, n0, a0, b0, a0, a0, b0
+                        "{}if pruv_i < 0 || pruv_j < 0 || pruv_n < 0 || pruv_i > (pruv_ea.len() as i64) - pruv_n || pruv_j > (pruv_eb.len() as i64) - pruv_n {{ pruv_oob(pruv_i, pruv_ea.len()) }} pruv_ea[(pruv_i as usize)..((pruv_i + pruv_n) as usize)] == pruv_eb[(pruv_j as usize)..((pruv_j + pruv_n) as usize)] }}",
+                        head
                     ));
                 }
                 if n == "load_be" {
@@ -5027,13 +5029,13 @@ mod tests {
         crate::check::check(&mut p).expect("check");
         let v = gen_rust(&p, true, false, 1 << 30).unwrap();
         assert!(
-            v.contains("{ let pruv_i: i64 = i; let pruv_j: i64 = j; let pruv_n: i64 = n; (unsafe { a.get_unchecked((pruv_i as usize)..((pruv_i + pruv_n) as usize)) }) == (unsafe { b.get_unchecked((pruv_j as usize)..((pruv_j + pruv_n) as usize)) }) }"),
+            v.contains("{ let pruv_ea = a; let pruv_i: i64 = i; let pruv_eb = b; let pruv_j: i64 = j; let pruv_n: i64 = n; (unsafe { pruv_ea.get_unchecked((pruv_i as usize)..((pruv_i + pruv_n) as usize)) }) == (unsafe { pruv_eb.get_unchecked((pruv_j as usize)..((pruv_j + pruv_n) as usize)) }) }"),
             "{}",
             v
         );
         let s = gen_rust(&p, false, false, 1 << 30).unwrap();
         assert!(
-            s.contains("{ let pruv_i: i64 = i; let pruv_j: i64 = j; let pruv_n: i64 = n; if pruv_i < 0 || pruv_j < 0 || pruv_n < 0 || pruv_i > (a.len() as i64) - pruv_n || pruv_j > (b.len() as i64) - pruv_n { pruv_oob(pruv_i, a.len()) } a[(pruv_i as usize)..((pruv_i + pruv_n) as usize)] == b[(pruv_j as usize)..((pruv_j + pruv_n) as usize)] }"),
+            s.contains("{ let pruv_ea = a; let pruv_i: i64 = i; let pruv_eb = b; let pruv_j: i64 = j; let pruv_n: i64 = n; if pruv_i < 0 || pruv_j < 0 || pruv_n < 0 || pruv_i > (pruv_ea.len() as i64) - pruv_n || pruv_j > (pruv_eb.len() as i64) - pruv_n { pruv_oob(pruv_i, pruv_ea.len()) } pruv_ea[(pruv_i as usize)..((pruv_i + pruv_n) as usize)] == pruv_eb[(pruv_j as usize)..((pruv_j + pruv_n) as usize)] }"),
             "{}",
             s
         );
