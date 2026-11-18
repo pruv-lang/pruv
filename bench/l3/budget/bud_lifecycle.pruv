@@ -545,6 +545,9 @@ pub fn attach(inout st: [i64], sk: [i64], ss: i64, sn: i64, origin: i64, size: i
   if s >= 0 && n < 30 { return 2; }
   if s == 0 || s == 1 {
     let il: i64 = c32(st[off + 24]);
+    // The id must lie inside the record (P19 audit R2): a declared length past the record would copy the next
+    // record's words. Never for an admitted store.
+    if crate::bud_keys::words(il) > n - 25 { return 2; }
     if !out_ok(out, 2 + crate::bud_keys::words(il)) { return 3; }
     crate::ent_u16::wr(inout out, 0, 3);
     let e: i64 = put_key(inout out, 1, st, off + 25, il);

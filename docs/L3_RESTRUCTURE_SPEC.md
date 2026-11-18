@@ -2706,3 +2706,175 @@ fixed in the same commit by the `found_at` order (P18.1, P18.3). The audit budge
   hand stays with P13d/P13e.
 - `attach` (1.10-1.14) and `closereopen`'s `maybeClose` share and hand `is_ok()` are P19's rows.
 - LLVM cells pending P17.
+
+## Appendix P19 (row B/bud_lifecycle.pruv: OPEN/attach/replace/CLOSE/maybeClose, synchronous isQuiet)
+
+Commits ff9694a (maybeClose host fact), 1b5dc5f (attach/replace proven indexing), 71b762c (M7/M10 harness), the
+audit-fix commit after them (attach id span, R2) and this appendix; base 86b62db. Changed files:
+`bench/l3/budget/bud_lifecycle.pruv`, `bench/l3/budget/m7_test/{bud_facts.rs,driver_m7.rs,hand_m7_u16.rs,run_m7.py,
+diff_hand_m7.py}`, `bench/l3/budget/m10_test/{driver_m10.rs,root_m10.pruv,run_m10.py}`. No compiler file, `SPEC.md`,
+`tests/run_all_rows*`, `bud_tools.pruv`, `bud_keys.pruv` or `bench/l3/lib` change. Raw logs: `work/p19/` (not
+committed).
+
+### P19.1 Change
+
+- `maybeClose` consults `isQuiet(session)` as a synchronous host fact (P10H) through
+  `trusted rust fn is_quiet(k: [i64], ks: i64, kn: i64) -> i64 ! io ensures true = "::bud_facts::is_quiet"`. The old
+  pre-answered `op[2]` word is gone. Order (TS `reference/backend-request-budget.ts:399-407`): absent -> status 2;
+  not open -> false; `clock_in` runs > 0 -> false; then, on the rewrite path only, `blob_copy` + `reserve` (Grow
+  returns before any query, so a retried call queries once); then exactly one query. Answer 0 -> false, 1 -> CLOSE
+  (in place or rewrite), anything else -> status 2 with `out`, `bv`, `fx` unwritten.
+- `attach` and `replace` read the entry by `bud_store::eb` with one span check and then proven direct indexing of
+  the state and id-length words (as P18's `found_at`); a span outside `st` (never for an admitted store) is
+  invalid for `attach` and falls back to `attach` for `replace`.
+- `attach` (audit R2): the stored id must lie inside the record, `words(il) <= n - 25`, else status 2. Before, a
+  declared id length past the record copied the next record's words into `out` (pre-existing, not P19's; hand16
+  rejects the same input).
+- `m7_test/bud_facts.rs` (new rlib): thread-local answer stream, default, call counter; `driver_m7`/`driver_m10`
+  log `E quiet <answer>` per call, hand16 queries at the same point; the typed perf lanes consume the whole result on
+  both sides (hand `black_box` of `Result<Res>`, Pruv `black_box((status, out[0]))`).
+
+Mutation check (early query must fail): `is_quiet` moved to right after the `se < 0` test, its answer fed to `q`.
+M7 Q1 fail 25 (exact 100), M7 life fail 32 (exact 268), errors `effects [('isQuiet', 0)] != []`
+(`work/p19/mut_q.log`, `mut_life.log`); source restored (`git diff` clean).
+
+### P19.2 Gates (Rust and Python compilers, Rust backend; all rc 0)
+
+`work/p19/gates2.sh` (exit codes propagated, `FAIL=0`), after the R2 fix, logs `work/p19/g2/`:
+
+| gate | rs | py |
+|---|---|---|
+| M7 Q1 (300) | exact 113, not-implemented 187, fail 0; maybeClose 79 compared | same |
+| M7 life (300) | exact 300, fail 0; maybeClose 108 | same |
+| M7 diff_hand (`q --hand16` + controls) | 0 mismatches; hand16 113/187/0 | - |
+| M10 Q (300) | exact 78, not-implemented 222, fail 0; maybeClose 194, 59 halts | same |
+| M10 halt (300) | exact 300, fail 0, 97 halts | same |
+| m34 admit | 26/26 | - |
+| m3 | 300/300 | - |
+| lanes (`m4llvmnv`) | 300/300, 1922/1922, import admission 300/300 | - |
+| perf rchk | 12 cells, 0 mismatches (every perf run) | - |
+
+LLVM-backend cells pending P17 (§6.1), not run. The R2 path has no fixture yet (P19.7).
+
+### P19.3 Time (Rust backend, Pruv typed / hand16 typed, floor 1.0x)
+
+`run_m7.py perf --rounds 15 --profile SM --no-instr`, worktree pruvc (built from the same `pruvc-rs` source as
+main, `git diff HEAD main -- pruvc-rs pruvc` empty). Final run after R2 `work/p19/perf15_final.log` (load 4.0 ->
+5.4); earlier runs `perf15_1.log` (load 16.7 -> 10.1), `perf15_2.log` (10.1 -> 8.5).
+
+| item | S | Pruv typed ns | hand16 ns | final | run 1 | run 2 | P18 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| attach | 100 | 13.4 | 12.0 | **1.12** | 1.12 | 1.16 | 1.10 |
+| attach | 500 | 13.2 | 11.7 | **1.13** | 1.17 | 1.17 | 1.10-1.14 |
+| closereopen (maybeClose + reopen) | 100 | 15.8 | 13.9 | **1.14** | 1.09 | 1.12 | 1.04-1.05 |
+| closereopen | 500 | 15.8 | 13.7 | **1.15** | 1.13 | 1.12 | 1.06-1.08 |
+| replace | 100 | 94.8 | 128 | **0.74** | 0.77 | 0.74 | 0.77-0.79 |
+| replace | 500 | 94.1 | 125 | **0.75** | 0.74 | 0.77 | 0.74-0.79 |
+| current | 100 / 500 | 12.3 / 12.6 | | 0.97 / 1.00 | 0.96 | 0.97 | 0.99-1.03 |
+| ishalted | 100 / 500 | 12.4 / 12.2 | | 0.95 / 0.98 | 0.98 | 0.97 | 1.02-1.12 |
+| reopenmiss | 100 / 500 | 14.2 / 13.7 | | 1.08 / 1.09 | 1.07 | 1.10 | 1.04-1.06 |
+
+Distributions do not overlap for `attach`, `closereopen` and `reopenmiss` (every run above 1.07), so these are
+**above the floor, open**. `replace` is below hand. CLOSE is not measured standalone: `closereopen` is one
+maybeClose(CLOSE in place) + one reopen per call (audit R6); its excess over P18 (+1.6-1.9 ns per pair, hand
++0.4) is attributed to the host call below, not proven per op.
+
+### P19.4 Hand vs generated Rust (open gaps, compiler side)
+
+maybeClose, per call, `bench/l3/budget/work/m7/{gen.rs,driver_m7}` vs `hand_m7_u16.rs:641-660`:
+
+| step | hand16 | generated | cost |
+|---|---|---|---|
+| lookup | `HashMap::get_mut(sid)` | `session_of` -> `find_w` (a real call) | P18.4 shape |
+| state / clock | `b.state`, `clocks.is_empty()` | `st[off]`, `bud_map::count(st, 1) == 0` | equal |
+| host fact | `bud_facts::is_quiet(&[],0,0)` inlined, `answer` inlined (0 `bl`) | `pruv_m_..._is_quiet` = `catch_unwind(AssertUnwindSafe(\|\| ::bud_facts::is_quiet(k, ks, kn)))`; `LocalKey::with` for `answer` is a `bl`, plus two TLV `blr` | wrapper + non-inlined TLS closure |
+| result | `Ok(Res::Bool(..))` in registers | `wr out[0]`; status return | P18b |
+| frame | inlined into dispatch | separate `#[inline]` body, 12 callee-saved registers, 0x130-0x140-byte frame (rewrite path in the same body) | P18.4 / T5 |
+
+attach: hand returns `Res::Ref(&b.id)` (a borrow); Pruv copies the id words into `out` (`put_key`), and the OPEN
+path (blob_copy, reserve, open_in) shares the body and frame. Experiment: one thread-local block in `bud_facts.rs`
+(one TLS access, `answer` `#[inline(always)]`) gave closereopen 1.05/1.15, attach 1.05/1.16 (load 8-12,
+`perf15_facts1.log`); not a fix, reverted. No source-level change removes the wrapper or the frame: source has no
+cold/no-inline control and the foreign wrapper is emitted by the compiler. Queued as rows (P19.7).
+
+### P19.5 Peak RSS and allocations
+
+`driver_m7 boundary S 20000 ITEM A` and `hand_m7_u16 perf S 20000 ITEM typed`, 7 interleaved rounds,
+`/usr/bin/time -l`, median KiB [min-max] (`work/p19/rss_raw.log`):
+
+| item | S | Pruv | hand16 | ratio | Pruv allocs/call |
+|---|---:|---:|---:|---:|---:|
+| attach | 100 | 3184 [3152-3216] | 2272 [2272-2336] | 1.40 | 0.000 |
+| attach | 500 | 7088 [7072-7120] | 3776 [3776-4016] | 1.88 | 0.000 |
+| closereopen | 100 | 3792 [3760-4272] | 2288 [2272-2304] | 1.66 | 0.000 |
+| closereopen | 500 | 9376 [9344-12304] | 3792 [3776-3808] | 2.47 | 0.000 |
+| replace | 100 | 3248 [3232-3264] | 2320 [2288-2352] | 1.40 | 1.000 |
+| replace | 500 | 7136 [7104-8176] | 3824 [3808-3856] | 1.87 | 1.000 |
+
+Same as P18.5 within a page (closereopen 3824/9376 at P18): P19 adds no RSS. Above hand on every cell: open with
+P13d/P13e. hand16 has no counting allocator, so its allocation count is **not measured**; the 1.000 of Pruv
+`replace` is one `alloc` per call (`store`'s `t` or `blob_copy`), not compared.
+
+### P19.6 Proof time (`/usr/bin/time -p`, real/user s, worktree and main 46db894 interleaved per run)
+
+`work/p19/proof_time.sh`, `work/p19/proof_time.log`:
+
+| root | compiler | main 46db894 | P19 |
+|---|---|---|---|
+| `m7_test/root.pruv` | Rust | 7.15/7.05, 7.10/7.00 | 7.24/7.10, 7.28/7.14 |
+| `m7_test/root.pruv` | Python | 12.10/11.94, 12.07/11.90 | 11.95/11.80, 11.79/11.65 |
+| `m10_test/root_m10.pruv` | Rust | 8.93/8.73, 8.34/8.22 | 8.32/8.18, 8.51/8.36 |
+| `m10_test/root_m10.pruv` | Python | 13.50/13.30, 13.33/13.12 | 14.41/14.14, 13.71/13.44 |
+
+Within run-to-run spread on every root.
+
+### P19.6a Audit
+
+One package audit (Codex gpt-6.2-astra ultra, diff 86b62db..71b762c). Query position and single query across Grow
+confirmed; B01-B10 Pruv = hand16. Findings and decisions:
+
+- R1 REQUIRED, **open**: on the rewrite path `reserve` -> `bud_map::make_room` can rehash the slot table (load
+  policy, `used > slots/2 && live <= slots/4`) before the query; an invalid answer then returns status 2 with `st`
+  rehashed (logically equal, raw words differ), against `InvalidInput -> st unchanged`
+  (`docs/REQUEST_BUDGET_SPEC.md:813`). Introduced by P19 (the old pre-answered word was checked before reserve).
+  The fix needs a write-free room decision in `bud_map` (plan before the query, rehash after a valid answer, with an
+  `ensures` linking the two), outside this row's files: queued P19a.
+- R2 REQUIRED, **fixed**: `attach` id span (P19.1). Regression fixture queued (P19a).
+- R3 REQUIRED, **open**: hand16 passes an empty key and the host ignores it; the drivers log `E quiet` per call but
+  not the session argument nor its order against effects. Queued P19a (log session + attempt + position; two
+  sessions with different answers; mutant moving the query after an effect).
+- R4 REQUIRED, **open**: no per-attempt assertion that a Grow-then-retry maybeClose queries `[0, 1]`; error results
+  do not compare `fx`/`out`. Queued P19a.
+- R5 REQUIRED, partly fixed: `gates2.sh` propagates exit codes and passes the M10 cases explicitly; the runners
+  still pass on all-`not-implemented` input and M7 does not check the expected request order. Queued P19a.
+- R6 REQUIRED, **open**: CLOSE has no standalone lane; `closereopen` mixes two ops (P19.3). Queued P19a.
+- O1 OPTIONAL, open: `ABI.md:85-95` still describes the `op[2]` answer; queued with P19a.
+
+No confirm audit: the required fixes left open are queued, not changed; the one landed fix (R2) is a single bound
+check covered by the gates above.
+
+### P19.7 Remaining work (queued rows)
+
+- **P19a (harness and state contract, next row):** R1 write-free `bud_map` room plan + rehash after the answer, with a
+  tombstone-heavy store whose `st` is compared word by word around an invalid answer; R2 fixture (id length past the
+  record, neighbour session); R3 session argument and effect-order logging on both sides; R4 per-attempt query counts
+  over forced Grow with answers 0/1/2; R5 required case ids / request-order checks in M7 and M10 Q; R6 standalone
+  CLOSE perf lane with matched result consumption; O1 `ABI.md`.
+- **T6 (compiler, foreign call wrapper):** `catch_unwind(AssertUnwindSafe(..))` around every trusted rust call and the
+  non-inlined `LocalKey::with` in the callee are absent in hand (P19.4). Measure a wrapper-free emission for `! io
+  ensures true` calls of crates built with `panic = abort`, or `#[inline]` hints across the rlib.
+- **T5 (inline policy) and P18b (out-buffer result):** `attach` 1.12-1.17, `closereopen` 1.09-1.15, `reopenmiss`
+  1.07-1.10 share the separate-body frame and the `out` store + reload against hand's register return. P18b
+  (measure the out-buffer path and a register return separately) was not reached in this package.
+- Peak RSS above hand on every M7 cell (P13d/P13e); hand16 allocation counting.
+- LLVM cells pending P17.
+
+### P19.8 Delegation
+
+- Research (Codex gpt-6.2-astra, Codex 2 account): trusted fn `[i64]` argument survey (encoding decision made in this
+  session).
+- Write (Codex gpt-6.2-sol): M7/M10 harness migration to the host fact (71b762c), reviewed and gated here.
+- Review (Codex gpt-6.2-astra ultra, Codex 2 account): package audit, P19.6a.
+- Proof/encoding decisions, the mutation check, gates, perf/RSS/proof-time measurement and the asm comparison were
+  done in this session. The worktree's own `pruvc-rs/target` was built once (`cargo build --release --locked`) after
+  the main checkout's release compiler disappeared mid-run; the main checkout's `target` was not touched.
