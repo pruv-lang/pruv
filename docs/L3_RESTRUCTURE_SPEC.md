@@ -4,7 +4,7 @@ Design only; inspected 2026-11-18. No implementation, builds or new benchmark re
 
 This framework governs ALL earlier L3 pieces and L3-10 budget: req, budget, entry/shared ent libraries, json/shared packages, mcp, qwen, grok, opencode, claude, codex and supervisor. Budget is the detailed worked example, not the scope boundary. Preserve the AGENTS rule supplied in this task: rework **L3-1..L3-9 as one restructure batch before plugging them into real Lair**. Intermediate proof/test slices are not separate product integrations.
 
-Pruv owns transitions and decisions; Rust performs allocation and external effects. Product structure follows Pruv, not Node module boundaries. Per-step packets are test transports only (`docs/REQUEST_BUDGET_SPEC.md:3-33`). Every item must reach **<=1.0x natural safe hand Rust**, in time and in memory (peak RSS, allocation count), including test adapters. Any cell above 1.0x is a defect to fix unless repeated interleaved runs on the same machine show overlapping distributions; there is no 1.0–1.1 tolerance band. **Gate note (2026-11-18):** older sections below that use a "<=1.1x" gate or list "cells above 1.1x" are history; from P13b on every cell above hand is open. Known open cells at P13b: `m4c/handc` sessions 1.35–1.50x, `m4llvm`/`m4llvmraw` sessions 1.26–1.39x, `m4llvmnv` sessions n=100 1.18x (P17), M5 `store_find` n=500/1000 and `store_find_enc` n=1000, and P13b peak RSS 1.02–1.15x of hand in 8 of 9 cells (P13c). Older notes' “within bar”/“explained” labels do not override this requirement. Stage two must beat Rust. Historical TS/Node comparisons remain separate gates; they cannot establish hand-Rust parity.
+Pruv owns transitions and decisions; Rust performs allocation and external effects. Product structure follows Pruv, not Node module boundaries. Per-step packets are test transports only (`docs/REQUEST_BUDGET_SPEC.md:3-33`). Every item must reach **<=1.0x natural safe hand Rust**, in time and in memory (peak RSS, allocation count), including test adapters. Any cell above 1.0x is a defect to fix unless repeated interleaved runs on the same machine show overlapping distributions; there is no 1.0–1.1 tolerance band. **Gate note (2026-11-18):** older sections below that use a "<=1.1x" gate or list "cells above 1.1x" are history; from P13b on every cell above hand is open. Known open cells at P13b (not a complete list: every matched cell above 1.0x in the tables below is open): `m4c/handc` sessions 1.35–1.50x, `m4llvm`/`m4llvmraw` sessions 1.26–1.39x, `m4llvmnv` sessions n=100 1.18x (P17), M5 `store_find` n=500/1000 and `store_find_enc` n=1000, and P13b peak RSS 1.02–1.15x of hand in 8 of 9 cells (P13c; after P13c 7 of 9 cells remain above hand, open in P13d code size, P13e entry layout and one undetermined page, Appendix P13c.8). Older notes' “within bar”/“explained” labels do not override this requirement. Stage two must beat Rust. Historical TS/Node comparisons remain separate gates; they cannot establish hand-Rust parity.
 
 ## 1. Causes and evidence
 
@@ -377,7 +377,9 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P11 | B/bud_store.pruv,bud_map.pruv: import I0+I1 | P: malformed headers/offsets/links/keys, linear admission counts; I2 model tests separate from safety proof. |
 | P12 | Same: local I1 mutator frames and guard removal one accessor at a time | C proof negatives if verifier changed; P Q2/Q3 churn/stale handles. Keep total accessors/step budgets until each local bound proved. |
 | P13 | Same + B/host.rs: reserve/grow/failure | P Q2/Q3 growth, no replay of effects/queries, old state valid or terminal poison; byte/copy accounting. |
-| P13c | B/host.rs: M4 peak RSS at or below hand (P13b.8) | P: peak RSS split by component (entry words, slot table, arena slack, old + new buffer at a grow) on the 9 M4 cells; every cell <= 1.0x hand by peak RSS and allocation count, time not worse than P13b; Q2/Q3 growth gates unchanged. |
+| P13c | B/host.rs: M4 peak RSS at or below hand (P13b.8) | P: peak RSS split by component (entry words, slot table, arena slack, old + new buffer at a grow) on the 9 M4 cells; every cell <= 1.0x hand by peak RSS and allocation count, time not worse than P13b; Q2/Q3 growth gates unchanged. Done in part (Appendix P13c): old buffers mapped by the host; 7 of 9 cells still above hand, split into P13d, P13e and one page of undetermined cause. |
+| P13d | Both codegens (pruvc / pruvc-rs): generated code size of the M4 driver (Appendix P13c.8) | P: resident `__TEXT` of the M4 Pruv binary at or below hand's (P13c: +80 KiB, measured before the P13c change, assumed unchanged after), with both sides built with the same flags; time not worse than P13c; no Pruv-only build flags. |
+| P13e | B/bud_map.pruv, bud_store.pruv, bud_world.pruv, bud_admit.pruv: entry layout (Appendix P13c.8) | P: smaller per-entry words (P13c: 20 words) so tools peak RSS reaches hand after P13d; proofs and M10 replay counters kept; time not worse than P13c. |
 | P13o | Both checkers/verifiers: `opaque fn` and `reveal F;` (Appendix P13o) | C: positive reveal/congruence/loop-scope cases; negatives for a missing reveal, false facts through the opaque symbol, totality, signature and reveal-target misuse; framework rows equal on both compilers. Unblocks P13a step 2 (Appendix P13a.3), which lands separately. |
 | P14 (deferred) | Both checkers/verifiers: aggregate/field mutation, only if residual profile requires L2 | New C manifest and estimates before activation; alias/frame proof cannot be replaced by Q. |
 | P15 (deferred) | Both codegens/ABI: P14 lowering | C four-pair ownership/ABI probes, then touched P gates; no assumed budget gain. |
@@ -2099,3 +2101,255 @@ copy checks (P13b.4); (6) M10 replay passed with no public call through Grow: ca
 (7) `grow 128` required Q3 growth unconditionally: required only when Q3's record words exceed the post-Q2 buffer.
 A confirmation review closed 1 to 6; on 7 it found that the count used whole op lengths, fixed to record words only.
 Findings: `work/audit_findings.md` (not committed).
+
+## Appendix P13c: M4 peak RSS split by component; state buffers mapped by the host
+
+Status: step 1 (measure, P13c.1-P13c.3) stopped for decisions; the decisions are in P13c.4 and steps 2 and 3 are
+done (P13c.5-P13c.10). Peak RSS is still above hand on 7 of 9 cells; the remaining excess is split and open
+(P13c.8). No `.pruv` file and no compiler is changed in this package (`git diff e92b471 -- '*.pruv' pruvc pruvc-rs`
+is empty).
+
+Machine: macOS arm64, 16 KiB pages. Code: main e92b471, Rust compiler (`pruvc-rs`), driver built by
+`m34_test/run.py build` (`rustc -C opt-level=3`), hand built by cargo release (`opt-level = 3`). Peak RSS from
+`/usr/bin/time -l`, `perf <axis> <n> 200000`. Per-region numbers from `vmmap` on a paused copy of each binary; phase
+numbers from `getrusage` / `task_info` probes in an instrumented copy (all in `work/p13c/`, not committed).
+
+### P13c.1 Facts measured
+
+- Process start (before `World::new`) is equal on both sides: about 1504-1520 KiB.
+- Resident `__TEXT` of the executable: Pruv 304 KiB, hand 224 KiB in every cell (+80 KiB fixed). `__text` is
+  338 KiB vs 282 KiB; the extra is mostly generated code (`World::exec` with `m4_op` inlined is 55 KB; `import_check`,
+  `observe`, `bud_map::remove`, `put_at` 4-7 KB each).
+- The peak is at the end of the prefill, not at a grow: current RSS never drops after a grow (phase probes:
+  sessions 1000 goes 1632 -> 1792 -> 1872 -> 1984 -> 2176 KiB over its four grows, 2272 at the end of the prefill;
+  `grows=0` in the timed loop).
+- Freed state buffers stay in resident size. They are medium-zone malloc blocks (32-512 KiB); macOS keeps freed
+  medium pages resident (reusable), and the next, larger buffer cannot reuse them. `malloc_zone_pressure_relief`
+  after each grow does not lower the peak (measured, no change).
+- `alloc_zeroed` of 64 KiB and more is lazy (untouched pages are not resident); 32 KiB is touched. So the untouched
+  arena slack of the final buffer costs nothing.
+- Grow history: n = 100 one grow (4096 -> 8192), n = 500 three (to 32768), n = 1000 four (to 65536), on all axes.
+- Final buffer, sessions 1000: slots 2048, entry top 1003, arena top 31544 of 65536, so 31544 words (246 KiB) are
+  touched; the entry table alone is 1003 x 20 words = 157 KiB. Clocks 1000: arena top 25544 (200 KiB). Hand's whole
+  malloc heap (vmmap, allocated) is 217 KiB (sessions 1000), 343 KiB (tools 1000), 315 KiB (clocks 1000).
+
+### P13c.2 Component table (KiB, Pruv minus hand peak RSS)
+
+"Old buffers" is measured by ablation: the same driver with allocations of 64 KiB and more served by `mmap` and
+returned by `munmap` (so a freed state buffer leaves resident size at once), 3 runs each. Pruv and ablation are
+means of 3 runs; hand is the P13b.7 value.
+
+| cell | Pruv | hand | excess | text | old buffers | rest (heap: entries, slots, arena) |
+|---|---|---|---|---|---|---|
+| sessions 100 | 1813 | 1712 | +101 | +80 | 21 | 0 |
+| sessions 500 | 2037 | 1872 | +165 | +80 | 122 | -37 |
+| sessions 1000 | 2288 | 2016 | +272 | +80 | 245 | -53 |
+| tools 100 | 1856 | 1728 | +128 | +80 | 43 | +5 |
+| tools 500 | 2096 | 1920 | +176 | +80 | 69 | +27 |
+| tools 1000 | 2395 | 2096 | +299 | +80 | 150 | +69 |
+| clocks 100 | 1808 | 1696 | +112 | +80 | 21 | +11 |
+| clocks 500 | 2032 | 1984 | +48 | +80 | 128 | -160 |
+| clocks 1000 | 2229 | 2272 | -43 | +80 | 229 | -352 |
+
+Reading: the two largest terms are the abandoned grow buffers (up to 245 KiB at n = 1000) and the fixed +80 KiB of
+resident code. "Old + new alive together at a grow" is not a separate peak (the peak is after the prefill); its cost
+is the old buffers staying resident. Arena slack is zero (lazy pages). The entry layout (20 words) shows up only in
+the rest column, which is above hand on tools (+5/+27/+69) and below hand elsewhere.
+
+### P13c.3 Candidates and the decisions they need
+
+1. Old buffers. Ablation result (KiB, 3 runs): sessions 1792/1915/2043, tools 1813/2027/2245,
+   clocks 1787/1904/2000. Below hand only on clocks 500/1000; the rest still carry the +80 KiB text.
+   Options: (a) the host maps state buffers directly (mmap/munmap for state-sized allocations; a host allocation
+   choice, decisions stay in Pruv; each map is still counted in `allocs=`); (b) a Pruv in-place grow (realloc the
+   buffer, then move the regions inside it with a proved relocation), which removes the abandoned buffer at the root
+   but is a larger change to `bud_store` / `bud_map` and their proofs. Decision needed: is (a) an admissible host
+   choice for the 1.0x comparison (hand keeps the default allocator), or is (b) required.
+2. Text +80 KiB. It is generated code size, so the root fix is in codegen (pruvc / pruvc-rs), which this package may
+   not change without stopping first. Measured build-flag effects on the driver (n = 100 peak, sessions / tools):
+   default 1808/1808, `codegen-units=1` 1792/1808, `panic=abort` 1776/1824, `lto=fat` + `codegen-units=1`
+   1712/1760 (`__text` 326 KiB; tools 1000 core time 36.0 vs 36.8 ns/op). Building only the Pruv side with LTO is
+   a toolchain choice the hand side does not get; decision needed on whether it is admissible, or whether the
+   codegen size work goes to a compiler package.
+3. Entries (tools rest +5/+27/+69). After 1 and 2, tools 500 and 1000 would still be above hand. A smaller entry
+   layout (for example two 32-bit fields per word) touches `bud_map`, `bud_store`, `bud_world`, `bud_admit`, their
+   proofs and the M10 replay counters; it is its own step.
+
+Step 1 left steps 2 and 3 waiting on these decisions. The Python compiler's generated code was not measured in
+step 1.
+
+### P13c.4 Decisions
+
+1. Old buffers: option (a). The host maps state-sized buffers by pages itself; this is the product host allocation
+   path (`host.rs` and every driver that uses it), not a benchmark-only switch. Hand keeps the default allocator.
+   "Hand + the same mapping path" is measured once as a reference column (P13c.7), so the part of the gain that is an
+   allocator effect and not a Pruv advantage is visible. No in-place grow (b).
+2. Text +80 KiB: building only the Pruv side with `lto=fat` is not admissible. Both sides with
+   `lto=fat` + `codegen-units=1` is measured once as a reference (P13c.7). The root fix (generated code size) is queued
+   as P13d (compiler); this package does not touch the compiler.
+3. Entry layout: queued as P13e, not in this package.
+
+### P13c.5 Change: `StateBuf` (`bench/l3/budget/state_buf.rs`)
+
+- `StateBuf` is an owned, zero-initialized `[i64]` of fixed length. Buffers of `STATE_MAP_BYTES` = 64 KiB or more are
+  an anonymous private `mmap` (zero-filled, pages resident only when touched) and are `munmap`ed on drop, which
+  returns their pages at once. Smaller buffers use the global allocator with `alloc_zeroed`. Drop picks the path again
+  from the same byte size.
+- Threshold 64 KiB: 4 pages of 16 KiB (macOS arm64) or 16 pages of 4 KiB. Below it the malloc zones reuse freed blocks
+  well and a mapping would waste most of a page; from it up, `alloc_zeroed` is already lazy on macOS (P13c.1), so
+  mapping does not touch more pages than before.
+- Why the default allocator keeps old buffers resident: on macOS the malloc medium zone keeps freed 32 KiB - 8 MiB
+  blocks resident until memory pressure, and the next, larger state buffer cannot reuse them (P13c.1). On Linux glibc
+  already serves blocks of 128 KiB and more with `mmap` (`M_MMAP_THRESHOLD`), but the threshold is dynamic: freeing a
+  mapped block raises it to that block's size, so whether a later buffer is mapped depends on the allocation history
+  (not measured here). `StateBuf` maps from a fixed 64 KiB on both, independent of the allocator's threshold.
+- Targets: the mapping path is compiled for 64-bit macOS / iOS and Linux on x86_64, aarch64 and riscv64 (constants
+  `MAP_PRIVATE` 0x02, `MAP_ANON` 0x1000 on Apple and 0x20 on Linux). Every other target (Windows included) compiles
+  the fallback under `cfg`, where `AVAILABLE` is false and every buffer uses the default allocator. Only the macOS
+  path was run in this package.
+- Users: `host.rs` (`ResidentState.st: StateBuf`; the `Core` trait and `harness.rs` take slices, which is what the
+  generated entries take), `host/src/lib.rs` (includes `state_buf.rs` before `host.rs`), and the M4 test driver
+  (`m34_test/driver_m4.rs`, `Store<StateBuf>`; `run.py` writes the include into `main_<tag>.rs`). The C-runtime lanes
+  (`m4c`) allocate in `runtime.c` and are unchanged.
+- Kept from P13b: sizing stays in Pruv (`bud_store::need` gives N, the host allocates exactly N words); a refused
+  allocation (`StateBuf::zeroed` returns `None`, or the injected `fail_allocs` hook) keeps the state of that grow
+  attempt and returns the failure, with that attempt's counters unchanged; the M10 replay counters are the same
+  (P13c.9). Scope (unchanged from P13b): the guarantee is per grow attempt. If one op grows, retries and a second grow
+  fails, the first grow's buffer and counters stay; that state observes exactly as before the call. The error string
+  is a small allocation; if that fails too, the process aborts as any Rust allocation does.
+- 32-bit targets: N comes from Pruv as `i64` (up to 2^40); an N above `usize` is refused like an allocation failure
+  (`host.rs` grow and init, `driver_m4.rs` grow), not truncated. `STATE_MAPS` and the driver's counter are `AtomicUsize`,
+  which every std target has.
+- Accounting: each mapping counts in `STATE_MAPS`, and the driver's `allocs=` adds it to the counting global
+  allocator's count, so one state buffer is one allocation on either path.
+
+### P13c.6 Performance and memory after the change (Rust backend, against hand Rust; floor 1.0x)
+
+`perf_headroom/host/run.py --only m4 --lanes m4nv --rounds 5`, same method and machine as P13b.7, 5 interleaved runs
+per cell, median [min-max]. Load average during the runs about 3.5-4.6.
+
+Time, ns per op (Pruv / hand):
+
+| axis | n | P13b Pruv | P13c Pruv | P13c hand | Pruv/hand | vs hand |
+|---|---:|---:|---:|---:|---:|---|
+| sessions | 100 | 12.6 | 12.5 | 15.5 | 0.81 | below |
+| sessions | 500 | 12.3 | 12.3 | 16.2 | 0.76 | below |
+| sessions | 1000 | 12.7 | 12.8 | 16.0 | 0.80 | below |
+| tools | 100 | 30.9 | 31.3 | 53.5 | 0.59 | below |
+| tools | 500 | 33.6 | 34.1 | 55.8 | 0.61 | below |
+| tools | 1000 | 32.7 | 33.1 | 54.7 | 0.61 | below |
+| clocks | 100 | 25.9 | 25.3 | 39.4 | 0.64 | below |
+| clocks | 500 | 25.6 | 25.2 | 40.8 | 0.62 | below |
+| clocks | 1000 | 26.2 | 26.0 | 41.1 | 0.63 | below |
+
+Per-cell median difference from P13b: -0.6 to +0.5 ns/op. The P13b binary was not in these interleaved runs, so
+this is a median comparison across sessions, not an equality by overlapping distributions (the grow path is outside
+the timed loop, `grows=0`).
+
+Peak RSS (KiB) and allocations:
+
+| axis | n | P13b Pruv | P13c Pruv | hand | vs hand | Pruv allocs | hand allocs |
+|---|---:|---|---|---|---|---:|---:|
+| sessions | 100 | 1808 [1792-1808] | 1808 [1792-1824] | 1712 [1696-1728] | above | 512 | 820 |
+| sessions | 500 | 2048 [2032-2048] | 1920 [1904-1936] | 1872 [1856-1872] | above | 2514 | 4023 |
+| sessions | 1000 | 2304 [2304-2304] | 2048 [2032-2064] | 2016 [2016-2032] | above (ranges touch at 2032, medians apart) | 5015 | 8024 |
+| tools | 100 | 1824 [1824-1840] | 1840 [1824-1856] | 1728 [1712-1744] | above | 1495 | 602304 |
+| tools | 500 | 2096 [2080-2192] | 2048 [2048-2048] | 1936 [1920-1936] | above | 7497 | 611507 |
+| tools | 1000 | 2400 [2384-2416] | 2256 [2256-2272] | 2112 [2096-2128] | above | 14998 | 623008 |
+| clocks | 100 | 1792 [1792-1808] | 1792 [1792-1808] | 1712 [1712-1728] | above | 535 | 200959 |
+| clocks | 500 | 2016 [2016-2032] | 1920 [1904-1920] | 2000 [1984-2016] | below | 2537 | 204562 |
+| clocks | 1000 | 2240 [2224-2240] | 2000 [2000-2016] | 2256 [2240-2272] | below | 5038 | 209063 |
+
+Time: every cell below hand. Allocations: every cell below hand (counts equal to P13b; a mapping counts as one).
+Peak RSS: n = 500 and 1000 dropped by 48 to 256 KiB; at n = 100 (one grow, 4096 -> 8192 words, the old 32 KiB buffer
+under the threshold) sessions and clocks are unchanged and tools rose by 16 KiB (1824 -> 1840, one page; ranges
+overlap). 7 of 9 cells are still above hand: a defect under the 1.0x floor, open (P13c.8).
+
+### P13c.7 Reference columns (measured once, not product configurations)
+
+`work/p13c/refs.py` (not committed), 5 interleaved rounds per cell, all six binaries in each round, peak RSS median
+KiB. `hand` is the cargo release build used in P13c.6; `hand_rustc` is `m4_hand.rs` built with the Pruv driver's
+`rustc -C opt-level=3`; `hand_mmap` is `hand_rustc` with a global allocator that maps every allocation of 64 KiB or
+more the same way as `StateBuf`; `*_lto` are both sides with `-C lto=fat -C codegen-units=1`.
+
+| cell | Pruv | hand | hand_rustc | hand_mmap | Pruv lto | hand lto |
+|---|---:|---:|---:|---:|---:|---:|
+| sessions 100 | 1824 | 1712 | 1728 | 1728 | 1696 | 1616 |
+| sessions 500 | 1920 | 1872 | 1872 | 1904 | 1808 | 1808 |
+| sessions 1000 | 2048 | 2016 | 2000 | 1968 | 1952 | 1968 |
+| tools 100 | 1824 | 1712 | 1728 | 1744 | 1744 | 1648 |
+| tools 500 | 2048 | 1920 | 1920 | 1952 | 1952 | 1856 |
+| tools 1000 | 2256 | 2112 | 2112 | 2064 | 2160 | 2032 |
+| clocks 100 | 1808 | 1696 | 1728 | 1728 | 1696 | 1648 |
+| clocks 500 | 1904 | 1984 | 1984 | 1920 | 1824 | 1904 |
+| clocks 1000 | 1984 | 2272 | 2256 | 2208 | 1920 | 2176 |
+
+Reading:
+
+- Hand with the same mapping path also drops at large n (sessions 1000 -32, tools 1000 -48, clocks 500 -64,
+  clocks 1000 -48 against `hand_rustc`) and rises by up to 32 KiB elsewhere. So part of the P13c gain is an allocator
+  effect that hand Rust would get too, not a Pruv advantage. Against `hand_mmap`, Pruv is still above on 7 of 9 cells
+  and below only on clocks 500 (-16) and clocks 1000 (-224).
+- `hand_rustc` is within 32 KiB of `hand` (16 to 32 KiB above it on sessions 100, tools 100 and clocks 100), so the
+  build driver (cargo vs rustc) may account for up to one or two pages at n = 100; not separated.
+- With LTO on both sides the gap stays: tools +96/+96/+128, sessions 100 +80, clocks 100 +48. LTO is not the fix for
+  the code-size term; it goes to P13d. Time with LTO (ns/op medians, same runs): Pruv within 0.8 ns/op of the default
+  build on every cell; hand within 1.2 ns/op (clocks 500 and 1000: 42.0 vs 40.8).
+
+### P13c.8 Remaining excess (open)
+
+Official medians (P13c.6), Pruv minus hand, KiB. "Code" is an estimate: the +80 KiB resident `__TEXT` difference
+measured in P13c.1 on the binary before this change (`StateBuf` adds a few hundred bytes of code, not re-measured).
+"Entries" is the tools residual after the code term; the 20-word entry layout is the candidate (P13c.2 rest column is
+above hand on tools, and +11 on clocks 100), but it is not separately ablated. "Other" is what remains.
+
+| cell | excess | code (P13d) | entries (P13e) | other |
+|---|---:|---:|---:|---:|
+| sessions 100 | +96 | +80 | 0 | +16 |
+| sessions 500 | +48 | +80 | 0 | -32 |
+| sessions 1000 | +32 | +80 | 0 | -48 |
+| tools 100 | +112 | +80 | +32 | 0 |
+| tools 500 | +112 | +80 | +32 | 0 |
+| tools 1000 | +144 | +80 | +64 | 0 |
+| clocks 100 | +80 | +80 | 0 | 0 |
+| clocks 500 | -80 | | | below hand |
+| clocks 1000 | -256 | | | below hand |
+
+- Code (P13d, open): the estimated code term is the largest part on every above-hand cell; on sessions 500 and 1000
+  it is larger than the excess (the state part is below hand there), on clocks 100 it equals the excess. P13d is a compiler package (generated code size); this package does not
+  change it.
+- Entries (P13e, open): the tools residual after the code term (+32 to +64 KiB), not yet split from other state.
+- Other (+16 on sessions 100, open): one 16 KiB page, cause not determined (observed: `hand_rustc` and `hand_mmap`
+  medians are both 1728 there).
+- All seven above-hand cells are open defects under the 1.0x floor.
+
+### P13c.9 Gates (both compilers, all rc 0)
+
+Rust compiler (`pruvc-rs`) and Python compiler (`pruvc`, venv python), same checkout:
+
+- `harness grow 128/300/3000`: fails 0.
+- m3 300/300; admit 26/26; lanes 300/300; m4 import 300/300.
+- M8 q exact 63, fail 0; M9 q exact 26, fail 0; M10 q exact 78, fail 0.
+- M10 replay identical: 726 effect lines, 456 small grows, 1093 attempts, 981 calls, 24 grown calls (P13b counters).
+- M10 same: identical, 226467 bytes.
+- M11: py and rs pairs both exact 213, prefix-ok 87.
+
+Proof time (`root_m8`, CPU = user + sys including solver children, s, base e92b471 and this package interleaved,
+3 runs each):
+
+| compiler | base | P13c | median ratio |
+|---|---|---|---:|
+| Rust | 6.80, 6.70, 6.81 | 6.75, 6.62, 6.64 | 0.98 |
+| Python | 11.61, 11.65, 11.51 | 11.68, 11.83, 11.53 | 1.01 |
+
+Equal within run spread, as expected with no `.pruv` change; the generated output is identical.
+
+### P13c.10 Remaining work
+
+- Peak RSS above hand on 7 of 9 M4 cells (P13c.8): code size (P13d), entry layout (P13e), one page of undetermined
+  cause on sessions 100.
+- A failed second grow in one op keeps the first grow's buffer and counters (valid, same observations); a strict
+  "state and counters as before the call" would commit only when the op finishes. Not changed here.
+- The mapping path ran only on macOS arm64 here. `state_buf.rs` type-checks for `x86_64-pc-windows-gnu` (fallback
+  path, `rustc --emit=metadata`); Linux was not built (no Linux std installed) and nothing ran on Linux or Windows.
+- The `m4c` C-runtime lanes keep `runtime.c` allocation (P17).
