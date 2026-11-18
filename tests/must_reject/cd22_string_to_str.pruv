@@ -1,0 +1,5 @@
+fn bad(s: String) -> str ! alloc
+  ensures len(result) != len(s)
+{
+  return string_to_str(s);
+}

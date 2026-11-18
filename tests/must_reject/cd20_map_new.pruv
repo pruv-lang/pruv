@@ -1,0 +1,5 @@
+fn bad() -> HashMap<i64, i64> ! alloc
+  ensures len(result) != 0
+{
+  return map_new::<i64, i64>();
+}

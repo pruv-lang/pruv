@@ -1,0 +1,5 @@
+fn bad(s: Socket) -> bool
+  ensures result != net_write_open(s)
+{
+  return net_write_open(s);
+}

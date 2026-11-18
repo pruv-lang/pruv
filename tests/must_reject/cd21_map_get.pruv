@@ -1,0 +1,5 @@
+fn bad(m: HashMap<i64, i64>, k: i64) -> Option<i64>
+  ensures is_some(result) != is_some(map_lookup::<i64, i64>(m, k))
+{
+  return map_get::<i64, i64>(m, k);
+}

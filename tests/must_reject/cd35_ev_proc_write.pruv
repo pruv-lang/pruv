@@ -1,0 +1,5 @@
+fn bad(take l: Loop, d: [u8]) -> Loop ! async, proc, alloc
+  requires ev_ok(l)
+{
+  return ev_proc_write(move l, -1, d);
+}

@@ -1,0 +1,5 @@
+fn bad(p: Process) -> i64
+  ensures result != proc_error(p)
+{
+  return proc_error(p);
+}

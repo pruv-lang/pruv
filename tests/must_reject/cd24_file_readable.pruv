@@ -1,0 +1,5 @@
+fn bad(f: File) -> bool
+  ensures result != file_readable(f)
+{
+  return file_readable(f);
+}

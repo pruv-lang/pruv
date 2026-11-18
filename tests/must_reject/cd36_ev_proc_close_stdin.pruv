@@ -1,0 +1,5 @@
+fn bad(take l: Loop) -> Loop ! async, proc, alloc
+  requires ev_ok(l)
+{
+  return ev_proc_close_stdin(move l, -1);
+}

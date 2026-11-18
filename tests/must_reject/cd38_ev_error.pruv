@@ -1,0 +1,5 @@
+fn bad(l: Loop) -> i64
+  ensures result != ev_error(l)
+{
+  return ev_error(l);
+}

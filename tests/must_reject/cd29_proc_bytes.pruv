@@ -1,0 +1,5 @@
+fn bad(p: Process) -> [u8] ! alloc
+  requires true
+{
+  return proc_bytes(p, 0);
+}

@@ -1,0 +1,5 @@
+fn bad(a: ProcessArgs) -> i64
+  ensures result != proc_args_len(a)
+{
+  return proc_args_len(a);
+}
