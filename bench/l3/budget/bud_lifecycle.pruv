@@ -530,18 +530,24 @@ pub fn attach(inout st: [i64], sk: [i64], ss: i64, sn: i64, origin: i64, size: i
   if !valid_origin(origin) || !valid_size(size) { return 2; }
   let se: i64 = session_of(st, sk, ss, sn);
   if se < 0 { return 2; }
-  // The ref path reads the stored record in place; only OPEN copies it.
-  let a: i64 = entry_addr(st, se);
-  let off: i64 = at_off(st, a);
-  let n: i64 = at_n(st, a);
+  // The ref path reads the stored record in place; only OPEN copies it. After one span check (P19, as found_at)
+  // the state and id-length words are read by proven direct indexing; a span outside st (a store that breaks I1,
+  // never for an admitted store) is invalid.
+  let a: i64 = crate::bud_store::eb(st, se);
+  if a < 0 { return 2; }
+  let off: i64 = st[a + 12];
+  let n: i64 = st[a + 13];
   let mut s: i64 = 0;
-  if n >= 1 { s = rd(st, off); }
+  if n >= 1 {
+    if off < 0 || off > len(st) - n { return 2; }
+    s = st[off];
+  }
   if s >= 0 && n < 30 { return 2; }
   if s == 0 || s == 1 {
-    let il: i64 = c32(rd(st, off + 24));
+    let il: i64 = c32(st[off + 24]);
     if !out_ok(out, 2 + crate::bud_keys::words(il)) { return 3; }
     crate::ent_u16::wr(inout out, 0, 3);
-    let e: i64 = put_key(inout out, 1, st, c40(off + 25), il);
+    let e: i64 = put_key(inout out, 1, st, off + 25, il);
     return 0;
   }
   let b: [i64] = blob_copy(st, se);
@@ -589,12 +595,18 @@ pub fn replace(inout st: [i64], sk: [i64], ss: i64, sn: i64, origin: i64, size: 
   if !valid_origin(o) || !valid_size(size) { return 2; }
   let se: i64 = session_of(st, sk, ss, sn);
   if se < 0 { return 2; }
-  let a: i64 = entry_addr(st, se);
-  let n: i64 = at_n(st, a);
-  if n < 30 || rd(st, at_off(st, a)) != 1 {
+  // State and old id length by proven direct indexing after one span check (P19, as attach); a span outside st
+  // reads as not halted, as the total reads did.
+  let a: i64 = crate::bud_store::eb(st, se);
+  if a < 0 {
     return attach(inout st, sk, ss, sn, o, size, unit, ut, uk, us, un, now, inout fx, inout out);
   }
-  let ol: i64 = c32(rd(st, at_off(st, a) + 24));
+  let n: i64 = st[a + 13];
+  let o0: i64 = st[a + 12];
+  if n < 30 || o0 < 0 || o0 > len(st) - n || st[o0] != 1 {
+    return attach(inout st, sk, ss, sn, o, size, unit, ut, uk, us, un, now, inout fx, inout out);
+  }
+  let ol: i64 = c32(st[o0 + 24]);
   let ow: i64 = crate::bud_keys::words(ol);
   let m: i64 = c32(un);
   let mw: i64 = crate::bud_keys::words(m);
