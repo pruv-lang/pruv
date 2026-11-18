@@ -1,0 +1,4 @@
+// spec: R-6o-4 reject
+// P13o: an opaque body is defined for every argument (here a[i] is read without a range guard)
+pub opaque fn pos(a: [i64], i: i64) -> bool
+{ return a[i] > 0; }

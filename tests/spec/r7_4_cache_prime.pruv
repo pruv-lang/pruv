@@ -1,0 +1,6 @@
+fn check(x: i64) -> i64
+  requires 0 <= x && x < 9
+{
+  assert x <= 8;
+  return x;
+}

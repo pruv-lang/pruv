@@ -1,0 +1,14 @@
+// spec: R-7-2 accept
+fn mk(n: i64) -> [i64] ! alloc
+  requires 1 <= n && n <= 4
+  ensures len(result) == n
+  ensures len(result) <= 4
+{
+  let mut o: [i64] = alloc(n, 0);
+  return o;
+}
+
+fn main() -> () ! alloc, io {
+  let a: [i64] = mk(4);
+  print(a[0]);
+}

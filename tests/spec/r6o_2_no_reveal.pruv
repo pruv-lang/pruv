@@ -1,0 +1,8 @@
+// spec: R-6o-2 reject
+// P13o: reading an opaque body without `reveal` fails, and the error names the hidden predicate
+pub opaque fn good(a: [i64], i: i64) -> bool
+{ return 0 <= i && i < len(a) && a[i] > 0; }
+
+pub fn read(a: [i64], i: i64) -> i64
+  requires good(a, i)
+{ return a[i]; }

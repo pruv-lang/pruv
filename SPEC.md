@@ -11,8 +11,10 @@ signature; no null, no exceptions, no implicit conversions, no globals, no overl
 
 ## 1. Lexical
 - Comments: `// ...` to end of line.
-- Identifiers: `[a-zA-Z_][a-zA-Z0-9_]*`. Integer literals: decimal digits, optional `_` separators (`1_000_000`).
-- Keywords: `fn let mut if else while return match true false invariant decreases requires ensures assert forall exists in result Some None Ok Err struct enum is_variant variant_field`.
+- Identifiers: `[a-zA-Z_][a-zA-Z0-9_]*`.
+- R-1-2 Integer literals: a decimal digit followed by digits and `_` separators (`1_000_000`; repeated separators such as `1__0` are accepted and mean `10`). A literal ending in `_` is rejected (`parse/bad_int`). Tests: [accept](tests/spec/r1_2_underscore.pruv), [reject](tests/spec/r1_2_trailing_underscore.pruv).
+- Keywords: `fn let mut if else while return match true false cost spent invariant decreases requires ensures assert forall exists in Some None Ok Err struct enum is_variant variant_field async`.
+- R-1-1 `result` is not a keyword: it is an ordinary name (a local may be called `result`), and inside `ensures` it names the return value. Used as the return value where there is none yet (for example in `requires`), it is rejected (`type/result_scope`). Tests: [accept](tests/spec/r1_1_result_name.pruv), [reject](tests/spec/r1_1_result_scope.pruv).
 - Names starting with `pruv_` or containing `__`, the name `_`, and Rust keywords (`type`, `loop`, `self`, `for`, ...) are reserved; the parser rejects them (`reserved_name`).
 
 ## 2. Types
@@ -169,6 +171,11 @@ Allowed only in `requires`, `ensures`, `invariant`, `assert`:
     bit builtin (`band`, `bor`, `bxor`, `wrapping_shl`, `ushr`, `wrapping_add`, `wrapping_mul`) gets no such fact,
     because it would bring bit-vector terms into every later query of the caller; give it an explicit `ensures`
     instead. `bool` functions always get it. A function that cannot be expanded keeps only its written `ensures`.
+  - R-6-1 The body fact crosses modules: a `pub fn` with no `requires` in another module gives the same fact at a
+    call in the caller's module. A callee with a `requires` (or any other rule above broken) gives none, so a fact
+    that only the body proves fails at the call (`verify/assert` for an `assert`). An `opaque fn` (section 6o) gives
+    none either. Tests: [accept](tests/spec/r6_1_body_facts/root.pruv),
+    [reject](tests/spec/r6_1_body_facts_requires/root.pruv).
   - Anything else is `type` error `call_in_contract` "function F cannot be expanded in a contract: REASON". A call in
     a `cost` clause stays unsupported. A `pub` function's `requires`/`ensures`/`decreases` may expand only `pub`
     functions (`type/public_interface`, section 6f), because the body becomes part of the public contract.
@@ -332,6 +339,11 @@ fn push_two(take v: Vec<i64>, x: i64) -> Vec<i64> ! alloc
   `ensures`; the Rust code itself is not proved. A wrong contract can make wrong code "verify", so the Rust backend lists the contracts in
   `<out>.foreign.json` (the LLVM backend does not write this file yet). Signatures use `i64`, `bool`, `Option`/`Result` of those, read-only `[i64]`/`[u8]`/`[bool]`/`str`
   parameters, and `i64`/`bool`/`()`/`Option`/`Result` results; at least one `ensures` (`ensures true` is allowed).
+- R-6d-1 **Owned results.** A trusted function may also return an owned `String` or `Vec<i64>` (the call needs
+  `! alloc`); its `ensures` may speak of `len(result)` and `result[i]`. A result longer than 2^40 is a run-time
+  representation failure (section 7, length bound). Any other result type, such as `[i64]`, is
+  `type/foreign_signature`. The generated call is wrapped in `catch_unwind`. Tests:
+  [accept](tests/spec/r6d_1_owned_results.pruv), [reject](tests/spec/r6d_1_array_result.pruv).
 - **Collections.** `Vec<T>`, `HashMap<K, V>` (`K` is `i64` or `bool`) and `String` hold values (no nested collections,
   no collections inside structs/Options/arrays). Operations (`vec_*` and `map_*` take explicit type arguments, `string_*` and `len` take none): `vec_new`, `vec_push`,
   `vec_get`, `map_new`, `map_insert`, `map_get` (returns `Option<V>`), `string_new`, `string_push_str`, `string_byte`,
@@ -439,8 +451,9 @@ pub fn bounded(x: i64) -> i64                requires 0 <= x && x <= 10
   `pruv_abi_<name>`). Their signatures must be plain values (no collections, recursive or buffer-field types:
   `type/entry_signature`). Child `pub` functions are for Pruv callers only. An optional root `main` must be
   `pub fn main() -> ()`; a child `main` is an ordinary function.
-- **Proof.** Every function is verified, including private and unused ones; a caller only sees the callee's
-  contract, never its body. Recursion and recursive types may span modules. Host entries check `requires` at run
+- **Proof.** Every function is verified, including private and unused ones; a caller sees the callee's contract and,
+  for a function that can be expanded (section 6, L3 P07, R-6-1), the fact `result == <body>` at its call, from any
+  module. It sees no other part of the body. Recursion and recursive types may span modules. Host entries check `requires` at run
   time unless `--trust-callers`; `--no-verify` checks `requires` on every call.
 - **Diagnostics** in explicit mode carry a `file` field (relative to the root, `/` separators). New codes include
   `parse/module_syntax`, `parse/visibility_syntax`, `parse/module_file`, `type/private_item`, `type/public_interface`,
@@ -753,12 +766,12 @@ UTF-8 arguments with the same placement rules, affine with auto-drop; an argumen
 
 | Operation | Effects | Meaning / contract |
 |---|---|---|
-| `proc_args_new() -> ProcessArgs`, `proc_args_push(take a, arg: str) -> ProcessArgs` | alloc | build the list; `proc_args_len` counts it |
+| `proc_args_new() -> ProcessArgs`, `proc_args_push(take a, arg: str) -> ProcessArgs` | alloc | build the list; `proc_args_len` counts it; push requires `proc_args_len(a) < 2^40` and adds one (R-6l-2) |
 | `proc_spawn(program: str, args: ProcessArgs, cwd: str) -> Process` | proc, alloc | no requires; ok and stdin open, or not ok with error 1 or 2. `cwd == ""` inherits |
 | `proc_spawn_env(program: str, args: ProcessArgs, cwd: str, env_names: ProcessArgs, env_values: ProcessArgs) -> Process` | proc, alloc | same contract as `proc_spawn`; the child inherits the parent environment, then the pairs are set in order (last wins, no removal); unequal counts, empty name, `=` or NUL in a name, NUL in a value: error 1 |
 | `proc_write_str/write_bytes(take p, ...) -> Process` | proc, alloc | requires ok and stdin open; writes everything |
 | `proc_close_stdin(take p) -> Process` | proc, alloc | requires ok and stdin open; ensures stdin closed |
-| `proc_read(take p, stream: i64, max: i64) -> Process` | proc, alloc | requires ok, stream 1 or 2, `0 < max`; next chunk of at most `max` bytes; EOF iff the chunk is empty |
+| `proc_read(take p, stream: i64, max: i64) -> Process` | proc, alloc | requires ok, stream 1 or 2, `1 <= max <= 2^40` (R-6l-1); next chunk of at most `max` bytes; EOF iff the chunk is empty |
 | `proc_read_all(take p) -> Process` | proc, alloc | requires ok and stdin closed; the rest of both streams (bytes not delivered by earlier reads) |
 | `proc_bytes(p, stream: i64) -> [u8]` | alloc | independent copy of a public buffer |
 | `proc_wait(take p) -> Result<i64>`, `proc_kill(take p) -> Result<i64>` | proc, alloc | no requires; reap (kill first) and consume; `Ok(code)` or `Err(error)` |
@@ -771,6 +784,12 @@ Unix signal exit is the negative signal number, a Windows code its unsigned 32-b
 drained internally whichever stream is read, so a full stderr cannot hang a stdout reader. Observers never
 query the OS: the same value always answers the same, and new output becomes visible only at the next effect
 operation. Protocol deadlocks, timeouts and process trees are not handled.
+
+- R-6l-1 A `proc_read` whose `max` is not proved to be in `1..=2^40` is `verify/call_requires`. Tests:
+  [accept](tests/spec/r6l_1_read_max_ok.pruv), [reject](tests/spec/r6l_1_read_max_zero.pruv).
+- R-6l-2 `proc_args_push(take a, arg)` requires `proc_args_len(a) < 2^40` and ensures the count is one more; a
+  push whose count bound is not proved is `verify/call_requires`. Tests:
+  [accept](tests/spec/r6l_2_args_push_ok.pruv), [reject](tests/spec/r6l_2_args_push_unbounded.pruv).
 
 ```
 pub fn version(program: str, cwd: str) -> Result<i64> ! proc, alloc
@@ -809,7 +828,7 @@ like `Process`: every handle, including a failed one, must end in `net_close` or
 | `net_write_str/write_bytes(take s, ...) -> Socket` | net, alloc | requires ok and write-open; writes everything |
 | `net_shutdown_write(take s) -> Socket` | net, alloc | requires ok and write-open; half-close, reading continues |
 | `net_set_timeout(take s, ms: i64) -> Socket` | net, alloc | requires ok, `0 <= ms <= 86400000` (0 = none); read and write timeout |
-| `net_read(take s, max: i64) -> Socket` | net, alloc | requires ok, `0 < max`; next chunk of at most `max` bytes; EOF iff the chunk is empty |
+| `net_read(take s, max: i64) -> Socket` | net, alloc | requires ok, `1 <= max <= 2^40` (R-6m-1); next chunk of at most `max` bytes; EOF iff the chunk is empty |
 | `net_read_all(take s) -> Socket` | net, alloc | requires ok; the bytes up to EOF not delivered by earlier reads |
 | `net_bytes(s) -> [u8]` | alloc | independent copy of the public buffer |
 | `net_close(take s)`, `net_listener_close(take l) -> Result<i64>` | net, alloc | no requires; release; `Ok(0)` or `Err(first error)` |
@@ -821,6 +840,9 @@ failed update closes the write side and empties the buffer, so only `net_close` 
 query the OS: data becomes visible only at the next effect operation. `net_read_all` does not close the write
 side; a peer that waits for our EOF needs `net_shutdown_write` first. TLS, UDP, HTTP, DNS, async and
 multiplexing are not part of this slice.
+
+- R-6m-1 A `net_read` whose `max` is not proved to be in `1..=2^40` is `verify/call_requires`. Tests:
+  [accept](tests/spec/r6m_1_read_max_ok.pruv), [reject](tests/spec/r6m_1_read_max_zero.pruv).
 
 ```
 pub fn ask(host: str, port: i64, q: [u8]) -> Result<i64> ! net, alloc
@@ -892,6 +914,37 @@ fn timer() -> i64 ! async, net, proc, alloc {
   match r { Ok(n) => { return n; } Err(e) => { return -e; } }
 }
 ```
+
+## 6o. Opaque predicates: opaque fn, reveal, opaque_total (L3 P13o)
+```
+pub opaque fn good(a: [i64], i: i64) -> bool
+{ return 0 <= i && i < len(a) && a[i] > 0; }
+
+pub fn read(a: [i64], i: i64) -> i64
+  requires good(a, i)
+  ensures result > 0
+{
+  reveal good;
+  return a[i];
+}
+```
+- R-6o-1 **Declaration.** `opaque fn` (or `pub opaque fn`) declares a predicate that follows the rules for user
+  functions in contracts (section 6, L3 P06) and returns `bool`. Any other result type is `type/opaque_signature`.
+- R-6o-2 **Callers see a symbol.** In every proof query an application `F(args)` is an uninterpreted `bool` symbol:
+  facts that only carry it along (from `requires` to `ensures`, between equal arguments) need nothing more, and a
+  code call of `F` gets no body fact (R-6-1). A proof that needs the body fails with the code of the failed
+  obligation (such as `verify/index_oob`) and a hint "opaque F is not revealed here; add reveal F; ...". At run
+  time (contract checks under `--no-verify`, host-entry `requires`) the body is evaluated as usual.
+- R-6o-3 **`reveal F;`** is a statement in a function body; `F` is resolved like a call path. From that point on the
+  current proof path, applications of `F` equal its body. It does not reveal opaque functions that `F` calls. A
+  target that is not an opaque function is `type/reveal_target`.
+- R-6o-4 **`opaque_total`.** Each opaque body is proved defined (no out-of-range index, overflow or division fault)
+  for every argument, with no `requires` and no range assumption on its parameters, so a symbol never stands for an
+  undefined value. A body that is not total is `verify/opaque_total`; guard reads with `&&` as above.
+
+Tests: [accept](tests/spec/r6o_1_opaque_bool.pruv) (all four rules);
+reject [R-6o-1](tests/spec/r6o_1_opaque_i64.pruv), [R-6o-2](tests/spec/r6o_2_no_reveal.pruv),
+[R-6o-3](tests/spec/r6o_3_reveal_target.pruv), [R-6o-4](tests/spec/r6o_4_total.pruv).
 
 ## 7. What the compiler proves (all must succeed)
 1. Every `a[i]` (read or write): `0 <= i < len(a)`.
@@ -1062,8 +1115,9 @@ one of the linked Rust modules define the `pruv_host_*` hooks (and `pruv_panic_c
 using `cost` or `par` also define unprefixed). Two programs with different package names then link into one binary.
 
 ### Inline policy (generated Rust)
-Every generated Rust fn carries an inline hint. The Python and Rust compilers choose it with the same pass over the
-finished Rust text, so their output stays byte-identical:
+R-7-3 Each generated Rust fn that the code generator emits with an `#[inline]` hint (such as the `F__pruv_body`
+functions) gets its final hint from one pass over the finished Rust text; fns emitted without
+the hint keep none. The Python and Rust compilers use the same pass, so their output stays byte-identical:
 - A fn is recursive if it can reach itself through calls (directly or through other fns). Recursive fns keep
   `#[inline]`.
 - The size of a fn is its number of body lines (1 for a one-line fn). Its inclusive size `incl` is its size plus, for
@@ -1079,6 +1133,44 @@ Measured on the request-budget milestones (`bench/l3/budget/M8_NOTES.md`, "Inlin
 gains of `#[inline(always)]` on every fn and improved M7, M9, M4 and M11 too. Always-on-every-fn grew rustc time 3-4x
 and binaries by up to 38%. Size thresholds and single-call-site rules alone did not reach the M8 gains. The LLVM
 backend is unchanged.
+
+Tests: [accept](tests/spec/r7_3_inline.pruv) (a small fn called once gets `#[inline(always)]`),
+[reject](tests/spec/r7_3_inline_recursive.pruv) (a recursive fn keeps `#[inline]`).
+
+### Stack arrays (generated code)
+R-7-1 A local array `let [mut] a: [E] = alloc(N, v);` (`E` is `i64`, refined or not, `u8` or `bool`) with a literal
+length `N` lives on the stack (`[i64; N]` in Rust, `alloca` in LLVM) when every use of `a` is `a[i]`, `a[i] = e`,
+`len(a)` or a direct `a` / `inout a` argument of a user (not foreign, not `take`) array parameter, the array takes at
+most 16384 bytes, and the function's stack arrays so far (in source order) total at most 65536 bytes. A function in
+a recursive cycle has none. A larger or escaping array stays on the heap; this is not an error. The type syntax `[i64; N]` itself is not
+Pruv (`parse/refinement_syntax`). Tests: [accept](tests/spec/r7_1_stack_array.pruv),
+[reject](tests/spec/r7_1_stack_array_big.pruv) (2049 `i64`s stay on the heap). Full rule:
+`tests/runtime/p3_s1_stack.pruv`.
+
+### Short `[i64]` results in a caller buffer (generated Rust)
+R-7-2 A function whose top-level `ensures` includes `len(result) <= K` with a literal `K` in `1..=64`, that calls no
+foreign function, and that returns one `let mut o: [i64] = alloc(...)` as its only final `return`, is also emitted
+as `F__pruv_small(pruv_sb: &mut [i64; K], ...) -> usize`. A non-recursive caller that binds the result with an
+immutable `let` passes a stack buffer instead of allocating (at most 4096 bytes of such buffers per caller). Nothing
+changes under `--trust-callers` or when any condition fails; this is not an error. Full rule:
+`docs/SMALL_RESULT_SPEC.md`. Tests: [accept](tests/spec/r7_2_small_result.pruv),
+[reject](tests/spec/r7_2_small_result_k65.pruv) (K = 65 gets no small form).
+
+### Proof cache
+R-7-4 `--proof-cache DIR` (off by default) stores each proved (unsat) solver query under `DIR/<2 hex>/<key>`, where
+the key is a hash of the query and the compiler (the Python and Rust compilers never share entries), and answers a
+later identical query from the file without calling the solver. Only unsat answers are stored; a failed or unknown
+query is always asked again. `--trust-report FILE` reports `"proof_cache": {"hits", "misses", "stores"}`, and the
+proof trace marks a reused query `"cached": true`. The std revalidation (section 6k) never uses the cache. Tests:
+[accept](tests/spec/r7_4_cache_hit.pruv) (a second identical compile hits),
+[reject](tests/spec/r7_4_cache_miss.pruv) (a different query after priming misses). Full rule:
+`tests/g4b/check_cache.py`.
+
+### Native output (`--emit`)
+R-7-5 `--emit exe|obj|ll|rs` is a Rust-driver option: `pruvc-rs` builds a native object or executable itself.
+`pruvc.py` accepts the option only to report a diagnostic found before code generation; otherwise it stops with a
+command-line error ("unrecognized arguments: --emit ..."). Tests: [accept](tests/spec/r7_5_emit_obj.pruv),
+[reject](tests/spec/r7_5_emit_exe_entry.pruv).
 
 ## 7a. Refinement types (STAGE 1, bundle A)
 A refinement is an annotation on a type that the compiler expands into the contracts of section 6; it adds no new
@@ -1142,8 +1234,190 @@ therefore does not check them (it still keeps the entry `requires` checks and th
 Do not read an annotation as a run-time guarantee of local variables or results under `--no-verify`.
 
 ## 8. Errors
-Compiler prints JSON lines: `{"stage": "parse|type|effect|verify|rustc", "line": n, "col": n,
-"code": "...", "message": "...", "fix": "...", "counterexample": {...}}`. Exit code 1 on any error.
+Compiler prints JSON lines: `{"stage": "...", "line": n, "col": n,
+"code": "...", "message": "...", "fix": "...", "counterexample": {...}}`. Exit code 1 on any error; a successful
+compile prints `{"ok": true}` and exits 0.
+
+R-8-1. The stage is one of `parse`, `type`, `effect`, `verify`, `pkg` (package manifests and the dependency graph,
+section 6a), `codegen` (code generation and native emission) and `link` (`--emit exe`; Rust compiler only, since
+`--emit exe|obj` is Rust only, section 7). A compiler defect prints one line with stage `internal` and code
+`internal_error` and exits 3. No compiler runs rustc, so no diagnostic has the stage `rustc`. Every code a compiler can
+print is a row of the table below; `tests/spec_trace.py` fails if a test expects or a compiler prints a code that is
+not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
+[tests/spec/r8_1_codegen.pruv](tests/spec/r8_1_codegen.pruv).
+
+### Diagnostic codes
+
+| code | stage | meaning |
+|---|---|---|
+| `parse/bad_char` | parse | a character that starts no token |
+| `parse/bad_int` | parse | a malformed integer literal, such as a trailing `_` (R-1-2) |
+| `parse/cost_syntax` | parse | `cost` needs one expression and must be the last header clause |
+| `parse/decreases_syntax` | parse | a malformed, empty or repeated `decreases` clause |
+| `parse/element_storage_type` | parse | `u8` used outside an array element type |
+| `parse/foreign_syntax` | parse | a malformed `trusted rust fn` declaration |
+| `parse/generic_syntax` | parse | a malformed type parameter list or type argument list |
+| `parse/inout_syntax` | parse | a malformed `inout` parameter or argument |
+| `parse/lib_module_conflict` | parse | a module is found both in the program and in a library path |
+| `parse/module_alias` | parse | one file is loaded as two modules |
+| `parse/module_file` | parse | a module's file is missing, unreadable or not UTF-8 |
+| `parse/module_syntax` | parse | a malformed `mod` declaration |
+| `parse/parallel_syntax` | parse | a malformed `par { ... }` block |
+| `parse/refinement_position` | parse | a refinement `\| L..=U` outside a parameter, return or `let` type |
+| `parse/refinement_syntax` | parse | malformed refinement bounds |
+| `parse/reserved_name` | parse | a name reserved for the compiler (`pruv_` prefix, `__`, a Rust keyword) |
+| `parse/std_import_location` | parse | `mod std;` outside the program root |
+| `parse/std_module_conflict` | parse | a local `std.pruv` conflicts with the bundled std module |
+| `parse/std_source` | parse | the bundled std module cannot be read |
+| `parse/string_character` | parse | a string literal spans lines or holds a control character |
+| `parse/string_escape` | parse | an unsupported escape in a string literal |
+| `parse/string_unterminated` | parse | a string literal without its closing quote |
+| `parse/syntax` | parse | any other syntax error |
+| `parse/unsupported_type` | parse | a type the parser knows but this compiler does not implement yet |
+| `parse/visibility_syntax` | parse | a misplaced or malformed `pub` |
+| `pkg/dependency_cycle` | pkg | the package dependencies form a cycle |
+| `pkg/identity_conflict` | pkg | one package is loaded from two places |
+| `pkg/manifest_invalid` | pkg | a package manifest is not valid |
+| `pkg/mount_conflict` | pkg | a module name is both a local module and a mounted package |
+| `pkg/std_in_dependency` | pkg | `mod std;` inside a dependency package |
+| `pkg/unused_dependency` | pkg | a declared dependency is not mounted by `mod` in the package root |
+| `pkg/version_unsatisfied` | pkg | a package version does not satisfy a requirement |
+| `type/arity` | type | a call or constructor with the wrong number of arguments |
+| `type/array_alias` | type | a borrowed array or str is stored or returned without `copy` |
+| `type/async_unconsumed` | type | a temporary `Loop` is never consumed |
+| `type/call_in_contract` | type | a contract calls a function that cannot be expanded there |
+| `type/contract_only` | type | a contract-only operation (`==>`, collection indexing, ...) used in code |
+| `type/cost_expr` | type | a `cost` expression uses `spent`, `result` or `old` |
+| `type/cost_type` | type | a `cost` expression is not `i64` |
+| `type/dup_field` | type | a struct or variant declares a field twice |
+| `type/dup_fn` | type | a function is defined twice |
+| `type/dup_param` | type | a function declares a parameter twice |
+| `type/dup_type` | type | a type is declared twice |
+| `type/dup_variant` | type | an enum declares a variant twice |
+| `type/duplicate_module` | type | a module is declared twice in one file |
+| `type/effect_in_contract` | type | an effectful operation (alloc, store_be, ...) in a contract |
+| `type/empty_enum` | type | an enum without variants |
+| `type/entry_main` | type | the root `main` is not `pub fn main() -> ()` |
+| `type/entry_signature` | type | a host entry has a parameter or result type the host cannot pass |
+| `type/eq_type` | type | `==` on arrays or collections |
+| `type/field_type` | type | a field type that is not allowed (unit, an array in a generic type, ...) |
+| `type/field_name` | type | a field name does not start with a lower-case letter |
+| `type/foreign_borrow` | type | one value is borrowed and moved in the same call |
+| `type/foreign_contract` | type | a catalog or foreign operation used against its contract rules |
+| `type/foreign_export` | type | `main` takes or returns a collection |
+| `type/foreign_loop_move` | type | a value moved in a loop body is not live again at its end |
+| `type/foreign_move` | type | `take` or `move` where no ownership is consumed |
+| `type/foreign_owned_type` | type | an owned collection in a position that cannot hold it |
+| `type/foreign_path` | type | an invalid Rust path in a `trusted rust fn` |
+| `type/foreign_signature` | type | a `trusted rust fn` signature the bridge does not support (R-6d-1) |
+| `type/generic_bound` | type | an unknown bound, or a missing `Element` bound |
+| `type/generic_main` | type | `main` declares type parameters |
+| `type/generic_operation` | type | a field, variant or other concrete operation on an abstract type parameter |
+| `type/immutable` | type | an assignment to a binding that is not mutable |
+| `type/immutable_string` | type | a byte store into a `str` |
+| `type/inout_alias` | type | an `inout` argument also used elsewhere in the same call |
+| `type/inout_argument` | type | an `inout` marker where the parameter is not `inout` |
+| `type/inout_context` | type | a call with an `inout` argument nested inside another expression |
+| `type/inout_type` | type | an `inout` parameter of a type that cannot be `inout` |
+| `type/int_range` | type | an integer literal outside the i64 range |
+| `type/internal` | type | an unknown statement or expression reached the checker |
+| `type/match_arity` | type | a match arm binds the wrong number of fields |
+| `type/match_arms` | type | match arms that are missing or repeated |
+| `type/match_type` | type | a match on a value that is not Option, Result or an enum |
+| `type/missing_return` | type | a function may reach its end without returning |
+| `type/name_collision` | type | one name is both a type and a function |
+| `type/net_unconsumed` | type | a temporary `Socket` or `Listener` is never consumed |
+| `type/not_array` | type | indexing or storing into a value that is not an array |
+| `type/not_enum` | type | an enum operation on a value that is not an enum |
+| `type/not_struct` | type | a field access or field store on a value that is not a struct |
+| `type/old_argument` | type | `old` applied to anything but one `inout` parameter |
+| `type/old_context` | type | `old` outside `ensures`, invariants and asserts |
+| `type/opaque_signature` | type | an `opaque fn` that is not a bool-valued function (R-6o-1) |
+| `type/parallel_alias` | type | two `par` branches share an array |
+| `type/parallel_argument` | type | a `par` branch argument of a form or type that cannot cross the branch |
+| `type/parallel_arity` | type | a `par` group with fewer than two calls |
+| `type/parallel_call` | type | a `par` branch that is not a call to a Pruv function |
+| `type/parallel_foreign` | type | a `par` branch reaches a trusted or catalog operation |
+| `type/parallel_nested` | type | a `par` branch reaches another `par` group |
+| `type/print_type` | type | `print` of a value that is not i64 or bool |
+| `type/private_item` | type | a path names a private item of another module |
+| `type/proc_unconsumed` | type | a temporary `Process` is never consumed |
+| `type/public_interface` | type | a public item exposes a private type or function |
+| `type/recursive_borrow` | type | a value is assigned or passed `inout` while a match on it is active |
+| `type/recursive_decreases` | type | a recursive function without `decreases` (or a trusted one with it) |
+| `type/recursive_generic_type` | type | a generic type that is recursive |
+| `type/recursive_polymorphism` | type | a recursive call that changes the type parameters |
+| `type/recursive_type` | type | a recursive type with no finite value, or recursion hidden in another type |
+| `type/refinement_base` | type | a refinement on a type it cannot apply to |
+| `type/refinement_bounds` | type | refinement bounds outside i64, or an empty range |
+| `type/reserved` | type | a function named like a builtin |
+| `type/result_scope` | type | `result` used outside `ensures` where it is not a declared name (R-1-1) |
+| `type/return_type` | type | a `return` that does not match the result type |
+| `type/reveal_target` | type | `reveal` of something that is not an opaque function (R-6o-3) |
+| `type/shadow` | type | a name that is already defined is bound again |
+| `type/size_type` | type | `size` of a value that is not a non-generic struct or enum |
+| `type/spent_context` | type | `spent` outside an invariant or assert of a cost function |
+| `type/struct_fields` | type | a struct literal with missing, extra or repeated fields |
+| `type/type_argument` | type | a type that cannot be a type argument or an array element |
+| `type/type_arity` | type | the wrong number of type arguments |
+| `type/type_mismatch` | type | an operand or argument of the wrong type |
+| `type/type_name` | type | a type name does not start with an upper-case letter |
+| `type/type_parameter` | type | a type parameter that is lower-case, repeated or shadows a type |
+| `type/unit_let` | type | a `let` of a `()` value |
+| `type/unit_param` | type | a parameter of type `()` |
+| `type/unknown_field` | type | a field the type does not have |
+| `type/unknown_fn` | type | a call to an unknown function |
+| `type/unknown_module` | type | a path through a module that is not declared |
+| `type/unknown_name` | type | an unknown variable |
+| `type/unknown_type` | type | an unknown type name |
+| `type/unknown_variant` | type | a variant the enum does not have |
+| `type/unused_value` | type | a non-unit value is dropped |
+| `type/useless_expr` | type | an expression statement that is not a call |
+| `type/variant_name` | type | a variant name does not start with an upper-case letter |
+| `effect/cost_callee` | effect | a cost function calls a function without `cost` |
+| `effect/cost_unsupported` | effect | a cost function calls a foreign, catalog or file operation |
+| `effect/missing_effect` | effect | a function uses an effect it does not declare |
+| `effect/parallel_effect` | effect | a `par` branch reaches a function with an effect |
+| `verify/alloc_negative` | verify | an allocation length not proved in `0..=2^40` |
+| `verify/assert` | verify | an `assert` not proved |
+| `verify/call_requires` | verify | a callee's `requires` not proved at the call |
+| `verify/contract_domain` | verify | a partial operation in a contract not guarded (index range, divisor, ...) |
+| `verify/cost_bound` | verify | `spent <= cost` not proved |
+| `verify/decreases_decrease` | verify | a loop's `decreases` not proved to shrink |
+| `verify/decreases_nonneg` | verify | a loop's `decreases` not proved `>= 0` |
+| `verify/div` | verify | a divisor not proved non-zero (or `i64::MIN / -1` not excluded) |
+| `verify/elem_range` | verify | a `[u8]` store or fill not proved in `0..=255` |
+| `verify/ensures` | verify | an `ensures` not proved |
+| `verify/index_oob` | verify | an index not proved in range |
+| `verify/inference_timeout` | verify | `--infer` hit its time limit for a function |
+| `verify/invariant_entry` | verify | a loop invariant not proved before the first iteration |
+| `verify/invariant_preserved` | verify | a loop invariant not proved after one iteration |
+| `verify/opaque_total` | verify | an `opaque fn` body not proved defined everywhere (R-6o-4) |
+| `verify/overflow` | verify | an arithmetic result not proved in the i64 range |
+| `verify/recursive_decrease` | verify | a recursive call's measure not proved smaller |
+| `verify/recursive_nonneg` | verify | a recursive measure not proved `>= 0` |
+| `verify/refinement_assign` | verify | a value stored into a refined local not proved in its range |
+| `verify/refinement_init` | verify | a refined local's initial value not proved in its range |
+| `verify/shift_range` | verify | a shift count not proved in `0..64` |
+| `verify/string_slice_range` | verify | `substr` bounds not proved in `0 <= lo <= hi <= len(s)` |
+| `verify/utf8_boundary` | verify | a `substr` cut not proved at a character boundary |
+| `verify/variant_domain` | verify | a `variant_field` lookup not guarded by its variant |
+| `verify/verify_unknown` | verify | the solver gave up on one obligation (see below) |
+| `codegen/foreign_target` | codegen | a program with foreign or file operations sent to native emission without the Rust host build |
+| `codegen/llvm_emit` | codegen | LLVM could not emit the object file (Rust compiler) |
+| `codegen/llvm_target` | codegen | LLVM has no target machine for the target (Rust compiler) |
+| `codegen/parallel_target` | codegen | native `--emit obj/exe` of a program with `par` |
+| `codegen/specialization_limit` | codegen | too many or too deeply nested generic instantiations |
+| `codegen/target_mismatch` | codegen | the object does not match the requested target (Rust compiler) |
+| `codegen/unsupported` | codegen | a native output this build cannot produce (Rust compiler) |
+| `codegen/unsupported_target` | codegen | a target that is not one of the four public targets (Rust compiler) |
+| `codegen/unsupported_type` | codegen | a construct the chosen backend does not implement yet |
+| `link/exe_entry` | link | `--emit exe` without `fn main() -> ()` |
+| `link/link_failed` | link | the linker failed; the message holds its first error line |
+| `link/linker_missing` | link | the linker could not be started |
+| `link/target_runtime_missing` | link | no embedded runtime for the target |
+| `link/unsupported` | link | linking for the target is not implemented (Windows) |
+| `internal/internal_error` | internal | a compiler defect; exit 3 |
 
 G3 added the error codes `generic_syntax`, `type_parameter`, `type_arity`, `type_argument`, `generic_operation`,
 `generic_bound`, `generic_main` and `specialization_limit` (section 6c).

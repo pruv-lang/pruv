@@ -1,0 +1,7 @@
+// spec: R-6l-2 accept
+fn extend(take a: ProcessArgs, x: str) -> ProcessArgs ! alloc
+  requires proc_args_len(a) < 1099511627776
+  ensures proc_args_len(result) == proc_args_len(a) + 1
+{
+  return proc_args_push(move a, x);
+}

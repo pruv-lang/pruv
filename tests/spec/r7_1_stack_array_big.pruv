@@ -1,0 +1,6 @@
+// spec: R-7-1 reject
+fn main() -> () ! alloc, io {
+  let mut a: [i64] = alloc(2049, 0);
+  a[0] = 1;
+  print(a[0]);
+}
