@@ -60,6 +60,8 @@ def build(args):
     main = os.path.join(WORK, "main_m8.rs")
     with open(main, "w") as f:
         f.write('#![allow(dead_code, unused_imports, unused_variables, unused_mut)]\n#[path = "gen.rs"] mod sol;\n')
+        # the product host's state buffer (StateBuf, L3 P13c), as in m34_test/run.py for driver_m4.rs
+        f.write('include!("%s");\n' % os.path.join(BUD, "state_buf.rs").replace("\\", "/"))
         f.write(open(os.path.join(HERE, "driver_m8.rs")).read())
     exe = os.path.join(WORK, "driver_m8")
     argv = [rustc(), "-C", "opt-level=3", "--edition", "2021", "-o", exe, main]
@@ -360,9 +362,281 @@ def classify(case, o, run, steps, cut):
     return "exact", ""
 
 
+def enc(v):
+    """Plain fixture JSON -> the tagged value form of Q cases (objects as {"obj": [[k, v], ...]}); values already
+    tagged ({"obj"}, {"undef"}, {"u16"}) keep their tag, object members are encoded recursively."""
+    if isinstance(v, list):
+        return [enc(x) for x in v]
+    if isinstance(v, dict):
+        if set(v) == {"obj"}:
+            return {"obj": [[k, enc(x)] for k, x in v["obj"]]}
+        if set(v) <= {"undef", "u16"}:
+            return v
+        return {"obj": [[k, enc(x)] for k, x in v.items()]}
+    return v
+
+
+def fixture_cases(groups):
+    """Fixture groups (e.g. "C,D") as tagged Q cases plus their oracle output, written to work/m8/fixtures_*.jsonl."""
+    sys.path.insert(0, BUD)
+    from common import load_group, strip_case
+    from oracle import run_oracle
+    cases = []
+    for g in groups.split(","):
+        for f in load_group(g.strip()):
+            c = strip_case(f)
+            c["world"] = {"sessions": enc(c["world"]["sessions"])}
+            c["script"] = [dict(e, args=enc(e["args"])) for e in c["script"]]
+            cases.append(c)
+    obs = run_oracle(cases)
+    os.makedirs(WORK, exist_ok=True)
+    cp, op = os.path.join(WORK, "fixtures_cases.jsonl"), os.path.join(WORK, "fixtures_oracle.jsonl")
+    with open(cp, "w") as f:
+        for c in cases:
+            f.write(json.dumps(c, ensure_ascii=False) + "\n")
+    with open(op, "w") as f:
+        for o in obs:
+            f.write(json.dumps(o, ensure_ascii=False) + "\n")
+    return cp, op
+
+
+# ---- negative / boundary controls (fixed; outside the TS oracle's exact range, so the expected answers are here) ----
+MAX = 9007199254740991  # 2^53 - 1
+BID = "11111111-1111-4111-8111-000000000001"
+
+
+def ctl_session(sid="s1", state="open", used=None, limits=None, unlimited=None, reason=None, bid=BID):
+    u = {"activeMs": 0, "delegations": 0, "commands": 0, "reviews": 0, "checks": 0, "tools": 0, "failures": 0,
+         "retries": 0}
+    u.update(used or {})
+    lim = {"timeMinutes": 120, "delegations": 24, "commands": 3, "reviews": 2, "checks": 1}
+    lim.update(limits or {})
+    b = {"id": bid, "openedAt": "2023-11-14T22:13:20.000Z", "origin": "user", "state": state, "limits": lim,
+         "used": u}
+    if unlimited:
+        b["unlimited"] = True
+    if reason is not None:
+        b["halt"] = {"reason": reason, "at": "2023-11-14T22:13:20.000Z"}
+    return {"id": sid, "budget": b}
+
+
+def REF(sid="s1", bid=BID):
+    return {"sessionId": sid, "budgetId": bid}
+
+
+def ctl(cid, sessions, calls, logs, counters_, turns=0):
+    """A control: script of (op, args); `logs` = the driver lines expected per call ("R 0", "R -", "X 5", "H 20 k"
+    prefix); `counters_` = s1's final [delegations, commands, reviews, checks, tools, failures, retries]; `turns` =
+    the number of toolSeen turns at the end."""
+    script = [{"ev": "call", "req": "r%d" % (i + 1), "op": op, "args": enc(a)} for i, (op, a) in enumerate(calls)]
+    return {"id": cid, "world": {"sessions": enc(sessions)}, "script": script, "logs": logs, "counters": counters_,
+            "turns": turns}
+
+
+def controls():
+    z = [0] * 7
+    big = {"delegations": MAX, "commands": MAX, "reviews": MAX, "checks": MAX}
+    return [
+        # ResourceBound refuses atomically: nothing written, not even the keys that fit
+        ctl("N01-max-counter-unlimited", [ctl_session(used={"delegations": MAX}, unlimited=True)],
+            [("charge", [REF(), {"delegations": 1}])], ["X 5"], [MAX, 0, 0, 0, 0, 0, 0]),
+        ctl("N02-retries-last-key-refuses-all", [ctl_session(used={"retries": MAX}, limits=big)],
+            [("charge", [REF(), {"delegations": 1, "commands": 1, "retries": 1}])], ["X 5"], [0, 0, 0, 0, 0, 0, MAX]),
+        ctl("N03-exact-max-is-allowed", [ctl_session(used={"checks": MAX - 1}, limits=big)],
+            [("charge", [REF(), {"checks": 1}]), ("charge", [REF(), {"checks": 1}])], ["R 0", "X 5"],
+            [0, 0, 0, MAX, 0, 0, 0]),
+        ctl("N04-unsafe-amount", [ctl_session(unlimited=True)],
+            [("charge", [REF(), {"commands": MAX + 1}])], ["X 5"], z),
+        ctl("N05-unsafe-negative-amount", [ctl_session()],
+            [("charge", [REF(), {"reviews": -MAX - 1}])], ["X 5"], z),
+        ctl("N06-negative-to-min-then-below", [ctl_session()],
+            [("charge", [REF(), {"reviews": -MAX}]), ("charge", [REF(), {"reviews": -1}])], ["R 0", "X 5"],
+            [0, 0, -MAX, 0, 0, 0, 0]),
+        ctl("N07-negative-amount-lowers-counter", [ctl_session(used={"commands": 1})],
+            [("charge", [REF(), {"commands": -3, "retries": -1}])], ["R 0"], [0, -2, 0, 0, 0, 0, -1]),
+        ctl("N08-limit-equality-then-over", [ctl_session(used={"commands": 1})],
+            [("charge", [REF(), {"commands": 2}]), ("charge", [REF(), {"commands": 1}])], ["R 0", "H 20 2"],
+            [0, 3, 0, 0, 0, 0, 0]),
+        ctl("N09-over-limit-before-later-bound", [ctl_session(used={"commands": MAX}, limits={"commands": MAX})],
+            [("charge", [REF(), {"delegations": 25, "commands": 1}])], ["H 20 1"], [0, MAX, 0, 0, 0, 0, 0]),
+        ctl("N10-bound-before-later-over-limit", [ctl_session(used={"delegations": MAX}, limits={"delegations": MAX})],
+            [("charge", [REF(), {"delegations": 1, "commands": 9}])], ["X 5"], [MAX, 0, 0, 0, 0, 0, 0]),
+        ctl("N11-stored-counter-outside-range", [ctl_session(used={"retries": MAX + 10})],
+            [("charge", [REF(), {"commands": 1}])], ["X 5"], [0, 0, 0, 0, 0, 0, MAX + 10]),
+        ctl("N12-nullish-amounts", [ctl_session(used={"checks": 1})],
+            [("charge", [REF(), {"obj": [["checks", None], ["reviews", {"undef": 1}]]}])], ["R 0"],
+            [0, 0, 0, 1, 0, 0, 0]),
+        ctl("N13-halted-answers-before-sums", [ctl_session(state="halted", reason="commands", used={"commands": MAX})],
+            [("charge", [REF(), {"commands": MAX}])], ["R 18"], [0, MAX, 0, 0, 0, 0, 0]),
+        ctl("N14-closed-answers-before-sums", [ctl_session(state="closed", used={"retries": MAX})],
+            [("charge", [REF(), {"retries": MAX}])], ["R 1"], [0, 0, 0, 0, 0, 0, MAX]),
+        ctl("N15-failure-at-max-halted", [ctl_session(state="halted", reason="time", used={"failures": MAX})],
+            [("noteFailure", [REF()])], ["X 5"], [0, 0, 0, 0, 0, MAX, 0]),
+        ctl("N16-failure-to-max", [ctl_session(used={"failures": MAX - 1})],
+            [("noteFailure", [REF()]), ("noteFailure", [REF()])], ["R -", "X 5"], [0, 0, 0, 0, 0, MAX, 0]),
+        ctl("N17-failure-negative-min", [ctl_session(used={"failures": -MAX})],
+            [("noteFailure", [REF()])], ["R -"], [0, 0, 0, 0, 0, -MAX + 1, 0]),
+        ctl("N18-stale-ref-at-max-is-no-op", [ctl_session(used={"failures": MAX})],
+            [("noteFailure", [REF(bid="11111111-1111-4111-8111-000000000063")])], ["R -"], [0, 0, 0, 0, 0, MAX, 0]),
+        ctl("N19-tool-to-max", [ctl_session(used={"tools": MAX - 1})],
+            [("noteTool", [REF(), "t1", "a1"]), ("noteTool", [REF(), "t1", "a1"])], ["R -", "R -"],
+            [0, 0, 0, 0, MAX, 0, 0], turns=1),
+        # a refused noteTool leaves the dedup set untouched too (the activity is not recorded)
+        ctl("N20-tool-at-max-new-activity", [ctl_session(used={"tools": MAX})],
+            [("noteTool", [REF(), "t1", "a1"])], ["X 5"], [0, 0, 0, 0, MAX, 0, 0], turns=0),
+    ]
+
+
+def cmd_controls(args):
+    """Runs the fixed negative / boundary controls through the Pruv driver (or --hand) and checks every call's
+    driver line, s1's final counters (atomic refusal: the record is unchanged) and the toolSeen turn count."""
+    hand = "hand_m8_u16" if args.hand16 else args.hand
+    exe = build_hand(hand) if hand else build(args)
+    cs = controls()
+    prog = []
+    for c in cs:
+        prog += program(c)[0]
+    r = subprocess.run([exe, "q"], input="\n".join(prog) + "\n", capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit("driver failed:\n" + r.stderr[-3000:])
+    runs = parse_driver(r.stdout)
+    fails = []
+    for c in cs:
+        run = runs[c["id"]]
+        got = [l for l in run["log"] if not l.startswith("@ ")]
+        ok = len(got) == len(c["logs"]) and all(g == w or (w.startswith("H ") and g.startswith(w + " "))
+                                                  for g, w in zip(got, c["logs"]))
+        sessions, turns = parse_obs(run["obs"])
+        cnt = mine_counters(sessions[tuple(units("s1"))])
+        if not ok or cnt != c["counters"] or len(turns) != c["turns"]:
+            fails.append("%s: lines %r want %r; counters %r want %r; turns %d want %d"
+                         % (c["id"], got, c["logs"], cnt, c["counters"], len(turns), c["turns"]))
+    print(json.dumps({"controls": len(cs), "pass": len(cs) - len(fails), "fail": len(fails)}))
+    for f in fails:
+        print("FAIL", f)
+    return 1 if fails else 0
+
+
+# ---- memory: peak RSS and allocation count (P20; the P13b memory gate's accounting) ----
+# Every mem binary is the lane's own source with this prelude in front: a counting global allocator (alloc,
+# alloc_zeroed and realloc each count one) that prints `allocs N` to stderr at exit. The timed lanes are built
+# without it, so wall time is not affected.
+MEM_PRELUDE = r'''
+struct CountingAlloc;
+static ALLOC_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+unsafe impl std::alloc::GlobalAlloc for CountingAlloc {
+    unsafe fn alloc(&self, l: std::alloc::Layout) -> *mut u8 {
+        ALLOC_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::alloc::System.alloc(l)
+    }
+    unsafe fn alloc_zeroed(&self, l: std::alloc::Layout) -> *mut u8 {
+        ALLOC_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::alloc::System.alloc_zeroed(l)
+    }
+    unsafe fn dealloc(&self, p: *mut u8, l: std::alloc::Layout) {
+        std::alloc::System.dealloc(p, l)
+    }
+    unsafe fn realloc(&self, p: *mut u8, l: std::alloc::Layout, n: usize) -> *mut u8 {
+        ALLOC_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::alloc::System.realloc(p, l, n)
+    }
+}
+#[global_allocator]
+static GLOBAL_ALLOC: CountingAlloc = CountingAlloc;
+extern "C" {
+    fn atexit(cb: extern "C" fn()) -> i32;
+}
+extern "C" fn report_allocs() {
+    eprintln!("allocs {}", ALLOC_COUNT.load(std::sync::atomic::Ordering::Relaxed));
+}
+extern "C" fn register_allocs() {
+    unsafe {
+        atexit(report_allocs);
+    }
+}
+#[used]
+#[link_section = "__DATA,__mod_init_func"]
+static REGISTER_ALLOCS: extern "C" fn() = register_allocs;
+'''
+MEM_LANES = [("pruv", None, "perf"), ("hand16", "hand_m8_u16", "perf"), ("hand16w", "hand_m8_u16", "perfw"),
+             ("oaw", "hand_m8_oa", "perfw")]
+
+
+def build_mem(name):
+    """The mem binary of the Pruv driver (name None; needs build() first: uses work/m8/main_m8.rs) or of a hand."""
+    if name is None:
+        src = os.path.join(WORK, "main_m8.rs")
+        body = open(src).read().split("\n", 1)
+        # keep the crate-level #![allow] line first; mapped state buffers count like allocator calls (STATE_MAPS, as
+        # driver_m4.rs counts them)
+        pre = MEM_PRELUDE.replace('eprintln!("allocs {}", ALLOC_COUNT.load(std::sync::atomic::Ordering::Relaxed));',
+                                  'eprintln!("allocs {}", ALLOC_COUNT.load(std::sync::atomic::Ordering::Relaxed)'
+                                  ' + STATE_MAPS.load(std::sync::atomic::Ordering::Relaxed));')
+        assert pre != MEM_PRELUDE
+        text_ = body[0] + "\n" + pre + body[1]
+        out, extra = os.path.join(WORK, "driver_m8_mem"), []
+        path = os.path.join(WORK, "main_m8_mem.rs")
+    else:
+        src, extra = HANDS[name]
+        text_ = MEM_PRELUDE + 'include!("%s");\n' % os.path.join(HERE, src)
+        out = os.path.join(WORK, name + "_mem")
+        path = out + ".rs"
+    with open(path, "w") as f:
+        f.write(text_)
+    argv = [rustc(), "-C", "opt-level=3", "--edition", "2021"] + extra + ["-o", out, path]
+    c = subprocess.run(argv, capture_output=True, text=True)
+    if c.returncode != 0:
+        sys.exit("rustc failed (mem %s):\n%s" % (name, c.stderr[-3000:]))
+    BUILDS[os.path.basename(out)] = argv
+    return out
+
+
+def mem_run(cmd):
+    r = subprocess.run(["/usr/bin/time", "-l"] + cmd, capture_output=True, text=True, cwd=HERE)
+    if r.returncode != 0:
+        sys.exit("%s failed:\n%s" % (cmd[0], r.stderr[-2000:]))
+    rss = allocs = None
+    for l in r.stderr.splitlines():
+        f = l.split()
+        if "maximum resident set size" in l:
+            rss = int(f[0])
+        elif len(f) == 2 and f[0] == "allocs":
+            allocs = int(f[1])
+    return rss, allocs
+
+
+def mem_pass(sizes, reps, runs, items=("charge", "failure")):
+    """Peak RSS (bytes) and allocation count per lane, item and size: `runs` runs each, lanes interleaved per run;
+    prints median [min-max]."""
+    exes = [(lane, [build_mem(name), mode]) for lane, name, mode in MEM_LANES]
+    res = {}
+    for k in range(runs):
+        order = exes[k % len(exes):] + exes[:k % len(exes)]
+        for size in sizes:
+            for item in items:
+                for lane, cmd in order:
+                    rss, al = mem_run(cmd + [str(size), str(reps), item])
+                    d = res.setdefault((item, size), {}).setdefault(lane, ([], []))
+                    d[0].append(rss)
+                    d[1].append(al)
+
+    def mm(xs, scale=1):
+        xs = [x / scale for x in xs]
+        return "%.0f [%.0f-%.0f]" % (statistics.median(xs), min(xs), max(xs))
+
+    print("memory (%d runs, reps %d): peak RSS KiB and allocation count, median [min-max]" % (runs, reps))
+    print("item | size | " + " | ".join("%s RSS KiB | %s allocs" % (l, l) for l, _, _ in MEM_LANES))
+    for (item, size), d in sorted(res.items(), key=lambda x: (x[0][0], x[0][1])):
+        print("%s | %d | %s" % (item, size, " | ".join("%s | %s" % (mm(d[l][0], 1024), mm(d[l][1])) for l, _, _ in
+                                                        MEM_LANES)))
+    return res
+
+
 def cmd_q(args):
     # --hand16: run the hand-written UTF-16 Rust baseline (hand_m8_u16.rs q mode) instead of the Pruv driver; the
     # comparison / classification below is the same, so mismatches vs the oracle are counted the same way.
+    if args.fixtures:
+        args.cases, args.oracle = fixture_cases(args.fixtures)
     hand = "hand_m8_u16" if args.hand16 else args.hand
     exe = build_hand(hand) if hand else build(args)
     cases = [json.loads(l) for l in open(args.cases)]
@@ -476,6 +750,9 @@ def cmd_perf(args):
     sides = [("pruv", [exe, "perf"]), ("hand16", [hand16, "perf"]), ("hand16w", [hand16, "perfw"]),
              ("fxmix", [fx, "perf"]), ("fxmixw", [fx, "perfw"]), ("oa", [oa, "perf"]), ("oaw", [oa, "perfw"]),
              ("hand", [hand]), ("ts", ts)]
+    if args.only:
+        keep = set(args.only.split(",")) | {"pruv"}
+        sides = [x for x in sides if x[0] in keep]
     lanes = [s for s, _ in sides]
     if args.profile:
         sizes = PROFILES[args.profile]
@@ -503,7 +780,7 @@ def cmd_perf(args):
             a = chks.get("pruv", {})
             if not a:
                 sys.exit("CHK MISMATCH (round %d, size %d, reps %d): pruv printed no chk" % (rd, size, args.reps))
-            for side in CHK_LANES[1:]:
+            for side in [l for l in CHK_LANES[1:] if l in lanes]:
                 b = chks.get(side, {})
                 if a.keys() != b.keys():
                     sys.exit("CHK MISMATCH (round %d, size %d, reps %d): item sets differ: pruv %r %s %r"
@@ -550,6 +827,19 @@ def cmd_perf(args):
             ns_rows[(item, sz)] = m
             print("%s | %d | %s | %s" % (item, sz, " | ".join(fmt(m.get(l), "%.1f") for l in lanes),
                                           " | ".join(ratio(m.get("pruv"), m.get(l)) for l in lanes[1:])))
+    dl = [l for l in ["pruv", "hand16", "hand16w", "oaw"] if l in lanes]
+    print("ns per call distribution, median [min-max] over rounds (interleaved; overlap = noise)")
+    print("item | size | " + " | ".join(dl) + " | pruv max <= lane min")
+    for item in ITEMS:
+        for sz in sizes:
+            x = res[(item, sz)]
+            print("%s | %d | %s | %s" % (item, sz, " | ".join("%.1f [%.1f-%.1f]" % (statistics.median(x[l]), min(x[l]),
+                                                                                       max(x[l])) for l in dl),
+                                          " ".join("%s:%s" % (l, "below" if max(x["pruv"]) <= min(x[l]) else
+                                                              ("above" if min(x["pruv"]) > max(x[l]) else "overlap"))
+                                                   for l in dl[1:])))
+    if not args.no_mem:
+        mem_pass(sizes, args.reps, args.mem_runs)
     print("retired instructions per call (/usr/bin/time -l, difference of two rep counts)" +
           (" -- skipped (--no-instr)" if args.no_instr else ""))
     print("item | size | " + " | ".join(l + " instr" for l in lanes) + " | " +
@@ -578,7 +868,8 @@ def cmd_perf(args):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["q", "perf", "derive"])
+    ap.add_argument("cmd", choices=["q", "perf", "derive", "controls"])
+    ap.add_argument("--fixtures", help="q: run these fixture groups (e.g. C,D) through the oracle instead of --cases")
     ap.add_argument("--pruvc", default=PRUVC_DEFAULT)
     ap.add_argument("--gen")
     ap.add_argument("--cases", default=os.path.join(WORK, "cases.jsonl"))
@@ -592,8 +883,11 @@ def main():
     ap.add_argument("--profile", choices=sorted(["S", "M", "SM"]), help="perf: size profile S=100 M=500 SM=100,500 "
                     "(run_meta.PROFILES); overrides --sizes")
     ap.add_argument("--reps", type=int, default=200000)
+    ap.add_argument("--no-mem", action="store_true", help="perf: skip the peak RSS / allocation count pass")
+    ap.add_argument("--mem-runs", type=int, default=5)
+    ap.add_argument("--only", help="perf: comma-separated lanes to time (default all); pruv is always kept")
     a = ap.parse_args()
-    sys.exit({"q": cmd_q, "perf": cmd_perf, "derive": cmd_derive}[a.cmd](a))
+    sys.exit({"q": cmd_q, "perf": cmd_perf, "derive": cmd_derive, "controls": cmd_controls}[a.cmd](a))
 
 
 if __name__ == "__main__":

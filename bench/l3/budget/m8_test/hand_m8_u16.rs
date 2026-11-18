@@ -356,24 +356,29 @@ impl World {
         Ok(())
     }
 
-    // bud_tools.pruv note_tool + bud_charge add_tool: the activity key is consumed first (even with a missing or stale
-    // budget), then CURRENT, then tools += 1. A ResourceBound there leaves the dedup key inserted, as in Pruv.
+    // bud_tools.pruv note_tool + bud_charge tool_room / add_tool: a seen activity returns at once (before CURRENT); a
+    // new one is recorded even with a missing or stale budget, unless the current budget's used.tools is at the
+    // safe-integer bound: that ResourceBound refuses before anything is written (KD-M8-1).
     fn note_tool(&mut self, session: &[u16], budget: &[u16], turn: &[u16], act: &[u16]) -> Result<(), ResourceBound> {
-        let inserted = match self.turns.get_mut(turn) {
-            Some(t) => t.add(act),
+        if self.turns.get(turn).map_or(false, |t| t.acts.contains_key(act)) {
+            return Ok(());
+        }
+        if let Some(b) = self.current(session, budget) {
+            safe_add(b.tools, 1).ok_or(ResourceBound)?;
+        }
+        match self.turns.get_mut(turn) {
+            Some(t) => {
+                t.add(act);
+            }
             None => {
                 let mut t = Turn { seq: self.next_turn, acts: Default::default() };
                 self.next_turn += 1;
                 t.add(act);
                 self.turns.insert(turn.into(), t);
-                true
             }
-        };
-        if !inserted {
-            return Ok(());
         }
         if let Some(b) = self.current(session, budget) {
-            b.tools = safe_add(b.tools, 1).ok_or(ResourceBound)?;
+            b.tools += 1;
         }
         Ok(())
     }

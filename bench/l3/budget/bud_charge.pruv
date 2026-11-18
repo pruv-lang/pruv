@@ -111,6 +111,17 @@ pub fn note_failure(inout cv: [i64]) -> i64
   ensures len(cv) == len(old(cv))
 { return bump(inout cv, 13); }
 
+// noteTool's bound, checked on the CURRENT frame before bud_tools::note_tool inserts a new activity: 5 ResourceBound
+// when the budget is current and used.tools + 1 would leave the safe-integer range (the refusal comes before any
+// write, so the dedup set is unchanged: KD-M8-1), 2 invalid frame, else 0.
+pub fn tool_room(cv: [i64]) -> i64
+{
+  if len(cv) < 15 { return 2; }
+  if cv[0] != 1 { return 0; }
+  if sum(cv[12], 1) == bad() { return 5; }
+  return 0;
+}
+
 // The counting half of noteTool, run after bud_tools::note_tool inserted a new activity and CURRENT: used.tools += 1.
 pub fn add_tool(inout cv: [i64]) -> i64
   ensures len(cv) == len(old(cv))

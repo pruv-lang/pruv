@@ -98,6 +98,8 @@ def build(label, pruvc, rev):
     main = os.path.join(d, "main.rs")
     with open(main, "w") as f:
         f.write('#![allow(dead_code, unused_imports, unused_variables, unused_mut)]\n#[path = "gen.rs"] mod sol;\n')
+        # driver_m8.rs keeps its state in the host's StateBuf (state_buf.rs), as run_m8.build writes it
+        f.write('include!("%s");\n' % os.path.join(os.path.dirname(HERE), "state_buf.rs").replace("\\", "/"))
         f.write(open(os.path.join(HERE, "driver_m8.rs")).read())
     exe = os.path.join(d, "driver")
     run([run_m8.rustc(), "-C", "opt-level=3", "--edition", "2021", "-o", exe, main], text=True)
