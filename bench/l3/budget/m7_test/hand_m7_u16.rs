@@ -651,7 +651,9 @@ impl World {
 
     // maybeClose (B:399-408): an open budget with no runs on its clock closes when the host says the session is quiet
     // (0 no, 1 yes, other answers are invalid).
-    fn maybe_close(&mut self, sid: &[u16], now: i64) -> Result<Res<'_>, i64> {
+    // `packed`: the session key's packed words as the wire call carried them (wire lane), passed to the host as is;
+    // None (typed lane) packs the unit key here.
+    fn maybe_close(&mut self, sid: &[u16], packed: Option<&[i64]>, now: i64) -> Result<Res<'_>, i64> {
         let b = match self.sessions.get_mut(sid) {
             None => return Err(2),
             Some(Slot::Budget(b)) if b.state == State::Open => b,
@@ -664,7 +666,9 @@ impl World {
         // units) take the cold heap path.
         let mut kbuf = [0i64; 64];
         let heap;
-        let k: &[i64] = if sid.len() <= 4 * kbuf.len() {
+        let k: &[i64] = if let Some(p) = packed {
+            p
+        } else if sid.len() <= 4 * kbuf.len() {
             pack_u16_into(sid, &mut kbuf)
         } else {
             heap = pack_u16(sid);
@@ -718,6 +722,8 @@ struct Call {
     origin: i64,
     size: i64,
     unit: [i64; 6],
+    // end of the session key's packed words in the op (they are op[12..sk_end])
+    sk_end: usize,
 }
 
 // The three call keys (sessionId, budgetId, uuid) as u16 units, decoded by decode_call into buffers the host reuses.
@@ -745,6 +751,7 @@ fn decode_call(op: &[i64], keys: &mut CallKeys) -> Result<Call, i64> {
         origin: op[3],
         size: op[4],
         unit,
+        sk_end: e1,
     })
 }
 
@@ -767,7 +774,7 @@ fn size_of(z: i64) -> Option<Size> {
     }
 }
 
-fn dispatch<'a>(w: &'a mut World, c: &Call, keys: &CallKeys) -> Result<Res<'a>, i64> {
+fn dispatch<'a>(w: &'a mut World, c: &Call, keys: &CallKeys, op: &[i64]) -> Result<Res<'a>, i64> {
     let [s, b, u] = keys;
     match c.code {
         1 => Ok(match w.current(s, b) {
@@ -776,7 +783,7 @@ fn dispatch<'a>(w: &'a mut World, c: &Call, keys: &CallKeys) -> Result<Res<'a>, 
         }),
         2 => Ok(Res::Bool(w.is_halted(s, b))),
         5 => w.reopen(s, b),
-        6 => w.maybe_close(s, c.now),
+        6 => w.maybe_close(s, Some(&op[12..c.sk_end]), c.now),
         3 => {
             let origin = origin_of(c.origin).ok_or(2)?;
             let size = size_of(c.size).ok_or(2)?;
@@ -876,7 +883,7 @@ impl Host {
         self.w.fx.clear();
         let status = match decode_call(&self.ops[slot].1, &mut self.keys) {
             Err(s) => s,
-            Ok(c) => match dispatch(&mut self.w, &c, &self.keys) {
+            Ok(c) => match dispatch(&mut self.w, &c, &self.keys, &self.ops[slot].1) {
                 Ok(r) => {
                     match words.as_deref_mut() {
                         Some(v) => v.extend(res_words(&r)),
@@ -953,7 +960,7 @@ impl Host {
         let before = bud_facts::calls();
         let (status, words) = match decode_call(&op, &mut self.keys) {
             Err(s) => (s, Vec::new()),
-            Ok(c) => match dispatch(&mut self.w, &c, &self.keys) {
+            Ok(c) => match dispatch(&mut self.w, &c, &self.keys, &op) {
                 Ok(r) => (0, res_words(&r)),
                 Err(s) => (s, Vec::new()),
             },
@@ -1248,7 +1255,7 @@ fn run_perf(args: &[String]) {
         let mut w = setup(State::Open);
         for sid in &sids {
             w.fx.clear();
-            assert_eq!(close_tag(w.maybe_close(sid, now).unwrap()), 2);
+            assert_eq!(close_tag(w.maybe_close(sid, None, now).unwrap()), 2);
         }
         let reset = |w: &mut World| {
             for (sid, rec) in sids.iter().zip(&records) {
@@ -1257,7 +1264,7 @@ fn run_perf(args: &[String]) {
         };
         let ns = close_batch(&mut w, size, reps, reset, |w, i| {
             w.fx.clear();
-            let pair = match w.maybe_close(black_box(&sids[i]), now) {
+            let pair = match w.maybe_close(black_box(&sids[i]), None, now) {
                 Ok(r) => (0, close_tag(r)),
                 Err(status) => (status, 0),
             };
@@ -1268,7 +1275,7 @@ fn run_perf(args: &[String]) {
             reset(&mut w);
             for sid in &sids[..size.min(vn - start)] {
                 w.fx.clear();
-                let tag = close_tag(w.maybe_close(sid, now).unwrap());
+                let tag = close_tag(w.maybe_close(sid, None, now).unwrap());
                 assert_eq!(tag, 2);
                 assert!(matches!(w.fx.as_slice(), [Effect::Changed]));
                 sum = rchk_fold(sum, 0, &[tag], &w.fx);
@@ -1282,7 +1289,7 @@ fn run_perf(args: &[String]) {
         let mut w = setup(State::Open);
         let mut go = |w: &mut World| {
             w.fx.clear();
-            let _ = black_box(w.maybe_close(black_box(sid), now));
+            let _ = black_box(w.maybe_close(black_box(sid), None, now));
             w.fx.clear();
             let _ = black_box(w.reopen(black_box(sid), black_box(lbid)));
         };
@@ -1299,7 +1306,7 @@ fn run_perf(args: &[String]) {
         let mut s = 0u64;
         for _ in 0..vn {
             w.fx.clear();
-            let (st, ws) = digest(w.maybe_close(sid, now));
+            let (st, ws) = digest(w.maybe_close(sid, None, now));
             s = rchk_fold(s, st, &ws, &w.fx);
             w.fx.clear();
             let (st, ws) = digest(w.reopen(sid, lbid));

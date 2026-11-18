@@ -4,10 +4,15 @@ import json
 from pathlib import Path
 
 
+CANONICAL = {"cases", "cases_life", "cases_halt"}
+
+
 def required_exact(here, cases):
     cases = Path(cases)
     manifest = Path(here) / (cases.stem + ".exact.json")
     if not manifest.is_file():
+        if cases.stem in CANONICAL:
+            raise SystemExit(f"FAIL Q {cases.name} required-id manifest {manifest.name} is missing")
         return set()
     required = json.loads(manifest.read_text())
     digest = hashlib.sha256(cases.read_bytes()).hexdigest()

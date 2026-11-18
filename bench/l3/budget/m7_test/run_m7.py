@@ -581,6 +581,10 @@ def cmd_same(args):
 
 PERF_ITEMS = ["ishalted", "current", "attach", "close", "closereopen", "reopenmiss", "replace"]  # items the Pruv driver and hand16 both run
 PERF_CALLS = {"closereopen": 2}  # calls per rep (ns and instructions are reported per call)
+# close: whole-process instruction counts would include the per-batch restore of the closed state, which differs by side
+# (Pruv copies st, hand16 rebuilds its records) and is outside the timed CLOSE span; close is measured by time,
+# allocations and peak RSS only.
+NO_INSTR_ITEMS = {"close"}
 
 
 def perf_sizes(args):
@@ -691,6 +695,8 @@ def cmd_perf(args):
     if not args.no_instr:
         for size in sizes:
             for item in PERF_ITEMS:
+                if item in NO_INSTR_ITEMS:
+                    continue
                 calls = PERF_CALLS.get(item, 1)
                 a = instr_per_call(lambda r: [exe, "boundary", str(size), str(r), item, "A"], args.reps, calls)
                 o = instr_per_call(lambda r: [exe, "boundary", str(size), str(r), item, "observe"], args.reps, calls)
@@ -820,6 +826,8 @@ def cmd_boundary(args):
     instr = {}
     if not args.no_instr:
         for (item, size, var) in sorted(ns):
+            if item in NO_INSTR_ITEMS:
+                continue  # the per-batch restore is in the process count (see NO_INSTR_ITEMS); ns only
             calls = B_PAIR.get(item, 1)  # calls per rep
             r1, r2 = args.reps, 5 * args.reps
             vals = []

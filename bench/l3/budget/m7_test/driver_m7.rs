@@ -956,37 +956,29 @@ fn run_boundary(args: &[String]) {
         }
     };
 
-    // Self-check: each variant once on fresh state; call status, out, fx, bv and state words must equal A's.
+    // Self-check: each variant once on fresh state, in lockstep with A; after every call the status, out, fx, bv and
+    // state words must equal A's (compared per step, so memory stays linear in the state size).
     for it in &items {
         if only_item.map_or(false, |o| o != it.name) {
             continue;
         }
-        let vars: &[Var] = if it.name == "noop" { &[Var::A, Var::B] } else { &[Var::A, Var::B, Var::Bnv, Var::C] };
-        let mut want: Option<Vec<i64>> = None;
+        let vars: &[Var] = if it.name == "noop" { &[Var::B] } else { &[Var::B, Var::Bnv, Var::C] };
+        let expect = if it.name == "noop" { 2 } else { 0 };
         for &v in vars {
-            let mut w = setup(it);
-            let ps: Vec<Prep> = it.bodies.iter().map(|b| prep_of(&mut w, b)).collect();
-            let mut snap: Vec<i64> = Vec::new();
+            let mut wa = setup(it);
+            let mut wv = setup(it);
+            let pa: Vec<Prep> = it.bodies.iter().map(|b| prep_of(&mut wa, b)).collect();
+            let pv: Vec<Prep> = it.bodies.iter().map(|b| prep_of(&mut wv, b)).collect();
             for (i, b) in it.bodies.iter().enumerate() {
-                let r = one(v, &mut w, b, &ps[i]);
-                let expect = if it.name == "noop" { 2 } else { 0 };
-                if r != expect {
-                    eprintln!("self-check: {} variant {} status {} (want {})", it.name, v as usize, r, expect);
+                let ra = one(Var::A, &mut wa, b, &pa[i]);
+                let rv = one(v, &mut wv, b, &pv[i]);
+                if ra != expect || rv != expect {
+                    eprintln!("self-check: {} step {} status A {} variant {} {} (want {})", it.name, i, ra, v as usize, rv, expect);
                     std::process::exit(2);
                 }
-                snap.push(r);
-                snap.extend_from_slice(&w.out);
-                snap.extend_from_slice(&w.fx);
-                snap.extend_from_slice(&w.bv);
-                snap.extend_from_slice(&w.st);
-            }
-            match &want {
-                None => want = Some(snap),
-                Some(x) => {
-                    if *x != snap {
-                        eprintln!("self-check: {} variant {} differs from A (out/fx/bv/state words)", it.name, v as usize);
-                        std::process::exit(2);
-                    }
+                if (&wa.out, &wa.fx, &wa.bv, &wa.st) != (&wv.out, &wv.fx, &wv.bv, &wv.st) {
+                    eprintln!("self-check: {} step {} variant {} differs from A (out/fx/bv/state words)", it.name, i, v as usize);
+                    std::process::exit(2);
                 }
             }
         }
@@ -1006,6 +998,38 @@ fn run_boundary(args: &[String]) {
             let per = it.bodies.len();
             let mut sum: u64 = 0;
             let (ns, allocs);
+            if it.name == "close" && matches!(vn, "prep" | "observe") {
+                // exactly reps operations, cycling the sessions as the timed close loop does (one close per op)
+                let mut r = 0;
+                if vn == "observe" {
+                    r = one(Var::A, &mut w, &it.bodies[0], &ps[0]);
+                }
+                let mut op_k = |w: &mut World, k: usize, sum: &mut u64| {
+                    if vn == "prep" {
+                        let b = &it.bodies[k % size];
+                        w.next_uuid = 0;
+                        bud_facts::set_calls(0);
+                        let (slot, op) = w.take_op(black_box(b));
+                        *sum = sum.wrapping_add(black_box(&op).len() as u64);
+                        w.put_op(slot, op);
+                    } else {
+                        *sum = consume(black_box(w), black_box(r), *sum);
+                    }
+                };
+                for k in 0..1000 {
+                    op_k(&mut w, k, &mut sum);
+                }
+                sum = 0;
+                let a0 = ALLOCS.load(Ordering::Relaxed);
+                let t = Instant::now();
+                for k in 0..reps {
+                    op_k(&mut w, k, &mut sum);
+                }
+                ns = t.elapsed().as_nanos() as f64 / reps as f64;
+                allocs = (ALLOCS.load(Ordering::Relaxed) - a0) as f64 / reps as f64;
+                println!("{} {} {} {:.2} {} {:.3}", it.name, vn, size, ns, black_box(sum), allocs);
+                continue;
+            }
             if it.name == "close" && matches!(vn, "A" | "B" | "Bnv" | "C") {
                 let v = match vn { "A" => Var::A, "B" => Var::B, "Bnv" => Var::Bnv, _ => Var::C };
                 let open = w.st.clone();
