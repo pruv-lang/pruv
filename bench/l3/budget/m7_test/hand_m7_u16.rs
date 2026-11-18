@@ -1241,7 +1241,7 @@ fn run_perf(args: &[String]) {
         let mut w = setup(State::Open);
         let mut go = |w: &mut World| {
             w.fx.clear();
-            black_box(w.reopen(black_box(sid), black_box(lbid)).is_ok());
+            black_box(matches!(w.reopen(black_box(sid), black_box(lbid)), Ok(Res::Bool(true))));
         };
         for _ in 0..1000 {
             go(&mut w);

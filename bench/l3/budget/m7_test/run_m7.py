@@ -756,7 +756,7 @@ def instr_retired(cmd, soft=False):
     sys.exit("no instruction count from /usr/bin/time -l")
 
 
-B_ITEMS = ["current", "ishalted", "attach", "closereopen", "replace"]
+B_ITEMS = ["current", "ishalted", "attach", "closereopen", "reopenmiss", "replace"]
 B_VARS = ["A", "B", "Bnv", "C", "prep", "observe"]
 B_PAIR = {"closereopen": 2}  # calls per rep; the closereopen rows are reported per pair (maybeClose + reopen)
 

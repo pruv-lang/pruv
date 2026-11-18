@@ -651,9 +651,9 @@ pub fn reopen(inout st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, 
     crate::ent_u16::wr(inout out, 0, 1);
     return 0;
   }
-  // current_at proved the record span st[off .. off + n) in st with n >= 30: header reads and writes are direct.
+  // current_at proved the record span st[off .. off + st[a + 13]) in st with st[a + 13] >= 30: header reads and
+  // writes are direct.
   let off: i64 = st[a + 12];
-  let n: i64 = st[a + 13];
   if st[off] != 2 || st[off + 18] != 1 {
     out[0] = 1;
     return 0;
