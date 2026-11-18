@@ -76,7 +76,8 @@ M4RAW_MODS = [("bench/l3/lib", "ent_u16"), ("bench/l3/budget", "bud_keys"), ("be
 # m4 lanes (all drive root_m4.pruv with driver_m4.rs; the q-mode check is the same for every lane):
 #   backend: "rust" (Rust source) or "llvm" (LLVM IR + Rust bindings, linked through clang + runtime.c);
 #   raw:     manifest raw_entries (None = no manifest, "crate" = pruv_raw::PruvStore, "c" = pruv_c extern "C" adapter);
-#   nv:      root_m4.pruv with the leading `valid(st)` checks of m4_op / m4_observe removed (temp copy);
+#   nv:      root_m4.pruv with the leading `valid(st)` checks of m4_op / m4_observe removed (temp copy; a no-op since
+#            L3 P13a.9 removed them from root_m4.pruv);
 #   eq:      the package copies of the modules call a verified element loop (EQ_HELPER) instead of eq_range. The LLVM
 #            backend rejects eq_range until P17a lowers it, so every LLVM lane needs this; m4eq is the Rust lane with the
 #            same substitution, the like-for-like reference for the LLVM lanes. These are preliminary (P10) lanes: P17c
@@ -146,8 +147,10 @@ def root_text(nv):
         text = fh.read()
     if nv:
         text, n = NV_CHECK.subn("", text)
-        if n != 2:    # m4_op and m4_observe (m4_grow checks `prev`, which stays)
-            raise ToolError("nv: expected 2 `valid(st)` checks in root_m4.pruv, found %d" % n)
+        # m4_op and m4_observe had them (m4_grow checks `prev`, which stays); since L3 P13a.9 they are gone (m4_op
+        # ensures valid is kept), so the nv lanes build the same root as their base lanes.
+        if n not in (0, 2):
+            raise ToolError("nv: expected 0 or 2 `valid(st)` checks in root_m4.pruv, found %d" % n)
     return text
 
 

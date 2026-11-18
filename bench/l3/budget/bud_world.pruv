@@ -173,6 +173,7 @@ fn keys_of(st: [i64], inout out: [i64], owner: i64) -> i64
 // Sets key -> blob in the map of `owner`. [1] new, [0] replaced (position kept). A new key takes words(kn) arena
 // words, so that is what make_room reserves.
 fn put_blob(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, blob: [i64], bs: i64, bn: i64, inout out: [i64]) -> i64
+  ensures crate::bud_store::kept(st, old(st))
 {
   if len(out) < 2 { return 3; }
   let e: i64 = fd(st, owner, key, ks, kn);
@@ -199,6 +200,7 @@ fn put_blob(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, blob: [i6
 
 // Removes the key from the map of `owner` (children go with it). [1] removed, [0] absent.
 fn del_key(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, inout out: [i64]) -> i64
+  ensures crate::bud_store::kept(st, old(st))
 {
   if len(out) < 2 { return 3; }
   let e: i64 = fd(st, owner, key, ks, kn);
@@ -210,6 +212,7 @@ fn del_key(inout st: [i64], owner: i64, key: [i64], ks: i64, kn: i64, inout out:
 // ---- sessions (root 0) ----
 
 pub fn session_put_w(inout st: [i64], key: [i64], ks: i64, kn: i64, blob: [i64], bs: i64, bn: i64, inout out: [i64]) -> i64
+  ensures crate::bud_store::kept(st, old(st))
 {
   return put_blob(inout st, 0, key, ks, kn, blob, bs, bn, inout out);
 }
@@ -253,6 +256,7 @@ pub fn session_get(st: [i64], key: [i64], ks: i64, kn: i64, inout out: [i64]) ->
 }
 
 pub fn session_del(inout st: [i64], key: [i64], ks: i64, kn: i64, inout out: [i64]) -> i64
+  ensures crate::bud_store::kept(st, old(st))
 {
   return del_key(inout st, 0, key, ks, kn, inout out);
 }
@@ -268,6 +272,7 @@ pub fn session_keys(st: [i64], inout out: [i64]) -> i64
 // and its packed words follow; the frame `skn, words...` is stored as the clock blob. [2] when the frame word is
 // missing or differs.
 pub fn clock_put(inout st: [i64], bkey: [i64], bks: i64, bkn: i64, skey: [i64], sks: i64, skn: i64, inout out: [i64]) -> i64
+  ensures crate::bud_store::kept(st, old(st))
 {
   if len(out) < 2 { return 3; }
   if sks < 1 || sks > len(skey) { return 2; }
@@ -276,12 +281,14 @@ pub fn clock_put(inout st: [i64], bkey: [i64], bks: i64, bkn: i64, skey: [i64], 
 }
 
 pub fn clock_del(inout st: [i64], key: [i64], ks: i64, kn: i64, inout out: [i64]) -> i64
+  ensures crate::bud_store::kept(st, old(st))
 {
   return del_key(inout st, 1, key, ks, kn, inout out);
 }
 
 // [1] ok, [0] no such clock
 pub fn clock_set(inout st: [i64], key: [i64], ks: i64, kn: i64, sp: i64, since: i64, armed: i64, dl: i64, inout out: [i64]) -> i64
+  ensures crate::bud_store::kept(st, old(st))
 {
   if len(out) < 2 { return 3; }
   let e: i64 = fd(st, 1, key, ks, kn);
@@ -318,6 +325,7 @@ pub fn clock_keys(st: [i64], inout out: [i64]) -> i64
 
 // [2] no clock, [1] new run, [0] updated (position kept)
 pub fn run_set(inout st: [i64], bkey: [i64], bks: i64, bkn: i64, rkey: [i64], rks: i64, rkn: i64, waiting: i64, inout out: [i64]) -> i64
+  ensures crate::bud_store::kept(st, old(st))
 {
   if len(out) < 2 { return 3; }
   let c: i64 = fd(st, 1, bkey, bks, bkn);
@@ -337,6 +345,7 @@ pub fn run_set(inout st: [i64], bkey: [i64], bks: i64, bkn: i64, rkey: [i64], rk
 
 // [1] removed, [0] absent
 pub fn run_del(inout st: [i64], bkey: [i64], bks: i64, bkn: i64, rkey: [i64], rks: i64, rkn: i64, inout out: [i64]) -> i64
+  ensures crate::bud_store::kept(st, old(st))
 {
   if len(out) < 2 { return 3; }
   let c: i64 = fd(st, 1, bkey, bks, bkn);
@@ -378,6 +387,7 @@ pub fn run_list(st: [i64], key: [i64], ks: i64, kn: i64, inout out: [i64]) -> i6
 
 // [1] new activity, [0] already seen. Looks only at the two keys; never scans the activity set.
 pub fn tool_note(inout st: [i64], tkey: [i64], tks: i64, tkn: i64, akey: [i64], aks: i64, akn: i64, inout out: [i64]) -> i64
+  ensures crate::bud_store::kept(st, old(st))
 {
   if len(out) < 2 { return 3; }
   let t: i64 = fd(st, 2, tkey, tks, tkn);
@@ -401,6 +411,7 @@ pub fn tool_note(inout st: [i64], tkey: [i64], tks: i64, tkn: i64, akey: [i64], 
 
 // Removes the turn and frees its activities: O(turn key length + activities), amortized O(1) per noted activity. [1] removed, [0] absent.
 pub fn tool_forget(inout st: [i64], key: [i64], ks: i64, kn: i64, inout out: [i64]) -> i64
+  ensures crate::bud_store::kept(st, old(st))
 {
   return del_key(inout st, 2, key, ks, kn, inout out);
 }

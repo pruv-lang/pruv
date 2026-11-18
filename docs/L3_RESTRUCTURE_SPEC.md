@@ -1451,7 +1451,7 @@ both compilers, and root_admit proves in 7.83 s (Python) and 6.88 s (Rust).
 ### P13a.8 Notes for the next package
 
 - Step 2 is ready to land as soon as the verifier keeps a ground predicate opaque (P13a.3). The archived diff (local, outside the tree) is the
-  starting point; bud_world's 11 mutators follow the same pattern.
+  starting point; bud_world's 11 mutators follow the same pattern. Landed with step 3 in P13a.9.
 - Steps 3 to 5 follow, in the original order: drop the per-call `valid` (m4 should meet m4nv), remove the poison flag
   (m4raw/m4 <= 1.1x), then I1 ensures and adapter wiring.
 - The reference for proof time is now P13a.4, not 13.25 s.
@@ -1590,7 +1590,8 @@ Starting from the archived step-2 diff, `kept` and `dyn_ok` were made `pub opaqu
 What is left is proof engineering in bud_map, not a verifier gap: a per-writer lemma (`sh` keeps `dyn_ok` when the
 written word is not one `dyn_ok` reads, or keeps the bound it checks) with `reveal dyn_ok;` only in `sh`, and
 `reveal kept;` moved from the function top to the exits. The attempt is kept locally (outside the tree); the
-bench sources are unchanged in this package. bud_world's 11 mutators wait for bud_map.
+bench sources are unchanged in this package. bud_world's 11 mutators wait for bud_map. Landed in P13a.9 (exit
+reveals after the frame asserts, `shape` through the opaque `shape_w`).
 
 ### P13o.8 Gates
 
@@ -1619,3 +1620,154 @@ code-call fact or module visibility.
 A confirmation review of the fix found nothing required. Contracts cannot allocate or slice arrays, and `old` and
 `inout` keep lengths, so no contract argument breaks the kept array facts. Opaque parameters are limited to `i64`,
 `bool`, `[i64]`, `[u8]` and `[bool]`, so the map fact is unused today.
+
+## Appendix P13a.9 (P13a step 2 landed: mutators keep `valid`; per-call `valid` removed from `m4_op`/`m4_observe`)
+
+P13a step 2 (P13a.3, P13o.7) lands with the P13o verifier, without a language change. Every write function of
+bud_store, bud_map and the 11 bud_world mutators ensures `kept(st, old(st))`, and `m4_op` ensures
+`valid(old(st)) ==> valid(st)`. So step 3 lands in the same package: `m4_op` and `m4_observe` no longer check `valid`
+per call.
+
+### P13a.9.1 Method
+
+- **`shape` by congruence.** `shape(st)` is a transparent wrapper, `len(st) >= 232 && shape_w(len(st), st[0], st[1],
+  st[2], st[3], st[4], st[5], st[6], st[9], st[11])`, where `shape_w` is an `opaque fn` over i64 words. A mutator that
+  shows `shape_same(st, old(st))` (equal length and shape words) gets `shape(st)` from `shape(old(st))` because an
+  opaque call is a function symbol: equal arguments, equal result. `shape_w` is revealed only in `ea` (entry address,
+  which needs the slot count), and never in a mutator, so the power-of-two layout test never reaches a mutator query.
+- **`dyn_ok` revealed at the write exits, after the frame.** `dyn_ok` (words 7, 8, 10, 12, 13, 14 against 6, 9, 11) is
+  opaque. Each write exit first asserts the header words it leaves equal (`hdr_same` / `shape_same` plus the single
+  words) and the values it wrote (for example `st[7] == top + 1`, `st[12] == live + 1`), and only then says
+  `reveal dyn_ok;`. The revealed body then closes over plain equalities instead of store chains. Exits that write
+  nothing need no reveal. Reveals: bud_store `wr16`, `set_ef`, `fill_entry`, `arena_put`, `entry_alloc`,
+  `entry_free`; bud_map `sh`, `write_at`'s loop, `link_fast`, `set_blob`; none in bud_world or root_m4. P13o.7 revealed at the function top, which is what timed out.
+- **`kept` as a proposition.** `kept(st, o) = len(st) == len(o) && (!shape(o) || shape(st)) && (!dyn_ok(o) ||
+  dyn_ok(st))`. It is transparent and cheap: reflexivity and chaining through a sequence of calls need no reveal, and
+  `valid(o) ==> valid(st)` follows from it with `len(st) >= 232` from `valid`'s own first term.
+- **Header writer lemma.** `bud_map::sh` (the one header writer) ensures `wok(old(st), i, v) ==> kept(st, old(st))`.
+  `wok` is small and transparent: true off the header and on buffers shorter than 15, the `dyn_ok` bound on words 7, 8,
+  10, 12..14, false on the shape words. Callers (`put_units`, `take_words`, `remove`, `rehash`, ...) prove `wok` with
+  linear facts and never reveal `dyn_ok`.
+- **Writes past the header.** Slot and region writes go through `bud_store::wr16` (`ent_u16::wr` that also skips
+  addresses below 16), so they keep the header frame on any buffer. `write_at`'s fast path additionally requires
+  `o >= 16`; `make_room`'s fit test uses `o >= 16` (was 15). On a valid store every such address is >= 16 already.
+- **`put_at` split.** Its direct-word linking block is now `link_fast(e, n, h, be, bo)` (same writes, same order), so
+  `put_at`'s query no longer carries the field writes; `put_at` went from 0.40 s to 0.15 s (Python), `link_fast` 0.13 s.
+- **Loops.** The mutating loops of `write_at`, `put_key_h`, `remove`, `set_blob` and `rehash` carry
+  `invariant kept(st, old(st))`; the loop body proves one step with the lemmas above.
+
+### P13a.9.2 Lemmas and ensures
+
+| file | functions with `ensures kept(st, old(st))` (or the `valid` form) |
+|---|---|
+| bud_store | `wr16`, `set_ef`, `fill_entry`, `arena_put`, `entry_alloc`, `entry_free` (+ `shape_w` opaque, `wok`, `kept`, `shape_same`) |
+| bud_map | `sf`, `sh` (under `wok`), `write_at`, `link_fast`, `put_at`, `put_key_h`, `put_units`, `take_words`, `room`, `make_room`, `rehash`, `set_blob`, `drop_entry`, `drop_child`, `drop_desc`, `remove`, `add_w`, `add_absent_w` |
+| bud_world | `put_blob`, `del_key`, `session_put_w`, `session_del`, `clock_put`, `clock_del`, `clock_set`, `run_set`, `run_del`, `tool_note`, `tool_forget` |
+| m34_test/root_m4 | `dec_key`, `dec_put`, `dec_two`, `dec_set`; `m4_op`: `valid(old(st)) ==> valid(st)` |
+
+### P13a.9.3 Contract change
+
+`m4_op` and `m4_observe` take `st` from `m4_init`, `m4_grow` or an earlier `m4_op`. On any other buffer they stay
+memory-safe and terminate (the bounds and loop limits are unchanged) but their answers are unspecified; status 2 now
+means a bad op encoding only (`m4_grow` still checks `valid(prev)`). m34_test/CONTRACT.md says so. The `nv` lanes of
+run.py are now the same code as the default lanes (the driver check accepts that). Behaviour on corrupt buffers
+changed in one more way: slot and region writes below address 16 are skipped instead of landing on the header.
+P10.4 kept the per-call `valid` until the handle records that init returned 0; here the proof covers every state the
+entries produce, so the record is not needed for these two calls. A handle that accepts a foreign buffer still needs
+it (the poison-flag step, below).
+
+### P13a.9.4 Proof time (user CPU s, one run each, same machine, same session; load about 3)
+
+HEAD (ab6b291) sources and P13a.9 sources, both with the worktree's compilers (no compiler change):
+
+| root | Python HEAD | Python P13a.9 | Rust HEAD | Rust P13a.9 |
+|---|---:|---:|---:|---:|
+| m34_test/root_m4 | 7.79 | 9.20 | 6.91 | 5.20 |
+| m8_test/root_m8 | 8.87 | 9.23 to 9.83 | 7.57 | 5.61 to 5.94 |
+| m9_test/root_m9 | 8.16 | 9.30 | 7.22 | 5.35 |
+| m34_test/root_admit | 8.02 | 8.34 | 7.04 | 4.91 |
+| m7_test/root | 9.58 | 10.37 | 7.75 | 5.95 |
+| m10_test/root_m10 | 10.38 | 11.44 | 8.43 | 6.62 |
+| m11_test/root | 14.02 | 14.37 | 10.17 | 8.02 |
+
+Gate (root_m8 <= 1.2x P13a.4: Python 10.09, Rust 9.24): met on both, with Python close (9.23 to 9.83 over three runs).
+Rust is faster than HEAD on every root: the hidden `shape_w`/`dyn_ok` bodies leave most queries smaller than the
+expanded `valid` of HEAD. Python is 4 to 18% slower than HEAD, mostly in `remove` (below).
+
+Per-write-function time, Python `pruvc` profile on root_m8 (s; `-` = below the profile's top 60, under 0.02 s):
+
+| function | HEAD | P13a.9 | | function | HEAD | P13a.9 |
+|---|---:|---:|---|---|---:|---:|
+| `bud_store::fill_entry` | 0.85 | 0.34 | | `bud_map::put_at` | 0.40 | 0.15 |
+| `bud_store::entry_free` | 0.42 | 0.33 | | `bud_map::link_fast` | - | 0.13 |
+| `bud_store::entry_alloc` | 0.26 | 0.24 | | `bud_map::put_key_h` | 0.05 | 0.14 |
+| `bud_store::arena_put` | 0.10 | 0.10 | | `bud_map::write_at` | 0.02 | 0.14 |
+| `bud_store::set_ef` | 0.06 | 0.05 | | `bud_map::set_blob` | 0.09 | 0.38 |
+| `bud_store::wr16` | 0.04 | 0.05 | | `bud_map::rehash` | 0.04 | 0.27 |
+| `bud_map::sh` | - | 0.05 | | `bud_map::drop_entry` | 0.18 | 0.17 |
+| `bud_map::sf` | - | 0.02 | | `bud_map::remove` | 0.79 | 1.23 |
+| `bud_map::put_units` | - | 0.03 | | `bud_map::drop_desc` | - | 0.04 |
+| `bud_map::take_words` | - | 0.02 | | `bud_world::put_blob` | - | 0.14 |
+| `bud_world::tool_note` | - | 0.13 | | `bud_world::run_set` | - | 0.04 |
+| `bud_world::clock_put` | - | 0.03 | | other bud_world mutators | - | 0.02 or less |
+
+Profile totals: root_m8 8.86 (HEAD) and 9.11; root_m4 7.49 and 8.92 (root_m4 adds `dec_*`, `m4_op` at 0.02 to 0.05
+each). The largest new cost is `remove`'s loop (+0.44 s): its invariant carries `kept`, and each iteration chains
+`kept` through `drop_child`/`drop_entry` and the pending word-14 write.
+
+### P13a.9.5 Performance (Rust backend)
+
+M4 (`perf_headroom/host/run.py --only m4 --lanes m4nv --rounds 5`, ns per op, median of 7 alternating rounds for the
+adapter table):
+
+| axis | n | hand | m4 | m4raw | m4nv | m4/hand | m4raw/hand | m4raw/m4 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| sessions | 100 | 14.6 | 11.6 | 13.1 | 11.6 | 0.79 | 0.90 | 1.13 |
+| sessions | 500 | 15.5 | 11.3 | 12.7 | 11.3 | 0.73 | 0.82 | 1.12 |
+| sessions | 1000 | 15.3 | 11.7 | 13.1 | 11.8 | 0.76 | 0.86 | 1.12 |
+| tools | 100 | 51.8 | 29.7 | 31.4 | 29.9 | 0.57 | 0.61 | 1.06 |
+| tools | 500 | 52.2 | 32.8 | 34.9 | 32.8 | 0.63 | 0.67 | 1.06 |
+| tools | 1000 | 52.9 | 32.1 | 34.1 | 31.8 | 0.61 | 0.64 | 1.06 |
+| clocks | 100 | 37.7 | 24.2 | 29.2 | 24.3 | 0.64 | 0.77 | 1.21 |
+| clocks | 500 | 38.9 | 23.7 | 27.3 | 23.8 | 0.61 | 0.70 | 1.15 |
+| clocks | 1000 | 38.9 | 24.3 | 28.3 | 24.8 | 0.62 | 0.73 | 1.17 |
+
+- `m4` now equals `m4nv` (P13a.5 had `m4 - m4nv` of 0.4 to 1.5 ns, the per-call `valid`).
+- Every cell is at or under 0.90x hand Rust.
+- `m4raw/m4` above 1.1x (sessions 1.12 to 1.13, clocks 1.15 to 1.21) is Pruv against Pruv, not a hand ratio: `m4raw`
+  goes through the `PruvStore` poison flag (P11.4, P13a.5; 1.4 to 1.5 ns on sessions here). The clocks gap
+  (3.6 to 5.0 ns) is wider than in P13a.5 (1.8 to 2.2 ns), and `m4raw` clocks has the widest round spread of the
+  table (27.5 to 31.7 ns at n=100); it is still 0.70 to 0.77x hand. Removing the flag is step 4.
+
+M8 (`m8_test/run_m8.py perf --rounds 5 --no-instr`, HEAD and P13a.9 generated sources run alternately twice,
+`--gen`), Pruv / hand16 ns: charge 20.1 to 21.8 against 21.0 to 25.1, failure 16.7 to 20.4 against 16.2 to 18.9,
+tooldup 23.8 to 26.8 against 25.1 to 28.5, toolgrow 48.7 to 53.5 against 90.7 to 97.9. P13a.9 equals HEAD in every
+cell within noise. `failure` n=500 (1.08 to 1.15x hand16) is above 1.0x on HEAD as well; it is not from this package.
+
+M7 (`m7_test/run_m7.py perf --rounds 5 --profile SM --no-instr`, HEAD and P13a.9 alternated twice), Pruv typed /
+hand16: `attach` 1.10 to 1.14 and `closereopen` 1.05 to 1.12 on both HEAD and P13a.9 (pre-existing). `ishalted` reads
+1.03 to 1.12 on P13a.9 against 0.95 to 1.02 on HEAD, but `c_is_halted` reaches none of the functions this package
+changes (its 36 generated functions are identical text on both), so the difference is code placement in the driver
+binary, not Pruv work. M9 (`run_m9.py perf --rounds 5`): 0.73 to 0.85x hand. M10 and M11 perf were not run; they
+use the same changed writers, whose generated code differs only as listed in P13a.9.3.
+
+### P13a.9.6 Gates
+
+Both compilers (Rust: worktree release build; Python: `pruvc/pruvc.py`):
+- `run.py admit`: 26/26;
+- `run.py lanes --count 300`: all 9 lanes 300/300;
+- all seven budget roots above prove.
+
+Not run, because their trigger did not apply: `cargo test --release`, `diff_rust.py`, `g8_frontend` (no compiler
+change), the bench/l3/lib user tests (bench/l3/lib unchanged). No audit: the package adds no language semantics; the
+contract change is the removed per-call check, stated in P13a.9.3.
+
+### P13a.9.7 Remaining work
+
+- Step 4: remove the `PruvStore` poison flag (`m4raw/m4` sessions and clocks above 1.1x). A handle that may receive a
+  buffer the entries did not produce needs the "init returned 0" record of P10.4 (or a validated ingress) first.
+- Step 5: I1 ensures and adapter wiring (P13a.8).
+- Python proof time on `remove` (1.23 s, HEAD 0.79 s): moving the loop body into a helper with its own `kept`
+  ensures would shrink the loop query.
+- M7 `attach`/`closereopen` and M8 `failure` n=500 are above 1.0x hand on HEAD too; they need their own row audit
+  (§4.1).

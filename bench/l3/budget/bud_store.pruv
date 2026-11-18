@@ -64,36 +64,40 @@ pub fn layout_slots(l: i64) -> i64
 }
 
 // O(1) header check against layout(len(st)): the shape of the fixed header words and the linear conditions on the
-// words the mutators write (L3 P13a). Mutators export "shape words unchanged" (shape_same) and dyn_ok preservation,
-// so their callers never expand shape (its power-of-two term is the costly one); valid follows by congruence.
+// words the mutators write (L3 P13a). Every mutator ensures kept(st, old(st)), so valid(old) ==> valid(st) chains
+// through callers without expanding shape_w or dyn_ok (both opaque; L3 P13a.9).
 pub fn valid(st: [i64]) -> bool
 {
-  return shape(st) && dyn_ok(st);
+  return len(st) >= 232 && shape(st) && dyn_ok(st);
 }
 
-// Fixed header words 0..6, 9, 11 against layout(len(st)); no mutator writes them.
+// Fixed header words 0..6, 9, 11 against layout(len(st)); no mutator writes them. A transparent read of those words
+// into the opaque shape_w: a mutator that keeps the length and the shape words (shape_same) keeps shape by congruence,
+// without ever expanding the layout test (its power-of-two term is the costly one).
 pub fn shape(st: [i64]) -> bool
 {
-  let l: i64 = len(st);
-  if l < 232 { return false; }
-  // len(st) >= 232 from here, so the header words 0..14 are read directly (hd would return the same values).
-  // s == layout_slots(l) without the doubling loop: a power of two in 8..2^32 with 54*(s/2)+16 <= l, and either
-  // s > 2^31 or 54*s+16 > l (the loop stops at exactly that s).
-  let s: i64 = st[4];
+  return len(st) >= 232 && shape_w(len(st), st[0], st[1], st[2], st[3], st[4], st[5], st[6], st[9], st[11]);
+}
+
+// The layout test on the shape words of a buffer of length l (l >= 232). s == layout_slots(l) without the doubling
+// loop: a power of two in 8..2^32 with 54*(s/2)+16 <= l, and either s > 2^31 or 54*s+16 > l (the loop stops at exactly
+// that s).
+pub opaque fn shape_w(l: i64, w0: i64, w1: i64, w2: i64, w3: i64, s: i64, w5: i64, w6: i64, w9: i64, w11: i64) -> bool
+{
   if s < 8 || s > 4294967296 { return false; }
   if band(s, s - 1) != 0 { return false; }
   if 54 * (s / 2) + 16 > l { return false; }
   if s <= 2147483648 && 54 * s + 16 <= l { return false; }
   let cap: i64 = s / 2;
-  if st[0] != 1112884307 || st[1] != 1 || st[2] != l { return false; }
-  if st[3] != 16 || st[4] != s || st[5] != 16 + s || st[6] != cap { return false; }
-  if st[9] != 16 + 11 * s || st[11] != l { return false; }
+  if w0 != 1112884307 || w1 != 1 || w2 != l { return false; }
+  if w3 != 16 || w5 != 16 + s || w6 != cap { return false; }
+  if w9 != 16 + 11 * s || w11 != l { return false; }
   return true;
 }
 
 // Linear conditions on the header words the mutators write: entry top 7, free head 8, arena top 10, live entries 12,
 // used slots 13, live words 14 (against the fixed words 6, 9, 11).
-pub fn dyn_ok(st: [i64]) -> bool
+pub opaque fn dyn_ok(st: [i64]) -> bool
 {
   if len(st) < 15 { return false; }
   let top: i64 = st[7];
@@ -103,6 +107,20 @@ pub fn dyn_ok(st: [i64]) -> bool
   if st[10] < st[9] || st[10] > st[11] { return false; }
   if st[12] < 0 || st[13] < 0 || st[14] < 0 { return false; }
   return true;
+}
+
+// Writing v to word i of o keeps kept(st, o). True when o is shorter than 15 (shape(o) and dyn_ok(o) are false
+// there) or i is outside the header words 0..14; on words 7, 8, 10, 12..14 when v meets the bound dyn_ok checks on
+// word i against the other words of o; false on the shape words and on 6, 9, 11. Small and transparent: header writers
+// prove it with linear facts and get kept from bud_map::sh's ensures, without revealing dyn_ok.
+pub fn wok(o: [i64], i: i64, v: i64) -> bool
+{
+  if len(o) < 15 || i < 0 || i >= 15 { return true; }
+  if i == 12 || i == 13 || i == 14 { return v >= 0; }
+  if i == 10 { return o[9] <= v && v <= o[11]; }
+  if i == 8 { return -1 <= v && v < o[7]; }
+  if i == 7 { return o[8] < v && v <= o[6]; }
+  return false;
 }
 
 // Header words 0..14 of a and b are equal except word w (w = -1: all of them); false if either is shorter than 15.
@@ -124,13 +142,13 @@ pub fn shape_same(a: [i64], b: [i64]) -> bool
     a[6] == b[6] && a[9] == b[9] && a[11] == b[11];
 }
 
-// st after a mutator applied to o: the same length and shape words, and dyn_ok(o) carried over to st. With it, valid(o)
-// gives valid(st) by congruence (shape reads only the length and the shape words).
+// st after a mutator applied to o, as a proposition: the same length, shape(o) carried over to st and dyn_ok(o) carried
+// over to st. So valid(o) gives valid(st), and kept chains through a sequence of mutators. Writers prove the shape term
+// by congruence (shape_same, then shape_w applied to equal words) and the dyn_ok term with one `reveal dyn_ok` at
+// each write exit, after asserting the header words it reads.
 pub fn kept(st: [i64], o: [i64]) -> bool
 {
-  if len(st) != len(o) { return false; }
-  if len(o) < 15 { return true; }
-  return shape_same(st, o) && (!dyn_ok(o) || dyn_ok(st));
+  return len(st) == len(o) && (!shape(o) || shape(st)) && (!dyn_ok(o) || dyn_ok(st));
 }
 
 // st[p] = v when p is past the 16 header words and in range, else nothing (ent_u16::wr with the header excluded). The
@@ -141,7 +159,9 @@ pub fn wr16(inout st: [i64], p: i64, v: i64) -> ()
   ensures (16 <= p && p < len(st)) ==> st[p] == v
   ensures forall k in 0..len(old(st)): k == p || st[k] == old(st)[k]
   ensures len(old(st)) >= 15 ==> hdr_same(st, old(st), -1)
+  ensures kept(st, old(st))
 {
+  reveal dyn_ok;
   if p < 16 || p >= len(st) { return; }
   st[p] = v;
 }
@@ -154,6 +174,8 @@ fn ea(st: [i64], e: i64, f: i64) -> i64
   ensures (valid(st) && 0 <= e && e < st[6] && 0 <= f && f < 20) ==> (16 <= result && result - f + 20 <= len(st))
   ensures (valid(st) && !(0 <= e && e < st[6] && 0 <= f && f < 20)) ==> result == -1
 {
+  // the valid premise of the ensures reads header words 5, 6 and the length through shape_w
+  reveal shape_w;
   // len(st) < 7 reads header words 5, 6 as 0 through hd (cap 0, so -1); otherwise both are in range.
   if len(st) < 7 { return -1; }
   let cap: i64 = c32(st[6]);
@@ -193,7 +215,9 @@ pub fn ef(st: [i64], e: i64, f: i64) -> i64
 pub fn set_ef(inout st: [i64], e: i64, f: i64, v: i64) -> ()
   ensures len(st) == len(old(st))
   ensures len(old(st)) >= 15 ==> hdr_same(st, old(st), -1)
+  ensures kept(st, old(st))
 {
+  reveal dyn_ok;
   let a: i64 = ea(st, e, f);
   if a < 16 { return; }
   crate::ent_u16::wr(inout st, a, v);
@@ -205,6 +229,7 @@ pub fn set_ef(inout st: [i64], e: i64, f: i64, v: i64) -> ()
 fn fill_entry(inout st: [i64], e: i64, owner: i64, ogen: i64, egen: i64, fresh: bool) -> ()
   ensures len(st) == len(old(st))
   ensures len(old(st)) >= 15 ==> hdr_same(st, old(st), -1)
+  ensures kept(st, old(st))
 {
   let b: i64 = eb(st, e);
   if b >= 0 {
@@ -214,11 +239,14 @@ fn fill_entry(inout st: [i64], e: i64, owner: i64, ogen: i64, egen: i64, fresh: 
     st[b + 7] = -1; st[b + 8] = -1; st[b + 9] = -1; st[b + 10] = -1;
     st[b + 11] = 0; st[b + 13] = 0; st[b + 14] = 0; st[b + 15] = 0; st[b + 16] = 0; st[b + 17] = 0;
     if fresh { st[b + 4] = 0; st[b + 12] = 0; st[b + 18] = 0; st[b + 19] = 0; }
+    // the header frame first, so dyn_ok's body reads equal words (no store chain in the dyn_ok goal)
+    assert len(old(st)) < 15 || hdr_same(st, old(st), -1);
+    reveal dyn_ok;
     return;
   }
   let a: i64 = ea(st, e, 0);
   // below 16 only on a buffer that is not valid (see set_ef): skipped so the header frame holds on any buffer
-  if a < 16 { return; }
+  if a < 16 { reveal dyn_ok; return; }
   crate::ent_u16::wr(inout st, a, 1);
   crate::ent_u16::wr(inout st, a + 1, owner);
   crate::ent_u16::wr(inout st, a + 2, ogen);
@@ -241,6 +269,8 @@ fn fill_entry(inout st: [i64], e: i64, owner: i64, ogen: i64, egen: i64, fresh: 
     crate::ent_u16::wr(inout st, a + 18, 0);
     crate::ent_u16::wr(inout st, a + 19, 0);
   }
+  assert len(old(st)) < 15 || hdr_same(st, old(st), -1);
+  reveal dyn_ok;
 }
 
 // ---- init ----
@@ -351,6 +381,7 @@ pub fn arena_put(inout st: [i64], src: [i64], s: i64, e: i64) -> i64
   ensures len(old(st)) >= 15 ==> (shape_same(st, old(st)) && st[7] == old(st)[7] && st[8] == old(st)[8] &&
     st[12] == old(st)[12] && st[13] == old(st)[13])
   ensures dyn_ok(old(st)) ==> dyn_ok(st)
+  ensures kept(st, old(st))
 {
   if s < 0 || e < s || e > len(src) { return -1; }
   let n: i64 = e - s;
@@ -374,6 +405,10 @@ pub fn arena_put(inout st: [i64], src: [i64], s: i64, e: i64) -> i64
   let lw: i64 = c40(hd(st, 14));
   set_hd(inout st, 10, top + n);
   set_hd(inout st, 14, lw + n);
+  // the written words first, so the revealed bodies read plain equalities (no store chain in their goals)
+  assert len(old(st)) < 15 || (shape_same(st, old(st)) && st[7] == old(st)[7] && st[8] == old(st)[8] &&
+    st[12] == old(st)[12] && st[13] == old(st)[13] && st[10] == top + n && st[14] == lw + n);
+  reveal dyn_ok;
   return top;
 }
 
@@ -386,6 +421,7 @@ pub fn entry_alloc(inout st: [i64], owner: i64, ogen: i64) -> i64
   ensures len(old(st)) >= 15 ==> (shape_same(st, old(st)) && st[10] == old(st)[10] && st[13] == old(st)[13] &&
     st[14] == old(st)[14])
   ensures dyn_ok(old(st)) ==> dyn_ok(st)
+  ensures kept(st, old(st))
 {
   let cap: i64 = c32(hd(st, 6));
   let top: i64 = c32(hd(st, 7));
@@ -400,12 +436,18 @@ pub fn entry_alloc(inout st: [i64], owner: i64, ogen: i64) -> i64
     set_hd(inout st, 8, nx);
     fill_entry(inout st, fh, owner, ogen, g, false);
     set_hd(inout st, 12, live + 1);
+    assert len(old(st)) < 15 || (shape_same(st, old(st)) && st[7] == old(st)[7] && st[10] == old(st)[10] &&
+      st[13] == old(st)[13] && st[14] == old(st)[14] && st[8] == nx && st[12] == live + 1);
+    reveal dyn_ok;
     return fh;
   }
   if top < cap {
     fill_entry(inout st, top, owner, ogen, 1, true);
     set_hd(inout st, 7, top + 1);
     set_hd(inout st, 12, live + 1);
+    assert len(old(st)) < 15 || (shape_same(st, old(st)) && st[8] == old(st)[8] && st[10] == old(st)[10] &&
+      st[13] == old(st)[13] && st[14] == old(st)[14] && st[7] == top + 1 && st[12] == live + 1);
+    reveal dyn_ok;
     return top;
   }
   return -1;
@@ -418,6 +460,7 @@ pub fn entry_free(inout st: [i64], e: i64) -> ()
   ensures len(old(st)) >= 15 ==> (shape_same(st, old(st)) && st[7] == old(st)[7] && st[10] == old(st)[10] &&
     st[13] == old(st)[13] && st[14] == old(st)[14])
   ensures dyn_ok(old(st)) ==> dyn_ok(st)
+  ensures kept(st, old(st))
 {
   if e < 3 { return; }
   let top: i64 = c32(hd(st, 7));
@@ -434,6 +477,9 @@ pub fn entry_free(inout st: [i64], e: i64) -> ()
     st[8] = e;
     let live: i64 = c32(st[12]);
     if live > 0 { st[12] = live - 1; }
+    assert len(old(st)) < 15 || (shape_same(st, old(st)) && st[7] == old(st)[7] && st[10] == old(st)[10] &&
+      st[13] == old(st)[13] && st[14] == old(st)[14] && st[8] == e && (st[12] == old(st)[12] || st[12] >= 0));
+    reveal dyn_ok;
     return;
   }
   if ef(st, e, 0) != 1 { return; }
@@ -445,4 +491,7 @@ pub fn entry_free(inout st: [i64], e: i64) -> ()
   set_hd(inout st, 8, e);
   let live: i64 = c32(hd(st, 12));
   if live > 0 { set_hd(inout st, 12, live - 1); }
+  assert len(old(st)) < 15 || (shape_same(st, old(st)) && st[7] == old(st)[7] && st[10] == old(st)[10] &&
+    st[13] == old(st)[13] && st[14] == old(st)[14] && st[8] == e && (st[12] == old(st)[12] || st[12] >= 0));
+  reveal dyn_ok;
 }
