@@ -7,7 +7,8 @@ mod bud_admit;
 // L3 P11 test root: import admission (bud_admit::admit, I0 + I1) on a built store and on one corruption per case
 // (driver_admit.rs, run.py admit). Case 0 is the clean store; every other case breaks one header word, offset, link,
 // key or count and expects admit's class code; 14, 19 and 20 are stores admit must accept (stale tag, slots left
-// by removal, reused entry under a stale slot); 21 and 22 grow top and the free list (grow). Functional (I2) properties are not part of these cases.
+// by removal, reused entry under a stale slot); 21 and 22 grow top and the free list (grow); 23 removes the middle of
+// a deep chain (chain), which admit must accept too. Functional (I2) properties are not part of these cases.
 
 fn fa(st: [i64], e: i64, f: i64) -> i64
   requires 0 <= f && f < 20
@@ -109,6 +110,32 @@ fn grow(inout st: [i64], keys: [i64], n: i64) -> i64
   return 0;
 }
 
+// Depth case (L3 P13a): a chain of 2n entries, each the only child of the one before (the first under root 0), plus a
+// leaf added under the n-th after its chain child (so the walk climbs from an internal node to a next sibling), then
+// the n-th removed with its whole subtree, on the case-19 store (live 7). live 7 + n - 1; no live entry may keep a
+// freed owner (admit class -4).
+fn chain(inout st: [i64], keys: [i64], n: i64) -> i64
+  requires 1 <= n && n <= 4096
+{
+  let mut o: i64 = 0;
+  let mut mid: i64 = -1;
+  let mut j: i64 = 0;
+  while j < 2 * n
+    invariant 0 <= j && j <= 2 * n
+    decreases 2 * n - j
+  {
+    let r: i64 = crate::bud_map::add_w(inout st, o, keys, 0, 4);
+    if r < 0 { return -106; }
+    if j == n - 1 { mid = r; }
+    o = r;
+    j = j + 1;
+  }
+  let s: i64 = crate::bud_map::add_w(inout st, mid, keys, 1, 4);
+  if s < 0 { return -107; }
+  crate::bud_map::remove(inout st, mid);
+  return 0;
+}
+
 pub fn admit_case(inout st: [i64], keys: [i64], case: i64, inout cnt: [i64]) -> i64
 {
   let b: i64 = build(inout st, keys);
@@ -129,6 +156,10 @@ pub fn admit_case(inout st: [i64], keys: [i64], case: i64, inout cnt: [i64]) -> 
     let mut n: i64 = 64;
     if case == 22 { n = 256; }
     let g: i64 = grow(inout st, keys, n);
+    if g != 0 { return g; }
+  }
+  if case == 23 {
+    let g: i64 = chain(inout st, keys, 64);
     if g != 0 { return g; }
   }
   let a: i64 = addr_of(st, case);

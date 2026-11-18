@@ -3,7 +3,7 @@
 // A map is the set of children of an owner entry, kept in insertion order by prev/next links (entry fields 7, 8)
 // and head/tail/count in the owner (fields 9, 10, 11). One open-addressing hash index (linear probing, slot word 0
 // empty, -1 tombstone, tag(h) * 2^32 + e + 1 entry e with stored hash h; see slot_word) covers all non-root entries.
-// The hash mixes owner, owner generation and the packed key words. Removing an entry frees its children too;
+// The hash mixes owner, owner generation and the packed key words. Removing an entry frees its subtree too;
 // make_room rebuilds the index when tombstones pile up.
 //
 // Entry fields: 0 state, 1 owner, 2 owner generation, 3 generation, 4 key off, 5 key len, 6 hash, 7 prev, 8 next,
@@ -444,9 +444,16 @@ fn drop_entry(inout st: [i64], e: i64) -> ()
   crate::bud_store::entry_free(inout st, e);
 }
 
-// Unlinks entry e from its owner and frees it together with its children (one level: the world's maps are at most
-// two levels below the roots). O(probe length + children): e's own slot is cleared, the children's slots are left
-// for the next rehash (drop_child). Roots are never removed.
+// Unlinks entry e from its owner and frees it with its whole subtree (any depth), in post order without a stack: the
+// walk descends to the head child while it is a live entry owned by the current node, frees a leaf and moves to its
+// next sibling, and climbs to the owner (freeing it) when a list ends. On a store whose child lists are well formed
+// (complete, mutually linked, acyclic: I2, which every store this module builds has and admission I0 + I1 does not
+// check), every entry of the subtree is entered at most once and freed once, so the walk takes at most
+// 2 * (subtree size) + 1 steps; there no live entry is left with a freed owner (admission class -4), and no freed
+// entry stays on the live count (word 12), which need() charges against the capacity. On any other buffer the
+// 2 * walk_limit + 2 step budget bounds the walk and every access stays total, but the walk may end a list early
+// (a candidate not owned by u ends it) and leave entries behind. O(probe length + subtree): e's own slot is cleared,
+// the descendants' slots are left for the next rehash (drop_child). Roots are never removed.
 pub fn remove(inout st: [i64], e: i64) -> ()
 {
   let top: i64 = crate::bud_store::c32(hw(st, 7));
@@ -467,35 +474,74 @@ pub fn remove(inout st: [i64], e: i64) -> ()
   }
   let oc: i64 = gf(st, owner, 11);
   if oc > 0 { sf(inout st, owner, 11, oc - 1); }
-  let mut b: i64 = walk_limit(st);
+  let mut b: i64 = 2 * walk_limit(st) + 2;
+  // u: the node whose list is walked (e or a live descendant not yet freed); c: the next candidate child of u.
+  let mut u: i64 = e;
   let mut c: i64 = gf(st, e, 9);
-  // Arena words of the children dropped by drop_child() whose word-14 update is still pending (saturated at 2^41).
-  let mut pend: i64 = 0;
-  let mut any: bool = false;
-  while c >= 0 && b > 0
-    invariant 0 <= b && b <= 4294967296 && 0 <= pend && pend <= 2199023255552
+  // Arena words of the entries dropped by drop_child() whose word-14 update is still pending (-1: none, else
+  // saturated at 2^41).
+  let mut pend: i64 = -1;
+  while b > 0
+    invariant 0 <= b && b <= 8589934594 && -1 <= pend && pend <= 2199023255552
     decreases b
   {
     b = b - 1;
-    let bc: i64 = crate::bud_store::eb(st, c);
-    let mut nc: i64 = 0;
-    let mut co: i64 = 0;
-    if bc >= 0 { nc = st[bc + 8]; co = st[bc + 1]; } else { nc = gf(st, c, 8); co = gf(st, c, 1); }
-    if co == e {
-      let kw: i64 = drop_child(inout st, c);
-      if kw >= 0 {
-        pend = pend + kw;
-        if pend > 2199023255552 { pend = 2199023255552; }
-        any = true;
-      } else if kw == -1 {
-        if any { take_words(inout st, pend); pend = 0; any = false; }
-        drop_entry(inout st, c);
+    let mut cs: i64 = -1;
+    let mut co: i64 = -1;
+    let mut ch: i64 = -1;
+    let mut nc: i64 = -1;
+    if c >= 0 {
+      let bc: i64 = crate::bud_store::eb(st, c);
+      if bc >= 0 {
+        cs = st[bc]; co = st[bc + 1]; nc = st[bc + 8]; ch = st[bc + 9];
+      } else {
+        cs = gf(st, c, 0); co = gf(st, c, 1); nc = gf(st, c, 8); ch = gf(st, c, 9);
       }
     }
-    c = nc;
+    if cs == 1 && co == u {
+      if ch >= 0 {
+        // descend: c's list first, c itself when it ends
+        u = c;
+        c = ch;
+      } else {
+        pend = drop_desc(inout st, c, pend);
+        c = nc;
+      }
+    } else {
+      // u's list ends: done at e, else free u and go on with its next sibling under its owner
+      if u == e { b = 0; } else {
+        let up: i64 = gf(st, u, 1);
+        let un: i64 = gf(st, u, 8);
+        pend = drop_desc(inout st, u, pend);
+        u = up;
+        c = un;
+      }
+    }
   }
-  if any { take_words(inout st, pend); }
+  if pend >= 0 { take_words(inout st, pend); }
   drop_entry(inout st, e);
+}
+
+// drop_child(c) with its word-14 update folded into the pending sum pend (-1: none pending): the new pending sum.
+// When c has no fast base (drop_child gives -1) the pending update is applied first and drop_entry frees c, so the
+// words written are those of one drop_entry per entry in the same order.
+fn drop_desc(inout st: [i64], c: i64, pend: i64) -> i64
+  requires -1 <= pend && pend <= 2199023255552
+  ensures -1 <= result && result <= 2199023255552
+{
+  let kw: i64 = drop_child(inout st, c);
+  if kw >= 0 {
+    let mut s: i64 = kw;
+    if pend > 0 { s = pend + kw; }
+    if s > 2199023255552 { s = 2199023255552; }
+    return s;
+  }
+  if kw == -1 {
+    if pend >= 0 { take_words(inout st, pend); }
+    drop_entry(inout st, c);
+    return -1;
+  }
+  return pend;
 }
 
 // Word 14 (live arena words) minus kw, saturating at 0: drop_entry's update. Applying it once with the sum of several
@@ -512,8 +558,8 @@ fn take_words(inout st: [i64], kw: i64) -> ()
   }
 }
 
-// drop_entry(c) for a child of an entry being removed, without its slot write and its word-14 update (the caller,
-// remove, applies the latter afterwards with take_words): the returned arena words (>= 0), or -2 if drop_entry would
+// drop_entry(c) for a descendant of an entry being removed, without its slot write and its word-14 update (the caller,
+// remove via drop_desc, applies the latter afterwards with take_words): the returned arena words (>= 0), or -2 if drop_entry would
 // have done nothing, or -1 (nothing written) when e has no fast base (the caller then applies the pending update and
 // calls drop_entry).
 // The slot is left in place (lazy deletion, as an open-addressing table with generation-stamped entries does): a

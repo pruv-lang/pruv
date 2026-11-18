@@ -1235,3 +1235,219 @@ one-line `admit` ensures above.
 - **`remove` depth (observed, not analysed).** Removing the middle of a 2n-deep chain left a store that admission
   rejects with -4: an owner is not live, so deeper descendants keep a freed owner. Check whether this is intended lazy
   deletion. If it is not, `remove` needs a work-list free before admission can be relied on after removals.
+
+## Appendix P13a (remove frees the subtree; valid split into shape + dyn_ok; big-mutator preservation measured, deferred)
+
+P13a is the work P12 deferred (P12.2, P12.5). The original P13 row (reserve / grow / failure) is P13b. Steps 0 and 1
+landed. Step 2 (big mutators) proves but is not flat, so it is kept outside the tree and steps 3 to 5, which depend on
+it, were not started (P13a.3).
+
+### P13a.1 `remove` depth: a bug, fixed (step 0)
+
+Removing the middle of a deep chain left live entries whose owner is free. P12 observed this as admission class -4.
+It is a `remove` bug, not intended lazy deletion:
+- **The lazy part is only the index slots.** `drop_child` leaves a removed descendant's slot in place, and lookups
+  re-check hash, state, owner and key (`entry_matches_w`). That is deletion by tombstone-free staleness and costs a
+  probe at most.
+- **The orphans were live entries.** A grandchild kept state 1 and stayed on the live count (word 12) and on the used
+  slot count. `need()` charges word 12 against the capacity, so every orphan leaked one entry of capacity for the life
+  of the store, and nothing could reach it again (its owner's links were gone).
+- **Depth is reachable through the pub API.** `add_w` takes any live entry as owner. The world sits at most two levels
+  below the roots, but `bud_map` is a general map module and the old comment ("one level") stated an assumption the
+  API does not enforce.
+- **A store the program produced must pass admission.** With orphans it did not (-4).
+
+Fix (bud_map.pruv `remove`, new `drop_desc`): a post-order walk without a stack. The walk:
+- descends to the head child while that child is a live entry owned by the current node;
+- frees a leaf and moves on to its next sibling;
+- when a list ends, climbs to the owner and frees it.
+
+Each entry of the subtree is entered once and freed once. On a valid store the walk takes at most 2 * (subtree size)
++ 1 steps. The budget is 2 * walk_limit + 2, which bounds the walk on any buffer. The words written are the same as one
+`drop_entry` per entry, in the same order:
+- `drop_desc` folds the deferred word-14 update (`take_words`) as before;
+- an entry without a fast base flushes the pending sum and calls `drop_entry`.
+
+The cost is linear in the subtree, and a one-level removal does the same work as before.
+
+Test: case 23 in `m34_test/root_admit.pruv` (`chain`) runs on the case-19 store (live 7) at len 65536. It builds a
+128-deep chain under root 0, adds a leaf under entry 64 after its chain child (so the walk climbs from an internal
+node to a next sibling), and removes entry 64 with its subtree. `run.py admit` then checks:
+- the result is live = 70;
+- entries visited == top == live + free (136 = 70 + 66).
+
+`admit: 26/26` passes on both compilers. With the old `remove` the case returns -4, and so does a mutant that drops
+the sibling step (`c = un` replaced by `c = -1`).
+
+The guarantee needs well-formed child lists (I2), which every store the module builds has. Admission (I0 + I1) does
+not check I2: a store that passes admission but has, say, a cut head link makes `remove` stop early, and the next
+admission returns -4. On such buffers `remove` stays in bounds and terminates (the step budget), which is all it
+promises there (P13a.7).
+
+### P13a.2 `valid` split (step 1)
+
+bud_store.pruv:
+- `valid(st) = shape(st) && dyn_ok(st)`.
+  - `shape` covers `len >= 232`, the power-of-two `s` with the layout inequalities (the only `band` term), and words
+    0..6, 9 and 11.
+  - `dyn_ok` is linear over the words the mutators write: `0 <= st[7] <= st[6]`, `-1 <= st[8] < st[7]`,
+    `st[9] <= st[10] <= st[11]`, and `st[12], st[13], st[14] >= 0`. `len >= 15` makes it total.
+  - The conjunction is the old `valid` term for term. The old `top <= cap` reads `st[6]` directly, which `shape` pins to
+    `cap`.
+- Ground frame predicates, all total on any buffer:
+  - `hdr_same(a, b, w)`: header words 0..14 are equal except w;
+  - `shape_same(a, b)`: same length and the same shape words;
+  - `kept(st, o)`: same length, and when `len >= 15` also `shape_same` and `dyn_ok(o) ==> dyn_ok(st)`.
+
+  `shape` reads only the length and the shape words, so `kept(st, o) && valid(o)` gives `valid(st)` by congruence.
+- `entry_alloc`, `entry_free` and `arena_put` now ensure:
+  - `shape_same` plus the dynamic words they do not write;
+  - `dyn_ok(old) ==> dyn_ok(st)`, in place of `valid(old) ==> valid(st)`.
+
+  `fill_entry` and `set_ef` ensure `hdr_same(st, old, -1)`, a header frame.
+- **Header-safe guards.** The frames hold on any buffer, not only under `valid(old)`, because the writes that could hit
+  the header are guarded at run time:
+  - `set_ef` and the `fill_entry` slow path return when `a < 16`;
+  - `arena_put` returns -1 when `top < 16 || aend > len || top > aend` (it used to clamp with `c40`);
+  - `wr16` writes only when `16 <= p < len`.
+
+  On a valid store none of them fires:
+  - entry bases are `>= 16 + s`;
+  - the arena range is `16 <= ab <= at <= ae <= len`.
+
+  Each guard is one or two compares, replacing the compares that were there. `wr16` is added for P13a.3 and has no
+  caller yet.
+
+Proof time fell by about 40% (P13a.4). The `band` term was being expanded into every caller of the four store mutators.
+
+### P13a.3 Big-mutator preservation: measured, not landed (step 2)
+
+The full step-2 change was written and proves on both compilers. It is kept at `work/p13a/bud_map.step2.pruv` and
+`work/p13a/p13a_step2_bud_map.diff`. It contains:
+- P12's frames reapplied in the split form: `sf` / `sh` header frames; `wr16` for the slot writes in `put_at`,
+  `drop_entry` and `rehash`; `write_at`'s fast path gated on `o >= 16`; `set_blob` in place only at `o >= 16`;
+- `kept(st, old(st))` ensures on `write_at`, `put_units`, `add_w`, `put_key_h`, `put_at`, `drop_entry`, `remove`,
+  `drop_desc`, `take_words`, `drop_child`, `set_blob`, `rehash`, `make_room`, `room` and `add_absent_w`;
+- loop invariants (`kept` or `hdr_same`) wherever a loop body calls an inout function.
+
+It is not flat (user CPU s, one run each):
+
+| state | root_m8 Python | root_m8 Rust | root_m4 Rust |
+|---|---:|---:|---:|
+| HEAD (reference) | 13.25 (P12), 13.82 (this run) | 11.62 | 11.02 |
+| P13a steps 0 + 1 | 8.41 | 7.70 | 6.78 |
+| + step 2 in bud_map (bud_world not yet) | 14.65 | 10.33 | 9.56 |
+
+Per-query solver time on root_m8 (Python, timer around `sol.check()`, local experiment only), step 1 → step 2:
+
+| obligation | queries | solver s |
+|---|---:|---:|
+| `contract_domain` | 73 → 316 | 0.36 → 2.01 |
+| `ensures` | 326 → 444 | 0.62 → 1.38 |
+| `invariant_preserved` | 256 → 366 | 1.36 → 1.59 |
+| all | 2625 → 3109 | 6.3 → 9.0 |
+
+By function, `remove` went from 0.57 to 1.86 s and `put_at` from 0.36 to 1.19 s.
+
+Two findings:
+- **The solver is less than half of the increase.** Solver time grows by 2.7 s; the other 3.2 s of the 5.9 s is
+  building and asserting terms. Each `kept` expands to about 30 array reads (two `dyn_ok` copies plus `shape_same`),
+  and that copy goes into the path condition after every call and into every loop invariant.
+- **The domain checks are not the cause.** All 243 new `contract_domain` queries are valid without the path condition.
+  An experiment that proved them path-free first removed them and gave 14.51 s: only the solver share moved.
+
+bud_world's 11 mutators would add the same kind of copies on top. Splitting further at the source level does not help,
+because the predicate is small. The cost is the syntactic expansion at every use. The remaining path is the verifier
+feature P12.2 already named, in both compilers (AGENTS principle 5): an opaque ground predicate, kept as an
+uninterpreted application at call sites and loop heads, with its body revealed only where a proof asks for it. The
+frame then needs only reflexivity and transitivity of `kept` on top of the store mutators' revealed proofs.
+
+Steps 3 (drop the per-call `valid` in `m4_op` / `m4_observe`), 4 (poison flag) and 5 (I1 ensures, adapter wiring)
+need step 2, so they were not started. The `m4raw/m4` sessions cells stay at P11.4 / P12.4 levels, with the same
+attribution (P13a.5).
+
+### P13a.4 Proof time (user CPU s, one run each, same machine, quiet)
+
+| root | Python HEAD | Python P13a | Rust HEAD | Rust P13a |
+|---|---:|---:|---:|---:|
+| m34_test/root_m4 | 13.09 | 7.54 | 11.02 | 6.78 |
+| m8_test/root_m8 | 13.82 | 8.41 | 11.62 | 7.70 |
+| m9_test/root_m9 | 13.49 | 8.08 | 11.45 | 7.17 |
+| m34_test/root_admit | 13.70 | 7.76 | 11.03 | 6.97 |
+
+- The HEAD column was re-measured in this run. It is 3 to 6% above P12.3 (root_m8 Python 13.82 against 13.25),
+  which is machine drift between sessions.
+- Step 0 alone gave root_m8 Python 13.21 and root_m4 Python 12.46, i.e. flat. The fall comes from step 1.
+- The Rust compiler is the HEAD source built in this worktree. P13a does not change it.
+
+### P13a.5 Performance (core ns/op, median of 5, 200000 reps, Rust backend, HEAD and P13a alternated per run)
+
+| axis | n | HEAD m4 | HEAD m4nv | HEAD m4raw | m4 | m4nv | m4raw | m4raw/m4 | m4 / HEAD m4 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| sessions | 100 | 13.5 | 12.0 | 14.7 | 13.5 | 12.1 | 15.0 | 1.11 | 1.00 |
+| sessions | 500 | 12.7 | 11.7 | 14.5 | 13.0 | 11.6 | 14.5 | 1.12 | 1.02 |
+| sessions | 1000 | 12.9 | 12.1 | 14.4 | 13.2 | 12.0 | 14.9 | 1.13 | 1.02 |
+| tools | 100 | 29.6 | 29.4 | 31.8 | 30.1 | 29.1 | 31.5 | 1.05 | 1.02 |
+| tools | 500 | 33.4 | 32.6 | 34.7 | 33.1 | 32.2 | 35.4 | 1.07 | 0.99 |
+| tools | 1000 | 32.3 | 31.7 | 33.8 | 32.4 | 31.6 | 34.6 | 1.07 | 1.00 |
+| clocks | 100 | 24.9 | 23.5 | 26.7 | 24.5 | 23.4 | 26.6 | 1.09 | 0.98 |
+| clocks | 500 | 25.0 | 23.8 | 26.8 | 24.9 | 23.6 | 26.7 | 1.07 | 1.00 |
+| clocks | 1000 | 25.0 | 23.8 | 27.1 | 24.9 | 23.7 | 26.7 | 1.07 | 1.00 |
+
+- `m4 / HEAD m4` is 0.98 to 1.02, which is run noise. The guards replace compares that were already there, and
+  `remove` does the same work on the one-level removals the world makes.
+- Cells above 1.1x: `m4raw/m4` sessions n=100/500/1000 (1.11, 1.12, 1.13), the same cells as in P11.4 (HEAD here:
+  1.09, 1.14, 1.12). P11.4 attributes them to the `PruvStore` poison flag, 0.9 to 1.9 ns of the 1.7 to 2.0 ns gap measured there. Here the gap is 1.5 to 1.7 ns.
+  Removing the flag is step 4, which waits for step 2 (P13a.3).
+- `m4 − m4nv`, 0.4 to 1.5 ns, is the per-call `valid` that step 3 removes.
+
+### P13a.6 Gates
+
+Gates run, all on both compilers (Rust: worktree release build; Python: `pruvc/pruvc.py`):
+- `run.py admit`: 26/26;
+- `run.py m3 --count 300`: 300/300;
+- `run.py lanes --count 300`: all 9 lanes 300/300, size and header checks ok.
+
+Gates not run, because their trigger did not apply:
+- `cargo test --release`, `diff_rust.py` and `g8_frontend` (no compiler change);
+- `--compare-rows` (no row change);
+- the lib user tests (bench/l3/lib unchanged).
+
+### P13a.7 Audit
+
+One Codex gpt-6.2-astra review audit, read-only on the source (no z3 run). Verdict: fix needed. Two findings were
+REQUIRED. Both are contract statements, not code defects, and were fixed in the text:
+- **`remove` needs I2.** Admission checks owner liveness and link bounds, not that child lists are complete, mutually
+  linked and acyclic. On an admitted store with a corrupt head link, `remove` stops early and leaves entries, and the
+  next admission returns -4. Fixed: the `remove` comment, `m34_test/CONTRACT.md` and P13a.1 now state the guarantee
+  for well-formed child lists, and only bounds and termination on other buffers. A check of I2 before the first write
+  was not added: it is a walk of the subtree on every removal, for stores the program never produces.
+- **Behaviour on corrupt headers changed.** These are intended (P13a.2), and on a valid store none of them fires:
+  - `arena_put` now returns -1 when the arena overlaps the header; HEAD wrote at offset 0;
+  - `set_ef` and the `fill_entry` slow path skip addresses below 16;
+  - a removal candidate whose owner is not the current node ends the list; HEAD skipped it and followed its `next`.
+    In a well-formed list every member is owned by the list's node, so the two agree there.
+
+The OPTIONAL findings:
+- The deletion order, the budget (at most 2(N-1)+1 steps, N <= walk_limit) and the accounting are correct (words 12,
+  13 and 14, the free list and generations). The `valid` split is equivalent to the old `valid` term for term. Neither
+  needs a change. The "one level" text in `CONTRACT.md` was stale and is updated.
+- `fill_entry` used to ensure that word 15 (pending Need) is kept, and `hdr_same` covers words 0..14 only. The code
+  still keeps word 15, and every root proves without that ensures, so no caller uses it. It is left out; it can be added
+  back as one ensures if a caller needs it.
+- Case 23 did not exercise the climb to a next sibling, since every internal node of a pure chain is an only child.
+  Fixed: case 23 adds that sibling, and the mutant above shows the case now catches a wrong sibling step. The audit
+  also suggested an exact word-14 check. It was not added: admission checks word 14 only for range, so the check
+  would need its own driver output, and `drop_desc` keeps the word-14 update of one `drop_entry` per entry (P13a.1).
+- The guards add no new rejection of valid input and no per-iteration work; the measured cells are in P13a.5.
+
+There was no confirmation audit: the REQUIRED fixes are text only. After the case-23 change, `run.py admit` is 26/26 on
+both compilers, and root_admit proves in 7.83 s (Python) and 6.88 s (Rust).
+
+### P13a.8 Notes for the next package
+
+- Step 2 is ready to land as soon as the verifier keeps a ground predicate opaque (P13a.3). The archived diff (local, outside the tree) is the
+  starting point; bud_world's 11 mutators follow the same pattern.
+- Steps 3 to 5 follow, in the original order: drop the per-call `valid` (m4 should meet m4nv), remove the poison flag
+  (m4raw/m4 <= 1.1x), then I1 ensures and adapter wiring.
+- The reference for proof time is now P13a.4, not 13.25 s.
