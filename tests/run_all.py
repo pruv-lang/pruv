@@ -1,11 +1,14 @@
 """Run all regression tests.
-python tests/run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4b_frontend|g4b_proof|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_async_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof|l3_frontend|l3_proof|l3_abi]
+python tests/run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4b_frontend|g4b_proof|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_async_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof|l3_frontend|l3_proof|l3_abi|spec_trace]
                         [--backend rust|llvm|both]
 
 group l3_abi (L3 P09; one backend null row): tests/l3/abi/check_raw_entries.py WORK --rs|--py PATH checks manifest
 raw_entries ("crate" / "unsafe"): text facts, rustc visibility / unsafe / privacy errors, panic poisoning of
 pruv_raw::PruvStore. The l3_p09_* roots are ordinary must_reject rows. Row l3_abi/c_handle (L3 P10):
 tests/l3/abi/check_c_handle.py WORK --rs|--py PATH checks raw_entries "c" (pruv_c text, rs == py, C probe c_probe.c).
+
+group spec_trace (T1; one backend null row): tests/spec_trace.py --only-py|--only-rs --py|--rs PATH checks that
+every SPEC.md rule ID has passing accept/reject tests under tests/spec and every diagnostic code is in the SPEC.md table.
 
 group s5_proof: tests/s5/proof/*.pruv verifies in default, trust-callers and infer modes
 with byte-identical Rust, LLVM IR and bindings erasure checks (one row checks both backends).
@@ -551,6 +554,19 @@ def g4b_proof_jobs():
     return [safe("g4b_proof/cache", cache_checks,
                  {"sample": "tests/g4b/check_cache.py", "backend": None, "flags": [],
                   "mode": "cache", "group": "g4b_proof"})]
+
+
+def spec_trace_jobs():
+    """T1 (docs/TIDY_SPEC.md): tests/spec_trace.py with this run's compiler, one row; backend null."""
+    def trace_checks():
+        k = _driver().kind
+        c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/spec_trace.py"), "--only-" + k,
+                            "--" + k, _driver().path, "--work", os.path.join(WORK, "spec_trace")],
+                           capture_output=True, text=True, timeout=1800)
+        return c.returncode == 0, c.stdout + c.stderr
+    return [safe("spec_trace/trace", trace_checks,
+                 {"sample": "tests/spec_trace.py", "backend": None, "flags": [],
+                  "mode": "trace", "group": "spec_trace"})]
 
 
 def g4_proof_jobs():
@@ -1453,7 +1469,7 @@ def runtime_jobs(backend):
     return jobs
 
 
-USAGE = ("usage: run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4b_frontend|g4b_proof|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_async_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof|l3_frontend|l3_proof|l3_abi] [--backend rust|llvm|both] "
+USAGE = ("usage: run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4b_frontend|g4b_proof|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_async_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof|l3_frontend|l3_proof|l3_abi|spec_trace] [--backend rust|llvm|both] "
          "[--sample-prefix PATH] [--compiler py|rs] [--compiler-path PATH] [--ir-tool PATH] [--list-rows [FILE]] [--compare-rows FILE]")
 
 
@@ -1546,7 +1562,7 @@ def main():
         i = sys.argv.index("--only")
         only = sys.argv[i + 1] if i + 1 < len(sys.argv) else None
         if only not in ("must_reject", "examples", "runtime", "g3_proof", "g6_frontend", "g6_proof", "g9_frontend",
-                        "g9_proof", "g4_frontend", "g4b_frontend", "g4b_proof", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_async_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "g8_proof", "l3_frontend", "l3_proof", "l3_abi"):
+                        "g9_proof", "g4_frontend", "g4b_frontend", "g4b_proof", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_async_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "g8_proof", "l3_frontend", "l3_proof", "l3_abi", "spec_trace"):
             print(USAGE)
             return 2
     backend = "rust"
@@ -1581,6 +1597,8 @@ def main():
             jobs += g4b_proof_jobs()
         if only in (None, "l3_abi"):
             jobs += l3_abi_jobs()
+        if only in (None, "spec_trace"):
+            jobs += spec_trace_jobs()
         if only in (None, "g4_proof"):
             jobs += g4_proof_jobs()
         if only in (None, "g10_frontend"):
@@ -1667,7 +1685,7 @@ def main():
         # scope comes from the arguments (--only/--backend), not from the rows that actually ran
         scope = set()
         null_backend = ("must_reject", "g3_proof", "g6_frontend", "g6_proof", "g9_frontend", "g9_proof", "g4_frontend",
-                        "g4b_frontend", "g4b_proof", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_async_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "l3_frontend", "l3_proof", "l3_abi")
+                        "g4b_frontend", "g4b_proof", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_async_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "l3_frontend", "l3_proof", "l3_abi", "spec_trace")
         for g in null_backend + ("examples", "runtime", "g8_proof"):
             if only in (None, g):
                 # g8_proof always runs both backends (whatever --backend says) plus one backend-free bundle row.
