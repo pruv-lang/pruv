@@ -16,6 +16,30 @@ pub type R<T> = Result<T, String>;
 pub const G6_UNSUPPORTED_MSG: &str = "G6 foreign calls and collections are not implemented by the llvm codegen layer yet";
 pub const G6_UNSUPPORTED_FIX: &str = "avoid trusted rust fn, Vec, HashMap, String, take and move for now";
 pub const G6_BRIDGE_DECL: &str = "@pruv_g6_bridge_v1 = external global i8\n";
+
+/// P10H: the prefix of every program-specific non-internal global symbol of the LLVM build (`pruv_abi_*`,
+/// `pruv_g6_v1_*`, `pruv_g6_bridge_v1`, the C adapter): `<pkg>__` for a program with a package name, so two programs
+/// link into one binary. A program without a package name keeps the unprefixed names (it cannot be linked together
+/// with another program that defines the same symbols). The program-independent runtime is never prefixed.
+pub fn sym_prefix(pkg: Option<&str>) -> String {
+    match pkg {
+        Some(p) if !p.is_empty() => format!("{}__", p),
+        _ => String::new(),
+    }
+}
+
+/// P10H: puts `pre` in front of the name of every `define .. @pruv_abi_*` line of a wrapper text produced by
+/// crate::abi (first `@pruv_abi_` of a `define` line only; the callee names of the bodies are internal).
+fn prefix_abi_defs(text: &str, pre: &str) -> String {
+    if pre.is_empty() {
+        return text.to_string();
+    }
+    let to = format!(" @{}pruv_abi_", pre);
+    text.split('\n')
+        .map(|l| if l.starts_with("define ") { l.replacen(" @pruv_abi_", &to, 1) } else { l.to_string() })
+        .collect::<Vec<String>>()
+        .join("\n")
+}
 /// A PruvError (codegen/unsupported_type) raised in the middle of a function body travels through `R<T>` as a string
 /// with this prefix and `line:col`; `gen_llvm_concrete_ex` turns it back into the diagnostic.
 const G6_DIAG_TAG: &str = "\u{0}g6diag:";
@@ -863,6 +887,8 @@ pub struct Mod {
     pub uses_repr: bool,
     par_types: Vec<String>,
     par_trampolines: Vec<String>,
+    /// P10H: `<pkg>__` (or "") in front of every program-specific global symbol (`sym_prefix`)
+    pub sym_pre: String,
     /// G6 A3: shim symbol -> declare line (iterated sorted by symbol)
     pub g6_decls: BTreeMap<String, String>,
     /// G6 A3: string_to_str needs the v2 copy/free declarations
@@ -910,6 +936,7 @@ impl Mod {
             uses_repr: false,
             par_types: Vec::new(),
             par_trampolines: Vec::new(),
+            sym_pre: String::new(),
             g6_decls: BTreeMap::new(),
             g6_v2: false,
             g6_take: false,
@@ -1355,7 +1382,7 @@ impl<'a> FnGen<'a> {
             if let Some(first) = self.lines.first() {
                 out.push(first.clone());
             }
-            out.push("  %g6.bridge = load volatile i8, ptr @pruv_g6_bridge_v1".to_string());
+            out.push(format!("  %g6.bridge = load volatile i8, ptr @{}pruv_g6_bridge_v1", self.m.sym_pre));
             out.extend(self.lines.iter().skip(1).cloned());
             self.m.g6_bridge = true;
         } else {
@@ -2038,8 +2065,11 @@ impl<'a> FnGen<'a> {
         self.bridge = true;
     }
 
-    /// Calls a bridge symbol; args: (llvm type, value). Returns the SSA result ("" for void).
+    /// Calls a bridge symbol (sym is the unprefixed foreign_shim name; the program prefix is added here);
+    /// args: (llvm type, value). Returns the SSA result ("" for void).
     fn g6_call(&mut self, sym: &str, ret: &str, args: &[(String, String)]) -> R<String> {
+        let sym_owned = format!("{}{}", self.m.sym_pre, sym);
+        let sym = sym_owned.as_str();
         let tys: Vec<&str> = args.iter().map(|(t, _)| t.as_str()).collect();
         self.g6_decl(sym, ret, &tys);
         let a: Vec<String> = args.iter().map(|(t, v)| format!("{} {}", t, v)).collect();
@@ -6309,6 +6339,7 @@ fn gen_llvm_body(
     // G9: SCC-condensed order and the extended / boxed metadata (identical to TypeTable::new otherwise)
     let tt = new_tt(prog);
     let mut m = Mod::new();
+    m.sym_pre = sym_prefix(prog.pkg_name.as_deref());
     m.storage = plan_storage(prog, verified);
     m.stack = crate::stack::plan_stack(prog, &m.storage, verified);
     let narrowed = m.storage.entries.iter().any(|(_, w)| *w != "i64");
@@ -6383,13 +6414,14 @@ fn gen_llvm_body(
                 chunks.push(entry_of(&mut m, &tt, &funcs, f, false, budget, false, verified)?);
             }
             if is_host_abi_fn(f, &tt, true, host) {
-                chunks.push(crate::abi::abi_of_target(
+                let abi = crate::abi::abi_of_target(
                     f,
                     &tt,
                     target,
                     &mut m,
                     if checked && !trust_callers { "entry" } else { "body" },
-                )?);
+                )?;
+                chunks.push(prefix_abi_defs(&abi, &m.sym_pre));
             }
             continue;
         }
@@ -6409,7 +6441,8 @@ fn gen_llvm_body(
         }
         if !crate::emit_common::is_spec_fn(&f.name) && !coll {
             // G3: a generic specialization has no ABI symbol
-            chunks.push(abi_of(f, &tt, target, &mut m)?);
+            let abi = abi_of(f, &tt, target, &mut m)?;
+            chunks.push(prefix_abi_defs(&abi, &m.sym_pre));
         }
     }
     if !tt.g9_ext.is_empty() || !m.need_size.is_empty() || !m.need_eq.is_empty() {
@@ -6422,7 +6455,7 @@ fn gen_llvm_body(
     // G6 A3: bridge marker and the shim symbols used, sorted by symbol
     let mut g6decls = String::new();
     if m.g6_bridge || !m.g6_decls.is_empty() {
-        g6decls.push_str(G6_BRIDGE_DECL);
+        g6decls.push_str(&G6_BRIDGE_DECL.replacen('@', &format!("@{}", m.sym_pre), 1));
         for line in m.g6_decls.values() {
             g6decls.push_str(line);
             g6decls.push('\n');
@@ -6469,7 +6502,7 @@ fn gen_llvm_body(
         ir.push_str(&m.par_trampolines.join("\n"));
     }
     let mut shim = if is_g6 {
-        Some(crate::foreign_shim::build_shim(prog, verified, trust_callers, budget, foreign_checks, m.g6_take, &m.g6_unbox.iter().cloned().collect::<Vec<String>>())?)
+        Some(crate::foreign_shim::build_shim(prog, verified, trust_callers, budget, foreign_checks, m.g6_take, &m.g6_unbox.iter().cloned().collect::<Vec<String>>(), &m.sym_pre)?)
     } else {
         None
     };
@@ -6575,6 +6608,7 @@ mod tests {
             explicit: None,
             uses_inout: None,
             raw_entries: None,
+            pkg_name: None,
         }
     }
 

@@ -531,11 +531,22 @@ def _string_take_adapter():
 # ---------------------------------------------------------------------------
 # the module
 # ---------------------------------------------------------------------------
+def prefix_adapter(text, pre):
+    """P10H: put the program prefix `pre` (`<pkg>__` or "") in front of the name of every adapter `_fn` defined in
+    `text` (they all read `pub extern "C" fn pruv_g6_v1_...`); the helper texts are never touched"""
+    if not pre:
+        return text
+    key = 'pub extern "C" fn ' + PREFIX
+    return text.replace(key, 'pub extern "C" fn ' + pre + PREFIX)
+
+
 def build_shim(prog, verified=True, trust_callers=False, budget=1 << 30, foreign_checks="requires", take=False,
-               unbox=()):
+               unbox=(), pre=""):
     """text of `mod pruv_g6_shim` for the (concrete) program prog; deterministic.  take: the LLVM lowering used
     pruv_g6_v1_string_take (P3 M3), so the take adapter and the allocator marker reference are emitted;
-    unbox: sorted names of the trusted String functions lowered unboxed (P3 M5), one `<f>__str` adapter each"""
+    unbox: sorted names of the trusted String functions lowered unboxed (P3 M5), one `<f>__str` adapter each;
+    pre: P10H symbol prefix (`<pkg>__`, or "" for a program without a package name) of every `pruv_g6_v1_*` adapter
+    and of the `pruv_g6_bridge_v1` marker, as the .ll side references them"""
     cats, colls, trusted = collect(prog)
     # helper discovery: exactly the A2 helpers (same texts, same mode and budget).  The entry checks of the Rust
     # source backend are not emitted here (trust=True): the LLVM entries evaluate requires themselves.
@@ -563,7 +574,8 @@ def build_shim(prog, verified=True, trust_callers=False, budget=1 << 30, foreign
     if uses_str(prog) or uses_array_type(prog, "string"):   # G6b: a String result indexed in an ensures
         out.append(CONTRACT_PRELUDE_STR)
     out.append(G6_PRELUDE)
-    out.append(BRIDGE_RUNTIME)
+    out.append(BRIDGE_RUNTIME.replace("pub static " + BRIDGE_SYM, "pub static " + pre + BRIDGE_SYM) if pre
+               else BRIDGE_RUNTIME)
     if take or unbox:
         out.append(TAKE_RUNTIME)
     adapters = []
@@ -588,7 +600,7 @@ def build_shim(prog, verified=True, trust_callers=False, budget=1 << 30, foreign
             adapters.append(_unbox_adapter(trusted[name]))
     for key in sorted(colls):
         adapters.append(_coll_adapters(colls[key]))
-    out.extend(adapters)
+    out.extend(prefix_adapter(a, pre) for a in adapters)
     out.append("}")
     if g.ev:
         out.append("pub use self::pruv_g6_shim::PRUV_ASYNC_THREADS;")

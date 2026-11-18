@@ -945,7 +945,11 @@ closure given to `with` never catches a panic (`catch_unwind` inside it would cl
 trusted, and `raw_entries` enforces that by visibility.
 `"c"`: the Rust backend output is identical to `"crate"` (it never contains `extern "C"`). LLVM bindings get the
 `"crate"` output plus `pub mod pruv_c`, the C adapter. `PruvHandle` is opaque to C (one pointer) and owns the resident
-state (`i64` words) in a `PruvStore`; C never sees the state buffer. `pruv_handle_new(len)` returns a handle whose state
+state (`i64` words) in a `PruvStore`; C never sees the state buffer. Every global C symbol of `pruv_c` carries the
+manifest package name as a prefix, `<pkg>__` (`pkg` = the manifest `name`): `<pkg>__pruv_handle_new`,
+`<pkg>__pruv_handle_free`, `<pkg>__pruv_handle_poisoned`, `<pkg>__pruv_handle_probe_panic`, `<pkg>__pruv_h_NAME`,
+`<pkg>__pruv_hr_NAME`, `<pkg>__pruv_hb_NAME`; Rust callers use the same names (`sol::pruv_c::<pkg>__pruv_...`). The
+names below are written without the prefix. `pruv_handle_new(len)` returns a handle whose state
 is `len` zero words (null for a negative or oversized length); call the program's init entry next.
 `pruv_handle_free(h)` frees a handle, poisoned or not (null is ignored); `pruv_handle_poisoned(h)` returns 1/0 (2 for
 null). Every entry whose first parameter is `[i64]` (`in` or `inout`), whose other parameters are `i64`, `bool`, `str`
@@ -953,7 +957,25 @@ or arrays of `i64`/`u8`/`bool`, and whose result is `i64`, `bool` or unit gets
 `pruv_h_NAME(h, args..., ret) -> i32`: the handle's state is the first argument, an array is a (pointer, length) pair,
 `bool` is an `i64` 0/1, and an `i64`/`bool` result goes to `*ret` on success. An entry `(prev: [i64], inout next:
 [i64]) -> i64` also gets `pruv_hr_NAME(h, new_len, ret)`: it runs the entry from the state into a fresh zeroed buffer
-of `new_len` words and makes that buffer the state only when the entry returns 0. Every call runs inside
+of `new_len` words and makes that buffer the state only when the entry returns 0. An entry whose state parameter is
+`inout [i64]` and whose result is `i64` also gets the batch entry `pruv_hb_NAME(h, n, <per user parameter aK>, ret,
+done) -> i32` (`n: i64`, `ret: *mut i64`, `done: *mut i64`). Each user parameter becomes a table of `n` items: an
+`i64`/`bool` scalar is `aK: *const i64` (n values); an array is `aK: *const <pointer type of the single entry's
+parameter>` (n pointers: `*const *const i64`, `*const *mut i64`, `*const *const u8`, `*const *mut u8`) plus
+`aK_len: *const i64` (n lengths). `ret` is a table of `n` results. Items 0..n run in order inside ONE store access
+(one poison set/clear, one `catch_unwind`), each as the single entry would, and the batch stops after the first item
+whose result is nonzero (its result is stored; later `ret` slots and buffers are untouched and later items do not
+run). `*done` is the number of items that ran, including the stopping one (written on status 0 and 2). Statuses are
+those of the single entry: 0 ok (all items ran, or the batch stopped on a nonzero result: compare `*done` with `n`),
+1 poisoned (checked before any argument), 2 bad arguments, 3 panicked. Status 2 is answered up front, before any item
+runs, for a negative `n`, a null or misaligned table with `n > 0`, or overlap of the `ret` table, `done` and the
+handle object; an up-front refusal writes `*done = 0` (no item ran) if `done` is itself usable, i.e. non-null,
+8-aligned, its end address does not overflow, and its 8 bytes are clear of the handle object and of the `ret` table's
+byte range (`ret` up to `ret + 8 * max(n, 0)`, even when that table is itself the bad argument); otherwise `done` is not
+written. `*done` is never written for a null handle (status 2), a poisoned handle (status 1) or a panic (status 3). It is
+answered per item `i` (with `*done = i`, items 0..i already ran and stay visible) for the
+single-entry argument errors of that item (a `bool` other than 0/1, a bad span, overlap with that item's other
+buffers, the `ret` table, `done` or the handle object). `n = 0` is status 0 with `*done = 0`. Every call runs inside
 `catch_unwind` and `PruvStore::with` and returns a status: 0 ok, 1 poisoned (checked right after the null handle,
 before any other argument; nothing ran), 2 bad arguments (null handle or `ret`; negative, oversized, null or
 misaligned array; a range whose end address overflows; a `bool` byte other than 0/1; invalid UTF-8; overlapping
@@ -965,8 +987,19 @@ with the adapter's own. The `pruv_c` module docs state the caller contract (each
 `h` came from `pruv_handle_new` and is live, one handle is never used concurrently or reentrantly, and each
 (pointer, length) with length > 0 names that many initialized elements in one live allocation that nobody else
 touches during the call. Each function has a fixed parameter count; there is no registry, so a double free or a call
-after free is undefined behaviour the adapter cannot detect, and symbol names are global (one `"c"` program per linked
-image).
+after free is undefined behaviour the adapter cannot detect. Symbol names are global; the package prefix keeps the
+`pruv_c` symbols of `"c"` programs with different package names apart (the same package name twice still clashes).
+LLVM symbol prefix: with a package name (the manifest `name`, `pkg`) every program-specific non-internal global symbol of
+the LLVM build also carries `<pkg>__`: the `.ll` exports `<pkg>__pruv_abi_<entry>` and `<pkg>__pruv_abi_<entry>__typed`
+(the Rust bindings call them by those names), and the G6 bridge between the `.ll` and the Rust module uses
+`<pkg>__pruv_g6_v1_<helper>` (including `drop__<C>`, `len__<C>`, `string_bytes`, `string_take`, `<f>__str`) and
+`<pkg>__pruv_g6_bridge_v1`, defined `#[no_mangle]` in the Rust module and declared in the `.ll`. A program without a
+package name (no manifest) keeps the unprefixed names (`pruv_abi_*`, `pruv_g6_v1_*`, `pruv_g6_bridge_v1`); it can be the
+only such program in a link, and `raw_entries = "c"` always needs a package name. Internal (`internal`/`private`) LLVM
+symbols are never prefixed. The shared runtime (`pruv_alloc`, `pruv_panic_*`, `pruv_check_*`, ...) and the allocator
+hooks the runtime calls (`pruv_host_*`) are program-independent and unprefixed: link the runtime object once, and let only
+one of the linked Rust modules define the `pruv_host_*` hooks (and `pruv_panic_cost` / `pruv_g7_v1_run`, which programs
+using `cost` or `par` also define unprefixed). Two programs with different package names then link into one binary.
 
 ### Inline policy (generated Rust)
 Every generated Rust fn carries an inline hint. The Python and Rust compilers choose it with the same pass over the

@@ -3745,10 +3745,13 @@ impl<'a> Gen<'a> {
         // G4 A2: messages name the source identity, the helper keeps its stem
         let disp = self.disp_of(name);
         let mut body: Vec<String> = Vec::new();
+        // requires/ensures lines: only they can reach pruv_ud, the one reader of the ctx
+        let mut checks = 0usize;
         if req {
             for r in &f.requires {
                 let code = self.c(r)?;
                 body.push(format!("if !({}) {{ pruv_g6_req({}, {}); }}", code, rstr(&disp), rstr(&show(r))));
+                checks += 1;
             }
         }
         let args = join_map(&f.params, ", ", |p| p.name.clone());
@@ -3775,12 +3778,13 @@ impl<'a> Gen<'a> {
             for x in &f.ensures {
                 let code = self.c(x)?;
                 body.push(format!("if !({}) {{ pruv_g6_ens({}, {}); }}", code, rstr(&disp), rstr(&show(x))));
+                checks += 1;
             }
         }
         body.push("result".to_string());
         let ps = join_map(&f.params, ", ", |p| format!("{}: {}", p.name, rty(&p.ty, true)));
         let ret: Option<&str> = if f.ret == "unit" { None } else { Some(rt.as_str()) };
-        Ok(self.fg_mut()?.fn_trusted(name, &ps, ret, &body, &disp))
+        Ok(self.fg_mut()?.fn_trusted(name, &ps, ret, &body, &disp, checks > 0))
     }
 
     fn e(&mut self, e: &Expr) -> R<String> {
@@ -4797,7 +4801,7 @@ mod tests {
             foreign: None,
             cost: None, decreases: None, small_bound: None, x_auto: None,
         };
-        Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None }
+        Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None, pkg_name: None }
     }
 
     #[test]
@@ -4846,7 +4850,7 @@ mod tests {
             foreign: None,
             cost: None, decreases: None, small_bound: None, x_auto: None,
         };
-        Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None }
+        Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None, pkg_name: None }
     }
 
     // L3-10: eq_range
@@ -4945,7 +4949,7 @@ mod tests {
                 Stmt::Return(Return { line: 1, col: 1, value: Some(call("len", vec![var("r", "array")], "i64")) }),
             ],
         );
-        Program { functions: vec![mk, g], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None }
+        Program { functions: vec![mk, g], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None, pkg_name: None }
     }
 
     #[test]

@@ -18,6 +18,18 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 type R<T> = Result<T, String>;
 
+/// op families that do I/O: their helpers are not inlined
+const IO_OP_PREFIXES: [&str; 4] = ["file_", "proc_", "ev_", "net_"];
+
+/// calls that reach pruv_ud (the only reader of PRUV_CTX): pruv_ud itself, the budget charge, the contract tick,
+/// the checked arithmetic / index helpers of codegen, and the contract accessors of the proc/net/loop runtimes
+const UD_CALLS: [&str; 19] = [
+    "pruv_ud(", "pruv_g6_charge(", "pruv_g9_tick(",
+    "pruv_cidx(", "pruv_cadd(", "pruv_csub(", "pruv_cmul(", "pruv_cneg(", "pruv_cdiv(", "pruv_crem(",
+    "pruv_cidx_u8(", "pruv_cidx_bool(", "pruv_cidx_str(", "pruv_cload_be(",
+    "pruv_cproc_buf(", "pruv_cproc_eof(", "pruv_cproc_byte(", "pruv_cnet_byte(", "pruv_cev_slot(",
+];
+
 fn budget_line(n: u64) -> String {
     format!("let mut pruv_budget: i64 = {};", fmt_underscore(n))
 }
@@ -152,12 +164,17 @@ impl ForeignGen {
     fn fn_text(&self, name: &str, params: &str, ret: Option<&str>, body: &[String]) -> String {
         let mut l: Vec<String> = Vec::new();
         l.push(ALLOW_G6.to_string());
+        // pure data accessors are inlined into the caller (P10H); I/O families keep a real call
+        if !IO_OP_PREFIXES.iter().any(|p| self.op.starts_with(p)) {
+            l.push("#[inline(always)]".to_string());
+        }
         let arrow = match ret {
             None => String::new(),
             Some(r) => format!(" -> {}", r),
         };
         l.push(format!("fn {}({}){} {{", name, params, arrow));
-        if self.req {
+        // the ctx guard (two thread-local writes) only serves pruv_ud, so emit it only when pruv_ud is reachable (P10H)
+        if self.req && (self.ens || body.iter().any(|x| UD_CALLS.iter().any(|c| x.contains(c)))) {
             l.push(format!("    let pruv_g = pruv_ctx({});", rstr(&self.op)));
         }
         if self.ens {
@@ -172,15 +189,18 @@ impl ForeignGen {
 
     /// the helper of a trusted fn: the guard and the budget are shared by requires and ensures of one call
     /// `disp`: the name the boundary guard reports (G4 A2: the source identity; the helper itself keeps its stem `name`)
-    pub fn fn_trusted(&self, name: &str, params: &str, ret: Option<&str>, body: &[String], disp: &str) -> String {
+    pub fn fn_trusted(&self, name: &str, params: &str, ret: Option<&str>, body: &[String], disp: &str, checks: bool) -> String {
         let mut l: Vec<String> = Vec::new();
         l.push(ALLOW_G6.to_string());
+        // inlined into its caller: one host call is one call, not a shim call plus the host call (P10H)
+        l.push("#[inline(always)]".to_string());
         let arrow = match ret {
             None => String::new(),
             Some(r) => format!(" -> {}", r),
         };
         l.push(format!("fn {}({}){} {{", name, params, arrow));
-        if self.req {
+        // the ctx guard (two thread-local writes) and the budget only serve contract checks (P10H)
+        if self.req && checks {
             l.push(format!("    let pruv_g = pruv_ctx({});", rstr(disp)));
             l.push(format!("    {}", budget_line(self.budget)));
         }

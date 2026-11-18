@@ -507,6 +507,7 @@ class _Mono:
             program.g9 = self._g9_meta()      # explicit mode: the same metadata over the Rust stems
         program.explicit = self.explicit      # G4 A2: the code generator applies the explicit visibility rules
         program.raw_entries = getattr(prog, "raw_entries", None)   # P06: raw entry visibility (applied in P09)
+        program.pkg_name = getattr(prog, "pkg_name", None)   # P10H: prefix of every global C symbol
         return SpecPlan(prog, program, fn_specs, type_specs, root_names)
 
 

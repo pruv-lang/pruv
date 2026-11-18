@@ -590,6 +590,7 @@ fn load_source_full(
         set_files(Vec::new());
         let mut prog = first.prog;
         prog.raw_entries = graph.and_then(|g| g.program().raw_entries.clone()); // P06: applied by codegen in P09
+        prog.pkg_name = graph.map(|g| g.program().name.clone()); // P10H: prefix of every global C symbol
         return Ok(Loaded { prog, g4: None }); // legacy mode: untouched
     }
     // explicit mode: the root is parsed again with its file tag
@@ -676,6 +677,7 @@ fn load_source_full(
     }
     let g4 = G4 { modules, items: all_items, fn_meta, ty_meta, entries: Vec::new(), main: None, resolved: false };
     prog.raw_entries = graph.and_then(|g| g.program().raw_entries.clone()); // P06: applied by codegen in P09
+    prog.pkg_name = graph.map(|g| g.program().name.clone()); // P10H: prefix of every global C symbol
     Ok(Loaded { prog, g4: Some(g4) })
 }
 

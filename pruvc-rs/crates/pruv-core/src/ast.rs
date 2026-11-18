@@ -348,4 +348,6 @@ pub struct Program {
     pub uses_inout: Option<bool>,
     /// P06: the manifest's `raw_entries` ("crate" or "unsafe"; None = host entries stay `pub fn`), applied in P09
     pub raw_entries: Option<String>,
+    /// P10H: the manifest's program package name (Python `Program.pkg_name`); prefix `<pkg>__` of every global C symbol
+    pub pkg_name: Option<String>,
 }

@@ -906,9 +906,23 @@ fn string_take_adapter() -> String {
 // the module
 // ---------------------------------------------------------------------------
 
+/// P10H: put the program prefix `pre` (`<pkg>__` or "") in front of the name of every adapter `fn_text` defined in
+/// `text` (they all read `pub extern "C" fn pruv_g6_v1_...`); the helper texts are never touched
+/// (`prefix_adapter` of foreign_shim.py)
+fn prefix_adapter(text: &str, pre: &str) -> String {
+    if pre.is_empty() {
+        return text.to_string();
+    }
+    let key = format!("pub extern \"C\" fn {}", PREFIX);
+    let to = format!("pub extern \"C\" fn {}{}", pre, PREFIX);
+    text.replace(&key, &to)
+}
+
 /// text of `mod pruv_g6_shim` for the (concrete) program prog; deterministic. take: the LLVM lowering used
 /// pruv_g6_v1_string_take (P3 M3), so the take adapter and the allocator marker reference are emitted;
-/// unbox: sorted names of the trusted String functions lowered unboxed (P3 M5), one `<f>__str` adapter each
+/// unbox: sorted names of the trusted String functions lowered unboxed (P3 M5), one `<f>__str` adapter each;
+/// pre: P10H symbol prefix (`<pkg>__`, or "" for a program without a package name) of every `pruv_g6_v1_*` adapter
+/// and of the `pruv_g6_bridge_v1` marker, as the .ll side references them
 pub fn build_shim(
     prog: &Program,
     verified: bool,
@@ -917,6 +931,7 @@ pub fn build_shim(
     foreign_checks: &str,
     take: bool,
     unbox: &[String],
+    pre: &str,
 ) -> R<String> {
     let (cats, colls, trusted, observers) = collect(prog)?;
     // helper discovery: exactly the A2 helpers (same texts, same mode and budget). The entry checks of the Rust
@@ -952,7 +967,11 @@ pub fn build_shim(
         out.push(CONTRACT_PRELUDE_STR.to_string());
     }
     out.push(G6_PRELUDE.to_string());
-    out.push(BRIDGE_RUNTIME.to_string());
+    if pre.is_empty() {
+        out.push(BRIDGE_RUNTIME.to_string());
+    } else {
+        out.push(BRIDGE_RUNTIME.replace(&format!("pub static {}", BRIDGE_SYM), &format!("pub static {}{}", pre, BRIDGE_SYM)));
+    }
     if take || !unbox.is_empty() {
         out.push(TAKE_RUNTIME.to_string());
     }
@@ -987,7 +1006,7 @@ pub fn build_shim(
     for t in colls.values() {
         adapters.push(coll_adapters(t)?);
     }
-    out.extend(adapters);
+    out.extend(adapters.iter().map(|a| prefix_adapter(a, pre)));
     out.push("}".to_string());
     if crate::foreign::first_async_use(prog).is_some() { out.push("pub use self::pruv_g6_shim::PRUV_ASYNC_THREADS;".to_string()); }
     let mut s = out.join("\n");

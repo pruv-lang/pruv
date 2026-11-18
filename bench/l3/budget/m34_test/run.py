@@ -2,7 +2,7 @@
 """Harness for the L3-10 M3/M4 milestones.
 
   python3 bench/l3/budget/m34_test/run.py m3|m4|m4raw|perf|keys [--pruvc PATH] [--seed N] [--count N]
-  python3 bench/l3/budget/m34_test/run.py m4 --only m4llvm|m4llvmraw|m4c|m4nv|m4llvmnv   (or the lane name as the mode;
+  python3 bench/l3/budget/m34_test/run.py m4 --only m4llvm|m4llvmraw|m4c|m4cb|m4nv|m4llvmnv   (or the lane name as the mode;
                                                   mode `lanes` runs every lane; see M4_LANES for what each builds)
 
 `--pruvc` may be pruvc/pruvc.py (the Python compiler; run under this interpreter).
@@ -85,8 +85,34 @@ M4_LANES = {
     "m4llvm":    dict(backend="llvm", raw=None,    nv=False, eq=True),
     "m4llvmraw": dict(backend="llvm", raw="crate", nv=False, eq=True),
     "m4c":       dict(backend="llvm", raw="c",     nv=False, eq=True),
+    # m4cb: m4c, but the sessions axis does each rep's get + put as ONE call of the batch entry <tag>__pruv_hb_m4_op
+    "m4cb":      dict(backend="llvm", raw="c",     nv=False, eq=True),
     "m4llvmnv":  dict(backend="llvm", raw=None,    nv=True,  eq=True),
 }
+# World-section lanes: driver_<tag>.rs replaces driver_m4.rs's World section (the symbols are <tag>__pruv_*)
+WORLD_LANES = ("m4c", "m4cb")
+# m4cb: the sessions-axis timed loop of driver_m4.rs perf (one [get, put] pair per rep) calls World::exec2 once per rep
+BATCH_LOOP_ANCHOR = "    for _ in 0..nops {\n        let op = &cycle[j];\n"
+BATCH_LOOP_PATCH = """    // m4cb (run.py): sessions axis = [get, put] per rep, one batch call per rep; other axes keep one call per op.
+    let batched = axis == "sessions" && cycle.len() == 2;
+    if batched {
+        for _ in 0..nops / 2 {
+            match w.exec2(black_box(&cycle[0]), black_box(&cycle[1])) {
+                // Same sink as the single-call loop: out[0] + out[1] of each of the two ops.
+                R::Ok(_) => {
+                    sink = sink.wrapping_add(black_box(w.out[0] + w.out[1]));
+                    sink = sink.wrapping_add(black_box(w.out2[0] + w.out2[1]));
+                }
+                _ => {
+                    eprintln!("perf: batch failed in timed loop");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+    for _ in 0..(if batched { 0 } else { nops }) {
+        let op = &cycle[j];
+"""
 EQ_CALL = re.compile(r"\beq_range\(")
 EQ_HELPER = """
 // P10 bench lane (run.py, eq lanes): eq_range as a verified element loop; same five bounds as eq_range's obligations.
@@ -167,7 +193,8 @@ def build_runtime():
 def build(pruvc, tag):
     """tag m3|keys|<m4 lane, see M4_LANES>: pruvc root -> gen_<tag>.rs (llvm lanes: gen_<tag>.ll + bindings gen_<tag>.rs,
     clang -> .o, linked with runtime.o), then rustc main_<tag>.rs + driver. m4raw/m4llvmraw: manifest raw_entries "crate"
-    (driver over sol::pruv_raw::PruvStore); m4c: raw_entries "c" (driver_m4c.rs world calls sol::pruv_c extern "C" symbols);
+    (driver over sol::pruv_raw::PruvStore); m4c: raw_entries "c" (driver_m4c.rs world calls the sol::pruv_c extern "C"
+    symbols, prefixed m4c__); m4cb: the same with driver_m4cb.rs (m4cb__ symbols) and one batch call (hb) per sessions rep;
     m4/m4nv/m4llvm/m4llvmnv use the local no-poison Plain store. Returns the exe."""
     lane = M4_LANES.get(tag)
     base = "m4" if lane else tag
@@ -204,16 +231,20 @@ def build(pruvc, tag):
         link = ["-C", "link-arg=" + obj, "-C", "link-arg=" + build_runtime()]
     with open(os.path.join(HERE, "driver_%s.rs" % base)) as d:
         driver = d.read()
-    if tag == "m4c":
+    if tag in WORLD_LANES:
         b, e = driver.find(WORLD_BEGIN), driver.find(WORLD_END)
         if b < 0 or e < b:
             raise ToolError("driver_m4.rs: LANE-WORLD markers missing")
-        with open(os.path.join(HERE, "driver_m4c.rs")) as w:
+        with open(os.path.join(HERE, "driver_%s.rs" % tag)) as w:
             driver = driver[:b] + w.read() + driver[e:]
+    if tag == "m4cb":
+        if driver.count(BATCH_LOOP_ANCHOR) != 1:
+            raise ToolError("driver_m4.rs: the timed loop of perf() changed, cannot patch the m4cb batch loop")
+        driver = driver.replace(BATCH_LOOP_ANCHOR, BATCH_LOOP_PATCH)
     main = os.path.join(WORK, "main_%s.rs" % tag)
     with open(main, "w") as fh:
         fh.write('#![allow(dead_code, unused_imports)]\n#[path = "%s"] mod sol;\n' % gen.replace("\\", "/"))
-        if lane and tag != "m4c":
+        if lane and tag not in WORLD_LANES:
             fh.write("type Store<T> = %s;\n" % ("sol::pruv_raw::PruvStore<T>" if lane["raw"] == "crate" else "Plain<T>"))
         fh.write(driver)
     exe = os.path.join(WORK, "driver_%s_bin" % tag + (".exe" if os.name == "nt" else ""))

@@ -13,7 +13,11 @@ ABI/lifetime, ret slots between sentinels, positional parameter names (h, ret, s
 arguments, zero-length NULL, BAD_ARGS (misaligned, overlap, address overflow, length > INT64_MAX/8, overlap with the
 handle object, invalid UTF-8, bad bool bytes, rebuild new_len negative/oversized), rebuild observed via stlen, and
 poisoning (the probe panic, whose payload Drop panics, returns 3 without aborting; a poisoned handle returns 1 before
-any argument check).
+any argument check), and the batch entry app__pruv_hb_op (order, stop rule, done, up-front and per-item BAD_ARGS, poison).
+All global C symbols carry the manifest package name as prefix ("app__"); text-level check with a second name "app2".
+The batch entry refuses up front with *done = 0 when done is usable (n = -1 with done preset to 77, NULL items with n = 1).
+Two programs (packages twoa / twob, same entry name, same G6 builtins) are compiled with the LLVM backend and linked into
+ONE binary (check_two_programs.py, c_two.c): the pruv_abi_* / pruv_g6_v1_* / pruv_g6_bridge_v1 symbols carry the prefix.
 Prints one FAIL line per failing case; exit 0 only if every case passes. Needs rustc and clang (PATH, else ~/.cargo/bin, /usr/bin)."""
 from pathlib import Path
 import json
@@ -108,12 +112,13 @@ def main(work, rs=None, py=None):
             return 127, repr(e)
         return c.returncode, c.stdout + c.stderr
 
-    def build(key):
-        """compile the program with raw_entries = key; returns (B.rs, out.ll) of the selected compiler or None"""
-        base = work / ("pkg_" + (key or "nokey"))
+    def build(key, name="app"):
+        """compile the program with raw_entries = key and manifest package name `name`;
+        returns (B.rs, out.ll) of the selected compiler or None"""
+        base = work / ("pkg_" + (key or "nokey") + ("" if name == "app" else "_" + name))
         pdir = base / "app"
         pdir.mkdir(parents=True)
-        man = {"name": "app", "version": "0.1.0", "root": "app.pruv"}
+        man = {"name": name, "version": "0.1.0", "root": "app.pruv"}
         if key is not None:
             man["raw_entries"] = key
         (pdir / "pruv.json").write_text(json.dumps(man))
@@ -146,11 +151,34 @@ def main(work, rs=None, py=None):
         return 1
     b_rs, ll = built
     t = b_rs.read_text()
-    for sym in ("pub mod pruv_c", "pruv_handle_new", "pruv_handle_free", "pruv_handle_poisoned", "pruv_h_setup",
-                "pruv_h_op", "pruv_h_big", "pruv_h_flagset", "pruv_h_setflag", "pruv_h_flag0", "pruv_hr_grow",
-                "pruv_h_clash", "pruv_h_bsum", "pruv_h_slen", "pruv_h_bflip", "pruv_h_stlen"):
+    # every global C symbol carries the manifest package name ("app") as a prefix; hb (batch) exists only for entries whose
+    # state is inout [i64] and whose return is i64: here only `op`
+    for sym in ("pub mod pruv_c", "app__pruv_handle_new", "app__pruv_handle_free", "app__pruv_handle_poisoned",
+                "app__pruv_handle_probe_panic", "app__pruv_h_setup", "app__pruv_h_op", "app__pruv_h_big",
+                "app__pruv_h_flagset", "app__pruv_h_setflag", "app__pruv_h_flag0", "app__pruv_hr_grow",
+                "app__pruv_h_clash", "app__pruv_h_bsum", "app__pruv_h_slen", "app__pruv_h_bflip", "app__pruv_h_stlen",
+                "app__pruv_hb_op"):
         check("c: B.rs has " + sym, sym in t)
+    for sym in ("app__pruv_hb_setup", "app__pruv_hb_big", "app__pruv_hb_flagset", "app__pruv_hb_setflag",
+                "app__pruv_hb_flag0", "app__pruv_hb_clash", "app__pruv_hb_bsum", "app__pruv_hb_slen",
+                "app__pruv_hb_bflip", "app__pruv_hb_stlen", "app__pruv_hb_grow", "app__pruv_hr_op"):
+        check("c: B.rs has no " + sym, sym not in t)
+    # no unprefixed definition of a pruv_c global is left
+    import re
+    unpref = re.findall(r"\bfn\s+(pruv_(?:handle|h|hr|hb)_\w*)", t)
+    check("c: no unprefixed pruv_c function definitions", not unpref, ", ".join(sorted(set(unpref))))
     check("c: the pruv_raw module is still there", "pub mod pruv_raw" in t)
+    check("c: the batch entry writes *done = 0 on an up-front refusal", "done.write(0);" in t)
+    # the same program under another package name uses only that name's prefix (disjoint global C symbols); linking two
+    # programs into one binary is tested below (check_two_programs.py: ONE staticlib with both Rust modules)
+    built2 = build("c", "app2")
+    if built2:
+        t2 = built2[0].read_text()
+        for sym in ("app2__pruv_handle_new", "app2__pruv_handle_free", "app2__pruv_h_op", "app2__pruv_hr_grow",
+                    "app2__pruv_hb_op"):
+            check("c: app2 B.rs has " + sym, sym in t2)
+        check("c: app2 B.rs has no app__ symbol", "app__pruv_" not in t2)
+        check("c: app B.rs has no app2__ symbol", "app2__pruv_" not in t)
 
     # ---- Rust backend: "c" is "crate" (the C adapter is LLVM-only, no extern "C" in Rust-backend output) --------------
     rust_out = {}
@@ -204,11 +232,19 @@ def main(work, rs=None, py=None):
                         if line.startswith("FAIL"):
                             fails.append("FAIL c_probe: " + line[5:])
 
+    # ---- two programs with different package names (same entry name, same G6 builtins) in ONE binary -------------------
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("check_two_programs", str(HERE / "check_two_programs.py"))
+    two = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(two)
+    two.run_case(work, rs, py, check, run, {"rustc": RUSTC, "clang": CLANG, "runtime_c": RUNTIME_C,
+                                            "sel_cmd": sel_cmd, "py_cmd": py_cmd})
+
     for line in fails:
         print(line)
     if fails:
         return 1
-    print("c_handle: pruv_c text facts, Rust backend c == crate without extern \"C\", staticlib + C probe (ABI, provenance, "
+    print("c_handle: two programs (packages twoa, twob; same entry name, same G6 builtins) in one binary, pruv_c text facts, Rust backend c == crate without extern \"C\", staticlib + C probe (ABI, provenance, "
           "lifetime, positional parameter names, [u8]/str/[bool] args, zero-length NULL, BAD_ARGS incl. address overflow, "
           "length limit, handle overlap, rebuild new_len, poison-before-argument-checks, panic with panicking payload "
           "Drop)%s: OK" % (", rs == py" if rs else ""))

@@ -857,3 +857,162 @@ Confirmed OK by the confirmation audit: the first-audit fixes for M1, M2, M3 and
 - **Per-call `valid`.** Costs 2.6 to 3.4 ns per call on LLVM (`m4llvm - m4llvmnv`) and 0.3 to 1.5 ns on Rust (`m4 - m4nv`). It can go once P11 gives every mutator `valid(old(st)) ==> valid(st)` and the handle keeps an "init returned 0" word (P10.4).
 - **Global symbols.** `pruv_handle_*` and `pruv_h_*` are unprefixed global C symbols, so two Pruv programs linked into one C binary collide. P10H should add a per-program prefix.
 - **Misuse.** Double free, use after free and cross-thread use are not checked (no registry, by design). A C wrapper that wants them checked keeps its own table.
+
+## Appendix P10H: budget and req host facts, batched C entry, symbol prefix
+
+### P10H.1 Host facts (bench/l3/hostfact)
+
+Concrete synchronous G6 host facts for budget and req. Decisions stay in Pruv (`root.pruv`); the host crate
+`hostfact_host` only answers facts or does side effects and appends each call to a trace. Signatures, entries and
+refusal semantics are in `bench/l3/hostfact/README.md`.
+
+| fact | signature | used by |
+|---|---|---|
+| `running_ids` | `(session, settled: i64) -> Vec<i64> ! alloc, io`, answer `[status, n, ids...]` | `bh_halt` |
+| `is_quiet` | `(session) -> i64 ! io` | `bh_close` |
+| `release_held` | `(session) -> i64 ! io` | `bh_release` |
+| `next_item`, `is_temporary`, `title_obs` | `(s, m) -> i64`, `(item) -> i64`, `(s) -> i64`, all `! io` | `rq_find` |
+
+Gates (13 per build, 4 builds: py/rs x rust/llvm, all pass): query order (the query sees the settled value), a
+query-before-settle mutant caught by the trace, result validation (bad status, bad length, bad id, small `out`: no
+write to `out` or the halted flag), close/release answers, re-entry refusal (code 9, guard cleared on unwind), req
+first match / invalid answer / no match with exact call sequences, and Pruv == hand lanes on every gate input.
+
+### P10H.2 Trusted shim fix (both emitters)
+
+The first grid run had `rq_find` at 1.27x to 2.60x of hand on the Rust backend. Cause: every trusted-fn helper
+(`pruv_m_f_*`) was a separate, non-inlined function, and it set the `PRUV_CTX` thread-local on entry and cleared it on
+drop even when the fn has no checked contract (`ensures true`). On macOS each thread-local access is a call. Fix in
+`pruvc/foreign_codegen.py` and `pruv-core/src/{foreign_codegen,codegen}.rs`, byte-identical output:
+
+- trusted helpers are `#[inline(always)]`;
+- the `pruv_ctx` guard and the budget line are emitted only when at least one requires/ensures check line is emitted.
+  `pruv_ud` (only reachable from contract expressions) is the one reader of `PRUV_CTX`, so no message changes.
+
+### P10H.3 Measurements (median ns, ratio = Pruv / hand; hand Rust lane has equal semantics)
+
+Host facts, after the fix (9 rounds; `rq_find`: S=20000, M=10, 420000 fresh per-item `is_temporary` calls, no match):
+
+| build | `rq_find` ratio | ns/call Pruv / hand | `bh_halt` ratio | ns/halt Pruv / hand |
+|---|---:|---:|---:|---:|
+| py/rust | 1.065 | 2.07 / 1.94 | 0.994 | 29.8 / 29.9 |
+| rs/rust | 1.162 | 3.15 / 2.71 | 1.001 | 28.8 / 28.8 |
+| py/llvm | 1.568 | 4.44 / 2.83 | 2.341 | 66.5 / 28.4 |
+| rs/llvm | 2.006 | 4.58 / 2.28 | 2.293 | 66.2 / 28.9 |
+
+py/rust and rs/rust generate byte-identical `root_gen.rs` (and so do the two llvm builds), so the rs/rust 1.16x is
+run noise: three 21-round repeats gave rs 0.71x, 1.25x, 0.96x and py 1.02x, 1.02x, 0.99x on the same machine.
+Before the fix: py/rust 1.656x (4.69 / 2.83), rs/rust 2.599x.
+
+Re-run after the audit harness fixes (hand lanes carry the same `requires` checks, both halt lanes `black_box` `st` and
+`out` after every call, lanes rotate per round; 9 rounds):
+
+| build | `rq_find` ratio | ns/call Pruv / hand | `bh_halt` ratio | ns/halt Pruv / hand |
+|---|---:|---:|---:|---:|
+| py/rust | 0.981 | 3.15 / 3.21 | 1.496 | 43.2 / 28.9 |
+| rs/rust | 0.897 | 3.09 / 3.44 | 1.603 | 41.4 / 25.8 |
+| py/llvm | 1.216 | 3.78 / 3.11 | 2.437 | 68.0 / 27.9 |
+| rs/llvm | 1.335 | 2.70 / 2.02 | 2.404 | 64.6 / 26.9 |
+
+The earlier 1.0x `bh_halt` hid real work: with `st` unobserved, the state writes and the guarded calls around them
+could be dropped. The Rust-backend `bh_halt` excess (+13 to +17 ns per halt) is the `vec_get` builtin
+`pruv_g6_vec_get__i`. It is not `#[inline(always)]` and opens a `pruv_ctx` guard (two thread-local writes) on each of
+its 8 calls per halt. In a scratch copy of the generated `root_gen.rs` (no compiler change), dropping only that guard
+line and adding `#[inline(always)]` gave Pruv / hand 27.9 / 28.1, 27.7 / 27.7 and 28.0 / 27.6 ns (three 9-round
+runs). Also removing the `catch_unwind` around `running_ids` changed nothing.
+
+Fix (both emitters, `pruvc/foreign_codegen.py` `_fn` and `pruv-core/src/foreign_codegen.rs` `fn_text`, byte-identical):
+every non-I/O G6 catalog helper (all ops except the `file_`/`proc_`/`ev_`/`net_` families) is `#[inline(always)]`,
+and the `pruv_ctx` guard is emitted only when the helper has a `requires` and either an `ensures` or a body call that
+reads the ctx (`pruv_ud`, `pruv_g6_charge`, `pruv_g9_tick` and the checked `pruv_c*` runtime helpers; list
+`_UD_CALLS` / `UD_CALLS`). Helpers now inlined without the guard: `vec_new`, `vec_push`, `vec_get`, `map_new`,
+`map_get`, `map_insert`, `string_new`, `string_push_str`, `string_byte`, `string_to_str`. Their refusal messages name
+the op explicitly and do not read the ctx, so no message changes (diff_rust 20 fuzz, all same).
+
+Final run after the fix (one compiler rebuild, 9 rounds, `bench/l3/hostfact/run.py --rounds 9`, all 52 gates pass):
+
+| build | `rq_find` ratio | ns/call Pruv / hand | `bh_halt` ratio | ns/halt Pruv / hand |
+|---|---:|---:|---:|---:|
+| py/rust | 1.012 | 3.49 / 3.45 | 0.968 | 25.97 / 26.82 |
+| rs/rust | 1.013 | 3.16 / 3.11 | 0.942 | 27.87 / 29.59 |
+| py/llvm | 1.199 | 4.00 / 3.33 | 2.126 | 60.32 / 28.38 |
+| rs/llvm | 1.193 | 3.90 / 3.27 | 2.102 | 60.37 / 28.71 |
+
+**req verdict:** passes on the Rust backend (median 0.90x to 1.07x over all runs, 1.01x in the final run); **blocked on
+the LLVM backend** (1.19x to 2.0x, P17).
+**budget synchronous path:** passes on the Rust backend (`bh_halt` 0.94x to 0.98x, matching the scratch copy); 2.1x to
+2.5x on LLVM (P17).
+
+LLVM decomposition (not separated further; P17): `rq_find` +1.6 to +2.3 ns per host call is one non-inlined
+`extern "C"` call from the `.ll` object into `pruv_g6_v1_*` plus its `pruv_g6_guard` frame (the Rust backend inlines
+the same shim). `bh_halt` +38 to +44 ns per halt is 11 such crossings per halt with 3 ids (`running_ids`, `len`, 8
+`vec_get`, `drop`) plus one heap handle (`pruv_g6_new`, a `Box` around the returned `Vec`) allocated and freed per halt.
+
+M4 adapter lanes (perf_headroom/host `--only m4 --rounds 7`, sessions axis, ns per op; tools and clocks are at or below
+1.10x matched):
+
+| n | hand | handc | handcb | m4 | m4llvm | m4c | m4cb | m4c/handc | m4cb/handcb |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 100 | 14.6 | 16.4 | 17.9 | 13.0 | 20.4 | 24.5 | 25.8 | 1.49 | 1.44 |
+| 500 | 15.8 | 17.5 | 18.5 | 12.7 | 20.2 | 24.1 | 25.8 | 1.38 | 1.39 |
+| 1000 | 15.8 | 17.4 | 18.5 | 13.2 | 20.7 | 24.4 | 26.3 | 1.40 | 1.42 |
+
+Batching did not lower the sessions cell. Exact decomposition of `m4c - handc` = `(m4llvm - hand) + (m4c - m4llvm) -
+(handc - hand)`:
+
+| n | m4c - handc | m4llvm - hand (LLVM path) | m4c - m4llvm (Pruv C entry) | handc - hand (hand C entry) |
+|---:|---:|---:|---:|---:|
+| 100 | +8.1 | +5.8 | +4.1 | +1.8 |
+| 500 | +6.6 | +4.4 | +3.9 | +1.7 |
+| 1000 | +7.0 | +4.9 | +3.7 | +1.6 |
+
+The largest term is the LLVM path (the same program is 0.80x to 0.89x of hand on the Rust backend, `m4`); the Pruv C
+entry costs 2.1 to 2.3 ns more than the hand C entry, because the generated entry calls the LLVM body across an object
+boundary while `handc` inlines its body. The crossing itself is not the term: `m4cb` (one crossing, one `catch_unwind`
+per get+put) is +1.3 to +1.9 ns slower than `m4c`, and `handcb` is +1.0 to +1.5 ns slower than `handc`, because the
+batch adds a per-item loop and per-item checks while the per-call crossing was already cheap. World equivalence:
+`m34_test m4cb` and `m4c` 300/300 (seed 1, 922 grows).
+
+### P10H.4 Batched entry and symbol prefix
+
+`@P@` in the C adapter is replaced by `<pkg>__` (the `pruv.json` name), so the C adapter symbols
+(`pruv_handle_*`/`pruv_h_*`/`pruv_hb_*`) carry the package name. `<pkg>__pruv_hb_NAME(h, items, n, done)` runs up to
+`n` operations inside one `catch_unwind` and one `store.with`, applies the single-entry checks per item, stops at the
+first nonzero result and reports `done`. `tests/l3/abi` probes it (positive, poison, bad args, stop-at-first, prefixed
+names).
+
+Audit findings, closed:
+
+- **Prefix scope.** For a program with a package name, every global program symbol of the LLVM backend carries
+  `<pkg>__`: the `.ll` exports `pruv_abi_<entry>` / `pruv_abi_<entry>__typed`, the G6 imports `pruv_g6_v1_*` and
+  `pruv_g6_bridge_v1` with their `#[no_mangle]` definitions in the Rust module, and the C adapter symbols. Root entry
+  bodies in the `.ll` were already `define internal`. A program without a package name keeps the old names. Not
+  prefixed on purpose: the shared runtime (`pruv_alloc`, `pruv_panic_*`, `pruv_check_*`, linked once) and the
+  program-independent `pruv_host_*` hooks the runtime calls by name. Each Rust module still emits those hooks, so a
+  host that links two modules keeps one copy (the same holds for `pruv_panic_cost` with cost and `pruv_g7_v1_run`
+  with par, SPEC.md: shared definitions are linked once). `tests/l3/abi/check_two_programs.py` (+ `c_two.c`) compiles packages
+  `twoa` and `twob` (same entry name, same `vec_*` builtins) with the LLVM backend and links ONE staticlib (both Rust
+  modules, the second without its hooks, asserted byte-identical to the first), both `.ll` objects and one runtime
+  into one C binary that calls both programs. It also checks that every non-internal `.ll` define and every
+  `#[no_mangle]` item is prefixed or a shared hook.
+- **`done` on up-front refusal.** An up-front `PRUV_BAD_ARGS` (`n < 0`, null `items`, misaligned or overlapping
+  arguments) now writes `*done = 0` when `done` itself is a usable slot (non-null, aligned, no address overflow, not
+  overlapping the handle or the `ret` table); an unusable `done` is never written. `c_probe.c` probes `n = -1` with
+  `done` preset to 77, null `items` with `n = 1`, and the unusable-`done` cases. SPEC.md states the rule.
+
+### P10H.5 Notes for P11+ and P17
+
+- **P17 (LLVM boundary).** Every LLVM cell above 1.1x here is the `.ll` to Rust call boundary: per G6 host call
+  (`rq_find`, `bh_halt`), per Vec element (`vec_get` crossings) and per op (`m4c`). Inline the Rust shims into the
+  LLVM object or link with LTO; lower `Vec` results to a borrowed slice instead of a boxed handle with per-element calls.
+  req stays blocked on LLVM until then.
+- **Open from the P10H confirmation audit (needs a compiler rebuild, both emitters).** (a) `_UD_CALLS` / `UD_CALLS`
+  (`pruvc/foreign_codegen.py`, `pruv-core/src/foreign_codegen.rs`) misses runtime helpers that also call `pruv_ud`:
+  `pruv_cband`, `pruv_cbor`, `pruv_cbxor`, `pruv_cwrapping_shl`, `pruv_cushr`, `pruv_cwrapping_add`,
+  `pruv_cwrapping_mul` (`pruvc/codegen.py`, `codegen.rs`). No current G6 builtin body calls them, so no guard is
+  missing today; a future builtin that does would lose its ctx guard. Root fix: derive the list from the runtime
+  prelude (every helper whose body reads `pruv_ud`) instead of a hand list. (b) `map_updated` is emitted outside
+  `_fn`/`fn_text` and is not `#[inline(always)]`; it is not on a measured path.
+- **P11.** The per-call `valid` (P10.4) and `m4raw/m4` (1.12x to 1.13x on sessions, P10.3) are unchanged by P10H.
+- **Batch API.** Keep `pruv_hb_` for callers that already hold a batch; it is not a performance lever while the body
+  crosses the LLVM boundary.

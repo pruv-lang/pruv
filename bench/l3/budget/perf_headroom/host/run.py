@@ -15,7 +15,8 @@ drift hits all three alike; the table reports the median over rounds of each sid
   M4 adapter table: matched baselines. The C-boundary lane (m4c) is compared with the hand Rust State behind the same
   kind of extern "C" handle (`m4_hand perfc`, "handc": black_box'd function pointers, handle/poison/ret/overlap/slice
   checks and a poison set/clear per call); the in-process lanes are compared with the in-process hand Rust (`m4_hand
-  perf`). m4c/hand (unmatched) is printed for information only.
+  perf`). m4c/hand (unmatched) is printed for information only. The batch lane m4cb (one hb call per sessions rep) is
+  compared with `m4_hand perfcb` ("handcb": one hand batch call, one catch_unwind + one store access per get+put).
   M5 (per op, min over --m5-reps after a warm-up, per run): Pruv = harness perf, hand = m5_hand perf, TS = m5_test/perf_ts.mjs.
 """
 import sys
@@ -35,7 +36,7 @@ import run as m34  # noqa: E402
 HAND = os.path.join(BUD, "work", "handbuild")
 HARNESS = os.path.join(BUD, "work", "m5build", "harness")
 SIZES = [100, 500, 1000]
-EXTRA_LANES = ["m4c", "m4eq", "m4llvm", "m4llvmraw", "m4nv", "m4llvmnv"]   # P10 lanes, built by m34_test/run.py (--lanes picks)
+EXTRA_LANES = ["m4c", "m4cb", "m4eq", "m4llvm", "m4llvmraw", "m4nv", "m4llvmnv"]   # P10 lanes, built by m34_test/run.py (--lanes picks)
 
 
 def sh(cmd, env=None, cwd=BUD):
@@ -115,6 +116,9 @@ def m4_poison(args, exe4):
     and an opaque call); every in-process lane is compared with the in-process hand Rust. m4c/hand is printed for
     information only (UNMATCHED). All sides use the identical sink (out[0] + out[1]) and identical accounting: total
     loop time with grows included (driver_m4 total_ns_per_op, not core_ns_per_op).
+    m4cb (m4c with one batch call <tag>__pruv_hb_m4_op per sessions rep) is compared with handcb (m4_hand perfcb: the
+    same hand State behind the extern "C" handle, one hand_hb_exec call per sessions rep); on the tools and clocks axes
+    both do single calls, so m4cb == m4c and handcb == handc there. m4cb/hand is information only (UNMATCHED).
     Separate rounds from the lanes above; the sides rotate order each round; >= 7 rounds."""
     reps = 200000
     rounds = max(args.rounds, 7)
@@ -127,6 +131,8 @@ def m4_poison(args, exe4):
                 sides = [(s, [args.lane_exes[s], "perf", axis, str(n), str(reps)], "total_ns_per_op") for s in lanes]
                 sides.append(("hand", [hand, "perf", axis, str(n), str(reps)], "hand_ns_per_op"))
                 sides.append(("handc", [hand, "perfc", axis, str(n), str(reps)], "hand_ns_per_op"))
+                if "m4cb" in lanes:
+                    sides.append(("handcb", [hand, "perfcb", axis, str(n), str(reps)], "hand_ns_per_op"))
                 for side, cmd, key in rotate(sides, r):
                     v = float(kv(sh(cmd).strip().splitlines()[-1])[key])
                     vals.setdefault((axis, n, side), []).append(v)
@@ -136,16 +142,21 @@ def m4_poison(args, exe4):
         if s == "m4c":
             ratio_cols.append("m4c/handc (MATCHED)")
             ratio_cols.append("m4c/hand (unmatched, info)")
+        elif s == "m4cb":
+            ratio_cols.append("m4cb/handcb (MATCHED)")
+            ratio_cols.append("m4cb/hand (unmatched, info)")
         else:
             ratio_cols.append("%s/hand (in-process, matched)" % s)
-    print("| axis | n | hand Rust (in-process) | hand C (handc: extern C handle) | " + " | ".join(lanes) + " | "
-          + " | ".join(ratio_cols) + " | m4raw/m4 |")
-    print("|---|---:|---:|---:|" + "---:|" * (len(lanes) + len(ratio_cols) + 1))
+    hand_sides = ["hand", "handc"] + (["handcb"] if "m4cb" in lanes else [])
+    print("| axis | n | hand Rust (in-process) | hand C (handc: extern C handle) | "
+          + ("hand C batch (handcb: one batch call per get+put) | " if "handcb" in hand_sides else "")
+          + " | ".join(lanes) + " | " + " | ".join(ratio_cols) + " | m4raw/m4 |")
+    print("|---|---:|---:|---:|" + "---:|" * (len(hand_sides) - 2 + len(lanes) + len(ratio_cols) + 1))
     for axis in ("sessions", "tools", "clocks"):
         for n in SIZES:
             cells = []
             med = {}
-            for s in ["hand", "handc"] + lanes:
+            for s in hand_sides + lanes:
                 v = vals[(axis, n, s)]
                 med[s] = statistics.median(v)
                 cells.append("%.1f [%.1f-%.1f]" % (med[s], min(v), max(v)))
@@ -153,6 +164,9 @@ def m4_poison(args, exe4):
             for s in lanes:
                 if s == "m4c":
                     ratios.append("%.2f" % (med[s] / med["handc"]))
+                    ratios.append("%.2f" % (med[s] / med["hand"]))
+                elif s == "m4cb":
+                    ratios.append("%.2f" % (med[s] / med["handcb"]))
                     ratios.append("%.2f" % (med[s] / med["hand"]))
                 else:
                     ratios.append("%.2f" % (med[s] / med["hand"]))

@@ -56,6 +56,14 @@ G6_UNSUPPORTED_MSG = "G6 foreign calls and collections are not implemented by th
 G6_UNSUPPORTED_FIX = "avoid trusted rust fn, Vec, HashMap, String, take and move for now"
 G6_BRIDGE_DECL = "@pruv_g6_bridge_v1 = external global i8\n"
 
+
+def sym_prefix(pkg):
+    """P10H: the prefix of every program-specific non-internal global symbol of the LLVM build (`pruv_abi_*`,
+    `pruv_g6_v1_*`, `pruv_g6_bridge_v1`, the C adapter): `<pkg>__` for a program with a package name, so two programs
+    link into one binary.  A program without a package name keeps the unprefixed names (it cannot be linked together
+    with another program that defines the same symbols).  The program-independent runtime is never prefixed."""
+    return pkg + "__" if pkg else ""
+
 SIGNED_MIN128 = -170141183460469231731687303715884105728
 BIT_LLVM = {"band": "and", "bor": "or", "bxor": "xor", "wrapping_shl": "shl", "ushr": "lshr",
              "wrapping_add": "add", "wrapping_mul": "mul"}   # P2: bit builtin -> LLVM instruction; later batches add entries
@@ -697,6 +705,7 @@ class Mod:
         s.uses_repr = False     # G3: the wrappers reject an invalid enum ordinal through pruv_panic_repr
         s.par_types = []
         s.par_trampolines = []
+        s.sym_pre = ""          # P10H: `<pkg>__` (or "") in front of every program-specific global symbol (sym_prefix)
         s.g6_decls = {}         # G6 A3: shim symbol -> declare line
         s.g6_v2 = False         # G6 A3: string_to_str needs the v2 copy/free declarations
         s.g6_take = False       # P3 M3: some string_to_str takes the String buffer (pruv_g6_v1_string_take)
@@ -884,7 +893,7 @@ class FnGen:
         if s.bridge:
             # G6 A3: a (volatile) read of the shim's bridge marker keeps the reference alive: linking without the
             # shim fails.  lines[0] is the `start:` label.
-            lines = lines[:1] + ["  %g6.bridge = load volatile i8, ptr @pruv_g6_bridge_v1"] + lines[1:]
+            lines = lines[:1] + ["  %g6.bridge = load volatile i8, ptr @" + s.m.sym_pre + "pruv_g6_bridge_v1"] + lines[1:]
             s.m.g6_bridge = True
         out += lines
         out.append("}")
@@ -1351,7 +1360,9 @@ class FnGen:
         s.bridge = True
 
     def g6_call(s, sym, ret, args):
-        """call a bridge symbol; args: [(llvm type, value)]; returns the SSA result (None for void)"""
+        """call a bridge symbol (sym is the unprefixed foreign_shim name; the program prefix is added here);
+        args: [(llvm type, value)]; returns the SSA result (None for void)"""
+        sym = s.m.sym_pre + sym
         s.g6_decl(sym, ret, [t for t, _ in args])
         a = ", ".join("%s %s" % (t, v) for t, v in args)
         if ret == "void":
@@ -4335,12 +4346,13 @@ def abi_of(f, tt, m=None, target="entry"):
         body.append("  %%r = call i64 %s(%s)" % (entry, ", ".join(args)))
         body.append("  ret i64 %r")
         ret = "i64"
-    out = "define %s @pruv_abi_%s(%s) {\nentry:\n%s\n}\n" % (ret, n, ", ".join(ext), "\n".join(body))
+    sp = m.sym_pre if m is not None else ""
+    out = "define %s @%spruv_abi_%s(%s) {\nentry:\n%s\n}\n" % (ret, sp, n, ", ".join(ext), "\n".join(body))
     if any(p.type.name in ("array_bool", "str") for p in f.params):
         # G2 A5/B2: typed Rust bindings pass &[bool] / &str (valid by type) to this entry without the check
         tb = [x for x in body if not (x.startswith("  call void @pruv_check_bool(")
                                       or x.startswith("  call void @pruv_check_utf8("))]
-        out += "\ndefine %s @pruv_abi_%s__typed(%s) {\nentry:\n%s\n}\n" % (ret, n, ", ".join(ext), "\n".join(tb))
+        out += "\ndefine %s @%spruv_abi_%s__typed(%s) {\nentry:\n%s\n}\n" % (ret, sp, n, ", ".join(ext), "\n".join(tb))
     return out
 
 
@@ -4518,10 +4530,11 @@ C_HEAD = """\
 // P10: manifest raw_entries = "c": pruv_c is the C adapter. One opaque handle owns the resident state in a
 // pruv_raw::PruvStore; every extern "C" function catches a Rust panic (no unwind crosses into C) and returns a status.
 // A poisoned handle refuses every call but is still freed. Only the LLVM bindings carry this module.
+// P10H: every global symbol carries the program prefix <pkg>__ so two Pruv programs link into one C binary.
 #[allow(dead_code, unexpected_cfgs)]
 pub mod pruv_c {
     //! Caller contract of every `pub unsafe extern "C" fn` below (the adapter cannot check what it cannot see):
-    //! - the handle comes from pruv_handle_new and has not been freed;
+    //! - the handle comes from @P@pruv_handle_new and has not been freed;
     //! - no concurrent or reentrant use of one handle;
     //! - each (pointer, length) pair with length > 0 points to `length` initialized elements inside one live
     //!   allocation, readable (writable for an inout parameter) and not accessed by anyone else for the duration
@@ -4530,10 +4543,12 @@ pub mod pruv_c {
     //!
     //! The adapter checks null, sign, alignment, size, address overflow and overlap among the call's buffers and
     //! the handle, but it cannot check allocation size or provenance.
-    /// Statuses of every pruv_h_* / pruv_hr_* call: 0 ok, 1 poisoned (refused before any argument is read, nothing
-    /// ran), 2 bad arguments (refused, nothing ran), 3 a Rust panic unwound to the adapter (if it happened inside the
-    /// store it poisoned the handle). Checked failures inside LLVM-compiled code (range, arithmetic, requires) and G6
-    /// host-callback failures end the process (exit 101); they never return a status.
+    /// Statuses of every @P@pruv_h_* / @P@pruv_hr_* / @P@pruv_hb_* call: 0 ok, 1 poisoned (refused before any argument
+    /// is read, nothing ran), 2 bad arguments (refused, nothing ran), 3 a Rust panic unwound to the adapter (if it
+    /// happened inside the store it poisoned the handle). A batch (`hb`) answers 1 and 2 for the whole call before any
+    /// item runs, except a bad item, which is answered 2 after the items before it ran. Checked failures inside
+    /// LLVM-compiled code (range, arithmetic, requires) and G6 host-callback failures end the process (exit 101);
+    /// they never return a status.
     pub const PRUV_OK: i32 = 0;
     pub const PRUV_POISONED: i32 = 1;
     pub const PRUV_BAD_ARGS: i32 = 2;
@@ -4574,6 +4589,14 @@ pub mod pruv_c {
         let s = p as usize;
         (s, s.saturating_add((n.max(0) as usize).saturating_mul(::std::mem::size_of::<T>())))
     }
+    // A C table of n elements, read by index with raw reads: true for n == 0, else n is positive and not oversized
+    // and the pointer is non-null, aligned and its end address does not overflow.
+    #[inline(always)]
+    fn tab<T>(p: *const T, n: i64) -> bool {
+        n == 0 || (n > 0 && n as u64 <= (isize::MAX as u64) / (::std::mem::size_of::<T>() as u64)
+            && (p as usize).checked_add(n as usize * ::std::mem::size_of::<T>()).is_some() && !p.is_null()
+            && (p as usize) % ::std::mem::align_of::<T>() == 0)
+    }
     // Empty ranges never overlap.
     #[inline(always)]
     fn apart(a: (usize, usize), b: (usize, usize)) -> bool {
@@ -4599,9 +4622,9 @@ pub mod pruv_c {
         }
     }
     /// A new handle whose state is `len` zero words (call the program's init entry next); null for a negative or
-    /// oversized length. Free it with pruv_handle_free.
+    /// oversized length. Free it with @P@pruv_handle_free.
     #[no_mangle]
-    pub extern "C" fn pruv_handle_new(len: i64) -> *mut PruvHandle {
+    pub extern "C" fn @P@pruv_handle_new(len: i64) -> *mut PruvHandle {
         if len < 0 || len as u64 > (isize::MAX as u64) / 8 {
             return ::std::ptr::null_mut();
         }
@@ -4617,12 +4640,12 @@ pub mod pruv_c {
             }
         }
     }
-    /// Frees a handle and its state, poisoned or not; null is ignored. The handle must come from pruv_handle_new and
+    /// Frees a handle and its state, poisoned or not; null is ignored. The handle must come from @P@pruv_handle_new and
     /// is never used again: without a registry a double free or a later call cannot be detected.
     /// # Safety
     /// The pruv_c caller contract (module docs) holds.
     #[no_mangle]
-    pub unsafe extern "C" fn pruv_handle_free(h: *mut PruvHandle) {
+    pub unsafe extern "C" fn @P@pruv_handle_free(h: *mut PruvHandle) {
         if h.is_null() {
             return;
         }
@@ -4635,7 +4658,7 @@ pub mod pruv_c {
     /// # Safety
     /// The pruv_c caller contract (module docs) holds.
     #[no_mangle]
-    pub unsafe extern "C" fn pruv_handle_poisoned(h: *const PruvHandle) -> i32 {
+    pub unsafe extern "C" fn @P@pruv_handle_poisoned(h: *const PruvHandle) -> i32 {
         match unsafe { h.as_ref() } {
             Some(h) => h.store.is_poisoned() as i32,
             None => PRUV_BAD_ARGS,
@@ -4647,7 +4670,7 @@ pub mod pruv_c {
     /// The pruv_c caller contract (module docs) holds.
     #[cfg(pruv_c_probe)]
     #[no_mangle]
-    pub unsafe extern "C" fn pruv_handle_probe_panic(h: *mut PruvHandle) -> i32 {
+    pub unsafe extern "C" fn @P@pruv_handle_probe_panic(h: *mut PruvHandle) -> i32 {
         struct Bomb;
         impl Drop for Bomb {
             fn drop(&mut self) {
@@ -4715,10 +4738,13 @@ def c_entries(pubs):
     return out
 
 
-def c_module(entries):
+def c_module(entries, pkg):
     """P10: the pruv_c module text (no trailing newline). entries: (name, state mode "mt"/"ro", [(param name, kind)],
-    ret kind "i64"/"bool"/"unit"), each already eligible (c_entries)."""
-    I12, I16 = " " * 12, " " * 16
+    ret kind "i64"/"bool"/"unit"), each already eligible (c_entries). pkg: the program package name; P10H: every
+    global symbol is prefixed `<pkg>__` (the @P@ placeholder of the text below)."""
+    if pkg is None:
+        raise RuntimeError("internal: c_module: raw_entries \"c\" without a program package name")
+    I12, I16, I20 = " " * 12, " " * 16, " " * 20
     parts = [C_HEAD]
     for name, smode, uparams, rk in entries:
         # no user parameter name is a Rust identifier below: the i-th parameter after the state is a{i}
@@ -4738,7 +4764,7 @@ def c_module(entries):
         if rk != "unit":
             doc += " On PRUV_OK the result is in *ret."
         L = [doc, "    /// # Safety", "    /// The pruv_c caller contract (module docs) holds.", "    #[no_mangle]",
-             '    pub unsafe extern "C" fn pruv_h_%s(%s) -> i32 {' % (name, ", ".join(sig)),
+             '    pub unsafe extern "C" fn @P@pruv_h_%s(%s) -> i32 {' % (name, ", ".join(sig)),
              "        guard(|| unsafe {",
              I12 + "let hd = match h.as_mut() {", I16 + "Some(h) => h,", I16 + "None => return PRUV_BAD_ARGS,",
              I12 + "};",
@@ -4777,6 +4803,85 @@ def c_module(entries):
                   I16 + "    PRUV_OK", I16 + "}"]
         L += [I16 + "Err(_) => PRUV_POISONED,", I12 + "}", "        })", "    }"]
         parts.append("\n".join(L))
+        if smode == "mt" and rk == "i64":
+            # P10H: the batched entry: n items in one store access
+            sigb = ["h: *mut PruvHandle", "n: i64"]
+            reads, rnames, tabs = [], [], ["tab(done as *const i64, 1)", "tab(ret as *const i64, n)"]
+            for x, k in params:
+                if k == "i64" or k == "bool":
+                    sigb.append("%s: *const i64" % x)
+                    reads.append("%s.add(i).read()" % x)
+                    rnames.append(x)
+                    tabs.append("tab(%s, n)" % x)
+                else:
+                    p = _C_PTR[k]
+                    sigb += ["%s: *const %s" % (x, p), "%s_len: *const i64" % x]
+                    reads += ["%s.add(i).read()" % x, "%s_len.add(i).read()" % x]
+                    rnames += [x, "%s_len" % x]
+                    tabs += ["tab(%s, n)" % x, "tab(%s_len, n)" % x]
+            sigb += ["ret: *mut i64", "done: *mut i64"]
+            # fixed line breaks (independent of the entry name)
+            wrapped = ["    /// C batch for `%s`: runs items 0..n in order inside one store access (one crossing, one panic" % name,
+                       "    /// guard) and stops after the first item whose result is nonzero. Item i takes aK[i] (and aK_len[i]) for",
+                       "    /// each parameter and its result goes to ret[i]. On PRUV_OK or PRUV_BAD_ARGS *done is the number of items",
+                       "    /// that ran (0 when the whole call is refused up front); a bad item i is refused before it runs (items",
+                       "    /// before it ran). An up-front refusal writes *done = 0 only if done is non-null, aligned, and clear of the",
+                       "    /// handle object and of the ret table (ret .. ret + 8 * max(n, 0) bytes); otherwise done is not written. A",
+                       "    /// NULL handle (PRUV_BAD_ARGS), a poisoned handle (PRUV_POISONED) and a panic (PRUV_PANICKED) never write",
+                       "    /// *done. Tables are read with raw reads, so an item buffer may overlap a table."]
+            LB = wrapped + ["    /// # Safety",
+                  "    /// The pruv_c caller contract (module docs) holds for every item; each table has n readable elements.",
+                  "    #[no_mangle]",
+                  '    pub unsafe extern "C" fn @P@pruv_hb_%s(%s) -> i32 {' % (name, ", ".join(sigb)),
+                  "        guard(|| unsafe {",
+                  I12 + "let hd = match h.as_mut() {", I16 + "Some(h) => h,", I16 + "None => return PRUV_BAD_ARGS,",
+                  I12 + "};",
+                  I12 + "if hd.store.is_poisoned() {", I16 + "return PRUV_POISONED;", I12 + "}",
+                  I12 + "let (sp_rett, sp_done, sp_h) = (span(ret, n), span(done, 1), span(h as *const PruvHandle, 1));",
+                  I12 + "if !(%s && apart(sp_rett, sp_done) && apart(sp_rett, sp_h) && apart(sp_done, sp_h)) {"
+                  % " && ".join(tabs),
+                  I16 + "// up-front refusal: *done = 0 (no item ran) when done itself is a valid slot clear of the handle and the ret table",
+                  I16 + "if tab(done as *const i64, 1) && apart(sp_done, sp_rett) && apart(sp_done, sp_h) {",
+                  I20 + "done.write(0);", I16 + "}",
+                  I16 + "return PRUV_BAD_ARGS;", I12 + "}",
+                  I12 + "match hd.store.with(|st| {",
+                  I16 + "let mut i: usize = 0;",
+                  I16 + "while i < n as usize {"]
+            if rnames:
+                # a one-element tuple needs its trailing comma
+                tc = "," if len(rnames) == 1 else ""
+                LB.append(I20 + "let (%s%s) = (%s%s);" % (", ".join(rnames), tc, ", ".join(reads), tc))
+            for x, k in params:
+                if k == "bool":
+                    LB += [I20 + "if %s != 0 && %s != 1 {" % (x, x), I20 + "    return (i, PRUV_BAD_ARGS);", I20 + "}"]
+            bb = [("sp_%s" % x, "span(%s, %s_len)" % (x, x), k.startswith("mt_")) for x, k in params
+                  if k in _C_ARRAY_KINDS]
+            own = [v[0] for v in bb]
+            bb += [("sp_rett", None, True), ("sp_done", None, True), ("sp_h", None, True)]
+            # the ret table, done and the handle are checked apart once before the loop: only pairs with an item buffer
+            pairsb = ["apart(%s, %s)" % (bb[i][0], bb[j][0]) for i in range(len(own)) for j in range(i + 1, len(bb))
+                      if bb[i][2] or bb[j][2]]
+            if own:
+                tc = "," if len(own) == 1 else ""
+                LB.append(I20 + "let (%s%s) = (%s%s);" % (", ".join(own), tc,
+                                                          ", ".join(v[1] for v in bb[:len(own)]), tc))
+                LB += [I20 + "if !(%s) {" % " && ".join(pairsb), I20 + "    return (i, PRUV_BAD_ARGS);", I20 + "}"]
+            argsb = ["&mut st[..]"]
+            for x, k in params:
+                if k in _C_ARRAY_KINDS:
+                    LB += [I20 + "let %s = match %s {" % (x, _C_CONV[k] % (x, x)), I20 + "    Some(v) => v,",
+                           I20 + "    None => return (i, PRUV_BAD_ARGS),", I20 + "};"]
+                    argsb.append(x)
+                elif k == "bool":
+                    argsb.append("%s != 0" % x)
+                else:
+                    argsb.append(x)
+            LB += [I20 + "let v = super::%s(%s);" % (name, ", ".join(argsb)),
+                   I20 + "ret.add(i).write(v);", I20 + "i += 1;", I20 + "if v != 0 {", I20 + "    break;", I20 + "}",
+                   I16 + "}", I16 + "(i, PRUV_OK)", I12 + "}) {",
+                   I16 + "Ok((k, s)) => {", I20 + "done.write(k as i64);", I20 + "s", I16 + "}",
+                   I16 + "Err(_) => PRUV_POISONED,", I12 + "}", "        })", "    }"]
+            parts.append("\n".join(LB))
         if smode == "ro" and len(params) == 1 and params[0][1] == "mt_i64" and rk == "i64":
             parts.append("""\
     /// C rebuild for `%s`: runs it from the handle's state into a fresh zeroed buffer of new_len words and, when
@@ -4784,7 +4889,7 @@ def c_module(entries):
     /// # Safety
     /// The pruv_c caller contract (module docs) holds.
     #[no_mangle]
-    pub unsafe extern "C" fn pruv_hr_%s(h: *mut PruvHandle, new_len: i64, ret: *mut i64) -> i32 {
+    pub unsafe extern "C" fn @P@pruv_hr_%s(h: *mut PruvHandle, new_len: i64, ret: *mut i64) -> i32 {
         guard(|| unsafe {
             let hd = match h.as_mut() {
                 Some(h) => h,
@@ -4819,12 +4924,13 @@ def c_module(entries):
         })
     }""" % (name, name, name))
     parts.append("}")
-    return "\n".join(parts)
+    return "\n".join(parts).replace("@P@", pkg + "__")
 
 
 def gen_bindings(prog, shim=None, verified=True):
     """shim: the `mod pruv_g6_shim` text of a G6 program (foreign_shim.build_shim); None for every other program"""
     tt = new_tt(prog)
+    sp = sym_prefix(getattr(prog, "pkg_name", None))   # P10H: prefix of the pruv_abi_* symbols (same as Mod.sym_pre)
     explicit = bool(getattr(prog, "explicit", False))
     raw = getattr(prog, "raw_entries", None) if explicit else None   # P09
     raw_items = []
@@ -4954,7 +5060,7 @@ pub unsafe extern "C" fn pruv_host_realloc_v2(data: *mut u8, len: i64, m: i64, s
         elif is_agg(f.ret):
             ps.append("*mut i64")
         ret = " -> i64" if f.ret in (I64, BOOL) else (" -> Pruv__Tagged" if f.ret in (OPTION, RESULT) else "")
-        decls.append("    fn pruv_abi_%s(%s)%s;" % (typed_abi_name(f), ", ".join("p%d: %s" % (i, t) for i, t in enumerate(ps)), ret))
+        decls.append("    fn %spruv_abi_%s(%s)%s;" % (sp, typed_abi_name(f), ", ".join("p%d: %s" % (i, t) for i, t in enumerate(ps)), ret))
     if any(f.ret.name == "array_bool" for f in pubs):  # G2 A5
         decls.append("    fn pruv_check_bool(p0: *const u8, p1: i64);")
     if any(f.ret.name == "str" for f in pubs):  # G2 B2
@@ -5001,8 +5107,8 @@ pub unsafe extern "C" fn pruv_host_realloc_v2(data: *mut u8, len: i64, m: i64, s
         if is_arr(f.ret):
             body.append("let _ = ::std::hint::black_box(pruv_runtime_rust_allocator_v2 as unsafe extern \"C\" fn());")
         body += pre
-        call = "pruv_abi_%s(%s)" % (typed_abi_name(f), ", ".join(args))
-        callo = "pruv_abi_%s(%s)" % (typed_abi_name(f), ", ".join(args + ["&mut pruv__out"]))
+        call = "%spruv_abi_%s(%s)" % (sp, typed_abi_name(f), ", ".join(args))
+        callo = "%spruv_abi_%s(%s)" % (sp, typed_abi_name(f), ", ".join(args + ["&mut pruv__out"]))
         if f.ret == UNIT:
             body.append(call + ";")
         elif f.ret == I64:
@@ -5029,7 +5135,7 @@ pub unsafe extern "C" fn pruv_host_realloc_v2(data: *mut u8, len: i64, m: i64, s
                         "pruv__out.len as usize) } else { ::std::vec::Vec::new() }")
         elif is_agg(f.ret):
             body.append("let mut pruv__out = [0i64; %d];" % words(tt, f.ret))
-            body.append("pruv_abi_%s(%s);" % (typed_abi_name(f), ", ".join(args + ["pruv__out.as_mut_ptr()"])))
+            body.append("%spruv_abi_%s(%s);" % (sp, typed_abi_name(f), ", ".join(args + ["pruv__out.as_mut_ptr()"])))
             body.append(rs_de(tt, f.ret, "pruv__out", 0))
         else:
             a, b = ("Some", "None") if f.ret == OPTION else ("Ok", "Err")
@@ -5046,7 +5152,7 @@ pub unsafe extern "C" fn pruv_host_realloc_v2(data: *mut u8, len: i64, m: i64, s
     if raw:   # P09: manifest raw_entries; the wrappers above are pub(crate)
         o.append(codegen.raw_module("crate" if raw == "c" else raw, raw_items))
     if raw == "c":   # P10: the C adapter module, after pruv_raw and before the G6 shim
-        o.append(c_module(c_entries(pubs)))
+        o.append(c_module(c_entries(pubs), getattr(prog, "pkg_name", None)))
     if shim is not None:   # G6 A3: the bridge shim module, exactly once, last
         o.append(shim.rstrip("\n"))
     return "\n".join(o) + "\n"
@@ -5144,6 +5250,7 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
         raise RuntimeError("unsupported_type: %s" % g2err.message)
     tt = new_tt(prog)   # G9: SCC-condensed order and the extended / boxed metadata (identical to TypeTable otherwise)
     m = Mod(tt)
+    m.sym_pre = sym_prefix(getattr(prog, "pkg_name", None))
     m.storage = plan_storage(prog, verified)
     from stack import plan_stack
     m.stack = plan_stack(prog, m.storage, verified)
@@ -5203,7 +5310,7 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
     has_str = uses_str(prog, cost=not verified) or type_has_field(prog, "str")  # G2 B2: walk the AST once
     g6decls = ""
     if m.g6_bridge or m.g6_decls:   # G6 A3: bridge marker and the shim symbols used, sorted by symbol
-        g6decls = G6_BRIDGE_DECL + "".join(m.g6_decls[k] + "\n" for k in sorted(m.g6_decls))
+        g6decls = G6_BRIDGE_DECL.replace("@", "@" + m.sym_pre, 1) + "".join(m.g6_decls[k] + "\n" for k in sorted(m.g6_decls))
     g9_u8 = type_has_field(prog, "array_u8") or type_has_field(prog, "array_bool")
     ir = m.render_strings() + "\n" + type_defs(tt) + ("\n" if prog.types else "") + DECLS + (
         DECLS_U8 if (uses_array_type(prog, "array_u8") or uses_array_type(prog, "array_bool") or has_str or m.g6_v2
@@ -5232,7 +5339,7 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
     shim = None
     if is_g6:
         shim = foreign_shim.build_shim(prog, verified, trust_callers, budget, foreign_checks, m.g6_take,
-                                       sorted(m.g6_unbox))
+                                       sorted(m.g6_unbox), m.sym_pre)
     if first_par(prog) is not None:
         shim = (shim or "") + parallel_shim.build_shim()
     if cost_used:

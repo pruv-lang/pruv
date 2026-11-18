@@ -2,6 +2,8 @@
 // run.py splices this file in place of driver_m4.rs's store/World section (between LANE-WORLD-BEGIN and
 // LANE-WORLD-END); q_mode and perf are unchanged. The host holds only an opaque PruvHandle: no state buffer, no
 // Rust slices; every call is (pointer, length) pairs plus a status code and a `ret` out-pointer, as from C.
+// Every global symbol of the generated pruv_c module carries the manifest package name as a prefix; the m4c lane's
+// manifest name is the lane tag, so the symbols are m4c__pruv_*.
 // The symbols are reached through std::hint::black_box'd function pointers, so the optimizer cannot inline the
 // Rust bodies into the driver and the calls cost what a call from a separate C translation unit costs.
 use sol::pruv_c::PruvHandle;
@@ -65,12 +67,12 @@ impl World {
 
     fn new(l: usize) -> World {
         let f = Fns {
-            new: black_box::<NewF>(sol::pruv_c::pruv_handle_new),
-            free: black_box::<FreeF>(sol::pruv_c::pruv_handle_free),
-            init: black_box::<InitF>(sol::pruv_c::pruv_h_m4_init),
-            op: black_box::<OpF>(sol::pruv_c::pruv_h_m4_op),
-            obs: black_box::<ObsF>(sol::pruv_c::pruv_h_m4_observe),
-            grow: black_box::<GrowF>(sol::pruv_c::pruv_hr_m4_grow),
+            new: black_box::<NewF>(sol::pruv_c::m4c__pruv_handle_new),
+            free: black_box::<FreeF>(sol::pruv_c::m4c__pruv_handle_free),
+            init: black_box::<InitF>(sol::pruv_c::m4c__pruv_h_m4_init),
+            op: black_box::<OpF>(sol::pruv_c::m4c__pruv_h_m4_op),
+            obs: black_box::<ObsF>(sol::pruv_c::m4c__pruv_h_m4_observe),
+            grow: black_box::<GrowF>(sol::pruv_c::m4c__pruv_hr_m4_grow),
         };
         let mut h = World::handle(&f, l);
         let mut len = l;

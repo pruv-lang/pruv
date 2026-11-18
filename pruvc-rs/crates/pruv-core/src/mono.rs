@@ -1037,6 +1037,8 @@ impl<'a> Mono<'a> {
             uses_inout: prog.uses_inout,
             // P06: raw entry visibility of the manifest (applied by codegen in P09)
             raw_entries: prog.raw_entries.clone(),
+            // P10H: program package name (prefix of every global C symbol)
+            pkg_name: prog.pkg_name.clone(),
         };
         Ok(SpecPlan { program, fn_stems, type_stems, roots: root_names })
     }

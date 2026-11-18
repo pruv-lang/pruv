@@ -1,0 +1,111 @@
+// P10H: synchronous host facts for budget (halt, close, release) and req (find). Decisions stay here; the host
+// only answers or performs side effects (see README.md for the signatures and refusal codes).
+trusted rust fn running_ids(session: i64, settled: i64) -> Vec<i64> ! alloc, io
+  ensures true
+  = "::hostfact_host::running_ids";
+trusted rust fn is_quiet(session: i64) -> i64 ! io
+  ensures true
+  = "::hostfact_host::is_quiet";
+trusted rust fn release_held(session: i64) -> i64 ! io
+  ensures true
+  = "::hostfact_host::release_held";
+trusted rust fn next_item(s: i64, m: i64) -> i64 ! io
+  ensures true
+  = "::hostfact_host::next_item";
+trusted rust fn is_temporary(item: i64) -> i64 ! io
+  ensures true
+  = "::hostfact_host::is_temporary";
+trusted rust fn title_obs(s: i64) -> i64 ! io
+  ensures true
+  = "::hostfact_host::title_obs";
+
+// Halt: SETTLE, then the running-delegation query with the settled value, validate, then the halted flag and the
+// effect words. st = [settled, pending, halted]. out = [count, effect words...]; effects: 1 halted,
+// 2 cancelRecovery, 3 stopMain, then (4, id) per running id in order (duplicates included).
+// Returns 0 done, 2 invalid host answer (nothing written to out, halted flag untouched), 3 out too small (same).
+// SETTLE itself is not undone by a refusal.
+pub fn bh_halt(inout st: [i64], session: i64, inout out: [i64]) -> i64 ! alloc, io
+  requires len(st) >= 3 && 0 <= st[0] && st[0] <= 1000000000000 && 0 <= st[1] && st[1] <= 1000000000000
+  requires len(out) <= 100000000
+{
+  st[0] = st[0] + st[1];
+  st[1] = 0;
+  let v: Vec<i64> = running_ids(session, st[0]);
+  let total: i64 = len(v);
+  if total < 2 { return 2; }
+  if vec_get::<i64>(v, 0) != 0 { return 2; }
+  if vec_get::<i64>(v, 1) != total - 2 { return 2; }
+  let mut i: i64 = 2;
+  while i < total
+    invariant 2 <= i && i <= total && total == len(v)
+    decreases total - i
+  {
+    if vec_get::<i64>(v, i) <= 0 { return 2; }
+    i = i + 1;
+  }
+  // words needed: 1 count + 3 fixed effects + 2 per id = 2 * total
+  if total > len(out) { return 3; }
+  if 2 * total > len(out) { return 3; }
+  st[2] = 1;
+  out[0] = total + 1;
+  out[1] = 1;
+  out[2] = 2;
+  out[3] = 3;
+  let mut j: i64 = 2;
+  let mut p: i64 = 4;
+  while j < total
+    invariant 2 <= j && j <= total && p == 2 * j && total == len(v) && 2 * total <= len(out)
+    decreases total - j
+  {
+    out[p] = 4;
+    out[p + 1] = vec_get::<i64>(v, j);
+    p = p + 2;
+    j = j + 1;
+  }
+  return 0;
+}
+
+// Close: is the session quiet? Returns 10 + answer (answer must be 0 or 1), else 2.
+pub fn bh_close(st: [i64], session: i64) -> i64 ! io
+{
+  let a: i64 = is_quiet(session);
+  if a == 0 { return 10; }
+  if a == 1 { return 11; }
+  return 2;
+}
+
+// Release: true -> 0, false -> 1 (the caller queues the continue effect), invalid answer -> 2.
+pub fn bh_release(session: i64) -> i64 ! io
+{
+  let a: i64 = release_held(session);
+  if a == 1 { return 0; }
+  if a == 0 { return 1; }
+  return 2;
+}
+
+// Req: first temporary item over s_n sessions x m_n items; one title observation per session, a fresh
+// observation per item. Returns the item id, -1 when nothing matches, -2 for an invalid temporary answer.
+pub fn rq_find(s_n: i64, m_n: i64) -> i64 ! io
+  requires 0 <= s_n && s_n <= 1000000000 && 0 <= m_n && m_n <= 1000000000
+{
+  let mut s: i64 = 0;
+  while s < s_n
+    invariant 0 <= s && s <= s_n
+    decreases s_n - s
+  {
+    let title: i64 = title_obs(s);
+    let mut m: i64 = 0;
+    while m < m_n
+      invariant 0 <= m && m <= m_n
+      decreases m_n - m
+    {
+      let it: i64 = next_item(s, m);
+      let t: i64 = is_temporary(it);
+      if t != 0 && t != 1 { return -2; }
+      if t == 1 { return it; }
+      m = m + 1;
+    }
+    s = s + 1;
+  }
+  return -1;
+}
