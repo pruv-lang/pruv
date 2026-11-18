@@ -378,10 +378,11 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P12 | Same: local I1 mutator frames and guard removal one accessor at a time | C proof negatives if verifier changed; P Q2/Q3 churn/stale handles. Keep total accessors/step budgets until each local bound proved. |
 | P13 | Same + B/host.rs: reserve/grow/failure | P Q2/Q3 growth, no replay of effects/queries, old state valid or terminal poison; byte/copy accounting. |
 | P13c | B/host.rs: M4 peak RSS at or below hand (P13b.8) | P: peak RSS split by component (entry words, slot table, arena slack, old + new buffer at a grow) on the 9 M4 cells; every cell <= 1.0x hand by peak RSS and allocation count, time not worse than P13b; Q2/Q3 growth gates unchanged. Done in part (Appendix P13c): old buffers mapped by the host; 7 of 9 cells still above hand, split into P13d, P13e and one page of undetermined cause. |
-| P13d | Both codegens (pruvc / pruvc-rs): generated code size of the M4 driver (Appendix P13c.8) | P: resident `__TEXT` of the M4 Pruv binary at or below hand's (P13c: +80 KiB, measured before the P13c change, assumed unchanged after), with both sides built with the same flags; time not worse than P13c; no Pruv-only build flags. |
+| P13d | Both codegens (pruvc / pruvc-rs): generated code size of the M4 driver (Appendix P13c.8) | P: resident `__TEXT` of the M4 Pruv binary at or below hand's (P13c: +80 KiB, measured before the P13c change, assumed unchanged after), with both sides built with the same flags; time not worse than P13c; no Pruv-only build flags. Measured (Appendix P13d): not met without time loss, no compiler change; size split by line and queued as P13h/P13e/P13f. |
 | P13e | B/bud_map.pruv, bud_store.pruv, bud_world.pruv, bud_admit.pruv: entry layout (Appendix P13c.8) | P: smaller per-entry words (P13c: 20 words) so tools peak RSS reaches hand after P13d (also P21: tooldup at M = 500, 3120 vs oaw 3040 KiB); proofs and M10 replay counters kept; time not worse than P13c. |
 | P13f | B/driver_m4.rs and the M4 bench adapter: length bound from T0 (TIDY_SPEC §4.10) | P: the bench adapter's allocations get the `2^40` bound (T0 audit finding 1), and the per-entry length check added by T0 is hoisted out of the timed loop where the driver already holds the length; m4 sessions back to the pre-T0 time (T0: +1-2%, outside A/A noise) and every M4 cell <= 1.0x hand. |
 | P13g | Both codegens: small helper inlining gap found by P20 (Appendix P20) | P: `find_w` in the bud_charge hot path is inlined (P20 attribution: about 25 instructions per call not inlined), output parity on both compilers, and the P20 unmatched hand16 lane (keys pre-parsed, 1.13-1.17x) re-measured after P13f and this row; any remaining gap above 1.0x is fixed or explained line by line (wire parsing is about 100 instructions of it). LLVM pairs for P20 wait for P17. |
+| P13h | Both codegens (and verifiers for (a)): M4 own-code size without time loss (Appendix P13d.5, P13d.8) | P: resident `__TEXT` of the M4 Pruv binary at or below hand's (P13d: 304 vs 240 KiB) with instructions and cycles on every M4 cell not worse than P13d.3's shipped column; candidates: proof-guided call-site specialization of total accessors, hot/cold body split of map growth paths; output parity on both compilers. |
 | P21a | B/bud_map.pruv, bud_tools.pruv: O(1) forgetTurn (Appendix P21.4) | P: forgetTurn of a turn holding N activities <= 1.0x oaw at S/M in time, peak RSS and allocations (P21: 8.9x / 37.9x; oa forgets by generation, Pruv frees each child), with the toolnew and tooldup cells kept <= 1.0x and the reclaim cost measured where it lands; plus a corrupt control that pokes header words (entry top = cap - 1, low live) for the P21.7 counterexample. Done (Appendix P21a): forget 0.99 / 0.95x oaw (overlap), RSS and allocations below; reclaim cost in toolnew queued as P21b. |
 | P21b | B/bud_map.pruv, bud_store.pruv: reclaim cost of the lazy forget (Appendix P21a.3) | P: toolnew <= 1.0x oaw at S/M by median and distribution (P21a: 0.93 / 1.08x, overlapping) and the toolgrow cycle <= 1.0x oaw in instructions (P21a: 1.05 / 1.08x), with toolforget, tooldup and memory kept; e.g. fold reclaim_head into entry_alloc. Same gates as P21a. Done (Appendix P21b): toolnew 0.87 / 0.97x oaw (Pruv max below oaw min), toolgrow 0.93 / 0.98x oaw instructions; cause was index load at M (early rehash bound slots/4 -> 3/8) plus the reclaim push/pop and repeated row bases. |
 | P13o | Both checkers/verifiers: `opaque fn` and `reveal F;` (Appendix P13o) | C: positive reveal/congruence/loop-scope cases; negatives for a missing reveal, false facts through the opaque symbol, totality, signature and reveal-target misuse; framework rows equal on both compilers. Unblocks P13a step 2 (Appendix P13a.3), which lands separately. |
@@ -4135,3 +4136,136 @@ Confirm audit `3cf22123` (same model): hold, 2 must-fix.
 | e8a7ec4d | write | Codex gpt-6.2-sol | gen_stale, dc, mutants, perf rows (one candidate, taken in by hand and fixed) |
 | e0269b0b | audit | Codex gpt-6.2-astra ultra | package audit |
 | 3cf22123 | confirm | Codex gpt-6.2-astra ultra | confirm audit |
+
+## Appendix P13d (row both codegens: generated code size of the M4 driver)
+
+### P13d.1 Result
+
+No compiler change; the row's size target is not met and is queued. No inline policy alone brings the M4 Pruv
+binary's resident `__TEXT` to hand's 240 KiB: the smallest (budget 0) reaches 272 and only reaches 240 with the
+driver's `q` adapter also removed. Every smaller policy costs time: +10-16% instructions and +9-16% cycles on
+sessions (ia1500 to b0), up to +11% on tools and clocks, so it breaks "time not worse than P13c"; the shipped
+binary is below hand in cycles on all nine cells, but already above hand in sessions instructions (186 vs 182 M),
+and b0 adds 14% more there. The shipped policy (R-7-3, `incl<=8 | sites<=1 |
+incl*(sites-1)<=1500`) is the best point measured for time; its size cost is written down below and queued (P13h).
+Base: main 22332cd. Raw logs and tools: `work/p13d/` (not committed). Binaries are the M4 driver plus generated code
+(`driver_m4.rs` + `root_m4`), and `m4_hand.rs`, each with a 4 s pause hook after the result line for `vmmap`,
+all built with `rustc -C opt-level=3 --edition 2021` (no other flag on either side).
+
+### P13d.2 What resident `__TEXT` measures
+
+`vmmap` resident `__TEXT` was the same on all three cells measured (sessions 100, tools 1000, clocks 100), so it
+does not depend on the workload. The linker lays out own code (driver, generated module, and in hand the hashbrown
+monomorphs) first in `__text`, then std. The own-code pages are nearly all touched; the std pages touched are about
+the same set on both sides. So resident `__TEXT` = (own-code size rounded to 16 KiB pages) + a fixed std part:
+
+| binary | own code KiB | `__text` B | resident `__TEXT` KiB |
+|---|---:|---:|---:|
+| hand (`m4_hand.rs`: `selftest` 10.9, `main` 6.3, `State::exec` 2.4, hashbrown about 10) | 37.3 | 282,620 | 240 |
+| Pruv shipped (b1500; `World::exec` 53.3, `main` with q mode 9.7, `import_check` 7.5, `put_at` 6.1, `remove` 4.8, `observe` 4.5, `new` 3.4) | 91.6 | 339,516 | 304 |
+| Pruv shipped, q-mode body replaced by `exit(9)` (b1500noq, test only) | | | 288 |
+| policy `incl` counts all non-recursive callees, budget 1500 (ia1500) | | 319,612 | 288 |
+| same, budget 300 (ia300) | | 303,548 | 272 |
+| budget 0 (b0: only `incl<=8` and single-site fns forced) | 57.6 | 304,700 | 272 |
+| budget 0, no q mode (b0noq, test only) | 40.8 | | 240 |
+
+The `mincore` page map is not usable on macOS for this (it reports page-cache residency, every page shows resident).
+
+### P13d.3 Time against size (interleaved, 3-5 rounds, load average 6-9; instructions and cycles from `/usr/bin/time -l`, stable under load; ns noisy)
+
+Instructions retired, millions per run, median:
+
+| cell | hand | shipped | ia1500 | ia300 | b300 | b0 |
+|---|---:|---:|---:|---:|---:|---:|
+| sessions 100 | 181.98 | 186.39 | 205.87 | 217.04 | 206.24 | 213.27 |
+| sessions 1000 | 186.27 | 194.71 | 214.14 | 225.78 | 214.23 | 221.54 |
+| tools 100 | 823.37 | 521.00 | 530.39 | 562.33 | 562.75 | 577.05 |
+| tools 1000 | 823.56 | 563.04 | 571.50 | 603.87 | 603.57 | 619.37 |
+| clocks 100 | 384.57 | 371.45 | 369.97 | 390.96 | 388.30 | 400.95 |
+| clocks 1000 | 389.84 | 362.00 | 360.98 | 380.77 | 379.78 | 392.27 |
+
+Cycles (millions), same runs: sessions 100 hand 31.2, shipped 25.3, ia1500 27.6, b0 29.4; tools 100 hand 134.5,
+shipped 82.0, b0 85.9; clocks 100 hand 67.8, shipped 49.8, b0 54.9. A second interleaved set (5 rounds, hand /
+shipped / b1500noq / b0noq) gives sessions 100 cycles 29.1 / 24.4 / 24.2 / 28.0: the q-mode code costs no time,
+budget 0 costs 15%.
+
+Single-function demotions from the shipped policy (only that function changed from `#[inline(always)]` to
+`#[inline]`; the six functions ia1500 demotes): `put_blob` sessions +8% instructions (-6.8 KB text), `make_room`
++3% (-10.6 KB), `add_w` +1.4% (-1.0 KB), `copy_node` / `del_key` / `put_key_h` within noise (-2.5 / -1.8 / -0.6 KB).
+`#[inline(never)]` on a body that sessions never runs (`rehash`, one site) still adds 1.5% sessions instructions
+(register allocation and layout around the outlined call). The three neutral demotions together remove about 5 KB,
+less than one 16 KiB page; with no rule that tells them from the hot three without profile data, they are not
+taken.
+
+### P13d.4 Peak RSS (KiB, same interleaved set, median of 5)
+
+| cell | hand | shipped | b1500noq | b0noq |
+|---|---:|---:|---:|---:|
+| sessions 100 | 1696 | 1792 | 1792 | 1728 |
+| sessions 500 | 1888 | 1920 | 1888 | 1856 |
+| sessions 1000 | 2032 | 2048 | 2016 | 1968 |
+| tools 100 | 1744 | 1824 | 1808 | 1776 |
+| tools 500 | 1936 | 2032 | 2016 | 1968 |
+| tools 1000 | 2112 | 2256 | 2240 | 2192 |
+| clocks 100 | 1728 | 1792 | 1760 | 1728 |
+| clocks 500 | 2000 | 1904 | 1872 | 1840 |
+| clocks 1000 | 2272 | 2000 | 1968 | 1920 |
+
+Even with text at hand's 240 KiB (b0noq), sessions 100 stays +32 and tools +32..80 (the P13e entry term); the P13c.8
+"code +80" estimate is about +64 for text on the shipped binary.
+
+### P13d.5 Why Pruv does not emit hand's code size (line by line)
+
+1. Hash map logic is Pruv code, not a shared std/hashbrown monomorph. Hand's `State::exec` is 2.4 KB and calls
+   hashbrown (about 10 KB of reserve/rehash/find monomorphs) and std's SipHash (in the std part counted on both sides).
+   Pruv's map (`bud_map.pruv`: slot probe, `put_at`, `remove`, `rehash`, `room_plan`/`room_apply`, `put_key_h`)
+   and store (`bud_store.pruv`, `bud_world.pruv`: `put_blob`, `copy_node`) are generated into the binary; with no
+   inlining at all beyond the size-8 rule (b0) this is about 27 KB of `sol` plus a 14 KB `exec`. This is the P13e
+   layout and library question, not a codegen defect.
+2. Inlining duplicates that logic per op. The shipped policy puts `make_room` (with `room` -> `room_plan`,
+   `room_apply`, `rehash`, `need`), `put_blob`, `add_w`, `put_key_h`, `del_key` and `copy_node` into each op arm of
+   `World::exec` (53 KB vs 14 KB at b0). This is what makes Pruv faster than hand in cycles on all nine cells
+   (P13d.3). Hand Rust gets the same speed without the duplication because hashbrown's hot path is a few small
+   inlined probes and the cold `reserve_rehash` stays one out-of-line copy; Rust attributes are per function, so
+   Pruv cannot say "inline at the hot call sites only" without a call-site attribute or a split into hot and cold
+   bodies, and LLVM does not do that split here (no profile, MachO has no machine function splitter by default).
+3. Total accessors are explicit code. `ent_u16::rd`/`wr`/`clamp` (and `c32`/`c40`, `hw`/`hd` built on them) are
+   defined total by the library ("defence in depth", `bench/l3/lib/ent_u16.pruv:1-19,182-191`): each inlined use is
+   a compare and a branch or select (in shipped `exec`: 640 `b.hs`, 515 `csel` of 13,300 lines). Where the verifier
+   proves the index in range at the call, that check is dead, but the codegen has no channel from a call-site proof to
+   the callee's body today; P13h below.
+4. Test adapter in the measured binary. The Pruv driver carries `q` mode (`import_check` 7.5 KB, the `q_mode` loop
+   inlined into `main`, word parsing), never run in perf, 16 KiB resident; hand carries `selftest` (10.9 KB),
+   also never run. Both are in the own-code pages, so the comparison already includes an adapter on each side; this is
+   not removed with a Pruv-only flag (`driver_m4.rs` belongs to P13f).
+
+### P13d.6 Other budget drivers (own code, same flags, `work/p13d/tools/others.sh`)
+
+| driver | Pruv own code KiB | hand own code KiB | Pruv `__text` B | hand `__text` B |
+|---|---:|---:|---:|---:|
+| M7 (`root` + `driver_m7.rs`; hand `hand_m7.rs` / `hand_m7_u16.rs`) | 151.5 | 14.2 / 59.4 | 405,180 | 253,692 / 311,484 |
+| M9 (`root_m9` + `driver_m9.rs`; hand `hand_m9.rs`) | 95.8 | 25.7 | 350,652 | 268,540 |
+| M4 (above) | 91.6 | 37.3 | 339,516 | 282,620 |
+
+M10 has no hand binary. By P13d.2, resident text on M7 is about +128..144 KiB over `hand_m7` (+96 over hand16) and
+on M9 about +64..80 KiB, of an RSS excess of 1.13-2.03x hand: text is a part, the rest is state (P13e). Not measured
+with `vmmap` here; these are own-code sizes rounded to pages.
+
+### P13d.7 Gates
+
+No source change, so no compiler, test or budget gate was re-run for this appendix. The measurement binaries were
+generated by the Python compiler from this checkout (base 22332cd) with the policy patched in memory
+(`work/p13d/tools/genpy3.py`); the shipped point is the unpatched output.
+
+### P13d.8 Queued rows
+
+- P13h (new row): own-code size without time loss, candidates (a) proof-guided call-site specialization of total
+  accessors (P13d.5 item 3), (b) a hot/cold body split so cold callees (`rehash`, `make_room` growth path) stay one
+  copy while the probe stays inlined (item 2). Each must keep every P13d.3 cell's instructions and cycles.
+- P13e: entry layout and the library code size of item 1 (tools +32..80 KiB peak RSS at hand-sized text).
+- P13f: whether the perf binary carries the `q` adapter (item 4); hand carries `selftest` likewise.
+- The seven M4 above-hand peak RSS cells (P13d.4: sessions, tools, clocks 100) stay open defects under the 1.0x floor.
+
+### P13d.9 Delegation
+
+None.
