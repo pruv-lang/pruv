@@ -457,7 +457,11 @@ fn run_perf(args: &[String]) {
         let step = |w: &mut World, ps: &[Prep], s: Option<&mut u64>| {
             let mut s = s;
             for p in ps {
-                let r = black_box(c_direct(w, black_box(p)));
+                let r = c_direct(w, black_box(p));
+                // consume the status and the result tag in one black_box, like the hand typed lane's one
+                // black_box of its Res (current/isHalted value, reopenmiss Bool): out[0] is observed every call,
+                // not only by the untimed rchk run
+                black_box((r, w.out[0]));
                 if let Some(s) = s.as_mut() {
                     **s = rchk_fold(w, r, **s);
                 }

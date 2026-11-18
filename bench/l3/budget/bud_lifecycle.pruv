@@ -182,9 +182,11 @@ fn found_at(st: [i64], se: i64, bk: [i64], bs: i64, bn: i64) -> i64
   let n: i64 = st[a + 13];
   if n < 30 { return -1; }
   if off < 0 || off > len(st) - n { return -2; }
+  if !id_at(st, off, n, bk, bs, bn) { return -1; }
+  // state read last, after the id compare: is_halted reads the same word next, and the load stays fresh
+  // (read before the compare, isHalted paid a reload chain: 14.3 vs 12.2-12.5 ns, work/p18/s6_ab_ishalted.log)
   let s: i64 = st[off];
   if s < 0 || s > 2 { return -1; }
-  if !id_at(st, off, n, bk, bs, bn) { return -1; }
   return a;
 }
 
