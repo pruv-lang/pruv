@@ -280,7 +280,7 @@ pub fn t_call(inout st: [i64], op: [i64], inout cv: [i64], inout fx: [i64]) -> i
     // returned before any write), so b0 still addresses the record afterwards.
     let b0: i64 = cur_off(st, op, 2, sn, op, e1 + 1, bn);
     // in place only when the record lies in the arena below the arena top read now (new key words go at or above
-    // st[10]); anything else, e.g. an offset inside the header of a corrupt buffer, takes the cv path below
+    // st[10]). The cv path is safe only for a record entirely beyond st: its write-back cannot overlap the insert.
     if b0 >= 0 && b0 + 14 <= len(st) && len(st) >= 15 && b0 >= st[9] && b0 + 14 <= st[10] {
       let u: i64 = st[b0 + 11];
       if u < -9007199254740991 || u >= 9007199254740991 { return 5; }
@@ -290,7 +290,7 @@ pub fn t_call(inout st: [i64], op: [i64], inout cv: [i64], inout fx: [i64]) -> i
       st[b0 + 11] = u + 1;
       return 0;
     }
-    if b0 >= 0 {
+    if b0 >= len(st) {
       // out-of-range record: the counters through the frame view, loaded before the insert
       let b1: i64 = load_cv_at(st, b0, inout cv);
       let room: i64 = crate::bud_charge::tool_room(cv);
@@ -304,6 +304,7 @@ pub fn t_call(inout st: [i64], op: [i64], inout cv: [i64], inout fx: [i64]) -> i
       if w != 0 { return 2; }
       return 0;
     }
+    if b0 >= 0 { return 2; }
     // no current budget: the dedup key is still consumed (§15 #6)
     let t: i64 = crate::bud_tools::note_new(inout st, s, op, e2 + 1, tn, op, e3 + 1, an);
     if t != 1 { return t; }

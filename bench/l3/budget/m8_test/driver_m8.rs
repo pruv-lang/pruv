@@ -71,6 +71,13 @@ impl World {
                 continue;
             }
             let (owner, ogen, koff, n) = (st[b + 1], st[b + 2], st[b + 4], st[b + 5]);
+            // Dead child: entry e >= 3 whose owner (>= 3) is an entry in range with state 0 (unreachable, awaiting lazy reclaim).
+            if e >= 3 && owner >= 3 && owner < top {
+                let ob = (base + 20 * owner) as usize;
+                if ob + 20 <= st.len() && st[ob] == 0 {
+                    continue;
+                }
+            }
             let m = (n.clamp(0, 1 << 30) + 3) >> 2;
             if t < koff || t >= koff + m {
                 continue;
@@ -262,6 +269,16 @@ fn run_q() {
                 match found.and_then(|i| w.rekey(i as i64 + delta, value).map(|_| i)) {
                     Some(i) => writeln!(o, "Z {}", i).unwrap(),
                     None => writeln!(o, "Z -").unwrap(),
+                }
+            }
+            "hdr" => {
+                // hdr: test-only view of the resident buffer (calls no sol:: function). Prints the buffer length and
+                // header words 4..=14 (`G -` when the header is shorter), so a control can tell a reclaim from a Grow.
+                if w.st.len() >= 15 {
+                    let f: Vec<String> = w.st[4..15].iter().map(|x| x.to_string()).collect();
+                    writeln!(o, "G {} {}", w.st.len(), f.join(" ")).unwrap();
+                } else {
+                    writeln!(o, "G -").unwrap();
                 }
             }
             "end" => {
@@ -499,21 +516,27 @@ fn run_perf(args: &[String]) {
             t_new += (after_new - start).as_nanos();
             t_forget += (after_forget - after_new).as_nanos();
         }
-        let checksum = w.checksum();
+        // Untimed extra round: the insert result is checksummed independently of the forget.
+        for j in 0..grow.len() {
+            w.call(grow.get(j));
+        }
+        let chk_new = w.checksum();
+        w.call(&forget);
+        let chk_forget = w.checksum();
         if only == Some("toolgrow") {
             let ns = (t_new + t_forget) as f64 / (rounds * n) as f64;
             println!("toolgrow {} {:.1}", n, ns);
-            println!("chk toolgrow {} {}", n, checksum);
+            println!("chk toolgrow {} {}:{}", n, chk_new, chk_forget);
         }
         if on("toolnew") {
             let ns = t_new as f64 / (rounds * n) as f64;
             println!("toolnew {} {:.1}", n, ns);
-            println!("chk toolnew {} {}", n, checksum);
+            println!("chk toolnew {} {}", n, chk_new);
         }
         if on("toolforget") {
             let ns = t_forget as f64 / rounds as f64;
             println!("toolforget {} {:.1}", n, ns);
-            println!("chk toolforget {} {}", n, checksum);
+            println!("chk toolforget {} {}", n, chk_forget);
         }
     }
 }

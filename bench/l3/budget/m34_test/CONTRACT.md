@@ -136,11 +136,12 @@ in place and steady churn does not grow the arena. Dead words of outgrown region
 
 ### Entries and maps (`bud_map`)
 
-`ENTRY_WORDS = 20`. Entry fields: 0 state (0 free, 1 live), 1 owner entry, 2 owner generation, 3 generation,
+`ENTRY_WORDS = 20`. Entry fields: 0 state (0 free, 1 live or pending dead), 1 owner entry, 2 owner generation, 3 generation,
 4 key off, 5 key len, 6 hash, 7 prev, 8 next, 9 child head, 10 child tail, 11 child count, 12 blob off,
 13 blob len, 14–17 scalar values v0–v3, 18 key region capacity, 19 blob region capacity. -1 is "none" for links.
 
 Entries 0, 1, 2 are the roots (live from `init`, never removed, no key): 0 sessions, 1 clocks, 2 toolSeen.
+A state-1 non-root entry is live if its owner is a root or has state 1. A state-1 entry with a free owner is dead.
 A map is "the children of an owner entry", kept in insertion order by the prev/next links and head/tail in the owner.
 JS `Map` semantics: setting an existing key keeps its position; delete then set appends at the tail.
 
@@ -149,19 +150,24 @@ One open-addressing hash index (linear probing) over all non-root entries: slot 
 non-matching entries without reading them). The hash mixes owner, owner generation and the key units (FNV-1a style
 with `wrapping_mul`, `band` to the slot mask). `find` matches an entry only when it is live and its hash, owner, owner
 generation (equal to the owner's current generation) and key all match; probing stops at an empty slot and is bounded
-by the slot count. A slot word may name a free entry, or an entry since reused for another key (see removal below);
+by the slot count. A slot word may name a dead or free entry, or an entry since reused for another key;
 such a slot never matches and is not reused by inserts, so it behaves as a tombstone until the next rehash.
 Load policy: before an insert that fits, the index is rebuilt in place (dropping tombstones) when the used slots would
 pass half the slot count while the live entries take at most a quarter of it; before an insert that does not fit only
 because of the 3/4 used bound, likewise. Each rebuild is O(slots) and at least slots/4 inserts from the next.
 
-Removing an entry with children (e.g. `forgetTurn`) unlinks it and frees it with its whole subtree, at any depth
+Eager removal (e.g. M4 `tool_forget`) unlinks an entry and frees it with its whole subtree, at any depth
 (post order without a stack; the world itself has at most one level below an entry): the entry's own slot gets a
 tombstone, the descendants' slots are left in place (lazy deletion, as above), every key/blob word leaves the live
 count, generations are bumped and the entries go on the free list. Cost `O(probe length + subtree)` with O(1) per
 descendant, amortized O(1) per insert. This holds on stores with well-formed child lists (I2), which every store the
 module builds has; admission (I0 + I1) does not check I2, and on other buffers removal stays in bounds and terminates
-but may leave entries behind. No reachable ghosts remain: a free entry is never found, iterated or counted.
+but may leave entries behind. A free entry is never found, iterated or counted.
+
+M8 `forget_turn` unlinks the turn, tombstones its slot and bumps its generation in O(probe length + turn key
+length). Activities stay on the free turn's child list until allocation reclaims them. They are unreachable
+and excluded from word 12, while their arena words remain in word 14 until reclaimed. Their saved owner
+generation differs from the turn's current generation, and a rehash omits their slots.
 
 `grow(prev, inout next)`: requires `valid(prev)` and `len(next) >= len(prev)`; writes a fresh layout for `len(next)`
 and copies every reachable entry (roots in order, each map in insertion order, children after their parent), key and

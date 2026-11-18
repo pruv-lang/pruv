@@ -26,9 +26,9 @@ pub fn seen(st: [i64], tkey: [i64], tks: i64, tkn: i64, akey: [i64], aks: i64, a
 // creating the turn together with its first activity (on a store whose header matches its tables a turn set is never
 // left empty).
 // 1 inserted, -N Grow(N) (nothing written; grow the buffer and retry), 2 invalid. Every 2 found by the checks
-// (room_w's r < -1, alloc_ok, the owner liveness test in put_seek_w) comes before the first key, entry or link write;
-// alloc_ok runs after room_w so a full table answers Grow, and on a store whose header matches its tables it always
-// holds there; on a broken buffer only room_w's index rebuild (same key set) can precede that 2. The remaining
+// (room_w's r < -1 or the owner liveness test in put_seek_w) comes before the first key, entry or link write.
+// The read-only allocation check asks for Grow before room_w if the top/free list cannot supply enough entries.
+// The remaining
 // 2-after-write paths need a store whose index or arena contradicts its header
 // beyond what valid() and alloc_ok read (no free slot after a rehash, a reused entry's key region not fitting); they
 // are scoped as broken buffers. Total on any input; a stale s can only mis-index (see bud_map::put_seek_w).
@@ -36,22 +36,22 @@ pub fn note_new(inout st: [i64], s: Seen, tkey: [i64], tks: i64, tkn: i64, akey:
   ensures crate::bud_store::kept(st, old(st))
 {
   if s.t.e >= 0 {
-    // known turn: the activity's hash and slot from seen(); after the fit, one entry must be allocatable
-    let r: i64 = crate::bud_map::room_w(inout st, 1, crate::bud_keys::words(akn));
+    // known turn: the activity's hash and slot from seen()
+    let words: i64 = crate::bud_keys::words(akn);
+    if !crate::bud_map::alloc_ok(st, 1) { return allocation_grow(st, 1, words); }
+    let r: i64 = crate::bud_map::room_w(inout st, 1, words);
     if r > 0 { return -r; }
-    if r < -1 { return 2; }
-    if !crate::bud_map::alloc_ok(st, 1) { return 2; }
+    if r < -1 || (r == -1 && !crate::bud_map::alloc_ok(st, 1)) { return 2; }
     let x: i64 = crate::bud_map::put_seek_w(inout st, s.t.e, s.a, akey, aks, akn, r == -1);
     if x < 0 { return 2; }
     return 1;
   }
   // new turn: the turn's hash and slot from seen(); the activity hashes under the new turn's generation
   let words: i64 = crate::bud_keys::words(tkn) + crate::bud_keys::words(akn);
+  if !crate::bud_map::alloc_ok(st, 2) { return allocation_grow(st, 2, words); }
   let r: i64 = crate::bud_map::room_w(inout st, 2, words);
   if r > 0 { return -r; }
-  if r < -1 { return 2; }
-  // after the fit (a full table is Grow, not 2), both entries (turn and activity) must be allocatable
-  if !crate::bud_map::alloc_ok(st, 2) { return 2; }
+  if r < -1 || (r == -1 && !crate::bud_map::alloc_ok(st, 2)) { return 2; }
   let tt: i64 = crate::bud_map::put_seek_w(inout st, 2, s.t, tkey, tks, tkn, r == -1);
   if tt < 0 { return 2; }
   let x: i64 = crate::bud_map::add_w(inout st, tt, akey, aks, akn);
@@ -59,12 +59,25 @@ pub fn note_new(inout st: [i64], s: Seen, tkey: [i64], tks: i64, tkn: i64, akey:
   return 1;
 }
 
-// forgetTurn(turnId): removes the turn and frees its activities, O(turnId length + activities of the turn).
+// Preserve the normal Grow size if the counts already require it. Otherwise force Grow so the host can compact
+// a store whose entry top or free list disagrees with its live count, before any writes.
+fn allocation_grow(st: [i64], entries: i64, words: i64) -> i64
+{
+  let n: i64 = crate::bud_store::need(st, entries, words);
+  if n > 0 { return -n; }
+  let cap: i64 = crate::bud_store::c32(crate::bud_store::hd(st, 6));
+  let grow: i64 = crate::bud_store::need(st, cap + 1, words);
+  if grow == 0 { return 2; }
+  return -grow;
+}
+
+// forgetTurn(turnId): unlinks the turn and invalidates its activities by generation, O(probe length + turn key).
+// Allocation reclaims the activities later.
 // 1 removed, 0 absent.
 pub fn forget_turn(inout st: [i64], tkey: [i64], tks: i64, tkn: i64) -> i64
 {
   let t: i64 = crate::bud_map::find_w(st, 2, tkey, tks, tkn);
   if t < 0 { return 0; }
-  crate::bud_map::remove(inout st, t);
+  crate::bud_map::forget_turn_entry(inout st, t);
   return 1;
 }

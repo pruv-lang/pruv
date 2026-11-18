@@ -28,8 +28,8 @@ fn span_w(off: i64, cap: i64, ab: i64, at: i64) -> bool
 
 // I1 of entry e as a ground predicate on its words, field f at st[c32(st[5]) + 20 * e + f], bud_store::ea's address
 // (a valid store has st[5] = 16 + slots <= 2^32 + 16; the base is clamped to 2^32 as ea clamps it): state 0 (free) or
-// 1 (live); roots 0..2 live with owner -1; key span (words 4, 18) and blob span (12, 19) inside the arena [ab, at); a
-// free entry's next link (8) is -1 or below top; a live entry
+// 1 (live or pending dead); roots 0..2 live with owner -1; key span (words 4, 18) and blob span (12, 19) inside the arena [ab, at); a
+// free entry's next link (8) is -1 or below top; a state-1 entry
 // (past the roots) has its owner (1) below top, its key length (5) in 0..2^30 and in its key span (words(kn) <= cap,
 // i.e. kn <= 4 * cap), its blob length (13) in 0..blob cap, its links (7..10) -1 or below top and word 11 >= 0. Opaque,
 // so a caller that only passes admit's ensures along does not expand it; under a quantifier it is expanded in place
@@ -58,13 +58,13 @@ pub fn ent_w(st: [i64], b: i64, e: i64, top: i64, ab: i64, at: i64) -> bool
     st[b + 11] >= 0;
 }
 
-// One entry of admit(): 1 live, 0 free, or admit's negative class code; on 0 and 1 ent_i1 holds. Reads the entry
+// One entry of admit(): 2 dead, 1 live, 0 free, or a negative class code. On nonnegative results ent_i1 holds. Reads the entry
 // words at c32(st[5]) + 20 * e directly (ef's address; admit checked 0 <= st[5] <= 2^32 + 16; e < top <= st[6] on a
 // valid store, so the entry lies in st and the -3 range test never fires there).
 fn entry_ok(st: [i64], e: i64, top: i64, ab: i64, at: i64) -> i64
   requires 0 <= ab && ab <= at && at <= 1099511627776
   requires 0 <= e && e < top && top <= 4294967296
-  ensures result <= 1
+  ensures result <= 2
   ensures result >= 0 ==> ent_i1(st, e, top, ab, at)
 {
   reveal ent_i1;
@@ -84,11 +84,19 @@ fn entry_ok(st: [i64], e: i64, top: i64, ab: i64, at: i64) -> i64
     if !link_ok(st[b + 8], top) { return -8; }
     return 0;
   }
+  let mut kind: i64 = 1;
   if e >= 3 {
     let ow: i64 = st[b + 1];
     if ow < 0 || ow >= top { return -4; }
     let bo: i64 = eb + 20 * ow;
-    if bo < 16 || bo > len(st) - 20 || st[bo] != 1 { return -4; }
+    if bo < 16 || bo > len(st) - 20 { return -4; }
+    if st[bo] != 1 {
+      if st[bo] != 0 || st[b + 2] == st[bo + 3] { return -4; }
+      // Lazy forget leaves a pending list. Redirecting a live child to an unrelated free leaf
+      // also yields a generation mismatch, but remains an owner error (M4 admission case 16).
+      if st[bo + 9] < 3 || st[bo + 9] >= top || st[bo + 11] <= 0 { return -4; }
+      kind = 2;
+    }
   }
   let kn: i64 = st[b + 5];
   if kn < 0 || kn > 1073741824 { return -5; }
@@ -99,11 +107,12 @@ fn entry_ok(st: [i64], e: i64, top: i64, ab: i64, at: i64) -> i64
   if !link_ok(st[b + 7], top) || !link_ok(st[b + 8], top) { return -7; }
   if !link_ok(st[b + 9], top) || !link_ok(st[b + 10], top) { return -7; }
   if st[b + 11] < 0 { return -7; }
-  return 1;
+  return kind;
 }
 
 // Import admission: I0 (bud_store::valid) and the I1 per-entry facts the accessors rely on, in one linear pass over
-// the entries, the free list and the slot table. Returns the number of live entries (roots included), or the first
+// the entries, the free list and the slot table. Returns the number of live entries (roots included, pending dead
+// children excluded), or the first
 // failed class: -1 header, -2 roots/top, -3 entry state, -4 owner, -5 key span/padding, -6 blob span, -7 links,
 // -8 free list, -9 slot word, -10 header counts (words 12, 13, 14). cnt[0..3] gets the entries, free-list steps and
 // slots visited (admission work is linear in top + slots). Functional properties (I2: index completeness, child
@@ -131,9 +140,10 @@ pub fn admit(st: [i64], inout cnt: [i64]) -> i64
   if st[5] < 0 || st[5] > 4294967312 || top > 4294967296 || ab < 0 || at < ab || at > 1099511627776 { return -1; }
   if top < 3 { return -2; }
   let mut live: i64 = 0;
+  let mut dead: i64 = 0;
   let mut e: i64 = 0;
   while e < top
-    invariant 0 <= e && e <= top && top <= 4294967296 && 0 <= live && live <= e
+    invariant 0 <= e && e <= top && top <= 4294967296 && 0 <= live && 0 <= dead && live + dead <= e
     invariant 0 <= ab && ab <= at && at <= 1099511627776
     invariant forall j in 0..e: ent_i1(st, j, top, ab, at)
     decreases top - e
@@ -143,6 +153,7 @@ pub fn admit(st: [i64], inout cnt: [i64]) -> i64
     // entry_ok's ensures gives ent_i1 at e as the opaque symbol; the invariant's forall expands it, so equate the two
     reveal ent_i1;
     if r == 1 { live = live + 1; }
+    if r == 2 { dead = dead + 1; }
     e = e + 1;
   }
   crate::ent_u16::wr(inout cnt, 0, top);
@@ -158,7 +169,7 @@ pub fn admit(st: [i64], inout cnt: [i64]) -> i64
     f = crate::bud_store::ef(st, f, 8);
   }
   crate::ent_u16::wr(inout cnt, 1, free);
-  if f != -1 || free + live != top { return -8; }
+  if f != -1 || free + live + dead != top { return -8; }
   let mut used: i64 = 0;
   let mut i: i64 = 0;
   while i < s
@@ -171,9 +182,8 @@ pub fn admit(st: [i64], inout cnt: [i64]) -> i64
       if w != -1 {
         if w < 0 { return -9; }
         let se: i64 = band(w, 4294967295) - 1;
-        // Only the entry index is an I1 fact. A slot may name a free or reused entry or carry a stale tag: removal
-        // frees descendants without clearing their slots (bud_map::drop_child), and lookups re-check hash, state,
-        // owner and key on the entry (bud_map::entry_matches_w), so those slots only cost a probe.
+        // Only the entry index is an I1 fact. Descendant slots can remain after eager and lazy removal.
+        // Lookups re-check state, owner, owner generation, hash and key (bud_map::entry_matches_w).
         if se < 0 || se >= top { return -9; }
       }
     }

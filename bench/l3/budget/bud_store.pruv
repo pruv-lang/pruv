@@ -3,7 +3,7 @@
 //
 // Header words (16): 0 magic, 1 version, 2 total words, 3 slot base, 4 slot count, 5 entry base, 6 entry capacity,
 // 7 entry top, 8 free-list head (-1 none), 9 arena base, 10 arena top, 11 arena end, 12 live entries (table
-// occupancy: roots + live), 13 used slots, 14 live arena words, 15 pending-Need sequence.
+// occupancy: roots + live), 13 used slots, 14 live arena words (including pending dead entries), 15 pending-Need sequence.
 //
 // Every access to the buffer goes through crate::ent_u16::rd / wr (total), and every value read from the buffer is
 // clamped before it is used in arithmetic. A corrupt buffer can therefore give wrong answers but never an
@@ -472,8 +472,9 @@ pub fn entry_alloc(inout st: [i64], owner: i64, ogen: i64) -> i64
   return -1;
 }
 
-// Puts a live non-root entry on the free list and bumps its generation (bud_map::remove frees the children first). The
-// key and blob regions (fields 4/18, 12/19) stay with the entry for reuse.
+// Puts a live non-root entry on the free list and bumps its generation. The child list stays in fields 9..11:
+// bud_map::remove frees descendants first, while M8 forget leaves pending dead children for allocation to reclaim.
+// The key and blob regions (fields 4/18, 12/19) stay with the entry for reuse.
 pub fn entry_free(inout st: [i64], e: i64) -> ()
   ensures len(st) == len(old(st))
   ensures len(old(st)) >= 15 ==> (shape_same(st, old(st)) && st[7] == old(st)[7] && st[10] == old(st)[10] &&
