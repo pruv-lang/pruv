@@ -150,3 +150,36 @@ pub fn t_observe(st: [i64], inout out: [i64]) -> i64
   if !crate::bud_store::valid(st) { return 2; }
   return crate::bud_world::observe(st, inout out);
 }
+
+// I2: recompute the active-run count from each clock's run list.
+pub fn t_i2(st: [i64]) -> i64
+{
+  if !crate::bud_store::valid(st) { return -1; }
+  let lim: i64 = crate::bud_map::walk_limit(st);
+  let mut clocks: i64 = 0;
+  let mut bad: i64 = 0;
+  let mut ce: i64 = crate::bud_map::head(st, 1);
+  while ce >= 0 && clocks < lim
+    invariant 0 <= bad && bad <= clocks && clocks <= lim && lim <= 4294967296
+    decreases lim - clocks
+  {
+    let mut runs: i64 = 0;
+    let mut active: i64 = 0;
+    let mut re: i64 = crate::bud_map::head(st, ce);
+    while re >= 0 && runs < lim
+      invariant 0 <= active && active <= runs && runs <= lim && lim <= 4294967296
+      decreases lim - runs
+    {
+      if crate::bud_store::ef(st, re, 14) != 1 { active = active + 1; }
+      runs = runs + 1;
+      re = crate::bud_map::next(st, re);
+    }
+    // A run list still going after walk_limit steps is a cycle (an acyclic list fits the entry capacity): a failure.
+    if re >= 0 { bad = bad + 1; }
+    else if active != crate::bud_store::ef(st, ce, 17) { bad = bad + 1; }
+    clocks = clocks + 1;
+    ce = crate::bud_map::next(st, ce);
+  }
+  if ce >= 0 { bad = bad + 1; }
+  return bad;
+}

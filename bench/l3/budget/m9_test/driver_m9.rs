@@ -71,7 +71,7 @@ fn dec(b: &[u8], out: &mut Vec<i64>) {
     }
 }
 
-struct World {
+struct World<const CHECK_I2: bool> {
     st: Vec<i64>,
     out: Vec<i64>,
     bv: Vec<i64>,
@@ -87,6 +87,8 @@ struct World {
     ks: Vec<u8>,
     log: Vec<String>,
     quiet: bool,
+    i2_checks: usize,
+    i2_bad: usize,
 }
 
 // Data words of a packed key of n units: ceil(n / 4).
@@ -188,8 +190,8 @@ fn dec_packed(b: &[u8], out: &mut Vec<i64>) -> i64 {
     n
 }
 
-impl World {
-    fn new() -> World {
+impl<const CHECK_I2: bool> World<CHECK_I2> {
+    fn new() -> Self {
         let mut st = vec![0i64; 256];
         let r = sol::t_init(&mut st);
         if r > 0 {
@@ -215,6 +217,8 @@ impl World {
             ks: Vec::with_capacity(64),
             log: Vec::new(),
             quiet: false,
+            i2_checks: 0,
+            i2_bad: 0,
         }
     }
 
@@ -231,6 +235,9 @@ impl World {
     fn put(&mut self, op: &[i64]) {
         for _ in 0..4 {
             let r = sol::t_put(&mut self.st, op, &mut self.out);
+            if CHECK_I2 {
+                self.check_i2();
+            }
             if r == 0 {
                 return;
             }
@@ -242,6 +249,17 @@ impl World {
             eprintln!("t_put status {}", r);
             std::process::exit(2);
         }
+        eprintln!("t_put still Grow after 4 tries");
+        std::process::exit(2);
+    }
+
+    fn check_i2(&mut self) {
+        self.i2_checks += 1;
+        let bad = sol::t_i2(&self.st);
+        if bad != 0 {
+            self.i2_bad += 1;
+            self.log.push(format!("I2 {}", bad));
+        }
     }
 
     // One Pruv call; returns the status after Grow retries, then runs the effects.
@@ -250,6 +268,9 @@ impl World {
         for _ in 0..4 {
             self.fx[0] = 0;
             r = sol::t_call(&mut self.st, op, self.now, &mut self.bv, &mut self.tmp, &mut self.fx);
+            if CHECK_I2 {
+                self.check_i2();
+            }
             if r < 0 {
                 self.grow((-r) as usize);
                 continue;
@@ -446,7 +467,9 @@ fn run_q() {
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut o = io::BufWriter::new(stdout.lock());
-    let mut w = World::new();
+    let mut w = World::<true>::new();
+    let mut i2_checks = 0;
+    let mut i2_bad = 0;
     let mut halted = false;
     for line in stdin.lock().lines() {
         let line = line.unwrap();
@@ -456,11 +479,14 @@ fn run_q() {
         }
         match p[0] {
             "case" => {
+                i2_checks += w.i2_checks;
+                i2_bad += w.i2_bad;
                 w = World::new();
                 halted = false;
                 writeln!(o, "case {}", p[1]).unwrap();
             }
-            "put" => w.put(&nums(&p[1..])),
+            // After a halt the script stops (the observation is the one at the halt), so later puts are skipped.
+            "put" if !halted => w.put(&nums(&p[1..])),
             "now" => w.now = p[1].parse().unwrap(),
             "step" => {
                 if !halted {
@@ -507,6 +533,13 @@ fn run_q() {
             }
         }
     }
+    i2_checks += w.i2_checks;
+    i2_bad += w.i2_bad;
+    o.flush().unwrap();
+    eprintln!("i2_checks={} i2_bad={}", i2_checks, i2_bad);
+    if i2_bad > 0 {
+        std::process::exit(3);
+    }
 }
 
 // perf <R> <reps>: one session/budget with R runs (all running). Items:
@@ -542,7 +575,7 @@ fn run_perf(args: &[String]) {
         op
     };
     // refresh_R
-    let mut w = World::new();
+    let mut w = World::<false>::new();
     w.quiet = true;
     w.put(&put);
     let keys: Vec<Vec<i64>> = (0..rsz).map(|i| key(&format!("run-{:04}", i))).collect();
@@ -567,7 +600,7 @@ fn run_perf(args: &[String]) {
     let ns = t.elapsed().as_nanos() as f64 / (2 * reps) as f64;
     println!("refresh {} {:.1}", rsz, ns);
     // cycle
-    let mut w = World::new();
+    let mut w = World::<false>::new();
     w.quiet = true;
     w.put(&put);
     let k0 = key("run-0000");
@@ -585,7 +618,7 @@ fn run_perf(args: &[String]) {
     let ns = t.elapsed().as_nanos() as f64 / (2 * reps) as f64;
     println!("cycle {} {:.1}", 1, ns);
     // fire (early delivery re-arm)
-    let mut w = World::new();
+    let mut w = World::<false>::new();
     w.quiet = true;
     w.put(&put);
     w.call(&st);
