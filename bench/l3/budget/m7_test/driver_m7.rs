@@ -2,19 +2,17 @@
 //
 //   driver_m7 q        program on stdin, one case after another:
 //                        case <id> | now <ms> | uuids <key>... | quiet <0/1>... | put <words...> | del <key words...>
-//                        | adv <ms> | call <req> <op words without now/quiet/uuid> | end
+//                        | adv <ms> | call <req> <op words without now/reserved word/uuid> | end
 //   driver_m7 perf <S> <reps>   perf program, see run_m7.py (cmd_perf). After each item's timed loop it runs an untimed
 //                        verification pass (fresh identical setup, same ops, V = min(reps, 2000) iterations) and prints
 //                        `rchk <item> <size> <value>`: s = s*31 + w over every op's status, effect words and result
 //                        words (see rchk_fold). hand_m7_u16 perf prints the same encoding; run_m7.py compares them.
 //
 // Boundary rule: the host owns the state buffer and the scratch frames and supplies the inputs of a call (now, the
-// next randomUUID value, the isQuiet answer); it never reads state words and decides nothing. It reads the result
+// next randomUUID value); it never reads state words and decides nothing. It reads the result
 // tag in out only to print the words (a budget result is a view [4, n, off]: the host prints st[off..off+n), as a
 // caller reads through the returned reference). Effects: [20] changed, [21] carryHeld, [22] uuid consumed (the host
-// advances its UUID stream), [23] isQuiet consulted (the host advances its isQuiet answers; the answer, next queued
-// or default false, is supplied up front in the op like the next UUID), [13] timerClear (no timers exist in M7
-// scenarios; logged). Need 5 only answers a call made without an isQuiet input; this host always supplies one.
+// advances its UUID stream), [13] timerClear. isQuiet takes the next answer synchronously (default false).
 // Grow -N: buffer of exactly N (Pruv sizes it, N >= 2*len), t_grow, retry.
 // Wire keys are packed u16 keys `n, words(n) packed words` (bud_keys layout), packed once by the encoder (run_m7.py
 // for q mode, key() below for perf / boundary); the records hold the budget id and follows packed the same way
@@ -33,13 +31,11 @@ struct World {
     now: i64,
     uuids: Vec<Vec<i64>>,
     next_uuid: usize,
-    quiet: Vec<i64>,
-    next_quiet: usize,
     log: Vec<String>,
     silent: bool,
-    // perf only (silent): the ops built so far, keyed by (body address, body length, quiet, uuid index). The perf
+    // perf only (silent): the ops built so far, keyed by (body address, body length, uuid index). The perf
     // bodies are fixed vectors, so a host that keeps its prepared arguments does not rebuild them on every call.
-    ops: Vec<((usize, usize, i64, usize), Vec<i64>)>,
+    ops: Vec<((usize, usize, usize), Vec<i64>)>,
 }
 
 impl World {
@@ -62,8 +58,6 @@ impl World {
             now: 1700000000000,
             uuids: Vec::new(),
             next_uuid: 0,
-            quiet: Vec::new(),
-            next_quiet: 0,
             log: Vec::new(),
             silent: false,
             ops: Vec::new(),
@@ -103,17 +97,16 @@ impl World {
         }
     }
 
-    // One public call: body = [code, origin, size, unit x6, sessionId key, budgetId key]; the host inserts now, the
-    // next isQuiet answer and the next UUID key.
+    // One public call: body = [code, origin, size, unit x6, sessionId key, budgetId key]; the host inserts now, a reserved
+    // zero word, and the next UUID key.
     fn call(&mut self, body: &[i64]) -> i64 {
-        let (slot, op, quiet) = self.take_op(body);
-        self.call_with(slot, op, quiet)
+        let (slot, op) = self.take_op(body);
+        self.call_with(slot, op)
     }
 
     // The host op build / cache lookup of `call` (returns the op taken out of its slot; give it back with put_op).
-    fn take_op(&mut self, body: &[i64]) -> (usize, Vec<i64>, i64) {
-        let quiet = self.quiet.get(self.next_quiet).copied().unwrap_or(0);
-        let k = (body.as_ptr() as usize, body.len(), quiet, self.next_uuid);
+    fn take_op(&mut self, body: &[i64]) -> (usize, Vec<i64>) {
+        let k = (body.as_ptr() as usize, body.len(), self.next_uuid);
         let mut slot = usize::MAX;
         if self.silent {
             slot = match self.ops.iter().position(|(key, _)| *key == k) {
@@ -129,7 +122,7 @@ impl World {
             op.clear();
             op.push(body[0]);
             op.push(self.now);
-            op.push(quiet);
+            op.push(0);
             op.extend_from_slice(&body[1..]);
             match self.uuids.get(self.next_uuid) {
                 Some(u) => op.extend_from_slice(u),
@@ -137,7 +130,7 @@ impl World {
             }
         }
         op[1] = self.now;
-        (slot, op, quiet)
+        (slot, op)
     }
 
     fn put_op(&mut self, slot: usize, op: Vec<i64>) {
@@ -148,8 +141,9 @@ impl World {
         }
     }
 
-    fn call_with(&mut self, slot: usize, op: Vec<i64>, quiet: i64) -> i64 {
+    fn call_with(&mut self, slot: usize, op: Vec<i64>) -> i64 {
         let mut r = 0;
+        let before = bud_facts::calls();
         for _ in 0..8 {
             self.fx[0] = 0;
             r = sol::t_call(&mut self.st, &op, &mut self.bv, &mut self.fx, &mut self.out);
@@ -159,16 +153,15 @@ impl World {
             }
             break;
         }
+        let after = bud_facts::calls();
+        if !self.silent {
+            for i in before..after {
+                self.log.push(format!("E quiet {}", bud_facts::answer(i)));
+            }
+        }
         self.put_op(slot, op);
         let used = self.fx[0].max(0) as usize;
         if r != 0 {
-            // A finished call that consulted isQuiet consumed the answer even when it failed afterwards.
-            if self.fx[1..=used].contains(&23) {
-                self.next_quiet += 1;
-                if !self.silent {
-                    self.log.push(format!("E quiet {}", quiet));
-                }
-            }
             if !self.silent {
                 self.log.push(format!("X {}", r));
             }
@@ -179,15 +172,11 @@ impl World {
             if e == 22 {
                 self.next_uuid += 1;
             }
-            if e == 23 {
-                self.next_quiet += 1;
-            }
             if !self.silent {
                 self.log.push(match e {
                     20 => "E changed".to_string(),
                     21 => "E carry".to_string(),
                     22 => "E uuid".to_string(),
-                    23 => format!("E quiet {}", quiet),
                     13 => "E clear".to_string(),
                     x => format!("X fx{}", x),
                 });
@@ -297,11 +286,13 @@ fn run_q() {
         match p[0] {
             "case" => {
                 w = World::new();
+                bud_facts::set_answers(&[], 0);
+                bud_facts::set_calls(0);
                 writeln!(o, "case {}", p[1]).unwrap();
             }
             "now" => w.now = p[1].parse().unwrap(),
             "uuids" => w.uuids = keys(&nums(&p[1..])),
-            "quiet" => w.quiet = nums(&p[1..]),
+            "quiet" => bud_facts::set_answers(&nums(&p[1..]), 0),
             "put" => w.put(&nums(&p[1..])),
             "del" => w.del(&nums(&p[1..])),
             "adv" => w.now += p[1].parse::<i64>().unwrap(),
@@ -382,6 +373,8 @@ fn key(s: &str) -> Vec<i64> {
 pub const PERF_REST: &str = "{\"card\":{\"deliverable\":\"d\",\"done\":[\"x\"],\"state\":\"done\",\"updatedAt\":\"2023-11-14T22:13:20.000Z\"}}";
 
 fn run_perf(args: &[String]) {
+    bud_facts::set_answers(&[], 1);
+    bud_facts::set_calls(0);
     let size: usize = args[0].parse().unwrap();
     let reps: usize = args[1].parse().unwrap();
     let sids: Vec<String> = (0..size).map(|i| format!("s{:04}", i)).collect();
@@ -412,7 +405,7 @@ fn run_perf(args: &[String]) {
         for _ in 0..1000 {
             for op in ops {
                 w.next_uuid = 0;
-                w.next_quiet = 0;
+                bud_facts::set_calls(0);
                 w.call(op);
             }
         }
@@ -420,15 +413,16 @@ fn run_perf(args: &[String]) {
         for _ in 0..reps {
             for op in ops {
                 w.next_uuid = 0;
-                w.next_quiet = 0;
-                black_box(w.call(black_box(op)));
+                bud_facts::set_calls(0);
+                let r = w.call(black_box(op));
+                black_box((r, w.out[0]));
             }
         }
         t.elapsed().as_nanos() as f64 / (reps * per) as f64
     };
     // dispatch probe: the host op build + t_call's checks (valid, 3 key scans) with an unknown code (status 2)
     // Untimed per-op result verification (rchk): a fresh setup identical to the timed one, the same ops with the same
-    // per-call resets (next_uuid / next_quiet = 0), V = min(reps, 2000) iterations, every call's status, effect words
+    // per-call resets (next_uuid and the host fact counter to 0), V = min(reps, 2000) iterations, every call's status, effect words
     // and result words folded by rchk_fold. Runs after the item's timed loop; nothing is added inside it.
     let vn = reps.min(2000);
     let verify = |w: &mut World, ops: &[Vec<i64>]| -> u64 {
@@ -436,7 +430,7 @@ fn run_perf(args: &[String]) {
         for _ in 0..vn {
             for op in ops {
                 w.next_uuid = 0;
-                w.next_quiet = 0;
+                bud_facts::set_calls(0);
                 let r = w.call(op);
                 s = rchk_fold(w, r, s);
             }
@@ -445,12 +439,11 @@ fn run_perf(args: &[String]) {
     };
     // Typed-entry lane: the same calls through c_direct(w, &Prep) (prepared once, outside the timed loop): one direct
     // typed call per op, like the hand typed lane's bare `w.current(..)`; the Grow retry loop (c_call) runs only
-    // when a call answers Grow. The typed calls read no host UUID / isQuiet stream, so no stream reset here. Prints
+    // when a call answers Grow. The host fact uses the perf default answer. Prints
     // `t <item> <size> <ns>` and, from an untimed fresh run of vn iterations, `rchk_t <item> <size> <value>`.
-    let typed = |name: &str, state: i64, quiet: &[i64], bodies: &[Vec<i64>], per: usize, put: Option<&Vec<i64>>| {
+    let typed = |name: &str, state: i64, bodies: &[Vec<i64>], per: usize, put: Option<&Vec<i64>>| {
         let mk = || -> (World, Vec<Prep>) {
             let mut w = setup(state);
-            w.quiet = quiet.to_vec();
             let ps: Vec<Prep> = bodies.iter().map(|b| prep_of(&mut w, b)).collect();
             (w, ps)
         };
@@ -493,12 +486,13 @@ fn run_perf(args: &[String]) {
     // raw t_call with a prepared op (no World::call): what the dispatch probe costs inside t_call itself
     {
         let mut w = setup(0);
-        let mut op = vec![0i64, w.now, -1];
+        let mut op = vec![0i64, w.now, 0];
         op.extend_from_slice(&body(0, -1, -1, &bid(last))[1..]);
         op.push(0);
         let t = Instant::now();
         for _ in 0..reps {
-            black_box(sol::t_call(&mut w.st, black_box(&op), &mut w.bv, &mut w.fx, &mut w.out));
+            let r = sol::t_call(&mut w.st, black_box(&op), &mut w.bv, &mut w.fx, &mut w.out);
+            black_box((r, w.out[0]));
         }
         println!("rawcall {} {:.1}", size, t.elapsed().as_nanos() as f64 / reps as f64);
         let mut w = setup(0);
@@ -515,36 +509,31 @@ fn run_perf(args: &[String]) {
     let ops = vec![body(2, -1, -1, &bid(last))];
     println!("ishalted {} {:.1}", size, time(&mut w, &ops, 1));
     println!("rchk ishalted {} {}", size, verify(&mut setup(0), &ops));
-    typed("ishalted", 0, &[], &ops, 1, None);
+    typed("ishalted", 0, &ops, 1, None);
     // current
     let mut w = setup(0);
     let ops = vec![body(1, -1, -1, &bid(last))];
     println!("current {} {:.1}", size, time(&mut w, &ops, 1));
     println!("rchk current {} {}", size, verify(&mut setup(0), &ops));
-    typed("current", 0, &[], &ops, 1, None);
+    typed("current", 0, &ops, 1, None);
     // attach (open budget: ref)
     let mut w = setup(0);
     let ops = vec![body(3, 0, -1, "")];
     println!("attach {} {:.1}", size, time(&mut w, &ops, 1));
     println!("rchk attach {} {}", size, verify(&mut setup(0), &ops));
-    typed("attach", 0, &[], &ops, 1, None);
+    typed("attach", 0, &ops, 1, None);
     // close + reopen cycle: maybeClose (quiet) then reopen
     let mut w = setup(0);
-    w.quiet = vec![1];
     let ops = vec![body(6, -1, -1, ""), body(5, -1, -1, &bid(last))];
     println!("closereopen {} {:.1}", size, time(&mut w, &ops, 2));
-    {
-        let mut w = setup(0);
-        w.quiet = vec![1];
-        println!("rchk closereopen {} {}", size, verify(&mut w, &ops));
-    }
-    typed("closereopen", 0, &[1], &ops, 2, None);
+    println!("rchk closereopen {} {}", size, verify(&mut setup(0), &ops));
+    typed("closereopen", 0, &ops, 2, None);
     // reopen on an open budget: CURRENT lookup + state test, answers [1], changes nothing (reopen's lookup alone)
     let mut w = setup(0);
     let ops = vec![body(5, -1, -1, &bid(last))];
     println!("reopenmiss {} {:.1}", size, time(&mut w, &ops, 1));
     println!("rchk reopenmiss {} {}", size, verify(&mut setup(0), &ops));
-    typed("reopenmiss", 0, &[], &ops, 1, None);
+    typed("reopenmiss", 0, &ops, 1, None);
     // replace on a halted budget (CLOSE + OPEN + follows + carryHeld), then put the halted record back
     let mut w = setup(1);
     let rp = body(4, 0, 2, "");
@@ -560,7 +549,8 @@ fn run_perf(args: &[String]) {
     let t = Instant::now();
     for _ in 0..reps {
         w.next_uuid = 0;
-        black_box(w.call(black_box(&rp)));
+        let r = w.call(black_box(&rp));
+        black_box((r, w.out[0]));
         w.put(black_box(&put));
     }
     println!("replace {} {:.1}", size, t.elapsed().as_nanos() as f64 / reps as f64);
@@ -574,12 +564,12 @@ fn run_perf(args: &[String]) {
         w.put(&put);
     }
     println!("rchk replace {} {}", size, s);
-    typed("replace", 1, &[], std::slice::from_ref(&rp), 1, Some(&put));
+    typed("replace", 1, std::slice::from_ref(&rp), 1, Some(&put));
 }
 
 // rchk: per-op result checksum of the perf verification pass, s = s*31 + w (wrapping u64). Per call it folds, in this
 // order: the status r, the effect count fx[0], every effect code fx[1..=fx[0]] (13 timerClear, 20 changed, 21 carryHeld,
-// 22 uuid, 23 isQuiet), and, for status 0, the result words the host reads (the same words q mode prints after `V `):
+// 22 uuid), and, for status 0, the result words the host reads (the same words q mode prints after `V `):
 // [0] undefined, [1] false, [2] true, [3, n, id units.. (, m, old id units.. when effect 21 is held)] a ref,
 // [4, n, record words..] a budget view (st[off..off+n)). hand_m7_u16.rs perf produces the identical words.
 fn rchk_fold(w: &World, r: i64, sum: u64) -> u64 {
@@ -625,7 +615,7 @@ fn rchk_fold(w: &World, r: i64, sum: u64) -> u64 {
 //   prep the host op build of A only (no t_call)
 //   observe  result consumption only (checksum fold), on the result of one call
 // item noop: A and B with code 0 (unknown code, status 2).
-// Every timed variant resets next_uuid/next_quiet before each call and folds the full result (status, effect
+// Every timed variant resets next_uuid and the host fact counter before each call and folds the full result (status, effect
 // words fx[1..=fx[0]], and the out / budget-view words) into a checksum; observe consumes the same.
 // Output line: `item variant S ns_per_call checksum allocs_per_call`.
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -668,7 +658,6 @@ struct Prep {
     op: Vec<i64>,
     code: i64,
     now: i64,
-    quiet: i64,
     origin: i64,
     size: i64,
     unit: Vec<i64>,
@@ -683,8 +672,8 @@ struct Prep {
 
 fn prep_of(w: &mut World, body: &[i64]) -> Prep {
     w.next_uuid = 0;
-    w.next_quiet = 0;
-    let (slot, op, quiet) = w.take_op(body);
+    bud_facts::set_calls(0);
+    let (slot, op) = w.take_op(body);
     let p = op.clone();
     w.put_op(slot, op);
     let sn = p[11];
@@ -695,7 +684,6 @@ fn prep_of(w: &mut World, body: &[i64]) -> Prep {
     Prep {
         code: p[0],
         now: p[1],
-        quiet,
         origin: p[3],
         size: p[4],
         unit: p[5..11].to_vec(),
@@ -738,7 +726,7 @@ fn c_call(w: &mut World, p: &Prep) -> i64 {
             3 => sol::c_attach(&mut w.st, black_box(&p.sk), p.sn, p.origin, p.size, &p.unit, black_box(&p.uk), p.un, p.now, &mut w.fx, &mut w.out),
             4 => sol::c_replace(&mut w.st, black_box(&p.sk), p.sn, p.origin, p.size, &p.unit, black_box(&p.uk), p.un, p.now, &mut w.bv, &mut w.fx, &mut w.out),
             5 => sol::c_reopen(&mut w.st, black_box(&p.sk), p.sn, black_box(&p.bk), p.bn, &mut w.fx, &mut w.out),
-            6 => sol::c_maybe_close(&mut w.st, black_box(&p.sk), p.sn, p.quiet, p.now, &mut w.bv, &mut w.fx, &mut w.out),
+            6 => sol::c_maybe_close(&mut w.st, black_box(&p.sk), p.sn, p.now, &mut w.bv, &mut w.fx, &mut w.out),
             _ => 2,
         };
         if r < 0 {
@@ -760,7 +748,7 @@ fn c_direct(w: &mut World, p: &Prep) -> i64 {
         3 => sol::c_attach(&mut w.st, black_box(&p.sk), p.sn, p.origin, p.size, &p.unit, black_box(&p.uk), p.un, p.now, &mut w.fx, &mut w.out),
         4 => sol::c_replace(&mut w.st, black_box(&p.sk), p.sn, p.origin, p.size, &p.unit, black_box(&p.uk), p.un, p.now, &mut w.bv, &mut w.fx, &mut w.out),
         5 => sol::c_reopen(&mut w.st, black_box(&p.sk), p.sn, black_box(&p.bk), p.bn, &mut w.fx, &mut w.out),
-        6 => sol::c_maybe_close(&mut w.st, black_box(&p.sk), p.sn, p.quiet, p.now, &mut w.bv, &mut w.fx, &mut w.out),
+        6 => sol::c_maybe_close(&mut w.st, black_box(&p.sk), p.sn, p.now, &mut w.bv, &mut w.fx, &mut w.out),
         _ => 2,
     };
     if r < 0 {
@@ -772,7 +760,7 @@ fn c_direct(w: &mut World, p: &Prep) -> i64 {
 // One call of variant v with the same reset of the host's UUID / isQuiet streams.
 fn one(v: Var, w: &mut World, body: &[i64], p: &Prep) -> i64 {
     w.next_uuid = 0;
-    w.next_quiet = 0;
+    bud_facts::set_calls(0);
     match v {
         Var::A => w.call(black_box(body)),
         Var::B => raw_call(w, black_box(&p.op), false),
@@ -822,11 +810,11 @@ struct Item {
     name: &'static str,
     bodies: Vec<Vec<i64>>,
     state: i64,
-    quiet: Vec<i64>,
     put: Option<Vec<i64>>,
 }
 
 fn run_boundary(args: &[String]) {
+    bud_facts::set_answers(&[], 1);
     let size: usize = args[0].parse().unwrap();
     let reps: usize = args[1].parse().unwrap();
     let only_item = args.get(2).map(|s| s.as_str()).filter(|s| *s != "all");
@@ -846,7 +834,6 @@ fn run_boundary(args: &[String]) {
             w.put(&op);
         }
         w.uuids = vec![key("00000000-0000-4000-8000-0000000000aa")];
-        w.quiet = it.quiet.clone();
         w
     };
     let body = |code: i64, origin: i64, sz: i64, b: &str| -> Vec<i64> {
@@ -861,19 +848,18 @@ fn run_boundary(args: &[String]) {
     put.push(r.len() as i64);
     put.extend(r);
     let items = vec![
-        Item { name: "current", bodies: vec![body(1, -1, -1, &bid(last))], state: 0, quiet: vec![], put: None },
-        Item { name: "ishalted", bodies: vec![body(2, -1, -1, &bid(last))], state: 0, quiet: vec![], put: None },
-        Item { name: "attach", bodies: vec![body(3, 0, -1, "")], state: 0, quiet: vec![], put: None },
+        Item { name: "current", bodies: vec![body(1, -1, -1, &bid(last))], state: 0, put: None },
+        Item { name: "ishalted", bodies: vec![body(2, -1, -1, &bid(last))], state: 0, put: None },
+        Item { name: "attach", bodies: vec![body(3, 0, -1, "")], state: 0, put: None },
         Item {
             name: "closereopen",
             bodies: vec![body(6, -1, -1, ""), body(5, -1, -1, &bid(last))],
             state: 0,
-            quiet: vec![1],
             put: None,
         },
-        Item { name: "reopenmiss", bodies: vec![body(5, -1, -1, &bid(last))], state: 0, quiet: vec![], put: None },
-        Item { name: "replace", bodies: vec![body(4, 0, 2, "")], state: 1, quiet: vec![], put: Some(put) },
-        Item { name: "noop", bodies: vec![body(0, -1, -1, &bid(last))], state: 0, quiet: vec![], put: None },
+        Item { name: "reopenmiss", bodies: vec![body(5, -1, -1, &bid(last))], state: 0, put: None },
+        Item { name: "replace", bodies: vec![body(4, 0, 2, "")], state: 1, put: Some(put) },
+        Item { name: "noop", bodies: vec![body(0, -1, -1, &bid(last))], state: 0, put: None },
     ];
 
     // One sequence of an item (all its calls, then the put): used by the self-check and the timed loops.
@@ -942,8 +928,8 @@ fn run_boundary(args: &[String]) {
                     let mut once = |w: &mut World, sum: &mut u64| {
                         for b in &it.bodies {
                             w.next_uuid = 0;
-                            w.next_quiet = 0;
-                            let (slot, op, _q) = w.take_op(black_box(b));
+                            bud_facts::set_calls(0);
+                            let (slot, op) = w.take_op(black_box(b));
                             *sum = sum.wrapping_add(black_box(&op).len() as u64);
                             w.put_op(slot, op);
                         }

@@ -17,7 +17,7 @@ After the random cases (numbered 0..count-1, seed 20261117) a fixed set of deter
   * edge-key programs (one per fixed edge key, every call kind);
   * malformed frames: short body, missing keys, trailing word, key length overrun / negative / above 2^30, unknown
     code, a frame that swallows the uuid key as an extra "key", invalid origin / size, `del` with a malformed or
-    non-canonical key (`X del 2`), maybeClose with quiet -1 (`X 5`), non-canonical packed call keys (nonzero tail lanes
+    non-canonical key (`X del 2`), maybeClose with quiet -1 (`E quiet -1` then `X 2`), non-canonical packed call keys (nonzero tail lanes
     in the last word of a session, budget or uuid key: `X 2`), absent sessions;
   * out-buffer limits: budget / uuid ids at the packed edge, 16376 / 16377 units (replace: 16368 / 16369), status 3
     above 4096 result words;
@@ -346,8 +346,8 @@ def controls():
         p.call(code, SK, BID, 0 if code in (3, 4) else -1, 2 if code == 4 else -1)
         exp = {1: ["@ r0", "V 0"], 2: ["@ r0", "V 1"], 5: ["@ r0", "V 1"]}.get(code, ["@ r0", "X 2"])
         add("session absent code %d" % code, p.end(), exp)
-    # maybeClose: quiet -1 on an open budget is `X 5`, on halted / closed / no-budget it is `V 1` (not asked)
-    for st, exp in ((0, ["@ r0", "X 5"]), (1, ["@ r0", "V 1"]), (2, ["@ r0", "V 1"])):
+    # maybeClose: quiet -1 on an open budget logs `E quiet -1` then `X 2`, on halted / closed / no-budget it is `V 1` (not asked)
+    for st, exp in ((0, ["@ r0", "E quiet -1", "X 2"]), (1, ["@ r0", "V 1"]), (2, ["@ r0", "V 1"])):
         p = base("mcq", st, quiet="-1", ended=(1, ("ms", 7)) if st == 2 else None)
         p.call(6, SK)
         add("maybeClose quiet -1 state %d" % st, p.end(), exp)
@@ -518,7 +518,7 @@ def main():
             bad_fatal.append((name, want_rc, rd, rh))
     lines = outs[0].splitlines()
     tally = {t: sum(1 for l in lines if l.startswith(t)) for t in
-             ("V 0", "V 1", "V 2", "V 3", "V 4", "E uuid", "E changed", "E carry", "E quiet", "X 2", "X 3", "X 5",
+             ("V 0", "V 1", "V 2", "V 3", "V 4", "E uuid", "E changed", "E carry", "E quiet", "X 2", "X 3",
               "X del")}
     print("random cases %d, mismatching cases %d" % (a.count, len(bad_rand)))
     print("controls %d, mismatches between sides %d, expectation failures %d" % (len(ctl), len(bad_ctl), len(expect_fail)))
