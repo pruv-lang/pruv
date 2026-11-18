@@ -11,12 +11,11 @@ mod bud_halt;
 // L3-10 M10a test root (test only, not product): drives halt (bud_halt.pruv) and the calls that reach it (charge over
 // limit, the run methods and FIRE through HALT_TIME) over the M7 record and the M9 clock.
 //
-// t_call op: [code, now, reserved zero, what x10, flag, sessionId key, budgetId key, runKey key, ids], key = `n, words(n)
-// packed words` (bud_keys layout; the host packs every key once at ingress), ids = the host's next
-// runningDelegationIds answer `n, (len, words(len) packed words)*` (queue head, n = 0 when the queue is empty); it is
-// consumed only when the effects hold [30] (M10_NOTES.md KD-M10-1).
-// Every key, and every id of the answer (bud_halt::ids_words), is checked with bud_keys::rec_end (framing + canonical
-// form, O(1) per key) before anything is read or written; a bad one answers 2. The sessionId stays framed in the op
+// t_call op: [code, now, reserved zero, what x10, flag, sessionId key, budgetId key, runKey key], key = `n, words(n)
+// packed words` (bud_keys layout; the host packs every key once at ingress). halt asks runningDelegationIds itself,
+// synchronously after SETTLE (bud_halt::running_ids, P24; the M10a prefetched answer and its [30] marker are retired).
+// Every key is checked with bud_keys::rec_end (framing + canonical form, O(1) per key) before anything is read or
+// written; a bad one answers 2. The sessionId stays framed in the op
 // (op[14] = sn), which run_started needs for the clock's owner blob. Records hold the budget id and follows packed
 // (bud_lifecycle.pruv header) and the stopped delegation ids packed (bud_halt.pruv header).
 //   code 1 current(ref), 2 isHalted(ref), 5 reopen(ref), 6 maybeClose(session), 7 charge(ref, what),
@@ -25,7 +24,8 @@ mod bud_halt;
 //   what[3..13) = bud_charge's [kind, value] x5 (delegations, commands, reviews, checks, retries).
 // maybeClose consults isQuiet synchronously.
 // out: lifecycle's tags (0 undef, 1 false, 2 true, 4 budget), charge [5, ok (1 false, 2 true), reason (0..4)].
-// Status: 0 done, 2 invalid, 3 out/fx small, -N Grow (nothing written).
+// Status: 0 done, 2 invalid, 3 out/fx small, 6 halt's answer does not fit (terminal, bud_halt.pruv header), -N Grow
+// (nothing written).
 
 fn rd(a: [i64], i: i64) -> i64
 { return crate::ent_u16::rd(a, i); }
@@ -81,7 +81,7 @@ fn out3(inout out: [i64], a: i64, b: i64, c: i64) -> ()
 
 // charge(ref, what) (B:244-262): CURRENT, the charge frame from the record, bud_charge, then the in-place counter
 // writes, or halt(ref, key) for an over-limit key.
-fn charge(inout st: [i64], op: [i64], sn: i64, bs: i64, bn: i64, now: i64, is: i64, inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc
+fn charge(inout st: [i64], op: [i64], sn: i64, bs: i64, bn: i64, now: i64, inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc, io
 {
   if len(out) < 3 { return 3; }
   let mut cv: [i64] = alloc(15, 0);
@@ -132,7 +132,7 @@ fn charge(inout st: [i64], op: [i64], sn: i64, bs: i64, bn: i64, now: i64, is: i
   }
   if r >= 33 && r <= 36 {
     let k: i64 = r - 32;
-    let h: i64 = crate::bud_halt::halt(inout st, op, 15, sn, op, bs, bn, k, now, op, is, inout bv, inout fx);
+    let h: i64 = crate::bud_halt::halt(inout st, op, 15, sn, op, bs, bn, k, now, inout bv, inout fx);
     if h != 0 { return h; }
     out3(inout out, 5, 1, k);
     return 0;
@@ -142,10 +142,11 @@ fn charge(inout st: [i64], op: [i64], sn: i64, bs: i64, bn: i64, now: i64, is: i
 
 // The run methods and FIRE (bud_clock keyed entries) on the M7 record: the clock frame bv is the record's view when
 // the ref is CURRENT; afterwards the record takes the frame back (used.activeMs, activeSince), and HALT_TIME runs
-// halt(ref, 'time'). Room for the clock entries, a rewritten record and halt is reserved before the first write, so a
-// Grow can only happen with nothing written. The fx room for the nested halt (5 clock words + 12 + 2 * nIds) and the
-// record check (rec_ok_in) are also done before the first write.
-fn run_op(inout st: [i64], op: [i64], code: i64, sn: i64, bs: i64, bn: i64, rs: i64, rn: i64, flag: i64, now: i64, is: i64, inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc
+// halt(ref, 'time'). Room for the clock entries, a rewritten record and halt's record without its id list is reserved
+// before the first write, so a Grow can only happen with nothing written (the id list is reserved by halt after its
+// query). The fx room for the nested halt's fixed part (5 clock words + 12) and the record check (rec_ok_in) are also
+// done before the first write.
+fn run_op(inout st: [i64], op: [i64], code: i64, sn: i64, bs: i64, bn: i64, rs: i64, rn: i64, flag: i64, now: i64, inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc, io
 {
   if len(out) < 1 { return 3; }
   if !crate::bud_clock::fx_ok(fx) { return 3; }
@@ -155,12 +156,11 @@ fn run_op(inout st: [i64], op: [i64], code: i64, sn: i64, bs: i64, bn: i64, rs: 
   let mut hw: i64 = 0;
   if se >= 0 {
     let off0: i64 = crate::bud_lifecycle::blob_at(st, se);
-    let d: i64 = c32(rd(op, is));
-    if crate::bud_store::c40(rd(fx, 0)) + 5 + 12 + 2 * d > len(fx) { return 3; }
+    if crate::bud_store::c40(rd(fx, 0)) + 5 + 12 > len(fx) { return 3; }
     if !crate::bud_halt::rec_ok_in(st, off0, crate::bud_lifecycle::blob_n(st, se)) { return 2; }
     crate::bud_lifecycle::view_in(st, off0, inout bv);
     k0 = rd(st, off0 + 16);
-    hw = crate::bud_halt::halt_words(st, se, op, is);
+    hw = crate::bud_halt::halt_words(st, se);
   }
   // a new clock and run: their packed key words, the framed owner blob (1 + words(sn)), and halt's room
   let nd: i64 = crate::bud_map::make_room(inout st, 2, crate::bud_keys::words(bn) + 1 + crate::bud_keys::words(sn) + crate::bud_keys::words(rn) + hw);
@@ -178,7 +178,8 @@ fn run_op(inout st: [i64], op: [i64], code: i64, sn: i64, bs: i64, bn: i64, rs: 
   wr(inout st, off + 16, rd(bv, 5));
   wr(inout st, off + 17, rd(bv, 6));
   if r == 4 {
-    let h: i64 = crate::bud_halt::halt(inout st, op, 15, sn, op, bs, bn, 0, now, op, is, inout bv, inout fx);
+    let h: i64 = crate::bud_halt::halt(inout st, op, 15, sn, op, bs, bn, 0, now, inout bv, inout fx);
+    if h == 6 { return 6; }
     if h != 0 { return 2; }
     return 0;
   }
@@ -203,8 +204,7 @@ pub fn t_call(inout st: [i64], op: [i64], inout bv: [i64], inout fx: [i64], inou
   if e2 < 0 { return 2; }
   let e3: i64 = crate::bud_keys::rec_end(op, e2);
   if e3 < 0 { return 2; }
-  let iw: i64 = crate::bud_halt::ids_words(op, e3);
-  if iw < 0 || e3 + iw != len(op) { return 2; }
+  if e3 != len(op) { return 2; }
   let code: i64 = rd(op, 0);
   let now: i64 = rd(op, 1);
   let flag: i64 = rd(op, 13);
@@ -216,11 +216,11 @@ pub fn t_call(inout st: [i64], op: [i64], inout bv: [i64], inout fx: [i64], inou
   if code == 2 { return crate::bud_lifecycle::is_halted(st, op, 15, sn, op, bs, bn, inout out); }
   if code == 5 { return crate::bud_lifecycle::reopen(inout st, op, 15, sn, op, bs, bn, inout fx, inout out); }
   if code == 6 { return crate::bud_lifecycle::maybe_close(inout st, op, 15, sn, now, inout bv, inout fx, inout out); }
-  if code == 7 { return charge(inout st, op, sn, bs, bn, now, e3, inout bv, inout fx, inout out); }
-  if code >= 8 && code <= 11 { return run_op(inout st, op, code, sn, bs, bn, e2 + 1, rn, flag, now, e3, inout bv, inout fx, inout out); }
+  if code == 7 { return charge(inout st, op, sn, bs, bn, now, inout bv, inout fx, inout out); }
+  if code >= 8 && code <= 11 { return run_op(inout st, op, code, sn, bs, bn, e2 + 1, rn, flag, now, inout bv, inout fx, inout out); }
   if code == 12 {
     if len(out) < 1 { return 3; }
-    let h: i64 = crate::bud_halt::halt(inout st, op, 15, sn, op, bs, bn, flag, now, op, e3, inout bv, inout fx);
+    let h: i64 = crate::bud_halt::halt(inout st, op, 15, sn, op, bs, bn, flag, now, inout bv, inout fx);
     if h != 0 { return h; }
     wr(inout out, 0, 0);
     return 0;

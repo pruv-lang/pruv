@@ -6,12 +6,15 @@
 //                         | call <req> <body words> | end
 //   driver_m10 perf <D> <reps>   perf program, see run_m10.py (cmd_perf)
 //
-// Boundary rule (M7 + M9): the host owns the state buffer and the scratch frames, supplies the inputs of a call (now,
-// the next runningDelegationIds answer) and performs the effects in order; it never reads state
-// words and decides nothing. Body = [code, what x10, flag, sessionId key, budgetId key, runKey key]; the host inserts
-// now and a reserved zero word after the code and appends the head of its runningDelegationIds queue (`n, keys`, n = 0 when empty).
-// Effects: [30] runningDelegationIds consumed (the host pops its queue), [31] cancelRecovery, [32] stopMain,
-// [33, i] stopDelegation of the i-th id of the answer passed in, [34] stopAttachedTurns, [35] holdQueued, [36] save,
+// Boundary rule (M7 + M9): the host owns the state buffer and the scratch frames, supplies the inputs of a call (now)
+// and the synchronous host facts' answers, and performs the effects in order; it never reads state words and decides
+// nothing. Body = [code, what x10, flag, sessionId key, budgetId key, runKey key]; the host inserts now and a reserved
+// zero word after the code.
+// runningDelegationIds (P24): halt asks it synchronously after SETTLE (bud_facts::running_ids, answers queued by the
+// `rdi` lines and taken one per query). The query is logged as `E rdi s:<sessionId units> b:<budgetId units>` at the effect
+// position it was asked at (the effect count the host fact recorded), so the trace shows it after SETTLE's timerClear.
+// Effects: [31] cancelRecovery, [32] stopMain,
+// [33, i] stopDelegation of the i-th id of that query's answer, [34] stopAttachedTurns, [35] holdQueued, [36] save,
 // [20] changed, [37] announce, [21] carryHeld, [22] uuid, [12, req, eff] timerSet, [13] timerClear, [14] timerForget.
 // Timers (M9): timerSet registers token t<n> due at now + eff with the call's ref (the callback's captured ref) and
 // makes it the budget's timer; timerClear cancels the budget's timer; timerForget drops the budget's handle. adv fires
@@ -51,7 +54,6 @@ struct World {
     op: Vec<i64>,
     now: i64,
     rdi: Vec<Vec<i64>>,
-    next_rdi: usize,
     seq: u64,
     active: Vec<Timer>,
     by_bid: HashMap<Vec<i64>, u64>,
@@ -99,7 +101,6 @@ impl World {
             op: Vec::with_capacity(256),
             now: 1700000000000,
             rdi: Vec::new(),
-            next_rdi: 0,
             seq: 0,
             active: Vec::new(),
             by_bid: HashMap::new(),
@@ -145,29 +146,29 @@ impl World {
     // One public call (or FIRE); returns the status after the Grow retries, then performs the effects.
     fn call(&mut self, body: &[i64]) -> i64 {
         let mut r = 0;
-        let empty = vec![0i64];
-        let ids: Vec<i64> = self.rdi.get(self.next_rdi).cloned().unwrap_or(empty);
         let mut op = std::mem::take(&mut self.op);
         op.clear();
         op.push(body[0]);
         op.push(self.now);
         op.push(0);
         op.extend_from_slice(&body[1..]);
-        op.extend_from_slice(&ids);
         CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut grew = false;
         let before = bud_facts::calls();
+        let rbefore = bud_facts::running_calls();
         for _ in 0..8 {
             self.fx[0] = 0;
             ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let snapshot = self.audit.then(|| (self.st.clone(), self.fx.clone(), self.out.clone(), bud_facts::calls()));
+            let snapshot = self.audit.then(|| (self.st.clone(), self.fx.clone(), self.out.clone(),
+                bud_facts::calls() + bud_facts::running_calls()));
             r = sol::t_call(&mut self.st, &op, &mut self.bv, &mut self.fx, &mut self.out);
             if let Some((st, fx, out, before)) = snapshot {
                 self.log.push(format!("A {} {} {} {} {} {} {:?}",
-                    r, bud_facts::calls() - before, self.st == st, self.fx == fx,
+                    r, bud_facts::calls() + bud_facts::running_calls() - before, self.st == st, self.fx == fx,
                     self.out == out, self.out[0], &self.fx[1..1 + self.fx[0] as usize]));
             }
             if r < 0 {
+                assert!(self.fx[0] == 0, "Grow with effects");
                 self.grow((-r) as usize);
                 grew = true;
                 continue;
@@ -175,42 +176,68 @@ impl World {
             break;
         }
         let after = bud_facts::calls();
+        let rafter = bud_facts::running_calls();
         if !self.silent {
             for i in before..after {
                 self.log.push(bud_facts::quiet_log(i));
             }
         }
+        // runningDelegationIds queries of this call: (effect position, log line, wire answer `n, keys`)
+        let mut rq: Vec<(usize, String, Vec<i64>)> = Vec::new();
+        if !self.silent {
+            for i in rbefore..rafter {
+                let q = bud_facts::running_query(i);
+                let a = self.rdi.get(i).cloned().unwrap_or_else(|| vec![0]);
+                let line = format!("E rdi s:{} b:{}", key_units_str(&q.sid), key_units_str(&q.bid));
+                rq.push((q.fxn.max(0) as usize, line, a));
+            }
+        }
+        let mut ids: Vec<i64> = vec![0];
+        let mut nq = 0;
         if grew && r == 0 && self.fx[0] > 0 {
             GROWN_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
-        if r != 0 {
+        // fx[1..fx[0]] is valid on every status >= 0: a rejection before any write leaves it empty, and halt's
+        // terminal 2 / 6 after SETTLE (bud_halt.pruv header) carries the timerClear SETTLE applied, which the host
+        // must apply too. A Grow never carries effects (every reserve precedes the first write).
+        if r < 0 {
             self.op = op;
+            for (_, line, _) in rq.drain(..) {
+                self.note(line);
+            }
             self.note(format!("X {}", r));
             return r;
         }
         // the call's ref (framed packed keys): scheduler key and captured ref
         let se = rec_end(&op, 14);
         let be = rec_end(&op, se);
-        let sid = op[14..se].to_vec();
-        let bid = op[se..be].to_vec();
+        // borrowed: the perf lane's effects (31..37) touch neither, so only a timer set copies them
+        let sid = &op[14..se];
+        let bid = &op[se..be];
         let used = self.fx[0].max(0) as usize;
         let mut i = 1;
         while i <= used {
+            while nq < rq.len() && rq[nq].0 + 1 <= i {
+                let line = rq[nq].1.clone();
+                ids = rq[nq].2.clone();
+                self.note(line);
+                nq += 1;
+            }
             let e = self.fx[i];
             match e {
                 12 => {
                     let req = self.fx[i + 1];
                     let eff = self.fx[i + 2];
                     self.seq += 1;
-                    self.active.push(Timer { token: self.seq, due: self.now + eff, sid: sid.clone(), bid: bid.clone() });
-                    self.by_bid.insert(bid.clone(), self.seq);
+                    self.active.push(Timer { token: self.seq, due: self.now + eff, sid: sid.to_vec(), bid: bid.to_vec() });
+                    self.by_bid.insert(bid.to_vec(), self.seq);
                     let s = format!("E set t{} {} {}", self.seq, req, eff);
                     self.note(s);
                     i += 3;
                     continue;
                 }
                 13 => {
-                    let s = match self.by_bid.remove(&bid) {
+                    let s = match self.by_bid.remove(bid) {
                         Some(tok) => {
                             self.active.retain(|t| t.token != tok);
                             format!("E clear t{}", tok)
@@ -220,14 +247,10 @@ impl World {
                     self.note(s);
                 }
                 14 => {
-                    self.by_bid.remove(&bid);
-                }
-                30 => {
-                    self.next_rdi += 1;
-                    self.note("E rdi".to_string());
+                    self.by_bid.remove(bid);
                 }
                 33 => {
-                    // the k-th id of the answer passed in (`n, (len, words(len))*`), printed in units; the log is
+                    // the k-th id of the last answer taken (`n, (len, words(len))*`), printed in units; the log is
                     // the only consumer, so a silent (perf) run skips the walk and the formatting
                     if !self.silent {
                         let k = self.fx[i + 1].max(0) as usize;
@@ -241,6 +264,7 @@ impl World {
                     i += 2;
                     continue;
                 }
+                _ if self.silent => {}
                 _ => {
                     let s = match e {
                         20 => "E changed".to_string(),
@@ -259,7 +283,16 @@ impl World {
             }
             i += 1;
         }
+        while nq < rq.len() {
+            let line = rq[nq].1.clone();
+            self.note(line);
+            nq += 1;
+        }
         self.op = op;
+        if r != 0 {
+            self.note(format!("X {}", r));
+            return r;
+        }
         if !self.silent {
             let w: Vec<String> = match self.out[0] {
                 4 => {
@@ -374,6 +407,9 @@ fn run_q() {
                 bud_facts::record_queries();
                 bud_facts::set_answers(&[], 0);
                 bud_facts::set_calls(0);
+                bud_facts::record_running();
+                bud_facts::set_running(Vec::new());
+                bud_facts::set_running_calls(0);
                 writeln!(o, "case {}", p[1]).unwrap();
             }
             "now" => w.now = p[1].parse().unwrap(),
@@ -385,7 +421,13 @@ fn run_q() {
             // Test-only: consume the remaining arena with unreferenced padding.
             "fill_arena" => w.st[10] = w.st[11],
             "quiet" => bud_facts::set_answers(&nums(&p[1..]), 0),
-            "rdi" => w.rdi.push(nums(&p[1..])),
+            "rdi" => {
+                let a = nums(&p[1..]);
+                let mut v = vec![0i64];
+                v.extend_from_slice(&a);
+                bud_facts::push_running(v);
+                w.rdi.push(a);
+            }
             "put" => w.put(&nums(&p[1..])),
             "adv" => {
                 w.log.push("@ -".to_string());
@@ -473,7 +515,7 @@ fn run_perf(args: &[String]) {
     let r = rec(bid, PERF_REST);
     put.push(r.len() as i64);
     put.extend(r);
-    let mut ids = vec![d as i64];
+    let mut ids = vec![0i64, d as i64];
     for i in 0..d {
         ids.extend(key(&format!("d{:04}", i)));
     }
@@ -487,15 +529,20 @@ fn run_perf(args: &[String]) {
     w.silent = true;
     w.put(&put);
     let mut go = |w: &mut World| {
-        w.rdi.clear();
-        w.rdi.push(ids.clone());
-        w.next_rdi = 0;
+        // the host builds its answer for the one query of the call (the hand baseline does the same)
+        bud_facts::set_running(vec![ids.clone()]);
+        bud_facts::set_running_calls(0);
         black_box(w.call(black_box(&body)));
         w.put(black_box(&put));
     };
     for _ in 0..1000 {
         go(&mut w);
     }
+    // the halt ran: one query, D stops (2D + 7 effect words, no timerClear: the perf budget has no clock)
+    bud_facts::set_running(vec![ids.clone()]);
+    bud_facts::set_running_calls(0);
+    assert!(w.call(&body) == 0 && w.fx[0] == 2 * d as i64 + 7 && bud_facts::running_calls() == 1);
+    w.put(&put);
     let t = Instant::now();
     for _ in 0..reps {
         go(&mut w);
