@@ -160,6 +160,7 @@ fn fix_for(code: &str) -> &'static str {
         "decreases_decrease" => "the decreases expression must strictly decrease each iteration",
         "recursive_nonneg" => "the decreases measure must be >= 0 at function entry and at every recursive call; add a requires, or guard the call with an if/match",
         "recursive_decrease" => "the callee's measure must be strictly smaller than the caller's entry measure: recurse on a smaller argument (a child of a match binder, an index one closer to the end), or fix the measure",
+        "opaque_total" => "an opaque body must be defined for every argument: guard each partial operation inside the body (for example i < len(a) && a[i] > 0)",
         "variant_domain" => "guard the lookup so it is only reached for that variant, e.g. `is_variant(e, E::V) && variant_field(e, E::V, f) > 0` or `!is_variant(e, E::V) || ...`",
         "contract_domain" => "guard the partial operation earlier in the same contract or in an earlier clause: index range, divisor != 0, is_some/is_ok before some_val/ok_val/err_val, lo < hi before max/min",
         "elem_range" => "store or fill only values in 0..=255 into a [u8] array: bound the value with requires, an if, or a loop invariant",
@@ -244,15 +245,14 @@ fn set_key(kv: &mut Vec<(String, Json)>, key: &str, v: Json) {
 impl<'a> FnVerifier<'a> {
     /// Prototype path: the error wording (`what`) is left empty.
     pub fn prove(&mut self, st: &State, g: &[Ast], ob: &Ast, node: Pos, code: &str, key_extra: Option<&str>) {
-        self.prove_core(&st.env, &st.pc, g, ob, node, code, "", key_extra);
+        self.prove_core(st, g, ob, node, code, "", key_extra);
     }
 
     /// verify.py `prove(st, g, ob, node, code, what, key_extra)` (line 254). The state is taken as (env, pc).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn prove_core(
         &mut self,
-        senv: &Env,
-        pc: &[Ast],
+        st: &State,
         g: &[Ast],
         ob: &Ast,
         node: Pos,
@@ -260,15 +260,14 @@ impl<'a> FnVerifier<'a> {
         what: &str,
         key_extra: Option<&str>,
     ) {
-        self.prove_core_cand(senv, pc, g, ob, node, code, what, key_extra, None);
+        self.prove_core_cand(st, g, ob, node, code, what, key_extra, None);
     }
 
     /// `prove_core` + `cand` for recording.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn prove_core_cand(
         &mut self,
-        senv: &Env,
-        pc: &[Ast],
+        st: &State,
         g: &[Ast],
         ob: &Ast,
         node: Pos,
@@ -301,21 +300,21 @@ impl<'a> FnVerifier<'a> {
             return;
         }
         if probing {
-            self.probe_attempts(pc, g, ob, code, cand.unwrap_or(""), idx);
+            self.probe_attempts(&st.pc, g, ob, code, cand.unwrap_or(""), idx);
             return;
         }
         // First without the aggregate lemmas: assumptions are few, so unsat here is a sound proof,
         // and it drops the quantified lemmas for the many obligations that do not need them
-        let (mut sol, mut r) = self.run_attempt(pc, g, ob, false, idx);
+        let (mut sol, mut r) = self.run_attempt(&st.pc, g, ob, false, idx);
         if r == Sat::Unsat {
             return;
         }
         let mut relaxed: Option<Vec<(String, Json)>> = None;
         if !self.lemmas.is_empty() {
             if r == Sat::Sat {
-                relaxed = Some(self.cex(&sol.model(), senv));
+                relaxed = Some(self.cex(&sol.model(), &st.env));
             }
-            let (s2, r2) = self.run_attempt(pc, g, ob, true, idx);
+            let (s2, r2) = self.run_attempt(&st.pc, g, ob, true, idx);
             sol = s2;
             r = r2;
             if r == Sat::Unsat {
@@ -326,7 +325,7 @@ impl<'a> FnVerifier<'a> {
         let fix = fix_for(code).to_string();
         let (code2, msg, cex) = if r == Sat::Sat || relaxed.is_some() {
             let cex = if r == Sat::Sat {
-                self.cex(&sol.model(), senv)
+                self.cex(&sol.model(), &st.env)
             } else {
                 let mut m = relaxed.unwrap_or_default();
                 let note = format!(
@@ -336,7 +335,19 @@ impl<'a> FnVerifier<'a> {
                 set_key(&mut m, "_note", Json::Str(note));
                 m
             };
-            (code.to_string(), format!("cannot prove {} in {}", what, self.fname), Some(Json::Obj(cex)))
+            let mut cex = cex;
+            let mut msg = format!("cannot prove {} in {}", what, self.fname);
+            let hid = self.hidden(st);
+            if !hid.is_empty() {
+                // P13o (P13o.3): name the opaque functions whose bodies the proof did not see
+                for h in &hid {
+                    msg.push_str(&format!(
+                        " (opaque {h} is not revealed here; add reveal {h}; before this point if the proof needs its body)"
+                    ));
+                }
+                set_key(&mut cex, "_opaque", Json::Arr(hid.into_iter().map(Json::Str).collect()));
+            }
+            (code.to_string(), msg, Some(Json::Obj(cex)))
         } else {
             (
                 "verify_unknown".to_string(),

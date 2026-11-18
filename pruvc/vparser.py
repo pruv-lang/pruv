@@ -113,11 +113,12 @@ def _move_token(src, end, toks):
 # `kw` token only in the positions below; everywhere else they stay the old reserved_name error.
 #   mod   at top level (brace depth 0), at the start of an item (first token, after `}` or `;`, or after `pub`), and
 #         followed by a name, a string or `{` (so `mod x;`, `mod "p";`, `mod x { }` reach the module-syntax errors)
-#   pub   at top level, at the start of an item (or after another `pub`), followed by fn/struct/enum/mod/trusted/rust/pub
+#   pub   at top level, at the start of an item (or after another `pub`), followed by
+#         fn/struct/enum/mod/trusted/rust/opaque/pub
 #   crate right before `::`, not after fn/let/mut/struct/enum and not after `.` or `::`
 _G4_SKIP = r"(?:[ \t\r\n]|//[^\n]*(?=\n|\Z))*"
 _G4_MOD_AHEAD = re.compile(_G4_SKIP + r"[A-Za-z_\"{]")
-_G4_PUB_AHEAD = re.compile(_G4_SKIP + r"(?:fn|struct|enum|mod|pub|trusted|rust)(?![A-Za-z0-9_])")
+_G4_PUB_AHEAD = re.compile(_G4_SKIP + r"(?:fn|struct|enum|mod|pub|trusted|rust|opaque)(?![A-Za-z0-9_])")
 _G4_CRATE_AHEAD = re.compile(_G4_SKIP + r"::")
 
 
@@ -266,6 +267,13 @@ class Parser:
                                      'write `trusted rust fn name(..) -> T ensures .. = "::path";`')
                 s.next(); s.next()
                 f = s.function(t)
+                p.functions.append(f)
+                p.items.append(f)
+            elif s.peek().kind == "id" and s.peek().val == "opaque" and s.at("fn", 1):
+                s.next()                  # P13o: `opaque fn` keeps its body out of contracts until `reveal`
+                f = s.function()
+                f.pub = pub is not None
+                f.opaque = True
                 p.functions.append(f)
                 p.items.append(f)
             elif s.peek().kind == "id" and s.peek().val == "rust" and s.at("fn", 1):
@@ -850,6 +858,15 @@ class Parser:
             s.next()
             v = s.expr(); s.expect(";")
             return Assert(L, C, v)
+        if t.kind == "id" and t.val == "reveal" and (s.peek(1).kind == "id" or s.at("crate", 1)):
+            # P13o: `reveal F;` is a proof-only statement (an assert of true that carries the revealed function)
+            s.next()
+            nt = s.peek()
+            name = "::".join(["crate"] + s.crate_path(False)[1]) if s.at("crate") else s.ident().val
+            s.expect(";")
+            a = Assert(L, C, BoolLit(L, C, True))
+            a.reveal = Call(nt.line, nt.col, name, [])
+            return a
         if s.at("match"):
             s.next()
             scr = s.expr()

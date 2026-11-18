@@ -1,0 +1,1 @@
+{"stage": "verify", "code": "index_oob", "line": 16, "col": 11, "message": "cannot prove index in bounds for a[...] in crate::after (opaque crate::good is not revealed here; add reveal crate::good; before this point if the proof needs its body)"}

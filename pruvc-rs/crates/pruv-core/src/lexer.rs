@@ -164,7 +164,7 @@ fn g4_token(word: &str, src: &[char], end: usize, toks: &[Tok], depth: usize) ->
         r += 1;
     }
     let w: String = src[q..r].iter().collect();
-    matches!(w.as_str(), "fn" | "struct" | "enum" | "mod" | "pub" | "trusted" | "rust")
+    matches!(w.as_str(), "fn" | "struct" | "enum" | "mod" | "pub" | "trusted" | "rust" | "opaque")
 }
 
 /// The operator token starting at pos (regex order: 3 characters, 2 characters, 1 character).

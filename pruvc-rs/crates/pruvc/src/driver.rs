@@ -345,6 +345,7 @@ fn compile(a: &Args, graph: Option<&pruv_core::manifest::Graph>) -> Result<(), F
         } else {
             pruv_proof::verify_program_cached(&prog, &tt, None, cache.clone()).map_err(Fail::Internal)?
         };
+        pruv_core::check::opaque_inline(&mut prog); // P13o: contract applications of opaque functions become bodies
         // G4b-2: the trust report is written after verification, proved or not, before the proof errors are returned
         if let Some(p) = &a.trust_report {
             write_trust_report(a, p, &prog, g4.as_ref(), graph, cache.as_deref())?;
@@ -354,6 +355,7 @@ fn compile(a: &Args, graph: Option<&pruv_core::manifest::Graph>) -> Result<(), F
         }
     } else {
         // G4b-2: with --no-verify the report comes right where verification would have been
+        pruv_core::check::opaque_inline(&mut prog); // P13o: same place as after verification
         if let Some(p) = &a.trust_report {
             write_trust_report(a, p, &prog, g4.as_ref(), graph, None)?;
         }

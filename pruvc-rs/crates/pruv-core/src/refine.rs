@@ -332,7 +332,7 @@ impl At {
         Expr::Binary(Binary { line: self.line, col: self.col, op: op.to_string(), left: Box::new(l), right: Box::new(r), ty: None })
     }
     fn length(&self, n: &str) -> Expr {
-        Expr::Call(Call { line: self.line, col: self.col, name: "len".to_string(), args: vec![self.var(n)], ty: None, targs: None, inst: None, old: None })
+        Expr::Call(Call { line: self.line, col: self.col, name: "len".to_string(), args: vec![self.var(n)], ty: None, targs: None, inst: None, old: None, opaque_c: false })
     }
     /// L <= v && v <= U (v is a function that builds a fresh i64 expression each time)
     fn within(&self, v: &dyn Fn() -> Expr, r: &Refinement) -> Expr {
@@ -377,7 +377,7 @@ fn parts(r: &Refinement, name: &str, kname: &str) -> Vec<(&'static str, Expr)> {
 }
 
 fn synth_assert(r: &Refinement, expr: Expr, code: &str, what: String) -> Stmt {
-    Stmt::Assert(Assert { line: r.line, col: r.col, cond: expr, origin_code: Some(code.to_string()), origin_what: Some(what) })
+    Stmt::Assert(Assert { line: r.line, col: r.col, cond: expr, origin_code: Some(code.to_string()), origin_what: Some(what), reveal: None })
 }
 
 /// A scope that preserves declaration order (Python dict). Re-inserting the same name keeps its position and only replaces the value.
@@ -426,6 +426,7 @@ impl Expander {
                                     cond: ex,
                                     origin_code: Some("refinement_assign".to_string()),
                                     origin_what: Some(what),
+                                    reveal: None,
                                 });
                             }
                             ia.post_refine = posts;

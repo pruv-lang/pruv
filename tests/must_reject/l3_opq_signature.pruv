@@ -1,0 +1,3 @@
+// P13o: only a bool predicate may be opaque
+pub opaque fn half(a: [i64]) -> i64
+{ return len(a) / 2; }

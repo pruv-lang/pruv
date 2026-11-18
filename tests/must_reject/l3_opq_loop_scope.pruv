@@ -1,0 +1,17 @@
+// P13o: a reveal inside a loop body ends with its iteration; the read after the loop is not covered
+pub opaque fn good(a: [i64], i: i64) -> bool
+{ return 0 <= i && i < len(a) && a[i] > 0; }
+
+pub fn after(a: [i64], i: i64) -> i64
+  requires good(a, i)
+{
+  let mut k: i64 = 0;
+  while k < 1
+    invariant 0 <= k && k <= 1
+    decreases 1 - k
+  {
+    reveal good;
+    k = k + 1;
+  }
+  return a[i];
+}

@@ -1118,7 +1118,19 @@ impl<'a> Rs<'a> {
                         self.rexpr(v)?;
                     }
                 }
-                Stmt::Assert(a) => self.rexpr(&mut a.cond)?,
+                Stmt::Assert(a) => {
+                    self.rexpr(&mut a.cond)?;
+                    if let Some((n, l, c)) = a.reveal.take() {
+                        // P13o: the revealed name resolves like a call
+                        let mut ce = Expr::Call(Call {
+                            line: l, col: c, name: n.clone(), args: vec![], ty: None, targs: None, inst: None,
+                            old: None, opaque_c: false,
+                        });
+                        self.rexpr(&mut ce)?;
+                        let n2 = if let Expr::Call(cc) = &ce { cc.name.clone() } else { n };
+                        a.reveal = Some((n2, l, c));
+                    }
+                }
                 Stmt::Par(x) => {
                     for c in &mut x.calls {
                         self.rexpr(c)?;

@@ -807,10 +807,14 @@ class State:
     def __init__(s, env, pc):
         s.env, s.pc = env, pc
         s.obs = frozenset()     # G9 A1: ids of the recursive-value facts already in pc (immutable, shared by forks)
+        s.rev = frozenset()     # P13o: names of the opaque functions revealed on this path
+        s.apps = ()             # P13o: (function, application term, argument values) met on this path, in order
+        s.app_ids = frozenset()
 
     def fork(s, extra=None):
         n = State(dict(s.env), s.pc + ([extra] if extra is not None else []))
         n.obs = s.obs
+        n.rev, n.apps, n.app_ids = s.rev, s.apps, s.app_ids
         return n
 
 
@@ -920,6 +924,19 @@ def _expr_text(e):
     return "..."
 
 
+def _opq_parts(args):
+    """P13o: the argument encodings of an opaque application: an array is its contents and its length"""
+    out = []
+    for a in args:
+        if isinstance(a, Arr):
+            out += [a.a, a.n]
+        elif isinstance(a, Map):
+            out += [a.d, a.a, a.n]
+        else:
+            out.append(a)
+    return out
+
+
 def _occurs(t, c):
     """does z3 constant c appear in term t"""
     seen, todo = set(), [t]
@@ -980,6 +997,7 @@ FIX = {
     "recursive_nonneg": "the decreases measure must be >= 0 at function entry and at every recursive call; add a requires, or guard the call with an if/match",
     "recursive_decrease": "the callee's measure must be strictly smaller than the caller's entry measure: recurse on a smaller argument (a child of a match binder, an index one closer to the end), or fix the measure",
     "variant_domain": "guard the lookup so it is only reached for that variant, e.g. `is_variant(e, E::V) && variant_field(e, E::V, f) > 0` or `!is_variant(e, E::V) || ...`",
+    "opaque_total": "an opaque body must be defined for every argument: guard each partial operation inside the body (for example i < len(a) && a[i] > 0)",
     "contract_domain": "guard the partial operation earlier in the same contract or in an earlier clause: index range, divisor != 0, is_some/is_ok before some_val/ok_val/err_val, lo < hi before max/min",
     "elem_range": "store or fill only values in 0..=255 into a [u8] array: bound the value with requires, an if, or a loop invariant",
     "string_slice_range": "keep 0 <= lo <= hi <= len(s) for substr(s, lo, hi): bound lo and hi with requires, an if, or a loop invariant (a counterexample str may not be valid UTF-8)",
@@ -1005,6 +1023,7 @@ class FnVerifier:
         s.k = 0
         s.seen = set()
         s.qstack = []
+        s.opq_fns = {}      # P13o: opaque function name -> its uninterpreted symbol opq!F
         s.aggs = {}
         s.lemmas = []
         s.lemma_keys = set()
@@ -1218,6 +1237,11 @@ class FnVerifier:
         if r == z3.sat or relaxed is not None:
             cex = s.cex(sol.model(), st) if r == z3.sat else dict(relaxed, _note="counterexample ignores aggregate (sum/count/max/min) definitions; retry with them: %s" % sol.reason_unknown())
             code2, msg = code, "cannot prove %s in %s" % (what, s.f.name)
+            hid = s.hidden(st)
+            if hid:     # P13o (P13o.3): name the opaque functions whose bodies the proof did not see
+                msg += "".join(" (opaque %s is not revealed here; add reveal %s; before this point if the proof needs "
+                               "its body)" % (h, h) for h in hid)
+                cex = dict(cex or {}, _opaque=hid)
         else:
             code2, msg = "verify_unknown", "solver gave up proving %s in %s (%s)" % (what, s.f.name, sol.reason_unknown())
         s.errors.append(PruvError("verify", node.line, node.col, code2, msg, FIX.get(code, ""), cex,
@@ -1909,6 +1933,8 @@ class FnVerifier:
             o = s.model.res(s.model.type_of(args[0]))
             return o.is_ok(args[0]) if n == "is_ok" else o.oval(args[0]) if n == "ok_val" else o.eval(args[0])
         f = s.funcs[n]
+        if f.opaque and not code:   # P13o: a contract application of an opaque function is its symbol
+            return s.opq(f, args, st)
         cenv = {p.name: a for p, a in zip(f.params, args)}
         # G5 A1 (5.2 step 2): the pre-call arrays freeze as the callee's old bindings (scoped to this contract
         # evaluation: the caller's own snapshot map is never touched)
@@ -1960,7 +1986,10 @@ class FnVerifier:
             # P07: the callee's body is its contract expansion (no requires, so its code proof covers every
             # argument): the result equals the template over the arguments. Evaluated before "result" is bound,
             # so a parameter named result keeps its argument value.
-            xv = s.ev(xa, st, g, False, cenv) if code and xa is not None else None
+            if code and f.opaque:   # P13o: the result is the symbol; its body is known only where F is revealed
+                xv = s.opq(f, args, st)
+            else:
+                xv = s.ev(xa, st, g, False, cenv) if code and xa is not None else None
             cenv["result"] = res
             for en in f.ensures:
                 s.assume(st, g, s.ev(en, st, g, False, cenv))
@@ -1971,6 +2000,50 @@ class FnVerifier:
             return res
         finally:
             s.theta = saved
+
+    def opq(s, f, args, st):
+        """P13o (appendix P13o.1): the application of the opaque function f to the argument values: the
+        uninterpreted opq!F over the argument encodings (an array is its contents and its length). Under a quantifier
+        whose bound variable reaches an argument the application is expanded in place instead (a reveal equation
+        cannot mention a bound variable). A new application is recorded on the path; if F is revealed on the path
+        its equation is appended to pc at once."""
+        if s.qstack and any(_occurs(t, c) for t in _opq_parts(args) for c in s.qstack):
+            return s.opq_body(f, args, st)
+        parts = _opq_parts(args)
+        fn = s.opq_fns.get(f.name)
+        if fn is None:
+            fn = z3.Function("opq!" + f.name, *([t.sort() for t in parts] + [z3.BoolSort()]))
+            s.opq_fns[f.name] = fn
+        app = fn(*parts)
+        i = app.get_id()
+        if i not in st.app_ids:
+            st.apps = st.apps + ((f, app, tuple(args)),)
+            st.app_ids = st.app_ids | {i}
+            if f.name in st.rev:
+                st.pc.append(app == s.opq_body(f, args, st))
+        return app
+
+    def opq_body(s, f, args, st):
+        """P13o: the body of the opaque f over the argument values (its contract template; opaque calls in it stay
+        symbols, so a reveal does not cascade)"""
+        return s.ev(f.x_auto, st, [], False, {p.name: a for p, a in zip(f.params, args)})
+
+    def reveal(s, stmt, st):
+        """P13o: `reveal F;` makes F transparent on the rest of this path: the equation of every application already
+        met, in the order met; later applications add theirs when met (opq)"""
+        st = st.fork()
+        name = stmt.reveal.name
+        if name in st.rev:
+            return [st]
+        st.rev = st.rev | {name}
+        for f, app, args in st.apps:
+            if f.name == name:
+                st.pc.append(app == s.opq_body(f, list(args), st))
+        return [st]
+
+    def hidden(s, st):
+        """P13o: the opaque functions applied on this path and not revealed, sorted"""
+        return sorted({f.name for f, _, _ in st.apps if f.name not in st.rev})
 
     def inout_finals(s, e, f, ios, args, cenv, st, g):
         """G5 A1 (G5_SPEC 5.2 step 5): for every inout argument in parameter order, fresh contents of exactly the
@@ -2756,6 +2829,8 @@ class FnVerifier:
             v = s.ev(stmt.value, st, [], True) if stmt.value is not None else None
             s.ensures_ok(st, v, stmt)
             return []
+        if isinstance(stmt, Assert) and stmt.reveal is not None:     # P13o: proof-only, no query
+            return s.reveal(stmt, st)
         if isinstance(stmt, Assert):
             ob = s.check_assert(stmt, st)
             st = st.fork(ob)
@@ -2876,14 +2951,17 @@ class FnVerifier:
     def run(s):
         f = s.f
         env, pc = {}, []
+        shape = []      # P13o: the facts every value of the parameter types meets in a contract too
         for p in f.params:
             v = s.fresh(p.name, p.type)
             if isinstance(v, Arr):
                 pc.append(z3.And(v.n >= 0, v.n <= MAX_LEN))
                 if v.elem == U8:
                     pc.append(u8_dom(v))
+                shape.extend(pc[-2:] if v.elem == U8 else pc[-1:])
             elif isinstance(v, Map):    # G6 A1
                 pc.append(z3.And(v.n >= 0, v.n <= MAX_LEN))
+                shape.append(pc[-1])
             else:
                 w = s.wf(p.type, v)
                 if w is not None:
@@ -2894,6 +2972,14 @@ class FnVerifier:
         # array and is rebound by element stores, calls and loop havoc, never the snapshot
         s.snap = {p.name: env[p.name] for p in f.params if p.mode is not None}
         st = State(env, pc)
+        if f.opaque and f.x_auto is not None:
+            # P13o (P13o.1 totality): the body is defined for every argument, proven once here, so a reveal equation
+            # never stands on an undefined body. Contract arithmetic is unbounded, so a contract may apply F to a
+            # scalar outside i64 (or to an array element, which has no i64 fact): the proof assumes only the array
+            # and map shape facts, never the i64 range of a scalar parameter (audit P13o.9)
+            st0 = State(dict(env), list(shape))
+            for d, _ in s.dom_obligations(f.x_auto, st0, [], st0.env):
+                s.prove(st0, [], d, f, "opaque_total", "the body of opaque %s is defined for every argument" % f.name)
         for r in f.requires:
             # D(r) is proven from the earlier requires only, then D(r) && r is assumed, in declaration order
             s.check_dom(st, [], r, r, "variant_field lookups in requires (line %d) are defined" % r.line)

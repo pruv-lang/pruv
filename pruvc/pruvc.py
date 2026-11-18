@@ -47,7 +47,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from vast import PruvError  # noqa: E402
 from vparser import parse, RUST_KEYWORDS  # noqa: E402
 from modules import load_program  # noqa: E402
-from check import check  # noqa: E402
+from check import check, opaque_inline  # noqa: E402
 from codegen import gen_rust, gen_rust_ex  # noqa: E402
 from typeinfo import g2_unimplemented_error, first_g3_use  # noqa: E402
 from mono import specialize  # noqa: E402
@@ -122,6 +122,7 @@ def compile_file(path, out, verify=True, trust_callers=False, backend="rust", ru
         errs = []
     else:
         errs = []
+    opaque_inline(prog)     # P13o: after verification, contract applications of opaque functions become their bodies
     if trust_report is not None:
         # G4b-2: after verification (proved or not); a language error raised here is the compile's result
         _write_trust_report(prog, path, trust_report, verify, trust_callers, budget, infer, foreign_checks,

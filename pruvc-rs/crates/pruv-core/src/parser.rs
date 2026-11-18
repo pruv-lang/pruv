@@ -268,6 +268,14 @@ impl Parser {
                 self.fn_pub.push(false);
                 p.functions.push(f);
                 self.items.push(Item::Fn(p.functions.len() - 1));
+            } else if self.peek(0).kind == Kind::Id && self.peek(0).val == "opaque" && self.at("fn", 1) {
+                // P13o: `opaque fn` keeps its body out of contracts until `reveal`
+                self.bump();
+                let mut f = self.function(None)?;
+                f.opaque = true;
+                self.fn_pub.push(is_pub);
+                p.functions.push(f);
+                self.items.push(Item::Fn(p.functions.len() - 1));
             } else if self.peek(0).kind == Kind::Id && self.peek(0).val == "rust" && self.at("fn", 1) {
                 let t = self.peek(0).clone();
                 return Err(self.foreign_syntax(&t, "missing `trusted`", "write `trusted rust fn ...`"));
@@ -488,11 +496,11 @@ impl Parser {
                 return Ok(Expr::StructLit(StructLit { line, col, name: path, fields, ty: None, targs: Some(targs), inst: None }));
             }
             let args = self.call_args()?;
-            return Ok(Expr::Call(Call { line, col, name: path, args, ty: None, targs: Some(targs), inst: None, old: None }));
+            return Ok(Expr::Call(Call { line, col, name: path, args, ty: None, targs: Some(targs), inst: None, old: None, opaque_c: false }));
         }
         if self.at("(", 0) {
             let args = self.call_args()?;
-            return Ok(Expr::Call(Call { line, col, name: path, args, ty: None, targs: None, inst: None, old: None }));
+            return Ok(Expr::Call(Call { line, col, name: path, args, ty: None, targs: None, inst: None, old: None, opaque_c: false }));
         }
         if self.at("{", 0) && last_upper {
             let fields = self.struct_inits()?;
@@ -1057,7 +1065,7 @@ impl Parser {
             foreign: info,
             decreases,
             cost,
-            small_bound: None, x_auto: None,
+            small_bound: None, x_auto: None, opaque: false,
         })
     }
 
@@ -1277,7 +1285,30 @@ impl Parser {
             self.bump();
             let v = self.expr()?;
             self.expect(";")?;
-            return Ok(Stmt::Assert(Assert { line: l, col: c, cond: v, origin_code: None, origin_what: None }));
+            return Ok(Stmt::Assert(Assert { line: l, col: c, cond: v, origin_code: None, origin_what: None, reveal: None }));
+        }
+        if self.peek(0).kind == Kind::Id
+            && self.peek(0).val == "reveal"
+            && (self.peek(1).kind == Kind::Id || self.at("crate", 1))
+        {
+            // P13o: `reveal F;` is a proof-only statement (an assert of true that carries the revealed function)
+            self.bump();
+            let nt = self.peek(0).clone();
+            let name = if self.at("crate", 0) {
+                let (_, segs) = self.crate_path(false)?;
+                format!("crate::{}", segs.join("::"))
+            } else {
+                self.ident()?.val
+            };
+            self.expect(";")?;
+            return Ok(Stmt::Assert(Assert {
+                line: l,
+                col: c,
+                cond: Expr::BoolLit(BoolLit { line: l, col: c, value: true, ty: None }),
+                origin_code: None,
+                origin_what: None,
+                reveal: Some((name, nt.line, nt.col)),
+            }));
         }
         if self.at("match", 0) {
             self.bump();
@@ -1807,7 +1838,7 @@ impl Parser {
                     }
                 }
                 self.expect(")")?;
-                return Ok(Expr::Call(Call { line, col, name: t.val.clone(), args, ty: None, targs, inst: None, old: None }));
+                return Ok(Expr::Call(Call { line, col, name: t.val.clone(), args, ty: None, targs, inst: None, old: None, opaque_c: false }));
             }
             return Ok(Expr::Var(Var { line, col, name: t.val, ty: None }));
         }

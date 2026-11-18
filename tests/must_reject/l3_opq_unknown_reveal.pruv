@@ -1,0 +1,6 @@
+// P13o: reveal of an unknown name
+pub fn f(a: [i64]) -> i64
+{
+  reveal nope;
+  return 0;
+}

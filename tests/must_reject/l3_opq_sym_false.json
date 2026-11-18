@@ -1,0 +1,1 @@
+{"stage": "verify", "code": "ensures", "line": 7, "col": 3, "message": "cannot prove postcondition (line 6) in crate::claim (opaque crate::good is not revealed here; add reveal crate::good; before this point if the proof needs its body)"}

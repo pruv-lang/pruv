@@ -1,0 +1,58 @@
+// P13o: an opaque bool predicate is an uninterpreted symbol in every query until `reveal F;` on the path.
+// Facts that only pass the symbol along (requires to ensures, equal arguments) need no reveal; facts that read the
+// body reveal it once.
+pub opaque fn good(a: [i64], i: i64) -> bool
+{ return 0 <= i && i < len(a) && a[i] > 0; }
+
+// pass-through: the symbol is carried from requires to ensures without its body
+fn keep(a: [i64], i: i64) -> i64
+  requires good(a, i)
+  ensures good(a, i) && result == 0
+{ return 0; }
+
+// reading the body: reveal before the read, so i is in range
+pub fn read(a: [i64], i: i64) -> i64
+  requires good(a, i)
+  ensures result > 0
+{
+  reveal good;
+  return a[i];
+}
+
+// establishing the predicate needs the body too; the reveal comes after the application is met
+pub fn make(a: [i64], i: i64) -> bool
+  ensures result == good(a, i)
+{
+  if 0 <= i && i < len(a) {
+    if a[i] > 0 {
+      reveal good;
+      return good(a, i);
+    }
+  }
+  reveal good;
+  return good(a, i);
+}
+
+// a code call of an opaque function: its result is the symbol, chained through keep without a reveal
+pub fn chain(a: [i64], i: i64) -> i64
+{
+  if good(a, i) {
+    let k: i64 = keep(a, i);
+    reveal good;
+    return a[i] - k;
+  }
+  return 0;
+}
+
+// a quantified argument expands in place (no reveal needed, none possible)
+pub fn all_good(a: [i64]) -> i64
+  requires forall j in 0..len(a): a[j] > 0
+  ensures forall j in 0..len(a): good(a, j)
+{ return 0; }
+
+// a contract argument outside i64 (an array element has no i64 fact, contract arithmetic is unbounded): the body
+// is total over every integer, so the application needs no range fact
+pub fn shifted(a: [i64], i: i64) -> i64
+  requires forall j in 0..len(a): good(a, a[j] + 1)
+  requires good(a, i + 1)
+{ return 0; }

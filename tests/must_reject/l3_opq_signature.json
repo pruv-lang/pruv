@@ -1,0 +1,1 @@
+{"stage": "type", "code": "opaque_signature", "line": 2, "col": 12, "message": "opaque function crate::half must return bool"}

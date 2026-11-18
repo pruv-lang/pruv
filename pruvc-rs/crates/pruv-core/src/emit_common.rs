@@ -540,7 +540,7 @@ mod tests {
         Expr::Binary(Binary { line: 1, col: 1, op: op.into(), left: Box::new(l), right: Box::new(r), ty: None })
     }
     fn len(n: &str) -> Expr {
-        Expr::Call(Call { line: 1, col: 1, name: "len".into(), args: vec![var(n)], ty: None, targs: None, inst: None, old: None })
+        Expr::Call(Call { line: 1, col: 1, name: "len".into(), args: vec![var(n)], ty: None, targs: None, inst: None, old: None, opaque_c: false })
     }
     fn idx(a: &str, i: &str) -> Expr {
         Expr::Index(Index { line: 1, col: 1, array: Box::new(var(a)), index: Box::new(var(i)), ty: None })
@@ -560,7 +560,7 @@ mod tests {
         let e = bin("+", var("x"), Expr::BoolLit(BoolLit { line: 1, col: 1, value: true, ty: None }));
         assert_eq!(show(&e), "(x + true)");
         assert_eq!(show(&sorted(var("i"))), "forall i in 0..len(a): forall j in i..len(a): (a[i] <= a[j])");
-        let c = Expr::Call(Call { line: 1, col: 1, name: "f".into(), args: vec![int("-3"), var("y")], ty: None, targs: None, inst: None, old: None });
+        let c = Expr::Call(Call { line: 1, col: 1, name: "f".into(), args: vec![int("-3"), var("y")], ty: None, targs: None, inst: None, old: None, opaque_c: false });
         assert_eq!(show(&c), "f(-3, y)");
     }
 

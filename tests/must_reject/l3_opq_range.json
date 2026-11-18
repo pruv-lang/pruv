@@ -1,0 +1,1 @@
+{"stage": "verify", "code": "opaque_total", "line": 3, "col": 12, "message": "cannot prove the body of opaque crate::p is defined for every argument in crate::p"}

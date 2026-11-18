@@ -551,6 +551,8 @@ class _Resolver:
                     st.value = s.rexpr(st.value)
             elif isinstance(st, Assert):
                 st.cond = s.rexpr(st.cond)
+                if st.reveal is not None:      # P13o: the revealed name resolves like a call
+                    st.reveal = s.rexpr(st.reveal)
             elif isinstance(st, ExprStmt):
                 st.expr = s.rexpr(st.expr)
             elif isinstance(st, Par):      # G7 A0: every branch call resolves like an ordinary call

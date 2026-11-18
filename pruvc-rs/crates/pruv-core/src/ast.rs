@@ -58,6 +58,9 @@ pub struct Call {
     pub targs: Option<Vec<GType>>, pub inst: Option<Inst>,
     /// G5 A0: set by the checker on a resolved builtin `old(a)`: (parameter name, parameter position).
     pub old: Option<(String, usize)>,
+    /// P13o: set by the checker on a contract application of an opaque function (Python `Call.opaque_c`); the code
+    /// generators see its expansion (check::opaque_inline). Not emitted in the dump.
+    pub opaque_c: bool,
 }
 #[derive(Debug, Clone, PartialEq)]
 pub struct Index { pub line: i64, pub col: i64, pub array: Box<Expr>, pub index: Box<Expr>, pub ty: Ty }
@@ -241,6 +244,8 @@ pub struct Return { pub line: i64, pub col: i64, pub value: Option<Expr> }
 pub struct Assert {
     pub line: i64, pub col: i64, pub cond: Expr,
     pub origin_code: Option<String>, pub origin_what: Option<String>,
+    /// P13o: `reveal F;` (Python `Assert.reveal`): the opaque function name, with its position; cond is `true`.
+    pub reveal: Option<(String, i64, i64)>,
 }
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExprStmt { pub line: i64, pub col: i64, pub expr: Expr }
@@ -284,6 +289,8 @@ pub struct Function {
     /// P07 (docs/L3_RESTRUCTURE_SPEC.md appendix P07): the contract expansion template of an expandable function, set
     /// by the checker (Python `Function.x_auto`); a code call assumes `result == template`. Not emitted in the dump.
     pub x_auto: Option<Expr>,
+    /// P13o: `opaque fn` (Python `Function.opaque`). Not emitted in the dump.
+    pub opaque: bool,
 }
 
 /// G9 A0: checker metadata recorded on the program and the type table, only when a G9 feature is present

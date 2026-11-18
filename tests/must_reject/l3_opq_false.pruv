@@ -1,0 +1,11 @@
+// P13o: the opaque symbol proves nothing false: after reveal, good(a, i) still does not give good(a, i + 1)
+pub opaque fn good(a: [i64], i: i64) -> bool
+{ return 0 <= i && i < len(a) && a[i] > 0; }
+
+pub fn next(a: [i64], i: i64) -> i64
+  requires good(a, i) && i < 100
+  ensures good(a, i + 1)
+{
+  reveal good;
+  return 0;
+}

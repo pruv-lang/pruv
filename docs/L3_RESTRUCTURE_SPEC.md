@@ -274,6 +274,8 @@ Stage one closes every operation/size at <=1.0x (i), with uncertainty, both comp
 
 Hash threat model: most budget keys are internal UUIDs, engine IDs or local snapshots; external/imported keys still require validation and resource bounds. Default to a **per-store random seed mixed into existing mix/fin**, not a mandatory strong keyed hash for all keys. Seeded mix is not a cryptographic hash-flood defense. Maintain a max-probe counter and bounded reseed/rehash attempts; exhausted limits cause an explicit resource refusal with KD/P6 and atomicity/effect-order rules, never silent key/effect loss. Reseed recomputes stored hashes, counted as O(total key bytes+entries). Use a strong keyed hash for attacker-controlled keys; document trust classification per ingress. Test chosen collisions, retry limits and latency on both baseline implementations. Removing diffusion previously caused 43–50 average probes and ~4.1x sessions (B/M4_NOTES.md:166-176), so keep mix/fin and require evidence for changes.
 
+**Proof time is a budget too.** A proof-only change must not buy run-time speed with unbounded verifier cost. When an invariant is preserved through many calls, keep its predicate opaque (`opaque fn`, Appendix P13o) and reveal the body only on the paths that chain it, rather than expanding it at every contract instantiation. Report proof CPU next to every such change (Appendix P13a.4 is the current reference).
+
 ### 4.3 Cross-piece opportunities where proof removes checks
 
 First establish equal-work baselines. Prioritize **json tape access, ring/chunk/tail spans and card unit iteration**, where safe hand Rust may retain bounds checks LLVM cannot eliminate. For each claimed proof win, publish the hand/Pruv assembly diff and surviving/removed check counts; if none exists, classify the gain as algorithmic, allocation or data-structure work. Admission, adapters and complete operations still meet <=1.0x.
@@ -375,6 +377,7 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P11 | B/bud_store.pruv,bud_map.pruv: import I0+I1 | P: malformed headers/offsets/links/keys, linear admission counts; I2 model tests separate from safety proof. |
 | P12 | Same: local I1 mutator frames and guard removal one accessor at a time | C proof negatives if verifier changed; P Q2/Q3 churn/stale handles. Keep total accessors/step budgets until each local bound proved. |
 | P13 | Same + B/host.rs: reserve/grow/failure | P Q2/Q3 growth, no replay of effects/queries, old state valid or terminal poison; byte/copy accounting. |
+| P13o | Both checkers/verifiers: `opaque fn` and `reveal F;` (Appendix P13o) | C: positive reveal/congruence/loop-scope cases; negatives for a missing reveal, false facts through the opaque symbol, totality, signature and reveal-target misuse; framework rows equal on both compilers. Unblocks P13a step 2 (Appendix P13a.3), which lands separately. |
 | P14 (deferred) | Both checkers/verifiers: aggregate/field mutation, only if residual profile requires L2 | New C manifest and estimates before activation; alias/frame proof cannot be replaced by Q. |
 | P15 (deferred) | Both codegens/ABI: P14 lowering | C four-pair ownership/ABI probes, then touched P gates; no assumed budget gain. |
 | P16 | Both verifiers: eq_range content/frames or explicit loop lemmas | C proof positives/false equality/frame/empty/alias negatives and solver cost; preserve bounds. |
@@ -508,6 +511,7 @@ Retire only product word layout/dispatch, repeated validation after proven owner
 - Synchronous host-fact signatures, live req observation compatibility and net call costs are unverified. Req parity stays blocked until P10H and its full grid pass. Need/Resume is only for proved async hosts and needs a separate design/measurement.
 - M10b/M12, integrated scenario execution, KD judge and native/hand/LLVM perf lanes remain completion dependencies. M10 lacks hand/TS baselines; replacing archived prefetch needs live query-order evidence and the SETTLE mutant.
 - Source-only MCP linearisation is proposed, not measured. JSON 6.3x is one parser cell; Q wall times are not throughput. Key layout selection, seed/probe/refusal policy and any conditional interning need measured lifecycle/complete-operation costs.
+- Opaque predicates (P13o) are sound by construction (Appendix P13o.2) but their proof-time gain on bud_map/bud_world is not yet shown: the first P13a step-2 attempt with `kept`/`dyn_ok` opaque still needed `dyn_ok`'s body in the header-writing mutators and timed out in `put_at`/`drop_entry` (Appendix P13o.7).
 - Fixed UUID fast paths require exact form/spelling. Snapshot versioning, source-span lifetimes, escaped-string materialization/unit lengths, and host allocation/destructor contracts need integration evidence without weakening external validation or lone-surrogate equivalence.
 
 ## Appendix P06. Contract expansion and raw-entry visibility (design note for P07–P09)
@@ -1451,3 +1455,167 @@ both compilers, and root_admit proves in 7.83 s (Python) and 6.88 s (Rust).
 - Steps 3 to 5 follow, in the original order: drop the per-call `valid` (m4 should meet m4nv), remove the poison flag
   (m4raw/m4 <= 1.1x), then I1 ensures and adapter wiring.
 - The reference for proof time is now P13a.4, not 13.25 s.
+
+## Appendix P13o (opaque ground predicates: `opaque fn` and `reveal F;`)
+
+P13a.3 measured why preserving `valid` through bud_map's big mutators is slow (root_m8 Python 8.41 s to 14.65 s):
+- **Term building.** Every `kept(st, old(st))` the checker expands inline is about 30 array reads. It is rebuilt and
+  re-asserted at each contract instantiation, about 3.2 s of the 5.9 s growth.
+- **Domain queries.** Each expansion also brings a contract-domain query for its guarded reads (73 to 316 queries),
+  and every one of those is valid with no path condition.
+
+Neither cost buys anything. Most queries in a mutator never look inside `kept`; only the few that chain it
+(`kept(c, b) && kept(b, a) ==> kept(c, a)`) need the body. This is a language gap (AGENTS.md principle 5): the user
+has no way to say "this predicate is a name here, and its body there". P13o adds it.
+
+### P13o.1 Syntax and meaning
+
+- **`opaque fn` / `pub opaque fn`.** It marks a function that expands in contracts (SPEC §6, the P06 rules) and
+  returns `bool`. Its meaning is unchanged: the body. Only the verifier's view changes.
+- **Opaque by default.** Wherever the checker would put the body in place (a contract call, or the P07 fact at a
+  code call), it keeps the call. The verifier encodes the call as one application of an uninterpreted z3 function
+  `opq!F`, applied to the argument encodings. An `i64` or `bool` argument is its own term. An array argument is two
+  terms, its contents and its length. Calls with equal arguments are the same term, so congruence still works
+  (`kept(st, o)` from an `ensures` matches `kept(st, o)` in a later `requires` without the body).
+- **`reveal F;`.** A proof-only statement in a function body, like `assert`. It generates no code. F must be the
+  name (a path is allowed) of an opaque function. From that statement on, along the execution path that reaches it,
+  F is transparent:
+  - every F application already met on the path gets the equation `opq!F(t) == body(t)`;
+  - every later F application gets the same equation when it is met.
+
+  A path that does not pass through the `reveal` keeps F opaque. A loop body's reveal ends with that iteration (the
+  path after the loop continues from the loop's entry state). A callee's reveal never reaches its callers.
+- **Quantified arguments.** An application whose arguments mention a variable bound by `forall`, `exists` or an
+  aggregate is not a ground term. It is replaced by its body in place, as before P13o.
+- **Totality.** The body of an opaque function must be defined on every argument. The verifier proves its contract
+  domain once, at the definition (code `opaque_total`). Only the shape facts that every value of a parameter type
+  meets inside a contract are assumed: 0 <= len <= MAX_LEN for an array (and the byte domain for `[u8]`), the same
+  bound on a map's size. The i64 range of a scalar is not assumed. Contract arithmetic is unbounded, and an `[i64]`
+  element has no i64 fact, so a contract can apply F to `x + 1` or `a[j]` outside i64 (audit, P13o.9). After that,
+  an opaque application needs no domain obligation of its own (only its arguments' domains). This removes the
+  per-instantiation domain queries of P13a.3. Every predicate in bud_store is already written this way (guarded
+  reads).
+
+### P13o.2 Soundness
+
+Fix an opaque F with body B over parameters x. Interpret `opq!F` as the function x ↦ B(x), with B read in z3's
+total semantics. This is well defined because B is a closed, non-recursive expression over x. With this choice:
+- **Equations.** Every equation the verifier adds, `opq!F(t) == B(t)`, is true.
+- **Contract meaning.** Each contract that mentions F means what the pre-P13o expansion meant. Totality makes B's
+  z3 value its language value on every argument a contract can supply, including integers outside i64 and arguments
+  where a partial read could otherwise be unspecified. So dropping the per-application domain obligation does not admit an undefined contract.
+- **Code calls.** At a code call, the verifier assumes `result == opq!F(args)`. This is P07's fact under the same
+  interpretation. It is valid because F's code is verified separately with no assumptions (no `requires`), against
+  the same body.
+
+Each query asks whether `pc ∧ ¬goal` is unsatisfiable, with `opq!F` free. A proof therefore covers every
+interpretation of `opq!F`, including the intended one. So a proof with F opaque is a proof with F expanded, and the
+reveal equations are true facts under that interpretation.
+
+What can be lost is completeness, never soundness:
+- a goal that needs B and has no reveal fails;
+- two arrays that are equal only on the range B reads are different `opq!F` arguments.
+
+### P13o.3 Errors and counterexamples
+
+- **Checker errors** (`type` stage):
+  - `opaque_signature`: `opaque` on a function that does not expand in contracts or does not return `bool`. The
+    message gives the P06 reason.
+  - `reveal_target`: `reveal X;` where X is unknown or not opaque.
+- **`opaque_total`** (verify): the body is not defined on some argument. The counterexample gives the parameters.
+- **Proof failures with something hidden.** When a proof fails and the path holds an application of an opaque
+  function that is not revealed there, the message ends with
+  `(opaque F is not revealed here; add reveal F; before this point if the proof needs its body)`, one clause per
+  function in name order. The counterexample gets `"_opaque": ["F", ...]`, the same names. The SMT model's
+  interpretation of `opq!F` is not printed. It is an arbitrary table, and the hint says what to do about it.
+- **Same output on both compilers.** pruvc and pruvc-rs build the same terms in the same order:
+  - the application term `opq!F` is built at the call;
+  - a reveal equation is built at the `reveal` (for earlier applications, in the order they were met) or at the
+    application (for later ones), and is appended to the path condition unguarded.
+
+### P13o.4 What it does not allow
+
+- **Opaque values.** No opaque `i64` functions: the body would still be needed for every arithmetic use. No opaque
+  generic, recursive, `inout` or `requires` functions: they do not expand at all (P06).
+- **Scoped reveals.** No `reveal` inside a contract, no `reveal` that lasts past the path it is on, no reveal for one
+  goal only (Dafny's `reveal` in an `assert … by`) and no `hide`. There is one way: a `reveal` statement, scoped to
+  the rest of its path.
+- **Unrolling.** No fuel and no partial unfolding. A reveal of F does not reveal opaque functions that F's body
+  calls; each needs its own `reveal`.
+- **Visibility.** P06's `public_interface` rule still applies. A `pub` function's contract may mention only `pub`
+  functions, opaque or not, because the body is still the contract's meaning.
+
+### P13o.5 Prior art
+
+- **Dafny.** An `{:opaque}` function (`opaque function` in Dafny 4) is hidden from the verifier until a `reveal f();`
+  statement, a ghost statement like `assert`. The Boogie encoding makes the reveal a call to a generated lemma
+  ([Dafny Reference Manual](https://dafny.org/dafny/DafnyRef/DafnyRef),
+  [Dafny compilation to Boogie](https://dafny.org/dafny/Compilation/Boogie)).
+- **Verus.** `#[verifier::opaque]` keeps a spec function's body from unfolding, and `reveal(f)` makes the body
+  available for the rest of the enclosing scope. Verus presents this as solver performance control, not modularity
+  ([Modules, hiding, opaque, reveal](https://verus-lang.github.io/verus/guide/opaque.html),
+  [reveal, reveal_with_fuel, hide](https://verus-lang.github.io/verus/guide/reference-reveal-hide.html)).
+- **F\*.** `[@"opaque_to_smt"]` hides a definition from Z3, and `reveal_opaque` brings it back for the rest of the
+  scope
+  ([F\* wiki](https://github-wiki-see.page/m/FStarLang/FStar/wiki/Code-pattern-for-hiding-definitions-from-Z3-and-selectively-revealing-them)).
+
+Pruv takes the shared core of all three: an opaque marker, a statement that reveals, and an uninterpreted symbol
+with definitional equations. It leaves out fuel, `hide`, and per-assertion reveal. The scope is the execution path
+(the verifier has no joins), which in structured code is the rest of the enclosing block plus what follows it on the
+same branch.
+
+### P13o.6 Proof time (user CPU s, bench sources unchanged)
+
+The feature costs nothing when unused. HEAD (99bdf62) and P13o compilers, alternated on the same machine in one
+session (a busy one: absolute numbers sit 5-15% above P13a.4):
+
+| Root | Py HEAD | Py P13o | Rs HEAD | Rs P13o | P13a.4 Py / Rs |
+|---|---|---|---|---|---|
+| root_m4 | 8.01 | 8.29 | 7.11, 7.08 | 7.10, 7.08 | 7.54 / 6.78 |
+| root_m8 | 9.22, 9.14 | 9.11, 9.21 | 7.77, 7.74 | 7.78, 8.13 | 8.41 / 7.70 |
+| root_m9 | 8.51 | 8.39 | 7.43, 7.43 | 7.42, 7.46 | 8.08 / 7.17 |
+| root_admit | 8.30 | 8.26 | 7.21, 7.22 | 7.30, 7.55 | 7.83 / 6.88 |
+
+### P13o.7 P13a step 2 with opaque `kept`/`dyn_ok`: tried, not landed
+
+Starting from the archived step-2 diff, `kept` and `dyn_ok` were made `pub opaque fn`, with `reveal dyn_ok;` in
+`arena_put`, `entry_alloc` and `entry_free`. Two placements were tried on root_m8:
+- **No reveal in bud_map.** Reflexivity (`kept(st, st)` at a loop entry or an early return) and the final chaining
+  step need `kept`'s body, so the `kept`-ensuring mutators fail with the hidden-opaque hint. The hint names the right function.
+- **`reveal kept;` at the top of the 15 `kept`-ensuring mutators**, `dyn_ok` still opaque. `kept`'s body is
+  `shape_same(st, o) && (!dyn_ok(o) || dyn_ok(st))`, so chaining no longer needs `dyn_ok`. But mutators that write
+  header words through `sh` (`write_at`, `put_units`, `take_words`, `remove`'s loop entry, and others) need
+  `dyn_ok`'s body to show the write keeps it, and `put_at` and `drop_entry` time out. Rust: 23.6 s, failing.
+
+What is left is proof engineering in bud_map, not a verifier gap: a per-writer lemma (`sh` keeps `dyn_ok` when the
+written word is not one `dyn_ok` reads, or keeps the bound it checks) with `reveal dyn_ok;` only in `sh`, and
+`reveal kept;` moved from the function top to the exits. The attempt is kept locally (outside the tree); the
+bench sources are unchanged in this package. bud_world's 11 mutators wait for bud_map.
+
+### P13o.8 Gates
+
+- Targeted: tests/l3/proof/opaque_reveal.pruv (positive: a symbol passed along without a reveal, reveal before a
+  read, reveal on branches, a code-call fact, a quantified argument, arguments outside i64) and
+  tests/must_reject/l3_opq_{no_reveal, false, sym_false, total, range, loop_scope, signature, reveal_target,
+  unknown_reveal}. The error JSON is equal on both compilers, including with `--infer` and the LLVM
+  backend; the generated Rust is equal.
+- Framework rows: tests/run_all_rows.txt regenerated with Rust (`--backend both --list-rows`, 4443 rows, 11 new,
+  all backend-null). Rust full run (rust backend) 3088/3088; Python full run with `--compare-rows` against the Rust
+  list: 3076 run, missing 0, extra 0, failed 0.
+- `cargo test --release` passes. `tests/diff_rust.py --fuzz-count 20`: all same.
+- `--only g8_frontend` on both compilers: 27/27 (py), 39/39 (rs).
+- m34 `run.py admit` 26/26. `lanes --count 300`: every lane 300/300, header checks 1922/1922.
+
+### P13o.9 Audit
+
+An independent soundness review found one required fix. Contract arithmetic is unbounded, but `opaque_total` was
+proven with i64 parameters assumed. So a contract such as `requires p(a, 9223372036854775807 + 1)` applied F where
+its body could be undefined, and the inline expansion would have rejected it. A call-site range obligation was tried
+first and dropped: it also refuses `forall j in 0..len(a): p(a, a[j])`, because an `[i64]` element has no i64 fact.
+The landed fix narrows what totality assumes, to the shape facts only (P13o.1). The repro is
+tests/must_reject/l3_opq_range. `shifted` in tests/l3/proof/opaque_reveal.pruv covers out-of-i64 arguments. The
+review found no reveal leak across branches, loop iterations or calls, and no gap in the array encoding, the
+code-call fact or module visibility.
+A confirmation review of the fix found nothing required. Contracts cannot allocate or slice arrays, and `old` and
+`inout` keep lengths, so no contract argument breaks the kept array facts. Opaque parameters are limited to `i64`,
+`bool`, `[i64]`, `[u8]` and `[bool]`, so the map fact is unused today.
