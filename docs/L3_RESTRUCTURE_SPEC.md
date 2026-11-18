@@ -382,7 +382,8 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P13e | B/bud_map.pruv, bud_store.pruv, bud_world.pruv, bud_admit.pruv: entry layout (Appendix P13c.8) | P: smaller per-entry words (P13c: 20 words) so tools peak RSS reaches hand after P13d (also P21: tooldup at M = 500, 3120 vs oaw 3040 KiB); proofs and M10 replay counters kept; time not worse than P13c. |
 | P13f | B/driver_m4.rs and the M4 bench adapter: length bound from T0 (TIDY_SPEC §4.10) | P: the bench adapter's allocations get the `2^40` bound (T0 audit finding 1), and the per-entry length check added by T0 is hoisted out of the timed loop where the driver already holds the length; m4 sessions back to the pre-T0 time (T0: +1-2%, outside A/A noise) and every M4 cell <= 1.0x hand. |
 | P13g | Both codegens: small helper inlining gap found by P20 (Appendix P20) | P: `find_w` in the bud_charge hot path is inlined (P20 attribution: about 25 instructions per call not inlined), output parity on both compilers, and the P20 unmatched hand16 lane (keys pre-parsed, 1.13-1.17x) re-measured after P13f and this row; any remaining gap above 1.0x is fixed or explained line by line (wire parsing is about 100 instructions of it). LLVM pairs for P20 wait for P17. |
-| P21a | B/bud_map.pruv, bud_tools.pruv: O(1) forgetTurn (Appendix P21.4) | P: forgetTurn of a turn holding N activities <= 1.0x oaw at S/M in time, peak RSS and allocations (P21: 8.9x / 37.9x; oa forgets by generation, Pruv frees each child), with the toolnew and tooldup cells kept <= 1.0x and the reclaim cost measured where it lands; plus a corrupt control that pokes header words (entry top = cap - 1, low live) for the P21.7 counterexample. |
+| P21a | B/bud_map.pruv, bud_tools.pruv: O(1) forgetTurn (Appendix P21.4) | P: forgetTurn of a turn holding N activities <= 1.0x oaw at S/M in time, peak RSS and allocations (P21: 8.9x / 37.9x; oa forgets by generation, Pruv frees each child), with the toolnew and tooldup cells kept <= 1.0x and the reclaim cost measured where it lands; plus a corrupt control that pokes header words (entry top = cap - 1, low live) for the P21.7 counterexample. Done (Appendix P21a): forget 0.99 / 0.95x oaw (overlap), RSS and allocations below; reclaim cost in toolnew queued as P21b. |
+| P21b | B/bud_map.pruv, bud_store.pruv: reclaim cost of the lazy forget (Appendix P21a.3) | P: toolnew <= 1.0x oaw at S/M by median and distribution (P21a: 0.93 / 1.08x, overlapping) and the toolgrow cycle <= 1.0x oaw in instructions (P21a: 1.05 / 1.08x), with toolforget, tooldup and memory kept; e.g. fold reclaim_head into entry_alloc. Same gates as P21a. |
 | P13o | Both checkers/verifiers: `opaque fn` and `reveal F;` (Appendix P13o) | C: positive reveal/congruence/loop-scope cases; negatives for a missing reveal, false facts through the opaque symbol, totality, signature and reveal-target misuse; framework rows equal on both compilers. Unblocks P13a step 2 (Appendix P13a.3), which lands separately. |
 | P14 (deferred) | Both checkers/verifiers: aggregate/field mutation, only if residual profile requires L2 | New C manifest and estimates before activation; alias/frame proof cannot be replaced by Q. |
 | P15 (deferred) | Both codegens/ABI: P14 lowering | C four-pair ownership/ABI probes, then touched P gates; no assumed budget gain. |
@@ -2838,8 +2839,161 @@ One package audit (static, on a23b9ff) and one fix-check (on 570c635).
 
 ### P21.8 Remaining
 
-- P21a (queued): O(1) forgetTurn by turn generation, a header-poke control for the P21.7 counterexample, and the
-  op 3 fallback write-back on a header-pointing blob offset (P21.7 fix-check medium).
+- P21a (done, Appendix P21a): O(1) forgetTurn by turn generation, the header-poke controls for the P21.7
+  counterexample, and the op 3 fallback scoped to records beyond `st`. Follow-ups P21b, ops 1/2 arena guard and the
+  admission owner-generation check in P21a.6.
 - P13e: tooldup peak RSS at M = 500 (1.03x oaw).
 - Interning (measured follow-up only): not started; dup and new are below every matched lane without it.
 - LLVM pairs (P17a-c).
+
+## Appendix P21a (B/bud_map.pruv, bud_tools.pruv: O(1) forgetTurn by generation)
+
+Status: forget gate met on the Rust and Python compilers (gates on both; perf from `run_m8.py perf`'s own build). toolnew at M = 500 is 1.08x oaw by median with overlapping distributions (noise by the rule) and the new + forget cycle costs 1.05-1.08x oaw in instructions; the reclaim cost is queued as P21b. Rust and Python compilers (2 of the 4 pairs; LLVM waits for P17a-c). On top of 46db894. Changed:
+`bud_map.pruv`, `bud_tools.pruv`, `bud_admit.pruv`, `bud_store.pruv` (comments only), `m8_test/` (root, driver, the
+two oa/u16 hand lanes, `corrupt_resident.py`), `M8_NOTES.md`, `m34_test/CONTRACT.md`. No compiler, `SPEC.md`,
+`tests/run_all_rows*`, `bud_clock.pruv`, `bud_charge.pruv`, `bud_lifecycle.pruv` or M7/M9/M10 root change (P22 works
+on those in parallel). Raw logs in `work/p21a/` (not committed).
+
+### P21a.1 What changed
+
+- forgetTurn (`bud_tools::forget_turn` -> `bud_map::forget_turn_entry`): finds the turn, unlinks it from root 2, takes
+  its child count off word 12 (`uncount_children`) and frees the turn entry (`drop_entry`, which bumps its
+  generation). The activities are not walked: each keeps state 1 with an owner that is now free and an owner
+  generation (field 2) that no longer equals the owner's generation (field 3). Cost O(probe length + turn key),
+  independent of the number of activities (was O(activities), P21.4).
+- Reclaim where it lands: `put_at` first runs `reclaim_head`. While the free-list head f is a free entry whose head
+  child c is pending dead (`reclaimable`: state 1, owner f, og != gen(f), field row writable), c is detached from f's
+  list, its key and blob words come off word 14, it is freed (generation bumped) and pushed on the free list, where
+  `entry_alloc` takes it. f itself stays on the free list until its list is empty, so a freed turn is never reused
+  while it still owns pending children. If c has children of its own, they are uncounted and the loop continues
+  (fuel top + 1, so a malformed child list ends the loop). Dead children keep their index slots until the next
+  rehash; lookups compare the stored hash, owner and key, so a stale slot can only cost a probe step.
+- `alloc_ok` mirrors the reclaim (a reclaimable head child of the free head counts as the second entry) and now runs
+  before `room_w`: when the top and free list cannot supply the entries, `note_new` answers Grow before any write
+  (`allocation_grow`: the count-based `need()` size if it already asks for growth, else `need(cap + 1)`). This closes
+  the P21.7 counterexample (entry top = cap - 1, low live count) with a Grow instead of 2.
+- `rehash` reinserts only entries in state 1 whose owner is a root or live, so pending dead children leave the index
+  at a rehash and used <= live holds on a store whose word 12 counts its live entries.
+- `remove` (M4 eager delete, unchanged walk) returns early on a pending dead child, which is already off word 12.
+- Admission (`bud_admit::entry_ok`): a state-1 entry whose owner is free, with og != gen(owner) and the owner still
+  holding a child list (head in range, count > 0), is classed dead (2). `admit` counts dead entries separately and
+  checks free + live + dead == top and word 12 == live. A live child redirected to an unrelated free leaf stays an
+  owner error (-4, M34 admission case 16).
+- root_m8 op 3 (P21.7 fix-check medium): the counters are updated in place only when the record lies inside the arena
+  below the arena top; the cv fallback runs only for a record entirely beyond `st` (`b0 >= len(st)`); an offset
+  inside `st` but outside the arena (e.g. into the header) answers 2 before any write. The old revision wrote the
+  copied counters back over the header (for `b0 = 1`, the arena top).
+- Bench drivers: the perf checksum is taken after the forget; the driver gains an `hdr` command (header words 4..14)
+  so `corrupt_resident.py` can tell a Grow from an in-place answer.
+
+### P21a.2 Gates (final tree; `work/p21a/gates2.log`, rerun after the audit fixes)
+
+| gate | Rust compiler | Python compiler |
+|---|---|---|
+| verify root_m8, m34 root_m4 and root_admit, m7, m9, m10, m11 roots | ok | ok |
+| controls N01-N25 | 25/25 | 25/25 |
+| C/D fixtures | 17 / 3 (halt dispatch, M10) / 0 | same |
+| Q2 300 cases (seed 20261117) | 63 exact / 237 not-implemented / 0 fail | same |
+| diff_hand16 (u16 and oa hands) | 300 random + 84 malformed controls, 0 mismatches | - |
+| corrupt resident vs 46db894 | 387 controls, 0 mismatches; P21a controls 6/6 | - |
+| m34 admit / m4 | 26/26 / 300/300 | - |
+| m7, m10 same (rs vs py output) | identical | identical |
+| m11 py,rs | rc 0 | rc 0 |
+
+P21a controls (`corrupt_resident.py`, header words poked through the driver, checked with `hdr`):
+- a-high-top: entry top = cap - 1 with few live entries. Answers Grow; only word 7 differs before the call, the
+  buffer grows, the retry inserts (P21.7 counterexample; was 2 after `room_w`).
+- b-header-blob: session blob offset 1. Answers 2; header words 4..14 unchanged (the old revision answered 0 and
+  restored the arena top).
+- c-reuse: forget a turn, then insert the same number of activities. No Grow (length and entry top unchanged), word
+  12 drops at the forget, words 12 and 14 return to their pre-forget values after the reuse.
+
+### P21a.3 Performance, S = 100 and M = 500
+
+One interleaved run on the final tree, 7 rounds, reps 200000, memory 5 runs (`work/p21a/perf_final.log`; command
+`m8_test/run_m8.py perf --only hand16w,oaw,fxmixw --sizes 100,500 --rounds 7 --reps 200000 --mem-runs 5`). chk: 70
+(item, size, round) checksums equal between Pruv and hand16w, fxmixw, oaw; the toolnew / toolforget chk is now taken
+after the forget on every lane (P21.7 fix-check low). Verdict: Pruv max vs lane min over rounds (overlap = noise).
+
+| item | n | Pruv ns [min-max] | oaw ns [min-max] | /hand16w | /oaw | /fxmixw | verdict hand16w, oaw | P21 Pruv ns |
+|---|---|---|---|---|---|---|---|---|
+| tooldup | 100 | 23.6 [23.2-34.9] | 37.2 [34.8-38.2] | 0.41 | 0.63 | 0.64 | below, overlap | 22.0 |
+| tooldup | 500 | 25.4 [25.1-27.3] | 41.3 [39.6-100.8] | 0.44 | 0.62 | 0.72 | below, below | 24.2 |
+| toolnew | 100 | 58.3 [56.8-111.8] | 62.9 [61.3-96.9] | 0.39 | 0.93 | 0.63 | below, overlap | 48.0 |
+| toolnew | 500 | 62.8 [61.3-72.7] | 58.2 [57.0-108.4] | 0.39 | **1.08** | 0.65 | below, overlap | 50.8 |
+| toolforget | 100 | 34.3 [32.2-47.1] | 34.8 [32.6-37.5] | 0.03 | 0.99 | 0.03 | below, overlap | 298.9 |
+| toolforget | 500 | 36.8 [33.0-40.2] | 38.8 [35.6-51.3] | 0.01 | 0.95 | 0.01 | below, overlap | 1486.1 |
+
+toolforget no longer grows with the activity count (34.3 / 36.8 ns at N = 100 / 500, was 298.9 / 1486.1) and sits on
+oaw (P21: 8.90x / 37.91x). charge and failure stay below every matched lane (0.58-0.82x).
+
+Instructions per call (Pruv, / hand16w, / oaw, / fxmixw): tooldup 584 / 587, 0.53, 0.66, 0.64 (P21: 576-578);
+toolgrow (one new + its share of the forget, per activity) 1528 / 1502, 0.45-0.47, **1.05 / 1.08**, 0.61-0.63
+(P21: 1346 / 1320, 0.92-0.95 vs oaw).
+
+Peak RSS KiB and allocations (median of 5 [min-max]); toolgrow covers toolnew and toolforget:
+
+| item | n | Pruv KiB | Pruv allocs | hand16w KiB | oaw KiB | oaw allocs |
+|---|---|---|---|---|---|---|
+| tooldup | 100 | 2192 [2192-2192] | 40 | 2256 | 2304 | 12409 |
+| tooldup | 500 | **3152 [3152-3168]** | 44 | 3376 | 3104 [3088-3136] | 61635 |
+| toolgrow | 100 | 2128 [2112-2144] | 40 | 2416 | 2560 | 23852 |
+| toolgrow | 500 | 3200 [3168-3216] | 45 | 3536 | 3536 [3504-3568] | 66323 |
+
+forget (toolgrow) RSS and allocations are below oaw and hand16w at S and M. tooldup RSS at M stays above oaw (1.02x,
+non-overlapping; P21: 1.03x), the open P13e cell; P21a does not touch it. Unmatched lanes (keys decoded before the
+timer) are not <= 1.0x cells (P20.3): hand16 tooldup / toolgrow RSS at M is 2944 / 3088 KiB.
+
+Attribution of the toolnew cost at M: P21's toolnew was the insert alone, with each activity freed later by the eager
+forget walk (about 3 ns per activity, inside toolforget). P21a moves that work into the insert: `reclaim_head` at
+every `put_at` (free head, its head child, `reclaimable`'s field address, then the detach, word-14 update, free and
+push) and `alloc_ok`'s second-entry test with the same reads, now ahead of `room_w`. Net: +10-12 ns per toolnew and +180
+instructions per toolgrow cycle, so the lazy reclaim costs more per activity than P21's eager free did. oa pays its
+deferred cost at a rebuild instead (23852-66323 allocations against Pruv's 40-45). Candidate fixes, not tried here
+(build budget used): fold `reclaim_head` into `entry_alloc` so the free head is read once; skip the reclaim test when
+word 8 is -1 or its head child is -1 (one load); reclaim a whole pending list per free-list visit.
+
+### P21a.4 Checks the proofs removed or changed
+
+- `entry_ok` now returns 2 (dead) as well as 0 and 1; `admit`'s loop invariant carries live + dead <= e, and the
+  header check is word 12 == live with free + live + dead == top.
+- `alloc_ok` is no longer proved equivalent to two `entry_alloc` calls (it was not machine-checked in P21 either); it
+  mirrors `reclaim_head` + `entry_alloc` and is covered by the a-high-top and c-reuse controls and the Q2/controls
+  gates. A wrong `alloc_ok` can only turn an insert into Grow (before any write) or reach the existing 2 paths.
+- used <= live after `rehash` is a comment premise (a store with a valid layout, cap = slots/2 as `bud_store::valid`
+  checks, whose word 12 counts its live entries), not a proved postcondition; on other buffers a Grow can follow the
+  rehash (same key set), as `room_w` states.
+- `reclaim_head` and `forget_turn_entry` keep `kept(st, old(st))` and entry top; the reclaim loop is total by fuel.
+
+### P21a.5 Audit
+
+One package audit (static, Codex gpt-6.2-astra; the first attempt was stopped by the engine's content filter and
+rerun as a plain code review) and one fix-check.
+
+- taken: `remove` on a pending dead child (reachable through a stale index slot) took it off word 12 a second
+  time. Fixed by the early return in `remove`.
+- taken: `rehash` reinserts live entries only and reads an entry's owner after its state (a free row's owner
+  word is no longer loaded).
+- taken: the P21a controls could not tell a Grow from an in-place answer; added the driver `hdr` command and
+  the header checks above.
+- taken: the `room_w` comment claimed used <= live on any buffer; scoped to a valid layout with an exact word 12.
+- scoped, not changed (pre-existing, same as 46db894): ops 1/2 (charge) write a record in place when its offset
+  points into the header of a corrupt buffer; guarding it adds arena-bound loads to the charge hot path. Queued.
+- scoped: op 3 assumes a record inside the arena does not overlap other live arena regions (arena-internal overlap is
+  a broken buffer, not checked).
+- advisory: completeness of a pending child list (every dead child reachable from its former owner) is I2 and not
+  checked by admission; an unreachable dead entry is leaked until the host rebuilds the store, never reused while
+  linked.
+- Fix-check: the `remove` and `rehash` fixes are correct, the `hdr` controls separate Grow from in place; the comment
+  and one control name were narrowed as asked. New, recorded (medium, pre-existing): admission does not check
+  og == gen(owner) when the owner is live, so a child with a stale owner generation under a live owner is admitted
+  as live, while `remove` now skips it. Fixing it changes admission results and the m34 expectations; queued.
+
+### P21a.6 Remaining
+
+- ops 1/2 arena guard for a header-pointing record offset (P21a.5), measured on the charge path.
+- Admission og == gen(owner) check for live owners (P21a.5 fix-check), with the m34 expectations.
+- P21b: the reclaim cost moved into the insert (P21a.3: toolnew 1.08x oaw median at M, overlapping; toolgrow 1.05-1.08x
+  oaw instructions). Fold `reclaim_head` into `entry_alloc` or short-cut the empty case, then re-measure toolnew,
+  toolforget and toolgrow interleaved.
+- P13e (tooldup peak RSS at M = 500), LLVM pairs (P17a-c) unchanged.

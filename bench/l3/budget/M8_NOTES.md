@@ -299,4 +299,4 @@ Expected normal path; Grow (host copy, rare) and rehash (amortized) are storage 
 - charge: O(sessionId + budgetId length): one `find`, the bid compare, constant field work. Measured flat in N: 63.6 / 76.1 / 72.0 ns at N = 100 / 500 / 1000.
 - noteFailure: O(key length); flat: 53.4 / 65.1 / 65.9 ns.
 - noteTool: O(turnId + activityId + ref key lengths), no scan of the turn's activities: dedup hit on a turn of N activities is flat: 50.9 / 65.8 / 55.4 ns.
-- forgetTurn: O(turnId + A): `bud_map::remove` frees the A children. Measured inside toolgrow as a per-noteTool cost that stays flat (135.9 / 155.6 / 155.9 ns), so forget is linear in A, not worse.
+- forgetTurn: O(probe length + turn key length), independent of the activity count. Unlinking the turn and bumping its generation invalidate its activities, which allocation reclaims later.

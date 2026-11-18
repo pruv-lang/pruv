@@ -808,21 +808,27 @@ fn run_perf(args: &[String]) {
             t_new += (after_new - start).as_nanos();
             t_forget += (after_forget - after_new).as_nanos();
         }
-        let checksum = w.checksum();
+        // Untimed extra round: the insert result is checksummed independently of the forget.
+        for a in &acts {
+            let _ = w.note_tool(&r0.session, &r0.budget, &turn2, a);
+        }
+        let chk_new = w.checksum();
+        w.forget_turn(&turn2);
+        let chk_forget = w.checksum();
         if only == Some("toolgrow") {
             let ns = (t_new + t_forget) as f64 / (rounds * n) as f64;
             println!("toolgrow {} {:.1}", n, ns);
-            println!("chk toolgrow {} {}", n, checksum);
+            println!("chk toolgrow {} {}:{}", n, chk_new, chk_forget);
         }
         if on("toolnew") {
             let ns = t_new as f64 / (rounds * n) as f64;
             println!("toolnew {} {:.1}", n, ns);
-            println!("chk toolnew {} {}", n, checksum);
+            println!("chk toolnew {} {}", n, chk_new);
         }
         if on("toolforget") {
             let ns = t_forget as f64 / rounds as f64;
             println!("toolforget {} {:.1}", n, ns);
-            println!("chk toolforget {} {}", n, checksum);
+            println!("chk toolforget {} {}", n, chk_forget);
         }
     }
     black_box(&w.sessions);
@@ -954,21 +960,27 @@ fn run_perfw(args: &[String]) {
             t_new += (after_new - start).as_nanos();
             t_forget += (after_forget - after_new).as_nanos();
         }
-        let checksum = w.checksum();
+        // Untimed extra round: the insert result is checksummed independently of the forget.
+        for d in &grow {
+            w.call_wire(d, &mut sc, &mut fr);
+        }
+        let chk_new = w.checksum();
+        w.call_wire(&forget, &mut sc, &mut fr);
+        let chk_forget = w.checksum();
         if only == Some("toolgrow") {
             let ns = (t_new + t_forget) as f64 / (rounds * n) as f64;
             println!("toolgrow {} {:.1}", n, ns);
-            println!("chk toolgrow {} {}", n, checksum);
+            println!("chk toolgrow {} {}:{}", n, chk_new, chk_forget);
         }
         if on("toolnew") {
             let ns = t_new as f64 / (rounds * n) as f64;
             println!("toolnew {} {:.1}", n, ns);
-            println!("chk toolnew {} {}", n, checksum);
+            println!("chk toolnew {} {}", n, chk_new);
         }
         if on("toolforget") {
             let ns = t_forget as f64 / rounds as f64;
             println!("toolforget {} {:.1}", n, ns);
-            println!("chk toolforget {} {}", n, checksum);
+            println!("chk toolforget {} {}", n, chk_forget);
         }
     }
     black_box(&w.sessions);
