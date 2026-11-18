@@ -158,5 +158,12 @@ by byte-identical output and run by group, with the full test suite once before 
    ⑥ reachability set and the `old` pair. T0 is done only after ①–⑤. Then T1 one rule group per step,
    T2 three to five operations sharing a precondition per step, T4 one table per step; T3 can merge alone.
 9. T6 output includes the last three CI runs and the `work/` size and backup state.
+10. **T0 follow-ups (queued at the T0 merge, 417dd56).** (a) Budget bench: the M4 bench adapter's allocations
+    have no `2^40` bound, and m4 sessions are 1-2% slower than before T0; both go to L3_RESTRUCTURE_SPEC row
+    P13f. (b) T0.4 (new meaning, audited): widen the verifier's `[i64]` length assumption from `2^40` to
+    `2^60 - 1` so the host check can match `isize::MAX / 8`; T0 found `root_m4` then fails at `lit`,
+    `tail_word` and `arena_put`, so this needs proof work in the budget sources first. (c) Two-compiler
+    scope review: decide how much of the Python compiler to keep (reference, test oracle, or frozen), with
+    an adversarial debate, before the R12/P36 freeze decision in "Not in this package".
 
 Order after the review: T0①–⑥ → T3 → T1 → T2 → T4 → P16, P17a → T5 (inline policy) → T6.
