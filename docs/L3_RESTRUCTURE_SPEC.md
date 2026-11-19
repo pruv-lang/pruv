@@ -381,11 +381,14 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P13d | Both codegens (pruvc / pruvc-rs): generated code size of the M4 driver (Appendix P13c.8) | P: resident `__TEXT` of the M4 Pruv binary at or below hand's (P13c: +80 KiB, measured before the P13c change, assumed unchanged after), with both sides built with the same flags; time not worse than P13c; no Pruv-only build flags. Measured (Appendix P13d): not met without time loss, no compiler change; size split by line and queued as P13h/P13e/P13f. T5 adds M7: every inline promotion of the P19c bodies grows `__text` (Appendix T5.2). |
 | P13e | B/bud_map.pruv, bud_store.pruv, bud_world.pruv, bud_admit.pruv: entry layout (Appendix P13c.8) | P: smaller per-entry words (P13c: 20 words) so tools peak RSS reaches hand after P13d (also P21: tooldup at M = 500, 3120 vs oaw 3040 KiB); proofs and M10 replay counters kept; time not worse than P13c. Step 1 (Appendix P13e): the M4 excess is a fixed +64..96 KiB (P13d/P13h) on every axis; only tools has a proportional share above hand (+96 KiB at n = 1000). Decision option 1 (boundary widened). Step 2a accessors (2d877e8), step 2b base 10 words + on-demand 10-word extension (b231319): tools proportional RSS at hand within one page, sessions/clocks below hand, allocations equal, instructions equal or lower at n = 2000 and +0.3..1.4 % at n = 100..1000 (fixed code term); fixed share +16..48 KiB of code on M4 and M7 +96..176 / M10 +16..32 KiB, open with P13d/P13h (Appendix P13e.6-7). Audit fixes and resident format version 2: c85a671 (P13e.10). |
 | P13f | B/driver_m4.rs and the M4 bench adapter: length bound from T0 (TIDY_SPEC §4.10) | P: the bench adapter's allocations get the `2^40` bound (T0 audit finding 1), and the per-entry length check added by T0 is hoisted out of the timed loop where the driver already holds the length; m4 sessions back to the pre-T0 time (T0: +1-2%, outside A/A noise) and every M4 cell <= 1.0x hand. Done (Appendix P13f): bounded owner types (`StateBuf::zeroed` refuses `> 2^40`, driver `Words` checks once at construction; both `Deref`s carry `assert_unchecked(len <= 2^40)`), so the entry's inline check folds away with no codegen change; probe `driver_m4 bound state|words` run by `run.py m4`. Instructions below base on all 9 cells (-10..-15/op), time below hand everywhere and overlapping base, peak RSS overlapping base, `__text` -192 B. Still above hand from base: sessions/clocks 100/1000 instructions (T5e) and 7 of 9 peak RSS cells (P13d/P13h fixed code share). |
+| P13f2 | B/state_buf.rs, driver_m4.rs: P13f audit should/nits (Appendix P13f.5) | P: the `2^40` bound constant is target-width safe (no `1<<40` overflow on 32-bit `usize`; compile-time assert or `u64` compare), the bound probe also covers a refused length that never allocates (not only successful allocations), and the `Words::new` comment states what the check guarantees. No perf change on the 9 M4 cells (instructions/time/RSS overlap P13f). |
 | P13g | Both codegens: small helper inlining gap found by P20 (Appendix P20) | P: `find_w` in the bud_charge hot path is inlined (P20 attribution: about 25 instructions per call not inlined), output parity on both compilers, and the P20 unmatched hand16 lane (keys pre-parsed, 1.13-1.17x) re-measured after P13f and this row; any remaining gap above 1.0x is fixed or explained line by line (wire parsing is about 100 instructions of it). LLVM pairs for P20 wait for P17. |
 | P13h | Both codegens (and verifiers for (a)): M4 own-code size without time loss (Appendix P13d.5, P13d.8) | P: resident `__TEXT` of the M4 Pruv binary at or below hand's (P13d: 304 vs 240 KiB) with instructions and cycles on every M4 cell not worse than P13d.3's shipped column; candidates: proof-guided call-site specialization of total accessors, hot/cold body split of map growth paths; output parity on both compilers. |
-| P13i | B/bud_lifecycle.pruv (and bud_store.pruv for (c)): M7/M10 fixed-share regression from P13e plus the P18b handovers (Appendix P13e.7) | P: (a) lifecycle bodies (maybe_close, replace, reopen, attach) use the direct `xa`/`xb` paths like `copy_node` so the driver `__text` growth of about 37 KB and the M7 +96..176 / M10 +16..32 KiB fixed peak-RSS rise go back to c3ec58d or below; (b) drop the id copy in attach (P18b `noid`: S = 500 391.1 -> 355.1 instr/call, hand16 303.3); (c) M7 proportional RSS share (about 0.74 KB per session over hand16) from `bud_store::need` slack, and attribute the unexplained fixed 254 KB. Time and M4 cells not worse than P13e. Runs after P18c (shared M7 driver `__text` base) and before T5b2 if both touch bud_lifecycle. Measured (Appendix P13i, parts (a) and (b); (c) needs bud_store.pruv and stays open for P13j): (b) attach returns a view `[6, n, off]` of the stored id instead of copying it, attach 392.8 -> 353.5 / 393.2 -> 355.3 instructions per call at S/M (hand16 299.8 / 305.3, 1.18 / 1.16x; after the audit's length clamp 348.6 / 349.4, 1.12 / 1.17x), other cells unchanged, peak RSS overlapping, 0 allocations, M7 Q 113/187/0 on both compilers. Not met: (a) the lifecycle bodies already use `xa`/`xb`; the `__text` growth is `find_w` inlined everywhere since P13e's `ef`/`set_ef` `#[inline]`, and no variant within the allowed files restores `__text` (457,532 B; 413,244 at c3ec58d) or the fixed peak RSS without an instruction loss (P13i.1); M7 `__text` +384 B from the harness tag-6 decoder (Pruv code -44 B); M10 `__text` unchanged. |
-| P13j | B/bud_store.pruv: store bounds found by the P13e audit (Appendix P13e.10) | P: at the maximum slot count the entry base must not overlap the slot table, and a grow must carry the root payload; both as proved `ensures` plus a gate case that drives each path (none does now); proofs kept, time and RSS not worse than P13e. |
+| P13i | B/bud_lifecycle.pruv (and bud_store.pruv for (c)): M7/M10 fixed-share regression from P13e plus the P18b handovers (Appendix P13e.7) | P: (a) lifecycle bodies (maybe_close, replace, reopen, attach) use the direct `xa`/`xb` paths like `copy_node` so the driver `__text` growth of about 37 KB and the M7 +96..176 / M10 +16..32 KiB fixed peak-RSS rise go back to c3ec58d or below; (b) drop the id copy in attach (P18b `noid`: S = 500 391.1 -> 355.1 instr/call, hand16 303.3); (c) M7 proportional RSS share (about 0.74 KB per session over hand16) from `bud_store::need` slack, and attribute the unexplained fixed 254 KB. Time and M4 cells not worse than P13e. Runs after P18c (shared M7 driver `__text` base) and before T5b2 if both touch bud_lifecycle. Measured (Appendix P13i, parts (a) and (b); (c) needed bud_store.pruv and was left open for P13j): (b) attach returns a view `[6, n, off]` of the stored id instead of copying it, attach 392.8 -> 353.5 / 393.2 -> 355.3 instructions per call at S/M (hand16 299.8 / 305.3, 1.18 / 1.16x; after the audit's length clamp 348.6 / 349.4, 1.12 / 1.17x), other cells unchanged, peak RSS overlapping, 0 allocations, M7 Q 113/187/0 on both compilers. Not met: (a) the lifecycle bodies already use `xa`/`xb`; the `__text` growth is `find_w` inlined everywhere since P13e's `ef`/`set_ef` `#[inline]`, and no variant within the allowed files restores `__text` (457,532 B; 413,244 at c3ec58d) or the fixed peak RSS without an instruction loss (P13i.1); M7 `__text` +384 B from the harness tag-6 decoder (Pruv code -44 B); M10 `__text` unchanged. (c) done (Appendix P13i(c)): after setup at S = 1000 only one 16 KiB page of the arena slack past the top is resident; the per-session excess is the record text one UTF-16 unit per i64 word (rest 95, date 24; `PERF_REST = "{}"` drops the slope 4.95 -> 2.40 KiB per session, hand16 3.56), outside these files, queued as P13i2 (proposed in the appendix); the full-run excess was the driver keeping every item's World alive, now scoped per item like hand16 (peak RSS S 100 5568 -> 3888, M 500 14208 -> 8256 KiB, hand16 2608 / 5248; instructions overlap); fixed share +176 KiB at S = 1 is `__text` +143 KiB (P13k) and the 32 KiB out buffer. |
+| P13j | B/bud_store.pruv: store bounds found by the P13e audit (Appendix P13e.10) | P: at the maximum slot count the entry base must not overlap the slot table, and a grow must carry the root payload; both as proved `ensures` plus a gate case that drives each path (none does now); proofs kept, time and RSS not worse than P13e. Done (Appendix P13j): entry base 16 + c32(word 4) in `ea`/`xa` (and the admission mirror), bound `ensures` on ea/eb/xa/xb/xbm; root payload through `copy_pay` in `copy_kids` and a `grow_copy` `ensures` (root_carried + blob words); gate cases `maxslot` and admit case 24 fail on a4427ec and pass; gates as P13e.8; instructions, peak RSS and allocations not worse; M7 `__text` -320 B, M4 `__text` +832 B accepted for the root payload fix, removal queued as P13j2 (P13j.4); audit: 2 required findings fixed with admit cases 25/26 (P13j.5). |
 | P13k | B/bud_map.pruv, bud_store.pruv (and both codegens if the lever is inline policy): part (a) of P13i, handed back (Appendix P13i.1) | P: take P13i.1 variant E's cold-fallback split of `bud_map::find_w` (instructions down on all five M7 cells: attach 392 -> 376, reopenmiss 383 -> 373, current 322 -> 311, isHalted 319 -> 304) together with a size lever (out-of-line shared cold paths, `ef`/`set_ef` attributes, or a proof-guided inline rule) so the M7 driver `__text` (457,916 B after P13i) and the M7 +96..176 / M10 +16..32 KiB fixed peak RSS go back toward c3ec58d (413,244 B), with no instruction cell given back on M4, M7, M10; output parity on both compilers if a codegen changes. Starts after P13j (shares bud_store/bud_map) and before T5b2 (same M7 cells). |
+| P13j2 | B/bud_map.pruv (and bud_store.pruv if the frame needs a store `ensures`): root-compare loop in `grow_copy` (Appendix P13j.4) | P: drop the `grow_copy` root-compare loop by a frame proof that `copy_kids` arena writes never touch the root extension records (M4 `__text` -~512 B; P13j left M4 `__text` +832 B over a4427ec, accepted for the root payload fix), with the `grow_copy` root payload `ensures` kept proved, admit cases 24-26 passing, and no instruction, peak RSS or allocation cell given back on M4, M7, M10. Not done (Appendix P13j2): the frame needs content `ensures` on `set_blob`/`copy_pay`, frame `ensures` on `arena_put`/`xbm` and a root-payload-last copy order; split P13j2a/b/c proposed. |
+| P13i2 | B/bud_lifecycle.pruv, m7_test/driver_m7.rs (M7 wire): record text representation (Appendix P13i(c).3) | P: the M7 record keeps `rest` (95 units) and the date (24 units) one UTF-16 unit per i64 word (160 arena words per session; hand16 holds u16 text), which is the M7 proportional peak-RSS excess (Pruv 4.95 vs hand16 3.56 KiB per session slope). Store both as UTF-8 bytes (`[u8]`/`str`, §6b; the representation rule in §1-§4), not as packed i64 words, so the per-session record is at or below hand16; M7 proportional RSS share <= hand16 at S/M, no M7/M10 instruction or time cell given back, M7 Q 113/187/0 on both compilers. Fixed share left to P13k (`__text` +143 KiB). Runs before T5b2 (same M7 cells and bud_lifecycle). |
 | P21a | B/bud_map.pruv, bud_tools.pruv: O(1) forgetTurn (Appendix P21.4) | P: forgetTurn of a turn holding N activities <= 1.0x oaw at S/M in time, peak RSS and allocations (P21: 8.9x / 37.9x; oa forgets by generation, Pruv frees each child), with the toolnew and tooldup cells kept <= 1.0x and the reclaim cost measured where it lands; plus a corrupt control that pokes header words (entry top = cap - 1, low live) for the P21.7 counterexample. Done (Appendix P21a): forget 0.99 / 0.95x oaw (overlap), RSS and allocations below; reclaim cost in toolnew queued as P21b. |
 | P21b | B/bud_map.pruv, bud_store.pruv: reclaim cost of the lazy forget (Appendix P21a.3) | P: toolnew <= 1.0x oaw at S/M by median and distribution (P21a: 0.93 / 1.08x, overlapping) and the toolgrow cycle <= 1.0x oaw in instructions (P21a: 1.05 / 1.08x), with toolforget, tooldup and memory kept; e.g. fold reclaim_head into entry_alloc. Same gates as P21a. Done (Appendix P21b): toolnew 0.87 / 0.97x oaw (Pruv max below oaw min), toolgrow 0.93 / 0.98x oaw instructions; cause was index load at M (early rehash bound slots/4 -> 3/8) plus the reclaim push/pop and repeated row bases. |
 | P13o | Both checkers/verifiers: `opaque fn` and `reveal F;` (Appendix P13o) | C: positive reveal/congruence/loop-scope cases; negatives for a missing reveal, false facts through the opaque symbol, totality, signature and reveal-target misuse; framework rows equal on both compilers. Unblocks P13a step 2 (Appendix P13a.3), which lands separately. |
@@ -6475,6 +6478,215 @@ replace move or clone checked buffers, every q/perf op through `Words::new`, `ou
 |---|---|
 | audit: does the hoisted check cover every length the driver passes to an entry | Codex gpt-6.2-astra ultra, review |
 | design, edits, gates, measurement, this appendix | Claude Opus 5.5, direct |
+
+## Appendix P13j (row P13j: store bounds from the P13e audit)
+
+Result: both bounds are proved `ensures` and each has a gate case that fails on a4427ec and passes now. No new
+`admit`, `assume` or `opaque`; no compiler change; no layout change (resident format version stays 2). Gates equal
+P13e.8. Instructions, peak RSS and allocations are not worse on any M4 / M7 cell. M7 `__text` is 320 B below base;
+M4 `__text` is 832 B above base, accepted for the root payload fix; its removal is queued as P13j2 (P13j.4). The final audit's two required findings are fixed (P13j.5).
+
+Base: a4427ec, release `pruvc-rs` (read-only), macOS arm64. Work files in `work/p13j/` (not committed).
+
+### P13j.1 Entry base at the maximum slot count (`bud_store.pruv`, `bud_admit.pruv`)
+
+- Bug: `ea` / `xa` took the entry base as `c32(st[5])`. At s = 2^32 word 5 is 16 + 2^32, the clamp cut it to 2^32,
+  and entry 0 sat inside the slot table [16, 16 + 2^32).
+- Fix: base = `16 + c32(st[4]) + 10 e` (equal to word 5 on a valid store, since `shape_w` gives w5 = 16 + s). It uses
+  the same 2^32 constant as the `c32(st[6])` clamp. A first form `c33(st[5])` (clamp to 2^33) added a second
+  materialized constant at every address site: about +4 instructions per op, sessions n = 1000 / 2000 IQR-separated
+  above base. It was dropped.
+- `ensures` (valid store, 0 <= e < st[6]): `st[3] + st[4] <= result && result + 10 <= st[9]` on `ea` (base and
+  extension), `eb`, `xa`, `xb`, `xbm` (on `old(st)`). `ea` also has `(valid(st) && result >= 0) ==> 0 <= e < st[6]`.
+- Forced caller change, `bud_admit.pruv`: `ent_i1` and `entry_ok` compute the same base (16 + word 4, word 4 checked
+  in [0, 2^32]) so the admission facts name the addresses the store reads. The old 2^32 cut branch is gone.
+- Gate: `driver_admit.rs` prints `maxslot` (`entry_addr` = `field_at(st, e, 0)` on a header-only buffer with
+  s = 2^32, w5 = 2^32 + 16, w6 = 2^31). `run.py admit` expects 4294967312 / 4294967322 (>= the slot table end).
+  a4427ec: 4294967296 / 4294967306 (MISMATCH). New: pass.
+
+### P13j.2 Root payload through grow (`bud_map.pruv`)
+
+- Bug: `grow_copy` copied each root's children but not the root's own payload (values v0..v3, blob); a fresh root in
+  `nxt` read as defaults.
+- Fix: `copy_node` = `put_node` (key) + `copy_pay` (blob and values). `copy_kids` runs one extra first loop step that
+  calls `copy_pay(pr -> nr)` without a budget step, so the root payload goes through the same `copy_pay` site as each
+  child's (no third inlined `set_blob` site; a separate `carry_root` call cost about +2.2 KB of `__text` in
+  `World::exec`).
+- `grow_copy` `ensures result == 0 ==> forall r in 0..3: root_carried(prev, nxt, r) && blob words equal`. The
+  writers keep `valid(nxt)` (`kept`) but do not give a frame over the arena, so the property is closed by a compare
+  loop over the three roots at the end (`blob_same`, `root_carried`; `nxt` is not written after it). A failing compare
+  returns 2 (the old state stays valid, as for the live-count check). `root_carried` reads the base and extension at
+  w5 + 10 r (+ 10 w6) of each buffer, the addresses `ef` / `blob_len` read on a valid store; a missing extension
+  reads as the defaults.
+- Gate: admit case 24 = case 19 with a blob (2 units) and v0..v3 on roots 0..2; `root_pay_diff` compares values,
+  blob length and units through the public accessors after `admit_grow`. a4427ec: pay_diff 1 (MISMATCH). New: 0.
+
+### P13j.3 Gates (rs, then py; same counts as P13e.8, fail 0)
+
+| gate | result |
+|---|---|
+| 7 roots verify (rs and py) | ok |
+| M4 / admit / Q2-Q3 grow | 300/300 / 29/29 (+ maxslot, cases 24..26) / fails 0 |
+| M7 / M10 / M8 / M9 q3 | 113/187/0 / 78/222/0 / 63/237/0 / 26/274/0 |
+| M9 clock / q4 / q4clock / stale | 136/164/0 / 0/300/0 / 293/7/0 / 300/0/0 |
+| M10 halt | 300/0/0 |
+| mut_m9 | control CLEAN, 10/10 KILLED |
+| corrupt_resident (`--old-rev a4427ec`) | controls 387, mismatches 0, poke-not-found 0; P21a 6/6 |
+| M11 | 213 exact + 87 prefix-ok, py/rs pairs identical |
+
+### P13j.4 Performance (7 alternating rounds base / new / hand; M instructions and KiB peak RSS, medians)
+
+| cell | base | new | hand |
+|---|---|---|---|
+| sessions 100 | 15.680 / 1808 | 15.659 / 1792 | 15.662 / 1712 |
+| sessions 1000 | 20.776 / 2064 | 20.775 / 2048 | 21.305 / 2016 |
+| sessions 2000 | 27.331 / 2336 | 27.182 / 2320 | 28.884 / 2304 |
+| tools 100 | 18.212 / 1856 | 18.248 / 1840 | 19.759 / 1712 |
+| tools 1000 | 29.481 / 2224 | 29.578 / 2208 | 34.380 / 2112 |
+| tools 2000 | 34.607 / 2336 | 34.617 / 2320 | 41.408 / 2208 |
+| clocks 100 | 16.731 / 1792 | 16.720 / 1792 | 16.699 / 1696 |
+| clocks 1000 | 21.750 / 2016 | 21.746 / 1984 | 22.964 / 2272 |
+| clocks 2000 | 27.413 / 2208 | 27.530 / 2224 | 30.428 / 2768 |
+| M7 S | 132.436 / 5136 | 133.194 / 5152 | 83.066 / 2640 |
+| M7 M | 523.337 / 13440 | 523.216 / 13456 | 249.582 / 4432 |
+
+Measured after the P13j.5 fixes (`work/p13j/perf_final2.log`).
+
+- new vs base: every median equal or lower, or within the overlapping min-max range (tools 100 +0.2 %, tools 1000
+  +0.3 %, clocks 2000 +0.4 %, M7 S +0.6 %, M7 S / M RSS +16 KiB: all overlap base). Allocations equal (M4 base = new
+  on every cell).
+- Against hand, the cells above hand (M4 n = 100 peak RSS fixed share, tools RSS, M7 time and RSS) are the open
+  P13d / P13h / P13i items, unchanged by this row.
+- `__text` (`size -m`): M4 351,356 vs base 350,524 (+832 B; +768 B before P13j.5, +64 B from the empty-blob
+  branch); M7 457,660 vs 457,980 (-320 B). The M4 excess is the
+  root compare loop (`blob_same` / `root_carried`, inlined into `World::exec`, about +512 B) and the `copy_kids`
+  first step. Tried and dropped: a shared `carry_pay` helper (M7 +15 KB), `root_carried` with matching extension
+  flags instead of the default branches (M4 +832, M7 +512). Removing the compare needs a frame proof of the root
+  extension over every arena write of `copy_kids`; not done here. M4 `__text` +832 B (0.2 %), no change to
+  peak RSS or instructions measured: accepted for this row (it pays for the root payload fix); the frame proof that
+  drops the compare loop is queued as row P13j2.
+
+### P13j.5 Final audit (Codex gpt-6.2-astra ultra)
+
+- Required 1, empty root blob with a free offset: admission does not check the offset of an empty blob (`span_w`
+  with cap 0 is true), so an admitted root may hold blob length 0 with offset -1 or past the buffer. `copy_pay`
+  passed that offset to `set_blob` (rejects `s0 > len(src)`) and `root_carried` required `po >= 0`, so grow failed
+  on an admitted store (regression of P13j.2). Fix: `copy_pay` passes offset 0 when the length is 0; `root_carried`
+  returns true for n = 0 (an empty blob reads nothing). Gate: admit cases 25 / 26 = case 19 with v0..v3 on root 0 and
+  blob offset `len(st) + 1` / -1. Before the fix: grow [2, 7, 3, 1] / [2, 7, 7, 0]; now 0, live 7 -> 7, pay_diff 0
+  (run.py requires `[0, 7, 7, 0]` for cases 24..26).
+- Required 2, raw words against clamped reads: the `ensures` compared raw offset / length words while `blob_len` /
+  `blob_unit` read `c40(offset) + j` and `c40(length)`. Fix: `root_carried` requires n, po, no in [0, 2^40] when
+  n > 0, the range where the raw words equal the clamped reads.
+- Optional: the `grow_copy` cost comment now says linear in the summed blob lengths of the three roots.
+- Re-gated after the fixes: P13j.3 (rs then py, identical), mut_m9, corrupt_resident, M11, and P13j.4.
+
+### P13j.6 Re-gate after merging main (9925a2c: P13i(b), P18c, P26b, TIDY 4.14, T5d, rows T5e/P13k)
+
+- Merges 5f4d31b (main 390325f; spec rows and appendices from both sides kept) and 2a8333d (main 9925a2c, clean).
+- M4 `__text` +832 B accepted for this row (it pays for the root payload fix; time, peak RSS and allocations not
+  worse); the frame proof that drops the `grow_copy` root-compare loop is queued as row P13j2.
+- Gates on the merged tree, rs then py, identical: 7 roots verify; M4 300/300, admit 29/29 (maxslot, cases 24-26),
+  grow fails 0; M7 113/187/0, M10 78/222/0, M8 63/237/0, M9 26/274/0, clock 136/164/0, q4 0/300/0,
+  q4clock 293/7/0, stale 300/0/0, M10 halt 300/0/0. M11 213 exact + 87 prefix-ok on both pairs (identical).
+  mut_m9 control CLEAN, 10/10 KILLED. corrupt_resident `--old-rev a4427ec`: controls 387, mismatches 0, P21a 6/6.
+- Size against main 9925a2c: M4 `__text` 351,356 vs 350,524 (+832, as P13j.4); M7 457,916 vs 457,916.
+- Perf, 15 alternating rounds main / merged / hand (M instructions median [min-max], KiB peak RSS median):
+
+| cell | main | merged | hand |
+|---|---|---|---|
+| M4 sessions 1000 | 20.837 [20.734-22.124], 2064 | 20.800 [20.736-21.734], 2048 | 21.242, 2000 |
+| M4 tools 1000 | 29.536 [29.432-29.965], 2192 | 29.556 [29.424-29.839], 2176 | 34.310, 2080 |
+| M4 clocks 1000 | 21.753 [21.546-22.755], 2000 | 21.813 [21.662-21.981], 2000 | 23.035, 2256 |
+| M7 S 100 | 132.122 [131.513-132.634], 5136 | 132.488 [131.966-133.236], 5280 [5088-5888] | 83.321, 2640 |
+
+  Every cell overlaps main in instructions and peak RSS, allocations equal. The M7 S (+0.28 %) and clocks
+  (+0.28 %) medians sit above main in both the 5- and 15-round sets; within overlap, same direction as P13j.4.
+  Against hand, the cells above hand (M4 sessions/tools RSS, M7 time and RSS) are the open P13d/P13h/P13k/T5e rows.
+
+## Appendix P13i(c): M7 proportional and fixed peak RSS, attributed (base main 5a82208)
+
+### P13i(c).1 Method
+
+Instrumented scratch copies of the M7 driver (`mincore` resident bytes per store region after setup, `task_info`
+resident size after every grow) and of hand16 (a counting global allocator, live and peak heap bytes after each
+setup). Peak RSS is `/usr/bin/time -l` maximum resident set size. Single lane: `perf S 5 attach f` (Pruv) against
+`perf S 5 attach typed` (hand16), two Worlds alive in each.
+
+### P13i(c).2 `need` slack: one page resident after setup
+
+At S = 1000 the store grows 256 -> 262144 words (s = 8192, cap = 4096, 1003 entries, arena 160,000 words used of
+172,016). Resident per World after setup: slots 80 KiB, entry bases 96 KiB, extensions 96 KiB, arena used 1264 KiB,
+arena rest 16 KiB (one page past the top). The doubling slack of `bud_store::need` is never written (`init_store`
+writes the header, the slot table and the three roots; `grow_copy` appends at the arena top), so after setup at S = 1000 `mincore` shows one 16 KiB page
+of it resident (the full run's `close` item copies whole stores, tail included, with
+`copy_from_slice`; that is a harness copy, not `need`). `need` is not the source of the proportional share; nothing in bud_store.pruv changes.
+
+### P13i(c).3 Proportional share: the record text encoding
+
+Per World and session, Pruv holds 1.49 KiB resident (the arena record is 160 words = 1.26 KiB), hand16 0.90 KiB of
+live heap. The record (driver `rec()`, bud_lifecycle record layout) stores the `rest` text (PERF_REST, 95
+UTF-16 units) and the date (24 units) one unit per i64 word; hand16 keeps both as u16 text (`Stamp::Text`), so the text data alone
+differs by (95 + 24) x (8 - 2) = 714 B per session. Experiment: the same driver with `PERF_REST = "{}"` uses 67 arena words per session (160 before) and the
+single-lane peak RSS slope drops from 4.95 to 2.40 KiB per session (S = 100 -> 1000; hand16 3.56). The excess is the
+text words times two Worlds, times the grow transient (old and new store alive during `t_grow`, and libmalloc keeping
+the freed large blocks resident: after the last grow at S = 1000 RSS is 4624 KiB for a 1488 KiB store on a 1792 KiB
+start). Packing the record text (4 units per word, as keys already are) changes the bud_lifecycle record layout read
+by Pruv and the M7 wire; it is outside this package's files and is queued for the main session as a row
+("P13i2: pack the M7 record rest/date text 4 units per word in bud_lifecycle and the driver; expected about
+-0.6 KiB per session per World").
+
+### P13i(c).4 Full-run peak: a harness asymmetry, fixed in the driver
+
+The full `perf S 5` run kept every item's World alive (`let mut w = setup(0)` shadowing at the top of `run_perf`,
+10+ Worlds), while hand16 scopes each item in an `if typed && on(..) { .. }` block. The driver now puts each item (World and
+ops, `close` included) in its own block and drops the item World before the typed and fair lanes build theirs; in
+`replace` the timed World stays alive during the verification setup, as hand16's shadowed Host does (audit fix).
+The single-lane path, the printed values and every timed loop are unchanged.
+
+### P13i(c).5 Fixed share
+
+At S = 1 (single lane) Pruv peaks at 1808 KiB, hand16 at 1632 KiB: +176 KiB. `__text` is 457,916 B against 311,484
+(+143 KiB of code, the open P13k size lever), plus the 4096-word out buffer (32 KiB). The 254 KiB intercept of the
+full-run fit also carried the extra Worlds of P13i(c).4.
+
+### P13i(c).6 Performance (5 alternating rounds base / new / hand; M instructions and KiB peak RSS, medians [range])
+
+| cell | base 5a82208 | new | hand |
+|---|---|---|---|
+| M7 S 100 | 132.602 [131.766-133.879], 5568 [5088-5728] | 132.717 [132.048-134.103], 3888 [3264-3904] | 83.366, 2608 |
+| M7 M 500 | 517.328 [514.166-521.749], 14208 [14032-15728] | 522.525 [518.388-523.324], 8256 [8224-8336] | 249.448, 5248 |
+
+M4 (9 cells) built from unchanged sources: `__text` 351,868 B in both, instructions and RSS overlap in every cell,
+allocations equal. M10 sources and driver unchanged. The single-lane (fair, typed) instruction cells run code that
+returns before the changed part. Whole-run instructions overlap base in both cells (a first cut that dropped the
+`replace` timed World early ran M 500 at +0.77 % without overlap; the audit fix removed that). Peak RSS falls 30 % (S)
+and 42 % (M). Still above
+hand: P13i2 (record text) and P13k (code size).
+
+### P13i(c).7 Gates
+
+Only `m7_test/driver_m7.rs` `run_perf` changed. M7 Q 113/187/0 on rs, then py. No .pruv file changed, so the
+generated .rs, the budget roots and the other gates are those of 5a82208.
+
+## Appendix P13j2: root-compare loop, not done (split)
+
+The `grow_copy` root payload `ensures` needs, without the compare loop, facts no writer states today: (a) content
+`ensures` on `set_blob`/`copy_pay` (the blob words and values of pe land in ne), (b) frame `ensures` on `arena_put`
+(words 16 .. old top unchanged) and `xbm` (only its record and flag word written), and (c) a copy order in which no
+child write follows a root's payload copy: child linking writes the root's extension words 7/8 and may create it
+(`xbm`), `set_ef(18)` rewrites base word 9 (only `has_x` is kept), and `set_blob`'s in-place path writes an old region
+whose disjointness from the other roots' blobs is not stated anywhere. Proposed split: P13j2a (a) with admit 24-26,
+P13j2b (b), P13j2c copy root payloads after all children through the single `copy_kids` site and drop
+`blob_same`/the compare loop, measuring M4 `__text`. Left open in this package (one-hour step cap). Audit preconditions for P13j2c: (1) `grow_copy` checks only `valid(prev)`, so a root
+extension with raw blob length -1 and zero scalars passes; `copy_pay` clamps the length with `c32` and copies an
+empty payload, and today only the compare loop returns 2; dropping it without checking the raw length (and, for a
+non-empty blob, the raw offset and range) breaks the `ensures`. (2) `copy_pay` returns 0 without touching ne when pe
+has no extension, and `set_blob` can reach 0 after a failed `xbm` on a general buffer, so the content contract needs
+the premise that the destination payload is default, and must cover the four scalars after `set_vals`; the second
+pass must show the reused region does not overlap an earlier root's blob. (3) Pass 1's invariant is "root payload
+default" (not "no extension": the first child may create it); pass 2 copies roots only, without re-inserting
+children or charging budget, and keeps child links and earlier roots' flags, scalars and blob words.
 
 ## Appendix P27 (row P27: exact text/number/date, bounded source-byte outputs)
 

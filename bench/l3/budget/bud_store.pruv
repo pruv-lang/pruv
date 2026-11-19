@@ -179,16 +179,21 @@ pub fn has_x(xk: i64) -> bool
   return xk % 2 == 1;
 }
 
-// Start of the base or extension record, or -1 for an entry outside the capacity.
+// Start of the base or extension record, or -1 for an entry outside the capacity. On a valid store the record lies
+// between the slot table end (st[3] + st[4]) and the arena base (st[9]), also at the maximum slot count 2^32, where
+// the entry base 16 + 2^32 is above 2^32. The base is therefore 16 + the clamped slot count (word 4), equal to word 5 on
+// a valid store: a c32 clamp of word 5 cut it to 2^32, inside the slot table (L3 P13j).
 fn ea(st: [i64], e: i64, extension: bool) -> i64
   ensures result >= -1 && result <= 1099511627767
   ensures (valid(st) && 0 <= e && e < st[6]) ==> (16 <= result && result + 10 <= len(st))
+  ensures (valid(st) && 0 <= e && e < st[6]) ==> (st[3] + st[4] <= result && result + 10 <= st[9])
+  ensures (valid(st) && result >= 0) ==> (0 <= e && e < st[6])
 {
   reveal shape_w;
   if len(st) < 7 { return -1; }
   let cap: i64 = c32(st[6]);
   if e < 0 || e >= cap { return -1; }
-  let b: i64 = c32(st[5]) + 10 * e;
+  let b: i64 = 16 + c32(st[4]) + 10 * e;
   if extension { return b + 10 * cap; }
   return b;
 }
@@ -202,6 +207,7 @@ pub fn field_addr(st: [i64], e: i64) -> i64
 pub fn eb(st: [i64], e: i64) -> i64
   ensures result == -1 || (16 <= result && result + 10 <= len(st))
   ensures (valid(st) && 0 <= e && e < st[6]) ==> result >= 16
+  ensures (valid(st) && 0 <= e && e < st[6]) ==> (st[3] + st[4] <= result && result + 10 <= st[9])
 {
   let b: i64 = ea(st, e, false);
   if b < 16 || b > len(st) - 10 { return -1; }
@@ -211,12 +217,14 @@ pub fn eb(st: [i64], e: i64) -> i64
 // Extension address when the base has its extension flag set. Total readers use rd.
 pub fn xa(st: [i64], e: i64) -> i64
   ensures result >= -1 && result <= 1099511627767
+  ensures (valid(st) && result >= 0) ==> (st[3] + st[4] <= result && result + 10 <= st[9])
 {
+  reveal shape_w;
   // eb and ea inlined: one capacity read and one base bound check.
   if len(st) < 7 { return -1; }
   let cap: i64 = c32(st[6]);
   if e < 0 || e >= cap { return -1; }
-  let b: i64 = c32(st[5]) + 10 * e;
+  let b: i64 = 16 + c32(st[4]) + 10 * e;
   if b < 16 || b > len(st) - 10 { return -1; }
   if !has_x(st[b + 9]) { return -1; }
   return b + 10 * cap;
@@ -226,6 +234,7 @@ pub fn xa(st: [i64], e: i64) -> i64
 pub fn xb(st: [i64], e: i64) -> i64
   ensures result == -1 || (16 <= result && result + 10 <= len(st))
   ensures result <= 1099511627767
+  ensures (valid(st) && result >= 0) ==> (st[3] + st[4] <= result && result + 10 <= st[9])
 {
   let x: i64 = xa(st, e);
   if x < 16 || x > len(st) - 10 { return -1; }
@@ -238,6 +247,7 @@ pub fn xbm(inout st: [i64], e: i64) -> i64
   ensures len(old(st)) >= 15 ==> hdr_same(st, old(st), -1)
   ensures kept(st, old(st))
   ensures result == -1 || (16 <= result && result + 10 <= len(st))
+  ensures (valid(old(st)) && result >= 0) ==> (old(st)[3] + old(st)[4] <= result && result + 10 <= old(st)[9])
 {
   reveal dyn_ok;
   let b: i64 = eb(st, e);

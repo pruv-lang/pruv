@@ -4598,7 +4598,29 @@ fn gen_rust_concrete_core(
     if !g.proven_items.is_empty() {
         text.push_str(&proven_module(&text, &g.proven_items, g.allow));
     }
+    let text = hide_bodies(text);
     Ok((text, manifest, trust))
+}
+
+// A host macro_rules! defined before the generated file is in textual scope inside it and would replace
+// the std macro the checks use (a host `panic!` that returns lets a violated requires run the body).
+// Local forwarders shadow any host definition; the list is every macro the generator calls unqualified.
+// Forward through the extern prelude: core:: for macros core has (no_std hosts keep compiling); no leading ::
+// because in edition 2015 that names the crate root.
+const HIDE_MACROS: &[(&str, &str)] = &[
+    ("assert", "core"), ("eprintln", "std"), ("format_args", "core"), ("matches", "core"),
+    ("panic", "core"), ("println", "std"), ("unreachable", "core"), ("vec", "std"),
+];
+
+fn hide_bodies(text: String) -> String {
+    // Hosts reach only re-exported pub items. Even a crate-root include! cannot name
+    // unchecked __pruv_body fns or other private items. Keep lines unindented for
+    // R-7-3 and line-anchored checks. Module boundaries do not change inlining.
+    let mut out = String::from("mod pruv_impl {\n");
+    for (m, c) in HIDE_MACROS {
+        out.push_str(&format!("#[allow(unused_macros)]\nmacro_rules! {m} {{ ($($t:tt)*) => {{ {c}::{m}!($($t)*) }} }}\n"));
+    }
+    format!("{out}{text}}}\n#[allow(unused_imports)]\npub use self::pruv_impl::*;\n")
 }
 
 const PROVEN_NAMES: &[&str] = &["PruvArr", "PruvStr", "pruv_arr_slow", "pruv_str_slow", "pruv_proven"];
@@ -5030,7 +5052,7 @@ mod tests {
     #[test]
     fn verified_plain() {
         let s = gen_rust(&prog(vec![]), true, false, 1 << 30).unwrap();
-        assert_eq!(s, format!("{}\n#[inline(always)]\npub fn f(x: i64) -> i64 {{\n    return (x + 1i64);\n}}\n\n", ALLOW));
+        assert_eq!(s, hide_bodies(format!("{}\n#[inline(always)]\npub fn f(x: i64) -> i64 {{\n    return (x + 1i64);\n}}\n\n", ALLOW)));
     }
 
     #[test]
@@ -5038,7 +5060,9 @@ mod tests {
         let p = prog(vec![bin(">", var("x", "i64"), int("0"))]);
         // the prelude helpers keep `#[inline]` in the constant; inline_policy may raise them to always
         let s = gen_rust(&p, false, false, 1 << 30).unwrap().replace("#[inline(always)]", "#[inline]");
-        assert!(s.starts_with(SAFE_PRELUDE));
+        let head = hide_bodies(String::new());
+        let head = head.strip_suffix("}\n#[allow(unused_imports)]\npub use self::pruv_impl::*;\n").unwrap();
+        assert!(s.starts_with(&format!("{head}{SAFE_PRELUDE}")));
         assert!(s.contains(CONTRACT_PRELUDE));
         assert!(s.contains("fn f__pruv_body(x: i64) -> i64 {\n    return pruv_add(x, 1i64);\n}\n"));
         assert!(s.contains("    let mut pruv_budget: i64 = 1_073_741_824;\n"));

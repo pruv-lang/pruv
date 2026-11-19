@@ -1138,6 +1138,17 @@ fn probe_w(st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn: i64)
 fn copy_node(prev: [i64], inout nxt: [i64], pe: i64, nowner: i64) -> i64
   ensures crate::bud_store::kept(nxt, old(nxt))
 {
+  let ne: i64 = put_node(prev, inout nxt, pe, nowner);
+  if ne < 0 { return -1; }
+  let p: i64 = copy_pay(prev, inout nxt, pe, ne);
+  if p != 0 { return -1; }
+  return ne;
+}
+
+// The key of entry pe of prev as a new child of nowner in nxt (no payload). New entry index or -1.
+fn put_node(prev: [i64], inout nxt: [i64], pe: i64, nowner: i64) -> i64
+  ensures crate::bud_store::kept(nxt, old(nxt))
+{
   let koff: i64 = crate::bud_store::c40(gf(prev, pe, 4));
   let klen: i64 = crate::bud_store::c32(gf(prev, pe, 5));
   let og: i64 = gf(nxt,nowner,3);
@@ -1147,17 +1158,24 @@ fn copy_node(prev: [i64], inout nxt: [i64], pe: i64, nowner: i64) -> i64
     h = crate::bud_keys::hash(mix(1469598103934665603,
       wrapping_add(nowner,wrapping_mul(og,4294967296))),prev,koff,klen);
   }
-  let ne: i64 = put_key_h(inout nxt,nowner,og,h,prev,koff,klen);
-  if ne < 0 { return -1; }
-  // Without an extension the blob and scalars read as defaults (empty blob, 0), which a fresh ne already has.
+  return put_key_h(inout nxt,nowner,og,h,prev,koff,klen);
+}
+
+// Copies the payload of entry pe of prev (blob and values v0..v3) to entry ne of nxt: 0 ok, -1 failure. Without an
+// extension the blob and scalars read as defaults (empty blob, 0), which a fresh ne (or a fresh root) already has.
+fn copy_pay(prev: [i64], inout nxt: [i64], pe: i64, ne: i64) -> i64
+  ensures crate::bud_store::kept(nxt, old(nxt))
+{
   let px: i64 = crate::bud_store::xb(prev, pe);
-  if px < 0 { return ne; }
-  let boff: i64 = crate::bud_store::c40(prev[px + 1]);
+  if px < 0 { return 0; }
   let blen: i64 = crate::bud_store::c32(prev[px + 2]);
+  // An empty blob has no region: admission leaves its offset unchecked, so it is not passed on (L3 P13j.5).
+  let mut boff: i64 = 0;
+  if blen > 0 { boff = crate::bud_store::c40(prev[px + 1]); }
   let rb: i64 = set_blob(inout nxt, ne, prev, boff, blen);
   if rb < 0 { return -1; }
   crate::bud_store::set_vals(inout nxt, ne, prev[px + 3], prev[px + 4], prev[px + 5], prev[px + 6]);
-  return ne;
+  return 0;
 }
 
 // Copies the leaf children of pe (in order) under ne. Returns the remaining step budget, or -1 on failure.
@@ -1181,8 +1199,9 @@ fn copy_leaves(prev: [i64], inout nxt: [i64], pe: i64, ne: i64, budget: i64) -> 
   return b;
 }
 
-// Copies the children of root pr (in order) under root nr; with deep, each child's own children follow it.
-// Returns the remaining step budget, or -1 on failure.
+// Copies the payload of root pr to root nr, then the children of pr (in order) under nr; with deep, each child's own
+// children follow it. The root's payload goes through the same copy_pay site as each child's (first step, no budget;
+// L3 P13j), so grow_copy adds no inlined set_blob. Returns the remaining step budget, or -1 on failure.
 fn copy_kids(prev: [i64], inout nxt: [i64], pr: i64, nr: i64, budget: i64, deep: bool) -> i64
   requires 0 <= budget && budget <= 4294967296
   ensures result >= -1 && result <= budget
@@ -1190,21 +1209,94 @@ fn copy_kids(prev: [i64], inout nxt: [i64], pr: i64, nr: i64, budget: i64, deep:
 {
   let mut b: i64 = budget;
   let mut c: i64 = gf(prev, pr, 9);
-  while c >= 0 && b > 0
-    invariant 0 <= b && b <= budget
+  let mut first: i64 = 1;
+  while first == 1 || (c >= 0 && b > 0)
+    invariant 0 <= b && b <= budget && 0 <= first && first <= 1
     invariant crate::bud_store::kept(nxt, old(nxt))
-    decreases b
+    decreases b + first
   {
-    b = b - 1;
-    let nc: i64 = copy_node(prev, inout nxt, c, nr);
-    if nc < 0 { return -1; }
-    if deep {
-      b = copy_leaves(prev, inout nxt, c, nc, b);
-      if b < 0 { return -1; }
+    let mut pe: i64 = pr;
+    let mut ne: i64 = nr;
+    if first == 0 {
+      b = b - 1;
+      ne = put_node(prev, inout nxt, c, nr);
+      if ne < 0 { return -1; }
+      pe = c;
     }
-    c = gf(prev, c, 8);
+    let p: i64 = copy_pay(prev, inout nxt, pe, ne);
+    if p != 0 { return -1; }
+    if first == 0 {
+      if deep {
+        b = copy_leaves(prev, inout nxt, c, ne, b);
+        if b < 0 { return -1; }
+      }
+      c = gf(prev, c, 8);
+    }
+    first = 0;
   }
   return b;
+}
+
+// Root r's blob of prev (n = prev[x+2] words at prev[x+1], x = st[5] + 10r + 10 st[6], the extension address ea gives
+// on a valid store) is word for word the blob of root r of nxt, when prev has the extension. With root_carried both
+// regions are in range and the lengths are equal (L3 P13j).
+fn blob_same(prev: [i64], nxt: [i64], r: i64) -> bool
+  ensures result ==> root_carried(prev, nxt, r)
+  ensures result ==> (crate::bud_store::has_x(prev[prev[5] + 10 * r + 9]) ==>
+    (forall j in 0..prev[prev[5] + 10 * r + 10 * prev[6] + 2]:
+      nxt[nxt[nxt[5] + 10 * r + 10 * nxt[6] + 1] + j] == prev[prev[prev[5] + 10 * r + 10 * prev[6] + 1] + j]))
+{
+  if !root_carried(prev, nxt, r) { return false; }
+  let pb: i64 = prev[5] + 10 * r;
+  if !crate::bud_store::has_x(prev[pb + 9]) { return true; }
+  let px: i64 = prev[5] + 10 * r + 10 * prev[6];
+  let n: i64 = prev[px + 2];
+  if n == 0 { return true; }
+  let nx: i64 = nxt[5] + 10 * r + 10 * nxt[6];
+  let po: i64 = prev[px + 1];
+  let no: i64 = nxt[nx + 1];
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && 0 <= po && 0 <= no && n <= len(prev) - po && n <= len(nxt) - no
+    invariant forall k in 0..j: nxt[no + k] == prev[po + k]
+    decreases n - j
+  {
+    if nxt[no + j] != prev[po + j] { return false; }
+    j = j + 1;
+  }
+  return true;
+}
+
+// Root r of nxt holds the payload root r of prev holds: the four values and the blob length (blob_same adds the blob
+// words), read through the header words of each buffer as the accessors read them on a valid store. A missing
+// extension reads as the defaults (values 0, empty blob), as ef and blob_len read it (L3 P13j).
+pub fn root_carried(prev: [i64], nxt: [i64], r: i64) -> bool
+{
+  if len(prev) < 16 || len(nxt) < 16 || r < 0 || r >= 3 { return false; }
+  if prev[5] < 0 || prev[5] > 1099511627776 || nxt[5] < 0 || nxt[5] > 1099511627776 { return false; }
+  if prev[6] < 0 || prev[6] > 4294967296 || nxt[6] < 0 || nxt[6] > 4294967296 { return false; }
+  let pb: i64 = prev[5] + 10 * r;
+  let nb: i64 = nxt[5] + 10 * r;
+  if pb < 16 || pb > len(prev) - 10 || nb < 16 || nb > len(nxt) - 10 { return false; }
+  let px: i64 = pb + 10 * prev[6];
+  let nx: i64 = nb + 10 * nxt[6];
+  let ph: bool = crate::bud_store::has_x(prev[pb + 9]);
+  let nh: bool = crate::bud_store::has_x(nxt[nb + 9]);
+  if ph && (px < 16 || px > len(prev) - 10) { return false; }
+  if nh && (nx < 16 || nx > len(nxt) - 10) { return false; }
+  if !ph && !nh { return true; }
+  if !ph { return nxt[nx + 2] == 0 && nxt[nx + 3] == 0 && nxt[nx + 4] == 0 && nxt[nx + 5] == 0 && nxt[nx + 6] == 0; }
+  if !nh { return prev[px + 2] == 0 && prev[px + 3] == 0 && prev[px + 4] == 0 && prev[px + 5] == 0 && prev[px + 6] == 0; }
+  let n: i64 = prev[px + 2];
+  let po: i64 = prev[px + 1];
+  let no: i64 = nxt[nx + 1];
+  if nxt[nx + 2] != n || nxt[nx + 3] != prev[px + 3] || nxt[nx + 4] != prev[px + 4] ||
+    nxt[nx + 5] != prev[px + 5] || nxt[nx + 6] != prev[px + 6] { return false; }
+  // An empty blob reads nothing, whatever its offset. A nonempty one is in the c40 range, where the raw words equal
+  // what blob_len / blob_unit read (L3 P13j.5).
+  if n == 0 { return true; }
+  return n > 0 && n <= 1099511627776 && 0 <= po && po <= 1099511627776 && 0 <= no && no <= 1099511627776 &&
+    n <= len(prev) - po && n <= len(nxt) - no;
 }
 
 // Writes a fresh layout for len(nxt) into nxt and copies the reachable entries of prev: roots 0..2, each map in
@@ -1219,6 +1311,10 @@ fn copy_kids(prev: [i64], inout nxt: [i64], pr: i64, nr: i64, budget: i64, deep:
 pub fn grow_copy(prev: [i64], inout nxt: [i64]) -> i64
   ensures len(nxt) == len(old(nxt))
   ensures result != 0 || crate::bud_store::valid(nxt)
+  ensures result == 0 ==> (forall r in 0..3: root_carried(prev, nxt, r) &&
+    (crate::bud_store::has_x(prev[prev[5] + 10 * r + 9]) ==>
+      (forall j in 0..prev[prev[5] + 10 * r + 10 * prev[6] + 2]:
+        nxt[nxt[nxt[5] + 10 * r + 10 * nxt[6] + 1] + j] == prev[prev[prev[5] + 10 * r + 10 * prev[6] + 1] + j])))
 {
   if !crate::bud_store::valid(prev) { return 2; }
   if len(nxt) < len(prev) { return 2; }
@@ -1240,6 +1336,21 @@ pub fn grow_copy(prev: [i64], inout nxt: [i64]) -> i64
   // accepts deeper trees; their extra entries would be dropped, so a live count that differs from prev's fails the
   // grow instead (2: the old state stays valid and unchanged, nothing is lost silently; L3 P13b).
   if hw(nxt, 12) != hw(prev, 12) { return 2; }
+  // The writers keep valid(nxt) (kept); nxt is not written after this point, so a compare of the three root payloads
+  // (linear in the summed blob lengths of the three roots) gives the ensures above without a frame proof over every arena write (L3 P13j).
+  let mut q: i64 = 0;
+  while q < 3
+    invariant 0 <= q && q <= 3
+    invariant forall k in 0..q: root_carried(prev, nxt, k)
+    invariant forall k in 0..q:
+      (crate::bud_store::has_x(prev[prev[5] + 10 * k + 9]) ==>
+        (forall j in 0..prev[prev[5] + 10 * k + 10 * prev[6] + 2]:
+          nxt[nxt[nxt[5] + 10 * k + 10 * nxt[6] + 1] + j] == prev[prev[prev[5] + 10 * k + 10 * prev[6] + 1] + j]))
+    decreases 3 - q
+  {
+    if !blob_same(prev, nxt, q) { return 2; }
+    q = q + 1;
+  }
   return 0;
 }
 

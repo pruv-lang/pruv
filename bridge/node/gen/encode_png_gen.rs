@@ -1,3 +1,20 @@
+mod pruv_impl {
+#[allow(unused_macros)]
+macro_rules! assert { ($($t:tt)*) => { core::assert!($($t)*) } }
+#[allow(unused_macros)]
+macro_rules! eprintln { ($($t:tt)*) => { std::eprintln!($($t)*) } }
+#[allow(unused_macros)]
+macro_rules! format_args { ($($t:tt)*) => { core::format_args!($($t)*) } }
+#[allow(unused_macros)]
+macro_rules! matches { ($($t:tt)*) => { core::matches!($($t)*) } }
+#[allow(unused_macros)]
+macro_rules! panic { ($($t:tt)*) => { core::panic!($($t)*) } }
+#[allow(unused_macros)]
+macro_rules! println { ($($t:tt)*) => { std::println!($($t)*) } }
+#[allow(unused_macros)]
+macro_rules! unreachable { ($($t:tt)*) => { core::unreachable!($($t)*) } }
+#[allow(unused_macros)]
+macro_rules! vec { ($($t:tt)*) => { std::vec!($($t)*) } }
 #[allow(dead_code)]
 #[cold]
 #[inline(never)]
@@ -206,3 +223,6 @@ pub fn png_scanlines(data: &[u8], width: i64, height: i64, kind: i64, max_pixels
     png_scanlines__pruv_body(data, width, height, kind, max_pixels)
 }
 
+}
+#[allow(unused_imports)]
+pub use self::pruv_impl::*;
