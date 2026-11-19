@@ -14,7 +14,7 @@
 //   dump
 //   perfA <U> <reps> | perfB/C/R/H/I <n> <reps> | handA/B/C/R/H/I (same args) -> `ns <ns per call> <checksum>`
 //   R alternates card sizes, H queries hasCard, I pairs setCard with current.
-//   handcheck | hdiff <card> | <lang> | <by>  compare hand and Pruv result words
+//   handcheck | hdiff <card> | <lang> | <by> [| <scen 0..4>]  compare hand and Pruv result words
 // Output: `ok <words>` (the entry's out[1..1+out[0]]), `err <status>`, or `PANIC <msg>`.
 #[path = "@SOL@"] mod sol;
 #[path = "@HAND@"] mod hand;
@@ -418,7 +418,48 @@ fn perf(op: &str, a: usize, reps: usize) -> String {
 
 // hand-vs-Pruv on one card: the admission / validation kind (or the stored-card checksum) of m11_perf_card against
 // hand admit + validate + build, then the whole setCard result words with the given lang and by.
-fn hand_diff(card: &[u8], lang: &[u8], by: &[u8]) -> String {
+//
+// scen picks the stored budget / ref / session key (0 = open budget s1/b1; every other scenario expects error kind 0):
+//   1 stored budget is "closed"; 2 ref names session s2 (not stored); 3 ref budgetId b2 (mismatch);
+//   4 ref without sessionId and an empty session key.
+// Result line: "same err <kind> <en> <used_now>" | "same ok" | "same refused" | "differ ...".
+fn diff_ref(scen: i64) -> Vec<i64> {
+    let (sess, bid) = match scen { 2 => (Some("s2"), "b1"), 3 => (Some("s1"), "b2"), 4 => (None, "b1"), _ => (Some("s1"), "b1") };
+    let mut o = vec![9, if sess.is_some() { 2 } else { 1 }];
+    if let Some(s) = sess {
+        key(&mut o, "sessionId");
+        sv(&mut o, s);
+    }
+    key(&mut o, "budgetId");
+    sv(&mut o, bid);
+    o
+}
+fn diff_sid(scen: i64) -> Vec<i64> {
+    match scen { 2 => pkey("s2"), 4 => Vec::new(), _ => pkey("s1") }
+}
+fn diff_budget(scen: i64) -> Vec<i64> {
+    let mut o = vec![9, 3];
+    key(&mut o, "id");
+    sv(&mut o, "b1");
+    key(&mut o, "state");
+    sv(&mut o, if scen == 1 { "closed" } else { "running" });
+    key(&mut o, "turnCount");
+    o.extend_from_slice(&[5, 3]);
+    o
+}
+// the string units of an error V, which must be exactly {ok:false, error:<string>}
+fn error_units(v: &[i64]) -> Option<&[i64]> {
+    let mut pre = vec![9, 2];
+    key(&mut pre, "ok");
+    pre.push(3);
+    key(&mut pre, "error");
+    pre.push(6);
+    let rest = v.strip_prefix(pre.as_slice())?;
+    let n = usize::try_from(*rest.first()?).ok()?;
+    if rest.len() != n + 1 { return None; }
+    Some(&rest[1..])
+}
+fn hand_diff(card: &[u8], lang: &[u8], by: &[u8], scen: i64) -> String {
     let pk = sol::m11_perf_card(card, NOW0);
     let hk = if !hand::admit(card) { -102 } else {
         let k = hand::validate(card);
@@ -429,26 +470,46 @@ fn hand_diff(card: &[u8], lang: &[u8], by: &[u8]) -> String {
         }
     };
     if pk != hk { return format!("differ kind pruv={} hand={}", pk, hk); }
-    let kind = if card.is_empty() { 1 } else if pk < 0 { -pk } else { -1 };
-    let rf = perf_ref();
-    let sid = pkey("s1");
+    let kind = if scen != 0 { 0 } else if card.is_empty() { 1 } else if pk < 0 { -pk } else { -1 };
+    let rf = diff_ref(scen);
+    let sid = diff_sid(scen);
     let mut w = World::new();
-    let b = perf_budget();
-    w.call(&|st, out| sol::m11_load(st, &sid, &b, out)).unwrap();
+    let b = diff_budget(scen);
+    w.call(&|st, out| sol::m11_load(st, &pkey("s1"), &b, out)).unwrap();
     let mut s = hand::Store { sessions: std::collections::HashMap::new() };
-    s.sessions.insert(pkey("s1"), perf_budget());
+    s.sessions.insert(pkey("s1"), diff_budget(scen));
     let mut ho: Vec<i64> = Vec::new();
+    let mut line = String::new();
     // twice: the second call reads the budget the first one stored (a stored card must stay readable)
     for i in 0..2 {
         let p = w.call(&|st, out| sol::m11_set_card(st, &rf, &sid, card, lang, by, NOW0 + i, out)).map(|x| x.to_vec());
+        // World::call clamps the length prefix to the buffer; the raw prefix must equal the words returned
+        if let Ok(ref q) = p {
+            if w.out[0] != q.len() as i64 { return format!("differ prefix call={} pruv={} words={}", i, w.out[0], q.len()); }
+        }
         let hk = s.set_card(&rf, &sid, card, lang, by, NOW0 + i, &mut ho);
         match p {
-            Err(2) if hk == -2 => return if pk < 0 { format!("same {}", pk) } else { "same refused-entry".to_string() },
-            Ok(p) if hk == kind && ho.len() == p.len() + 1 && ho[0] as usize == p.len() && ho[1..] == p[..] => {}
+            Err(2) if hk == -2 => return "same refused".to_string(),
+            Ok(p) if hk == kind && ho.len() == p.len() + 1 && ho[0] as usize == p.len() && ho[1..] == p[..] => {
+                if kind < 0 {
+                    line = "same ok".to_string();
+                    continue;
+                }
+                // an error result: counters and the {ok:false, error} V checked explicitly
+                if p.len() < 4 || p[0] != ho[1] || p[0] != (hk >= 3) as i64 { return format!("differ used_now pruv={} hand={}", p.first().copied().unwrap_or(-1), ho[1]); }
+                if p[1] != 0 || p[2] != 0 || ho[2] != 0 || ho[3] != 0 {
+                    return format!("differ saved/changed pruv={},{} hand={},{}", p[1], p[2], ho[2], ho[3]);
+                }
+                match (error_units(&p[4..]), error_units(&ho[5..])) {
+                    (Some(a), Some(c)) if a == c => {}
+                    _ => return format!("differ error value call={} pruv={} hand={}", i, words(&p[4..]), words(&ho[5..])),
+                }
+                line = format!("same err {} {} {}", hk, hand::lang_code(lang), p[0]);
+            }
             p => return format!("differ words call={} pruv={:?} hand={} {}", i, p.map(|x| words(&x)), hk, words(&ho)),
         }
     }
-    if pk < 0 { format!("same {}", pk) } else { "same ok".to_string() }
+    line
 }
 
 fn main() {
@@ -496,7 +557,8 @@ fn main() {
                 "handcheck" => hand_check(),
                 "hdiff" => {
                     let a = args(&rest);
-                    hand_diff(&bytes_of(&a[0]), &bytes_of(&a[1]), &bytes_of(&a[2]))
+                    let scen = a.get(3).and_then(|p| p.first()).copied().unwrap_or(0);
+                    hand_diff(&bytes_of(&a[0]), &bytes_of(&a[1]), &bytes_of(&a[2]), scen)
                 }
                 p => {
                     let a = args(&rest);
