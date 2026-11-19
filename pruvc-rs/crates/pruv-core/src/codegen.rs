@@ -1246,6 +1246,8 @@ struct Gen<'a> {
     /// address of the Call being emitted as a rewritten call site (0 = none) and the name of its binding
     small_call: usize,
     small_buf: String,
+    /// buffer element of the `__pruv_small` variant being emitted ("i64" or "u8")
+    small_elem: &'static str,
 }
 
 impl<'a> Gen<'a> {
@@ -1297,6 +1299,7 @@ impl<'a> Gen<'a> {
             small_o: None,
             small_call: 0,
             small_buf: String::new(),
+            small_elem: "i64",
             function_name: String::new(),
             prog,
             explicit,
@@ -1733,8 +1736,8 @@ impl<'a> Gen<'a> {
         }
         self.emit(0, "}");
         self.emit(0, "");
-        if let Some((k, o)) = self.small.fns.get(&f.name).cloned() {
-            self.small_fn(f, &ps, k, &o)?;
+        if let Some((k, o, elem)) = self.small.fns.get(&f.name).cloned() {
+            self.small_fn(f, &ps, k, &o, elem)?;
         }
         if self.cost {
             let cps =join_map(&f.params, ", ", |p| format!("{}: {}", p.name, self.rt(&p.ty, true)));
@@ -1794,11 +1797,12 @@ impl<'a> Gen<'a> {
     }
 
     /// KD-M6-3: the variant of a small function that writes its result into the caller's stack buffer
-    fn small_fn(&mut self, f: &Function, ps: &str, k: i64, o: &str) -> R<()> {
+    fn small_fn(&mut self, f: &Function, ps: &str, k: i64, o: &str, elem: &'static str) -> R<()> {
         let allow = self.allow;
         self.emit(0, allow);
         let sep = if ps.is_empty() { "" } else { ", " };
-        self.emit(0, &format!("fn {}__pruv_small(pruv_sb: &mut [i64; {}]{}{}) -> usize {{", f.name, k, sep, ps));
+        self.emit(0, &format!("fn {}__pruv_small(pruv_sb: &mut [{}; {}]{}{}) -> usize {{", f.name, elem, k, sep, ps));
+        self.small_elem = elem;
         let saved = self.inouts.clone();
         self.inouts.insert(o.to_string());
         self.small_o = Some(o.to_string());
@@ -3433,18 +3437,20 @@ impl<'a> Gen<'a> {
                     }
                     _ => return Err("codegen: internal error: small alloc".to_string()),
                 };
+                let el = self.small_elem;
+                let cast = if el == "i64" { String::new() } else { format!(" as {}", el) };
                 self.emit(
                     ind,
                     &format!(
-                        "let {}: &mut [i64] = {{ let pruv_n: i64 = {}; let pruv_v: i64 = {}; let pruv_s: &mut [i64] = &mut pruv_sb[..pruv_n as usize]; pruv_s.fill(pruv_v); pruv_s }};",
-                        x.name, n0, v0
+                        "let {}: &mut [{}] = {{ let pruv_n: i64 = {}; let pruv_v: i64 = {}; let pruv_s: &mut [{}] = &mut pruv_sb[..pruv_n as usize]; pruv_s.fill(pruv_v{}); pruv_s }};",
+                        x.name, el, n0, v0, el, cast
                     ),
                 );
                 self.vars.insert(x.name.clone(), x.ty.clone());
                 self.refs.remove(&x.name);
             }
             Stmt::Let(x) if self.small.sites.contains_key(&(x as *const Let as usize)) => {
-                let k = self.small.sites[&(x as *const Let as usize)].1;
+                let (_, k, el) = self.small.sites[&(x as *const Let as usize)].clone();
                 if let Expr::Call(c) = &x.value {
                     self.small_call = c as *const Call as usize;
                 }
@@ -3452,9 +3458,9 @@ impl<'a> Gen<'a> {
                 let call = self.e(&x.value);
                 self.small_call = 0;
                 let call = call?;
-                self.emit(ind, &format!("let mut pruv_sb_{}: [i64; {}] = [0i64; {}];", x.name, k, k));
+                self.emit(ind, &format!("let mut pruv_sb_{}: [{}; {}] = [0{}; {}];", x.name, el, k, el, k));
                 self.emit(ind, &format!("let pruv_sl_{}: usize = {};", x.name, call));
-                self.emit(ind, &format!("let {}: &[i64] = &pruv_sb_{}[..pruv_sl_{}];", x.name, x.name, x.name));
+                self.emit(ind, &format!("let {}: &[{}] = &pruv_sb_{}[..pruv_sl_{}];", x.name, el, x.name, x.name));
                 self.vars.insert(x.name.clone(), x.ty.clone());
                 self.refs.remove(&x.name);
             }

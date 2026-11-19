@@ -1592,6 +1592,7 @@ class Gen:
         s.small_o = None      # the local `o` while a __pruv_small variant is emitted
         s.small_call = None   # the call being emitted as a rewritten call site, and the name of its binding
         s.small_buf = None
+        s.small_elem = "i64"   # buffer element of the __pruv_small variant being emitted
         if verified and not trust_callers and not s.cost_used:
             from small import plan_small
             s.small, s.small_sites = plan_small(prog, s.fmap, s.layout, s.stack)
@@ -1796,9 +1797,10 @@ class Gen:
 
     def small_fn(s, f, ps):
         """KD-M6-3: the variant of a small function that writes its result into the caller's stack buffer"""
-        k, o = s.small[f.name]
+        k, o, elem = s.small[f.name]
         s.emit(0, s.allow)
-        s.emit(0, "fn %s__pruv_small(pruv_sb: &mut [i64; %d]%s) -> usize {" % (f.name, k, ", " + ps if ps else ""))
+        s.emit(0, "fn %s__pruv_small(pruv_sb: &mut [%s; %d]%s) -> usize {" % (f.name, elem, k, ", " + ps if ps else ""))
+        s.small_elem = elem
         saved = s.inouts
         s.inouts = set(saved) | {o}
         s.small_o = o
@@ -2706,19 +2708,21 @@ class Gen:
             s.vt[st.name] = st.type
             s.refs.discard(st.name)
         elif isinstance(st, Let) and s.small_o is not None and st.name == s.small_o:
-            a = st.value.args
-            s.emit(ind, "let %s: &mut [i64] = { let pruv_n: i64 = %s; let pruv_v: i64 = %s; let pruv_s: &mut [i64] = "
-                        "&mut pruv_sb[..pruv_n as usize]; pruv_s.fill(pruv_v); pruv_s };" % (st.name, s.e(a[0]), s.e(a[1])))
+            a, el = st.value.args, s.small_elem
+            cast = "" if el == "i64" else " as " + el
+            s.emit(ind, "let %s: &mut [%s] = { let pruv_n: i64 = %s; let pruv_v: i64 = %s; let pruv_s: &mut [%s] = "
+                        "&mut pruv_sb[..pruv_n as usize]; pruv_s.fill(pruv_v%s); pruv_s };"
+                   % (st.name, el, s.e(a[0]), s.e(a[1]), el, cast))
             s.vt[st.name] = st.type
             s.refs.discard(st.name)
         elif isinstance(st, Let) and id(st) in s.small_sites:
-            k = s.small_sites[id(st)][1]
+            _, k, el = s.small_sites[id(st)]
             s.small_call, s.small_buf = st.value, st.name
             call = s.e(st.value)
             s.small_call = None
-            s.emit(ind, "let mut pruv_sb_%s: [i64; %d] = [0i64; %d];" % (st.name, k, k))
+            s.emit(ind, "let mut pruv_sb_%s: [%s; %d] = [0%s; %d];" % (st.name, el, k, el, k))
             s.emit(ind, "let pruv_sl_%s: usize = %s;" % (st.name, call))
-            s.emit(ind, "let %s: &[i64] = &pruv_sb_%s[..pruv_sl_%s];" % (st.name, st.name, st.name))
+            s.emit(ind, "let %s: &[%s] = &pruv_sb_%s[..pruv_sl_%s];" % (st.name, el, st.name, st.name))
             s.vt[st.name] = st.type
             s.refs.discard(st.name)
         elif isinstance(st, Let):

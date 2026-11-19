@@ -12,12 +12,26 @@ pub const MAX_BOUND: i64 = 64;
 /// bytes of rewritten buffers per function
 pub const STACK_CAP: i64 = 4096;
 
+/// result type -> buffer element (P27.5: `[u8]` beside `[i64]`); both need the unnarrowed storage layout ("i64" in
+/// StoragePlan terms)
+pub fn elem_of(ret: &str) -> Option<&'static str> {
+    match ret {
+        "array" => Some("i64"),
+        "array_u8" => Some("u8"),
+        _ => None,
+    }
+}
+
+fn elem_size(elem: &str) -> i64 {
+    if elem == "u8" { 1 } else { 8 }
+}
+
 #[derive(Debug, Default)]
 pub struct SmallPlan {
-    /// function name -> (K, the local `o` that is returned)
-    pub fns: HashMap<String, (i64, String)>,
-    /// address of a rewritten `Let` -> (callee, K)
-    pub sites: HashMap<usize, (String, i64)>,
+    /// function name -> (K, the local `o` that is returned, buffer element "i64" or "u8")
+    pub fns: HashMap<String, (i64, String, &'static str)>,
+    /// address of a rewritten `Let` -> (callee, K, buffer element)
+    pub sites: HashMap<usize, (String, i64, &'static str)>,
 }
 
 type Fmap<'a> = HashMap<String, &'a Function>;
@@ -33,9 +47,10 @@ fn conjuncts<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
     out.push(e);
 }
 
-/// K of a top-level `len(result) <= K` conjunct (literal, 1..=64) of a non-generic, non-foreign `[i64]` function
+/// K of a top-level `len(result) <= K` conjunct (literal, 1..=64) of a non-generic, non-foreign `[i64]` or `[u8]`
+/// function
 pub fn declared_bound(f: &Function) -> Option<i64> {
-    if !f.tparams.is_empty() || f.foreign.is_some() || f.ret != "array" {
+    if !f.tparams.is_empty() || f.foreign.is_some() || elem_of(&f.ret).is_none() {
         return None;
     }
     let mut cs: Vec<&Expr> = Vec::new();
@@ -216,25 +231,26 @@ fn count(stmts: &[Stmt], pred: &dyn Fn(&Stmt) -> bool) -> usize {
 }
 
 struct Sites<'a, 'b> {
-    fns: &'b HashMap<String, (i64, String)>,
+    fns: &'b HashMap<String, (i64, String, &'static str)>,
     fmap: &'b Fmap<'a>,
     storage: &'b StoragePlan,
     used: i64,
     full: bool,
-    sites: &'b mut HashMap<usize, (String, i64)>,
+    sites: &'b mut HashMap<usize, (String, i64, &'static str)>,
 }
 
 impl<'a, 'b> Sites<'a, 'b> {
     fn walk(&mut self, stmts: &[Stmt]) {
         for (i, st) in stmts.iter().enumerate() {
             if let Stmt::Let(x) = st {
-                if !x.mutable && x.ty == "array" && !self.full && self.storage.layout_of(x) == "i64" {
+                if !x.mutable && !self.full && self.storage.layout_of(x) == "i64" {
                     if let Expr::Call(c) = &x.value {
-                        if let Some((k, _)) = self.fns.get(&c.name) {
-                            if stmts_ok(&stmts[i + 1..], &x.name, false, self.fmap) {
-                                if self.used + 8 * k <= STACK_CAP {
-                                    self.used += 8 * k;
-                                    self.sites.insert(x as *const Let as usize, (c.name.clone(), *k));
+                        if let Some((k, _, elem)) = self.fns.get(&c.name) {
+                            if elem_of(&x.ty) == Some(*elem) && stmts_ok(&stmts[i + 1..], &x.name, false, self.fmap) {
+                                let bytes = elem_size(elem) * k;
+                                if self.used + bytes <= STACK_CAP {
+                                    self.used += bytes;
+                                    self.sites.insert(x as *const Let as usize, (c.name.clone(), *k, *elem));
                                 } else {
                                     self.full = true;
                                 }
@@ -344,7 +360,7 @@ pub fn plan_small(prog: &Program, fmap: &Fmap, storage: &StoragePlan, stack: &St
         if f.foreign.is_some()
             || plan.fns.contains_key(&f.name)
             || !fmap.get(&f.name).map_or(false, |g| std::ptr::eq(*g, f))
-            || f.ret != "array"
+            || elem_of(&f.ret).is_none()
             || tainted.contains(&f.name)
         {
             continue;
@@ -372,7 +388,8 @@ pub fn plan_small(prog: &Program, fmap: &Fmap, storage: &StoragePlan, stack: &St
             _ => continue,
         };
         let alloc_ok = matches!(&decl.value, Expr::Call(c) if c.name == "alloc" && c.args.len() == 2);
-        if !(decl.mutable && decl.ty == "array" && alloc_ok) {
+        let elem = elem_of(&f.ret).unwrap_or("i64");
+        if !(decl.mutable && decl.ty == f.ret && alloc_ok) {
             continue;
         }
         if count(&f.body, &|st| matches!(st, Stmt::Return(_))) != 1 {
@@ -384,13 +401,13 @@ pub fn plan_small(prog: &Program, fmap: &Fmap, storage: &StoragePlan, stack: &St
         if !stmts_ok(&f.body[idx[0] + 1..f.body.len() - 1], &o, true, fmap) {
             continue;
         }
-        plan.fns.insert(f.name.clone(), (k, o));
+        plan.fns.insert(f.name.clone(), (k, o, elem));
     }
 
     if plan.fns.is_empty() {
         return plan;
     }
-    let mut sites: HashMap<usize, (String, i64)> = HashMap::new();
+    let mut sites: HashMap<usize, (String, i64, &'static str)> = HashMap::new();
     for f in &prog.functions {
         if f.foreign.is_some() || !fmap.get(&f.name).map_or(false, |g| std::ptr::eq(*g, f)) || in_cycle(&f.name) {
             continue;
