@@ -1087,6 +1087,19 @@ before the representation checks, the `requires` and the body, in both compilers
   (registers or a stack array) and how many stores the zeroing costs are up to the Rust compiler, so a host picks
   the form per call site by measurement (Appendix P18c of docs/L3_RESTRUCTURE_SPEC.md).
   Unused forms are never instantiated (no code). `val` is a module, so it does not clash with an entry named `val`.
+- Fixed-prefix internal results (`--proven-entries`, Rust backend, both compilers): only in a verified build (not
+  `--no-verify`) of a program without G10 runtime or `par` groups, a non-entry, non-foreign function (a generic
+  function only through its concrete specializations) that cannot reach a foreign function, a G6 catalog operation (whose boundary helper panics on a failed check or an exhausted check budget) or `print` through calls and whose last parameter is `inout o: [i64]` and whose every use of `o` is a literal index
+  (`o[c]` read or write), a comparison of `len(o)` with an integer literal, or `inout o` passed as the last argument
+  to another such function, has a prefix length `K` (at least 1, at most 16) computed by the compiler: past every
+  literal index, past every literal `len(o)` is compared against, and at least each callee's `K`. Recursive
+  functions and any other use of `o` get no `K`. Such a function is emitted as a by-value core that takes and
+  returns `[i64; K]` (a single `i64` when `K` is 1; with the logical length `min(len(o), K)`) plus an always-inlined adapter with the old
+  signature that copies the first `min(len(o), K)` words in and back. The body sees a buffer of that length instead of
+  `len(o)`; for the accepted uses both lengths give the same branches, reads and writes, and words past `K` are never
+  touched, so the caller's buffer and status are the same as without the flag (the adapter copies back only when the
+  core returns, which is why a function that could unwind after a write never gets the form). No new contract or proof
+  obligation is involved; the shape is a syntactic property the code generator checks itself.
 - LLVM ABI symbols (`pruv_abi_*` and `__typed`): section 6b, "Run time"; a negative length is rejected by the same
   unsigned compare.
 - C adapter (`pruv_c`): an array or `str` length, a `pruv_handle_new` length and the `new_len` of `pruv_hr_*` are

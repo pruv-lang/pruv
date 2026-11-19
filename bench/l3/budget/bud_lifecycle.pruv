@@ -672,7 +672,7 @@ fn reopen_b(inout st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn
   if len(out) < 1 { return 3; }
   let a: i64 = current_at(st, sk, ss, sn, bk, bs, bn);
   if a < 0 {
-    crate::ent_u16::wr(inout out, 0, 1);
+    out[0] = 1;
     return 0;
   }
   // current_at proved the record span st[off .. off + st[a + 2]) in st with st[a + 2] >= 30: header reads and
@@ -695,7 +695,7 @@ fn reopen_b(inout st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn
   let se: i64 = session_of(st, sk, ss, sn);
   let b: [i64] = blob_copy(st, se);
   if rd(b, 0) != 2 || rd(b, 18) != 1 {
-    crate::ent_u16::wr(inout out, 0, 1);
+    out[0] = 1;
     return 0;
   }
   let mut h: [i64] = crate::ent_u16::slice(b, 0, 24);
@@ -709,7 +709,7 @@ fn reopen_b(inout st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn
   let w: i64 = store(inout st, sk, ss, sn, r);
   if w != 0 { return w; }
   push(inout fx, 20);
-  crate::ent_u16::wr(inout out, 0, 2);
+  out[0] = 2;
   return 0;
 }
 
@@ -738,9 +738,9 @@ pub fn maybe_close(inout st: [i64], sk: [i64], ss: i64, sn: i64, now: i64, inout
   if se < 0 { return 2; }
   let a: i64 = entry_addr(st, se);
   let off: i64 = at_off(st, a);
-  if state_of(st, off, at_n(st, a)) != 0 { crate::ent_u16::wr(inout out, 0, 1); return 0; }
+  if state_of(st, off, at_n(st, a)) != 0 { out[0] = 1; return 0; }
   let ce: i64 = clock_in(st, st, c40(off + 25), c32(rd(st, off + 24)));
-  if ce >= 0 && crate::bud_map::count(st, ce) > 0 { crate::ent_u16::wr(inout out, 0, 1); return 0; }
+  if ce >= 0 && crate::bud_map::count(st, ce) > 0 { out[0] = 1; return 0; }
   // activeSince (string 2) and ended.at (string 3) both empty, from one walk: with string 2 empty, string 3's length
   // word is the next word (str_len_in(st, off, 3) == c32(rd(st, c40(p2 + 1))) when string 2 has length 0).
   let p2: i64 = str_pos_in(st, off, 2);
@@ -762,14 +762,14 @@ pub fn maybe_close(inout st: [i64], sk: [i64], ss: i64, sn: i64, now: i64, inout
     let g: i64 = crate::bud_map::room_apply(inout st, p, 0, wd);
     if g > 0 { return grow(g); }
   }
-  crate::ent_u16::wr(inout out, 0, 1);
+  out[0] = 1;
   if q == 0 { return 0; }
   if !in_place {
     let r: [i64] = close_rec(inout st, sk, ss, sn, b, 1, now, inout bv, inout fx);
     let w: i64 = store(inout st, sk, ss, sn, r);
     if w != 0 { return w; }
     push(inout fx, 20);
-    crate::ent_u16::wr(inout out, 0, 2);
+    out[0] = 2;
     return 0;
   }
   // No activeSince text and no ended.at text: CLOSE keeps the record length, so only the header changes. The clock
@@ -783,7 +783,7 @@ pub fn maybe_close(inout st: [i64], sk: [i64], ss: i64, sn: i64, now: i64, inout
     crate::ent_u16::wr(inout st, off + 19, 2);
     crate::ent_u16::wr(inout st, off + 22, now);
     push(inout fx, 20);
-    crate::ent_u16::wr(inout out, 0, 2);
+    out[0] = 2;
     return 0;
   }
   view_in(st, off, inout bv);
@@ -801,6 +801,6 @@ pub fn maybe_close(inout st: [i64], sk: [i64], ss: i64, sn: i64, now: i64, inout
   crate::ent_u16::wr(inout st, o2 + 19, 2);
   crate::ent_u16::wr(inout st, o2 + 22, now);
   push(inout fx, 20);
-  crate::ent_u16::wr(inout out, 0, 2);
+  out[0] = 2;
   return 0;
 }

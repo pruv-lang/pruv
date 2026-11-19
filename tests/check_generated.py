@@ -29,6 +29,17 @@ def inline_case(lines, sites):
 INLINE_PAIRS = [(8, 300, True), (9, 300, False), (1500, 2, True), (1501, 2, False)]
 
 
+def inline_fp_case(sites, triple=True):
+    """P18d: a by-value twin `f__pruv_fp` (21 body lines, one textual call from its pinned adapter `f`) takes the call
+    sites of `f`; True when the twin gets always (pruvc-rs inline_policy_fp_uses_base_sites has the same pair).
+    triple=False drops the generated body `f__pruv_fpb`: the name is then an ordinary fn with its own single call site."""
+    body = "".join("    let _ = x + %d;\n" % i for i in range(20)) + "    x\n"
+    text = ("#[inline(always)] // pruv: explicit\nfn f(x: i64) -> i64 {\n    f__pruv_fp(x)\n}\n#[inline]\n"
+            "fn f__pruv_fp(x: i64) -> i64 {\n" + body + "}\n"
+            + ("#[inline(always)] // pruv: explicit\nfn f__pruv_fpb(x: i64) -> i64 {\n    x\n}\n" if triple else "") + "fn main() {\n" + "    f(0);\n" * sites + "}\n")
+    return "#[inline(always)]\nfn f__pruv_fp(" in inline_policy(text)
+
+
 def main():
     bad = False
     for path in sorted(glob.glob(os.path.join(ROOT, "pruvc", "data", "*.json"))):
@@ -48,6 +59,11 @@ def main():
     for lines, sites, want in INLINE_PAIRS:
         if inline_case(lines, sites) != want:
             print("inline policy: %d lines, %d sites: want %s" % (lines, sites, "always" if want else "inline"))
+            bad = True
+    for sites, triple, want in ((300, True, False), (1, True, True), (300, False, True)):
+        if inline_fp_case(sites, triple) != want:
+            print("inline policy: __pruv_fp twin (triple %s), %d base sites: want %s"
+                  % (triple, sites, "always" if want else "inline"))
             bad = True
     if bad:
         return 1

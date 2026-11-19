@@ -267,7 +267,7 @@ impl<'a, 'b> Sites<'a, 'b> {
 }
 
 /// Names on a call cycle (iterative Tarjan, linear in the call graph).
-fn cyclic(calls: &HashMap<String, HashSet<String>>) -> HashSet<String> {
+pub(crate) fn cyclic(calls: &HashMap<String, HashSet<String>>) -> HashSet<String> {
     let mut index: HashMap<&str, usize> = HashMap::new();
     let mut low: HashMap<&str, usize> = HashMap::new();
     let mut on: HashSet<&str> = HashSet::new();
