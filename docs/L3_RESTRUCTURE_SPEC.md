@@ -388,7 +388,7 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P13j | B/bud_store.pruv: store bounds found by the P13e audit (Appendix P13e.10) | P: at the maximum slot count the entry base must not overlap the slot table, and a grow must carry the root payload; both as proved `ensures` plus a gate case that drives each path (none does now); proofs kept, time and RSS not worse than P13e. Done (Appendix P13j): entry base 16 + c32(word 4) in `ea`/`xa` (and the admission mirror), bound `ensures` on ea/eb/xa/xb/xbm; root payload through `copy_pay` in `copy_kids` and a `grow_copy` `ensures` (root_carried + blob words); gate cases `maxslot` and admit case 24 fail on a4427ec and pass; gates as P13e.8; instructions, peak RSS and allocations not worse; M7 `__text` -320 B, M4 `__text` +832 B accepted for the root payload fix, removal queued as P13j2 (P13j.4); audit: 2 required findings fixed with admit cases 25/26 (P13j.5). |
 | P13k | B/bud_map.pruv, bud_store.pruv (and both codegens if the lever is inline policy): part (a) of P13i, handed back (Appendix P13i.1) | P: take P13i.1 variant E's cold-fallback split of `bud_map::find_w` (instructions down on all five M7 cells: attach 392 -> 376, reopenmiss 383 -> 373, current 322 -> 311, isHalted 319 -> 304) together with a size lever (out-of-line shared cold paths, `ef`/`set_ef` attributes, or a proof-guided inline rule) so the M7 driver `__text` (457,916 B after P13i) and the M7 +96..176 / M10 +16..32 KiB fixed peak RSS go back toward c3ec58d (413,244 B), with no instruction cell given back on M4, M7, M10; output parity on both compilers if a codegen changes. Starts after P13j (shares bud_store/bud_map) and before T5b2 (same M7 cells). |
 | P13j2 | B/bud_map.pruv (and bud_store.pruv if the frame needs a store `ensures`): root-compare loop in `grow_copy` (Appendix P13j.4) | P: drop the `grow_copy` root-compare loop by a frame proof that `copy_kids` arena writes never touch the root extension records (M4 `__text` -~512 B; P13j left M4 `__text` +832 B over a4427ec, accepted for the root payload fix), with the `grow_copy` root payload `ensures` kept proved, admit cases 24-26 passing, and no instruction, peak RSS or allocation cell given back on M4, M7, M10. Not done (Appendix P13j2): the frame needs content `ensures` on `set_blob`/`copy_pay`, frame `ensures` on `arena_put`/`xbm` and a root-payload-last copy order; split P13j2a/b/c proposed. |
-| P13i2 | B/bud_lifecycle.pruv, m7_test/driver_m7.rs (M7 wire): record text representation (Appendix P13i(c).3) | P: the M7 record keeps `rest` (95 units) and the date (24 units) one UTF-16 unit per i64 word (160 arena words per session; hand16 holds u16 text), which is the M7 proportional peak-RSS excess (Pruv 4.95 vs hand16 3.56 KiB per session slope). Store both as UTF-8 bytes (`[u8]`/`str`, §6b; the representation rule in §1-§4), not as packed i64 words, so the per-session record is at or below hand16; M7 proportional RSS share <= hand16 at S/M, no M7/M10 instruction or time cell given back, M7 Q 113/187/0 on both compilers. Fixed share left to P13k (`__text` +143 KiB). Runs before T5b2 (same M7 cells and bud_lifecycle). |
+| P13i2 | B/bud_lifecycle.pruv, m7_test/driver_m7.rs (M7 wire): record text representation (Appendix P13i(c).3) | P: the M7 record keeps `rest` (95 units) and the date (24 units) one UTF-16 unit per i64 word (160 arena words per session; hand16 holds u16 text), which is the M7 proportional peak-RSS excess (Pruv 4.95 vs hand16 3.56 KiB per session slope). Store both as UTF-8 bytes (`[u8]`/`str`, §6b; the representation rule in §1-§4), not as packed i64 words, so the per-session record is at or below hand16; M7 proportional RSS share <= hand16 at S/M, no M7/M10 instruction or time cell given back, M7 Q 113/187/0 on both compilers. Fixed share left to P13k (`__text` +143 KiB). Runs before T5b2 (same M7 cells and bud_lifecycle). Not done (Appendix P13i2, base 4747c4b, no code changed): the text layout is shared with `bud_halt.pruv` (`halted()` sizes and copies strings 1-3 as unit words and writes a structured halt prefix of numbers and packed ids into string 5) and `m10_test`, both outside this row; the store has no byte region (no `[u8]` view of `[i64]`, and a typed store with an in-place `[u8]` field needs field `inout`, a language gap). Proposed split, for the main session to queue as row P13i2a (files B/bud_lifecycle.pruv, bud_halt.pruv, m7_test/*, m10_test/*; Appendix P13i2.3): a second resident `[u8]` text arena `tx` beside `st`, written by the host at ingress only (WTF-8, §2.1 G4); record strings 1-3 and the rest tail become `(byte len, byte off)` handles, the halt prefix stays structured words; lifecycle and halt bodies copy handles (no op reads `tx`), `t_put` checks spans at ingress, egress views are checked against `len(tx)` in Pruv, `t_grow` compacts `tx`. Expected M7 perf record 1280 -> about 479 B per session per World (hand16 about 0.90 KiB). Same done conditions as P13i2 plus M10 Q 78/222/0 and `cases_halt` 300/0/0 on both compilers. Runs before T5b2. |
 | P21a | B/bud_map.pruv, bud_tools.pruv: O(1) forgetTurn (Appendix P21.4) | P: forgetTurn of a turn holding N activities <= 1.0x oaw at S/M in time, peak RSS and allocations (P21: 8.9x / 37.9x; oa forgets by generation, Pruv frees each child), with the toolnew and tooldup cells kept <= 1.0x and the reclaim cost measured where it lands; plus a corrupt control that pokes header words (entry top = cap - 1, low live) for the P21.7 counterexample. Done (Appendix P21a): forget 0.99 / 0.95x oaw (overlap), RSS and allocations below; reclaim cost in toolnew queued as P21b. |
 | P21b | B/bud_map.pruv, bud_store.pruv: reclaim cost of the lazy forget (Appendix P21a.3) | P: toolnew <= 1.0x oaw at S/M by median and distribution (P21a: 0.93 / 1.08x, overlapping) and the toolgrow cycle <= 1.0x oaw in instructions (P21a: 1.05 / 1.08x), with toolforget, tooldup and memory kept; e.g. fold reclaim_head into entry_alloc. Same gates as P21a. Done (Appendix P21b): toolnew 0.87 / 0.97x oaw (Pruv max below oaw min), toolgrow 0.93 / 0.98x oaw instructions; cause was index load at M (early rehash bound slots/4 -> 3/8) plus the reclaim push/pop and repeated row bases. |
 | P13o | Both checkers/verifiers: `opaque fn` and `reveal F;` (Appendix P13o) | C: positive reveal/congruence/loop-scope cases; negatives for a missing reveal, false facts through the opaque symbol, totality, signature and reveal-target misuse; framework rows equal on both compilers. Unblocks P13a step 2 (Appendix P13a.3), which lands separately. |
@@ -6687,3 +6687,53 @@ the premise that the destination payload is default, and must cover the four sca
 pass must show the reused region does not overlap an earlier root's blob. (3) Pass 1's invariant is "root payload
 default" (not "no extension": the first child may create it); pass 2 copies roots only, without re-inserting
 children or charging budget, and keeps child links and earlier roots' flags, scalars and blob words.
+
+## Appendix P13i2: M7 record text as bytes, not done (split)
+
+Base main 4747c4b. Stopped after the read-and-design step; no source changed, so no gate or performance run applies
+(the generated Rust, gates and cells are those of 4747c4b).
+
+### P13i2.1 Who reads and writes the record text
+
+| place | strings 1-3 (openedAt, activeSince, ended.at text) and 5 (rest) |
+|---|---|
+| `bud_lifecycle.pruv` | `str_words` stride `1 + len`, `str_at` / `str_pos_in`, `rewrite` (copies 1, 2, 5, writes 3), `rec_bound`, `put_str`; `reopen` tests `str_len_in(3) == 0` |
+| `bud_halt.pruv` | `halted()` sizes the record as `30 + .. + l1 + l2 + l3 + .. + rl` and copies strings 1-3 with `put_str` (`l` words each); string 5 becomes a structured halt prefix in words (`-2, reason, kind, at, ids` as framed packed keys) followed by the old rest tail; `prefix_len` and the halt reason read those words |
+| `m10_test` (`root_m10.pruv` `str_at`/`rewrite`, `driver_m10.rs` `rec()`, `hand_m10.rs`) | same layout, one unit per word |
+| `m7_test` (`driver_m7.rs` `rec()` and egress, `hand_m7_u16.rs` `encode()`) | same layout |
+
+So the rest string is not opaque text in the store: bud_halt writes numbers and packed ids into it. Changing the
+layout of strings 1-3 alone (the dates) already breaks `bud_halt::halted()`. Both `bud_halt.pruv` and `m10_test` are
+outside row P13i2's files.
+
+### P13i2.2 Representation options
+
+| option | result |
+|---|---|
+| UTF-16 units 4 per word, or bytes 8 per word, inside the `[i64]` arena | rejected: the project rule keeps strings out of i64 words (the "4 units per word" of P13i(c).3 is withdrawn) |
+| a `[u8]` view of the `[i64]` arena | not in the language (SPEC §6b: no `[u8]`/`[i64]` conversion) and bytes-in-words in disguise |
+| a typed store `struct { words: [i64], text: [u8] }` changed in place | language gap: buffer fields are read-only views (SPEC §6e) and fields cannot be `inout` places (§6g); §3 of this spec already says not to assume field `inout` |
+| a second resident `[u8]` text arena `tx` beside `st` (two `inout` arrays, existing features) | feasible; chosen for P13i2a |
+
+### P13i2.3 Proposed P13i2a
+
+- `tx: [u8]` beside `st`, written by the host at ingress only. The text comes from UTF-16 (JS) and may hold lone
+  surrogates, so it is WTF-8 (`[u8]`, never `str`, §2.1 G4), decoded back to units at egress.
+- Record strings 1-3 and the rest tail are handles `(byte len, byte off)` into `tx`; the halt prefix stays structured
+  words (`rl, -2, reason, kind, at, ids, tail handle`). Lifecycle and halt bodies copy handles and never read bytes,
+  so no lifecycle signature takes `tx`; `t_put` checks every span `off + len <= len(tx)` at ingress and egress views
+  `[tag, off, len]` are checked against `len(tx)` in Pruv. `reopen`'s ended.at emptiness test reads the byte length.
+- Dropped text (OPEN, session delete) is garbage in `tx` until `t_grow` compacts it (a lifecycle-level walk of live
+  records, O(live text)); hand16 frees per drop, so the garbage bound (ingress bytes since the last grow) must be
+  measured against hand16's peak.
+- Size per M7 perf session and World: record 160 words (1280 B) -> 24 + 12 (id) + 3 x 2 + 1 (follows) + 2 (rest) = 45
+  words (360 B) plus 119 text bytes, about 479 B; hand16 holds about 0.90 KiB of live heap per session.
+- Files: `bud_lifecycle.pruv`, `bud_halt.pruv`, `m7_test/{root.pruv, driver_m7.rs, hand_m7_u16.rs, diff_hand_m7.py}`,
+  `m10_test/{root_m10.pruv, driver_m10.rs, hand_m10.rs}`. Roots that import bud_lifecycle through bud_map, bud_clock
+  or bud_halt (M4, M8, M9, M11, admit) rebuild without source changes; their generated Rust is a gate.
+
+### P13i2.4 Delegations
+
+| work | by |
+|---|---|
+| reading, attribution of the text readers, representation decision, this appendix | Claude Opus 5.5, direct (no multi-file sweep was needed past a few greps; no audit, nothing to audit) |
