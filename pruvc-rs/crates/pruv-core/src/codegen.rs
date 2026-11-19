@@ -1707,7 +1707,13 @@ impl<'a> Gen<'a> {
         self.emit(0, allow);
         // Inline hint on every function body: without it rustc keeps the generated call chains as real calls.
         // inline_policy raises it to #[inline(always)] where the measured policy says so.
-        self.emit(0, "#[inline]");
+        if f.cold {
+            // P13k: `#[cold] fn` is never an inline candidate (inline_policy only rewrites exact `#[inline]` lines)
+            self.emit(0, "#[cold]");
+            self.emit(0, "#[inline(never)]");
+        } else {
+            self.emit(0, "#[inline]");
+        }
         self.emit(0, &format!("{}fn {}({}){} {{", vis, body_name, ps, ret));
         self.cost = !self.verified && f.cost.is_some();
         if self.cost {
@@ -1891,7 +1897,12 @@ impl<'a> Gen<'a> {
         let checked = checked.unwrap_or(!self.trust);
         let allow = self.allow;
         self.emit(0, allow);
-        self.emit(0, "#[inline]");
+        if f.cold {
+            self.emit(0, "#[cold]");
+            self.emit(0, "#[inline(never)]");
+        } else {
+            self.emit(0, "#[inline]");
+        }
         let vis = if is_pub { self.pub_vis() } else { "" };
         let header = format!("{vis}fn {name}({ps}){ret} {{");
         self.emit(0, &header);
@@ -4724,10 +4735,15 @@ impl ProvenEntry {
 }
 
 fn proven_module(text: &str, items: &[ProvenEntry], allow: &str) -> String {
-    let attrs: HashMap<&str, &str> = text.split('\n').zip(text.split('\n').skip(1))
-        .filter(|(attr, _)| matches!(*attr, "#[inline]" | "#[inline(always)]"))
-        .map(|(attr, header)| (header, attr))
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut attrs: HashMap<&str, Vec<&str>> = lines.windows(2)
+        .filter(|w| matches!(w[0], "#[inline]" | "#[inline(always)]"))
+        .map(|w| (w[1], vec![w[0]]))
         .collect();
+    // R-7-3: a `#[cold]` fn is emitted as `#[cold]` then `#[inline(never)]`; its proven entry keeps both.
+    attrs.extend(lines.windows(3)
+        .filter(|w| w[0] == "#[cold]" && w[1] == "#[inline(never)]")
+        .map(|w| (w[2], vec![w[0], w[1]])));
     let has_str = items.iter().any(|item| item.has_str);
     let mut module = String::from("\n");
     module.push_str(PROVEN_ARR);
@@ -4740,7 +4756,8 @@ fn proven_module(text: &str, items: &[ProvenEntry], allow: &str) -> String {
     }
     module.push_str("\n/// P18b (--proven-entries): entries with lengths checked once by their parameter constructors.\npub mod pruv_proven {\n    use super::*;\n");
     for item in items {
-        for line in [allow, attrs[item.header.as_str()], &item.signature] {
+        let attr = &attrs[item.header.as_str()];
+        for line in std::iter::once(allow).chain(attr.iter().copied()).chain(std::iter::once(item.signature.as_str())) {
             module.push_str("    ");
             module.push_str(line);
             module.push('\n');
@@ -5044,7 +5061,7 @@ mod tests {
             ret_refine: None,
             tparams: vec![],
             foreign: None,
-            cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false,
+            cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, cold: false,
         };
         Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None, pkg_name: None }
     }
@@ -5095,7 +5112,7 @@ mod tests {
             ret_refine: None,
             tparams: vec![],
             foreign: None,
-            cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false,
+            cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, cold: false,
         };
         Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None, pkg_name: None }
     }
@@ -5155,7 +5172,7 @@ mod tests {
             foreign: None,
             cost: None,
             decreases: None,
-            small_bound: None, x_auto: None, opaque: false,
+            small_bound: None, x_auto: None, opaque: false, cold: false,
         }
     }
 

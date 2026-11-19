@@ -51,7 +51,7 @@ impl Tok {
     }
 }
 
-const OPS2: &[&str] = &["==", "!=", "<=", ">=", "&&", "||", "->", "=>", "::", ".."];
+const OPS2: &[&str] = &["==", "!=", "<=", ">=", "&&", "||", "->", "=>", "::", "..", "#["];
 const OPS1_LIST: &[&str] = &[".", "|", "-", "+", "*", "/", "%", "<", ">", "=", "!", "(", ")", "{", "}", "[", "]", ",", ":", ";"];
 
 /// STAGE1 A: `|` is a token only directly after a name that looks like a type in a type position
@@ -125,6 +125,18 @@ fn g4_skip(src: &[char], mut p: usize) -> usize {
     p
 }
 
+/// True when the last three tokens are `#[` `cold` `]` (the `]` closing a `#[cold]` attribute starts an item).
+fn cold_attr_close(toks: &[Tok]) -> bool {
+    let n = toks.len();
+    n >= 3
+        && toks[n - 3].kind == Kind::Op
+        && toks[n - 3].val == "#["
+        && toks[n - 2].kind == Kind::Id
+        && toks[n - 2].val == "cold"
+        && toks[n - 1].kind == Kind::Op
+        && toks[n - 1].val == "]"
+}
+
 /// G4 A0 (vparser.py `_g4_token`): `mod`, `pub` and `crate` are Rust keywords (reserved names) but also contextual module
 /// syntax. They become a `kw` token only in these positions; everywhere else they stay the old reserved_name error.
 ///   mod   at top level (brace depth 0), at the start of an item (first token, after `}` or `;`, or after `pub`), and
@@ -150,7 +162,11 @@ fn g4_token(word: &str, src: &[char], end: usize, toks: &[Tok], depth: usize) ->
     }
     let start = match prev {
         None => true,
-        Some(p) => (p.kind == Kind::Op && matches!(p.val.as_str(), "}" | ";")) || (p.kind == Kind::Kw && p.val == "pub"),
+        Some(p) => {
+            (p.kind == Kind::Op && matches!(p.val.as_str(), "}" | ";"))
+                || (p.kind == Kind::Kw && p.val == "pub")
+                || cold_attr_close(toks)
+        }
     };
     if !start {
         return false;
@@ -315,6 +331,24 @@ pub fn lex_into(src: &[char], tag: usize, toks: &mut Vec<Tok>) -> Result<(), Pru
             if op == "|" && !bar_after_type(&toks) {
                 // A stray `|` outside a type position stays the lexical error it has always been
                 return Err(PruvError::new("parse", line, col, "bad_char", format!("unexpected character {}", repr_str("|")), "remove it"));
+            }
+            if op == "#[" {
+                // P13k: an attribute may only start a top-level item (first token, after `}` / `;`, or after `#[cold]`)
+                let ok = brace_depth == 0
+                    && match toks.last() {
+                        None => true,
+                        Some(p) => (p.kind == Kind::Op && matches!(p.val.as_str(), "}" | ";")) || cold_attr_close(&toks),
+                    };
+                if !ok {
+                    return Err(PruvError::new(
+                        "parse",
+                        line,
+                        col,
+                        "attribute_position",
+                        "#[cold] must be followed by a private fn item",
+                        "put #[cold] directly before `fn` (not pub, opaque, trusted rust fn, struct, enum or mod)",
+                    ));
+                }
             }
             pos += op.len();
             if op == "{" {

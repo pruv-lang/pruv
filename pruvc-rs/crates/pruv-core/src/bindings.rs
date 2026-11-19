@@ -1278,7 +1278,7 @@ mod tests {
             line: 1, col: 1, name: name.into(),
             params: params.into_iter().map(|(n, t)| Param { name: n.into(), ty: t.into(), refine: None, take: false, mode_pos: None }).collect(),
             ret: ret.into(), effects: vec![], requires: vec![], ensures: vec![], body: vec![], ret_refine: None, tparams: vec![],
-            foreign: None, cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false,
+            foreign: None, cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, cold: false,
         }
     }
 

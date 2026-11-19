@@ -15,7 +15,7 @@ TOKEN_RE = re.compile(r"""
  (?P<ws>[ \t\r]+) | (?P<nl>\n) | (?P<comment>//[^\n]*)
 |(?P<int>[0-9][0-9_]*)
 |(?P<id>[A-Za-z_][A-Za-z0-9_]*)
-|(?P<op>==>|==|!=|<=|>=|&&|\|\||->|=>|::|\.\.|\.|\||[-+*/%<>=!(){}\[\],:;])
+|(?P<op>==>|==|!=|<=|>=|&&|\|\||->|=>|::|\.\.|\.|\||\#\[|[-+*/%<>=!(){}\[\],:;])
 """, re.X)
 
 
@@ -122,6 +122,13 @@ _G4_PUB_AHEAD = re.compile(_G4_SKIP + r"(?:fn|struct|enum|mod|pub|trusted|rust|o
 _G4_CRATE_AHEAD = re.compile(_G4_SKIP + r"::")
 
 
+def _cold_end(toks):
+    """P13k: the previous three tokens are `#[` `cold` `]` (the `]` that closes a `#[cold]` attribute)"""
+    return (len(toks) >= 3 and toks[-1].kind == "op" and toks[-1].val == "]"
+            and toks[-2].kind == "id" and toks[-2].val == "cold"
+            and toks[-3].kind == "op" and toks[-3].val == "#[")
+
+
 def _g4_token(word, src, end, toks, depth):
     prev = toks[-1] if toks else None
     if word == "crate":
@@ -131,7 +138,8 @@ def _g4_token(word, src, end, toks, depth):
         return _G4_CRATE_AHEAD.match(src, end) is not None
     if depth != 0:
         return False
-    start = prev is None or (prev.kind == "op" and prev.val in ("}", ";")) or (prev.kind == "kw" and prev.val == "pub")
+    start = (prev is None or (prev.kind == "op" and prev.val in ("}", ";")) or (prev.kind == "kw" and prev.val == "pub")
+             or _cold_end(toks))
     if not start:
         return False
     if word == "mod":
@@ -185,6 +193,14 @@ def lex(src, toks=None):
             if v == "|" and not _bar_after_type(toks):
                 # a lone `|` outside a type position stays the lexical error it always was
                 raise PruvError("parse", line, col, "bad_char", "unexpected character %r" % v, "remove it")
+            if v == "#[":
+                # P13k: an attribute may only start a top-level item (first token, after `}` / `;`, or after `#[cold]`)
+                prev = toks[-1] if toks else None
+                if not (depth == 0 and (prev is None or (prev.kind == "op" and prev.val in ("}", ";"))
+                                        or _cold_end(toks))):
+                    raise PruvError("parse", line, col, "attribute_position",
+                                    "#[cold] must be followed by a private fn item",
+                                    "put #[cold] directly before `fn` (not pub, opaque, trusted rust fn, struct, enum or mod)")
             if v == "{":
                 depth += 1
             elif v == "}" and depth > 0:
@@ -238,6 +254,18 @@ class Parser:
         p.mods = []
         while s.peek().kind != "eof":
             pub = None
+            cold = None
+            if s.at("#["):                # P13k: the only attribute is `#[cold]`, directly before a private `fn`
+                cold = s.next()
+                if not (s.peek().kind == "id" and s.peek().val == "cold" and s.at("]", 1)):
+                    raise PruvError("parse", cold.line, cold.col, "unknown_attribute",
+                                    "unknown attribute; the only function attribute is #[cold]",
+                                    "remove the attribute or write #[cold]")
+                s.next(); s.next()
+                if not s.at("fn"):
+                    raise PruvError("parse", cold.line, cold.col, "attribute_position",
+                                    "#[cold] must be followed by a private fn item",
+                                    "put #[cold] directly before `fn` (not pub, opaque, trusted rust fn, struct, enum or mod)")
             if s.at("pub"):               # G4: visibility of the next item
                 pub = s.next()
                 if s.at("pub"):
@@ -281,6 +309,7 @@ class Parser:
             else:
                 f = s.function()
                 f.pub = pub is not None
+                f.cold = cold is not None
                 p.functions.append(f)
                 p.items.append(f)
             if pub is not None:

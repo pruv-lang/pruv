@@ -1,0 +1,5 @@
+// spec: R-7-3 reject
+// `#[cold]` is written once, directly before `fn`
+#[cold]
+#[cold]
+fn f() -> i64 { return 1; }
