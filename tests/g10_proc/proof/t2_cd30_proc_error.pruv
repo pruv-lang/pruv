@@ -1,0 +1,16 @@
+// TIDY 4.11 accept twin of must_reject/cd30_proc_error: proc_error is 0 exactly on an ok handle, and a failed
+// spawn reports 1 or 2.
+fn zero_iff_ok(p: Process) -> bool
+  ensures result == proc_ok(p)
+{
+  return proc_error(p) == 0;
+}
+
+fn spawn_code(program: str, cwd: str) -> Result<i64> ! proc, alloc {
+  let args: ProcessArgs = proc_args_new();
+  let p: Process = proc_spawn(program, args, cwd);
+  if !proc_ok(p) {
+    assert proc_error(p) == 1 || proc_error(p) == 2;
+  }
+  return proc_kill(move p);
+}

@@ -1,0 +1,13 @@
+// TIDY 4.11 accept twin of must_reject/cd38_ev_error: ev_error is 0 right after ev_new(1) and 0 exactly on an ok
+// loop.
+fn fresh() -> Loop ! async, alloc
+  ensures ev_error(result) == 0
+{
+  return ev_new(1);
+}
+
+fn zero_iff_ok(l: Loop) -> bool
+  ensures result == ev_ok(l)
+{
+  return ev_error(l) == 0;
+}

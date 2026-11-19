@@ -1,0 +1,11 @@
+// TIDY 4.11 accept twin of must_reject/cd24_file_readable: a file opened for reading is readable exactly when it
+// opened; a created file is never readable.
+fn opened_read(path: str) -> bool ! fs
+  ensures true
+{
+  let f: File = file_open_read(path);
+  assert file_readable(f) == file_ok(f);
+  let g: File = file_create(path);
+  assert !file_readable(g);
+  return file_readable(f);
+}

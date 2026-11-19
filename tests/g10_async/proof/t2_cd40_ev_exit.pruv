@@ -1,0 +1,14 @@
+// TIDY 4.11 accept twin of must_reject/cd40_ev_exit: ev_exit is 0 right after ev_new(1) and ev_wait keeps it while
+// the event fields change.
+fn fresh() -> Loop ! async, alloc
+  ensures ev_exit(result) == 0
+{
+  return ev_new(1);
+}
+
+fn wait_keeps(take l: Loop) -> Loop ! async, net, proc, alloc
+  requires ev_ok(l) && ev_exit(l) == 7
+  ensures ev_exit(result) == 7
+{
+  return ev_wait(move l, 0);
+}

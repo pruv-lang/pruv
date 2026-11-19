@@ -1,0 +1,12 @@
+// TIDY 4.11 accept twin of must_reject/cd22_string_to_str: the view of a String built from "ab" has length 2 and
+// the bytes 97, 98.
+fn view_bytes() -> i64 ! alloc
+  ensures result == 2
+{
+  let mut s: String = string_new();
+  s = string_push_str(move s, "ab");
+  let t: str = string_to_str(s);
+  assert len(t) == 2;
+  assert t[0] == 97 && t[1] == 98;
+  return len(t);
+}

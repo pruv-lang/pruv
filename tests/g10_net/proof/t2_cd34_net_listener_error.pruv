@@ -1,0 +1,18 @@
+// TIDY 4.11 accept twin of must_reject/cd34_net_listener_error: net_listener_error is 0 exactly on an ok listener,
+// and a failed listen reports 1 or 2 (its port is 0).
+fn zero_iff_ok(l: Listener) -> bool
+  ensures result == net_listener_ok(l)
+{
+  return net_listener_error(l) == 0;
+}
+
+fn listen_code(host: str, port: i64) -> Result<i64> ! net, alloc
+  requires 0 <= port && port <= 65535
+{
+  let l: Listener = net_listen(host, port);
+  if !net_listener_ok(l) {
+    assert net_listener_port(l) == 0;
+    assert net_listener_error(l) == 1 || net_listener_error(l) == 2;
+  }
+  return net_listener_close(move l);
+}

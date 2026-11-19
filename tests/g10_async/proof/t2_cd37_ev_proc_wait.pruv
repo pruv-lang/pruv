@@ -1,0 +1,7 @@
+// TIDY 4.11 accept twin of must_reject/cd37_ev_proc_wait: the same call on a process slot meets the precondition.
+fn ok(take l: Loop, a: i64) -> Loop ! async, proc, alloc
+  requires ev_ok(l)
+  requires 0 <= a && a < ev_cap(l) && ev_kind(l, a) == 3
+{
+  return ev_proc_wait(move l, a);
+}
