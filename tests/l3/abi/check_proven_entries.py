@@ -51,6 +51,20 @@ pub fn bytes_out(inout out: [u8]) -> i64
     out[0] = 1;
     return 0;
 }
+
+pub fn named_k(K: i64, inout out: [i64]) -> i64
+  requires len(out) >= 1
+{
+    out[0] = K;
+    return K;
+}
+
+pub fn only_out(inout out: [i64]) -> i64
+  requires len(out) >= 1
+{
+    out[0] = 3;
+    return 4;
+}
 """
 
 HOST = """\
@@ -69,6 +83,8 @@ fn main() {
     assert_eq!(text_len(text), pruv_proven::text_len(PruvStr::new(text)));
     assert_eq!(pruv_proven::val::pair::<2>(5), (7, [5, 6]));
     assert_eq!(pruv_proven::val::copy_first::<3>(src_proof), (42, [42, 0, 0]));
+    assert_eq!(pruv_proven::val::named_k::<2>(9), (9, [9, 0]));
+    assert_eq!(pruv_proven::val::only_out::<1>(), (4, [3]));
 
     let err = std::panic::catch_unwind(|| {
         let mut dst = [0];
@@ -133,8 +149,8 @@ def main(work, rs, py):
         assert b"let dst: &mut [i64] = dst.get_mut();" in twins
         assert b"let text: &str = text.get();" in twins
         assert b"pub mod val {" in twins
-        assert b"fn pair<const K: usize>(x: i64) -> (i64, [i64; K])" in twins
-        assert b"fn copy_first<const K: usize>(src: &PruvArr<i64>) -> (i64, [i64; K])" in twins
+        assert b"fn pair<const PRUV__K: usize>(x: i64) -> (i64, [i64; PRUV__K])" in twins
+        assert b"fn copy_first<const PRUV__K: usize>(src: &PruvArr<i64>) -> (i64, [i64; PRUV__K])" in twins
         for name in (b"not_last", b"bytes_out", b"scalar", b"array_len"):
             assert b"fn " + name + b"<" not in twins, name
         for name in (b"copy_first", b"text_len", b"array_len"):
@@ -161,6 +177,7 @@ def main(work, rs, py):
     # The val module's glob import brings the checked entries into scope privately.
     for call, diagnostic in (
         ("pair::<{ (1usize << 40) + 1 }>(1)", "by-value result longer than 2^40"),
+        ("pair::<{ (1usize << 40) + 1 }>(1)", "E0080"),
         ("not_last::<1>(1)", "E0603"),
         ("bytes_out::<1>()", "E0603"),
     ):
@@ -169,7 +186,7 @@ def main(work, rs, py):
         result = run([rustc, "--edition", "2021", str(work / "main.rs"), "-o", str(work / "host")])
         assert result.returncode != 0, call
         assert diagnostic in result.stderr, result.stderr
-        if call.startswith("pair"):
+        if call.startswith("pair") and diagnostic != "E0080":
             print(next(line for line in result.stderr.splitlines() if diagnostic in line))
 
     manifest = work / "pruv.json"
@@ -187,7 +204,7 @@ def main(work, rs, py):
             twins = proven[0][len(plain[0]):]
             assert b"pub mod pruv_raw {" in plain[0] and b"pub mod pruv_proven {" in twins, mode
             assert b"pub(crate) fn copy_first(" in twins, mode
-            assert b"pub(crate) fn pair<const K: usize>" in twins, mode
+            assert b"pub(crate) fn pair<const PRUV__K: usize>" in twins, mode
 
     clash = work / "clash.pruv"
     clash.write_text("pub struct PruvArr { x: i64 }\n" + SOURCE, encoding="utf-8")

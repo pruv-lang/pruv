@@ -4687,9 +4687,9 @@ impl ProvenEntry {
                 .collect::<Vec<_>>().join(", ");
             Some(format!(concat!(
                 "        #[inline(always)]\n",
-                "        {vis}fn {name}<const K: usize>({inputs}) -> ({rt}, [i64; K]) {{\n",
-                "            const {{ assert!((K as u64) <= (1u64 << 40), \"pruv: by-value result longer than 2^40\") }};\n",
-                "            let mut pruv_res = [0i64; K];\n",
+                "        {vis}fn {name}<const PRUV__K: usize>({inputs}) -> ({rt}, [i64; PRUV__K]) {{\n",
+                "            const {{ assert!((PRUV__K as u64) <= (1u64 << 40), \"pruv: by-value result longer than 2^40\") }};\n",
+                "            let mut pruv_res = [0i64; PRUV__K];\n",
                 "            let pruv_r = super::{name}({args});\n",
                 "            (pruv_r, pruv_res)\n",
                 "        }}\n",

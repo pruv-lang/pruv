@@ -1025,13 +1025,16 @@ before the representation checks, the `requires` and the body, in both compilers
 - By-value results (`--proven-entries`): a twin whose last parameter is `inout` of `[i64]` (the result buffer) also
   gets a by-value form `pruv_proven::val::f::<K>(..)`: the twin's parameters without the last one, returning
   `(r, [i64; K])`, where `r` is the entry's result and the array is the result buffer after the call. `K` is the
-  host's chosen buffer length; it runs the twin on a fresh zeroed `[i64; K]`, so it is exactly the twin called with
-  a new length-`K` all-zero buffer (the same `requires`, status and words; a `K` too small for a result gives the
-  same answer as a too-small buffer). `K > 2^40` is a compile-time error (a `const` assertion, not a run-time
-  check), so the length bound holds by construction. An entry whose last parameter is not `inout [i64]` (another
-  element type, not `inout`, or not last) gets no `val` form. The form is `#[inline(always)]` and generic: when the
-  entry body inlines into the host, the result words stay in registers and the buffer is never stored; when it does
-  not, the zeroed buffer is a stack array (K stores per call), so a host picks the form per call site by measurement.
+  host's chosen buffer length (the generated const parameter is named `PRUV__K`, a reserved name, so it cannot
+  clash with a parameter named `K`). It runs the twin on a fresh zeroed `[i64; K]`, so it is exactly the twin
+  called with a new length-`K` all-zero buffer: the same `requires`, status and words. A `K` too small for the
+  result is a too-small buffer: a `requires` panic in a checked build, and under `--trust-callers` the host must
+  meet the twin's contract for that zero buffer, as for the twin itself. `K > 2^40` is a compile-time error (a
+  `const` assertion, not a run-time check), so the length bound holds by construction. An entry whose last
+  parameter is not `inout [i64]` (another element type, not `inout`, or not last) gets no `val` form. The form is
+  `#[inline(always)]` and generic. This rule fixes the meaning only; where the words live after optimization
+  (registers or a stack array) and how many stores the zeroing costs are up to the Rust compiler, so a host picks
+  the form per call site by measurement (Appendix P18c of docs/L3_RESTRUCTURE_SPEC.md).
   Unused forms are never instantiated (no code). `val` is a module, so it does not clash with an entry named `val`.
 - LLVM ABI symbols (`pruv_abi_*` and `__typed`): section 6b, "Run time"; a negative length is rejected by the same
   unsigned compare.

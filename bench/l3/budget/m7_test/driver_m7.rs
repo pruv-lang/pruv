@@ -949,7 +949,7 @@ fn fair_val<const C: i64, const K: usize>(b: &mut FBuf, a: &FArgs) -> (i64, [i64
         2 => sol::pruv_proven::val::c_is_halted::<K>(b.st, black_box(a.sk), a.sn, black_box(a.bk), a.bn),
         _ => unreachable!(),
     };
-    black_box((r, o[0]));
+    black_box((r, o));
     (r, o)
 }
 

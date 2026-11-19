@@ -3370,9 +3370,9 @@ def proven_entry(f, param_types, vis, name, ret):
         args = [p.name for p in f.params[:-1]] + ["PruvArr::new_mut(&mut pruv_res)"]
         val = [
             "#[inline(always)]",
-            f"{vis}fn {name}<const K: usize>({', '.join(params[:-1])}) -> ({rt}, [i64; K]) {{",
-            '    const { assert!((K as u64) <= (1u64 << 40), "pruv: by-value result longer than 2^40") };',
-            "    let mut pruv_res = [0i64; K];",
+            f"{vis}fn {name}<const PRUV__K: usize>({', '.join(params[:-1])}) -> ({rt}, [i64; PRUV__K]) {{",
+            '    const { assert!((PRUV__K as u64) <= (1u64 << 40), "pruv: by-value result longer than 2^40") };',
+            "    let mut pruv_res = [0i64; PRUV__K];",
             f"    let pruv_r = super::{name}({', '.join(args)});",
             "    (pruv_r, pruv_res)",
             "}",
