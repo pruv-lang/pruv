@@ -380,7 +380,7 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P13c | B/host.rs: M4 peak RSS at or below hand (P13b.8) | P: peak RSS split by component (entry words, slot table, arena slack, old + new buffer at a grow) on the 9 M4 cells; every cell <= 1.0x hand by peak RSS and allocation count, time not worse than P13b; Q2/Q3 growth gates unchanged. Done in part (Appendix P13c): old buffers mapped by the host; 7 of 9 cells still above hand, split into P13d, P13e and one page of undetermined cause. |
 | P13d | Both codegens (pruvc / pruvc-rs): generated code size of the M4 driver (Appendix P13c.8) | P: resident `__TEXT` of the M4 Pruv binary at or below hand's (P13c: +80 KiB, measured before the P13c change, assumed unchanged after), with both sides built with the same flags; time not worse than P13c; no Pruv-only build flags. Measured (Appendix P13d): not met without time loss, no compiler change; size split by line and queued as P13h/P13e/P13f. T5 adds M7: every inline promotion of the P19c bodies grows `__text` (Appendix T5.2). |
 | P13e | B/bud_map.pruv, bud_store.pruv, bud_world.pruv, bud_admit.pruv: entry layout (Appendix P13c.8) | P: smaller per-entry words (P13c: 20 words) so tools peak RSS reaches hand after P13d (also P21: tooldup at M = 500, 3120 vs oaw 3040 KiB); proofs and M10 replay counters kept; time not worse than P13c. Step 1 (Appendix P13e): the M4 excess is a fixed +64..96 KiB (P13d/P13h) on every axis; only tools has a proportional share above hand (+96 KiB at n = 1000). Decision option 1 (boundary widened). Step 2a accessors (2d877e8), step 2b base 10 words + on-demand 10-word extension (b231319): tools proportional RSS at hand within one page, sessions/clocks below hand, allocations equal, instructions equal or lower at n = 2000 and +0.3..1.4 % at n = 100..1000 (fixed code term); fixed share +16..48 KiB of code on M4 and M7 +96..176 / M10 +16..32 KiB, open with P13d/P13h (Appendix P13e.6-7). Audit fixes and resident format version 2: c85a671 (P13e.10). |
-| P13f | B/driver_m4.rs and the M4 bench adapter: length bound from T0 (TIDY_SPEC §4.10) | P: the bench adapter's allocations get the `2^40` bound (T0 audit finding 1), and the per-entry length check added by T0 is hoisted out of the timed loop where the driver already holds the length; m4 sessions back to the pre-T0 time (T0: +1-2%, outside A/A noise) and every M4 cell <= 1.0x hand. |
+| P13f | B/driver_m4.rs and the M4 bench adapter: length bound from T0 (TIDY_SPEC §4.10) | P: the bench adapter's allocations get the `2^40` bound (T0 audit finding 1), and the per-entry length check added by T0 is hoisted out of the timed loop where the driver already holds the length; m4 sessions back to the pre-T0 time (T0: +1-2%, outside A/A noise) and every M4 cell <= 1.0x hand. Done (Appendix P13f): bounded owner types (`StateBuf::zeroed` refuses `> 2^40`, driver `Words` checks once at construction; both `Deref`s carry `assert_unchecked(len <= 2^40)`), so the entry's inline check folds away with no codegen change; probe `driver_m4 bound state|words` run by `run.py m4`. Instructions below base on all 9 cells (-10..-15/op), time below hand everywhere and overlapping base, peak RSS overlapping base, `__text` -192 B. Still above hand from base: sessions/clocks 100/1000 instructions (T5e) and 7 of 9 peak RSS cells (P13d/P13h fixed code share). |
 | P13g | Both codegens: small helper inlining gap found by P20 (Appendix P20) | P: `find_w` in the bud_charge hot path is inlined (P20 attribution: about 25 instructions per call not inlined), output parity on both compilers, and the P20 unmatched hand16 lane (keys pre-parsed, 1.13-1.17x) re-measured after P13f and this row; any remaining gap above 1.0x is fixed or explained line by line (wire parsing is about 100 instructions of it). LLVM pairs for P20 wait for P17. |
 | P13h | Both codegens (and verifiers for (a)): M4 own-code size without time loss (Appendix P13d.5, P13d.8) | P: resident `__TEXT` of the M4 Pruv binary at or below hand's (P13d: 304 vs 240 KiB) with instructions and cycles on every M4 cell not worse than P13d.3's shipped column; candidates: proof-guided call-site specialization of total accessors, hot/cold body split of map growth paths; output parity on both compilers. |
 | P13i | B/bud_lifecycle.pruv (and bud_store.pruv for (c)): M7/M10 fixed-share regression from P13e plus the P18b handovers (Appendix P13e.7) | P: (a) lifecycle bodies (maybe_close, replace, reopen, attach) use the direct `xa`/`xb` paths like `copy_node` so the driver `__text` growth of about 37 KB and the M7 +96..176 / M10 +16..32 KiB fixed peak-RSS rise go back to c3ec58d or below; (b) drop the id copy in attach (P18b `noid`: S = 500 391.1 -> 355.1 instr/call, hand16 303.3); (c) M7 proportional RSS share (about 0.74 KB per session over hand16) from `bud_store::need` slack, and attribute the unexplained fixed 254 KB. Time and M4 cells not worse than P13e. Runs after P18c (shared M7 driver `__text` base) and before T5b2 if both touch bud_lifecycle. Measured (Appendix P13i, parts (a) and (b); (c) needs bud_store.pruv and stays open for P13j): (b) attach returns a view `[6, n, off]` of the stored id instead of copying it, attach 392.8 -> 353.5 / 393.2 -> 355.3 instructions per call at S/M (hand16 299.8 / 305.3, 1.18 / 1.16x; after the audit's length clamp 348.6 / 349.4, 1.12 / 1.17x), other cells unchanged, peak RSS overlapping, 0 allocations, M7 Q 113/187/0 on both compilers. Not met: (a) the lifecycle bodies already use `xa`/`xb`; the `__text` growth is `find_w` inlined everywhere since P13e's `ef`/`set_ef` `#[inline]`, and no variant within the allowed files restores `__text` (457,532 B; 413,244 at c3ec58d) or the fixed peak RSS without an instruction loss (P13i.1); M7 `__text` +384 B from the harness tag-6 decoder (Pruv code -44 B); M10 `__text` unchanged. |
@@ -6373,6 +6373,109 @@ Kept for the record; nothing changes, because the decision is keep.
 | runner flag lines and lane setup (research) | Codex gpt-6.2-astra, high, research |
 | first draft of the scratch `build.py` / `measure.py` / `summarize.py` / `alloccount.c` | Claude sonnet, medium, write (copied into `work/t5d` by hand, M4 `Store` alias fixed) |
 | gates, builds, measurement, decision, this appendix | Claude Opus 5.5, direct |
+
+## Appendix P13f: M4 bench adapter length bound, paid once outside the timed loop
+
+Row P13f. Base main 9925a2c. No compiler change, no `.pruv` change. Changed files: `bench/l3/budget/state_buf.rs`,
+`bench/l3/budget/m34_test/driver_m4.rs`, `bench/l3/budget/m34_test/run.py`, and (audit must, P13f.5)
+`driver_m4c.rs`, `driver_m4cb.rs`. All but `state_buf.rs` sit inside P13j's `m34_test/*` area.
+
+### P13f.1 Mechanism: bounded owner types, no proven entries
+
+SPEC "Length bound at host boundaries": a checked pub entry tests `len <= 2^40` (cold `pruv_len_slow`, exit 101
+`pruv: invalid representation: N (array length)`) and calls the private `__pruv_body`. The driver never calls
+`__pruv_body`. Instead every buffer the driver hands to an entry is an owner type whose constructor refuses a length
+above `2^40` and whose `Deref` tells the optimizer so:
+- `state_buf.rs`: `STATE_MAX_WORDS = 1 << 40`. `StateBuf::zeroed(n)` returns `None` for `n > STATE_MAX_WORDS`
+  before allocating (like an allocator failure); `zeroed_or_abort` panics with "state buffer of N words is too large"
+  instead of `handle_alloc_error`. `Deref`/`DerefMut` wrap `from_raw_parts` in
+  `std::hint::assert_unchecked(self.len <= STATE_MAX_WORDS)` (sound: `zeroed` is the only constructor).
+- `driver_m4.rs`: `struct Words(Vec<i64>)` for the op words and the `out` buffer. `Words::new`, `Words::zeroed` and
+  `Words::resize` check the bound once (cold `words_too_long`, the same message and exit 101 as a generated entry);
+  `Deref`/`DerefMut` are `#[inline(always)]` with the same `assert_unchecked`. The perf op list (`Vec<Words>`) is
+  built before the timed loop, so the check is paid once per op at setup. `out` growth (status 3) is clamped with
+  `.min(STATE_MAX_WORDS)`; the import and observe scratch buffers are clamped the same way.
+- Result: the entry's inline compare folds away on every lane with no codegen change. `nm` on the new perf binary:
+  `m4_op`, `m4_init`, `m4_import` `pruv_len_slow` are gone (dead after folding); only `m4_observe`'s remains, which
+  runs outside the timed loop on a plain clamped `Vec`.
+- Proven entries (`--proven-entries`, P18b `PruvArr`) were not used: the driver's buffers are owned and grown, so a
+  proof wrapper would be rebuilt (`new_mut`) on every call, and the LLVM lanes have no proven twins. The owner type
+  carries the same fact in the type without touching either compiler.
+- Inlining note: dereferencing `Words` inside the state-call closure left `World::exec::{closure#0}` out of line
+  (+5..+20 instr/op). `exec` now derefs `op` and `out` to slices before the closure; the closure inlines as at base.
+  `m4c`/`m4cb` replace the World section and take `&Words` through deref coercion (files unchanged).
+
+### P13f.2 Probe
+
+`driver_m4 bound state` checks `StateBuf::zeroed(2^40 + 1)` and `zeroed(usize::MAX / 8 + 1)` return `None` with no
+allocation (`ALLOC_COUNT + STATE_MAPS` unchanged): stdout `bound state refused=true allocs=0`.
+`driver_m4 bound words` calls `Words::zeroed(2^40 + 1)`: exit 101, empty stdout, stderr
+`pruv: invalid representation: 1099511627777 (array length)`. `run.py m4` runs both after every build and fails the
+lane on a mismatch ("length bound probe ok").
+
+### P13f.3 Gates
+
+| gate | result |
+|---|---|
+| M4 root verify, pruvc.py / pruvc-rs | ok / ok |
+| `run.py m4` q, count 300, pruvc.py lanes m4, m4raw | 300/300, probe ok |
+| `run.py lanes` (pruvc-rs, all 9 lanes incl. m4c, m4cb, LLVM) | 300/300 each, probe ok, import 300/300 |
+| M8 q (shares `state_buf.rs`), p13e cases | 63 exact, 0 fail (237 not-implemented as at base) |
+| product host crate (`bench/l3/budget/host`, includes `state_buf.rs`) | `cargo build --release` ok |
+
+### P13f.4 Performance (base 9925a2c vs new vs hand, 5 interleaved rounds)
+
+Method as T5d: instr/op = (I(5R) - I(R)) / (4R * ops), R = 200,000; ns from the driver's own timing at 5R
+(`total_ns_per_op`, hand `hand_ns_per_op`); peak = maximum resident set size at 5R; medians of 5 rounds, lane order
+rotated and size order reversed on odd rounds; same generated `sol` (pruvc-rs) for base and new.
+`__text`: base 350,524 B, new 350,332 B (-192), hand 281,532 B.
+
+| cell | instr/op base | new | hand | new/hand | ns base | new | hand | new/hand | peak KiB base | new | hand |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| sessions 100 | 460.6 | 446.0 | 417.0 | 1.069 | 18.8 | 17.8 | 20.6 | 0.86 | 1808 | 1824 | 1712 |
+| tools 100 | 897.1 | 886.9 | 1345.6 | 0.659 | 38.4 | 46.8 | 72.5 | 0.65 | 1840 | 1856 | 1744 |
+| clocks 100 | 981.3 | 970.7 | 923.6 | 1.051 | 34.8 | 34.5 | 43.8 | 0.79 | 1792 | 1824 | 1712 |
+| sessions 1000 | 468.5 | 454.0 | 414.0 | 1.096 | 15.1 | 16.9 | 21.7 | 0.78 | 2064 | 2048 | 2016 |
+| tools 1000 | 952.7 | 942.3 | 1320.5 | 0.714 | 40.3 | 41.4 | 62.3 | 0.66 | 2208 | 2208 | 2112 |
+| clocks 1000 | 944.2 | 933.6 | 920.8 | 1.014 | 38.6 | 36.5 | 54.1 | 0.67 | 2016 | 2000 | 2288 |
+| sessions 2000 | 459.6 | 445.0 | 456.0 | 0.976 | 16.8 | 17.3 | 21.3 | 0.81 | 2336 | 2336 | 2304 |
+| tools 2000 | 893.8 | 883.4 | 1330.4 | 0.664 | 43.6 | 43.5 | 66.0 | 0.66 | 2560 | 2528 | 2448 |
+| clocks 2000 | 983.7 | 973.6 | 988.4 | 0.985 | 41.1 | 42.4 | 49.1 | 0.86 | 2208 | 2224 | 2768 |
+
+- Instructions: new is below base on all 9 cells (-10..-15 instr/op; instruction counts are deterministic to
+  ~0.5). The T0 per-entry check is gone from the loop.
+- Time: every new cell is below hand; new and base ns ranges overlap on every cell (machine shared with other
+  packages; per-cell min-max in `work/p13f`, e.g. sessions 100 base 16.4-20.5, new 15.4-26.6). Sessions time is back
+  to the pre-T0 level within noise.
+- Peak RSS: new and base overlap on every cell. Sessions 100 was resampled 12 more times per lane: base 1792-1808,
+  new 1792-1824 KiB. Driver function sizes: `World::exec` -624 B, `main` +700 B (the probe inlined into it, runs
+  once), the three `pruv_len_slow` copies and the old `zeroed_or_abort` path gone.
+- Above hand, all already above hand at base and not owned by P13f:
+  - instructions sessions 100/1000 (1.07 / 1.10x) and clocks 100/1000 (1.05 / 1.01x): row T5e (Appendix T5d.2);
+    P13f lowers each by 10-15 instr/op but does not close them;
+  - peak RSS on 7 of 9 cells (+16..112 KiB, every cell but clocks 1000/2000): the fixed code share open in
+    P13d/P13h with P13e.6-7 and T5e's sessions 100 page. `__text` stays 68.8 KB above hand.
+
+### P13f.5 Audit (Codex gpt-6.2-astra ultra): does the bound cover every length
+
+No path found on any of the 9 lanes (64-bit) where a slice over `2^40` reaches a Pruv body or an `assert_unchecked`
+premise breaks: initial/reinit state via `zeroed_or_abort`, grow only after `StateBuf::zeroed` succeeds, import and
+replace move or clone checked buffers, every q/perf op through `Words::new`, `out` doubling clamped.
+- must, fixed: `m4c`/`m4cb` keep their own `out` (`out2`) as `Vec<i64>`; `need = max(4096, 4 * len)` was not
+  clamped, so a state of `2^38 + 1` words would try a `2^40 + 4` word buffer (the C adapter would still refuse it
+  before the body). `driver_m4c.rs:116`, `driver_m4cb.rs:147,181` now clamp `need` to `STATE_MAX_WORDS`;
+  `run.py m4c`/`m4cb` 300/300, probe ok, after the fix. The q gate rows in P13f.3 for these lanes are this rerun.
+- should, open: `1 << 40` as `usize` does not compile for a 32-bit target (the bench is 64-bit only); the probe's
+  `allocs=0` counts successful maps only (the source refuses before the map call); the probe does not exercise
+  `Words::new`/`resize` or the C lanes' `out`. nit, open: the header says `Words::new` checks before allocating; it
+  checks an already collected `Vec`.
+
+### P13f.6 Delegations
+
+| work | by |
+|---|---|
+| audit: does the hoisted check cover every length the driver passes to an entry | Codex gpt-6.2-astra ultra, review |
+| design, edits, gates, measurement, this appendix | Claude Opus 5.5, direct |
 
 ## Appendix P13j (row P13j: store bounds from the P13e audit)
 

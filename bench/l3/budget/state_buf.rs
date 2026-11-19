@@ -16,6 +16,12 @@
 // malloc zones reuse freed blocks well and a mapping would waste most of a page.
 pub const STATE_MAP_BYTES: usize = 64 * 1024;
 
+// Largest state buffer in words: 2^40, the length bound of every generated entry (SPEC "Length bound at host
+// boundaries"). zeroed refuses a longer buffer before allocating, so every StateBuf has len <= STATE_MAX_WORDS, and
+// Deref / DerefMut tell the optimizer so: the entry's own length test on a StateBuf argument folds away, and the bound is
+// paid once per allocation instead of once per call (L3 P13f).
+pub const STATE_MAX_WORDS: usize = 1 << 40;
+
 // Number of mapped state buffers created (zeroed and clone), so drivers that count global-allocator calls can add the
 // mappings to their allocation count (same accounting as the default path, where each buffer is one allocator call).
 // usize atomics exist on every std target (64-bit atomics do not).
@@ -91,8 +97,12 @@ impl StateBuf {
         state_map::AVAILABLE && bytes >= STATE_MAP_BYTES
     }
 
-    // n zero words, or None when the allocation is refused (the caller keeps its old state).
+    // n zero words, or None when the allocation is refused (the caller keeps its old state). A length above
+    // STATE_MAX_WORDS is refused like an allocator failure, without allocating.
     pub fn zeroed(n: usize) -> Option<StateBuf> {
+        if n > STATE_MAX_WORDS {
+            return None;
+        }
         if n == 0 {
             return Some(StateBuf { ptr: std::ptr::NonNull::dangling(), len: 0 });
         }
@@ -121,8 +131,8 @@ impl StateBuf {
         match StateBuf::zeroed(n) {
             Some(b) => b,
             None => match std::alloc::Layout::array::<i64>(n) {
-                Ok(l) => std::alloc::handle_alloc_error(l),
-                Err(_) => panic!("state buffer of {} words is too large", n),
+                Ok(l) if n <= STATE_MAX_WORDS => std::alloc::handle_alloc_error(l),
+                _ => panic!("state buffer of {} words is too large", n),
             },
         }
     }
@@ -131,15 +141,22 @@ impl StateBuf {
 impl std::ops::Deref for StateBuf {
     type Target = [i64];
     fn deref(&self) -> &[i64] {
-        // SAFETY: ptr points to len initialized i64 words owned by self (dangling with len 0 is a valid empty slice).
-        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
+        // SAFETY: ptr points to len initialized i64 words owned by self (dangling with len 0 is a valid empty slice);
+        // zeroed is the only constructor and refuses len > STATE_MAX_WORDS.
+        unsafe {
+            std::hint::assert_unchecked(self.len <= STATE_MAX_WORDS);
+            std::slice::from_raw_parts(self.ptr.as_ptr(), self.len)
+        }
     }
 }
 
 impl std::ops::DerefMut for StateBuf {
     fn deref_mut(&mut self) -> &mut [i64] {
         // SAFETY: as in deref, and &mut self gives exclusive access.
-        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
+        unsafe {
+            std::hint::assert_unchecked(self.len <= STATE_MAX_WORDS);
+            std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len)
+        }
     }
 }
 

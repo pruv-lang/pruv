@@ -113,7 +113,7 @@ impl World {
 
     fn exec(&mut self, op: &[i64]) -> R {
         for attempt in 0..4 {
-            let need = std::cmp::max(4096, 4 * self.len);
+            let need = std::cmp::max(4096, 4 * self.len).min(STATE_MAX_WORDS); // P13f: out stays within the entry length bound
             if self.out.len() < need {
                 self.out.resize(need, 0);
             }

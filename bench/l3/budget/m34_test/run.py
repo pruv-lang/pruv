@@ -352,10 +352,28 @@ def cmd_m4raw(args):
     return cmd_m4(args, "m4raw")
 
 
+def bound_probe(exe, tag):
+    """L3 P13f: the driver refuses a state buffer, an op or an out buffer longer than 2^40 words before allocating
+    (driver_m4.rs bound_probe). Returns an error string or None."""
+    c = run([exe, "bound", "state"])
+    if c.returncode != 0 or c.stdout.strip() != "bound state refused=true allocs=0":
+        return "bound state: exit %d, %r" % (c.returncode, (c.stdout + c.stderr).strip()[:300])
+    c = run([exe, "bound", "words"])
+    want = "pruv: invalid representation: %d (array length)" % ((1 << 40) + 1)
+    if c.returncode != 101 or c.stdout.strip() or c.stderr.strip() != want:
+        return "bound words: exit %d, %r" % (c.returncode, (c.stdout + c.stderr).strip()[:300])
+    return None
+
+
 def cmd_m4(args, tag="m4"):
     exe = build(args.pruvc, tag)
     progs = gen_m4.gen_programs(args.seed, args.count)
     bad = []
+    err = bound_probe(exe, tag)
+    if err:
+        bad.append((-1, -1, "(length bound probe)", "refused over 2^40", err))
+    else:
+        print("%s: length bound probe ok (state / op / out over 2^40 refused before allocating)" % tag)
     grows_total = 0
     with_grow = 0
     stats_checks = 0
