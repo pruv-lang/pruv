@@ -404,7 +404,10 @@ pub fn show(e: &Expr) -> String {
         Expr::BoolLit(x) => (if x.value { "true" } else { "false" }).to_string(),
         Expr::StrLit(_) => "<str>".to_string(),
         Expr::Var(x) => x.name.clone(),
-        Expr::Move(x) => format!("move {}", x.name), // G6 A0: never reaches a generator (guarded in the driver)
+        Expr::Move(x) => {
+            let place = std::iter::once(x.name.as_str()).chain(x.fields.iter().map(String::as_str)).collect::<Vec<_>>();
+            format!("move {}", place.join("."))
+        }
         Expr::InoutArg(x) => format!("inout {}", show(&x.expr)), // G5 A0: never reaches a generator (guarded in the driver)
         Expr::Unary(x) => format!("{}{}", x.op, show(&x.operand)),
         Expr::Binary(x) => format!("({} {} {})", show(&x.left), x.op, show(&x.right)),

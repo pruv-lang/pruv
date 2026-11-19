@@ -819,6 +819,8 @@ pub type Takes = HashMap<String, Vec<bool>>;
 struct Ownership<'a> {
     funcs: &'a Takes,
     bor: HashSet<String>,
+    /// binders of the user-enum match arms being checked (payload views; only owned collection fields are collections)
+    arm_bor: Vec<String>,
     /// name -> "move" | "borrow" of the outermost call being checked (shared by nested calls)
     track: Option<Track>,
     /// G10 A0: must-consume bindings, name -> "Process" | "Socket" | "Listener"; never File, String or ProcessArgs
@@ -883,11 +885,11 @@ impl<'a> Ownership<'a> {
         let mut declared: Vec<String> = Vec::new();
         let mut cur: Option<St> = Some(st);
         for x in stmts {
-            let s = match cur.take() {
-                Some(s) => s,
-                None => break,
-            };
-            cur = self.stmt(x, s, &mut declared)?;
+            if let Some(s) = cur.take() {
+                cur = self.stmt(x, s, &mut declared)?;
+            } else {
+                self.dead_stmt(x)?;
+            }
         }
         if let Some(s) = cur.as_mut() {
             for n in &declared {
@@ -937,7 +939,7 @@ impl<'a> Ownership<'a> {
                 Ok(Some(st))
             }
             Stmt::FieldAssign(a) => {
-                self.expr(&a.value, &mut st)?;
+                self.consume(&a.value, &mut st, "assign")?;
                 Ok(Some(st))
             }
             Stmt::If(i) => {
@@ -993,7 +995,10 @@ impl<'a> Ownership<'a> {
                 let mut out: Option<St> = None;
                 let mut first = true;
                 for a in &m.arms {
-                    let r = self.block(&a.body, st.clone())?;
+                    let n = self.push_arm(a);
+                    let r = self.block(&a.body, st.clone());
+                    self.arm_bor.truncate(self.arm_bor.len() - n);
+                    let r = r?;
                     out = if first { r } else { join(out, r) };
                     first = false;
                 }
@@ -1002,6 +1007,103 @@ impl<'a> Ownership<'a> {
             // Assert: contract, not subject to liveness
             Stmt::Assert(_) => Ok(Some(st)),
         }
+    }
+
+    /// Check owning positions in unreachable code without tracking liveness.
+    fn dead_stmt(&mut self, x: &Stmt) -> Res<()> {
+        match x {
+            Stmt::Let(l) => self.dead_expr(&l.value, true)?,
+            Stmt::Assign(a) => self.dead_expr(&a.value, true)?,
+            Stmt::FieldAssign(a) => self.dead_expr(&a.value, true)?,
+            Stmt::Return(r) => {
+                if let Some(v) = &r.value {
+                    self.dead_expr(v, true)?;
+                }
+            }
+            Stmt::IndexAssign(a) => {
+                self.dead_expr(&a.index, false)?;
+                self.dead_expr(&a.value, false)?;
+            }
+            Stmt::ExprStmt(e) => self.dead_expr(&e.expr, false)?,
+            Stmt::Par(p) => {
+                for c in &p.calls {
+                    self.dead_expr(c, false)?;
+                }
+            }
+            Stmt::If(i) => {
+                self.dead_expr(&i.cond, false)?;
+                for stmt in i.then.iter().chain(&i.els) {
+                    self.dead_stmt(stmt)?;
+                }
+            }
+            Stmt::While(w) => {
+                self.dead_expr(&w.cond, false)?;
+                for stmt in &w.body {
+                    self.dead_stmt(stmt)?;
+                }
+            }
+            Stmt::Match(m) => {
+                self.dead_expr(&m.scrutinee, false)?;
+                for a in &m.arms {
+                    let n = self.push_arm(a);
+                    let r = a.body.iter().try_for_each(|stmt| self.dead_stmt(stmt));
+                    self.arm_bor.truncate(self.arm_bor.len() - n);
+                    r?;
+                }
+            }
+            Stmt::Assert(_) => {}
+        }
+        Ok(())
+    }
+
+    fn dead_expr(&self, e: &Expr, owned: bool) -> Res<()> {
+        if owned {
+            Self::check_field_alias(e)?;
+            if let Expr::Var(v) = e {
+                if is_coll(&v.ty) && (self.bor.contains(&v.name) || self.arm_bor.contains(&v.name)) {
+                    return Err(err(
+                        e.line(),
+                        e.col(),
+                        "foreign_borrow",
+                        "borrowed alias",
+                        format!("{} is a read parameter and cannot be aliased", v.name),
+                    ));
+                }
+            }
+        }
+        if let Expr::Call(c) = e {
+            for (arg, take) in c.args.iter().zip(self.takes(c)) {
+                self.dead_expr(arg, take)?;
+            }
+        } else {
+            let owns_fields = matches!(e, Expr::StructLit(_) | Expr::EnumCtor(_));
+            for k in expr_kids(e) {
+                self.dead_expr(k, owns_fields)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// push the binders of a user-enum arm; returns how many were pushed
+    fn push_arm(&mut self, a: &MatchArm) -> usize {
+        if a.enum_name.is_none() {
+            return 0;
+        }
+        self.arm_bor.extend(a.binders.iter().cloned());
+        a.binders.len()
+    }
+
+    fn check_field_alias(e: &Expr) -> Res<()> {
+        if matches!(e, Expr::FieldAccess(_) | Expr::VariantField(_)) && is_coll(crate::llvmgen::expr_ty(e)) {
+            return Err(err(
+                e.line(),
+                e.col(),
+                "foreign_borrow",
+                "borrowed alias",
+                "the field is a read view and cannot be aliased",
+            ));
+        }
+        Ok(())
     }
 
     // ---- uses ----
@@ -1026,6 +1128,10 @@ impl<'a> Ownership<'a> {
     }
 
     fn mv(&mut self, e: &Move, st: &mut St, consuming: bool, tracked: bool) -> Res<()> {
+        if !e.fields.is_empty() {
+            // The type checker allows this move only when the call replaces the same field.
+            return Ok(());
+        }
         let (line, col) = (e.line, e.col);
         if !is_coll(&e.ty) {
             return Err(err(
@@ -1067,7 +1173,7 @@ impl<'a> Ownership<'a> {
                 "use move for a take argument, a let initializer, an assignment or return",
             ));
         }
-        if self.bor.contains(n) {
+        if self.bor.contains(n) || !st.contains(n) {
             // G10 specifies foreign_borrow; the established G6 diagnostic stays for the other types.
             let code = if matches!(e.ty.as_deref(), Some("file") | Some("process") | Some("socket") | Some("listener") | Some("loop")) { "foreign_borrow" } else { "foreign_move" };
             return Err(err(
@@ -1088,10 +1194,10 @@ impl<'a> Ownership<'a> {
     /// let initializer / assignment / return value
     fn consume(&mut self, e: &Expr, st: &mut St, pos: &str) -> Res<()> {
         match e {
-            Expr::Move(m) => self.mv(m, st, true, false),
+            Expr::Move(m) => self.mv(m, st, true, pos == "field"),
             Expr::Var(v) if is_coll(&v.ty) => {
                 self.use_(&v.name, v.line, v.col, st)?;
-                if self.bor.contains(&v.name) {
+                if self.bor.contains(&v.name) || !st.contains(&v.name) {
                     if pos == "return" {
                         return Err(err(
                             v.line,
@@ -1137,6 +1243,9 @@ impl<'a> Ownership<'a> {
 
     /// owned: the value is taken at once by a binding, a return or a take argument (not a dropped temporary)
     fn expr_o(&mut self, e: &Expr, st: &mut St, owned: bool) -> Res<()> {
+        if owned {
+            Self::check_field_alias(e)?;
+        }
         match e {
             Expr::Spent(_) => Ok(()),
             Expr::Var(v) => {
@@ -1153,6 +1262,18 @@ impl<'a> Ownership<'a> {
                     if let Some(kind) = c.ty.as_deref().and_then(must_kind) {
                         return Err(handle_lost(kind, c.line, c.col, format!("temporary {} is not consumed", kind)));
                     }
+                }
+                Ok(())
+            }
+            Expr::StructLit(lit) => {
+                for f in &lit.fields {
+                    self.consume(&f.value, st, "field")?;
+                }
+                Ok(())
+            }
+            Expr::EnumCtor(ctor) => {
+                for arg in &ctor.args {
+                    self.consume(arg, st, "field")?;
                 }
                 Ok(())
             }
@@ -1176,20 +1297,23 @@ impl<'a> Ownership<'a> {
         }
     }
 
-    fn call(&mut self, e: &Call, st: &mut St) -> Res<()> {
-        let takes: Vec<bool> = match if self.funcs.contains_key(&e.name) { None } else { catalog_fn(&e.name) } {
+    fn takes(&self, e: &Call) -> Vec<bool> {
+        match if self.funcs.contains_key(&e.name) { None } else { catalog_fn(&e.name) } {
             Some(f) => f.params.iter().map(|p| p.take).collect(),
             None => match self.funcs.get(&e.name) {
                 Some(t) => t.clone(),
                 None => vec![false; e.args.len()],
             },
-        };
+        }
+    }
+
+    fn call(&mut self, e: &Call, st: &mut St) -> Res<()> {
         // nested calls share the outermost call's track (audit R1)
         let outer = self.track.is_some();
         if !outer {
             self.track = Some(HashMap::new());
         }
-        let r = self.call_args(e, st, &takes);
+        let r = self.call_args(e, st, &self.takes(e));
         if !outer {
             self.track = None;
         }
@@ -1203,7 +1327,7 @@ impl<'a> Ownership<'a> {
                     Expr::Move(m) => self.mv(m, st, true, true)?,
                     Expr::Var(v) if is_coll(&v.ty) => {
                         self.use_(&v.name, v.line, v.col, st)?;
-                        if self.bor.contains(&v.name) {
+                        if self.bor.contains(&v.name) || !st.contains(&v.name) {
                             return Err(err(
                                 v.line,
                                 v.col,
@@ -1220,7 +1344,7 @@ impl<'a> Ownership<'a> {
                             format!("write move {}", v.name),
                         ));
                     }
-                    _ => self.expr_o(arg, st, true)?,
+                    _ => self.consume(arg, st, "argument")?,
                 }
             } else {
                 match arg {
@@ -1250,7 +1374,7 @@ impl<'a> Ownership<'a> {
 
 /// ownership/liveness of one typed, non-foreign function; funcs: name -> `take` flags of the program's functions
 pub fn check_ownership(f: &Function, funcs: &Takes) -> Res<()> {
-    Ownership { funcs, bor: HashSet::new(), track: None, proc: HashMap::new(), decl: HashMap::new() }.run(f)
+    Ownership { funcs, bor: HashSet::new(), arm_bor: Vec::new(), track: None, proc: HashMap::new(), decl: HashMap::new() }.run(f)
 }
 
 // ---------------------------------------------------------------------------
@@ -1368,6 +1492,11 @@ fn g6_stmts(stmts: &[Stmt], out: &mut Cands) {
 /// first G6 construct of a checked program -> (line, col, what) or None. Source order: functions in order,
 /// the signature (foreign declaration, take or collection parameter/result) before the body.
 pub fn first_g6_use(prog: &Program) -> Option<(i64, i64, String)> {
+    for d in &prog.types {
+        if let Some(f) = d.all_fields().into_iter().find(|f| key_contains_collection(&f.ty)) {
+            return Some((f.line, f.col, format!("collection field {}.{}", d.name(), f.name)));
+        }
+    }
     for f in &prog.functions {
         if f.foreign.is_some() {
             return Some((f.line, f.col, format!("trusted rust fn {}", f.name)));

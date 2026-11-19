@@ -1,0 +1,15 @@
+// spec: R-6g-1 reject
+fn changed(inout a: [i64]) -> bool {
+  return true;
+}
+
+fn demo() -> () ! alloc {
+  let mut d: [i64] = alloc(1, 0);
+  let mut i: i64 = 0;
+  while changed(inout d) && i < 1
+    invariant 0 <= i && i <= 1
+    decreases 1 - i
+  {
+    i = i + 1;
+  }
+}

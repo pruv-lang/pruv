@@ -1,0 +1,7 @@
+// spec: R-6e-2 reject
+struct Rec { id: i64, data: Vec<i64> }
+
+fn append() -> () ! alloc {
+  let mut p: Rec = Rec { id: 7, data: vec_new::<i64>() };
+  p.data = vec_push::<i64>(move p.data, p.id);
+}

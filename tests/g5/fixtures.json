@@ -45,9 +45,6 @@
     {"name": "g5_old_in_code", "root": "tests/must_reject/g5_old_in_code.pruv", "stage": "type", "code": "old_context", "mode": "static"},
     {"name": "g5_old_ordinary_param", "root": "tests/must_reject/g5_old_ordinary_param.pruv", "stage": "type", "code": "old_argument", "mode": "static"},
     {"name": "g5_old_arity", "root": "tests/must_reject/g5_old_arity.pruv", "stage": "type", "code": "old_argument", "mode": "static"},
-    {"name": "g5_context_binary", "root": "tests/must_reject/g5_context_binary.pruv", "stage": "type", "code": "inout_context", "mode": "static"},
-    {"name": "g5_context_if_cond", "root": "tests/must_reject/g5_context_if_cond.pruv", "stage": "type", "code": "inout_context", "mode": "static"},
-    {"name": "g5_context_call_arg", "root": "tests/must_reject/g5_context_call_arg.pruv", "stage": "type", "code": "inout_context", "mode": "static"},
     {"name": "g5_foreign_inout", "root": "tests/must_reject/g5_foreign_inout.pruv", "stage": "type", "code": "foreign_signature", "mode": "static"},
     {"name": "g5_syntax_take_inout", "root": "tests/must_reject/g5_syntax_take_inout.pruv", "stage": "parse", "code": "inout_syntax", "mode": "static"},
     {"name": "g5_syntax_repeated_mode", "root": "tests/must_reject/g5_syntax_repeated_mode.pruv", "stage": "parse", "code": "inout_syntax", "mode": "static"},
@@ -76,6 +73,8 @@
     {"name": "p16_infer_controls", "root": "tests/g5/proof/p16_infer_controls.pruv", "infer": true}
   ],
   "proof_reject": [
+    {"name": "g5_context_binary", "root": "tests/must_reject/g5_context_binary.pruv", "stage": "verify", "code": "overflow"},
+    {"name": "g5_context_call_arg", "root": "tests/must_reject/g5_context_call_arg.pruv", "stage": "verify", "code": "overflow"},
     {"name": "g5p_ensures_false_store", "root": "tests/must_reject/g5p_ensures_false_store.pruv", "stage": "verify", "code": "ensures"},
     {"name": "g5p_entry_final_callee", "root": "tests/must_reject/g5p_entry_final_callee.pruv", "stage": "verify", "code": "ensures"},
     {"name": "g5p_entry_final_caller", "root": "tests/must_reject/g5p_entry_final_caller.pruv", "stage": "verify", "code": "assert"},

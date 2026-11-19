@@ -99,7 +99,7 @@ pub struct VariantField {
 
 /// G6 A0: `move name` (consumes an owned collection binding). Counterpart of vast.Move.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Move { pub line: i64, pub col: i64, pub name: String, pub ty: Ty }
+pub struct Move { pub line: i64, pub col: i64, pub name: String, pub fields: Vec<String>, pub ty: Ty }
 
 /// G5 A0: the call-argument marker `inout <operand>`; line/col = the `inout` token. The operand is kept as written (the
 /// checker requires a plain Var naming a mutable local array or an inout parameter of the caller). Counterpart of vast.InoutArg.

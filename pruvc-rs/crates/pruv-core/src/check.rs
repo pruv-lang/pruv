@@ -317,6 +317,8 @@ struct Checker {
     externs: Vec<String>,
     /// G6: function name -> `take` flags of its parameters (for the ownership checker)
     takes: Takes,
+    /// Location of the field move allowed in the current field assignment.
+    field_move: Option<(i64, i64)>,
     // ---- G9 A0 metadata ----
     /// recursive type SCCs (names in declaration order), SCC-number order
     type_sccs: Vec<Vec<String>>,
@@ -343,7 +345,7 @@ struct Checker {
     host_entry: Vec<bool>,
     /// G5 A0: enables the contextual builtin `old`
     uses_inout: bool,
-    /// G5: kind of the expression being checked: requires/ensures/decreases/invariant/assert/code
+    /// G5: kind of the expression being checked: requires/ensures/decreases/invariant/assert/code/par
     ckind: &'static str,
     // ---- P06: contract expansion of user functions (check.py x_*) ----
     /// function name -> why a contract cannot expand it, or a raw copy of its body
@@ -434,11 +436,63 @@ fn mentions(e: &Expr, name: &str) -> bool {
     crate::refine::kids(e).into_iter().any(|k| mentions(k, name))
 }
 
+fn first_field_move(e: &Expr) -> Option<&Move> {
+    if let Expr::Move(m) = e {
+        if !m.fields.is_empty() {
+            return Some(m);
+        }
+    }
+    crate::refine::kids(e).into_iter().find_map(first_field_move)
+}
+
+fn field_move_error(m: &Move) -> PruvError {
+    terr(
+        m.line,
+        m.col,
+        "foreign_move",
+        "a field can be moved only into a call whose result is assigned back to the same field",
+        "move a Vec or String field of a mutable local directly into a take parameter and use the local only there",
+    )
+}
+
 /// G5: the identity of a call node, for "the call allowed at the statement boundary" (Python `e is s.boundary`).
 fn boundary_of(e: &Expr) -> Option<usize> {
     match e {
         Expr::Call(c) => Some(c as *const Call as usize),
         _ => None,
+    }
+}
+
+#[derive(Clone, Copy)]
+enum InoutContext<'a> {
+    Value,
+    Assign(&'a str),
+    WhileCondition,
+    PlaceAssignment(&'a str),
+}
+
+/// Collect all syntactic mentions and visit calls in evaluation order (arguments first).
+fn inout_statement_calls<'a>(
+    e: &'a Expr,
+    conditional: bool,
+    mentions: &mut HashMap<&'a str, usize>,
+    calls: &mut Vec<(&'a Call, bool)>,
+) {
+    match e {
+        Expr::Var(v) => *mentions.entry(&v.name).or_default() += 1,
+        Expr::Move(v) => *mentions.entry(&v.name).or_default() += 1,
+        Expr::Binary(b) if b.op == "&&" || b.op == "||" => {
+            inout_statement_calls(&b.left, conditional, mentions, calls);
+            inout_statement_calls(&b.right, true, mentions, calls);
+            return;
+        }
+        _ => {}
+    }
+    for child in crate::refine::kids(e) {
+        inout_statement_calls(child, conditional, mentions, calls);
+    }
+    if let Expr::Call(c) = e {
+        calls.push((c, conditional));
     }
 }
 
@@ -522,6 +576,7 @@ impl Checker {
             arg_decls: HashMap::new(),
             externs: externs.to_vec(),
             takes,
+            field_move: None,
             type_sccs: Vec::new(),
             boxed: Vec::new(),
             boxed_decls: HashSet::new(),
@@ -1306,13 +1361,15 @@ impl Checker {
                         ));
                     }
                     self.check_type(f.line, f.col, &ft)?;
-                    if ft.contains_collection() {
+                    if ft.contains_collection()
+                        && !(d.tparams().is_empty() && crate::gtype::key_is_owned_field(&f.ty))
+                    {
                         return Err(terr(
                             f.line,
                             f.col,
                             "foreign_owned_type",
                             format!("field {} cannot have the collection type {}", f.name, tn(&ft)),
-                            "collections cannot be struct fields or enum payloads; pass them as separate bindings",
+                            "only non-generic declarations may have Vec<i64>, Vec<bool> or String fields",
                         ));
                     }
                 }
@@ -1491,7 +1548,7 @@ impl Checker {
         for d in types {
             if decl_fields(d).iter().any(|(_, fd)| {
                 let t = GType::from_key(&fd.ty);
-                t.is_array() || t == strt()
+                t.is_array() || t == strt() || crate::gtype::key_is_owned_field(&fd.ty)
             }) {
                 direct.insert(d.name().to_string());
             }
@@ -1629,16 +1686,16 @@ impl Checker {
         Ok(())
     }
 
-    /// G4 A0 (explicit mode): a host entry (root `pub`, nongeneric, ordinary function) may not have a collection or an extended
-    /// (G9) type in its signature; child `pub` functions and generic functions are not host entries.
-    /// An inout parameter ([i64] / [u8] / [bool], already type-checked) is allowed on a host entry.
+    /// Host entries allow plain signatures and concrete Vec<i64>/Vec<bool> results.
     fn check_entries(&self, prog: &Program) -> Res<()> {
         for (i, f) in prog.functions.iter().enumerate() {
             if !self.host_entry.get(i).copied().unwrap_or(false) {
                 continue;
             }
             let mut sig: Vec<(String, &str)> = f.params.iter().map(|p| (format!("parameter {}", p.name), p.ty.as_str())).collect();
-            sig.push(("the result".to_string(), f.ret.as_str()));
+            if !crate::gtype::key_is_scalar_vec(&f.ret) {
+                sig.push(("the result".to_string(), f.ret.as_str()));
+            }
             for (what, key) in sig {
                 let ty = GType::from_key(key);
                 if ty.contains_collection() || dependencies(&ty).iter().any(|n| self.extended.contains(n)) {
@@ -1912,6 +1969,81 @@ impl Checker {
         t.owner.is_none() && self.tt.is_enum(&t.name)
     }
 
+    /// R-6g-1: the ordinary argument checks have already handled aliases within each call.
+    fn check_inout_context(&self, exprs: &[&Expr], context: InoutContext<'_>) -> Res<()> {
+        if !self.uses_inout {
+            return Ok(());
+        }
+        let mut mentions = HashMap::new();
+        let mut calls = Vec::new();
+        if let InoutContext::Assign(name) | InoutContext::PlaceAssignment(name) = context {
+            mentions.insert(name, 1);
+        }
+        for expr in exprs {
+            inout_statement_calls(expr, matches!(context, InoutContext::WhileCondition), &mut mentions, &mut calls);
+        }
+        let mut effect_before = false;
+        for (call, conditional) in calls {
+            if let Some(f) = self.funcs.get(&call.name) {
+                let marked: Vec<&crate::ast::InoutArg> = call
+                    .args
+                    .iter()
+                    .filter_map(|arg| if let Expr::InoutArg(a) = arg { Some(a) } else { None })
+                    .collect();
+                if !marked.is_empty() {
+                    for arg in &marked {
+                        let name = match arg.expr.as_ref() {
+                            Expr::Var(v) => v.name.as_str(),
+                            Expr::Move(v) => v.name.as_str(),
+                            _ => continue,
+                        };
+                        if mentions.get(name).copied().unwrap_or(0) > 1 {
+                            return Err(terr(
+                                arg.line,
+                                arg.col,
+                                "inout_context",
+                                format!("{} is passed inout and also mentioned elsewhere in this statement", name),
+                                "use a separate statement for the inout call",
+                            ));
+                        }
+                    }
+                    if conditional {
+                        return Err(terr(
+                            call.line,
+                            call.col,
+                            "inout_context",
+                            "the inout call may be skipped or repeated",
+                            "use a separate statement where the call must run once",
+                        ));
+                    }
+                    if matches!(context, InoutContext::PlaceAssignment(_)) {
+                        return Err(terr(
+                            call.line,
+                            call.col,
+                            "inout_context",
+                            "an inout call is not allowed in an element or field assignment",
+                            "compute the call's result before the assignment",
+                        ));
+                    }
+                    if effect_before {
+                        return Err(terr(
+                            call.line,
+                            call.col,
+                            "inout_context",
+                            "an inout call is not allowed here because a call with effects runs before it",
+                            "evaluate the earlier call in a separate statement",
+                        ));
+                    }
+                }
+                effect_before |= f.effects.iter().any(|effect| effect != "alloc");
+            } else if !effect_before {
+                effect_before = call.name == "print"
+                    || catalog_fn(&call.name).is_some_and(|f| f.effects.iter().any(|effect| effect != "alloc"));
+            }
+        }
+        Ok(())
+    }
+
     fn stmt(&mut self, st: &mut Stmt, scope: &mut Scope) -> Res<()> {
         self.ckind = "code";
         self.boundary = None; // G5: only the statements below that allow a mutating call set it
@@ -1935,6 +2067,7 @@ impl Checker {
                 self.boundary = boundary_of(&s.value);
                 self.want_alloc(&s.value, &sty);
                 self.expect(&mut s.value, &sty, scope, false, None)?;
+                self.check_inout_context(&[&s.value], InoutContext::Value)?;
                 if sty.is_array() || sty == strt() {
                     self.array_source(s.line, s.col, &s.value, scope, false, &sty)?;
                 }
@@ -1960,6 +2093,7 @@ impl Checker {
                 self.boundary = boundary_of(&s.value);
                 self.want_alloc(&s.value, &v.ty);
                 self.expect(&mut s.value, &v.ty, scope, false, None)?;
+                self.check_inout_context(&[&s.value], InoutContext::Assign(&s.name))?;
                 if v.ty.is_array() || v.ty == strt() {
                     self.array_source(s.line, s.col, &s.value, scope, false, &v.ty)?;
                 }
@@ -1990,9 +2124,10 @@ impl Checker {
                     ));
                 }
                 self.expect(&mut s.index, &i64t(), scope, false, None)?;
-                // G2 A5: stored value is bool for a bool array; G3: exactly T for a [T]
+                                // G2 A5: stored value is bool for a bool array; G3: exactly T for a [T]
                 let want_val = elem_type(&v.ty);
                 self.expect(&mut s.value, &want_val, scope, false, None)?;
+                self.check_inout_context(&[&s.index, &s.value], InoutContext::PlaceAssignment(&s.name))?;
             }
             Stmt::FieldAssign(s) => {
                 let v = self.lookup(s.line, s.col, &s.name, scope)?;
@@ -2020,9 +2155,33 @@ impl Checker {
                     cur = self.field_type(s.line, s.col, &cur, fname)?;
                 }
                 if !v.mutable {
+                    if let Some(m) = first_field_move(&s.value) {
+                        return Err(field_move_error(m));
+                    }
                     return Err(terr(s.line, s.col, "immutable", format!("{} is not mutable", s.name), Self::immutable_fix(v.kind)));
                 }
-                self.expect(&mut s.value, &cur, scope, false, None)?;
+                let saved = self.field_move.take();
+                if v.kind == "local" && s.fields.len() == 1 && crate::gtype::key_is_owned_field(&cur.to_key()) {
+                    if let Expr::Call(call) = &s.value {
+                        self.field_move = call.args.iter().enumerate().find_map(|(i, arg)| {
+                            let Expr::Move(m) = arg else { return None };
+                            if m.name != s.name || m.fields != s.fields {
+                                return None;
+                            }
+                            let take = if let Some(takes) = self.takes.get(&call.name) {
+                                takes.get(i).copied().unwrap_or(false)
+                            } else {
+                                catalog_fn(&call.name).and_then(|f| f.params.get(i).map(|p| p.take)).unwrap_or(false)
+                            };
+                            (take && !call.args.iter().enumerate().any(|(j, arg)| j != i && mentions(arg, &s.name)))
+                                .then_some((m.line, m.col))
+                        });
+                    }
+                }
+                let checked = self.expect(&mut s.value, &cur, scope, false, None);
+                self.field_move = saved;
+                checked?;
+                self.check_inout_context(&[&s.value], InoutContext::PlaceAssignment(&s.name))?;
                 if cur.is_array() || cur == strt() {
                     // G9 A0: G2 explicit ownership for a buffer field
                     self.array_source(s.line, s.col, &s.value, scope, false, &cur)?;
@@ -2031,6 +2190,7 @@ impl Checker {
             }
             Stmt::If(s) => {
                 self.expect(&mut s.cond, &boolt(), scope, false, Some("a condition"))?;
+                self.check_inout_context(&[&s.cond], InoutContext::Value)?;
                 let mut sc = scope.clone();
                 self.block(&mut s.then, &mut sc)?;
                 let mut sc = scope.clone();
@@ -2038,6 +2198,7 @@ impl Checker {
             }
             Stmt::While(s) => {
                 self.expect(&mut s.cond, &boolt(), scope, false, Some("a condition"))?;
+                self.check_inout_context(&[&s.cond], InoutContext::WhileCondition)?;
                 self.ckind = "invariant";
                 for i in s.invariants.iter_mut() {
                     self.expect(i, &boolt(), scope, true, None)?;
@@ -2069,6 +2230,7 @@ impl Checker {
                         self.boundary = boundary_of(v);
                         self.want_alloc(v, &ret);
                         self.expect(v, &ret, scope, false, None)?;
+                        self.check_inout_context(&[&*v], InoutContext::Value)?;
                         if ret.is_array() || ret == strt() {
                             self.array_source(s.line, s.col, v, scope, true, &ret)?;
                         }
@@ -2101,6 +2263,9 @@ impl Checker {
             }
             Stmt::ExprStmt(s) => {
                 if !matches!(s.expr, Expr::Call(_)) {
+                    if let Some(m) = first_field_move(&s.expr) {
+                        return Err(field_move_error(m));
+                    }
                     return Err(terr(
                         s.line,
                         s.col,
@@ -2111,6 +2276,7 @@ impl Checker {
                 }
                 self.boundary = boundary_of(&s.expr);
                 let t = self.expr(&mut s.expr, scope, false)?;
+                self.check_inout_context(&[&s.expr], InoutContext::Value)?;
                 if t.owner.is_none() && t.name == "process" {
                     // G10 proc: a discarded Process result keeps its duty
                     return Err(terr(
@@ -2162,10 +2328,11 @@ impl Checker {
             self.par_target(e)?;
         }
         for e in &mut p.calls {
-            self.ckind = "code";
+            self.ckind = "par";
             self.boundary = boundary_of(e);
             self.expr(e, scope, false)?;
         }
+        self.ckind = "code";
         self.boundary = None;
         for e in &p.calls {
             self.par_args(e)?;
@@ -2329,6 +2496,7 @@ impl Checker {
     fn match_stmt(&mut self, m: &mut Match, scope: &mut Scope) -> Res<()> {
         let (line, col) = (m.line, m.col);
         let t = self.expr(&mut m.scrutinee, scope, false)?;
+        self.check_inout_context(&[&m.scrutinee], InoutContext::Value)?;
         let user = self.is_enum(&t);
         let root: Option<String> = self.match_root(&m.scrutinee, &t, scope); // G9 A0: root variable of an extended scrutinee path
         if t.owner.is_some() {
@@ -2720,7 +2888,14 @@ impl Checker {
                 }
             }
             Expr::Move(x) => {
-                // G6: liveness and position rules are checked by foreign::check_ownership
+                if let Some(field) = x.fields.first() {
+                    if c || self.field_move != Some((x.line, x.col)) {
+                        return Err(field_move_error(x));
+                    }
+                    let root = self.lookup(x.line, x.col, &x.name, scope)?;
+                    return self.field_type(x.line, x.col, &root.ty, field);
+                }
+                // G6: liveness and position rules for binding moves are checked by foreign::check_ownership.
                 if c {
                     return Err(terr(
                         x.line,
@@ -3108,7 +3283,7 @@ impl Checker {
     // ---- G5 A0: inout call arguments and old(..) ----
     /// Arguments of a resolved call to a user function whose signature has an inout parameter (or that carries a marker):
     /// per argument marker/place validity and the instantiated type, then exclusive use of every marked binding across the
-    /// whole argument list, then the statement-boundary position of the call.
+    /// whole argument list.
     fn inout_args(&mut self, e: &mut Call, f: &FuncInfo, m: &Mapping, scope: &Scope, c: bool) -> Res<()> {
         let n = e.name.clone();
         let mut marked: Vec<(usize, String)> = Vec::new();
@@ -3225,13 +3400,13 @@ impl Checker {
                 ));
             }
         }
-        if !c && self.boundary != Some(&*e as *const Call as usize) {
+        if !c && self.ckind == "par" && self.boundary != Some(&*e as *const Call as usize) {
             return Err(terr(
                 e.line,
                 e.col,
                 "inout_context",
-                "a call with an inout parameter must be a whole expression statement, let initializer, assignment value or return value",
-                "bind the result first: `let r: T = f(inout a);` and use r afterwards",
+                "a par branch cannot contain a nested inout call",
+                "evaluate the call in a separate statement before the par group",
             ));
         }
         Ok(())
@@ -3893,7 +4068,7 @@ impl Checker {
         arity(f.params.len())?;
         match &cat {
             Some(cf) if is_catalog_contract_only(&n) => self.observer_args(e, cf, &m, scope, c)?,
-            // G5 A0: marker, place, type, exclusivity and statement context
+            // G5 A0: marker, place, type and same-call exclusivity
             None if f.inout.iter().any(|b| *b) || e.args.iter().any(|x| matches!(x, Expr::InoutArg(_))) => {
                 self.inout_args(e, &f, &m, scope, c)?
             }

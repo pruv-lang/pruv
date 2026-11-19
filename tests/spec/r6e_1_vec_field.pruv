@@ -1,0 +1,24 @@
+// spec: R-6e-1 R-6d-2 accept
+struct Rec { id: i64, data: Vec<i64> }
+
+fn pack(take v: Vec<i64>) -> Rec {
+  return Rec { id: 7, data: move v };
+}
+
+fn bounded_sum(r: Rec) -> i64
+  requires len(r.data) <= 1000
+  requires forall k in 0..len(r.data): 0 <= r.data[k] && r.data[k] <= 100
+  ensures 0 <= result && result <= 100 * len(r.data)
+{
+  let mut sum: i64 = 0;
+  let mut i: i64 = 0;
+  while i < len(r.data)
+    invariant 0 <= i && i <= len(r.data)
+    invariant 0 <= sum && sum <= 100 * i
+    decreases len(r.data) - i
+  {
+    sum = sum + vec_get::<i64>(r.data, i);
+    i = i + 1;
+  }
+  return sum;
+}

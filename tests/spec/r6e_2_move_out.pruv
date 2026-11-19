@@ -1,0 +1,8 @@
+// spec: R-6e-2 reject
+struct Rec { id: i64, data: Vec<i64> }
+
+fn extract() -> Vec<i64> ! alloc {
+  let mut p: Rec = Rec { id: 7, data: vec_new::<i64>() };
+  let w: Vec<i64> = move p.data;
+  return move w;
+}

@@ -1,0 +1,1 @@
+{"stage":"type","code":"inout_context","out_contains":["a call with effects runs before it"]}

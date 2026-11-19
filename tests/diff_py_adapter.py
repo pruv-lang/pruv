@@ -81,7 +81,7 @@ NODE_FIELDS = {
     "FieldAccess": ("base", "field", "ty"),
     "IsVariant": ("value", "enum_name", "variant", "ty"),
     "VariantField": ("value", "enum_name", "variant", "field", "ty"),
-    "Move": ("name", "ty"),      # G6 A0: `move name`
+    "Move": ("name", "ty"),
     "InoutArg": ("expr", "ty"),  # G5 A0: call-argument marker `inout name`
     # declarations and helper nodes
     "FieldDecl": ("name", "type"),
@@ -117,6 +117,7 @@ NODE_FIELDS = {
 #               with an element range (check dump only)
 NODE_FIELDS["Refinement"] = ("shape", "base", "lo", "hi", "maxlen")
 OPTIONAL_FIELDS = {
+    "Move": ("fields",),
     "Param": ("refine",),
     "Function": ("ret_refine",),
     "Let": ("refine",),
@@ -244,6 +245,8 @@ def ser(v):
         out[f] = ser(getattr(v, f))
     for f in OPTIONAL_FIELDS.get(name, ()):
         x = getattr(v, f)
+        if name == "Move":
+            x = list(x) if x else None
         if x is not None:
             out[f] = ser(x)
     _g3_extras(v, out)

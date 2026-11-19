@@ -349,8 +349,7 @@ fn assign_stmts<'s>(stmts: &'s [Stmt], out: &mut Vec<Asg<'s>>) {
     }
 }
 
-/// infer.py `_expr_inout` (G5 A1): whole-array operands of the inout arguments of e itself (G5_SPEC 2.1: an inout call is
-/// always the complete expression of a statement, so nothing below it is visited).
+/// Names of the whole-array inout operands throughout an expression.
 fn expr_inout(e: &Expr, out: &mut BTreeSet<String>) {
     if let Expr::Call(c) = e {
         for a in &c.args {
@@ -360,6 +359,9 @@ fn expr_inout(e: &Expr, out: &mut BTreeSet<String>) {
                 }
             }
         }
+    }
+    for child in kids(e) {
+        expr_inout(child, out);
     }
 }
 
@@ -380,6 +382,8 @@ fn stmt_inout(st: &Stmt) -> BTreeSet<String> {
             }
         }
         Stmt::ExprStmt(x) => expr_inout(&x.expr, &mut out),
+        Stmt::If(x) => expr_inout(&x.cond, &mut out),
+        Stmt::Match(x) => expr_inout(&x.scrutinee, &mut out),
         _ => {}
     }
     out
@@ -902,7 +906,7 @@ impl Bld {
                 _ => Expr::Var(ast::Var { line, col, name: x.name.clone(), ty: None }),
             },
             // G6 A0: never reaches the proof layer (the driver's A0 guard stops the program earlier)
-            Expr::Move(x) => Expr::Move(ast::Move { line, col, name: x.name.clone(), ty: None }),
+            Expr::Move(x) => Expr::Move(ast::Move { line, col, name: x.name.clone(), fields: x.fields.clone(), ty: None }),
             Expr::Quant(x) => {
                 let inner = match sub {
                     Some((n, _)) if x.var == n => None,

@@ -556,7 +556,7 @@ impl<'a> Mono<'a> {
                 Expr::StrLit(StrLit { line: x.line, col: x.col, value: x.value.clone(), ty: self.ty_opt(&x.ty)? })
             }
             Expr::Var(x) => Expr::Var(Var { line: x.line, col: x.col, name: x.name.clone(), ty: self.ty_opt(&x.ty)? }),
-            Expr::Move(x) => Expr::Move(Move { line: x.line, col: x.col, name: x.name.clone(), ty: self.ty_opt(&x.ty)? }),
+            Expr::Move(x) => Expr::Move(Move { line: x.line, col: x.col, name: x.name.clone(), fields: x.fields.clone(), ty: self.ty_opt(&x.ty)? }),
             Expr::InoutArg(x) => {
                 let expr = self.bx(&x.expr)?;
                 Expr::InoutArg(InoutArg { line: x.line, col: x.col, expr, ty: self.ty_opt(&x.ty)?, post_refine: Vec::new() })

@@ -74,7 +74,7 @@ match e {                        // e: Option<i64>, Result<i64> or a user enum (
 }
 match r { Ok(v) => { ... } Err(c) => { ... } }
 f(args);                 // call as statement only if f returns ()
-f(inout a, args);        // mutating call: only in the statement positions of section 6g
+f(inout a, args);        // mutating call: subject to the expression rules of section 6g
 ```
 `while` is the only loop. A value of type `Result<i64>` or `Option<i64>` must be used (let-bound, returned, matched);
 it can never be silently dropped.
@@ -120,7 +120,7 @@ it can never be silently dropped.
   big-endian. For `n < 8` the value is in `0..2^(8n)`; for `n = 8` the 64 bits are read as two's complement. Allowed in
   code and contracts. A non-literal `n`, or a literal outside 1..=8, is `type_mismatch`. In code the verifier must prove
   `0 <= i && i + n <= len(a)` (`verify` error `index_oob`).
-- `store_be(inout a, i, w, n);`: a statement (a mutating call in the section 6g positions; `a` a mutable `[u8]`). It
+- `store_be(inout a, i, w, n);`: a whole expression statement (`a` a mutable `[u8]`). It
   writes the low `8n` bits of `w: i64` big-endian into `a[i..i+n]` and leaves the other elements unchanged. `n` and the
   obligation are as for `load_be`. Not allowed in contracts.
 - `eq_range(a, i, b, j, n)`: `a` and `b` of one type, `[i64]` or `[u8]` (else `type_mismatch`); `i, j, n: i64`; a
@@ -133,7 +133,7 @@ it can never be silently dropped.
   `n < 4`); a literal `n == 0` is `true` without a compare. An operand layout other than `[u8]` bytes or 64-bit
   elements is `codegen` error `unsupported_type` (today a `[u8]` operand is stored as bytes and the storage plan keeps
   an `[i64]` operand, refined or not, as 64-bit elements, so it is not reached).
-- `copy_range(inout dst, i, src, j, n);` (R-5-1): a statement (a mutating call in the section 6g positions, like
+- `copy_range(inout dst, i, src, j, n);` (R-5-1): a whole expression statement (like
   `store_be`; as an expression it is `type/inout_context`). `dst` is a mutable local array or an `inout` array
   parameter (a missing `inout` marker or a non-mutable place is `type/inout_argument`); `dst` and `src` have one type,
   `[i64]` or `[u8]` (else `type_mismatch`); `i, j, n: i64`. Code only (`effect_in_contract` in a contract), name
@@ -370,8 +370,15 @@ fn push_two(take v: Vec<i64>, x: i64) -> Vec<i64> ! alloc
   representation failure (section 7, length bound). Any other result type, such as `[i64]`, is
   `type/foreign_signature`. The generated call is wrapped in `catch_unwind`. Tests:
   [accept](tests/spec/r6d_1_owned_results.pruv), [reject](tests/spec/r6d_1_array_result.pruv).
-- **Collections.** `Vec<T>`, `HashMap<K, V>` (`K` is `i64` or `bool`) and `String` hold values (no nested collections,
-  no collections inside structs/Options/arrays). Operations (`vec_*` and `map_*` take explicit type arguments, `string_*` and `len` take none): `vec_new`, `vec_push`,
+- R-6d-2 **Proved vector reads.** In a verified build with `--foreign-checks requires` or `off`, the Rust backend
+  emits `vec_get::<T>(v, i)` as `(unsafe { *(<v>).get_unchecked((<i>) as usize) })` after proving its bounds
+  precondition, provided the program declares no user `trusted rust fn` (whose unchecked `ensures` a bound proof
+  could rest on). A field operand reads the field directly, without a clone. With `--no-verify`,
+  `--foreign-checks all` or a user `trusted rust fn`, Rust uses the checked catalog helper. The inlined read is
+  still listed in `.foreign.json` and `--trust-report` as a `vec_get` use. This rule does not change LLVM lowering.
+- **Collections.** `Vec<T>`, `HashMap<K, V>` (`K` is `i64` or `bool`) and `String` hold values. Collections
+  cannot be nested or stored in `Option`, `Result` or arrays. R-6e-1 specifies the exception for struct and enum
+  fields. Operations (`vec_*` and `map_*` take explicit type arguments, `string_*` and `len` take none): `vec_new`, `vec_push`,
   `vec_get`, `map_new`, `map_insert`, `map_get` (returns `Option<V>`), `string_new`, `string_push_str`, `string_byte`,
   `string_to_str` (copies into a `str`), and `len`. Allocating operations need `! alloc`. In contracts only: `v[i]`, `s[i]`,
   `map_lookup::<K, V>(m, k)` and `map_updated::<K, V>(after, before, k, v)` (the whole new map: k set, size, others kept).
@@ -380,11 +387,12 @@ fn push_two(take v: Vec<i64>, x: i64) -> Vec<i64> ! alloc
   invariant about only the queried key cannot bound the others, so `count + 1` is then not provably free of overflow.
 - **Ownership.** A collection has one owner. An unmarked collection parameter is borrowed for the call (read only, cannot
   be moved, returned or aliased). `take` parameters and locals own their collection. Pass ownership with `move x`
-  (into a `take` argument, a `let`, an assignment or a `return`); after that `x` is dead until reassigned. A binding
+  (into a `take` argument, a `let`, an assignment, a `return` or a field initializer under section 6e); after
+  that `x` is dead until reassigned. A binding
   moved on only some paths cannot be used after the join; a loop must leave every outer owner alive at the end of each
   iteration. Collections are freed automatically. `ensures` may mention a consumed parameter: it means the value at entry.
 - **Run-time boundary checks** (`--foreign-checks`): `requires` (default) checks foreign and catalog preconditions at
-  run time; `all` also checks their postconditions (snapshots; slower, repeated appends become quadratic; on the LLVM backend
+  run time, subject to R-6d-2; `all` also checks their postconditions (snapshots; slower, repeated appends become quadratic; on the LLVM backend
   the bytes copied by `string_to_str` are not re-compared); `off` skips
   both (only with verification). Failures exit 101 with `pruv: foreign requires violated:`, `pruv: foreign ensures
   violated:`, `pruv: foreign contract undefined:` or `pruv: foreign panic:`.
@@ -392,8 +400,8 @@ fn push_two(take v: Vec<i64>, x: i64) -> Vec<i64> ! alloc
   functions over `i64`/`bool`/arrays/`str` returning `i64`/`bool`/`()`, built by compiling the generated bindings
   (which then contain the Rust shim) with rustc together with the object; the Rust compiler's `--emit exe|obj` rejects such
   programs with `codegen/foreign_target`, and a `--no-verify` LLVM build cannot check a `requires` that uses `v[i]`, `s[i]`,
-  `map_lookup` or `map_updated` (`codegen/unsupported_type`). Collection-bearing functions are internal: expose them through functions with
-  ordinary parameter and result types.
+  `map_lookup` or `map_updated` (`codegen/unsupported_type`). Collection-bearing functions are internal except
+  for the Rust entry results specified in section 6f.
 - **New error codes:** `foreign_syntax`, `foreign_path`, `foreign_signature`, `foreign_owned_type`, `foreign_move`,
   `foreign_borrow`, `foreign_loop_move`, `foreign_contract`, `foreign_export`, `foreign_target`.
 
@@ -431,17 +439,43 @@ fn tree_count(t: Tree) -> i64
 - **Buffer fields.** `[i64]`, `[u8]`, `[bool]` and `str` may be fields of non-generic structs and payloads. Initialize
   or replace them with a fresh buffer (`alloc`, a literal string) or `copy(view)`; return a field buffer with `copy`.
   `p.bytes[i] = v` is not allowed: copy the field into a mutable local, change it, and assign the field back.
+- R-6e-1 **Owned collection fields.** Non-generic structs and enum payloads may have `Vec<i64>`, `Vec<bool>`
+  and `String` fields. Other collection field types, including `HashMap`, other `Vec` element types and nested
+  collections, are `type/foreign_owned_type`. Generic structs and enums cannot have collection fields.
+  These aggregates are extended types and follow the buffer-field rules for copying and type positions.
+  An owned collection field initializer or replacement (`p.f = e` for a `let mut` local `p`) requires a call
+  result or `move x` of an owned collection local or `take` parameter. The move consumes `x`. A plain binding,
+  borrowed parameter or field read in the owning position gives the same diagnostic as using that expression
+  to initialize a collection local.
+  A read `r.f` on a struct parameter, local or match binding is a borrowed view. It may be passed to an
+  unmarked collection parameter, including the catalog operations `len`, `vec_get`, `string_byte` and
+  `string_to_str`. It is never moved implicitly. Contracts support `len(r.f)` and `r.f[i]` using the same
+  buffer model as for collection locals. The verifier models field construction, replacement and reads with
+  that model, including `vec_get` preconditions and postconditions and loop invariants on `len(r.f)`.
+  Rust uses `::std::vec::Vec<i64>`, `::std::vec::Vec<bool>` and `::std::string::String` for these fields.
+  The aggregate derives `Clone` without `Copy`, and struct parameters remain borrowed (`&Rec` for `Rec`).
+  Initializers that move a binding or use a call result store it directly without cloning.
+  LLVM rejects a struct or enum with such a field as `codegen/unsupported_type`. The diagnostic names the
+  aggregate and says owned collection fields need the Rust backend.
+- R-6e-2 **Moving a field into its replacement.** `move p.f` is permitted only as a direct `take` argument
+  of a call whose result is assigned back to the same field, as in
+  `p.f = vec_push::<i64>(move p.f, 5);`. The receiver `p` must be a `let mut` local and `f` an owned
+  collection field. Apart from the assignment target and the move, `p` may not occur anywhere in the
+  statement. Other field moves are `type/foreign_move`, with a diagnostic saying a field can be moved only
+  into a call whose result is assigned back to the same field. The callee takes the old field value and the
+  assignment stores its result. Rust passes it with `::std::mem::take(&mut p.f)` without cloning. An active
+  match borrow of `p` still makes the assignment `type/recursive_borrow`.
 - **Values, not pointers.** Recursive and buffer-bearing values are independent: copying one deep-copies everything,
   and changing a copy never changes the original. Parameters, field reads and `match` bindings are read-only views
   and do not allocate. Putting an existing value into an owning place (`let`, assignment, constructor field,
   `return`) copies it and needs `! alloc`; a fresh constructor or call result moves without a copy. Any constructor
   of a recursive value needs `! alloc`. While a `match` arm views part of a mutable local, that local cannot be
-  changed (`type/recursive_borrow`). Whole-value `==`/`!=` on values that contain arrays or strings is rejected
+  changed (`type/recursive_borrow`). Whole-value `==`/`!=` on values that contain arrays, strings or owned collections is rejected
   (`type/eq_type`); compare tags, lengths and elements instead.
 - **Limits.** Recursive and buffer-field types cannot be generic arguments, `Option`/`Result` payloads or G6
-  collection elements. Functions whose signatures use them are internal (no exported ABI or `--rust-bindings` entry);
-  expose them through functions with ordinary parameters. Contracts are not invented: a property such as "x is
-  somewhere in the tree" must be stated with the existing contract operations, and not every recursive property is
+  collection elements. Functions whose signatures use these types are internal. In explicit mode a host entry
+  with such a type in its signature is `type/entry_signature`. A property such as "x is somewhere in the tree"
+  must be stated with the existing contract operations, and not every recursive property is
   expressible. Proofs about deeply nested or very wide types can be slow. Native stack depth is not checked: very
   deep recursion, copying or freeing can overflow the stack (a resource failure, never a successful result).
   `--no-verify` does not check `decreases` and may recurse forever. Run-time `requires` that use `size`, `==` or
@@ -478,10 +512,18 @@ pub fn bounded(x: i64) -> i64                requires 0 <= x && x <= 10
   checking and verification are unchanged. Other attributes and arguments are `parse/unknown_attribute`.
   A recognized attribute before `pub fn`, `opaque fn`, `trusted rust fn`, a type, `mod`, another attribute or the
   end of the file, and any `#[` inside a body, is `parse/attribute_position`.
-- **Host entries.** Only root `pub`, non-generic functions are callable from Rust/C (`--rust-bindings`, LLVM
-  `pruv_abi_<name>`). Their signatures must be plain values (no collections, recursive or buffer-field types:
-  `type/entry_signature`). Child `pub` functions are for Pruv callers only. An optional root `main` must be
-  `pub fn main() -> ()`; a child `main` is an ordinary function.
+- **Host entries.** In explicit mode only root `pub` non-generic functions are host entries. A parameter of
+  collection, recursive or buffer-field type, or an `inout` parameter (section 6g, Host limits), is
+  `type/entry_signature`. The same restriction applies to results, subject to R-6f-1. Ordinary entries can be
+  exported through `--rust-bindings` and the LLVM
+  `pruv_abi_<name>` interface. Child `pub` functions are for Pruv callers only. An optional root `main`
+  must be `pub fn main() -> ()`. A child `main` is an ordinary function.
+- R-6f-1 **Vector entry results.** In explicit mode a root `pub` non-generic function may return `Vec<i64>` or
+  `Vec<bool>`. The generated Rust module exposes it like any other host entry (`pub fn`, or `pub(crate) fn` under
+  manifest `raw_entries`, section 7 Raw entries) returning `::std::vec::Vec<i64>` or `::std::vec::Vec<bool>`.
+  A vector-result entry has no C ABI. The LLVM backend and
+  `--rust-bindings` reject it with `codegen/unsupported_type` naming the entry. Other collection and
+  extended-type results remain `type/entry_signature`. Legacy mode is unchanged.
 - **Proof.** Every function is verified, including private and unused ones; a caller sees the callee's contract and,
   for a function that can be expanded (section 6, L3 P07, R-6-1), the fact `result == <body>` at its call, from any
   module. It sees no other part of the body. Recursion and recursive types may span modules. Host entries check `requires` at run
@@ -499,7 +541,8 @@ pub fn bounded(x: i64) -> i64                requires 0 <= x && x <= 10
   declare them too. The alias check applies; a legacy root ignores `--lib`. `DIR` must be an existing directory.
 
 ## 6g. In-place array parameters: `inout` (G5)
-Full contract: `docs/G5_SPEC.md` (§2–§8 and §15 for deferred limits). Examples: `examples/g5_*.pruv`, `tests/runtime/g5_r*`.
+Full contract: `docs/G5_SPEC.md` (§2–§8 and §15 for deferred limits). R-6g-1 below replaces its §2.1
+statement-boundary rule for calls; the rest of that contract still applies. Examples: `examples/g5_*.pruv`, `tests/runtime/g5_r*`.
 ```
 fn set_at(inout a: [i64], i: i64, v: i64) -> ()
   requires 0 <= i && i < len(a)
@@ -533,11 +576,24 @@ set_at(inout w, 0, 7);
   length. An unconstrained element is arbitrary, even if the body never writes it, so state the frame
   (`k != i ==> a[k] == old(a)[k]`). Other variables keep their values. The `requires` are proved on the pre-call
   arrays and `old` refers to them. `ensures` of an `inout` function are always applied at the call.
-- **Statement boundaries.** A call with `inout` may only be the whole expression of an expression statement, a `let`
-  initializer, the right side of a whole-variable assignment, or a `return` (parentheses do not matter); anywhere
-  else (argument, operator, condition, index, field or element assignment) it is `type/inout_context`. Its result may
-  have any supported type. Use a temporary: `let changed: bool = update(inout data);`. Arguments are evaluated left
-  to right and the mutation completes before the `let`/assignment/return.
+- R-6g-1 **Inout calls in expressions.** A user function call with an `inout` argument may occur at any
+  depth in a code expression if all of the following conditions hold. The statement is one simple statement.
+  For `if`, `while` or `match` it consists only of the condition or scrutinee.
+  1. An array passed `inout` occurs nowhere else in the statement, including the assignment target, other
+     operands or arguments, and other `inout` calls. Repeated mentions in the same call's arguments remain
+     `type/inout_alias`. Elsewhere the error is `type/inout_context` and says that the binding is passed
+     inout and also mentioned elsewhere in this statement.
+  2. The call is evaluated exactly once when the statement is reached. It cannot be in a `while` condition,
+     the right operand of `&&` or `||`, or any other part that may be skipped or repeated. Violations are
+     `type/inout_context` and say that the call may be skipped or repeated.
+  3. The statement is not an element or field assignment. Violations are `type/inout_context`.
+  4. No call with an effect other than `alloc` runs before the inout call in the statement. Violations are
+     `type/inout_context` and say that a call with effects runs before it.
+
+  Rust and LLVM evaluate the call in place. Expressions evaluate left to right, with arguments evaluated
+  before the call they belong to. The verifier may model inout calls in fresh temporaries before the statement,
+  in their original evaluation order. The existing checks on whole-expression calls still apply. The builtins
+  `copy_range` and `store_be` remain whole expression statements, and the rules for `par` are unchanged.
 - **Generics.** `fn swap<T: Element>(inout a: [T], ...)` works like any G3 function; `swap::<i64>(inout w, i, j)`
   (`examples/g5_generic_swap.pruv`). It is specialized per element type, also across modules.
 - **Loops.** A loop that passes an array as `inout` treats it as changed: an `inout` parameter keeps its length, a
@@ -556,7 +612,7 @@ set_at(inout w, 0, 7);
   (private, child-`pub` and generic functions may use it; in legacy mode it is automatically internal); a
   `trusted rust fn` with `inout` is `type/foreign_signature`. Give the host an ordinary function that owns a
   `copy` of its input, calls the `inout` helpers on it and returns it.
-- **Not supported.** `inout` calls nested in expressions or conditions, fields or elements as `inout` places, scalar,
+- **Not supported.** Fields or elements as `inout` places, scalar,
   `str`, aggregate or collection `inout` parameters, `old` of anything but an `inout` parameter, mutable host entries.
 - **New error codes:** `inout_syntax`, `inout_type`, `inout_argument`, `inout_alias`, `inout_context`, `old_context`,
   `old_argument`; reused: `immutable`, `array_alias`, `recursive_borrow`, `entry_signature`, `foreign_signature`,
@@ -1430,14 +1486,14 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/empty_enum` | type | an enum without variants |
 | `type/entry_main` | type | the root `main` is not `pub fn main() -> ()` |
 | `type/entry_signature` | type | a host entry has a parameter or result type the host cannot pass |
-| `type/eq_type` | type | `==` on arrays or collections |
+| `type/eq_type` | type | `==` or `!=` on a type that does not support whole-value equality |
 | `type/field_type` | type | a field type that is not allowed (unit, an array in a generic type, ...) |
 | `type/field_name` | type | a field name does not start with a lower-case letter |
 | `type/foreign_borrow` | type | one value is borrowed and moved in the same call |
 | `type/foreign_contract` | type | a catalog or foreign operation used against its contract rules |
 | `type/foreign_export` | type | `main` takes or returns a collection |
 | `type/foreign_loop_move` | type | a value moved in a loop body is not live again at its end |
-| `type/foreign_move` | type | `take` or `move` where no ownership is consumed |
+| `type/foreign_move` | type | an invalid collection move, missing move, or use after move |
 | `type/foreign_owned_type` | type | an owned collection in a position that cannot hold it |
 | `type/foreign_path` | type | an invalid Rust path in a `trusted rust fn` |
 | `type/foreign_signature` | type | a `trusted rust fn` signature the bridge does not support (R-6d-1) |
@@ -1448,7 +1504,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/immutable_string` | type | a byte store into a `str` |
 | `type/inout_alias` | type | an `inout` argument also used elsewhere in the same call |
 | `type/inout_argument` | type | an `inout` marker where the parameter is not `inout` |
-| `type/inout_context` | type | a call with an `inout` argument nested inside another expression |
+| `type/inout_context` | type | an `inout` call in a position forbidden by section 6g or by a builtin's statement-only rule |
 | `type/inout_type` | type | an `inout` parameter of a type that cannot be `inout` |
 | `type/int_range` | type | an integer literal outside the i64 range |
 | `type/internal` | type | an unknown statement or expression reached the checker |

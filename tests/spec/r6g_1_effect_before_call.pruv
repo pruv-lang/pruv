@@ -1,0 +1,21 @@
+// spec: R-6g-1 reject
+fn set_value(inout a: [i64], x: i64) -> i64
+  requires len(a) > 0
+  ensures a[0] == x
+  ensures result == x
+{
+  a[0] = x;
+  return x;
+}
+
+fn announce() -> i64 ! io
+  ensures result == 1
+{
+  print(1);
+  return 1;
+}
+
+fn demo() -> i64 ! io, alloc {
+  let mut d: [i64] = alloc(1, 0);
+  return announce() + set_value(inout d, 4);
+}

@@ -1,4 +1,4 @@
-// G5: a call with an inout parameter cannot be an argument of another call
+// P31L: an inout call may be a call argument (R-6g-1), but a[0] + 1 in bump may overflow
 fn bump(inout a: [i64]) -> i64
   requires len(a) >= 1
 {

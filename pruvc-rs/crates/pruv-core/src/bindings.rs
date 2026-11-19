@@ -257,6 +257,36 @@ fn rs_de(tt: &TypeTable, ty: &str, arr: &str, off: i64) -> Result<String, String
     }
 }
 
+/// Both the LLVM backend and its bindings require a C ABI for host entries.
+pub fn owned_collection_abi_error(
+    prog: &Program,
+    g4: Option<&crate::modules::G4>,
+) -> Option<crate::diagnostic::PruvError> {
+    let err = |line, col, message| {
+        crate::diagnostic::PruvError::new("codegen", line, col, "unsupported_type", message, "use the Rust backend")
+    };
+    for d in &prog.types {
+        if d.all_fields().iter().any(|f| crate::gtype::key_is_owned_field(&f.ty)) {
+            let name = prog.explicit.as_ref().and_then(|e| e.tdisp.get(d.name())).map_or(d.name(), String::as_str);
+            return Some(err(d.line(), d.col(), format!("{} has owned collection fields, which need the Rust backend", name)));
+        }
+    }
+    for (i, f) in prog.functions.iter().enumerate() {
+        if !crate::gtype::key_is_scalar_vec(&f.ret) {
+            continue;
+        }
+        let name = if let Some(g4) = g4 {
+            g4.fn_meta.get(i).filter(|m| m.host_entry).map(|m| m.src_name.as_str())
+        } else {
+            prog.explicit.as_ref().and_then(|e| e.fns.get(i)).filter(|m| m.host_entry).map(|m| m.disp.as_str())
+        };
+        if let Some(name) = name {
+            return Some(err(f.line, f.col, format!("host entry {} returns a Vec, which has no C ABI", name)));
+        }
+    }
+    None
+}
+
 pub fn gen_bindings(prog: &Program) -> Result<String, String> {
     gen_bindings_with(prog, None, true)
 }
@@ -292,6 +322,9 @@ fn entry_type_closure(prog: &Program, tt: &TypeTable) -> std::collections::HashS
 
 /// shim: the `mod pruv_g6_shim` text of a G6 program (foreign_shim::build_shim); None for every other program.
 pub fn gen_bindings_with(prog: &Program, shim: Option<&str>, verified: bool) -> Result<String, String> {
+    if let Some(e) = owned_collection_abi_error(prog, None) {
+        return Err(format!("{}: {}", e.code, e.message));
+    }
     let tt = crate::llvmgen::new_tt(prog); // G9 A3: Python new_tt (extended / boxed metadata)
     // P10H: prefix of the pruv_abi_* symbols (same as Mod::sym_pre)
     let sp = crate::llvmgen::sym_prefix(prog.pkg_name.as_deref());

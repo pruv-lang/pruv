@@ -6,7 +6,7 @@ passes through unchanged."""
 import re
 
 from vast import *
-from typeinfo import fn_owner, is_collection, contains_collection, type_name
+from typeinfo import TypeTable, fn_owner, is_collection, contains_collection, is_owned_field_type, type_name
 from refine import _kids as expr_kids
 
 
@@ -333,8 +333,9 @@ def _handle_lost(node, kind, msg):
 
 
 class _Ownership:
-    def __init__(s, funcs):
+    def __init__(s, funcs, types):
         s.funcs = funcs
+        s.types = types
         s.bor = set()
         s.track = None   # name -> "move" | "borrow" of the outermost call being checked (shared by nested calls)
         s.proc = {}      # G10 A0: must-consume bindings, name -> "Process" | "Socket" | "Listener"; never File etc.
@@ -353,8 +354,9 @@ class _Ownership:
         declared = []
         for x in stmts:
             if st is None:
-                break
-            st = s.stmt(x, st, declared)
+                s.dead_stmt(x)
+            else:
+                st = s.stmt(x, st, declared)
         if st is not None:
             for n in declared:
                 if n in s.proc and st.get(n) in ("live", "maybe"):
@@ -389,7 +391,7 @@ class _Ownership:
             s.expr(x.value, st)
             return st
         if isinstance(x, FieldAssign):
-            s.expr(x.value, st)
+            s.consume(x.value, st, "assign")
             return st
         if isinstance(x, If):
             s.expr(x.cond, st)
@@ -424,11 +426,66 @@ class _Ownership:
             out = None
             first = True
             for a in x.arms:
+                borrowed = s.arm_borrowed(a)
+                s.bor.update(borrowed)
                 r = s.block(a.body, dict(st))
+                s.bor.difference_update(borrowed)
                 out = r if first else _join(out, r)
                 first = False
             return out
         return st   # Assert: contract, not subject to liveness
+
+    def dead_stmt(s, x):
+        """Check owning positions in unreachable code without tracking liveness."""
+        if isinstance(x, (Let, Assign, FieldAssign, Return)):
+            if x.value is not None:
+                s.dead_expr(x.value, True)
+        elif isinstance(x, IndexAssign):
+            s.dead_expr(x.index)
+            s.dead_expr(x.value)
+        elif isinstance(x, ExprStmt):
+            s.dead_expr(x.expr)
+        elif isinstance(x, Par):
+            for c in x.calls:
+                s.dead_expr(c)
+        elif isinstance(x, (If, While, Match)):
+            s.dead_expr(x.scrutinee if isinstance(x, Match) else x.cond)
+            if isinstance(x, Match):
+                for a in x.arms:
+                    borrowed = s.arm_borrowed(a)
+                    s.bor.update(borrowed)
+                    for stmt in a.body:
+                        s.dead_stmt(stmt)
+                    s.bor.difference_update(borrowed)
+                return
+            for body in ((x.then, x.els) if isinstance(x, If) else (x.body,)):
+                for stmt in body:
+                    s.dead_stmt(stmt)
+
+    def dead_expr(s, e, owned=False):
+        if owned:
+            s.check_field_alias(e)
+            if isinstance(e, Var) and is_collection(e.ty) and e.name in s.bor:
+                _err(e, "foreign_borrow", "borrowed alias", "%s is a read parameter and cannot be aliased" % e.name)
+        if isinstance(e, Call):
+            for arg, take in zip(e.args, s.takes(e)):
+                s.dead_expr(arg, take)
+        else:
+            for k in expr_kids(e):
+                s.dead_expr(k, isinstance(e, (StructLit, EnumCtor)))
+
+    @staticmethod
+    def check_field_alias(e):
+        if isinstance(e, (FieldAccess, VariantField)) and is_collection(e.ty):
+            _err(e, "foreign_borrow", "borrowed alias", "the field is a read view and cannot be aliased")
+
+    def arm_borrowed(s, a):
+        """binders of a user enum arm that view an owned collection field"""
+        decl = s.types.get(a.enum_name)
+        if decl is None:
+            return set()
+        variant = next(v for v in decl.variants if v.name == a.ctor)
+        return {b for b, fd in zip(a.binders, variant.fields) if is_owned_field_type(fd.type)}
 
     # ---- uses ----
     def use(s, e, st):
@@ -441,6 +498,8 @@ class _Ownership:
                  "%s is moved on some paths; make every path leave it live, or do not use it afterwards" % e.name)
 
     def move(s, e, st, consuming, track):
+        if e.fields:
+            return       # The checker permits only a take argument immediately stored back into this field.
         if not is_collection(e.ty):
             _err(e, "foreign_move", "move of a non-collection value",
                  "move applies to Vec, HashMap and String bindings only; use the value directly")
@@ -465,7 +524,7 @@ class _Ownership:
     def consume(s, e, st, pos):
         """let initializer / assignment / return value"""
         if isinstance(e, Move):
-            s.move(e, st, True, None)
+            s.move(e, st, True, s.track)
         elif isinstance(e, Var) and is_collection(e.ty):
             s.use(e, st)
             if e.name in s.bor:
@@ -481,6 +540,8 @@ class _Ownership:
     # ---- expressions ----
     def expr(s, e, st, owned=False):
         """owned: the value is taken at once by a binding, a return or a take argument (not a dropped temporary)"""
+        if owned:
+            s.check_field_alias(e)
         if isinstance(e, Var):
             if is_collection(e.ty):
                 s.use(e, st)
@@ -501,16 +562,21 @@ class _Ownership:
             st.update(joined)
         else:
             for k in expr_kids(e):
-                s.expr(k, st)
+                if isinstance(e, (StructLit, EnumCtor)) and is_collection(k.ty):
+                    s.consume(k, st, "let")
+                else:
+                    s.expr(k, st)
+
+    def takes(s, e):
+        f = s.funcs.get(e.name) or CATALOG.get(e.name)
+        return [bool(p.take) for p in f.params] if f is not None else [False] * len(e.args)
 
     def call(s, e, st):
-        f = s.funcs.get(e.name) or CATALOG.get(e.name)
-        takes = [bool(p.take) for p in f.params] if f is not None else [False] * len(e.args)
         outer = s.track
         track = outer if outer is not None else {}   # nested calls share the outermost call's track (R1)
         s.track = track
         try:
-            s.call_args(e, st, takes, track)
+            s.call_args(e, st, s.takes(e), track)
         finally:
             s.track = outer
 
@@ -540,9 +606,9 @@ class _Ownership:
                 s.expr(arg, st)
 
 
-def check_ownership(f, funcs):
+def check_ownership(f, funcs, types):
     """ownership/liveness of one typed, non-foreign function; funcs: name -> Function of the program"""
-    _Ownership(funcs).run(f)
+    _Ownership(funcs, types).run(f)
 
 
 # ---------------------------------------------------------------------------
@@ -580,6 +646,10 @@ def first_g6_use(prog):
         _g6_candidates(f.body, cands)
         if cands:
             return min(cands, key=lambda c: (c[0], c[1]))
+    for d in prog.types:
+        for fd in TypeTable._all_fields(d):
+            if is_owned_field_type(fd.type):
+                return (fd.line, fd.col, "an owned collection field")
     return None
 
 

@@ -3072,9 +3072,6 @@
 {"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g5_reject", "mode": "no-verify", "sample": "tests/must_reject/g5_alias_nested_call.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g5_reject", "mode": "no-verify", "sample": "tests/must_reject/g5_alias_two_marked.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g5_reject", "mode": "no-verify", "sample": "tests/must_reject/g5_call_place.pruv"}
-{"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g5_reject", "mode": "no-verify", "sample": "tests/must_reject/g5_context_binary.pruv"}
-{"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g5_reject", "mode": "no-verify", "sample": "tests/must_reject/g5_context_call_arg.pruv"}
-{"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g5_reject", "mode": "no-verify", "sample": "tests/must_reject/g5_context_if_cond.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g5_reject", "mode": "no-verify", "sample": "tests/must_reject/g5_context_index_target.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g5_reject", "mode": "no-verify", "sample": "tests/must_reject/g5_context_while_cond.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "g5_reject", "mode": "no-verify", "sample": "tests/must_reject/g5_element_place.pruv"}
@@ -3262,9 +3259,6 @@
 {"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g5_reject", "mode": "trust-callers", "sample": "tests/must_reject/g5_alias_nested_call.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g5_reject", "mode": "trust-callers", "sample": "tests/must_reject/g5_alias_two_marked.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g5_reject", "mode": "trust-callers", "sample": "tests/must_reject/g5_call_place.pruv"}
-{"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g5_reject", "mode": "trust-callers", "sample": "tests/must_reject/g5_context_binary.pruv"}
-{"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g5_reject", "mode": "trust-callers", "sample": "tests/must_reject/g5_context_call_arg.pruv"}
-{"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g5_reject", "mode": "trust-callers", "sample": "tests/must_reject/g5_context_if_cond.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g5_reject", "mode": "trust-callers", "sample": "tests/must_reject/g5_context_index_target.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g5_reject", "mode": "trust-callers", "sample": "tests/must_reject/g5_context_while_cond.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g5_reject", "mode": "trust-callers", "sample": "tests/must_reject/g5_element_place.pruv"}
@@ -4105,7 +4099,6 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g5_call_place.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g5_context_binary.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g5_context_call_arg.pruv"}
-{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g5_context_if_cond.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g5_context_index_target.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g5_context_while_cond.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g5_element_place.pruv"}
