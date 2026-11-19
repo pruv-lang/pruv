@@ -32,6 +32,7 @@ fn timed(f: impl FnOnce() -> i64) -> String {
 
 fn run(op: &str, w: &[i64]) -> String {
     match op {
+        "unit" => words(&sol::t_unit(w[0] != 0, w[1], w[2], w[3], w[4], w[5])),
         "cls" => words(&sol::t_class(w[0])),
         "oki" => sol::t_okint(w[0]).to_string(),
         "sfe" => sol::t_issafe(w[0]).to_string(),

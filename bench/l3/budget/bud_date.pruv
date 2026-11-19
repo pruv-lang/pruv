@@ -65,7 +65,7 @@ pub fn valid_iso_parts(y: i64, m: i64, d: i64, h: i64, mi: i64, sec: i64, f: i64
 
 pub fn iso_parts(ms: i64) -> IsoParts
   requires -8640000000000000 <= ms && ms <= 8640000000000000
-  ensures result.n == 0 || result.n == 24 || result.n == 27
+  ensures result.n == 24 || result.n == 27
   ensures valid_iso_parts(result.y, result.m, result.d, result.h, result.mi, result.sec, result.f, result.n)
 {
   let day: i64 = 86400000;
@@ -193,6 +193,7 @@ fn put_iso_b(inout o: [u8], at: i64, p: IsoParts) -> ()
 // Exactly new Date(ms).toISOString(). Empty only if the calendar walk left its guarded ranges.
 pub fn iso(ms: i64) -> [u8] ! alloc
   requires -8640000000000000 <= ms && ms <= 8640000000000000
+  ensures len(result) == 24 || len(result) == 27
 {
   let p: IsoParts = iso_parts(ms);
   let mut o: [u8] = alloc(p.n, 0);

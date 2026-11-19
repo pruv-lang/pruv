@@ -74,6 +74,21 @@ pub fn t_int(x: i64) -> [u8] ! alloc
   return crate::bud_text::int_text(x);
 }
 
+// Transport the five limit fields followed by the defaultUnlimited presence bit.
+pub fn t_unit(configured: bool, t: i64, d: i64, c: i64, r: i64, k: i64) -> [i64] ! alloc
+{
+  let mut unit: crate::bud_num::Unit = crate::bud_num::unit_default();
+  if configured { unit = crate::bud_num::unit_of(t, d, c, r, k); }
+  let mut out: [i64] = alloc(6, 0);
+  out[0] = unit.time_minutes;
+  out[1] = unit.delegations;
+  out[2] = unit.commands;
+  out[3] = unit.reviews;
+  out[4] = unit.checks;
+  if unit.default_unlimited { out[5] = 1; }
+  return out;
+}
+
 // ---------------------------------------------------------------- dates
 
 pub fn t_iso(ms: i64) -> [u8] ! alloc

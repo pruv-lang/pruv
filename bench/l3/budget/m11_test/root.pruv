@@ -82,7 +82,7 @@ fn emit_all(inout out: [i64], pos: i64, w: [i64]) -> i64
   return emit_range(inout out, pos, w, 0, len(w));
 }
 
-// `u, units` of the UTF-8 text b (a bud_text output, valid UTF-8; u = bud_card::units(b)): a short decode loop, so the
+// `u, units` of the UTF-8 text b (a bud_text output, valid UTF-8; u = its UTF-16 unit count): a short decode loop, so the
 // error branch of m11_set_card stays small (the WTF-8 put_units loop inlined there cost the success path ~48
 // instructions per call, P27)
 fn emit_utf8(inout out: [i64], pos: i64, b: [u8], u: i64) -> i64
@@ -290,8 +290,9 @@ pub fn m11_set_card(inout st: [i64], rf: [i64], sid: [i64], card: [u8], lang: [u
   let r: crate::bud_card::Judged = crate::bud_card::judge(found, closed, card, at_b(card), lc);
   if r.kind >= 0 {
     // {ok: false, error}
-    // the error text is UTF-8 bytes: count its UTF-16 units once, then write them after the header
-    let eu: i64 = crate::bud_card::units(r.error, 0, len(r.error), len(r.error));
+    // the error text is a bud_text card error: its unit count is a generated constant (a count loop here was inlined
+    // into every m11_set_card caller and pushed the m11 harness one 16 KiB code page over hand, P27)
+    let eu: i64 = crate::bud_text::card_error_units(r.kind, lc);
     let need: i64 = 19 + eu;
     if len(out) < need { return 3; }
     let mut p: i64 = emit(inout out, 0, need - 1);

@@ -5,7 +5,8 @@
 
 1. copies root.pruv + ../bud_num.pruv ../bud_text.pruv ../bud_date.pruv into work/m6/src/
 2. compiles with the Python compiler (py/rust) and/or the Rust compiler (rs/rust), then rustc -O harness.rs per pair
-3. generates exactly --count deterministic cases (xorshift32), asks node_ref.mjs for the expected words, runs each harness, compares
+3. generates exactly --count deterministic cases (xorshift32) plus N and Q8 helper replays,
+   asks node_ref.mjs for the expected words and UTF-16 units, runs each harness, compares
 4. --perf: compare Python- and Rust-compiled helpers with hand Rust (hand.rs, linked into the same harness) at 100, 500 and 1000 calls
 Report: work/m6/report.json. Exit 1 on any mismatch, 2 on a build or driver failure.
 """
@@ -26,7 +27,9 @@ REPO = HERE.parents[3]                       # m6_test -> budget -> l3 -> bench 
 WORK = BUDGET / 'work' / 'm6'
 LIB = REPO / 'bench' / 'l3' / 'lib'
 sys.path.insert(0, str(BUDGET))
-from common import NODE, TS_ENV              # noqa: E402
+from common import NODE, TS_ENV, load_group  # noqa: E402
+from compare import UNDEF, jv_decode        # noqa: E402
+import q_gen                                # noqa: E402
 
 RS_DEFAULT = '/Users/spica4345/Projects/pruv/pruvc-rs/target/release/pruvc'
 MODULES = ('bud_num.pruv', 'bud_text.pruv', 'bud_date.pruv')
@@ -34,6 +37,12 @@ PAIRS = {'py': 'py/rust', 'rs': 'rs/rust'}
 SAFE = 2 ** 53 - 1
 DMAX = 8640000000000000
 M32 = 0xFFFFFFFF
+Q8_SCENARIOS = 40
+REASONS = ('time', 'delegations', 'commands', 'reviews', 'checks')
+LIMIT_KEYS = ('timeMinutes', *REASONS[1:])
+HELPER_ENTRIES = {'refusal': 'ref', 'continueText': 'con', 'refusalWire': 'wir',
+                  'limitText': 'lmt', 'cardMissing': 'cmi', 'budgetUnitOf': 'unit'}
+TEXT_ENTRIES = {'int', 'iso', 'ref', 'con', 'amt', 'lmt', 'wir', 'cmi', 'cer', 'cnt', 'nol'}
 WEIGHTS = [('class', 50), ('int', 45), ('floor', 40), ('iso', 45), ('arith', 30), ('text', 60), ('trim', 30)]
 PERF_OPS = [
     ('p_iso', [1700000000000]),
@@ -158,8 +167,7 @@ def number_pools(seed):
     for letter in 'KN':
         with open(BUDGET / 'fixtures' / f'{letter}.json', encoding='utf-8') as f:
             collect_nums(json.load(f), fx)
-    import q_gen
-    for case in q_gen.gen(seed, ['Q6', 'Q8'], 40):
+    for case in q_gen.gen(seed, ['Q6', 'Q8'], Q8_SCENARIOS):
         collect_nums(case, qg)
     dedup = lambda xs: list(dict.fromkeys(xs))
     return dedup(fx), dedup(qg)
@@ -354,6 +362,143 @@ def build_cases(count, seed):
     return cases, dict(zip((n for n, _ in WEIGHTS), quotas))
 
 
+class OutsideDomain(ValueError):
+    pass
+
+
+def safe_word(value, field):
+    if type(value) not in (int, float) or not -SAFE <= value <= SAFE or int(value) != value:
+        raise OutsideDomain(f'{field} is not a safe integer')
+    return int(value)
+
+
+def language_word(args):
+    lang = args[0] if args else UNDEF
+    if lang is UNDEF or lang in ('ko', 'en'):
+        return int(lang == 'en')
+    raise OutsideDomain('language is outside the typed ko/en domain')
+
+
+def unlimited_word(budget):
+    value = budget.get('unlimited', UNDEF)
+    if value is UNDEF or type(value) is bool:
+        return int(value is True)
+    raise OutsideDomain('budget unlimited flag is not boolean or absent')
+
+
+def card_error_kind(sessions, ref, card):
+    # Project the fixture's first validation failure onto the typed error code.
+    budget = next((s.get('budget') for s in sessions if s['id'] == ref['sessionId']), None)
+    if not budget or budget['id'] != ref['budgetId'] or budget['state'] == 'closed':
+        return 0
+
+    def valid_text(value):
+        return isinstance(value, str) and 1 <= len(units(value.strip(''.join(WS)))) <= 300
+
+    def valid_lines(value, minimum):
+        return isinstance(value, list) and minimum <= len(value) <= 5 and all(map(valid_text, value))
+
+    if not isinstance(card, dict) or not valid_text(card.get('deliverable')):
+        return 1
+    if not valid_lines(card.get('done'), 1):
+        return 2
+    targets = card.get('targets', UNDEF)
+    if isinstance(targets, dict) and any(type(v) in (int, float) and v < 0
+                                         for v in (targets.get(k) for k in ('confirmed', 'candidate', 'unknown'))):
+        return 3
+    verify = card.get('verify', UNDEF)
+    if isinstance(verify, list) and any(v is None for v in verify):
+        return 4
+    if 'conflicts' in card and not valid_lines(card['conflicts'], 0):
+        return 5
+    if 'state' in card and card['state'] not in ('working', 'done', 'waiting-user', 'blocked'):
+        return 6
+    raise OutsideDomain('setCard has no supported fixture error projection')
+
+
+def replay_words(helper, args, scenario):
+    if helper == 'setCard':
+        ref, card, *lang = args
+        sessions = jv_decode(scenario['world']['sessions'])
+        return 'cer', [card_error_kind(sessions, ref, card), language_word(lang)]
+    if helper not in HELPER_ENTRIES:
+        raise OutsideDomain(f'{helper} requires stateful budget execution outside M6')
+    entry = HELPER_ENTRIES[helper]
+    if entry == 'unit':
+        setting = args[0] if args else UNDEF
+        if setting is UNDEF or setting is None:
+            return entry, [0, 0, 0, 0, 0, 0]
+        if not isinstance(setting, dict):
+            raise OutsideDomain('budget setting is neither an object nor nullish')
+        return entry, [1, *(safe_word(setting.get(k), k) for k in LIMIT_KEYS)]
+    if entry == 'cmi':
+        return entry, [language_word(args)]
+    if entry == 'lmt':
+        budget, value, *lang = args
+        return entry, [unlimited_word(budget), safe_word(value, 'limit'), language_word(lang)]
+    reason, budget, *lang = args
+    if reason not in REASONS:
+        raise OutsideDomain('unknown budget counter')
+    index = REASONS.index(reason)
+    used = safe_word(budget.get('used', {}).get('activeMs' if index == 0 else reason), 'used')
+    limit = safe_word(budget.get('limits', {}).get(LIMIT_KEYS[index]), 'limit')
+    if entry == 'wir':
+        return entry, [index, used, limit]
+    return entry, [index, unlimited_word(budget), used, limit, language_word(lang)]
+
+
+def fixture_words(helper, request):
+    value = jv_decode(request['value'])
+    if request['terminal'] != 'ok':
+        raise ValueError('expected a successful fixture request')
+    if helper == 'budgetUnitOf':
+        keys = set(LIMIT_KEYS)
+        default = 'defaultUnlimited' in value
+        if default:
+            keys.add('defaultUnlimited')
+        if set(value) != keys or (default and value['defaultUnlimited'] is not True):
+            raise ValueError('unexpected fixture unit shape')
+        return [*(safe_word(value[k], k) for k in LIMIT_KEYS), int(default)]
+    if helper == 'setCard':
+        if set(value) != {'ok', 'error'} or value['ok'] is not False:
+            raise ValueError('expected a fixture card failure')
+        value = value['error']
+    if helper == 'refusalWire':
+        if set(value) != {'key', 'args'} or set(value['args']) != {'used', 'limit'}:
+            raise ValueError('unexpected fixture wire shape')
+        return [*value['key'].encode('utf-8'), *(safe_word(value['args'][k], k) for k in ('used', 'limit'))]
+    return list(value.encode('utf-8'))
+
+
+def build_replays(seed):
+    cases, exclusions = [], {'fixture.N': [], 'qgen.Q8': []}
+    sources = [('fixture.N', load_group('N')), ('qgen.Q8', q_gen.gen(seed, ['Q8'], Q8_SCENARIOS))]
+    for kind, scenarios in sources:
+        for scenario in scenarios:
+            requests = {r['req']: r for r in scenario.get('expect', {}).get('requests', [])}
+            for step in scenario['script']:
+                if step['ev'] != 'call':
+                    continue
+                helper = step['op']
+                if kind == 'qgen.Q8' and helper not in HELPER_ENTRIES:
+                    continue  # Q8 interleaves standalone helpers with stateful compatibility calls.
+                req_id = step['req']
+                case_id = f'{scenario["id"]}/{req_id}'
+                try:
+                    entry, words = replay_words(helper, jv_decode(step['args']), scenario)
+                except OutsideDomain as e:
+                    exclusions[kind].append({'id': case_id, 'op': helper, 'reason': str(e)})
+                    continue
+                case = mk(kind, case_id, entry, words, {})
+                case['req'] = {'op': 'replay', 'helper': helper, 'args': step['args']}
+                if helper == 'setCard':
+                    case['req']['sessions'] = scenario['world']['sessions']
+                if kind == 'fixture.N':
+                    case['fixture'] = fixture_words(helper, requests[req_id])
+                cases.append(case)
+    return cases, exclusions
+
+
 # ---------------------------------------------------------------- tools
 def tool_env():
     env = dict(os.environ)
@@ -434,20 +579,37 @@ def parse_words(line):
     return [int(x) for x in line.split()]
 
 
-def compare(key, cases, expected, got_lines):
+def compare(cases, expected, got_lines):
     stats, mism = {}, []
     for c, e, g in zip(cases, expected, got_lines):
         k = stats.setdefault(c['kind'], [0, 0])
         k[0] += 1
         want = e.get('w')
         got = parse_words(g)
-        if c['kind'] == 'floor.min' and 'exact' in e:
-            want = [e['exact']]
-        if want is not None and got == want:
+        entry = c['line'].split(' ', 1)[0]
+        text_error = None
+        if entry in TEXT_ENTRIES:
+            if 'u' not in e or not isinstance(got, list):
+                text_error = 'missing Node UTF-16 units or Pruv byte output'
+            else:
+                raw = got[:-2] if entry == 'wir' else got
+                try:
+                    decoded = bytes(raw).decode('utf-8', 'strict')
+                    if units(decoded) != e['u']:
+                        text_error = 'UTF-16 units differ'
+                except ValueError as exc:
+                    text_error = f'invalid UTF-8 output: {exc}'
+        fixture_ok = 'fixture' not in c or c['fixture'] == got
+        if want is not None and got == want and not text_error and fixture_ok:
             k[1] += 1
         else:
-            mism.append({'kind': c['kind'], 'label': c['label'], 'line': c['line'][:300], 'expected': want if want is not None else 'ERR ' + e.get('err', '?'),
-                         'got': got})
+            mismatch = {'kind': c['kind'], 'label': c['label'], 'line': c['line'][:300],
+                        'expected': want if want is not None else 'ERR ' + e.get('err', '?'), 'got': got}
+            if text_error:
+                mismatch['text_error'] = text_error
+            if not fixture_ok:
+                mismatch['fixture_expected'] = c['fixture']
+            mism.append(mismatch)
     return stats, mism
 
 
@@ -558,6 +720,8 @@ def main():
 
     cases, quotas = build_cases(a.count, a.seed)
     print(f'{len(cases)} cases (seed {a.seed}): ' + ' '.join(f'{k}={v}' for k, v in quotas.items()), flush=True)
+    replays, exclusions = build_replays(a.seed)
+    cases += replays
     expected = run_node([c['req'] for c in cases])
     inexact = sum(1 for c, e in zip(cases, expected) if c['kind'] == 'floor.min' and 'exact' in e and e['exact'] != e['w'][0])
     labels = {}
@@ -567,19 +731,31 @@ def main():
     report = {'seed': a.seed, 'count': a.count, 'quotas': quotas, 'labels': labels, 'ts_inexact_minutes': inexact, 'pairs': {}}
     failed = False
     for k in keys:
-        stats, mism = compare(k, cases, expected, run_harness(k, [c['line'] for c in cases]))
+        stats, mism = compare(cases, expected, run_harness(k, [c['line'] for c in cases]))
+        replay_stats = {}
+        for kind, excluded in exclusions.items():
+            replayed, exact = stats.pop(kind, (0, 0))
+            replay_stats[kind] = {'total': replayed + len(excluded), 'exact': exact, 'excluded': len(excluded),
+                                  'exclusions': excluded, 'case_ids': [c['label'] for c in replays if c['kind'] == kind]}
         total = sum(v[0] for v in stats.values())
         exact = sum(v[1] for v in stats.values())
-        print(f'\n== {PAIRS[k]}: total {total}, exact {exact}, mismatches {len(mism)}')
+        print(f'\n== {PAIRS[k]}: total {total}, exact {exact}, mismatches {total - exact}')
+        for kind, summary in replay_stats.items():
+            print(f'  {kind}: total {summary["total"]}, exact {summary["exact"]}, excluded {summary["excluded"]}')
+            for excluded in summary['exclusions']:
+                print(f'    {excluded["id"]} ({excluded["op"]}): {excluded["reason"]}')
         for m in mism[:10]:
             print(f'  MISMATCH [{m["kind"]}/{m["label"]}] {m["line"]}\n    expected {clip(m["expected"])}\n    got      {clip(m["got"])}')
+            for field in ('text_error', 'fixture_expected'):
+                if field in m:
+                    print(f'    {field}: {clip(m[field])}')
         print(f'  {"kind":18}{"source":>7}{"total":>7}{"exact":>7}')
         for kind in sorted(stats):
             print(f'  {kind:18}{labels[kind]:>7}{stats[kind][0]:>7}{stats[kind][1]:>7}')
-        report['pairs'][PAIRS[k]] = {'total': total, 'exact': exact, 'mismatches': mism, 'kinds': {x: {'total': v[0], 'exact': v[1]} for x, v in stats.items()}}
+        report['pairs'][PAIRS[k]] = {'total': total, 'exact': exact, 'mismatches': mism, 'replays': replay_stats,
+                                    'kinds': {x: {'total': v[0], 'exact': v[1]} for x, v in stats.items()}}
         failed |= bool(mism)
-    if inexact:
-        print(f'\nnote: for {inexact} floor.min cases JS Math.floor(ms/60000) (double division) differs from the exact floor; the comparison uses exact floor for those cases')
+    print(f'\nfloor.min Node vs exact floor: {inexact} disagreements')
 
     if a.perf:
         report['perf'] = perf(keys)

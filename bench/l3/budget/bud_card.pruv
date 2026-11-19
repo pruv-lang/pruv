@@ -1412,6 +1412,8 @@ pub fn set_card(found: bool, closed: bool, card: [u8], at: i64, lang: i64, by: [
 {
   let j: Judged = judge(found, closed, card, at, lang);
   if j.kind >= 0 {
+    // the copy runs on the reject path only. Calling card_error here instead (no Judged.error) outlined card_error and
+    // cost the success path of the only caller (m11 perf item C) +0.9% instructions vs base, 7 rounds (P27).
     return SetCard { kind: j.kind, used_now: j.used_now, card: crate::ent_u16::empty(), error: copy(j.error) };
   }
   return SetCard { kind: j.kind, used_now: j.used_now, card: build(card, j.f, by, by_at, now_ms), error: empty_error() };

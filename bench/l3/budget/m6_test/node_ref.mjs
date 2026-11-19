@@ -6,6 +6,7 @@
 // i64 values arrive as decimal strings (exact), strings as arrays of UTF-16 units. Result words use the harness output encoding.
 import { createInterface } from 'node:readline';
 import * as B from '../reference/backend-request-budget.ts';
+import { d as decodeJV } from '../oracle-world.mjs';
 
 const KEYS = ['time', 'delegations', 'commands', 'reviews', 'checks'];   // reason 0..4
 const LKEYS = ['timeMinutes', 'delegations', 'commands', 'reviews', 'checks'];
@@ -13,6 +14,10 @@ const LANGS = ['ko', 'en'];
 const SAFE = 9007199254740991n;
 
 const bytesOf = s => Array.from(Buffer.from(s, 'utf8'));
+const textResult = (s, suffix = []) => ({
+  w: [...bytesOf(s), ...suffix],
+  u: Array.from({ length: s.length }, (_, i) => s.charCodeAt(i)),
+});
 const strOf = u => { let s = ''; for (const x of u) s += String.fromCharCode(x); return s; };
 const big = v => BigInt(v);
 
@@ -57,14 +62,6 @@ function cardError(kind, lang) {
     limits: { timeMinutes: 120, delegations: 24, commands: 3, reviews: 2, checks: 1 },
     used: { activeMs: 0, delegations: 0, commands: 0, reviews: 0, checks: 0, tools: 0, failures: 0, retries: 0 },
   };
-  const sessions = new Map([['s1', { id: 's1', budget }]]);
-  const noop = () => {};
-  const deps = {
-    now: () => 1700000000000, unit: () => budget.limits, findSession: id => sessions.get(id), save: noop, changed: noop, stopMain: noop,
-    stopDelegation: noop, runningDelegationIds: () => [], stopAttachedTurns: noop, holdQueued: noop, releaseHeld: () => false, carryHeld: noop,
-    queueContinue: noop, dropHeld: noop, cancelRecovery: noop, isQuiet: () => true, announce: noop,
-  };
-  const rb = new B.RequestBudgets(deps);
   const base = { deliverable: 'd', done: ['x'] };
   const cards = [
     null,
@@ -76,9 +73,51 @@ function cardError(kind, lang) {
     { ...base, state: 'bogus' },
   ];
   const ref = { sessionId: kind === 0 ? 'nobody' : 's1', budgetId: 'b1' };
-  const res = rb.setCard(ref, cards[kind] ?? base, LANGS[lang]);
-  if (res.ok) throw new Error(`setCard unexpectedly succeeded for kind ${kind}`);
+  return setCardError([{ id: 's1', budget }], ref, cards[kind] ?? base, LANGS[lang]);
+}
+
+function setCardError(sessions, ...args) {
+  const byId = new Map(sessions.map(s => [s.id, s]));
+  const noop = () => {};
+  const deps = {
+    now: () => 1700000000000, unit: () => B.budgetUnitOf(), findSession: id => byId.get(id), save: noop, changed: noop, stopMain: noop,
+    stopDelegation: noop, runningDelegationIds: () => [], stopAttachedTurns: noop, holdQueued: noop, releaseHeld: () => false, carryHeld: noop,
+    queueContinue: noop, dropHeld: noop, cancelRecovery: noop, isQuiet: () => true, announce: noop,
+  };
+  const rb = new B.RequestBudgets(deps);
+  const res = rb.setCard(...args);
+  if (res.ok !== false) throw new Error('setCard unexpectedly succeeded');
   return res.error;
+}
+
+function wireResult(wire) {
+  return textResult(wire.key, [wire.args.used, wire.args.limit]);
+}
+
+function unitResult(setting) {
+  const unit = B.budgetUnitOf(setting);
+  const keys = Object.keys(unit);
+  const unlimited = Object.hasOwn(unit, 'defaultUnlimited');
+  if (unlimited && unit.defaultUnlimited !== true ||
+      keys.length !== LKEYS.length + Number(unlimited) ||
+      !LKEYS.every(k => Object.hasOwn(unit, k) && Number.isSafeInteger(unit[k]))) {
+    throw new Error('unexpected budget unit shape');
+  }
+  return { w: [...LKEYS.map(k => unit[k]), Number(unlimited)] };
+}
+
+function replay(r) {
+  const args = r.args.map(decodeJV);
+  switch (r.helper) {
+    case 'refusal': return textResult(B.refusal(...args));
+    case 'continueText': return textResult(B.continueText(...args));
+    case 'limitText': return textResult(B.limitText(...args));
+    case 'cardMissing': return textResult(B.cardMissing(...args));
+    case 'refusalWire': return wireResult(B.refusalWire(...args));
+    case 'budgetUnitOf': return unitResult(...args);
+    case 'setCard': return textResult(setCardError(decodeJV(r.sessions), ...args));
+    default: throw new Error(`unknown replay helper ${r.helper}`);
+  }
 }
 
 function classOf(x) {
@@ -90,6 +129,8 @@ function classOf(x) {
 
 function handle(r) {
   switch (r.op) {
+    case 'replay': return replay(r);
+    case 'unit': return unitResult(r.setting);
     case 'cls': {
       const x = new Float64Array(new BigUint64Array([BigInt('0x' + r.hex)]).buffer)[0];
       const c = classOf(x);
@@ -113,24 +154,21 @@ function handle(r) {
       const ms = big(r.ms);
       let q = ms / 60000n;
       if (ms % 60000n !== 0n && ms < 0n) q -= 1n;
-      // expected = the real JS expression of the TS helpers; `exact` shows where double division differs from exact floor
+      // Check the JS expression against integer division independently.
       return { w: [Math.floor(Number(ms) / 60000)], exact: Number(q) };
     }
-    case 'int': return { w: bytesOf(String(Number(big(r.x)))) };
-    case 'iso': return { w: bytesOf(new Date(Number(big(r.ms))).toISOString()) };
+    case 'int': return textResult(String(Number(big(r.x))));
+    case 'iso': return textResult(new Date(Number(big(r.ms))).toISOString());
     case 'dok': return { w: [Number.isNaN(new Date(Number(big(r.ms))).getTime()) ? 0 : 1] };
-    case 'ref': return { w: bytesOf(B.refusal(KEYS[r.reason], mkBudget(r), LANGS[r.lang])) };
-    case 'con': return { w: bytesOf(B.continueText(KEYS[r.reason], mkBudget(r), LANGS[r.lang])) };
-    case 'amt': return { w: bytesOf(amountOf(r)) };
-    case 'lmt': return { w: bytesOf(B.limitText({ unlimited: !!r.unl }, Number(big(r.limit)), LANGS[r.lang])) };
-    case 'wir': {
-      const wire = B.refusalWire(KEYS[r.reason], mkBudget(r));
-      return { w: [...bytesOf(wire.key), Number(wire.args.used), Number(wire.args.limit)] };
-    }
-    case 'cmi': return { w: bytesOf(B.cardMissing(LANGS[r.lang])) };
-    case 'cer': return { w: bytesOf(cardError(r.kind, r.lang)) };
-    case 'cnt': return { w: bytesOf(counterName(r.reason, r.lang)) };
-    case 'nol': return { w: bytesOf(B.limitText({ unlimited: true }, 0, LANGS[r.lang])) };
+    case 'ref': return textResult(B.refusal(KEYS[r.reason], mkBudget(r), LANGS[r.lang]));
+    case 'con': return textResult(B.continueText(KEYS[r.reason], mkBudget(r), LANGS[r.lang]));
+    case 'amt': return textResult(amountOf(r));
+    case 'lmt': return textResult(B.limitText({ unlimited: !!r.unl }, Number(big(r.limit)), LANGS[r.lang]));
+    case 'wir': return wireResult(B.refusalWire(KEYS[r.reason], mkBudget(r)));
+    case 'cmi': return textResult(B.cardMissing(LANGS[r.lang]));
+    case 'cer': return textResult(cardError(r.kind, r.lang));
+    case 'cnt': return textResult(counterName(r.reason, r.lang));
+    case 'nol': return textResult(B.limitText({ unlimited: true }, 0, LANGS[r.lang]));
     case 'lng': {
       // language selection of the real helpers: engineText(entry, language) = entry[language] ?? entry.ko. Observed through cardMissing.
       const en = B.cardMissing('en');

@@ -137,7 +137,7 @@ fn put_int(inout o: [u8], at: i64, x: i64, n: i64) -> ()
 // String(x) for a safe integer, built in one allocation.
 pub fn int_text(x: i64) -> [u8] ! alloc
   requires -9007199254740991 <= x && x <= 9007199254740991
-  ensures len(result) <= 17
+  ensures len(result) <= 17 // Generated text bound.
 {
   let n: i64 = int_len(x);
   let mut o: [u8] = alloc(n, 0);
@@ -147,6 +147,7 @@ pub fn int_text(x: i64) -> [u8] ! alloc
 
 pub fn reason_name(reason: i64) -> [u8] ! alloc
   requires 0 <= reason && reason <= 4
+  ensures len(result) <= 11 // Generated text bound.
 {
   let mut o: [u8] = alloc(len_cn(reason, 1), 0);
   put_cn(inout o, 0, reason, 1);
@@ -156,6 +157,7 @@ pub fn reason_name(reason: i64) -> [u8] ! alloc
 pub fn counter_name(reason: i64, lang: i64) -> [u8] ! alloc
   requires 0 <= reason && reason <= 4
   requires 0 <= lang && lang <= 1
+  ensures len(result) <= 14 // Generated text bound.
 {
   let mut o: [u8] = alloc(len_cn(reason, lang), 0);
   put_cn(inout o, 0, reason, lang);
@@ -164,6 +166,7 @@ pub fn counter_name(reason: i64, lang: i64) -> [u8] ! alloc
 
 pub fn no_limit(lang: i64) -> [u8] ! alloc
   requires 0 <= lang && lang <= 1
+  ensures len(result) <= 13 // Generated text bound.
 {
   let mut o: [u8] = alloc(len_nl(lang), 0);
   put_nl(inout o, 0, lang);
@@ -173,6 +176,7 @@ pub fn no_limit(lang: i64) -> [u8] ! alloc
 pub fn limit_text(unlimited: bool, limit: i64, lang: i64) -> [u8] ! alloc
   requires -9007199254740991 <= limit && limit <= 9007199254740991
   requires 0 <= lang && lang <= 1
+  ensures len(result) <= 17 // Generated text bound.
 {
   if unlimited { return no_limit(lang); }
   return int_text(limit);
@@ -184,6 +188,7 @@ pub fn amount_text(reason: i64, unlimited: bool, used: i64, limit: i64, lang: i6
   requires -9007199254740991 <= used && used <= 9007199254740991
   requires -9007199254740991 <= limit && limit <= 9007199254740991
   requires 0 <= lang && lang <= 1
+  ensures len(result) <= 35 // Generated text bound.
 {
   let mut u: i64 = used;
   if reason == 0 { u = crate::bud_num::minutes_of(used); }
@@ -2418,7 +2423,11 @@ fn put_wire_prefix(inout o: [u8], at: i64) -> ()
 fn len_pre(t: i64, lang: i64) -> i64
   requires 0 <= t && t <= 1
   requires 0 <= lang && lang <= 1
-  ensures 0 <= result && result <= 1000
+  ensures 0 <= result && result <= 42
+  ensures !(t == 0 && lang == 0) || result <= 14
+  ensures !(t == 0 && lang == 1) || result <= 26
+  ensures !(t == 1 && lang == 0) || result <= 27
+  ensures !(t == 1 && lang == 1) || result <= 42
 {
   if t == 0 && lang == 0 { return 14; }
   if t == 0 && lang == 1 { return 26; }
@@ -2439,7 +2448,11 @@ fn put_pre(inout o: [u8], at: i64, t: i64, lang: i64) -> ()
 fn len_post(t: i64, lang: i64) -> i64
   requires 0 <= t && t <= 1
   requires 0 <= lang && lang <= 1
-  ensures 0 <= result && result <= 1000
+  ensures 0 <= result && result <= 191
+  ensures !(t == 0 && lang == 0) || result <= 191
+  ensures !(t == 0 && lang == 1) || result <= 175
+  ensures !(t == 1 && lang == 0) || result <= 164
+  ensures !(t == 1 && lang == 1) || result <= 136
 {
   if t == 0 && lang == 0 { return 191; }
   if t == 0 && lang == 1 { return 175; }
@@ -2459,7 +2472,7 @@ fn put_post(inout o: [u8], at: i64, t: i64, lang: i64) -> ()
 }
 fn len_nl(lang: i64) -> i64
   requires 0 <= lang && lang <= 1
-  ensures 0 <= result && result <= 1000
+  ensures 0 <= result && result <= 13
 {
   if lang == 0 { return 13; }
   return 8;
@@ -2475,7 +2488,9 @@ fn put_nl(inout o: [u8], at: i64, lang: i64) -> ()
 fn len_cn(reason: i64, lang: i64) -> i64
   requires 0 <= reason && reason <= 4
   requires 0 <= lang && lang <= 1
-  ensures 0 <= result && result <= 1000
+  ensures 0 <= result && result <= 14
+  ensures !(lang == 0) || result <= 14
+  ensures !(lang == 1) || result <= 11
 {
   if reason == 0 && lang == 0 { return 6; }
   if reason == 0 && lang == 1 { return 4; }
@@ -2507,7 +2522,7 @@ fn put_cn(inout o: [u8], at: i64, reason: i64, lang: i64) -> ()
 }
 fn len_cm(lang: i64) -> i64
   requires 0 <= lang && lang <= 1
-  ensures 0 <= result && result <= 1000
+  ensures 0 <= result && result <= 89
 {
   if lang == 0 { return 81; }
   return 89;
@@ -2523,6 +2538,7 @@ fn put_cm(inout o: [u8], at: i64, lang: i64) -> ()
 pub fn card_error(kind: i64, lang: i64) -> [u8] ! alloc
   requires 0 <= kind && kind <= 6
   requires 0 <= lang && lang <= 1
+  ensures len(result) <= 102
 {
   if kind == 0 && lang == 0 {
     let mut o: [u8] = alloc(75, 0);
@@ -2593,6 +2609,26 @@ pub fn card_error(kind: i64, lang: i64) -> [u8] ! alloc
   put_ce_6_1(inout o, 0);
   return o;
 }
+pub fn card_error_units(kind: i64, lang: i64) -> i64
+  requires 0 <= kind && kind <= 6
+  requires 0 <= lang && lang <= 1
+  ensures 0 <= result && result <= 98
+{
+  if kind == 0 && lang == 0 { return 31; }
+  if kind == 0 && lang == 1 { return 65; }
+  if kind == 1 && lang == 0 { return 26; }
+  if kind == 1 && lang == 1 { return 37; }
+  if kind == 2 && lang == 0 { return 28; }
+  if kind == 2 && lang == 1 { return 54; }
+  if kind == 3 && lang == 0 { return 46; }
+  if kind == 3 && lang == 1 { return 77; }
+  if kind == 4 && lang == 0 { return 70; }
+  if kind == 4 && lang == 1 { return 98; }
+  if kind == 5 && lang == 0 { return 33; }
+  if kind == 5 && lang == 1 { return 59; }
+  if kind == 6 && lang == 0 { return 52; }
+  return 60;
+}
 // END GENERATED
 
 // pre + counter + " " + used + "/" + limit text + post in one allocation; t: 0 refusal, 1 continue.
@@ -2603,6 +2639,7 @@ fn template(t: i64, reason: i64, unlimited: bool, used: i64, limit: i64, lang: i
   requires -9007199254740991 <= used && used <= 9007199254740991
   requires -9007199254740991 <= limit && limit <= 9007199254740991
   requires 0 <= lang && lang <= 1
+  ensures len(result) <= 255 && (t != 0 || len(result) <= 255) && (t != 1 || len(result) <= 241) // Generated text bound.
 {
   let mut u: i64 = used;
   if reason == 0 { u = crate::bud_num::minutes_of(used); }
@@ -2635,6 +2672,7 @@ pub fn refusal(reason: i64, unlimited: bool, used: i64, limit: i64, lang: i64) -
   requires -9007199254740991 <= used && used <= 9007199254740991
   requires -9007199254740991 <= limit && limit <= 9007199254740991
   requires 0 <= lang && lang <= 1
+  ensures len(result) <= 255 // Generated text bound.
 {
   return template(0, reason, unlimited, used, limit, lang);
 }
@@ -2644,12 +2682,14 @@ pub fn continue_text(reason: i64, unlimited: bool, used: i64, limit: i64, lang: 
   requires -9007199254740991 <= used && used <= 9007199254740991
   requires -9007199254740991 <= limit && limit <= 9007199254740991
   requires 0 <= lang && lang <= 1
+  ensures len(result) <= 241 // Generated text bound.
 {
   return template(1, reason, unlimited, used, limit, lang);
 }
 
 pub fn card_missing(lang: i64) -> [u8] ! alloc
   requires 0 <= lang && lang <= 1
+  ensures len(result) <= 89 // Generated text bound.
 {
   let mut o: [u8] = alloc(len_cm(lang), 0);
   put_cm(inout o, 0, lang);
@@ -2658,6 +2698,7 @@ pub fn card_missing(lang: i64) -> [u8] ! alloc
 
 fn refusal_key(reason: i64) -> [u8] ! alloc
   requires 0 <= reason && reason <= 4
+  ensures len(result) <= 26 // Generated text bound.
 {
   let mut o: [u8] = alloc(15 + len_cn(reason, 1), 0);
   put_wire_prefix(inout o, 0);
@@ -2671,6 +2712,7 @@ pub struct Wire { key: [u8], used: i64, limit: i64 }
 pub fn refusal_wire(reason: i64, used: i64, limit: i64) -> Wire ! alloc
   requires 0 <= reason && reason <= 4
   requires -9007199254740991 <= used && used <= 9007199254740991
+  ensures len(result.key) <= 26 // Generated text bound.
 {
   let mut u: i64 = used;
   if reason == 0 { u = crate::bud_num::minutes_of(used); }
