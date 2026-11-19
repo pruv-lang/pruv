@@ -415,7 +415,7 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | T5a | Both codegens and B/bud_map.pruv, bud_lifecycle.pruv: M7 lookup and lifecycle gap without code growth (Appendix T5.3) | P: `attach`, `closereopen`, `reopenmiss`, `current`, `isHalted` <= 1.0x hand16 with M7 `__text` and peak RSS not above the T5 base (405,180 B); the inline-only route is ruled out (T5.2). Candidates: cut the always callees of `find_w` (P13h specialization or hot/cold split), the P19c entry/record re-validation and id copies; output parity on both compilers. Measured (Appendix T5a): no change ships. The fixes found (reopen cold tail -32/-35, maybe_close direct header path -9) all grow `__text`. Part of each raw cell is the driver typed-lane shape (current: floor 73 vs hand ~19). The rest is split by line, queued as T5b/T5c, and kept in P13h/P18b. |
 | T5b | Both codegens: cold-tail rule (Appendix T5a.4) | P: reopen's slow tail (blob_copy, rewrite, store) is emitted out of line and cold, so the miss path drops the slow-path frame (352 B in the T5a build). The rule is an attribute or a proof-free rule that does not mark the M4 put path cold. reopenmiss and closereopen fewer instructions than T5 with `__text` and peak RSS not above the T5 base (405,180 B); the hand-edited reference is rsplita (-32/-35 against its same-run base, for +10.9 KB). Includes a per-function attribution of the closereopen pair. Output parity on both compilers. State (Appendix T5b, step cap hit at rule design; no compiler change): on the P18b base (`__text` 413,244 B) a cold or never-inlined tail alone does not move the miss path (reopenmiss S=500 386.8 to 390.0, ranges overlap) because the miss path pays the same six callee-saved pairs (nine arguments live across `bl find_w`), not the tail frame; the win needs the fast part inlined into each caller (-34/-24) at +13.7 KB `__text`. Split into T5b1 and T5b2. |
 | T5c | B/m7_test/driver_m7.rs: typed-lane harness parity (Appendix T5a.2) | P: the M7 timed loop calls the `c_*` entry with the same shape as hand16's bare method call (no non-inlined step closure, no per-op prep match), reported next to the existing lane. The floor of each lane is measured with bodies emptied. Measurement only; no product number moves. Measured (Appendix T5c): fair lane (`driver_m7 perf S R item f`) against hand16, instructions S/M: isHalted 0.99/0.98 (no overlap, at or below 1.0x), current 1.02/1.02, attach 1.30/1.29, closereopen 1.18/1.18, reopenmiss 1.16/1.15; floor-subtracted 0.97/0.96, 1.00/1.01, 1.27/1.25, 1.16/1.16, 1.14/1.15. The rest is the entry floor (length guards, `out` store: P18b), the reopen tail (T5b), and find_w/entry re-validation (P13h); no new row. Driver `__text` 405,180 to 413,756 B (harness only; T5b re-measures its base). |
-| T5b2 | Both codegens and B/bud_map.pruv, bud_lifecycle.pruv: reopen miss path live set (Appendix T5b.4) | P: reopenmiss and closereopen <= 1.0x hand16 at S/M by cutting the values live across `bl find_w` (nine arguments, six callee-saved pairs), not the tail frame. Routes: the reopen fast part takes the session record as one view (P18c result path or P13h specialization), or the coldA inline paired with a `__text` cut of at least 13.7 KB elsewhere. `__text` and peak RSS not above the P18b base (413,244 B) under the T5b.3 rule. Includes the five-cell S/M re-baseline, the closereopen per-function attribution and M4 cells. Runs after P18c and P13h (same files). P13k note: at a9664a9 the gap to hand16 (fair lanes, S = 100) is closereopen 539 vs 437..448 and reopenmiss 387 vs 336 instructions per call; the P13k G split (not landed) reached 508 / 355, so the rest sits in the bud_lifecycle reopen bodies, not in `find_w`. |
+| T5b2 | Both codegens and B/bud_map.pruv, bud_lifecycle.pruv: reopen miss path live set (Appendix T5b.4) | P: reopenmiss and closereopen <= 1.0x hand16 at S/M by cutting the values live across `bl find_w` (nine arguments, six callee-saved pairs), not the tail frame. Routes: the reopen fast part takes the session record as one view (P18c result path or P13h specialization), or the coldA inline paired with a `__text` cut of at least 13.7 KB elsewhere. `__text` and peak RSS not above the P18b base (413,244 B) under the T5b.3 rule. Includes the five-cell S/M re-baseline, the closereopen per-function attribution and M4 cells. Runs after P18c and P13h (same files). P13k note: at a9664a9 the gap to hand16 (fair lanes, S = 100) is closereopen 539 vs 437..448 and reopenmiss 387 vs 336 instructions per call; the P13k G split (not landed) reached 508 / 355, so the rest sits in the bud_lifecycle reopen bodies, not in `find_w`. State (Appendix T5b2, one fix attempt used, not met): at afe3732 fair instr/call M / L reopenmiss 392.3 / 391.1 vs hand16 335.6 / 335.5 (1.17x), closereopen 548.4 / 549.3 vs 445.0 / 445.9 (1.23x), cycles 0.85-0.89x, peak RSS below hand16. The source cold split (variant A, coldA shape) reached reopenmiss 373.0 / 372.4 (1.11x), closereopen unchanged, `__text` +9,984 B, so it is reverted and nothing ships. lldb attribution: the pair is close +99 / reopen +108 over hand16; the miss path's own code is 305 vs hand16's 81 + 168 SipHash, from 65 stack loads/stores (nine live arguments across two `memcmp` calls) and about 100 instructions of flat-`[i64]` record checks (`c32` clamps, entry field tests). Debt D14; typed session records proposed as the next row. |
 | T5d | B/m7_test and bench/l3/budget build flags: codegen-units measurement (Appendix T5b.3) | P: measure hand16 and the generated M7/M4 drivers with `-C codegen-units=1` next to the current flags: time, instructions, peak RSS, `__text`, rustc time. Switch the bench profile for both sides only if no axis loses on either side and rustc time stays within the budget m4 20% line; otherwise keep the flags and keep the T5b.3 reporting rule. Measurement and flags only; no codegen change. Measured (Appendix T5d): keep the flags and the T5b.3 rule. Under cgu1, Pruv M4 instructions are +2.7..5.3 % on all nine cells and hand M4 +0.8..3.5 %. Hand16 reopenmiss is +5..6 %. Pruv `__text` is +6,272 B (M7) and +5,312 B (M4), against hand -5,184 / -4,800 B. Pruv M7 closereopen drops -6.4 % and reopenmiss -3.5 %. Generated M4 driver rustc time is 2.21 -> 1.85 s, within the 20 % line. No Pruv/hand ratio crosses 1.0x. Over hand on instructions under both flag sets: M7 attach 1.18x, closereopen 1.20 / 1.13x, reopenmiss 1.15 / 1.05x, M4 sessions 1.01..1.13x and clocks 1.02..1.10x. Allocations are equal under both flag sets. |
 | T5e | B/bud_map.pruv, bud_store.pruv, bud_clock.pruv and/or both codegens: M4 sessions/clocks instructions over hand (Appendix T5d.2) | P: M4 sessions (instr/op 1.01-1.13x hand at n = 100/1000/2000) and clocks (1.02-1.06x) at or below hand in instructions while time stays below hand (now 0.80-0.83x / 0.75x) and no cell given back; M4 sessions n=100 peak RSS 1088 vs hand 1072 KiB (+16, attribute fixed vs proportional share). First a per-function instruction attribution (Pruv vs hand, same flags), then the cut. Starts after P13j and P13k (same store/map files). |
 | P20 | B/bud_charge.pruv,m8_test: counters/sums/bounds | P Q2+C/D, equal safe-number baseline; negative/boundary atomic refusal and charge/failure <=1.0. |
@@ -532,11 +532,12 @@ fixed in one package before R12.
 | D6 | M7 typed replace 500: 161.6 ns vs hand16 127.4 (1.27x; base a9664a9 149.6, 1.17x); M10 putback d=50/100 34.8/35.0 vs base 26.7 (still 0.3x M10 hand); M10 halt +1-4% | P13i2a (Appendix P13i2a): the put path parses the text frame (~90 instr), checks five spans (~41), copies text into the arena and rewrites five handles plus an 8-byte used header (~150). One fix attempt (per-record text base) has a floor of 873 vs base 811 instr per put. Root rows: L-u64-bytes below, and a fixed-slot text header in the record format |
 | D7 | P13i2a S and layout cells (M10 putback d=10, M7 replace 100, fair current 100/500 +0.6-1.2 ns, typed isHalted 500 +0.1 ns) | P13i2a perf report: same put path; code layout |
 | D8 | PERF_HEADROOM p_iso 100 rs 1.06x (py 0.91x), p_iso 500/1000 medians 1.01-1.04x (overlap base and hand), p_wr 1000 py 1.17x (rs 0.98x) | P27.5 (Appendix P27): no code change on these paths and py/rs Rust is identical, so the py/rs gap is build layout; p_iso has no stack site |
-| D9 | P18d M7 fair cells at M/L: attach 377.4 / 372.6 vs hand16 297.6 / 297.1 (1.27 / 1.25x), closereopen 548.7 / 549.0 vs 445.3 / 445.0 (1.23x), reopenmiss 393.3 / 391.1 vs 334.3 / 336.5 (1.18 / 1.16x) | P18d (Appendix P18d.4), one fix attempt (K = 1 scalar return) used: attach keeps the `out` buffer (put_key's written length depends on the key); closereopen's maybe_close is a pub entry and writes through its own val array; reopen_b passes 12 arguments (stack-passed tail) and the twin carries a run-time `pruv_fn`; the rest is the reopen body gap queued in T5b2 |
+| D9 | P18d M7 fair cells at M/L: attach 377.4 / 372.6 vs hand16 297.6 / 297.1 (1.27 / 1.25x), closereopen 548.7 / 549.0 vs 445.3 / 445.0 (1.23x), reopenmiss 393.3 / 391.1 vs 334.3 / 336.5 (1.18 / 1.16x) | P18d (Appendix P18d.4), one fix attempt (K = 1 scalar return) used: attach keeps the `out` buffer (put_key's written length depends on the key); closereopen's maybe_close is a pub entry and writes through its own val array; reopen_b passes 12 arguments (stack-passed tail) and the twin carries a run-time `pruv_fn`; the rest is the reopen body gap queued in T5b2; T5b2 (Appendix T5b2) used its attempt on the reopen cells: see D14 |
 | D10 | P18d M7 driver `__text` 464,700 vs 461,628 B (+3,072) | P18d (Appendix P18d.4): fixed share; the pinned adapters' copy-in/copy-out inlined into the host callers (`raw_call` +952, `run_perf` +596, `c_call` +420, `one` +388, two `run_perf` closures +416 / +376); the core itself is the old body size (reopen_b 11,648 -> 11,636). Same multiplication as P13k.2 |
 | D11 | P13g M8 tooldup M/L 585 / 571 vs base 574 / 561 instr/call (+1.9%, ns +0.5..1.3; still 0.60-0.67x oaw), M8 driver `__text` 318,716 vs 316,924 B (+1,792), peak RSS +16 KiB on most cells | P13g (Appendix P13g.4): a tooldup hit returns before `cur_off`, so the cost is `World::call` layout with `cur_off` inlined into the code 3 arm (register pressure not isolated); the one fix attempt (cold `cur_off` wrapper for code 3) moved +23 to toolgrow and was dropped. `__text`/RSS: fixed share, one more inlined `find_w` copy |
 | D12 | P13g M8 charge / noteFailure: `bud_store::valid(st)` on every `t_call` (47 / 36 instr/call) and the `cur_off` record tests (11 / 10), Pruv only | P13g.5 ablations A and E. Two separate facts: `valid` checks the store header and dynamic bounds of whatever buffer the host passes; I1 (root_m8 header) is the validity of the stored keys and records. Dropping `valid` needs both mutators keeping it (P13a.9 style) and a guarantee on the entry buffer's origin (or an entry bound check that stays); dropping the record tests needs I1 as a checked resident invariant |
 | D13 | P13g M8 charge / noteFailure: 54 / 62 (M), 55 / 63 (L) instr/call above hand16 not owned by one line | P13g.5: after `valid` and the record tests, the rest is spread over the lookup path (key framing on wire words, inlined `find_w` chain, `charge_at` / `note_failure_at`); single-line removals (B, C, D) only move layout (+5..13). The 9-word id compare is `_memcmp` in both Pruv and hand16, not a gap source. Attribution below line level needs P17's LLVM pairs |
+| D14 | T5b2 M7 fair cells at M/L: reopenmiss 392.3 / 391.1 vs hand16 335.6 / 335.5 (1.17x), closereopen 548.4 / 549.3 vs 445.0 / 445.9 (1.23x) instr/call; cycles 0.85-0.89x and peak RSS below hand16 | T5b2 (Appendix T5b2.3), one fix attempt (source cold split, -19 on reopenmiss, `__text` +10 KB) not shipped. Cause by line: 65 stack loads/stores on the miss path (six callee-saved pairs, hoisted invariants, spills around the key and id `memcmp` calls with nine arguments live) and about 100 instructions of flat-`[i64]` record checks (`c32` clamps, `gf` owner generation, `entry_matches_w` field tests, `id_at` range tests) that hand16's typed `HashMap` entry does not do; closereopen's close half adds +83 own code and +35 harness host-fact inlining. Proposed fix: typed session records (representation), then the live set |
 
 Queued with the debt list (not product perf):
 
@@ -5553,6 +5554,119 @@ itself should move to one CGU for both hand and generated code is measured in ro
 | work | model | mode |
 |---|---|---|
 | re-baseline, variant builds, disassembly, measurement, this appendix | Claude Opus 5.5 | direct |
+
+## Appendix T5b2: reopen miss path live set, one fix attempt, not met (debt D14)
+
+Base: main `afe3732` (after P13g and P18d), worktree `pruvc-rs` release build, M7 driver and hand16 built by
+`m7_test/t5c_floor.py` (bench flags `-C opt-level=3 --edition 2021`, 16 CGUs). Driver `__text` 464,700 B.
+Fair lane `pruv_f` against hand16 `typed`, instructions per call `(X(5R)-X(R))/(4R*calls)`, R = 20000, five
+interleaved rounds, median [min..max]; closereopen has calls = 2. Raw tables: `work/t5b2/base/floor.txt` and
+`work/t5b2/varA/floor.txt` (not committed).
+
+### T5b2.1 Five-cell re-baseline at afe3732
+
+| cell | S=100 pruv_f / hand16 | M=500 pruv_f / hand16 | L=1000 pruv_f / hand16 | fair x at M / L | cycles f/hand M / L |
+|---|---:|---:|---:|---:|---:|
+| ishalted | 326.2 / 340.7 | 340.6 / 338.9 | 342.2 / 341.3 | 1.01 / 1.00 (overlap) | 0.79 / 0.71 |
+| current | 329.5 / 332.0 | 343.7 / 333.3 | 345.3 / 333.4 | 1.03 / 1.04 | 0.76 / 0.76 |
+| attach | 363.4 / 297.2 | 374.2 / 297.0 | 379.4 / 297.1 | 1.26 / 1.28 | 0.80 / 0.86 |
+| closereopen | 533.8 / 442.6 | 548.4 / 445.0 | 549.3 / 445.9 | 1.23 / 1.23 | 0.86 / 0.89 |
+| reopenmiss | 377.4 / 336.2 | 392.3 / 335.6 | 391.1 / 335.5 | 1.17 / 1.17 | 0.85 / 0.89 |
+
+Time (cycles) is below hand16 on every fair cell; instructions are not. Peak RSS (median, 5-rep run) is below
+hand16 on every cell and size, for example M closereopen 2,834,768 vs 3,211,600 B and L reopenmiss 3,932,496 vs
+4,997,456 B.
+
+### T5b2.2 The fix attempt (variant A, not shipped)
+
+`bud_lifecycle.pruv`: `reopen_b` keeps the guards, `current_at` and the state test and ends in a tail call to a new
+`#[cold]` private `reopen_c(inout st, sk, ss, sn, off, inout fx, inout out)` (precondition `0 <= off <= 2^40`,
+`30 <= len(st) - off`, `1 <= len(out)`) that holds the change path (`session_of`, `blob_copy`, `rewrite`,
+`reserve`, `store`, the `fx` push). This is the T5b coldA shape written in the source: the fast part is small
+enough to inline into its callers, and no fp twin is planned for it. It verified and built on the bench flags.
+
+| build | `__text` (B) | reopenmiss S / M / L | closereopen S / M / L |
+|---|---:|---:|---:|
+| base afe3732 | 464,700 | 377.4 / 392.3 / 391.1 | 533.8 / 548.4 / 549.3 |
+| variant A | 474,684 (+9,984) | 358.0 / 373.0 / 372.4 | 535.2 / 549.4 / 549.6 |
+| hand16 (same runs) | | 337.2 / 336.7 / 335.4 | 445.2 / 444.2 / 444.4 |
+
+reopenmiss drops 19 at M and L and stays 1.11x; closereopen does not move (its reopen hits, so it pays the
+change path either way). The inlined `reopen_b` still saves six callee-saved pairs, still
+stores hoisted invariants before the probe loop and still spills about 11 registers around the key `memcmp`.
+`__text` grows by 10 KB, so variant A fails the `__text` gate as well as the 1.0x gate; it is reverted (no source
+or compiler change ships from this row) and the cgu1 number was not taken for a build that does not ship.
+
+### T5b2.3 Per-function attribution (lldb single step, one call or pair at M)
+
+Method: `lldb` breakpoint on the entry function after 50 warm calls (`perf 500 200 <item> f` for Pruv, `typed` for
+hand16), then `StepInstruction` until the same entry is hit again; every retired instruction is attributed to the
+symbol that holds its pc. The counts match the counter medians (Pruv pair 1,097 vs 548.4 x 2; hand pair 890 vs
+445.0 x 2; Pruv reopenmiss 392; hand 336). Traces: `work/t5b2/attr/` (not committed).
+
+closereopen pair (close half = from `maybe_close` entry to its return; reopen half = the rest of the iteration):
+
+| part | Pruv | hand16 | Pruv - hand |
+|---|---:|---:|---:|
+| maybe_close own code (Pruv: includes its inlined hash) | 465 | 214 + 168 SipHash = 382 | +83 |
+| maybe_close host facts (`bud_facts::calls`, `is_quiet`, `answer`, TLS) | 133 | 98 | +35 |
+| maybe_close `memcmp` | 14 | 33 | -19 |
+| reopen (hit) own code (Pruv: includes its inlined hash) | 377 | 117 + 168 SipHash = 285 | +92 |
+| reopen `memcmp` (key and 9-word id) | 67 | 86 | -19 |
+| loop / harness (`fair_loop` by-value copy vs hand closure) | 40 | 5 | +35 |
+| pair total | 1,096 | 889 | +207 |
+
+The host-facts row is the same harness function (`bud_facts::is_quiet`) on both sides; hand's build inlines
+`answer` into `maybe_close`, the Pruv build calls it through `LocalKey::with` (harness inlining, not generated
+code). The loop row is mostly in the floors (`pruv_f0` 5.1 vs `hand0` 4.6 per call at M); the floor-subtracted
+ratio stays 1.23.
+
+reopenmiss at M, Pruv 392 = own code 305 + `memcmp` 67 + `fair_loop` 20; hand16 336 = closure 76 + loop 5 +
+SipHash 168 + `memcmp` 86. The Pruv own code by source line:
+
+| Pruv source part | instr | of which stack loads/stores | `bic`/`csel` clamps |
+|---|---:|---:|---:|
+| frame prologue (six callee-saved pairs, `sub sp, #0x1f0`) | 8 | 6 | 0 |
+| `fx_ok(fx)`, `len(out)` guards | 15 | 3 | 2 |
+| `og = gf(st, owner, 3)` | 17 | 0 | 2 |
+| `hash_words` (2 words) | 34 | 0 | 2 |
+| `find_h_w` setup and invariants hoisted out of the probe loop | 51 | 11 | 6 |
+| probe loop (2 probes) | 27 | 0 | 0 |
+| `entry_matches_w` field tests (kind, owner, owner gen, hash, length) | 47 | 6 | 3 |
+| key compare call: argument moves and spills around `bl memcmp` | 24 | 18 | 0 |
+| `id_at` record tests and the 9-word id compare call | 71 | 15 | 1 |
+| miss exit and epilogue | 11 | 6 | 0 |
+| total | 305 | 65 | 16 |
+
+So hand16's own code is 81 instructions plus a 168-instruction library hash; Pruv's hash is 34, but its own code
+around it is 271. Line-level cause of the +56 (M) gap:
+
+1. Register pressure: `reopen_b`'s nine arguments (14 words as slices) plus the hoisted invariants stay live
+   across the two `memcmp` calls, so the miss path pays 65 stack loads/stores (six callee-saved pairs, 11
+   hoisted-invariant stores, 18 and 15 spill/reload words around the two calls). hand16's `reopen` is inlined into
+   its loop with `sessions.get_mut(sid)` live state in registers. Variant A (inline the fast part) removed only 19
+   of these.
+2. Record checks on the flat `[i64]` store: `c32` clamps of stored counts (16 `bic`/`csel`), the owner generation
+   read, `entry_matches_w`'s five field tests and `id_at`'s range tests (together about 100 instructions with the
+   guards). hand16's `HashMap<Box<[u16]>, Session>` has typed fields and does none of them.
+
+### T5b2.4 Gates and what did not change
+
+No source or compiler change ships, so codegen parity, the test groups, M4 cells, `__text` (464,700 B) and peak
+RSS are those of `afe3732` (M4 not re-measured: no file it builds from changed). reopenmiss and closereopen stay
+1.17x / 1.23x hand16 at M and L in instructions (0.85-0.89x in cycles) and move to debt D14.
+
+Proposed next row (for main to open): the session store as typed records (struct or `[u8]` entries with typed
+count fields) for the reopen / maybe_close lookup, which removes the `c32` clamps and the field tests by
+representation, per the §7.5 data representation rule; and either the inline policy taking `reopen_b` with a
+`__text` cut elsewhere or a language form that passes the session record as one view so fewer values are live
+across the compare calls.
+
+### T5b2.5 Delegation
+
+| work | model | mode |
+|---|---|---|
+| re-baseline, variant A, disassembly, lldb attribution, measurement, this appendix | Claude Opus 5.5 | direct |
 
 ## Appendix P13e (row B/bud_map, bud_store, bud_world, bud_admit: entry layout)
 
