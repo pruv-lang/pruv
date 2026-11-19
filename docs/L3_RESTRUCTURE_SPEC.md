@@ -399,7 +399,7 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P19a | B/bud_lifecycle.pruv, bud_map.pruv, m7_test, m10_test, ABI.md: P19 audit R1, R3-R6, O1 (Appendix P19.6a, P19.7) | P: invalid answer leaves `st` word-for-word unchanged (write-free `bud_map` room plan before the query, rehash after a valid answer, `ensures` linking the two; tombstone-heavy control); R2 regression fixture; session argument and effect order logged on both sides with a mutant; per-attempt query counts over forced Grow; required case ids and request order in M7/M10 Q; standalone CLOSE lane with matched consumption <= 1.0x hand. Starts after P21a (shares bud_map.pruv). |
 | P19c | Both codegens: foreign (trusted rust) call wrapper and cross-rlib inlining (Appendix P19.4) | P: `catch_unwind(AssertUnwindSafe(..))` around every trusted rust call and the non-inlined callee `LocalKey::with` removed or made free where sound (for example crates built with `panic = abort`, or the poison rule of P10 kept by another path), with the soundness argument written and audited; output parity on both compilers; P19 `closereopen` (1.14-1.15) and `attach` (1.12-1.13) re-measured, the wrapper share attributed, the rest left to T5/P18b by line. Done (Appendix P19c): drop guard (`pruv_ForeignGuard`) in place of `catch_unwind`, `__rust_try` and the catch frame gone; the foreign path now equals a plain call (closereopen `guard` = `direct` within 0.1 ns, 61 rounds); the diagnostic goes through a fresh `/dev/stderr` handle, not std's stderr lock, on unix; `LocalKey::with` is the caller's LLVM inline decision, present with no wrapper and gone when inlined; the rest (attach 1.13x, closereopen 1.11-1.12x, reopenmiss 1.05-1.08x vs hand16) is the inline policy (T5, measured: 1.02-1.06x with the four lifecycle/map bodies forced inline) and the result path (P18b, hypothesis). T5 (Appendix T5): no inline rule ships; every promotion grows `__text` (find_w + attach +40 %, the four +116 %) for 2-13 % fewer instructions; queued as T5a. |
 | T5a | Both codegens and B/bud_map.pruv, bud_lifecycle.pruv: M7 lookup and lifecycle gap without code growth (Appendix T5.3) | P: `attach`, `closereopen`, `reopenmiss`, `current`, `isHalted` <= 1.0x hand16 with M7 `__text` and peak RSS not above the T5 base (405,180 B); the inline-only route is ruled out (T5.2). Candidates: cut the always callees of `find_w` (P13h specialization or hot/cold split), the P19c entry/record re-validation and id copies; output parity on both compilers. Measured (Appendix T5a): no change ships. The fixes found (reopen cold tail -32/-35, maybe_close direct header path -9) all grow `__text`. Part of each raw cell is the driver typed-lane shape (current: floor 73 vs hand ~19). The rest is split by line, queued as T5b/T5c, and kept in P13h/P18b. |
-| T5b | Both codegens: cold-tail rule (Appendix T5a.4) | P: reopen's slow tail (blob_copy, rewrite, store) is emitted out of line and cold, so the miss path drops the slow-path frame (352 B in the T5a build). The rule is an attribute or a proof-free rule that does not mark the M4 put path cold. reopenmiss and closereopen fewer instructions than T5 with `__text` and peak RSS not above the T5 base (405,180 B); the hand-edited reference is rsplita (-32/-35 against its same-run base, for +10.9 KB). Includes a per-function attribution of the closereopen pair. Output parity on both compilers. |
+| T5b | Both codegens: cold-tail rule (Appendix T5a.4) | P: reopen's slow tail (blob_copy, rewrite, store) is emitted out of line and cold, so the miss path drops the slow-path frame (352 B in the T5a build). The rule is an attribute or a proof-free rule that does not mark the M4 put path cold. reopenmiss and closereopen fewer instructions than T5 with `__text` and peak RSS not above the T5 base (405,180 B); the hand-edited reference is rsplita (-32/-35 against its same-run base, for +10.9 KB). Includes a per-function attribution of the closereopen pair. Output parity on both compilers. State (Appendix T5b, step cap hit at rule design; no compiler change): on the P18b base (`__text` 413,244 B) a cold or never-inlined tail alone does not move the miss path (reopenmiss S=500 386.8 to 390.0, ranges overlap) because the miss path pays the same six callee-saved pairs (nine arguments live across `bl find_w`), not the tail frame; the win needs the fast part inlined into each caller (-34/-24) at +13.7 KB `__text`. Split into T5b1 and T5b2. |
 | T5c | B/m7_test/driver_m7.rs: typed-lane harness parity (Appendix T5a.2) | P: the M7 timed loop calls the `c_*` entry with the same shape as hand16's bare method call (no non-inlined step closure, no per-op prep match), reported next to the existing lane. The floor of each lane is measured with bodies emptied. Measurement only; no product number moves. Measured (Appendix T5c): fair lane (`driver_m7 perf S R item f`) against hand16, instructions S/M: isHalted 0.99/0.98 (no overlap, at or below 1.0x), current 1.02/1.02, attach 1.30/1.29, closereopen 1.18/1.18, reopenmiss 1.16/1.15; floor-subtracted 0.97/0.96, 1.00/1.01, 1.27/1.25, 1.16/1.16, 1.14/1.15. The rest is the entry floor (length guards, `out` store: P18b), the reopen tail (T5b), and find_w/entry re-validation (P13h); no new row. Driver `__text` 405,180 to 413,756 B (harness only; T5b re-measures its base). |
 | P20 | B/bud_charge.pruv,m8_test: counters/sums/bounds | P Q2+C/D, equal safe-number baseline; negative/boundary atomic refusal and charge/failure <=1.0. |
 | P21 | B/bud_tools.pruv,key helpers: stored hash/dedup | P Q2+D; dup/new/forget separately <=1.0, missing-budget dedup. Interning only as measured follow-up. |
@@ -5418,3 +5418,75 @@ Not taken: moving the `FBuf` checks out of the timed region (one check per timed
 | audit | Codex gpt-6.2-astra ultra (Codex 2) | review |
 | full Python suite | shell command | command |
 | proof and encoding choice, isolating and final measurement, SPEC and this appendix | Claude Opus 5.5 | direct |
+
+## Appendix T5b: cold-tail rule, state at the step cap
+
+Base: main `f0c5932` (after P18b), worktree `pruvc-rs` release build, M7 driver built by
+`run_m7.py` flags (`-C opt-level=3 --edition 2021`). Driver `__text` 413,244 B, the P18b base.
+The variants were hand edits of the generated `gen.rs` only (no source and no compiler change):
+reopen is cut at `let se = session_of(..)` into a fast part that ends in a tail call and a tail
+function `reopen__pruv_tail(st, sk, ss, sn, fx, out)`.
+
+### T5b.1 Variants and numbers
+
+Fair lane (`driver_m7 perf 500 R item f`, hand16 `typed`), instructions per call from
+`(X(5R)-X(R))/(4R*calls)`, R=20000, 3 interleaved rounds, median [min..max]. Peak RSS is the
+median `peak memory footprint`. Machine load was high; cycles are listed but not used.
+
+| variant | fast part | tail | `__text` (B) | reopenmiss instr | closereopen instr | peak (B) |
+|---|---|---|---:|---:|---:|---:|
+| base (P18b) | `#[inline]` | (whole fn) | 413,244 | 386.8 [368.8..388.9] | 521.6 [521.2..528.4] | 3,817,808-3,834,192 |
+| cold | `#[inline]` | `#[cold] #[inline(never)]` | 418,876 | 390.0 [377.3..393.0] | 525.2 [523.7..525.8] | 3,834,192 |
+| never | `#[inline]` | `#[inline(never)]` | 418,876 | 391.3 [372.4..395.3] | 525.7 [525.6..525.7] | 3,834,192-3,883,344 |
+| coldA | `#[inline(always)]` | `#[cold] #[inline(never)]` | 426,940 | 352.8 [332.4..359.2] | 497.7 [496.2..498.3] | 3,817,808-3,834,192 |
+| hand16 | | | (own binary) | 334.0 [322.1..334.6] | 445.9 [442.7..458.3] | 3,195,216 |
+
+`rchk` is equal for every variant (reopenmiss 7239146844012164864, closereopen
+16571789882858190432). cold and never overlap base on reopenmiss and are 3-4 instructions worse
+on closereopen; only coldA separates from base (-34 / -24), and it is still 1.06x / 1.12x hand16.
+
+### T5b.2 Why the tail split alone does not help (line level)
+
+The miss path of base `reopen` is: frame `sub sp, sp, #0x160`, six `stp` of x19-x30, the
+length/`out` guards, five `mov` to keep `ss, sn, bk, bs, bn` in callee-saved registers, two
+spills (`str x6`, `stp x1, x0`), `bl find_w`, then the miss exit and six `ldp`. In the cold
+variant the fast part is 948 B and its frame drops to `#0x90`, but it still saves all six pairs
+and spills argument words to the stack (`stp x10, x6`, `str x7` and three stack-argument copies): the nine arguments (`st`, `sk`, `ss`, `sn`, `bk`, `bs`, `bn`,
+`fx`, `out`, as slices 14 words) stay live across `bl find_w` because the hit path needs them for
+the tail call. The cost on the miss path is the register-save set, and it is set by what is live
+across the lookup call, not by the size of the slow tail. A smaller frame changes one `sub`
+immediate. hand16 does not pay it because its `reopen` is inlined into the timed loop, where the
+values are already in registers.
+
+So the only measured win (coldA) is the fast part inlined into its callers. The `reopen` call
+sites in the driver binary are the wire dispatch and every driver function that inlines
+`c_reopen` (`fair_loop`, `raw_call`, `c_call`, `one`, `run_perf` and two of its closures,
+`World::call`): +628 to +1,476 B each.
+
+### T5b.3 `__text` is partly a CGU artifact
+
+With identical call graphs (same `bl` targets per function, checked from `otool -tvV`), the cold
+variant's `put_at` grows 5,468 to 11,668 B (`memcpy` calls 4 to 8) and `find_w` 1,020 to 2,024 B
+(`memcmp` 1 to 2): LLVM duplicated code inside them. Built with `-C codegen-units=1` (diagnosis
+only, not the bench flags): base 413,884, cold 411,964 (-1,920), coldA 420,732 (+6,848). So
+under the default 16 CGUs a gen change that removes code can still grow `__text` by about 6 KB
+from partitioning. The `__text` gate stays on the bench flags; this is reported so a later row
+does not read the +5.6 KB of cold as the rule's own cost.
+
+### T5b.4 Split
+
+- T5b1 (measurement, this appendix): done. No compiler change ships; the cold attribute alone
+  does not meet the row (no instruction gain, `__text` +5.6 KB under bench flags).
+- T5b2 (new row, open): cut the miss path's live set across `find_w` instead of the tail. Either
+  the reopen fast part takes the session record as one view (P18b result path / P13h
+  specialization), or the cold-tail rule is paired with a `__text` cut of at least 13.7 KB
+  (bench flags) elsewhere so the coldA inline fits the P18b base. Still to do there: the
+  five-cell S/M re-baseline table, the closereopen per-function attribution, M4 cells, gates,
+  and the audit.
+
+### T5b.5 Delegation
+
+| work | model | mode |
+|---|---|---|
+| re-baseline, variant builds, disassembly, measurement, this appendix | Claude Opus 5.5 | direct |
+
