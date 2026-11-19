@@ -1,0 +1,256 @@
+// Resident WTF-8 arena shared by the M7 and M10 test roots.
+
+fn rd(a: [i64], p: i64) -> i64
+{ return crate::ent_u16::rd(a, p); }
+
+fn used(tx: [u8]) -> i64
+  ensures result == -1 || (8 <= result && result <= len(tx))
+{
+  if len(tx) < 8 { return -1; }
+  if tx[7] >= 128 { return -1; }
+  let n: i64 = tx[0] + tx[1] * 256 + tx[2] * 65536 + tx[3] * 16777216
+    + tx[4] * 4294967296 + tx[5] * 1099511627776 + tx[6] * 281474976710656 + tx[7] * 72057594037927936;
+  if n < 8 || n > len(tx) { return -1; }
+  return n;
+}
+
+fn set_used(inout tx: [u8], n: i64) -> ()
+{
+  if len(tx) < 8 { return; }
+  tx[0] = band(n, 255);
+  tx[1] = band(ushr(n, 8), 255);
+  tx[2] = band(ushr(n, 16), 255);
+  tx[3] = band(ushr(n, 24), 255);
+  tx[4] = band(ushr(n, 32), 255);
+  tx[5] = band(ushr(n, 40), 255);
+  tx[6] = band(ushr(n, 48), 255);
+  tx[7] = band(ushr(n, 56), 255);
+}
+
+pub fn init(inout tx: [u8]) -> i64
+{
+  if len(tx) < 8 { return 2; }
+  set_used(inout tx, 8);
+  return 0;
+}
+
+fn copy_bytes(src: [u8], off: i64, n: i64, inout dst: [u8], at: i64) -> ()
+  requires 0 <= off && 0 <= at && 0 <= n && n <= len(src) - off && n <= len(dst) - at
+{
+  copy_range(inout dst, at, src, off, n);
+}
+
+pub fn text(tx: [u8], off: i64, n: i64, inout ob: [u8]) -> i64
+{
+  let u: i64 = used(tx);
+  if u < 8 || off < 8 || off > u || n < 0 || n > u - off { return 2; }
+  if n > len(ob) { return 3; }
+  copy_bytes(tx, off, n, inout ob, 0);
+  return 0;
+}
+
+// A zero position denotes an absent handle. Other positions are relative to the record base.
+fn span(st: [i64], base: i64, p: i64, lo: i64, hi: i64) -> i64
+  requires 0 <= base && base <= 1099511627776 && 0 <= p && p <= 1099511627776 && 0 <= lo
+{
+  if p == 0 { return 0; }
+  let n: i64 = rd(st, base + p);
+  let off: i64 = rd(st, base + p + 1);
+  if n < 1 || off < lo || off > hi || n > hi - off { return -1; }
+  return n;
+}
+
+fn handle(frame: crate::bud_halt::TextFrame, i: i64) -> i64
+  requires 0 <= frame.opened && frame.opened <= 1099511627776
+  requires 0 <= frame.active && frame.active <= 1099511627776
+  requires 0 <= frame.ended && frame.ended <= 1099511627776
+  requires 0 <= frame.halt_at && frame.halt_at <= 1099511627776
+  requires 0 <= frame.tail && frame.tail <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776
+{
+  if i == 0 { return frame.opened; }
+  if i == 1 { return frame.active; }
+  if i == 2 { return frame.ended; }
+  if i == 3 { return frame.halt_at; }
+  return frame.tail;
+}
+
+struct Footprint { bytes: i64, walked: i64 }
+
+fn measure(st: [i64], u: i64) -> Footprint
+  ensures 0 <= result.walked
+{
+  let lim: i64 = crate::bud_map::walk_limit(st);
+  let mut e: i64 = crate::bud_map::head(st, 0);
+  let mut steps: i64 = 0;
+  let mut bytes: i64 = 0;
+  let mut ids: i64 = 0;
+  while e >= 0 && steps < lim
+    invariant 0 <= steps && steps <= lim && lim <= 4294967296 && 0 <= bytes && 0 <= ids
+    decreases lim - steps
+  {
+    let base: i64 = crate::bud_map::blob_off(st, e);
+    let f: crate::bud_halt::TextFrame = crate::bud_halt::text_frame(st, base, crate::bud_map::blob_len(st, e));
+    if f.valid {
+      if f.ids > 9223372036854775807 - ids { return Footprint { bytes: -1, walked: 0 }; }
+      ids = ids + f.ids;
+      let mut i: i64 = 0;
+      while i < 5
+        invariant 0 <= i && i <= 5 && 0 <= bytes
+        decreases 5 - i
+      {
+        let n: i64 = span(st, base, handle(f, i), 8, u);
+        if n < 0 || n > 9223372036854775807 - bytes { return Footprint { bytes: -1, walked: 0 }; }
+        bytes = bytes + n;
+        i = i + 1;
+      }
+    }
+    steps = steps + 1;
+    e = crate::bud_map::next(st, e);
+  }
+  if e >= 0 || ids > 9223372036854775807 - steps { return Footprint { bytes: -1, walked: 0 }; }
+  return Footprint { bytes: bytes, walked: steps + ids };
+}
+
+pub fn grow(inout st: [i64], prev: [u8], inout next: [u8]) -> i64
+{
+  if !crate::bud_store::valid(st) { return 2; }
+  let u: i64 = used(prev);
+  if u < 8 || len(next) < 8 { return 2; }
+  // Check all spans and destination space before modifying any handles.
+  let live: Footprint = measure(st, u);
+  if live.bytes < 0 || live.bytes > len(next) - 8 { return 2; }
+  let lim: i64 = crate::bud_map::walk_limit(st);
+  let mut e: i64 = crate::bud_map::head(st, 0);
+  let mut steps: i64 = 0;
+  let mut at: i64 = 8;
+  while e >= 0 && steps < lim
+    invariant 0 <= steps && steps <= lim && lim <= 4294967296 && 8 <= at && at <= len(next)
+    decreases lim - steps
+  {
+    let base: i64 = crate::bud_map::blob_off(st, e);
+    let f: crate::bud_halt::TextFrame = crate::bud_halt::text_frame(st, base, crate::bud_map::blob_len(st, e));
+    if f.valid {
+      let mut i: i64 = 0;
+      while i < 5
+        invariant 0 <= i && i <= 5 && 8 <= at && at <= len(next)
+        decreases 5 - i
+      {
+        let p: i64 = handle(f, i);
+        if p != 0 {
+          let n: i64 = rd(st, base + p);
+          let off: i64 = rd(st, base + p + 1);
+          if off < 8 || off > u || n < 1 || n > u - off || n > len(next) - at { return 2; }
+          copy_bytes(prev, off, n, inout next, at);
+          crate::ent_u16::wr(inout st, base + p + 1, at);
+          at = at + n;
+        }
+        i = i + 1;
+      }
+    }
+    steps = steps + 1;
+    e = crate::bud_map::next(st, e);
+  }
+  set_used(inout next, at);
+  return 0;
+}
+
+// Offset of a validated op span (0 when absent), or -1 when the span does not lie inside [0, hi).
+fn soff(op: [i64], base: i64, p: i64, hi: i64) -> i64
+  requires 0 <= base && base <= 1099511627776 && 0 <= p && p <= 1099511627776 && 0 <= hi
+  ensures result == -1 || (0 <= result && result <= hi)
+{
+  if p == 0 { return 0; }
+  let n: i64 = rd(op, base + p);
+  let off: i64 = rd(op, base + p + 1);
+  if n < 1 || off < 0 || off > hi || n > hi - off { return -1; }
+  return off;
+}
+
+// The blob holds a verbatim copy of the op frame, so the rebased offset is the validated op offset plus u.
+fn rebase(inout st: [i64], base: i64, p: i64, v: i64) -> ()
+  requires 0 <= base && base <= 1099511627776 && 0 <= p && p <= 1099511627776
+{
+  if p != 0 { crate::ent_u16::wr(inout st, base + p + 1, v); }
+}
+
+pub fn put(inout st: [i64], inout tx: [u8], op: [i64], txt: [u8], inout out: [i64]) -> i64
+{
+  if !crate::bud_store::valid(st) { return 2; }
+  let key_end: i64 = crate::bud_keys::rec_end(op, 0);
+  if key_end < 0 || key_end >= len(op) { return 2; }
+  let kn: i64 = rd(op, 0);
+  let n: i64 = rd(op, key_end);
+  let base: i64 = key_end + 1;
+  if n != len(op) - base { return 2; }
+  let f: crate::bud_halt::TextFrame = crate::bud_halt::text_frame(op, base, n);
+  let need: i64 = len(txt);
+  if !f.valid && need != 0 { return 2; }
+  let mut o1: i64 = 0;
+  let mut o2: i64 = 0;
+  let mut o3: i64 = 0;
+  let mut o4: i64 = 0;
+  let mut o5: i64 = 0;
+  if f.valid {
+    o1 = soff(op, base, f.opened, need);
+    o2 = soff(op, base, f.active, need);
+    o3 = soff(op, base, f.ended, need);
+    o4 = soff(op, base, f.halt_at, need);
+    o5 = soff(op, base, f.tail, need);
+    if o1 < 0 || o2 < 0 || o3 < 0 || o4 < 0 || o5 < 0 { return 2; }
+  }
+  let u: i64 = used(tx);
+  if u < 8 { return 2; }
+  if len(out) < 2 { return 3; }
+  // One lookup serves the store plan and the write (session_put_w's sequence, inlined to keep the entry index).
+  let e: i64 = crate::bud_map::find_w(st, 0, op, 1, kn);
+  let mut entries: i64 = 1;
+  let mut words: i64 = crate::bud_keys::words(kn) + crate::bud_store::c32(n);
+  if e >= 0 {
+    entries = 0;
+    words = crate::bud_store::c32(n);
+    if crate::bud_map::blob_fits(st, e, words) { words = 0; }
+  }
+  if need > len(tx) - u {
+    // Check store Grow first, write-free, so a text Grow never follows a store change.
+    let room: i64 = crate::bud_map::room_plan(st, entries, words);
+    if room > 0 {
+      out[0] = room;
+      return 1;
+    }
+    let live: Footprint = measure(st, u);
+    if live.walked > 9223372036854775799 { return 2; }
+    let max_payload: i64 = (9223372036854775807 - 8 - live.walked) / 4;
+    if live.bytes < 0 || live.bytes > max_payload || need > max_payload - live.bytes { return 2; }
+    let want: i64 = 8 + 4 * (live.bytes + need) + live.walked;
+    out[0] = want;
+    if want < 4096 { out[0] = 4096; }
+    return 4;
+  }
+  let nd: i64 = crate::bud_map::make_room(inout st, entries, words);
+  if nd != 0 {
+    crate::ent_u16::wr(inout out, 0, nd);
+    return 1;
+  }
+  let mut x: i64 = e;
+  let mut fresh: i64 = 0;
+  if x < 0 {
+    x = crate::bud_map::add_w(inout st, 0, op, 1, kn);
+    fresh = 1;
+  }
+  if x < 0 { return 2; }
+  let r: i64 = crate::bud_map::set_blob(inout st, x, op, base, n);
+  if r < 0 { return 2; }
+  out[0] = 1;
+  out[1] = fresh;
+  if need == 0 { return 0; }
+  copy_bytes(txt, 0, need, inout tx, u);
+  let dst: i64 = crate::bud_map::blob_off(st, x);
+  rebase(inout st, dst, f.opened, u + o1);
+  rebase(inout st, dst, f.active, u + o2);
+  rebase(inout st, dst, f.ended, u + o3);
+  rebase(inout st, dst, f.halt_at, u + o4);
+  rebase(inout st, dst, f.tail, u + o5);
+  set_used(inout tx, u + need);
+  return 0;
+}

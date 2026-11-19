@@ -7,6 +7,7 @@ mod bud_clock;
 mod bud_lifecycle;
 mod bud_charge;
 mod bud_halt;
+mod bud_tx;
 
 // L3-10 M10a test root (test only, not product): drives halt (bud_halt.pruv) and the calls that reach it (charge over
 // limit, the run methods and FIRE through HALT_TIME) over the M7 record and the M9 clock.
@@ -49,18 +50,19 @@ pub fn t_grow(prev: [i64], inout next: [i64]) -> i64
   return 0;
 }
 
-// session put: [sessionId key, n, words...] (key packed; the record words are stored as they are); 0 ok, 1 Grow
-// (out[0] = N), 2 invalid, 3 out small.
-pub fn t_put(inout st: [i64], op: [i64], inout out: [i64]) -> i64
-{
-  if !crate::bud_store::valid(st) { return 2; }
-  let e1: i64 = crate::bud_keys::rec_end(op, 0);
-  if e1 < 0 || e1 >= len(op) { return 2; }
-  let kn: i64 = crate::ent_u16::rd(op, 0);
-  let n: i64 = crate::ent_u16::rd(op, e1);
-  if n < 0 || n != len(op) - e1 - 1 { return 2; }
-  return crate::bud_world::session_put_w(inout st, op, 1, kn, op, e1 + 1, n, inout out);
-}
+// Session put: [sessionId key, n, record words...] with text offsets relative to txt.
+// Status: 0 ok, 1 store Grow, 2 invalid, 3 out small, 4 text Grow. Grow sizes are in out[0].
+pub fn t_put(inout st: [i64], inout tx: [u8], op: [i64], txt: [u8], inout out: [i64]) -> i64
+{ return crate::bud_tx::put(inout st, inout tx, op, txt, inout out); }
+
+pub fn t_tinit(inout tx: [u8]) -> i64
+{ return crate::bud_tx::init(inout tx); }
+
+pub fn t_tgrow(inout st: [i64], prev: [u8], inout next: [u8]) -> i64
+{ return crate::bud_tx::grow(inout st, prev, inout next); }
+
+pub fn t_text(tx: [u8], off: i64, n: i64, inout ob: [u8]) -> i64
+{ return crate::bud_tx::text(tx, off, n, inout ob); }
 
 // session remove: [sessionId key].
 pub fn t_del(inout st: [i64], op: [i64], inout out: [i64]) -> i64

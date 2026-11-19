@@ -2574,19 +2574,20 @@ class FnGen:
                                 "copy_range is not supported by the llvm codegen layer for this operand yet",
                                 "copy the elements in a loop, or use the Rust backend")
             if not s.verified:
-                # one combined check: i < 0 || j < 0 || n < 0 || i > len(dst) - n || j > len(src) - n
+                # P13i2a.audit-1: the destination check (i < 0 || n < 0 || i > len(dst) - n) reports (i, len(dst)),
+                # then the source check (j < 0 || j > len(src) - n) reports (j, len(src))
                 ta = s.op("sub i64 %s, %s" % (dv.b, cnt.a))
-                tb = s.op("sub i64 %s, %s" % (sv.b, cnt.a))
                 c1 = s.op("icmp slt i64 %s, 0" % iv.a)
-                c2 = s.op("icmp slt i64 %s, 0" % jv.a)
                 c3 = s.op("icmp slt i64 %s, 0" % cnt.a)
                 c4 = s.op("icmp sgt i64 %s, %s" % (iv.a, ta))
-                c5 = s.op("icmp sgt i64 %s, %s" % (jv.a, tb))
-                o = s.op("or i1 %s, %s" % (c1, c2))
-                o = s.op("or i1 %s, %s" % (o, c3))
+                o = s.op("or i1 %s, %s" % (c1, c3))
                 o = s.op("or i1 %s, %s" % (o, c4))
-                o = s.op("or i1 %s, %s" % (o, c5))
                 s.guard(o, lambda: s.ins("call void @pruv_panic_oob(i64 %s, i64 %s)" % (iv.a, dv.b)), True)
+                tb = s.op("sub i64 %s, %s" % (sv.b, cnt.a))
+                c2 = s.op("icmp slt i64 %s, 0" % jv.a)
+                c5 = s.op("icmp sgt i64 %s, %s" % (jv.a, tb))
+                o = s.op("or i1 %s, %s" % (c2, c5))
+                s.guard(o, lambda: s.ins("call void @pruv_panic_oob(i64 %s, i64 %s)" % (jv.a, sv.b)), True)
             tyd, tys = storage_ty(dv), storage_ty(sv)
             if not ((is_bytes(dv) and is_bytes(sv)) or (tyd == "i64" and tys == "i64")):
                 # the storage plan pins copy_range operands to i64 or bytes, as for eq_range; any other pair is not lowered

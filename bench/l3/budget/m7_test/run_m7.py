@@ -36,6 +36,8 @@ BUD = os.path.dirname(HERE)
 ROOT = os.path.abspath(os.path.join(BUD, "..", "..", ".."))
 WORK = os.path.join(BUD, "work", "m7")
 PRUVC_DEFAULT = os.path.join(ROOT, "pruvc-rs", "target", "release", "pruvc")
+if not os.path.isfile(PRUVC_DEFAULT):
+    PRUVC_DEFAULT = "/Users/spica4345/Projects/pruv/pruvc-rs/target/release/pruvc"
 PY_DEFAULT = "/Users/spica4345/Projects/pruv/.venv/bin/python"
 PRUVC_PY = os.path.join(ROOT, "pruvc", "pruvc.py")  # this checkout's Python compiler (P18b: --proven-entries)
 LIBS = ["--lib", "bench/l3/budget", "--lib", "bench/l3/lib"]
@@ -95,6 +97,11 @@ def compile_gen(which, gen, rlib=None):
         sys.exit("pruvc failed:\n" + c.stdout + c.stderr)
 
 
+def driver_source(here=HERE):
+    codec = json.dumps(os.path.join(here, "record_text.rs"))
+    return f"#[path = {codec}] mod record_text;\n" + open(os.path.join(here, "driver_m7.rs")).read()
+
+
 def build(args):
     rlib = build_facts()
     gen = os.path.join(WORK, "gen.rs")
@@ -102,7 +109,7 @@ def build(args):
     main = os.path.join(WORK, "main_m7.rs")
     with open(main, "w") as f:
         f.write('#![allow(dead_code, unused_imports, unused_variables, unused_mut)]\n#[path = "gen.rs"] mod sol;\n')
-        f.write(open(os.path.join(HERE, "driver_m7.rs")).read())
+        f.write(driver_source())
     exe = os.path.join(WORK, "driver_m7")
     c = subprocess.run([rustc()] + RUSTC_FLAGS + ["--extern", f"bud_facts={rlib}", "-o", exe, main], capture_output=True, text=True)
     if c.returncode != 0:
@@ -178,7 +185,18 @@ def is_str(v):
 PACKED_STRS = (0, 4)  # record strings stored as framed packed keys: 0 id, 4 follows
 
 
-def encode_budget(b):
+def text_words(s, txt):
+    if txt is None:  # hand16 still uses the unit-based Q input
+        return units(s)
+    data = s.encode("utf-8", "surrogatepass")
+    if not data:
+        return []
+    handle = [len(data), len(txt)]
+    txt.extend(data)
+    return handle
+
+
+def encode_budget(b, txt=None):
     """Budget (decoded python dict, or None/UNDEF) -> record words. Fields the record has no header slot for (or holds
     with a value the header cannot carry) go into the opaque rest text as canonical JV JSON."""
     if not isinstance(b, dict):
@@ -203,14 +221,14 @@ def encode_budget(b):
             h[8:16] = [v[n] for n in USED]
         elif k == "activeSince" and is_str(v):
             h[16] = 1
-            strs[2] = units(v)
+            strs[2] = text_words(v, txt)
         elif k == "ended" and isinstance(v, dict) and v.get("how") in HOW and is_str(v.get("at")) and len(v) == 2:
             h[18] = HOW[v["how"]]
             h[19] = 1
-            strs[3] = units(v["at"])
+            strs[3] = text_words(v["at"], txt)
         elif k == "openedAt" and is_str(v):
             h[20] = 1
-            strs[1] = units(v)
+            strs[1] = text_words(v, txt)
         elif k == "follows":
             h[23] = 1 if is_str(v) else 2
             if is_str(v):
@@ -222,7 +240,7 @@ def encode_budget(b):
     for k in ("id", "state", "origin", "limits", "used", "openedAt"):
         if k not in b or (k in ("state", "origin") and b[k] not in (STATE if k == "state" else ORIGIN)):
             raise ValueError("budget field %s not representable: %r" % (k, b.get(k)))
-    strs[5] = units(json.dumps(jv_encode(rest), ensure_ascii=False, separators=(",", ":"))) if rest else []
+    strs[5] = text_words(json.dumps(jv_encode(rest), ensure_ascii=False, separators=(",", ":")), txt) if rest else []
     w = list(h)
     for i, s in enumerate(strs):
         w += [len(s)] + (pack(s) if i in PACKED_STRS else s)
@@ -268,10 +286,14 @@ def decode_budget(w):
     return b
 
 
-def put_words(sess):
+def put_line(sess, hand16):
     d = jv_decode(sess)
-    rec = encode_budget(d.get("budget"))
-    return key(d["id"]) + [len(rec)] + rec
+    txt = None if hand16 else bytearray()
+    rec = encode_budget(d.get("budget"), txt)
+    line = "put " + " ".join(map(str, key(d["id"]) + [len(rec)] + rec))
+    if txt is not None:
+        line += " | " + " ".join(map(str, txt))
+    return line
 
 
 # ---- driver program ----
@@ -301,7 +323,7 @@ def default_uuid(n):
     return "00000000-0000-4000-8000-%012x" % n
 
 
-def program(case):
+def program(case, hand16=False):
     """Returns (lines, cut) where cut is None or (req, op) of the first call owned by another milestone."""
     w = case["world"]
     out = ["case " + case["id"], "now %d" % w.get("clockStart", 1700000000000)]
@@ -310,7 +332,7 @@ def program(case):
     q = (w.get("deps") or {}).get("isQuiet") or []
     out.append("quiet " + " ".join("1" if x else "0" for x in q))
     for s in w["sessions"]:
-        out.append("put " + " ".join(map(str, put_words(s))))
+        out.append(put_line(s, hand16))
     unit = jv_decode(w["unit"])
     cut = None
     for e in case["script"]:
@@ -320,7 +342,7 @@ def program(case):
         elif ev == "setUnit":
             unit = jv_decode(e["unit"])
         elif ev == "putSession":
-            out.append("put " + " ".join(map(str, put_words(e["session"]))))
+            out.append(put_line(e["session"], hand16))
         elif ev == "removeSession":
             out.append("del " + " ".join(map(str, key(e["id"]))))
         elif ev == "call":
@@ -522,7 +544,7 @@ def cmd_q(args):
         oracle[o["id"]] = o
     prog, cuts = [], {}
     for c in cases:
-        lines, cut = program(c)
+        lines, cut = program(c, args.hand16)
         prog += lines
         cuts[c["id"]] = cut
     r = subprocess.run([exe, "q"], input="\n".join(prog) + "\n", capture_output=True, text=True)

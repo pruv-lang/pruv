@@ -389,11 +389,13 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P13k | B/bud_map.pruv, bud_store.pruv (and both codegens if the lever is inline policy): part (a) of P13i, handed back (Appendix P13i.1) | P: take P13i.1 variant E's cold-fallback split of `bud_map::find_w` (instructions down on all five M7 cells: attach 392 -> 376, reopenmiss 383 -> 373, current 322 -> 311, isHalted 319 -> 304) together with a size lever (out-of-line shared cold paths, `ef`/`set_ef` attributes, or a proof-guided inline rule) so the M7 driver `__text` (457,916 B after P13i) and the M7 +96..176 / M10 +16..32 KiB fixed peak RSS go back toward c3ec58d (413,244 B), with no instruction cell given back on M4, M7, M10; output parity on both compilers if a codegen changes. Starts after P13j (shares bud_store/bud_map) and before T5b2 (same M7 cells). Result (Appendix P13k): the lever landed as a language attribute: `#[cold]` on a private top-level `fn` (SPEC R-7-3 supplement and attribute syntax; both compilers emit `#[cold]` `#[inline(never)]`, verification unchanged, accept/reject tests `tests/spec/r7_3_cold*`). No bud_map/bud_keys split meets the no-give-back rule, so the bench sources stay at base: G (first probe inline, rest of the probe loop and every fallback cold) cuts M7 instructions 30..55 per call on all five cells and `__text` -6.7 KB, but M4 sessions/tools/clocks lose up to +11 % per op (second probes run on most M4 lookups) and M7 peak RSS rises 32..80 KiB; F (only the never-run fallbacks cold) loses M7 current/isHalted +2 %; hash-fallback-only cold cuts M7 12..23 per call with RSS overlapping, but M10 D 100 +0.6 % instructions (no overlap). `__text` stays 458,300 B (c3ec58d 413,244); the size share is the host copies of the inlined `find_w`, row P13k.2. |
 | P13k.2 | m7_test/m10_test drivers or bud_lifecycle.pruv callers (P13i2a files), bud_map.pruv: host copies of the inlined `find_w` (Appendix P13k.4) | P: the M7 driver `__text` excess over c3ec58d (458,300 vs 413,244 B) is about 1.5-2 KB per inlined `find_w` copy, multiplied through host fns (`c_call`, `one`, `raw_call`, `World::call`, `run_perf`, `fair_loop`, closures inlining current/isHalted); `find_w` out of line gives 422,844 B but gives back most of the instruction gain. Choose per call site between the inlined and the out-of-line (`#[cold]`-free, shared) lookup so `__text` and the M7 +96..176 / M10 +16..32 KiB fixed peak RSS go toward c3ec58d with no M4/M7/M10 instruction, time or RSS cell given back. Row only; runs after P13i2a (same callers). |
 | P13j2 | B/bud_map.pruv (and bud_store.pruv if the frame needs a store `ensures`): root-compare loop in `grow_copy` (Appendix P13j.4) | P: drop the `grow_copy` root-compare loop by a frame proof that `copy_kids` arena writes never touch the root extension records (M4 `__text` -~512 B; P13j left M4 `__text` +832 B over a4427ec, accepted for the root payload fix), with the `grow_copy` root payload `ensures` kept proved, admit cases 24-26 passing, and no instruction, peak RSS or allocation cell given back on M4, M7, M10. Not done (Appendix P13j2): the frame needs content `ensures` on `set_blob`/`copy_pay`, frame `ensures` on `arena_put`/`xbm` and a root-payload-last copy order; split P13j2a/b/c proposed. |
-| P13i2 | B/bud_lifecycle.pruv, m7_test/driver_m7.rs (M7 wire): record text representation (Appendix P13i(c).3) | P: the M7 record keeps `rest` (95 units) and the date (24 units) one UTF-16 unit per i64 word (160 arena words per session; hand16 holds u16 text), which is the M7 proportional peak-RSS excess (Pruv 4.95 vs hand16 3.56 KiB per session slope). Store both as UTF-8 bytes (`[u8]`/`str`, §6b; the representation rule in §1-§4), not as packed i64 words, so the per-session record is at or below hand16; M7 proportional RSS share <= hand16 at S/M, no M7/M10 instruction or time cell given back, M7 Q 113/187/0 on both compilers. Fixed share left to P13k (`__text` +143 KiB). Runs before T5b2 (same M7 cells and bud_lifecycle). Not done (Appendix P13i2, base 4747c4b, no code changed): the text layout is shared with `bud_halt.pruv` (`halted()` sizes and copies strings 1-3 as unit words and writes a structured halt prefix of numbers and packed ids into string 5) and `m10_test`, both outside this row; the store has no byte region (no `[u8]` view of `[i64]`, and a typed store with an in-place `[u8]` field needs field `inout`, a language gap). Proposed split, for the main session to queue as row P13i2a (files B/bud_lifecycle.pruv, bud_halt.pruv, m7_test/*, m10_test/*; Appendix P13i2.3): a second resident `[u8]` text arena `tx` beside `st`, written by the host at ingress only (WTF-8, §2.1 G4); record strings 1-3 and the rest tail become `(byte len, byte off)` handles, the halt prefix stays structured words; lifecycle and halt bodies copy handles (no op reads `tx`), `t_put` checks spans at ingress, egress views are checked against `len(tx)` in Pruv, `t_grow` compacts `tx`. Expected M7 perf record 1280 -> about 479 B per session per World (hand16 about 0.90 KiB). Same done conditions as P13i2 plus M10 Q 78/222/0 and `cases_halt` 300/0/0 on both compilers. Runs before T5b2. P13k note (for P13i2a, bud_lifecycle): closereopen 539 vs hand16 437..448 and reopenmiss 387 vs 336 instructions per call at S = 100 remain after P13k; a cold `find_w` split closes at most 31 / 33 of that. |
+| P13i2 | B/bud_lifecycle.pruv, m7_test/driver_m7.rs (M7 wire): record text representation (Appendix P13i(c).3) | P: the M7 record keeps `rest` (95 units) and the date (24 units) one UTF-16 unit per i64 word (160 arena words per session; hand16 holds u16 text), which is the M7 proportional peak-RSS excess (Pruv 4.95 vs hand16 3.56 KiB per session slope). Store both as UTF-8 bytes (`[u8]`/`str`, §6b; the representation rule in §1-§4), not as packed i64 words, so the per-session record is at or below hand16; M7 proportional RSS share <= hand16 at S/M, no M7/M10 instruction or time cell given back, M7 Q 113/187/0 on both compilers. Fixed share left to P13k (`__text` +143 KiB). Runs before T5b2 (same M7 cells and bud_lifecycle). Not done (Appendix P13i2, base 4747c4b, no code changed): the text layout is shared with `bud_halt.pruv` (`halted()` sizes and copies strings 1-3 as unit words and writes a structured halt prefix of numbers and packed ids into string 5) and `m10_test`, both outside this row; the store has no byte region (no `[u8]` view of `[i64]`, and a typed store with an in-place `[u8]` field needs field `inout`, a language gap). Proposed split, for the main session to queue as row P13i2a (files B/bud_lifecycle.pruv, bud_halt.pruv, m7_test/*, m10_test/*; Appendix P13i2.3): a second resident `[u8]` text arena `tx` beside `st`, written by the host at ingress only (WTF-8, §2.1 G4); record strings 1-3 and the rest tail become `(byte len, byte off)` handles, the halt prefix stays structured words; lifecycle and halt bodies copy handles (no op reads `tx`), `t_put` checks spans at ingress, egress views are checked against `len(tx)` in Pruv, `t_grow` compacts `tx`. Expected M7 perf record 1280 -> about 479 B per session per World (hand16 about 0.90 KiB). Same done conditions as P13i2 plus M10 Q 78/222/0 and `cases_halt` 300/0/0 on both compilers. Runs before T5b2. P13k note (for P13i2a, bud_lifecycle): closereopen 539 vs hand16 437..448 and reopenmiss 387 vs 336 instructions per call at S = 100 remain after P13k; a cold `find_w` split closes at most 31 / 33 of that. Built as P13i2a (next row). |
+| P13i2a | B/bud_lifecycle.pruv, bud_halt.pruv, m7_test/*, m10_test/* (split from P13i2, Appendix P13i2.3); steps 1-2 in both compilers (`#[inline]` attributes, row L-copy-range) | P: the P13i2 design: resident WTF-8 arena `tx: [u8]` beside `st`, record dates 1-3, rest tail and halt at-text as `(byte len, byte off)` handles, host ingress/egress conversion, Grow compacts `tx` with the amortized bound stated. Same done conditions as P13i2 plus M10 Q 78/222/0 and `cases_halt` 300/0/0 on both compilers. Done (Appendix P13i2a.1-P13i2a.4): `bud_tx.pruv` arena (`put`, `text`, `grow`), compaction copy <= 4/3 per ingress byte; all gates on both compilers, generated Rust identical across them; M7 instructions 520.6 -> 369.2 M, peak RSS 5,808 -> 4,624 KiB, RSS slope 8.60 -> 3.98 KiB per session (hand16 3.63), allocations 495,523 -> 355,930 at M, all 5/5. Not met (gate of 2026-11-19, blocking = proportional cost at M/L): M10 putback d=50/100 26.7 -> 34.8/35.0 ns, M7 typed/wire replace 500 149.6/139.7 -> 161.6/154.9 ns, M10 halt d=50/100 +3.9/+1.4%; cause is the put path (frame parse, five span checks, second copy and 8-byte header, handle rebases; 986 vs 811 instructions), and the one fix attempt (per-record text base) has a floor of 873 instructions, so it was not kept. S and fixed-share cells are perf-debt rows (P13i2a.4). Audit: P13i2a.audit-1 (copy_range diagnostic, fixed). |
 | P21a | B/bud_map.pruv, bud_tools.pruv: O(1) forgetTurn (Appendix P21.4) | P: forgetTurn of a turn holding N activities <= 1.0x oaw at S/M in time, peak RSS and allocations (P21: 8.9x / 37.9x; oa forgets by generation, Pruv frees each child), with the toolnew and tooldup cells kept <= 1.0x and the reclaim cost measured where it lands; plus a corrupt control that pokes header words (entry top = cap - 1, low live) for the P21.7 counterexample. Done (Appendix P21a): forget 0.99 / 0.95x oaw (overlap), RSS and allocations below; reclaim cost in toolnew queued as P21b. |
 | P21b | B/bud_map.pruv, bud_store.pruv: reclaim cost of the lazy forget (Appendix P21a.3) | P: toolnew <= 1.0x oaw at S/M by median and distribution (P21a: 0.93 / 1.08x, overlapping) and the toolgrow cycle <= 1.0x oaw in instructions (P21a: 1.05 / 1.08x), with toolforget, tooldup and memory kept; e.g. fold reclaim_head into entry_alloc. Same gates as P21a. Done (Appendix P21b): toolnew 0.87 / 0.97x oaw (Pruv max below oaw min), toolgrow 0.93 / 0.98x oaw instructions; cause was index load at M (early rehash bound slots/4 -> 3/8) plus the reclaim push/pop and repeated row bases. |
 | P13o | Both checkers/verifiers: `opaque fn` and `reveal F;` (Appendix P13o) | C: positive reveal/congruence/loop-scope cases; negatives for a missing reveal, false facts through the opaque symbol, totality, signature and reveal-target misuse; framework rows equal on both compilers. Unblocks P13a step 2 (Appendix P13a.3), which lands separately. |
 | L-copy-range | Both checkers/verifiers/codegens (Rust and LLVM): built-in statement `copy_range(inout dst, i, src, j, n);` (SPEC §5, R-5-1); first use `copy_bytes` in `bench/l3/budget/m7_test/bud_tx.pruv` | C: a language-visible range copy instead of a loop-shape heuristic. Statement only, `inout dst` and `src` of one type `[i64]` or `[u8]`, `i, j, n: i64`; same-array use is `inout_alias`. Verification: obligations `0 <= i`, `0 <= j`, `0 <= n`, `i + n <= len(dst)`, `j + n <= len(src)` in this order (`index_oob`), then one array-theory update `dst' = fun p. if i <= p < i + n then src[j + p - i] else dst[p]` (length unchanged, content and frame facts hold by construction, no quantified assumption; `[u8]` domain assumed). Rust backend: `copy_from_slice` (byte-identical text from both compilers); LLVM: `llvm.memcpy`. Tests: `tests/spec/r5_1_copy_range_*` (accept and reject, each obligation and each unsound fact separately), `tests/runtime/l3_rt_copy_range*`, `pruvc-rs` unit tests; roots without `copy_range` keep byte-identical generated Rust. |
+| L-inout-field | Both checkers/verifiers/codegens: struct buffer fields as `inout` places (SPEC §6e, §6g "Not supported") | C: language gap found in P13i2 (Appendix P13i2.2): a typed store `struct { words: [i64], text: [u8] }` cannot be changed in place, because buffer fields are read-only views and fields cannot be `inout` places, so P13i2a passes the text arena as a second `inout tx: [u8]` argument beside `st` at every ingress, egress and Grow entry. Allow `inout s.f` for a buffer field `f` of an `inout` struct place (disjoint fields as separate places for `inout_alias`, length and content facts of the other fields kept), with accept and reject spec tests and byte-identical generated Rust on both compilers. Row only; not started. |
 | P14 (deferred) | Both checkers/verifiers: aggregate/field mutation, only if residual profile requires L2 | New C manifest and estimates before activation; alias/frame proof cannot be replaced by Q. |
 | P15 (deferred) | Both codegens/ABI: P14 lowering | C four-pair ownership/ABI probes, then touched P gates; no assumed budget gain. |
 | P16 | Both verifiers: eq_range content/frames or explicit loop lemmas | C proof positives/false equality/frame/empty/alias negatives and solver cost; preserve bounds. |
@@ -6690,10 +6692,11 @@ pass must show the reused region does not overlap an earlier root's blob. (3) Pa
 default" (not "no extension": the first child may create it); pass 2 copies roots only, without re-inserting
 children or charging budget, and keeps child links and earlier roots' flags, scalars and blob words.
 
-## Appendix P13i2: M7 record text as bytes, not done (split)
+## Appendix P13i2: M7 record text as bytes (P13i2 split, built in P13i2a)
 
-Base main 4747c4b. Stopped after the read-and-design step; no source changed, so no gate or performance run applies
-(the generated Rust, gates and cells are those of 4747c4b).
+P13i2 (base main 4747c4b) stopped after the read-and-design step with no source change; P13i2.1-P13i2.4 are that
+step. P13i2a built the design (P13i2a.1-P13i2a.6) on top of its own steps 1 (`#[inline]` attributes, 0bf3e5d) and 2
+(`copy_range`, 3b4add7, row L-copy-range).
 
 ### P13i2.1 Who reads and writes the record text
 
@@ -6739,6 +6742,99 @@ outside row P13i2's files.
 | work | by |
 |---|---|
 | reading, attribution of the text readers, representation decision, this appendix | Claude Opus 5.5, direct (no multi-file sweep was needed past a few greps; no audit, nothing to audit) |
+
+### P13i2a.1 What was built
+
+- `bench/l3/budget/m7_test/bud_tx.pruv` (new, shared by the M7 and M10 roots): the resident WTF-8 arena `tx: [u8]`.
+  Bytes 0..7 hold the used length (little-endian, `used`/`set_used`; `[u8]` has no u64 load, so 8 byte ops); text
+  starts at 8. `put(inout st, inout tx, op, txt, inout out)` is the ingress: it parses the record's text frame
+  (`bud_halt::text_frame`), checks each of the five op spans against `len(txt)` (`soff`), plans store room first so
+  a text Grow never follows a store change, copies `txt` to `used` with `copy_range` and rebases the five handles in
+  the stored blob to absolute arena offsets. `text` is the checked egress view; `grow(inout st, prev, inout next)`
+  compacts (P13i2a.2).
+- `bud_lifecycle.pruv`: strings 1, 2, 3 hold `0` or `2, byteLen, byteOff`; string 5 holds `0`, a two-word JSON text
+  handle, or the halt prefix followed by an optional text handle. Lifecycle bodies move handles only; no lifecycle
+  signature called by bud_map/bud_store changed (`reopen` keeps its signature and calls an `#[inline]` body
+  `reopen_b`, an explicit directive against the R-7-3 count promotion that `bud_halt`'s extra `rewrite` call
+triggered).
+- `bud_halt.pruv`: `halted()` sizes and copies the date handles instead of unit strings and keeps the halt prefix as
+  structured words with the at-text as a handle; `text_frame` returns the five handle positions.
+- `m7_test/{root.pruv, driver_m7.rs, record_text.rs (new), run_m7.py, lifecycle_controls.py, mutant_quiet.py,
+  t5c_floor.py}`, `m10_test/{root_m10.pruv, driver_m10.rs, run_m10.py}`: the host converts UTF-16 to WTF-8 at
+  ingress and back at egress (`record_text.rs`); the Q protocol keeps the old unit layout at egress and still
+  accepts it for raw-state fixtures, so the Q expectations did not change. `hand_m7_u16.rs`/`hand_m10.rs` unchanged.
+
+### P13i2a.2 Compaction bound
+
+`put` returns 4 with the wanted size `want = max(4096, 8 + 4 * (live + need) + walked)` when the text does not fit
+(`live` = live text bytes found by a walk of the records, `need` = incoming bytes, `walked` = walk steps). The host
+allocates `next` of that size and calls `grow`, which copies only the live spans into `next` from offset 8 and
+rewrites their offsets, then retries the put. After a compaction the arena holds `live + need` bytes and has at
+least `3 * (live + need) + walked` free, so the next compaction needs at least `3 * (live + need)` more ingress bytes
+and copies at most `live + need` plus those bytes. Copy work per ingress byte is therefore at most 4/3 (amortized
+O(1)), and the walk is paid once per compaction. Measured with the earlier `2 *` factor (live M7 perf records, 1,000
+overwrites per session): 100 / 500 / 1,000 sessions, 981 / 989 / 991 compactions, copied/written 0.981 / 0.989 /
+0.991 (`work/p13i2/perf_report.md`, "아레나 압축"); the `4 *` factor and the 4096 floor only add room between
+compactions. Garbage (dropped texts) is bounded by the ingress since the last compaction.
+
+### P13i2a.3 Gates
+
+On the 16:52 candidate, rs then py compiler: M7 Q 113/187/0, M10 Q 78/222/0, M10 `cases_halt` 300/0/0, M8 Q 63/237/0,
+M9 Q 26/274/0, M11 213 exact and 87 prefix matches, M9 mutation (clean passes, 10 detected), all on both compilers;
+generated Rust of the five roots byte-identical across the compilers.
+
+`corrupt_resident` (M8 resident corruption) baseline: the runner's default OLD revision is `c4d3a63^` (36f04ae),
+which predates the packed wire; fed the same 387 packed inputs it answers from the old layout (for example
+`a-sk-w0-valid-hit-seq`: OLD `P X 2`, `Z -`, `X 2`, `O 0 0 0` while NEW resumes at `Z 104`), giving `controls 387,
+mismatches 387, poke-not-found 369`. So the run passes `--old-rev a9664a9` (the performance baseline, packed wire):
+387 controls, 0 mismatches, 0 not found, P21a 6/6 on both compilers; `--old-rev a4427ec` gives the same.
+
+### P13i2a.4 Performance (base a9664a9, 5 alternating rounds, medians)
+
+Won 5/5 (proportional, M7): instructions S 132.1 -> 98.5 M, M 520.6 -> 369.2 M (hand16 82.9 / 249.5); process
+time M 20 -> 10 ms; peak RSS S 3,264 -> 2,816, M 5,808 -> 4,624 KiB (hand16 2,592 / 4,560); typed `current` RSS slope
+8.60 -> 3.98 KiB per session (hand16 3.63); allocation calls S 101,839 -> 74,142, M 495,523 -> 355,930. Most M7
+dispatch cells (wire current/attach/ishalted/close/closereopen/reopenmiss, typed close/closereopen) also won.
+
+Gate (main, 2026-11-19): blocking is proportional cost at M (M7 500, M10 d=50) and L (M10 d=100); S cells and
+fixed-share cells above 1.0x are perf-debt rows. The one blocking fix attempt was a per-record text base: it needs
+a wire change (no record word is free in every state) or a frame parse, and its floor (put without parse,
+validation or handle writes, 873 instructions per put) is still above base (811), because base carries the text
+units inside the single verbatim `set_blob` copy while any arena form adds a second destination with a fill-level
+header that Pruv reads and writes as 8 byte operations. No further perf chain. Blocking cells still above base:
+
+| cell | base | P13i2a | pairs <= base | cause |
+|---|---:|---:|---:|---|
+| M10 putback d=50 / d=100 | 26.7 / 26.7 | 34.8 / 35.0 | 0/5 | put 986 vs 811 instructions: `text_frame` parse ~90, five span checks ~41, copy + five rebases + used header ~150, amortized compaction ~15 |
+| M7 typed / wire replace 500 | 149.6 / 139.7 | 161.6 / 154.9 | 0/5 | every timed iteration restores the halted record through `put` (same diff) |
+| M10 halt d=50 / d=100 | 675.2 / 1,057.6 | 701.3 / 1,072.1 | 2/5, 1/5 | halt includes one putback (same diff) |
+
+Perf-debt rows (for the pre-R12 perf-debt package): S M10 putback d=10 (26.5 -> 34.1), M7 typed / wire replace 100
+(138.0 -> 152.2, 129.5 -> 150.8), same put diff; fixed share, no text work on the path: M7 fair `current` 100 / 500
+(9.7 -> 10.3 / 10.9), typed `isHalted` 500 (11.6 -> 11.7), typed and fair `attach` 100 / 500 (+0.1..0.2 ns), code
+layout of the shared dispatch after `bud_halt` joined the M7 root. Full tables and the put-path diff:
+`work/p13i2/perf_report.md` (not committed) and `perf_5round_1652.log`.
+
+### P13i2a.5 Delegations
+
+| work | by |
+|---|---|
+| design, implementation, gates, performance runs, per-record attempt, this appendix | Claude Opus 5.5, direct |
+| copy_range package audit (P13i2a.audit-1) | Codex |
+| `--only runtime` and `--only g8_frontend` runs on both compilers | background command delegation |
+
+### P13i2a.audit-1 copy_range source-range diagnostic
+
+The package audit (Codex, on the step-2 commit 3b4add7 `copy_range`) found no soundness defect: bounds, post-state,
+`[u8]` facts, aliasing, evaluation order, both compilers and the LLVM lowering check out. One should-fix finding:
+under `--no-verify` the single combined range check reported the destination pair `(i, len(dst))` to `pruv_oob` even
+when the source range (`j`, `n` against `len(src)`) was the bad one. Fixed in all four code generators
+(`pruvc/codegen.py`, `pruvc/llvmgen.py`, `pruv-core` `codegen.rs`, `llvmgen.rs`): the check is split into the
+destination check `i < 0 || n < 0 || i > len(dst) - n` reporting `(i, len(dst))`, then the source check
+`j < 0 || j > len(src) - n` reporting `(j, len(src))`; verified code is unchanged (no check). New runtime row
+`tests/runtime/l3_rt_copy_range_nv_oob_src` (bad `j`, expects `index out of bounds: 2 (len 3)`); the row list grows
+by 2 (rust and llvm, `--no-verify`), regenerated with the Rust `--list-rows`. Gates: `--only runtime` and
+`--only g8_frontend` on both compilers (no full run). No confirm audit: the finding is should-fix only.
 
 ## Appendix P13k: `#[cold]` attribute; no bud_map split meets the no-give-back rule
 

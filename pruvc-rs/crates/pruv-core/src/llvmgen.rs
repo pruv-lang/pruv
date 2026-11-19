@@ -3925,19 +3925,20 @@ impl<'a> FnGen<'a> {
                 return Err(format!("{}{}:{}:operand", CPR_DIAG_TAG, e.line, e.col));
             }
             if !self.verified {
-                // one combined check: i < 0 || j < 0 || n < 0 || i > len(dst) - n || j > len(src) - n
+                // P13i2a.audit-1: the destination check (i < 0 || n < 0 || i > len(dst) - n) reports (i, len(dst)),
+                // then the source check (j < 0 || j > len(src) - n) reports (j, len(src))
                 let ta = self.op(format!("sub i64 {}, {}", dv.b, cnt.a))?;
-                let tb = self.op(format!("sub i64 {}, {}", sv.b, cnt.a))?;
                 let c1 = self.op(format!("icmp slt i64 {}, 0", iv.a))?;
-                let c2 = self.op(format!("icmp slt i64 {}, 0", jv.a))?;
                 let c3 = self.op(format!("icmp slt i64 {}, 0", cnt.a))?;
                 let c4 = self.op(format!("icmp sgt i64 {}, {}", iv.a, ta))?;
-                let c5 = self.op(format!("icmp sgt i64 {}, {}", jv.a, tb))?;
-                let o = self.op(format!("or i1 {}, {}", c1, c2))?;
-                let o = self.op(format!("or i1 {}, {}", o, c3))?;
+                let o = self.op(format!("or i1 {}, {}", c1, c3))?;
                 let o = self.op(format!("or i1 {}, {}", o, c4))?;
-                let o = self.op(format!("or i1 {}, {}", o, c5))?;
                 self.guard(&o, Fail::Oob(iv.a.clone(), dv.b.clone()), true)?;
+                let tb = self.op(format!("sub i64 {}, {}", sv.b, cnt.a))?;
+                let c2 = self.op(format!("icmp slt i64 {}, 0", jv.a))?;
+                let c5 = self.op(format!("icmp sgt i64 {}, {}", jv.a, tb))?;
+                let o = self.op(format!("or i1 {}, {}", c2, c5))?;
+                self.guard(&o, Fail::Oob(jv.a.clone(), sv.b.clone()), true)?;
             }
             let tyd = elem_ir(&dv);
             let tys = elem_ir(&sv);

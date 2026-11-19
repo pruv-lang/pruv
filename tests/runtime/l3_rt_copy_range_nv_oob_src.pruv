@@ -1,0 +1,11 @@
+// --no-verify: a source range past the end of src fails the source check, which reports (j, len(src))
+fn put(inout dst: [i64], i: i64, src: [i64], j: i64, n: i64) -> () {
+  copy_range(inout dst, i, src, j, n);
+}
+fn run() -> () ! io, alloc {
+  let mut a: [i64] = alloc(4, 1);
+  let b: [i64] = alloc(3, 1);
+  print(1);
+  put(inout a, 0, b, 2, 2);
+  print(3);
+}

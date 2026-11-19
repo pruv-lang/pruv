@@ -1,4 +1,4 @@
-// --no-verify: an i + n past the end (i near i64 max, so i + n would overflow) fails the combined range check
+// --no-verify: an i + n past the end (i near i64 max, so i + n would overflow) fails the destination range check, which reports (i, len(dst))
 fn put(inout dst: [i64], i: i64, src: [i64], j: i64, n: i64) -> () {
   copy_range(inout dst, i, src, j, n);
 }

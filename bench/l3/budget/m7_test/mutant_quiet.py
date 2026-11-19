@@ -36,7 +36,7 @@ def main():
         gen = tmp / "gen.rs"
         main_rs = tmp / "main.rs"
         main_rs.write_text('#![allow(dead_code, unused_imports, unused_variables, unused_mut)]\n'
-                           'mod gen;\nuse gen as sol;\n' + (budget / "m7_test/driver_m7.rs").read_text())
+                           'mod gen;\nuse gen as sol;\n' + run_m7.driver_source(str(budget / "m7_test")))
         for name, old, new, checks in mutants:
             exe = tmp / name
             if old is not None:

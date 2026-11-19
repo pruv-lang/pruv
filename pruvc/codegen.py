@@ -3130,8 +3130,9 @@ class Gen:
                 if s.verified:
                     return ("%sunsafe { %s.get_unchecked_mut(%s) }.copy_from_slice(unsafe { pruv_cs.get_unchecked(%s) }); }"
                             % (head, name, ri, rj))
-                return ("%sif pruv_i < 0 || pruv_j < 0 || pruv_n < 0 || pruv_i > (%s.len() as i64) - pruv_n "
-                        "|| pruv_j > (pruv_cs.len() as i64) - pruv_n { pruv_oob(pruv_i, %s.len()) } "
+                # P13i2a.audit-1: a bad destination range reports (i, len(dst)), a bad source range (j, len(src))
+                return ("%sif pruv_i < 0 || pruv_n < 0 || pruv_i > (%s.len() as i64) - pruv_n { pruv_oob(pruv_i, %s.len()) } "
+                        "if pruv_j < 0 || pruv_j > (pruv_cs.len() as i64) - pruv_n { pruv_oob(pruv_j, pruv_cs.len()) } "
                         "%s[%s].copy_from_slice(&pruv_cs[%s]); }" % (head, name, name, name, ri, rj))
             if n == "load_be":   # P2 batch 4: big-endian word of a[i..i+nb]; unchecked slice when verified
                 nb = a[2].value

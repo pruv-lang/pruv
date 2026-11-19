@@ -4156,8 +4156,9 @@ impl<'a> Gen<'a> {
                             head, name
                         ));
                     }
+                    // P13i2a.audit-1: a bad destination range reports (i, len(dst)), a bad source range (j, len(src))
                     return Ok(format!(
-                        "{}if pruv_i < 0 || pruv_j < 0 || pruv_n < 0 || pruv_i > ({}.len() as i64) - pruv_n || pruv_j > (pruv_cs.len() as i64) - pruv_n {{ pruv_oob(pruv_i, {}.len()) }} {}[(pruv_i as usize)..((pruv_i + pruv_n) as usize)].copy_from_slice(&pruv_cs[(pruv_j as usize)..((pruv_j + pruv_n) as usize)]); }}",
+                        "{}if pruv_i < 0 || pruv_n < 0 || pruv_i > ({}.len() as i64) - pruv_n {{ pruv_oob(pruv_i, {}.len()) }} if pruv_j < 0 || pruv_j > (pruv_cs.len() as i64) - pruv_n {{ pruv_oob(pruv_j, pruv_cs.len()) }} {}[(pruv_i as usize)..((pruv_i + pruv_n) as usize)].copy_from_slice(&pruv_cs[(pruv_j as usize)..((pruv_j + pruv_n) as usize)]); }}",
                         head, name, name, name
                     ));
                 }
@@ -5181,7 +5182,7 @@ mod tests {
         );
         let s = gen_rust(&p, false, false, 1 << 30).unwrap();
         assert!(
-            s.contains("{ let pruv_i: i64 = i; let pruv_cs = s; let pruv_j: i64 = j; let pruv_n: i64 = n; if pruv_i < 0 || pruv_j < 0 || pruv_n < 0 || pruv_i > (d.len() as i64) - pruv_n || pruv_j > (pruv_cs.len() as i64) - pruv_n { pruv_oob(pruv_i, d.len()) } d[(pruv_i as usize)..((pruv_i + pruv_n) as usize)].copy_from_slice(&pruv_cs[(pruv_j as usize)..((pruv_j + pruv_n) as usize)]); }"),
+            s.contains("{ let pruv_i: i64 = i; let pruv_cs = s; let pruv_j: i64 = j; let pruv_n: i64 = n; if pruv_i < 0 || pruv_n < 0 || pruv_i > (d.len() as i64) - pruv_n { pruv_oob(pruv_i, d.len()) } if pruv_j < 0 || pruv_j > (pruv_cs.len() as i64) - pruv_n { pruv_oob(pruv_j, pruv_cs.len()) } d[(pruv_i as usize)..((pruv_i + pruv_n) as usize)].copy_from_slice(&pruv_cs[(pruv_j as usize)..((pruv_j + pruv_n) as usize)]); }"),
             "{}",
             s
         );
