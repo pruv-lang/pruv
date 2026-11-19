@@ -12,6 +12,7 @@ sol::pruv_raw::PruvStore; `m4` drives the same calls through the local no-poison
 `admit` (P11) builds root_admit.pruv / driver_admit.rs: bud_admit::admit on a clean store and on one corruption per
 check (header, roots, state, owner, key span/padding, blob span, links, free list, slot word, counts), then the clean store
 at larger lengths (visit counts must stay linear: entries == top, free steps == free entries, slots == slot count).
+L3 P13j adds cases 24..26 (root payload kept by grow_copy) and the `maxslot` line (entry base at s = 2^32).
 
 `keys` (P03) builds root_keys.pruv / driver_keys.rs and compares every output line with the gen_keys.py oracle.
 
@@ -445,8 +446,8 @@ def cmd_keys(args):
 
 # Expected admit result per case of root_admit.pruv (14, 19, 20 are valid stores: stale tag, slots left by removal,
 # reused entry under a stale slot), the exact (case, len) rows driver_admit.rs prints, and the slot count per length.
-ADMIT_EXPECT = [10, -1, -2, -3, -4, -5, -5, -5, -6, -7, -8, -9, -10, -10, 10, -10, -4, -8, -7, 7, 8, 74, 266, 70]
-ADMIT_ROWS = [(c, 1024) for c in range(21)] + [(0, 4096), (0, 65536), (21, 65536), (22, 65536), (23, 65536)]
+ADMIT_EXPECT = [10, -1, -2, -3, -4, -5, -5, -5, -6, -7, -8, -9, -10, -10, 10, -10, -4, -8, -7, 7, 8, 74, 266, 70, 7, 7, 7]
+ADMIT_ROWS = [(c, 1024) for c in range(21)] + [(0, 4096), (0, 65536), (21, 65536), (22, 65536), (23, 65536), (24, 1024), (25, 1024), (26, 1024)]
 # Linearity cases 21 and 22 (P12): 2n entries added under root 0, n removed (root_admit.pruv grow). Visits must be
 # top (= live + free) / free entries / slots.
 ADMIT_GROW = {21: 64, 22: 256}
@@ -461,20 +462,41 @@ def cmd_admit(args):
     if c.returncode != 0:
         raise ToolError("driver_admit exit %d: %s" % (c.returncode, tail(c)))
     lines = [l for l in c.stdout.split("\n") if l.strip()]
-    rows = [[int(x) for x in l.split()] for l in lines if not l.startswith("grow ")]
+    rows = [[int(x) for x in l.split()] for l in lines if not l.startswith(("grow ", "maxslot "))]
     grows = [[int(x) for x in l.split()[1:]] for l in lines if l.startswith("grow ")]
+    maxs = [[int(x) for x in l.split()[1:]] for l in lines if l.startswith("maxslot ")]
     bad = []
+    # Entry base at the maximum slot count (L3 P13j): s = 2^32 must not clamp the entry base into the slot table.
+    slot_end = 16 + 2 ** 32
+    if len(maxs) != 1 or len(maxs[0]) != 2:
+        bad.append("maxslot: line missing or malformed (%s)" % maxs)
+    else:
+        a0, a1 = maxs[0]
+        print("admit maxslot entry 0 at %d (slot table ends at %d)" % (a0, slot_end))
+        if a0 != 4294967312 or a1 != 4294967322 or a0 < slot_end:
+            bad.append("maxslot: entry 0 at %d, entry 1 at %d, expected 4294967312 / 4294967322 (>= %d)" % (a0, a1, slot_end))
     # Grow after admission (L3 P13b): a 0 result keeps every live entry; a tree deeper than grow_copy copies fails
     # with 2 (old state kept) instead of dropping entries. Case 0 (entries 9, 10 under entry 3 under root 0) must fail;
     # case 19 (entry 3 and its children removed, flat) must succeed.
     gby = {}
-    for case, g, lp, ln in grows:
+    for case, g, lp, ln, pd in grows:
         gby[case] = g
         if g == 0 and lp != ln:
             bad.append("grow case %d: result 0 but live %d -> %d" % (case, lp, ln))
         if g not in (0, 2):
             bad.append("grow case %d: result %d" % (case, g))
-        print("admit grow case %2d -> %d  (live %d -> %d)" % (case, g, lp, ln))
+        # root payload (blob, v0..v3 of roots 0..2) must survive every successful grow (L3 P13j)
+        if g == 0 and pd != 0:
+            bad.append("grow case %d: result 0 but root payload differs (%d)" % (case, pd))
+        print("admit grow case %2d -> %d  (live %d -> %d, payload diff %d)" % (case, g, lp, ln, pd))
+    # 24: root payloads; 25, 26: an empty root blob with an offset admission leaves free (P13j.5)
+    for gc in (24, 25, 26):
+        if gc not in gby:
+            bad.append("grow case %d: no grow row" % gc)
+        else:
+            gx = [x for x in grows if x[0] == gc][0]
+            if gx[1:] != [0, 7, 7, 0]:
+                bad.append("grow case %d: got result/live/live/pay_diff %s, expected [0, 7, 7, 0]" % (gc, gx[1:]))
     if gby.get(0) != 2 or gby.get(19) != 0:
         bad.append("grow: case 0 -> %s (expected 2), case 19 -> %s (expected 0)" % (gby.get(0), gby.get(19)))
     if [(r[0], r[1]) for r in rows] != ADMIT_ROWS:
