@@ -3339,6 +3339,7 @@
 {"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "s5_proof", "mode": "trust-callers", "sample": "tests/s5/proof/unbounded.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "s5_proof", "mode": "trust-callers", "sample": "tests/s5/proof/zero.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "check_generated", "mode": "trace", "sample": "tests/check_generated.py"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "codegen_boundaries", "mode": "codegen", "sample": "tests/check_codegen_boundaries.py"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_frontend", "mode": "default", "sample": "tests/g10_async/frontend/async_only.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_frontend", "mode": "default", "sample": "tests/g10_async/frontend/both_branch.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g10_async_frontend", "mode": "default", "sample": "tests/g10_async/frontend/catalog_updates.pruv"}
