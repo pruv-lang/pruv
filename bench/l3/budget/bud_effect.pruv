@@ -1,0 +1,33 @@
+// Ordered, variable-length effect records: code, payload length, delay, effective, payload.
+// The last record (code 0) carries the V result, status, and Grow target.
+pub fn push(take effects: Vec<i64>, code: i64, data: [i64], delay: i64, effective: i64) -> Vec<i64> ! alloc
+{
+  let n: i64 = len(data);
+  if n > 1099511627772 || len(effects) > 1099511627772 - n { return move effects; }
+  let mut out: Vec<i64> = vec_push::<i64>(move effects, code);
+  out = vec_push::<i64>(move out, n);
+  out = vec_push::<i64>(move out, delay);
+  out = vec_push::<i64>(move out, effective);
+  let mut p: i64 = 0;
+  while p < n
+    invariant 0 <= p && p <= n && n == len(data) && len(out) <= 1099511627776 - n + p
+    decreases n - p
+  {
+    out = vec_push::<i64>(move out, crate::bud_vwords::rd(data, p));
+    p = p + 1;
+  }
+  return move out;
+}
+
+pub fn value(take effects: Vec<i64>, code: i64, data: [i64]) -> Vec<i64> ! alloc
+{ return push(move effects, code, data, 0, 0); }
+
+pub fn mark(take effects: Vec<i64>, code: i64) -> Vec<i64> ! alloc
+{ return value(move effects, code, crate::bud_vwords::empty()); }
+
+pub fn reply(status: i64, session_grow: bool, result: [i64], take effects: Vec<i64>) -> Vec<i64> ! alloc
+{
+  let mut grow: i64 = 0;
+  if session_grow { grow = 1; }
+  return push(move effects, 0, result, status, grow);
+}

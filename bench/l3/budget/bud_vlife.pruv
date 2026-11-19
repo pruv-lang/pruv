@@ -1,0 +1,533 @@
+// V-word adapter for OPEN, charge, the run clock, FIRE and halt. The clock and charge
+// views are the existing bud_clock / bud_charge ABIs. Only edited properties go back to V.
+trusted rust fn unit(fxn: i64) -> Vec<i64> ! alloc, io
+  ensures true
+  = "::m12_facts::unit";
+
+trusted rust fn uuid(fxn: i64) -> Vec<i64> ! alloc, io
+  ensures true
+  = "::m12_facts::uuid";
+
+trusted rust fn running_ids(rf: [i64], fxn: i64) -> Vec<i64> ! alloc, io
+  ensures true
+  = "::m12_facts::running_ids";
+
+trusted rust fn running_ids_words() -> i64 ! io
+  ensures true
+  = "::m12_facts::running_ids_words";
+
+trusted rust fn observing() -> bool ! io
+  ensures true
+  = "::m12_facts::observing";
+
+trusted rust fn observe_find(offset: i64, budget: [i64]) -> () ! io
+  ensures true
+  = "::m12_facts::observe_find";
+
+pub fn array(v: Vec<i64>) -> [i64] ! alloc
+{
+  let n: i64 = len(v);
+  if n > 1099511627776 { return crate::bud_vwords::empty(); }
+  let mut out: [i64] = alloc(n, 0);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(v) && n <= 1099511627776
+    decreases n - i
+  {
+    crate::bud_vwords::wr(inout out, i, vec_get::<i64>(v, i));
+    i = i + 1;
+  }
+  return out;
+}
+
+fn rd(a: [i64], p: i64) -> i64 { return crate::bud_vwords::rd(a, p); }
+
+fn get(a: [i64], p: i64, k: str) -> i64 { return crate::bud_vwords::get(a, p, k); }
+
+fn part(a: [i64], p: i64) -> [i64] ! alloc { return crate::bud_vwords::part(a, p); }
+
+fn cat(a: [i64], b: [i64]) -> [i64] ! alloc { return crate::bud_vwords::cat(a, b); }
+
+fn num(a: [i64], p: i64) -> i64
+  ensures -9007199254740991 <= result && result <= 9007199254740991
+{
+  if p < 0 || p > len(a) - 2 || rd(a, p) != 5 { return 0; }
+  let x: i64 = rd(a, p + 1);
+  if x < -9007199254740991 || x > 9007199254740991 { return 0; }
+  return x;
+}
+
+fn number(n: i64) -> [i64] ! alloc { return crate::bud_vwords::pair(5, n); }
+
+fn numeric(k: str, n: i64) -> [i64] ! alloc { return crate::bud_vwords::field(k, number(n)); }
+
+fn named(i: i64) -> str ! alloc
+{
+  if i == 0 { return "time"; }
+  if i == 1 { return "delegations"; }
+  if i == 2 { return "commands"; }
+  if i == 3 { return "reviews"; }
+  if i == 4 { return "checks"; }
+  if i == 5 { return "retries"; }
+  if i == 6 { return "tools"; }
+  return "failures";
+}
+
+fn is_text(a: [i64], p: i64, s: str) -> bool ! alloc
+{ return crate::ent_u16::eq(part(a, p), crate::bud_vwords::text(s)); }
+
+fn reason_code(a: [i64], p: i64) -> i64 ! alloc
+{
+  let mut i: i64 = 0;
+  while i <= 4
+    invariant 0 <= i && i <= 5
+    decreases 5 - i
+  {
+    if is_text(a, p, named(i)) { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn state(a: [i64]) -> i64 ! alloc
+{
+  let p: i64 = get(a, 0, "state");
+  if is_text(a, p, "open") { return 0; }
+  if is_text(a, p, "halted") { return 1; }
+  return 2;
+}
+
+fn budget(st: [i64], e: i64) -> [i64] ! alloc
+{
+  if e < 0 { return crate::bud_vwords::empty(); }
+  let at: i64 = crate::bud_map::blob_off(st, e);
+  return crate::ent_u16::slice(st, at, at + crate::bud_map::blob_len(st, e));
+}
+
+pub fn ref_value(sid: [i64], bid: [i64], budget_first: bool) -> [i64] ! alloc
+{
+  let s: [i64] = crate::bud_vwords::field("sessionId", crate::bud_vwords::unpack(sid));
+  let b: [i64] = crate::bud_vwords::field("budgetId", crate::bud_vwords::unpack(bid));
+  if budget_first { return crate::bud_vwords::object(2, cat(b, s)); }
+  return crate::bud_vwords::object(2, cat(s, b));
+}
+
+fn current(a: [i64], bid: [i64]) -> bool ! alloc
+{
+  return len(bid) > 0 && crate::ent_u16::eq(bid, crate::bud_vwords::packed(a, get(a, 0, "id")));
+}
+
+fn tick(take effects: Vec<i64>, now: i64) -> Vec<i64> ! alloc
+{ return crate::bud_effect::value(move effects, 2, number(now)); }
+
+// Empty result and no effects mark a Grow before any logical store changes.
+fn grow(status: i64, sessions: bool) -> Vec<i64> ! alloc
+{ return crate::bud_effect::reply(status, sessions, crate::bud_vwords::empty(), vec_new::<i64>()); }
+
+fn reserve_budget(inout st: [i64], e: i64, words: i64) -> i64
+{
+  let size: i64 = crate::bud_store::c32(words);
+  if crate::bud_map::blob_fits(st, e, size) { return 0; }
+  let need: i64 = crate::bud_map::make_room(inout st, 0, size);
+  return 0 - crate::bud_store::c40(need);
+}
+
+fn halt_words(a: [i64]) -> i64 ! io
+{
+  // Up to four V words per packed reply word. The fixed slack covers both
+  // clock updates and the halt/state fields, including extended ISO dates.
+  return crate::bud_store::c32(len(a)) + 256 + 4 * crate::bud_store::c40(running_ids_words());
+}
+
+fn attach(inout st: [i64], inout clocks: [i64], sid: [i64], arg: [i64], now: i64) -> Vec<i64> ! alloc, io
+{
+  let e: i64 = crate::bud_auto::session_entry(st, sid);
+  let old_budget: [i64] = budget(st, e);
+  let stale: [i64] = crate::bud_vwords::packed(old_budget, get(old_budget, 0, "id"));
+  let mut effects: Vec<i64> = vec_new::<i64>();
+  if e < 0 { return crate::bud_effect::reply(2, false, crate::ent_u16::one(1), move effects); }
+  if len(old_budget) > 0 && !is_text(old_budget, get(old_budget, 0, "state"), "closed") {
+    return crate::bud_effect::reply(0, false, ref_value(sid, stale, false), move effects);
+  }
+  // Emit the clear at its original position, but defer the deletion until
+  // the replacement budget fits and the session write has succeeded.
+  let mut ce: i64 = -1;
+  if len(stale) > 0 { ce = crate::bud_clock::clock_of(clocks, stale, 1, rd(stale, 0)); }
+  effects = crate::bud_cleanup::clear_effect(clocks, ce, move effects);
+  let u: [i64] = array(unit(len(effects)));
+  effects = crate::bud_effect::value(move effects, 5, u);
+  let s: i64 = get(arg, 0, "size");
+  let mut unlimited: bool = is_text(arg, s, "unlimited");
+  let mut times: i64 = 1;
+  if s < 0 || rd(arg, s) == 1 || rd(arg, s) == 2 {
+    unlimited = crate::bud_card::truthy(u, get(u, 0, "defaultUnlimited"));
+  } else if !unlimited {
+    times = num(arg, s);
+    if times != 1 && times != 2 && times != 4 && times != 8 {
+      return crate::bud_effect::reply(2, false, crate::ent_u16::one(1), move effects);
+    }
+  }
+  let bid: [i64] = array(uuid(len(effects)));
+  effects = crate::bud_effect::value(move effects, 6, crate::bud_vwords::unpack(bid));
+  effects = tick(move effects, now);
+
+  if crate::ent_u16::eq(stale, bid) || crate::bud_clock::clock_of(clocks, bid, 1, rd(bid, 0)) >= 0 {
+    return crate::bud_effect::reply(2, false, crate::ent_u16::one(1), move effects);
+  }
+  let minutes: i64 = num(u, get(u, 0, "timeMinutes")) * times;
+  if minutes < -9007199254740991 || minutes > 9007199254740991 {
+    return crate::bud_effect::reply(5, false, crate::ent_u16::one(1), move effects);
+  }
+  let mut limits: [i64] = numeric("timeMinutes", minutes);
+  let mut used: [i64] = numeric("activeMs", 0);
+  let mut i: i64 = 1;
+  while i <= 4
+    invariant 1 <= i && i <= 5
+    decreases 5 - i
+  {
+    let k: str = named(i);
+    let limit: i64 = num(u, get(u, 0, k)) * times;
+    if limit < -9007199254740991 || limit > 9007199254740991 {
+      return crate::bud_effect::reply(5, false, crate::ent_u16::one(1), move effects);
+    }
+    limits = cat(limits, numeric(k, limit));
+    used = cat(used, numeric(k, 0));
+    i = i + 1;
+  }
+  used = cat(used, numeric("tools", 0));
+  used = cat(used, numeric("failures", 0));
+  used = cat(used, numeric("retries", 0));
+  let mut body: [i64] = crate::bud_vwords::field("id", crate::bud_vwords::unpack(bid));
+  body = cat(body, crate::bud_vwords::field("openedAt", crate::bud_vwords::iso(now)));
+  body = cat(body, crate::bud_vwords::field("origin", part(arg, get(arg, 0, "origin"))));
+  body = cat(body, crate::bud_vwords::field("state", crate::bud_vwords::text("open")));
+  body = cat(body, crate::bud_vwords::field("limits", crate::bud_vwords::object(5, limits)));
+  let mut fields: i64 = 6;
+  if unlimited {
+    body = cat(body, crate::bud_vwords::field("unlimited", crate::ent_u16::one(4)));
+    fields = 7;
+  }
+  body = cat(body, crate::bud_vwords::field("used", crate::bud_vwords::object(8, used)));
+  let status: i64 = crate::bud_vwords::write(inout st, e, crate::bud_vwords::object(fields, body));
+  if status < 0 { return grow(status, true); }
+  if status == 0 { crate::bud_map::remove(inout clocks, ce); }
+  effects = crate::bud_effect::mark(move effects, 4);
+  return crate::bud_effect::reply(status, true, ref_value(sid, bid, false), move effects);
+}
+
+fn no_active_since(a: [i64]) -> [i64] ! alloc
+{
+  let mut p: crate::bud_auto::Pair = crate::bud_auto::find_pair(a, 0, "activeSince");
+  if p.k < 0 { return crate::ent_u16::slice(a, 0, len(a)); }
+  let mut out: [i64] = cat(crate::ent_u16::slice(a, 0, p.k), crate::ent_u16::slice(a, p.end, len(a)));
+  let mut left: i64 = crate::bud_store::c40(p.n) - 1;
+  let count: i64 = crate::bud_store::c40(rd(a, 1));
+  crate::bud_vwords::wr(inout out, 1, count - 1);
+  while left > 0
+    decreases left
+  {
+    p = crate::bud_auto::find_pair(out, 0, "activeSince");
+    let remaining: i64 = crate::bud_store::c40(rd(out, 1));
+    out = cat(crate::ent_u16::slice(out, 0, p.k), crate::ent_u16::slice(out, p.end, len(out)));
+    left = left - 1;
+    crate::bud_vwords::wr(inout out, 1, remaining - 1);
+  }
+  return out;
+}
+
+fn clock_view(a: [i64], found: bool) -> [i64] ! alloc
+{
+  let mut bv: [i64] = alloc(7, 0);
+  if !found { return bv; }
+  bv[0] = 1;
+  bv[1] = state(a);
+  if crate::bud_card::truthy(a, get(a, 0, "unlimited")) { bv[2] = 1; }
+  bv[3] = num(a, get(a, get(a, 0, "limits"), "timeMinutes"));
+  bv[4] = num(a, get(a, get(a, 0, "used"), "activeMs"));
+  if get(a, 0, "activeSince") >= 0 { bv[5] = 1; }
+  return bv;
+}
+
+fn clock_budget(a: [i64], bv: [i64], settled: bool) -> [i64] ! alloc
+{
+  let mut out: [i64] = crate::ent_u16::slice(a, 0, len(a));
+  if settled {
+    out = no_active_since(out);
+    let used: [i64] = part(out, get(out, 0, "used"));
+    out = crate::bud_vwords::put(out, "used", crate::bud_vwords::put(used, "activeMs", number(rd(bv, 4))));
+  }
+  if rd(bv, 5) == 2 {
+    out = crate::bud_vwords::put(out, "activeSince", crate::bud_vwords::iso(rd(bv, 6)));
+  }
+  return out;
+}
+
+fn halt(inout st: [i64], inout clocks: [i64], rf: [i64], sid: [i64], bid: [i64], a: [i64], reason: i64, now: i64, result: [i64], reserved: bool, take incoming: Vec<i64>) -> Vec<i64> ! alloc, io
+{
+  let owner: [i64] = crate::bud_vwords::unpack(sid);
+  if reserved && observing() { observe_find(len(incoming), a); }
+  let mut effects: Vec<i64> = crate::bud_effect::value(move incoming, 1, owner);
+  if reserved && observing() { observe_find(len(effects), a); }
+  effects = crate::bud_effect::value(move effects, 1, owner);
+  let e: i64 = crate::bud_auto::session_entry(st, sid);
+  if e < 0 || !current(a, bid) || state(a) != 0 {
+    return crate::bud_effect::reply(0, false, result, move effects);
+  }
+  if !reserved {
+    let words: i64 = halt_words(a);
+    let plan: i64 = reserve_budget(inout st, e, words);
+    if plan < 0 { return grow(plan, true); }
+  }
+  let ce: i64 = crate::bud_clock::clock_of(clocks, bid, 1, rd(bid, 0));
+  let settled: bool = crate::bud_store::ef(clocks, ce, 14) == 1 && crate::bud_cleanup::owner_matches(clocks, ce, sid);
+  let mut bv: [i64] = clock_view(a, true);
+  let mut fx: [i64] = alloc(8, 0);
+  let added: i64 = crate::bud_clock::settle_at(inout clocks, ce, sid, 1, rd(sid, 0), now, inout bv, inout fx);
+  if rd(fx, 1) == 13 { effects = crate::bud_effect::value(move effects, 13, bid); }
+  if settled { effects = tick(move effects, now); }
+
+  // The host returns count followed by the framed packed delegation IDs, preserving duplicates.
+  let ids: [i64] = array(running_ids(rf, len(effects)));
+  let n: i64 = crate::bud_store::c32(rd(ids, 0));
+  if n > len(ids) { return crate::bud_effect::reply(2, false, result, move effects); }
+  let mut p: i64 = 1;
+  // Each packed word holds at most four units. The V list also needs a
+  // string tag per ID and its array header. Write the list in one pass.
+  if len(ids) > 274877906943 { return crate::bud_effect::reply(2, false, result, move effects); }
+  let mut list_words: [i64] = alloc(2 + 4 * len(ids), 0);
+  crate::bud_vwords::wr(inout list_words, 0, 8);
+  crate::bud_vwords::wr(inout list_words, 1, n);
+  let mut used_words: i64 = 2;
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && n <= 4294967296 && 1 <= p && 0 <= used_words && used_words <= 1099511627776
+    decreases n - j
+  {
+    let end: i64 = crate::bud_keys::rec_end(ids, p);
+    if end < p || used_words > 4294967296 { return crate::bud_effect::reply(2, false, result, move effects); }
+    let id: [i64] = crate::bud_vwords::unpack(crate::ent_u16::slice(ids, p, end));
+    used_words = crate::ent_u16::put_all(inout list_words, used_words, id);
+    p = end;
+    j = j + 1;
+  }
+  let list: [i64] = crate::ent_u16::slice(list_words, 0, used_words);
+  effects = crate::bud_effect::value(move effects, 7, cat(crate::bud_vwords::pair(8, 2), cat(rf, list)));
+
+  let mut b: [i64] = clock_budget(a, bv, settled);
+  b = crate::bud_vwords::put(b, "state", crate::bud_vwords::text("halted"));
+  effects = tick(move effects, now);
+  let mut h: [i64] = crate::bud_vwords::field("reason", crate::bud_vwords::text(named(reason)));
+  h = cat(h, crate::bud_vwords::field("at", crate::bud_vwords::iso(now)));
+  h = cat(h, crate::bud_vwords::field("stoppedDelegationIds", list));
+  b = crate::bud_vwords::put(b, "halt", crate::bud_vwords::object(3, h));
+
+  let status: i64 = crate::bud_vwords::write_reserved(inout st, e, b);
+  effects = crate::bud_effect::value(move effects, 8, owner);
+  effects = crate::bud_effect::value(move effects, 9, owner);
+  p = 1;
+  j = 0;
+  while j < n
+    invariant 0 <= j && j <= n && n <= 4294967296 && 1 <= p
+    decreases n - j
+  {
+    let end: i64 = crate::bud_keys::rec_end(ids, p);
+    if end < p { return crate::bud_effect::reply(2, false, result, move effects); }
+    let id: [i64] = crate::bud_vwords::unpack(crate::ent_u16::slice(ids, p, end));
+    effects = crate::bud_effect::value(move effects, 10, cat(crate::bud_vwords::pair(8, 2), cat(owner, id)));
+    p = end;
+    j = j + 1;
+  }
+  effects = crate::bud_effect::value(move effects, 11, rf);
+  effects = crate::bud_effect::value(move effects, 15, cat(crate::bud_vwords::pair(8, 2), cat(owner, crate::bud_vwords::unpack(bid))));
+  effects = crate::bud_effect::value(move effects, 3, owner);
+  effects = crate::bud_effect::mark(move effects, 4);
+  effects = crate::bud_effect::value(move effects, 16, owner);
+  return crate::bud_effect::reply(status, true, result, move effects);
+}
+
+fn charged(ok: bool, reason: i64) -> [i64] ! alloc
+{
+  if ok { return crate::bud_vwords::object(1, crate::bud_vwords::field("ok", crate::ent_u16::one(4))); }
+  let body: [i64] = crate::bud_vwords::field("ok", crate::ent_u16::one(3));
+  return crate::bud_vwords::object(2, cat(body, crate::bud_vwords::field("reason", crate::bud_vwords::text(named(reason)))));
+}
+
+fn charge(inout st: [i64], inout clocks: [i64], rf: [i64], sid: [i64], bid: [i64], what: [i64], now: i64) -> Vec<i64> ! alloc, io
+{
+  let e: i64 = crate::bud_auto::session_entry(st, sid);
+  let a: [i64] = budget(st, e);
+  let effects: Vec<i64> = crate::bud_effect::value(vec_new::<i64>(), 1, part(rf, get(rf, 0, "sessionId")));
+  if !current(a, bid) { return crate::bud_effect::reply(0, false, charged(true, 0), move effects); }
+  let mut cv: [i64] = alloc(15, 0);
+  cv[0] = 1;
+  cv[1] = state(a);
+  if crate::bud_card::truthy(a, get(a, 0, "unlimited")) { cv[2] = 1; }
+  cv[3] = reason_code(a, get(a, get(a, 0, "halt"), "reason"));
+  let limits: i64 = get(a, 0, "limits");
+  let used: i64 = get(a, 0, "used");
+  let mut amounts: [i64] = alloc(10, 0);
+  let mut i: i64 = 0;
+  while i < 5
+    invariant 0 <= i && i <= 5 && len(cv) == 15 && len(amounts) == 10
+    decreases 5 - i
+  {
+    let k: str = named(i + 1);
+    let p: i64 = get(what, 0, k);
+    if rd(what, p) == 5 {
+      amounts[2 * i] = 2;
+      amounts[2 * i + 1] = num(what, p);
+    }
+    if i < 4 {
+      cv[4 + i] = num(a, get(a, limits, k));
+      cv[8 + i] = num(a, get(a, used, k));
+    } else { cv[14] = num(a, get(a, used, k)); }
+    i = i + 1;
+  }
+  let status: i64 = crate::bud_charge::charge(inout cv, amounts, 0);
+  if status >= 33 && status <= 36 {
+    return halt(inout st, inout clocks, rf, sid, bid, a, status - 32, now, charged(false, status - 32), false, move effects);
+  }
+  if status >= 16 && status <= 20 { return crate::bud_effect::reply(0, false, charged(false, status - 16), move effects); }
+  if status == 1 { return crate::bud_effect::reply(0, false, charged(true, 0), move effects); }
+  if status != 0 { return crate::bud_effect::reply(status, false, charged(false, 1), move effects); }
+
+  let mut updated: [i64] = part(a, used);
+  i = 0;
+  while i < 4
+    invariant 0 <= i && i <= 4
+    decreases 4 - i
+  {
+    updated = crate::bud_vwords::put(updated, named(i + 1), number(rd(cv, 8 + i)));
+    i = i + 1;
+  }
+  updated = crate::bud_vwords::put(updated, "retries", number(rd(cv, 14)));
+  let saved: i64 = crate::bud_vwords::write(inout st, e, crate::bud_vwords::put(a, "used", updated));
+  if saved < 0 { return grow(saved, true); }
+  return crate::bud_effect::reply(saved, true, charged(true, 0), move effects);
+}
+
+// Return the clock's timer effects at their source positions. Since transitions tell the
+// adapter where the clock read now, including a zero-duration settlement.
+fn clock_call(inout st: [i64], inout clocks: [i64], op: i64, rf: [i64], sid: [i64], bid: [i64], arg: [i64], now: i64) -> Vec<i64> ! alloc, io
+{
+  let result: [i64] = crate::ent_u16::one(1);
+  let mut effects: Vec<i64> = vec_new::<i64>();
+  let bn: i64 = rd(bid, 0);
+  let sn: i64 = rd(sid, 0);
+  let ce: i64 = crate::bud_clock::clock_of(clocks, bid, 1, bn);
+  let rk: [i64] = crate::bud_vwords::packed(arg, get(arg, 0, "run"));
+  let rn: i64 = rd(rk, 0);
+  let waiting: bool = crate::bud_card::truthy(arg, get(arg, 0, "waiting"));
+  if op == 5 || op == 6 {
+    let re: i64 = crate::bud_map::find_w(clocks, ce, rk, 1, rn);
+    if ce < 0 || re < 0 || (op == 5 && (crate::bud_store::ef(clocks, re, 14) == 1) == waiting) {
+      return crate::bud_effect::reply(0, false, result, move effects);
+    }
+  }
+
+  let id: [i64] = part(rf, get(rf, 0, "sessionId"));
+  effects = crate::bud_effect::value(move effects, 1, id);
+  let e: i64 = crate::bud_auto::session_entry(st, sid);
+  let a: [i64] = budget(st, e);
+  let found: bool = current(a, bid);
+  if op == 4 {
+    if !found { return crate::bud_effect::reply(0, false, result, move effects); }
+    if len(rk) == 0 { return crate::bud_effect::reply(2, false, result, move effects); }
+    effects = crate::bud_effect::value(move effects, 1, id);
+  }
+  let was_consuming: bool = crate::bud_store::ef(clocks, ce, 14) == 1;
+  let owned: bool = crate::bud_cleanup::owner_matches(clocks, ce, sid);
+  let mut bv: [i64] = clock_view(a, found);
+  let eligible: bool = found && rd(bv, 1) == 0 && rd(bv, 2) != 1;
+  if found && (eligible || op != 7) {
+    // A normal transition can append activeSince (up to 41 words) and the
+    // numeric activeMs property with its containing field (16 words).
+    let mut words: i64 = crate::bud_store::c32(len(a)) + 64;
+    let minutes: i64 = rd(bv, 3);
+    let mut may_halt: bool = op == 7 || minutes < -150000000000000;
+    if -150000000000000 <= minutes && minutes <= 150000000000000 {
+      may_halt = may_halt || rd(bv, 4) >= minutes * 60000;
+    }
+    // FIRE can halt after settlement. Refresh can halt only at BEGIN,
+    // when ARM sees the already-used time meet or exceed the limit.
+    if eligible && (op == 7 || !was_consuming) && may_halt { words = halt_words(a); }
+    let plan: i64 = reserve_budget(inout st, e, words);
+    if plan < 0 { return grow(plan, true); }
+  }
+  let mut fx: [i64] = alloc(8, 0);
+  let mut status: i64 = 0;
+  if op == 4 {
+    // run_started plans its clock/run entries and packed words before
+    // changing the clock store. Other clock operations need no new space.
+    status = crate::bud_clock::run_started(inout clocks, bid, 1, bn, sid, 1, sn, rk, 1, rn, now, inout bv, inout fx);
+  } else if op == 5 {
+    status = crate::bud_clock::run_waiting(inout clocks, bid, 1, bn, sid, 1, sn, rk, 1, rn, waiting, now, inout bv, inout fx);
+  } else if op == 6 {
+    status = crate::bud_clock::run_ended(inout clocks, bid, 1, bn, sid, 1, sn, rk, 1, rn, now, inout bv, inout fx);
+  } else {
+    status = crate::bud_clock::fire_at(inout clocks, ce, sid, 1, sn, now, inout bv, inout fx);
+  }
+  if status < 0 { return grow(status, false); }
+  if status != 0 && status != 4 { return crate::bud_effect::reply(status, false, result, move effects); }
+
+  let mut at: i64 = 1;
+  let first: i64 = rd(fx, at);
+  if first == 13 || first == 14 {
+    effects = crate::bud_effect::value(move effects, first, bid);
+    at = 2;
+  }
+  let consuming: bool = crate::bud_store::ef(clocks, crate::bud_clock::clock_of(clocks, bid, 1, bn), 14) == 1;
+  let mut settled: bool = was_consuming && owned && (!consuming || op == 7) && found;
+  if op == 7 { settled = settled && eligible; }
+  if settled { effects = tick(move effects, now); }
+  if rd(bv, 5) == 2 { effects = tick(move effects, now); }
+  if op != 7 && status == 4 {
+    // ARM found no time left: BEGIN, synchronous FIRE/CURRENT, then SETTLE.
+    effects = tick(move effects, now);
+    if observing() {
+      let started: [i64] = crate::bud_vwords::put(a, "activeSince", crate::bud_vwords::iso(now));
+      observe_find(len(effects), started);
+    }
+    effects = crate::bud_effect::value(move effects, 1, id);
+    effects = tick(move effects, now);
+    settled = true;
+  }
+
+  if rd(fx, at) == 12 {
+    // The scheduler keeps the two packed keys and the original field order.
+    let mut budget_first: i64 = 0;
+    if get(rf, 0, "budgetId") < get(rf, 0, "sessionId") { budget_first = 1; }
+    let capture: [i64] = cat(bid, crate::ent_u16::one(budget_first));
+    effects = crate::bud_effect::push(move effects, 12, capture, rd(fx, at + 1), rd(fx, at + 2));
+  }
+  if status == 4 {
+    return halt(inout st, inout clocks, rf, sid, bid, clock_budget(a, bv, settled), 0, now, result, true, move effects);
+  }
+  if settled || rd(bv, 5) == 2 {
+    status = crate::bud_vwords::write_reserved(inout st, e, clock_budget(a, bv, settled));
+  }
+  return crate::bud_effect::reply(status, true, result, move effects);
+}
+
+pub fn call(inout st: [i64], inout clocks: [i64], op: i64, rf: [i64], sid: [i64], arg: [i64], now: i64) -> Vec<i64> ! alloc, io
+{
+  if op < 1 || op > 10 {
+    return crate::bud_effect::reply(2, false, crate::ent_u16::one(1), vec_new::<i64>());
+  }
+  if op == 1 { return crate::bud_cleanup::boot_restore(inout st, inout clocks, sid); }
+  if op == 2 { return crate::bud_cleanup::forget_session(inout clocks, sid); }
+  if op == 3 { return crate::bud_cleanup::dispose(inout clocks); }
+  if op == 8 { return attach(inout st, inout clocks, sid, arg, now); }
+  let bid: [i64] = crate::bud_vwords::packed(rf, get(rf, 0, "budgetId"));
+  if op == 9 { return charge(inout st, inout clocks, rf, sid, bid, arg, now); }
+  if op == 10 {
+    let e: i64 = crate::bud_auto::session_entry(st, sid);
+    let a: [i64] = budget(st, e);
+    let reason: i64 = reason_code(arg, 0);
+    if reason < 0 {
+      return crate::bud_effect::reply(2, false, crate::ent_u16::one(1), vec_new::<i64>());
+    }
+    return halt(inout st, inout clocks, rf, sid, bid, a, reason, now, crate::ent_u16::one(1), false, vec_new::<i64>());
+  }
+  return clock_call(inout st, inout clocks, op, rf, sid, bid, arg, now);
+}

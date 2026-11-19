@@ -1,0 +1,128 @@
+// §4.9 cleanup of one instance. Session budgets are shared, clocks and toolSeen are instance-local.
+fn clock_key(st: [i64], e: i64) -> [i64] ! alloc
+{
+  let n: i64 = crate::bud_map::key_len(st, e);
+  if n < 0 || n > 1073741824 { return crate::bud_vwords::empty(); }
+  let mut out: [i64] = alloc(1 + crate::bud_keys::words(n), 0);
+  crate::bud_vwords::wr(inout out, 0, n);
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && n <= 1073741824
+    decreases n - j
+  {
+    let word: i64 = j / 4 + 1;
+    let unit: i64 = crate::bud_map::key_unit(st, e, j);
+    let packed: i64 = bor(crate::bud_vwords::rd(out, word), wrapping_shl(band(unit, 65535), 48 - 16 * (j % 4)));
+    crate::bud_vwords::wr(inout out, word, packed);
+    j = j + 1;
+  }
+  return out;
+}
+
+pub fn clear_effect(st: [i64], e: i64, take effects: Vec<i64>) -> Vec<i64> ! alloc
+{
+  if crate::bud_store::ef(st, e, 16) != 1 { return move effects; }
+  return crate::bud_effect::value(move effects, 13, clock_key(st, e));
+}
+
+pub fn drop_clock(inout clocks: [i64], bid: [i64], take effects: Vec<i64>) -> Vec<i64> ! alloc
+{
+  if len(bid) == 0 { return move effects; }
+  let e: i64 = crate::bud_clock::clock_of(clocks, bid, 1, crate::bud_vwords::rd(bid, 0));
+  let out: Vec<i64> = clear_effect(clocks, e, move effects);
+  crate::bud_map::remove(inout clocks, e);
+  return move out;
+}
+
+pub fn boot_restore(inout sessions: [i64], inout clocks: [i64], sid: [i64]) -> Vec<i64> ! alloc
+{
+  let e: i64 = crate::bud_auto::session_entry(sessions, sid);
+  let mut effects: Vec<i64> = vec_new::<i64>();
+  let mut status: i64 = 0;
+  if e >= 0 && crate::bud_map::blob_len(sessions, e) > 0 {
+    let o: i64 = crate::bud_map::blob_off(sessions, e);
+    let bid: [i64] = crate::bud_vwords::packed(sessions, crate::bud_card::obj_get(sessions, o, "id"));
+    let mut p: crate::bud_auto::Pair = crate::bud_auto::find_pair(sessions, o, "activeSince");
+    effects = drop_clock(inout clocks, bid, move effects);
+    let mut left: i64 = p.n;
+    while status == 0 && left > 0 && p.k >= o && p.end >= p.k
+      decreases left
+    {
+      let empty: [i64] = crate::bud_vwords::empty();
+      let count: i64 = crate::bud_store::c32(crate::bud_vwords::rd(sessions, o + 1));
+      status = crate::bud_map::splice_blob(inout sessions, e, p.k - o, p.end - o, empty, 0, 0);
+      if status == 0 { crate::bud_vwords::wr(inout sessions, o + 1, count - 1); }
+      left = left - 1;
+      if left > 0 { p = crate::bud_auto::find_pair(sessions, o, "activeSince"); }
+    }
+  }
+  return crate::bud_effect::reply(status, false, crate::ent_u16::one(1), move effects);
+}
+
+pub fn owner_matches(st: [i64], e: i64, sid: [i64]) -> bool
+{
+  let size: i64 = len(sid);
+  if size == 0 || size > 268435457 { return false; }
+  let n: i64 = sid[0];
+  if n < 0 || n > 1073741824 || size != 1 + crate::bud_keys::words(n) { return false; }
+  let x: i64 = crate::bud_store::xb(st, e);
+  if x < 16 || x + 3 > len(st) || st[x + 2] != size { return false; }
+  let off: i64 = st[x + 1];
+  if off < 16 || off > len(st) - size || st[off] != n { return false; }
+  if size == 1 { return true; }
+  if st[off + 1] != sid[1] { return false; }
+  return eq_range(st, off + 2, sid, 2, size - 2);
+}
+
+pub fn forget_session(inout clocks: [i64], sid: [i64]) -> Vec<i64> ! alloc
+{
+  let mut effects: Vec<i64> = vec_new::<i64>();
+  let mut e: i64 = crate::bud_map::head(clocks, 1);
+  let mut left: i64 = crate::bud_map::walk_limit(clocks);
+  while e >= 0 && left > 0
+    invariant 0 <= left && left <= 4294967296
+    decreases left
+  {
+    let next: i64 = crate::bud_map::next(clocks, e);
+    if owner_matches(clocks, e, sid) {
+      effects = clear_effect(clocks, e, move effects);
+      crate::bud_map::remove(inout clocks, e);
+    }
+    e = next;
+    left = left - 1;
+  }
+  return crate::bud_effect::reply(0, false, crate::ent_u16::one(1), move effects);
+}
+
+fn clear_map(inout st: [i64], root: i64) -> ()
+{
+  let mut left: i64 = crate::bud_map::walk_limit(st);
+  let mut e: i64 = crate::bud_map::head(st, root);
+  while e >= 0 && left > 0
+    invariant 0 <= left && left <= 4294967296
+    decreases left
+  {
+    let next: i64 = crate::bud_map::next(st, e);
+    crate::bud_map::remove(inout st, e);
+    e = next;
+    left = left - 1;
+  }
+}
+
+pub fn dispose(inout clocks: [i64]) -> Vec<i64> ! alloc
+{
+  let mut effects: Vec<i64> = vec_new::<i64>();
+  let mut left: i64 = crate::bud_map::walk_limit(clocks);
+  let mut e: i64 = crate::bud_map::head(clocks, 1);
+  while e >= 0 && left > 0
+    invariant 0 <= left && left <= 4294967296
+    decreases left
+  {
+    effects = clear_effect(clocks, e, move effects);
+    e = crate::bud_map::next(clocks, e);
+    left = left - 1;
+  }
+  clear_map(inout clocks, 1);
+  clear_map(inout clocks, 2);
+  return crate::bud_effect::reply(0, false, crate::ent_u16::one(1), move effects);
+}
