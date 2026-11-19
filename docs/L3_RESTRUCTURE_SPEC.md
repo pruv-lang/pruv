@@ -406,7 +406,7 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | T5b | Both codegens: cold-tail rule (Appendix T5a.4) | P: reopen's slow tail (blob_copy, rewrite, store) is emitted out of line and cold, so the miss path drops the slow-path frame (352 B in the T5a build). The rule is an attribute or a proof-free rule that does not mark the M4 put path cold. reopenmiss and closereopen fewer instructions than T5 with `__text` and peak RSS not above the T5 base (405,180 B); the hand-edited reference is rsplita (-32/-35 against its same-run base, for +10.9 KB). Includes a per-function attribution of the closereopen pair. Output parity on both compilers. State (Appendix T5b, step cap hit at rule design; no compiler change): on the P18b base (`__text` 413,244 B) a cold or never-inlined tail alone does not move the miss path (reopenmiss S=500 386.8 to 390.0, ranges overlap) because the miss path pays the same six callee-saved pairs (nine arguments live across `bl find_w`), not the tail frame; the win needs the fast part inlined into each caller (-34/-24) at +13.7 KB `__text`. Split into T5b1 and T5b2. |
 | T5c | B/m7_test/driver_m7.rs: typed-lane harness parity (Appendix T5a.2) | P: the M7 timed loop calls the `c_*` entry with the same shape as hand16's bare method call (no non-inlined step closure, no per-op prep match), reported next to the existing lane. The floor of each lane is measured with bodies emptied. Measurement only; no product number moves. Measured (Appendix T5c): fair lane (`driver_m7 perf S R item f`) against hand16, instructions S/M: isHalted 0.99/0.98 (no overlap, at or below 1.0x), current 1.02/1.02, attach 1.30/1.29, closereopen 1.18/1.18, reopenmiss 1.16/1.15; floor-subtracted 0.97/0.96, 1.00/1.01, 1.27/1.25, 1.16/1.16, 1.14/1.15. The rest is the entry floor (length guards, `out` store: P18b), the reopen tail (T5b), and find_w/entry re-validation (P13h); no new row. Driver `__text` 405,180 to 413,756 B (harness only; T5b re-measures its base). |
 | T5b2 | Both codegens and B/bud_map.pruv, bud_lifecycle.pruv: reopen miss path live set (Appendix T5b.4) | P: reopenmiss and closereopen <= 1.0x hand16 at S/M by cutting the values live across `bl find_w` (nine arguments, six callee-saved pairs), not the tail frame. Routes: the reopen fast part takes the session record as one view (P18c result path or P13h specialization), or the coldA inline paired with a `__text` cut of at least 13.7 KB elsewhere. `__text` and peak RSS not above the P18b base (413,244 B) under the T5b.3 rule. Includes the five-cell S/M re-baseline, the closereopen per-function attribution and M4 cells. Runs after P18c and P13h (same files). |
-| T5d | B/m7_test and bench/l3/budget build flags: codegen-units measurement (Appendix T5b.3) | P: measure hand16 and the generated M7/M4 drivers with `-C codegen-units=1` next to the current flags: time, instructions, peak RSS, `__text`, rustc time. Switch the bench profile for both sides only if no axis loses on either side and rustc time stays within the budget m4 20% line; otherwise keep the flags and keep the T5b.3 reporting rule. Measurement and flags only; no codegen change. |
+| T5d | B/m7_test and bench/l3/budget build flags: codegen-units measurement (Appendix T5b.3) | P: measure hand16 and the generated M7/M4 drivers with `-C codegen-units=1` next to the current flags: time, instructions, peak RSS, `__text`, rustc time. Switch the bench profile for both sides only if no axis loses on either side and rustc time stays within the budget m4 20% line; otherwise keep the flags and keep the T5b.3 reporting rule. Measurement and flags only; no codegen change. Measured (Appendix T5d): keep the flags and the T5b.3 rule. Under cgu1, Pruv M4 instructions are +2.7..5.3 % on all nine cells and hand M4 +0.8..3.5 %. Hand16 reopenmiss is +5..6 %. Pruv `__text` is +6,272 B (M7) and +5,312 B (M4), against hand -5,184 / -4,800 B. Pruv M7 closereopen drops -6.4 % and reopenmiss -3.5 %. Generated M4 driver rustc time is 2.21 -> 1.85 s, within the 20 % line. No Pruv/hand ratio crosses 1.0x. Over hand on instructions under both flag sets: M7 attach 1.18x, closereopen 1.20 / 1.13x, reopenmiss 1.15 / 1.05x, M4 sessions 1.01..1.13x and clocks 1.02..1.10x. Allocations are equal under both flag sets. |
 | P20 | B/bud_charge.pruv,m8_test: counters/sums/bounds | P Q2+C/D, equal safe-number baseline; negative/boundary atomic refusal and charge/failure <=1.0. |
 | P21 | B/bud_tools.pruv,key helpers: stored hash/dedup | P Q2+D; dup/new/forget separately <=1.0, missing-budget dedup. Interning only as measured follow-up. |
 | P22 | B/bud_clock.pruv: runs/refresh/begin/settle/arm | P Q3+E/F, active-count functional model, R/timer cycle; do not treat I2 as an unchecked proof assumption. |
@@ -6146,3 +6146,126 @@ Reruns after the fixes: 7 roots verify rs and py rc 0; M7 Q rs and py 113 / 187 
 `cases_halt` 300 / 0 / 0 on both compilers, M10 `__text` 464,380 B; `run_m7.py perf` 21 cells 0 mismatches;
 `diff_hand_m7.py` as in P13i.3.
 Confirm audit (same reviewer, only the three fix scopes): all three FIXED, no required finding.
+
+## Appendix T5d: codegen-units=1 for the bench profile, measured
+
+Decision: keep the bench flags `-C opt-level=3 --edition 2021` and the T5b.3 reporting rule. `-C codegen-units=1`
+loses axes on both sides: Pruv instructions on every M4 cell, hand instructions on every M4 cell and M7 reopenmiss,
+Pruv `__text`, and the M7 Pruv peak by a small margin. The row's switch condition is not met. No Pruv/hand ratio
+crosses 1.0x under cgu1.
+
+### T5d.1 Method
+
+- Base main a21f8b5, compiler `pruvc-rs/target/release/pruvc` of the main checkout, rustc 1.99.1 (58cf8f9c3 2026-10-13) of
+  `~/.cargo/bin`. Scratch scripts in `work/t5d/` (not committed): `build.py`, `measure.py`,
+  `summarize.py`, `alloccount.c`.
+- Two flag sets, the same on both sides of every column: `base` = `-C opt-level=3 --edition 2021`;
+  `cgu1` = base + `-C codegen-units=1`. The `bud_facts` rlib stays at `-O` as in `run_m7.py:75-76`.
+- Binaries: M7 driver (`m7_test/root.pruv`, `--proven-entries`, `driver_m7.rs`, as `run_m7.py`) and `hand_m7_u16.rs`
+  (fair lane); M4 driver (`m34_test/root_m4.pruv`, `driver_m4.rs`, lane `m4` with `state_buf.rs` and
+  `type Store<T> = Plain<T>` as `m34_test/run.py`) and `perf_headroom/host/src/bin/m4_hand.rs`. The M4 hand is built
+  here with the same direct rustc command as the Pruv driver, not with the host Cargo release profile, so both sides
+  share the flags exactly.
+- Instructions per call = (I(5R) - I(R)) / (4R x calls), R = 20000, from `/usr/bin/time -l` "instructions retired";
+  ns from the driver's own timing at 5R. M7 peak = "peak memory footprint", M4 peak = "maximum resident set size"
+  (as T5c and the M4 host). Allocations per call from a `DYLD_INSERT_LIBRARIES` malloc counter in a separate run
+  (SIP strips DYLD variables through `/usr/bin/time`).
+- 7 rounds per cell, the four (flag set, lane) runs rotated each round and the size order reversed on odd rounds.
+  Load average 2.3 to 4.0 during the runs, so instructions are the primary axis; "overlap" below means the min..max
+  ranges of the two compared distributions intersect. Result checksums agree between all four runs of every cell.
+- `__text` from `size -m`; rustc wall time = median of 5 interleaved builds.
+- Gates on the base tree before the runs: M7 `run_m7.py q` 113 / 187 / 0, `q --py` 113 / 187 / 0.
+
+### T5d.2 Per cell (medians over 7 rounds; instr per call or per op, ns, peak KiB, allocations per call)
+
+| cell | fs | Pruv instr | hand instr | ratio | Pruv ns | hand ns | Pruv peak | hand peak | Pruv alloc | hand alloc |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| M7 attach S=100 | base | 350.7 | 296.8 | 1.181 | 10.2 | 12.9 | 2080 | 1632 | 0 | 0 |
+| M7 attach S=100 | cgu1 | 354.9 | 300.7 | 1.180 | 9.9 | 12.4 | 2080 | 1632 | 0 | 0 |
+| M7 closereopen S=100 | base | 533.4 | 445.4 | 1.198 | 16.0 | 18.4 | 2000 | 1632 | 0 | 0 |
+| M7 closereopen S=100 | cgu1 | 499.5 | 442.2 | 1.130 | 14.4 | 17.8 | 2032 | 1632 | 0 | 0 |
+| M7 reopenmiss S=100 | base | 384.5 | 333.0 | 1.155 | 10.2 | 12.4 | 1984 | 1632 | 0 | 0 |
+| M7 reopenmiss S=100 | cgu1 | 370.2 | 353.1 | 1.048 | 9.7 | 13.6 | 2016 | 1616 | 0 | 0 |
+| M7 current S=100 | base | 323.3 | 346.1 | 0.934 | 8.9 | 13.0 | 1984 | 1648 | 0 | 0 |
+| M7 current S=100 | cgu1 | 323.8 | 336.4 | 0.962 | 8.4 | 12.7 | 2016 | 1648 | 0 | 0 |
+| M7 isHalted S=100 | base | 319.9 | 338.6 | 0.945 | 9.1 | 12.7 | 1968 | 1616 | 0 | 0 |
+| M7 isHalted S=100 | cgu1 | 323.8 | 349.8 | 0.925 | 8.7 | 12.9 | 2016 | 1632 | 0 | 0 |
+| M7 attach M=500 | base | 352.3 | 297.0 | 1.186 | 10.1 | 13.0 | 3840 | 3104 | 0 | 0 |
+| M7 attach M=500 | cgu1 | 354.1 | 300.5 | 1.178 | 9.9 | 12.1 | 3888 | 3136 | 0 | 0 |
+| M7 closereopen M=500 | base | 533.5 | 445.2 | 1.198 | 16.1 | 18.3 | 3792 | 3120 | 0 | 0 |
+| M7 closereopen M=500 | cgu1 | 499.7 | 441.9 | 1.131 | 14.3 | 17.9 | 3840 | 3120 | 0 | 0 |
+| M7 reopenmiss M=500 | base | 383.4 | 335.8 | 1.142 | 10.1 | 12.4 | 3776 | 3104 | 0 | 0 |
+| M7 reopenmiss M=500 | cgu1 | 371.1 | 352.8 | 1.052 | 9.7 | 13.4 | 3840 | 3120 | 0 | 0 |
+| M7 current M=500 | base | 322.6 | 333.0 | 0.969 | 8.9 | 12.7 | 3792 | 3104 | 0 | 0 |
+| M7 current M=500 | cgu1 | 322.3 | 336.4 | 0.958 | 8.4 | 12.8 | 3840 | 3152 | 0 | 0 |
+| M7 isHalted M=500 | base | 320.3 | 339.9 | 0.942 | 8.9 | 12.7 | 3824 | 3104 | 0 | 0 |
+| M7 isHalted M=500 | cgu1 | 322.9 | 341.1 | 0.947 | 8.7 | 12.8 | 3840 | 3136 | 0 | 0 |
+| M4 tools n=100 | base | 898.1 | 1321.3 | 0.680 | 31.9 | 52.4 | 1136 | 1104 | 0 | 1.0 |
+| M4 tools n=100 | cgu1 | 943.0 | 1331.4 | 0.708 | 33.4 | 51.5 | 1136 | 1104 | 0 | 1.0 |
+| M4 sessions n=100 | base | 460.2 | 417.1 | 1.103 | 12.9 | 15.0 | 1088 | 1072 | 0 | 0 |
+| M4 sessions n=100 | cgu1 | 472.9 | 431.5 | 1.096 | 13.2 | 15.3 | 1088 | 1056 | 0 | 0 |
+| M4 clocks n=100 | base | 981.3 | 923.4 | 1.063 | 29.8 | 38.7 | 1088 | 1088 | 0 | 0.5 |
+| M4 clocks n=100 | cgu1 | 1032.0 | 937.5 | 1.101 | 34.0 | 38.8 | 1088 | 1088 | 0 | 0.5 |
+| M4 tools n=1000 | base | 951.5 | 1320.8 | 0.720 | 35.4 | 52.9 | 1488 | 1488 | 0 | 1.0 |
+| M4 tools n=1000 | cgu1 | 995.2 | 1336.0 | 0.745 | 36.4 | 52.4 | 1488 | 1488 | 0 | 1.0 |
+| M4 sessions n=1000 | base | 469.0 | 413.8 | 1.134 | 13.3 | 16.0 | 1376 | 1392 | 0 | 0 |
+| M4 sessions n=1000 | cgu1 | 482.5 | 428.1 | 1.127 | 13.8 | 16.4 | 1376 | 1392 | 0 | 0 |
+| M4 clocks n=1000 | base | 943.7 | 920.8 | 1.025 | 30.3 | 40.3 | 1312 | 1632 | 0 | 0.5 |
+| M4 clocks n=1000 | cgu1 | 994.1 | 934.4 | 1.064 | 32.9 | 41.8 | 1328 | 1648 | 0 | 0.5 |
+| M4 tools n=2000 | base | 891.9 | 1327.3 | 0.672 | 32.4 | 54.0 | 1824 | 1824 | 0 | 1.0 |
+| M4 tools n=2000 | cgu1 | 939.2 | 1343.1 | 0.699 | 33.7 | 52.7 | 1840 | 1824 | 0 | 1.0 |
+| M4 sessions n=2000 | base | 460.7 | 456.0 | 1.010 | 12.6 | 16.6 | 1664 | 1696 | 0 | 0 |
+| M4 sessions n=2000 | cgu1 | 472.9 | 470.5 | 1.005 | 13.2 | 17.6 | 1680 | 1696 | 0 | 0 |
+| M4 clocks n=2000 | base | 982.7 | 962.2 | 1.021 | 31.3 | 41.1 | 1536 | 2128 | 0 | 0.5 |
+| M4 clocks n=2000 | cgu1 | 1034.6 | 976.5 | 1.059 | 33.7 | 42.9 | 1568 | 2144 | 0 | 0.5 |
+
+Build axes (rustc wall seconds, median of 5 interleaved builds):
+
+| binary | base `__text` B | cgu1 `__text` B | base rustc s | cgu1 rustc s |
+|---|---:|---:|---:|---:|
+| M7 driver (Pruv) | 457,916 | 464,188 (+6,272) | 3.17 | 2.68 |
+| hand16 | 311,484 | 306,300 (-5,184) | 0.69 | 0.82 |
+| M4 driver (Pruv) | 350,524 | 355,836 (+5,312) | 2.21 | 1.85 |
+| M4 hand | 281,532 | 276,732 (-4,800) | 0.37 | 0.49 |
+
+### T5d.3 What cgu1 changes (cgu1 against base, same lane, ranges not overlapping unless said)
+
+- Pruv losses: M4 instructions +2.7..5.3 % on all nine cells (tools +45..47, sessions +12..14, clocks +50..52 per op),
+  M4 clocks time +8..14 %; `__text` +6,272 B (M7) and +5,312 B (M4); M7 peak +16..64 KiB median on every cell
+  (overlapping on some cells).
+- Pruv gains: M7 closereopen 533 -> 500 (-6.4 %), reopenmiss 384 -> 371 (-3.5 %), with time down 5..11 %; attach,
+  current, isHalted overlap.
+- Hand losses: M4 instructions +0.8..3.5 % on all nine cells; M7 reopenmiss 333 -> 353 / 336 -> 353 (+5..6 %,
+  overlapping at S=100, not at M=500), time +8..10 %; hand rustc time +19 % (hand16) and +32 % (M4 hand).
+- Hand gains: `__text` -5,184 B / -4,800 B.
+- rustc on the 20 % line: the generated M4 driver builds faster under cgu1 (2.21 -> 1.85 s), so the budget m4 line holds.
+  The row's other condition fails, so this does not change the decision.
+- Ratios: no cell crosses 1.0x. The M7 closereopen and reopenmiss ratios improve (1.20 -> 1.13, 1.15 -> 1.05).
+  Reopenmiss improves partly because hand16 gets slower. The M4 tools, clocks and M7 current S ratios get worse.
+  Cells over hand stay over hand on instructions under both flag sets:
+  - M7 attach, closereopen, reopenmiss;
+  - M4 sessions (1.01..1.13x);
+  - M4 clocks (1.02..1.10x).
+  On time (ns), every Pruv cell is under hand.
+- Allocations are identical between flag sets: Pruv 0 everywhere; hand M4 tools 1.0 and clocks 0.5 per op, and 0
+  elsewhere.
+
+### T5d.4 Runner lines a switch would touch (not applied)
+
+Kept for the record; nothing changes, because the decision is keep.
+- `bench/l3/budget/run_meta.py:28` `RUSTC_FLAGS` (M7 driver `run_m7.py:107`, hand16 and hand_m7 `run_m7.py:117-118`;
+  also m8 and `t5c_floor`).
+- `bench/l3/budget/m34_test/run.py:262` (M4 driver rustc line).
+- `bench/l3/budget/perf_headroom/host/Cargo.toml` `[profile.release]` (M4 hand; read by `perf_headroom/host/run.py:64-66`
+  and `tools/health.py:254-256`).
+- Other direct rustc lines with the same flags: `m8_test/run_m8.py:67,99,610`, `m9_test/run_m9.py:69,664`,
+  `m10_test/run_m10.py:104,798`, `p01_keys/run_keys.py:74-75`, `dev_build.sh:22`, `mcp/perf/run_perf.py:48,132`.
+  `bench/perf/run.py:42,83` already uses `codegen-units=1` and is outside the L3 budget.
+
+### T5d.5 Delegations
+
+| work | by |
+|---|---|
+| runner flag lines and lane setup (research) | Codex gpt-6.2-astra, high, research |
+| first draft of the scratch `build.py` / `measure.py` / `summarize.py` / `alloccount.c` | Claude sonnet, medium, write (copied into `work/t5d` by hand, M4 `Store` alias fixed) |
+| gates, builds, measurement, decision, this appendix | Claude Opus 5.5, direct |
