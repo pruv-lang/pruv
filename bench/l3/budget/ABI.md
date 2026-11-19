@@ -118,3 +118,36 @@ The M7 key and record rows above apply. The halt call adds its own query, effect
   (256 words) reserved before the query, plus any free words already in the arena that the second reserve's in-place
   rehash recovers. In-call growth is queued (Appendix P24).
 - M7's isQuiet used a prefetched answer before P24's form; it was already moved to the synchronous form (`is_quiet`).
+
+## M12 resident auto-continuation (m12_test)
+
+The test root exposes `m12_init`, `m12_grow`, `m12_load`, `m12_set_card`,
+`m12_query`, and `m12_dump` with the M11 shapes. The additional entry is
+`m12_auto(st, op, ref, ref_sid, caller, packet, out)`.
+
+| op | operation | additional input |
+|---|---|---|
+| 1 | clearAutoContinue | ref and its packed session key |
+| 2 | recordAutoContinue | ref, its packed session key, and one admitted JB value (empty means undefined) |
+| 3 | stopAutoContinue | packed caller session key and optional ref with its packed session key |
+
+Refs are V values. Supply `[1]` and an empty ref key for an omitted or
+undefined stop ref. Packed keys use `[unit_count, packed_words...]`, including
+`[0]` for an empty string. Arguments unused by the operation are empty.
+
+Status 0 writes `[k, findSession, save, changed, V result, owner...]`, where
+`k` counts the words following it. The V result is undefined for clear and stop
+and boolean for record. The owner is present only on a stop save and is a
+framed packed session key. Save precedes changed. On status 1, retry after
+growing to the word count in `out[0]`. Statuses 2 and 3 indicate invalid input
+and insufficient output space. The operation does not edit the budget on a
+nonzero status.
+
+The harness accepts `auto <op> | <ref> | <ref_sid> | <caller> | <packet>`
+as decimal words. The test probe `room` prints `ok <grows> <free>` on the
+Pruv lane, where `grows` counts Grow statuses so far and `free` is
+`min(len(st), st[11]) - st[10]`; the hand lane prints `ok 0 0`. The fixed
+checks use it to flag a Grow when the edit's size fits the free arena. It supports `perfR` / `handR` (record), `perfC` / `handC`
+(clear), `perfT` / `handT` (flip), and `perfS` / `handS` (synthetic
+stop). Each command takes size and repetitions and prints
+`ns <ns/op> <checksum> alloc <allocations including reallocations>`.

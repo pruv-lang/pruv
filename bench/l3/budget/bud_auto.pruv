@@ -1,0 +1,515 @@
+// JB-to-V encoding for fully admitted packets, as in bud_card.
+fn bt(b: [u8], i: i64) -> i64
+  ensures 0 <= result && result <= 255 && (result == 0 || (0 <= i && i < len(b)))
+{
+  if i < 0 || i >= len(b) { return 0; }
+  return b[i];
+}
+
+fn ascii8(b: [u8], i: i64) -> bool
+  requires 0 <= i && i <= len(b) - 8
+{
+  return band(load_be(b, i, 8), -9187201950435737472) == 0;
+}
+
+fn bits_at(b: [u8], p: i64) -> i64
+{
+  if p < 0 || p > len(b) - 9 { return 0; }
+  return load_be(b, p + 1, 8);
+}
+
+fn safe_int(bits: i64) -> bool
+{
+  if bits == 0 { return true; }
+  let e: i64 = band(ushr(bits, 52), 2047);
+  if e < 1023 || e > 1075 { return false; }
+  if e == 1075 { return true; }
+  let mask: i64 = ushr(-1, 12 + (e - 1023));
+  return band(bits, mask) == 0;
+}
+
+fn int_val(bits: i64) -> i64
+{
+  let e: i64 = band(ushr(bits, 52), 2047);
+  if e < 1023 || e > 1075 { return 0; }
+  let m: i64 = band(bits, 4503599627370495) + 4503599627370496;
+  let mag: i64 = ushr(m, 1075 - e);
+  if bits < 0 { return 0 - mag; }
+  return mag;
+}
+
+fn put(inout o: [i64], p: i64, x: i64) -> i64
+  requires 0 <= p && p <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776 && len(o) == len(old(o))
+{
+  if p >= 1099511627776 { return 1099511627776; }
+  crate::ent_u16::wr(inout o, p, x);
+  return p + 1;
+}
+
+fn put_key(inout o: [i64], p: i64, s: str) -> i64
+  requires 0 <= p && p <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776 && len(o) == len(old(o))
+{
+  let m: i64 = len(s);
+  let mut q: i64 = put(inout o, p, m);
+  let mut j: i64 = 0;
+  while j < m
+    invariant 0 <= j && j <= m && m == len(s) && 0 <= q && q <= 1099511627776 && len(o) == len(old(o))
+    decreases m - j
+  {
+    q = put(inout o, q, s[j]);
+    j = j + 1;
+  }
+  return q;
+}
+
+fn put_units(inout o: [i64], q: i64, b: [u8], s: i64, e: i64) -> i64
+  requires 0 <= q && q <= 1099511627776
+  requires 0 <= s && s <= e && e <= len(b)
+  ensures 0 <= result && result <= 1099511627776 && len(o) == len(old(o))
+{
+  let u: i64 = crate::bud_card::units(b, s, e, e - s);
+  let r: i64 = put(inout o, q, u);
+  if u > len(o) - r {
+    // size pass (or no room): only the position moves
+    if u >= 1099511627776 - r { return 1099511627776; }
+    return r + u;
+  }
+  let mut i: i64 = s;
+  let mut k: i64 = 0;
+  while i < e && k < u
+    invariant s <= i && i <= e && e <= len(b) && 0 <= k && k <= u && 0 <= r && r + u <= len(o) && len(o) == len(old(o))
+    decreases e - i
+  {
+    let c: i64 = b[i];
+    if c < 128 {
+      o[r + k] = c;
+      i = i + 1;
+      k = k + 1;
+      let i0: i64 = i;
+      while i <= e - 8 && k <= u - 8 && ascii8(b, i)
+        invariant i0 <= i && s <= i && i <= e && e <= len(b) && 0 <= k && k <= u && 0 <= r && r + u <= len(o) && len(o) == len(old(o))
+        decreases e - i
+      {
+        o[r + k] = b[i];
+        o[r + k + 1] = b[i + 1];
+        o[r + k + 2] = b[i + 2];
+        o[r + k + 3] = b[i + 3];
+        o[r + k + 4] = b[i + 4];
+        o[r + k + 5] = b[i + 5];
+        o[r + k + 6] = b[i + 6];
+        o[r + k + 7] = b[i + 7];
+        i = i + 8;
+        k = k + 8;
+      }
+    } else if c < 224 {
+      if i + 1 >= e { return r + u; }
+      o[r + k] = band(c, 31) * 64 + band(b[i + 1], 63);
+      i = i + 2;
+      k = k + 1;
+    } else if c < 240 {
+      if i + 2 >= e { return r + u; }
+      o[r + k] = band(c, 15) * 4096 + band(b[i + 1], 63) * 64 + band(b[i + 2], 63);
+      i = i + 3;
+      k = k + 1;
+    } else {
+      if i + 3 >= e || k + 1 >= u { return r + u; }
+      let cp: i64 = band(c, 7) * 262144 + band(b[i + 1], 63) * 4096 + band(b[i + 2], 63) * 64 + band(b[i + 3], 63) - 65536;
+      o[r + k] = 55296 + band(ushr(cp, 10), 1023);
+      o[r + k + 1] = 56320 + band(cp, 1023);
+      i = i + 4;
+      k = k + 2;
+    }
+  }
+  return r + u;
+}
+
+fn put_text(inout o: [i64], q: i64, b: [u8], p: i64) -> i64
+  requires 0 <= q && q <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776 && len(o) == len(old(o))
+{
+  if bt(b, p) != 6 { return put(inout o, q, 1); }
+  let e: i64 = s_end(b, p + 1);
+  if e < 0 { return put(inout o, q, 1); }
+  let r: i64 = put(inout o, q, 6);
+  return put_units(inout o, r, b, p + 5, e);
+}
+
+fn put_num(inout o: [i64], q: i64, bits: i64) -> i64
+  requires 0 <= q && q <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776 && len(o) == len(old(o))
+{
+  if safe_int(bits) {
+    let r: i64 = put(inout o, q, 5);
+    return put(inout o, r, int_val(bits));
+  }
+  let r2: i64 = put(inout o, q, 7);
+  return put(inout o, r2, bits);
+}
+
+fn put_jv(inout o: [i64], q: i64, b: [u8], p: i64, depth: i64) -> i64
+  requires 0 <= q && q <= 1099511627776
+  requires 0 <= depth && depth <= 33
+  ensures 0 <= result && result <= 1099511627776 && len(o) == len(old(o))
+  decreases 33 - depth
+{
+  if depth > 32 { return put(inout o, q, 1); }
+  let t: i64 = bt(b, p);
+  if t >= 1 && t <= 4 { return put(inout o, q, t); }
+  if t == 7 {
+    if p > len(b) - 9 { return put(inout o, q, 1); }
+    return put_num(inout o, q, bits_at(b, p));
+  }
+  if t == 6 { return put_text(inout o, q, b, p); }
+  if t == 8 || t == 9 {
+    let n: i64 = len(b);
+    if n > 1099511627776 || p < 0 || n - p < 5 { return put(inout o, q, 1); }
+    let cnt: i64 = load_be(b, p + 1, 4);
+    let mut r: i64 = put(inout o, q, t);
+    r = put(inout o, r, cnt);
+    let mut pos: i64 = p + 5;
+    let mut i: i64 = 0;
+    while i < cnt
+      invariant 0 <= i && i <= cnt && 0 <= r && r <= 1099511627776 && 0 <= depth && depth <= 32 && len(o) == len(old(o))
+      decreases cnt - i
+    {
+      let mut vs: i64 = pos;
+      if t == 9 {
+        let ke: i64 = s_end(b, pos);
+        if ke < 0 { return r; }
+        r = put_units(inout o, r, b, pos + 4, ke);
+        vs = ke;
+      }
+      r = put_jv(inout o, r, b, vs, depth + 1);
+      let e: i64 = crate::bud_card::j_end(b, vs);
+      if e < 0 { return r; }
+      pos = e;
+      i = i + 1;
+    }
+    return r;
+  }
+  return put(inout o, q, 1);
+}
+
+fn truthy_b(b: [u8], p: i64) -> bool
+{
+  let t: i64 = bt(b, p);
+  if t == 4 || t == 8 || t == 9 { return true; }
+  if t == 7 {
+    if p > len(b) - 9 { return false; }
+    let x: i64 = bits_at(b, p);
+    if band(x, 9223372036854775807) == 0 { return false; }
+    return crate::bud_num::count_class(x) != 3;
+  }
+  if t == 6 {
+    let e: i64 = s_end(b, p + 1);
+    return e > p + 5;
+  }
+  return false;
+}
+
+fn s_end(b: [u8], p: i64) -> i64
+  ensures result == -1 || (0 <= p && p + 4 <= result && result <= len(b))
+{
+  let n: i64 = len(b);
+  if n > 1099511627776 { return -1; }
+  if p < 0 || p > n - 4 { return -1; }
+  let m: i64 = load_be(b, p, 4);
+  if m > n - p - 4 { return -1; }
+  let e: i64 = p + 4 + m;
+  return e;
+}
+
+fn rd(v: [i64], p: i64) -> i64 { return crate::ent_u16::rd(v, p); }
+
+// The session entry for the packed key sid (framed `n, words(n) packed words`), or -1. An empty sid = the ref has no
+// string sessionId (nothing to look up: -1, like the old non-string case).
+// Design (ref IDs): the V string "sessionId" inside the ref is `6, n, units` (one unit per word) and is NOT a map key
+// format, so it is never handed to bud_map. The host packs the ref's sessionId once at ingress and passes it as a
+// separate packed argument `sid` next to the ref V (same split as the M8 lane: V words stay V words, IDs used as
+// lookup keys are packed keys). The root checks sid's framing and canonical form (rec_end, O(1)) and then trusts that
+// it is the packed form of ref.sessionId (host contract, exercised by the oracle comparison). budgetId is only compared
+// against the stored budget's id as V strings (str_eq), so it needs no packed form.
+pub fn session_entry(st: [i64], sid: [i64]) -> i64
+{
+  if len(sid) == 0 { return -1; }
+  if crate::bud_keys::rec_end(sid, 0) != len(sid) { return -1; }
+  return crate::bud_map::find_w(st, 0, sid, 1, rd(sid, 0));
+}
+
+
+pub struct Pair { k: i64, v: i64, end: i64, n: i64 }
+
+// Last matching pair, with absolute key, value and end positions, and n = how many pairs carry the key
+// (a loaded V object can repeat a key; the last value wins on read, delete removes them all).
+pub fn find_pair(st: [i64], obj: i64, key: str) -> Pair
+{
+  let missing: Pair = Pair { k: -1, v: -1, end: -1, n: 0 };
+  let n: i64 = len(st);
+  if obj < 0 || obj > n - 2 || st[obj] != 9 { return missing; }
+  let cnt: i64 = st[obj + 1];
+  if cnt < 0 || cnt > n - obj - 2 { return missing; }
+  let mut p: i64 = obj + 2;
+  let mut i: i64 = 0;
+  let mut found: Pair = missing;
+  let mut hits: i64 = 0;
+  while i < cnt
+    invariant 0 <= i && i <= cnt && 0 <= p && p <= n && n == len(st) && 0 <= hits && hits <= i
+    decreases cnt - i
+  {
+    if p == n { return missing; }
+    let kn: i64 = st[p];
+    if kn < 0 || kn > n - p - 1 { return missing; }
+    let v: i64 = p + 1 + kn;
+    let end: i64 = crate::bud_card::v_end(st, v);
+    if end < 0 { return missing; }
+    if key_eq(st, p, key) { hits = hits + 1; found = Pair { k: p, v: v, end: end, n: hits }; }
+    p = end;
+    i = i + 1;
+  }
+  return found;
+}
+
+fn key_eq(st: [i64], p: i64, key: str) -> bool
+{
+  if p < 0 || p >= len(st) { return false; }
+  let n: i64 = len(key);
+  if n > len(st) - p - 1 || st[p] != n { return false; }
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && n == len(key) && 0 <= p && p + 1 + n <= len(st)
+    decreases n - j
+  {
+    if st[p + 1 + j] != key[j] { return false; }
+    j = j + 1;
+  }
+  return true;
+}
+
+fn string_is(st: [i64], at: i64, value: str) -> bool
+{
+  return at >= 0 && at < len(st) && st[at] == 6 && key_eq(st, at + 1, value);
+}
+
+fn string_matches(st: [i64], at: i64, sid: [i64]) -> bool
+{
+  let n: i64 = rd(sid, 0);
+  if at < 0 || at > len(st) - 2 || st[at] != 6 || st[at + 1] != n || n < 0 || n > len(st) - at - 2 { return false; }
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && 0 <= at && at + 2 + n <= len(st)
+    decreases n - j
+  {
+    if st[at + 2 + j] != crate::bud_keys::unit(sid, 1, n, j) { return false; }
+    j = j + 1;
+  }
+  return true;
+}
+
+fn result_words(inout out: [i64], finds: i64, value: i64, owner: [i64]) -> i64
+{
+  let n: i64 = len(owner);
+  if len(out) < 5 || n > len(out) - 5 { return 3; }
+  let mut saved: i64 = 0;
+  if n > 0 { saved = 1; }
+  out[0] = 4 + n;
+  out[1] = finds;
+  out[2] = saved;
+  out[3] = saved;
+  out[4] = value;
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && n == len(owner) && n <= len(out) - 5
+    decreases n - j
+  {
+    out[5 + j] = owner[j];
+    j = j + 1;
+  }
+  return 0;
+}
+
+// The enclosing object count lives in the prefix. Update it after the splice
+// succeeds, using the new blob offset if the arena allocated a larger slot.
+fn edit(inout st: [i64], e: i64, obj: i64, begin: i64, end: i64, src: [i64], k: i64, delta: i64, inout out: [i64]) -> i64
+{
+  let o: i64 = crate::bud_map::blob_off(st, e);
+  let n: i64 = crate::bud_map::blob_len(st, e);
+  if obj < o || obj > o + n || begin < obj + 2 || end < begin || end > o + n || k < 0 || k > len(src) || k > 4294967296 { return 2; }
+  let m: i64 = n - (end - begin) + k;
+  if m > 4294967296 { return 2; }
+  let mut reserve: i64 = 0;
+  if !crate::bud_map::blob_fits(st, e, m) {
+    reserve = m + m / 2;
+    if reserve > 4294967296 { reserve = 4294967296; }
+    // Spare capacity only when the arena has it now: never Grow (a whole-store copy) just for the extra half.
+    let top: i64 = rd(st, 10);
+    let mut cap: i64 = len(st);
+    if rd(st, 11) < cap { cap = rd(st, 11); }
+    if top >= 0 && top <= cap && reserve > cap - top && m <= cap - top { reserve = m; }
+    let need: i64 = crate::bud_map::make_room(inout st, 0, reserve);
+    if need != 0 {
+      crate::ent_u16::wr(inout out, 0, need);
+      return 1;
+    }
+  }
+  let r: i64 = crate::bud_map::splice_blob(inout st, e, begin - o, end - o, src, k, reserve);
+  if r != 0 { return r; }
+  if delta != 0 {
+    let count: i64 = crate::bud_map::blob_off(st, e) + (obj - o) + 1;
+    let old_count: i64 = rd(st, count);
+    if old_count >= 0 && old_count <= 4294967296 && delta >= -1 && delta <= 1 {
+      crate::ent_u16::wr(inout st, count, old_count + delta);
+    }
+  }
+  return 0;
+}
+
+// current is the resolved resident entry, or -1 for an absent budget.
+pub fn clear(inout st: [i64], current: i64, inout out: [i64]) -> i64 ! alloc
+{
+  let empty: [i64] = crate::ent_u16::empty();
+  let r: i64 = result_words(inout out, 1, 1, empty);
+  if r != 0 || current < 0 { return r; }
+  let o: i64 = crate::bud_map::blob_off(st, current);
+  let p: Pair = find_pair(st, o, "autoContinue");
+  if !crate::bud_card::truthy(st, p.v) { return 0; }
+  return drop_all(inout st, current, o, p, inout out);
+}
+
+// Delete every "autoContinue" pair (o is the blob offset p was found at, p is find_pair's answer, p.k >= 0), one count decrement per pair. Shrinking
+// splices stay in the slot, so this never Grows half-way. The rescan only runs for a repeated key.
+fn drop_all(inout st: [i64], e: i64, o: i64, p: Pair, inout out: [i64]) -> i64 ! alloc
+{
+  let empty: [i64] = crate::ent_u16::empty();
+  let mut r: i64 = edit(inout st, e, o, p.k, p.end, empty, 0, -1, inout out);
+  let mut left: i64 = 0;
+  if p.n > 1 { left = p.n - 1; }
+  while r == 0 && left > 0
+    decreases left
+  {
+    let o2: i64 = crate::bud_map::blob_off(st, e);
+    let q: Pair = find_pair(st, o2, "autoContinue");
+    if q.k < 0 { return 0; }
+    r = edit(inout st, e, o2, q.k, q.end, empty, 0, -1, inout out);
+    left = left - 1;
+  }
+  return r;
+}
+
+// The entry point admits the entire JB packet at depth 3 before CURRENT.
+// A zero-length packet represents undefined.
+pub fn record(inout st: [i64], current: i64, packet: [u8], inout out: [i64]) -> i64 ! alloc
+{
+  let empty: [i64] = crate::ent_u16::empty();
+  if current < 0 { return result_words(inout out, 1, 3, empty); }
+  let r: i64 = result_words(inout out, 1, 4, empty);
+  if r != 0 { return r; }
+  let o: i64 = crate::bud_map::blob_off(st, current);
+  let p: Pair = find_pair(st, o, "autoContinue");
+  if !truthy_b(packet, 0) {
+    if p.k < 0 { return 0; }
+    return drop_all(inout st, current, o, p, inout out);
+  }
+  let mut prefix: i64 = 0;
+  let mut delta: i64 = 0;
+  let mut start: i64 = p.v;
+  let mut end: i64 = p.end;
+  if p.k < 0 {
+    prefix = 13;
+    delta = 1;
+    start = o + crate::bud_map::blob_len(st, current);
+    end = start;
+  }
+  // JB encodes each eventual V word in at least one byte.
+  let n: i64 = len(packet);
+  if n > 4294967296 - 13 { return 2; }
+  let mut words: [i64] = alloc(n + prefix, 0);
+  if prefix != 0 { let ignored: i64 = put_key(inout words, 0, "autoContinue"); }
+  let written: i64 = put_jv(inout words, prefix, packet, 0, 3);
+  if written > len(words) { return 2; }
+  return edit(inout st, current, o, start, end, words, written, delta, inout out);
+}
+
+fn synthetic(sid: [i64], include_key: bool) -> [i64] ! alloc
+{
+  let n: i64 = rd(sid, 0);
+  if n < 0 || n > 1073741824 { return crate::ent_u16::empty(); }
+  let mut prefix: i64 = 0;
+  if include_key { prefix = 13; }
+  let mut w: [i64] = alloc(prefix + 44 + n, 0);
+  if include_key { let ignored: i64 = put_key(inout w, 0, "autoContinue"); }
+  let mut p: i64 = put(inout w, prefix, 9);
+  p = put(inout w, p, 4);
+  p = put_key(inout w, p, "sessionId");
+  p = put(inout w, p, 6);
+  p = put(inout w, p, n);
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && n <= 1073741824 && 0 <= p && p <= 1099511627776
+    decreases n - j
+  {
+    p = put(inout w, p, crate::bud_keys::unit(sid, 1, n, j));
+    j = j + 1;
+  }
+  p = put_key(inout w, p, "userTurnId");
+  p = put(inout w, p, 6);
+  p = put(inout w, p, 0);
+  p = put_key(inout w, p, "count");
+  p = put(inout w, p, 5);
+  p = put(inout w, p, 0);
+  p = put_key(inout w, p, "stopped");
+  p = put(inout w, p, 4);
+  return w;
+}
+
+// pointed is CURRENT(ref), or -1. The caller and ref keys are already framed.
+pub fn stop(inout st: [i64], pointed: i64, has_ref: bool, ref_sid: [i64], sid: [i64], inout out: [i64]) -> i64 ! alloc
+{
+  let mut finds: i64 = 1;
+  if has_ref { finds = 2; }
+  let empty: [i64] = crate::ent_u16::empty();
+  let r: i64 = result_words(inout out, finds, 1, empty);
+  if r != 0 { return r; }
+  if pointed >= 0 { return stop_owner(inout st, ref_sid, sid, finds, inout out); }
+  return stop_owner(inout st, sid, sid, finds, inout out);
+}
+
+fn stop_owner(inout st: [i64], owner: [i64], sid: [i64], finds: i64, inout out: [i64]) -> i64 ! alloc
+{
+  let e: i64 = session_entry(st, owner);
+  if e < 0 || crate::bud_map::blob_len(st, e) == 0 { return 0; }
+  let o: i64 = crate::bud_map::blob_off(st, e);
+  if !string_is(st, crate::bud_card::obj_get(st, o, "state"), "open") { return 0; }
+  let p: Pair = find_pair(st, o, "autoContinue");
+  let record_sid: i64 = crate::bud_card::obj_get(st, p.v, "sessionId");
+  if string_matches(st, record_sid, sid) {
+    let stopped: Pair = find_pair(st, p.v, "stopped");
+    if crate::bud_card::truthy(st, stopped.v) { return 0; }
+    let result: i64 = result_words(inout out, finds, 1, owner);
+    if result != 0 { return result; }
+    if stopped.v >= 0 && stopped.v < 1099511627776 && stopped.end == stopped.v + 1 {
+      crate::ent_u16::wr(inout st, stopped.v, 4);
+      return 0;
+    }
+    if stopped.v >= 0 {
+      let word: [i64] = alloc(1, 4);
+      return edit(inout st, e, p.v, stopped.v, stopped.end, word, 1, 0, inout out);
+    }
+    let mut pair: [i64] = alloc(9, 0);
+    let at: i64 = put_key(inout pair, 0, "stopped");
+    let end: i64 = put(inout pair, at, 4);
+    return edit(inout st, e, p.v, p.end, p.end, pair, end, 1, inout out);
+  }
+  if crate::bud_card::truthy(st, p.v) { return 0; }
+  let card: i64 = crate::bud_card::obj_get(st, o, "card");
+  if !string_is(st, crate::bud_card::obj_get(st, card, "state"), "working") { return 0; }
+  let by: i64 = crate::bud_card::obj_get(st, card, "by");
+  if !string_matches(st, crate::bud_card::obj_get(st, by, "sessionId"), sid) { return 0; }
+  let result: i64 = result_words(inout out, finds, 1, owner);
+  if result != 0 { return result; }
+  let words: [i64] = synthetic(sid, p.k < 0);
+  if p.k >= 0 { return edit(inout st, e, o, p.v, p.end, words, len(words), 0, inout out); }
+  let end: i64 = o + crate::bud_map::blob_len(st, e);
+  return edit(inout st, e, o, end, end, words, len(words), 1, inout out);
+}
