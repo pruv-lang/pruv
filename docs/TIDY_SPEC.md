@@ -197,5 +197,12 @@ by byte-identical output and run by group, with the full test suite once before 
     observer classes, and the 95-entry foreign catalog declarations. The shared values also have no boundary
     tests: add accept/reject pairs at `MAX_TYPE_APPS`/`MAX_TYPE_NODES` and at the inline thresholds (8/9 and
     1500/1501), on both compilers, so a wrong value in the JSON is caught.
+13. **P18b follow-up (queued at the P18b merge, f0c5932; soundness).** A host that `include!`s a generated file
+    at its crate root can call the unchecked inner bodies (`f__pruv_body`) directly and skip the entry checks
+    (T0 length bound, `requires`). It predates P18b (a6fb98e) and `--proven-entries` did not widen it; SPEC
+    states the guarantee only for hosts that attach the file as a `#[path] mod`. Fix: emit the inner bodies
+    in a private module (or with private visibility the host cannot name) so only checked entries and
+    `pruv_proven::*` are reachable; every generated file changes, so run it as its own step with
+    `check_generated`, the 7 budget roots and a must-reject host test that names an inner body.
 
 Order after the review: T0①–⑥ → T3 → T1 → T2 → T4 → P16, P17a → T5 (inline policy) → T6.
