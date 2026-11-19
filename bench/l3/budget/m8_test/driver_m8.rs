@@ -51,19 +51,20 @@ impl World {
 
     // Test-only (rekey line): st[t] = value where t is a packed key word of a live map entry, keeping the stored hash
     // and the slot table consistent with the new key. Reads the bud_store layout (header word 5 entry base, 6 entry
-    // cap, 7 top; entry = 20 words: 0 live, 1 owner, 2 owner generation, 4 key offset, 5 unit count, 6 hash), which
-    // is the same in every revision corrupt_resident.py compares. None when no live entry covers t or the stored hash
-    // differs from the mirror (the mirror would then be wrong, a control error).
+    // cap, 7 top; base = 10 words: 0 live, 1 owner, 2 owner generation, 4 key offset, 5 unit count, 6 hash).
+    // None when no live entry covers t or the mirrored hash differs from the stored hash.
     fn rekey(&mut self, t: i64, value: i64) -> Option<()> {
         let st = &self.st;
         if st.len() < 16 || t < 0 || t as usize >= st.len() {
             return None;
         }
+        // The differential harness also compiles this driver against pre-split stores.
+        let stride = if cfg!(budget_legacy_entries) { 20 } else { 10 };
         let base = st[5];
         let top = st[7].min(st[6]);
         for e in 0..top.max(0) {
-            let b = base + 20 * e;
-            if b < 16 || (b + 20) as usize > st.len() {
+            let b = base + stride * e;
+            if b < 16 || (b + stride) as usize > st.len() {
                 return None;
             }
             let b = b as usize;
@@ -73,8 +74,8 @@ impl World {
             let (owner, ogen, koff, n) = (st[b + 1], st[b + 2], st[b + 4], st[b + 5]);
             // Dead child: entry e >= 3 whose owner (>= 3) is an entry in range with state 0 (unreachable, awaiting lazy reclaim).
             if e >= 3 && owner >= 3 && owner < top {
-                let ob = (base + 20 * owner) as usize;
-                if ob + 20 <= st.len() && st[ob] == 0 {
+                let ob = (base + stride * owner) as usize;
+                if ob + stride as usize <= st.len() && st[ob] == 0 {
                     continue;
                 }
             }

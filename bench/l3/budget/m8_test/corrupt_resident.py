@@ -105,7 +105,11 @@ def build(label, pruvc, rev):
         f.write('include!("%s");\n' % os.path.join(os.path.dirname(HERE), "state_buf.rs").replace("\\", "/"))
         f.write(open(os.path.join(HERE, "driver_m8.rs")).read())
     exe = os.path.join(d, "driver")
-    run([run_m8.rustc(), "-C", "opt-level=3", "--edition", "2021", "-o", exe, main], text=True)
+    store = os.path.join(cwd, "bench", "l3", "budget", "bud_store.pruv")
+    with open(store, encoding="utf-8") as f:
+        legacy = "pub fn has_x(" not in f.read()
+    cfg = ["--cfg", "budget_legacy_entries"] if legacy else []
+    run([run_m8.rustc(), "-C", "opt-level=3", "--edition", "2021", "-o", exe, main] + cfg, text=True)
     return exe
 
 
@@ -274,7 +278,8 @@ def p21a_controls(exe):
     # Two sessions force the 256-word initial store to 512 words (16 slots, 8 entries, top 5).
     # Anchoring on all nine header words checks that the fixed offsets used by both pokes are correct.
     header = [1112884307, 1, 512, 16, 16, 32, 8, 5, -1]
-    first_session_blob_off = header[5] + 20 * 3 + 12
+    # Extension records follow all bases. Entry 3's blob offset is extension word 1.
+    first_session_blob_off = header[5] + 10 * header[6] + 10 * 3 + 1
     add = SETUP[0]
     # Use an empty budget ID so header word 15 (pending-Need, 0) matches the record's ID length at offset 1.
     overlap = [put_line(bid=[]), second_session, poke(header, first_session_blob_off, 1)]
