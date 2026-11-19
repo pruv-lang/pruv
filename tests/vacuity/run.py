@@ -13,7 +13,7 @@ contradiction An intended dead point (contradictory requires, a branch the requi
               the original and the variant must both verify. Listing them keeps such points visible; normal builds
               make no extra satisfiability query.
 pair          Sources checked as they are: `accept` must verify, `reject` must fail with the given stage, code and
-              message (the message names the failing line).
+              message (the message names the failing line). Line and column are checked when given.
 
 --compiler both (default) runs the selected sets with the Python and the Rust compiler. --kinds defaults to all
 sets. Failures are counted by class for each compiler and set. Exit code: 0 all pass, 1 a case failed, 2 a tool
@@ -94,9 +94,12 @@ def run_case(drv, kind, case, timeout):
                 cls = "other"
             elif case["message"] not in d.get("message", ""):
                 cls = "wrong_location"
+            elif any(d.get(key) != case[key] for key in ("line", "col") if key in case):
+                cls = "wrong_location"
             else:
                 return None
-            return cls, "expected reject %s/%s %r, got %s %s" % (want[0], want[1], case["message"], got, d)
+            location = {key: case[key] for key in ("line", "col") if key in case}
+            return cls, "expected reject %s/%s %r %s, got %s %s" % (want[0], want[1], case["message"], location, got, d)
         got, d = compile_src(drv, os.path.join(ROOT, case["src"]), tmp, timeout)
         if got != "ok":
             return ACCEPT_FAILURE[got], "original must verify, got %s %s" % (got, d)

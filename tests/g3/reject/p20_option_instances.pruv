@@ -1,0 +1,25 @@
+// G3 TIDY 14(b) reject twin of p20: use one as the integer default; must fail verify/ensures
+// The remaining declarations are copied from the proof fixture.
+fn get_or<T>(o: Option<T>, d: T) -> T
+  ensures is_some(o) ==> result == some_val(o)
+  ensures !is_some(o) ==> result == d
+{
+  match o {
+    Some(v) => { return v; }
+    None => { return d; }
+  }
+}
+
+fn bool_or_false(o: Option<bool>) -> bool
+  ensures is_some(o) ==> result == some_val(o)
+  ensures !is_some(o) ==> !result
+{
+  return get_or::<bool>(o, false);
+}
+
+fn int_or_zero(o: Option<i64>) -> i64
+  ensures is_some(o) ==> result == some_val(o)
+  ensures !is_some(o) ==> result == 0
+{
+  return get_or::<i64>(o, 1);
+}

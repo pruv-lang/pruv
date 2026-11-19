@@ -1,0 +1,16 @@
+// G3 TIDY 14(b) reject twin of p19: reset the tag id to zero; must fail verify/ensures
+struct Tag<T> {
+  id: i64
+}
+
+fn retag<A, B>(t: Tag<A>) -> Tag<B>
+  ensures result.id == t.id
+{
+  return Tag::<B> { id: 0 };
+}
+
+fn make<T>(id: i64) -> Tag<T>
+  ensures result.id == id
+{
+  return Tag::<T> { id: id };
+}
