@@ -19,7 +19,7 @@ mod bud_tools;
 // n == 15 + words(bn), the id slice canonical via slice_ok; counters are not validated).
 // t_call checks every key of the op on EVERY call with rec_end (framing + canonical form in O(1) per key), before
 // anything is written. Any bad key answers 2 with nothing written.
-// t_call also keeps the state / reason checks (bud_charge::charge) and the word-14 compare in load_cv.
+// t_call also keeps the state / reason checks (bud_charge::charge) and the word-14 compare in cur_off.
 // These checks stay because the store invariant I1 (every stored key and every stored record passed t_put
 // validation) is NOT a checked invariant: st is a resident buffer the host may hand back in any content, and nothing
 // in the code proves or re-validates I1 on entry. Erasing the per-call key checks, the state / reason rechecks or the
@@ -40,8 +40,7 @@ mod bud_tools;
 // Grow: a negative status -N (nothing written; the host grows the buffer to at least N words and retries).
 // Scratch `cv` (>= 15 words) is caller-provided working memory; the host never reads it.
 
-// The blob offset of ref's (sk, bk) budget record when CURRENT(ref) holds, else -1. Same tests as the copy in
-// load_cv, which calls it.
+// The blob offset of ref's (sk, bk) budget record when CURRENT(ref) holds, else -1.
 fn cur_off(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64) -> i64
   ensures -1 <= result && result <= 1099511627776
 {
@@ -87,18 +86,9 @@ fn cur_off(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64) 
   return off;
 }
 
-// Loads the charge view for ref (sk, bk) from the session blob into cv; cv[0] = 1 when current. Returns the blob
-// offset of the session's budget record when current, else -1 (store_cv writes the counters back there; the state
-// does not change between load_cv and store_cv). Only the out-of-range fallback of t_call uses it: when the record
-// words lie in st, t_call works on them in place (bud_charge *_at).
-fn load_cv(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64, inout cv: [i64]) -> i64
-{
-  crate::ent_u16::wr(inout cv, 0, 0);
-  let off: i64 = cur_off(st, sk, ss, sn, bk, bs, bn);
-  return load_cv_at(st, off, inout cv);
-}
-
-// load_cv for a caller that already ran cur_off: off is its result (-1 or a blob offset), so CURRENT runs once.
+// Loads the charge view at off, the result of cur_off (-1 or a blob offset), into cv; cv[0] = 1 when current.
+// Returns off (store_cv writes the counters back there). Only the out-of-range fallbacks of t_call use it: when the
+// record words lie in st, t_call works on them in place (bud_charge *_at).
 fn load_cv_at(st: [i64], off: i64, inout cv: [i64]) -> i64
   requires -1 <= off && off <= 1099511627776
 {
@@ -115,7 +105,7 @@ fn load_cv_at(st: [i64], off: i64, inout cv: [i64]) -> i64
   return off;
 }
 
-// Writes the counters cv[8..14] back into blob words 7..13 at the offset load_cv returned (in place: same length).
+// Writes the counters cv[8..14] back into blob words 7..13 at the offset load_cv_at returned (in place: same length).
 fn store_cv(inout st: [i64], off: i64, cv: [i64]) -> i64
 {
   if off < 0 { return 0; }
@@ -225,16 +215,33 @@ pub fn t_call(inout st: [i64], op: [i64], inout cv: [i64], inout fx: [i64]) -> i
   let e2: i64 = crate::bud_keys::rec_end(op, e1);
   if e2 < 0 { return 2; }
   let bn: i64 = crate::ent_u16::rd(op, e1);
-  if code == 1 {
-    if e2 + 10 != len(op) { return 2; }
-    // e2 + 10 == len(op) and e2 >= 0 (rec_end): the what words are in op
+  if code == 1 || code == 2 {
+    // charge (code 1, what x10 after the budget key) and noteFailure (code 2) share one CURRENT lookup: one cur_off
+    // call site keeps it inlined (SPEC "Inline policy": copies beyond one count against INLINE_BUDGET). The length
+    // check runs before the lookup, as at base: a bad length answers 2 with st and cv unchanged (fx[0..2] is
+    // already written above, also as at base).
+    if (code == 1 && e2 + 10 != len(op)) || (code == 2 && e2 != len(op)) { return 2; }
     let bo: i64 = cur_off(st, op, 2, sn, op, e1 + 1, bn);
+    if code == 2 {
+      if bo < 0 { return 0; }
+      if bo + 14 <= len(st) { return crate::bud_charge::note_failure_at(inout st, bo); }
+      // out-of-range record: the frame view at bo (CURRENT ran once above)
+      crate::ent_u16::wr(inout cv, 0, 0);
+      let b2: i64 = load_cv_at(st, bo, inout cv);
+      let r: i64 = crate::bud_charge::note_failure(inout cv);
+      if r != 0 { return r; }
+      let w: i64 = store_cv(inout st, b2, cv);
+      if w != 0 { return 2; }
+      return 0;
+    }
+    // e2 + 10 == len(op) and e2 >= 0 (rec_end): the what words are in op
     let mut r: i64 = 1;
     if bo >= 0 && bo + 14 <= len(st) {
       // the record words in range: charge them in place (the writes come after every check, as in the frame path)
       r = crate::bud_charge::charge_at(inout st, bo, op, e2);
     } else if bo >= 0 {
-      let b2: i64 = load_cv(st, op, 2, sn, op, e1 + 1, bn, inout cv);
+      crate::ent_u16::wr(inout cv, 0, 0);
+      let b2: i64 = load_cv_at(st, bo, inout cv);
       r = crate::bud_charge::charge(inout cv, op, e2);
       if r == 0 {
         let w: i64 = store_cv(inout st, b2, cv);
@@ -247,18 +254,6 @@ pub fn t_call(inout st: [i64], op: [i64], inout cv: [i64], inout fx: [i64]) -> i
       let h: i64 = halt_frame(op, e2, r - 32, inout fx);
       return h;
     }
-    return 0;
-  }
-  if code == 2 {
-    if e2 != len(op) { return 2; }
-    let bo: i64 = cur_off(st, op, 2, sn, op, e1 + 1, bn);
-    if bo < 0 { return 0; }
-    if bo + 14 <= len(st) { return crate::bud_charge::note_failure_at(inout st, bo); }
-    let b2: i64 = load_cv(st, op, 2, sn, op, e1 + 1, bn, inout cv);
-    let r: i64 = crate::bud_charge::note_failure(inout cv);
-    if r != 0 { return r; }
-    let w: i64 = store_cv(inout st, b2, cv);
-    if w != 0 { return 2; }
     return 0;
   }
   if code == 3 {
