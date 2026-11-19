@@ -11,6 +11,8 @@
 //                                        (Host::call_quiet: op build into a cached Vec, decode_call, dispatch, effect
 //                                        bookkeeping; no logging, no result words in the timed loop).
 //                                        lane: typed | wire | all (default all); item: an item name or `all`.
+//   --cfg t5c_empty (floor build for t5c_floor.py only): current, is_halted, attach, reopen and maybe_close return at
+//                                        once (bodies emptied); the default build is unchanged.
 //
 // chk (hand only): the full observed final state (the words q mode prints after `O`) folded as s = s*31 + w (wrapping
 // u64), computed outside the timing; it shows that the perf runs are deterministic.
@@ -565,6 +567,9 @@ impl World {
 
     // CURRENT(ref): the session has a budget whose id is the ref's.
     fn current(&self, sid: &[u16], bid: &[u16]) -> Option<&Budget> {
+        if cfg!(t5c_empty) {
+            return None; // T5c floor build (--cfg t5c_empty): body emptied
+        }
         match self.sessions.get(sid) {
             Some(Slot::Budget(b)) if *b.id == *bid => Some(b),
             _ => None,
@@ -572,6 +577,9 @@ impl World {
     }
 
     fn is_halted(&self, sid: &[u16], bid: &[u16]) -> bool {
+        if cfg!(t5c_empty) {
+            return false; // T5c floor build (--cfg t5c_empty): body emptied
+        }
         self.current(sid, bid).map_or(false, |b| b.state == State::Halted)
     }
 
@@ -584,6 +592,9 @@ impl World {
         uuid: Option<&[u16]>,
         now: i64,
     ) -> Result<Res<'_>, i64> {
+        if cfg!(t5c_empty) {
+            return Ok(Res::Bool(false)); // T5c floor build (--cfg t5c_empty): body emptied
+        }
         let slot = match self.sessions.get_mut(sid) {
             Some(s) => s,
             None => return Err(2),
@@ -636,6 +647,9 @@ impl World {
 
     // reopen (B:224-231): CURRENT(ref) closed with ended.how quiet -> open, ended deleted, changed.
     fn reopen(&mut self, sid: &[u16], bid: &[u16]) -> Result<Res<'_>, i64> {
+        if cfg!(t5c_empty) {
+            return Ok(Res::Bool(false)); // T5c floor build (--cfg t5c_empty): body emptied
+        }
         let b = match self.sessions.get_mut(sid) {
             Some(Slot::Budget(b)) if *b.id == *bid => b,
             _ => return Ok(Res::Bool(false)),
@@ -654,6 +668,9 @@ impl World {
     // `packed`: the session key's packed words as the wire call carried them (wire lane), passed to the host as is;
     // None (typed lane) packs the unit key here.
     fn maybe_close(&mut self, sid: &[u16], packed: Option<&[i64]>, now: i64) -> Result<Res<'_>, i64> {
+        if cfg!(t5c_empty) {
+            return Ok(Res::Bool(false)); // T5c floor build (--cfg t5c_empty): body emptied
+        }
         let b = match self.sessions.get_mut(sid) {
             None => return Err(2),
             Some(Slot::Budget(b)) if b.state == State::Open => b,

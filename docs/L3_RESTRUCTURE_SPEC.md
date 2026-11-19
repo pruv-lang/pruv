@@ -399,7 +399,7 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P19c | Both codegens: foreign (trusted rust) call wrapper and cross-rlib inlining (Appendix P19.4) | P: `catch_unwind(AssertUnwindSafe(..))` around every trusted rust call and the non-inlined callee `LocalKey::with` removed or made free where sound (for example crates built with `panic = abort`, or the poison rule of P10 kept by another path), with the soundness argument written and audited; output parity on both compilers; P19 `closereopen` (1.14-1.15) and `attach` (1.12-1.13) re-measured, the wrapper share attributed, the rest left to T5/P18b by line. Done (Appendix P19c): drop guard (`pruv_ForeignGuard`) in place of `catch_unwind`, `__rust_try` and the catch frame gone; the foreign path now equals a plain call (closereopen `guard` = `direct` within 0.1 ns, 61 rounds); the diagnostic goes through a fresh `/dev/stderr` handle, not std's stderr lock, on unix; `LocalKey::with` is the caller's LLVM inline decision, present with no wrapper and gone when inlined; the rest (attach 1.13x, closereopen 1.11-1.12x, reopenmiss 1.05-1.08x vs hand16) is the inline policy (T5, measured: 1.02-1.06x with the four lifecycle/map bodies forced inline) and the result path (P18b, hypothesis). T5 (Appendix T5): no inline rule ships; every promotion grows `__text` (find_w + attach +40 %, the four +116 %) for 2-13 % fewer instructions; queued as T5a. |
 | T5a | Both codegens and B/bud_map.pruv, bud_lifecycle.pruv: M7 lookup and lifecycle gap without code growth (Appendix T5.3) | P: `attach`, `closereopen`, `reopenmiss`, `current`, `isHalted` <= 1.0x hand16 with M7 `__text` and peak RSS not above the T5 base (405,180 B); the inline-only route is ruled out (T5.2). Candidates: cut the always callees of `find_w` (P13h specialization or hot/cold split), the P19c entry/record re-validation and id copies; output parity on both compilers. Measured (Appendix T5a): no change ships. The fixes found (reopen cold tail -32/-35, maybe_close direct header path -9) all grow `__text`. Part of each raw cell is the driver typed-lane shape (current: floor 73 vs hand ~19). The rest is split by line, queued as T5b/T5c, and kept in P13h/P18b. |
 | T5b | Both codegens: cold-tail rule (Appendix T5a.4) | P: reopen's slow tail (blob_copy, rewrite, store) is emitted out of line and cold, so the miss path drops the slow-path frame (352 B in the T5a build). The rule is an attribute or a proof-free rule that does not mark the M4 put path cold. reopenmiss and closereopen fewer instructions than T5 with `__text` and peak RSS not above the T5 base (405,180 B); the hand-edited reference is rsplita (-32/-35 against its same-run base, for +10.9 KB). Includes a per-function attribution of the closereopen pair. Output parity on both compilers. |
-| T5c | B/m7_test/driver_m7.rs: typed-lane harness parity (Appendix T5a.2) | P: the M7 timed loop calls the `c_*` entry with the same shape as hand16's bare method call (no non-inlined step closure, no per-op prep match), reported next to the existing lane. The floor of each lane is measured with bodies emptied. Measurement only; no product number moves. |
+| T5c | B/m7_test/driver_m7.rs: typed-lane harness parity (Appendix T5a.2) | P: the M7 timed loop calls the `c_*` entry with the same shape as hand16's bare method call (no non-inlined step closure, no per-op prep match), reported next to the existing lane. The floor of each lane is measured with bodies emptied. Measurement only; no product number moves. Measured (Appendix T5c): fair lane (`driver_m7 perf S R item f`) against hand16, instructions S/M: isHalted 0.99/0.98 (no overlap, at or below 1.0x), current 1.02/1.02, attach 1.30/1.29, closereopen 1.18/1.18, reopenmiss 1.16/1.15; floor-subtracted 0.97/0.96, 1.00/1.01, 1.27/1.25, 1.16/1.16, 1.14/1.15. The rest is the entry floor (length guards, `out` store: P18b), the reopen tail (T5b), and find_w/entry re-validation (P13h); no new row. Driver `__text` 405,180 to 413,756 B (harness only; T5b re-measures its base). |
 | P20 | B/bud_charge.pruv,m8_test: counters/sums/bounds | P Q2+C/D, equal safe-number baseline; negative/boundary atomic refusal and charge/failure <=1.0. |
 | P21 | B/bud_tools.pruv,key helpers: stored hash/dedup | P Q2+D; dup/new/forget separately <=1.0, missing-budget dedup. Interning only as measured follow-up. |
 | P22 | B/bud_clock.pruv: runs/refresh/begin/settle/arm | P Q3+E/F, active-count functional model, R/timer cycle; do not treat I2 as an unchecked proof assumption. |
@@ -4922,3 +4922,148 @@ then answer "not open". That is a behaviour change outside the T5a scope, so it 
 | package audit | Codex gpt-6.2-astra ultra | review |
 
 Diagnosis, the variants, the measurements and this appendix were done directly.
+
+## Appendix T5c (M7 typed-lane harness parity and floors)
+
+Result: with a typed lane shaped like hand16's typed loop, isHalted is below hand16 at S and M (0.98-0.99x
+instructions, no overlap). current is 1.02x. attach (1.29-1.30x), closereopen (1.18x) and reopenmiss (1.15-1.16x)
+stay above 1.0x. Each remaining gap is split by line below and points to T5b, P13h or P18b; no new row. Measurement
+only: no `.pruv` file or compiler changed, the generated Rust is as at T5a (rs and py output byte-identical), and the
+existing typed lane is unchanged.
+
+### T5c.1 Lanes and floors
+
+- **Existing typed lane (`t`, `rchk_t`, unchanged):** the `step` closure (not inlined), the `c_direct` match on the prep
+  code, `w.fx[0] = 0` per op, the Grow fallback. Its closure's disassembly is identical to the T5a driver on the same
+  `gen.rs` (same symbol, same address, md5 of the address-stripped listing equal).
+- **Fair typed lane (`f`, `rchk_f`, new, `driver_m7.rs` `fair_loop`):** the match on the item is outside the loop; the
+  loop calls `fair_one::<C>` (`#[inline(always)]`, const-generic code), which calls the `c_*` entry directly and then
+  `black_box((r, w.out[0]))`, the same observation as the existing lane.
+  - fx is reset only where hand16 clears fx: attach, reopen and maybe_close (hand `fx.clear()`); current and
+    isHalted reset nothing, as hand16 does not.
+  - No Grow fallback: none of the five cells grows a buffer, and `fair_rchk` asserts `r >= 0` for every op.
+  - Arguments are the same pre-decoded words as the existing lane (`FArgs` from `Prep`), read through `black_box`,
+    as hand16 reads its keys through `black_box`.
+  - closereopen runs maybe_close then reopen per rep (2 calls), as hand16 does.
+- `driver_m7 perf S reps <item> <t|f>` runs one lane of one item (setup, warm-up 1000, timed loop, `rchk_*` pass);
+  `run_m7.py perf` parses `f` / `rchk_f` as lane `pruv_f` and adds the fair columns and their instructions.
+- **Floors (`t5c_floor.py`):**
+  - Pruv: the shipped `gen.rs` with the five typed `c_*` bodies (current, is_halted, attach, reopen, maybe_close)
+    replaced by `out[0]=0; return 0;`, as T5a's `m7.emptyall.rs`. The entry length guards stay. `c_replace` and the
+    wire path are kept, so setup is unchanged.
+  - hand16: `hand_m7_u16.rs` built with `--cfg t5c_empty`; current, is_halted, attach, reopen and maybe_close return
+    at once. The default build is unchanged: its `__text` is 311,484 B before and after, and the otool listing md5 is
+    equal. The floor build is 304,380 B.
+- Driver `__text` (rs output, this flags set): 405,180 B before, 413,756 B with the fair lane. The growth is the
+  harness binary only, but row T5a's text rule reads this binary, so T5b and later rows must re-measure their base on
+  this driver (or on the old driver) and compare like with like.
+
+### T5c.2 Method
+
+- Instructions and cycles per call are `(X(5R) - X(R)) / (4R x calls)` from `/usr/bin/time -l`, R = 20,000, with
+  calls = 2 for closereopen. Setup, warm-up and the rchk pass (min(R, 2000) ops) are equal in both runs and cancel.
+- 5 interleaved rounds: each round runs every (size, cell, lane) once, and the lane order rotates per round. Six
+  lanes: Pruv t, Pruv f, hand16, and the three floors (t0, f0, hand0). Sizes S = 100 and M = 500.
+- Load was high, so instructions lead; cycles are reported, but their ranges overlap in most cells.
+- Ratios use medians: raw = t / hand, fair = f / hand, floor-subtracted = (f - f0) / (hand - hand0).
+- Overlap is whether the [min, max] ranges of f and hand intersect over the 5 rounds.
+- rchk_f equals rchk and rchk_t for every cell, on the rs-built and the py-built driver.
+
+### T5c.3 Instructions per call (median of 5; f and hand ranges in brackets)
+
+| cell | S | hand16 | Pruv t (raw) | raw | Pruv f (fair) | fair | t0 | f0 | hand0 | floor-sub | f vs hand overlap |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| isHalted | 100 | 340.7 [338.9..402.8] | 404.1 | 1.19 | 335.9 [335.6..336.1] | 0.99 | 79.2 | 12.0 | 6.5 | 0.97 | no (f below) |
+| current | 100 | 335.5 [334.3..382.6] | 404.8 | 1.21 | 341.7 [341.1..355.6] | 1.02 | 76.4 | 12.6 | 7.7 | 1.00 | yes |
+| attach | 100 | 301.5 [292.3..338.0] | 453.0 | 1.50 | 392.7 [391.2..394.6] | 1.30 | 86.8 | 14.8 | 4.9 | 1.27 | no |
+| closereopen | 100 | 445.3 [441.9..472.8] | 574.0 | 1.29 | 523.4 [523.0..523.7] | 1.18 | 63.0 | 10.8 | 4.5 | 1.16 | no |
+| reopenmiss | 100 | 337.0 [324.5..353.5] | 456.2 | 1.35 | 389.6 [389.2..390.8] | 1.16 | 80.8 | 12.9 | 6.4 | 1.14 | no |
+| isHalted | 500 | 340.3 [337.5..340.8] | 402.7 | 1.18 | 334.6 [333.3..336.0] | 0.98 | 77.8 | 11.6 | 5.0 | 0.96 | no (f below) |
+| current | 500 | 333.7 [332.4..336.3] | 404.6 | 1.21 | 340.7 [339.1..343.3] | 1.02 | 78.3 | 13.1 | 8.2 | 1.01 | no |
+| attach | 500 | 303.7 [300.4..305.6] | 455.0 | 1.50 | 391.2 [371.4..393.8] | 1.29 | 86.4 | 15.7 | 3.6 | 1.25 | no |
+| closereopen | 500 | 444.7 [443.6..445.1] | 573.6 | 1.29 | 523.3 [522.3..524.5] | 1.18 | 63.0 | 10.9 | 4.6 | 1.16 | no |
+| reopenmiss | 500 | 337.9 [336.1..401.5] | 456.2 | 1.35 | 388.9 [388.5..390.6] | 1.15 | 80.2 | 10.7 | 7.9 | 1.15 | yes |
+
+- The two overlaps (current S, reopenmiss M) come from one high hand16 round each. In both cells the f median is
+  above the hand median, and at the other size the ranges do not overlap. They are not read as at or below 1.0x.
+- The harness shape accounts for the raw-vs-fair difference: t0 - f0 is 64-72 per call (52 for closereopen), close to
+  t - f (60-68; 50-51 for closereopen).
+- T5a's closure-lane floor (66-92) and its "current hand floor ~19" are replaced by these floors.
+- hand16 attach is 301-304 here against 319 in T5a (same binary text). The T5a run was median of 3 under a different
+  load and is not reused.
+
+Cycles per call (median of 5; noisy, ranges overlap in most cells):
+
+| cell | S | hand16 | Pruv t | Pruv f | fair | floor-sub | f vs hand overlap |
+|---|---:|---:|---:|---:|---:|---:|---|
+| isHalted | 100 | 57.2 | 51.9 | 39.1 | 0.68 | 0.64 | yes |
+| current | 100 | 56.0 | 49.8 | 41.5 | 0.74 | 0.70 | yes |
+| attach | 100 | 47.0 | 48.3 | 50.0 | 1.06 | 1.12 | yes |
+| closereopen | 100 | 71.6 | 69.7 | 59.8 | 0.84 | 0.81 | yes |
+| reopenmiss | 100 | 48.4 | 50.3 | 44.0 | 0.91 | 0.98 | yes |
+| isHalted | 500 | 49.8 | 46.2 | 36.5 | 0.73 | 0.45 | no (f below) |
+| current | 500 | 50.4 | 45.6 | 36.6 | 0.73 | 0.68 | no (f below) |
+| attach | 500 | 53.2 | 53.3 | 41.9 | 0.79 | 0.55 | yes |
+| closereopen | 500 | 74.2 | 67.7 | 60.7 | 0.82 | 0.80 | no (f below) |
+| reopenmiss | 500 | 59.0 | 56.4 | 44.3 | 0.75 | 0.72 | yes |
+
+- Cycles are at or below hand16 at the median in every cell except attach S (1.06, overlapping).
+- Instructions stay the primary measure. The cycle lead is not claimed as a time win under this load: only isHalted,
+  current and closereopen at M are separated.
+
+**Peak memory footprint (whole process, 5R run, median):**
+- Pruv: about 1.98-2.03 MB at S and 3.82-3.88 MB at M. hand16: 1.66-1.69 MB at S and 3.20-3.23 MB at M.
+- The floors show the same gap (f0 2.02 / 3.82-3.83 MB, hand0 1.64-1.67 / 3.20-3.21 MB). So the gap is in setup,
+  state and harness, not in the lane shape or the cell bodies.
+- It is not attributed here. The M7 peak RSS question stays in P18b.
+
+### T5c.4 Remaining gap per cell, by line (fair lane, instructions per call, S / M)
+
+- **The entry floor, f0 - hand0 = +3 to +12. Points to P18b.**
+  - In `drv0`'s `fair_loop`, the current loop is 12 instructions per call:
+    - 5 for the `black_box` reload of the two key slices (hand also reads its keys through `black_box`);
+    - 3 for the entry's 2^40 length guards (`cmp`, `ccmp`, `b.hi`);
+    - 1 for the result store into `out`;
+    - 1 for the result `black_box`;
+    - 2 for the loop.
+  - hand0's loop is a bare inlined call: 7.7 / 8.2.
+  - The guards and the `out` store are the host shim/ABI result path, so they belong to P18b.
+  - attach, reopen and maybe_close add the `w.fx[0] = 0` store; hand's `fx.clear()` is a length store.
+- **isHalted:** -4.8 / -5.7. At or below 1.0x at S and M, with no overlap. No remaining gap.
+- **current:** +6.2 / +7.0.
+  - The entry floor is +4.9 / +4.9 (P18b).
+  - The body after the floor is +1.3 / +2.1: the find_w probe re-validation (`entry_matches_w` through `field_addr → ea`),
+    which is P13h per T5a.4.
+- **reopenmiss:** +52.6 / +51.0.
+  - Floor +6.5 / +2.8 (P18b).
+  - Body +46 / +48: the reopen slow-path frame (`sub sp, sp, #0x160`) that the miss path pays, which is T5b; rsplita
+    measured -32 against its same-run base in T5a.3.
+  - The rest (about 15) is the find_w probe and entry re-validation, P13h. It is not separated here.
+- **closereopen (per call; the pair is double):** +78.1 / +78.6.
+  - Floor +6.3 / +6.3 (P18b).
+  - Body per pair about +144 / +145:
+    - the reopen tail (T5b; rsplita -35 per pair);
+    - maybe_close's entry and header re-validation (P13h; mc -9 per pair);
+    - find_w twice per pair (P13h).
+  - About 100 per pair stays unattributed. T5b already carries the per-function attribution of the pair.
+- **attach:** +91.2 / +87.5.
+  - Floor +9.9 / +12.1 (P18b).
+  - Body +81 / +75: the stored budget id copied into `out` by `put_key`, where hand returns `Res::Ref` (P18b), plus
+    entry re-validation and the find_w probe (P13h).
+  - The split between the two is not measured here.
+
+Every remaining cause is one already named in T5a.4, so no new row is opened.
+
+### T5c.5 Gates and delegation
+
+- `run_m7.py q` (rs) and `run_m7.py q --py`: 300 cases, exact 113, not-implemented 187, fail 0, on both. The driver
+  with the fair lane builds on both outputs (identical `gen.rs`).
+- `tests/` is unchanged, so `run_all.py --list-rows` was not re-run. No audit: this is a measurement-only harness change,
+  and product meaning is unchanged.
+- `work/m7/t5c/` holds the floor binaries and `floor.json`; it is not committed.
+
+| work | to | mode |
+|---|---|---|
+| `run_m7.py` fair-lane parsing, rchk check, instr and columns | Claude sonnet | write |
+
+The lane design, the driver and hand floor edits, `t5c_floor.py`, the measurements and this appendix were done directly.
