@@ -106,7 +106,7 @@ The M7 key and record rows above apply. The halt call adds its own query, effect
 | query | `running_ids(k, ks, kn, bk, bs, bn, fxn)`: runningDelegationIds(ref), asked by halt after SETTLE; ref = sessionId key `k[ks..]` (kn units) and budgetId key `bk[bs..]` (bn units); `fxn` = the number of effect words recorded so far (`fx[0]`; a real host ignores it, the test host logs it) |
 | answer | `[0, n, (len, words(len) packed words)*]`, ids as packed key words; anything else (status not 0, a non-canonical key, words left over) makes halt return 2 |
 | fx | SETTLE's 13 timerClear (if any), then halt's 31 cancelRecovery, 32 stopMain, `[33, i]` stopDelegation of answer id i, 34 stopAttachedTurns, 35 holdQueued, 36 save, 20 changed, 37 announce |
-| status | 0 done, 2 invalid, 3 fx too small for the fixed part or a short view (nothing written), 6 the answer does not fit fx or the store room, or a size above 2^32 words (terminal), -N Grow (grow to N words, call again) |
+| status | 0 done, 2 invalid, 3 fx too small for the fixed part or a short view (nothing written), 6 the answer does not fit fx or the store room, a size above 2^32 words, or a record above 2^30 words (refused before any write) (terminal), -N Grow (grow to N words, call again) |
 
 - When the host answers the query, it treats `fx[1..fxn)` as already performed (SETTLE's timerClear comes before the
   query).

@@ -21,7 +21,8 @@
    Status (P24): 0 (also when nothing halts: no current / not open), 2 invalid (bad reason, the record frame fails
    `rec_ok_in`: six raw string lengths must end exactly at the blob end, or an invalid answer after SETTLE), 3 fx too
    small for the fixed part (fx[0] + 12 > len, nothing written), 6 the answer does not fit (fx: fx[0] + 8 + 2·D >
-   len; store: more id words than QUERY_ROOM = 256 plus the free words a rehash finds; terminal, SETTLE applied),
+   len; store: more id words than QUERY_ROOM = 256 plus the free words a rehash finds; terminal, SETTLE applied; or
+   a record above 2^30 words, refused before any write),
    -N Grow (nothing written). Room for the record without its id list plus QUERY_ROOM is reserved before SETTLE
    (`halt_words`), so Grow comes before any write; the second reserve after the query can only rehash in place.
    On 2 / 6 after SETTLE, fx holds SETTLE's timerClear and the host applies it as on status 0. The record is read
@@ -94,6 +95,7 @@ Gates after P24 (Rust and Python pruvc, byte-identical Rust; raw logs `work/p24/
 | q cases.jsonl (Q4/Q5) | 78 exact / 222 not-implemented / 0 fail, 59 queries compared | same |
 | q cases_halt.jsonl (derived cuts) | 300 / 0 / 0, halts compared 97 | same |
 | replay (cases / cases_halt) | identical, 981 / 1687 calls, 47 / 76 grown | same |
+| same | 285490 bytes identical | - |
 | mutant_halt.py | control CLEAN, 12/12 mutants KILLED (query_before_settle, no_settle, query_budget_as_session, query_session_as_budget, bad_answer_ok, bad_answer_drops_settle, big_answer_drops_settle, no_stop_loop, stop_reversed, cancel_after_stopmain, no_save, big_answer_continues) | - |
 
 The q comparison now includes the query itself, as it happened: the driver logs the answer `running_ids` actually
@@ -103,10 +105,13 @@ carry that answer. G fixtures (mutant_halt.py): G1 answer order (2 ids, 0 ids); 
 G3 an answer too big for fx → 6, G3b an answer too big for the store room → 6, each with exactly SETTLE's timerClear,
 the query and nothing else, the session not halted and the record holding SETTLE's result (`keep_settled`); G4 a
 forced Grow: the first call returns -N with no query and `st`/fx unchanged, the retry queries once.
+`query_before_settle` must die in q with a reason naming `X armed` or `runningDelegationIds`. The `X armed` check is
+replayed host-side after the call, so it checks the host-visible order. A run op rewrites its settled record before a
+nested halt, so a nested halt that fails keeps a consistent record.
 
 Perf (`run_m10.py perf --rounds 7 --reps 50000`, interleaved with `hand_m10.rs`, ns; the driver names each stopped
-id as the hand lane does): halt D=10 315.6 vs 331.7 (0.95, overlap), D=50 680.2 vs 1119.3 (0.61), D=100 1027.3 vs
-2131.1 (0.48); putback 28.6-28.8 vs 72.7-76.4 (0.38-0.39). Allocations per rep: Pruv 4, hand 17 / 57 / 107.
+id as the hand lane does): halt D=10 319.8 vs 332.5 (0.96, overlap), D=50 682.3 vs 1129.9 (0.60), D=100 1035.7 vs
+2118.5 (0.49); putback 28.8-29.2 vs 73.2-78.6 (0.37-0.40). Allocations per rep: Pruv 4, hand 17 / 57 / 107.
 Details: L3_RESTRUCTURE_SPEC.md Appendix P24.
 
 ## M10b still needs
