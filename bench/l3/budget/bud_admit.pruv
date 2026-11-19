@@ -26,41 +26,51 @@ fn span_w(off: i64, cap: i64, ab: i64, at: i64) -> bool
     cap <= at - off);
 }
 
-// I1 of entry e as a ground predicate on its words, field f at st[c32(st[5]) + 20 * e + f], bud_store::ea's address
-// (a valid store has st[5] = 16 + slots <= 2^32 + 16; the base is clamped to 2^32 as ea clamps it): state 0 (free) or
-// 1 (live or pending dead); roots 0..2 live with owner -1; key span (words 4, 18) and blob span (12, 19) inside the arena [ab, at); a
-// free entry's next link (8) is -1 or below top; a state-1 entry
-// (past the roots) has its owner (1) below top, its key length (5) in 0..2^30 and in its key span (words(kn) <= cap,
-// i.e. kn <= 4 * cap), its blob length (13) in 0..blob cap, its links (7..10) -1 or below top and word 11 >= 0. Opaque,
-// so a caller that only passes admit's ensures along does not expand it; under a quantifier it is expanded in place
-// (P13o), so admit reveals it in its entry loop. Not stated (entry_ok still checks them): the owner's state and the key
-// padding (L3 P13a.10).
+// I1 checks the base and any flagged extension. The addresses use the same clamped
+// header words as bud_store. Owner state and key padding are checked by entry_ok.
 pub opaque fn ent_i1(st: [i64], e: i64, top: i64, ab: i64, at: i64) -> bool
 {
   if len(st) < 16 || e < 0 || e > 4294967296 || st[5] < 0 || st[5] > 4294967312 { return false; }
-  if st[5] > 4294967296 { return ent_w(st, 4294967296 + 20 * e, e, top, ab, at); }
-  return ent_w(st, st[5] + 20 * e, e, top, ab, at);
+  // Admission checks the header first, so capacity is already in the c32 range.
+  if st[6] < 0 || st[6] > 4294967296 { return false; }
+  let ext_delta: i64 = 10 * st[6];
+  if st[5] > 4294967296 {
+    let b: i64 = 4294967296 + 10 * e;
+    return ent_w(st, b, b + ext_delta, e, top, ab, at);
+  }
+  let b: i64 = st[5] + 10 * e;
+  return ent_w(st, b, b + ext_delta, e, top, ab, at);
 }
 
-// ent_i1's word tests for entry e whose words start at b.
-pub fn ent_w(st: [i64], b: i64, e: i64, top: i64, ab: i64, at: i64) -> bool
+// I1 word checks given the base and extension addresses.
+pub fn ent_w(st: [i64], b: i64, x: i64, e: i64, top: i64, ab: i64, at: i64) -> bool
 {
-  if b < 16 || b > len(st) - 20 { return false; }
+  if b < 16 || b > len(st) - 10 { return false; }
   let f0: i64 = st[b];
   if f0 != 0 && f0 != 1 { return false; }
   if e < 3 && (f0 != 1 || st[b + 1] != -1) { return false; }
-  if !span_w(st[b + 4], st[b + 18], ab, at) || !span_w(st[b + 12], st[b + 19], ab, at) { return false; }
+  let xk: i64 = st[b + 9];
+  // Express the quantified span check on xk itself. A nonempty key region must
+  // fit even with either flag value, so xk is at most 2 * remaining_words + 1.
+  if xk < 0 || xk > 8589934593 { return false; }
+  let ko: i64 = st[b + 4];
+  if xk >= 2 && !(0 <= ab && at <= 1099511627776 && ab <= ko && ko <= at && xk <= 2 * (at - ko) + 1) { return false; }
+  let has_ext: bool = crate::bud_store::has_x(xk);
+  if has_ext && (x < 16 || x > len(st) - 10 || !span_w(st[x + 1], st[x + 9], ab, at)) { return false; }
   if f0 == 0 { return link_ok(st[b + 8], top); }
   if e >= 3 && (st[b + 1] < 0 || st[b + 1] >= top) { return false; }
-  if st[b + 5] < 0 || st[b + 5] > 1073741824 || st[b + 5] > 4 * st[b + 18] { return false; }
-  if st[b + 13] < 0 || st[b + 13] > st[b + 19] { return false; }
-  return link_ok(st[b + 7], top) && link_ok(st[b + 8], top) && link_ok(st[b + 9], top) && link_ok(st[b + 10], top) &&
-    st[b + 11] >= 0;
+  let kn: i64 = st[b + 5];
+  // Twice xk counts key units plus two when the flag is set.
+  if kn < 0 || kn > 1073741824 || kn > 2 * xk || (has_ext && kn > 2 * xk - 2) { return false; }
+  if !link_ok(st[b + 7], top) || !link_ok(st[b + 8], top) { return false; }
+  if !has_ext { return link_ok(-1, top); }
+  if x < 16 || x > len(st) - 10 { return false; }
+  if st[x + 2] < 0 || st[x + 2] > st[x + 9] { return false; }
+  return link_ok(st[x + 7], top) && link_ok(st[x + 8], top) && st[x] >= 0;
 }
 
-// One entry of admit(): 2 dead, 1 live, 0 free, or a negative class code. On nonnegative results ent_i1 holds. Reads the entry
-// words at c32(st[5]) + 20 * e directly (ef's address; admit checked 0 <= st[5] <= 2^32 + 16; e < top <= st[6] on a
-// valid store, so the entry lies in st and the -3 range test never fires there).
+// One entry of admit(): 2 dead, 1 live, 0 free, or a negative class code.
+// An absent extension has an empty blob span, no children, and zero count.
 fn entry_ok(st: [i64], e: i64, top: i64, ab: i64, at: i64) -> i64
   requires 0 <= ab && ab <= at && at <= 1099511627776
   requires 0 <= e && e < top && top <= 4294967296
@@ -68,45 +78,50 @@ fn entry_ok(st: [i64], e: i64, top: i64, ab: i64, at: i64) -> i64
   ensures result >= 0 ==> ent_i1(st, e, top, ab, at)
 {
   reveal ent_i1;
-  if len(st) < 16 || st[5] < 0 || st[5] > 4294967312 { return -3; }
-  let mut eb: i64 = st[5];
-  if eb > 4294967296 { eb = 4294967296; }    // c32(st[5]), ef's base
-  let b: i64 = eb + 20 * e;
-  if b < 16 || b > len(st) - 20 { return -3; }
+  if len(st) < 16 || st[5] < 0 || st[5] > 4294967312 || st[6] < 0 || st[6] > 4294967296 { return -3; }
+  let eb: i64 = crate::bud_store::c32(st[5]);
+  let cap: i64 = crate::bud_store::c32(st[6]);
+  let b: i64 = eb + 10 * e;
+  let x: i64 = b + 10 * cap;
+  if b < 16 || b > len(st) - 10 { return -3; }
   let f0: i64 = st[b];
   if f0 != 0 && f0 != 1 { return -3; }
   if e < 3 && (f0 != 1 || st[b + 1] != -1) { return -2; }
-  let kc: i64 = st[b + 18];
+  let xk: i64 = st[b + 9];
+  if xk < 0 || xk > 8589934593 { return -5; }
+  let kc: i64 = crate::bud_store::kcap_of(xk);
   let ko: i64 = st[b + 4];
   if !span_w(ko, kc, ab, at) { return -5; }
-  if !span_w(st[b + 12], st[b + 19], ab, at) { return -6; }
+  let has_ext: bool = crate::bud_store::has_x(xk);
+  if has_ext && (x < 16 || x > len(st) - 10 || !span_w(st[x + 1], st[x + 9], ab, at)) { return -6; }
   if f0 == 0 {
     if !link_ok(st[b + 8], top) { return -8; }
+    assert ent_w(st, b, x, e, top, ab, at);
     return 0;
   }
   let mut kind: i64 = 1;
   if e >= 3 {
     let ow: i64 = st[b + 1];
     if ow < 0 || ow >= top { return -4; }
-    let bo: i64 = eb + 20 * ow;
-    if bo < 16 || bo > len(st) - 20 { return -4; }
+    let bo: i64 = eb + 10 * ow;
+    if bo < 16 || bo > len(st) - 10 { return -4; }
     if st[bo] != 1 {
       if st[bo] != 0 || st[b + 2] == st[bo + 3] { return -4; }
-      // Lazy forget leaves a pending list. Redirecting a live child to an unrelated free leaf
-      // also yields a generation mismatch, but remains an owner error (M4 admission case 16).
-      if st[bo + 9] < 3 || st[bo + 9] >= top || st[bo + 11] <= 0 { return -4; }
+      // A pending owner must still have a child list (M4 admission case 16).
+      if !crate::bud_store::has_x(st[bo + 9]) { return -4; }
+      let xo: i64 = bo + 10 * cap;
+      if xo < 16 || xo > len(st) - 10 { return -4; }
+      if st[xo + 7] < 3 || st[xo + 7] >= top || st[xo] <= 0 { return -4; }
       kind = 2;
     }
   }
   let kn: i64 = st[b + 5];
-  if kn < 0 || kn > 1073741824 { return -5; }
-  if kn > 4 * kc { return -5; }    // words(kn) > kc
+  if kn < 0 || kn > 1073741824 || kn > 4 * kc { return -5; }
   if kn > 0 && !key_pad_ok(st, ko, kn) { return -5; }
-  let bl: i64 = st[b + 13];
-  if bl < 0 || bl > st[b + 19] { return -6; }
+  if has_ext && (st[x + 2] < 0 || st[x + 2] > st[x + 9]) { return -6; }
   if !link_ok(st[b + 7], top) || !link_ok(st[b + 8], top) { return -7; }
-  if !link_ok(st[b + 9], top) || !link_ok(st[b + 10], top) { return -7; }
-  if st[b + 11] < 0 { return -7; }
+  if has_ext && (!link_ok(st[x + 7], top) || !link_ok(st[x + 8], top) || st[x] < 0) { return -7; }
+  assert ent_w(st, b, x, e, top, ab, at);
   return kind;
 }
 

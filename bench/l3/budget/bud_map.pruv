@@ -1,17 +1,16 @@
 // L3-10 M4: ordered keyed maps over the resident store (bud_store).
 //
-// A map is the set of children of an owner entry, kept in insertion order by prev/next links (entry fields 7, 8)
-// and head/tail/count in the owner (fields 9, 10, 11). One open-addressing hash index (linear probing, slot word 0
+// A map is the set of children of an owner entry, kept in insertion order by prev/next links in their bases
+// and head/tail/count in the owner's extension. One open-addressing hash index (linear probing, slot word 0
 // empty, -1 tombstone, tag(h) * 2^32 + e + 1 entry e with stored hash h; see slot_word) covers all non-root entries.
 // The hash mixes owner, owner generation and the packed key words. remove frees a subtree eagerly. M8 forget
 // leaves state-1 children of its free turn dead until allocation reclaims them. They count toward arena words
 // (14) until reclaimed, while word 12 counts only live entries. make_room rebuilds the index to discard stale slots.
 //
-// Entry fields: 0 state, 1 owner, 2 owner generation, 3 generation, 4 key off, 5 key len, 6 hash, 7 prev, 8 next,
-// 9 child head, 10 child tail, 11 child count, 12 blob off, 13 blob len, 14..17 scalars v0..v3, 18 key region
-// capacity, 19 blob region capacity. A freed entry keeps its key and blob regions (4/18, 12/19); when the entry is
-// reused, a key or blob that fits is written back in place, so steady churn does not grow the arena.
-// Keys use the bud_keys big-endian codec: field 5 counts units, field 18 and arena accounting count ceil(n/4)
+// The base holds state, owner, generations, key offset/length/hash, sibling links, and packed key capacity/flag.
+// The optional extension holds child count, blob offset/length, four scalars, child head/tail, and blob capacity.
+// A freed entry keeps its arena regions so steady reuse can write back in place.
+// Keys use the bud_keys big-endian codec: length counts units, while capacity and arena accounting count ceil(n/4)
 // words. Blobs keep unit records. Key units outside 0..65535 retain their low 16 bits on write.
 //
 // All probing loops are bounded by the slot count and all list walks by a caller-supplied step budget, so
@@ -93,22 +92,21 @@ fn slot_entry(w: i64) -> i64
 // same words, so the result does not depend on the path. Equal n and equal words == equal units (one encoding per key).
 fn entry_matches_w(st: [i64], e: i64, owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn: i64) -> bool
 {
-  let a: i64 = crate::bud_store::field_addr(st, e);
-  if a < 0 { return false; }
+  let a: i64 = crate::bud_store::eb(st, e);
   let n: i64 = crate::bud_store::c32(kn);
   let mut ko: i64 = 0;
-  if a + 7 <= len(st) {
+  if a >= 0 {
     if st[a + 6] != h { return false; }
     if st[a] != 1 { return false; }
     if st[a + 1] != owner || st[a + 2] != og { return false; }
     if st[a + 5] != n { return false; }
     ko = crate::bud_store::c40(st[a + 4]);
   } else {
-    if crate::ent_u16::rd(st, a + 6) != h { return false; }
-    if crate::ent_u16::rd(st, a) != 1 { return false; }
-    if crate::ent_u16::rd(st, a + 1) != owner || crate::ent_u16::rd(st, a + 2) != og { return false; }
-    if crate::ent_u16::rd(st, a + 5) != n { return false; }
-    ko = crate::bud_store::c40(crate::ent_u16::rd(st, a + 4));
+    if gf(st, e, 6) != h { return false; }
+    if gf(st, e, 0) != 1 { return false; }
+    if gf(st, e, 1) != owner || gf(st, e, 2) != og { return false; }
+    if gf(st, e, 5) != n { return false; }
+    ko = crate::bud_store::c40(gf(st, e, 4));
   }
   let s0: i64 = crate::bud_store::c40(ks);
   if n > 1073741824 { return false; }
@@ -228,7 +226,11 @@ fn slot_of(st: [i64], e: i64, h: i64) -> i64
 // ---- iteration and field access ----
 
 pub fn head(st: [i64], owner: i64) -> i64
-{ return gf(st, owner, 9); }
+{
+  let x: i64 = crate::bud_store::xb(st, owner);
+  if x < 0 { return -1; }
+  return st[x + 7];
+}
 
 pub fn next(st: [i64], e: i64) -> i64
 { return gf(st, e, 8); }
@@ -254,7 +256,11 @@ pub fn key_unit(st: [i64], e: i64, j: i64) -> i64
 
 pub fn blob_len(st: [i64], e: i64) -> i64
   ensures 0 <= result && result <= 1099511627776
-{ return crate::bud_store::c40(gf(st, e, 13)); }
+{
+  let x: i64 = crate::bud_store::xb(st, e);
+  if x < 0 { return 0; }
+  return crate::bud_store::c40(st[x + 2]);
+}
 
 pub fn blob_off(st: [i64], e: i64) -> i64
   ensures 0 <= result && result <= 1099511627776
@@ -379,29 +385,33 @@ fn put_key_h(inout st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, 
   return -1;
 }
 
-// put_at()'s field writes on direct words when e and owner have fast bases be, bo: the gf/sf sequence of put_at's
-// general path, same order (bud_store::eb; e, owner and t may alias on a corrupt buffer, which the ordered word
-// accesses handle the same way). Every word written is an entry field past the header, so the store is kept.
-fn link_fast(inout st: [i64], e: i64, n: i64, h: i64, be: i64, bo: i64) -> ()
-  requires 16 <= be && be + 20 <= len(st) && 16 <= bo && bo + 20 <= len(st)
+// Link the new entry using its base and the owner's extension. The owner needs an extension
+// for the new tail and count, even if this is its first child.
+fn link_fast(inout st: [i64], e: i64, n: i64, h: i64, be: i64, owner: i64) -> ()
+  requires 16 <= be && be + 10 <= len(st)
   ensures crate::bud_store::kept(st, old(st))
 {
   st[be + 5] = n;
   st[be + 6] = h;
-  let t: i64 = st[bo + 10];
+  assert crate::bud_store::hdr_same(st, old(st), -1);
+  reveal crate::bud_store::dyn_ok;
+  let x: i64 = crate::bud_store::xbm(inout st, owner);
+  let mut t: i64 = -1;
+  if x >= 0 { t = st[x + 8]; }
   st[be + 7] = t;
   st[be + 8] = -1;
   if t >= 0 {
     let bt: i64 = crate::bud_store::eb(st, t);
     if bt >= 0 { st[bt + 8] = e; } else { sf(inout st, t, 8, e); }
-  } else {
-    st[bo + 9] = e;
+  } else if x >= 0 {
+    st[x + 7] = e;
   }
-  st[bo + 10] = e;
-  let oc: i64 = crate::bud_store::c32(st[bo + 11]);
-  st[bo + 11] = oc + 1;
+  if x >= 0 {
+    st[x + 8] = e;
+    let oc: i64 = crate::bud_store::c32(st[x]);
+    st[x] = oc + 1;
+  }
   assert len(st) == len(old(st)) && crate::bud_store::hdr_same(st, old(st), -1);
-  reveal crate::bud_store::dyn_ok;
 }
 
 // A pending child of f. Its free-list link must be writable, so a truncated row cannot strand f.
@@ -409,8 +419,7 @@ fn reclaimable(st: [i64], f: i64, c: i64, top: i64) -> bool
 {
   if c < 3 || c >= top || gf(st, c, 0) != 1 || gf(st, c, 1) != f ||
     gf(st, c, 2) == gf(st, f, 3) { return false; }
-  let b: i64 = crate::bud_store::field_addr(st, c);
-  return b >= 16 && b + 8 < len(st);
+  return crate::bud_store::eb(st, c) >= 0;
 }
 
 // Exclude a newly dead child list from the live-entry count, saturating at zero.
@@ -465,46 +474,31 @@ fn reclaim_head(inout st: [i64]) -> ()
   }
 }
 
-// reclaim_head()'s detach of child c from the free head f on direct words (f, c have fast bases bf, bc; f != c, so
-// the rows are disjoint and past the header): the same f-row writes in the same order.
-fn detach_fast(inout st: [i64], bf: i64, bc: i64, top: i64) -> ()
-  requires 16 <= bf && bf + 20 <= len(st) && 16 <= bc && bc + 20 <= len(st)
+// Detach c from the free head's existing extension. The next sibling lives in c's base.
+fn detach_fast(inout st: [i64], xf: i64, bc: i64, top: i64) -> ()
+  requires 16 <= xf && xf + 10 <= len(st) && 16 <= bc && bc + 10 <= len(st)
   ensures crate::bud_store::kept(st, old(st))
 {
   let mut n: i64 = st[bc + 8];
   if n < 0 || n >= top { n = -1; }
-  st[bf + 9] = n;
-  if n == -1 { st[bf + 10] = -1; }
-  let nc: i64 = crate::bud_store::c32(st[bf + 11]);
-  if nc > 0 { st[bf + 11] = nc - 1; }
+  st[xf + 7] = n;
+  if n == -1 { st[xf + 8] = -1; }
+  let nc: i64 = crate::bud_store::c32(st[xf]);
+  if nc > 0 { st[xf] = nc - 1; }
   assert len(st) == len(old(st)) && crate::bud_store::hdr_same(st, old(st), -1);
   reveal crate::bud_store::dyn_ok;
 }
 
-// bud_store::fill_entry(st, e, owner, ogen, egen, false) for an entry e with fast base b: the same words in the same
-// order as its direct path (a reused entry keeps its key and blob regions, fields 4/18 and 12/19).
-fn fill_fast(inout st: [i64], b: i64, owner: i64, ogen: i64, egen: i64) -> ()
-  requires 16 <= b && b + 20 <= len(st)
-  ensures crate::bud_store::kept(st, old(st))
-{
-  st[b] = 1; st[b + 1] = owner; st[b + 2] = ogen; st[b + 3] = egen;
-  st[b + 5] = 0; st[b + 6] = 0;
-  st[b + 7] = -1; st[b + 8] = -1; st[b + 9] = -1; st[b + 10] = -1;
-  st[b + 11] = 0; st[b + 13] = 0; st[b + 14] = 0; st[b + 15] = 0; st[b + 16] = 0; st[b + 17] = 0;
-  assert len(st) == len(old(st)) && crate::bud_store::hdr_same(st, old(st), -1);
-  reveal crate::bud_store::dyn_ok;
-}
-
-// put_units(st, e, 4, 18, src, s0, n) for an entry e with fast base be (the key region): the same reads and writes on
+// The key-region put_units path for an entry with fast base be: the same reads and writes on
 // direct words. arena_put changes no header word eb reads and keeps the length, so be stays e's base.
 fn put_key_fast(inout st: [i64], be: i64, src: [i64], s0: i64, n: i64) -> i64
-  requires 16 <= be && be + 20 <= len(st)
+  requires 16 <= be && be + 10 <= len(st)
   requires 0 <= s0 && s0 <= 1099511627776 && 0 <= n && n <= 4294967296
   ensures crate::bud_store::kept(st, old(st))
 {
   let off: i64 = st[be + 4];
   if s0 + n > len(src) { return -1; }
-  if fits_region(st, off, st[be + 18], n) {
+  if fits_region(st, off, crate::bud_store::kcap_of(st[be + 9]), n) {
     write_at(inout st, crate::bud_store::c40(off), src, s0, n);
     return 0;
   }
@@ -515,11 +509,13 @@ fn put_key_fast(inout st: [i64], be: i64, src: [i64], s0: i64, n: i64) -> i64
 }
 
 fn set_key_region(inout st: [i64], be: i64, ko: i64, n: i64) -> ()
-  requires 16 <= be && be + 20 <= len(st)
+  requires 16 <= be && be + 10 <= len(st) && 0 <= n && n <= 4294967296
   ensures crate::bud_store::kept(st, old(st))
 {
   st[be + 4] = ko;
-  st[be + 18] = n;
+  let mut xk: i64 = 2 * n;
+  if crate::bud_store::has_x(st[be + 9]) { xk = xk + 1; }
+  st[be + 9] = xk;
   assert len(st) == len(old(st)) && crate::bud_store::hdr_same(st, old(st), -1);
   reveal crate::bud_store::dyn_ok;
 }
@@ -528,7 +524,7 @@ fn set_key_region(inout st: [i64], be: i64, ko: i64, n: i64) -> ()
 // (reclaimable, no child list) and both rows have fast bases, reclaim_head would detach c, take its key and blob
 // words off word 14, free it (generation + 1) and push it, then return; entry_alloc would pop c, put f back as the
 // head and fill c keeping that generation. That end state is written directly: f's list without c, word 14 less c's
-// words, c filled with generation gen(c) + 1, head still f, word 12 + 1, with no push and pop and one base per row.
+// words, c filled with generation gen(c) + 1, head still f, word 12 + 1, with no push and pop.
 // Every other case runs the two in order. O(1) on the fast path; reclaim_head's loop otherwise.
 fn alloc_entry(inout st: [i64], owner: i64, og: i64) -> i64
   ensures crate::bud_store::kept(st, old(st))
@@ -539,19 +535,22 @@ fn alloc_entry(inout st: [i64], owner: i64, og: i64) -> i64
     if f >= 3 && f < top {
       let bf: i64 = crate::bud_store::eb(st, f);
       if bf >= 0 && st[bf] == 0 {
-        let c: i64 = st[bf + 9];
-        if c >= 3 && c < top {
-          let bc: i64 = crate::bud_store::eb(st, c);
-          if bc >= 0 && st[bc] == 1 && st[bc + 1] == f && st[bc + 2] != st[bf + 3] && st[bc + 9] < 0 {
-            let g: i64 = wrapping_add(st[bc + 3], 1);
-            let kw: i64 = crate::bud_keys::words(crate::bud_store::c32(st[bc + 5])) +
-              crate::bud_store::c40(st[bc + 13]);
-            detach_fast(inout st, bf, bc, top);
-            take_words(inout st, kw);
-            fill_fast(inout st, bc, owner, og, g);
-            let live: i64 = crate::bud_store::c32(hw(st, 12));
-            sh(inout st, 12, live + 1);
-            return c;
+        let xf: i64 = crate::bud_store::xb(st, f);
+        if xf >= 0 {
+          let c: i64 = st[xf + 7];
+          if c >= 3 && c < top {
+            let bc: i64 = crate::bud_store::eb(st, c);
+            if bc >= 0 && st[bc] == 1 && st[bc + 1] == f && st[bc + 2] != st[bf + 3] && head(st, c) < 0 {
+              let g: i64 = wrapping_add(st[bc + 3], 1);
+              let kw: i64 = crate::bud_keys::words(crate::bud_store::c32(st[bc + 5])) +
+                blob_len(st, c);
+              detach_fast(inout st, xf, bc, top);
+              take_words(inout st, kw);
+              crate::bud_store::fill_entry(inout st, c, owner, og, g, false);
+              let live: i64 = crate::bud_store::c32(hw(st, 12));
+              sh(inout st, 12, live + 1);
+              return c;
+            }
           }
         }
       }
@@ -584,7 +583,7 @@ fn put_at(inout st: [i64], owner: i64, og: i64, h: i64, key: [i64], ks: i64, kn:
   }
   let bo: i64 = crate::bud_store::eb(st, owner);
   if be >= 0 && bo >= 0 {
-    link_fast(inout st, e, n, h, be, bo);
+    link_fast(inout st, e, n, h, be, owner);
   } else {
     sf(inout st, e, 5, n);
     sf(inout st, e, 6, h);
@@ -625,7 +624,7 @@ fn drop_entry(inout st: [i64], e: i64) -> ()
     if st[b] != 1 { return; }
     let sl: i64 = slot_of(st, e, st[b + 6]);
     if sl >= 0 { crate::bud_store::wr16(inout st, sl, -1); }
-    kw = crate::bud_keys::words(crate::bud_store::c32(st[b + 5])) + crate::bud_store::c40(st[b + 13]);
+    kw = crate::bud_keys::words(crate::bud_store::c32(st[b + 5])) + blob_len(st, e);
   } else {
     if gf(st, e, 0) != 1 { return; }
     let sl: i64 = slot_of(st, e, gf(st, e, 6));
@@ -714,7 +713,7 @@ pub fn remove(inout st: [i64], e: i64) -> ()
     if c >= 0 {
       let bc: i64 = crate::bud_store::eb(st, c);
       if bc >= 0 {
-        cs = st[bc]; co = st[bc + 1]; nc = st[bc + 8]; ch = st[bc + 9];
+        cs = st[bc]; co = st[bc + 1]; nc = st[bc + 8]; ch = head(st, c);
       } else {
         cs = gf(st, c, 0); co = gf(st, c, 1); nc = gf(st, c, 8); ch = gf(st, c, 9);
       }
@@ -799,11 +798,11 @@ fn drop_child(inout st: [i64], c: i64) -> i64
 {
   let b: i64 = crate::bud_store::eb(st, c);
   if b < 0 { return -1; }
-  // b >= 16 and b + 20 <= len(st), so header word 7 is in range
+  // b >= 16 and b + 10 <= len(st), so header word 7 is in range
   let top: i64 = crate::bud_store::c32(st[7]);
   if c < 3 || c >= top { return -2; }
   if st[b] != 1 { return -2; }
-  let kw: i64 = crate::bud_keys::words(crate::bud_store::c32(st[b + 5])) + crate::bud_store::c40(st[b + 13]);
+  let kw: i64 = crate::bud_keys::words(crate::bud_store::c32(st[b + 5])) + blob_len(st, c);
   crate::bud_store::entry_free(inout st, c);
   return kw;
 }
@@ -815,22 +814,21 @@ pub fn set_blob(inout st: [i64], e: i64, src: [i64], s: i64, n: i64) -> i64
 {
   let s0: i64 = crate::bud_store::c40(s);
   let m: i64 = crate::bud_store::c32(n);
-  let a: i64 = crate::bud_store::field_addr(st, e);
+  let b: i64 = crate::bud_store::eb(st, e);
   let l: i64 = len(st);
-  if l >= 15 && a >= 15 && a + 20 <= l {
-    // header word 7 and field 0 read directly (hw / gf give the same words here)
+  if b >= 0 {
     let top0: i64 = crate::bud_store::c32(st[7]);
     if e < 0 || e >= top0 { return -1; }
-    if st[a] != 1 { return -1; }
+    if st[b] != 1 { return -1; }
   }
-  if l >= 15 && a >= 15 && a + 20 <= l && s0 + m <= len(src) {
-    // In-place rewrite with the header (0..15) and the entry's fields in range. When the old region takes the blob
-    // and lies apart from the header and from the fields, the writes cannot change any word read below (field
-    // address, word 14, field 13), so this gives exactly the words of the general path that follows.
-    let off: i64 = st[a + 12];
+  let x: i64 = crate::bud_store::xb(st, e);
+  if b >= 0 && x >= 0 && s0 + m <= len(src) {
+    // An in-place copy must leave the header, extension and its flag intact on malformed buffers too.
+    let off: i64 = st[x + 1];
     let o: i64 = crate::bud_store::c40(off);
-    if fits_region(st, off, st[a + 19], m) && o >= 16 && o + m <= l && (o + m <= a || o >= a + 20) {
-      let ob0: i64 = crate::bud_store::c40(st[a + 13]);
+    if fits_region(st, off, st[x + 9], m) && o >= 16 && o + m <= l &&
+      (o + m <= x || o >= x + 10) && (o + m <= b + 9 || o >= b + 10) {
+      let ob0: i64 = crate::bud_store::c40(st[x + 2]);
       let mut k: i64 = 0;
       while k < m
         invariant 0 <= k && k <= m && 16 <= o && o + m <= l && l == len(st) && 0 <= s0 && s0 + m <= len(src)
@@ -844,14 +842,14 @@ pub fn set_blob(inout st: [i64], e: i64, src: [i64], s: i64, n: i64) -> i64
       }
       let lw0: i64 = crate::bud_store::c40(st[14]) + m;
       st[14] = lw0;
-      st[a + 13] = m;
+      st[x + 2] = m;
       let lw1: i64 = crate::bud_store::c40(lw0);
       if lw1 > ob0 {
         st[14] = lw1 - ob0;
       } else {
         st[14] = 0;
       }
-      // word 14 >= 0 and field 13 past the header: dyn_ok carried over from the copy loop
+      // word 14 >= 0 and the blob length past the header: dyn_ok carried over from the copy loop
       reveal crate::bud_store::dyn_ok;
       return 0;
     }
@@ -859,10 +857,30 @@ pub fn set_blob(inout st: [i64], e: i64, src: [i64], s: i64, n: i64) -> i64
   let top: i64 = crate::bud_store::c32(hw(st, 7));
   if e < 0 || e >= top { return -1; }
   if gf(st, e, 0) != 1 { return -1; }
-  let ob: i64 = crate::bud_store::c40(gf(st, e, 13));
-  let rb: i64 = put_units(inout st, e, 12, 19, src, s0, m);
-  if rb < 0 { return -1; }
-  sf(inout st, e, 13, m);
+  // Copying an empty blob into a fresh entry needs neither arena space nor an extension.
+  if x < 0 && m == 0 {
+    if s0 > len(src) { return -1; }
+    return 0;
+  }
+  let mut ob: i64 = 0;
+  if x < 0 {
+    // No extension: put_units would find the empty region (offset 0, capacity 0) too small, append to the arena and
+    // then create the extension through its first field write. The same writes with one extension lookup.
+    if s0 + m > len(src) { return -1; }
+    let ko: i64 = crate::bud_store::arena_put(inout st, src, s0, s0 + m);
+    if ko < 0 { return -1; }
+    let nx: i64 = crate::bud_store::xbm(inout st, e);
+    if nx >= 0 {
+      crate::bud_store::wr16(inout st, nx + 1, ko);
+      crate::bud_store::wr16(inout st, nx + 9, m);
+      crate::bud_store::wr16(inout st, nx + 2, m);
+    }
+  } else {
+    ob = crate::bud_store::c40(gf(st, e, 13));
+    let rb: i64 = put_units(inout st, e, 12, 19, src, s0, m);
+    if rb < 0 { return -1; }
+    sf(inout st, e, 13, m);
+  }
   let lw: i64 = crate::bud_store::c40(hw(st, 14));
   if lw > ob {
     sh(inout st, 14, lw - ob);
@@ -875,10 +893,9 @@ pub fn set_blob(inout st: [i64], e: i64, src: [i64], s: i64, n: i64) -> i64
 // Would `words` more arena words for entry e's blob fit in its current blob region?
 pub fn blob_fits(st: [i64], e: i64, words: i64) -> bool
 {
-  // fields 12, 19 read directly when the entry's fields are in range (gf gives the same words)
-  let a: i64 = crate::bud_store::field_addr(st, e);
-  if a >= 0 && a + 20 <= len(st) { return fits_region(st, st[a + 12], st[a + 19], words); }
-  return fits_region(st, gf(st, e, 12), gf(st, e, 19), words);
+  let x: i64 = crate::bud_store::xb(st, e);
+  if x >= 0 { return fits_region(st, st[x + 1], st[x + 9], words); }
+  return fits_region(st, 0, 0, words);
 }
 
 // ---- index maintenance ----
@@ -1132,19 +1149,14 @@ fn copy_node(prev: [i64], inout nxt: [i64], pe: i64, nowner: i64) -> i64
   }
   let ne: i64 = put_key_h(inout nxt,nowner,og,h,prev,koff,klen);
   if ne < 0 { return -1; }
-  let boff: i64 = crate::bud_store::c40(gf(prev, pe, 12));
-  let blen: i64 = crate::bud_store::c32(gf(prev, pe, 13));
+  // Without an extension the blob and scalars read as defaults (empty blob, 0), which a fresh ne already has.
+  let px: i64 = crate::bud_store::xb(prev, pe);
+  if px < 0 { return ne; }
+  let boff: i64 = crate::bud_store::c40(prev[px + 1]);
+  let blen: i64 = crate::bud_store::c32(prev[px + 2]);
   let rb: i64 = set_blob(inout nxt, ne, prev, boff, blen);
   if rb < 0 { return -1; }
-  let mut f: i64 = 14;
-  while f < 18
-    invariant 14 <= f && f <= 18
-    invariant crate::bud_store::kept(nxt, old(nxt))
-    decreases 18 - f
-  {
-    sf(inout nxt, ne, f, gf(prev, pe, f));
-    f = f + 1;
-  }
+  crate::bud_store::set_vals(inout nxt, ne, prev[px + 3], prev[px + 4], prev[px + 5], prev[px + 6]);
   return ne;
 }
 

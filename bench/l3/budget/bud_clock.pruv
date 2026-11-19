@@ -32,10 +32,11 @@
 // sk[ss - 1] == sn, because the frame `sn, words...` is stored as the clock's owner blob (status 2 otherwise).
 
 //
-// Proven indexing (P22): every clock and run access goes through one entry base from bud_store::eb, whose ensures
-// gives 16 <= a && a + 20 <= len(st); fields are then read and written as st[a + f] with no further check. eb is -1
-// only for an entry outside the capacity or the buffer (never a live entry of a valid store); such an entry is
-// treated as absent. The budget view frame needs len(bv) >= 7: every public entry that takes bv tests it (after the fx
+// Proven indexing (P22, P13e): every clock and run access goes through one value-record base from bud_store::xb
+// (reads) or bud_store::xbm (writes; it creates the record when the entry has none), whose ensures gives
+// 16 <= x && x + 7 <= len(st); the words are then read and written as st[x + k] with no further check (k = field - 11:
+// x + 0 child count, x + 1 / x + 2 blob off / len, x + 3 .. x + 6 fields 14..17). The base is -1 only for an entry
+// outside the capacity or the buffer (never a live entry of a valid store); such an entry is treated as absent. The budget view frame needs len(bv) >= 7: every public entry that takes bv tests it (after the fx
 // room check) before any write and returns 0 with nothing changed on a shorter frame. The active count (field 17, I2) is only a number here: no
 // access depends on it, and I2 is checked by the functional model test of m9_test (t_i2), never assumed by a proof.
 
@@ -50,15 +51,15 @@ fn sc(x: i64) -> i64
 
 // Adds d to the active-run count of the clock at base ca, clamped at 0; no other word changes.
 fn add_active(inout st: [i64], ca: i64, d: i64) -> ()
-  requires 16 <= ca && ca + 20 <= len(st) && -1 <= d && d <= 1
+  requires 16 <= ca && ca + 7 <= len(st) && -1 <= d && d <= 1
   ensures len(st) == len(old(st))
-  ensures 0 <= st[ca + 17] && st[ca + 17] <= 4294967297
-  ensures (0 <= old(st)[ca + 17] && old(st)[ca + 17] <= 4294967296 && 0 <= old(st)[ca + 17] + d) ==> st[ca + 17] == old(st)[ca + 17] + d
-  ensures forall k in 0..len(st): k == ca + 17 || st[k] == old(st)[k]
+  ensures 0 <= st[ca + 6] && st[ca + 6] <= 4294967297
+  ensures (0 <= old(st)[ca + 6] && old(st)[ca + 6] <= 4294967296 && 0 <= old(st)[ca + 6] + d) ==> st[ca + 6] == old(st)[ca + 6] + d
+  ensures forall k in 0..len(st): k == ca + 6 || st[k] == old(st)[k]
 {
-  let mut n: i64 = crate::bud_store::c32(st[ca + 17]) + d;
+  let mut n: i64 = crate::bud_store::c32(st[ca + 6]) + d;
   if n < 0 { n = 0; }
-  st[ca + 17] = n;
+  st[ca + 6] = n;
 }
 
 // limits.timeMinutes * 60000 with timeMinutes clamped into -150000000000000..150000000000000 (product at most 9e18,
@@ -122,12 +123,12 @@ pub fn clock_of(st: [i64], bk: [i64], bs: i64, bn: i64) -> i64
 // Unit count of the framed owner key stored as the blob of the clock at base ca: blob word 0 when the blob is exactly
 // 1 + words(n) words, else 0 (a corrupt blob names the empty key; same rule as bud_world::owner_n).
 fn owner_len(st: [i64], ca: i64) -> i64
-  requires 16 <= ca && ca + 20 <= len(st)
+  requires 16 <= ca && ca + 7 <= len(st)
   ensures 0 <= result && result <= 1073741824
 {
-  let bl: i64 = crate::bud_store::c40(st[ca + 13]);
+  let bl: i64 = crate::bud_store::c40(st[ca + 2]);
   if bl < 1 { return 0; }
-  let n: i64 = crate::ent_u16::rd(st, crate::bud_store::c40(st[ca + 12]));
+  let n: i64 = crate::ent_u16::rd(st, crate::bud_store::c40(st[ca + 1]));
   if n < 0 || n > 1073741824 { return 0; }
   if crate::bud_keys::words(n) != bl - 1 { return 0; }
   return n;
@@ -139,7 +140,7 @@ pub fn clock_owner(st: [i64], bk: [i64], bs: i64, bn: i64, inout dst: [i64]) -> 
 {
   let ce: i64 = clock_of(st, bk, bs, bn);
   if ce < 0 { return -1; }
-  let ca: i64 = crate::bud_store::eb(st, ce);
+  let ca: i64 = crate::bud_store::xb(st, ce);
   let mut n: i64 = 0;
   if ca >= 0 { n = owner_len(st, ca); }
   let ko: i64 = crate::bud_map::blob_off(st, ce) + 1;
@@ -168,13 +169,13 @@ pub fn armed(st: [i64], bk: [i64], bs: i64, bn: i64) -> i64
 // their buffers, a per-word total compare otherwise (both read the same words). Equal n and equal words are equal
 // units (one encoding per key).
 fn owner_is(st: [i64], ca: i64, sk: [i64], ss: i64, sn: i64) -> bool
-  requires 16 <= ca && ca + 20 <= len(st)
+  requires 16 <= ca && ca + 7 <= len(st)
 {
   if sn < 0 || sn > 1073741824 { return false; }
   if ss < 0 || ss > 1099511627776 { return false; }
   let m: i64 = crate::bud_keys::words(sn);
-  if crate::bud_store::c40(st[ca + 13]) != 1 + m { return false; }
-  let off: i64 = crate::bud_store::c40(st[ca + 12]);
+  if crate::bud_store::c40(st[ca + 2]) != 1 + m { return false; }
+  let off: i64 = crate::bud_store::c40(st[ca + 1]);
   if crate::ent_u16::rd(st, off) != sn { return false; }
   if off + 1 + m <= len(st) && ss + m <= len(sk) {
     // eq_range obligations: off + 1 >= 0, ss >= 0, m >= 0, both ranges in bounds
@@ -195,17 +196,17 @@ fn owner_is(st: [i64], ca: i64, sk: [i64], ss: i64, sn: i64) -> bool
 
 // SETTLE (§5.4): adds the open consuming interval to used.activeMs, clears the timer. Returns the added ms.
 fn settle_in(inout st: [i64], ca: i64, sk: [i64], ss: i64, sn: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> i64
-  requires 16 <= ca && ca + 20 <= len(st) && len(bv) >= 7
+  requires 16 <= ca && ca + 7 <= len(st) && len(bv) >= 7
   ensures len(st) == len(old(st)) && len(bv) == len(old(bv)) && len(fx) == len(old(fx))
 {
   if !owner_is(st, ca, sk, ss, sn) { return 0; }
-  if st[ca + 16] == 1 { push(inout fx, 13); }
-  st[ca + 16] = 0;
-  if st[ca + 14] != 1 { return 0; }
-  let mut added: i64 = sc(now) - sc(st[ca + 15]);
+  if st[ca + 5] == 1 { push(inout fx, 13); }
+  st[ca + 5] = 0;
+  if st[ca + 3] != 1 { return 0; }
+  let mut added: i64 = sc(now) - sc(st[ca + 4]);
   if added < 0 { added = 0; }
-  st[ca + 14] = 0;
-  st[ca + 15] = 0;
+  st[ca + 3] = 0;
+  st[ca + 4] = 0;
   bv[5] = 0;
   bv[6] = 0;
   bv[4] = sc(sc(bv[4]) + added);
@@ -214,12 +215,12 @@ fn settle_in(inout st: [i64], ca: i64, sk: [i64], ss: i64, sn: i64, now: i64, in
 
 // BEGIN (§5.2): opens a consuming interval at now.
 fn begin_in(inout st: [i64], ca: i64, now: i64, inout bv: [i64]) -> ()
-  requires 16 <= ca && ca + 20 <= len(st) && len(bv) >= 7
+  requires 16 <= ca && ca + 7 <= len(st) && len(bv) >= 7
   ensures len(st) == len(old(st)) && len(bv) == len(old(bv))
 {
   let t: i64 = sc(now);
-  st[ca + 14] = 1;
-  st[ca + 15] = t;
+  st[ca + 3] = 1;
+  st[ca + 4] = t;
   bv[5] = 2;
   bv[6] = t;
 }
@@ -227,32 +228,32 @@ fn begin_in(inout st: [i64], ca: i64, now: i64, inout bv: [i64]) -> ()
 // ARM (§5.3). Nonpositive left: the source's synchronous FIRE right after BEGIN always ends in SETTLE (adding 0)
 // followed by halt(ref, 'time') because activeMs >= limit; that is what this returns (status 4).
 fn arm_in(inout st: [i64], ca: i64, sk: [i64], ss: i64, sn: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> i64
-  requires 16 <= ca && ca + 20 <= len(st) && len(bv) >= 7
+  requires 16 <= ca && ca + 7 <= len(st) && len(bv) >= 7
   ensures len(st) == len(old(st)) && len(bv) == len(old(bv)) && len(fx) == len(old(fx))
 {
   if bv[2] == 1 { return 0; }
   let left: i64 = limit_ms(bv) - sc(bv[4]);
   if left <= 0 {
-    st[ca + 16] = 0;
+    st[ca + 5] = 0;
     let a: i64 = settle_in(inout st, ca, sk, ss, sn, now, inout bv, inout fx);
     return 4;
   }
   let mut eff: i64 = left;
   if left > 2147483647 { eff = 1; }
   push3(inout fx, 12, left, eff);
-  st[ca + 16] = 1;
+  st[ca + 5] = 1;
   return 0;
 }
 
 // REFRESH (§5.1): reacts only when the consuming predicate differs from since-present. "Some run is not waiting"
 // is the active-run count (field 17) > 0, which the run methods keep equal to that predicate (I2, tested by t_i2).
 fn refresh_in(inout st: [i64], ca: i64, sk: [i64], ss: i64, sn: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> i64
-  requires 16 <= ca && ca + 20 <= len(st) && len(bv) >= 7
+  requires 16 <= ca && ca + 7 <= len(st) && len(bv) >= 7
   ensures len(st) == len(old(st)) && len(bv) == len(old(bv)) && len(fx) == len(old(fx))
 {
   if bv[0] != 1 { return 0; }
-  let consuming: bool = bv[1] == 0 && st[ca + 17] > 0;
-  let has: bool = st[ca + 14] == 1;
+  let consuming: bool = bv[1] == 0 && st[ca + 6] > 0;
+  let has: bool = st[ca + 3] == 1;
   if consuming == has { return 0; }
   if !consuming {
     let a: i64 = settle_in(inout st, ca, sk, ss, sn, now, inout bv, inout fx);
@@ -270,7 +271,7 @@ fn refresh_in(inout st: [i64], ca: i64, sk: [i64], ss: i64, sn: i64, now: i64, i
 pub fn settle_at(inout st: [i64], ce: i64, sk: [i64], ss: i64, sn: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> i64
 {
   if len(bv) < 7 { return 0; }
-  let ca: i64 = crate::bud_store::eb(st, ce);
+  let ca: i64 = crate::bud_store::xbm(inout st, ce);
   if ca < 0 { return 0; }
   return settle_in(inout st, ca, sk, ss, sn, now, inout bv, inout fx);
 }
@@ -278,7 +279,7 @@ pub fn settle_at(inout st: [i64], ce: i64, sk: [i64], ss: i64, sn: i64, now: i64
 pub fn begin_at(inout st: [i64], ce: i64, now: i64, inout bv: [i64]) -> ()
 {
   if len(bv) < 7 { return; }
-  let ca: i64 = crate::bud_store::eb(st, ce);
+  let ca: i64 = crate::bud_store::xbm(inout st, ce);
   if ca < 0 { return; }
   begin_in(inout st, ca, now, inout bv);
 }
@@ -287,7 +288,7 @@ pub fn arm_at(inout st: [i64], ce: i64, sk: [i64], ss: i64, sn: i64, now: i64, i
 {
   if !fx_ok(fx) { return 3; }
   if len(bv) < 7 { return 0; }
-  let ca: i64 = crate::bud_store::eb(st, ce);
+  let ca: i64 = crate::bud_store::xbm(inout st, ce);
   if ca < 0 { return 0; }
   return arm_in(inout st, ca, sk, ss, sn, now, inout bv, inout fx);
 }
@@ -296,7 +297,7 @@ pub fn refresh_at(inout st: [i64], ce: i64, sk: [i64], ss: i64, sn: i64, now: i6
 {
   if !fx_ok(fx) { return 3; }
   if len(bv) < 7 || bv[0] != 1 { return 0; }
-  let ca: i64 = crate::bud_store::eb(st, ce);
+  let ca: i64 = crate::bud_store::xbm(inout st, ce);
   if ca < 0 { return 0; }
   return refresh_in(inout st, ca, sk, ss, sn, now, inout bv, inout fx);
 }
@@ -311,15 +312,15 @@ pub fn fire_at(inout st: [i64], ce: i64, sk: [i64], ss: i64, sn: i64, now: i64, 
 {
   if !fx_ok(fx) { return 3; }
   if len(bv) < 7 { return 0; }
-  let ca: i64 = crate::bud_store::eb(st, ce);
+  let ca: i64 = crate::bud_store::xbm(inout st, ce);
   if ca >= 0 {
-    if st[ca + 16] == 1 { push(inout fx, 14); }
-    st[ca + 16] = 0;
+    if st[ca + 5] == 1 { push(inout fx, 14); }
+    st[ca + 5] = 0;
   }
   if bv[0] != 1 || bv[1] != 0 || bv[2] == 1 { return 0; }
   if ca < 0 { return 4; }
   let a: i64 = settle_in(inout st, ca, sk, ss, sn, now, inout bv, inout fx);
-  if sc(bv[4]) < limit_ms(bv) && crate::bud_store::c32(st[ca + 11]) > 0 {
+  if sc(bv[4]) < limit_ms(bv) && crate::bud_store::c32(st[ca + 0]) > 0 {
     begin_in(inout st, ca, now, inout bv);
     return arm_in(inout st, ca, sk, ss, sn, now, inout bv, inout fx);
   }
@@ -330,9 +331,9 @@ pub fn fire_at(inout st: [i64], ce: i64, sk: [i64], ss: i64, sn: i64, now: i64, 
 pub fn drop_at(inout st: [i64], ce: i64, inout fx: [i64]) -> ()
 {
   if ce < 0 { return; }
-  let ca: i64 = crate::bud_store::eb(st, ce);
+  let ca: i64 = crate::bud_store::xb(st, ce);
   if ca >= 0 {
-    if st[ca + 16] == 1 { push(inout fx, 13); }
+    if st[ca + 5] == 1 { push(inout fx, 13); }
   }
   crate::bud_map::remove(inout st, ce);
 }
@@ -423,12 +424,13 @@ pub fn run_started(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: 
     if re < 0 { return 2; }
     became = true;
   }
-  let ra: i64 = crate::bud_store::eb(st, re);
+  // waiting = 0 is the default of an absent extension, so only an existing one is written.
+  let ra: i64 = crate::bud_store::xb(st, re);
   if ra >= 0 {
-    if st[ra + 14] == 1 { became = true; }
-    st[ra + 14] = 0;
+    if st[ra + 3] == 1 { became = true; }
+    st[ra + 3] = 0;
   }
-  let ca: i64 = crate::bud_store::eb(st, ce);
+  let ca: i64 = crate::bud_store::xbm(inout st, ce);
   if ca < 0 { return 0; }
   if became { add_active(inout st, ca, 1); }
   return refresh_in(inout st, ca, sk, ss, sn, now, inout bv, inout fx);
@@ -444,15 +446,17 @@ pub fn run_waiting(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: 
   if ce < 0 { return 0; }
   let re: i64 = crate::bud_map::find_w(st, ce, rk, rs, rn);
   if re < 0 { return 0; }
-  let ra: i64 = crate::bud_store::eb(st, re);
+  // Compare against the default first: an unchanged run gets no extension.
+  let rx: i64 = crate::bud_store::xb(st, re);
   let mut was: bool = false;
-  if ra >= 0 { was = st[ra + 14] == 1; }
+  if rx >= 0 { was = st[rx + 3] == 1; }
   if was == waiting { return 0; }
   let mut w: i64 = 0;
   let mut d: i64 = 1;
   if waiting { w = 1; d = -1; }
-  if ra >= 0 { st[ra + 14] = w; }
-  let ca: i64 = crate::bud_store::eb(st, ce);
+  let ra: i64 = crate::bud_store::xbm(inout st, re);
+  if ra >= 0 { st[ra + 3] = w; }
+  let ca: i64 = crate::bud_store::xbm(inout st, ce);
   if ca < 0 { return 0; }
   add_active(inout st, ca, d);
   return refresh_in(inout st, ca, sk, ss, sn, now, inout bv, inout fx);
@@ -468,10 +472,10 @@ pub fn run_ended(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: i6
   if ce < 0 { return 0; }
   let re: i64 = crate::bud_map::find_w(st, ce, rk, rs, rn);
   if re < 0 { return 0; }
-  let ca: i64 = crate::bud_store::eb(st, ce);
-  let ra: i64 = crate::bud_store::eb(st, re);
+  let ca: i64 = crate::bud_store::xbm(inout st, ce);
+  let ra: i64 = crate::bud_store::xb(st, re);
   let mut w: i64 = -1;
-  if ra >= 0 { w = st[ra + 14]; }
+  if ra >= 0 { w = st[ra + 3]; }
   if ca >= 0 && w != 1 { add_active(inout st, ca, -1); }
   crate::bud_map::remove(inout st, re);
   if ca < 0 { return 0; }

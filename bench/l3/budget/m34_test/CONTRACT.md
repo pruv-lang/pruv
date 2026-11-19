@@ -107,7 +107,7 @@ All return a status: `>= 0` is the number of words written to `out`; negative is
 
 ### Buffer layout (`bud_store`)
 
-Header, 16 words: 0 magic `0x42554453`, 1 version 1, 2 total words (`== len(st)`), 3 slot base, 4 slot count
+Header, 16 words: 0 magic `0x42554453`, 1 version 2 (1 was the 20-word entry layout before P13e), 2 total words (`== len(st)`), 3 slot base, 4 slot count
 (power of two, `>= 8`), 5 entry base, 6 entry capacity, 7 entry top (high-water mark), 8 free-list head (-1 none),
 9 arena base, 10 arena top, 11 arena end, 12 allocated entries (roots + live), 13 used slots (live + tombstones), 14 live arena
 words, 15 pending-Need sequence (0 none).
@@ -129,16 +129,43 @@ state-changing operation calls `bud_map::make_room` with its worst case before t
 with no write. `make_room` is `need` plus tombstone recovery: when only the used-slot bound fails and the live entries
 fit, it rebuilds the slot table in place (amortized O(1)) and asks `need` again.
 
-Arena: `[i64]` words for keys (UTF-16 units) and blobs. Each entry owns a key region (off 4, capacity 18) and a blob
-region (off 12, capacity 19). A key or blob that fits its entry's region is written in place; otherwise it is appended
+Arena: `[i64]` words for keys (UTF-16 units) and blobs. Each entry owns a key region (base offset and packed capacity) and a blob
+region (extension offset and capacity). A key or blob that fits its entry's region is written in place; otherwise it is appended
 and the region becomes the new words. A freed entry keeps its regions, so a reused entry (free-list head) writes back
 in place and steady churn does not grow the arena. Dead words of outgrown regions are reclaimed by `grow`.
 
 ### Entries and maps (`bud_map`)
 
-`ENTRY_WORDS = 20`. Entry fields: 0 state (0 free, 1 live or pending dead), 1 owner entry, 2 owner generation, 3 generation,
-4 key off, 5 key len, 6 hash, 7 prev, 8 next, 9 child head, 10 child tail, 11 child count, 12 blob off,
-13 blob len, 14–17 scalar values v0–v3, 18 key region capacity, 19 blob region capacity. -1 is "none" for links.
+`ENTRY_WORDS = 20`. The table contains all ten-word base records followed by all ten-word extension records.
+With `E = st[5]` and `cap = st[6]`, entry `e` has its base at `E + 10*e` and its extension at
+`E + 10*cap + 10*e`.
+
+| Base offset | Field |
+| --- | --- |
+| 0 | State (0 free, 1 live or pending dead) |
+| 1 | Owner entry |
+| 2 | Owner generation |
+| 3 | Generation |
+| 4 | Key offset |
+| 5 | Key length |
+| 6 | Hash |
+| 7 | Previous sibling |
+| 8 | Next sibling |
+| 9 | `xk = 2*key_capacity + extension_flag` |
+
+| Extension offset | Field | Default |
+| --- | --- | --- |
+| 0 | Child count | 0 |
+| 1 | Blob offset | 0 |
+| 2 | Blob length | 0 |
+| 3–6 | Scalar values v0–v3 | 0 |
+| 7 | First child | -1 |
+| 8 | Last child | -1 |
+| 9 | Blob capacity | 0 |
+
+Links use `-1` for “none”. With the flag clear, reads return the defaults without reading the extension.
+The first non-default extension write initializes all ten extension words and sets the flag. Fresh entries
+initialize only the base. Reuse keeps the key region and, when the flag is set, the blob offset and capacity.
 
 Entries 0, 1, 2 are the roots (live from `init`, never removed, no key): 0 sessions, 1 clocks, 2 toolSeen.
 A state-1 non-root entry is live if its owner is a root or has state 1. A state-1 entry with a free owner is dead.

@@ -20,7 +20,7 @@ Details, methods and raw numbers:
 | item | Pruv | hand Rust | TS | Pruv/hand | cause | status |
 |---|---|---|---|---|---|---|
 | M4 resident state: sessions | 18.0-18.6 | 14.7-16.4 | 59-66 | 1.22 / 1.13 / 1.14 (pass 3; was 1.22 / 1.17 / 1.16, 1.40 / 1.30 / 1.30) | compiler now emits `#[inline]` on every generated fn and `bud_map` compares keys with the `eq_range` builtin. Left: the per-op `valid()` header check of the raw-buffer ABI (about 2 ns of 2-3 ns; scratch build without it is at parity). `valid` already runs once per root call. Line by line and the typed-handle design that would remove it: `perf_headroom/HOST.md` | open (> 1.1x), written reason: ABI header check |
-| M4 resident state: tools | 36-40 | 53 | 60 | 0.69 / 0.75 / 0.74 | - | ok |
+| M4 resident state: tools | 36-40 | 53 | 60 | 0.69 / 0.75 / 0.74 | P13e (b231319): 10-word base entry, extension only for entries with children/blob/values; peak RSS 1.065 / 1.050 / 1.045 of hand, proportional share at hand (fixed code share open, P13d/P13h); instructions 0.92 / 0.88 / 0.85 of hand | ok (time); RSS fixed share open |
 | M4 resident state: clocks | 34-38 | 38-40 | 99-108 | 0.98 / 0.86 / 0.98 | - | ok |
 | M5 store_find, lookup only | 9.6-11.2 | 11.7-13.0 | - | 0.96 / 0.76 / 0.78 | was the UTF-16 key build and the handle read; now a byte-keyed index holding the handle | ok (was 1.18 / 1.21 / 1.29) |
 | M5 store_find, JV encode only | 31-39 | 35-39 | - | 0.87 / 0.95 / 1.02 | was the J tree; now one text encoder | ok (was 1.11 / 1.21 / 1.15 vs tree) |

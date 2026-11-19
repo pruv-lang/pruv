@@ -12,7 +12,7 @@ mod bud_admit;
 
 fn fa(st: [i64], e: i64, f: i64) -> i64
   requires 0 <= f && f < 20
-{ return crate::bud_store::field_addr(st, e) + f; }
+{ return crate::bud_store::field_at(st, e, f); }
 
 fn poke(inout st: [i64], i: i64, v: i64) -> ()
 { crate::ent_u16::wr(inout st, i, v); }

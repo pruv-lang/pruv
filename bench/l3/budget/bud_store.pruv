@@ -5,9 +5,8 @@
 // 7 entry top, 8 free-list head (-1 none), 9 arena base, 10 arena top, 11 arena end, 12 live entries (table
 // occupancy: roots + live), 13 used slots, 14 live arena words (including pending dead entries), 15 pending-Need sequence.
 //
-// Every access to the buffer goes through crate::ent_u16::rd / wr (total), and every value read from the buffer is
-// clamped before it is used in arithmetic. A corrupt buffer can therefore give wrong answers but never an
-// out-of-bounds access, an arithmetic overflow, or a non-terminating loop.
+// Buffer accesses use total reads/writes or direct indexing after a range check. Buffer values used
+// in arithmetic are bounded or handled with wrapping operations, including on malformed buffers.
 
 pub fn magic() -> i64
   ensures result == 1112884307
@@ -89,7 +88,7 @@ pub opaque fn shape_w(l: i64, w0: i64, w1: i64, w2: i64, w3: i64, s: i64, w5: i6
   if 54 * (s / 2) + 16 > l { return false; }
   if s <= 2147483648 && 54 * s + 16 <= l { return false; }
   let cap: i64 = s / 2;
-  if w0 != 1112884307 || w1 != 1 || w2 != l { return false; }
+  if w0 != 1112884307 || w1 != 2 || w2 != l { return false; }
   if w3 != 16 || w5 != 16 + s || w6 != cap { return false; }
   if w9 != 16 + 11 * s || w11 != l { return false; }
   return true;
@@ -168,109 +167,222 @@ pub fn wr16(inout st: [i64], p: i64, v: i64) -> ()
 
 // ---- entry fields ----
 
-// Absolute word address of field f of entry e; -1 if e is outside the entry capacity or f is not in 0..20.
-fn ea(st: [i64], e: i64, f: i64) -> i64
-  ensures result >= -1 && result <= 1099511627776
-  ensures (valid(st) && 0 <= e && e < st[6] && 0 <= f && f < 20) ==> (16 <= result && result - f + 20 <= len(st))
-  ensures (valid(st) && !(0 <= e && e < st[6] && 0 <= f && f < 20)) ==> result == -1
+// xk stores capacity above the extension flag. A negative xk decodes to an oversized capacity.
+pub fn kcap_of(xk: i64) -> i64
+  ensures xk >= 0 ==> result == xk / 2
+{ return ushr(xk, 1); }
+
+pub fn has_x(xk: i64) -> bool
+  ensures xk >= 0 ==> (result == (xk % 2 == 1))
 {
-  // the valid premise of the ensures reads header words 5, 6 and the length through shape_w
+  if xk < 0 { return (-(xk + 1)) % 2 == 0; }
+  return xk % 2 == 1;
+}
+
+// Start of the base or extension record, or -1 for an entry outside the capacity.
+fn ea(st: [i64], e: i64, extension: bool) -> i64
+  ensures result >= -1 && result <= 1099511627767
+  ensures (valid(st) && 0 <= e && e < st[6]) ==> (16 <= result && result + 10 <= len(st))
+{
   reveal shape_w;
-  // len(st) < 7 reads header words 5, 6 as 0 through hd (cap 0, so -1); otherwise both are in range.
   if len(st) < 7 { return -1; }
   let cap: i64 = c32(st[6]);
-  if e < 0 || e >= cap || f < 0 || f >= 20 { return -1; }
-  return c32(st[5]) + e * 20 + f;
+  if e < 0 || e >= cap { return -1; }
+  let b: i64 = c32(st[5]) + 10 * e;
+  if extension { return b + 10 * cap; }
+  return b;
 }
 
-// Address of field 0 of entry e (fields 0..19 follow it); -1 if e is outside the entry capacity.
+// Address of base word 0, or -1 for an entry outside the capacity.
 pub fn field_addr(st: [i64], e: i64) -> i64
   ensures result >= -1 && result <= 1099511627776
-{ return ea(st, e, 0); }
+{ return ea(st, e, false); }
 
-// Fast-path base of entry e: the address of field 0 when the whole entry (fields 0..19) lies in st past the 16 header
-// words, else -1. When it is not -1, ef(st, e, f) == st[result + f] and set_ef(st, e, f, v) is st[result + f] = v for
-// every f in 0..20, on any buffer: ea gives the same address, rd/wr are in range, and entry writes never reach the
-// header words 5/6 that ea reads, so the base stays valid across the run (header writes to other words do not move
-// it). Callers use it for one range check per run of field accesses and keep the ef/set_ef code as the fallback.
+// Base address when the ten base words lie in the buffer past the header.
 pub fn eb(st: [i64], e: i64) -> i64
-  ensures result == -1 || (16 <= result && result + 20 <= len(st))
+  ensures result == -1 || (16 <= result && result + 10 <= len(st))
   ensures (valid(st) && 0 <= e && e < st[6]) ==> result >= 16
 {
-  let a: i64 = ea(st, e, 0);
-  if a < 16 || a > len(st) - 20 { return -1; }
-  return a;
+  let b: i64 = ea(st, e, false);
+  if b < 16 || b > len(st) - 10 { return -1; }
+  return b;
 }
 
-// Field f of entry e; -1 if e or f is out of range (so a bad link reads as "none").
+// Extension address when the base has its extension flag set. Total readers use rd.
+pub fn xa(st: [i64], e: i64) -> i64
+  ensures result >= -1 && result <= 1099511627767
+{
+  // eb and ea inlined: one capacity read and one base bound check.
+  if len(st) < 7 { return -1; }
+  let cap: i64 = c32(st[6]);
+  if e < 0 || e >= cap { return -1; }
+  let b: i64 = c32(st[5]) + 10 * e;
+  if b < 16 || b > len(st) - 10 { return -1; }
+  if !has_x(st[b + 9]) { return -1; }
+  return b + 10 * cap;
+}
+
+// Extension address for direct reads, with all ten words in range.
+pub fn xb(st: [i64], e: i64) -> i64
+  ensures result == -1 || (16 <= result && result + 10 <= len(st))
+  ensures result <= 1099511627767
+{
+  let x: i64 = xa(st, e);
+  if x < 16 || x > len(st) - 10 { return -1; }
+  return x;
+}
+
+// Extension address for direct writes. Publish the flag after initializing the record.
+pub fn xbm(inout st: [i64], e: i64) -> i64
+  ensures len(st) == len(old(st))
+  ensures len(old(st)) >= 15 ==> hdr_same(st, old(st), -1)
+  ensures kept(st, old(st))
+  ensures result == -1 || (16 <= result && result + 10 <= len(st))
+{
+  reveal dyn_ok;
+  let b: i64 = eb(st, e);
+  if b < 0 { return -1; }
+  let x: i64 = ea(st, e, true);
+  if x < 16 || x > len(st) - 10 { return -1; }
+  let xk: i64 = st[b + 9];
+  if !has_x(xk) {
+    st[x] = 0; st[x + 1] = 0; st[x + 2] = 0; st[x + 3] = 0; st[x + 4] = 0;
+    st[x + 5] = 0; st[x + 6] = 0; st[x + 7] = -1; st[x + 8] = -1; st[x + 9] = 0;
+    st[b + 9] = wrapping_add(xk, 1);
+    assert len(old(st)) < 15 || hdr_same(st, old(st), -1);
+  }
+  return x;
+}
+
+// Extension offset for a logical field known to be in the extension.
+fn xfield(f: i64) -> i64
+  requires 9 <= f && f < 20 && f != 18
+  ensures 0 <= result && result < 10
+{
+  if f == 9 { return 7; }
+  if f == 10 { return 8; }
+  if f == 19 { return 9; }
+  return f - 11;
+}
+
+// Physical address of a logical field for corruption tests. Field 18 names the packed xk word.
+pub fn field_at(st: [i64], e: i64, f: i64) -> i64
+  ensures result >= -1 && result <= 1099511627776
+{
+  if f < 0 || f >= 20 { return -1; }
+  if f < 9 || f == 18 {
+    let b: i64 = ea(st, e, false);
+    if b < 0 { return -1; }
+    if f == 18 { return b + 9; }
+    return b + f;
+  }
+  let x: i64 = xb(st, e);
+  if x < 0 { return -1; }
+  return x + xfield(f);
+}
+
+// Logical field read. Missing extensions supply -1 for head/tail and 0 for all other fields.
 pub fn ef(st: [i64], e: i64, f: i64) -> i64
 {
-  let a: i64 = ea(st, e, f);
-  if a < 0 { return -1; }
-  return crate::ent_u16::rd(st, a);
+  if f < 0 || f >= 20 { return -1; }
+  if f < 9 || f == 18 {
+    let b: i64 = ea(st, e, false);
+    if b < 0 { return -1; }
+    if f < 9 { return crate::ent_u16::rd(st, b + f); }
+    return kcap_of(crate::ent_u16::rd(st, b + 9));
+  }
+  // An extension implies a base in range (xa checks it), so the base check is needed only on the default path.
+  let x: i64 = xb(st, e);
+  if x >= 0 { return st[x + xfield(f)]; }
+  if ea(st, e, false) < 0 { return -1; }
+  if f == 9 || f == 10 { return -1; }
+  return 0;
 }
 
-// Writes past the 16 header words only (ea is >= 16 on a valid store; a lower address is skipped like -1), so the
-// header frame holds on any buffer.
+// Logical field write. A default write leaves a missing extension untouched.
 pub fn set_ef(inout st: [i64], e: i64, f: i64, v: i64) -> ()
   ensures len(st) == len(old(st))
   ensures len(old(st)) >= 15 ==> hdr_same(st, old(st), -1)
   ensures kept(st, old(st))
 {
-  reveal dyn_ok;
-  let a: i64 = ea(st, e, f);
-  if a < 16 { return; }
-  crate::ent_u16::wr(inout st, a, v);
+  if f < 0 || f >= 20 { return; }
+  if f < 9 {
+    let b: i64 = ea(st, e, false);
+    if b >= 16 { wr16(inout st, b + f, v); }
+    return;
+  }
+  if f == 18 {
+    let b: i64 = eb(st, e);
+    if b < 0 { return; }
+    let mut xk: i64 = 2 * c40(v);
+    if has_x(st[b + 9]) { xk = xk + 1; }
+    wr16(inout st, b + 9, xk);
+    return;
+  }
+  let mut x: i64 = xb(st, e);
+  if x < 0 {
+    let mut d: i64 = 0;
+    if f == 9 || f == 10 { d = -1; }
+    if v == d { return; }
+    x = xbm(inout st, e);
+  }
+  if x >= 0 { wr16(inout st, x + xfield(f), v); }
 }
 
-// Writes a live entry with no key, no blob, no children, no links and zero scalars. With fresh, the arena regions
-// (key off 4 / key cap 18, blob off 12 / blob cap 19) are cleared too; a reused entry keeps them so that a new key or
-// blob that fits is written back into its old region (no arena growth under steady churn).
-fn fill_entry(inout st: [i64], e: i64, owner: i64, ogen: i64, egen: i64, fresh: bool) -> ()
+// set_ef(e, 14..17, a..d) with one extension lookup: the extension is created only when one value is not 0, and then
+// holds the same four words the four calls would leave.
+pub fn set_vals(inout st: [i64], e: i64, a: i64, b: i64, c: i64, d: i64) -> ()
   ensures len(st) == len(old(st))
   ensures len(old(st)) >= 15 ==> hdr_same(st, old(st), -1)
   ensures kept(st, old(st))
 {
+  let mut x: i64 = xb(st, e);
+  if x < 0 {
+    if a == 0 && b == 0 && c == 0 && d == 0 { return; }
+    x = xbm(inout st, e);
+    if x < 0 { return; }
+  }
+  wr16(inout st, x + 3, a);
+  wr16(inout st, x + 4, b);
+  wr16(inout st, x + 5, c);
+  wr16(inout st, x + 6, d);
+}
+
+// Fresh entries write only the base. Reused entries retain their key and blob regions
+// and reset the contents of an existing extension.
+pub fn fill_entry(inout st: [i64], e: i64, owner: i64, ogen: i64, egen: i64, fresh: bool) -> ()
+  ensures len(st) == len(old(st))
+  ensures len(old(st)) >= 15 ==> hdr_same(st, old(st), -1)
+  ensures kept(st, old(st))
+{
+  reveal dyn_ok;
   let b: i64 = eb(st, e);
-  if b >= 0 {
-    // Same words in the same order as the wr path below (see eb).
-    st[b] = 1; st[b + 1] = owner; st[b + 2] = ogen; st[b + 3] = egen;
-    st[b + 5] = 0; st[b + 6] = 0;
-    st[b + 7] = -1; st[b + 8] = -1; st[b + 9] = -1; st[b + 10] = -1;
-    st[b + 11] = 0; st[b + 13] = 0; st[b + 14] = 0; st[b + 15] = 0; st[b + 16] = 0; st[b + 17] = 0;
-    if fresh { st[b + 4] = 0; st[b + 12] = 0; st[b + 18] = 0; st[b + 19] = 0; }
-    // the header frame first, so dyn_ok's body reads equal words (no store chain in the dyn_ok goal)
-    assert len(old(st)) < 15 || hdr_same(st, old(st), -1);
-    reveal dyn_ok;
+  if b < 0 {
+    // Keep the total writes for a truncated base on a malformed buffer.
+    set_ef(inout st, e, 0, 1);
+    set_ef(inout st, e, 1, owner);
+    set_ef(inout st, e, 2, ogen);
+    set_ef(inout st, e, 3, egen);
+    set_ef(inout st, e, 5, 0);
+    set_ef(inout st, e, 6, 0);
+    set_ef(inout st, e, 7, -1);
+    set_ef(inout st, e, 8, -1);
+    if fresh { set_ef(inout st, e, 4, 0); }
     return;
   }
-  let a: i64 = ea(st, e, 0);
-  // below 16 only on a buffer that is not valid (see set_ef): skipped so the header frame holds on any buffer
-  if a < 16 { reveal dyn_ok; return; }
-  crate::ent_u16::wr(inout st, a, 1);
-  crate::ent_u16::wr(inout st, a + 1, owner);
-  crate::ent_u16::wr(inout st, a + 2, ogen);
-  crate::ent_u16::wr(inout st, a + 3, egen);
-  crate::ent_u16::wr(inout st, a + 5, 0);
-  crate::ent_u16::wr(inout st, a + 6, 0);
-  crate::ent_u16::wr(inout st, a + 7, -1);
-  crate::ent_u16::wr(inout st, a + 8, -1);
-  crate::ent_u16::wr(inout st, a + 9, -1);
-  crate::ent_u16::wr(inout st, a + 10, -1);
-  crate::ent_u16::wr(inout st, a + 11, 0);
-  crate::ent_u16::wr(inout st, a + 13, 0);
-  crate::ent_u16::wr(inout st, a + 14, 0);
-  crate::ent_u16::wr(inout st, a + 15, 0);
-  crate::ent_u16::wr(inout st, a + 16, 0);
-  crate::ent_u16::wr(inout st, a + 17, 0);
+  st[b] = 1; st[b + 1] = owner; st[b + 2] = ogen; st[b + 3] = egen;
+  st[b + 5] = 0; st[b + 6] = 0; st[b + 7] = -1; st[b + 8] = -1;
+  assert len(old(st)) < 15 || hdr_same(st, old(st), -1);
   if fresh {
-    crate::ent_u16::wr(inout st, a + 4, 0);
-    crate::ent_u16::wr(inout st, a + 12, 0);
-    crate::ent_u16::wr(inout st, a + 18, 0);
-    crate::ent_u16::wr(inout st, a + 19, 0);
+    st[b + 4] = 0; st[b + 9] = 0;
+  } else {
+    let x: i64 = xb(st, e);
+    if x >= 0 {
+      st[x] = 0; st[x + 2] = 0; st[x + 3] = 0; st[x + 4] = 0;
+      st[x + 5] = 0; st[x + 6] = 0; st[x + 7] = -1; st[x + 8] = -1;
+    }
   }
   assert len(old(st)) < 15 || hdr_same(st, old(st), -1);
-  reveal dyn_ok;
 }
 
 // ---- init ----
@@ -291,7 +403,7 @@ pub fn init_store(inout st: [i64]) -> i64
   if s == 0 { return 232; }
   let ab: i64 = 16 + 11 * s;
   set_hd(inout st, 0, 1112884307);
-  set_hd(inout st, 1, 1);
+  set_hd(inout st, 1, 2);
   set_hd(inout st, 2, l);
   set_hd(inout st, 3, 16);
   set_hd(inout st, 4, s);
@@ -472,9 +584,9 @@ pub fn entry_alloc(inout st: [i64], owner: i64, ogen: i64) -> i64
   return -1;
 }
 
-// Puts a live non-root entry on the free list and bumps its generation. The child list stays in fields 9..11:
+// Puts a live non-root entry on the free list and bumps its generation. The child list stays in the extension:
 // bud_map::remove frees descendants first, while M8 forget leaves pending dead children for allocation to reclaim.
-// The key and blob regions (fields 4/18, 12/19) stay with the entry for reuse.
+// The key and blob regions stay with the entry for reuse.
 pub fn entry_free(inout st: [i64], e: i64) -> ()
   ensures len(st) == len(old(st))
   ensures len(old(st)) >= 15 ==> (shape_same(st, old(st)) && st[7] == old(st)[7] && st[10] == old(st)[10] &&
@@ -487,7 +599,7 @@ pub fn entry_free(inout st: [i64], e: i64) -> ()
   if e >= top { return; }
   let b: i64 = eb(st, e);
   if b >= 0 {
-    // Same reads and writes as the ef/set_ef path below (see eb); len(st) >= 36 here, so header word 8 is st[8].
+    // Same reads and writes as the ef/set_ef path below (see eb); len(st) >= 26 here, so header word 8 is st[8].
     if st[b] != 1 { return; }
     let g: i64 = st[b + 3];
     let head: i64 = st[8];
