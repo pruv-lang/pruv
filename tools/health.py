@@ -222,7 +222,7 @@ def parse_time(stderr):
     m = re.search(r"(\d+)\s+maximum resident set size", stderr)
     if m:
         rss = int(m.group(1))
-    m = re.search(r"Elapsed \(wall clock\) time[^:]*:\s*(?:(\d+):)?(\d+):([\d.]+)", stderr)
+    m = re.search(r"Elapsed \(wall clock\) time(?: \([^)]*\))?:\s*(?:(\d+):)?(\d+):([\d.]+)", stderr)
     if m:
         wall = int(m.group(1) or 0) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
     m = re.search(r"Maximum resident set size \(kbytes\):\s*(\d+)", stderr)

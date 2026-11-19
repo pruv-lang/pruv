@@ -99,6 +99,25 @@ and binary size for budget m4, items slower than hand Rust (above 1.0x beyond me
 Later the top-15 branchy functions get a short invariant note each (GHC "Note" style) before anyone edits
 them; no rewrite in this package.
 
+Status (2026-11-19, on 148de2b):
+
+- Done: `tools/health.py` (standard library only). Default (fast, ~1-2 s) prints one row in the health log
+  columns: tracked line counts of `pruvc/*.py` and `pruvc-rs/*.rs` with the delta to the last state, top 5
+  files, every PERF_HEADROOM summary item above 1.0x hand (no tolerance band; noise is a person's call from
+  interleaved runs), last 3 CI runs on main, `work/` size and backup state (newest file in `work/` vs the last
+  `../pruv-internal` commit; `backup.sh` is never run), disk free and Pruv folder size (§4 item 9).
+  `--full` (~11 s) builds budget m4 through `m34_test/run.py build()` in a temp dir with pruvc and rustc under
+  `/usr/bin/time` (proof time, compiler + in-process z3 peak RSS, rustc time and peak RSS, binary size), then
+  runs the M4 driver against `m4_hand` (n = 1000, 3 alternating rounds) for time, peak RSS and allocation
+  count (the counting global allocators already in `driver_m4.rs` and `m4_hand.rs`). `--save` appends to
+  `work/health_state.json` in the main checkout; `--compare` prints only the lines past their thresholds
+  (+1,000 lines per compiler, +20% for m4 times, sizes and memory, any item above 1.0x hand, failed CI,
+  `work/` changed after backup, disk under 20 GB) against the last state, falling back to the line counts of
+  the last `health_log.md` row. Unit test: `tests/health_tool.py` (not a `run_all.py` row).
+- Done (list only): `--branchy` ranks the 15 functions with the most branch points across both compilers
+  (Python by AST; Rust by a token count inside the fn braces, closures included). No invariant notes yet.
+- Open: the invariant notes on those 15 functions.
+
 ### Not in this package
 
 - Freezing the Python compiler. Criteria (from TypeScript 7 and rustc NLL practice): every required case
