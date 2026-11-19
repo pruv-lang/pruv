@@ -195,10 +195,10 @@ impl World {
         }
         if !self.silent {
             let w: Vec<String> = match self.out[0] {
-                3 => {
+                3 | 6 => {
                     // the ref's ids are packed in out; print them as units
                     let carry = self.fx[1..=used].contains(&21);
-                    ref_units(&self.out, carry).iter().map(|x| x.to_string()).collect()
+                    ref_units(&self.out, &self.st, carry).iter().map(|x| x.to_string()).collect()
                 }
                 4 => {
                     // budget view: the record is st[off..off+n)
@@ -244,16 +244,19 @@ fn words(n: i64) -> usize {
 }
 
 // Host egress of a ref result (out[0] == 3): out = [3, n, packed id words (words(n)) (, m, packed old id words(m) when
-// effect 21 is held)]. Returns the unit form [3, n, id units.. (, m, old id units..)], the words q mode prints and
-// rchk folds. Untimed paths only.
-fn ref_units(out: &[i64], carry: bool) -> Vec<i64> {
+// effect 21 is held)]; or a ref view (out[0] == 6, attach's ref path): out = [6, n, off], the packed id words are
+// st[off..off+words(n)) (never carried). Returns the unit form [3, n, id units.. (, m, old id units..)], the words q
+// mode prints and rchk folds. Untimed paths only.
+fn ref_units(out: &[i64], st: &[i64], carry: bool) -> Vec<i64> {
+    let view = out[0] == 6;
     let mut v = vec![3i64];
     let mut p = 1;
-    for _ in 0..(if carry { 2 } else { 1 }) {
+    for _ in 0..(if carry && !view { 2 } else { 1 }) {
         let n = out[p].max(0) as usize;
         v.push(n as i64);
+        let (src, at) = if view { (st, out[2].max(0) as usize) } else { (out, p + 1) };
         for j in 0..n {
-            let word = out[p + 1 + j / 4] as u64;
+            let word = src[at + j / 4] as u64;
             v.push(((word >> (48 - 16 * (j % 4))) & 0xffff) as i64);
         }
         p += 1 + words(n as i64);
@@ -723,9 +726,9 @@ fn rchk_fold(w: &World, r: i64, sum: u64) -> u64 {
                 fold(*x);
             }
         }
-        3 => {
-            // the ref's packed ids are unpacked to units, so the folded words equal hand16's
-            for x in ref_units(&w.out, w.fx[1..=used].contains(&21)) {
+        3 | 6 => {
+            // the ref's packed ids (in out, or in st for a view) are unpacked to units, so the folded words equal hand16's
+            for x in ref_units(&w.out, &w.st, w.fx[1..=used].contains(&21)) {
                 fold(x);
             }
         }
@@ -1056,11 +1059,16 @@ fn consume(w: &World, r: i64, sum: u64) -> u64 {
                 fold(*x);
             }
         }
-        3 => {
+        3 | 6 => {
             let used = w.fx[0].max(0) as usize;
-            // packed ref words: [3, n, words(n) id words (, m, words(m) old id words)]
-            let k = ref_len(&w.out, w.fx[1..=used].contains(&21));
-            for x in &w.out[..k] {
+            // packed ref words: [3, n, words(n) id words (, m, words(m) old id words)]; a ref view [6, n, off] stands for
+            // [3, n, st[off..off+words(n))] (never carried)
+            let view = w.out[0] == 6;
+            let k = if view { 2 + words(w.out[1]) } else { ref_len(&w.out, w.fx[1..=used].contains(&21)) };
+            let (src, at) = if view { (&w.st[..], w.out[2].max(0) as usize) } else { (&w.out[..], 2) };
+            fold(3);
+            fold(w.out[1]);
+            for x in &src[at..at + k - 2] {
                 fold(*x);
             }
         }

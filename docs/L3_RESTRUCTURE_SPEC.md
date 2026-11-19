@@ -383,7 +383,7 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P13f | B/driver_m4.rs and the M4 bench adapter: length bound from T0 (TIDY_SPEC §4.10) | P: the bench adapter's allocations get the `2^40` bound (T0 audit finding 1), and the per-entry length check added by T0 is hoisted out of the timed loop where the driver already holds the length; m4 sessions back to the pre-T0 time (T0: +1-2%, outside A/A noise) and every M4 cell <= 1.0x hand. |
 | P13g | Both codegens: small helper inlining gap found by P20 (Appendix P20) | P: `find_w` in the bud_charge hot path is inlined (P20 attribution: about 25 instructions per call not inlined), output parity on both compilers, and the P20 unmatched hand16 lane (keys pre-parsed, 1.13-1.17x) re-measured after P13f and this row; any remaining gap above 1.0x is fixed or explained line by line (wire parsing is about 100 instructions of it). LLVM pairs for P20 wait for P17. |
 | P13h | Both codegens (and verifiers for (a)): M4 own-code size without time loss (Appendix P13d.5, P13d.8) | P: resident `__TEXT` of the M4 Pruv binary at or below hand's (P13d: 304 vs 240 KiB) with instructions and cycles on every M4 cell not worse than P13d.3's shipped column; candidates: proof-guided call-site specialization of total accessors, hot/cold body split of map growth paths; output parity on both compilers. |
-| P13i | B/bud_lifecycle.pruv (and bud_store.pruv for (c)): M7/M10 fixed-share regression from P13e plus the P18b handovers (Appendix P13e.7) | P: (a) lifecycle bodies (maybe_close, replace, reopen, attach) use the direct `xa`/`xb` paths like `copy_node` so the driver `__text` growth of about 37 KB and the M7 +96..176 / M10 +16..32 KiB fixed peak-RSS rise go back to c3ec58d or below; (b) drop the id copy in attach (P18b `noid`: S = 500 391.1 -> 355.1 instr/call, hand16 303.3); (c) M7 proportional RSS share (about 0.74 KB per session over hand16) from `bud_store::need` slack, and attribute the unexplained fixed 254 KB. Time and M4 cells not worse than P13e. Runs after P18c (shared M7 driver `__text` base) and before T5b2 if both touch bud_lifecycle. |
+| P13i | B/bud_lifecycle.pruv (and bud_store.pruv for (c)): M7/M10 fixed-share regression from P13e plus the P18b handovers (Appendix P13e.7) | P: (a) lifecycle bodies (maybe_close, replace, reopen, attach) use the direct `xa`/`xb` paths like `copy_node` so the driver `__text` growth of about 37 KB and the M7 +96..176 / M10 +16..32 KiB fixed peak-RSS rise go back to c3ec58d or below; (b) drop the id copy in attach (P18b `noid`: S = 500 391.1 -> 355.1 instr/call, hand16 303.3); (c) M7 proportional RSS share (about 0.74 KB per session over hand16) from `bud_store::need` slack, and attribute the unexplained fixed 254 KB. Time and M4 cells not worse than P13e. Runs after P18c (shared M7 driver `__text` base) and before T5b2 if both touch bud_lifecycle. Measured (Appendix P13i, parts (a) and (b); (c) needs bud_store.pruv and stays open for P13j): (b) attach returns a view `[6, n, off]` of the stored id instead of copying it, attach 392.8 -> 353.5 / 393.2 -> 355.3 instructions per call at S/M (hand16 299.8 / 305.3, 1.18 / 1.16x; after the audit's length clamp 348.6 / 349.4, 1.12 / 1.17x), other cells unchanged, peak RSS overlapping, 0 allocations, M7 Q 113/187/0 on both compilers. Not met: (a) the lifecycle bodies already use `xa`/`xb`; the `__text` growth is `find_w` inlined everywhere since P13e's `ef`/`set_ef` `#[inline]`, and no variant within the allowed files restores `__text` (457,532 B; 413,244 at c3ec58d) or the fixed peak RSS without an instruction loss (P13i.1); M7 `__text` +384 B from the harness tag-6 decoder (Pruv code -44 B); M10 `__text` unchanged. |
 | P13j | B/bud_store.pruv: store bounds found by the P13e audit (Appendix P13e.10) | P: at the maximum slot count the entry base must not overlap the slot table, and a grow must carry the root payload; both as proved `ensures` plus a gate case that drives each path (none does now); proofs kept, time and RSS not worse than P13e. |
 | P21a | B/bud_map.pruv, bud_tools.pruv: O(1) forgetTurn (Appendix P21.4) | P: forgetTurn of a turn holding N activities <= 1.0x oaw at S/M in time, peak RSS and allocations (P21: 8.9x / 37.9x; oa forgets by generation, Pruv frees each child), with the toolnew and tooldup cells kept <= 1.0x and the reclaim cost measured where it lands; plus a corrupt control that pokes header words (entry top = cap - 1, low live) for the P21.7 counterexample. Done (Appendix P21a): forget 0.99 / 0.95x oaw (overlap), RSS and allocations below; reclaim cost in toolnew queued as P21b. |
 | P21b | B/bud_map.pruv, bud_store.pruv: reclaim cost of the lazy forget (Appendix P21a.3) | P: toolnew <= 1.0x oaw at S/M by median and distribution (P21a: 0.93 / 1.08x, overlapping) and the toolgrow cycle <= 1.0x oaw in instructions (P21a: 1.05 / 1.08x), with toolforget, tooldup and memory kept; e.g. fold reclaim_head into entry_alloc. Same gates as P21a. Done (Appendix P21b): toolnew 0.87 / 0.97x oaw (Pruv max below oaw min), toolgrow 0.93 / 0.98x oaw instructions; cause was index load at M (early rehash bound slots/4 -> 3/8) plus the reclaim push/pop and repeated row bases. |
@@ -5946,3 +5946,103 @@ gives, panicking only when a declared `requires` is violated.
 | audit and confirm audit | Codex gpt-6.2-astra, ultra, review |
 | full Python suite | shell command delegation |
 | prototype, measurement, proof judgment, SPEC, `driver_m7.rs`, audit fixes, this appendix | Claude Opus 5.5, direct |
+
+## Appendix P13i: lifecycle fixed share and the attach id copy
+
+Scope of this package: parts (a) and (b) of row P13i. Part (c) (`bud_store::need` slack and the fixed 254 KB) needs
+`bud_store.pruv`, which row P13j owns, so it stays open.
+
+### P13i.1 Attribution of (a)
+
+The lifecycle bodies (`maybe_close`, `replace`, `reopen`, `attach`) already reach records through the direct `xa`/`xb`
+paths, so the fix named in the row has nothing left to change. The M7 driver `__text` growth (c3ec58d 413,244 B ->
+5832908 457,532 B) comes from P13e giving `bud_store::ef` / `set_ef` an `#[inline]` attribute: with them inlined,
+`bud_map::find_w` becomes small enough for LLVM to inline it at every call site. Experiments on hand-edited generated
+Rust (M7 driver, fair lane, R = 20000):
+
+| variant | change | `__text` (B) | instructions |
+|---|---|---|---|
+| base (5832908) | none | 457,532 | reference |
+| A | `ef`/`set_ef` `#[inline(always)]` | 458,236 | no gain |
+| B | `find_w` `#[inline(never)]` | 421,436 | +12..+25 per call on current, isHalted, reopenmiss, closereopen |
+| C | cold fallback paths, `find_w` out of line | 422,268 | same losses as B |
+| E | C's cold fallbacks, `find_w` `#[inline(always)]` | 454,140 | wins on every cell (attach 392 -> 376, reopenmiss 383 -> 373, current 322 -> 311, isHalted 319 -> 304) |
+
+No variant restores `__text` without an instruction loss, and every lever (the shape of `bud_map::find_w`, the
+`ef`/`set_ef` attributes in `bud_store.pruv`, or the compiler inline policy) is outside this package's files. Peak
+RSS is also not restored: c3ec58d attach S 2752-2784 KiB, M 4496-4544 KiB against 2800-2848 / 4608-4656 KiB for
+both 5832908 and this package (3 interleaved rounds). Part (a) is handed back. Suggested follow-up: a `bud_map` row
+that takes E's cold-fallback split (it pays in instructions on all five cells) together with a size lever that keeps
+those gains.
+
+### P13i.2 Design of (b)
+
+`attach` on the ref path used to copy the packed id into `out` (`[3, n, id words]`). It now returns a view of the
+stored id, `[6, n, off]`, where the packed id words are `st[off..off + words(n))` inside the stored record, the same
+way `current` returns a budget view `[4, n, off]`. The length word is clamped into 0..2^30 as `put_key` does, so the
+view's length and the words checked against the record agree. The view is valid until the next change of `st`. Being 3
+words, it fits the 4096-word out buffer for any id, so the hand reference (`hand_m7_u16.rs`) drops its out-buffer limit
+on this path and `diff_hand_m7.py` expects a value for the 16,377-unit control (OPEN and halted `replace` keep the
+limit). The OPEN path keeps `[3, n, id words]` (its id is the caller's
+`uk`). The M7 driver reads tag 6 from `st` in egress, `rchk_fold` and `consume`; the consume checksum folds the same
+words as the tag-3 form, so result checks are unchanged. No proof annotation changed and no admit, assume or opaque
+was added; no compiler change.
+
+### P13i.3 Gates
+
+| gate | result |
+|---|---|
+| verify the 7 budget roots, rs and py | all rc 0 |
+| M7 Q, rs then py | exact 113, not-implemented 187, fail 0 (both) |
+| M10 Q, rs and py | 78 / 222 / 0; `cases_halt` 300 / 0 / 0 |
+| M4, M8, admit, M9, M11 generated Rust | byte-identical to 5832908 |
+| `mut_m9` | control CLEAN, 10/10 KILLED |
+| `run_m7.py perf` result checks | 21 cells, 0 mismatches |
+| `diff_hand_m7.py` (after the audit fixes) | 300 random and 189 control cases, 0 mismatches, 0 expectation failures; 15 fatal controls, 0 failures |
+| allocations per call | 0 on all 10 cells (base and P13i), identical checksums |
+
+### P13i.4 Measured
+
+Fair lane, 7 interleaved rounds, instructions per call median [min..max], hand16 for reference:
+
+| cell | 5832908 | P13i | hand16 | P13i / hand16 |
+|---|---|---|---|---|
+| attach S | 392.8 | 353.5 [347.7..354.8] | 299.8 | 1.18 (from 1.31) |
+| attach M | 393.2 | 355.3 [349.5..359.5] | 305.3 | 1.16 (from 1.29) |
+| closereopen S / M | 533.6 / 533.7 | 533.2 / 533.3 | 446.0 / 444.3 | 1.20 / 1.20 |
+| reopenmiss S / M | 384.4 / 383.4 | 383.9 / 384.0 (overlaps base) | 333.2 / 333.4 | 1.15 / 1.15 |
+| current S / M | 323.1 / 323.2 | 322.7 / 321.8 | 334.5 / 333.6 | 0.96 / 0.96 |
+| isHalted S / M | 319.7 / 320.3 | 319.6 / 320.6 (overlaps base) | 338.3 / 338.6 | 0.94 / 0.95 |
+
+After the audit fixes (length clamp, P13i.6), 5 interleaved rounds: attach S 394.6 -> 348.6, M 391.8 -> 349.4 against
+hand16 311.3 [270.3..315.0] / 298.4 (1.12 / 1.17x; the hand reference no longer checks the out size on this path).
+
+Cycles per call are noisy (about 35-63) and below hand16's on every cell. Peak RSS distributions of 5832908 and P13i
+overlap on every cell (S about 2.75-2.85 MB, M about 4.55-4.67 MB; hand16 2.24-2.32 / 3.76-3.82 MB): the gap to hand is
+part (c). M7 `__text` 457,532 -> 457,916 B (+384, final build): Pruv code -44 B, the host harness decoder for tag 6 +428 B
+(before the clamp: Pruv -32, harness +480 with `ref_units` +308, `consume` +124, `rchk_fold` +16, other +32). The rule "not above the
+base" is literally exceeded by the harness only. M10 `__text` 464,380 B, identical to 5832908 (attach is dead code there).
+
+Not met: (a) `__text` and fixed peak RSS back to c3ec58d (P13i.1); attach still 1.16-1.18x and closereopen /
+reopenmiss 1.15-1.20x of hand16; part (c).
+
+### P13i.5 Delegations
+
+| work | by |
+|---|---|
+| attribution, experiments A-E, (b) design and code, `driver_m7.rs`, gates, measurement, this appendix | Claude Opus 5.5, direct |
+| audit and confirm audit | Codex gpt-6.2-astra, ultra, review |
+
+### P13i.6 Audit
+
+Review delegation (Codex gpt-6.2-astra, ultra) over the (b) diff, verdict fix then merge. Required findings, all fixed:
+1. `c32` lets the id length reach 2^32 while `words` clamps at 2^30, so a record with length 2^30 + 1 passed the span
+   check for 2^28 words while the driver read 2^28 + 1: the length is now clamped to 2^30 before the check.
+2. and 3. The view fits any id, so Pruv answered `V 3` for the 16,377-unit control where hand16 and
+   `diff_hand_m7.py` expected `X 3`: the hand drops the limit on the live-ref path and the control expects a value.
+Optional (not done, files outside this package): `ABI.md` line 89 and `M7_NOTES.md` line 84 describe only the tag 3
+form; they should add `[6, n, st offset]` and its lifetime.
+Reruns after the fixes: 7 roots verify rs and py rc 0; M7 Q rs and py 113 / 187 / 0; M10 Q 78 / 222 / 0 and
+`cases_halt` 300 / 0 / 0 on both compilers, M10 `__text` 464,380 B; `run_m7.py perf` 21 cells 0 mismatches;
+`diff_hand_m7.py` as in P13i.3.
+Confirm audit (same reviewer, only the three fix scopes): all three FIXED, no required finding.
