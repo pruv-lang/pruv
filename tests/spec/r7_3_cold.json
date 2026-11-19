@@ -1,0 +1,1 @@
+{"gen_regex":["#\\[cold\\]\\n#\\[inline\\(never\\)\\]\\nfn \\w*fallback__pruv_body\\(","#\\[cold\\]\\n#\\[inline\\(never\\)\\]\\n(pub )?fn \\w*fallback\\(","#\\[cold\\]\\n#\\[inline\\(never\\)\\]\\nfn \\w*keep"],"gen_regex_absent":["#\\[inline(\\(always\\))?\\]\\n(pub )?fn \\w*fallback(__pruv_body)?\\(","#\\[inline(\\(always\\))?\\]\\nfn \\w*keep"]}

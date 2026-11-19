@@ -321,6 +321,20 @@ def main(work, rs, py):
         assert result.returncode == 2 and result.stderr.strip().endswith(
             "--proven-entries requires --backend rust"), result.stdout + result.stderr
     assert diagnostics[0] == diagnostics[1], "clash diagnostics differ"
+
+    # R-7-3 (P13k audit): a `#[cold]` fn that becomes an entry keeps `#[cold]` and `#[inline(never)]` on its twin.
+    cold = work / "cold.pruv"
+    cold.write_text("#[cold] fn f(a: [i64]) -> i64 { return 0; }\n", encoding="utf-8")
+    proven = [unwrap(compile_source(driver, cold, work / "cold.rs", (flag,))) for driver in drivers]
+    assert proven[0] == proven[1], "cold proven output differs"
+    twins = proven[0].split(b"pub mod pruv_proven {", 1)[1]
+    assert b"    #[cold]\n    #[inline(never)]\n    pub fn f(a: &PruvArr<i64>) -> i64 {" in twins, twins
+    (work / "main.rs").write_text('include!("cold.rs");\nfn main() { assert_eq!(pruv_proven::f(PruvArr::new(&[1])), 0); }\n',
+                                  encoding="utf-8")
+    result = run([rustc, "--edition", "2021", str(work / "main.rs"), "-o", str(work / "host")])
+    assert result.returncode == 0, result.stderr
+    result = run([str(work / "host")])
+    assert result.returncode == 0, result.stderr
     print("P18b/P18c: parity in 3 compiler modes and 2 manifest modes, 3 host runs, privacy, %d body rejects, %d macro shadows and diagnostics pass" % (rejects, shadows))
 
 

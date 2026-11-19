@@ -1,0 +1,4 @@
+// spec: R-7-3 reject
+// `#[cold]` takes no arguments
+#[cold()]
+fn f() -> i64 { return 1; }

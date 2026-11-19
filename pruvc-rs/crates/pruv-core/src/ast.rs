@@ -291,6 +291,8 @@ pub struct Function {
     pub x_auto: Option<Expr>,
     /// P13o: `opaque fn` (Python `Function.opaque`). Not emitted in the dump.
     pub opaque: bool,
+    /// P13k: `#[cold] fn` (Python `Function.cold`). Kept by specialization. Not emitted in the dump.
+    pub cold: bool,
 }
 
 /// G9 A0: checker metadata recorded on the program and the type table, only when a G9 feature is present

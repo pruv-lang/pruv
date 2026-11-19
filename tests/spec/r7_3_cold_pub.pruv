@@ -1,0 +1,4 @@
+// spec: R-7-3 reject
+// `#[cold]` is not allowed on a `pub fn`
+#[cold]
+pub fn f() -> i64 { return 1; }
