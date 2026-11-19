@@ -220,6 +220,28 @@ by byte-identical output and run by group, with the full test suite once before 
     in a private module (or with private visibility the host cannot name) so only checked entries and
     `pruv_proven::*` are reachable; every generated file changes, so run it as its own step with
     `check_generated`, the 7 budget roots and a must-reject host test that names an inner body.
+    Done (TIDY 4.13): both compilers wrap every Rust-backend output, last, as `mod pruv_impl { … }` plus
+    `pub use self::pruv_impl::*;`, so a host reaches only `pub` items (checked entries, `pruv_proven::*`,
+    public types) and, inside its crate, the `pub(crate)` raw entries. Naming a body fails with E0425
+    (unqualified, or `gen::f__pruv_body` from a `#[path] mod`) or E0603 (through `pruv_impl::`). The audit found
+    a second, older bypass: a host `macro_rules! panic` defined before the file is in textual scope inside it,
+    and one that returns lets a failed `requires` run the body (reproduced: `g(-1)` returned 7). The module now
+    defines `macro_rules!` forwarders for the 8 macro names the generator calls unqualified, which shadow host
+    ones; they go to `core::` (`std::` only for `eprintln`, `println`, `vec`) through the extern prelude, so a
+    `no_std` host still compiles (the confirm audit caught `::std::` breaking one) and edition 2015 works. Limit: one generated file per crate-root `include!` (fixed module name); several attach as
+    `#[path] mod`s. `tests/l3/abi/check_proven_entries.py` adds 4 must-reject hosts (`include!` and
+    `#[path] mod`, unqualified and through `pruv_impl`) × plain/`--proven-entries` × both drivers (16 rejects,
+    each must be a rustc error with the expected code whose primary span is in the host file), 2 macro-shadow
+    hosts per run (8 runs; `guarded(-1)`, whose body safely returns 7, must still panic with the `requires` message) and a `#[path] mod` accept
+    host calling the checked entry and `pruv_proven::*`. Against the base compilers only the unqualified
+    `include!` host is a real bypass (it built); `gen::f__pruv_body` was already E0603 and the two
+    `pruv_impl::` hosts name a module that did not exist. py/rs output is byte-identical; `bridge/node/gen`
+    regenerated (+20 lines each); g8 rust hashes updated after checking new == wrap(base). Gates on both
+    compilers: g8_frontend, check_generated, l3_abi, the 7 budget roots, M4 300, M7 q, M11 Q6, `cargo test`,
+    `diff_rust` fuzz 20; run_all rows unchanged. Perf (budget m4, base vs new, 5 alternating rounds):
+    instructions and peak RSS distributions overlap on all three axes, `__text` the same size (the bytes
+    differ by layout). The LLVM backend was already closed (`define internal` bodies).
+    `bench/s5/perf/*_rust_*.rs` are frozen S5 records and were not regenerated.
 14. **Item 10(c) decision (two-compiler scope, adversarial debate 2026-11-19).** Decision: option ② (Rust
     compiler first; Python kept as the reference and proof-differential oracle), effective only after the
     R12/P36 close. Until then option ① stays: both compilers are full peers and every change is ported in the

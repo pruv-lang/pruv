@@ -1025,8 +1025,27 @@ before the representation checks, the `requires` and the body, in both compilers
   item whose generated Rust name is `PruvArr` or `PruvStr` is `codegen/proven_name_clash` (a private or
   specialized item gets a mangled name, such as `pruv_m_t_1_7_PruvArr`, and does not clash); the other generated names (`pruv_proven`,
   `pruv_proven_types`, `pruv_arr_slow`, `pruv_str_slow`) already carry the reserved `pruv_` prefix
-  (`parse/reserved_name`). The guarantee covers host code outside the generated module (`#[path] mod`): a crate-root
-  `include!` can also reach the private, unchecked `f__pruv_body` functions, as it could before this flag.
+  (`parse/reserved_name`). The guarantee covers every host style, a `#[path] mod` and a crate-root `include!` (see
+  the next item).
+- Private bodies (every Rust-backend output): the whole generated program sits in a private module, unindented,
+  `mod pruv_impl {\n<forwarders><program>}\n#[allow(unused_imports)]\npub use self::pruv_impl::*;\n`. The glob
+  re-export reaches the `pub` items (checked entries, `pruv_proven`, `PruvArr`/`PruvStr`) and, inside the host crate,
+  the `pub(crate)` raw entries; private items, including the unchecked `f__pruv_body`, cannot be named from the host,
+  neither unqualified after an `include!` (E0425) nor as `pruv_impl::f__pruv_body` (E0603, private function) nor
+  through a `#[path] mod` (E0425 / E0603, private module). A host `macro_rules!` defined before the generated file is
+  in textual scope inside it, so a host `panic!` that returns could let a failed `requires` run the body; the module
+  therefore defines a forwarder for each macro name the generator calls unqualified (`assert`, `eprintln`,
+  `format_args`, `matches`, `panic`, `println`, `unreachable`, `vec`), each `#[allow(unused_macros)] macro_rules! m
+  { ($($t:tt)*) => { core::m!($($t)*) } }` (`std::` for `eprintln`, `println`, `vec`), which shadows any host
+  definition. The path goes through the extern prelude, so a `no_std` host still compiles and edition 2015 works
+  (a leading `::` there names the crate root). Trusted `rust` blocks that use other macros are the
+  author's trust, as before. Because the module name is fixed, a crate root `include!`s at most one generated file
+  (two would define `pruv_impl` twice, E0428); attach several as `#[path] mod`s. Host items in the same scope keep
+  away from the `pruv_` prefix, as before. The wrap is applied last, after the R-7-3 inline policy, so it changes no
+  inlining decision; a module boundary and a macro forwarder are not a codegen cost (budget M4: same `__text` size,
+  overlapping instruction and RSS distributions, TIDY 4.13). The LLVM backend is unaffected: its bodies are
+  `define internal`, the exported `pruv_abi_*` symbols call a checked entry or, where the caller is trusted or no
+  check is needed, the internal body, and the `--rust-bindings` file names no body.
 - By-value results (`--proven-entries`): a twin whose last parameter is `inout` of `[i64]` (the result buffer) also
   gets a by-value form `pruv_proven::val::f::<K>(..)`: the twin's parameters without the last one, returning
   `(r, [i64; K])`, where `r` is the entry's result and the array is the result buffer after the call. `K` is the
