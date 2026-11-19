@@ -1597,3 +1597,81 @@ pub fn alloc_ok(st: [i64], k: i64) -> bool
   // On malformed buffers the top write can be out of range, or the old head can become eligible.
   return k < 2 || len(st) <= 7 || top + 1 < cap || (fh >= 3 && fh == top);
 }
+
+// Splice a resident blob. reserve is the preflighted capacity used on relocation.
+// Each loop proves its source and destination bounds. The arena is disjoint from
+// metadata. In the slot, copy backward on growth and forward on shrink.
+pub fn splice_blob(inout st: [i64], e: i64, begin: i64, end: i64, src: [i64], k: i64, reserve: i64) -> i64
+  ensures crate::bud_store::kept(st, old(st))
+{
+  let x: i64 = crate::bud_store::xb(st, e);
+  let l: i64 = len(st);
+  if x < 16 || x > l - 10 { return 2; }
+  let o: i64 = crate::bud_store::c40(st[x + 1]);
+  let n: i64 = crate::bud_store::c40(st[x + 2]);
+  let top: i64 = st[10];
+  let base: i64 = st[9];
+  if o < x + 10 || o < base || o + n > top || top > l || top > st[11] { return 2; }
+  if begin < 0 || begin > end || end > n || k < 0 || k > len(src) || k > 4294967296 { return 2; }
+  let m: i64 = n - (end - begin) + k;
+  if m > 4294967296 { return 2; }
+  let target: i64 = begin + k;
+  let tail: i64 = n - end;
+  let mut dest: i64 = o;
+  let moved: bool = !fits_region(st, o, st[x + 9], m);
+  if moved {
+    if reserve < m || reserve > 4294967296 || reserve > l - top || (st[11] < l && reserve > st[11] - top) { return 2; }
+    dest = top;
+    let mut j: i64 = 0;
+    while j < begin
+      invariant 0 <= j && j <= begin && begin <= n && 0 <= o && o + n <= top && top + reserve <= l && begin <= reserve && top == dest && top >= 16 && l == len(st) && x <= l - 10 && x >= 16
+      invariant crate::bud_store::hdr_same(st, old(st), -1)
+      decreases begin - j
+    {
+      st[dest + j] = st[o + j];
+      j = j + 1;
+    }
+  }
+  if dest + m > l { return 2; }
+  reveal crate::bud_store::dyn_ok;
+  if !moved && target > end {
+    let mut j: i64 = tail;
+    while j > 0
+      invariant 0 <= j && j <= tail && 0 <= o && 0 <= end && end + tail == n && o + n <= l && 0 <= target && target + tail == m && o + m <= l && l == len(st) && x >= 16 && x <= l - 10
+      invariant crate::bud_store::hdr_same(st, old(st), -1) && o >= 16
+      decreases j
+    {
+      j = j - 1;
+      st[o + target + j] = st[o + end + j];
+    }
+  } else if moved || target != end {
+    let mut j: i64 = 0;
+    while j < tail
+      invariant 0 <= j && j <= tail && 0 <= o && 0 <= end && end + tail == n && o + n <= l && 0 <= dest && 0 <= target && target + tail == m && dest + m <= l && l == len(st) && x >= 16 && x <= l - 10
+      invariant crate::bud_store::hdr_same(st, old(st), -1) && dest >= 16
+      decreases tail - j
+    {
+      st[dest + target + j] = st[o + end + j];
+      j = j + 1;
+    }
+  }
+  let mut j: i64 = 0;
+  while j < k
+    invariant 0 <= j && j <= k && k <= len(src) && 0 <= dest && 0 <= begin && begin + k <= m && dest + m <= l && l == len(st) && x >= 16 && x <= l - 10
+    invariant crate::bud_store::hdr_same(st, old(st), -1) && dest >= 16
+    decreases k - j
+  {
+    st[dest + begin + j] = src[j];
+    j = j + 1;
+  }
+  if moved {
+    st[x + 1] = dest;
+    st[x + 9] = reserve;
+    sh(inout st, 10, top + reserve);
+  }
+  st[x + 2] = m;
+  let live: i64 = crate::bud_store::c40(hw(st, 14));
+  if live >= n { sh(inout st, 14, live - n + m); }
+  reveal crate::bud_store::dyn_ok;
+  return 0;
+}
