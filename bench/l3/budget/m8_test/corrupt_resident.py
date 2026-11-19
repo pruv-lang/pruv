@@ -87,6 +87,9 @@ def extract(rev, dest):
     return len(names)
 
 
+LEGACY = {}  # exe -> built with the 20-word entry layout (version 1)
+
+
 def build(label, pruvc, rev):
     """Builds the q driver for label ('new' / 'old'): rev None = working tree, else that git revision."""
     d = os.path.join(OUT, label)
@@ -109,6 +112,7 @@ def build(label, pruvc, rev):
     with open(store, encoding="utf-8") as f:
         legacy = "pub fn has_x(" not in f.read()
     cfg = ["--cfg", "budget_legacy_entries"] if legacy else []
+    LEGACY[exe] = legacy
     run([run_m8.rustc(), "-C", "opt-level=3", "--edition", "2021", "-o", exe, main] + cfg, text=True)
     return exe
 
@@ -277,9 +281,14 @@ def p21a_controls(exe):
     two_sessions = [put_line(), second_session]
     # Two sessions force the 256-word initial store to 512 words (16 slots, 8 entries, top 5).
     # Anchoring on all nine header words checks that the fixed offsets used by both pokes are correct.
-    header = [1112884307, 1, 512, 16, 16, 32, 8, 5, -1]
-    # Extension records follow all bases. Entry 3's blob offset is extension word 1.
-    first_session_blob_off = header[5] + 10 * header[6] + 10 * 3 + 1
+    legacy = LEGACY[exe]
+    header = [1112884307, 1 if legacy else 2, 512, 16, 16, 32, 8, 5, -1]
+    # Legacy: entry 3's blob offset is entry word 12. Split layout: extension records follow all bases and the blob
+    # offset is extension word 1.
+    if legacy:
+        first_session_blob_off = header[5] + 20 * 3 + 12
+    else:
+        first_session_blob_off = header[5] + 10 * header[6] + 10 * 3 + 1
     add = SETUP[0]
     # Use an empty budget ID so header word 15 (pending-Need, 0) matches the record's ID length at offset 1.
     overlap = [put_line(bid=[]), second_session, poke(header, first_session_blob_off, 1)]

@@ -88,7 +88,7 @@ pub opaque fn shape_w(l: i64, w0: i64, w1: i64, w2: i64, w3: i64, s: i64, w5: i6
   if 54 * (s / 2) + 16 > l { return false; }
   if s <= 2147483648 && 54 * s + 16 <= l { return false; }
   let cap: i64 = s / 2;
-  if w0 != 1112884307 || w1 != 1 || w2 != l { return false; }
+  if w0 != 1112884307 || w1 != 2 || w2 != l { return false; }
   if w3 != 16 || w5 != 16 + s || w6 != cap { return false; }
   if w9 != 16 + 11 * s || w11 != l { return false; }
   return true;
@@ -403,7 +403,7 @@ pub fn init_store(inout st: [i64]) -> i64
   if s == 0 { return 232; }
   let ab: i64 = 16 + 11 * s;
   set_hd(inout st, 0, 1112884307);
-  set_hd(inout st, 1, 1);
+  set_hd(inout st, 1, 2);
   set_hd(inout st, 2, l);
   set_hd(inout st, 3, 16);
   set_hd(inout st, 4, s);

@@ -107,7 +107,7 @@ All return a status: `>= 0` is the number of words written to `out`; negative is
 
 ### Buffer layout (`bud_store`)
 
-Header, 16 words: 0 magic `0x42554453`, 1 version 1, 2 total words (`== len(st)`), 3 slot base, 4 slot count
+Header, 16 words: 0 magic `0x42554453`, 1 version 2 (1 was the 20-word entry layout before P13e), 2 total words (`== len(st)`), 3 slot base, 4 slot count
 (power of two, `>= 8`), 5 entry base, 6 entry capacity, 7 entry top (high-water mark), 8 free-list head (-1 none),
 9 arena base, 10 arena top, 11 arena end, 12 allocated entries (roots + live), 13 used slots (live + tombstones), 14 live arena
 words, 15 pending-Need sequence (0 none).

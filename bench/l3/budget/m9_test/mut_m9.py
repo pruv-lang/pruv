@@ -43,7 +43,7 @@ CLOCK_MUTANTS = (
      r"(  if ca >= 0 \{\n.*?^  \}\n)(  if bv\[0\].*?\n)", r"\2\1"),
     ("m8_close_no_settle", "close", r"  let a: i64 = settle_at\([^\n]+\);\n", ""),
     ("m9_drop_no_remove", "drop_at", r"  crate::bud_map::remove\(inout st, ce\);\n", ""),
-    ("m10_fire_active_count", "fire_at", r"st\[ca \+ 11\]", "st[ca + 17]"),
+    ("m10_fire_active_count", "fire_at", r"st\[ca \+ 0\]", "st[ca + 6]"),
 )
 
 

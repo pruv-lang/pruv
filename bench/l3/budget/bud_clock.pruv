@@ -424,7 +424,8 @@ pub fn run_started(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: 
     if re < 0 { return 2; }
     became = true;
   }
-  let ra: i64 = crate::bud_store::xbm(inout st, re);
+  // waiting = 0 is the default of an absent extension, so only an existing one is written.
+  let ra: i64 = crate::bud_store::xb(st, re);
   if ra >= 0 {
     if st[ra + 3] == 1 { became = true; }
     st[ra + 3] = 0;
@@ -445,13 +446,15 @@ pub fn run_waiting(inout st: [i64], bk: [i64], bs: i64, bn: i64, sk: [i64], ss: 
   if ce < 0 { return 0; }
   let re: i64 = crate::bud_map::find_w(st, ce, rk, rs, rn);
   if re < 0 { return 0; }
-  let ra: i64 = crate::bud_store::xbm(inout st, re);
+  // Compare against the default first: an unchanged run gets no extension.
+  let rx: i64 = crate::bud_store::xb(st, re);
   let mut was: bool = false;
-  if ra >= 0 { was = st[ra + 3] == 1; }
+  if rx >= 0 { was = st[rx + 3] == 1; }
   if was == waiting { return 0; }
   let mut w: i64 = 0;
   let mut d: i64 = 1;
   if waiting { w = 1; d = -1; }
+  let ra: i64 = crate::bud_store::xbm(inout st, re);
   if ra >= 0 { st[ra + 3] = w; }
   let ca: i64 = crate::bud_store::xbm(inout st, ce);
   if ca < 0 { return 0; }
