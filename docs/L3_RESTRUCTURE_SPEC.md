@@ -412,7 +412,8 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P24 | B/bud_halt.pruv,m10_test: synchronous halt/effects | P Q4/Q5+G including derived cuts; actual query trace after SETTLE and query-before-SETTLE mutant must fail; no prefetch proof or D². |
 | P25 | B/bud_card.pruv: validation/projection | P Q6+K, UTF-16 lengths/raw Number/refusal <=1.0; separate card proof-speed experiment only with hand assembly evidence. |
 | P26 | Same+m11_test: resident setCard/hasCard | P Q6+K, B/C optional replacement/identity <=1.0. Done (Appendix P26): budget resident in `st`, Q6 213/87 and K 10/10 on rs/py, hdiff 0, time 0.49-0.71x hand in every cell, allocations <= hand; audit + confirm audit fixed; peak RSS fixed shares queued as P26a. |
-| P26a | m11_test harness and layout: peak RSS fixed shares (Appendix P26.4) | P: A 100/300 (+2 pages, code layout; A code = base) and H (+3 pages, `World` st/out buffers) peak RSS <= hand at the same allocation counts, time cells kept <= 1.0x. |
+| P26a | m11_test harness and layout: peak RSS fixed shares (Appendix P26.4) | P: A 100/300 (+2 pages, code layout; A code = base) and H (+3 pages, `World` st/out buffers) peak RSS <= hand at the same allocation counts, time cells kept <= 1.0x. Measured, no change kept (Appendix P26a): both shares are touched code pages (A +48 KiB, H +80 KiB in 11 runs), not buffers (H with 256-word `st`/`out`: same RSS); out-of-line entry wrappers give back 2-4 % per-call instructions, a link order file leaves A +32 / H +16; generated `bud_card` code size queued as P26b. |
+| P26b | B/bud_card.pruv and/or both codegens: A and setCard path code footprint (Appendix P26a.4) | P: A 100/300 and H peak RSS <= hand in the same binary by cutting the touched Pruv code (A: `put_card_words0` 14.1 KB + `check_optional` 4.9 KB vs ~15 KB hand; H: `put_card_words` 16.5 KB + `put_at` 6.8 KB + per-call-site entry copies), with no per-call instruction or time cell given back (the `put_card_words0` copy stays unless its A/C time is kept) and `__text` not above the P26a base (489,276 B). Entry copies per call site belong with P33 (inline attribute of generated entries). |
 | P27 | B/bud_text.pruv,bud_num.pruv,bud_date.pruv,m6_test | P Q8+N/K, exact text/number/date, bounded source-byte outputs (not F1 payloads), helper grid <=1.0. |
 | P28 | New B/bud_auto.pruv,M12 driver: clear/record/stop | P Q7+L, owner lookup/record sizes; actual semantics, no stub pass. |
 | P29 | New B/bud_cleanup.pruv: restore/forget/dispose | P Q7+M, ordered timers/markers/linear reclaim; C/R/A axes. |
@@ -5686,3 +5687,79 @@ Documented, not changed:
   root payload is not carried across a grow. No gate exercises either; queued with the store bounds work.
 - Nits: extension writes on a corrupt buffer (`xbm` returns -1) are skipped silently; the old per-field `ea` range
   ensures were folded into `xb`'s single ensures; `xbm` success is not part of its contract (callers test -1).
+
+## Appendix P26a (row P26a: m11 peak RSS fixed shares)
+
+Result: no harness, host or layout change is kept. Both fixed shares are code pages of the A and setCard paths, not
+`World` buffers; the host variants that lower them either keep Pruv above hand in the same binary or give back
+per-call instructions. The remaining share is generated code size of the `bud_card` paths, queued as P26b. Nothing
+in the repository changed except this appendix and the rows, so the gates of P26.5 stand as run there (base Q6 rs
+re-run here: exact 213, prefix-ok 87). No proof meaning was added, so no audit.
+
+Base: main 39b49c8, release `pruvc-rs`, `run_m11.py` build (`rustc -O`), macOS arm64 (16 KiB pages). All work files
+in `work/p26a/` (not committed). Machine load was high, so instructions are the primary time axis.
+
+### P26a.1 Re-measure (base, 11 alternating runs, KiB median (min-max), Pruv and hand from the same binary)
+
+| cell | Pruv | hand | |
+|---|---|---|---|
+| empty | 1600 (1600-1600) | 1600 (1600-1632) | |
+| A 100 | 1792 (1776-1808) | 1744 (1728-1744) | +48, no overlap |
+| A 300 | 1776 (1776-1792) | 1728 (1712-1744) | +48, no overlap |
+| A 1000 | 1760 (1744-1760) | 1728 (1728-1744) | +32, overlap |
+| B 1000 | 1952 (1936-1984) | 1952 (1920-1968) | |
+| C 1000 | 1888 (1872-1904) | 1888 (1872-1920) | |
+| R 100 / 1000 | 1952 / 1952 | 1936 / 1968 | overlap |
+| H 100 | 1952 (1936-1984) | 1872 (1872-1904) | +80, no overlap |
+| H 1000 | 1952 (1936-1968) | 1872 (1872-1904) | +80, no overlap |
+| I 100 / 1000 | 1952 / 1952 | 1936 / 1952 | overlap |
+
+A counting-allocator build (forwards `alloc_zeroed` to `System`, so no extra memset) gives the same picture.
+
+### P26a.2 Split: code pages, not buffers
+
+- `vmmap -wide` at the end of a run (process kept alive): own `__TEXT` resident A 100 Pruv 368 K vs hand 336 K
+  (+32 K), A 1000 352 vs 336; H Pruv 448 K vs hand 336 K (+112 K, 7 pages). The H heap is lower on the Pruv lane
+  (malloc tiny 48 + small 160 K vs 64 + 176 K).
+- H buffer test (step 2): `World` `st` and `out` started at 256 words instead of 4096 (grow / out-too-small retries
+  do the rest): H peak RSS 1952 = base 1952. The 64 KiB zero-filled buffers are not resident cost; no buffer change.
+- Code touched per lane (lldb one-shot breakpoint on every function of the harness, `perfX 100 3` / `handX 100 3`;
+  function-granular, so an upper bound): base A Pruv 87 functions 84.0 KB over 22 pages, hand 94 / 78.8 KB / 20
+  pages; H Pruv 104 / 132.9 KB / 27 pages, hand 116 / 90.9 KB / 20 pages.
+  - A, Pruv only: `put_card_words0` 14,096 B, `check_optional` 4,872, `j_end_d` 1,356 (+ `m11_perf_card`, `validate`
+    and `build` inlined into `main::perf`, 20,400 B). Hand only: `hand::build` 7,376, `validate` 1,588, `put_units`
+    1,240, `put_lines` 1,088, `fields` 916, `wtf8_ok` 904, small helpers (~15 KB).
+  - H, Pruv only: `put_card_words` 16,464, `perf_resident` setCard closure 13,952 (entry inlined), `World::call` 10,624,
+    `bud_map::put_at` 6,808, `check_optional` 4,872, `hand_check` closure 6,492, `j/v_end` 2,868. Hand only: `build`,
+    `Store::set_card` 1,356, `put_card` 960, `validate` and helpers, `HashMap` / `RandomState` (~25 KB).
+  The setup `setCard` on both lanes (one per rep, untimed) brings the card writer in; the Pruv writer and its callers
+  are larger than the hand ones.
+
+### P26a.3 Host variants tried (none kept)
+
+| variant | `__text` B | A 100 / 300 Pruv-hand | H 100 / 1000 Pruv-hand | per-call instructions Pruv vs base |
+|---|---|---|---|---|
+| base | 489,276 | +48 / +48 | +80 / +80 | = |
+| v3: one `#[inline(never)]` wrapper per entry | 411,132 | +80 / +80 | +48 / +32 | B +2.1 %, R +2.6 %, H +3.1-4.3 %, I +3.2 % |
+| v4: v3 + link order file | 412,156 | +48 / +48 | 0 / 0 | as v3 |
+| v5: base + link order file | 490,428 | +32 / +32 | +16 / +16 (overlap) | = (within 0.5 %) |
+
+- v3: rustc copies each whole generated entry (`#[inline(always)]` wrapper of the body) into every `World::call`
+  closure (several 14-17 KB copies). Out-of-line wrappers cut `__text` 78 KB and every Pruv cell 48-64 KiB, but the
+  hand lane of the same binary drops too, A gets worse against it, and the per-call instructions of B/R/H/I rise
+  2-4 % (calls lose the constant `&[]` arguments). Gives back a won time axis: rejected.
+- Order file (`-Wl,-order_file`, functions touched by A/H grouped: common, Pruv only, hand only): both lanes drop
+  150-200 KiB (empty run 1600 -> 1504) but the Pruv lane keeps 2 more touched pages on A and 1 on H. It needs
+  toolchain-specific mangled names or a two-pass build in `run_m11.py`, and does not reach the target: not kept.
+- Per-call instructions (`(I(2R) - I(R)) / R`, median of 3), base Pruv / hand: A 100 11,338 / 20,248; B 1000
+  9.56 M / 17.70 M; H 1000 1.31 M / 1.95 M; I 1000 11.08 M / 19.36 M. All cells stay 0.50-0.70 of hand in base, v3
+  and v5 (time 7 alternating runs: every Pruv median below hand).
+
+### P26a.4 Finding and queued row
+
+The A 100/300 (+48 KiB, 3 pages) and H (+80 KiB, 5 pages) shares are touched generated code: on A the Pruv-only path
+is about 20 KB (`put_card_words0` 14.1 KB, `check_optional` 4.9 KB) against about 15 KB of hand code; on H the setCard
+path (`put_card_words` 16.5 KB, `put_at` 6.8 KB, the entry copy in the closure) against `hand::build` and
+`Store::set_card`. `put_card_words0` is a deliberate `p0 = 0` copy that keeps A/C 2-6 % faster (Appendix P26.3), so
+dropping it is not allowed. Allocation counts are unchanged (P26.4). Queued as P26b (`bud_card.pruv` and/or both
+codegens, outside this row's boundary).
