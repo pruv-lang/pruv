@@ -133,6 +133,27 @@ it can never be silently dropped.
   `n < 4`); a literal `n == 0` is `true` without a compare. An operand layout other than `[u8]` bytes or 64-bit
   elements is `codegen` error `unsupported_type` (today a `[u8]` operand is stored as bytes and the storage plan keeps
   an `[i64]` operand, refined or not, as 64-bit elements, so it is not reached).
+- `copy_range(inout dst, i, src, j, n);` (R-5-1): a statement (a mutating call in the section 6g positions, like
+  `store_be`; as an expression it is `type/inout_context`). `dst` is a mutable local array or an `inout` array
+  parameter (a missing `inout` marker or a non-mutable place is `type/inout_argument`); `dst` and `src` have one type,
+  `[i64]` or `[u8]` (else `type_mismatch`); `i, j, n: i64`. Code only (`effect_in_contract` in a contract), name
+  reserved. It copies `src[j..j+n]` into `dst[i..i+n]` and leaves every other element and `len(dst)` unchanged; `n == 0`
+  copies nothing. The verifier must prove, in this order, `0 <= i`, `0 <= j`, `0 <= n`, `i + n <= len(dst)`,
+  `j + n <= len(src)` (`verify` error `index_oob`; only the first one that fails is reported). It then knows
+  `len(dst') == len(dst)`, `forall k in 0..n: dst'[i+k] == src[j+k]` (`src` as it is at the call) and
+  `forall p: (p < i || p >= i + n) ==> dst'[p] == dst[p]`. These facts are one array-theory update of `dst`
+  (`dst' = fun p. if i <= p < i + n then src[j + p - i] else dst[p]`), not a quantified assumption, so they are exact
+  (no vacuous or missing fact) and cost the callers no quantifier instantiation; a `[u8]` result stays in `0..=255`.
+  Aliasing: pruv arrays have value semantics and the call is an `inout` call, so the existing `inout_alias` rule
+  applies: `src`, `i`, `j` or `n` naming `dst` (`copy_range(inout a, 0, a, 4, 2)`) is `type/inout_alias`; copy the
+  source first (`copy(a)`). So no overlapping (memmove) case exists. Both backends evaluate the arguments once each,
+  in source order dst, i, src, j, n. The Rust backend emits one `copy_from_slice` of the two slices (unchecked
+  slices when verified, a checked failure `pruv_oob` with `--no-verify`); the LLVM backend emits one
+  `llvm.memcpy` of `n` times the element size, and an operand layout other than `[u8]` bytes or 64-bit elements is
+  `codegen` error `unsupported_type`, as for `eq_range`. Tests: `tests/spec/r5_1_copy_range_*.pruv`
+  (accept: `_u8`, `_i64`, `_zero`, `_eq`, `_caller`; reject: `_i`, `_j`, `_n`, `_dst_end`, `_src_end`, `_order`,
+  `_type`, `_nonarray`, `_noinout`, `_contract`, `_expr`, `_alias`, `_idx_alias`, `_fact_outside`, `_fact_nocopy`),
+  `tests/runtime/l3_rt_copy_range*.pruv`.
 - Evaluation order: code evaluates left to right in source order, the same in every compile mode; call arguments left to right, and in `a[i] = v` the index is evaluated before the value.
 - Precedence (high to low): unary `- !`; `* / %`; `+ -`; comparisons (non-associative); `&&`; `||`; `==>`.
 

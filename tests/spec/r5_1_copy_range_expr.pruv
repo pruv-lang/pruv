@@ -1,0 +1,8 @@
+// spec: R-5-1 reject
+// copy_range is a statement: it cannot be nested inside another expression.
+pub fn f(inout dst: [u8], src: [u8]) -> i64
+  requires 1 <= len(dst) && 1 <= len(src)
+{
+  let x: i64 = 1 + copy_range(inout dst, 0, src, 0, 1);
+  return x;
+}

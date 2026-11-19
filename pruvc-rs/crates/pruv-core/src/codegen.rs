@@ -4133,6 +4133,34 @@ impl<'a> Gen<'a> {
                         head
                     ));
                 }
+                if n == "copy_range" {
+                    // L-copy-range: dst[i..i+n].copy_from_slice(&src[j..j+n]); i, src, j, n bound once in source order
+                    let name = match arg(a, 0)? {
+                        Expr::InoutArg(ia) => match ia.expr.as_ref() {
+                            Expr::Var(v) => v.name.clone(),
+                            other => return Err(format!("codegen: inout operand is not a variable: {:?}", other)),
+                        },
+                        other => return Err(format!("codegen: inout operand is not a variable: {:?}", other)),
+                    };
+                    let i0 = self.e(arg(a, 1)?)?;
+                    let s0 = self.arr_ref(arg(a, 2)?)?;
+                    let j0 = self.e(arg(a, 3)?)?;
+                    let n0 = self.e(arg(a, 4)?)?;
+                    let head = format!(
+                        "{{ let pruv_i: i64 = {}; let pruv_cs = {}; let pruv_j: i64 = {}; let pruv_n: i64 = {}; ",
+                        i0, s0, j0, n0
+                    );
+                    if self.verified {
+                        return Ok(format!(
+                            "{}unsafe {{ {}.get_unchecked_mut((pruv_i as usize)..((pruv_i + pruv_n) as usize)) }}.copy_from_slice(unsafe {{ pruv_cs.get_unchecked((pruv_j as usize)..((pruv_j + pruv_n) as usize)) }}); }}",
+                            head, name
+                        ));
+                    }
+                    return Ok(format!(
+                        "{}if pruv_i < 0 || pruv_j < 0 || pruv_n < 0 || pruv_i > ({}.len() as i64) - pruv_n || pruv_j > (pruv_cs.len() as i64) - pruv_n {{ pruv_oob(pruv_i, {}.len()) }} {}[(pruv_i as usize)..((pruv_i + pruv_n) as usize)].copy_from_slice(&pruv_cs[(pruv_j as usize)..((pruv_j + pruv_n) as usize)]); }}",
+                        head, name, name, name
+                    ));
+                }
                 if n == "load_be" {
                     // P2 batch 4: big-endian word of a[i..i+nb]; unchecked slice when verified
                     let nb = crate::check::word_width(arg(a, 2)?).unwrap_or(0);
@@ -5134,6 +5162,26 @@ mod tests {
         let s = gen_rust(&p, false, false, 1 << 30).unwrap();
         assert!(
             s.contains("{ let pruv_ea = a; let pruv_i: i64 = i; let pruv_eb = b; let pruv_j: i64 = j; let pruv_n: i64 = n; if pruv_i < 0 || pruv_j < 0 || pruv_n < 0 || pruv_i > (pruv_ea.len() as i64) - pruv_n || pruv_j > (pruv_eb.len() as i64) - pruv_n { pruv_oob(pruv_i, pruv_ea.len()) } pruv_ea[(pruv_i as usize)..((pruv_i + pruv_n) as usize)] == pruv_eb[(pruv_j as usize)..((pruv_j + pruv_n) as usize)] }"),
+            "{}",
+            s
+        );
+    }
+
+    // L-copy-range
+    #[test]
+    fn copy_range_emitted_rust() {
+        let src = "fn put(inout d: [u8], i: i64, s: [u8], j: i64, n: i64) -> () { copy_range(inout d, i, s, j, n); }";
+        let mut p = crate::parse(src).expect("parse");
+        crate::check::check(&mut p).expect("check");
+        let v = gen_rust(&p, true, false, 1 << 30).unwrap();
+        assert!(
+            v.contains("{ let pruv_i: i64 = i; let pruv_cs = s; let pruv_j: i64 = j; let pruv_n: i64 = n; unsafe { d.get_unchecked_mut((pruv_i as usize)..((pruv_i + pruv_n) as usize)) }.copy_from_slice(unsafe { pruv_cs.get_unchecked((pruv_j as usize)..((pruv_j + pruv_n) as usize)) }); }"),
+            "{}",
+            v
+        );
+        let s = gen_rust(&p, false, false, 1 << 30).unwrap();
+        assert!(
+            s.contains("{ let pruv_i: i64 = i; let pruv_cs = s; let pruv_j: i64 = j; let pruv_n: i64 = n; if pruv_i < 0 || pruv_j < 0 || pruv_n < 0 || pruv_i > (d.len() as i64) - pruv_n || pruv_j > (pruv_cs.len() as i64) - pruv_n { pruv_oob(pruv_i, d.len()) } d[(pruv_i as usize)..((pruv_i + pruv_n) as usize)].copy_from_slice(&pruv_cs[(pruv_j as usize)..((pruv_j + pruv_n) as usize)]); }"),
             "{}",
             s
         );

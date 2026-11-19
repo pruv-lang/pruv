@@ -2563,6 +2563,42 @@ class FnGen:
                 ok = s.op("icmp ult i64 %s, 64" % y.a)
                 s.guard(ok, s.panic1("pruv_panic_arith", "shift count outside 0..64"), False)
             return V("i64", s.op("%s i64 %s, %s" % (BIT_LLVM[n], x.a, y.a)))
+        if n == "copy_range":  # L-copy-range: dst[i..i+n] := src[j..j+n]; source order dst, i, src, j, n; one memcpy
+            dv = s.ev(a[0].expr)
+            iv = s.ev(a[1])
+            sv = s.ev(a[2])
+            jv = s.ev(a[3])
+            cnt = s.ev(a[4])
+            if dv.k != "arr" or sv.k != "arr":
+                raise PruvError("codegen", e.line, e.col, "unsupported_type",
+                                "copy_range is not supported by the llvm codegen layer for this operand yet",
+                                "copy the elements in a loop, or use the Rust backend")
+            if not s.verified:
+                # one combined check: i < 0 || j < 0 || n < 0 || i > len(dst) - n || j > len(src) - n
+                ta = s.op("sub i64 %s, %s" % (dv.b, cnt.a))
+                tb = s.op("sub i64 %s, %s" % (sv.b, cnt.a))
+                c1 = s.op("icmp slt i64 %s, 0" % iv.a)
+                c2 = s.op("icmp slt i64 %s, 0" % jv.a)
+                c3 = s.op("icmp slt i64 %s, 0" % cnt.a)
+                c4 = s.op("icmp sgt i64 %s, %s" % (iv.a, ta))
+                c5 = s.op("icmp sgt i64 %s, %s" % (jv.a, tb))
+                o = s.op("or i1 %s, %s" % (c1, c2))
+                o = s.op("or i1 %s, %s" % (o, c3))
+                o = s.op("or i1 %s, %s" % (o, c4))
+                o = s.op("or i1 %s, %s" % (o, c5))
+                s.guard(o, lambda: s.ins("call void @pruv_panic_oob(i64 %s, i64 %s)" % (iv.a, dv.b)), True)
+            tyd, tys = storage_ty(dv), storage_ty(sv)
+            if not ((is_bytes(dv) and is_bytes(sv)) or (tyd == "i64" and tys == "i64")):
+                # the storage plan pins copy_range operands to i64 or bytes, as for eq_range; any other pair is not lowered
+                raise PruvError("codegen", e.line, e.col, "unsupported_type",
+                                "copy_range is not supported by the llvm codegen layer for this array layout yet",
+                                "copy the elements in a loop, or use the Rust backend")
+            pd = s.op("getelementptr inbounds %s, ptr %s, i64 %s" % (tyd, dv.a, iv.a))
+            ps = s.op("getelementptr inbounds %s, ptr %s, i64 %s" % (tys, sv.a, jv.a))
+            nb = cnt.a if tyd == "i8" else s.op("mul nuw nsw i64 %s, 8" % cnt.a)
+            # dst and src are distinct arrays (the checker rejects the same array, inout_alias), so memcpy is exact
+            s.ins("call void @llvm.memcpy.p0.p0.i64(ptr %s, ptr %s, i64 %s, i1 false)" % (pd, ps, nb))
+            return V("unit")
         if n == "eq_range":  # P17a: a[i..i+n] == b[j..j+n]; source order a, i, b, j, n
             av = s.ev(a[0])
             iv = s.ev(a[1])

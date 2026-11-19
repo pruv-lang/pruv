@@ -1,0 +1,6 @@
+// spec: R-5-1 reject
+// No bound is given: the obligations are tried in order and the first one that fails (0 <= i) is the one reported.
+pub fn f(inout dst: [u8], i: i64, src: [u8], j: i64, n: i64) -> ()
+{
+  copy_range(inout dst, i, src, j, n);
+}

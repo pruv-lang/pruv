@@ -1,0 +1,22 @@
+// spec: R-5-1 accept
+// A caller of a copy_range helper uses the helper's ensures (content and frame), on local [u8] arrays.
+fn put(inout dst: [u8], i: i64, src: [u8], j: i64, n: i64) -> ()
+  requires 0 <= i && 0 <= j && 0 <= n && i + n <= len(dst) && j + n <= len(src)
+  ensures len(dst) == len(old(dst))
+  ensures forall k in 0..n: dst[i + k] == src[j + k]
+  ensures forall p in 0..len(dst): (p < i || p >= i + n) ==> dst[p] == old(dst)[p]
+{
+  copy_range(inout dst, i, src, j, n);
+}
+
+pub fn caller() -> i64 ! alloc
+{
+  let mut d: [u8] = alloc(4, 0);
+  let s: [u8] = alloc(2, 9);
+  put(inout d, 1, s, 0, 2);
+  assert d[1] == 9;
+  assert d[2] == 9;
+  assert d[0] == 0;
+  assert d[3] == 0;
+  return d[1];
+}

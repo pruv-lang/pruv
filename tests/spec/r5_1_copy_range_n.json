@@ -1,0 +1,1 @@
+{"stage": "verify", "code": "index_oob", "line": 6, "out_contains": ["copy_range length 0 <= n"]}

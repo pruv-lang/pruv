@@ -149,7 +149,7 @@ fn query_range(s: str, lo: i64, hi: i64) -> [i64] ! alloc
 }
 
 // dst[0..n) = src[lo..lo+n)
-fn copy_range(inout dst: [u8], src: str, lo: i64, n: i64) -> ()
+fn copy_text_range(inout dst: [u8], src: str, lo: i64, n: i64) -> ()
   requires 0 <= lo && 0 <= n && n <= len(dst) && lo <= len(src) && n <= len(src) - lo
   ensures len(dst) == len(old(dst))
 {
@@ -186,7 +186,7 @@ fn feed_user(d: crate::json::JsonDocument, inout st: [i64], inout sl: [i64], ino
     let n: i64 = q[1] - q[0];
     if n < 0 || n > len(txt) { return -1; }
     let mut bb: [u8] = alloc(n, 0);
-    copy_range(inout bb, txt, q[0], n);
+    copy_text_range(inout bb, txt, q[0], n);
     let inner: str = crate::jstr::adapter_probe(bb);
     if len(inner) != n { return -1; }
     prompt = copy(inner);  // MUT:M08 => prompt = crate::text::trim(inner);

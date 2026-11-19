@@ -1866,6 +1866,24 @@ class FnVerifier:
             s.assume(st, g, r == z3.ForAll([k], z3.Implies(z3.And(k >= 0, k < cnt),
                                                          z3.Select(av.a, i + k) == z3.Select(bv.a, j + k))))
             return r
+        if n == "copy_range":   # L-copy-range: five bounds obligations in order, then dst' := Lambda p. (i <= p < i+n ? src[j+p-i] : dst[p])
+            dv, i, sv, j, cnt = args    # src is the value at the call (aliasing with dst is rejected by the checker)
+            s.prove(st, g, i >= 0, e, "index_oob", "copy_range start 0 <= i for %s" % dv.name)
+            s.prove(st, g, j >= 0, e, "index_oob", "copy_range start 0 <= j for %s" % sv.name)
+            s.prove(st, g, cnt >= 0, e, "index_oob", "copy_range length 0 <= n")
+            s.prove(st, g, i + cnt <= dv.n, e, "index_oob", "copy_range i + n <= len(%s)" % dv.name)
+            s.prove(st, g, j + cnt <= sv.n, e, "index_oob", "copy_range j + n <= len(%s)" % sv.name)
+            p = z3.Int("copy_range!p")
+            # a definitional (array-theory) update, no quantified assumption: the content fact dst'[i+k] == src[j+k] for 0 <= k < n,
+            # the frame fact dst'[p] == dst[p] outside [i, i+n), and len(dst') == len(dst) hold by construction
+            arr = z3.Lambda([p], z3.If(z3.And(p >= i, p < i + cnt), z3.Select(sv.a, j + p - i), z3.Select(dv.a, p)))
+            name = e.args[0].expr.name
+            nv = mk_arr(arr, dv.n, name, dv.elem)
+            st.env[name] = nv
+            if nv.elem == U8:       # both operands are in the byte domain, so the result is too
+                s.assume(st, g, u8_dom(nv))
+            s.post_refine(e, [0], st, g)
+            return None
         if n == "load_be":      # P2 batch 4: big-endian word of the n bytes a[i..i+n]
             av, i = args[0], args[1]
             nb = e.args[2].value

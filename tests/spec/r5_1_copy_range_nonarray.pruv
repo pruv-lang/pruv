@@ -1,0 +1,9 @@
+// spec: R-5-1 reject
+// dst is not an array.
+pub fn f(src: [i64]) -> i64
+  requires 1 <= len(src)
+{
+  let mut x: i64 = 0;
+  copy_range(inout x, 0, src, 0, 1);
+  return x;
+}

@@ -3121,6 +3121,18 @@ class Gen:
                 return ("%sif pruv_i < 0 || pruv_j < 0 || pruv_n < 0 || pruv_i > (pruv_ea.len() as i64) - pruv_n "
                         "|| pruv_j > (pruv_eb.len() as i64) - pruv_n { pruv_oob(pruv_i, pruv_ea.len()) } "
                         "pruv_ea[%s] == pruv_eb[%s] }" % (head, ri, rj))
+            if n == "copy_range":  # L-copy-range: dst[i..i+n].copy_from_slice(&src[j..j+n]); i, src, j, n bound once in source order
+                name = a[0].expr.name
+                head = ("{ let pruv_i: i64 = %s; let pruv_cs = %s; let pruv_j: i64 = %s; let pruv_n: i64 = %s; "
+                        % (s.e(a[1]), s.arr_ref(a[2]), s.e(a[3]), s.e(a[4])))
+                ri = "(pruv_i as usize)..((pruv_i + pruv_n) as usize)"
+                rj = "(pruv_j as usize)..((pruv_j + pruv_n) as usize)"
+                if s.verified:
+                    return ("%sunsafe { %s.get_unchecked_mut(%s) }.copy_from_slice(unsafe { pruv_cs.get_unchecked(%s) }); }"
+                            % (head, name, ri, rj))
+                return ("%sif pruv_i < 0 || pruv_j < 0 || pruv_n < 0 || pruv_i > (%s.len() as i64) - pruv_n "
+                        "|| pruv_j > (pruv_cs.len() as i64) - pruv_n { pruv_oob(pruv_i, %s.len()) } "
+                        "%s[%s].copy_from_slice(&pruv_cs[%s]); }" % (head, name, name, name, ri, rj))
             if n == "load_be":   # P2 batch 4: big-endian word of a[i..i+nb]; unchecked slice when verified
                 nb = a[2].value
                 chk = "" if s.verified else ("if pruv_i < 0 || (pruv_i as u64) + %d > (pruv_a.len() as u64) "

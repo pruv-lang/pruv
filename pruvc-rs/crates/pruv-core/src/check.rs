@@ -472,7 +472,7 @@ impl Checker {
             if funcs.contains_key(&name) {
                 return Err(terr(f.line, f.col, "dup_fn", format!("function {} defined twice", name), ""));
             }
-            if matches!(name.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "truncate" | "eq_range" | "resize")
+            if matches!(name.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "truncate" | "eq_range" | "resize" | "copy_range")
                 || is_bit_builtin(&name)
                 || is_word_builtin(&name)
                 || contract_only(&name).is_some()
@@ -2194,7 +2194,7 @@ impl Checker {
                     format!("{} returns {}: a par branch must return ()", n, tn(&f.ret)),
                     "call a unit Pruv helper and pass results back through whole inout arrays"));
             }
-        } else if ["len", "alloc", "copy", "print", "is_char_boundary", "substr", "truncate", "eq_range", "resize"].contains(&n.as_str())
+        } else if ["len", "alloc", "copy", "print", "is_char_boundary", "substr", "truncate", "eq_range", "resize", "copy_range"].contains(&n.as_str())
             || is_bit_builtin(n)
             || is_word_builtin(n)
             || contract_only(n).is_some() || is_catalog(n) || (n == "old" && self.uses_inout)
@@ -3364,6 +3364,116 @@ impl Checker {
         Ok(if store { unitt() } else { i64t() })
     }
 
+    /// L-copy-range: copy_range(inout dst, i, src, j, n) -> (), a whole expression statement (check.py copy_range_call).
+    /// dst is a `let mut` local array or an inout parameter of type [i64] or [u8]; src has the same type; i, j, n are i64.
+    /// Same-array aliasing (src mentions dst) is rejected with the existing inout_alias rule, as for store_be.
+    fn copy_range_call(&mut self, e: &mut Call, scope: &Scope, c: bool) -> Res<GType> {
+        let (line, col) = (e.line, e.col);
+        if c {
+            return Err(terr(line, col, "effect_in_contract", "copy_range is not allowed in contracts", ""));
+        }
+        if e.args.len() != 5 {
+            return Err(terr(line, col, "arity", format!("copy_range takes 5 argument(s), got {}", e.args.len()), ""));
+        }
+        let (aline, acol) = (e.args[0].line(), e.args[0].col());
+        let name: String;
+        let dty: GType;
+        {
+            let arg: &mut InoutArg = match &mut e.args[0] {
+                Expr::InoutArg(a) => a,
+                _ => {
+                    return Err(terr(
+                        aline,
+                        acol,
+                        "inout_argument",
+                        "the destination array of copy_range needs the `inout` marker",
+                        "write `copy_range(inout name, i, src, j, n)` with a `let mut` local array or an inout parameter",
+                    ))
+                }
+            };
+            let op: &mut Var = match &mut *arg.expr {
+                Expr::Var(v) => v,
+                _ => {
+                    return Err(terr(
+                        aline,
+                        acol,
+                        "inout_argument",
+                        "an inout argument must be the whole name of a local array or an inout parameter",
+                        "name a `let mut` local array or an inout parameter of this function",
+                    ))
+                }
+            };
+            let v = self.lookup(op.line, op.col, &op.name, scope)?;
+            if v.kind == "local" && !v.mutable {
+                return Err(terr(
+                    aline,
+                    acol,
+                    "inout_argument",
+                    format!("{} is not mutable: it cannot be passed inout", op.name),
+                    "declare it with `let mut`",
+                ));
+            }
+            if v.kind != "inout" && v.kind != "local" {
+                return Err(terr(
+                    aline,
+                    acol,
+                    "inout_argument",
+                    format!(
+                        "{} is a read-only {}: it cannot be passed inout",
+                        op.name,
+                        if v.kind == "param" { "parameter" } else { "binding" }
+                    ),
+                    format!("declare the parameter `inout {}: ...`, or copy into a `let mut` local", op.name),
+                ));
+            }
+            if v.ty != GType::array() && v.ty != GType::array_u8() {
+                return Err(terr(
+                    aline,
+                    acol,
+                    "type_mismatch",
+                    format!("expected {} or {}, found {}", tn(&GType::array()), tn(&GType::array_u8()), tn(&v.ty)),
+                    "",
+                ));
+            }
+            if self.active_roots.iter().any(|r| *r == op.name) {
+                return Err(terr(
+                    aline,
+                    acol,
+                    "recursive_borrow",
+                    format!("cannot pass {} inout while a match on it is active", op.name),
+                    "finish the match before the call",
+                ));
+            }
+            op.ty = Some(v.ty.to_key());
+            arg.ty = Some(v.ty.to_key());
+            name = op.name.clone();
+            dty = v.ty.clone();
+        }
+        self.expect(&mut e.args[1], &i64t(), scope, c, None)?;
+        self.expect(&mut e.args[2], &dty, scope, c, None)?;
+        self.expect(&mut e.args[3], &i64t(), scope, c, None)?;
+        self.expect(&mut e.args[4], &i64t(), scope, c, None)?;
+        if e.args[1..].iter().any(|x| mentions(x, &name)) {
+            return Err(terr(
+                aline,
+                acol,
+                "inout_alias",
+                format!("{} is passed inout and also used elsewhere in the arguments of this call", name),
+                format!("copy the source first with `let mut t: [..] = copy({});` (needs alloc), then pass t", name),
+            ));
+        }
+        if self.boundary != Some(&*e as *const Call as usize) {
+            return Err(terr(
+                line,
+                col,
+                "inout_context",
+                "copy_range must be a whole expression statement",
+                "write `copy_range(inout dst, i, src, j, n);` as a statement",
+            ));
+        }
+        Ok(unitt())
+    }
+
     /// The contextual builtin old(a): context first, then arity and operand.
     fn old_call(&mut self, e: &mut Call, scope: &Scope) -> Res<GType> {
         let (line, col) = (e.line, e.col);
@@ -3520,7 +3630,7 @@ impl Checker {
             }
             Ok(())
         };
-        let is_builtin = matches!(n.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "truncate" | "eq_range" | "resize")
+        let is_builtin = matches!(n.as_str(), "len" | "alloc" | "copy" | "print" | "is_char_boundary" | "substr" | "truncate" | "eq_range" | "resize" | "copy_range")
             || is_bit_builtin(&n)
             || is_word_builtin(&n);
         let is_old = n == "old" && self.uses_inout && !self.funcs.contains_key(&n); // G5 A0: contextual builtin
@@ -3612,6 +3722,8 @@ impl Checker {
             }
             // P2 batch 4: load_be / store_be
             _ if is_word_builtin(&n) => return self.word_call(e, scope, c),
+            // L-copy-range: copy_range(inout dst: [T], i, src: [T], j, n), a statement, T an integer element type
+            "copy_range" => return self.copy_range_call(e, scope, c),
             // L3-10: eq_range(a: [T], i, b: [T], j, n) -> bool, code only, T an integer element type
             "eq_range" => {
                 if c {
@@ -4195,6 +4307,38 @@ mod tests {
         assert_eq!(e.code, "arity");
         let e = run("fn f(a: [bool], b: [bool]) -> bool { return eq_range(a, 0, b, 0, 1); }").unwrap_err();
         assert_eq!(e.code, "type_mismatch");
+    }
+
+    // L-copy-range: accepted forms
+    #[test]
+    fn copy_range_checks_as_a_statement() {
+        assert!(run("fn f(inout d: [u8], s: [u8]) -> () { copy_range(inout d, 0, s, 1, 2); }").is_ok());
+        assert!(run("fn f(inout d: [i64], s: [i64]) -> () { copy_range(inout d, 0, s, 1, 2); }").is_ok());
+    }
+
+    // L-copy-range: every rejection of the statement
+    #[test]
+    fn copy_range_rejections() {
+        let e = run("fn f(inout d: [u8], s: [i64]) -> () { copy_range(inout d, 0, s, 0, 1); }").unwrap_err();
+        assert_eq!(e.code, "type_mismatch");
+        let e = run("fn f(inout d: [bool], s: [bool]) -> () { copy_range(inout d, 0, s, 0, 1); }").unwrap_err();
+        assert_eq!(e.code, "type_mismatch");
+        let e = run("fn f(inout d: [u8], s: [u8]) -> () { copy_range(inout d, 0, s, 0); }").unwrap_err();
+        assert_eq!(e.code, "arity");
+        let e = run("fn f(d: [u8], s: [u8]) -> () { copy_range(d, 0, s, 0, 1); }").unwrap_err();
+        assert_eq!(e.code, "inout_argument");
+        let e = run("fn f(inout a: [u8]) -> () { copy_range(inout a, 0, a, 4, 2); }").unwrap_err();
+        assert_eq!(e.code, "inout_alias");
+        let e = run("fn f(inout a: [i64], s: [i64]) -> () { copy_range(inout a, len(a) - 2, s, 0, 2); }").unwrap_err();
+        assert_eq!(e.code, "inout_alias");
+        let e = run("fn f(inout d: [u8], s: [u8]) -> i64 { let x: i64 = 1 + copy_range(inout d, 0, s, 0, 1); return x; }")
+            .unwrap_err();
+        assert_eq!(e.code, "inout_context");
+        let e = run("fn f(inout d: [u8], s: [u8]) -> () requires copy_range(d, 0, s, 0, 1) == 0 { return; }").unwrap_err();
+        assert_eq!(e.code, "effect_in_contract");
+        assert_eq!(e.message, "copy_range is not allowed in contracts");
+        let e = run("fn copy_range(a: i64) -> i64 { return a; }").unwrap_err();
+        assert_eq!(e.code, "reserved");
     }
 
     #[test]

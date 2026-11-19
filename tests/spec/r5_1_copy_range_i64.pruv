@@ -1,0 +1,26 @@
+// spec: R-5-1 accept
+// copy_range on [i64]: a caller proves point facts (content and frame) of a local array right after the copy.
+pub fn put(inout dst: [i64], i: i64, src: [i64], j: i64, n: i64) -> ()
+  requires 0 <= i && 0 <= j && 0 <= n && i + n <= len(dst) && j + n <= len(src)
+  ensures len(dst) == len(old(dst))
+  ensures forall k in 0..n: dst[i + k] == src[j + k]
+  ensures forall p in 0..len(dst): (p < i || p >= i + n) ==> dst[p] == old(dst)[p]
+{
+  copy_range(inout dst, i, src, j, n);
+}
+
+pub fn use_it(src: [i64]) -> i64 ! alloc
+  requires 4 <= len(src)
+{
+  let mut d: [i64] = alloc(8, 7);
+  copy_range(inout d, 2, src, 1, 3);
+  assert len(d) == 8;
+  assert d[2] == src[1];
+  assert d[3] == src[2];
+  assert d[4] == src[3];
+  assert d[0] == 7;
+  assert d[1] == 7;
+  assert d[5] == 7;
+  assert d[7] == 7;
+  return d[3];
+}
