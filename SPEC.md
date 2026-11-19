@@ -1009,6 +1009,16 @@ before the representation checks, the `requires` and the body, in both compilers
   the same crate can call them, and that host adapter takes over the obligation below. The check runs before
   the entry writes anything, so the no-unwind store rule below still holds (an entry panics only in its length or
   `requires` checks).
+- Proven entries (`--proven-entries`, Rust backend only; rejected with `--backend llvm`): the generated file also
+  holds `PruvArr<T>` (a `#[repr(transparent)]` wrapper of `[T]`) and, when a `str` entry needs it, `PruvStr` (of
+  `str`), both with a private field, and a module `pruv_proven` with one twin per checked public entry (same name,
+  each array parameter as `&PruvArr<T>` / `&mut PruvArr<T>`, each `str` as `&PruvStr`). The only way to make one is
+  `PruvArr::new` / `new_mut` / `PruvStr::new`, which perform the same check with the same message and exit 101, so
+  the bound is proved by the type: a twin skips the per-call check and runs the same representation checks,
+  `requires` and body as its checked entry. A host that wraps resident state once pays the check once, not per
+  call. The checked entries stay unchanged. An entry with an owned length-checked parameter gets no twin. A user
+  item named `PruvArr`, `PruvStr`, `pruv_arr_slow`, `pruv_str_slow` or `pruv_proven` is
+  `codegen/proven_name_clash`.
 - LLVM ABI symbols (`pruv_abi_*` and `__typed`): section 6b, "Run time"; a negative length is rejected by the same
   unsigned compare.
 - C adapter (`pruv_c`): an array or `str` length, a `pruv_handle_new` length and the `new_len` of `pruv_hr_*` are
@@ -1412,6 +1422,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `codegen/llvm_emit` | codegen | LLVM could not emit the object file (Rust compiler) |
 | `codegen/llvm_target` | codegen | LLVM has no target machine for the target (Rust compiler) |
 | `codegen/parallel_target` | codegen | native `--emit obj/exe` of a program with `par` |
+| `codegen/proven_name_clash` | codegen | `--proven-entries` with a user item named like a generated proven-entry item |
 | `codegen/specialization_limit` | codegen | too many or too deeply nested generic instantiations |
 | `codegen/target_mismatch` | codegen | the object does not match the requested target (Rust compiler) |
 | `codegen/unsupported` | codegen | a native output this build cannot produce (Rust compiler) |

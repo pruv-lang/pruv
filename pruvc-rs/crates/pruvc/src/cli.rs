@@ -5,7 +5,7 @@ use pruvc::target::{Cpu, Target};
 use std::path::{Component, Path, PathBuf};
 
 // The usage line on stdout is kept the same as Python pruvc.py (except for the executable name) (audit must-fix 3). New options are reported on stderr.
-pub const USAGE: &str = "usage: pruvc in.pruv -o OUT [--no-verify] [--trust-callers] [--backend rust|llvm] [--rust-bindings PATH] [--infer [--show-inferred]] [--rust-extern NAME=PATH] [--rust-search PATH] [--lib DIR] [--proof-cache DIR] [--foreign-checks requires|all|off]";
+pub const USAGE: &str = "usage: pruvc in.pruv -o OUT [--no-verify] [--trust-callers] [--proven-entries] [--backend rust|llvm] [--rust-bindings PATH] [--infer [--show-inferred]] [--rust-extern NAME=PATH] [--rust-search PATH] [--lib DIR] [--proof-cache DIR] [--foreign-checks requires|all|off]";
 pub const USAGE_MORE: &str = "       [--emit exe|obj|ll|rs] [--target TRIPLE] [-mcpu=CPU]";
 
 /// Internal output kind (the result of the backend x emit decision table).
@@ -37,6 +37,7 @@ pub struct Args {
     pub kind: Kind,
     pub verify: bool,
     pub trust_callers: bool,
+    pub proven_entries: bool,
     /// --infer: turns on Houdini invariant inference.
     pub infer: bool,
     /// --show-inferred: prints the per-loop inference record to stderr (requires --infer).
@@ -76,10 +77,11 @@ pub fn usage_error(msg: &str) -> i32 {
 }
 
 // Option names and the number of values they take. The declaration order is also the order of argparse's abbreviation-ambiguity message.
-static OPTS: [(&str, usize); 18] = [
+static OPTS: [(&str, usize); 19] = [
     ("-o", 1),
     ("--no-verify", 0),
     ("--trust-callers", 0),
+    ("--proven-entries", 0),
     ("--backend", 1),
     ("--rust-bindings", 1),
     ("--infer", 0),
@@ -104,6 +106,7 @@ struct Raw {
     out: Option<String>,
     no_verify: bool,
     trust_callers: bool,
+    proven_entries: bool,
     infer: bool,
     show_inferred: bool,
     backend: Option<&'static str>,
@@ -275,6 +278,7 @@ fn parse_raw(argv: &[String]) -> Result<Raw, String> {
                 "--no-verify" => r.no_verify = true,
                 "--infer" => r.infer = true,
                 "--show-inferred" => r.show_inferred = true,
+                "--proven-entries" => r.proven_entries = true,
                 _ => r.trust_callers = true,
             }
             continue;
@@ -466,6 +470,9 @@ pub fn parse(argv: &[String]) -> Result<Args, String> {
         return Err(format!("unrecognized arguments: {}", r.extras.join(" ")));
     }
     let kind = kind_res?;
+    if r.proven_entries && kind != Kind::Rs {
+        return Err("--proven-entries requires --backend rust".to_string());
+    }
     let input = r.input.clone().ok_or_else(|| "the following arguments are required: input".to_string())?;
 
     // The first check of pruvc.py main: --show-inferred requires --infer
@@ -617,6 +624,7 @@ pub fn parse(argv: &[String]) -> Result<Args, String> {
         kind,
         verify: !r.no_verify,
         trust_callers: r.trust_callers,
+        proven_entries: r.proven_entries,
         infer: r.infer,
         show_inferred: r.show_inferred,
         rust_extern,

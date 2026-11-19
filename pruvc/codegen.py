@@ -1524,6 +1524,8 @@ class Gen:
         s.raw_crate = s.raw == "crate"
         if s.raw == "c":   # P10: the Rust backend treats "c" exactly as "crate" (no extern "C")
             s.raw = "crate"
+        s.proven_entries = False
+        s.proven_items = []
         s.raw_items = []    # (name, params text, return text, parameter names) of each host entry's public item, in emission order
         s.checks_needed = s.explicit and any(
             f.requires and f.foreign is None and (not verified or (f.host_entry and not trust_callers))
@@ -1721,11 +1723,9 @@ class Gen:
         s.vt = {p.name: p.type for p in f.params}
         s.borrowed = {p.name for p in f.params if is_collection(p.type) and not p.take}
         s.refs = {p.name for p in f.params if s.is_ext(p.type)}
-        if s.inouts:
-            ps = ", ".join("%s: %s" % (p.name, "&mut " + rty(p.type, True)[1:] if p.mode == "inout"
-                                       else s.rt(p.type, not p.take, p)) for p in f.params)
-        else:
-            ps = ", ".join("%s: %s" % (p.name, s.rt(p.type, not p.take, p)) for p in f.params)
+        param_types = ["&mut " + rty(p.type, True)[1:] if s.inouts and p.mode == "inout"
+                       else s.rt(p.type, not p.take, p) for p in f.params]
+        ps = ", ".join("%s: %s" % (p.name, ty) for p, ty in zip(f.params, param_types))
         ret = "" if f.ret == UNIT else " -> " + s.rt(f.ret, site=f)
         body_name = f.name + "__pruv_body" if f.name in s.body_named else f.name
         if s.explicit:
@@ -1768,20 +1768,20 @@ class Gen:
         if f.requires:
             if not s.explicit:
                 # G5: a wrapper of an inout function always checks (trust_callers does not waive it)
-                s.entry(f, ps, ret, body_name, checked=True if s.inouts else None)
+                s.entry(f, ps, param_types, ret, body_name, checked=True if s.inouts else None)
                 if not s.verified and s.trust and not s.inouts and f.name in s.par_callees:
-                    s.entry(f, ps, ret, body_name, f.name + "__pruv_par_chk", False, True)
+                    s.entry(f, ps, param_types, ret, body_name, f.name + "__pruv_par_chk", False, True)
             elif s.verified:
                 if f.host_entry:     # the checked host wrapper; no other function has a wrapper in verified mode
-                    s.entry(f, ps, ret, body_name, f.name, True, not s.trust)
+                    s.entry(f, ps, param_types, ret, body_name, f.name, True, not s.trust)
             elif f.host_entry:
-                s.entry(f, ps, ret, body_name, f.name, True, not s.trust)
+                s.entry(f, ps, param_types, ret, body_name, f.name, True, not s.trust)
                 if s.trust:          # Pruv callers of the entry keep the safe-mode check
-                    s.entry(f, ps, ret, body_name, f.name + "__pruv_chk", False, True)
+                    s.entry(f, ps, param_types, ret, body_name, f.name + "__pruv_chk", False, True)
             else:
-                s.entry(f, ps, ret, body_name, f.name, False, True)
+                s.entry(f, ps, param_types, ret, body_name, f.name, False, True)
         elif f.name in s.lg:
-            s.entry(f, ps, ret, body_name, f.name, True, False)   # T0: only the length guard
+            s.entry(f, ps, param_types, ret, body_name, f.name, True, False)   # T0: only the length guard
 
     def pub_vis(s):
         """P09: the visibility of a host entry's public item"""
@@ -1839,22 +1839,24 @@ class Gen:
                        for p in f.params if p.name in used]
         return conversions, checks
 
-    def entry(s, f, ps, ret, body_name, name=None, pub=None, checked=None):
+    def entry(s, f, ps, param_types, ret, body_name, name=None, pub=None, checked=None):
         """the checked wrapper of f. Legacy: `pub` unless private, checks unless trust_callers. Explicit mode passes the
         wrapper name, its visibility and whether it checks."""
         name = f.name if name is None else name
         pub = (not s.private(f)) if pub is None else pub
         checked = (not s.trust) if checked is None else checked
+        vis = s.pub_vis() if pub else ""
+        header = "%sfn %s(%s)%s {" % (vis, name, ps, ret)
         s.emit(0, s.allow)
         s.emit(0, "#[inline]")
-        s.emit(0, "%sfn %s(%s)%s {" % (s.pub_vis() if pub else "", name, ps, ret))
+        s.emit(0, header)
         if pub and s.explicit and s.raw:
             s.raw_items.append((name, ps, ret, [p.name for p in f.params]))
-        if pub and not s.raw_crate:
-            # T0: every public entry checks its array / str lengths first, also under trust_callers. Under manifest
-            # raw_entries = "crate" the entries are pub(crate) and the host adapter in the crate owns the check (SPEC 7)
-            for line in len_guard(f):
-                s.emit(1, line)
+        # T0 also applies under trust_callers. The same-crate adapter owns it in raw_entries = "crate".
+        guard = len_guard(f) if pub and not s.raw_crate else []
+        for line in guard:
+            s.emit(1, line)
+        body_start = len(s.out)
         if checked:
             conversions, checks = s.req_checks(f)
             for line in conversions:
@@ -1877,6 +1879,11 @@ class Gen:
                                                         for p in f.params)))
         else:
             s.emit(1, "%s(%s)" % (body_name, ", ".join(p.name for p in f.params)))
+        if s.proven_entries and guard:
+            twin = proven_entry(f, param_types, vis, name, ret)
+            if twin is not None:
+                signature, rebinds, has_str = twin
+                s.proven_items.append((header, s.allow, signature, rebinds + s.out[body_start:], has_str))
         s.emit(0, "}")
         s.emit(0, "")
 
@@ -3293,6 +3300,90 @@ def raw_module(mode, items, unwind_free=False, adapter_len=False):
     return "\n".join(head + [store] + mid + fwd + ["    }", "}"])
 
 
+PROVEN_NAMES = ("PruvArr", "PruvStr", "pruv_arr_slow", "pruv_str_slow", "pruv_proven")
+
+# The child module keeps the fields private even when the generated file is included at the host's crate root.
+PROVEN_ARR = """\
+mod pruv_proven_types {
+    /// P18b (--proven-entries): a slice whose length was checked against 2^40 by `new` or `new_mut`.
+    #[repr(transparent)]
+    pub struct PruvArr<T>([T]);
+    #[cold]
+    #[inline(never)]
+    fn pruv_arr_slow(n: usize) -> ! { panic!("pruv: invalid representation: {} (array length)", n) }
+    #[allow(dead_code)]
+    impl<T> PruvArr<T> {
+        // The transparent casts preserve the slice metadata and the original borrow.
+        #[inline]
+        pub fn new(a: &[T]) -> &PruvArr<T> { if (a.len() as u64) > (1u64 << 40) { pruv_arr_slow(a.len()) } unsafe { &*(a as *const [T] as *const PruvArr<T>) } }
+        #[inline]
+        pub fn new_mut(a: &mut [T]) -> &mut PruvArr<T> { if (a.len() as u64) > (1u64 << 40) { pruv_arr_slow(a.len()) } unsafe { &mut *(a as *mut [T] as *mut PruvArr<T>) } }
+        // The private field and the checked constructors establish the bound for both accessors.
+        #[inline(always)]
+        pub fn get(&self) -> &[T] { unsafe { ::core::hint::assert_unchecked((self.0.len() as u64) <= (1u64 << 40)) }; &self.0 }
+        #[inline(always)]
+        pub fn get_mut(&mut self) -> &mut [T] { unsafe { ::core::hint::assert_unchecked((self.0.len() as u64) <= (1u64 << 40)) }; &mut self.0 }
+    }
+"""
+
+PROVEN_STR = """\
+    /// P18b (--proven-entries): a string whose byte length was checked against 2^40 by `new`.
+    #[repr(transparent)]
+    pub struct PruvStr(str);
+    #[cold]
+    #[inline(never)]
+    fn pruv_str_slow(n: usize) -> ! { panic!("pruv: invalid representation: {} (str length)", n) }
+    #[allow(dead_code)]
+    impl PruvStr {
+        #[inline]
+        pub fn new(s: &str) -> &PruvStr { if (s.len() as u64) > (1u64 << 40) { pruv_str_slow(s.len()) } unsafe { &*(s as *const str as *const PruvStr) } }
+        #[inline(always)]
+        pub fn get(&self) -> &str { unsafe { ::core::hint::assert_unchecked((self.0.len() as u64) <= (1u64 << 40)) }; &self.0 }
+    }
+"""
+
+
+def proven_entry(f, param_types, vis, name, ret):
+    checked = {p.name for p in len_params(f)}
+    params, rebinds = [], []
+    has_str = False
+    for p, ty in zip(f.params, param_types):
+        mapped = ty
+        if p.name in checked:
+            accessor = "get"
+            if ty == "&str":
+                mapped = "&PruvStr"
+                has_str = True
+            elif ty.startswith("&mut [") and ty.endswith("]"):
+                mapped = "&mut PruvArr<%s>" % ty[6:-1]
+                accessor = "get_mut"
+            elif ty.startswith("&[") and ty.endswith("]"):
+                mapped = "&PruvArr<%s>" % ty[2:-1]
+            else:
+                # Owned length-checked parameters need ownership transfer, so skip this entry.
+                return None
+            rebinds.append("    let %s: %s = %s.%s();" % (p.name, ty, p.name, accessor))
+        params.append("%s: %s" % (p.name, mapped))
+    return "%sfn %s(%s)%s {" % (vis, name, ", ".join(params), ret), rebinds, has_str
+
+
+def proven_module(text, items):
+    lines = text.split("\n")
+    attrs = {line: attr for attr, line in zip(lines, lines[1:]) if attr in ("#[inline]", "#[inline(always)]")}
+    has_str = any(item[-1] for item in items)
+    prelude = PROVEN_ARR + (PROVEN_STR if has_str else "") + "}\n"
+    exports = ["#[allow(unused_imports)]", "pub use self::pruv_proven_types::PruvArr;"]
+    if has_str:
+        exports.append("pub use self::pruv_proven_types::PruvStr;")
+    module = ["", "/// P18b (--proven-entries): entries with lengths checked once by their parameter constructors.",
+              "pub mod pruv_proven {", "    use super::*;"]
+    for header, allow, signature, body, _ in items:
+        module.extend("    " + line for line in (allow, attrs[header], signature))
+        module.extend("    " + line for item in body for line in item.split("\n"))
+        module.append("    }")
+    return "\n" + prelude + "\n".join(exports + module + ["}", ""])
+
+
 def raw_unwind_free(g):
     """P13a.10: no host entry of the program can unwind after it starts writing. Verified explicit mode erases every
     check inside bodies (Pruv callers call f__pruv_body, the caller proved requires; no cost counters) and every
@@ -3304,15 +3395,15 @@ def raw_unwind_free(g):
 
 
 def gen_rust(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None, foreign_checks="requires",
-             externs=()):
+             externs=(), proven_entries=False):
     """plan: a mono.SpecPlan for a generic program (computed here when omitted; PruvError specialization_limit
     propagates). A program without generics is generated directly from prog, exactly as before G3.
     foreign_checks: G6 boundary checks requires|all|off (docs/G6_SPEC.md section 12.3)."""
-    return gen_rust_ex(prog, verified, trust_callers, budget, plan, foreign_checks, externs)[0]
+    return gen_rust_ex(prog, verified, trust_callers, budget, plan, foreign_checks, externs, proven_entries=proven_entries)[0]
 
 
 def gen_rust_ex(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None, foreign_checks="requires",
-                externs=(), trust_out=None):
+                externs=(), trust_out=None, proven_entries=False):
     """(rust text, manifest text or None). The manifest (G6_SPEC 12.4) exists only for programs that use G6;
     externs: [(name, path)] as given with --rust-extern.
     trust_out: G4b-2, a dict filled with the trust data (the concrete program and the ForeignGen or None)."""
@@ -3329,10 +3420,17 @@ def gen_rust_ex(prog, verified=True, trust_callers=False, budget=1 << 30, plan=N
     g2err = g2_unimplemented_error(prog, "codegen", skip=("array_u8", "array_bool", "str"))  # G2 B2
     if g2err is not None:  # same as the Rust generator's Err(String); drivers reject earlier with the diagnostic
         raise RuntimeError("unsupported_type: %s" % g2err.message)
+    if proven_entries:
+        for item in (*prog.types, *prog.functions):
+            if item.name in PROVEN_NAMES:
+                raise PruvError("codegen", 0, 0, "proven_name_clash",
+                                "--proven-entries conflicts with Rust name " + item.name,
+                                "rename the item or omit --proven-entries")
     from storage import plan_storage
     from stack import plan_stack
     storage = plan_storage(prog, verified)
     g = Gen(prog, verified, trust_callers, budget, foreign_checks, storage, plan_stack(prog, storage, verified))
+    g.proven_entries = proven_entries
     g.prelude()
     mark = len(g.out)
     for f in prog.functions:
@@ -3360,6 +3458,8 @@ def gen_rust_ex(prog, verified=True, trust_callers=False, budget=1 << 30, plan=N
     text = inline_policy("\n".join(g.out) + "\n")
     if g.raw:   # P09: after inline_policy, so the module never changes an inlining decision
         text += raw_module(g.raw, g.raw_items, raw_unwind_free(g), g.raw_crate) + "\n"
+    if g.proven_items:
+        text += proven_module(text, g.proven_items)
     return text, manifest
 
 ASYNC_PRELUDE = r"""#[derive(Clone, Default)]

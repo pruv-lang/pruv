@@ -1229,6 +1229,8 @@ struct Gen<'a> {
     explicit: bool,
     /// P09: manifest raw_entries ("crate" / "unsafe"), only in explicit mode
     raw: Option<String>,
+    proven_entries: bool,
+    proven_items: Vec<ProvenEntry>,
     /// P09: (name, params text, return text, parameter names) of each host entry's public item, in emission order
     raw_items: Vec<(String, String, String, Vec<String>)>,
     /// G4 A2: the host entries (Rust names)
@@ -1299,6 +1301,8 @@ impl<'a> Gen<'a> {
             prog,
             explicit,
             raw: if explicit { prog.raw_entries.clone() } else { None },
+            proven_entries: false,
+            proven_items: Vec::new(),
             raw_items: Vec::new(),
             entries,
             checks_needed,
@@ -1663,14 +1667,16 @@ impl<'a> Gen<'a> {
         self.borrowed =
             f.params.iter().filter(|p| key_is_collection(&p.ty) && !p.take).map(|p| p.name.clone()).collect();
         self.refs = f.params.iter().filter(|p| self.is_ext(Some(&p.ty))).map(|p| p.name.clone()).collect();
-        let ps = join_map(&f.params, ", ", |p| {
+        let param_types: Vec<String> = f.params.iter().map(|p| {
             if p.mode_pos.is_some() {
                 // G5 A2: an inout parameter is a mutable slice borrow (`&mut [T]`)
-                format!("{}: &mut {}", p.name, &rty(&p.ty, true)[1..])
+                format!("&mut {}", &rty(&p.ty, true)[1..])
             } else {
-                format!("{}: {}", p.name, self.rt_width(&p.ty, !p.take, self.storage.layout_of(p)))
+                self.rt_width(&p.ty, !p.take, self.storage.layout_of(p))
             }
-        });
+        }).collect();
+        let ps = f.params.iter().zip(&param_types).map(|(p, ty)| format!("{}: {ty}", p.name))
+            .collect::<Vec<_>>().join(", ");
         let ret = if f.ret == "unit" { String::new() } else { format!(" -> {}", self.rt_width(&f.ret, false, self.storage.layout_of(f))) };
         let has = !f.requires.is_empty();
         let named = self.body_named.contains(&f.name);
@@ -1741,31 +1747,31 @@ impl<'a> Gen<'a> {
             if !self.explicit {
                 // G5: a wrapper of an inout function always checks (trust_callers does not waive it)
                 let chk = if self.inouts.is_empty() { None } else { Some(true) };
-                self.entry(f, &ps, &ret, &body_name, None, None, chk)?;
+                self.entry(f, &ps, &param_types, &ret, &body_name, None, None, chk)?;
                 if !self.verified && self.trust && self.inouts.is_empty() && self.par_callees.contains(&f.name) {
                     let name = format!("{}__pruv_par_chk", f.name);
-                    self.entry(f, &ps, &ret, &body_name, Some(&name), Some(false), Some(true))?;
+                    self.entry(f, &ps, &param_types, &ret, &body_name, Some(&name), Some(false), Some(true))?;
                 }
             } else if self.verified {
                 if host {
                     // the checked host wrapper; no other function has a wrapper in verified mode
                     let checked = !self.trust;
-                    self.entry(f, &ps, &ret, &body_name, Some(f.name.as_str()), Some(true), Some(checked))?;
+                    self.entry(f, &ps, &param_types, &ret, &body_name, Some(f.name.as_str()), Some(true), Some(checked))?;
                 }
             } else if host {
                 let checked = !self.trust;
-                self.entry(f, &ps, &ret, &body_name, Some(f.name.as_str()), Some(true), Some(checked))?;
+                self.entry(f, &ps, &param_types, &ret, &body_name, Some(f.name.as_str()), Some(true), Some(checked))?;
                 if self.trust {
                     // Pruv callers of the entry keep the safe-mode check
                     let chk = format!("{}__pruv_chk", f.name);
-                    self.entry(f, &ps, &ret, &body_name, Some(chk.as_str()), Some(false), Some(true))?;
+                    self.entry(f, &ps, &param_types, &ret, &body_name, Some(chk.as_str()), Some(false), Some(true))?;
                 }
             } else {
-                self.entry(f, &ps, &ret, &body_name, Some(f.name.as_str()), Some(false), Some(true))?;
+                self.entry(f, &ps, &param_types, &ret, &body_name, Some(f.name.as_str()), Some(false), Some(true))?;
             }
         } else if self.lg.contains(&f.name) {
             // T0: only the length guard
-            self.entry(f, &ps, &ret, &body_name, Some(f.name.as_str()), Some(true), Some(false))?;
+            self.entry(f, &ps, &param_types, &ret, &body_name, Some(f.name.as_str()), Some(true), Some(false))?;
         }
         Ok(())
     }
@@ -1873,6 +1879,7 @@ impl<'a> Gen<'a> {
         &mut self,
         f: &Function,
         ps: &str,
+        param_types: &[String],
         ret: &str,
         body_name: &str,
         name: Option<&str>,
@@ -1886,7 +1893,8 @@ impl<'a> Gen<'a> {
         self.emit(0, allow);
         self.emit(0, "#[inline]");
         let vis = if is_pub { self.pub_vis() } else { "" };
-        self.emit(0, &format!("{}fn {}({}){} {{", vis, name, ps, ret));
+        let header = format!("{vis}fn {name}({ps}){ret} {{");
+        self.emit(0, &header);
         if is_pub && self.explicit && self.raw.is_some() {
             self.raw_items.push((
                 name.to_string(),
@@ -1895,13 +1903,12 @@ impl<'a> Gen<'a> {
                 f.params.iter().map(|p| p.name.clone()).collect(),
             ));
         }
-        if is_pub && self.raw.as_deref() != Some("crate") {
-            // T0: every public entry checks its array / str lengths first, also under trust_callers. Under manifest
-            // raw_entries = "crate" the entries are pub(crate) and the host adapter in the crate owns the check (SPEC 7)
-            for line in len_guard(f) {
-                self.emit(1, &line);
-            }
+        // T0 also applies under trust_callers. The same-crate adapter owns it in raw_entries = "crate".
+        let guard = if is_pub && self.raw.as_deref() != Some("crate") { len_guard(f) } else { Vec::new() };
+        for line in &guard {
+            self.emit(1, line);
         }
+        let body_start = self.out.len();
         if checked {
             let (conversions, checks) = self.req_checks(f)?;
             for line in &conversions {
@@ -1934,6 +1941,12 @@ impl<'a> Gen<'a> {
             if p.mode_pos.is_some() { format!("&mut *{}", p.name) } else { p.name.clone() }
         });
         self.emit(1, &format!("{}({})", body_name, args));
+        if self.proven_entries && !guard.is_empty() {
+            if let Some(mut twin) = ProvenEntry::new(f, param_types, vis, name, ret, header) {
+                twin.body.extend_from_slice(&self.out[body_start..]);
+                self.proven_items.push(twin);
+            }
+        }
         self.emit(0, "}");
         self.emit(0, "");
         Ok(())
@@ -4352,6 +4365,19 @@ pub fn gen_rust_ex_g4(
     foreign_checks: &str,
     externs: &[(String, String)],
 ) -> Result<(String, Option<String>), GenError> {
+    gen_rust_ex_g4_with_entries(prog, g4, verified, trust_callers, budget, foreign_checks, externs, false)
+}
+
+pub fn gen_rust_ex_g4_with_entries(
+    prog: &Program,
+    g4: Option<&crate::modules::G4>,
+    verified: bool,
+    trust_callers: bool,
+    budget: u64,
+    foreign_checks: &str,
+    externs: &[(String, String)],
+    proven_entries: bool,
+) -> Result<(String, Option<String>), GenError> {
     if !matches!(foreign_checks, "requires" | "all" | "off") {
         return Err(GenError::Msg("foreign_checks must be requires, all or off".to_string()));
     }
@@ -4360,9 +4386,9 @@ pub fn gen_rust_ex_g4(
             crate::mono::MonoError::Limit(p) => GenError::Diag(p),
             crate::mono::MonoError::Internal(m) => GenError::Msg(m),
         })?;
-        return gen_rust_concrete_ex(&plan.program, verified, trust_callers, budget, foreign_checks, externs);
+        return gen_rust_concrete_with_entries(&plan.program, verified, trust_callers, budget, foreign_checks, externs, proven_entries);
     }
-    gen_rust_concrete_ex(prog, verified, trust_callers, budget, foreign_checks, externs)
+    gen_rust_concrete_with_entries(prog, verified, trust_callers, budget, foreign_checks, externs, proven_entries)
 }
 
 /// Pruv -> Rust source. Err is the str(e) at the place where Python raises an Exception. A generic program is
@@ -4392,7 +4418,19 @@ pub fn gen_rust_concrete_ex(
     foreign_checks: &str,
     externs: &[(String, String)],
 ) -> Result<(String, Option<String>), GenError> {
-    gen_rust_concrete_core(prog, verified, trust_callers, budget, foreign_checks, externs).map(|(s, m, _)| (s, m))
+    gen_rust_concrete_with_entries(prog, verified, trust_callers, budget, foreign_checks, externs, false)
+}
+
+pub fn gen_rust_concrete_with_entries(
+    prog: &Program,
+    verified: bool,
+    trust_callers: bool,
+    budget: u64,
+    foreign_checks: &str,
+    externs: &[(String, String)],
+    proven_entries: bool,
+) -> Result<(String, Option<String>), GenError> {
+    gen_rust_concrete_core(prog, verified, trust_callers, budget, foreign_checks, externs, proven_entries).map(|(s, m, _)| (s, m))
 }
 
 /// G4b-2: one `trusted rust fn` of the concrete program, as the trust report lists it.
@@ -4427,7 +4465,7 @@ pub fn gen_rust_trust_data(
     foreign_checks: &str,
     externs: &[(String, String)],
 ) -> Result<TrustData, GenError> {
-    gen_rust_concrete_core(prog, verified, trust_callers, budget, foreign_checks, externs)
+    gen_rust_concrete_core(prog, verified, trust_callers, budget, foreign_checks, externs, false)
         .map(|(_, _, t)| t)
 }
 
@@ -4438,12 +4476,25 @@ fn gen_rust_concrete_core(
     budget: u64,
     foreign_checks: &str,
     externs: &[(String, String)],
+    proven_entries: bool,
 ) -> Result<(String, Option<String>, TrustData), GenError> {
     if !matches!(foreign_checks, "requires" | "all" | "off") {
         return Err(GenError::Msg("foreign_checks must be requires, all or off".to_string()));
     }
     if let Some(e) = crate::typeinfo::g2_unimplemented_error(prog, "codegen", None, &["array_u8", "array_bool", "str"], None) { // G2 B2
         return Err(GenError::Msg(format!("unsupported_type: {}", e.message)));
+    }
+    if proven_entries {
+        let names = prog.types.iter().map(|d| d.name()).chain(prog.functions.iter().map(|f| f.name.as_str()));
+        for name in names {
+            if PROVEN_NAMES.contains(&name) {
+                return Err(GenError::Diag(PruvError::new(
+                    "codegen", 0, 0, "proven_name_clash",
+                    format!("--proven-entries conflicts with Rust name {name}"),
+                    "rename the item or omit --proven-entries",
+                )));
+            }
+        }
     }
     // G4 A2: the identities behind the Rust names (panic text); cleared again when the generator returns
     struct DispGuard;
@@ -4455,6 +4506,7 @@ fn gen_rust_concrete_core(
     let _disp_guard = DispGuard;
     crate::emit_common::set_type_disp(prog.explicit.as_ref().map(|x| x.tdisp.clone()).unwrap_or_default());
     let mut g = Gen::new(prog, verified, trust_callers, budget, foreign_checks);
+    g.proven_entries = proven_entries;
     let mut mark = 0usize;
     let res: R<()> = (|| {
         g.prelude()?;
@@ -4543,7 +4595,121 @@ fn gen_rust_concrete_core(
         text.push_str(&raw_module_with(raw, &g.raw_items, raw_unwind_free(&g), raw == "crate"));
         text.push('\n');
     }
+    if !g.proven_items.is_empty() {
+        text.push_str(&proven_module(&text, &g.proven_items, g.allow));
+    }
     Ok((text, manifest, trust))
+}
+
+const PROVEN_NAMES: &[&str] = &["PruvArr", "PruvStr", "pruv_arr_slow", "pruv_str_slow", "pruv_proven"];
+
+// The child module keeps the fields private even when the generated file is included at the host's crate root.
+const PROVEN_ARR: &str = r#"mod pruv_proven_types {
+    /// P18b (--proven-entries): a slice whose length was checked against 2^40 by `new` or `new_mut`.
+    #[repr(transparent)]
+    pub struct PruvArr<T>([T]);
+    #[cold]
+    #[inline(never)]
+    fn pruv_arr_slow(n: usize) -> ! { panic!("pruv: invalid representation: {} (array length)", n) }
+    #[allow(dead_code)]
+    impl<T> PruvArr<T> {
+        // The transparent casts preserve the slice metadata and the original borrow.
+        #[inline]
+        pub fn new(a: &[T]) -> &PruvArr<T> { if (a.len() as u64) > (1u64 << 40) { pruv_arr_slow(a.len()) } unsafe { &*(a as *const [T] as *const PruvArr<T>) } }
+        #[inline]
+        pub fn new_mut(a: &mut [T]) -> &mut PruvArr<T> { if (a.len() as u64) > (1u64 << 40) { pruv_arr_slow(a.len()) } unsafe { &mut *(a as *mut [T] as *mut PruvArr<T>) } }
+        // The private field and the checked constructors establish the bound for both accessors.
+        #[inline(always)]
+        pub fn get(&self) -> &[T] { unsafe { ::core::hint::assert_unchecked((self.0.len() as u64) <= (1u64 << 40)) }; &self.0 }
+        #[inline(always)]
+        pub fn get_mut(&mut self) -> &mut [T] { unsafe { ::core::hint::assert_unchecked((self.0.len() as u64) <= (1u64 << 40)) }; &mut self.0 }
+    }
+"#;
+
+const PROVEN_STR: &str = r#"    /// P18b (--proven-entries): a string whose byte length was checked against 2^40 by `new`.
+    #[repr(transparent)]
+    pub struct PruvStr(str);
+    #[cold]
+    #[inline(never)]
+    fn pruv_str_slow(n: usize) -> ! { panic!("pruv: invalid representation: {} (str length)", n) }
+    #[allow(dead_code)]
+    impl PruvStr {
+        #[inline]
+        pub fn new(s: &str) -> &PruvStr { if (s.len() as u64) > (1u64 << 40) { pruv_str_slow(s.len()) } unsafe { &*(s as *const str as *const PruvStr) } }
+        #[inline(always)]
+        pub fn get(&self) -> &str { unsafe { ::core::hint::assert_unchecked((self.0.len() as u64) <= (1u64 << 40)) }; &self.0 }
+    }
+"#;
+
+struct ProvenEntry {
+    header: String,
+    signature: String,
+    body: Vec<String>,
+    has_str: bool,
+}
+
+impl ProvenEntry {
+    fn new(f: &Function, param_types: &[String], vis: &str, name: &str, ret: &str, header: String) -> Option<Self> {
+        let checked = len_params(f);
+        let mut params = Vec::new();
+        let mut body = Vec::new();
+        let mut has_str = false;
+        for (p, ty) in f.params.iter().zip(param_types) {
+            let mapped = if checked.iter().any(|q| q.name == p.name) {
+                let (mapped, accessor) = if ty == "&str" {
+                    has_str = true;
+                    ("&PruvStr".to_string(), "get")
+                } else if let Some(elem) = ty.strip_prefix("&mut [").and_then(|t| t.strip_suffix(']')) {
+                    (format!("&mut PruvArr<{elem}>"), "get_mut")
+                } else if let Some(elem) = ty.strip_prefix("&[").and_then(|t| t.strip_suffix(']')) {
+                    (format!("&PruvArr<{elem}>"), "get")
+                } else {
+                    // Owned length-checked parameters need ownership transfer, so skip this entry.
+                    return None;
+                };
+                body.push(format!("    let {n}: {ty} = {n}.{accessor}();", n = p.name));
+                mapped
+            } else {
+                ty.clone()
+            };
+            params.push(format!("{}: {mapped}", p.name));
+        }
+        let signature = format!("{vis}fn {name}({}){ret} {{", params.join(", "));
+        Some(Self { header, signature, body, has_str })
+    }
+}
+
+fn proven_module(text: &str, items: &[ProvenEntry], allow: &str) -> String {
+    let attrs: HashMap<&str, &str> = text.split('\n').zip(text.split('\n').skip(1))
+        .filter(|(attr, _)| matches!(*attr, "#[inline]" | "#[inline(always)]"))
+        .map(|(attr, header)| (header, attr))
+        .collect();
+    let has_str = items.iter().any(|item| item.has_str);
+    let mut module = String::from("\n");
+    module.push_str(PROVEN_ARR);
+    if has_str {
+        module.push_str(PROVEN_STR);
+    }
+    module.push_str("}\n#[allow(unused_imports)]\npub use self::pruv_proven_types::PruvArr;\n");
+    if has_str {
+        module.push_str("pub use self::pruv_proven_types::PruvStr;\n");
+    }
+    module.push_str("\n/// P18b (--proven-entries): entries with lengths checked once by their parameter constructors.\npub mod pruv_proven {\n    use super::*;\n");
+    for item in items {
+        for line in [allow, attrs[item.header.as_str()], &item.signature] {
+            module.push_str("    ");
+            module.push_str(line);
+            module.push('\n');
+        }
+        for line in item.body.iter().flat_map(|item| item.split('\n')) {
+            module.push_str("    ");
+            module.push_str(line);
+            module.push('\n');
+        }
+        module.push_str("    }\n");
+    }
+    module.push_str("}\n");
+    module
 }
 
 const RAW_STORE: &str = "    /// The store was poisoned by a panic inside `PruvStore::with`; its state is never observed or reused.

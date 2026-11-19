@@ -1,6 +1,6 @@
 """pruvc: Pruv compiler CLI.
 
-  python pruvc/pruvc.py in.pruv -o OUT [--no-verify] [--trust-callers]
+  python pruvc/pruvc.py in.pruv -o OUT [--no-verify] [--trust-callers] [--proven-entries]
                       [--backend rust|llvm] [--rust-bindings PATH] [--infer [--show-inferred]]
 
 --no-verify      skip the proof; emit safe code (checked indexing/arithmetic)
@@ -11,6 +11,7 @@
                  line, col, status, invariants, generated, capped, kept, dropped, rounds, queries).
                  With --no-verify the single line {"status": "skipped_no_verify"}.
 --trust-callers  public entry points skip the run-time `requires` check (benchmarking)
+--proven-entries  emit checked-length Rust entry twins
 --backend        rust (default): OUT is Rust source.
                  llvm: OUT is textual LLVM IR (.ll); Rust bindings are written to
                  --rust-bindings PATH (default: OUT with the extension changed to .rs;
@@ -53,7 +54,7 @@ from typeinfo import g2_unimplemented_error, first_g3_use  # noqa: E402
 from mono import specialize  # noqa: E402
 from foreign import g6_unimplemented_error, g7_target_error, first_async_use  # noqa: E402
 
-USAGE = ("usage: pruvc.py in.pruv -o OUT [--no-verify] [--trust-callers] "
+USAGE = ("usage: pruvc.py in.pruv -o OUT [--no-verify] [--trust-callers] [--proven-entries] "
          "[--backend rust|llvm] [--rust-bindings PATH] [--infer [--show-inferred]] "
          "[--rust-extern NAME=PATH] [--rust-search PATH] [--lib DIR] [--proof-cache DIR] [--foreign-checks requires|all|off]")
 
@@ -90,12 +91,14 @@ def _write_trust_report(prog, path, report_path, verify, trust_callers, budget, 
 def compile_file(path, out, verify=True, trust_callers=False, backend="rust", rust_bindings=None,
                  budget=None, also_llvm=None, infer=False, show_inferred=False, externs=(),
                  foreign_checks="requires", extern_specs=(), emit=None, libs=(), manifest=None,
-                 trust_report=None, rust_extern_raw=(), rust_search_raw=(), proof_cache=None):
+                 trust_report=None, rust_extern_raw=(), rust_search_raw=(), proof_cache=None, proven_entries=False):
     """extern_specs: [(name, path)] of --rust-extern (recorded in the manifest); externs: the names only.
     trust_report: PATH of --trust-report (G4b-2); rust_extern_raw / rust_search_raw: the raw flag values for it."""
     if budget is None:
         budget = 1 << 30
     assert 1 <= budget <= 2 ** 62
+    if proven_entries and backend == "llvm":
+        raise ValueError("--proven-entries requires --backend rust")
     if also_llvm and backend != "rust":
         raise ValueError("also_llvm requires backend='rust'")
     prog = load_program(path, libs=libs, manifest=manifest)   # G4: the root file plus its declared module files; a legacy root is plain parse(src)
@@ -172,7 +175,8 @@ def compile_file(path, out, verify=True, trust_callers=False, backend="rust", ru
         # (gen_rust / gen_llvm do not mutate prog, so they share it)
         specs = list(extern_specs) if extern_specs else [(n, "") for n in externs]
         rs_text, manifest = gen_rust_ex(prog, verified=verify, trust_callers=trust_callers, budget=budget,
-                                        plan=plan, foreign_checks=foreign_checks, externs=specs)
+                                        plan=plan, foreign_checks=foreign_checks, externs=specs,
+                                        proven_entries=proven_entries)
         llvm_texts = None
         if also_llvm:
             from llvmgen import gen_llvm
@@ -211,6 +215,7 @@ def main(argv):
     ap.add_argument("-o", dest="out", required=True)
     ap.add_argument("--no-verify", action="store_true")
     ap.add_argument("--trust-callers", action="store_true")
+    ap.add_argument("--proven-entries", action="store_true")
     ap.add_argument("--backend", choices=["rust", "llvm"], default="rust")
     ap.add_argument("--rust-bindings", default=None)
     ap.add_argument("--emit", choices=["exe", "obj"], default=None)
@@ -229,6 +234,8 @@ def main(argv):
     ap.add_argument("--also-llvm", dest="also_llvm", nargs=2, metavar=("LL", "RS"), default=None,
                     help=argparse.SUPPRESS)
     a = ap.parse_args(argv[1:])
+    if a.proven_entries and a.backend == "llvm":
+        ap.error("--proven-entries requires --backend rust")
     if a.show_inferred and not a.infer:
         ap.error("--show-inferred requires --infer")
     if a.also_llvm is not None:
@@ -294,7 +301,7 @@ def main(argv):
                           foreign_checks=a.foreign_checks, extern_specs=tuple(extern_specs), emit=a.emit,
                           libs=tuple(a.libs), manifest=graph, trust_report=a.trust_report,
                           rust_extern_raw=tuple(a.rust_extern), rust_search_raw=tuple(a.rust_search),
-                          proof_cache=a.proof_cache)
+                          proof_cache=a.proof_cache, proven_entries=a.proven_entries)
     except NativeEmitUnavailable:
         ap.error("unrecognized arguments: --emit " + a.emit)
     except PruvError as e:
