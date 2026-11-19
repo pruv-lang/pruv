@@ -6475,3 +6475,26 @@ Measured after the P13j.5 fixes (`work/p13j/perf_final2.log`).
   n > 0, the range where the raw words equal the clamped reads.
 - Optional: the `grow_copy` cost comment now says linear in the summed blob lengths of the three roots.
 - Re-gated after the fixes: P13j.3 (rs then py, identical), mut_m9, corrupt_resident, M11, and P13j.4.
+
+### P13j.6 Re-gate after merging main (9925a2c: P13i(b), P18c, P26b, TIDY 4.14, T5d, rows T5e/P13k)
+
+- Merges 5f4d31b (main 390325f; spec rows and appendices from both sides kept) and 2a8333d (main 9925a2c, clean).
+- M4 `__text` +832 B accepted for this row (it pays for the root payload fix; time, peak RSS and allocations not
+  worse); the frame proof that drops the `grow_copy` root-compare loop is queued as row P13j2.
+- Gates on the merged tree, rs then py, identical: 7 roots verify; M4 300/300, admit 29/29 (maxslot, cases 24-26),
+  grow fails 0; M7 113/187/0, M10 78/222/0, M8 63/237/0, M9 26/274/0, clock 136/164/0, q4 0/300/0,
+  q4clock 293/7/0, stale 300/0/0, M10 halt 300/0/0. M11 213 exact + 87 prefix-ok on both pairs (identical).
+  mut_m9 control CLEAN, 10/10 KILLED. corrupt_resident `--old-rev a4427ec`: controls 387, mismatches 0, P21a 6/6.
+- Size against main 9925a2c: M4 `__text` 351,356 vs 350,524 (+832, as P13j.4); M7 457,916 vs 457,916.
+- Perf, 15 alternating rounds main / merged / hand (M instructions median [min-max], KiB peak RSS median):
+
+| cell | main | merged | hand |
+|---|---|---|---|
+| M4 sessions 1000 | 20.837 [20.734-22.124], 2064 | 20.800 [20.736-21.734], 2048 | 21.242, 2000 |
+| M4 tools 1000 | 29.536 [29.432-29.965], 2192 | 29.556 [29.424-29.839], 2176 | 34.310, 2080 |
+| M4 clocks 1000 | 21.753 [21.546-22.755], 2000 | 21.813 [21.662-21.981], 2000 | 23.035, 2256 |
+| M7 S 100 | 132.122 [131.513-132.634], 5136 | 132.488 [131.966-133.236], 5280 [5088-5888] | 83.321, 2640 |
+
+  Every cell overlaps main in instructions and peak RSS, allocations equal. The M7 S (+0.28 %) and clocks
+  (+0.28 %) medians sit above main in both the 5- and 15-round sets; within overlap, same direction as P13j.4.
+  Against hand, the cells above hand (M4 sessions/tools RSS, M7 time and RSS) are the open P13d/P13h/P13k/T5e rows.
