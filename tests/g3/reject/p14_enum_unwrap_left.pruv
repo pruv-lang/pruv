@@ -1,0 +1,15 @@
+// G3 TIDY 14(b) reject twin of p14: return the default for Left; must fail verify/ensures
+enum Choice<A, B> {
+  Left(value: A),
+  Right(value: B)
+}
+
+fn left_or<A, B>(c: Choice<A, B>, d: A) -> A
+  ensures is_variant(c, Choice::Left) ==> result == variant_field(c, Choice::Left, value)
+  ensures !is_variant(c, Choice::Left) ==> result == d
+{
+  match c {
+    Choice::Left(x) => { return d; }
+    Choice::Right(y) => { return d; }
+  }
+}

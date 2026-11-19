@@ -1,0 +1,9 @@
+// spec: R-7-6 reject
+// Report the fall-through postcondition failure at the `fn` keyword, not the start of the declaration.
+pub fn inc(inout a: [i64], k: i64) -> ()
+  requires 0 <= k && k < len(a) && a[k] < 1000
+  ensures a[k] == a[k] + 1
+  ensures len(a) == len(old(a))
+{
+  a[k] = a[k] + 1;
+}

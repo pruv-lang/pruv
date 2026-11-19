@@ -1,0 +1,23 @@
+// G3 TIDY 14(b) reject twin of p02: require the result to equal b; must fail verify/ensures
+struct Pair<A, B> {
+  first: A,
+  second: B
+}
+
+fn swap<A, B>(p: Pair<A, B>) -> Pair<B, A>
+  ensures result.first == p.second
+  ensures result.second == p.first
+{
+  return Pair::<B, A> {
+    first: p.second,
+    second: p.first
+  };
+}
+
+fn swap_ints(a: i64, b: i64) -> i64
+  ensures result == b
+{
+  let p: Pair<i64, bool> = Pair::<i64, bool> { first: a, second: b > 0 };
+  let q: Pair<bool, i64> = swap::<i64, bool>(p);
+  return q.second;
+}

@@ -1,0 +1,12 @@
+// G3 TIDY 14(b) reject twin of p23: wrap a instead of b; must fail verify/ensures
+fn never_called<T>(a: T, b: T) -> Option<T>
+  ensures is_some(result) && some_val(result) == b
+{
+  return Some::<T>(a);
+}
+
+fn plain(x: i64) -> i64
+  ensures result == x
+{
+  return x;
+}

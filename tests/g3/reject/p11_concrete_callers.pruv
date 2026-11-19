@@ -1,0 +1,22 @@
+// G3 TIDY 14(b) reject twin of p11: require at least two elements in first; must fail verify/call_requires
+// The remaining declarations are copied from the proof fixture.
+fn first<T: Element>(a: [T]) -> T
+  requires len(a) > 1
+  ensures result == a[0]
+{
+  return a[0];
+}
+
+fn head_int(a: [i64]) -> i64
+  requires len(a) > 0
+  ensures result == a[0]
+{
+  return first::<i64>(a);
+}
+
+fn head_bool(a: [bool]) -> bool
+  requires len(a) > 0
+  ensures result == a[0]
+{
+  return first::<bool>(a);
+}

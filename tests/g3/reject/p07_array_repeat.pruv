@@ -1,0 +1,9 @@
+// G3 TIDY 14(b) reject twin of p07: remove the lower bound on n; must fail verify/alloc_negative
+fn repeat<T: Element>(n: i64, value: T) -> [T] ! alloc
+  requires n <= 1000
+  ensures len(result) == n
+  ensures forall k in 0..n: result[k] == value
+{
+  let out: [T] = alloc(n, value);
+  return out;
+}

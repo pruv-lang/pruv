@@ -1,0 +1,32 @@
+// G3 TIDY 14(b) reject twin of p09: wrap None in Some; must fail verify/ensures
+// The remaining declarations are copied from the proof fixture.
+fn wrap<T>(x: T) -> Option<T>
+  ensures is_some(result) && some_val(result) == x
+{
+  return Some::<T>(x);
+}
+
+fn id<T>(x: T) -> T
+  ensures result == x
+{
+  return x;
+}
+
+fn forward<U>(x: U) -> Option<U>
+  ensures is_some(result) && some_val(result) == x
+{
+  return wrap::<U>(id::<U>(x));
+}
+
+fn via_option<T>(x: T) -> Option<T>
+  ensures is_some(result) && some_val(result) == x
+{
+  return id::<Option<T>>(wrap::<T>(x));
+}
+
+fn wrap_twice<T>(x: T) -> Option<Option<T>>
+  ensures is_some(result) && is_some(some_val(result)) && some_val(some_val(result)) == x
+{
+  let inner: Option<T> = wrap::<T>(x);
+  return Some::<Option<T>>(None::<T>);
+}

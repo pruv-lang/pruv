@@ -20,39 +20,53 @@ pub fn date_ok(ms: i64) -> bool
   return ms >= -8640000000000000 && ms <= 8640000000000000;
 }
 
-// Writes "-MM-DDTHH:mm:ss.sssZ" (20 units) at position at.
-fn put_tail(inout o: [i64], at: i64, m: i64, d: i64, h: i64, mi: i64, sec: i64, f: i64) -> ()
-  requires 0 <= at && at <= 1000
+// Writes "-MM-DDTHH:mm:ss.sssZ" (20 units) after the year.
+fn put_tail(inout o: [i64], at: i64, year_len: i64, m: i64, d: i64, h: i64, mi: i64, sec: i64, f: i64) -> ()
+  requires 0 <= at && at <= 1099511627776
+  requires year_len == 4 || year_len == 7
   requires 0 <= m && m <= 100 && 0 <= d && d <= 100 && 0 <= h && h <= 100
   requires 0 <= mi && mi <= 100 && 0 <= sec && sec <= 100 && 0 <= f && f <= 1000
   ensures len(o) == len(old(o))
 {
-  crate::ent_u16::wr(inout o, at, 45);
-  crate::ent_u16::wr(inout o, at + 1, 48 + (m / 10) % 10);
-  crate::ent_u16::wr(inout o, at + 2, 48 + m % 10);
-  crate::ent_u16::wr(inout o, at + 3, 45);
-  crate::ent_u16::wr(inout o, at + 4, 48 + (d / 10) % 10);
-  crate::ent_u16::wr(inout o, at + 5, 48 + d % 10);
-  crate::ent_u16::wr(inout o, at + 6, 84);
-  crate::ent_u16::wr(inout o, at + 7, 48 + (h / 10) % 10);
-  crate::ent_u16::wr(inout o, at + 8, 48 + h % 10);
-  crate::ent_u16::wr(inout o, at + 9, 58);
-  crate::ent_u16::wr(inout o, at + 10, 48 + (mi / 10) % 10);
-  crate::ent_u16::wr(inout o, at + 11, 48 + mi % 10);
-  crate::ent_u16::wr(inout o, at + 12, 58);
-  crate::ent_u16::wr(inout o, at + 13, 48 + (sec / 10) % 10);
-  crate::ent_u16::wr(inout o, at + 14, 48 + sec % 10);
-  crate::ent_u16::wr(inout o, at + 15, 46);
-  crate::ent_u16::wr(inout o, at + 16, 48 + (f / 100) % 10);
-  crate::ent_u16::wr(inout o, at + 17, 48 + (f / 10) % 10);
-  crate::ent_u16::wr(inout o, at + 18, 48 + f % 10);
-  crate::ent_u16::wr(inout o, at + 19, 90);
+  let pos: i64 = at + year_len;
+  crate::ent_u16::wr(inout o, pos, 45);
+  crate::ent_u16::wr(inout o, pos + 1, 48 + (m / 10) % 10);
+  crate::ent_u16::wr(inout o, pos + 2, 48 + m % 10);
+  crate::ent_u16::wr(inout o, pos + 3, 45);
+  crate::ent_u16::wr(inout o, pos + 4, 48 + (d / 10) % 10);
+  crate::ent_u16::wr(inout o, pos + 5, 48 + d % 10);
+  crate::ent_u16::wr(inout o, pos + 6, 84);
+  crate::ent_u16::wr(inout o, pos + 7, 48 + (h / 10) % 10);
+  crate::ent_u16::wr(inout o, pos + 8, 48 + h % 10);
+  crate::ent_u16::wr(inout o, pos + 9, 58);
+  crate::ent_u16::wr(inout o, pos + 10, 48 + (mi / 10) % 10);
+  crate::ent_u16::wr(inout o, pos + 11, 48 + mi % 10);
+  crate::ent_u16::wr(inout o, pos + 12, 58);
+  crate::ent_u16::wr(inout o, pos + 13, 48 + (sec / 10) % 10);
+  crate::ent_u16::wr(inout o, pos + 14, 48 + sec % 10);
+  crate::ent_u16::wr(inout o, pos + 15, 46);
+  crate::ent_u16::wr(inout o, pos + 16, 48 + (f / 100) % 10);
+  crate::ent_u16::wr(inout o, pos + 17, 48 + (f / 10) % 10);
+  crate::ent_u16::wr(inout o, pos + 18, 48 + f % 10);
+  crate::ent_u16::wr(inout o, pos + 19, 90);
 }
 
-// Exactly new Date(ms).toISOString(). An empty array is returned only if the calendar walk left its guarded
-// ranges (a defect, never expected inside the date range).
-pub fn iso(ms: i64) -> [i64] ! alloc
+// n is the UTF-16 unit count, or 0 if the calendar walk left its guarded ranges.
+pub struct IsoParts { y: i64, m: i64, d: i64, h: i64, mi: i64, sec: i64, f: i64, n: i64 }
+
+pub fn valid_iso_parts(y: i64, m: i64, d: i64, h: i64, mi: i64, sec: i64, f: i64, n: i64) -> bool
+{
+  return n == 0 || (
+    ((n == 24 && 0 <= y && y <= 9999) || (n == 27 && -300000 <= y && y <= 300000 && (y < 0 || y > 9999)))
+    && 1 <= m && m <= 12 && 1 <= d && d <= 31 && 0 <= h && h <= 23
+    && 0 <= mi && mi < 60 && 0 <= sec && sec < 60 && 0 <= f && f < 1000
+  );
+}
+
+pub fn iso_parts(ms: i64) -> IsoParts
   requires -8640000000000000 <= ms && ms <= 8640000000000000
+  ensures result.n == 0 || result.n == 24 || result.n == 27
+  ensures valid_iso_parts(result.y, result.m, result.d, result.h, result.mi, result.sec, result.f, result.n)
 {
   let day: i64 = 86400000;
   let shifted: i64 = ms + 8835946560000000;
@@ -73,28 +87,57 @@ pub fn iso(ms: i64) -> [i64] ! alloc
   let mi: i64 = (rem / 60000) % 60;
   let sec: i64 = (rem / 1000) % 60;
   let f: i64 = rem % 1000;
-  if y < -300000 || y > 300000 || m < 1 || m > 12 || d < 1 || d > 31 || h < 0 || h > 23 {
-    return crate::ent_u16::empty();
+  let mut n: i64 = 0;
+  if -300000 <= y && y <= 300000 && 1 <= m && m <= 12 && 1 <= d && d <= 31 && 0 <= h && h <= 23 {
+    n = 27;
+    if 0 <= y && y <= 9999 { n = 24; }
   }
-  if y >= 0 && y <= 9999 {
-    let mut o: [i64] = alloc(24, 0);
-    crate::ent_u16::wr(inout o, 0, 48 + (y / 1000) % 10);
-    crate::ent_u16::wr(inout o, 1, 48 + (y / 100) % 10);
-    crate::ent_u16::wr(inout o, 2, 48 + (y / 10) % 10);
-    crate::ent_u16::wr(inout o, 3, 48 + y % 10);
-    put_tail(inout o, 4, m, d, h, mi, sec, f);
-    return o;
+  return IsoParts { y: y, m: m, d: d, h: h, mi: mi, sec: sec, f: f, n: n };
+}
+
+// Write the units that fit when a card writer is given a short output buffer.
+pub fn put_iso_prefix(inout o: [i64], at: i64, p: IsoParts) -> ()
+  requires 0 <= at && at <= 1099511627776
+  requires valid_iso_parts(p.y, p.m, p.d, p.h, p.mi, p.sec, p.f, p.n) && p.n != 0
+  ensures len(o) == len(old(o))
+{
+  let y: i64 = p.y;
+  if p.n == 24 {
+    crate::ent_u16::wr(inout o, at, 48 + (y / 1000) % 10);
+    crate::ent_u16::wr(inout o, at + 1, 48 + (y / 100) % 10);
+    crate::ent_u16::wr(inout o, at + 2, 48 + (y / 10) % 10);
+    crate::ent_u16::wr(inout o, at + 3, 48 + y % 10);
+    put_tail(inout o, at, 4, p.m, p.d, p.h, p.mi, p.sec, p.f);
+    return;
   }
   let mut ay: i64 = y;
   if y < 0 { ay = -y; }
-  let mut p: [i64] = alloc(27, 0);
-  if y < 0 { crate::ent_u16::wr(inout p, 0, 45); } else { crate::ent_u16::wr(inout p, 0, 43); }
-  crate::ent_u16::wr(inout p, 1, 48 + (ay / 100000) % 10);
-  crate::ent_u16::wr(inout p, 2, 48 + (ay / 10000) % 10);
-  crate::ent_u16::wr(inout p, 3, 48 + (ay / 1000) % 10);
-  crate::ent_u16::wr(inout p, 4, 48 + (ay / 100) % 10);
-  crate::ent_u16::wr(inout p, 5, 48 + (ay / 10) % 10);
-  crate::ent_u16::wr(inout p, 6, 48 + ay % 10);
-  put_tail(inout p, 7, m, d, h, mi, sec, f);
-  return p;
+  if y < 0 { crate::ent_u16::wr(inout o, at, 45); } else { crate::ent_u16::wr(inout o, at, 43); }
+  crate::ent_u16::wr(inout o, at + 1, 48 + (ay / 100000) % 10);
+  crate::ent_u16::wr(inout o, at + 2, 48 + (ay / 10000) % 10);
+  crate::ent_u16::wr(inout o, at + 3, 48 + (ay / 1000) % 10);
+  crate::ent_u16::wr(inout o, at + 4, 48 + (ay / 100) % 10);
+  crate::ent_u16::wr(inout o, at + 5, 48 + (ay / 10) % 10);
+  crate::ent_u16::wr(inout o, at + 6, 48 + ay % 10);
+  put_tail(inout o, at, 7, p.m, p.d, p.h, p.mi, p.sec, p.f);
+}
+
+pub fn put_iso(inout o: [i64], at: i64, p: IsoParts) -> ()
+  requires 0 <= at && at <= 1099511627776
+  requires valid_iso_parts(p.y, p.m, p.d, p.h, p.mi, p.sec, p.f, p.n)
+  ensures len(o) == len(old(o))
+{
+  if p.n == 0 || at + p.n > len(o) { return; }
+  put_iso_prefix(inout o, at, p);
+}
+
+// Exactly new Date(ms).toISOString(). Empty only if the calendar walk left its guarded ranges.
+pub fn iso(ms: i64) -> [i64] ! alloc
+  requires -8640000000000000 <= ms && ms <= 8640000000000000
+{
+  let p: IsoParts = iso_parts(ms);
+  if p.n == 0 { return crate::ent_u16::empty(); }
+  let mut o: [i64] = alloc(p.n, 0);
+  put_iso(inout o, 0, p);
+  return o;
 }

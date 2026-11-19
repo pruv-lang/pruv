@@ -20,7 +20,7 @@
 //   check_required(b, f) -> i64             0 ok, 1 deliverable, 2 done
 //   check_optional(b, f) -> i64             0 ok, else the first failing of 3 targets, 4 verify, 5 conflicts, 6 state
 //   validate(b, f) -> i64                   required then optional
-//   put_card_words(inout o, p0, b, f, by, by_at, iso) -> i64   write at p0 and return the end (empty o: size pass)
+//   put_card_words(inout o, p0, b, f, by, by_at, iso: bud_date::IsoParts) -> i64   write at p0 and return the end (empty o: size pass)
 //   build(b, f, by, by_at, now_ms) -> [i64] the stored card (deliverable, done, updatedAt, targets?, verify?, conflicts?, state?, by?)
 //   lang_code(lang) -> i64                  1 iff the packet is the string "en" (empty packet = absent -> 0)
 //   truthy(v, at) -> bool                   JS truthiness of a V value
@@ -819,6 +819,13 @@ pub fn check_required(b: [u8], f: Keys) -> i64
   return 0;
 }
 
+// some optional key (targets, verify, conflicts, state) was found; when none was, check_optional (out of line, cold
+// for such cards) is not entered (P26b: fewer touched code pages)
+fn any_optional(f: Keys) -> bool
+{
+  return f.p2 >= 0 || f.p3 >= 0 || f.p4 >= 0 || f.p5 >= 0;
+}
+
 // 0 ok, else the first failing of 3 targets, 4 verify, 5 conflicts, 6 state
 pub fn check_optional(b: [u8], f: Keys) -> i64 ! alloc
   ensures result == 0 || (3 <= result && result <= 6)
@@ -835,6 +842,7 @@ pub fn validate(b: [u8], f: Keys) -> i64 ! alloc
 {
   let r: i64 = check_required(b, f);
   if r != 0 { return r; }
+  if !any_optional(f) { return 0; }
   return check_optional(b, f);
 }
 
@@ -1120,8 +1128,55 @@ fn truthy_b(b: [u8], p: i64) -> bool
   return false;
 }
 
-pub fn put_card_words(inout o: [i64], p0: i64, b: [u8], f: Keys, by: [u8], by_at: i64, iso: [i64]) -> i64 ! alloc
+// the optional fields of a card (targets, verify, conflicts, state, by), shared by put_card_words and put_card_words0:
+// one body out of the hot path, so a card with none of them runs only the header, deliverable, done and updatedAt code
+// (P26b: fewer touched code pages, one copy of the optional writers).
+fn put_card_opt(inout o: [i64], q0: i64, b: [u8], f: Keys, by: [u8], by_at: i64, has_by: bool) -> i64 ! alloc
+  requires 0 <= q0 && q0 <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776 && len(o) == len(old(o))
+{
+  let mut q: i64 = q0;
+  if b_present(b, f.p2) {
+    q = put_key(inout o, q, "targets");
+    q = put_targets(inout o, q, b, f.p2);
+  }
+  if b_present(b, f.p3) {
+    q = put_key(inout o, q, "verify");
+    q = put_verify(inout o, q, b, f.p3);
+  }
+  if b_present(b, f.p4) {
+    q = put_key(inout o, q, "conflicts");
+    q = put_lines(inout o, q, b, f.p4);
+  }
+  if b_present(b, f.p5) {
+    q = put_key(inout o, q, "state");
+    q = put_text(inout o, q, b, f.p5);
+  }
+  if has_by {
+    q = put_key(inout o, q, "by");
+    q = put_by(inout o, q, by, by_at);
+  }
+  return q;
+}
+
+fn put_date(inout o: [i64], q: i64, iso: crate::bud_date::IsoParts) -> i64
+  requires 0 <= q && q <= 1099511627776
+  requires crate::bud_date::valid_iso_parts(iso.y, iso.m, iso.d, iso.h, iso.mi, iso.sec, iso.f, iso.n)
+  ensures 0 <= result && result <= 1099511627776 && len(o) == len(old(o))
+{
+  let end: i64 = q + iso.n;
+  if q < len(o) && len(o) < end {
+    crate::bud_date::put_iso_prefix(inout o, q, iso);
+  } else {
+    crate::bud_date::put_iso(inout o, q, iso);
+  }
+  if end > 1099511627776 { return 1099511627776; }
+  return end;
+}
+
+pub fn put_card_words(inout o: [i64], p0: i64, b: [u8], f: Keys, by: [u8], by_at: i64, iso: crate::bud_date::IsoParts) -> i64 ! alloc
   requires 0 <= p0 && p0 <= 1099511627776
+  requires crate::bud_date::valid_iso_parts(iso.y, iso.m, iso.d, iso.h, iso.mi, iso.sec, iso.f, iso.n)
   ensures 0 <= result && result <= 1099511627776 && len(o) == len(old(o))
 {
   let has_by: bool = by_at >= 0 && truthy_b(by, by_at);
@@ -1139,34 +1194,16 @@ pub fn put_card_words(inout o: [i64], p0: i64, b: [u8], f: Keys, by: [u8], by_at
   q = put_lines(inout o, q, b, f.p1);
   q = put_key(inout o, q, "updatedAt");
   q = put(inout o, q, 6);
-  q = put(inout o, q, len(iso));
-  q = put_words(inout o, q, iso, 0, len(iso));
-  if b_present(b, f.p2) {
-    q = put_key(inout o, q, "targets");
-    q = put_targets(inout o, q, b, f.p2);
-  }
-  if b_present(b, f.p3) {
-    q = put_key(inout o, q, "verify");
-    q = put_verify(inout o, q, b, f.p3);
-  }
-  if b_present(b, f.p4) {
-    q = put_key(inout o, q, "conflicts");
-    q = put_lines(inout o, q, b, f.p4);
-  }
-  if b_present(b, f.p5) {
-    q = put_key(inout o, q, "state");
-    q = put_text(inout o, q, b, f.p5);
-  }
-  if has_by {
-    q = put_key(inout o, q, "by");
-    q = put_by(inout o, q, by, by_at);
-  }
+  q = put(inout o, q, iso.n);
+  q = put_date(inout o, q, iso);
+  if k > 3 { q = put_card_opt(inout o, q, b, f, by, by_at, has_by); }
   return q;
 }
 
 // put_card_words at p0 = 0 for build (perf A/C): the constant start lets the writers' positions fold; the p0 form
 // alone measured A/C 2-6% slower on median (P26 appendix). Same words as put_card_words(o, 0, ...).
-fn put_card_words0(inout o: [i64], b: [u8], f: Keys, by: [u8], by_at: i64, iso: [i64]) -> i64 ! alloc
+fn put_card_words0(inout o: [i64], b: [u8], f: Keys, by: [u8], by_at: i64, iso: crate::bud_date::IsoParts) -> i64 ! alloc
+  requires crate::bud_date::valid_iso_parts(iso.y, iso.m, iso.d, iso.h, iso.mi, iso.sec, iso.f, iso.n)
   ensures 0 <= result && result <= 1099511627776 && len(o) == len(old(o))
 {
   let has_by: bool = by_at >= 0 && truthy_b(by, by_at);
@@ -1184,28 +1221,9 @@ fn put_card_words0(inout o: [i64], b: [u8], f: Keys, by: [u8], by_at: i64, iso: 
   q = put_lines(inout o, q, b, f.p1);
   q = put_key(inout o, q, "updatedAt");
   q = put(inout o, q, 6);
-  q = put(inout o, q, len(iso));
-  q = put_words(inout o, q, iso, 0, len(iso));
-  if b_present(b, f.p2) {
-    q = put_key(inout o, q, "targets");
-    q = put_targets(inout o, q, b, f.p2);
-  }
-  if b_present(b, f.p3) {
-    q = put_key(inout o, q, "verify");
-    q = put_verify(inout o, q, b, f.p3);
-  }
-  if b_present(b, f.p4) {
-    q = put_key(inout o, q, "conflicts");
-    q = put_lines(inout o, q, b, f.p4);
-  }
-  if b_present(b, f.p5) {
-    q = put_key(inout o, q, "state");
-    q = put_text(inout o, q, b, f.p5);
-  }
-  if has_by {
-    q = put_key(inout o, q, "by");
-    q = put_by(inout o, q, by, by_at);
-  }
+  q = put(inout o, q, iso.n);
+  q = put_date(inout o, q, iso);
+  if k > 3 { q = put_card_opt(inout o, q, b, f, by, by_at, has_by); }
   return q;
 }
 
@@ -1213,7 +1231,7 @@ fn put_card_words0(inout o: [i64], b: [u8], f: Keys, by: [u8], by_at: i64, iso: 
 pub fn build(b: [u8], f: Keys, by: [u8], by_at: i64, now_ms: i64) -> [i64] ! alloc
   requires -8640000000000000 <= now_ms && now_ms <= 8640000000000000
 {
-  let iso: [i64] = crate::bud_date::iso(now_ms);
+  let iso: crate::bud_date::IsoParts = crate::bud_date::iso_parts(now_ms);
   let mut dry: [i64] = crate::ent_u16::empty();
   let size: i64 = put_card_words0(inout dry, b, f, by, by_at, iso);
   let mut o: [i64] = crate::ent_u16::zeros(size);
@@ -1374,7 +1392,8 @@ pub fn judge(found: bool, closed: bool, card: [u8], at: i64, lang: i64) -> Judge
   if r != 0 {
     return Judged { kind: r, used_now: false, f: f, error: crate::bud_text::card_error(r, lang) };
   }
-  let o: i64 = check_optional(card, f);
+  let mut o: i64 = 0;
+  if any_optional(f) { o = check_optional(card, f); }
   if o != 0 {
     return Judged { kind: o, used_now: true, f: f, error: crate::bud_text::card_error(o, lang) };
   }
