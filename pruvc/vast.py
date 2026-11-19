@@ -401,6 +401,7 @@ for _cls in (Expr, Stmt, FieldDecl, VariantDecl, FieldInit, MatchArm, Refinement
     _cls.file = None
 Function.pub = False        # `pub fn`
 Function.opaque = False     # P13o: `opaque fn`
+Function.cold = False       # P13k: `#[cold] fn` (plain class attribute, not a dump field)
 Assert.reveal = None        # P13o: `reveal F;` -> Assert(true) with reveal = Call(F, []) (the name only)
 Program.uses_inout = None   # G5 A0: set by the checker (program_uses_inout); None = not checked yet
 TypeDecl.pub = False        # `pub struct` / `pub enum`

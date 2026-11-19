@@ -452,6 +452,10 @@ pub fn bounded(x: i64) -> i64                requires 0 <= x && x <= 10
   visible. A public signature or contract may mention only public types and items (checked through field types too);
   a function a public contract calls directly must be `pub` (section 6, user functions in contracts);
   private helpers are fine inside bodies. `pub trusted rust fn` is rejected: wrap it in a public Pruv function.
+- **Function attributes.** `#[cold]` is the only attribute. It is written directly before a non-`pub` top-level `fn`
+  item (generic fns allowed, any module) and has no effect on checking; it only changes the generated Rust (R-7-3).
+  Any other `#[...]` is `parse/unknown_attribute`; `#[cold]` before `pub fn`, `opaque fn`, `trusted rust fn`, a type,
+  `mod`, another attribute or the end of the file, and any `#[` inside a body, is `parse/attribute_position`.
 - **Host entries.** Only root `pub`, non-generic functions are callable from Rust/C (`--rust-bindings`, LLVM
   `pruv_abi_<name>`). Their signatures must be plain values (no collections, recursive or buffer-field types:
   `type/entry_signature`). Child `pub` functions are for Pruv callers only. An optional root `main` must be
@@ -1194,6 +1198,17 @@ backend is unchanged.
 Tests: [accept](tests/spec/r7_3_inline.pruv) (a small fn called once gets `#[inline(always)]`),
 [reject](tests/spec/r7_3_inline_recursive.pruv) (a recursive fn keeps `#[inline]`).
 
+A fn marked `#[cold]` (see "Function attributes", section 6f) is emitted with the two lines `#[cold]` and
+`#[inline(never)]` instead of `#[inline]`, for its body and its checked wrapper (and `F__pruv_chk` /
+`F__pruv_par_chk` where emitted). The pass above only rewrites lines that are exactly `#[inline]`, so a cold fn is never
+a candidate, and calls to it add nothing to a caller's `incl`. Variants that carry no `#[inline]` (`F__pruv_cost`,
+`F__pruv_small`) are unchanged. Verification is unchanged (contracts, proofs and run-time checks are the same); the LLVM
+backend ignores the attribute. Why: it keeps rare fallback paths (total reads of out-of-range data, long probe tails)
+out of inlined hot code; measured on M7, see `docs/L3_RESTRUCTURE_SPEC.md` Appendix P13k.
+Tests: [accept](tests/spec/r7_3_cold.pruv) (body and wrapper get `#[cold]` + `#[inline(never)]`, never
+`#[inline(always)]`), [reject](tests/spec/r7_3_cold_unknown.pruv) (`#[hot]`), [reject](tests/spec/r7_3_cold_pub.pruv)
+(`#[cold] pub fn`), [reject](tests/spec/r7_3_cold_struct.pruv) (`#[cold] struct`).
+
 ### Stack arrays (generated code)
 R-7-1 A local array `let [mut] a: [E] = alloc(N, v);` (`E` is `i64`, refined or not, `u8` or `bool`) with a literal
 length `N` lives on the stack (`[i64; N]` in Rust, `alloca` in LLVM) when every use of `a` is `a[i]`, `a[i] = e`,
@@ -1307,6 +1322,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 
 | code | stage | meaning |
 |---|---|---|
+| `parse/attribute_position` | parse | a `#[cold]` not directly before a private `fn` item, or a `#[` that does not start a top-level item |
 | `parse/bad_char` | parse | a character that starts no token |
 | `parse/bad_int` | parse | a malformed integer literal, such as a trailing `_` (R-1-2) |
 | `parse/cost_syntax` | parse | `cost` needs one expression and must be the last header clause |
@@ -1330,6 +1346,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `parse/string_escape` | parse | an unsupported escape in a string literal |
 | `parse/string_unterminated` | parse | a string literal without its closing quote |
 | `parse/syntax` | parse | any other syntax error |
+| `parse/unknown_attribute` | parse | `#[` followed by anything other than `cold]` |
 | `parse/unsupported_type` | parse | a type the parser knows but this compiler does not implement yet |
 | `parse/visibility_syntax` | parse | a misplaced or malformed `pub` |
 | `pkg/dependency_cycle` | pkg | the package dependencies form a cycle |

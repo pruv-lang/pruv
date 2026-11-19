@@ -1737,7 +1737,11 @@ class Gen:
         s.emit(0, s.allow)
         # Inline hint on every function body: without it rustc keeps the generated call chains as real calls.
         # inline_policy raises it to #[inline(always)] where the measured policy says so.
-        s.emit(0, "#[inline]")
+        if f.cold:     # P13k: `#[cold]` keeps the rare fallback out of inlined hot code (never an R-7-3 candidate)
+            s.emit(0, "#[cold]")
+            s.emit(0, "#[inline(never)]")
+        else:
+            s.emit(0, "#[inline]")
         s.emit(0, "%sfn %s(%s)%s {" % (vis, body_name, ps, ret))
         s.cost = not s.verified and f.cost is not None
         if s.cost:
@@ -1848,7 +1852,11 @@ class Gen:
         vis = s.pub_vis() if pub else ""
         header = "%sfn %s(%s)%s {" % (vis, name, ps, ret)
         s.emit(0, s.allow)
-        s.emit(0, "#[inline]")
+        if f.cold:     # P13k
+            s.emit(0, "#[cold]")
+            s.emit(0, "#[inline(never)]")
+        else:
+            s.emit(0, "#[inline]")
         s.emit(0, header)
         if pub and s.explicit and s.raw:
             s.raw_items.append((name, ps, ret, [p.name for p in f.params]))
@@ -3382,7 +3390,10 @@ def proven_entry(f, param_types, vis, name, ret):
 
 def proven_module(text, items):
     lines = text.split("\n")
-    attrs = {line: attr for attr, line in zip(lines, lines[1:]) if attr in ("#[inline]", "#[inline(always)]")}
+    attrs = {line: [attr] for attr, line in zip(lines, lines[1:]) if attr in ("#[inline]", "#[inline(always)]")}
+    # R-7-3: a `#[cold]` fn is emitted as `#[cold]` then `#[inline(never)]`; its proven entry keeps both.
+    attrs.update({line: [cold, attr] for cold, attr, line in zip(lines, lines[1:], lines[2:])
+                  if cold == "#[cold]" and attr == "#[inline(never)]"})
     has_str = any(has_str for _, _, _, _, has_str, _ in items)
     prelude = PROVEN_ARR + (PROVEN_STR if has_str else "") + "}\n"
     exports = ["#[allow(unused_imports)]", "pub use self::pruv_proven_types::PruvArr;"]
@@ -3392,7 +3403,7 @@ def proven_module(text, items):
               "pub mod pruv_proven {", "    use super::*;"]
     vals = []
     for header, allow, signature, body, _, val in items:
-        module.extend("    " + line for line in (allow, attrs[header], signature))
+        module.extend("    " + line for line in (allow, *attrs[header], signature))
         module.extend("    " + line for item in body for line in item.split("\n"))
         module.append("    }")
         if val is not None:

@@ -1,0 +1,4 @@
+// spec: R-7-3 reject
+// the only attribute is `#[cold]`
+#[hot]
+fn f() -> i64 { return 1; }
