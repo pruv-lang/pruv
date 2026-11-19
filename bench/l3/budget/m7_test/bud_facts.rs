@@ -89,3 +89,85 @@ pub fn is_quiet(k: &[i64], ks: i64, kn: i64, fxn: i64) -> i64 {
     });
     answer
 }
+
+// ---- runningDelegationIds (P24, bud_halt::halt) ----
+// A separate answer stream: answer i is the packed list `[0, n, (len, words(len) packed words)*]` (status 0, then the
+// bud_keys records of the running delegation ids) taken by the i-th `running_ids` call since `set_running_calls(0)`;
+// `[0, 0]` (no running delegations) past the end. Bad answers (status != 0, bad framing) are for G fixtures; Pruv
+// rejects them after SETTLE with status 2. Q records the ref (framed packed sessionId and budgetId keys) and the effect
+// count with each call, so the driver places the query among the call's effects.
+
+#[derive(Clone)]
+pub struct RunningQuery {
+    pub sid: Vec<i64>,
+    pub bid: Vec<i64>,
+    pub fxn: i64,
+    /// The answer this call returned (`[status, n, keys...]`), as the host gave it.
+    pub answer: Vec<i64>,
+}
+
+thread_local! {
+    static RUNNING: RefCell<Vec<Vec<i64>>> = const { RefCell::new(Vec::new()) };
+    static RQUERIES: RefCell<Option<Vec<RunningQuery>>> = const { RefCell::new(None) };
+    static RCALLS: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Replaces the runningDelegationIds answer stream.
+pub fn set_running(v: Vec<Vec<i64>>) {
+    RUNNING.with(|a| *a.borrow_mut() = v);
+}
+
+/// Appends one answer to the stream.
+pub fn push_running(v: Vec<i64>) {
+    RUNNING.with(|a| a.borrow_mut().push(v));
+}
+
+pub fn running_calls() -> usize {
+    RCALLS.with(|c| c.get())
+}
+
+pub fn set_running_calls(n: usize) {
+    RCALLS.with(|c| c.set(n));
+    RQUERIES.with(|q| {
+        if let Some(q) = q.borrow_mut().as_mut() {
+            q.truncate(n);
+        }
+    });
+}
+
+pub fn record_running() {
+    RQUERIES.with(|q| *q.borrow_mut() = Some(Vec::new()));
+}
+
+/// The answer the i-th call takes.
+pub fn running_answer(i: usize) -> Vec<i64> {
+    RUNNING.with(|a| a.borrow().get(i).cloned()).unwrap_or_else(|| vec![0, 0])
+}
+
+/// The i-th recorded call (q mode).
+pub fn running_query(i: usize) -> RunningQuery {
+    RQUERIES.with(|q| q.borrow().as_ref().unwrap()[i].clone())
+}
+
+fn framed(k: &[i64], ks: i64, kn: i64) -> Vec<i64> {
+    let start = ks as usize;
+    let mut v = vec![kn];
+    v.extend_from_slice(&k[start..start + (kn as usize).div_ceil(4)]);
+    v
+}
+
+/// Answer the next runningDelegationIds query and record its ref and the answer it returns in q mode. The answer is
+/// moved out of the stream (each answer is taken once), so the host cost is the call and the move, no copy (q mode
+/// also clones it into the record).
+#[inline(always)]
+pub fn running_ids(k: &[i64], ks: i64, kn: i64, bk: &[i64], bs: i64, bn: i64, fxn: i64) -> Vec<i64> {
+    let index = running_calls();
+    RCALLS.with(|c| c.set(index + 1));
+    let a = RUNNING.with(|a| a.borrow_mut().get_mut(index).map(std::mem::take)).unwrap_or_else(|| vec![0, 0]);
+    RQUERIES.with(|q| {
+        if let Some(q) = q.borrow_mut().as_mut() {
+            q.push(RunningQuery { sid: framed(k, ks, kn), bid: framed(bk, bs, bn), fxn, answer: a.clone() });
+        }
+    });
+    a
+}

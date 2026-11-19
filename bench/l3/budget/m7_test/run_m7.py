@@ -9,7 +9,9 @@
 q --hand16 runs hand_m7_u16.rs (typed UTF-16 hand Rust, q mode) on the same program instead of the Pruv driver, through the
 same classification. perf lanes: pruv (driver_m7), hand16 (hand_m7_u16), hand (hand_m7, UTF-8 String, informational), ts.
 perf also writes work/m7/perf.json with run_meta.run_meta(...) and the rows (ns, retired instructions, ratios).
-perf compares per cell the per-op result checksums rchk, rchk_t (pruv) and rchk, rchk_w (hand16) (untimed passes); a
+perf also has pruv_f: driver_m7 fair typed lane (T5c): the c_* entry called in a loop shaped like hand16's typed loop
+(const-generic entry, no step closure, no per-op prep match, fx reset only where hand clears fx).
+perf compares per cell the per-op result checksums rchk, rchk_t, rchk_f (pruv) and rchk, rchk_w (hand16) (untimed passes); a
 mismatch or missing rchk fails the cell (no ratio) and the exit status.
 If work/m7/cases.jsonl / oracle.jsonl are missing the read-only source SRC_WORK is read instead.
 
@@ -580,6 +582,7 @@ def cmd_same(args):
 
 
 PERF_ITEMS = ["ishalted", "current", "attach", "close", "closereopen", "reopenmiss", "replace"]  # items the Pruv driver and hand16 both run
+FAIR_ITEMS = ["ishalted", "current", "attach", "closereopen", "reopenmiss"]  # items that also have the fair typed lane (f / rchk_f)
 PERF_CALLS = {"closereopen": 2}  # calls per rep (ns and instructions are reported per call)
 # close: whole-process instruction counts would include the per-batch restore of the closed state, which differs by side
 # (Pruv copies st, hand16 rebuilds its records) and is outside the timed CLOSE span; close is measured by time,
@@ -627,12 +630,19 @@ def cmd_perf(args):
     vs hand16 typed) stays but is UNMATCHED. Per cell rchk, rchk_t (pruv) and rchk, rchk_w (hand16) must be one
     identical value in every round; a missing one (including rchk_t) is RCHK MISSING.
 
+    Fair lane: for FAIR_ITEMS driver_m7 `perf` also prints `f <item> <size> <ns>` and `rchk_f <item> <size> <value>`
+    (lane pruv_f). pruv_f: driver_m7 fair typed lane (T5c): the c_* entry called in a loop shaped like hand16's typed
+    loop (const-generic entry, no step closure, no per-op prep match, fx reset only where hand clears fx). rchk_f is
+    checked like the other lanes (one identical value per round).
+
     Instructions: driver_m7 `perf` runs every item in one process (no item argument), so its per-item instructions are
     taken from `driver_m7 boundary S reps item A` (the same World::call path and bodies as perf) minus the same item's
     `observe` row (boundary variants additionally fold the result words into a checksum; observe is that fold alone).
     Pruv typed instr = boundary variant C minus observe. hand16 typed instr uses `hand_m7_u16 perf S reps item typed`,
     hand16w instr `... item wire`. All: (instr(5 reps) - instr(reps)) / (4 reps x calls per rep). Instr ratios:
     Pruv/hand16w (wire), Pruv typed/hand16 (typed), Pruv/hand16 (unmatched).
+    Fair lane instr (FAIR_ITEMS only): `driver_m7 perf S reps item f`, same formula. Extra columns at the end:
+    Pruv fair ns, Pruv fair/hand16 (typed), Pruv fair instr, instr Pruv fair/hand16.
     No retired-instruction counter (no /usr/bin/time -l line) -> 'unavailable', never 0."""
     from common import NODE, TS_ENV
     exe = build(args)
@@ -658,17 +668,17 @@ def cmd_perf(args):
                     if f[0] == "chk":  # chk <item> <size> <value> (hand16 only)
                         chk.setdefault((f[1], int(f[2])), set()).add(f[3])
                         continue
-                    if f[0] in ("rchk", "rchk_t", "rchk_w"):
+                    if f[0] in ("rchk", "rchk_t", "rchk_w", "rchk_f"):
                         # rchk <item> <size> <value> (pruv and hand16 typed lane; per-op results, untimed pass);
-                        # rchk_t (pruv typed lane) and rchk_w (hand16 wire lane) go to their own lane key
-                        # (pruv_t / hand16w); kept per run (one list entry per process run), so a value missing from
-                        # one round is seen
-                        lk = {"rchk": side, "rchk_t": "pruv_t", "rchk_w": "hand16w"}[f[0]]
+                        # rchk_t (pruv typed lane), rchk_w (hand16 wire lane) and rchk_f (pruv fair typed lane) go to
+                        # their own lane key (pruv_t / hand16w / pruv_f); kept per run (one list entry per process
+                        # run), so a value missing from one round is seen
+                        lk = {"rchk": side, "rchk_t": "pruv_t", "rchk_w": "hand16w", "rchk_f": "pruv_f"}[f[0]]
                         rchk.setdefault((f[1], int(f[2])), {}).setdefault(lk, {}).setdefault(rd, []).append(f[3])
                         continue
-                    if f[0] in ("t", "w"):  # t <item> <size> <ns> (pruv typed lane), w <item> <size> <ns> (hand16 wire)
-                        res.setdefault((f[1], int(f[2])), {}).setdefault("pruv_t" if f[0] == "t" else "hand16w", []).append(
-                            float(f[3]))
+                    if f[0] in ("t", "w", "f"):  # t/w/f <item> <size> <ns> (pruv typed, hand16 wire, pruv fair typed)
+                        lane = {"t": "pruv_t", "w": "hand16w", "f": "pruv_f"}[f[0]]
+                        res.setdefault((f[1], int(f[2])), {}).setdefault(lane, []).append(float(f[3]))
                         continue
                     item, sz, ns = f
                     res.setdefault((item, int(sz)), {}).setdefault(side, []).append(float(ns))
@@ -682,9 +692,10 @@ def cmd_perf(args):
             continue
         n_cmp += 1
         r = rchk.get((item, sz), {})
-        # four lanes must each print exactly one value in every round, all identical: pruv rchk, pruv typed rchk_t,
-        # hand16 rchk, hand16 wire rchk_w
-        lanes = [r.get(k, {}) for k in ("pruv", "pruv_t", "hand16", "hand16w")]
+        # every listed lane must print exactly one value in every round, all identical: pruv rchk, pruv typed rchk_t,
+        # hand16 rchk, hand16 wire rchk_w, plus the fair typed lane rchk_f (pruv_f) for FAIR_ITEMS
+        lane_keys = ("pruv", "pruv_t", "hand16", "hand16w") + (("pruv_f",) if item in FAIR_ITEMS else ())
+        lanes = [r.get(k, {}) for k in lane_keys]
         if any(len(ln.get(rd, [])) != 1 for ln in lanes for rd in range(args.rounds)):
             cell_status[(item, sz)] = "RCHK MISSING"
         elif len({v for ln in lanes for vs in ln.values() for v in vs}) != 1:
@@ -711,6 +722,9 @@ def cmd_perf(args):
                     lambda r: [hand16, "perf", str(size), str(r), item, "typed"], args.reps, calls)
                 instr[("hand16w", item, size)] = instr_per_call(
                     lambda r: [hand16, "perf", str(size), str(r), item, "wire"], args.reps, calls)
+                if item in FAIR_ITEMS:
+                    instr[("pruv_f", item, size)] = instr_per_call(
+                        lambda r: [exe, "perf", str(size), str(r), item, "f"], args.reps, calls)
     fi = lambda x: "unavailable" if x is None else "%.0f" % x
     print("rounds %d, reps %d, sizes %s; ns and instructions per call" % (args.rounds, args.reps, sizes))
     print("Matched pairs: Pruv/hand16w (wire vs wire), Pruv typed/hand16 (typed vs typed). Pruv/hand16 is UNMATCHED "
@@ -718,7 +732,8 @@ def cmd_perf(args):
     print("item | S | Pruv ns | hand16 ns | hand(old UTF-8) ns | TS ns | Pruv typed ns | hand16w ns"
           " | Pruv/hand16 (unmatched: wire vs typed) | Pruv/hand16w (wire) | Pruv typed/hand16 (typed) | Pruv/hand(old)"
           " | Pruv instr | hand16 instr | instr Pruv/hand16 (unmatched) | Pruv typed instr | hand16w instr"
-          " | instr Pruv/hand16w | instr Pruv typed/hand16")
+          " | instr Pruv/hand16w | instr Pruv typed/hand16"
+          " | Pruv fair ns | Pruv fair/hand16 (typed) | Pruv fair instr | instr Pruv fair/hand16")
     rows = []
     for (item, sz), v in sorted(res.items(), key=lambda kv: (kv[0][1], kv[0][0])):
         m = {k: statistics.median(x) for k, x in v.items()}
@@ -729,17 +744,21 @@ def cmd_perf(args):
         ir = (ip / ih) if ip is not None and ih else None
         irw = (ip / ihw) if ip is not None and ihw else None  # wire vs wire
         irt = (ipt / ih) if ipt is not None and ih else None  # typed vs typed
+        ipf = instr.get(("pruv_f", item, sz))
+        irf = (ipf / ih) if ipf is not None and ih else None  # fair typed vs hand16 typed
         fr = lambda x: "-" if x is None else "%.2f" % x
         fail = cell_status.get((item, sz))
         if fail:  # no ratio of a cell whose per-op results are unchecked or differ
             rt = lambda a, b: None
-            ir = irw = irt = None
+            ir = irw = irt = irf = None
         ci = item in PERF_ITEMS and not args.no_instr
-        print("%s | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s%s" % (
+        print("%s | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s"
+              " | %s | %s | %s | %s%s" % (
             item, sz, f("pruv"), f("hand16"), f("hand"), f("ts"), f("pruv_t"), f("hand16w"),
             fr(rt("pruv", "hand16")), fr(rt("pruv", "hand16w")), fr(rt("pruv_t", "hand16")), fr(rt("pruv", "hand")),
             fi(ip) if ci else "-", fi(ih) if ci else "-", fr(ir),
             fi(ipt) if ci else "-", fi(ihw) if ci else "-", fr(irw), fr(irt),
+            f("pruv_f"), fr(rt("pruv_f", "hand16")), fi(ipf) if ci and ipf is not None else "-", fr(irf),
             " | FAIL " + fail if fail else ""))
         rc = rchk.get((item, sz), {})
         rows.append({
@@ -753,6 +772,8 @@ def cmd_perf(args):
             "instr_pruv": num(ip), "instr_hand16": num(ih), "instr_pruv_over_hand16": num(ir),
             "instr_pruv_typed": num(ipt), "instr_hand16w": num(ihw),
             "instr_pruv_over_hand16w": num(irw), "instr_pruv_typed_over_hand16": num(irt),
+            "pruv_fair_over_hand16": num(rt("pruv_f", "hand16")),
+            "instr_pruv_fair": num(ipf), "instr_pruv_fair_over_hand16": num(irf),
             "instr_pruv_boundary_C": num(instr.get(("pruv_C", item, sz))),
             "instr_pruv_boundary_A": num(instr.get(("pruv_A", item, sz))),
             "instr_pruv_boundary_observe": num(instr.get(("pruv_observe", item, sz))),
@@ -760,9 +781,10 @@ def cmd_perf(args):
     os.makedirs(WORK, exist_ok=True)
     meta = run_meta(pruvc=PRUVC_PY if args.py else args.pruvc, backend="rust", rustc=rustc(), flags=RUSTC_FLAGS,
                     seed=SEED, profile=args.profile or "custom:" + ",".join(map(str, sizes)),
-                    lanes=[s for s, _ in sides] + ["pruv_t", "hand16w"],
+                    lanes=[s for s, _ in sides] + ["pruv_t", "hand16w", "pruv_f"],
                     extra={"rounds": args.rounds, "reps": args.reps, "sizes": sizes, "instr_enabled": not args.no_instr,
-                           "pruv_checksum": "rchk + rchk_t per op (driver_m7), compared with hand16 rchk + rchk_w per cell"})
+                           "pruv_checksum": "rchk + rchk_t (+ rchk_f for FAIR_ITEMS) per op (driver_m7), compared with "
+                                            "hand16 rchk + rchk_w per cell"})
     with open(os.path.join(WORK, "perf.json"), "w") as f:
         json.dump({"meta": meta, "rows": rows, "checksum_problems": bad,
                    "result_checks": {"compared": n_cmp, "mismatches": n_bad,

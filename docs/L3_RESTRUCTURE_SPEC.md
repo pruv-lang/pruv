@@ -397,7 +397,9 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P19 | Same: OPEN/attach/replace/CLOSE/maybeClose | P Q1/Q4+B/G, synchronous query/effect order after P10H; close <=1.0. |
 | P19a | B/bud_lifecycle.pruv, bud_map.pruv, m7_test, m10_test, ABI.md: P19 audit R1, R3-R6, O1 (Appendix P19.6a, P19.7) | P: invalid answer leaves `st` word-for-word unchanged (write-free `bud_map` room plan before the query, rehash after a valid answer, `ensures` linking the two; tombstone-heavy control); R2 regression fixture; session argument and effect order logged on both sides with a mutant; per-attempt query counts over forced Grow; required case ids and request order in M7/M10 Q; standalone CLOSE lane with matched consumption <= 1.0x hand. Starts after P21a (shares bud_map.pruv). |
 | P19c | Both codegens: foreign (trusted rust) call wrapper and cross-rlib inlining (Appendix P19.4) | P: `catch_unwind(AssertUnwindSafe(..))` around every trusted rust call and the non-inlined callee `LocalKey::with` removed or made free where sound (for example crates built with `panic = abort`, or the poison rule of P10 kept by another path), with the soundness argument written and audited; output parity on both compilers; P19 `closereopen` (1.14-1.15) and `attach` (1.12-1.13) re-measured, the wrapper share attributed, the rest left to T5/P18b by line. Done (Appendix P19c): drop guard (`pruv_ForeignGuard`) in place of `catch_unwind`, `__rust_try` and the catch frame gone; the foreign path now equals a plain call (closereopen `guard` = `direct` within 0.1 ns, 61 rounds); the diagnostic goes through a fresh `/dev/stderr` handle, not std's stderr lock, on unix; `LocalKey::with` is the caller's LLVM inline decision, present with no wrapper and gone when inlined; the rest (attach 1.13x, closereopen 1.11-1.12x, reopenmiss 1.05-1.08x vs hand16) is the inline policy (T5, measured: 1.02-1.06x with the four lifecycle/map bodies forced inline) and the result path (P18b, hypothesis). T5 (Appendix T5): no inline rule ships; every promotion grows `__text` (find_w + attach +40 %, the four +116 %) for 2-13 % fewer instructions; queued as T5a. |
-| T5a | Both codegens and B/bud_map.pruv, bud_lifecycle.pruv: M7 lookup and lifecycle gap without code growth (Appendix T5.3) | P: `attach`, `closereopen`, `reopenmiss`, `current`, `isHalted` <= 1.0x hand16 with M7 `__text` and peak RSS not above the T5 base (405,180 B); the inline-only route is ruled out (T5.2). Candidates: cut the always callees of `find_w` (P13h specialization or hot/cold split), the P19c entry/record re-validation and id copies; output parity on both compilers. |
+| T5a | Both codegens and B/bud_map.pruv, bud_lifecycle.pruv: M7 lookup and lifecycle gap without code growth (Appendix T5.3) | P: `attach`, `closereopen`, `reopenmiss`, `current`, `isHalted` <= 1.0x hand16 with M7 `__text` and peak RSS not above the T5 base (405,180 B); the inline-only route is ruled out (T5.2). Candidates: cut the always callees of `find_w` (P13h specialization or hot/cold split), the P19c entry/record re-validation and id copies; output parity on both compilers. Measured (Appendix T5a): no change ships. The fixes found (reopen cold tail -32/-35, maybe_close direct header path -9) all grow `__text`. Part of each raw cell is the driver typed-lane shape (current: floor 73 vs hand ~19). The rest is split by line, queued as T5b/T5c, and kept in P13h/P18b. |
+| T5b | Both codegens: cold-tail rule (Appendix T5a.4) | P: reopen's slow tail (blob_copy, rewrite, store) is emitted out of line and cold, so the miss path drops the slow-path frame (352 B in the T5a build). The rule is an attribute or a proof-free rule that does not mark the M4 put path cold. reopenmiss and closereopen fewer instructions than T5 with `__text` and peak RSS not above the T5 base (405,180 B); the hand-edited reference is rsplita (-32/-35 against its same-run base, for +10.9 KB). Includes a per-function attribution of the closereopen pair. Output parity on both compilers. |
+| T5c | B/m7_test/driver_m7.rs: typed-lane harness parity (Appendix T5a.2) | P: the M7 timed loop calls the `c_*` entry with the same shape as hand16's bare method call (no non-inlined step closure, no per-op prep match), reported next to the existing lane. The floor of each lane is measured with bodies emptied. Measurement only; no product number moves. Measured (Appendix T5c): fair lane (`driver_m7 perf S R item f`) against hand16, instructions S/M: isHalted 0.99/0.98 (no overlap, at or below 1.0x), current 1.02/1.02, attach 1.30/1.29, closereopen 1.18/1.18, reopenmiss 1.16/1.15; floor-subtracted 0.97/0.96, 1.00/1.01, 1.27/1.25, 1.16/1.16, 1.14/1.15. The rest is the entry floor (length guards, `out` store: P18b), the reopen tail (T5b), and find_w/entry re-validation (P13h); no new row. Driver `__text` 405,180 to 413,756 B (harness only; T5b re-measures its base). |
 | P20 | B/bud_charge.pruv,m8_test: counters/sums/bounds | P Q2+C/D, equal safe-number baseline; negative/boundary atomic refusal and charge/failure <=1.0. |
 | P21 | B/bud_tools.pruv,key helpers: stored hash/dedup | P Q2+D; dup/new/forget separately <=1.0, missing-budget dedup. Interning only as measured follow-up. |
 | P22 | B/bud_clock.pruv: runs/refresh/begin/settle/arm | P Q3+E/F, active-count functional model, R/timer cycle; do not treat I2 as an unchecked proof assumption. |
@@ -4584,9 +4586,493 @@ mutants, perf C), not by a third audit.
 | 2d7348ef | audit | Codex gpt-6.2-astra ultra | package audit |
 | ddb8e411 | audit | Codex gpt-6.2-astra ultra | confirm audit of the fixes (P25.7) |
 
+## Appendix P24 (row B/bud_halt.pruv + m10_test: synchronous halt and its effects)
+
+The commit with this appendix; base 00aa88e (main, P23); main 22332cd (P19c) merged as cb3d79c and main 06ef5a8
+(P13d, T5) merged as 59f6487 before the final gates (neither touches a `bench/l3/budget` file; T5 moves the inline
+policy into its own module in both compilers with the rule unchanged). Changed files: `bench/l3/budget/bud_halt.pruv`,
+`bench/l3/budget/m10_test/{driver_m10.rs,hand_m10.rs,mutant_halt.py,root_m10.pruv,run_m10.py}`,
+`bench/l3/budget/m7_test/bud_facts.rs` (the `running_ids` host fact), `bench/l3/budget/{M10_NOTES.md,ABI.md}`. No
+compiler file and no `bud_lifecycle.pruv` change. Raw logs: `work/p24/` (not committed).
+
+### P24.1 Change
+
+- `bud_halt::halt` asks `runningDelegationIds` itself, synchronously, after SETTLE (KD-M10-1 retired: the op no longer
+  carries a prefetched answer and the `[30]` marker is gone). Order inside one call:
+  1. record frame check (`rec_ok_in`), then `reserve(halt_words)` with `halt_words = blob_n + 8 + QUERY_ROOM`
+     (QUERY_ROOM = 256 words); a shortfall returns -N Grow with no effect and no query;
+  2. re-read the record offset and re-check its frame (`blob_n` unchanged, `rec_ok_in`), view, clock, `settle_at`
+     (may push 13 timerClear);
+  3. `running_ids` (trusted Rust host fact in `bud_facts.rs`), answer size `iw`; a malformed answer returns 2 with
+     only SETTLE's effects; an answer that does not fit fx (`fx[0] + 8 + 2D`) or the store returns 6;
+  4. the second `reserve(n + 8 + iw)` (inside QUERY_ROOM it can only rehash in place; any other result returns 6),
+     re-read and re-check the record, then `halted` writes the halted record in place and the effects 31, 32,
+     [33, i]..., 34, 35, 36, 20, 37 follow.
+- Status 6 (terminal): halt's answer does not fit fx or the store room. fx is valid on every status >= 0.
+- Every return after SETTLE goes through `fail_settled`, which first calls `keep_settled`: SETTLE's record change is
+  stored even when halt then fails (words 8 activeMs / 16 activeSince kind / 17 since from the view, and, when SETTLE
+  ended an active clock (`k0 == 1`, view kind no longer 1), the record is rewritten without the activeSince string, as
+  `root_m10::run_op` does). So on 2 / 6 the store and SETTLE's timerClear in fx agree. A failed keep returns 2.
+- Store offsets are 40-bit (`c40`): `rec_ok_in` ensures `off <= 2^40`, `halted`/`put_vec`/`copy_in` take offsets up to
+  2^40 (`copy_in` falls back to word puts above 2^32). The record copies (`copy_in`, `bud_lifecycle::copy_words`) move
+  at most 2^30 words per string, so halt returns 6 before any write when the record has more than 2^30 words (this
+  also keeps `halt_words` below 2^32, which `reserve` truncates to), 6 when `n + 8 + iw` exceeds 2^32, and 3 when the
+  view has fewer than 7 words.
+- `halted(st, base, ...)` reads the old record in place from `st` (`copy_in` block copy for the 24-word head, then
+  words 0/8/16/17, `put_key`/`put` from `st`, the id list, the tail via `copy_in`); no intermediate record copy.
+  `str_pos` walks the record's strings from `c40(base + 24)` with `bud_lifecycle::str_words`.
+- `root_m10`: the op is `[code, now, 0, what x10, flag, sessionId, budgetId, runKey]` (no answer); `run_op` reserves
+  halt's room without the id list and checks only the fixed fx part; status 6 is passed through. A run op whose SETTLE
+  ended a text activeSince rewrites the record (string 2 dropped) before a nested halt, and reserves that rewrite's
+  words with halt's room, so a nested halt that fails after its own SETTLE keeps a consistent record.
+- `bud_facts.rs::running_ids`: the host's queue head as `n, (len, words)*`; the query record keeps the answer actually
+  returned. The driver logs each query as an `rdi` event at its effect position with that answer, preceded by
+  `X armed` when the budget's timer is still armed at query time (a query before SETTLE); q fails on `X armed`.
+- `driver_m10.rs` effect 33 resolves each stopped id from the answer (id start positions built in one pass), so the
+  perf lane names every stop as the hand lane does (`black_box(id)` when silent).
+- `run_m10.py`:
+  - q compares the query itself: `runningDelegationIds` must come after SETTLE's timerClear with the ref's sessionId and
+    budgetId, and the stops must carry that answer; `halts` counts queries;
+  - `build --budlib/--out` (mutant library and its own build directory);
+  - `perf` interleaves Pruv and `hand_m10.rs` per round and D, rejects rounds/reps < 1 and fails with `HOLD` for a
+    median above 1.0x hand without overlap.
+- `driver_m10.rs`: borrows sid/bid (no per-call key clone), silent arm for the perf loop.
+- `hand_m10.rs` (new): hand Rust halt and put-back, perf lane only.
+- `mutant_halt.py` (new): control, 12 mutants and the G fixtures (G1 answer order with 2 and 0 ids, G2 malformed answer,
+  G3 answer too big for fx, G3b too big for the store room, G4 a forced Grow before the query). G2/G3/G3b check the
+  exact terminal log (`clear`, `rdi`, `X s`), that the session is not halted and that the record's words
+  (0, 8, 16, 17) equal the settled values of the control's halt (the fixture asserts SETTLE changed them). G4 fills the
+  arena so the first call returns -N with 0 queries and `st`/fx unchanged; the retry returns 0 with exactly one query.
+  `query_before_settle` must build and be killed by q with a reason naming `X armed` or `runningDelegationIds` (not
+  only by G, and not by an unrelated failure); a mutant that fails rustc counts as BROKEN.
+- The `X armed` check is replayed host-side after the call (effects up to fxn), so it checks the host-visible order of
+  the query against SETTLE's timerClear, not Pruv's in-call store write order (the host contract treats fx[1..fxn) as
+  performed when it answers).
+
+### P24.2 Gates (Rust and Python compilers, Rust backend; all rc 0)
+
+Logs `work/p24/` (`q3_*.log`, `replay3_*.log`, `same3.log`, `mutant_halt2.log`, `roots/summary3.log`, `m9/`, `m7/`),
+after the main merge 59f6487 (compilers at 06ef5a8) and the confirm-audit fixes.
+
+| gate | rs | py |
+|---|---|---|
+| 8 budget roots (m3, keys, admit, m4, m7, m8, m9, m10) | all verify | all verify |
+| M10 q cases.jsonl (Q4/Q5) | 78 exact / 222 not-implemented / 0 fail, 59 queries compared | same |
+| M10 q cases_halt.jsonl (derived cuts) | 300 / 0 / 0, 97 queries compared | same |
+| M10 replay cases / cases_halt | identical, 981 / 1687 calls, 47 / 76 grown, small grows 501/1138, 607/1950 | same |
+| M10 same | 285490 bytes identical | - |
+| mutant_halt (campaign-v1cl9leo) | control CLEAN; 12/12 KILLED: query_before_settle, no_settle, query_budget_as_session, query_session_as_budget, bad_answer_ok, bad_answer_drops_settle, big_answer_drops_settle, no_stop_loop, stop_reversed, cancel_after_stopmain, no_save, big_answer_continues | - |
+| M9 Q3 / clock / E/F | 26/274/0, 136/164/0, 15/5/0 | same |
+| M9 Q4 / Q4 clock / stale | 0/300/0, 293/7/0, 300/0/0 | same |
+| M9 dc | 313/313 ok | same |
+| M7 q | 113/187/0 | same |
+
+- The query trace is the actual one: the driver logs the answer `running_ids` returned, at the effect count of the
+  call, and `X armed` if the timer was still armed. The query-before-SETTLE mutant moves `running_ids` above
+  `settle_at`; it verifies and builds, and q kills it (`X armed` at Q4-20261117-32 r10, and the query precedes
+  timerClear); cases_halt and G fail on it too.
+- `bad_answer_drops_settle` / `big_answer_drops_settle` return 2 / 6 without `keep_settled`; G2 / G3b kill them on the
+  record words. Most other mutants die in q; G kills `bad_answer_ok` (G2) and `big_answer_continues` (G3/G3b).
+- The two Grow fixtures in q print `queries 0 then 1`.
+- M7 life and diff_hand were not rerun: `work/m7/cases_life.jsonl` is not in this worktree. P24 does not change
+  `bud_lifecycle.pruv`; the m7 root verifies on both compilers.
+
+### P24.3 Time (Rust backend, ns, 7 interleaved rounds Pruv/hand, 50,000 reps)
+
+`run_m10.py perf --rounds 7 --reps 50000`, log `work/p24/perf_s6.log` (final tree: confirm-audit fixes, main merged). Base (00aa88e) has no
+hand lane and a different op (prefetched answer), so there is no base column. Overlap compares the min-max ranges.
+
+| cell | Pruv | hand | Pruv/hand median | Pruv min-max | hand min-max | overlap |
+|---|---:|---:|---:|---|---|---|
+| halt D = 10 | 319.8 | 332.5 | 0.96 | 311.1-589.5 | 331.4-677.9 | yes |
+| halt D = 50 | 682.3 | 1129.9 | 0.60 | 674.8-804.0 | 1091.1-1250.0 | no (Pruv faster) |
+| halt D = 100 | 1035.7 | 2118.5 | 0.49 | 1026.9-1248.9 | 2067.2-2312.8 | no (Pruv faster) |
+| putback D = 10 | 29.2 | 78.6 | 0.37 | 28.7-40.9 | 73.9-79.9 | no (Pruv faster) |
+| putback D = 50 | 29.1 | 73.4 | 0.40 | 28.8-29.5 | 71.9-76.2 | no (Pruv faster) |
+| putback D = 100 | 28.8 | 73.2 | 0.39 | 28.7-29.3 | 72.4-77.2 | no (Pruv faster) |
+
+- Cost bound per flow:
+  - halt: CURRENT + SETTLE + O(record words + D + id words). Two reserves (the second rehashes in place at most), one
+    in-place record write, 2D + 8 effect words. A failure after SETTLE adds one record rewrite (`keep_settled`).
+  - putback: O(record words), flat in D.
+- Measured halt slope about 7 ns per id (682 -> 1036 over 50 ids). The driver now names each stopped id (effect 33)
+  as the hand lane does, so D = 50/100 are slower than `perf_s4` (546 / 796): `perf_s4` timed a driver that skipped
+  that work.
+- D = 10 history:
+  - 1.88x (`perf_s1`, record copied through a scratch vec);
+  - 1.73x (`perf_s2`, `copy_in` block copy);
+  - 1.13x (`perf_s3`, driver borrows sid/bid and arms silently, as the hand lane);
+  - 0.97 (`perf_s4`, record read in place from `st`);
+  - 0.95 (`perf_s5`, after the audit fixes);
+  - 0.96 (`perf_s6`, after the confirm-audit fixes and the main merge; the added `n > 2^30` compare and the run_op
+    reorder are outside the timed halt path's loops).
+- Profiles of s2/s3 picked each step.
+
+### P24.4 Hand vs generated
+
+- halt at D = 10 is within noise of hand Rust (the ranges overlap).
+- At D = 50/100 Pruv is about 1.6-2x faster:
+  - Hand Rust gets the host answer as D owned `String` ids and pushes each into the stopped list and the effects.
+  - Pruv writes the answer's packed words once into the flat store and the fx frame.
+- Answer preparation differs:
+  - The hand lane's per-rep `host.answer = ids.clone()` clones D `String`s. This is the host side of the query, as
+    `running_ids` is for Pruv, and it is counted in the hand time.
+  - Pruv's host moves a prebuilt word vector out and back.
+- putback:
+  - Hand Rust clones the open `Budget` struct (its `String` fields) back into the map.
+  - Pruv puts the open record back into the flat store without allocating.
+
+### P24.5 RSS and allocations
+
+- Allocations per repetition (counting `GlobalAlloc`; 40,000 reps minus 20,000 reps; `work/p24/mem/allocs2.log`,
+  rebuilt with the fixed driver after the package audit; not re-measured after the confirm-audit fixes, which add one
+  compare in halt and no allocation):
+  - Pruv: 4 at D = 10/50/100;
+  - hand: 17 / 57 / 107 (the D id clones of the host answer are part of the hand lane).
+- Peak RSS KiB (50,000 reps, 3 runs, `work/p24/mem/rss2.log`), about 1.09-1.12x hand (the P13d/P13e range, queued):
+
+  | D | Pruv | hand |
+  |---|---|---|
+  | 10 | 1840-1856 | 1680 |
+  | 50 | 1856 | 1696 |
+  | 100 | 1872-1888 | 1680-1696 |
+
+### P24.6 Proof time (real s, root_m10, median of 3)
+
+| tree | rs | py |
+|---|---|---|
+| base 22332cd | 8.33 | 14.94 |
+| P24 (with the audit fixes) | 8.47 | 15.92 |
+
+- Logs: `work/p24/proof_time.log` and `proof_time2.log` (load average about 4-7).
+- The added time comes from the new `halted`/`str_pos`/`keep_settled` frame obligations and the two reserve re-checks.
+- All 8 roots on both compilers (parallel 4): 0.8-15.3 s rs, 1.2-23.5 s py (`work/p24/roots/summary.log`).
+- Final tree, sequential single runs (`work/p24/roots/summary3.log`): root_m10 8.5 s rs, 15.3 s py; all 8 roots
+  0.4-8.5 s rs, 0.7-15.3 s py.
+
+### P24.6a Audit
+
+Package audit 282acd5d (5 must-fix) and confirm audit c5e89999 (4 must-fix, one judged should-fix). No further audit.
+
+| audit | finding | resolution |
+|---|---|---|
+| 282acd5d MF1 | a halt failing after SETTLE (2 / 6) lost SETTLE's record change while fx kept its timerClear | `keep_settled` / `fail_settled` on every return after SETTLE; G2/G3b check the record words; 2 mutants |
+| 282acd5d MF2 | 32-bit truncation of store offsets and of `reserve`'s argument | `c40` offsets, 2^32 bounds return 6, view length check returns 3 |
+| 282acd5d MF3 | the query trace used the queued answer, not the one returned; no query-time evidence | the driver logs the actual answer and `X armed`; q checks both |
+| 282acd5d MF4 | mutant gates weak (query_before_settle not required to die in q) | MUST_BUILD + q requirement, 12 mutants, G fixtures |
+| 282acd5d MF5 | the perf driver did not name stopped ids, so Pruv timed less work than hand | effect 33 resolves each id (`perf_s5`) |
+| c5e89999 MF1 | a nested halt in a run op saw `k0 = 0` and did not drop string 2 when it failed | `run_op` rewrites the record before the nested halt and reserves those words |
+| c5e89999 MF2 | record copies clamp at 2^30 words per string | halt returns 6 for a record above 2^30 words, before any write |
+| c5e89999 MF3 | `X armed` is replayed after the call, not query-time evidence of Pruv's store order | should-fix: the in-call write order is not host-observable; comment and docs say host-visible order |
+| c5e89999 MF4 | MUST_BUILD accepted any q failure | the q failure reason must name `X armed` or `runningDelegationIds` |
+
+Should-fix, not changed:
+- `bud_halt.pruv` `halted` path: view word 1 is set before the store and a store failure returns its status without
+  `fail_settled`; the auditor found no reachable path (the store room is reserved before).
+- G2/G3 compare the `clear` / `rdi` lines by prefix.
+- No G fixture for the nested-halt case (no corpus run op halts a text activeSince); the reorder in `run_op` covers it
+  by construction.
+
+### P24.7 Queued rows
+
+- In-call store growth for halt: an answer above QUERY_ROOM plus the free words of an in-place rehash returns 6 instead
+  of growing (ABI.md, M10 halt host protocol).
+- RSS 1.09-1.12x hand: P13d/P13e.
+- `bud_lifecycle.pruv` settle_at/drop_at fx-room requires (not touched in P24).
+- A hand Rust Q lane for M10 (hand_m10.rs is a perf lane only, as in M10a).
+- Mutant campaign directory cleanup under `work/m10`.
+- `root_m10::run_op`'s own record rewrite has the same 2^30-words-per-string copy limit (pre-existing, not in this row).
+
+### P24.8 Delegation
+
+| id | mode | engine / model | use |
+|---|---|---|---|
+| 1961cfdf | research | Codex gpt-6.2-astra | M10a halt state, host query order in B, gate plan |
+| 282acd5d | audit | Codex gpt-6.2-astra ultra | package audit |
+| c5e89999 | confirm | Codex gpt-6.2-astra ultra | confirm audit |
+
+## Appendix T5a (M7 lookup and lifecycle gap without code growth)
+
+Result: no change ships. Every product fix found within the package lowers instructions only by adding `__text`
+above the T5 base (405,180 B), which row T5a forbids. The generated Rust, the binaries, `__text` and peak RSS stay as
+in T5. The remaining gap is split by line below and queued (T5a.5).
+
+### T5a.1 Method
+
+- Instructions per op are `(I(5R) - I(R)) / 4R`, with S = 100, R = 20000, median of 3, from `/usr/bin/time -l`.
+  Load average was 4-10, so instructions lead; cycles were read as a cross-check only.
+- The Pruv lane is the driver's typed lane (`driver_m7.rs` `perf`), filtered to one item. hand16 is
+  `hand_m7_u16 perf 100 R ITEM typed`.
+- Variants were built from the shipped M7 output (`work/t5a/m7.base.rs`, identical to the T5 base) by editing the
+  generated Rust. `__text` is from `size -m` on the work build (base 406,268 B there; same flags for every variant).
+
+### T5a.2 Cells and harness floor
+
+The raw typed-lane cells are not a like-for-like comparison:
+- the hand16 timed loop is a bare method call (`black_box(w.current(..))` for current);
+- the Pruv typed loop goes through a `step` closure that rustc does not inline (its own symbol with a 6 register-pair
+  prologue), a match on the prep code, `w.fx[0] = 0`, the 2^40 length guards of the `c_*` entries and an `out[0]`
+  read.
+
+The Pruv floor was measured with the `c_*` bodies emptied (`m7.emptyall.rs`; `c_replace` is kept, it is not a
+target cell). The hand floor was measured only for current (`hand_empty.rs`, current returns `None`). The hand
+attach and reopenmiss loops also run `fx.clear()`, and closereopen makes two calls per iteration
+(`hand_m7_u16.rs` perf loops), so the hand floor of the other cells is not measured and no floor-subtracted gap is
+claimed for them.
+
+| cell | base | hand16 | raw ratio | Pruv floor (bodies empty) | hand floor |
+|---|---:|---:|---:|---:|---:|
+| isHalted | 405 | 339 | 1.19 | 66 | not measured |
+| current | 403 | 335 | 1.20 | 73 | ~19 |
+| attach | 457 | 319 | 1.43 | 92 | not measured |
+| reopenmiss | 456 | 339 | 1.35 | 80 | not measured |
+| closereopen (pair) | 1151 | 889 | 1.29 | 128 | not measured |
+
+- For current, floor-subtracted work is about 330 (Pruv) against about 316 (hand): +14, about 1.04x.
+- If the current hand floor of about 19 per call held for the pair, closereopen would be about 1023 against 851
+  (+172). That is an estimate, not a measurement.
+- The step closure alone: with the current body emptied in both, the Pruv floor is 73 with the closure lane and 50
+  with an inline loop (`T5A_INL`; the `emptyI` build empties only current). With the shipped body and the inline loop,
+  current goes from 407 to 372. Neither changes product code.
+
+### T5a.3 Experiments (product code)
+
+rsplita and mc were measured in the same run as base, so their delta uses that run's base.
+
+| variant | change | same-run base | variant | delta | `__text` B | verdict |
+|---|---|---|---|---|---:|---|
+| rsplit | reopen slow tail (session_of, blob_copy, rewrite, reserve, store) moved to `#[cold] #[inline(never)] reopen_slow`, reopen stays `#[inline]` | reopenmiss 456, closereopen 1151 (T5a.2 table, not same run) | 461, 1157 | +5, +6 | not measured | worse |
+| rsplita | rsplit plus reopen `#[inline(always)]` | reopenmiss 452, closereopen 1146 | 420, 1111 | -32, -35 | 417,212 (+10.9 KB) | not shippable (text rule); not expressible today (T5a.4) |
+| mc | maybe_close: `eb` plus one span check, then direct state read and in-place header writes; old path kept as the fallback for buffers outside the premise | closereopen 1149 | 1140 | -9 | 408,508 (+2.2 KB) | gain under 1 %, text grows; not shipped |
+
+- Work build base `__text` is 406,268 B.
+- current under rsplita was read as unchanged. current under rsplit, and every cell under mc other than
+  closereopen, were not measured.
+- `str_pos_in` is still in mc.
+
+Removing the fallback in `mc` would cut text. But for an entry whose record span is not in `st`, maybe_close today
+still reads the record through total accessors. A `found_at` style check returns -2 there, and maybe_close would
+then answer "not open". That is a behaviour change outside the T5a scope, so it was not taken.
+
+### T5a.4 Line-level reasons for each remaining cell
+
+- **current, isHalted** (current +14 after the floor; isHalted's hand floor not measured):
+  - Generated: find_w → `gf(owner, 3)`, `hash_words`, `find_h_w`.
+  - Generated: on each tag-matching probe, `entry_matches_w` re-reads `st[5]`/`st[6]` through `field_addr → ea`, with
+    clamps.
+  - Generated: found_at does one `eb`, one span check, the `id_at` memcmp and the state check.
+  - Hand: one SipHash `HashMap::get` and a `Box<[u16]>` compare.
+  - Why Pruv cannot emit it: the per-probe re-validation is the total accessor on an unproved buffer. A caller-proved
+    base would remove it, which is the P13h call-site specialization. Inlining find_w is ruled out by T5.2
+    (+29.7 KB).
+- **reopenmiss**:
+  - reopen is `#[inline]` and out of line, and its single body holds the slow path (blob_copy Vec, rewrite, store).
+  - The miss path therefore pays the slow path's frame: `sub sp, sp, #0x160` (352 B) in this build, with saved
+    registers (P18.4 measured 320 B).
+  - The split that removes this (rsplita) needs a cold, never-inlined tail. Pruv source has no cold or no-inline
+    marker, and the inline policy folds a single-caller fn back into its caller (P18.4), so neither compiler can emit
+    it. Even then it costs +10.9 KB of text.
+  - The miss share without the frame is not separated.
+- **closereopen**:
+  - The reopen share is as above.
+  - Per pair, find_w runs twice: maybe_close's `session_of`, and reopen's `current_at`. `clock_in` answers -1 on the
+    empty clock map without hashing.
+  - maybe_close re-validates the entry with total accessors: `entry_addr`, `at_off`/`at_n`, `state_of`,
+    `str_pos_in`, and an `ent_u16::wr` per in-place header write. Proving the entry and header part away measured -9
+    (mc).
+  - Hand also calls `is_quiet` and records `Changed` on both calls, so those are not a Pruv-only cost.
+  - The cause of the rest of the pair gap is not determined by these experiments. A per-function attribution is
+    queued with T5b.
+- **attach**:
+  - On an open budget, Pruv copies the stored budget id into `out` (`put_key`, `bud_lifecycle.pruv` attach ref path).
+    Hand returns a reference to the stored id (`Res::Ref(&b.id, ..)`).
+  - Pruv also re-validates the entry (eb, span check, id length inside the record).
+  - The copy follows from the `out` buffer result ABI, not the entry layout. It belongs with P18b's result-path
+    question, not P13e.
+  - Inlining is ruled out: T5.2's `fa` variant (find_w + attach inlined together) gives -13 % for +40 % text.
+
+### T5a.5 Queued rows
+
+- T5b (new): a cold-tail rule in both codegens, for example an attribute or a proof-free rule on a branch that ends in
+  an `! alloc` call chain, chosen so the M4 put path is not marked cold. Target: reopenmiss and closereopen, with
+  `__text` not above the T5 base. rsplita is the upper bound it must beat in text.
+- T5c (new): M7 typed-lane harness parity in `driver_m7.rs`. The timed loop calls the `c_*` entry the way hand16 calls
+  its method (no non-inlined step closure, no prep match per op), and is reported next to the current lane. This is
+  measurement only; it moves no product number.
+- P13h keeps the find_w probe re-validation. P18b keeps the result path, including the attach id copy into `out` (T5a.4).
+
+### T5a.6 Gates, audit and delegation
+
+- No product file changed: the generated output is identical to T5, so `tests/g8/compatibility.json`, the budget roots
+  and the M4 cells are as at T5 and were not re-run.
+- `work/t5a/` holds the variants, `mk.py`, `instr.py` and `diag.md`; it is not committed.
+- Step 1 went over its 1-hour cap. The package was split as row T5a.5 says, rather than shipping a text-growing
+  change.
+- Audit (Codex gpt-6.2-astra, ultra, review): it found that the no-ship verdict holds. It made four required findings,
+  all fixed above:
+  1. The harness floor was stated per cell, but it was measured only for current.
+  2. The deltas mixed bases.
+  3. The reopen frame is 352 B in this build; closereopen runs find_w twice per pair, and hand also calls is_quiet and
+     logs `Changed`.
+  4. attach copies the stored id into `out`; it is not a key copy into the record.
+- One optional finding is left unmeasured: reopen's slow path could reuse the already validated `off`/`n` instead of a
+  second `session_of` and state re-check. It is folded into T5b.
+
+| work | to | mode |
+|---|---|---|
+| package audit | Codex gpt-6.2-astra ultra | review |
+
+Diagnosis, the variants, the measurements and this appendix were done directly.
+
+## Appendix T5c (M7 typed-lane harness parity and floors)
+
+Result: with a typed lane shaped like hand16's typed loop, isHalted is below hand16 at S and M (0.98-0.99x
+instructions, no overlap). current is 1.02x. attach (1.29-1.30x), closereopen (1.18x) and reopenmiss (1.15-1.16x)
+stay above 1.0x. Each remaining gap is split by line below and points to T5b, P13h or P18b; no new row. Measurement
+only: no `.pruv` file or compiler changed, the generated Rust is as at T5a (rs and py output byte-identical), and the
+existing typed lane is unchanged.
+
+### T5c.1 Lanes and floors
+
+- **Existing typed lane (`t`, `rchk_t`, unchanged):** the `step` closure (not inlined), the `c_direct` match on the prep
+  code, `w.fx[0] = 0` per op, the Grow fallback. Its closure's disassembly is identical to the T5a driver on the same
+  `gen.rs` (same symbol, same address, md5 of the address-stripped listing equal).
+- **Fair typed lane (`f`, `rchk_f`, new, `driver_m7.rs` `fair_loop`):** the match on the item is outside the loop; the
+  loop calls `fair_one::<C>` (`#[inline(always)]`, const-generic code), which calls the `c_*` entry directly and then
+  `black_box((r, w.out[0]))`, the same observation as the existing lane.
+  - fx is reset only where hand16 clears fx: attach, reopen and maybe_close (hand `fx.clear()`); current and
+    isHalted reset nothing, as hand16 does not.
+  - No Grow fallback: none of the five cells grows a buffer, and `fair_rchk` asserts `r >= 0` for every op.
+  - Arguments are the same pre-decoded words as the existing lane (`FArgs` from `Prep`), read through `black_box`,
+    as hand16 reads its keys through `black_box`.
+  - closereopen runs maybe_close then reopen per rep (2 calls), as hand16 does.
+- `driver_m7 perf S reps <item> <t|f>` runs one lane of one item (setup, warm-up 1000, timed loop, `rchk_*` pass);
+  `run_m7.py perf` parses `f` / `rchk_f` as lane `pruv_f` and adds the fair columns and their instructions.
+- **Floors (`t5c_floor.py`):**
+  - Pruv: the shipped `gen.rs` with the five typed `c_*` bodies (current, is_halted, attach, reopen, maybe_close)
+    replaced by `out[0]=0; return 0;`, as T5a's `m7.emptyall.rs`. The entry length guards stay. `c_replace` and the
+    wire path are kept, so setup is unchanged.
+  - hand16: `hand_m7_u16.rs` built with `--cfg t5c_empty`; current, is_halted, attach, reopen and maybe_close return
+    at once. The default build is unchanged: its `__text` is 311,484 B before and after, and the otool listing md5 is
+    equal. The floor build is 304,380 B.
+- Driver `__text` (rs output, this flags set): 405,180 B before, 413,756 B with the fair lane. The growth is the
+  harness binary only, but row T5a's text rule reads this binary, so T5b and later rows must re-measure their base on
+  this driver (or on the old driver) and compare like with like.
+
+### T5c.2 Method
+
+- Instructions and cycles per call are `(X(5R) - X(R)) / (4R x calls)` from `/usr/bin/time -l`, R = 20,000, with
+  calls = 2 for closereopen. Setup, warm-up and the rchk pass (min(R, 2000) ops) are equal in both runs and cancel.
+- 5 interleaved rounds: each round runs every (size, cell, lane) once, and the lane order rotates per round. Six
+  lanes: Pruv t, Pruv f, hand16, and the three floors (t0, f0, hand0). Sizes S = 100 and M = 500.
+- Load was high, so instructions lead; cycles are reported, but their ranges overlap in most cells.
+- Ratios use medians: raw = t / hand, fair = f / hand, floor-subtracted = (f - f0) / (hand - hand0).
+- Overlap is whether the [min, max] ranges of f and hand intersect over the 5 rounds.
+- rchk_f equals rchk and rchk_t for every cell, on the rs-built and the py-built driver.
+
+### T5c.3 Instructions per call (median of 5; f and hand ranges in brackets)
+
+| cell | S | hand16 | Pruv t (raw) | raw | Pruv f (fair) | fair | t0 | f0 | hand0 | floor-sub | f vs hand overlap |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| isHalted | 100 | 340.7 [338.9..402.8] | 404.1 | 1.19 | 335.9 [335.6..336.1] | 0.99 | 79.2 | 12.0 | 6.5 | 0.97 | no (f below) |
+| current | 100 | 335.5 [334.3..382.6] | 404.8 | 1.21 | 341.7 [341.1..355.6] | 1.02 | 76.4 | 12.6 | 7.7 | 1.00 | yes |
+| attach | 100 | 301.5 [292.3..338.0] | 453.0 | 1.50 | 392.7 [391.2..394.6] | 1.30 | 86.8 | 14.8 | 4.9 | 1.27 | no |
+| closereopen | 100 | 445.3 [441.9..472.8] | 574.0 | 1.29 | 523.4 [523.0..523.7] | 1.18 | 63.0 | 10.8 | 4.5 | 1.16 | no |
+| reopenmiss | 100 | 337.0 [324.5..353.5] | 456.2 | 1.35 | 389.6 [389.2..390.8] | 1.16 | 80.8 | 12.9 | 6.4 | 1.14 | no |
+| isHalted | 500 | 340.3 [337.5..340.8] | 402.7 | 1.18 | 334.6 [333.3..336.0] | 0.98 | 77.8 | 11.6 | 5.0 | 0.96 | no (f below) |
+| current | 500 | 333.7 [332.4..336.3] | 404.6 | 1.21 | 340.7 [339.1..343.3] | 1.02 | 78.3 | 13.1 | 8.2 | 1.01 | no |
+| attach | 500 | 303.7 [300.4..305.6] | 455.0 | 1.50 | 391.2 [371.4..393.8] | 1.29 | 86.4 | 15.7 | 3.6 | 1.25 | no |
+| closereopen | 500 | 444.7 [443.6..445.1] | 573.6 | 1.29 | 523.3 [522.3..524.5] | 1.18 | 63.0 | 10.9 | 4.6 | 1.16 | no |
+| reopenmiss | 500 | 337.9 [336.1..401.5] | 456.2 | 1.35 | 388.9 [388.5..390.6] | 1.15 | 80.2 | 10.7 | 7.9 | 1.15 | yes |
+
+- The two overlaps (current S, reopenmiss M) come from one high hand16 round each. In both cells the f median is
+  above the hand median, and at the other size the ranges do not overlap. They are not read as at or below 1.0x.
+- The harness shape accounts for the raw-vs-fair difference: t0 - f0 is 64-72 per call (52 for closereopen), close to
+  t - f (60-68; 50-51 for closereopen).
+- T5a's closure-lane floor (66-92) and its "current hand floor ~19" are replaced by these floors.
+- hand16 attach is 301-304 here against 319 in T5a (same binary text). The T5a run was median of 3 under a different
+  load and is not reused.
+
+Cycles per call (median of 5; noisy, ranges overlap in most cells):
+
+| cell | S | hand16 | Pruv t | Pruv f | fair | floor-sub | f vs hand overlap |
+|---|---:|---:|---:|---:|---:|---:|---|
+| isHalted | 100 | 57.2 | 51.9 | 39.1 | 0.68 | 0.64 | yes |
+| current | 100 | 56.0 | 49.8 | 41.5 | 0.74 | 0.70 | yes |
+| attach | 100 | 47.0 | 48.3 | 50.0 | 1.06 | 1.12 | yes |
+| closereopen | 100 | 71.6 | 69.7 | 59.8 | 0.84 | 0.81 | yes |
+| reopenmiss | 100 | 48.4 | 50.3 | 44.0 | 0.91 | 0.98 | yes |
+| isHalted | 500 | 49.8 | 46.2 | 36.5 | 0.73 | 0.45 | no (f below) |
+| current | 500 | 50.4 | 45.6 | 36.6 | 0.73 | 0.68 | no (f below) |
+| attach | 500 | 53.2 | 53.3 | 41.9 | 0.79 | 0.55 | yes |
+| closereopen | 500 | 74.2 | 67.7 | 60.7 | 0.82 | 0.80 | no (f below) |
+| reopenmiss | 500 | 59.0 | 56.4 | 44.3 | 0.75 | 0.72 | yes |
+
+- Cycles are at or below hand16 at the median in every cell except attach S (1.06, overlapping).
+- Instructions stay the primary measure. The cycle lead is not claimed as a time win under this load: only isHalted,
+  current and closereopen at M are separated.
+
+**Peak memory footprint (whole process, 5R run, median):**
+- Pruv: about 1.98-2.03 MB at S and 3.82-3.88 MB at M. hand16: 1.66-1.69 MB at S and 3.20-3.23 MB at M.
+- The floors show the same gap (f0 2.02 / 3.82-3.83 MB, hand0 1.64-1.67 / 3.20-3.21 MB). So the gap is in setup,
+  state and harness, not in the lane shape or the cell bodies.
+- It is not attributed here. The M7 peak RSS question stays in P18b.
+
+### T5c.4 Remaining gap per cell, by line (fair lane, instructions per call, S / M)
+
+- **The entry floor, f0 - hand0 = +3 to +12. Points to P18b.**
+  - In `drv0`'s `fair_loop`, the current loop is 12 instructions per call:
+    - 5 for the `black_box` reload of the two key slices (hand also reads its keys through `black_box`);
+    - 3 for the entry's 2^40 length guards (`cmp`, `ccmp`, `b.hi`);
+    - 1 for the result store into `out`;
+    - 1 for the result `black_box`;
+    - 2 for the loop.
+  - hand0's loop is a bare inlined call: 7.7 / 8.2.
+  - The guards and the `out` store are the host shim/ABI result path, so they belong to P18b.
+  - attach, reopen and maybe_close add the `w.fx[0] = 0` store; hand's `fx.clear()` is a length store.
+- **isHalted:** -4.8 / -5.7. At or below 1.0x at S and M, with no overlap. No remaining gap.
+- **current:** +6.2 / +7.0.
+  - The entry floor is +4.9 / +4.9 (P18b).
+  - The body after the floor is +1.3 / +2.1: the find_w probe re-validation (`entry_matches_w` through `field_addr → ea`),
+    which is P13h per T5a.4.
+- **reopenmiss:** +52.6 / +51.0.
+  - Floor +6.5 / +2.8 (P18b).
+  - Body +46 / +48: the reopen slow-path frame (`sub sp, sp, #0x160`) that the miss path pays, which is T5b; rsplita
+    measured -32 against its same-run base in T5a.3.
+  - The rest (about 15) is the find_w probe and entry re-validation, P13h. It is not separated here.
+- **closereopen (per call; the pair is double):** +78.1 / +78.6.
+  - Floor +6.3 / +6.3 (P18b).
+  - Body per pair about +144 / +145:
+    - the reopen tail (T5b; rsplita -35 per pair);
+    - maybe_close's entry and header re-validation (P13h; mc -9 per pair);
+    - find_w twice per pair (P13h).
+  - About 100 per pair stays unattributed. T5b already carries the per-function attribution of the pair.
+- **attach:** +91.2 / +87.5.
+  - Floor +9.9 / +12.1 (P18b).
+  - Body +81 / +75: the stored budget id copied into `out` by `put_key`, where hand returns `Res::Ref` (P18b), plus
+    entry re-validation and the find_w probe (P13h).
+  - The split between the two is not measured here.
+
+Every remaining cause is one already named in T5a.4, so no new row is opened.
+
+### T5c.5 Gates and delegation
+
+- `run_m7.py q` (rs) and `run_m7.py q --py`: 300 cases, exact 113, not-implemented 187, fail 0, on both. The driver
+  with the fair lane builds on both outputs (identical `gen.rs`).
+- `tests/` is unchanged, so `run_all.py --list-rows` was not re-run. No audit: this is a measurement-only harness change,
+  and product meaning is unchanged.
+- `work/m7/t5c/` holds the floor binaries and `floor.json`; it is not committed.
+
+| work | to | mode |
+|---|---|---|
+| `run_m7.py` fair-lane parsing, rchk check, instr and columns | Claude sonnet | write |
+
+The lane design, the driver and hand floor edits, `t5c_floor.py`, the measurements and this appendix were done directly.
+
 ## Appendix P26 (row Same+m11_test: resident setCard/hasCard)
 
-The commit with this appendix; base 03cda63 (main, P25). Changed files: `bench/l3/budget/bud_card.pruv` and
+The commit with this appendix; base 03cda63 (main, P25); main a6fb98e (T5a-T5c, P24 fixes) merged before the
+final gates (P26.5). Changed files: `bench/l3/budget/bud_card.pruv` and
 `bench/l3/budget/m11_test/{root.pruv,hand.rs,harness.rs,run_m11.py}`. No compiler file, `bud_map`, `bud_lifecycle`,
 `bud_halt`, `m7_test` or `m10_test` change. Raw logs: `work/p26/` (not committed).
 

@@ -96,3 +96,25 @@ The host answers 0 (false) or 1 (true). Any other answer returns status 2 withou
 state, effects, or the result. The drivers log each query as
 `E quiet <answer> <kn> <packed words...> @<fxn>`, where `fxn` counts effects at query time
 and is 0 for `maybeClose`.
+
+## M10 halt host protocol (`m10_test/root_m10.pruv`, `bud_halt.pruv`; P24)
+
+The M7 key and record rows above apply. The halt call adds its own query, effects and statuses:
+
+| row | words |
+|---|---|
+| query | `running_ids(k, ks, kn, bk, bs, bn, fxn)`: runningDelegationIds(ref), asked by halt after SETTLE; ref = sessionId key `k[ks..]` (kn units) and budgetId key `bk[bs..]` (bn units); `fxn` = the number of effect words recorded so far (`fx[0]`; a real host ignores it, the test host logs it) |
+| answer | `[0, n, (len, words(len) packed words)*]`, ids as packed key words; anything else (status not 0, a non-canonical key, words left over) makes halt return 2 |
+| fx | SETTLE's 13 timerClear (if any), then halt's 31 cancelRecovery, 32 stopMain, `[33, i]` stopDelegation of answer id i, 34 stopAttachedTurns, 35 holdQueued, 36 save, 20 changed, 37 announce |
+| status | 0 done, 2 invalid, 3 fx too small for the fixed part or a short view (nothing written), 6 the answer does not fit fx or the store room, a size above 2^32 words, or a record above 2^30 words (refused before any write) (terminal), -N Grow (grow to N words, call again) |
+
+- When the host answers the query, it treats `fx[1..fxn)` as already performed (SETTLE's timerClear comes before the
+  query).
+- fx is valid on every status >= 0. On 2 or 6 after SETTLE, fx holds SETTLE's effects (a timerClear) and the store
+  holds SETTLE's record change (activeMs, activeSince dropped); the host applies the effects as on status 0.
+- A Grow (-N) carries no effects and writes nothing; the host grows `st` and calls again. The query is asked only on
+  the call that gets past the first reserve.
+- Status 6 is terminal: the query was observed, so the call cannot Grow and retry. Its store bound is QUERY_ROOM
+  (256 words) reserved before the query, plus any free words already in the arena that the second reserve's in-place
+  rehash recovers. In-call growth is queued (Appendix P24).
+- M7's isQuiet used a prefetched answer before P24's form; it was already moved to the synchronous form (`is_quiet`).

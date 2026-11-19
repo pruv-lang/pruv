@@ -7,6 +7,9 @@
 //                        verification pass (fresh identical setup, same ops, V = min(reps, 2000) iterations) and prints
 //                        `rchk <item> <size> <value>`: s = s*31 + w over every op's status, effect words and result
 //                        words (see rchk_fold). hand_m7_u16 perf prints the same encoding; run_m7.py compares them.
+//                        Lanes per item: wire (`<item>`), typed (`t`, `rchk_t`) and, for ishalted, current, attach,
+//                        closereopen and reopenmiss, the fair typed lane (`f`, `rchk_f`, T5c; see fair_loop).
+//   driver_m7 perf <S> <reps> <item> <t|f>   only that lane of that item (instruction counts, t5c_floor.py)
 //
 // Boundary rule: the host owns the state buffer and the scratch frames and supplies the inputs of a call (now, the
 // next randomUUID value); it never reads state words and decides nothing. It reads the result
@@ -509,6 +512,52 @@ fn run_perf(args: &[String]) {
         }
         println!("rchk_t {} {} {}", name, size, s);
     };
+    // Fair typed lane (T5c): the same c_* calls, shaped like hand16's typed loop. See fair_loop. Prints
+    // `f <item> <size> <ns>` and, from an untimed fresh run of vn iterations through the same call, `rchk_f ..`.
+    // `fair` is called right after `typed` for each item; the existing typed lane above is unchanged.
+    let fair = |name: &str, bodies: &[Vec<i64>], per: usize| {
+        let mk = || -> (World, Vec<Prep>) {
+            let mut w = setup(0);
+            let ps: Vec<Prep> = bodies.iter().map(|b| prep_of(&mut w, b)).collect();
+            (w, ps)
+        };
+        let (mut w, ps) = mk();
+        let fa: Vec<FArgs> = ps.iter().map(FArgs::of).collect();
+        fair_loop(name, &mut w, &fa, 1000);
+        let t = Instant::now();
+        fair_loop(name, &mut w, &fa, reps);
+        println!("f {} {} {:.1}", name, size, t.elapsed().as_nanos() as f64 / (reps * per) as f64);
+        let (mut w, ps) = mk();
+        let fa: Vec<FArgs> = ps.iter().map(FArgs::of).collect();
+        println!("rchk_f {} {} {}", name, size, fair_rchk(name, &mut w, &fa, vn));
+    };
+    // `perf S reps ITEM LANE` (LANE t or f; T5c instruction counts): only that lane of ITEM runs, through the same
+    // `typed` / `fair` closure as the full run (warm-up, timed loop, then its rchk pass of min(reps, 2000)
+    // iterations, which cancels in (I(5R) - I(R)) for R >= 2000). No other item and no wire lane run.
+    if let (Some(item), Some(lane)) = (args.get(2), args.get(3)) {
+        let code = |c: i64, b: &str| body(c, -1, -1, b);
+        let lb = bid(last);
+        let (ops, per) = match item.as_str() {
+            "ishalted" => (vec![code(2, &lb)], 1),
+            "current" => (vec![code(1, &lb)], 1),
+            "attach" => (vec![body(3, 0, -1, "")], 1),
+            "closereopen" => (vec![code(6, ""), code(5, &lb)], 2),
+            "reopenmiss" => (vec![code(5, &lb)], 1),
+            _ => {
+                eprintln!("perf: item must be ishalted|current|attach|closereopen|reopenmiss, got {}", item);
+                std::process::exit(2);
+            }
+        };
+        match lane.as_str() {
+            "t" => typed(item, 0, &ops, per, None),
+            "f" => fair(item, &ops, per),
+            _ => {
+                eprintln!("perf: lane must be t|f, got {}", lane);
+                std::process::exit(2);
+            }
+        }
+        return;
+    }
     let mut w = setup(0);
     let ops = vec![body(0, -1, -1, &bid(last))];
     println!("dispatch {} {:.1}", size, time(&mut w, &ops, 1));
@@ -540,18 +589,21 @@ fn run_perf(args: &[String]) {
     println!("ishalted {} {:.1}", size, time(&mut w, &ops, 1));
     println!("rchk ishalted {} {}", size, verify(&mut setup(0), &ops));
     typed("ishalted", 0, &ops, 1, None);
+    fair("ishalted", &ops, 1);
     // current
     let mut w = setup(0);
     let ops = vec![body(1, -1, -1, &bid(last))];
     println!("current {} {:.1}", size, time(&mut w, &ops, 1));
     println!("rchk current {} {}", size, verify(&mut setup(0), &ops));
     typed("current", 0, &ops, 1, None);
+    fair("current", &ops, 1);
     // attach (open budget: ref)
     let mut w = setup(0);
     let ops = vec![body(3, 0, -1, "")];
     println!("attach {} {:.1}", size, time(&mut w, &ops, 1));
     println!("rchk attach {} {}", size, verify(&mut setup(0), &ops));
     typed("attach", 0, &ops, 1, None);
+    fair("attach", &ops, 1);
     let close: Vec<_> = sids.iter().map(|sid| {
         let mut v = vec![6, -1, -1];
         v.extend(unit);
@@ -603,12 +655,14 @@ fn run_perf(args: &[String]) {
     println!("closereopen {} {:.1}", size, time(&mut w, &ops, 2));
     println!("rchk closereopen {} {}", size, verify(&mut setup(0), &ops));
     typed("closereopen", 0, &ops, 2, None);
+    fair("closereopen", &ops, 2);
     // reopen on an open budget: CURRENT lookup + state test, answers [1], changes nothing (reopen's lookup alone)
     let mut w = setup(0);
     let ops = vec![body(5, -1, -1, &bid(last))];
     println!("reopenmiss {} {:.1}", size, time(&mut w, &ops, 1));
     println!("rchk reopenmiss {} {}", size, verify(&mut setup(0), &ops));
     typed("reopenmiss", 0, &ops, 1, None);
+    fair("reopenmiss", &ops, 1);
     // replace on a halted budget (CLOSE + OPEN + follows + carryHeld), then put the halted record back
     let mut w = setup(1);
     let rp = body(4, 0, 2, "");
@@ -830,6 +884,102 @@ fn c_direct(w: &mut World, p: &Prep) -> i64 {
         return c_call(w, p);
     }
     r
+}
+
+// ---- fair typed lane (T5c) ----
+// The timed loop has the shape of hand_m7_u16's typed loop (`black_box(w.current(black_box(sid), black_box(lbid)))`):
+// - the entry is chosen by a const generic, so there is no per-op match on the prep code and no step closure;
+// - the key slices are borrowed once (FArgs), so each op passes a black_box'ed slice, as hand passes `black_box(sid)`;
+// - `fx[0] = 0` only where hand clears fx (attach, reopen, maybeClose: hand runs `w.fx.clear()` before each call),
+//   not for current / isHalted, which take no fx;
+// - no Grow fallback: these five cells never answer Grow (no record grows); the rchk_f pass asserts r >= 0 per call;
+// - the result is consumed as in the typed lane, `black_box((status, out[0]))`, the counterpart of hand's one
+//   black_box of its result value.
+// The 2^40 length guards are part of the generated c_* entries (product code) and stay; the emptied-body floor
+// (`out[0]=0; return 0;` bodies) keeps them, so they are inside the floor.
+struct FArgs<'a> {
+    sk: &'a [i64],
+    sn: i64,
+    bk: &'a [i64],
+    bn: i64,
+    origin: i64,
+    size: i64,
+    unit: &'a [i64],
+    uk: &'a [i64],
+    un: i64,
+    now: i64,
+}
+
+impl<'a> FArgs<'a> {
+    fn of(p: &'a Prep) -> FArgs<'a> {
+        FArgs { sk: &p.sk, sn: p.sn, bk: &p.bk, bn: p.bn, origin: p.origin, size: p.size, unit: &p.unit, uk: &p.uk, un: p.un, now: p.now }
+    }
+}
+
+#[inline(always)]
+fn fair_one<const C: i64>(w: &mut World, a: &FArgs) -> i64 {
+    let r = match C {
+        1 => sol::c_current(&w.st, black_box(a.sk), a.sn, black_box(a.bk), a.bn, &mut w.out),
+        2 => sol::c_is_halted(&w.st, black_box(a.sk), a.sn, black_box(a.bk), a.bn, &mut w.out),
+        3 => {
+            w.fx[0] = 0;
+            sol::c_attach(&mut w.st, black_box(a.sk), a.sn, a.origin, a.size, a.unit, black_box(a.uk), a.un, a.now, &mut w.fx, &mut w.out)
+        }
+        5 => {
+            w.fx[0] = 0;
+            sol::c_reopen(&mut w.st, black_box(a.sk), a.sn, black_box(a.bk), a.bn, &mut w.fx, &mut w.out)
+        }
+        6 => {
+            w.fx[0] = 0;
+            sol::c_maybe_close(&mut w.st, black_box(a.sk), a.sn, a.now, &mut w.bv, &mut w.fx, &mut w.out)
+        }
+        _ => unreachable!(),
+    };
+    black_box((r, w.out[0]));
+    r
+}
+
+// The timed fair loop of one item: `n` iterations; closereopen is one maybeClose + reopen pair per iteration, like
+// hand's closereopen loop. The item match is outside the loop.
+#[inline(never)]
+fn fair_loop(item: &str, w: &mut World, a: &[FArgs], n: usize) {
+    match item {
+        "ishalted" => for _ in 0..n { fair_one::<2>(w, &a[0]); },
+        "current" => for _ in 0..n { fair_one::<1>(w, &a[0]); },
+        "attach" => for _ in 0..n { fair_one::<3>(w, &a[0]); },
+        "reopenmiss" => for _ in 0..n { fair_one::<5>(w, &a[0]); },
+        "closereopen" => for _ in 0..n {
+            fair_one::<6>(w, &a[0]);
+            fair_one::<5>(w, &a[1]);
+        },
+        _ => unreachable!("fair lane item {}", item),
+    }
+}
+
+// Untimed check of the fair lane: the same fair_one calls on a fresh setup, every call folded by rchk_fold (must equal
+// rchk / rchk_t and hand16's rchk); a Grow answer would be a harness error here.
+fn fair_rchk(item: &str, w: &mut World, a: &[FArgs], n: usize) -> u64 {
+    let mut s = 0u64;
+    let mut fold = |w: &World, r: i64| {
+        assert!(r >= 0, "fair lane: {} answered {}", item, r);
+        s = rchk_fold(w, r, s);
+    };
+    for _ in 0..n {
+        match item {
+            "ishalted" => { let r = fair_one::<2>(w, &a[0]); fold(w, r) }
+            "current" => { let r = fair_one::<1>(w, &a[0]); fold(w, r) }
+            "attach" => { let r = fair_one::<3>(w, &a[0]); fold(w, r) }
+            "reopenmiss" => { let r = fair_one::<5>(w, &a[0]); fold(w, r) }
+            "closereopen" => {
+                let r = fair_one::<6>(w, &a[0]);
+                fold(w, r);
+                let r = fair_one::<5>(w, &a[1]);
+                fold(w, r)
+            }
+            _ => unreachable!(),
+        }
+    }
+    s
 }
 
 // One call of variant v with the same reset of the host's UUID / isQuiet streams.
