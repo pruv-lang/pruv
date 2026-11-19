@@ -1,8 +1,8 @@
-// M11 perf baseline: idiomatic hand-written Rust for setCard. The stored budget and the result words are flat V words
+// M11 perf baseline: idiomatic hand-written Rust for setCard, current and hasCard. The stored budget and the result words are flat V words
 // (tags 1..9, see ABI.md); the card / lang / by inputs are "JB" byte packets (big-endian):
 //   01 undefined, 02 null, 03 false, 04 true, 07 + f64 bits (every number), 06 + u32 len + WTF-8,
 //   08 + u32 count + elements, 09 + u32 count + (u32 key len + key WTF-8 + value) pairs; depth <= 32, one value, no tail.
-// Used only by the harness perf ops; it never feeds the Q comparison.
+// Used by the harness perf and diff ops; it never feeds the Q comparison.
 #![allow(dead_code)]
 use std::collections::HashMap;
 
@@ -11,23 +11,40 @@ const SAFE: f64 = 9007199254740991.0;
 
 // ---- V words (budget side) ----
 
+/// End of the V value starting at `at`, or None when malformed: every count (string length, array count, object pair
+/// count, key length) must be >= 0 and fit in the remaining words, and depth must be <= MAX_DEPTH (top value = 1).
 pub fn v_end(v: &[i64], at: usize) -> Option<usize> {
+    v_end_d(v, at, 1)
+}
+
+/// A non-negative count that fits in the words remaining from `from`; returns it as usize.
+fn fit(v: &[i64], from: usize, n: i64) -> Option<usize> {
+    if n < 0 || from > v.len() { return None; }
+    let n = n as u64;
+    if n > (v.len() - from) as u64 { return None; }
+    Some(n as usize)
+}
+
+fn v_end_d(v: &[i64], at: usize, depth: u32) -> Option<usize> {
+    if depth > MAX_DEPTH { return None; }
     let t = *v.get(at)?;
     match t {
         1..=4 => Some(at + 1),
         5 | 7 => if at + 2 <= v.len() { Some(at + 2) } else { None },
         6 => {
-            let n = *v.get(at + 1)? as usize;
-            if at + 2 + n <= v.len() { Some(at + 2 + n) } else { None }
+            let n = fit(v, at + 2, *v.get(at + 1)?)?;
+            Some(at + 2 + n)
         }
         8 | 9 => {
-            let cnt = *v.get(at + 1)?;
+            // each element / pair takes at least one word, so the count must fit in the remaining words
+            let cnt = fit(v, at + 2, *v.get(at + 1)?)?;
             let mut p = at + 2;
             for _ in 0..cnt {
                 if t == 9 {
-                    p += 1 + *v.get(p)? as usize;
+                    let kl = fit(v, p + 1, *v.get(p)?)?;
+                    p += 1 + kl;
                 }
-                p = v_end(v, p)?;
+                p = v_end_d(v, p, depth + 1)?;
             }
             Some(p)
         }
@@ -448,7 +465,8 @@ fn truthy(b: &[u8]) -> bool {
     }
 }
 
-/// ISO-8601 of epoch ms (years 0..9999 suffice for the perf inputs).
+/// ISO-8601 of epoch ms like JS Date.toISOString: 4-digit year inside 0..=9999, otherwise a signed 6-digit year
+/// ("+010000", "-000001"). Valid ms range is -8.64e15..=8.64e15.
 pub fn iso(ms: i64) -> String {
     let days = ms.div_euclid(86_400_000);
     let rem = ms.rem_euclid(86_400_000);
@@ -461,7 +479,12 @@ pub fn iso(ms: i64) -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z", y, m, d, rem / 3_600_000, rem / 60_000 % 60, rem / 1000 % 60, rem % 1000)
+    let ys = if (0..=9999).contains(&y) {
+        format!("{:04}", y)
+    } else {
+        format!("{}{:06}", if y > 9999 { '+' } else { '-' }, y.abs())
+    };
+    format!("{}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z", ys, m, d, rem / 3_600_000, rem / 60_000 % 60, rem / 1000 % 60, rem % 1000)
 }
 
 /// The stored card V words. `card` must be admitted and valid; `by` is an admitted packet or empty (absent);
@@ -531,6 +554,37 @@ pub fn lang_code(lang: &[u8]) -> i64 {
     (lang == [6, 0, 0, 0, 2, b'e', b'n']) as i64
 }
 
+fn card_error(kind: i64, en: bool) -> &'static str {
+    match (kind, en) {
+        (0, false) => "지금 예산을 찾을 수 없어 작업 카드를 저장하지 못했다.",
+        (1, false) => "deliverable 은 1~300자여야 한다.",
+        (2, false) => "done 은 각 300자 이하 1~5줄이어야 한다.",
+        (3, false) => "targets 의 수는 0 이상 정수여야 하고 note 는 300자 이하여야 한다.",
+        (4, false) => "verify 는 label 1~300자와 status(planned·done·skipped)를 가진 0~5개 항목이어야 한다.",
+        (5, false) => "conflicts 는 각 300자 이하 0~5줄이어야 한다.",
+        (6, false) => "state 는 working·done·waiting-user·blocked 중 하나여야 한다.",
+        (0, true) => "The current budget was not found, so the work card was not saved.",
+        (1, true) => "deliverable must be 1–300 characters.",
+        (2, true) => "done must be 1–5 lines of at most 300 characters each.",
+        (3, true) => "targets counts must be non-negative integers and note at most 300 characters.",
+        (4, true) => "verify must be 0–5 items with a label of 1–300 characters and a status (planned, done or skipped).",
+        (5, true) => "conflicts must be 0–5 lines of at most 300 characters each.",
+        (6, true) => "state must be one of working, done, waiting-user or blocked.",
+        _ => unreachable!(),
+    }
+}
+
+fn emit_card_error(out: &mut Vec<i64>, kind: i64, lang: &[u8]) -> i64 {
+    out.clear();
+    out.extend_from_slice(&[0, i64::from(kind >= 3), 0, 0, 2, 9, 2]);
+    key(out, "ok");
+    out.push(3);
+    key(out, "error");
+    put_str(out, card_error(kind, lang_code(lang) == 1).as_bytes());
+    out[0] = (out.len() - 1) as i64;
+    kind
+}
+
 // ---- budget (V words) ----
 
 pub fn put_card(budget: &[i64], card: &[i64]) -> Vec<i64> {
@@ -574,11 +628,54 @@ fn packed_framed_ok(k: &[i64]) -> bool {
 }
 
 impl Store {
+    fn current_budget(&self, rf: &[i64], sid: &[i64]) -> Option<&[i64]> {
+        if sid.is_empty() { return None; }
+        let budget = self.sessions.get(sid)?;
+        let a = obj_get(budget, 0, "id")?;
+        let b = obj_get(rf, 0, "budgetId")?;
+        (budget[a] == 6 && rf[b] == 6 && units(budget, a) == units(rf, b))
+            .then_some(budget.as_slice())
+    }
+
+    /// false = refused (status 2: rf is not exactly one well-formed V, or sid is non-empty and not framed); `out` is cleared.
+    pub fn current(&self, rf: &[i64], sid: &[i64], out: &mut Vec<i64>) -> bool {
+        if v_end(rf, 0) != Some(rf.len()) || (!sid.is_empty() && !packed_framed_ok(sid)) {
+            out.clear();
+            return false;
+        }
+        let budget = self.current_budget(rf, sid);
+        let budget = budget.unwrap_or(&[1]);
+        out.clear();
+        out.extend_from_slice(&[(1 + budget.len()) as i64, 1]);
+        out.extend_from_slice(budget);
+        true
+    }
+
+    /// None = refused (status 2, same validation as `current`).
+    pub fn has_card(&self, rf: &[i64], sid: &[i64]) -> Option<bool> {
+        if v_end(rf, 0) != Some(rf.len()) || (!sid.is_empty() && !packed_framed_ok(sid)) { return None; }
+        Some(self.has_card_valid(rf, sid))
+    }
+
+    fn has_card_valid(&self, rf: &[i64], sid: &[i64]) -> bool {
+        let Some(budget) = self.current_budget(rf, sid) else { return false };
+        let Some(at) = obj_get(budget, 0, "card") else { return false };
+        match budget[at] {
+            4 | 8 | 9 => true,
+            5 => budget[at + 1] != 0,
+            6 => budget[at + 1] > 0,
+            7 => {
+                let n = f64::from_bits(budget[at + 1] as u64);
+                n != 0.0 && !n.is_nan()
+            }
+            _ => false,
+        }
+    }
+
     /// setCard on the stored budget; returns -1 ok (budget stored, result words in `out`), 0 = input shape / session
     /// check failed, 1..=6 = validation kind, -2 = a JB packet is malformed (the Pruv entry's status 2).
     /// `sid` = the framed packed key of ref.sessionId (packed once by the caller; empty = the ref has none).
-    /// Same work as root.pruv m11_set_card: admission of card / lang / by, shape checks, then on success the result words
-    /// [k, used_now, saved, changed, findSession, {ok: true, budget}] written into `out`.
+    /// Writes [k, used_now, saved, changed, findSession, result V...] for admitted requests.
     pub fn set_card(&mut self, rf: &[i64], sid: &[i64], card: &[u8], lang: &[u8], by: &[u8], now_ms: i64, out: &mut Vec<i64>) -> i64 {
         if v_end(rf, 0) != Some(rf.len()) { return 0; }
         // by is stored at budget.card.by and returned one level deeper: its top value sits at depth 4
@@ -586,16 +683,13 @@ impl Store {
             return -2;
         }
         if !sid.is_empty() && !packed_framed_ok(sid) { return 0; }
-        let budget = match self.sessions.get(sid) { Some(b) if !b.is_empty() => b, _ => return 0 };
-        let same = match (obj_get(budget, 0, "id"), obj_get(rf, 0, "budgetId")) {
-            (Some(a), Some(b)) if budget[a] == 6 && rf[b] == 6 => units(budget, a) == units(rf, b),
-            _ => false,
-        };
-        if !same || str_is_v(budget, obj_get(budget, 0, "state"), "closed") { return 0; }
+        let Some(budget) = self.current_budget(rf, sid) else { return emit_card_error(out, 0, lang) };
+        if str_is_v(budget, obj_get(budget, 0, "state"), "closed") {
+            return emit_card_error(out, 0, lang);
+        }
         let k = if card.is_empty() { 1 } else { validate(card) }; // absent card: deliverable
         if k != 0 {
-            let _lang = lang_code(lang); // selects the error text; the baseline only returns the kind
-            return k;
+            return emit_card_error(out, k, lang);
         }
         let c = build(card, by, now_ms);
         let nb = put_card(budget, &c);

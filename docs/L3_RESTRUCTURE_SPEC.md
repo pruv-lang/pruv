@@ -404,7 +404,8 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P23 | Same+m9_test: fire/drop/close/stale timers | P Q3/Q4+F/G, timer order/deletion bounds and <=1.0. |
 | P24 | B/bud_halt.pruv,m10_test: synchronous halt/effects | P Q4/Q5+G including derived cuts; actual query trace after SETTLE and query-before-SETTLE mutant must fail; no prefetch proof or D². |
 | P25 | B/bud_card.pruv: validation/projection | P Q6+K, UTF-16 lengths/raw Number/refusal <=1.0; separate card proof-speed experiment only with hand assembly evidence. |
-| P26 | Same+m11_test: resident setCard/hasCard | P Q6+K, B/C optional replacement/identity <=1.0. |
+| P26 | Same+m11_test: resident setCard/hasCard | P Q6+K, B/C optional replacement/identity <=1.0. Done (Appendix P26): budget resident in `st`, Q6 213/87 and K 10/10 on rs/py, hdiff 0, time 0.49-0.71x hand in every cell, allocations <= hand; audit + confirm audit fixed; peak RSS fixed shares queued as P26a. |
+| P26a | m11_test harness and layout: peak RSS fixed shares (Appendix P26.4) | P: A 100/300 (+2 pages, code layout; A code = base) and H (+3 pages, `World` st/out buffers) peak RSS <= hand at the same allocation counts, time cells kept <= 1.0x. |
 | P27 | B/bud_text.pruv,bud_num.pruv,bud_date.pruv,m6_test | P Q8+N/K, exact text/number/date, bounded source-byte outputs (not F1 payloads), helper grid <=1.0. |
 | P28 | New B/bud_auto.pruv,M12 driver: clear/record/stop | P Q7+L, owner lookup/record sizes; actual semantics, no stub pass. |
 | P29 | New B/bud_cleanup.pruv: restore/forget/dispose | P Q7+M, ordered timers/markers/linear reclaim; C/R/A axes. |
@@ -4582,3 +4583,177 @@ mutants, perf C), not by a third audit.
 | 88a1ca4b | write | Claude sonnet | m11_test harness/hand/run_m11 on JB packets (one candidate; scheduled apply cancelled, files taken in by hand and extended with `hdiff`) |
 | 2d7348ef | audit | Codex gpt-6.2-astra ultra | package audit |
 | ddb8e411 | audit | Codex gpt-6.2-astra ultra | confirm audit of the fixes (P25.7) |
+
+## Appendix P26 (row Same+m11_test: resident setCard/hasCard)
+
+The commit with this appendix; base 03cda63 (main, P25). Changed files: `bench/l3/budget/bud_card.pruv` and
+`bench/l3/budget/m11_test/{root.pruv,hand.rs,harness.rs,run_m11.py}`. No compiler file, `bud_map`, `bud_lifecycle`,
+`bud_halt`, `m7_test` or `m10_test` change. Raw logs: `work/p26/` (not committed).
+
+### P26.1 Change
+
+- The budget stays in its `st` blob `[o, o+n)`; nothing is copied out to decide.
+  - `bud_card::budget_pos(v, at, end) -> BudgetPos {ok, id, state, card, card_end}`: one walk of the top-level pairs
+    of the object at `v[at]` (last pair wins, as `obj_get`), ASCII key match for `id`, `state`, `card`; `ok` iff tag 9,
+    every value well formed (`v_end_d` from depth 3: a field value of the stored budget sits at depth 3 of the
+    `{ok, budget}` result) and the walk ends exactly at `end`.
+  - `bud_card::v_stored_end(v, at)` (`v_end_u` from depth 2, with the unit range 0..65535 of every string and key):
+    `m11_load` refuses (status 2) a blob unless it is exactly one such V, so a stored budget is always a valid V that
+    still fits the 32-level limit inside the setCard result (audit fixes, P26.8).
+  - `root::cur(st, rf, sid) -> Cur {e, o, n, state, card, card_end}`: session entry, blob offset/length, `budget_pos`
+    bounded by `o + n`, and `str_eq` of the budget id with `ref_budget_id(rf)` (last `budgetId` pair wins). `e = -1`
+    when there is no current budget (no session, empty blob, id mismatch, malformed blob).
+  - `bud_card::judge(found, closed, card, at, lang) -> Judged {kind, used_now, f, error}` is `set_card` without the
+    build; `set_card` = `judge` + `build` (kept for perf items A/C).
+  - `put_card_words(inout o, p0, ...)` is `pub` with a start position (`requires 0 <= p0 <= 2^40`): the setCard path
+    writes the card straight into `out` at the budget's place. `build` keeps a private `p0 = 0` copy
+    (`put_card_words0`): with the `p0` form alone, A/C were 2-6 % slower on median than base (61 rounds; the
+    constant start lets the writer positions fold). Same words for `p0 = 0`; the generated `build`, `m11_perf_card` and
+    `put_card_words0` are now the base code token for token.
+- `m11_set_card`: `judge`; on error the old error result. On success: one dry size pass for the card (`cs`);
+  `nbn = n + 5 + cs` (append `"card"`) or `n - (card_end - card) + cs` (replace); `need2 = 18 + nbn`; out too small
+  -> 3; `nbn > 2^32` -> 2; `words = 0` if `blob_fits`, `make_room(st, 0, words)` -> Grow 1 with `st` unchanged; a
+  moved blob after `make_room` -> 2 (unreachable, `make_room` rehashes the index only). Then the 18-word header,
+  `st[o..card)`, the card words in place, `st[card_end..o+n)` (append: all of the budget, count + 1 at `out[19]`,
+  key `"card"`, the card), and `set_blob(st, e, out, 18, nbn)`. The returned budget and the stored budget are the
+  same words (identity by construction).
+- `m11_query` drops `! alloc`: op 1 (`current`) copies `st[o..o+n)` once; op 2 (`isHalted`) `is_halted` (literal-free
+  6-unit test); op 3 (`hasCard`) `card >= 0 && truthy(st, card)`.
+- `hand.rs`: the error path (P25.8 queued row): `card_error(kind, en)` with the Korean and English texts,
+  `emit_card_error`; `Store::current_budget`, `current` (`bool`), `has_card` (`Option<bool>`), both validating `rf`
+  and `sid`; a strict `v_end` (depth limit, counts checked); `iso` with the signed 6-digit year outside 0..=9999. `harness.rs`: perf items R/H/I (P26.3) and
+  `hand_diff` compares the full error words. `run_m11.py`: a `dump` follows every `set` (strict framing,
+  `parse_dump`), and `judge` checks after every successful setCard, halted or not, that the returned budget words
+  equal the dumped blob of that session (identity oracle).
+- Types: `[u8]` card packets, `i64` V words in `st`/`out`, structs for positions; no flat record arrays.
+
+### P26.2 Cost bound per path (B = budget words, V + U = card packet, K = top-level budget pairs)
+
+| path | P25 | P26 bound |
+|---|---|---|
+| setCard ok | H + 4 walks + O(V+U) + 4 O(B) copies, 4 allocations | H + 1 walk O(K) + O(V+U) + 2 O(card) + 2 O(B) copies (st->out, out->st), 1 allocation (iso) |
+| setCard missing/closed | H + O(B) copy + 2 walks + allocation | H + 1 walk, no copy, the error text only |
+| setCard field error | as ok up to the failing field | H + 1 walk + the validation prefix (short-circuit) |
+| setCard Grow / out small | after O(B) work | before any `st` write; `st` unchanged |
+| hasCard | H + O(B) copy + 2 walks + allocation | H + 1 walk + O(1) truthiness, no allocation |
+| current | H + O(B) copy + walk + allocation + copy | H + 1 walk + 1 O(B) copy, no allocation |
+| isHalted | H + O(B) copy + 2 walks | H + 1 walk, no allocation |
+
+The walk is O(K + sizes of nested containers) (`v_end` of a string is O(1)). Confirmed by perf (P26.3): B/R/I fall
+to 0.57-0.61 of base and H to 0.36; allocations per call (P26.4) B/R 4 -> 1, H 2 -> 0, I 6 -> 1, all flat in n.
+
+### P26.3 Time (Rust backend, ns per call, interleaved rounds base/P26/hand, one process per measurement)
+
+Items: A = card validate + build (U units), B = setCard through the store (n calls), C = set_card + put_card chain
+on one in-memory budget, R = setCard alternating a full card with `state` and a minimal card (optional replacement),
+H = hasCard on a budget holding a card, I = setCard + current pairs (identity read-back; per call, 2 calls a pair).
+After the audit fixes (31 rounds; `perf_fix.txt`):
+
+| cell | base | P26 | hand | P26/hand med (min) | P26/hand overlap | P26/base med | P26/base overlap |
+|---|---|---|---|---|---|---|---|
+| A 100 | 458.4 | 464.5 | 750.2 | 0.62 (0.61) | no (faster) | 1.01 | yes |
+| A 300 | 801.3 | 799.9 | 1626.4 | 0.49 (0.49) | no (faster) | 1.00 | yes |
+| A 1000 | 129.5 | 131.9 | 226.5 | 0.58 (0.57) | no (faster) | 1.02 | yes |
+| B 100 | 622.3 | 368.3 | 709.0 | 0.52 (0.52) | no (faster) | 0.59 | no (faster) |
+| B 500 | 648.7 | 378.0 | 733.6 | 0.52 (0.52) | no (faster) | 0.58 | no (faster) |
+| B 1000 | 625.3 | 373.0 | 700.9 | 0.53 (0.51) | no (faster) | 0.60 | no (faster) |
+| C 100 | 384.0 | 376.0 | 535.9 | 0.70 (0.68) | no (faster) | 0.98 | yes |
+| C 1000 | 380.1 | 375.5 | 532.0 | 0.71 (0.69) | no (faster) | 0.99 | yes |
+| R 100 | 517.8 | 302.3 | 620.6 | 0.49 (0.47) | no (faster) | 0.58 | no (faster) |
+| R 1000 | 518.6 | 300.4 | 613.2 | 0.49 (0.49) | no (faster) | 0.58 | no (faster) |
+| H 100 | 122.7 | 44.2 | 81.4 | 0.54 (0.55) | no (faster) | 0.36 | no (faster) |
+| H 1000 | 122.3 | 44.3 | 72.2 | 0.61 (0.61) | no (faster) | 0.36 | no (faster) |
+| I 100 | 383.3 | 218.5 | 386.3 | 0.57 (0.55) | no (faster) | 0.57 | no (faster) |
+| I 1000 | 379.1 | 216.8 | 380.8 | 0.57 (0.57) | no (faster) | 0.57 | no (faster) |
+
+Before the fixes (61 rounds) the cells were 0.50-0.74 of hand and the same against base; no distribution of P26 moved
+against base. - Every cell is below 1.0x hand on median and min.
+- A: the generated code of the A path (`m11_perf_card`, `validate`, `build`, `put_card_words0`) is the base code token
+  for token, so A 1.00-1.05 against base is layout only. Control: base with one unused verified function added
+  (`work/p26/base3`) measured 1.00-1.02 against base in the same runs (61 rounds). The distributions overlap; no gain
+  of P25 is given back on the A code.
+- C, before the `put_card_words0` copy: 1.03-1.04 against base (overlapping); after: 0.97-0.98.
+- A `--no-verify` build is not a valid perf control: it keeps the runtime index and overflow checks (A 1.46-2.0x).
+
+### P26.4 RSS and allocations
+
+- Allocations per call after the audit fixes (counting allocator, reps 5 and 25; base / P26 / hand): A 100 and 300
+  2.00 / 2.00 / 5.00; A 1000 (refusal) 0 / 0 / 0; B 4.12 / 1.12 / 7.14 (n = 100), 4.01 / 1.01 / 7.01 (n = 1000);
+  C 3.07 / 3.07 / 6.08; R 4.08 / 1.08 / 7.11; H 2.12 / 0.09 / 0.18, 2.01 / 0.01 / 0.02; I (per pair) 6.08 / 1.08 /
+  7.11. No cell above hand (the hand lane gained one allocation per call with its strict checks; Pruv unchanged).
+- Peak RSS KiB (`/usr/bin/time -l`, median of 11 alternating runs, base / P26 / hand; P26 and hand are one binary;
+  after the fixes): empty run 1648 / 1664 / 1680; A 100 1776 / 1792 / 1760; A 300 1760 / 1792 / 1760; A 1000
+  1744 / 1760 / 1760; B 1000 1984 / 1952 / 1936; C 1000 1856 / 1872 / 1888; R 100 2000 / 1952 / 1952, R 1000
+  2000 / 1936 / 1952; H 100 and 1000 1984 / 1936 / 1888; I 2016 / 1952 / 1936.
+- Above hand: A 100 / 300 (+32 KiB, 2 pages) and H (+48 KiB, 3 pages). Both fixed, none proportional: the same at
+  U = 100 and 300 and at n = 100 and 1000, with allocations at or below hand.
+  - A: the A path code equals base, the P26 binary is larger (empty run +16 KiB) and the A path touches 2 more code
+    pages of it than the hand path of the same binary. Layout share, queued (P26a).
+  - H: the Pruv lane runs through `World` (`st` and `out` of 4096 words each, 64 KiB, zero-filled by the host) while
+    the hand lane keeps a `HashMap` and a 4096-word `out` capacity it does not touch. Host buffer sizing, queued (P26a).
+
+### P26.5 Gates (Rust and Python compilers, Rust backend; all rc 0)
+
+- The 7 budget roots (m8, m34 m4/admit, m7, m9, m10, m11) on rs and py. m11 proof time after the audit fixes: rs 12.8 s, py 22.5 s (P25:
+  9.8-10.4 / 18.3-18.7; new functions `budget_pos`, `cur`, `judge`, `m11_set_card` resident path).
+- `run_m11.py` Q6 (300 cases, seed 20261117): exact 213, prefix-ok 87 on py and rs, pairs identical. K: 10/10 exact
+  on both, identical. Query cases `work/p26/qx.py` (72: 6 states open/closed/halted/haltee/halt/Halted x 12 card values
+  absent/null/false/true/0/1/2.5/""/"x"/{}/[]/object; each calls current/isHalted/hasCard, a ref with a repeated
+  `budgetId`, a stale ref, setCard, hasCard, current): 72/72 exact on rs and py.
+- Hand vs Pruv: `handcheck` same; `hdiff` 10,711 cards (now including the error words): 0 differences on rs and py.
+- Audit fix repros (`work/p26/audfix.py`, rs and py): a unit 65535 loads; 65536 and a key unit -1 are refused
+  (status 2); a depth-32 budget is refused; a depth-31 budget loads and setCard returns `ok` with result depth 32.
+- `tests/` is unchanged.
+
+### P26.6 Mutants (`work/p26/mut.py`, hdiff + oracle over Q6 + K + qx)
+
+Control: exact 295, prefix-ok 87; hdiff 0 of 10,711. 14 of 18 caught (hdiff, the oracle or both; an oracle crash on malformed words
+counts as caught). Rerun after the audit fixes (per-setCard identity oracle): the same 14 of 18, the same 4 not
+caught:
+
+| # | mutant | class |
+|---|---|---|
+| 1 | `budget_pos`: first `card` pair wins | equivalent in domain: stored budgets come from JSON (`m11_load`) or setCard, both with unique keys |
+| 4 | `budget_pos`: tail not checked (`pos > end`) | equivalent in domain: the blob is always exactly one V (`m11_load` checks `v_stored_end`, setCard writes one V) |
+| 14 | `ref`: first `budgetId` wins | unreachable: the driver builds `ref` as a JS object before it is encoded, so a repeated key is collapsed (last wins) before Pruv sees it; the two qx refs with a repeated key (`other` then the id, and the reverse) give the same words to both forms |
+| 18 | `judge`: missing reported as kind 1 | equivalent: the root reads `kind` only by sign (`kind >= 0` = error) and takes the text from `error`, which stays `card_error(0, lang)`; `used_now` is false in both |
+
+Before `qx.py` the `isHalted` and `hasCard` mutants were missed (Q6 has no query on a closed budget or a falsy card);
+`qx.py` closes both.
+
+### P26.7 Classification
+
+| behaviour | class | how it is kept |
+|---|---|---|
+| setCard returns the same budget object it stores | intent (TS identity) | by construction (one set of words); the oracle compares every returned budget with the dumped blob |
+| an optional field absent from the new card is not kept from the old card | intent (TS replaces `budget.card`) | the card V is replaced whole; Q6 + perf R |
+| hasCard = `Boolean(card)` | intent | `truthy` on the resident words; qx 12 card kinds |
+| a malformed resident blob reads as "no current" (missing) instead of status 2 at put_card | accident, unreachable | `m11_load` checks `v_stored_end`, setCard writes one V; recorded here, not observable by Q |
+| a budget at depth 32 (or with a unit outside 0..65535) is refused at load (status 2) | intent (ABI V limits) | the setCard result `{ok, budget}` adds one level; `v_stored_end` counts from depth 2; `audfix.py` |
+| a repeated `budgetId` in `ref`: last pair wins | intent (JS object semantics) | `ref_budget_id`; not producible by the driver (mutant 14) |
+
+### P26.8 Audit
+
+Package audit (Codex gpt-6.2-astra ultra): 5 required, 1 optional; all fixed.
+
+| # | finding | fix |
+|---|---|---|
+| 1 | the identity oracle compared only the last setCard of a session with the final dump | `run_m11.py`: a `dump` after every `set`; every successful setCard (halted or not) is compared word for word with the dumped blob |
+| 2 | `budget_pos` / `v_end` did not check the unit range and restarted the depth at the fields | `v_stored_end` at `m11_load` (units 0..65535, depth from 2); `budget_pos` walks field values from depth 3 |
+| 3 | a depth-32 budget became depth 33 inside the `{ok, budget}` result | the same load check counts from depth 2 (ABI limit 32); a depth-32 budget is refused, depth 31 loads (`audfix.py`) |
+| 4 | `hand.rs` queries did not validate `ref`; negative counts passed its `v_end` | strict hand `v_end` (depth, counts); `current` -> `bool`, `has_card` -> `Option<bool>`, both validate `ref` and `sid` |
+| 5 | hand `iso` lacked the signed 6-digit year | fixed (`-000001`, `+010000`) |
+| 6 (optional) | loose dump framing | `parse_dump` (strict counts, lengths, tail) |
+
+Confirm audit (same model): 1-5 confirmed fixed, H/I perf calls measure the same work. One required regression: a
+halted replay no longer checked its final dump (`err 2` there classed `prefix-ok`); and (optional) a dump key unit
+out of range raised `struct.error` past the `ValueError` handler. Fixed: every dump after a `set` and the final dump
+must parse (only the final comparison is skipped on halt), and `parse_dump` refuses key units outside 0..65535.
+Rechecked: `judge` on a halted case with `err 2` -> `prefix-fail`; `parse_dump([1, 1, 65536, 0])` -> `ValueError`;
+Q6 213/87, K 10/10, qx 72/72 on rs and py.
+
+### P26.9 Queued rows
+
+- P26a: peak RSS above hand by fixed shares only: A +2 pages (code layout of the larger m11 binary, A code = base)
+  and H +3 pages (harness `World` buffers vs the hand lane's untouched capacity). Proportional share: none.
+- P25.8 JB `ref`/result row stays queued (outside this row).

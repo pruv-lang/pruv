@@ -15,7 +15,7 @@ mod bud_card;
 //
 // Status of every entry: 0 ok (out[0] = number of words after out[0]), 1 Grow (out[0] = N; nothing written, the host
 // grows st and retries the same call), 2 invalid input, 3 out too small.
-// Values (ref, card, lang, by) are V words; an empty array = the argument is absent (undefined).
+// ref uses V words; card, lang and by use JB bytes. Empty packets are absent (undefined).
 
 fn rd(v: [i64], i: i64) -> i64
 { return crate::ent_u16::rd(v, i); }
@@ -46,32 +46,40 @@ fn emit_lit(inout out: [i64], pos: i64, s: str) -> i64
   return p;
 }
 
-fn emit_all(inout out: [i64], pos: i64, w: [i64]) -> i64
+fn emit_range(inout out: [i64], pos: i64, src: [i64], s: i64, e: i64) -> i64
   requires 0 <= pos && pos <= 1099511627776
+  requires 0 <= s && s <= e && e <= len(src)
   ensures 0 <= result && result <= 1099511627776 && len(out) == len(old(out))
 {
-  let n: i64 = len(w);
+  let n: i64 = e - s;
   let mut p: i64 = pos;
   let mut j: i64 = 0;
   if n <= 1099511627776 - pos && pos + n <= len(out) {
     // the whole range is in bounds: one check for the loop (same writes as the per-word path below)
     while j < n
-      invariant 0 <= j && j <= n && n == len(w) && 0 <= pos && pos + n <= len(out) && pos + n <= 1099511627776 && len(out) == len(old(out))
+      invariant 0 <= j && j <= n && 0 <= s && s + n <= len(src) && 0 <= pos && pos + n <= len(out) && pos + n <= 1099511627776 && len(out) == len(old(out))
       decreases n - j
     {
-      out[pos + j] = w[j];
+      out[pos + j] = src[s + j];
       j = j + 1;
     }
     return pos + n;
   }
   while j < n
-    invariant 0 <= j && j <= n && n == len(w) && 0 <= p && p <= 1099511627776 && len(out) == len(old(out))
+    invariant 0 <= j && j <= n && 0 <= s && s + n <= len(src) && 0 <= p && p <= 1099511627776 && len(out) == len(old(out))
     decreases n - j
   {
-    p = emit(inout out, p, w[j]);
+    p = emit(inout out, p, src[s + j]);
     j = j + 1;
   }
   return p;
+}
+
+fn emit_all(inout out: [i64], pos: i64, w: [i64]) -> i64
+  requires 0 <= pos && pos <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776 && len(out) == len(old(out))
+{
+  return emit_range(inout out, pos, w, 0, len(w));
 }
 
 // the value at `at` is the string equal to the ASCII literal s
@@ -90,6 +98,42 @@ fn str_is(v: [i64], at: i64, s: str) -> bool
     j = j + 1;
   }
   return true;
+}
+
+// Compare the state tags without allocating string literals.
+fn is_halted(v: [i64], at: i64) -> bool
+{
+  if at < 0 || at > len(v) - 8 { return false; }
+  return v[at] == 6 && v[at + 1] == 6 && v[at + 2] == 104 && v[at + 3] == 97 &&
+    v[at + 4] == 108 && v[at + 5] == 116 && v[at + 6] == 101 && v[at + 7] == 100;
+}
+
+// Last budgetId value in the admitted ref, without a string literal.
+fn ref_budget_id(rf: [i64]) -> i64
+{
+  let n: i64 = len(rf);
+  if n < 2 || rf[0] != 9 { return -1; }
+  let cnt: i64 = rf[1];
+  if cnt < 0 || cnt > n - 2 { return -1; }
+  let mut pos: i64 = 2;
+  let mut i: i64 = 0;
+  let mut found: i64 = -1;
+  while i < cnt
+    invariant 0 <= i && i <= cnt && 2 <= pos && pos <= n && n == len(rf)
+    decreases cnt - i
+  {
+    if pos >= n { return -1; }
+    let kn: i64 = rf[pos];
+    if kn < 0 || kn > n - pos - 1 { return -1; }
+    let vs: i64 = pos + 1 + kn;
+    let end: i64 = crate::bud_card::v_end(rf, vs);
+    if end < 0 { return -1; }
+    if kn == 8 && rf[pos + 1] == 98 && rf[pos + 2] == 117 && rf[pos + 3] == 100 && rf[pos + 4] == 103 &&
+      rf[pos + 5] == 101 && rf[pos + 6] == 116 && rf[pos + 7] == 73 && rf[pos + 8] == 100 { found = vs; }
+    pos = end;
+    i = i + 1;
+  }
+  return found;
 }
 
 // both values are strings with the same units
@@ -125,43 +169,28 @@ fn session_entry(st: [i64], sid: [i64]) -> i64
   return crate::bud_map::find_w(st, 0, sid, 1, rd(sid, 0));
 }
 
-fn blob_of(st: [i64], e: i64) -> [i64] ! alloc
+struct Cur { e: i64, o: i64, n: i64, state: i64, card: i64, card_end: i64 }
+
+fn no_cur() -> Cur
+  ensures result.e == -1
 {
-  let n: i64 = crate::bud_map::blob_len(st, e);
-  let o: i64 = crate::bud_map::blob_off(st, e);
-  let mut b: [i64] = crate::ent_u16::zeros(n);
-  let mut j: i64 = 0;
-  if len(b) == n && n <= len(st) - o {
-    // the blob region is in bounds: one check for the copy (same words as blob_unit below)
-    while j < n
-      invariant 0 <= j && j <= n && len(b) == n && 0 <= o && n <= len(st) - o
-      decreases n - j
-    {
-      b[j] = st[o + j];
-      j = j + 1;
-    }
-    return b;
-  }
-  while j < n
-    invariant 0 <= j && j <= n && n <= 1099511627776
-    decreases n - j
-  {
-    crate::ent_u16::wr(inout b, j, crate::bud_map::blob_unit(st, e, j));
-    j = j + 1;
-  }
-  return b;
+  return Cur { e: -1, o: 0, n: 0, state: -1, card: -1, card_end: -1 };
 }
 
-// CURRENT(ref): findSession(ref.sessionId)?.budget, kept only if budget.id === ref.budgetId (both strings).
-// Returns the budget V, or an empty array when there is no such current budget.
-fn current_of(st: [i64], rf: [i64], sid: [i64]) -> [i64] ! alloc
+// CURRENT(ref): the resident budget whose id equals ref.budgetId.
+fn cur(st: [i64], rf: [i64], sid: [i64]) -> Cur
+  ensures result.e < 0 || (0 <= result.o && 2 <= result.n && result.n <= 1099511627776 && result.o + result.n <= len(st))
+  ensures result.e < 0 || (result.card == -1 || (result.o <= result.card && result.card < result.card_end && result.card_end <= result.o + result.n))
 {
   let e: i64 = session_entry(st, sid);
-  if e < 0 { return crate::ent_u16::empty(); }
-  let b: [i64] = blob_of(st, e);
-  if len(b) == 0 { return b; }
-  if !str_eq(b, crate::bud_card::obj_get(b, 0, "id"), rf, crate::bud_card::obj_get(rf, 0, "budgetId")) { return crate::ent_u16::empty(); }
-  return b;
+  if e < 0 { return no_cur(); }
+  let o: i64 = crate::bud_map::blob_off(st, e);
+  let n: i64 = crate::bud_map::blob_len(st, e);
+  if n == 0 || o + n > len(st) { return no_cur(); }
+  let p: crate::bud_card::BudgetPos = crate::bud_card::budget_pos(st, o, o + n);
+  if !p.ok { return no_cur(); }
+  if !str_eq(st, p.id, rf, ref_budget_id(rf)) { return no_cur(); }
+  return Cur { e: e, o: o, n: n, state: p.state, card: p.card, card_end: p.card_end };
 }
 
 // value position of a JB packet (empty = absent)
@@ -196,11 +225,13 @@ pub fn m11_grow(prev: [i64], inout next: [i64]) -> i64
 // world setup: session `key` (a framed packed key `n, words(n) packed words`, packed once by the host) with budget V
 // `blob` (empty = no budget). out = [1, fresh]. rec_end is the whole key check (framing + canonical form); packed
 // lanes are always valid u16 units, so the old per-unit 0..65535 loop is gone.
+// The blob is checked by v_stored_end: shape, string/key units 0..65535, and depth from 2 (setCard returns it inside
+// {ok, budget}), so the resident walks (budget_pos) never see an out-of-ABI budget.
 pub fn m11_load(inout st: [i64], key: [i64], blob: [i64], inout out: [i64]) -> i64
 {
   if !crate::bud_store::valid(st) { return 2; }
   if crate::bud_keys::rec_end(key, 0) != len(key) { return 2; }
-  if len(blob) > 0 && crate::bud_card::v_end(blob, 0) != len(blob) { return 2; }
+  if len(blob) > 0 && crate::bud_card::v_stored_end(blob, 0) != len(blob) { return 2; }
   return crate::bud_world::session_put_w(inout st, key, 1, rd(key, 0), blob, 0, len(blob), inout out);
 }
 
@@ -219,11 +250,11 @@ pub fn m11_set_card(inout st: [i64], rf: [i64], sid: [i64], card: [u8], lang: [u
   if len(lang) > 0 && !crate::bud_card::j_ok(lang) { return 2; }
   // by is stored at budget.card.by (depth 3) and returned one level deeper: its top value sits at depth 4 of the result
   if len(by) > 0 && !crate::bud_card::j_ok_at(by, 4) { return 2; }
-  let cb: [i64] = current_of(st, rf, sid);
-  let found: bool = len(cb) > 0;
-  let closed: bool = found && str_is(cb, crate::bud_card::obj_get(cb, 0, "state"), "closed");
+  let c: Cur = cur(st, rf, sid);
+  let found: bool = c.e >= 0;
+  let closed: bool = found && str_is(st, c.state, "closed");
   let lc: i64 = crate::bud_card::lang_code(lang);
-  let r: crate::bud_card::SetCard = crate::bud_card::set_card(found, closed, card, at_b(card), lc, by, at_b(by), now_ms);
+  let r: crate::bud_card::Judged = crate::bud_card::judge(found, closed, card, at_b(card), lc);
   if r.kind >= 0 {
     // {ok: false, error}
     let need: i64 = 5 + 14 + len(r.error);
@@ -243,14 +274,27 @@ pub fn m11_set_card(inout st: [i64], rf: [i64], sid: [i64], card: [u8], lang: [u
     p = emit_all(inout out, p, r.error);
     return 0;
   }
-  let nb: [i64] = crate::bud_card::put_card(cb, 0, r.card);
-  if len(nb) == 0 { return 2; }
-  let need2: i64 = 5 + 13 + len(nb);
+  if c.e < 0 { return 2; }
+  let iso: [i64] = crate::bud_date::iso(now_ms);
+  let mut dry: [i64] = crate::ent_u16::empty();
+  let by_at: i64 = at_b(by);
+  let cs: i64 = crate::bud_card::put_card_words(inout dry, 0, card, r.f, by, by_at, iso);
+  let mut nbn: i64 = c.n + 5 + cs;
+  if c.card >= 0 { nbn = c.n - (c.card_end - c.card) + cs; }
+  let need2: i64 = 18 + nbn;
   if len(out) < need2 { return 3; }
-  // found (cb non-empty) implies sid is a non-empty canonical packed key (session_entry), so it is the re-put key
-  if len(sid) == 0 { return 2; }
-  let s: i64 = crate::bud_world::session_put_w(inout st, sid, 1, rd(sid, 0), nb, 0, len(nb), inout out);
-  if s != 0 { return s; }
+  // set_blob clamps lengths at 2^32. A successful write must store the entire budget.
+  if nbn > 4294967296 { return 2; }
+  let mut words: i64 = nbn;
+  if crate::bud_map::blob_fits(st, c.e, nbn) { words = 0; }
+  let nd: i64 = crate::bud_map::make_room(inout st, 0, words);
+  if nd != 0 {
+    crate::ent_u16::wr(inout out, 0, nd);
+    return 1;
+  }
+  // make_room rebuilds only the index.
+  if crate::bud_map::blob_off(st, c.e) != c.o { return 2; }
+  let end: i64 = c.o + c.n;
   let mut q: i64 = emit(inout out, 0, need2 - 1);
   q = emit(inout out, q, 1);
   q = emit(inout out, q, 1);
@@ -261,36 +305,54 @@ pub fn m11_set_card(inout st: [i64], rf: [i64], sid: [i64], card: [u8], lang: [u
   q = emit_lit(inout out, q, "ok");
   q = emit(inout out, q, 4);
   q = emit_lit(inout out, q, "budget");
-  q = emit_all(inout out, q, nb);
+  if c.card >= 0 {
+    q = emit_range(inout out, q, st, c.o, c.card);
+    q = crate::bud_card::put_card_words(inout out, q, card, r.f, by, by_at, iso);
+    q = emit_range(inout out, q, st, c.card_end, end);
+  } else {
+    q = emit_range(inout out, q, st, c.o, end);
+    let cnt: i64 = rd(st, c.o + 1);
+    if cnt < 0 || cnt > c.n - 2 { return 2; }
+    crate::ent_u16::wr(inout out, 19, cnt + 1);
+    q = emit_lit(inout out, q, "card");
+    q = crate::bud_card::put_card_words(inout out, q, card, r.f, by, by_at, iso);
+  }
+  let wrote: i64 = crate::bud_map::set_blob(inout st, c.e, out, 18, nbn);
+  if wrote < 0 { return 2; }
   return 0;
 }
 
 // op 1 current -> budget V or undefined; 2 isHalted -> bool; 3 hasCard -> bool. sid as in m11_set_card.
 // out = [k, findSession, V...].
-pub fn m11_query(st: [i64], op: i64, rf: [i64], sid: [i64], inout out: [i64]) -> i64 ! alloc
+pub fn m11_query(st: [i64], op: i64, rf: [i64], sid: [i64], inout out: [i64]) -> i64
 {
   if !crate::bud_store::valid(st) { return 2; }
   if op < 1 || op > 3 { return 2; }
   if len(rf) == 0 || crate::bud_card::v_end(rf, 0) != len(rf) { return 2; }
   if len(sid) > 0 && crate::bud_keys::rec_end(sid, 0) != len(sid) { return 2; }
-  let cb: [i64] = current_of(st, rf, sid);
-  let mut v: [i64] = crate::ent_u16::zeros(1);
-  crate::ent_u16::wr(inout v, 0, 1);
-  if op == 1 {
-    if len(cb) > 0 { v = copy(cb); }
-  } else {
-    let mut t: bool = false;
-    if len(cb) > 0 {
-      if op == 2 { t = str_is(cb, crate::bud_card::obj_get(cb, 0, "state"), "halted"); }
-      else { t = crate::bud_card::has_card(cb, 0); }
-    }
-    if t { crate::ent_u16::wr(inout v, 0, 4); } else { crate::ent_u16::wr(inout v, 0, 3); }
+  let c: Cur = cur(st, rf, sid);
+  if op == 1 && c.e >= 0 {
+    let need: i64 = 2 + c.n;
+    if len(out) < need { return 3; }
+    crate::ent_u16::wr(inout out, 0, need - 1);
+    crate::ent_u16::wr(inout out, 1, 1);
+    let p: i64 = emit_range(inout out, 2, st, c.o, c.o + c.n);
+    return 0;
   }
-  let need: i64 = 2 + len(v);
-  if len(out) < need { return 3; }
-  let mut p: i64 = emit(inout out, 0, need - 1);
-  p = emit(inout out, p, 1);
-  p = emit_all(inout out, p, v);
+  if len(out) < 3 { return 3; }
+  let mut v: i64 = 1;
+  if op != 1 {
+    let mut t: bool = false;
+    if c.e >= 0 {
+      if op == 2 { t = is_halted(st, c.state); }
+      else { t = c.card >= 0 && crate::bud_card::truthy(st, c.card); }
+    }
+    v = 3;
+    if t { v = 4; }
+  }
+  crate::ent_u16::wr(inout out, 0, 2);
+  crate::ent_u16::wr(inout out, 1, 1);
+  crate::ent_u16::wr(inout out, 2, v);
   return 0;
 }
 

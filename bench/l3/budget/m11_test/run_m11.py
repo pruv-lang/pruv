@@ -9,10 +9,12 @@
 4. replays each case through the harness (stand-in session store in root.pruv) and compares in canonical JV space:
    every request value (budget wrappers {bref, v}: the bref must be the named session's budget, then v is compared),
    per-request trace counts of findSession / now / save / changed, and finalSessions (id + budget).
+   Every successful setCard budget must also match the blob dumped right after it, word for word (even when halted).
    Cases with a `halt` op are not-implemented (M11 has no halt): only the prefix before the first halt is replayed and
    reported as prefix-ok / prefix-fail; they never count as passes.
 5. --perf: item C (diagnostic, Pruv vs hand only) = B without the stand-in store and out words; item A (validate+build, U = 100/300/1000) and item B (n = 100/500/1000 successive setCard) for Pruv, hand.rs
-   and the pinned TS (perf_ts.mjs); medians of >= 5 alternating runs.
+   and the pinned TS (perf_ts.mjs); items R (alternating cards), H (hasCard), I (setCard + current) for Pruv vs hand.
+   Medians of >= 5 alternating runs.
 Report: work/m11/report.json. Exit 1 on any fail, 2 on a build or driver failure.
 """
 import sys
@@ -338,6 +340,9 @@ def case_lines(case):
             lang = [] if len(args) < 3 else to_b(args[2])
             by = [] if len(args) < 4 else to_b(args[3])
             lines.append('set ' + wline([now], V(args[0]), sid_of(args[0]), card, lang, by))
+            lines.append('dump')  # read-only; answers the store right after this set (identity oracle)
+            calls.append({'req': ev['req'], 'op': ev['op'], 'ref': args[0], 'dump_after': True})
+            continue
         elif ev['op'] in QUERY:
             lines.append('q ' + wline([QUERY[ev['op']]], V(args[0]), sid_of(args[0])))
         else:
@@ -352,6 +357,36 @@ def parse_ok(line):
     if not line.startswith('ok'):
         raise ValueError(line)
     return [int(x) for x in line.split()[1:]]
+
+
+def parse_dump(dump):
+    """Dump words -> [(sid, blob)]. Strict framing: n >= 0, every key / blob length >= 0 and inside the dump, and the
+    cursor ends exactly at len(dump), and every key unit in 0..65535. Raises ValueError on any violation."""
+    if not dump:
+        raise ValueError('empty dump')
+    n, p, out = dump[0], 1, []
+    if n < 0:
+        raise ValueError(f'negative session count {n}')
+    for _ in range(n):
+        if p >= len(dump):
+            raise ValueError('truncated before key length')
+        kn = dump[p]
+        if kn < 0 or p + 1 + kn > len(dump):
+            raise ValueError(f'bad key length {kn} at word {p}')
+        if any(not 0 <= x <= 65535 for x in dump[p + 1:p + 1 + kn]):
+            raise ValueError(f'key unit out of range at word {p}')
+        sid = from_units(dump[p + 1:p + 1 + kn])
+        p += 1 + kn
+        if p >= len(dump):
+            raise ValueError('truncated before blob length')
+        bn = dump[p]
+        if bn < 0 or p + 1 + bn > len(dump):
+            raise ValueError(f'bad blob length {bn} at word {p}')
+        out.append((sid, dump[p + 1:p + 1 + bn]))
+        p += 1 + bn
+    if p != len(dump):
+        raise ValueError(f'cursor ends at {p} of {len(dump)} words')
+    return out
 
 
 def judge(case, exp, answers, calls, halted):
@@ -375,6 +410,14 @@ def judge(case, exp, answers, calls, halted):
             problems.append(f"{c['req']}: op {c['op']} not supported")
             continue
         line = next(it)
+        dump_line = next(it) if c.get('dump_after') else None  # always consumed, whatever happens to the set answer
+        blobs = None
+        if dump_line is not None:
+            # every dump after a set must be a well-formed ok dump, whether or not the set succeeded
+            try:
+                blobs = dict(parse_dump(parse_ok(dump_line)))
+            except ValueError as e:
+                problems.append(f"dump: malformed after {c['req']}: {str(e)[:200]}")
         er = reqs.get(c['req'])
         if er is None:
             problems.append(f"{c['req']}: no expected request")
@@ -396,6 +439,12 @@ def judge(case, exp, answers, calls, halted):
         want = strip_brefs(jv_decode(er['value']), brefs)
         ref = c['ref']
         sid = ref.get('sessionId') if isinstance(ref, dict) else None
+        if blobs is not None and isinstance(got, dict) and got.get('ok') is True:
+            # setCard result ABI: 4 trace words and 13 words before the budget V; must equal the blob stored for sid.
+            if sid not in blobs:
+                problems.append(f"identity: no dumped blob for {sid!r} after {c['req']}")
+            elif blobs[sid] != w[17:end]:
+                problems.append(f"identity: returned budget differs from dumped blob for {sid!r} after {c['req']}")
         for b in brefs:
             if final_brefs.get(sid) != b:
                 problems.append(f"{c['req']}: bref {b} is not the budget of session {sid!r}")
@@ -407,23 +456,23 @@ def judge(case, exp, answers, calls, halted):
         gc = {'findSession': finds, 'now': used_now, 'save': saved, 'changed': changed}
         if ec != gc:
             problems.append(f"{c['req']}: counts want {ec} got {gc}")
-    dump = parse_ok(next(it))
+    final_line = next(it)
+    try:  # the final dump must be well formed even when the replay halted (only the comparison is skipped)
+        entries = parse_dump(parse_ok(final_line))
+    except ValueError as e:
+        entries = None
+        problems.append(f"dump: malformed final dump: {str(e)[:200]}")
     if not halted:
-        n, p, got_s = dump[0], 1, []
-        for _ in range(n):
-            kn = dump[p]
-            sid = from_units(dump[p + 1:p + 1 + kn])
-            p += 1 + kn
-            bn = dump[p]
-            blob = dump[p + 1:p + 1 + bn]
-            p += 1 + bn
-            s = {'id': sid}
-            if bn:
-                s['budget'] = from_v(blob)[0]
-            got_s.append(s)
-        want_s = [strip_brefs(jv_decode(fs['v']), []) for fs in exp.get('finalSessions', [])]
-        if canon(got_s) != canon(want_s):
-            problems.append(f"finalSessions\n   want {canon(want_s)[:400]}\n   got  {canon(got_s)[:400]}")
+        if entries is not None:
+            got_s = []
+            for sid, blob in entries:
+                s = {'id': sid}
+                if blob:
+                    s['budget'] = from_v(blob)[0]
+                got_s.append(s)
+            want_s = [strip_brefs(jv_decode(fs['v']), []) for fs in exp.get('finalSessions', [])]
+            if canon(got_s) != canon(want_s):
+                problems.append(f"finalSessions\n   want {canon(want_s)[:400]}\n   got  {canon(got_s)[:400]}")
     if halted:
         return ('prefix-fail' if problems else 'prefix-ok'), problems
     if problems:
@@ -467,7 +516,7 @@ def perf(harness, runs):
             HERE / 'perf_ts.mjs']
     # item A at size 1000 is the cheap error path (~20 ns): enough reps that one run is not a few microseconds of cold start
     items = [('A', u, max(2000, 2000000 // u)) for u in (100, 300, 1000)] + [('B', n, max(5, 20000 // n)) for n in (100, 500, 1000)] + \
-        [('C', n, max(5, 20000 // n)) for n in (100, 1000)]
+        [(item, n, max(5, 20000 // n)) for item in ('C', 'R', 'H', 'I') for n in (100, 1000)]
     # the hand baseline must write the same result words as the Pruv entry (same work), incl. every optional field
     chk = sh([harness], data='handcheck\n').stdout.strip()
     print(f'  handcheck: {chk}')
@@ -486,7 +535,7 @@ def perf(harness, runs):
                 out = sh([harness], data=f'hand{item} {size} {reps}\nperf{item} {size} {reps}\n').stdout.splitlines()
                 hv.append(ns_of(out[0]))
                 pv.append(ns_of(out[1]))
-            if item != 'C':
+            if item in ('A', 'B'):
                 r = sh(node + [item, size, reps], cwd=BUDGET, env=TS_ENV())
                 tv.append(ns_of(r.stdout.strip() or 'TS failed: ' + r.stderr[-500:]))
         p, h = statistics.median(pv), statistics.median(hv)

@@ -12,7 +12,9 @@
 // Keys are packed u16 (bud_keys): word i = u[4i]<<48 | u[4i+1]<<32 | u[4i+2]<<16 | u[4i+3], tail lanes zero; the driver
 // (run_m11.py pack) packs each key once, the host never packs or unpacks inside a call.
 //   dump
-//   perfA <U> <reps> | perfB <n> <reps> | perfC <n> <reps> | handA / handB / handC (same args)   ->  `ns <ns per call> <checksum>`
+//   perfA <U> <reps> | perfB/C/R/H/I <n> <reps> | handA/B/C/R/H/I (same args) -> `ns <ns per call> <checksum>`
+//   R alternates card sizes, H queries hasCard, I pairs setCard with current.
+//   handcheck | hdiff <card> | <lang> | <by>  compare hand and Pruv result words
 // Output: `ok <words>` (the entry's out[1..1+out[0]]), `err <status>`, or `PANIC <msg>`.
 #[path = "@SOL@"] mod sol;
 #[path = "@HAND@"] mod hand;
@@ -151,6 +153,16 @@ fn perf_card(u: usize) -> Vec<u8> {
     }
     o
 }
+fn minimal_card() -> Vec<u8> {
+    let mut o = Vec::new();
+    bhead(&mut o, 9, 2);
+    bkey(&mut o, "deliverable");
+    bstr(&mut o, "a");
+    bkey(&mut o, "done");
+    bhead(&mut o, 8, 1);
+    bstr(&mut o, "a");
+    o
+}
 fn perf_ref() -> Vec<i64> {
     let mut o = vec![9, 2];
     key(&mut o, "sessionId");
@@ -245,6 +257,80 @@ fn hand_check() -> String {
     if lines.is_empty() { "same".to_string() } else { lines.join("\n") }
 }
 
+fn perf_resident(op: &str, n: usize, reps: usize) -> String {
+    let hand = op.starts_with("hand");
+    let has = op.ends_with('H');
+    let read_back = op.ends_with('I');
+    let rf = perf_ref();
+    let sid = pkey("s1");
+    let mut card = perf_card(20);
+    let mut short = None;
+    if op.ends_with('R') {
+        // Give the long card an optional field so the short card removes it.
+        card[1..5].copy_from_slice(&3u32.to_be_bytes());
+        bkey(&mut card, "state");
+        bstr(&mut card, "working");
+        short = Some(minimal_card());
+    }
+    let mut total = 0u128;
+    let mut sum = 0i64;
+    for _ in 0..reps {
+        if hand {
+            let mut s = hand::Store { sessions: std::collections::HashMap::new() };
+            s.sessions.insert(sid.clone(), perf_budget());
+            let mut out = Vec::with_capacity(4096);
+            if has {
+                assert_eq!(s.set_card(&rf, &sid, &card, &[], &[], NOW0, &mut out), -1);
+            }
+            let t = Instant::now();
+            for i in 0..n {
+                if has {
+                    let found = s.has_card(black_box(&rf), &sid).unwrap();
+                    sum = sum.wrapping_add(black_box(3 + i64::from(found)));
+                } else {
+                    let input = if i % 2 == 0 { &card } else { short.as_ref().unwrap_or(&card) };
+                    let kind = s.set_card(black_box(&rf), &sid, input, &[], &[], NOW0 + i as i64, &mut out);
+                    assert_eq!(kind, -1);
+                    sum = sum.wrapping_add(black_box(out[0] + out[3]));
+                    if read_back {
+                        assert!(s.current(black_box(&rf), &sid, &mut out));
+                        sum = sum.wrapping_add(black_box(out[0] + out[out.len() - 1]));
+                    }
+                }
+            }
+            total += t.elapsed().as_nanos();
+        } else {
+            let mut w = World::new();
+            let b = perf_budget();
+            w.call(&|st, out| sol::m11_load(st, &sid, &b, out)).unwrap();
+            if has {
+                let r = w.call(&|st, out| sol::m11_set_card(st, &rf, &sid, &card, &[], &[], NOW0, out)).unwrap();
+                assert_eq!(r[1], 1);
+            }
+            let t = Instant::now();
+            for i in 0..n {
+                if has {
+                    let r = w.call(&|st, out| sol::m11_query(st, 3, &rf, &sid, out)).unwrap();
+                    sum = sum.wrapping_add(black_box(r[1]));
+                } else {
+                    let input = if i % 2 == 0 { &card } else { short.as_ref().unwrap_or(&card) };
+                    let now = NOW0 + i as i64;
+                    let r = w.call(&|st, out| sol::m11_set_card(st, &rf, &sid, input, &[], &[], now, out)).unwrap();
+                    assert_eq!(r[1], 1);
+                    sum = sum.wrapping_add(black_box(r.len() as i64 + r[2]));
+                    if read_back {
+                        let r = w.call(&|st, out| sol::m11_query(st, 1, &rf, &sid, out)).unwrap();
+                        sum = sum.wrapping_add(black_box(r.len() as i64 + r[r.len() - 1]));
+                    }
+                }
+            }
+            total += t.elapsed().as_nanos();
+        }
+    }
+    let calls = (n * reps * if read_back { 2 } else { 1 }) as f64;
+    format!("ns {:.1} {}", total as f64 / calls, sum)
+}
+
 fn perf(op: &str, a: usize, reps: usize) -> String {
     match op {
         "perfA" | "handA" => {
@@ -325,12 +411,13 @@ fn perf(op: &str, a: usize, reps: usize) -> String {
             }
             format!("ns {:.1} {}", total as f64 / (a * reps) as f64, sum)
         }
+        "perfR" | "handR" | "perfH" | "handH" | "perfI" | "handI" => perf_resident(op, a, reps),
         _ => "bad".to_string(),
     }
 }
 
 // hand-vs-Pruv on one card: the admission / validation kind (or the stored-card checksum) of m11_perf_card against
-// hand admit + validate + build, then for a valid card the whole setCard result words with the given lang and by.
+// hand admit + validate + build, then the whole setCard result words with the given lang and by.
 fn hand_diff(card: &[u8], lang: &[u8], by: &[u8]) -> String {
     let pk = sol::m11_perf_card(card, NOW0);
     let hk = if !hand::admit(card) { -102 } else {
@@ -342,6 +429,7 @@ fn hand_diff(card: &[u8], lang: &[u8], by: &[u8]) -> String {
         }
     };
     if pk != hk { return format!("differ kind pruv={} hand={}", pk, hk); }
+    let kind = if card.is_empty() { 1 } else if pk < 0 { -pk } else { -1 };
     let rf = perf_ref();
     let sid = pkey("s1");
     let mut w = World::new();
@@ -356,9 +444,7 @@ fn hand_diff(card: &[u8], lang: &[u8], by: &[u8]) -> String {
         let hk = s.set_card(&rf, &sid, card, lang, by, NOW0 + i, &mut ho);
         match p {
             Err(2) if hk == -2 => return if pk < 0 { format!("same {}", pk) } else { "same refused-entry".to_string() },
-            // invalid or absent card: Pruv writes {ok: false, error} (saved 0, changed 0), hand returns the kind
-            Ok(p) if hk > 0 && p.len() > 4 && p[1] == 0 && p[2] == 0 && (pk < 0 || card.is_empty()) => {}
-            Ok(p) if hk == -1 && ho.len() == p.len() + 1 && ho[0] as usize == p.len() && ho[1..] == p[..] => {}
+            Ok(p) if hk == kind && ho.len() == p.len() + 1 && ho[0] as usize == p.len() && ho[1..] == p[..] => {}
             p => return format!("differ words call={} pruv={:?} hand={} {}", i, p.map(|x| words(&x)), hk, words(&ho)),
         }
     }

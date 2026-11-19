@@ -174,3 +174,23 @@ Advisory, recorded and not changed:
   Both belong to the M7 store and product integration.
 
 Confirmation audit (same reviewer, scope = the two fixes): both FIXED, no new required finding.
+
+## P26: resident setCard / hasCard (spec Appendix P26)
+
+- The budget stays in its `st` blob. `bud_card::budget_pos` walks the stored object once (`id`, `state`, `card`
+  positions, last pair wins, whole blob checked); `root::cur` adds the session entry and the `ref` budget id match.
+- `setCard` = `bud_card::judge` + one card size pass + an in-place rewrite of the budget into `out` (replace the card
+  value or append `"card"`) + `set_blob`. The returned budget and the stored budget are the same words. Grow / out too
+  small are decided before any `st` write.
+- `hasCard` = `truthy` on the resident card value; `current` copies the blob once; `isHalted` reads the resident
+  `state`. No query allocates.
+- `run_m11.py` now checks identity: a `dump` follows every `set`, and the budget returned by every successful setCard
+  equals the dumped blob of that session. `hand.rs` has the error path (`card_error`), `current`, `has_card` (both
+  validate `ref`), a strict `v_end` and the extended ISO year; perf items R (optional replacement), H (hasCard) and
+  I (setCard + current) were added.
+- `load` checks the blob with `bud_card::v_stored_end`: one V, units 0..65535, depth counted from 2, so a budget
+  that would exceed the 32-level limit inside the `{ok, budget}` setCard result is refused (status 2).
+- The advisory above ("the stand-in copies the whole budget on every lookup") is resolved by this change; effect
+  order still belongs to product integration.
+- Time after the audit fixes: every cell 0.49-0.71x hand (B 0.52, R 0.49, H 0.54-0.61, I 0.57); allocations per call at or below hand.
+  Peak RSS fixed shares above hand (A +2 pages, H +3 pages) are queued as row P26a.
