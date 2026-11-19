@@ -510,6 +510,33 @@ Queue order is explicit; R IDs identify packages and need not sort numerically. 
 | R11 req (blocked) | A: equal-semantics full hand lane + P10H query/call/byte counts; B: one RequestStore root with synchronous facts; C: world/answer handoff | Fresh Q3/Q7 observations and forge controls; 420k-call overhead and full list/open grids <=1.0 before unblocking. Async-only host requires new design, not assumed continuation parity. |
 | R12 whole batch | Audit dependency/intent ledger; close missing hand lanes and unresolved causes with new packages, never waivers; schedule P36 | Full four-pair Q ×2000 where generated, existing fixture suites and all §7.3 grids/selected §4 goals. No real-Lair hookup while any baseline/backend/cause or req gate is incomplete. |
 
+### 7.5 Perf debt (gate scope, 2026-11-19)
+
+The target stays at or below 1.0x hand for both time and memory. Only cells that measure cost proportional to data
+size (time, peak RSS growth) at the representative sizes M and L block the next package. A cell above 1.0x that is
+fixed share (code pages, `__text`, start buffers under 64 KiB) or tiny size (S or any cell under about 1 ms in total)
+is recorded here instead and does not block. One fix package per blocking cell; if the cell is still above 1.0x
+after it, its line-level cause (generated vs hand Rust) is written here and the queue moves on. The whole list is
+fixed in one package before R12.
+
+| Debt | Cell(s) | Owner row / cause |
+|---|---|---|
+| D1 | M4 resident `__TEXT` 304 vs 240 KiB hand | P13d, P13h (code size; fixed share) |
+| D2 | M4 `__text` from `blob_same` / `grow_copy` root-compare loop | P13j2b, P13j2c (code size; P13j2a proved the content facts) |
+| D3 | M4 sessions/clocks instructions 1.01-1.13x hand (time 0.75-0.83x), sessions n=100 peak RSS +16 KiB | T5e (time below hand; RSS fixed share) |
+| D4 | M4 peak RSS cells above hand from fixed code share | P13d/P13h with P13e.6-7 |
+| D5 | S-size cells of P18d / T5b2 (reopenmiss, closereopen, attach at S) | P18d, T5b2: their M cells still block |
+
+Queued with the debt list (not product perf):
+
+- Proof time: P13j2a's frame/content `ensures` raised M4 proof time by 45-61% (pruvc-rs) and 66-125% (pruvc),
+  because imported modules are re-proved in every importing root. Row: reuse a module's proof across roots
+  (modular proof results or a proof cache keyed by module source and imported facts).
+- Language gap: there are no ghost (spec-only) functions; spec helpers are emitted into the generated Rust
+  (Appendix P13j2a.3).
+- grok fixtures `acp-error-not-object` and `acp-timeout-session-load` fail on the reference side (also on main
+  f5d9891); fix the reference fixtures.
+
 ## 8. Test migration and open assumptions
 
 ### 8.1 Compatibility plan
