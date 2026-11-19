@@ -416,7 +416,8 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P25 | B/bud_card.pruv: validation/projection | P Q6+K, UTF-16 lengths/raw Number/refusal <=1.0; separate card proof-speed experiment only with hand assembly evidence. |
 | P26 | Same+m11_test: resident setCard/hasCard | P Q6+K, B/C optional replacement/identity <=1.0. Done (Appendix P26): budget resident in `st`, Q6 213/87 and K 10/10 on rs/py, hdiff 0, time 0.49-0.71x hand in every cell, allocations <= hand; audit + confirm audit fixed; peak RSS fixed shares queued as P26a. |
 | P26a | m11_test harness and layout: peak RSS fixed shares (Appendix P26.4) | P: A 100/300 (+2 pages, code layout; A code = base) and H (+3 pages, `World` st/out buffers) peak RSS <= hand at the same allocation counts, time cells kept <= 1.0x. Measured, no change kept (Appendix P26a): both shares are touched code pages (A +48 KiB, H +80 KiB in 11 runs), not buffers (H with 256-word `st`/`out`: same RSS); out-of-line entry wrappers give back 2-4 % per-call instructions, a link order file leaves A +32 / H +16; generated `bud_card` code size queued as P26b. |
-| P26b | B/bud_card.pruv and/or both codegens: A and setCard path code footprint (Appendix P26a.4) | P: A 100/300 and H peak RSS <= hand in the same binary by cutting the touched Pruv code (A: `put_card_words0` 14.1 KB + `check_optional` 4.9 KB vs ~15 KB hand; H: `put_card_words` 16.5 KB + `put_at` 6.8 KB + per-call-site entry copies), with no per-call instruction or time cell given back (the `put_card_words0` copy stays unless its A/C time is kept) and `__text` not above the P26a base (489,276 B). Entry copies per call site belong with P33 (inline attribute of generated entries). |
+| P26b | B/bud_card.pruv and/or both codegens: A and setCard path code footprint (Appendix P26a.4) | P: A 100/300 and H peak RSS <= hand in the same binary by cutting the touched Pruv code (A: `put_card_words0` 14.1 KB + `check_optional` 4.9 KB vs ~15 KB hand; H: `put_card_words` 16.5 KB + `put_at` 6.8 KB + per-call-site entry copies), with no per-call instruction or time cell given back (the `put_card_words0` copy stays unless its A/C time is kept) and `__text` not above the P26a base (489,276 B). Entry copies per call site belong with P33 (inline attribute of generated entries). Done for A (Appendix P26b): the per-call 192 B `bud_date::iso` array was the A heap page (allocator puts it on a fresh 16 KiB page after ~10 calls); `bud_date::iso_parts`/`put_iso` write the date into the card, optional tail out of line (`put_card_opt`), `check_optional` skipped without optional keys. A 100/300/1000 RSS = hand, B/C/R/I <= hand, every instruction cell <= base (H1000 +0.06 %, overlapping), `__text` 487,164. H stays +32 KiB: 5 more code pages (perf H lane 25 vs hand 20), all entry copies at call sites (`m11_load`/`m11_set_card` closures, `World::call`+`put_at`), queued as P26c. |
+| P26c | P33 inline attribute + B/bud_map.pruv + m11_test harness: H code pages (Appendix P26b.4) | P: H 100/1000 peak RSS <= hand without a link order file: the perf H lane executes 6 pages the hand lane does not (closures of `perf_resident`/`hand_check` with the entries inlined 2.1-4.6 KB each, `bud_map::put_at` 1.1 KB + `World::call`, `bud_card` writers 2.7 KB) against 1 hand-only page; no per-call instruction cell given back. |
 | P27 | B/bud_text.pruv,bud_num.pruv,bud_date.pruv,m6_test | P Q8+N/K, exact text/number/date, bounded source-byte outputs (not F1 payloads), helper grid <=1.0. |
 | P28 | New B/bud_auto.pruv,M12 driver: clear/record/stop | P Q7+L, owner lookup/record sizes; actual semantics, no stub pass. |
 | P29 | New B/bud_cleanup.pruv: restore/forget/dispose | P Q7+M, ordered timers/markers/linear reclaim; C/R/A axes. |
@@ -488,7 +489,7 @@ Queue order is explicit; R IDs identify packages and need not sort numerically. 
 
 | Queue | A / B / C scope | D closure |
 |---|---|---|
-| R01 budget | A: P01–P02; B/C: P03–P35 in §6 order, with P14/P15 deferred and no duplicate edits | C1–C10 per-op parity, surrogate/external-input rules; LLVM P17a–c explicit. |
+| R01 budget | A: P01–P02; B/C: P03–P35 in §6 order, with P14/P15 deferred and no duplicate edits; P26c (H code pages) runs after P33, whose inline attribute it needs | C1–C10 per-op parity, surrogate/external-input rules; LLVM P17a–c explicit. |
 | R00 mcp early source part | A: accepted-tool copy/visit counters; C: P05M pre-sized output and inout writes | 0–500 accepted tools, linear records+payload copy slope; no G2/G3 dependency. R04 continues later. |
 | R02 entry/lib | A: replay/copy counters and hand lane; B: one owned progress root; C: completion/effect handoff using source spans | entry + req consumer regressions; at-most-once effects; only actual async boundaries need continuation tests. |
 | R03 json/pkgs | A: parse/publication/access/copy split; B: local Document/NodeId bounds; C: source/tape byte handoff | Narrow A0–A5/Q/mutant families and affected consumers, external tape/ID admission; full suites at closure. |
@@ -6047,6 +6048,107 @@ All gates re-run after the fix (P25.8a.2 numbers are from the re-run).
 |---|---|---|---|
 | 65b87ba5 | write | Claude sonnet | `harness.rs` scenarios and `run_m11.py --hdiff` (one candidate, taken in by hand; the whitespace code points and the `enc` loop indentation were corrected after) |
 | dfdec104 | review | Codex gpt-6.2-astra ultra | audit of the hdiff comparison rules |
+
+## Appendix P26b (row P26b: A and setCard path footprint)
+
+Result: A 100/300/1000 peak RSS equal to hand, B/C/R/I at or below hand, `__text` 499,260 -> 487,164 B, every Pruv
+instruction cell at or below base. H stays +32 KiB (base +64): code pages only, all entry copies at call sites,
+queued as P26c. No compiler change. Changed files: `bench/l3/budget/bud_card.pruv`, `bench/l3/budget/bud_date.pruv`,
+`bench/l3/budget/m11_test/root.pruv`.
+
+### P26b.1 Change
+
+- `bud_card`: the optional tail (targets/verify/conflicts/state/by) of `put_card_words` and `put_card_words0` moved
+  into one out-of-line `put_card_opt`, called only when more than the 3 required keys were found; `any_optional(f)`
+  lets `validate` and `judge` skip `check_optional` when no optional key was found. The `put_card_words0` copy (fixed
+  start 0, P26 appendix) stays.
+- `bud_date`: `IsoParts {y, m, d, h, mi, sec, f, n}` with `valid_iso_parts`, `iso_parts(ms)` (the civil walk,
+  `n` = 24, 27, or 0 outside the guarded ranges), `put_iso(inout o, at, p)` (writes nothing if `n == 0` or the
+  date does not fit, so the size pass costs one compare) and `put_iso_prefix` (the units that fit, for a short
+  buffer, as the old `put_words` of the array did). `put_tail` takes the year length and an `at` up to 2^40.
+  `iso(ms)` keeps its output and is now `alloc(n)` + `put_iso`.
+- `bud_card::build` and `m11_set_card` take `iso_parts(now_ms)` and write the date straight into the card
+  (`put_date`), no per-call date array.
+
+### P26b.2 Cause of the A heap page
+
+vmmap with the process alive (A 100 x 25, 6 alternating runs): MALLOC_TINY+SMALL Pruv 128 KiB vs hand 112 KiB, 6/6.
+Ruled out: live bytes (counting allocator peak Pruv 24,876 B vs hand 25,636 B, 76 vs 151 allocations), calloc
+(`zeros` as `with_capacity`+`set_len`: still 128), block size (capacity 783 words = hand's 6,264 B, or +32: still
+128). An allocation trace showed the per-call `iso` array (24 words, 192 B) placed in a fresh small-region chunk
+(+0x24000) from about the 10th call on (15 of 25 calls), a 16 KiB page no other allocation touches; hand's date
+`String` (8 -> 16 -> 32 B) stays on touched pages. Reusing that buffer in a copy of `sol.rs` gave 112 = 112 KiB
+(6/6); P26b.1 removes the array from the source. Root: an `[i64]` holds one UTF-16 unit per word (8x the bytes).
+
+### P26b.3 Measurements (same binaries, base e1786b5 vs new, release `pruvc-rs`)
+
+Peak RSS, KiB median (min-max), 11 alternating runs, base and new lanes in the same run:
+
+| cell | Pruv base | hand base | Pruv new | hand new | Pruv - hand (new) |
+|---|---|---|---|---|---|
+| empty | 1600 | 1600 | 1616 | 1616 | 0 |
+| A 100 | 1776 | 1744 | 1760 | 1760 | 0 |
+| A 300 | 1760 | 1728 | 1744 | 1744 | 0 |
+| A 1000 | 1744 | 1744 | 1760 | 1760 | 0 |
+| B 1000 | 1952 | 1952 (1936-1952) | 1920 | 1936 (1920-1952) | -16 |
+| C 1000 | 1872 | 1888 (1872-1888) | 1840 | 1888 (1872-1888) | -48 |
+| R 100 / 1000 | 1952 / 1952 | 1968 / 1968 | 1920 / 1920 | 1952 / 1952 | -32 |
+| H 100 | 1952 | 1888 | 1920 (1920-1936) | 1888 (1888-1904) | +32, no overlap |
+| H 1000 | 1952 | 1888 | 1920 | 1888 (1888-1904) | +32, no overlap |
+| I 100 / 1000 | 1952 / 1952 | 1952 / 1952 | 1920 / 1920 | 1936 / 1936 | -16 |
+
+Instructions per call, (I(2R)-I(R))/R, median of 5 (base -> new, Pruv lane): A 100 11,337 -> 10,928, A 300
+19,845 -> 19,454, A 1000 3,970 -> 3,941, B 1000 9,541,037 -> 8,948,109, C 1000 8,741,971 -> 8,309,395, R 1000
+7,635,645 -> 7,100,315, H 100 150,767 -> 150,364, H 1000 1,310,514 -> 1,311,275, I 1000 11,088,857 ->
+10,493,039. H 1000 (+0.06 %) was re-run with 7 alternating runs per binary: base 1,311,854 [1,305,141..1,312,748]
+vs new 1,312,154 [1,308,526..1,315,294], overlapping, noise. Hand lanes unchanged (within 1 %, same hand code). Allocations:
+one fewer per setCard/build call than base by construction (the date array; c2 counted 76 vs hand 151 at A 100 x 25).
+
+`__text`: 499,260 (base) -> 490,620 (optional tail and `any_optional`) -> 487,164 (date writer).
+
+### P26b.4 H: the remaining +32 KiB is code (cause row P26c)
+
+vmmap (H 100 x 25, 3 runs): `__TEXT` resident Pruv 432 KiB vs hand 352 KiB; MALLOC_TINY+SMALL Pruv 192 KiB vs hand
+208-256 KiB. So the heap is not the gap. Block-level touch (one-shot breakpoint per basic block, 9,540 blocks,
+`work/p26b/lanes.sh`): A lane 20 pages each (equal). H lane: Pruv 25 pages, hand 20. Pages only one lane executes
+(bytes of executed blocks):
+
+| page | lane | executed code |
+|---|---|---|
+| 0x100004000, 0x100008000 | Pruv | `hand_check::{closure#0}` 1,020 + 1,084 B: the `m11_load` closure with the entry inlined (6.5 KB body; the identical `perf_resident` load closure was folded into it, so the symbol carries the `hand_check` name) |
+| 0x10000c000 | Pruv | `perf_resident::{closure#2}` 2,168 B: `m11_set_card` closure with the entry inlined |
+| 0x100010000 | Pruv | `perf_resident::{closure#1}` 4,560 B: `m11_query` closure with the entry inlined |
+| 0x100028000 | Pruv | `bud_map::put_at` 1,108 B, `bud_store::set_ef` 140, `ef` 136, `World::call` 76 |
+| 0x10002c000 | Pruv | `put_card_words` 1,016, `v_end_u` 584, `j_end_d` 564, `v_end_d` 520 |
+| 0x100034000 | hand | `hand::build` 3,028, `Store::set_card` 848, `obj_get` 504, `current_budget` 456, `skip`, `trim` |
+
+Four of the five extra pages are entry bodies copied into each `World::call` closure (P33: inline attribute of
+generated entries; the per-call-site copies are what the closures execute) and the `bud_map` store write
+(`put_at`, a file outside this row). Hand's code is 1 page because its set_card path is ~6 KB in one place. A link
+order file (`-order_file`) can move these atoms next to touched std pages, but it also moves hand addresses and
+is a build-option layout choice, not a code rule; not used (P26a measured it: A +32 / H +16).
+
+The code-placement research (Codex) confirmed the levers: CGU assignment follows the defining module, items in a
+CGU are emitted in mangled-name order, ld keeps input-object order per output section; `#[cold]` creates no
+separate section on Mach-O, `#[inline]`/item order cannot put generated code on std pages. The only rule-based cut
+is fewer executed bytes; P26c is that cut for H.
+
+### P26b.5 Gates
+
+- Every `bench/l3/budget` root (m6, m7, m8, m9, m10, m11, m34 admit/keys/m3/m4) verifies on `pruvc-rs` and
+  `pruvc.py`, rs == py byte-identical. Against base only m6 and m11 generated Rust changed (the two roots whose code
+  reaches `bud_date::iso`/`bud_card`; the others' generated Rust is byte-identical to base), so M7 q / M10 q / m34 need no re-run.
+- M11 Q6 `--pairs py,rs --count 300`: 213 exact / 87 prefix-ok each, pairs identical. `--hdiff` rs and py:
+  items 22,192, differ 0.
+- M6 `run_m6.py`: py and rs total 300, exact 300 (iso 35/35, iso.dok 10/10).
+- No compiler or `tests/` change, no codegen rule (no audit row).
+
+### P26b.6 Delegation
+
+| id | mode | engine / model | use |
+|---|---|---|---|
+| 33a155cd | research | Codex gpt-6.2-astra high | `__text` order: CGU, ld order, order file, `#[cold]`, what a codegen controls |
+| 77fa7a26 | write | Codex gpt-6.2-sol high | `bud_date` `IsoParts`/`iso_parts`/`put_iso`, `bud_card` and `m11_set_card` date writer (one candidate, applied as is) |
 
 ## Appendix P13i: lifecycle fixed share and the attach id copy
 
