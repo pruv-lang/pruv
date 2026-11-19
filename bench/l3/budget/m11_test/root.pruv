@@ -275,7 +275,7 @@ pub fn m11_set_card(inout st: [i64], rf: [i64], sid: [i64], card: [u8], lang: [u
     return 0;
   }
   if c.e < 0 { return 2; }
-  let iso: [i64] = crate::bud_date::iso(now_ms);
+  let iso: crate::bud_date::IsoParts = crate::bud_date::iso_parts(now_ms);
   let mut dry: [i64] = crate::ent_u16::empty();
   let by_at: i64 = at_b(by);
   let cs: i64 = crate::bud_card::put_card_words(inout dry, 0, card, r.f, by, by_at, iso);
