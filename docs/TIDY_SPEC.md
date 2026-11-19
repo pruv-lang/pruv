@@ -204,5 +204,22 @@ by byte-identical output and run by group, with the full test suite once before 
     in a private module (or with private visibility the host cannot name) so only checked entries and
     `pruv_proven::*` are reachable; every generated file changes, so run it as its own step with
     `check_generated`, the 7 budget roots and a must-reject host test that names an inner body.
+14. **Item 10(c) decision (two-compiler scope, adversarial debate 2026-11-19).** Decision: option ② (Rust
+    compiler first; Python kept as the reference and proof-differential oracle), effective only after the
+    R12/P36 close. Until then option ① stays: both compilers are full peers and every change is ported in the
+    same package. Evidence: 17 of the last 20 compiler-touching commits changed both compilers; `diff_rust`
+    caught a real G6 false reject; both verifiers shared the 2^40 assumption, so differential testing alone
+    misses shared mistakes. Follow-up rows:
+    (a) Before R12: make the Rust verifier judge independent expected results directly (g3_proof on Rust,
+        `spec_trace --only-rs`, `vacuity --compiler rs`, the 19 assert-false points, 3 contradictions, old
+        pairs), reporting false reject, false accept, wrong location and timeout separately.
+    (b) Before R12: fill the independent-expectation gaps (item 11 style accept twins) and measure the porting
+        cost per change.
+    (c) At the R12/P36 close, the ①→② gate: all required cases pass on Rust, every remaining difference has a
+        SPEC basis, an expected-result set exists that alone catches false proof acceptance, and the 4 combos
+        x 2000 baseline is recorded. Otherwise keep ①.
+    (d) After the gate: change the README policy and the CI compare scope together. New proof rules are still
+        written in both compilers; output/linker features close through spec execution values and perf. Keep
+        the corpus, the shared JSON (`pruvc/data/`) and `pruvc/runtime.c`.
 
 Order after the review: T0①–⑥ → T3 → T1 → T2 → T4 → P16, P17a → T5 (inline policy) → T6.
