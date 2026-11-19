@@ -1,0 +1,105 @@
+// V-word record editing. A replacement keeps its pair position; a new key is appended.
+pub fn rd(a: [i64], p: i64) -> i64 { return crate::ent_u16::rd(a, p); }
+
+pub fn wr(inout a: [i64], p: i64, x: i64) -> ()
+  ensures len(a) == len(old(a))
+{ crate::ent_u16::wr(inout a, p, x); }
+
+pub fn get(a: [i64], p: i64, k: str) -> i64
+{ return crate::bud_card::obj_get(a, p, k); }
+
+pub fn part(a: [i64], p: i64) -> [i64] ! alloc
+{ return crate::ent_u16::slice(a, p, crate::bud_card::v_end(a, p)); }
+
+pub fn cat(a: [i64], b: [i64]) -> [i64] ! alloc
+{ return crate::ent_u16::cat(a, b); }
+
+pub fn empty() -> [i64] ! alloc { return crate::ent_u16::empty(); }
+
+pub fn pair(a: i64, b: i64) -> [i64] ! alloc
+{
+  let mut out: [i64] = alloc(2, a);
+  out[1] = b;
+  return out;
+}
+
+pub fn text(s: str) -> [i64] ! alloc
+{ return cat(pair(6, len(s)), crate::ent_u16::lit(s)); }
+
+pub fn field(k: str, value: [i64]) -> [i64] ! alloc
+{ return cat(cat(crate::ent_u16::one(len(k)), crate::ent_u16::lit(k)), value); }
+
+pub fn object(n: i64, body: [i64]) -> [i64] ! alloc
+{ return cat(pair(9, n), body); }
+
+pub fn put(a: [i64], k: str, value: [i64]) -> [i64] ! alloc
+{
+  let p: crate::bud_auto::Pair = crate::bud_auto::find_pair(a, 0, k);
+  if p.v < 0 {
+    let mut out: [i64] = cat(a, field(k, value));
+    let count: i64 = crate::bud_store::c40(rd(a, 1));
+    wr(inout out, 1, count + 1);
+    return out;
+  }
+  return cat(cat(crate::ent_u16::slice(a, 0, p.v), value),
+             crate::ent_u16::slice(a, p.end, len(a)));
+}
+
+pub fn iso(now: i64) -> [i64] ! alloc
+{
+  if now < -8640000000000000 || now > 8640000000000000 { return empty(); }
+  let p: crate::bud_date::IsoParts = crate::bud_date::iso_parts(now);
+  if p.n != 24 && p.n != 27 { return empty(); }
+  let mut out: [i64] = alloc(p.n + 2, 0);
+  wr(inout out, 0, 6);
+  wr(inout out, 1, p.n);
+  crate::bud_date::put_iso(inout out, 2, p);
+  return out;
+}
+
+// Framed packed keys for resident clock IDs and scheduler addresses.
+pub fn packed(a: [i64], p: i64) -> [i64] ! alloc
+{
+  if p < 0 || p > len(a) - 2 || rd(a, p) != 6 { return empty(); }
+  let n: i64 = rd(a, p + 1);
+  if n < 0 || n > 1073741824 || n > len(a) - p - 2 { return empty(); }
+  let mut out: [i64] = alloc(1 + crate::bud_keys::words(n), 0);
+  wr(inout out, 0, n);
+  let status: i64 = crate::bud_keys::pack_units(inout out, 1, a, p + 2, n);
+  if status != 0 { return empty(); }
+  return out;
+}
+
+pub fn unpack(k: [i64]) -> [i64] ! alloc
+{
+  let n: i64 = rd(k, 0);
+  if n < 0 || n > 1073741824 || crate::bud_keys::rec_end(k, 0) != len(k) || len(k) == 0 { return empty(); }
+  let mut out: [i64] = alloc(n + 2, 0);
+  wr(inout out, 0, 6);
+  let status: i64 = crate::bud_keys::unpack_units(inout out, 2, k, 1, n);
+  if status != 0 { return empty(); }
+  wr(inout out, 1, n);
+  return out;
+}
+
+// One complete write to the resident session. A negative result requests more session-store words.
+pub fn write(inout st: [i64], e: i64, budget: [i64]) -> i64
+{
+  let n: i64 = len(budget);
+  if n > 4294967296 { return 2; }
+  if !crate::bud_map::blob_fits(st, e, n) {
+    let need: i64 = crate::bud_map::make_room(inout st, 0, n);
+    if need != 0 { return 0 - crate::bud_store::c40(need); }
+  }
+  return write_reserved(inout st, e, budget);
+}
+
+// The caller has already reserved enough space for this write. No Grow can follow it.
+pub fn write_reserved(inout st: [i64], e: i64, budget: [i64]) -> i64
+{
+  let n: i64 = len(budget);
+  if n > 4294967296 { return 2; }
+  let wrote: i64 = crate::bud_map::set_blob(inout st, e, budget, 0, n);
+  if wrote < 0 { return 2; }
+  return 0;
+}

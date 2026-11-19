@@ -1,10 +1,13 @@
-// M12 perf baseline: idiomatic hand-written Rust for setCard, current and hasCard. The stored budget and the result words are flat V words
+// M12 hand-written baseline for legacy operations. This lane stores budgets and results as flat V words
 // (tags 1..9, see ABI.md); the card / lang / by inputs are "JB" byte packets (big-endian):
 //   01 undefined, 02 null, 03 false, 04 true, 07 + f64 bits (every number), 06 + u32 len + WTF-8,
 //   08 + u32 count + elements, 09 + u32 count + (u32 key len + key WTF-8 + value) pairs; depth <= 32, one value, no tail.
-// Used by the harness perf and diff ops; it never feeds the Q comparison.
+// The full replay lane uses native state for lifecycle operations.
 #![allow(dead_code)]
 use std::collections::HashMap;
+
+#[path = "hand_life.rs"]
+pub mod life;
 
 const MAX_DEPTH: u32 = 32;
 const SAFE: f64 = 9007199254740991.0;
@@ -609,6 +612,7 @@ pub fn put_card(budget: &[i64], card: &[i64]) -> Vec<i64> {
 }
 
 /// Sessions keyed by the framed packed session-id key `n, words(n)` (packed u16 lanes, see bud_keys); value = budget V words.
+#[derive(Clone)]
 pub struct Store {
     pub sessions: HashMap<Vec<i64>, Vec<i64>>,
 }

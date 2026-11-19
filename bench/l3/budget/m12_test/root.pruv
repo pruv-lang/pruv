@@ -8,6 +8,88 @@ mod bud_map;
 mod bud_world;
 mod bud_card;
 mod bud_auto;
+mod bud_clock;
+mod bud_charge;
+mod bud_vwords;
+mod bud_effect;
+mod bud_cleanup;
+mod bud_vlife;
+
+pub fn m12_life(inout st: [i64], inout clocks: [i64], op: i64, rf: [i64], sid: [i64], arg: [i64], now: i64) -> [i64] ! alloc, io
+{
+  let effects: Vec<i64> = crate::bud_vlife::call(inout st, inout clocks, op, rf, sid, arg, now);
+  return crate::bud_vlife::array(effects);
+}
+
+pub fn m12_fire(inout st: [i64], inout clocks: [i64], sid: [i64], bid: [i64], budget_first: bool, now: i64) -> [i64] ! alloc, io
+{
+  let rf: [i64] = crate::bud_vlife::ref_value(sid, bid, budget_first);
+  let effects: Vec<i64> = crate::bud_vlife::call(inout st, inout clocks, 7, rf, sid, crate::ent_u16::empty(), now);
+  return crate::bud_vlife::array(effects);
+}
+
+pub fn m12_session(st: [i64], sid: [i64]) -> [i64] ! alloc
+{
+  let e: i64 = crate::bud_auto::session_entry(st, sid);
+  if e < 0 { return crate::ent_u16::empty(); }
+  let at: i64 = crate::bud_map::blob_off(st, e);
+  return crate::bud_vwords::cat(crate::ent_u16::one(1),
+    crate::ent_u16::slice(st, at, at + crate::bud_map::blob_len(st, e)));
+}
+
+pub fn m12_observe(st: [i64], inout out: [i64]) -> i64
+{
+  return crate::bud_world::observe(st, inout out);
+}
+
+// Seed toolSeen for cleanup fixtures. The oracle uses noteTool on a stale ref,
+// so fixture setup does not change any session's usage counter.
+pub fn m12_seed_tool(inout st: [i64], turn: [i64], activity: [i64], inout out: [i64]) -> i64
+{
+  return crate::bud_world::tool_note(inout st, turn, 1, crate::bud_vwords::rd(turn, 0), activity, 1, crate::bud_vwords::rd(activity, 0), inout out);
+}
+
+// The legacy entry results also carry effect counts. Expand them in source order
+// while leaving the compact ABI available to the hand differential and fixed checks.
+pub fn m12_legacy_effects(st: [i64], kind: i64, op: i64, rf: [i64], sid: [i64], caller: [i64], now: i64, w: [i64]) -> [i64] ! alloc
+{
+  let mut effects: Vec<i64> = vec_new::<i64>();
+  let id: [i64] = crate::bud_vwords::part(rf, crate::bud_card::obj_get(rf, 0, "sessionId"));
+  let mut owner: [i64] = crate::bud_vwords::unpack(sid);
+  let mut saved: i64 = 0;
+  let mut changed: i64 = 0;
+  if kind == 1 {
+    if op == 3 {
+      if rd(w, 0) == 2 {
+        effects = crate::bud_effect::value(move effects, 1, id);
+      }
+      if rd(w, 0) == 1 || cur(st, rf, sid).e < 0 {
+        owner = crate::bud_vwords::unpack(caller);
+      }
+      effects = crate::bud_effect::value(move effects, 1, owner);
+      if rd(w, 1) == 1 {
+        owner = crate::bud_vwords::unpack(crate::ent_u16::slice(w, 4, len(w)));
+      }
+    } else {
+      if rd(w, 0) == 1 { effects = crate::bud_effect::value(move effects, 1, id); }
+    }
+    saved = rd(w, 1);
+    changed = rd(w, 2);
+  } else if kind == 2 {
+    if rd(w, 3) >= 1 { effects = crate::bud_effect::value(move effects, 1, id); }
+    if rd(w, 3) == 2 { effects = crate::bud_effect::value(move effects, 1, id); }
+    if rd(w, 0) == 1 {
+      effects = crate::bud_effect::value(move effects, 2, crate::bud_vwords::pair(5, now));
+    }
+    saved = rd(w, 1);
+    changed = rd(w, 2);
+  } else {
+    if rd(w, 0) == 1 { effects = crate::bud_effect::value(move effects, 1, id); }
+  }
+  if saved == 1 { effects = crate::bud_effect::value(move effects, 3, owner); }
+  if changed == 1 { effects = crate::bud_effect::mark(move effects, 4); }
+  return crate::bud_vlife::array(effects);
+}
 
 // L3-10 M12 test root. STAND-IN for the session table of the real app (deps.findSession / deps.save): sessions live in
 // the resident store st via bud_world::session_put_w / bud_map::find_w; key = session id as a packed key, blob = the budget V of
