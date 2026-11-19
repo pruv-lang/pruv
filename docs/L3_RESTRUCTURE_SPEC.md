@@ -5180,7 +5180,8 @@ against base. - Every cell is below 1.0x hand on median and min.
 
 ### P26.5 Gates (Rust and Python compilers, Rust backend; all rc 0)
 
-- The 7 budget roots (m8, m34 m4/admit, m7, m9, m10, m11) on rs and py. m11 proof time after the audit fixes: rs 12.8 s, py 22.5 s (P25:
+- The 7 budget roots (m8, m34 m4/admit, m7, m9, m10, m11) on rs and py. m11 proof time after the audit fixes: rs 12.8 s, py 22.5 s (after the main a6fb98e merge, all 14 runs rc 0 again: rs 15.8 s, py 27.3 s in a run where
+  every root was slower, e.g. m9 rs 23.4 s) (P25:
   9.8-10.4 / 18.3-18.7; new functions `budget_pos`, `cur`, `judge`, `m11_set_card` resident path).
 - `run_m11.py` Q6 (300 cases, seed 20261117): exact 213, prefix-ok 87 on py and rs, pairs identical. K: 10/10 exact
   on both, identical. Query cases `work/p26/qx.py` (72: 6 states open/closed/halted/haltee/halt/Halted x 12 card values
