@@ -82,6 +82,39 @@ fn emit_all(inout out: [i64], pos: i64, w: [i64]) -> i64
   return emit_range(inout out, pos, w, 0, len(w));
 }
 
+// `u, units` of the UTF-8 text b (a bud_text output, valid UTF-8; u = bud_card::units(b)): a short decode loop, so the
+// error branch of m11_set_card stays small (the WTF-8 put_units loop inlined there cost the success path ~48
+// instructions per call, P27)
+fn emit_utf8(inout out: [i64], pos: i64, b: [u8], u: i64) -> i64
+  requires 0 <= pos && pos <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776 && len(out) == len(old(out))
+{
+  let n: i64 = len(b);
+  let mut p: i64 = emit(inout out, pos, u);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(b) && 0 <= p && p <= 1099511627776 && len(out) == len(old(out))
+    decreases n - i
+  {
+    // one unit per lead byte (two emits only for a 4-byte lead), so the loop has two emit sites
+    let c: i64 = b[i];
+    let mut v: i64 = c;
+    let mut k: i64 = 1;
+    if c >= 192 && i + 1 < n { v = (c % 32) * 64 + b[i + 1] % 64; k = 2; }
+    if c >= 224 && i + 2 < n { v = (c % 16) * 4096 + (b[i + 1] % 64) * 64 + b[i + 2] % 64; k = 3; }
+    if c >= 240 && i + 3 < n {
+      let mut x: i64 = (c % 8) * 262144 + (b[i + 1] % 64) * 4096 + (b[i + 2] % 64) * 64 + b[i + 3] % 64 - 65536;
+      if x < 0 { x = 0; }
+      p = emit(inout out, p, 55296 + x / 1024 % 1024);
+      v = 56320 + x % 1024;
+      k = 4;
+    }
+    p = emit(inout out, p, v);
+    i = i + k;
+  }
+  return p;
+}
+
 // the value at `at` is the string equal to the ASCII literal s
 fn str_is(v: [i64], at: i64, s: str) -> bool
 {
@@ -257,7 +290,9 @@ pub fn m11_set_card(inout st: [i64], rf: [i64], sid: [i64], card: [u8], lang: [u
   let r: crate::bud_card::Judged = crate::bud_card::judge(found, closed, card, at_b(card), lc);
   if r.kind >= 0 {
     // {ok: false, error}
-    let need: i64 = 5 + 14 + len(r.error);
+    // the error text is UTF-8 bytes: count its UTF-16 units once, then write them after the header
+    let eu: i64 = crate::bud_card::units(r.error, 0, len(r.error), len(r.error));
+    let need: i64 = 19 + eu;
     if len(out) < need { return 3; }
     let mut p: i64 = emit(inout out, 0, need - 1);
     p = emit(inout out, p, b01(r.used_now));
@@ -270,8 +305,7 @@ pub fn m11_set_card(inout st: [i64], rf: [i64], sid: [i64], card: [u8], lang: [u
     p = emit(inout out, p, 3);
     p = emit_lit(inout out, p, "error");
     p = emit(inout out, p, 6);
-    p = emit(inout out, p, len(r.error));
-    p = emit_all(inout out, p, r.error);
+    p = emit_utf8(inout out, p, r.error, eu);
     return 0;
   }
   if c.e < 0 { return 2; }

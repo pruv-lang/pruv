@@ -29,7 +29,7 @@
 //   has_card(budget, at) -> bool            Boolean(budget.card)
 //   put_card(budget, at, card) -> [i64]     budget object with "card" replaced in place, or appended at the end
 
-pub struct SetCard { kind: i64, used_now: bool, card: [i64], error: [i64] }
+pub struct SetCard { kind: i64, used_now: bool, card: [i64], error: [u8] }
 
 // ================= V words (stored budget) =================
 
@@ -653,7 +653,7 @@ fn cut(b: [u8], s: i64, e: i64, cap: i64) -> i64
 }
 
 // UTF-16 length of b[s..e); stops once it passes cap (then the result is > cap)
-fn units(b: [u8], s: i64, e: i64, cap: i64) -> i64
+pub fn units(b: [u8], s: i64, e: i64, cap: i64) -> i64
   requires 0 <= s && s <= e && e <= len(b) && 0 <= cap
   ensures 0 <= result && result <= 2 * (e - s)
 {
@@ -1377,7 +1377,12 @@ pub fn put_card(budget: [i64], at: i64, card: [i64]) -> [i64] ! alloc
 // kind: -1 ok (card set), 0 missing (no session / stale ref / closed), 1..6 the first failing field.
 // used_now: deps.now() was read (KD-1, §15 row 18: right after `done` passes, before the optional fields).
 // card / by are admitted JB packets (j_ok) with the value at `at` / `by_at` (-1 = absent).
-pub struct Judged { kind: i64, used_now: bool, f: Keys, error: [i64] }
+fn empty_error() -> [u8] ! alloc
+{
+  return alloc(0, 0);
+}
+
+pub struct Judged { kind: i64, used_now: bool, f: Keys, error: [u8] }
 
 pub fn judge(found: bool, closed: bool, card: [u8], at: i64, lang: i64) -> Judged ! alloc
   requires 0 <= lang && lang <= 1
@@ -1397,7 +1402,7 @@ pub fn judge(found: bool, closed: bool, card: [u8], at: i64, lang: i64) -> Judge
   if o != 0 {
     return Judged { kind: o, used_now: true, f: f, error: crate::bud_text::card_error(o, lang) };
   }
-  return Judged { kind: -1, used_now: true, f: f, error: crate::ent_u16::empty() };
+  return Judged { kind: -1, used_now: true, f: f, error: empty_error() };
 }
 
 pub fn set_card(found: bool, closed: bool, card: [u8], at: i64, lang: i64, by: [u8], by_at: i64, now_ms: i64) -> SetCard ! alloc
@@ -1409,5 +1414,5 @@ pub fn set_card(found: bool, closed: bool, card: [u8], at: i64, lang: i64, by: [
   if j.kind >= 0 {
     return SetCard { kind: j.kind, used_now: j.used_now, card: crate::ent_u16::empty(), error: copy(j.error) };
   }
-  return SetCard { kind: j.kind, used_now: j.used_now, card: build(card, j.f, by, by_at, now_ms), error: crate::ent_u16::empty() };
+  return SetCard { kind: j.kind, used_now: j.used_now, card: build(card, j.f, by, by_at, now_ms), error: empty_error() };
 }

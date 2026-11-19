@@ -12,7 +12,7 @@ const LKEYS = ['timeMinutes', 'delegations', 'commands', 'reviews', 'checks'];
 const LANGS = ['ko', 'en'];
 const SAFE = 9007199254740991n;
 
-const unitsOf = s => { const o = []; for (let i = 0; i < s.length; i++) o.push(s.charCodeAt(i)); return o; };
+const bytesOf = s => Array.from(Buffer.from(s, 'utf8'));
 const strOf = u => { let s = ''; for (const x of u) s += String.fromCharCode(x); return s; };
 const big = v => BigInt(v);
 
@@ -41,8 +41,8 @@ function counterName(k, lang) {
   return m[1];
 }
 // amount text "used/limit" extracted from the real refusal text
-function amountOf(r) {
-  const t = B.refusal(KEYS[r.reason], mkBudget(r), LANGS[r.lang]);
+function amountOf(r, budget = mkBudget(r)) {
+  const t = B.refusal(KEYS[r.reason], budget, LANGS[r.lang]);
   const m = t.match(textRe[r.lang]);
   if (!m) throw new Error(`cannot extract amount from ${JSON.stringify(t)}`);
   const name = counterName(r.reason, r.lang);
@@ -116,21 +116,21 @@ function handle(r) {
       // expected = the real JS expression of the TS helpers; `exact` shows where double division differs from exact floor
       return { w: [Math.floor(Number(ms) / 60000)], exact: Number(q) };
     }
-    case 'int': return { w: unitsOf(String(Number(big(r.x)))) };
-    case 'iso': return { w: unitsOf(new Date(Number(big(r.ms))).toISOString()) };
+    case 'int': return { w: bytesOf(String(Number(big(r.x)))) };
+    case 'iso': return { w: bytesOf(new Date(Number(big(r.ms))).toISOString()) };
     case 'dok': return { w: [Number.isNaN(new Date(Number(big(r.ms))).getTime()) ? 0 : 1] };
-    case 'ref': return { w: unitsOf(B.refusal(KEYS[r.reason], mkBudget(r), LANGS[r.lang])) };
-    case 'con': return { w: unitsOf(B.continueText(KEYS[r.reason], mkBudget(r), LANGS[r.lang])) };
-    case 'amt': return { w: unitsOf(amountOf(r)) };
-    case 'lmt': return { w: unitsOf(B.limitText({ unlimited: !!r.unl }, Number(big(r.limit)), LANGS[r.lang])) };
+    case 'ref': return { w: bytesOf(B.refusal(KEYS[r.reason], mkBudget(r), LANGS[r.lang])) };
+    case 'con': return { w: bytesOf(B.continueText(KEYS[r.reason], mkBudget(r), LANGS[r.lang])) };
+    case 'amt': return { w: bytesOf(amountOf(r)) };
+    case 'lmt': return { w: bytesOf(B.limitText({ unlimited: !!r.unl }, Number(big(r.limit)), LANGS[r.lang])) };
     case 'wir': {
       const wire = B.refusalWire(KEYS[r.reason], mkBudget(r));
-      return { w: [...unitsOf(wire.key), Number(wire.args.used), Number(wire.args.limit)] };
+      return { w: [...bytesOf(wire.key), Number(wire.args.used), Number(wire.args.limit)] };
     }
-    case 'cmi': return { w: unitsOf(B.cardMissing(LANGS[r.lang])) };
-    case 'cer': return { w: unitsOf(cardError(r.kind, r.lang)) };
-    case 'cnt': return { w: unitsOf(counterName(r.reason, r.lang)) };
-    case 'nol': return { w: unitsOf(B.limitText({ unlimited: true }, 0, LANGS[r.lang])) };
+    case 'cmi': return { w: bytesOf(B.cardMissing(LANGS[r.lang])) };
+    case 'cer': return { w: bytesOf(cardError(r.kind, r.lang)) };
+    case 'cnt': return { w: bytesOf(counterName(r.reason, r.lang)) };
+    case 'nol': return { w: bytesOf(B.limitText({ unlimited: true }, 0, LANGS[r.lang])) };
     case 'lng': {
       // language selection of the real helpers: engineText(entry, language) = entry[language] ?? entry.ko. Observed through cardMissing.
       const en = B.cardMissing('en');
@@ -154,8 +154,12 @@ function handle(r) {
 }
 
 // Timing: n calls of the real helper in a loop with an input alternating by +0/+1; one warm-up rep, then the min over `reps`.
-// consume a result like root.pruv: length plus parity of first+middle+last unit (charCodeAt also flattens V8 ropes)
-const eat = t => t.length + ((t.charCodeAt(0) + t.charCodeAt(t.length >> 1) + t.charCodeAt(t.length - 1)) & 1);
+// Consume UTF-8 bytes just as root.pruv does.
+const eat = text => {
+  const bytes = Buffer.from(text, 'utf8');
+  const n = bytes.length;
+  return n + ((bytes[0] + bytes[n >> 1] + bytes[n - 1]) & 1);
+};
 function perf(r) {
   const n = r.n;
   const a = r.args.map(big);
@@ -166,15 +170,27 @@ function perf(r) {
   } else if (r.name === 'p_int') {
     const base = Number(a[0]);
     body = () => { let s = 0; for (let i = 0; i < n; i++) s += eat(String(base + (i & 1))); return s; };
-  } else if (r.name === 'p_ref') {
+  } else if (r.name === 'p_ref' || r.name === 'p_amount') {
     const [reason, unl, used, limit, lang] = a.map(Number);
     const b = mkBudget({ reason, unl, used: '0', limit: String(limit), rem: 0 });
     const key = reason === 0 ? 'activeMs' : KEYS[reason];
-        body = () => {
+    body = () => {
       let s = 0;
       // time: used is activeMs, the same value root.pruv p_refusal receives
-      for (let i = 0; i < n; i++) { b.used[key] = used + (i & 1); s += eat(B.refusal(KEYS[reason], b, LANGS[lang])); }
+      for (let i = 0; i < n; i++) {
+        b.used[key] = used + (i & 1);
+        const text = r.name === 'p_ref' ? B.refusal(KEYS[reason], b, LANGS[lang])
+          : amountOf({ reason, lang }, b);
+        s += eat(text);
+      }
       return s;
+    };
+  } else if (r.name === 'p_card_error') {
+    const [kind, lang] = a.map(Number);
+    body = () => {
+      let sum = 0;
+      for (let i = 0; i < n; i++) sum += eat(cardError(kind + (i & 1), lang));
+      return sum;
     };
   } else throw new Error(`unknown perf op ${r.name}`);
   body();

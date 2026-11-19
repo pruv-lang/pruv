@@ -15,7 +15,7 @@ pub fn p_amt(n: i64, x: i64, limit: i64) -> i64 ! alloc
     invariant 0 <= i && i <= n && 0 <= d && d <= 1 && 0 <= acc && acc <= 1000000 * i
     decreases n - i
   {
-    let r: [i64] = crate::bud_text::amount_text(1, false, x + d, limit, 0);
+    let r: [u8] = crate::bud_text::amount_text(1, false, x + d, limit, 0);
     let mut l: i64 = len(r);
     let mut c: i64 = 0;
     if l > 0 {

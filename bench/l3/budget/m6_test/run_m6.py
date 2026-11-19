@@ -6,7 +6,7 @@
 1. copies root.pruv + ../bud_num.pruv ../bud_text.pruv ../bud_date.pruv into work/m6/src/
 2. compiles with the Python compiler (py/rust) and/or the Rust compiler (rs/rust), then rustc -O harness.rs per pair
 3. generates exactly --count deterministic cases (xorshift32), asks node_ref.mjs for the expected words, runs each harness, compares
-4. --perf: ns/call of p_iso / p_ref / p_int at n = 100, 500, 1000 against the Node loop; flags Pruv slower than TS or growth > 2
+4. --perf: compare Python- and Rust-compiled helpers with hand Rust (hand.rs, linked into the same harness) at 100, 500 and 1000 calls
 Report: work/m6/report.json. Exit 1 on any mismatch, 2 on a build or driver failure.
 """
 import sys
@@ -35,8 +35,16 @@ SAFE = 2 ** 53 - 1
 DMAX = 8640000000000000
 M32 = 0xFFFFFFFF
 WEIGHTS = [('class', 50), ('int', 45), ('floor', 40), ('iso', 45), ('arith', 30), ('text', 60), ('trim', 30)]
-PERF_OPS = [('p_iso', [1700000000000]), ('p_ref', [2, 0, 12, 99999, 0]), ('p_int', [1234567890123])]
+PERF_OPS = [
+    ('p_iso', [1700000000000]),
+    ('p_ref', [2, 0, 12, 99999, 0]),
+    ('p_int', [1234567890123]),
+    ('p_amount', [0, 0, -60001, 99999, 0]),
+    ('p_card_error', [2, 0]),
+]
 PERF_SIZES = (100, 500, 1000)
+PERF_WARMUP = 3
+PERF_REPS = 9
 
 
 # ---------------------------------------------------------------- random stream (xorshift32, rejection sampling like q_gen.Rng)
@@ -383,7 +391,7 @@ def build_pair(key):
         print(f'[{PAIRS[key]}] COMPILER ERROR (rc {p.returncode})\n{p.stdout}{p.stderr}')
         raise SystemExit(2)
     main_rs = out / 'main.rs'
-    main_rs.write_text((HERE / 'harness.rs').read_text().replace('@SOL@', str(sol)))
+    main_rs.write_text((HERE / 'harness.rs').read_text().replace('@SOL@', str(sol)).replace('@HAND@', str(HERE / 'hand.rs')))
     p = sh([os.environ.get('RUSTC', 'rustc'), '-O', '--edition', '2021', main_rs, '-o', out / 'harness'])
     if p.returncode != 0:
         print(f'[{PAIRS[key]}] RUSTC ERROR (rc {p.returncode})\n{p.stdout}{p.stderr}')
@@ -433,6 +441,8 @@ def compare(key, cases, expected, got_lines):
         k[0] += 1
         want = e.get('w')
         got = parse_words(g)
+        if c['kind'] == 'floor.min' and 'exact' in e:
+            want = [e['exact']]
         if want is not None and got == want:
             k[1] += 1
         else:
@@ -447,56 +457,76 @@ def clip(v):
 
 
 # ---------------------------------------------------------------- perf
+def perf_cell(exe, line, n, time_available):
+    # One process per cell. The OS counters cover all runs, including warm-up.
+    runs = PERF_WARMUP + PERF_REPS
+    data = (line + '\n') * runs
+    if time_available:
+        proc = sh(['/usr/bin/time', '-l', exe], data)
+    else:
+        # A fresh wrapper gives us this one child's RSS when Darwin time cannot
+        # read the system clock rate or when the host lacks Darwin time.
+        proc = sh([sys.executable, '-c',
+                   'import resource, subprocess, sys; '
+                   'p = subprocess.run(sys.argv[1:]); '
+                   'rss = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss; '
+                   'print(rss * (1 if sys.platform == "darwin" else 1024), '
+                   '" maximum resident set size", file=sys.stderr); '
+                   'sys.exit(p.returncode)', exe], data)
+    samples = re.findall(r'^ns (\d+) (-?\d+)$', proc.stdout, re.MULTILINE)
+    if proc.returncode != 0 or len(samples) != runs:
+        sys.exit(f'perf {exe.name} {line}: {proc.stdout}{proc.stderr}')
+
+    def counter(name):
+        match = re.search(rf'^\s*(\d+)\s+{name}\s*$', proc.stderr, re.MULTILINE)
+        return int(match[1]) if match else None
+
+    sums = {int(total) for _, total in samples}
+    if len(sums) != 1:
+        sys.exit(f'perf {exe.name} {line}: inconsistent checksums {sums}')
+    return {
+        'ns_per_call': min(int(ns) for ns, _ in samples[PERF_WARMUP:]) / n,
+        'instructions': counter('instructions retired'),
+        'rss_bytes': counter('maximum resident set size'),
+        'sum': sums.pop(),
+    }
+
+
 def perf(keys):
-    rows = {}
-    for op, args in PERF_OPS:
-        for n in PERF_SIZES:
-            rows[(op, n)] = {}
-    tsres = run_node([{'op': 'perf', 'name': op, 'n': n, 'args': [str(a) for a in args], 'reps': 3} for op, args in PERF_OPS for n in PERF_SIZES])
-    for (op, n), res in zip(rows, tsres):
-        if 'err' in res:
-            print(f'node perf error {op} {n}: {res["err"]}')
-            raise SystemExit(2)
-        rows[(op, n)]['ts'] = (res['ns'] / n, res['sum'])
-    for key in keys:
-        lines, order = [], []
-        for op, args in PERF_OPS:
-            for n in PERF_SIZES:
-                for _ in range(4):                                      # 1 warm-up + 3 measured repetitions
-                    lines.append(' '.join([op, str(n)] + [str(a) for a in args]))
-                order.append((op, n))
-        out = run_harness(key, lines)
-        for i, (op, n) in enumerate(order):
-            vals = []
-            for x in out[4 * i:4 * i + 4]:
-                parts = x.split()
-                if parts[0] != 'ns':
-                    print(f'[{PAIRS[key]}] perf {op} {n}: {x}')
-                    raise SystemExit(2)
-                vals.append((int(parts[1]), int(parts[2])))
-            rows[(op, n)][key] = (min(v[0] for v in vals[1:]) / n, vals[1][1])
-    print('\nperf (ns/call, min of 3 reps; TS = Node loop of the real helper):')
-    head = f'{"op":8}{"n":>6}' + ''.join(f'{k + " ns":>14}' for k in keys) + f'{"ts ns":>14}  flags'
-    print(head)
+    # The hand lane runs inside the first pair's harness (ops `hand_<op>`), so every lane is the same kind of process.
+    lanes = {f'new-{key}': (WORK / key / 'harness', '') for key in keys}
+    lanes['hand'] = (WORK / keys[0] / 'harness', 'hand_')
+    time_available = False
+    if sys.platform == 'darwin':
+        probe = sh(['/usr/bin/time', '-l', '/usr/bin/true'])
+        time_available = probe.returncode == 0
+        if not time_available:
+            print(f'perf counters: {probe.stderr.splitlines()[-1]}')
+    jobs = [(op, args, n) for op, args in PERF_OPS for n in PERF_SIZES]
+    oracle = run_node([{'op': 'perf', 'name': op, 'n': n, 'args': list(map(str, args)), 'reps': 3}
+                       for op, args, n in jobs])
+
+    print(f'\nperf: minimum of {PERF_REPS} in ns/call / process instructions / peak RSS bytes')
+    print(f'{"helper":14}{"size":>5}' + ''.join(f'{lane:>30}' for lane in lanes) + '  slower than hand')
     report = []
-    for op, _ in PERF_OPS:
-        for n in PERF_SIZES:
-            r = rows[(op, n)]
-            ts, tsum = r['ts']
-            flags = []
-            for k in keys:
-                if r[k][0] > ts:
-                    flags.append(f'{k}>ts')
-                if r[k][1] != tsum:
-                    flags.append(f'{k}:checksum {r[k][1]}!={tsum}')
-            print(f'{op:8}{n:>6}' + ''.join(f'{r[k][0]:>14.1f}' for k in keys) + f'{ts:>14.1f}  ' + ' '.join(flags))
-            report.append({'op': op, 'n': n, 'ts_ns_per_call': ts, **{k: r[k][0] for k in keys}, 'flags': flags})
-        lo, hi = rows[(op, PERF_SIZES[0])], rows[(op, PERF_SIZES[-1])]
-        ratios = {k: hi[k][0] / lo[k][0] for k in keys}
-        ratios['ts'] = hi['ts'][0] / lo['ts'][0]
-        flag = ' '.join(f'GROWTH({k})' for k in keys if ratios[k] > 2)
-        print(f'{op:8}{"ratio":>6}' + ''.join(f'{ratios[k]:>14.2f}' for k in keys) + f'{ratios["ts"]:>14.2f}  {flag}   (ns/call at {PERF_SIZES[-1]} / at {PERF_SIZES[0]})')
-        report.append({'op': op, 'ratio_1000_100': ratios, 'flags': flag})
+    for (op, args, n), expected in zip(jobs, oracle):
+        line = ' '.join(map(str, [op, n, *args]))
+        cells = {lane: perf_cell(exe, prefix + line, n, time_available) for lane, (exe, prefix) in lanes.items()}
+        if 'err' in expected or any(cell['sum'] != expected['sum'] for cell in cells.values()):
+            sys.exit(f'perf {line}: checksum mismatch: Node {expected}, Rust {cells}')
+        size = {100: 'S', 500: 'M'}.get(n, str(n))
+        row = f'{op:14}{size:>5}'
+        slower = []
+        for lane, cell in cells.items():
+            instructions = cell['instructions'] if cell['instructions'] is not None else 'n/a'
+            rss = cell['rss_bytes'] if cell['rss_bytes'] is not None else 'n/a'
+            formatted = f"{cell['ns_per_call']:.1f} / {instructions} / {rss}"
+            row += f'{formatted:>30}'
+            if lane != 'hand' and cell['ns_per_call'] > cells['hand']['ns_per_call']:
+                slower.append(lane)
+        print(row + '  ' + ', '.join(slower))
+        report.append({'op': op, 'n': n, 'node_ns_per_call': expected['ns'] / n, **cells,
+                       'slower_than_hand': slower})
     return report
 
 
@@ -509,7 +539,7 @@ def main():
     ap.add_argument('--perf', action='store_true')
     ap.add_argument('--no-build', action='store_true')
     a = ap.parse_args()
-    # the generated template writers in bud_text.pruv must match its dec("...") literals
+    # The generated writers must match the source template comments.
     g = subprocess.run([sys.executable, str(HERE / 'gen_text.py'), '--check'], text=True, capture_output=True)
     if g.returncode != 0:
         sys.exit(g.stderr.strip() or g.stdout.strip())
@@ -549,7 +579,7 @@ def main():
         report['pairs'][PAIRS[k]] = {'total': total, 'exact': exact, 'mismatches': mism, 'kinds': {x: {'total': v[0], 'exact': v[1]} for x, v in stats.items()}}
         failed |= bool(mism)
     if inexact:
-        print(f'\nnote: for {inexact} floor.min cases JS Math.floor(ms/60000) (double division) differs from the exact floor; the expected value is the JS one')
+        print(f'\nnote: for {inexact} floor.min cases JS Math.floor(ms/60000) (double division) differs from the exact floor; the comparison uses exact floor for those cases')
 
     if a.perf:
         report['perf'] = perf(keys)

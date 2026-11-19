@@ -1,14 +1,7 @@
 #!/usr/bin/env python3
-"""Regenerate the hot-path template writers of bud_text.pruv.
+"""Generate UTF-8 byte writers and byte-length dispatchers from bud_text.pruv's template comments.
 
-refusal/continue_text run on every budget refusal, so they must not decode UTF-8 literals per call. This script
-takes the template texts from the `dec("...")` literals that bud_text.pruv already holds (the single source of the
-texts) and emits, between the GENERATED markers, writer functions that store the UTF-16 units directly, three
-units packed per i64 constant. Run after changing any template text:
-
-  python3 bench/l3/budget/m6_test/gen_text.py
-
-With --check it only fails (exit 1) when the generated region does not match the literals; run_m6.py calls that.
+Run after changing a template. With --check, fail if the generated region is stale.
 """
 import re
 import sys
@@ -19,50 +12,16 @@ BEGIN = '// BEGIN GENERATED (m6_test/gen_text.py): template writers, do not edit
 END = '// END GENERATED\n'
 
 
-def lits(body):
-    out = re.findall(r'dec\("((?:[^"\\]|\\.)*)"\)', body)
-    for s in out:
-        if '\\' in s:
-            raise SystemExit(f'escape sequences are not supported in template literals: {s!r}')
-    return out
-
-
-def fn_body(text, name):
-    m = re.search(r'\nfn ' + name + r'\(|\npub fn ' + name + r'\(', text)
-    if not m:
-        raise SystemExit(f'function {name} not found')
-    i = text.index('{\n', m.end())
-    j = text.index('\n}\n', i)
-    return text[i:j]
-
-
-def units(s):
-    out = []
-    for ch in s:
-        c = ord(ch)
-        if c > 0xFFFF:
-            raise SystemExit('template text must be BMP only')
-        out.append(c)
-    return out
-
-
-def writer(name, s):
-    u = units(s)
-    lines = [f'// {s!r} ({len(u)} units)',
-             f'fn put_{name}(inout o: [i64], at: i64) -> ()',
+def writer(name, value):
+    data = value.encode('utf-8')
+    lines = [f'fn put_{name}(inout o: [u8], at: i64) -> ()',
              '  requires 0 <= at && at <= 1000000',
              '  ensures len(o) == len(old(o))',
-             '{']
-    k = 0
-    while k + 3 <= len(u):
-        w = u[k] + u[k + 1] * 65536 + u[k + 2] * 4294967296
-        lines.append(f'  put3(inout o, at + {k}, {w});')
-        k += 3
-    while k < len(u):
-        lines.append(f'  crate::ent_u16::wr(inout o, at + {k}, {u[k]});')
-        k += 1
+             '{',
+             f'  if at + {len(data)} > len(o) {{ return; }}']
+    lines.extend(f'  o[at + {k}] = {byte};' for k, byte in enumerate(data))
     lines.append('}')
-    return '\n'.join(lines) + '\n', len(u)
+    return '\n'.join(lines) + '\n', len(data)
 
 
 def main():
@@ -71,17 +30,7 @@ def main():
     if head is None:
         raise SystemExit('GENERATED markers missing in bud_text.pruv')
     tail = rest.split(END, 1)[1]
-    src = head + tail
-    # texts: (piece name, literal) taken from the cold decoding functions
-    ref_en_pre, ref_en_post, ref_ko_pre, ref_ko_post = lits(fn_body(src, 'refusal_cold'))
-    con_en_pre, con_en_post, con_ko_pre, con_ko_post = lits(fn_body(src, 'continue_cold'))
-    nl_en, nl_ko = lits(fn_body(src, 'no_limit'))
-    rn = lits(fn_body(src, 'reason_name'))
-    cn_ko = lits(fn_body(src, 'counter_name'))
-    pieces = [('pre_0_0', ref_ko_pre), ('pre_0_1', ref_en_pre), ('post_0_0', ref_ko_post), ('post_0_1', ref_en_post),
-              ('pre_1_0', con_ko_pre), ('pre_1_1', con_en_pre), ('post_1_0', con_ko_post), ('post_1_1', con_en_post),
-              ('nl_0', nl_ko), ('nl_1', nl_en)]
-    pieces += [(f'cn_{r}_0', cn_ko[r]) for r in range(5)] + [(f'cn_{r}_1', rn[r]) for r in range(5)]
+    pieces = re.findall(r'^// text (\w+): (.+)$', head, re.MULTILINE)
     out = [BEGIN]
     lens = {}
     for name, s in pieces:
@@ -92,7 +41,7 @@ def main():
     def dispatch(fname, keys, params, reqs):
         # keys: list of (condition, piece)
         ln = [f'fn len_{fname}({params}) -> i64', *reqs, '  ensures 0 <= result && result <= 1000', '{']
-        pt = [f'fn put_{fname}(inout o: [i64], at: i64, {params}) -> ()', *reqs,
+        pt = [f'fn put_{fname}(inout o: [u8], at: i64, {params}) -> ()', *reqs,
               '  requires 0 <= at && at <= 1000000', '  ensures len(o) == len(old(o))', '{']
         for cond, p in keys[:-1]:
             ln.append(f'  if {cond} {{ return {lens[p]}; }}')
@@ -110,6 +59,25 @@ def main():
     keys = [(f'reason == {r} && lang == {l}', f'cn_{r}_{l}') for r in range(5) for l in (0, 1)]
     out.append(dispatch('cn', keys, 'reason: i64, lang: i64',
                         ['  requires 0 <= reason && reason <= 4', '  requires 0 <= lang && lang <= 1']))
+    out.append(dispatch('cm', [('lang == 0', 'cm_0'), ('lang == 1', 'cm_1')], 'lang: i64',
+                        ['  requires 0 <= lang && lang <= 1']))
+    # Dispatch before allocation so each fixed-size error can be initialized directly.
+    errors = ['pub fn card_error(kind: i64, lang: i64) -> [u8] ! alloc',
+              '  requires 0 <= kind && kind <= 6',
+              '  requires 0 <= lang && lang <= 1', '{']
+    for k in range(7):
+        for lang in range(2):
+            name = f'ce_{k}_{lang}'
+            last = k == 6 and lang == 1
+            if not last:
+                errors.append(f'  if kind == {k} && lang == {lang} {{')
+            indent = '  ' if last else '    '
+            errors.extend([f'{indent}let mut o: [u8] = alloc({lens[name]}, 0);',
+                           f'{indent}put_{name}(inout o, 0);',
+                           f'{indent}return o;'])
+            if not last:
+                errors.append('  }')
+    out.append('\n'.join(errors + ['}']) + '\n')
     out.append(END)
     new = head + ''.join(out) + tail
     if '--check' in sys.argv[1:]:
