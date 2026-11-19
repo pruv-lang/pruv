@@ -366,7 +366,11 @@ fn inout_ops(e: &Expr, out: &mut BTreeSet<String>) {
     if let Expr::Call(c) = e {
         for a in &c.args {
             if let Expr::InoutArg(ia) = a {
-                if let Expr::Var(v) = &*ia.expr {
+                let mut place = ia.expr.as_ref();
+                while let Expr::FieldAccess(f) = place {
+                    place = &f.base;
+                }
+                if let Expr::Var(v) = place {
                     out.insert(v.name.clone());
                 }
             }
@@ -1298,6 +1302,11 @@ impl<'a> FnVerifier<'a> {
             let (a, n) = self.model.buf_parts(ft, term)?;
             return Ok(Some(self.wf_buf(ft, &n, &a)));
         }
+        if matches!(ft.coll(), Some(Coll::Map(..))) {
+            let (_, f) = self.model.map_field(ft)?;
+            let n = f.accs[2].apply1(term);
+            return Ok(Some(self.z.and(&[n.ge_i(0), n.le_i(MAX_LEN)])));
+        }
         self.try_wf(ft, term)
     }
 
@@ -1333,7 +1342,19 @@ impl<'a> FnVerifier<'a> {
     fn field_val(&self, fty: &Ty, term: Ast, name: &str) -> R<Val> {
         if Model::is_buf(fty) {
             let (a, n) = self.model.buf_parts(fty, &term)?;
-            return Ok(Val::Arr(Arr::new(a, n, name.to_string(), Model::buf_elem(fty))));
+            let arr = if let Some(Coll::Vec(elem)) = fty.coll() {
+                coll_arr(a, n, name, &elem)
+            } else {
+                Arr::new(a, n, name.to_string(), Model::buf_elem(fty))
+            };
+            return Ok(Val::Arr(arr));
+        }
+        if let Some(Coll::Map(kty, vty)) = fty.coll() {
+            let (_, f) = self.model.map_field(fty)?;
+            return Ok(Val::Map(MapV {
+                d: f.accs[0].apply1(&term), a: f.accs[1].apply1(&term),
+                n: f.accs[2].apply1(&term), name: name.to_string(), kty, vty,
+            }));
         }
         Val::from_field(fty, term)
     }
@@ -1344,6 +1365,10 @@ impl<'a> FnVerifier<'a> {
             if Model::is_buf(fty) {
                 return Ok(self.model.buf_put(fty, &a.n, &a.a)?);
             }
+        }
+        if let Val::Map(m) = v {
+            let (_, f) = self.model.map_field(fty)?;
+            return Ok(f.ctor.apply(&[m.d.clone(), m.a.clone(), m.n.clone()]));
         }
         Ok(v.try_ast()?.clone())
     }
@@ -2096,14 +2121,16 @@ impl<'a> FnVerifier<'a> {
             }
             // A move reads the old value. Field assignment replaces it after evaluating the call.
             Expr::Move(x) => {
-                let v = env.try_get(&x.name).ok_or_else(|| format!("'{}'", x.name))?;
-                let Some(field) = x.fields.first() else { return Ok(v.clone()) };
-                let Val::Dt(va, sty) = v else { return Err("field move on a non-struct value".to_string()) };
-                let sf = model.struct_info(sty)?;
-                let idx = model.field_index_of(sty, field, None)?;
-                let fty = &model.fields_of(sty, None)?[idx].1;
-                self.observe(st, va, Some(sty), false)?;
-                self.field_val(fty, sf.accs[idx].apply1(va), field)
+                let mut v = env.try_get(&x.name).ok_or_else(|| format!("'{}'", x.name))?.clone();
+                for field in &x.fields {
+                    let Val::Dt(va, sty) = v else { return Err("field move on a non-struct value".to_string()) };
+                    let sf = model.struct_info(&sty)?;
+                    let idx = model.field_index_of(&sty, field, None)?;
+                    let fty = &model.fields_of(&sty, None)?[idx].1;
+                    self.observe(st, &va, Some(&sty), false)?;
+                    v = self.field_val(fty, sf.accs[idx].apply1(&va), field)?;
+                }
+                Ok(v)
             }
             // G5 A0: never reaches the proof layer (the driver's A0 guard stops the program earlier)
             Expr::InoutArg(x) => self.ev(&x.expr, st, g, code, env),
@@ -2842,16 +2869,23 @@ impl<'a> FnVerifier<'a> {
         };
         for &i in ios {
             let pname = f.params[i].name.as_str();
-            let pre: Arr = match cenv.try_get(&old_key(pname)) {
-                Some(v) => v.try_arr()?.clone(),
-                None => return Err(format!("'{}'", pname)),
-            };
             let name: String = match call.args.get(i) {
                 Some(Expr::InoutArg(ia)) => match &*ia.expr {
                     Expr::Var(v) => v.name.clone(),
                     _ => return Err("inout_finals: operand is not a name".to_string()),
                 },
                 _ => return Err("inout_finals: missing inout argument".to_string()),
+            };
+            let pre = cenv.get(&old_key(pname));
+            let Val::Arr(pre) = pre else {
+                let ty = Ty::from_name(&f.params[i].ty);
+                let nv = self.try_fresh(&name, &ty)?;
+                if let Some(wf) = self.wf_of_val(&ty, &nv)? {
+                    self.assume(st, g, wf);
+                }
+                cenv.set(pname, nv.clone());
+                st.env.set(&name, nv);
+                continue;
             };
             let fv = self.try_fresh(&name, &pre.array_ty())?;
             let fa = fv.try_arr()?.clone();
@@ -3588,7 +3622,13 @@ impl<'a> FnVerifier<'a> {
                 let r = v.a.select(&i);
                 match v.elem {
                     Elem::Bool => Ok(Val::Bool(r)),
-                    Elem::Abs => Ok(Val::Dt(r, v.elem_ty())),
+                    Elem::Abs => {
+                        let ty = v.elem_ty();
+                        if let Some(wf) = self.try_wf(&ty, &r)? {
+                            self.assume(st, g, wf);
+                        }
+                        Ok(Val::Dt(r, ty))
+                    },
                     Elem::I64 | Elem::U8 => {
                         // as an array read: an i64/u8 element is a machine integer
                         if code {
@@ -4045,7 +4085,22 @@ impl<'a> FnVerifier<'a> {
             }
             Stmt::Match(s) => {
                 let mut st = st.fork(None);
-                let sv = self.ev0(&s.scrutinee, &mut st, &[], true)?;
+                let mut map_update = None;
+                let sv = if let Expr::Call(call) = &s.scrutinee {
+                    if call.name == "map_get_mut" && !self.funcs.contains_key(&call.name) {
+                        let Expr::InoutArg(arg) = &call.args[0] else { return Err("missing inout place".into()) };
+                        let k = self.ev0_ast(&call.args[1], &mut st, &[], true)?;
+                        let m = self.ev0(&arg.expr, &mut st, &[], true)?.try_map()?.clone();
+                        let ty = Ty::from_name(call.ty.as_deref().ok_or("missing map result type")?);
+                        let v = self.map_lookup(&m, &k, Some(&ty))?;
+                        map_update = Some((arg.expr.as_ref(), m, k));
+                        v
+                    } else {
+                        self.ev0(&s.scrutinee, &mut st, &[], true)?
+                    }
+                } else {
+                    self.ev0(&s.scrutinee, &mut st, &[], true)?
+                };
                 let v = sv.try_ast()?.clone();
                 let outer: HashSet<String> = st.env.0.iter().map(|(k, _)| k.clone()).collect();
                 let mut out: Vec<State> = Vec::new();
@@ -4117,6 +4172,26 @@ impl<'a> FnVerifier<'a> {
                         }
                     }
                     for mut end in self.exec_block(&a.body, b)? {
+                        if let (Some((place, before, key)), Some(name)) = (&map_update, a.binders.first()) {
+                            let mut after = before.clone();
+                            after.a = before.a.store(key, end.env.get(name).try_ast()?);
+                            let mut root = *place;
+                            let mut path = Vec::new();
+                            while let Expr::FieldAccess(f) = root {
+                                path.push(f.field.as_str());
+                                root = &f.base;
+                            }
+                            let Expr::Var(root) = root else { return Err("invalid map place".into()) };
+                            let value = Val::Map(after);
+                            if path.is_empty() {
+                                end.env.set(&root.name, value);
+                            } else {
+                                path.reverse();
+                                let Val::Dt(term, ty) = end.env.get(&root.name) else { return Err("invalid map root".into()) };
+                                let rebuilt = self.try_rebuild_v(ty, term, &path, &value)?;
+                                end.env.set(&root.name, Val::Dt(rebuilt, ty.clone()));
+                            }
+                        }
                         // The binder and the arm's local variables end with the arm; only updates to outer variables remain
                         let drop_keys: Vec<String> =
                             end.env.0.iter().filter(|(k, _)| !outer.contains(k)).map(|(k, _)| k.clone()).collect();

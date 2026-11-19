@@ -6,7 +6,7 @@ passes through unchanged."""
 import re
 
 from vast import *
-from typeinfo import TypeTable, fn_owner, is_collection, contains_collection, is_owned_field_type, type_name
+from typeinfo import TypeTable, fn_owner, is_collection, contains_collection, is_owned_field_type, type_name, is_nongeneric_struct
 from refine import _kids as expr_kids
 
 
@@ -58,6 +58,8 @@ _add("vec_push", _T, lambda T: ([_p("v", _vec(T), True), _p("x", T)], _vec(T)), 
 _add("vec_get", _T, lambda T: ([_p("v", _vec(T)), _p("i", I64)], T))
 _add("map_new", _KV, lambda K, V: ([], _map(K, V)), ["alloc"])
 _add("map_get", _KV, lambda K, V: ([_p("m", _map(K, V)), _p("k", K)], mk_option(V)))
+_add("map_get_mut", _KV, lambda K, V: ([_p("m", _map(K, V)), _p("k", K)], mk_option(V)))
+CATALOG["map_get_mut"].params[0].mode = "inout"
 _add("map_insert", _KV, lambda K, V: ([_p("m", _map(K, V), True), _p("k", K), _p("v", V)], _map(K, V)), ["alloc"])
 _add("string_new", [], lambda: ([], STRING), ["alloc"])
 _add("string_push_str", [], lambda: ([_p("s", STRING, True), _p("text", STR)], STRING), ["alloc"])
@@ -368,7 +370,7 @@ class _Ownership:
     def stmt(s, x, st, declared):
         if isinstance(x, Let):
             s.consume(x.value, st, "let")
-            if is_collection(x.type):
+            if is_collection(x.type) or is_nongeneric_struct(x.type, s.types):
                 st[x.name] = "live"
                 declared.append(x.name)
                 kind = _must_kind(x.type)
@@ -391,6 +393,7 @@ class _Ownership:
             s.expr(x.value, st)
             return st
         if isinstance(x, FieldAssign):
+            s.use(x, st)
             s.consume(x.value, st, "assign")
             return st
         if isinstance(x, If):
@@ -499,8 +502,9 @@ class _Ownership:
 
     def move(s, e, st, consuming, track):
         if e.fields:
+            s.use(e, st)
             return       # The checker permits only a take argument immediately stored back into this field.
-        if not is_collection(e.ty):
+        if not is_collection(e.ty) and not (is_nongeneric_struct(e.ty, s.types) and e.name in st):
             _err(e, "foreign_move", "move of a non-collection value",
                  "move applies to Vec, HashMap and String bindings only; use the value directly")
         n = e.name
@@ -543,8 +547,7 @@ class _Ownership:
         if owned:
             s.check_field_alias(e)
         if isinstance(e, Var):
-            if is_collection(e.ty):
-                s.use(e, st)
+            s.use(e, st)
         elif isinstance(e, Move):
             s.move(e, st, False, None)
         elif isinstance(e, Call):
@@ -569,6 +572,8 @@ class _Ownership:
 
     def takes(s, e):
         f = s.funcs.get(e.name) or CATALOG.get(e.name)
+        if e.name in ("vec_push", "map_insert") and is_nongeneric_struct(e.args[-1].ty, s.types):
+            return [bool(p.take) for p in f.params[:-1]] + [True]
         return [bool(p.take) for p in f.params] if f is not None else [False] * len(e.args)
 
     def call(s, e, st):
@@ -596,7 +601,7 @@ class _Ownership:
                     s.expr(arg, st, True)
             elif isinstance(arg, Move):
                 s.move(arg, st, False, track)
-            elif isinstance(arg, Var) and is_collection(arg.ty):
+            elif isinstance(arg, Var) and (is_collection(arg.ty) or arg.name in st):
                 if track.get(arg.name) == "move":
                     _err(arg, "foreign_borrow", "borrowed and moved in one call",
                          "do not pass %s both read-only and with move in one call" % arg.name)

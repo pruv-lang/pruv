@@ -1,0 +1,9 @@
+// spec: R-6f-2 reject
+pub struct Ctr { n: i64 }
+
+pub fn bump(inout st: Ctr, x: i64) -> i64
+  requires x >= 0 && x <= 100 && st.n >= 0 && st.n <= 1000000
+{
+  st.n = st.n + x;
+  return st.n;
+}

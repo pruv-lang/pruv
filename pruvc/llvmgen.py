@@ -45,7 +45,7 @@ from vast import *
 import codegen
 from codegen import show
 from typeinfo import TypeTable, is_user_type, is_array, uses_array_type, uses_str  # G2 B2: uses_str
-from typeinfo import is_collection, contains_collection, encode, is_owned_field_type, is_scalar_vec
+from typeinfo import is_collection, contains_collection, encode, is_scalar_vec
 from foreign import CATALOG, CATALOG_CONTRACT_ONLY, first_g6_use, _owned_result, NET_OBSERVERS, ASYNC_OBSERVERS  # G6 A3, G6b, G10 net A3
 import foreign_shim  # G6 A3
 import parallel_shim
@@ -2793,6 +2793,10 @@ class FnGen:
 
     def catalog_call(s, e, owned):
         n = e.name
+        if n == "map_get_mut":
+            raise PruvError("codegen", e.line, e.col, "unsupported_type",
+                            "map_get_mut in %s needs the Rust backend" % getattr(s.f, "disp", s.f.name),
+                            "use the Rust backend", file=getattr(e, "file", None))
         cat = CATALOG[n]
         low, src = foreign_shim.inst_types(e)
         sym = foreign_shim.adapter_sym(foreign_shim.helper_name(n, src))
@@ -5419,8 +5423,13 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
         raise ValueError("foreign_checks must be requires, all or off")
     from check import opaque_inline
     opaque_inline(prog)     # P13o: contract applications of opaque functions become their bodies
+    for f in prog.functions:
+        if any(p.mode == "inout" and not is_array(p.type) for p in f.params):
+            raise PruvError("codegen", f.line, f.col, "unsupported_type",
+                            "%s has an inout struct parameter, which needs the Rust backend" % getattr(f, "disp", f.name),
+                            "use the Rust backend", file=getattr(f, "file", None))
     for d in prog.types:
-        if any(is_owned_field_type(fd.type) for fd in TypeTable._all_fields(d)):
+        if any(is_collection(fd.type) for fd in TypeTable._all_fields(d)):
             raise PruvError("codegen", d.line, d.col, "unsupported_type",
                             "%s has owned collection fields, which need the Rust backend" % getattr(d, "disp", d.name),
                             "use the Rust backend",

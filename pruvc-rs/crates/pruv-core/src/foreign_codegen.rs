@@ -313,7 +313,7 @@ impl ForeignGen {
         }
     }
 
-    pub fn catalog_helper(&mut self, op: &str, low: &[GType], src: &[GType]) -> R<String> {
+    pub fn catalog_helper(&mut self, op: &str, low: &[GType], src: &[GType], owned_payload: bool) -> R<String> {
         let src: &[GType] = if src.is_empty() && !low.is_empty() { low } else { src };
         let mut name = format!("pruv_g6_{}", op);
         for t in src {
@@ -323,7 +323,7 @@ impl ForeignGen {
         self.record_pkg_catalog(op, src.iter().map(format_type).collect());
         if !self.has_item(&name) {
             self.op = op.to_string();
-            let text = self.catalog_text(op, &name, low)?;
+            let text = self.catalog_text(op, &name, low, owned_payload)?;
             self.items.push((name.clone(), text));
             self.catalog.push((op.to_string(), src.iter().map(format_type).collect()));
         }
@@ -384,7 +384,7 @@ impl ForeignGen {
         }
         Ok(self.fn_text(name,args,Some(ret),&body))
     }
-    fn catalog_text(&self, op: &str, name: &str, low: &[GType]) -> R<String> {
+    fn catalog_text(&self, op: &str, name: &str, low: &[GType], owned_payload: bool) -> R<String> {
         if op.starts_with("file_") {
             return Ok(self.file_text(op, name));
         }
@@ -416,11 +416,17 @@ impl ForeignGen {
                 if self.ens {
                     body.push("pruv_g6_charge(&mut pruv_budget, pruv_snap.len());".to_string());
                 }
-                body.extend(self.ens_line("v[..pruv_snap.len()] == pruv_snap[..]", "result[..len(v)] == v"));
+                if !owned_payload {
+                    body.extend(self.ens_line("v[..pruv_snap.len()] == pruv_snap[..]", "result[..len(v)] == v"));
+                }
                 if self.ens {
                     body.push("pruv_g6_charge(&mut pruv_budget, 1);".to_string()); // one visited element (G6_SPEC 12.3)
                 }
-                body.extend(self.ens_line("v[pruv_snap.len()] == x", "result[len(v)] == x"));
+                if self.ens && owned_payload {
+                    body.extend(self.ens_line("v.get(pruv_snap.len()).is_some()", "result contains the pushed value"));
+                } else {
+                    body.extend(self.ens_line("v[pruv_snap.len()] == x", "result[len(v)] == x"));
+                }
                 body.push("v".to_string());
                 Ok(self.fn_text(name, &format!("mut v: {}, x: {}", v, t), Some(v.as_str()), &body))
             }
@@ -478,14 +484,21 @@ impl ForeignGen {
                 if self.ens {
                     body.push("pruv_g6_charge(&mut pruv_budget, 1);".to_string()); // one visited element (G6_SPEC 12.3)
                 }
-                body.extend(self.ens_line("m.get(&k) == Some(&v)", "result[k] == v"));
+                if self.ens && owned_payload {
+                    body.extend(self.ens_line("m.contains_key(&k)", "result contains the inserted key"));
+                } else {
+                    body.extend(self.ens_line("m.get(&k) == Some(&v)", "result[k] == v"));
+                }
                 if self.ens {
-                    body.push("for (pruv_sk, pruv_sv) in pruv_snap.iter() {".to_string());
+                    let bindings = if owned_payload { "_" } else { "(pruv_sk, pruv_sv)" };
+                    body.push(format!("for {bindings} in pruv_snap.iter() {{"));
                     body.push("    pruv_g6_charge(&mut pruv_budget, 1);".to_string());
-                    body.push(format!(
-                        "    if *pruv_sk != k && m.get(pruv_sk) != Some(pruv_sv) {{ pruv_g6_ens({}, \"entries other than k are unchanged\"); }}",
-                        rstr(op)
-                    ));
+                    if !owned_payload {
+                        body.push(format!(
+                            "    if *pruv_sk != k && m.get(pruv_sk) != Some(pruv_sv) {{ pruv_g6_ens({}, \"entries other than k are unchanged\"); }}",
+                            rstr(op)
+                        ));
+                    }
                     body.push("}".to_string());
                 }
                 body.push("m".to_string());

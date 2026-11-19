@@ -1202,6 +1202,7 @@ struct Gen<'a> {
     boxed: HashSet<String>,
     /// G9 A2: names bound to a Rust reference (extended parameters, match payload views, buffer payload views)
     refs: HashSet<String>,
+    map_views: HashSet<String>,
     /// owned extended locals the current return statement may move (return_movable)
     moving: HashSet<String>,
     /// names borrowed as the scrutinee of an enclosing match_ext arm
@@ -1356,6 +1357,7 @@ impl<'a> Gen<'a> {
             ext: prog.g9.as_ref().map(|m| m.extended.iter().cloned().collect()).unwrap_or_default(),
             boxed: prog.g9.as_ref().map(|m| m.boxed.iter().cloned().collect()).unwrap_or_default(),
             refs: HashSet::new(),
+            map_views: HashSet::new(),
             moving: HashSet::new(),
             pinned: HashSet::new(),
             frames: Vec::new(),
@@ -1388,6 +1390,13 @@ impl<'a> Gen<'a> {
             .map(|f| f.name.clone())
             .collect();
         g.body_named = g.has_req.union(&lg).cloned().collect();
+        if verified && !explicit {
+            for f in &prog.functions {
+                if has_struct_inout(f) && !f.params.iter().any(|p| p.mode_pos.is_some() && GType::from_key(&p.ty).is_array()) {
+                    g.body_named.remove(&f.name);
+                }
+            }
+        }
         g.lg = lg;
         g
     }
@@ -1768,11 +1777,15 @@ impl<'a> Gen<'a> {
         self.vars = f.params.iter().map(|p| (p.name.clone(), p.ty.clone())).collect();
         self.borrowed =
             f.params.iter().filter(|p| key_is_collection(&p.ty) && !p.take).map(|p| p.name.clone()).collect();
-        self.refs = f.params.iter().filter(|p| self.is_ext(Some(&p.ty))).map(|p| p.name.clone()).collect();
+        self.refs = f.params.iter().filter(|p| !p.take && self.is_ext(Some(&p.ty))).map(|p| p.name.clone()).collect();
         let param_types: Vec<String> = f.params.iter().map(|p| {
             if p.mode_pos.is_some() {
                 // G5 A2: an inout parameter is a mutable slice borrow (`&mut [T]`)
-                format!("&mut {}", &rty(&p.ty, true)[1..])
+                if GType::from_key(&p.ty).is_array() {
+                    format!("&mut {}", &rty(&p.ty, true)[1..])
+                } else {
+                    format!("&mut {}", rty(&p.ty, false))
+                }
             } else {
                 self.rt_width(&p.ty, !p.take, self.storage.layout_of(p))
             }
@@ -1840,7 +1853,13 @@ impl<'a> Gen<'a> {
             self.small_fn(f, &ps, k, &o, elem)?;
         }
         if self.cost {
-            let cps =join_map(&f.params, ", ", |p| format!("{}: {}", p.name, self.rt(&p.ty, true)));
+            let cps = join_map(&f.params, ", ", |p| {
+                if p.mode_pos.is_some() && !GType::from_key(&p.ty).is_array() {
+                    format!("{}: &{}", p.name, self.rt(&p.ty, false))
+                } else {
+                    format!("{}: {}", p.name, self.rt(&p.ty, true))
+                }
+            });
             self.emit(0, allow);
             self.emit(0, &format!("fn {}__pruv_cost({}) -> i128 {{", f.name, cps));
             // The bound is evaluated only inside the callee's requires (spec 5: requires before contract_domain).
@@ -1858,7 +1877,7 @@ impl<'a> Gen<'a> {
             self.emit(0, "}");
             self.emit(0, "");
         }
-        if has {
+        if has && named {
             if !self.explicit {
                 // G5: a wrapper of an inout function always checks (trust_callers does not waive it)
                 let chk = if self.inouts.is_empty() { None } else { Some(true) };
@@ -1982,7 +2001,12 @@ impl<'a> Gen<'a> {
         let mut conversions = Vec::new();
         for p in &f.params {
             if let Some(ty) = used.get(&p.name) {
-                conversions.push(format!("let pruv_cp_{}: {} = {};", p.name, try_cty(ty)?, try_conv(ty, &p.name)?));
+                let operand = if p.mode_pos.is_some() && !GType::from_key(&p.ty).is_array() {
+                    format!("*{}", p.name)
+                } else {
+                    p.name.clone()
+                };
+                conversions.push(format!("let pruv_cp_{}: {} = {};", p.name, try_cty(ty)?, try_conv(ty, &operand)?));
             }
         }
         Ok((conversions, checks))
@@ -2054,7 +2078,11 @@ impl<'a> Gen<'a> {
             }
         }
         let args = join_map(&f.params, ", ", |p| {
-            if p.mode_pos.is_some() { format!("&mut *{}", p.name) } else { p.name.clone() }
+            if p.mode_pos.is_some() && GType::from_key(&p.ty).is_array() {
+                format!("&mut *{}", p.name)
+            } else {
+                p.name.clone()
+            }
         });
         self.emit(1, &format!("{}({})", body_name, args));
         if self.proven_entries && !guard.is_empty() {
@@ -3417,6 +3445,69 @@ impl<'a> Gen<'a> {
 
     /// match on an extended enum: the scrutinee is borrowed (a view, never cloned) and every payload binder is an
     /// arm-local view, unless the match consumes the scrutinee (below).
+    fn map_match_call<'b>(&self, stmt: &'b Match) -> Option<&'b Call> {
+        let Expr::Call(call) = &stmt.scrutinee else { return None };
+        if self.fmap.contains_key(&call.name) {
+            return None;
+        }
+        let (types, _) = crate::foreign_shim::inst_types(call);
+        (call.name == "map_get_mut" || (call.name == "map_get"
+            && types.get(1).is_some_and(|t| self.is_ext(Some(&t.to_key()))))).then_some(call)
+    }
+
+    fn match_map(&mut self, stmt: &Match, ind: usize) -> R<()> {
+        let call = self.map_match_call(stmt).unwrap();
+        let mutable = call.name == "map_get_mut";
+        let place = match &call.args[0] {
+            Expr::InoutArg(arg) => arg.expr.as_ref(),
+            expr => expr,
+        };
+        let receiver = self.e(place)?;
+        let mut key = self.e(&call.args[1])?;
+        let (types, src) = crate::foreign_shim::inst_types(call);
+        self.fg_mut()?.record_inline_catalog(&call.name, &src);
+        let scoped = mutable && !matches!(&call.args[1], Expr::Var(_) | Expr::IntLit(_) | Expr::BoolLit(_));
+        if scoped {
+            self.emit(ind, "{");
+            self.emit(ind + 1, &format!("let pruv_key = {};", key));
+            key = "pruv_key".to_string();
+        }
+        let depth = ind + usize::from(scoped);
+        let method = if mutable { "get_mut" } else { "get" };
+        let receiver = if matches!(place, Expr::Var(_) | Expr::FieldAccess(_)) { receiver } else { format!("({})", receiver) };
+        self.emit(depth, &format!("match {}.{}(&{}) {{", receiver, method, key));
+        let ty = types[1].to_key();
+        for arm in &stmt.arms {
+            let pattern = if let Some(name) = arm.binders.first() {
+                self.vars.insert(name.clone(), ty.clone());
+                self.refs.insert(name.clone());
+                if mutable {
+                    self.inouts.insert(name.clone());
+                }
+                if !self.is_ext(Some(&ty)) {
+                    self.map_views.insert(name.clone());
+                }
+                format!("Some({})", name)
+            } else {
+                "None".to_string()
+            };
+            self.emit(depth + 1, &format!("{} => {{", pattern));
+            self.block_in(&arm.body, depth + 2, &arm.binders, false)?;
+            if let Some(name) = arm.binders.first() {
+                self.vars.remove(name);
+                self.refs.remove(name);
+                self.inouts.remove(name);
+                self.map_views.remove(name);
+            }
+            self.emit(depth + 1, "}");
+        }
+        self.emit(depth, "}");
+        if scoped {
+            self.emit(ind, "}");
+        }
+        Ok(())
+    }
+
     fn match_ext(&mut self, x: &Match, ind: usize) -> R<()> {
         let sty = key_name(expr_ty(&x.scrutinee).as_deref().unwrap_or("")).to_string();
         // Consuming match: a match on an owned local that no arm and no later statement names again (dead_after) is
@@ -3585,8 +3676,22 @@ impl<'a> Gen<'a> {
                 self.emit(ind, &format!("{} = {};", x.name, v));
             }
             Stmt::FieldAssign(x) => {
-                if expr_ty(&x.value).as_deref().map_or(false, crate::gtype::key_is_owned_field) {
-                    let v = self.e(&x.value)?;
+                if let Expr::Call(call) = &x.value {
+                    if call.name == "vec_push" && !self.fmap.contains_key(&call.name)
+                        && matches!(call.args.first(), Some(Expr::Move(m)) if m.name == x.name && m.fields == x.fields)
+                        && self.unchecked_collections()
+                    {
+                        let (_, src) = crate::foreign_shim::inst_types(call);
+                        self.fg_mut()?.record_inline_catalog(&call.name, &src);
+                        let value = self.e(&call.args[1])?;
+                        self.emit(ind, &format!("{}.{}.push({});", x.name, x.fields.join("."), value));
+                        return Ok(());
+                    }
+                }
+                if expr_ty(&x.value).as_deref().is_some_and(key_is_collection)
+                    || (self.inouts.contains(&x.name) && !self.path_boxed(&x.name, &x.fields))
+                {
+                    let v = self.own_e(&x.value)?;
                     self.emit(ind, &format!("{}.{} = {};", x.name, x.fields.join("."), v));
                     return Ok(());
                 }
@@ -3712,6 +3817,9 @@ impl<'a> Gen<'a> {
             Stmt::ExprStmt(x) => {
                 let t = self.e(&x.expr)?;
                 self.emit(ind, &format!("{};", t));
+            }
+            Stmt::Match(x) if self.map_match_call(x).is_some() => {
+                self.match_map(x, ind)?;
             }
             Stmt::Match(x) if self.is_ext(expr_ty(&x.scrutinee).as_deref()) => {
                 self.match_ext(x, ind)?;
@@ -3862,22 +3970,30 @@ impl<'a> Gen<'a> {
         Ok(format!("&({})", self.e(x)?))
     }
 
+    fn unchecked_collections(&self) -> bool {
+        self.verified && self.fg.as_ref().is_some_and(|fg| fg.mode != "all")
+            && !self.prog.functions.iter().any(|f| f.foreign.is_some())
+    }
+
     /// executable catalog operation -> call of its private boundary helper
     fn catalog_call(&mut self, x: &Call) -> R<String> {
         let cat = catalog_fn(&x.name).ok_or_else(|| repr_str(&x.name))?;
         let (low, src) = crate::foreign_shim::inst_types(x);
         // A bound proof can depend on an unchecked user foreign postcondition.
-        if x.name == "vec_get"
-            && self.verified
-            && self.fg_mut()?.mode != "all"
-            && !self.prog.functions.iter().any(|f| f.foreign.is_some())
-        {
+        if x.name == "vec_get" && self.unchecked_collections() {
             self.fg_mut()?.record_inline_catalog(&x.name, &src);
             let v = self.e(arg(&x.args, 0)?)?;
             let i = self.e(arg(&x.args, 1)?)?;
             return Ok(format!("(unsafe {{ *({}).get_unchecked(({}) as usize) }})", v, i));
         }
-        let name = self.fg_mut()?.catalog_helper(&x.name, &low, &src)?;
+        if x.name == "vec_get" && low.first().is_some_and(|t| self.is_ext(Some(&t.to_key()))) {
+            self.fg_mut()?.record_inline_catalog(&x.name, &src);
+            let v = self.e(arg(&x.args, 0)?)?;
+            let i = self.e(arg(&x.args, 1)?)?;
+            return Ok(format!("({})[({}) as usize]", v, i));
+        }
+        let owned_payload = low.last().is_some_and(|t| self.is_ext(Some(&t.to_key())));
+        let name = self.fg_mut()?.catalog_helper(&x.name, &low, &src, owned_payload)?;
         // string_to_str of an owned local that the enclosing return moves: the String itself is the copy.
         if x.name == "string_to_str" && !self.cost {
             if let Some(a @ Expr::Var(v)) = x.args.first() {
@@ -4004,6 +4120,12 @@ impl<'a> Gen<'a> {
             }
             Expr::BoolLit(x) => Ok((if x.value { "true" } else { "false" }).to_string()),
             Expr::StrLit(x) => Ok(format!("::std::string::String::from({})", lit_str(&x.value))), // G2 B2
+            Expr::Var(x) if self.map_views.contains(&x.name)
+                || (self.inouts.contains(&x.name) && x.ty.as_deref().is_some_and(|t|
+                    !GType::from_key(t).is_array() && !self.is_ext(Some(t)))) =>
+            {
+                Ok(format!("(*{})", x.name))
+            }
             Expr::Var(x) => Ok(x.name.clone()),
             Expr::Unary(x) => {
                 if !self.verified && x.op == "-" {
@@ -4118,7 +4240,25 @@ impl<'a> Gen<'a> {
                 }
                 Ok(format!("{}({})", ctor, parts.join(", ")))
             }
-            Expr::FieldAccess(x) => Ok(format!("{}.{}", self.e(&x.base)?, x.field)),
+            Expr::FieldAccess(x) => {
+                if let Expr::Call(call) = x.base.as_ref() {
+                    if call.name == "vec_get" && !self.fmap.contains_key(&call.name)
+                        && self.is_ext(expr_ty(&x.base).as_deref()) && self.unchecked_collections()
+                    {
+                        let (_, types) = crate::foreign_shim::inst_types(call);
+                        self.fg_mut()?.record_inline_catalog(&call.name, &types);
+                        let v = self.e(&call.args[0])?;
+                        let i = self.e(&call.args[1])?;
+                        let field = format!("(*({}).get_unchecked(({}) as usize)).{}", v, i, x.field);
+                        return Ok(if expr_ty(e).as_deref().is_some_and(key_is_collection) {
+                            format!("(unsafe {{ &{} }})", field)
+                        } else {
+                            format!("(unsafe {{ {} }})", field)
+                        });
+                    }
+                }
+                Ok(format!("{}.{}", self.e(&x.base)?, x.field))
+            },
             Expr::Call(x) => {
                 let n = x.name.as_str();
                 let a = &x.args;
@@ -4418,7 +4558,12 @@ impl<'a> Gen<'a> {
                             Expr::Var(v) => v.name.clone(),
                             other => return Err(format!("codegen: inout operand is not a variable: {:?}", other)),
                         };
-                        args.push(self.mut_ref(&nm));
+                        let ty = expr_ty(&ia.expr).as_deref().unwrap_or("");
+                        args.push(if !GType::from_key(ty).is_array() && self.inouts.contains(&nm) {
+                            nm
+                        } else {
+                            self.mut_ref(&nm)
+                        });
                     } else if self.g6 && (is_move || coll) {
                         let take = is_move || callee.map_or(false, |c| c.params.get(i).map_or(false, |p| p.take));
                         if take {
@@ -4426,10 +4571,18 @@ impl<'a> Gen<'a> {
                         } else {
                             args.push(self.cref(xa)?);
                         }
+                    } else if callee.is_some_and(|f| f.params.get(i).is_some_and(|p| p.take)) {
+                        args.push(self.own_e(xa)?);
                     } else if !self.ext.is_empty() && self.is_ext(expr_ty(xa).as_deref()) {
                         args.push(self.view(xa)?); // G9: an extended argument is a read view; a fresh temporary lives through the call
                     } else if expr_ty(xa).as_deref().map_or(false, |t| is_array_name(t) || t == "str") {
                         args.push(self.arr_ref(xa)?);
+                    } else if let Expr::IntLit(lit) = xa {
+                        if callee.is_some_and(has_struct_inout) && !lit.value.starts_with('-') {
+                            args.push(lit.value.clone());
+                        } else {
+                            args.push(self.e(xa)?);
+                        }
                     } else {
                         args.push(self.e(xa)?);
                     }
@@ -4476,7 +4629,7 @@ pub fn shim_helpers(
     }
     if let Some(fg) = g.fg.as_mut() {
         for (op, low) in observers {
-            fg.catalog_helper(op, low, low)?;
+            fg.catalog_helper(op, low, low, false)?;
         }
     }
     match g.fg.as_ref() {
@@ -4652,6 +4805,11 @@ fn gen_rust_concrete_core(
     if let Some(e) = crate::typeinfo::g2_unimplemented_error(prog, "codegen", None, &["array_u8", "array_bool", "str"], None) { // G2 B2
         return Err(GenError::Msg(format!("unsupported_type: {}", e.message)));
     }
+    if prog.raw_entries.as_deref() == Some("c") {
+        if let Some(e) = crate::bindings::struct_inout_abi_error(prog, true) {
+            return Err(GenError::Diag(e));
+        }
+    }
     if proven_entries {
         let names = prog.types.iter().map(|d| d.name()).chain(prog.functions.iter().map(|f| f.name.as_str()));
         for name in names {
@@ -4792,6 +4950,10 @@ fn hide_bodies(text: String) -> String {
         out.push_str(&format!("#[allow(unused_macros)]\nmacro_rules! {m} {{ ($($t:tt)*) => {{ {c}::{m}!($($t)*) }} }}\n"));
     }
     format!("{out}{text}}}\n#[allow(unused_imports)]\npub use self::pruv_impl::*;\n")
+}
+
+fn has_struct_inout(f: &Function) -> bool {
+    f.params.iter().any(|p| p.mode_pos.is_some() && !GType::from_key(&p.ty).is_array())
 }
 
 const PROVEN_NAMES: &[&str] = &["PruvArr", "PruvStr", "pruv_arr_slow", "pruv_str_slow", "pruv_proven"];

@@ -1569,7 +1569,12 @@ class Gen:
         s.lg = set() if s.raw_crate else {f.name for f in prog.functions
                 if f.foreign is None and not f.requires and len_params(f)
                 and (f.host_entry if s.explicit else not s.private(f))}
+        s.struct_inouts = {f.name for f in prog.functions
+                           if any(p.mode == "inout" and not is_array(p.type) for p in f.params)}
         s.body_named = s.has_req | s.lg
+        if verified and not s.explicit:
+            s.body_named -= s.struct_inouts - {f.name for f in prog.functions
+                                              if any(p.mode == "inout" and is_array(p.type) for p in f.params)}
         # G6 (section 12): only a program that uses G6 gets any of the following
         from foreign import first_g6_use, first_proc_use, first_net_use, first_async_use, uses_files
         s.ev = first_async_use(prog) is not None
@@ -1788,9 +1793,10 @@ class Gen:
             s.inouts = {p.name for p in f.params if p.mode == "inout"}
         s.vt = {p.name: p.type for p in f.params}
         s.borrowed = {p.name for p in f.params if is_collection(p.type) and not p.take}
-        s.refs = {p.name for p in f.params if s.is_ext(p.type)}
-        param_types = ["&mut " + rty(p.type, True)[1:] if s.inouts and p.mode == "inout"
-                       else s.rt(p.type, not p.take, p) for p in f.params]
+        s.refs = {p.name for p in f.params if s.is_ext(p.type) and not p.take}
+        param_types = [
+            "&mut " + (rty(p.type, True)[1:] if is_array(p.type) else rty(p.type))
+            if p.mode == "inout" else s.rt(p.type, not p.take, p) for p in f.params]
         ps = ", ".join("%s: %s" % (p.name, ty) for p, ty in zip(f.params, param_types))
         ret = "" if f.ret == UNIT else " -> " + s.rt(f.ret, site=f)
         body_name = f.name + "__pruv_body" if f.name in s.body_named else f.name
@@ -1825,7 +1831,9 @@ class Gen:
             s.small_fn(f, ps)
         if s.cost:
             # Use the requires evaluator on parameter views, including immutable views of inout.
-            cps = ", ".join("%s: %s" % (p.name, s.rt(p.type, True)) for p in f.params)
+            cps = ", ".join("%s: %s" % (p.name, "&" + rty(p.type)
+                                        if p.mode == "inout" and not is_array(p.type) else s.rt(p.type, True))
+                            for p in f.params)
             s.emit(0, s.allow)
             s.emit(0, "fn %s__pruv_cost(%s) -> i128 {" % (f.name, cps))
             # The bound is evaluated only inside the callee's requires (spec 5: requires before contract_domain).
@@ -1838,7 +1846,7 @@ class Gen:
             s.emit(1, s.c(f.cost))
             s.emit(0, "}")
             s.emit(0, "")
-        if f.requires:
+        if f.requires and f.name in s.body_named:
             if not s.explicit:
                 # G5: a wrapper of an inout function always checks (trust_callers does not waive it)
                 s.entry(f, ps, param_types, ret, body_name, checked=True if s.inouts else None)
@@ -1909,7 +1917,7 @@ class Gen:
             used = dict(s.cp)
         finally:
             s.cp = None
-        conversions = ["let pruv_cp_%s: %s = %s;" % (p.name, cty(used[p.name]), conv(used[p.name], p.name))
+        conversions = ["let pruv_cp_%s: %s = %s;" % (p.name, cty(used[p.name]), conv(used[p.name], ("*" + p.name) if p.mode == "inout" and not is_array(p.type) else p.name))
                        for p in f.params if p.name in used]
         return conversions, checks
 
@@ -1949,7 +1957,7 @@ class Gen:
                 for line in checks[plan.start:]:
                     s.emit(1, line)
         if s.inouts:
-            s.emit(1, "%s(%s)" % (body_name, ", ".join(("&mut *" + p.name) if p.mode == "inout" else p.name
+            s.emit(1, "%s(%s)" % (body_name, ", ".join(("&mut *" + p.name) if p.mode == "inout" and is_array(p.type) else p.name
                                                         for p in f.params)))
         else:
             s.emit(1, "%s(%s)" % (body_name, ", ".join(p.name for p in f.params)))
@@ -2802,8 +2810,15 @@ class Gen:
             s.moving = set()
         elif isinstance(st, FieldAssign):
             vty = st.value.ty
-            if vty is not None and is_owned_field_type(vty):
-                s.emit(ind, "%s.%s = %s;" % (st.name, ".".join(st.fields), s.e(st.value)))
+            call = st.value
+            if (isinstance(call, Call) and call.name == "vec_push" and isinstance(call.args[0], Move)
+                    and call.args[0].fields and s.unchecked_catalog()):
+                args = tuple(call.inst.get("src_args", call.inst["args"]))
+                s.fg.record_inline_catalog(call.name, args)
+                s.emit(ind, "%s.%s.push(%s);" % (st.name, ".".join(st.fields), s.e(call.args[1])))
+                return
+            if (vty is not None and is_collection(vty)) or (st.name in s.inouts and not (s.boxed and s.path_boxed(st.name, st.fields))):
+                s.emit(ind, "%s.%s = %s;" % (st.name, ".".join(st.fields), s.own_e(st.value) if vty is None or not is_collection(vty) else s.e(st.value)))
                 return
             # rhs is fully evaluated into a temporary before the store (the replaced value drops at the store)
             decl = "let pruv_v: %s = " % rty(vty) if vty is not None else "let pruv_v = "
@@ -2871,14 +2886,49 @@ class Gen:
         elif isinstance(st, Match) and s.is_ext(st.scrutinee.ty):
             s.match_ext(st, ind)
         elif isinstance(st, Match):
-            s.emit(ind, "match %s {" % s.e(st.scrutinee))
+            sc = st.scrutinee
+            map_call = isinstance(sc, Call) and sc.name not in s.fmap and sc.name in ("map_get", "map_get_mut")
+            ty = sc.inst["args"][1] if map_call else None
+            mutable_map = map_call and sc.name == "map_get_mut"
+            scoped = False
+            if mutable_map or map_call and s.is_ext(ty):
+                from foreign_shim import inst_types
+                s.fg.record_inline_catalog(sc.name, inst_types(sc)[1])
+                place, key = sc.args
+                if mutable_map:
+                    place = place.expr
+                receiver = s.e(place)
+                if not isinstance(place, (Var, FieldAccess)):
+                    receiver = "(%s)" % receiver
+                key_text = s.e(key)
+                scoped = mutable_map and not isinstance(key, (Var, IntLit, BoolLit))
+                if scoped:
+                    s.emit(ind, "{")
+                    ind += 1
+                    s.emit(ind, "let pruv_key = %s;" % key_text)
+                    key_text = "pruv_key"
+                scrutinee = "%s.%s(&%s)" % (receiver, "get_mut" if mutable_map else "get", key_text)
+            else:
+                scrutinee = s.e(sc)
+            s.emit(ind, "match %s {" % scrutinee)
             for a in st.arms:
                 name = a.ctor if a.enum_name is None else "%s::%s" % (a.enum_name, a.ctor)
                 pat = name if not a.binders else "%s(%s)" % (name, ", ".join(a.binders))
                 s.emit(ind + 1, "%s => {" % pat)
+                saved_inouts, saved_refs, saved_vt = set(s.inouts), set(s.refs), dict(s.vt)
+                if map_call and a.binders:
+                    b = a.binders[0]
+                    s.vt[b] = ty
+                    if mutable_map:
+                        s.inouts.add(b)
+                    if mutable_map or s.is_ext(ty):
+                        s.refs.add(b)
                 s.block(a.body, ind + 2)
+                s.inouts, s.refs, s.vt = saved_inouts, saved_refs, saved_vt
                 s.emit(ind + 1, "}")
             s.emit(ind, "}")
+            if scoped:
+                s.emit(ind - 1, "}")
 
     def match_ext(s, st, ind):
         """match on an extended enum: the scrutinee is borrowed (a view, never cloned) and every payload binder is an
@@ -3006,7 +3056,9 @@ class Gen:
 
     def mut_ref(s, name):
         """G5: a mutable borrow of the array `name`: a reborrow for an inout parameter (already `&mut [T]`)"""
-        return "&mut *" + name if name in s.inouts else "&mut " + name
+        if name in s.inouts:
+            return name if name in s.vt and not is_array(s.vt[name]) else "&mut *" + name
+        return "&mut " + name
 
     def arr_ref(s, e):
         """an array expression used as a borrowed slice; a string literal is borrowed as its `&'static str` (no alloc)"""
@@ -3028,6 +3080,9 @@ class Gen:
             return x.name if x.name in s.borrowed or x.name in s.refs else "&" + x.name
         return "&(%s)" % s.e(x)
 
+    def unchecked_catalog(s):
+        return s.verified and s.fmode != "all" and not any(f.foreign is not None for f in s.prog.functions)
+
     def catalog_call(s, e):
         """executable catalog operation -> call of its private boundary helper"""
         from foreign import CATALOG
@@ -3035,8 +3090,13 @@ class Gen:
         low = tuple(e.inst["args"]) if e.inst else ()
         src = tuple(e.inst.get("src_args", low)) if e.inst else ()
         # A bound proof can depend on an unchecked user foreign postcondition.
-        if (e.name == "vec_get" and s.verified and s.fmode != "all"
-                and not any(f.foreign is not None for f in s.prog.functions)):
+        if e.name == "vec_get" and s.is_ext(low[-1]):
+            s.fg.record_inline_catalog(e.name, src)
+            v, i = map(s.e, e.args)
+            if s.unchecked_catalog():
+                return "(unsafe { %s.get_unchecked(%s as usize) })" % (v, i)
+            return "(%s)[(%s) as usize]" % (v, i)
+        if e.name == "vec_get" and s.unchecked_catalog():
             s.fg.record_inline_catalog(e.name, src)
             v, i = e.args
             return "(unsafe { *(%s).get_unchecked((%s) as usize) })" % (s.e(v), s.e(i))
@@ -3062,10 +3122,12 @@ class Gen:
         if isinstance(e, BoolLit):
             return "true" if e.value else "false"
         if isinstance(e, Var):
+            if e.name in s.inouts and not (is_array(e.ty) or s.is_ext(e.ty)):
+                return "(*%s)" % e.name
             return e.name
         if isinstance(e, Move):   # G6: Rust moves
             if e.fields:
-                return "::std::mem::take(&mut %s.%s)" % (e.name, e.fields[0])
+                return "::std::mem::take(&mut %s.%s)" % (e.name, ".".join(e.fields))
             return e.name
         if isinstance(e, Unary):
             if not s.verified and e.op == "-":
@@ -3122,6 +3184,12 @@ class Gen:
                     s.field_value(a, "%s::%s.%s" % (e.enum_name, e.variant, fd.name)) for a, fd in zip(e.args, vf)))
             return "%s(%s)" % (ctor, ", ".join(s.e(a) for a in e.args)) if e.args else ctor
         if isinstance(e, FieldAccess):
+            b = e.base
+            if (isinstance(b, Call) and b.name == "vec_get" and b.name not in s.fmap and s.is_ext(b.ty)
+                    and s.unchecked_catalog()):
+                s.fg.record_inline_catalog(b.name, tuple(b.inst.get("src_args", b.inst["args"])))
+                f = "(*(%s).get_unchecked((%s) as usize)).%s" % (s.e(b.args[0]), s.e(b.args[1]), e.field)
+                return "(unsafe { &%s })" % f if e.ty is not None and is_collection(e.ty) else "(unsafe { %s })" % f
             return "%s.%s" % (s.e(e.base), e.field)
         if isinstance(e, Call):
             n, a = e.name, e.args
@@ -3266,12 +3334,14 @@ class Gen:
                 s.fg.trusted_helper(callee)   # emitted on first use; the helper checks the selected requires itself
             args = []
             for i, x in enumerate(a):
-                if isinstance(x, InoutArg):   # G5: `inout name` -> a mutable borrow / reborrow, in source order
+                if isinstance(x, InoutArg):   # G5: mutable borrow / reborrow
                     args.append(s.mut_ref(x.expr.name))
+                elif n in s.struct_inouts and isinstance(x, IntLit) and x.value >= 0:
+                    args.append(str(x.value))
                 elif s.g6 and (isinstance(x, Move) or (x.ty is not None and is_collection(x.ty))):
                     take = isinstance(x, Move) or (callee is not None and callee.params[i].take)
                     args.append(s.e(x) if take else s.cref(x))
-                elif s.ext and s.is_ext(x.ty):
+                elif s.ext and s.is_ext(x.ty) and not (callee is not None and callee.params[i].take):
                     args.append(s.view(x))   # G9: an extended argument is a read view; a fresh temporary lives through the call
                 elif x.ty is not None and (is_array(x.ty) or is_str(x.ty)):
                     args.append(s.arr_ref(x))
@@ -3537,6 +3607,12 @@ def gen_rust_ex(prog, verified=True, trust_callers=False, budget=1 << 30, plan=N
     from typeinfo import g2_unimplemented_error, first_g3_use
     if foreign_checks not in ("requires", "all", "off"):
         raise ValueError("foreign_checks must be requires, all or off")
+    if getattr(prog, "raw_entries", None) == "c":
+        for f in prog.functions:
+            if f.host_entry and any(p.mode == "inout" and not is_array(p.type) for p in f.params):
+                raise PruvError("codegen", f.line, f.col, "unsupported_type",
+                                "host entry %s takes an inout struct, which has no C ABI" % f.name,
+                                "use Rust raw_entries crate or unsafe", file=getattr(f, "file", None))
     from check import opaque_inline
     opaque_inline(prog)     # P13o: contract applications of opaque functions become their bodies
     if plan is None and (first_g3_use(prog) is not None or prog.explicit):   # G4 A2: explicit mode always names via mono

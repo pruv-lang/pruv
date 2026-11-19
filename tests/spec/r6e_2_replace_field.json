@@ -1,1 +1,1 @@
-{"gen_contains":["mem::take(&mut p.data)"],"gen_absent":[".clone()"]}
+{"gen_contains":["p.data.push(5i64)"],"gen_absent":[".clone()","mem::take"]}

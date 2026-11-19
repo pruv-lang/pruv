@@ -1,0 +1,16 @@
+// spec: R-6g-2 accept
+struct Record { hits: i64, log: Vec<i64> }
+
+fn bump(inout r: Record, x: i64) -> () ! alloc
+  requires x >= 0 && x <= 100 && r.hits >= 0 && r.hits <= 1000000 && len(r.log) < 1000
+  ensures r.hits >= 0
+{
+  r.hits = r.hits + x;
+  r.log = vec_push::<i64>(move r.log, x);
+}
+
+fn run() -> i64 ! alloc {
+  let mut a: Record = Record { hits: 1, log: vec_new::<i64>() };
+  bump(inout a, 2);
+  return a.hits;
+}

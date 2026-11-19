@@ -1,0 +1,1 @@
+{"gen_contains":["pub fn bump(st: &mut Ctr, x: i64) -> i64"],"gen_absent":[".clone()"]}

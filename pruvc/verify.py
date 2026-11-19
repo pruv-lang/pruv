@@ -4,7 +4,7 @@ import z3
 import proof_cache
 from vast import *
 from typeinfo import (TypeTable, is_array, array_elem, array_of, bind_args, substitute, decl_owner, format_type,
-                      is_collection, is_owned_field_type)
+                      is_collection, field_place)
 from foreign import CATALOG, CATALOG_NAMES, FILE, FILE_OBSERVERS, PROCESS, PROCESS_ARGS, SOCKET, LISTENER, LOOP
 from refine import _stmt_inout
 
@@ -175,6 +175,7 @@ class Model:
         s.recrel = set()    # names of non-generic types that are recursive or (transitively) contain a recursive type
         s.bufs = {}         # "int" | "bool" -> (sort, constructor, length accessor, array accessor)
         s.buf_names = set()
+        s.maps = {}
         s.size_f, s.wf_f, s.fixed_memo = {}, {}, {}
         if meta is not None:
             pindex = {}
@@ -252,7 +253,7 @@ class Model:
     @staticmethod
     def is_buf(ty):
         """A field stored as a length and an array of scalar elements."""
-        return ty in (ARRAY, ARRAY_U8, ARRAY_BOOL, STR) or is_owned_field_type(ty)
+        return ty in (ARRAY, ARRAY_U8, ARRAY_BOOL, STR) or ty.name in ("vec", "string") and ty.owner is None
 
     @staticmethod
     def buf_elem(ty):
@@ -262,7 +263,8 @@ class Model:
 
     @staticmethod
     def buf_key(ty):
-        return "bool" if Model.buf_elem(ty) == BOOL else "int"
+        elem = Model.buf_elem(ty)
+        return "bool" if elem == BOOL else "int" if elem in (I64, U8) else elem
 
     def bufsort(s, ty):
         """datatype Buf(len: Int, arr: Array(Int, elem sort)); one per element sort (Int for i64/u8/str, Bool)"""
@@ -271,7 +273,7 @@ class Model:
         if ent is None:
             tag = "%sbuf!%s" % (s.pre, key)
             dt = z3.Datatype(tag)
-            esort = z3.BoolSort() if key == "bool" else z3.IntSort()
+            esort = s.sort_of(key) if isinstance(key, Type) else z3.BoolSort() if key == "bool" else z3.IntSort()
             dt.declare(tag + ".mk", (tag + ".len", z3.IntSort()), (tag + ".arr", z3.ArraySort(z3.IntSort(), esort)))
             srt = dt.create()
             ent = (srt, srt.constructor(0), srt.accessor(0, 0), srt.accessor(0, 1))
@@ -279,8 +281,22 @@ class Model:
             s.buf_names.add(srt.name())
         return ent[0]
 
+    def map_fields(s, ty):
+        if ty not in s.maps:
+            key, value = map(s.sort_of, ty.args)
+            tag = "%smap!%d" % (s.pre, len(s.maps))
+            dt = z3.Datatype(tag)
+            dt.declare(tag + ".mk", (tag + ".d", z3.ArraySort(key, z3.BoolSort())),
+                       (tag + ".a", z3.ArraySort(key, value)), (tag + ".n", z3.IntSort()))
+            sort = dt.create()
+            s.maps[ty] = (sort, sort.constructor(0), *(sort.accessor(0, i) for i in range(3)))
+        return s.maps[ty]
+
     def field_get(s, fty, term, name="field"):
         """adapt a stored field value to the verifier's own model: a buffer field becomes an Arr"""
+        if fty.name == "hashmap" and fty.owner is None:
+            _, _, d, a, n = s.map_fields(fty)
+            return Map(d(term), a(term), n(term), name, *fty.args)
         if not s.is_buf(fty):
             return term
         s.bufsort(fty)
@@ -289,6 +305,8 @@ class Model:
 
     def field_put(s, fty, val):
         """inverse of field_get: an Arr stored into a buffer field becomes a Buf value"""
+        if isinstance(val, Map):
+            return s.map_fields(fty)[1](val.d, val.a, val.n)
         if not (s.is_buf(fty) and isinstance(val, Arr)):
             return val
         s.bufsort(fty)
@@ -432,6 +450,8 @@ class Model:
             return z3.BoolSort()
         if s.is_buf(ty):        # G9 A1: a buffer field of a struct/enum
             return s.bufsort(ty)
+        if ty.name == "hashmap" and ty.owner is None:
+            return s.map_fields(ty)[0]
         if ty == OPTION:
             return Opt
         if ty == RESULT:
@@ -1498,7 +1518,9 @@ class FnVerifier:
             return env[e.name]
         if isinstance(e, Move):
             v = env[e.name]
-            return s.read_field(st, v, e.fields[0]) if e.fields else v
+            for field in e.fields:
+                v = s.read_field(st, v, field)
+            return v
         if isinstance(e, InoutArg):     # G5 A1: the marked place's current array (the call transition rebinds it)
             return s.ev(e.expr, st, g, code, env)
         if isinstance(e, Unary):
@@ -2088,10 +2110,17 @@ class FnVerifier:
         for i in ios:
             pre = args[i]
             name = e.args[i].expr.name
-            fv = s.fresh(name, arr_type(pre.elem))
-            nv = mk_arr(fv.a, pre.n, name, pre.elem)
-            if nv.elem == U8:
-                s.assume(st, g, u8_dom(nv))
+            if isinstance(pre, Arr):
+                fv = s.fresh(name, arr_type(pre.elem))
+                nv = mk_arr(fv.a, pre.n, name, pre.elem)
+                if nv.elem == U8:
+                    s.assume(st, g, u8_dom(nv))
+            else:
+                ty = substitute(f.params[i].type, s.theta)
+                nv = s.fresh(name, ty)
+                wf = s.wf(ty, nv)
+                if wf is not None:
+                    s.assume(st, g, wf)
             cenv[f.params[i].name] = nv
             st.env[name] = nv
 
@@ -2255,8 +2284,12 @@ class FnVerifier:
             r = z3.Select(v.a, i)
             if code and v.elem in (I64, U8):   # as an array read: an i64/u8 element is a machine integer
                 s.assume(st, g, in_range(r))
+            if code and s.model.tt.is_struct(v.elem):
+                wf = s.wf(v.elem, r)
+                if wf is not None:
+                    s.assume(st, g, wf)
             return r
-        if n in ("map_get", "map_lookup"):
+        if n in ("map_get", "map_lookup", "map_get_mut"):
             m, k = args
             return s.map_lookup(m, k, rty)
         if n == "map_insert":
@@ -2666,6 +2699,10 @@ class FnVerifier:
             elif isinstance(st, While):
                 s.assigned(st.body, out)
             elif isinstance(st, Match):
+                sc = st.scrutinee
+                if isinstance(sc, Call) and sc.name == "map_get_mut":
+                    root, _ = field_place(sc.args[0].expr)
+                    out.add(root.name)
                 for a in st.arms:
                     s.assigned(a.body, out)
         return out
@@ -2794,7 +2831,16 @@ class FnVerifier:
             return s.exec_block(stmt.then, st.fork(c)) + s.exec_block(stmt.els, st.fork(z3.Not(c)))
         if isinstance(stmt, Match):
             st = st.fork()
-            v = s.ev(stmt.scrutinee, st, [], True)
+            scrutinee = stmt.scrutinee
+            update = isinstance(scrutinee, Call) and scrutinee.name == "map_get_mut"
+            if update:
+                place = scrutinee.args[0].expr
+                root, path = field_place(place)
+                m = s.ev(place, st, [], True)
+                key = s.ev(scrutinee.args[1], st, [], True)
+                v = s.map_lookup(m, key, scrutinee.ty)
+            else:
+                v = s.ev(scrutinee, st, [], True)
             outer = set(st.env)
             out = []
             sty = s.model.type_of(v)     # G3: the scrutinee's complete (possibly generic) type
@@ -2829,6 +2875,10 @@ class FnVerifier:
                     if w is not None:
                         b.pc.append(w)
                 for end in s.exec_block(a.body, b):
+                    if update and a.ctor == "Some":
+                        final = end.env[a.binders[0]]
+                        new = Map(m.d, z3.Store(m.a, key, final), m.n, m.name, m.kty, m.vty)
+                        end.env[root.name] = s.rebuild(root.ty, end.env[root.name], path, new)
                     # binders and arm locals end with the arm; only updates to outer variables remain
                     for k in [k for k in end.env if k not in outer]:
                         del end.env[k]
@@ -2986,7 +3036,7 @@ class FnVerifier:
         s.params = dict(env)
         # G5 A1 (5.1): the immutable entry snapshots of the inout parameters; the executable name starts as the same
         # array and is rebound by element stores, calls and loop havoc, never the snapshot
-        s.snap = {p.name: env[p.name] for p in f.params if p.mode is not None}
+        s.snap = {p.name: env[p.name] for p in f.params if p.mode is not None and is_array(p.type)}
         st = State(env, pc)
         if f.opaque and f.x_auto is not None:
             # P13o (P13o.1 totality): the body is defined for every argument, proven once here, so a reveal equation

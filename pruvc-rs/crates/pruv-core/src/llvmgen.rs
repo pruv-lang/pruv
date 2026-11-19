@@ -6222,6 +6222,9 @@ pub fn g6_llvm_error(prog: &Program) -> Option<crate::diagnostic::PruvError> {
                     }
                 }
                 if let Expr::Call(c) = e {
+                    if c.name == "map_get_mut" {
+                        bad.push((c.line, c.col));
+                    }
                     if crate::foreign::is_catalog(&c.name) && !crate::foreign::is_catalog_contract_only(&c.name) {
                         if let Some(inst) = &c.inst {
                             if !inst.args.iter().all(|a| g6_scalar(&a.to_key())) {

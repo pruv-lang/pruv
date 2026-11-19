@@ -32,6 +32,20 @@ def is_owned_field_type(ty: Type) -> bool:
     return ty == Type("string") or is_scalar_vec(ty)
 
 
+def is_nongeneric_struct(ty, decls):
+    decl = decls.get(ty.name)
+    return ty.owner is None and not ty.args and isinstance(decl, StructDecl) and not decl.tparams
+
+
+def field_place(expr):
+    """Return the root expression and field path of a place."""
+    path = []
+    while isinstance(expr, FieldAccess):
+        path.append(expr.field)
+        expr = expr.base
+    return expr, tuple(reversed(path))
+
+
 def contains_collection(ty: Type) -> bool:
     """ty is a collection type or has one anywhere inside its type arguments."""
     return is_collection(ty) or any(contains_collection(a) for a in ty.args)
@@ -547,7 +561,7 @@ class TypeTable:
                 continue
             seen.add(n)
             d = self.decls[n]
-            if any(is_array(f.type) or f.type == STR or is_owned_field_type(f.type) for f in self._all_fields(d)):
+            if any(is_array(f.type) or f.type == STR or is_collection(f.type) for f in self._all_fields(d)):
                 return True
             todo.extend(self._deps(d))
         return False
