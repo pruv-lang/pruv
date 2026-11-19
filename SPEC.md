@@ -1027,9 +1027,10 @@ before the representation checks, the `requires` and the body, in both compilers
   `(r, [i64; K])`, where `r` is the entry's result and the array is the result buffer after the call. `K` is the
   host's chosen buffer length (the generated const parameter is named `PRUV__K`, a reserved name, so it cannot
   clash with a parameter named `K`). It runs the twin on a fresh zeroed `[i64; K]`, so it is exactly the twin
-  called with a new length-`K` all-zero buffer: the same `requires`, status and words. A `K` too small for the
-  result is a too-small buffer: a `requires` panic in a checked build, and under `--trust-callers` the host must
-  meet the twin's contract for that zero buffer, as for the twin itself. `K > 2^40` is a compile-time error (a
+  called with a new length-`K` all-zero buffer: the same `requires`, status and words. A small `K` gives what the
+  twin gives for that buffer: if it violates a declared `requires`, a checked build panics, and under
+  `--trust-callers` the host must meet the twin's contract for that zero buffer, as for the twin itself; an entry
+  that declares no length precondition just runs (for example it may return a status for a buffer too short). `K > 2^40` is a compile-time error (a
   `const` assertion, not a run-time check), so the length bound holds by construction. An entry whose last
   parameter is not `inout [i64]` (another element type, not `inout`, or not last) gets no `val` form. The form is
   `#[inline(always)]` and generic. This rule fixes the meaning only; where the words live after optimization
