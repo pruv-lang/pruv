@@ -1,0 +1,7 @@
+// spec: R-5-1 reject
+// The destination array is not marked inout.
+pub fn f(dst: [u8], src: [u8]) -> ()
+  requires 1 <= len(dst) && 1 <= len(src)
+{
+  copy_range(dst, 0, src, 0, 1);
+}

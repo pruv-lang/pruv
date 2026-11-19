@@ -1,0 +1,7 @@
+// spec: R-5-1 reject
+// dst is [u8] and src is [i64]: one element type is required.
+pub fn f(inout dst: [u8], src: [i64]) -> ()
+  requires 1 <= len(dst) && 1 <= len(src)
+{
+  copy_range(inout dst, 0, src, 0, 1);
+}

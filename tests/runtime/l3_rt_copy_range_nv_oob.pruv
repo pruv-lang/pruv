@@ -1,0 +1,11 @@
+// --no-verify: an i + n past the end (i near i64 max, so i + n would overflow) fails the destination range check, which reports (i, len(dst))
+fn put(inout dst: [i64], i: i64, src: [i64], j: i64, n: i64) -> () {
+  copy_range(inout dst, i, src, j, n);
+}
+fn run() -> () ! io, alloc {
+  let mut a: [i64] = alloc(4, 1);
+  let b: [i64] = alloc(4, 1);
+  print(1);
+  put(inout a, 9223372036854775807, b, 0, 2);
+  print(3);
+}

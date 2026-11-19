@@ -2286,6 +2286,47 @@ impl<'a> FnVerifier<'a> {
                 self.assume(st, g, r_ast.eq(&fa));
                 return Ok(r);
             }
+            "copy_range" => {
+                // L-copy-range: five bounds obligations in order, then dst' := Lambda p. (i <= p < i+n ? src[j+p-i] : dst[p]);
+                // src is the value at the call (aliasing with dst is rejected by the checker)
+                let dv = arg(0)?.try_arr()?.clone();
+                let i = arg(1)?.try_ast()?.clone();
+                let sv = arg(2)?.try_arr()?.clone();
+                let j = arg(3)?.try_ast()?.clone();
+                let cnt = arg(4)?.try_ast()?.clone();
+                let obs: Vec<(Ast, String)> = vec![
+                    (i.ge_i(0), format!("copy_range start 0 <= i for {}", dv.name)),
+                    (j.ge_i(0), format!("copy_range start 0 <= j for {}", sv.name)),
+                    (cnt.ge_i(0), "copy_range length 0 <= n".to_string()),
+                    (i.add(&cnt).le(&dv.n), format!("copy_range i + n <= len({})", dv.name)),
+                    (j.add(&cnt).le(&sv.n), format!("copy_range j + n <= len({})", sv.name)),
+                ];
+                for (ob, msg) in obs {
+                    self.prove_core(&st, g, &ob, pos(e), "index_oob", &msg, None);
+                }
+                // a definitional (array-theory) update, no quantified assumption: the content fact, the frame fact and
+                // len(dst') == len(dst) hold by construction
+                let p = self.z.int_const("copy_range!p");
+                let inr = self.z.and(&[i.le(&p), p.lt(&i.add(&cnt))]);
+                let body = self.z.ite(&inr, &sv.a.select(&j.add(&p).sub(&i)), &dv.a.select(&p));
+                let lam = self.z.lambda(&[p], &body);
+                let name = match &x.args[0] {
+                    Expr::InoutArg(ia) => match &*ia.expr {
+                        Expr::Var(v) => v.name.clone(),
+                        _ => return Err("'NoneType' object has no attribute 'name'".to_string()),
+                    },
+                    _ => return Err("'NoneType' object has no attribute 'expr'".to_string()),
+                };
+                let nv = dv.like(lam, dv.n.clone(), &name);
+                if nv.elem == Elem::U8 {
+                    // both operands are in the byte domain, so the result is too
+                    let dom = self.u8_dom(&nv);
+                    self.assume(st, g, dom);
+                }
+                st.env.set(&name, Val::Arr(nv));
+                self.post_refine(e, &[0], st, g)?;
+                return Ok(Val::Unit);
+            }
             "load_be" => {
                 // P2 batch 4: big-endian word of the nb bytes a[i..i+nb]
                 let av = arg(0)?.try_arr()?.clone();

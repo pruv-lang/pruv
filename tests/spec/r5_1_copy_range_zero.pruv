@@ -1,0 +1,9 @@
+// spec: R-5-1 accept
+// copy_range with n == 0 copies nothing: the start offsets may be one past the end, the array is unchanged.
+pub fn none(inout dst: [u8], i: i64, src: [u8], j: i64) -> ()
+  requires 0 <= i && i <= len(dst) && 0 <= j && j <= len(src)
+  ensures len(dst) == len(old(dst))
+  ensures forall p in 0..len(dst): dst[p] == old(dst)[p]
+{
+  copy_range(inout dst, i, src, j, 0);
+}

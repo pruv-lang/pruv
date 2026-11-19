@@ -1,14 +1,11 @@
 // L3-10 M10a: the halt sub-operation (spec §4.5, B:381-397) and the halt section of the budget record.
 //
-// Halt section: the M7 record keeps the other budget properties as an opaque unit string (string 5, `rest`). A
-// halt is stored as a binary prefix of that string, before the JSON units (units are 0..65535, so -2 cannot start
-// a JSON text):
-//   [-2, reason (0 time, 1 delegations, 2 commands, 3 reviews, 4 checks), atKind (1 stored text, 2 instant in
-//    atMs), atMs, atLen, atUnits..., nIds, (n, words(n) packed words)* stoppedDelegationIds]
-// The stopped delegation ids are delegation keys, so they are kept as framed PACKED keys (bud_keys layout), exactly as
-// the host delivered them (packed once at ingress); a later lookup by one of them needs no re-packing. The prefix words
-// are therefore not units (like the leading -2); the record codecs read the prefix by this layout.
-// halt writes atKind 2 (at = now; toISOString is left to the boundary that renders the record, like M7's instants).
+// Halt section: a binary prefix of M7 string 5 (rest) followed by the optional JSON text handle.
+//   [-2, reason (0 time, 1 delegations, 2 commands, 3 reviews, 4 checks), atKind (1 text, 2 instant),
+//    atMs, atL (0 or 2), optional atBlen and atBoff, nIds, (n, words(n) packed words)*]
+// The prefix and the optional pair (byte length, byte offset) use data words. WTF-8 text lives in the tx arena.
+// Stopped delegation ids are framed packed keys (bud_keys layout) and can be read in place for lookups.
+// halt writes atKind 2, atMs = now, and atL = 0; the boundary formats the instant.
 // Record strings 0 (id) and 4 (follows) are packed keys (bud_lifecycle.pruv header): stride 1 + words(len).
 //
 // halt(ref, reason): only a CURRENT open budget halts (B:383-384). Order (B:385-396):
@@ -68,8 +65,7 @@ pub fn ids_words(a: [i64], s: i64) -> i64
   return p - s;
 }
 
-// Units of the halt prefix at the start of a rest string whose units are b[u..u+l), 0 without one (or when it is
-// malformed: then the units stay JSON-opaque and are kept as they are).
+// Data words of a valid halt prefix in b[u..u+l), or 0 when absent or malformed.
 fn prefix_len(b: [i64], u: i64, l: i64) -> i64
   ensures 0 <= result && result <= 1099511627776
 {
@@ -80,43 +76,81 @@ fn prefix_len(b: [i64], u: i64, l: i64) -> i64
   let kind: i64 = rd(b, u + 2);
   if kind != 1 && kind != 2 { return 0; }
   let al: i64 = rd(b, u + 4);
-  if al < 0 || al > l - 6 { return 0; }
+  if (al != 0 && al != 2) || al > l - 6 { return 0; }
   let w: i64 = ids_words(b, u + 5 + al);
   if w < 0 { return 0; }
   let t: i64 = 5 + al + w;
-  if t > l { return 0; }
+  if t > l || (l - t != 0 && l - t != 2) { return 0; }
   return c40(t);
 }
 
-// True iff the n words of the record stored in st at off form a well-formed record frame: n >= 30 and the six
-// strings (raw length words, never clamped) starting at off + 24 end exactly at off + n, strings 0 and 4 being
-// canonical packed keys (bud_keys::slice_ok; data words words(len)), the others len data words. The frame must lie
-// inside st.
+// Nonzero positions point to the byte-length word of a handle, relative to the record start.
+pub struct TextFrame {
+  valid: bool, opened: i64, active: i64, ended: i64, halt_at: i64, tail: i64, ids: i64
+}
+
+// Parse an exact budget frame, including the packed keys and the optional halt prefix.
+pub fn text_frame(st: [i64], off: i64, n: i64) -> TextFrame
+  ensures 0 <= result.opened && result.opened <= 1099511627776
+  ensures 0 <= result.active && result.active <= 1099511627776
+  ensures 0 <= result.ended && result.ended <= 1099511627776
+  ensures 0 <= result.halt_at && result.halt_at <= 1099511627776
+  ensures 0 <= result.tail && result.tail <= 1099511627776
+  ensures 0 <= result.ids && result.ids <= 1099511627776
+{
+  let invalid: TextFrame = TextFrame {
+    valid: false, opened: 0, active: 0, ended: 0, halt_at: 0, tail: 0, ids: 0
+  };
+  if n < 30 || off < 0 || off > 1099511627776 || n > 1099511627776 || off + n > len(st) {
+    return invalid;
+  }
+  let state: i64 = rd(st, off);
+  if state < 0 || state > 2 { return invalid; }
+  let end: i64 = off + n;
+  let id: i64 = crate::bud_keys::rec_end(st, off + 24);
+  if id < 0 || id > end - 5 { return invalid; }
+  let l1: i64 = rd(st, id);
+  if l1 != 0 && l1 != 2 { return invalid; }
+  let p2: i64 = id + 1 + l1;
+  let l2: i64 = rd(st, p2);
+  if l2 != 0 && l2 != 2 { return invalid; }
+  let p3: i64 = p2 + 1 + l2;
+  let l3: i64 = rd(st, p3);
+  if l3 != 0 && l3 != 2 { return invalid; }
+  let p5: i64 = crate::bud_keys::rec_end(st, p3 + 1 + l3);
+  if p5 < 0 || p5 >= end { return invalid; }
+  let rl: i64 = rd(st, p5);
+  if rl != end - p5 - 1 { return invalid; }
+  let mut opened: i64 = 0;
+  let mut active: i64 = 0;
+  let mut ended: i64 = 0;
+  let mut halt_at: i64 = 0;
+  let mut tail: i64 = 0;
+  let mut ids: i64 = 0;
+  if l1 == 2 { opened = id + 1 - off; }
+  if l2 == 2 { active = p2 + 1 - off; }
+  if l3 == 2 { ended = p3 + 1 - off; }
+  if rl == 2 {
+    tail = p5 + 1 - off;
+  } else if rl != 0 {
+    let pre: i64 = prefix_len(st, p5 + 1, rl);
+    if pre == 0 || pre > rl { return invalid; }
+    let al: i64 = rd(st, p5 + 5);
+    if (al != 0 && al != 2) || al > rl - 6 { return invalid; }
+    if al == 2 { halt_at = p5 + 6 - off; }
+    ids = rd(st, p5 + 6 + al);
+    if ids < 0 || ids > 1099511627776 { return invalid; }
+    if rl - pre == 2 { tail = p5 + 1 + pre - off; }
+  }
+  return TextFrame { valid: true, opened: opened, active: active, ended: ended, halt_at: halt_at, tail: tail, ids: ids };
+}
+
 pub fn rec_ok_in(st: [i64], off: i64, n: i64) -> bool
   ensures result ==> (0 <= off && off <= 1099511627776)
 {
-  if n < 30 || off < 0 || off > 1099511627776 || n > 1099511627776 { return false; }
-  if off + n > len(st) { return false; }
-  let end: i64 = off + n;
-  let mut p: i64 = off + 24;
-  let mut i: i64 = 0;
-  while i < 6
-    invariant 0 <= i && i <= 6 && off + 24 <= p && p <= end
-    decreases 6 - i
-  {
-    if p >= end { return false; }
-    let l: i64 = rd(st, p);
-    if l < 0 { return false; }
-    let mut w: i64 = l;
-    if i == 0 || i == 4 {
-      if !crate::bud_keys::slice_ok(st, p + 1, l) { return false; }
-      w = crate::bud_keys::words(l);
-    }
-    if w > end - p - 1 { return false; }
-    p = p + 1 + w;
-    i = i + 1;
-  }
-  return p == end;
+  if off < 0 || off > 1099511627776 { return false; }
+  let f: TextFrame = text_frame(st, off, n);
+  return f.valid;
 }
 
 // Start (length word) of string 5 (rest) of the record stored in st at off.

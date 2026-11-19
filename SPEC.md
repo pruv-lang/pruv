@@ -133,6 +133,27 @@ it can never be silently dropped.
   `n < 4`); a literal `n == 0` is `true` without a compare. An operand layout other than `[u8]` bytes or 64-bit
   elements is `codegen` error `unsupported_type` (today a `[u8]` operand is stored as bytes and the storage plan keeps
   an `[i64]` operand, refined or not, as 64-bit elements, so it is not reached).
+- `copy_range(inout dst, i, src, j, n);` (R-5-1): a statement (a mutating call in the section 6g positions, like
+  `store_be`; as an expression it is `type/inout_context`). `dst` is a mutable local array or an `inout` array
+  parameter (a missing `inout` marker or a non-mutable place is `type/inout_argument`); `dst` and `src` have one type,
+  `[i64]` or `[u8]` (else `type_mismatch`); `i, j, n: i64`. Code only (`effect_in_contract` in a contract), name
+  reserved. It copies `src[j..j+n]` into `dst[i..i+n]` and leaves every other element and `len(dst)` unchanged; `n == 0`
+  copies nothing. The verifier must prove, in this order, `0 <= i`, `0 <= j`, `0 <= n`, `i + n <= len(dst)`,
+  `j + n <= len(src)` (`verify` error `index_oob`; only the first one that fails is reported). It then knows
+  `len(dst') == len(dst)`, `forall k in 0..n: dst'[i+k] == src[j+k]` (`src` as it is at the call) and
+  `forall p: (p < i || p >= i + n) ==> dst'[p] == dst[p]`. These facts are one array-theory update of `dst`
+  (`dst' = fun p. if i <= p < i + n then src[j + p - i] else dst[p]`), not a quantified assumption, so they are exact
+  (no vacuous or missing fact) and cost the callers no quantifier instantiation; a `[u8]` result stays in `0..=255`.
+  Aliasing: pruv arrays have value semantics and the call is an `inout` call, so the existing `inout_alias` rule
+  applies: `src`, `i`, `j` or `n` naming `dst` (`copy_range(inout a, 0, a, 4, 2)`) is `type/inout_alias`; copy the
+  source first (`copy(a)`). So no overlapping (memmove) case exists. Both backends evaluate the arguments once each,
+  in source order dst, i, src, j, n. The Rust backend emits one `copy_from_slice` of the two slices (unchecked
+  slices when verified, a checked failure `pruv_oob` with `--no-verify`); the LLVM backend emits one
+  `llvm.memcpy` of `n` times the element size, and an operand layout other than `[u8]` bytes or 64-bit elements is
+  `codegen` error `unsupported_type`, as for `eq_range`. Tests: `tests/spec/r5_1_copy_range_*.pruv`
+  (accept: `_u8`, `_i64`, `_zero`, `_eq`, `_caller`; reject: `_i`, `_j`, `_n`, `_dst_end`, `_src_end`, `_order`,
+  `_type`, `_nonarray`, `_noinout`, `_contract`, `_expr`, `_alias`, `_idx_alias`, `_fact_outside`, `_fact_nocopy`),
+  `tests/runtime/l3_rt_copy_range*.pruv`.
 - Evaluation order: code evaluates left to right in source order, the same in every compile mode; call arguments left to right, and in `a[i] = v` the index is evaluated before the value.
 - Precedence (high to low): unary `- !`; `* / %`; `+ -`; comparisons (non-associative); `&&`; `||`; `==>`.
 
@@ -452,10 +473,11 @@ pub fn bounded(x: i64) -> i64                requires 0 <= x && x <= 10
   visible. A public signature or contract may mention only public types and items (checked through field types too);
   a function a public contract calls directly must be `pub` (section 6, user functions in contracts);
   private helpers are fine inside bodies. `pub trusted rust fn` is rejected: wrap it in a public Pruv function.
-- **Function attributes.** `#[cold]` is the only attribute. It is written directly before a non-`pub` top-level `fn`
-  item (generic fns allowed, any module) and has no effect on checking; it only changes the generated Rust (R-7-3).
-  Any other `#[...]` is `parse/unknown_attribute`; `#[cold]` before `pub fn`, `opaque fn`, `trusted rust fn`, a type,
-  `mod`, another attribute or the end of the file, and any `#[` inside a body, is `parse/attribute_position`.
+- **Function attributes.** Write at most one of `#[cold]`, `#[inline]` or `#[inline(always)]` directly before a
+  non-`pub` top-level `fn` item (generic fns allowed, any module). The attribute affects generated Rust (R-7-3);
+  checking and verification are unchanged. Other attributes and arguments are `parse/unknown_attribute`.
+  A recognized attribute before `pub fn`, `opaque fn`, `trusted rust fn`, a type, `mod`, another attribute or the
+  end of the file, and any `#[` inside a body, is `parse/attribute_position`.
 - **Host entries.** Only root `pub`, non-generic functions are callable from Rust/C (`--rust-bindings`, LLVM
   `pruv_abi_<name>`). Their signatures must be plain values (no collections, recursive or buffer-field types:
   `type/entry_signature`). Child `pub` functions are for Pruv callers only. An optional root `main` must be
@@ -1198,16 +1220,28 @@ backend is unchanged.
 Tests: [accept](tests/spec/r7_3_inline.pruv) (a small fn called once gets `#[inline(always)]`),
 [reject](tests/spec/r7_3_inline_recursive.pruv) (a recursive fn keeps `#[inline]`).
 
-A fn marked `#[cold]` (see "Function attributes", section 6f) is emitted with the two lines `#[cold]` and
-`#[inline(never)]` instead of `#[inline]`, for its body and its checked wrapper (and `F__pruv_chk` /
-`F__pruv_par_chk` where emitted). The pass above only rewrites lines that are exactly `#[inline]`, so a cold fn is never
-a candidate, and calls to it add nothing to a caller's `incl`. Variants that carry no `#[inline]` (`F__pruv_cost`,
-`F__pruv_small`) are unchanged. Verification is unchanged (contracts, proofs and run-time checks are the same); the LLVM
-backend ignores the attribute. Why: it keeps rare fallback paths (total reads of out-of-range data, long probe tails)
-out of inlined hot code; measured on M7, see `docs/L3_RESTRUCTURE_SPEC.md` Appendix P13k.
-Tests: [accept](tests/spec/r7_3_cold.pruv) (body and wrapper get `#[cold]` + `#[inline(never)]`, never
-`#[inline(always)]`), [reject](tests/spec/r7_3_cold_unknown.pruv) (`#[hot]`), [reject](tests/spec/r7_3_cold_pub.pruv)
-(`#[cold] pub fn`), [reject](tests/spec/r7_3_cold_struct.pruv) (`#[cold] struct`).
+A source function attribute (section 6f) takes precedence over the automatic R-7-3 rule. The Rust body and checked
+wrapper use the explicit `#[inline]` or `#[inline(always)]` directive, or `#[cold]` followed by `#[inline(never)]`
+for a cold fn. This also applies to `F__pruv_chk` and `F__pruv_par_chk` where emitted, and `--proven-entries`
+twins retain the directive. Variants without an inline hint (`F__pruv_cost`, `F__pruv_small`) keep none.
+The pass never evaluates these fns for promotion. Each call to an explicit `#[inline(always)]` fn adds its
+inclusive size just like a call to an automatically promoted fn. Calls to explicit `#[inline]` and `#[cold]`
+fns add nothing. A recursive fn without a directive is still never evaluated and adds nothing. A recursive fn with
+an explicit `#[inline(always)]` is evaluated, but its inclusive size counts only its calls to non-recursive fns:
+calls from it to recursive fns are dropped, so the size stays finite. Both LLVM backends ignore these attributes.
+
+Tests: [accept](tests/spec/r7_3_inline_explicit.pruv) (single-call `#[inline]` and large `#[inline(always)]` fns
+retain their directives), [accept](tests/spec/r7_3_cold.pruv) (body and wrapper get `#[cold]` + `#[inline(never)]`,
+never `#[inline(always)]`), [reject](tests/spec/r7_3_cold_unknown.pruv) (`#[hot]`),
+[reject](tests/spec/r7_3_cold_pub.pruv) (`#[cold] pub fn`), [reject](tests/spec/r7_3_cold_struct.pruv)
+(`#[cold] struct`), [reject](tests/spec/r7_3_cold_args.pruv) (`#[cold()]`),
+[reject](tests/spec/r7_3_cold_twice.pruv) (`#[cold]` twice), [reject](tests/spec/r7_3_cold_body.pruv) (on a
+statement), [reject](tests/spec/r7_3_inline_pub.pruv) (`#[inline(always)] pub fn`),
+[reject](tests/spec/r7_3_inline_struct.pruv) (`#[inline] struct`), [reject](tests/spec/r7_3_inline_body.pruv) (on a
+statement), [reject](tests/spec/r7_3_inline_unknown.pruv) (`#[inline(x)]`),
+[reject](tests/spec/r7_3_inline_never.pruv) (`#[inline(never)]`), [reject](tests/spec/r7_3_inline_twice.pruv)
+(`#[inline] #[inline]`), [reject](tests/spec/r7_3_inline_cold.pruv) (`#[cold] #[inline(always)]`). Cold keeps rare
+fallback paths out of inlined hot code (M7 measurements in `docs/L3_RESTRUCTURE_SPEC.md` Appendix P13k).
 
 ### Stack arrays (generated code)
 R-7-1 A local array `let [mut] a: [E] = alloc(N, v);` (`E` is `i64`, refined or not, `u8` or `bool`) with a literal
@@ -1322,7 +1356,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 
 | code | stage | meaning |
 |---|---|---|
-| `parse/attribute_position` | parse | a `#[cold]` not directly before a private `fn` item, or a `#[` that does not start a top-level item |
+| `parse/attribute_position` | parse | a recognized attribute not directly before a private `fn` item, or a `#[` that does not start a top-level item |
 | `parse/bad_char` | parse | a character that starts no token |
 | `parse/bad_int` | parse | a malformed integer literal, such as a trailing `_` (R-1-2) |
 | `parse/cost_syntax` | parse | `cost` needs one expression and must be the last header clause |
@@ -1346,7 +1380,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `parse/string_escape` | parse | an unsupported escape in a string literal |
 | `parse/string_unterminated` | parse | a string literal without its closing quote |
 | `parse/syntax` | parse | any other syntax error |
-| `parse/unknown_attribute` | parse | `#[` followed by anything other than `cold]` |
+| `parse/unknown_attribute` | parse | an attribute other than `#[cold]`, `#[inline]` or `#[inline(always)]` |
 | `parse/unsupported_type` | parse | a type the parser knows but this compiler does not implement yet |
 | `parse/visibility_syntax` | parse | a misplaced or malformed `pub` |
 | `pkg/dependency_cycle` | pkg | the package dependencies form a cycle |

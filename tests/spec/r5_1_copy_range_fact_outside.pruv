@@ -1,0 +1,9 @@
+// spec: R-5-1 reject
+// Unsound fact: claims an element outside the copied range changed (the frame says it did not).
+pub fn f(inout dst: [i64], src: [i64]) -> ()
+  requires 4 <= len(dst) && 2 <= len(src)
+{
+  let before: i64 = dst[3];
+  copy_range(inout dst, 0, src, 0, 2);
+  assert dst[3] != before;
+}

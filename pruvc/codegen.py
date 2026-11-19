@@ -86,7 +86,7 @@ from collections import namedtuple
 from vast import *
 from typeinfo import TypeTable, is_user_type, is_array, uses_array_type, uses_str, is_collection, dependencies
 from foreign import CATALOG
-from inline_policy import inline_policy  # the inline pass lives in pruvc/inline_policy.py
+from inline_policy import PIN_INLINE, PIN_ALWAYS, inline_policy
 from check import BIT_BUILTINS
 from refine import _kids as expr_kids, _stmt_names, _expr_names
 
@@ -1596,6 +1596,13 @@ class Gen:
             from small import plan_small
             s.small, s.small_sites = plan_small(prog, s.fmap, s.layout, s.stack)
 
+    def emit_inline(s, f):
+        if f.attribute == "cold":
+            s.emit(0, "#[cold]")
+            s.emit(0, "#[inline(never)]")
+        else:
+            s.emit(0, {"inline": PIN_INLINE, "inline(always)": PIN_ALWAYS}.get(f.attribute, "#[inline]"))
+
     def emit(s, ind, line):
         s.out.append("    " * ind + line)
 
@@ -1737,11 +1744,7 @@ class Gen:
         s.emit(0, s.allow)
         # Inline hint on every function body: without it rustc keeps the generated call chains as real calls.
         # inline_policy raises it to #[inline(always)] where the measured policy says so.
-        if f.cold:     # P13k: `#[cold]` keeps the rare fallback out of inlined hot code (never an R-7-3 candidate)
-            s.emit(0, "#[cold]")
-            s.emit(0, "#[inline(never)]")
-        else:
-            s.emit(0, "#[inline]")
+        s.emit_inline(f)
         s.emit(0, "%sfn %s(%s)%s {" % (vis, body_name, ps, ret))
         s.cost = not s.verified and f.cost is not None
         if s.cost:
@@ -1852,11 +1855,7 @@ class Gen:
         vis = s.pub_vis() if pub else ""
         header = "%sfn %s(%s)%s {" % (vis, name, ps, ret)
         s.emit(0, s.allow)
-        if f.cold:     # P13k
-            s.emit(0, "#[cold]")
-            s.emit(0, "#[inline(never)]")
-        else:
-            s.emit(0, "#[inline]")
+        s.emit_inline(f)
         s.emit(0, header)
         if pub and s.explicit and s.raw:
             s.raw_items.append((name, ps, ret, [p.name for p in f.params]))
@@ -3122,6 +3121,19 @@ class Gen:
                 return ("%sif pruv_i < 0 || pruv_j < 0 || pruv_n < 0 || pruv_i > (pruv_ea.len() as i64) - pruv_n "
                         "|| pruv_j > (pruv_eb.len() as i64) - pruv_n { pruv_oob(pruv_i, pruv_ea.len()) } "
                         "pruv_ea[%s] == pruv_eb[%s] }" % (head, ri, rj))
+            if n == "copy_range":  # L-copy-range: dst[i..i+n].copy_from_slice(&src[j..j+n]); i, src, j, n bound once in source order
+                name = a[0].expr.name
+                head = ("{ let pruv_i: i64 = %s; let pruv_cs = %s; let pruv_j: i64 = %s; let pruv_n: i64 = %s; "
+                        % (s.e(a[1]), s.arr_ref(a[2]), s.e(a[3]), s.e(a[4])))
+                ri = "(pruv_i as usize)..((pruv_i + pruv_n) as usize)"
+                rj = "(pruv_j as usize)..((pruv_j + pruv_n) as usize)"
+                if s.verified:
+                    return ("%sunsafe { %s.get_unchecked_mut(%s) }.copy_from_slice(unsafe { pruv_cs.get_unchecked(%s) }); }"
+                            % (head, name, ri, rj))
+                # P13i2a.audit-1: a bad destination range reports (i, len(dst)), a bad source range (j, len(src))
+                return ("%sif pruv_i < 0 || pruv_n < 0 || pruv_i > (%s.len() as i64) - pruv_n { pruv_oob(pruv_i, %s.len()) } "
+                        "if pruv_j < 0 || pruv_j > (pruv_cs.len() as i64) - pruv_n { pruv_oob(pruv_j, pruv_cs.len()) } "
+                        "%s[%s].copy_from_slice(&pruv_cs[%s]); }" % (head, name, name, name, ri, rj))
             if n == "load_be":   # P2 batch 4: big-endian word of a[i..i+nb]; unchecked slice when verified
                 nb = a[2].value
                 chk = "" if s.verified else ("if pruv_i < 0 || (pruv_i as u64) + %d > (pruv_a.len() as u64) "
@@ -3390,6 +3402,7 @@ def proven_entry(f, param_types, vis, name, ret):
 
 def proven_module(text, items):
     lines = text.split("\n")
+    # The policy pass has already normalized explicit inline directives.
     attrs = {line: [attr] for attr, line in zip(lines, lines[1:]) if attr in ("#[inline]", "#[inline(always)]")}
     # R-7-3: a `#[cold]` fn is emitted as `#[cold]` then `#[inline(never)]`; its proven entry keeps both.
     attrs.update({line: [cold, attr] for cold, attr, line in zip(lines, lines[1:], lines[2:])

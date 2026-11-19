@@ -1,0 +1,41 @@
+// copy_range(inout dst, i, src, j, n): range copy on [i64] and [u8]; bounds are proof obligations.
+fn put(inout dst: [i64], i: i64, src: [i64], j: i64, n: i64) -> ()
+  requires 0 <= i && 0 <= j && 0 <= n && i + n <= len(dst) && j + n <= len(src)
+{ copy_range(inout dst, i, src, j, n); }
+fn put8(inout dst: [u8], i: i64, src: [u8], j: i64, n: i64) -> ()
+  requires 0 <= i && 0 <= j && 0 <= n && i + n <= len(dst) && j + n <= len(src)
+{ copy_range(inout dst, i, src, j, n); }
+fn bit(x: bool) -> i64 {
+  if x { return 1; }
+  return 0;
+}
+fn run() -> () ! io, alloc {
+  let mut a: [i64] = alloc(5, 0);
+  let mut c: [i64] = alloc(4, 0);
+  c[0] = 1; c[1] = 2; c[2] = 3; c[3] = 4;
+  put(inout a, 1, c, 1, 3);
+  print(a[0]);
+  print(a[1]);
+  print(a[2]);
+  print(a[3]);
+  print(a[4]);
+  put(inout a, 4, c, 0, 0);
+  put(inout a, 5, c, 4, 0);
+  print(a[4]);
+  put(inout a, 0, c, 3, 1);
+  print(a[0]);
+  let mut s: [u8] = alloc(6, 0);
+  let mut t: [u8] = alloc(3, 0);
+  t[0] = 200; t[1] = 7; t[2] = 1;
+  put8(inout s, 2, t, 0, 3);
+  print(s[1]);
+  print(s[2]);
+  print(s[3]);
+  print(s[4]);
+  print(s[5]);
+  print(bit(eq_range(s, 2, t, 0, 3)));
+  copy_range(inout s, 0, t, 1, 2);
+  print(s[0]);
+  print(s[1]);
+  print(s[2]);
+}

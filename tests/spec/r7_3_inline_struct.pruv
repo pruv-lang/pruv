@@ -1,0 +1,4 @@
+// spec: R-7-3 reject
+// Directives mark function items.
+#[inline]
+struct P { x: i64 }
