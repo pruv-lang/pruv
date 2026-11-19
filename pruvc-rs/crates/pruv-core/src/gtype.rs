@@ -182,6 +182,16 @@ pub fn key_is_collection(key: &str) -> bool {
     }
 }
 
+/// Concrete Vec results that can be exposed by a Rust host entry.
+pub(crate) fn key_is_scalar_vec(key: &str) -> bool {
+    matches!(key, "vec<i64>" | "vec<bool>")
+}
+
+/// Collection types permitted as owned fields of non-generic declarations.
+pub(crate) fn key_is_owned_field(key: &str) -> bool {
+    key_is_scalar_vec(key) || key == "string"
+}
+
 // ---------- keys: the string form carried in the AST (ast.rs `Type = String`) ----------
 
 /// Whether an AST type string is a structured (G3) key rather than a legacy plain name.

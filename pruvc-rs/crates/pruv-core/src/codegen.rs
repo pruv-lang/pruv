@@ -1609,7 +1609,7 @@ impl<'a> Gen<'a> {
             // G9: the G2 helpers are emitted by usage; uses_array_type / uses_str look at parameters, results and lets only
             u8_used = u8_used || self.field_uses("array_u8");
             bool_used = bool_used || self.field_uses("array_bool");
-            str_used = str_used || self.field_uses("str");
+            str_used = str_used || self.field_uses("str") || self.field_uses("string");
         }
         if self.g6 && !str_used {
             // G6: a String parameter can be indexed in a runtime requires (pruv_cidx_str)
@@ -3471,6 +3471,9 @@ impl<'a> Gen<'a> {
                 } else if is_array_name(ft) || ft == "str" {
                     self.emit(ind + 2, &format!("let {}: {} = {};", b, rty(ft, true), b));
                     self.refs.insert(b.clone());
+                } else if key_is_collection(ft) && !consume {
+                    self.emit(ind + 2, &format!("let {}: {} = {};", b, rty(ft, true), b));
+                    self.refs.insert(b.clone());
                 } else if consume {
                     self.emit(ind + 2, &format!("let {}: {} = {};", b, rty(ft, false), b));
                     self.refs.remove(b);
@@ -3582,6 +3585,11 @@ impl<'a> Gen<'a> {
                 self.emit(ind, &format!("{} = {};", x.name, v));
             }
             Stmt::FieldAssign(x) => {
+                if expr_ty(&x.value).as_deref().map_or(false, crate::gtype::key_is_owned_field) {
+                    let v = self.e(&x.value)?;
+                    self.emit(ind, &format!("{}.{} = {};", x.name, x.fields.join("."), v));
+                    return Ok(());
+                }
                 // Fully evaluate the right-hand side into a temporary, then store
                 let decl = match expr_ty(&x.value) {
                     Some(t) => format!("let pruv_v: {} = ", rty(t, false)),
@@ -3845,7 +3853,11 @@ impl<'a> Gen<'a> {
     /// a collection expression in a borrow position (G6 section 12.1)
     fn cref(&mut self, x: &Expr) -> R<String> {
         if let Expr::Var(v) = x {
-            return Ok(if self.borrowed.contains(&v.name) { v.name.clone() } else { format!("&{}", v.name) });
+            return Ok(if self.borrowed.contains(&v.name) || self.refs.contains(&v.name) {
+                v.name.clone()
+            } else {
+                format!("&{}", v.name)
+            });
         }
         Ok(format!("&({})", self.e(x)?))
     }
@@ -3853,10 +3865,18 @@ impl<'a> Gen<'a> {
     /// executable catalog operation -> call of its private boundary helper
     fn catalog_call(&mut self, x: &Call) -> R<String> {
         let cat = catalog_fn(&x.name).ok_or_else(|| repr_str(&x.name))?;
-        let (low, src): (Vec<GType>, Vec<GType>) = match &x.inst {
-            Some(i) => (i.args.clone(), i.src_args.clone().unwrap_or_else(|| i.args.clone())),
-            None => (Vec::new(), Vec::new()),
-        };
+        let (low, src) = crate::foreign_shim::inst_types(x);
+        // A bound proof can depend on an unchecked user foreign postcondition.
+        if x.name == "vec_get"
+            && self.verified
+            && self.fg_mut()?.mode != "all"
+            && !self.prog.functions.iter().any(|f| f.foreign.is_some())
+        {
+            self.fg_mut()?.record_inline_catalog(&x.name, &src);
+            let v = self.e(arg(&x.args, 0)?)?;
+            let i = self.e(arg(&x.args, 1)?)?;
+            return Ok(format!("(unsafe {{ *({}).get_unchecked(({}) as usize) }})", v, i));
+        }
         let name = self.fg_mut()?.catalog_helper(&x.name, &low, &src)?;
         // string_to_str of an owned local that the enclosing return moves: the String itself is the copy.
         if x.name == "string_to_str" && !self.cost {
@@ -3972,7 +3992,8 @@ impl<'a> Gen<'a> {
     fn e(&mut self, e: &Expr) -> R<String> {
         match e {
             Expr::Spent(_) => Err("cost_unavailable: Stage 5 cost verification is not implemented yet".into()),
-            Expr::Move(x) => Ok(x.name.clone()), // G6: Rust moves
+            Expr::Move(x) if x.fields.is_empty() => Ok(x.name.clone()),
+            Expr::Move(x) => Ok(format!("::std::mem::take(&mut {}.{})", x.name, x.fields.join("."))),
             // G5 A0: never reaches the generator (the driver's A0 guard stops the program earlier)
             Expr::InoutArg(_) => Err("G5 inout argument reached the Rust generator".to_string()),
             Expr::IntLit(x) => {

@@ -1,0 +1,7 @@
+// spec: R-6f-1 reject
+pub fn make(n: i64) -> Vec<i64> ! alloc
+  ensures len(result) == 1 && result[0] == n
+{
+  let v: Vec<i64> = vec_new::<i64>();
+  return vec_push::<i64>(move v, n);
+}

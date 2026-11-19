@@ -120,7 +120,7 @@ pub struct ForeignGen {
     op: String,
     /// G4b-2: package of the function being emitted (None = the program package); set by Gen::func
     pub cur_pkg: Option<String>,
-    /// G4b-2: package name ("" = program package) -> every (op, type_args) catalog_helper was asked for (not only first use)
+    /// G4b-2: package name ("" = program package) -> every catalog instance used by generated code
     pkg_catalog: BTreeMap<String, BTreeSet<(String, Vec<String>)>>,
 }
 
@@ -304,6 +304,15 @@ impl ForeignGen {
     }
 
     // ------------------------------------------------------------------ catalog
+    pub fn record_inline_catalog(&mut self, op: &str, src: &[GType]) {
+        let targs: Vec<_> = src.iter().map(format_type).collect();
+        self.record_pkg_catalog(op, targs.clone());
+        let entry = (op.to_string(), targs);
+        if !self.catalog.contains(&entry) {
+            self.catalog.push(entry);
+        }
+    }
+
     pub fn catalog_helper(&mut self, op: &str, low: &[GType], src: &[GType]) -> R<String> {
         let src: &[GType] = if src.is_empty() && !low.is_empty() { low } else { src };
         let mut name = format!("pruv_g6_{}", op);

@@ -1,6 +1,6 @@
-// foreign_owned_type: a struct field of collection type
+// foreign_owned_type: a struct field of HashMap type
 struct Bag {
-  items: Vec<i64>
+  items: HashMap<i64, i64>
 }
 
 fn f(x: i64) -> i64 {

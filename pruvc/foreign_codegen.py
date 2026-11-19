@@ -10,9 +10,10 @@ named
 and are emitted once each, in first-use order, in front of the Pruv functions.
 
 Check modes (Gen.fmode): requires = requires checks in every helper; all = also ensures (snapshots are `.clone()`s
-taken before the operation; the actual contents are compared afterwards); off = no contract checks.  Indexing is
-checked in every mode (`vec_get`, `string_byte`).  `all` spends the contract budget: one unit per visited element
-or entry, a fresh budget per helper call; exhaustion -> `pruv: foreign contract undefined: NAME: budget`.
+taken before the operation; the actual contents are compared afterwards); off = no contract checks. The catalog
+helpers check indexing; verified Rust builds may inline a proved `vec_get`. In `all` mode each helper call starts with
+a fresh contract budget and spends one unit per visited element or entry. Exhaustion reports
+`pruv: foreign contract undefined: NAME: budget`.
 """
 import json
 import re
@@ -141,6 +142,12 @@ class ForeignGen:
         return ["pruv_g6_charge(&mut pruv_budget, %s.len());" % src, "let pruv_snap: %s = %s.clone();" % (ty, src)]
 
     # ------------------------------------------------------------------ catalog
+    def record_inline_catalog(s, op, src):
+        s._note_catalog(op, src)
+        entry = {"op": op, "type_args": [format_type(t) for t in src]}
+        if entry not in s.catalog:
+            s.catalog.append(entry)
+
     def catalog_helper(s, op, low, src):
         if not src and low:
             src = low

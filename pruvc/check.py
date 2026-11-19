@@ -1,12 +1,13 @@
 """Pruv type / effect / structure checker. Fills Expr.ty."""
 import copy
 import re
+from collections import Counter
 from vast import *
 from typeinfo import (TypeTable, BUILTIN_TYPE_NAMES, type_name, is_user_type, is_array, array_elem,  # G2 A5: array_elem
                       TypeArityError, check_arity, bind_args, substitute, is_value, is_element,
                       dependencies, decl_owner, fn_owner,  # G3 A1
                       COLLECTION_ARITY, COLLECTION_SPELLING, is_collection, contains_collection,  # G6 A0
-                      program_uses_inout)  # G5 A0
+                      program_uses_inout, is_owned_field_type, is_scalar_vec)
 from refine import expand as refine_expand
 from refine import _kids as expr_kids
 from foreign import (CATALOG, CATALOG_NAMES, CATALOG_CONTRACT_ONLY, FILE_OBSERVERS, PROC_OBSERVERS, NET_OBSERVERS, ASYNC_OBSERVERS, ASYNC_OPS,
@@ -55,6 +56,18 @@ def _mentions(e, name):
     if isinstance(e, (Var, Move)) and e.name == name:
         return True
     return any(_mentions(k, name) for k in expr_kids(e))
+
+
+def _field_moves(e):
+    if isinstance(e, Move) and e.fields:
+        yield e
+    for child in expr_kids(e):
+        yield from _field_moves(child)
+
+
+def _field_move_error(e):
+    terr(e, "foreign_move", "a field can be moved only into a call whose result is assigned back to the same field",
+         "move a Vec or String field of a mutable local directly into a take parameter and use the local only there")
 
 
 def _sccs(n, adj):
@@ -142,7 +155,8 @@ class Checker:
         s.uses_inout = program_uses_inout(prog)   # G5 A0: enables the contextual builtin `old`
         prog.uses_inout = s.uses_inout            # G5 A0: lets the staging guard skip its walk for inout-free programs
         s.ckind = "code"          # G5: kind of the expression being checked: requires/ensures/decreases/invariant/assert/code
-        s.boundary = None         # G5: the call allowed at the statement boundary of the statement being checked
+        s.boundary = None         # statement boundary for the statement-only builtins
+        s.in_par = False
         s.funcs = {}
         for f in prog.functions:
             if f.name in s.funcs:
@@ -498,10 +512,10 @@ class Checker:
                         terr(f, "field_type", "field %s cannot have type %s" % (f.name, type_name(f.type)),
                              "fields are i64, bool, Option<i64>, Result<i64> or a user struct/enum")
                     s.check_type(f, f.type)
-                    if contains_collection(f.type):
+                    if contains_collection(f.type) and (d.tparams or not is_owned_field_type(f.type)):
                         terr(f, "foreign_owned_type", "field %s cannot have the collection type %s" % (
                             f.name, type_name(f.type)),
-                             "collections cannot be struct fields or enum payloads; pass them as separate bindings")
+                             "only non-generic declarations may have Vec<i64>, Vec<bool> or String fields")
         for f in s.prog.functions:
             s.enter(fn_owner(f.name), f.tparams)
             for p in f.params:
@@ -619,7 +633,7 @@ class Checker:
         rec = set(n for names in s.type_sccs for n in names)
         direct = set()
         for d in s.prog.types:
-            if any(is_array(fd.type) or fd.type == STR for _, fd in s.decl_fields(d)):
+            if any(is_array(fd.type) or fd.type == STR or is_owned_field_type(fd.type) for _, fd in s.decl_fields(d)):
                 direct.add(d.name)
         ext = set(rec) | direct
         buf = set(direct)
@@ -686,13 +700,14 @@ class Checker:
                          "declare %s without inout, or give it one of those array types" % p.name)
 
     def check_entries(s):
-        """G4 A0 (explicit mode): a host entry (root `pub`, nongeneric, ordinary function) may not have a collection or an
-        extended (G9) type in its signature; child `pub` functions and generic functions are not host entries.
-        Mutable host entries: an inout parameter ([i64], [u8], [bool], already enforced by check_modes) is allowed"""
+        """Host entry signatures admit plain values, array/str parameters and scalar Vec results."""
         for f in s.prog.functions:
             if not f.host_entry:
                 continue
-            for what, ty in [("parameter %s" % p.name, p.type) for p in f.params] + [("the result", f.ret)]:
+            positions = [("parameter %s" % p.name, p.type) for p in f.params]
+            if not is_scalar_vec(f.ret):
+                positions.append(("the result", f.ret))
+            for what, ty in positions:
                 if contains_collection(ty) or any(n in s.extended for n in dependencies(ty)):
                     terr(f, "entry_signature", "host entry %s cannot have the type %s in %s" % (
                         f.name, type_name(ty), what),
@@ -773,6 +788,7 @@ class Checker:
             # G5 A0: an inout parameter allows element stores but, like every parameter, never whole reassignment
             scope[p.name] = (p.type, False, "inout" if p.mode is not None else "param")
         s.used_effects = set()
+        s.field_move = None
         s.ckind = "requires"
         for r in f.requires:
             s.expect(r, BOOL, scope, contract=True)
@@ -802,7 +818,7 @@ class Checker:
                 terr(f, "missing_effect", "function %s uses effect `%s` but does not declare it" % (f.name, e),
                      "add `! %s` after the return type" % ", ".join(sorted(set(f.effects) | s.used_effects)),
                      stage="effect")
-        check_ownership(f, s.funcs)      # G6: liveness of collection bindings (after typing)
+        check_ownership(f, s.funcs, s.decls)      # G6: liveness of collection bindings (after typing)
 
     def ends_in_return(s, stmts):
         if not stmts:
@@ -821,10 +837,54 @@ class Checker:
         for st in stmts:
             s.stmt(st, scope)
 
+    def check_inout_context(s, st, *exprs):
+        """R-6g-1: check the typed expressions of one statement, without entering its blocks."""
+        if not s.uses_inout:
+            return
+        mentions = Counter()
+        if isinstance(st, (Assign, IndexAssign, FieldAssign)):
+            mentions[st.name] += 1
+        calls = []
+
+        def visit(e, conditional):
+            if isinstance(e, (Var, Move)):
+                mentions[e.name] += 1
+            short_circuit = isinstance(e, Binary) and e.op in ("&&", "||")
+            for k in expr_kids(e):
+                visit(k, conditional or (short_circuit and k is e.right))
+            if isinstance(e, Call):
+                calls.append((e, conditional))
+
+        for e in exprs:
+            visit(e, isinstance(st, While))
+        effect_before = False
+        for e, conditional in calls:
+            f = s.funcs.get(e.name)
+            marked = [arg for arg in e.args if isinstance(arg, InoutArg)] if f is not None else []
+            if marked:
+                for arg in marked:
+                    if mentions[arg.expr.name] > 1:
+                        terr(arg, "inout_context",
+                             "%s is passed inout and also mentioned elsewhere in this statement" % arg.expr.name,
+                             "use a separate statement for the inout call")
+                if conditional:
+                    terr(e, "inout_context", "the inout call may be skipped or repeated",
+                         "use a separate statement where the call must run once")
+                if isinstance(st, (IndexAssign, FieldAssign)):
+                    terr(e, "inout_context", "an inout call is not allowed in an element or field assignment",
+                         "compute the call's result before the assignment")
+                if effect_before:
+                    terr(e, "inout_context", "an inout call is not allowed here because a call with effects runs before it",
+                         "evaluate the earlier call in a separate statement")
+            callee = f if f is not None else CATALOG.get(e.name)
+            if e.name == "print" or (callee is not None and any(effect != "alloc" for effect in callee.effects)):
+                effect_before = True
+
     def stmt(s, st, scope):
         f = s.f
         s.ckind = "code"
-        s.boundary = None     # G5: only the statements below that allow a mutating call set it
+        s.boundary = None
+        s.field_move = None
         if isinstance(st, Let):
             if st.name in scope:
                 terr(st, "shadow", "%s is already defined; shadowing is not allowed" % st.name,
@@ -836,6 +896,7 @@ class Checker:
             s.boundary = st.value
             s.alloc_hint_for(st.value, st.type)
             s.expect(st.value, st.type, scope)
+            s.check_inout_context(st, st.value)
             if is_array(st.type) or st.type == STR:
                 s.array_source(st, st.value, scope)
             s.own(st.value)
@@ -852,6 +913,7 @@ class Checker:
             s.boundary = st.value
             s.alloc_hint_for(st.value, v[0])
             s.expect(st.value, v[0], scope)
+            s.check_inout_context(st, st.value)
             if is_array(v[0]) or v[0] == STR:
                 s.array_source(st, st.value, scope)
             s.own(st.value)
@@ -868,6 +930,7 @@ class Checker:
             s.expect(st.index, I64, scope)
             # G2 A5: stored value is bool for a bool array; G3: exactly T for a [T]
             s.expect(st.value, s.elem_type(v[0]), scope)
+            s.check_inout_context(st, st.index, st.value)
         elif isinstance(st, FieldAssign):
             v = s.lookup(st, st.name, scope)
             s.check_borrow(st, st.name, st.fields)
@@ -880,19 +943,23 @@ class Checker:
                     terr(st, "not_struct", "cannot assign field %s: %s is not a struct" % (fname, type_name(cur)),
                          "field assignment paths run through structs only; assign the whole enum value instead")
                 cur = s.field_type(st, cur, fname)
+            s.field_move = s.field_update_move(st, cur, v)
             if not v[1]:
                 terr(st, "immutable", "%s is not mutable" % st.name,
                      "declare it with `let mut`" if v[2] == "local" else "parameters are immutable; copy into a `let mut` local")
             s.expect(st.value, cur, scope)
+            s.check_inout_context(st, st.value)
             if is_array(cur) or cur == STR:      # G9 A0: G2 explicit ownership for a buffer field
                 s.array_source(st, st.value, scope)
             s.own(st.value)
         elif isinstance(st, If):
             s.expect(st.cond, BOOL, scope, op="a condition")
+            s.check_inout_context(st, st.cond)
             s.block(st.then, dict(scope))
             s.block(st.els, dict(scope))
         elif isinstance(st, While):
             s.expect(st.cond, BOOL, scope, op="a condition")
+            s.check_inout_context(st, st.cond)
             s.ckind = "invariant"
             for i in st.invariants:
                 s.expect(i, BOOL, scope, contract=True)
@@ -910,6 +977,7 @@ class Checker:
                 s.boundary = st.value
                 s.alloc_hint_for(st.value, f.ret)
                 s.expect(st.value, f.ret, scope)
+                s.check_inout_context(st, st.value)
                 if is_array(f.ret) or f.ret == STR:
                     s.array_source(st, st.value, scope, allow_local_var=True)
                 s.own(st.value)
@@ -925,9 +993,12 @@ class Checker:
             s.ckind = "code"
         elif isinstance(st, ExprStmt):
             if not isinstance(st.expr, Call):
+                for e in _field_moves(st.expr):
+                    _field_move_error(e)
                 terr(st, "useless_expr", "expression statement must be a call", "bind it with let or remove it")
             s.boundary = st.expr
             t = s.expr(st.expr, scope)
+            s.check_inout_context(st, st.expr)
             if t.owner is None and t.name == "process":   # G10 proc: a discarded Process result keeps its duty
                 terr(st, "proc_unconsumed", "temporary Process is not consumed",
                      "consume it with proc_wait(move p) or proc_kill(move p), or return / transfer ownership")
@@ -947,6 +1018,7 @@ class Checker:
             s.par(st, scope)
         elif isinstance(st, Match):
             t = s.expr(st.scrutinee, scope)
+            s.check_inout_context(st, st.scrutinee)
             user = s.tt.is_enum(t)
             root = s.match_root(st.scrutinee, t, scope)   # G9 A0: root variable of an extended scrutinee path
             if t.owner is not None:
@@ -1017,10 +1089,12 @@ class Checker:
                  "write a single ordinary call instead of a par group")
         for c in calls:
             s.par_target(c)
+        s.in_par = True
         for c in calls:
             s.ckind = "code"
-            s.boundary = c       # each branch is a whole-statement call for the G5 statement-boundary rule
+            s.boundary = c
             s.expr(c, scope)
+        s.in_par = False
         s.boundary = None
         for c in calls:
             s.par_args(c)
@@ -1250,6 +1324,22 @@ class Checker:
             terr(st, "recursive_borrow", "cannot assign to %s while a match on it is active" % ".".join([name] + list(fields)),
                  "copy the needed payload into a local, finish the match, then assign")
 
+    def field_update_move(s, st, ty, binding):
+        """Select the only field move allowed in the right-hand side of a field assignment."""
+        moves = list(_field_moves(st.value))
+        if not moves:
+            return None
+        e = moves[0]
+        if (len(moves) != 1 or len(st.fields) != 1 or e.fields != tuple(st.fields) or e.name != st.name
+                or binding[1:] != (True, "local") or not is_owned_field_type(ty) or not isinstance(st.value, Call)):
+            _field_move_error(e)
+        call = st.value
+        callee = s.funcs.get(call.name) or CATALOG.get(call.name)
+        if (callee is None or not any(arg is e and p.take for arg, p in zip(call.args, callee.params))
+                or any(_mentions(arg, st.name) for arg in call.args if arg is not e)):
+            _field_move_error(e)
+        return e
+
     def alloc_hint_for(s, value, expected):
         """G2: only a builtin alloc call that IS the right-hand side of a typed let / array reassignment /
         return takes its array type from the expected type"""
@@ -1365,6 +1455,10 @@ class Checker:
                 s.expect(e.left, BOOL, scope, c, op="a boolean operation")
                 s.expect(e.right, BOOL, scope, c, op="a boolean operation"); return BOOL
         if isinstance(e, Move):   # G6: liveness and position rules are checked by foreign.check_ownership
+            if e.fields:
+                if e is not s.field_move:
+                    _field_move_error(e)
+                return s.field_type(e, s.lookup(e, e.name, scope)[0], e.fields[0])
             if c:
                 terr(e, "foreign_move", "move only where ownership is consumed",
                      "contracts read parameters and locals directly; remove `move`")
@@ -1569,7 +1663,7 @@ class Checker:
     def inout_args(s, e, f, m, scope, c):
         """arguments of a resolved call to a user function whose signature has an inout parameter (or that carries a
         marker): per argument marker/place validity and the instantiated type, then exclusive use of every marked
-        binding across the whole argument list, then the statement-boundary position of the call"""
+        binding across the whole argument list"""
         n = e.name
         marked = []
         for arg, p in zip(e.args, f.params):
@@ -1611,10 +1705,9 @@ class Checker:
             if any(x is not arg and _mentions(x, name) for x in e.args):
                 terr(arg, "inout_alias", "%s is passed inout and also used elsewhere in the arguments of this call" % name,
                      "compute the other value first, e.g. `let n: i64 = len(%s);`, then pass n" % name)
-        if not c and e is not s.boundary:
-            terr(e, "inout_context", "a call with an inout parameter must be a whole expression statement, let initializer, "
-                 "assignment value or return value",
-                 "bind the result first: `let r: T = f(inout a);` and use r afterwards")
+        if not c and s.in_par and e is not s.boundary:
+            terr(e, "inout_context", "a par branch cannot contain a nested inout call",
+                 "evaluate the call in a separate statement before the par group")
 
     def word_call(s, e, scope, c):
         """P2 batch 4: load_be(a: [u8], i, n) -> i64 (code and contracts) and the statement-only
@@ -1934,7 +2027,7 @@ class Checker:
         if n in CATALOG_CONTRACT_ONLY:
             s.observer_args(e, f, m, scope, c)
         elif not catalog and (any(p.mode is not None for p in f.params) or any(isinstance(x, InoutArg) for x in a)):
-            s.inout_args(e, f, m, scope, c)     # G5 A0: marker, place, type, exclusivity and statement context
+            s.inout_args(e, f, m, scope, c)     # G5 A0: marker, place, type and same-call exclusivity
         else:
             for arg, p in zip(a, f.params):
                 s.expect(arg, substitute(p.type, m), scope, c)

@@ -136,7 +136,13 @@ fn bx(e: &Expr) -> Json {
 pub fn expr(e: &Expr) -> Json {
     match e {
         Expr::Spent(x) => node("Spent", Some((x.line, x.col)), vec![("ty", ty(&x.ty))]),
-        Expr::Move(x) => node("Move", Some((x.line, x.col)), vec![("name", js(&x.name)), ("ty", ty(&x.ty))]),
+        Expr::Move(x) => {
+            let mut fields = vec![("name", js(&x.name)), ("ty", ty(&x.ty))];
+            if !x.fields.is_empty() {
+                fields.push(("fields", Json::Arr(x.fields.iter().map(|f| js(f)).collect())));
+            }
+            node("Move", Some((x.line, x.col)), fields)
+        }
         Expr::IntLit(x) => node("IntLit", Some((x.line, x.col)), vec![("value", js(&x.value)), ("ty", ty(&x.ty))]),
         Expr::BoolLit(x) => node("BoolLit", Some((x.line, x.col)), vec![("value", Json::Bool(x.value)), ("ty", ty(&x.ty))]),
         Expr::StrLit(x) => {

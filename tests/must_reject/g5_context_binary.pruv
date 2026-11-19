@@ -1,4 +1,4 @@
-// G5: a call with an inout parameter cannot be an operand of a binary operator
+// P31L: an inout call may be a binary operand (R-6g-1), but bump may return the i64 maximum, so + 1 overflows
 fn bump(inout a: [i64]) -> i64
   requires len(a) >= 1
 {

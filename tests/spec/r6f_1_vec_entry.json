@@ -1,0 +1,1 @@
+{"gen_regex":["pub fn make\\([^)]*\\)\\s*->\\s*::std::vec::Vec<i64>","pub fn flags\\([^)]*\\)\\s*->\\s*::std::vec::Vec<bool>"]}

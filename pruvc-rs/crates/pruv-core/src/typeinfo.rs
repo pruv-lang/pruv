@@ -830,8 +830,7 @@ impl TypeTable {
     }
 
     /// In field order, without duplicates, declared names only.
-    /// G9 (Python `TypeTable.holds_buffer`): a value of the declared type `name` can hold an array or str field,
-    /// directly or through a field type.
+    /// Whether a declared type contains a buffer or owned collection field, including transitively.
     pub fn holds_buffer(&self, name: &str) -> bool {
         if let Some(&b) = self.buffer_memo.borrow().get(name) {
             return b;
@@ -853,7 +852,7 @@ impl TypeTable {
                 None => continue,
             };
             seen.insert(n.clone());
-            if d.all_fields().iter().any(|f| is_array_name(&f.ty) || f.ty == "str") {
+            if d.all_fields().iter().any(|f| is_array_name(&f.ty) || f.ty == "str" || crate::gtype::key_is_owned_field(&f.ty)) {
                 return true;
             }
             todo.extend(self.deps(d));

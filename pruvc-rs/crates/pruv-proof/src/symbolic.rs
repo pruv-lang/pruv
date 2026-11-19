@@ -361,8 +361,7 @@ pub fn assigned(stmts: &[Stmt], out: &mut BTreeSet<String>) {
     }
 }
 
-/// verify.py `_inout_ops` (G5 A1): whole-array operands of the inout arguments of e itself (G5_SPEC 2.1: an inout call is
-/// always the complete expression of a statement, so nothing below it is visited).
+/// Names of the whole-array inout operands throughout an expression.
 fn inout_ops(e: &Expr, out: &mut BTreeSet<String>) {
     if let Expr::Call(c) = e {
         for a in &c.args {
@@ -373,10 +372,12 @@ fn inout_ops(e: &Expr, out: &mut BTreeSet<String>) {
             }
         }
     }
+    for child in kids(e) {
+        inout_ops(child, out);
+    }
 }
 
-/// verify.py `call_writes` (G5 A1): names passed inout to calls in let initializers, assignments, returns and expression
-/// statements, recursively through statement blocks (empty for a program without inout).
+/// verify.py `call_writes`: names passed inout in executable expressions, recursively through statement blocks.
 fn call_writes(stmts: &[Stmt], out: &mut BTreeSet<String>) {
     for st in stmts {
         match st {
@@ -394,11 +395,13 @@ fn call_writes(stmts: &[Stmt], out: &mut BTreeSet<String>) {
             }
             Stmt::ExprStmt(x) => inout_ops(&x.expr, out),
             Stmt::If(x) => {
+                inout_ops(&x.cond, out);
                 call_writes(&x.then, out);
                 call_writes(&x.els, out);
             }
             Stmt::While(x) => call_writes(&x.body, out),
             Stmt::Match(m) => {
+                inout_ops(&m.scrutinee, out);
                 for a in &m.arms {
                     call_writes(&a.body, out);
                 }
@@ -1845,6 +1848,8 @@ impl<'a> FnVerifier<'a> {
 
     /// `ev` with `st.env` as the snapshot (the env=None call).
     fn ev0(&mut self, e: &Expr, st: &mut State, g: &[Ast], code: bool) -> R<Val> {
+        // R-6g-1: nested inout calls update st in place. Their arrays occur nowhere
+        // else in the statement, so other operands can still read the entry snapshot.
         let env = st.env.clone();
         self.ev(e, st, g, code, &env)
     }
@@ -2089,8 +2094,17 @@ impl<'a> FnVerifier<'a> {
                 let vf = model.variant_fns(&ety, &x.variant)?;
                 Ok(Val::Bool(vf.rec.apply1(v.try_ast()?)))
             }
-            // G6 A1: `move x` evaluates to the current value of the binding
-            Expr::Move(x) => env.try_get(&x.name).cloned().ok_or_else(|| format!("'{}'", x.name)),
+            // A move reads the old value. Field assignment replaces it after evaluating the call.
+            Expr::Move(x) => {
+                let v = env.try_get(&x.name).ok_or_else(|| format!("'{}'", x.name))?;
+                let Some(field) = x.fields.first() else { return Ok(v.clone()) };
+                let Val::Dt(va, sty) = v else { return Err("field move on a non-struct value".to_string()) };
+                let sf = model.struct_info(sty)?;
+                let idx = model.field_index_of(sty, field, None)?;
+                let fty = &model.fields_of(sty, None)?[idx].1;
+                self.observe(st, va, Some(sty), false)?;
+                self.field_val(fty, sf.accs[idx].apply1(va), field)
+            }
             // G5 A0: never reaches the proof layer (the driver's A0 guard stops the program earlier)
             Expr::InoutArg(x) => self.ev(&x.expr, st, g, code, env),
             Expr::VariantField(x) => {

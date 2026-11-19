@@ -6391,7 +6391,7 @@ pub fn gen_llvm_concrete_ex(
     if !matches!(foreign_checks, "requires" | "all" | "off") {
         return Err(GenError::Msg("foreign_checks must be requires, all or off".to_string()));
     }
-    if let Some(e) = g6_llvm_error(prog) {
+    if let Some(e) = crate::bindings::owned_collection_abi_error(prog, None).or_else(|| g6_llvm_error(prog)) {
         return Err(GenError::Diag(e));
     }
     gen_llvm_body(prog, verified, trust_callers, budget, target, foreign_checks).map_err(|s| match s.strip_prefix(G6_DIAG_TAG) {

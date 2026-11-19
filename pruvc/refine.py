@@ -156,26 +156,31 @@ def pick_bound_name(names):
 
 
 def _inout_operands(e, out):
-    """G5 A1: names of the whole-array operands of the inout arguments of e itself (an inout call is always the
-    complete expression of a statement, G5_SPEC 2.1, so nothing below it is visited)"""
-    if isinstance(e, Call):
-        for a in e.args:
-            if isinstance(a, InoutArg) and isinstance(a.expr, Var):
-                out.add(a.expr.name)
+    if isinstance(e, InoutArg) and isinstance(e.expr, Var):
+        out.add(e.expr.name)
+    for k in _kids(e):
+        _inout_operands(k, out)
+
+
+def _stmt_call_exprs(st):
+    """Expressions of one statement that can contain an inout call (R-6g-1)."""
+    if isinstance(st, (Let, Assign, Return)):
+        if st.value is not None:
+            yield st.value
+    elif isinstance(st, ExprStmt):
+        yield st.expr
+    elif isinstance(st, If):
+        yield st.cond
+    elif isinstance(st, Match):
+        yield st.scrutinee
+    elif isinstance(st, Par):
+        yield from st.calls
 
 
 def _stmt_inout(st, out):
-    """G5 A1: inout operands of the calls in the own expressions of one statement (statement-boundary calls)"""
-    if isinstance(st, (Let, Assign)):
-        _inout_operands(st.value, out)
-    elif isinstance(st, Return):
-        if st.value is not None:
-            _inout_operands(st.value, out)
-    elif isinstance(st, ExprStmt):
-        _inout_operands(st.expr, out)
-    elif isinstance(st, Par):       # G7 A0: every branch's inout operands are changed variables
-        for c in st.calls:
-            _inout_operands(c, out)
+    for e in _stmt_call_exprs(st):
+        _inout_operands(e, out)
+    return out
 
 
 def _assigned(stmts, out):
@@ -254,16 +259,16 @@ class _Expander:
                             _synth_assert(r, label, ex, "refinement_assign",
                                           "the %s of local %s after the call on line %d" % (label, a.expr.name, e.line))
                             for label, ex in parts(r, a.expr.name, s.k)]
-        # statement-boundary rule (G5 §2.1): an inout call is always the whole statement expression; no recursion
+        for k in _kids(e):
+            s.annotate(k, scope)
 
     def block(s, stmts, scope):
         out = []
         for st in stmts:
             out.append(st)
-            if isinstance(st, (Let, Assign, Return, ExprStmt)):
-                e0 = st.expr if isinstance(st, ExprStmt) else st.value
-                if e0 is not None:
-                    s.annotate(e0, scope)
+            if scope:
+                for e in _stmt_call_exprs(st):
+                    s.annotate(e, scope)
             if isinstance(st, Let):
                 if st.refine is not None:
                     scope[st.name] = st.refine
@@ -299,9 +304,6 @@ class _Expander:
             elif isinstance(st, Match):
                 for a in st.arms:
                     a.body = s.block(a.body, dict(scope))
-            elif isinstance(st, Par):      # G7 A0: branch calls carry the same post-call refinement annotations
-                for c in st.calls:
-                    s.annotate(c, scope)
         return out
 
     def run(s):

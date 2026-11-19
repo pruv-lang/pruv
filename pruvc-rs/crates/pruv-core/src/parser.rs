@@ -1716,14 +1716,21 @@ impl Parser {
             return Ok(Expr::StrLit(StrLit { line, col, value: decode_str_lit(&t.val), ty: None }));
         }
         if t.kind == Kind::Move {
-            // G6: `move name`
+            // Parse the full field path so the checker can enforce where a field move is legal.
             self.bump();
             let n = self.peek(0).clone();
             if n.kind != Kind::Id {
                 return Err(self.foreign_syntax(&t, "move takes a binding name", "write `move name`"));
             }
             self.bump();
-            return Ok(Expr::Move(Move { line, col, name: n.val, ty: None }));
+            let mut fields = Vec::new();
+            while self.at(".", 0) {
+                self.bump();
+                fields.push(self.ident()?.val);
+                self.enter(1)?;
+            }
+            self.leave(fields.len());
+            return Ok(Expr::Move(Move { line, col, name: n.val, fields, ty: None }));
         }
         if self.at("true", 0) || self.at("false", 0) {
             self.bump();

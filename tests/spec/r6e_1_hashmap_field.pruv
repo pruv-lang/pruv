@@ -1,0 +1,4 @@
+// spec: R-6e-1 reject
+struct Bag { items: HashMap<i64, i64> }
+
+fn f() -> i64 { return 0; }

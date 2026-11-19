@@ -1190,13 +1190,17 @@ class Parser:
             s.next(); return IntLit(t.line, t.col, t.val)
         if t.kind == "str":   # G2 B0
             s.next(); return StrLit(t.line, t.col, _decode_string(t.val))
-        if t.kind == "move":   # G6: `move name`
+        if t.kind == "move":
             s.next()
             n = s.peek()
             if n.kind != "id":
                 s.foreign_syntax(t, "move takes a binding name", "write `move name`")
             s.next()
-            return Move(t.line, t.col, n.val)
+            fields = []
+            while s.at("."):
+                s.next()
+                fields.append(s.ident().val)
+            return Move(t.line, t.col, n.val, fields=tuple(fields))
         if s.at("true") or s.at("false"):
             s.next(); return BoolLit(t.line, t.col, t.val == "true")
         if s.at("("):

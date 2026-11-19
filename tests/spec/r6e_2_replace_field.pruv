@@ -1,0 +1,10 @@
+// spec: R-6e-2 accept
+struct Rec { id: i64, data: Vec<i64> }
+
+fn append() -> i64 ! alloc
+  ensures result == 5
+{
+  let mut p: Rec = Rec { id: 7, data: vec_new::<i64>() };
+  p.data = vec_push::<i64>(move p.data, 5);
+  return vec_get::<i64>(p.data, 0);
+}

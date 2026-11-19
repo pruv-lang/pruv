@@ -551,7 +551,8 @@ def build_shim(prog, verified=True, trust_callers=False, budget=1 << 30, foreign
     for f in prog.functions:
         g.fn(f)
     for op, low in cats.values():
-        if op in FILE_OBSERVERS or op in PROC_OBSERVERS or op in NET_OBSERVERS or op in ASYNC_OBSERVERS:
+        # vec_get: a verified Rust body inlines a proved read (R-6d-2), but the LLVM entries still call the helper
+        if op in FILE_OBSERVERS or op in PROC_OBSERVERS or op in NET_OBSERVERS or op in ASYNC_OBSERVERS or op == "vec_get":
             g.fg.catalog_helper(op, low, low)
     items = g.fg.items
     out = [MOD_ALLOW, "mod pruv_g6_shim {"]

@@ -24,6 +24,14 @@ def is_collection(ty: Type) -> bool:
     return ty.owner is None and ty.name in COLLECTION_ARITY
 
 
+def is_scalar_vec(ty: Type) -> bool:
+    return ty.owner is None and ty.name == "vec" and ty.args in ((I64,), (BOOL,))
+
+
+def is_owned_field_type(ty: Type) -> bool:
+    return ty == Type("string") or is_scalar_vec(ty)
+
+
 def contains_collection(ty: Type) -> bool:
     """ty is a collection type or has one anywhere inside its type arguments."""
     return is_collection(ty) or any(contains_collection(a) for a in ty.args)
@@ -455,7 +463,7 @@ def first_g9_use(prog):
             cands.append((d.line, d.col, "recursive type %s" % d.name))
         fields = d.fields if isinstance(d, StructDecl) else [x for v in d.variants for x in v.fields]
         for fd in fields:
-            if is_array(fd.type) or fd.type == STR:
+            if is_array(fd.type) or fd.type == STR or is_owned_field_type(fd.type):
                 cands.append((fd.line, fd.col, "buffer field %s" % fd.name))
     for fn in prog.functions:
         if fn.decreases is not None:
@@ -526,7 +534,7 @@ class TypeTable:
         self._buffer_memo: Dict[str, bool] = {}
 
     def holds_buffer(self, name: str) -> bool:
-        """G9: a value of the declared type `name` can hold an array or str field, directly or through a field type"""
+        """Whether a declared type contains a buffer or owned collection field, including transitively."""
         if name not in self._buffer_memo:
             self._buffer_memo[name] = self._holds_buffer_walk(name)
         return self._buffer_memo[name]
@@ -539,7 +547,7 @@ class TypeTable:
                 continue
             seen.add(n)
             d = self.decls[n]
-            if any(is_array(f.type) or f.type.name == "str" for f in self._all_fields(d)):
+            if any(is_array(f.type) or f.type == STR or is_owned_field_type(f.type) for f in self._all_fields(d)):
                 return True
             todo.extend(self._deps(d))
         return False

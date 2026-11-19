@@ -433,7 +433,7 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P29 | New B/bud_cleanup.pruv: restore/forget/dispose | P Q7+M, ordered timers/markers/linear reclaim; C/R/A axes. Done (Appendix P29): `bud_cleanup.pruv` (bootRestore / forgetSession / dispose) plus the V-word integration of attach, charge, halt, runStarted / runWaiting / runEnded and FIRE (`bud_vlife.pruv`, `bud_vwords.pruv`, `bud_effect.pruv`), every decision in Pruv, the host runs effects, time, timers and facts only; no shared module changed. Q7 300 exact (no prefix-ok left), Q7P 300, L 10, crafted 8 + 7 (audit), lifecycle 7 exact on rs and py, session-carrying effects compared with the oracle snapshot at call time; hdiff Q7 300/300, legacy 326/326, lifecycle 7/7; C=10/50/100 cleanup and 100/1000/5000 owner-lookup checks 9/9 against the oracle on both lanes and compilers. Every entry is Grow-atomic (room planned before the first write), so the host runs in place with no store clone. Time at or below hand in F / D / O M and L and B L; B M 1.16x with overlapping distributions (D23); A M / L, H M / L and U M / L are above after one fix attempt, debt D19-D21; D22 keeps the O per-clock load cause (O L 0.89x now); S cells D23; peak RSS D24. Audit 11 must-fix: 9 fixed, 2 rejected (C16, C17), one uuid gap known (P29.8). |
 | P30 | New B/bud_decide.pruv: raise | P Q5+H, synchronous reached queries, limits/R; new M10b coverage. Done (Appendix P30): `bud_decide.pruv` `raise` (unlimited, per-key max of size x unit, settle + refresh on a raised time limit, nested time halt, changed last), every decision in Pruv, the host answers `unit` and runs timers only; no shared module changed (`m7_test/bud_facts.rs` adds the `unit` fact). M10b q 300 exact (428 raise calls) and H01-H10 exact on rs and py, `same` byte-identical; M7-M12 Q unchanged. Perf D = 10 / 50 / 100: O(1) in D, every cell under 1 us, so fixed share: Pruv 34-131 vs hand 33-82 ns, allocations equal, RSS +0.54-0.67 MB (D25-D27). KD-P30-1..4; three proposed rows (P30.8). |
 | P31 | Same: decide extend/end | P Q5+I, releaseHeld at reached position, save/refresh/wake and atomic bounds. Done (Appendix P31): `bud_decide.pruv` `decide` (not-found / not-halted, extend: unlimited or limits += size x unit, open, halt deleted, save, changed, REFRESH without SETTLE with a nested time halt, queueContinue(reason, no wake), the synchronous `releaseHeld` fact at its effect position and queueContinue(null, wake) when nothing was held; end: CLOSE('user-end'), dropHeld, save, changed), every decision in Pruv, the host answers `unit` / `releaseHeld` and runs effects only; no shared module changed (new `m10b_test/decide_facts.rs`). M10b q 300 exact (598 decide + 428 raise calls) and I01-I10 exact on rs and py, H01-H10 and raise controls unchanged, `same` byte-identical; M10 Q unchanged. Perf D = 10 / 50 / 100: extend below hand at D = 50 / 100 (0.64x / 0.41x), end below at D = 100 (0.91x), above at small D by a fixed per-call share (lower slope in D than hand), debt D28-D30. Audit 1 + re-check 1 (P31.7). KD-P31-1..3; proposed rows (P31.8). |
-| P31L | Both compilers (pruvc, pruvc-rs), SPEC.md, tests/ | Root package before P32 (main decision 2026-11-20: the debt list D14, D19-D25, D28-D29 keeps pointing at the same representation cause, so close the language gaps instead of working around them). Owned collection fields in structs (`[i64]` / `[u8]` / `Vec` / `String` fields, `foreign_owned_type`) and `Vec` root entry results (`entry_signature`), plus `inout` calls in expression position where the evaluation order is unambiguous (`inout_context`), Appendix P29.9. Positive and negative tests on both backends, SPEC.md section, proofs still erase bounds checks on field-held collections, generated Rust moves (no clone) where the source moves. Gate: g8_frontend both, cargo test, diff_rust fuzz, full suite of each changed compiler once. |
+| P31L | Both compilers (pruvc, pruvc-rs), SPEC.md, tests/ | Root package before P32 (main decision 2026-11-20: the debt list D14, D19-D25, D28-D29 keeps pointing at the same representation cause, so close the language gaps instead of working around them). Owned collection fields in structs (`[i64]` / `[u8]` / `Vec` / `String` fields, `foreign_owned_type`) and `Vec` root entry results (`entry_signature`), plus `inout` calls in expression position where the evaluation order is unambiguous (`inout_context`), Appendix P29.9. Positive and negative tests on both backends, SPEC.md section, proofs still erase bounds checks on field-held collections, generated Rust moves (no clone) where the source moves. Gate: g8_frontend both, cargo test, diff_rust fuzz, full suite of each changed compiler once. Done (Appendix P31L): R-6e-1/2 owned `Vec<i64>` / `Vec<bool>` / `String` fields in non-generic structs and enum payloads (field read = borrowed view, `move p.f` only into a take call assigned back), R-6d-2 proved `vec_get` as `get_unchecked` when no user `trusted rust fn` exists, R-6f-1 `Vec` root entry results, R-6g-1 inout calls in expressions with `inout_context` reasons; small example `--trust-callers` 0.99-1.00x hand Rust, no bounds check, no clone, py and rs byte-identical. Full suites rs 4572/4572, py 4560/4560 with `--compare-rows`; audit A1-A9 fixed (P31L.3). |
 | P31T | B/bud_map.pruv, bud_store.pruv, bud_lifecycle.pruv, bud_decide.pruv and their consumers (M4-M12, M10b) | After P31L. Typed session record (struct with owned fields) replacing the flat framed `[i64]` record and packed-key double lookups (D14, D25), shrink-in-place record write for extend / close (D28, D29, P31.8), struct replies with `Vec` effects instead of framed `[i64]` (D19-D24). Every consumer's Q unchanged on rs and py; re-measure D14, D19-D25, D28-D29 cells against hand Rust and close the rows that reach <= 1.0x. |
 | P32 | B/host.rs,roots/bindings,bud_test_abi.pruv,m34/m5–m11 shims | P split per operation/narrow family; direct/adapter grid, malformed admission, one decision engine. |
 | P33 | Both codegens/hot contracts: residual L4/L5 only | C inline attribute/size heuristic and local proof gates; P touched families, M11 compile CPU/binary size and parity. Partly done in P13i2a: `#[inline(always)]` and `#[inline]` fn attributes (explicit directive over R-7-3 promotion); size heuristic/local proof gates still open. |
@@ -8558,3 +8558,94 @@ done in the main conversation.
 | shrink-in-place store write | write a record that only shrinks in its slot without a fresh slice | D28 (extend's extra allocation, B/bud_decide.pruv:277) |
 | in-place close in `bud_lifecycle` | close a stored record without `blob_copy` / `rewrite` | D29 (end's 3 allocations, B/bud_lifecycle.pruv:577, :588) |
 | record validity fact | carry "record frame checked" from store to reader so `rec_ok_in` / `text_frame` are not re-run per call | D28 / D29 per-call validation share |
+
+## Appendix P31L: owned collection fields, Vec entry results, inout calls in expressions (both compilers)
+
+### P31L.1 Rules (SPEC.md)
+
+- R-6e-1 owned collection fields: non-generic structs and enum payloads may have `Vec<i64>`, `Vec<bool>` and
+  `String` fields; other collection field types (HashMap, other element types, nested) and any collection field in
+  a generic declaration stay `type/foreign_owned_type`. An owning initializer or replacement takes a call result or
+  `move x`; a field read `r.f` is a borrowed view (passable to unmarked collection parameters and the catalog reads,
+  never moved implicitly). Contracts and the verifier use the collection-local buffer model for `len(r.f)` and
+  `r.f[i]`. Rust uses `::std::vec::Vec` / `::std::string::String` fields, the aggregate derives `Clone` without
+  `Copy`, and moved initializers are stored without a clone. LLVM rejects such aggregates
+  (`codegen/unsupported_type`, naming the aggregate).
+- R-6e-2: `move p.f` only as a direct `take` argument of a call whose result is assigned back to the same field
+  (`p.f = vec_push::<i64>(move p.f, 5);`); Rust passes `::std::mem::take(&mut p.f)`. Other field moves are
+  `type/foreign_move`.
+- R-6d-2 proved vector reads: in a verified build with `--foreign-checks requires|off`, `vec_get` is emitted as
+  `get_unchecked` after its bounds precondition is proved, only when the program declares no user `trusted rust fn`
+  (audit A1); a field operand is read in place.
+- R-6f-1: an explicit-mode root `pub` non-generic function may return `Vec<i64>` / `Vec<bool>` as an ordinary
+  Rust host entry (`pub fn`, `pub(crate) fn` under `raw_entries`); no C ABI (LLVM and `--rust-bindings` give `codegen/unsupported_type`). Other collection results
+  stay `type/entry_signature`.
+- R-6g-1: a user call with an `inout` argument may occur at any depth of one simple statement (or an
+  `if` / `while` / `match` condition or scrutinee) when (1) the inout array is not mentioned elsewhere in the
+  statement, (2) the call runs exactly once (not in a `while` condition, a right operand of `&&` / `||` or an
+  if-expression branch), (3) the statement is not an element or field assignment, (4) no call with an effect other
+  than `alloc` runs before it. Each violation is `type/inout_context` with its reason (message and fix). R-6g-1 replaces the
+  docs/G5_SPEC.md §2.1 statement-boundary rule. The three forms of `g5_context_binary`, `g5_context_call_arg`
+  and `g5_context_if_cond` are now accepted: `g5_context_if_cond` is removed, and the other two stay in
+  must_reject (and tests/g5/fixtures.json `proof_reject`) as `verify/overflow` regressions, since their bodies still overflow.
+  The rejected positions are covered by the new `tests/spec/r6g_1_*` rows.
+
+### P31L.2 Small example (work copy, not a repository file)
+
+Source: a struct `Rec { id: i64, data: Vec<i64> }`, `make(take v) -> Rec { Rec { id: 7, data: move v } }`, and
+`sum_rec(r: Rec)` summing `vec_get::<i64>(r.data, i)` under `requires len(r.data) <= 1000` and an element range.
+Generated Rust (`--trust-callers`, Python and Rust compilers byte-identical) against hand Rust:
+
+| hand Rust | generated |
+|---|---|
+| `pub struct Rec { pub id: i64, pub data: Vec<i64> }` | `pub struct Rec { pub id: i64, pub data: ::std::vec::Vec<i64> }` (`#[derive(Clone, Debug)]`) |
+| `Rec { id: 7, data: v }` | `return (Rec { id: 7i64, data: v });` (move, no clone) |
+| `fn sum_rec(r: &Rec) -> i64` | `fn sum_rec__pruv_body(r: &Rec) -> i64` + wrapper `sum_rec(r: &Rec)` calling it (`#[inline(always)]`) |
+| `while i < r.data.len() as i64` | `while (i < (r.data.len() as i64))` |
+| `s = s + unsafe { *r.data.get_unchecked(i as usize) }` | `s = (s + (unsafe { *(r.data).get_unchecked((i) as usize) }));` (no bounds check) |
+
+Perf (rustc -O, codegen-units=1, 1000 elements, 2,000,000 calls, 5 runs): hand 52.7-53.2 ns/call, generated
+`--trust-callers` 52.7-53.1 ns/call (0.99-1.00x; one warm-up run 62.65 excluded). The default build adds the
+public-entry runtime `requires` check (an O(n) `forall`, about 557 ns/call): that is the existing SPEC public-entry
+behaviour, outside this row's gate.
+
+### P31L.3 Gate
+
+Final tree (build 6, after the audit fixes and the A4 follow-up):
+
+| check | command | result |
+|---|---|---|
+| g8_frontend rs | `tests/run_all.py --backend both --only g8_frontend` | rc 0, 39/39 |
+| g8_frontend py | `tests/run_all.py --backend both --compiler py --only g8_frontend` | rc 0, 27/27 |
+| cargo test | `cargo test --release` (pruvc-rs) | rc 0, 139 passed |
+| diff_rust | `tests/diff_rust.py --rs-path pruvc-rs/target/release/pruv-rust-dump --fuzz-count 20` | rc 0, all same |
+| full suite rs | `tests/run_all.py --backend both --compare-rows tests/run_all_rows.txt` | rc 0, 4572/4572, missing 0, extra 0, failed 0 |
+| full suite py | `tests/run_all.py --backend both --compiler py --compare-rows tests/run_all_rows.txt` | rc 0, 4560/4560 (12 rs-only rows out of scope), missing 0, extra 0, failed 0 |
+| small example | P31L.2 source, `--trust-callers`, both compilers | byte-identical, 1 `get_unchecked`, 0 `.clone()` |
+
+`tests/run_all_rows.txt` gains only the two restored `must_reject` rows `g5_context_binary` and `g5_context_call_arg`.
+Before the audit, the full suite found that the LLVM shim lost `pruv_g6_vec_get__*` once verified Rust inlined a
+proved `vec_get` (27 llvm runtime rows, both compilers); `foreign_shim` now treats `vec_get` as an observer.
+
+Audit (one review plus one confirming review, both read-only):
+
+| # | finding | handling |
+|---|---|---|
+| A1 | `get_unchecked` emitted when a bound proof may rest on an unchecked user foreign `ensures` | inline only when the program declares no user `trusted rust fn`; otherwise the checked helper |
+| A2 | Rust `holds_buffer_walk` missed an owned field (Rust cloned, Python rejected) | owned field included, as in Python |
+| A3 | Rust inline `vec_get` skipped catalog registration (`.foreign.json`, `--trust-report`) | registered before the inline return |
+| A4 | borrowed alias in unreachable code passed (`return; let v: Vec<i64> = r.data;`); the confirming review found pattern binders still open | both ownership checkers check field reads, read parameters and user-enum arm binders in unreachable statements; repro rejected `type/foreign_borrow` with identical JSON on both |
+| A5 | `move p.data;` statement and nested `par` `inout_context` text differed | Rust aligned to Python |
+| A6 | LLVM rejection text of `r6e_1_llvm_field` / `r6f_1_llvm_entry` differed | unified |
+| A7 | `tests/diff_py_adapter.py` schema lacked `Move.fields` | added |
+| A8 | deleted `g5_context_binary` / `g5_context_call_arg` still fail `verify/overflow` | restored as `must_reject`, listed in `tests/g5/fixtures.json` `proof_reject` |
+| A9 | SPEC text missed the `raw_entries` `pub(crate)` case and contradicted G5_SPEC section 2.1 | SPEC.md R-6f-1 / R-6g-1 text fixed |
+
+Budget: 6 release builds against a budget of 3, and more than 2 hours of wall time (the fixes after the audit
+and the A4 follow-up each needed a rebuild; full suites take about 56 minutes per compiler).
+
+Debt passed on: P31T uses these fields and `Vec` results in `bench/l3/budget` (not changed here). Not covered:
+`HashMap` and other element types as fields, collection fields in generic declarations, LLVM aggregates with
+collection fields, and `get_unchecked` in programs that declare a user `trusted rust fn` (they keep the checked
+helper). The default (non `--trust-callers`) build still pays the public-entry `requires` check (P31L.2), which is
+existing SPEC behaviour.

@@ -253,8 +253,7 @@ pub fn pick_bound_name(names: &HashSet<String>) -> String {
     format!("k_{}", i)
 }
 
-/// refine.py `_inout_operands` (G5 A1): names of the whole-array operands of the inout arguments of e itself (G5_SPEC 2.1:
-/// an inout call is always the complete expression of a statement, so nothing below it is visited).
+/// Names of the whole-array inout operands throughout an expression.
 fn inout_operands(e: &Expr, out: &mut HashSet<String>) {
     if let Expr::Call(c) = e {
         for a in &c.args {
@@ -264,6 +263,9 @@ fn inout_operands(e: &Expr, out: &mut HashSet<String>) {
                 }
             }
         }
+    }
+    for child in kids(e) {
+        inout_operands(child, out);
     }
 }
 
@@ -283,6 +285,8 @@ fn stmt_inout(st: &Stmt, out: &mut HashSet<String>) {
             }
         }
         Stmt::ExprStmt(x) => inout_operands(&x.expr, out),
+        Stmt::If(x) => inout_operands(&x.cond, out),
+        Stmt::Match(x) => inout_operands(&x.scrutinee, out),
         _ => {}
     }
 }
@@ -402,6 +406,34 @@ impl Expander {
     /// refine.py `_Expander.annotate` (G5 A1): an inout argument naming a refined local carries the synthesized assertions of
     /// that local's refinement (`post_refine`); verify proves them right after the call transition.
     fn annotate(&self, e: &mut Expr, scope: &Scope) {
+        match e {
+            Expr::Unary(x) => self.annotate(&mut x.operand, scope),
+            Expr::Binary(x) => {
+                self.annotate(&mut x.left, scope);
+                self.annotate(&mut x.right, scope);
+            }
+            Expr::Index(x) => {
+                self.annotate(&mut x.array, scope);
+                self.annotate(&mut x.index, scope);
+            }
+            Expr::Ctor(x) => {
+                if let Some(arg) = &mut x.arg {
+                    self.annotate(arg, scope);
+                }
+            }
+            Expr::StructLit(x) => {
+                for field in &mut x.fields {
+                    self.annotate(&mut field.value, scope);
+                }
+            }
+            Expr::EnumCtor(x) => {
+                for arg in &mut x.args {
+                    self.annotate(arg, scope);
+                }
+            }
+            Expr::FieldAccess(x) => self.annotate(&mut x.base, scope),
+            _ => {}
+        }
         if let Expr::Call(c) = e {
             let call_line = c.line;
             for a in c.args.iter_mut() {
@@ -432,10 +464,11 @@ impl Expander {
                             ia.post_refine = posts;
                         }
                     }
+                } else {
+                    self.annotate(a, scope);
                 }
             }
         }
-        // statement-boundary rule (G5 §2.1): an inout call is always the whole statement expression; no recursion
     }
 
     fn block(&self, stmts: Vec<Stmt>, scope: &mut Scope) -> Vec<Stmt> {
@@ -457,6 +490,8 @@ impl Expander {
                     }
                 }
                 Stmt::ExprStmt(x) => self.annotate(&mut x.expr, scope),
+                Stmt::If(x) => self.annotate(&mut x.cond, scope),
+                Stmt::Match(x) => self.annotate(&mut x.scrutinee, scope),
                 _ => {}
             }
             match &mut st {

@@ -1,0 +1,13 @@
+// spec: R-6e-1 accept
+enum Flags { Absent, Present(bits: Vec<bool>) }
+
+fn empty_flags() -> Flags ! alloc {
+  return Flags::Present(vec_new::<bool>());
+}
+
+fn count(f: Flags) -> i64 {
+  match f {
+    Flags::Absent => { return 0; }
+    Flags::Present(bits) => { return len(bits); }
+  }
+}

@@ -157,7 +157,10 @@ fn generate(a: &Args, prog: &Program) -> Result<(String, String), Fail> {
 }
 
 /// G6_SPEC 13.1: `--emit exe|obj` of a G6 program needs the Rust host build (the shim lives in the generated bindings).
-fn foreign_target_error(prog: &Program) -> Option<PruvError> {
+fn foreign_target_error(prog: &Program, g4: Option<&pruv_core::modules::G4>) -> Option<PruvError> {
+    if let Some(e) = pruv_core::bindings::owned_collection_abi_error(prog, g4) {
+        return Some(e);
+    }
     if pruv_core::foreign::first_g6_use(prog).is_none() && !pruv_core::foreign::uses_files(prog) {
         return None;
     }
@@ -375,7 +378,7 @@ fn compile(a: &Args, graph: Option<&pruv_core::manifest::Graph>) -> Result<(), F
         }
         // Pre-G10 order for File-free native programs: with --no-verify, foreign_target fires before the notice.
         if g6_native && pruv_core::foreign::g7_target_error(&prog).is_none() && !pruv_core::foreign::uses_files(&prog) {
-            if let Some(e) = foreign_target_error(&prog) {
+            if let Some(e) = foreign_target_error(&prog, g4.as_ref()) {
                 return Err(Fail::Lang(vec![e]));
             }
         }
@@ -388,7 +391,7 @@ fn compile(a: &Args, graph: Option<&pruv_core::manifest::Graph>) -> Result<(), F
         if let Some(e) = pruv_core::foreign::g7_target_error(&prog) { return Err(Fail::Lang(vec![e])); }
     }
     if g6_native {
-        if let Some(e) = foreign_target_error(&prog) {
+        if let Some(e) = foreign_target_error(&prog, g4.as_ref()) {
             return Err(Fail::Lang(vec![e]));
         }
     }

@@ -133,8 +133,9 @@ class Quant(Expr):
 
 @dataclass
 class Move(Expr):
-    name: str          # G6: `move name` (consumes an owned collection binding)
+    name: str          # Root binding of `move name` or `move name.field`.
     ty: Optional[Type] = None
+    fields: tuple[str, ...] = ()
 
 @dataclass
 class InoutArg(Expr):

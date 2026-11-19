@@ -740,6 +740,9 @@ impl Model {
                 return Ok((self.int_sort.clone(), Some(i)));
             }
         }
+        if Self::is_buf(ft) {
+            return Ok((self.bufsort(ft)?, None));
+        }
         Ok((self.try_sort_of(ft)?, None))
     }
 
@@ -816,9 +819,15 @@ impl Model {
 
     // ---------- G9 A1: buffer fields ----------
 
-    /// verify.py `Model.is_buf`: a `[i64]` / `[u8]` / `[bool]` / `str` field type (never a G3 `[T]`).
+    /// Arrays, strings and the concrete Vec types all use the same buffer field representation.
     pub fn is_buf(ty: &Ty) -> bool {
-        matches!(ty, Ty::Array(_) | Ty::Str)
+        match ty {
+            Ty::Array(_) | Ty::Str => true,
+            Ty::User(n) => n == "string",
+            Ty::Inst(g) => g.owner.is_none() && g.name == "vec"
+                && matches!(g.args.as_slice(), [t] if *t == GType::i64() || *t == GType::bool()),
+            _ => false,
+        }
     }
 
     /// verify.py `Model.buf_elem`.
@@ -826,6 +835,8 @@ impl Model {
         match ty {
             Ty::Array(Elem::Bool) => Elem::Bool,
             Ty::Array(Elem::U8) | Ty::Str => Elem::U8,
+            Ty::User(n) if n == "string" => Elem::U8,
+            Ty::Inst(g) if g.name == "vec" && g.args.first() == Some(&GType::bool()) => Elem::Bool,
             _ => Elem::I64,
         }
     }
@@ -833,7 +844,7 @@ impl Model {
     /// verify.py `Model.bufsort` (the whole `bufs` entry): datatype Buf(len: Int, arr: Array(Int, elem sort)); one per element
     /// sort (Int for i64/u8/str, Bool).
     pub fn buf_entry(&self, ty: &Ty) -> Result<BufFns, String> {
-        let key = matches!(ty, Ty::Array(Elem::Bool));
+        let key = Self::buf_elem(ty) == Elem::Bool;
         if let Some(e) = self.bufs.borrow().get(&key) {
             return Ok(e.clone());
         }

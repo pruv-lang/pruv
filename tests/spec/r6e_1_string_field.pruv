@@ -1,0 +1,35 @@
+// spec: R-6e-1 accept
+struct Label { text: String }
+
+fn make_label() -> Label ! alloc {
+  return Label { text: string_new() };
+}
+
+fn clear_label() -> i64 ! alloc
+  ensures result == 0
+{
+  let mut r: Label = Label { text: string_new() };
+  let replacement: String = string_new();
+  r.text = move replacement;
+  return len(r.text);
+}
+
+fn first_byte(s: String) -> i64
+  requires len(s) > 0
+  ensures result == s[0]
+{
+  return string_byte(s, 0);
+}
+
+fn label_first(r: Label) -> i64
+  requires len(r.text) > 0
+  ensures result == r.text[0]
+{
+  return first_byte(r.text);
+}
+
+fn label_text(r: Label) -> str ! alloc
+  ensures len(result) == len(r.text)
+{
+  return string_to_str(r.text);
+}

@@ -4,8 +4,9 @@ import z3
 import proof_cache
 from vast import *
 from typeinfo import (TypeTable, is_array, array_elem, array_of, bind_args, substitute, decl_owner, format_type,
-                      is_collection)
+                      is_collection, is_owned_field_type)
 from foreign import CATALOG, CATALOG_NAMES, FILE, FILE_OBSERVERS, PROCESS, PROCESS_ARGS, SOCKET, LISTENER, LOOP
+from refine import _stmt_inout
 
 I64_MIN, I64_MAX = -2 ** 63, 2 ** 63 - 1
 MAX_LEN = 2 ** 40
@@ -250,16 +251,22 @@ class Model:
     # ---------- G9 A1: buffer fields ----------
     @staticmethod
     def is_buf(ty):
-        """a [i64] / [u8] / [bool] / str field type (never a G3 [T])"""
-        return ty.owner is None and not ty.args and ty.name in ("array", "array_u8", "array_bool", "str")
+        """A field stored as a length and an array of scalar elements."""
+        return ty in (ARRAY, ARRAY_U8, ARRAY_BOOL, STR) or is_owned_field_type(ty)
 
     @staticmethod
     def buf_elem(ty):
-        return BOOL if ty.name == "array_bool" else U8 if ty.name in ("array_u8", "str") else I64
+        if ty.name == "vec":
+            return ty.args[0]
+        return BOOL if ty == ARRAY_BOOL else U8 if ty in (ARRAY_U8, STR, Type("string")) else I64
+
+    @staticmethod
+    def buf_key(ty):
+        return "bool" if Model.buf_elem(ty) == BOOL else "int"
 
     def bufsort(s, ty):
         """datatype Buf(len: Int, arr: Array(Int, elem sort)); one per element sort (Int for i64/u8/str, Bool)"""
-        key = "bool" if ty.name == "array_bool" else "int"
+        key = s.buf_key(ty)
         ent = s.bufs.get(key)
         if ent is None:
             tag = "%sbuf!%s" % (s.pre, key)
@@ -277,7 +284,7 @@ class Model:
         if not s.is_buf(fty):
             return term
         s.bufsort(fty)
-        ent = s.bufs["bool" if fty.name == "array_bool" else "int"]
+        ent = s.bufs[s.buf_key(fty)]
         return mk_arr(ent[3](term), ent[2](term), name, s.buf_elem(fty))
 
     def field_put(s, fty, val):
@@ -285,7 +292,7 @@ class Model:
         if not (s.is_buf(fty) and isinstance(val, Arr)):
             return val
         s.bufsort(fty)
-        return s.bufs["bool" if fty.name == "array_bool" else "int"][1](val.n, val.a)
+        return s.bufs[s.buf_key(fty)][1](val.n, val.a)
 
     # ---------- G9 A1: structural size and well-formedness of recursive values ----------
     def rel(s, ty):
@@ -1461,6 +1468,18 @@ class FnVerifier:
         st.pc.append(z3.Implies(z3.And(*g), fact) if g else fact)
 
     # ---------- expressions ----------
+    def read_field(s, st, v, field):
+        model = s.model
+        ty = model.type_of(v)
+        i = model.tt.field_index(ty, field)
+        r = model.struct_info(ty)[1][i](v)
+        if model.g9:
+            s.observe(st, v, ty)
+            fty = model.fields_of(ty)[i][1]
+            r = model.field_get(fty, r, field)
+            s.observe(st, r, fty)
+        return r
+
     def ev(s, e, st, g, code, env=None):
         """code=True: emit proof obligations and i64 semantics. env overrides st.env (contracts)."""
         env = st.env if env is None else env
@@ -1477,8 +1496,9 @@ class FnVerifier:
             return mk_arr(a, z3.IntVal(len(e.value)), "literal", U8)
         if isinstance(e, Var):
             return env[e.name]
-        if isinstance(e, Move):     # G6 A1: the current value of the binding
-            return env[e.name]
+        if isinstance(e, Move):
+            v = env[e.name]
+            return s.read_field(st, v, e.fields[0]) if e.fields else v
         if isinstance(e, InoutArg):     # G5 A1: the marked place's current array (the call transition rebinds it)
             return s.ev(e.expr, st, g, code, env)
         if isinstance(e, Unary):
@@ -1571,16 +1591,7 @@ class FnVerifier:
                 return res
             return s.model.enum_info(ety)[e.variant][0](*vals)
         if isinstance(e, FieldAccess):
-            v = s.ev(e.base, st, g, code, env)
-            ty = s.model.type_of(v)
-            i = s.model.tt.field_index(ty, e.field)
-            r = s.model.struct_info(ty)[1][i](v)
-            if s.model.g9:      # G9 A1: adapt a buffer field to an Arr; parent and nominal child are observed terms
-                s.observe(st, v, ty)        # the parent's one-step wf/size equations give the field's own facts
-                fty = s.model.fields_of(ty)[i][1]
-                r = s.model.field_get(fty, r, e.field)
-                s.observe(st, r, fty)
-            return r
+            return s.read_field(st, s.ev(e.base, st, g, code, env), e.field)
         if isinstance(e, IsVariant):
             v = s.ev(e.value, st, g, code, env)
             return s.model.enum_info(s._enum_ty(e, v))[e.variant][1](v)
@@ -1978,6 +1989,7 @@ class FnVerifier:
                 s.termination(e, f, st, g, cenv)    # G9 A1: only a call inside the caller's own recursive SCC
                 s.call_cost(e, f, st, g, cenv)
             if ios:
+                # R-6g-1: code evaluates this call once in place, on the enclosing statement's path.
                 s.inout_finals(e, f, ios, args, cenv, st, g)    # G5 A1 (5.2 step 5): fresh same-length contents
             if f.ret == UNIT:
                 # G6 A1 (11.4): a trusted unit result still assumes its ensures; G9 A1: so does a member of a recursive
@@ -2659,29 +2671,11 @@ class FnVerifier:
         return out
 
     # ---------- G5 A1: inout writes in the changed-variable analysis ----------
-    def _inout_ops(s, e, out):
-        """whole-array operands of the inout arguments of e itself (an inout call is always the complete expression
-        of a statement, G5_SPEC 2.1, so nothing below it is visited)"""
-        if isinstance(e, Call):
-            for a in e.args:
-                if isinstance(a, InoutArg) and isinstance(a.expr, Var):
-                    out.add(a.expr.name)
-
     def call_writes(s, stmts, out):
-        """names passed inout to calls in let initializers, assignments, returns and expression statements,
-        recursively through statement blocks (empty for a program without inout)"""
+        """Names passed inout at any expression depth, including in nested blocks."""
         for st in stmts:
-            if isinstance(st, (Let, Assign)):
-                s._inout_ops(st.value, out)
-            elif isinstance(st, Return):
-                if st.value is not None:
-                    s._inout_ops(st.value, out)
-            elif isinstance(st, ExprStmt):
-                s._inout_ops(st.expr, out)
-            elif isinstance(st, Par):      # G7 A0: every branch's inout operands (verification itself is A1)
-                for c in st.calls:
-                    s._inout_ops(c, out)
-            elif isinstance(st, If):
+            _stmt_inout(st, out)
+            if isinstance(st, If):
                 s.call_writes(st.then, out); s.call_writes(st.els, out)
             elif isinstance(st, While):
                 s.call_writes(st.body, out)

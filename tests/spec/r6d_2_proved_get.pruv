@@ -1,0 +1,8 @@
+// spec: R-6d-2 accept
+fn first() -> i64 ! alloc
+  ensures result == 5
+{
+  let mut v: Vec<i64> = vec_new::<i64>();
+  v = vec_push::<i64>(move v, 5);
+  return vec_get::<i64>(v, 0);
+}

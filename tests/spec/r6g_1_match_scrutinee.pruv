@@ -1,0 +1,22 @@
+// spec: R-6g-1 accept
+fn set_and_get(inout a: [i64]) -> Option<i64>
+  requires len(a) > 0
+  ensures a[0] == 7
+  ensures result == Some(7)
+{
+  a[0] = 7;
+  return Some(7);
+}
+
+fn demo() -> i64 ! alloc
+  ensures result == 7
+{
+  let mut d: [i64] = alloc(1, 0);
+  match set_and_get(inout d) {
+    Some(v) => {
+      assert d[0] == v;
+      return v;
+    }
+    None => { return 0; }
+  }
+}

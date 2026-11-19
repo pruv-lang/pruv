@@ -260,7 +260,10 @@ fn collect<'a>(prog: &'a Program) -> R<(Cats, Colls, HashMap<String, &'a Functio
                                 if !cats.contains_key(&h)
                                     && (FILE_OBSERVERS.contains(&c.name.as_str())
                                         || PROC_OBSERVERS.contains(&c.name.as_str())
-                                        || ASYNC_OBSERVERS.contains(&c.name.as_str()) || NET_OBSERVERS.contains(&c.name.as_str()))
+                                        || ASYNC_OBSERVERS.contains(&c.name.as_str()) || NET_OBSERVERS.contains(&c.name.as_str())
+                                        // vec_get: a verified Rust body inlines a proved read (R-6d-2), but the
+                                        // LLVM entries still call the helper
+                                        || c.name == "vec_get")
                                 {
                                     observers.push((c.name.clone(), low.clone()));
                                 }

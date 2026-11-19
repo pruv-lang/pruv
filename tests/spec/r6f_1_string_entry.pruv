@@ -1,0 +1,4 @@
+// spec: R-6f-1 reject
+pub fn make() -> String ! alloc {
+  return string_new();
+}

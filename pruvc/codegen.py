@@ -84,7 +84,7 @@ go through it), under trust_callers the pub entry is unchecked and `<entry>__pru
 """
 from collections import namedtuple
 from vast import *
-from typeinfo import TypeTable, is_user_type, is_array, uses_array_type, uses_str, is_collection, dependencies
+from typeinfo import TypeTable, is_user_type, is_array, uses_array_type, uses_str, is_collection, dependencies, is_owned_field_type
 from foreign import CATALOG
 from inline_policy import PIN_INLINE, PIN_ALWAYS, inline_policy
 from check import BIT_BUILTINS
@@ -1692,7 +1692,7 @@ class Gen:
         if s.g9:
             u8_used = u8_used or s.field_uses("array_u8")
             bool_used = bool_used or s.field_uses("array_bool")
-            str_used = str_used or s.field_uses("str")
+            str_used = str_used or s.field_uses("str") or s.field_uses("string")
         if s.g6 and not str_used:   # G6: a String parameter can be indexed in a runtime requires (pruv_cidx_str)
             str_used = uses_array_type(s.prog, "string")
         if str_used:
@@ -2801,8 +2801,11 @@ class Gen:
             s.emit(ind, "%s = %s;" % (st.name, s.own_e(st.value)))
             s.moving = set()
         elif isinstance(st, FieldAssign):
-            # rhs is fully evaluated into a temporary before the store (the replaced value drops at the store)
             vty = st.value.ty
+            if vty is not None and is_owned_field_type(vty):
+                s.emit(ind, "%s.%s = %s;" % (st.name, ".".join(st.fields), s.e(st.value)))
+                return
+            # rhs is fully evaluated into a temporary before the store (the replaced value drops at the store)
             decl = "let pruv_v: %s = " % rty(vty) if vty is not None else "let pruv_v = "
             stored = "pruv_v"
             if s.boxed and s.path_boxed(st.name, st.fields):
@@ -2913,6 +2916,9 @@ class Gen:
                 elif s.is_ext(ft):
                     s.emit(ind + 2, "let %s: &%s = %s;" % (b, ft.name, b))
                     s.refs.add(b)
+                elif is_owned_field_type(ft):
+                    s.emit(ind + 2, "let %s: %s = %s%s;" % (b, rty(ft, True), "&" if consume else "", b))
+                    s.refs.add(b)
                 elif (is_array(ft) or ft == STR) and consume:
                     s.emit(ind + 2, "let %s: %s = %s;" % (b, rty(ft), b))
                     s.refs.discard(b)
@@ -3019,7 +3025,7 @@ class Gen:
     def cref(s, x):
         """a collection expression in a borrow position (G6 section 12.1)"""
         if isinstance(x, Var):
-            return x.name if x.name in s.borrowed else "&" + x.name
+            return x.name if x.name in s.borrowed or x.name in s.refs else "&" + x.name
         return "&(%s)" % s.e(x)
 
     def catalog_call(s, e):
@@ -3028,6 +3034,12 @@ class Gen:
         cat = CATALOG[e.name]
         low = tuple(e.inst["args"]) if e.inst else ()
         src = tuple(e.inst.get("src_args", low)) if e.inst else ()
+        # A bound proof can depend on an unchecked user foreign postcondition.
+        if (e.name == "vec_get" and s.verified and s.fmode != "all"
+                and not any(f.foreign is not None for f in s.prog.functions)):
+            s.fg.record_inline_catalog(e.name, src)
+            v, i = e.args
+            return "(unsafe { *(%s).get_unchecked((%s) as usize) })" % (s.e(v), s.e(i))
         name = s.fg.catalog_helper(e.name, low, src)
         # string_to_str of an owned local that the enclosing return moves: the String itself is the copy.
         if e.name == "string_to_str" and not s.cost and isinstance(e.args[0], Var) and e.args[0].name in s.moving:
@@ -3052,6 +3064,8 @@ class Gen:
         if isinstance(e, Var):
             return e.name
         if isinstance(e, Move):   # G6: Rust moves
+            if e.fields:
+                return "::std::mem::take(&mut %s.%s)" % (e.name, e.fields[0])
             return e.name
         if isinstance(e, Unary):
             if not s.verified and e.op == "-":

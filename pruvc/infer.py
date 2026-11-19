@@ -11,7 +11,7 @@ import dataclasses
 import time
 
 from vast import *
-from refine import pick_bound_name, _fn_names, _kids
+from refine import pick_bound_name, _fn_names, _kids, _stmt_inout
 from typeinfo import contains_collection
 from verify import (FnVerifier, QueryConfig, Probe, BudgetExhausted, InferenceTimeout, walk_loops)
 
@@ -138,36 +138,11 @@ def _assign_stmts(stmts, out):
     return out
 
 
-def _expr_inout(e, out):
-    """G5 A1: whole-array operands of the inout arguments of e itself. The checker admits an inout call only as the
-    complete expression of a statement (G5_SPEC 2.1), so nothing below the top-level call is visited."""
-    if isinstance(e, Call):
-        for a in e.args:
-            if isinstance(a, InoutArg) and isinstance(a.expr, Var):
-                out.add(a.expr.name)
-
-
-def _stmt_inout(st):
-    """G5 A1: names written by inout calls in the own expressions of one statement (statement-boundary calls)"""
-    out = set()
-    if isinstance(st, (Let, Assign)):
-        _expr_inout(st.value, out)
-    elif isinstance(st, Return):
-        if st.value is not None:
-            _expr_inout(st.value, out)
-    elif isinstance(st, ExprStmt):
-        _expr_inout(st.expr, out)
-    elif isinstance(st, Par):       # G7 A0: every branch's inout operands are written (no stale initializer facts)
-        for c in st.calls:
-            _expr_inout(c, out)
-    return out
-
-
 def _call_written(stmts, out):
     """G5 A1: every name written by an inout call, nested blocks included. A call write is an assignment for the
     changed-variable analysis, but it is neither an initializer nor an element store."""
     for st in stmts:
-        out |= _stmt_inout(st)
+        _stmt_inout(st, out)
         if isinstance(st, If):
             _call_written(st.then, out)
             _call_written(st.els, out)
@@ -205,7 +180,7 @@ def _init(block, idx, name, skip_index=False):
     earlier if/while/match assigns it first or there is none. skip_index: IndexAssign to it is stepped over."""
     for j in range(idx - 1, -1, -1):
         st = block[j]
-        if name in _stmt_inout(st):     # G5 A1: an inout call write invalidates every earlier initializer/content fact
+        if name in _stmt_inout(st, set()):     # G5 A1: an inout call write invalidates every earlier initializer/content fact
             return None
         if isinstance(st, (Let, Assign)) and st.name == name:
             return st.value

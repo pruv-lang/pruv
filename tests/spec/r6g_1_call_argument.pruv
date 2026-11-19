@@ -1,0 +1,15 @@
+// spec: R-6g-1 accept
+fn bump(inout a: [i64]) -> i64
+  requires len(a) >= 1
+  requires a[0] < 9223372036854775807
+  ensures a[0] == old(a)[0] + 1
+{
+  a[0] = a[0] + 1;
+  return a[0];
+}
+
+fn demo() -> () ! io, alloc {
+  let mut d: [i64] = alloc(2, 0);
+  print(bump(inout d));
+  assert d[0] == 1;
+}
