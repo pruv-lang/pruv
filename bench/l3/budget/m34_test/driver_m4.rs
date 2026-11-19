@@ -2,11 +2,18 @@
 //
 //   driver_m4 q                      program on stdin: `init <L>` | `op <w...>` | `observe` (op keys already packed)
 //   driver_m4 perf <axis> <n> <reps> axis = sessions | tools | clocks
+//   driver_m4 bound state|words      length-bound probe (see bound_probe)
 //
 // Boundary rule: the host owns the state buffer `st` but never reads or writes its words. It allocates, calls the
 // entries, and on status 1 (Grow, N = out[0]) allocates a zeroed buffer of exactly N (sized in Pruv, N >= 2*len), calls m4_grow, swaps the
 // buffers and retries the same op (at most 3 retries). State buffers are the product host's StateBuf (bench/l3/budget/
 // state_buf.rs, included by run.py in front of this file): large ones are mapped pages, returned at once on drop (L3 P13c).
+//
+// Length bound (L3 P13f): every slice this driver hands an entry is at most 2^40 words (STATE_MAX_WORDS), the bound
+// each checked entry tests and the host owes a raw_entries = "crate" build (SPEC "Length bound at host boundaries").
+// The state is a StateBuf (zeroed refuses longer), ops and the out buffer are Words (below, every constructor and resize
+// checks), and the q-mode observe / import buffers are capped. The bound is paid where a buffer is made or resized, so the
+// entry's own test on a held buffer folds away and the timed loop pays no length test.
 use std::hint::black_box;
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
@@ -34,6 +41,59 @@ unsafe impl std::alloc::GlobalAlloc for CountingAlloc {
 }
 #[global_allocator]
 static GLOBAL_ALLOC: CountingAlloc = CountingAlloc;
+
+// An owned op or output buffer of at most STATE_MAX_WORDS words (L3 P13f). new / zeroed / resize check the bound
+// before allocating, and nothing else changes the length, so Deref / DerefMut can tell the optimizer: an entry's length
+// test on a Words argument folds away. In perf mode every cycle op is made once, before the timed loop; in q mode once
+// per input line. Over the bound the process exits like a generated entry (status 101, same message).
+struct Words(Vec<i64>);
+
+#[cold]
+#[inline(never)]
+fn words_too_long(n: usize) -> ! {
+    eprintln!("pruv: invalid representation: {} (array length)", n);
+    std::process::exit(101);
+}
+
+impl Words {
+    fn new(v: Vec<i64>) -> Words {
+        if v.len() > STATE_MAX_WORDS {
+            words_too_long(v.len());
+        }
+        Words(v)
+    }
+    fn zeroed(n: usize) -> Words {
+        if n > STATE_MAX_WORDS {
+            words_too_long(n);
+        }
+        Words(vec![0; n])
+    }
+    fn resize(&mut self, n: usize, v: i64) {
+        if n > STATE_MAX_WORDS {
+            words_too_long(n);
+        }
+        self.0.resize(n, v);
+    }
+}
+
+impl std::ops::Deref for Words {
+    type Target = [i64];
+    #[inline(always)]
+    fn deref(&self) -> &[i64] {
+        // SAFETY: new / zeroed / resize keep len <= STATE_MAX_WORDS and are the only ways to set it.
+        unsafe { std::hint::assert_unchecked(self.0.len() <= STATE_MAX_WORDS) };
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Words {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut [i64] {
+        // SAFETY: as in deref.
+        unsafe { std::hint::assert_unchecked(self.0.len() <= STATE_MAX_WORDS) };
+        &mut self.0
+    }
+}
 
 // LANE-WORLD-BEGIN (run.py replaces everything up to LANE-WORLD-END with driver_m4c.rs for the m4c lane)
 // Every call on the resident state goes through a store with the PruvStore API (`new`, `with`). run.py puts one line
@@ -86,7 +146,7 @@ enum R {
 struct World {
     st: St,
     len: usize, // len(st), kept by the host (the host never reads the words)
-    out: Vec<i64>,
+    out: Words, // len <= STATE_MAX_WORDS (Words)
     grows: u64,
     grow_ns: u128,
 }
@@ -110,7 +170,7 @@ impl World {
             eprintln!("m4_init returned {}", r);
             std::process::exit(2);
         }
-        World { st, len, out: Vec::new(), grows: 0, grow_ns: 0 }
+        World { st, len, out: Words::zeroed(0), grows: 0, grow_ns: 0 }
     }
 
     fn observe(&mut self, out: &mut Vec<i64>) -> i64 {
@@ -132,7 +192,7 @@ impl World {
         let mut cnt = vec![0i64; 3];
         let r = call(&mut fresh, |s| sol::m4_import(s, &mut cnt));
         if r == 0 {
-            let mut o1 = vec![0i64; std::cmp::max(4096, 4 * self.len)];
+            let mut o1 = vec![0i64; std::cmp::max(4096, 4 * self.len).min(STATE_MAX_WORDS)];
             let mut o2 = o1.clone();
             let r1 = self.observe(&mut o1);
             let r2 = call(&mut fresh, |s| sol::m4_observe(s, &mut o2));
@@ -151,19 +211,23 @@ impl World {
     // The out buffer starts at 4096 words and doubles on status 3 up to 4·len (L3 P13b; before, it was sized 4·len up
     // front, which made it the largest resident buffer). The retry replays nothing: every bud_world mutator checks
     // len(out) >= 2 before its first write, so with >= 4096 words only the read-only ops (gets, key and run lists)
-    // can return 3, and they take st by value.
-    fn exec(&mut self, op: &[i64]) -> R {
+    // can return 3, and they take st by value. The doubling stops at STATE_MAX_WORDS (L3 P13f).
+    fn exec(&mut self, op: &Words) -> R {
+        // The op and out slices are taken here, outside the state-call closure: Words::deref states the length bound
+        // in exec itself, so the closure (and the entry inlined into it) inlines into exec as before (P13f measured a
+        // separate closure function, +5..+20 instructions per op, when the derefs sat inside it).
+        let op: &[i64] = op;
         if self.out.len() < 4096 {
             self.out.resize(4096, 0);
         }
         let mut attempt = 0;
         while attempt < 4 {
-            let out = &mut self.out;
+            let out: &mut [i64] = &mut self.out;
             let s = call(&mut self.st, |st| sol::m4_op(st, op, out));
             match s {
                 0 => return R::Ok(self.out[0].max(0) as usize),
-                3 if self.out.len() < 4 * self.len => {
-                    let n = (2 * self.out.len()).min(4 * self.len);
+                3 if self.out.len() < (4 * self.len).min(STATE_MAX_WORDS) => {
+                    let n = (2 * self.out.len()).min(4 * self.len).min(STATE_MAX_WORDS);
                     self.out.resize(n, 0);
                     continue;
                 }
@@ -245,7 +309,7 @@ fn q_mode() {
                 writeln!(w, "init ok").unwrap();
             }
             "op" => {
-                let op: Vec<i64> = it.map(|t| t.parse::<i64>().expect("bad word")).collect();
+                let op = Words::new(it.map(|t| t.parse::<i64>().expect("bad word")).collect());
                 let wd = world.as_mut().expect("op before init");
                 match wd.exec(&op) {
                     R::Ok(k) => {
@@ -271,7 +335,7 @@ fn q_mode() {
                 if imported.is_none() {
                     imported = Some(wd.import_check());
                 }
-                let mut out = vec![0i64; std::cmp::max(4096, 4 * wd.len)];
+                let mut out = vec![0i64; std::cmp::max(4096, 4 * wd.len).min(STATE_MAX_WORDS)];
                 let s = wd.observe(&mut out);
                 if s != 0 {
                     writeln!(w, "observe-fail {}", s).unwrap();
@@ -349,7 +413,7 @@ fn op_kk(code: i64, a: &str, b: &str) -> Vec<i64> {
     v
 }
 
-fn run_checked(w: &mut World, op: &[i64], what: &str) {
+fn run_checked(w: &mut World, op: &Words, what: &str) {
     match w.exec(op) {
         R::Ok(_) => {}
         R::Invalid => {
@@ -375,19 +439,19 @@ fn perf(axis: &str, n: usize, reps: usize) {
     match axis {
         "sessions" => {
             for i in 0..n {
-                let op = op_session_put(&format!("s{}", i), &blob);
+                let op = Words::new(op_session_put(&format!("s{}", i), &blob));
                 run_checked(&mut w, &op, "prefill session_put");
             }
         }
         "tools" => {
             for i in 0..n {
-                let op = op_kk(13, "t0", &format!("a{}", i));
+                let op = Words::new(op_kk(13, "t0", &format!("a{}", i)));
                 run_checked(&mut w, &op, "prefill tool_note");
             }
         }
         "clocks" => {
             for i in 0..n {
-                let op = op_kk(5, &format!("c{}", i), "s0");
+                let op = Words::new(op_kk(5, &format!("c{}", i), "s0"));
                 run_checked(&mut w, &op, "prefill clock_put");
             }
         }
@@ -410,14 +474,15 @@ fn perf(axis: &str, n: usize, reps: usize) {
     }
     .min(reps.max(1));
     let t_enc = Instant::now();
-    let mut ops: Vec<Vec<i64>> = Vec::with_capacity(per * 3);
+    // Each cycle op is a Words: its length bound is checked here, once, outside the timed loop (L3 P13f).
+    let mut ops: Vec<Words> = Vec::with_capacity(per * 3);
     let mut width = 0usize;
     match axis {
         "sessions" => {
             let k = format!("s{}", n / 2);
             for _ in 0..per {
-                ops.push(op_k(2, &k));
-                ops.push(op_session_put(&k, &blob));
+                ops.push(Words::new(op_k(2, &k)));
+                ops.push(Words::new(op_session_put(&k, &blob)));
             }
             width = 2;
         }
@@ -425,9 +490,9 @@ fn perf(axis: &str, n: usize, reps: usize) {
             // Per rep: note an already-seen activity, note a new activity (fresh turn "x"), forget that turn.
             // The prefilled turn keeps exactly n activities throughout.
             for r in 0..per {
-                ops.push(op_kk(13, "t0", &format!("a{}", r % n.max(1))));
-                ops.push(op_kk(13, "x", "y"));
-                ops.push(op_k(14, "x"));
+                ops.push(Words::new(op_kk(13, "t0", &format!("a{}", r % n.max(1)))));
+                ops.push(Words::new(op_kk(13, "x", "y")));
+                ops.push(Words::new(op_k(14, "x")));
             }
             width = 3;
         }
@@ -440,8 +505,8 @@ fn perf(axis: &str, n: usize, reps: usize) {
                 key(&mut set, &c);
                 key(&mut set, &rk);
                 set.push(1);
-                ops.push(set);
-                ops.push(op_kk(10, &c, &rk));
+                ops.push(Words::new(set));
+                ops.push(Words::new(op_kk(10, &c, &rk)));
             }
             width = 2;
         }
@@ -485,10 +550,33 @@ fn perf(axis: &str, n: usize, reps: usize) {
     );
 }
 
+// Length-bound probe (L3 P13f; run.py m4 runs it on every lane): `bound state` checks that a state buffer one word over
+// STATE_MAX_WORDS, and one whose byte size overflows, is refused without allocating (no mapping, no allocator call);
+// `bound words` makes an op / out buffer one word over the bound, which must exit 101 before allocating.
+fn bound_probe(what: &str) {
+    let before = ALLOC_COUNT.load(std::sync::atomic::Ordering::Relaxed) + STATE_MAPS.load(std::sync::atomic::Ordering::Relaxed);
+    match what {
+        "state" => {
+            let over = StateBuf::zeroed(STATE_MAX_WORDS + 1).is_none() && StateBuf::zeroed(usize::MAX / 8 + 1).is_none();
+            let after = ALLOC_COUNT.load(std::sync::atomic::Ordering::Relaxed) + STATE_MAPS.load(std::sync::atomic::Ordering::Relaxed);
+            println!("bound state refused={} allocs={}", over, after - before);
+        }
+        "words" => {
+            let w = Words::zeroed(STATE_MAX_WORDS + 1);
+            println!("bound words accepted {}", w.len());
+        }
+        _ => {
+            eprintln!("usage: driver_m4 bound state|words");
+            std::process::exit(2);
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(|s| s.as_str()) {
         Some("q") => q_mode(),
+        Some("bound") => bound_probe(args.get(2).map(|s| s.as_str()).unwrap_or("")),
         Some("perf") => {
             if args.len() < 5 {
                 eprintln!("usage: driver_m4 perf <axis> <n> <reps>");
@@ -499,7 +587,7 @@ fn main() {
             perf(&args[2], n, reps);
         }
         _ => {
-            eprintln!("usage: driver_m4 q | perf <axis> <n> <reps>");
+            eprintln!("usage: driver_m4 q | perf <axis> <n> <reps> | bound state|words");
             std::process::exit(2);
         }
     }
