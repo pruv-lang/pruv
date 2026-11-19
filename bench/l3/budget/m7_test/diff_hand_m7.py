@@ -399,11 +399,12 @@ def controls():
             p = base("badtail", 1, quiet="1")
             p.call_words([code, 0, 2 if code == 4 else -1] + U + bad + kw(BID))
             add("call key tail lane %d = %d, session key, code %d" % (lane, v, code), p.end(), ["@ r0", "X 2"])
-    # out-buffer limits: results of more than 4096 words answer status 3 (ids are packed: 2 + words(n) <= 4096)
-    for il, exp in ((16376, "V 3"), (16377, "X 3")):
+    # out-buffer limits: copied results of more than 4096 words answer status 3 (ids are packed: 2 + words(n) <= 4096);
+    # attach on a live budget returns a 3-word view of the stored id (P13i), so a long id fits
+    for il in (16376, 16377):
         p = base("outbig", 0, bid=[97] * il)
         p.call(3, SK, [97] * il, 0)
-        add("attach ref, budget id %d units" % il, p.end(), ["@ r0", exp] if exp == "X 3" else None)
+        add("attach ref, budget id %d units" % il, p.end(), None)
     for ul, ex in ((16376, "ok"), (16377, "X 3")):
         p = base("outbig", 2, uuids=kw([98] * ul), ended=(1, ("ms", 7)))
         p.call(3, SK, BID, 0)

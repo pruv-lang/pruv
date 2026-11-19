@@ -3,6 +3,7 @@
 review change 4). Cases are in cases.json next to this file.
 
   python3 tests/vacuity/run.py [--compiler py|rs|both] [--compiler-path PATH] [--timeout S]
+                              [--kinds reach,contradiction,pair]
 
 reach         The original source must verify. `assert false; ` is inserted just before the text `before` on line
               `line` (a point a concrete input reaches; the input is written in the case as `witness`). The variant
@@ -14,8 +15,9 @@ contradiction An intended dead point (contradictory requires, a branch the requi
 pair          Sources checked as they are: `accept` must verify, `reject` must fail with the given stage, code and
               message (the message names the failing line).
 
---compiler both (default) runs every case with the Python and the Rust compiler. Exit code: 0 all pass, 1 a case
-failed, 2 a tool problem. Python 3.9, standard library only.
+--compiler both (default) runs the selected sets with the Python and the Rust compiler. --kinds defaults to all
+sets. Failures are counted by class for each compiler and set. Exit code: 0 all pass, 1 a case failed, 2 a tool
+problem. Python 3.9, standard library only.
 """
 import argparse
 import json
@@ -30,6 +32,10 @@ sys.path.insert(0, os.path.dirname(HERE))
 import compiler_driver as CD  # noqa: E402
 
 INSERT = "assert false; "
+KINDS = ("reach", "contradiction", "pair")
+CLASSES = ("false_reject", "false_accept", "wrong_location", "timeout", "other")
+ACCEPT_FAILURE = {"reject": "false_reject", "timeout": "timeout", "crash": "other"}
+REJECT_FAILURE = {"ok": "false_accept", "timeout": "timeout", "crash": "other"}
 
 
 def diagnostic(res):
@@ -53,7 +59,7 @@ def compile_src(drv, path, tmp, timeout):
     if res.returncode == 0:
         return "ok", None
     d = diagnostic(res)
-    return ("reject", d) if d is not None else ("crash", (res.stdout + res.stderr)[-400:])
+    return ("reject", d) if res.returncode == 1 and d is not None else ("crash", (res.stdout + res.stderr)[-400:])
 
 
 def variant(case, tmp):
@@ -74,29 +80,35 @@ def variant(case, tmp):
 
 
 def run_case(drv, kind, case, timeout):
-    """None when the case passes, else the failure text."""
+    """None when the case passes, else (failure class, detail)."""
     tmp = tempfile.mkdtemp(prefix="pruv_vacuity_")
     try:
         if kind == "pair":
             got, d = compile_src(drv, os.path.join(ROOT, case["src"]), tmp, timeout)
             if case["expect"] == "accept":
-                return None if got == "ok" else "expected accept, got %s %s" % (got, d)
+                return None if got == "ok" else (ACCEPT_FAILURE[got], "expected accept, got %s %s" % (got, d))
             want = (case["stage"], case["code"])
-            if got != "reject" or (d.get("stage"), d.get("code")) != want or case["message"] not in d.get("message", ""):
-                return "expected reject %s/%s %r, got %s %s" % (want[0], want[1], case["message"], got, d)
-            return None
+            if got != "reject":
+                cls = REJECT_FAILURE[got]
+            elif (d.get("stage"), d.get("code")) != want:
+                cls = "other"
+            elif case["message"] not in d.get("message", ""):
+                cls = "wrong_location"
+            else:
+                return None
+            return cls, "expected reject %s/%s %r, got %s %s" % (want[0], want[1], case["message"], got, d)
         got, d = compile_src(drv, os.path.join(ROOT, case["src"]), tmp, timeout)
         if got != "ok":
-            return "original must verify, got %s %s" % (got, d)
+            return ACCEPT_FAILURE[got], "original must verify, got %s %s" % (got, d)
         path, col = variant(case, tmp)
         got, d = compile_src(drv, path, tmp, timeout)
         if kind == "contradiction":
-            return None if got == "ok" else "intended dead point must verify, got %s %s" % (got, d)
+            return None if got == "ok" else (ACCEPT_FAILURE[got], "intended dead point must verify, got %s %s" % (got, d))
         if got != "reject":
-            return "expected verify/assert at %d:%d, got %s %s" % (case["line"], col, got, d)
+            return REJECT_FAILURE[got], "expected verify/assert at %d:%d, got %s %s" % (case["line"], col, got, d)
         where = (d.get("stage"), d.get("code"), d.get("line"), d.get("col"))
         if where != ("verify", "assert", case["line"], col):
-            return "expected verify/assert at %d:%d, got %s/%s at %s:%s (%s)" % (
+            return "wrong_location", "expected verify/assert at %d:%d, got %s/%s at %s:%s (%s)" % (
                 case["line"], col, where[0], where[1], where[2], where[3], d.get("message"))
         return None
     finally:
@@ -108,29 +120,51 @@ def main():
     ap.add_argument("--compiler", choices=["py", "rs", "both"], default="both")
     ap.add_argument("--compiler-path", default=None, help="only with --compiler py or rs")
     ap.add_argument("--timeout", type=int, default=120, help="seconds per compile; a timeout is a failure")
+    ap.add_argument("--kinds", default=",".join(KINDS), help="comma-separated sets: reach,contradiction,pair (default all)")
     args = ap.parse_args()
     if args.compiler == "both" and args.compiler_path:
         sys.exit("--compiler-path needs --compiler py or rs")
-    kinds = ["py", "rs"] if args.compiler == "both" else [args.compiler]
-    drivers = [CD.make_driver(k, args.compiler_path) for k in kinds]
+    selected = {kind.strip() for kind in args.kinds.split(",")}
+    if selected.difference(KINDS):
+        ap.error("--kinds must be a comma-separated list of reach,contradiction,pair")
+    compilers = ["py", "rs"] if args.compiler == "both" else [args.compiler]
+    drivers = [CD.make_driver(k, args.compiler_path) for k in compilers]
     with open(os.path.join(HERE, "cases.json"), encoding="utf-8") as fh:
         cases = json.load(fh)
     total = failed = 0
+    tool_error = False
     for drv in drivers:
-        for kind in ("reach", "contradiction", "pair"):
+        counts = dict.fromkeys(CLASSES, 0)
+        sets = []
+        for kind in KINDS:
+            if kind not in selected:
+                continue
+            set_counts = dict.fromkeys(CLASSES, 0)
             for case in cases[kind]:
                 total += 1
                 try:
                     err = run_case(drv, kind, case, args.timeout)
                 except (OSError, ValueError) as e:
-                    print("ERROR %s %s/%s: %s" % (drv.kind, kind, case["name"], e))
-                    return 2
+                    err = "other", str(e)
+                    tool_error = True
                 if err is None:
                     print("PASS %s %s/%s" % (drv.kind, kind, case["name"]))
                 else:
                     failed += 1
-                    print("FAIL %s %s/%s: %s" % (drv.kind, kind, case["name"], err))
+                    cls, detail = err
+                    counts[cls] += 1
+                    set_counts[cls] += 1
+                    print("FAIL %s %s/%s [%s]: %s" % (drv.kind, kind, case["name"], cls, detail))
+            size = len(cases[kind])
+            sets.append("SET %s %s pass=%d/%d %s" % (
+                drv.kind, kind, size - sum(set_counts.values()), size,
+                " ".join("%s=%d" % item for item in set_counts.items())))
+        print("CLASSES %s %s" % (drv.kind, " ".join("%s=%d" % item for item in counts.items())))
+        for line in sets:
+            print(line)
     print("TOTAL %d/%d" % (total - failed, total))
+    if tool_error:
+        return 2
     return 1 if failed else 0
 
 

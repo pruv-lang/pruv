@@ -383,8 +383,10 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P13f | B/driver_m4.rs and the M4 bench adapter: length bound from T0 (TIDY_SPEC §4.10) | P: the bench adapter's allocations get the `2^40` bound (T0 audit finding 1), and the per-entry length check added by T0 is hoisted out of the timed loop where the driver already holds the length; m4 sessions back to the pre-T0 time (T0: +1-2%, outside A/A noise) and every M4 cell <= 1.0x hand. |
 | P13g | Both codegens: small helper inlining gap found by P20 (Appendix P20) | P: `find_w` in the bud_charge hot path is inlined (P20 attribution: about 25 instructions per call not inlined), output parity on both compilers, and the P20 unmatched hand16 lane (keys pre-parsed, 1.13-1.17x) re-measured after P13f and this row; any remaining gap above 1.0x is fixed or explained line by line (wire parsing is about 100 instructions of it). LLVM pairs for P20 wait for P17. |
 | P13h | Both codegens (and verifiers for (a)): M4 own-code size without time loss (Appendix P13d.5, P13d.8) | P: resident `__TEXT` of the M4 Pruv binary at or below hand's (P13d: 304 vs 240 KiB) with instructions and cycles on every M4 cell not worse than P13d.3's shipped column; candidates: proof-guided call-site specialization of total accessors, hot/cold body split of map growth paths; output parity on both compilers. |
-| P13i | B/bud_lifecycle.pruv (and bud_store.pruv for (c)): M7/M10 fixed-share regression from P13e plus the P18b handovers (Appendix P13e.7) | P: (a) lifecycle bodies (maybe_close, replace, reopen, attach) use the direct `xa`/`xb` paths like `copy_node` so the driver `__text` growth of about 37 KB and the M7 +96..176 / M10 +16..32 KiB fixed peak-RSS rise go back to c3ec58d or below; (b) drop the id copy in attach (P18b `noid`: S = 500 391.1 -> 355.1 instr/call, hand16 303.3); (c) M7 proportional RSS share (about 0.74 KB per session over hand16) from `bud_store::need` slack, and attribute the unexplained fixed 254 KB. Time and M4 cells not worse than P13e. Runs after P18c (shared M7 driver `__text` base) and before T5b2 if both touch bud_lifecycle. |
-| P13j | B/bud_store.pruv: store bounds found by the P13e audit (Appendix P13e.10) | P: at the maximum slot count the entry base must not overlap the slot table, and a grow must carry the root payload; both as proved `ensures` plus a gate case that drives each path (none does now); proofs kept, time and RSS not worse than P13e. Done (Appendix P13j): entry base 16 + c32(word 4) in `ea`/`xa` (and the admission mirror), bound `ensures` on ea/eb/xa/xb/xbm; root payload through `copy_pay` in `copy_kids` and a `grow_copy` `ensures` (root_carried + blob words); gate cases `maxslot` and admit case 24 fail on a4427ec and pass; gates as P13e.8; instructions, peak RSS and allocations not worse; M7 `__text` -320 B, M4 `__text` +832 B open (P13j.4); audit: 2 required findings fixed with admit cases 25/26 (P13j.5). |
+| P13i | B/bud_lifecycle.pruv (and bud_store.pruv for (c)): M7/M10 fixed-share regression from P13e plus the P18b handovers (Appendix P13e.7) | P: (a) lifecycle bodies (maybe_close, replace, reopen, attach) use the direct `xa`/`xb` paths like `copy_node` so the driver `__text` growth of about 37 KB and the M7 +96..176 / M10 +16..32 KiB fixed peak-RSS rise go back to c3ec58d or below; (b) drop the id copy in attach (P18b `noid`: S = 500 391.1 -> 355.1 instr/call, hand16 303.3); (c) M7 proportional RSS share (about 0.74 KB per session over hand16) from `bud_store::need` slack, and attribute the unexplained fixed 254 KB. Time and M4 cells not worse than P13e. Runs after P18c (shared M7 driver `__text` base) and before T5b2 if both touch bud_lifecycle. Measured (Appendix P13i, parts (a) and (b); (c) needs bud_store.pruv and stays open for P13j): (b) attach returns a view `[6, n, off]` of the stored id instead of copying it, attach 392.8 -> 353.5 / 393.2 -> 355.3 instructions per call at S/M (hand16 299.8 / 305.3, 1.18 / 1.16x; after the audit's length clamp 348.6 / 349.4, 1.12 / 1.17x), other cells unchanged, peak RSS overlapping, 0 allocations, M7 Q 113/187/0 on both compilers. Not met: (a) the lifecycle bodies already use `xa`/`xb`; the `__text` growth is `find_w` inlined everywhere since P13e's `ef`/`set_ef` `#[inline]`, and no variant within the allowed files restores `__text` (457,532 B; 413,244 at c3ec58d) or the fixed peak RSS without an instruction loss (P13i.1); M7 `__text` +384 B from the harness tag-6 decoder (Pruv code -44 B); M10 `__text` unchanged. |
+| P13j | B/bud_store.pruv: store bounds found by the P13e audit (Appendix P13e.10) | P: at the maximum slot count the entry base must not overlap the slot table, and a grow must carry the root payload; both as proved `ensures` plus a gate case that drives each path (none does now); proofs kept, time and RSS not worse than P13e. Done (Appendix P13j): entry base 16 + c32(word 4) in `ea`/`xa` (and the admission mirror), bound `ensures` on ea/eb/xa/xb/xbm; root payload through `copy_pay` in `copy_kids` and a `grow_copy` `ensures` (root_carried + blob words); gate cases `maxslot` and admit case 24 fail on a4427ec and pass; gates as P13e.8; instructions, peak RSS and allocations not worse; M7 `__text` -320 B, M4 `__text` +832 B accepted for the root payload fix, removal queued as P13j2 (P13j.4); audit: 2 required findings fixed with admit cases 25/26 (P13j.5). |
+| P13k | B/bud_map.pruv, bud_store.pruv (and both codegens if the lever is inline policy): part (a) of P13i, handed back (Appendix P13i.1) | P: take P13i.1 variant E's cold-fallback split of `bud_map::find_w` (instructions down on all five M7 cells: attach 392 -> 376, reopenmiss 383 -> 373, current 322 -> 311, isHalted 319 -> 304) together with a size lever (out-of-line shared cold paths, `ef`/`set_ef` attributes, or a proof-guided inline rule) so the M7 driver `__text` (457,916 B after P13i) and the M7 +96..176 / M10 +16..32 KiB fixed peak RSS go back toward c3ec58d (413,244 B), with no instruction cell given back on M4, M7, M10; output parity on both compilers if a codegen changes. Starts after P13j (shares bud_store/bud_map) and before T5b2 (same M7 cells). |
+| P13j2 | B/bud_map.pruv (and bud_store.pruv if the frame needs a store `ensures`): root-compare loop in `grow_copy` (Appendix P13j.4) | P: drop the `grow_copy` root-compare loop by a frame proof that `copy_kids` arena writes never touch the root extension records (M4 `__text` -~512 B; P13j left M4 `__text` +832 B over a4427ec, accepted for the root payload fix), with the `grow_copy` root payload `ensures` kept proved, admit cases 24-26 passing, and no instruction, peak RSS or allocation cell given back on M4, M7, M10. |
 | P21a | B/bud_map.pruv, bud_tools.pruv: O(1) forgetTurn (Appendix P21.4) | P: forgetTurn of a turn holding N activities <= 1.0x oaw at S/M in time, peak RSS and allocations (P21: 8.9x / 37.9x; oa forgets by generation, Pruv frees each child), with the toolnew and tooldup cells kept <= 1.0x and the reclaim cost measured where it lands; plus a corrupt control that pokes header words (entry top = cap - 1, low live) for the P21.7 counterexample. Done (Appendix P21a): forget 0.99 / 0.95x oaw (overlap), RSS and allocations below; reclaim cost in toolnew queued as P21b. |
 | P21b | B/bud_map.pruv, bud_store.pruv: reclaim cost of the lazy forget (Appendix P21a.3) | P: toolnew <= 1.0x oaw at S/M by median and distribution (P21a: 0.93 / 1.08x, overlapping) and the toolgrow cycle <= 1.0x oaw in instructions (P21a: 1.05 / 1.08x), with toolforget, tooldup and memory kept; e.g. fold reclaim_head into entry_alloc. Same gates as P21a. Done (Appendix P21b): toolnew 0.87 / 0.97x oaw (Pruv max below oaw min), toolgrow 0.93 / 0.98x oaw instructions; cause was index load at M (early rehash bound slots/4 -> 3/8) plus the reclaim push/pop and repeated row bases. |
 | P13o | Both checkers/verifiers: `opaque fn` and `reveal F;` (Appendix P13o) | C: positive reveal/congruence/loop-scope cases; negatives for a missing reveal, false facts through the opaque symbol, totality, signature and reveal-target misuse; framework rows equal on both compilers. Unblocks P13a step 2 (Appendix P13a.3), which lands separately. |
@@ -396,7 +398,8 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P17c | Budget perf runners: LLVM matched A/B/C, direct and adapter lane | P S/M core/boundary/complete timing, wrapper poison/overlap/shim cost and full consumption. No four-pair parity inference from Rust numbers. |
 | P18 | B/bud_lifecycle.pruv: current/isHalted/reopen | P Q1+B, lookup S/M <=1.0; retain dynamic identity checks. |
 | P18b | M7 host shim/ABI result path and inline policy: P18 lookup floor (Appendix P18.8) | P: first an isolating measurement (register-return variant of the host shim vs the `out` buffer store + reload), then the fix in the layer it names; `current` (0.99-1.03), `isHalted` (1.02-1.12) and `reopenmiss` (1.04-1.06 of hand16) each <= 1.0x hand at S/M, or a line-by-line hand vs generated Rust difference showing why Pruv cannot emit it. Peak RSS 2-4 pages above P13c re-measured and attributed. Runs with or after P19 (same files). T5: inlining is not a no-loss route here (Appendix T5.2); the result path hypothesis stays. Measured (Appendix P18b): opt-in `--proven-entries` (length-checked `PruvArr`/`PruvStr` twins, T0 kept for untrusted callers) drops the per-call 2^40 guards: fair-lane instructions S/M isHalted 0.97/0.96, current 1.00/1.01 (overlapping), attach 1.20/1.24, closereopen 1.17/1.18, reopenmiss 1.15/1.15 of hand16; floors at hand0 +-2; `__text` 413,244 B (T5c 413,756). Left: the `out` store + reload (about +3 per call) needs a by-value result ABI (P18c); attach's id copy (-36) is `bud_lifecycle.pruv` (P13e); body gaps go to T5b/P13h; the peak-RSS proportional share is `bud_store::need` headroom (P13e). |
-| P18c | Both codegens: by-value small-result entries (Appendix P18b.2 item 2) | P: an entry whose result is a small fixed-shape record returns it by value (in registers), not through a host `&mut [i64]` `out`; exposed through the `--proven-entries` twins; M7 current at or below 1.0x hand16 at S/M with no overlap above, and the floor's `out` write gone from attach/closereopen/reopenmiss; `__text` and peak RSS not above the P18b base (413,244 B); output parity on both compilers. |
+| P18c | Both codegens: by-value small-result entries (Appendix P18b.2 item 2) | P: an entry whose result is a small fixed-shape record returns it by value (in registers), not through a host `&mut [i64]` `out`; exposed through the `--proven-entries` twins; M7 current at or below 1.0x hand16 at S/M with no overlap above, and the floor's `out` write gone from attach/closereopen/reopenmiss; `__text` and peak RSS not above the P18b base (413,244 B); output parity on both compilers. Measured (Appendix P18c): `pruv_proven::val::<name>::<PRUV__K>` forms on both compilers (no output change without the flag); the fair lane uses them for current and isHalted, consuming the whole result: current 0.99 / 0.99 of hand16 at S/M (from 1.01 / 1.01; no overlap at M in the quieter run, a small overlap at S, single-round overlaps under load 28-40), isHalted 0.96 / 0.96; `__text` 413,244 B (= base), peak RSS within the per-build range of the unchanged base. Not met: the `out` write of attach/closereopen/reopenmiss (their bodies are calls, a by-value entry adds a zeroed stack buffer; needs by-value results through the call chain, proposed row P18d), and closereopen +1.4 / +2.2 instructions per call from the harness's register allocation (P18c.3). |
+| P18d | Both codegens: by-value results through non-inlined calls (Appendix P18c.4) | P: an internal function whose `inout [i64]` result has a statically fixed written prefix (proved: K fixed per function, every word written on every path) returns it by value instead of writing a caller buffer; attach / closereopen / reopenmiss floors without the `out` write, those cells not above P18c, `__text` and peak RSS not above the P18c base; output parity on both compilers; must-reject tests for unproved shapes. Runs with or before T5b2 (same reopen path), one codegen package at a time. |
 | P19 | Same: OPEN/attach/replace/CLOSE/maybeClose | P Q1/Q4+B/G, synchronous query/effect order after P10H; close <=1.0. |
 | P19a | B/bud_lifecycle.pruv, bud_map.pruv, m7_test, m10_test, ABI.md: P19 audit R1, R3-R6, O1 (Appendix P19.6a, P19.7) | P: invalid answer leaves `st` word-for-word unchanged (write-free `bud_map` room plan before the query, rehash after a valid answer, `ensures` linking the two; tombstone-heavy control); R2 regression fixture; session argument and effect order logged on both sides with a mutant; per-attempt query counts over forced Grow; required case ids and request order in M7/M10 Q; standalone CLOSE lane with matched consumption <= 1.0x hand. Starts after P21a (shares bud_map.pruv). |
 | P19c | Both codegens: foreign (trusted rust) call wrapper and cross-rlib inlining (Appendix P19.4) | P: `catch_unwind(AssertUnwindSafe(..))` around every trusted rust call and the non-inlined callee `LocalKey::with` removed or made free where sound (for example crates built with `panic = abort`, or the poison rule of P10 kept by another path), with the soundness argument written and audited; output parity on both compilers; P19 `closereopen` (1.14-1.15) and `attach` (1.12-1.13) re-measured, the wrapper share attributed, the rest left to T5/P18b by line. Done (Appendix P19c): drop guard (`pruv_ForeignGuard`) in place of `catch_unwind`, `__rust_try` and the catch frame gone; the foreign path now equals a plain call (closereopen `guard` = `direct` within 0.1 ns, 61 rounds); the diagnostic goes through a fresh `/dev/stderr` handle, not std's stderr lock, on unix; `LocalKey::with` is the caller's LLVM inline decision, present with no wrapper and gone when inlined; the rest (attach 1.13x, closereopen 1.11-1.12x, reopenmiss 1.05-1.08x vs hand16) is the inline policy (T5, measured: 1.02-1.06x with the four lifecycle/map bodies forced inline) and the result path (P18b, hypothesis). T5 (Appendix T5): no inline rule ships; every promotion grows `__text` (find_w + attach +40 %, the four +116 %) for 2-13 % fewer instructions; queued as T5a. |
@@ -404,7 +407,8 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | T5b | Both codegens: cold-tail rule (Appendix T5a.4) | P: reopen's slow tail (blob_copy, rewrite, store) is emitted out of line and cold, so the miss path drops the slow-path frame (352 B in the T5a build). The rule is an attribute or a proof-free rule that does not mark the M4 put path cold. reopenmiss and closereopen fewer instructions than T5 with `__text` and peak RSS not above the T5 base (405,180 B); the hand-edited reference is rsplita (-32/-35 against its same-run base, for +10.9 KB). Includes a per-function attribution of the closereopen pair. Output parity on both compilers. State (Appendix T5b, step cap hit at rule design; no compiler change): on the P18b base (`__text` 413,244 B) a cold or never-inlined tail alone does not move the miss path (reopenmiss S=500 386.8 to 390.0, ranges overlap) because the miss path pays the same six callee-saved pairs (nine arguments live across `bl find_w`), not the tail frame; the win needs the fast part inlined into each caller (-34/-24) at +13.7 KB `__text`. Split into T5b1 and T5b2. |
 | T5c | B/m7_test/driver_m7.rs: typed-lane harness parity (Appendix T5a.2) | P: the M7 timed loop calls the `c_*` entry with the same shape as hand16's bare method call (no non-inlined step closure, no per-op prep match), reported next to the existing lane. The floor of each lane is measured with bodies emptied. Measurement only; no product number moves. Measured (Appendix T5c): fair lane (`driver_m7 perf S R item f`) against hand16, instructions S/M: isHalted 0.99/0.98 (no overlap, at or below 1.0x), current 1.02/1.02, attach 1.30/1.29, closereopen 1.18/1.18, reopenmiss 1.16/1.15; floor-subtracted 0.97/0.96, 1.00/1.01, 1.27/1.25, 1.16/1.16, 1.14/1.15. The rest is the entry floor (length guards, `out` store: P18b), the reopen tail (T5b), and find_w/entry re-validation (P13h); no new row. Driver `__text` 405,180 to 413,756 B (harness only; T5b re-measures its base). |
 | T5b2 | Both codegens and B/bud_map.pruv, bud_lifecycle.pruv: reopen miss path live set (Appendix T5b.4) | P: reopenmiss and closereopen <= 1.0x hand16 at S/M by cutting the values live across `bl find_w` (nine arguments, six callee-saved pairs), not the tail frame. Routes: the reopen fast part takes the session record as one view (P18c result path or P13h specialization), or the coldA inline paired with a `__text` cut of at least 13.7 KB elsewhere. `__text` and peak RSS not above the P18b base (413,244 B) under the T5b.3 rule. Includes the five-cell S/M re-baseline, the closereopen per-function attribution and M4 cells. Runs after P18c and P13h (same files). |
-| T5d | B/m7_test and bench/l3/budget build flags: codegen-units measurement (Appendix T5b.3) | P: measure hand16 and the generated M7/M4 drivers with `-C codegen-units=1` next to the current flags: time, instructions, peak RSS, `__text`, rustc time. Switch the bench profile for both sides only if no axis loses on either side and rustc time stays within the budget m4 20% line; otherwise keep the flags and keep the T5b.3 reporting rule. Measurement and flags only; no codegen change. |
+| T5d | B/m7_test and bench/l3/budget build flags: codegen-units measurement (Appendix T5b.3) | P: measure hand16 and the generated M7/M4 drivers with `-C codegen-units=1` next to the current flags: time, instructions, peak RSS, `__text`, rustc time. Switch the bench profile for both sides only if no axis loses on either side and rustc time stays within the budget m4 20% line; otherwise keep the flags and keep the T5b.3 reporting rule. Measurement and flags only; no codegen change. Measured (Appendix T5d): keep the flags and the T5b.3 rule. Under cgu1, Pruv M4 instructions are +2.7..5.3 % on all nine cells and hand M4 +0.8..3.5 %. Hand16 reopenmiss is +5..6 %. Pruv `__text` is +6,272 B (M7) and +5,312 B (M4), against hand -5,184 / -4,800 B. Pruv M7 closereopen drops -6.4 % and reopenmiss -3.5 %. Generated M4 driver rustc time is 2.21 -> 1.85 s, within the 20 % line. No Pruv/hand ratio crosses 1.0x. Over hand on instructions under both flag sets: M7 attach 1.18x, closereopen 1.20 / 1.13x, reopenmiss 1.15 / 1.05x, M4 sessions 1.01..1.13x and clocks 1.02..1.10x. Allocations are equal under both flag sets. |
+| T5e | B/bud_map.pruv, bud_store.pruv, bud_clock.pruv and/or both codegens: M4 sessions/clocks instructions over hand (Appendix T5d.2) | P: M4 sessions (instr/op 1.01-1.13x hand at n = 100/1000/2000) and clocks (1.02-1.06x) at or below hand in instructions while time stays below hand (now 0.80-0.83x / 0.75x) and no cell given back; M4 sessions n=100 peak RSS 1088 vs hand 1072 KiB (+16, attribute fixed vs proportional share). First a per-function instruction attribution (Pruv vs hand, same flags), then the cut. Starts after P13j and P13k (same store/map files). |
 | P20 | B/bud_charge.pruv,m8_test: counters/sums/bounds | P Q2+C/D, equal safe-number baseline; negative/boundary atomic refusal and charge/failure <=1.0. |
 | P21 | B/bud_tools.pruv,key helpers: stored hash/dedup | P Q2+D; dup/new/forget separately <=1.0, missing-budget dedup. Interning only as measured follow-up. |
 | P22 | B/bud_clock.pruv: runs/refresh/begin/settle/arm | P Q3+E/F, active-count functional model, R/timer cycle; do not treat I2 as an unchecked proof assumption. |
@@ -4581,7 +4585,8 @@ mutants, perf C), not by a third audit.
 - The stored budget, `ref` and the result are still V words; a JB result/`ref` would remove the boundary `v_end`
   pass (outside the row; P13d/P13e layouts).
 - The hand `Store::set_card` does not build the error text or `used_now`; a hand error path would let hdiff compare
-  them directly instead of the oracle only.
+  them directly instead of the oracle only. Done: the hand error path came with P26 (Appendix P26.1); the hdiff
+  scenarios for kind 0 and the per-kind/language counts are Appendix P25.8a.
 
 ### P25.9 Delegation
 
@@ -5764,12 +5769,515 @@ path (`put_card_words` 16.5 KB, `put_at` 6.8 KB, the entry copy in the closure) 
 dropping it is not allowed. Allocation counts are unchanged (P26.4). Queued as P26b (`bud_card.pruv` and/or both
 codegens, outside this row's boundary).
 
+## Appendix P18c: by-value result forms
+
+### P18c.1 Surface (SPEC "By-value results")
+
+With `--proven-entries`, every `pruv_proven` twin whose last parameter is the `inout` `[i64]` result buffer also
+gets `pruv_proven::val::<name>::<const PRUV__K: usize>(other twin parameters) -> (RT, [i64; PRUV__K])`. The body
+makes a fresh `[0i64; PRUV__K]`, calls the twin with `PruvArr::new_mut(&mut buf)` and returns `(status, buf)`, so it
+means exactly the twin called on a new zeroed buffer of length K; the twin's own `requires` (for example
+`len(out) >= 2`) still apply in checked builds, and under `--trust-callers` the host must meet them for the zeroed
+buffer. `K > 2^40` is a `const` assertion (a compile error E0080, `pruv: by-value result longer than 2^40`). No form
+is emitted for another element type, for a non-`inout` result or when the buffer is not last. The form is
+`#[inline(always)]` and generic: an unused form emits no code, and `val` is a module, so an entry named `val` does not
+clash. The const generic is named `PRUV__K` because `__` names are reserved in Pruv (`vparser.py`), so no Pruv
+parameter can shadow it (the first cut named it `K`, and a parameter named `K` broke the generated Rust; audit
+finding, P18c.6). SPEC fixes the meaning only; where the result words live after optimization is rustc's choice, so a
+host picks `val` or the `out` twin per call site by measurement (P18c.2).
+
+Both compilers emit the same text (M7 root, `--proven-entries`: 117 added lines, Python = Rust byte for byte).
+Without the flag the output is byte-identical to the base (M7 root, m34 root_m4, m11 root checked against the
+base compiler); the guarded `c_*` entries and the P18b twins are unchanged.
+
+Tests (`tests/l3/abi/check_proven_entries.py`): host calls `val::pair::<2>` = `(7, [5, 6])`,
+`val::copy_first::<3>` = `(42, [42, 0, 0])`, `val::named_k::<2>(9)` = `(9, [9, 0])` (a Pruv parameter named `K`),
+`val::only_out::<1>()` = `(4, [3])` (the result buffer is the only parameter), `val::pair::<1>` panics with
+`requires violated`; must-reject: `K = 2^40 + 1` (E0080 with our const message), a result buffer that is not last,
+and a `[u8]` result (no `val` form, E0603).
+
+### P18c.2 Prototype: where the by-value form wins
+
+Isolating measurement before the compiler change: a `val` module added by script to the shipped M7 gen and the fair
+lane switched cell by cell (lanes `f` = P18b fair lane, `v` = by-value; per call = (X(5R) - X(R)) / (4R x calls),
+R = 20000, `/usr/bin/time -l`, interleaved rounds; instructions per call, medians).
+
+| cell | f | v | hand16 |
+|---|---|---|---|
+| current S / M | 336.7 / 335.3 | 325.7 / 323.8 | 332.9 / 333.9 |
+| isHalted S / M | 328.0 / 329.8 | 325.1 / 324.7 | 340.0 / 340.4 |
+| attach S / M (K = 11) | 380.6 / 378.3 | 380.6 / 381.5 | |
+| closereopen S / M | 521.4 / 520.1 | 523.8 / 524.2 | |
+| reopenmiss S / M | 385.7 / 386.2 | 385.7 / 387.2 | |
+
+- current and isHalted: the twin body inlines into the caller, the `[i64; K]` lives in registers and the `out`
+  store + reload (P18b.2 item 2) is gone: -11 instructions per call.
+- attach, reopen and maybeClose: their bodies (`bud_lifecycle` attach/reopen/maybe_close) are calls, not inlined.
+  The by-value form then adds per call a zero store of the stack array, the length constant and the array's stack
+  address (from `otool -tvV`), and the result is still stored and reloaded through memory: +0 to +4. The zeroing
+  cannot be dropped: the body may read `out`, and a `&mut [i64]` over uninitialized memory is undefined behaviour.
+  attach also needs K >= 11 to keep the same per-op checksum; K = 4 changes `rchk_f`.
+
+Decision: the M7 fair lane uses `val` for current (K = 3, `[4, n, off]` on a hit) and isHalted (K = 1) only;
+attach, reopen and maybeClose keep the `out` twins (`fair_out`, the P18b shape), so no cell gives back a P18b gain.
+
+### P18c.3 Fair lane after (5 cells, S/M)
+
+Shipped compilers, `driver_m7.rs` as committed. Lane `f` = P18b base (base gen + base driver, `__text` 413,244 B),
+`v` = P18c, `hand` = hand_m7_u16 typed (`__text` 311,484 B). Instructions per call, median [min..max] of 5
+interleaved rounds (isHalted: 7 rounds, a second run), load 4-14. current: 25 interleaved rounds, load 28-40, after
+the audit fix (the lane consumes the whole `(r, o)` result, P18c.6). `rchk_f` equals the base in all ten cells, and
+`run_m7.py perf` compares 14 cells with 0 mismatches (rerun after the fix).
+
+| cell | f instr | v instr | hand16 instr | f / hand | v / hand |
+|---|---|---|---|---|---|
+| isHalted S | 328.0 [327.4..330.5] | 325.5 [324.0..335.3] | 340.1 [336.7..352.3] | 0.96 | 0.96 |
+| isHalted M | 328.4 [322.8..330.6] | 326.4 [324.5..328.1] | 338.7 [336.3..341.1] | 0.97 | 0.96 |
+| current S | 336.1 [319.7..348.2] | 330.2 [326.8..335.6] | 334.3 [316.9..427.1] | 1.01 | 0.99 |
+| current M | 338.2 [331.6..344.0] | 329.1 [326.0..349.0] | 334.0 [324.7..349.4] | 1.01 | 0.99 |
+| attach S | 378.1 [375.5..379.3] | 376.6 [376.0..379.4] | 322.0 [291.7..370.1] | 1.17 | 1.17 |
+| attach M | 377.7 [374.2..379.3] | 377.8 [375.2..379.3] | 303.2 [302.0..305.2] | 1.25 | 1.25 |
+| closereopen S | 522.1 [521.8..523.2] | 523.5 [516.5..524.2] | 458.1 [445.6..506.7] | 1.14 | 1.14 |
+| closereopen M | 521.5 [521.3..523.1] | 523.7 [522.6..525.5] | 444.2 [434.6..446.2] | 1.17 | 1.18 |
+| reopenmiss S | 385.4 [384.7..386.2] | 384.9 [382.2..385.1] | 334.6 [326.3..340.3] | 1.15 | 1.15 |
+| reopenmiss M | 390.2 [380.9..397.9] | 384.7 [383.2..387.4] | 336.2 [334.7..338.6] | 1.16 | 1.14 |
+
+Cycles per call, medians of the same 5-round run (noisy; ranges overlap in every cell): isHalted S/M f 34.3/33.9,
+v 36.0/37.7, hand 48.2/49.9; current (25-round run) f 36.6/37.6, v 36.7/41.0, hand 52.5/50.1; attach f 43.0/40.3, v 42.8/42.3,
+hand 51.1/51.5; closereopen f 59.3/58.6, v 57.6/58.3, hand 75.3/75.0; reopenmiss f 44.2/46.1, v 40.8/41.2, hand
+46.0/51.4.
+
+Floors (bodies emptied, instructions, f0 / v0 / hand0, S then M): isHalted 6.6 / 5.4 / 6.3, 8.0 / 7.4 / 6.2; current
+6.9 / 6.3 / 6.8, 5.6 / 6.5 / 6.4; attach 8.5 / 7.8 / 5.1, 8.3 / 8.5 / 3.7; closereopen 6.4 / 6.3 / 4.6, 6.7 / 6.2 /
+5.3; reopenmiss 8.2 / 8.1 / 6.9, 9.0 / 9.0 / 7.4. The `out[0] = 0` write is gone from the current and isHalted
+floors; attach, closereopen and reopenmiss still write it (they keep the `out` twin).
+
+Result against the row:
+- current: 0.99 / 0.99 of hand16 at S/M (from 1.01 / 1.01). Under load 28-40 the 25-round ranges overlap at S
+  and M through single noisy rounds (hand min 316.9 / 324.7). A 9-round run earlier the same session (lower load,
+  same binaries): S v 330.2 [327.6..331.7] vs hand 335.2 [330.4..385.1] (overlap 1.3 instructions), M v 329.7
+  [322.8..330.7] vs hand 333.8 [332.8..338.0], no overlap. Met at M; at S met by median with a small overlap.
+  Before the audit fix the lane consumed only `o[0]` and showed 0.97 / 0.97; that lane (`vo`) measured in the
+  same 25 rounds 325.8 / 324.6, so whole-result consumption costs about 4-5 instructions per call, and the
+  table reports the honest lane.
+- isHalted: 0.96 / 0.96 (from 0.96 / 0.97), no overlap at S or M.
+- attach, reopenmiss: unchanged within noise (attach +-0.1, reopenmiss -0.5 / -5.5).
+- closereopen: +1.4 / +2.2 instructions per call (0.3 / 0.4 %), ranges overlapping. Its loop code is the same
+  source as the base. The cause is the driver's shared `fair_loop` function: with two of its arms changed, LLVM
+  allocates registers differently for the closereopen arm (`otool -tvV`: extra `mov`/`ldp` spill moves around the
+  two calls; every generated `sol` function has the same size in both binaries). Two harness layouts were tried:
+  one `#[inline(never)]` loop function per item (closereopen -0.7 / -1.6, but isHalted +4.1 / +5.7, attach
+  +4.8 / +6.4, `__text` +704 B) and separate functions for the two `val` items only (isHalted +3.8 / +3.3, `__text`
+  +448 B). Both were worse overall; the shared function is kept and the closereopen delta is reported, not hidden.
+- floor `out` write gone from attach / closereopen / reopenmiss: not met (P18c.4).
+
+`__text` (bench flags): 413,244 B, equal to the P18b base (the `o[0]` lane before the audit fix was 413,180 B), so
+no `-C codegen-units=1` report is needed.
+
+Peak memory footprint (`/usr/bin/time -l`, 15 alternating runs per lane, KB, median / min; one run with the
+control lanes): current S f 1968 / 1936, v 1968 / 1952; attach S f 2016 / 1984, v 2048 / 2016; current M f 3760 /
+3712, v 3776 / 3728; attach M f 3808 / 3760, v 3824 / 3792. Other runs put v one page (16 KB) above f also in
+cells whose loop is unchanged (closereopen, reopenmiss). Control: two rebuilds of the unchanged base source under
+other crate names (h, k) in the same run give current S 1984 / 1952 and 2000 / 1984, attach S 2032 / 2016 and
+2048 / 2032, current M 3776 / 3728 and 3776 / 3760, attach M 3808 / 3776 and 3824 / 3808. The base binary sits at
+the low end of what the same source gives per build; v lies inside the h/k range in every cell. So the page is
+build identity (crate hash and layout), not P18c; it is reported here so a later row does not read it as P18c's
+cost. After the audit fix (25-round run, bytes, median of rounds): current S f 1,999,184 / v 2,015,568, isHalted S
+2,015,568 / 2,015,568, current M 3,850,576 / 3,834,192, isHalted M 3,834,192 / 3,850,576: one page either way, inside
+the per-build range above. hand16 stays lower (1,720,656 / 3,244,368 at current S/M); that gap predates P18c (the
+P18b base has it) and is the M7 memory item, not this row's.
+
+M4 cells: M4 does not use `--proven-entries`, and its generated code is byte-identical to the base (root_m4
+checked), so the M4 cells cannot move; not re-measured.
+
+### P18c.4 Not met here: the `out` write of call-shaped bodies
+
+The by-value result only stays in registers when the twin body inlines into the caller. attach, reopen and
+maybeClose call non-inlined `bud_lifecycle` functions that take the result buffer as `&mut [i64]` (pointer and
+length) and write through it. A by-value form at the entry cannot remove that store; it only moves the buffer to
+the host's stack and adds the zeroing. Removing it needs the result to travel by value through the call chain: the
+callee returns its result words (a small tuple or `[i64; K]` in registers, Rust's aggregate return) instead of
+writing a caller buffer, which is a codegen change for every function that writes an `inout` result, plus a proof
+of the shape (K fixed per function, all words written on every path). Proposed new row (for main to open):
+
+- P18d, both codegens: by-value results through non-inlined calls. An internal function whose `inout [i64]`
+  result has a statically fixed written prefix returns it by value; attach / closereopen / reopenmiss floors
+  without the `out` write, those cells not above P18b, `__text` and peak RSS not above the P18b base; output parity
+  on both compilers. Runs with or before T5b2 (same reopen path).
+
+### P18c.5 Gates (Rust and Python compilers, Rust backend)
+
+| gate | result |
+|---|---|
+| `cargo build --release`, `cargo test --release` | ok, all test results ok |
+| `diff_rust.py --fuzz-count 20` | all same |
+| `gen_shared.py --check`, `check_generated.py` | ok |
+| `run_all --only g8_frontend` rs / py | 39/39, 27/27 |
+| `run_all --only l3_abi` | 3/3 |
+| verify root_m8, m34 root_m4 and root_admit, m7, m9, m10, m11 roots | ok / ok (14 runs, rc 0) |
+| M7 Q, rs then py | 300 cases, fail 0 (both) |
+| `mutant_quiet.py` | all PASS |
+| `run_all_rows.txt` | unchanged |
+
+Rerun after the audit fixes (commit b2fb727): `cargo test --release` ok; `diff_rust.py --fuzz-count 20` all same;
+`gen_shared.py --check` and `check_generated.py` ok; g8_frontend rs 39/39, py 27/27; l3_abi 3/3; M7 Q rs and py 300
+cases, fail 0; `run_m7.py perf` 14 cells, 0 mismatches; `--list-rows` equals `run_all_rows.txt` (4514 rows). The 7
+budget roots do not use `--proven-entries`, so the rename cannot change their output. Full Python suite (`run_all --compiler py --backend both`, on b2fb727): TOTAL 4502/4502, exit 0. The
+later SPEC-only commit 7389fc5 changes no code.
+
+### P18c.6 Audit
+
+Review delegation (Codex gpt-6.2-astra, ultra) over the P18c commits. Required findings, all fixed in b2fb727:
+1. The const generic `K` clashed with a Pruv parameter named `K`: renamed `PRUV__K` in both codegens, host test
+   `named_k` added.
+2. The fair lane's current timing consumed only `o[0]` of the by-value result, so the optimizer could drop the other
+   words: `fair_val` now black-boxes the whole `(r, o)` (P18c.3 reports the cost, about 4-5 instructions).
+3. SPEC promised where the words live (registers, no store): rewritten to state the meaning only.
+
+Optional: an E0080 must-reject test for `K > 2^40` (added); a unit-return case (Pruv entries cannot return unit, so
+an i64 entry whose only parameter is the result buffer, `only_out`, covers the empty-argument form instead); the
+attach lane's `uk` black-box differs from the hand lane's (predates P18c, unchanged; noted for the M7 harness owner).
+Confirm audit (same reviewer, only the three fix scopes): scopes 1 and 2 FIXED; scope 3 had one required finding,
+the SPEC text said a too-small `K` always panics in a checked build, but an entry without a length `requires` (M7
+`c_current`) just runs and returns a status (3 for `K = 0`). Fixed: SPEC now says a small `K` gives what the twin
+gives, panicking only when a declared `requires` is violated.
+
+### P18c.7 Delegations
+
+| work | by |
+|---|---|
+| compiler implementation (both codegens) and `check_proven_entries.py` tests | Codex gpt-6.2-sol, write |
+| audit and confirm audit | Codex gpt-6.2-astra, ultra, review |
+| full Python suite | shell command delegation |
+| prototype, measurement, proof judgment, SPEC, `driver_m7.rs`, audit fixes, this appendix | Claude Opus 5.5, direct |
+
+## Appendix P25.8a (queued P25.8 item: hand error path in hdiff)
+
+Result: the hand error path already existed (P26, Appendix P26.1: `card_error(kind, en)`, `emit_card_error`), and
+hdiff already compared full error words, but only with one open budget, so kind 0 (no current budget) was never
+reached, and the generator lived in an uncommitted work file. This row moves the generator into `run_m11.py --hdiff`,
+adds the kind 0 scenarios and per-kind checks, and changes only the measurement harness: `harness.rs` and
+`run_m11.py`. `hand.rs`, `root.pruv`, the `.pruv` sources and both compilers are unchanged. No proof meaning changed.
+
+Base: main a9ac433, release `pruvc-rs` built in the worktree, macOS arm64. Work files in `work/p25_8/` (not committed).
+
+### P25.8a.1 Change
+
+- `harness.rs` `hand_diff(card, lang, by, scen)`: both sides load the same budget `s1 -> b1`; `scen` 1 = the found
+  budget is `closed`, 2 = unknown session `s2`, 3 = `ref` budgetId `b2` against `b1`, 4 = no `ref.sessionId` and
+  an empty sid. For scen 1..4 the expected kind is 0; for scen 0 it is the validation kind (or ok). Two calls per
+  card (the second reads the stored budget). Each call compares the whole hand words with the Pruv words, and in
+  addition: the raw Pruv length prefix equals the returned word count (`World::call` clamps it to the buffer), on an
+  error `used_now` equals `kind >= 3` on both sides, `saved`/`changed` are 0 on both sides, and the value is exactly
+  `{ok:false, error:<string>}` with equal UTF-16 units. A malformed packet must be refused by both (Pruv status 2,
+  hand -2). Output: `same err <kind> <en> <used_now>` / `same ok` / `same refused` / `differ ...`. The perf
+  functions are byte-identical to the base.
+- `run_m11.py --hdiff`: the P26 generator ported unchanged (10,711 items at scen 0, checked equal in order and
+  label to `work/p26/p26/hdiff.py`), the same items again at scen 1 (`closed:`), and 770 crafted `kind` items
+  (one card per validation kind plus one valid card, 22 cards, x 7 `lang` inputs `en`/`ko`/`EN`/empty/1/null/absent
+  x scen 0..4). It fails on any differ, an output line-count mismatch, a `used_now` other than `kind >= 3`, or an
+  empty cell in the kind 0..6 x en 0/1 table.
+
+### P25.8a.2 Gates
+
+| gate | rs | py |
+|---|---|---|
+| hdiff | 22,192 items, 22,192 lines, differ 0 | same |
+| Q6 (300, seed 20261117) | exact 213, prefix-ok 87 | same |
+| K | 10/10 exact | 10/10 exact, identical to rs |
+
+hdiff outcomes (rs = py): error 14,540, ok 2,102, entry refusal 5,550. Error cells (kind, en): 0/0 7,104, 0/1
+1,448, 1/0 1,058, 1/1 232, 2/0 2,050, 2/1 455, 3/0 882, 3/1 188, 4/0 346, 4/1 62, 5/0 330, 5/1 69, 6/0 269, 6/1
+47; `used_now` is 0 for kinds 0-2 and 1 for kinds 3-6 in every cell.
+
+Not observable: the result ABI has no kind word, so an internal Pruv kind that differs while the text and flags
+stay the same cannot be seen; each kind has its own text, so any visible change of kind is caught.
+
+### P25.8a.3 Performance (base harness vs this harness, same `pruvc-rs`, 11 alternating runs)
+
+Instructions retired (M, median) are the primary axis; ns medians are in `work/p25_8/tm11b.txt`.
+
+| cell | Pruv base -> new | hand base -> new | Pruv / hand (new) |
+|---|---|---|---|
+| A 100 | 240.48 -> 240.45 | 418.94 -> 418.97 | 0.57 |
+| A 300 | 146.36 -> 146.37 | 281.20 -> 281.16 | 0.52 |
+| A 1000 | 21.99 -> 21.96 | 25.89 -> 25.89 | 0.85 |
+| B 100 | 207.76 -> 207.73 | 371.05 -> 372.50 | 0.56 |
+| B 500 | 205.31 -> 205.27 | 368.71 -> 370.07 | 0.55 |
+| B 1000 | 204.96 -> 204.94 | 368.40 -> 369.77 | 0.55 |
+| C 100 / 1000 | 190.04 / 189.01 -> 190.02 / 188.99 | 294.02 / 291.78 -> 294.02 / 291.81 | 0.65 |
+| R 100 / 1000 | 169.26 / 166.93 -> 169.22 / 166.91 | 319.86 / 317.48 -> 319.87 / 317.44 | 0.53 |
+| H 100 / 1000 | 44.35 / 40.40 -> 44.38 / 40.41 | 57.75 / 53.09 -> 57.76 / 53.05 | 0.77 / 0.76 |
+| I 100 / 1000 | 238.10 / 235.75 -> 238.05 / 235.78 | 404.96 / 402.72 -> 404.95 / 401.28 | 0.59 |
+
+Every Pruv cell stays within 0.05 % of the base. The hand lane is unchanged except B (+0.4 %, hand slower, the
+`HashMap` `RandomState` lane; the first run of the same binaries before the audit fix had B hand 371.05 / 368.67 /
+368.33, equal to base); the hand success path code is unchanged. Every ns median is below hand.
+
+Peak RSS (KiB median (min-max), 11 alternating runs):
+
+| cell | Pruv base | hand base | Pruv new | hand new | Pruv - hand (new) |
+|---|---|---|---|---|---|
+| empty | 1600 | 1600 | 1600 | 1600 | 0 |
+| A 100 | 1792 (1776-1792) | 1728 (1728-1744) | 1776 (1776-1776) | 1744 (1744-1744) | +32, no overlap |
+| A 300 | 1776 (1776-1776) | 1728 (1712-1728) | 1760 (1760-1760) | 1728 (1728-1728) | +32, no overlap |
+| A 1000 | 1744 (1744-1760) | 1744 (1728-1744) | 1744 | 1744 | 0 |
+| B 1000 | 1952 | 1936 (1920-1936) | 1952 | 1952 (1920-1952) | 0 |
+| C 1000 | 1872 | 1872 (1856-1872) | 1872 | 1888 (1872-1888) | -16 |
+| R 100 / 1000 | 1952 / 1952 | 1952 / 1952 | 1952 / 1952 | 1968 / 1968 | -16 |
+| H 100 | 1952 | 1872 | 1952 | 1888 | +64, no overlap |
+| H 1000 | 1952 | 1872 | 1952 | 1888 | +64, no overlap |
+| I 100 / 1000 | 1952 / 1952 | 1936 / 1936 | 1952 / 1952 | 1936 / 1952 | +16 / 0 |
+
+Pruv peak RSS is still above hand on A 100/300 and H (and I 100 by one page, overlapping). These are the P26a code
+page shares (queued P26b), not this change: the larger harness binary moves the layout (Pruv A -16, hand H/R/C
++16), but the cause is not fixed. They stay open under P26b.
+
+### P25.8a.4 Audit and delegation
+
+Audit (Codex gpt-6.2-astra ultra, dfdec104), one round:
+- bug: `World::call` clamps the Pruv length prefix to the buffer, so a too-large prefix could pass as `same`.
+  Fixed: the raw prefix is compared with the returned word count.
+- risk: `used_now == (kind >= 3)` was only checked as hand = Pruv. Fixed: checked in `hand_diff` and in
+  `run_m11.py`.
+- risk: the internal Pruv kind is not in the result ABI (P25.8a.2, not observable). Kept as a note.
+- Port completeness was out of the auditor's file scope; checked here: 10,711 items equal in order and label.
+All gates re-run after the fix (P25.8a.2 numbers are from the re-run).
+
+| id | mode | engine / model | use |
+|---|---|---|---|
+| 65b87ba5 | write | Claude sonnet | `harness.rs` scenarios and `run_m11.py --hdiff` (one candidate, taken in by hand; the whitespace code points and the `enc` loop indentation were corrected after) |
+| dfdec104 | review | Codex gpt-6.2-astra ultra | audit of the hdiff comparison rules |
+
+## Appendix P13i: lifecycle fixed share and the attach id copy
+
+Scope of this package: parts (a) and (b) of row P13i. Part (c) (`bud_store::need` slack and the fixed 254 KB) needs
+`bud_store.pruv`, which row P13j owns, so it stays open.
+
+### P13i.1 Attribution of (a)
+
+The lifecycle bodies (`maybe_close`, `replace`, `reopen`, `attach`) already reach records through the direct `xa`/`xb`
+paths, so the fix named in the row has nothing left to change. The M7 driver `__text` growth (c3ec58d 413,244 B ->
+5832908 457,532 B) comes from P13e giving `bud_store::ef` / `set_ef` an `#[inline]` attribute: with them inlined,
+`bud_map::find_w` becomes small enough for LLVM to inline it at every call site. Experiments on hand-edited generated
+Rust (M7 driver, fair lane, R = 20000):
+
+| variant | change | `__text` (B) | instructions |
+|---|---|---|---|
+| base (5832908) | none | 457,532 | reference |
+| A | `ef`/`set_ef` `#[inline(always)]` | 458,236 | no gain |
+| B | `find_w` `#[inline(never)]` | 421,436 | +12..+25 per call on current, isHalted, reopenmiss, closereopen |
+| C | cold fallback paths, `find_w` out of line | 422,268 | same losses as B |
+| E | C's cold fallbacks, `find_w` `#[inline(always)]` | 454,140 | wins on every cell (attach 392 -> 376, reopenmiss 383 -> 373, current 322 -> 311, isHalted 319 -> 304) |
+
+No variant restores `__text` without an instruction loss, and every lever (the shape of `bud_map::find_w`, the
+`ef`/`set_ef` attributes in `bud_store.pruv`, or the compiler inline policy) is outside this package's files. Peak
+RSS is also not restored: c3ec58d attach S 2752-2784 KiB, M 4496-4544 KiB against 2800-2848 / 4608-4656 KiB for
+both 5832908 and this package (3 interleaved rounds). Part (a) is handed back. Suggested follow-up: a `bud_map` row
+that takes E's cold-fallback split (it pays in instructions on all five cells) together with a size lever that keeps
+those gains.
+
+### P13i.2 Design of (b)
+
+`attach` on the ref path used to copy the packed id into `out` (`[3, n, id words]`). It now returns a view of the
+stored id, `[6, n, off]`, where the packed id words are `st[off..off + words(n))` inside the stored record, the same
+way `current` returns a budget view `[4, n, off]`. The length word is clamped into 0..2^30 as `put_key` does, so the
+view's length and the words checked against the record agree. The view is valid until the next change of `st`. Being 3
+words, it fits the 4096-word out buffer for any id, so the hand reference (`hand_m7_u16.rs`) drops its out-buffer limit
+on this path and `diff_hand_m7.py` expects a value for the 16,377-unit control (OPEN and halted `replace` keep the
+limit). The OPEN path keeps `[3, n, id words]` (its id is the caller's
+`uk`). The M7 driver reads tag 6 from `st` in egress, `rchk_fold` and `consume`; the consume checksum folds the same
+words as the tag-3 form, so result checks are unchanged. No proof annotation changed and no admit, assume or opaque
+was added; no compiler change.
+
+### P13i.3 Gates
+
+| gate | result |
+|---|---|
+| verify the 7 budget roots, rs and py | all rc 0 |
+| M7 Q, rs then py | exact 113, not-implemented 187, fail 0 (both) |
+| M10 Q, rs and py | 78 / 222 / 0; `cases_halt` 300 / 0 / 0 |
+| M4, M8, admit, M9, M11 generated Rust | byte-identical to 5832908 |
+| `mut_m9` | control CLEAN, 10/10 KILLED |
+| `run_m7.py perf` result checks | 21 cells, 0 mismatches |
+| `diff_hand_m7.py` (after the audit fixes) | 300 random and 189 control cases, 0 mismatches, 0 expectation failures; 15 fatal controls, 0 failures |
+| allocations per call | 0 on all 10 cells (base and P13i), identical checksums |
+
+### P13i.4 Measured
+
+Fair lane, 7 interleaved rounds, instructions per call median [min..max], hand16 for reference:
+
+| cell | 5832908 | P13i | hand16 | P13i / hand16 |
+|---|---|---|---|---|
+| attach S | 392.8 | 353.5 [347.7..354.8] | 299.8 | 1.18 (from 1.31) |
+| attach M | 393.2 | 355.3 [349.5..359.5] | 305.3 | 1.16 (from 1.29) |
+| closereopen S / M | 533.6 / 533.7 | 533.2 / 533.3 | 446.0 / 444.3 | 1.20 / 1.20 |
+| reopenmiss S / M | 384.4 / 383.4 | 383.9 / 384.0 (overlaps base) | 333.2 / 333.4 | 1.15 / 1.15 |
+| current S / M | 323.1 / 323.2 | 322.7 / 321.8 | 334.5 / 333.6 | 0.96 / 0.96 |
+| isHalted S / M | 319.7 / 320.3 | 319.6 / 320.6 (overlaps base) | 338.3 / 338.6 | 0.94 / 0.95 |
+
+After the audit fixes (length clamp, P13i.6), 5 interleaved rounds: attach S 394.6 -> 348.6, M 391.8 -> 349.4 against
+hand16 311.3 [270.3..315.0] / 298.4 (1.12 / 1.17x; the hand reference no longer checks the out size on this path).
+
+Cycles per call are noisy (about 35-63) and below hand16's on every cell. Peak RSS distributions of 5832908 and P13i
+overlap on every cell (S about 2.75-2.85 MB, M about 4.55-4.67 MB; hand16 2.24-2.32 / 3.76-3.82 MB): the gap to hand is
+part (c). M7 `__text` 457,532 -> 457,916 B (+384, final build): Pruv code -44 B, the host harness decoder for tag 6 +428 B
+(before the clamp: Pruv -32, harness +480 with `ref_units` +308, `consume` +124, `rchk_fold` +16, other +32). The rule "not above the
+base" is literally exceeded by the harness only. M10 `__text` 464,380 B, identical to 5832908 (attach is dead code there).
+
+Not met: (a) `__text` and fixed peak RSS back to c3ec58d (P13i.1); attach still 1.16-1.18x and closereopen /
+reopenmiss 1.15-1.20x of hand16; part (c).
+
+### P13i.5 Delegations
+
+| work | by |
+|---|---|
+| attribution, experiments A-E, (b) design and code, `driver_m7.rs`, gates, measurement, this appendix | Claude Opus 5.5, direct |
+| audit and confirm audit | Codex gpt-6.2-astra, ultra, review |
+
+### P13i.6 Audit
+
+Review delegation (Codex gpt-6.2-astra, ultra) over the (b) diff, verdict fix then merge. Required findings, all fixed:
+1. `c32` lets the id length reach 2^32 while `words` clamps at 2^30, so a record with length 2^30 + 1 passed the span
+   check for 2^28 words while the driver read 2^28 + 1: the length is now clamped to 2^30 before the check.
+2. and 3. The view fits any id, so Pruv answered `V 3` for the 16,377-unit control where hand16 and
+   `diff_hand_m7.py` expected `X 3`: the hand drops the limit on the live-ref path and the control expects a value.
+Optional (not done, files outside this package): `ABI.md` line 89 and `M7_NOTES.md` line 84 describe only the tag 3
+form; they should add `[6, n, st offset]` and its lifetime.
+Reruns after the fixes: 7 roots verify rs and py rc 0; M7 Q rs and py 113 / 187 / 0; M10 Q 78 / 222 / 0 and
+`cases_halt` 300 / 0 / 0 on both compilers, M10 `__text` 464,380 B; `run_m7.py perf` 21 cells 0 mismatches;
+`diff_hand_m7.py` as in P13i.3.
+Confirm audit (same reviewer, only the three fix scopes): all three FIXED, no required finding.
+
+## Appendix T5d: codegen-units=1 for the bench profile, measured
+
+Decision: keep the bench flags `-C opt-level=3 --edition 2021` and the T5b.3 reporting rule. `-C codegen-units=1`
+loses axes on both sides: Pruv instructions on every M4 cell, hand instructions on every M4 cell and M7 reopenmiss,
+Pruv `__text`, and the M7 Pruv peak by a small margin. The row's switch condition is not met. No Pruv/hand ratio
+crosses 1.0x under cgu1.
+
+### T5d.1 Method
+
+- Base main a21f8b5, compiler `pruvc-rs/target/release/pruvc` of the main checkout, rustc 1.99.1 (58cf8f9c3 2026-10-13) of
+  `~/.cargo/bin`. Scratch scripts in `work/t5d/` (not committed): `build.py`, `measure.py`,
+  `summarize.py`, `alloccount.c`.
+- Two flag sets, the same on both sides of every column: `base` = `-C opt-level=3 --edition 2021`;
+  `cgu1` = base + `-C codegen-units=1`. The `bud_facts` rlib stays at `-O` as in `run_m7.py:75-76`.
+- Binaries: M7 driver (`m7_test/root.pruv`, `--proven-entries`, `driver_m7.rs`, as `run_m7.py`) and `hand_m7_u16.rs`
+  (fair lane); M4 driver (`m34_test/root_m4.pruv`, `driver_m4.rs`, lane `m4` with `state_buf.rs` and
+  `type Store<T> = Plain<T>` as `m34_test/run.py`) and `perf_headroom/host/src/bin/m4_hand.rs`. The M4 hand is built
+  here with the same direct rustc command as the Pruv driver, not with the host Cargo release profile, so both sides
+  share the flags exactly.
+- Instructions per call = (I(5R) - I(R)) / (4R x calls), R = 20000, from `/usr/bin/time -l` "instructions retired";
+  ns from the driver's own timing at 5R. M7 peak = "peak memory footprint", M4 peak = "maximum resident set size"
+  (as T5c and the M4 host). Allocations per call from a `DYLD_INSERT_LIBRARIES` malloc counter in a separate run
+  (SIP strips DYLD variables through `/usr/bin/time`).
+- 7 rounds per cell, the four (flag set, lane) runs rotated each round and the size order reversed on odd rounds.
+  Load average 2.3 to 4.0 during the runs, so instructions are the primary axis; "overlap" below means the min..max
+  ranges of the two compared distributions intersect. Result checksums agree between all four runs of every cell.
+- `__text` from `size -m`; rustc wall time = median of 5 interleaved builds.
+- Gates on the base tree before the runs: M7 `run_m7.py q` 113 / 187 / 0, `q --py` 113 / 187 / 0.
+
+### T5d.2 Per cell (medians over 7 rounds; instr per call or per op, ns, peak KiB, allocations per call)
+
+| cell | fs | Pruv instr | hand instr | ratio | Pruv ns | hand ns | Pruv peak | hand peak | Pruv alloc | hand alloc |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| M7 attach S=100 | base | 350.7 | 296.8 | 1.181 | 10.2 | 12.9 | 2080 | 1632 | 0 | 0 |
+| M7 attach S=100 | cgu1 | 354.9 | 300.7 | 1.180 | 9.9 | 12.4 | 2080 | 1632 | 0 | 0 |
+| M7 closereopen S=100 | base | 533.4 | 445.4 | 1.198 | 16.0 | 18.4 | 2000 | 1632 | 0 | 0 |
+| M7 closereopen S=100 | cgu1 | 499.5 | 442.2 | 1.130 | 14.4 | 17.8 | 2032 | 1632 | 0 | 0 |
+| M7 reopenmiss S=100 | base | 384.5 | 333.0 | 1.155 | 10.2 | 12.4 | 1984 | 1632 | 0 | 0 |
+| M7 reopenmiss S=100 | cgu1 | 370.2 | 353.1 | 1.048 | 9.7 | 13.6 | 2016 | 1616 | 0 | 0 |
+| M7 current S=100 | base | 323.3 | 346.1 | 0.934 | 8.9 | 13.0 | 1984 | 1648 | 0 | 0 |
+| M7 current S=100 | cgu1 | 323.8 | 336.4 | 0.962 | 8.4 | 12.7 | 2016 | 1648 | 0 | 0 |
+| M7 isHalted S=100 | base | 319.9 | 338.6 | 0.945 | 9.1 | 12.7 | 1968 | 1616 | 0 | 0 |
+| M7 isHalted S=100 | cgu1 | 323.8 | 349.8 | 0.925 | 8.7 | 12.9 | 2016 | 1632 | 0 | 0 |
+| M7 attach M=500 | base | 352.3 | 297.0 | 1.186 | 10.1 | 13.0 | 3840 | 3104 | 0 | 0 |
+| M7 attach M=500 | cgu1 | 354.1 | 300.5 | 1.178 | 9.9 | 12.1 | 3888 | 3136 | 0 | 0 |
+| M7 closereopen M=500 | base | 533.5 | 445.2 | 1.198 | 16.1 | 18.3 | 3792 | 3120 | 0 | 0 |
+| M7 closereopen M=500 | cgu1 | 499.7 | 441.9 | 1.131 | 14.3 | 17.9 | 3840 | 3120 | 0 | 0 |
+| M7 reopenmiss M=500 | base | 383.4 | 335.8 | 1.142 | 10.1 | 12.4 | 3776 | 3104 | 0 | 0 |
+| M7 reopenmiss M=500 | cgu1 | 371.1 | 352.8 | 1.052 | 9.7 | 13.4 | 3840 | 3120 | 0 | 0 |
+| M7 current M=500 | base | 322.6 | 333.0 | 0.969 | 8.9 | 12.7 | 3792 | 3104 | 0 | 0 |
+| M7 current M=500 | cgu1 | 322.3 | 336.4 | 0.958 | 8.4 | 12.8 | 3840 | 3152 | 0 | 0 |
+| M7 isHalted M=500 | base | 320.3 | 339.9 | 0.942 | 8.9 | 12.7 | 3824 | 3104 | 0 | 0 |
+| M7 isHalted M=500 | cgu1 | 322.9 | 341.1 | 0.947 | 8.7 | 12.8 | 3840 | 3136 | 0 | 0 |
+| M4 tools n=100 | base | 898.1 | 1321.3 | 0.680 | 31.9 | 52.4 | 1136 | 1104 | 0 | 1.0 |
+| M4 tools n=100 | cgu1 | 943.0 | 1331.4 | 0.708 | 33.4 | 51.5 | 1136 | 1104 | 0 | 1.0 |
+| M4 sessions n=100 | base | 460.2 | 417.1 | 1.103 | 12.9 | 15.0 | 1088 | 1072 | 0 | 0 |
+| M4 sessions n=100 | cgu1 | 472.9 | 431.5 | 1.096 | 13.2 | 15.3 | 1088 | 1056 | 0 | 0 |
+| M4 clocks n=100 | base | 981.3 | 923.4 | 1.063 | 29.8 | 38.7 | 1088 | 1088 | 0 | 0.5 |
+| M4 clocks n=100 | cgu1 | 1032.0 | 937.5 | 1.101 | 34.0 | 38.8 | 1088 | 1088 | 0 | 0.5 |
+| M4 tools n=1000 | base | 951.5 | 1320.8 | 0.720 | 35.4 | 52.9 | 1488 | 1488 | 0 | 1.0 |
+| M4 tools n=1000 | cgu1 | 995.2 | 1336.0 | 0.745 | 36.4 | 52.4 | 1488 | 1488 | 0 | 1.0 |
+| M4 sessions n=1000 | base | 469.0 | 413.8 | 1.134 | 13.3 | 16.0 | 1376 | 1392 | 0 | 0 |
+| M4 sessions n=1000 | cgu1 | 482.5 | 428.1 | 1.127 | 13.8 | 16.4 | 1376 | 1392 | 0 | 0 |
+| M4 clocks n=1000 | base | 943.7 | 920.8 | 1.025 | 30.3 | 40.3 | 1312 | 1632 | 0 | 0.5 |
+| M4 clocks n=1000 | cgu1 | 994.1 | 934.4 | 1.064 | 32.9 | 41.8 | 1328 | 1648 | 0 | 0.5 |
+| M4 tools n=2000 | base | 891.9 | 1327.3 | 0.672 | 32.4 | 54.0 | 1824 | 1824 | 0 | 1.0 |
+| M4 tools n=2000 | cgu1 | 939.2 | 1343.1 | 0.699 | 33.7 | 52.7 | 1840 | 1824 | 0 | 1.0 |
+| M4 sessions n=2000 | base | 460.7 | 456.0 | 1.010 | 12.6 | 16.6 | 1664 | 1696 | 0 | 0 |
+| M4 sessions n=2000 | cgu1 | 472.9 | 470.5 | 1.005 | 13.2 | 17.6 | 1680 | 1696 | 0 | 0 |
+| M4 clocks n=2000 | base | 982.7 | 962.2 | 1.021 | 31.3 | 41.1 | 1536 | 2128 | 0 | 0.5 |
+| M4 clocks n=2000 | cgu1 | 1034.6 | 976.5 | 1.059 | 33.7 | 42.9 | 1568 | 2144 | 0 | 0.5 |
+
+Build axes (rustc wall seconds, median of 5 interleaved builds):
+
+| binary | base `__text` B | cgu1 `__text` B | base rustc s | cgu1 rustc s |
+|---|---:|---:|---:|---:|
+| M7 driver (Pruv) | 457,916 | 464,188 (+6,272) | 3.17 | 2.68 |
+| hand16 | 311,484 | 306,300 (-5,184) | 0.69 | 0.82 |
+| M4 driver (Pruv) | 350,524 | 355,836 (+5,312) | 2.21 | 1.85 |
+| M4 hand | 281,532 | 276,732 (-4,800) | 0.37 | 0.49 |
+
+### T5d.3 What cgu1 changes (cgu1 against base, same lane, ranges not overlapping unless said)
+
+- Pruv losses: M4 instructions +2.7..5.3 % on all nine cells (tools +45..47, sessions +12..14, clocks +50..52 per op),
+  M4 clocks time +8..14 %; `__text` +6,272 B (M7) and +5,312 B (M4); M7 peak +16..64 KiB median on every cell
+  (overlapping on some cells).
+- Pruv gains: M7 closereopen 533 -> 500 (-6.4 %), reopenmiss 384 -> 371 (-3.5 %), with time down 5..11 %; attach,
+  current, isHalted overlap.
+- Hand losses: M4 instructions +0.8..3.5 % on all nine cells; M7 reopenmiss 333 -> 353 / 336 -> 353 (+5..6 %,
+  overlapping at S=100, not at M=500), time +8..10 %; hand rustc time +19 % (hand16) and +32 % (M4 hand).
+- Hand gains: `__text` -5,184 B / -4,800 B.
+- rustc on the 20 % line: the generated M4 driver builds faster under cgu1 (2.21 -> 1.85 s), so the budget m4 line holds.
+  The row's other condition fails, so this does not change the decision.
+- Ratios: no cell crosses 1.0x. The M7 closereopen and reopenmiss ratios improve (1.20 -> 1.13, 1.15 -> 1.05).
+  Reopenmiss improves partly because hand16 gets slower. The M4 tools, clocks and M7 current S ratios get worse.
+  Cells over hand stay over hand on instructions under both flag sets:
+  - M7 attach, closereopen, reopenmiss;
+  - M4 sessions (1.01..1.13x);
+  - M4 clocks (1.02..1.10x).
+  On time (ns), every Pruv cell is under hand.
+- Allocations are identical between flag sets: Pruv 0 everywhere; hand M4 tools 1.0 and clocks 0.5 per op, and 0
+  elsewhere.
+
+### T5d.4 Runner lines a switch would touch (not applied)
+
+Kept for the record; nothing changes, because the decision is keep.
+- `bench/l3/budget/run_meta.py:28` `RUSTC_FLAGS` (M7 driver `run_m7.py:107`, hand16 and hand_m7 `run_m7.py:117-118`;
+  also m8 and `t5c_floor`).
+- `bench/l3/budget/m34_test/run.py:262` (M4 driver rustc line).
+- `bench/l3/budget/perf_headroom/host/Cargo.toml` `[profile.release]` (M4 hand; read by `perf_headroom/host/run.py:64-66`
+  and `tools/health.py:254-256`).
+- Other direct rustc lines with the same flags: `m8_test/run_m8.py:67,99,610`, `m9_test/run_m9.py:69,664`,
+  `m10_test/run_m10.py:104,798`, `p01_keys/run_keys.py:74-75`, `dev_build.sh:22`, `mcp/perf/run_perf.py:48,132`.
+  `bench/perf/run.py:42,83` already uses `codegen-units=1` and is outside the L3 budget.
+
+### T5d.5 Delegations
+
+| work | by |
+|---|---|
+| runner flag lines and lane setup (research) | Codex gpt-6.2-astra, high, research |
+| first draft of the scratch `build.py` / `measure.py` / `summarize.py` / `alloccount.c` | Claude sonnet, medium, write (copied into `work/t5d` by hand, M4 `Store` alias fixed) |
+| gates, builds, measurement, decision, this appendix | Claude Opus 5.5, direct |
+
 ## Appendix P13j (row P13j: store bounds from the P13e audit)
 
 Result: both bounds are proved `ensures` and each has a gate case that fails on a4427ec and passes now. No new
 `admit`, `assume` or `opaque`; no compiler change; no layout change (resident format version stays 2). Gates equal
 P13e.8. Instructions, peak RSS and allocations are not worse on any M4 / M7 cell. M7 `__text` is 320 B below base;
-M4 `__text` is 832 B above base and stays open (P13j.4). The final audit's two required findings are fixed (P13j.5).
+M4 `__text` is 832 B above base, accepted for the root payload fix; its removal is queued as P13j2 (P13j.4). The final audit's two required findings are fixed (P13j.5).
 
 Base: a4427ec, release `pruvc-rs` (read-only), macOS arm64. Work files in `work/p13j/` (not committed).
 
@@ -5847,8 +6355,9 @@ Measured after the P13j.5 fixes (`work/p13j/perf_final2.log`).
   root compare loop (`blob_same` / `root_carried`, inlined into `World::exec`, about +512 B) and the `copy_kids`
   first step. Tried and dropped: a shared `carry_pay` helper (M7 +15 KB), `root_carried` with matching extension
   flags instead of the default branches (M4 +832, M7 +512). Removing the compare needs a frame proof of the root
-  extension over every arena write of `copy_kids`; not done here. Open: M4 `__text` +832 B (0.2 %), no change to
-  peak RSS or instructions measured.
+  extension over every arena write of `copy_kids`; not done here. M4 `__text` +832 B (0.2 %), no change to
+  peak RSS or instructions measured: accepted for this row (it pays for the root payload fix); the frame proof that
+  drops the compare loop is queued as row P13j2.
 
 ### P13j.5 Final audit (Codex gpt-6.2-astra ultra)
 

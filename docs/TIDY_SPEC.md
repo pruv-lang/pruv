@@ -238,4 +238,42 @@ by byte-identical output and run by group, with the full test suite once before 
         written in both compilers; output/linker features close through spec execution values and perf. Keep
         the corpus, the shared JSON (`pruvc/data/`) and `pruvc/runtime.c`.
 
+    **Result of (a) (2026-11-19, tests only, no compiler change).** Switches added: `g3_proof` with
+    `--compiler rs` now compiles each file with the selected Rust compiler (verification on, `--backend rust`;
+    before, both `--compiler` values ran the Python verifier through `tests/g3/verify_only.py`, which the py side
+    still uses because the Python code generator rejects generics); new `run_all` group `vacuity` (one row,
+    `tests/vacuity/run.py --compiler py|rs`; the `g3_proof` rows keep their key, so `run_all_rows.txt` only gains
+    that row); `tests/vacuity/run.py --kinds reach,contradiction,pair`; both
+    `vacuity/run.py` and `spec_trace.py` now put every failure in one class (`false_reject`, `false_accept`,
+    `wrong_location`, `timeout`, `other`) and print per-compiler `CLASSES` counts (`vacuity` also per-set `SET`
+    lines); `spec_trace` checks `line`/`col` when an expectation JSON gives them. Expected values unchanged.
+    Rust results (release `pruvc` built from b2fb727, the last pruvc-rs commit), wall time per run on this machine:
+
+    | set | cases | pass | false reject | false accept | wrong location | timeout | other | wall |
+    |---|---|---|---|---|---|---|---|---|
+    | `g3_proof` (`run_all --only g3_proof --compiler rs`) | 24 | 24 | 0 | 0 | 0 | 0 | 0 | 0.17 s |
+    | `spec_trace --only-rs` (32 tests, 228 checks) | 32 | 32 | 0 | 0 | 0 | 0 | 0 | 0.67 s |
+    | `vacuity` reach (19 `assert false` points) | 19 | 19 | 0 | 0 | 0 | 0 | 0 | 0.99 s |
+    | `vacuity` contradiction | 3 | 3 | 0 | 0 | 0 | 0 | 0 | 0.11 s |
+    | `vacuity` pair (`old` accept/reject) | 2 | 2 | 0 | 0 | 0 | 0 | 0 | 0.08 s |
+
+    Whole `vacuity` group on rs: 1.24 s. The py side is unchanged: `g3_proof` 24/24, `spec_trace` (both
+    compilers) 260/260, `vacuity --compiler py` 24/24 with all classes 0. No disagreement between Rust and an
+    independent expected result was found. Classifier check (scratch, not committed): the Rust compiler wrapped
+    with `--no-verify` gives `false_accept` 19/19 on reach, 1 on the pair, 7 on `spec_trace` (its 7 verify-stage
+    rejects), and contradictions still pass, as they must.
+    Gaps found (queued follow-ups, no fix here):
+    - **Old-pair reject location.** `tests/vacuity/old_increment_reject.pruv` fails `verify/ensures` at line 2
+      col 1 (the `fn` header) on both compilers; only the message names line 4 (the `ensures`). `cases.json`
+      checks the message, so a wrong structured location is not caught. SPEC (§diagnostic table,
+      `verify/ensures`) states no location for an `ensures` that fails at a fall-through end of the body, while
+      an explicit `return` reports the `return` line (`tests/must_reject/cd20_map_new.json`, line 4). Follow-up:
+      write the location rule in SPEC by hand, then put `line`/`col` in the pair expectation.
+    - **Sets that cannot see a false accept.** `g3_proof` has only accept cases and the 3 contradictions expect
+      accept on both sides (they passed under `--no-verify`). Only reach, the reject half of the pair and the 7
+      verify-stage `spec_trace` rejects catch false proof acceptance on generics-free code; reject twins for G3
+      belong to (b).
+    - **No structured location in `spec_trace` expectations.** None of the 32 JSONs gives `line`/`col`; adding
+      them (hand-fixed from SPEC) is part of (b).
+
 Order after the review: T0①–⑥ → T3 → T1 → T2 → T4 → P16, P17a → T5 (inline policy) → T6.

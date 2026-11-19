@@ -195,10 +195,10 @@ impl World {
         }
         if !self.silent {
             let w: Vec<String> = match self.out[0] {
-                3 => {
+                3 | 6 => {
                     // the ref's ids are packed in out; print them as units
                     let carry = self.fx[1..=used].contains(&21);
-                    ref_units(&self.out, carry).iter().map(|x| x.to_string()).collect()
+                    ref_units(&self.out, &self.st, carry).iter().map(|x| x.to_string()).collect()
                 }
                 4 => {
                     // budget view: the record is st[off..off+n)
@@ -244,16 +244,19 @@ fn words(n: i64) -> usize {
 }
 
 // Host egress of a ref result (out[0] == 3): out = [3, n, packed id words (words(n)) (, m, packed old id words(m) when
-// effect 21 is held)]. Returns the unit form [3, n, id units.. (, m, old id units..)], the words q mode prints and
-// rchk folds. Untimed paths only.
-fn ref_units(out: &[i64], carry: bool) -> Vec<i64> {
+// effect 21 is held)]; or a ref view (out[0] == 6, attach's ref path): out = [6, n, off], the packed id words are
+// st[off..off+words(n)) (never carried). Returns the unit form [3, n, id units.. (, m, old id units..)], the words q
+// mode prints and rchk folds. Untimed paths only.
+fn ref_units(out: &[i64], st: &[i64], carry: bool) -> Vec<i64> {
+    let view = out[0] == 6;
     let mut v = vec![3i64];
     let mut p = 1;
-    for _ in 0..(if carry { 2 } else { 1 }) {
+    for _ in 0..(if carry && !view { 2 } else { 1 }) {
         let n = out[p].max(0) as usize;
         v.push(n as i64);
+        let (src, at) = if view { (st, out[2].max(0) as usize) } else { (out, p + 1) };
         for j in 0..n {
-            let word = out[p + 1 + j / 4] as u64;
+            let word = src[at + j / 4] as u64;
             v.push(((word >> (48 - 16 * (j % 4))) & 0xffff) as i64);
         }
         p += 1 + words(n as i64);
@@ -723,9 +726,9 @@ fn rchk_fold(w: &World, r: i64, sum: u64) -> u64 {
                 fold(*x);
             }
         }
-        3 => {
-            // the ref's packed ids are unpacked to units, so the folded words equal hand16's
-            for x in ref_units(&w.out, w.fx[1..=used].contains(&21)) {
+        3 | 6 => {
+            // the ref's packed ids (in out, or in st for a view) are unpacked to units, so the folded words equal hand16's
+            for x in ref_units(&w.out, &w.st, w.fx[1..=used].contains(&21)) {
                 fold(x);
             }
         }
@@ -934,11 +937,28 @@ impl<'a> FBuf<'a> {
     }
 }
 
+// P18c: current and isHalted take the by-value form (sol::pruv_proven::val, `K` result words returned with the
+// status, no `out` buffer): their bodies inline into the loop, so the result words stay in registers, as hand's
+// `Option<&Budget>` / `bool` result does. attach, reopen and maybeClose keep the `out` twin (fair_out, the P18b
+// shape unchanged): their bodies are calls, so a by-value result would be a zeroed stack array passed by pointer
+// (measured slower, Appendix P18c). K: current 3 ([4, n, off] on a hit), isHalted 1.
+const K_CURRENT: usize = 3;
+const K_HALTED: usize = 1;
+
 #[inline(always)]
-fn fair_one<const C: i64>(b: &mut FBuf, a: &FArgs) -> i64 {
+fn fair_val<const C: i64, const K: usize>(b: &mut FBuf, a: &FArgs) -> (i64, [i64; K]) {
+    let (r, o) = match C {
+        1 => sol::pruv_proven::val::c_current::<K>(b.st, black_box(a.sk), a.sn, black_box(a.bk), a.bn),
+        2 => sol::pruv_proven::val::c_is_halted::<K>(b.st, black_box(a.sk), a.sn, black_box(a.bk), a.bn),
+        _ => unreachable!(),
+    };
+    black_box((r, o));
+    (r, o)
+}
+
+#[inline(always)]
+fn fair_out<const C: i64>(b: &mut FBuf, a: &FArgs) -> i64 {
     let r = match C {
-        1 => sol::pruv_proven::c_current(b.st, black_box(a.sk), a.sn, black_box(a.bk), a.bn, b.out),
-        2 => sol::pruv_proven::c_is_halted(b.st, black_box(a.sk), a.sn, black_box(a.bk), a.bn, b.out),
         3 => {
             b.fx.get_mut()[0] = 0;
             sol::pruv_proven::c_attach(b.st, black_box(a.sk), a.sn, a.origin, a.size, a.unit, black_box(a.uk), a.un, a.now, b.fx, b.out)
@@ -963,37 +983,39 @@ fn fair_one<const C: i64>(b: &mut FBuf, a: &FArgs) -> i64 {
 fn fair_loop(item: &str, w: &mut World, a: &[FArgs], n: usize) {
     let b = &mut FBuf::of(w);
     match item {
-        "ishalted" => for _ in 0..n { fair_one::<2>(b, &a[0]); },
-        "current" => for _ in 0..n { fair_one::<1>(b, &a[0]); },
-        "attach" => for _ in 0..n { fair_one::<3>(b, &a[0]); },
-        "reopenmiss" => for _ in 0..n { fair_one::<5>(b, &a[0]); },
+        "ishalted" => for _ in 0..n { fair_val::<2, K_HALTED>(b, &a[0]); },
+        "current" => for _ in 0..n { fair_val::<1, K_CURRENT>(b, &a[0]); },
+        "attach" => for _ in 0..n { fair_out::<3>(b, &a[0]); },
+        "reopenmiss" => for _ in 0..n { fair_out::<5>(b, &a[0]); },
         "closereopen" => for _ in 0..n {
-            fair_one::<6>(b, &a[0]);
-            fair_one::<5>(b, &a[1]);
+            fair_out::<6>(b, &a[0]);
+            fair_out::<5>(b, &a[1]);
         },
         _ => unreachable!("fair lane item {}", item),
     }
 }
 
-// Untimed check of the fair lane: the same fair_one calls on a fresh setup, every call folded by rchk_fold (must equal
-// rchk / rchk_t and hand16's rchk); a Grow answer would be a harness error here.
+// Untimed check of the fair lane: the same fair_val / fair_out calls on a fresh setup, every call folded by rchk_fold (must equal
+// rchk / rchk_t and hand16's rchk); a Grow answer would be a harness error here. The by-value words are put in
+// w.out[..K] first (the `out` cells pass none: theirs are already there), so rchk_fold reads the by-value result.
 fn fair_rchk(item: &str, w: &mut World, a: &[FArgs], n: usize) -> u64 {
     let mut s = 0u64;
-    let mut fold = |w: &World, r: i64| {
+    let mut fold = |w: &mut World, r: i64, o: &[i64]| {
         assert!(r >= 0, "fair lane: {} answered {}", item, r);
+        w.out[..o.len()].copy_from_slice(o);
         s = rchk_fold(w, r, s);
     };
     for _ in 0..n {
         match item {
-            "ishalted" => { let r = fair_one::<2>(&mut FBuf::of(w), &a[0]); fold(w, r) }
-            "current" => { let r = fair_one::<1>(&mut FBuf::of(w), &a[0]); fold(w, r) }
-            "attach" => { let r = fair_one::<3>(&mut FBuf::of(w), &a[0]); fold(w, r) }
-            "reopenmiss" => { let r = fair_one::<5>(&mut FBuf::of(w), &a[0]); fold(w, r) }
+            "ishalted" => { let (r, o) = fair_val::<2, K_HALTED>(&mut FBuf::of(w), &a[0]); fold(w, r, &o) }
+            "current" => { let (r, o) = fair_val::<1, K_CURRENT>(&mut FBuf::of(w), &a[0]); fold(w, r, &o) }
+            "attach" => { let r = fair_out::<3>(&mut FBuf::of(w), &a[0]); fold(w, r, &[]) }
+            "reopenmiss" => { let r = fair_out::<5>(&mut FBuf::of(w), &a[0]); fold(w, r, &[]) }
             "closereopen" => {
-                let r = fair_one::<6>(&mut FBuf::of(w), &a[0]);
-                fold(w, r);
-                let r = fair_one::<5>(&mut FBuf::of(w), &a[1]);
-                fold(w, r)
+                let r = fair_out::<6>(&mut FBuf::of(w), &a[0]);
+                fold(w, r, &[]);
+                let r = fair_out::<5>(&mut FBuf::of(w), &a[1]);
+                fold(w, r, &[])
             }
             _ => unreachable!(),
         }
@@ -1037,11 +1059,16 @@ fn consume(w: &World, r: i64, sum: u64) -> u64 {
                 fold(*x);
             }
         }
-        3 => {
+        3 | 6 => {
             let used = w.fx[0].max(0) as usize;
-            // packed ref words: [3, n, words(n) id words (, m, words(m) old id words)]
-            let k = ref_len(&w.out, w.fx[1..=used].contains(&21));
-            for x in &w.out[..k] {
+            // packed ref words: [3, n, words(n) id words (, m, words(m) old id words)]; a ref view [6, n, off] stands for
+            // [3, n, st[off..off+words(n))] (never carried)
+            let view = w.out[0] == 6;
+            let k = if view { 2 + words(w.out[1]) } else { ref_len(&w.out, w.fx[1..=used].contains(&21)) };
+            let (src, at) = if view { (&w.st[..], w.out[2].max(0) as usize) } else { (&w.out[..], 2) };
+            fold(3);
+            fold(w.out[1]);
+            for x in &src[at..at + k - 2] {
                 fold(*x);
             }
         }

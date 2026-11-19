@@ -1,15 +1,17 @@
 """Run all regression tests.
-python tests/run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4b_frontend|g4b_proof|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_async_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof|l3_frontend|l3_proof|l3_abi|spec_trace|check_generated|shim_edges]
+python tests/run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4b_frontend|g4b_proof|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_async_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof|l3_frontend|l3_proof|l3_abi|spec_trace|vacuity|check_generated|shim_edges]
                         [--backend rust|llvm|both]
 
 group l3_abi (backend null rows): tests/l3/abi/check_raw_entries.py WORK --rs|--py PATH checks manifest
 raw_entries ("crate" / "unsafe"): text facts, rustc visibility / unsafe / privacy errors, panic poisoning of
 pruv_raw::PruvStore. The l3_p09_* roots are ordinary must_reject rows. Row l3_abi/c_handle (L3 P10):
 tests/l3/abi/check_c_handle.py WORK --rs|--py PATH checks raw_entries "c" (pruv_c text, rs == py, C probe c_probe.c).
-Row l3_abi/proven_entries (L3 P18b) compares --proven-entries output and runs optimized Rust host probes.
+Row l3_abi/proven_entries (L3 P18b/P18c) compares --proven-entries output and runs optimized Rust host probes.
 
 group spec_trace (T1; one backend null row): tests/spec_trace.py --only-py|--only-rs --py|--rs PATH checks that
 every SPEC.md rule ID has passing accept/reject tests under tests/spec and every diagnostic code is in the SPEC.md table.
+
+group vacuity (one backend null row): tests/vacuity/run.py checks reachability and old() with the selected compiler.
 
 group check_generated (one backend null row): tests/check_generated.py fails when a generated shared-table file
 (pruvc-rs/crates/pruv-core/src/shared_tables.rs, from pruvc/data/*.json by tools/gen_shared.py) is stale.
@@ -573,6 +575,19 @@ def spec_trace_jobs():
                   "mode": "trace", "group": "spec_trace"})]
 
 
+def vacuity_jobs():
+    """Run the vacuity cases with this run's compiler, one row; backend null."""
+    def vacuity_checks():
+        drv = _driver()
+        c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/vacuity/run.py"),
+                            "--compiler", drv.kind, "--compiler-path", drv.path],
+                           capture_output=True, text=True, timeout=1800)
+        return c.returncode == 0, c.stdout + c.stderr
+    return [safe("vacuity/cases", vacuity_checks,
+                 {"sample": "tests/vacuity/run.py", "backend": None, "flags": [],
+                  "mode": "vacuity", "group": "vacuity"})]
+
+
 def check_generated_jobs():
     """tests/check_generated.py: generated shared tables are up to date; one row; backend null."""
     def generated_checks():
@@ -636,13 +651,40 @@ def g4_proof_jobs():
 
 
 def g3_proof_jobs():
-    """G3 A2: tests/g3/proof/*.pruv must type-check and verify completely. The code generators still reject
-    generics (unsupported_type), so these run through tests/g3/verify_only.py (Python verifier, no code
-    generation) in their own process; the compiler under test (--compiler) is not involved."""
+    """G3 A2: tests/g3/proof/*.pruv must type-check and verify completely. Rust compiles generics, so
+    it runs a normal compile with verification enabled. Python runs tests/g3/verify_only.py because
+    its code generator rejects generics."""
     jobs = []
     script = os.path.join(ROOT, "tests/g3/verify_only.py")
     for f in sorted(glob.glob(os.path.join(ROOT, "tests/g3/proof/*.pruv"))):
         name = "g3_proof/" + os.path.basename(f)
+
+        if _driver().kind == "rs":
+            def verify(f=f):
+                from spec_trace import diags_of
+
+                drv = _driver()
+                basename = os.path.splitext(os.path.basename(f))[0]
+                out = os.path.join(WORK, "g3_" + basename + ".rs")
+                try:
+                    c = drv.run(drv.argv(f, out, [], "rust"), timeout=300)
+                except subprocess.TimeoutExpired:
+                    raise
+                except Exception as e:
+                    return False, "other: %r" % e
+                if c.timed_out:
+                    return False, "timeout: " + (c.stdout + c.stderr)[-600:]
+                if c.returncode == 0:
+                    return True, ""
+                cls = "false_reject" if c.returncode == 1 and any(
+                    "stage" in d for d in diags_of(c.stdout + "\n" + c.stderr)) else "other"
+                return False, "%s: exit %d (expected 0) %s" % (cls, c.returncode, (c.stdout + c.stderr)[-600:])
+
+            # Same row as the py side: the rows file is shared by both compilers and the row means "this sample
+            # proves"; how each compiler checks it (full compile here, verify_only.py on py) is not part of the key.
+            jobs.append(safe(name, verify, {"sample": rel_sample(f), "backend": None, "flags": [], "mode": "verify_only",
+                                             "group": "g3_proof"}))
+            continue
 
         def fn(f=f):
             c = subprocess.run([CD.pinned_python(), script, f], capture_output=True, text=True, timeout=300)
@@ -1511,7 +1553,7 @@ def runtime_jobs(backend):
     return jobs
 
 
-USAGE = ("usage: run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4b_frontend|g4b_proof|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_async_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof|l3_frontend|l3_proof|l3_abi|spec_trace|check_generated|codegen_boundaries|shim_edges] [--backend rust|llvm|both] "
+USAGE = ("usage: run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4b_frontend|g4b_proof|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_async_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof|l3_frontend|l3_proof|l3_abi|spec_trace|vacuity|check_generated|codegen_boundaries|shim_edges] [--backend rust|llvm|both] "
          "[--sample-prefix PATH] [--compiler py|rs] [--compiler-path PATH] [--ir-tool PATH] [--list-rows [FILE]] [--compare-rows FILE]")
 
 
@@ -1604,7 +1646,7 @@ def main():
         i = sys.argv.index("--only")
         only = sys.argv[i + 1] if i + 1 < len(sys.argv) else None
         if only not in ("must_reject", "examples", "runtime", "g3_proof", "g6_frontend", "g6_proof", "g9_frontend",
-                        "g9_proof", "g4_frontend", "g4b_frontend", "g4b_proof", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_async_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "g8_proof", "l3_frontend", "l3_proof", "l3_abi", "spec_trace", "check_generated", "codegen_boundaries", "shim_edges"):
+                        "g9_proof", "g4_frontend", "g4b_frontend", "g4b_proof", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_async_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "g8_proof", "l3_frontend", "l3_proof", "l3_abi", "spec_trace", "vacuity", "check_generated", "codegen_boundaries", "shim_edges"):
             print(USAGE)
             return 2
     backend = "rust"
@@ -1641,6 +1683,8 @@ def main():
             jobs += l3_abi_jobs()
         if only in (None, "spec_trace"):
             jobs += spec_trace_jobs()
+        if only in (None, "vacuity"):
+            jobs += vacuity_jobs()
         if only in (None, "check_generated"):
             jobs += check_generated_jobs()
         if only in (None, "codegen_boundaries"):
@@ -1733,7 +1777,7 @@ def main():
         # scope comes from the arguments (--only/--backend), not from the rows that actually ran
         scope = set()
         null_backend = ("must_reject", "g3_proof", "g6_frontend", "g6_proof", "g9_frontend", "g9_proof", "g4_frontend",
-                        "g4b_frontend", "g4b_proof", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_async_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "l3_frontend", "l3_proof", "l3_abi", "spec_trace", "check_generated", "codegen_boundaries", "shim_edges")
+                        "g4b_frontend", "g4b_proof", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_async_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "l3_frontend", "l3_proof", "l3_abi", "spec_trace", "vacuity", "check_generated", "codegen_boundaries", "shim_edges")
         for g in null_backend + ("examples", "runtime", "g8_proof"):
             if only in (None, g):
                 # g8_proof always runs both backends (whatever --backend says) plus one backend-free bundle row.
