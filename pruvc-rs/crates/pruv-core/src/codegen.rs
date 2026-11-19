@@ -13,7 +13,7 @@ use crate::emit_common::{
 use crate::foreign::{catalog_fn, is_catalog};
 use crate::foreign_codegen::ForeignGen;
 use crate::gtype::{is_g3_key, key_is_collection, mk_option, GType};
-use crate::inline_policy::inline_policy;
+use crate::inline_policy::{inline_policy, PIN_ALWAYS, PIN_INLINE};
 use crate::pyrepr::repr_str;
 use crate::typeinfo::{array_elem_name, is_array_name, uses_array_type, uses_str, TypeTable};
 use std::collections::{HashMap, HashSet};
@@ -1481,6 +1481,18 @@ impl<'a> Gen<'a> {
             || (self.g5 && f.params.iter().any(|p| p.mode_pos.is_some())) // G5: no public API for a mutable borrow
     }
 
+    fn emit_inline(&mut self, f: &Function) {
+        match f.attribute {
+            Some(FnAttribute::Cold) => {
+                self.emit(0, "#[cold]");
+                self.emit(0, "#[inline(never)]");
+            }
+            Some(FnAttribute::Inline) => self.emit(0, PIN_INLINE),
+            Some(FnAttribute::InlineAlways) => self.emit(0, PIN_ALWAYS),
+            None => self.emit(0, "#[inline]"),
+        }
+    }
+
     fn emit(&mut self, ind: usize, line: &str) {
         self.out.push(format!("{}{}", "    ".repeat(ind), line));
     }
@@ -1707,13 +1719,7 @@ impl<'a> Gen<'a> {
         self.emit(0, allow);
         // Inline hint on every function body: without it rustc keeps the generated call chains as real calls.
         // inline_policy raises it to #[inline(always)] where the measured policy says so.
-        if f.cold {
-            // P13k: `#[cold] fn` is never an inline candidate (inline_policy only rewrites exact `#[inline]` lines)
-            self.emit(0, "#[cold]");
-            self.emit(0, "#[inline(never)]");
-        } else {
-            self.emit(0, "#[inline]");
-        }
+        self.emit_inline(f);
         self.emit(0, &format!("{}fn {}({}){} {{", vis, body_name, ps, ret));
         self.cost = !self.verified && f.cost.is_some();
         if self.cost {
@@ -1897,12 +1903,7 @@ impl<'a> Gen<'a> {
         let checked = checked.unwrap_or(!self.trust);
         let allow = self.allow;
         self.emit(0, allow);
-        if f.cold {
-            self.emit(0, "#[cold]");
-            self.emit(0, "#[inline(never)]");
-        } else {
-            self.emit(0, "#[inline]");
-        }
+        self.emit_inline(f);
         let vis = if is_pub { self.pub_vis() } else { "" };
         let header = format!("{vis}fn {name}({ps}){ret} {{");
         self.emit(0, &header);
@@ -4736,6 +4737,7 @@ impl ProvenEntry {
 
 fn proven_module(text: &str, items: &[ProvenEntry], allow: &str) -> String {
     let lines: Vec<&str> = text.split('\n').collect();
+    // The policy pass has already normalized explicit inline directives.
     let mut attrs: HashMap<&str, Vec<&str>> = lines.windows(2)
         .filter(|w| matches!(w[0], "#[inline]" | "#[inline(always)]"))
         .map(|w| (w[1], vec![w[0]]))
@@ -5061,7 +5063,7 @@ mod tests {
             ret_refine: None,
             tparams: vec![],
             foreign: None,
-            cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, cold: false,
+            cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, attribute: None,
         };
         Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None, pkg_name: None }
     }
@@ -5112,7 +5114,7 @@ mod tests {
             ret_refine: None,
             tparams: vec![],
             foreign: None,
-            cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, cold: false,
+            cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, attribute: None,
         };
         Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None, pkg_name: None }
     }
@@ -5172,7 +5174,7 @@ mod tests {
             foreign: None,
             cost: None,
             decreases: None,
-            small_bound: None, x_auto: None, opaque: false, cold: false,
+            small_bound: None, x_auto: None, opaque: false, attribute: None,
         }
     }
 

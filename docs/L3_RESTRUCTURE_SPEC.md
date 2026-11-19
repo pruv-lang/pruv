@@ -428,7 +428,7 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P30 | New B/bud_decide.pruv: raise | P Q5+H, synchronous reached queries, limits/R; new M10b coverage. |
 | P31 | Same: decide extend/end | P Q5+I, releaseHeld at reached position, save/refresh/wake and atomic bounds. |
 | P32 | B/host.rs,roots/bindings,bud_test_abi.pruv,m34/m5–m11 shims | P split per operation/narrow family; direct/adapter grid, malformed admission, one decision engine. |
-| P33 | Both codegens/hot contracts: residual L4/L5 only | C inline attribute/size heuristic and local proof gates; P touched families, M11 compile CPU/binary size and parity. |
+| P33 | Both codegens/hot contracts: residual L4/L5 only | C inline attribute/size heuristic and local proof gates; P touched families, M11 compile CPU/binary size and parity. Partly done in P13i2a: `#[inline(always)]` and `#[inline]` fn attributes (explicit directive over R-7-3 promotion); size heuristic/local proof gates still open. |
 | P34 | One measured §4 opportunity per subpackage | P touched families/collisions and raw/admitted complete operations; saving ledger, same-structure hand (ii), assembly evidence for any proof win. |
 | P35 | B/compare.py,check_oracle.py,future judge,notes | P focused KD/final-observation checks; missing/unsupported paths remain open; full grid inventory ready. |
 | P36 | Whole-batch results after §7 | Full Q four pairs ×2000 where generated, existing fixture suites, all final grids and selected stage-two targets; every cell <=1.0, req gate and LLVM complete. |

@@ -426,7 +426,7 @@ class _Mono:
             new.cost = self.cp(f.cost)
         new.small_bound = declared_bound(f)
         new.private = private
-        new.cold = f.cold  # P13k: specialisations keep `#[cold]`
+        new.attribute = f.attribute
         new.file = f.file  # explicit mode: later codegen diagnostics keep the source file (Rust: the tagged line)
         if f.foreign is not None:
             new.foreign = f.foreign

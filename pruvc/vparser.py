@@ -122,11 +122,15 @@ _G4_PUB_AHEAD = re.compile(_G4_SKIP + r"(?:fn|struct|enum|mod|pub|trusted|rust|o
 _G4_CRATE_AHEAD = re.compile(_G4_SKIP + r"::")
 
 
-def _cold_end(toks):
-    """P13k: the previous three tokens are `#[` `cold` `]` (the `]` that closes a `#[cold]` attribute)"""
-    return (len(toks) >= 3 and toks[-1].kind == "op" and toks[-1].val == "]"
-            and toks[-2].kind == "id" and toks[-2].val == "cold"
-            and toks[-3].kind == "op" and toks[-3].val == "#[")
+def _attribute_end(toks):
+    if not toks or toks[-1].kind != "op" or toks[-1].val != "]":
+        return False
+    short = tuple((t.kind, t.val) for t in toks[-3:])
+    if short in ((("op", "#["), ("id", "cold"), ("op", "]")),
+                 (("op", "#["), ("id", "inline"), ("op", "]"))):
+        return True
+    return tuple((t.kind, t.val) for t in toks[-6:]) == (
+        ("op", "#["), ("id", "inline"), ("op", "("), ("id", "always"), ("op", ")"), ("op", "]"))
 
 
 def _g4_token(word, src, end, toks, depth):
@@ -139,7 +143,7 @@ def _g4_token(word, src, end, toks, depth):
     if depth != 0:
         return False
     start = (prev is None or (prev.kind == "op" and prev.val in ("}", ";")) or (prev.kind == "kw" and prev.val == "pub")
-             or _cold_end(toks))
+             or _attribute_end(toks))
     if not start:
         return False
     if word == "mod":
@@ -194,13 +198,13 @@ def lex(src, toks=None):
                 # a lone `|` outside a type position stays the lexical error it always was
                 raise PruvError("parse", line, col, "bad_char", "unexpected character %r" % v, "remove it")
             if v == "#[":
-                # P13k: an attribute may only start a top-level item (first token, after `}` / `;`, or after `#[cold]`)
+                # An attribute must start a top-level item. Let the parser reject stacked attributes.
                 prev = toks[-1] if toks else None
                 if not (depth == 0 and (prev is None or (prev.kind == "op" and prev.val in ("}", ";"))
-                                        or _cold_end(toks))):
+                                        or _attribute_end(toks))):
                     raise PruvError("parse", line, col, "attribute_position",
-                                    "#[cold] must be followed by a private fn item",
-                                    "put #[cold] directly before `fn` (not pub, opaque, trusted rust fn, struct, enum or mod)")
+                                    "a function attribute must be followed by a private fn item",
+                                    "put one attribute directly before a private fn")
             if v == "{":
                 depth += 1
             elif v == "}" and depth > 0:
@@ -254,18 +258,26 @@ class Parser:
         p.mods = []
         while s.peek().kind != "eof":
             pub = None
-            cold = None
-            if s.at("#["):                # P13k: the only attribute is `#[cold]`, directly before a private `fn`
-                cold = s.next()
-                if not (s.peek().kind == "id" and s.peek().val == "cold" and s.at("]", 1)):
-                    raise PruvError("parse", cold.line, cold.col, "unknown_attribute",
-                                    "unknown attribute; the only function attribute is #[cold]",
-                                    "remove the attribute or write #[cold]")
-                s.next(); s.next()
+            attribute = None
+            if s.at("#["):
+                tok = s.next()
+                name = s.peek()
+                if name.kind == "id" and name.val in ("cold", "inline") and s.at("]", 1):
+                    attribute = name.val
+                    s.i += 2
+                elif (name.kind == "id" and name.val == "inline" and s.at("(", 1)
+                      and s.peek(2).kind == "id" and s.peek(2).val == "always"
+                      and s.at(")", 3) and s.at("]", 4)):
+                    attribute = "inline(always)"
+                    s.i += 5
+                else:
+                    raise PruvError("parse", tok.line, tok.col, "unknown_attribute",
+                                    "unknown function attribute",
+                                    "use #[cold], #[inline] or #[inline(always)]")
                 if not s.at("fn"):
-                    raise PruvError("parse", cold.line, cold.col, "attribute_position",
-                                    "#[cold] must be followed by a private fn item",
-                                    "put #[cold] directly before `fn` (not pub, opaque, trusted rust fn, struct, enum or mod)")
+                    raise PruvError("parse", tok.line, tok.col, "attribute_position",
+                                    "a function attribute must be followed by a private fn item",
+                                    "put one attribute directly before a private fn")
             if s.at("pub"):               # G4: visibility of the next item
                 pub = s.next()
                 if s.at("pub"):
@@ -309,7 +321,7 @@ class Parser:
             else:
                 f = s.function()
                 f.pub = pub is not None
-                f.cold = cold is not None
+                f.attribute = attribute
                 p.functions.append(f)
                 p.items.append(f)
             if pub is not None:

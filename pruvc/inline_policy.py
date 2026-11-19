@@ -11,6 +11,11 @@ INLINE_SMALL = _INLINE["INLINE_SMALL"]
 INLINE_BUDGET = _INLINE["INLINE_BUDGET"]
 
 
+# Private codegen markers consumed before the Rust text is returned.
+PIN_INLINE = "#[inline] // pruv: explicit"
+PIN_ALWAYS = "#[inline(always)] // pruv: explicit"
+
+
 def _ident_byte(c):
     return 48 <= c <= 57 or 65 <= c <= 90 or 97 <= c <= 122 or c == 95
 
@@ -37,9 +42,15 @@ def _calls(text, names):
 
 def inline_policy(text):
     lines = text.split("\n")
-    fns = []    # (attribute line, name, size, body text)
+    fns = []    # (attribute line, name, size, body text, pinned always)
     for i in range(len(lines) - 1):
-        if lines[i] != "#[inline]":
+        if lines[i] == PIN_INLINE:
+            lines[i] = "#[inline]"
+            continue
+        pinned = lines[i] == PIN_ALWAYS
+        if pinned:
+            lines[i] = "#[inline(always)]"
+        elif lines[i] != "#[inline]":
             continue
         h = lines[i + 1]
         p = 4 if h.startswith("pub fn ") else (11 if h.startswith("pub(crate) fn ") else 0)   # P09: pub(crate)
@@ -51,16 +62,16 @@ def inline_policy(text):
         if e == p + 3 or e >= len(h) or h[e] != "(":
             continue
         if h.endswith("}") and h.count("{") == h.count("}"):
-            fns.append((i, h[p + 3:e], 1, h))
+            fns.append((i, h[p + 3:e], 1, h, pinned))
             continue
         end = i + 2
         while end < len(lines) and lines[end] != "}":
             end += 1
         if end == len(lines):
             continue
-        fns.append((i, h[p + 3:e], max(end - i - 2, 1), "\n".join(lines[i + 2:end])))
+        fns.append((i, h[p + 3:e], max(end - i - 2, 1), "\n".join(lines[i + 2:end]), pinned))
     if not fns:
-        return text
+        return "\n".join(lines)
     index = {}
     for k, f in enumerate(fns):
         index.setdefault(f[1], k)
@@ -70,7 +81,7 @@ def inline_policy(text):
         got = _calls(f[3], index)
         edges.append(sorted((index[m], c) for m, c in got.items()))
     nf = len(fns)
-    # recursive: the fn reaches itself through its calls (direct or mutual); it never gets always and adds nothing
+    # Recursive automatic candidates add nothing. Explicit always still contributes its finite size.
     rec = [False] * nf
     for v in range(nf):
         seen = [False] * nf
@@ -83,12 +94,16 @@ def inline_policy(text):
             if not seen[w]:
                 seen[w] = True
                 todo.extend(x for x, _ in edges[w])
-    # the non-recursive fns form a DAG: incl / always in post-order (iterative, call chains can be deep)
-    done = [False] * nf
+    # Cut edges between recursive functions so pinned recursion has a finite inclusive size.
+    for v in range(nf):
+        if rec[v]:
+            edges[v] = [(w, c) for w, c in edges[v] if not rec[w]]
+    # Evaluate the remaining DAG in post-order (iterative, call chains can be deep).
+    done = [rec[v] and not fns[v][4] for v in range(nf)]
     incl = [0] * nf
     always = [False] * nf
     for root in range(nf):
-        if rec[root] or done[root]:
+        if done[root]:
             continue
         stack = [(root, 0)]
         while stack:
@@ -96,7 +111,7 @@ def inline_policy(text):
             if k < len(edges[v]):
                 stack[-1] = (v, k + 1)
                 w = edges[v][k][0]
-                if not rec[w] and not done[w]:
+                if not done[w]:
                     stack.append((w, 0))
                 continue
             stack.pop()
@@ -106,8 +121,11 @@ def inline_policy(text):
                 if always[w]:
                     tot += c * incl[w]
             incl[v] = tot
-            calls = sites.get(fns[v][1], 0)
-            always[v] = tot <= INLINE_SMALL or calls <= 1 or tot * (calls - 1) <= INLINE_BUDGET
+            if fns[v][4]:
+                always[v] = True
+            else:
+                calls = sites.get(fns[v][1], 0)
+                always[v] = tot <= INLINE_SMALL or calls <= 1 or tot * (calls - 1) <= INLINE_BUDGET
     for v, f in enumerate(fns):
         if always[v]:
             lines[f[0]] = "#[inline(always)]"

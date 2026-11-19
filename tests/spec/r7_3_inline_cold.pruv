@@ -1,0 +1,4 @@
+// spec: R-7-3 reject
+// Only one directive is permitted.
+#[cold] #[inline(always)]
+fn f() -> i64 { return 1; }

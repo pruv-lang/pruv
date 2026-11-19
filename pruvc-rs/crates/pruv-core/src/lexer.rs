@@ -125,16 +125,23 @@ fn g4_skip(src: &[char], mut p: usize) -> usize {
     p
 }
 
-/// True when the last three tokens are `#[` `cold` `]` (the `]` closing a `#[cold]` attribute starts an item).
-fn cold_attr_close(toks: &[Tok]) -> bool {
-    let n = toks.len();
-    n >= 3
-        && toks[n - 3].kind == Kind::Op
-        && toks[n - 3].val == "#["
-        && toks[n - 2].kind == Kind::Id
-        && toks[n - 2].val == "cold"
-        && toks[n - 1].kind == Kind::Op
-        && toks[n - 1].val == "]"
+/// A recognized attribute's closing bracket starts an item.
+fn attribute_close(toks: &[Tok]) -> bool {
+    match toks {
+        [.., open, name, close]
+            if open.kind == Kind::Op && open.val == "#["
+                && name.kind == Kind::Id && matches!(name.val.as_str(), "cold" | "inline")
+                && close.kind == Kind::Op && close.val == "]" => true,
+        [.., open, name, arg_open, arg, arg_close, close] => {
+            open.kind == Kind::Op && open.val == "#["
+                && name.kind == Kind::Id && name.val == "inline"
+                && arg_open.kind == Kind::Op && arg_open.val == "("
+                && arg.kind == Kind::Id && arg.val == "always"
+                && arg_close.kind == Kind::Op && arg_close.val == ")"
+                && close.kind == Kind::Op && close.val == "]"
+        }
+        _ => false,
+    }
 }
 
 /// G4 A0 (vparser.py `_g4_token`): `mod`, `pub` and `crate` are Rust keywords (reserved names) but also contextual module
@@ -165,7 +172,7 @@ fn g4_token(word: &str, src: &[char], end: usize, toks: &[Tok], depth: usize) ->
         Some(p) => {
             (p.kind == Kind::Op && matches!(p.val.as_str(), "}" | ";"))
                 || (p.kind == Kind::Kw && p.val == "pub")
-                || cold_attr_close(toks)
+                || attribute_close(toks)
         }
     };
     if !start {
@@ -333,11 +340,11 @@ pub fn lex_into(src: &[char], tag: usize, toks: &mut Vec<Tok>) -> Result<(), Pru
                 return Err(PruvError::new("parse", line, col, "bad_char", format!("unexpected character {}", repr_str("|")), "remove it"));
             }
             if op == "#[" {
-                // P13k: an attribute may only start a top-level item (first token, after `}` / `;`, or after `#[cold]`)
+                // An attribute must start a top-level item. Let the parser reject stacked attributes.
                 let ok = brace_depth == 0
                     && match toks.last() {
                         None => true,
-                        Some(p) => (p.kind == Kind::Op && matches!(p.val.as_str(), "}" | ";")) || cold_attr_close(&toks),
+                        Some(p) => (p.kind == Kind::Op && matches!(p.val.as_str(), "}" | ";")) || attribute_close(&toks),
                     };
                 if !ok {
                     return Err(PruvError::new(
@@ -345,8 +352,8 @@ pub fn lex_into(src: &[char], tag: usize, toks: &mut Vec<Tok>) -> Result<(), Pru
                         line,
                         col,
                         "attribute_position",
-                        "#[cold] must be followed by a private fn item",
-                        "put #[cold] directly before `fn` (not pub, opaque, trusted rust fn, struct, enum or mod)",
+                        "a function attribute must be followed by a private fn item",
+                        "put one attribute directly before a private fn",
                     ));
                 }
             }

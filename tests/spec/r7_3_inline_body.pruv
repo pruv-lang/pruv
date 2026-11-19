@@ -1,0 +1,6 @@
+// spec: R-7-3 reject
+// Directives mark function items.
+fn f() -> i64 {
+    #[inline]
+    return 1;
+}

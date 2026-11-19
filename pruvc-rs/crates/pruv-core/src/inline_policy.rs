@@ -6,6 +6,10 @@
 use crate::shared_tables::inline_policy::{INLINE_BUDGET, INLINE_SMALL}; // shared with pruvc (pruvc/data/inline_policy.json, tools/gen_shared.py)
 use std::collections::{BTreeMap, HashMap};
 
+// Private codegen markers consumed before the Rust text is returned.
+pub(crate) const PIN_INLINE: &str = "#[inline] // pruv: explicit";
+pub(crate) const PIN_ALWAYS: &str = "#[inline(always)] // pruv: explicit";
+
 fn ident_byte(c: u8) -> bool {
     c.is_ascii_alphanumeric() || c == b'_'
 }
@@ -36,10 +40,17 @@ fn inline_calls(text: &str, index: &HashMap<&str, usize>) -> BTreeMap<usize, u64
 
 pub(crate) fn inline_policy(text: String) -> String {
     let mut lines: Vec<&str> = text.split('\n').collect();
-    // (attribute line, name, size, body text)
-    let mut fns: Vec<(usize, &str, u64, String)> = Vec::new();
+    // (attribute line, name, size, body text, pinned always)
+    let mut fns: Vec<(usize, &str, u64, String, bool)> = Vec::new();
     for i in 0..lines.len().saturating_sub(1) {
-        if lines[i] != "#[inline]" {
+        if lines[i] == PIN_INLINE {
+            lines[i] = "#[inline]";
+            continue;
+        }
+        let pinned = lines[i] == PIN_ALWAYS;
+        if pinned {
+            lines[i] = "#[inline(always)]";
+        } else if lines[i] != "#[inline]" {
             continue;
         }
         let h = lines[i + 1];
@@ -63,7 +74,7 @@ pub(crate) fn inline_policy(text: String) -> String {
         }
         let name = &h[p + 3..e];
         if h.ends_with('}') && h.matches('{').count() == h.matches('}').count() {
-            fns.push((i, name, 1, h.to_string()));
+            fns.push((i, name, 1, h.to_string(), pinned));
             continue;
         }
         let mut end = i + 2;
@@ -73,19 +84,19 @@ pub(crate) fn inline_policy(text: String) -> String {
         if end == lines.len() {
             continue;
         }
-        fns.push((i, name, std::cmp::max(end - i - 2, 1) as u64, lines[i + 2..end].join("\n")));
+        fns.push((i, name, std::cmp::max(end - i - 2, 1) as u64, lines[i + 2..end].join("\n"), pinned));
     }
     if fns.is_empty() {
-        return text;
+        return lines.join("\n");
     }
     let mut index: HashMap<&str, usize> = HashMap::new();
     for (k, f) in fns.iter().enumerate() {
         index.entry(f.1).or_insert(k);
     }
     let sites = inline_calls(&text, &index);
-    let edges: Vec<Vec<(usize, u64)>> = fns.iter().map(|f| inline_calls(&f.3, &index).into_iter().collect()).collect();
+    let mut edges: Vec<Vec<(usize, u64)>> = fns.iter().map(|f| inline_calls(&f.3, &index).into_iter().collect()).collect();
     let nf = fns.len();
-    // recursive: the fn reaches itself through its calls (direct or mutual); it never gets always and adds nothing
+    // Recursive automatic candidates add nothing. Explicit always still contributes its finite size.
     let mut rec = vec![false; nf];
     for v in 0..nf {
         let mut seen = vec![false; nf];
@@ -101,12 +112,18 @@ pub(crate) fn inline_policy(text: String) -> String {
             }
         }
     }
-    // the non-recursive fns form a DAG: incl / always in post-order (iterative, call chains can be deep)
-    let mut done = vec![false; nf];
+    // Cut edges between recursive functions so pinned recursion has a finite inclusive size.
+    for v in 0..nf {
+        if rec[v] {
+            edges[v].retain(|&(w, _)| !rec[w]);
+        }
+    }
+    // Evaluate the remaining DAG in post-order (iterative, call chains can be deep).
+    let mut done: Vec<bool> = (0..nf).map(|v| rec[v] && !fns[v].4).collect();
     let mut incl = vec![0u64; nf];
     let mut always = vec![false; nf];
     for root in 0..nf {
-        if rec[root] || done[root] {
+        if done[root] {
             continue;
         }
         let mut stack: Vec<(usize, usize)> = vec![(root, 0)];
@@ -114,7 +131,7 @@ pub(crate) fn inline_policy(text: String) -> String {
             if k < edges[v].len() {
                 stack.last_mut().unwrap().1 = k + 1;
                 let w = edges[v][k].0;
-                if !rec[w] && !done[w] {
+                if !done[w] {
                     stack.push((w, 0));
                 }
                 continue;
@@ -128,8 +145,12 @@ pub(crate) fn inline_policy(text: String) -> String {
                 }
             }
             incl[v] = tot;
-            let calls = sites.get(&v).copied().unwrap_or(0);
-            always[v] = tot <= INLINE_SMALL || calls <= 1 || tot.saturating_mul(calls - 1) <= INLINE_BUDGET;
+            if fns[v].4 {
+                always[v] = true;
+            } else {
+                let calls = sites.get(&v).copied().unwrap_or(0);
+                always[v] = tot <= INLINE_SMALL || calls <= 1 || tot.saturating_mul(calls - 1) <= INLINE_BUDGET;
+            }
         }
     }
     for (v, f) in fns.iter().enumerate() {
