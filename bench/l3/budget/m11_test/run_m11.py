@@ -15,6 +15,7 @@
 5. --perf: item C (diagnostic, Pruv vs hand only) = B without the stand-in store and out words; item A (validate+build, U = 100/300/1000) and item B (n = 100/500/1000 successive setCard) for Pruv, hand.rs
    and the pinned TS (perf_ts.mjs); items R (alternating cards), H (hasCard), I (setCard + current) for Pruv vs hand.
    Medians of >= 5 alternating runs.
+6. --hdiff: hand.rs vs Pruv setCard on generated cards x scenarios (open / closed / missing / mismatched budget), tallied per error kind.
 Report: work/m11/report.json. Exit 1 on any fail, 2 on a build or driver failure.
 """
 import sys
@@ -22,6 +23,7 @@ sys.dont_write_bytecode = True
 import argparse
 import json
 import os
+import random
 import shutil
 import statistics
 import struct
@@ -35,6 +37,7 @@ WORK = BUDGET / 'work' / 'm11'
 LIB = REPO / 'bench' / 'l3' / 'lib'
 sys.path.insert(0, str(BUDGET))
 from common import NODE, TS_ENV              # noqa: E402
+import common                                # noqa: E402
 import q_gen                                 # noqa: E402
 import oracle                                # noqa: E402
 from compare import jv_decode, jv_encode, UNDEF   # noqa: E402
@@ -545,6 +548,209 @@ def perf(harness, runs):
     return rows
 
 
+# ---- --hdiff: hand.rs vs Pruv on generated cards ----------------------------------------------------------------------------
+def hdiff_items():
+    """[(card, lang, by, scen, label)]: the generated card corpus (scen 0), its closed-budget copies, crafted error cards."""
+    items = []
+
+    def add(card, label, lang=None, by=None):
+        items.append((list(card), list(lang or []), list(by or []), 0, label))
+
+    def card(d='d', done=('x',), **kw):
+        return to_b({'deliverable': d, 'done': list(done), **kw})
+
+    def from_cases(cases, label):
+        for c in cases:
+            for ev in c['script']:
+                if ev.get('ev') == 'call' and ev.get('op') == 'setCard':
+                    a = [jv_decode(x) for x in ev['args']]
+                    if len(a) < 2:
+                        continue
+                    add(to_b(a[1]), label, to_b(a[2]) if len(a) > 2 else [], to_b(a[3]) if len(a) > 3 else [])
+
+    for seed in (20261117, 1, 2, 3):
+        from_cases(q_gen.gen(seed, ['Q6'], count=300), 'Q6')
+    from_cases([common.strip_case(c) for c in common.load_group('K')], 'K')
+
+    ws = [' ', '\t', '\n', '\x0b', '\x0c', '\r', '\xa0', ' ', ' ', ' ', ' ', ' ', ' ', ' ', '　', '﻿', '​', '\u0085']
+    for w in ws:
+        for d in (w + 'a' + w, w * 3, 'a' + w * 2 + 'b', w + '\ud83d' + w):
+            add(card(d), 'trim')
+            add(card('ok', done=[d]), 'trim')
+    for n in (299, 300, 301):
+        for unit in ('a', 'é', '中', '😀', '\ud83d', '\ude00'):
+            s = unit * (n // (2 if unit == '😀' else 1))
+            add(card(s), 'len')
+            add(card(' ' + s + ' '), 'len')
+            add(card(targets={'confirmed': 1, 'candidate': 0, 'unknown': 0, 'note': s}), 'note')
+            add(card(targets={'confirmed': 1, 'candidate': 0, 'unknown': 0, 'note': ' ' + s}), 'note')
+    add(card('😀' * 150 + 'a'), 'len')
+    for head in ('a' * 299, 'a' * 300, 'a' * 301, 'a' * 298 + '\U0001f600', 'a' * 299 + '\U0001f600', '\U0001f600' * 150, '中' * 300, 'a' * 299 + '　'):
+        for tail in ('', ' ' * 5000, '　' * 400 + '﻿', ' ' * 300 + 'b', '　' * 2 + '\U0001f600', ' ' * 3 + '\ud83d'):
+            add(card(head + tail), 'cut')
+            add(card('ok', done=['\t' + head + tail]), 'cut')
+
+    def numcard(bits_list):
+        o = bytearray(card())
+        o[1:5] = struct.pack('>I', 3)
+        o += struct.pack('>I', 7) + b'targets' + bytes([9]) + struct.pack('>I', 3)
+        for k, b in zip(('confirmed', 'candidate', 'unknown'), bits_list):
+            o += struct.pack('>I', len(k)) + k.encode() + bytes([7]) + struct.pack('>Q', b)
+        return o
+
+    def f(x):
+        return struct.unpack('>Q', struct.pack('>d', x))[0]
+
+    inf = float('inf')
+    nums = [0, f(-0.0), f(1.0), f(-1.0), f(0.5), f(2.0 ** 53), f(2.0 ** 53 - 1), f(2.0 ** 53 + 2), f(1e300), f(-1e300), f(inf), f(-inf),
+            0x7ff8000000000000, 0x7ff0000000000001, 0xfff8000000000000, 1, 0x8000000000000001, f(2.0 ** 63), f(-2.0 ** 63),
+            f(4503599627370495.5), f(2.0 ** 52 + 0.5)]
+    for a in nums:
+        for b in (0, a):
+            add(numcard([a, b, 0]), 'num')
+            add(numcard([0, 0, a]), 'num')
+
+    for by in ({'sessionId': 's', 'turnId': 't'}, {'sessionId': 1.5, 'turnId': -0.0}, {'sessionId': 2.0 ** 60, 'turnId': [1, {'a': None}]},
+               {}, '', 'x', 0, -0.0, float('nan'), 1, True, False, None, UNDEF, [], {'turnId': 't', 'sessionId': 's', 'sessionId2': 1}):
+        add(card(), 'by', by=to_b(by))
+        add(card(state='done'), 'by', lang=to_b('en'), by=to_b(by))
+    for lang in ('en', 'ko', 'EN', '', 1, None):
+        add(card(''), 'lang', lang=to_b(lang))
+    for v in ([], [{'label': 'a', 'status': 'done'}] * 5, [{'label': 'a', 'status': 'done'}] * 6, [{'label': ' ', 'status': 'done'}],
+              [{'label': 'a', 'status': 'Done'}], [{'status': 'planned', 'label': 'x', 'extra': 1}], [1], 'x', {}, None):
+        add(card(verify=v), 'verify')
+    for st in ('working', 'done', 'waiting-user', 'blocked', 'closed', '', 1, None, UNDEF):
+        add(card(state=st), 'state')
+    for cf in ([], ['a'] * 5, ['a'] * 6, [' '], [1], 'a', None, UNDEF):
+        add(card(conflicts=cf), 'conflicts')
+    dup = bytearray(to_b({'deliverable': ' ', 'done': ['x']}))
+    dup[1:5] = struct.pack('>I', 3)
+    dup += struct.pack('>I', 11) + b'deliverable' + bytes(to_b('ok'))
+    add(dup, 'dup')
+    add(to_b({'deliverable': UNDEF, 'done': ['x']}), 'undef')
+    add(card(targets=UNDEF, verify=UNDEF), 'undef')
+    add(to_b([1]), 'shape')
+    add(to_b('x'), 'shape')
+    add(to_b(None), 'shape')
+    add([], 'empty')
+    for d in (30, 31, 32, 33):
+        x = 1
+        for _ in range(d - 2):
+            x = [x]
+        add(card(by_extra=x), 'depth')
+        add(card(), 'depth', by=to_b({'sessionId': x, 'turnId': 1}))
+
+    def inj(seq, where):
+        c = bytearray(card('ab', done=['cd'], targets={'confirmed': 1, 'candidate': 0, 'unknown': 0, 'note': 'ef'}))
+        tag = {'d': b'ab', 'l': b'cd', 'n': b'ef'}[where]
+        p = c.index(bytes([6, 0, 0, 0, 2]) + tag) + 5
+        c[p + 1:p + 1] = seq
+        c[p - 4:p] = struct.pack('>I', struct.unpack('>I', c[p - 4:p])[0] + len(seq))
+        return c
+
+    enc = [b'\xc0\x80', b'\xc1\xbf', b'\xe0\x80\x80', b'\xe0\x9f\xbf', b'\xe0\xa0\x80', b'\xed\xa0\x80', b'\xed\xbf\xbf',
+           b'\xed\xa0\x80\xed\xb0\x80', b'\xed\xaf\xbf\xed\xbf\xbf', b'\xed\xb0\x80\xed\xa0\x80', b'\xed\xa0\x80a\xed\xb0\x80',
+           b'\xf0\x80\x80\x80', b'\xf0\x8f\xbf\xbf', b'\xf0\x90\x80\x80', b'\xf4\x8f\xbf\xbf', b'\xf4\x90\x80\x80', b'\xf5\x80\x80\x80',
+           b'\x80', b'\xbf', b'\xc2', b'\xe2\x80', b'\xf0\x9f\x98', b'\xff', b'\xc2\xa0', b'\xef\xbb\xbf']
+    for seq in enc:
+        for wh in 'dln':
+            add(inj(seq, wh), 'enc')
+        add(card(), 'enc', by=bytes([6]) + struct.pack('>I', len(seq)) + seq)
+        add(card(), 'enc', lang=bytes([6]) + struct.pack('>I', len(seq)) + seq)
+
+    rng = random.Random(25)
+    valid = [it for it in items if it[4] in ('Q6', 'K')][:400]
+    bad_utf = [b'\xc0\x80', b'\xe0\x80\x80', b'\xed\xa0\x80\xed\xb0\x80', b'\xf4\x90\x80\x80', b'\xf5', b'\x80', b'\xe2\x80', b'\xf0\x9f\x98']
+    for i in range(3000):
+        c = bytearray(rng.choice(valid)[0])
+        if not c:
+            continue
+        r = rng.random()
+        if r < 0.3:
+            c[rng.randrange(len(c))] = rng.randrange(256)
+        elif r < 0.5:
+            del c[rng.randrange(len(c)):]
+        elif r < 0.6:
+            c += bytes([rng.randrange(256)])
+        else:
+            c = bytearray(card('a' + 'b' * rng.randrange(3)))
+            bad = rng.choice(bad_utf)
+            s0 = 5 + 4 + 11
+            assert c[s0] == 6
+            p = s0 + 5 + rng.randrange(struct.unpack('>I', c[s0 + 1:s0 + 5])[0] + 1)
+            c[p:p] = bad
+            c[s0 + 1:s0 + 5] = struct.pack('>I', struct.unpack('>I', c[s0 + 1:s0 + 5])[0] + len(bad))
+        add(c, 'mut')
+
+    # a) every ported item again against a closed budget
+    items += [(c, l, b, 1, 'closed:' + lab) for (c, l, b, _, lab) in list(items)]
+
+    # b) crafted error cards per kind, crossed with lang and scenario
+    def tg(**kw):
+        return {'confirmed': 1, 'candidate': 0, 'unknown': 0, 'note': '', **kw}
+
+    crafted = [to_b({'deliverable': d, 'done': ['x']}) for d in ('', '   ', 'a' * 301, 5)] + [[]]
+    crafted += [card(done=d) for d in ([], ['x'] * 6, ['a' * 301], [5])]
+    crafted += [card(targets=tg(confirmed=-1)), card(targets=tg(confirmed=0.5)), card(targets=tg(note='n' * 301)),
+                card(targets=tg(candidate='x'))]
+    crafted += [card(verify=[{'label': 'a', 'status': 'done'}] * 6), card(verify=[{'label': '', 'status': 'done'}]),
+                card(verify=[{'label': 'a', 'status': 'x'}])]
+    crafted += [card(conflicts=['a'] * 6), card(conflicts=['a' * 301])]
+    crafted += [card(state=s) for s in ('closed', 'x', 1)]
+    crafted += [card()]
+    for c in crafted:
+        for lang in ('en', 'ko', 'EN', '', 1, None):
+            for scen in range(5):
+                items.append((c, to_b(lang), [], scen, 'kind'))
+        for scen in range(5):
+            items.append((c, [], [], scen, 'kind'))
+    return items
+
+
+def hdiff_pair(k, harness):
+    items = hdiff_items()
+    data = ''.join('hdiff ' + wline(c, l, b, [s]) + '\n' for (c, l, b, s, _) in items)
+    r = sh([harness], data=data)
+    if r.returncode != 0:
+        sys.stderr.write(r.stderr[-2000:])
+        sys.exit(2)
+    outs = r.stdout.splitlines()
+    tally, errs, differ = {}, {}, []
+    for (c, l, b, s, lab), line in zip(items, outs):
+        p = line.split()
+        if p[:2] == ['same', 'err'] and len(p) == 5 and p[4] != str(int(int(p[2]) >= 3)):
+            differ.append(f'{lab} scen={s}: used_now {p[4]} for kind {p[2]}')
+            continue
+        if p[:2] == ['same', 'err'] and len(p) == 5:
+            outcome = f'err {p[2]} en={p[3]} used={p[4]}'
+            cell = errs.setdefault((int(p[2]), int(p[3])), {})
+            cell[p[4]] = cell.get(p[4], 0) + 1
+        elif line == 'same ok':
+            outcome = 'ok'
+        elif line == 'same refused':
+            outcome = 'refused'
+        else:
+            differ.append(f'{lab} scen={s}: {line[:300]}')
+            continue
+        key = f'{lab.split(":")[-1]}|{s}|{outcome}'
+        tally[key] = tally.get(key, 0) + 1
+    bad = bool(differ) or len(outs) != len(items)
+    print(f'[{PAIRS[k]}] hdiff items={len(items)} lines={len(outs)} differ={len(differ)}')
+    for d in differ[:15]:
+        print('  differ', d)
+    print('  kind en | count | used_now values')
+    for kind in range(7):
+        for en in (0, 1):
+            cell = errs.get((kind, en), {})
+            if not cell:
+                bad = True
+            print(f'  {kind}    {en}  | {sum(cell.values()):5} | {dict(sorted(cell.items()))}')
+    (WORK / f'hdiff_{k}.json').write_text(json.dumps(
+        {'items': len(items), 'lines': len(outs), 'differ': len(differ), 'tally': tally,
+         'errors': {f'{kd}|{en}': v for (kd, en), v in sorted(errs.items())}}, indent=1, ensure_ascii=False))
+    return bad
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--pairs', default='py,rs')
@@ -553,6 +759,7 @@ def main():
     ap.add_argument('--perf', action='store_true')
     ap.add_argument('--runs', type=int, default=5)
     ap.add_argument('--no-build', action='store_true')
+    ap.add_argument('--hdiff', action='store_true', help='hand vs Pruv setCard on generated cards x scenarios (no oracle replay)')
     ap.add_argument('--selftest-b', action='store_true', help='check the to_b codec and exit')
     a = ap.parse_args()
     if a.selftest_b:
@@ -565,6 +772,11 @@ def main():
     for k in pairs:
         h = WORK / k / 'harness'
         harness[k] = h if (a.no_build and h.exists()) else build_pair(k, root)
+    if a.hdiff:
+        bad = False
+        for k in pairs:
+            bad = hdiff_pair(k, harness[k]) or bad
+        sys.exit(1 if bad else 0)
     cases = q_gen.gen(a.seed, ['Q6'], count=a.count)
     obs = oracle.run_oracle(cases)
     report = {'seed': a.seed, 'count': len(cases), 'pairs': {}}

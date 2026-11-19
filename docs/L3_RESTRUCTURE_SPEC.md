@@ -4581,7 +4581,8 @@ mutants, perf C), not by a third audit.
 - The stored budget, `ref` and the result are still V words; a JB result/`ref` would remove the boundary `v_end`
   pass (outside the row; P13d/P13e layouts).
 - The hand `Store::set_card` does not build the error text or `used_now`; a hand error path would let hdiff compare
-  them directly instead of the oracle only.
+  them directly instead of the oracle only. Done: the hand error path came with P26 (Appendix P26.1); the hdiff
+  scenarios for kind 0 and the per-kind/language counts are Appendix P25.8a.
 
 ### P25.9 Delegation
 
@@ -5763,3 +5764,101 @@ path (`put_card_words` 16.5 KB, `put_at` 6.8 KB, the entry copy in the closure) 
 `Store::set_card`. `put_card_words0` is a deliberate `p0 = 0` copy that keeps A/C 2-6 % faster (Appendix P26.3), so
 dropping it is not allowed. Allocation counts are unchanged (P26.4). Queued as P26b (`bud_card.pruv` and/or both
 codegens, outside this row's boundary).
+
+## Appendix P25.8a (queued P25.8 item: hand error path in hdiff)
+
+Result: the hand error path already existed (P26, Appendix P26.1: `card_error(kind, en)`, `emit_card_error`), and
+hdiff already compared full error words, but only with one open budget, so kind 0 (no current budget) was never
+reached, and the generator lived in an uncommitted work file. This row moves the generator into `run_m11.py --hdiff`,
+adds the kind 0 scenarios and per-kind checks, and changes only the measurement harness: `harness.rs` and
+`run_m11.py`. `hand.rs`, `root.pruv`, the `.pruv` sources and both compilers are unchanged. No proof meaning changed.
+
+Base: main a9ac433, release `pruvc-rs` built in the worktree, macOS arm64. Work files in `work/p25_8/` (not committed).
+
+### P25.8a.1 Change
+
+- `harness.rs` `hand_diff(card, lang, by, scen)`: both sides load the same budget `s1 -> b1`; `scen` 1 = the found
+  budget is `closed`, 2 = unknown session `s2`, 3 = `ref` budgetId `b2` against `b1`, 4 = no `ref.sessionId` and
+  an empty sid. For scen 1..4 the expected kind is 0; for scen 0 it is the validation kind (or ok). Two calls per
+  card (the second reads the stored budget). Each call compares the whole hand words with the Pruv words, and in
+  addition: the raw Pruv length prefix equals the returned word count (`World::call` clamps it to the buffer), on an
+  error `used_now` equals `kind >= 3` on both sides, `saved`/`changed` are 0 on both sides, and the value is exactly
+  `{ok:false, error:<string>}` with equal UTF-16 units. A malformed packet must be refused by both (Pruv status 2,
+  hand -2). Output: `same err <kind> <en> <used_now>` / `same ok` / `same refused` / `differ ...`. The perf
+  functions are byte-identical to the base.
+- `run_m11.py --hdiff`: the P26 generator ported unchanged (10,711 items at scen 0, checked equal in order and
+  label to `work/p26/p26/hdiff.py`), the same items again at scen 1 (`closed:`), and 770 crafted `kind` items
+  (one card per validation kind plus one valid card, 22 cards, x 7 `lang` inputs `en`/`ko`/`EN`/empty/1/null/absent
+  x scen 0..4). It fails on any differ, an output line-count mismatch, a `used_now` other than `kind >= 3`, or an
+  empty cell in the kind 0..6 x en 0/1 table.
+
+### P25.8a.2 Gates
+
+| gate | rs | py |
+|---|---|---|
+| hdiff | 22,192 items, 22,192 lines, differ 0 | same |
+| Q6 (300, seed 20261117) | exact 213, prefix-ok 87 | same |
+| K | 10/10 exact | 10/10 exact, identical to rs |
+
+hdiff outcomes (rs = py): error 14,540, ok 2,102, entry refusal 5,550. Error cells (kind, en): 0/0 7,104, 0/1
+1,448, 1/0 1,058, 1/1 232, 2/0 2,050, 2/1 455, 3/0 882, 3/1 188, 4/0 346, 4/1 62, 5/0 330, 5/1 69, 6/0 269, 6/1
+47; `used_now` is 0 for kinds 0-2 and 1 for kinds 3-6 in every cell.
+
+Not observable: the result ABI has no kind word, so an internal Pruv kind that differs while the text and flags
+stay the same cannot be seen; each kind has its own text, so any visible change of kind is caught.
+
+### P25.8a.3 Performance (base harness vs this harness, same `pruvc-rs`, 11 alternating runs)
+
+Instructions retired (M, median) are the primary axis; ns medians are in `work/p25_8/tm11b.txt`.
+
+| cell | Pruv base -> new | hand base -> new | Pruv / hand (new) |
+|---|---|---|---|
+| A 100 | 240.48 -> 240.45 | 418.94 -> 418.97 | 0.57 |
+| A 300 | 146.36 -> 146.37 | 281.20 -> 281.16 | 0.52 |
+| A 1000 | 21.99 -> 21.96 | 25.89 -> 25.89 | 0.85 |
+| B 100 | 207.76 -> 207.73 | 371.05 -> 372.50 | 0.56 |
+| B 500 | 205.31 -> 205.27 | 368.71 -> 370.07 | 0.55 |
+| B 1000 | 204.96 -> 204.94 | 368.40 -> 369.77 | 0.55 |
+| C 100 / 1000 | 190.04 / 189.01 -> 190.02 / 188.99 | 294.02 / 291.78 -> 294.02 / 291.81 | 0.65 |
+| R 100 / 1000 | 169.26 / 166.93 -> 169.22 / 166.91 | 319.86 / 317.48 -> 319.87 / 317.44 | 0.53 |
+| H 100 / 1000 | 44.35 / 40.40 -> 44.38 / 40.41 | 57.75 / 53.09 -> 57.76 / 53.05 | 0.77 / 0.76 |
+| I 100 / 1000 | 238.10 / 235.75 -> 238.05 / 235.78 | 404.96 / 402.72 -> 404.95 / 401.28 | 0.59 |
+
+Every Pruv cell stays within 0.05 % of the base. The hand lane is unchanged except B (+0.4 %, hand slower, the
+`HashMap` `RandomState` lane; the first run of the same binaries before the audit fix had B hand 371.05 / 368.67 /
+368.33, equal to base); the hand success path code is unchanged. Every ns median is below hand.
+
+Peak RSS (KiB median (min-max), 11 alternating runs):
+
+| cell | Pruv base | hand base | Pruv new | hand new | Pruv - hand (new) |
+|---|---|---|---|---|---|
+| empty | 1600 | 1600 | 1600 | 1600 | 0 |
+| A 100 | 1792 (1776-1792) | 1728 (1728-1744) | 1776 (1776-1776) | 1744 (1744-1744) | +32, no overlap |
+| A 300 | 1776 (1776-1776) | 1728 (1712-1728) | 1760 (1760-1760) | 1728 (1728-1728) | +32, no overlap |
+| A 1000 | 1744 (1744-1760) | 1744 (1728-1744) | 1744 | 1744 | 0 |
+| B 1000 | 1952 | 1936 (1920-1936) | 1952 | 1952 (1920-1952) | 0 |
+| C 1000 | 1872 | 1872 (1856-1872) | 1872 | 1888 (1872-1888) | -16 |
+| R 100 / 1000 | 1952 / 1952 | 1952 / 1952 | 1952 / 1952 | 1968 / 1968 | -16 |
+| H 100 | 1952 | 1872 | 1952 | 1888 | +64, no overlap |
+| H 1000 | 1952 | 1872 | 1952 | 1888 | +64, no overlap |
+| I 100 / 1000 | 1952 / 1952 | 1936 / 1936 | 1952 / 1952 | 1936 / 1952 | +16 / 0 |
+
+Pruv peak RSS is still above hand on A 100/300 and H (and I 100 by one page, overlapping). These are the P26a code
+page shares (queued P26b), not this change: the larger harness binary moves the layout (Pruv A -16, hand H/R/C
++16), but the cause is not fixed. They stay open under P26b.
+
+### P25.8a.4 Audit and delegation
+
+Audit (Codex gpt-6.2-astra ultra, dfdec104), one round:
+- bug: `World::call` clamps the Pruv length prefix to the buffer, so a too-large prefix could pass as `same`.
+  Fixed: the raw prefix is compared with the returned word count.
+- risk: `used_now == (kind >= 3)` was only checked as hand = Pruv. Fixed: checked in `hand_diff` and in
+  `run_m11.py`.
+- risk: the internal Pruv kind is not in the result ABI (P25.8a.2, not observable). Kept as a note.
+- Port completeness was out of the auditor's file scope; checked here: 10,711 items equal in order and label.
+All gates re-run after the fix (P25.8a.2 numbers are from the re-run).
+
+| id | mode | engine / model | use |
+|---|---|---|---|
+| 65b87ba5 | write | Claude sonnet | `harness.rs` scenarios and `run_m11.py --hdiff` (one candidate, taken in by hand; the whitespace code points and the `enc` loop indentation were corrected after) |
+| dfdec104 | review | Codex gpt-6.2-astra ultra | audit of the hdiff comparison rules |
