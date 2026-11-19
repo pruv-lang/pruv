@@ -8,6 +8,9 @@ from refine import _kids
 
 MAX_BOUND = 64
 STACK_CAP = 4096       # bytes of rewritten buffers per function
+ELEM = {ARRAY: "i64", ARRAY_U8: "u8"}    # result type -> buffer element (P27.5: `[u8]` beside `[i64]`); both need
+                                         # the unnarrowed storage layout ("i64" in StoragePlan terms)
+SIZE = {"i64": 8, "u8": 1}
 
 
 def _conjuncts(e):
@@ -17,8 +20,9 @@ def _conjuncts(e):
 
 
 def declared_bound(f):
-    """K of a top-level `len(result) <= K` conjunct (literal, 1..=64) of a non-generic, non-foreign `[i64]` function"""
-    if f.tparams or f.foreign is not None or f.ret != ARRAY:
+    """K of a top-level `len(result) <= K` conjunct (literal, 1..=64) of a non-generic, non-foreign `[i64]` or `[u8]`
+    function"""
+    if f.tparams or f.foreign is not None or f.ret not in ELEM:
         return None
     best = None
     for e in f.ensures:
@@ -187,8 +191,8 @@ def _cyclic(calls):
 
 
 def plan_small(prog, fmap, layout, stack):
-    """({function name: (K, o)}, {id(Let node): (callee, K)}); layout(node) is the storage layout of a declaration or
-    function result, stack the P3-S1 plan (or None)"""
+    """({function name: (K, o, elem)}, {id(Let node): (callee, K, elem)}); layout(node) is the storage layout of a
+    declaration or function result, stack the P3-S1 plan (or None); elem is the buffer element ("i64" or "u8")"""
     calls = {}
     for f in fmap.values():
         out = set()
@@ -213,7 +217,7 @@ def plan_small(prog, fmap, layout, stack):
 
     fns = {}
     for f in prog.functions:
-        if f.foreign is not None or f.name in fns or fmap.get(f.name) is not f or f.ret != ARRAY or f.name in tainted:
+        if f.foreign is not None or f.name in fns or fmap.get(f.name) is not f or f.ret not in ELEM or f.name in tainted:
             continue
         k = f.small_bound if f.small_bound is not None else declared_bound(f)
         if k is None or not 1 <= k <= MAX_BOUND or not f.body or not isinstance(f.body[-1], Return):
@@ -226,7 +230,8 @@ def plan_small(prog, fmap, layout, stack):
         if len(idx) != 1 or _count(f.body, lambda st: isinstance(st, Let) and st.name == o) != 1:
             continue
         decl = f.body[idx[0]]
-        if not (decl.mutable and decl.type == ARRAY and isinstance(decl.value, Call) and decl.value.name == "alloc"
+        elem = ELEM[f.ret]
+        if not (decl.mutable and decl.type == f.ret and isinstance(decl.value, Call) and decl.value.name == "alloc"
                 and len(decl.value.args) == 2):
             continue
         if _count(f.body, lambda st: isinstance(st, Return)) != 1:
@@ -235,7 +240,7 @@ def plan_small(prog, fmap, layout, stack):
             continue
         if not _stmts_ok(f.body[idx[0] + 1:-1], o, True, fmap):
             continue
-        fns[f.name] = (k, o)
+        fns[f.name] = (k, o, elem)
 
     sites = {}
     for f in prog.functions:
@@ -245,13 +250,13 @@ def plan_small(prog, fmap, layout, stack):
 
         def walk(stmts):
             for i, st in enumerate(stmts):
-                if (isinstance(st, Let) and not st.mutable and st.type == ARRAY and isinstance(st.value, Call)
-                        and st.value.name in fns and not used[1] and layout(st) == "i64"
+                if (isinstance(st, Let) and not st.mutable and isinstance(st.value, Call) and st.value.name in fns
+                        and not used[1] and st.type == fmap[st.value.name].ret and layout(st) == "i64"
                         and _stmts_ok(stmts[i + 1:], st.name, False, fmap)):
-                    k = fns[st.value.name][0]
-                    if used[0] + 8 * k <= STACK_CAP:
-                        used[0] += 8 * k
-                        sites[id(st)] = (st.value.name, k)
+                    k, _, elem = fns[st.value.name]
+                    if used[0] + SIZE[elem] * k <= STACK_CAP:
+                        used[0] += SIZE[elem] * k
+                        sites[id(st)] = (st.value.name, k, elem)
                     else:
                         used[1] = True
                 for body in _children(st):

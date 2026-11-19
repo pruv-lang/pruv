@@ -1253,13 +1253,13 @@ Pruv (`parse/refinement_syntax`). Tests: [accept](tests/spec/r7_1_stack_array.pr
 [reject](tests/spec/r7_1_stack_array_big.pruv) (2049 `i64`s stay on the heap). Full rule:
 `tests/runtime/p3_s1_stack.pruv`.
 
-### Short `[i64]` results in a caller buffer (generated Rust)
+### Short `[i64]` and `[u8]` results in a caller buffer (generated Rust)
 R-7-2 A function whose top-level `ensures` includes `len(result) <= K` with a literal `K` in `1..=64`, that calls no
-foreign function, and that returns one `let mut o: [i64] = alloc(...)` as its only final `return`, is also emitted
-as `F__pruv_small(pruv_sb: &mut [i64; K], ...) -> usize`. A non-recursive caller that binds the result with an
+foreign function, and that returns one `let mut o: [T] = alloc(...)` (`T` is `i64` or `u8`, the result type) as its only final `return`, is also
+emitted as `F__pruv_small(pruv_sb: &mut [T; K], ...) -> usize`. A non-recursive caller that binds the result with an
 immutable `let` passes a stack buffer instead of allocating (at most 4096 bytes of such buffers per caller). Nothing
 changes under `--trust-callers` or when any condition fails; this is not an error. Full rule:
-`docs/SMALL_RESULT_SPEC.md`. Tests: [accept](tests/spec/r7_2_small_result.pruv),
+`docs/SMALL_RESULT_SPEC.md`. Tests: [accept](tests/spec/r7_2_small_result.pruv), [accept `[u8]`](tests/spec/r7_2_small_result_u8.pruv),
 [reject](tests/spec/r7_2_small_result_k65.pruv) (K = 65 gets no small form).
 
 ### Proof cache

@@ -1,0 +1,109 @@
+// P27.5: a short `[u8]` result bound by `ensures len(result) <= K` is built in a caller-owned `[u8; K]` stack buffer
+// (docs/SMALL_RESULT_SPEC.md rule 1). Binding names tell the call sites apart in the generated Rust: bl, bs are
+// rewritten; bm, br, bc are not.
+
+fn put(inout o: [u8], v: i64) -> ()
+  requires 0 <= v && v <= 200
+  requires len(o) <= 64
+  ensures len(o) == len(old(o))
+{
+  let mut i: i64 = 0;
+  while i < len(o)
+    invariant 0 <= i && i <= len(o) && len(o) == len(old(o)) && len(o) <= 64 && 0 <= v && v <= 200
+    decreases len(o) - i
+  {
+    o[i] = v + i % 50;
+    i = i + 1;
+  }
+}
+
+fn total(a: [u8]) -> i64
+  requires len(a) <= 64
+{
+  let mut s: i64 = 0;
+  let mut i: i64 = 0;
+  while i < len(a)
+    invariant 0 <= i && i <= len(a) && 0 <= s && s <= i * 255
+    decreases len(a) - i
+  {
+    s = s + a[i];
+    i = i + 1;
+  }
+  return s;
+}
+
+// small byte function, K = 16
+fn mkb(n: i64, v: i64) -> [u8] ! alloc
+  requires 1 <= n && n <= 16
+  requires 0 <= v && v <= 200
+  ensures len(result) == n
+  ensures len(result) <= 16
+{
+  let mut o: [u8] = alloc(n, 9);
+  put(inout o, v);
+  return o;
+}
+
+// rewritten: a binding inside a loop, read through len, an index and a user function
+fn loop_show(count: i64) -> () ! alloc, io
+  requires 1 <= count && count <= 16
+{
+  let mut i: i64 = 1;
+  while i <= count
+    invariant 1 <= i && i <= count + 1
+    decreases count + 1 - i
+  {
+    let bl: [u8] = mkb(i, 60);
+    print(len(bl));
+    print(bl[len(bl) - 1]);
+    print(total(bl));
+    i = i + 1;
+  }
+}
+
+// rewritten: a single binding
+fn single(n: i64) -> () ! alloc, io
+  requires 1 <= n && n <= 16
+{
+  let bs: [u8] = mkb(n, 100);
+  print(bs[0]);
+  print(total(bs));
+}
+
+// not rewritten: the binding is returned
+fn ret_bind(n: i64) -> [u8] ! alloc
+  requires 1 <= n && n <= 16
+  ensures len(result) == n
+{
+  let br: [u8] = mkb(n, 1);
+  return br;
+}
+
+// not rewritten: `let mut`
+fn let_mut(n: i64) -> () ! alloc, io
+  requires 1 <= n && n <= 16
+{
+  let mut bm: [u8] = mkb(n, 2);
+  bm[0] = 7;
+  print(total(bm));
+}
+
+// not rewritten: passed to `copy`
+fn copy_case(n: i64) -> () ! alloc, io
+  requires 1 <= n && n <= 16
+{
+  let bc: [u8] = mkb(n, 3);
+  let d: [u8] = copy(bc);
+  print(total(d));
+}
+
+fn run() -> () ! alloc, io {
+  loop_show(16);
+  single(1);
+  single(16);
+  let t: [u8] = ret_bind(16);
+  print(total(t));
+  let_mut(1);
+  let_mut(16);
+  copy_case(16);
+}

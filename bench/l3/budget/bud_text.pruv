@@ -1,66 +1,45 @@
 // L3-10 M6: request-budget text helpers (backend-request-budget.ts lines 60-160, engineText).
-// Strings are [i64] arrays of UTF-16 units. lang: 0 = ko, 1 = en. reason: 0 time, 1 delegations, 2 commands,
+// Text outputs are [u8] UTF-8 bytes. Input strings use UTF-16 units. lang: 0 = ko, 1 = en. reason: 0 time, 1 delegations, 2 commands,
 // 3 reviews, 4 checks. Card error kind: 0 missing, 1 deliverable, 2 done, 3 targets, 4 verify, 5 conflicts, 6 state.
-// All texts are BMP only, so one UTF-8 character decodes to exactly one UTF-16 unit.
 
-// Byte i of s, 0 outside the string (total accessor).
-fn sb(s: str, i: i64) -> i64
-  ensures 0 <= result && result <= 255
-{
-  if i < 0 || i >= len(s) { return 0; }
-  return s[i];
-}
-
-// Decode a UTF-8 literal (BMP only) into UTF-16 units. Two linear passes: O(len(s)).
-fn dec(s: str) -> [i64] ! alloc
-{
-  let n: i64 = len(s);
-  let mut c: i64 = 0;
-  let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= i && i <= n && n == len(s) && 0 <= c && c <= i
-    decreases n - i
-  {
-    let b: i64 = s[i];
-    if b < 128 || b >= 192 { c = c + 1; }
-    i = i + 1;
-  }
-  let mut o: [i64] = crate::ent_u16::zeros(c);
-  i = 0;
-  let mut k: i64 = 0;
-  while i < n
-    invariant 0 <= i && i <= n && n == len(s) && 0 <= k && k <= i
-    decreases n - i
-  {
-    let b: i64 = s[i];
-    if b < 128 {
-      crate::ent_u16::wr(inout o, k, b);
-      k = k + 1;
-      i = i + 1;
-    } else {
-      if b >= 224 {
-        let b1: i64 = sb(s, i + 1);
-        let b2: i64 = sb(s, i + 2);
-        crate::ent_u16::wr(inout o, k, band(b, 15) * 4096 + band(b1, 63) * 64 + band(b2, 63));
-        k = k + 1;
-        i = i + 3;
-        if i > n { i = n; }
-      } else {
-        if b >= 192 {
-          let d1: i64 = sb(s, i + 1);
-          crate::ent_u16::wr(inout o, k, band(b, 31) * 64 + band(d1, 63));
-          k = k + 1;
-          i = i + 2;
-          if i > n { i = n; }
-        } else {
-          // stray continuation byte (cannot occur in valid UTF-8): skipped
-          i = i + 1;
-        }
-      }
-    }
-  }
-  return o;
-}
+// UTF-8 template source for m6_test/gen_text.py.
+// text pre_0_1: The request budget limit (
+// text post_0_1: ) was reached, so work is paused until the user extends it or ends it. Do not try new delegations or commands; briefly report the results so far and what you could not verify.
+// text pre_0_0: 예산 한도(
+// text post_0_0: )에 닿아 사용자가 늘리거나 끝내기를 고를 때까지 멈춘다. 새 위임·명령을 시도하지 않고 지금까지 결과와 확인하지 못한 것만 짧게 보고한다.
+// text pre_1_1: The user raised the request budget limit (
+// text post_1_1: ). The tool call that was cut off earlier was stopped by the app at this budget limit, not by the user. Continue from where you stopped.
+// text pre_1_0: 사용자가 예산 한도(
+// text post_1_0: )를 늘렸다. 앞서 끊긴 도구 호출은 사용자 중단이 아니라 이 예산 한도에 닿아 앱이 멈춘 것이다. 멈춘 지점에서 이어 간다.
+// text nl_1: no limit
+// text nl_0: 제한 없음
+// text cm_1: Before delegating, write the deliverable and the done conditions with the work_card tool.
+// text cm_0: 위임 전에 work_card 도구로 산출물과 완료 조건을 먼저 적는다.
+// text cn_0_0: 시간
+// text cn_1_0: 위임
+// text cn_2_0: 빌드·명령
+// text cn_3_0: 감사
+// text cn_4_0: 실제 확인
+// text cn_0_1: time
+// text cn_1_1: delegations
+// text cn_2_1: commands
+// text cn_3_1: reviews
+// text cn_4_1: checks
+// text ce_0_0: 지금 예산을 찾을 수 없어 작업 카드를 저장하지 못했다.
+// text ce_1_0: deliverable 은 1~300자여야 한다.
+// text ce_2_0: done 은 각 300자 이하 1~5줄이어야 한다.
+// text ce_3_0: targets 의 수는 0 이상 정수여야 하고 note 는 300자 이하여야 한다.
+// text ce_4_0: verify 는 label 1~300자와 status(planned·done·skipped)를 가진 0~5개 항목이어야 한다.
+// text ce_5_0: conflicts 는 각 300자 이하 0~5줄이어야 한다.
+// text ce_6_0: state 는 working·done·waiting-user·blocked 중 하나여야 한다.
+// text ce_0_1: The current budget was not found, so the work card was not saved.
+// text ce_1_1: deliverable must be 1–300 characters.
+// text ce_2_1: done must be 1–5 lines of at most 300 characters each.
+// text ce_3_1: targets counts must be non-negative integers and note at most 300 characters.
+// text ce_4_1: verify must be 0–5 items with a label of 1–300 characters and a status (planned, done or skipped).
+// text ce_5_1: conflicts must be 0–5 lines of at most 300 characters each.
+// text ce_6_1: state must be one of working, done, waiting-user or blocked.
+// text wire_prefix: budget.refusal.
 
 // engineText(entry, lang) for the typed domain: absent -> ko; exactly "en" -> en; everything else -> ko.
 pub fn lang_of(present: bool, s: [i64]) -> i64
@@ -92,529 +71,2370 @@ pub fn lang_excluded(s: [i64]) -> bool ! alloc
   return false;
 }
 
-// number of units of String(x) for a safe integer (1..17: at most 16 digits plus a sign)
+// Decimal digit count using threshold comparisons.
+fn digits(v: i64) -> i64
+  requires 0 <= v && v <= 9007199254740991
+  ensures 1 <= result && result <= 16
+{
+  if v < 100000000 {
+    if v < 10000 {
+      if v < 10 { return 1; }
+      if v < 100 { return 2; }
+      if v < 1000 { return 3; }
+      return 4;
+    }
+    if v < 100000 { return 5; }
+    if v < 1000000 { return 6; }
+    if v < 10000000 { return 7; }
+    return 8;
+  }
+  if v < 1000000000000 {
+    if v < 1000000000 { return 9; }
+    if v < 10000000000 { return 10; }
+    if v < 100000000000 { return 11; }
+    return 12;
+  }
+  if v < 10000000000000 { return 13; }
+  if v < 100000000000000 { return 14; }
+  if v < 1000000000000000 { return 15; }
+  return 16;
+}
+
 fn int_len(x: i64) -> i64
   requires -9007199254740991 <= x && x <= 9007199254740991
   ensures 1 <= result && result <= 17
 {
-  let mut v: i64 = x;
-  if x < 0 { v = -x; }
-  let mut n: i64 = 1;
-  let mut t: i64 = v / 10;
-  while t > 0 && n < 16
-    invariant 1 <= n && n <= 16 && t >= 0
-    decreases 16 - n
-  {
-    n = n + 1;
-    t = t / 10;
-  }
-  if x < 0 { n = n + 1; }
-  return n;
+  if x < 0 { return 1 + digits(-x); }
+  return digits(x);
 }
 
-// write String(x) (n = int_len(x) units) into o at at; digits go backwards from the end
-fn put_int(inout o: [i64], at: i64, x: i64, n: i64) -> ()
+// write String(x) (n = int_len(x) bytes) into o at at; digits go backwards from the end
+fn put_int(inout o: [u8], at: i64, x: i64, n: i64) -> ()
   requires -9007199254740991 <= x && x <= 9007199254740991
   requires 0 <= at && at <= 1000000 && 1 <= n && n <= 17
   ensures len(o) == len(old(o))
 {
   let mut v: i64 = x;
+  if at + n > len(o) || (x < 0 && n < 2) { return; }
   let mut nd: i64 = n;
   if x < 0 {
     v = -x;
     nd = n - 1;
-    crate::ent_u16::wr(inout o, at, 45);
+    o[at] = 45;
   }
   let mut t: i64 = v;
   let mut k: i64 = 0;
   while k < nd
-    invariant 0 <= k && k <= nd && nd <= 17 && t >= 0 && 0 <= at && at <= 1000000 && len(o) == len(old(o))
+    invariant 0 <= k && k <= nd && nd <= n && t >= 0 && at + n <= len(o) && len(o) == len(old(o))
     decreases nd - k
   {
-    crate::ent_u16::wr(inout o, at + n - 1 - k, 48 + t % 10);
+    o[at + n - 1 - k] = 48 + t % 10;
     t = t / 10;
     k = k + 1;
   }
 }
 
 // String(x) for a safe integer, built in one allocation.
-pub fn int_text(x: i64) -> [i64] ! alloc
+pub fn int_text(x: i64) -> [u8] ! alloc
   requires -9007199254740991 <= x && x <= 9007199254740991
-  ensures len(result) <= 17
+  ensures len(result) <= 17 // Generated text bound.
 {
   let n: i64 = int_len(x);
-  let mut o: [i64] = alloc(n, 0);
+  let mut o: [u8] = alloc(n, 0);
   put_int(inout o, 0, x, n);
   return o;
 }
 
-pub fn reason_name(reason: i64) -> [i64] ! alloc
+pub fn reason_name(reason: i64) -> [u8] ! alloc
   requires 0 <= reason && reason <= 4
+  ensures len(result) <= 11 // Generated text bound.
 {
-  if reason == 0 { return dec("time"); }
-  if reason == 1 { return dec("delegations"); }
-  if reason == 2 { return dec("commands"); }
-  if reason == 3 { return dec("reviews"); }
-  return dec("checks");
+  let mut o: [u8] = alloc(len_cn(reason, 1), 0);
+  put_cn(inout o, 0, reason, 1);
+  return o;
 }
 
-pub fn counter_name(reason: i64, lang: i64) -> [i64] ! alloc
+pub fn counter_name(reason: i64, lang: i64) -> [u8] ! alloc
   requires 0 <= reason && reason <= 4
   requires 0 <= lang && lang <= 1
+  ensures len(result) <= 14 // Generated text bound.
 {
-  if lang == 1 { return reason_name(reason); }
-  if reason == 0 { return dec("시간"); }
-  if reason == 1 { return dec("위임"); }
-  if reason == 2 { return dec("빌드·명령"); }
-  if reason == 3 { return dec("감사"); }
-  return dec("실제 확인");
+  let mut o: [u8] = alloc(len_cn(reason, lang), 0);
+  put_cn(inout o, 0, reason, lang);
+  return o;
 }
 
-pub fn no_limit(lang: i64) -> [i64] ! alloc
+pub fn no_limit(lang: i64) -> [u8] ! alloc
   requires 0 <= lang && lang <= 1
+  ensures len(result) <= 13 // Generated text bound.
 {
-  if lang == 1 { return dec("no limit"); }
-  return dec("제한 없음");
+  let mut o: [u8] = alloc(len_nl(lang), 0);
+  put_nl(inout o, 0, lang);
+  return o;
 }
 
-pub fn limit_text(unlimited: bool, limit: i64, lang: i64) -> [i64] ! alloc
+pub fn limit_text(unlimited: bool, limit: i64, lang: i64) -> [u8] ! alloc
   requires -9007199254740991 <= limit && limit <= 9007199254740991
   requires 0 <= lang && lang <= 1
+  ensures len(result) <= 17 // Generated text bound.
 {
   if unlimited { return no_limit(lang); }
   return int_text(limit);
 }
 
 // `${used}/${limitText}`. Time: used is activeMs, floored to minutes; limit is timeMinutes.
-pub fn amount_text(reason: i64, unlimited: bool, used: i64, limit: i64, lang: i64) -> [i64] ! alloc
+pub fn amount_text(reason: i64, unlimited: bool, used: i64, limit: i64, lang: i64) -> [u8] ! alloc
   requires 0 <= reason && reason <= 4
   requires -9007199254740991 <= used && used <= 9007199254740991
   requires -9007199254740991 <= limit && limit <= 9007199254740991
   requires 0 <= lang && lang <= 1
+  ensures len(result) <= 35 // Generated text bound.
 {
   let mut u: i64 = used;
   if reason == 0 { u = crate::bud_num::minutes_of(used); }
-  // sized once and written in place (one allocation, like template below) instead of int_text + one + limit_text + 2 cats
   let lu: i64 = int_len(u);
   let mut ll: i64 = len_nl(lang);
   if !unlimited { ll = int_len(limit); }
-  let mut o: [i64] = alloc(lu + 1 + ll, 0);
+  let mut o: [u8] = alloc(lu + 1 + ll, 0);
   put_int(inout o, 0, u, lu);
-  crate::ent_u16::wr(inout o, lu, 47);
+  o[lu] = 47;
   if unlimited { put_nl(inout o, lu + 1, lang); } else { put_int(inout o, lu + 1, limit, ll); }
   return o;
 }
 
-// Cold reference forms of the two templates. They hold the template texts (the single source gen_text.py reads) and
-// are not on the hot path; refusal/continue_text below build the same text in one allocation from generated writers.
-// pre + counter + " " + amount + post
-fn frame(pre: [i64], counter: [i64], amount: [i64], post: [i64]) -> [i64] ! alloc
-{
-  let sp: [i64] = crate::ent_u16::one(32);
-  let a: [i64] = crate::ent_u16::cat(pre, counter);
-  let b: [i64] = crate::ent_u16::cat(a, sp);
-  let c: [i64] = crate::ent_u16::cat(b, amount);
-  return crate::ent_u16::cat(c, post);
-}
-
-fn refusal_cold(reason: i64, unlimited: bool, used: i64, limit: i64, lang: i64) -> [i64] ! alloc
-  requires 0 <= reason && reason <= 4
-  requires -9007199254740991 <= used && used <= 9007199254740991
-  requires -9007199254740991 <= limit && limit <= 9007199254740991
-  requires 0 <= lang && lang <= 1
-{
-  let counter: [i64] = counter_name(reason, lang);
-  let amount: [i64] = amount_text(reason, unlimited, used, limit, lang);
-  if lang == 1 {
-    let pre_en: [i64] = dec("The request budget limit (");
-    let post_en: [i64] = dec(") was reached, so work is paused until the user extends it or ends it. Do not try new delegations or commands; briefly report the results so far and what you could not verify.");
-    return frame(pre_en, counter, amount, post_en);
-  }
-  let pre: [i64] = dec("예산 한도(");
-  let post: [i64] = dec(")에 닿아 사용자가 늘리거나 끝내기를 고를 때까지 멈춘다. 새 위임·명령을 시도하지 않고 지금까지 결과와 확인하지 못한 것만 짧게 보고한다.");
-  return frame(pre, counter, amount, post);
-}
-
-fn continue_cold(reason: i64, unlimited: bool, used: i64, limit: i64, lang: i64) -> [i64] ! alloc
-  requires 0 <= reason && reason <= 4
-  requires -9007199254740991 <= used && used <= 9007199254740991
-  requires -9007199254740991 <= limit && limit <= 9007199254740991
-  requires 0 <= lang && lang <= 1
-{
-  let counter: [i64] = counter_name(reason, lang);
-  let amount: [i64] = amount_text(reason, unlimited, used, limit, lang);
-  if lang == 1 {
-    let pre_en: [i64] = dec("The user raised the request budget limit (");
-    let post_en: [i64] = dec("). The tool call that was cut off earlier was stopped by the app at this budget limit, not by the user. Continue from where you stopped.");
-    return frame(pre_en, counter, amount, post_en);
-  }
-  let pre: [i64] = dec("사용자가 예산 한도(");
-  let post: [i64] = dec(")를 늘렸다. 앞서 끊긴 도구 호출은 사용자 중단이 아니라 이 예산 한도에 닿아 앱이 멈춘 것이다. 멈춘 지점에서 이어 간다.");
-  return frame(pre, counter, amount, post);
-}
-
-fn put3(inout o: [i64], at: i64, w: i64) -> ()
-  requires 0 <= at && at <= 2000000 && 0 <= w
-  ensures len(o) == len(old(o))
-{
-  crate::ent_u16::wr(inout o, at, band(w, 65535));
-  crate::ent_u16::wr(inout o, at + 1, band(ushr(w, 16), 65535));
-  crate::ent_u16::wr(inout o, at + 2, ushr(w, 32));
-}
-
 // BEGIN GENERATED (m6_test/gen_text.py): template writers, do not edit by hand
-// '예산 한도(' (6 units)
-fn put_pre_0_0(inout o: [i64], at: i64) -> ()
+fn put_pre_0_1(inout o: [u8], at: i64) -> ()
   requires 0 <= at && at <= 1000000
   ensures len(o) == len(old(o))
 {
-  put3(inout o, at + 0, 140671763976);
-  put3(inout o, at + 3, 174814713180);
+  if at + 26 > len(o) { return; }
+  o[at + 0] = 84;
+  o[at + 1] = 104;
+  o[at + 2] = 101;
+  o[at + 3] = 32;
+  o[at + 4] = 114;
+  o[at + 5] = 101;
+  o[at + 6] = 113;
+  o[at + 7] = 117;
+  o[at + 8] = 101;
+  o[at + 9] = 115;
+  o[at + 10] = 116;
+  o[at + 11] = 32;
+  o[at + 12] = 98;
+  o[at + 13] = 117;
+  o[at + 14] = 100;
+  o[at + 15] = 103;
+  o[at + 16] = 101;
+  o[at + 17] = 116;
+  o[at + 18] = 32;
+  o[at + 19] = 108;
+  o[at + 20] = 105;
+  o[at + 21] = 109;
+  o[at + 22] = 105;
+  o[at + 23] = 116;
+  o[at + 24] = 32;
+  o[at + 25] = 40;
 }
-// 'The request budget limit (' (26 units)
-fn put_pre_0_1(inout o: [i64], at: i64) -> ()
+fn put_post_0_1(inout o: [u8], at: i64) -> ()
   requires 0 <= at && at <= 1000000
   ensures len(o) == len(old(o))
 {
-  put3(inout o, at + 0, 433798512724);
-  put3(inout o, at + 3, 433799168032);
-  put3(inout o, at + 6, 433799364721);
-  put3(inout o, at + 9, 137446555763);
-  put3(inout o, at + 12, 429504397410);
-  put3(inout o, at + 15, 498222825575);
-  put3(inout o, at + 18, 450978644000);
-  put3(inout o, at + 21, 498223087725);
-  crate::ent_u16::wr(inout o, at + 24, 32);
-  crate::ent_u16::wr(inout o, at + 25, 40);
+  if at + 175 > len(o) { return; }
+  o[at + 0] = 41;
+  o[at + 1] = 32;
+  o[at + 2] = 119;
+  o[at + 3] = 97;
+  o[at + 4] = 115;
+  o[at + 5] = 32;
+  o[at + 6] = 114;
+  o[at + 7] = 101;
+  o[at + 8] = 97;
+  o[at + 9] = 99;
+  o[at + 10] = 104;
+  o[at + 11] = 101;
+  o[at + 12] = 100;
+  o[at + 13] = 44;
+  o[at + 14] = 32;
+  o[at + 15] = 115;
+  o[at + 16] = 111;
+  o[at + 17] = 32;
+  o[at + 18] = 119;
+  o[at + 19] = 111;
+  o[at + 20] = 114;
+  o[at + 21] = 107;
+  o[at + 22] = 32;
+  o[at + 23] = 105;
+  o[at + 24] = 115;
+  o[at + 25] = 32;
+  o[at + 26] = 112;
+  o[at + 27] = 97;
+  o[at + 28] = 117;
+  o[at + 29] = 115;
+  o[at + 30] = 101;
+  o[at + 31] = 100;
+  o[at + 32] = 32;
+  o[at + 33] = 117;
+  o[at + 34] = 110;
+  o[at + 35] = 116;
+  o[at + 36] = 105;
+  o[at + 37] = 108;
+  o[at + 38] = 32;
+  o[at + 39] = 116;
+  o[at + 40] = 104;
+  o[at + 41] = 101;
+  o[at + 42] = 32;
+  o[at + 43] = 117;
+  o[at + 44] = 115;
+  o[at + 45] = 101;
+  o[at + 46] = 114;
+  o[at + 47] = 32;
+  o[at + 48] = 101;
+  o[at + 49] = 120;
+  o[at + 50] = 116;
+  o[at + 51] = 101;
+  o[at + 52] = 110;
+  o[at + 53] = 100;
+  o[at + 54] = 115;
+  o[at + 55] = 32;
+  o[at + 56] = 105;
+  o[at + 57] = 116;
+  o[at + 58] = 32;
+  o[at + 59] = 111;
+  o[at + 60] = 114;
+  o[at + 61] = 32;
+  o[at + 62] = 101;
+  o[at + 63] = 110;
+  o[at + 64] = 100;
+  o[at + 65] = 115;
+  o[at + 66] = 32;
+  o[at + 67] = 105;
+  o[at + 68] = 116;
+  o[at + 69] = 46;
+  o[at + 70] = 32;
+  o[at + 71] = 68;
+  o[at + 72] = 111;
+  o[at + 73] = 32;
+  o[at + 74] = 110;
+  o[at + 75] = 111;
+  o[at + 76] = 116;
+  o[at + 77] = 32;
+  o[at + 78] = 116;
+  o[at + 79] = 114;
+  o[at + 80] = 121;
+  o[at + 81] = 32;
+  o[at + 82] = 110;
+  o[at + 83] = 101;
+  o[at + 84] = 119;
+  o[at + 85] = 32;
+  o[at + 86] = 100;
+  o[at + 87] = 101;
+  o[at + 88] = 108;
+  o[at + 89] = 101;
+  o[at + 90] = 103;
+  o[at + 91] = 97;
+  o[at + 92] = 116;
+  o[at + 93] = 105;
+  o[at + 94] = 111;
+  o[at + 95] = 110;
+  o[at + 96] = 115;
+  o[at + 97] = 32;
+  o[at + 98] = 111;
+  o[at + 99] = 114;
+  o[at + 100] = 32;
+  o[at + 101] = 99;
+  o[at + 102] = 111;
+  o[at + 103] = 109;
+  o[at + 104] = 109;
+  o[at + 105] = 97;
+  o[at + 106] = 110;
+  o[at + 107] = 100;
+  o[at + 108] = 115;
+  o[at + 109] = 59;
+  o[at + 110] = 32;
+  o[at + 111] = 98;
+  o[at + 112] = 114;
+  o[at + 113] = 105;
+  o[at + 114] = 101;
+  o[at + 115] = 102;
+  o[at + 116] = 108;
+  o[at + 117] = 121;
+  o[at + 118] = 32;
+  o[at + 119] = 114;
+  o[at + 120] = 101;
+  o[at + 121] = 112;
+  o[at + 122] = 111;
+  o[at + 123] = 114;
+  o[at + 124] = 116;
+  o[at + 125] = 32;
+  o[at + 126] = 116;
+  o[at + 127] = 104;
+  o[at + 128] = 101;
+  o[at + 129] = 32;
+  o[at + 130] = 114;
+  o[at + 131] = 101;
+  o[at + 132] = 115;
+  o[at + 133] = 117;
+  o[at + 134] = 108;
+  o[at + 135] = 116;
+  o[at + 136] = 115;
+  o[at + 137] = 32;
+  o[at + 138] = 115;
+  o[at + 139] = 111;
+  o[at + 140] = 32;
+  o[at + 141] = 102;
+  o[at + 142] = 97;
+  o[at + 143] = 114;
+  o[at + 144] = 32;
+  o[at + 145] = 97;
+  o[at + 146] = 110;
+  o[at + 147] = 100;
+  o[at + 148] = 32;
+  o[at + 149] = 119;
+  o[at + 150] = 104;
+  o[at + 151] = 97;
+  o[at + 152] = 116;
+  o[at + 153] = 32;
+  o[at + 154] = 121;
+  o[at + 155] = 111;
+  o[at + 156] = 117;
+  o[at + 157] = 32;
+  o[at + 158] = 99;
+  o[at + 159] = 111;
+  o[at + 160] = 117;
+  o[at + 161] = 108;
+  o[at + 162] = 100;
+  o[at + 163] = 32;
+  o[at + 164] = 110;
+  o[at + 165] = 111;
+  o[at + 166] = 116;
+  o[at + 167] = 32;
+  o[at + 168] = 118;
+  o[at + 169] = 101;
+  o[at + 170] = 114;
+  o[at + 171] = 105;
+  o[at + 172] = 102;
+  o[at + 173] = 121;
+  o[at + 174] = 46;
 }
-// ')에 닿아 사용자가 늘리거나 끝내기를 고를 때까지 멈춘다. 새 위임·명령을 시도하지 않고 지금까지 결과와 확인하지 못한 것만 짧게 보고한다.' (78 units)
-fn put_post_0_0(inout o: [i64], at: i64) -> ()
+fn put_pre_0_0(inout o: [u8], at: i64) -> ()
   requires 0 <= at && at <= 1000000
   ensures len(o) == len(old(o))
 {
-  put3(inout o, at + 0, 140757696553);
-  put3(inout o, at + 3, 140748567295);
-  put3(inout o, at + 6, 219424622231724);
-  put3(inout o, at + 9, 196365906914304);
-  put3(inout o, at + 12, 194169774586284);
-  put3(inout o, at + 15, 194290099486752);
-  put3(inout o, at + 18, 140550909488);
-  put3(inout o, at + 21, 140550909152);
-  put3(inout o, at + 24, 221829395166540);
-  put3(inout o, at + 27, 226055844003872);
-  put3(inout o, at + 30, 137442013924);
-  put3(inout o, at + 33, 218819995943112);
-  put3(inout o, at + 36, 205080405460868);
-  put3(inout o, at + 39, 140782123065);
-  put3(inout o, at + 42, 234576949854940);
-  put3(inout o, at + 45, 216921620400576);
-  put3(inout o, at + 48, 221826473045216);
-  put3(inout o, at + 51, 221829395164680);
-  put3(inout o, at + 54, 190201228951584);
-  put3(inout o, at + 57, 235660562712128);
-  put3(inout o, at + 60, 221830050269048);
-  put3(inout o, at + 63, 234594246524960);
-  put3(inout o, at + 66, 204288718733344);
-  put3(inout o, at + 69, 189720682758176);
-  put3(inout o, at + 72, 190081242759200);
-  put3(inout o, at + 75, 200569836892);
+  if at + 14 > len(o) { return; }
+  o[at + 0] = 236;
+  o[at + 1] = 152;
+  o[at + 2] = 136;
+  o[at + 3] = 236;
+  o[at + 4] = 130;
+  o[at + 5] = 176;
+  o[at + 6] = 32;
+  o[at + 7] = 237;
+  o[at + 8] = 149;
+  o[at + 9] = 156;
+  o[at + 10] = 235;
+  o[at + 11] = 143;
+  o[at + 12] = 132;
+  o[at + 13] = 40;
 }
-// ') was reached, so work is paused until the user extends it or ends it. Do not try new delegations or commands; briefly report the results so far and what you could not verify.' (175 units)
-fn put_post_0_1(inout o: [i64], at: i64) -> ()
+fn put_post_0_0(inout o: [u8], at: i64) -> ()
   requires 0 <= at && at <= 1000000
   ensures len(o) == len(old(o))
 {
-  put3(inout o, at + 0, 511103205417);
-  put3(inout o, at + 3, 137446490209);
-  put3(inout o, at + 6, 416618446962);
-  put3(inout o, at + 9, 433798512739);
-  put3(inout o, at + 12, 137441837156);
-  put3(inout o, at + 15, 137446228083);
-  put3(inout o, at + 18, 489633546359);
-  put3(inout o, at + 21, 450973663339);
-  put3(inout o, at + 24, 481038434419);
-  put3(inout o, at + 27, 493928906849);
-  put3(inout o, at + 30, 137445507173);
-  put3(inout o, at + 33, 498223415413);
-  put3(inout o, at + 36, 137446031465);
-  put3(inout o, at + 39, 433798512756);
-  put3(inout o, at + 42, 493928906784);
-  put3(inout o, at + 45, 137446424677);
-  put3(inout o, at + 48, 498224070757);
-  put3(inout o, at + 51, 429503938661);
-  put3(inout o, at + 54, 450973663347);
-  put3(inout o, at + 57, 476743467124);
-  put3(inout o, at + 60, 433793794162);
-  put3(inout o, at + 63, 493927792750);
-  put3(inout o, at + 66, 498223087648);
-  put3(inout o, at + 69, 292059873326);
-  put3(inout o, at + 72, 472448499823);
-  put3(inout o, at + 75, 137446555759);
-  put3(inout o, at + 78, 519698514036);
-  put3(inout o, at + 81, 433798905888);
-  put3(inout o, at + 84, 429498826871);
-  put3(inout o, at + 87, 433798774885);
-  put3(inout o, at + 90, 498222563431);
-  put3(inout o, at + 93, 472453677161);
-  put3(inout o, at + 96, 476743467123);
-  put3(inout o, at + 99, 425203859570);
-  put3(inout o, at + 102, 468158578799);
-  put3(inout o, at + 105, 429503938657);
-  put3(inout o, at + 108, 137442820211);
-  put3(inout o, at + 111, 450979037282);
-  put3(inout o, at + 114, 463863152741);
-  put3(inout o, at + 117, 489628369017);
-  put3(inout o, at + 120, 476748709989);
-  put3(inout o, at + 123, 137446555762);
-  put3(inout o, at + 126, 433798512756);
-  put3(inout o, at + 129, 433799168032);
-  put3(inout o, at + 132, 463864135795);
-  put3(inout o, at + 135, 137446490228);
-  put3(inout o, at + 138, 137446228083);
-  put3(inout o, at + 141, 489632628838);
-  put3(inout o, at + 144, 472452759584);
-  put3(inout o, at + 147, 511103205476);
-  put3(inout o, at + 150, 498222563432);
-  put3(inout o, at + 153, 476749299744);
-  put3(inout o, at + 156, 425203859573);
-  put3(inout o, at + 159, 463864135791);
-  put3(inout o, at + 162, 472448499812);
-  put3(inout o, at + 165, 137446555759);
-  put3(inout o, at + 168, 489632890998);
-  put3(inout o, at + 171, 519697727593);
-  crate::ent_u16::wr(inout o, at + 174, 46);
+  if at + 191 > len(o) { return; }
+  o[at + 0] = 41;
+  o[at + 1] = 236;
+  o[at + 2] = 151;
+  o[at + 3] = 144;
+  o[at + 4] = 32;
+  o[at + 5] = 235;
+  o[at + 6] = 139;
+  o[at + 7] = 191;
+  o[at + 8] = 236;
+  o[at + 9] = 149;
+  o[at + 10] = 132;
+  o[at + 11] = 32;
+  o[at + 12] = 236;
+  o[at + 13] = 130;
+  o[at + 14] = 172;
+  o[at + 15] = 236;
+  o[at + 16] = 154;
+  o[at + 17] = 169;
+  o[at + 18] = 236;
+  o[at + 19] = 158;
+  o[at + 20] = 144;
+  o[at + 21] = 234;
+  o[at + 22] = 176;
+  o[at + 23] = 128;
+  o[at + 24] = 32;
+  o[at + 25] = 235;
+  o[at + 26] = 138;
+  o[at + 27] = 152;
+  o[at + 28] = 235;
+  o[at + 29] = 166;
+  o[at + 30] = 172;
+  o[at + 31] = 234;
+  o[at + 32] = 177;
+  o[at + 33] = 176;
+  o[at + 34] = 235;
+  o[at + 35] = 130;
+  o[at + 36] = 152;
+  o[at + 37] = 32;
+  o[at + 38] = 235;
+  o[at + 39] = 129;
+  o[at + 40] = 157;
+  o[at + 41] = 235;
+  o[at + 42] = 130;
+  o[at + 43] = 180;
+  o[at + 44] = 234;
+  o[at + 45] = 184;
+  o[at + 46] = 176;
+  o[at + 47] = 235;
+  o[at + 48] = 165;
+  o[at + 49] = 188;
+  o[at + 50] = 32;
+  o[at + 51] = 234;
+  o[at + 52] = 179;
+  o[at + 53] = 160;
+  o[at + 54] = 235;
+  o[at + 55] = 165;
+  o[at + 56] = 188;
+  o[at + 57] = 32;
+  o[at + 58] = 235;
+  o[at + 59] = 149;
+  o[at + 60] = 140;
+  o[at + 61] = 234;
+  o[at + 62] = 185;
+  o[at + 63] = 140;
+  o[at + 64] = 236;
+  o[at + 65] = 167;
+  o[at + 66] = 128;
+  o[at + 67] = 32;
+  o[at + 68] = 235;
+  o[at + 69] = 169;
+  o[at + 70] = 136;
+  o[at + 71] = 236;
+  o[at + 72] = 182;
+  o[at + 73] = 152;
+  o[at + 74] = 235;
+  o[at + 75] = 139;
+  o[at + 76] = 164;
+  o[at + 77] = 46;
+  o[at + 78] = 32;
+  o[at + 79] = 236;
+  o[at + 80] = 131;
+  o[at + 81] = 136;
+  o[at + 82] = 32;
+  o[at + 83] = 236;
+  o[at + 84] = 156;
+  o[at + 85] = 132;
+  o[at + 86] = 236;
+  o[at + 87] = 158;
+  o[at + 88] = 132;
+  o[at + 89] = 194;
+  o[at + 90] = 183;
+  o[at + 91] = 235;
+  o[at + 92] = 170;
+  o[at + 93] = 133;
+  o[at + 94] = 235;
+  o[at + 95] = 160;
+  o[at + 96] = 185;
+  o[at + 97] = 236;
+  o[at + 98] = 157;
+  o[at + 99] = 132;
+  o[at + 100] = 32;
+  o[at + 101] = 236;
+  o[at + 102] = 139;
+  o[at + 103] = 156;
+  o[at + 104] = 235;
+  o[at + 105] = 143;
+  o[at + 106] = 132;
+  o[at + 107] = 237;
+  o[at + 108] = 149;
+  o[at + 109] = 152;
+  o[at + 110] = 236;
+  o[at + 111] = 167;
+  o[at + 112] = 128;
+  o[at + 113] = 32;
+  o[at + 114] = 236;
+  o[at + 115] = 149;
+  o[at + 116] = 138;
+  o[at + 117] = 234;
+  o[at + 118] = 179;
+  o[at + 119] = 160;
+  o[at + 120] = 32;
+  o[at + 121] = 236;
+  o[at + 122] = 167;
+  o[at + 123] = 128;
+  o[at + 124] = 234;
+  o[at + 125] = 184;
+  o[at + 126] = 136;
+  o[at + 127] = 234;
+  o[at + 128] = 185;
+  o[at + 129] = 140;
+  o[at + 130] = 236;
+  o[at + 131] = 167;
+  o[at + 132] = 128;
+  o[at + 133] = 32;
+  o[at + 134] = 234;
+  o[at + 135] = 178;
+  o[at + 136] = 176;
+  o[at + 137] = 234;
+  o[at + 138] = 179;
+  o[at + 139] = 188;
+  o[at + 140] = 236;
+  o[at + 141] = 153;
+  o[at + 142] = 128;
+  o[at + 143] = 32;
+  o[at + 144] = 237;
+  o[at + 145] = 153;
+  o[at + 146] = 149;
+  o[at + 147] = 236;
+  o[at + 148] = 157;
+  o[at + 149] = 184;
+  o[at + 150] = 237;
+  o[at + 151] = 149;
+  o[at + 152] = 152;
+  o[at + 153] = 236;
+  o[at + 154] = 167;
+  o[at + 155] = 128;
+  o[at + 156] = 32;
+  o[at + 157] = 235;
+  o[at + 158] = 170;
+  o[at + 159] = 187;
+  o[at + 160] = 237;
+  o[at + 161] = 149;
+  o[at + 162] = 156;
+  o[at + 163] = 32;
+  o[at + 164] = 234;
+  o[at + 165] = 178;
+  o[at + 166] = 131;
+  o[at + 167] = 235;
+  o[at + 168] = 167;
+  o[at + 169] = 140;
+  o[at + 170] = 32;
+  o[at + 171] = 236;
+  o[at + 172] = 167;
+  o[at + 173] = 167;
+  o[at + 174] = 234;
+  o[at + 175] = 178;
+  o[at + 176] = 140;
+  o[at + 177] = 32;
+  o[at + 178] = 235;
+  o[at + 179] = 179;
+  o[at + 180] = 180;
+  o[at + 181] = 234;
+  o[at + 182] = 179;
+  o[at + 183] = 160;
+  o[at + 184] = 237;
+  o[at + 185] = 149;
+  o[at + 186] = 156;
+  o[at + 187] = 235;
+  o[at + 188] = 139;
+  o[at + 189] = 164;
+  o[at + 190] = 46;
 }
-// '사용자가 예산 한도(' (11 units)
-fn put_pre_1_0(inout o: [i64], at: i64) -> ()
+fn put_pre_1_1(inout o: [u8], at: i64) -> ()
   requires 0 <= at && at <= 1000000
   ensures len(o) == len(old(o))
 {
-  put3(inout o, at + 0, 219424622231724);
-  put3(inout o, at + 3, 217737664179200);
-  put3(inout o, at + 6, 234591115854000);
-  crate::ent_u16::wr(inout o, at + 9, 46020);
-  crate::ent_u16::wr(inout o, at + 10, 40);
+  if at + 42 > len(o) { return; }
+  o[at + 0] = 84;
+  o[at + 1] = 104;
+  o[at + 2] = 101;
+  o[at + 3] = 32;
+  o[at + 4] = 117;
+  o[at + 5] = 115;
+  o[at + 6] = 101;
+  o[at + 7] = 114;
+  o[at + 8] = 32;
+  o[at + 9] = 114;
+  o[at + 10] = 97;
+  o[at + 11] = 105;
+  o[at + 12] = 115;
+  o[at + 13] = 101;
+  o[at + 14] = 100;
+  o[at + 15] = 32;
+  o[at + 16] = 116;
+  o[at + 17] = 104;
+  o[at + 18] = 101;
+  o[at + 19] = 32;
+  o[at + 20] = 114;
+  o[at + 21] = 101;
+  o[at + 22] = 113;
+  o[at + 23] = 117;
+  o[at + 24] = 101;
+  o[at + 25] = 115;
+  o[at + 26] = 116;
+  o[at + 27] = 32;
+  o[at + 28] = 98;
+  o[at + 29] = 117;
+  o[at + 30] = 100;
+  o[at + 31] = 103;
+  o[at + 32] = 101;
+  o[at + 33] = 116;
+  o[at + 34] = 32;
+  o[at + 35] = 108;
+  o[at + 36] = 105;
+  o[at + 37] = 109;
+  o[at + 38] = 105;
+  o[at + 39] = 116;
+  o[at + 40] = 32;
+  o[at + 41] = 40;
 }
-// 'The user raised the request budget limit (' (42 units)
-fn put_pre_1_1(inout o: [i64], at: i64) -> ()
+fn put_post_1_1(inout o: [u8], at: i64) -> ()
   requires 0 <= at && at <= 1000000
   ensures len(o) == len(old(o))
 {
-  put3(inout o, at + 0, 433798512724);
-  put3(inout o, at + 3, 493928906784);
-  put3(inout o, at + 6, 137446424677);
-  put3(inout o, at + 9, 450977923186);
-  put3(inout o, at + 12, 429503348851);
-  put3(inout o, at + 15, 446684200992);
-  put3(inout o, at + 18, 489628368997);
-  put3(inout o, at + 21, 502518579301);
-  put3(inout o, at + 24, 498223743077);
-  put3(inout o, at + 27, 502517596192);
-  put3(inout o, at + 30, 433798447204);
-  put3(inout o, at + 33, 463858565236);
-  put3(inout o, at + 36, 450978709609);
-  put3(inout o, at + 39, 171800789108);
+  if at + 136 > len(o) { return; }
+  o[at + 0] = 41;
+  o[at + 1] = 46;
+  o[at + 2] = 32;
+  o[at + 3] = 84;
+  o[at + 4] = 104;
+  o[at + 5] = 101;
+  o[at + 6] = 32;
+  o[at + 7] = 116;
+  o[at + 8] = 111;
+  o[at + 9] = 111;
+  o[at + 10] = 108;
+  o[at + 11] = 32;
+  o[at + 12] = 99;
+  o[at + 13] = 97;
+  o[at + 14] = 108;
+  o[at + 15] = 108;
+  o[at + 16] = 32;
+  o[at + 17] = 116;
+  o[at + 18] = 104;
+  o[at + 19] = 97;
+  o[at + 20] = 116;
+  o[at + 21] = 32;
+  o[at + 22] = 119;
+  o[at + 23] = 97;
+  o[at + 24] = 115;
+  o[at + 25] = 32;
+  o[at + 26] = 99;
+  o[at + 27] = 117;
+  o[at + 28] = 116;
+  o[at + 29] = 32;
+  o[at + 30] = 111;
+  o[at + 31] = 102;
+  o[at + 32] = 102;
+  o[at + 33] = 32;
+  o[at + 34] = 101;
+  o[at + 35] = 97;
+  o[at + 36] = 114;
+  o[at + 37] = 108;
+  o[at + 38] = 105;
+  o[at + 39] = 101;
+  o[at + 40] = 114;
+  o[at + 41] = 32;
+  o[at + 42] = 119;
+  o[at + 43] = 97;
+  o[at + 44] = 115;
+  o[at + 45] = 32;
+  o[at + 46] = 115;
+  o[at + 47] = 116;
+  o[at + 48] = 111;
+  o[at + 49] = 112;
+  o[at + 50] = 112;
+  o[at + 51] = 101;
+  o[at + 52] = 100;
+  o[at + 53] = 32;
+  o[at + 54] = 98;
+  o[at + 55] = 121;
+  o[at + 56] = 32;
+  o[at + 57] = 116;
+  o[at + 58] = 104;
+  o[at + 59] = 101;
+  o[at + 60] = 32;
+  o[at + 61] = 97;
+  o[at + 62] = 112;
+  o[at + 63] = 112;
+  o[at + 64] = 32;
+  o[at + 65] = 97;
+  o[at + 66] = 116;
+  o[at + 67] = 32;
+  o[at + 68] = 116;
+  o[at + 69] = 104;
+  o[at + 70] = 105;
+  o[at + 71] = 115;
+  o[at + 72] = 32;
+  o[at + 73] = 98;
+  o[at + 74] = 117;
+  o[at + 75] = 100;
+  o[at + 76] = 103;
+  o[at + 77] = 101;
+  o[at + 78] = 116;
+  o[at + 79] = 32;
+  o[at + 80] = 108;
+  o[at + 81] = 105;
+  o[at + 82] = 109;
+  o[at + 83] = 105;
+  o[at + 84] = 116;
+  o[at + 85] = 44;
+  o[at + 86] = 32;
+  o[at + 87] = 110;
+  o[at + 88] = 111;
+  o[at + 89] = 116;
+  o[at + 90] = 32;
+  o[at + 91] = 98;
+  o[at + 92] = 121;
+  o[at + 93] = 32;
+  o[at + 94] = 116;
+  o[at + 95] = 104;
+  o[at + 96] = 101;
+  o[at + 97] = 32;
+  o[at + 98] = 117;
+  o[at + 99] = 115;
+  o[at + 100] = 101;
+  o[at + 101] = 114;
+  o[at + 102] = 46;
+  o[at + 103] = 32;
+  o[at + 104] = 67;
+  o[at + 105] = 111;
+  o[at + 106] = 110;
+  o[at + 107] = 116;
+  o[at + 108] = 105;
+  o[at + 109] = 110;
+  o[at + 110] = 117;
+  o[at + 111] = 101;
+  o[at + 112] = 32;
+  o[at + 113] = 102;
+  o[at + 114] = 114;
+  o[at + 115] = 111;
+  o[at + 116] = 109;
+  o[at + 117] = 32;
+  o[at + 118] = 119;
+  o[at + 119] = 104;
+  o[at + 120] = 101;
+  o[at + 121] = 114;
+  o[at + 122] = 101;
+  o[at + 123] = 32;
+  o[at + 124] = 121;
+  o[at + 125] = 111;
+  o[at + 126] = 117;
+  o[at + 127] = 32;
+  o[at + 128] = 115;
+  o[at + 129] = 116;
+  o[at + 130] = 111;
+  o[at + 131] = 112;
+  o[at + 132] = 112;
+  o[at + 133] = 101;
+  o[at + 134] = 100;
+  o[at + 135] = 46;
 }
-// ')를 늘렸다. 앞서 끊긴 도구 호출은 사용자 중단이 아니라 이 예산 한도에 닿아 앱이 멈춘 것이다. 멈춘 지점에서 이어 간다.' (70 units)
-fn put_post_1_0(inout o: [i64], at: i64) -> ()
+fn put_pre_1_0(inout o: [u8], at: i64) -> ()
   requires 0 <= at && at <= 1000000
   ensures len(o) == len(old(o))
 {
-  put3(inout o, at + 0, 140550864937);
-  put3(inout o, at + 3, 196695413011096);
-  put3(inout o, at + 6, 217007519694894);
-  put3(inout o, at + 9, 193831876215068);
-  put3(inout o, at + 12, 197654397103668);
-  put3(inout o, at + 15, 235536008654188);
-  put3(inout o, at + 18, 140781866396);
-  put3(inout o, at + 21, 219424622231724);
-  put3(inout o, at + 24, 196712875491360);
-  put3(inout o, at + 27, 216895850596212);
-  put3(inout o, at + 30, 140517356232);
-  put3(inout o, at + 33, 217737664186228);
-  put3(inout o, at + 36, 234591115854000);
-  put3(inout o, at + 39, 140757742532);
-  put3(inout o, at + 42, 140748567295);
-  put3(inout o, at + 45, 140785272177);
-  put3(inout o, at + 48, 140888291912);
-  put3(inout o, at + 51, 196695668599939);
-  put3(inout o, at + 54, 204818402508846);
-  put3(inout o, at + 57, 221826473053592);
-  put3(inout o, at + 60, 212329322039312);
-  put3(inout o, at + 63, 217380231053344);
-  put3(inout o, at + 66, 196695208230944);
-  crate::ent_u16::wr(inout o, at + 69, 46);
+  if at + 27 > len(o) { return; }
+  o[at + 0] = 236;
+  o[at + 1] = 130;
+  o[at + 2] = 172;
+  o[at + 3] = 236;
+  o[at + 4] = 154;
+  o[at + 5] = 169;
+  o[at + 6] = 236;
+  o[at + 7] = 158;
+  o[at + 8] = 144;
+  o[at + 9] = 234;
+  o[at + 10] = 176;
+  o[at + 11] = 128;
+  o[at + 12] = 32;
+  o[at + 13] = 236;
+  o[at + 14] = 152;
+  o[at + 15] = 136;
+  o[at + 16] = 236;
+  o[at + 17] = 130;
+  o[at + 18] = 176;
+  o[at + 19] = 32;
+  o[at + 20] = 237;
+  o[at + 21] = 149;
+  o[at + 22] = 156;
+  o[at + 23] = 235;
+  o[at + 24] = 143;
+  o[at + 25] = 132;
+  o[at + 26] = 40;
 }
-// '). The tool call that was cut off earlier was stopped by the app at this budget limit, not by the user. Continue from where you stopped.' (136 units)
-fn put_post_1_1(inout o: [i64], at: i64) -> ()
+fn put_post_1_0(inout o: [u8], at: i64) -> ()
   requires 0 <= at && at <= 1000000
   ensures len(o) == len(old(o))
 {
-  put3(inout o, at + 0, 137441968169);
-  put3(inout o, at + 3, 433798512724);
-  put3(inout o, at + 6, 476748972064);
-  put3(inout o, at + 9, 137446031471);
-  put3(inout o, at + 12, 463862825059);
-  put3(inout o, at + 15, 498218303596);
-  put3(inout o, at + 18, 498222563432);
-  put3(inout o, at + 21, 416619626528);
-  put3(inout o, at + 24, 425203859571);
-  put3(inout o, at + 27, 137446555765);
-  put3(inout o, at + 30, 438093348975);
-  put3(inout o, at + 33, 416618446880);
-  put3(inout o, at + 36, 450978644082);
-  put3(inout o, at + 39, 137446424677);
-  put3(inout o, at + 42, 493927596151);
-  put3(inout o, at + 45, 498223743008);
-  put3(inout o, at + 48, 481043677295);
-  put3(inout o, at + 51, 137445507173);
-  put3(inout o, at + 54, 137446883426);
-  put3(inout o, at + 57, 433798512756);
-  put3(inout o, at + 60, 481042694176);
-  put3(inout o, at + 63, 416613924976);
-  put3(inout o, at + 66, 498218303604);
-  put3(inout o, at + 69, 493928120424);
-  put3(inout o, at + 72, 502517596192);
-  put3(inout o, at + 75, 433798447204);
-  put3(inout o, at + 78, 463858565236);
-  put3(inout o, at + 81, 450978709609);
-  put3(inout o, at + 84, 137441837172);
-  put3(inout o, at + 87, 498223480942);
-  put3(inout o, at + 90, 519697465376);
-  put3(inout o, at + 93, 446684200992);
-  put3(inout o, at + 96, 502513270885);
-  put3(inout o, at + 99, 489632890995);
-  put3(inout o, at + 102, 287764906030);
-  put3(inout o, at + 105, 498223415407);
-  put3(inout o, at + 108, 502518382697);
-  put3(inout o, at + 111, 438088761445);
-  put3(inout o, at + 114, 468158709874);
-  put3(inout o, at + 117, 446684397600);
-  put3(inout o, at + 120, 433799168101);
-  put3(inout o, at + 123, 476749299744);
-  put3(inout o, at + 126, 493923336309);
-  put3(inout o, at + 129, 481043611764);
-  put3(inout o, at + 132, 429503348848);
-  crate::ent_u16::wr(inout o, at + 135, 46);
+  if at + 164 > len(o) { return; }
+  o[at + 0] = 41;
+  o[at + 1] = 235;
+  o[at + 2] = 165;
+  o[at + 3] = 188;
+  o[at + 4] = 32;
+  o[at + 5] = 235;
+  o[at + 6] = 138;
+  o[at + 7] = 152;
+  o[at + 8] = 235;
+  o[at + 9] = 160;
+  o[at + 10] = 184;
+  o[at + 11] = 235;
+  o[at + 12] = 139;
+  o[at + 13] = 164;
+  o[at + 14] = 46;
+  o[at + 15] = 32;
+  o[at + 16] = 236;
+  o[at + 17] = 149;
+  o[at + 18] = 158;
+  o[at + 19] = 236;
+  o[at + 20] = 132;
+  o[at + 21] = 156;
+  o[at + 22] = 32;
+  o[at + 23] = 235;
+  o[at + 24] = 129;
+  o[at + 25] = 138;
+  o[at + 26] = 234;
+  o[at + 27] = 184;
+  o[at + 28] = 180;
+  o[at + 29] = 32;
+  o[at + 30] = 235;
+  o[at + 31] = 143;
+  o[at + 32] = 132;
+  o[at + 33] = 234;
+  o[at + 34] = 181;
+  o[at + 35] = 172;
+  o[at + 36] = 32;
+  o[at + 37] = 237;
+  o[at + 38] = 152;
+  o[at + 39] = 184;
+  o[at + 40] = 236;
+  o[at + 41] = 182;
+  o[at + 42] = 156;
+  o[at + 43] = 236;
+  o[at + 44] = 157;
+  o[at + 45] = 128;
+  o[at + 46] = 32;
+  o[at + 47] = 236;
+  o[at + 48] = 130;
+  o[at + 49] = 172;
+  o[at + 50] = 236;
+  o[at + 51] = 154;
+  o[at + 52] = 169;
+  o[at + 53] = 236;
+  o[at + 54] = 158;
+  o[at + 55] = 144;
+  o[at + 56] = 32;
+  o[at + 57] = 236;
+  o[at + 58] = 164;
+  o[at + 59] = 145;
+  o[at + 60] = 235;
+  o[at + 61] = 139;
+  o[at + 62] = 168;
+  o[at + 63] = 236;
+  o[at + 64] = 157;
+  o[at + 65] = 180;
+  o[at + 66] = 32;
+  o[at + 67] = 236;
+  o[at + 68] = 149;
+  o[at + 69] = 132;
+  o[at + 70] = 235;
+  o[at + 71] = 139;
+  o[at + 72] = 136;
+  o[at + 73] = 235;
+  o[at + 74] = 157;
+  o[at + 75] = 188;
+  o[at + 76] = 32;
+  o[at + 77] = 236;
+  o[at + 78] = 157;
+  o[at + 79] = 180;
+  o[at + 80] = 32;
+  o[at + 81] = 236;
+  o[at + 82] = 152;
+  o[at + 83] = 136;
+  o[at + 84] = 236;
+  o[at + 85] = 130;
+  o[at + 86] = 176;
+  o[at + 87] = 32;
+  o[at + 88] = 237;
+  o[at + 89] = 149;
+  o[at + 90] = 156;
+  o[at + 91] = 235;
+  o[at + 92] = 143;
+  o[at + 93] = 132;
+  o[at + 94] = 236;
+  o[at + 95] = 151;
+  o[at + 96] = 144;
+  o[at + 97] = 32;
+  o[at + 98] = 235;
+  o[at + 99] = 139;
+  o[at + 100] = 191;
+  o[at + 101] = 236;
+  o[at + 102] = 149;
+  o[at + 103] = 132;
+  o[at + 104] = 32;
+  o[at + 105] = 236;
+  o[at + 106] = 149;
+  o[at + 107] = 177;
+  o[at + 108] = 236;
+  o[at + 109] = 157;
+  o[at + 110] = 180;
+  o[at + 111] = 32;
+  o[at + 112] = 235;
+  o[at + 113] = 169;
+  o[at + 114] = 136;
+  o[at + 115] = 236;
+  o[at + 116] = 182;
+  o[at + 117] = 152;
+  o[at + 118] = 32;
+  o[at + 119] = 234;
+  o[at + 120] = 178;
+  o[at + 121] = 131;
+  o[at + 122] = 236;
+  o[at + 123] = 157;
+  o[at + 124] = 180;
+  o[at + 125] = 235;
+  o[at + 126] = 139;
+  o[at + 127] = 164;
+  o[at + 128] = 46;
+  o[at + 129] = 32;
+  o[at + 130] = 235;
+  o[at + 131] = 169;
+  o[at + 132] = 136;
+  o[at + 133] = 236;
+  o[at + 134] = 182;
+  o[at + 135] = 152;
+  o[at + 136] = 32;
+  o[at + 137] = 236;
+  o[at + 138] = 167;
+  o[at + 139] = 128;
+  o[at + 140] = 236;
+  o[at + 141] = 160;
+  o[at + 142] = 144;
+  o[at + 143] = 236;
+  o[at + 144] = 151;
+  o[at + 145] = 144;
+  o[at + 146] = 236;
+  o[at + 147] = 132;
+  o[at + 148] = 156;
+  o[at + 149] = 32;
+  o[at + 150] = 236;
+  o[at + 151] = 157;
+  o[at + 152] = 180;
+  o[at + 153] = 236;
+  o[at + 154] = 150;
+  o[at + 155] = 180;
+  o[at + 156] = 32;
+  o[at + 157] = 234;
+  o[at + 158] = 176;
+  o[at + 159] = 132;
+  o[at + 160] = 235;
+  o[at + 161] = 139;
+  o[at + 162] = 164;
+  o[at + 163] = 46;
 }
-// '제한 없음' (5 units)
-fn put_nl_0(inout o: [i64], at: i64) -> ()
+fn put_nl_1(inout o: [u8], at: i64) -> ()
   requires 0 <= at && at <= 1000000
   ensures len(o) == len(old(o))
 {
-  put3(inout o, at + 0, 141018581020);
-  crate::ent_u16::wr(inout o, at + 3, 50630);
-  crate::ent_u16::wr(inout o, at + 4, 51020);
+  if at + 8 > len(o) { return; }
+  o[at + 0] = 110;
+  o[at + 1] = 111;
+  o[at + 2] = 32;
+  o[at + 3] = 108;
+  o[at + 4] = 105;
+  o[at + 5] = 109;
+  o[at + 6] = 105;
+  o[at + 7] = 116;
 }
-// 'no limit' (8 units)
-fn put_nl_1(inout o: [i64], at: i64) -> ()
+fn put_nl_0(inout o: [u8], at: i64) -> ()
   requires 0 <= at && at <= 1000000
   ensures len(o) == len(old(o))
 {
-  put3(inout o, at + 0, 137446228078);
-  put3(inout o, at + 3, 468158316652);
-  crate::ent_u16::wr(inout o, at + 6, 105);
-  crate::ent_u16::wr(inout o, at + 7, 116);
+  if at + 13 > len(o) { return; }
+  o[at + 0] = 236;
+  o[at + 1] = 160;
+  o[at + 2] = 156;
+  o[at + 3] = 237;
+  o[at + 4] = 149;
+  o[at + 5] = 156;
+  o[at + 6] = 32;
+  o[at + 7] = 236;
+  o[at + 8] = 151;
+  o[at + 9] = 134;
+  o[at + 10] = 236;
+  o[at + 11] = 157;
+  o[at + 12] = 140;
 }
-// '시간' (2 units)
-fn put_cn_0_0(inout o: [i64], at: i64) -> ()
+fn put_cm_1(inout o: [u8], at: i64) -> ()
   requires 0 <= at && at <= 1000000
   ensures len(o) == len(old(o))
 {
-  crate::ent_u16::wr(inout o, at + 0, 49884);
-  crate::ent_u16::wr(inout o, at + 1, 44036);
+  if at + 89 > len(o) { return; }
+  o[at + 0] = 66;
+  o[at + 1] = 101;
+  o[at + 2] = 102;
+  o[at + 3] = 111;
+  o[at + 4] = 114;
+  o[at + 5] = 101;
+  o[at + 6] = 32;
+  o[at + 7] = 100;
+  o[at + 8] = 101;
+  o[at + 9] = 108;
+  o[at + 10] = 101;
+  o[at + 11] = 103;
+  o[at + 12] = 97;
+  o[at + 13] = 116;
+  o[at + 14] = 105;
+  o[at + 15] = 110;
+  o[at + 16] = 103;
+  o[at + 17] = 44;
+  o[at + 18] = 32;
+  o[at + 19] = 119;
+  o[at + 20] = 114;
+  o[at + 21] = 105;
+  o[at + 22] = 116;
+  o[at + 23] = 101;
+  o[at + 24] = 32;
+  o[at + 25] = 116;
+  o[at + 26] = 104;
+  o[at + 27] = 101;
+  o[at + 28] = 32;
+  o[at + 29] = 100;
+  o[at + 30] = 101;
+  o[at + 31] = 108;
+  o[at + 32] = 105;
+  o[at + 33] = 118;
+  o[at + 34] = 101;
+  o[at + 35] = 114;
+  o[at + 36] = 97;
+  o[at + 37] = 98;
+  o[at + 38] = 108;
+  o[at + 39] = 101;
+  o[at + 40] = 32;
+  o[at + 41] = 97;
+  o[at + 42] = 110;
+  o[at + 43] = 100;
+  o[at + 44] = 32;
+  o[at + 45] = 116;
+  o[at + 46] = 104;
+  o[at + 47] = 101;
+  o[at + 48] = 32;
+  o[at + 49] = 100;
+  o[at + 50] = 111;
+  o[at + 51] = 110;
+  o[at + 52] = 101;
+  o[at + 53] = 32;
+  o[at + 54] = 99;
+  o[at + 55] = 111;
+  o[at + 56] = 110;
+  o[at + 57] = 100;
+  o[at + 58] = 105;
+  o[at + 59] = 116;
+  o[at + 60] = 105;
+  o[at + 61] = 111;
+  o[at + 62] = 110;
+  o[at + 63] = 115;
+  o[at + 64] = 32;
+  o[at + 65] = 119;
+  o[at + 66] = 105;
+  o[at + 67] = 116;
+  o[at + 68] = 104;
+  o[at + 69] = 32;
+  o[at + 70] = 116;
+  o[at + 71] = 104;
+  o[at + 72] = 101;
+  o[at + 73] = 32;
+  o[at + 74] = 119;
+  o[at + 75] = 111;
+  o[at + 76] = 114;
+  o[at + 77] = 107;
+  o[at + 78] = 95;
+  o[at + 79] = 99;
+  o[at + 80] = 97;
+  o[at + 81] = 114;
+  o[at + 82] = 100;
+  o[at + 83] = 32;
+  o[at + 84] = 116;
+  o[at + 85] = 111;
+  o[at + 86] = 111;
+  o[at + 87] = 108;
+  o[at + 88] = 46;
 }
-// '위임' (2 units)
-fn put_cn_1_0(inout o: [i64], at: i64) -> ()
+fn put_cm_0(inout o: [u8], at: i64) -> ()
   requires 0 <= at && at <= 1000000
   ensures len(o) == len(old(o))
 {
-  crate::ent_u16::wr(inout o, at + 0, 50948);
-  crate::ent_u16::wr(inout o, at + 1, 51076);
+  if at + 81 > len(o) { return; }
+  o[at + 0] = 236;
+  o[at + 1] = 156;
+  o[at + 2] = 132;
+  o[at + 3] = 236;
+  o[at + 4] = 158;
+  o[at + 5] = 132;
+  o[at + 6] = 32;
+  o[at + 7] = 236;
+  o[at + 8] = 160;
+  o[at + 9] = 132;
+  o[at + 10] = 236;
+  o[at + 11] = 151;
+  o[at + 12] = 144;
+  o[at + 13] = 32;
+  o[at + 14] = 119;
+  o[at + 15] = 111;
+  o[at + 16] = 114;
+  o[at + 17] = 107;
+  o[at + 18] = 95;
+  o[at + 19] = 99;
+  o[at + 20] = 97;
+  o[at + 21] = 114;
+  o[at + 22] = 100;
+  o[at + 23] = 32;
+  o[at + 24] = 235;
+  o[at + 25] = 143;
+  o[at + 26] = 132;
+  o[at + 27] = 234;
+  o[at + 28] = 181;
+  o[at + 29] = 172;
+  o[at + 30] = 235;
+  o[at + 31] = 161;
+  o[at + 32] = 156;
+  o[at + 33] = 32;
+  o[at + 34] = 236;
+  o[at + 35] = 130;
+  o[at + 36] = 176;
+  o[at + 37] = 236;
+  o[at + 38] = 182;
+  o[at + 39] = 156;
+  o[at + 40] = 235;
+  o[at + 41] = 172;
+  o[at + 42] = 188;
+  o[at + 43] = 234;
+  o[at + 44] = 179;
+  o[at + 45] = 188;
+  o[at + 46] = 32;
+  o[at + 47] = 236;
+  o[at + 48] = 153;
+  o[at + 49] = 132;
+  o[at + 50] = 235;
+  o[at + 51] = 163;
+  o[at + 52] = 140;
+  o[at + 53] = 32;
+  o[at + 54] = 236;
+  o[at + 55] = 161;
+  o[at + 56] = 176;
+  o[at + 57] = 234;
+  o[at + 58] = 177;
+  o[at + 59] = 180;
+  o[at + 60] = 236;
+  o[at + 61] = 157;
+  o[at + 62] = 132;
+  o[at + 63] = 32;
+  o[at + 64] = 235;
+  o[at + 65] = 168;
+  o[at + 66] = 188;
+  o[at + 67] = 236;
+  o[at + 68] = 160;
+  o[at + 69] = 128;
+  o[at + 70] = 32;
+  o[at + 71] = 236;
+  o[at + 72] = 160;
+  o[at + 73] = 129;
+  o[at + 74] = 235;
+  o[at + 75] = 138;
+  o[at + 76] = 148;
+  o[at + 77] = 235;
+  o[at + 78] = 139;
+  o[at + 79] = 164;
+  o[at + 80] = 46;
 }
-// '빌드·명령' (5 units)
-fn put_cn_2_0(inout o: [i64], at: i64) -> ()
+fn put_cn_0_0(inout o: [u8], at: i64) -> ()
   requires 0 <= at && at <= 1000000
   ensures len(o) == len(old(o))
 {
-  put3(inout o, at + 0, 789013380684);
-  crate::ent_u16::wr(inout o, at + 3, 47749);
-  crate::ent_u16::wr(inout o, at + 4, 47161);
+  if at + 6 > len(o) { return; }
+  o[at + 0] = 236;
+  o[at + 1] = 139;
+  o[at + 2] = 156;
+  o[at + 3] = 234;
+  o[at + 4] = 176;
+  o[at + 5] = 132;
 }
-// '감사' (2 units)
-fn put_cn_3_0(inout o: [i64], at: i64) -> ()
+fn put_cn_1_0(inout o: [u8], at: i64) -> ()
   requires 0 <= at && at <= 1000000
   ensures len(o) == len(old(o))
 {
-  crate::ent_u16::wr(inout o, at + 0, 44048);
-  crate::ent_u16::wr(inout o, at + 1, 49324);
+  if at + 6 > len(o) { return; }
+  o[at + 0] = 236;
+  o[at + 1] = 156;
+  o[at + 2] = 132;
+  o[at + 3] = 236;
+  o[at + 4] = 158;
+  o[at + 5] = 132;
 }
-// '실제 확인' (5 units)
-fn put_cn_4_0(inout o: [i64], at: i64) -> ()
+fn put_cn_2_0(inout o: [u8], at: i64) -> ()
   requires 0 <= at && at <= 1000000
   ensures len(o) == len(old(o))
 {
-  put3(inout o, at + 0, 140796281572);
-  crate::ent_u16::wr(inout o, at + 3, 54869);
-  crate::ent_u16::wr(inout o, at + 4, 51064);
+  if at + 14 > len(o) { return; }
+  o[at + 0] = 235;
+  o[at + 1] = 185;
+  o[at + 2] = 140;
+  o[at + 3] = 235;
+  o[at + 4] = 147;
+  o[at + 5] = 156;
+  o[at + 6] = 194;
+  o[at + 7] = 183;
+  o[at + 8] = 235;
+  o[at + 9] = 170;
+  o[at + 10] = 133;
+  o[at + 11] = 235;
+  o[at + 12] = 160;
+  o[at + 13] = 185;
 }
-// 'time' (4 units)
-fn put_cn_0_1(inout o: [i64], at: i64) -> ()
+fn put_cn_3_0(inout o: [u8], at: i64) -> ()
   requires 0 <= at && at <= 1000000
   ensures len(o) == len(old(o))
 {
-  put3(inout o, at + 0, 468158316660);
-  crate::ent_u16::wr(inout o, at + 3, 101);
+  if at + 6 > len(o) { return; }
+  o[at + 0] = 234;
+  o[at + 1] = 176;
+  o[at + 2] = 144;
+  o[at + 3] = 236;
+  o[at + 4] = 130;
+  o[at + 5] = 172;
 }
-// 'delegations' (11 units)
-fn put_cn_1_1(inout o: [i64], at: i64) -> ()
+fn put_cn_4_0(inout o: [u8], at: i64) -> ()
   requires 0 <= at && at <= 1000000
   ensures len(o) == len(old(o))
 {
-  put3(inout o, at + 0, 463863087204);
-  put3(inout o, at + 3, 416618578021);
-  put3(inout o, at + 6, 476748251252);
-  crate::ent_u16::wr(inout o, at + 9, 110);
-  crate::ent_u16::wr(inout o, at + 10, 115);
+  if at + 13 > len(o) { return; }
+  o[at + 0] = 236;
+  o[at + 1] = 139;
+  o[at + 2] = 164;
+  o[at + 3] = 236;
+  o[at + 4] = 160;
+  o[at + 5] = 156;
+  o[at + 6] = 32;
+  o[at + 7] = 237;
+  o[at + 8] = 153;
+  o[at + 9] = 149;
+  o[at + 10] = 236;
+  o[at + 11] = 157;
+  o[at + 12] = 184;
 }
-// 'commands' (8 units)
-fn put_cn_2_1(inout o: [i64], at: i64) -> ()
+fn put_cn_0_1(inout o: [u8], at: i64) -> ()
   requires 0 <= at && at <= 1000000
   ensures len(o) == len(old(o))
 {
-  put3(inout o, at + 0, 468158709859);
-  put3(inout o, at + 3, 472452759661);
-  crate::ent_u16::wr(inout o, at + 6, 100);
-  crate::ent_u16::wr(inout o, at + 7, 115);
+  if at + 4 > len(o) { return; }
+  o[at + 0] = 116;
+  o[at + 1] = 105;
+  o[at + 2] = 109;
+  o[at + 3] = 101;
 }
-// 'reviews' (7 units)
-fn put_cn_3_1(inout o: [i64], at: i64) -> ()
+fn put_cn_1_1(inout o: [u8], at: i64) -> ()
   requires 0 <= at && at <= 1000000
   ensures len(o) == len(old(o))
 {
-  put3(inout o, at + 0, 506812760178);
-  put3(inout o, at + 3, 511107727465);
-  crate::ent_u16::wr(inout o, at + 6, 115);
+  if at + 11 > len(o) { return; }
+  o[at + 0] = 100;
+  o[at + 1] = 101;
+  o[at + 2] = 108;
+  o[at + 3] = 101;
+  o[at + 4] = 103;
+  o[at + 5] = 97;
+  o[at + 6] = 116;
+  o[at + 7] = 105;
+  o[at + 8] = 111;
+  o[at + 9] = 110;
+  o[at + 10] = 115;
 }
-// 'checks' (6 units)
-fn put_cn_4_1(inout o: [i64], at: i64) -> ()
+fn put_cn_2_1(inout o: [u8], at: i64) -> ()
   requires 0 <= at && at <= 1000000
   ensures len(o) == len(old(o))
 {
-  put3(inout o, at + 0, 433798512739);
-  put3(inout o, at + 3, 493928251491);
+  if at + 8 > len(o) { return; }
+  o[at + 0] = 99;
+  o[at + 1] = 111;
+  o[at + 2] = 109;
+  o[at + 3] = 109;
+  o[at + 4] = 97;
+  o[at + 5] = 110;
+  o[at + 6] = 100;
+  o[at + 7] = 115;
+}
+fn put_cn_3_1(inout o: [u8], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  if at + 7 > len(o) { return; }
+  o[at + 0] = 114;
+  o[at + 1] = 101;
+  o[at + 2] = 118;
+  o[at + 3] = 105;
+  o[at + 4] = 101;
+  o[at + 5] = 119;
+  o[at + 6] = 115;
+}
+fn put_cn_4_1(inout o: [u8], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  if at + 6 > len(o) { return; }
+  o[at + 0] = 99;
+  o[at + 1] = 104;
+  o[at + 2] = 101;
+  o[at + 3] = 99;
+  o[at + 4] = 107;
+  o[at + 5] = 115;
+}
+fn put_ce_0_0(inout o: [u8], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  if at + 75 > len(o) { return; }
+  o[at + 0] = 236;
+  o[at + 1] = 167;
+  o[at + 2] = 128;
+  o[at + 3] = 234;
+  o[at + 4] = 184;
+  o[at + 5] = 136;
+  o[at + 6] = 32;
+  o[at + 7] = 236;
+  o[at + 8] = 152;
+  o[at + 9] = 136;
+  o[at + 10] = 236;
+  o[at + 11] = 130;
+  o[at + 12] = 176;
+  o[at + 13] = 236;
+  o[at + 14] = 157;
+  o[at + 15] = 132;
+  o[at + 16] = 32;
+  o[at + 17] = 236;
+  o[at + 18] = 176;
+  o[at + 19] = 190;
+  o[at + 20] = 236;
+  o[at + 21] = 157;
+  o[at + 22] = 132;
+  o[at + 23] = 32;
+  o[at + 24] = 236;
+  o[at + 25] = 136;
+  o[at + 26] = 152;
+  o[at + 27] = 32;
+  o[at + 28] = 236;
+  o[at + 29] = 151;
+  o[at + 30] = 134;
+  o[at + 31] = 236;
+  o[at + 32] = 150;
+  o[at + 33] = 180;
+  o[at + 34] = 32;
+  o[at + 35] = 236;
+  o[at + 36] = 158;
+  o[at + 37] = 145;
+  o[at + 38] = 236;
+  o[at + 39] = 151;
+  o[at + 40] = 133;
+  o[at + 41] = 32;
+  o[at + 42] = 236;
+  o[at + 43] = 185;
+  o[at + 44] = 180;
+  o[at + 45] = 235;
+  o[at + 46] = 147;
+  o[at + 47] = 156;
+  o[at + 48] = 235;
+  o[at + 49] = 165;
+  o[at + 50] = 188;
+  o[at + 51] = 32;
+  o[at + 52] = 236;
+  o[at + 53] = 160;
+  o[at + 54] = 128;
+  o[at + 55] = 236;
+  o[at + 56] = 158;
+  o[at + 57] = 165;
+  o[at + 58] = 237;
+  o[at + 59] = 149;
+  o[at + 60] = 152;
+  o[at + 61] = 236;
+  o[at + 62] = 167;
+  o[at + 63] = 128;
+  o[at + 64] = 32;
+  o[at + 65] = 235;
+  o[at + 66] = 170;
+  o[at + 67] = 187;
+  o[at + 68] = 237;
+  o[at + 69] = 150;
+  o[at + 70] = 136;
+  o[at + 71] = 235;
+  o[at + 72] = 139;
+  o[at + 73] = 164;
+  o[at + 74] = 46;
+}
+fn put_ce_1_0(inout o: [u8], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  if at + 38 > len(o) { return; }
+  o[at + 0] = 100;
+  o[at + 1] = 101;
+  o[at + 2] = 108;
+  o[at + 3] = 105;
+  o[at + 4] = 118;
+  o[at + 5] = 101;
+  o[at + 6] = 114;
+  o[at + 7] = 97;
+  o[at + 8] = 98;
+  o[at + 9] = 108;
+  o[at + 10] = 101;
+  o[at + 11] = 32;
+  o[at + 12] = 236;
+  o[at + 13] = 157;
+  o[at + 14] = 128;
+  o[at + 15] = 32;
+  o[at + 16] = 49;
+  o[at + 17] = 126;
+  o[at + 18] = 51;
+  o[at + 19] = 48;
+  o[at + 20] = 48;
+  o[at + 21] = 236;
+  o[at + 22] = 158;
+  o[at + 23] = 144;
+  o[at + 24] = 236;
+  o[at + 25] = 151;
+  o[at + 26] = 172;
+  o[at + 27] = 236;
+  o[at + 28] = 149;
+  o[at + 29] = 188;
+  o[at + 30] = 32;
+  o[at + 31] = 237;
+  o[at + 32] = 149;
+  o[at + 33] = 156;
+  o[at + 34] = 235;
+  o[at + 35] = 139;
+  o[at + 36] = 164;
+  o[at + 37] = 46;
+}
+fn put_ce_2_0(inout o: [u8], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  if at + 50 > len(o) { return; }
+  o[at + 0] = 100;
+  o[at + 1] = 111;
+  o[at + 2] = 110;
+  o[at + 3] = 101;
+  o[at + 4] = 32;
+  o[at + 5] = 236;
+  o[at + 6] = 157;
+  o[at + 7] = 128;
+  o[at + 8] = 32;
+  o[at + 9] = 234;
+  o[at + 10] = 176;
+  o[at + 11] = 129;
+  o[at + 12] = 32;
+  o[at + 13] = 51;
+  o[at + 14] = 48;
+  o[at + 15] = 48;
+  o[at + 16] = 236;
+  o[at + 17] = 158;
+  o[at + 18] = 144;
+  o[at + 19] = 32;
+  o[at + 20] = 236;
+  o[at + 21] = 157;
+  o[at + 22] = 180;
+  o[at + 23] = 237;
+  o[at + 24] = 149;
+  o[at + 25] = 152;
+  o[at + 26] = 32;
+  o[at + 27] = 49;
+  o[at + 28] = 126;
+  o[at + 29] = 53;
+  o[at + 30] = 236;
+  o[at + 31] = 164;
+  o[at + 32] = 132;
+  o[at + 33] = 236;
+  o[at + 34] = 157;
+  o[at + 35] = 180;
+  o[at + 36] = 236;
+  o[at + 37] = 150;
+  o[at + 38] = 180;
+  o[at + 39] = 236;
+  o[at + 40] = 149;
+  o[at + 41] = 188;
+  o[at + 42] = 32;
+  o[at + 43] = 237;
+  o[at + 44] = 149;
+  o[at + 45] = 156;
+  o[at + 46] = 235;
+  o[at + 47] = 139;
+  o[at + 48] = 164;
+  o[at + 49] = 46;
+}
+fn put_ce_3_0(inout o: [u8], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  if at + 84 > len(o) { return; }
+  o[at + 0] = 116;
+  o[at + 1] = 97;
+  o[at + 2] = 114;
+  o[at + 3] = 103;
+  o[at + 4] = 101;
+  o[at + 5] = 116;
+  o[at + 6] = 115;
+  o[at + 7] = 32;
+  o[at + 8] = 236;
+  o[at + 9] = 157;
+  o[at + 10] = 152;
+  o[at + 11] = 32;
+  o[at + 12] = 236;
+  o[at + 13] = 136;
+  o[at + 14] = 152;
+  o[at + 15] = 235;
+  o[at + 16] = 138;
+  o[at + 17] = 148;
+  o[at + 18] = 32;
+  o[at + 19] = 48;
+  o[at + 20] = 32;
+  o[at + 21] = 236;
+  o[at + 22] = 157;
+  o[at + 23] = 180;
+  o[at + 24] = 236;
+  o[at + 25] = 131;
+  o[at + 26] = 129;
+  o[at + 27] = 32;
+  o[at + 28] = 236;
+  o[at + 29] = 160;
+  o[at + 30] = 149;
+  o[at + 31] = 236;
+  o[at + 32] = 136;
+  o[at + 33] = 152;
+  o[at + 34] = 236;
+  o[at + 35] = 151;
+  o[at + 36] = 172;
+  o[at + 37] = 236;
+  o[at + 38] = 149;
+  o[at + 39] = 188;
+  o[at + 40] = 32;
+  o[at + 41] = 237;
+  o[at + 42] = 149;
+  o[at + 43] = 152;
+  o[at + 44] = 234;
+  o[at + 45] = 179;
+  o[at + 46] = 160;
+  o[at + 47] = 32;
+  o[at + 48] = 110;
+  o[at + 49] = 111;
+  o[at + 50] = 116;
+  o[at + 51] = 101;
+  o[at + 52] = 32;
+  o[at + 53] = 235;
+  o[at + 54] = 138;
+  o[at + 55] = 148;
+  o[at + 56] = 32;
+  o[at + 57] = 51;
+  o[at + 58] = 48;
+  o[at + 59] = 48;
+  o[at + 60] = 236;
+  o[at + 61] = 158;
+  o[at + 62] = 144;
+  o[at + 63] = 32;
+  o[at + 64] = 236;
+  o[at + 65] = 157;
+  o[at + 66] = 180;
+  o[at + 67] = 237;
+  o[at + 68] = 149;
+  o[at + 69] = 152;
+  o[at + 70] = 236;
+  o[at + 71] = 151;
+  o[at + 72] = 172;
+  o[at + 73] = 236;
+  o[at + 74] = 149;
+  o[at + 75] = 188;
+  o[at + 76] = 32;
+  o[at + 77] = 237;
+  o[at + 78] = 149;
+  o[at + 79] = 156;
+  o[at + 80] = 235;
+  o[at + 81] = 139;
+  o[at + 82] = 164;
+  o[at + 83] = 46;
+}
+fn put_ce_4_0(inout o: [u8], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  if at + 100 > len(o) { return; }
+  o[at + 0] = 118;
+  o[at + 1] = 101;
+  o[at + 2] = 114;
+  o[at + 3] = 105;
+  o[at + 4] = 102;
+  o[at + 5] = 121;
+  o[at + 6] = 32;
+  o[at + 7] = 235;
+  o[at + 8] = 138;
+  o[at + 9] = 148;
+  o[at + 10] = 32;
+  o[at + 11] = 108;
+  o[at + 12] = 97;
+  o[at + 13] = 98;
+  o[at + 14] = 101;
+  o[at + 15] = 108;
+  o[at + 16] = 32;
+  o[at + 17] = 49;
+  o[at + 18] = 126;
+  o[at + 19] = 51;
+  o[at + 20] = 48;
+  o[at + 21] = 48;
+  o[at + 22] = 236;
+  o[at + 23] = 158;
+  o[at + 24] = 144;
+  o[at + 25] = 236;
+  o[at + 26] = 153;
+  o[at + 27] = 128;
+  o[at + 28] = 32;
+  o[at + 29] = 115;
+  o[at + 30] = 116;
+  o[at + 31] = 97;
+  o[at + 32] = 116;
+  o[at + 33] = 117;
+  o[at + 34] = 115;
+  o[at + 35] = 40;
+  o[at + 36] = 112;
+  o[at + 37] = 108;
+  o[at + 38] = 97;
+  o[at + 39] = 110;
+  o[at + 40] = 110;
+  o[at + 41] = 101;
+  o[at + 42] = 100;
+  o[at + 43] = 194;
+  o[at + 44] = 183;
+  o[at + 45] = 100;
+  o[at + 46] = 111;
+  o[at + 47] = 110;
+  o[at + 48] = 101;
+  o[at + 49] = 194;
+  o[at + 50] = 183;
+  o[at + 51] = 115;
+  o[at + 52] = 107;
+  o[at + 53] = 105;
+  o[at + 54] = 112;
+  o[at + 55] = 112;
+  o[at + 56] = 101;
+  o[at + 57] = 100;
+  o[at + 58] = 41;
+  o[at + 59] = 235;
+  o[at + 60] = 165;
+  o[at + 61] = 188;
+  o[at + 62] = 32;
+  o[at + 63] = 234;
+  o[at + 64] = 176;
+  o[at + 65] = 128;
+  o[at + 66] = 236;
+  o[at + 67] = 167;
+  o[at + 68] = 132;
+  o[at + 69] = 32;
+  o[at + 70] = 48;
+  o[at + 71] = 126;
+  o[at + 72] = 53;
+  o[at + 73] = 234;
+  o[at + 74] = 176;
+  o[at + 75] = 156;
+  o[at + 76] = 32;
+  o[at + 77] = 237;
+  o[at + 78] = 149;
+  o[at + 79] = 173;
+  o[at + 80] = 235;
+  o[at + 81] = 170;
+  o[at + 82] = 169;
+  o[at + 83] = 236;
+  o[at + 84] = 157;
+  o[at + 85] = 180;
+  o[at + 86] = 236;
+  o[at + 87] = 150;
+  o[at + 88] = 180;
+  o[at + 89] = 236;
+  o[at + 90] = 149;
+  o[at + 91] = 188;
+  o[at + 92] = 32;
+  o[at + 93] = 237;
+  o[at + 94] = 149;
+  o[at + 95] = 156;
+  o[at + 96] = 235;
+  o[at + 97] = 139;
+  o[at + 98] = 164;
+  o[at + 99] = 46;
+}
+fn put_ce_5_0(inout o: [u8], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  if at + 55 > len(o) { return; }
+  o[at + 0] = 99;
+  o[at + 1] = 111;
+  o[at + 2] = 110;
+  o[at + 3] = 102;
+  o[at + 4] = 108;
+  o[at + 5] = 105;
+  o[at + 6] = 99;
+  o[at + 7] = 116;
+  o[at + 8] = 115;
+  o[at + 9] = 32;
+  o[at + 10] = 235;
+  o[at + 11] = 138;
+  o[at + 12] = 148;
+  o[at + 13] = 32;
+  o[at + 14] = 234;
+  o[at + 15] = 176;
+  o[at + 16] = 129;
+  o[at + 17] = 32;
+  o[at + 18] = 51;
+  o[at + 19] = 48;
+  o[at + 20] = 48;
+  o[at + 21] = 236;
+  o[at + 22] = 158;
+  o[at + 23] = 144;
+  o[at + 24] = 32;
+  o[at + 25] = 236;
+  o[at + 26] = 157;
+  o[at + 27] = 180;
+  o[at + 28] = 237;
+  o[at + 29] = 149;
+  o[at + 30] = 152;
+  o[at + 31] = 32;
+  o[at + 32] = 48;
+  o[at + 33] = 126;
+  o[at + 34] = 53;
+  o[at + 35] = 236;
+  o[at + 36] = 164;
+  o[at + 37] = 132;
+  o[at + 38] = 236;
+  o[at + 39] = 157;
+  o[at + 40] = 180;
+  o[at + 41] = 236;
+  o[at + 42] = 150;
+  o[at + 43] = 180;
+  o[at + 44] = 236;
+  o[at + 45] = 149;
+  o[at + 46] = 188;
+  o[at + 47] = 32;
+  o[at + 48] = 237;
+  o[at + 49] = 149;
+  o[at + 50] = 156;
+  o[at + 51] = 235;
+  o[at + 52] = 139;
+  o[at + 53] = 164;
+  o[at + 54] = 46;
+}
+fn put_ce_6_0(inout o: [u8], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  if at + 71 > len(o) { return; }
+  o[at + 0] = 115;
+  o[at + 1] = 116;
+  o[at + 2] = 97;
+  o[at + 3] = 116;
+  o[at + 4] = 101;
+  o[at + 5] = 32;
+  o[at + 6] = 235;
+  o[at + 7] = 138;
+  o[at + 8] = 148;
+  o[at + 9] = 32;
+  o[at + 10] = 119;
+  o[at + 11] = 111;
+  o[at + 12] = 114;
+  o[at + 13] = 107;
+  o[at + 14] = 105;
+  o[at + 15] = 110;
+  o[at + 16] = 103;
+  o[at + 17] = 194;
+  o[at + 18] = 183;
+  o[at + 19] = 100;
+  o[at + 20] = 111;
+  o[at + 21] = 110;
+  o[at + 22] = 101;
+  o[at + 23] = 194;
+  o[at + 24] = 183;
+  o[at + 25] = 119;
+  o[at + 26] = 97;
+  o[at + 27] = 105;
+  o[at + 28] = 116;
+  o[at + 29] = 105;
+  o[at + 30] = 110;
+  o[at + 31] = 103;
+  o[at + 32] = 45;
+  o[at + 33] = 117;
+  o[at + 34] = 115;
+  o[at + 35] = 101;
+  o[at + 36] = 114;
+  o[at + 37] = 194;
+  o[at + 38] = 183;
+  o[at + 39] = 98;
+  o[at + 40] = 108;
+  o[at + 41] = 111;
+  o[at + 42] = 99;
+  o[at + 43] = 107;
+  o[at + 44] = 101;
+  o[at + 45] = 100;
+  o[at + 46] = 32;
+  o[at + 47] = 236;
+  o[at + 48] = 164;
+  o[at + 49] = 145;
+  o[at + 50] = 32;
+  o[at + 51] = 237;
+  o[at + 52] = 149;
+  o[at + 53] = 152;
+  o[at + 54] = 235;
+  o[at + 55] = 130;
+  o[at + 56] = 152;
+  o[at + 57] = 236;
+  o[at + 58] = 151;
+  o[at + 59] = 172;
+  o[at + 60] = 236;
+  o[at + 61] = 149;
+  o[at + 62] = 188;
+  o[at + 63] = 32;
+  o[at + 64] = 237;
+  o[at + 65] = 149;
+  o[at + 66] = 156;
+  o[at + 67] = 235;
+  o[at + 68] = 139;
+  o[at + 69] = 164;
+  o[at + 70] = 46;
+}
+fn put_ce_0_1(inout o: [u8], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  if at + 65 > len(o) { return; }
+  o[at + 0] = 84;
+  o[at + 1] = 104;
+  o[at + 2] = 101;
+  o[at + 3] = 32;
+  o[at + 4] = 99;
+  o[at + 5] = 117;
+  o[at + 6] = 114;
+  o[at + 7] = 114;
+  o[at + 8] = 101;
+  o[at + 9] = 110;
+  o[at + 10] = 116;
+  o[at + 11] = 32;
+  o[at + 12] = 98;
+  o[at + 13] = 117;
+  o[at + 14] = 100;
+  o[at + 15] = 103;
+  o[at + 16] = 101;
+  o[at + 17] = 116;
+  o[at + 18] = 32;
+  o[at + 19] = 119;
+  o[at + 20] = 97;
+  o[at + 21] = 115;
+  o[at + 22] = 32;
+  o[at + 23] = 110;
+  o[at + 24] = 111;
+  o[at + 25] = 116;
+  o[at + 26] = 32;
+  o[at + 27] = 102;
+  o[at + 28] = 111;
+  o[at + 29] = 117;
+  o[at + 30] = 110;
+  o[at + 31] = 100;
+  o[at + 32] = 44;
+  o[at + 33] = 32;
+  o[at + 34] = 115;
+  o[at + 35] = 111;
+  o[at + 36] = 32;
+  o[at + 37] = 116;
+  o[at + 38] = 104;
+  o[at + 39] = 101;
+  o[at + 40] = 32;
+  o[at + 41] = 119;
+  o[at + 42] = 111;
+  o[at + 43] = 114;
+  o[at + 44] = 107;
+  o[at + 45] = 32;
+  o[at + 46] = 99;
+  o[at + 47] = 97;
+  o[at + 48] = 114;
+  o[at + 49] = 100;
+  o[at + 50] = 32;
+  o[at + 51] = 119;
+  o[at + 52] = 97;
+  o[at + 53] = 115;
+  o[at + 54] = 32;
+  o[at + 55] = 110;
+  o[at + 56] = 111;
+  o[at + 57] = 116;
+  o[at + 58] = 32;
+  o[at + 59] = 115;
+  o[at + 60] = 97;
+  o[at + 61] = 118;
+  o[at + 62] = 101;
+  o[at + 63] = 100;
+  o[at + 64] = 46;
+}
+fn put_ce_1_1(inout o: [u8], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  if at + 39 > len(o) { return; }
+  o[at + 0] = 100;
+  o[at + 1] = 101;
+  o[at + 2] = 108;
+  o[at + 3] = 105;
+  o[at + 4] = 118;
+  o[at + 5] = 101;
+  o[at + 6] = 114;
+  o[at + 7] = 97;
+  o[at + 8] = 98;
+  o[at + 9] = 108;
+  o[at + 10] = 101;
+  o[at + 11] = 32;
+  o[at + 12] = 109;
+  o[at + 13] = 117;
+  o[at + 14] = 115;
+  o[at + 15] = 116;
+  o[at + 16] = 32;
+  o[at + 17] = 98;
+  o[at + 18] = 101;
+  o[at + 19] = 32;
+  o[at + 20] = 49;
+  o[at + 21] = 226;
+  o[at + 22] = 128;
+  o[at + 23] = 147;
+  o[at + 24] = 51;
+  o[at + 25] = 48;
+  o[at + 26] = 48;
+  o[at + 27] = 32;
+  o[at + 28] = 99;
+  o[at + 29] = 104;
+  o[at + 30] = 97;
+  o[at + 31] = 114;
+  o[at + 32] = 97;
+  o[at + 33] = 99;
+  o[at + 34] = 116;
+  o[at + 35] = 101;
+  o[at + 36] = 114;
+  o[at + 37] = 115;
+  o[at + 38] = 46;
+}
+fn put_ce_2_1(inout o: [u8], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  if at + 56 > len(o) { return; }
+  o[at + 0] = 100;
+  o[at + 1] = 111;
+  o[at + 2] = 110;
+  o[at + 3] = 101;
+  o[at + 4] = 32;
+  o[at + 5] = 109;
+  o[at + 6] = 117;
+  o[at + 7] = 115;
+  o[at + 8] = 116;
+  o[at + 9] = 32;
+  o[at + 10] = 98;
+  o[at + 11] = 101;
+  o[at + 12] = 32;
+  o[at + 13] = 49;
+  o[at + 14] = 226;
+  o[at + 15] = 128;
+  o[at + 16] = 147;
+  o[at + 17] = 53;
+  o[at + 18] = 32;
+  o[at + 19] = 108;
+  o[at + 20] = 105;
+  o[at + 21] = 110;
+  o[at + 22] = 101;
+  o[at + 23] = 115;
+  o[at + 24] = 32;
+  o[at + 25] = 111;
+  o[at + 26] = 102;
+  o[at + 27] = 32;
+  o[at + 28] = 97;
+  o[at + 29] = 116;
+  o[at + 30] = 32;
+  o[at + 31] = 109;
+  o[at + 32] = 111;
+  o[at + 33] = 115;
+  o[at + 34] = 116;
+  o[at + 35] = 32;
+  o[at + 36] = 51;
+  o[at + 37] = 48;
+  o[at + 38] = 48;
+  o[at + 39] = 32;
+  o[at + 40] = 99;
+  o[at + 41] = 104;
+  o[at + 42] = 97;
+  o[at + 43] = 114;
+  o[at + 44] = 97;
+  o[at + 45] = 99;
+  o[at + 46] = 116;
+  o[at + 47] = 101;
+  o[at + 48] = 114;
+  o[at + 49] = 115;
+  o[at + 50] = 32;
+  o[at + 51] = 101;
+  o[at + 52] = 97;
+  o[at + 53] = 99;
+  o[at + 54] = 104;
+  o[at + 55] = 46;
+}
+fn put_ce_3_1(inout o: [u8], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  if at + 77 > len(o) { return; }
+  o[at + 0] = 116;
+  o[at + 1] = 97;
+  o[at + 2] = 114;
+  o[at + 3] = 103;
+  o[at + 4] = 101;
+  o[at + 5] = 116;
+  o[at + 6] = 115;
+  o[at + 7] = 32;
+  o[at + 8] = 99;
+  o[at + 9] = 111;
+  o[at + 10] = 117;
+  o[at + 11] = 110;
+  o[at + 12] = 116;
+  o[at + 13] = 115;
+  o[at + 14] = 32;
+  o[at + 15] = 109;
+  o[at + 16] = 117;
+  o[at + 17] = 115;
+  o[at + 18] = 116;
+  o[at + 19] = 32;
+  o[at + 20] = 98;
+  o[at + 21] = 101;
+  o[at + 22] = 32;
+  o[at + 23] = 110;
+  o[at + 24] = 111;
+  o[at + 25] = 110;
+  o[at + 26] = 45;
+  o[at + 27] = 110;
+  o[at + 28] = 101;
+  o[at + 29] = 103;
+  o[at + 30] = 97;
+  o[at + 31] = 116;
+  o[at + 32] = 105;
+  o[at + 33] = 118;
+  o[at + 34] = 101;
+  o[at + 35] = 32;
+  o[at + 36] = 105;
+  o[at + 37] = 110;
+  o[at + 38] = 116;
+  o[at + 39] = 101;
+  o[at + 40] = 103;
+  o[at + 41] = 101;
+  o[at + 42] = 114;
+  o[at + 43] = 115;
+  o[at + 44] = 32;
+  o[at + 45] = 97;
+  o[at + 46] = 110;
+  o[at + 47] = 100;
+  o[at + 48] = 32;
+  o[at + 49] = 110;
+  o[at + 50] = 111;
+  o[at + 51] = 116;
+  o[at + 52] = 101;
+  o[at + 53] = 32;
+  o[at + 54] = 97;
+  o[at + 55] = 116;
+  o[at + 56] = 32;
+  o[at + 57] = 109;
+  o[at + 58] = 111;
+  o[at + 59] = 115;
+  o[at + 60] = 116;
+  o[at + 61] = 32;
+  o[at + 62] = 51;
+  o[at + 63] = 48;
+  o[at + 64] = 48;
+  o[at + 65] = 32;
+  o[at + 66] = 99;
+  o[at + 67] = 104;
+  o[at + 68] = 97;
+  o[at + 69] = 114;
+  o[at + 70] = 97;
+  o[at + 71] = 99;
+  o[at + 72] = 116;
+  o[at + 73] = 101;
+  o[at + 74] = 114;
+  o[at + 75] = 115;
+  o[at + 76] = 46;
+}
+fn put_ce_4_1(inout o: [u8], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  if at + 102 > len(o) { return; }
+  o[at + 0] = 118;
+  o[at + 1] = 101;
+  o[at + 2] = 114;
+  o[at + 3] = 105;
+  o[at + 4] = 102;
+  o[at + 5] = 121;
+  o[at + 6] = 32;
+  o[at + 7] = 109;
+  o[at + 8] = 117;
+  o[at + 9] = 115;
+  o[at + 10] = 116;
+  o[at + 11] = 32;
+  o[at + 12] = 98;
+  o[at + 13] = 101;
+  o[at + 14] = 32;
+  o[at + 15] = 48;
+  o[at + 16] = 226;
+  o[at + 17] = 128;
+  o[at + 18] = 147;
+  o[at + 19] = 53;
+  o[at + 20] = 32;
+  o[at + 21] = 105;
+  o[at + 22] = 116;
+  o[at + 23] = 101;
+  o[at + 24] = 109;
+  o[at + 25] = 115;
+  o[at + 26] = 32;
+  o[at + 27] = 119;
+  o[at + 28] = 105;
+  o[at + 29] = 116;
+  o[at + 30] = 104;
+  o[at + 31] = 32;
+  o[at + 32] = 97;
+  o[at + 33] = 32;
+  o[at + 34] = 108;
+  o[at + 35] = 97;
+  o[at + 36] = 98;
+  o[at + 37] = 101;
+  o[at + 38] = 108;
+  o[at + 39] = 32;
+  o[at + 40] = 111;
+  o[at + 41] = 102;
+  o[at + 42] = 32;
+  o[at + 43] = 49;
+  o[at + 44] = 226;
+  o[at + 45] = 128;
+  o[at + 46] = 147;
+  o[at + 47] = 51;
+  o[at + 48] = 48;
+  o[at + 49] = 48;
+  o[at + 50] = 32;
+  o[at + 51] = 99;
+  o[at + 52] = 104;
+  o[at + 53] = 97;
+  o[at + 54] = 114;
+  o[at + 55] = 97;
+  o[at + 56] = 99;
+  o[at + 57] = 116;
+  o[at + 58] = 101;
+  o[at + 59] = 114;
+  o[at + 60] = 115;
+  o[at + 61] = 32;
+  o[at + 62] = 97;
+  o[at + 63] = 110;
+  o[at + 64] = 100;
+  o[at + 65] = 32;
+  o[at + 66] = 97;
+  o[at + 67] = 32;
+  o[at + 68] = 115;
+  o[at + 69] = 116;
+  o[at + 70] = 97;
+  o[at + 71] = 116;
+  o[at + 72] = 117;
+  o[at + 73] = 115;
+  o[at + 74] = 32;
+  o[at + 75] = 40;
+  o[at + 76] = 112;
+  o[at + 77] = 108;
+  o[at + 78] = 97;
+  o[at + 79] = 110;
+  o[at + 80] = 110;
+  o[at + 81] = 101;
+  o[at + 82] = 100;
+  o[at + 83] = 44;
+  o[at + 84] = 32;
+  o[at + 85] = 100;
+  o[at + 86] = 111;
+  o[at + 87] = 110;
+  o[at + 88] = 101;
+  o[at + 89] = 32;
+  o[at + 90] = 111;
+  o[at + 91] = 114;
+  o[at + 92] = 32;
+  o[at + 93] = 115;
+  o[at + 94] = 107;
+  o[at + 95] = 105;
+  o[at + 96] = 112;
+  o[at + 97] = 112;
+  o[at + 98] = 101;
+  o[at + 99] = 100;
+  o[at + 100] = 41;
+  o[at + 101] = 46;
+}
+fn put_ce_5_1(inout o: [u8], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  if at + 61 > len(o) { return; }
+  o[at + 0] = 99;
+  o[at + 1] = 111;
+  o[at + 2] = 110;
+  o[at + 3] = 102;
+  o[at + 4] = 108;
+  o[at + 5] = 105;
+  o[at + 6] = 99;
+  o[at + 7] = 116;
+  o[at + 8] = 115;
+  o[at + 9] = 32;
+  o[at + 10] = 109;
+  o[at + 11] = 117;
+  o[at + 12] = 115;
+  o[at + 13] = 116;
+  o[at + 14] = 32;
+  o[at + 15] = 98;
+  o[at + 16] = 101;
+  o[at + 17] = 32;
+  o[at + 18] = 48;
+  o[at + 19] = 226;
+  o[at + 20] = 128;
+  o[at + 21] = 147;
+  o[at + 22] = 53;
+  o[at + 23] = 32;
+  o[at + 24] = 108;
+  o[at + 25] = 105;
+  o[at + 26] = 110;
+  o[at + 27] = 101;
+  o[at + 28] = 115;
+  o[at + 29] = 32;
+  o[at + 30] = 111;
+  o[at + 31] = 102;
+  o[at + 32] = 32;
+  o[at + 33] = 97;
+  o[at + 34] = 116;
+  o[at + 35] = 32;
+  o[at + 36] = 109;
+  o[at + 37] = 111;
+  o[at + 38] = 115;
+  o[at + 39] = 116;
+  o[at + 40] = 32;
+  o[at + 41] = 51;
+  o[at + 42] = 48;
+  o[at + 43] = 48;
+  o[at + 44] = 32;
+  o[at + 45] = 99;
+  o[at + 46] = 104;
+  o[at + 47] = 97;
+  o[at + 48] = 114;
+  o[at + 49] = 97;
+  o[at + 50] = 99;
+  o[at + 51] = 116;
+  o[at + 52] = 101;
+  o[at + 53] = 114;
+  o[at + 54] = 115;
+  o[at + 55] = 32;
+  o[at + 56] = 101;
+  o[at + 57] = 97;
+  o[at + 58] = 99;
+  o[at + 59] = 104;
+  o[at + 60] = 46;
+}
+fn put_ce_6_1(inout o: [u8], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  if at + 60 > len(o) { return; }
+  o[at + 0] = 115;
+  o[at + 1] = 116;
+  o[at + 2] = 97;
+  o[at + 3] = 116;
+  o[at + 4] = 101;
+  o[at + 5] = 32;
+  o[at + 6] = 109;
+  o[at + 7] = 117;
+  o[at + 8] = 115;
+  o[at + 9] = 116;
+  o[at + 10] = 32;
+  o[at + 11] = 98;
+  o[at + 12] = 101;
+  o[at + 13] = 32;
+  o[at + 14] = 111;
+  o[at + 15] = 110;
+  o[at + 16] = 101;
+  o[at + 17] = 32;
+  o[at + 18] = 111;
+  o[at + 19] = 102;
+  o[at + 20] = 32;
+  o[at + 21] = 119;
+  o[at + 22] = 111;
+  o[at + 23] = 114;
+  o[at + 24] = 107;
+  o[at + 25] = 105;
+  o[at + 26] = 110;
+  o[at + 27] = 103;
+  o[at + 28] = 44;
+  o[at + 29] = 32;
+  o[at + 30] = 100;
+  o[at + 31] = 111;
+  o[at + 32] = 110;
+  o[at + 33] = 101;
+  o[at + 34] = 44;
+  o[at + 35] = 32;
+  o[at + 36] = 119;
+  o[at + 37] = 97;
+  o[at + 38] = 105;
+  o[at + 39] = 116;
+  o[at + 40] = 105;
+  o[at + 41] = 110;
+  o[at + 42] = 103;
+  o[at + 43] = 45;
+  o[at + 44] = 117;
+  o[at + 45] = 115;
+  o[at + 46] = 101;
+  o[at + 47] = 114;
+  o[at + 48] = 32;
+  o[at + 49] = 111;
+  o[at + 50] = 114;
+  o[at + 51] = 32;
+  o[at + 52] = 98;
+  o[at + 53] = 108;
+  o[at + 54] = 111;
+  o[at + 55] = 99;
+  o[at + 56] = 107;
+  o[at + 57] = 101;
+  o[at + 58] = 100;
+  o[at + 59] = 46;
+}
+fn put_wire_prefix(inout o: [u8], at: i64) -> ()
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  if at + 15 > len(o) { return; }
+  o[at + 0] = 98;
+  o[at + 1] = 117;
+  o[at + 2] = 100;
+  o[at + 3] = 103;
+  o[at + 4] = 101;
+  o[at + 5] = 116;
+  o[at + 6] = 46;
+  o[at + 7] = 114;
+  o[at + 8] = 101;
+  o[at + 9] = 102;
+  o[at + 10] = 117;
+  o[at + 11] = 115;
+  o[at + 12] = 97;
+  o[at + 13] = 108;
+  o[at + 14] = 46;
 }
 fn len_pre(t: i64, lang: i64) -> i64
   requires 0 <= t && t <= 1
   requires 0 <= lang && lang <= 1
-  ensures 0 <= result && result <= 1000
+  ensures 0 <= result && result <= 42
+  ensures !(t == 0 && lang == 0) || result <= 14
+  ensures !(t == 0 && lang == 1) || result <= 26
+  ensures !(t == 1 && lang == 0) || result <= 27
+  ensures !(t == 1 && lang == 1) || result <= 42
 {
-  if t == 0 && lang == 0 { return 6; }
+  if t == 0 && lang == 0 { return 14; }
   if t == 0 && lang == 1 { return 26; }
-  if t == 1 && lang == 0 { return 11; }
+  if t == 1 && lang == 0 { return 27; }
   return 42;
 }
-fn put_pre(inout o: [i64], at: i64, t: i64, lang: i64) -> ()
+fn put_pre(inout o: [u8], at: i64, t: i64, lang: i64) -> ()
   requires 0 <= t && t <= 1
   requires 0 <= lang && lang <= 1
   requires 0 <= at && at <= 1000000
@@ -628,14 +2448,18 @@ fn put_pre(inout o: [i64], at: i64, t: i64, lang: i64) -> ()
 fn len_post(t: i64, lang: i64) -> i64
   requires 0 <= t && t <= 1
   requires 0 <= lang && lang <= 1
-  ensures 0 <= result && result <= 1000
+  ensures 0 <= result && result <= 191
+  ensures !(t == 0 && lang == 0) || result <= 191
+  ensures !(t == 0 && lang == 1) || result <= 175
+  ensures !(t == 1 && lang == 0) || result <= 164
+  ensures !(t == 1 && lang == 1) || result <= 136
 {
-  if t == 0 && lang == 0 { return 78; }
+  if t == 0 && lang == 0 { return 191; }
   if t == 0 && lang == 1 { return 175; }
-  if t == 1 && lang == 0 { return 70; }
+  if t == 1 && lang == 0 { return 164; }
   return 136;
 }
-fn put_post(inout o: [i64], at: i64, t: i64, lang: i64) -> ()
+fn put_post(inout o: [u8], at: i64, t: i64, lang: i64) -> ()
   requires 0 <= t && t <= 1
   requires 0 <= lang && lang <= 1
   requires 0 <= at && at <= 1000000
@@ -648,12 +2472,12 @@ fn put_post(inout o: [i64], at: i64, t: i64, lang: i64) -> ()
 }
 fn len_nl(lang: i64) -> i64
   requires 0 <= lang && lang <= 1
-  ensures 0 <= result && result <= 1000
+  ensures 0 <= result && result <= 13
 {
-  if lang == 0 { return 5; }
+  if lang == 0 { return 13; }
   return 8;
 }
-fn put_nl(inout o: [i64], at: i64, lang: i64) -> ()
+fn put_nl(inout o: [u8], at: i64, lang: i64) -> ()
   requires 0 <= lang && lang <= 1
   requires 0 <= at && at <= 1000000
   ensures len(o) == len(old(o))
@@ -664,20 +2488,22 @@ fn put_nl(inout o: [i64], at: i64, lang: i64) -> ()
 fn len_cn(reason: i64, lang: i64) -> i64
   requires 0 <= reason && reason <= 4
   requires 0 <= lang && lang <= 1
-  ensures 0 <= result && result <= 1000
+  ensures 0 <= result && result <= 14
+  ensures !(lang == 0) || result <= 14
+  ensures !(lang == 1) || result <= 11
 {
-  if reason == 0 && lang == 0 { return 2; }
+  if reason == 0 && lang == 0 { return 6; }
   if reason == 0 && lang == 1 { return 4; }
-  if reason == 1 && lang == 0 { return 2; }
+  if reason == 1 && lang == 0 { return 6; }
   if reason == 1 && lang == 1 { return 11; }
-  if reason == 2 && lang == 0 { return 5; }
+  if reason == 2 && lang == 0 { return 14; }
   if reason == 2 && lang == 1 { return 8; }
-  if reason == 3 && lang == 0 { return 2; }
+  if reason == 3 && lang == 0 { return 6; }
   if reason == 3 && lang == 1 { return 7; }
-  if reason == 4 && lang == 0 { return 5; }
+  if reason == 4 && lang == 0 { return 13; }
   return 6;
 }
-fn put_cn(inout o: [i64], at: i64, reason: i64, lang: i64) -> ()
+fn put_cn(inout o: [u8], at: i64, reason: i64, lang: i64) -> ()
   requires 0 <= reason && reason <= 4
   requires 0 <= lang && lang <= 1
   requires 0 <= at && at <= 1000000
@@ -694,16 +2520,126 @@ fn put_cn(inout o: [i64], at: i64, reason: i64, lang: i64) -> ()
   if reason == 4 && lang == 0 { put_cn_4_0(inout o, at); return; }
   put_cn_4_1(inout o, at);
 }
+fn len_cm(lang: i64) -> i64
+  requires 0 <= lang && lang <= 1
+  ensures 0 <= result && result <= 89
+{
+  if lang == 0 { return 81; }
+  return 89;
+}
+fn put_cm(inout o: [u8], at: i64, lang: i64) -> ()
+  requires 0 <= lang && lang <= 1
+  requires 0 <= at && at <= 1000000
+  ensures len(o) == len(old(o))
+{
+  if lang == 0 { put_cm_0(inout o, at); return; }
+  put_cm_1(inout o, at);
+}
+pub fn card_error(kind: i64, lang: i64) -> [u8] ! alloc
+  requires 0 <= kind && kind <= 6
+  requires 0 <= lang && lang <= 1
+  ensures len(result) <= 102
+{
+  if kind == 0 && lang == 0 {
+    let mut o: [u8] = alloc(75, 0);
+    put_ce_0_0(inout o, 0);
+    return o;
+  }
+  if kind == 0 && lang == 1 {
+    let mut o: [u8] = alloc(65, 0);
+    put_ce_0_1(inout o, 0);
+    return o;
+  }
+  if kind == 1 && lang == 0 {
+    let mut o: [u8] = alloc(38, 0);
+    put_ce_1_0(inout o, 0);
+    return o;
+  }
+  if kind == 1 && lang == 1 {
+    let mut o: [u8] = alloc(39, 0);
+    put_ce_1_1(inout o, 0);
+    return o;
+  }
+  if kind == 2 && lang == 0 {
+    let mut o: [u8] = alloc(50, 0);
+    put_ce_2_0(inout o, 0);
+    return o;
+  }
+  if kind == 2 && lang == 1 {
+    let mut o: [u8] = alloc(56, 0);
+    put_ce_2_1(inout o, 0);
+    return o;
+  }
+  if kind == 3 && lang == 0 {
+    let mut o: [u8] = alloc(84, 0);
+    put_ce_3_0(inout o, 0);
+    return o;
+  }
+  if kind == 3 && lang == 1 {
+    let mut o: [u8] = alloc(77, 0);
+    put_ce_3_1(inout o, 0);
+    return o;
+  }
+  if kind == 4 && lang == 0 {
+    let mut o: [u8] = alloc(100, 0);
+    put_ce_4_0(inout o, 0);
+    return o;
+  }
+  if kind == 4 && lang == 1 {
+    let mut o: [u8] = alloc(102, 0);
+    put_ce_4_1(inout o, 0);
+    return o;
+  }
+  if kind == 5 && lang == 0 {
+    let mut o: [u8] = alloc(55, 0);
+    put_ce_5_0(inout o, 0);
+    return o;
+  }
+  if kind == 5 && lang == 1 {
+    let mut o: [u8] = alloc(61, 0);
+    put_ce_5_1(inout o, 0);
+    return o;
+  }
+  if kind == 6 && lang == 0 {
+    let mut o: [u8] = alloc(71, 0);
+    put_ce_6_0(inout o, 0);
+    return o;
+  }
+  let mut o: [u8] = alloc(60, 0);
+  put_ce_6_1(inout o, 0);
+  return o;
+}
+pub fn card_error_units(kind: i64, lang: i64) -> i64
+  requires 0 <= kind && kind <= 6
+  requires 0 <= lang && lang <= 1
+  ensures 0 <= result && result <= 98
+{
+  if kind == 0 && lang == 0 { return 31; }
+  if kind == 0 && lang == 1 { return 65; }
+  if kind == 1 && lang == 0 { return 26; }
+  if kind == 1 && lang == 1 { return 37; }
+  if kind == 2 && lang == 0 { return 28; }
+  if kind == 2 && lang == 1 { return 54; }
+  if kind == 3 && lang == 0 { return 46; }
+  if kind == 3 && lang == 1 { return 77; }
+  if kind == 4 && lang == 0 { return 70; }
+  if kind == 4 && lang == 1 { return 98; }
+  if kind == 5 && lang == 0 { return 33; }
+  if kind == 5 && lang == 1 { return 59; }
+  if kind == 6 && lang == 0 { return 52; }
+  return 60;
+}
 // END GENERATED
 
 // pre + counter + " " + used + "/" + limit text + post in one allocation; t: 0 refusal, 1 continue.
 // Time: used is activeMs, floored to minutes; limit is timeMinutes.
-fn template(t: i64, reason: i64, unlimited: bool, used: i64, limit: i64, lang: i64) -> [i64] ! alloc
+fn template(t: i64, reason: i64, unlimited: bool, used: i64, limit: i64, lang: i64) -> [u8] ! alloc
   requires 0 <= t && t <= 1
   requires 0 <= reason && reason <= 4
   requires -9007199254740991 <= used && used <= 9007199254740991
   requires -9007199254740991 <= limit && limit <= 9007199254740991
   requires 0 <= lang && lang <= 1
+  ensures len(result) <= 255 && (t != 0 || len(result) <= 255) && (t != 1 || len(result) <= 241) // Generated text bound.
 {
   let mut u: i64 = used;
   if reason == 0 { u = crate::bud_num::minutes_of(used); }
@@ -713,17 +2649,17 @@ fn template(t: i64, reason: i64, unlimited: bool, used: i64, limit: i64, lang: i
   let mut ll: i64 = len_nl(lang);
   if !unlimited { ll = int_len(limit); }
   let lq: i64 = len_post(t, lang);
-  let mut o: [i64] = alloc(lp + lc + 1 + lu + 1 + ll + lq, 0);
+  let mut o: [u8] = alloc(lp + lc + 1 + lu + 1 + ll + lq, 0);
   let mut at: i64 = 0;
   put_pre(inout o, at, t, lang);
   at = at + lp;
   put_cn(inout o, at, reason, lang);
   at = at + lc;
-  crate::ent_u16::wr(inout o, at, 32);
+  o[at] = 32;
   at = at + 1;
   put_int(inout o, at, u, lu);
   at = at + lu;
-  crate::ent_u16::wr(inout o, at, 47);
+  o[at] = 47;
   at = at + 1;
   if unlimited { put_nl(inout o, at, lang); } else { put_int(inout o, at, limit, ll); }
   at = at + ll;
@@ -731,84 +2667,73 @@ fn template(t: i64, reason: i64, unlimited: bool, used: i64, limit: i64, lang: i
   return o;
 }
 
-pub fn refusal(reason: i64, unlimited: bool, used: i64, limit: i64, lang: i64) -> [i64] ! alloc
+pub fn refusal(reason: i64, unlimited: bool, used: i64, limit: i64, lang: i64) -> [u8] ! alloc
   requires 0 <= reason && reason <= 4
   requires -9007199254740991 <= used && used <= 9007199254740991
   requires -9007199254740991 <= limit && limit <= 9007199254740991
   requires 0 <= lang && lang <= 1
+  ensures len(result) <= 255 // Generated text bound.
 {
   return template(0, reason, unlimited, used, limit, lang);
 }
 
-pub fn continue_text(reason: i64, unlimited: bool, used: i64, limit: i64, lang: i64) -> [i64] ! alloc
+pub fn continue_text(reason: i64, unlimited: bool, used: i64, limit: i64, lang: i64) -> [u8] ! alloc
   requires 0 <= reason && reason <= 4
   requires -9007199254740991 <= used && used <= 9007199254740991
   requires -9007199254740991 <= limit && limit <= 9007199254740991
   requires 0 <= lang && lang <= 1
+  ensures len(result) <= 241 // Generated text bound.
 {
   return template(1, reason, unlimited, used, limit, lang);
 }
 
-pub fn card_missing(lang: i64) -> [i64] ! alloc
+pub fn card_missing(lang: i64) -> [u8] ! alloc
   requires 0 <= lang && lang <= 1
+  ensures len(result) <= 89 // Generated text bound.
 {
-  if lang == 1 { return dec("Before delegating, write the deliverable and the done conditions with the work_card tool."); }
-  return dec("위임 전에 work_card 도구로 산출물과 완료 조건을 먼저 적는다.");
+  let mut o: [u8] = alloc(len_cm(lang), 0);
+  put_cm(inout o, 0, lang);
+  return o;
 }
 
-fn card_error_ko(kind: i64) -> [i64] ! alloc
-  requires 0 <= kind && kind <= 6
+fn refusal_key(reason: i64) -> [u8] ! alloc
+  requires 0 <= reason && reason <= 4
+  ensures len(result) <= 26 // Generated text bound.
 {
-  if kind == 0 { return dec("지금 예산을 찾을 수 없어 작업 카드를 저장하지 못했다."); }
-  if kind == 1 { return dec("deliverable 은 1~300자여야 한다."); }
-  if kind == 2 { return dec("done 은 각 300자 이하 1~5줄이어야 한다."); }
-  if kind == 3 { return dec("targets 의 수는 0 이상 정수여야 하고 note 는 300자 이하여야 한다."); }
-  if kind == 4 { return dec("verify 는 label 1~300자와 status(planned·done·skipped)를 가진 0~5개 항목이어야 한다."); }
-  if kind == 5 { return dec("conflicts 는 각 300자 이하 0~5줄이어야 한다."); }
-  return dec("state 는 working·done·waiting-user·blocked 중 하나여야 한다.");
+  let mut o: [u8] = alloc(15 + len_cn(reason, 1), 0);
+  put_wire_prefix(inout o, 0);
+  put_cn(inout o, 15, reason, 1);
+  return o;
 }
 
-fn card_error_en(kind: i64) -> [i64] ! alloc
-  requires 0 <= kind && kind <= 6
-{
-  if kind == 0 { return dec("The current budget was not found, so the work card was not saved."); }
-  if kind == 1 { return dec("deliverable must be 1–300 characters."); }
-  if kind == 2 { return dec("done must be 1–5 lines of at most 300 characters each."); }
-  if kind == 3 { return dec("targets counts must be non-negative integers and note at most 300 characters."); }
-  if kind == 4 { return dec("verify must be 0–5 items with a label of 1–300 characters and a status (planned, done or skipped)."); }
-  if kind == 5 { return dec("conflicts must be 0–5 lines of at most 300 characters each."); }
-  return dec("state must be one of working, done, waiting-user or blocked.");
-}
-
-pub fn card_error(kind: i64, lang: i64) -> [i64] ! alloc
-  requires 0 <= kind && kind <= 6
-  requires 0 <= lang && lang <= 1
-{
-  if lang == 1 { return card_error_en(kind); }
-  return card_error_ko(kind);
-}
-
-pub struct Wire { key: [i64], used: i64, limit: i64 }
+pub struct Wire { key: [u8], used: i64, limit: i64 }
 
 // {key: 'budget.refusal.' + reason, args: {used, limit}}; time used (activeMs) floored to minutes; limit as given.
 pub fn refusal_wire(reason: i64, used: i64, limit: i64) -> Wire ! alloc
   requires 0 <= reason && reason <= 4
   requires -9007199254740991 <= used && used <= 9007199254740991
+  ensures len(result.key) <= 26 // Generated text bound.
 {
-  let prefix: [i64] = dec("budget.refusal.");
-  let name: [i64] = reason_name(reason);
-  let key: [i64] = crate::ent_u16::cat(prefix, name);
   let mut u: i64 = used;
   if reason == 0 { u = crate::bud_num::minutes_of(used); }
-  return Wire { key: copy(key), used: u, limit: limit };
+  return Wire { key: refusal_key(reason), used: u, limit: limit };
 }
 
 // card validText: 1 <= trim(s).length <= 300 (UTF-16 units)
-pub fn text_len_ok(s: [i64]) -> bool ! alloc
+pub fn text_len_ok(a: [i64]) -> bool
 {
-  let t: [i64] = crate::ent_u16::trim(s);
-  let n: i64 = len(t);
-  return n >= 1 && n <= 300;
+  let n: i64 = len(a);
+  let mut s: i64 = 0;
+  while s < n && crate::ent_u16::is_trim_unit(a[s])
+    invariant 0 <= s && s <= n && n == len(a)
+    decreases n - s
+  { s = s + 1; }
+  let mut e: i64 = n;
+  while e > s && crate::ent_u16::is_trim_unit(a[e - 1])
+    invariant s <= e && e <= n && 0 <= s && n == len(a)
+    decreases e - s
+  { e = e - 1; }
+  return e > s && e - s <= 300;
 }
 
 // targets.note: untrimmed length <= 300

@@ -2727,6 +2727,7 @@
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/g9_r28_ctor_scalar_select.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/kd_m6_small_result.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/kd_m6_small_result_foreign.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/kd_m6_small_result_u8.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_copy_range.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_eq_range.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/runtime/l3_rt_eq_range_edges.pruv"}

@@ -68,15 +68,30 @@ pub fn t_minutes(ms: i64) -> i64
   return crate::bud_num::minutes_of(ms);
 }
 
-pub fn t_int(x: i64) -> [i64] ! alloc
+pub fn t_int(x: i64) -> [u8] ! alloc
   requires -9007199254740991 <= x && x <= 9007199254740991
 {
   return crate::bud_text::int_text(x);
 }
 
+// Transport the five limit fields followed by the defaultUnlimited presence bit.
+pub fn t_unit(configured: bool, t: i64, d: i64, c: i64, r: i64, k: i64) -> [i64] ! alloc
+{
+  let mut unit: crate::bud_num::Unit = crate::bud_num::unit_default();
+  if configured { unit = crate::bud_num::unit_of(t, d, c, r, k); }
+  let mut out: [i64] = alloc(6, 0);
+  out[0] = unit.time_minutes;
+  out[1] = unit.delegations;
+  out[2] = unit.commands;
+  out[3] = unit.reviews;
+  out[4] = unit.checks;
+  if unit.default_unlimited { out[5] = 1; }
+  return out;
+}
+
 // ---------------------------------------------------------------- dates
 
-pub fn t_iso(ms: i64) -> [i64] ! alloc
+pub fn t_iso(ms: i64) -> [u8] ! alloc
   requires -8640000000000000 <= ms && ms <= 8640000000000000
 {
   return crate::bud_date::iso(ms);
@@ -92,7 +107,7 @@ pub fn t_dok(ms: i64) -> i64
 
 // ---------------------------------------------------------------- text helpers
 
-pub fn t_refusal(reason: i64, unlimited: i64, used: i64, limit: i64, lang: i64) -> [i64] ! alloc
+pub fn t_refusal(reason: i64, unlimited: i64, used: i64, limit: i64, lang: i64) -> [u8] ! alloc
   requires 0 <= reason && reason <= 4
   requires 0 <= unlimited && unlimited <= 1
   requires -9007199254740991 <= used && used <= 9007199254740991
@@ -103,7 +118,7 @@ pub fn t_refusal(reason: i64, unlimited: i64, used: i64, limit: i64, lang: i64) 
   return crate::bud_text::refusal(reason, u, used, limit, lang);
 }
 
-pub fn t_continue(reason: i64, unlimited: i64, used: i64, limit: i64, lang: i64) -> [i64] ! alloc
+pub fn t_continue(reason: i64, unlimited: i64, used: i64, limit: i64, lang: i64) -> [u8] ! alloc
   requires 0 <= reason && reason <= 4
   requires 0 <= unlimited && unlimited <= 1
   requires -9007199254740991 <= used && used <= 9007199254740991
@@ -114,7 +129,7 @@ pub fn t_continue(reason: i64, unlimited: i64, used: i64, limit: i64, lang: i64)
   return crate::bud_text::continue_text(reason, u, used, limit, lang);
 }
 
-pub fn t_amount(reason: i64, unlimited: i64, used: i64, limit: i64, lang: i64) -> [i64] ! alloc
+pub fn t_amount(reason: i64, unlimited: i64, used: i64, limit: i64, lang: i64) -> [u8] ! alloc
   requires 0 <= reason && reason <= 4
   requires 0 <= unlimited && unlimited <= 1
   requires -9007199254740991 <= used && used <= 9007199254740991
@@ -125,7 +140,7 @@ pub fn t_amount(reason: i64, unlimited: i64, used: i64, limit: i64, lang: i64) -
   return crate::bud_text::amount_text(reason, u, used, limit, lang);
 }
 
-pub fn t_limit(unlimited: i64, limit: i64, lang: i64) -> [i64] ! alloc
+pub fn t_limit(unlimited: i64, limit: i64, lang: i64) -> [u8] ! alloc
   requires 0 <= unlimited && unlimited <= 1
   requires -9007199254740991 <= limit && limit <= 9007199254740991
   requires 0 <= lang && lang <= 1
@@ -134,40 +149,39 @@ pub fn t_limit(unlimited: i64, limit: i64, lang: i64) -> [i64] ! alloc
   return crate::bud_text::limit_text(u, limit, lang);
 }
 
-// key units followed by used, limit
-pub fn t_wire(reason: i64, used: i64, limit: i64) -> [i64] ! alloc
+// The key bytes and numeric arguments are serialized together by the harness.
+pub fn t_wire(reason: i64, used: i64, limit: i64, inout args: [i64]) -> [u8] ! alloc
   requires 0 <= reason && reason <= 4
   requires -9007199254740991 <= used && used <= 9007199254740991
-  requires -9007199254740991 <= limit && limit <= 9007199254740991
+  requires len(args) == 2
 {
-  let w: crate::bud_text::Wire = crate::bud_text::refusal_wire(reason, used, limit);
-  let mut t: [i64] = alloc(2, 0);
-  t[0] = w.used;
-  t[1] = w.limit;
-  return crate::ent_u16::cat(w.key, t);
+  let wire: crate::bud_text::Wire = crate::bud_text::refusal_wire(reason, used, limit);
+  args[0] = wire.used;
+  args[1] = wire.limit;
+  return copy(wire.key);
 }
 
-pub fn t_card_missing(lang: i64) -> [i64] ! alloc
+pub fn t_card_missing(lang: i64) -> [u8] ! alloc
   requires 0 <= lang && lang <= 1
 {
   return crate::bud_text::card_missing(lang);
 }
 
-pub fn t_card_error(kind: i64, lang: i64) -> [i64] ! alloc
+pub fn t_card_error(kind: i64, lang: i64) -> [u8] ! alloc
   requires 0 <= kind && kind <= 6
   requires 0 <= lang && lang <= 1
 {
   return crate::bud_text::card_error(kind, lang);
 }
 
-pub fn t_counter(reason: i64, lang: i64) -> [i64] ! alloc
+pub fn t_counter(reason: i64, lang: i64) -> [u8] ! alloc
   requires 0 <= reason && reason <= 4
   requires 0 <= lang && lang <= 1
 {
   return crate::bud_text::counter_name(reason, lang);
 }
 
-pub fn t_nolimit(lang: i64) -> [i64] ! alloc
+pub fn t_nolimit(lang: i64) -> [u8] ! alloc
   requires 0 <= lang && lang <= 1
 {
   return crate::bud_text::no_limit(lang);
@@ -199,8 +213,18 @@ pub fn t_len(s: [i64]) -> [i64] ! alloc
 
 // ---------------------------------------------------------------- perf entries
 // Each loops n times over the helper with an input that alternates by +0/+1 (so the call cannot be hoisted) and returns
-// sum(len + parity of first+middle+last unit) as a checksum; node_ref.mjs consumes its strings the same way, so both
+// sum(len + parity of first+middle+last byte) as a checksum; node_ref.mjs consumes its strings the same way, so both
 // sides read the produced text and the checksums must agree.
+
+fn byte_checksum(bytes: [u8]) -> i64
+  ensures 0 <= result && result <= 1000000
+{
+  let n: i64 = len(bytes);
+  if n == 0 { return 0; }
+  let parity: i64 = band(bytes[0] + bytes[n / 2] + bytes[n - 1], 1);
+  if n > 999999 { return 999999 + parity; }
+  return n + parity;
+}
 
 pub fn p_iso(n: i64, ms: i64) -> i64 ! alloc
   requires 0 <= n && n <= 1000000
@@ -213,16 +237,8 @@ pub fn p_iso(n: i64, ms: i64) -> i64 ! alloc
     invariant 0 <= i && i <= n && 0 <= d && d <= 1 && 0 <= acc && acc <= 1000000 * i
     decreases n - i
   {
-    let r: [i64] = crate::bud_date::iso(ms + d);
-    let mut l: i64 = len(r);
-    let mut c: i64 = 0;
-    if l > 0 {
-      if band(r[0], 1) != 0 { c = 1 - c; }
-      if band(r[l / 2], 1) != 0 { c = 1 - c; }
-      if band(r[l - 1], 1) != 0 { c = 1 - c; }
-    }
-    if l > 999999 { l = 999999; }
-    acc = acc + l + c;
+    let r: [u8] = crate::bud_date::iso(ms + d);
+    acc = acc + byte_checksum(r);
     d = 1 - d;
     i = i + 1;
   }
@@ -245,16 +261,8 @@ pub fn p_refusal(n: i64, reason: i64, unlimited: i64, used: i64, limit: i64, lan
     invariant 0 <= i && i <= n && 0 <= d && d <= 1 && 0 <= acc && acc <= 1000000 * i
     decreases n - i
   {
-    let r: [i64] = crate::bud_text::refusal(reason, u, used + d, limit, lang);
-    let mut l: i64 = len(r);
-    let mut c: i64 = 0;
-    if l > 0 {
-      if band(r[0], 1) != 0 { c = 1 - c; }
-      if band(r[l / 2], 1) != 0 { c = 1 - c; }
-      if band(r[l - 1], 1) != 0 { c = 1 - c; }
-    }
-    if l > 999999 { l = 999999; }
-    acc = acc + l + c;
+    let r: [u8] = crate::bud_text::refusal(reason, u, used + d, limit, lang);
+    acc = acc + byte_checksum(r);
     d = 1 - d;
     i = i + 1;
   }
@@ -272,16 +280,52 @@ pub fn p_int(n: i64, x: i64) -> i64 ! alloc
     invariant 0 <= i && i <= n && 0 <= d && d <= 1 && 0 <= acc && acc <= 1000000 * i
     decreases n - i
   {
-    let r: [i64] = crate::bud_text::int_text(x + d);
-    let mut l: i64 = len(r);
-    let mut c: i64 = 0;
-    if l > 0 {
-      if band(r[0], 1) != 0 { c = 1 - c; }
-      if band(r[l / 2], 1) != 0 { c = 1 - c; }
-      if band(r[l - 1], 1) != 0 { c = 1 - c; }
-    }
-    if l > 999999 { l = 999999; }
-    acc = acc + l + c;
+    let r: [u8] = crate::bud_text::int_text(x + d);
+    acc = acc + byte_checksum(r);
+    d = 1 - d;
+    i = i + 1;
+  }
+  return acc;
+}
+
+pub fn p_amount(n: i64, reason: i64, unlimited: i64, used: i64, limit: i64, lang: i64) -> i64 ! alloc
+  requires 0 <= n && n <= 1000000
+  requires 0 <= reason && reason <= 4
+  requires 0 <= unlimited && unlimited <= 1
+  requires -9007199254740991 <= used && used <= 9007199254740990
+  requires -9007199254740991 <= limit && limit <= 9007199254740991
+  requires 0 <= lang && lang <= 1
+{
+  let u: bool = unlimited != 0;
+  let mut i: i64 = 0;
+  let mut d: i64 = 0;
+  let mut acc: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && 0 <= d && d <= 1 && 0 <= acc && acc <= 1000000 * i
+    decreases n - i
+  {
+    let r: [u8] = crate::bud_text::amount_text(reason, u, used + d, limit, lang);
+    acc = acc + byte_checksum(r);
+    d = 1 - d;
+    i = i + 1;
+  }
+  return acc;
+}
+
+pub fn p_card_error(n: i64, kind: i64, lang: i64) -> i64 ! alloc
+  requires 0 <= n && n <= 1000000
+  requires 0 <= kind && kind <= 5
+  requires 0 <= lang && lang <= 1
+{
+  let mut i: i64 = 0;
+  let mut d: i64 = 0;
+  let mut acc: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && 0 <= d && d <= 1 && 0 <= acc && acc <= 1000000 * i
+    decreases n - i
+  {
+    let r: [u8] = crate::bud_text::card_error(kind + d, lang);
+    acc = acc + byte_checksum(r);
     d = 1 - d;
     i = i + 1;
   }

@@ -65,7 +65,7 @@ pub fn valid_iso_parts(y: i64, m: i64, d: i64, h: i64, mi: i64, sec: i64, f: i64
 
 pub fn iso_parts(ms: i64) -> IsoParts
   requires -8640000000000000 <= ms && ms <= 8640000000000000
-  ensures result.n == 0 || result.n == 24 || result.n == 27
+  ensures result.n == 24 || result.n == 27
   ensures valid_iso_parts(result.y, result.m, result.d, result.h, result.mi, result.sec, result.f, result.n)
 {
   let day: i64 = 86400000;
@@ -131,13 +131,72 @@ pub fn put_iso(inout o: [i64], at: i64, p: IsoParts) -> ()
   put_iso_prefix(inout o, at, p);
 }
 
+// Byte writers for the source text output.
+fn put_tail_b(inout o: [u8], at: i64, year_len: i64, m: i64, d: i64, h: i64, mi: i64, sec: i64, f: i64) -> ()
+  requires 0 <= at && at <= 1099511627776
+  requires year_len == 4 || year_len == 7
+  requires 0 <= m && m <= 100 && 0 <= d && d <= 100 && 0 <= h && h <= 100
+  requires 0 <= mi && mi <= 100 && 0 <= sec && sec <= 100 && 0 <= f && f <= 1000
+  ensures len(o) == len(old(o))
+{
+  let pos: i64 = at + year_len;
+  if pos + 20 > len(o) { return; }
+  o[pos] = 45;
+  o[pos + 1] = 48 + (m / 10) % 10;
+  o[pos + 2] = 48 + m % 10;
+  o[pos + 3] = 45;
+  o[pos + 4] = 48 + (d / 10) % 10;
+  o[pos + 5] = 48 + d % 10;
+  o[pos + 6] = 84;
+  o[pos + 7] = 48 + (h / 10) % 10;
+  o[pos + 8] = 48 + h % 10;
+  o[pos + 9] = 58;
+  o[pos + 10] = 48 + (mi / 10) % 10;
+  o[pos + 11] = 48 + mi % 10;
+  o[pos + 12] = 58;
+  o[pos + 13] = 48 + (sec / 10) % 10;
+  o[pos + 14] = 48 + sec % 10;
+  o[pos + 15] = 46;
+  o[pos + 16] = 48 + (f / 100) % 10;
+  o[pos + 17] = 48 + (f / 10) % 10;
+  o[pos + 18] = 48 + f % 10;
+  o[pos + 19] = 90;
+}
+
+fn put_iso_b(inout o: [u8], at: i64, p: IsoParts) -> ()
+  requires 0 <= at && at <= 1099511627776
+  requires valid_iso_parts(p.y, p.m, p.d, p.h, p.mi, p.sec, p.f, p.n)
+  ensures len(o) == len(old(o))
+{
+  if p.n == 0 || at + p.n > len(o) { return; }
+  let y: i64 = p.y;
+  if p.n == 24 {
+    o[at] = 48 + (y / 1000) % 10;
+    o[at + 1] = 48 + (y / 100) % 10;
+    o[at + 2] = 48 + (y / 10) % 10;
+    o[at + 3] = 48 + y % 10;
+    put_tail_b(inout o, at, 4, p.m, p.d, p.h, p.mi, p.sec, p.f);
+    return;
+  }
+  let mut ay: i64 = y;
+  if y < 0 { ay = -y; }
+  if y < 0 { o[at] = 45; } else { o[at] = 43; }
+  o[at + 1] = 48 + (ay / 100000) % 10;
+  o[at + 2] = 48 + (ay / 10000) % 10;
+  o[at + 3] = 48 + (ay / 1000) % 10;
+  o[at + 4] = 48 + (ay / 100) % 10;
+  o[at + 5] = 48 + (ay / 10) % 10;
+  o[at + 6] = 48 + ay % 10;
+  put_tail_b(inout o, at, 7, p.m, p.d, p.h, p.mi, p.sec, p.f);
+}
+
 // Exactly new Date(ms).toISOString(). Empty only if the calendar walk left its guarded ranges.
-pub fn iso(ms: i64) -> [i64] ! alloc
+pub fn iso(ms: i64) -> [u8] ! alloc
   requires -8640000000000000 <= ms && ms <= 8640000000000000
+  ensures len(result) == 24 || len(result) == 27
 {
   let p: IsoParts = iso_parts(ms);
-  if p.n == 0 { return crate::ent_u16::empty(); }
-  let mut o: [i64] = alloc(p.n, 0);
-  put_iso(inout o, 0, p);
+  let mut o: [u8] = alloc(p.n, 0);
+  put_iso_b(inout o, 0, p);
   return o;
 }

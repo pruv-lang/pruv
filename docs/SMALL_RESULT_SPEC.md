@@ -25,14 +25,15 @@ backend, nothing changes.
 
 ### Callee eligibility ("small function", bound `K`)
 
-1. The return type is `[i64]` and both the result and the local `o` below use the plain `i64` storage layout
-   (no narrowed element layout from the storage plan).
+1. The return type is `[i64]` or (P27.5) `[u8]`, and both the result and the local `o` below use the plain storage
+   layout of that type (no narrowed element layout from the storage plan; `[u8]` never narrows). The buffer element
+   `T` is `i64` or `u8` accordingly.
 2. The source declaration (before specialisation) is not generic, not foreign, and has a top-level `ensures`
    conjunct `len(result) <= K` with `K` an integer literal, `1 <= K <= 64`. Specialisation drops `ensures` of
    non-foreign functions, so `K` is taken from the source declaration while specialising and carried to code
    generation as per-function metadata (`small_bound`); programs that are not specialised read it from `ensures`
    directly. The bound comes from the contract, never from inference.
-3. The body declares exactly one `let mut o: [i64] = alloc(e_n, e_v);` as a top-level statement, its last statement
+3. The body declares exactly one `let mut o: [T] = alloc(e_n, e_v);` (same array type as the result) as a top-level statement, its last statement
    is `return o;`, and there is no other `return` anywhere in the body (nested blocks included).
 4. After its declaration `o` occurs only as `len(o)`, `o[i]` (read), `o[i] = e`, or a direct argument (by value or
    `inout`) of a call to a user function. Not in `e_n`/`e_v`, never assigned whole, never an argument of a builtin
@@ -48,7 +49,7 @@ oversized `alloc` would otherwise turn a later panic into an earlier one.
 
 ### Call-site eligibility
 
-A binding `let r: [i64] = f(args);` (immutable, the whole initialiser is the call) is rewritten when `f` is a small
+A binding `let r: [T] = f(args);` (immutable, the same array type as `f`'s result, the whole initialiser is the call) is rewritten when `f` is a small
 function and every later occurrence of `r` in its scope is `len(r)`, `r[i]` (read), or a direct by-value argument of
 a call to a user function (not a builtin). The checker already rejects shadowing and implicit array aliasing, and a
 callee that returns its parameter must `copy` it, so such a callee cannot keep `r`.
@@ -56,7 +57,7 @@ callee that returns its parameter must `copy` it, so such a callee cannot keep `
 Not rewritten: calls in other positions (`return f(x)`, `g(f(x))`, `a = f(x)`), `let mut`, `r` passed `inout`,
 written, returned, assigned, put in a struct or passed to a builtin such as `copy`; call sites inside functions that
 are part of a recursion cycle; and further call sites in a function once its rewritten buffers would exceed 4096
-bytes (source order). `limit_text` (returns `int_text(..)`) stays on the heap; `amount_text` and the perf loop were
+bytes (source order; a buffer counts `8 * K` bytes for `i64`, `K` for `u8`). `limit_text` (returns `int_text(..)`) stays on the heap; `amount_text` and the perf loop were
 rewritten (`amount_text` later stopped calling `int_text`, see perf_headroom/compiler/COMPILER.md).
 
 ### Cost bound
@@ -92,6 +93,10 @@ let r: &[i64] = &pruv_sb_r[..pruv_sl_r];
 and later uses of `r` are emitted unchanged (`r.len()`, `r.get_unchecked(..)`, `&r` coerces to `&[i64]`). `pub`
 entry wrappers keep returning `Vec`, so the external ABI does not change. The variant is emitted for every small
 function (unused ones fall under the existing `dead_code` allow).
+
+For a `[u8]` result (P27.5) the shape is the same with `u8` in place of `i64`: the buffer is `[u8; K]` zeroed with
+`[0u8; K]`, the slices are `&mut [u8]` / `&[u8]`, and the `alloc` fill value is cast with `pruv_v as u8` (the
+verifier has proved `0 <= e_v <= 255`, as for the heap `vec![pruv_v as u8; ..]`).
 
 ## LLVM backend shape (not implemented)
 
@@ -141,6 +146,7 @@ is the only edit under bench/l3/budget besides the M6_NOTES entry.
 1. Runtime test case (both compilers through tests/run_all.py): a small function and call sites that are rewritten
    (loop binding, single binding read through a user function) and not rewritten (returned, `let mut`, `inout`,
    passed to `copy`, nested call, no bound, `K` = 65, callee calling a foreign function), pinned with
-   `gen_contains`/`gen_absent`, and results at lengths 1 and `K`.
+   `gen_contains`/`gen_absent`, and results at lengths 1 and `K`. The `[u8]` form has its own case
+   (tests/runtime/kd_m6_small_result_u8) and a spec accept test (tests/spec/r7_2_small_result_u8).
 2. tests/diff_rust.py on that group and `--fuzz-count 20`; `cargo test --release`.
 3. M6: `run_m6.py` 300/300 on py/rust and rs/rust; `--perf` at n = 100/500/1000 with every op at or below TS.

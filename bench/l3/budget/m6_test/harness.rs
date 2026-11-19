@@ -3,13 +3,17 @@
 // Input: one line per case, `op w1 w2 ...` with decimal i64 words; a string is `len u1 .. ulen` (UTF-16 units).
 // Output: one line per case with the result words (decimal), or `PANIC <message>` if the Pruv entry panicked
 // (e.g. a `requires` check at the host entry). Perf ops print `ns <elapsed ns of the Pruv call> <checksum>`.
+// Ops prefixed `hand_` run the same perf op on the hand Rust baseline (hand.rs, linked into this binary so both lanes
+// share one process image and their peak RSS compares the helpers, not two executables).
 // Calling convention (SPEC.md section 2): [i64] params are &[i64], [i64] results are Vec<i64>, bool is bool, i64 is i64.
 #[path = "@SOL@"] mod sol;
+#[path = "@HAND@"] mod hand;
+use std::fmt::Display;
 use std::io::{self, BufRead};
 use std::panic::{self, AssertUnwindSafe};
 use std::time::Instant;
 
-fn words(v: &[i64]) -> String {
+fn words(v: &[impl Display]) -> String {
     v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(" ")
 }
 
@@ -28,6 +32,7 @@ fn timed(f: impl FnOnce() -> i64) -> String {
 
 fn run(op: &str, w: &[i64]) -> String {
     match op {
+        "unit" => words(&sol::t_unit(w[0] != 0, w[1], w[2], w[3], w[4], w[5])),
         "cls" => words(&sol::t_class(w[0])),
         "oki" => sol::t_okint(w[0]).to_string(),
         "sfe" => sol::t_issafe(w[0]).to_string(),
@@ -41,7 +46,11 @@ fn run(op: &str, w: &[i64]) -> String {
         "con" => words(&sol::t_continue(w[0], w[1], w[2], w[3], w[4])),
         "amt" => words(&sol::t_amount(w[0], w[1], w[2], w[3], w[4])),
         "lmt" => words(&sol::t_limit(w[0], w[1], w[2])),
-        "wir" => words(&sol::t_wire(w[0], w[1], w[2])),
+        "wir" => {
+            let mut args = [0; 2];
+            let key = sol::t_wire(w[0], w[1], w[2], &mut args[..]);
+            format!("{} {}", words(&key), words(&args))
+        }
         "cmi" => words(&sol::t_card_missing(w[0])),
         "cer" => words(&sol::t_card_error(w[0], w[1])),
         "cnt" => words(&sol::t_counter(w[0], w[1])),
@@ -60,7 +69,10 @@ fn run(op: &str, w: &[i64]) -> String {
         }
         "p_iso" => timed(|| sol::p_iso(w[0], w[1])),
         "p_ref" => timed(|| sol::p_refusal(w[0], w[1], w[2], w[3], w[4], w[5])),
+        "p_amount" => timed(|| sol::p_amount(w[0], w[1], w[2], w[3], w[4], w[5])),
+        "p_card_error" => timed(|| sol::p_card_error(w[0], w[1], w[2])),
         "p_int" => timed(|| sol::p_int(w[0], w[1])),
+        _ if op.starts_with("hand_") => timed(|| hand::run(&op[5..], w)),
         _ => panic!("unknown op {}", op),
     }
 }
