@@ -5230,6 +5230,9 @@ Audit (Codex gpt-6.2-astra ultra), required findings:
    left for a new row.
 
 Optional findings taken: SPEC separates the lexer's reserved `pruv_` names from the `PruvArr` / `PruvStr` clash.
+The confirm audit (same model) found 1 and 2 resolved and the include! scope accurate, and one required SPEC fix:
+the clash is on the generated Rust name (a private or specialized `PruvArr` is mangled and does not clash), now
+stated in SPEC.
 Not taken: moving the `FBuf` checks out of the timed region (one check per timed call, not per iteration).
 
 | work | engine / model | mode |
