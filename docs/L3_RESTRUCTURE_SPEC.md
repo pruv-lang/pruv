@@ -389,6 +389,9 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P13k | B/bud_map.pruv, bud_store.pruv (and both codegens if the lever is inline policy): part (a) of P13i, handed back (Appendix P13i.1) | P: take P13i.1 variant E's cold-fallback split of `bud_map::find_w` (instructions down on all five M7 cells: attach 392 -> 376, reopenmiss 383 -> 373, current 322 -> 311, isHalted 319 -> 304) together with a size lever (out-of-line shared cold paths, `ef`/`set_ef` attributes, or a proof-guided inline rule) so the M7 driver `__text` (457,916 B after P13i) and the M7 +96..176 / M10 +16..32 KiB fixed peak RSS go back toward c3ec58d (413,244 B), with no instruction cell given back on M4, M7, M10; output parity on both compilers if a codegen changes. Starts after P13j (shares bud_store/bud_map) and before T5b2 (same M7 cells). Result (Appendix P13k): the lever landed as a language attribute: `#[cold]` on a private top-level `fn` (SPEC R-7-3 supplement and attribute syntax; both compilers emit `#[cold]` `#[inline(never)]`, verification unchanged, accept/reject tests `tests/spec/r7_3_cold*`). No bud_map/bud_keys split meets the no-give-back rule, so the bench sources stay at base: G (first probe inline, rest of the probe loop and every fallback cold) cuts M7 instructions 30..55 per call on all five cells and `__text` -6.7 KB, but M4 sessions/tools/clocks lose up to +11 % per op (second probes run on most M4 lookups) and M7 peak RSS rises 32..80 KiB; F (only the never-run fallbacks cold) loses M7 current/isHalted +2 %; hash-fallback-only cold cuts M7 12..23 per call with RSS overlapping, but M10 D 100 +0.6 % instructions (no overlap). `__text` stays 458,300 B (c3ec58d 413,244); the size share is the host copies of the inlined `find_w`, row P13k.2. |
 | P13k.2 | m7_test/m10_test drivers or bud_lifecycle.pruv callers (P13i2a files), bud_map.pruv: host copies of the inlined `find_w` (Appendix P13k.4) | P: the M7 driver `__text` excess over c3ec58d (458,300 vs 413,244 B) is about 1.5-2 KB per inlined `find_w` copy, multiplied through host fns (`c_call`, `one`, `raw_call`, `World::call`, `run_perf`, `fair_loop`, closures inlining current/isHalted); `find_w` out of line gives 422,844 B but gives back most of the instruction gain. Choose per call site between the inlined and the out-of-line (`#[cold]`-free, shared) lookup so `__text` and the M7 +96..176 / M10 +16..32 KiB fixed peak RSS go toward c3ec58d with no M4/M7/M10 instruction, time or RSS cell given back. Row only; runs after P13i2a (same callers). |
 | P13j2 | B/bud_map.pruv (and bud_store.pruv if the frame needs a store `ensures`): root-compare loop in `grow_copy` (Appendix P13j.4) | P: drop the `grow_copy` root-compare loop by a frame proof that `copy_kids` arena writes never touch the root extension records (M4 `__text` -~512 B; P13j left M4 `__text` +832 B over a4427ec, accepted for the root payload fix), with the `grow_copy` root payload `ensures` kept proved, admit cases 24-26 passing, and no instruction, peak RSS or allocation cell given back on M4, M7, M10. Not done (Appendix P13j2): the frame needs content `ensures` on `set_blob`/`copy_pay`, frame `ensures` on `arena_put`/`xbm` and a root-payload-last copy order; split P13j2a/b/c proposed. |
+| P13j2a | B/bud_map.pruv, bud_store.pruv: content `ensures` for (a) of Appendix P13j2 | P: proved content `ensures` on `set_blob` and `copy_pay`: the blob words and the four scalars of pe land in ne, premise destination payload default, scalars covered after `set_vals`; every existing `ensures` (with `grow_copy`'s root payload `ensures`) kept, admit cases 24-26 passing, proof facts only (generated Rust byte-identical for every importing root). Done (Appendix P13j2a): spec-only facts on 7 bud_store and 7 bud_map fns, no new fn; for a fresh destination (flag word 0: the `grow_copy` root, not its children, whose keys are stored first) the logical payload of pe lands in ne; generated Rust identical on all 7 roots and both compilers; gates pass on both; proof time +45..61 % (rs) / +66..125 % (py) per root, cause the new quantified frame and content obligations (P13j2a.4); two unproved destination states left (P13j2a.2). |
+| P13j2b | B/bud_store.pruv (bud_map.pruv callers): (b) of Appendix P13j2 | P: frame `ensures` on `arena_put` / `xbm` that P13j2c needs beyond P13j2a (P13j2a already states `arena_put` words 16 .. result kept and `xbm` words from old top kept), and, if P13j2c needs them, the two destination states P13j2a leaves unproved (P13j2a.2). Queued. |
+| P13j2c | B/bud_map.pruv: (c) of Appendix P13j2 | P: copy root payloads after all children through the single `copy_kids` site, drop `blob_same` and the `grow_copy` root-compare loop (audit preconditions in Appendix P13j2), measure M4 `__text`. Queued after P13j2b. |
 | P13i2 | B/bud_lifecycle.pruv, m7_test/driver_m7.rs (M7 wire): record text representation (Appendix P13i(c).3) | P: the M7 record keeps `rest` (95 units) and the date (24 units) one UTF-16 unit per i64 word (160 arena words per session; hand16 holds u16 text), which is the M7 proportional peak-RSS excess (Pruv 4.95 vs hand16 3.56 KiB per session slope). Store both as UTF-8 bytes (`[u8]`/`str`, §6b; the representation rule in §1-§4), not as packed i64 words, so the per-session record is at or below hand16; M7 proportional RSS share <= hand16 at S/M, no M7/M10 instruction or time cell given back, M7 Q 113/187/0 on both compilers. Fixed share left to P13k (`__text` +143 KiB). Runs before T5b2 (same M7 cells and bud_lifecycle). P13k note (for P13i2a, bud_lifecycle): closereopen 539 vs hand16 437..448 and reopenmiss 387 vs 336 instructions per call at S = 100 remain after P13k; a cold `find_w` split closes at most 31 / 33 of that. |
 | P21a | B/bud_map.pruv, bud_tools.pruv: O(1) forgetTurn (Appendix P21.4) | P: forgetTurn of a turn holding N activities <= 1.0x oaw at S/M in time, peak RSS and allocations (P21: 8.9x / 37.9x; oa forgets by generation, Pruv frees each child), with the toolnew and tooldup cells kept <= 1.0x and the reclaim cost measured where it lands; plus a corrupt control that pokes header words (entry top = cap - 1, low live) for the P21.7 counterexample. Done (Appendix P21a): forget 0.99 / 0.95x oaw (overlap), RSS and allocations below; reclaim cost in toolnew queued as P21b. |
 | P21b | B/bud_map.pruv, bud_store.pruv: reclaim cost of the lazy forget (Appendix P21a.3) | P: toolnew <= 1.0x oaw at S/M by median and distribution (P21a: 0.93 / 1.08x, overlapping) and the toolgrow cycle <= 1.0x oaw in instructions (P21a: 1.05 / 1.08x), with toolforget, tooldup and memory kept; e.g. fold reclaim_head into entry_alloc. Same gates as P21a. Done (Appendix P21b): toolnew 0.87 / 0.97x oaw (Pruv max below oaw min), toolgrow 0.93 / 0.98x oaw instructions; cause was index load at M (early rehash bound slots/4 -> 3/8) plus the reclaim push/pop and repeated row bases. |
@@ -6767,6 +6770,139 @@ the premise that the destination payload is default, and must cover the four sca
 pass must show the reused region does not overlap an earlier root's blob. (3) Pass 1's invariant is "root payload
 default" (not "no extension": the first child may create it); pass 2 copies roots only, without re-inserting
 children or charging budget, and keeps child links and earlier roots' flags, scalars and blob words.
+
+## Appendix P13j2a: content `ensures` on `set_blob` / `copy_pay`
+
+Status: done on the Rust and Python compilers; proof facts only. On top of f5d9891. Changed: `B/bud_map.pruv`
+(+158 -1), `B/bud_store.pruv` (+64): `ensures`, loop invariants, `assert` and `reveal` only. No statement changed and
+no fn added.
+
+### P13j2a.1 Contracts
+
+Addresses below are written inline: entry base `st[5] + 10 * e`, extension `base + 10 * st[6]`, flag word `base + 9`
+read through `has_x`, extension words 1 = blob offset, 2 = blob length, 3..6 = the four scalars. "Payload" is
+logical: a missing extension reads as an empty blob and zero scalars, as in `root_carried`.
+
+- bud_store:
+  - `has_x`: the negative-key case.
+  - `ea`/`eb`/`xa`/`xb`: exact address under `valid` (base, extension, or -1 iff `!has_x`).
+  - `xbm`:
+    - the result is the extension address;
+    - a flag word that was 0 or `has_x` ends `has_x`, and a 0 flag becomes 1;
+    - an existing extension's flag is kept;
+    - a new extension has word 2 = 0;
+    - words from the old top `st[9]` to the end are unchanged.
+  - `xfield`: values for f 12/13/19.
+  - `ef(12)`: reads extension word 1.
+  - `set_ef(12/13/19)` on an existing extension: writes only that word, keeps the flag, frame from old `st[9]`.
+  - `set_vals`:
+    - words 3..6 are a..d whenever the result has an extension;
+    - flag and words 1/2 are kept for an existing extension;
+    - a fresh flag becomes 1 when any value is non-zero, and a new extension's word 2 = 0;
+    - all-zero values on no extension leave none;
+    - frame from old `st[9]`.
+  - `arena_put`: `result == old st[10]`, words written, words 16 .. result kept, `result >= old st[9]`.
+- bud_map:
+  - `gf`/`sf` (f 12/13/19), `fits_region` (range), `write_at` (content and frame), `put_units` (content).
+  - `set_blob`:
+    - **No extension before** (flag 0, or `!has_x` for length and words): with 0 < n <= 2^32, length n at a new
+      region `old st[10]`, the region lies above `st[9]` and inside the buffer, and the words equal `src[s..s+n)`.
+      The extension bit itself is proved only from flag 0.
+    - **Existing extension**: length n, and for n > 0 and offset >= 0 the words at the stored offset equal
+      `src[s..s+n)`.
+    - **n = 0 on no extension**: none is created (flag 0 stays 0).
+  - `copy_pay`:
+    - pe without an extension: nxt is unchanged.
+    - pe with an extension and ne ending with one: the four scalars are equal.
+    - pe with an extension and a fresh ne (flag 0):
+      - 0 < length: ne has an extension, the same length, offset `old nxt[10]`, and the blob words equal;
+      - length 0: ne's length is 0, or ne has no extension and pe's scalars are all 0.
+    - existing ne extension with offset >= 0: the same length and words.
+
+For a fresh destination with flag word 0, the logical payload of pe (blob length, blob words, scalars) equals ne's
+after `copy_pay`. In `grow_copy` this covers the root only: `init_store` sets the root's flag word to 0. A child is
+not covered: `put_node` stores the key before `copy_pay`, and `set_key_region` writes `2 * n` into word 9, so a child
+with a non-empty key and no extension is in unproved state 1 below (audit finding). `grow_copy`'s root payload `ensures`
+and the compare loop are unchanged (P13j2c removes the loop).
+
+For P13j2c: on the existing-extension path `copy_pay` states length and word equality but not that ne's offset and
+span stay inside the buffer, which `root_carried` also needs. If P13j2c links children first so that the root already
+has an extension, these contracts alone do not justify removing the compare loop (audit, optional).
+
+### P13j2a.2 Unproved destination states (left to P13j2b if P13j2c needs them)
+
+1. Flag word non-zero but `!has_x` (a freed-extension state, and every new child after `put_node` stores its key): that `set_blob` sets the extension bit is not proved.
+   The verifier returns `verify_unknown` (timeout) for it, so `copy_pay` states the full payload equality only from
+   flag 0.
+2. An existing destination extension with a negative stored offset and n > 0 (`set_blob` takes the append path):
+   length and word equality are not proved. Stating it fails with `cannot prove postcondition` (counterexample offset
+   -1), so it is excluded by the premise `0 <= offset`.
+
+### P13j2a.3 Language finding
+
+The contracts had to be written inline, as raw address arithmetic, for two reasons:
+
+- Every new `fn` is emitted into the generated Rust, even one used only in contracts or `assert`s. A helper
+  `pay_def` changed the generated code.
+- An i64 fn with an `if` (`xb`, `c32`, `c40`) cannot be called in a contract (`call_in_contract`).
+
+The cost is long repeated premises. A ghost (spec-only, not emitted) fn would remove them. This is a language-gap row
+candidate and was not worked around in the compilers.
+
+### P13j2a.4 Gates, generated code, proof time
+
+Generated Rust was produced for every root importing these files with both compilers (worktree `pruvc-rs` release,
+then `pruvc.py`): m34 `root_m4`, `root_admit`, m7 `root`, m8 `root_m8`, m9 `root_m9`, m10 `root_m10`, m11 `root`.
+All 14 outputs are byte-identical to f5d9891 (`cmp`). That replaces perf measurement.
+
+| gate | rs | py |
+|---|---|---|
+| `run.py admit` (cases 0..26, maxslot) | 29/29 | 29/29 |
+| `run.py lanes` | 9 lanes 300/300 each | same |
+| M7 q | 113 exact / 187 not-impl / 0 fail | same |
+| M8 q (p13e cases) | 63 / 237 / 0 | same (on the py-generated gen.rs) |
+| `corrupt_resident.py --old-rev f5d9891` | controls 387, mismatches 0, poke-not-found 0; P21a 6/6 | - (py output byte-identical) |
+| M9 q | 26 / 274 / 0, i2_bad 0 | same (on the py-generated gen.rs) |
+| M10 q | 78 / 222 / 0 | same |
+| M11 | exact 213, prefix-ok 87 | same |
+
+Proof plus codegen time per root, in seconds. rs: base and new alternated, 2 rounds each. py: 1 round each.
+
+| root | rs base | rs new | rs | py base | py new | py |
+|---|---|---|---|---|---|---|
+| m4 | 7.0, 7.0 | 11.0, 11.2 | +59 % | 15.3 | 28.4 | +86 % |
+| admit | 16.1, 6.9 | 24.7, 11.1 | +61 % (min) | 16.8 | 30.3 | +80 % |
+| m7 | 8.2, 9.5 | 13.5, 14.0 | +55 % | 15.9 | 30.6 | +92 % |
+| m8 | 7.9, 9.4 | 14.1, 12.4 | +53 % | 15.0 | 33.8 | +125 % |
+| m9 | 7.2, 7.3 | 11.7, 11.6 | +61 % | 14.9 | 32.0 | +115 % |
+| m10 | 9.4, 9.3 | 13.8, 13.8 | +48 % | 17.9 | 34.9 | +95 % |
+| m11 | 9.9, 10.2 | 14.9, 14.2 | +45 % | 19.3 | 32.0 | +66 % |
+
+The increase is over 20 % on every root. The cause is the new obligations, which are verified once per importing
+root:
+
+- the quantified frame `ensures` (`forall j in old st[9]..len`) and content `ensures` on `xbm`, `set_vals`, `set_ef`,
+  `arena_put`, `write_at`, `set_blob` and `copy_pay`;
+- the loop invariants added in `write_at`, `arena_put` and `set_blob`.
+
+Neither compiler reports per-fn time, so the split between fns was not measured. Runtime is unaffected (same code).
+Perf gate (2026-11-19 rule): no runtime, memory or code-size cell changes, because the generated Rust is identical; no
+perf-debt row.
+
+### P13j2a.5 Audit
+
+One audit (Codex gpt-6.2-astra ultra, read-only):
+
+- required: the claim that the `grow_copy` destination has flag word 0 holds for the root, not for children
+  (`put_node` stores the key first). Fixed in this appendix and the row by limiting the scope to the root; no contract
+  changed.
+- optional: the existing-extension path does not state the buffer range `root_carried` needs (noted for P13j2c in
+  P13j2a.1).
+- optional: the read/write contracts on `gf`/`ef`/`sf`/`set_ef` cover field 12/13 only (no capacity `ensures` after
+  writing 19). The published length and word equalities read the words directly, so the root copy result is not
+  weakened.
+
+The fix touches the docs only, so no confirm audit was run.
 
 ## Appendix P13k: `#[cold]` attribute; no bud_map split meets the no-give-back rule
 
