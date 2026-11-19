@@ -321,6 +321,28 @@ def main(work, rs, py):
         assert result.returncode == 2 and result.stderr.strip().endswith(
             "--proven-entries requires --backend rust"), result.stdout + result.stderr
     assert diagnostics[0] == diagnostics[1], "clash diagnostics differ"
+
+    # R-7-3: proven twins retain each source directive.
+    attrs = work / "attrs.pruv"
+    attrs.write_text(
+        "#[cold] fn f(a: [i64]) -> i64 { return 0; }\n"
+        "#[inline] fn g(a: [i64]) -> i64 { return 1; }\n"
+        "#[inline(always)] fn h(a: [i64]) -> i64 { return 2; }\n", encoding="utf-8")
+    proven = [unwrap(compile_source(driver, attrs, work / "attrs.rs", (flag,))) for driver in drivers]
+    assert proven[0] == proven[1], "attribute proven output differs"
+    twins = proven[0].split(b"pub mod pruv_proven {", 1)[1]
+    for name, directive in (("f", "#[cold]\n    #[inline(never)]"), ("g", "#[inline]"), ("h", "#[inline(always)]")):
+        assert f"    {directive}\n    pub fn {name}(a: &PruvArr<i64>) -> i64 {{".encode() in twins, twins
+    (work / "main.rs").write_text(
+        'include!("attrs.rs");\nfn main() {\n'
+        '    assert_eq!(pruv_proven::f(PruvArr::new(&[1])), 0);\n'
+        '    assert_eq!(pruv_proven::g(PruvArr::new(&[1])), 1);\n'
+        '    assert_eq!(pruv_proven::h(PruvArr::new(&[1])), 2);\n'
+        '}\n', encoding="utf-8")
+    result = run([rustc, "--edition", "2021", str(work / "main.rs"), "-o", str(work / "host")])
+    assert result.returncode == 0, result.stderr
+    result = run([str(work / "host")])
+    assert result.returncode == 0, result.stderr
     print("P18b/P18c: parity in 3 compiler modes and 2 manifest modes, 3 host runs, privacy, %d body rejects, %d macro shadows and diagnostics pass" % (rejects, shadows))
 
 

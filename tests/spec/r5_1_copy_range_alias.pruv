@@ -1,0 +1,7 @@
+// spec: R-5-1 reject
+// The source is the destination array itself: pruv arrays have value semantics, so the inout_alias rule rejects it.
+pub fn f(inout a: [u8]) -> ()
+  requires 6 <= len(a)
+{
+  copy_range(inout a, 0, a, 4, 2);
+}

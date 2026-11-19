@@ -1,7 +1,7 @@
 // M7 driver (appended to a main file that already declares `mod sol;`, see run_m7.py).
 //
 //   driver_m7 q        program on stdin, one case after another:
-//                        case <id> | now <ms> | uuids <key>... | quiet <0/1>... | put <words...> | del <key words...>
+//                        case <id> | now <ms> | uuids <key>... | quiet <0/1>... | put <words...> | <text bytes...> | del <key words...>
 //                        | adv <ms> | call <req> <op words without now/reserved word/uuid> | end
 //   driver_m7 perf <S> <reps>   perf program, see run_m7.py (cmd_perf). After each item's timed loop it runs an untimed
 //                        verification pass (fresh identical setup, same ops, V = min(reps, 2000) iterations) and prints
@@ -25,6 +25,8 @@ use std::hint::black_box;
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
 
+use record_text::{observation, parse_put, perf_put, unit_record, Put};
+
 struct World {
     st: Vec<i64>,
     out: Vec<i64>,
@@ -40,6 +42,7 @@ struct World {
     // perf only (silent): the ops built so far, keyed by (body address, body length, uuid index). The perf
     // bodies are fixed vectors, so a host that keeps its prepared arguments does not rebuild them on every call.
     ops: Vec<((usize, usize, usize), Vec<i64>)>,
+    tx: Vec<u8>,
 }
 
 impl World {
@@ -53,8 +56,12 @@ impl World {
                 std::process::exit(2);
             }
         }
+        // The first nonempty put sizes the arena from its actual text payload.
+        let mut tx = vec![0; 8];
+        assert_eq!(sol::t_tinit(&mut tx), 0);
         World {
             st,
+            tx,
             out: vec![0; 4096],
             bv: vec![0; 8],
             fx: vec![0; 16],
@@ -79,9 +86,9 @@ impl World {
         self.st = fresh;
     }
 
-    fn put(&mut self, op: &[i64]) {
+    fn put(&mut self, put: &Put) {
         for _ in 0..4 {
-            let r = sol::t_put(&mut self.st, op, &mut self.out);
+            let r = sol::t_put(&mut self.st, &mut self.tx, &put.words, &put.text, &mut self.out);
             if r == 0 {
                 return;
             }
@@ -90,9 +97,16 @@ impl World {
                 self.grow(n);
                 continue;
             }
+            if r == 4 {
+                let mut next = vec![0; self.out[0] as usize];
+                assert_eq!(sol::t_tgrow(&mut self.st, &self.tx, &mut next), 0);
+                self.tx = next;
+                continue;
+            }
             eprintln!("t_put status {}", r);
             std::process::exit(2);
         }
+        panic!("t_put exhausted Grow retries");
     }
 
     fn del(&mut self, op: &[i64]) {
@@ -148,7 +162,7 @@ impl World {
 
     fn call_with(&mut self, slot: usize, op: Vec<i64>) -> i64 {
         let mut r = 0;
-        let before = bud_facts::calls();
+        let before = if self.silent { 0 } else { bud_facts::calls() };
         for _ in 0..8 {
             self.fx[0] = 0;
             let snapshot = self.audit.then(|| (self.st.clone(), self.fx.clone(), self.out.clone(), bud_facts::calls()));
@@ -164,9 +178,8 @@ impl World {
             }
             break;
         }
-        let after = bud_facts::calls();
         if !self.silent {
-            for i in before..after {
+            for i in before..bud_facts::calls() {
                 self.log.push(bud_facts::quiet_log(i));
             }
         }
@@ -194,25 +207,32 @@ impl World {
             }
         }
         if !self.silent {
-            let w: Vec<String> = match self.out[0] {
-                3 | 6 => {
-                    // the ref's ids are packed in out; print them as units
-                    let carry = self.fx[1..=used].contains(&21);
-                    ref_units(&self.out, &self.st, carry).iter().map(|x| x.to_string()).collect()
-                }
-                4 => {
-                    // budget view: the record is st[off..off+n)
-                    let n = self.out[1].max(0) as usize;
-                    let off = self.out[2].max(0) as usize;
-                    let mut v = vec!["4".to_string(), n.to_string()];
-                    v.extend(self.st[off..off + n].iter().map(|x| x.to_string()));
-                    v
-                }
-                x => vec![x.to_string()],
-            };
-            self.log.push(format!("V {}", w.join(" ")));
+            self.log_result(used);
         }
         0
+    }
+
+    // Keep budget serialization on the Q logging path.
+    #[inline(never)]
+    fn log_result(&mut self, used: usize) {
+        let w: Vec<String> = match self.out[0] {
+            3 | 6 => {
+                // the ref's ids are packed in out; print them as units
+                let carry = self.fx[1..=used].contains(&21);
+                ref_units(&self.out, &self.st, carry).iter().map(|x| x.to_string()).collect()
+            }
+            4 => {
+                // budget view: the record is st[off..off+n)
+                let n = self.out[1].max(0) as usize;
+                let off = self.out[2].max(0) as usize;
+                let units = unit_record(&self.tx, &self.st[off..off + n]);
+                let mut v = vec!["4".to_string(), units.len().to_string()];
+                v.extend(units.iter().map(|x| x.to_string()));
+                v
+            }
+            x => vec![x.to_string()],
+        };
+        self.log.push(format!("V {}", w.join(" ")));
     }
 
     fn observe(&mut self) -> String {
@@ -225,12 +245,7 @@ impl World {
             return format!("O X {}", r);
         }
         let n = self.out[0].max(0) as usize;
-        let mut s = String::from("O");
-        for x in &self.out[1..1 + n] {
-            s.push(' ');
-            s.push_str(&x.to_string());
-        }
-        s
+        observation(&self.tx, &self.out[1..1 + n])
     }
 }
 
@@ -329,7 +344,7 @@ fn run_q() {
                 assert!(w.st[11] - w.st[10] >= 64);
             }
             "quiet" => bud_facts::set_answers(&nums(&p[1..]), 0),
-            "put" => w.put(&nums(&p[1..])),
+            "put" => w.put(&parse_put(&p[1..])),
             "del" => w.del(&nums(&p[1..])),
             "adv" => w.now += p[1].parse::<i64>().unwrap(),
             "call" => {
@@ -359,30 +374,6 @@ fn run_q() {
 //   reopen_S  : maybeClose(quiet) then reopen on the last session (2 calls per rep)
 //   attach_S  : attach on an open budget of the last session (ref result)
 // prints `item size ns_per_call`.
-// Record words (bud_lifecycle.pruv header): the id (string 0) and follows (string 4, empty here) are packed keys.
-fn rec(id: &str, state: i64, rest: &str) -> Vec<i64> {
-    let mut h = vec![0i64; 24];
-    h[0] = state;
-    h[3] = 120;
-    h[4] = 24;
-    h[5] = 3;
-    h[6] = 2;
-    h[7] = 1;
-    h[20] = 1;
-    let mut v = h;
-    let mut s = |t: &str, v: &mut Vec<i64>| {
-        let u: Vec<i64> = t.encode_utf16().map(|x| x as i64).collect();
-        v.push(u.len() as i64);
-        v.extend(u);
-    };
-    v.extend(key(id));
-    s("2023-11-14T22:13:20.000Z", &mut v);
-    s("", &mut v);
-    s("", &mut v);
-    v.extend(key(""));
-    s(rest, &mut v);
-    v
-}
 
 // Packed-u16 words (bud_keys layout): four big-endian lanes per word, tail lanes zero.
 fn pack_u16(units: &[u16]) -> Vec<i64> {
@@ -420,11 +411,7 @@ fn run_perf(args: &[String]) {
         let mut w = World::new();
         w.silent = true;
         for (i, s) in sids.iter().enumerate() {
-            let mut op = key(s);
-            let r = rec(&bid(i), state, PERF_REST);
-            op.push(r.len() as i64);
-            op.extend(r);
-            w.put(&op);
+            w.put(&perf_put(key(s), key(&bid(i)), state, PERF_REST));
         }
         w.uuids = vec![key("00000000-0000-4000-8000-0000000000aa")];
         w
@@ -477,7 +464,7 @@ fn run_perf(args: &[String]) {
     // typed call per op, like the hand typed lane's bare `w.current(..)`; the Grow retry loop (c_call) runs only
     // when a call answers Grow. The host fact uses the perf default answer. Prints
     // `t <item> <size> <ns>` and, from an untimed fresh run of vn iterations, `rchk_t <item> <size> <value>`.
-    let typed = |name: &str, state: i64, bodies: &[Vec<i64>], per: usize, put: Option<&Vec<i64>>| {
+    let typed = |name: &str, state: i64, bodies: &[Vec<i64>], per: usize, put: Option<&Put>| {
         let mk = || -> (World, Vec<Prep>) {
             let mut w = setup(state);
             let ps: Vec<Prep> = bodies.iter().map(|b| prep_of(&mut w, b)).collect();
@@ -693,10 +680,7 @@ fn run_perf(args: &[String]) {
     {
         let mut w = setup(1);
         let rp = body(4, 0, 2, "");
-        let mut put = key(&sids[last]);
-        let r = rec(&bid(last), 1, PERF_REST);
-        put.push(r.len() as i64);
-        put.extend(r);
+        let put = perf_put(key(&sids[last]), key(&bid(last)), 1, PERF_REST);
         for _ in 0..1000 {
             w.next_uuid = 0;
             w.call(&rp);
@@ -748,9 +732,10 @@ fn rchk_fold(w: &World, r: i64, sum: u64) -> u64 {
             let n = w.out[1].max(0) as usize;
             let off = w.out[2].max(0) as usize;
             fold(4);
-            fold(n as i64);
-            for x in &w.st[off..off + n] {
-                fold(*x);
+            let units = unit_record(&w.tx, &w.st[off..off + n]);
+            fold(units.len() as i64);
+            for x in units {
+                fold(x);
             }
         }
         3 | 6 => {
@@ -1108,7 +1093,7 @@ struct Item {
     name: &'static str,
     bodies: Vec<Vec<i64>>,
     state: i64,
-    put: Option<Vec<i64>>,
+    put: Option<Put>,
 }
 
 fn run_boundary(args: &[String]) {
@@ -1125,11 +1110,7 @@ fn run_boundary(args: &[String]) {
         let mut w = World::new();
         w.silent = true;
         for (i, s) in sids.iter().enumerate() {
-            let mut op = key(s);
-            let r = rec(&bid(i), it.state, PERF_REST);
-            op.push(r.len() as i64);
-            op.extend(r);
-            w.put(&op);
+            w.put(&perf_put(key(s), key(&bid(i)), it.state, PERF_REST));
         }
         w.uuids = vec![key("00000000-0000-4000-8000-0000000000aa")];
         w
@@ -1141,10 +1122,7 @@ fn run_boundary(args: &[String]) {
         v.extend(key(b));
         v
     };
-    let mut put = key(&sids[last]);
-    let r = rec(&bid(last), 1, PERF_REST);
-    put.push(r.len() as i64);
-    put.extend(r);
+    let put = perf_put(key(&sids[last]), key(&bid(last)), 1, PERF_REST);
     let close = sids.iter().map(|sid| {
         let mut v = vec![6, -1, -1];
         v.extend(unit);

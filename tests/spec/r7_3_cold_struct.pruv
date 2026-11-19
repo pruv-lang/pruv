@@ -1,0 +1,4 @@
+// spec: R-7-3 reject
+// `#[cold]` is only for `fn` items
+#[cold]
+struct P { x: i64 }

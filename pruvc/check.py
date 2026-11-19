@@ -29,7 +29,7 @@ def x_has_bit(e):
 
 # P2 batch 4: byte-word access on [u8]: load_be(a, i, n) and the statement-only store_be(inout a, i, w, n)
 WORD_BUILTINS = ("load_be", "store_be")
-BUILTIN_FNS = ("len", "alloc", "copy", "print", "is_char_boundary", "substr", "truncate", "eq_range", "resize") + tuple(BIT_BUILTINS) + WORD_BUILTINS   # L3-10: eq_range
+BUILTIN_FNS = ("len", "alloc", "copy", "print", "is_char_boundary", "substr", "truncate", "eq_range", "resize", "copy_range") + tuple(BIT_BUILTINS) + WORD_BUILTINS   # L3-10: eq_range; L-copy-range
 RESERVED_TYPE_NAMES = ("Option", "Result", "Some", "None", "Ok", "Err")
 TYPE_NAME_RE = re.compile(r"[A-Z][A-Za-z0-9_]*\Z")
 FIELD_NAME_RE = re.compile(r"[a-z][A-Za-z0-9_]*\Z")
@@ -1667,6 +1667,50 @@ class Checker:
         w.ty = I64
         return UNIT if store else I64
 
+    def copy_range_call(s, e, scope, c):
+        """L-copy-range: copy_range(inout dst, i, src, j, n) -> (), a whole expression statement. dst is a `let mut`
+        local array or an inout parameter of type [i64] or [u8]; src has the same type; i, j, n are i64. Same-array
+        aliasing (src mentions dst) is rejected with the existing inout_alias rule, as for store_be."""
+        a = e.args
+        if c: terr(e, "effect_in_contract", "copy_range is not allowed in contracts")
+        if len(a) != 5:
+            terr(e, "arity", "copy_range takes 5 argument(s), got %d" % len(a))
+        arg = a[0]
+        if not isinstance(arg, InoutArg):
+            terr(arg, "inout_argument", "the destination array of copy_range needs the `inout` marker",
+                 "write `copy_range(inout name, i, src, j, n)` with a `let mut` local array or an inout parameter")
+        op = arg.expr
+        if not isinstance(op, Var):
+            terr(arg, "inout_argument", "an inout argument must be the whole name of a local array or an inout "
+                 "parameter", "name a `let mut` local array or an inout parameter of this function")
+        v = s.lookup(op, op.name, scope)
+        if v[2] == "local" and not v[1]:
+            terr(arg, "inout_argument", "%s is not mutable: it cannot be passed inout" % op.name,
+                 "declare it with `let mut`")
+        if v[2] not in ("inout", "local"):
+            terr(arg, "inout_argument", "%s is a read-only %s: it cannot be passed inout" % (
+                op.name, "parameter" if v[2] == "param" else "binding"),
+                 "declare the parameter `inout %s: ...`, or copy into a `let mut` local" % op.name)
+        if v[0] not in (ARRAY, ARRAY_U8):
+            terr(arg, "type_mismatch", "expected %s or %s, found %s" % (
+                type_name(ARRAY), type_name(ARRAY_U8), type_name(v[0])))
+        if op.name in s.active_roots:
+            terr(arg, "recursive_borrow", "cannot pass %s inout while a match on it is active" % op.name,
+                 "finish the match before the call")
+        op.ty = v[0]
+        arg.ty = v[0]
+        s.expect(a[1], I64, scope, c)
+        s.expect(a[2], v[0], scope, c)
+        s.expect(a[3], I64, scope, c)
+        s.expect(a[4], I64, scope, c)
+        if any(_mentions(x, op.name) for x in a[1:]):
+            terr(arg, "inout_alias", "%s is passed inout and also used elsewhere in the arguments of this call" % op.name,
+                 "copy the source first with `let mut t: [..] = copy(%s);` (needs alloc), then pass t" % op.name)
+        if e is not s.boundary:
+            terr(e, "inout_context", "copy_range must be a whole expression statement",
+                 "write `copy_range(inout dst, i, src, j, n);` as a statement")
+        return UNIT
+
     def old_call(s, e, scope):
         """the contextual builtin old(a): context first, then arity and operand"""
         if s.ckind not in ("ensures", "invariant", "assert"):
@@ -1814,6 +1858,8 @@ class Checker:
             return I64
         if n in WORD_BUILTINS:  # P2 batch 4
             return s.word_call(e, scope, c)
+        if n == "copy_range":   # L-copy-range: copy_range(inout dst, i, src, j, n); statement only, dst and src of one integer array type
+            return s.copy_range_call(e, scope, c)
         if n == "eq_range":     # L3-10: eq_range(a, i, b, j, n) -> bool, code only, a and b of one integer array type
             if c: terr(e, "effect_in_contract", "eq_range is not allowed in contracts")
             arity(5)

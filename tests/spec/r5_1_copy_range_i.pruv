@@ -1,0 +1,7 @@
+// spec: R-5-1 reject
+// Only 0 <= i is not proved.
+pub fn f(inout dst: [u8], i: i64, src: [u8], j: i64, n: i64) -> ()
+  requires 0 <= j && 0 <= n && i + n <= len(dst) && j + n <= len(src)
+{
+  copy_range(inout dst, i, src, j, n);
+}

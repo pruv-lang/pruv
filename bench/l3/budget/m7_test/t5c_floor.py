@@ -45,7 +45,7 @@ def build(pruvc):
     empty, n = BODY.subn("    out[0]=0; return 0;", src)
     assert n == 5, "expected the 5 typed c_* body lines, found %d" % n
     open(os.path.join(OUT, "gen0.rs"), "w").write(empty)
-    drv = open(os.path.join(m7.HERE, "driver_m7.rs")).read()
+    drv = m7.driver_source()
     flags = [m7.rustc()] + m7.RUSTC_FLAGS + ["--extern", "bud_facts=" + rlib]
     for g, name in (("gen.rs", "drv"), ("gen0.rs", "drv0")):
         main = os.path.join(OUT, "main_%s.rs" % name)

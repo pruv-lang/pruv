@@ -1,0 +1,10 @@
+// spec: R-5-1 accept
+// copy_range on [u8]: the bounds come from requires; length, content and frame facts hold after the copy.
+pub fn put(inout dst: [u8], i: i64, src: [u8], j: i64, n: i64) -> ()
+  requires 0 <= i && 0 <= j && 0 <= n && i + n <= len(dst) && j + n <= len(src)
+  ensures len(dst) == len(old(dst))
+  ensures forall k in 0..n: dst[i + k] == src[j + k]
+  ensures forall p in 0..len(dst): (p < i || p >= i + n) ==> dst[p] == old(dst)[p]
+{
+  copy_range(inout dst, i, src, j, n);
+}

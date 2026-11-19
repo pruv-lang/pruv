@@ -1,0 +1,4 @@
+// spec: R-7-3 reject
+// Repeating a directive is an error.
+#[inline] #[inline]
+fn f() -> i64 { return 1; }

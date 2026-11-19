@@ -273,6 +273,13 @@ pub enum Stmt {
 }
 
 // ---------- top level ----------
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FnAttribute {
+    Cold,
+    Inline,
+    InlineAlways,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
     pub line: i64, pub col: i64, pub name: String, pub params: Vec<Param>, pub ret: Type,
@@ -291,6 +298,8 @@ pub struct Function {
     pub x_auto: Option<Expr>,
     /// P13o: `opaque fn` (Python `Function.opaque`). Not emitted in the dump.
     pub opaque: bool,
+    /// Source attribute, kept by specialization and omitted from the AST dump.
+    pub attribute: Option<FnAttribute>,
 }
 
 /// G9 A0: checker metadata recorded on the program and the type table, only when a G9 feature is present

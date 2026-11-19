@@ -13,7 +13,7 @@ use crate::emit_common::{
 use crate::foreign::{catalog_fn, is_catalog};
 use crate::foreign_codegen::ForeignGen;
 use crate::gtype::{is_g3_key, key_is_collection, mk_option, GType};
-use crate::inline_policy::inline_policy;
+use crate::inline_policy::{inline_policy, PIN_ALWAYS, PIN_INLINE};
 use crate::pyrepr::repr_str;
 use crate::typeinfo::{array_elem_name, is_array_name, uses_array_type, uses_str, TypeTable};
 use std::collections::{HashMap, HashSet};
@@ -1481,6 +1481,18 @@ impl<'a> Gen<'a> {
             || (self.g5 && f.params.iter().any(|p| p.mode_pos.is_some())) // G5: no public API for a mutable borrow
     }
 
+    fn emit_inline(&mut self, f: &Function) {
+        match f.attribute {
+            Some(FnAttribute::Cold) => {
+                self.emit(0, "#[cold]");
+                self.emit(0, "#[inline(never)]");
+            }
+            Some(FnAttribute::Inline) => self.emit(0, PIN_INLINE),
+            Some(FnAttribute::InlineAlways) => self.emit(0, PIN_ALWAYS),
+            None => self.emit(0, "#[inline]"),
+        }
+    }
+
     fn emit(&mut self, ind: usize, line: &str) {
         self.out.push(format!("{}{}", "    ".repeat(ind), line));
     }
@@ -1707,7 +1719,7 @@ impl<'a> Gen<'a> {
         self.emit(0, allow);
         // Inline hint on every function body: without it rustc keeps the generated call chains as real calls.
         // inline_policy raises it to #[inline(always)] where the measured policy says so.
-        self.emit(0, "#[inline]");
+        self.emit_inline(f);
         self.emit(0, &format!("{}fn {}({}){} {{", vis, body_name, ps, ret));
         self.cost = !self.verified && f.cost.is_some();
         if self.cost {
@@ -1891,7 +1903,7 @@ impl<'a> Gen<'a> {
         let checked = checked.unwrap_or(!self.trust);
         let allow = self.allow;
         self.emit(0, allow);
-        self.emit(0, "#[inline]");
+        self.emit_inline(f);
         let vis = if is_pub { self.pub_vis() } else { "" };
         let header = format!("{vis}fn {name}({ps}){ret} {{");
         self.emit(0, &header);
@@ -4121,6 +4133,35 @@ impl<'a> Gen<'a> {
                         head
                     ));
                 }
+                if n == "copy_range" {
+                    // L-copy-range: dst[i..i+n].copy_from_slice(&src[j..j+n]); i, src, j, n bound once in source order
+                    let name = match arg(a, 0)? {
+                        Expr::InoutArg(ia) => match ia.expr.as_ref() {
+                            Expr::Var(v) => v.name.clone(),
+                            other => return Err(format!("codegen: inout operand is not a variable: {:?}", other)),
+                        },
+                        other => return Err(format!("codegen: inout operand is not a variable: {:?}", other)),
+                    };
+                    let i0 = self.e(arg(a, 1)?)?;
+                    let s0 = self.arr_ref(arg(a, 2)?)?;
+                    let j0 = self.e(arg(a, 3)?)?;
+                    let n0 = self.e(arg(a, 4)?)?;
+                    let head = format!(
+                        "{{ let pruv_i: i64 = {}; let pruv_cs = {}; let pruv_j: i64 = {}; let pruv_n: i64 = {}; ",
+                        i0, s0, j0, n0
+                    );
+                    if self.verified {
+                        return Ok(format!(
+                            "{}unsafe {{ {}.get_unchecked_mut((pruv_i as usize)..((pruv_i + pruv_n) as usize)) }}.copy_from_slice(unsafe {{ pruv_cs.get_unchecked((pruv_j as usize)..((pruv_j + pruv_n) as usize)) }}); }}",
+                            head, name
+                        ));
+                    }
+                    // P13i2a.audit-1: a bad destination range reports (i, len(dst)), a bad source range (j, len(src))
+                    return Ok(format!(
+                        "{}if pruv_i < 0 || pruv_n < 0 || pruv_i > ({}.len() as i64) - pruv_n {{ pruv_oob(pruv_i, {}.len()) }} if pruv_j < 0 || pruv_j > (pruv_cs.len() as i64) - pruv_n {{ pruv_oob(pruv_j, pruv_cs.len()) }} {}[(pruv_i as usize)..((pruv_i + pruv_n) as usize)].copy_from_slice(&pruv_cs[(pruv_j as usize)..((pruv_j + pruv_n) as usize)]); }}",
+                        head, name, name, name
+                    ));
+                }
                 if n == "load_be" {
                     // P2 batch 4: big-endian word of a[i..i+nb]; unchecked slice when verified
                     let nb = crate::check::word_width(arg(a, 2)?).unwrap_or(0);
@@ -4724,10 +4765,16 @@ impl ProvenEntry {
 }
 
 fn proven_module(text: &str, items: &[ProvenEntry], allow: &str) -> String {
-    let attrs: HashMap<&str, &str> = text.split('\n').zip(text.split('\n').skip(1))
-        .filter(|(attr, _)| matches!(*attr, "#[inline]" | "#[inline(always)]"))
-        .map(|(attr, header)| (header, attr))
+    let lines: Vec<&str> = text.split('\n').collect();
+    // The policy pass has already normalized explicit inline directives.
+    let mut attrs: HashMap<&str, Vec<&str>> = lines.windows(2)
+        .filter(|w| matches!(w[0], "#[inline]" | "#[inline(always)]"))
+        .map(|w| (w[1], vec![w[0]]))
         .collect();
+    // R-7-3: a `#[cold]` fn is emitted as `#[cold]` then `#[inline(never)]`; its proven entry keeps both.
+    attrs.extend(lines.windows(3)
+        .filter(|w| w[0] == "#[cold]" && w[1] == "#[inline(never)]")
+        .map(|w| (w[2], vec![w[0], w[1]])));
     let has_str = items.iter().any(|item| item.has_str);
     let mut module = String::from("\n");
     module.push_str(PROVEN_ARR);
@@ -4740,7 +4787,8 @@ fn proven_module(text: &str, items: &[ProvenEntry], allow: &str) -> String {
     }
     module.push_str("\n/// P18b (--proven-entries): entries with lengths checked once by their parameter constructors.\npub mod pruv_proven {\n    use super::*;\n");
     for item in items {
-        for line in [allow, attrs[item.header.as_str()], &item.signature] {
+        let attr = &attrs[item.header.as_str()];
+        for line in std::iter::once(allow).chain(attr.iter().copied()).chain(std::iter::once(item.signature.as_str())) {
             module.push_str("    ");
             module.push_str(line);
             module.push('\n');
@@ -5044,7 +5092,7 @@ mod tests {
             ret_refine: None,
             tparams: vec![],
             foreign: None,
-            cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false,
+            cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, attribute: None,
         };
         Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None, pkg_name: None }
     }
@@ -5095,7 +5143,7 @@ mod tests {
             ret_refine: None,
             tparams: vec![],
             foreign: None,
-            cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false,
+            cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, attribute: None,
         };
         Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None, pkg_name: None }
     }
@@ -5115,6 +5163,26 @@ mod tests {
         let s = gen_rust(&p, false, false, 1 << 30).unwrap();
         assert!(
             s.contains("{ let pruv_ea = a; let pruv_i: i64 = i; let pruv_eb = b; let pruv_j: i64 = j; let pruv_n: i64 = n; if pruv_i < 0 || pruv_j < 0 || pruv_n < 0 || pruv_i > (pruv_ea.len() as i64) - pruv_n || pruv_j > (pruv_eb.len() as i64) - pruv_n { pruv_oob(pruv_i, pruv_ea.len()) } pruv_ea[(pruv_i as usize)..((pruv_i + pruv_n) as usize)] == pruv_eb[(pruv_j as usize)..((pruv_j + pruv_n) as usize)] }"),
+            "{}",
+            s
+        );
+    }
+
+    // L-copy-range
+    #[test]
+    fn copy_range_emitted_rust() {
+        let src = "fn put(inout d: [u8], i: i64, s: [u8], j: i64, n: i64) -> () { copy_range(inout d, i, s, j, n); }";
+        let mut p = crate::parse(src).expect("parse");
+        crate::check::check(&mut p).expect("check");
+        let v = gen_rust(&p, true, false, 1 << 30).unwrap();
+        assert!(
+            v.contains("{ let pruv_i: i64 = i; let pruv_cs = s; let pruv_j: i64 = j; let pruv_n: i64 = n; unsafe { d.get_unchecked_mut((pruv_i as usize)..((pruv_i + pruv_n) as usize)) }.copy_from_slice(unsafe { pruv_cs.get_unchecked((pruv_j as usize)..((pruv_j + pruv_n) as usize)) }); }"),
+            "{}",
+            v
+        );
+        let s = gen_rust(&p, false, false, 1 << 30).unwrap();
+        assert!(
+            s.contains("{ let pruv_i: i64 = i; let pruv_cs = s; let pruv_j: i64 = j; let pruv_n: i64 = n; if pruv_i < 0 || pruv_n < 0 || pruv_i > (d.len() as i64) - pruv_n { pruv_oob(pruv_i, d.len()) } if pruv_j < 0 || pruv_j > (pruv_cs.len() as i64) - pruv_n { pruv_oob(pruv_j, pruv_cs.len()) } d[(pruv_i as usize)..((pruv_i + pruv_n) as usize)].copy_from_slice(&pruv_cs[(pruv_j as usize)..((pruv_j + pruv_n) as usize)]); }"),
             "{}",
             s
         );
@@ -5155,7 +5223,7 @@ mod tests {
             foreign: None,
             cost: None,
             decreases: None,
-            small_bound: None, x_auto: None, opaque: false,
+            small_bound: None, x_auto: None, opaque: false, attribute: None,
         }
     }
 

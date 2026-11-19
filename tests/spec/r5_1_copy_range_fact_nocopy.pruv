@@ -1,0 +1,8 @@
+// spec: R-5-1 reject
+// Unsound fact: claims content that no copy established (dst[0] equals src[1], but the copy took src[0]).
+pub fn f(inout dst: [i64], src: [i64]) -> ()
+  requires 2 <= len(dst) && 2 <= len(src) && src[0] != src[1]
+{
+  copy_range(inout dst, 0, src, 0, 1);
+  assert dst[0] == src[1];
+}

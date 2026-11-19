@@ -1,0 +1,6 @@
+// spec: R-7-3 reject
+// `#[cold]` marks a fn item, not a statement
+fn f() -> i64 {
+    #[cold]
+    return 1;
+}

@@ -2,6 +2,7 @@
 """L3-10 M10a runner: halt (bud_halt.pruv) and the calls that reach it, against the TS oracle.
 
   python3 bench/l3/budget/m10_test/run_m10.py q      [--pruvc PATH | --py] [--cases F] [--oracle F]
+    Passing cases_halt.exact.json selects the verified cases_halt.jsonl and its oracle.
   python3 bench/l3/budget/m10_test/run_m10.py derive (writes work/m10/cases_halt.jsonl + oracle_halt.jsonl)
   python3 bench/l3/budget/m10_test/run_m10.py same   (Python pruvc vs Rust pruvc: byte-identical Rust)
   python3 bench/l3/budget/m10_test/run_m10.py perf   [--rounds N] [--reps N]   (Pruv vs hand_m10.rs, interleaved; no TS lane)
@@ -28,13 +29,16 @@ ROOT = os.path.abspath(os.path.join(BUD, "..", "..", ".."))
 WORK = os.path.join(BUD, "work", "m10")
 PRUVC_DEFAULT = "/Users/spica4345/Projects/pruv/pruvc-rs/target/release/pruvc"
 PY_DEFAULT = "/Users/spica4345/Projects/pruv/.venv/bin/python"
-PRUVC_PY = "/Users/spica4345/Projects/pruv/pruvc/pruvc.py"
-LIBS = ["--lib", "bench/l3/budget", "--lib", "bench/l3/lib"]
+PRUVC_PY = os.path.join(ROOT, "pruvc", "pruvc.py")
+SRC_WORK = "/Users/spica4345/Projects/pruv/bench/l3/budget/work/m10"
+M7 = os.path.join(BUD, "m7_test")
+LIBS = ["--lib", "bench/l3/budget", "--lib", "bench/l3/lib", "--lib", M7]
 sys.path.insert(0, BUD)
 from compare import jv_decode, jv_encode, UNDEF  # noqa: E402
 
-sys.path.insert(0, os.path.join(BUD, "m7_test"))
+sys.path.insert(0, M7)
 from q_gate import failures as gate_failures, required_exact  # noqa: E402
+from run_m7 import text_words  # noqa: E402
 
 STATE = {"open": 0, "halted": 1, "closed": 2}
 STATE_N = {v: k for k, v in STATE.items()}
@@ -58,6 +62,11 @@ MINE_FX = {"rdi": "runningDelegationIds", "cancel": "cancelRecovery", "stopMain"
            "announce": "announce", "uuid": "uuid"}
 
 
+def input_path(name):
+    p = os.path.join(WORK, name)
+    return p if os.path.exists(p) else os.path.join(SRC_WORK, name)
+
+
 def rustc():
     return shutil.which("rustc") or os.path.expanduser("~/.cargo/bin/rustc")
 
@@ -77,7 +86,7 @@ def compile_gen(which, gen, rlib=None, budlib=None):
     if rlib is None:
         rlib = build_facts()
     root = "bench/l3/budget/m10_test/root_m10.pruv"
-    libs = LIBS if budlib is None else ["--lib", budlib, "--lib", "bench/l3/lib"]
+    libs = LIBS if budlib is None else ["--lib", budlib, "--lib", "bench/l3/lib", "--lib", M7]
     if which == "py":
         cmd = [PY_DEFAULT, PRUVC_PY, root, "-o", gen, "--backend", "rust"] + libs
     else:
@@ -99,6 +108,8 @@ def build(args):
     main = os.path.join(work, "main_m10.rs")
     with open(main, "w") as f:
         f.write('#![allow(dead_code, unused_imports, unused_variables, unused_mut)]\n#[path = "gen.rs"] mod sol;\n')
+        codec = json.dumps(os.path.join(M7, "record_text.rs"))
+        f.write(f"#[path = {codec}] mod record_text;\n")
         f.write(open(os.path.join(HERE, "driver_m10.rs")).read())
     exe = os.path.join(work, "driver_m10")
     c = subprocess.run([rustc(), "-C", "opt-level=3", "--edition", "2021", "--extern", f"bud_facts={rlib}",
@@ -173,7 +184,7 @@ def truthy(v):
 PACKED_STRS = (0, 4)  # record strings stored as framed packed keys: 0 id, 4 follows
 
 
-def halt_prefix(h):
+def halt_prefix(h, txt):
     """A well-formed halt object -> the binary prefix of `rest` (atKind 1, stored text), else None (stays JSON). The
     stopped delegation ids are framed packed keys (bud_halt.pruv header)."""
     if not isinstance(h, dict) or set(h) != {"reason", "at", "stoppedDelegationIds"}:
@@ -183,14 +194,14 @@ def halt_prefix(h):
     ids = h["stoppedDelegationIds"]
     if not all(is_str(x) for x in ids):
         return None
-    at = units(h["at"])
+    at = text_words(h["at"], txt)
     w = [-2, REASONS.index(h["reason"]), 1, 0, len(at)] + at + [len(ids)]
     for x in ids:
         w += key(x)
     return w
 
 
-def encode_budget(b):
+def encode_budget(b, txt):
     """Budget (decoded python dict, or None/UNDEF) -> record words. Fields the record has no header slot for (or holds
     with a value the header cannot carry) go into the opaque rest text as canonical JV JSON; a well-formed halt becomes
     the rest's binary prefix."""
@@ -217,28 +228,32 @@ def encode_budget(b):
             h[8:16] = [v[n] for n in USED]
         elif k == "activeSince" and is_str(v):
             h[16] = 1
-            strs[2] = units(v)
+            strs[2] = text_words(v, txt)
         elif k == "ended" and isinstance(v, dict) and v.get("how") in HOW and is_str(v.get("at")) and len(v) == 2:
             h[18] = HOW[v["how"]]
             h[19] = 1
-            strs[3] = units(v["at"])
+            strs[3] = text_words(v["at"], txt)
         elif k == "openedAt" and is_str(v):
             h[20] = 1
-            strs[1] = units(v)
+            strs[1] = text_words(v, txt)
         elif k == "follows":
             h[23] = 1 if is_str(v) else 2
             if is_str(v):
                 strs[4] = units(v)
             else:
                 rest[k] = v
-        elif k == "halt" and halt_prefix(v) is not None:
-            pre = halt_prefix(v)
+        elif k == "halt":
+            prefix = halt_prefix(v, txt)
+            if prefix is None:
+                rest[k] = v
+            else:
+                pre = prefix
         else:
             rest[k] = v
     for k in ("id", "state", "origin", "limits", "used", "openedAt"):
         if k not in b or (k in ("state", "origin") and b[k] not in (STATE if k == "state" else ORIGIN)):
             raise ValueError("budget field %s not representable: %r" % (k, b.get(k)))
-    js = units(json.dumps(jv_encode(rest), ensure_ascii=False, separators=(",", ":"))) if rest else []
+    js = text_words(json.dumps(jv_encode(rest), ensure_ascii=False, separators=(",", ":")), txt) if rest else []
     strs[5] = pre + js
     w = list(h)
     for i, s in enumerate(strs):
@@ -247,9 +262,7 @@ def encode_budget(b):
 
 
 def prefix_ok(r):
-    """Mirror of bud_halt.pruv prefix_len: True iff the words r start with a well-formed halt prefix (otherwise the
-    whole rest is JSON-opaque). Raw values, nothing is normalized; each stopped id is a canonical packed key
-    (bud_halt ids_words -> bud_keys::rec_end)."""
+    """Recognize the halt prefix in the old unit layout emitted by the Q driver."""
     n = len(r)
     if n < 6 or r[0] != -2 or n > 4294967296:
         return False
@@ -330,10 +343,11 @@ def decode_budget(w):
     return b
 
 
-def put_words(sess):
+def put_line(sess):
     d = jv_decode(sess)
-    rec = encode_budget(d.get("budget"))
-    return key(d["id"]) + [len(rec)] + rec
+    txt = bytearray()
+    rec = encode_budget(d.get("budget"), txt)
+    return "put " + " ".join(map(str, key(d["id"]) + [len(rec)] + rec)) + " | " + " ".join(map(str, txt))
 
 
 # ---- driver program ----
@@ -380,7 +394,7 @@ def program(case):
         ids = jv_decode(ans)
         out.append("rdi " + " ".join(map(str, [len(ids)] + [x for i in ids for x in key(i)])))
     for s in w["sessions"]:
-        out.append("put " + " ".join(map(str, put_words(s))))
+        out.append(put_line(s))
     cut = None
     for e in case["script"]:
         ev = e["ev"]
@@ -840,11 +854,15 @@ def main():
     ap.add_argument("--py", action="store_true")
     ap.add_argument("--budlib", help="budget library directory to compile against (mutants)")
     ap.add_argument("--out", help="build directory for gen.rs and the driver (default work/m10)")
-    ap.add_argument("--cases", default=os.path.join(WORK, "cases.jsonl"))
-    ap.add_argument("--oracle", default=os.path.join(WORK, "oracle.jsonl"))
+    ap.add_argument("--cases", default=None)
+    ap.add_argument("--oracle", default=None)
     ap.add_argument("--rounds", type=int, default=5)
     ap.add_argument("--reps", type=int, default=100000)
     a = ap.parse_args()
+    if a.cases and os.path.abspath(a.cases) == os.path.join(HERE, "cases_halt.exact.json"):
+        a.cases = input_path("cases_halt.jsonl")
+    a.cases = a.cases or input_path("cases.jsonl")
+    a.oracle = a.oracle or input_path("oracle_halt.jsonl" if os.path.basename(a.cases) == "cases_halt.jsonl" else "oracle.jsonl")
     sys.exit({"q": cmd_q, "perf": cmd_perf, "derive": cmd_derive, "same": cmd_same, "replay": cmd_replay}[a.cmd](a))
 
 

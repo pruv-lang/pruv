@@ -34,7 +34,8 @@ def rewrite_record():
 
 
 def check_tombstones(exe):
-    p = Prog("tombstones").add(put_line([120], rec(BID, rest=[97] * 600)))
+    # An opaque blob forces word-arena growth even when budget text lives in the byte arena.
+    p = Prog("tombstones").add(put_line([120], [7] + [0] * 180))
     p.add("del " + " ".join(map(str, kw([120]))))
     p.add(put_line(SK, rewrite_record())).add("tombstones").add("quiet 2 0 1").add("dump")
     p.call(6, SK).add("dump").call(6, SK).add("dump").call(6, SK).call(1, SK, BID)

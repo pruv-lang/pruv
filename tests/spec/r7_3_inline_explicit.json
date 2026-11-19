@@ -1,0 +1,1 @@
+{"gen_regex": ["#\\[inline\\]\\n(?:pub )?fn \\w*keep", "#\\[inline\\(always\\)\\]\\nfn \\w*large__pruv_body\\(", "#\\[inline\\(always\\)\\]\\n(?:pub )?fn \\w*large\\(", "#\\[inline\\]\\nfn \\w*caller__pruv_body\\("], "gen_regex_absent": ["#\\[inline\\(always\\)\\]\\n(?:pub )?fn \\w*keep", "#\\[inline\\]\\n(?:pub )?fn \\w*large(?:__pruv_body)?\\(", "// pruv: explicit"]}

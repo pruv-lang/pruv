@@ -1,0 +1,4 @@
+// spec: R-7-3 reject
+// The only supported inline argument is always.
+#[inline(never)]
+fn f() -> i64 { return 1; }

@@ -12,14 +12,13 @@
 //                19 ended.at kind (1 stored text, 2 instant in word 22)
 //                20 openedAt kind (1 stored text, 2 instant in word 21), 21 openedAt ms, 22 ended.at ms
 //                23 follows (0 key absent, 1 string, 2 key present with a non-string value, kept as stored)
-//   then six strings: 0 id, 1 openedAt text, 2 activeSince text, 3 ended.at text, 4 follows, 5 rest (the other budget
-//   properties - halt, card, autoContinue, ... - as an opaque unit string this module never reads; it is kept on every
-//   in-place change and dropped when OPEN replaces the budget).
-//   Strings 0 (id) and 4 (follows) are budget ids used as lookup keys (clock map, CURRENT compare, the next record's
-//   follows), so they are stored as framed PACKED keys `n, words(n) packed words` (bud_keys layout: n units, four
-//   big-endian lanes per word, tail lanes zero): a lookup or compare reads them in place with no re-packing.
-//   Strings 1, 2, 3, 5 are plain text and stay `len, units` (one unit per word). The stride of string i is therefore
-//   1 + str_words(i, len) (str_at / str_len_in).
+//   then six strings: 0 id, 1 openedAt text, 2 activeSince text, 3 ended.at text, 4 follows, 5 rest.
+//   Strings 0 and 4 are framed packed keys: `n, words(n) packed words` (bud_keys layout: n UTF-16 units,
+//   four big-endian lanes per word, tail lanes zero).
+//   Strings 1, 2 and 3 each hold `0` or `2, byteLen, byteOff`. String 5 holds `0`, a two-word JSON
+//   text handle, or a halt prefix followed by an optional JSON text handle (bud_halt.pruv).
+//   Text bytes are WTF-8 in the resident tx arena; lifecycle operations move only the handles.
+//   The stride is 1 + str_words(i, len), where len counts data words for strings 1, 2, 3 and 5.
 // Keys passed in (sessionId, budgetId, uuid) are packed: (array, start, unit count n) names words(n) packed words,
 // canonical (the caller validated them with bud_keys::rec_end / slice_ok at ingress).
 // Instants this module writes are stored as numbers (kind 2); formatting them with toISOString is left to the
@@ -67,7 +66,7 @@ pub fn session_of(st: [i64], sk: [i64], ss: i64, sn: i64) -> i64
 { return crate::bud_map::find_w(st, 0, sk, ss, sn); }
 
 // Data words of record string i whose length word is l: words(l) for the packed id strings 0 (id) and 4 (follows),
-// else l (one unit per word), l clamped into 0..2^32.
+// else l (data words), l clamped into 0..2^32.
 pub fn str_words(i: i64, l: i64) -> i64
   ensures 0 <= result && result <= 4294967296
 {
@@ -211,7 +210,7 @@ fn clock_in(st: [i64], k: [i64], s: i64, n: i64) -> i64
 }
 
 // Start (the length word) of string k (0..5) of a record held in b (header at 0). Strings 0 and 4 are packed keys
-// (stride 1 + words(len)), the others unit strings (stride 1 + len).
+// (stride 1 + words(len)); the other fields count record words (stride 1 + len).
 pub fn str_at(b: [i64], k: i64) -> i64
   ensures 0 <= result && result <= 1099511627776
 {
@@ -664,6 +663,10 @@ pub fn replace(inout st: [i64], sk: [i64], ss: i64, sn: i64, origin: i64, size: 
 // reopen(ref) (B:224-231): CURRENT(ref) closed with ended.how quiet -> open, ended deleted, changed; out [2].
 // Otherwise [1]. O(key length + record).
 pub fn reopen(inout st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64, inout fx: [i64], inout out: [i64]) -> i64 ! alloc
+{ return reopen_b(inout st, sk, ss, sn, bk, bs, bn, inout fx, inout out); }
+
+#[inline]
+fn reopen_b(inout st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64, inout fx: [i64], inout out: [i64]) -> i64 ! alloc
 {
   if !crate::bud_clock::fx_ok(fx) { return 3; }
   if len(out) < 1 { return 3; }

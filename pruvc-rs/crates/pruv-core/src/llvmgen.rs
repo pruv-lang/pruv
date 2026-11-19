@@ -56,6 +56,9 @@ const G9_DIAG_TAG: &str = "\u{0}g9diag:";
 /// this prefix, then `line:col:what` (the operand or layout that is not lowered).
 const EQR_DIAG_TAG: &str = "\u{0}eqrdiag:";
 
+/// L-copy-range: a copy_range the LLVM backend does not lower; same `line:col:what` payload as EQR_DIAG_TAG.
+const CPR_DIAG_TAG: &str = "\u{0}cprdiag:";
+
 /// P17a: a dynamic-length eq_range below this many elements uses the inline loop, else memcmp (Python EQR_LOOP_MAX).
 const EQR_LOOP_MAX: i64 = 4;
 
@@ -3907,6 +3910,49 @@ impl<'a> FnGen<'a> {
             let r = self.op(format!("{} i64 {}, {}", ins, x.a, y.a))?;
             return Ok(V::new(Kind::I64, r));
         }
+        if n == "copy_range" {
+            // L-copy-range: dst[i..i+n] := src[j..j+n]; source order dst, i, src, j, n; one memcpy
+            let target = match arg(a, 0)? {
+                Expr::InoutArg(ia) => ia.expr.as_ref(),
+                other => other,
+            };
+            let dv = self.ev(target, false)?;
+            let iv = self.ev(arg(a, 1)?, false)?;
+            let sv = self.ev(arg(a, 2)?, false)?;
+            let jv = self.ev(arg(a, 3)?, false)?;
+            let cnt = self.ev(arg(a, 4)?, false)?;
+            if dv.k != Kind::Arr || sv.k != Kind::Arr {
+                return Err(format!("{}{}:{}:operand", CPR_DIAG_TAG, e.line, e.col));
+            }
+            if !self.verified {
+                // P13i2a.audit-1: the destination check (i < 0 || n < 0 || i > len(dst) - n) reports (i, len(dst)),
+                // then the source check (j < 0 || j > len(src) - n) reports (j, len(src))
+                let ta = self.op(format!("sub i64 {}, {}", dv.b, cnt.a))?;
+                let c1 = self.op(format!("icmp slt i64 {}, 0", iv.a))?;
+                let c3 = self.op(format!("icmp slt i64 {}, 0", cnt.a))?;
+                let c4 = self.op(format!("icmp sgt i64 {}, {}", iv.a, ta))?;
+                let o = self.op(format!("or i1 {}, {}", c1, c3))?;
+                let o = self.op(format!("or i1 {}, {}", o, c4))?;
+                self.guard(&o, Fail::Oob(iv.a.clone(), dv.b.clone()), true)?;
+                let tb = self.op(format!("sub i64 {}, {}", sv.b, cnt.a))?;
+                let c2 = self.op(format!("icmp slt i64 {}, 0", jv.a))?;
+                let c5 = self.op(format!("icmp sgt i64 {}, {}", jv.a, tb))?;
+                let o = self.op(format!("or i1 {}, {}", c2, c5))?;
+                self.guard(&o, Fail::Oob(jv.a.clone(), sv.b.clone()), true)?;
+            }
+            let tyd = elem_ir(&dv);
+            let tys = elem_ir(&sv);
+            if !((is_bytes_ty(&dv.ty) && is_bytes_ty(&sv.ty)) || (tyd == "i64" && tys == "i64")) {
+                // the storage plan pins copy_range operands to i64 or bytes, as for eq_range; any other pair is not lowered
+                return Err(format!("{}{}:{}:array layout", CPR_DIAG_TAG, e.line, e.col));
+            }
+            let pd = self.op(format!("getelementptr inbounds {}, ptr {}, i64 {}", tyd, dv.a, iv.a))?;
+            let ps = self.op(format!("getelementptr inbounds {}, ptr {}, i64 {}", tys, sv.a, jv.a))?;
+            let nb = if tyd == "i8" { cnt.a.clone() } else { self.op(format!("mul nuw nsw i64 {}, 8", cnt.a))? };
+            // dst and src are distinct arrays (the checker rejects the same array, inout_alias), so memcpy is exact
+            self.ins(format!("call void @llvm.memcpy.p0.p0.i64(ptr {}, ptr {}, i64 {}, i1 false)", pd, ps, nb))?;
+            return Ok(V::unit());
+        }
         if n == "eq_range" {
             // P17a: a[i..i+n] == b[j..j+n]; source order a, i, b, j, n
             let av = self.ev(arg(a, 0)?, false)?;
@@ -5564,7 +5610,7 @@ fn dummy_fn() -> Function {
         ret_refine: None,
         tparams: vec![],
         foreign: None,
-        cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false,
+        cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, attribute: None,
     }
 }
 
@@ -6393,7 +6439,23 @@ pub fn gen_llvm_concrete_ex(
                         "compare the elements in a loop, or use the Rust backend",
                     ))
                 }
-                None => GenError::Msg(s),
+                None => match s.strip_prefix(CPR_DIAG_TAG) {
+                    Some(rest) => {
+                        let mut it = rest.splitn(3, ':');
+                        let line: i64 = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+                        let col: i64 = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+                        let what = it.next().unwrap_or("");
+                        GenError::Diag(crate::diagnostic::PruvError::new(
+                            "codegen",
+                            line,
+                            col,
+                            "unsupported_type",
+                            &format!("copy_range is not supported by the llvm codegen layer for this {} yet", what),
+                            "copy the elements in a loop, or use the Rust backend",
+                        ))
+                    }
+                    None => GenError::Msg(s),
+                },
             },
         },
     })
@@ -6675,7 +6737,7 @@ mod tests {
             ret_refine: None,
             tparams: vec![],
             foreign: None,
-            cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false,
+            cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, attribute: None,
         };
         let mut m = Mod::new();
         let mut g = FnGen::new(&mut m, &tt, &funcs, &f, false);
@@ -6702,7 +6764,7 @@ mod tests {
                 ret_refine: None,
                 tparams: vec![],
                 foreign: None,
-                cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false,
+                cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, attribute: None,
             }],
             refined: false,
             g9: None,

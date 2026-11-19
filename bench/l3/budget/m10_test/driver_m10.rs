@@ -2,7 +2,7 @@
 //
 //   driver_m10 q        program on stdin, one case after another:
 //                         case <id> | now <ms> | uuids <key>... | quiet <0/1>... | rdi <n> <key>... (one line per
-//                         queued runningDelegationIds answer, in order) | put <words...> | adv <ms>
+//                         queued runningDelegationIds answer, in order) | put <words...> | <text bytes...> | adv <ms>
 //                         | call <req> <body words> | end
 //   driver_m10 perf <D> <reps>   perf program, see run_m10.py (cmd_perf)
 //
@@ -46,6 +46,8 @@ static ATTEMPTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::ne
 static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static GROWN_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+use record_text::{observation, parse_put, perf_put, unit_record, Put};
+
 struct World {
     st: Vec<i64>,
     out: Vec<i64>,
@@ -63,6 +65,7 @@ struct World {
     host_ids: Vec<i64>,
     pos: Vec<usize>,
     audit: bool,
+    tx: Vec<u8>,
 }
 
 // Data words of a packed key of n units: ceil(n / 4).
@@ -96,8 +99,12 @@ impl World {
                 std::process::exit(2);
             }
         }
+        // The first nonempty put sizes the arena from its actual text payload.
+        let mut tx = vec![0; 8];
+        assert_eq!(sol::t_tinit(&mut tx), 0);
         World {
             st,
+            tx,
             out: vec![0; 4096],
             bv: vec![0; 8],
             fx: vec![0; 4096],
@@ -126,9 +133,9 @@ impl World {
         self.st = fresh;
     }
 
-    fn put(&mut self, op: &[i64]) {
+    fn put(&mut self, put: &Put) {
         for _ in 0..4 {
-            let r = sol::t_put(&mut self.st, op, &mut self.out);
+            let r = sol::t_put(&mut self.st, &mut self.tx, &put.words, &put.text, &mut self.out);
             if r == 0 {
                 return;
             }
@@ -137,9 +144,16 @@ impl World {
                 self.grow(n);
                 continue;
             }
+            if r == 4 {
+                let mut next = vec![0; self.out[0] as usize];
+                assert_eq!(sol::t_tgrow(&mut self.st, &self.tx, &mut next), 0);
+                self.tx = next;
+                continue;
+            }
             eprintln!("t_put status {}", r);
             std::process::exit(2);
         }
+        panic!("t_put exhausted Grow retries");
     }
 
     fn note(&mut self, s: String) {
@@ -336,8 +350,9 @@ impl World {
                     // budget view: the record is st[off..off+n)
                     let n = self.out[1].max(0) as usize;
                     let off = self.out[2].max(0) as usize;
-                    let mut v = vec!["4".to_string(), n.to_string()];
-                    v.extend(self.st[off..off + n].iter().map(|x| x.to_string()));
+                    let units = unit_record(&self.tx, &self.st[off..off + n]);
+                    let mut v = vec!["4".to_string(), units.len().to_string()];
+                    v.extend(units.iter().map(|x| x.to_string()));
                     v
                 }
                 5 => self.out[..3].iter().map(|x| x.to_string()).collect(),
@@ -408,11 +423,7 @@ impl World {
             return format!("O X {}", r);
         }
         let n = self.out[0].max(0) as usize;
-        let mut s = String::from("O");
-        for x in &self.out[1..1 + n] {
-            s.push(' ');
-            s.push_str(&x.to_string());
-        }
+        let mut s = observation(&self.tx, &self.out[1..1 + n]);
         // active timers: t<token>:<due>:<budgetId units>:<1 when it is the budget's timer>
         s.push_str(" | T");
         for t in &self.active {
@@ -465,7 +476,7 @@ fn run_q() {
                 bud_facts::push_running(v);
                 w.rdi.push(a);
             }
-            "put" => w.put(&nums(&p[1..])),
+            "put" => w.put(&parse_put(&p[1..])),
             "adv" => {
                 w.log.push("@ -".to_string());
                 w.advance(p[1].parse::<i64>().unwrap());
@@ -514,32 +525,6 @@ fn key(s: &str) -> Vec<i64> {
     v
 }
 
-// A unit string `len, units...`.
-fn ustr(s: &str) -> Vec<i64> {
-    let mut v = vec![s.encode_utf16().count() as i64];
-    v.extend(s.encode_utf16().map(|u| u as i64));
-    v
-}
-
-// Record words (bud_lifecycle.pruv header): strings 0 (id) and 4 (follows, empty) packed, the others units.
-fn rec(id: &str, rest: &str) -> Vec<i64> {
-    let mut h = vec![0i64; 24];
-    h[3] = 120;
-    h[4] = 24;
-    h[5] = 3;
-    h[6] = 2;
-    h[7] = 1;
-    h[20] = 1;
-    let mut v = h;
-    v.extend(key(id));
-    for t in ["2023-11-14T22:13:20.000Z", "", ""] {
-        v.extend(ustr(t));
-    }
-    v.extend(key(""));
-    v.extend(ustr(rest));
-    v
-}
-
 pub const PERF_REST: &str = "{\"card\":{\"deliverable\":\"d\",\"done\":[\"x\"],\"state\":\"done\",\"updatedAt\":\"2023-11-14T22:13:20.000Z\"}}";
 
 fn run_perf(args: &[String]) {
@@ -548,10 +533,7 @@ fn run_perf(args: &[String]) {
     let d: usize = args[0].parse().unwrap();
     let reps: usize = args[1].parse().unwrap();
     let bid = "99b568f7-0000-4000-8000-000000000001";
-    let mut put = key("session-perf");
-    let r = rec(bid, PERF_REST);
-    put.push(r.len() as i64);
-    put.extend(r);
+    let put = perf_put(key("session-perf"), key(bid), 0, PERF_REST);
     let mut ids = vec![0i64, d as i64];
     for i in 0..d {
         ids.extend(key(&format!("d{:04}", i)));

@@ -51,7 +51,7 @@ impl Tok {
     }
 }
 
-const OPS2: &[&str] = &["==", "!=", "<=", ">=", "&&", "||", "->", "=>", "::", ".."];
+const OPS2: &[&str] = &["==", "!=", "<=", ">=", "&&", "||", "->", "=>", "::", "..", "#["];
 const OPS1_LIST: &[&str] = &[".", "|", "-", "+", "*", "/", "%", "<", ">", "=", "!", "(", ")", "{", "}", "[", "]", ",", ":", ";"];
 
 /// STAGE1 A: `|` is a token only directly after a name that looks like a type in a type position
@@ -125,6 +125,25 @@ fn g4_skip(src: &[char], mut p: usize) -> usize {
     p
 }
 
+/// A recognized attribute's closing bracket starts an item.
+fn attribute_close(toks: &[Tok]) -> bool {
+    match toks {
+        [.., open, name, close]
+            if open.kind == Kind::Op && open.val == "#["
+                && name.kind == Kind::Id && matches!(name.val.as_str(), "cold" | "inline")
+                && close.kind == Kind::Op && close.val == "]" => true,
+        [.., open, name, arg_open, arg, arg_close, close] => {
+            open.kind == Kind::Op && open.val == "#["
+                && name.kind == Kind::Id && name.val == "inline"
+                && arg_open.kind == Kind::Op && arg_open.val == "("
+                && arg.kind == Kind::Id && arg.val == "always"
+                && arg_close.kind == Kind::Op && arg_close.val == ")"
+                && close.kind == Kind::Op && close.val == "]"
+        }
+        _ => false,
+    }
+}
+
 /// G4 A0 (vparser.py `_g4_token`): `mod`, `pub` and `crate` are Rust keywords (reserved names) but also contextual module
 /// syntax. They become a `kw` token only in these positions; everywhere else they stay the old reserved_name error.
 ///   mod   at top level (brace depth 0), at the start of an item (first token, after `}` or `;`, or after `pub`), and
@@ -150,7 +169,11 @@ fn g4_token(word: &str, src: &[char], end: usize, toks: &[Tok], depth: usize) ->
     }
     let start = match prev {
         None => true,
-        Some(p) => (p.kind == Kind::Op && matches!(p.val.as_str(), "}" | ";")) || (p.kind == Kind::Kw && p.val == "pub"),
+        Some(p) => {
+            (p.kind == Kind::Op && matches!(p.val.as_str(), "}" | ";"))
+                || (p.kind == Kind::Kw && p.val == "pub")
+                || attribute_close(toks)
+        }
     };
     if !start {
         return false;
@@ -315,6 +338,24 @@ pub fn lex_into(src: &[char], tag: usize, toks: &mut Vec<Tok>) -> Result<(), Pru
             if op == "|" && !bar_after_type(&toks) {
                 // A stray `|` outside a type position stays the lexical error it has always been
                 return Err(PruvError::new("parse", line, col, "bad_char", format!("unexpected character {}", repr_str("|")), "remove it"));
+            }
+            if op == "#[" {
+                // An attribute must start a top-level item. Let the parser reject stacked attributes.
+                let ok = brace_depth == 0
+                    && match toks.last() {
+                        None => true,
+                        Some(p) => (p.kind == Kind::Op && matches!(p.val.as_str(), "}" | ";")) || attribute_close(&toks),
+                    };
+                if !ok {
+                    return Err(PruvError::new(
+                        "parse",
+                        line,
+                        col,
+                        "attribute_position",
+                        "a function attribute must be followed by a private fn item",
+                        "put one attribute directly before a private fn",
+                    ));
+                }
             }
             pos += op.len();
             if op == "{" {

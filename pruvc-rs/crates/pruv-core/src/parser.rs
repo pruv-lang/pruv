@@ -214,6 +214,24 @@ impl Parser {
     fn program(&mut self) -> R<Program> {
         let mut p = Program::default();
         while self.peek(0).kind != Kind::Eof {
+            let mut attribute = None;
+            if self.at("#[", 0) {
+                let at_tok = self.next();
+                let name = self.peek(0);
+                let (kind, len) = match name.val.as_str() {
+                    "cold" if name.kind == Kind::Id && self.at("]", 1) => (FnAttribute::Cold, 2),
+                    "inline" if name.kind == Kind::Id && self.at("]", 1) => (FnAttribute::Inline, 2),
+                    "inline" if name.kind == Kind::Id && self.at("(", 1)
+                        && self.peek(2).kind == Kind::Id && self.peek(2).val == "always"
+                        && self.at(")", 3) && self.at("]", 4) => (FnAttribute::InlineAlways, 5),
+                    _ => return Err(self.unknown_attribute(&at_tok)),
+                };
+                self.i += len;
+                if !self.at("fn", 0) {
+                    return Err(self.attribute_position(&at_tok));
+                }
+                attribute = Some(kind);
+            }
             let mut pub_tok: Option<Tok> = None;
             if self.at("pub", 0) {
                 // G4: visibility of the next item
@@ -280,7 +298,8 @@ impl Parser {
                 let t = self.peek(0).clone();
                 return Err(self.foreign_syntax(&t, "missing `trusted`", "write `trusted rust fn ...`"));
             } else {
-                let f = self.function(None)?;
+                let mut f = self.function(None)?;
+                f.attribute = attribute;
                 self.fn_pub.push(is_pub);
                 p.functions.push(f);
                 self.items.push(Item::Fn(p.functions.len() - 1));
@@ -290,6 +309,28 @@ impl Parser {
             }
         }
         Ok(p)
+    }
+
+    fn unknown_attribute(&self, tok: &Tok) -> PruvError {
+        PruvError::new(
+            "parse",
+            tok.line,
+            tok.col,
+            "unknown_attribute",
+            "unknown function attribute",
+            "use #[cold], #[inline] or #[inline(always)]",
+        )
+    }
+
+    fn attribute_position(&self, tok: &Tok) -> PruvError {
+        PruvError::new(
+            "parse",
+            tok.line,
+            tok.col,
+            "attribute_position",
+            "a function attribute must be followed by a private fn item",
+            "put one attribute directly before a private fn",
+        )
     }
 
     fn foreign_syntax(&self, tok: &Tok, msg: &str, fix: &str) -> PruvError {
@@ -1065,7 +1106,7 @@ impl Parser {
             foreign: info,
             decreases,
             cost,
-            small_bound: None, x_auto: None, opaque: false,
+            small_bound: None, x_auto: None, opaque: false, attribute: None,
         })
     }
 
@@ -1870,6 +1911,19 @@ mod tests {
             Expr::IntLit(i) => (i.value.clone(), i.col),
             other => panic!("not an IntLit: {:?}", other),
         }
+    }
+
+    #[test]
+    fn cold_attribute() {
+        let p = parse_source("#[cold] fn f() -> i64 { return 1; }\nfn g() -> i64 { return 2; }").unwrap();
+        assert_eq!(p.functions[0].attribute, Some(FnAttribute::Cold));
+        assert_eq!(p.functions[1].attribute, None);
+        let e = parse_source("#[hot] fn f() -> i64 { return 1; }").unwrap_err();
+        assert_eq!((e.code.as_str(), e.line, e.col), ("unknown_attribute", 1, 1));
+        let e = parse_source("#[cold] pub fn f() -> i64 { return 1; }").unwrap_err();
+        assert_eq!((e.code.as_str(), e.line, e.col), ("attribute_position", 1, 1));
+        let e = parse_source("fn f() -> i64 {\n  #[cold]\n  return 1;\n}").unwrap_err();
+        assert_eq!((e.code.as_str(), e.line, e.col), ("attribute_position", 2, 3));
     }
 
     #[test]

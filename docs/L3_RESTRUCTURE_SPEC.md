@@ -381,17 +381,24 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P13d | Both codegens (pruvc / pruvc-rs): generated code size of the M4 driver (Appendix P13c.8) | P: resident `__TEXT` of the M4 Pruv binary at or below hand's (P13c: +80 KiB, measured before the P13c change, assumed unchanged after), with both sides built with the same flags; time not worse than P13c; no Pruv-only build flags. Measured (Appendix P13d): not met without time loss, no compiler change; size split by line and queued as P13h/P13e/P13f. T5 adds M7: every inline promotion of the P19c bodies grows `__text` (Appendix T5.2). |
 | P13e | B/bud_map.pruv, bud_store.pruv, bud_world.pruv, bud_admit.pruv: entry layout (Appendix P13c.8) | P: smaller per-entry words (P13c: 20 words) so tools peak RSS reaches hand after P13d (also P21: tooldup at M = 500, 3120 vs oaw 3040 KiB); proofs and M10 replay counters kept; time not worse than P13c. Step 1 (Appendix P13e): the M4 excess is a fixed +64..96 KiB (P13d/P13h) on every axis; only tools has a proportional share above hand (+96 KiB at n = 1000). Decision option 1 (boundary widened). Step 2a accessors (2d877e8), step 2b base 10 words + on-demand 10-word extension (b231319): tools proportional RSS at hand within one page, sessions/clocks below hand, allocations equal, instructions equal or lower at n = 2000 and +0.3..1.4 % at n = 100..1000 (fixed code term); fixed share +16..48 KiB of code on M4 and M7 +96..176 / M10 +16..32 KiB, open with P13d/P13h (Appendix P13e.6-7). Audit fixes and resident format version 2: c85a671 (P13e.10). |
 | P13f | B/driver_m4.rs and the M4 bench adapter: length bound from T0 (TIDY_SPEC §4.10) | P: the bench adapter's allocations get the `2^40` bound (T0 audit finding 1), and the per-entry length check added by T0 is hoisted out of the timed loop where the driver already holds the length; m4 sessions back to the pre-T0 time (T0: +1-2%, outside A/A noise) and every M4 cell <= 1.0x hand. Done (Appendix P13f): bounded owner types (`StateBuf::zeroed` refuses `> 2^40`, driver `Words` checks once at construction; both `Deref`s carry `assert_unchecked(len <= 2^40)`), so the entry's inline check folds away with no codegen change; probe `driver_m4 bound state|words` run by `run.py m4`. Instructions below base on all 9 cells (-10..-15/op), time below hand everywhere and overlapping base, peak RSS overlapping base, `__text` -192 B. Still above hand from base: sessions/clocks 100/1000 instructions (T5e) and 7 of 9 peak RSS cells (P13d/P13h fixed code share). |
-| P13f2 | B/state_buf.rs, driver_m4.rs: P13f audit should/nits (Appendix P13f.5) | P: the `2^40` bound constant is target-width safe (no `1<<40` overflow on 32-bit `usize`; compile-time assert or `u64` compare), the bound probe also covers a refused length that never allocates (not only successful allocations), and the `Words::new` comment states what the check guarantees. No perf change on the 9 M4 cells (instructions/time/RSS overlap P13f). |
+| P13f2 | B/state_buf.rs, driver_m4.rs: P13f audit should/nits (Appendix P13f.5) | P: the `2^40` bound constant is target-width safe (no `1<<40` overflow on 32-bit `usize`; compile-time assert or `u64` compare), the bound probe also covers a refused length that never allocates (not only successful allocations), and the `Words::new` comment states what the check guarantees. No perf change on the 9 M4 cells (instructions/time/RSS overlap P13f). Done (Appendix P13f2): `STATE_MAX_WORDS` computed in `u64` (2^40 on 64-bit, `usize::MAX` on 32-bit); probe adds an at-bound control (a buffer of exactly 2^40 words must move the count by 1 when built), so `refused=true allocs=0` is checked against a counter shown to see a buffer one word below; a mutation without the bound check fails it. Counting map attempts (instead of successful maps) was measured and dropped: +0.5..1.1 instr/op on all 9 cells (zeroed is inlined into `World::exec`). `World::exec` byte-identical to base; instructions, time, peak RSS overlap base on all 9 cells. |
 | P13g | Both codegens: small helper inlining gap found by P20 (Appendix P20) | P: `find_w` in the bud_charge hot path is inlined (P20 attribution: about 25 instructions per call not inlined), output parity on both compilers, and the P20 unmatched hand16 lane (keys pre-parsed, 1.13-1.17x) re-measured after P13f and this row; any remaining gap above 1.0x is fixed or explained line by line (wire parsing is about 100 instructions of it). LLVM pairs for P20 wait for P17. |
 | P13h | Both codegens (and verifiers for (a)): M4 own-code size without time loss (Appendix P13d.5, P13d.8) | P: resident `__TEXT` of the M4 Pruv binary at or below hand's (P13d: 304 vs 240 KiB) with instructions and cycles on every M4 cell not worse than P13d.3's shipped column; candidates: proof-guided call-site specialization of total accessors, hot/cold body split of map growth paths; output parity on both compilers. |
 | P13i | B/bud_lifecycle.pruv (and bud_store.pruv for (c)): M7/M10 fixed-share regression from P13e plus the P18b handovers (Appendix P13e.7) | P: (a) lifecycle bodies (maybe_close, replace, reopen, attach) use the direct `xa`/`xb` paths like `copy_node` so the driver `__text` growth of about 37 KB and the M7 +96..176 / M10 +16..32 KiB fixed peak-RSS rise go back to c3ec58d or below; (b) drop the id copy in attach (P18b `noid`: S = 500 391.1 -> 355.1 instr/call, hand16 303.3); (c) M7 proportional RSS share (about 0.74 KB per session over hand16) from `bud_store::need` slack, and attribute the unexplained fixed 254 KB. Time and M4 cells not worse than P13e. Runs after P18c (shared M7 driver `__text` base) and before T5b2 if both touch bud_lifecycle. Measured (Appendix P13i, parts (a) and (b); (c) needed bud_store.pruv and was left open for P13j): (b) attach returns a view `[6, n, off]` of the stored id instead of copying it, attach 392.8 -> 353.5 / 393.2 -> 355.3 instructions per call at S/M (hand16 299.8 / 305.3, 1.18 / 1.16x; after the audit's length clamp 348.6 / 349.4, 1.12 / 1.17x), other cells unchanged, peak RSS overlapping, 0 allocations, M7 Q 113/187/0 on both compilers. Not met: (a) the lifecycle bodies already use `xa`/`xb`; the `__text` growth is `find_w` inlined everywhere since P13e's `ef`/`set_ef` `#[inline]`, and no variant within the allowed files restores `__text` (457,532 B; 413,244 at c3ec58d) or the fixed peak RSS without an instruction loss (P13i.1); M7 `__text` +384 B from the harness tag-6 decoder (Pruv code -44 B); M10 `__text` unchanged. (c) done (Appendix P13i(c)): after setup at S = 1000 only one 16 KiB page of the arena slack past the top is resident; the per-session excess is the record text one UTF-16 unit per i64 word (rest 95, date 24; `PERF_REST = "{}"` drops the slope 4.95 -> 2.40 KiB per session, hand16 3.56), outside these files, queued as P13i2 (proposed in the appendix); the full-run excess was the driver keeping every item's World alive, now scoped per item like hand16 (peak RSS S 100 5568 -> 3888, M 500 14208 -> 8256 KiB, hand16 2608 / 5248; instructions overlap); fixed share +176 KiB at S = 1 is `__text` +143 KiB (P13k) and the 32 KiB out buffer. |
 | P13j | B/bud_store.pruv: store bounds found by the P13e audit (Appendix P13e.10) | P: at the maximum slot count the entry base must not overlap the slot table, and a grow must carry the root payload; both as proved `ensures` plus a gate case that drives each path (none does now); proofs kept, time and RSS not worse than P13e. Done (Appendix P13j): entry base 16 + c32(word 4) in `ea`/`xa` (and the admission mirror), bound `ensures` on ea/eb/xa/xb/xbm; root payload through `copy_pay` in `copy_kids` and a `grow_copy` `ensures` (root_carried + blob words); gate cases `maxslot` and admit case 24 fail on a4427ec and pass; gates as P13e.8; instructions, peak RSS and allocations not worse; M7 `__text` -320 B, M4 `__text` +832 B accepted for the root payload fix, removal queued as P13j2 (P13j.4); audit: 2 required findings fixed with admit cases 25/26 (P13j.5). |
-| P13k | B/bud_map.pruv, bud_store.pruv (and both codegens if the lever is inline policy): part (a) of P13i, handed back (Appendix P13i.1) | P: take P13i.1 variant E's cold-fallback split of `bud_map::find_w` (instructions down on all five M7 cells: attach 392 -> 376, reopenmiss 383 -> 373, current 322 -> 311, isHalted 319 -> 304) together with a size lever (out-of-line shared cold paths, `ef`/`set_ef` attributes, or a proof-guided inline rule) so the M7 driver `__text` (457,916 B after P13i) and the M7 +96..176 / M10 +16..32 KiB fixed peak RSS go back toward c3ec58d (413,244 B), with no instruction cell given back on M4, M7, M10; output parity on both compilers if a codegen changes. Starts after P13j (shares bud_store/bud_map) and before T5b2 (same M7 cells). |
+| P13k | B/bud_map.pruv, bud_store.pruv (and both codegens if the lever is inline policy): part (a) of P13i, handed back (Appendix P13i.1) | P: take P13i.1 variant E's cold-fallback split of `bud_map::find_w` (instructions down on all five M7 cells: attach 392 -> 376, reopenmiss 383 -> 373, current 322 -> 311, isHalted 319 -> 304) together with a size lever (out-of-line shared cold paths, `ef`/`set_ef` attributes, or a proof-guided inline rule) so the M7 driver `__text` (457,916 B after P13i) and the M7 +96..176 / M10 +16..32 KiB fixed peak RSS go back toward c3ec58d (413,244 B), with no instruction cell given back on M4, M7, M10; output parity on both compilers if a codegen changes. Starts after P13j (shares bud_store/bud_map) and before T5b2 (same M7 cells). Result (Appendix P13k): the lever landed as a language attribute: `#[cold]` on a private top-level `fn` (SPEC R-7-3 supplement and attribute syntax; both compilers emit `#[cold]` `#[inline(never)]`, verification unchanged, accept/reject tests `tests/spec/r7_3_cold*`). No bud_map/bud_keys split meets the no-give-back rule, so the bench sources stay at base: G (first probe inline, rest of the probe loop and every fallback cold) cuts M7 instructions 30..55 per call on all five cells and `__text` -6.7 KB, but M4 sessions/tools/clocks lose up to +11 % per op (second probes run on most M4 lookups) and M7 peak RSS rises 32..80 KiB; F (only the never-run fallbacks cold) loses M7 current/isHalted +2 %; hash-fallback-only cold cuts M7 12..23 per call with RSS overlapping, but M10 D 100 +0.6 % instructions (no overlap). `__text` stays 458,300 B (c3ec58d 413,244); the size share is the host copies of the inlined `find_w`, row P13k.2. |
+| P13k.2 | m7_test/m10_test drivers or bud_lifecycle.pruv callers (P13i2a files), bud_map.pruv: host copies of the inlined `find_w` (Appendix P13k.4) | P: the M7 driver `__text` excess over c3ec58d (458,300 vs 413,244 B) is about 1.5-2 KB per inlined `find_w` copy, multiplied through host fns (`c_call`, `one`, `raw_call`, `World::call`, `run_perf`, `fair_loop`, closures inlining current/isHalted); `find_w` out of line gives 422,844 B but gives back most of the instruction gain. Choose per call site between the inlined and the out-of-line (`#[cold]`-free, shared) lookup so `__text` and the M7 +96..176 / M10 +16..32 KiB fixed peak RSS go toward c3ec58d with no M4/M7/M10 instruction, time or RSS cell given back. Row only; runs after P13i2a (same callers). |
 | P13j2 | B/bud_map.pruv (and bud_store.pruv if the frame needs a store `ensures`): root-compare loop in `grow_copy` (Appendix P13j.4) | P: drop the `grow_copy` root-compare loop by a frame proof that `copy_kids` arena writes never touch the root extension records (M4 `__text` -~512 B; P13j left M4 `__text` +832 B over a4427ec, accepted for the root payload fix), with the `grow_copy` root payload `ensures` kept proved, admit cases 24-26 passing, and no instruction, peak RSS or allocation cell given back on M4, M7, M10. Not done (Appendix P13j2): the frame needs content `ensures` on `set_blob`/`copy_pay`, frame `ensures` on `arena_put`/`xbm` and a root-payload-last copy order; split P13j2a/b/c proposed. |
-| P13i2 | B/bud_lifecycle.pruv, m7_test/driver_m7.rs (M7 wire): record text representation (Appendix P13i(c).3) | P: the M7 record keeps `rest` (95 units) and the date (24 units) one UTF-16 unit per i64 word (160 arena words per session; hand16 holds u16 text), which is the M7 proportional peak-RSS excess (Pruv 4.95 vs hand16 3.56 KiB per session slope). Store both as UTF-8 bytes (`[u8]`/`str`, §6b; the representation rule in §1-§4), not as packed i64 words, so the per-session record is at or below hand16; M7 proportional RSS share <= hand16 at S/M, no M7/M10 instruction or time cell given back, M7 Q 113/187/0 on both compilers. Fixed share left to P13k (`__text` +143 KiB). Runs before T5b2 (same M7 cells and bud_lifecycle). |
+| P13j2a | B/bud_map.pruv, bud_store.pruv: content `ensures` for (a) of Appendix P13j2 | P: proved content `ensures` on `set_blob` and `copy_pay`: the blob words and the four scalars of pe land in ne, premise destination payload default, scalars covered after `set_vals`; every existing `ensures` (with `grow_copy`'s root payload `ensures`) kept, admit cases 24-26 passing, proof facts only (generated Rust byte-identical for every importing root). Done (Appendix P13j2a): spec-only facts on 7 bud_store and 7 bud_map fns, no new fn; for a fresh destination (flag word 0: the `grow_copy` root, not its children, whose keys are stored first) the logical payload of pe lands in ne; generated Rust identical on all 7 roots and both compilers; gates pass on both; proof time +45..61 % (rs) / +66..125 % (py) per root, cause the new quantified frame and content obligations (P13j2a.4); two unproved destination states left (P13j2a.2). |
+| P13j2b | B/bud_store.pruv (bud_map.pruv callers): (b) of Appendix P13j2 | P: frame `ensures` on `arena_put` / `xbm` that P13j2c needs beyond P13j2a (P13j2a already states `arena_put` words 16 .. result kept and `xbm` words from old top kept), and, if P13j2c needs them, the two destination states P13j2a leaves unproved (P13j2a.2). Queued. |
+| P13j2c | B/bud_map.pruv: (c) of Appendix P13j2 | P: copy root payloads after all children through the single `copy_kids` site, drop `blob_same` and the `grow_copy` root-compare loop (audit preconditions in Appendix P13j2), measure M4 `__text`. Queued after P13j2b. |
+| P13i2 | B/bud_lifecycle.pruv, m7_test/driver_m7.rs (M7 wire): record text representation (Appendix P13i(c).3) | P: the M7 record keeps `rest` (95 units) and the date (24 units) one UTF-16 unit per i64 word (160 arena words per session; hand16 holds u16 text), which is the M7 proportional peak-RSS excess (Pruv 4.95 vs hand16 3.56 KiB per session slope). Store both as UTF-8 bytes (`[u8]`/`str`, §6b; the representation rule in §1-§4), not as packed i64 words, so the per-session record is at or below hand16; M7 proportional RSS share <= hand16 at S/M, no M7/M10 instruction or time cell given back, M7 Q 113/187/0 on both compilers. Fixed share left to P13k (`__text` +143 KiB). Runs before T5b2 (same M7 cells and bud_lifecycle). Not done (Appendix P13i2, base 4747c4b, no code changed): the text layout is shared with `bud_halt.pruv` (`halted()` sizes and copies strings 1-3 as unit words and writes a structured halt prefix of numbers and packed ids into string 5) and `m10_test`, both outside this row; the store has no byte region (no `[u8]` view of `[i64]`, and a typed store with an in-place `[u8]` field needs field `inout`, a language gap). Proposed split, for the main session to queue as row P13i2a (files B/bud_lifecycle.pruv, bud_halt.pruv, m7_test/*, m10_test/*; Appendix P13i2.3): a second resident `[u8]` text arena `tx` beside `st`, written by the host at ingress only (WTF-8, §2.1 G4); record strings 1-3 and the rest tail become `(byte len, byte off)` handles, the halt prefix stays structured words; lifecycle and halt bodies copy handles (no op reads `tx`), `t_put` checks spans at ingress, egress views are checked against `len(tx)` in Pruv, `t_grow` compacts `tx`. Expected M7 perf record 1280 -> about 479 B per session per World (hand16 about 0.90 KiB). Same done conditions as P13i2 plus M10 Q 78/222/0 and `cases_halt` 300/0/0 on both compilers. Runs before T5b2. P13k note (for P13i2a, bud_lifecycle): closereopen 539 vs hand16 437..448 and reopenmiss 387 vs 336 instructions per call at S = 100 remain after P13k; a cold `find_w` split closes at most 31 / 33 of that. Built as P13i2a (next row). |
+| P13i2a | B/bud_lifecycle.pruv, bud_halt.pruv, m7_test/*, m10_test/* (split from P13i2, Appendix P13i2.3); steps 1-2 in both compilers (`#[inline]` attributes, row L-copy-range) | P: the P13i2 design: resident WTF-8 arena `tx: [u8]` beside `st`, record dates 1-3, rest tail and halt at-text as `(byte len, byte off)` handles, host ingress/egress conversion, Grow compacts `tx` with the amortized bound stated. Same done conditions as P13i2 plus M10 Q 78/222/0 and `cases_halt` 300/0/0 on both compilers. Done (Appendix P13i2a.1-P13i2a.4): `bud_tx.pruv` arena (`put`, `text`, `grow`), compaction copy <= 4/3 per ingress byte; all gates on both compilers, generated Rust identical across them; M7 instructions 520.6 -> 369.2 M, peak RSS 5,808 -> 4,624 KiB, RSS slope 8.60 -> 3.98 KiB per session (hand16 3.63), allocations 495,523 -> 355,930 at M, all 5/5. Not met (gate of 2026-11-19, blocking = proportional cost at M/L): M10 putback d=50/100 26.7 -> 34.8/35.0 ns, M7 typed/wire replace 500 149.6/139.7 -> 161.6/154.9 ns, M10 halt d=50/100 +3.9/+1.4%; cause is the put path (frame parse, five span checks, second copy and 8-byte header, handle rebases; 986 vs 811 instructions), and the one fix attempt (per-record text base) has a floor of 873 instructions, so it was not kept. S and fixed-share cells are perf-debt rows (P13i2a.4). Audit: P13i2a.audit-1 (copy_range diagnostic, fixed). |
 | P21a | B/bud_map.pruv, bud_tools.pruv: O(1) forgetTurn (Appendix P21.4) | P: forgetTurn of a turn holding N activities <= 1.0x oaw at S/M in time, peak RSS and allocations (P21: 8.9x / 37.9x; oa forgets by generation, Pruv frees each child), with the toolnew and tooldup cells kept <= 1.0x and the reclaim cost measured where it lands; plus a corrupt control that pokes header words (entry top = cap - 1, low live) for the P21.7 counterexample. Done (Appendix P21a): forget 0.99 / 0.95x oaw (overlap), RSS and allocations below; reclaim cost in toolnew queued as P21b. |
 | P21b | B/bud_map.pruv, bud_store.pruv: reclaim cost of the lazy forget (Appendix P21a.3) | P: toolnew <= 1.0x oaw at S/M by median and distribution (P21a: 0.93 / 1.08x, overlapping) and the toolgrow cycle <= 1.0x oaw in instructions (P21a: 1.05 / 1.08x), with toolforget, tooldup and memory kept; e.g. fold reclaim_head into entry_alloc. Same gates as P21a. Done (Appendix P21b): toolnew 0.87 / 0.97x oaw (Pruv max below oaw min), toolgrow 0.93 / 0.98x oaw instructions; cause was index load at M (early rehash bound slots/4 -> 3/8) plus the reclaim push/pop and repeated row bases. |
 | P13o | Both checkers/verifiers: `opaque fn` and `reveal F;` (Appendix P13o) | C: positive reveal/congruence/loop-scope cases; negatives for a missing reveal, false facts through the opaque symbol, totality, signature and reveal-target misuse; framework rows equal on both compilers. Unblocks P13a step 2 (Appendix P13a.3), which lands separately. |
+| L-copy-range | Both checkers/verifiers/codegens (Rust and LLVM): built-in statement `copy_range(inout dst, i, src, j, n);` (SPEC §5, R-5-1); first use `copy_bytes` in `bench/l3/budget/m7_test/bud_tx.pruv` | C: a language-visible range copy instead of a loop-shape heuristic. Statement only, `inout dst` and `src` of one type `[i64]` or `[u8]`, `i, j, n: i64`; same-array use is `inout_alias`. Verification: obligations `0 <= i`, `0 <= j`, `0 <= n`, `i + n <= len(dst)`, `j + n <= len(src)` in this order (`index_oob`), then one array-theory update `dst' = fun p. if i <= p < i + n then src[j + p - i] else dst[p]` (length unchanged, content and frame facts hold by construction, no quantified assumption; `[u8]` domain assumed). Rust backend: `copy_from_slice` (byte-identical text from both compilers); LLVM: `llvm.memcpy`. Tests: `tests/spec/r5_1_copy_range_*` (accept and reject, each obligation and each unsound fact separately), `tests/runtime/l3_rt_copy_range*`, `pruvc-rs` unit tests; roots without `copy_range` keep byte-identical generated Rust. |
+| L-inout-field | Both checkers/verifiers/codegens: struct buffer fields as `inout` places (SPEC §6e, §6g "Not supported") | C: language gap found in P13i2 (Appendix P13i2.2): a typed store `struct { words: [i64], text: [u8] }` cannot be changed in place, because buffer fields are read-only views and fields cannot be `inout` places, so P13i2a passes the text arena as a second `inout tx: [u8]` argument beside `st` at every ingress, egress and Grow entry. Allow `inout s.f` for a buffer field `f` of an `inout` struct place (disjoint fields as separate places for `inout_alias`, length and content facts of the other fields kept), with accept and reject spec tests and byte-identical generated Rust on both compilers. Row only; not started. |
 | P14 (deferred) | Both checkers/verifiers: aggregate/field mutation, only if residual profile requires L2 | New C manifest and estimates before activation; alias/frame proof cannot be replaced by Q. |
 | P15 (deferred) | Both codegens/ABI: P14 lowering | C four-pair ownership/ABI probes, then touched P gates; no assumed budget gain. |
 | P16 | Both verifiers: eq_range content/frames or explicit loop lemmas | C proof positives/false equality/frame/empty/alias negatives and solver cost; preserve bounds. |
@@ -408,7 +415,7 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | T5a | Both codegens and B/bud_map.pruv, bud_lifecycle.pruv: M7 lookup and lifecycle gap without code growth (Appendix T5.3) | P: `attach`, `closereopen`, `reopenmiss`, `current`, `isHalted` <= 1.0x hand16 with M7 `__text` and peak RSS not above the T5 base (405,180 B); the inline-only route is ruled out (T5.2). Candidates: cut the always callees of `find_w` (P13h specialization or hot/cold split), the P19c entry/record re-validation and id copies; output parity on both compilers. Measured (Appendix T5a): no change ships. The fixes found (reopen cold tail -32/-35, maybe_close direct header path -9) all grow `__text`. Part of each raw cell is the driver typed-lane shape (current: floor 73 vs hand ~19). The rest is split by line, queued as T5b/T5c, and kept in P13h/P18b. |
 | T5b | Both codegens: cold-tail rule (Appendix T5a.4) | P: reopen's slow tail (blob_copy, rewrite, store) is emitted out of line and cold, so the miss path drops the slow-path frame (352 B in the T5a build). The rule is an attribute or a proof-free rule that does not mark the M4 put path cold. reopenmiss and closereopen fewer instructions than T5 with `__text` and peak RSS not above the T5 base (405,180 B); the hand-edited reference is rsplita (-32/-35 against its same-run base, for +10.9 KB). Includes a per-function attribution of the closereopen pair. Output parity on both compilers. State (Appendix T5b, step cap hit at rule design; no compiler change): on the P18b base (`__text` 413,244 B) a cold or never-inlined tail alone does not move the miss path (reopenmiss S=500 386.8 to 390.0, ranges overlap) because the miss path pays the same six callee-saved pairs (nine arguments live across `bl find_w`), not the tail frame; the win needs the fast part inlined into each caller (-34/-24) at +13.7 KB `__text`. Split into T5b1 and T5b2. |
 | T5c | B/m7_test/driver_m7.rs: typed-lane harness parity (Appendix T5a.2) | P: the M7 timed loop calls the `c_*` entry with the same shape as hand16's bare method call (no non-inlined step closure, no per-op prep match), reported next to the existing lane. The floor of each lane is measured with bodies emptied. Measurement only; no product number moves. Measured (Appendix T5c): fair lane (`driver_m7 perf S R item f`) against hand16, instructions S/M: isHalted 0.99/0.98 (no overlap, at or below 1.0x), current 1.02/1.02, attach 1.30/1.29, closereopen 1.18/1.18, reopenmiss 1.16/1.15; floor-subtracted 0.97/0.96, 1.00/1.01, 1.27/1.25, 1.16/1.16, 1.14/1.15. The rest is the entry floor (length guards, `out` store: P18b), the reopen tail (T5b), and find_w/entry re-validation (P13h); no new row. Driver `__text` 405,180 to 413,756 B (harness only; T5b re-measures its base). |
-| T5b2 | Both codegens and B/bud_map.pruv, bud_lifecycle.pruv: reopen miss path live set (Appendix T5b.4) | P: reopenmiss and closereopen <= 1.0x hand16 at S/M by cutting the values live across `bl find_w` (nine arguments, six callee-saved pairs), not the tail frame. Routes: the reopen fast part takes the session record as one view (P18c result path or P13h specialization), or the coldA inline paired with a `__text` cut of at least 13.7 KB elsewhere. `__text` and peak RSS not above the P18b base (413,244 B) under the T5b.3 rule. Includes the five-cell S/M re-baseline, the closereopen per-function attribution and M4 cells. Runs after P18c and P13h (same files). |
+| T5b2 | Both codegens and B/bud_map.pruv, bud_lifecycle.pruv: reopen miss path live set (Appendix T5b.4) | P: reopenmiss and closereopen <= 1.0x hand16 at S/M by cutting the values live across `bl find_w` (nine arguments, six callee-saved pairs), not the tail frame. Routes: the reopen fast part takes the session record as one view (P18c result path or P13h specialization), or the coldA inline paired with a `__text` cut of at least 13.7 KB elsewhere. `__text` and peak RSS not above the P18b base (413,244 B) under the T5b.3 rule. Includes the five-cell S/M re-baseline, the closereopen per-function attribution and M4 cells. Runs after P18c and P13h (same files). P13k note: at a9664a9 the gap to hand16 (fair lanes, S = 100) is closereopen 539 vs 437..448 and reopenmiss 387 vs 336 instructions per call; the P13k G split (not landed) reached 508 / 355, so the rest sits in the bud_lifecycle reopen bodies, not in `find_w`. |
 | T5d | B/m7_test and bench/l3/budget build flags: codegen-units measurement (Appendix T5b.3) | P: measure hand16 and the generated M7/M4 drivers with `-C codegen-units=1` next to the current flags: time, instructions, peak RSS, `__text`, rustc time. Switch the bench profile for both sides only if no axis loses on either side and rustc time stays within the budget m4 20% line; otherwise keep the flags and keep the T5b.3 reporting rule. Measurement and flags only; no codegen change. Measured (Appendix T5d): keep the flags and the T5b.3 rule. Under cgu1, Pruv M4 instructions are +2.7..5.3 % on all nine cells and hand M4 +0.8..3.5 %. Hand16 reopenmiss is +5..6 %. Pruv `__text` is +6,272 B (M7) and +5,312 B (M4), against hand -5,184 / -4,800 B. Pruv M7 closereopen drops -6.4 % and reopenmiss -3.5 %. Generated M4 driver rustc time is 2.21 -> 1.85 s, within the 20 % line. No Pruv/hand ratio crosses 1.0x. Over hand on instructions under both flag sets: M7 attach 1.18x, closereopen 1.20 / 1.13x, reopenmiss 1.15 / 1.05x, M4 sessions 1.01..1.13x and clocks 1.02..1.10x. Allocations are equal under both flag sets. |
 | T5e | B/bud_map.pruv, bud_store.pruv, bud_clock.pruv and/or both codegens: M4 sessions/clocks instructions over hand (Appendix T5d.2) | P: M4 sessions (instr/op 1.01-1.13x hand at n = 100/1000/2000) and clocks (1.02-1.06x) at or below hand in instructions while time stays below hand (now 0.80-0.83x / 0.75x) and no cell given back; M4 sessions n=100 peak RSS 1088 vs hand 1072 KiB (+16, attribute fixed vs proportional share). First a per-function instruction attribution (Pruv vs hand, same flags), then the cut. Starts after P13j and P13k (same store/map files). |
 | P20 | B/bud_charge.pruv,m8_test: counters/sums/bounds | P Q2+C/D, equal safe-number baseline; negative/boundary atomic refusal and charge/failure <=1.0. |
@@ -427,7 +434,7 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P30 | New B/bud_decide.pruv: raise | P Q5+H, synchronous reached queries, limits/R; new M10b coverage. |
 | P31 | Same: decide extend/end | P Q5+I, releaseHeld at reached position, save/refresh/wake and atomic bounds. |
 | P32 | B/host.rs,roots/bindings,bud_test_abi.pruv,m34/m5–m11 shims | P split per operation/narrow family; direct/adapter grid, malformed admission, one decision engine. |
-| P33 | Both codegens/hot contracts: residual L4/L5 only | C inline attribute/size heuristic and local proof gates; P touched families, M11 compile CPU/binary size and parity. |
+| P33 | Both codegens/hot contracts: residual L4/L5 only | C inline attribute/size heuristic and local proof gates; P touched families, M11 compile CPU/binary size and parity. Partly done in P13i2a: `#[inline(always)]` and `#[inline]` fn attributes (explicit directive over R-7-3 promotion); size heuristic/local proof gates still open. |
 | P34 | One measured §4 opportunity per subpackage | P touched families/collisions and raw/admitted complete operations; saving ledger, same-structure hand (ii), assembly evidence for any proof win. |
 | P35 | B/compare.py,check_oracle.py,future judge,notes | P focused KD/final-observation checks; missing/unsupported paths remain open; full grid inventory ready. |
 | P36 | Whole-batch results after §7 | Full Q four pairs ×2000 where generated, existing fixture suites, all final grids and selected stage-two targets; every cell <=1.0, req gate and LLVM complete. |
@@ -505,6 +512,38 @@ Queue order is explicit; R IDs identify packages and need not sort numerically. 
 | R10 supervisor | A: matched startup/hash lanes; B: ring/chunk local bounds; C: byte tail handoff | Child/cancel/deadline cases, chunk/tail complete grid <=1.0. |
 | R11 req (blocked) | A: equal-semantics full hand lane + P10H query/call/byte counts; B: one RequestStore root with synchronous facts; C: world/answer handoff | Fresh Q3/Q7 observations and forge controls; 420k-call overhead and full list/open grids <=1.0 before unblocking. Async-only host requires new design, not assumed continuation parity. |
 | R12 whole batch | Audit dependency/intent ledger; close missing hand lanes and unresolved causes with new packages, never waivers; schedule P36 | Full four-pair Q ×2000 where generated, existing fixture suites and all §7.3 grids/selected §4 goals. No real-Lair hookup while any baseline/backend/cause or req gate is incomplete. |
+
+### 7.5 Perf debt (gate scope, 2026-11-19)
+
+The target stays at or below 1.0x hand for both time and memory. Only cells that measure cost proportional to data
+size (time, peak RSS growth) at the representative sizes M and L block the next package. A cell above 1.0x that is
+fixed share (code pages, `__text`, start buffers under 64 KiB) or tiny size (S or any cell under about 1 ms in total)
+is recorded here instead and does not block. One fix package per blocking cell; if the cell is still above 1.0x
+after it, its line-level cause (generated vs hand Rust) is written here and the queue moves on. The whole list is
+fixed in one package before R12.
+
+| Debt | Cell(s) | Owner row / cause |
+|---|---|---|
+| D1 | M4 resident `__TEXT` 304 vs 240 KiB hand | P13d, P13h (code size; fixed share) |
+| D2 | M4 `__text` from `blob_same` / `grow_copy` root-compare loop | P13j2b, P13j2c (code size; P13j2a proved the content facts) |
+| D3 | M4 sessions/clocks instructions 1.01-1.13x hand (time 0.75-0.83x), sessions n=100 peak RSS +16 KiB | T5e (time below hand; RSS fixed share) |
+| D4 | M4 peak RSS cells above hand from fixed code share | P13d/P13h with P13e.6-7 |
+| D5 | S-size cells of P18d / T5b2 (reopenmiss, closereopen, attach at S) | P18d, T5b2: their M cells still block |
+| D6 | M7 typed replace 500: 161.6 ns vs hand16 127.4 (1.27x; base a9664a9 149.6, 1.17x); M10 putback d=50/100 34.8/35.0 vs base 26.7 (still 0.3x M10 hand); M10 halt +1-4% | P13i2a (Appendix P13i2a): the put path parses the text frame (~90 instr), checks five spans (~41), copies text into the arena and rewrites five handles plus an 8-byte used header (~150). One fix attempt (per-record text base) has a floor of 873 vs base 811 instr per put. Root rows: L-u64-bytes below, and a fixed-slot text header in the record format |
+| D7 | P13i2a S and layout cells (M10 putback d=10, M7 replace 100, fair current 100/500 +0.6-1.2 ns, typed isHalted 500 +0.1 ns) | P13i2a perf report: same put path; code layout |
+
+Queued with the debt list (not product perf):
+
+- Proof time: P13j2a's frame/content `ensures` raised M4 proof time by 45-61% (pruvc-rs) and 66-125% (pruvc),
+  because imported modules are re-proved in every importing root. Row: reuse a module's proof across roots
+  (modular proof results or a proof cache keyed by module source and imported facts).
+- L-u64-bytes (language gap): there is no single little-endian `u64` load/store on `[u8]`, so the P13i2a arena
+  fill-level header costs 8 byte reads and 8 byte writes per put (P13i2a floor variant with a native `u64` header:
+  845 vs 873 instr per put). Row: a proved `[u8]` word read/write builtin in both compilers.
+- Language gap: there are no ghost (spec-only) functions; spec helpers are emitted into the generated Rust
+  (Appendix P13j2a.3).
+- grok fixtures `acp-error-not-object` and `acp-timeout-session-load` fail on the reference side (also on main
+  f5d9891); fix the reference fixtures.
 
 ## 8. Test migration and open assumptions
 
@@ -6479,6 +6518,85 @@ replace move or clone checked buffers, every q/perf op through `Words::new`, `ou
 | audit: does the hoisted check cover every length the driver passes to an entry | Codex gpt-6.2-astra ultra, review |
 | design, edits, gates, measurement, this appendix | Claude Opus 5.5, direct |
 
+## Appendix P13f2: P13f audit should/nits (bound constant width, refused-length probe, `Words::new` comment)
+
+Base main b29259c. Files: `bench/l3/budget/state_buf.rs`, `m34_test/driver_m4.rs`, `m34_test/run.py`. No `.pruv`, no
+compiler change. Notes and scripts in `work/p13f2` (not committed).
+
+### P13f2.1 Changes
+
+- `STATE_MAX_WORDS` is computed from a `u64` `1 << 40`: `BOUND as usize` when `BOUND <= usize::MAX as u64`, else
+  `usize::MAX`. On 64-bit it is exactly 2^40 (same constant, same code); on 32-bit no `1 << 40` overflow and no extra
+  test (no slice there can exceed 2^40 elements). Checked with a `u32` stand-in of the expression (2^32 - 1 for 32-bit,
+  2^40 for 64-bit); no 32-bit Rust target is installed here, the bench stays 64-bit.
+- `Words` comments: `zeroed` and `resize` check before allocating; `new` checks an already built `Vec` (it does not
+  prevent that allocation); together they guarantee no `Words` is longer than `STATE_MAX_WORDS`, which is what the
+  `Deref` `assert_unchecked` needs.
+- `driver_m4 bound state` adds an at-bound control: after the two refused lengths (`2^40 + 1` and `usize::MAX / 8 + 1`)
+  it makes `StateBuf::zeroed(STATE_MAX_WORDS)`. When built (macOS maps 8 TiB lazily) the count (allocator calls plus
+  successful maps) must move by exactly 1; when the OS refuses it, by at most 1. Output
+  `bound state refused=true allocs=0 at_bound=built|refused at_bound_ok=true`, checked by `run.py` on every lane.
+  So `allocs=0` on the refused lengths is read against a counter shown to see a buffer one word below the cut.
+  Mutation: `state_buf.rs` without the `n > STATE_MAX_WORDS` test prints `refused=false allocs=1` (the 2^40 + 1 map
+  succeeds lazily on macOS), so the probe fails as it should.
+
+### P13f2.2 Counting map attempts: measured, not taken
+
+The audit's other reading of "a refused length that never allocates" is to count map calls before the call
+(`STATE_MAPS` incremented unconditionally), so a regression that calls `mmap` and is refused would also show. Measured
+on the 9 M4 cells (5 rounds): +0.5..1.1 instr/op on every cell, distributions not overlapping base (e.g. sessions 1000
+base 464.0-464.1, attempts 465.0-465.1). Cause: `StateBuf::zeroed` is inlined into `World::exec`; moving the increment
+changes register allocation there (`World::exec` -68 B, spills reordered). Moving the increment into
+`state_map::map` costs the same. The constant change alone leaves `World::exec` identical to base. Dropped by the
+no-give-back rule; `STATE_MAPS` keeps counting successful maps. Left open: on an OS that refuses an 8 TiB map
+(e.g. Linux heuristic overcommit), a regression that calls `mmap` for `2^40 + 1` words would be refused by the OS and
+pass the probe; on macOS (this bench) it is caught.
+
+### P13f2.3 Gates (worktree pruvc-rs release first, then pruvc.py)
+
+| gate | rs | py |
+|---|---|---|
+| `run.py lanes` (m4, m4raw, m4nv, m4eq, m4llvm, m4llvmraw, m4c, m4cb, m4llvmnv) | 300/300 each, probe ok, size/header 1922/1922, grows 922, import 300/300 | m4, m4raw: same |
+| M8 q (`run_m8.py q`, p13e cases) | 63 exact / 237 not-implemented / 0 fail | same |
+| `corrupt_resident.py --old-rev HEAD` | controls 387, mismatches 0, poke-not-found 0; P21a 6/6 | same |
+| host crate `cargo build --release` | ok | - |
+| M7 q / M10 q | 113 / 187 / 0 and 78 / 222 / 0 | same |
+
+M7/M10 drivers do not include `state_buf.rs`; their q gates were run on the first version of this change (attempt
+counting) and not rerun after the revert, which only touches `state_buf.rs` and the M4 probe.
+
+### P13f2.4 Perf (base b29259c / new / hand, 5 alternating rounds, R = 200000, medians)
+
+`__text`: base 351,868, new 352,060 (+192 B, the probe in `main`, runs once), hand 281,532. `World::exec`
+disassembly identical to base.
+
+| cell | instr/op base | new | hand | ns base | new | hand | peak KiB base | new | hand |
+|---|---|---|---|---|---|---|---|---|---|
+| sessions 100 | 455.5 | 455.6 | 416.8 | 12.9 | 12.9 | 15.4 | 1808 | 1808 | 1696 |
+| tools 100 | 893.9 | 894.2 | 1322.6 | 32.7 | 33.1 | 53.9 | 1856 | 1856 | 1728 |
+| clocks 100 | 981.9 | 981.5 | 923.7 | 33.0 | 32.8 | 40.5 | 1792 | 1824 | 1728 |
+| sessions 1000 | 464.1 | 464.4 | 414.1 | 13.4 | 13.3 | 17.2 | 2048 | 2064 | 2000 |
+| tools 1000 | 951.8 | 951.8 | 1321.4 | 36.3 | 37.9 | 55.4 | 2208 | 2208 | 2112 |
+| clocks 1000 | 942.5 | 942.9 | 921.0 | 33.2 | 35.8 | 41.5 | 2016 | 1984 | 2256 |
+| sessions 2000 | 454.8 | 454.6 | 456.2 | 12.7 | 12.4 | 17.3 | 2352 | 2352 | 2320 |
+| tools 2000 | 893.0 | 892.9 | 1327.9 | 33.4 | 33.5 | 55.2 | 2528 | 2544 | 2448 |
+| clocks 2000 | 984.9 | 984.5 | 962.9 | 33.6 | 34.2 | 42.2 | 2224 | 2240 | 2768 |
+
+- Instructions, ns and peak RSS: new and base per-round ranges overlap on every cell (e.g. clocks 1000 ns base
+  32.4-34.9, new 32.4-49.5; peak clocks 100 base 1792-1808, new 1792-1824 KiB). Time below hand on every cell.
+- Above hand, unchanged from base and not owned here: instructions sessions 100/1000, clocks 100/1000/2000 (T5e);
+  peak RSS on 7 of 9 cells (P13d/P13h fixed code share).
+
+### P13f2.5 Audit decision and delegations
+
+No audit run: the shipped change has no new runtime semantics (same constant on 64-bit, `STATE_MAPS` back to base,
+the rest is probe and comments); the one semantic change considered (attempt counting) was dropped (P13f2.2).
+
+| work | by |
+|---|---|
+| first edits (constant, comments, probe, attempt counting) | delegated write worker (Lair delegate, write mode) |
+| perf attribution, revert of attempt counting, probe control, gates, measurement, this appendix | Claude Opus 5.5, direct |
+
 ## Appendix P13j (row P13j: store bounds from the P13e audit)
 
 Result: both bounds are proved `ensures` and each has a gate case that fails on a4427ec and passes now. No new
@@ -6687,6 +6805,336 @@ the premise that the destination payload is default, and must cover the four sca
 pass must show the reused region does not overlap an earlier root's blob. (3) Pass 1's invariant is "root payload
 default" (not "no extension": the first child may create it); pass 2 copies roots only, without re-inserting
 children or charging budget, and keeps child links and earlier roots' flags, scalars and blob words.
+
+## Appendix P13j2a: content `ensures` on `set_blob` / `copy_pay`
+
+Status: done on the Rust and Python compilers; proof facts only. On top of f5d9891. Changed: `B/bud_map.pruv`
+(+158 -1), `B/bud_store.pruv` (+64): `ensures`, loop invariants, `assert` and `reveal` only. No statement changed and
+no fn added.
+
+### P13j2a.1 Contracts
+
+Addresses below are written inline: entry base `st[5] + 10 * e`, extension `base + 10 * st[6]`, flag word `base + 9`
+read through `has_x`, extension words 1 = blob offset, 2 = blob length, 3..6 = the four scalars. "Payload" is
+logical: a missing extension reads as an empty blob and zero scalars, as in `root_carried`.
+
+- bud_store:
+  - `has_x`: the negative-key case.
+  - `ea`/`eb`/`xa`/`xb`: exact address under `valid` (base, extension, or -1 iff `!has_x`).
+  - `xbm`:
+    - the result is the extension address;
+    - a flag word that was 0 or `has_x` ends `has_x`, and a 0 flag becomes 1;
+    - an existing extension's flag is kept;
+    - a new extension has word 2 = 0;
+    - words from the old top `st[9]` to the end are unchanged.
+  - `xfield`: values for f 12/13/19.
+  - `ef(12)`: reads extension word 1.
+  - `set_ef(12/13/19)` on an existing extension: writes only that word, keeps the flag, frame from old `st[9]`.
+  - `set_vals`:
+    - words 3..6 are a..d whenever the result has an extension;
+    - flag and words 1/2 are kept for an existing extension;
+    - a fresh flag becomes 1 when any value is non-zero, and a new extension's word 2 = 0;
+    - all-zero values on no extension leave none;
+    - frame from old `st[9]`.
+  - `arena_put`: `result == old st[10]`, words written, words 16 .. result kept, `result >= old st[9]`.
+- bud_map:
+  - `gf`/`sf` (f 12/13/19), `fits_region` (range), `write_at` (content and frame), `put_units` (content).
+  - `set_blob`:
+    - **No extension before** (flag 0, or `!has_x` for length and words): with 0 < n <= 2^32, length n at a new
+      region `old st[10]`, the region lies above `st[9]` and inside the buffer, and the words equal `src[s..s+n)`.
+      The extension bit itself is proved only from flag 0.
+    - **Existing extension**: length n, and for n > 0 and offset >= 0 the words at the stored offset equal
+      `src[s..s+n)`.
+    - **n = 0 on no extension**: none is created (flag 0 stays 0).
+  - `copy_pay`:
+    - pe without an extension: nxt is unchanged.
+    - pe with an extension and ne ending with one: the four scalars are equal.
+    - pe with an extension and a fresh ne (flag 0):
+      - 0 < length: ne has an extension, the same length, offset `old nxt[10]`, and the blob words equal;
+      - length 0: ne's length is 0, or ne has no extension and pe's scalars are all 0.
+    - existing ne extension with offset >= 0: the same length and words.
+
+For a fresh destination with flag word 0, the logical payload of pe (blob length, blob words, scalars) equals ne's
+after `copy_pay`. In `grow_copy` this covers the root only: `init_store` sets the root's flag word to 0. A child is
+not covered: `put_node` stores the key before `copy_pay`, and `set_key_region` writes `2 * n` into word 9, so a child
+with a non-empty key and no extension is in unproved state 1 below (audit finding). `grow_copy`'s root payload `ensures`
+and the compare loop are unchanged (P13j2c removes the loop).
+
+For P13j2c: on the existing-extension path `copy_pay` states length and word equality but not that ne's offset and
+span stay inside the buffer, which `root_carried` also needs. If P13j2c links children first so that the root already
+has an extension, these contracts alone do not justify removing the compare loop (audit, optional).
+
+### P13j2a.2 Unproved destination states (left to P13j2b if P13j2c needs them)
+
+1. Flag word non-zero but `!has_x` (a freed-extension state, and every new child after `put_node` stores its key): that `set_blob` sets the extension bit is not proved.
+   The verifier returns `verify_unknown` (timeout) for it, so `copy_pay` states the full payload equality only from
+   flag 0.
+2. An existing destination extension with a negative stored offset and n > 0 (`set_blob` takes the append path):
+   length and word equality are not proved. Stating it fails with `cannot prove postcondition` (counterexample offset
+   -1), so it is excluded by the premise `0 <= offset`.
+
+### P13j2a.3 Language finding
+
+The contracts had to be written inline, as raw address arithmetic, for two reasons:
+
+- Every new `fn` is emitted into the generated Rust, even one used only in contracts or `assert`s. A helper
+  `pay_def` changed the generated code.
+- An i64 fn with an `if` (`xb`, `c32`, `c40`) cannot be called in a contract (`call_in_contract`).
+
+The cost is long repeated premises. A ghost (spec-only, not emitted) fn would remove them. This is a language-gap row
+candidate and was not worked around in the compilers.
+
+### P13j2a.4 Gates, generated code, proof time
+
+Generated Rust was produced for every root importing these files with both compilers (worktree `pruvc-rs` release,
+then `pruvc.py`): m34 `root_m4`, `root_admit`, m7 `root`, m8 `root_m8`, m9 `root_m9`, m10 `root_m10`, m11 `root`.
+All 14 outputs are byte-identical to f5d9891 (`cmp`). That replaces perf measurement.
+
+| gate | rs | py |
+|---|---|---|
+| `run.py admit` (cases 0..26, maxslot) | 29/29 | 29/29 |
+| `run.py lanes` | 9 lanes 300/300 each | same |
+| M7 q | 113 exact / 187 not-impl / 0 fail | same |
+| M8 q (p13e cases) | 63 / 237 / 0 | same (on the py-generated gen.rs) |
+| `corrupt_resident.py --old-rev f5d9891` | controls 387, mismatches 0, poke-not-found 0; P21a 6/6 | - (py output byte-identical) |
+| M9 q | 26 / 274 / 0, i2_bad 0 | same (on the py-generated gen.rs) |
+| M10 q | 78 / 222 / 0 | same |
+| M11 | exact 213, prefix-ok 87 | same |
+
+Proof plus codegen time per root, in seconds. rs: base and new alternated, 2 rounds each. py: 1 round each.
+
+| root | rs base | rs new | rs | py base | py new | py |
+|---|---|---|---|---|---|---|
+| m4 | 7.0, 7.0 | 11.0, 11.2 | +59 % | 15.3 | 28.4 | +86 % |
+| admit | 16.1, 6.9 | 24.7, 11.1 | +61 % (min) | 16.8 | 30.3 | +80 % |
+| m7 | 8.2, 9.5 | 13.5, 14.0 | +55 % | 15.9 | 30.6 | +92 % |
+| m8 | 7.9, 9.4 | 14.1, 12.4 | +53 % | 15.0 | 33.8 | +125 % |
+| m9 | 7.2, 7.3 | 11.7, 11.6 | +61 % | 14.9 | 32.0 | +115 % |
+| m10 | 9.4, 9.3 | 13.8, 13.8 | +48 % | 17.9 | 34.9 | +95 % |
+| m11 | 9.9, 10.2 | 14.9, 14.2 | +45 % | 19.3 | 32.0 | +66 % |
+
+The increase is over 20 % on every root. The cause is the new obligations, which are verified once per importing
+root:
+
+- the quantified frame `ensures` (`forall j in old st[9]..len`) and content `ensures` on `xbm`, `set_vals`, `set_ef`,
+  `arena_put`, `write_at`, `set_blob` and `copy_pay`;
+- the loop invariants added in `write_at`, `arena_put` and `set_blob`.
+
+Neither compiler reports per-fn time, so the split between fns was not measured. Runtime is unaffected (same code).
+Perf gate (2026-11-19 rule): no runtime, memory or code-size cell changes, because the generated Rust is identical; no
+perf-debt row.
+
+### P13j2a.5 Audit
+
+One audit (Codex gpt-6.2-astra ultra, read-only):
+
+- required: the claim that the `grow_copy` destination has flag word 0 holds for the root, not for children
+  (`put_node` stores the key first). Fixed in this appendix and the row by limiting the scope to the root; no contract
+  changed.
+- optional: the existing-extension path does not state the buffer range `root_carried` needs (noted for P13j2c in
+  P13j2a.1).
+- optional: the read/write contracts on `gf`/`ef`/`sf`/`set_ef` cover field 12/13 only (no capacity `ensures` after
+  writing 19). The published length and word equalities read the words directly, so the root copy result is not
+  weakened.
+
+The fix touches the docs only, so no confirm audit was run.
+
+## Appendix P13i2: M7 record text as bytes (P13i2 split, built in P13i2a)
+
+P13i2 (base main 4747c4b) stopped after the read-and-design step with no source change; P13i2.1-P13i2.4 are that
+step. P13i2a built the design (P13i2a.1-P13i2a.6) on top of its own steps 1 (`#[inline]` attributes, 0bf3e5d) and 2
+(`copy_range`, 3b4add7, row L-copy-range).
+
+### P13i2.1 Who reads and writes the record text
+
+| place | strings 1-3 (openedAt, activeSince, ended.at text) and 5 (rest) |
+|---|---|
+| `bud_lifecycle.pruv` | `str_words` stride `1 + len`, `str_at` / `str_pos_in`, `rewrite` (copies 1, 2, 5, writes 3), `rec_bound`, `put_str`; `reopen` tests `str_len_in(3) == 0` |
+| `bud_halt.pruv` | `halted()` sizes the record as `30 + .. + l1 + l2 + l3 + .. + rl` and copies strings 1-3 with `put_str` (`l` words each); string 5 becomes a structured halt prefix in words (`-2, reason, kind, at, ids` as framed packed keys) followed by the old rest tail; `prefix_len` and the halt reason read those words |
+| `m10_test` (`root_m10.pruv` `str_at`/`rewrite`, `driver_m10.rs` `rec()`, `hand_m10.rs`) | same layout, one unit per word |
+| `m7_test` (`driver_m7.rs` `rec()` and egress, `hand_m7_u16.rs` `encode()`) | same layout |
+
+So the rest string is not opaque text in the store: bud_halt writes numbers and packed ids into it. Changing the
+layout of strings 1-3 alone (the dates) already breaks `bud_halt::halted()`. Both `bud_halt.pruv` and `m10_test` are
+outside row P13i2's files.
+
+### P13i2.2 Representation options
+
+| option | result |
+|---|---|
+| UTF-16 units 4 per word, or bytes 8 per word, inside the `[i64]` arena | rejected: the project rule keeps strings out of i64 words (the "4 units per word" of P13i(c).3 is withdrawn) |
+| a `[u8]` view of the `[i64]` arena | not in the language (SPEC §6b: no `[u8]`/`[i64]` conversion) and bytes-in-words in disguise |
+| a typed store `struct { words: [i64], text: [u8] }` changed in place | language gap: buffer fields are read-only views (SPEC §6e) and fields cannot be `inout` places (§6g); §3 of this spec already says not to assume field `inout` |
+| a second resident `[u8]` text arena `tx` beside `st` (two `inout` arrays, existing features) | feasible; chosen for P13i2a |
+
+### P13i2.3 Proposed P13i2a
+
+- `tx: [u8]` beside `st`, written by the host at ingress only. The text comes from UTF-16 (JS) and may hold lone
+  surrogates, so it is WTF-8 (`[u8]`, never `str`, §2.1 G4), decoded back to units at egress.
+- Record strings 1-3 and the rest tail are handles `(byte len, byte off)` into `tx`; the halt prefix stays structured
+  words (`rl, -2, reason, kind, at, ids, tail handle`). Lifecycle and halt bodies copy handles and never read bytes,
+  so no lifecycle signature takes `tx`; `t_put` checks every span `off + len <= len(tx)` at ingress and egress views
+  `[tag, off, len]` are checked against `len(tx)` in Pruv. `reopen`'s ended.at emptiness test reads the byte length.
+- Dropped text (OPEN, session delete) is garbage in `tx` until `t_grow` compacts it (a lifecycle-level walk of live
+  records, O(live text)); hand16 frees per drop, so the garbage bound (ingress bytes since the last grow) must be
+  measured against hand16's peak.
+- Size per M7 perf session and World: record 160 words (1280 B) -> 24 + 12 (id) + 3 x 2 + 1 (follows) + 2 (rest) = 45
+  words (360 B) plus 119 text bytes, about 479 B; hand16 holds about 0.90 KiB of live heap per session.
+- Files: `bud_lifecycle.pruv`, `bud_halt.pruv`, `m7_test/{root.pruv, driver_m7.rs, hand_m7_u16.rs, diff_hand_m7.py}`,
+  `m10_test/{root_m10.pruv, driver_m10.rs, hand_m10.rs}`. Roots that import bud_lifecycle through bud_map, bud_clock
+  or bud_halt (M4, M8, M9, M11, admit) rebuild without source changes; their generated Rust is a gate.
+
+### P13i2.4 Delegations
+
+| work | by |
+|---|---|
+| reading, attribution of the text readers, representation decision, this appendix | Claude Opus 5.5, direct (no multi-file sweep was needed past a few greps; no audit, nothing to audit) |
+
+### P13i2a.1 What was built
+
+- `bench/l3/budget/m7_test/bud_tx.pruv` (new, shared by the M7 and M10 roots): the resident WTF-8 arena `tx: [u8]`.
+  Bytes 0..7 hold the used length (little-endian, `used`/`set_used`; `[u8]` has no u64 load, so 8 byte ops); text
+  starts at 8. `put(inout st, inout tx, op, txt, inout out)` is the ingress: it parses the record's text frame
+  (`bud_halt::text_frame`), checks each of the five op spans against `len(txt)` (`soff`), plans store room first so
+  a text Grow never follows a store change, copies `txt` to `used` with `copy_range` and rebases the five handles in
+  the stored blob to absolute arena offsets. `text` is the checked egress view; `grow(inout st, prev, inout next)`
+  compacts (P13i2a.2).
+- `bud_lifecycle.pruv`: strings 1, 2, 3 hold `0` or `2, byteLen, byteOff`; string 5 holds `0`, a two-word JSON text
+  handle, or the halt prefix followed by an optional text handle. Lifecycle bodies move handles only; no lifecycle
+  signature called by bud_map/bud_store changed (`reopen` keeps its signature and calls an `#[inline]` body
+  `reopen_b`, an explicit directive against the R-7-3 count promotion that `bud_halt`'s extra `rewrite` call
+triggered).
+- `bud_halt.pruv`: `halted()` sizes and copies the date handles instead of unit strings and keeps the halt prefix as
+  structured words with the at-text as a handle; `text_frame` returns the five handle positions.
+- `m7_test/{root.pruv, driver_m7.rs, record_text.rs (new), run_m7.py, lifecycle_controls.py, mutant_quiet.py,
+  t5c_floor.py}`, `m10_test/{root_m10.pruv, driver_m10.rs, run_m10.py}`: the host converts UTF-16 to WTF-8 at
+  ingress and back at egress (`record_text.rs`); the Q protocol keeps the old unit layout at egress and still
+  accepts it for raw-state fixtures, so the Q expectations did not change. `hand_m7_u16.rs`/`hand_m10.rs` unchanged.
+
+### P13i2a.2 Compaction bound
+
+`put` returns 4 with the wanted size `want = max(4096, 8 + 4 * (live + need) + walked)` when the text does not fit
+(`live` = live text bytes found by a walk of the records, `need` = incoming bytes, `walked` = walk steps). The host
+allocates `next` of that size and calls `grow`, which copies only the live spans into `next` from offset 8 and
+rewrites their offsets, then retries the put. After a compaction the arena holds `live + need` bytes and has at
+least `3 * (live + need) + walked` free, so the next compaction needs at least `3 * (live + need)` more ingress bytes
+and copies at most `live + need` plus those bytes. Copy work per ingress byte is therefore at most 4/3 (amortized
+O(1)), and the walk is paid once per compaction. Measured with the earlier `2 *` factor (live M7 perf records, 1,000
+overwrites per session): 100 / 500 / 1,000 sessions, 981 / 989 / 991 compactions, copied/written 0.981 / 0.989 /
+0.991 (`work/p13i2/perf_report.md`, "아레나 압축"); the `4 *` factor and the 4096 floor only add room between
+compactions. Garbage (dropped texts) is bounded by the ingress since the last compaction.
+
+### P13i2a.3 Gates
+
+On the 16:52 candidate, rs then py compiler: M7 Q 113/187/0, M10 Q 78/222/0, M10 `cases_halt` 300/0/0, M8 Q 63/237/0,
+M9 Q 26/274/0, M11 213 exact and 87 prefix matches, M9 mutation (clean passes, 10 detected), all on both compilers;
+generated Rust of the five roots byte-identical across the compilers.
+
+`corrupt_resident` (M8 resident corruption) baseline: the runner's default OLD revision is `c4d3a63^` (36f04ae),
+which predates the packed wire; fed the same 387 packed inputs it answers from the old layout (for example
+`a-sk-w0-valid-hit-seq`: OLD `P X 2`, `Z -`, `X 2`, `O 0 0 0` while NEW resumes at `Z 104`), giving `controls 387,
+mismatches 387, poke-not-found 369`. So the run passes `--old-rev a9664a9` (the performance baseline, packed wire):
+387 controls, 0 mismatches, 0 not found, P21a 6/6 on both compilers; `--old-rev a4427ec` gives the same.
+
+### P13i2a.4 Performance (base a9664a9, 5 alternating rounds, medians)
+
+Won 5/5 (proportional, M7): instructions S 132.1 -> 98.5 M, M 520.6 -> 369.2 M (hand16 82.9 / 249.5); process
+time M 20 -> 10 ms; peak RSS S 3,264 -> 2,816, M 5,808 -> 4,624 KiB (hand16 2,592 / 4,560); typed `current` RSS slope
+8.60 -> 3.98 KiB per session (hand16 3.63); allocation calls S 101,839 -> 74,142, M 495,523 -> 355,930. Most M7
+dispatch cells (wire current/attach/ishalted/close/closereopen/reopenmiss, typed close/closereopen) also won.
+
+Gate (main, 2026-11-19): blocking is proportional cost at M (M7 500, M10 d=50) and L (M10 d=100); S cells and
+fixed-share cells above 1.0x are perf-debt rows. The one blocking fix attempt was a per-record text base: it needs
+a wire change (no record word is free in every state) or a frame parse, and its floor (put without parse,
+validation or handle writes, 873 instructions per put) is still above base (811), because base carries the text
+units inside the single verbatim `set_blob` copy while any arena form adds a second destination with a fill-level
+header that Pruv reads and writes as 8 byte operations. No further perf chain. Blocking cells still above base:
+
+| cell | base | P13i2a | pairs <= base | cause |
+|---|---:|---:|---:|---|
+| M10 putback d=50 / d=100 | 26.7 / 26.7 | 34.8 / 35.0 | 0/5 | put 986 vs 811 instructions: `text_frame` parse ~90, five span checks ~41, copy + five rebases + used header ~150, amortized compaction ~15 |
+| M7 typed / wire replace 500 | 149.6 / 139.7 | 161.6 / 154.9 | 0/5 | every timed iteration restores the halted record through `put` (same diff) |
+| M10 halt d=50 / d=100 | 675.2 / 1,057.6 | 701.3 / 1,072.1 | 2/5, 1/5 | halt includes one putback (same diff) |
+
+Perf-debt rows (for the pre-R12 perf-debt package): S M10 putback d=10 (26.5 -> 34.1), M7 typed / wire replace 100
+(138.0 -> 152.2, 129.5 -> 150.8), same put diff; fixed share, no text work on the path: M7 fair `current` 100 / 500
+(9.7 -> 10.3 / 10.9), typed `isHalted` 500 (11.6 -> 11.7), typed and fair `attach` 100 / 500 (+0.1..0.2 ns), code
+layout of the shared dispatch after `bud_halt` joined the M7 root. Full tables and the put-path diff:
+`work/p13i2/perf_report.md` (not committed) and `perf_5round_1652.log`.
+
+### P13i2a.5 Delegations
+
+| work | by |
+|---|---|
+| design, implementation, gates, performance runs, per-record attempt, this appendix | Claude Opus 5.5, direct |
+| copy_range package audit (P13i2a.audit-1) | Codex |
+| `--only runtime` and `--only g8_frontend` runs on both compilers | background command delegation |
+
+### P13i2a.audit-1 copy_range source-range diagnostic
+
+The package audit (Codex, on the step-2 commit 3b4add7 `copy_range`) found no soundness defect: bounds, post-state,
+`[u8]` facts, aliasing, evaluation order, both compilers and the LLVM lowering check out. One should-fix finding:
+under `--no-verify` the single combined range check reported the destination pair `(i, len(dst))` to `pruv_oob` even
+when the source range (`j`, `n` against `len(src)`) was the bad one. Fixed in all four code generators
+(`pruvc/codegen.py`, `pruvc/llvmgen.py`, `pruv-core` `codegen.rs`, `llvmgen.rs`): the check is split into the
+destination check `i < 0 || n < 0 || i > len(dst) - n` reporting `(i, len(dst))`, then the source check
+`j < 0 || j > len(src) - n` reporting `(j, len(src))`; verified code is unchanged (no check). New runtime row
+`tests/runtime/l3_rt_copy_range_nv_oob_src` (bad `j`, expects `index out of bounds: 2 (len 3)`); the row list grows
+by 2 (rust and llvm, `--no-verify`), regenerated with the Rust `--list-rows`. Gates: `--only runtime` and
+`--only g8_frontend` on both compilers (no full run). No confirm audit: the finding is should-fix only.
+
+## Appendix P13k: `#[cold]` attribute; no bud_map split meets the no-give-back rule
+
+### P13k.1 Lever
+
+Pruv had no way to keep a fn out of line: R-7-3 gives every generated fn `#[inline]` or `#[inline(always)]`. The parent
+chose a source attribute (rule (c)): `#[cold]` directly before a private top-level `fn`, emitted as `#[cold]`
+`#[inline(never)]` on the fn and its body/wrapper items; no effect on checking or verification; anything else
+(`#[hot]`, `#[cold(x)]`, `#[cold] pub fn`, inside a body, before `struct`) is a parse error. SPEC.md R-7-3 supplement and
+attribute syntax; both compilers (pruvc/vparser.py, vast.py, mono.py, codegen.py; pruvc-rs lexer, parser, ast, mono,
+codegen, bindings, abi, llvmgen); accept/reject tests `tests/spec/r7_3_cold{,_pub,_struct,_unknown}`.
+Gates: cargo test ok, diff_rust same (fuzz 20), g8_frontend rs 39/39 and py 27/27, list-rows no diff, spec trace.
+Audit (Codex, one pass): a `#[cold]` fn that becomes a `--proven-entries` twin crashed both `proven_module`s (the
+attribute map knew only `#[inline]`/`#[inline(always)]`); fixed identically, the twin keeps `#[cold]` `#[inline(never)]`,
+checked in tests/l3/abi/check_proven_entries.py. Rejecting `#[cold] pub fn` is by design. Reject tests added for
+`#[cold()]`, a repeated `#[cold]` and `#[cold]` inside a body; spec trace 252/252 on both compilers, l3_abi 3/3.
+
+### P13k.2 Variants (M7 driver `__text`, base 458,300 B)
+
+All variants were built from source with the new compiler; the generated Rust of the unchanged base sources is
+byte-identical to main's. Counters in the M7 build show none of the cold fns runs in any M7 perf item.
+
+| variant | cold fns | M4 / M7 / M10 `__text` | result |
+|---|---|---|---|
+| G | first probe inline; probe loop rest, `hash_far`, `entry_far_w`, `key_far_w` | 349,884 / 451,580 / 458,044 | M7 -30..-55 per call on all five cells; M4 per op sessions 1000 +11 %, tools 100/1000 +5 %, clocks 2000 +10 %; M7 RSS +32..80 KiB |
+| F | probe loop inline; the four fallbacks (never run) | 350,588 / 455,868 / 460,988 | M4 overlaps; M7 current 330 -> 338, isHalted 326 -> 333; RSS +32..80 KiB |
+| H | first probe peeled + loop inline | 357,948 / 473,660 / 471,484 | `__text` +15 KB |
+| J | first probe inline; loop rest in a cold fn with direct reads | 350,268 / 455,036 / - | M4 sessions 1000 +21 %, clocks 2000 +9 % per op |
+| hash only | `hash_far` (bud_keys) | 351,548 / 457,980 / 465,916 | M7 -12..-23 per call, RSS overlaps; M4 overlaps; M10 D 100 +0.6 % instructions without overlap, M10 `__text` +128 B |
+
+M4 second probes are common (counters: `find_next_w` runs on roughly every second to every `find_h_w` call in
+sessions/clocks), so moving the probe loop behind a call costs M4 what it saves M7. The M7 RSS rise of the cold
+variants is not start-up (an early-exit run is equal) and not a cold fn running; it follows the code layout.
+
+### P13k.3 Fair lanes (instructions per call, S = 100, 5 rounds, median)
+
+| cell | base | G | hash only | hand16 |
+|---|---|---|---|---|
+| attach | 348 | 292 | 336 | 294..299 |
+| closereopen | 539 | 508 | 515 | 437..448 |
+| reopenmiss | 387 | 355 | 364 | 336 |
+| current | 329 | 292 | 316 | 333..338 |
+| isHalted | 327 | 284 | 313 | 339..351 |
+
+### P13k.4 Left open
+
+- No bud_map/bud_keys change landed. Hash-only is the closest (only M10 D 100 +0.6 % and +128 B); it needs a reason
+  for the M10 cell before it can land.
+- Size (P13k.2 row): the excess over c3ec58d is the inlined `find_w` copies in host fns, not the fallbacks.
+- closereopen/reopenmiss vs hand16: noted in rows T5b2 and P13i2 (bud_lifecycle bodies).
+- R-7-3 recursion: a cold fn is left out of the inline call graph, so in `even -> odd (cold) -> even` `even` may get
+  `#[inline(always)]`. It is still correct (the cycle goes through the `#[inline(never)]` fn); revisit if a cold fn
+  ever sits on a recursive path.
 
 ## Appendix P27 (row P27: exact text/number/date, bounded source-byte outputs)
 

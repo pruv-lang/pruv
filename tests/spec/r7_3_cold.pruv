@@ -1,0 +1,26 @@
+// spec: R-7-3 accept
+// a private `#[cold] fn` (with a requires) and a generic `#[cold] fn` called from a hot fn
+#[cold]
+fn fallback(x: i64) -> i64
+  requires 0 <= x && x <= 1000
+  ensures result <= 1001
+{
+  return x + 1;
+}
+
+#[cold]
+fn keep<T>(a: T) -> T {
+  return a;
+}
+
+fn hot(x: i64) -> i64
+  requires 0 <= x && x <= 1000
+{
+  let k: i64 = keep::<i64>(1);
+  if k < 0 || k > 10 { return 0; }
+  return fallback(x) + k;
+}
+
+fn main() -> () ! io {
+  print(hot(2));
+}

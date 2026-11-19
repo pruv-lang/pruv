@@ -1,0 +1,8 @@
+// spec: R-5-1 reject
+// copy_range is code only: it is not allowed in a contract.
+pub fn f(inout dst: [u8], src: [u8]) -> ()
+  requires 1 <= len(dst) && 1 <= len(src)
+  requires copy_range(dst, 0, src, 0, 1) == 0
+{
+  copy_range(inout dst, 0, src, 0, 1);
+}

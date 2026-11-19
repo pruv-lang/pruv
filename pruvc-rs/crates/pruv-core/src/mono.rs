@@ -861,7 +861,7 @@ impl<'a> Mono<'a> {
             foreign: f.foreign.clone(),
             cost: f.cost.as_ref().map(|e| self.cp_e(e)).transpose()?, decreases: None, // G9 A0: G9 programs are rejected before specialization
             small_bound,
-            x_auto: None, opaque: false,
+            x_auto: None, opaque: false, attribute: f.attribute,
         })
     }
 

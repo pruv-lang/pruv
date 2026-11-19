@@ -1,0 +1,7 @@
+// spec: R-5-1 reject
+// The destination array is also read in an index argument (len(a)): inout_alias, as for any inout call.
+pub fn f(inout a: [i64], src: [i64]) -> ()
+  requires 2 <= len(a) && 2 <= len(src)
+{
+  copy_range(inout a, len(a) - 2, src, 0, 2);
+}
