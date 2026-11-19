@@ -397,7 +397,9 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P19 | Same: OPEN/attach/replace/CLOSE/maybeClose | P Q1/Q4+B/G, synchronous query/effect order after P10H; close <=1.0. |
 | P19a | B/bud_lifecycle.pruv, bud_map.pruv, m7_test, m10_test, ABI.md: P19 audit R1, R3-R6, O1 (Appendix P19.6a, P19.7) | P: invalid answer leaves `st` word-for-word unchanged (write-free `bud_map` room plan before the query, rehash after a valid answer, `ensures` linking the two; tombstone-heavy control); R2 regression fixture; session argument and effect order logged on both sides with a mutant; per-attempt query counts over forced Grow; required case ids and request order in M7/M10 Q; standalone CLOSE lane with matched consumption <= 1.0x hand. Starts after P21a (shares bud_map.pruv). |
 | P19c | Both codegens: foreign (trusted rust) call wrapper and cross-rlib inlining (Appendix P19.4) | P: `catch_unwind(AssertUnwindSafe(..))` around every trusted rust call and the non-inlined callee `LocalKey::with` removed or made free where sound (for example crates built with `panic = abort`, or the poison rule of P10 kept by another path), with the soundness argument written and audited; output parity on both compilers; P19 `closereopen` (1.14-1.15) and `attach` (1.12-1.13) re-measured, the wrapper share attributed, the rest left to T5/P18b by line. Done (Appendix P19c): drop guard (`pruv_ForeignGuard`) in place of `catch_unwind`, `__rust_try` and the catch frame gone; the foreign path now equals a plain call (closereopen `guard` = `direct` within 0.1 ns, 61 rounds); the diagnostic goes through a fresh `/dev/stderr` handle, not std's stderr lock, on unix; `LocalKey::with` is the caller's LLVM inline decision, present with no wrapper and gone when inlined; the rest (attach 1.13x, closereopen 1.11-1.12x, reopenmiss 1.05-1.08x vs hand16) is the inline policy (T5, measured: 1.02-1.06x with the four lifecycle/map bodies forced inline) and the result path (P18b, hypothesis). T5 (Appendix T5): no inline rule ships; every promotion grows `__text` (find_w + attach +40 %, the four +116 %) for 2-13 % fewer instructions; queued as T5a. |
-| T5a | Both codegens and B/bud_map.pruv, bud_lifecycle.pruv: M7 lookup and lifecycle gap without code growth (Appendix T5.3) | P: `attach`, `closereopen`, `reopenmiss`, `current`, `isHalted` <= 1.0x hand16 with M7 `__text` and peak RSS not above the T5 base (405,180 B); the inline-only route is ruled out (T5.2). Candidates: cut the always callees of `find_w` (P13h specialization or hot/cold split), the P19c entry/record re-validation and id copies; output parity on both compilers. |
+| T5a | Both codegens and B/bud_map.pruv, bud_lifecycle.pruv: M7 lookup and lifecycle gap without code growth (Appendix T5.3) | P: `attach`, `closereopen`, `reopenmiss`, `current`, `isHalted` <= 1.0x hand16 with M7 `__text` and peak RSS not above the T5 base (405,180 B); the inline-only route is ruled out (T5.2). Candidates: cut the always callees of `find_w` (P13h specialization or hot/cold split), the P19c entry/record re-validation and id copies; output parity on both compilers. Measured (Appendix T5a): no change ships. The fixes found (reopen cold tail -32/-35, maybe_close direct header path -9) all grow `__text`. Part of each raw cell is the driver typed-lane shape (current: floor 73 vs hand ~19). The rest is split by line, queued as T5b/T5c, and kept in P13h/P18b. |
+| T5b | Both codegens: cold-tail rule (Appendix T5a.4) | P: reopen's slow tail (blob_copy, rewrite, store) is emitted out of line and cold, so the miss path drops the slow-path frame (352 B in the T5a build). The rule is an attribute or a proof-free rule that does not mark the M4 put path cold. reopenmiss and closereopen fewer instructions than T5 with `__text` and peak RSS not above the T5 base (405,180 B); the hand-edited reference is rsplita (-32/-35 against its same-run base, for +10.9 KB). Includes a per-function attribution of the closereopen pair. Output parity on both compilers. |
+| T5c | B/m7_test/driver_m7.rs: typed-lane harness parity (Appendix T5a.2) | P: the M7 timed loop calls the `c_*` entry with the same shape as hand16's bare method call (no non-inlined step closure, no per-op prep match), reported next to the existing lane. The floor of each lane is measured with bodies emptied. Measurement only; no product number moves. |
 | P20 | B/bud_charge.pruv,m8_test: counters/sums/bounds | P Q2+C/D, equal safe-number baseline; negative/boundary atomic refusal and charge/failure <=1.0. |
 | P21 | B/bud_tools.pruv,key helpers: stored hash/dedup | P Q2+D; dup/new/forget separately <=1.0, missing-budget dedup. Interning only as measured follow-up. |
 | P22 | B/bud_clock.pruv: runs/refresh/begin/settle/arm | P Q3+E/F, active-count functional model, R/timer cycle; do not treat I2 as an unchecked proof assumption. |
@@ -4787,3 +4789,136 @@ Should-fix, not changed:
 | 1961cfdf | research | Codex gpt-6.2-astra | M10a halt state, host query order in B, gate plan |
 | 282acd5d | audit | Codex gpt-6.2-astra ultra | package audit |
 | c5e89999 | confirm | Codex gpt-6.2-astra ultra | confirm audit |
+
+## Appendix T5a (M7 lookup and lifecycle gap without code growth)
+
+Result: no change ships. Every product fix found within the package lowers instructions only by adding `__text`
+above the T5 base (405,180 B), which row T5a forbids. The generated Rust, the binaries, `__text` and peak RSS stay as
+in T5. The remaining gap is split by line below and queued (T5a.5).
+
+### T5a.1 Method
+
+- Instructions per op are `(I(5R) - I(R)) / 4R`, with S = 100, R = 20000, median of 3, from `/usr/bin/time -l`.
+  Load average was 4-10, so instructions lead; cycles were read as a cross-check only.
+- The Pruv lane is the driver's typed lane (`driver_m7.rs` `perf`), filtered to one item. hand16 is
+  `hand_m7_u16 perf 100 R ITEM typed`.
+- Variants were built from the shipped M7 output (`work/t5a/m7.base.rs`, identical to the T5 base) by editing the
+  generated Rust. `__text` is from `size -m` on the work build (base 406,268 B there; same flags for every variant).
+
+### T5a.2 Cells and harness floor
+
+The raw typed-lane cells are not a like-for-like comparison:
+- the hand16 timed loop is a bare method call (`black_box(w.current(..))` for current);
+- the Pruv typed loop goes through a `step` closure that rustc does not inline (its own symbol with a 6 register-pair
+  prologue), a match on the prep code, `w.fx[0] = 0`, the 2^40 length guards of the `c_*` entries and an `out[0]`
+  read.
+
+The Pruv floor was measured with the `c_*` bodies emptied (`m7.emptyall.rs`; `c_replace` is kept, it is not a
+target cell). The hand floor was measured only for current (`hand_empty.rs`, current returns `None`). The hand
+attach and reopenmiss loops also run `fx.clear()`, and closereopen makes two calls per iteration
+(`hand_m7_u16.rs` perf loops), so the hand floor of the other cells is not measured and no floor-subtracted gap is
+claimed for them.
+
+| cell | base | hand16 | raw ratio | Pruv floor (bodies empty) | hand floor |
+|---|---:|---:|---:|---:|---:|
+| isHalted | 405 | 339 | 1.19 | 66 | not measured |
+| current | 403 | 335 | 1.20 | 73 | ~19 |
+| attach | 457 | 319 | 1.43 | 92 | not measured |
+| reopenmiss | 456 | 339 | 1.35 | 80 | not measured |
+| closereopen (pair) | 1151 | 889 | 1.29 | 128 | not measured |
+
+- For current, floor-subtracted work is about 330 (Pruv) against about 316 (hand): +14, about 1.04x.
+- If the current hand floor of about 19 per call held for the pair, closereopen would be about 1023 against 851
+  (+172). That is an estimate, not a measurement.
+- The step closure alone: with the current body emptied in both, the Pruv floor is 73 with the closure lane and 50
+  with an inline loop (`T5A_INL`; the `emptyI` build empties only current). With the shipped body and the inline loop,
+  current goes from 407 to 372. Neither changes product code.
+
+### T5a.3 Experiments (product code)
+
+rsplita and mc were measured in the same run as base, so their delta uses that run's base.
+
+| variant | change | same-run base | variant | delta | `__text` B | verdict |
+|---|---|---|---|---|---:|---|
+| rsplit | reopen slow tail (session_of, blob_copy, rewrite, reserve, store) moved to `#[cold] #[inline(never)] reopen_slow`, reopen stays `#[inline]` | reopenmiss 456, closereopen 1151 (T5a.2 table, not same run) | 461, 1157 | +5, +6 | not measured | worse |
+| rsplita | rsplit plus reopen `#[inline(always)]` | reopenmiss 452, closereopen 1146 | 420, 1111 | -32, -35 | 417,212 (+10.9 KB) | not shippable (text rule); not expressible today (T5a.4) |
+| mc | maybe_close: `eb` plus one span check, then direct state read and in-place header writes; old path kept as the fallback for buffers outside the premise | closereopen 1149 | 1140 | -9 | 408,508 (+2.2 KB) | gain under 1 %, text grows; not shipped |
+
+- Work build base `__text` is 406,268 B.
+- current under rsplita was read as unchanged. current under rsplit, and every cell under mc other than
+  closereopen, were not measured.
+- `str_pos_in` is still in mc.
+
+Removing the fallback in `mc` would cut text. But for an entry whose record span is not in `st`, maybe_close today
+still reads the record through total accessors. A `found_at` style check returns -2 there, and maybe_close would
+then answer "not open". That is a behaviour change outside the T5a scope, so it was not taken.
+
+### T5a.4 Line-level reasons for each remaining cell
+
+- **current, isHalted** (current +14 after the floor; isHalted's hand floor not measured):
+  - Generated: find_w → `gf(owner, 3)`, `hash_words`, `find_h_w`.
+  - Generated: on each tag-matching probe, `entry_matches_w` re-reads `st[5]`/`st[6]` through `field_addr → ea`, with
+    clamps.
+  - Generated: found_at does one `eb`, one span check, the `id_at` memcmp and the state check.
+  - Hand: one SipHash `HashMap::get` and a `Box<[u16]>` compare.
+  - Why Pruv cannot emit it: the per-probe re-validation is the total accessor on an unproved buffer. A caller-proved
+    base would remove it, which is the P13h call-site specialization. Inlining find_w is ruled out by T5.2
+    (+29.7 KB).
+- **reopenmiss**:
+  - reopen is `#[inline]` and out of line, and its single body holds the slow path (blob_copy Vec, rewrite, store).
+  - The miss path therefore pays the slow path's frame: `sub sp, sp, #0x160` (352 B) in this build, with saved
+    registers (P18.4 measured 320 B).
+  - The split that removes this (rsplita) needs a cold, never-inlined tail. Pruv source has no cold or no-inline
+    marker, and the inline policy folds a single-caller fn back into its caller (P18.4), so neither compiler can emit
+    it. Even then it costs +10.9 KB of text.
+  - The miss share without the frame is not separated.
+- **closereopen**:
+  - The reopen share is as above.
+  - Per pair, find_w runs twice: maybe_close's `session_of`, and reopen's `current_at`. `clock_in` answers -1 on the
+    empty clock map without hashing.
+  - maybe_close re-validates the entry with total accessors: `entry_addr`, `at_off`/`at_n`, `state_of`,
+    `str_pos_in`, and an `ent_u16::wr` per in-place header write. Proving the entry and header part away measured -9
+    (mc).
+  - Hand also calls `is_quiet` and records `Changed` on both calls, so those are not a Pruv-only cost.
+  - The cause of the rest of the pair gap is not determined by these experiments. A per-function attribution is
+    queued with T5b.
+- **attach**:
+  - On an open budget, Pruv copies the stored budget id into `out` (`put_key`, `bud_lifecycle.pruv` attach ref path).
+    Hand returns a reference to the stored id (`Res::Ref(&b.id, ..)`).
+  - Pruv also re-validates the entry (eb, span check, id length inside the record).
+  - The copy follows from the `out` buffer result ABI, not the entry layout. It belongs with P18b's result-path
+    question, not P13e.
+  - Inlining is ruled out: T5.2's `fa` variant (find_w + attach inlined together) gives -13 % for +40 % text.
+
+### T5a.5 Queued rows
+
+- T5b (new): a cold-tail rule in both codegens, for example an attribute or a proof-free rule on a branch that ends in
+  an `! alloc` call chain, chosen so the M4 put path is not marked cold. Target: reopenmiss and closereopen, with
+  `__text` not above the T5 base. rsplita is the upper bound it must beat in text.
+- T5c (new): M7 typed-lane harness parity in `driver_m7.rs`. The timed loop calls the `c_*` entry the way hand16 calls
+  its method (no non-inlined step closure, no prep match per op), and is reported next to the current lane. This is
+  measurement only; it moves no product number.
+- P13h keeps the find_w probe re-validation. P18b keeps the result path, including the attach id copy into `out` (T5a.4).
+
+### T5a.6 Gates, audit and delegation
+
+- No product file changed: the generated output is identical to T5, so `tests/g8/compatibility.json`, the budget roots
+  and the M4 cells are as at T5 and were not re-run.
+- `work/t5a/` holds the variants, `mk.py`, `instr.py` and `diag.md`; it is not committed.
+- Step 1 went over its 1-hour cap. The package was split as row T5a.5 says, rather than shipping a text-growing
+  change.
+- Audit (Codex gpt-6.2-astra, ultra, review): it found that the no-ship verdict holds. It made four required findings,
+  all fixed above:
+  1. The harness floor was stated per cell, but it was measured only for current.
+  2. The deltas mixed bases.
+  3. The reopen frame is 352 B in this build; closereopen runs find_w twice per pair, and hand also calls is_quiet and
+     logs `Changed`.
+  4. attach copies the stored id into `out`; it is not a key copy into the record.
+- One optional finding is left unmeasured: reopen's slow path could reuse the already validated `off`/`n` instead of a
+  second `session_of` and state re-check. It is folded into T5b.
+
+| work | to | mode |
+|---|---|---|
+| package audit | Codex gpt-6.2-astra ultra | review |
+
+Diagnosis, the variants, the measurements and this appendix were done directly.
