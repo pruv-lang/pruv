@@ -148,7 +148,14 @@ pub(crate) fn inline_policy(text: String) -> String {
             if fns[v].4 {
                 always[v] = true;
             } else {
-                let calls = sites.get(&v).copied().unwrap_or(0);
+                // P18d: the by-value twin has one textual call site (its adapter); count the adapter's callers.
+                // Only a generated triple (base, base__pruv_fp, base__pruv_fpb) counts, never a user name ending so.
+                let nm = fns[v].1;
+                let nm = match nm.strip_suffix("__pruv_fp") {
+                    Some(b) if index.contains_key(b) && index.contains_key(format!("{}b", nm).as_str()) => b,
+                    _ => nm,
+                };
+                let calls = index.get(nm).and_then(|k| sites.get(k)).copied().unwrap_or(0);
                 always[v] = tot <= INLINE_SMALL || calls <= 1 || tot.saturating_mul(calls - 1) <= INLINE_BUDGET;
             }
         }
@@ -185,6 +192,28 @@ mod tests {
         }
         t.push_str("}\n");
         inline_policy(t).starts_with("#[inline(always)]\n")
+    }
+
+    /// P18d: a `__pruv_fp` twin is counted by the call sites of its base name, not by its single adapter call.
+    #[test]
+    fn inline_policy_fp_uses_base_sites() {
+        let mut t = String::from(
+            "#[inline(always)] // pruv: explicit\nfn f(x: i64) -> i64 {\n    f__pruv_fp(x)\n}\n#[inline]\nfn f__pruv_fp(x: i64) -> i64 {\n",
+        );
+        for i in 0..20 {
+            t.push_str(&format!("    let _ = x + {};\n", i));
+        }
+        t.push_str("    x\n}\n#[inline(always)] // pruv: explicit\nfn f__pruv_fpb(x: i64) -> i64 {\n    x\n}\nfn main() {\n");
+        for _ in 0..300 {
+            t.push_str("    f(0);\n");
+        }
+        t.push_str("}\n");
+        let few = t.replace("    f(0);\n", "").replace("fn main() {\n", "fn main() {\n    f(0);\n");
+        assert!(inline_policy(t.clone()).contains("#[inline]\nfn f__pruv_fp("), "many base sites keep #[inline]");
+        assert!(inline_policy(few).contains("#[inline(always)]\nfn f__pruv_fp("), "one base site forces always");
+        // without the generated __pruv_fpb body the name is an ordinary function with its own single call site
+        let lone = t.replace("fn f__pruv_fpb(", "fn g__other(");
+        assert!(inline_policy(lone).contains("#[inline(always)]\nfn f__pruv_fp("), "no triple, own sites");
     }
 
     /// Spec thresholds, not the JSON values, so a wrong pruvc/data/inline_policy.json is caught

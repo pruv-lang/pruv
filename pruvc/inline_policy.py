@@ -124,7 +124,12 @@ def inline_policy(text):
             if fns[v][4]:
                 always[v] = True
             else:
-                calls = sites.get(fns[v][1], 0)
+                nm = fns[v][1]
+                # P18d: the by-value twin has one textual call site (its adapter); count the adapter's callers.
+                # Only a generated triple (base, base__pruv_fp, base__pruv_fpb) counts, never a user name ending so.
+                if nm.endswith("__pruv_fp") and nm[:-len("__pruv_fp")] in index and nm + "b" in index:
+                    nm = nm[:-len("__pruv_fp")]
+                calls = sites.get(nm, 0)
                 always[v] = tot <= INLINE_SMALL or calls <= 1 or tot * (calls - 1) <= INLINE_BUDGET
     for v, f in enumerate(fns):
         if always[v]:

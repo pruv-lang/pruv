@@ -951,17 +951,31 @@ impl<'a> FBuf<'a> {
 
 // P18c: current and isHalted take the by-value form (sol::pruv_proven::val, `K` result words returned with the
 // status, no `out` buffer): their bodies inline into the loop, so the result words stay in registers, as hand's
-// `Option<&Budget>` / `bool` result does. attach, reopen and maybeClose keep the `out` twin (fair_out, the P18b
-// shape unchanged): their bodies are calls, so a by-value result would be a zeroed stack array passed by pointer
-// (measured slower, Appendix P18c). K: current 3 ([4, n, off] on a hit), isHalted 1.
+// `Option<&Budget>` / `bool` result does. In P18c attach, reopen and maybeClose kept the `out` twin (fair_out, the
+// P18b shape): their bodies are calls, so a by-value result was a zeroed stack array passed by pointer (measured
+// slower, Appendix P18c); P18d below changes that for reopen and maybeClose. K: current 3 ([4, n, off] on a hit), isHalted 1.
 const K_CURRENT: usize = 3;
 const K_HALTED: usize = 1;
+// P18d: reopen and maybeClose take the by-value form too: the compiler proves their `out` use is the fixed prefix
+// [status] (K = 1) and emits a by-value twin of the real body (`__pruv_fp`, result words in and out of the call
+// in registers), so no buffer is passed by pointer. attach stays on fair_out: its `out` has a variable length
+// (put_key), which the compiler rejects (Appendix P18d).
+const K_REOPEN: usize = 1;
+const K_CLOSE: usize = 1;
 
 #[inline(always)]
 fn fair_val<const C: i64, const K: usize>(b: &mut FBuf, a: &FArgs) -> (i64, [i64; K]) {
     let (r, o) = match C {
         1 => sol::pruv_proven::val::c_current::<K>(b.st, black_box(a.sk), a.sn, black_box(a.bk), a.bn),
         2 => sol::pruv_proven::val::c_is_halted::<K>(b.st, black_box(a.sk), a.sn, black_box(a.bk), a.bn),
+        5 => {
+            b.fx.get_mut()[0] = 0;
+            sol::pruv_proven::val::c_reopen::<K>(b.st, black_box(a.sk), a.sn, black_box(a.bk), a.bn, b.fx)
+        }
+        6 => {
+            b.fx.get_mut()[0] = 0;
+            sol::pruv_proven::val::c_maybe_close::<K>(b.st, black_box(a.sk), a.sn, a.now, b.bv, b.fx)
+        }
         _ => unreachable!(),
     };
     black_box((r, o));
@@ -998,10 +1012,10 @@ fn fair_loop(item: &str, w: &mut World, a: &[FArgs], n: usize) {
         "ishalted" => for _ in 0..n { fair_val::<2, K_HALTED>(b, &a[0]); },
         "current" => for _ in 0..n { fair_val::<1, K_CURRENT>(b, &a[0]); },
         "attach" => for _ in 0..n { fair_out::<3>(b, &a[0]); },
-        "reopenmiss" => for _ in 0..n { fair_out::<5>(b, &a[0]); },
+        "reopenmiss" => for _ in 0..n { fair_val::<5, K_REOPEN>(b, &a[0]); },
         "closereopen" => for _ in 0..n {
-            fair_out::<6>(b, &a[0]);
-            fair_out::<5>(b, &a[1]);
+            fair_val::<6, K_CLOSE>(b, &a[0]);
+            fair_val::<5, K_REOPEN>(b, &a[1]);
         },
         _ => unreachable!("fair lane item {}", item),
     }
@@ -1022,12 +1036,12 @@ fn fair_rchk(item: &str, w: &mut World, a: &[FArgs], n: usize) -> u64 {
             "ishalted" => { let (r, o) = fair_val::<2, K_HALTED>(&mut FBuf::of(w), &a[0]); fold(w, r, &o) }
             "current" => { let (r, o) = fair_val::<1, K_CURRENT>(&mut FBuf::of(w), &a[0]); fold(w, r, &o) }
             "attach" => { let r = fair_out::<3>(&mut FBuf::of(w), &a[0]); fold(w, r, &[]) }
-            "reopenmiss" => { let r = fair_out::<5>(&mut FBuf::of(w), &a[0]); fold(w, r, &[]) }
+            "reopenmiss" => { let (r, o) = fair_val::<5, K_REOPEN>(&mut FBuf::of(w), &a[0]); fold(w, r, &o) }
             "closereopen" => {
-                let r = fair_out::<6>(&mut FBuf::of(w), &a[0]);
-                fold(w, r, &[]);
-                let r = fair_out::<5>(&mut FBuf::of(w), &a[1]);
-                fold(w, r, &[])
+                let (r, o) = fair_val::<6, K_CLOSE>(&mut FBuf::of(w), &a[0]);
+                fold(w, r, &o);
+                let (r, o) = fair_val::<5, K_REOPEN>(&mut FBuf::of(w), &a[1]);
+                fold(w, r, &o)
             }
             _ => unreachable!(),
         }

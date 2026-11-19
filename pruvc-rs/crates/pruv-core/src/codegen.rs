@@ -1248,6 +1248,8 @@ struct Gen<'a> {
     small_buf: String,
     /// buffer element of the `__pruv_small` variant being emitted ("i64" or "u8")
     small_elem: &'static str,
+    /// P18d: function name -> (K, o) of the by-value fixed-prefix twins (--proven-entries, see plan_fp)
+    fp: HashMap<String, (i64, String)>,
 }
 
 impl<'a> Gen<'a> {
@@ -1300,6 +1302,7 @@ impl<'a> Gen<'a> {
             small_call: 0,
             small_buf: String::new(),
             small_elem: "i64",
+            fp: HashMap::new(),
             function_name: String::new(),
             prog,
             explicit,
@@ -1387,6 +1390,90 @@ impl<'a> Gen<'a> {
         g.body_named = g.has_req.union(&lg).cloned().collect();
         g.lg = lg;
         g
+    }
+
+    /// P18d: plan the by-value `__pruv_fp` twins; runs after proven_entries is set. The adapter copies the prefix back
+    /// only when the core returns, so a panic after a write would lose that write: plan only in a verified build (no
+    /// overflow or index panic) without G10 runtime or par groups, and never for a function that can reach a foreign
+    /// function, a G6 catalog operation or print (fixed_prefix::may_unwind). Same rule as the Python generator's plan_fp.
+    fn plan_fp(&mut self) {
+        let prog = self.prog;
+        if !(self.verified && !self.g10 && !self.proc && !self.net && !self.ev && self.par_callees.is_empty()) {
+            return;
+        }
+        let plan = {
+            let mut cands: Vec<&Function> = Vec::new();
+            for f in &prog.functions {
+                if !self.g5
+                    || !f.tparams.is_empty()
+                    || f.foreign.is_some()
+                    || self.entries.contains(&f.name)
+                    || self.body_named.contains(&f.name)
+                    || self.small.fns.contains_key(&f.name)
+                    || f.params.is_empty()
+                    || !self.fmap.get(&f.name).map_or(false, |g| std::ptr::eq(*g, f))
+                    || (!self.verified && f.cost.is_some())
+                {
+                    continue;
+                }
+                if let Some(p) = f.params.last() {
+                    if p.mode_pos.is_some() && p.ty == "array" && format!("&mut {}", &rty(&p.ty, true)[1..]) == "&mut [i64]" {
+                        cands.push(f);
+                    }
+                }
+            }
+            let unwind = crate::fixed_prefix::may_unwind(prog, &self.fmap);
+            crate::fixed_prefix::plan_fp(&cands, &self.fmap, &unwind)
+        };
+        self.fp = plan;
+    }
+
+    /// P18d: the adapter `f` (pinned always) and the by-value twin `f__pruv_fp`; the body follows as `f__pruv_fpb`
+    fn fp_items(&mut self, f: &Function, ps: &str, ret: &str, param_types: &[String], k: i64, o: &str) {
+        let n = f.params.len() - 1;
+        let others: Vec<String> =
+            f.params[..n].iter().zip(&param_types[..n]).map(|(p, ty)| format!("{}: {}", p.name, ty)).collect();
+        let args: Vec<String> = f.params[..n].iter().map(|p| p.name.clone()).collect();
+        let rt = if f.ret == "unit" { "()".to_string() } else { ret[4..].to_string() };
+        let allow = self.allow;
+        // one word: (RT, i64) is a scalar pair, returned in registers; (RT, [i64; 1]) is returned through memory
+        let one = k == 1;
+        let mut adapter_args = args.clone();
+        adapter_args.push(if one { "pruv_fa[0]" } else { "pruv_fa" }.to_string());
+        adapter_args.push("pruv_fn".to_string());
+        let mut fp_params = others;
+        fp_params.push(if one { "pruv_f0: i64".to_string() } else { format!("mut pruv_fa: [i64; {}]", k) });
+        fp_params.push("pruv_fn: usize".to_string());
+        let mut fpb_args = args;
+        fpb_args.push("&mut pruv_fa[..pruv_fn]".to_string());
+        self.emit(0, allow);
+        self.emit(0, PIN_ALWAYS);
+        self.emit(0, &format!("fn {}({}){} {{", f.name, ps, ret));
+        self.emit(1, &format!("let pruv_fn: usize = if {o}.len() < {k} {{ {o}.len() }} else {{ {k} }};"));
+        self.emit(1, &format!("let mut pruv_fa = [0i64; {k}];"));
+        self.emit(1, &format!("pruv_fa[..pruv_fn].copy_from_slice(&{o}[..pruv_fn]);"));
+        if one {
+            self.emit(1, &format!("let (pruv_fr, pruv_f0) = {}__pruv_fp({});", f.name, adapter_args.join(", ")));
+            self.emit(1, "pruv_fa[0] = pruv_f0;");
+        } else {
+            self.emit(1, &format!("let (pruv_fr, pruv_fa) = {}__pruv_fp({});", f.name, adapter_args.join(", ")));
+        }
+        self.emit(1, &format!("{o}[..pruv_fn].copy_from_slice(&pruv_fa[..pruv_fn]);"));
+        self.emit(1, "pruv_fr");
+        self.emit(0, "}");
+        self.emit(0, "");
+        self.emit(0, allow);
+        self.emit_inline(f);
+        if one {
+            self.emit(0, &format!("fn {}__pruv_fp({}) -> ({}, i64) {{", f.name, fp_params.join(", "), rt));
+            self.emit(1, "let mut pruv_fa = [pruv_f0];");
+        } else {
+            self.emit(0, &format!("fn {}__pruv_fp({}) -> ({}, [i64; {}]) {{", f.name, fp_params.join(", "), rt, k));
+        }
+        self.emit(1, &format!("let pruv_fr = {}__pruv_fpb({});", f.name, fpb_args.join(", ")));
+        self.emit(1, if one { "(pruv_fr, pruv_fa[0])" } else { "(pruv_fr, pruv_fa)" });
+        self.emit(0, "}");
+        self.emit(0, "");
     }
 
     /// G9: some struct field / enum payload has the internal type `name` (array_u8, array_bool, str)
@@ -1719,10 +1806,23 @@ impl<'a> Gen<'a> {
             "pub "
         };
         let allow = self.allow;
+        // P18d: adapter + by-value twin first, then the unchanged body under its new name
+        let fp = self.fp.get(&f.name).cloned();
+        let (body_name, vis) = match &fp {
+            Some((k, o)) => {
+                self.fp_items(f, &ps, &ret, &param_types, *k, o);
+                (format!("{}__pruv_fpb", f.name), "")
+            }
+            None => (body_name, vis),
+        };
         self.emit(0, allow);
         // Inline hint on every function body: without it rustc keeps the generated call chains as real calls.
         // inline_policy raises it to #[inline(always)] where the measured policy says so.
-        self.emit_inline(f);
+        if fp.is_some() {
+            self.emit(0, PIN_ALWAYS);
+        } else {
+            self.emit_inline(f);
+        }
         self.emit(0, &format!("{}fn {}({}){} {{", vis, body_name, ps, ret));
         self.cost = !self.verified && f.cost.is_some();
         if self.cost {
@@ -4554,6 +4654,9 @@ fn gen_rust_concrete_core(
     crate::emit_common::set_type_disp(prog.explicit.as_ref().map(|x| x.tdisp.clone()).unwrap_or_default());
     let mut g = Gen::new(prog, verified, trust_callers, budget, foreign_checks);
     g.proven_entries = proven_entries;
+    if proven_entries {
+        g.plan_fp();
+    }
     let mut mark = 0usize;
     let res: R<()> = (|| {
         g.prelude()?;

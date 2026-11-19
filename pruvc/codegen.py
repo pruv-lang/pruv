@@ -1596,6 +1596,64 @@ class Gen:
         if verified and not trust_callers and not s.cost_used:
             from small import plan_small
             s.small, s.small_sites = plan_small(prog, s.fmap, s.layout, s.stack)
+        s.fp = {}    # P18d: {function name: (K, o)} of the by-value fixed-prefix twins (--proven-entries, see plan_fp)
+
+    def plan_fp(s):
+        """P18d: plan the by-value `__pruv_fp` twins; runs after proven_entries is set. The adapter copies the prefix
+        back only when the core returns, so a panic after a write would lose that write: plan only in a verified build
+        (no overflow or index panic) without G10 runtime or par groups, and never for a function that can reach a
+        foreign function, a G6 catalog operation or print (fixed_prefix.may_unwind)."""
+        from fixed_prefix import plan_fp, may_unwind
+        if not (s.verified and not s.g10 and not s.proc and not s.net and not s.ev and not s.par_callees):
+            return
+        cands = []
+        for f in s.prog.functions:
+            if (not s.g5 or f.tparams or f.foreign is not None or f.name in s.entries or f.name in s.body_named
+                    or f.name in s.small or not f.params or s.fmap.get(f.name) is not f
+                    or (not s.verified and f.cost is not None)):
+                continue
+            p = f.params[-1]
+            if p.mode == "inout" and p.type == ARRAY and "&mut " + rty(p.type, True)[1:] == "&mut [i64]":
+                cands.append(f)
+        s.fp = plan_fp(cands, s.fmap, may_unwind(s.prog, s.fmap))
+
+    def fp_items(s, f, ps, ret, param_types, fp):
+        """P18d: the adapter `f` (pinned always) and the by-value twin `f__pruv_fp`; the body follows as `f__pruv_fpb`"""
+        k, o = fp
+        others = ["%s: %s" % (p.name, ty) for p, ty in zip(f.params[:-1], param_types[:-1])]
+        args = [p.name for p in f.params[:-1]]
+        rt = "()" if f.ret == UNIT else ret[4:]
+        s.emit(0, s.allow)
+        s.emit(0, PIN_ALWAYS)
+        s.emit(0, "fn %s(%s)%s {" % (f.name, ps, ret))
+        s.emit(1, "let pruv_fn: usize = if %s.len() < %d { %s.len() } else { %d };" % (o, k, o, k))
+        s.emit(1, "let mut pruv_fa = [0i64; %d];" % k)
+        s.emit(1, "pruv_fa[..pruv_fn].copy_from_slice(&%s[..pruv_fn]);" % o)
+        if k == 1:
+            # one word: (RT, i64) is a scalar pair, returned in registers; (RT, [i64; 1]) is returned through memory
+            s.emit(1, "let (pruv_fr, pruv_f0) = %s__pruv_fp(%s);" % (
+                f.name, ", ".join(args + ["pruv_fa[0]", "pruv_fn"])))
+            s.emit(1, "pruv_fa[0] = pruv_f0;")
+        else:
+            s.emit(1, "let (pruv_fr, pruv_fa) = %s__pruv_fp(%s);" % (
+                f.name, ", ".join(args + ["pruv_fa", "pruv_fn"])))
+        s.emit(1, "%s[..pruv_fn].copy_from_slice(&pruv_fa[..pruv_fn]);" % o)
+        s.emit(1, "pruv_fr")
+        s.emit(0, "}")
+        s.emit(0, "")
+        s.emit(0, s.allow)
+        s.emit_inline(f)
+        if k == 1:
+            s.emit(0, "fn %s__pruv_fp(%s) -> (%s, i64) {" % (
+                f.name, ", ".join(others + ["pruv_f0: i64", "pruv_fn: usize"]), rt))
+            s.emit(1, "let mut pruv_fa = [pruv_f0];")
+        else:
+            s.emit(0, "fn %s__pruv_fp(%s) -> (%s, [i64; %d]) {" % (
+                f.name, ", ".join(others + ["mut pruv_fa: [i64; %d]" % k, "pruv_fn: usize"]), rt, k))
+        s.emit(1, "let pruv_fr = %s__pruv_fpb(%s);" % (f.name, ", ".join(args + ["&mut pruv_fa[..pruv_fn]"])))
+        s.emit(1, "(pruv_fr, pruv_fa[0])" if k == 1 else "(pruv_fr, pruv_fa)")
+        s.emit(0, "}")
+        s.emit(0, "")
 
     def emit_inline(s, f):
         if f.attribute == "cold":
@@ -1742,10 +1800,17 @@ class Gen:
                 s.raw_items.append((f.name, ps, ret, [p.name for p in f.params]))
         else:
             vis = "" if (f.name in s.body_named or s.private(f)) else "pub "   # G3: specializations are private
+        fp = s.fp.get(f.name)
+        if fp is not None:     # P18d: adapter + by-value twin first, then the unchanged body under its new name
+            s.fp_items(f, ps, ret, param_types, fp)
+            body_name, vis = f.name + "__pruv_fpb", ""
         s.emit(0, s.allow)
         # Inline hint on every function body: without it rustc keeps the generated call chains as real calls.
         # inline_policy raises it to #[inline(always)] where the measured policy says so.
-        s.emit_inline(f)
+        if fp is not None:
+            s.emit(0, PIN_ALWAYS)
+        else:
+            s.emit_inline(f)
         s.emit(0, "%sfn %s(%s)%s {" % (vis, body_name, ps, ret))
         s.cost = not s.verified and f.cost is not None
         if s.cost:
@@ -3479,6 +3544,8 @@ def gen_rust_ex(prog, verified=True, trust_callers=False, budget=1 << 30, plan=N
     storage = plan_storage(prog, verified)
     g = Gen(prog, verified, trust_callers, budget, foreign_checks, storage, plan_stack(prog, storage, verified))
     g.proven_entries = proven_entries
+    if proven_entries:
+        g.plan_fp()
     g.prelude()
     mark = len(g.out)
     for f in prog.functions:

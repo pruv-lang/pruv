@@ -1,5 +1,6 @@
 """Check P18b/P18c output parity and the checked-length and by-value Rust host APIs."""
 import argparse
+import re
 import json
 from pathlib import Path
 import shutil
@@ -199,6 +200,259 @@ fn main() {
 """
 
 
+# P18d: an internal function whose last parameter is `inout o: [i64]` and whose uses of `o` have a fixed prefix K gets a
+# by-value twin `NAME__pruv_fp` (`[i64; K]` in and out, a scalar `i64` when K = 1). `g` and `f` are the positive chain (K = 1); the other internal
+# functions must NOT get one: variable index, `inout` passed at a non-last position to a callee with a variable index,
+# `len(o)` in arithmetic, recursion (it has a requires, which the plan skips as well; the cycle rule itself is a Rust
+# unit test in fixed_prefix.rs), and a needed K of 17.
+FP_SOURCE = """\
+fn g(x: i64, inout o: [i64]) -> i64 {
+  if len(o) < 1 { return 3; }
+  o[0] = x;
+  return 0;
+}
+
+fn f(x: i64, inout o: [i64]) -> i64 {
+  let r: i64 = g(x, inout o);
+  return r;
+}
+
+pub fn run(x: i64, inout out: [i64]) -> i64 {
+  let r: i64 = f(x, inout out);
+  return r;
+}
+
+fn rv(i: i64, inout o: [i64]) -> i64 {
+  if i < 0 || i >= len(o) { return 3; }
+  o[i] = 1;
+  return 0;
+}
+
+pub fn run_rv(i: i64, inout out: [i64]) -> i64 {
+  let r: i64 = rv(i, inout out);
+  return r;
+}
+
+fn wr(inout a: [i64], i: i64, v: i64) -> i64 {
+  if i < 0 || i >= len(a) { return 3; }
+  a[i] = v;
+  return 0;
+}
+
+fn viaw(v: i64, inout o: [i64]) -> i64 {
+  let r: i64 = wr(inout o, 0, v);
+  return r;
+}
+
+pub fn run_viaw(v: i64, inout out: [i64]) -> i64 {
+  let r: i64 = viaw(v, inout out);
+  return r;
+}
+
+fn la(inout o: [i64]) -> i64 {
+  if len(o) - 1 < 0 { return 3; }
+  o[0] = 1;
+  return 0;
+}
+
+pub fn run_la(inout out: [i64]) -> i64 {
+  let r: i64 = la(inout out);
+  return r;
+}
+
+fn rec(n: i64, inout o: [i64]) -> i64
+  requires n >= 0
+  decreases n
+{
+  if len(o) < 1 { return 3; }
+  o[0] = n;
+  if n == 0 { return 0; }
+  let r: i64 = rec(n - 1, inout o);
+  return r;
+}
+
+pub fn run_rec(n: i64, inout out: [i64]) -> i64 {
+  if n < 0 { return 2; }
+  let r: i64 = rec(n, inout out);
+  return r;
+}
+
+fn big(inout o: [i64]) -> i64 {
+  if len(o) < 17 { return 3; }
+  o[16] = 1;
+  return 0;
+}
+
+pub fn run_big(inout out: [i64]) -> i64 {
+  let r: i64 = big(inout out);
+  return r;
+}
+"""
+
+# Appended to FP_SOURCE (must-reject): print can panic after a write, so a function that reaches print, directly (pw)
+# or through a callee that does not take `o` (pc), gets no twin; so does one that reaches a G6 catalog operation, whose
+# boundary helper panics on a failed check or an exhausted check budget (pk directly, pkc through ap); g and f keep theirs.
+FP_PRINT = """
+fn say(x: i64) -> i64 ! io {
+  print(x);
+  return x;
+}
+
+fn pw(x: i64, inout o: [i64]) -> i64 ! io {
+  if len(o) < 1 { return 3; }
+  o[0] = x;
+  print(x);
+  return 0;
+}
+
+fn pc(x: i64, inout o: [i64]) -> i64 ! io {
+  if len(o) < 1 { return 3; }
+  o[0] = x;
+  let r: i64 = say(x);
+  return 0;
+}
+
+pub fn run_p(x: i64, inout out: [i64]) -> i64 ! io {
+  let a: i64 = pw(x, inout out);
+  if a != 0 { return a; }
+  let b: i64 = pc(x, inout out);
+  return b;
+}
+fn ap(t: str) -> i64 ! alloc
+{
+  let s: String = string_new();
+  let r: String = string_push_str(move s, t);
+  return len(r);
+}
+
+fn pk(t: str, inout o: [i64]) -> i64 ! alloc
+{
+  if len(o) < 1 { return 3; }
+  o[0] = 7;
+  let s: String = string_new();
+  let r: String = string_push_str(move s, t);
+  return 0;
+}
+
+fn pkc(t: str, inout o: [i64]) -> i64 ! alloc
+{
+  if len(o) < 1 { return 3; }
+  o[0] = 7;
+  let n: i64 = ap(t);
+  return 0;
+}
+
+pub fn run_k(t: str, inout out: [i64]) -> i64 ! alloc
+{
+  let a: i64 = pk(t, inout out);
+  if a != 0 { return a; }
+  let b: i64 = pkc(t, inout out);
+  return b;
+}
+"""
+
+# Buffers of length 0, 1, 4, 17 and 20 are pre-filled with 9; only the one expected word may change.
+FP_HOST = """\
+include!("fp_gen.rs");
+
+fn probe(name: &str, f: &dyn Fn(&mut [i64]) -> i64, min: usize, idx: usize, val: i64, ok: i64, bad: i64) {
+    for len in [0usize, 1, 4, 17, 20] {
+        let mut buf = [9i64; 20];
+        let got = f(&mut buf[..len]);
+        let mut want = [9i64; 20];
+        if len >= min { want[idx] = val; }
+        assert_eq!(got, if len >= min { ok } else { bad }, "{name} len {len}");
+        assert_eq!(buf, want, "{name} len {len}");
+    }
+}
+
+fn main() {
+    probe("run", &|o| run(5, o), 1, 0, 5, 0, 3);
+    probe("run_rv", &|o| run_rv(0, o), 1, 0, 1, 0, 3);
+    probe("run_viaw", &|o| run_viaw(7, o), 1, 0, 7, 0, 3);
+    probe("run_la", &|o| run_la(o), 1, 0, 1, 0, 3);
+    probe("run_rec", &|o| run_rec(3, o), 1, 0, 0, 0, 3);
+    probe("run_big", &|o| run_big(o), 17, 16, 1, 0, 3);
+    probe("proven run", &|o| pruv_proven::run(5, PruvArr::new_mut(o)), 1, 0, 5, 0, 3);
+    probe("proven run_rv", &|o| pruv_proven::run_rv(0, PruvArr::new_mut(o)), 1, 0, 1, 0, 3);
+    probe("proven run_viaw", &|o| pruv_proven::run_viaw(7, PruvArr::new_mut(o)), 1, 0, 7, 0, 3);
+    probe("proven run_la", &|o| pruv_proven::run_la(PruvArr::new_mut(o)), 1, 0, 1, 0, 3);
+    probe("proven run_rec", &|o| pruv_proven::run_rec(3, PruvArr::new_mut(o)), 1, 0, 0, 0, 3);
+    probe("proven run_big", &|o| pruv_proven::run_big(PruvArr::new_mut(o)), 17, 16, 1, 0, 3);
+    assert_eq!(pruv_proven::val::run::<0>(5), (3, [0i64; 0]));
+    assert_eq!(pruv_proven::val::run::<1>(5), (0, [5]));
+    assert_eq!(pruv_proven::val::run::<4>(5), (0, [5, 0, 0, 0]));
+    assert_eq!(pruv_proven::val::run_rv::<2>(1), (0, [0, 1]));
+    assert_eq!(pruv_proven::val::run_viaw::<1>(7), (0, [7]));
+    assert_eq!(pruv_proven::val::run_la::<1>(), (0, [1]));
+    assert_eq!(pruv_proven::val::run_rec::<1>(3), (0, [0]));
+    assert_eq!(pruv_proven::val::run_big::<16>(), (3, [0i64; 16]));
+}
+"""
+
+
+def check_fixed_prefix(work, drivers, rustc):
+    """P18d: the by-value twin exists exactly for the proved functions, both compilers print the same text, and the
+    optimized host probes (normal entry, proven twin, val::<K>) see the same results and untouched words."""
+    source = work / "fp.pruv"
+    source.write_text(FP_SOURCE, encoding="utf-8")
+    flag = "--proven-entries"
+    for flags in ((), ("--trust-callers",), ("--no-verify",)):
+        plain = [compile_source(driver, source, work / "fp_plain.rs", flags) for driver in drivers]
+        proven = [compile_source(driver, source, work / "fp_gen.rs", (*flags, flag)) for driver in drivers]
+        assert plain[0] == plain[1], "fixed-prefix plain output differs"
+        assert proven[0] == proven[1], "fixed-prefix proven output differs"
+        assert b"__pruv_fp" not in plain[0], "twin without --proven-entries"
+        code = unwrap(proven[0])
+        if flags == ("--no-verify",):
+            # must-reject: an unverified build may panic inside a body (overflow, index), and the adapter would drop
+            # the words written before the panic; the plan needs a verified, unwind-free program
+            assert b"__pruv_fp" not in code, "twin in a --no-verify build"
+        else:
+            check_fp_twins(code)
+            # must-reject: print and G6 catalog operations can panic after a write, so a function that reaches one gets
+            # no twin (checked in every --foreign-checks mode: requires, all, off)
+            printing = work / "fp_print.pruv"
+            printing.write_text(FP_SOURCE + FP_PRINT, encoding="utf-8")
+            for mode in ("requires", "all", "off"):
+                fc = ("--foreign-checks", mode)
+                outs = [compile_source(driver, printing, work / "fp_print.rs", (*flags, flag, *fc)) for driver in drivers]
+                assert outs[0] == outs[1], "fixed-prefix print output differs"
+                code = unwrap(outs[0])
+                check_fp_twins(code)
+                for name in (b"say", b"pw", b"pc", b"run_p", b"ap", b"pk", b"pkc", b"run_k"):
+                    assert re.search(rb"\nfn \w*" + name + rb"__pruv_fpb?\(", code) is None, (mode, name)
+        if flags == ("--trust-callers",):
+            continue
+        (work / "main.rs").write_text(FP_HOST, encoding="utf-8")
+        edition = () if not flags else ("--edition", "2021")
+        result = run([rustc, *edition, "-C", "opt-level=3", str(work / "main.rs"), "-o", str(work / "host")])
+        assert result.returncode == 0, result.stderr
+        result = run([str(work / "host")])
+        assert result.returncode == 0, result.stderr
+
+
+def check_fp_twins(code):
+    """twins exactly for g and f"""
+    # private functions carry the module prefix (e.g. pruv_m_..._g); take it from g's twin
+    found = re.search(rb"\nfn (\w*?)g__pruv_fp\(", code)
+    assert found, "no twin for g"
+    pre = found.group(1)
+    for name in (b"g", b"f"):
+        assert b"\nfn " + pre + name + b"__pruv_fp(" in code, name
+        assert b"\nfn " + pre + name + b"__pruv_fpb(" in code, name
+    # K = 1: the word travels as a scalar (`(i64, i64)` is returned in registers, `(i64, [i64; 1])` through memory)
+    assert b"\nfn " + pre + b"g__pruv_fp(x: i64, pruv_f0: i64, pruv_fn: usize) -> (i64, i64) {" in code
+    assert b"\nfn " + pre + b"f__pruv_fp(x: i64, pruv_f0: i64, pruv_fn: usize) -> (i64, i64) {" in code
+    assert b"let (pruv_fr, pruv_f0) = " + pre + b"g__pruv_fp(x, pruv_fa[0], pruv_fn);" in code
+    assert code.count(b"__pruv_fp(") == 4, "twins beyond g and f"
+    for name in (b"run", b"rv", b"run_rv", b"wr", b"viaw", b"run_viaw", b"la", b"run_la", b"rec", b"run_rec",
+                 b"big", b"run_big"):
+        for p in (b"", pre):
+            assert b"\nfn " + p + name + b"__pruv_fp(" not in code, name
+            assert b"\nfn " + p + name + b"__pruv_fpb(" not in code, name
+
+
 def inline_attr(code, name):
     lines = code.splitlines()
     index = next(i for i, line in enumerate(lines) if line.lstrip().startswith(b"pub fn " + name + b"("))
@@ -343,6 +597,8 @@ def main(work, rs, py):
     assert result.returncode == 0, result.stderr
     result = run([str(work / "host")])
     assert result.returncode == 0, result.stderr
+    check_fixed_prefix(work, drivers, rustc)
+    print("P18d: by-value fixed-prefix twins in 3 compiler modes, 5 must-reject shapes, no twin under --no-verify or reaching print or a G6 catalog operation, 2 optimized host runs")
     print("P18b/P18c: parity in 3 compiler modes and 2 manifest modes, 3 host runs, privacy, %d body rejects, %d macro shadows and diagnostics pass" % (rejects, shadows))
 
 
