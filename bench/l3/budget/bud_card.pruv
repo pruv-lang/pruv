@@ -11,6 +11,7 @@
 // Named sub-operations (all pub):
 //   v_end(v, at) -> i64                     end offset of the V value at `at`, -1 if malformed / out of range (depth <= 32)
 //   obj_get(v, at, key: str) -> i64         offset of the value of the LAST pair with key `key` in the V object at `at`
+//   budget_pos(v, at, end) -> BudgetPos    offsets of id, state and card in an exact budget V region (last pair wins)
 //   j_ok(b) -> bool                         admission: b is exactly one well-formed JB value (canonical WTF-8, depth <= 32)
 //   j_end(b, at) -> i64                     end of the JB value at `at`, -1 if malformed
 //   card_at(b, at) -> Keys                  value positions of the card fields, one pass over the pairs (last pair wins)
@@ -19,9 +20,11 @@
 //   check_required(b, f) -> i64             0 ok, 1 deliverable, 2 done
 //   check_optional(b, f) -> i64             0 ok, else the first failing of 3 targets, 4 verify, 5 conflicts, 6 state
 //   validate(b, f) -> i64                   required then optional
+//   put_card_words(inout o, p0, b, f, by, by_at, iso) -> i64   write at p0 and return the end (empty o: size pass)
 //   build(b, f, by, by_at, now_ms) -> [i64] the stored card (deliverable, done, updatedAt, targets?, verify?, conflicts?, state?, by?)
 //   lang_code(lang) -> i64                  1 iff the packet is the string "en" (empty packet = absent -> 0)
 //   truthy(v, at) -> bool                   JS truthiness of a V value
+//   judge(found, closed, card, at, lang) -> Judged   setCard checks and error text
 //   set_card(found, closed, card, at, lang, by, by_at, now_ms) -> SetCard
 //   has_card(budget, at) -> bool            Boolean(budget.card)
 //   put_card(budget, at, card) -> [i64]     budget object with "card" replaced in place, or appended at the end
@@ -104,6 +107,82 @@ pub fn v_end(v: [i64], at: i64) -> i64
   return v_end_d(v, at, 1);
 }
 
+// every unit of v[s .. s+n) is in 0..65535 (u is iff band(u, -65536) == 0, and OR keeps that over all units)
+fn units_ok(v: [i64], s: i64, n: i64) -> bool
+  requires 0 <= s && 0 <= n && s + n <= len(v)
+{
+  let mut acc: i64 = 0;
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && 0 <= s && s + n <= len(v)
+    decreases n - j
+  {
+    acc = bor(acc, v[s + j]);
+    j = j + 1;
+  }
+  return band(acc, -65536) == 0;
+}
+
+// v_end_d plus the ABI unit range of every string and key (tag 6: units 0..65535). Load-time only: the resident
+// walks (budget_pos) take the stored words as checked here and skip strings in O(1).
+fn v_end_u(v: [i64], at: i64, depth: i64) -> i64
+  requires 0 <= depth && depth <= 33
+  ensures result == -1 || (at < result && result <= len(v))
+  decreases 33 - depth
+{
+  if depth > 32 { return -1; }
+  let n: i64 = len(v);
+  if at < 0 || at >= n { return -1; }
+  let t: i64 = v[at];
+  if t >= 1 && t <= 4 { return at + 1; }
+  if t == 5 || t == 7 {
+    if n - at < 2 { return -1; }
+    return at + 2;
+  }
+  if t == 6 {
+    if n - at < 2 { return -1; }
+    let c: i64 = v[at + 1];
+    if c < 0 || c > n - at - 2 { return -1; }
+    if !units_ok(v, at + 2, c) { return -1; }
+    return at + 2 + c;
+  }
+  if t == 8 || t == 9 {
+    if n - at < 2 { return -1; }
+    let cnt: i64 = v[at + 1];
+    if cnt < 0 || cnt > n - at - 2 { return -1; }
+    let mut pos: i64 = at + 2;
+    let mut i: i64 = 0;
+    while i < cnt
+      invariant 0 <= i && i <= cnt && at < pos && pos <= n && n == len(v) && 0 <= at && at < n && 0 <= depth && depth <= 32
+      decreases cnt - i
+    {
+      let mut vs: i64 = pos;
+      if t == 9 {
+        if pos >= n { return -1; }
+        let kn: i64 = v[pos];
+        if kn < 0 || kn > n - pos - 1 { return -1; }
+        if !units_ok(v, pos + 1, kn) { return -1; }
+        vs = pos + 1 + kn;
+      }
+      let e: i64 = v_end_u(v, vs, depth + 1);
+      if e < 0 { return -1; }
+      if e <= pos { return -1; }
+      pos = e;
+      i = i + 1;
+    }
+    return pos;
+  }
+  return -1;
+}
+
+// End of a stored budget V (-1 = refused): the shape, the unit range, and depth counted from 2, because setCard
+// returns the stored budget inside {ok, budget} (ABI depth <= 32 for that result).
+pub fn v_stored_end(v: [i64], at: i64) -> i64
+  ensures result == -1 || (at < result && result <= len(v))
+{
+  return v_end_u(v, at, 2);
+}
+
 fn tag(v: [i64], at: i64) -> i64
 {
   if at < 0 { return 0; }
@@ -176,6 +255,54 @@ pub fn obj_get(v: [i64], at: i64, key: str) -> i64
     i = i + 1;
   }
   return found;
+}
+
+pub struct BudgetPos { ok: bool, id: i64, state: i64, card: i64, card_end: i64 }
+
+fn no_budget_pos() -> BudgetPos
+  ensures !result.ok
+{
+  return BudgetPos { ok: false, id: -1, state: -1, card: -1, card_end: -1 };
+}
+
+pub fn budget_pos(v: [i64], at: i64, end: i64) -> BudgetPos
+  ensures !result.ok || (0 <= at && at + 2 <= end && end <= len(v))
+  ensures !result.ok || ((result.card == -1 && result.card_end == -1) || (at <= result.card && result.card < result.card_end && result.card_end <= end))
+{
+  if end > len(v) || at < 0 || end < 2 || at > end - 2 { return no_budget_pos(); }
+  if v[at] != 9 { return no_budget_pos(); }
+  let cnt: i64 = v[at + 1];
+  if cnt < 0 || cnt > end - at - 2 { return no_budget_pos(); }
+  let mut pos: i64 = at + 2;
+  let mut i: i64 = 0;
+  let mut id: i64 = -1;
+  let mut state: i64 = -1;
+  let mut card: i64 = -1;
+  let mut card_end: i64 = -1;
+  while i < cnt
+    invariant 0 <= i && i <= cnt && 0 <= at && at + 2 <= pos && pos <= end && end <= len(v)
+    invariant (card == -1 && card_end == -1) || (at <= card && card < card_end && card_end <= pos)
+    decreases cnt - i
+  {
+    if pos >= end { return no_budget_pos(); }
+    let kn: i64 = v[pos];
+    if kn < 0 || kn > end - pos - 1 { return no_budget_pos(); }
+    let vs: i64 = pos + 1 + kn;
+    // field values sit at depth 3 of the setCard result {ok, budget: {.., key: value}} (the bound of v_stored_end)
+    let e: i64 = v_end_d(v, vs, 3);
+    if e < 0 || e > end { return no_budget_pos(); }
+    // ASCII keys: id, state, card.
+    if kn == 2 && v[pos + 1] == 105 && v[pos + 2] == 100 { id = vs; }
+    else if kn == 5 && v[pos + 1] == 115 && v[pos + 2] == 116 && v[pos + 3] == 97 && v[pos + 4] == 116 && v[pos + 5] == 101 { state = vs; }
+    else if kn == 4 && v[pos + 1] == 99 && v[pos + 2] == 97 && v[pos + 3] == 114 && v[pos + 4] == 100 {
+      card = vs;
+      card_end = e;
+    }
+    pos = e;
+    i = i + 1;
+  }
+  if pos != end { return no_budget_pos(); }
+  return BudgetPos { ok: true, id: id, state: state, card: card, card_end: card_end };
 }
 
 // present = the key exists and its value is not undefined (TS `input.x !== undefined`)
@@ -993,7 +1120,53 @@ fn truthy_b(b: [u8], p: i64) -> bool
   return false;
 }
 
-fn put_card_words(inout o: [i64], b: [u8], f: Keys, by: [u8], by_at: i64, iso: [i64]) -> i64 ! alloc
+pub fn put_card_words(inout o: [i64], p0: i64, b: [u8], f: Keys, by: [u8], by_at: i64, iso: [i64]) -> i64 ! alloc
+  requires 0 <= p0 && p0 <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776 && len(o) == len(old(o))
+{
+  let has_by: bool = by_at >= 0 && truthy_b(by, by_at);
+  let mut k: i64 = 3;
+  if b_present(b, f.p2) { k = k + 1; }
+  if b_present(b, f.p3) { k = k + 1; }
+  if b_present(b, f.p4) { k = k + 1; }
+  if b_present(b, f.p5) { k = k + 1; }
+  if has_by { k = k + 1; }
+  let mut q: i64 = put(inout o, p0, 9);
+  q = put(inout o, q, k);
+  q = put_key(inout o, q, "deliverable");
+  q = put_trimmed(inout o, q, b, f.p0);
+  q = put_key(inout o, q, "done");
+  q = put_lines(inout o, q, b, f.p1);
+  q = put_key(inout o, q, "updatedAt");
+  q = put(inout o, q, 6);
+  q = put(inout o, q, len(iso));
+  q = put_words(inout o, q, iso, 0, len(iso));
+  if b_present(b, f.p2) {
+    q = put_key(inout o, q, "targets");
+    q = put_targets(inout o, q, b, f.p2);
+  }
+  if b_present(b, f.p3) {
+    q = put_key(inout o, q, "verify");
+    q = put_verify(inout o, q, b, f.p3);
+  }
+  if b_present(b, f.p4) {
+    q = put_key(inout o, q, "conflicts");
+    q = put_lines(inout o, q, b, f.p4);
+  }
+  if b_present(b, f.p5) {
+    q = put_key(inout o, q, "state");
+    q = put_text(inout o, q, b, f.p5);
+  }
+  if has_by {
+    q = put_key(inout o, q, "by");
+    q = put_by(inout o, q, by, by_at);
+  }
+  return q;
+}
+
+// put_card_words at p0 = 0 for build (perf A/C): the constant start lets the writers' positions fold; the p0 form
+// alone measured A/C 2-6% slower on median (P26 appendix). Same words as put_card_words(o, 0, ...).
+fn put_card_words0(inout o: [i64], b: [u8], f: Keys, by: [u8], by_at: i64, iso: [i64]) -> i64 ! alloc
   ensures 0 <= result && result <= 1099511627776 && len(o) == len(old(o))
 {
   let has_by: bool = by_at >= 0 && truthy_b(by, by_at);
@@ -1042,9 +1215,9 @@ pub fn build(b: [u8], f: Keys, by: [u8], by_at: i64, now_ms: i64) -> [i64] ! all
 {
   let iso: [i64] = crate::bud_date::iso(now_ms);
   let mut dry: [i64] = crate::ent_u16::empty();
-  let size: i64 = put_card_words(inout dry, b, f, by, by_at, iso);
+  let size: i64 = put_card_words0(inout dry, b, f, by, by_at, iso);
   let mut o: [i64] = crate::ent_u16::zeros(size);
-  let w: i64 = put_card_words(inout o, b, f, by, by_at, iso);
+  let w: i64 = put_card_words0(inout o, b, f, by, by_at, iso);
   return o;
 }
 
@@ -1186,22 +1359,36 @@ pub fn put_card(budget: [i64], at: i64, card: [i64]) -> [i64] ! alloc
 // kind: -1 ok (card set), 0 missing (no session / stale ref / closed), 1..6 the first failing field.
 // used_now: deps.now() was read (KD-1, §15 row 18: right after `done` passes, before the optional fields).
 // card / by are admitted JB packets (j_ok) with the value at `at` / `by_at` (-1 = absent).
+pub struct Judged { kind: i64, used_now: bool, f: Keys, error: [i64] }
+
+pub fn judge(found: bool, closed: bool, card: [u8], at: i64, lang: i64) -> Judged ! alloc
+  requires 0 <= lang && lang <= 1
+  ensures -1 <= result.kind && result.kind <= 6
+  ensures result.kind >= 0 || found
+{
+  if !found || closed {
+    return Judged { kind: 0, used_now: false, f: no_keys(), error: crate::bud_text::card_error(0, lang) };
+  }
+  let f: Keys = card_at(card, at);
+  let r: i64 = check_required(card, f);
+  if r != 0 {
+    return Judged { kind: r, used_now: false, f: f, error: crate::bud_text::card_error(r, lang) };
+  }
+  let o: i64 = check_optional(card, f);
+  if o != 0 {
+    return Judged { kind: o, used_now: true, f: f, error: crate::bud_text::card_error(o, lang) };
+  }
+  return Judged { kind: -1, used_now: true, f: f, error: crate::ent_u16::empty() };
+}
+
 pub fn set_card(found: bool, closed: bool, card: [u8], at: i64, lang: i64, by: [u8], by_at: i64, now_ms: i64) -> SetCard ! alloc
   requires 0 <= lang && lang <= 1
   requires -8640000000000000 <= now_ms && now_ms <= 8640000000000000
   ensures -1 <= result.kind && result.kind <= 6
 {
-  if !found || closed {
-    return SetCard { kind: 0, used_now: false, card: crate::ent_u16::empty(), error: crate::bud_text::card_error(0, lang) };
+  let j: Judged = judge(found, closed, card, at, lang);
+  if j.kind >= 0 {
+    return SetCard { kind: j.kind, used_now: j.used_now, card: crate::ent_u16::empty(), error: copy(j.error) };
   }
-  let f: Keys = card_at(card, at);
-  let r: i64 = check_required(card, f);
-  if r != 0 {
-    return SetCard { kind: r, used_now: false, card: crate::ent_u16::empty(), error: crate::bud_text::card_error(r, lang) };
-  }
-  let o: i64 = check_optional(card, f);
-  if o != 0 {
-    return SetCard { kind: o, used_now: true, card: crate::ent_u16::empty(), error: crate::bud_text::card_error(o, lang) };
-  }
-  return SetCard { kind: -1, used_now: true, card: build(card, f, by, by_at, now_ms), error: crate::ent_u16::empty() };
+  return SetCard { kind: j.kind, used_now: j.used_now, card: build(card, j.f, by, by_at, now_ms), error: crate::ent_u16::empty() };
 }
