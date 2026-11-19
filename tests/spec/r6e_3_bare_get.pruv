@@ -1,0 +1,9 @@
+// spec: R-6e-3 reject
+struct Record { hits: i64, log: Vec<i64> }
+
+fn first(v: Vec<Record>) -> i64
+  requires len(v) >= 1
+{
+  let r: Record = vec_get::<Record>(v, 0);
+  return r.hits;
+}

@@ -498,7 +498,8 @@ pub struct Model {
     /// names of non-generic types that are recursive or (transitively) contain a recursive type
     recrel: HashSet<String>,
     /// `false` = "int" (i64/u8/str elements), `true` = "bool": buffer datatypes built lazily
-    bufs: RefCell<HashMap<bool, BufFns>>,
+    bufs: RefCell<HashMap<String, BufFns>>,
+    maps: RefCell<HashMap<String, (Sort, StructFns)>>,
     buf_names: RefCell<HashSet<String>>,
     /// lazily declared uninterpreted `size!<Name>` / `wf!<Name>` functions
     size_f: RefCell<HashMap<String, FuncDecl>>,
@@ -659,6 +660,7 @@ impl Model {
             scc_of: HashMap::new(),
             recrel: HashSet::new(),
             bufs: RefCell::new(HashMap::new()),
+            maps: RefCell::new(HashMap::new()),
             buf_names: RefCell::new(HashSet::new()),
             size_f: RefCell::new(HashMap::new()),
             wf_f: RefCell::new(HashMap::new()),
@@ -743,6 +745,9 @@ impl Model {
         if Self::is_buf(ft) {
             return Ok((self.bufsort(ft)?, None));
         }
+        if matches!(ft.coll(), Some(Coll::Map(..))) {
+            return Ok((self.map_field(ft)?.0, None));
+        }
         Ok((self.try_sort_of(ft)?, None))
     }
 
@@ -824,8 +829,7 @@ impl Model {
         match ty {
             Ty::Array(_) | Ty::Str => true,
             Ty::User(n) => n == "string",
-            Ty::Inst(g) => g.owner.is_none() && g.name == "vec"
-                && matches!(g.args.as_slice(), [t] if *t == GType::i64() || *t == GType::bool()),
+            Ty::Inst(g) => g.owner.is_none() && g.name == "vec",
             _ => false,
         }
     }
@@ -837,6 +841,7 @@ impl Model {
             Ty::Array(Elem::U8) | Ty::Str => Elem::U8,
             Ty::User(n) if n == "string" => Elem::U8,
             Ty::Inst(g) if g.name == "vec" && g.args.first() == Some(&GType::bool()) => Elem::Bool,
+            Ty::Inst(g) if g.name == "vec" && g.args.first() != Some(&GType::i64()) => Elem::Abs,
             _ => Elem::I64,
         }
     }
@@ -844,12 +849,18 @@ impl Model {
     /// verify.py `Model.bufsort` (the whole `bufs` entry): datatype Buf(len: Int, arr: Array(Int, elem sort)); one per element
     /// sort (Int for i64/u8/str, Bool).
     pub fn buf_entry(&self, ty: &Ty) -> Result<BufFns, String> {
-        let key = Self::buf_elem(ty) == Elem::Bool;
+        let (key, esort) = match Self::buf_elem(ty) {
+            Elem::Bool => ("bool".to_string(), self.bool_sort.clone()),
+            Elem::Abs => {
+                let elem = &ty.args()[0];
+                (elem.to_key(), self.try_sort_of(&Ty::from_gtype(elem))?)
+            }
+            _ => ("int".to_string(), self.int_sort.clone()),
+        };
         if let Some(e) = self.bufs.borrow().get(&key) {
             return Ok(e.clone());
         }
-        let tag = format!("{}buf!{}", self.pre_tag, if key { "bool" } else { "int" });
-        let esort = if key { self.bool_sort.clone() } else { self.int_sort.clone() };
+        let tag = format!("{}buf!{}", self.pre_tag, key);
         let arr_sort = self.z.array_sort(&self.int_sort, &esort);
         let spec = DtSpec {
             name: tag.clone(),
@@ -1368,6 +1379,33 @@ impl Model {
     }
 
     /// `Model.try_sort_of` (Python `sort_of` raises `KeyError(name)` when there is no sort).
+    pub fn map_field(&self, ty: &Ty) -> Result<(Sort, StructFns), String> {
+        let key = ty.to_gtype().to_key();
+        let tag = format!("{}map!{}", self.pre_tag, key);
+        if let Some(f) = self.maps.borrow().get(&key) {
+            return Ok(f.clone());
+        }
+        let Some(Coll::Map(k, v)) = ty.coll() else { return Err(nokey(ty.name())) };
+        let ks = self.try_sort_of(&Ty::from_gtype(&k))?;
+        let vs = self.try_sort_of(&Ty::from_gtype(&v))?;
+        let spec = DtSpec {
+            name: tag.clone(),
+            ctors: vec![DtCtorSpec {
+                name: format!("{}.mk", tag),
+                fields: vec![
+                    (format!("{}.d", tag), self.z.array_sort(&ks, &self.bool_sort)),
+                    (format!("{}.a", tag), self.z.array_sort(&ks, &vs)),
+                    (format!("{}.len", tag), self.int_sort.clone()),
+                ],
+            }],
+        };
+        let DtSort { sort, mut ctors } = self.z.create_datatypes(&[spec]).pop().ok_or("datatype")?;
+        let DtCtor { ctor, accs, .. } = ctors.pop().ok_or("datatype")?;
+        let f = StructFns { ctor, accs };
+        self.maps.borrow_mut().insert(key, (sort.clone(), f.clone()));
+        Ok((sort, f))
+    }
+
     pub fn try_sort_of(&self, ty: &Ty) -> Result<Sort, String> {
         match ty {
             Ty::I64 => Ok(self.int_sort.clone()),

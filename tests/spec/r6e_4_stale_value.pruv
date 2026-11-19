@@ -1,0 +1,17 @@
+// spec: R-6e-4 reject
+struct Rec { hits: i64 }
+
+fn f() -> i64 ! alloc
+  ensures result == 5
+{
+  let m0: HashMap<i64, Rec> = map_new::<i64, Rec>();
+  let mut m: HashMap<i64, Rec> = map_insert::<i64, Rec>(move m0, 3, Rec { hits: 5 });
+  match map_get_mut::<i64, Rec>(inout m, 3) {
+    Some(r) => { r.hits = r.hits + 1; }
+    None => { }
+  }
+  match map_get::<i64, Rec>(m, 3) {
+    Some(r) => { return r.hits; }
+    None => { return 0; }
+  }
+}

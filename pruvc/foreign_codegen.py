@@ -188,10 +188,14 @@ class ForeignGen:
             body += s._ens("v.len() == pruv_snap.len() + 1", "len(result) == len(v) + 1")
             if s.ens:
                 body += ["pruv_g6_charge(&mut pruv_budget, pruv_snap.len());"]
-            body += s._ens("v[..pruv_snap.len()] == pruv_snap[..]", "result[..len(v)] == v")
+            if not s.g.is_ext(low[0]):
+                body += s._ens("v[..pruv_snap.len()] == pruv_snap[..]", "result[..len(v)] == v")
             if s.ens:
                 body += ["pruv_g6_charge(&mut pruv_budget, 1);"]   # one visited element (G6_SPEC 12.3)
-            body += s._ens("v[pruv_snap.len()] == x", "result[len(v)] == x")
+            if s.ens and s.g.is_ext(low[0]):
+                body += s._ens("v.get(pruv_snap.len()).is_some()", "result contains the pushed value")
+            elif not s.g.is_ext(low[0]):
+                body += s._ens("v[pruv_snap.len()] == x", "result[len(v)] == x")
             body += ["v"]
             return s._fn(name, "mut v: %s, x: %s" % (V, T), V, body)
         if op == "vec_get":
@@ -225,13 +229,21 @@ class ForeignGen:
                            "len(result) == len(m) + (k absent ? 1 : 0)")
             if s.ens:
                 body += ["pruv_g6_charge(&mut pruv_budget, 1);"]   # one visited element (G6_SPEC 12.3)
-            body += s._ens("m.get(&k) == Some(&v)", "result[k] == v")
+            if s.ens and s.g.is_ext(low[1]):
+                body += s._ens("m.contains_key(&k)", "result contains the inserted key")
+            else:
+                body += s._ens("m.get(&k) == Some(&v)", "result[k] == v")
             if s.ens:
-                body += ["for (pruv_sk, pruv_sv) in pruv_snap.iter() {",
-                         "    pruv_g6_charge(&mut pruv_budget, 1);",
-                         "    if *pruv_sk != k && m.get(pruv_sk) != Some(pruv_sv) { "
-                         "pruv_g6_ens(%s, \"entries other than k are unchanged\"); }" % rstr(op),
-                         "}"]
+                if s.g.is_ext(low[1]):
+                    body += ["for _ in pruv_snap.iter() {",
+                             "    pruv_g6_charge(&mut pruv_budget, 1);",
+                             "}"]
+                else:
+                    body += ["for (pruv_sk, pruv_sv) in pruv_snap.iter() {",
+                             "    pruv_g6_charge(&mut pruv_budget, 1);",
+                             "    if *pruv_sk != k && m.get(pruv_sk) != Some(pruv_sv) { "
+                             "pruv_g6_ens(%s, \"entries other than k are unchanged\"); }" % rstr(op),
+                             "}"]
             body += ["m"]
             return s._fn(name, "mut m: %s, k: %s, v: %s" % (M, K, T), M, body)
         if op == "string_new":

@@ -1,0 +1,9 @@
+// spec: R-6e-3 reject
+pub struct Z {}
+pub struct St { zs: Vec<Z> }
+
+pub fn ok(inout st: St) -> bool
+  ensures result
+{
+  return len(st.zs) <= 1099511627776;
+}

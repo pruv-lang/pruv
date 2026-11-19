@@ -1,0 +1,6 @@
+// spec: R-6g-2 reject
+struct Pair<A> { a: A, b: A }
+
+fn swap(inout p: Pair<i64>) -> () {
+  p.a = p.b;
+}

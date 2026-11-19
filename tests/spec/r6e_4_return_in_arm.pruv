@@ -1,0 +1,11 @@
+// spec: R-6e-4 reject
+struct Record { hits: i64, log: Vec<i64> }
+struct St { count: i64, recs: HashMap<i64, Record> }
+
+fn touch(inout st: St, k: i64) -> i64 {
+  match map_get_mut::<i64, Record>(inout st.recs, k) {
+    Some(r) => { r.hits = 1; return 0; }
+    None => { }
+  }
+  return 1;
+}

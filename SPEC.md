@@ -459,12 +459,36 @@ fn tree_count(t: Tree) -> i64
   aggregate and says owned collection fields need the Rust backend.
 - R-6e-2 **Moving a field into its replacement.** `move p.f` is permitted only as a direct `take` argument
   of a call whose result is assigned back to the same field, as in
-  `p.f = vec_push::<i64>(move p.f, 5);`. The receiver `p` must be a `let mut` local and `f` an owned
-  collection field. Apart from the assignment target and the move, `p` may not occur anywhere in the
+  `p.f = vec_push::<i64>(move p.f, 5);`. The receiver `p` must be a `let mut` local, a struct `inout` parameter (R-6g-2) or
+  the `Some` binder of R-6e-4, and `f` an owned collection field. Apart from the assignment target and the move, `p` may not occur anywhere in the
   statement. Other field moves are `type/foreign_move`, with a diagnostic saying a field can be moved only
   into a call whose result is assigned back to the same field. The callee takes the old field value and the
   assignment stores its result. Rust passes it with `::std::mem::take(&mut p.f)` without cloning. An active
   match borrow of `p` still makes the assignment `type/recursive_borrow`.
+- R-6e-3 **Collections of owned aggregates.** An owned aggregate is a non-generic, non-recursive struct whose
+  fields are scalars, plain value types or R-6e-1 owned fields. `Vec<S>` and `HashMap<i64, S>` with an owned
+  aggregate `S` are allowed wherever a collection type is allowed, including catalog type arguments. A state
+  struct is a non-generic struct that may also have fields of these two types. Nesting stops there: an owned
+  aggregate may not hold such fields and a state struct is not a payload (`type/foreign_owned_type`).
+  A zero-sized struct (no fields, or only zero-sized struct fields) is not a `Vec` element or `HashMap`
+  value either (`type/foreign_owned_type`), because the verifier bounds collection lengths by memory.
+  `vec_push::<S>` and `map_insert::<i64, S>` move the element in without cloning. The element must be a
+  constructor, a call result or `move y`; anything else is `type/foreign_move`. When `S` has owned fields,
+  `vec_get::<S>(v, i)` is allowed only as the receiver of a field access (`vec_get::<S>(v, i).f`, Rust
+  `v[i as usize].f`, or `get_unchecked` under R-6d-2), and `map_get::<i64, S>(m, k)` only as a direct `match`
+  scrutinee whose `Some(r)` binds a borrowed view (Rust `match m.get(&k)`). Other uses of those reads are
+  `type/foreign_owned_type`. A plain `S` keeps the copying reads.
+- R-6e-4 **In-place map element update.** `map_get_mut::<K, V>(inout P, k)` is allowed only as the direct
+  scrutinee of a `match` statement; elsewhere it is `type/foreign_contract`. `P` must be a `let mut` local,
+  an `inout` parameter or a field path of either, of type `HashMap<K, V>` (`type/inout_argument`). `k` is
+  evaluated once and may not mention the root of `P` (`type/inout_alias`). In the `Some(r)` arm `r` is an
+  inout view of the element. The arm may read and assign its fields, use R-6e-2 on `r.f` and pass `inout r`.
+  It may not return, reassign, move or store `r`. The root of `P` may not be mentioned in the arm
+  (`type/recursive_borrow`). The arm may not contain `return`, `break` or `continue` (`type/foreign_contract`).
+  The `None` arm is unrestricted. Rust emits `match P.get_mut(&k)` with one lookup. The verifier gives `r`
+  the stored element when `k` is present and writes the final `r` back at arm exit. The `None` arm leaves `P`
+  unchanged. When the R-6d-2 condition holds (verified build, foreign checks not `all`, no trusted Rust
+  function), R-6e-2's `P.f = vec_push::<T>(move P.f, x)` emits `P.f.push(x);` without `mem::take`.
 - **Values, not pointers.** Recursive and buffer-bearing values are independent: copying one deep-copies everything,
   and changing a copy never changes the original. Parameters, field reads and `match` bindings are read-only views
   and do not allocate. Putting an existing value into an owning place (`let`, assignment, constructor field,
@@ -473,7 +497,8 @@ fn tree_count(t: Tree) -> i64
   changed (`type/recursive_borrow`). Whole-value `==`/`!=` on values that contain arrays, strings or owned collections is rejected
   (`type/eq_type`); compare tags, lengths and elements instead.
 - **Limits.** Recursive and buffer-field types cannot be generic arguments, `Option`/`Result` payloads or G6
-  collection elements. Functions whose signatures use these types are internal. In explicit mode a host entry
+  collection elements, except the owned aggregates of R-6e-3. Functions whose signatures use these types are internal, except
+  the R-6f-2 state entry. In explicit mode a host entry
   with such a type in its signature is `type/entry_signature`. A property such as "x is somewhere in the tree"
   must be stated with the existing contract operations, and not every recursive property is
   expressible. Proofs about deeply nested or very wide types can be slow. Native stack depth is not checked: very
@@ -524,6 +549,12 @@ pub fn bounded(x: i64) -> i64                requires 0 <= x && x <= 10
   A vector-result entry has no C ABI. The LLVM backend and
   `--rust-bindings` reject it with `codegen/unsupported_type` naming the entry. Other collection and
   extended-type results remain `type/entry_signature`. Legacy mode is unchanged.
+- R-6f-2 **Typed resident state entries.** In explicit mode the first parameter of a root `pub` entry may be
+  `inout st: S` for a non-generic struct `S`, including a state struct (R-6e-3). Only the Rust backend emits it,
+  as `pub fn e(st: &mut S, ...)`, or `pub(crate) fn` under `raw_entries` "crate" or "unsafe" where the host keeps
+  a `PruvStore<S>`. `raw_entries` "c", `--rust-bindings` and the LLVM backend reject it with
+  `codegen/unsupported_type` naming the entry. `requires` on `st` are checked at entry and skipped under
+  `--trust-callers`, like other entry `requires`.
 - **Proof.** Every function is verified, including private and unused ones; a caller sees the callee's contract and,
   for a function that can be expanded (section 6, L3 P07, R-6-1), the fact `result == <body>` at its call, from any
   module. It sees no other part of the body. Recursion and recursive types may span modules. Host entries check `requires` at run
@@ -554,7 +585,7 @@ let mut w: [i64] = copy(a);
 set_at(inout w, 0, 7);
 ```
 - **Syntax and types.** `inout name: T` on a parameter, `T` one of `[i64]`, `[u8]`, `[bool]` or `[T]` with `T: Element`
-  (section 6c); any other type is `type/inout_type`. The mode is not part of the type. The caller must write `inout`
+  (section 6c), or a non-generic struct under R-6g-2; any other type is `type/inout_type`. The mode is not part of the type. The caller must write `inout`
   at the call (`type/inout_argument` if missing or extra). The marked argument must be a whole `let mut` array local
   or an `inout` parameter of the caller, with exactly the parameter's element type; immutable locals, ordinary
   parameters, `match` binders, fields, elements and calls are rejected. `inout` is contextual, not a keyword;
@@ -594,6 +625,12 @@ set_at(inout w, 0, 7);
   before the call they belong to. The verifier may model inout calls in fresh temporaries before the statement,
   in their original evaluation order. The existing checks on whole-expression calls still apply. The builtins
   `copy_range` and `store_be` remain whole expression statements, and the rules for `par` are unchanged.
+- R-6g-2 **Struct inout parameters.** `inout x: S` is allowed for a non-generic struct `S`, emitted as
+  `x: &mut S`. The callee may assign fields of `x` (also nested), use R-6e-2 on `x.f`, pass `x.f` to
+  `map_get_mut` and forward `inout x`. Whole reassignment `x = e` is `type/immutable`. A generic struct is
+  `type/inout_type`. The caller passes `inout y` for a `let mut` local or `inout` parameter `y`, with the alias
+  rules for arrays. `old(x)` is not supported for structs (`type/old_argument`). After the call the caller
+  knows only the callee's `ensures` about `y`.
 - **Generics.** `fn swap<T: Element>(inout a: [T], ...)` works like any G3 function; `swap::<i64>(inout w, i, j)`
   (`examples/g5_generic_swap.pruv`). It is specialized per element type, also across modules.
 - **Loops.** A loop that passes an array as `inout` treats it as changed: an `inout` parameter keeps its length, a
@@ -609,11 +646,12 @@ set_at(inout w, 0, 7);
   it. Neither allocates or copies for the parameter. Programs without `inout` compile exactly as before.
 - **Host limits.** An `inout` function is never host-visible: no exported ABI entry, no typed variant, no
   `--rust-bindings` entry. In explicit mode a root `pub` non-generic function with `inout` is `type/entry_signature`
-  (private, child-`pub` and generic functions may use it; in legacy mode it is automatically internal); a
+  (private, child-`pub` and generic functions may use it; in legacy mode it is automatically internal),
+  except the R-6f-2 typed state entry; a
   `trusted rust fn` with `inout` is `type/foreign_signature`. Give the host an ordinary function that owns a
   `copy` of its input, calls the `inout` helpers on it and returns it.
 - **Not supported.** Fields or elements as `inout` places, scalar,
-  `str`, aggregate or collection `inout` parameters, `old` of anything but an `inout` parameter, mutable host entries.
+  `str`, collection or generic struct `inout` parameters (non-generic structs are R-6g-2), `old` of anything but an array `inout` parameter, mutable host entries other than R-6f-2.
 - **New error codes:** `inout_syntax`, `inout_type`, `inout_argument`, `inout_alias`, `inout_context`, `old_context`,
   `old_argument`; reused: `immutable`, `array_alias`, `recursive_borrow`, `entry_signature`, `foreign_signature`,
   `reserved`, `refinement_assign`.

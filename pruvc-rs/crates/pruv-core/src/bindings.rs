@@ -257,6 +257,27 @@ fn rs_de(tt: &TypeTable, ty: &str, arr: &str, off: i64) -> Result<String, String
     }
 }
 
+/// Mutable struct parameters have a Rust-only calling convention.
+pub(crate) fn struct_inout_abi_error(
+    prog: &Program, entries_only: bool,
+) -> Option<crate::diagnostic::PruvError> {
+    for (i, f) in prog.functions.iter().enumerate() {
+        let meta = prog.explicit.as_ref().and_then(|e| e.fns.get(i));
+        if entries_only && !meta.is_some_and(|m| m.host_entry) {
+            continue;
+        }
+        if f.params.iter().any(|p| p.mode_pos.is_some() && !GType::from_key(&p.ty).is_array()) {
+            let name = meta.map_or(f.name.as_str(), |m| m.disp.as_str());
+            return Some(crate::diagnostic::PruvError::new(
+                "codegen", f.line, f.col, "unsupported_type",
+                format!("{} has a non-array inout parameter, which needs the Rust backend", name),
+                "use the Rust backend with Rust entries",
+            ));
+        }
+    }
+    None
+}
+
 /// Both the LLVM backend and its bindings require a C ABI for host entries.
 pub fn owned_collection_abi_error(
     prog: &Program,
@@ -265,8 +286,11 @@ pub fn owned_collection_abi_error(
     let err = |line, col, message| {
         crate::diagnostic::PruvError::new("codegen", line, col, "unsupported_type", message, "use the Rust backend")
     };
+    if let Some(e) = struct_inout_abi_error(prog, false) {
+        return Some(e);
+    }
     for d in &prog.types {
-        if d.all_fields().iter().any(|f| crate::gtype::key_is_owned_field(&f.ty)) {
+        if d.all_fields().iter().any(|f| crate::gtype::key_is_collection(&f.ty)) {
             let name = prog.explicit.as_ref().and_then(|e| e.tdisp.get(d.name())).map_or(d.name(), String::as_str);
             return Some(err(d.line(), d.col(), format!("{} has owned collection fields, which need the Rust backend", name)));
         }

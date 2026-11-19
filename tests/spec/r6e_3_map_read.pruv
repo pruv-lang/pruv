@@ -1,0 +1,12 @@
+// spec: R-6e-3 accept
+struct Record { hits: i64, log: Vec<i64> }
+
+fn count(m: HashMap<i64, Record>, k: i64) -> i64 {
+  match map_get::<i64, Record>(m, k) {
+    Some(r) => {
+      if r.hits <= 1000000000000 && len(r.log) < 1000000 { return r.hits + len(r.log); }
+      return 0;
+    }
+    None => { return 0; }
+  }
+}

@@ -319,6 +319,8 @@ struct Checker {
     takes: Takes,
     /// Location of the field move allowed in the current field assignment.
     field_move: Option<(i64, i64)>,
+    read_context: Option<usize>,
+    map_roots: Vec<String>,
     // ---- G9 A0 metadata ----
     /// recursive type SCCs (names in declaration order), SCC-number order
     type_sccs: Vec<Vec<String>>,
@@ -427,6 +429,29 @@ fn set_ty(e: &mut Expr, t: &GType) {
 }
 
 /// G5: does the full syntax of e (every operand, reachable or not) mention the binding `name`?
+fn collection_catalog(name: &str) -> bool {
+    matches!(name, "vec_new" | "vec_push" | "vec_get" | "map_new" | "map_insert"
+        | "map_get" | "map_get_mut")
+}
+
+fn place_root(e: &Expr) -> Option<&str> {
+    match e {
+        Expr::Var(v) => Some(&v.name),
+        Expr::FieldAccess(f) => place_root(&f.base),
+        _ => None,
+    }
+}
+
+fn has_arm_exit(body: &[Stmt]) -> bool {
+    body.iter().any(|stmt| match stmt {
+        Stmt::Return(_) => true,
+        Stmt::If(s) => has_arm_exit(&s.then) || has_arm_exit(&s.els),
+        Stmt::While(s) => has_arm_exit(&s.body),
+        Stmt::Match(s) => s.arms.iter().any(|a| has_arm_exit(&a.body)),
+        _ => false,
+    })
+}
+
 fn mentions(e: &Expr, name: &str) -> bool {
     match e {
         Expr::Var(x) if x.name == name => return true,
@@ -577,6 +602,8 @@ impl Checker {
             externs: externs.to_vec(),
             takes,
             field_move: None,
+            read_context: None,
+            map_roots: Vec::new(),
             type_sccs: Vec::new(),
             boxed: Vec::new(),
             boxed_decls: HashSet::new(),
@@ -1128,7 +1155,19 @@ impl Checker {
                         "use i64 or bool keys, or declare the parameter `: Element`",
                     ));
                 }
-                self.collection_payload(line, col, &ty.args[1], "a HashMap value")?;
+                let v = &ty.args[1];
+                self.collection_payload(line, col, v, "a HashMap value")?;
+                if *k != i64t() && v.owner.is_none() {
+                    if let Some(TypeDecl::Struct(d)) = self.decls.get(&v.name) {
+                        if d.tparams.is_empty()
+                            && d.fields.iter().any(|f| crate::gtype::key_is_owned_field(&f.ty))
+                            && d.fields.iter().all(|f| crate::gtype::key_is_owned_field(&f.ty)
+                                || is_value(&GType::from_key(&f.ty), &|n| self.value_decl(n)))
+                        {
+                            return Err(terr(line, col, "foreign_owned_type", "aggregate HashMap values require i64 keys", ""));
+                        }
+                    }
+                }
             }
             return Ok(());
         }
@@ -1209,6 +1248,13 @@ impl Checker {
     }
 
     /// G6: a collection payload is a plain G3 value (never another collection).
+    fn value_decl(&self, name: &str) -> Option<(usize, Vec<GType>)> {
+        self.decls.get(name).map(|decl| (
+            decl.tparams().len(),
+            decl_fields(decl).into_iter().map(|(_, f)| GType::from_key(&f.ty)).collect(),
+        ))
+    }
+
     fn collection_payload(&self, line: i64, col: i64, a: &GType, what: &str) -> Res<()> {
         if a.contains_collection() {
             return Err(terr(
@@ -1321,7 +1367,9 @@ impl Checker {
         for (a, tp) in targs.iter().zip(tparams.iter()) {
             self.check_type(line, col, a)?;
             self.check_arg(line, col, a, Some(tp))?;
-            self.ext_misuse(line, col, a, Some("arg"))?; // G9 A0: extended types are never type arguments
+            let catalog_collection = what.strip_prefix("function ").is_some_and(|n|
+                !self.funcs.contains_key(n) && collection_catalog(n));
+            self.ext_misuse(line, col, a, Some(if catalog_collection { "coll" } else { "arg" }))?;
         }
         match bind_args(owner, tparams.len(), targs) {
             Ok(m) => Ok(Some(m)),
@@ -1362,8 +1410,15 @@ impl Checker {
                     }
                     self.check_type(f.line, f.col, &ft)?;
                     if ft.contains_collection()
-                        && !(d.tparams().is_empty() && crate::gtype::key_is_owned_field(&f.ty))
+                        && !(d.tparams().is_empty() && (crate::gtype::key_is_owned_field(&f.ty)
+                            || matches!(d, TypeDecl::Struct(_)) && self.state_collection(&ft)))
                     {
+                        if matches!(ft.name.as_str(), "vec" | "hashmap") {
+                            if let Some(payload) = ft.args.last().filter(|ty| is_value(ty, &|n| self.value_decl(n))) {
+                                // The type graph has not run yet; is_value rules out recursive payloads.
+                                self.ext_misuse(f.line, f.col, payload, Some("coll"))?;
+                            }
+                        }
                         return Err(terr(
                             f.line,
                             f.col,
@@ -1548,7 +1603,7 @@ impl Checker {
         for d in types {
             if decl_fields(d).iter().any(|(_, fd)| {
                 let t = GType::from_key(&fd.ty);
-                t.is_array() || t == strt() || crate::gtype::key_is_owned_field(&fd.ty)
+                t.is_array() || t == strt() || t.is_collection()
             }) {
                 direct.insert(d.name().to_string());
             }
@@ -1587,6 +1642,35 @@ impl Checker {
     }
 
     /// An extended type may not be a type argument (type_argument) or a G6 collection payload (foreign_owned_type).
+    fn owned_aggregate(&self, ty: &GType) -> bool {
+        ty.owner.is_none() && ty.args.is_empty()
+            && matches!(self.decls.get(&ty.name), Some(TypeDecl::Struct(d))
+                if d.tparams.is_empty() && !self.type_sccs.iter().any(|s| s.contains(&ty.name))
+                    && d.fields.iter().all(|f| {
+                        let t = GType::from_key(&f.ty);
+                        crate::gtype::key_is_owned_field(&f.ty)
+                            || (!t.contains_collection() && !t.is_array() && t != strt()
+                                && dependencies(&t).iter().all(|n| !self.extended.contains(n)))
+                    }))
+    }
+
+    fn state_collection(&self, ty: &GType) -> bool {
+        match (ty.name.as_str(), ty.args.as_slice()) {
+            ("vec", [v]) => self.owned_aggregate(v),
+            ("hashmap", [k, v]) => *k == i64t() && self.owned_aggregate(v),
+            _ => false,
+        }
+    }
+
+    fn is_zero_sized_struct(&self, ty: &GType) -> bool {
+        ty.owner.is_none()
+            && matches!(self.decls.get(&ty.name), Some(TypeDecl::Struct(d))
+                if !self.type_sccs.iter().any(|s| s.contains(&ty.name))
+                    && self.bind_decl_args(ty).is_ok_and(|m| d.fields.iter().all(|f| {
+                        self.is_zero_sized_struct(&substitute(&GType::from_key(&f.ty), &m))
+                    })))
+    }
+
     fn ext_misuse(&self, line: i64, col: i64, ty: &GType, inside: Option<&str>) -> Res<()> {
         if ty.owner.is_some() {
             return Ok(());
@@ -1597,8 +1681,21 @@ impl Checker {
             }
             return Ok(());
         }
+        if inside == Some("coll") {
+            if self.is_zero_sized_struct(ty) {
+                let name = tn(ty);
+                return Err(terr(
+                    line, col, "foreign_owned_type",
+                    format!("{name} has no data and cannot be a Vec or HashMap element"),
+                    format!("give {name} a field"),
+                ));
+            }
+            if self.owned_aggregate(ty) {
+                return Ok(());
+            }
+        }
         if self.extended.contains(&ty.name) && ty.args.is_empty() && self.decls.contains_key(&ty.name) {
-            if inside == Some("coll") {
+            if matches!(inside, Some("coll" | "coll_nested")) {
                 return Err(terr(
                     line,
                     col,
@@ -1621,7 +1718,7 @@ impl Checker {
             }
             return Ok(());
         }
-        let next = if inside == Some("coll") { "coll" } else { "arg" };
+        let next = if matches!(inside, Some("coll" | "coll_nested")) { "coll_nested" } else { "arg" };
         for a in &ty.args {
             self.ext_misuse(line, col, a, Some(next))?;
         }
@@ -1649,6 +1746,11 @@ impl Checker {
                         ));
                     }
                 }
+                if matches!(d, TypeDecl::Struct(_)) && ft.is_collection()
+                    && !crate::gtype::key_is_owned_field(&fd.ty) && !self.state_collection(&ft)
+                {
+                    return Err(terr(fd.line, fd.col, "foreign_owned_type", format!("field {} cannot have the collection type {}", fd.name, tn(&ft)), ""));
+                }
                 self.ext_misuse(fd.line, fd.col, &ft, None)?;
             }
         }
@@ -1667,7 +1769,7 @@ impl Checker {
             for p in &f.params {
                 if let Some((ml, mc)) = p.mode_pos {
                     let pt = GType::from_key(&p.ty);
-                    if !pt.is_array() {
+                    if !pt.is_array() && !(pt.args.is_empty() && matches!(self.decls.get(&pt.name), Some(TypeDecl::Struct(_)))) {
                         return Err(terr(
                             ml,
                             mc,
@@ -1692,7 +1794,15 @@ impl Checker {
             if !self.host_entry.get(i).copied().unwrap_or(false) {
                 continue;
             }
-            let mut sig: Vec<(String, &str)> = f.params.iter().map(|p| (format!("parameter {}", p.name), p.ty.as_str())).collect();
+            let mut sig: Vec<(String, &str)> = f.params.iter().enumerate().filter(|(i, p)| {
+                !(*i == 0 && self.explicit && p.mode_pos.is_some()
+                    && matches!(self.decls.get(&p.ty), Some(TypeDecl::Struct(_))))
+            }).map(|(_, p)| (format!("parameter {}", p.name), p.ty.as_str())).collect();
+            if let Some(p) = f.params.iter().skip(if self.explicit { 1 } else { 0 })
+                .find(|p| p.mode_pos.is_some() && matches!(self.decls.get(&p.ty), Some(TypeDecl::Struct(_))))
+            {
+                return Err(terr(f.line, f.col, "entry_signature", format!("host entry {} must take inout state {} first", f.name, p.name), ""));
+            }
             if !crate::gtype::key_is_scalar_vec(&f.ret) {
                 sig.push(("the result".to_string(), f.ret.as_str()));
             }
@@ -1858,7 +1968,7 @@ impl Checker {
             if pt == unitt() {
                 return Err(terr(f.line, f.col, "unit_param", format!("parameter {} cannot have type ()", p.name), ""));
             }
-            if p.take && !pt.is_collection() {
+            if p.take && !pt.is_collection() && !self.owned_aggregate(&pt) {
                 return Err(terr(
                     f.line,
                     f.col,
@@ -1933,7 +2043,8 @@ impl Checker {
                 ));
             }
         }
-        check_ownership(f, &self.takes)?; // G6: liveness of collection bindings (after typing)
+        let aggregates = self.decls.keys().filter(|n| self.owned_aggregate(&GType::from_key(n))).cloned().collect();
+        check_ownership(f, &self.takes, &aggregates)?; // G6: liveness of collection bindings (after typing)
         Ok(())
     }
 
@@ -1946,6 +2057,9 @@ impl Checker {
     }
 
     fn lookup(&self, line: i64, col: i64, name: &str, scope: &Scope) -> Res<Entry> {
+        if self.map_roots.iter().any(|root| root == name) {
+            self.check_borrow(line, col, name, &[])?;
+        }
         match scope.get(name) {
             Some(v) => Ok(v.clone()),
             None => Err(terr(line, col, "unknown_name", format!("unknown variable {}", name), "")),
@@ -2078,7 +2192,7 @@ impl Checker {
                 let v = self.lookup(s.line, s.col, &s.name, scope)?;
                 self.check_borrow(s.line, s.col, &s.name, &[])?; // G9 A0
                 if !v.mutable {
-                    if v.kind == "inout" {
+                    if matches!(v.kind, "inout" | "map_inout") {
                         // G5 A0: element stores are allowed, replacing the binding is not
                         return Err(terr(
                             s.line,
@@ -2154,14 +2268,16 @@ impl Checker {
                     }
                     cur = self.field_type(s.line, s.col, &cur, fname)?;
                 }
-                if !v.mutable {
+                if !v.mutable && !matches!(v.kind, "inout" | "map_inout") {
                     if let Some(m) = first_field_move(&s.value) {
                         return Err(field_move_error(m));
                     }
                     return Err(terr(s.line, s.col, "immutable", format!("{} is not mutable", s.name), Self::immutable_fix(v.kind)));
                 }
                 let saved = self.field_move.take();
-                if v.kind == "local" && s.fields.len() == 1 && crate::gtype::key_is_owned_field(&cur.to_key()) {
+                if matches!(v.kind, "local" | "inout" | "map_inout")
+                    && (crate::gtype::key_is_owned_field(&cur.to_key()) || self.state_collection(&cur))
+                {
                     if let Expr::Call(call) = &s.value {
                         self.field_move = call.args.iter().enumerate().find_map(|(i, arg)| {
                             let Expr::Move(m) = arg else { return None };
@@ -2495,10 +2611,26 @@ impl Checker {
 
     fn match_stmt(&mut self, m: &mut Match, scope: &mut Scope) -> Res<()> {
         let (line, col) = (m.line, m.col);
-        let t = self.expr(&mut m.scrutinee, scope, false)?;
+        let t = self.read_expr(&mut m.scrutinee, scope, false, &["map_get", "map_get_mut"])?;
+        let map_call = match &m.scrutinee {
+            Expr::Call(call) if !self.funcs.contains_key(&call.name) => Some(call),
+            _ => None,
+        };
+        let map_mut = map_call.is_some_and(|call| call.name == "map_get_mut");
+        let map_borrow = map_call.is_some_and(|call| call.name == "map_get")
+            && t.args.first().is_some_and(|ty| self.is_extended(ty));
         self.check_inout_context(&[&m.scrutinee], InoutContext::Value)?;
         let user = self.is_enum(&t);
-        let root: Option<String> = self.match_root(&m.scrutinee, &t, scope); // G9 A0: root variable of an extended scrutinee path
+        let root = if let Some(call) = map_call.filter(|_| map_mut) {
+            match &call.args[0] {
+                Expr::InoutArg(arg) => place_root(&arg.expr).map(str::to_string),
+                _ => None,
+            }
+        } else if let Some(call) = map_call.filter(|_| map_borrow) {
+            place_root(&call.args[0]).map(str::to_string)
+        } else {
+            self.match_root(&m.scrutinee, &t, scope)
+        }; // G9 A0: root variable of an extended scrutinee path
         if t.owner.is_some() {
             return Err(terr(
                 line,
@@ -2583,15 +2715,26 @@ impl Checker {
                     return Err(terr(nl, nc, "shadow", format!("{} is already defined", b), "use a new name"));
                 }
                 // G9 A0: a buffer payload is a read view (like a parameter): returning it needs copy()
-                let kind = if bt.is_array() || *bt == strt() { "param" } else { "local" };
+                let kind = if map_mut { "map_inout" } else if map_borrow { "map_view" }
+                    else if bt.is_array() || *bt == strt() { "param" } else { "local" };
                 sc.insert(b.clone(), Entry { ty: bt.clone(), mutable: false, kind });
             }
-            if let Some(r) = &root {
+            let active = root.as_ref().filter(|_| !(map_mut || map_borrow) || a.ctor == "Some");
+            if let Some(r) = active {
+                if map_mut && has_arm_exit(&a.body) {
+                    return Err(terr(a.line, a.col, "foreign_contract", "the Some arm of map_get_mut must reach its end", ""));
+                }
                 self.active_roots.push(r.clone());
+                if map_mut {
+                    self.map_roots.push(r.clone());
+                }
             }
             self.block(&mut a.body, &mut sc)?;
-            if root.is_some() {
+            if active.is_some() {
                 self.active_roots.pop();
+                if map_mut {
+                    self.map_roots.pop();
+                }
             }
         }
         Ok(())
@@ -2749,6 +2892,18 @@ impl Checker {
         Ok(t)
     }
 
+    fn read_expr(&mut self, e: &mut Expr, scope: &Scope, c: bool, allowed: &[&str]) -> Res<GType> {
+        let saved = self.read_context.take();
+        if let Expr::Call(call) = e {
+            if allowed.contains(&call.name.as_str()) {
+                self.read_context = Some(call as *const Call as usize);
+            }
+        }
+        let result = self.expr(e, scope, c);
+        self.read_context = saved;
+        result
+    }
+
     fn expr(&mut self, e: &mut Expr, scope: &Scope, contract: bool) -> Res<GType> {
         let t = self.expr_inner(e, scope, contract)?;
         set_ty(e, &t);
@@ -2888,12 +3043,16 @@ impl Checker {
                 }
             }
             Expr::Move(x) => {
-                if let Some(field) = x.fields.first() {
+                self.check_borrow(x.line, x.col, &x.name, &x.fields)?;
+                if !x.fields.is_empty() {
                     if c || self.field_move != Some((x.line, x.col)) {
                         return Err(field_move_error(x));
                     }
-                    let root = self.lookup(x.line, x.col, &x.name, scope)?;
-                    return self.field_type(x.line, x.col, &root.ty, field);
+                    let mut ty = self.lookup(x.line, x.col, &x.name, scope)?.ty;
+                    for field in &x.fields {
+                        ty = self.field_type(x.line, x.col, &ty, field)?;
+                    }
+                    return Ok(ty);
                 }
                 // G6: liveness and position rules for binding moves are checked by foreign::check_ownership.
                 if c {
@@ -2994,7 +3153,7 @@ impl Checker {
                 Ok(ety)
             }
             Expr::FieldAccess(x) => {
-                let bt = self.expr(&mut x.base, scope, c)?;
+                let bt = self.read_expr(&mut x.base, scope, c, &["vec_get"])?;
                 if bt.owner.is_some() {
                     return Err(terr(
                         x.line,
@@ -3346,7 +3505,7 @@ impl Checker {
                     "declare it with `let mut`",
                 ));
             }
-            if v.kind != "inout" && v.kind != "local" {
+            if !matches!(v.kind, "inout" | "local" | "map_inout") {
                 return Err(terr(
                     aline,
                     acol,
@@ -3671,7 +3830,7 @@ impl Checker {
             ));
         }
         let entry: Option<Entry> = match &e.args[0] {
-            Expr::Var(v) => scope.get(&v.name).filter(|x| x.kind == "inout").cloned(),
+            Expr::Var(v) => scope.get(&v.name).filter(|x| x.kind == "inout" && x.ty.is_array()).cloned(),
             _ => None,
         };
         let entry = match entry {
@@ -4066,6 +4225,38 @@ impl Checker {
         }
         let m = m.unwrap_or_default();
         arity(f.params.len())?;
+        let direct = self.read_context == Some(e as *const Call as usize);
+        if n == "map_get_mut" && cat.is_some() {
+            if !direct {
+                return Err(terr(line, col, "foreign_contract", "map_get_mut is only allowed as a direct match scrutinee", ""));
+            }
+            let (place, key) = e.args.split_at_mut(1);
+            let Expr::InoutArg(arg) = &mut place[0] else {
+                return Err(terr(line, col, "inout_argument", "map_get_mut requires an inout place", ""));
+            };
+            let root = place_root(&arg.expr).ok_or_else(|| terr(line, col, "inout_argument", "map_get_mut requires an inout place", ""))?.to_string();
+            let entry = self.lookup(line, col, &root, scope)?;
+            self.check_borrow(line, col, &root, &[])?;
+            if !(entry.mutable || matches!(entry.kind, "inout" | "map_inout")) {
+                return Err(terr(line, col, "inout_argument", "map_get_mut requires a mutable map place", ""));
+            }
+            let ty = self.expr(&mut arg.expr, scope, c)?;
+            if ty != substitute(&f.params[0], &m) {
+                return Err(terr(line, col, "inout_argument", "map_get_mut requires a map of the declared type", ""));
+            }
+            if mentions(&key[0], &root) {
+                return Err(terr(line, col, "inout_alias", format!("{} is passed inout and also used in the key", root), ""));
+            }
+            arg.ty = Some(ty.to_key());
+            self.expect(&mut key[0], &substitute(&f.params[1], &m), scope, c, None)?;
+            return Ok(substitute(&f.ret, &m));
+        }
+        if cat.is_some() && matches!(n.as_str(), "vec_get" | "map_get" | "map_lookup") && !direct {
+            let payload = targs.as_ref().and_then(|a| a.last()).unwrap();
+            if self.is_extended(payload) {
+                return Err(terr(line, col, "foreign_owned_type", format!("{} cannot copy {}", n, tn(payload)), ""));
+            }
+        }
         match &cat {
             Some(cf) if is_catalog_contract_only(&n) => self.observer_args(e, cf, &m, scope, c)?,
             // G5 A0: marker, place, type and same-call exclusivity
@@ -4078,9 +4269,41 @@ impl Checker {
                 }
             }
         }
+        if cat.is_some() && matches!(n.as_str(), "vec_push" | "map_insert") {
+            let arg = e.args.last().unwrap();
+            if matches!(arg, Expr::Var(v) if scope.get(&v.name).is_some_and(|entry| entry.kind == "map_inout")) {
+                return Err(terr(arg.line(), arg.col(), "foreign_move",
+                    "an aggregate collection payload needs a constructor, call result or move", ""));
+            }
+            let payload = targs.as_ref().and_then(|a| a.last()).unwrap();
+            if self.owned_aggregate(payload) && !matches!(arg, Expr::StructLit(_) | Expr::Call(_) | Expr::Move(_)) {
+                return Err(terr(arg.line(), arg.col(), "foreign_move", "an aggregate collection element must be moved in", "use a constructor, call result, or move a local binding"));
+            }
+        }
         if cat.is_some() {
             self.used_effects.extend(f.effects.iter().cloned());
             return Ok(substitute(&f.ret, &m));
+        }
+        if let Some(takes) = self.takes.get(&n) {
+            for ((arg, param), take) in e.args.iter().zip(&f.params).zip(takes) {
+                if !*take || !self.is_struct(&substitute(param, &m)) {
+                    continue;
+                }
+                let valid = match arg {
+                    Expr::StructLit(_) | Expr::Call(_) => true,
+                    Expr::Move(v) if v.fields.is_empty() => {
+                        scope.get(&v.name).is_some_and(|entry| entry.kind == "local")
+                            || self.funcs.get(&self.cur_name).zip(self.takes.get(&self.cur_name))
+                                .is_some_and(|(sig, flags)| sig.pnames.iter().zip(flags)
+                                    .any(|(name, take)| name == &v.name && *take))
+                    }
+                    _ => false,
+                };
+                if !valid {
+                    return Err(terr(arg.line(), arg.col(), "foreign_move",
+                        "a take struct argument needs a constructor, call result or move", ""));
+                }
+            }
         }
         if c && !f.effects.is_empty() {
             return Err(terr(

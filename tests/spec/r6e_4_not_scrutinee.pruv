@@ -1,0 +1,8 @@
+// spec: R-6e-4 reject
+struct Rec { hits: i64 }
+
+fn f(k: i64) -> i64 ! alloc {
+  let mut m: HashMap<i64, Rec> = map_new::<i64, Rec>();
+  let o: Option<Rec> = map_get_mut::<i64, Rec>(inout m, k);
+  return 0;
+}

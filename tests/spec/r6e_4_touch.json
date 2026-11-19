@@ -1,0 +1,1 @@
+{"gen_contains":[".get_mut(&k)", "r.log.push(x)"],"gen_absent":[".clone()","mem::take"],"gen_regex":["pub fn touch\\(st: &mut St, k: i64, x: i64\\) -> i64"]}

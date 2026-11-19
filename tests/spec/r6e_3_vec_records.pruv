@@ -1,0 +1,18 @@
+// spec: R-6e-3 accept
+struct Record { hits: i64, log: Vec<i64> }
+
+fn build() -> i64 ! alloc
+  ensures result == 9
+{
+  let v: Vec<Record> = vec_new::<Record>();
+  let v2: Vec<Record> = vec_push::<Record>(move v, Record { hits: 4, log: vec_new::<i64>() });
+  let r: Record = Record { hits: 5, log: vec_new::<i64>() };
+  let v3: Vec<Record> = vec_push::<Record>(move v2, move r);
+  return vec_get::<Record>(v3, 0).hits + vec_get::<Record>(v3, 1).hits;
+}
+
+fn total(v: Vec<Record>) -> i64
+  requires len(v) >= 1
+{
+  return len(vec_get::<Record>(v, 0).log);
+}

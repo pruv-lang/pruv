@@ -1,0 +1,1 @@
+{"gen_contains":["fn bump(r: &mut Record","bump(&mut a, 2)"],"gen_absent":[".clone()"]}

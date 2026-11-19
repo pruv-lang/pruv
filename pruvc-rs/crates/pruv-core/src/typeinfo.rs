@@ -852,7 +852,7 @@ impl TypeTable {
                 None => continue,
             };
             seen.insert(n.clone());
-            if d.all_fields().iter().any(|f| is_array_name(&f.ty) || f.ty == "str" || crate::gtype::key_is_owned_field(&f.ty)) {
+            if d.all_fields().iter().any(|f| is_array_name(&f.ty) || f.ty == "str" || crate::gtype::key_is_collection(&f.ty)) {
                 return true;
             }
             todo.extend(self.deps(d));

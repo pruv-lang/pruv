@@ -1,0 +1,7 @@
+// spec: R-6e-3 reject
+struct Record { hits: i64, log: Vec<i64> }
+struct Shelf { items: Vec<Record> }
+
+fn f(v: Vec<Shelf>) -> i64 {
+  return len(v);
+}
