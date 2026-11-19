@@ -1017,8 +1017,10 @@ before the representation checks, the `requires` and the body, in both compilers
   the bound is proved by the type: a twin skips the per-call check and runs the same representation checks,
   `requires` and body as its checked entry. A host that wraps resident state once pays the check once, not per
   call. The checked entries stay unchanged. An entry with an owned length-checked parameter gets no twin. A user
-  item named `PruvArr`, `PruvStr`, `pruv_arr_slow`, `pruv_str_slow` or `pruv_proven` is
-  `codegen/proven_name_clash`.
+  item named `PruvArr` or `PruvStr` is `codegen/proven_name_clash`; the other generated names (`pruv_proven`,
+  `pruv_proven_types`, `pruv_arr_slow`, `pruv_str_slow`) already carry the reserved `pruv_` prefix
+  (`parse/reserved_name`). The guarantee covers host code outside the generated module (`#[path] mod`): a crate-root
+  `include!` can also reach the private, unchecked `f__pruv_body` functions, as it could before this flag.
 - LLVM ABI symbols (`pruv_abi_*` and `__typed`): section 6b, "Run time"; a negative length is rejected by the same
   unsigned compare.
 - C adapter (`pruv_c`): an array or `str` length, a `pruv_handle_new` length and the `new_len` of `pruv_hr_*` are

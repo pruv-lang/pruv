@@ -44,7 +44,7 @@ def main():
             lifecycle.write_text(original if old is None else original.replace(old, new, 1))
             subprocess.run([args.pruvc, str(budget / "m7_test/root.pruv"), "-o", str(gen),
                             "--lib", str(budget), "--lib", "bench/l3/lib",
-                            "--rust-extern", f"bud_facts={rlib}"],
+                            "--rust-extern", f"bud_facts={rlib}", "--proven-entries"],
                            cwd=run_m7.ROOT, check=True)
             subprocess.run([run_m7.rustc(), "-O", "--edition", "2021", "--extern", f"bud_facts={rlib}",
                             "-o", str(exe), str(main_rs)], check=True)

@@ -5206,3 +5206,35 @@ Size and memory:
 
 New row P18c: a by-value small-result entry (fixed-shape result returned in registers instead of through a host
 `&mut [i64]`), in both compilers, with the `--proven-entries` twins as the host surface.
+
+### P18b.6 Gates, audit and delegations
+
+Gates (rerun after the audit fixes: cargo test, diff_rust, gen_shared, check_generated, g8_frontend, l3_abi,
+mutant_quiet; the rest ran on e76cd78, and the fixes only change the accessor path `::core` to `::std`): release build, `cargo test --release` 123/0; `diff_rust --fuzz-count 20` with this
+checkout's `pruv-rust-dump`: all same; `gen_shared --check` rc 0; `check_generated` ok; `run_all --only g8_frontend`
+39/39 and `--only l3_abi` 3/3 on both compilers; the 7 budget roots ok on rs and py with identical outputs; M7 `q`
+on rs then py: 300 cases, fail 0; `mutant_quiet.py`: unmutated tree passes, all three mutants caught; full Python
+suite `run_all --compiler py --backend both`: 4502/4502. `tests/run_all_rows.txt` gains one row (l3_abi
+proven_entries).
+
+Audit (Codex gpt-6.2-astra ultra), required findings:
+
+1. `::core::hint::assert_unchecked` in the `PruvArr` / `PruvStr` accessors did not resolve under rustc's default
+   edition (E0433). Fixed: both compilers emit `::std::hint::assert_unchecked`; the proven-entries test now builds
+   its default-flags host without `--edition`.
+2. `mutant_quiet.py` built the new driver without `--proven-entries`. Fixed: it passes the flag; `run_m7.py`'s
+   default Rust compiler is now this checkout's `pruvc-rs/target/release/pruvc`.
+3. A crate-root `include!` reaches the private, safe, unchecked `f__pruv_body` functions directly. This predates
+   P18b (a6fb98e) and P18b does not widen it; fixing it moves every body into a private child module, which changes
+   every generated file. Not fixed here: SPEC now states the guarantee covers `#[path] mod` hosts, and the fix is
+   left for a new row.
+
+Optional findings taken: SPEC separates the lexer's reserved `pruv_` names from the `PruvArr` / `PruvStr` clash.
+Not taken: moving the `FBuf` checks out of the timed region (one check per timed call, not per iteration).
+
+| work | engine / model | mode |
+|---|---|---|
+| `--proven-entries` in both compilers + test | Codex gpt-6.2-sol (Codex 2) | write, applied by hand |
+| audit | Codex gpt-6.2-astra ultra (Codex 2) | review |
+| full Python suite | shell command | command |
+| proof and encoding choice, isolating and final measurement, SPEC and this appendix | Claude Opus 5.5 | direct |

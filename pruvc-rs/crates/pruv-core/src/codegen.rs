@@ -4620,9 +4620,9 @@ const PROVEN_ARR: &str = r#"mod pruv_proven_types {
         pub fn new_mut(a: &mut [T]) -> &mut PruvArr<T> { if (a.len() as u64) > (1u64 << 40) { pruv_arr_slow(a.len()) } unsafe { &mut *(a as *mut [T] as *mut PruvArr<T>) } }
         // The private field and the checked constructors establish the bound for both accessors.
         #[inline(always)]
-        pub fn get(&self) -> &[T] { unsafe { ::core::hint::assert_unchecked((self.0.len() as u64) <= (1u64 << 40)) }; &self.0 }
+        pub fn get(&self) -> &[T] { unsafe { ::std::hint::assert_unchecked((self.0.len() as u64) <= (1u64 << 40)) }; &self.0 }
         #[inline(always)]
-        pub fn get_mut(&mut self) -> &mut [T] { unsafe { ::core::hint::assert_unchecked((self.0.len() as u64) <= (1u64 << 40)) }; &mut self.0 }
+        pub fn get_mut(&mut self) -> &mut [T] { unsafe { ::std::hint::assert_unchecked((self.0.len() as u64) <= (1u64 << 40)) }; &mut self.0 }
     }
 "#;
 
@@ -4637,7 +4637,7 @@ const PROVEN_STR: &str = r#"    /// P18b (--proven-entries): a string whose byte
         #[inline]
         pub fn new(s: &str) -> &PruvStr { if (s.len() as u64) > (1u64 << 40) { pruv_str_slow(s.len()) } unsafe { &*(s as *const str as *const PruvStr) } }
         #[inline(always)]
-        pub fn get(&self) -> &str { unsafe { ::core::hint::assert_unchecked((self.0.len() as u64) <= (1u64 << 40)) }; &self.0 }
+        pub fn get(&self) -> &str { unsafe { ::std::hint::assert_unchecked((self.0.len() as u64) <= (1u64 << 40)) }; &self.0 }
     }
 "#;
 

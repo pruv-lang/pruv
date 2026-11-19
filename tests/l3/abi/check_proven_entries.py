@@ -112,12 +112,15 @@ def main(work, rs, py):
             continue
         (work / "main.rs").write_text(HOST, encoding="utf-8")
         binary = work / "host"
-        result = run([rustc, "--edition", "2021", "-C", "opt-level=3", str(work / "main.rs"), "-o", str(binary)])
+        # The default build uses rustc's default edition (as README's direct compile does).
+        edition = () if not flags else ("--edition", "2021")
+        result = run([rustc, *edition, "-C", "opt-level=3", str(work / "main.rs"), "-o", str(binary)])
         assert result.returncode == 0, result.stderr
         result = run([str(binary)])
         assert result.returncode == 0, result.stderr
 
-    # Even an include! at the crate root cannot let safe host code bypass the constructor.
+    # Even an include! at the crate root cannot let safe host code build a PruvArr without the length check.
+    # (The private f__pruv_body is reachable from a root include!; that predates P18b, see Appendix P18b.6.)
     (work / "main.rs").write_text(
         'include!("gen.rs");\nfn main() { let _ = &PruvArr::new(&[1]).0; }\n', encoding="utf-8")
     result = run([rustc, "--edition", "2021", str(work / "main.rs"), "-o", str(work / "host")])
