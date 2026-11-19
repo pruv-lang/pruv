@@ -382,7 +382,7 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P13e | B/bud_map.pruv, bud_store.pruv, bud_world.pruv, bud_admit.pruv: entry layout (Appendix P13c.8) | P: smaller per-entry words (P13c: 20 words) so tools peak RSS reaches hand after P13d (also P21: tooldup at M = 500, 3120 vs oaw 3040 KiB); proofs and M10 replay counters kept; time not worse than P13c. Step 1 (Appendix P13e): the M4 excess is a fixed +64..96 KiB (P13d/P13h) on every axis; only tools has a proportional share above hand (+96 KiB at n = 1000). Decision option 1 (boundary widened). Step 2a accessors (2d877e8), step 2b base 10 words + on-demand 10-word extension (b231319): tools proportional RSS at hand within one page, sessions/clocks below hand, allocations equal, instructions equal or lower at n = 2000 and +0.3..1.4 % at n = 100..1000 (fixed code term); fixed share +16..48 KiB of code on M4 and M7 +96..176 / M10 +16..32 KiB, open with P13d/P13h (Appendix P13e.6-7). Audit fixes and resident format version 2: c85a671 (P13e.10). |
 | P13f | B/driver_m4.rs and the M4 bench adapter: length bound from T0 (TIDY_SPEC §4.10) | P: the bench adapter's allocations get the `2^40` bound (T0 audit finding 1), and the per-entry length check added by T0 is hoisted out of the timed loop where the driver already holds the length; m4 sessions back to the pre-T0 time (T0: +1-2%, outside A/A noise) and every M4 cell <= 1.0x hand. Done (Appendix P13f): bounded owner types (`StateBuf::zeroed` refuses `> 2^40`, driver `Words` checks once at construction; both `Deref`s carry `assert_unchecked(len <= 2^40)`), so the entry's inline check folds away with no codegen change; probe `driver_m4 bound state|words` run by `run.py m4`. Instructions below base on all 9 cells (-10..-15/op), time below hand everywhere and overlapping base, peak RSS overlapping base, `__text` -192 B. Still above hand from base: sessions/clocks 100/1000 instructions (T5e) and 7 of 9 peak RSS cells (P13d/P13h fixed code share). |
 | P13f2 | B/state_buf.rs, driver_m4.rs: P13f audit should/nits (Appendix P13f.5) | P: the `2^40` bound constant is target-width safe (no `1<<40` overflow on 32-bit `usize`; compile-time assert or `u64` compare), the bound probe also covers a refused length that never allocates (not only successful allocations), and the `Words::new` comment states what the check guarantees. No perf change on the 9 M4 cells (instructions/time/RSS overlap P13f). Done (Appendix P13f2): `STATE_MAX_WORDS` computed in `u64` (2^40 on 64-bit, `usize::MAX` on 32-bit); probe adds an at-bound control (a buffer of exactly 2^40 words must move the count by 1 when built), so `refused=true allocs=0` is checked against a counter shown to see a buffer one word below; a mutation without the bound check fails it. Counting map attempts (instead of successful maps) was measured and dropped: +0.5..1.1 instr/op on all 9 cells (zeroed is inlined into `World::exec`). `World::exec` byte-identical to base; instructions, time, peak RSS overlap base on all 9 cells. |
-| P13g | Both codegens: small helper inlining gap found by P20 (Appendix P20) | P: `find_w` in the bud_charge hot path is inlined (P20 attribution: about 25 instructions per call not inlined), output parity on both compilers, and the P20 unmatched hand16 lane (keys pre-parsed, 1.13-1.17x) re-measured after P13f and this row; any remaining gap above 1.0x is fixed or explained line by line (wire parsing is about 100 instructions of it). LLVM pairs for P20 wait for P17. |
+| P13g | Both codegens: small helper inlining gap found by P20 (Appendix P20) | P: `find_w` in the bud_charge hot path is inlined (P20 attribution: about 25 instructions per call not inlined), output parity on both compilers, and the P20 unmatched hand16 lane (keys pre-parsed, 1.13-1.17x) re-measured after P13f and this row; any remaining gap above 1.0x is fixed or explained line by line (wire parsing is about 100 instructions of it). LLVM pairs for P20 wait for P17. Done (Appendix P13g): the out-of-line helper was `cur_off` (4 call sites, 562 lines inclusive), not `find_w` (already always); root_m8 now has one `cur_off` site for charge/noteFailure and folds `load_cv` into `load_cv_at`, so the shared policy inlines it (no compiler change, py/rs output identical). M/L instr/call charge 689 -> 606 (hand16 494, 1.23x), failure 559 -> 470 (362, 1.30x); time at L 1.03x / 1.05x hand16; toolgrow -54; tooldup +11 (D11); `__text` +1,792 B and RSS +16 KiB (D11). Gap above hand16 by line (P13g.5): `valid(st)` 47/36 and record tests 11/10, Pruv only (D12); the remaining 54/62 at M (55/63 at L) has no single-line owner (D13); the 9-word id compare is `_memcmp` on both sides. |
 | P13h | Both codegens (and verifiers for (a)): M4 own-code size without time loss (Appendix P13d.5, P13d.8) | P: resident `__TEXT` of the M4 Pruv binary at or below hand's (P13d: 304 vs 240 KiB) with instructions and cycles on every M4 cell not worse than P13d.3's shipped column; candidates: proof-guided call-site specialization of total accessors, hot/cold body split of map growth paths; output parity on both compilers. |
 | P13i | B/bud_lifecycle.pruv (and bud_store.pruv for (c)): M7/M10 fixed-share regression from P13e plus the P18b handovers (Appendix P13e.7) | P: (a) lifecycle bodies (maybe_close, replace, reopen, attach) use the direct `xa`/`xb` paths like `copy_node` so the driver `__text` growth of about 37 KB and the M7 +96..176 / M10 +16..32 KiB fixed peak-RSS rise go back to c3ec58d or below; (b) drop the id copy in attach (P18b `noid`: S = 500 391.1 -> 355.1 instr/call, hand16 303.3); (c) M7 proportional RSS share (about 0.74 KB per session over hand16) from `bud_store::need` slack, and attribute the unexplained fixed 254 KB. Time and M4 cells not worse than P13e. Runs after P18c (shared M7 driver `__text` base) and before T5b2 if both touch bud_lifecycle. Measured (Appendix P13i, parts (a) and (b); (c) needed bud_store.pruv and was left open for P13j): (b) attach returns a view `[6, n, off]` of the stored id instead of copying it, attach 392.8 -> 353.5 / 393.2 -> 355.3 instructions per call at S/M (hand16 299.8 / 305.3, 1.18 / 1.16x; after the audit's length clamp 348.6 / 349.4, 1.12 / 1.17x), other cells unchanged, peak RSS overlapping, 0 allocations, M7 Q 113/187/0 on both compilers. Not met: (a) the lifecycle bodies already use `xa`/`xb`; the `__text` growth is `find_w` inlined everywhere since P13e's `ef`/`set_ef` `#[inline]`, and no variant within the allowed files restores `__text` (457,532 B; 413,244 at c3ec58d) or the fixed peak RSS without an instruction loss (P13i.1); M7 `__text` +384 B from the harness tag-6 decoder (Pruv code -44 B); M10 `__text` unchanged. (c) done (Appendix P13i(c)): after setup at S = 1000 only one 16 KiB page of the arena slack past the top is resident; the per-session excess is the record text one UTF-16 unit per i64 word (rest 95, date 24; `PERF_REST = "{}"` drops the slope 4.95 -> 2.40 KiB per session, hand16 3.56), outside these files, queued as P13i2 (proposed in the appendix); the full-run excess was the driver keeping every item's World alive, now scoped per item like hand16 (peak RSS S 100 5568 -> 3888, M 500 14208 -> 8256 KiB, hand16 2608 / 5248; instructions overlap); fixed share +176 KiB at S = 1 is `__text` +143 KiB (P13k) and the 32 KiB out buffer. |
 | P13j | B/bud_store.pruv: store bounds found by the P13e audit (Appendix P13e.10) | P: at the maximum slot count the entry base must not overlap the slot table, and a grow must carry the root payload; both as proved `ensures` plus a gate case that drives each path (none does now); proofs kept, time and RSS not worse than P13e. Done (Appendix P13j): entry base 16 + c32(word 4) in `ea`/`xa` (and the admission mirror), bound `ensures` on ea/eb/xa/xb/xbm; root payload through `copy_pay` in `copy_kids` and a `grow_copy` `ensures` (root_carried + blob words); gate cases `maxslot` and admit case 24 fail on a4427ec and pass; gates as P13e.8; instructions, peak RSS and allocations not worse; M7 `__text` -320 B, M4 `__text` +832 B accepted for the root payload fix, removal queued as P13j2 (P13j.4); audit: 2 required findings fixed with admit cases 25/26 (P13j.5). |
@@ -534,6 +534,9 @@ fixed in one package before R12.
 | D8 | PERF_HEADROOM p_iso 100 rs 1.06x (py 0.91x), p_iso 500/1000 medians 1.01-1.04x (overlap base and hand), p_wr 1000 py 1.17x (rs 0.98x) | P27.5 (Appendix P27): no code change on these paths and py/rs Rust is identical, so the py/rs gap is build layout; p_iso has no stack site |
 | D9 | P18d M7 fair cells at M/L: attach 377.4 / 372.6 vs hand16 297.6 / 297.1 (1.27 / 1.25x), closereopen 548.7 / 549.0 vs 445.3 / 445.0 (1.23x), reopenmiss 393.3 / 391.1 vs 334.3 / 336.5 (1.18 / 1.16x) | P18d (Appendix P18d.4), one fix attempt (K = 1 scalar return) used: attach keeps the `out` buffer (put_key's written length depends on the key); closereopen's maybe_close is a pub entry and writes through its own val array; reopen_b passes 12 arguments (stack-passed tail) and the twin carries a run-time `pruv_fn`; the rest is the reopen body gap queued in T5b2 |
 | D10 | P18d M7 driver `__text` 464,700 vs 461,628 B (+3,072) | P18d (Appendix P18d.4): fixed share; the pinned adapters' copy-in/copy-out inlined into the host callers (`raw_call` +952, `run_perf` +596, `c_call` +420, `one` +388, two `run_perf` closures +416 / +376); the core itself is the old body size (reopen_b 11,648 -> 11,636). Same multiplication as P13k.2 |
+| D11 | P13g M8 tooldup M/L 585 / 571 vs base 574 / 561 instr/call (+1.9%, ns +0.5..1.3; still 0.60-0.67x oaw), M8 driver `__text` 318,716 vs 316,924 B (+1,792), peak RSS +16 KiB on most cells | P13g (Appendix P13g.4): a tooldup hit returns before `cur_off`, so the cost is `World::call` layout with `cur_off` inlined into the code 3 arm (register pressure not isolated); the one fix attempt (cold `cur_off` wrapper for code 3) moved +23 to toolgrow and was dropped. `__text`/RSS: fixed share, one more inlined `find_w` copy |
+| D12 | P13g M8 charge / noteFailure: `bud_store::valid(st)` on every `t_call` (47 / 36 instr/call) and the `cur_off` record tests (11 / 10), Pruv only | P13g.5 ablations A and E. Two separate facts: `valid` checks the store header and dynamic bounds of whatever buffer the host passes; I1 (root_m8 header) is the validity of the stored keys and records. Dropping `valid` needs both mutators keeping it (P13a.9 style) and a guarantee on the entry buffer's origin (or an entry bound check that stays); dropping the record tests needs I1 as a checked resident invariant |
+| D13 | P13g M8 charge / noteFailure: 54 / 62 (M), 55 / 63 (L) instr/call above hand16 not owned by one line | P13g.5: after `valid` and the record tests, the rest is spread over the lookup path (key framing on wire words, inlined `find_w` chain, `charge_at` / `note_failure_at`); single-line removals (B, C, D) only move layout (+5..13). The 9-word id compare is `_memcmp` in both Pruv and hand16, not a gap source. Attribution below line level needs P17's LLVM pairs |
 
 Queued with the debt list (not product perf):
 
@@ -7610,3 +7613,129 @@ can be replaced by an older-mtime binary before the first stat (now a build-time
 in the identity walk so a stat error also turns the cache off. Gates after these fixes: `check_module_cache.py` 56/56,
 rs `g4b_proof` 2/2, `cargo test --release`, M10 rs output byte-identical without the flag, cold and warm (11 records,
 warm 0.08 s).
+
+## Appendix P13g: the M8 CURRENT lookup inlined; the rest of the hand16 gap, by line
+
+Base main 04b43b6. Files: `bench/l3/budget/m8_test/root_m8.pruv` only. No compiler change, no verifier change. Notes,
+variants and scripts in `work/p13g` (not committed).
+
+### P13g.1 What blocked inlining
+
+At base `bud_map::find_w` already gets `#[inline(always)]`. The helper that stayed out of line on the hot path was
+`cur_off` (root_m8): four textual call sites (charge, noteFailure, noteTool, and the one inside `load_cv`), inclusive
+size 562 lines (own body 47 plus the inlined `find_w` chain, 415), so `incl * (sites - 1)` = 1,686 exceeded
+`INLINE_BUDGET` (1,500) and the policy left it `#[inline]`; rustc did not inline it. The policy itself is right here (more copies of a large body grow `__text`); the
+shape was the cause, so the fix is in the source:
+
+- The code 1 and code 2 arms of `t_call` share one `cur_off` site. The length test for each code runs before the
+  lookup, as at base: a bad length answers 2 with `st` and `cv` unchanged (`fx[0..2]` is already written, as at base).
+- `load_cv` (which re-ran `cur_off` on the out-of-range fallback, so CURRENT ran twice there) is removed; both
+  fallbacks call `load_cv_at` with the offset already found.
+- `cur_off` now has two sites (code 1/2, code 3), 562 * 1 fits the budget, and the policy makes it `#[inline(always)]` on both compilers; the
+  generated Rust from pruvc and pruvc-rs is byte-identical.
+
+### P13g.2 Variants measured
+
+| variant | charge M/L instr | failure M/L | tooldup M/L | toolgrow M/L | taken |
+|---|---|---|---|---|---|
+| base 04b43b6 | 689 / 690 | 559 / 560 | 574 / 561 | 1429 / 1419 | - |
+| v1: one code 1/2 site, `load_cv` folded (shipped) | 606 / 607 | 470 / 470 | 585 / 571 | 1375 / 1364 | yes |
+| v1 + `#[cold]` wrapper of `cur_off` for code 3 (the tooldup fix attempt) | 606 / 607 | 473 / 473 | 562 / 548 | 1453 / 1442 | no: toolgrow +23 (+1.6%), and `#[cold]` on a hot path |
+
+### P13g.3 Gates (worktree pruvc-rs release first, then pruvc.py)
+
+| gate | rs | py |
+|---|---|---|
+| `cargo test --release` (pruvc-rs) | 139 passed, 0 failed | - |
+| `tests/diff_rust.py --fuzz-count 20` | all same | (compares both) |
+| `run_all --only g8_frontend` | 39/39 | 27/27 |
+| `run_all --only runtime` | 1146/1146 | 1146/1146 |
+| `run_all --only l3_abi` | 3/3 | 3/3 |
+| `tests/check_generated.py` | ok (4 tables) | - |
+| M8 q (`run_m8.py q`, Q2 x 300 cases from `q_gen.py --families Q2 --count 300` + `oracle.py`) | 63 exact / 237 not-implemented / 0 fail | same |
+| `corrupt_resident.py --old-rev HEAD` | controls 387, mismatches 0, poke-not-found 0; P21a 6/6 | - |
+
+Generated code of other roots: nothing imports `root_m8`, so no other root's generated Rust changes and the M4-M11
+PERF_HEADROOM cells are not affected by construction (no other root Q rerun). tests/ unchanged.
+
+### P13g.4 Perf (base 04b43b6 / new, 5 alternating rounds, R = 200000, medians; unmatched hand16 lane, keys pre-parsed)
+
+`__text` (M8 driver): base 316,924, new 318,716 (+1,792 B: one more inlined `find_w` copy, now in the code 1/2 arm
+and the code 3 arm). Peak RSS: +16 KiB (one page) on most cells (e.g. charge 500 2480 -> 2496, tooldup 1000 4224 ->
+4240, toolgrow 1000 4320 -> 4336 KiB), allocations equal.
+
+| cell | instr/call base | new | hand16 | new / hand16 | ns base | new | hand16 |
+|---|---|---|---|---|---|---|---|
+| charge 100 | 686 | 603 | 494 | 1.22 | 23.0 | 21.4 | 21.1 |
+| charge 500 | 689 | 606 | 494 | 1.23 | 26.0 | 23.7 | 23.4 |
+| charge 1000 | 690 | 607 | 495 | 1.23 | 25.3 | 23.5 | 22.9 |
+| failure 100 | 556 | 466 | 361 | 1.29 | 19.1 | 17.1 | 17.4 |
+| failure 500 | 559 | 470 | 362 | 1.30 | 21.2 | 18.6 | 18.1 |
+| failure 1000 | 560 | 470 | 362 | 1.30 | 21.1 | 18.8 | 17.9 |
+| tooldup 100 | 572 | 583 | 529 | 1.10 | 21.3 | 22.3 | ~33 |
+| tooldup 500 | 574 | 585 | 529 | 1.11 | 23.0 | 24.3 | ~33 |
+| tooldup 1000 | 561 | 571 | 530 | 1.08 | 21.9 | 22.4 | ~33 |
+| toolgrow 500 | 1429 | 1375 | 2672-2797 | 0.49 | | | |
+| toolgrow 1000 | 1419 | 1364 | 2672-2797 | 0.49 | | | |
+
+- charge and failure: -83 and -89 instructions per call, more than P20.4's 25-29 for `find_w` (the call, the
+  argument passing and the out-of-line body all go). Time -7..-12%; at L 1.03x / 1.05x hand16.
+- tooldup: +10..11 instructions (+1.9%) and +0.5..1.3 ns at M/L (per-round ns at M do not overlap: base 22.3-23.8,
+  new 24.0-24.9). A tooldup hit returns before `cur_off`, so the cost is code layout of `World::call` with
+  `cur_off` inlined into the code 3 arm (register pressure is a guess this package did not isolate). One fix attempt
+  (P13g.2, cold wrapper) moved the loss to toolgrow; recorded as debt D11. Still 0.60-0.67x oaw on time.
+- toolnew unchanged within noise; time numbers carry some noise (gate commands ran during part of the runs);
+  instruction counts were stable to +-1 across rounds.
+- Matched wire lanes (3 rounds, instructions): charge Pruv / hand16w 0.81 -> 0.71, / oaw 0.90 -> 0.79; failure 0.81 ->
+  0.68 and 0.92 -> 0.77; toolgrow / oaw 1.03 -> 0.99 (M) and 1.02 -> 0.98 (L), now below 1.0; tooldup / oaw 0.64 ->
+  0.66 (M) and 0.63 -> 0.64 (L).
+
+### P13g.5 The rest of the charge / failure gap above hand16, by line
+
+Ablations on the generated Rust of the shipped tree (work only, one change each, instructions per call at M/L,
+stable to +-1):
+
+| ablation of the new tree | charge | failure | share of the gap |
+|---|---|---|---|
+| new (shipped) | 606 / 607 | 470 / 470 | +112 / +108 over hand16 at M (+113 / +109 at L) |
+| A: drop `if !bud_store::valid(st) { return 2; }` (t_call line 1) | 559 / 560 | 434 / 434 | `valid(st)`: 47 / 36 |
+| B: A + `rec_end(op, 1)` / `rec_end(op, e1)` as plain offsets | 564 / 565 | 446 / 447 | key framing + canonical checks: about 0 (removal costs +5 / +12 from layout) |
+| C: A + the T0 `2^40` length test in `pub fn t_call` | 565 / 566 | 441 / 441 | about 0 (+6 / +7 from layout) |
+| D: C + the `len(op) < 2 / len(fx) < 2 / len(cv) < 15` line | 571 / 572 | 447 / 448 | about 0 (+12 / +13 from layout) |
+| F: A + `cur_off`'s `eq_range` id compare | 500 / 501 | 369 / 369 | removes work hand16 also does (below) |
+| E: F + `n == 15 + bm` and the word-14 / state test | 489 / 490 | 359 / 359 | record tests: 11 / 10 |
+
+The bench budget id is 36 UTF-16 units, 9 words. Pruv's `eq_range` (a slice `==` on 9 `i64`) and hand16's
+`*b.id == *budget` (a `[u16]` compare) both call `_memcmp` on 72 bytes, so the A -> F drop (59 / 65) is the cost of
+the compare itself, which hand16 pays too, not a Pruv-only line. F (1.01 / 1.02x) and E (0.99x) are therefore below
+what a fair comparison allows; the gap above hand16 at M/L reads:
+
+1. `valid(st)` at the top of `t_call`: 47 / 36 instructions, Pruv only. Debt D12.
+2. Record tests in `cur_off` (`n == 15 + bm`, word 14 / state): 11 / 10, Pruv only; kept because I1 is not a checked
+   resident invariant (root_m8 header). Part of D12.
+3. The rest, 54 / 62 at M (charge 606 - 494 - 47 - 11 = 54, failure 470 - 362 - 36 - 10 = 62) and 55 / 63 at L
+   (hand16 494 / 361): spread over the lookup
+   path (session/budget key framing on the wire words, the inlined `find_w` hash chain, `charge_at` / `note_failure_at`
+   bodies) and not owned by any single line: removing the framing and length lines one at a time (B, C, D) costs +5..13
+   instructions from layout instead of saving any. Debt D13; an attribution below line level needs the LLVM pairs of
+   P17.
+
+Key framing and length tests have no measurable single-line cost.
+
+### P13g.6 Audit and delegations
+
+Codex gpt-6.2-astra (ultra) audit: `t_call` codes 1 and 2 return the same values and write the same buffers as
+04b43b6 (length rejects, `bo < 0` for each code, the out-of-range fallback that clears, loads and writes back `cv`,
+error and HALT returns); the archived generated Rust of both compilers is byte-identical. Two must-fix findings, both
+in this appendix, fixed: the 0.99x claim (it holds only for E, and F/E remove a compare hand16 also does) and D13
+(the id is 9 words and hand16 calls `_memcmp` too; P13g.5 rewritten). Should items fixed: the length-check order in
+the root_m8 comment and P13g.1, D12 now separates the store-shape check from I1, the cold variant's failure 473 /
+473, toolgrow base 1429, tooldup hand16 529 (1.11x), the tooldup cause stated as layout with register pressure
+unproven; nit: tooldup / oaw at L. Re-check (same auditor, one pass): all seven fixed; one new must-fix (the residual mixed M and L medians) fixed by
+stating M and L separately. The comment change leaves the generated Rust byte-identical (pruvc-rs output `cmp` equal).
+
+| work | by |
+|---|---|
+| blocking-helper finding, source change, variants, ablations, perf measurement, this appendix | Claude Opus 5.5, direct |
+| py-compiler runtime / l3_abi and `check_generated.py` gate run | Lair command delegation |
+| package audit | Codex gpt-6.2-astra (review, ultra) |
