@@ -432,7 +432,7 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P28 | New B/bud_auto.pruv,M12 driver: clear/record/stop | P Q7+L, owner lookup/record sizes; actual semantics, no stub pass. Done (Appendix P28): `bud_auto.pruv` on the resident store plus additive `bud_map::splice_blob`; fixed checks (duplicate-key delete, 572-world reserve sweep) 0 problems; Q7P 300/300, L 10/10, crafted 8/8 exact and Q7 7 exact + 293 prefix-ok (cut at P29 ops) on rs and py, hdiff 0 over 326 cases, 4 mutants plus 2 fixed-check mutants each caught; M4-M11 Q reruns unchanged; time at or below hand in every data-proportional cell except clear M (1.144x, separated distributions, debt D15), allocations equal everywhere; S cells, stop M/L and peak RSS shares are debt D16-D18. Audit 13 findings: 7 fixed, 2 to debt, 4 known gaps (P28.8). |
 | P29 | New B/bud_cleanup.pruv: restore/forget/dispose | P Q7+M, ordered timers/markers/linear reclaim; C/R/A axes. Done (Appendix P29): `bud_cleanup.pruv` (bootRestore / forgetSession / dispose) plus the V-word integration of attach, charge, halt, runStarted / runWaiting / runEnded and FIRE (`bud_vlife.pruv`, `bud_vwords.pruv`, `bud_effect.pruv`), every decision in Pruv, the host runs effects, time, timers and facts only; no shared module changed. Q7 300 exact (no prefix-ok left), Q7P 300, L 10, crafted 8 + 7 (audit), lifecycle 7 exact on rs and py, session-carrying effects compared with the oracle snapshot at call time; hdiff Q7 300/300, legacy 326/326, lifecycle 7/7; C=10/50/100 cleanup and 100/1000/5000 owner-lookup checks 9/9 against the oracle on both lanes and compilers. Every entry is Grow-atomic (room planned before the first write), so the host runs in place with no store clone. Time at or below hand in F / D / O M and L and B L; B M 1.16x with overlapping distributions (D23); A M / L, H M / L and U M / L are above after one fix attempt, debt D19-D21; D22 keeps the O per-clock load cause (O L 0.89x now); S cells D23; peak RSS D24. Audit 11 must-fix: 9 fixed, 2 rejected (C16, C17), one uuid gap known (P29.8). |
 | P30 | New B/bud_decide.pruv: raise | P Q5+H, synchronous reached queries, limits/R; new M10b coverage. Done (Appendix P30): `bud_decide.pruv` `raise` (unlimited, per-key max of size x unit, settle + refresh on a raised time limit, nested time halt, changed last), every decision in Pruv, the host answers `unit` and runs timers only; no shared module changed (`m7_test/bud_facts.rs` adds the `unit` fact). M10b q 300 exact (428 raise calls) and H01-H10 exact on rs and py, `same` byte-identical; M7-M12 Q unchanged. Perf D = 10 / 50 / 100: O(1) in D, every cell under 1 us, so fixed share: Pruv 34-131 vs hand 33-82 ns, allocations equal, RSS +0.54-0.67 MB (D25-D27). KD-P30-1..4; three proposed rows (P30.8). |
-| P31 | Same: decide extend/end | P Q5+I, releaseHeld at reached position, save/refresh/wake and atomic bounds. |
+| P31 | Same: decide extend/end | P Q5+I, releaseHeld at reached position, save/refresh/wake and atomic bounds. Done (Appendix P31): `bud_decide.pruv` `decide` (not-found / not-halted, extend: unlimited or limits += size x unit, open, halt deleted, save, changed, REFRESH without SETTLE with a nested time halt, queueContinue(reason, no wake), the synchronous `releaseHeld` fact at its effect position and queueContinue(null, wake) when nothing was held; end: CLOSE('user-end'), dropHeld, save, changed), every decision in Pruv, the host answers `unit` / `releaseHeld` and runs effects only; no shared module changed (new `m10b_test/decide_facts.rs`). M10b q 300 exact (598 decide + 428 raise calls) and I01-I10 exact on rs and py, H01-H10 and raise controls unchanged, `same` byte-identical; M10 Q unchanged. Perf D = 10 / 50 / 100: extend below hand at D = 50 / 100 (0.64x / 0.41x), end below at D = 100 (0.91x), above at small D by a fixed per-call share (lower slope in D than hand), debt D28-D30. Audit 1 + re-check 1 (P31.7). KD-P31-1..3; proposed rows (P31.8). |
 | P32 | B/host.rs,roots/bindings,bud_test_abi.pruv,m34/m5–m11 shims | P split per operation/narrow family; direct/adapter grid, malformed admission, one decision engine. |
 | P33 | Both codegens/hot contracts: residual L4/L5 only | C inline attribute/size heuristic and local proof gates; P touched families, M11 compile CPU/binary size and parity. Partly done in P13i2a: `#[inline(always)]` and `#[inline]` fn attributes (explicit directive over R-7-3 promotion); size heuristic/local proof gates still open. |
 | P34 | One measured §4 opportunity per subpackage | P touched families/collisions and raw/admitted complete operations; saving ledger, same-structure hand (ii), assembly evidence for any proof win. |
@@ -551,6 +551,9 @@ fixed in one package before R12.
 | D25 | P30 M10b raise, all paths, D = 10 / 50 / 100: limits 65.4-67.6 vs hand 55.8-56.7 ns/op (1.17-1.21x), unlimited 34.4-35.3 vs 32.9-33.8 (1.02-1.07x, D = 10 / 100 overlapping); allocations 1 / 1 and 0 / 0 | P30 (Appendix P30.5): O(1) in D and under 1 us, fixed share. Cause by line: about 2-12 ns per call common to every path: `t_call` decodes the op frame (m10b_test/root_m10b.pruv `t_call`), `current_entry` hashes and compares the packed session key and `clock_of` does a second packed-key lookup (B/bud_decide.pruv:101, :114), and every record access is a bounds-checked `ent_u16::rd` / `wr` (:23-27); hand reads a typed struct from one `HashMap<String>` lookup. Fix: the typed session record row (P13i2a, D14) |
 | D26 | P30 M10b raise time path (settle + refresh): D = 10 / 50 / 100 130.6 / 85.5 / 85.7 vs hand 82.0 / 62.4 / 60.2 ns/op (1.37-1.59x; D = 10 distributions overlap); allocations 1 / 1 | P30 (Appendix P30.5): fixed share, as D25 plus about 20 ns: `bud_halt::rec_ok_in` validates the whole stored record frame (`text_frame`, O(W)) before the refresh writes (B/bud_decide.pruv:154), `room_plan` probes the store before the unit query (:124), and `view_in` copies the header into `bv` with three words written back after settle and refresh (:62-68); hand mutates its typed record in place. Fix: as D25; a record validity fact kept by the store would drop `rec_ok_in` |
 | D27 | P30 M10b peak RSS (fresh process per sample): 2.16-2.34 vs hand 1.61-1.67 MB (+0.54-0.67 MB, 1.33-1.42x), flat in D | P30 (Appendix P30.5): fixed share. The Pruv binary carries the whole M10 world (state arena, 4096-word `fx` and `out` buffers, text arena, larger `__text`); same start-buffer cause as D18 |
+| D28 | P31 M10b decide extend, D = 10 / 50 / 100: 211.6 / 250.7 / 296.9 vs hand 147.3 / 392.1 / 727.0 ns/op (1.44x / 0.64x / 0.41x; perf3 1.35x / 0.68x / 0.40x); 2 vs 1 allocations per op | P31 (Appendix P31.5): above hand only at D = 10. The excess is fixed per call: the Pruv slope in D is 0.9 vs hand 6.4 ns per id (hand drops its `Vec<String>` stopped list, m10b_test/hand_m10b.rs:119), so it is not data-proportional. Cause by line: the stripped record is built in a fresh prefix slice (B/bud_decide.pruv:277, the extra allocation), `text_frame` and `rest_rel` validate and walk the stored record (:253, :255), `room_plan` probes the store before the unit query (:267) and the `releaseHeld` fact is a trusted call (:316); plus D25's per-call lookup share. Fix: write the open state, limits and halt strip in place in the stored record (it only shrinks), which needs a shrink-in-place store write (P31.8) |
+| D29 | P31 M10b decide end, D = 10 / 50 / 100: 258.7 / 503.1 / 743.9 vs hand 147.1 / 454.1 / 815.3 ns/op (1.76x / 1.11x / 0.91x; perf3 1.84x / 1.15x / 0.88x; earlier runs 1.71x / 1.20x / 0.90x and 1.79x / 1.13x / 0.98x); 3 vs 0 allocations per op | P31 (Appendix P31.5): a fixed share of about 110 ns, not data-proportional: the Pruv slope is 5.4 vs hand 7.4 ns per stopped id, so the ratio falls with D and is below 1.0 at D = 100; no fix attempt is owed for a gating cell. Cause by line: `blob_copy` of the stored record (B/bud_decide.pruv:330) and `rec_ok_in` over it (:331), then the shared `close_rec` slices the header and `rewrite` builds the closed record (B/bud_lifecycle.pruv:577, :588), three allocations where hand mutates its typed struct and drops the clock. Fix: an in-place close in `bud_lifecycle` (shared module, outside P31's file boundary; P31.8) |
+| D30 | P31 M10b decide peak RSS (fresh process per sample): extend 2.36-2.44 vs hand 1.69-1.70 MB, end 2.29-2.42 vs 1.72 MB (+0.6-0.7 MB, 1.32-1.41x), nearly flat in D | P31 (Appendix P31.5): fixed share, the D27 cause (the whole M10 world's start buffers and the larger binary) |
 
 Queued with the debt list (not product perf):
 
@@ -8415,3 +8418,141 @@ Queued with the debt list (§7.5): a `bud_clock` disarm-only operation (raise cl
 `bud_store::set_ef`); header precedence in the shared M10 record decoder (Q5-20261117-26-raise); and the nested halt
 status 6 bound, folded into the existing in-call store growth follow-up. None blocked the port. The perf debts D25-D27
 point to the typed record row already proposed (P13i2a, D14).
+
+## Appendix P31: decide extend / end (bud_decide.pruv, M10b)
+
+### P31.1 Semantics (B:449-477)
+
+`decide(session, budgetId, choice, size)` returns `out = [6, code]`: 0 `{ok: true}`, 1 `not-found` (no session, no
+budget or not the session's current id), 2 `not-halted`. Every decision is made in `bud_decide.pruv`; the host answers
+two facts (`unit`, the P30 fact, and `releaseHeld` in the new `m10b_test/decide_facts.rs`) and runs effects. New
+effect words: `[36]` save, `[38, reason (-1 = null, 0..4), wake (0 / 1)]` queueContinue, `[39]` dropHeld.
+
+- extend (size 0 = unlimited, 1 / 2 / 4 / 8; an absent size is 1): unlimited sets word 2 with no unit query, otherwise
+  limits[k] += size x unit[k] for the five keys (each sum checked <= 2^53-1 before any write); state open, halt
+  deleted (the record is stored without its halt section), save, changed; when the budget has a clock, REFRESH
+  without SETTLE (B:466): a timer set, or a nested `bud_halt` time halt when the time limit is still reached; then
+  queueContinue(reason, no wake) when the halt had a reason (read in O(1) at the halt prefix the frame check proved), then `releaseHeld` asked synchronously at its position
+  in the effect stream, and queueContinue(null, wake) when it answers 0 (nothing held).
+- end: CLOSE('user-end') through the shared `bud_lifecycle::close_rec` (settle, state closed, ended = {user-end,
+  now}, the clock dropped, the halt section kept), then dropHeld, save, changed.
+- Grow atomicity: extend plans room for the stripped record, a since-text rewrite and, for a limited extend only
+  (an unlimited budget is never armed, so it cannot re-halt for time), a nested halt (`bud_halt::halt_words`) before
+  the unit query; end reserves the stored record's length before CLOSE (the closed
+  record is never longer). A Grow writes nothing and asks nothing; status 2 / 3 paths write nothing except
+  KD-P31-3. If a nested halt uses its slack word and the two queueContinue records no longer fit, the call returns
+  the halt capacity status 6 (as P30's R8 fix).
+
+### P31.2 Intent / bug / accident (work/p31/classify.md)
+
+| # | behaviour | class | treatment |
+|---|---|---|---|
+| X1 | absent session / budget or a non-current id -> not-found | intent | oracle-compared |
+| X2 | current budget not halted -> not-halted | intent | oracle-compared |
+| X3 | extend size 0 -> unlimited, no unit query | intent | oracle-compared |
+| X4 | extend size s -> limits[k] += s x unit[k] | intent | oracle-compared |
+| X5 | open, halt deleted, save, changed in that order | intent | oracle-compared |
+| X6 | REFRESH without SETTLE: timer set or a nested time halt | intent | oracle-compared |
+| X7 | queueContinue(reason, false) when the halt had a reason | intent | oracle-compared |
+| X8 | releaseHeld at its place; false -> queueContinue(null, true) | intent | oracle-compared (position, session, budget id) |
+| X9 | end: CLOSE('user-end'), halt kept, dropHeld, save, changed | intent | oracle-compared |
+| X10 | size outside {0, 1, 2, 4, 8} multiplies whatever arrives | accident (excluded by the type) | KD-P31-1: status 2 before any write |
+| X11 | limit + size x unit above 2^53-1 rounds silently | bug (JS number) | KD-P31-2: status 2 before any write |
+| X12 | a releaseHeld answer outside {false, true} is coerced by truthiness | accident (host fault) | KD-P31-3: status 2 after the store; the host call already ran and cannot be undone. The same holds for an invalid `running_ids` answer inside a nested halt (as P30 raise) |
+| X13 | writes before knowing room exists | host model | Grow before the unit query, nothing written |
+
+X1-X9 are compared with the Node oracle; X10-X13 are checked by `check_decide_controls` (4 rejection paths, 2 Grow
+retries, 1 invalid releaseHeld answer).
+
+### P31.3 Complexity, by flow
+
+S / B / O / W / D / I as P30.3.
+
+| flow | time / extra space |
+|---|---|
+| X1, X2 | O(S) / O(1) |
+| extend unlimited / numeric | O(S + B + W) / O(W): record frame check, room plan and one stripped-record copy; the halt reason is one word read; one fixed-size unit answer |
+| extend with a clock | adds REFRESH O(1) or a nested halt O(W + D + I) plus one lookup and owner compare |
+| end | O(S + B + W) / O(W): record copy, validation and the closed-record rewrite (W includes the kept halt's D ids) plus the clock drop O(clock runs) |
+| releaseHeld / effects | O(1) words each |
+
+Checked by the perf run (P31.5): extend and end grow linearly in D (the stored halt's stopped ids) with a lower slope
+than hand.
+
+### P31.4 Tests (both compilers; `run_m10b.py`)
+
+| check | rs | py |
+|---|---|---|
+| q --set decide (Q5 + decide) | 300 exact, 0 cut, 0 fail; 598 decide + 428 raise calls compared | same |
+| q --set raise | 300 exact (428 raise calls), unchanged from P30 | same |
+| h H01-H10 | 10 exact, raise controls pass | same |
+| h I01-I10 | 10 exact, 16 decide calls | same |
+| h G (decide controls) | 4 rejection paths (size 3, product and sum-only above 2^53-1, malformed unit), 2 Grow retries whose output and final stored state equal a plain run, 1 invalid releaseHeld answer whose stored state equals a valid answer's | same |
+| same | byte-identical, 350,906 B | |
+
+No shared module changed (`bud_decide.pruv` is P30's file; `decide_facts.rs` is new), so only M10 Q was rerun:
+78 exact / 222 cut / 0 fail, unchanged.
+
+### P31.5 Perf (5 alternating rounds, medians; 10,000 decides per lane per round)
+
+D = clock runs and staged delegation ids. Each sample halts the budget for `commands` with D stopped ids outside the
+timer, then times one public decide plus its effects (`perf_raise` in the driver, `decide` + `Host::perform` in
+`hand_m10b.rs`). Run after the re-check fixes to the hand lane (work/p31/perf4.txt); the run after the audit fixes
+(perf3.txt: extend 197.2 / 261.3 / 296.4 vs 145.6 / 386.5 / 743.8, end 263.7 / 507.4 / 736.8 vs 143.3 / 441.4 / 832.8)
+and the two pre-audit runs (perf1.txt, perf2.txt) agree within 10% for end; extend got faster after the audit (the
+O(1) halt reason read).
+
+| path | D | Pruv ns | hand ns | ratio | alloc Pruv / hand | RSS Pruv / hand (B) |
+|---|---:|---:|---:|---:|---|---|
+| extend | 10 | 211.6 | 147.3 | 1.44 | 2 / 1 | 2342912 / 1720320 |
+| extend | 50 | 250.7 | 392.1 | 0.64 | 2 / 1 | 2375680 / 1736704 |
+| extend | 100 | 296.9 | 727.0 | 0.41 | 2 / 1 | 2441216 / 1753088 |
+| end | 10 | 258.7 | 147.1 | 1.76 | 3 / 0 | 2293760 / 1736704 |
+| end | 50 | 503.1 | 454.1 | 1.11 | 3 / 0 | 2359296 / 1769472 |
+| end | 100 | 743.9 | 815.3 | 0.91 | 3 / 0 | 2424832 / 1769472 |
+
+Slopes per stopped id: extend 0.9 vs hand 6.4 ns, end 5.4 vs 7.4 ns. The excess at small D is a fixed per-call share
+(record copies and validation, D28 / D29), so no data-proportional cell is above hand; the allocation counts are
+fixed per call (D28 / D29) and RSS is D27's start-buffer share (D30). Raise (time / limits / unlimited) is unchanged
+from P30.5 (perf3: 127.0 / 87.1 / 90.0, 73.0 / 68.0 / 69.6, 38.8 / 38.3 / 39.2 ns; the hand `Effect` stays 16 bytes).
+
+### P31.6 Hand Rust lane
+
+`hand_m10b.rs` `decide`: the typed `Budget` gains `ended` and the halt its `reason`; the same not-found / not-halted
+(a closed current budget is not-halted), size and 2^53-1 checks, unit query, REFRESH without settle mirroring
+`bud_clock::refresh_in` (consuming vs a since mark, settle only for the clock owner, no timer for an unlimited budget,
+otherwise timer set or nested time halt, whose settle is also owner-checked), queueContinue order and the same `decide_facts::release_held` fact (0 ->
+queueContinue(null, wake), 1 nothing, any other answer an error); end only for the end code, settles only for the
+clock owner, removes the clock (an armed timer is cleared whatever the owner, as `bud_clock::drop_at`) and closes. Used for perf only.
+
+### P31.7 Audit and delegations
+
+One batch audit (Codex gpt-6.2-astra ultra), 21 items, and one re-check of the must-fix items (Codex 2 account; the
+default account was at its limit). The re-check confirmed 9, 10, 12, 13, 14, 15, 18, 20 and 21; it found 16 open in
+one path and one new hand-lane must-fix, both fixed in `hand_m10b.rs` (the Pruv code did not change).
+
+| item | finding | disposition |
+|---|---|---|
+| 9 | an unlimited extend reserved nested-halt room it can never use | fixed: halt room only for a limited extend |
+| 10 | the halt reason was found by re-walking the stopped ids, O(D) | fixed: one word read at the proven halt prefix |
+| 12, 13, 15, 16 | hand refresh, closed-budget code, end selection and settle owner differed from Pruv | fixed in the hand lane; the re-check found 16 still open in the refresh nested halt (settled another owner's clock), fixed after it |
+| re-check new | hand end skipped the timer clear for another owner's armed clock (Pruv `drop_at` clears it, B/bud_clock.pruv:336, :379) | fixed in the hand lane; perf rerun (perf4) |
+| 14 | hand ignored an invalid releaseHeld answer | fixed (answer check); key and position marshalling is host side (note) |
+| 18, 20, 21 | controls lacked the sum-only overflow, final-state comparison of Grow retries and of the invalid answer | fixed in the harness |
+| 1 | status 6 when a nested halt leaves no room for the records | rejected: the declared halt capacity status, as P30 raise |
+| 2 | an invalid nested-halt running_ids answer after the store | rejected: the KD-P31-3 class (a host fact after the store, as P30) |
+| 3 | releaseHeld should be an effect, not a fact | rejected: Node reads its answer synchronously at that position; Q5 compares it |
+| 4, 19 | save as a tag; ids from the request | rejected: host model |
+| 5, 6, 7, 17 | hypothetical paths | notes, no concrete code path |
+| 8, 11 | extend / end allocations and fixed share | already D28 / D29 (non-gating) |
+
+Delegations: the audit (08f6bf97) and the re-check (22a50a95), both read-only. Implementation, tests and perf were
+done in the main conversation.
+
+### P31.8 Proposed rows (language / shared modules, not done in P31)
+
+| row | need | evidence |
+|---|---|---|
+| shrink-in-place store write | write a record that only shrinks in its slot without a fresh slice | D28 (extend's extra allocation, B/bud_decide.pruv:277) |
+| in-place close in `bud_lifecycle` | close a stored record without `blob_copy` / `rewrite` | D29 (end's 3 allocations, B/bud_lifecycle.pruv:577, :588) |
+| record validity fact | carry "record frame checked" from store to reader so `rec_ok_in` / `text_frame` are not re-run per call | D28 / D29 per-call validation share |

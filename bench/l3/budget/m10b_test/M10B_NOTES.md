@@ -39,6 +39,10 @@ Reserve may trigger the shared index rehash. It scans slots and entries and rein
 - KD-P30-2. A scaled unit above 2^53−1 returns status 2 before record or effect writes.
 - KD-P30-3. A malformed unit answer returns status 2 before record or effect writes.
 - KD-P30-4. An unsupported size code on a current, non-closed budget returns status 2.
+- KD-P31-1. A decide size outside {0, 1, 2, 4, 8} returns status 2 before record or effect writes.
+- KD-P31-2. A decide sum above 2^53−1 returns status 2 before record or effect writes.
+- KD-P31-3. A releaseHeld answer outside {0, 1} returns status 2 after the record is stored (the host call already ran).
+  The same class covers an invalid `running_ids` answer inside the nested halt of extend's REFRESH (as P30 raise).
 - R10 intentionally retains numeric limit updates on unlimited budgets. R15 retains the shared clock owner rule.
 
 ## Verification
@@ -88,3 +92,10 @@ The first version of the harness timed `World::call`. That added the M10 schedul
 ## Gaps
 
 `work/p30/gaps.md` records three proposed follow-ups. The clock could expose a disarm-only operation to encapsulate field 16. A shared record decoder could use the header precedence already tested in M10b. Nested halt inherits status 6 for an answer larger than the reserved arena or effect frame, pending the existing in-call growth follow-up.
+
+## P31 decide
+
+`decide` (extend / end) runs in `bud_decide.pruv`; the host answers `unit` and the synchronous `releaseHeld` fact
+(`decide_facts.rs`) and runs effects. `q --set decide` keeps decide calls (598 compared plus 428 raise), `h` adds
+I01–I10 and the decide controls on G10, `perf --items extend,end` times decide. Results: docs/L3_RESTRUCTURE_SPEC.md
+Appendix P31.

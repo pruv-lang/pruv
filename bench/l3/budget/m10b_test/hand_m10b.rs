@@ -1,4 +1,4 @@
-// Hand Rust raise baseline. This process owns its typed state and mock host.
+// Hand Rust raise and decide (extend / end) baseline. This process owns its typed state and mock host.
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::HashMap;
 use std::hint::black_box;
@@ -47,6 +47,8 @@ pub struct Setup {
     pub size: i64,
     pub unit: [i64; 6],
     pub effect_words: i64,
+    /// decide paths (P31): `size` is the wire flag, -1 = end
+    pub decide: bool,
 }
 
 impl Setup {
@@ -55,14 +57,21 @@ impl Setup {
             "time" => (2, [0, 120, 0, 0, 0, 0], 5),
             "limits" => (2, [0, 0, 24, 3, 2, 1], 1),
             "unlimited" => (0, [0; 6], 2),
+            // extend size 1 on a budget halted for commands: save, changed, timerSet (3), queueContinue(commands,
+            // no wake) and queueContinue(null, wake) (3 each)
+            "extend" => (1, [0, 120, 24, 3, 2, 1], 11),
+            // end: dropHeld, save, changed (the halt already settled the clock, so no timerClear)
+            "end" => (-1, [0; 6], 3),
             other => panic!("unknown path {other}"),
         };
+        let decide = matches!(args[0].as_str(), "extend" | "end");
         Self {
             d: args[1].parse().unwrap(),
             reps: args[2].parse().unwrap(),
             size,
             unit,
             effect_words,
+            decide,
         }
     }
 }
@@ -96,9 +105,16 @@ struct Budget {
     active_ms: i64,
     active_since: Option<i64>,
     halt: Option<Halt>,
+    ended: Option<(Ended, i64)>,
+}
+
+#[derive(Clone, Copy)]
+enum Ended {
+    UserEnd,
 }
 
 struct Halt {
+    reason: usize,
     at: i64,
     stopped: Vec<String>,
 }
@@ -123,6 +139,9 @@ enum Effect {
     Save,
     Changed,
     Announce,
+    // reason -1 (null) or a REASONS index 0..4, kept small so Effect stays 16 bytes as in P30
+    QueueContinue(i8, bool),
+    DropHeld,
 }
 
 struct Host {
@@ -218,7 +237,7 @@ fn raise(
                         let stopped = host.running_delegation_ids(sid, bid);
                         let count = stopped.len();
                         budget.state = State::Halted;
-                        budget.halt = Some(Halt { at: now, stopped });
+                        budget.halt = Some(Halt { reason: 0, at: now, stopped });
                         effects.extend([Effect::CancelRecovery, Effect::StopMain]);
                         for i in 0..count {
                             effects.push(Effect::StopDelegation(i));
@@ -234,12 +253,181 @@ fn raise(
     Ok(true)
 }
 
+// REFRESH without SETTLE (decide extend, B:466): restart an open budget's interval, or halt for time.
+fn refresh(clock: &mut Clock, budget: &mut Budget, sid: &str, bid: &str, now: i64, effects: &mut Vec<Effect>, host: &Host) {
+    // As bud_clock::refresh_in: act only when "consuming" differs from "since present"; an unlimited budget starts
+    // its interval but sets no timer.
+    let consuming = budget.state == State::Open && clock.active > 0;
+    if consuming == clock.since.is_some() {
+        return;
+    }
+    if !consuming {
+        if clock.owner == sid {
+            settle(clock, budget, now, effects);
+        }
+        return;
+    }
+    clock.since = Some(now);
+    budget.active_since = Some(now);
+    if budget.unlimited {
+        return;
+    }
+    let left = budget.limits[0].clamp(-150_000_000_000_000, 150_000_000_000_000) * 60_000 - budget.active_ms;
+    if left > 0 {
+        clock.armed = true;
+        effects.push(Effect::Set(left));
+        return;
+    }
+    if clock.owner == sid {
+        settle(clock, budget, now, effects);
+    }
+    let stopped = host.running_delegation_ids(sid, bid);
+    let count = stopped.len();
+    budget.state = State::Halted;
+    budget.halt = Some(Halt { reason: 0, at: now, stopped });
+    effects.extend([Effect::CancelRecovery, Effect::StopMain]);
+    for i in 0..count {
+        effects.push(Effect::StopDelegation(i));
+    }
+    effects.extend([Effect::StopAttachedTurns, Effect::HoldQueued, Effect::Save, Effect::Changed, Effect::Announce]);
+}
+
+/// decide (B:449-477): Ok(0) ok, Ok(1) not-found, Ok(2) not-halted; Err = an invalid size or unit answer.
+fn decide(
+    sessions: &mut HashMap<String, Budget>,
+    clocks: &mut HashMap<String, Clock>,
+    sid: &str,
+    bid: &str,
+    size: i64,
+    now: i64,
+    effects: &mut Vec<Effect>,
+    host: &Host,
+) -> Result<u8, ()> {
+    effects.clear();
+    let Some(budget) = sessions.get_mut(sid) else { return Ok(1) };
+    if budget.id != bid {
+        return Ok(1);
+    }
+    if budget.state != State::Halted {
+        return Ok(2);
+    }
+    if size == -1 {
+        // CLOSE('user-end'): SETTLE (only the owner's open interval), closed, ended, DROP the clock; the halt stays
+        if let Some(mut clock) = clocks.remove(bid) {
+            if clock.owner == sid {
+                settle(&mut clock, budget, now, effects);
+            }
+            // DROP (bud_clock drop_at): an armed timer is cleared whatever the owner
+            if clock.armed {
+                effects.push(Effect::Clear);
+            }
+        }
+        budget.state = State::Closed;
+        budget.active_since = None;
+        budget.ended = Some((Ended::UserEnd, now));
+        effects.extend([Effect::DropHeld, Effect::Save, Effect::Changed]);
+        return Ok(0);
+    }
+    if !matches!(size, 0 | 1 | 2 | 4 | 8) {
+        return Err(());
+    }
+    let reason = budget.halt.as_ref().map(|halt| halt.reason);
+    if size == 0 {
+        budget.unlimited = true;
+    } else {
+        let unit = bud_facts::unit(0);
+        let [0, t, d, c, r, ch] = unit.as_slice() else { return Err(()) };
+        let values = [*t, *d, *c, *r, *ch];
+        let mut next = budget.limits;
+        for (limit, value) in next.iter_mut().zip(values) {
+            if !(0..=MAX_SAFE).contains(&value) || value * size > MAX_SAFE - *limit {
+                return Err(());
+            }
+            *limit += value * size;
+        }
+        budget.limits = next;
+    }
+    budget.state = State::Open;
+    budget.halt = None;
+    effects.extend([Effect::Save, Effect::Changed]);
+    if let Some(clock) = clocks.get_mut(bid) {
+        refresh(clock, budget, sid, bid, now, effects, host);
+    }
+    if let Some(reason) = reason {
+        effects.push(Effect::QueueContinue(reason as i8, false));
+    }
+    match decide_facts::release_held(&[], 0, 0, &[], 0, 0, effects.len() as i64) {
+        0 => effects.push(Effect::QueueContinue(-1, true)),
+        1 => {}
+        _ => return Err(()),
+    }
+    Ok(0)
+}
+
+fn effect_words(effects: &[Effect]) -> i64 {
+    effects.iter().map(|effect| match effect {
+        Effect::Set(_) | Effect::QueueContinue(_, _) => 3,
+        Effect::StopDelegation(_) => 2,
+        _ => 1,
+    }).sum()
+}
+
+const COMMANDS: usize = 2;
+
+fn main_decide(setup: &Setup) {
+    let mut sessions = HashMap::new();
+    let mut clocks = HashMap::new();
+    let host = Host {
+        running: (0..setup.d).map(|i| format!("d{i:04}")).collect(),
+        timer: None,
+    };
+    let mut host = host;
+    let mut effects = Vec::with_capacity(16);
+    let mut now = 1_700_000_000_000;
+    bud_facts::set_unit(&setup.unit);
+    measure(setup.reps, || {
+        // A budget halted for commands with D stopped delegations; its clock (D runs, one active) settled by the
+        // halt. Built outside the measurement, as the Pruv lane's put / runs / halt calls are.
+        sessions.insert(SID.to_string(), Budget {
+            id: BID.to_string(), state: State::Halted, unlimited: false, limits: LIMITS,
+            active_ms: 1, active_since: None,
+            halt: Some(Halt { reason: COMMANDS, at: now, stopped: host.running.clone() }),
+            ended: None,
+        });
+        if !clocks.contains_key(BID) {
+            clocks.insert(BID.to_string(), Clock {
+                owner: SID.to_string(), since: None, armed: false, active: 1,
+                runs: (0..setup.d).map(|i| (format!("d{i:04}"), i != 0)).collect(),
+            });
+        }
+        let clock = clocks.get_mut(BID).unwrap();
+        clock.since = None;
+        clock.armed = false;
+        now += 1;
+
+        let before = allocations();
+        let start = Instant::now();
+        let result = decide(&mut sessions, &mut clocks, black_box(SID), black_box(BID),
+                            black_box(setup.size), now, &mut effects, &host);
+        host.perform(&effects, now, &sessions, SID);
+        black_box(host.timer);
+        let elapsed = start.elapsed();
+        let allocs = allocations() - before;
+        assert_eq!(result, Ok(0));
+        assert_eq!(effect_words(&effects), setup.effect_words);
+        (elapsed, allocs)
+    });
+}
+
 fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let setup = Setup::parse(&args);
+    if setup.decide {
+        return main_decide(&setup);
+    }
     let mut sessions = HashMap::from([(SID.to_string(), Budget {
         id: BID.to_string(), state: State::Open, unlimited: false, limits: LIMITS,
-        active_ms: 0, active_since: None, halt: None,
+        active_ms: 0, active_since: None, halt: None, ended: None,
     })]);
     let mut clocks = HashMap::from([(BID.to_string(), Clock {
         owner: SID.to_string(), since: None, armed: false, active: 1,
