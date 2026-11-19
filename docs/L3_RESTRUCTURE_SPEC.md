@@ -7135,3 +7135,75 @@ variants is not start-up (an early-exit run is equal) and not a cold fn running;
 - R-7-3 recursion: a cold fn is left out of the inline call graph, so in `even -> odd (cold) -> even` `even` may get
   `#[inline(always)]`. It is still correct (the cycle goes through the `#[inline(never)]` fn); revisit if a cold fn
   ever sits on a recursive path.
+
+## Appendix PR1: proof reuse across roots (module proof records)
+
+Problem: every bench root re-proved the shared library modules (bud_map, bud_store, bud_keys, ...), which are about
+98% of a root's proof time (M10 py: 33.0 s of FnVerifier, root_m10 itself 0.69 s). The query cache (G4b-3) cannot hit
+across roots: sort and symbol names carry program-wide indices, and a hit still pays the encoding.
+
+Route: a per-module proof record behind `--module-cache DIR` (off by default; full rule docs/G4B_SPEC.md section 7.8,
+SPEC.md proof cache section). The obligations are the same; only the run of a module's function verifiers is skipped
+when the same inputs were already proved with no error. True modular proof with exported interface facts was
+rejected: it changes what a module's proof may assume.
+
+Key inputs: compiler identity (py: `pruvc/*.py`, `pruvc/data/*`, `stdlib/*`; rs: the running executable on Linux, a build-time hash of all compiler inputs elsewhere), full Z3
+version, explicit mode, `--infer`, the G9 metadata restricted to the closure, the module, and for each module of its
+reference closure the file digest and rdigest (the digest of what its names resolved to). Edges come from resolved
+identities before expansion, so callees of callees, types, constructors and template sources are all in the closure.
+Not in the key (does not enter a module's proof): caller contracts, `--trust-callers`, `--proven-entries`,
+`--foreign-checks`, `--budget`, rust-extern bodies, whole-program index order (renaming only).
+
+Adversarial review of the design (Codex gpt-6.2-astra), fixed before the gates: swapped package aliases kept the key
+(fixed: rdigest); `pruvc/data/builtin_types.json` was outside the py identity (fixed); py identity hashed after the
+checker passes (now hashed at the start of `main`).
+
+Gates (both compilers): `tests/g4b/check_module_cache.py` 50/50 (56/56 after the audit fixes); full py `run_all --compare-rows` 3190/3190, 0
+missing/extra/failed; rs `g4b_proof` and `g4b_frontend` rows; `cargo test --release`; diff_rust fuzz 20 all same;
+M7 Q 113 exact and M10 Q 78 exact on rs and `--py`; M4 run rc 0 on both; L3 lib tests (json a0..a5, mcp, qwen,
+supervisor a0..a3) all pass; spec_trace 380/380. Generated `.rs` of the ten bench roots is byte-identical between
+HEAD, the new compiler without the flag and with the flag, on both compilers (40 comparisons).
+
+Timing, wall seconds, compile with verify of the ten bench roots in order (m3, keys, admit, m4, m6, m7, m8, m9, m10,
+m11); the new compiler runs them as one chain sharing one cache directory ("cold": empty at the start), "warm" is the
+same chain again. Noisy machine (load about 12); py rows are the second of two runs.
+
+| compiler | f5d9891 (pre-P13j2a) | HEAD 24d28ac | PR1 cold chain | PR1 warm |
+|---|---|---|---|---|
+| rs | 63.91 | 110.59 | 38.42 | 1.67 |
+| py | 129.80 | 222.91 | 84.29 | 11.36 |
+| rs, after audit fixes | | | 43.84 | 1.80 |
+| py, after audit fixes | | | 100.66 | 11.64 |
+
+Per root, rs: f5 1.47 3.03 7.33 7.44 2.80 8.04 7.49 7.47 9.27 9.56; HEAD 0.55 4.24 13.07 12.37 2.80 15.38 14.84
+13.11 18.39 15.84; cold 0.53 3.10 9.07 1.49 2.77 3.10 1.02 0.38 2.57 14.39. py: f5 0.72 3.54 17.21 16.14 4.26 16.91
+15.42 15.32 20.06 20.22; HEAD 0.70 3.49 31.67 28.88 3.70 32.27 27.64 29.00 33.72 31.84; cold 0.72 3.24 27.55 2.39
+3.59 7.31 2.53 1.91 3.44 31.61.
+
+Reading: the chain total is under f5d9891 on both compilers. The first root that loads the heavy shared modules
+(admit) still pays their full proof, and m11 owns its own modules (py 31.6 vs f5 20.2, rs 14.4 vs f5 9.6), so a single
+root compiled with an empty cache costs what HEAD costs; the P13j2a proof-time growth itself is not reduced, only paid
+once per input set.
+
+Code audit (Codex gpt-6.2-astra, one round, verdict must-fix). Must-fix, all fixed in the same commit: (1) Rust edges
+missed identities nested in a type key string (`option<crate::types::Flag>`), so a module named only as a generic
+argument was outside the closure and a changed enum reused the stale record; the Python resolver already recursed into
+type arguments. Fixed by splitting quoted strings on the type-key separators; the new `nested` case fails on the old
+code and passes now. (2) A Rust `ModulePlan` passed through `VerifyOptions` to a second program with the same function
+count used the first program's keys (library API only); a plan is now used once. (3) Rust hashed the executable late,
+so a binary replaced after start could label the old verifier's results; it is now hashed first in `main`, and the
+cache is off if the file was modified after start or changed while hashed. (4) Python ignored an unreadable source
+directory and hashed a partial set; any OS error now turns the cache off. Should-fix taken: bounded record reads and
+exclusive temporary files on both compilers. Deferred (performance only): the Rust rdigest is the `Debug` text of
+resolved items, which carries program-wide indices and file tags, so the same module loaded by two roots can get two
+keys (a miss, never a wrong hit); the measured roots still reuse across the chain. Note documented in G4B 7.8 rule 6:
+under `--infer` a hit skips inference attempts, so the guarantee is proof validity, not identical diagnostics.
+Re-check (Codex gpt-6.2-astra, the second and last audit round, verdict must-fix): (1), (4), bounded reads and
+exclusive temporaries confirmed fixed, and no new wrong-accept path in the fix diff. Two remained, fixed after the
+re-check and not audited again: the Rust plan was consumed only when records were on, so a call with a trace or report
+left it for a later program (now consumed whenever it is passed); off Linux the executable was re-opened by path, which
+can be replaced by an older-mtime binary before the first stat (now a build-time identity, `build.rs`, see G4B 7.8 rule
+2; verified that adding a file under `crates/` changes the id and removing it restores it). Python now uses `os.stat`
+in the identity walk so a stat error also turns the cache off. Gates after these fixes: `check_module_cache.py` 56/56,
+rs `g4b_proof` 2/2, `cargo test --release`, M10 rs output byte-identical without the flag, cold and warm (11 records,
+warm 0.08 s).

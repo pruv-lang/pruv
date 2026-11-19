@@ -424,6 +424,51 @@ Implementation decisions fixed in G4b-3:
 13. `--no-verify` makes no solver calls, so the cache is not touched. The cache never changes diagnostics, inference
     results or generated code; it only replaces calls whose answer would be `unsat` again.
 
+### 7.8 Module proof records (`--module-cache DIR`, PR1)
+
+`--module-cache DIR` (off by default, independent of `--proof-cache`) lets a module proved once be skipped by any
+later compile, of any root, that loads it with the same inputs. Design and measurements: docs/L3_RESTRUCTURE_SPEC.md
+appendix PR1.
+
+1. Unit: one module (a `.pruv` file of the program, std included). A record says "every function of this module
+   verified with no error under exactly the inputs in the key". Used only in explicit-module mode, with verification
+   on, and when neither a proof trace nor an inferred-facts report is requested (those need every attempt).
+2. Key: SHA-256 over `<prefix><key text>`. Prefix: Python `py <version>\0<code id>\0<full z3 version>\0`, code id =
+   SHA-256 over the names and bytes of `pruvc/*.py`, `pruvc/data/*` and `stdlib/*` (hashed at the start of `main`; if
+   any of them cannot be listed or read there is no code id); Rust `rs <crate version>\0<code id>\0<full z3 version>\0`.
+   On Linux the code id is the SHA-256 of the running executable read through `/proc/self/exe` at the start of
+   `main`, with no code id when it cannot be read, was modified after the process started, or changed (mtime, length,
+   inode) while being hashed. On other targets the path of the executable can be replaced before it is re-opened, so
+   the code id is `build:` plus a build-time SHA-256 (`crates/pruv-proof/build.rs`) of every file under
+   `pruvc-rs/crates`, `pruvc-rs/{Cargo.toml,Cargo.lock,rust-toolchain.toml}`, `stdlib/`, `pruvc/runtime.c`, the
+   `rustc -vV` output and the target, profile and rustflags variables; cargo reruns the script when any of them
+   changes. Without a code id the cache is not used: every module is a miss and nothing is stored. The two
+   compilers never share records.
+3. Key text, one line each: `pruv-module-proof 1`, `explicit <0|1>`, `infer <0|1>`, `g9 <off | canonical JSON of the
+   G9 metadata entries that mention an item of the closure>`, `module <pkg>\0<path>`, then for every module of the
+   closure, in index order, `dep <pkg>\0<path>\0<sha256 of the file bytes>\0<rdigest>`. rdigest is the SHA-256 of what
+   every name in that module resolved to, so the same files under swapped package aliases give another key.
+4. Closure: the module plus every module reachable through reference edges. Edges are collected after name
+   resolution and before contract/template expansion: any resolved identity (call, type, constructor, variant, struct
+   literal, type argument, quantifier sort) of an item of module A that belongs to module B adds A -> B, including an
+   identity nested inside a type (`Option<crate::types::Flag>`, tuple and function types). Extra edges are allowed.
+5. Record: file `DIR/<first 2 hex>/<key hex>` with exactly the bytes `pruv-module-proof 1\nproved\n`, written to
+   `DIR/<xx>/.tmp.<pid>.<n>` (created exclusively; an existing file of that name drops the store) and renamed. A record is written only when the module's functions added no error
+   (unknown and timeout are errors). A lookup reads at most the record length plus one byte and hits only on those
+   exact bytes; anything else (missing, short, other
+   content, unreadable) is a miss and the module is proved again. OS errors on store drop the store silently.
+6. A hit skips only that module's function verifiers. Loading, resolution, checks, G2, global model generation and code
+   generation run as without the flag; generated code is byte-identical. Errors in any other module still reject.
+   The guarantee is logical: the module's obligations were proved under these inputs. Under `--infer` a hit also skips
+   the inference attempts, so an inference timeout that a fresh run could report is not reported. In the Rust library
+   API a module plan built for one program is consumed by the first verification that receives it (also when a trace
+   or report turns records off for that call); a second use verifies everything.
+7. Trust report: with the flag, `flags.module_cache` is `true` and a top-level `"module_cache": {"hits", "misses",
+   "stores"}` counts modules. Without the flag neither key is present, so reports stay byte-identical.
+8. Test: `tests/g4b/check_module_cache.py` (row `g4b_proof/module_cache`, both compilers): cold/warm reuse with
+   identical output, changed callee `ensures`, changed imported body, swapped aliases, a module named only inside a
+   generic type argument, corrupt records, a failing single file never recorded, report shape.
+
 ## 8. Batches
 
 Each batch ships the Python implementation and its Rust port in one commit (AGENTS.md rule 6). Tests run per group

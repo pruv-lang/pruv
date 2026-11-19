@@ -94,7 +94,7 @@ fn run(path: &std::ffi::OsStr, infer: bool, no_verify: bool, cache_dir: Option<s
                     // G4b-3: the compiler version is the pruvc crate's ("0.0.1").
                     let proof_cache = cache_dir
                         .map(|d| std::rc::Rc::new(pruv_proof::proof_cache::ProofCache::new(d, "0.0.1")));
-                    let opts = VerifyOptions { infer, proof_cache };
+                    let opts = VerifyOptions { infer, proof_cache, ..Default::default() };
                     let rep = if infer { Some(&mut report) } else { None };
                     match verify_program_opts(&prog, &tt, Some(&mut trace), &opts, rep) {
                         Ok(errs) => {

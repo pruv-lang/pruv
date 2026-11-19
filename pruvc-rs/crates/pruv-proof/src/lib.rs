@@ -57,7 +57,7 @@ pub fn verify_program_cached(
     rec: Option<&mut Trace>,
     cache: Option<std::rc::Rc<proof_cache::ProofCache>>,
 ) -> Result<Vec<PruvError>, String> {
-    verify_program_opts(prog, tt, rec, &VerifyOptions { infer: false, proof_cache: cache }, None)
+    verify_program_opts(prog, tt, rec, &VerifyOptions { infer: false, proof_cache: cache, ..Default::default() }, None)
 }
 
 /// STAGE1 B2 options.
@@ -67,6 +67,8 @@ pub struct VerifyOptions {
     pub infer: bool,
     /// `--proof-cache DIR` (G4b-3). None: no extra work.
     pub proof_cache: Option<std::rc::Rc<proof_cache::ProofCache>>,
+    /// PR1 `--module-cache DIR` (docs/G4B_SPEC.md 7.8): skip and record whole modules. None: no extra work.
+    pub modules: Option<std::rc::Rc<proof_cache::ModulePlan>>,
 }
 
 /// verify.py `verify_program(prog, rec, infer, report)`. `infer=false` keeps the existing path unchanged.
@@ -83,6 +85,10 @@ pub fn verify_program_opts(
     // G3 A2: the verifier handles generics (no guard here); the code generators and the driver still reject them.
     // The structured `[T]` is never a G2 hit (the plain `[i64]` is not either), so "array" needs no skip entry.
     if let Some(e) = pruv_core::typeinfo::g2_unimplemented_error(prog, "verify", None, &["array_u8", "array_bool", "str"], None) { return Ok(vec![e]); } // G2 B1
+    // PR1: module records apply only without a trace and without an inference report (as in Python).
+    // A plan is used once: consumed here even when trace/report turn records off, so a later call cannot reuse its keys.
+    let plan = opts.modules.as_deref().filter(|p| !p.spent.replace(true));
+    let plan = if rec.is_none() && report.is_none() { plan } else { None };
     let mut local = Trace::off();
     let trace: &mut Trace = match rec {
         Some(t) => t,
@@ -99,8 +105,12 @@ pub fn verify_program_opts(
         Model::for_program(&z, &pre, &decls, prog, seq)?;
     }
     let mut errors: Vec<PruvError> = Vec::new();
-    if opts.infer {
-        for f in &prog.functions {
+    let one = |f: &pruv_core::ast::Function,
+                   errors: &mut Vec<PruvError>,
+                   trace: &mut Trace,
+                   report: &mut Option<&mut Vec<pruv_core::pyjson::Json>>|
+     -> Result<(), String> {
+        if opts.infer {
             let res = infer::infer_function(prog, f, &decls, seq, &mut *trace)?;
             let before = errors.len();
             if res.status == infer::InferStatus::Timeout {
@@ -128,10 +138,8 @@ pub fn verify_program_opts(
             if let Some(rep) = report.as_mut() {
                 rep.extend(res.records(errors.len() - before));
             }
+            return Ok(());
         }
-        return Ok(errors);
-    }
-    for f in &prog.functions {
         // A fresh context per function (a non-rc context never frees ASTs, so it is dropped wholesale when the function ends).
         // Counterexample model values may differ from Python (the SMT text and verdicts are the same). Suspected cause: z3py uses an rc context, so AST ids are reused
         // and the chosen model differs (switching to one context per program left the counterexample difference unchanged, RESULTS §18).
@@ -141,6 +149,35 @@ pub fn verify_program_opts(
         let mut fv = FnVerifier::for_function(&z, &pre, &model, &mut *trace, prog, f);
         fv.run()?;
         errors.append(&mut fv.errors);
+        Ok(())
+    };
+    // a plan is used once (`ModulePlan.spent`, consumed above): it was built for one program
+    let Some(plan) = plan.filter(|p| p.fn_module.len() == prog.functions.len()) else {
+        for f in &prog.functions {
+            one(f, &mut errors, &mut *trace, &mut report)?;
+        }
+        return Ok(errors);
+    };
+    // per module: (key, record found, errors added by its functions); filled on the module's first function
+    let mut state: Vec<Option<(Option<String>, bool, usize)>> = vec![None; plan.key_texts.len()];
+    for (i, f) in prog.functions.iter().enumerate() {
+        let mi = plan.fn_module[i];
+        let st = state[mi].get_or_insert_with(|| {
+            let k = plan.recs.key(&plan.key_texts[mi]);
+            let hit = plan.recs.lookup(k.as_deref());
+            (k, hit, 0)
+        });
+        if st.1 {
+            continue;
+        }
+        let before = errors.len();
+        one(f, &mut errors, &mut *trace, &mut report)?;
+        st.2 += errors.len() - before;
+    }
+    for (k, hit, nerr) in state.into_iter().flatten() {
+        if !hit && nerr == 0 {
+            plan.recs.store(k.as_deref());
+        }
     }
     Ok(errors)
 }

@@ -50,6 +50,7 @@ pub fn build(
     graph: Option<&Graph>,
     data: &TrustData,
     cache: Option<&pruv_proof::proof_cache::ProofCache>,
+    mcache: Option<&pruv_proof::proof_cache::ModuleRecords>,
 ) -> Result<String, String> {
     let basename: String = Path::new(&a.input)
         .file_name()
@@ -184,6 +185,27 @@ pub fn build(
             ]),
         ),
     ]);
+    // PR1 (G4B_SPEC 7.8): the flag and the counters are present only with --module-cache
+    let mut doc = doc;
+    if a.module_cache.is_some() {
+        if let J::O(top) = &mut doc {
+            for (k, v) in top.iter_mut() {
+                if k == "flags" {
+                    if let J::O(fl) = v {
+                        fl.push(("module_cache".to_string(), J::B(true)));
+                    }
+                }
+            }
+            top.push((
+                "module_cache".to_string(),
+                J::O(vec![
+                    ("hits".to_string(), J::I(mcache.map_or(0, |c| c.hits()) as _)),
+                    ("misses".to_string(), J::I(mcache.map_or(0, |c| c.misses()) as _)),
+                    ("stores".to_string(), J::I(mcache.map_or(0, |c| c.stores()) as _)),
+                ]),
+            ));
+        }
+    }
     let mut out = String::new();
     dump_json(&doc, 0, &mut out);
     out.push('\n');

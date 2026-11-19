@@ -8,3 +8,5 @@ description = "Pruv frontend (AST, lexer, parser, check) and shared output code.
 
 # No dependencies (M3_C4_SPEC §2: indexmap/serde are added at exact versions when the AST is ported).
 [dependencies]
+# PR1: module proof record digests (the same pinned version pruv-proof uses for G4b-3)
+sha2 = "=0.10.9"

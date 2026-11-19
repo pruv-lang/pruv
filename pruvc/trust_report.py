@@ -26,7 +26,8 @@ def _sha256(files):
 
 
 def build_report(prog, trust, graph, input_path, verify, trust_callers, foreign_checks, infer,
-                 rust_extern, rust_search, cache=None, cache_flag=False):
+                 rust_extern, rust_search, cache=None, cache_flag=False, mcache=None,
+                 mcache_flag=False):
     """prog: the loaded program (modules in load order); trust: the dict filled by gen_rust_ex(trust_out=...);
     graph: manifest.Graph or None; input_path: the root file given on the command line."""
     cprog = trust.get("program")
@@ -78,6 +79,11 @@ def build_report(prog, trust, graph, input_path, verify, trust_callers, foreign_
            "proof_cache": {"hits": cache.hits if cache is not None else 0,
                            "misses": cache.misses if cache is not None else 0,
                            "stores": cache.stores if cache is not None else 0}}
+    if mcache_flag:     # PR1 (G4B_SPEC 7.8): present only with --module-cache
+        doc["flags"]["module_cache"] = True
+        doc["module_cache"] = {"hits": mcache.hits if mcache is not None else 0,
+                               "misses": mcache.misses if mcache is not None else 0,
+                               "stores": mcache.stores if mcache is not None else 0}
     return json.dumps(doc, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
 
 
