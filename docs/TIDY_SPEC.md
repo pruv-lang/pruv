@@ -289,12 +289,14 @@ by byte-identical output and run by group, with the full test suite once before 
       Always-accept check (scratch, not committed): Rust wrapped with `--no-verify`, and `verify_only.py` with
       its verification errors dropped, each give 24/24 reject rows `false_accept` while the 24 accept rows
       still pass (24/48 on both). So `g3_proof` alone now catches a verifier that accepts everything.
-    - **Rule R-7-6 (SPEC §7).** An `ensures` not proved at a `return` is reported at that `return`; one not
-      proved where a `()` body ends without `return` is reported at the start of the function header. This is
+    - **Rule R-7-6 (SPEC §7).** A `verify/ensures` diagnostic for a written `ensures` points to the `return`
+      keyword on a path that returns, and to the `fn` keyword on a path that reaches the end of a `()` body
+      (synthesized refinement `ensures` and `verify_unknown` keep their own rules). This is
       what both compilers already do and what `tests/must_reject/l3_hf_frame.json` (11:1) and the 20 `return`
       cases in `must_reject` expect, so no compiler change and no follow-up row. Tests:
-      `tests/spec/r7_6_ensures_fallthrough_ok.pruv` (accept), `r7_6_ensures_fallthrough` (reject, 3:1),
-      `r7_6_ensures_return` (reject, 7:3). The old pair now checks it: `cases.json` `old_increment_reject`
+      `tests/spec/r7_6_ensures_fallthrough_ok.pruv` (accept), `r7_6_ensures_fallthrough` (reject, `pub fn`, 3:5 = the `fn` keyword),
+      `r7_6_ensures_return` (reject, 7:3). Audit (Codex gpt-6.2-astra ultra): two required
+      wording fixes (scope to written `ensures`; name the `fn` keyword, since `pub fn` starts earlier), applied. The old pair now checks it: `cases.json` `old_increment_reject`
       expects 2:1, and `tests/vacuity/run.py` compares `line`/`col` for a pair reject when the case gives them.
     - **`spec_trace` locations.** Line and column where SPEC fixes the point: `r1_1_result_scope` 4:12,
       `r1_2_trailing_underscore` 3:24, `r6l_1_read_max_big` 5:10, `r6l_1_read_max_zero` 5:10,

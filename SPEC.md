@@ -964,9 +964,10 @@ reject [R-6o-1](tests/spec/r6o_1_opaque_i64.pruv), [R-6o-2](tests/spec/r6o_2_no_
 Variables not assigned in a loop keep their values across it; assigned ones are only known through invariants.
 A variable counts as assigned if the loop body assigns it, stores into its elements, or passes it as an `inout`
 argument (section 6g); an `inout` array keeps only its length across the loop.
-R-7-6 An `ensures` that is not proved at a `return` is reported (`verify/ensures`) at that `return`; one not proved where
-a `()` body ends without `return` is reported at the start of the function header. Tests:
-[accept](tests/spec/r7_6_ensures_fallthrough_ok.pruv), [reject at the header](tests/spec/r7_6_ensures_fallthrough.pruv),
+R-7-6 A `verify/ensures` diagnostic for an explicitly written `ensures` clause points to the `return` keyword on a path
+that executes a `return`; on a path that reaches the end of a `()` body without one, it points to the function's `fn`
+keyword. Tests:
+[accept](tests/spec/r7_6_ensures_fallthrough_ok.pruv), [reject at `fn`](tests/spec/r7_6_ensures_fallthrough.pruv),
 [reject at the return](tests/spec/r7_6_ensures_return.pruv).
 
 ### Run-time `requires` and modes
