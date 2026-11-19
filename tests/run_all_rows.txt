@@ -3512,6 +3512,7 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "g4b_frontend", "mode": "pkg", "sample": "tests/g4b/check_pkg.py"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g4b_frontend", "mode": "trust", "sample": "tests/g4b/check_trust.py"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g4b_proof", "mode": "cache", "sample": "tests/g4b/check_cache.py"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "g4b_proof", "mode": "module_cache", "sample": "tests/g4b/check_module_cache.py"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g5_frontend", "mode": "default", "sample": "tests/g5/frontend/f01_i64_set_at.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g5_frontend", "mode": "default", "sample": "tests/g5/frontend/f02_u8_store.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "g5_frontend", "mode": "default", "sample": "tests/g5/frontend/f03_bool_store.pruv"}

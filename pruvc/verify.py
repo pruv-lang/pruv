@@ -3029,10 +3029,13 @@ class FnVerifier:
                 s.ensures_ok(end, None, f)
 
 
-def verify_program(prog, rec=None, infer=False, report=None, cache=None):
+def verify_program(prog, rec=None, infer=False, report=None, cache=None, modrec=None):
     """infer=True (STAGE1 B2, --infer): per function, explore template invariant candidates (infer.py), then
     verify the whole function with the survivors as extra loop invariants. report (a list) receives one record
-    per loop (docs/STAGE1_B_INFER.md section 5). infer=False: exactly the old path."""
+    per loop (docs/STAGE1_B_INFER.md section 5). infer=False: exactly the old path.
+    modrec: PR1 proof_cache.ModuleRecords or None. With it (explicit-module programs only, no trace, no
+    inference report) a module whose record exists is not verified again, and a module whose functions all verify
+    with no error gets a record (docs/G4B_SPEC.md 7.8)."""
     from typeinfo import g2_unimplemented_error
     # G3 A2: the verifier handles generics (no guard here); the code generators and pruvc.py still reject them.
     # "array" in skip exempts only the structured [T] (the plain [i64] is never a G2 hit).
@@ -3041,12 +3044,12 @@ def verify_program(prog, rec=None, infer=False, report=None, cache=None):
         return [g2err]
     errors = []
     model = Model(prog)
-    if not infer:
-        for f in prog.functions:
+
+    def one(f):
+        if not infer:
             FnVerifier(prog, f, errors, model, rec=rec, cache=cache).run()
-        return errors
-    import infer as infer_mod      # lazy: infer.py imports this module
-    for f in prog.functions:
+            return
+        import infer as infer_mod      # lazy: infer.py imports this module
         res = infer_mod.infer_function(prog, f, model, rec, cache)
         before = len(errors)
         if res.status == "timeout":
@@ -3058,4 +3061,48 @@ def verify_program(prog, rec=None, infer=False, report=None, cache=None):
             FnVerifier(prog, f, errors, model, rec=rec, extra=res.extra(), cache=cache).run()
         if report is not None:
             report.extend(res.records(len(errors) - before))
+
+    groups = _module_groups(prog) if modrec is not None and rec is None and report is None else None
+    if groups is None:
+        for f in prog.functions:
+            one(f)
+        return errors
+    import proof_cache
+    closures = proof_cache.module_closures(prog)
+    keys = {}
+    for f in prog.functions:
+        mi = groups.get(id(f))
+        if mi is None:
+            one(f)
+            continue
+        if mi not in keys:
+            k = modrec.key(proof_cache.module_key_text(prog, mi, closures[mi], infer))
+            keys[mi] = [k, modrec.lookup(k), len(errors), 0]
+            if keys[mi][1]:
+                modrec.hits += 1
+            else:
+                modrec.misses += 1
+        st = keys[mi]
+        if st[1]:
+            continue
+        before = len(errors)
+        one(f)
+        st[3] += len(errors) - before
+    for k, hit, _, nerr in keys.values():
+        if not hit and nerr == 0:
+            modrec.store(k)
     return errors
+
+
+def _module_groups(prog):
+    """id(Function) -> index of its module in prog.modules, or None when the program has no module structure"""
+    mods = getattr(prog, "modules", None)
+    if not getattr(prog, "explicit", False) or not mods or not getattr(prog, "_g4_resolved", False):
+        return None
+    ix = {(m.pkg, m.path): i for i, m in enumerate(mods)}
+    out = {}
+    for f in prog.functions:
+        i = ix.get((getattr(f, "pkg", None), getattr(f, "mod_path", None)))
+        if i is not None and any(it is f for it in mods[i].items):
+            out[id(f)] = i
+    return out

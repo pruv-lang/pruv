@@ -139,6 +139,12 @@ pub struct Module {
     pub funcs: HashMap<String, usize>,
     /// source name -> index into Program.types (filled by resolve)
     pub types: HashMap<String, usize>,
+    /// PR1: lowercase hex SHA-256 of the module's source text (module proof record key)
+    pub digest: String,
+    /// PR1: lowercase hex SHA-256 of the module's items right after resolution (`module_edges`)
+    pub rdigest: String,
+    /// PR1: sorted indices of the other modules whose items an item of this module mentions (filled by resolve)
+    pub deps: Vec<usize>,
 }
 
 impl Module {
@@ -155,6 +161,9 @@ impl Module {
             items: Vec::new(),
             funcs: HashMap::new(),
             types: HashMap::new(),
+            digest: String::new(),
+            rdigest: String::new(),
+            deps: Vec::new(),
         }
     }
 
@@ -308,6 +317,7 @@ impl<'g> Loader<'g> {
         };
         let ci = self.modules.len();
         let mut child = Module::new(Vec::new(), rel, Some(mi));
+        child.digest = sha256_hex(text.as_bytes());
         child.src_path = Some(fpath.clone());
         child.pkg = Some(dpkg.name.clone());
         child.pkginfo = Some(di);
@@ -486,6 +496,7 @@ impl<'g> Loader<'g> {
             };
             let ci = self.modules.len();
             let mut child = Module::new(cpath, rel, Some(mi));
+            child.digest = sha256_hex(text.as_bytes());
             if md.name != "std" {
                 child.src_path = Some(fpath.clone());
             }
@@ -610,6 +621,7 @@ fn load_source_full(
     let root_dir = abs.parent().map(|p| p.to_path_buf()).unwrap_or_default();
     let mut root_mod = Module::new(Vec::new(), root_file.clone(), None);
     root_mod.src_path = Some(abs.clone());
+    root_mod.digest = sha256_hex(src.as_bytes());
     root_mod.pkginfo = graph.map(|_| 0);
     root_mod.mods = root.mods.clone();
     let mut loaded = HashMap::new();
@@ -855,7 +867,96 @@ fn run(prog: &mut Program, g4: &mut G4) -> Res<()> {
         }
     }
     // 4. root main and host entries
-    entries(prog, g4)
+    entries(prog, g4)?;
+    module_edges(prog, g4);
+    Ok(())
+}
+
+/// lowercase hex SHA-256 of `bytes`
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let d = Sha256::digest(bytes);
+    let mut out = String::with_capacity(64);
+    for b in d.iter() {
+        out.push_str(&format!("{:02x}", b));
+    }
+    out
+}
+
+/// PR1 (Python `_Resolver.module_edges`): `Module.deps` = the other modules whose items an item of the module mentions,
+/// and `Module.rdigest` = SHA-256 of the module's resolved items, both read right after resolution (before check and
+/// refinement expansion rewrite calls). The `Debug` text of each item (and its `ItemMeta`) is the serialization: it is
+/// deterministic (no hash map inside a pre-mono item) and holds every resolved identity as a quoted string. A quoted
+/// string equal to an item identity (or a type-parameter owner `fn:<identity>` / `type:<identity>`) of another module is an
+/// edge, so calls, reveals, types, constructors, variants, literals, type arguments and refinement bases all count; an
+/// identity nested in a type key string (`option<crate::types::Flag>`) is found by splitting the string on the type-key
+/// separators. Over-approximation is safe: an extra edge only makes a module proof record depend on more files.
+fn module_edges(prog: &Program, g4: &mut G4) {
+    // Debug-quoted identity -> defining module
+    let mut owner: HashMap<String, usize> = HashMap::new();
+    // raw identity -> defining module, for identities nested inside a larger type key string
+    let mut raw_owner: HashMap<String, usize> = HashMap::new();
+    for (i, f) in prog.functions.iter().enumerate() {
+        let m = g4.fn_meta[i].module;
+        owner.insert(format!("{:?}", f.name), m);
+        owner.insert(format!("{:?}", format!("fn:{}", f.name)), m);
+        raw_owner.insert(f.name.to_string(), m);
+        raw_owner.insert(format!("fn:{}", f.name), m);
+    }
+    for (i, d) in prog.types.iter().enumerate() {
+        let m = g4.ty_meta[i].module;
+        owner.insert(format!("{:?}", d.name()), m);
+        owner.insert(format!("{:?}", format!("type:{}", d.name())), m);
+        raw_owner.insert(d.name().to_string(), m);
+        raw_owner.insert(format!("type:{}", d.name()), m);
+    }
+    for mi in 0..g4.modules.len() {
+        let mut text = String::new();
+        for it in &g4.modules[mi].items {
+            match *it {
+                Item::Fn(i) => text.push_str(&format!("F{:?}\n{:?}\n", prog.functions[i], g4.fn_meta[i])),
+                Item::Ty(i) => text.push_str(&format!("T{:?}\n{:?}\n", prog.types[i], g4.ty_meta[i])),
+            }
+        }
+        let mut deps: Vec<usize> = Vec::new();
+        let b = text.as_bytes();
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] != b'"' {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            i += 1;
+            while i < b.len() && b[i] != b'"' {
+                i += if b[i] == b'\\' { 2 } else { 1 };
+            }
+            let end = (i + 1).min(b.len());
+            let mut hit = |j: usize| {
+                if j != mi && !deps.contains(&j) {
+                    deps.push(j);
+                }
+            };
+            if let Some(&j) = owner.get(&text[start..end]) {
+                hit(j);
+            }
+            // identities nested in a type key string (`option<crate::types::Flag>`, tuple/fn keys joined by `\u{1}`):
+            // split the escaped inner text on type-key separators and look each piece up as a raw identity
+            let inner = text[start + 1..end.saturating_sub(1).max(start + 1)].replace("\\u{1}", "<");
+            for tok in inner.split(|c: char| matches!(c, '<' | '>' | ',' | ' ' | '(' | ')' | '[' | ']' | ';' | '&')) {
+                if !tok.is_empty() {
+                    if let Some(&j) = raw_owner.get(tok) {
+                        hit(j);
+                    }
+                }
+            }
+            i = end;
+        }
+        deps.sort_unstable();
+        let m = &mut g4.modules[mi];
+        m.rdigest = sha256_hex(text.as_bytes());
+        m.deps = deps;
+    }
 }
 
 /// resolver state (Python `_Resolver`): the module tree is read-only here, the items are rewritten in place

@@ -16,6 +16,7 @@ Identity key = the canonical absolute path of the item.  Function.name / TypeDec
 source spelling stays in `src_name`, the defining module in `mod_path`.  Diagnostics print identities (they are
 source-qualified).  Type-parameter owners become "fn:<identity>" / "type:<identity>".
 """
+import hashlib
 import os
 
 from vast import *
@@ -75,6 +76,13 @@ class Module:
         s.items = []             # Function / StructDecl / EnumDecl in source order
         s.funcs = {}             # source name -> Function   (filled by resolve)
         s.types = {}             # source name -> TypeDecl   (filled by resolve)
+        s.digest = None          # PR1: sha256 hex of the parsed source text (module proof record key)
+        s.rdigest = None         # PR1: sha256 hex of the module's items after resolution (module_edges)
+        s.deps = set()           # PR1: indices (into Program.modules) of modules this one references (filled by resolve)
+
+
+def _digest(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +154,7 @@ def load_program(path, libs=(), manifest=None):
     root = Module((), root_file, None)
     root.base, root.relpre = root_dir, ""
     root.abspath = os.path.abspath(path)
+    root.digest = _digest(src)
     if graph is not None:
         root.pkginfo = graph.program
     pkg_mods = {}                       # canonical dependency dir -> its root Module (one per package)
@@ -249,6 +258,7 @@ def load_program(path, libs=(), manifest=None):
                 e.file = rel
                 raise
             child = Module(cpath, rel, m)
+            child.digest = _digest(text)
             child.base, child.relpre = base, relpre
             # the bundled std belongs to the compiler (its version), not to a package hash (G4B_SPEC 6 rule 11)
             child.abspath = None if md.name == "std" else os.path.abspath(fpath)
@@ -302,6 +312,7 @@ def load_program(path, libs=(), manifest=None):
             e.file = rel
             raise
         child = Module((), rel, m)
+        child.digest = _digest(text)
         child.pkg, child.pkginfo = dpkg.name, dpkg
         child.abspath = os.path.abspath(fpath)
         child.base = os.path.join(dpkg.dir, *sub.split("/")) if sub else dpkg.dir
@@ -422,6 +433,59 @@ class _Resolver:
             if it.pub:
                 s.interface(it)
         s.entries()
+        s.module_edges()
+
+    def module_edges(s):
+        """PR1: Module.deps = the other modules whose items an item of the module mentions, read right after
+        resolution (before check/refine expansion erases call names).  Every string in the resolved AST that is the
+        identity of an item (or a type-parameter owner of one) counts, so calls, reveals, types, constructors,
+        variants, struct literals, type arguments and refinement bases are all edges.  Over-approximation is safe:
+        an extra edge only makes a module proof record depend on more files."""
+        prog = s.prog
+        mod_ix = {id(m): i for i, m in enumerate(prog.modules)}
+        owner = {it.name: mod_ix[id(s.by_path[(it.pkg, it.mod_path)])] for it in prog.items}
+        # The same walk also hashes the resolved items (Module.rdigest): a deterministic serialization of every
+        # node in walk order (class name, strings, numbers, container shape).  The file bytes alone do not fix what
+        # each path resolves to (mount aliases and package maps come from other files), the resolved identities at
+        # each reference point do.
+        for m in prog.modules:
+            mi = mod_ix[id(m)]
+            h = hashlib.sha256()
+            seen, stack = {}, list(reversed(m.items))
+            while stack:
+                n = stack.pop()
+                if isinstance(n, str):
+                    h.update(b"s%d:" % len(n.encode("utf-8")) + n.encode("utf-8"))
+                    for key in (n, n.split(":", 1)[1] if n.startswith(("fn:", "type:")) else None):
+                        j = owner.get(key)
+                        if j is not None and j != mi:
+                            m.deps.add(j)
+                    continue
+                if n is None or isinstance(n, (int, float, bool, bytes)):
+                    h.update(("v%s:%r;" % (type(n).__name__, n)).encode("utf-8"))
+                    continue
+                if isinstance(n, Module):
+                    h.update(("M%s:%s;" % (n.pkg, "::".join(n.path))).encode("utf-8"))
+                    continue
+                if id(n) in seen:
+                    h.update(b"r%d;" % seen[id(n)])
+                    continue
+                seen[id(n)] = len(seen)
+                if isinstance(n, (set, frozenset)):
+                    kids = sorted(n, key=repr)
+                elif isinstance(n, (list, tuple)):
+                    kids = list(n)
+                elif isinstance(n, dict):
+                    kids = [x for kv in n.items() for x in kv]
+                elif isinstance(n, Type):
+                    kids = [n.name, n.args, n.owner]
+                elif hasattr(n, "__dict__"):
+                    kids = [x for kv in vars(n).items() for x in kv]
+                else:
+                    kids = [repr(n)]
+                h.update(("(%s %d;" % (type(n).__name__, len(kids))).encode("utf-8"))
+                stack.extend(reversed(kids))
+            m.rdigest = h.hexdigest()
 
     # ---- paths ----
     def walk(s, path):

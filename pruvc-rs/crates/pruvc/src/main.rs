@@ -30,6 +30,7 @@ fn internal(msg: &str) -> i32 {
 }
 
 fn main() {
+    pruv_proof::proof_cache::note_start();
     let mut argv: Vec<String> = Vec::new();
     for a in std::env::args_os().skip(1) {
         match a.into_string() {
@@ -39,6 +40,10 @@ fn main() {
                 std::process::exit(code);
             }
         }
+    }
+    // PR1: hash the running binary right at start, before it could be replaced on disk
+    if argv.iter().any(|a| a == "--module-cache" || a.starts_with("--module-cache=")) {
+        let _ = pruv_proof::proof_cache::code_identity();
     }
     // Run on a large-stack thread for deeply nested input.
     let code = match std::thread::Builder::new().stack_size(1 << 30).spawn(move || run(argv)) {

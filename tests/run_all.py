@@ -552,15 +552,26 @@ def l3_abi_jobs():
 
 
 def g4b_proof_jobs():
-    """G4b-3 (docs/G4B_SPEC.md 8): tests/g4b/check_cache.py, one row; backend null."""
+    """G4b-3 (docs/G4B_SPEC.md 8): tests/g4b/check_cache.py, one row; PR1 (7.8): tests/g4b/check_module_cache.py,
+    one row; backend null."""
     def cache_checks():
         c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/g4b/check_cache.py"), WORK] +
                            ["--rs" if _driver().kind == "rs" else "--py", _driver().path],
                            capture_output=True, text=True, timeout=1800)
         return c.returncode == 0, c.stdout + c.stderr
+    def module_checks():
+        # PR1 (G4B_SPEC 7.8): this run's compiler only
+        k = _driver().kind
+        c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/g4b/check_module_cache.py"), WORK,
+                            "--" + k, _driver().path, "--only", k],
+                           capture_output=True, text=True, timeout=1800)
+        return c.returncode == 0, c.stdout + c.stderr
     return [safe("g4b_proof/cache", cache_checks,
                  {"sample": "tests/g4b/check_cache.py", "backend": None, "flags": [],
-                  "mode": "cache", "group": "g4b_proof"})]
+                  "mode": "cache", "group": "g4b_proof"}),
+            safe("g4b_proof/module_cache", module_checks,
+                 {"sample": "tests/g4b/check_module_cache.py", "backend": None, "flags": [],
+                  "mode": "module_cache", "group": "g4b_proof"})]
 
 
 def spec_trace_jobs():

@@ -4,6 +4,7 @@ Only `unsat` answers are stored. An entry is the file DIR/<key[:2]>/<key> holdin
 """
 import hashlib
 import os
+import stat
 import re
 
 from trust_report import VERSION
@@ -148,5 +149,140 @@ class ProofCache:
                 os.remove(tmp)
             except OSError:
                 pass
+            return
+        self.stores += 1
+
+
+# ---------------------------------------------------------------------------
+# PR1: module proof records, `--module-cache DIR` (docs/G4B_SPEC.md section 7.8)
+# ---------------------------------------------------------------------------
+MODULE_ENTRY = b"pruv-module-proof 1\nproved\n"
+_code_id = None
+
+
+def code_identity():
+    """sha256 over the compiler's own source files (pruvc/*.py, pruvc/data/* and stdlib/*, name and bytes, sorted): any edit of
+    the compiler, its built-in catalogs or the bundled std gives new module keys.  None when any of them cannot be listed
+    or read: a partial hash could miss an input, so module records are then off."""
+    global _code_id
+    if _code_id is None:
+        here = os.path.dirname(os.path.abspath(__file__))
+        h = hashlib.sha256()
+        try:
+            for d, pat in ((here, ".py"), (os.path.join(here, "data"), ""), (os.path.join(here, "..", "stdlib"), "")):
+                for n in sorted(os.listdir(d)):
+                    p = os.path.join(d, n)
+                    if not n.endswith(pat) or not stat.S_ISREG(os.stat(p).st_mode):
+                        continue  # os.stat raises on error (identity off) instead of skipping the file
+                    with open(p, "rb") as fh:
+                        b = fh.read()
+                    h.update(("%s\0%d\0" % (n, len(b))).encode("utf-8"))
+                    h.update(b)
+            _code_id = h.hexdigest()
+        except OSError:
+            _code_id = ""
+    return _code_id or None
+
+
+def module_key_text(prog, mi, closure, infer):
+    """the key text of the module record of prog.modules[mi]; closure = sorted module indices (mi included) whose
+    files its proof can read.  Global inputs: explicit mode, --infer, G9 activation and the G9 metadata entries that
+    mention an item of the closure (an entry naming only outside items cannot reach the closure's encoding)."""
+    import json
+    mods = prog.modules
+    ids = {it.name for j in closure for it in mods[j].items}
+    meta = getattr(prog, "g9", None)
+    if meta is None:
+        g9 = "off"
+    else:
+        known = _all_ids(prog)
+
+        def mentions(x):
+            if not isinstance(x, str):
+                return any(mentions(y) for y in x)
+            head = x.split(".", 1)[0]
+            for c in (head, head.rsplit("::", 1)[0]):
+                if c in known:
+                    return c in ids
+            return True                  # not an item identity: keep it (conservative)
+        g9 = json.dumps({k: [x for x in meta[k] if mentions(x)] for k in sorted(meta)}, sort_keys=True)
+    out = ["pruv-module-proof 1", "explicit %d" % bool(prog.explicit), "infer %d" % bool(infer), "g9 " + g9,
+           "module %s\0%s" % (mods[mi].pkg or "", "::".join(mods[mi].path))]
+    for j in closure:
+        m = mods[j]
+        out.append("dep %s\0%s\0%s\0%s" % (m.pkg or "", "::".join(m.path), m.digest, m.rdigest))
+    return "\n".join(out) + "\n"
+
+
+def _all_ids(prog):
+    ids = getattr(prog, "_pr1_ids", None)
+    if ids is None:
+        ids = prog._pr1_ids = {it.name for it in prog.items}
+    return ids
+
+
+def module_closures(prog):
+    """sorted transitive closure (by Module.deps) of every module index"""
+    out = []
+    for i in range(len(prog.modules)):
+        seen, stack = {i}, [i]
+        while stack:
+            for j in prog.modules[stack.pop()].deps:
+                if j not in seen:
+                    seen.add(j)
+                    stack.append(j)
+        out.append(sorted(seen))
+    return out
+
+
+class ModuleRecords:
+    """Module proof records under DIR/<key[:2]>/<key>. A record means: every function of the module verified
+    with no error under exactly the inputs hashed into the key."""
+    def __init__(self, dir):
+        self.dir = dir
+        self.hits = 0
+        self.misses = 0
+        self.stores = 0
+        self._n = 0
+        import z3
+        cid = code_identity()
+        # None = the compiler could not be hashed: every key is None, never hit, never store
+        self._prefix = None if cid is None else "py " + VERSION + "\0" + cid + "\0" + z3.get_full_version() + "\0"
+
+    def key(self, text):
+        if self._prefix is None:
+            return None
+        return hashlib.sha256((self._prefix + text).encode("utf-8")).hexdigest()
+
+    def lookup(self, k):
+        if k is None:
+            return False
+        try:
+            with open(os.path.join(self.dir, k[:2], k), "rb") as fh:
+                return fh.read(len(MODULE_ENTRY) + 1) == MODULE_ENTRY
+        except OSError:
+            return False
+
+    def store(self, k):
+        if k is None:
+            return
+        sub = os.path.join(self.dir, k[:2])
+        self._n += 1
+        tmp = os.path.join(sub, ".tmp.%d.%d" % (os.getpid(), self._n))
+        fd = None
+        try:
+            os.makedirs(sub, exist_ok=True)
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)     # exclusive: never share a temporary file
+            os.write(fd, MODULE_ENTRY)
+            os.close(fd)
+            fd = None
+            os.replace(tmp, os.path.join(sub, k))
+        except OSError:
+            if fd is not None:
+                os.close(fd)
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
             return
         self.stores += 1

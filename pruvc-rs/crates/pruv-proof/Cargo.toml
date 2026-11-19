@@ -20,6 +20,10 @@ sha2 = "=0.10.9"
 # Step 3: parser, checker, error/JSON emitter (pyjson)
 pruv-core = { path = "../pruv-core" }
 
+[build-dependencies]
+# PR1: build-time code identity (build.rs)
+sha2 = "=0.10.9"
+
 [[bin]]
 name = "pruv-proof-spike"
 path = "src/bin/pruv-proof-spike.rs"

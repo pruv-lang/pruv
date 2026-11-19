@@ -1272,6 +1272,16 @@ proof trace marks a reused query `"cached": true`. The std revalidation (section
 [reject](tests/spec/r7_4_cache_miss.pruv) (a different query after priming misses). Full rule:
 `tests/g4b/check_cache.py`.
 
+Module proof records: `--module-cache DIR` (off by default) records, per module, that all of the module's functions verified
+with no error: file `DIR/<2 hex>/<key>` containing `pruv-module-proof 1\nproved\n`. The key hashes the compiler
+(source files for `pruvc.py`; for `pruvc-rs` the executable on Linux and a build-time hash of its inputs elsewhere; if that hash cannot be made safely the flag records and
+reuses nothing), the Z3 version, `--infer`, the G9 state, and the
+content and name resolution of every module the module's proof can reach. A later compile of any root that loads
+the module with the same key skips proving it; any change to those inputs gives a new key and a full proof. A
+module with an error is never recorded. With the flag, `--trust-report FILE` adds `"flags": {"module_cache": true}`
+and `"module_cache": {"hits", "misses", "stores"}`. Full rule: docs/G4B_SPEC.md section 7.8. Test:
+`tests/g4b/check_module_cache.py`.
+
 ### Native output (`--emit`)
 R-7-5 `--emit exe|obj|ll|rs` is a Rust-driver option: `pruvc-rs` builds a native object or executable itself.
 `pruvc.py` accepts the option only to report a diagnostic found before code generation; otherwise it stops with a

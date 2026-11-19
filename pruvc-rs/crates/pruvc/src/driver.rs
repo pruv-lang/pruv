@@ -253,6 +253,7 @@ fn write_trust_report(
     g4: Option<&pruv_core::modules::G4>,
     graph: Option<&pruv_core::manifest::Graph>,
     cache: Option<&pruv_proof::proof_cache::ProofCache>,
+    mcache: Option<&pruv_proof::proof_cache::ModuleRecords>,
 ) -> Result<(), Fail> {
     let plan: Option<Program> = if pruv_core::typeinfo::first_g3_use(prog).is_some() || g4.is_some() {
         match pruv_core::mono::specialize_g4(prog, g4) {
@@ -279,7 +280,7 @@ fn write_trust_report(
         pruv_core::codegen::GenError::Diag(p) => Fail::Lang(vec![p]),
         pruv_core::codegen::GenError::Msg(m) => Fail::Internal(m),
     })?;
-    let text = crate::trust_report::build(a, g4, graph, &data, cache).map_err(Fail::Internal)?;
+    let text = crate::trust_report::build(a, g4, graph, &data, cache, mcache).map_err(Fail::Internal)?;
     write_text(path, &text)
 }
 
@@ -326,8 +327,20 @@ fn compile(a: &Args, graph: Option<&pruv_core::manifest::Graph>) -> Result<(), F
                 env!("CARGO_PKG_VERSION"),
             ))
         });
+        // PR1: module records exist only when --module-cache is given and verification runs; only an explicit-module
+        // program (G4, resolved) gets a plan, any other program verifies exactly as without the flag.
+        let mcache: Option<std::rc::Rc<pruv_proof::proof_cache::ModuleRecords>> = a.module_cache.as_ref().map(|d| {
+            std::rc::Rc::new(pruv_proof::proof_cache::ModuleRecords::new(
+                std::path::PathBuf::from(d),
+                env!("CARGO_PKG_VERSION"),
+            ))
+        });
+        let modules = match (&mcache, g4.as_ref()) {
+            (Some(r), Some(g)) => pruv_proof::proof_cache::module_plan(&prog, g, r.clone(), a.infer).map(std::rc::Rc::new),
+            _ => None,
+        };
         let errs = if a.infer {
-            let opts = pruv_proof::VerifyOptions { infer: true, proof_cache: cache.clone() };
+            let opts = pruv_proof::VerifyOptions { infer: true, proof_cache: cache.clone(), modules };
             let mut report: Vec<pruv_core::pyjson::Json> = Vec::new();
             let r = pruv_proof::verify_program_opts(
                 &prog,
@@ -343,12 +356,13 @@ fn compile(a: &Args, graph: Option<&pruv_core::manifest::Graph>) -> Result<(), F
             }
             errs
         } else {
-            pruv_proof::verify_program_cached(&prog, &tt, None, cache.clone()).map_err(Fail::Internal)?
+            let opts = pruv_proof::VerifyOptions { infer: false, proof_cache: cache.clone(), modules };
+            pruv_proof::verify_program_opts(&prog, &tt, None, &opts, None).map_err(Fail::Internal)?
         };
         pruv_core::check::opaque_inline(&mut prog); // P13o: contract applications of opaque functions become bodies
         // G4b-2: the trust report is written after verification, proved or not, before the proof errors are returned
         if let Some(p) = &a.trust_report {
-            write_trust_report(a, p, &prog, g4.as_ref(), graph, cache.as_deref())?;
+            write_trust_report(a, p, &prog, g4.as_ref(), graph, cache.as_deref(), mcache.as_deref())?;
         }
         if !errs.is_empty() {
             return Err(Fail::Lang(errs));
@@ -357,7 +371,7 @@ fn compile(a: &Args, graph: Option<&pruv_core::manifest::Graph>) -> Result<(), F
         // G4b-2: with --no-verify the report comes right where verification would have been
         pruv_core::check::opaque_inline(&mut prog); // P13o: same place as after verification
         if let Some(p) = &a.trust_report {
-            write_trust_report(a, p, &prog, g4.as_ref(), graph, None)?;
+            write_trust_report(a, p, &prog, g4.as_ref(), graph, None, None)?;
         }
         // Pre-G10 order for File-free native programs: with --no-verify, foreign_target fires before the notice.
         if g6_native && pruv_core::foreign::g7_target_error(&prog).is_none() && !pruv_core::foreign::uses_files(&prog) {

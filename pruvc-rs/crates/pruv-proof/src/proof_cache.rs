@@ -216,6 +216,241 @@ impl ProofCache {
     }
 }
 
+// ---------------------------------------------------------------------------
+// PR1: module proof records, `--module-cache DIR` (docs/G4B_SPEC.md section 7.8)
+// ---------------------------------------------------------------------------
+
+pub const MODULE_ENTRY: &[u8] = b"pruv-module-proof 1\nproved\n";
+
+static START: std::sync::OnceLock<std::time::SystemTime> = std::sync::OnceLock::new();
+
+/// Records the process start time (call first thing in `main`): `code_identity` refuses a binary modified after it.
+pub fn note_start() {
+    START.get_or_init(std::time::SystemTime::now);
+}
+
+/// Compiler code identity for module keys. Linux: SHA-256 of the running binary read through /proc/self/exe (it embeds
+/// the bundled std and every built-in catalog); None (module records off) when it cannot be read, when it was modified
+/// after `note_start`, or when it changed while being hashed. Other targets: the build-time hash of every compiler
+/// input (build.rs, PRUV_BUILD_ID), because re-opening the executable by path races with a replacement of that path.
+/// Call it early (`main` does when `--module-cache` is given).
+pub fn code_identity() -> Option<String> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        // Re-opening the executable by path races with a replacement of that path, so other targets use the
+        // build-time identity of every compiler input (build.rs).
+        Some(format!("build:{}", env!("PRUV_BUILD_ID")))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        static ID: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+        ID.get_or_init(|| {
+            let exe = PathBuf::from("/proc/self/exe");
+            let stamp = |m: &std::fs::Metadata| -> Option<(std::time::SystemTime, u64, u64)> {
+                Some((m.modified().ok()?, m.len(), std::os::unix::fs::MetadataExt::ino(m)))
+            };
+            let before = stamp(&std::fs::metadata(&exe).ok()?)?;
+            let start = *START.get_or_init(std::time::SystemTime::now);
+            if before.0 > start {
+                return None;
+            }
+            let bytes = std::fs::read(&exe).ok()?;
+            let after = stamp(&std::fs::metadata(&exe).ok()?)?;
+            if after != before || bytes.len() as u64 != before.1 {
+                return None;
+            }
+            Some(hex(&Sha256::digest(&bytes)))
+        })
+        .clone()
+    }
+}
+
+/// Module proof records under DIR/<key[:2]>/<key>. A record means: every function of the module verified with no error
+/// under exactly the inputs hashed into the key.
+#[derive(Debug)]
+pub struct ModuleRecords {
+    dir: PathBuf,
+    /// `rs <version>\0<binary sha256>\0<solver>\0`; None = the binary could not be hashed (never hit, never store)
+    prefix: Option<String>,
+    hits: Cell<u64>,
+    misses: Cell<u64>,
+    stores: Cell<u64>,
+    n: Cell<u64>,
+}
+
+impl ModuleRecords {
+    pub fn new(dir: PathBuf, version: &str) -> ModuleRecords {
+        let prefix = code_identity().map(|c| format!("rs {}\0{}\0{}\0", version, c, crate::sys::full_version()));
+        ModuleRecords { dir, prefix, hits: Cell::new(0), misses: Cell::new(0), stores: Cell::new(0), n: Cell::new(0) }
+    }
+
+    pub fn key(&self, text: &str) -> Option<String> {
+        let p = self.prefix.as_ref()?;
+        let mut h = Sha256::new();
+        h.update(p.as_bytes());
+        h.update(text.as_bytes());
+        Some(hex(&h.finalize()))
+    }
+
+    /// True only for a well-formed record. Counts a hit or a miss.
+    pub fn lookup(&self, key: Option<&str>) -> bool {
+        let ok = match key {
+            Some(k) => read_bounded(&self.dir.join(&k[..2]).join(k)).is_some_and(|b| b == MODULE_ENTRY),
+            None => false,
+        };
+        if ok {
+            self.hits.set(self.hits.get() + 1);
+        } else {
+            self.misses.set(self.misses.get() + 1);
+        }
+        ok
+    }
+
+    /// Writes the record (temporary file + rename); any io error drops it silently. Counts a store on success.
+    pub fn store(&self, key: Option<&str>) {
+        let Some(key) = key else { return };
+        let sub = self.dir.join(&key[..2]);
+        if std::fs::create_dir_all(&sub).is_err() {
+            return;
+        }
+        let n = self.n.get();
+        self.n.set(n + 1);
+        let tmp = sub.join(format!(".tmp.{}.{}", std::process::id(), n));
+        // exclusive create: an existing file of that name (another writer) is never shared or truncated
+        let file = match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
+            Ok(f) => f,
+            Err(_) => return,
+        };
+        let ok = {
+            use std::io::Write;
+            let mut f = file;
+            f.write_all(MODULE_ENTRY).is_ok()
+        };
+        if !ok || std::fs::rename(&tmp, sub.join(key)).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+            return;
+        }
+        self.stores.set(self.stores.get() + 1);
+    }
+
+    pub fn hits(&self) -> u64 {
+        self.hits.get()
+    }
+    pub fn misses(&self) -> u64 {
+        self.misses.get()
+    }
+    pub fn stores(&self) -> u64 {
+        self.stores.get()
+    }
+}
+
+/// At most `MODULE_ENTRY.len() + 1` bytes of the record file (a longer file is malformed anyway).
+fn read_bounded(p: &std::path::Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut b = Vec::with_capacity(MODULE_ENTRY.len() + 1);
+    std::fs::File::open(p).ok()?.take(MODULE_ENTRY.len() as u64 + 1).read_to_end(&mut b).ok()?;
+    Some(b)
+}
+
+/// What `verify_program_opts` needs to skip and record whole modules.
+#[derive(Debug)]
+pub struct ModulePlan {
+    pub recs: std::rc::Rc<ModuleRecords>,
+    /// parallel to `Program.functions`: the index of the defining module
+    pub fn_module: Vec<usize>,
+    /// per module: the key text of its record
+    pub key_texts: Vec<String>,
+    /// set on first use: a plan describes one program, so a second use (a library caller reusing the options on another
+    /// program) verifies everything instead of trusting keys built for the first
+    pub spent: Cell<bool>,
+}
+
+/// Builds the plan of an explicit-module program (`g4` resolved). Key text of module `mi`: the format line, explicit
+/// mode, `--infer`, G9 activation with the G9 metadata entries that mention an item of the module's closure (an entry
+/// naming only outside items cannot reach the closure's encoding), the module itself, then one line per module of its
+/// closure (transitive `Module.deps`, sorted, itself included) with its source digest and resolved-items digest.
+pub fn module_plan(
+    prog: &pruv_core::ast::Program,
+    g4: &pruv_core::modules::G4,
+    recs: std::rc::Rc<ModuleRecords>,
+    infer: bool,
+) -> Option<ModulePlan> {
+    if !g4.resolved || g4.fn_meta.len() != prog.functions.len() {
+        return None;
+    }
+    let mods = &g4.modules;
+    let known: std::collections::HashSet<&str> =
+        prog.functions.iter().map(|f| f.name.as_str()).chain(prog.types.iter().map(|d| d.name())).collect();
+    let mut item_mod: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for (i, f) in prog.functions.iter().enumerate() {
+        item_mod.insert(f.name.as_str(), g4.fn_meta[i].module);
+    }
+    for (i, d) in prog.types.iter().enumerate() {
+        item_mod.insert(d.name(), g4.ty_meta[i].module);
+    }
+    let mut key_texts = Vec::with_capacity(mods.len());
+    for mi in 0..mods.len() {
+        let mut seen = vec![false; mods.len()];
+        seen[mi] = true;
+        let mut stack = vec![mi];
+        while let Some(j) = stack.pop() {
+            for &d in &mods[j].deps {
+                if !seen[d] {
+                    seen[d] = true;
+                    stack.push(d);
+                }
+            }
+        }
+        let g9 = match &prog.g9 {
+            None => "off".to_string(),
+            Some(meta) => {
+                let mentions = |x: &str| -> bool {
+                    let head = x.split('.').next().unwrap_or(x);
+                    let up = head.rsplit_once("::").map_or(head, |p| p.0);
+                    for c in [head, up] {
+                        if known.contains(c) {
+                            return item_mod.get(c).is_some_and(|&m| seen[m]);
+                        }
+                    }
+                    true // not an item identity: keep it (conservative)
+                };
+                let one = |v: &Vec<String>| -> Vec<String> { v.iter().filter(|x| mentions(x)).cloned().collect() };
+                let many = |v: &Vec<Vec<String>>| -> Vec<Vec<String>> {
+                    v.iter().filter(|xs| xs.iter().any(|x| mentions(x))).cloned().collect()
+                };
+                format!(
+                    "boxed={:?} extended={:?} fn_sccs={:?} type_sccs={:?}",
+                    one(&meta.boxed),
+                    one(&meta.extended),
+                    many(&meta.fn_sccs),
+                    many(&meta.type_sccs)
+                )
+            }
+        };
+        let m = &mods[mi];
+        let mut t = format!(
+            "pruv-module-proof 1\nexplicit 1\ninfer {}\ng9 {}\nmodule {}\0{}\n",
+            infer as u8,
+            g9,
+            m.pkg.as_deref().unwrap_or(""),
+            m.path.join("::")
+        );
+        for (j, d) in mods.iter().enumerate() {
+            if seen[j] {
+                t.push_str(&format!(
+                    "dep {}\0{}\0{}\0{}\n",
+                    d.pkg.as_deref().unwrap_or(""),
+                    d.path.join("::"),
+                    d.digest,
+                    d.rdigest
+                ));
+            }
+        }
+        key_texts.push(t);
+    }
+    Some(ModulePlan { recs, fn_module: g4.fn_meta.iter().map(|m| m.module).collect(), key_texts, spent: Cell::new(false) })
+}
+
 #[cfg(test)]
 mod tests {
     use super::canonical;
