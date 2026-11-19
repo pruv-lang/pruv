@@ -30,15 +30,13 @@ fn span_w(off: i64, cap: i64, ab: i64, at: i64) -> bool
 // header words as bud_store. Owner state and key padding are checked by entry_ok.
 pub opaque fn ent_i1(st: [i64], e: i64, top: i64, ab: i64, at: i64) -> bool
 {
-  if len(st) < 16 || e < 0 || e > 4294967296 || st[5] < 0 || st[5] > 4294967312 { return false; }
+  if len(st) < 16 || e < 0 || e > 4294967296 || st[4] < 0 || st[4] > 4294967296 { return false; }
   // Admission checks the header first, so capacity is already in the c32 range.
   if st[6] < 0 || st[6] > 4294967296 { return false; }
   let ext_delta: i64 = 10 * st[6];
-  if st[5] > 4294967296 {
-    let b: i64 = 4294967296 + 10 * e;
-    return ent_w(st, b, b + ext_delta, e, top, ab, at);
-  }
-  let b: i64 = st[5] + 10 * e;
+  // The entry base is 16 + slot count, as in bud_store::ea (equal to word 5 on a valid store; L3 P13j: no cut at
+  // 2^32, where the base 16 + 2^32 is above the c32 range).
+  let b: i64 = 16 + st[4] + 10 * e;
   return ent_w(st, b, b + ext_delta, e, top, ab, at);
 }
 
@@ -78,8 +76,8 @@ fn entry_ok(st: [i64], e: i64, top: i64, ab: i64, at: i64) -> i64
   ensures result >= 0 ==> ent_i1(st, e, top, ab, at)
 {
   reveal ent_i1;
-  if len(st) < 16 || st[5] < 0 || st[5] > 4294967312 || st[6] < 0 || st[6] > 4294967296 { return -3; }
-  let eb: i64 = crate::bud_store::c32(st[5]);
+  if len(st) < 16 || st[4] < 0 || st[4] > 4294967296 || st[6] < 0 || st[6] > 4294967296 { return -3; }
+  let eb: i64 = 16 + crate::bud_store::c32(st[4]);
   let cap: i64 = crate::bud_store::c32(st[6]);
   let b: i64 = eb + 10 * e;
   let x: i64 = b + 10 * cap;

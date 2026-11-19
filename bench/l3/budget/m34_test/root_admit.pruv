@@ -8,7 +8,9 @@ mod bud_admit;
 // (driver_admit.rs, run.py admit). Case 0 is the clean store; every other case breaks one header word, offset, link,
 // key or count and expects admit's class code; 14, 19 and 20 are stores admit must accept (stale tag, slots left
 // by removal, reused entry under a stale slot); 21 and 22 grow top and the free list (grow); 23 removes the middle of
-// a deep chain (chain), which admit must accept too. Functional (I2) properties are not part of these cases.
+// a deep chain (chain), which admit must accept too; 24 is case 19 with a payload (blob, v0..v3) on roots 0..2, which
+// grow_copy must keep (root_pay_diff, L3 P13j); 25 and 26 are case 19 with values and an empty blob on root 0 whose
+// offset is past the buffer (25) or -1 (26), which admit accepts and grow_copy must copy (P13j.5). entry_addr checks the entry base at the maximum slot count. Functional (I2) properties are not part of these cases.
 
 fn fa(st: [i64], e: i64, f: i64) -> i64
   requires 0 <= f && f < 20
@@ -62,6 +64,7 @@ fn addr_of(st: [i64], case: i64) -> i64
   if case == 16 { return fa(st, 9, 1); }
   if case == 17 { return 8; }
   if case == 18 { return fa(st, 6, 8); }
+  if case == 25 || case == 26 { return fa(st, 0, 12); }
   return -1;
 }
 
@@ -80,7 +83,8 @@ fn val_of(st: [i64], case: i64) -> i64
     return 0;
   }
   if case == 15 { return 1099511627776; }
-  if case == 17 { return -1; }
+  if case == 17 || case == 26 { return -1; }
+  if case == 25 { return len(st) + 1; }
   return 0;
 }
 
@@ -146,8 +150,44 @@ pub fn admit_grow(inout st: [i64], keys: [i64], case: i64, inout nxt: [i64], ino
   let g: i64 = crate::bud_map::grow_copy(st, inout nxt);
   crate::ent_u16::wr(inout live, 0, crate::bud_store::hd(st, 12));
   crate::ent_u16::wr(inout live, 1, crate::bud_store::hd(nxt, 12));
+  crate::ent_u16::wr(inout live, 2, root_pay_diff(st, nxt));
   return g;
 }
+
+// Root payload kept by grow_copy (L3 P13j): 1 if any of roots 0..2 differs in values v0..v3 (fields 14..17), blob
+// length or blob units between prev and nxt, else 0 (returns on the first mismatch, so no counter to overflow).
+pub fn root_pay_diff(prev: [i64], nxt: [i64]) -> i64
+{
+  let mut r: i64 = 0;
+  while r < 3
+    invariant 0 <= r && r <= 3
+    decreases 3 - r
+  {
+    let mut f: i64 = 14;
+    while f < 18
+      invariant 14 <= f && f <= 18
+      decreases 18 - f
+    {
+      if crate::bud_store::ef(prev, r, f) != crate::bud_store::ef(nxt, r, f) { return 1; }
+      f = f + 1;
+    }
+    let n: i64 = crate::bud_map::blob_len(prev, r);
+    if n != crate::bud_map::blob_len(nxt, r) { return 1; }
+    let mut j: i64 = 0;
+    while j < n
+      invariant 0 <= j && j <= n
+      decreases n - j
+    {
+      if crate::bud_map::blob_unit(prev, r, j) != crate::bud_map::blob_unit(nxt, r, j) { return 1; }
+      j = j + 1;
+    }
+    r = r + 1;
+  }
+  return 0;
+}
+
+// L3 P13j: entry base at the maximum slot count.
+pub fn entry_addr(st: [i64], e: i64) -> i64 { return crate::bud_store::field_at(st, e, 0); }
 
 pub fn admit_case(inout st: [i64], keys: [i64], case: i64, inout cnt: [i64]) -> i64
 {
@@ -174,6 +214,22 @@ pub fn admit_case(inout st: [i64], keys: [i64], case: i64, inout cnt: [i64]) -> 
   if case == 23 {
     let g: i64 = chain(inout st, keys, 64);
     if g != 0 { return g; }
+  }
+  if case == 24 {
+    let mut r: i64 = 0;
+    while r < 3
+      invariant 0 <= r && r <= 3
+      decreases 3 - r
+    {
+      let rb: i64 = crate::bud_map::set_blob(inout st, r, keys, r, 2);
+      if rb != 0 { return -108; }
+      crate::bud_store::set_vals(inout st, r, 100 + r, 200 + r, 300 + r, 400 + r);
+      r = r + 1;
+    }
+  }
+  if case == 25 || case == 26 {
+    // values but an empty blob on root 0: its extension exists and the blob offset is free (P13j.5)
+    crate::bud_store::set_vals(inout st, 0, 7, 8, 9, 10);
   }
   let a: i64 = addr_of(st, case);
   let v: i64 = val_of(st, case);
