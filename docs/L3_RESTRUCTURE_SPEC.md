@@ -379,7 +379,7 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P13 | Same + B/host.rs: reserve/grow/failure | P Q2/Q3 growth, no replay of effects/queries, old state valid or terminal poison; byte/copy accounting. |
 | P13c | B/host.rs: M4 peak RSS at or below hand (P13b.8) | P: peak RSS split by component (entry words, slot table, arena slack, old + new buffer at a grow) on the 9 M4 cells; every cell <= 1.0x hand by peak RSS and allocation count, time not worse than P13b; Q2/Q3 growth gates unchanged. Done in part (Appendix P13c): old buffers mapped by the host; 7 of 9 cells still above hand, split into P13d, P13e and one page of undetermined cause. |
 | P13d | Both codegens (pruvc / pruvc-rs): generated code size of the M4 driver (Appendix P13c.8) | P: resident `__TEXT` of the M4 Pruv binary at or below hand's (P13c: +80 KiB, measured before the P13c change, assumed unchanged after), with both sides built with the same flags; time not worse than P13c; no Pruv-only build flags. Measured (Appendix P13d): not met without time loss, no compiler change; size split by line and queued as P13h/P13e/P13f. T5 adds M7: every inline promotion of the P19c bodies grows `__text` (Appendix T5.2). |
-| P13e | B/bud_map.pruv, bud_store.pruv, bud_world.pruv, bud_admit.pruv: entry layout (Appendix P13c.8) | P: smaller per-entry words (P13c: 20 words) so tools peak RSS reaches hand after P13d (also P21: tooldup at M = 500, 3120 vs oaw 3040 KiB); proofs and M10 replay counters kept; time not worse than P13c. Step 1 (Appendix P13e): the M4 excess is a fixed +64..96 KiB (P13d/P13h) on every axis; only tools has a proportional share above hand (+96 KiB at n = 1000). Layout stopped: entry fields 11..17 and the 20-word bound are used by bud_clock.pruv, bud_lifecycle.pruv, m9_test/root_m9.pruv, m8_test/root_m8.pruv (outside this row); decision pending (P13e.3). |
+| P13e | B/bud_map.pruv, bud_store.pruv, bud_world.pruv, bud_admit.pruv: entry layout (Appendix P13c.8) | P: smaller per-entry words (P13c: 20 words) so tools peak RSS reaches hand after P13d (also P21: tooldup at M = 500, 3120 vs oaw 3040 KiB); proofs and M10 replay counters kept; time not worse than P13c. Step 1 (Appendix P13e): the M4 excess is a fixed +64..96 KiB (P13d/P13h) on every axis; only tools has a proportional share above hand (+96 KiB at n = 1000). Decision option 1 (boundary widened). Step 2a accessors (2d877e8), step 2b base 10 words + on-demand 10-word extension (b231319): tools proportional RSS at hand within one page, sessions/clocks below hand, allocations equal, instructions equal or lower at n = 2000 and +0.3..1.4 % at n = 100..1000 (fixed code term); fixed share +16..48 KiB of code on M4 and M7 +96..176 / M10 +16..32 KiB, open with P13d/P13h (Appendix P13e.6-7). Audit fixes and resident format version 2: c85a671 (P13e.10). |
 | P13f | B/driver_m4.rs and the M4 bench adapter: length bound from T0 (TIDY_SPEC §4.10) | P: the bench adapter's allocations get the `2^40` bound (T0 audit finding 1), and the per-entry length check added by T0 is hoisted out of the timed loop where the driver already holds the length; m4 sessions back to the pre-T0 time (T0: +1-2%, outside A/A noise) and every M4 cell <= 1.0x hand. |
 | P13g | Both codegens: small helper inlining gap found by P20 (Appendix P20) | P: `find_w` in the bud_charge hot path is inlined (P20 attribution: about 25 instructions per call not inlined), output parity on both compilers, and the P20 unmatched hand16 lane (keys pre-parsed, 1.13-1.17x) re-measured after P13f and this row; any remaining gap above 1.0x is fixed or explained line by line (wire parsing is about 100 instructions of it). LLVM pairs for P20 wait for P17. |
 | P13h | Both codegens (and verifiers for (a)): M4 own-code size without time loss (Appendix P13d.5, P13d.8) | P: resident `__TEXT` of the M4 Pruv binary at or below hand's (P13d: 304 vs 240 KiB) with instructions and cycles on every M4 cell not worse than P13d.3's shipped column; candidates: proof-guided call-site specialization of total accessors, hot/cold body split of map growth paths; output parity on both compilers. |
@@ -4925,7 +4925,10 @@ Diagnosis, the variants, the measurements and this appendix were done directly.
 
 ## Appendix P13e (row B/bud_map, bud_store, bud_world, bud_admit: entry layout)
 
-Status: step 1 (RSS split) done; step 2 (layout) stopped for a file-boundary decision (P13e.3). No source change.
+Status: done in part. Step 1 (RSS split, P13e.1-3) and, after decision option 1, step 2a (accessors, 2d877e8, no
+layout change) and step 2b (base + extension layout, b231319, P13e.5-8). Tools proportional RSS is at hand (within
+one 16 KiB page, ranges overlap); the fixed share grew by one to three pages of code (open, P13d/P13h), and M7/M10
+peak RSS rose by that fixed share (P13e.7). Audit fixes and the resident format version 2 in c85a671 (P13e.10).
 Base: main c3ec58d. Binaries: M4 driver built by `m34_test/run.py build` with the main checkout's `pruvc-rs` release
 binary; hand is `work/handbuild/release/m4_hand`. `perf <axis> <n> 1000`, one run per point, `/usr/bin/time -l`
 (16 KiB pages, macOS arm64). Raw: `/tmp/p13e/` (not committed).
@@ -4980,6 +4983,129 @@ which the package brief forbids; decision requested from the main session:
 Generation width stays 64 bits in both options: a 32-bit generation makes a stale child match its reused owner after
 2^32 reuses of one entry, which the tools churn (one turn forgotten per rep) reaches in hours.
 
-### P13e.4 Delegation
+Decision (main session): option 1, with `bud_clock.pruv`, `bud_lifecycle.pruv`, `m9_test/root_m9.pruv`,
+`m8_test/root_m8.pruv` and the layout constants in `m34_test/run.py` added to the boundary; generation stays 64-bit.
 
-None (measurement and the stop decision were done directly).
+### P13e.4 Step 2a: accessors (2d877e8)
+
+Fixed offsets 11..17 and the `a + 20 <= len(st)` bounds outside `bud_store` go through `xa` / `xb` / `xbm` /
+`field_at`; the layout is unchanged and every gate output is identical to c3ec58d.
+
+### P13e.5 Step 2b: layout (b231319)
+
+The buffer keeps 20 cap words of entry space, split in two arrays:
+
+- Base, 10 words at `E + 10e`: 0 state, 1 owner, 2 owner gen, 3 gen, 4 key offset, 5 key length, 6 hash, 7 prev,
+  8 next, 9 `xk = 2 * key cap + flag` (flag = extension present).
+- Extension, 10 words at `E + 10 cap + 10e`: 0 child count, 1 blob offset, 2 blob length, 3..6 v0..v3, 7 child head,
+  8 child tail, 9 blob cap. Written only when an entry gets children, a blob or a nonzero value (`xbm` sets the
+  flag and the defaults). Without it reads give head/tail -1 and 0 otherwise.
+
+Pure map members (all tools activities) touch 10 words plus slot and key; the extension half of their entries is never
+written, and buffers of 64 KiB and up are host-mapped (P13c), so those pages stay non-resident. Admission
+(`ent_i1` / `ent_w` / `entry_ok`) checks the base, and the extension only when the flag is set; no new
+`admit` / `assume` / `opaque`. Deviation from the brief's 6-7 word base: generation, owner generation and hash stay
+full words and the base is not bit-packed, because packing added decode instructions on every lookup (the
+instructions and time come first). `copy_node` / `set_blob` write the extension directly (`set_vals`, `wr16`) instead
+of the generic field path; without that sessions and clocks lost about 1M instructions (+4 %) at n = 2000 (grow
+copies).
+
+Layout-forced changes outside the row files: `m8_test/driver_m8.rs` (import fixture offsets),
+`m8_test/corrupt_resident.py` (field addresses; `--old-rev HEAD` passes, the default `c4d3a63^` fails as before for a
+pre-existing format reason), `m34_test/CONTRACT.md` (layout text), and after the audit `m9_test/mut_m9.py` (P13e.10).
+
+### P13e.6 M4 after (7 alternating rounds base / P13e / hand, medians; reps 1000)
+
+Instructions (M) and peak RSS (KiB), base c3ec58d / P13e / hand; allocations are identical to base in every cell
+(sessions 512 / 2514 / 5015, tools 1495 / 7497 / 14998, clocks 535 / 2537 / 5038; hand 820..26008).
+
+| axis | n | instr base / P13e / hand | RSS base / P13e / hand | P13e/hand instr, RSS |
+|---|---|---|---|---|
+| sessions | 100 | 15.42 / 15.47 / 15.59 | 1792 / 1792 / 1712 | 0.993, 1.047 |
+| sessions | 500 | 17.63 / 17.73 / 18.12 | 1904 / 1936 / 1872 | 0.978, 1.034 |
+| sessions | 1000 | 20.53 / 20.61 / 21.20 | 2048 / 2064 / 2016 | 0.972, 1.024 |
+| tools | 100 | 17.85 / 18.01 / 19.69 | 1824 / 1840 / 1728 | 0.915, 1.065 |
+| tools | 500 | 23.10 / 23.12 / 26.28 | 2032 / 2032 / 1936 | 0.880, 1.050 |
+| tools | 1000 | 29.42 / 29.25 / 34.28 | 2256 / 2208 / 2112 | 0.853, 1.045 |
+| clocks | 100 | 16.33 / 16.56 / 16.68 | 1792 / 1792 / 1712 | 0.993, 1.047 |
+| clocks | 500 | 18.58 / 18.71 / 19.60 | 1904 / 1920 / 2000 | 0.955, 0.960 |
+| clocks | 1000 | 21.38 / 21.55 / 22.94 | 1984 / 2016 / 2256 | 0.940, 0.894 |
+
+At n = 2000: sessions 27.15 / 27.12 M, clocks 27.08 / 27.25 M, tools 34.91 / 34.45 M; RSS sessions 2320 / 2336,
+tools 2448 / 2320 (hand 2208), clocks 2192 / 2208.
+
+Split (as P13e.2, excess over hand; fixed = n = 1):
+
+| axis | fixed base / P13e | proportional base n=100/500/1000/2000 | proportional P13e | slope base / P13e / hand |
+|---|---|---|---|---|
+| sessions | +96 / +112 | -16 / -64 / -64 / -80 | -32 / -48 / -64 / -80 | 0.278 / 0.286 / 0.312 |
+| tools | +64 / +96 | +32 / +32 / +80 / +176 | +16 / 0 / 0 / +16 | 0.328 / 0.253 / 0.253 |
+| clocks | +64 / +112 | +16 / -160 / -336 / -640 | -32 / -192 / -352 / -672 | 0.211 / 0.219 / 0.556 |
+
+- Tools proportional share: at hand (0 at n = 500, 1000; +16 KiB, one page, at 100 and 2000 with overlapping
+  ranges). The goal "tools proportional <= hand" is met within one page.
+- Sessions and clocks stay below hand proportionally.
+- Fixed share +16..48 KiB: `__text` grew about 11 KB in the M4 driver (World::exec +8 KB: inlined extension
+  branches of `ef` / `set_ef`). Instructions at n = 1 are +0.03..0.16 M, which is the whole sessions/clocks
+  difference at n = 100..1000 (+0.3..1.4 %); at n = 2000 they are equal or lower. Open, with the P13d/P13h code-size
+  term.
+
+### P13e.7 M10 and M7 lanes (peak RSS KiB, 5 alternating rounds before / after / hand, medians)
+
+| lane | before (c3ec58d) | after (b231319) | hand |
+|---|---|---|---|
+| M10 D=10 / 50 / 100 | 1872 / 1872 / 1920 | 1888 / 1904 / 1936 | 1584 / 1584 / 1584 |
+| M7 S=100 / 500 / 1000 | 4944 / 13216 / 23728 | 5072 / 13392 / 23824 | 2688 / 4432 / 6512 (hand16) |
+
+The M7 rise is fixed (+96..176 KiB; S = 100 to 1000 slope 18784 before, 18752 after) and the M10 rise is one or
+two pages; `__text` of both drivers grew about 37 KB (`bud_lifecycle` maybe_close +7 KB, replace +5 KB, reopen
++3.5 KB, attach +2 KB: inlined extension branches). M7 instructions at S = 100, one rep: 105.8 M before, 104.7 M
+after. This is a regression of the fixed share on M7/M10 and stays open: the lifecycle bodies should use the
+direct `xa` / `xb` paths the way `copy_node` does (P13d/P13h code size).
+
+Handed over from P18b (main f0c5932), not done in this package: (1) drop the id copy in `bud_lifecycle` attach
+(P18b `noid`: S = 500 391.1 -> 355.1 instr/call, hand16 303.3); (2) the M7 proportional RSS share (about 0.74 KB per
+session over hand) comes from `bud_store::need` sizing (N >= 2 len, doubled to a power of two, up to 4x slack; two
+Worlds alive), plus an unattributed fixed share of about 254 KB.
+
+### P13e.8 Gates (b231319)
+
+Seven roots rs + py verify; M4 Q2/Q3 300/300, admission 26/26; M8 63/237/0; M7 113/187/0; M9 q3 26/274/0, clock
+136/164/0, q4 0/300/0, q4clock 293/7/0, stale 300/0/0; M10 78/222/0, cases_halt 300/0/0; M11 Q6 py/rust and rs/rust
+213 exact + 87 prefix-ok. rs and py identical, fail 0, run one after the other. Same counts as c3ec58d.
+
+### P13e.9 Delegation
+
+- Research (one task): Codex gpt-6.2-astra.
+- Write (one task, part of the source edits): Codex gpt-6.2-sol, applied by direct copy and then checked by the gates.
+- Audit of b231319: Codex gpt-6.2-astra, ultra effort, once (verdict "fix then merge", P13e.10).
+
+### P13e.10 Audit findings and fixes (c85a671)
+
+Fixed:
+
+- `m9_test/mut_m9.py`: mutant `m10_fire_active_count` matched the old count word; it now mutates the extension
+  count (`st[ca + 6]`). The campaign is control CLEAN and all 10 mutants KILLED. The file is outside the widened
+  boundary; the layout forced it.
+- `bud_clock` `run_started` wrote the waiting count through `xbm`, which created an extension for every run. It
+  now writes only an existing extension (`xb`); a missing one already reads waiting 0. `run_waiting` reads the old
+  value through `xb`, returns early when nothing changes, and only then creates the extension.
+- Resident format version: header word 1 is now 2 (`bud_store` init and `valid`), so a 20-word (version 1) buffer
+  fails admission instead of being read with the 10-word layout. `m34_test/CONTRACT.md` says so.
+- `m8_test/corrupt_resident.py` P21a controls: header version and blob address follow the build (version 1 and
+  the 20-word offset only for a legacy old revision). `--old-rev HEAD` and `--old-rev c3ec58d` (20-word): 387
+  controls, 0 mismatches, 0 poke-not-found, P21a 6/6. The default `c4d3a63^` predates the packed wire and is not
+  meaningful (module docstring).
+
+After the fixes: seven roots rs + py verify, all q gates as P13e.8 with the same counts, fail 0. M4 clocks n = 100 /
+1000 / 2000, 3 runs: instructions and RSS within run-to-run noise of b231319, allocations equal.
+
+Documented, not changed:
+
+- `bud_store::copy_words` still counts 20 words per entry up to top (reserved capacity, both arrays). The Q2 grow
+  check (`harness.rs:109-124`, at least 60 words per grow) relies on that meaning; the real copy of a base-only entry
+  is 10 words plus key.
+- Pre-existing, not from this layout: at the maximum slot count the entry base can overlap the slot table, and the
+  root payload is not carried across a grow. No gate exercises either; queued with the store bounds work.
+- Nits: extension writes on a corrupt buffer (`xbm` returns -1) are skipped silently; the old per-field `ea` range
+  ensures were folded into `xb`'s single ensures; `xbm` success is not part of its contract (callers test -1).
