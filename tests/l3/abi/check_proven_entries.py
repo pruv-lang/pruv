@@ -1,4 +1,4 @@
-"""Check P18b output parity and the checked-length Rust host API."""
+"""Check P18b/P18c output parity and the checked-length and by-value Rust host APIs."""
 import argparse
 import json
 from pathlib import Path
@@ -29,6 +29,28 @@ pub fn array_len(src: [i64]) -> i64 {
 pub fn scalar(x: i64) -> i64 {
     return x;
 }
+
+pub fn pair(x: i64, inout out: [i64]) -> i64
+  requires len(out) >= 2 && x < 9223372036854775807
+{
+    out[0] = x;
+    out[1] = x + 1;
+    return 7;
+}
+
+pub fn not_last(inout out: [i64], x: i64) -> i64
+  requires len(out) >= 1
+{
+    out[0] = x;
+    return x;
+}
+
+pub fn bytes_out(inout out: [u8]) -> i64
+  requires len(out) >= 1
+{
+    out[0] = 1;
+    return 0;
+}
 """
 
 HOST = """\
@@ -45,11 +67,16 @@ fn main() {
     assert_eq!(array_len(&src), pruv_proven::array_len(src_proof));
     let text = "hé";
     assert_eq!(text_len(text), pruv_proven::text_len(PruvStr::new(text)));
+    assert_eq!(pruv_proven::val::pair::<2>(5), (7, [5, 6]));
+    assert_eq!(pruv_proven::val::copy_first::<3>(src_proof), (42, [42, 0, 0]));
 
     let err = std::panic::catch_unwind(|| {
         let mut dst = [0];
         pruv_proven::copy_first(PruvArr::new(&[]), PruvArr::new_mut(&mut dst));
     }).unwrap_err();
+    assert!(err.downcast_ref::<&str>().is_some_and(|s| s.contains("pruv: requires violated"))
+         || err.downcast_ref::<String>().is_some_and(|s| s.contains("pruv: requires violated")));
+    let err = std::panic::catch_unwind(|| pruv_proven::val::pair::<1>(5)).unwrap_err();
     assert!(err.downcast_ref::<&str>().is_some_and(|s| s.contains("pruv: requires violated"))
          || err.downcast_ref::<String>().is_some_and(|s| s.contains("pruv: requires violated")));
 
@@ -105,6 +132,11 @@ def main(work, rs, py):
         assert b"pruv_len_slow" not in twins and b"fn scalar(" not in twins
         assert b"let dst: &mut [i64] = dst.get_mut();" in twins
         assert b"let text: &str = text.get();" in twins
+        assert b"pub mod val {" in twins
+        assert b"fn pair<const K: usize>(x: i64) -> (i64, [i64; K])" in twins
+        assert b"fn copy_first<const K: usize>(src: &PruvArr<i64>) -> (i64, [i64; K])" in twins
+        for name in (b"not_last", b"bytes_out", b"scalar", b"array_len"):
+            assert b"fn " + name + b"<" not in twins, name
         for name in (b"copy_first", b"text_len", b"array_len"):
             assert inline_attr(plain[0], name) == inline_attr(twins, name), name
         if flags == ("--trust-callers",):
@@ -126,6 +158,20 @@ def main(work, rs, py):
     result = run([rustc, "--edition", "2021", str(work / "main.rs"), "-o", str(work / "host")])
     assert result.returncode != 0 and "E0616" in result.stderr, result.stderr
 
+    # The val module's glob import brings the checked entries into scope privately.
+    for call, diagnostic in (
+        ("pair::<{ (1usize << 40) + 1 }>(1)", "by-value result longer than 2^40"),
+        ("not_last::<1>(1)", "E0603"),
+        ("bytes_out::<1>()", "E0603"),
+    ):
+        (work / "main.rs").write_text(
+            f'include!("gen.rs");\nfn main() {{ let _ = pruv_proven::val::{call}; }}\n', encoding="utf-8")
+        result = run([rustc, "--edition", "2021", str(work / "main.rs"), "-o", str(work / "host")])
+        assert result.returncode != 0, call
+        assert diagnostic in result.stderr, result.stderr
+        if call.startswith("pair"):
+            print(next(line for line in result.stderr.splitlines() if diagnostic in line))
+
     manifest = work / "pruv.json"
     for mode in ("crate", "unsafe"):
         manifest.write_text(json.dumps({"name": "app", "version": "1.0.0", "root": source.name,
@@ -141,6 +187,7 @@ def main(work, rs, py):
             twins = proven[0][len(plain[0]):]
             assert b"pub mod pruv_raw {" in plain[0] and b"pub mod pruv_proven {" in twins, mode
             assert b"pub(crate) fn copy_first(" in twins, mode
+            assert b"pub(crate) fn pair<const K: usize>" in twins, mode
 
     clash = work / "clash.pruv"
     clash.write_text("pub struct PruvArr { x: i64 }\n" + SOURCE, encoding="utf-8")
@@ -154,7 +201,7 @@ def main(work, rs, py):
         assert result.returncode == 2 and result.stderr.strip().endswith(
             "--proven-entries requires --backend rust"), result.stdout + result.stderr
     assert diagnostics[0] == diagnostics[1], "clash diagnostics differ"
-    print("P18b: parity in 3 compiler modes and 2 manifest modes, 2 host runs, privacy and diagnostics pass")
+    print("P18b/P18c: parity in 3 compiler modes and 2 manifest modes, 2 host runs, privacy and diagnostics pass")
 
 
 if __name__ == "__main__":

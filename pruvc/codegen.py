@@ -1882,8 +1882,8 @@ class Gen:
         if s.proven_entries and guard:
             twin = proven_entry(f, param_types, vis, name, ret)
             if twin is not None:
-                signature, rebinds, has_str = twin
-                s.proven_items.append((header, s.allow, signature, rebinds + s.out[body_start:], has_str))
+                signature, rebinds, has_str, val = twin
+                s.proven_items.append((header, s.allow, signature, rebinds + s.out[body_start:], has_str, val))
         s.emit(0, "}")
         s.emit(0, "")
 
@@ -3364,23 +3364,43 @@ def proven_entry(f, param_types, vis, name, ret):
                 return None
             rebinds.append("    let %s: %s = %s.%s();" % (p.name, ty, p.name, accessor))
         params.append("%s: %s" % (p.name, mapped))
-    return "%sfn %s(%s)%s {" % (vis, name, ", ".join(params), ret), rebinds, has_str
+    val = None
+    if f.params and f.params[-1].mode == "inout" and param_types[-1] == "&mut [i64]":
+        rt = ret[4:] if ret else "()"
+        args = [p.name for p in f.params[:-1]] + ["PruvArr::new_mut(&mut pruv_res)"]
+        val = [
+            "#[inline(always)]",
+            f"{vis}fn {name}<const K: usize>({', '.join(params[:-1])}) -> ({rt}, [i64; K]) {{",
+            '    const { assert!((K as u64) <= (1u64 << 40), "pruv: by-value result longer than 2^40") };',
+            "    let mut pruv_res = [0i64; K];",
+            f"    let pruv_r = super::{name}({', '.join(args)});",
+            "    (pruv_r, pruv_res)",
+            "}",
+        ]
+    return "%sfn %s(%s)%s {" % (vis, name, ", ".join(params), ret), rebinds, has_str, val
 
 
 def proven_module(text, items):
     lines = text.split("\n")
     attrs = {line: attr for attr, line in zip(lines, lines[1:]) if attr in ("#[inline]", "#[inline(always)]")}
-    has_str = any(item[-1] for item in items)
+    has_str = any(has_str for _, _, _, _, has_str, _ in items)
     prelude = PROVEN_ARR + (PROVEN_STR if has_str else "") + "}\n"
     exports = ["#[allow(unused_imports)]", "pub use self::pruv_proven_types::PruvArr;"]
     if has_str:
         exports.append("pub use self::pruv_proven_types::PruvStr;")
     module = ["", "/// P18b (--proven-entries): entries with lengths checked once by their parameter constructors.",
               "pub mod pruv_proven {", "    use super::*;"]
-    for header, allow, signature, body, _ in items:
+    vals = []
+    for header, allow, signature, body, _, val in items:
         module.extend("    " + line for line in (allow, attrs[header], signature))
         module.extend("    " + line for item in body for line in item.split("\n"))
         module.append("    }")
+        if val is not None:
+            vals.extend("        " + line for line in [allow, *val])
+    if vals:
+        module.extend(['    /// P18c (--proven-entries): by-value results, see SPEC.md "By-value results".',
+                       "    pub mod val {", "        #[allow(unused_imports)]", "        use super::super::*;",
+                       *vals, "    }"])
     return "\n" + prelude + "\n".join(exports + module + ["}", ""])
 
 

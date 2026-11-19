@@ -6,7 +6,7 @@ group l3_abi (backend null rows): tests/l3/abi/check_raw_entries.py WORK --rs|--
 raw_entries ("crate" / "unsafe"): text facts, rustc visibility / unsafe / privacy errors, panic poisoning of
 pruv_raw::PruvStore. The l3_p09_* roots are ordinary must_reject rows. Row l3_abi/c_handle (L3 P10):
 tests/l3/abi/check_c_handle.py WORK --rs|--py PATH checks raw_entries "c" (pruv_c text, rs == py, C probe c_probe.c).
-Row l3_abi/proven_entries (L3 P18b) compares --proven-entries output and runs optimized Rust host probes.
+Row l3_abi/proven_entries (L3 P18b/P18c) compares --proven-entries output and runs optimized Rust host probes.
 
 group spec_trace (T1; one backend null row): tests/spec_trace.py --only-py|--only-rs --py|--rs PATH checks that
 every SPEC.md rule ID has passing accept/reject tests under tests/spec and every diagnostic code is in the SPEC.md table.
