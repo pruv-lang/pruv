@@ -15,6 +15,7 @@ Test format (tests/spec/README.md): a file `NAME.pruv` or a project `NAME/root.p
   flags            extra compiler flags (list of strings)
   backend          "rust" (default), "llvm", or "none" (no --backend flag; for native --emit)
   stage, code      reject: one emitted diagnostic must have this stage and code (exit 1)
+  line, col        optional expected location of that diagnostic
   exit             expected exit code (default 0 accept, 1 reject)
   gen_contains, gen_absent           strings that must / must not appear in the generated output
   gen_regex, gen_regex_absent        regular expressions (re.M) that must / must not match the generated output
@@ -30,6 +31,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 
@@ -44,6 +46,7 @@ SPEC_DIR = os.path.join(HERE, "spec")
 RULE_ID = re.compile(r"\bR-[0-9]+[a-z]?-[0-9]+\b")
 HEADER = re.compile(r"^//\s*spec:\s*((?:R-[0-9]+[a-z]?-[0-9]+\s+)+)(accept|reject)\s*$")
 TABLE_ROW = re.compile(r"^\|\s*`([a-z_]+)/([a-z0-9_]+)`\s*\|\s*([a-z_]+)\s*\|")
+CLASSES = ("false_reject", "false_accept", "wrong_location", "timeout", "other")
 
 
 def spec_ids_and_sections(text):
@@ -127,7 +130,7 @@ def diags_of(text):
 
 
 def run_test(drv, src, want, kind, work, seen):
-    """(ok, detail)"""
+    """(ok, detail, failure class or None)"""
     flags = list(want.get("flags", []))
     backend = want.get("backend", "rust")
     tag = "%s_%s" % (drv.kind, re.sub(r"[^A-Za-z0-9]+", "_", os.path.relpath(src, SPEC_DIR)))
@@ -139,9 +142,10 @@ def run_test(drv, src, want, kind, work, seen):
         cdir = os.path.join(work, tag + "_cache")
         shutil.rmtree(cdir, ignore_errors=True)
         prime = os.path.join(os.path.dirname(src), cache["prime"]) if cache.get("prime") else src
-        c0 = drv.run(drv.argv(prime, out + ".prime", ["--proof-cache", cdir], backend), timeout=300)
+        c0 = drv.run(drv.argv(prime, out + ".prime", ["--proof-cache", cdir], backend),
+                     timeout=300).raise_if_timeout()
         if c0.returncode != 0:
-            return False, "prime exit %d %s" % (c0.returncode, (c0.stdout + c0.stderr)[-300:])
+            return False, "prime exit %d %s" % (c0.returncode, (c0.stdout + c0.stderr)[-300:]), "other"
         report = os.path.join(work, tag + "_trust.json")
         flags += ["--proof-cache", cdir, "--trust-report", report]
     if backend == "none":   # no --backend flag (native --emit picks its own)
@@ -150,48 +154,58 @@ def run_test(drv, src, want, kind, work, seen):
         argv = drv.argv(src, out, flags, backend)
     c = drv.run(argv, timeout=300).raise_if_timeout()
     text = c.stdout + c.stderr
-    ds = diags_of(c.stdout)
+    ds = diags_of(c.stdout + "\n" + c.stderr)
     for d in ds:
         if isinstance(d.get("stage"), str) and isinstance(d.get("code"), str):
             seen.setdefault((d["stage"], d["code"]), os.path.relpath(src, ROOT))
     exit_want = want.get("exit", 0 if kind == "accept" else 1)
     if c.returncode != exit_want:
-        return False, "exit %d (expected %d) %s" % (c.returncode, exit_want, text[-400:])
+        cls = "other"
+        if kind == "accept" and c.returncode == 1 and any("stage" in d for d in ds):
+            cls = "false_reject"
+        elif kind == "reject" and c.returncode == 0:
+            cls = "false_accept"
+        return False, "exit %d (expected %d) %s" % (c.returncode, exit_want, text[-400:]), cls
     if "code" in want:
-        if not any(d.get("stage") == want.get("stage") and d.get("code") == want["code"] for d in ds):
+        matching = [d for d in ds if d.get("stage") == want.get("stage") and d.get("code") == want["code"]]
+        if not matching:
             return False, "expected %s/%s; got %s" % (want.get("stage"), want["code"],
-                                                     [(d.get("stage"), d.get("code")) for d in ds])
+                                                     [(d.get("stage"), d.get("code")) for d in ds]), "other"
+        location = {k: want[k] for k in ("line", "col") if k in want}
+        if location and not any(all(d.get(k) == v for k, v in location.items()) for d in matching):
+            return False, "expected location %s; got %s" % (
+                location, [{k: d.get(k) for k in location} for d in matching]), "wrong_location"
     elif kind == "reject" and exit_want == 1:
-        return False, "a reject test needs stage and code in its JSON"
+        return False, "a reject test needs stage and code in its JSON", "other"
     for s in want.get("out_contains", []):
         if s not in text:
-            return False, "output lacks %r: %s" % (s, text[-300:])
+            return False, "output lacks %r: %s" % (s, text[-300:]), "other"
     gen_keys = ("gen_contains", "gen_absent", "gen_regex", "gen_regex_absent")
     if any(k in want for k in gen_keys):
         try:
             gen = open(out, encoding="utf-8").read()
         except OSError as e:
-            return False, "no generated output: %r" % e
+            return False, "no generated output: %r" % e, "other"
         for s in want.get("gen_contains", []):
             if s not in gen:
-                return False, "generated output lacks %r" % s
+                return False, "generated output lacks %r" % s, "other"
         for s in want.get("gen_absent", []):
             if s in gen:
-                return False, "generated output has %r" % s
+                return False, "generated output has %r" % s, "other"
         for r in want.get("gen_regex", []):
             if not re.search(r, gen, re.M):
-                return False, "generated output does not match /%s/" % r
+                return False, "generated output does not match /%s/" % r, "other"
         for r in want.get("gen_regex_absent", []):
             if re.search(r, gen, re.M):
-                return False, "generated output matches /%s/" % r
+                return False, "generated output matches /%s/" % r, "other"
     if cache is not None:
         try:
             hits = json.load(open(report, encoding="utf-8"))["proof_cache"]["hits"]
         except (OSError, ValueError, KeyError, TypeError) as e:
-            return False, "no proof_cache.hits in the trust report: %r" % e
+            return False, "no proof_cache.hits in the trust report: %r" % e, "other"
         if (hits > 0) != (cache.get("hits") == "positive"):
-            return False, "proof_cache.hits = %d (expected %s)" % (hits, cache.get("hits"))
-    return True, ""
+            return False, "proof_cache.hits = %d (expected %s)" % (hits, cache.get("hits")), "other"
+    return True, "", None
 
 
 def main(argv):
@@ -232,6 +246,7 @@ def main(argv):
     work = work or tempfile.mkdtemp(prefix="spec_trace_")
     os.makedirs(work, exist_ok=True)
     seen = {}
+    counts = {drv.kind: dict.fromkeys(CLASSES, 0) for drv in drivers}
     passed = {}   # (id, kind) -> set of compiler kinds where some test passed
     try:
         for rel, src, jf, tids, kind in tests:
@@ -249,14 +264,17 @@ def main(argv):
                         want[k] = v
                 checks += 1
                 try:
-                    ok, detail = run_test(drv, src, want, kind, work, seen)
-                except Exception as e:  # timeout or spawn failure is a failed test, not a crash
-                    ok, detail = False, repr(e)
+                    ok, detail, cls = run_test(drv, src, want, kind, work, seen)
+                except subprocess.TimeoutExpired as e:
+                    ok, detail, cls = False, repr(e), "timeout"
+                except Exception as e:
+                    ok, detail, cls = False, repr(e), "other"
                 if ok:
                     for t in tids:
                         passed.setdefault((t, kind), set()).add(drv.kind)
                 else:
-                    fails.append("%s [%s] %s: %s" % (rel, drv.kind, kind, detail))
+                    counts[drv.kind][cls] += 1
+                    fails.append("%s [%s] %s [%s]: %s" % (rel, drv.kind, kind, cls, detail))
     finally:
         if own_work:
             shutil.rmtree(work, ignore_errors=True)
@@ -281,6 +299,8 @@ def main(argv):
     for s in untracked:
         print("untracked: " + s)
     print("rule IDs: %d, tests: %d, compilers: %s" % (len(ids), len(tests), ",".join(kinds) if run else "none"))
+    for k, classes in counts.items():
+        print("CLASSES %s %s" % (k, " ".join("%s=%d" % item for item in classes.items())))
     print("spec_trace: %d/%d passed" % (checks - len(fails), checks))
     return 0 if not fails else 1
 

@@ -522,7 +522,9 @@ fn open_words(b: [i64], un: i64) -> i64
 { return 30 + c32(un) + c32(len(b)); }
 
 // attach(session, origin, size) (B:181-185): the session's budget when it is not closed, else OPEN.
-// out = ref = [3, n, packed id words (words(n))] (the id stays packed; the host unpacks it at egress).
+// out = ref: on the ref path a view of the stored id, [6, n, off] (the packed id words are st[off..off+words(n)), inside
+// the stored record; no copy, as current's [4, n, off]); after OPEN [3, n, packed id words (words(n))] (the id stays
+// packed; the host unpacks it at egress).
 // O(key length + U).
 pub fn attach(inout st: [i64], sk: [i64], ss: i64, sn: i64, origin: i64, size: i64, unit: [i64], ut: i64, uk: [i64], us: i64, un: i64, now: i64, inout fx: [i64], inout out: [i64]) -> i64 ! alloc
 {
@@ -544,13 +546,16 @@ pub fn attach(inout st: [i64], sk: [i64], ss: i64, sn: i64, origin: i64, size: i
   }
   if s >= 0 && n < 30 { return 2; }
   if s == 0 || s == 1 {
-    let il: i64 = c32(st[off + 24]);
-    // The id must lie inside the record (P19 audit R2): a declared length past the record would copy the next
+    // Clamped into 0..2^30 as put_key does, so the view's length and the words checked below agree (P13i audit).
+    let mut il: i64 = c32(st[off + 24]);
+    if il > 1073741824 { il = 1073741824; }
+    // The id must lie inside the record (P19 audit R2): a declared length past the record would expose the next
     // record's words. Never for an admitted store.
     if crate::bud_keys::words(il) > n - 25 { return 2; }
-    if !out_ok(out, 2 + crate::bud_keys::words(il)) { return 3; }
-    crate::ent_u16::wr(inout out, 0, 3);
-    let e: i64 = put_key(inout out, 1, st, off + 25, il);
+    if !out_ok(out, 3) { return 3; }
+    crate::ent_u16::wr(inout out, 0, 6);
+    crate::ent_u16::wr(inout out, 1, il);
+    crate::ent_u16::wr(inout out, 2, off + 25);
     return 0;
   }
   let b: [i64] = blob_copy(st, se);

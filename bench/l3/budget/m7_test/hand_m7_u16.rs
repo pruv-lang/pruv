@@ -516,9 +516,7 @@ fn attach_slot<'a>(
     let live = matches!(&*slot, Slot::Budget(b) if b.state != State::Closed);
     if live {
         let Slot::Budget(b) = slot else { unreachable!() };
-        if 2 + packed_words(b.id.len()) > OUT_LEN {
-            return Err(3);
-        }
+        // The stored id is returned as a 3-word view [6, n, off] (P13i), so no out-buffer limit applies here.
         return Ok(Res::Ref(&b.id, None));
     }
     let Some(uuid) = uuid else { unsupported("uuid key unit outside 0..65535") };
