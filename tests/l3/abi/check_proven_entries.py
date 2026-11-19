@@ -65,6 +65,12 @@ pub fn only_out(inout out: [i64]) -> i64
     out[0] = 3;
     return 4;
 }
+
+pub fn guarded(x: i64) -> i64
+  requires x >= 0
+{
+    return 7;
+}
 """
 
 HOST = """\
@@ -121,6 +127,78 @@ def compile_source(driver, source, out, flags=(), backend="rust"):
     return out.read_bytes()
 
 
+# The forwarders shadow host macro_rules! for every macro the generator emits (TIDY 4.13 audit).
+WRAP_MACROS = (("assert", "core"), ("eprintln", "std"), ("format_args", "core"), ("matches", "core"),
+               ("panic", "core"), ("println", "std"), ("unreachable", "core"), ("vec", "std"))
+WRAP_HEAD = b"mod pruv_impl {\n" + b"".join(
+    b"#[allow(unused_macros)]\nmacro_rules! %s { ($($t:tt)*) => { %s::%s!($($t)*) } }\n" % (m.encode(), c.encode(), m.encode())
+    for m, c in WRAP_MACROS)
+WRAP_TAIL = b"}\n#[allow(unused_imports)]\npub use self::pruv_impl::*;\n"
+
+
+def unwrap(code):
+    """The program text inside the private `pruv_impl` module that hides the unchecked bodies (TIDY 4.13)."""
+    assert code.startswith(WRAP_HEAD) and code.endswith(WRAP_TAIL), code[:80] + code[-120:]
+    return code[len(WRAP_HEAD):-len(WRAP_TAIL)]
+
+
+def host_rejects(rustc, work, host, codes):
+    """Compile a host that must not build; an error with one of codes must point into the host (main.rs)."""
+    (work / "main.rs").write_text(host, encoding="utf-8")
+    result = run([rustc, "--edition", "2021", "--error-format=json", str(work / "main.rs"), "-o", str(work / "host")])
+    assert result.returncode != 0, "host built:\n" + host
+    for line in result.stderr.splitlines():
+        d = json.loads(line) if line.startswith("{") else {}
+        spans = [sp for sp in d.get("spans", ()) if sp["is_primary"]]
+        if d.get("level") == "error" and (d.get("code") or {}).get("code") in codes and spans \
+                and all(Path(sp["file_name"]).name == "main.rs" for sp in spans):
+            return "%s at main.rs:%d: %s" % (d["code"]["code"], spans[0]["line_start"], d["message"])
+    raise AssertionError(result.stderr)
+
+
+# TIDY 4.13: a host names an unchecked inner body (skipping the length and requires checks); it must not compile,
+# whether the generated file is a crate-root include! or a #[path] module, with or without --proven-entries.
+BODY_REJECTS = (
+    ('include!("gen.rs");\nfn main() { let _ = copy_first__pruv_body(&[], &mut []); }\n', ("E0425",)),
+    ('include!("gen.rs");\nfn main() { let _ = pruv_impl::copy_first__pruv_body(&[], &mut []); }\n', ("E0603",)),
+    ('#[path = "gen.rs"] mod gen;\nfn main() { let _ = gen::copy_first__pruv_body(&[], &mut []); }\n',
+     ("E0425", "E0603")),
+    ('#[path = "gen.rs"] mod gen;\nfn main() { let _ = gen::pruv_impl::copy_first__pruv_body(&[], &mut []); }\n',
+     ("E0603",)),
+)
+
+# A host macro_rules! is in textual scope inside the generated file; one that lets a failed requires fall through
+# must not take over the check (TIDY 4.13 audit). Both host styles, the requires message must still be raised.
+MACRO_HOST = """\
+macro_rules! panic { ("{}", $s:expr) => { {} }; ($($t:tt)*) => { ::std::panic!($($t)*) } }
+%s
+
+fn main() {
+    std::panic::set_hook(Box::new(|_| {}));
+    // guarded's body returns 7 safely, so a check that falls through fails unwrap_err() instead of running UB.
+    let err = std::panic::catch_unwind(|| %sguarded(-1)).unwrap_err();
+    assert!(err.downcast_ref::<&str>().is_some_and(|s| s.contains("pruv: requires violated"))
+         || err.downcast_ref::<String>().is_some_and(|s| s.contains("pruv: requires violated")));
+}
+"""
+MACRO_HOSTS = (MACRO_HOST % ('include!("gen.rs");', ""), MACRO_HOST % ('#[path = "gen.rs"] mod gen;', "gen::"))
+
+# The checked entry and the proven twins stay reachable from a #[path] host (the include! host is HOST above).
+PATH_HOST = """\
+#[path = "gen.rs"] mod gen;
+
+fn main() {
+    let (src, mut dst) = ([42, 9], [0]);
+    assert_eq!(gen::copy_first(&src, &mut dst), 42);
+    assert_eq!(gen::pruv_proven::copy_first(gen::PruvArr::new(&src), gen::PruvArr::new_mut(&mut dst)), 42);
+    assert_eq!(gen::pruv_proven::val::pair::<2>(5), (7, [5, 6]));
+    let err = std::panic::catch_unwind(|| gen::copy_first(&[], &mut [0])).unwrap_err();
+    assert!(err.downcast_ref::<&str>().is_some_and(|s| s.contains("pruv: requires violated"))
+         || err.downcast_ref::<String>().is_some_and(|s| s.contains("pruv: requires violated")));
+}
+"""
+
+
 def inline_attr(code, name):
     lines = code.splitlines()
     index = next(i for i, line in enumerate(lines) if line.lstrip().startswith(b"pub fn " + name + b"("))
@@ -142,6 +220,7 @@ def main(work, rs, py):
             proven.append(compile_source(driver, source, work / "gen.rs", (*flags, flag)))
         assert plain[0] == plain[1], "plain output differs"
         assert proven[0] == proven[1], "proven output differs"
+        plain, proven = [unwrap(code) for code in plain], [unwrap(code) for code in proven]
         assert proven[0].startswith(plain[0]), "guarded output changed"
         assert all(name not in plain[0] for name in (b"PruvArr", b"PruvStr", b"pruv_proven"))
         twins = proven[0].split(b"pub mod pruv_proven {", 1)[1]
@@ -168,7 +247,6 @@ def main(work, rs, py):
         assert result.returncode == 0, result.stderr
 
     # Even an include! at the crate root cannot let safe host code build a PruvArr without the length check.
-    # (The private f__pruv_body is reachable from a root include!; that predates P18b, see Appendix P18b.6.)
     (work / "main.rs").write_text(
         'include!("gen.rs");\nfn main() { let _ = &PruvArr::new(&[1]).0; }\n', encoding="utf-8")
     result = run([rustc, "--edition", "2021", str(work / "main.rs"), "-o", str(work / "host")])
@@ -189,6 +267,30 @@ def main(work, rs, py):
         if call.startswith("pair") and diagnostic != "E0080":
             print(next(line for line in result.stderr.splitlines() if diagnostic in line))
 
+    # TIDY 4.13: no host style can name an unchecked body; the checked entries and twins still work.
+    rejects = shadows = 0
+    for flags in ((), (flag,)):
+        for driver in drivers:
+            compile_source(driver, source, work / "gen.rs", flags)
+            for host, codes in BODY_REJECTS:
+                if rejects == 0:
+                    print(host_rejects(rustc, work, host, codes))
+                else:
+                    host_rejects(rustc, work, host, codes)
+                rejects += 1
+            for host in MACRO_HOSTS:
+                (work / "main.rs").write_text(host, encoding="utf-8")
+                result = run([rustc, "--edition", "2021", str(work / "main.rs"), "-o", str(work / "host")])
+                assert result.returncode == 0, result.stderr
+                result = run([str(work / "host")])
+                assert result.returncode == 0, host + result.stderr
+                shadows += 1
+    (work / "main.rs").write_text(PATH_HOST, encoding="utf-8")
+    result = run([rustc, "--edition", "2021", "-C", "opt-level=3", str(work / "main.rs"), "-o", str(work / "host")])
+    assert result.returncode == 0, result.stderr
+    result = run([str(work / "host")])
+    assert result.returncode == 0, result.stderr
+
     manifest = work / "pruv.json"
     for mode in ("crate", "unsafe"):
         manifest.write_text(json.dumps({"name": "app", "version": "1.0.0", "root": source.name,
@@ -197,6 +299,7 @@ def main(work, rs, py):
         plain = [compile_source(driver, source, work / "plain.rs", flags) for driver in drivers]
         proven = [compile_source(driver, source, work / "gen.rs", (*flags, flag)) for driver in drivers]
         assert plain[0] == plain[1] and proven[0] == proven[1], mode
+        plain, proven = [unwrap(code) for code in plain], [unwrap(code) for code in proven]
         assert proven[0].startswith(plain[0]), mode
         if mode == "crate":
             assert proven[0] == plain[0], mode
@@ -218,7 +321,7 @@ def main(work, rs, py):
         assert result.returncode == 2 and result.stderr.strip().endswith(
             "--proven-entries requires --backend rust"), result.stdout + result.stderr
     assert diagnostics[0] == diagnostics[1], "clash diagnostics differ"
-    print("P18b/P18c: parity in 3 compiler modes and 2 manifest modes, 2 host runs, privacy and diagnostics pass")
+    print("P18b/P18c: parity in 3 compiler modes and 2 manifest modes, 3 host runs, privacy, %d body rejects, %d macro shadows and diagnostics pass" % (rejects, shadows))
 
 
 if __name__ == "__main__":

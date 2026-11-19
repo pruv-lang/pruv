@@ -1,3 +1,20 @@
+mod pruv_impl {
+#[allow(unused_macros)]
+macro_rules! assert { ($($t:tt)*) => { core::assert!($($t)*) } }
+#[allow(unused_macros)]
+macro_rules! eprintln { ($($t:tt)*) => { std::eprintln!($($t)*) } }
+#[allow(unused_macros)]
+macro_rules! format_args { ($($t:tt)*) => { core::format_args!($($t)*) } }
+#[allow(unused_macros)]
+macro_rules! matches { ($($t:tt)*) => { core::matches!($($t)*) } }
+#[allow(unused_macros)]
+macro_rules! panic { ($($t:tt)*) => { core::panic!($($t)*) } }
+#[allow(unused_macros)]
+macro_rules! println { ($($t:tt)*) => { std::println!($($t)*) } }
+#[allow(unused_macros)]
+macro_rules! unreachable { ($($t:tt)*) => { core::unreachable!($($t)*) } }
+#[allow(unused_macros)]
+macro_rules! vec { ($($t:tt)*) => { std::vec!($($t)*) } }
 #[allow(dead_code)]
 #[cold]
 #[inline(never)]
@@ -137,3 +154,6 @@ pub fn zip_uncompressed_total(buf: &[u8]) -> i64 {
     zip_uncompressed_total__pruv_body(buf)
 }
 
+}
+#[allow(unused_imports)]
+pub use self::pruv_impl::*;
