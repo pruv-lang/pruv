@@ -19,11 +19,18 @@ pub const STATE_MAP_BYTES: usize = 64 * 1024;
 // Largest state buffer in words: 2^40, the length bound of every generated entry (SPEC "Length bound at host
 // boundaries"). zeroed refuses a longer buffer before allocating, so every StateBuf has len <= STATE_MAX_WORDS, and
 // Deref / DerefMut tell the optimizer so: the entry's own length test on a StateBuf argument folds away, and the bound is
-// paid once per allocation instead of once per call (L3 P13f).
-pub const STATE_MAX_WORDS: usize = 1 << 40;
+// paid once per allocation instead of once per call (L3 P13f). The bound is computed in u64 so the file builds on every
+// target width; on a target whose usize cannot reach 2^40 (32-bit) it is usize::MAX, i.e. no extra test, since no slice
+// there can exceed 2^40 elements anyway (L3 P13f2). On 64-bit the value is exactly 2^40.
+pub const STATE_MAX_WORDS: usize = {
+    const BOUND: u64 = 1 << 40;
+    if BOUND <= usize::MAX as u64 { BOUND as usize } else { usize::MAX }
+};
 
 // Number of mapped state buffers created (zeroed and clone), so drivers that count global-allocator calls can add the
 // mappings to their allocation count (same accounting as the default path, where each buffer is one allocator call).
+// Only successful maps count: counting every attempt (before the call) costs about 1 instruction per M4 op, since zeroed
+// is inlined into the hot exec path (L3 P13f2), so the M4 bound probe checks a refused length by its success instead.
 // usize atomics exist on every std target (64-bit atomics do not).
 pub static STATE_MAPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 

@@ -354,9 +354,11 @@ def cmd_m4raw(args):
 
 def bound_probe(exe, tag):
     """L3 P13f: the driver refuses a state buffer, an op or an out buffer longer than 2^40 words before allocating
-    (driver_m4.rs bound_probe). Returns an error string or None."""
+    (driver_m4.rs bound_probe). allocs counts allocator calls plus successful maps; a buffer of exactly 2^40 words, when
+    built, must move that count by exactly 1 (at-bound control, L3 P13f2). Returns an error string or None."""
     c = run([exe, "bound", "state"])
-    if c.returncode != 0 or c.stdout.strip() != "bound state refused=true allocs=0":
+    if c.returncode != 0 or c.stdout.strip() not in ("bound state refused=true allocs=0 at_bound=built at_bound_ok=true",
+                                                     "bound state refused=true allocs=0 at_bound=refused at_bound_ok=true"):
         return "bound state: exit %d, %r" % (c.returncode, (c.stdout + c.stderr).strip()[:300])
     c = run([exe, "bound", "words"])
     want = "pruv: invalid representation: %d (array length)" % ((1 << 40) + 1)

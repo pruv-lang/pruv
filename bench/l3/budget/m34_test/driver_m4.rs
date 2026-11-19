@@ -42,9 +42,11 @@ unsafe impl std::alloc::GlobalAlloc for CountingAlloc {
 #[global_allocator]
 static GLOBAL_ALLOC: CountingAlloc = CountingAlloc;
 
-// An owned op or output buffer of at most STATE_MAX_WORDS words (L3 P13f). new / zeroed / resize check the bound
-// before allocating, and nothing else changes the length, so Deref / DerefMut can tell the optimizer: an entry's length
-// test on a Words argument folds away. In perf mode every cycle op is made once, before the timed loop; in q mode once
+// An owned op or output buffer of at most STATE_MAX_WORDS words (L3 P13f). zeroed and resize check the length
+// before allocating; new checks the length of an already built Vec (it does not prevent that allocation). So what all
+// three guarantee is that no Words, and so no slice this driver hands an entry, is longer than STATE_MAX_WORDS; nothing
+// else changes the length, so Deref / DerefMut can tell the optimizer (an entry's length test on a Words argument folds
+// away). In perf mode every cycle op is made once, before the timed loop; in q mode once
 // per input line. Over the bound the process exits like a generated entry (status 101, same message).
 struct Words(Vec<i64>);
 
@@ -56,6 +58,7 @@ fn words_too_long(n: usize) -> ! {
 }
 
 impl Words {
+    // Checks a Vec already built; guarantees len <= STATE_MAX_WORDS for every Words.
     fn new(v: Vec<i64>) -> Words {
         if v.len() > STATE_MAX_WORDS {
             words_too_long(v.len());
@@ -553,13 +556,24 @@ fn perf(axis: &str, n: usize, reps: usize) {
 // Length-bound probe (L3 P13f; run.py m4 runs it on every lane): `bound state` checks that a state buffer one word over
 // STATE_MAX_WORDS, and one whose byte size overflows, is refused without allocating (no mapping, no allocator call);
 // `bound words` makes an op / out buffer one word over the bound, which must exit 101 before allocating.
+// allocs counts allocator calls plus successful maps (STATE_MAPS counts only successful maps, see state_buf.rs), so
+// allocs=0 with refused=true shows the over-bound lengths were refused, not built. The at-bound control (L3 P13f2) makes
+// a buffer of exactly STATE_MAX_WORDS: when it is built (macOS maps 8 TiB lazily) the counter must move by exactly 1,
+// so the counter does see a buffer there and the cut is exactly between 2^40 and 2^40 + 1; when the OS refuses it (e.g.
+// Linux heuristic overcommit), at most one allocator call may be counted and the probe only shows refused=true.
 fn bound_probe(what: &str) {
-    let before = ALLOC_COUNT.load(std::sync::atomic::Ordering::Relaxed) + STATE_MAPS.load(std::sync::atomic::Ordering::Relaxed);
+    let calls = || ALLOC_COUNT.load(std::sync::atomic::Ordering::Relaxed) + STATE_MAPS.load(std::sync::atomic::Ordering::Relaxed);
     match what {
         "state" => {
+            let before = calls();
             let over = StateBuf::zeroed(STATE_MAX_WORDS + 1).is_none() && StateBuf::zeroed(usize::MAX / 8 + 1).is_none();
-            let after = ALLOC_COUNT.load(std::sync::atomic::Ordering::Relaxed) + STATE_MAPS.load(std::sync::atomic::Ordering::Relaxed);
-            println!("bound state refused={} allocs={}", over, after - before);
+            let after = calls();
+            let before_at = calls();
+            let at = StateBuf::zeroed(STATE_MAX_WORDS);
+            let d = calls() - before_at;
+            let (case, ok) = if at.is_some() { ("built", d == 1) } else { ("refused", d <= 1) };
+            drop(at);
+            println!("bound state refused={} allocs={} at_bound={} at_bound_ok={}", over, after - before, case, ok);
         }
         "words" => {
             let w = Words::zeroed(STATE_MAX_WORDS + 1);
