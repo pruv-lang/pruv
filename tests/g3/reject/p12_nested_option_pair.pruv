@@ -1,0 +1,17 @@
+// G3 TIDY 14(b) reject twin of p12: initialize both fields with x; must fail verify/ensures
+struct Pair<A, B> {
+  first: A,
+  second: B
+}
+
+fn both<T>(x: T, y: T) -> Option<Pair<T, T>>
+  ensures is_some(result) && some_val(result).first == x && some_val(result).second == y
+{
+  return Some::<Pair<T, T>>(Pair::<T, T> { first: x, second: x });
+}
+
+fn dup<T>(x: T) -> Pair<T, T>
+  ensures result.first == result.second
+{
+  return Pair::<T, T> { first: x, second: x };
+}

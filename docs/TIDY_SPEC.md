@@ -276,4 +276,46 @@ by byte-identical output and run by group, with the full test suite once before 
     - **No structured location in `spec_trace` expectations.** None of the 32 JSONs gives `line`/`col`; adding
       them (hand-fixed from SPEC) is part of (b).
 
+    **Result of (b) (2026-11-19, tests and one SPEC sentence, no compiler change).** All three gaps above are
+    closed. Expected values were written by hand from SPEC, never copied from compiler output.
+    - **G3 reject twins.** `tests/g3/reject/pNN_*.pruv` + `.json`, one per `tests/g3/proof` file (24). Each twin
+      differs from its original by exactly one code line (checked with `diff`; line 1/2 comments aside), keeps
+      the line numbers, and names the expected diagnostic: 20 `verify/ensures` at the failing `return`
+      (line and the column of `return`), plus p07 `alloc_negative` (lower bound on `n` dropped, line 7), p11
+      `call_requires` (callee needs `len(a) > 1`, 14:10), p15 `overflow` (upper bound on `t.tag` dropped,
+      line 20) and p16 `invariant_preserved` (`out[i] = a[0]`, no location: SPEC gives none for it). They run
+      in group `g3_proof` as mode `verify_reject` (same compile path as the accept rows), classed
+      `false_accept` / `wrong_location` / `timeout` / `other`. Result: `g3_proof` 48/48 on py and on rs.
+      Always-accept check (scratch, not committed): Rust wrapped with `--no-verify`, and `verify_only.py` with
+      its verification errors dropped, each give 24/24 reject rows `false_accept` while the 24 accept rows
+      still pass (24/48 on both). So `g3_proof` alone now catches a verifier that accepts everything.
+    - **Rule R-7-6 (SPEC §7).** An `ensures` not proved at a `return` is reported at that `return`; one not
+      proved where a `()` body ends without `return` is reported at the start of the function header. This is
+      what both compilers already do and what `tests/must_reject/l3_hf_frame.json` (11:1) and the 20 `return`
+      cases in `must_reject` expect, so no compiler change and no follow-up row. Tests:
+      `tests/spec/r7_6_ensures_fallthrough_ok.pruv` (accept), `r7_6_ensures_fallthrough` (reject, 3:1),
+      `r7_6_ensures_return` (reject, 7:3). The old pair now checks it: `cases.json` `old_increment_reject`
+      expects 2:1, and `tests/vacuity/run.py` compares `line`/`col` for a pair reject when the case gives them.
+    - **`spec_trace` locations.** Line and column where SPEC fixes the point: `r1_1_result_scope` 4:12,
+      `r1_2_trailing_underscore` 3:24, `r6l_1_read_max_big` 5:10, `r6l_1_read_max_zero` 5:10,
+      `r6l_2_args_push_unbounded` 3:10, `r6m_1_read_max_zero` 5:10; line only (the construct is fixed, the
+      column is not): `r6o_2_no_reveal` 8, `r6o_3_reveal_target` 8; plus the two R-7-6 rejects. Left without a
+      location: `r6_1_body_facts_requires` (SPEC does not say whether the call on line 7 or the `assert` on
+      line 8 carries it), `r6d_1_array_result`, `r6o_1_opaque_i64`, `r6o_4_total`, `r7_5_emit_exe_entry`,
+      `r8_1_codegen` (SPEC names no location). `spec_trace` (both compilers): 35 tests, 271/271, all classes 0.
+      `vacuity` 1/1 on py and on rs.
+    - **Porting cost per change.** The last 30 non-merge commits touching `pruvc/` or `pruvc-rs/`
+      (b2fb727..9147ae4), lines added + removed under `pruvc/` and under `pruvc-rs/` (`git show --numstat`):
+
+      | | commits | Python lines (total / median) | Rust lines (total / median) |
+      |---|---|---|---|
+      | both compilers | 27 | 2935 / 63 | 4939 / 147 |
+      | Python only | 2 (bdfcd54, 0ff7795) | — | — |
+      | Rust only | 1 (e0690f0) | — | — |
+
+      Over the 27 shared changes the Rust side is 1.43x the Python side per commit (median) and 1.68x in total;
+      the shared `pruvc/data/` tables were touched by 4 commits, 1 line each. Spot checks by hand: ca6cba2 is
+      8 files / 190 lines Python vs 19 / 563 Rust, 0aaf6b6 6 / 218 vs 8 / 311. Option ① therefore costs about
+      1.4–1.7x the Python work again on every change; this is the number the (c) gate weighs.
+
 Order after the review: T0①–⑥ → T3 → T1 → T2 → T4 → P16, P17a → T5 (inline policy) → T6.

@@ -1,0 +1,8 @@
+// spec: R-7-6 reject
+// Report the postcondition failure at the explicit return.
+fn f(x: i64) -> i64
+  requires 0 <= x && x < 100
+  ensures result == x
+{
+  return x + 1;
+}

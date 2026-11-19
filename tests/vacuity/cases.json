@@ -1,5 +1,5 @@
 {
-  "comment": "TIDY T0 step 6 (docs/TIDY_SPEC.md 2 T0.2-T0.3, review change 4). Each reach case inserts `assert false; ` into a proved source just before the text `before` on line `line`; a concrete input reaches that point, so both verifiers must reject the variant with verify/assert at that line (and column) while the original verifies. contradiction cases are intended dead points (contradictory requires, a branch the requires rule out): the variant must still verify. pair cases are accept/reject sources checked as they are; a reject expects the given stage, code and message text.",
+  "comment": "TIDY T0 step 6 (docs/TIDY_SPEC.md 2 T0.2-T0.3, review change 4). Each reach case inserts `assert false; ` into a proved source just before the text `before` on line `line`; a concrete input reaches that point, so both verifiers must reject the variant with verify/assert at that line (and column) while the original verifies. contradiction cases are intended dead points (contradictory requires, a branch the requires rule out): the variant must still verify. pair cases are accept/reject sources checked as they are; a reject expects the given stage, code and message text; a pair reject may give line/col (R-7-6: a fall-through ensures failure is reported at the fn header).",
   "reach": [
     {"name": "bsearch_first", "src": "examples/bsearch.pruv", "line": 8, "before": "let mut lo", "witness": "any a (sorted), any x"},
     {"name": "bsearch_loop", "src": "examples/bsearch.pruv", "line": 17, "before": "if a[mid] < x", "witness": "a = [0], x = 0"},
@@ -29,6 +29,6 @@
   "pair": [
     {"name": "old_increment_accept", "src": "tests/vacuity/old_increment_accept.pruv", "expect": "accept"},
     {"name": "old_increment_reject", "src": "tests/vacuity/old_increment_reject.pruv", "expect": "reject",
-     "stage": "verify", "code": "ensures", "message": "cannot prove postcondition (line 4) in inc"}
+     "stage": "verify", "code": "ensures", "message": "cannot prove postcondition (line 4) in inc", "line": 2, "col": 1}
   ]
 }

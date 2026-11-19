@@ -113,9 +113,10 @@ groups g9_frontend / g9_proof (G9 A0): tests/g9/frontend/*.pruv (mode no-verify,
 (mode default); rows have backend null. While G9_GUARD is True (until batch A2) a g9_frontend row passes when pruvc
 exits 1 with the downstream guard unsupported_type / "rust codegen layer"; g9_proof rows expect verification to pass and then the same guard.
 
-group g3_proof (G3 A2): tests/g3/proof/*.pruv must verify; they run through tests/g3/verify_only.py (Python verifier,
-no code generation, whatever --compiler says) because the code generators still reject generics. Rows have
-group "g3_proof", mode "verify_only", backend null.
+group g3_proof (G3 A2): tests/g3/proof/*.pruv must verify (mode "verify_only"). Rust compiles them normally;
+Python runs tests/g3/verify_only.py because its code generator rejects generics. TIDY 14(b) adds reject twins
+(tests/g3/reject/*.pruv + .json, mode "verify_reject") so a verifier that accepts too much fails the group.
+Rows have group "g3_proof" and backend null.
 
 --list-rows [FILE]: build the job list, run nothing, and write one JSON row per line (sort_keys, sorted) to FILE
 (stdout if omitted); exit code 0. A row is {"sample", "backend", "flags", "mode", "group", "compiler"[, "name"][, "dup"]};
@@ -651,11 +652,19 @@ def g4_proof_jobs():
 
 
 def g3_proof_jobs():
-    """G3 A2: tests/g3/proof/*.pruv must type-check and verify completely. Rust compiles generics, so
-    it runs a normal compile with verification enabled. Python runs tests/g3/verify_only.py because
-    its code generator rejects generics."""
+    """G3 A2: proof fixtures must verify. TIDY 14(b) reject twins must fail with the expected diagnostic.
+    Rust compiles normally with verification enabled. Python runs tests/g3/verify_only.py."""
     jobs = []
     script = os.path.join(ROOT, "tests/g3/verify_only.py")
+
+    def compile_sample(f, prefix):
+        drv = _driver()
+        if drv.kind == "rs":
+            basename = os.path.splitext(os.path.basename(f))[0]
+            out = os.path.join(WORK, prefix + basename + ".rs")
+            return drv.run(drv.argv(f, out, [], "rust"), timeout=300)
+        return subprocess.run([CD.pinned_python(), script, f], capture_output=True, text=True, timeout=300)
+
     for f in sorted(glob.glob(os.path.join(ROOT, "tests/g3/proof/*.pruv"))):
         name = "g3_proof/" + os.path.basename(f)
 
@@ -663,11 +672,8 @@ def g3_proof_jobs():
             def verify(f=f):
                 from spec_trace import diags_of
 
-                drv = _driver()
-                basename = os.path.splitext(os.path.basename(f))[0]
-                out = os.path.join(WORK, "g3_" + basename + ".rs")
                 try:
-                    c = drv.run(drv.argv(f, out, [], "rust"), timeout=300)
+                    c = compile_sample(f, "g3_")
                 except subprocess.TimeoutExpired:
                     raise
                 except Exception as e:
@@ -687,10 +693,49 @@ def g3_proof_jobs():
             continue
 
         def fn(f=f):
-            c = subprocess.run([CD.pinned_python(), script, f], capture_output=True, text=True, timeout=300)
+            c = compile_sample(f, "g3_")
             return c.returncode == 0, "exit %d (expected 0) %s" % (c.returncode, (c.stdout + c.stderr)[-600:])
         jobs.append(safe(name, fn, {"sample": rel_sample(f), "backend": None, "flags": [], "mode": "verify_only",
                                      "group": "g3_proof"}))
+
+    for f in sorted(glob.glob(os.path.join(ROOT, "tests/g3/reject/*.pruv"))):
+        name = "g3_proof/reject/" + os.path.basename(f)
+
+        def reject(f=f):
+            from spec_trace import diags_of
+
+            expected = None
+            try:
+                with open(os.path.splitext(f)[0] + ".json", encoding="utf-8") as fh:
+                    expected = json.load(fh)
+                c = compile_sample(f, "g3_reject_")
+            except subprocess.TimeoutExpired as e:
+                output = [(part or b"").decode(errors="replace") if not isinstance(part, str) else part
+                          for part in (e.stdout, e.stderr)]
+                return False, "timeout: expected %r, diagnostics %s" % (
+                    expected, repr(diags_of("\n".join(output)))[:600])
+            except Exception as e:
+                return False, "other: expected %r, diagnostics [], error %s" % (expected, repr(e)[:600])
+
+            diags = diags_of(c.stdout + "\n" + c.stderr)
+            matching = [d for d in diags if d.get("stage") == expected["stage"] and d.get("code") == expected["code"]]
+            location_matches = any(all(d.get(k) == expected[k] for k in ("line", "col") if k in expected)
+                                   for d in matching)
+            if getattr(c, "timed_out", False):
+                cls = "timeout"
+            elif c.returncode == 0:
+                cls = "false_accept"
+            elif c.returncode == 1 and location_matches:
+                return True, ""
+            elif matching and not location_matches:
+                cls = "wrong_location"
+            else:
+                cls = "other"
+            return False, "%s: exit %s, expected %r, diagnostics %s" % (
+                cls, c.returncode, expected, repr(diags)[:600])
+
+        jobs.append(safe(name, reject, {"sample": rel_sample(f), "backend": None, "flags": [], "mode": "verify_reject",
+                                         "group": "g3_proof"}))
     return jobs
 
 

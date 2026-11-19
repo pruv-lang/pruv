@@ -1,0 +1,18 @@
+// G3 TIDY 14(b) reject twin of p08: store the original first element; must fail verify/ensures
+fn set_first<T: Element>(a: [T], v: T) -> [T] ! alloc
+  requires len(a) > 0
+  ensures len(result) == len(a)
+  ensures result[0] == v
+{
+  let mut out: [T] = copy(a);
+  out[0] = a[0];
+  return out;
+}
+
+fn copy_all<T: Element>(a: [T]) -> [T] ! alloc
+  ensures len(result) == len(a)
+  ensures forall k in 0..len(a): result[k] == a[k]
+{
+  let out: [T] = copy(a);
+  return out;
+}

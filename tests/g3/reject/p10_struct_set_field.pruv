@@ -1,0 +1,14 @@
+// G3 TIDY 14(b) reject twin of p10: keep the original first field; must fail verify/ensures
+struct Pair<A, B> {
+  first: A,
+  second: B
+}
+
+fn set_first<A, B>(p: Pair<A, B>, v: A) -> Pair<A, B>
+  ensures result.first == v
+  ensures result.second == p.second
+{
+  let mut q: Pair<A, B> = p;
+  q.first = p.first;
+  return q;
+}

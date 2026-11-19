@@ -1,1 +1,1 @@
-{"stage": "verify", "code": "index_oob", "out_contains": ["add reveal crate::good;"]}
+{"stage": "verify", "code": "index_oob", "out_contains": ["add reveal crate::good;"], "line": 8}

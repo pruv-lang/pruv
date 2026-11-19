@@ -1,0 +1,20 @@
+// G3 TIDY 14(b) reject twin of p22: drop the equality between b and c; must fail verify/ensures
+fn trans<T>(a: T, b: T, c: T) -> T
+  requires a == b
+  ensures result == c
+{
+  return a;
+}
+
+fn sym<T>(a: T, b: T) -> T
+  requires a == b
+  ensures result == a && result == b
+{
+  return b;
+}
+
+fn excluded_middle<T>(a: T, b: T) -> bool
+  ensures a == b || a != b
+{
+  return true;
+}

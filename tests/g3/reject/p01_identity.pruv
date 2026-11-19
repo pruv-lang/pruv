@@ -1,0 +1,18 @@
+// G3 TIDY 14(b) reject twin of p01: return b instead of a; must fail verify/ensures
+fn identity<T>(x: T) -> T
+  ensures result == x
+{
+  return x;
+}
+
+fn first_of<T>(a: T, b: T) -> T
+  ensures result == a
+{
+  return b;
+}
+
+fn second_of<T>(a: T, b: T) -> T
+  ensures result == b
+{
+  return b;
+}
