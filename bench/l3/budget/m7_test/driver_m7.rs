@@ -561,10 +561,15 @@ fn run_perf(args: &[String]) {
         }
         return;
     }
-    let mut w = setup(0);
-    let ops = vec![body(0, -1, -1, &bid(last))];
-    println!("dispatch {} {:.1}", size, time(&mut w, &ops, 1));
-    println!("rchk dispatch {} {}", size, verify(&mut setup(0), &ops)); // pruv only
+    // Each item's Worlds live in their own block and drop before the next item's setup, like hand16's per-item
+    // `if typed && on(..) { .. }` blocks, so the full run's peak RSS holds at most the Worlds of one item (a
+    // shadowing `let` would keep every earlier item's World resident until run_perf returns).
+    {
+        let mut w = setup(0);
+        let ops = vec![body(0, -1, -1, &bid(last))];
+        println!("dispatch {} {:.1}", size, time(&mut w, &ops, 1));
+        println!("rchk dispatch {} {}", size, verify(&mut setup(0), &ops)); // pruv only
+    }
     // raw t_call with a prepared op (no World::call): what the dispatch probe costs inside t_call itself
     {
         let mut w = setup(0);
@@ -587,116 +592,138 @@ fn run_perf(args: &[String]) {
         println!("rchk rawcall {} {}", size, s); // pruv only
     }
     // isHalted (no record copy)
-    let mut w = setup(0);
-    let ops = vec![body(2, -1, -1, &bid(last))];
-    println!("ishalted {} {:.1}", size, time(&mut w, &ops, 1));
-    println!("rchk ishalted {} {}", size, verify(&mut setup(0), &ops));
-    typed("ishalted", 0, &ops, 1, None);
-    fair("ishalted", &ops, 1);
-    // current
-    let mut w = setup(0);
-    let ops = vec![body(1, -1, -1, &bid(last))];
-    println!("current {} {:.1}", size, time(&mut w, &ops, 1));
-    println!("rchk current {} {}", size, verify(&mut setup(0), &ops));
-    typed("current", 0, &ops, 1, None);
-    fair("current", &ops, 1);
-    // attach (open budget: ref)
-    let mut w = setup(0);
-    let ops = vec![body(3, 0, -1, "")];
-    println!("attach {} {:.1}", size, time(&mut w, &ops, 1));
-    println!("rchk attach {} {}", size, verify(&mut setup(0), &ops));
-    typed("attach", 0, &ops, 1, None);
-    fair("attach", &ops, 1);
-    let close: Vec<_> = sids.iter().map(|sid| {
-        let mut v = vec![6, -1, -1];
-        v.extend(unit);
-        v.extend(key(sid));
-        v.push(0);
-        v
-    }).collect();
-    for direct in [false, true] {
+    {
         let mut w = setup(0);
-        let open = w.st.clone();
-        let ps: Vec<_> = close.iter().map(|b| prep_of(&mut w, b)).collect();
-        let call = |w: &mut World, i: usize| {
-            if direct { c_direct(w, &ps[i]) } else { w.call(black_box(&close[i])) }
-        };
-        for i in 0..size {
-            assert_eq!(call(&mut w, i), 0);
-        }
-        let mut elapsed = std::time::Duration::ZERO;
-        for start in (0..reps).step_by(size) {
-            w.st.copy_from_slice(&open);
-            let t = Instant::now();
-            for i in 0..size.min(reps - start) {
-                let r = call(&mut w, i);
-                black_box((r, w.out[0]));
+        let ops = vec![body(2, -1, -1, &bid(last))];
+        println!("ishalted {} {:.1}", size, time(&mut w, &ops, 1));
+        println!("rchk ishalted {} {}", size, verify(&mut setup(0), &ops));
+        drop(w); // the typed and fair lanes build their own Worlds
+        typed("ishalted", 0, &ops, 1, None);
+        fair("ishalted", &ops, 1);
+    }
+    // current
+    {
+        let mut w = setup(0);
+        let ops = vec![body(1, -1, -1, &bid(last))];
+        println!("current {} {:.1}", size, time(&mut w, &ops, 1));
+        println!("rchk current {} {}", size, verify(&mut setup(0), &ops));
+        drop(w); // the typed and fair lanes build their own Worlds
+        typed("current", 0, &ops, 1, None);
+        fair("current", &ops, 1);
+    }
+    // attach (open budget: ref)
+    {
+        let mut w = setup(0);
+        let ops = vec![body(3, 0, -1, "")];
+        println!("attach {} {:.1}", size, time(&mut w, &ops, 1));
+        println!("rchk attach {} {}", size, verify(&mut setup(0), &ops));
+        drop(w); // the typed and fair lanes build their own Worlds
+        typed("attach", 0, &ops, 1, None);
+        fair("attach", &ops, 1);
+    }
+    // the close ops live in this item's block, like hand16's `ops`
+    {
+        let close: Vec<_> = sids.iter().map(|sid| {
+            let mut v = vec![6, -1, -1];
+            v.extend(unit);
+            v.extend(key(sid));
+            v.push(0);
+            v
+        }).collect();
+        for direct in [false, true] {
+            let mut w = setup(0);
+            let open = w.st.clone();
+            let ps: Vec<_> = close.iter().map(|b| prep_of(&mut w, b)).collect();
+            let call = |w: &mut World, i: usize| {
+                if direct { c_direct(w, &ps[i]) } else { w.call(black_box(&close[i])) }
+            };
+            for i in 0..size {
+                assert_eq!(call(&mut w, i), 0);
             }
-            elapsed += t.elapsed();
-        }
-        let mut sum = 0;
-        for start in (0..vn).step_by(size) {
-            w.st.copy_from_slice(&open);
-            for i in 0..size.min(vn - start) {
-                let r = call(&mut w, i);
-                assert_eq!((r, w.out[0], &w.fx[..2]), (0, 2, &[1, 20][..]));
-                sum = rchk_fold(&w, r, sum);
+            let mut elapsed = std::time::Duration::ZERO;
+            for start in (0..reps).step_by(size) {
+                w.st.copy_from_slice(&open);
+                let t = Instant::now();
+                for i in 0..size.min(reps - start) {
+                    let r = call(&mut w, i);
+                    black_box((r, w.out[0]));
+                }
+                elapsed += t.elapsed();
             }
-        }
-        let ns = elapsed.as_nanos() as f64 / reps as f64;
-        if direct {
-            println!("t close {} {:.1}", size, ns);
-            println!("rchk_t close {} {}", size, sum);
-        } else {
-            println!("close {} {:.1}", size, ns);
-            println!("rchk close {} {}", size, sum);
+            let mut sum = 0;
+            for start in (0..vn).step_by(size) {
+                w.st.copy_from_slice(&open);
+                for i in 0..size.min(vn - start) {
+                    let r = call(&mut w, i);
+                    assert_eq!((r, w.out[0], &w.fx[..2]), (0, 2, &[1, 20][..]));
+                    sum = rchk_fold(&w, r, sum);
+                }
+            }
+            let ns = elapsed.as_nanos() as f64 / reps as f64;
+            if direct {
+                println!("t close {} {:.1}", size, ns);
+                println!("rchk_t close {} {}", size, sum);
+            } else {
+                println!("close {} {:.1}", size, ns);
+                println!("rchk close {} {}", size, sum);
+            }
         }
     }
     // close + reopen cycle: maybeClose (quiet) then reopen
-    let mut w = setup(0);
-    let ops = vec![body(6, -1, -1, ""), body(5, -1, -1, &bid(last))];
-    println!("closereopen {} {:.1}", size, time(&mut w, &ops, 2));
-    println!("rchk closereopen {} {}", size, verify(&mut setup(0), &ops));
-    typed("closereopen", 0, &ops, 2, None);
-    fair("closereopen", &ops, 2);
+    {
+        let mut w = setup(0);
+        let ops = vec![body(6, -1, -1, ""), body(5, -1, -1, &bid(last))];
+        println!("closereopen {} {:.1}", size, time(&mut w, &ops, 2));
+        println!("rchk closereopen {} {}", size, verify(&mut setup(0), &ops));
+        drop(w); // the typed and fair lanes build their own Worlds
+        typed("closereopen", 0, &ops, 2, None);
+        fair("closereopen", &ops, 2);
+    }
     // reopen on an open budget: CURRENT lookup + state test, answers [1], changes nothing (reopen's lookup alone)
-    let mut w = setup(0);
-    let ops = vec![body(5, -1, -1, &bid(last))];
-    println!("reopenmiss {} {:.1}", size, time(&mut w, &ops, 1));
-    println!("rchk reopenmiss {} {}", size, verify(&mut setup(0), &ops));
-    typed("reopenmiss", 0, &ops, 1, None);
-    fair("reopenmiss", &ops, 1);
+    {
+        let mut w = setup(0);
+        let ops = vec![body(5, -1, -1, &bid(last))];
+        println!("reopenmiss {} {:.1}", size, time(&mut w, &ops, 1));
+        println!("rchk reopenmiss {} {}", size, verify(&mut setup(0), &ops));
+        drop(w); // the typed and fair lanes build their own Worlds
+        typed("reopenmiss", 0, &ops, 1, None);
+        fair("reopenmiss", &ops, 1);
+    }
     // replace on a halted budget (CLOSE + OPEN + follows + carryHeld), then put the halted record back
-    let mut w = setup(1);
-    let rp = body(4, 0, 2, "");
-    let mut put = key(&sids[last]);
-    let r = rec(&bid(last), 1, PERF_REST);
-    put.push(r.len() as i64);
-    put.extend(r);
-    for _ in 0..1000 {
-        w.next_uuid = 0;
-        w.call(&rp);
-        w.put(&put);
+    {
+        let mut w = setup(1);
+        let rp = body(4, 0, 2, "");
+        let mut put = key(&sids[last]);
+        let r = rec(&bid(last), 1, PERF_REST);
+        put.push(r.len() as i64);
+        put.extend(r);
+        for _ in 0..1000 {
+            w.next_uuid = 0;
+            w.call(&rp);
+            w.put(&put);
+        }
+        let t = Instant::now();
+        for _ in 0..reps {
+            w.next_uuid = 0;
+            let r = w.call(black_box(&rp));
+            black_box((r, w.out[0]));
+            w.put(black_box(&put));
+        }
+        println!("replace {} {:.1}", size, t.elapsed().as_nanos() as f64 / reps as f64);
+        // untimed verification: fresh halted setup, the same call + put-back per iteration (the timed World stays
+        // alive, as hand16's shadowed Host does)
+        let mut v = setup(1);
+        let mut s = 0u64;
+        for _ in 0..vn {
+            v.next_uuid = 0;
+            let r = v.call(&rp);
+            s = rchk_fold(&v, r, s);
+            v.put(&put);
+        }
+        println!("rchk replace {} {}", size, s);
+        drop((w, v)); // the typed lane builds its own Worlds
+        typed("replace", 1, std::slice::from_ref(&rp), 1, Some(&put));
     }
-    let t = Instant::now();
-    for _ in 0..reps {
-        w.next_uuid = 0;
-        let r = w.call(black_box(&rp));
-        black_box((r, w.out[0]));
-        w.put(black_box(&put));
-    }
-    println!("replace {} {:.1}", size, t.elapsed().as_nanos() as f64 / reps as f64);
-    // untimed verification: fresh halted setup, the same call + put-back per iteration
-    let mut w = setup(1);
-    let mut s = 0u64;
-    for _ in 0..vn {
-        w.next_uuid = 0;
-        let r = w.call(&rp);
-        s = rchk_fold(&w, r, s);
-        w.put(&put);
-    }
-    println!("rchk replace {} {}", size, s);
-    typed("replace", 1, std::slice::from_ref(&rp), 1, Some(&put));
 }
 
 // rchk: per-op result checksum of the perf verification pass, s = s*31 + w (wrapping u64). Per call it folds, in this
