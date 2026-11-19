@@ -204,9 +204,15 @@ by byte-identical output and run by group, with the full test suite once before 
 12. **T4 follow-up (queued at the T4 merge, 4b8be7f).** T4 shared four tables (`pruvc/data/`: inline policy,
     monomorphization limits, builtin type names, G6 shim edges) and derived the Python bit tables from
     `check.BIT_BUILTINS`. Not yet shared across the two compilers: bit/word builtins, contract-only and
-    observer classes, and the 95-entry foreign catalog declarations. The shared values also have no boundary
-    tests: add accept/reject pairs at `MAX_TYPE_APPS`/`MAX_TYPE_NODES` and at the inline thresholds (8/9 and
-    1500/1501), on both compilers, so a wrong value in the JSON is caught.
+    observer classes, and the 95-entry foreign catalog declarations (open; touches both compilers). Boundary
+    tests for the shared values: done. Group `codegen_boundaries` (`tests/check_codegen_boundaries.py`, both
+    compilers, `--no-verify` Rust output) compiles generated sources at each edge with the spec numbers
+    hard-coded: `probe` gets `#[inline(always)]` at 8 lines (189 sites, so only `INLINE_SMALL` applies) and
+    `#[inline]` at 9; `#[inline(always)]` at 1500 lines × 2 sites and `#[inline]` at 1501; 4096 distinct `Tag`
+    applications are emitted and 4097 reject with `codegen/specialization_limit` ("more than 4096 distinct
+    generic type applications"); a 65536-node type argument is accepted and 65537 rejects ("more than 65536
+    nodes"). Mutation check: each of the four JSON values changed by +1 and by -1 (Rust side regenerated with
+    `tools/gen_shared.py` and rebuilt) fails the matching pair on py and rs (16/16 runs).
 13. **P18b follow-up (queued at the P18b merge, f0c5932; soundness).** A host that `include!`s a generated file
     at its crate root can call the unchecked inner bodies (`f__pruv_body`) directly and skip the entry checks
     (T0 length bound, `requires`). It predates P18b (a6fb98e) and `--proven-entries` did not widen it; SPEC

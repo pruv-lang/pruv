@@ -586,6 +586,18 @@ def check_generated_jobs():
                   "mode": "trace", "group": "check_generated"})]
 
 
+def codegen_boundaries_jobs():
+    """tests/check_codegen_boundaries.py: inline/specialization limit boundaries; one row; backend null."""
+    def boundary_checks():
+        c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/check_codegen_boundaries.py"), WORK,
+                            "--rs" if _driver().kind == "rs" else "--py", _driver().path],
+                           capture_output=True, text=True, timeout=1800)
+        return c.returncode == 0, c.stdout + c.stderr
+    return [safe("codegen_boundaries/limits", boundary_checks,
+                 {"sample": "tests/check_codegen_boundaries.py", "backend": None, "flags": [],
+                  "mode": "codegen", "group": "codegen_boundaries"})]
+
+
 def shim_edges_jobs():
     """tests/shim_edges.py: each G6 shim helper edge links (LLVM IR + Rust bindings); one row; backend null."""
     def shim_checks():
@@ -1499,7 +1511,7 @@ def runtime_jobs(backend):
     return jobs
 
 
-USAGE = ("usage: run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4b_frontend|g4b_proof|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_async_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof|l3_frontend|l3_proof|l3_abi|spec_trace|check_generated|shim_edges] [--backend rust|llvm|both] "
+USAGE = ("usage: run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4b_frontend|g4b_proof|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_async_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof|l3_frontend|l3_proof|l3_abi|spec_trace|check_generated|codegen_boundaries|shim_edges] [--backend rust|llvm|both] "
          "[--sample-prefix PATH] [--compiler py|rs] [--compiler-path PATH] [--ir-tool PATH] [--list-rows [FILE]] [--compare-rows FILE]")
 
 
@@ -1592,7 +1604,7 @@ def main():
         i = sys.argv.index("--only")
         only = sys.argv[i + 1] if i + 1 < len(sys.argv) else None
         if only not in ("must_reject", "examples", "runtime", "g3_proof", "g6_frontend", "g6_proof", "g9_frontend",
-                        "g9_proof", "g4_frontend", "g4b_frontend", "g4b_proof", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_async_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "g8_proof", "l3_frontend", "l3_proof", "l3_abi", "spec_trace", "check_generated", "shim_edges"):
+                        "g9_proof", "g4_frontend", "g4b_frontend", "g4b_proof", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_async_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "g8_proof", "l3_frontend", "l3_proof", "l3_abi", "spec_trace", "check_generated", "codegen_boundaries", "shim_edges"):
             print(USAGE)
             return 2
     backend = "rust"
@@ -1631,6 +1643,8 @@ def main():
             jobs += spec_trace_jobs()
         if only in (None, "check_generated"):
             jobs += check_generated_jobs()
+        if only in (None, "codegen_boundaries"):
+            jobs += codegen_boundaries_jobs()
         if only in (None, "shim_edges"):
             jobs += shim_edges_jobs()
         if only in (None, "g4_proof"):
@@ -1719,7 +1733,7 @@ def main():
         # scope comes from the arguments (--only/--backend), not from the rows that actually ran
         scope = set()
         null_backend = ("must_reject", "g3_proof", "g6_frontend", "g6_proof", "g9_frontend", "g9_proof", "g4_frontend",
-                        "g4b_frontend", "g4b_proof", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_async_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "l3_frontend", "l3_proof", "l3_abi", "spec_trace", "check_generated", "shim_edges")
+                        "g4b_frontend", "g4b_proof", "g4_proof", "g5_frontend", "g5_reject", "g5_proof", "g10_frontend", "g10_proof", "g10_proc_frontend", "g10_proc_proof", "g10_async_frontend", "g10_async_proof", "g10_net_frontend", "g10_net_proof", "g7_frontend", "g7_proof", "s5_frontend", "s5_proof", "g8_frontend", "l3_frontend", "l3_proof", "l3_abi", "spec_trace", "check_generated", "codegen_boundaries", "shim_edges")
         for g in null_backend + ("examples", "runtime", "g8_proof"):
             if only in (None, g):
                 # g8_proof always runs both backends (whatever --backend says) plus one backend-free bundle row.
