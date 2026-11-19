@@ -4646,6 +4646,7 @@ struct ProvenEntry {
     signature: String,
     body: Vec<String>,
     has_str: bool,
+    val: Option<String>,
 }
 
 impl ProvenEntry {
@@ -4675,7 +4676,28 @@ impl ProvenEntry {
             params.push(format!("{}: {mapped}", p.name));
         }
         let signature = format!("{vis}fn {name}({}){ret} {{", params.join(", "));
-        Some(Self { header, signature, body, has_str })
+        let val = if f.params.last().is_some_and(|p| p.mode_pos.is_some())
+            && param_types.last().is_some_and(|ty| ty == "&mut [i64]")
+        {
+            let last = params.len() - 1;
+            let inputs = params[..last].join(", ");
+            let rt = ret.strip_prefix(" -> ").unwrap_or("()");
+            let args = f.params[..last].iter().map(|p| p.name.as_str())
+                .chain(std::iter::once("PruvArr::new_mut(&mut pruv_res)"))
+                .collect::<Vec<_>>().join(", ");
+            Some(format!(concat!(
+                "        #[inline(always)]\n",
+                "        {vis}fn {name}<const PRUV__K: usize>({inputs}) -> ({rt}, [i64; PRUV__K]) {{\n",
+                "            const {{ assert!((PRUV__K as u64) <= (1u64 << 40), \"pruv: by-value result longer than 2^40\") }};\n",
+                "            let mut pruv_res = [0i64; PRUV__K];\n",
+                "            let pruv_r = super::{name}({args});\n",
+                "            (pruv_r, pruv_res)\n",
+                "        }}\n",
+            ), vis = vis, name = name, inputs = inputs, rt = rt, args = args))
+        } else {
+            None
+        };
+        Some(Self { header, signature, body, has_str, val })
     }
 }
 
@@ -4705,6 +4727,21 @@ fn proven_module(text: &str, items: &[ProvenEntry], allow: &str) -> String {
             module.push_str("    ");
             module.push_str(line);
             module.push('\n');
+        }
+        module.push_str("    }\n");
+    }
+    if items.iter().any(|item| item.val.is_some()) {
+        module.push_str(concat!(
+            "    /// P18c (--proven-entries): by-value results, see SPEC.md \"By-value results\".\n",
+            "    pub mod val {\n",
+            "        #[allow(unused_imports)]\n",
+            "        use super::super::*;\n",
+        ));
+        for val in items.iter().filter_map(|item| item.val.as_deref()) {
+            module.push_str("        ");
+            module.push_str(allow);
+            module.push('\n');
+            module.push_str(val);
         }
         module.push_str("    }\n");
     }
