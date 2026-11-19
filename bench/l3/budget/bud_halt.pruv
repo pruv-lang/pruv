@@ -12,12 +12,20 @@
 // Record strings 0 (id) and 4 (follows) are packed keys (bud_lifecycle.pruv header): stride 1 + words(len).
 //
 // halt(ref, reason): only a CURRENT open budget halts (B:383-384). Order (B:385-396):
-//   SETTLE (bud_clock: may emit [13] timerClear), runningDelegationIds(ref) ([30] consumed: the host prefetched the
-//   answer into `ids`, see M10_NOTES.md KD-M10-1), state halted + halt section, then the effects
-//   [31] cancelRecovery, [32] stopMain, [33, i] stopDelegation of id i (in list order, duplicates kept),
+//   SETTLE (bud_clock: may emit [13] timerClear), runningDelegationIds(ref) (a synchronous host fact, `running_ids`
+//   below, called after SETTLE; P24), state halted + halt section, then the effects
+//   [31] cancelRecovery, [32] stopMain, [33, i] stopDelegation of id i of the answer (in list order, duplicates kept),
 //   [34] stopAttachedTurns, [35] holdQueued, [36] save, [20] changed, [37] announce.
-// Status: 0 done (also when nothing halts), 2 invalid (malformed id list, corrupt state), 3 fx too small
-// (fx[0] + 12 + 2 * nIds > len(fx)), -N Grow (nothing written).
+// Status: 0 done (also when nothing halts), 2 invalid (corrupt state before any write, or an invalid answer: SETTLE
+// applied, nothing else written), 3 fx too small for the fixed part (fx[0] + 12 > len(fx), nothing written), 6 the
+// answer does not fit (st: halt_words' QUERY_ROOM plus the other free words a rehash finds; fx: room for its 2 * nIds
+// words):
+// SETTLE applied, halt not written; terminal (spec §2.3: after an observation the call cannot Grow and retry, and an
+// inout store keeps its length), -N Grow (nothing written). On 2 / 6 after SETTLE, fx[1..fx[0]] holds SETTLE's
+// effects (a timerClear): the store already dropped the clock's timer, so the host applies them as on status 0.
+//
+// Archived form (M10a, M10_NOTES.md KD-M10-1): the host prefetched the answer into the op and Pruv emitted a consumed
+// marker [30] at the query position. It is retired: the marker did not prove when the host computed the answer.
 
 fn rd(a: [i64], i: i64) -> i64
 { return crate::ent_u16::rd(a, i); }
@@ -85,6 +93,7 @@ fn prefix_len(b: [i64], u: i64, l: i64) -> i64
 // canonical packed keys (bud_keys::slice_ok; data words words(len)), the others len data words. The frame must lie
 // inside st.
 pub fn rec_ok_in(st: [i64], off: i64, n: i64) -> bool
+  ensures result ==> (0 <= off && off <= 1099511627776)
 {
   if n < 30 || off < 0 || off > 1099511627776 || n > 1099511627776 { return false; }
   if off + n > len(st) { return false; }
@@ -144,97 +153,259 @@ fn put(inout o: [i64], at: i64, src: [i64], s: i64, n: i64) -> i64
   ensures 0 <= result && result <= 1099511627776
 { return crate::bud_lifecycle::put_str(inout o, at, src, s, n); }
 
-// The halted record: b with header h, string 2 (activeSince text) dropped unless keep_since, and string 5 =
-// [halt prefix: reason, at = now, the ids] + b's rest without its old halt prefix. O(record + ids).
-fn halted(b: [i64], h: [i64], keep_since: bool, reason: i64, now: i64, ids: [i64], is: i64, iw: i64) -> [i64] ! alloc
+// Copies src[s .. s + m) to o[at ..); returns at + m (m clamped into 0..2^30). With both ranges in bounds the loop
+// indexes directly (no per-word range test, so it lowers to a block copy); otherwise ent_u16::put_range (total),
+// whose 32-bit position bound is not met only by a range that is out of bounds anyway (then nothing is copied).
+fn copy_in(inout o: [i64], at: i64, src: [i64], s: i64, m: i64) -> i64
+  requires 0 <= at && at <= 1099511627776 && 0 <= s && s <= 1099511627776
+  ensures len(o) == len(old(o)) && 0 <= result && result <= 1099511627776
 {
-  let p0: i64 = crate::bud_lifecycle::str_at(b, 0);
-  let p1: i64 = crate::bud_lifecycle::str_at(b, 1);
-  let p2: i64 = crate::bud_lifecycle::str_at(b, 2);
-  let p3: i64 = crate::bud_lifecycle::str_at(b, 3);
-  let p4: i64 = crate::bud_lifecycle::str_at(b, 4);
-  let p5: i64 = crate::bud_lifecycle::str_at(b, 5);
-  let l0: i64 = c32(rd(b, p0));
-  let l1: i64 = c32(rd(b, p1));
-  let mut l2: i64 = c32(rd(b, p2));
+  let mut mm: i64 = m;
+  if mm < 0 { mm = 0; }
+  if mm > 1073741824 { mm = 1073741824; }
+  if at + mm <= len(o) && s + mm <= len(src) {
+    let mut k: i64 = 0;
+    while k < mm
+      invariant 0 <= k && k <= mm && at + mm <= len(o) && s + mm <= len(src) && 0 <= at && 0 <= s && len(o) == len(old(o))
+      decreases mm - k
+    {
+      o[at + k] = src[s + k];
+      k = k + 1;
+    }
+    return at + mm;
+  }
+  if at > 4294967296 || s > 4294967296 { return c40(at + mm); }
+  return crate::ent_u16::put_range(inout o, at, src, s, mm);
+}
+
+// Position (the length word) of string k (0..5) of the record stored in st at base (bud_lifecycle::str_at shifted
+// by base): one walk over strings 0..k-1.
+fn str_pos(st: [i64], base: i64, k: i64) -> i64
+  requires 0 <= base && base <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776
+{
+  let mut p: i64 = c40(base + 24);
+  let mut i: i64 = 0;
+  while i < k && i < 6
+    invariant 0 <= i && i <= 6 && 0 <= p && p <= 1099511627776
+    decreases 6 - i
+  {
+    p = c40(p + 1 + crate::bud_lifecycle::str_words(i, rd(st, p)));
+    i = i + 1;
+  }
+  return p;
+}
+
+// The halted record, read from the record stored in st at base (rec_ok_in: the frame lies in st) with no copy of
+// it: header words 0 = 1 (halted), 8 = am (activeMs), 16 = k, 17 = since (activeSince kind and ms, after SETTLE),
+// string 2 (activeSince text) dropped unless keep_since, and string 5 = [halt prefix: reason, at = now, the id list
+// v[1 .. 1 + iw)] + the old rest without its old halt prefix. O(record + ids).
+fn halted(st: [i64], base: i64, am: i64, k: i64, since: i64, keep_since: bool, reason: i64, now: i64, v: Vec<i64>, iw: i64) -> [i64] ! alloc
+  requires 1 <= iw && iw + 1 == len(v) && iw <= 1099511627776 && 0 <= base && base <= 1099511627776
+{
+  let p0: i64 = str_pos(st, base, 0);
+  let p1: i64 = str_pos(st, base, 1);
+  let p2: i64 = str_pos(st, base, 2);
+  let p3: i64 = str_pos(st, base, 3);
+  let p4: i64 = str_pos(st, base, 4);
+  let p5: i64 = str_pos(st, base, 5);
+  let l0: i64 = c32(rd(st, p0));
+  let l1: i64 = c32(rd(st, p1));
+  let mut l2: i64 = c32(rd(st, p2));
   if !keep_since { l2 = 0; }
-  let l3: i64 = c32(rd(b, p3));
-  let l4: i64 = c32(rd(b, p4));
-  let l5: i64 = c32(rd(b, p5));
-  let old_pre: i64 = prefix_len(b, c40(p5 + 1), l5);
+  let l3: i64 = c32(rd(st, p3));
+  let l4: i64 = c32(rd(st, p4));
+  let l5: i64 = c32(rd(st, p5));
+  let old_pre: i64 = prefix_len(st, c40(p5 + 1), l5);
   let tail: i64 = c32(l5 - old_pre);
-  let w: i64 = c32(iw);
+  let w: i64 = iw;
+  if w > 4294967296 { return crate::ent_u16::zeros(0); }
   let rl: i64 = 5 + w + tail;
   let total: i64 = 30 + crate::bud_keys::words(l0) + l1 + l2 + l3 + crate::bud_keys::words(l4) + rl;
   let mut o: [i64] = crate::ent_u16::zeros(total);
-  let mut j: i64 = 0;
-  while j < 24
-    invariant 0 <= j && j <= 24
-    decreases 24 - j
-  {
-    crate::ent_u16::wr(inout o, j, rd(h, j));
-    j = j + 1;
-  }
+  let x: i64 = copy_in(inout o, 0, st, base, 24);
+  crate::ent_u16::wr(inout o, 0, 1);
+  crate::ent_u16::wr(inout o, 8, am);
+  crate::ent_u16::wr(inout o, 16, k);
+  crate::ent_u16::wr(inout o, 17, since);
   let mut at: i64 = 24;
-  at = crate::bud_lifecycle::put_key(inout o, at, b, c40(p0 + 1), l0);
-  at = put(inout o, at, b, c40(p1 + 1), l1);
-  at = put(inout o, at, b, c40(p2 + 1), l2);
-  at = put(inout o, at, b, c40(p3 + 1), l3);
-  at = crate::bud_lifecycle::put_key(inout o, at, b, c40(p4 + 1), l4);
+  at = crate::bud_lifecycle::put_key(inout o, at, st, c40(p0 + 1), l0);
+  at = put(inout o, at, st, c40(p1 + 1), l1);
+  at = put(inout o, at, st, c40(p2 + 1), l2);
+  at = put(inout o, at, st, c40(p3 + 1), l3);
+  at = crate::bud_lifecycle::put_key(inout o, at, st, c40(p4 + 1), l4);
   crate::ent_u16::wr(inout o, at, rl);
   crate::ent_u16::wr(inout o, at + 1, -2);
   crate::ent_u16::wr(inout o, at + 2, reason);
   crate::ent_u16::wr(inout o, at + 3, 2);
   crate::ent_u16::wr(inout o, at + 4, now);
   crate::ent_u16::wr(inout o, at + 5, 0);
-  let e: i64 = crate::ent_u16::put_range(inout o, c32(at + 6), ids, c32(is), w);
-  let f: i64 = crate::ent_u16::put_range(inout o, c32(e), b, c32(p5 + 1 + old_pre), tail);
+  let e: i64 = put_vec(inout o, c40(at + 6), v, w);
+  let f: i64 = copy_in(inout o, c40(e), st, c40(p5 + 1 + old_pre), tail);
   return o;
 }
 
-// Room halt needs for the session's record: the rewritten record and the id list (the caller reserves this before
-// any write when halt follows another write in the same call, so halt's own reserve cannot Grow).
-pub fn halt_words(st: [i64], se: i64, ids: [i64], is: i64) -> i64
+// Room halt reserves before SETTLE: the halted record without its id list (blob_n + 8) plus QUERY_ROOM words for the
+// answer, which is only known after the query. After the query halt reserves blob_n + 8 + id words again; that can
+// rehash in place but not Grow, so an answer longer than QUERY_ROOM plus the store's other free words ends with
+// status 6 (header). QUERY_ROOM = 256 words: about 60 ids of up to 16 units. In-call store growth would remove the
+// bound (Appendix P24, queued row).
+pub fn halt_words(st: [i64], se: i64) -> i64
   ensures 0 <= result && result <= 1099511627776
+{ return c40(crate::bud_lifecycle::blob_n(st, se) + 8 + 256); }
+
+// runningDelegationIds(ref) (B:388), a synchronous host fact (P10H): ref = {sessionId, budgetId}, the packed keys
+// k[ks .. ks + words(kn)) and bk[bs .. bs + words(bn)). Answer `[0, n, (len, words(len) packed words)*]`: status 0, then the ids as framed packed
+// keys (bud_keys layout, packed once by the host). Anything else is invalid (answer_words: -1). fxn is the number of
+// effects this call has recorded so far (fx[0]); a real host ignores it, the test host logs the ref at that effect
+// position so the harness checks that the query comes after SETTLE's effects (spec §2.4). Test host: crate bud_facts
+// (m7_test/bud_facts.rs), linked with --rust-extern.
+trusted rust fn running_ids(k: [i64], ks: i64, kn: i64, bk: [i64], bs: i64, bn: i64, fxn: i64) -> Vec<i64> ! alloc, io
+  ensures true
+  = "::bud_facts::running_ids";
+
+// bud_keys::slice_ok / rec_end over the answer vector.
+fn vslice_ok(v: Vec<i64>, ks: i64, n: i64) -> bool
+  ensures result ==> (0 <= n && n <= 1073741824 && 0 <= ks && ks + ushr(n + 3, 2) <= len(v))
 {
-  let w: i64 = ids_words(ids, is);
-  let mut ww: i64 = 0;
-  if w > 0 { ww = w; }
-  return c40(crate::bud_lifecycle::blob_n(st, se) + 8 + ww);
+  if n < 0 || n > 1073741824 { return false; }
+  if ks < 0 { return false; }
+  let m: i64 = ushr(n + 3, 2);
+  if m > len(v) - ks { return false; }
+  let r: i64 = band(n, 3);
+  if r != 0 && m >= 1 {
+    if band(vec_get::<i64>(v, ks + m - 1), ushr(-1, 16 * r)) != 0 { return false; }
+  }
+  return true;
 }
 
-// halt(ref, reason) (B:381-397). ids[is..] = the prefetched runningDelegationIds(ref) answer
-// `n, (len, words(len) packed words)*` (validated by ids_words). Keys (sk, bk) are packed.
-pub fn halt(inout st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64, reason: i64, now: i64, ids: [i64], is: i64, inout bv: [i64], inout fx: [i64]) -> i64 ! alloc
+fn vrec_end(v: Vec<i64>, p: i64) -> i64
+  ensures result == -1 || (result > p && result <= len(v))
+{
+  if p < 0 || p >= len(v) { return -1; }
+  let n: i64 = vec_get::<i64>(v, p);
+  if !vslice_ok(v, p + 1, n) { return -1; }
+  return p + 1 + ushr(n + 3, 2);
+}
+
+// Words of the id list of a valid answer v = [0, n, ids...]: len(v) - 1 (the list `n, ids...` that the halt section
+// stores), or -1 when the status is not 0, an id is not a canonical packed key or the ids do not end exactly at the
+// end of v. O(n): one rec_end per id.
+fn answer_words(v: Vec<i64>) -> i64
+  ensures result == -1 || (1 <= result && result + 1 == len(v) && result <= 1099511627776)
+{
+  let t: i64 = len(v);
+  if t < 2 || t > 1099511627776 { return -1; }
+  if vec_get::<i64>(v, 0) != 0 { return -1; }
+  let n: i64 = vec_get::<i64>(v, 1);
+  if n < 0 || n > t { return -1; }
+  let mut p: i64 = 2;
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && 2 <= p && p <= t && t == len(v)
+    decreases n - i
+  {
+    let e: i64 = vrec_end(v, p);
+    if e < 0 { return -1; }
+    p = e;
+    i = i + 1;
+  }
+  if p != t { return -1; }
+  return t - 1;
+}
+
+// Writes v[1 .. 1 + m) at o[at..); returns at + m.
+fn put_vec(inout o: [i64], at: i64, v: Vec<i64>, m: i64) -> i64
+  requires 0 <= at && at <= 1099511627776 && 0 <= m && m + 1 <= len(v) && m <= 1099511627776
+  ensures len(o) == len(old(o)) && result == at + m
+{
+  let mut k: i64 = 0;
+  while k < m
+    invariant 0 <= k && k <= m && m + 1 <= len(v) && len(o) == len(old(o))
+    decreases m - k
+  {
+    crate::ent_u16::wr(inout o, at + k, vec_get::<i64>(v, 1 + k));
+    k = k + 1;
+  }
+  return at + m;
+}
+
+// A halt that ends with status 2 or 6 after SETTLE keeps SETTLE's result, as the other clock ops do (root run_op):
+// header words 8, 16, 17 of the record at entry se take activeMs and activeSince (kind, ms) from bv, and a record
+// whose activeSince was a text (k0 == 1) and no longer is drops string 2. The record is not halted. Returns 0, or
+// 2 when the frame is no longer valid or the rewrite cannot be stored (the room halt reserved before SETTLE covers
+// it: the rewrite is not longer than the record).
+fn keep_settled(inout st: [i64], se: i64, sk: [i64], ss: i64, sn: i64, k0: i64, bv: [i64]) -> i64 ! alloc
+{
+  let off: i64 = crate::bud_lifecycle::blob_at(st, se);
+  if !rec_ok_in(st, off, crate::bud_lifecycle::blob_n(st, se)) { return 2; }
+  crate::ent_u16::wr(inout st, off + 8, rd(bv, 4));
+  crate::ent_u16::wr(inout st, off + 16, rd(bv, 5));
+  crate::ent_u16::wr(inout st, off + 17, rd(bv, 6));
+  if k0 == 1 && rd(bv, 5) != 1 {
+    let b: [i64] = crate::bud_lifecycle::blob_copy(st, se);
+    let h: [i64] = crate::ent_u16::slice(b, 0, 24);
+    let p3: i64 = crate::bud_lifecycle::str_at(b, 3);
+    let l3: i64 = c32(rd(b, p3));
+    let nb: [i64] = crate::bud_lifecycle::rewrite(b, h, true, b, c40(p3 + 1), l3);
+    let w: i64 = crate::bud_lifecycle::store(inout st, sk, ss, sn, nb);
+    if w != 0 { return 2; }
+  }
+  return 0;
+}
+
+// Status s (2 or 6) after SETTLE: keep SETTLE's result (keep_settled), then s; 2 if that fails.
+fn fail_settled(inout st: [i64], se: i64, sk: [i64], ss: i64, sn: i64, k0: i64, bv: [i64], s: i64) -> i64 ! alloc
+{
+  let w: i64 = keep_settled(inout st, se, sk, ss, sn, k0, bv);
+  if w != 0 { return 2; }
+  return s;
+}
+
+// halt(ref, reason) (B:381-397). Keys (sk, bk) are packed. Room for the record without the id list is reserved before
+// SETTLE (Grow: nothing written); the id list's room is reserved after the query, which can only rehash in place.
+// Cost: current + SETTLE + O(record + nIds + id words) (one rec_end per id, one copy of the list), exactly nIds
+// ordered stops.
+pub fn halt(inout st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64, reason: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> i64 ! alloc, io
 {
   if reason < 0 || reason > 4 { return 2; }
-  let iw: i64 = ids_words(ids, is);
-  if iw < 0 { return 2; }
-  let d: i64 = c32(rd(ids, is));
-  let p: i64 = c40(rd(fx, 0));
-  if p + 12 + 2 * d > len(fx) { return 3; }
+  if c40(rd(fx, 0)) + 12 > len(fx) { return 3; }
+  if len(bv) < 7 { return 3; }
   let se: i64 = crate::bud_lifecycle::current_entry(st, sk, ss, sn, bk, bs, bn);
   if se < 0 { return 0; }
   let off: i64 = crate::bud_lifecycle::blob_at(st, se);
   if rd(st, off) != 0 { return 0; }
-  if !rec_ok_in(st, off, crate::bud_lifecycle::blob_n(st, se)) { return 2; }
-  let hw: i64 = halt_words(st, se, ids, is);
+  let n: i64 = crate::bud_lifecycle::blob_n(st, se);
+  if !rec_ok_in(st, off, n) { return 2; }
+  // the record copies (copy_in, bud_lifecycle copy_words) move at most 2^30 words per string; a larger record cannot
+  // be rewritten whole, so halt refuses it before any write (status 6, nothing written)
+  if n > 1073741824 { return 6; }
+  let hw: i64 = halt_words(st, se);
   let g: i64 = crate::bud_lifecycle::reserve(inout st, hw);
   if g != 0 { return crate::bud_lifecycle::grow(g); }
-  let b: [i64] = crate::bud_lifecycle::blob_copy(st, se);
-  if len(b) < 30 { return 2; }
-  crate::bud_lifecycle::view(b, inout bv);
-  let ce: i64 = crate::bud_clock::clock_of(st, b, 25, c32(rd(b, 24)));
-  let a: i64 = crate::bud_clock::settle_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
-  push(inout fx, 30);
-  let mut h: [i64] = crate::ent_u16::slice(b, 0, 24);
-  crate::ent_u16::wr(inout h, 0, 1);
-  crate::ent_u16::wr(inout h, 8, rd(bv, 4));
+  // The record is read in place (no copy). A reserve that fits rebuilds only the index slots and SETTLE writes only
+  // the clock entry, so entry se keeps its blob; the frame is checked again after each reserve all the same (status
+  // 2 if it moved, unreachable on a valid store).
+  let o1: i64 = crate::bud_lifecycle::blob_at(st, se);
+  if crate::bud_lifecycle::blob_n(st, se) != n || !rec_ok_in(st, o1, n) { return 2; }
+  crate::bud_lifecycle::view_in(st, o1, inout bv);
+  let k0: i64 = rd(bv, 5);
+  let ce: i64 = crate::bud_clock::clock_of(st, st, c40(o1 + 25), c32(rd(st, o1 + 24)));
+  let _a: i64 = crate::bud_clock::settle_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
+  let v: Vec<i64> = running_ids(sk, ss, sn, bk, bs, bn, rd(fx, 0));
+  let iw: i64 = answer_words(v);
+  if iw < 0 { return fail_settled(inout st, se, sk, ss, sn, k0, bv, 2); }
+  let d: i64 = c32(vec_get::<i64>(v, 1));
+  if c40(rd(fx, 0)) + 8 + 2 * d > len(fx) { return fail_settled(inout st, se, sk, ss, sn, k0, bv, 6); }
+  // reserve takes a 32-bit word count
+  if n + 8 + iw > 4294967296 { return fail_settled(inout st, se, sk, ss, sn, k0, bv, 6); }
+  let g2: i64 = crate::bud_lifecycle::reserve(inout st, n + 8 + iw);
+  if g2 != 0 { return fail_settled(inout st, se, sk, ss, sn, k0, bv, 6); }
+  let o2: i64 = crate::bud_lifecycle::blob_at(st, se);
+  if crate::bud_lifecycle::blob_n(st, se) != n || !rec_ok_in(st, o2, n) { return fail_settled(inout st, se, sk, ss, sn, k0, bv, 2); }
   let k: i64 = rd(bv, 5);
-  crate::ent_u16::wr(inout h, 16, k);
-  crate::ent_u16::wr(inout h, 17, rd(bv, 6));
+  let r: [i64] = halted(st, o2, rd(bv, 4), k, rd(bv, 6), k == 1, reason, now, v, iw);
   crate::ent_u16::wr(inout bv, 1, 1);
-  let r: [i64] = halted(b, h, k == 1, reason, now, ids, is, iw);
   let w: i64 = crate::bud_lifecycle::store(inout st, sk, ss, sn, r);
   if w != 0 { return w; }
   push(inout fx, 31);

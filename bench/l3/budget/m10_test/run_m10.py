@@ -4,7 +4,7 @@
   python3 bench/l3/budget/m10_test/run_m10.py q      [--pruvc PATH | --py] [--cases F] [--oracle F]
   python3 bench/l3/budget/m10_test/run_m10.py derive (writes work/m10/cases_halt.jsonl + oracle_halt.jsonl)
   python3 bench/l3/budget/m10_test/run_m10.py same   (Python pruvc vs Rust pruvc: byte-identical Rust)
-  python3 bench/l3/budget/m10_test/run_m10.py perf   [--rounds N] [--reps N]   (Pruv only; hand Rust / TS: later)
+  python3 bench/l3/budget/m10_test/run_m10.py perf   [--rounds N] [--reps N]   (Pruv vs hand_m10.rs, interleaved; no TS lane)
 
 q: each case becomes a driver program over the M7 record (bud_lifecycle.pruv) with the halt section codec in `rest`
 (bud_halt.pruv header) and the M9 clock (driver_m10.rs runs the timer scheduler). Compared with the oracle per request:
@@ -62,9 +62,9 @@ def rustc():
     return shutil.which("rustc") or os.path.expanduser("~/.cargo/bin/rustc")
 
 
-def build_facts():
-    os.makedirs(WORK, exist_ok=True)
-    rlib = os.path.join(WORK, "libbud_facts.rlib")
+def build_facts(work=WORK):
+    os.makedirs(work, exist_ok=True)
+    rlib = os.path.join(work, "libbud_facts.rlib")
     src = os.path.join(BUD, "m7_test", "bud_facts.rs")
     c = subprocess.run([rustc(), "-O", "--edition", "2021", "--crate-type", "rlib",
                         "--crate-name", "bud_facts", src, "-o", rlib], capture_output=True, text=True)
@@ -73,30 +73,34 @@ def build_facts():
     return rlib
 
 
-def compile_gen(which, gen, rlib=None):
+def compile_gen(which, gen, rlib=None, budlib=None):
     if rlib is None:
         rlib = build_facts()
     root = "bench/l3/budget/m10_test/root_m10.pruv"
+    libs = LIBS if budlib is None else ["--lib", budlib, "--lib", "bench/l3/lib"]
     if which == "py":
-        cmd = [PY_DEFAULT, PRUVC_PY, root, "-o", gen, "--backend", "rust"] + LIBS
+        cmd = [PY_DEFAULT, PRUVC_PY, root, "-o", gen, "--backend", "rust"] + libs
     else:
-        cmd = [which, root, "-o", gen] + LIBS
+        cmd = [which, root, "-o", gen] + libs
     c = subprocess.run(cmd + ["--rust-extern", f"bud_facts={rlib}"], cwd=ROOT, capture_output=True, text=True)
     if c.returncode != 0 or not os.path.exists(gen):
         sys.exit("pruvc failed:\n" + c.stdout + c.stderr)
 
 
 def build(args):
-    rlib = build_facts()
-    gen = os.path.join(WORK, "gen.rs")
+    # --budlib / --out: a mutant library and its own build directory (mutant_halt.py), never the shared work/m10
+    budlib = getattr(args, "budlib", None)
+    work = os.path.abspath(getattr(args, "out", None) or WORK)
+    rlib = build_facts(work)
+    gen = os.path.join(work, "gen.rs")
     if os.path.exists(gen):
         os.remove(gen)
-    compile_gen("py" if args.py else args.pruvc, gen, rlib)
-    main = os.path.join(WORK, "main_m10.rs")
+    compile_gen("py" if args.py else args.pruvc, gen, rlib, budlib)
+    main = os.path.join(work, "main_m10.rs")
     with open(main, "w") as f:
         f.write('#![allow(dead_code, unused_imports, unused_variables, unused_mut)]\n#[path = "gen.rs"] mod sol;\n')
         f.write(open(os.path.join(HERE, "driver_m10.rs")).read())
-    exe = os.path.join(WORK, "driver_m10")
+    exe = os.path.join(work, "driver_m10")
     c = subprocess.run([rustc(), "-C", "opt-level=3", "--edition", "2021", "--extern", f"bud_facts={rlib}",
                         "-o", exe, main], capture_output=True, text=True)
     if c.returncode != 0:
@@ -334,8 +338,8 @@ def put_words(sess):
 
 # ---- driver program ----
 def call_body(op, args):
-    """[code, what x10, flag, sessionId key, budgetId key, runKey key] (the driver inserts now and a reserved zero after the code
-    and appends its next runningDelegationIds answer)."""
+    """[code, what x10, flag, sessionId key, budgetId key, runKey key] (the driver inserts now and a reserved zero after the code;
+    halt asks runningDelegationIds itself, so the op carries no answer)."""
     a = [x if (isinstance(x, dict) and "sess" in x) else jv_decode(x) for x in args]
     what = [0] * 10
     flag, bid, rk = 0, "", ""
@@ -480,6 +484,9 @@ def oracle_ev(t, between=False):
         return ("isQuiet", 1 if jv_decode(t.get("o")) else 0)
     if c == "stopDelegation":
         return ("stopDelegation", None if between else tuple(units(a[0])), tuple(units(a[1])))
+    if c == "runningDelegationIds":
+        ref = jv_decode(a[0])
+        return (c, tuple(units(ref["sessionId"])), tuple(units(ref["budgetId"])))
     if c in ("timer.set", "timer.clear", "timer.fire"):
         d = jv_decode(a)
         return (c, d["token"]) + ((d["delay"],) if c == "timer.set" else ())
@@ -526,6 +533,10 @@ def mine_effect(f, sid):
     if f[0] == "stopDel":
         u = tuple(int(x) for x in f[1].split(",")) if len(f) > 1 else ()
         return ("stopDelegation", None if sid is None else tuple(units(sid)), u)
+    if f[0] == "rdi":
+        # synchronous query (P24): the ref it was asked with, placed at its effect position by the driver
+        ks = [tuple(int(x) for x in w[2:].split(",") if x) for w in f[1:]]
+        return ("runningDelegationIds",) + tuple(ks)
     if f[0] == "carry":
         return ("carryHeld",)
     if f[0] in MINE_FX:
@@ -653,8 +664,7 @@ def classify(case, o, run, cut):
         wfx = [f + (tuple(key(sid)), "@0") if f[0] == "isQuiet" else f for f in oracle_fx(o, r)]
         if got != wfx:
             return "fail", "%s %s effects %r != %r" % (r, e["op"], got, wfx)
-        if ("runningDelegationIds",) in got:
-            STATS["halts"] += 1
+        STATS["halts"] += sum(1 for g in got if g[0] == "runningDelegationIds")
     wb = oracle_between(o, cut[0] if cut else None)
     if run["between"] != wb:
         return "fail", "between effects %r != %r" % (run["between"], wb)
@@ -717,8 +727,8 @@ def cmd_q(args):
 
 def cmd_replay(args):
     """No replay across Grow (L3 P13b): run the q program from the smallest start (t_init's N, so calls hit Grow) and
-    from a start big enough that no call grows. isQuiet is called after the room check, and effect processing consumes
-    runningDelegationIds only after a successful attempt. Both runs must print the same log (effects, answers
+    from a start big enough that no call grows. isQuiet is called after the room check, and halt asks runningDelegationIds once,
+    synchronously after its room check and SETTLE (P24), so a Grow never repeats a query. Both runs must print the same log (effects, answers
     consumed, errors) and observation byte for byte; the small run must grow."""
     exe = build(args)
     prog = []
@@ -778,22 +788,49 @@ def cmd_same(args):
 
 
 def cmd_perf(args):
-    """Pruv only for M10a (hand_m10.rs / perf_ts.mjs come with M10b): median ns per halt with D running delegations
-    (the timed loop also puts the record back open; `putback` times that put alone)."""
+    """Alternates Pruv / hand Rust (hand_m10.rs) runs per round and D (10, 50, 100 running delegations); prints the
+    median ns per halt (the timed loop also puts the record back open; `putback` times that put alone). A median above
+    1.0x hand whose distributions do not overlap (min Pruv above max hand) is a hold and fails the command, as in M9."""
+    if args.rounds < 1 or args.reps < 1:
+        sys.exit("perf needs --rounds >= 1 and --reps >= 1")
     exe = build(args)
+    hand = os.path.join(os.path.dirname(exe), "hand_m10")
+    c = subprocess.run([rustc(), "-C", "opt-level=3", "--edition", "2021", "-o", hand,
+                        os.path.join(HERE, "hand_m10.rs")], capture_output=True, text=True)
+    if c.returncode != 0:
+        sys.exit("rustc failed (hand):\n" + c.stderr[-3000:])
+    sides = {"pruv": [exe, "perf"], "hand": [hand]}
     res = {}
     for rd in range(args.rounds):
         for d in (10, 50, 100):
-            r = subprocess.run([exe, "perf", str(d), str(args.reps)], capture_output=True, text=True)
-            if r.returncode != 0:
-                sys.exit("perf failed:\n" + r.stderr[-2000:])
-            for l in r.stdout.splitlines():
-                item, sz, ns = l.split()
-                res.setdefault((item, int(sz)), []).append(float(ns))
-    print("item | D | Pruv ns (median of %d)" % args.rounds)
+            for side, cmd in sides.items():
+                r = subprocess.run(cmd + [str(d), str(args.reps)], capture_output=True, text=True)
+                if r.returncode != 0:
+                    sys.exit("%s perf failed:\n%s" % (side, r.stderr[-2000:]))
+                for l in r.stdout.splitlines():
+                    item, sz, ns = l.split()
+                    res.setdefault((item, int(sz)), {}).setdefault(side, []).append(float(ns))
+    want = {(i, d) for i in ("halt", "putback") for d in (10, 50, 100)}
+    missing = sorted(k for k in want if not {"pruv", "hand"} <= set(res.get(k, {})))
+    holds = []
+    print("item | D | Pruv ns | hand Rust ns | Pruv/hand | Pruv min-max | hand min-max | overlap (median of %d)"
+          % args.rounds)
     for (item, sz), v in sorted(res.items()):
-        print("%s | %d | %.1f" % (item, sz, statistics.median(v)))
-    return 0
+        if not {"pruv", "hand"} <= set(v):
+            continue
+        m = {k: statistics.median(x) for k, x in v.items()}
+        ratio = m["pruv"] / m["hand"]
+        overlap = min(v["pruv"]) <= max(v["hand"]) and min(v["hand"]) <= max(v["pruv"])
+        if ratio > 1.0 and not overlap:
+            holds.append((item, sz))
+        print("%s | %d | %.1f | %.1f | %.2f | %.1f-%.1f | %.1f-%.1f | %s" % (
+            item, sz, m["pruv"], m["hand"], ratio, min(v["pruv"]), max(v["pruv"]), min(v["hand"]), max(v["hand"]),
+            "yes" if overlap else "no"))
+    if missing:
+        print("MISSING " + " ".join("%s/%d" % k for k in missing))
+    if holds:
+        print("HOLD " + " ".join("%s/%d" % k for k in holds))
+    return 1 if missing or holds else 0
 
 
 def main():
@@ -801,6 +838,8 @@ def main():
     ap.add_argument("cmd", choices=["q", "perf", "derive", "same", "replay"])
     ap.add_argument("--pruvc", default=PRUVC_DEFAULT)
     ap.add_argument("--py", action="store_true")
+    ap.add_argument("--budlib", help="budget library directory to compile against (mutants)")
+    ap.add_argument("--out", help="build directory for gen.rs and the driver (default work/m10)")
     ap.add_argument("--cases", default=os.path.join(WORK, "cases.jsonl"))
     ap.add_argument("--oracle", default=os.path.join(WORK, "oracle.jsonl"))
     ap.add_argument("--rounds", type=int, default=5)
