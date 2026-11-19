@@ -21,10 +21,12 @@ mod bud_decide;
 // (bud_lifecycle.pruv header) and the stopped delegation ids packed (bud_halt.pruv header).
 //   code 1 current(ref), 2 isHalted(ref), 5 reopen(ref), 6 maybeClose(session), 7 charge(ref, what),
 //   8 runStarted(ref, runKey), 9 runWaiting(ref, runKey, flag == 1), 10 runEnded(ref, runKey),
-//   11 FIRE (the ref the delivered timer captured when it was armed), 12 halt(ref, reason = flag), 13 raise(ref, size = flag).
+//   11 FIRE (the ref the delivered timer captured when it was armed), 12 halt(ref, reason = flag), 13 raise(ref, size = flag),
+//   14 decide(ref, flag): -1 end, else extend with size = flag (0 unlimited, 1, 2, 4, 8; the host maps an absent size to 1).
 //   what[3..13) = bud_charge's [kind, value] x5 (delegations, commands, reviews, checks, retries).
 // maybeClose consults isQuiet synchronously.
-// out: lifecycle's tags (0 undef, 1 false, 2 true, 4 budget), charge [5, ok (1 false, 2 true), reason (0..4)].
+// out: lifecycle's tags (0 undef, 1 false, 2 true, 4 budget), charge [5, ok (1 false, 2 true), reason (0..4)],
+// decide [6, code (0 ok, 1 not-found, 2 not-halted)]. decide asks releaseHeld synchronously (bud_decide.pruv).
 // Status: 0 done, 2 invalid, 3 out/fx small, 6 halt's answer does not fit (terminal, bud_halt.pruv header), -N Grow
 // (nothing written).
 
@@ -225,6 +227,7 @@ pub fn t_call(inout st: [i64], op: [i64], inout bv: [i64], inout fx: [i64], inou
   if code == 7 { return charge(inout st, op, sn, bs, bn, now, inout bv, inout fx, inout out); }
   if code >= 8 && code <= 11 { return run_op(inout st, op, code, sn, bs, bn, e2 + 1, rn, flag, now, inout bv, inout fx, inout out); }
   if code == 13 { return crate::bud_decide::raise(inout st, op, 15, sn, op, bs, bn, flag, now, inout bv, inout fx, inout out); }
+  if code == 14 { return crate::bud_decide::decide(inout st, op, 15, sn, op, bs, bn, flag == -1, flag, now, inout bv, inout fx, inout out); }
   if code == 12 {
     if len(out) < 1 { return 3; }
     let h: i64 = crate::bud_halt::halt(inout st, op, 15, sn, op, bs, bn, flag, now, inout bv, inout fx);
