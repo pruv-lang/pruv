@@ -17,13 +17,28 @@
 // termination never depends on the contents of the buffer.
 
 fn gf(st: [i64], e: i64, f: i64) -> i64
+  ensures (f == 12 && crate::bud_store::valid(st) && 0 <= e && e < st[6]) ==>
+    (16 <= st[5] + 10 * e && st[5] + 10 * e + 10 <= st[5] + 10 * e + 10 * st[6] &&
+    st[5] + 10 * e + 10 * st[6] + 10 <= st[9] && st[9] <= len(st))
+  ensures (f == 12 && crate::bud_store::valid(st) && 0 <= e && e < st[6] &&
+    crate::bud_store::has_x(st[st[5] + 10 * e + 9])) ==> result == st[st[5] + 10 * e + 10 * st[6] + 1]
 { return crate::bud_store::ef(st, e, f); }
 
 fn sf(inout st: [i64], e: i64, f: i64, v: i64) -> ()
   ensures len(st) == len(old(st))
   ensures len(old(st)) >= 15 ==> crate::bud_store::hdr_same(st, old(st), -1)
   ensures crate::bud_store::kept(st, old(st))
-{ crate::bud_store::set_ef(inout st, e, f, v); }
+  ensures ((f == 12 || f == 13 || f == 19) && crate::bud_store::valid(old(st)) && 0 <= e && e < old(st)[6] &&
+    crate::bud_store::has_x(old(st)[old(st)[5] + 10 * e + 9])) ==>
+    (crate::bud_store::has_x(st[st[5] + 10 * e + 9]) &&
+    (f == 12 ==> st[st[5] + 10 * e + 10 * st[6] + 1] == v) &&
+    (f == 13 ==> st[st[5] + 10 * e + 10 * st[6] + 2] == v) &&
+    (f != 12 ==> st[st[5] + 10 * e + 10 * st[6] + 1] == old(st)[old(st)[5] + 10 * e + 10 * old(st)[6] + 1]) &&
+    (forall j in old(st)[9]..len(st): st[j] == old(st)[j]))
+{
+  reveal crate::bud_store::shape_w;
+  crate::bud_store::set_ef(inout st, e, f, v);
+}
 
 fn hw(st: [i64], i: i64) -> i64
 { return crate::bud_store::hd(st, i); }
@@ -278,7 +293,11 @@ pub fn blob_unit(st: [i64], e: i64, j: i64) -> i64
 // Can n units be written into the arena region [off, off+cap) of a freed entry? (The region must lie inside the
 // used part of the arena; a fresh entry has cap 0.)
 fn fits_region(st: [i64], off: i64, cap: i64, n: i64) -> bool
+  ensures (result && crate::bud_store::valid(st) && 0 <= off && 0 < n) ==>
+    (st[9] <= off && off <= 1099511627776 && off + n <= len(st))
 {
+  reveal crate::bud_store::shape_w;
+  reveal crate::bud_store::dyn_ok;
   // header words 9, 10 are in range when len(st) >= 11; shorter buffers read them as 0 through hw
   let mut ab: i64 = 0;
   let mut at: i64 = 0;
@@ -298,6 +317,11 @@ fn fits_region(st: [i64], off: i64, cap: i64, n: i64) -> bool
 fn write_at(inout st: [i64], o: i64, src: [i64], s0: i64, n: i64) -> ()
   requires 0 <= o && o <= 1099511627776 && 0 <= s0 && s0 <= 1099511627776 && 0 <= n && n <= 4294967296
   ensures crate::bud_store::kept(st, old(st))
+  ensures len(old(st)) >= 15 ==> crate::bud_store::shape_same(st, old(st))
+  ensures (16 <= o && o + n <= len(st) && s0 + n <= len(src)) ==>
+    ((forall j in 0..n: st[o + j] == src[s0 + j]) &&
+    (forall j in 16..o: st[j] == old(st)[j]))
+  ensures n == 0 ==> (forall j in 16..len(st): st[j] == old(st)[j])
 {
   let mut k: i64 = 0;
   // o >= 16 on a valid store (the region lies in the arena); a lower o, only on a buffer that is not valid, takes the
@@ -308,6 +332,9 @@ fn write_at(inout st: [i64], o: i64, src: [i64], s0: i64, n: i64) -> ()
       invariant 0 <= k && k <= n && n <= 4294967296 && 16 <= o && o + n <= len(st) && 0 <= s0 && s0 + n <= len(src)
       invariant len(st) == len(old(st)) && (len(st) < 15 || crate::bud_store::hdr_same(st, old(st), -1))
       invariant crate::bud_store::kept(st, old(st))
+      invariant forall j in 0..k: st[o + j] == src[s0 + j]
+      invariant forall j in 16..o: st[j] == old(st)[j]
+      invariant n == 0 ==> (forall j in 16..len(st): st[j] == old(st)[j])
       decreases n - k
     {
       // one word past the header: dyn_ok reads only header words (this iteration only)
@@ -320,6 +347,7 @@ fn write_at(inout st: [i64], o: i64, src: [i64], s0: i64, n: i64) -> ()
       invariant 0 <= k && k <= n && n <= 4294967296 && 0 <= o && o <= 1099511627776 && 0 <= s0 && s0 <= 1099511627776
       invariant len(st) == len(old(st)) && (len(st) < 15 || crate::bud_store::hdr_same(st, old(st), -1))
       invariant crate::bud_store::kept(st, old(st))
+      invariant n == 0 ==> (forall j in 16..len(st): st[j] == old(st)[j])
       decreases n - k
     {
       crate::bud_store::wr16(inout st, o + k, crate::ent_u16::rd(src, s0 + k));
@@ -335,6 +363,15 @@ fn write_at(inout st: [i64], o: i64, src: [i64], s0: i64, n: i64) -> ()
 fn put_units(inout st: [i64], e: i64, fo: i64, fc: i64, src: [i64], s0: i64, n: i64) -> i64
   requires 0 <= s0 && s0 <= 1099511627776 && 0 <= n && n <= 4294967296
   ensures crate::bud_store::kept(st, old(st))
+  ensures len(old(st)) >= 15 ==> crate::bud_store::shape_same(st, old(st))
+  ensures (result == 0 && fo == 12 && fc == 19 &&
+    crate::bud_store::valid(old(st)) && 0 <= e && e < old(st)[6] && crate::bud_store::has_x(old(st)[old(st)[5] + 10 * e + 9]) && n > 0 && 0 <= old(st)[old(st)[5] + 10 * e + 10 * old(st)[6] + 1]) ==>
+    (crate::bud_store::has_x(st[st[5] + 10 * e + 9]) && st[9] <= st[st[5] + 10 * e + 10 * st[6] + 1] &&
+    st[st[5] + 10 * e + 10 * st[6] + 1] + n <= len(st) && s0 + n <= len(src) &&
+    (forall j in 0..n: st[st[st[5] + 10 * e + 10 * st[6] + 1] + j] == src[s0 + j]))
+  ensures result == 0 || result == -1
+  ensures (result == 0 && fo == 12 && fc == 19 &&
+    crate::bud_store::valid(old(st)) && 0 <= e && e < old(st)[6] && crate::bud_store::has_x(old(st)[old(st)[5] + 10 * e + 9]) && n == 0) ==> crate::bud_store::has_x(st[st[5] + 10 * e + 9])
 {
   let off: i64 = gf(st, e, fo);
   if s0 + n > len(src) { return -1; }
@@ -344,7 +381,12 @@ fn put_units(inout st: [i64], e: i64, fo: i64, fc: i64, src: [i64], s0: i64, n: 
   }
   let ko: i64 = crate::bud_store::arena_put(inout st, src, s0, s0 + n);
   if ko < 0 { return -1; }
+  assert !(fo == 12 && fc == 19 && crate::bud_store::valid(old(st)) && 0 <= e && e < old(st)[6] &&
+    crate::bud_store::has_x(old(st)[old(st)[5] + 10 * e + 9])) || (crate::bud_store::has_x(st[st[5] + 10 * e + 9]) && st[9] <= ko && ko + n <= len(st));
   sf(inout st, e, fo, ko);
+  assert !(fo == 12 && fc == 19 && crate::bud_store::valid(old(st)) && 0 <= e && e < old(st)[6] &&
+    crate::bud_store::has_x(old(st)[old(st)[5] + 10 * e + 9])) || (crate::bud_store::has_x(st[st[5] + 10 * e + 9]) && st[st[5] + 10 * e + 10 * st[6] + 1] == ko &&
+    (forall j in 0..n: st[ko + j] == src[s0 + j]));
   sf(inout st, e, fc, n);
   return 0;
 }
@@ -811,6 +853,39 @@ fn drop_child(inout st: [i64], c: i64) -> i64
 // arena. 0 ok, -1 failure (nothing changed).
 pub fn set_blob(inout st: [i64], e: i64, src: [i64], s: i64, n: i64) -> i64
   ensures crate::bud_store::kept(st, old(st))
+  ensures (result == 0 && crate::bud_store::valid(old(st)) && 0 <= e && e < old(st)[6] && n == 0 &&
+    !crate::bud_store::has_x(old(st)[old(st)[5] + 10 * e + 9])) ==> !crate::bud_store::has_x(st[st[5] + 10 * e + 9])
+  ensures len(old(st)) >= 15 ==> crate::bud_store::shape_same(st, old(st))
+  ensures (result == 0 && crate::bud_store::valid(old(st)) && 0 <= e && e < old(st)[6] &&
+    old(st)[old(st)[5] + 10 * e + 9] == 0 && 0 < n && n <= 4294967296) ==>
+    crate::bud_store::has_x(st[st[5] + 10 * e + 9])
+  ensures (result == 0 && crate::bud_store::valid(old(st)) && 0 <= e && e < old(st)[6] &&
+    !crate::bud_store::has_x(old(st)[old(st)[5] + 10 * e + 9]) && 0 < n && n <= 4294967296) ==>
+    st[st[5] + 10 * e + 10 * st[6] + 2] == n
+  ensures (result == 0 && crate::bud_store::valid(old(st)) && 0 <= e && e < old(st)[6] &&
+    !crate::bud_store::has_x(old(st)[old(st)[5] + 10 * e + 9]) && 0 < n && n <= 4294967296) ==>
+    st[st[5] + 10 * e + 10 * st[6] + 1] == old(st)[10]
+  ensures (result == 0 && crate::bud_store::valid(old(st)) && 0 <= e && e < old(st)[6] &&
+    !crate::bud_store::has_x(old(st)[old(st)[5] + 10 * e + 9]) && 0 < n && n <= 4294967296) ==>
+    st[9] <= old(st)[10] && old(st)[10] + n <= len(st)
+  ensures (result == 0 && crate::bud_store::valid(old(st)) && 0 <= e && e < old(st)[6] &&
+    !crate::bud_store::has_x(old(st)[old(st)[5] + 10 * e + 9]) && 0 < n && n <= 4294967296) ==>
+    (0 <= s && s <= 1099511627776 ==> s + n <= len(src))
+  ensures (result == 0 && crate::bud_store::valid(old(st)) && 0 <= e && e < old(st)[6] &&
+    !crate::bud_store::has_x(old(st)[old(st)[5] + 10 * e + 9]) && 0 < n && n <= 4294967296) ==>
+    (0 <= s && s <= 1099511627776 ==> (forall j in 0..n: st[old(st)[10] + j] == src[s + j]))
+  ensures result == 0 || result == -1
+  ensures (result == 0 && crate::bud_store::valid(old(st)) && 0 <= e && e < old(st)[6] &&
+    old(st)[old(st)[5] + 10 * e + 9] == 0 && n == 0) ==> st[st[5] + 10 * e + 9] == 0
+  ensures (result == 0 && crate::bud_store::valid(old(st)) && 0 <= e && e < old(st)[6]) ==> (16 <= st[5] + 10 * e &&
+    st[5] + 10 * e + 10 <= st[5] + 10 * e + 10 * st[6] && st[5] + 10 * e + 10 * st[6] + 10 <= st[9] && st[9] <= len(st))
+  ensures (result == 0 && crate::bud_store::valid(old(st)) && 0 <= e && e < old(st)[6] && crate::bud_store::has_x(old(st)[old(st)[5] + 10 * e + 9]) &&
+    0 <= n && n <= 4294967296 && (n == 0 || 0 <= old(st)[old(st)[5] + 10 * e + 10 * old(st)[6] + 1])) ==>
+    (crate::bud_store::has_x(st[st[5] + 10 * e + 9]) && st[st[5] + 10 * e + 10 * st[6] + 2] == n)
+  ensures (result == 0 && crate::bud_store::valid(old(st)) && 0 <= e && e < old(st)[6] && crate::bud_store::has_x(old(st)[old(st)[5] + 10 * e + 9]) &&
+    0 < n && n <= 4294967296 && 0 <= old(st)[old(st)[5] + 10 * e + 10 * old(st)[6] + 1] && 0 <= s && s <= 1099511627776) ==>
+    (st[9] <= st[st[5] + 10 * e + 10 * st[6] + 1] && st[st[5] + 10 * e + 10 * st[6] + 1] + n <= len(st) && s + n <= len(src) &&
+    (forall j in 0..n: st[st[st[5] + 10 * e + 10 * st[6] + 1] + j] == src[s + j]))
 {
   let s0: i64 = crate::bud_store::c40(s);
   let m: i64 = crate::bud_store::c32(n);
@@ -834,6 +909,10 @@ pub fn set_blob(inout st: [i64], e: i64, src: [i64], s: i64, n: i64) -> i64
         invariant 0 <= k && k <= m && 16 <= o && o + m <= l && l == len(st) && 0 <= s0 && s0 + m <= len(src)
         invariant len(st) == len(old(st)) && crate::bud_store::hdr_same(st, old(st), -1)
         invariant crate::bud_store::kept(st, old(st))
+        invariant 16 <= b && b + 10 <= l && 16 <= x && x + 10 <= l
+        invariant (o + m <= x || o >= x + 10) && (o + m <= b + 9 || o >= b + 10)
+        invariant st[b + 9] == old(st)[b + 9] && st[x + 1] == off && off == old(st)[x + 1]
+        invariant forall j in 0..k: st[o + j] == src[s0 + j]
         decreases m - k
       {
         reveal crate::bud_store::dyn_ok;
@@ -869,11 +948,21 @@ pub fn set_blob(inout st: [i64], e: i64, src: [i64], s: i64, n: i64) -> i64
     if s0 + m > len(src) { return -1; }
     let ko: i64 = crate::bud_store::arena_put(inout st, src, s0, s0 + m);
     if ko < 0 { return -1; }
+    assert !(crate::bud_store::valid(old(st)) && 0 <= e && e < old(st)[6]) ||
+      st[st[5] + 10 * e + 9] == old(st)[old(st)[5] + 10 * e + 9];
+    assert !(crate::bud_store::valid(old(st)) && 0 <= e && e < old(st)[6]) ||
+      (crate::bud_store::valid(st) && e < st[6] && b == st[5] + 10 * e);
     let nx: i64 = crate::bud_store::xbm(inout st, e);
     if nx >= 0 {
+      assert !(crate::bud_store::valid(old(st)) && 0 <= e && e < old(st)[6] && old(st)[old(st)[5] + 10 * e + 9] == 0) || (st[b + 9] == 1 && b + 9 < nx);
       crate::bud_store::wr16(inout st, nx + 1, ko);
       crate::bud_store::wr16(inout st, nx + 9, m);
       crate::bud_store::wr16(inout st, nx + 2, m);
+      assert !(crate::bud_store::valid(old(st)) && 0 <= e && e < old(st)[6] && old(st)[old(st)[5] + 10 * e + 9] == 0) || st[b + 9] == 1;
+      assert !(crate::bud_store::valid(old(st)) && 0 <= e && e < old(st)[6]) || (b == st[5] + 10 * e && nx == b + 10 * st[6]);
+      assert st[nx + 1] == ko && st[nx + 2] == m;
+      assert !(crate::bud_store::valid(old(st)) && 0 <= e && e < old(st)[6]) ||
+        (forall j in 0..m: st[ko + j] == src[s0 + j]);
     }
   } else {
     ob = crate::bud_store::c40(gf(st, e, 13));
@@ -881,6 +970,14 @@ pub fn set_blob(inout st: [i64], e: i64, src: [i64], s: i64, n: i64) -> i64
     if rb < 0 { return -1; }
     sf(inout st, e, 13, m);
   }
+  assert !(crate::bud_store::valid(old(st)) && 0 <= e && e < old(st)[6] &&
+    old(st)[old(st)[5] + 10 * e + 9] == 0) ||
+    (st[st[5] + 10 * e + 9] == 1 && st[st[5] + 10 * e + 10 * st[6] + 2] == m &&
+    st[st[5] + 10 * e + 10 * st[6] + 1] == old(st)[10] &&
+    (forall j in 0..m: st[old(st)[10] + j] == src[s0 + j]));
+  assert !(crate::bud_store::valid(old(st)) && 0 <= e && e < old(st)[6] && !crate::bud_store::has_x(old(st)[old(st)[5] + 10 * e + 9])) ||
+    (st[st[5] + 10 * e + 10 * st[6] + 2] == m && st[st[5] + 10 * e + 10 * st[6] + 1] == old(st)[10] &&
+    (forall j in 0..m: st[old(st)[10] + j] == src[s0 + j]));
   let lw: i64 = crate::bud_store::c40(hw(st, 14));
   if lw > ob {
     sh(inout st, 14, lw - ob);
@@ -1165,6 +1262,57 @@ fn put_node(prev: [i64], inout nxt: [i64], pe: i64, nowner: i64) -> i64
 // extension the blob and scalars read as defaults (empty blob, 0), which a fresh ne (or a fresh root) already has.
 fn copy_pay(prev: [i64], inout nxt: [i64], pe: i64, ne: i64) -> i64
   ensures crate::bud_store::kept(nxt, old(nxt))
+  ensures (result == 0 && crate::bud_store::valid(prev) && 0 <= pe && pe < prev[6] &&
+    !crate::bud_store::has_x(prev[prev[5] + 10 * pe + 9])) ==>
+    (forall j in 0..len(nxt): nxt[j] == old(nxt)[j])
+  ensures (result == 0 && crate::bud_store::valid(prev) && 0 <= pe && pe < prev[6] &&
+    crate::bud_store::valid(old(nxt)) && 0 <= ne && ne < old(nxt)[6] && crate::bud_store::has_x(prev[prev[5] + 10 * pe + 9])) ==>
+    (crate::bud_store::has_x(nxt[nxt[5] + 10 * ne + 9]) ==>
+    (nxt[nxt[5] + 10 * ne + 10 * nxt[6] + 3] == prev[prev[5] + 10 * pe + 10 * prev[6] + 3] &&
+    nxt[nxt[5] + 10 * ne + 10 * nxt[6] + 4] == prev[prev[5] + 10 * pe + 10 * prev[6] + 4] &&
+    nxt[nxt[5] + 10 * ne + 10 * nxt[6] + 5] == prev[prev[5] + 10 * pe + 10 * prev[6] + 5] &&
+    nxt[nxt[5] + 10 * ne + 10 * nxt[6] + 6] == prev[prev[5] + 10 * pe + 10 * prev[6] + 6]))
+  ensures (result == 0 && crate::bud_store::valid(prev) && 0 <= pe && pe < prev[6] &&
+    crate::bud_store::valid(old(nxt)) && 0 <= ne && ne < old(nxt)[6] &&
+    crate::bud_store::has_x(prev[prev[5] + 10 * pe + 9]) && old(nxt)[old(nxt)[5] + 10 * ne + 9] == 0 &&
+    0 < prev[prev[5] + 10 * pe + 10 * prev[6] + 2] && prev[prev[5] + 10 * pe + 10 * prev[6] + 2] <= 4294967296) ==>
+    (crate::bud_store::has_x(nxt[nxt[5] + 10 * ne + 9]) && nxt[nxt[5] + 10 * ne + 10 * nxt[6] + 2] == prev[prev[5] + 10 * pe + 10 * prev[6] + 2])
+  ensures (result == 0 && crate::bud_store::valid(prev) && 0 <= pe && pe < prev[6] &&
+    crate::bud_store::valid(old(nxt)) && 0 <= ne && ne < old(nxt)[6] &&
+    crate::bud_store::has_x(prev[prev[5] + 10 * pe + 9]) && old(nxt)[old(nxt)[5] + 10 * ne + 9] == 0 &&
+    prev[prev[5] + 10 * pe + 10 * prev[6] + 2] == 0) ==>
+    ((crate::bud_store::has_x(nxt[nxt[5] + 10 * ne + 9]) ==> nxt[nxt[5] + 10 * ne + 10 * nxt[6] + 2] == 0) &&
+    (!crate::bud_store::has_x(nxt[nxt[5] + 10 * ne + 9]) ==> (
+    prev[prev[5] + 10 * pe + 10 * prev[6] + 3] == 0 && prev[prev[5] + 10 * pe + 10 * prev[6] + 4] == 0 &&
+    prev[prev[5] + 10 * pe + 10 * prev[6] + 5] == 0 && prev[prev[5] + 10 * pe + 10 * prev[6] + 6] == 0)))
+  ensures (result == 0 && crate::bud_store::valid(prev) && 0 <= pe && pe < prev[6] &&
+    crate::bud_store::valid(old(nxt)) && 0 <= ne && ne < old(nxt)[6] &&
+    crate::bud_store::has_x(prev[prev[5] + 10 * pe + 9]) && old(nxt)[old(nxt)[5] + 10 * ne + 9] == 0 &&
+    0 < prev[prev[5] + 10 * pe + 10 * prev[6] + 2] && prev[prev[5] + 10 * pe + 10 * prev[6] + 2] <= 4294967296 &&
+    0 <= prev[prev[5] + 10 * pe + 10 * prev[6] + 1] && prev[prev[5] + 10 * pe + 10 * prev[6] + 1] <= 1099511627776) ==>
+    (nxt[nxt[5] + 10 * ne + 10 * nxt[6] + 1] == old(nxt)[10] && old(nxt)[10] + prev[prev[5] + 10 * pe + 10 * prev[6] + 2] <= len(nxt) &&
+    prev[prev[5] + 10 * pe + 10 * prev[6] + 1] + prev[prev[5] + 10 * pe + 10 * prev[6] + 2] <= len(prev) &&
+    (forall j in 0..prev[prev[5] + 10 * pe + 10 * prev[6] + 2]:
+      nxt[old(nxt)[10] + j] == prev[prev[prev[5] + 10 * pe + 10 * prev[6] + 1] + j]))
+  ensures (result == 0 && crate::bud_store::valid(prev) && 0 <= pe && pe < prev[6] &&
+    crate::bud_store::valid(old(nxt)) && 0 <= ne && ne < old(nxt)[6] &&
+    crate::bud_store::has_x(prev[prev[5] + 10 * pe + 9]) && crate::bud_store::has_x(old(nxt)[old(nxt)[5] + 10 * ne + 9]) &&
+    0 <= prev[prev[5] + 10 * pe + 10 * prev[6] + 2] && prev[prev[5] + 10 * pe + 10 * prev[6] + 2] <= 4294967296 &&
+    (prev[prev[5] + 10 * pe + 10 * prev[6] + 2] == 0 || 0 <= old(nxt)[old(nxt)[5] + 10 * ne + 10 * old(nxt)[6] + 1])) ==>
+    (crate::bud_store::has_x(nxt[nxt[5] + 10 * ne + 9]) && nxt[nxt[5] + 10 * ne + 10 * nxt[6] + 2] == prev[prev[5] + 10 * pe + 10 * prev[6] + 2])
+  ensures (result == 0 && crate::bud_store::valid(prev) && 0 <= pe && pe < prev[6] &&
+    crate::bud_store::valid(old(nxt)) && 0 <= ne && ne < old(nxt)[6] &&
+    crate::bud_store::has_x(prev[prev[5] + 10 * pe + 9]) && crate::bud_store::has_x(old(nxt)[old(nxt)[5] + 10 * ne + 9]) &&
+    0 <= old(nxt)[old(nxt)[5] + 10 * ne + 10 * old(nxt)[6] + 1] &&
+    0 < prev[prev[5] + 10 * pe + 10 * prev[6] + 2] && prev[prev[5] + 10 * pe + 10 * prev[6] + 2] <= 4294967296 &&
+    0 <= prev[prev[5] + 10 * pe + 10 * prev[6] + 1] && prev[prev[5] + 10 * pe + 10 * prev[6] + 1] <= 1099511627776) ==>
+    (forall j in 0..prev[prev[5] + 10 * pe + 10 * prev[6] + 2]:
+      nxt[nxt[nxt[5] + 10 * ne + 10 * nxt[6] + 1] + j] == prev[prev[prev[5] + 10 * pe + 10 * prev[6] + 1] + j])
+  ensures (result == 0 && crate::bud_store::valid(prev) && 0 <= pe && pe < prev[6] &&
+    crate::bud_store::valid(old(nxt)) && 0 <= ne && ne < old(nxt)[6] &&
+    crate::bud_store::has_x(prev[prev[5] + 10 * pe + 9]) && prev[prev[5] + 10 * pe + 10 * prev[6] + 2] == 0 &&
+    !crate::bud_store::has_x(old(nxt)[old(nxt)[5] + 10 * ne + 9]) && crate::bud_store::has_x(nxt[nxt[5] + 10 * ne + 9])) ==>
+    nxt[nxt[5] + 10 * ne + 10 * nxt[6] + 2] == 0
 {
   let px: i64 = crate::bud_store::xb(prev, pe);
   if px < 0 { return 0; }
@@ -1172,8 +1320,17 @@ fn copy_pay(prev: [i64], inout nxt: [i64], pe: i64, ne: i64) -> i64
   // An empty blob has no region: admission leaves its offset unchecked, so it is not passed on (L3 P13j.5).
   let mut boff: i64 = 0;
   if blen > 0 { boff = crate::bud_store::c40(prev[px + 1]); }
+  assert 0 <= boff && boff <= 1099511627776;
   let rb: i64 = set_blob(inout nxt, ne, prev, boff, blen);
   if rb < 0 { return -1; }
+  assert !(crate::bud_store::valid(old(nxt)) && 0 <= ne && ne < old(nxt)[6] &&
+    old(nxt)[old(nxt)[5] + 10 * ne + 9] == 0 && 0 < blen) ||
+    (crate::bud_store::has_x(nxt[nxt[5] + 10 * ne + 9]) && nxt[nxt[5] + 10 * ne + 10 * nxt[6] + 2] == blen &&
+    nxt[nxt[5] + 10 * ne + 10 * nxt[6] + 1] == old(nxt)[10] && nxt[9] <= old(nxt)[10] &&
+    old(nxt)[10] + blen <= len(nxt) && boff + blen <= len(prev));
+  assert (crate::bud_store::valid(old(nxt)) && 0 <= ne && ne < old(nxt)[6] &&
+    old(nxt)[old(nxt)[5] + 10 * ne + 9] == 0 && 0 < blen) ==>
+    (forall j in 0..blen: nxt[old(nxt)[10] + j] == prev[boff + j]);
   crate::bud_store::set_vals(inout nxt, ne, prev[px + 3], prev[px + 4], prev[px + 5], prev[px + 6]);
   return 0;
 }
