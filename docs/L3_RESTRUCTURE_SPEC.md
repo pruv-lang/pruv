@@ -394,7 +394,7 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P17c | Budget perf runners: LLVM matched A/B/C, direct and adapter lane | P S/M core/boundary/complete timing, wrapper poison/overlap/shim cost and full consumption. No four-pair parity inference from Rust numbers. |
 | P18 | B/bud_lifecycle.pruv: current/isHalted/reopen | P Q1+B, lookup S/M <=1.0; retain dynamic identity checks. |
 | P18b | M7 host shim/ABI result path and inline policy: P18 lookup floor (Appendix P18.8) | P: first an isolating measurement (register-return variant of the host shim vs the `out` buffer store + reload), then the fix in the layer it names; `current` (0.99-1.03), `isHalted` (1.02-1.12) and `reopenmiss` (1.04-1.06 of hand16) each <= 1.0x hand at S/M, or a line-by-line hand vs generated Rust difference showing why Pruv cannot emit it. Peak RSS 2-4 pages above P13c re-measured and attributed. Runs with or after P19 (same files). T5: inlining is not a no-loss route here (Appendix T5.2); the result path hypothesis stays. Measured (Appendix P18b): opt-in `--proven-entries` (length-checked `PruvArr`/`PruvStr` twins, T0 kept for untrusted callers) drops the per-call 2^40 guards: fair-lane instructions S/M isHalted 0.97/0.96, current 1.00/1.01 (overlapping), attach 1.20/1.24, closereopen 1.17/1.18, reopenmiss 1.15/1.15 of hand16; floors at hand0 +-2; `__text` 413,244 B (T5c 413,756). Left: the `out` store + reload (about +3 per call) needs a by-value result ABI (P18c); attach's id copy (-36) is `bud_lifecycle.pruv` (P13e); body gaps go to T5b/P13h; the peak-RSS proportional share is `bud_store::need` headroom (P13e). |
-| P18c | Both codegens: by-value small-result entries (Appendix P18b.2 item 2) | P: an entry whose result is a small fixed-shape record returns it by value (in registers), not through a host `&mut [i64]` `out`; exposed through the `--proven-entries` twins; M7 current at or below 1.0x hand16 at S/M with no overlap above, and the floor's `out` write gone from attach/closereopen/reopenmiss; `__text` and peak RSS not above the P18b base (413,244 B); output parity on both compilers. |
+| P18c | Both codegens: by-value small-result entries (Appendix P18b.2 item 2) | P: an entry whose result is a small fixed-shape record returns it by value (in registers), not through a host `&mut [i64]` `out`; exposed through the `--proven-entries` twins; M7 current at or below 1.0x hand16 at S/M with no overlap above, and the floor's `out` write gone from attach/closereopen/reopenmiss; `__text` and peak RSS not above the P18b base (413,244 B); output parity on both compilers. Measured (Appendix P18c): `pruv_proven::val::<name>::<PRUV__K>` forms on both compilers (no output change without the flag); the fair lane uses them for current and isHalted, consuming the whole result: current 0.99 / 0.99 of hand16 at S/M (from 1.01 / 1.01; no overlap at M in the quieter run, a small overlap at S, single-round overlaps under load 28-40), isHalted 0.96 / 0.96; `__text` 413,244 B (= base), peak RSS within the per-build range of the unchanged base. Not met: the `out` write of attach/closereopen/reopenmiss (their bodies are calls, a by-value entry adds a zeroed stack buffer; needs by-value results through the call chain, proposed row P18d), and closereopen +1.4 / +2.2 instructions per call from the harness's register allocation (P18c.3). |
 | P19 | Same: OPEN/attach/replace/CLOSE/maybeClose | P Q1/Q4+B/G, synchronous query/effect order after P10H; close <=1.0. |
 | P19a | B/bud_lifecycle.pruv, bud_map.pruv, m7_test, m10_test, ABI.md: P19 audit R1, R3-R6, O1 (Appendix P19.6a, P19.7) | P: invalid answer leaves `st` word-for-word unchanged (write-free `bud_map` room plan before the query, rehash after a valid answer, `ensures` linking the two; tombstone-heavy control); R2 regression fixture; session argument and effect order logged on both sides with a mutant; per-attempt query counts over forced Grow; required case ids and request order in M7/M10 Q; standalone CLOSE lane with matched consumption <= 1.0x hand. Starts after P21a (shares bud_map.pruv). |
 | P19c | Both codegens: foreign (trusted rust) call wrapper and cross-rlib inlining (Appendix P19.4) | P: `catch_unwind(AssertUnwindSafe(..))` around every trusted rust call and the non-inlined callee `LocalKey::with` removed or made free where sound (for example crates built with `panic = abort`, or the poison rule of P10 kept by another path), with the soundness argument written and audited; output parity on both compilers; P19 `closereopen` (1.14-1.15) and `attach` (1.12-1.13) re-measured, the wrapper share attributed, the rest left to T5/P18b by line. Done (Appendix P19c): drop guard (`pruv_ForeignGuard`) in place of `catch_unwind`, `__rust_try` and the catch frame gone; the foreign path now equals a plain call (closereopen `guard` = `direct` within 0.1 ns, 61 rounds); the diagnostic goes through a fresh `/dev/stderr` handle, not std's stderr lock, on unix; `LocalKey::with` is the caller's LLVM inline decision, present with no wrapper and gone when inlined; the rest (attach 1.13x, closereopen 1.11-1.12x, reopenmiss 1.05-1.08x vs hand16) is the inline policy (T5, measured: 1.02-1.06x with the four lifecycle/map bodies forced inline) and the result path (P18b, hypothesis). T5 (Appendix T5): no inline rule ships; every promotion grows `__text` (find_w + attach +40 %, the four +116 %) for 2-13 % fewer instructions; queued as T5a. |
@@ -5498,3 +5498,184 @@ itself should move to one CGU for both hand and generated code is measured in ro
 |---|---|---|
 | re-baseline, variant builds, disassembly, measurement, this appendix | Claude Opus 5.5 | direct |
 
+## Appendix P18c: by-value result forms
+
+### P18c.1 Surface (SPEC "By-value results")
+
+With `--proven-entries`, every `pruv_proven` twin whose last parameter is the `inout` `[i64]` result buffer also
+gets `pruv_proven::val::<name>::<const PRUV__K: usize>(other twin parameters) -> (RT, [i64; PRUV__K])`. The body
+makes a fresh `[0i64; PRUV__K]`, calls the twin with `PruvArr::new_mut(&mut buf)` and returns `(status, buf)`, so it
+means exactly the twin called on a new zeroed buffer of length K; the twin's own `requires` (for example
+`len(out) >= 2`) still apply in checked builds, and under `--trust-callers` the host must meet them for the zeroed
+buffer. `K > 2^40` is a `const` assertion (a compile error E0080, `pruv: by-value result longer than 2^40`). No form
+is emitted for another element type, for a non-`inout` result or when the buffer is not last. The form is
+`#[inline(always)]` and generic: an unused form emits no code, and `val` is a module, so an entry named `val` does not
+clash. The const generic is named `PRUV__K` because `__` names are reserved in Pruv (`vparser.py`), so no Pruv
+parameter can shadow it (the first cut named it `K`, and a parameter named `K` broke the generated Rust; audit
+finding, P18c.6). SPEC fixes the meaning only; where the result words live after optimization is rustc's choice, so a
+host picks `val` or the `out` twin per call site by measurement (P18c.2).
+
+Both compilers emit the same text (M7 root, `--proven-entries`: 117 added lines, Python = Rust byte for byte).
+Without the flag the output is byte-identical to the base (M7 root, m34 root_m4, m11 root checked against the
+base compiler); the guarded `c_*` entries and the P18b twins are unchanged.
+
+Tests (`tests/l3/abi/check_proven_entries.py`): host calls `val::pair::<2>` = `(7, [5, 6])`,
+`val::copy_first::<3>` = `(42, [42, 0, 0])`, `val::named_k::<2>(9)` = `(9, [9, 0])` (a Pruv parameter named `K`),
+`val::only_out::<1>()` = `(4, [3])` (the result buffer is the only parameter), `val::pair::<1>` panics with
+`requires violated`; must-reject: `K = 2^40 + 1` (E0080 with our const message), a result buffer that is not last,
+and a `[u8]` result (no `val` form, E0603).
+
+### P18c.2 Prototype: where the by-value form wins
+
+Isolating measurement before the compiler change: a `val` module added by script to the shipped M7 gen and the fair
+lane switched cell by cell (lanes `f` = P18b fair lane, `v` = by-value; per call = (X(5R) - X(R)) / (4R x calls),
+R = 20000, `/usr/bin/time -l`, interleaved rounds; instructions per call, medians).
+
+| cell | f | v | hand16 |
+|---|---|---|---|
+| current S / M | 336.7 / 335.3 | 325.7 / 323.8 | 332.9 / 333.9 |
+| isHalted S / M | 328.0 / 329.8 | 325.1 / 324.7 | 340.0 / 340.4 |
+| attach S / M (K = 11) | 380.6 / 378.3 | 380.6 / 381.5 | |
+| closereopen S / M | 521.4 / 520.1 | 523.8 / 524.2 | |
+| reopenmiss S / M | 385.7 / 386.2 | 385.7 / 387.2 | |
+
+- current and isHalted: the twin body inlines into the caller, the `[i64; K]` lives in registers and the `out`
+  store + reload (P18b.2 item 2) is gone: -11 instructions per call.
+- attach, reopen and maybeClose: their bodies (`bud_lifecycle` attach/reopen/maybe_close) are calls, not inlined.
+  The by-value form then adds per call a zero store of the stack array, the length constant and the array's stack
+  address (from `otool -tvV`), and the result is still stored and reloaded through memory: +0 to +4. The zeroing
+  cannot be dropped: the body may read `out`, and a `&mut [i64]` over uninitialized memory is undefined behaviour.
+  attach also needs K >= 11 to keep the same per-op checksum; K = 4 changes `rchk_f`.
+
+Decision: the M7 fair lane uses `val` for current (K = 3, `[4, n, off]` on a hit) and isHalted (K = 1) only;
+attach, reopen and maybeClose keep the `out` twins (`fair_out`, the P18b shape), so no cell gives back a P18b gain.
+
+### P18c.3 Fair lane after (5 cells, S/M)
+
+Shipped compilers, `driver_m7.rs` as committed. Lane `f` = P18b base (base gen + base driver, `__text` 413,244 B),
+`v` = P18c, `hand` = hand_m7_u16 typed (`__text` 311,484 B). Instructions per call, median [min..max] of 5
+interleaved rounds (isHalted: 7 rounds, a second run), load 4-14. current: 25 interleaved rounds, load 28-40, after
+the audit fix (the lane consumes the whole `(r, o)` result, P18c.6). `rchk_f` equals the base in all ten cells, and
+`run_m7.py perf` compares 14 cells with 0 mismatches (rerun after the fix).
+
+| cell | f instr | v instr | hand16 instr | f / hand | v / hand |
+|---|---|---|---|---|---|
+| isHalted S | 328.0 [327.4..330.5] | 325.5 [324.0..335.3] | 340.1 [336.7..352.3] | 0.96 | 0.96 |
+| isHalted M | 328.4 [322.8..330.6] | 326.4 [324.5..328.1] | 338.7 [336.3..341.1] | 0.97 | 0.96 |
+| current S | 336.1 [319.7..348.2] | 330.2 [326.8..335.6] | 334.3 [316.9..427.1] | 1.01 | 0.99 |
+| current M | 338.2 [331.6..344.0] | 329.1 [326.0..349.0] | 334.0 [324.7..349.4] | 1.01 | 0.99 |
+| attach S | 378.1 [375.5..379.3] | 376.6 [376.0..379.4] | 322.0 [291.7..370.1] | 1.17 | 1.17 |
+| attach M | 377.7 [374.2..379.3] | 377.8 [375.2..379.3] | 303.2 [302.0..305.2] | 1.25 | 1.25 |
+| closereopen S | 522.1 [521.8..523.2] | 523.5 [516.5..524.2] | 458.1 [445.6..506.7] | 1.14 | 1.14 |
+| closereopen M | 521.5 [521.3..523.1] | 523.7 [522.6..525.5] | 444.2 [434.6..446.2] | 1.17 | 1.18 |
+| reopenmiss S | 385.4 [384.7..386.2] | 384.9 [382.2..385.1] | 334.6 [326.3..340.3] | 1.15 | 1.15 |
+| reopenmiss M | 390.2 [380.9..397.9] | 384.7 [383.2..387.4] | 336.2 [334.7..338.6] | 1.16 | 1.14 |
+
+Cycles per call, medians of the same 5-round run (noisy; ranges overlap in every cell): isHalted S/M f 34.3/33.9,
+v 36.0/37.7, hand 48.2/49.9; current (25-round run) f 36.6/37.6, v 36.7/41.0, hand 52.5/50.1; attach f 43.0/40.3, v 42.8/42.3,
+hand 51.1/51.5; closereopen f 59.3/58.6, v 57.6/58.3, hand 75.3/75.0; reopenmiss f 44.2/46.1, v 40.8/41.2, hand
+46.0/51.4.
+
+Floors (bodies emptied, instructions, f0 / v0 / hand0, S then M): isHalted 6.6 / 5.4 / 6.3, 8.0 / 7.4 / 6.2; current
+6.9 / 6.3 / 6.8, 5.6 / 6.5 / 6.4; attach 8.5 / 7.8 / 5.1, 8.3 / 8.5 / 3.7; closereopen 6.4 / 6.3 / 4.6, 6.7 / 6.2 /
+5.3; reopenmiss 8.2 / 8.1 / 6.9, 9.0 / 9.0 / 7.4. The `out[0] = 0` write is gone from the current and isHalted
+floors; attach, closereopen and reopenmiss still write it (they keep the `out` twin).
+
+Result against the row:
+- current: 0.99 / 0.99 of hand16 at S/M (from 1.01 / 1.01). Under load 28-40 the 25-round ranges overlap at S
+  and M through single noisy rounds (hand min 316.9 / 324.7). A 9-round run earlier the same session (lower load,
+  same binaries): S v 330.2 [327.6..331.7] vs hand 335.2 [330.4..385.1] (overlap 1.3 instructions), M v 329.7
+  [322.8..330.7] vs hand 333.8 [332.8..338.0], no overlap. Met at M; at S met by median with a small overlap.
+  Before the audit fix the lane consumed only `o[0]` and showed 0.97 / 0.97; that lane (`vo`) measured in the
+  same 25 rounds 325.8 / 324.6, so whole-result consumption costs about 4-5 instructions per call, and the
+  table reports the honest lane.
+- isHalted: 0.96 / 0.96 (from 0.96 / 0.97), no overlap at S or M.
+- attach, reopenmiss: unchanged within noise (attach +-0.1, reopenmiss -0.5 / -5.5).
+- closereopen: +1.4 / +2.2 instructions per call (0.3 / 0.4 %), ranges overlapping. Its loop code is the same
+  source as the base. The cause is the driver's shared `fair_loop` function: with two of its arms changed, LLVM
+  allocates registers differently for the closereopen arm (`otool -tvV`: extra `mov`/`ldp` spill moves around the
+  two calls; every generated `sol` function has the same size in both binaries). Two harness layouts were tried:
+  one `#[inline(never)]` loop function per item (closereopen -0.7 / -1.6, but isHalted +4.1 / +5.7, attach
+  +4.8 / +6.4, `__text` +704 B) and separate functions for the two `val` items only (isHalted +3.8 / +3.3, `__text`
+  +448 B). Both were worse overall; the shared function is kept and the closereopen delta is reported, not hidden.
+- floor `out` write gone from attach / closereopen / reopenmiss: not met (P18c.4).
+
+`__text` (bench flags): 413,244 B, equal to the P18b base (the `o[0]` lane before the audit fix was 413,180 B), so
+no `-C codegen-units=1` report is needed.
+
+Peak memory footprint (`/usr/bin/time -l`, 15 alternating runs per lane, KB, median / min; one run with the
+control lanes): current S f 1968 / 1936, v 1968 / 1952; attach S f 2016 / 1984, v 2048 / 2016; current M f 3760 /
+3712, v 3776 / 3728; attach M f 3808 / 3760, v 3824 / 3792. Other runs put v one page (16 KB) above f also in
+cells whose loop is unchanged (closereopen, reopenmiss). Control: two rebuilds of the unchanged base source under
+other crate names (h, k) in the same run give current S 1984 / 1952 and 2000 / 1984, attach S 2032 / 2016 and
+2048 / 2032, current M 3776 / 3728 and 3776 / 3760, attach M 3808 / 3776 and 3824 / 3808. The base binary sits at
+the low end of what the same source gives per build; v lies inside the h/k range in every cell. So the page is
+build identity (crate hash and layout), not P18c; it is reported here so a later row does not read it as P18c's
+cost. After the audit fix (25-round run, bytes, median of rounds): current S f 1,999,184 / v 2,015,568, isHalted S
+2,015,568 / 2,015,568, current M 3,850,576 / 3,834,192, isHalted M 3,834,192 / 3,850,576: one page either way, inside
+the per-build range above. hand16 stays lower (1,720,656 / 3,244,368 at current S/M); that gap predates P18c (the
+P18b base has it) and is the M7 memory item, not this row's.
+
+M4 cells: M4 does not use `--proven-entries`, and its generated code is byte-identical to the base (root_m4
+checked), so the M4 cells cannot move; not re-measured.
+
+### P18c.4 Not met here: the `out` write of call-shaped bodies
+
+The by-value result only stays in registers when the twin body inlines into the caller. attach, reopen and
+maybeClose call non-inlined `bud_lifecycle` functions that take the result buffer as `&mut [i64]` (pointer and
+length) and write through it. A by-value form at the entry cannot remove that store; it only moves the buffer to
+the host's stack and adds the zeroing. Removing it needs the result to travel by value through the call chain: the
+callee returns its result words (a small tuple or `[i64; K]` in registers, Rust's aggregate return) instead of
+writing a caller buffer, which is a codegen change for every function that writes an `inout` result, plus a proof
+of the shape (K fixed per function, all words written on every path). Proposed new row (for main to open):
+
+- P18d, both codegens: by-value results through non-inlined calls. An internal function whose `inout [i64]`
+  result has a statically fixed written prefix returns it by value; attach / closereopen / reopenmiss floors
+  without the `out` write, those cells not above P18b, `__text` and peak RSS not above the P18b base; output parity
+  on both compilers. Runs with or before T5b2 (same reopen path).
+
+### P18c.5 Gates (Rust and Python compilers, Rust backend)
+
+| gate | result |
+|---|---|
+| `cargo build --release`, `cargo test --release` | ok, all test results ok |
+| `diff_rust.py --fuzz-count 20` | all same |
+| `gen_shared.py --check`, `check_generated.py` | ok |
+| `run_all --only g8_frontend` rs / py | 39/39, 27/27 |
+| `run_all --only l3_abi` | 3/3 |
+| verify root_m8, m34 root_m4 and root_admit, m7, m9, m10, m11 roots | ok / ok (14 runs, rc 0) |
+| M7 Q, rs then py | 300 cases, fail 0 (both) |
+| `mutant_quiet.py` | all PASS |
+| `run_all_rows.txt` | unchanged |
+
+Rerun after the audit fixes (commit b2fb727): `cargo test --release` ok; `diff_rust.py --fuzz-count 20` all same;
+`gen_shared.py --check` and `check_generated.py` ok; g8_frontend rs 39/39, py 27/27; l3_abi 3/3; M7 Q rs and py 300
+cases, fail 0; `run_m7.py perf` 14 cells, 0 mismatches; `--list-rows` equals `run_all_rows.txt` (4514 rows). The 7
+budget roots do not use `--proven-entries`, so the rename cannot change their output. Full Python suite (`run_all --compiler py --backend both`, on b2fb727): TOTAL 4502/4502, exit 0. The
+later SPEC-only commit 7389fc5 changes no code.
+
+### P18c.6 Audit
+
+Review delegation (Codex gpt-6.2-astra, ultra) over the P18c commits. Required findings, all fixed in b2fb727:
+1. The const generic `K` clashed with a Pruv parameter named `K`: renamed `PRUV__K` in both codegens, host test
+   `named_k` added.
+2. The fair lane's current timing consumed only `o[0]` of the by-value result, so the optimizer could drop the other
+   words: `fair_val` now black-boxes the whole `(r, o)` (P18c.3 reports the cost, about 4-5 instructions).
+3. SPEC promised where the words live (registers, no store): rewritten to state the meaning only.
+
+Optional: an E0080 must-reject test for `K > 2^40` (added); a unit-return case (Pruv entries cannot return unit, so
+an i64 entry whose only parameter is the result buffer, `only_out`, covers the empty-argument form instead); the
+attach lane's `uk` black-box differs from the hand lane's (predates P18c, unchanged; noted for the M7 harness owner).
+Confirm audit (same reviewer, only the three fix scopes): scopes 1 and 2 FIXED; scope 3 had one required finding,
+the SPEC text said a too-small `K` always panics in a checked build, but an entry without a length `requires` (M7
+`c_current`) just runs and returns a status (3 for `K = 0`). Fixed: SPEC now says a small `K` gives what the twin
+gives, panicking only when a declared `requires` is violated.
+
+### P18c.7 Delegations
+
+| work | by |
+|---|---|
+| compiler implementation (both codegens) and `check_proven_entries.py` tests | Codex gpt-6.2-sol, write |
+| audit and confirm audit | Codex gpt-6.2-astra, ultra, review |
+| full Python suite | shell command delegation |
+| prototype, measurement, proof judgment, SPEC, `driver_m7.rs`, audit fixes, this appendix | Claude Opus 5.5, direct |
