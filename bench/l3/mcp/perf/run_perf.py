@@ -106,6 +106,16 @@ def build(pruvc, want_new):
     if gen is None:
         sys.exit("pruvc failed:\n" + err)
     g = open(gen, encoding="utf-8").read()
+    # This bench intentionally times private internals, so remove the module that hides them from hosts.
+    prefix = "mod pruv_impl {\n" + "".join(
+        "#[allow(unused_macros)]\nmacro_rules! %s { ($($t:tt)*) => { %s::%s!($($t)*) } }\n" % (m, c, m)
+        for m, c in (("assert", "core"), ("eprintln", "std"), ("format_args", "core"), ("matches", "core"),
+                     ("panic", "core"), ("println", "std"), ("unreachable", "core"), ("vec", "std")))
+    suffix = "}\n#[allow(unused_imports)]\npub use self::pruv_impl::*;\n"
+    if g.startswith(prefix) and g.endswith(suffix):
+        g = g[len(prefix):-len(suffix)]
+        with open(gen, "w", encoding="utf-8") as f:
+            f.write(g)
 
     def one(pat, what):
         m = re.search(pat, g)

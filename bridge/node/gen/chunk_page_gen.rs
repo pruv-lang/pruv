@@ -1,3 +1,20 @@
+mod pruv_impl {
+#[allow(unused_macros)]
+macro_rules! assert { ($($t:tt)*) => { core::assert!($($t)*) } }
+#[allow(unused_macros)]
+macro_rules! eprintln { ($($t:tt)*) => { std::eprintln!($($t)*) } }
+#[allow(unused_macros)]
+macro_rules! format_args { ($($t:tt)*) => { core::format_args!($($t)*) } }
+#[allow(unused_macros)]
+macro_rules! matches { ($($t:tt)*) => { core::matches!($($t)*) } }
+#[allow(unused_macros)]
+macro_rules! panic { ($($t:tt)*) => { core::panic!($($t)*) } }
+#[allow(unused_macros)]
+macro_rules! println { ($($t:tt)*) => { std::println!($($t)*) } }
+#[allow(unused_macros)]
+macro_rules! unreachable { ($($t:tt)*) => { core::unreachable!($($t)*) } }
+#[allow(unused_macros)]
+macro_rules! vec { ($($t:tt)*) => { std::vec!($($t)*) } }
 #[allow(dead_code)]
 #[inline(always)]
 fn pruv_str_boundary(a: &str, i: i64) -> bool { i >= 0 && (i as u64) <= (a.len() as u64) && a.is_char_boundary(i as usize) }
@@ -256,3 +273,6 @@ pub fn chunk_image(s: &str, max: i64) -> ::std::vec::Vec<i64> {
     chunk_image__pruv_body(s, max)
 }
 
+}
+#[allow(unused_imports)]
+pub use self::pruv_impl::*;

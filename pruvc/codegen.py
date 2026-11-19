@@ -3480,7 +3480,28 @@ def gen_rust_ex(prog, verified=True, trust_callers=False, budget=1 << 30, plan=N
         text += raw_module(g.raw, g.raw_items, raw_unwind_free(g), g.raw_crate) + "\n"
     if g.proven_items:
         text += proven_module(text, g.proven_items)
+    text = hide_bodies(text)
     return text, manifest
+
+
+# A host macro_rules! defined before the generated file is in textual scope inside it and would replace
+# the std macro the checks use (a host `panic!` that returns lets a violated requires run the body).
+# Local forwarders shadow any host definition; the list is every macro the generator calls unqualified.
+# Forward through the extern prelude: core:: for macros core has (no_std hosts keep compiling); no leading ::
+# because in edition 2015 that names the crate root.
+HIDE_MACROS = (("assert", "core"), ("eprintln", "std"), ("format_args", "core"), ("matches", "core"),
+               ("panic", "core"), ("println", "std"), ("unreachable", "core"), ("vec", "std"))
+HIDE_HEAD = "mod pruv_impl {\n" + "".join(
+    "#[allow(unused_macros)]\nmacro_rules! %s { ($($t:tt)*) => { %s::%s!($($t)*) } }\n" % (m, c, m)
+    for m, c in HIDE_MACROS)
+
+
+def hide_bodies(text):
+    # Hosts reach only re-exported pub items. Even a crate-root include! cannot name
+    # unchecked __pruv_body fns or other private items. Keep lines unindented for
+    # R-7-3 and line-anchored checks. Module boundaries do not change inlining.
+    return HIDE_HEAD + text + "}\n#[allow(unused_imports)]\npub use self::pruv_impl::*;\n"
+
 
 ASYNC_PRELUDE = r"""#[derive(Clone, Default)]
 struct PruvEvPublic { kind: i64, open: bool, eof: bool, failed: bool, ends: [bool;2] }
