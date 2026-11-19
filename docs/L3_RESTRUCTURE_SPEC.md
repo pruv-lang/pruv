@@ -4922,3 +4922,64 @@ then answer "not open". That is a behaviour change outside the T5a scope, so it 
 | package audit | Codex gpt-6.2-astra ultra | review |
 
 Diagnosis, the variants, the measurements and this appendix were done directly.
+
+## Appendix P13e (row B/bud_map, bud_store, bud_world, bud_admit: entry layout)
+
+Status: step 1 (RSS split) done; step 2 (layout) stopped for a file-boundary decision (P13e.3). No source change.
+Base: main c3ec58d. Binaries: M4 driver built by `m34_test/run.py build` with the main checkout's `pruvc-rs` release
+binary; hand is `work/handbuild/release/m4_hand`. `perf <axis> <n> 1000`, one run per point, `/usr/bin/time -l`
+(16 KiB pages, macOS arm64). Raw: `/tmp/p13e/` (not committed).
+
+### P13e.1 Peak RSS against n (KiB, Pruv / hand)
+
+| axis | n=1 | n=100 | n=500 | n=1000 | n=2000 |
+|---|---|---|---|---|---|
+| sessions | 1728 / 1632 | 1776 / 1712 | 1920 / 1872 | 2048 / 2016 | 2336 / 2320 |
+| tools | 1728 / 1664 | 1824 / 1728 | 2048 / 1936 | 2256 / 2096 | 2448 / 2208 |
+| clocks | 1712 / 1648 | 1776 / 1696 | 1888 / 1984 | 2000 / 2256 | 2208 / 2752 |
+
+### P13e.2 Split: fixed and proportional share of the excess
+
+Fixed share = the excess at n = 1 (code pages, the 4096-word start buffer): +64 (tools, clocks) to +96 (sessions)
+KiB; this is the P13d/P13h term. Proportional share = excess(n) - excess(1):
+
+| axis | n=100 | n=500 | n=1000 | n=2000 | slope Pruv / hand (KiB per entry, n 100..2000) |
+|---|---:|---:|---:|---:|---|
+| sessions | -32 | -48 | -64 | -80 | 0.296 / 0.319 |
+| tools | +32 | +48 | +96 | +176 | 0.328 / 0.253 |
+| clocks | +16 | -160 | -320 | -608 | 0.227 / 0.555 |
+
+Only tools has a proportional share above hand. Per activity Pruv touches one 20-word entry (160 B), two i64 slots
+(16 B) and one packed key word (8 B), 184 B; hand's `HashSet<Box<[u16]>>` is a 16 B bucket plus a control byte at
+load 7/8 or less and a 16 B key block, about 56 B at n = 1000 (2048 buckets) and 115 B per added activity between
+1000 and 2000 (a doubling to 4096). Sessions and clocks are below hand proportionally (hand's per-entry `Vec` /
+nested `HashMap`), so their excess is the fixed share alone.
+
+### P13e.3 Why the layout step stopped
+
+The entry fields 11..17 (child count, blob offset and length, v0..v3) and the bound `16 <= a && a + 20 <= len(st)`
+are a word ABI outside this row's files:
+
+- `bud_clock.pruv`: `st[ca + 11..17]`, `st[ra + 14]`, `requires 16 <= ca && ca + 20 <= len(st)` (P22 proven indexing).
+- `bud_lifecycle.pruv`: `st[a + 12]`, `st[a + 13]`, `found_at` ensures `result + 20 <= len(st)`.
+- `m9_test/root_m9.pruv` (fields 12, 13, 14, 17) and `m8_test/root_m8.pruv` (12, 13) through `field_addr`.
+
+Inside the row's files the most that can shrink is fields 0..10, 18, 19 (bits: state 1, owner/prev/next/head/tail
+32 each, key off 40, key len 31, key cap 28, blob cap 40, plus three full words gen, owner gen, hash), packed in
+front of the seven fixed words with `eb` returning a virtual base: 15 words per entry. Tools then touches about
+144 B per activity, still above hand's 56-115 B (n = 1000: about +55 KiB proportional left). Reaching hand needs a
+per-kind layout: a small base entry for map members (state, owner, generations, hash, links, key; about 6-7 words,
+short keys inline) and an extension record only for entries with children, blobs or scalars, reached through
+accessors. That changes `bud_clock.pruv`, `bud_lifecycle.pruv`, `m9_test/root_m9.pruv` and `m8_test/root_m8.pruv`,
+which the package brief forbids; decision requested from the main session:
+
+1. allow those four files (accessor-based fields; proofs re-done there), then the per-kind layout; or
+2. ship the in-boundary 15-word layout now (tools proportional share shrinks but stays above hand), and queue the
+   per-kind layout as a new row.
+
+Generation width stays 64 bits in both options: a 32-bit generation makes a stale child match its reused owner after
+2^32 reuses of one entry, which the tools churn (one turn forgotten per rep) reaches in hours.
+
+### P13e.4 Delegation
+
+None (measurement and the stop decision were done directly).
