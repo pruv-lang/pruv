@@ -895,62 +895,81 @@ fn c_direct(w: &mut World, p: &Prep) -> i64 {
 // - no Grow fallback: these five cells never answer Grow (no record grows); the rchk_f pass asserts r >= 0 per call;
 // - the result is consumed as in the typed lane, `black_box((status, out[0]))`, the counterpart of hand's one
 //   black_box of its result value.
-// The 2^40 length guards are part of the generated c_* entries (product code) and stay; the emptied-body floor
-// (`out[0]=0; return 0;` bodies) keeps them, so they are inside the floor.
+// P18b: the lane calls the proven entries (sol::pruv_proven, emitted by `--proven-entries`). Each array is
+// length-checked against 2^40 once, where the host acquires it (PruvArr::new / new_mut: the key slices in FArgs::of,
+// the World buffers in FBuf::of before the timed loop), and the proven entry takes the checked type with no per-call
+// guard. The guarded c_* entries (T0) stay for every other caller; the emptied-body floor empties the proven bodies.
 struct FArgs<'a> {
-    sk: &'a [i64],
+    sk: &'a sol::PruvArr<i64>,
     sn: i64,
-    bk: &'a [i64],
+    bk: &'a sol::PruvArr<i64>,
     bn: i64,
     origin: i64,
     size: i64,
-    unit: &'a [i64],
-    uk: &'a [i64],
+    unit: &'a sol::PruvArr<i64>,
+    uk: &'a sol::PruvArr<i64>,
     un: i64,
     now: i64,
 }
 
 impl<'a> FArgs<'a> {
     fn of(p: &'a Prep) -> FArgs<'a> {
-        FArgs { sk: &p.sk, sn: p.sn, bk: &p.bk, bn: p.bn, origin: p.origin, size: p.size, unit: &p.unit, uk: &p.uk, un: p.un, now: p.now }
+        let a = sol::PruvArr::new;
+        FArgs { sk: a(&p.sk), sn: p.sn, bk: a(&p.bk), bn: p.bn, origin: p.origin, size: p.size, unit: a(&p.unit), uk: a(&p.uk), un: p.un, now: p.now }
+    }
+}
+
+// The World buffers the fair entries take, each checked once (P18b).
+struct FBuf<'a> {
+    st: &'a mut sol::PruvArr<i64>,
+    out: &'a mut sol::PruvArr<i64>,
+    bv: &'a mut sol::PruvArr<i64>,
+    fx: &'a mut sol::PruvArr<i64>,
+}
+
+impl<'a> FBuf<'a> {
+    fn of(w: &'a mut World) -> FBuf<'a> {
+        let m = sol::PruvArr::new_mut;
+        FBuf { st: m(&mut w.st), out: m(&mut w.out), bv: m(&mut w.bv), fx: m(&mut w.fx) }
     }
 }
 
 #[inline(always)]
-fn fair_one<const C: i64>(w: &mut World, a: &FArgs) -> i64 {
+fn fair_one<const C: i64>(b: &mut FBuf, a: &FArgs) -> i64 {
     let r = match C {
-        1 => sol::c_current(&w.st, black_box(a.sk), a.sn, black_box(a.bk), a.bn, &mut w.out),
-        2 => sol::c_is_halted(&w.st, black_box(a.sk), a.sn, black_box(a.bk), a.bn, &mut w.out),
+        1 => sol::pruv_proven::c_current(b.st, black_box(a.sk), a.sn, black_box(a.bk), a.bn, b.out),
+        2 => sol::pruv_proven::c_is_halted(b.st, black_box(a.sk), a.sn, black_box(a.bk), a.bn, b.out),
         3 => {
-            w.fx[0] = 0;
-            sol::c_attach(&mut w.st, black_box(a.sk), a.sn, a.origin, a.size, a.unit, black_box(a.uk), a.un, a.now, &mut w.fx, &mut w.out)
+            b.fx.get_mut()[0] = 0;
+            sol::pruv_proven::c_attach(b.st, black_box(a.sk), a.sn, a.origin, a.size, a.unit, black_box(a.uk), a.un, a.now, b.fx, b.out)
         }
         5 => {
-            w.fx[0] = 0;
-            sol::c_reopen(&mut w.st, black_box(a.sk), a.sn, black_box(a.bk), a.bn, &mut w.fx, &mut w.out)
+            b.fx.get_mut()[0] = 0;
+            sol::pruv_proven::c_reopen(b.st, black_box(a.sk), a.sn, black_box(a.bk), a.bn, b.fx, b.out)
         }
         6 => {
-            w.fx[0] = 0;
-            sol::c_maybe_close(&mut w.st, black_box(a.sk), a.sn, a.now, &mut w.bv, &mut w.fx, &mut w.out)
+            b.fx.get_mut()[0] = 0;
+            sol::pruv_proven::c_maybe_close(b.st, black_box(a.sk), a.sn, a.now, b.bv, b.fx, b.out)
         }
         _ => unreachable!(),
     };
-    black_box((r, w.out[0]));
+    black_box((r, b.out.get()[0]));
     r
 }
 
 // The timed fair loop of one item: `n` iterations; closereopen is one maybeClose + reopen pair per iteration, like
-// hand's closereopen loop. The item match is outside the loop.
+// hand's closereopen loop. The item match is outside the loop; the buffers are checked once, before it.
 #[inline(never)]
 fn fair_loop(item: &str, w: &mut World, a: &[FArgs], n: usize) {
+    let b = &mut FBuf::of(w);
     match item {
-        "ishalted" => for _ in 0..n { fair_one::<2>(w, &a[0]); },
-        "current" => for _ in 0..n { fair_one::<1>(w, &a[0]); },
-        "attach" => for _ in 0..n { fair_one::<3>(w, &a[0]); },
-        "reopenmiss" => for _ in 0..n { fair_one::<5>(w, &a[0]); },
+        "ishalted" => for _ in 0..n { fair_one::<2>(b, &a[0]); },
+        "current" => for _ in 0..n { fair_one::<1>(b, &a[0]); },
+        "attach" => for _ in 0..n { fair_one::<3>(b, &a[0]); },
+        "reopenmiss" => for _ in 0..n { fair_one::<5>(b, &a[0]); },
         "closereopen" => for _ in 0..n {
-            fair_one::<6>(w, &a[0]);
-            fair_one::<5>(w, &a[1]);
+            fair_one::<6>(b, &a[0]);
+            fair_one::<5>(b, &a[1]);
         },
         _ => unreachable!("fair lane item {}", item),
     }
@@ -966,14 +985,14 @@ fn fair_rchk(item: &str, w: &mut World, a: &[FArgs], n: usize) -> u64 {
     };
     for _ in 0..n {
         match item {
-            "ishalted" => { let r = fair_one::<2>(w, &a[0]); fold(w, r) }
-            "current" => { let r = fair_one::<1>(w, &a[0]); fold(w, r) }
-            "attach" => { let r = fair_one::<3>(w, &a[0]); fold(w, r) }
-            "reopenmiss" => { let r = fair_one::<5>(w, &a[0]); fold(w, r) }
+            "ishalted" => { let r = fair_one::<2>(&mut FBuf::of(w), &a[0]); fold(w, r) }
+            "current" => { let r = fair_one::<1>(&mut FBuf::of(w), &a[0]); fold(w, r) }
+            "attach" => { let r = fair_one::<3>(&mut FBuf::of(w), &a[0]); fold(w, r) }
+            "reopenmiss" => { let r = fair_one::<5>(&mut FBuf::of(w), &a[0]); fold(w, r) }
             "closereopen" => {
-                let r = fair_one::<6>(w, &a[0]);
+                let r = fair_one::<6>(&mut FBuf::of(w), &a[0]);
                 fold(w, r);
-                let r = fair_one::<5>(w, &a[1]);
+                let r = fair_one::<5>(&mut FBuf::of(w), &a[1]);
                 fold(w, r)
             }
             _ => unreachable!(),

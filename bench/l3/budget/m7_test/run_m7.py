@@ -35,9 +35,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 BUD = os.path.dirname(HERE)
 ROOT = os.path.abspath(os.path.join(BUD, "..", "..", ".."))
 WORK = os.path.join(BUD, "work", "m7")
-PRUVC_DEFAULT = "/Users/spica4345/Projects/pruv/pruvc-rs/target/release/pruvc"
+PRUVC_DEFAULT = os.path.join(ROOT, "pruvc-rs", "target", "release", "pruvc")
 PY_DEFAULT = "/Users/spica4345/Projects/pruv/.venv/bin/python"
-PRUVC_PY = "/Users/spica4345/Projects/pruv/pruvc/pruvc.py"
+PRUVC_PY = os.path.join(ROOT, "pruvc", "pruvc.py")  # this checkout's Python compiler (P18b: --proven-entries)
 LIBS = ["--lib", "bench/l3/budget", "--lib", "bench/l3/lib"]
 SRC_WORK = "/Users/spica4345/Projects/pruv/bench/l3/budget/work/m7"  # read-only source of cases / oracle
 sys.path.insert(0, BUD)
@@ -87,7 +87,10 @@ def compile_gen(which, gen, rlib=None):
         cmd = [PY_DEFAULT, PRUVC_PY, root, "-o", gen, "--backend", "rust"] + LIBS
     else:
         cmd = [which, root, "-o", gen] + LIBS
-    c = subprocess.run(cmd + ["--rust-extern", f"bud_facts={rlib}"], cwd=ROOT, capture_output=True, text=True)
+    # P18b: --proven-entries adds the pruv_proven twins (PruvArr arguments, length checked once by the host) that
+    # driver_m7.rs's fair lane calls; the guarded c_* entries are unchanged.
+    c = subprocess.run(cmd + ["--rust-extern", f"bud_facts={rlib}", "--proven-entries"], cwd=ROOT,
+                       capture_output=True, text=True)
     if c.returncode != 0 or not os.path.exists(gen):
         sys.exit("pruvc failed:\n" + c.stdout + c.stderr)
 

@@ -3194,6 +3194,7 @@
 {"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "s5_frontend", "mode": "no-verify", "sample": "tests/s5/frontend/plain.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "s5_frontend", "mode": "no-verify", "sample": "tests/s5/frontend/recursive.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--no-verify"], "group": "s5_frontend", "mode": "no-verify", "sample": "tests/s5/frontend/sum.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--proven-entries"], "group": "l3_abi", "mode": "proven_entries", "sample": "tests/l3/abi/check_proven_entries.py"}
 {"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g10_async_frontend", "mode": "trust-callers", "sample": "tests/g10_async/frontend/async_only.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g10_async_frontend", "mode": "trust-callers", "sample": "tests/g10_async/frontend/both_branch.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--trust-callers"], "group": "g10_async_frontend", "mode": "trust-callers", "sample": "tests/g10_async/frontend/catalog_updates.pruv"}

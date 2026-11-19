@@ -401,13 +401,14 @@ fn compile(a: &Args, graph: Option<&pruv_core::manifest::Graph>) -> Result<(), F
         // Stage 7: the Rust-source backend. Like Python compile_file, all the text (rs, and with --also-llvm also ll and bindings)
         // is produced first and only then are files written (on a generator error no file is written). Write order: OUT, LL, RS.
         Kind::Rs => {
-            let (rs_text, manifest) = pruv_core::codegen::gen_rust_concrete_ex(
+            let (rs_text, manifest) = pruv_core::codegen::gen_rust_concrete_with_entries(
                 gprog,
                 a.verify,
                 a.trust_callers,
                 a.budget,
                 &a.foreign_checks,
                 &a.rust_extern_specs,
+                a.proven_entries,
             )
             .map_err(|e| match e {
                 // G9 A2: a runtime requires the Rust backend cannot lower yet is a diagnostic (Python PruvError)

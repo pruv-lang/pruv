@@ -393,7 +393,8 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P17b | Budget milestone/scenario drivers and bindings: LLVM build/transport/result lane | C ABI lifetime/layout probes plus P narrow Q on all four pairs; separately label old py,rs defaults. |
 | P17c | Budget perf runners: LLVM matched A/B/C, direct and adapter lane | P S/M core/boundary/complete timing, wrapper poison/overlap/shim cost and full consumption. No four-pair parity inference from Rust numbers. |
 | P18 | B/bud_lifecycle.pruv: current/isHalted/reopen | P Q1+B, lookup S/M <=1.0; retain dynamic identity checks. |
-| P18b | M7 host shim/ABI result path and inline policy: P18 lookup floor (Appendix P18.8) | P: first an isolating measurement (register-return variant of the host shim vs the `out` buffer store + reload), then the fix in the layer it names; `current` (0.99-1.03), `isHalted` (1.02-1.12) and `reopenmiss` (1.04-1.06 of hand16) each <= 1.0x hand at S/M, or a line-by-line hand vs generated Rust difference showing why Pruv cannot emit it. Peak RSS 2-4 pages above P13c re-measured and attributed. Runs with or after P19 (same files). T5: inlining is not a no-loss route here (Appendix T5.2); the result path hypothesis stays. |
+| P18b | M7 host shim/ABI result path and inline policy: P18 lookup floor (Appendix P18.8) | P: first an isolating measurement (register-return variant of the host shim vs the `out` buffer store + reload), then the fix in the layer it names; `current` (0.99-1.03), `isHalted` (1.02-1.12) and `reopenmiss` (1.04-1.06 of hand16) each <= 1.0x hand at S/M, or a line-by-line hand vs generated Rust difference showing why Pruv cannot emit it. Peak RSS 2-4 pages above P13c re-measured and attributed. Runs with or after P19 (same files). T5: inlining is not a no-loss route here (Appendix T5.2); the result path hypothesis stays. Measured (Appendix P18b): opt-in `--proven-entries` (length-checked `PruvArr`/`PruvStr` twins, T0 kept for untrusted callers) drops the per-call 2^40 guards: fair-lane instructions S/M isHalted 0.97/0.96, current 1.00/1.01 (overlapping), attach 1.20/1.24, closereopen 1.17/1.18, reopenmiss 1.15/1.15 of hand16; floors at hand0 +-2; `__text` 413,244 B (T5c 413,756). Left: the `out` store + reload (about +3 per call) needs a by-value result ABI (P18c); attach's id copy (-36) is `bud_lifecycle.pruv` (P13e); body gaps go to T5b/P13h; the peak-RSS proportional share is `bud_store::need` headroom (P13e). |
+| P18c | Both codegens: by-value small-result entries (Appendix P18b.2 item 2) | P: an entry whose result is a small fixed-shape record returns it by value (in registers), not through a host `&mut [i64]` `out`; exposed through the `--proven-entries` twins; M7 current at or below 1.0x hand16 at S/M with no overlap above, and the floor's `out` write gone from attach/closereopen/reopenmiss; `__text` and peak RSS not above the P18b base (413,244 B); output parity on both compilers. |
 | P19 | Same: OPEN/attach/replace/CLOSE/maybeClose | P Q1/Q4+B/G, synchronous query/effect order after P10H; close <=1.0. |
 | P19a | B/bud_lifecycle.pruv, bud_map.pruv, m7_test, m10_test, ABI.md: P19 audit R1, R3-R6, O1 (Appendix P19.6a, P19.7) | P: invalid answer leaves `st` word-for-word unchanged (write-free `bud_map` room plan before the query, rehash after a valid answer, `ensures` linking the two; tombstone-heavy control); R2 regression fixture; session argument and effect order logged on both sides with a mutant; per-attempt query counts over forced Grow; required case ids and request order in M7/M10 Q; standalone CLOSE lane with matched consumption <= 1.0x hand. Starts after P21a (shares bud_map.pruv). |
 | P19c | Both codegens: foreign (trusted rust) call wrapper and cross-rlib inlining (Appendix P19.4) | P: `catch_unwind(AssertUnwindSafe(..))` around every trusted rust call and the non-inlined callee `LocalKey::with` removed or made free where sound (for example crates built with `panic = abort`, or the poison rule of P10 kept by another path), with the soundness argument written and audited; output parity on both compilers; P19 `closereopen` (1.14-1.15) and `attach` (1.12-1.13) re-measured, the wrapper share attributed, the rest left to T5/P18b by line. Done (Appendix P19c): drop guard (`pruv_ForeignGuard`) in place of `catch_unwind`, `__rust_try` and the catch frame gone; the foreign path now equals a plain call (closereopen `guard` = `direct` within 0.1 ns, 61 rounds); the diagnostic goes through a fresh `/dev/stderr` handle, not std's stderr lock, on unix; `LocalKey::with` is the caller's LLVM inline decision, present with no wrapper and gone when inlined; the rest (attach 1.13x, closereopen 1.11-1.12x, reopenmiss 1.05-1.08x vs hand16) is the inline policy (T5, measured: 1.02-1.06x with the four lifecycle/map bodies forced inline) and the result path (P18b, hypothesis). T5 (Appendix T5): no inline rule ships; every promotion grows `__text` (find_w + attach +40 %, the four +116 %) for 2-13 % fewer instructions; queued as T5a. |
@@ -5244,3 +5245,176 @@ Q6 213/87, K 10/10, qx 72/72 on rs and py.
 - P26a: peak RSS above hand by fixed shares only: A +2 pages (code layout of the larger m11 binary, A code = base)
   and H +3 pages (harness `World` buffers vs the hand lane's untouched capacity). Proportional share: none.
 - P25.8 JB `ref`/result row stays queued (outside this row).
+
+## Appendix P18b (M7 entry/result path: length guards, out store, id copy, peak RSS)
+
+Base: main a6fb98e (T5c). Lane: the T5c fair typed lane (`driver_m7 perf S R item f`) against hand16 typed, S = 100,
+M = 500 sessions. Per call = (X(5R) - X(R)) / (4R calls), X from `/usr/bin/time -l`, R = 20000, 7 interleaved rounds
+with the lane order rotated per round; medians, [min..max] over rounds. Instructions are the primary metric. Every
+run's rchk value is equal across base, P18b and hand.
+
+### P18b.1 Isolating measurement (instructions per call, S = 500)
+
+Variants of the T5c `gen.rs` / driver, built from one compiler output (measurement only, not shipped):
+- `ng`: the 2^40 length-guard `if` removed from the five typed `c_*` entries.
+- `lo`: the driver passes a local `[i64; 64]` as `out` and observes `lo[0]`. It stands in for a register result,
+  because every body here is inlined and LLVM may keep `out[0]` in a register.
+- `noid`: attach's ref-path `put_key` (the stored budget id copied into `out`) replaced by a 2-word view.
+- `*0`: the five typed bodies emptied (floors).
+
+| item | base | ng | noid | proven prototype | hand | base0 | proven prototype0 | hand0 |
+|---|---|---|---|---|---|---|---|---|
+| current | 341.0 | 334.2 | 341.1 | 336.6 | 334.0 | 11.2 | 7.1 | 7.0 |
+| attach | 391.1 | 379.1 | 355.1 | 377.9 | 303.3 | 15.0 | 8.0 | 5.0 |
+
+`lo` was measured in a separate interleaved run with `ng` beside it, on current at S = 500: `ng` 334.3, `nglo` 327.2,
+and base 341.0 against `lo` 332.1.
+
+Shares per call:
+- Length guard: -6.8 on current and -12.0 on attach (`ng`); in the floors, 11-15 -> 6-8.
+- `out` store + reload: -7..-9 on current (`lo`).
+- attach's id copy: -36 (`noid`).
+- The proven prototype (twins hand-added to the T5c output) matches the shipped `--proven-entries` result in P18b.3.
+
+### P18b.2 The three causes
+
+1. **2^40 guards, fixed by proof.** New opt-in `--proven-entries` (Rust backend, both compilers, SPEC.md "Length
+   bound at host boundaries"). The generated file adds two types, `PruvArr<T>` (`#[repr(transparent)]` over `[T]`)
+   and `PruvStr`. Each has a private field in a private module, and its only constructors (`new`, `new_mut`) run the
+   T0 check with T0's message. `get` / `get_mut` pass the bound to LLVM through `assert_unchecked`.
+   - `pruv_proven::f` is a twin of each checked entry `f`. It takes these types, rebinds them to slices, then runs
+     the same representation checks, `requires` and body.
+   - The checked entries are byte-identical with and without the flag. Without the flag the whole output is
+     unchanged: root_m4 and m7 root are identical to the a6fb98e compiler's output.
+   - Safe host code cannot build an unchecked `PruvArr`. `tests/l3/abi/check_proven_entries.py` asserts this through
+     E0616 on `include!` at crate root, and also checks the 2^40 and 2^40+1 boundary and the `requires` panic. So
+     T0's guarantee holds for untrusted callers: they pay the check once when they wrap the resident state, not on
+     every call.
+   - `raw_entries = "crate"` is not used.
+   - `driver_m7.rs`'s fair lane now wraps `st`/`out`/`bv`/`fx` once (`FBuf`) and the keys once (`FArgs`).
+   - `run_m7.py` compiles with `--proven-entries`. The step lane, `q`, and the checked entries are unchanged.
+2. **`out` store + reload: no fix in this row; it needs a new ABI → P18c.**
+   - Hand: `World::current` is out of line and returns `Option<&Budget>` in x0, which costs 1 `str` (black_box).
+   - Pruv: `current` inlines into the loop, and the hit tail writes the host's `out`
+     (`stp x9,x14,[x27]; str x15,[x27,#0x10]` = `[4, n, off]`). The host then reloads `out[0]` (`ldr x9,[x27]`).
+   - That is 2 stores + 1 load against hand's 1 store, about +3 per call. The empty-body floors show it too: the
+     emptied body still writes `out[0] = 0`, which accounts for the +1.4..+3.1 left in pv0 - hand0 on
+     attach/closereopen/reopenmiss.
+   - `out` is `&mut [i64]` owned by the host, so the stores are visible to the host and LLVM must keep them. Pruv
+     cannot emit a register result under the current entry ABI: every array result goes through a host buffer.
+   - Fix: an entry form that returns a small fixed-shape result by value (registers). That is a language/ABI change,
+     so it is opened as P18c, not done here.
+3. **attach's id copy: needs `bud_lifecycle.pruv`, so it is not done here (P13e owns that file).**
+   - `put_key` copies the stored budget id into `out`. Hand returns `Res::Ref` (a pointer into the store).
+   - `noid` measures -36 per call. A layout that returns a view (`[il, off+25]`, as `noid` does) is a `.pruv` change in
+     the entry layout P13e owns. It is reported to P13e.
+
+### P18b.3 Fair lane before / after (instructions per call, median [min..max] of 7)
+
+| item | S | T5c base | P18b | hand16 | base/hand | P18b/hand | P18b vs hand overlap |
+|---|---|---|---|---|---|---|---|
+| isHalted | S | 335.6 | 329.5 [313.4..334.4] | 339.0 [330.4..384.2] | 0.99 | 0.97 | yes |
+| isHalted | M | 336.2 | 327.4 [326.5..333.3] | 339.5 [337.8..341.7] | 0.99 | 0.96 | no (below) |
+| current | S | 341.7 | 335.2 [328.6..337.2] | 335.8 [331.3..349.5] | 1.02 | 1.00 | yes |
+| current | M | 340.6 | 336.2 [332.8..337.9] | 333.9 [332.5..346.5] | 1.02 | 1.01 | yes |
+| attach | S | 391.2 | 377.1 [376.1..380.3] | 314.9 [301.6..398.8] | 1.24 | 1.20 | yes (hand outlier) |
+| attach | M | 390.5 | 375.5 [367.4..378.0] | 303.3 [295.9..305.4] | 1.29 | 1.24 | no (above) |
+| closereopen | S | 523.4 | 522.3 [520.8..529.7] | 444.8 [440.5..451.6] | 1.18 | 1.17 | no (above) |
+| closereopen | M | 523.1 | 522.1 [520.5..523.3] | 444.3 [443.8..445.8] | 1.18 | 1.18 | no (above) |
+| reopenmiss | S | 390.2 | 386.1 [384.2..386.7] | 335.5 [325.5..399.5] | 1.16 | 1.15 | yes (hand outlier) |
+| reopenmiss | M | 391.0 | 385.7 [384.5..388.5] | 336.7 [332.3..338.4] | 1.16 | 1.15 | no (above) |
+
+Floors (bodies emptied), S / M:
+
+| item | base0 | P18b0 | hand0 |
+|---|---|---|---|
+| isHalted | 11.6 / 11.5 | 6.0 / 5.5 | 6.3 / 6.1 |
+| current | 12.0 / 11.8 | 5.7 / 6.5 | 7.4 / 7.0 |
+| attach | 14.8 / 15.8 | 8.4 / 7.4 | 5.8 / 4.3 |
+| closereopen | 11.2 / 10.8 | 6.4 / 6.4 | 4.3 / 4.6 |
+| reopenmiss | 12.8 / 12.1 | 8.3 / 8.4 | 6.9 / 6.6 |
+
+Body share, (P18b - P18b0) - (hand - hand0), S / M:
+- isHalted: -9.2 / -11.5.
+- current: +1.1 / +2.8.
+- attach: +59.6 / +69.1.
+- closereopen: +75.4 / +76.0.
+- reopenmiss: +49.2 / +47.2.
+
+Cycles per call in this run are too noisy to rank, because the [min..max] ranges of all lanes overlap. Medians (S / M):
+
+| lane | isHalted | current | attach | closereopen | reopenmiss |
+|---|---|---|---|---|---|
+| base | 34.3 / 37.1 | 34.9 / 36.9 | 44.6 / 47.7 | 66.2 / 60.6 | 38.7 / 48.2 |
+| P18b | 38.5 / 36.5 | 38.0 / 38.0 | 40.1 / 38.0 | 62.1 / 60.6 | 47.6 / 39.2 |
+| hand | 48.5 / 52.3 | 55.0 / 49.9 | 55.0 / 55.4 | 73.7 / 76.2 | 49.7 / 45.6 |
+
+Size and memory:
+- Driver `__text`: 413,244 B, against the T5c base of 413,756 B (hand 311,484 B).
+- Peak footprint: ranges overlap with base in every cell (the medians differ by at most one 16 KiB page either way).
+- M4 is not worse: its generated Rust is byte-identical, because the flag is off there.
+
+### P18b.4 Peak RSS attribution (P18b vs hand16, both drivers keep two worlds alive)
+
+| | S = 100 | S = 500 |
+|---|---|---|
+| gap (median) | about +330 KB | about +620 KB |
+| Pruv `st` after setup | 32,768 words (256 KiB) x 2 worlds | 131,072 words (1 MiB) x 2 worlds |
+
+- The linear fit gives about 0.74 KB per session proportional plus about 254 KB fixed.
+- The proportional share is the store headroom. `bud_store::need` keeps `N >= 2 * len` with power-of-two growth, so
+  `st` is up to 4x its live words. That is `bud_store.pruv` (P13e), not a compiler or host share.
+- The fixed share is not split here (larger `__text`/`__const` and the bud_facts rlib are candidates). The emptied-body
+  floors carry the same gap, so it does not come from the body paths measured above.
+
+### P18b.5 What is still above 1.0x, and where it goes
+
+- **current M (1.01, overlapping):** the `out` store + reload, about +3 per call (P18b.2 item 2) → P18c.
+- **attach (1.20 / 1.24):**
+  - entry share +2.6 / +3.1 over hand0: the floor's `out[0]` write → P18c;
+  - body +60 / +69: the id copy, about 36 → P13e (`bud_lifecycle.pruv`); the rest is entry re-validation and the
+    find_w probe → P13h.
+- **closereopen (1.17 / 1.18):**
+  - entry +2.1 / +1.8 → P18c;
+  - body +75 / +76: the reopen cold tail → T5b; maybe_close header re-validation and find_w twice per pair → P13h.
+- **reopenmiss (1.15):**
+  - entry +1.4 / +1.8 → P18c;
+  - body +49 / +47: the reopen slow-tail frame → T5b; re-validation → P13h.
+
+New row P18c: a by-value small-result entry (fixed-shape result returned in registers instead of through a host
+`&mut [i64]`), in both compilers, with the `--proven-entries` twins as the host surface.
+
+### P18b.6 Gates, audit and delegations
+
+Gates (rerun after the audit fixes: cargo test, diff_rust, gen_shared, check_generated, g8_frontend, l3_abi,
+mutant_quiet; the rest ran on e76cd78, and the fixes only change the accessor path `::core` to `::std`): release build, `cargo test --release` 123/0; `diff_rust --fuzz-count 20` with this
+checkout's `pruv-rust-dump`: all same; `gen_shared --check` rc 0; `check_generated` ok; `run_all --only g8_frontend`
+39/39 and `--only l3_abi` 3/3 on both compilers; the 7 budget roots ok on rs and py with identical outputs; M7 `q`
+on rs then py: 300 cases, fail 0; `mutant_quiet.py`: unmutated tree passes, all three mutants caught; full Python
+suite `run_all --compiler py --backend both`: 4502/4502. `tests/run_all_rows.txt` gains one row (l3_abi
+proven_entries).
+
+Audit (Codex gpt-6.2-astra ultra), required findings:
+
+1. `::core::hint::assert_unchecked` in the `PruvArr` / `PruvStr` accessors did not resolve under rustc's default
+   edition (E0433). Fixed: both compilers emit `::std::hint::assert_unchecked`; the proven-entries test now builds
+   its default-flags host without `--edition`.
+2. `mutant_quiet.py` built the new driver without `--proven-entries`. Fixed: it passes the flag; `run_m7.py`'s
+   default Rust compiler is now this checkout's `pruvc-rs/target/release/pruvc`.
+3. A crate-root `include!` reaches the private, safe, unchecked `f__pruv_body` functions directly. This predates
+   P18b (a6fb98e) and P18b does not widen it; fixing it moves every body into a private child module, which changes
+   every generated file. Not fixed here: SPEC now states the guarantee covers `#[path] mod` hosts, and the fix is
+   left for a new row.
+
+Optional findings taken: SPEC separates the lexer's reserved `pruv_` names from the `PruvArr` / `PruvStr` clash.
+The confirm audit (same model) found 1 and 2 resolved and the include! scope accurate, and one required SPEC fix:
+the clash is on the generated Rust name (a private or specialized `PruvArr` is mangled and does not clash), now
+stated in SPEC.
+Not taken: moving the `FBuf` checks out of the timed region (one check per timed call, not per iteration).
+
+| work | engine / model | mode |
+|---|---|---|
+| `--proven-entries` in both compilers + test | Codex gpt-6.2-sol (Codex 2) | write, applied by hand |
+| audit | Codex gpt-6.2-astra ultra (Codex 2) | review |
+| full Python suite | shell command | command |
+| proof and encoding choice, isolating and final measurement, SPEC and this appendix | Claude Opus 5.5 | direct |

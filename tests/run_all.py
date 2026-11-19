@@ -2,10 +2,11 @@
 python tests/run_all.py [--only must_reject|examples|runtime|g3_proof|g6_frontend|g6_proof|g9_frontend|g9_proof|g4_frontend|g4b_frontend|g4b_proof|g4_proof|g5_frontend|g5_reject|g5_proof|g10_frontend|g10_proof|g10_proc_frontend|g10_proc_proof|g10_async_frontend|g10_async_proof|g10_net_frontend|g10_net_proof|g7_frontend|g7_proof|s5_frontend|s5_proof|g8_frontend|g8_proof|l3_frontend|l3_proof|l3_abi|spec_trace|check_generated|shim_edges]
                         [--backend rust|llvm|both]
 
-group l3_abi (L3 P09; one backend null row): tests/l3/abi/check_raw_entries.py WORK --rs|--py PATH checks manifest
+group l3_abi (backend null rows): tests/l3/abi/check_raw_entries.py WORK --rs|--py PATH checks manifest
 raw_entries ("crate" / "unsafe"): text facts, rustc visibility / unsafe / privacy errors, panic poisoning of
 pruv_raw::PruvStore. The l3_p09_* roots are ordinary must_reject rows. Row l3_abi/c_handle (L3 P10):
 tests/l3/abi/check_c_handle.py WORK --rs|--py PATH checks raw_entries "c" (pruv_c text, rs == py, C probe c_probe.c).
+Row l3_abi/proven_entries (L3 P18b) compares --proven-entries output and runs optimized Rust host probes.
 
 group spec_trace (T1; one backend null row): tests/spec_trace.py --only-py|--only-rs --py|--rs PATH checks that
 every SPEC.md rule ID has passing accept/reject tests under tests/spec and every diagnostic code is in the SPEC.md table.
@@ -530,24 +531,21 @@ def g4b_frontend_jobs():
 
 
 def l3_abi_jobs():
-    """L3 P09: tests/l3/abi/check_raw_entries.py (manifest raw_entries: visibility, pruv_raw, panic poisoning), one row;
-    backend null."""
-    def raw_checks():
-        c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/l3/abi/check_raw_entries.py"), WORK] +
+    """L3 ABI probes for raw entries, C handles and checked-length Rust entries."""
+    def abi_check(name):
+        c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/l3/abi", name), WORK] +
                            ["--rs" if _driver().kind == "rs" else "--py", _driver().path],
                            capture_output=True, text=True, timeout=1800)
         return c.returncode == 0, c.stdout + c.stderr
-    def c_checks():
-        c = subprocess.run([CD.pinned_python(), os.path.join(ROOT, "tests/l3/abi/check_c_handle.py"), WORK] +
-                           ["--rs" if _driver().kind == "rs" else "--py", _driver().path],
-                           capture_output=True, text=True, timeout=1800)
-        return c.returncode == 0, c.stdout + c.stderr
-    return [safe("l3_abi/raw_entries", raw_checks,
+    return [safe("l3_abi/raw_entries", lambda: abi_check("check_raw_entries.py"),
                  {"sample": "tests/l3/abi/check_raw_entries.py", "backend": None, "flags": [],
                   "mode": "raw_entries", "group": "l3_abi"}),
-            safe("l3_abi/c_handle", c_checks,
+            safe("l3_abi/c_handle", lambda: abi_check("check_c_handle.py"),
                  {"sample": "tests/l3/abi/check_c_handle.py", "backend": None, "flags": [],
-                  "mode": "c_handle", "group": "l3_abi"})]
+                  "mode": "c_handle", "group": "l3_abi"}),
+            safe("l3_abi/proven_entries", lambda: abi_check("check_proven_entries.py"),
+                 {"sample": "tests/l3/abi/check_proven_entries.py", "backend": None,
+                  "flags": ["--proven-entries"], "mode": "proven_entries", "group": "l3_abi"})]
 
 
 def g4b_proof_jobs():

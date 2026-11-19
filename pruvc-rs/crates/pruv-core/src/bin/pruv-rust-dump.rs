@@ -1,4 +1,4 @@
-//! Usage: pruv-rust-dump [--no-verify] [--trust-callers] [--budget N] [--manifest PATH] FILE...
+//! Usage: pruv-rust-dump [--no-verify] [--trust-callers] [--proven-entries] [--budget N] [--manifest PATH] FILE...
 //! Writes exactly one line (UTF-8, ending with \n) per file to stdout, in order.
 //! G4b: with --manifest PATH (applies to every FILE of the call) the package graph is loaded first; a manifest error is the
 //! line {"error": <diag>} for every FILE, otherwise each FILE is loaded with load_program_with_manifest.
@@ -11,6 +11,7 @@ use std::io::Write;
 struct Opts {
     verified: bool,
     trust_callers: bool,
+    proven_entries: bool,
     budget: u64,
     manifest: Option<std::ffi::OsString>,
     files: Vec<std::ffi::OsString>,
@@ -63,8 +64,10 @@ fn line_for(path: &std::ffi::OsStr, o: &Opts, pkgs: &Pkgs) -> String {
     // like Python gen_rust (default foreign checks, no externs; a G6 program is lowered, the manifest is not part of the
     // dump): a generic (or explicit-mode) program is specialized first (a specialization limit is a diagnostic)
     pruv_core::check::opaque_inline(&mut prog); // P13o: like Python gen_rust / gen_llvm
-    match pruv_core::codegen::gen_rust_any_g4(&prog, g4.as_ref(), o.verified, o.trust_callers, o.budget) {
-        Ok(rs) => obj1("rs", Json::Str(rs)),
+    match pruv_core::codegen::gen_rust_ex_g4_with_entries(
+        &prog, g4.as_ref(), o.verified, o.trust_callers, o.budget, "requires", &[], o.proven_entries,
+    ) {
+        Ok((rs, _)) => obj1("rs", Json::Str(rs)),
         Err(pruv_core::codegen::GenError::Diag(e)) => obj1("error", e.to_json_value()),
         Err(pruv_core::codegen::GenError::Msg(msg)) => obj1("internal", Json::Str(msg)),
     }
@@ -90,17 +93,18 @@ fn work(o: Opts) -> bool {
 }
 
 fn usage() -> ! {
-    eprintln!("usage: pruv-rust-dump [--no-verify] [--trust-callers] [--budget N] [--manifest PATH] FILE...");
+    eprintln!("usage: pruv-rust-dump [--no-verify] [--trust-callers] [--proven-entries] [--budget N] [--manifest PATH] FILE...");
     std::process::exit(2);
 }
 
 fn main() {
-    let mut o = Opts { verified: true, trust_callers: false, budget: 1 << 30, manifest: None, files: Vec::new() };
+    let mut o = Opts { verified: true, trust_callers: false, proven_entries: false, budget: 1 << 30, manifest: None, files: Vec::new() };
     let mut it = std::env::args_os().skip(1);
     while let Some(a) = it.next() {
         match a.to_str() {
             Some("--no-verify") => o.verified = false,
             Some("--trust-callers") => o.trust_callers = true,
+            Some("--proven-entries") => o.proven_entries = true,
             Some("--budget") => match it.next().and_then(|v| v.to_str().and_then(|s| s.parse::<u64>().ok())) {
                 Some(n) => o.budget = n,
                 None => usage(),
