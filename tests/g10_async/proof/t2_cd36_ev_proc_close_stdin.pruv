@@ -1,0 +1,8 @@
+// TIDY 4.11 accept twin of must_reject/cd36_ev_proc_close_stdin: the same call on a process slot with stdin open
+// meets the precondition.
+fn ok(take l: Loop, a: i64) -> Loop ! async, proc, alloc
+  requires ev_ok(l)
+  requires 0 <= a && a < ev_cap(l) && ev_kind(l, a) == 3 && ev_write_open(l, a)
+{
+  return ev_proc_close_stdin(move l, a);
+}

@@ -1,0 +1,27 @@
+// TIDY 4.11 accept twin of must_reject/cd32_net_error: net_error is 0 exactly on an ok socket, a failed connect
+// reports 1 or 2 and a failed accept reports 5.
+fn zero_iff_ok(s: Socket) -> bool
+  ensures result == net_ok(s)
+{
+  return net_error(s) == 0;
+}
+
+fn connect_code(host: str, port: i64) -> Result<i64> ! net, alloc
+  requires 1 <= port && port <= 65535
+{
+  let s: Socket = net_connect(host, port);
+  if !net_ok(s) {
+    assert net_error(s) == 1 || net_error(s) == 2;
+  }
+  return net_close(move s);
+}
+
+fn accept_code(l: Listener) -> Result<i64> ! net, alloc
+  requires net_listener_ok(l)
+{
+  let s: Socket = net_accept(l);
+  if !net_ok(s) {
+    assert net_error(s) == 5;
+  }
+  return net_close(move s);
+}

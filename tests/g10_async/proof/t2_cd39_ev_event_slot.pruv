@@ -1,0 +1,15 @@
+// TIDY 4.11 accept twin of must_reject/cd39_ev_event_slot: ev_event_slot is -1 right after ev_new(1) and stays -1
+// when ev_add_timer moves ev_last to 0.
+fn fresh() -> Loop ! async, alloc
+  ensures ev_event_slot(result) == -1
+{
+  return ev_new(1);
+}
+
+fn after_timer() -> Loop ! async, net, proc, alloc
+  ensures ev_last(result) == 0
+  ensures ev_event_slot(result) == -1
+{
+  let l: Loop = ev_new(1);
+  return ev_add_timer(move l, 5);
+}

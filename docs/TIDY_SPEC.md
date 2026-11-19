@@ -190,6 +190,16 @@ by byte-identical output and run by group, with the full test suite once before 
     operation, so they check contract consistency only. Add paired accept tests on independent values
     (for example `ev_event_slot == -1` right after `ev_new(1)`) so a wrong state-field link is caught. Also run
     the satisfied-precondition accept twin for `ev_proc_write`, `ev_proc_close_stdin`, `ev_proc_wait`.
+    - Done: 16 accept tests `t2_cdNN_*.pruv` in the g6, g10, g10_proc, g10_net and g10_async proof groups.
+      Each was checked against one scratch contract mutation (never committed), and every test failed under
+      its mutation on both compilers. The mutations covered three kinds of wrong link: an observer reading
+      the wrong state field, `map_new` size 1, `map_get` skipping the domain check, `string_to_str` byte
+      and length, and `proc_args_len` returning 0; the `ev_proc_*` slot kind changed from 3 to 1; and for
+      file handles, the open/create `ensures` linking `ok` to the other flag. Limits: a file observer
+      swapped to the other field cannot be seen, because file fields are only defined through those
+      observers in the catalog `ensures`, so the `ensures` link is the testable one. An `ev_exit` →
+      `error` swap is not caught by any accept test, because `exit` is provably nonzero only where `ev_ok`
+      also holds; `t2_cd40` catches `exit` → `ev_slot`/`last` instead.
 
 12. **T4 follow-up (queued at the T4 merge, 4b8be7f).** T4 shared four tables (`pruvc/data/`: inline policy,
     monomorphization limits, builtin type names, G6 shim edges) and derived the Python bit tables from

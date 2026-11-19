@@ -1,0 +1,11 @@
+// TIDY 4.11 accept twin of must_reject/cd25_file_writable: a created file is writable exactly when it opened; a
+// file opened for reading is never writable.
+fn created(path: str) -> bool ! fs
+  ensures true
+{
+  let f: File = file_create(path);
+  assert file_writable(f) == file_ok(f);
+  let g: File = file_open_read(path);
+  assert !file_writable(g);
+  return file_writable(f);
+}

@@ -1,0 +1,14 @@
+// TIDY 4.11 accept twin of must_reject/cd33_net_write_open: a connected socket is write-open, and a socket after
+// net_shutdown_write is not.
+fn open_then_shut(host: str, port: i64) -> Result<i64> ! net, alloc
+  requires 1 <= port && port <= 65535
+{
+  let mut s: Socket = net_connect(host, port);
+  if !net_ok(s) {
+    return net_close(move s);
+  }
+  assert net_write_open(s);
+  s = net_shutdown_write(move s);
+  assert !net_write_open(s);
+  return net_close(move s);
+}

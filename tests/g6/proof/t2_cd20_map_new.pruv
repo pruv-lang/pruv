@@ -1,0 +1,7 @@
+// TIDY 4.11 accept twin of must_reject/cd20_map_new: map_new pinned to independent values (size 0, no key present).
+fn fresh() -> HashMap<i64, i64> ! alloc
+  ensures len(result) == 0
+  ensures !is_some(map_lookup::<i64, i64>(result, 0)) && !is_some(map_lookup::<i64, i64>(result, 9))
+{
+  return map_new::<i64, i64>();
+}
