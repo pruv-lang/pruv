@@ -202,6 +202,47 @@ pub fn eb(st: [i64], e: i64) -> i64
   return a;
 }
 
+// ---- value record accessors ----
+// The value words of an entry, addressed relative to one base x: x + 0 child count, x + 1 blob off, x + 2 blob len,
+// x + 3 .. x + 6 values v0..v3 (fields 11..17). Code outside bud_store reads and writes these words only through xa,
+// xb and xbm, never through fixed entry offsets, so the entry layout can change behind them.
+
+// Total base: the address of the child-count word of entry e when e is inside the entry capacity, else -1. Reads go
+// through ent_u16::rd (0 outside st), so the base needs no range proof. -1 also when e has no value record.
+pub fn xa(st: [i64], e: i64) -> i64
+  ensures result >= -1 && result <= 1099511627776
+{
+  let a: i64 = ea(st, e, 11);
+  return a;
+}
+
+// Proven base: as xa, but -1 unless the seven value words lie in st past the 16 header words, so callers index
+// st[x + k] (k in 0..7) directly. Read-only callers use it; a missing value record reads as all defaults (-1 here).
+pub fn xb(st: [i64], e: i64) -> i64
+  ensures result == -1 || (16 <= result && result + 7 <= len(st))
+{
+  let a: i64 = eb(st, e);
+  if a < 0 { return -1; }
+  return a + 11;
+}
+
+// Proven base for writing: as xb, and creates the value record of e when it has none (defaults), so a write through
+// it is never lost. Keeps the length and the store shape; header word 5 and 6 (which the bases read) do not change.
+pub fn xbm(inout st: [i64], e: i64) -> i64
+  ensures len(st) == len(old(st))
+  ensures len(old(st)) >= 15 ==> hdr_same(st, old(st), -1)
+  ensures kept(st, old(st))
+  ensures result == -1 || (16 <= result && result + 7 <= len(st))
+{
+  reveal dyn_ok;
+  return xb(st, e);
+}
+
+// Address of field f of entry e; -1 if e or f is out of range (tests that corrupt one field use it).
+pub fn field_at(st: [i64], e: i64, f: i64) -> i64
+  ensures result >= -1 && result <= 1099511627776
+{ return ea(st, e, f); }
+
 // Field f of entry e; -1 if e or f is out of range (so a bad link reads as "none").
 pub fn ef(st: [i64], e: i64, f: i64) -> i64
 {

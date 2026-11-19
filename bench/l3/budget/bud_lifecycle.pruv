@@ -75,44 +75,44 @@ pub fn str_words(i: i64, l: i64) -> i64
   return c32(l);
 }
 
-// Field address of session entry se (bud_store::field_addr), -1 if out of range. The blob offset is at a + 12 and
-// its length at a + 13; callers read both through one address instead of one field_addr per word.
+// Value-record base of session entry se (bud_store::xa), -1 if out of range. The blob offset is at a + 1 and
+// its length at a + 2; callers read both through one address instead of one accessor call per word.
 fn entry_addr(st: [i64], se: i64) -> i64
   ensures result >= -1 && result <= 1099511627776
 {
   if se < 0 { return -1; }
-  return crate::bud_store::field_addr(st, se);
+  return crate::bud_store::xa(st, se);
 }
 
 fn at_off(st: [i64], a: i64) -> i64
   ensures 0 <= result && result <= 1099511627776
 {
   if a < 0 || a > 1099511627776 { return 0; }
-  return c40(rd(st, a + 12));
+  return c40(rd(st, a + 1));
 }
 
 fn at_n(st: [i64], a: i64) -> i64
   ensures 0 <= result && result <= 1099511627776
 {
   if a < 0 || a > 1099511627776 { return 0; }
-  return c40(rd(st, a + 13));
+  return c40(rd(st, a + 2));
 }
 
 // Arena offset and length of the session's blob.
 pub fn blob_at(st: [i64], se: i64) -> i64
   ensures 0 <= result && result <= 1099511627776
 {
-  let a: i64 = crate::bud_store::field_addr(st, se);
+  let a: i64 = crate::bud_store::xa(st, se);
   if a < 0 { return 0; }
-  return c40(rd(st, a + 12));
+  return c40(rd(st, a + 1));
 }
 
 pub fn blob_n(st: [i64], se: i64) -> i64
   ensures 0 <= result && result <= 1099511627776
 {
-  let a: i64 = crate::bud_store::field_addr(st, se);
+  let a: i64 = crate::bud_store::xa(st, se);
   if a < 0 { return 0; }
-  return c40(rd(st, a + 13));
+  return c40(rd(st, a + 2));
 }
 
 // State word of the session's budget, -1 without a budget (or a blob too short to be a record).
@@ -166,19 +166,19 @@ fn id_at(st: [i64], off: i64, n: i64, k: [i64], ks: i64, kn: i64) -> bool
   return id_is(st, off, k, ks, kn);
 }
 
-// CURRENT(ref) on session entry se: the entry's field address (bud_store::eb, so fields 0..19 lie in st) when the
+// CURRENT(ref) on session entry se: the entry's value-record base (bud_store::xb, so its words 0..6 lie in st) when the
 // session has a budget (state 0..2 in a blob of >= 30 words) whose id is (bk, bs, bn); -1 when it has none or the id
 // differs; -2 when the blob span st[off .. off + n) does not lie in st (a store that breaks I1; never for an admitted
 // store). After one span check every header and id word is read by proven direct indexing; the state and identity
 // checks stay dynamic.
 fn found_at(st: [i64], se: i64, bk: [i64], bs: i64, bn: i64) -> i64
-  ensures result == -1 || result == -2 || (16 <= result && result + 20 <= len(st) && 0 <= st[result + 12] && 30 <= st[result + 13] && st[result + 12] <= len(st) - st[result + 13] && 0 <= st[st[result + 12]] && st[st[result + 12]] <= 2)
+  ensures result == -1 || result == -2 || (16 <= result && result + 7 <= len(st) && 0 <= st[result + 1] && 30 <= st[result + 2] && st[result + 1] <= len(st) - st[result + 2] && 0 <= st[st[result + 1]] && st[st[result + 1]] <= 2)
 {
   if se < 0 { return -1; }
-  let a: i64 = crate::bud_store::eb(st, se);
+  let a: i64 = crate::bud_store::xb(st, se);
   if a < 0 { return -1; }
-  let off: i64 = st[a + 12];
-  let n: i64 = st[a + 13];
+  let off: i64 = st[a + 1];
+  let n: i64 = st[a + 2];
   if n < 30 { return -1; }
   if off < 0 || off > len(st) - n { return -2; }
   if !id_at(st, off, n, bk, bs, bn) { return -1; }
@@ -199,7 +199,7 @@ pub fn current_entry(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64,
 
 // CURRENT(ref): found_at of the session's entry. One map lookup, one address computation.
 fn current_at(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64) -> i64
-  ensures result == -1 || result == -2 || (16 <= result && result + 20 <= len(st) && 0 <= st[result + 12] && 30 <= st[result + 13] && st[result + 12] <= len(st) - st[result + 13] && 0 <= st[st[result + 12]] && st[st[result + 12]] <= 2)
+  ensures result == -1 || result == -2 || (16 <= result && result + 7 <= len(st) && 0 <= st[result + 1] && 30 <= st[result + 2] && st[result + 1] <= len(st) - st[result + 2] && 0 <= st[st[result + 1]] && st[st[result + 1]] <= 2)
 { return found_at(st, session_of(st, sk, ss, sn), bk, bs, bn); }
 
 // Clock entry of the budget whose id is st[s..s+n), -1 without one. An empty clock map (root 1 has no children)
@@ -435,8 +435,8 @@ pub fn current(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i
   }
   if len(out) < 3 { return 3; }
   out[0] = 4;
-  out[1] = st[a + 13];
-  out[2] = st[a + 12];
+  out[1] = st[a + 2];
+  out[2] = st[a + 1];
   return 0;
 }
 
@@ -446,7 +446,7 @@ pub fn is_halted(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn:
   if len(out) < 1 { return 3; }
   let a: i64 = current_at(st, sk, ss, sn, bk, bs, bn);
   let mut r: i64 = 1;
-  if a >= 0 && st[st[a + 12]] == 1 { r = 2; }
+  if a >= 0 && st[st[a + 1]] == 1 { r = 2; }
   out[0] = r;
   return 0;
 }
@@ -533,10 +533,10 @@ pub fn attach(inout st: [i64], sk: [i64], ss: i64, sn: i64, origin: i64, size: i
   // The ref path reads the stored record in place; only OPEN copies it. After one span check (P19, as found_at)
   // the state and id-length words are read by proven direct indexing; a span outside st (a store that breaks I1,
   // never for an admitted store) is invalid.
-  let a: i64 = crate::bud_store::eb(st, se);
+  let a: i64 = crate::bud_store::xb(st, se);
   if a < 0 { return 2; }
-  let off: i64 = st[a + 12];
-  let n: i64 = st[a + 13];
+  let off: i64 = st[a + 1];
+  let n: i64 = st[a + 2];
   let mut s: i64 = 0;
   if n >= 1 {
     if off < 0 || off > len(st) - n { return 2; }
@@ -600,12 +600,12 @@ pub fn replace(inout st: [i64], sk: [i64], ss: i64, sn: i64, origin: i64, size: 
   if se < 0 { return 2; }
   // State and old id length by proven direct indexing after one span check (P19, as attach); a span outside st
   // reads as not halted, as the total reads did.
-  let a: i64 = crate::bud_store::eb(st, se);
+  let a: i64 = crate::bud_store::xb(st, se);
   if a < 0 {
     return attach(inout st, sk, ss, sn, o, size, unit, ut, uk, us, un, now, inout fx, inout out);
   }
-  let n: i64 = st[a + 13];
-  let o0: i64 = st[a + 12];
+  let n: i64 = st[a + 2];
+  let o0: i64 = st[a + 1];
   if n < 30 || o0 < 0 || o0 > len(st) - n || st[o0] != 1 {
     return attach(inout st, sk, ss, sn, o, size, unit, ut, uk, us, un, now, inout fx, inout out);
   }
@@ -667,9 +667,9 @@ pub fn reopen(inout st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, 
     crate::ent_u16::wr(inout out, 0, 1);
     return 0;
   }
-  // current_at proved the record span st[off .. off + st[a + 13]) in st with st[a + 13] >= 30: header reads and
+  // current_at proved the record span st[off .. off + st[a + 2]) in st with st[a + 2] >= 30: header reads and
   // writes are direct.
-  let off: i64 = st[a + 12];
+  let off: i64 = st[a + 1];
   if st[off] != 2 || st[off + 18] != 1 {
     out[0] = 1;
     return 0;

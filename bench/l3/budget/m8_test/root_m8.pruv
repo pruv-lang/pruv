@@ -47,17 +47,17 @@ fn cur_off(st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64) 
 {
   let se: i64 = crate::bud_map::find_w(st, 0, sk, ss, sn);
   if se < 0 { return -1; }
-  let a: i64 = crate::bud_store::field_addr(st, se);
+  let a: i64 = crate::bud_store::xa(st, se);
   if a < 0 { return -1; }
   let mut n: i64 = 0;
   let mut off: i64 = 0;
-  if a + 14 <= len(st) {
-    // fields 12, 13 in range: read directly (rd gives the same words)
-    n = crate::bud_store::c40(st[a + 13]);
-    off = crate::bud_store::c40(st[a + 12]);
+  if a + 3 <= len(st) {
+    // value-record words 1, 2 (blob off, len) in range: read directly (rd gives the same words)
+    n = crate::bud_store::c40(st[a + 2]);
+    off = crate::bud_store::c40(st[a + 1]);
   } else {
-    n = crate::bud_store::c40(crate::ent_u16::rd(st, a + 13));
-    off = crate::bud_store::c40(crate::ent_u16::rd(st, a + 12));
+    n = crate::bud_store::c40(crate::ent_u16::rd(st, a + 2));
+    off = crate::bud_store::c40(crate::ent_u16::rd(st, a + 1));
   }
   // bn > 2^30 never matches: t_put rejects such a record, so no stored record has word 14 above 2^30.
   if bn < 0 || bn > 1073741824 || bs < 0 || bs > 1099511627776 { return -1; }
