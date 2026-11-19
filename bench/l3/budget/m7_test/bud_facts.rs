@@ -171,3 +171,35 @@ pub fn running_ids(k: &[i64], ks: i64, kn: i64, bk: &[i64], bs: i64, bn: i64, fx
     });
     a
 }
+
+// P30 synchronous unit fact. The comparison lane enables logging.
+thread_local! {
+    static UNIT: RefCell<Vec<i64>> = const { RefCell::new(Vec::new()) };
+    static UNIT_LOG: RefCell<Option<Vec<(i64, Vec<i64>)>>> = const { RefCell::new(None) };
+}
+
+pub fn set_unit(answer: &[i64]) {
+    UNIT.with(|u| {
+        let mut u = u.borrow_mut();
+        u.clear();
+        u.extend_from_slice(answer);
+    });
+}
+
+pub fn record_unit() {
+    UNIT_LOG.with(|log| *log.borrow_mut() = Some(Vec::new()));
+}
+
+pub fn take_unit_log() -> Vec<(i64, Vec<i64>)> {
+    UNIT_LOG.with(|log| log.borrow_mut().as_mut().map(std::mem::take).unwrap_or_default())
+}
+
+pub fn unit(fxn: i64) -> Vec<i64> {
+    let answer = UNIT.with(|u| u.borrow().clone());
+    UNIT_LOG.with(|log| {
+        if let Some(log) = log.borrow_mut().as_mut() {
+            log.push((fxn, answer.clone()));
+        }
+    });
+    answer
+}
