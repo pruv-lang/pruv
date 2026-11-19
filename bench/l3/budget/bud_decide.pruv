@@ -1,0 +1,179 @@
+// Budget raise (B:410–446).
+trusted rust fn unit(fxn: i64) -> Vec<i64> ! alloc, io
+  ensures true
+  = "::bud_facts::unit";
+
+pub fn unit_ok(v: Vec<i64>) -> bool
+  ensures result ==> len(v) == 6
+{
+  if len(v) != 6 { return false; }
+  if vec_get::<i64>(v, 0) != 0 { return false; }
+  let mut i: i64 = 1;
+  while i < 6
+    invariant 1 <= i && i <= 6 && len(v) == 6
+    decreases 6 - i
+  {
+    let value: i64 = vec_get::<i64>(v, i);
+    if value < 0 || value > 9007199254740991 { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+fn rd(a: [i64], i: i64) -> i64
+{ return crate::ent_u16::rd(a, i); }
+
+fn wr(inout a: [i64], i: i64, v: i64) -> ()
+{ crate::ent_u16::wr(inout a, i, v); }
+
+fn emit(inout fx: [i64], tag: i64) -> ()
+{
+  let n: i64 = crate::bud_store::c40(rd(fx, 0));
+  wr(inout fx, n + 1, tag);
+  wr(inout fx, 0, n + 1);
+}
+
+fn raise_unlimited(inout st: [i64], off: i64, ce: i64, inout fx: [i64], inout out: [i64]) -> i64
+  requires 0 <= off && off <= 1099511627776
+{
+  if rd(st, off + 2) == 1 {
+    wr(inout out, 0, 1);
+    return 0;
+  }
+  let armed: bool = ce >= 0 && crate::bud_store::ef(st, ce, 16) == 1;
+  let mut words: i64 = 2;
+  if armed { words = 3; }
+  if crate::bud_store::c40(rd(fx, 0)) + words > len(fx) { return 3; }
+  wr(inout st, off + 2, 1);
+  if armed {
+    // bud_clock has no disarm-only operation. Field 16 is armed; the since fields stay intact.
+    crate::bud_store::set_ef(inout st, ce, 16, 0);
+    emit(inout fx, 13);
+  }
+  emit(inout fx, 20);
+  wr(inout out, 0, 2);
+  return 0;
+}
+
+fn refresh_raised(inout st: [i64], se: i64, ce: i64, sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64, now: i64, inout bv: [i64], inout fx: [i64]) -> i64 ! alloc, io
+{
+  let off: i64 = crate::bud_lifecycle::blob_at(st, se);
+  let old_kind: i64 = rd(st, off + 16);
+  crate::bud_lifecycle::view_in(st, off, inout bv);
+  let _added: i64 = crate::bud_clock::settle_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
+  let r: i64 = crate::bud_clock::refresh_at(inout st, ce, sk, ss, sn, now, inout bv, inout fx);
+  if r != 0 && r != 4 { return 2; }
+  wr(inout st, off + 8, rd(bv, 4));
+  wr(inout st, off + 16, rd(bv, 5));
+  wr(inout st, off + 17, rd(bv, 6));
+  if old_kind == 1 && rd(bv, 5) != 1 {
+    let b: [i64] = crate::bud_lifecycle::blob_copy(st, se);
+    let header: [i64] = crate::ent_u16::slice(b, 0, 24);
+    let p: i64 = crate::bud_lifecycle::str_at(b, 3);
+    let n: i64 = crate::bud_store::c32(rd(b, p));
+    let next: [i64] = crate::bud_lifecycle::rewrite(b, header, true, b, crate::bud_store::c40(p + 1), n);
+    let stored: i64 = crate::bud_lifecycle::store(inout st, sk, ss, sn, next);
+    if stored != 0 { return 2; }
+  }
+  if r == 4 {
+    // halt reserves one word of slack beyond its 7 + 2D effect words.
+    let h: i64 = crate::bud_halt::halt(inout st, sk, ss, sn, bk, bs, bn, 0, now, inout bv, inout fx);
+    if h == 6 { return 6; }
+    if h != 0 { return 2; }
+  }
+  return 0;
+}
+
+// Checked before any record write. The scalar guard also proves the multiplication fits i64.
+fn scaled(v: Vec<i64>, i: i64, size: i64) -> i64
+  requires 0 <= i && i < len(v) && 2 <= size && size <= 8
+{
+  let value: i64 = vec_get::<i64>(v, i);
+  if value < 0 || value > 9007199254740991 { return -1; }
+  let product: i64 = value * size;
+  if product > 9007199254740991 { return -1; }
+  return product;
+}
+
+pub fn raise(inout st: [i64], sk: [i64], ss: i64, sn: i64, bk: [i64], bs: i64, bn: i64, size: i64, now: i64, inout bv: [i64], inout fx: [i64], inout out: [i64]) -> i64 ! alloc, io
+{
+  if len(out) < 1 { return 3; }
+  let se: i64 = crate::bud_lifecycle::current_entry(st, sk, ss, sn, bk, bs, bn);
+  if se < 0 {
+    wr(inout out, 0, 1);
+    return 0;
+  }
+  let off: i64 = crate::bud_lifecycle::blob_at(st, se);
+  let state: i64 = rd(st, off);
+  if state == 2 || size == 1 {
+    wr(inout out, 0, 1);
+    return 0;
+  }
+  if len(fx) < 1 || rd(fx, 0) < 0 || rd(fx, 0) >= len(fx) { return 3; }
+  if size != 0 && size != 2 && size != 4 && size != 8 { return 2; }
+  let ce: i64 = crate::bud_clock::clock_of(st, bk, bs, bn);
+  if size == 0 { return raise_unlimited(inout st, off, ce, inout fx, inout out); }
+  let may_refresh: bool = ce >= 0 && crate::bud_store::ef(st, ce, 14) == 1 && rd(st, off + 2) != 1;
+  let mut room: i64 = 0;
+  let mut plan: i64 = 0;
+  // Plan Grow before asking unit. Delay any rehash until the answer is valid and the refresh is needed.
+  if may_refresh {
+    if state == 0 { room = crate::bud_halt::halt_words(st, se); }
+    if rd(st, off + 16) == 1 { room = crate::bud_store::c40(room + crate::bud_lifecycle::blob_n(st, se)); }
+    if room > 0 {
+      plan = crate::bud_map::room_plan(st, 0, room);
+      if plan > 0 { return crate::bud_lifecycle::grow(plan); }
+    }
+  }
+  let v: Vec<i64> = unit(rd(fx, 0));
+  if !unit_ok(v) { return 2; }
+  let mut time_raised: bool = false;
+  let mut changed: bool = false;
+  let mut i: i64 = 1;
+  while i < 6
+    invariant 1 <= i && i <= 6 && len(v) == 6
+    decreases 6 - i
+  {
+    let next: i64 = scaled(v, i, size);
+    if next < 0 { return 2; }
+    if next > rd(st, off + 2 + i) {
+      changed = true;
+      if i == 1 { time_raised = true; }
+    }
+    i = i + 1;
+  }
+  if !changed {
+    wr(inout out, 0, 1);
+    return 0;
+  }
+  let refresh: bool = time_raised && may_refresh;
+  let fxn: i64 = crate::bud_store::c40(rd(fx, 0));
+  if fxn + 2 > len(fx) { return 3; }
+  if refresh {
+    if len(bv) < 7 || fxn + 18 > len(fx) { return 3; }
+    if !crate::bud_halt::rec_ok_in(st, off, crate::bud_lifecycle::blob_n(st, se)) { return 2; }
+    if room > 0 {
+      let reserved: i64 = crate::bud_map::room_apply(inout st, plan, 0, room);
+      if reserved > 0 { return 2; }
+    }
+  }
+  let mut j: i64 = 1;
+  while j < 6
+    invariant 1 <= j && j <= 6 && len(v) == 6
+    decreases 6 - j
+  {
+    let next: i64 = scaled(v, j, size);
+    let at: i64 = off + 2 + j;
+    if next > rd(st, at) { wr(inout st, at, next); }
+    j = j + 1;
+  }
+  if refresh {
+    let r: i64 = refresh_raised(inout st, se, ce, sk, ss, sn, bk, bs, bn, now, inout bv, inout fx);
+    if r != 0 { return r; }
+    // A nested halt may use its slack word; changed must still fit, else the halt capacity status.
+    if crate::bud_store::c40(rd(fx, 0)) + 2 > len(fx) { return 6; }
+  }
+  emit(inout fx, 20);
+  wr(inout out, 0, 2);
+  return 0;
+}
