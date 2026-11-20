@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """L3-10 M10a runner: halt (bud_halt.pruv) and the calls that reach it, against the TS oracle.
 
-  python3 bench/l3/budget/m10_test/run_m10.py q      [--typed] [--pruvc PATH | --py] [--cases F] [--oracle F]
+  python3 bench/l3/budget/m10_test/run_m10.py q      [--typed [--lane direct|adapter]] [--pruvc PATH | --py] [--cases F] [--oracle F]
     Passing cases_halt.exact.json selects the verified cases_halt.jsonl and its oracle.
   python3 bench/l3/budget/m10_test/run_m10.py derive (writes work/m10/cases_halt.jsonl + oracle_halt.jsonl)
   python3 bench/l3/budget/m10_test/run_m10.py same   (Python pruvc vs Rust pruvc: byte-identical Rust)
@@ -880,6 +880,8 @@ def main():
     ap.add_argument("--pruvc", default=PRUVC_DEFAULT)
     ap.add_argument("--py", action="store_true")
     ap.add_argument("--typed", action="store_true", help="use the resident typed lane (q or perf)")
+    ap.add_argument("--lane", choices=("direct", "adapter"), default="adapter",
+                    help="typed lane: driver calls the typed entries (direct) or the t_call adapter")
     ap.add_argument("--budlib", help="budget library directory to compile against (mutants)")
     ap.add_argument("--out", help="build directory for gen.rs and the driver (default work/m10)")
     ap.add_argument("--cases", default=None)
@@ -887,6 +889,7 @@ def main():
     ap.add_argument("--rounds", type=int, default=5)
     ap.add_argument("--reps", type=int, default=100000)
     a = ap.parse_args()
+    os.environ["M10_LANE"] = a.lane
     if a.typed and (a.cmd not in ("q", "perf") or a.budlib):
         ap.error("--typed supports q and perf without --budlib")
     if a.cases and os.path.abspath(a.cases) == os.path.join(HERE, "cases_halt.exact.json"):
