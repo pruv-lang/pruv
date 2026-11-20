@@ -2,8 +2,34 @@ mod bud_tstate;
 mod bud_tlife;
 mod bud_tdecide;
 
+pub struct Ordinal { value: i64 }
+
 pub struct St {
-  sessions: HashMap<String, crate::bud_tstate::Budget>, clock_state: crate::bud_tstate::ClockState, out: crate::bud_tstate::Out
+  sessions: HashMap<String, crate::bud_tstate::Budget>,
+  ordinals: HashMap<String, Ordinal>, next_session: i64,
+  clock_state: crate::bud_tstate::ClockState, out: crate::bud_tstate::Out
+}
+
+fn take_budget(budget: crate::bud_tstate::Budget) -> crate::bud_tstate::Budget ! alloc
+{ return budget; }
+
+// Session insertion: Pruv decides the refusal (status 2 before an ordinal reaches 2^40) and keeps the order.
+pub fn t_put(inout st: St, sid: str, budget: crate::bud_tstate::Budget) -> i64 ! alloc
+{
+  if len(st.sessions) >= 1099511627776 { return 2; }
+  let mut new_session: bool = true;
+  match map_get_mut::<String, Ordinal>(inout st.ordinals, sid) {
+    Some(ordinal) => { new_session = false; }
+    None => { }
+  }
+  if new_session {
+    let ordinal: i64 = st.next_session;
+    if len(st.ordinals) >= 1099511627776 || ordinal < 0 || ordinal >= 1099511627775 { return 2; }
+    st.next_session = ordinal + 1;
+    st.ordinals = map_insert::<String, Ordinal>(move st.ordinals, string_push_str(string_new(), sid), Ordinal { value: ordinal });
+  }
+  st.sessions = map_insert::<String, crate::bud_tstate::Budget>(move st.sessions, string_push_str(string_new(), sid), take_budget(budget));
+  return 0;
 }
 
 fn apply_charge(inout st: St, sid: str, bid: str, now: i64, what: [i64]) -> crate::bud_tstate::Reply ! alloc, io

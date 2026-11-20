@@ -38,6 +38,14 @@ pub fn t_del(inout st: St, sid: str) -> ()
   let removed_ordinal: bool = map_remove::<String, Ordinal>(inout st.ordinals, sid);
 }
 
+fn unit_floor(x: i64) -> i64
+  ensures 0 <= result && result <= 9007199254740991
+{
+  if x < 0 { return 0; }
+  if x > 9007199254740991 { return 9007199254740991; }
+  return x;
+}
+
 fn open_budget(inout b: crate::bud_tstate::Budget, origin: i64, size: i64,
                unit: [i64], uuid: str, now: i64, carry: bool) -> () ! alloc
   requires len(unit) == 6
@@ -57,12 +65,13 @@ fn open_budget(inout b: crate::bud_tstate::Budget, origin: i64, size: i64,
   let mut scale: i64 = size;
   if scale < 1 { scale = 1; }
   if scale > 8 { scale = 8; }
+  // Units clamp to 0..2^53-1 before scaling, as in the flat lane and the hand baseline.
   b.limits = crate::bud_tstate::Limits {
-    time: crate::bud_tstate::bounded(unit[0]) * scale,
-    delegations: crate::bud_tstate::bounded(unit[1]) * scale,
-    commands: crate::bud_tstate::bounded(unit[2]) * scale,
-    reviews: crate::bud_tstate::bounded(unit[3]) * scale,
-    checks: crate::bud_tstate::bounded(unit[4]) * scale
+    time: unit_floor(unit[0]) * scale,
+    delegations: unit_floor(unit[1]) * scale,
+    commands: unit_floor(unit[2]) * scale,
+    reviews: unit_floor(unit[3]) * scale,
+    checks: unit_floor(unit[4]) * scale
   };
   b.active_ms = 0;
   b.active_since = 0;

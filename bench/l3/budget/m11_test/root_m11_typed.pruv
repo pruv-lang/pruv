@@ -52,7 +52,7 @@ pub fn m11_load(inout st: St, key: str, blob: [i64], inout out: [i64]) -> i64 ! 
   }
   if fresh == 1 {
     let ordinal: i64 = st.next_sessions;
-    if ordinal < 0 || ordinal >= 1099511627776 || len(st.sessions) >= 1099511627776 { return 2; }
+    if ordinal < 0 || ordinal >= 1099511627775 || len(st.sessions) >= 1099511627776 { return 2; }
     st.next_sessions = ordinal + 1;
     st.sessions = map_insert::<String, Sess>(move st.sessions, owned_text(key),
       Sess { ordinal: ordinal, blob: blob_copy(blob, 0, len(blob)) });

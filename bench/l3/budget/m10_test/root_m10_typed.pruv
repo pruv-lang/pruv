@@ -77,7 +77,7 @@ pub fn t_put(inout st: St, sid: str, budget: crate::bud_tstate::Budget) -> i64 !
   match map_get::<String, SessionOrdinal>(st.session_ordinals, sid) {
     Some(entry) => {}
     None => {
-      if st.next_session < 0 || st.next_session >= 1099511627776 ||
+      if st.next_session < 0 || st.next_session >= 1099511627775 ||
          len(st.session_ordinals) >= 1099511627776 { return 2; }
       let seq: i64 = st.next_session;
       st.next_session = seq + 1;

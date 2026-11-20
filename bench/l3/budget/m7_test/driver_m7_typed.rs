@@ -31,43 +31,47 @@ fn append_text(words: &mut Vec<i64>, text: &str) {
     words.extend(bud_facts::decode_js_text(text).into_iter().map(i64::from));
 }
 
-fn take_text(words: &mut &[i64]) -> String {
-    let n = usize::try_from(words[0]).unwrap();
-    let units: Vec<_> = words[1..1 + n].iter().map(|&u| u16::try_from(u).unwrap()).collect();
-    *words = &words[1 + n..];
-    bud_facts::encode_js_text(units)
+fn take_text(words: &mut &[i64]) -> Option<String> {
+    let (&n, tail) = words.split_first()?;
+    let n = usize::try_from(n).ok()?;
+    let units = tail.get(..n)?.iter().map(|&u| u16::try_from(u).ok()).collect::<Option<Vec<_>>>()?;
+    *words = &tail[n..];
+    Some(bud_facts::encode_js_text(units))
 }
 
-fn read_budget(words: &[i64]) -> Budget {
+// Wire decode only: a record the typed Budget cannot represent (an empty or short blob, a malformed tail) is
+// refused at the Q boundary with X 3 instead of panicking.
+fn read_budget(words: &[i64]) -> Option<Budget> {
     let empty = [0; 30];
     let absent = words == [-1];
     let words = if absent { &empty[..] } else { words };
-    let mut tail = &words[24..];
-    let id = take_key(&mut tail).unwrap();
-    let opened_at = take_text(&mut tail);
-    let since_text = take_text(&mut tail);
-    let ended_at = take_text(&mut tail);
-    let follows = take_key(&mut tail).unwrap();
+    let mut tail = words.get(24..)?;
+    let id = take_key(&mut tail)?;
+    let opened_at = take_text(&mut tail)?;
+    let since_text = take_text(&mut tail)?;
+    let ended_at = take_text(&mut tail)?;
+    let follows = take_key(&mut tail)?;
     let mut halt_reason = -1;
     let mut halt_kind = 0;
     let mut halt_ms = 0;
     let mut halt_text = String::new();
     let mut stopped = Vec::new();
-    let mut rest = &tail[1..];
+    let mut rest = tail.get(1..)?;
     if rest.first() == Some(&-2) {
-        halt_reason = rest[1];
-        halt_kind = rest[2];
-        halt_ms = rest[3];
+        let head = rest.get(1..4)?;
+        halt_reason = head[0];
+        halt_kind = head[1];
+        halt_ms = head[2];
         rest = &rest[4..];
-        halt_text = take_text(&mut rest);
-        let count = rest[0];
-        rest = &rest[1..];
+        halt_text = take_text(&mut rest)?;
+        let (&count, more) = rest.split_first()?;
+        rest = more;
         for _ in 0..count {
-            stopped.push(take_key(&mut rest).unwrap());
+            stopped.push(take_key(&mut rest)?);
         }
     }
     let rest = bud_facts::encode_js_text(rest.iter().map(|&u| u as u16));
-    Budget {
+    Some(Budget {
         id, state: if absent { -1 } else { words[0] }, origin: words[1],
         unlimited: words[2] == 1, unlimited_kind: words[2],
         limits: Limits { time: words[3], delegations: words[4], commands: words[5], reviews: words[6], checks: words[7] },
@@ -77,7 +81,7 @@ fn read_budget(words: &[i64]) -> Budget {
         ended_how: words[18], ended_kind: words[19], metadata: words[20],
         opened_ms: words[21], ended_ms: words[22], follows_kind: words[23],
         opened_at, since_text, ended_at, follows, rest, halt_reason, halt_kind, halt_ms, halt_text, stopped,
-    }
+    })
 }
 
 fn budget_words(b: &Budget) -> Vec<i64> {
@@ -141,15 +145,16 @@ struct Call {
 }
 
 impl Call {
-    fn decode(words: &[i64]) -> Self {
-        let mut keys = &words[9..];
-        let sid = take_key(&mut keys).unwrap();
-        let bid = take_key(&mut keys).unwrap();
-        assert!(keys.is_empty());
-        Self {
+    // Wire decode only: a malformed call line yields None and the driver answers X 2.
+    fn decode(words: &[i64]) -> Option<Self> {
+        let mut keys = words.get(9..)?;
+        let sid = take_key(&mut keys)?;
+        let bid = take_key(&mut keys)?;
+        if !keys.is_empty() { return None; }
+        Some(Self {
             code: words[0], origin: words[1], size: words[2],
-            unit: words[3..9].try_into().unwrap(), sid, bid,
-        }
+            unit: words[3..9].try_into().ok()?, sid, bid,
+        })
     }
 
     fn dispatch(&self, st: &mut sol::St, uuid: &str, now: i64) -> Reply {
@@ -230,7 +235,10 @@ fn run_q() {
                 let mut tail = put.words.as_slice();
                 let sid = take_key(&mut tail).unwrap();
                 assert_eq!(tail[0] as usize, tail.len() - 1);
-                let budget = read_budget(&unit_record(&put.text, &tail[1..]));
+                let Some(budget) = read_budget(&unit_record(&put.text, &tail[1..])) else {
+                    writeln!(out, "X 3").unwrap();
+                    continue;
+                };
                 let status = sol::t_put(&mut st, &sid, &budget);
                 if status != 0 {
                     writeln!(out, "X {status}").unwrap();
@@ -242,7 +250,10 @@ fn run_q() {
             }
             "call" => {
                 writeln!(out, "@ {}", tokens[1]).unwrap();
-                let call = Call::decode(&nums(&tokens[2..]));
+                let Some(call) = Call::decode(&nums(&tokens[2..])) else {
+                    writeln!(out, "X 2").unwrap();
+                    continue;
+                };
                 let before = bud_facts::calls();
                 let uuid = uuids.get(next_uuid).map_or("", String::as_str);
                 let reply = call.dispatch(&mut st, uuid, now);
@@ -299,7 +310,7 @@ fn perf_budget(bid: &str, state: i64) -> Budget {
     append_text(&mut words, "2023-11-14T22:13:20.000Z");
     words.extend([0, 0, 0]);
     append_text(&mut words, PERF_REST);
-    read_budget(&words)
+    read_budget(&words).unwrap()
 }
 
 fn fold(call: &Call, st: &sol::St, reply: &Reply, sum: u64) -> u64 {

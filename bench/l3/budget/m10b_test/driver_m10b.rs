@@ -134,6 +134,8 @@ impl World {
         Self {
             st: sol::St {
                 sessions: HashMap::new(),
+                ordinals: HashMap::new(),
+                next_session: 0,
                 clock_state: ClockState { clocks: HashMap::new(), next_clock: 0 },
                 out: Out { fx: Vec::new() },
             },
@@ -145,7 +147,11 @@ impl World {
     fn put(&mut self, put: &Put) {
         let mut record = put.words.as_slice();
         let sid = take_key(&mut record).unwrap();
-        self.st.sessions.insert(sid, read_budget(&unit_record(&put.text, &record[1..])));
+        let budget = read_budget(&unit_record(&put.text, &record[1..]));
+        let status = sol::t_put(&mut self.st, &sid, &budget);
+        if status != 0 {
+            self.log.push(format!("X {status}"));
+        }
     }
 
     fn note(&mut self, line: String) {
@@ -279,7 +285,7 @@ impl World {
     fn observe(&self) -> String {
         let mut words = vec![self.st.sessions.len() as i64];
         let mut sessions: Vec<_> = self.st.sessions.iter().collect();
-        sessions.sort_unstable_by_key(|(sid, _)| *sid);
+        sessions.sort_unstable_by_key(|(sid, _)| self.st.ordinals[sid.as_str()].value);
         for (sid, budget) in sessions {
             append_text(&mut words, sid);
             let budget = budget_words(budget);
