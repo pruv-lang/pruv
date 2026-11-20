@@ -40,6 +40,10 @@ fn stmt_call_names(stmts: &[Stmt], acc: &mut HashSet<String>) {
                 call_names(&w.cond, acc);
                 stmt_call_names(&w.body, acc);
             }
+            Stmt::ForMap(w) => {
+                call_names(&w.place, acc);
+                stmt_call_names(&w.body, acc);
+            }
             Stmt::Return(r) => {
                 if let Some(v) = &r.value {
                     call_names(v, acc);
@@ -227,6 +231,7 @@ fn stmts_ok(stmts: &[Stmt], o: &str, fmap: &Fmap, acc: &mut Acc) -> bool {
                 expr_ok(&x.cond, o, fmap, acc) && stmts_ok(&x.then, o, fmap, acc) && stmts_ok(&x.els, o, fmap, acc)
             }
             Stmt::While(x) => expr_ok(&x.cond, o, fmap, acc) && stmts_ok(&x.body, o, fmap, acc),
+            Stmt::ForMap(x) => expr_ok(&x.place, o, fmap, acc) && stmts_ok(&x.body, o, fmap, acc),
             Stmt::Return(x) => match &x.value {
                 Some(v) => expr_ok(v, o, fmap, acc),
                 None => true,

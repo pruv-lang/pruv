@@ -69,6 +69,11 @@ fn g2_in_stmts(stmts: &[Stmt], pick: &dyn Fn(&str) -> bool) -> Option<(i64, i64,
                     return Some(r);
                 }
             }
+            Stmt::ForMap(w) => {
+                if let Some(r) = g2_in_stmts(&w.body, pick) {
+                    return Some(r);
+                }
+            }
             Stmt::Match(m) => {
                 for arm in &m.arms {
                     if let Some(r) = g2_in_stmts(&arm.body, pick) {
@@ -210,6 +215,13 @@ fn g2_cand_stmts(stmts: &[Stmt], pick: &dyn Fn(&str) -> bool, lits: bool, ghost:
                     g2_cand_expr(inv, lits, best);
                 }
                 g2_cand_expr(&w.decreases, lits, best);
+                g2_cand_stmts(&w.body, pick, lits, ghost, best);
+            }
+            Stmt::ForMap(w) => {
+                g2_cand_expr(&w.place, lits, best);
+                for inv in w.invariants.iter().filter(|i| ghost || !has_spent(i)) {
+                    g2_cand_expr(inv, lits, best);
+                }
                 g2_cand_stmts(&w.body, pick, lits, ghost, best);
             }
             Stmt::Return(r) => {
@@ -425,6 +437,13 @@ fn g3_stmts(stmts: &[Stmt], out: &mut G3Cands) {
                 g3_expr(&w.decreases, out);
                 g3_stmts(&w.body, out);
             }
+            Stmt::ForMap(w) => {
+                g3_expr(&w.place, out);
+                for inv in &w.invariants {
+                    g3_expr(inv, out);
+                }
+                g3_stmts(&w.body, out);
+            }
             Stmt::Return(r) => {
                 if let Some(v) = &r.value {
                     g3_expr(v, out);
@@ -565,6 +584,13 @@ fn g9_size_stmts(stmts: &[Stmt], out: &mut Vec<(i64, i64)>) {
                 g9_size_expr(&w.decreases, out);
                 g9_size_stmts(&w.body, out);
             }
+            Stmt::ForMap(w) => {
+                g9_size_expr(&w.place, out);
+                for inv in &w.invariants {
+                    g9_size_expr(inv, out);
+                }
+                g9_size_stmts(&w.body, out);
+            }
             Stmt::Return(r) => {
                 if let Some(v) = &r.value {
                     g9_size_expr(v, out);
@@ -696,6 +722,13 @@ fn g5_walk_stmts(stmts: &[Stmt], f: &mut dyn FnMut(&Expr)) {
                     g5_walk_expr(inv, f);
                 }
                 g5_walk_expr(&w.decreases, f);
+                g5_walk_stmts(&w.body, f);
+            }
+            Stmt::ForMap(w) => {
+                g5_walk_expr(&w.place, f);
+                for inv in &w.invariants {
+                    g5_walk_expr(inv, f);
+                }
                 g5_walk_stmts(&w.body, f);
             }
             Stmt::Return(r) => {

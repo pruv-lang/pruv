@@ -130,7 +130,7 @@ def _assign_stmts(stmts, out):
         elif isinstance(st, If):
             _assign_stmts(st.then, out)
             _assign_stmts(st.els, out)
-        elif isinstance(st, While):
+        elif isinstance(st, (While, ForMap)):
             _assign_stmts(st.body, out)
         elif isinstance(st, Match):
             for a in st.arms:
@@ -146,7 +146,7 @@ def _call_written(stmts, out):
         if isinstance(st, If):
             _call_written(st.then, out)
             _call_written(st.els, out)
-        elif isinstance(st, While):
+        elif isinstance(st, (While, ForMap)):
             _call_written(st.body, out)
         elif isinstance(st, Match):
             for a in st.arms:
@@ -166,7 +166,9 @@ def _locals(stmts, out):
         elif isinstance(st, If):
             _locals(st.then, out)
             _locals(st.els, out)
-        elif isinstance(st, While):
+        elif isinstance(st, (While, ForMap)):
+            if isinstance(st, ForMap):
+                out.update((st.key, st.val))
             _locals(st.body, out)
         elif isinstance(st, Match):
             for a in st.arms:
@@ -186,7 +188,7 @@ def _init(block, idx, name, skip_index=False):
             return st.value
         if skip_index and isinstance(st, IndexAssign) and st.name == name:
             continue
-        if isinstance(st, (If, While, Match)) and name in _assigned([st]):
+        if isinstance(st, (If, While, ForMap, Match)) and name in _assigned([st]):
             return None
     return None
 
@@ -326,7 +328,7 @@ def _scope_types(f, w):
                     r = walk(st.els, dict(env))
                 if r is not None:
                     return r
-            elif isinstance(st, While):
+            elif isinstance(st, (While, ForMap)):
                 r = walk(st.body, dict(env))
                 if r is not None:
                     return r

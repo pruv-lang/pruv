@@ -103,9 +103,10 @@ pub fn inst_types(e: &Call) -> (Vec<GType>, Vec<GType>) {
 // program scan
 // ---------------------------------------------------------------------------
 
-/// A visited AST node: a `let` statement or an expression (every dataclass node of a body that carries a type).
+/// Statements of interest and expressions visited by the foreign-feature scan.
 pub enum Node<'a> {
     Let(&'a Let),
+    ForMap(&'a ForMap),
     Expr(&'a Expr),
 }
 
@@ -137,6 +138,14 @@ fn walk_stmt(s: &Stmt, f: &mut dyn FnMut(Node<'_>)) {
                 walk_expr(inv, f);
             }
             walk_expr(&w.decreases, f);
+            walk_stmts(&w.body, f);
+        }
+        Stmt::ForMap(w) => {
+            f(Node::ForMap(w));
+            walk_expr(&w.place, f);
+            for inv in &w.invariants {
+                walk_expr(inv, f);
+            }
             walk_stmts(&w.body, f);
         }
         Stmt::Return(r) => {
@@ -248,6 +257,7 @@ fn collect<'a>(prog: &'a Program) -> R<(Cats, Colls, HashMap<String, &'a Functio
         add_coll(&mut colls, &f.ret, &mut err);
         let mut visit = |n: Node<'_>| match n {
             Node::Let(l) => add_coll(&mut colls, &l.ty, &mut err),
+            Node::ForMap(_) => {},
             Node::Expr(e) => {
                 if let Some(t) = expr_ty(e) {
                     add_coll(&mut colls, t, &mut err);

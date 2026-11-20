@@ -259,6 +259,14 @@ class While(Stmt):
     body: List[Stmt]
 
 @dataclass
+class ForMap(Stmt):
+    key: str
+    val: str
+    place: Expr
+    invariants: List[Expr]
+    body: List[Stmt]
+
+@dataclass
 class Return(Stmt):
     value: Optional[Expr]
 

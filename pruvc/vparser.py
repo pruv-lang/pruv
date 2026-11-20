@@ -117,6 +117,7 @@ def _move_token(src, end, toks):
 #         fn/struct/enum/mod/trusted/rust/opaque/pred/pub
 #   crate right before `::`, not after fn/let/mut/struct/enum and not after `.` or `::`
 _G4_SKIP = r"(?:[ \t\r\n]|//[^\n]*(?=\n|\Z))*"
+_FOR_AHEAD = re.compile(_G4_SKIP + r"\(")
 _G4_MOD_AHEAD = re.compile(_G4_SKIP + r"[A-Za-z_\"{]")
 _G4_PUB_AHEAD = re.compile(_G4_SKIP + r"(?:fn|struct|enum|mod|pub|trusted|rust|opaque|pred)(?![A-Za-z0-9_])")
 _G4_CRATE_AHEAD = re.compile(_G4_SKIP + r"::")
@@ -185,6 +186,11 @@ def lex(src, toks=None):
                 pos = m.end()
                 continue
             if v in ("mod", "pub", "crate") and _g4_token(v, src, m.end(), toks, depth):
+                toks.append(Tok("kw", v, line, col, col + len(v)))
+                pos = m.end()
+                continue
+            if (v == "for" and depth > 0 and toks and toks[-1].kind == "op"
+                    and toks[-1].val in ("{", "}", ";") and _FOR_AHEAD.match(src, m.end())):
                 toks.append(Tok("kw", v, line, col, col + len(v)))
                 pos = m.end()
                 continue
@@ -896,6 +902,20 @@ class Parser:
             if dec is None:
                 s.err("while loop needs a `decreases <expr>` clause", "add `decreases n - i` before '{'")
             return While(L, C, cond, invs, dec, s.block())
+        if s.at("for") and s.at("(", 1):
+            s.next()
+            s.expect("(")
+            key = s.ident().val
+            s.expect(",")
+            val = s.ident().val
+            s.expect(")")
+            s.expect("in")
+            place = s.map_iteration_place()
+            invs = []
+            while s.at("invariant"):
+                s.next()
+                invs.append(s.expr())
+            return ForMap(L, C, key, val, place, invs, s.block())
         if s.at("return"):
             s.next()
             if s.at(";"):
@@ -1010,6 +1030,20 @@ class Parser:
         e = s.expr()
         s.expect(";")
         return ExprStmt(L, C, e)
+
+    def map_iteration_place(s):
+        # An uppercase binding followed by a block would otherwise start a struct literal.
+        name = s.peek()
+        if name.kind == "id" and name.val[0].isupper() and s.at("{", 1):
+            fields = s.peek(2).kind == "id" and s.at(":", 3)
+            continued = (s.at("}", 2) and s.peek(3).val in
+                         ("{", "invariant", "decreases", "[", ".", "==>", "||", "&&",
+                          "==", "!=", "<", "<=", ">", ">=", "+", "-", "*", "/", "%"))
+            deref_assign = continued and s.at("*", 3) and s.peek(4).kind == "id" and s.at("=", 5)
+            if not fields and (not continued or deref_assign):
+                s.next()
+                return Var(name.line, name.col, name.val)
+        return s.expr()
 
     def if_(s):
         t = s.expect("if")

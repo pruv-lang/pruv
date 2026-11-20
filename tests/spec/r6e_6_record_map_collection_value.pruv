@@ -1,0 +1,4 @@
+// spec: R-6e-6 reject
+struct Inner { items: Vec<i64> }
+struct Clock { runs: HashMap<String, Inner> }
+struct St { clocks: HashMap<String, Clock> }

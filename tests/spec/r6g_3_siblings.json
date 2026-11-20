@@ -1,0 +1,1 @@
+{"gen_contains":["set(&mut s.a, &mut s.b, (*s).c)"],"gen_absent":[".clone()"]}

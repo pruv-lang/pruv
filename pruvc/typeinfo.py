@@ -34,6 +34,12 @@ def is_nested_collection_field(ty: Type) -> bool:
             and ty.args[0] in (I64, Type("string")) and ty.args[1] in (I64, BOOL))
 
 
+def is_string_record_map(ty: Type) -> bool:
+    return (ty.owner is None and ty.name == "hashmap" and len(ty.args) == 2
+            and ty.args[0] == Type("string") and not ty.args[1].args
+            and is_user_type(ty.args[1]))
+
+
 def is_owned_field_type(ty: Type) -> bool:
     return ty == Type("string") or is_scalar_vec(ty)
 
@@ -318,7 +324,7 @@ def _any_array_named(stmts, name):
         elif isinstance(st, If):
             if _any_array_named(st.then, name) or _any_array_named(st.els, name):
                 return True
-        elif isinstance(st, While):
+        elif isinstance(st, (While, ForMap)):
             if _any_array_named(st.body, name):
                 return True
         elif isinstance(st, Match):

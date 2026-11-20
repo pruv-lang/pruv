@@ -1,0 +1,8 @@
+// spec: R-6e-13 accept
+struct State { m: HashMap<String, bool> }
+
+fn inspect(s: State) -> bool {
+  for (k, v) in s.m {
+  }
+  return true;
+}

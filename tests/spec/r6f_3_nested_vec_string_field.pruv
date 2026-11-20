@@ -1,0 +1,4 @@
+// spec: R-6f-3 reject
+pub struct Reply { keys: Vec<String> }
+pub struct Replies { items: Vec<Reply> }
+pub fn replies() -> Replies ! alloc { return Replies { items: vec_new::<Reply>() }; }

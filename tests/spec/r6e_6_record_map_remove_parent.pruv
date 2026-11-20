@@ -1,0 +1,19 @@
+// spec: R-6e-6 reject
+struct Run { since: i64 }
+struct Clock { runs: HashMap<String, Run> }
+struct St { clocks: HashMap<String, Clock> }
+
+fn remove(inout st: St, k: str, query: str) -> () {
+  match map_get_mut::<String, Clock>(inout st.clocks, k) {
+    Some(r) => {
+      match map_get_mut::<String, Run>(inout r.runs, query) {
+        Some(x) => {
+          let removed: bool = map_remove::<String, Clock>(inout st.clocks, k);
+          x.since = 0;
+        }
+        None => { }
+      }
+    }
+    None => { }
+  }
+}

@@ -1,0 +1,5 @@
+// spec: R-6g-3 reject
+struct Rec { n: i64 }
+struct St { a: Rec }
+fn set(inout a: Rec) -> i64 { a.n = 1; return 1; }
+fn update(inout s: St) -> i64 { return set(inout s.a) + s.a.n; }

@@ -1319,6 +1319,23 @@ impl Parser {
             let body = self.block()?;
             return Ok(Stmt::While(While { line: l, col: c, cond, invariants: invs, decreases: dec, body }));
         }
+        if self.at("for", 0) && self.at("(", 1) {
+            self.bump();
+            self.expect("(")?;
+            let key = self.ident()?.val;
+            self.expect(",")?;
+            let val = self.ident()?.val;
+            self.expect(")")?;
+            self.expect("in")?;
+            let place = self.map_iteration_place()?;
+            let mut invariants = Vec::new();
+            while self.at("invariant", 0) {
+                self.bump();
+                invariants.push(self.expr()?);
+            }
+            let body = self.block()?;
+            return Ok(Stmt::ForMap(ForMap { line: l, col: c, key, val, place, invariants, body }));
+        }
         if self.at("return", 0) {
             self.bump();
             if self.at(";", 0) {
@@ -1499,6 +1516,23 @@ impl Parser {
         let e = self.expr()?;
         self.expect(";")?;
         Ok(Stmt::ExprStmt(ExprStmt { line: l, col: c, expr: e }))
+    }
+
+    fn map_iteration_place(&mut self) -> R<Expr> {
+        // An uppercase binding followed by a block would otherwise start a struct literal.
+        let name = self.peek(0);
+        if name.kind == Kind::Id && is_upper(&name.val) && self.at("{", 1) {
+            let fields = self.peek(2).kind == Kind::Id && self.at(":", 3);
+            let continued = self.at("}", 2) && matches!(self.peek(3).val.as_str(),
+                "{" | "invariant" | "decreases" | "[" | "." | "==>" | "||" | "&&"
+                | "==" | "!=" | "<" | "<=" | ">" | ">=" | "+" | "-" | "*" | "/" | "%");
+            let deref_assign = continued && self.at("*", 3) && self.peek(4).kind == Kind::Id && self.at("=", 5);
+            if !fields && (!continued || deref_assign) {
+                let name = self.next();
+                return Ok(Expr::Var(Var { line: name.line, col: name.col, name: name.val, ty: None }));
+            }
+        }
+        self.expr()
     }
 
     fn if_(&mut self) -> R<If> {

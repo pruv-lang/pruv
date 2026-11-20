@@ -932,6 +932,20 @@ impl<'a> Ownership<'a> {
         Ok(cur)
     }
 
+    fn loop_body(&mut self, line: i64, col: i64, body: &[Stmt], entry: &St, st: St) -> Res<Option<St>> {
+        let end = self.block(body, st.clone())?;
+        if let Some(end) = &end {
+            for (n, v) in entry.iter() {
+                if *v == V::Live && end.get(n) != Some(V::Live) {
+                    return Err(err(line, col, "foreign_loop_move", "moved in the loop body and not restored",
+                        format!("{} must be live again at the end of every path of the body: reassign it, e.g. \
+                                 {} = f(move {}, ..), or do not consume it inside the loop", n, n, n)));
+                }
+            }
+        }
+        Ok(join(Some(st), end))
+    }
+
     fn stmt(&mut self, x: &Stmt, mut st: St, declared: &mut Vec<String>) -> Res<Option<St>> {
         match x {
             Stmt::Let(l) => {
@@ -980,30 +994,20 @@ impl<'a> Ownership<'a> {
             Stmt::While(w) => {
                 let entry = st.clone();
                 // R03L: an invariant holds before the condition runs
-                for clause in w.invariants.iter() {
+                for clause in &w.invariants {
                     self.array_reads(clause, &st)?;
                 }
                 self.expr(&w.cond, &mut st)?;
                 self.array_reads(&w.decreases, &st)?;
-                let end = self.block(&w.body, st.clone())?;
-                if let Some(end) = &end {
-                    for (n, v) in entry.iter() {
-                        if *v == V::Live && end.get(n) != Some(V::Live) {
-                            return Err(err(
-                                w.line,
-                                w.col,
-                                "foreign_loop_move",
-                                "moved in the loop body and not restored",
-                                format!(
-                                    "{} must be live again at the end of every path of the body: reassign it, e.g. \
-                                     {} = f(move {}, ..), or do not consume it inside the loop",
-                                    n, n, n
-                                ),
-                            ));
-                        }
-                    }
+                self.loop_body(w.line, w.col, &w.body, &entry, st)
+            }
+            Stmt::ForMap(w) => {
+                let entry = st.clone();
+                for clause in &w.invariants {
+                    self.array_reads(clause, &st)?;
                 }
-                Ok(join(Some(st), end))
+                self.expr(&w.place, &mut st)?;
+                self.loop_body(w.line, w.col, &w.body, &entry, st)
             }
             Stmt::Return(r) => {
                 if let Some(v) = &r.value {
@@ -1094,6 +1098,12 @@ impl<'a> Ownership<'a> {
             }
             Stmt::While(w) => {
                 self.dead_expr(&w.cond, false)?;
+                for stmt in &w.body {
+                    self.dead_stmt(stmt)?;
+                }
+            }
+            Stmt::ForMap(w) => {
+                self.dead_expr(&w.place, false)?;
                 for stmt in &w.body {
                     self.dead_stmt(stmt)?;
                 }
@@ -1566,6 +1576,13 @@ fn g6_stmts(stmts: &[Stmt], out: &mut Cands) {
                 g6_expr(&w.decreases, out);
                 g6_stmts(&w.body, out);
             }
+            Stmt::ForMap(w) => {
+                g6_expr(&w.place, out);
+                for inv in &w.invariants {
+                    g6_expr(inv, out);
+                }
+                g6_stmts(&w.body, out);
+            }
             Stmt::Return(r) => {
                 if let Some(v) = &r.value {
                     g6_expr(v, out);
@@ -1727,6 +1744,13 @@ fn proc_stmts(stmts: &[Stmt], out: &mut Cands) {
                 proc_expr(&w.decreases, out);
                 proc_stmts(&w.body, out);
             }
+            Stmt::ForMap(w) => {
+                proc_expr(&w.place, out);
+                for inv in &w.invariants {
+                    proc_expr(inv, out);
+                }
+                proc_stmts(&w.body, out);
+            }
             Stmt::Return(r) => {
                 if let Some(v) = &r.value {
                     proc_expr(v, out);
@@ -1855,6 +1879,13 @@ fn net_stmts(stmts: &[Stmt], out: &mut Cands) {
                 net_expr(&w.decreases, out);
                 net_stmts(&w.body, out);
             }
+            Stmt::ForMap(w) => {
+                net_expr(&w.place, out);
+                for inv in &w.invariants {
+                    net_expr(inv, out);
+                }
+                net_stmts(&w.body, out);
+            }
             Stmt::Return(r) => {
                 if let Some(v) = &r.value {
                     net_expr(v, out);
@@ -1932,6 +1963,9 @@ fn g10_stmts(stmts: &[Stmt]) -> bool {
         Stmt::While(w) => {
             g10_expr(&w.cond) || w.invariants.iter().any(g10_expr) || g10_expr(&w.decreases) || g10_stmts(&w.body)
         }
+        Stmt::ForMap(w) => {
+            g10_expr(&w.place) || w.invariants.iter().any(g10_expr) || g10_stmts(&w.body)
+        }
         Stmt::Return(r) => r.value.as_ref().map_or(false, g10_expr),
         Stmt::Assert(a) => g10_expr(&a.cond),
         Stmt::Par(e) => e.calls.iter().any(g10_expr),
@@ -2004,6 +2038,7 @@ pub fn first_par(stmts: &[Stmt]) -> Option<&Par> {
         Stmt::Par(p) => Some(p),
         Stmt::If(x) => [first_par(&x.then), first_par(&x.els)].into_iter().flatten().min_by_key(|p| (p.line,p.col)),
         Stmt::While(x) => first_par(&x.body),
+        Stmt::ForMap(x) => first_par(&x.body),
         Stmt::Match(x) => x.arms.iter().filter_map(|a| first_par(&a.body)).min_by_key(|p| (p.line,p.col)),
         Stmt::Let(_) | Stmt::Assign(_) | Stmt::IndexAssign(_) | Stmt::FieldAssign(_) | Stmt::Return(_) | Stmt::Assert(_) | Stmt::ExprStmt(_) => None,
     }).min_by_key(|p| (p.line,p.col))
@@ -2094,6 +2129,13 @@ fn async_stmts(stmts: &[Stmt], out: &mut Cands, names: &HashSet<&str>) {
                     async_expr(inv, out, names);
                 }
                 async_expr(&w.decreases, out, names);
+                async_stmts(&w.body, out, names);
+            }
+            Stmt::ForMap(w) => {
+                async_expr(&w.place, out, names);
+                for inv in &w.invariants {
+                    async_expr(inv, out, names);
+                }
                 async_stmts(&w.body, out, names);
             }
             Stmt::Return(r) => {

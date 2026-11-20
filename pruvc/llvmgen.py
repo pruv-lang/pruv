@@ -5411,6 +5411,8 @@ def g6_llvm_error(prog):
         rust_only = []
 
         def visit(n):
+            if isinstance(n, ForMap):
+                rust_only.append((n.line, n.col, "map iteration"))
             if isinstance(n, Let) and not _g6_type_ok(n.type):
                 bad.append((n.line, n.col))
             ty = getattr(n, "ty", None)

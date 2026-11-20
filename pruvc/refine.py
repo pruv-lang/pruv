@@ -117,6 +117,12 @@ def _stmt_names(stmts, out):
             out.add(st.name); _expr_names(st.index, out); _expr_names(st.value, out)
         elif isinstance(st, If):
             _expr_names(st.cond, out); _stmt_names(st.then, out); _stmt_names(st.els, out)
+        elif isinstance(st, ForMap):
+            out.update((st.key, st.val))
+            _expr_names(st.place, out)
+            for i in st.invariants:
+                _expr_names(i, out)
+            _stmt_names(st.body, out)
         elif isinstance(st, While):
             _expr_names(st.cond, out)
             for i in st.invariants:
@@ -195,7 +201,7 @@ def _assigned(stmts, out):
             out.add(st.name)
         elif isinstance(st, If):
             _assigned(st.then, out); _assigned(st.els, out)
-        elif isinstance(st, While):
+        elif isinstance(st, (While, ForMap)):
             _assigned(st.body, out)
         elif isinstance(st, Match):
             for a in st.arms:
@@ -297,7 +303,7 @@ class _Expander:
             elif isinstance(st, If):
                 st.then = s.block(st.then, dict(scope))
                 st.els = s.block(st.els, dict(scope))
-            elif isinstance(st, While):
+            elif isinstance(st, (While, ForMap)):
                 changed = _assigned(st.body, set())
                 pre = []
                 for name, r in scope.items():          # declaration order, only what is alive at the loop head
@@ -330,7 +336,7 @@ def _validate_block(stmts, user=()):
             _validate(st.refine, user)
         elif isinstance(st, If):
             _validate_block(st.then, user); _validate_block(st.els, user)
-        elif isinstance(st, While):
+        elif isinstance(st, (While, ForMap)):
             _validate_block(st.body, user)
         elif isinstance(st, Match):
             for a in st.arms:
@@ -352,7 +358,7 @@ def _any_let_refine(stmts):
             return True
         if isinstance(st, If) and (_any_let_refine(st.then) or _any_let_refine(st.els)):
             return True
-        if isinstance(st, While) and _any_let_refine(st.body):
+        if isinstance(st, (While, ForMap)) and _any_let_refine(st.body):
             return True
         if isinstance(st, Match) and any(_any_let_refine(a.body) for a in st.arms):
             return True

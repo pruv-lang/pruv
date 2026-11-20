@@ -325,6 +325,7 @@ struct Checker {
     statement_call: Option<usize>,
     borrowed_text: Option<usize>,
     map_roots: Vec<(String, Vec<String>)>,
+    map_iterations: Vec<(String, Vec<String>)>,
     // ---- G9 A0 metadata ----
     /// recursive type SCCs (names in declaration order), SCC-number order
     type_sccs: Vec<Vec<String>>,
@@ -451,7 +452,7 @@ pub(crate) fn place_root(e: &Expr) -> Option<&str> {
     }
 }
 
-fn field_place(mut e: &Expr) -> (&Expr, Vec<String>) {
+pub(crate) fn field_place(mut e: &Expr) -> (&Expr, Vec<String>) {
     let mut path = Vec::new();
     while let Expr::FieldAccess(f) = e {
         path.push(f.field.clone());
@@ -468,6 +469,26 @@ fn mentions(e: &Expr, name: &str) -> bool {
         _ => {}
     }
     crate::refine::kids(e).into_iter().any(|k| mentions(k, name))
+}
+
+fn paths_overlap(a: &[String], b: &[String]) -> bool {
+    a.starts_with(b) || b.starts_with(a)
+}
+
+/// Collect each mentioned place once, using the full field path for a field read.
+fn place_mentions<'a>(e: &'a Expr, out: &mut Vec<(&'a str, Vec<String>)>) {
+    if let Expr::Move(m) = e {
+        out.push((&m.name, m.fields.clone()));
+        return;
+    }
+    let (root, path) = field_place(e);
+    if let Expr::Var(v) = root {
+        out.push((&v.name, path));
+        return;
+    }
+    for child in crate::refine::kids(e) {
+        place_mentions(child, out);
+    }
 }
 
 fn first_field_move(e: &Expr) -> Option<&Move> {
@@ -502,28 +523,24 @@ enum InoutContext<'a> {
     Value,
     Assign(&'a str),
     WhileCondition,
-    PlaceAssignment(&'a str),
+    PlaceAssignment(&'a str, &'a [String]),
 }
 
-/// Collect all syntactic mentions and visit calls in evaluation order (arguments first).
+/// Visit calls in evaluation order (arguments first).
 fn inout_statement_calls<'a>(
     e: &'a Expr,
     conditional: bool,
-    mentions: &mut HashMap<&'a str, usize>,
     calls: &mut Vec<(&'a Call, bool)>,
 ) {
-    match e {
-        Expr::Var(v) => *mentions.entry(&v.name).or_default() += 1,
-        Expr::Move(v) => *mentions.entry(&v.name).or_default() += 1,
-        Expr::Binary(b) if b.op == "&&" || b.op == "||" => {
-            inout_statement_calls(&b.left, conditional, mentions, calls);
-            inout_statement_calls(&b.right, true, mentions, calls);
+    if let Expr::Binary(b) = e {
+        if b.op == "&&" || b.op == "||" {
+            inout_statement_calls(&b.left, conditional, calls);
+            inout_statement_calls(&b.right, true, calls);
             return;
         }
-        _ => {}
     }
     for child in crate::refine::kids(e) {
-        inout_statement_calls(child, conditional, mentions, calls);
+        inout_statement_calls(child, conditional, calls);
     }
     if let Expr::Call(c) = e {
         calls.push((c, conditional));
@@ -617,6 +634,7 @@ impl Checker {
             statement_call: None,
             borrowed_text: None,
             map_roots: Vec::new(),
+            map_iterations: Vec::new(),
             type_sccs: Vec::new(),
             boxed: Vec::new(),
             boxed_decls: HashSet::new(),
@@ -967,6 +985,13 @@ impl Checker {
                     self.norm_expr(&mut s.decreases);
                     self.norm_stmts(&mut s.body);
                 }
+                Stmt::ForMap(s) => {
+                    self.norm_expr(&mut s.place);
+                    for inv in &mut s.invariants {
+                        self.norm_expr(inv);
+                    }
+                    self.norm_stmts(&mut s.body);
+                }
                 Stmt::Assert(s) => self.norm_expr(&mut s.cond),
                 Stmt::Par(s) => {
                     for c in &mut s.calls {
@@ -1196,9 +1221,13 @@ impl Checker {
                 if !text_key && *k != i64t() && v.owner.is_none() {
                     if let Some(TypeDecl::Struct(d)) = self.decls.get(&v.name) {
                         if d.tparams.is_empty()
-                            && d.fields.iter().any(|f| crate::gtype::key_is_owned_field(&f.ty))
-                            && d.fields.iter().all(|f| crate::gtype::key_is_owned_field(&f.ty)
-                                || is_value(&GType::from_key(&f.ty), &|n| self.value_decl(n)))
+                            && d.fields.iter().any(|f| crate::gtype::key_is_collection(&f.ty))
+                            && d.fields.iter().all(|f| {
+                                let ft = GType::from_key(&f.ty);
+                                crate::gtype::key_is_owned_field(&f.ty)
+                                    || self.record_map_field(&ft)
+                                    || is_value(&ft, &|n| self.value_decl(n))
+                            })
                         {
                             return Err(terr(line, col, "foreign_owned_type", "aggregate HashMap values with owned fields require i64 or String keys", ""));
                         }
@@ -1701,14 +1730,25 @@ impl Checker {
                     && d.fields.iter().all(|f| {
                         let t = GType::from_key(&f.ty);
                         crate::gtype::key_is_owned_field(&f.ty)
+                            || self.collection_records.borrow().contains(&ty.name) && self.record_map_field(&t)
                             || (!t.contains_collection() && !t.is_array() && t != strt()
                                 && dependencies(&t).iter().all(|n| !self.extended.contains(n)))
                     }))
     }
 
+    fn record_map_field(&self, ty: &GType) -> bool {
+        let Some(value) = ty.string_record_map_value() else { return false };
+        matches!(self.decls.get(&value.name), Some(TypeDecl::Struct(d))
+            if d.tparams.is_empty() && d.fields.iter().all(|f| {
+                f.ty == "string" || is_value(&GType::from_key(&f.ty), &|n| self.value_decl(n))
+            }))
+    }
+
     fn depends_on_nested_record(&self, ty: &GType) -> bool {
         dependencies(ty).iter().any(|name| matches!(self.decls.get(name), Some(TypeDecl::Struct(d))
-            if d.fields.iter().any(|f| crate::gtype::key_is_nested_collection_field(&f.ty))))
+            if d.fields.iter().any(|f| crate::gtype::key_is_nested_collection_field(&f.ty)
+                || self.collection_records.borrow().contains(name)
+                    && self.record_map_field(&GType::from_key(&f.ty)))))
     }
 
     fn state_collection(&self, ty: &GType) -> bool {
@@ -1855,7 +1895,7 @@ impl Checker {
         }
         d.fields.iter().any(|f| GType::from_key(&f.ty).is_collection())
             && d.fields.iter().all(|f| {
-                if crate::gtype::key_is_scalar_vec(&f.ty) {
+                if crate::gtype::key_is_scalar_vec(&f.ty) || f.ty == "vec<string>" {
                     return true;
                 }
                 let ft = GType::from_key(&f.ty);
@@ -2182,7 +2222,7 @@ impl Checker {
 
     fn lookup(&self, line: i64, col: i64, name: &str, scope: &Scope, path: &[String]) -> Res<Entry> {
         if self.map_roots.iter().any(|(root, held)| {
-            root == name && (path.starts_with(held) || held.starts_with(path))
+            root == name && paths_overlap(path, held)
         }) {
             return Err(terr(line, col, "recursive_borrow", format!("cannot use {name} inside a mutable collection Some arm"), ""));
         }
@@ -2214,13 +2254,16 @@ impl Checker {
         if !self.uses_inout {
             return Ok(());
         }
-        let mut mentions = HashMap::new();
+        let mut mentions = Vec::new();
         let mut calls = Vec::new();
-        if let InoutContext::Assign(name) | InoutContext::PlaceAssignment(name) = context {
-            mentions.insert(name, 1);
+        match context {
+            InoutContext::Assign(name) => mentions.push((name, Vec::new())),
+            InoutContext::PlaceAssignment(name, path) => mentions.push((name, path.to_vec())),
+            _ => {}
         }
         for expr in exprs {
-            inout_statement_calls(expr, matches!(context, InoutContext::WhileCondition), &mut mentions, &mut calls);
+            place_mentions(expr, &mut mentions);
+            inout_statement_calls(expr, matches!(context, InoutContext::WhileCondition), &mut calls);
         }
         let mut effect_before = false;
         for (call, conditional) in calls {
@@ -2233,8 +2276,10 @@ impl Checker {
                     .collect();
                 if !marked.is_empty() {
                     for arg in &marked {
-                        let Some(name) = place_root(&arg.expr) else { continue };
-                        if mentions.get(name).copied().unwrap_or(0) > 1 {
+                        let (root, path) = field_place(&arg.expr);
+                        let Expr::Var(root) = root else { continue };
+                        let name = &root.name;
+                        if mentions.iter().filter(|(other, p)| *other == name && paths_overlap(&path, p)).count() > 1 {
                             return Err(terr(
                                 arg.line,
                                 arg.col,
@@ -2253,7 +2298,7 @@ impl Checker {
                             "use a separate statement where the call must run once",
                         ));
                     }
-                    if matches!(context, InoutContext::PlaceAssignment(_)) {
+                    if matches!(context, InoutContext::PlaceAssignment(..)) {
                         return Err(terr(
                             call.line,
                             call.col,
@@ -2342,6 +2387,7 @@ impl Checker {
                 self.own(&s.value, scope)?;
             }
             Stmt::IndexAssign(s) => {
+                self.check_iteration_borrow(s.line, s.col, &s.name, &[])?;
                 let v = self.lookup(s.line, s.col, &s.name, scope, &[])?;
                 if v.ty == strt() {
                     return Err(terr(
@@ -2369,7 +2415,10 @@ impl Checker {
                                 // G2 A5: stored value is bool for a bool array; G3: exactly T for a [T]
                 let want_val = elem_type(&v.ty);
                 self.expect(&mut s.value, &want_val, scope, false, None)?;
-                self.check_inout_context(&[&s.index, &s.value], InoutContext::PlaceAssignment(&s.name))?;
+                if Self::is_iteration_binder(&s.value, scope) {
+                    self.own(&s.value, scope)?;
+                }
+                self.check_inout_context(&[&s.index, &s.value], InoutContext::PlaceAssignment(&s.name, &[]))?;
             }
             Stmt::FieldAssign(s) => {
                 let v = self.lookup(s.line, s.col, &s.name, scope, &s.fields)?;
@@ -2425,7 +2474,7 @@ impl Checker {
                 let checked = self.expect(&mut s.value, &cur, scope, false, None);
                 self.field_move = saved;
                 checked?;
-                self.check_inout_context(&[&s.value], InoutContext::PlaceAssignment(&s.name))?;
+                self.check_inout_context(&[&s.value], InoutContext::PlaceAssignment(&s.name, &s.fields))?;
                 if cur.is_array() || cur == strt() {
                     // G9 A0: G2 explicit ownership for a buffer field
                     self.array_source(s.line, s.col, &s.value, scope, false, &cur)?;
@@ -2453,7 +2502,11 @@ impl Checker {
                 let mut sc = scope.clone();
                 self.block(&mut s.body, &mut sc)?;
             }
+            Stmt::ForMap(s) => self.for_map(s, scope)?,
             Stmt::Return(s) => {
+                if !self.map_iterations.is_empty() {
+                    return Err(terr(s.line, s.col, "foreign_contract", "cannot return inside a map iteration", ""));
+                }
                 if !self.map_roots.is_empty() {
                     return Err(terr(s.line, s.col, "foreign_contract", "cannot return inside a mutable collection Some arm", ""));
                 }
@@ -2635,7 +2688,9 @@ impl Checker {
     fn par_args(&self, e: &Expr) -> Res<()> {
         if let Expr::Call(c) = e {
             for arg in &c.args {
-                if !matches!(arg, Expr::InoutArg(_) | Expr::Var(_) | Expr::IntLit(_) | Expr::BoolLit(_)) {
+                if !matches!(arg, Expr::InoutArg(_) | Expr::Var(_) | Expr::IntLit(_) | Expr::BoolLit(_))
+                    || matches!(arg, Expr::InoutArg(a) if !matches!(&*a.expr, Expr::Var(_)))
+                {
                     return Err(terr(arg.line(), arg.col(), "parallel_argument",
                         "a par branch argument must be a binding name, an integer or bool literal, or `inout name`",
                         "bind the value before the group, e.g. `let n: i64 = len(a);`, and pass n"));
@@ -2753,8 +2808,16 @@ impl Checker {
             _ => None,
         };
         let map_mut = map_call.is_some_and(|call| matches!(call.name.as_str(), "map_get_mut" | "vec_at_mut"));
-        let map_borrow = map_call.is_some_and(|call| call.name == "map_get")
-            && t.args.first().is_some_and(|ty| self.is_extended(ty));
+        let map_read = map_call.filter(|call| call.name == "map_get");
+        let nested_map_path = map_read.and_then(|call| {
+            GType::from_key(expr_ty(&call.args[0]).as_deref()?).string_record_map_value()?;
+            let (root, path) = field_place(&call.args[0]);
+            let Expr::Var(v) = root else { return None };
+            (!path.is_empty() && scope.get(&v.name).is_some_and(|entry| entry.kind == "map_inout"))
+                .then(|| (v.name.clone(), path))
+        });
+        let map_borrow = map_read.is_some()
+            && (t.args.first().is_some_and(|ty| self.is_extended(ty)) || nested_map_path.is_some());
         self.check_inout_context(&[&m.scrutinee], InoutContext::Value)?;
         let user = self.is_enum(&t);
         let mutable_place = map_call.filter(|_| map_mut).and_then(|call| {
@@ -2763,12 +2826,14 @@ impl Checker {
             let Expr::Var(v) = root else { return None };
             Some((v.name.clone(), path))
         });
-        let root = if let Some(call) = map_call.filter(|_| map_borrow) {
-            place_root(&call.args[0]).map(str::to_string)
-        } else {
-            self.match_root(&m.scrutinee, &t, scope)
-        }; // G9 A0: root variable of an extended scrutinee path
         let mpath = self.match_inout_path(&m.scrutinee, &t, scope);
+        let root = if let Some(call) = map_call.filter(|_| map_borrow && nested_map_path.is_none()) {
+            place_root(&call.args[0]).map(str::to_string)
+        } else if mpath.is_none() {
+            self.match_root(&m.scrutinee, &t, scope)
+        } else {
+            None
+        }; // G9 A0: root variable of an extended scrutinee path
         if t.owner.is_some() {
             return Err(terr(
                 line,
@@ -2859,17 +2924,18 @@ impl Checker {
             }
             let active = root.as_ref().filter(|_| !map_borrow || a.ctor == "Some");
             let borrowed = mutable_place.as_ref().filter(|_| a.ctor == "Some");
+            let arm_path = mpath.as_ref().or(nested_map_path.as_ref().filter(|_| a.ctor == "Some"));
             if let Some(r) = active {
                 self.active_roots.push(r.clone());
             }
             if let Some(place) = borrowed {
                 self.map_roots.push(place.clone());
             }
-            if let Some(mp) = &mpath {
+            if let Some(mp) = arm_path {
                 self.match_paths.push(mp.clone());
             }
             self.block(&mut a.body, &mut sc)?;
-            if mpath.is_some() {
+            if arm_path.is_some() {
                 self.match_paths.pop();
             }
             if borrowed.is_some() {
@@ -2886,13 +2952,17 @@ impl Checker {
     /// `value` (already typed) is moved into an owning position (let, assignment, constructor field, return):
     /// a non-fresh extended value is cloned, which needs `alloc`; constructors, literals and calls are fresh.
     fn own(&mut self, value: &Expr, scope: &Scope) -> Res<()> {
+        if Self::is_iteration_binder(value, scope) {
+            return Err(terr(value.line(), value.col(), "foreign_move",
+                "a map iteration binder cannot be used as an owned value", ""));
+        }
         if matches!(value, Expr::Var(v) if scope.get(&v.name).is_some_and(|e| e.kind == "map_inout" && e.ty != i64t() && e.ty != boolt())) {
             return Err(terr(value.line(), value.col(), "foreign_move",
                 "a mutable collection binder cannot be used as an owned value", ""));
         }
         if let Some(k) = expr_ty(value) {
             let t = GType::from_key(k);
-            if self.is_extended(&t) && !matches!(value, Expr::EnumCtor(_) | Expr::StructLit(_) | Expr::Call(_)) {
+            if self.is_extended(&t) && !matches!(value, Expr::EnumCtor(_) | Expr::StructLit(_) | Expr::Call(_) | Expr::Move(_)) {
                 self.used_effects.insert("alloc".to_string());
             }
         }
@@ -2934,31 +3004,87 @@ impl Checker {
         None
     }
 
-    /// R-6e-8: (root, field path) of a match scrutinee place over an extended type rooted at an inout or
-    /// element binding, else None.
+    /// R-6e-8: the held path of an extended match on an inout, element binding or mutable local field.
     fn match_inout_path(&self, scrut: &Expr, t: &GType, scope: &Scope) -> Option<(String, Vec<String>)> {
         if !self.is_extended(t) {
             return None;
         }
-        let mut e: &Expr = scrut;
-        let mut fields: Vec<String> = Vec::new();
-        while let Expr::FieldAccess(x) = e {
-            fields.insert(0, x.field.clone());
-            e = &x.base;
-        }
+        let (e, fields) = field_place(scrut);
         if let Expr::Var(v) = e {
-            if scope.get(&v.name).is_some_and(|x| x.kind == "inout" || x.kind == "map_inout") {
+            if scope.get(&v.name).is_some_and(|x| {
+                matches!(x.kind, "inout" | "map_inout") || !fields.is_empty() && x.kind == "local" && x.mutable
+            }) {
                 return Some((v.name.clone(), fields));
             }
         }
         None
     }
 
+    fn for_map(&mut self, st: &mut ForMap, scope: &Scope) -> Res<()> {
+        if self.cur_cost {
+            return Err(terr(st.line, st.col, "foreign_contract",
+                "map iteration is not allowed in a function with a cost clause", ""));
+        }
+        let (root, path) = field_place(&st.place);
+        let Expr::Var(root) = root else {
+            return Err(terr(st.place.line(), st.place.col(), "foreign_contract",
+                "map iteration requires a binding or field path", ""));
+        };
+        let root = root.name.clone();
+        let ty = self.expr(&mut st.place, scope, false)?;
+        let val = match (ty.owner.is_none(), ty.name.as_str(), ty.args.as_slice()) {
+            (true, "hashmap", [k, v]) if k.to_key() == "string"
+                && (*v == i64t() || *v == boolt() || self.owned_aggregate(v)) => v.clone(),
+            _ => return Err(terr(st.place.line(), st.place.col(), "foreign_owned_type",
+                "map iteration requires HashMap<String, V> with scalar or owned aggregate values", "")),
+        };
+        self.ckind = "invariant";
+        for inv in &mut st.invariants {
+            self.expect(inv, &boolt(), scope, true, None)?;
+        }
+        self.ckind = "code";
+        let mut inner = scope.clone();
+        for (name, ty) in [(&st.key, GType::from_key("string")), (&st.val, val)] {
+            if inner.contains_key(name) {
+                return Err(terr(st.line, st.col, "shadow", format!("{} is already defined", name), "use a new name"));
+            }
+            inner.insert(name.clone(), Entry { ty, mutable: false, kind: "map_iter" });
+        }
+        self.map_iterations.push((root, path));
+        let result = self.block(&mut st.body, &mut inner);
+        self.map_iterations.pop();
+        result
+    }
+
+    fn is_iteration_binder(e: &Expr, scope: &Scope) -> bool {
+        matches!(e, Expr::Var(v) if scope.get(&v.name).is_some_and(|entry| entry.kind == "map_iter"))
+    }
+
+    fn expect_str_arg(&mut self, e: &mut Expr, scope: &Scope, contract: bool) -> Res<()> {
+        let got = self.text_expr(e, scope, contract)?;
+        if got.to_key() == "string" && Self::is_iteration_binder(e, scope) {
+            return Ok(());
+        }
+        self.check_expected_type(e, &strt(), None, got)?;
+        Ok(())
+    }
+
     fn match_path_held(&self, name: &str, path: &[String]) -> bool {
-        self.match_paths.iter().any(|(root, held)| root == name && (path.starts_with(held) || held.starts_with(path)))
+        self.match_paths.iter().any(|(root, held)| root == name && paths_overlap(path, held))
+    }
+
+    fn check_iteration_borrow(&self, line: i64, col: i64, name: &str, path: &[String]) -> Res<()> {
+        if self.map_iterations.iter().any(|(root, held)|
+            root == name && (path.starts_with(held) || held.starts_with(path))) {
+            let place = std::iter::once(name).chain(path.iter().map(String::as_str)).collect::<Vec<_>>().join(".");
+            return Err(terr(line, col, "recursive_borrow",
+                format!("cannot mutate or move {} during map iteration", place), ""));
+        }
+        Ok(())
     }
 
     fn check_borrow(&self, line: i64, col: i64, name: &str, fields: &[String]) -> Res<()> {
+        self.check_iteration_borrow(line, col, name, fields)?;
         if self.active_roots.iter().any(|r| r == name) || self.match_path_held(name, fields) {
             let mut parts: Vec<&str> = vec![name];
             parts.extend(fields.iter().map(|f| f.as_str()));
@@ -3247,6 +3373,9 @@ impl Checker {
             }
             Expr::Move(x) => {
                 self.check_borrow(x.line, x.col, &x.name, &x.fields)?;
+                if scope.get(&x.name).is_some_and(|entry| entry.kind == "map_iter") {
+                    return Err(terr(x.line, x.col, "foreign_move", "a map iteration binder cannot be moved", ""));
+                }
                 if !x.fields.is_empty() {
                     let mut ty = self.lookup(x.line, x.col, &x.name, scope, &x.fields)?.ty;
                     for field in &x.fields {
@@ -3606,6 +3735,9 @@ impl Checker {
                 }
                 if let Some(a) = e.arg.as_mut() {
                     self.expect(a, &i64t(), scope, c, None)?;
+                    if !c {
+                        self.own(a, scope)?;
+                    }
                 }
                 return Ok(if name == "Some" { GType::option() } else { GType::result() });
             }
@@ -3634,6 +3766,9 @@ impl Checker {
         let want = if name == "Err" { i64t() } else { x.clone() };
         if let Some(a) = e.arg.as_mut() {
             self.expect(a, &want, scope, c, None)?;
+            if !c {
+                self.own(a, scope)?;
+            }
         }
         Ok(if name == "Some" { mk_option(x) } else { mk_result(x) })
     }
@@ -3700,8 +3835,9 @@ impl Checker {
     /// whole argument list.
     fn inout_args(&mut self, e: &mut Call, f: &FuncInfo, m: &Mapping, scope: &Scope, c: bool) -> Res<()> {
         let n = e.name.clone();
-        let collection_place = !self.funcs.contains_key(&n) && matches!(n.as_str(), "map_get_mut" | "vec_at_mut" | "map_remove" | "vec_clear");
-        let mut marked: Vec<(usize, String)> = Vec::new();
+        let user_call = self.funcs.contains_key(&n);
+        let collection_place = !user_call && matches!(n.as_str(), "map_get_mut" | "vec_at_mut" | "map_remove" | "vec_clear");
+        let mut marked = Vec::new();
         for i in 0..e.args.len().min(f.params.len()) {
             let want = substitute(&f.params[i], m);
             let pname = f.pnames[i].clone();
@@ -3719,8 +3855,7 @@ impl Checker {
                     self.check_text_key(&mut e.args[i], scope, c, None)?;
                 } else {
                     if self.funcs.contains_key(&n) && want == strt() {
-                        let got = self.text_expr(&mut e.args[i], scope, c)?;
-                        self.check_expected_type(&e.args[i], &want, None, got)?;
+                        self.expect_str_arg(&mut e.args[i], scope, c)?;
                     } else {
                         self.expect(&mut e.args[i], &want, scope, c, None)?;
                     }
@@ -3740,9 +3875,13 @@ impl Checker {
                     ))
                 }
             };
+            let (place, path) = field_place(&arg.expr);
+            if let Expr::Var(op) = place {
+                self.check_iteration_borrow(aline, acol, &op.name, &path)?;
+            }
             let what: Option<&str> = match &*arg.expr {
                 Expr::Var(_) => None,
-                Expr::FieldAccess(_) if collection_place && place_root(&arg.expr).is_some() => None,
+                Expr::FieldAccess(_) if (user_call || collection_place) && place_root(&arg.expr).is_some() => None,
                 Expr::FieldAccess(_) => Some("a field"),
                 Expr::Index(_) => Some("an element"),
                 Expr::Call(_) => Some("a call"),
@@ -3757,7 +3896,6 @@ impl Checker {
                     "name a `let mut` local array or an inout parameter of this function",
                 ));
             }
-            let (place, path) = field_place(&arg.expr);
             let Expr::Var(op) = place else { return Err(terr(aline, acol, "internal", "unknown expression", "")) };
             let name = op.name.clone();
             let v = self.lookup(op.line, op.col, &name, scope, &path)?;
@@ -3812,10 +3950,16 @@ impl Checker {
             }
             if let Expr::Var(op) = &mut *arg.expr { op.ty = Some(actual.to_key()); }
             arg.ty = Some(actual.to_key());
-            marked.push((i, name));
+            marked.push((i, name, if user_call { path } else { Vec::new() }));
         }
-        for (i, name) in &marked {
-            if e.args.iter().enumerate().any(|(j, x)| j != *i && mentions(x, name)) {
+        for (i, name, path) in &marked {
+            let mut others = Vec::new();
+            for (j, arg) in e.args.iter().enumerate() {
+                if j != *i {
+                    place_mentions(arg, &mut others);
+                }
+            }
+            if others.iter().any(|(other, p)| *other == name && paths_overlap(path, p)) {
                 return Err(terr(
                     e.args[*i].line(),
                     e.args[*i].col(),
@@ -4541,8 +4685,7 @@ impl Checker {
                     if cat.is_some() && n == "map_get" && want.to_key() == "string" {
                         self.check_text_key(arg, scope, c, None)?;
                     } else if cat.is_none() && want == strt() {
-                        let got = self.text_expr(arg, scope, c)?;
-                        self.check_expected_type(arg, &want, None, got)?;
+                        self.expect_str_arg(arg, scope, c)?;
                     } else {
                         self.expect(arg, &want, scope, c, None)?;
                     }
@@ -4578,6 +4721,9 @@ impl Checker {
                 }
             }
             let arg = e.args.last().unwrap();
+            if Self::is_iteration_binder(arg, scope) {
+                self.own(arg, scope)?;
+            }
             if matches!(arg, Expr::Var(v) if scope.get(&v.name).is_some_and(|entry| entry.kind == "map_inout" && entry.ty != i64t() && entry.ty != boolt())) {
                 return Err(terr(arg.line(), arg.col(), "foreign_move",
                     "an aggregate collection payload needs a constructor, call result or move", ""));
@@ -4594,6 +4740,10 @@ impl Checker {
         if let Some(takes) = self.takes.get(&n) {
             for ((arg, param), take) in e.args.iter().zip(&f.params).zip(takes) {
                 let pt = substitute(param, &m);
+                if *take && Self::is_iteration_binder(arg, scope) {
+                    return Err(terr(arg.line(), arg.col(), "foreign_move",
+                        "a map iteration binder cannot be used as an owned value", ""));
+                }
                 if *take && pt.is_array() && !matches!(arg, Expr::Move(_)) {
                     let fix = match arg {
                         Expr::Var(v) => format!("write move {}", v.name),
@@ -5007,6 +5157,11 @@ pub fn opaque_inline(prog: &mut Program) {
                     ex(&mut x.decreases, d);
                     st(&mut x.body, d);
                 }
+                Stmt::ForMap(x) => {
+                    ex(&mut x.place, d);
+                    x.invariants.iter_mut().for_each(|a| ex(a, d));
+                    st(&mut x.body, d);
+                }
                 Stmt::Return(x) => {
                     if let Some(v) = x.value.as_mut() {
                         ex(v, d);
@@ -5191,6 +5346,10 @@ fn par_info(f: &Function, funcs: &HashMap<String, Rc<FuncInfo>>) -> ParInfo {
                     ex(&x.cond, info, funcs);
                     walk(&x.body, info, funcs);
                 }
+                Stmt::ForMap(x) => {
+                    ex(&x.place, info, funcs);
+                    walk(&x.body, info, funcs);
+                }
                 Stmt::Return(x) => if let Some(v) = &x.value { ex(v, info, funcs); },
                 Stmt::ExprStmt(x) => ex(&x.expr, info, funcs),
                 Stmt::Par(x) => {
@@ -5248,6 +5407,7 @@ fn cost_calls(stmts: &[Stmt], out: &mut Vec<Call>) {
             Stmt::IndexAssign(x) => { ex(&x.index, out); ex(&x.value, out); }
             Stmt::If(x) => { ex(&x.cond, out); cost_calls(&x.then, out); cost_calls(&x.els, out); }
             Stmt::While(x) => { ex(&x.cond, out); cost_calls(&x.body, out); }
+            Stmt::ForMap(x) => cost_calls(&x.body, out),
             Stmt::Return(x) => if let Some(v) = &x.value { ex(v, out); },
             Stmt::ExprStmt(x) => ex(&x.expr, out),
             Stmt::Par(x) => for c in &x.calls { ex(c, out); },

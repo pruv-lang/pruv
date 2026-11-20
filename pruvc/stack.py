@@ -228,6 +228,11 @@ class Uses:
             self.expr(st.cond, scope)
             self.block(st.then, scope, ctx)
             self.block(st.els, scope, ctx)
+        elif isinstance(st, ForMap):
+            self.expr(st.place, scope)
+            for inv in st.invariants:
+                self.expr(inv, scope)
+            self.block(st.body, scope, ctx)
         elif isinstance(st, While):
             self.expr(st.cond, scope)
             for inv in st.invariants:

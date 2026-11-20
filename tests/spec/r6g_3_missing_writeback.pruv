@@ -1,0 +1,10 @@
+// spec: R-6g-3 reject
+struct Rec { n: i64 }
+struct St { a: Rec, c: i64 }
+fn set(inout a: Rec) -> ()
+  ensures a.n == 7
+{ a.n = 7; }
+fn update(inout s: St) -> ()
+  requires s.a.n == 0 && s.c == 0
+  ensures s.a.n == s.c
+{ set(inout s.a); }

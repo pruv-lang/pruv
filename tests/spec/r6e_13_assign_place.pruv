@@ -1,0 +1,9 @@
+// spec: R-6e-13 reject
+struct Rec { n: i64 }
+struct State { recs: HashMap<String, Rec> }
+
+fn update(inout st: State) -> () ! alloc {
+  for (k, v) in st.recs {
+    st.recs = map_new::<String, Rec>();
+  }
+}

@@ -108,6 +108,14 @@ impl GType {
         self.is_collection() || self.args.iter().any(|a| a.contains_collection())
     }
 
+    pub(crate) fn string_record_map_value(&self) -> Option<&GType> {
+        match (self.owner.as_ref(), self.name.as_str(), self.args.as_slice()) {
+            (None, "hashmap", [k, v])
+                if k.to_key() == "string" && v.args.is_empty() && v.is_user_type() => Some(v),
+            _ => None,
+        }
+    }
+
     /// Whether this names a user struct/enum (declared or not); not a built-in name and not a parameter.
     pub fn is_user_type(&self) -> bool {
         self.owner.is_none() && !BUILTIN_TYPE_NAMES.contains(&self.name.as_str())

@@ -191,6 +191,14 @@ fn stmt_names(stmts: &[Stmt], out: &mut HashSet<String>) {
                 expr_names(&x.decreases, out);
                 stmt_names(&x.body, out);
             }
+            Stmt::ForMap(x) => {
+                out.extend([x.key.clone(), x.val.clone()]);
+                expr_names(&x.place, out);
+                for i in &x.invariants {
+                    expr_names(i, out);
+                }
+                stmt_names(&x.body, out);
+            }
             Stmt::Return(x) => {
                 if let Some(v) = &x.value {
                     expr_names(v, out);
@@ -339,6 +347,7 @@ fn assign_stmts<'s>(stmts: &'s [Stmt], out: &mut Vec<Asg<'s>>) {
                 assign_stmts(&x.els, out);
             }
             Stmt::While(x) => assign_stmts(&x.body, out),
+            Stmt::ForMap(x) => assign_stmts(&x.body, out),
             Stmt::Match(m) => {
                 for a in &m.arms {
                     assign_stmts(&a.body, out);
@@ -399,6 +408,7 @@ fn call_written(stmts: &[Stmt], out: &mut BTreeSet<String>) {
                 call_written(&x.els, out);
             }
             Stmt::While(x) => call_written(&x.body, out),
+            Stmt::ForMap(x) => call_written(&x.body, out),
             Stmt::Match(m) => {
                 for a in &m.arms {
                     call_written(&a.body, out);
@@ -429,6 +439,10 @@ fn locals(stmts: &[Stmt], out: &mut BTreeSet<String>) {
                 locals(&x.els, out);
             }
             Stmt::While(x) => locals(&x.body, out),
+            Stmt::ForMap(x) => {
+                out.extend([x.key.clone(), x.val.clone()]);
+                locals(&x.body, out);
+            }
             Stmt::Match(m) => {
                 for a in &m.arms {
                     for b in &a.binders {
@@ -454,7 +468,7 @@ fn init<'s>(block: &'s [Stmt], idx: usize, name: &str, skip_index: bool) -> Opti
             Stmt::Let(x) if x.name == name => return Some(&x.value),
             Stmt::Assign(x) if x.name == name => return Some(&x.value),
             Stmt::IndexAssign(x) if skip_index && x.name == name => continue,
-            Stmt::If(_) | Stmt::While(_) | Stmt::Match(_) => {
+            Stmt::If(_) | Stmt::While(_) | Stmt::ForMap(_) | Stmt::Match(_) => {
                 if assigned(std::slice::from_ref(st)).contains(name) {
                     return None;
                 }
@@ -583,6 +597,13 @@ fn find_loop_env(stmts: &[Stmt], env: &mut TyEnv, w: &ast::While) -> bool {
                 if std::ptr::eq(x, w) {
                     return true;
                 }
+                let mut e2 = env.clone();
+                if find_loop_env(&x.body, &mut e2, w) {
+                    *env = e2;
+                    return true;
+                }
+            }
+            Stmt::ForMap(x) => {
                 let mut e2 = env.clone();
                 if find_loop_env(&x.body, &mut e2, w) {
                     *env = e2;

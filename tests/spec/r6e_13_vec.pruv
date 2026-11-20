@@ -1,0 +1,4 @@
+// spec: R-6e-13 reject
+fn bad(m: Vec<i64>) -> () {
+  for (k, v) in m {}
+}

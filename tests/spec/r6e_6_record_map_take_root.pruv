@@ -1,0 +1,7 @@
+// spec: R-6e-6 reject
+struct Run { since: i64 }
+struct State { runs: HashMap<String, Run> }
+
+fn consume(take s: State) -> i64 {
+  return len(s.runs);
+}

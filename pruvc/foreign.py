@@ -410,12 +410,15 @@ class _Ownership:
         if isinstance(x, If):
             s.expr(x.cond, st)
             return _join(s.block(x.then, dict(st)), s.block(x.els, dict(st)))
-        if isinstance(x, While):
+        if isinstance(x, (While, ForMap)):
             entry = dict(st)
             for clause in x.invariants:    # R03L: an invariant holds before the condition runs
                 s.array_reads(clause, st)
-            s.expr(x.cond, st)
-            s.array_reads(x.decreases, st)
+            if isinstance(x, While):
+                s.expr(x.cond, st)
+                s.array_reads(x.decreases, st)
+            else:
+                s.expr(x.place, st)
             end = s.block(x.body, dict(st))
             if end is not None:
                 for n, v in entry.items():
@@ -476,6 +479,10 @@ class _Ownership:
         elif isinstance(x, Par):
             for c in x.calls:
                 s.dead_expr(c)
+        elif isinstance(x, ForMap):
+            s.dead_expr(x.place)
+            for stmt in x.body:
+                s.dead_stmt(stmt)
         elif isinstance(x, (If, While, Match)):
             s.dead_expr(x.scrutinee if isinstance(x, Match) else x.cond)
             if isinstance(x, Match):

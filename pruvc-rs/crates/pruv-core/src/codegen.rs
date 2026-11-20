@@ -5,6 +5,7 @@
 //! Places where Python raises an Exception return Err(str(e)) (an AST printed with %r becomes {:?} — an unreachable path).
 
 use crate::ast::*;
+use crate::check::field_place;
 use crate::diagnostic::PruvError;
 use crate::emit_common::{
     emit_public_types_with, fast_forall, fuse_map, is_spec_fn, is_user_key, key_name, make_type_table, match_sorted_requires, rstr, rty, rty_g,
@@ -1264,6 +1265,7 @@ impl<'a> Gen<'a> {
                     },
                     Stmt::If(x) => { collect_par(&x.then, names); collect_par(&x.els, names); }
                     Stmt::While(x) => collect_par(&x.body, names),
+                    Stmt::ForMap(x) => collect_par(&x.body, names),
                     Stmt::Match(x) => for arm in &x.arms { collect_par(&arm.body, names); },
                     _ => {}
                 }
@@ -3485,7 +3487,20 @@ impl<'a> Gen<'a> {
         }
         let (types, _) = crate::foreign_shim::inst_types(call);
         (matches!(call.name.as_str(), "map_get_mut" | "vec_at_mut") || (call.name == "map_get"
-            && types.get(1).is_some_and(|t| self.is_ext(Some(&t.to_key()))))).then_some(call)
+            && (types.get(1).is_some_and(|t| self.is_ext(Some(&t.to_key())))
+                || self.nested_record_map_read(&call.args[0])))).then_some(call)
+    }
+
+    fn nested_record_map_read(&self, place: &Expr) -> bool {
+        if !expr_ty(place).as_deref().is_some_and(|t| GType::from_key(t).string_record_map_value().is_some()) {
+            return false;
+        }
+        let mut root = place;
+        while let Expr::FieldAccess(field) = root {
+            root = &field.base;
+        }
+        !std::ptr::eq(root, place)
+            && matches!(root, Expr::Var(v) if self.inouts.contains(&v.name) && !self.params.contains(&v.name))
     }
 
     fn match_map(&mut self, stmt: &Match, ind: usize) -> R<()> {
@@ -3720,7 +3735,10 @@ impl<'a> Gen<'a> {
             Stmt::FieldAssign(x) => {
                 if let Expr::Call(call) = &x.value {
                     let nested_insert = call.name == "map_insert"
-                        && expr_ty(&x.value).as_deref().is_some_and(crate::gtype::key_is_nested_collection_field);
+                        && expr_ty(&x.value).as_deref().is_some_and(|t| {
+                            crate::gtype::key_is_nested_collection_field(t)
+                                || GType::from_key(t).string_record_map_value().is_some()
+                        });
                     if (call.name == "vec_push" || nested_insert) && !self.fmap.contains_key(&call.name)
                         && matches!(call.args.first(), Some(Expr::Move(m)) if m.name == x.name && m.fields == x.fields)
                         && self.unchecked_collections()
@@ -3833,6 +3851,31 @@ impl<'a> Gen<'a> {
                     self.emit(ind + 1, &Self::cost_add("1"));
                 }
                 self.block_in(&x.body, ind + 1, &[], true)?;
+                self.emit(ind, "}");
+            }
+            Stmt::ForMap(x) => {
+                let place = self.e(&x.place)?;
+                let place_ty = GType::from_key(expr_ty(&x.place).as_deref().unwrap_or(""));
+                let val_ty = place_ty.args[1].to_key();
+                let scalar = matches!(val_ty.as_str(), "i64" | "bool");
+                let pattern = if scalar { "&" } else { "" };
+                self.emit(ind, &format!("for ({}, {}{}) in {}.iter() {{", x.key, pattern, x.val, place));
+                let saved_vars = self.vars.clone();
+                let saved_refs = self.refs.clone();
+                self.vars.insert(x.key.clone(), "string".into());
+                self.vars.insert(x.val.clone(), val_ty.clone());
+                self.refs.insert(x.key.clone());
+                if !scalar {
+                    self.refs.insert(x.val.clone());
+                    if !self.is_ext(Some(&val_ty)) {
+                        self.map_views.insert(x.val.clone());
+                    }
+                }
+                let result = self.block_in(&x.body, ind + 1, &[], true);
+                self.map_views.remove(&x.val);
+                self.vars = saved_vars;
+                self.refs = saved_refs;
+                result?;
                 self.emit(ind, "}");
             }
             Stmt::Return(x)
@@ -4674,19 +4717,24 @@ impl<'a> Gen<'a> {
                     let is_move = matches!(xa, Expr::Move(_));
                     let coll = expr_ty(xa).as_deref().map_or(false, key_is_collection);
                     if let Expr::InoutArg(ia) = xa {
-                        // G5: `inout name` -> a mutable borrow / reborrow, in source order
-                        let nm = match ia.expr.as_ref() {
-                            Expr::Var(v) => v.name.clone(),
-                            other => return Err(format!("codegen: inout operand is not a variable: {:?}", other)),
+                        // Mutable borrow / reborrow in source order.
+                        let (root, path) = field_place(&ia.expr);
+                        let Expr::Var(v) = root else {
+                            return Err(format!("codegen: inout operand is not a place: {:?}", ia.expr));
                         };
-                        let ty = expr_ty(&ia.expr).as_deref().unwrap_or("");
-                        args.push(if !GType::from_key(ty).is_array() && self.inouts.contains(&nm) {
-                            nm
+                        let ty = v.ty.as_deref().unwrap_or("");
+                        args.push(if !path.is_empty() {
+                            format!("&mut {}.{}", v.name, path.join("."))
+                        } else if !GType::from_key(ty).is_array() && self.inouts.contains(&v.name) {
+                            v.name.clone()
                         } else {
-                            self.mut_ref(&nm)
+                            self.mut_ref(&v.name)
                         });
                     } else if is_move && expr_ty(xa).as_deref().is_some_and(is_array_name) {
                         args.push(self.e(xa)?);
+                    } else if callee.is_some_and(|c| c.params.get(i).is_some_and(|p| p.ty == "str"))
+                        && expr_ty(xa).as_deref() == Some("string") {
+                        args.push(self.borrowed_map_key(xa)?);
                     } else if self.g6 && (is_move || coll) {
                         let take = is_move || callee.map_or(false, |c| c.params.get(i).map_or(false, |p| p.take));
                         if take {
@@ -4701,7 +4749,7 @@ impl<'a> Gen<'a> {
                     } else if expr_ty(xa).as_deref().map_or(false, |t| is_array_name(t) || t == "str") {
                         args.push(self.arr_ref(xa)?);
                     } else if let Expr::IntLit(lit) = xa {
-                        if callee.is_some_and(has_struct_inout) && !lit.value.starts_with('-') {
+                        if self.fmap.get(n).copied().is_some_and(has_struct_inout) && !lit.value.starts_with('-') {
                             args.push(lit.value.clone());
                         } else {
                             args.push(self.e(xa)?);

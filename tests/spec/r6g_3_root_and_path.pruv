@@ -1,0 +1,5 @@
+// spec: R-6g-3 reject
+struct Rec { n: i64 }
+struct St { a: Rec }
+fn touch(inout s: St, inout a: Rec) -> () {}
+fn update(inout s: St) -> () { touch(inout s, inout s.a); }

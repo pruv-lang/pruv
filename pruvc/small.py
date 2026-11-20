@@ -74,6 +74,9 @@ def _stmts_ok(stmts, name, write_ok, fmap):
             if not (_expr_ok(st.cond, name, write_ok, fmap) and _stmts_ok(st.then, name, write_ok, fmap)
                     and _stmts_ok(st.els, name, write_ok, fmap)):
                 return False
+        elif isinstance(st, ForMap):
+            if not (_expr_ok(st.place, name, write_ok, fmap) and _stmts_ok(st.body, name, write_ok, fmap)):
+                return False
         elif isinstance(st, While):
             if not (_expr_ok(st.cond, name, write_ok, fmap) and _stmts_ok(st.body, name, write_ok, fmap)):
                 return False
@@ -117,6 +120,8 @@ def _code_calls(stmts, out):
             ex(st.cond); _code_calls(st.then, out); _code_calls(st.els, out)
         elif isinstance(st, While):
             ex(st.cond); _code_calls(st.body, out)
+        elif isinstance(st, ForMap):
+            _code_calls(st.body, out)
         elif isinstance(st, Return):
             if st.value is not None:
                 ex(st.value)
@@ -144,7 +149,7 @@ def _count(stmts, pred):
 def _children(st):
     if isinstance(st, If):
         return [st.then, st.els]
-    if isinstance(st, While):
+    if isinstance(st, (While, ForMap)):
         return [st.body]
     if isinstance(st, Match):
         return [a.body for a in st.arms]

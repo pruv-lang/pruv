@@ -1,0 +1,19 @@
+// spec: R-6e-13 accept
+pub struct Value { n: i64 }
+pub struct State { values: HashMap<String, Value> }
+pub struct Totals { sum: i64, keys: i64 }
+
+pub fn totals(inout st: State) -> Totals {
+  let mut sum: i64 = 0;
+  let mut keys: i64 = 0;
+  for (k, v) in st.values
+    invariant 0 <= sum
+    invariant 0 <= keys && keys <= 100
+  {
+    if v.n > 0 && sum <= 9223372036854775807 - v.n {
+      sum = sum + v.n;
+    }
+    if keys < 100 { keys = keys + 1; }
+  }
+  return Totals { sum: sum, keys: keys };
+}

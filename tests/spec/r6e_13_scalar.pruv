@@ -1,0 +1,21 @@
+// spec: R-6e-13 accept
+fn sum(m: HashMap<String, i64>) -> i64
+  ensures result >= 0
+{
+  let mut total: i64 = 0;
+  for (k, v) in m
+    invariant total >= 0
+  {
+    assert is_some(map_lookup::<String, i64>(m, k));
+    assert some_val(map_lookup::<String, i64>(m, k)) == v;
+    if v > 0 && total <= 9223372036854775807 - v {
+      total = total + v;
+    }
+  }
+  return total;
+}
+
+fn inspect(Map: HashMap<String, i64>) -> () {
+  for (k, v) in Map { assert len(k) >= 0; }
+  for (k, v) in Map {}
+}

@@ -1,0 +1,21 @@
+// spec: R-6e-13 accept
+pub struct Rec { n: i64, counts: HashMap<String, i64> }
+pub struct State { recs: HashMap<String, Rec>, total: i64 }
+
+pub fn update(inout st: State) -> () {
+  let initial: i64 = len(st.recs);
+  for (k, v) in st.recs {
+    if v.n > 0 && len(k) > 0 && len(v.counts) > 0 {
+      let mut i: i64 = 0;
+      while i < 1
+        invariant 0 <= i && i <= 1
+        decreases 1 - i
+      {
+        st.total = v.n;
+        i = i + 1;
+      }
+    }
+    assert len(st.recs) == initial;
+  }
+  assert len(st.recs) == initial;
+}

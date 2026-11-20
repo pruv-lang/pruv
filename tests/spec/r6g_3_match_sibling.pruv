@@ -1,0 +1,16 @@
+// spec: R-6g-3 accept
+enum Blob { Empty, Ints(items: [i64]) }
+struct Rec { n: i64 }
+struct St { a: Blob, b: Rec }
+fn set(inout r: Rec, n: i64) -> ()
+  ensures r.n == n
+{ r.n = n; }
+fn update() -> i64 ! alloc
+  ensures result == 2
+{ let mut s: St = St { a: Blob::Ints(alloc(2, 9)), b: Rec { n: 0 } };
+  match s.a {
+    Blob::Ints(items) => { set(inout s.b, len(items)); assert len(items) == 2; }
+    Blob::Empty => { set(inout s.b, 0); }
+  }
+  return s.b.n;
+}

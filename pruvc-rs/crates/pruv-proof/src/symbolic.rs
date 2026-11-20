@@ -112,6 +112,7 @@ pub fn walk_loops(stmts: &[Stmt]) -> Vec<(&ast::While, &[Stmt], usize)> {
     fn go<'s>(stmts: &'s [Stmt], out: &mut Vec<(&'s ast::While, &'s [Stmt], usize)>) {
         for (i, st) in stmts.iter().enumerate() {
             match st {
+                Stmt::ForMap(w) => go(&w.body, out),
                 Stmt::While(w) => {
                     out.push((w, stmts, i));
                     go(&w.body, out);
@@ -316,6 +317,12 @@ fn payload_val(ty: &Ty, a: Ast) -> R<Val> {
     }
 }
 
+#[derive(Clone, Copy)]
+enum Loop<'a> {
+    While(&'a ast::While),
+    Map(&'a ast::ForMap),
+}
+
 fn stmt_pos(s: &Stmt) -> Pos {
     let (l, c) = match s {
         Stmt::Let(x) => (x.line, x.col),
@@ -323,6 +330,7 @@ fn stmt_pos(s: &Stmt) -> Pos {
         Stmt::IndexAssign(x) => (x.line, x.col),
         Stmt::If(x) => (x.line, x.col),
         Stmt::While(x) => (x.line, x.col),
+        Stmt::ForMap(x) => (x.line, x.col),
         Stmt::Return(x) => (x.line, x.col),
         Stmt::Assert(x) => (x.line, x.col),
         Stmt::Par(x) => (x.line, x.col),
@@ -351,6 +359,7 @@ pub fn assigned(stmts: &[Stmt], out: &mut BTreeSet<String>) {
                 assigned(&i.els, out);
             }
             Stmt::While(w) => assigned(&w.body, out),
+            Stmt::ForMap(w) => assigned(&w.body, out),
             Stmt::Match(m) => {
                 for a in &m.arms {
                     assigned(&a.body, out);
@@ -405,6 +414,7 @@ fn call_writes(stmts: &[Stmt], out: &mut BTreeSet<String>, select: &impl Fn(&ast
                 call_writes(&x.els, out, select);
             }
             Stmt::While(x) => call_writes(&x.body, out, select),
+            Stmt::ForMap(x) => call_writes(&x.body, out, select),
             Stmt::Match(m) => {
                 inout_ops(&m.scrutinee, out, select);
                 for a in &m.arms {
@@ -428,6 +438,7 @@ fn whole_assigned(stmts: &[Stmt], out: &mut BTreeSet<String>) {
                 whole_assigned(&x.els, out);
             }
             Stmt::While(x) => whole_assigned(&x.body, out),
+            Stmt::ForMap(x) => whole_assigned(&x.body, out),
             Stmt::Match(m) => {
                 for a in &m.arms {
                     whole_assigned(&a.body, out);
@@ -857,6 +868,7 @@ pub struct FnVerifier<'a> {
     /// G5 A1 (`s.snap`): immutable entry snapshots {inout parameter name: entry array}; separate from the current
     /// environment. Empty for a function without inout parameters.
     pub(crate) snap: Env,
+    iter_places: Vec<Expr>,
     /// G4b-3 (verify.py `s._kmemo`): AST id -> key piece of that assertion (digest, fresh names; obligation.rs
     /// `key_text`).
     pub(crate) kmemo: HashMap<u32, (String, Vec<String>)>,
@@ -957,6 +969,7 @@ impl<'a> FnVerifier<'a> {
             cost0: None,
             fn_tag: 0,
             snap: Env::default(),
+            iter_places: Vec::new(),
             kmemo: HashMap::new(),
         }
     }
@@ -1363,6 +1376,9 @@ impl<'a> FnVerifier<'a> {
 
     /// `wf(ty, v)` of an environment value: an Arr view of a buffer field (G9) uses the buffer branch, anything else `try_wf`.
     fn wf_of_val(&self, ty: &Ty, v: &Val) -> R<Option<Ast>> {
+        if let Val::Map(m) = v {
+            return Ok(Some(self.z.and(&[m.n.ge_i(0), m.n.le_i(MAX_LEN)])));
+        }
         if let Val::File(f) = v { return Ok(Some(self.wf_file(f))); }
         if let Val::Proc(p) = v { return Ok(Some(self.wf_proc(p))); }
         if let Val::Sock(p) = v { return Ok(Some(self.wf_sock(p))); }
@@ -1725,6 +1741,18 @@ impl<'a> FnVerifier<'a> {
                     }
                 }
                 Val::Unit => return Err("havoc: None".to_string()),
+            }
+        }
+        // A disjoint sibling write can havoc the root of a read-only iteration place.
+        for i in 0..self.iter_places.len() {
+            let place = self.iter_places[i].clone();
+            let mut root = &place;
+            while let Expr::FieldAccess(f) = root {
+                root = &f.base;
+            }
+            if matches!(root, Expr::Var(v) if names.contains(&v.name)) {
+                let saved = self.ev0(&place, &mut st.fork(None), &[], false)?;
+                self.store_collection_place(&place, &mut h.env, saved)?;
             }
         }
         Ok(h)
@@ -2909,36 +2937,41 @@ impl<'a> FnVerifier<'a> {
         };
         for &i in ios {
             let pname = f.params[i].name.as_str();
-            let name: String = match call.args.get(i) {
-                Some(Expr::InoutArg(ia)) => match &*ia.expr {
-                    Expr::Var(v) => v.name.clone(),
-                    _ => return Err("inout_finals: operand is not a name".to_string()),
-                },
+            let place = match call.args.get(i) {
+                Some(Expr::InoutArg(ia)) => ia.expr.as_ref(),
                 _ => return Err("inout_finals: missing inout argument".to_string()),
             };
+            let mut root = place;
+            while let Expr::FieldAccess(field) = root {
+                root = &field.base;
+            }
+            let Expr::Var(root) = root else { return Err("inout_finals: operand is not a place".into()) };
+            let name = &root.name;
             let pre = cenv.get(&old_key(pname));
             let ty = Ty::from_name(&f.params[i].ty);
             let ty = Ty::from_gtype(&gtype::substitute(&ty.to_gtype(), &self.theta));
-            if !matches!(pre, Val::Arr(_)) || self.vec_resize_params.contains(&(f.name.clone(), i)) {
-                let nv = self.try_fresh(&name, &ty)?;
-                if let Some(wf) = self.wf_of_val(&ty, &nv)? {
-                    self.assume(st, g, wf);
+            let nv = match pre {
+                Val::Arr(pre) if !self.vec_resize_params.contains(&(f.name.clone(), i)) => {
+                    let fresh_ty = if matches!(ty.coll(), Some(Coll::Vec(_))) { ty } else { pre.array_ty() };
+                    let fv = self.try_fresh(name, &fresh_ty)?;
+                    let fa = fv.try_arr()?;
+                    let nv = pre.like(fa.a.clone(), pre.n.clone(), name);
+                    if nv.elem == Elem::U8 {
+                        let d = self.u8_dom(&nv);
+                        self.assume(st, g, d);
+                    }
+                    Val::Arr(nv)
                 }
-                cenv.set(pname, nv.clone());
-                st.env.set(&name, nv);
-                continue;
-            }
-            let Val::Arr(pre) = pre else { unreachable!() };
-            let fresh_ty = if matches!(ty.coll(), Some(Coll::Vec(_))) { ty } else { pre.array_ty() };
-            let fv = self.try_fresh(&name, &fresh_ty)?;
-            let fa = fv.try_arr()?.clone();
-            let nv = pre.like(fa.a.clone(), pre.n.clone(), &name);
-            if nv.elem == Elem::U8 {
-                let d = self.u8_dom(&nv);
-                self.assume(st, g, d);
-            }
-            cenv.set(pname, Val::Arr(nv.clone()));
-            st.env.set(&name, Val::Arr(nv));
+                _ => {
+                    let nv = self.try_fresh(name, &ty)?;
+                    if let Some(wf) = self.wf_of_val(&ty, &nv)? {
+                        self.assume(st, g, wf);
+                    }
+                    nv
+                }
+            };
+            cenv.set(pname, nv.clone());
+            self.store_collection_place(place, &mut st.env, nv)?;
         }
         Ok(())
     }
@@ -4359,7 +4392,14 @@ impl<'a> FnVerifier<'a> {
             }
             Stmt::While(w) => {
                 let mut st = st;
-                self.loop_(w, &mut st)
+                self.loop_(Loop::While(w), &mut st)
+            }
+            Stmt::ForMap(w) => {
+                let mut st = st;
+                self.iter_places.push(w.place.clone());
+                let result = self.loop_(Loop::Map(w), &mut st);
+                self.iter_places.pop();
+                result
             }
         }
     }
@@ -4378,25 +4418,24 @@ impl<'a> FnVerifier<'a> {
     }
 
     /// verify.py `loop` (line 786).
-    fn loop_(&mut self, w: &ast::While, st: &mut State) -> R<Vec<State>> {
+    fn loop_(&mut self, head: Loop<'_>, st: &mut State) -> R<Vec<State>> {
         if self.probe_aborted() {
             return Ok(Vec::new());
         }
-        let dpos = pos(&w.decreases);
-        // STAGE1 B2: append this loop's candidates (sorted order) after the written invariants (required refinements → user).
-        let extra_here: std::rc::Rc<Vec<ExtraInv>> = if self.extra.is_empty() {
-            std::rc::Rc::new(Vec::new())
-        } else {
-            let n = *self
-                .loop_no
-                .get(&(w as *const ast::While as usize))
-                .ok_or_else(|| "loop number not found".to_string())?;
-            match self.extra.get(&n) {
-                Some(v) => std::rc::Rc::clone(v),
-                None => std::rc::Rc::new(Vec::new()),
-            }
+        let (invariants, body) = match head {
+            Loop::While(w) => (&w.invariants, &w.body),
+            Loop::Map(w) => (&w.invariants, &w.body),
         };
-        let mut invs: Vec<InvRef<'_>> = w.invariants.iter().map(|i| (None, i, None)).collect();
+        // Append inferred candidates after the written invariants of a while loop.
+        let extra_here = match head {
+            Loop::While(w) if !self.extra.is_empty() => {
+                let n = self.loop_no.get(&(w as *const ast::While as usize))
+                    .ok_or_else(|| "loop number not found".to_string())?;
+                self.extra.get(n).cloned()
+            }
+            _ => None,
+        }.unwrap_or_default();
+        let mut invs: Vec<InvRef<'_>> = invariants.iter().map(|i| (None, i, None)).collect();
         for (id, e, t) in extra_here.iter() {
             invs.push((Some(id.as_str()), e, Some(t.as_str())));
         }
@@ -4410,22 +4449,22 @@ impl<'a> FnVerifier<'a> {
             prev.push(ob);
         }
         let mut names: BTreeSet<String> = BTreeSet::new();
-        assigned(&w.body, &mut names);
+        assigned(body, &mut names);
         if self.has_cost() { names.insert("spent".to_string()); }
         // G5 A1 (5.3): inout call arguments are changed too. Inout parameters keep their entry length; a local changed
         // by inout calls keeps the loop-head length only if no whole assignment in the body can replace it.
         // Without inout, calls = {} and snap = {}: names/keep (and the SMT) are exactly the old ones.
         let mut calls: BTreeSet<String> = BTreeSet::new();
-        call_writes(&w.body, &mut calls, &|_, _| true);
+        call_writes(body, &mut calls, &|_, _| true);
         let mut keep: BTreeSet<String> = BTreeSet::new();
         if !calls.is_empty() || !self.snap.0.is_empty() {
             let mut whole: BTreeSet<String> = BTreeSet::new();
             if !calls.is_empty() {
-                whole_assigned(&w.body, &mut whole);
+                whole_assigned(body, &mut whole);
             }
             names.extend(calls.iter().cloned());
             let mut resizes = BTreeSet::new();
-            call_writes(&w.body, &mut resizes, &|call, i| {
+            call_writes(body, &mut resizes, &|call, i| {
                 call.name == "vec_clear" || self.vec_resize_params.contains(&(call.name.clone(), i))
             });
             for n in &names {
@@ -4437,14 +4476,24 @@ impl<'a> FnVerifier<'a> {
         // An arbitrary single iteration: at the start the invariants held (and were defined)
         let mut b = self.havoc_set(st, &names, &keep)?;
         self.loop_assume_invariants(&invs, &mut b)?;
-        let c = self.ev0_ast(&w.cond, &mut b, &[], true)?;
-        b.pc.push(c);
-        self.check_dom_e(&mut b, &[], &w.decreases, dpos, "variant_field lookups in decreases are defined", None)?;
-        let d0 = self.ev0_ast(&w.decreases, &mut b, &[], false)?;
-        let ob = d0.ge_i(0);
-        self.prove_core(&b, &[], &ob, dpos, "decreases_nonneg", "decreases >= 0", None);
+        let measure = match head {
+            Loop::While(w) => {
+                let c = self.ev0_ast(&w.cond, &mut b, &[], true)?;
+                b.pc.push(c);
+                let dpos = pos(&w.decreases);
+                self.check_dom_e(&mut b, &[], &w.decreases, dpos, "variant_field lookups in decreases are defined", None)?;
+                let d0 = self.ev0_ast(&w.decreases, &mut b, &[], false)?;
+                let ob = d0.ge_i(0);
+                self.prove_core(&b, &[], &ob, dpos, "decreases_nonneg", "decreases >= 0", None);
+                Some((&w.decreases, d0))
+            }
+            Loop::Map(w) => {
+                self.map_iteration(w, &mut b)?;
+                None
+            }
+        };
         self.spend(&mut b, &[], self.z.int(1));
-        for mut end in self.exec_block(&w.body, b)? {
+        for mut end in self.exec_block(body, b)? {
             let mut prev: Vec<Ast> = Vec::new();
             for &(cid, inv, text) in &invs {
                 let (w_dom, w_ob) = inv_what(cid, text, "preserved");
@@ -4454,7 +4503,9 @@ impl<'a> FnVerifier<'a> {
                 self.prove_core_cand(&end, &[], &ob, pos(inv), "invariant_preserved", &w_ob, cid, cid);
                 prev.push(ob);
             }
-            if has_vf(&w.decreases, PKind::All) {
+            let Some((decreases, d0)) = &measure else { continue };
+            let dpos = pos(decreases);
+            if has_vf(decreases, PKind::All) {
                 // decreases is read at the end of the body: the invariants just proved can justify that lookup
                 let mut extra: Vec<Ast> = Vec::new();
                 for &(_cid, inv, _text) in &invs {
@@ -4468,22 +4519,45 @@ impl<'a> FnVerifier<'a> {
                 self.check_dom_e(
                     &mut end,
                     &extra,
-                    &w.decreases,
+                    decreases,
                     dpos,
                     "variant_field lookups in decreases are defined",
                     None,
                 )?;
             }
-            let dv = self.ev0_ast(&w.decreases, &mut end, &[], false)?;
-            let ob = dv.lt(&d0);
+            let dv = self.ev0_ast(decreases, &mut end, &[], false)?;
+            let ob = dv.lt(d0);
             self.prove_core(&end, &[], &ob, dpos, "decreases_decrease", "decreases strictly decreases", None);
         }
         // After the loop
         let mut a = self.havoc_set(st, &names, &keep)?;
         self.loop_assume_invariants(&invs, &mut a)?;
-        let c = self.ev0_ast(&w.cond, &mut a, &[], true)?;
-        a.pc.push(c.not());
+        if let Loop::While(w) = head {
+            let c = self.ev0_ast(&w.cond, &mut a, &[], true)?;
+            a.pc.push(c.not());
+        }
         Ok(vec![a])
+    }
+
+    fn map_iteration(&mut self, w: &ast::ForMap, st: &mut State) -> R<()> {
+        let map = self.ev0(&w.place, st, &[], true)?;
+        let map = map.try_map()?;
+        let key_ty = Ty::from_gtype(&map.kty);
+        let val_ty = Ty::from_gtype(&map.vty);
+        let key = self.try_fresh(&w.key, &key_ty)?;
+        let index = self.map_key(&map.kty, &key)?;
+        let value = self.field_val(&val_ty, map.a.select(&index), &w.val)?;
+        st.pc.push(map.d.select(&index));
+        for (name, ty, term) in [(&w.key, key_ty, key), (&w.val, val_ty, value)] {
+            if let Val::Dt(ast, _) = &term {
+                self.observe(st, ast, Some(&ty), false)?;
+            }
+            if let Some(wf) = self.wf_of_val(&ty, &term)? {
+                st.pc.push(wf);
+            }
+            st.env.set(name, term);
+        }
+        Ok(())
     }
 
     /// verify.py `run_foreign`: domain-only check of the ensures of a trusted rust fn: fresh result `result!k` with its

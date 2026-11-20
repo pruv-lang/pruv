@@ -1,0 +1,43 @@
+// spec: R-6e-6 accept
+struct Run { since: i64, wait: bool }
+struct Clock { owner: String, runs: HashMap<String, Run> }
+struct St { clocks: HashMap<String, Clock> }
+
+fn update(inout st: St, k: str, query: str, take key: String) -> i64 ! alloc
+  ensures result == 0 || result == 42
+{
+  let mut found: i64 = 0;
+  match map_get_mut::<String, Clock>(inout st.clocks, k) {
+    Some(r) => {
+      let owner_len: i64 = len(r.owner);
+      let before: i64 = len(r.runs);
+      if before < 1099511627776 {
+        r.runs = map_insert::<String, Run>(move r.runs, move key, Run { since: 1, wait: true });
+        assert len(r.runs) == before || len(r.runs) == before + 1;
+      }
+      let mut updated: bool = false;
+      match map_get_mut::<String, Run>(inout r.runs, query) {
+        Some(x) => {
+          x.since = 42;
+          updated = true;
+        }
+        None => { }
+      }
+      match map_get::<String, Run>(r.runs, query) {
+        Some(x) => { found = x.since; }
+        None => { }
+      }
+      let n: i64 = len(r.runs);
+      let removed: bool = map_remove::<String, Run>(inout r.runs, query);
+      assert removed == updated;
+      if removed { assert len(r.runs) == n - 1; }
+      assert len(r.owner) == owner_len;
+    }
+    None => { }
+  }
+  match map_get::<String, Clock>(st.clocks, k) {
+    Some(r) => { assert !is_some(map_lookup::<String, Run>(r.runs, query)); }
+    None => { }
+  }
+  return found;
+}

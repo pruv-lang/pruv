@@ -321,6 +321,17 @@ pub fn stmt(s: &Stmt) -> Json {
                 ("body", list(&x.body, stmt)),
             ],
         ),
+        Stmt::ForMap(x) => node(
+            "ForMap",
+            Some((x.line, x.col)),
+            vec![
+                ("key", js(&x.key)),
+                ("val", js(&x.val)),
+                ("place", expr(&x.place)),
+                ("invariants", list(&x.invariants, expr)),
+                ("body", list(&x.body, stmt)),
+            ],
+        ),
         Stmt::Return(x) => node(
             "Return",
             Some((x.line, x.col)),

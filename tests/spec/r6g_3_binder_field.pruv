@@ -1,0 +1,20 @@
+// spec: R-6g-3 accept
+struct Rec { n: i64 }
+struct Entry { rec: Rec, keep: i64 }
+struct St { entries: Vec<Entry> }
+fn set(inout r: Rec) -> ()
+  ensures r.n == 2
+{ r.n = 2; }
+fn update(inout s: St) -> ()
+  requires len(s.entries) > 0
+  ensures s.entries[0].rec.n == 2
+  ensures len(s.entries) > 0
+{ match vec_at_mut::<Entry>(inout s.entries, 0) {
+    Some(r) => {
+      let before: i64 = r.keep;
+      set(inout r.rec);
+      assert r.keep == before;
+    }
+    None => {}
+  }
+}
