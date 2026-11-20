@@ -284,6 +284,11 @@ pub fn running_id(_sid: &str, _bid: &str, i: i64) -> String {
     CURRENT_RUNNING.with(|current| std::mem::take(&mut current.borrow_mut()[i as usize]))
 }
 
+// The whole id list stored by the last `running_count` call, moved out in one call (M10b typed lane).
+pub fn running_take(_sid: &str, _bid: &str) -> Vec<String> {
+    CURRENT_RUNNING.with(|current| std::mem::take(&mut *current.borrow_mut()))
+}
+
 pub fn is_quiet_text(sid: &str, position: i64) -> i64 {
     if QUERIES.with(|q| q.borrow().is_some()) {
         let key = packed_key(sid);

@@ -4,9 +4,10 @@ The M10b runner generates the Rust ABI from `root_m10b_typed.pruv`.
 The driver keeps one `St` per world and passes it by mutable reference. The
 session map holds budgets with numeric limits and counters, owned text fields,
 and the halt's ordered `Vec<String>`. The clock map holds the clock owner,
-interval, timer flag, active-run count, and a `HashMap<String, bool>` of waiting
-flags. The clock ordinal and run insertion history preserve the order of the
-TypeScript observations, including removal and reinsertion.
+interval, timer flag, active-run count, and a `HashMap<String, i64>` of runs.
+Each run value is its insertion ordinal, negated while the run is waiting, so
+the clock ordinal and the run ordinals preserve the order of the TypeScript
+observations, including removal and reinsertion, without a separate order list.
 
 Pruv updates the records through borrowed text keys, removes closed clocks
 with `map_remove`, and returns a `Reply` with a `Vec<Effect>`. Rust performs the
@@ -15,8 +16,10 @@ and egress. The text codec preserves isolated UTF-16 surrogates using escaped
 Unicode scalars so keys remain lossless inside Rust strings.
 
 The synchronous halt path settles the clock, records the effect position, and
-calls the host's `running_count` once. It takes the IDs in order via
-`running_id`, whose owned `String` result is allowed under R-6d-1. The older
+calls the host's `running_count` once. It takes all IDs in order via one
+`running_take` call, whose owned `Vec<String>` result is allowed under R-6d-1,
+and stores them in the budget's reused `stopped` vector (`vec_clear` on reset).
+Text comparisons use `string_eq`. The older
 packed host fact still serves the other lanes. Unit responses remain
 `Vec<i64>`, also supported under R-6d-1. UUID is outside the M10b entry set.
 
@@ -25,3 +28,9 @@ Run `run_m10b.py derive` to stage the Q cases and oracle locally, or pass
 Rust, proof caches and binaries in `.m10b-work/`. The H and G controls still
 check rejected inputs for effects and state changes. The old packed arena's
 Grow injection has no counterpart in the typed state.
+
+Each call still builds a fresh `Reply.effects` vector. A buffer kept in `St`
+cannot be reused, because helpers would need it as an inout field argument
+(`type/inout_argument`, SPEC 6g), and a record holding `Vec<Effect>` cannot sit
+in a map or vector to reach it through a binder. That costs one allocation per
+call on the effect paths; see Appendix P31T (attempt 5) in the restructure spec.

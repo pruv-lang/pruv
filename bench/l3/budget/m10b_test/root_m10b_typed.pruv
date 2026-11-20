@@ -14,7 +14,7 @@ pub struct Budget {
 }
 pub struct Clock {
   owner: String, since: i64, has_since: bool, armed: bool, active: i64, ordinal: i64,
-  runs: HashMap<String, bool>, run_order: Vec<String>
+  runs: HashMap<String, i64>, next_run: i64
 }
 pub struct St {
   sessions: HashMap<String, Budget>, clocks: HashMap<String, Clock>, next_clock: i64
@@ -24,28 +24,14 @@ pub struct Reply { status: i64, value: i64, a: i64, b: i64, effects: Vec<Effect>
 
 trusted rust fn running_count(sid: str, bid: str) -> i64 ! io
   ensures true = "::bud_facts::running_count";
-trusted rust fn running_id(sid: str, bid: str, i: i64) -> String ! alloc, io
-  ensures true = "::bud_facts::running_id";
+trusted rust fn running_take(sid: str, bid: str) -> Vec<String> ! alloc, io
+  ensures true = "::bud_facts::running_take";
 trusted rust fn running_position(position: i64) -> () ! io
   ensures true = "::bud_facts::running_position";
 trusted rust fn is_quiet(sid: str, position: i64) -> i64 ! io
   ensures true = "::bud_facts::is_quiet_text";
 trusted rust fn unit_at(position: i64, i: i64) -> i64 ! io
   ensures true = "::decide_facts::unit_at";
-
-fn equal(a: String, b: str) -> bool
-{
-  if len(a) != len(b) { return false; }
-  let mut i: i64 = 0;
-  while i < len(a)
-    invariant 0 <= i && i <= len(a) && len(a) == len(b)
-    decreases len(a) - i
-  {
-    if string_byte(a, i) != b[i] { return false; }
-    i = i + 1;
-  }
-  return true;
-}
 
 fn emit(inout reply: Reply, tag: i64, a: i64, b: i64) -> () ! alloc
 {
@@ -78,7 +64,7 @@ fn disarm(inout c: Clock, inout reply: Reply) -> () ! alloc
 
 fn settle(inout b: Budget, inout c: Clock, sid: str, now: i64, inout reply: Reply) -> () ! alloc
 {
-  if !equal(c.owner, sid) { return; }
+  if !string_eq(c.owner, sid) { return; }
   disarm(inout c, inout reply);
   if !c.has_since { return; }
   let elapsed: i64 = bounded(now) - bounded(c.since);
@@ -97,7 +83,7 @@ fn halt(inout b: Budget, sid: str, bid: str, now: i64, reason: i64,
   running_position(len(reply.effects));
   let count: i64 = running_count(sid, bid);
   if count < 0 || count > 1099511627776 { return 2; }
-  b.stopped = vec_new::<String>();
+  b.stopped = running_take(sid, bid);
   b.state = 1;
   b.halt_reason = reason;
   b.halt_kind = 2;
@@ -106,11 +92,10 @@ fn halt(inout b: Budget, sid: str, bid: str, now: i64, reason: i64,
   emit(inout reply, 31, 0, 0);
   emit(inout reply, 32, 0, 0);
   let mut i: i64 = 0;
-  while i < count
-    invariant 0 <= i && i <= count && len(b.stopped) == i
-    decreases count - i
+  while i < len(b.stopped)
+    invariant 0 <= i && i <= len(b.stopped)
+    decreases len(b.stopped) - i
   {
-    b.stopped = vec_push::<String>(move b.stopped, running_id(sid, bid, i));
     emit(inout reply, 33, i, 0);
     i = i + 1;
   }
@@ -297,31 +282,38 @@ fn active_change(inout c: Clock, delta: i64) -> ()
 
 fn update_run(inout c: Clock, code: i64, run: str, waiting: bool) -> bool ! alloc
 {
-  match map_get::<String, bool>(c.runs, run) {
-    Some(was) => {
+  // A run's value is its insertion ordinal, negated while it waits (observation keeps JS Map order).
+  let mut delta: i64 = 0;
+  let mut changed: bool = false;
+  let mut gone: bool = false;
+  let mut fresh: bool = false;
+  match map_get_mut::<String, i64>(inout c.runs, run) {
+    Some(v) => {
+      let was: bool = *v < 0;
       if code == 10 {
-        let removed: bool = map_remove::<String, bool>(inout c.runs, run);
-        if !was { active_change(inout c, -1); }
-        return true;
-      }
-      if was != waiting && len(c.runs) < 1099511627776 {
-        c.runs = map_insert::<String, bool>(move c.runs, string_push_str(string_new(), run), waiting);
-        if waiting { active_change(inout c, -1); }
-        else { active_change(inout c, 1); }
-        return true;
-      }
-      return code == 8;
+        gone = true;
+        if !was { delta = -1; }
+        changed = true;
+      } else if was != waiting {
+        if -1099511627776 < *v && *v < 1099511627776 { *v = 0 - *v; }
+        if waiting { delta = -1; } else { delta = 1; }
+        changed = true;
+      } else { changed = code == 8; }
     }
-    None => {
-      if code == 8 && len(c.runs) < 1099511627776 && len(c.run_order) < 1099511627776 {
-        c.runs = map_insert::<String, bool>(move c.runs, string_push_str(string_new(), run), false);
-        c.run_order = vec_push::<String>(move c.run_order, string_push_str(string_new(), run));
-        active_change(inout c, 1);
-        return true;
-      }
-    }
+    None => { fresh = code == 8; }
   }
-  return false;
+  if fresh && len(c.runs) < 1099511627776 && 0 < c.next_run && c.next_run < 1099511627776 {
+    let mut k: String = string_new();
+    k = string_push_str(move k, run);
+    let seq: i64 = c.next_run;
+    c.next_run = seq + 1;
+    c.runs = map_insert::<String, i64>(move c.runs, move k, seq);
+    delta = 1;
+    changed = true;
+  }
+  if gone { let removed: bool = map_remove::<String, i64>(inout c.runs, run); }
+  active_change(inout c, delta);
+  return changed;
 }
 
 fn closed(inout b: Budget, how: i64, now: i64) -> () ! alloc
@@ -340,7 +332,7 @@ fn view(inout st: St, sid: str, bid: str, code: i64) -> Reply ! alloc
   if code == 1 { reply.value = 0; }
   match map_get_mut::<String, Budget>(inout st.sessions, sid) {
     Some(b) => {
-      if b.state >= 0 && equal(b.id, bid) {
+      if b.state >= 0 && string_eq(b.id, bid) {
         if code == 1 { reply.value = 4; }
         if code == 2 && b.state == 1 { reply.value = 2; }
         if code == 5 && b.state == 2 && b.ended_how == 1 {
@@ -399,7 +391,7 @@ fn apply_charge(inout st: St, sid: str, bid: str, now: i64, what: [i64]) -> Repl
   let mut reply: Reply = Reply { status: 0, value: 5, a: 2, b: 0, effects: vec_new::<Effect>() };
   match map_get_mut::<String, Budget>(inout st.sessions, sid) {
     Some(b) => {
-      if b.state >= 0 && equal(b.id, bid) {
+      if b.state >= 0 && string_eq(b.id, bid) {
         let mut reason: i64 = -1;
         if b.state == 1 {
           reason = b.halt_reason;
@@ -432,7 +424,7 @@ fn run_event(inout st: St, sid: str, bid: str, run: str, code: i64, now: i64, fl
   let mut no_current: bool = true;
   match map_get_mut::<String, Budget>(inout st.sessions, sid) {
     Some(b) => {
-      if b.state >= 0 && equal(b.id, bid) {
+      if b.state >= 0 && string_eq(b.id, bid) {
         no_current = false;
         match map_get_mut::<String, Clock>(inout st.clocks, bid) {
           Some(c) => {
@@ -452,8 +444,8 @@ fn run_event(inout st: St, sid: str, bid: str, run: str, code: i64, now: i64, fl
           let mut c: Clock = Clock {
             owner: string_push_str(string_new(), sid), since: 0, has_since: false, armed: false, active: 1,
             ordinal: st.next_clock,
-            runs: map_insert::<String, bool>(map_new::<String, bool>(), string_push_str(string_new(), run), false),
-            run_order: vec_push::<String>(vec_new::<String>(), string_push_str(string_new(), run))
+            runs: map_insert::<String, i64>(map_new::<String, i64>(), string_push_str(string_new(), run), 1),
+            next_run: 2
           };
           let status: i64 = refresh(inout b, inout c, sid, bid, now, inout reply); reply.status = status;
           if len(st.clocks) < 1099511627776 {
@@ -485,7 +477,7 @@ fn explicit_halt(inout st: St, sid: str, bid: str, now: i64, flag: i64) -> Reply
   if flag < 0 || flag > 4 { reply.status = 2; return reply; }
   match map_get_mut::<String, Budget>(inout st.sessions, sid) {
     Some(b) => {
-      if b.state == 0 && equal(b.id, bid) {
+      if b.state == 0 && string_eq(b.id, bid) {
         match map_get_mut::<String, Clock>(inout st.clocks, bid) {
           Some(c) => { settle(inout b, inout c, sid, now, inout reply); }
           None => { }
@@ -503,7 +495,7 @@ fn raise(inout st: St, sid: str, bid: str, now: i64, flag: i64) -> Reply ! alloc
   let mut reply: Reply = Reply { status: 0, value: 1, a: 0, b: 0, effects: vec_new::<Effect>() };
   match map_get_mut::<String, Budget>(inout st.sessions, sid) {
     Some(b) => {
-      if b.state >= 0 && b.state != 2 && equal(b.id, bid) {
+      if b.state >= 0 && b.state != 2 && string_eq(b.id, bid) {
         let changed: i64 = apply_limits(inout b, flag, false, len(reply.effects));
         if changed < 0 { reply.status = 2; }
         if changed > 0 {
@@ -532,7 +524,7 @@ fn decide(inout st: St, sid: str, bid: str, now: i64, flag: i64) -> Reply ! allo
   let mut drop_clock: bool = false;
   match map_get_mut::<String, Budget>(inout st.sessions, sid) {
     Some(b) => {
-      if b.state >= 0 && equal(b.id, bid) {
+      if b.state >= 0 && string_eq(b.id, bid) {
         reply.a = 2;
         if b.state == 1 && flag == -1 {
           match map_get_mut::<String, Clock>(inout st.clocks, bid) {
@@ -558,7 +550,7 @@ fn decide(inout st: St, sid: str, bid: str, now: i64, flag: i64) -> Reply ! allo
             b.halt_kind = 0;
             b.halt_ms = 0;
             b.halt_text = string_new();
-            b.stopped = vec_new::<String>();
+            vec_clear::<String>(inout b.stopped);
             emit(inout reply, 36, 0, 0);
             emit(inout reply, 20, 0, 0);
             match map_get_mut::<String, Clock>(inout st.clocks, bid) {
