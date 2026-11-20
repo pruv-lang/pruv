@@ -3626,8 +3626,11 @@ impl<'a> FnVerifier<'a> {
                     Elem::Bool => Ok(Val::Bool(r)),
                     Elem::Abs => {
                         let ty = v.elem_ty();
-                        if let Some(wf) = self.try_wf(&ty, &r)? {
-                            self.assume(st, g, wf);
+                        // verify.py: only a struct element read in code assumes its well-formedness
+                        if code && self.model.nominal_kind(&ty) == Some(NomKind::Struct) {
+                            if let Some(wf) = self.try_wf(&ty, &r)? {
+                                self.assume(st, g, wf);
+                            }
                         }
                         Ok(Val::Dt(r, ty))
                     },
