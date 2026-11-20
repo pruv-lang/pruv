@@ -27,21 +27,6 @@ fn blob_copy(blob: [i64], start: i64, end: i64) -> Vec<i64> ! alloc
   return move result;
 }
 
-// bud_card consumes array parameters. Copy the typed field into that representation.
-fn budget_words(session: Sess) -> [i64] ! alloc {
-  let n: i64 = len(session.blob);
-  let mut words: [i64] = alloc(n, 0);
-  let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= i && i <= n && n == len(session.blob) && len(words) == n
-    decreases n - i
-  {
-    words[i] = vec_get::<i64>(session.blob, i);
-    i = i + 1;
-  }
-  return words;
-}
-
 pub fn m11_load(inout st: St, key: str, blob: [i64], inout out: [i64]) -> i64 ! alloc {
   if len(blob) > 0 && crate::bud_card::v_stored_end(blob, 0) != len(blob) { return 2; }
   if len(out) < 2 { return 3; }
@@ -341,8 +326,7 @@ pub fn m11_set_card(inout st: St, rf: [i64], sid: str, has_sid: bool, card: [u8]
     let mut status: i64 = -1;
     match map_get_mut::<String, Sess>(inout st.sessions, sid) {
       Some(session) => {
-        let blob: [i64] = budget_words(session);
-        status = set_reply(blob, rf, card, lang, by, now_ms, inout out);
+        status = set_reply(session.blob, rf, card, lang, by, now_ms, inout out);
         if status == 0 && rd(out, 2) == 1 {
           let end: i64 = rd(out, 0);
           if end < 18 || end >= len(out) { status = 2; }
@@ -389,8 +373,7 @@ pub fn m11_query(st: St, op: i64, rf: [i64], sid: str, has_sid: bool, inout out:
   if has_sid {
     match map_get::<String, Sess>(st.sessions, sid) {
       Some(session) => {
-        let blob: [i64] = budget_words(session);
-        return query_blob(blob, op, rf, inout out);
+        return query_blob(session.blob, op, rf, inout out);
       }
       None => {}
     }

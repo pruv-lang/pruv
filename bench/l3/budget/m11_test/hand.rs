@@ -619,7 +619,7 @@ fn units(v: &[i64], p: usize) -> &[i64] {
 
 /// The framed packed key `k` = [n, words(n) words] is canonical: n in 0..=2^30, len == 1 + ceil(n/4), zero tail lanes
 /// (the same test as bud_keys::rec_end over the whole slice).
-fn packed_framed_ok(k: &[i64]) -> bool {
+pub fn packed_framed_ok(k: &[i64]) -> bool {
     let n = match k.first() { Some(&n) if (0..=1 << 30).contains(&n) => n as usize, _ => return false };
     let m = (n + 3) / 4;
     if k.len() != 1 + m { return false; }
@@ -639,7 +639,15 @@ impl Store {
 
     /// false = refused (status 2: rf is not exactly one well-formed V, or sid is non-empty and not framed); `out` is cleared.
     pub fn current(&self, rf: &[i64], sid: &[i64], out: &mut Vec<i64>) -> bool {
-        if v_end(rf, 0) != Some(rf.len()) || (!sid.is_empty() && !packed_framed_ok(sid)) {
+        if !sid.is_empty() && !packed_framed_ok(sid) {
+            out.clear();
+            return false;
+        }
+        self.current_with_valid_sid(rf, sid, out)
+    }
+
+    pub fn current_with_valid_sid(&self, rf: &[i64], sid: &[i64], out: &mut Vec<i64>) -> bool {
+        if v_end(rf, 0) != Some(rf.len()) {
             out.clear();
             return false;
         }
@@ -653,7 +661,12 @@ impl Store {
 
     /// None = refused (status 2, same validation as `current`).
     pub fn has_card(&self, rf: &[i64], sid: &[i64]) -> Option<bool> {
-        if v_end(rf, 0) != Some(rf.len()) || (!sid.is_empty() && !packed_framed_ok(sid)) { return None; }
+        if !sid.is_empty() && !packed_framed_ok(sid) { return None; }
+        self.has_card_with_valid_sid(rf, sid)
+    }
+
+    pub fn has_card_with_valid_sid(&self, rf: &[i64], sid: &[i64]) -> Option<bool> {
+        if v_end(rf, 0) != Some(rf.len()) { return None; }
         Some(self.has_card_valid(rf, sid))
     }
 
@@ -677,12 +690,20 @@ impl Store {
     /// `sid` = the framed packed key of ref.sessionId (packed once by the caller; empty = the ref has none).
     /// Writes [k, used_now, saved, changed, findSession, result V...] for admitted requests.
     pub fn set_card(&mut self, rf: &[i64], sid: &[i64], card: &[u8], lang: &[u8], by: &[u8], now_ms: i64, out: &mut Vec<i64>) -> i64 {
+        self.set_card_inner::<true>(rf, sid, card, lang, by, now_ms, out)
+    }
+
+    pub fn set_card_with_valid_sid(&mut self, rf: &[i64], sid: &[i64], card: &[u8], lang: &[u8], by: &[u8], now_ms: i64, out: &mut Vec<i64>) -> i64 {
+        self.set_card_inner::<false>(rf, sid, card, lang, by, now_ms, out)
+    }
+
+    fn set_card_inner<const CHECK_SID: bool>(&mut self, rf: &[i64], sid: &[i64], card: &[u8], lang: &[u8], by: &[u8], now_ms: i64, out: &mut Vec<i64>) -> i64 {
         if v_end(rf, 0) != Some(rf.len()) { return 0; }
         // by is stored at budget.card.by and returned one level deeper: its top value sits at depth 4
         if (!card.is_empty() && !admit(card)) || (!lang.is_empty() && !admit(lang)) || (!by.is_empty() && !admit_at(by, 4)) {
             return -2;
         }
-        if !sid.is_empty() && !packed_framed_ok(sid) { return 0; }
+        if CHECK_SID && !sid.is_empty() && !packed_framed_ok(sid) { return 0; }
         let Some(budget) = self.current_budget(rf, sid) else { return emit_card_error(out, 0, lang) };
         if str_is_v(budget, obj_get(budget, 0, "state"), "closed") {
             return emit_card_error(out, 0, lang);

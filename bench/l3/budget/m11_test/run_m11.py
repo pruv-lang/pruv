@@ -91,14 +91,17 @@ def build_pair(key, root, work, typed):
     main = (HERE / 'harness.rs').read_text().replace('@SOL@', str(sol)).replace('@HAND@', str(HERE / 'hand.rs'))
     main = main.replace('@TYPED@', str(HERE / 'harness_typed.rs'))
     if typed:
-        # The shared harness uses wire IDs. Decode once during setup for the typed timings.
+        # Validate both SID representations during setup for the typed timings.
         start = main.index('fn perf_resident(')
         end = main.index('fn diff_ref(', start)
         perf_code = main[start:end]
         for indent in ('    ', '            '):
             setup = f'\n{indent}let sid = pkey("s1");'
             perf_code = perf_code.replace(
-                setup, setup + f'\n{indent}let (sid_text, sid_present) = sol::decode_sid(&sid).unwrap();')
+                setup, setup + f'\n{indent}assert!(hand::packed_framed_ok(&sid));'
+                             + f'\n{indent}let (sid_text, sid_present) = sol::decode_sid(&sid).unwrap();')
+        for method in ('set_card', 'has_card', 'current'):
+            perf_code = perf_code.replace(f's.{method}(', f's.{method}_with_valid_sid(')
         perf_code = perf_code.replace(
             'sol::m11_set_card(st, &rf, &sid,', 'generated::m11_set_card(st, &rf, &sid_text, sid_present,')
         for op in (1, 3):
@@ -562,7 +565,8 @@ def perf(harness, runs):
                 tv.append(ns_of(r.stdout.strip() or 'TS failed: ' + r.stderr[-500:]))
         p, h = statistics.median(pv), statistics.median(hv)
         t = statistics.median(tv) if tv else float('nan')
-        rows.append({'item': item, 'size': size, 'pruv_ns': p, 'hand_ns': h, 'ts_ns': t, 'pruv_hand': round(p / h, 2)})
+        rows.append({'item': item, 'size': size, 'pruv_ns': p, 'hand_ns': h, 'ts_ns': t, 'pruv_hand': round(p / h, 2),
+                     'samples_ns': {'pruv': pv, 'hand': hv}})
         print(f'  {item} | {size:5} | {p:9.1f} | {h:9.1f} | {t:9.1f} | {p / h:.2f}')
     return rows
 

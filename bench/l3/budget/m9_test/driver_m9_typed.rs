@@ -1,6 +1,10 @@
 // Typed boundary for the shared M9 scheduler and benchmark workloads.
 include!("driver_m9.rs");
 
+// Perf shares the hand lane's decoded inputs and timer host. Q keeps the wire codec below.
+#[path = "hand_m9.rs"]
+mod typed_perf;
+
 // Encode each UTF-16 code unit independently, including lone surrogates.
 const SURROGATE_OFFSET: u32 = 0x10000 - 0xd800;
 

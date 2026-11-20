@@ -47,6 +47,10 @@ struct Request {
     rf: Vec<i64>,
     sid: Vec<i64>,
     arg: Vec<i64>,
+    #[cfg(m12_typed)]
+    typed_sid: String,
+    #[cfg(m12_typed)]
+    typed_keys: sol::LifeKeys,
     hand_rf: hand::life::Value,
     hand_sid: Vec<u16>,
     hand_arg: hand::life::Value,
@@ -63,6 +67,10 @@ impl Request {
             string_field(&mut rf, "budgetId", bid);
         }
         Self {
+            #[cfg(m12_typed)]
+            typed_sid: m12_facts::decode_key(&pkey(sid)),
+            #[cfg(m12_typed)]
+            typed_keys: sol::decode_life(&rf, &arg),
             op, hand_rf: hand::life::Value::decode(&rf), hand_arg: hand::life::Value::decode(&arg),
             rf, sid: pkey(sid), arg, hand_sid: sid.encode_utf16().collect(), now,
         }
@@ -82,7 +90,11 @@ impl Sample {
             (Lane::HandReplay { sessions: hand::life::Sessions::default(), out: Vec::new() },
              Clocks::Hand(hand::life::Clocks::default()))
         } else {
-            (Lane::new(false), Clocks::Pruv(World::new()))
+            #[cfg(m12_typed)]
+            let clocks = Clocks::Pruv(sol::new_state());
+            #[cfg(not(m12_typed))]
+            let clocks = Clocks::Pruv(World::new());
+            (Lane::new(false), clocks)
         };
         Self { sessions, clocks, scheduler: Scheduler { unref: true, ..Scheduler::default() } }
     }
@@ -92,6 +104,11 @@ impl Sample {
         let packet = match (&mut self.clocks, &mut self.sessions) {
             (Clocks::Hand(clocks), Lane::HandReplay { sessions, .. }) => {
                 clocks.call(sessions, request.op, &request.hand_rf, &request.hand_sid, &request.hand_arg, request.now)
+            }
+            #[cfg(m12_typed)]
+            (Clocks::Pruv(clocks), Lane::Pruv(world)) => {
+                sol::life_decoded(&mut world.st, clocks, request.op, &request.rf, &request.sid,
+                                  &request.typed_sid, &request.arg, request.now, &request.typed_keys)
             }
             (clocks, sessions) => {
                 clocks.call(sessions, request.op, &request.rf, &request.sid, &request.arg, request.now)

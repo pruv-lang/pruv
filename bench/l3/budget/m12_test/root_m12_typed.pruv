@@ -10,23 +10,23 @@ mod bud_world;
 mod bud_tstate;
 mod bud_tlife;
 mod bud_clock;
-mod bud_cleanup;
 mod bud_vwords;
 mod bud_auto;
 mod bud_effect;
 
 pub struct Ordinal { value: i64 }
+pub struct ToolTurn { ordinal: i64, activities: HashMap<String, i64> }
 pub struct St {
   sessions: HashMap<String, crate::bud_tstate::Budget>,
   ordinals: HashMap<String, Ordinal>,
   next_session: i64,
-  clock_state: crate::bud_tstate::ClockState
+  wire: Wire,
+  clock_state: crate::bud_tstate::ClockState,
+  clock_order: Vec<String>,
+  clock_ordinals: Vec<i64>,
+  tools: HashMap<String, ToolTurn>
 }
 
-trusted rust fn encode_words(words: [i64]) -> String ! alloc
-  ensures true = "::m12_facts::encode_words";
-trusted rust fn decode_words(words: str) -> Vec<i64> ! alloc
-  ensures true = "::m12_facts::decode_words";
 trusted rust fn decode_key(words: [i64]) -> String ! alloc
   ensures true = "::m12_facts::decode_key";
 
@@ -48,10 +48,264 @@ fn words_array(words: Vec<i64>) -> [i64] ! alloc
   return out;
 }
 
-fn budget_words(b: crate::bud_tstate::Budget) -> [i64] ! alloc
-{ return words_array(decode_words(string_to_str(b.rest))); }
 
-fn make_budget(blob: [i64]) -> crate::bud_tstate::Budget ! alloc
+// A typed arena preserves duplicate keys and wire order. Links are node IDs,
+// with 0 denoting an absent value. Text occupies one String per actual value.
+pub struct WireNode {
+  key: String, text: String, tag: i64, scalar: i64,
+  children: i64, count: i64, next: i64
+}
+pub struct Wire {
+  nodes: HashMap<i64, WireNode>, next: i64
+}
+
+trusted rust fn v_units(words: [i64], at: i64, count: i64) -> String ! alloc
+  ensures true = "::m12_facts::v_units";
+trusted rust fn j_units(packet: [u8], at: i64, count: i64) -> String ! alloc
+  ensures true = "::m12_facts::j_units";
+trusted rust fn wire_units(s: str) -> Vec<i64> ! alloc
+  ensures true = "::m12_facts::wire_units";
+
+fn append_node(inout wire: Wire, take node: WireNode) -> i64 ! alloc
+{
+  let id: i64 = wire.next;
+  if id <= 0 || id >= 9223372036854775807 || len(wire.nodes) >= 1099511627776 { return 0; }
+  wire.next = id + 1;
+  wire.nodes = map_insert::<i64, WireNode>(move wire.nodes, id, move node);
+  return id;
+}
+
+fn j_count(packet: [u8], at: i64) -> i64
+  ensures 0 <= result && result <= 4294967295
+{
+  if at < 0 || at > len(packet) - 4 { return 0; }
+  return load_be(packet, at, 4);
+}
+
+fn j_bits(packet: [u8], at: i64) -> i64
+{
+  if at < 0 || at > len(packet) - 8 { return 0; }
+  return load_be(packet, at, 8);
+}
+
+fn safe_int(bits: i64) -> bool
+{
+  if bits == 0 { return true; }
+  let e: i64 = band(ushr(bits, 52), 2047);
+  if e < 1023 || e > 1075 { return false; }
+  if e == 1075 { return true; }
+  return band(bits, ushr(-1, 12 + e - 1023)) == 0;
+}
+
+fn int_val(bits: i64) -> i64
+{
+  let e: i64 = band(ushr(bits, 52), 2047);
+  if e < 1023 || e > 1075 { return 0; }
+  let mag: i64 = ushr(band(bits, 4503599627370495) + 4503599627370496, 1075 - e);
+  if bits < 0 { return 0 - mag; }
+  return mag;
+}
+
+fn link(inout wire: Wire, at: i64, next: i64) -> ()
+{
+  match map_get_mut::<i64, WireNode>(inout wire.nodes, at) {
+    Some(n) => { n.next = next; }
+    None => {}
+  }
+}
+
+// Both wire formats have already passed full admission at their entry point.
+fn read_node(inout wire: Wire, v: [i64], j: [u8], jb: bool, at: i64,
+             take key: String, depth: i64) -> i64 ! alloc
+  requires 0 <= depth && depth <= 64
+  decreases 64 - depth
+{
+  if depth >= 64 || at < 0 || at > 1099511627776 { return 0; }
+  let mut tag: i64 = rd(v, at);
+  if jb {
+    if at >= len(j) { return 0; }
+    tag = j[at];
+  }
+  let mut node: WireNode = WireNode {
+    key: move key, text: string_new(), tag: tag, scalar: 0, children: 0, count: 0, next: 0
+  };
+  if tag == 6 {
+    if jb { node.text = j_units(j, at + 5, j_count(j, at + 1)); }
+    else { node.text = v_units(v, at + 2, rd(v, at + 1)); }
+  }
+  if tag == 5 || tag == 7 {
+    if jb {
+      let bits: i64 = j_bits(j, at + 1);
+      if safe_int(bits) { node.tag = 5; node.scalar = int_val(bits); }
+      else { node.scalar = bits; }
+    } else { node.scalar = rd(v, at + 1); }
+  }
+  if tag == 8 || tag == 9 {
+    let mut pos: i64 = at + 2;
+    let mut count: i64 = crate::bud_store::c40(rd(v, at + 1));
+    if jb { count = j_count(j, at + 1); pos = at + 5; }
+    let mut i: i64 = 0;
+    let mut last: i64 = 0;
+    while i < count
+      invariant 0 <= i && i <= count && 0 <= depth && depth < 64 && 0 <= pos && pos <= 1099511627781
+      decreases count - i
+    {
+      if pos > 1099511627776 { return 0; }
+      let mut name: String = string_new();
+      if tag == 9 {
+        if jb {
+          let size: i64 = j_count(j, pos);
+          name = j_units(j, pos + 4, size);
+          pos = pos + 4 + size;
+        } else {
+          let size: i64 = crate::bud_store::c40(rd(v, pos));
+          name = v_units(v, pos + 1, size);
+          pos = pos + 1 + size;
+        }
+      }
+      let child: i64 = read_node(inout wire, v, j, jb, pos, move name, depth + 1);
+      if child == 0 { return 0; }
+      if i == 0 { node.children = child; }
+      else { link(inout wire, last, child); }
+      last = child;
+      let mut end: i64 = 0;
+      if jb { end = crate::bud_card::j_end(j, pos); }
+      else { end = crate::bud_card::v_end(v, pos); }
+      if end <= pos || end > 1099511627776 { return 0; }
+      pos = end;
+      i = i + 1;
+    }
+    node.count = count;
+  }
+  return append_node(inout wire, move node);
+}
+
+fn delete_node(inout wire: Wire, id: i64, depth: i64) -> i64
+  requires 0 <= depth && depth <= 64
+  decreases depth
+{
+  if id == 0 || depth == 0 { return 0; }
+  match map_take::<i64, WireNode>(inout wire.nodes, id) {
+    Some(n) => {
+      let mut at: i64 = n.children;
+      let mut left: i64 = n.count;
+      while at != 0 && left > 0
+        invariant 0 < depth && depth <= 64
+        decreases left
+      {
+        at = delete_node(inout wire, at, depth - 1);
+        left = left - 1;
+      }
+      return n.next;
+    }
+    None => {}
+  }
+  return 0;
+}
+
+fn node_next(wire: Wire, id: i64) -> i64
+{
+  match map_get::<i64, WireNode>(wire.nodes, id) {
+    Some(n) => { return n.next; }
+    None => {}
+  }
+  return 0;
+}
+
+fn write_text(take incoming: Vec<i64>, s: str) -> Vec<i64> ! alloc
+{
+  let words: Vec<i64> = wire_units(s);
+  let mut out: Vec<i64> = move incoming;
+  let mut i: i64 = 0;
+  while i < len(words) && len(out) < 1099511627776
+    invariant 0 <= i && i <= len(words)
+    decreases len(words) - i
+  {
+    out = vec_push::<i64>(move out, vec_get::<i64>(words, i));
+    i = i + 1;
+  }
+  return move out;
+}
+
+// A synthetic stop always has a fixed shape. Its only variable field is
+// sessionId, stored as text on the node.
+fn synthetic_tag() -> i64 { return 10; }
+
+fn push_word(take out: Vec<i64>, word: i64) -> Vec<i64> ! alloc
+{
+  if len(out) == 1099511627776 { return move out; }
+  return vec_push::<i64>(move out, word);
+}
+
+fn write_synthetic(take incoming: Vec<i64>, sid: str) -> Vec<i64> ! alloc
+{
+  let mut out: Vec<i64> = move incoming;
+  out = write_text(move out, "autoContinue");
+  out = push_word(move out, 9);
+  out = push_word(move out, 4);
+  out = write_text(move out, "sessionId");
+  out = push_word(move out, 6);
+  out = write_text(move out, sid);
+  out = write_text(move out, "userTurnId");
+  out = push_word(move out, 6);
+  out = push_word(move out, 0);
+  out = write_text(move out, "count");
+  out = push_word(move out, 5);
+  out = push_word(move out, 0);
+  out = write_text(move out, "stopped");
+  return push_word(move out, 4);
+}
+
+fn write_node(wire: Wire, id: i64, keyed: bool, depth: i64,
+              take incoming: Vec<i64>) -> Vec<i64> ! alloc
+  requires 0 <= depth && depth <= 64
+  decreases depth
+{
+  let mut out: Vec<i64> = move incoming;
+  if depth == 0 || len(out) >= 1099511627774 { return move out; }
+  match map_get::<i64, WireNode>(wire.nodes, id) {
+    Some(n) => {
+      if n.tag == synthetic_tag() { return write_synthetic(move out, string_to_str(n.text)); }
+      if keyed { out = write_text(move out, string_to_str(n.key)); }
+      if len(out) >= 1099511627774 { return move out; }
+      out = vec_push::<i64>(move out, n.tag);
+      if n.tag == 5 || n.tag == 7 { out = vec_push::<i64>(move out, n.scalar); }
+      else if n.tag == 6 { out = write_text(move out, string_to_str(n.text)); }
+      else if n.tag == 8 || n.tag == 9 {
+        out = vec_push::<i64>(move out, n.count);
+        let mut child: i64 = n.children;
+        let mut left: i64 = n.count;
+        while child != 0 && left > 0
+          invariant 0 < depth && depth <= 64
+          decreases left
+        {
+          out = write_node(wire, child, n.tag == 9, depth - 1, move out);
+          child = node_next(wire, child);
+          left = left - 1;
+        }
+      }
+    }
+    None => {}
+  }
+  return move out;
+}
+
+fn budget_words(wire: Wire, b: crate::bud_tstate::Budget) -> [i64] ! alloc
+{ return words_array(write_node(wire, b.metadata, false, 64, vec_new::<i64>())); }
+
+fn replace_wire(inout wire: Wire, old: i64, blob: [i64]) -> i64 ! alloc
+{
+  // Read the new tree first; keep the old root if the new one cannot be stored.
+  let mut fresh: i64 = 0;
+  if len(blob) != 0 {
+    let empty: [u8] = alloc(0, 0);
+    fresh = read_node(inout wire, blob, empty, false, 0, string_new(), 2);
+    if fresh == 0 { return old; }
+  }
+  let ignored: i64 = delete_node(inout wire, old, 64);
+  return fresh;
+}
+fn make_budget(blob: [i64], root: i64) -> crate::bud_tstate::Budget ! alloc
 {
   let id: [i64] = crate::bud_vwords::packed(blob, crate::bud_vwords::get(blob, 0, "id"));
   let pos: i64 = crate::bud_vwords::get(blob, 0, "state");
@@ -70,10 +324,10 @@ fn make_budget(blob: [i64]) -> crate::bud_tstate::Budget ! alloc
     delegations: num(blob, get(blob, used, "delegations")), commands: num(blob, get(blob, used, "commands")),
     reviews: num(blob, get(blob, used, "reviews")), checks: num(blob, get(blob, used, "checks")),
     tools: num(blob, get(blob, used, "tools")), failures: num(blob, get(blob, used, "failures")),
-    retries: num(blob, get(blob, used, "retries")), metadata: 0, origin: 0,
+    retries: num(blob, get(blob, used, "retries")), metadata: root, origin: 0,
     opened_at: string_new(), since_text: string_new(), ended_at: string_new(), follows: string_new(),
     ended_how: 0, ended_kind: 0, ended_ms: 0, opened_ms: 0, follows_kind: 0,
-    rest: encode_words(blob), halt_reason: reason_code(blob, get(blob, get(blob, 0, "halt"), "reason")),
+    rest: string_new(), halt_reason: reason_code(blob, get(blob, get(blob, 0, "halt"), "reason")),
     halt_kind: 0, halt_ms: 0,
     halt_text: string_new(), stopped: vec_new::<String>()
   };
@@ -95,7 +349,13 @@ pub fn load(inout st: St, sid: str, blob: [i64], inout out: [i64]) -> i64 ! allo
     st.next_session = seq + 1;
     st.ordinals = map_insert::<String, Ordinal>(move st.ordinals, text(sid), Ordinal { value: seq });
   }
-  let b: crate::bud_tstate::Budget = make_budget(blob);
+  let mut old: i64 = 0;
+  match map_get::<String, crate::bud_tstate::Budget>(st.sessions, sid) {
+    Some(b) => { old = b.metadata; }
+    None => {}
+  }
+  let root: i64 = replace_wire(inout st.wire, old, blob);
+  let b: crate::bud_tstate::Budget = make_budget(blob, root);
   st.sessions = map_insert::<String, crate::bud_tstate::Budget>(move st.sessions, text(sid), move b);
   crate::ent_u16::wr(inout out, 0, 1);
   crate::ent_u16::wr(inout out, 1, fresh);
@@ -105,7 +365,7 @@ pub fn load(inout st: St, sid: str, blob: [i64], inout out: [i64]) -> i64 ! allo
 pub fn session(st: St, sid: str) -> [i64] ! alloc
 {
   match map_get::<String, crate::bud_tstate::Budget>(st.sessions, sid) {
-    Some(b) => { return crate::bud_vwords::cat(crate::ent_u16::one(1), budget_words(b)); }
+    Some(b) => { return crate::bud_vwords::cat(crate::ent_u16::one(1), budget_words(st.wire, b)); }
     None => {}
   }
   return crate::ent_u16::empty();
@@ -306,9 +566,42 @@ fn at_b(b: [u8]) -> i64
 }
 
 fn b01(b: bool) -> i64
+  ensures 0 <= result && result <= 1
 {
   if b { return 1; }
   return 0;
+}
+
+// The timer captures the position of the first reference key, even if a
+// later duplicate supplies the budget ID used by the operation itself.
+fn timer_budget_first(rf: [i64]) -> bool
+{
+  let n: i64 = len(rf);
+  let count: i64 = rd(rf, 1);
+  if rd(rf, 0) != 9 || count < 0 || count > n { return false; }
+  let mut pos: i64 = 2;
+  let mut i: i64 = 0;
+  while i < count
+    invariant 0 <= i && i <= count && 0 <= pos && pos <= n + 2
+    decreases count - i
+  {
+    if pos >= n { return false; }
+    let size: i64 = rf[pos];
+    if size < 0 || size >= n - pos { return false; }
+    let at: i64 = pos + 1 + size;
+    if size == 8 && rd(rf, pos + 1) == 98 && rd(rf, pos + 2) == 117 &&
+      rd(rf, pos + 3) == 100 && rd(rf, pos + 4) == 103 && rd(rf, pos + 5) == 101 &&
+      rd(rf, pos + 6) == 116 && rd(rf, pos + 7) == 73 && rd(rf, pos + 8) == 100 { return true; }
+    if size == 9 && rd(rf, pos + 1) == 115 && rd(rf, pos + 2) == 101 &&
+      rd(rf, pos + 3) == 115 && rd(rf, pos + 4) == 115 && rd(rf, pos + 5) == 105 &&
+      rd(rf, pos + 6) == 111 && rd(rf, pos + 7) == 110 && rd(rf, pos + 8) == 73 &&
+      rd(rf, pos + 9) == 100 { return false; }
+    let end: i64 = crate::bud_card::v_end(rf, at);
+    if end <= pos || end > n { return false; }
+    pos = end;
+    i = i + 1;
+  }
+  return false;
 }
 
 // Build the wire reply before replacing the stored budget.
@@ -389,12 +682,15 @@ pub fn set_card(inout st: St, rf: [i64], sid: str, has_sid: bool, card: [u8], la
     let mut status: i64 = -1;
     match map_get_mut::<String, crate::bud_tstate::Budget>(inout st.sessions, sid) {
       Some(session) => {
-        let blob: [i64] = budget_words(session);
+        let blob: [i64] = budget_words(st.wire, session);
         status = set_reply(blob, rf, card, lang, by, now_ms, inout out);
         if status == 0 && rd(out, 2) == 1 {
           let end: i64 = rd(out, 0);
           if end < 18 || end >= len(out) { status = 2; }
-          else { session.rest = encode_words(crate::ent_u16::slice(out, 18, end + 1)); }
+          else {
+            let updated: i64 = replace_wire(inout st.wire, session.metadata, crate::ent_u16::slice(out, 18, end + 1));
+            session.metadata = updated;
+          }
         }
       }
       None => {}
@@ -437,7 +733,7 @@ pub fn query(st: St, op: i64, rf: [i64], sid: str, has_sid: bool, inout out: [i6
   if has_sid {
     match map_get::<String, crate::bud_tstate::Budget>(st.sessions, sid) {
       Some(session) => {
-        let blob: [i64] = budget_words(session);
+        let blob: [i64] = budget_words(st.wire, session);
         return query_blob(blob, op, rf, inout out);
       }
       None => {}
@@ -447,31 +743,259 @@ pub fn query(st: St, op: i64, rf: [i64], sid: str, has_sid: bool, inout out: [i6
 }
 
 
-fn seed(inout scratch: [i64], st: St, key: [i64], sid: str) -> i64 ! alloc
+
+struct FieldLink { id: i64, prev: i64, next: i64, tail: i64, hits: i64 }
+
+fn find_field(wire: Wire, root: i64, key: str) -> FieldLink
 {
-  if len(key) == 0 { return 0; }
-  match map_get::<String, crate::bud_tstate::Budget>(st.sessions, sid) {
-    Some(b) => {
-      let blob: [i64] = budget_words(b);
-      let mut result: [i64] = alloc(2, 0);
-      return crate::bud_world::session_put_w(inout scratch, key, 1, rd(key, 0), blob, 0, len(blob), inout result);
+  let mut found: FieldLink = FieldLink { id: 0, prev: 0, next: 0, tail: 0, hits: 0 };
+  match map_get::<i64, WireNode>(wire.nodes, root) {
+    Some(obj) => {
+      if obj.tag == 9 {
+        let mut at: i64 = obj.children;
+        let mut prev: i64 = 0;
+        let mut left: i64 = obj.count;
+        while at != 0 && left > 0
+          decreases left
+        {
+          match map_get::<i64, WireNode>(wire.nodes, at) {
+            Some(n) => {
+              if (n.tag != synthetic_tag() && string_eq(n.key, key)) ||
+                (n.tag == synthetic_tag() && string_eq(key, "autoContinue")) {
+                found.id = at;
+                found.prev = prev;
+                found.next = n.next;
+                if found.hits < 2 { found.hits = found.hits + 1; }
+              }
+              prev = at;
+              at = n.next;
+            }
+            None => { at = 0; }
+          }
+          left = left - 1;
+        }
+        found.tail = prev;
+      }
     }
     None => {}
+  }
+  return found;
+}
+
+fn node_truthy(wire: Wire, id: i64) -> bool
+{
+  match map_get::<i64, WireNode>(wire.nodes, id) {
+    Some(n) => {
+      if n.tag == 4 || n.tag == 8 || n.tag == 9 || n.tag == synthetic_tag() { return true; }
+      if n.tag == 5 { return n.scalar != 0; }
+      if n.tag == 6 { return len(n.text) != 0; }
+      if n.tag == 7 {
+        return band(n.scalar, 9223372036854775807) != 0 && crate::bud_num::count_class(n.scalar) != 3;
+      }
+    }
+    None => {}
+  }
+  return false;
+}
+
+fn node_text_is(wire: Wire, id: i64, text: str) -> bool
+{
+  match map_get::<i64, WireNode>(wire.nodes, id) {
+    Some(n) => { return n.tag == 6 && string_eq(n.text, text); }
+    None => {}
+  }
+  return false;
+}
+
+fn replace_field(inout wire: Wire, parent: i64, slot: FieldLink, fresh: i64) -> ()
+{
+  if fresh == 0 { return; }
+  let mut prev: i64 = slot.prev;
+  if slot.id == 0 { prev = slot.tail; }
+  else {
+    link(inout wire, fresh, slot.next);
+    let ignored: i64 = delete_node(inout wire, slot.id, 64);
+  }
+  if prev != 0 { link(inout wire, prev, fresh); }
+  match map_get_mut::<i64, WireNode>(inout wire.nodes, parent) {
+    Some(obj) => {
+      if prev == 0 { obj.children = fresh; }
+      if slot.id == 0 && obj.count < 1099511627776 { obj.count = obj.count + 1; }
+    }
+    None => {}
+  }
+}
+
+fn delete_fields(inout wire: Wire, root: i64, key: str, first: FieldLink) -> () ! alloc
+{
+  let mut slot: FieldLink = first;
+  let mut left: i64 = len(wire.nodes);
+  while slot.id != 0 && left > 0
+    decreases left
+  {
+    if slot.prev != 0 { link(inout wire, slot.prev, slot.next); }
+    match map_get_mut::<i64, WireNode>(inout wire.nodes, root) {
+      Some(obj) => {
+        if slot.prev == 0 { obj.children = slot.next; }
+        if obj.count > 0 { obj.count = obj.count - 1; }
+      }
+      None => {}
+    }
+    let ignored: i64 = delete_node(inout wire, slot.id, 64);
+    if slot.hits == 1 { return; }
+    slot = find_field(wire, root, key);
+    left = left - 1;
+  }
+}
+
+fn jb_truthy(packet: [u8]) -> bool
+{
+  if len(packet) == 0 { return false; }
+  let tag: i64 = packet[0];
+  if tag == 4 || tag == 8 || tag == 9 { return true; }
+  if tag == 6 { return j_count(packet, 1) > 0; }
+  if tag != 7 { return false; }
+  let bits: i64 = j_bits(packet, 1);
+  return band(bits, 9223372036854775807) != 0 && crate::bud_num::count_class(bits) != 3;
+}
+
+fn auto_reply(inout out: [i64], finds: i64, value: i64, owner: [i64]) -> i64
+{
+  let n: i64 = len(owner);
+  if len(out) < 5 || n > len(out) - 5 || n > 1073741824 { return 3; }
+  let saved: i64 = b01(n != 0);
+  out[0] = 4 + n;
+  out[1] = finds;
+  out[2] = saved;
+  out[3] = saved;
+  out[4] = value;
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(owner) && n <= len(out) - 5
+    decreases n - i
+  {
+    out[5 + i] = owner[i];
+    i = i + 1;
   }
   return 0;
 }
 
-fn commit(inout st: St, scratch: [i64], key: [i64], sid: str) -> ()
-  ! alloc
+// The key codec maps each UTF-16 unit to one Rust character, using U+10000
+// through U+107FF for surrogate units. Compare without cloning the String.
+fn id_matches(rf: [i64], at: i64, id: String) -> bool
 {
-  let e: i64 = crate::bud_auto::session_entry(scratch, key);
-  if e < 0 { return; }
-  let at: i64 = crate::bud_map::blob_off(scratch, e);
-  let words: [i64] = crate::ent_u16::slice(scratch, at, at + crate::bud_map::blob_len(scratch, e));
-  match map_get_mut::<String, crate::bud_tstate::Budget>(inout st.sessions, sid) {
-    Some(b) => { b.rest = encode_words(words); }
+  if at < 0 || at > len(rf) - 2 || rf[at] != 6 { return false; }
+  let count: i64 = rf[at + 1];
+  if count < 0 || count > len(rf) - at - 2 { return false; }
+  let n: i64 = len(id);
+  let mut i: i64 = 0;
+  let mut used: i64 = 0;
+  while i < n && used < count
+    invariant 0 <= i && i <= n && n == len(id) && 0 <= used && used <= count
+    invariant 0 <= at && count <= len(rf) - at - 2
+    decreases n - i
+  {
+    let lead: i64 = string_byte(id, i);
+    let mut cp: i64 = lead;
+    let mut width: i64 = 1;
+    if lead >= 240 {
+      if n - i < 4 { return false; }
+      cp = band(lead, 7) * 262144 + band(string_byte(id, i + 1), 63) * 4096 +
+        band(string_byte(id, i + 2), 63) * 64 + band(string_byte(id, i + 3), 63) - 10240;
+      width = 4;
+    } else if lead >= 224 {
+      if n - i < 3 { return false; }
+      cp = band(lead, 15) * 4096 + band(string_byte(id, i + 1), 63) * 64 + band(string_byte(id, i + 2), 63);
+      width = 3;
+    } else if lead >= 192 {
+      if n - i < 2 { return false; }
+      cp = band(lead, 31) * 64 + band(string_byte(id, i + 1), 63);
+      width = 2;
+    }
+    if cp != rf[at + 2 + used] { return false; }
+    used = used + 1;
+    i = i + width;
+  }
+  return i == n && used == count;
+}
+
+fn matches_auto(wire: Wire, b: crate::bud_tstate::Budget, rf: [i64], id: i64) -> bool ! alloc
+{
+  if b.metadata == 0 || id < 0 || id > 1099511627776 || rd(rf, id) != 6 { return false; }
+  if len(b.id) == 0 && !node_text_is(wire, find_field(wire, b.metadata, "id").id, "") { return false; }
+  return id_matches(rf, id, b.id);
+}
+
+fn current_auto(st: St, sid: str, rf: [i64], id: i64) -> bool ! alloc
+{
+  match map_get::<String, crate::bud_tstate::Budget>(st.sessions, sid) {
+    Some(b) => { return matches_auto(st.wire, b, rf, id); }
     None => {}
   }
+  return false;
+}
+
+fn atom(inout wire: Wire, key: str, tag: i64, text_value: str, next: i64) -> i64 ! alloc
+{
+  return append_node(inout wire, WireNode {
+    key: text(key), text: text(text_value), tag: tag, scalar: 0,
+    children: 0, count: 0, next: next
+  });
+}
+
+fn stop_auto(inout wire: Wire, root: i64, caller_sid: str, finds: i64, owner: [i64],
+             inout out: [i64]) -> i64 ! alloc
+{
+  let record: FieldLink = find_field(wire, root, "autoContinue");
+  let record_sid: FieldLink = find_field(wire, record.id, "sessionId");
+  if node_text_is(wire, record_sid.id, caller_sid) {
+    let stopped: FieldLink = find_field(wire, record.id, "stopped");
+    if node_truthy(wire, stopped.id) { return 0; }
+    let reply: i64 = auto_reply(inout out, finds, 1, owner);
+    if reply != 0 { return reply; }
+    if stopped.id == 0 {
+      let fresh: i64 = atom(inout wire, "stopped", 4, "", 0);
+      replace_field(inout wire, record.id, stopped, fresh);
+    } else {
+      match map_get_mut::<i64, WireNode>(inout wire.nodes, stopped.id) {
+        Some(n) => {
+          // A falsy value cannot have children.
+          n.tag = 4;
+          n.text = string_new();
+        }
+        None => {}
+      }
+    }
+    return 0;
+  }
+  if node_truthy(wire, record.id) { return 0; }
+  let card: FieldLink = find_field(wire, root, "card");
+  if !node_text_is(wire, find_field(wire, card.id, "state").id, "working") { return 0; }
+  let by: FieldLink = find_field(wire, card.id, "by");
+  if !node_text_is(wire, find_field(wire, by.id, "sessionId").id, caller_sid) { return 0; }
+  let reply2: i64 = auto_reply(inout out, finds, 1, owner);
+  if reply2 != 0 { return reply2; }
+  let fresh: i64 = append_node(inout wire, WireNode {
+    key: string_new(), text: text(caller_sid), tag: synthetic_tag(), scalar: 0,
+    children: 0, count: 0, next: 0
+  });
+  if fresh == 0 { return 2; }
+  replace_field(inout wire, root, record, fresh);
+  return 0;
+}
+
+fn stop_owner(inout st: St, sid: str, owner: [i64], caller_sid: str, finds: i64,
+              inout out: [i64]) -> i64 ! alloc
+{
+  let mut root: i64 = 0;
+  match map_get::<String, crate::bud_tstate::Budget>(st.sessions, sid) {
+    Some(b) => {
+      if b.state == 0 { root = b.metadata; }
+    }
+    None => {}
+  }
+  if root == 0 { return 0; }
+  return stop_auto(inout st.wire, root, caller_sid, finds, owner, inout out);
 }
 
 pub fn auto(inout st: St, op: i64, rf: [i64], key: [i64], sid: str,
@@ -479,39 +1003,46 @@ pub fn auto(inout st: St, op: i64, rf: [i64], key: [i64], sid: str,
 {
   if op < 1 || op > 3 || len(rf) == 0 || crate::bud_card::v_end(rf, 0) != len(rf) { return 2; }
   if op == 2 && len(packet) > 0 && !crate::bud_card::j_ok_at(packet, 3) { return 2; }
-  if op == 3 && len(caller) == 0 { return 2; }
-  let a: [i64] = session(st, sid);
-  let mut extra: i64 = 0;
-  if op == 3 { extra = len(session(st, caller_sid)); }
-  if len(a) > 4294967296 || extra > 4294967296 || len(key) > 1073741824 ||
-     len(caller) > 1073741824 || len(packet) > 4294967296 { return 2; }
-  let mut scratch: [i64] = alloc(4096 + 3 * (len(a) + extra + len(key) + len(caller) + len(packet)), 0);
-  if crate::bud_store::init_store(inout scratch) != 0 { return 2; }
-  if seed(inout scratch, st, key, sid) != 0 { return 2; }
-  if op == 3 && (!string_eq(sid, caller_sid) || len(key) == 0) {
-    if seed(inout scratch, st, caller, caller_sid) != 0 { return 2; }
-  }
-  let mut pointed: i64 = -1;
-  if len(key) > 0 && cur(crate::ent_u16::slice(a, 1, len(a)), rf).e >= 0 {
-    pointed = crate::bud_auto::session_entry(scratch, key);
-  }
-  let mut status: i64 = 0;
-  if op == 1 { status = crate::bud_auto::clear(inout scratch, pointed, inout out); }
-  if op == 2 { status = crate::bud_auto::record(inout scratch, pointed, packet, inout out); }
+  let id: i64 = ref_budget_id(rf);
+  let empty: [i64] = crate::ent_u16::empty();
   if op == 3 {
-    status = crate::bud_auto::stop(inout scratch, pointed, crate::bud_card::truthy(rf, 0), key, caller, inout out);
+    if len(caller) == 0 { return 2; }
+    let has_ref: bool = crate::bud_card::truthy(rf, 0);
+    let finds: i64 = 1 + b01(has_ref);
+    let status: i64 = auto_reply(inout out, finds, 1, empty);
+    if status != 0 { return status; }
+    if has_ref && len(key) > 0 && current_auto(st, sid, rf, id) {
+      return stop_owner(inout st, sid, key, caller_sid, finds, inout out);
+    }
+    return stop_owner(inout st, caller_sid, caller, caller_sid, finds, inout out);
   }
-  if status == 0 {
-    if op == 3 && rd(out, 2) == 1 {
-      let end: i64 = rd(out, 0);
-      if end < 5 || end >= len(out) || end >= 1099511627776 { return 2; }
-      let owner: [i64] = crate::ent_u16::slice(out, 5, end + 1);
-      let owner_sid: String = decode_key(owner);
-      commit(inout st, scratch, owner, string_to_str(owner_sid));
-    } else if op != 3 && pointed >= 0 { commit(inout st, scratch, key, sid); }
+
+  let mut value: i64 = 1;
+  if op == 2 { value = 3; }
+  let reply: i64 = auto_reply(inout out, 1, value, empty);
+  if reply != 0 || len(key) == 0 { return reply; }
+  let mut root: i64 = 0;
+  match map_get::<String, crate::bud_tstate::Budget>(st.sessions, sid) {
+    Some(b) => {
+      if matches_auto(st.wire, b, rf, id) { root = b.metadata; }
+    }
+    None => {}
   }
-  if status == 1 { return 2; }
-  return status;
+  if root == 0 { return 0; }
+  let slot: FieldLink = find_field(st.wire, root, "autoContinue");
+  if op == 1 {
+    if node_truthy(st.wire, slot.id) { delete_fields(inout st.wire, root, "autoContinue", slot); }
+  } else {
+    let written: i64 = auto_reply(inout out, 1, 4, empty);
+    if written != 0 { return written; }
+    if jb_truthy(packet) {
+      if len(packet) > 4294967296 - 13 { return 2; }
+      let fresh: i64 = read_node(inout st.wire, empty, packet, true, 0, text("autoContinue"), 3);
+      if fresh == 0 { return 2; }
+      replace_field(inout st.wire, root, slot, fresh);
+    } else { delete_fields(inout st.wire, root, "autoContinue", slot); }
+  }
+  return 0;
 }
 pub fn legacy_effects(st: St, kind: i64, op: i64, rf: [i64], sid: [i64], sid_text: str, caller: [i64], now: i64, w: [i64]) -> [i64] ! alloc
 {
@@ -525,8 +1056,7 @@ pub fn legacy_effects(st: St, kind: i64, op: i64, rf: [i64], sid: [i64], sid_tex
       if rd(w, 0) == 2 {
         effects = crate::bud_effect::value(move effects, 1, id);
       }
-      let snapshot: [i64] = session(st, sid_text);
-      if rd(w, 0) == 1 || len(sid) == 0 || cur(crate::ent_u16::slice(snapshot, 1, len(snapshot)), rf).e < 0 {
+      if rd(w, 0) == 1 || len(sid) == 0 || !current_auto(st, sid_text, rf, ref_budget_id(rf)) {
         owner = crate::bud_vwords::unpack(caller);
       }
       effects = crate::bud_effect::value(move effects, 1, owner);
@@ -554,30 +1084,35 @@ pub fn legacy_effects(st: St, kind: i64, op: i64, rf: [i64], sid: [i64], sid_tex
   return words_array(effects);
 }
 
-pub fn m12_observe(st: [i64], inout out: [i64]) -> i64
-{
-  return crate::bud_world::observe(st, inout out);
-}
-
 // Seed toolSeen for cleanup fixtures. The oracle uses noteTool on a stale ref,
 // so fixture setup does not change any session's usage counter.
-pub fn m12_seed_tool(inout st: [i64], turn: [i64], activity: [i64], inout out: [i64]) -> i64
+pub fn seed_tool(inout st: St, turn: str, activity: str) -> i64 ! alloc
 {
-  return crate::bud_world::tool_note(inout st, turn, 1, crate::bud_vwords::rd(turn, 0), activity, 1, crate::bud_vwords::rd(activity, 0), inout out);
-}
-
-pub fn m12_init(inout st: [i64]) -> i64
-{
-  return crate::bud_store::init_store(inout st);
-}
-
-pub fn m12_grow(prev: [i64], inout next: [i64]) -> i64
-{
-  if !crate::bud_store::valid(prev) { return 2; }
-  if len(next) < len(prev) { return 2; }
-  let r: i64 = crate::bud_map::grow_copy(prev, inout next);
-  if r != 0 { return 2; }
-  return 0;
+  if len(st.tools) >= 1099511627776 { return -2; }
+  let ordinal: i64 = len(st.tools);
+  let mut fresh: i64 = 0;
+  match map_get_mut::<String, ToolTurn>(inout st.tools, turn) {
+    Some(t) => {
+      match map_get::<String, i64>(t.activities, activity) {
+        Some(a) => {}
+        None => {
+          if len(t.activities) < 1099511627776 {
+            let pos: i64 = len(t.activities);
+            t.activities = map_insert::<String, i64>(move t.activities, text(activity), pos);
+            fresh = 1;
+          } else { fresh = -2; }
+        }
+      }
+    }
+    None => {
+      st.tools = map_insert::<String, ToolTurn>(move st.tools, text(turn), ToolTurn {
+        ordinal: ordinal,
+        activities: map_insert::<String, i64>(map_new::<String, i64>(), text(activity), 0)
+      });
+      fresh = 1;
+    }
+  }
+  return fresh;
 }
 
 
@@ -753,11 +1288,18 @@ fn attach_fresh(inout st: St,
   }
   body = cat(body, crate::bud_vwords::field("used", crate::bud_vwords::object(8, used)));
   let blob: [i64] = crate::bud_vwords::object(fields, body);
-  let replacement: crate::bud_tstate::Budget = make_budget(blob);
+
   if len(st.sessions) >= 1099511627776 {
     outcome.status = 2;
     return crate::bud_effect::reply(2, false, crate::ent_u16::one(1), move effects);
   }
+  let mut old: i64 = 0;
+  match map_get::<String, crate::bud_tstate::Budget>(st.sessions, sid_text) {
+    Some(b) => { old = b.metadata; }
+    None => {}
+  }
+  let root: i64 = replace_wire(inout st.wire, old, blob);
+  let replacement: crate::bud_tstate::Budget = make_budget(blob, root);
   st.sessions = map_insert::<String, crate::bud_tstate::Budget>(move st.sessions, text(sid_text), move replacement);
   effects = crate::bud_effect::mark(move effects, 4);
   return crate::bud_effect::reply(0, false, ref_value(sid, bid, false), move effects);
@@ -813,7 +1355,66 @@ fn drop_clock(inout st: St, key: str, take incoming: Vec<i64>) -> Vec<i64> ! all
   return move effects;
 }
 
-fn cleanup(inout st: St, op: i64, sid: str, keys: [i64]) -> Vec<i64> ! alloc
+fn compact_clock_order(inout st: St) -> () ! alloc
+{
+  if len(st.clock_order) <= 2 * len(st.clock_state.clocks) + 64 { return; }
+  let mut order: Vec<String> = vec_new::<String>();
+  let mut ordinals: Vec<i64> = vec_new::<i64>();
+  let n: i64 = len(st.clock_order);
+  if n != len(st.clock_ordinals) { return; }
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(st.clock_order) && n == len(st.clock_ordinals) && len(order) == len(ordinals) && len(order) <= i
+    decreases n - i
+  {
+    let ordinal: i64 = vec_get::<i64>(st.clock_ordinals, i);
+    match map_get::<String, crate::bud_tstate::Clock>(st.clock_state.clocks, vec_get::<String>(st.clock_order, i)) {
+      Some(c) => {
+        if c.ordinal == ordinal {
+          order = vec_push::<String>(move order, text(vec_get::<String>(st.clock_order, i)));
+          ordinals = vec_push::<i64>(move ordinals, ordinal);
+        }
+      }
+      None => {}
+    }
+    i = i + 1;
+  }
+  st.clock_order = move order;
+  st.clock_ordinals = move ordinals;
+}
+
+fn cleanup_clocks(inout clocks: HashMap<String, crate::bud_tstate::Clock>,
+                  inout order: Vec<String>, inout ordinals: Vec<i64>,
+                  op: i64, sid: str) -> Vec<i64> ! alloc
+{
+  let mut effects: Vec<i64> = vec_new::<i64>();
+  let n: i64 = len(order);
+  if n != len(ordinals) { return move effects; }
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(order) && n == len(ordinals)
+    decreases n - i
+  {
+    let ordinal: i64 = vec_get::<i64>(ordinals, i);
+    let mut remove: bool = false;
+    match map_get::<String, crate::bud_tstate::Clock>(clocks, vec_get::<String>(order, i)) {
+      Some(c) => {
+        if c.ordinal == ordinal && (op == 3 || string_eq(c.owner, sid)) {
+          if c.armed { effects = crate::bud_effect::value(move effects, 13, words_array(encode_key(vec_get::<String>(order, i)))); }
+          remove = true;
+        }
+      }
+      None => {}
+    }
+    if op != 3 && remove {
+      let removed: bool = map_remove::<String, crate::bud_tstate::Clock>(inout clocks, vec_get::<String>(order, i));
+    }
+    i = i + 1;
+  }
+  return move effects;
+}
+
+fn cleanup(inout st: St, op: i64, sid: str) -> Vec<i64> ! alloc
 {
   let mut effects: Vec<i64> = vec_new::<i64>();
   if op == 1 {
@@ -824,7 +1425,8 @@ fn cleanup(inout st: St, op: i64, sid: str, keys: [i64]) -> Vec<i64> ! alloc
         if b.state >= 0 {
           found = true;
           id = text(string_to_str(b.id));
-          b.rest = encode_words(no_active_since(budget_words(b)));
+          let slot: FieldLink = find_field(st.wire, b.metadata, "activeSince");
+          delete_fields(inout st.wire, b.metadata, "activeSince", slot);
           b.active_since = -1;
           b.since_kind = -1;
         }
@@ -833,28 +1435,20 @@ fn cleanup(inout st: St, op: i64, sid: str, keys: [i64]) -> Vec<i64> ! alloc
     }
     if found { effects = drop_clock(inout st, string_to_str(id), move effects); }
   } else {
-    let mut i: i64 = 0;
-    while i < len(keys)
-      invariant 0 <= i && i <= len(keys)
-      decreases len(keys) - i
-    {
-      let key_end: i64 = crate::bud_keys::rec_end(keys, i);
-      if key_end <= i { return crate::bud_effect::reply(2, false, crate::ent_u16::one(1), move effects); }
-      let owner_end: i64 = crate::bud_keys::rec_end(keys, key_end);
-      if owner_end <= key_end { return crate::bud_effect::reply(2, false, crate::ent_u16::one(1), move effects); }
-      let owner: String = decode_key(crate::ent_u16::slice(keys, key_end, owner_end));
-      if op == 3 || string_eq(owner, sid) {
-        let key: String = decode_key(crate::ent_u16::slice(keys, i, key_end));
-        effects = drop_clock(inout st, string_to_str(key), move effects);
-      }
-      i = owner_end;
+    effects = cleanup_clocks(inout st.clock_state.clocks, inout st.clock_order, inout st.clock_ordinals, op, sid);
+    if op == 3 {
+      st.clock_state.clocks = map_new::<String, crate::bud_tstate::Clock>();
+      st.clock_state.next_clock = 0;
+      vec_clear::<String>(inout st.clock_order);
+      vec_clear::<i64>(inout st.clock_ordinals);
+      st.tools = map_new::<String, ToolTurn>();
     }
-    if op == 3 { st.clock_state.next_clock = 0; }
   }
+  compact_clock_order(inout st);
   return crate::bud_effect::reply(0, false, crate::ent_u16::one(1), move effects);
 }
 
-fn charge_budget(inout b: crate::bud_tstate::Budget, what: [i64]) -> i64 ! alloc
+fn charge_budget(inout wire: Wire, inout b: crate::bud_tstate::Budget, what: [i64]) -> i64 ! alloc
 {
   if b.state == 2 { return 1; }
   if b.state == 1 {
@@ -880,14 +1474,15 @@ fn charge_budget(inout b: crate::bud_tstate::Budget, what: [i64]) -> i64 ! alloc
   if charged < 0 { return 5; }
   if charged > 0 { return 32 + crate::bud_store::c32(charged); }
 
-  let a: [i64] = budget_words(b);
+  let a: [i64] = budget_words(wire, b);
   let mut used: [i64] = part(a, get(a, 0, "used"));
   used = crate::bud_vwords::put(used, "delegations", number(b.delegations));
   used = crate::bud_vwords::put(used, "commands", number(b.commands));
   used = crate::bud_vwords::put(used, "reviews", number(b.reviews));
   used = crate::bud_vwords::put(used, "checks", number(b.checks));
   used = crate::bud_vwords::put(used, "retries", number(b.retries));
-  b.rest = encode_words(crate::bud_vwords::put(a, "used", used));
+  let updated: i64 = replace_wire(inout wire, b.metadata, crate::bud_vwords::put(a, "used", used));
+  b.metadata = updated;
   return 0;
 }
 
@@ -934,9 +1529,9 @@ fn run_view(st: St, bid: str, sid: str, run: str, op: i64, waiting: bool) -> Run
   return v;
 }
 
-fn after_clock(inout b: crate::bud_tstate::Budget, settled: bool, began: bool, now: i64) -> [i64] ! alloc
+fn after_clock(wire: Wire, b: crate::bud_tstate::Budget, settled: bool, began: bool, now: i64) -> [i64] ! alloc
 {
-  let mut a: [i64] = budget_words(b);
+  let mut a: [i64] = budget_words(wire, b);
   if settled {
     a = no_active_since(a);
     let used: [i64] = part(a, get(a, 0, "used"));
@@ -959,8 +1554,9 @@ fn halt_wire(inout st: St, sid_text: str, sid: [i64], bid: [i64], rf: [i64], now
   h = cat(h, crate::bud_vwords::field("stoppedDelegationIds", list));
   match map_get_mut::<String, crate::bud_tstate::Budget>(inout st.sessions, sid_text) {
     Some(b) => {
-      let a: [i64] = crate::bud_vwords::put(budget_words(b), "state", crate::bud_vwords::text("halted"));
-      b.rest = encode_words(crate::bud_vwords::put(a, "halt", crate::bud_vwords::object(3, h)));
+      let a: [i64] = crate::bud_vwords::put(budget_words(st.wire, b), "state", crate::bud_vwords::text("halted"));
+      let updated: i64 = replace_wire(inout st.wire, b.metadata, crate::bud_vwords::put(a, "halt", crate::bud_vwords::object(3, h)));
+      b.metadata = updated;
     }
     None => {}
   }
@@ -988,21 +1584,42 @@ fn halt_wire(inout st: St, sid_text: str, sid: [i64], bid: [i64], rf: [i64], now
 }
 
 
+pub struct LifeKeys { text: Vec<String>, bid: Vec<i64>, has_run: bool }
+
+pub fn decode_life(rf: [i64], arg: [i64]) -> LifeKeys ! alloc
+{
+  let bid: [i64] = crate::bud_vwords::packed(rf, get(rf, 0, "budgetId"));
+  let run: [i64] = crate::bud_vwords::packed(arg, get(arg, 0, "run"));
+  let mut text: Vec<String> = vec_new::<String>();
+  text = vec_push::<String>(move text, decode_key(bid));
+  text = vec_push::<String>(move text, decode_key(run));
+  let mut packed: Vec<i64> = vec_new::<i64>();
+  let mut i: i64 = 0;
+  while i < len(bid)
+    invariant 0 <= i && i <= len(bid) && len(packed) == i
+    decreases len(bid) - i
+  {
+    packed = vec_push::<i64>(move packed, bid[i]);
+    i = i + 1;
+  }
+  return LifeKeys { text: move text, bid: move packed, has_run: len(run) != 0 };
+}
+
 pub fn life(inout st: St, op: i64, rf: [i64], sid: [i64], sid_text: str, arg: [i64], now: i64,
-            cleanup_keys: [i64]) -> [i64] ! alloc, io
+            bid: [i64], bid_text: str, run: str, has_run: bool) -> [i64] ! alloc, io
 {
   let undef: [i64] = crate::ent_u16::one(1);
   let mut effects: Vec<i64> = vec_new::<i64>();
   if op < 1 || op > 10 { return words_array(crate::bud_effect::reply(2, false, undef, move effects)); }
-  if op <= 3 { return words_array(cleanup(inout st, op, sid_text, cleanup_keys)); }
-  if op == 8 { return words_array(attach(inout st, sid, sid_text, arg, now)); }
+  if op <= 3 { return words_array(cleanup(inout st, op, sid_text)); }
+  if op == 8 {
+    let packet: Vec<i64> = attach(inout st, sid, sid_text, arg, now);
+    compact_clock_order(inout st);
+    return words_array(packet);
+  }
 
-  let bid: [i64] = crate::bud_vwords::packed(rf, get(rf, 0, "budgetId"));
-  let bid_text: String = decode_key(bid);
-  let rk: [i64] = crate::bud_vwords::packed(arg, get(arg, 0, "run"));
-  let run: String = decode_key(rk);
   let waiting: bool = crate::bud_card::truthy(arg, get(arg, 0, "waiting"));
-  let v: RunView = run_view(st, string_to_str(bid_text), sid_text, string_to_str(run), op, waiting);
+  let v: RunView = run_view(st, bid_text, sid_text, run, op, waiting);
   if !v.changed { return words_array(crate::bud_effect::reply(0, false, undef, move effects)); }
 
   let id: [i64] = part(rf, get(rf, 0, "sessionId"));
@@ -1027,7 +1644,7 @@ pub fn life(inout st: St, op: i64, rf: [i64], sid: [i64], sid_text: str, arg: [i
   }
   if op == 4 {
     if !found { return words_array(crate::bud_effect::reply(0, false, undef, move effects)); }
-    if len(rk) == 0 { return words_array(crate::bud_effect::reply(2, false, undef, move effects)); }
+    if !has_run { return words_array(crate::bud_effect::reply(2, false, undef, move effects)); }
     effects = crate::bud_effect::value(move effects, 1, id);
   }
 
@@ -1036,7 +1653,7 @@ pub fn life(inout st: St, op: i64, rf: [i64], sid: [i64], sid_text: str, arg: [i
     status = 1;
     if found {
       match map_get_mut::<String, crate::bud_tstate::Budget>(inout st.sessions, sid_text) {
-        Some(b) => { status = charge_budget(inout b, arg); }
+        Some(b) => { status = charge_budget(inout st.wire, inout b, arg); }
         None => {}
       }
     }
@@ -1058,13 +1675,21 @@ pub fn life(inout st: St, op: i64, rf: [i64], sid: [i64], sid_text: str, arg: [i
     effects = crate::bud_effect::value(move effects, 1, owner);
     effects = crate::bud_effect::value(move effects, 1, owner);
     if open {
-      let reply: crate::bud_tstate::Reply = crate::bud_tlife::explicit_halt(inout st.sessions, inout st.clock_state.clocks, inout out, sid_text, string_to_str(bid_text), now, reason);
+      let reply: crate::bud_tstate::Reply = crate::bud_tlife::explicit_halt(inout st.sessions, inout st.clock_state.clocks, inout out, sid_text, bid_text, now, reason);
       status = reply.status;
     } else { status = 0; }
   } else {
     let mut flag: i64 = 0;
     if waiting { flag = 1; }
-    let reply: crate::bud_tstate::Reply = crate::bud_tlife::run_event(inout st.sessions, inout st.clock_state, inout out, sid_text, string_to_str(bid_text), string_to_str(run), op + 4, now, flag);
+    let ordinal: i64 = st.clock_state.next_clock;
+    if op == 4 && (len(st.clock_order) >= 1099511627776 || len(st.clock_ordinals) >= 1099511627776) {
+      return words_array(crate::bud_effect::reply(2, false, undef, move effects));
+    }
+    let reply: crate::bud_tstate::Reply = crate::bud_tlife::run_event(inout st.sessions, inout st.clock_state, inout out, sid_text, bid_text, run, op + 4, now, flag);
+    if st.clock_state.next_clock != ordinal && len(st.clock_order) < 1099511627776 && len(st.clock_ordinals) < 1099511627776 {
+      st.clock_order = vec_push::<String>(move st.clock_order, text(bid_text));
+      st.clock_ordinals = vec_push::<i64>(move st.clock_ordinals, ordinal);
+    }
     status = reply.status;
   }
 
@@ -1091,11 +1716,12 @@ pub fn life(inout st: St, op: i64, rf: [i64], sid: [i64], sid_text: str, arg: [i
         settled = v.since && b.since_kind != -1 && (!began || op == 7);
         sync_fire = halted && !explicit && op != 7 && !v.since;
         if sync_fire && observing() {
-          sync_start = crate::bud_vwords::put(budget_words(b), "activeSince", crate::bud_vwords::iso(now));
+          sync_start = crate::bud_vwords::put(budget_words(st.wire, b), "activeSince", crate::bud_vwords::iso(now));
         }
         if settled || began || sync_fire {
-          let a: [i64] = after_clock(inout b, settled || sync_fire, began, now);
-          b.rest = encode_words(a);
+          let a: [i64] = after_clock(st.wire, b, settled || sync_fire, began, now);
+          let updated: i64 = replace_wire(inout st.wire, b.metadata, a);
+          b.metadata = updated;
         }
       }
       None => {}
@@ -1116,9 +1742,7 @@ pub fn life(inout st: St, op: i64, rf: [i64], sid: [i64], sid_text: str, arg: [i
   {
     let e: crate::bud_tstate::Effect = vec_get::<crate::bud_tstate::Effect>(out.fx, i);
     if e.tag == 12 {
-      let mut budget_first: i64 = 0;
-      if get(rf, 0, "budgetId") < get(rf, 0, "sessionId") { budget_first = 1; }
-      effects = crate::bud_effect::push(move effects, 12, cat(bid, crate::ent_u16::one(budget_first)), e.a, e.b);
+      effects = crate::bud_effect::push(move effects, 12, cat(bid, crate::ent_u16::one(b01(timer_budget_first(rf)))), e.a, e.b);
     }
     i = i + 1;
   }
@@ -1144,10 +1768,6 @@ pub fn life(inout st: St, op: i64, rf: [i64], sid: [i64], sid_text: str, arg: [i
 pub fn fire_timer(inout st: St, sid: [i64], sid_text: str, bid: [i64], budget_first: bool, now: i64) -> [i64] ! alloc, io
 {
   let rf: [i64] = ref_value(sid, bid, budget_first);
-  return life(inout st, 7, rf, sid, sid_text, crate::ent_u16::empty(), now, crate::ent_u16::empty());
-}
-
-pub fn m12_reset_tools(inout aux: [i64]) -> () ! alloc
-{
-  let discarded: Vec<i64> = crate::bud_cleanup::dispose(inout aux);
+  let key: String = decode_key(bid);
+  return life(inout st, 7, rf, sid, sid_text, crate::ent_u16::empty(), now, bid, string_to_str(key), "", false);
 }

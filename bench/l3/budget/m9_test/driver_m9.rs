@@ -16,6 +16,7 @@
 use std::collections::HashMap;
 use std::hint::black_box;
 use std::io::{self, BufRead, Write};
+#[cfg(not(m9_typed))]
 use std::time::Instant;
 
 // Op keys are packed u16 keys `n, words(n) packed words` (bud_keys layout), packed once by the encoder (run_m9.py, or
@@ -553,6 +554,7 @@ fn run_q() {
 //   drop/close : build R runs, then DROP or advance 1 ms and CLOSE (ns per repetition)
 //   stale/u    : captured FIRE after a budget id change or an unlimited budget replacement
 // prints `item size ns`.
+#[cfg(not(m9_typed))]
 fn run_perf(args: &[String]) {
     let rsz: usize = args[0].parse().unwrap();
     let reps: usize = args[1].parse().unwrap();
@@ -703,6 +705,9 @@ fn run_perf(args: &[String]) {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 && args[1] == "perf" {
+        #[cfg(m9_typed)]
+        typed_perf::run_perf(&args[2..]);
+        #[cfg(not(m9_typed))]
         run_perf(&args[2..]);
     } else {
         run_q();

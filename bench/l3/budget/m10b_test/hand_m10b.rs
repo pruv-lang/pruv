@@ -184,6 +184,7 @@ fn raise(
     bid: &str,
     size: i64,
     now: i64,
+    unit: &[i64],
     effects: &mut Vec<Effect>,
     host: &Host,
 ) -> Result<bool, ()> {
@@ -207,9 +208,7 @@ fn raise(
         if !matches!(size, 2 | 4 | 8) {
             return Err(());
         }
-        // Read the unit fact in place, as the Pruv side does (unit_at), without cloning the answer Vec.
-        let unit: [i64; 6] = std::array::from_fn(|i| bud_facts::unit_at(0, i as i64));
-        let [0, t, d, c, r, ch] = unit.as_slice() else { return Err(()) };
+        let [0, t, d, c, r, ch] = unit else { return Err(()) };
         let values = [*t, *d, *c, *r, *ch];
         if values.iter().any(|v| !(0..=MAX_SAFE / size).contains(v)) {
             return Err(());
@@ -301,6 +300,7 @@ fn decide(
     bid: &str,
     size: i64,
     now: i64,
+    unit: &[i64],
     effects: &mut Vec<Effect>,
     host: &Host,
 ) -> Result<u8, ()> {
@@ -336,9 +336,7 @@ fn decide(
     if size == 0 {
         budget.unlimited = true;
     } else {
-        // Read the unit fact in place, as the Pruv side does (unit_at), without cloning the answer Vec.
-        let unit: [i64; 6] = std::array::from_fn(|i| bud_facts::unit_at(0, i as i64));
-        let [0, t, d, c, r, ch] = unit.as_slice() else { return Err(()) };
+        let [0, t, d, c, r, ch] = unit else { return Err(()) };
         let values = [*t, *d, *c, *r, *ch];
         let mut next = budget.limits;
         for (limit, value) in next.iter_mut().zip(values) {
@@ -386,7 +384,7 @@ fn main_decide(setup: &Setup) {
     let mut host = host;
     let mut effects = Vec::with_capacity(16);
     let mut now = 1_700_000_000_000;
-    bud_facts::set_unit(&setup.unit);
+    let unit = black_box(setup.unit.as_slice());
     measure(setup.reps, || {
         // A budget halted for commands with D stopped delegations; its clock (D runs, one active) settled by the
         // halt. Built outside the measurement, as the Pruv lane's put / runs / halt calls are.
@@ -410,7 +408,7 @@ fn main_decide(setup: &Setup) {
         let before = allocations();
         let start = Instant::now();
         let result = decide(&mut sessions, &mut clocks, black_box(SID), black_box(BID),
-                            black_box(setup.size), now, &mut effects, &host);
+                            black_box(setup.size), now, unit, &mut effects, &host);
         host.perform(&effects, now, &sessions, SID);
         black_box(host.timer);
         let elapsed = start.elapsed();
@@ -441,7 +439,7 @@ fn main() {
     };
     let mut effects = Vec::with_capacity(8);
     let mut now = 1_700_000_000_000;
-    bud_facts::set_unit(&setup.unit);
+    let unit = black_box(setup.unit.as_slice());
     measure(setup.reps, || {
         let budget = sessions.get_mut(SID).unwrap();
         budget.limits = LIMITS;
@@ -458,7 +456,7 @@ fn main() {
         let before = allocations();
         let start = Instant::now();
         let result = raise(&mut sessions, &mut clocks, black_box(SID), black_box(BID),
-                           black_box(setup.size), now, &mut effects, &host);
+                           black_box(setup.size), now, unit, &mut effects, &host);
         host.perform(&effects, now, &sessions, SID);
         black_box(host.timer);
         let elapsed = start.elapsed();

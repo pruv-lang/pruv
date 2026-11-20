@@ -85,45 +85,21 @@ pub fn t_put(inout st: St, sid: str, budget: crate::bud_tstate::Budget) -> i64 !
         string_push_str(string_new(), sid), SessionOrdinal { seq: seq });
     }
   }
-  // An existing record with no stopped ids is refilled in place: no key String and no rehash.
+  // Replace the value in its existing slot, keeping the map key and ordinal.
   let mut done: bool = false;
-  if len(budget.stopped) == 0 {
-    match map_get_mut::<String, crate::bud_tstate::Budget>(inout st.sessions, sid) {
-      Some(b) => { refill(inout b, budget); done = true; }
-      None => {}
+  match map_get_mut::<String, crate::bud_tstate::Budget>(inout st.sessions, sid) {
+    Some(b) => {
+      let copy: crate::bud_tstate::Budget = budget;
+      *b = move copy;
+      done = true;
     }
+    None => {}
   }
   if !done {
     let copy: crate::bud_tstate::Budget = budget;
     st.sessions = map_insert::<String, crate::bud_tstate::Budget>(move st.sessions, string_push_str(string_new(), sid), move copy);
   }
   return 0;
-}
-
-fn text(s: str) -> String ! alloc
-{ return string_push_str(string_new(), s); }
-
-// Field-wise copy of a Budget whose `stopped` list is empty; equal String fields are kept.
-fn refill(inout b: crate::bud_tstate::Budget, src: crate::bud_tstate::Budget) -> () ! alloc
-{
-  if !string_eq(b.id, src.id) { b.id = text(string_to_str(src.id)); }
-  b.state = src.state; b.unlimited = src.unlimited; b.unlimited_kind = src.unlimited_kind;
-  b.limits.time = src.limits.time; b.limits.delegations = src.limits.delegations;
-  b.limits.commands = src.limits.commands; b.limits.reviews = src.limits.reviews; b.limits.checks = src.limits.checks;
-  b.active_ms = src.active_ms; b.active_since = src.active_since; b.since_kind = src.since_kind;
-  b.delegations = src.delegations; b.commands = src.commands; b.reviews = src.reviews; b.checks = src.checks;
-  b.tools = src.tools; b.failures = src.failures; b.retries = src.retries; b.metadata = src.metadata;
-  b.origin = src.origin;
-  if !string_eq(b.opened_at, src.opened_at) { b.opened_at = text(string_to_str(src.opened_at)); }
-  if !string_eq(b.since_text, src.since_text) { b.since_text = text(string_to_str(src.since_text)); }
-  if !string_eq(b.ended_at, src.ended_at) { b.ended_at = text(string_to_str(src.ended_at)); }
-  if !string_eq(b.follows, src.follows) { b.follows = text(string_to_str(src.follows)); }
-  b.ended_how = src.ended_how; b.ended_kind = src.ended_kind; b.ended_ms = src.ended_ms;
-  b.opened_ms = src.opened_ms; b.follows_kind = src.follows_kind;
-  if !string_eq(b.rest, src.rest) { b.rest = text(string_to_str(src.rest)); }
-  b.halt_reason = src.halt_reason; b.halt_kind = src.halt_kind; b.halt_ms = src.halt_ms;
-  if !string_eq(b.halt_text, src.halt_text) { b.halt_text = text(string_to_str(src.halt_text)); }
-  b.stopped = vec_new::<String>();
 }
 
 pub fn t_del(inout st: St, sid: str) -> bool
