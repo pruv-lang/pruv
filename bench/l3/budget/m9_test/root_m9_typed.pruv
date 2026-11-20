@@ -165,6 +165,14 @@ pub fn t_call(inout st: St, code: i64, sid: str, bid: str, run: str,
   vec_clear::<Effect>(inout st.out.fx);
   let mut status: i64 = 0;
   if code < 1 || code > 7 { return 2; }
+  if code == 5 {
+    // Drop needs no session lookup: take the clock out, disarm the owned value, drop it.
+    match map_take::<String, Clock>(inout st.clocks, bid) {
+      Some(c) => { disarm(inout c, inout st.out, 13); }
+      None => {}
+    }
+    return status;
+  }
   let valid: bool = current(st, sid, bid);
   if code == 1 && !valid { return 0; }
   if code == 1 {

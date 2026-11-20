@@ -1,0 +1,571 @@
+mod ent_u16;
+mod bud_num;
+mod bud_text;
+mod bud_date;
+mod bud_card;
+mod bud_keys;
+mod bud_store;
+mod bud_map;
+mod bud_world;
+mod bud_tstate;
+mod bud_vwords;
+mod bud_auto;
+mod bud_effect;
+
+pub struct Ordinal { value: i64 }
+pub struct St {
+  sessions: HashMap<String, crate::bud_tstate::Budget>,
+  ordinals: HashMap<String, Ordinal>,
+  next_session: i64
+}
+
+trusted rust fn encode_words(words: [i64]) -> String ! alloc
+  ensures true = "::m12_facts::encode_words";
+trusted rust fn decode_words(words: str) -> Vec<i64> ! alloc
+  ensures true = "::m12_facts::decode_words";
+trusted rust fn decode_key(words: [i64]) -> String ! alloc
+  ensures true = "::m12_facts::decode_key";
+
+fn text(s: str) -> String ! alloc
+{ return string_push_str(string_new(), s); }
+
+fn words_array(words: Vec<i64>) -> [i64] ! alloc
+{
+  let n: i64 = len(words);
+  let mut out: [i64] = alloc(n, 0);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(words) && len(out) == n
+    decreases n - i
+  {
+    out[i] = vec_get::<i64>(words, i);
+    i = i + 1;
+  }
+  return out;
+}
+
+fn budget_words(b: crate::bud_tstate::Budget) -> [i64] ! alloc
+{ return words_array(decode_words(string_to_str(b.rest))); }
+
+fn make_budget(blob: [i64]) -> crate::bud_tstate::Budget ! alloc
+{
+  let id: [i64] = crate::bud_vwords::packed(blob, crate::bud_vwords::get(blob, 0, "id"));
+  let pos: i64 = crate::bud_vwords::get(blob, 0, "state");
+  let mut state: i64 = 3;
+  if len(blob) == 0 { state = -1; }
+  if str_is(blob, pos, "open") { state = 0; }
+  if str_is(blob, pos, "halted") { state = 1; }
+  if str_is(blob, pos, "closed") { state = 2; }
+  return crate::bud_tstate::Budget {
+    id: decode_key(id), state: state, unlimited: false, unlimited_kind: 0,
+    limits: crate::bud_tstate::Limits { time: 0, delegations: 0, commands: 0, reviews: 0, checks: 0 },
+    active_ms: 0, active_since: -1, since_kind: 0, delegations: 0, commands: 0,
+    reviews: 0, checks: 0, tools: 0, failures: 0, retries: 0, metadata: 0, origin: 0,
+    opened_at: string_new(), since_text: string_new(), ended_at: string_new(), follows: string_new(),
+    ended_how: 0, ended_kind: 0, ended_ms: 0, opened_ms: 0, follows_kind: 0,
+    rest: encode_words(blob), halt_reason: -1, halt_kind: 0, halt_ms: 0,
+    halt_text: string_new(), stopped: vec_new::<String>()
+  };
+}
+
+pub fn load(inout st: St, sid: str, blob: [i64], inout out: [i64]) -> i64 ! alloc
+{
+  if len(blob) > 0 && crate::bud_card::v_stored_end(blob, 0) != len(blob) { return 2; }
+  if len(out) < 2 { return 3; }
+  if len(st.sessions) >= 1099511627776 { return 2; }
+  let mut fresh: i64 = 1;
+  match map_get::<String, Ordinal>(st.ordinals, sid) {
+    Some(o) => { fresh = 0; }
+    None => {}
+  }
+  if fresh == 1 {
+    if len(st.ordinals) >= 1099511627776 || st.next_session < 0 || st.next_session >= 1099511627775 { return 2; }
+    let seq: i64 = st.next_session;
+    st.next_session = seq + 1;
+    st.ordinals = map_insert::<String, Ordinal>(move st.ordinals, text(sid), Ordinal { value: seq });
+  }
+  let b: crate::bud_tstate::Budget = make_budget(blob);
+  st.sessions = map_insert::<String, crate::bud_tstate::Budget>(move st.sessions, text(sid), move b);
+  crate::ent_u16::wr(inout out, 0, 1);
+  crate::ent_u16::wr(inout out, 1, fresh);
+  return 0;
+}
+
+pub fn session(st: St, sid: str) -> [i64] ! alloc
+{
+  match map_get::<String, crate::bud_tstate::Budget>(st.sessions, sid) {
+    Some(b) => { return crate::bud_vwords::cat(crate::ent_u16::one(1), budget_words(b)); }
+    None => {}
+  }
+  return crate::ent_u16::empty();
+}
+fn rd(v: [i64], i: i64) -> i64
+{ return crate::ent_u16::rd(v, i); }
+
+fn emit(inout out: [i64], pos: i64, v: i64) -> i64
+  requires 0 <= pos && pos <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776 && len(out) == len(old(out))
+{
+  if pos >= 1099511627776 { return 1099511627776; }
+  crate::ent_u16::wr(inout out, pos, v);
+  return pos + 1;
+}
+
+fn emit_lit(inout out: [i64], pos: i64, s: str) -> i64
+  requires 0 <= pos && pos <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776 && len(out) == len(old(out))
+{
+  let m: i64 = len(s);
+  let mut p: i64 = emit(inout out, pos, m);
+  let mut j: i64 = 0;
+  while j < m
+    invariant 0 <= j && j <= m && m == len(s) && 0 <= p && p <= 1099511627776 && len(out) == len(old(out))
+    decreases m - j
+  {
+    p = emit(inout out, p, s[j]);
+    j = j + 1;
+  }
+  return p;
+}
+
+fn emit_range(inout out: [i64], pos: i64, src: [i64], s: i64, e: i64) -> i64
+  requires 0 <= pos && pos <= 1099511627776
+  requires 0 <= s && s <= e && e <= len(src)
+  ensures 0 <= result && result <= 1099511627776 && len(out) == len(old(out))
+{
+  let n: i64 = e - s;
+  let mut p: i64 = pos;
+  let mut j: i64 = 0;
+  if n <= 1099511627776 - pos && pos + n <= len(out) {
+    // the whole range is in bounds: one check for the loop (same writes as the per-word path below)
+    while j < n
+      invariant 0 <= j && j <= n && 0 <= s && s + n <= len(src) && 0 <= pos && pos + n <= len(out) && pos + n <= 1099511627776 && len(out) == len(old(out))
+      decreases n - j
+    {
+      out[pos + j] = src[s + j];
+      j = j + 1;
+    }
+    return pos + n;
+  }
+  while j < n
+    invariant 0 <= j && j <= n && 0 <= s && s + n <= len(src) && 0 <= p && p <= 1099511627776 && len(out) == len(old(out))
+    decreases n - j
+  {
+    p = emit(inout out, p, src[s + j]);
+    j = j + 1;
+  }
+  return p;
+}
+
+fn emit_all(inout out: [i64], pos: i64, w: [i64]) -> i64
+  requires 0 <= pos && pos <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776 && len(out) == len(old(out))
+{
+  return emit_range(inout out, pos, w, 0, len(w));
+}
+
+// `u, units` of the UTF-8 text b (a bud_text output, valid UTF-8; u = its UTF-16 unit count): a short decode loop, so the
+// error branch of m11_set_card stays small (the WTF-8 put_units loop inlined there cost the success path ~48
+// instructions per call, P27)
+fn emit_utf8(inout out: [i64], pos: i64, b: [u8], u: i64) -> i64
+  requires 0 <= pos && pos <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776 && len(out) == len(old(out))
+{
+  let n: i64 = len(b);
+  let mut p: i64 = emit(inout out, pos, u);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(b) && 0 <= p && p <= 1099511627776 && len(out) == len(old(out))
+    decreases n - i
+  {
+    // one unit per lead byte (two emits only for a 4-byte lead), so the loop has two emit sites
+    let c: i64 = b[i];
+    let mut v: i64 = c;
+    let mut k: i64 = 1;
+    if c >= 192 && i + 1 < n { v = (c % 32) * 64 + b[i + 1] % 64; k = 2; }
+    if c >= 224 && i + 2 < n { v = (c % 16) * 4096 + (b[i + 1] % 64) * 64 + b[i + 2] % 64; k = 3; }
+    if c >= 240 && i + 3 < n {
+      let mut x: i64 = (c % 8) * 262144 + (b[i + 1] % 64) * 4096 + (b[i + 2] % 64) * 64 + b[i + 3] % 64 - 65536;
+      if x < 0 { x = 0; }
+      p = emit(inout out, p, 55296 + x / 1024 % 1024);
+      v = 56320 + x % 1024;
+      k = 4;
+    }
+    p = emit(inout out, p, v);
+    i = i + k;
+  }
+  return p;
+}
+
+// the value at `at` is the string equal to the ASCII literal s
+fn str_is(v: [i64], at: i64, s: str) -> bool
+{
+  if at < 0 || at > 1099511627776 { return false; }
+  if rd(v, at) != 6 { return false; }
+  let m: i64 = len(s);
+  if rd(v, at + 1) != m { return false; }
+  let mut j: i64 = 0;
+  while j < m
+    invariant 0 <= j && j <= m && m == len(s) && 0 <= at && at <= 1099511627776
+    decreases m - j
+  {
+    if rd(v, at + 2 + j) != s[j] { return false; }
+    j = j + 1;
+  }
+  return true;
+}
+
+// Compare the state tags without allocating string literals.
+fn is_halted(v: [i64], at: i64) -> bool
+{
+  if at < 0 || at > len(v) - 8 { return false; }
+  return v[at] == 6 && v[at + 1] == 6 && v[at + 2] == 104 && v[at + 3] == 97 &&
+    v[at + 4] == 108 && v[at + 5] == 116 && v[at + 6] == 101 && v[at + 7] == 100;
+}
+
+// Last budgetId value in the admitted ref, without a string literal.
+fn ref_budget_id(rf: [i64]) -> i64
+{
+  let n: i64 = len(rf);
+  if n < 2 || rf[0] != 9 { return -1; }
+  let cnt: i64 = rf[1];
+  if cnt < 0 || cnt > n - 2 { return -1; }
+  let mut pos: i64 = 2;
+  let mut i: i64 = 0;
+  let mut found: i64 = -1;
+  while i < cnt
+    invariant 0 <= i && i <= cnt && 2 <= pos && pos <= n && n == len(rf)
+    decreases cnt - i
+  {
+    if pos >= n { return -1; }
+    let kn: i64 = rf[pos];
+    if kn < 0 || kn > n - pos - 1 { return -1; }
+    let vs: i64 = pos + 1 + kn;
+    let end: i64 = crate::bud_card::v_end(rf, vs);
+    if end < 0 { return -1; }
+    if kn == 8 && rf[pos + 1] == 98 && rf[pos + 2] == 117 && rf[pos + 3] == 100 && rf[pos + 4] == 103 &&
+      rf[pos + 5] == 101 && rf[pos + 6] == 116 && rf[pos + 7] == 73 && rf[pos + 8] == 100 { found = vs; }
+    pos = end;
+    i = i + 1;
+  }
+  return found;
+}
+
+// both values are strings with the same units
+fn str_eq(a: [i64], pa: i64, b: [i64], pb: i64) -> bool
+{
+  if pa < 0 || pb < 0 || pa > 1099511627776 || pb > 1099511627776 { return false; }
+  if rd(a, pa) != 6 || rd(b, pb) != 6 { return false; }
+  let n: i64 = rd(a, pa + 1);
+  if n != rd(b, pb + 1) || n < 0 || n > 1099511627776 { return false; }
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && n <= 1099511627776 && 0 <= pa && pa <= 1099511627776 && 0 <= pb && pb <= 1099511627776
+    decreases n - j
+  {
+    if rd(a, pa + 2 + j) != rd(b, pb + 2 + j) { return false; }
+    j = j + 1;
+  }
+  return true;
+}
+
+struct Cur { e: i64, o: i64, n: i64, state: i64, card: i64, card_end: i64 }
+
+fn no_cur() -> Cur
+  ensures result.e == -1
+{
+  return Cur { e: -1, o: 0, n: 0, state: -1, card: -1, card_end: -1 };
+}
+
+fn cur(blob: [i64], rf: [i64]) -> Cur
+  ensures result.e < 0 || (result.o == 0 && 2 <= result.n && result.n == len(blob))
+  ensures result.e < 0 || (result.card == -1 || (result.o <= result.card && result.card < result.card_end && result.card_end <= result.n))
+{
+  let n: i64 = len(blob);
+  let p: crate::bud_card::BudgetPos = crate::bud_card::budget_pos(blob, 0, n);
+  if !p.ok || !str_eq(blob, p.id, rf, ref_budget_id(rf)) { return no_cur(); }
+  return Cur { e: 0, o: 0, n: n, state: p.state, card: p.card, card_end: p.card_end };
+}
+
+// value position of a JB packet (empty = absent)
+fn at_b(b: [u8]) -> i64
+{
+  if len(b) == 0 { return -1; }
+  return 0;
+}
+
+fn b01(b: bool) -> i64
+{
+  if b { return 1; }
+  return 0;
+}
+
+// Build the wire reply before replacing the stored budget.
+fn set_reply(blob: [i64], rf: [i64], card: [u8], lang: [u8], by: [u8], now_ms: i64, inout out: [i64]) -> i64 ! alloc
+  requires -8640000000000000 <= now_ms && now_ms <= 8640000000000000
+{
+  let c: Cur = cur(blob, rf);
+  let found: bool = c.e >= 0;
+  let closed: bool = found && str_is(blob, c.state, "closed");
+  let lc: i64 = crate::bud_card::lang_code(lang);
+  let r: crate::bud_card::Judged = crate::bud_card::judge(found, closed, card, at_b(card), lc);
+  if r.kind >= 0 {
+    // {ok: false, error}
+    // the error text is a bud_text card error: its unit count is a generated constant (a count loop here was inlined
+    // into every m11_set_card caller and pushed the m11 harness one 16 KiB code page over hand, P27)
+    let eu: i64 = crate::bud_text::card_error_units(r.kind, lc);
+    let need: i64 = 19 + eu;
+    if len(out) < need { return 3; }
+    let mut p: i64 = emit(inout out, 0, need - 1);
+    p = emit(inout out, p, b01(r.used_now));
+    p = emit(inout out, p, 0);
+    p = emit(inout out, p, 0);
+    p = emit(inout out, p, 2);
+    p = emit(inout out, p, 9);
+    p = emit(inout out, p, 2);
+    p = emit_lit(inout out, p, "ok");
+    p = emit(inout out, p, 3);
+    p = emit_lit(inout out, p, "error");
+    p = emit(inout out, p, 6);
+    p = emit_utf8(inout out, p, r.error, eu);
+    return 0;
+  }
+  if c.e < 0 { return 2; }
+  let iso: crate::bud_date::IsoParts = crate::bud_date::iso_parts(now_ms);
+  let mut dry: [i64] = crate::ent_u16::empty();
+  let by_at: i64 = at_b(by);
+  let cs: i64 = crate::bud_card::put_card_words(inout dry, 0, card, r.f, by, by_at, iso);
+  let mut nbn: i64 = c.n + 5 + cs;
+  if c.card >= 0 { nbn = c.n - (c.card_end - c.card) + cs; }
+  let need2: i64 = 18 + nbn;
+  if len(out) < need2 { return 3; }
+  if nbn > 4294967296 { return 2; }
+  let end: i64 = c.o + c.n;
+  let mut q: i64 = emit(inout out, 0, need2 - 1);
+  q = emit(inout out, q, 1);
+  q = emit(inout out, q, 1);
+  q = emit(inout out, q, 1);
+  q = emit(inout out, q, 2);
+  q = emit(inout out, q, 9);
+  q = emit(inout out, q, 2);
+  q = emit_lit(inout out, q, "ok");
+  q = emit(inout out, q, 4);
+  q = emit_lit(inout out, q, "budget");
+  if c.card >= 0 {
+    q = emit_range(inout out, q, blob, c.o, c.card);
+    q = crate::bud_card::put_card_words(inout out, q, card, r.f, by, by_at, iso);
+    q = emit_range(inout out, q, blob, c.card_end, end);
+  } else {
+    q = emit_range(inout out, q, blob, c.o, end);
+    let cnt: i64 = rd(blob, c.o + 1);
+    if cnt < 0 || cnt > c.n - 2 { return 2; }
+    crate::ent_u16::wr(inout out, 19, cnt + 1);
+    q = emit_lit(inout out, q, "card");
+    q = crate::bud_card::put_card_words(inout out, q, card, r.f, by, by_at, iso);
+  }
+  return 0;
+}
+
+pub fn set_card(inout st: St, rf: [i64], sid: str, has_sid: bool, card: [u8], lang: [u8], by: [u8], now_ms: i64, inout out: [i64]) -> i64 ! alloc {
+  if now_ms < -8640000000000000 || now_ms > 8640000000000000 { return 2; }
+  if len(rf) == 0 || crate::bud_card::v_end(rf, 0) != len(rf) { return 2; }
+  // card, lang, by: JB packets (empty = absent), admitted whole before any judgment
+  if len(card) > 0 && !crate::bud_card::j_ok(card) { return 2; }
+  if len(lang) > 0 && !crate::bud_card::j_ok(lang) { return 2; }
+  // by is stored at budget.card.by (depth 3) and returned one level deeper: its top value sits at depth 4 of the result
+  if len(by) > 0 && !crate::bud_card::j_ok_at(by, 4) { return 2; }
+  if has_sid {
+    let mut status: i64 = -1;
+    match map_get_mut::<String, crate::bud_tstate::Budget>(inout st.sessions, sid) {
+      Some(session) => {
+        let blob: [i64] = budget_words(session);
+        status = set_reply(blob, rf, card, lang, by, now_ms, inout out);
+        if status == 0 && rd(out, 2) == 1 {
+          let end: i64 = rd(out, 0);
+          if end < 18 || end >= len(out) { status = 2; }
+          else { session.rest = encode_words(crate::ent_u16::slice(out, 18, end + 1)); }
+        }
+      }
+      None => {}
+    }
+    if status >= 0 { return status; }
+  }
+  return set_reply(crate::ent_u16::empty(), rf, card, lang, by, now_ms, inout out);
+}
+
+fn query_blob(blob: [i64], op: i64, rf: [i64], inout out: [i64]) -> i64 {
+  let c: Cur = cur(blob, rf);
+  if op == 1 && c.e >= 0 {
+    let need: i64 = 2 + c.n;
+    if len(out) < need { return 3; }
+    crate::ent_u16::wr(inout out, 0, need - 1);
+    crate::ent_u16::wr(inout out, 1, 1);
+    let p: i64 = emit_range(inout out, 2, blob, c.o, c.o + c.n);
+    return 0;
+  }
+  if len(out) < 3 { return 3; }
+  let mut v: i64 = 1;
+  if op != 1 {
+    let mut t: bool = false;
+    if c.e >= 0 {
+      if op == 2 { t = is_halted(blob, c.state); }
+      else { t = c.card >= 0 && crate::bud_card::truthy(blob, c.card); }
+    }
+    v = 3;
+    if t { v = 4; }
+  }
+  crate::ent_u16::wr(inout out, 0, 2);
+  crate::ent_u16::wr(inout out, 1, 1);
+  crate::ent_u16::wr(inout out, 2, v);
+  return 0;
+}
+
+pub fn query(st: St, op: i64, rf: [i64], sid: str, has_sid: bool, inout out: [i64]) -> i64 ! alloc {
+  if op < 1 || op > 3 { return 2; }
+  if len(rf) == 0 || crate::bud_card::v_end(rf, 0) != len(rf) { return 2; }
+  if has_sid {
+    match map_get::<String, crate::bud_tstate::Budget>(st.sessions, sid) {
+      Some(session) => {
+        let blob: [i64] = budget_words(session);
+        return query_blob(blob, op, rf, inout out);
+      }
+      None => {}
+    }
+  }
+  return query_blob(crate::ent_u16::empty(), op, rf, inout out);
+}
+
+
+fn seed(inout scratch: [i64], st: St, key: [i64], sid: str) -> i64 ! alloc
+{
+  if len(key) == 0 { return 0; }
+  match map_get::<String, crate::bud_tstate::Budget>(st.sessions, sid) {
+    Some(b) => {
+      let blob: [i64] = budget_words(b);
+      let mut result: [i64] = alloc(2, 0);
+      return crate::bud_world::session_put_w(inout scratch, key, 1, rd(key, 0), blob, 0, len(blob), inout result);
+    }
+    None => {}
+  }
+  return 0;
+}
+
+fn commit(inout st: St, scratch: [i64], key: [i64], sid: str) -> ()
+  ! alloc
+{
+  let e: i64 = crate::bud_auto::session_entry(scratch, key);
+  if e < 0 { return; }
+  let at: i64 = crate::bud_map::blob_off(scratch, e);
+  let words: [i64] = crate::ent_u16::slice(scratch, at, at + crate::bud_map::blob_len(scratch, e));
+  match map_get_mut::<String, crate::bud_tstate::Budget>(inout st.sessions, sid) {
+    Some(b) => { b.rest = encode_words(words); }
+    None => {}
+  }
+}
+
+pub fn auto(inout st: St, op: i64, rf: [i64], key: [i64], sid: str,
+            caller: [i64], caller_sid: str, packet: [u8], inout out: [i64]) -> i64 ! alloc
+{
+  if op < 1 || op > 3 || len(rf) == 0 || crate::bud_card::v_end(rf, 0) != len(rf) { return 2; }
+  if op == 2 && len(packet) > 0 && !crate::bud_card::j_ok_at(packet, 3) { return 2; }
+  if op == 3 && len(caller) == 0 { return 2; }
+  let a: [i64] = session(st, sid);
+  let mut extra: i64 = 0;
+  if op == 3 { extra = len(session(st, caller_sid)); }
+  if len(a) > 4294967296 || extra > 4294967296 || len(key) > 1073741824 ||
+     len(caller) > 1073741824 || len(packet) > 4294967296 { return 2; }
+  let mut scratch: [i64] = alloc(4096 + 3 * (len(a) + extra + len(key) + len(caller) + len(packet)), 0);
+  if crate::bud_store::init_store(inout scratch) != 0 { return 2; }
+  if seed(inout scratch, st, key, sid) != 0 { return 2; }
+  if op == 3 && (!string_eq(sid, caller_sid) || len(key) == 0) {
+    if seed(inout scratch, st, caller, caller_sid) != 0 { return 2; }
+  }
+  let mut pointed: i64 = -1;
+  if len(key) > 0 && cur(crate::ent_u16::slice(a, 1, len(a)), rf).e >= 0 {
+    pointed = crate::bud_auto::session_entry(scratch, key);
+  }
+  let mut status: i64 = 0;
+  if op == 1 { status = crate::bud_auto::clear(inout scratch, pointed, inout out); }
+  if op == 2 { status = crate::bud_auto::record(inout scratch, pointed, packet, inout out); }
+  if op == 3 {
+    status = crate::bud_auto::stop(inout scratch, pointed, crate::bud_card::truthy(rf, 0), key, caller, inout out);
+  }
+  if status == 0 {
+    if op == 3 && rd(out, 2) == 1 {
+      let end: i64 = rd(out, 0);
+      if end < 5 || end >= len(out) || end >= 1099511627776 { return 2; }
+      let owner: [i64] = crate::ent_u16::slice(out, 5, end + 1);
+      let owner_sid: String = decode_key(owner);
+      commit(inout st, scratch, owner, string_to_str(owner_sid));
+    } else if op != 3 && pointed >= 0 { commit(inout st, scratch, key, sid); }
+  }
+  if status == 1 { return 2; }
+  return status;
+}
+pub fn legacy_effects(st: St, kind: i64, op: i64, rf: [i64], sid: [i64], sid_text: str, caller: [i64], now: i64, w: [i64]) -> [i64] ! alloc
+{
+  let mut effects: Vec<i64> = vec_new::<i64>();
+  let id: [i64] = crate::bud_vwords::part(rf, crate::bud_card::obj_get(rf, 0, "sessionId"));
+  let mut owner: [i64] = crate::bud_vwords::unpack(sid);
+  let mut saved: i64 = 0;
+  let mut changed: i64 = 0;
+  if kind == 1 {
+    if op == 3 {
+      if rd(w, 0) == 2 {
+        effects = crate::bud_effect::value(move effects, 1, id);
+      }
+      let snapshot: [i64] = session(st, sid_text);
+      if rd(w, 0) == 1 || len(sid) == 0 || cur(crate::ent_u16::slice(snapshot, 1, len(snapshot)), rf).e < 0 {
+        owner = crate::bud_vwords::unpack(caller);
+      }
+      effects = crate::bud_effect::value(move effects, 1, owner);
+      if rd(w, 1) == 1 {
+        owner = crate::bud_vwords::unpack(crate::ent_u16::slice(w, 4, len(w)));
+      }
+    } else {
+      if rd(w, 0) == 1 { effects = crate::bud_effect::value(move effects, 1, id); }
+    }
+    saved = rd(w, 1);
+    changed = rd(w, 2);
+  } else if kind == 2 {
+    if rd(w, 3) >= 1 { effects = crate::bud_effect::value(move effects, 1, id); }
+    if rd(w, 3) == 2 { effects = crate::bud_effect::value(move effects, 1, id); }
+    if rd(w, 0) == 1 {
+      effects = crate::bud_effect::value(move effects, 2, crate::bud_vwords::pair(5, now));
+    }
+    saved = rd(w, 1);
+    changed = rd(w, 2);
+  } else {
+    if rd(w, 0) == 1 { effects = crate::bud_effect::value(move effects, 1, id); }
+  }
+  if saved == 1 { effects = crate::bud_effect::value(move effects, 3, owner); }
+  if changed == 1 { effects = crate::bud_effect::mark(move effects, 4); }
+  return words_array(effects);
+}
+
+pub fn m12_observe(st: [i64], inout out: [i64]) -> i64
+{
+  return crate::bud_world::observe(st, inout out);
+}
+
+// Seed toolSeen for cleanup fixtures. The oracle uses noteTool on a stale ref,
+// so fixture setup does not change any session's usage counter.
+pub fn m12_seed_tool(inout st: [i64], turn: [i64], activity: [i64], inout out: [i64]) -> i64
+{
+  return crate::bud_world::tool_note(inout st, turn, 1, crate::bud_vwords::rd(turn, 0), activity, 1, crate::bud_vwords::rd(activity, 0), inout out);
+}
+
+pub fn m12_init(inout st: [i64]) -> i64
+{
+  return crate::bud_store::init_store(inout st);
+}
+
+pub fn m12_grow(prev: [i64], inout next: [i64]) -> i64
+{
+  if !crate::bud_store::valid(prev) { return 2; }
+  if len(next) < len(prev) { return 2; }
+  let r: i64 = crate::bud_map::grow_copy(prev, inout next);
+  if r != 0 { return 2; }
+  return 0;
+}
+
