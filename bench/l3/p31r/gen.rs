@@ -88,17 +88,10 @@ fn pruv_g6_charge(budget: &mut i64, n: usize) { let n: i64 = if n > (i64::MAX as
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
 #[inline(always)]
-fn pruv_g6_string_new() -> ::std::string::String {
-    let pruv_r: ::std::string::String = ::std::string::String::new();
+fn pruv_g6_string_from(text: &str) -> ::std::string::String {
+    if !((text.len() as u64) <= (1u64 << 40)) { pruv_g6_req("string_from", "len(text) <= 2^40"); }
+    let pruv_r: ::std::string::String = text.to_string();
     pruv_r
-}
-
-#[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
-#[inline(always)]
-fn pruv_g6_string_push_str(mut s: ::std::string::String, text: &str) -> ::std::string::String {
-    if !((s.len() as u64) + (text.len() as u64) <= (1u64 << 40)) { pruv_g6_req("string_push_str", "len(s) + len(text) <= 2^40"); }
-    s.push_str(text);
-    s
 }
 
 #[allow(unused_mut, unused_variables, unused_parens, non_snake_case, non_camel_case_types, dead_code, unreachable_code, unreachable_patterns, unconditional_panic, arithmetic_overflow, unused_assignments, unused_comparisons)]
@@ -134,8 +127,7 @@ fn rekey__pruv_body(st: &mut St, from: &str, to: &str) -> i64 {
                 { let pruv_v: i64 = (c.used + 1i64); c.used = pruv_v; }
             }
             if ((st.clocks.len() as i64) < 1000000i64) {
-                let mut k: ::std::string::String = pruv_g6_string_new();
-                k = pruv_g6_string_push_str(k, to);
+                let k: ::std::string::String = pruv_g6_string_from(to);
                 st.clocks.insert(k, c);
                 return 0i64;
             }

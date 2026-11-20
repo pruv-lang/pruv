@@ -1,0 +1,1 @@
+{"gen_contains": ["a: &[i64]", "v.as_slice()"], "gen_absent": ["a: &[u8]"]}

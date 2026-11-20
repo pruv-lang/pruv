@@ -1,0 +1,12 @@
+// spec: R-6e-16 reject
+struct Pair { s: String }
+enum Wrap { Empty, P(p: Pair) }
+fn f(w: Wrap) -> () {
+  match w {
+    Wrap::P(p) => {
+      return;
+      let q: Pair = move p;
+    }
+    Wrap::Empty => { }
+  }
+}

@@ -1,0 +1,6 @@
+// spec: R-6g-4 reject
+fn bump(inout n: i64) -> () { n = 1; }
+fn run() -> () {
+  let n: i64 = 0;
+  bump(inout n);
+}

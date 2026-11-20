@@ -256,6 +256,15 @@ class ForeignGen:
             body += s._ens("pruv_r.len() == 0", "len(result) == 0")
             body += ["pruv_r"]
             return s._fn(name, "", STRING, body)
+        if op == "string_from":
+            body = s._req("(text.len() as u64) <= (1u64 << 40)", "len(text) <= 2^40")
+            body += ["let pruv_r: %s = text.to_string();" % STRING]
+            body += s._ens("pruv_r.len() == text.len()", "len(result) == len(text)")
+            if s.ens:
+                body += ["pruv_g6_charge(&mut pruv_budget, text.len());"]
+            body += s._ens("pruv_r.as_bytes() == text.as_bytes()", "bytes of result equal bytes of text")
+            body += ["pruv_r"]
+            return s._fn(name, "text: &str", STRING, body)
         if op == "string_push_str":
             body = s._req("(s.len() as u64) + (text.len() as u64) <= (1u64 << 40)", "len(s) + len(text) <= 2^40")
             body += s._snap(STRING, "s")
@@ -667,7 +676,8 @@ class ForeignGen:
         g = s.g
         s.op = name
         disp = getattr(f, "disp", name)     # G4 A2: messages name the source identity, the helper keeps its stem
-        saved = (g.params, g.vt, g.cp, g.bound, g.tmp, g.borrowed)
+        saved = (g.params, g.vt, g.cp, g.bound, g.tmp, g.borrowed, g.inouts)
+        g.inouts = {p.name for p in f.params if p.mode == "inout"}     # not the caller's (R-6g-4 deref)
         g.params = set(p.name for p in f.params) | {"result"}
         g.vt = dict((p.name, p.type) for p in f.params)
         g.cp, g.bound, g.tmp, g.borrowed = None, [], 0, set()
@@ -710,7 +720,7 @@ class ForeignGen:
             ps = ", ".join("%s: %s" % (p.name, rty(p.type, True)) for p in f.params)
             text = s._fn_trusted(name, ps, None if f.ret == UNIT else rt, body, disp, checks > 0)
         finally:
-            g.params, g.vt, g.cp, g.bound, g.tmp, g.borrowed = saved
+            g.params, g.vt, g.cp, g.bound, g.tmp, g.borrowed, g.inouts = saved
         s.items[name] = text
         return name
 

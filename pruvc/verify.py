@@ -2392,6 +2392,15 @@ class FnVerifier:
                           aft.n == bef.n + z3.If(z3.Select(bef.d, k), 0, 1),
                           z3.ForAll([j], z3.Implies(z3.Select(aft.d, j),
                                                     z3.Select(aft.a, j) == z3.Select(z3.Store(bef.a, k, x), j))))
+        if n == "string_from":
+            t = args[0]
+            need(t.n <= MAX_LEN)
+            res = s.fresh(n, _STRING)
+            s.assume(st, g, res.n == t.n)
+            k = z3.Int("str!k")
+            s.assume(st, g, z3.ForAll([k], z3.Implies(z3.And(k >= 0, k < t.n),
+                                                       z3.Select(res.a, k) == z3.Select(t.a, k))))
+            return res
         if n == "string_push_str":
             sv, t = args
             need(sv.n + t.n <= MAX_LEN)

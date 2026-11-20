@@ -27,7 +27,7 @@ entries: ordered tuple of (key, width). elem_size/alignment(width): byte count.
 """
 from vast import *
 from refine import _kids
-from typeinfo import is_collection
+from typeinfo import is_collection, is_vec_slice_arg
 
 
 def range_layout(lo, hi):
@@ -137,7 +137,10 @@ def plan_storage(program_after_mono, verified=True):
                 elif e.name == 'alloc': pass
                 elif e.name in fmap:
                     for j, c in enumerate(children):
-                        if c is not None: join(c, lookup.get(('param', e.name, j)))
+                        formal = lookup.get(('param', e.name, j))
+                        if c is not None: join(c, formal)
+                        elif formal is not None and is_vec_slice_arg(e.args[j].ty, ARRAY):
+                            pin(formal)
                     if n is not None: join(n, lookup.get(('result', e.name)))
                 elif e.name != 'len':
                     pin(n)

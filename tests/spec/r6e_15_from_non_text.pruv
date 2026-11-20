@@ -1,0 +1,2 @@
+// spec: R-6e-15 reject
+fn bad(n: i64) -> String ! alloc { return string_from(n); }

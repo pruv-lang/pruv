@@ -1,0 +1,7 @@
+// spec: R-6g-4 accept
+fn tick(inout n: i64) -> () cost 0 { n = 1; }
+
+fn update(inout n: i64) -> () cost 1 {
+  tick(inout n);
+  n = 2;
+}

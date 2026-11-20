@@ -1,0 +1,6 @@
+// spec: R-6e-17 reject
+fn array_len(a: [i64]) -> i64 { return len(a); }
+fn check() -> i64 ! alloc {
+  let v: Vec<i64> = vec_new::<i64>();
+  return array_len(v);
+}

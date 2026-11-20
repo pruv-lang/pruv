@@ -1,0 +1,9 @@
+// spec: R-6e-17 accept
+fn first(a: [i64 | 0..=9]) -> i64 requires len(a) > 0 {
+  return a[0];
+}
+
+fn check() -> i64 ! alloc {
+  let v: Vec<i64> = vec_push::<i64>(vec_new::<i64>(), 7);
+  return first(v);
+}

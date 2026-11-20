@@ -1,0 +1,12 @@
+// spec: R-6e-4 reject
+struct Row { value: String, hits: i64 }
+struct St { rows: HashMap<String, Row>, seed: i64 }
+fn make(seed: i64) -> Row ! alloc {
+  return Row { value: string_new(), hits: seed };
+}
+fn put(inout st: St, key: str) -> () ! alloc {
+  match map_get_mut::<String, Row>(inout st.rows, key) {
+    Some(row) => { row = make(st.seed); }
+    None => {}
+  }
+}

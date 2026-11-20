@@ -9,11 +9,7 @@
       ]
     },
     {
-      "op": "string_new",
-      "type_args": []
-    },
-    {
-      "op": "string_push_str",
+      "op": "string_from",
       "type_args": []
     },
     {

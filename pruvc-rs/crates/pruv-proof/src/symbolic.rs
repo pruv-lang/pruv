@@ -3611,7 +3611,7 @@ impl<'a> FnVerifier<'a> {
     }
 
     /// verify.py `catalog_call` (G6_SPEC 11.3): the standard catalog; every requires is a `call_requires` obligation
-    /// (only in code), then an exact term is the result (a fresh symbol only for new_* and string_push_str).
+    /// (only in code), then an exact term or a fresh symbol with catalog facts is the result.
     fn catalog_call(&mut self, e: &Expr, x: &ast::Call, args: &[Val], st: &mut State, g: &[Ast], code: bool) -> R<Val> {
         let n = x.name.as_str();
         let rty = self.t(x.ty.as_deref());
@@ -3799,6 +3799,21 @@ impl<'a> FnVerifier<'a> {
                 let body = aft.d.select(&j).implies(&aft.a.select(&j).eq(&bef.a.store(&k, &xv).select(&j)));
                 let c3 = z.forall(std::slice::from_ref(&j), &body, &[]);
                 Ok(Val::Bool(z.and(&[c1, c2, c3])))
+            }
+            "string_from" => {
+                let t = argv(0)?.try_arr()?;
+                if code {
+                    let ob = t.n.le_i(MAX_LEN);
+                    self.prove_core(&st, g, &ob, pos(e), "call_requires", &what, None);
+                }
+                let res_v = self.try_fresh(n, &Ty::User("string".to_string()))?;
+                let res = res_v.try_arr()?.clone();
+                self.assume(st, g, res.n.eq(&t.n));
+                let k = z.int_const("str!k");
+                let range = z.and(&[k.ge_i(0), k.lt(&t.n)]);
+                let bytes_equal = res.a.select(&k).eq(&t.a.select(&k));
+                self.assume(st, g, z.forall(std::slice::from_ref(&k), &range.implies(&bytes_equal), &[]));
+                Ok(Val::Arr(res))
             }
             "string_push_str" => {
                 let sv = argv(0)?.try_arr()?.clone();

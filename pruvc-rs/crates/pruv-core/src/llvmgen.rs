@@ -4199,7 +4199,7 @@ impl<'a> FnGen<'a> {
         }
         if matches!(
             n,
-            "vec_new" | "map_new" | "string_new" | "vec_push" | "map_insert" | "string_push_str"
+            "vec_new" | "map_new" | "string_from" | "string_new" | "vec_push" | "map_insert" | "string_push_str"
                 | "file_open_read" | "file_create" | "file_read_all" | "file_write_str" | "file_write_bytes"
                 | "proc_args_new" | "proc_args_push" | "proc_spawn" | "proc_spawn_env" | "proc_write_str" | "proc_write_bytes"
                 | "proc_close_stdin" | "proc_read" | "proc_read_all"
@@ -6212,6 +6212,7 @@ pub fn g6_llvm_error(prog: &Program) -> Option<crate::diagnostic::PruvError> {
             || ty.args.iter().any(needs_rust)
     }
     let rust_type = |key: &str| needs_rust(&crate::gtype::GType::from_key(key));
+    let funcs: HashMap<_, _> = prog.functions.iter().map(|f| (f.name.as_str(), f)).collect();
     for f in &prog.functions {
         if f.foreign.is_some() {
             if rust_type(&f.ret) {
@@ -6251,6 +6252,13 @@ pub fn g6_llvm_error(prog: &Program) -> Option<crate::diagnostic::PruvError> {
                     }
                 }
                 if let Expr::Call(c) = e {
+                    if funcs.get(c.name.as_str()).is_some_and(|callee| {
+                        c.args.iter().zip(&callee.params).any(|(arg, p)| {
+                            expr_ty(arg).as_deref().is_some_and(|ty| crate::gtype::key_is_vec_slice_arg(ty, &p.ty))
+                        })
+                    }) {
+                        rust_only.push((c.line, c.col, "a borrowed vector slice argument"));
+                    }
                     match c.name.as_str() {
                         "map_remove" => rust_only.push((c.line, c.col, "map_remove")),
                         "map_take" => rust_only.push((c.line, c.col, "map_take")),
@@ -6405,7 +6413,8 @@ pub fn gen_llvm_any_ex_g4(
             crate::mono::MonoError::Limit(p) => GenError::Diag(p),
             crate::mono::MonoError::Internal(m) => GenError::Msg(m),
         })?;
-        if let Some(e) = crate::bindings::take_array_abi_error(prog, g4) {
+        if let Some(e) = crate::bindings::take_array_abi_error(prog, g4)
+            .or_else(|| crate::bindings::struct_inout_abi_error(prog, false, g4)) {
             return Err(GenError::Diag(e));
         }
         return gen_llvm_concrete_ex(&plan.program, verified, trust_callers, budget, target, foreign_checks);
@@ -6435,7 +6444,16 @@ pub fn gen_llvm_concrete_ex(
     if !matches!(foreign_checks, "requires" | "all" | "off") {
         return Err(GenError::Msg("foreign_checks must be requires, all or off".to_string()));
     }
-    if let Some(e) = crate::bindings::owned_collection_abi_error(prog, None).or_else(|| g6_llvm_error(prog)) {
+    if let Some(e) = crate::bindings::owned_collection_abi_error(prog, None) {
+        return Err(GenError::Diag(e));
+    }
+    if let Some((line, col)) = prog.contract_vec_slice {
+        return Err(GenError::Diag(crate::diagnostic::PruvError::new(
+            "codegen", line, col, "unsupported_type",
+            "a borrowed vector slice argument needs the Rust backend", "use the Rust backend",
+        )));
+    }
+    if let Some(e) = g6_llvm_error(prog) {
         return Err(GenError::Diag(e));
     }
     gen_llvm_body(prog, verified, trust_callers, budget, target, foreign_checks).map_err(|s| match s.strip_prefix(G6_DIAG_TAG) {
@@ -6814,7 +6832,7 @@ mod tests {
             refined: false,
             g9: None,
             explicit: None,
-            uses_inout: None,
+            uses_inout: None, contract_vec_slice: None,
             raw_entries: None,
             pkg_name: None,
         }

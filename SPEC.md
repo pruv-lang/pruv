@@ -403,7 +403,8 @@ fn push_two(take v: Vec<i64>, x: i64) -> Vec<i64> ! alloc
   `String` hold values. Collections cannot be stored in `Option`, `Result` or arrays. R-6e-1, R-6e-3 and R-6e-6
   describe collection fields and the permitted nesting. Operations (`vec_*` and `map_*` take explicit type arguments, `string_*` and `len` take none): `vec_new`, `vec_push`,
   `vec_get`, `map_new`, `map_insert`, `map_get` (returns `Option<V>`), `string_new`, `string_push_str`, `string_byte`,
-  `string_to_str` (copies into a `str`), `vec_clear`, `string_eq`, and `len`. Allocating operations need `! alloc`. In contracts only: `v[i]`, `s[i]`,
+  `string_to_str` (copies into a `str`), `string_from` (copies a `str` into a new `String`), `vec_clear`, `string_eq`, and `len`.
+  Allocating operations need `! alloc`. In contracts only: `v[i]`, `s[i]`,
   `map_lookup::<K, V>(m, k)` and `map_updated::<K, V>(after, before, k, v)` (the whole new map: k set, size, others kept).
   A map whose values grow in a loop (counters, histograms) needs either a saturating update (`if c < LIMIT { c + 1 }`)
   (preferred) or an invariant bounding every value (quantifying over all keys is expensive and may time out); an
@@ -480,13 +481,13 @@ fn tree_count(t: Tree) -> i64
   Initializers that move a binding or use a call result store it directly without cloning.
   LLVM rejects a struct or enum with such a field as `codegen/unsupported_type`. The diagnostic names the
   aggregate and says owned collection fields need the Rust backend.
-- R-6e-2 **Moving a field into its replacement.** `move p.f` is permitted only as a direct `take` argument
+- R-6e-2 **Moving a field into its replacement.** This rule permits `move p.f` as a direct `take` argument
   of a call whose result is assigned back to the same field, as in
   `p.f = vec_push::<i64>(move p.f, 5);`. The receiver `p` must be a `let mut` local, a struct `inout` parameter (R-6g-2) or
   the `Some` binder of R-6e-4, and `f` an owned collection field. Apart from the assignment target and the move, `p` may not occur anywhere in the
-  statement. Other field moves are `type/foreign_move`, with a diagnostic saying a field can be moved only
-  into a call whose result is assigned back to the same field. The callee takes the old field value and the
-  assignment stores its result. Rust passes it with `::std::mem::take(&mut p.f)` without cloning. An active
+  statement. R-6e-16 also permits moving a field out and restoring it in the next statement.
+  The callee takes the old field value and the assignment stores its result.
+  Rust passes it with `::std::mem::take(&mut p.f)` without cloning. An active
   match borrow of `p` still makes the assignment `type/recursive_borrow`.
 - R-6e-3 **Collections of owned aggregates.** An owned aggregate is a non-generic, non-recursive struct whose
   fields are scalars, plain value types or R-6e-1 owned fields. `Vec<S>` and `HashMap<i64, S>` with an owned
@@ -506,7 +507,10 @@ fn tree_count(t: Tree) -> i64
   an `inout` parameter or a field path of either, of type `HashMap<K, V>` (`type/inout_argument`). `k` is
   evaluated once and may not mention the root of `P` (`type/inout_alias`). In the `Some(r)` arm `r` is an
   inout view of the element. The arm may read and assign its fields, use R-6e-2 on `r.f` and pass `inout r`.
-  It may not return, reassign, move or store `r`. The root of `P` may not be mentioned in the arm
+  It may not return, move or store `r`. For a record element of a map or vector, `r = e` and `*r = e`
+  replace the whole record and emit `*r = e;` in Rust; the right-hand side must be a constructor,
+  call result or move of an owned binding (`type/foreign_move`) and may not mention `r` or the root
+  of `P` (`type/recursive_borrow`). The root of `P` may not be mentioned in the arm
   (`type/recursive_borrow`), except through a field path disjoint from `P` (R-6e-8). The arm may not contain `return`, `break` or `continue` (`type/foreign_contract`).
   The `None` arm is unrestricted. Rust emits `match P.get_mut(&k)` with one lookup. The verifier gives `r`
   the stored element when `k` is present and writes the final `r` back at arm exit. The `None` arm leaves `P`
@@ -666,6 +670,40 @@ fn tree_count(t: Tree) -> i64
   [key type](tests/spec/r6e_14_take_key.pruv), [LLVM](tests/spec/r6e_14_take_llvm.pruv),
   [other field](tests/spec/r6e_14_take_other_field.pruv), [scalar read view](tests/spec/r6e_14_take_in_scalar_get.pruv)
   and [binder name reuse](tests/spec/r6e_14_take_proc_binder.pruv).
+- R-6e-15 **Owned text from a borrow.** `string_from(t) -> String` needs `! alloc` and takes
+  the same `str` argument as the text parameter of `string_push_str`. The verifier checks
+  `len(t) <= 2^40` and establishes that the fresh result has length `len(t)` and matches every byte
+  of `t`. Rust uses `t.to_string()` for the sole copy. LLVM calls the same helper through the
+  collection bridge and returns a fresh owned handle.
+  Tests cover [copying text](tests/spec/r6e_15_string_from.pruv),
+  [missing effect](tests/spec/r6e_15_from_no_alloc.pruv), [non-text argument](tests/spec/r6e_15_from_non_text.pruv),
+  [false postcondition](tests/spec/r6e_15_from_wrong_ensures.pruv), and [LLVM lowering](tests/spec/r6e_15_from_llvm.pruv).
+- R-6e-16 **Moving a field out.** For a receiver `p` mutable under R-6e-2, `p.g = move p.f;`
+  moves an owned `String`, `Vec<i64>` or `Vec<bool>` field to a disjoint field path of the same
+  root and type. `let t: T = move p.f;` moves the field into an ordinary owned local of its type.
+  Both forms support nested struct field paths. The immediately next statement in the same block
+  must assign to exactly the moved path `p.f`. Its right-hand side may be an owning expression
+  allowed for field replacement and may not mention `p`. It may also be a move from a disjoint
+  same-typed field of `p`, in which case the following statement must restore that field in turn.
+  For example, `let t: String = move p.f; p.f = move p.g; p.g = move t;` swaps two fields.
+  Outside R-6e-2 and these two forms, field moves are `type/foreign_move`. A missing or invalid
+  restore, or a move between overlapping paths, has the same code and the message
+  "a field moved out must be reassigned by the next statement". Moving a path held by an active
+  match, collection borrow or map iteration is `type/recursive_borrow` under the overlap rules
+  of R-6e-8 and R-6e-13.
+  Rust emits `::std::mem::take(&mut p.f)` without cloning. The verifier reads the old field into
+  the destination at zero cost and retains its symbolic source value until the restore.
+  Owned collection fields require the Rust backend.
+  Tests cover [field transfer](tests/spec/r6e_16_move_field.pruv),
+  [swapping](tests/spec/r6e_16_swap.pruv), [mutable collection views](tests/spec/r6e_16_in_get_mut.pruv),
+  [missing restoration](tests/spec/r6e_16_not_restored.pruv) and [held paths](tests/spec/r6e_16_held_borrow.pruv).
+- R-6e-17 **Borrowing a vector as an array argument.** A read of a `Vec<i64>` or `Vec<bool>` place
+  may be passed to an unmarked parameter of type `[i64]` or `[bool]`, respectively, of a Pruv
+  function. The place may be a local, parameter, binder or field path. This conversion is unavailable
+  for `take` or `inout` parameters, trusted Rust calls and positions other than call arguments.
+  Rust passes `place.as_slice()` without allocating or copying. The verifier uses the vector's existing
+  length and contents. A call that borrows a field of a vector-bearing binding cannot also move
+  that binding (`type/foreign_move`). This conversion requires the Rust backend even in contracts (`codegen/unsupported_type`).
 - **Values, not pointers.** Recursive and buffer-bearing values are independent: copying one deep-copies everything,
   and changing a copy never changes the original. Parameters, field reads and `match` bindings are read-only views
   and do not allocate. Putting an existing value into an owning place (`let`, assignment, constructor field,
@@ -716,7 +754,7 @@ pub fn bounded(x: i64) -> i64                requires 0 <= x && x <= 10
   end of the file, and any `#[` inside a body, is `parse/attribute_position`.
 - **Host entries.** In explicit mode only root `pub` non-generic functions are host entries. A parameter of
   collection, recursive or buffer-field type, or an `inout` parameter (section 6g, Host limits), is
-  `type/entry_signature`, subject to R-6e-5, R-6e-6 and R-6f-2. The same restriction applies to results, subject to R-6f-1 and R-6f-3. Ordinary entries can be
+  `type/entry_signature`, subject to R-6e-5, R-6e-6, R-6f-2 and R-6f-4. The same restriction applies to results, subject to R-6f-1 and R-6f-3. Ordinary entries can be
   exported through `--rust-bindings` and the LLVM
   `pruv_abi_<name>` interface. Child `pub` functions are for Pruv callers only. An optional root `main`
   must be `pub fn main() -> ()`. A child `main` is an ordinary function.
@@ -743,6 +781,10 @@ pub fn bounded(x: i64) -> i64                requires 0 <= x && x <= 10
   A `HashMap` field, a nested-collection element and deeper nesting remain
   `type/entry_signature`. Like R-6f-1 it has no C ABI: the LLVM backend rejects `R`
   with `codegen/unsupported_type`. Legacy mode is unchanged.
+- R-6f-4 **Owned String entry parameters.** A Rust host entry, with or without a state
+  parameter, may take an owned `String` using `take key: String`; the wrapper passes ownership
+  to the body without a copy, and LLVM and the C ABI reject the signature with
+  `codegen/unsupported_type`.
 - **Proof.** Every function is verified, including private and unused ones; a caller sees the callee's contract and,
   for a function that can be expanded (section 6, L3 P07, R-6-1), the fact `result == <body>` at its call, from any
   module. It sees no other part of the body. Recursion and recursive types may span modules. Host entries check `requires` at run
@@ -773,7 +815,7 @@ let mut w: [i64] = copy(a);
 set_at(inout w, 0, 7);
 ```
 - **Syntax and types.** `inout name: T` on a parameter, `T` one of `[i64]`, `[u8]`, `[bool]` or `[T]` with `T: Element`
-  (section 6c), a non-generic struct under R-6g-2, a map under R-6e-7 and R-6e-14, or a vector under R-6e-10; any other type is `type/inout_type`. The mode is not part of the type. The caller must write `inout`
+  (section 6c), `i64` or `bool` under R-6g-4, a non-generic struct under R-6g-2, a map under R-6e-7 and R-6e-14, or a vector under R-6e-10; any other type is `type/inout_type`. The mode is not part of the type. The caller must write `inout`
   at the call (`type/inout_argument` if missing or extra). The marked argument must name a mutable place of
   exactly the parameter's type (see R-6g-3 for field paths). Immutable locals, ordinary parameters,
   read-only `match` binders, elements and calls are rejected. `inout` is contextual, not a keyword;
@@ -832,6 +874,14 @@ set_at(inout w, 0, 7);
   by the callee's `ensures` back along that path only. Where `old` is supported it refers to the pre-call
   value. Sibling fields and other elements of enclosing collections retain their values.
   Rust passes `&mut x.f1...fn` directly, including when `x` is already a mutable reference.
+- R-6g-4 **Scalar inout parameters.** Non-entry Pruv functions may declare `inout n: i64`
+  or `inout n: bool`, read `n` and assign it with `n = e`. The caller marks an exactly
+  matching mutable local, inout parameter, field path or mutable scalar collection binder
+  with `inout`; the exclusivity rules of R-6g-1 and R-6g-3 apply. In `ensures` the name
+  denotes the final value. The caller learns only what those clauses guarantee about it.
+  `old(n)` is `type/old_argument` and a scalar inout root entry is `type/entry_signature`.
+  Rust uses `n: &mut T`, reads `(*n)`, writes `*n = e;` and passes a mutable borrow.
+  Scalar inout requires the Rust backend (`codegen/unsupported_type`).
 - **Generics.** `fn swap<T: Element>(inout a: [T], ...)` works like any G3 function; `swap::<i64>(inout w, i, j)`
   (`examples/g5_generic_swap.pruv`). It is specialized per element type, also across modules.
 - **Loops.** A loop that passes an array as `inout` treats it as changed: an `inout` parameter keeps its length, a
@@ -851,7 +901,7 @@ set_at(inout w, 0, 7);
   except the R-6f-2 typed state entry; a
   `trusted rust fn` with `inout` is `type/foreign_signature`. Give the host an ordinary function that owns a
   `copy` of its input, calls the `inout` helpers on it and returns it.
-- **Not supported.** Elements as `inout` places, scalar,
+- **Not supported.** Elements as `inout` places,
   `str`, collection types outside R-6e-7, or generic struct `inout` parameters (non-generic structs are R-6g-2), `old` of anything but an array `inout` parameter, mutable host entries other than R-6f-2.
 - **New error codes:** `inout_syntax`, `inout_type`, `inout_argument`, `inout_alias`, `inout_context`, `old_context`,
   `old_argument`; reused: `immutable`, `array_alias`, `recursive_borrow`, `entry_signature`, `foreign_signature`,
@@ -937,8 +987,8 @@ Each branch must call an ordinary Pruv function returning `()`. Arguments are
 binding names, integer/bool literals, or `inout name`; bind calculations first.
 Boundary types are `i64`, `bool`, primitive arrays (`[i64]`, `[u8]`, `[bool]`),
 and supported concrete `Element` specializations. Arrays are borrowed, never
-moved or copied. Every written array must be disjoint from every other branch's
-read or write arrays; immutable inputs may repeat. These rules apply even with
+moved or copied. A binding passed `inout` by one branch may not be read or written by another
+branch; read-only inputs may repeat. These rules apply even with
 `--no-verify --trust-callers`.
 
 The entire reachable branch call graph may use only the `alloc` effect, with no
@@ -1762,7 +1812,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/old_argument` | type | `old` applied to anything but one `inout` parameter |
 | `type/old_context` | type | `old` outside `ensures`, invariants and asserts |
 | `type/opaque_signature` | type | an `opaque fn` that is not a bool-valued function (R-6o-1) |
-| `type/parallel_alias` | type | two `par` branches share an array |
+| `type/parallel_alias` | type | one `par` branch writes a binding that another reads or writes |
 | `type/parallel_argument` | type | a `par` branch argument of a form or type that cannot cross the branch |
 | `type/parallel_arity` | type | a `par` group with fewer than two calls |
 | `type/parallel_call` | type | a `par` branch that is not a call to a Pruv function |

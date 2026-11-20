@@ -1,0 +1,2 @@
+// spec: R-6f-4 reject
+pub fn put(take key: String) -> i64 { return len(key); }

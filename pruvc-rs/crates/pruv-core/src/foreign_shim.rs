@@ -553,6 +553,12 @@ fn cat_adapter(helper: &str, op: &str, low: &[GType]) -> R<String> {
                 ),
             ))
         }
+        "string_from" => Ok(fn_text(
+            &s,
+            "p: *const u8, n: i64",
+            Some("PruvH"),
+            &format!("pruv_g6_guard(|| pruv_g6_new({}(pruv_g6_str(p, n))))", helper),
+        )),
         "string_push_str" => Ok(fn_text(
             &s,
             "s: PruvH, p: *const u8, n: i64",

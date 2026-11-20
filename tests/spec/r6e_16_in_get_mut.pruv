@@ -1,0 +1,22 @@
+// spec: R-6e-16 accept
+struct Record { id: String, follows: String }
+
+fn carry_in_map() -> i64 ! alloc
+  ensures result == 3
+{
+  let empty: HashMap<i64, Record> = map_new::<i64, Record>();
+  let mut records: HashMap<i64, Record> = map_insert::<i64, Record>(
+    move empty, 0, Record { id: string_from("abc"), follows: string_new() }
+  );
+  match map_get_mut::<i64, Record>(inout records, 0) {
+    Some(r) => {
+      r.follows = move r.id;
+      r.id = string_new();
+    }
+    None => {}
+  }
+  match map_get::<i64, Record>(records, 0) {
+    Some(r) => { return len(r.follows); }
+    None => { return 0; }
+  }
+}

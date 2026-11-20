@@ -1,0 +1,12 @@
+// spec: R-6e-16 reject
+struct Item { value: i64 }
+struct B { id: Vec<Item>, follows: Vec<Item> }
+fn bad(inout b: B) -> () ! alloc {
+  match vec_at_mut::<Item>(inout b.id, 0) {
+    Some(item) => {
+      b.follows = move b.id;
+      b.id = vec_new::<Item>();
+    }
+    None => {}
+  }
+}

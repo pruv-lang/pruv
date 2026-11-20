@@ -257,9 +257,9 @@ fn rs_de(tt: &TypeTable, ty: &str, arr: &str, off: i64) -> Result<String, String
     }
 }
 
-/// Mutable struct parameters have a Rust-only calling convention.
-pub(crate) fn struct_inout_abi_error(
-    prog: &Program, entries_only: bool,
+/// Non-array inout parameters have a Rust-only calling convention.
+pub fn struct_inout_abi_error(
+    prog: &Program, entries_only: bool, _g4: Option<&crate::modules::G4>,
 ) -> Option<crate::diagnostic::PruvError> {
     for (i, f) in prog.functions.iter().enumerate() {
         let meta = prog.explicit.as_ref().and_then(|e| e.fns.get(i));
@@ -267,12 +267,15 @@ pub(crate) fn struct_inout_abi_error(
             continue;
         }
         if f.params.iter().any(|p| p.mode_pos.is_some() && !GType::from_key(&p.ty).is_array()) {
+            // before the plan, f.name already holds the source identity (crate::m::f), as Python's disp
             let name = meta.map_or(f.name.as_str(), |m| m.disp.as_str());
             let (message, fix) = if entries_only {
                 (format!("host entry {name} takes an inout struct, which has no C ABI"), "use Rust raw_entries crate or unsafe")
             } else {
                 let kind = if f.params.iter().any(|p| p.mode_pos.is_some() && crate::gtype::key_is_collection(&p.ty)) {
                     "collection"
+                } else if f.params.iter().any(|p| p.mode_pos.is_some() && matches!(p.ty.as_str(), "i64" | "bool")) {
+                    "scalar"
                 } else {
                     "struct"
                 };
@@ -314,7 +317,7 @@ pub fn owned_collection_abi_error(
     let err = |line, col, message| {
         crate::diagnostic::PruvError::new("codegen", line, col, "unsupported_type", message, "use the Rust backend")
     };
-    if let Some(e) = take_array_abi_error(prog, g4).or_else(|| struct_inout_abi_error(prog, false)) {
+    if let Some(e) = take_array_abi_error(prog, g4).or_else(|| struct_inout_abi_error(prog, false, g4)) {
         return Some(e);
     }
     for d in &prog.types {
@@ -324,16 +327,18 @@ pub fn owned_collection_abi_error(
         }
     }
     for (i, f) in prog.functions.iter().enumerate() {
-        if !crate::gtype::key_is_scalar_vec(&f.ret) {
-            continue;
-        }
         let name = if let Some(g4) = g4 {
             g4.fn_meta.get(i).filter(|m| m.host_entry).map(|m| m.src_name.as_str())
         } else {
             prog.explicit.as_ref().and_then(|e| e.fns.get(i)).filter(|m| m.host_entry).map(|m| m.disp.as_str())
         };
         if let Some(name) = name {
-            return Some(err(f.line, f.col, format!("host entry {} returns a Vec, which has no C ABI", name)));
+            if f.params.iter().any(|p| p.take && p.ty == "string") {
+                return Some(err(f.line, f.col, format!("host entry {name} takes an owned String, which has no C ABI")));
+            }
+            if crate::gtype::key_is_scalar_vec(&f.ret) {
+                return Some(err(f.line, f.col, format!("host entry {} returns a Vec, which has no C ABI", name)));
+            }
         }
     }
     None
@@ -1461,7 +1466,7 @@ mod tests {
 
     #[test]
     fn raw_entries_c_order() {
-        let mut prog = Program { functions: vec![func("f", vec![("x", "i64")], "i64")], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: Some("c".into()), pkg_name: Some("app".into()) };
+        let mut prog = Program { functions: vec![func("f", vec![("x", "i64")], "i64")], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: Some("c".into()), pkg_name: Some("app".into()) };
         // not explicit: raw_entries is ignored, so no pruv_c
         assert!(!gen_bindings(&prog).unwrap().contains("pub mod pruv_c"));
         prog.raw_entries = None;
@@ -1470,7 +1475,7 @@ mod tests {
 
     #[test]
     fn simple_function() {
-        let prog = Program { functions: vec![func("f", vec![("x", "i64"), ("a", "array")], "bool")], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None, pkg_name: None };
+        let prog = Program { functions: vec![func("f", vec![("x", "i64"), ("a", "array")], "bool")], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None };
         let s = gen_bindings(&prog).unwrap();
         assert!(s.contains("    fn pruv_abi_f(p0: i64, p1: *const i64, p2: i64) -> i64;"));
         assert!(s.contains("pub fn f(x: i64, a: &[i64]) -> bool {"));
@@ -1481,7 +1486,7 @@ mod tests {
     #[test]
     fn abi_symbols_carry_the_package_prefix() {
         // P10H: with a package name every pruv_abi_* reference is `<pkg>__pruv_abi_*`; without one the names stay
-        let prog = Program { functions: vec![func("f", vec![("x", "i64"), ("a", "array")], "bool")], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None, pkg_name: Some("app".into()) };
+        let prog = Program { functions: vec![func("f", vec![("x", "i64"), ("a", "array")], "bool")], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: Some("app".into()) };
         let s = gen_bindings(&prog).unwrap();
         assert!(s.contains("    fn app__pruv_abi_f(p0: i64, p1: *const i64, p2: i64) -> i64;"));
         assert!(s.contains("        app__pruv_abi_f(x, a.as_ptr(), a.len() as i64) != 0"));
@@ -1490,7 +1495,7 @@ mod tests {
 
     #[test]
     fn mangling_error() {
-        let prog = Program { functions: vec![func("f\u{e9}", vec![], "unit")], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None, pkg_name: None };
+        let prog = Program { functions: vec![func("f\u{e9}", vec![], "unit")], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None };
         assert_eq!(
             gen_bindings(&prog).unwrap_err(),
             "llvmgen: function name f\u{e9} needs mangling; the bindings use the raw name"

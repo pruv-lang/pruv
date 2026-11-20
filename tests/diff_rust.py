@@ -233,6 +233,13 @@ def build_inputs(selected, args, tmp):
         base.append((rel(p), p))
         if "edge" in selected:
             per["edge"].append((rel(p), p, []))
+    if "edge" in selected:
+        for name in (
+            "r6e_15_string_from.pruv", "r6e_4_replace_binder.pruv",
+            "r6e_17_vec_as_slice.pruv", "r6g_4_scalar_inout.pruv", "r6f_4_take_string_entry.pruv",
+        ):
+            p = os.path.join(ROOT, "tests", "spec", name)
+            per["edge"].append((rel(p), p, []))
     if "fuzz" in selected:
         d = os.path.join(tmp, "fuzz")
         os.makedirs(d)

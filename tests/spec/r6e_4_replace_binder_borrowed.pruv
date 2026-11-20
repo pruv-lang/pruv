@@ -1,0 +1,9 @@
+// spec: R-6e-4 reject
+struct Row { value: String }
+struct St { rows: HashMap<String, Row> }
+fn put(inout st: St, key: str, other: Row) -> () {
+  match map_get_mut::<String, Row>(inout st.rows, key) {
+    Some(row) => { *row = other; }
+    None => {}
+  }
+}

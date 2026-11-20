@@ -1,0 +1,6 @@
+// spec: R-6e-16 reject
+struct B { id: String, follows: String }
+fn bad(inout b: B) -> () ! alloc {
+  b.follows = move b.id;
+  b.id = string_from(b.follows);
+}

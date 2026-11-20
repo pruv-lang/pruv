@@ -1,0 +1,1 @@
+{"flags": ["--proven-entries"], "gen_contains": ["if ((key.len() as u64) > (1u64 << 40))"], "gen_absent": ["pub mod pruv_proven"]}

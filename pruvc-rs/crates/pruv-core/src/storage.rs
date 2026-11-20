@@ -86,9 +86,14 @@ impl Analysis {
                 "copy" | "truncate" | "old" | "resize" => { if n.is_some() { self.join(n, children[0]); } }
                 "alloc" => {},
                 name if self.functions.contains(name) => {
-                    for (j, c) in children.iter().enumerate() { if c.is_some() {
-                        self.join(*c, self.lookup.get(&StorageKey::Param(name.into(), j)).copied());
-                    } }
+                    for (j, c) in children.iter().enumerate() {
+                        let formal = self.lookup.get(&StorageKey::Param(name.into(), j)).copied();
+                        if c.is_some() {
+                            self.join(*c, formal);
+                        } else if formal.is_some() && expr_ty(&x.args[j]).as_deref().is_some_and(|ty| crate::gtype::key_is_vec_slice_arg(ty, "array")) {
+                            self.pin(formal);
+                        }
+                    }
                     if n.is_some() { self.join(n, self.lookup.get(&StorageKey::Result(name.into())).copied()); }
                 }
                 "len" => {},

@@ -1,0 +1,1 @@
+{"stage":"type","code":"foreign_move","out_contains":["a field moved out must be reassigned by the next statement"]}

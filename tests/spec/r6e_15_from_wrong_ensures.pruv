@@ -1,0 +1,6 @@
+// spec: R-6e-15 reject
+fn bad(t: str) -> String ! alloc
+  ensures len(result) == len(t) + 1
+{
+  return string_from(t);
+}

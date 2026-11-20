@@ -85,7 +85,8 @@ go through it), under trust_callers the pub entry is unchecked and `<entry>__pru
 from collections import namedtuple
 from vast import *
 from typeinfo import (TypeTable, is_user_type, is_array, uses_array_type, uses_str, is_collection,
-                      dependencies, is_owned_field_type, is_nested_collection_field, is_string_record_map, field_place)
+                      dependencies, is_owned_field_type, is_nested_collection_field, is_string_record_map,
+                      field_place, is_vec_slice_arg)
 from foreign import CATALOG
 from inline_policy import PIN_INLINE, PIN_ALWAYS, inline_policy
 from check import BIT_BUILTINS
@@ -1824,7 +1825,7 @@ class Gen:
         s.emit(0, "%sfn %s(%s)%s {" % (vis, body_name, ps, ret))
         s.cost = not s.verified and f.cost is not None
         if s.cost:
-            args = ["&" + p.name if p.name in s.take_arrays else p.name for p in f.params]
+            args = ["&" + p.name if p.name in s.take_arrays or p.take and p.type.name == "string" else p.name for p in f.params]
             s.emit(1, "let pruv_cost: i128 = %s__pruv_cost(%s);" % (f.name, ", ".join(args)))
             s.emit(1, "let mut pruv_spent: u128 = 0;")
         s.block(f.body, 1)
@@ -1898,7 +1899,7 @@ class Gen:
 
     def cost_call(s, name, args):
         # A negative modular bound cannot be met by a nonnegative callee counter.
-        args = ["&" + arg if p.take and is_array(p.type) else arg for p, arg in zip(s.fmap[name].params, args)]
+        args = ["&" + arg if p.take and (is_array(p.type) or p.type.name == "string") else arg for p, arg in zip(s.fmap[name].params, args)]
         return ('let pruv_units = %s__pruv_cost(%s); '
                 'if pruv_units < 0 { panic!("pruv: cost exceeded"); } %s' %
                 (name, ", ".join(args), s.cost_add('(pruv_units as u128).checked_add(1).unwrap_or_else(|| panic!("pruv: cost exceeded"))')))
@@ -2228,9 +2229,10 @@ class Gen:
             if s.cp is not None and e.ty is not None and is_user_type(e.ty) and e.name in s.params:
                 s.cp[e.name] = e.ty
                 return "pruv_cp_" + e.name
+            name = "(*%s)" % e.name if e.name in s.inouts and t in ("i64", "bool") else e.name
             if t in ("i64", "option", "result") or is_user_type(e.ty):
-                return conv(e.ty if e.ty is not None else I64, e.name)
-            return e.name
+                return conv(e.ty if e.ty is not None else I64, name)
+            return name
         if isinstance(e, Unary):
             if e.op == "!":
                 return "(!%s)" % s.c(e.operand)
@@ -2828,7 +2830,10 @@ class Gen:
             s.refs.discard(st.name)
         elif isinstance(st, Let):
             s.moving = s.last_copy(st)
-            s.emit(ind, "let %s%s: %s = %s;" % ("mut " if st.mutable else "", st.name, s.rt(st.type, site=st), s.own_e(st.value)))
+            binding = ("mut " if st.mutable else "") + st.name
+            if not (isinstance(st.value, Move) and st.value.fields):
+                binding += ": " + s.rt(st.type, site=st)
+            s.emit(ind, "let %s = %s;" % (binding, s.own_e(st.value)))
             s.moving = set()
             s.vt[st.name] = st.type
             s.refs.discard(st.name)    # G9: a local is an owned value, never a reference
@@ -3068,8 +3073,10 @@ class Gen:
             for j, x in enumerate(call.args):
                 n = "pruv_arg_%d_%d" % (i, j)
                 if isinstance(x, InoutArg):
-                    ty = "&mut " + rty(s.vt[x.expr.name], True)[1:]
-                    val = s.mut_ref(x.expr.name)
+                    name = x.expr.name
+                    actual = s.vt[name]
+                    ty = "&mut " + (rty(actual, True)[1:] if is_array(actual) else rty(actual))
+                    val = "&mut *" + name if name in s.inouts else s.mut_ref(name)
                 elif is_array(x.ty):
                     ty, val = s.rt(x.ty, True, x), s.arr_ref(x)
                 else:
@@ -3122,7 +3129,7 @@ class Gen:
     def mut_ref(s, name):
         """G5: a mutable borrow of the array `name`: a reborrow for an inout parameter (already `&mut [T]`)"""
         if name in s.inouts:
-            return name if name in s.vt and not is_array(s.vt[name]) else "&mut *" + name
+            return name if not s.cost and name in s.vt and not is_array(s.vt[name]) else "&mut *" + name
         return "&mut " + name
 
     def arr_ref(s, e):
@@ -3454,6 +3461,8 @@ class Gen:
                     args.append(s.e(x))
                 elif callee is not None and callee.params[i].type == STR and x.ty is not None and x.ty.name == "string":
                     args.append(s.borrowed_map_key(x))
+                elif callee is not None and is_vec_slice_arg(x.ty, callee.params[i].type):
+                    args.append(s.e(x) + ".as_slice()")
                 elif s.g6 and (isinstance(x, Move) or (x.ty is not None and is_collection(x.ty))):
                     take = isinstance(x, Move) or (callee is not None and callee.params[i].take)
                     args.append(s.e(x) if take else s.cref(x))

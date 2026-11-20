@@ -28,6 +28,11 @@ def is_scalar_vec(ty: Type) -> bool:
     return ty.owner is None and ty.name == "vec" and ty.args in ((I64,), (BOOL,))
 
 
+def is_vec_slice_arg(actual: Type, expected: Type) -> bool:
+    return ((actual == Type("vec", (I64,)) and expected == ARRAY)
+            or (actual == Type("vec", (BOOL,)) and expected == ARRAY_BOOL))
+
+
 def is_nested_collection_field(ty: Type) -> bool:
     return (ty == Type("vec", (Type("string"),))
             or ty.owner is None and ty.name == "hashmap" and len(ty.args) == 2
