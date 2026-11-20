@@ -143,6 +143,38 @@ class TraceRecorder:
         s.obligations[idx]["attempts"].append(a)
 
 
+def _vec_resize_params(prog):
+    """Inout vector parameters whose length can change through vec_clear or forwarding."""
+    from foreign_shim import _walk
+
+    resizes = set()
+    forwarded = {}
+    for fn in prog.functions:
+        params = {p.name: i for i, p in enumerate(fn.params) if p.mode == "inout" and p.type.name == "vec"}
+        if not params:
+            continue
+
+        def visit(node):
+            if not isinstance(node, Call):
+                return
+            for i, arg in enumerate(node.args):
+                if isinstance(arg, InoutArg) and isinstance(arg.expr, Var) and arg.expr.name in params:
+                    source = (fn.name, params[arg.expr.name])
+                    if node.name == "vec_clear":
+                        resizes.add(source)
+                    else:
+                        forwarded.setdefault((node.name, i), set()).add(source)
+
+        _walk(fn.body, visit)
+    pending = list(resizes)
+    while pending:
+        for source in forwarded.get(pending.pop(), ()):
+            if source not in resizes:
+                resizes.add(source)
+                pending.append(source)
+    return resizes
+
+
 class Model:
     """Per-program z3 model of the user structs/enums (G1). Built once in verify_program.
     struct[name] = (constructor, [accessor per field])
@@ -151,6 +183,7 @@ class Model:
 
     def __init__(s, prog):
         s.tt = TypeTable(prog)
+        s.vec_resize_params = _vec_resize_params(prog)
         s.sorts = {}
         s.struct = {}
         s.enum = {}
@@ -2128,7 +2161,7 @@ class FnVerifier:
             pre = args[i]
             name = e.args[i].expr.name
             ty = substitute(f.params[i].type, s.theta)
-            if isinstance(pre, Arr):
+            if isinstance(pre, Arr) and (is_array(ty) or (f.name, i) not in s.model.vec_resize_params):
                 fv = s.fresh(name, ty if ty.name == "vec" else arr_type(pre.elem))
                 nv = mk_arr(fv.a, pre.n, name, pre.elem)
                 if nv.elem == U8:
@@ -2295,10 +2328,30 @@ class FnVerifier:
             v, x = args
             need(v.n < MAX_LEN)
             return mk_arr(z3.Store(v.a, v.n, s.model.field_put(v.elem, x)), v.n + 1, n, v.elem)
+        if n == "vec_clear":
+            v = args[0]
+            root, path = field_place(e.args[0].expr)
+            empty = mk_arr(v.a, z3.IntVal(0), v.name, v.elem)
+            st.env[root.name] = s.rebuild(root.ty, st.env[root.name], path, empty)
+            return None
+        if n == "string_eq":
+            a, b = args
+            r = s.fresh(n, BOOL)
+            k = z3.Int("string_eq!q%d" % s.k)
+            s.k += 1
+            equal_bytes = z3.ForAll([k], z3.Implies(z3.And(k >= 0, k < a.n),
+                                                   z3.Select(a.a, k) == z3.Select(b.a, k)))
+            s.assume(st, g, r == z3.And(a.n == b.n, equal_bytes))
+            return r
         if n in ("vec_get", "string_byte"):
             v, i = args
             need(z3.And(i >= 0, i < v.n))
             r = z3.Select(v.a, i)
+            if v.elem == _STRING:
+                text = s.model.field_get(_STRING, r, n)
+                if code:
+                    s.assume(st, g, s.wf(_STRING, text))
+                return text
             if code and v.elem in (I64, U8):   # as an array read: an i64/u8 element is a machine integer
                 s.assume(st, g, in_range(r))
             if code and s.model.tt.is_struct(v.elem):
@@ -2738,17 +2791,18 @@ class FnVerifier:
         return out
 
     # ---------- G5 A1: inout writes in the changed-variable analysis ----------
-    def call_writes(s, stmts, out):
+    def call_writes(s, stmts, out, *, select=None):
         """Names passed inout at any expression depth, including in nested blocks."""
         for st in stmts:
-            _stmt_inout(st, out)
+            _stmt_inout(st, out, select=select)
             if isinstance(st, If):
-                s.call_writes(st.then, out); s.call_writes(st.els, out)
+                s.call_writes(st.then, out, select=select)
+                s.call_writes(st.els, out, select=select)
             elif isinstance(st, While):
-                s.call_writes(st.body, out)
+                s.call_writes(st.body, out, select=select)
             elif isinstance(st, Match):
                 for a in st.arms:
-                    s.call_writes(a.body, out)
+                    s.call_writes(a.body, out, select=select)
         return out
 
     def whole_assigned(s, stmts, out):
@@ -2973,15 +3027,16 @@ class FnVerifier:
         names = s.assigned(w.body, set())
         if s.f.cost is not None:
             names.add("spent")
-        # G5 A1 (5.3): inout call arguments are changed too. Inout parameters keep their entry length; a local changed
-        # by inout calls keeps the loop-head length only if no whole assignment in the body can replace it.
-        # Without inout, calls = {} and snap = {}: names/keep (and the SMT) are exactly the old ones.
+        # G5 A1 (5.3): writes through inout places also havoc their roots. Only
+        # operands of resizing calls or whole assignments may lose their length.
         calls = s.call_writes(w.body, set())
         keep = frozenset()
         if calls or s.snap:
             whole = s.whole_assigned(w.body, set()) if calls else set()
-            names = names | calls
-            keep = frozenset(n for n in names if n in s.snap or (n in calls and n not in whole))
+            resizes = s.call_writes(w.body, set(), select=lambda call, i:
+                                    call.name == "vec_clear" or (call.name, i) in s.model.vec_resize_params)
+            names |= calls
+            keep = frozenset(n for n in names if n in s.snap or n in calls - (whole | resizes))
         # one arbitrary iteration; the invariants held (and were defined) at its start
         b = s.havoc(st, names, keep)
         for _cid, inv, _text in invs:

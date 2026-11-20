@@ -1,0 +1,14 @@
+// spec: R-6e-9 reject
+struct Clock { count: i64 }
+
+fn bad(inout clocks: HashMap<String, Clock>) -> () ! alloc {
+  match map_get_mut::<String, Clock>(inout clocks, vec_get::<String>(one(), 0)) {
+    Some(c) => { c.count = 1; }
+    None => { }
+  }
+}
+
+fn one() -> Vec<String> ! alloc {
+  let v: Vec<String> = vec_new::<String>();
+  return vec_push::<String>(move v, string_new());
+}

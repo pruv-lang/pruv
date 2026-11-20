@@ -1,0 +1,13 @@
+// spec: R-6e-10 reject
+fn clear(inout v: Vec<i64>) -> () ensures len(v) == 0 {
+  vec_clear::<i64>(inout v);
+}
+
+fn forward(inout v: Vec<i64>) -> () ensures len(v) == 0 {
+  clear(inout v);
+}
+
+fn bad(inout v: Vec<i64>) -> () requires len(v) > 0 {
+  forward(inout v);
+  assert false;
+}

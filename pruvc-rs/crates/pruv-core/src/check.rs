@@ -319,7 +319,10 @@ struct Checker {
     takes: Takes,
     /// Location of the field move allowed in the current field assignment.
     field_move: Option<(i64, i64)>,
+    collection_records: std::cell::RefCell<HashSet<String>>,
     read_context: Option<usize>,
+    statement_call: Option<usize>,
+    borrowed_text: Option<usize>,
     map_roots: Vec<(String, Vec<String>)>,
     // ---- G9 A0 metadata ----
     /// recursive type SCCs (names in declaration order), SCC-number order
@@ -433,10 +436,10 @@ fn set_ty(e: &mut Expr, t: &GType) {
 /// G5: does the full syntax of e (every operand, reachable or not) mention the binding `name`?
 fn collection_catalog(name: &str) -> bool {
     matches!(name, "vec_new" | "vec_push" | "vec_get" | "map_new" | "map_insert"
-        | "map_get" | "map_get_mut" | "map_remove" | "vec_at_mut")
+        | "map_get" | "map_get_mut" | "map_remove" | "vec_at_mut" | "vec_clear")
 }
 
-fn place_root(e: &Expr) -> Option<&str> {
+pub(crate) fn place_root(e: &Expr) -> Option<&str> {
     match e {
         Expr::Var(v) => Some(&v.name),
         Expr::FieldAccess(f) => place_root(&f.base),
@@ -604,7 +607,10 @@ impl Checker {
             externs: externs.to_vec(),
             takes,
             field_move: None,
+            collection_records: Default::default(),
             read_context: None,
+            statement_call: None,
+            borrowed_text: None,
             map_roots: Vec::new(),
             type_sccs: Vec::new(),
             boxed: Vec::new(),
@@ -849,6 +855,11 @@ impl Checker {
                 _ => name.clone(),
             };
         }
+        if matches!(name.as_str(), "vec" | "hashmap") {
+            if let Some(payload) = args.last().filter(|t| t.owner.is_none() && t.args.is_empty()) {
+                self.collection_records.borrow_mut().insert(payload.name.clone());
+            }
+        }
         if name == ty.name && args == ty.args {
             return ty.clone();
         }
@@ -971,6 +982,15 @@ impl Checker {
         match e {
             Expr::Call(x) => {
                 self.norm_targs(&mut x.targs);
+                if (x.name.starts_with("vec_") || x.name.starts_with("map_"))
+                    && is_catalog(&x.name) && !self.funcs.contains_key(&x.name)
+                {
+                    if let Some(payload) = x.targs.as_ref().and_then(|args| args.last())
+                        .filter(|t| t.owner.is_none() && t.args.is_empty())
+                    {
+                        self.collection_records.borrow_mut().insert(payload.name.clone());
+                    }
+                }
                 for a in x.args.iter_mut() {
                     self.norm_expr(a);
                 }
@@ -1429,9 +1449,13 @@ impl Checker {
                     if !self.state_collection(&ft) && self.depends_on_nested_record(&ft) {
                         return Err(terr(f.line, f.col, "foreign_owned_type", "a record with nested collection fields cannot be a direct field", ""));
                     }
+                    let nested_field = matches!(d, TypeDecl::Struct(_))
+                        && crate::gtype::key_is_nested_collection_field(&f.ty)
+                        && (!matches!(f.ty.as_str(), "hashmap<i64,i64>" | "hashmap<string,i64>")
+                            || self.collection_records.borrow().contains(d.name()));
                     if ft.contains_collection()
-                        && !(d.tparams().is_empty() && (crate::gtype::key_is_owned_field(&f.ty)
-                            && (!crate::gtype::key_is_nested_collection_field(&f.ty) || matches!(d, TypeDecl::Struct(_)))
+                        && !(d.tparams().is_empty() && ((crate::gtype::key_is_owned_field(&f.ty)
+                            && !crate::gtype::key_is_nested_collection_field(&f.ty) || nested_field)
                             || matches!(d, TypeDecl::Struct(_)) && self.state_collection(&ft)))
                     {
                         if matches!(ft.name.as_str(), "vec" | "hashmap") {
@@ -1795,9 +1819,9 @@ impl Checker {
             for p in &f.params {
                 if let Some((ml, mc)) = p.mode_pos {
                     let pt = GType::from_key(&p.ty);
-                    let aggregate_collection = matches!(pt.name.as_str(), "vec" | "hashmap")
+                    let aggregate_collection = pt.owner.is_none() && pt.name == "hashmap"
                         && pt.args.last().is_some_and(|payload| self.owned_aggregate(payload));
-                    if !pt.is_array() && !aggregate_collection
+                    if !pt.is_array() && !(pt.owner.is_none() && pt.name == "vec") && !aggregate_collection
                         && !(pt.args.is_empty() && matches!(self.decls.get(&pt.name), Some(TypeDecl::Struct(_)))) {
                         return Err(terr(
                             ml,
@@ -1808,7 +1832,7 @@ impl Checker {
                                 p.name,
                                 tn(&pt)
                             ),
-                            "use an array, a non-generic struct, or a map or vector of aggregate records, or remove inout",
+                            "use an array, a non-generic struct, or a vector or a map of aggregate records, or remove inout",
                         ));
                     }
                 }
@@ -1847,7 +1871,7 @@ impl Checker {
     /// Host entries allow plain signatures, scalar vectors and eligible record results.
     fn check_entries(&self, prog: &Program) -> Res<()> {
         fn new_collection(ty: &GType) -> bool {
-            matches!(ty.to_key().as_str(), "vec<string>" | "hashmap<i64,bool>")
+            matches!(ty.to_key().as_str(), "vec<string>" | "hashmap<i64,bool>" | "hashmap<i64,i64>")
                 || ty.name == "hashmap" && ty.args.first().is_some_and(|k| k.to_key() == "string")
                 || ty.args.iter().any(new_collection)
         }
@@ -2177,7 +2201,7 @@ impl Checker {
         let mut effect_before = false;
         for (call, conditional) in calls {
             let f = self.funcs.get(&call.name);
-            if f.is_some() || call.name == "map_remove" {
+            if f.is_some() || matches!(call.name.as_str(), "map_remove" | "vec_clear") {
                 let marked: Vec<&crate::ast::InoutArg> = call
                     .args
                     .iter()
@@ -2266,7 +2290,12 @@ impl Checker {
             Stmt::Assign(s) => {
                 let v = self.lookup(s.line, s.col, &s.name, scope, &[])?;
                 self.check_borrow(s.line, s.col, &s.name, &[])?; // G9 A0
-                if !v.mutable {
+                let scalar_binder = v.kind == "map_inout" && (v.ty == i64t() || v.ty == boolt());
+                if s.deref && !scalar_binder {
+                    return Err(terr(s.line, s.col, "type_mismatch",
+                        "dereference requires a mutable scalar collection binder", ""));
+                }
+                if !v.mutable && !scalar_binder {
                     if matches!(v.kind, "inout" | "map_inout") {
                         // G5 A0: element stores are allowed, replacing the binding is not
                         return Err(terr(
@@ -2469,7 +2498,12 @@ impl Checker {
                     ));
                 }
                 self.boundary = boundary_of(&s.expr);
-                let t = self.expr(&mut s.expr, scope, false)?;
+                if let Expr::Call(call) = &s.expr {
+                    self.statement_call = Some(call as *const Call as usize);
+                }
+                let result = self.expr(&mut s.expr, scope, false);
+                self.statement_call = None;
+                let t = result?;
                 self.check_inout_context(&[&s.expr], InoutContext::Value)?;
                 if t.owner.is_none() && t.name == "process" {
                     // G10 proc: a discarded Process result keeps its duty
@@ -2828,7 +2862,7 @@ impl Checker {
     /// `value` (already typed) is moved into an owning position (let, assignment, constructor field, return):
     /// a non-fresh extended value is cloned, which needs `alloc`; constructors, literals and calls are fresh.
     fn own(&mut self, value: &Expr, scope: &Scope) -> Res<()> {
-        if matches!(value, Expr::Var(v) if scope.get(&v.name).is_some_and(|e| e.kind == "map_inout")) {
+        if matches!(value, Expr::Var(v) if scope.get(&v.name).is_some_and(|e| e.kind == "map_inout" && e.ty != i64t() && e.ty != boolt())) {
             return Err(terr(value.line(), value.col(), "foreign_move",
                 "a mutable collection binder cannot be used as an owned value", ""));
         }
@@ -2955,6 +2989,10 @@ impl Checker {
     /// The argument must be an array of any element type (G2 B0: or a str). coll (G6): a Vec/HashMap/String is accepted too.
     fn expect_array(&mut self, e: &mut Expr, scope: &Scope, c: bool, coll: bool) -> Res<GType> {
         let t = self.expr(e, scope, c)?;
+        self.check_array_type(e, coll, t)
+    }
+
+    fn check_array_type(&self, e: &Expr, coll: bool, t: GType) -> Res<GType> {
         if t.owner.is_some() {
             return Err(terr(
                 e.line(),
@@ -2981,6 +3019,10 @@ impl Checker {
     /// an abstract type parameter there is a generic_operation error rather than a plain mismatch.
     fn expect(&mut self, e: &mut Expr, ty: &GType, scope: &Scope, contract: bool, op: Option<&str>) -> Res<GType> {
         let t = self.expr(e, scope, contract)?;
+        self.check_expected_type(e, ty, op, t)
+    }
+
+    fn check_expected_type(&self, e: &Expr, ty: &GType, op: Option<&str>, t: GType) -> Res<GType> {
         if t != *ty {
             if let Some(op) = op {
                 if t.owner.is_some() {
@@ -3013,6 +3055,16 @@ impl Checker {
         }
         let result = self.expr(e, scope, c);
         self.read_context = saved;
+        result
+    }
+
+    fn text_expr(&mut self, e: &mut Expr, scope: &Scope, contract: bool) -> Res<GType> {
+        let saved = self.borrowed_text.take();
+        if let Expr::Call(call) = e {
+            self.borrowed_text = Some(call as *const Call as usize);
+        }
+        let result = self.expr(e, scope, contract);
+        self.borrowed_text = saved;
         result
     }
 
@@ -3066,6 +3118,17 @@ impl Checker {
                 Ok(self.lookup(x.line, x.col, &x.name, scope, path)?.ty)
             }
             Expr::Unary(x) => {
+                if x.op == "*" {
+                    let error = || terr(x.line, x.col, "type_mismatch",
+                        "dereference requires a mutable scalar collection binder", "");
+                    let Expr::Var(var) = x.operand.as_ref() else { return Err(error()); };
+                    let binding = self.lookup(x.line, x.col, &var.name, scope, &[])?;
+                    if binding.kind != "map_inout" || (binding.ty != i64t() && binding.ty != boolt()) {
+                        return Err(error());
+                    }
+                    *e = Expr::Var(var.clone());
+                    return Ok(binding.ty);
+                }
                 if x.op == "-" {
                     self.expect(&mut x.operand, &i64t(), scope, c, Some("unary minus"))?;
                     Ok(i64t())
@@ -3539,7 +3602,7 @@ impl Checker {
         }
         let actual = match actual {
             Some(ty) => ty,
-            None => self.expr(arg, scope, c)?,
+            None => self.text_expr(arg, scope, c)?,
         };
         if actual == strt() || actual.to_key() == "string" && matches!(arg, Expr::Var(_) | Expr::FieldAccess(_) | Expr::VariantField(_)) {
             return Ok(());
@@ -3592,7 +3655,7 @@ impl Checker {
     /// whole argument list.
     fn inout_args(&mut self, e: &mut Call, f: &FuncInfo, m: &Mapping, scope: &Scope, c: bool) -> Res<()> {
         let n = e.name.clone();
-        let collection_place = !self.funcs.contains_key(&n) && matches!(n.as_str(), "map_get_mut" | "vec_at_mut" | "map_remove");
+        let collection_place = !self.funcs.contains_key(&n) && matches!(n.as_str(), "map_get_mut" | "vec_at_mut" | "map_remove" | "vec_clear");
         let mut marked: Vec<(usize, String)> = Vec::new();
         for i in 0..e.args.len().min(f.params.len()) {
             let want = substitute(&f.params[i], m);
@@ -3610,7 +3673,12 @@ impl Checker {
                 if collection_place && want.to_key() == "string" {
                     self.check_text_key(&mut e.args[i], scope, c, None)?;
                 } else {
-                    self.expect(&mut e.args[i], &want, scope, c, None)?;
+                    if self.funcs.contains_key(&n) && want == strt() {
+                        let got = self.text_expr(&mut e.args[i], scope, c)?;
+                        self.check_expected_type(&e.args[i], &want, None, got)?;
+                    } else {
+                        self.expect(&mut e.args[i], &want, scope, c, None)?;
+                    }
                 }
                 continue;
             }
@@ -4130,7 +4198,8 @@ impl Checker {
         match n.as_str() {
             "len" => {
                 arity(1)?;
-                self.expect_array(&mut e.args[0], scope, c, true)?; // G6: also Vec/HashMap/String
+                let ty = self.text_expr(&mut e.args[0], scope, c)?;
+                self.check_array_type(&e.args[0], true, ty)?;
                 return Ok(i64t());
             }
             "alloc" => {
@@ -4314,6 +4383,10 @@ impl Checker {
         }
         // G6: fixed standard catalog (G6_SPEC 10.3)
         let cat: Option<CatFn> = if self.funcs.contains_key(&n) { None } else { catalog_fn(&n) };
+        let call_site = Some(e as *const Call as usize);
+        if cat.is_some() && n == "vec_clear" && !c && self.statement_call != call_site {
+            return Err(terr(line, col, "inout_context", "vec_clear must be a whole expression statement", ""));
+        }
         let f: Rc<FuncInfo> = if let Some(cf) = &cat {
             if is_catalog_contract_only(&n) {
                 if !c {
@@ -4340,7 +4413,7 @@ impl Checker {
                 col: 0,
                 params: cf.params.iter().map(|p| p.ty.clone()).collect(),
                 pnames: cf.params.iter().map(|p| p.name.to_string()).collect(),
-                inout: (0..cf.params.len()).map(|i| i == 0 && matches!(n.as_str(), "map_get_mut" | "vec_at_mut" | "map_remove")).collect(),
+                inout: (0..cf.params.len()).map(|i| i == 0 && matches!(n.as_str(), "map_get_mut" | "vec_at_mut" | "map_remove" | "vec_clear")).collect(),
                 ret: cf.ret.clone(),
                 effects: cf.effects.clone(),
                 tparams: cf.tparams.clone(),
@@ -4378,18 +4451,33 @@ impl Checker {
         }
         let m = m.unwrap_or_default();
         arity(f.params.len())?;
-        let direct = self.read_context == Some(e as *const Call as usize);
+        let direct = self.read_context == call_site;
+        let string_element = cat.is_some() && n == "vec_get"
+            && targs.as_ref().unwrap()[0].to_key() == "string";
         if cat.is_some() && matches!(n.as_str(), "map_get_mut" | "vec_at_mut") && !direct {
             return Err(terr(line, col, "foreign_contract", format!("{n} is only allowed as a direct match scrutinee"), ""));
         }
         if cat.is_some() && !direct && (matches!(n.as_str(), "vec_get" | "map_get")
             || n == "map_lookup" && targs.as_ref().unwrap()[0].to_key() != "string") {
             let payload = targs.as_ref().and_then(|a| a.last()).unwrap();
-            if self.is_extended(payload) {
+            if !string_element && self.is_extended(payload) {
                 return Err(terr(line, col, "foreign_owned_type", format!("{} cannot copy {}", n, tn(payload)), ""));
             }
         }
         match &cat {
+            Some(_) if n == "string_eq" => {
+                for arg in &mut e.args {
+                    if let Expr::StrLit(lit) = arg {
+                        lit.ty = Some("str".into());
+                        continue;
+                    }
+                    let got = self.text_expr(arg, scope, c)?;
+                    if !matches!(got.to_key().as_str(), "string" | "str" | "array_u8") || matches!(arg, Expr::Move(_)) {
+                        return Err(terr(arg.line(), arg.col(), "type_mismatch",
+                            format!("expected String, str or [u8], found {}", tn(&got)), ""));
+                    }
+                }
+            }
             Some(cf) if is_catalog_contract_only(&n) => self.observer_args(e, cf, &m, scope, c)?,
             // G5 A0: marker, place, type and same-call exclusivity
             _ if f.inout.iter().any(|b| *b) || cat.is_none() && e.args.iter().any(|x| matches!(x, Expr::InoutArg(_))) => {
@@ -4400,6 +4488,9 @@ impl Checker {
                     let want = substitute(p, &m);
                     if cat.is_some() && n == "map_get" && want.to_key() == "string" {
                         self.check_text_key(arg, scope, c, None)?;
+                    } else if cat.is_none() && want == strt() {
+                        let got = self.text_expr(arg, scope, c)?;
+                        self.check_expected_type(arg, &want, None, got)?;
                     } else {
                         self.expect(arg, &want, scope, c, None)?;
                     }
@@ -4415,8 +4506,17 @@ impl Checker {
                 return Err(terr(line, col, "foreign_owned_type", "map_remove requires i64 or String keys", ""));
             }
         }
-        if cat.is_some() && n == "vec_get" && targs.as_ref().unwrap()[0].to_key() == "string" {
-            return Err(terr(line, col, "foreign_owned_type", "Vec<String> elements cannot be read with vec_get", ""));
+        if string_element {
+            if self.borrowed_text != call_site {
+                return Err(terr(line, col, "foreign_owned_type",
+                    "a Vec<String> element must be a direct borrowed text argument", ""));
+            }
+            let vector = &e.args[0];
+            if place_root(vector).is_none() {
+                return Err(terr(vector.line(), vector.col(), "foreign_borrow",
+                    "a borrowed Vec<String> element needs a vector place", ""));
+            }
+            return Ok(strt());
         }
         if cat.is_some() && matches!(n.as_str(), "vec_push" | "map_insert") {
             if targs.as_ref().unwrap()[0].to_key() == "string" {
@@ -4426,7 +4526,7 @@ impl Checker {
                 }
             }
             let arg = e.args.last().unwrap();
-            if matches!(arg, Expr::Var(v) if scope.get(&v.name).is_some_and(|entry| entry.kind == "map_inout")) {
+            if matches!(arg, Expr::Var(v) if scope.get(&v.name).is_some_and(|entry| entry.kind == "map_inout" && entry.ty != i64t() && entry.ty != boolt())) {
                 return Err(terr(arg.line(), arg.col(), "foreign_move",
                     "an aggregate collection payload needs a constructor, call result or move", ""));
             }

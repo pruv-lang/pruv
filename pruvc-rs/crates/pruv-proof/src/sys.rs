@@ -272,6 +272,13 @@ impl Z3 {
         // SAFETY: S1 S2.
         unsafe { self.wrap(nn(z::Z3_mk_const(self.raw(), s, sort.raw))) }
     }
+    /// z3py `z3.FreshInt(prefix)`.
+    pub fn fresh_int_const(&self, prefix: &str) -> Ast {
+        let prefix = CString::new(prefix).expect("fresh constant prefix");
+        let sort = self.int_sort();
+        // SAFETY: S1 S2 S4.
+        unsafe { self.wrap(nn(z::Z3_mk_fresh_const(self.raw(), prefix.as_ptr(), sort.raw))) }
+    }
     pub fn int_const(&self, name: &str) -> Ast {
         self.constant(name, &self.int_sort())
     }

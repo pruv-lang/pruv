@@ -1,0 +1,19 @@
+// spec: R-6e-11 accept
+fn compare(s: String, t: str, bytes: [u8]) -> bool
+  ensures result ==> len(s) == len(t) && len(s) == len(bytes)
+{
+  return string_eq(s, t) && string_eq(s, bytes);
+}
+
+fn empty(s: String, bytes: [u8]) -> bool
+  requires len(s) == 0 && len(bytes) == 0
+  ensures result
+{
+  return string_eq(s, bytes);
+}
+
+fn first(v: Vec<String>, t: str) -> bool
+  requires len(v) > 0
+{
+  return string_eq(vec_get::<String>(v, 0), t);
+}

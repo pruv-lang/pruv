@@ -1,0 +1,2 @@
+// spec: R-6e-10 reject
+fn bad(v: [i64]) -> () { vec_clear::<i64>(inout v); }

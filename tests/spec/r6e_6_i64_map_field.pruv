@@ -1,0 +1,25 @@
+// spec: R-6e-6 accept
+struct Clock { runs: HashMap<i64, i64> }
+
+fn update() -> () ! alloc {
+  let mut clocks: HashMap<i64, Clock> = map_insert::<i64, Clock>(
+    map_new::<i64, Clock>(), 1, Clock { runs: map_insert::<i64, i64>(map_new::<i64, i64>(), 0, 3) });
+  clocks = map_insert::<i64, Clock>(move clocks, 2,
+    Clock { runs: map_insert::<i64, i64>(map_new::<i64, i64>(), 0, 9) });
+  let run: i64 = 0;
+  match map_get_mut::<i64, Clock>(inout clocks, 1) {
+    Some(c) => {
+      match map_get_mut::<i64, i64>(inout c.runs, run) {
+        Some(v) => { v = 7; }
+        None => { assert false; }
+      }
+      let value: i64 = 7;
+      assert map_lookup::<i64, i64>(c.runs, run) == Some(value);
+    }
+    None => { assert false; }
+  }
+  match map_get::<i64, Clock>(clocks, 2) {
+    Some(c) => { assert map_lookup::<i64, i64>(c.runs, run) == Some(9); }
+    None => { assert false; }
+  }
+}

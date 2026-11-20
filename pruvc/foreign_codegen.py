@@ -699,6 +699,9 @@ class ForeignGen:
             if is_collection(f.ret):    # G6b: an owned result's length fits the 2^40 model in every check mode
                 body.append("if (result.len() as u128) > (1u128 << 40) { pruv_g6_repr(%s); }"
                             % rstr(disp + ": result length"))
+            if f.ret == Type("vec", (Type("string"),)):
+                body.append("if result.iter().any(|s| (s.len() as u128) > (1u128 << 40)) { pruv_g6_repr(%s); }"
+                            % rstr(disp + ": result element length"))
             if s.ens:
                 for x in f.ensures:
                     body.append("if !(%s) { pruv_g6_ens(%s, %s); }" % (g.c(x), rstr(disp), rstr(show(x))))

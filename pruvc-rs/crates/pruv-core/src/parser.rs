@@ -1444,12 +1444,18 @@ impl Parser {
             self.expect("}")?;
             return Ok(Stmt::Match(Match { line: l, col: c, scrutinee: scr, arms }));
         }
-        if t.kind == Kind::Id && self.at("=", 1) {
-            let n = self.next().val;
-            self.bump();
+        let deref = self.at("*", 0) && self.at("=", 2);
+        if deref || t.kind == Kind::Id && self.at("=", 1) {
+            let n = if deref {
+                self.bump();
+                self.ident()?.val
+            } else {
+                self.next().val
+            };
+            self.expect("=")?;
             let v = self.expr()?;
             self.expect(";")?;
-            return Ok(Stmt::Assign(Assign { line: l, col: c, name: n, value: v }));
+            return Ok(Stmt::Assign(Assign { line: l, col: c, name: n, value: v, deref }));
         }
         if t.kind == Kind::Id && self.at("[", 1) {
             // It may also be an index assignment
@@ -1642,7 +1648,7 @@ impl Parser {
     }
 
     fn unary(&mut self) -> R<Expr> {
-        if self.at("-", 0) || self.at("!", 0) {
+        if self.at("-", 0) || self.at("!", 0) || self.at("*", 0) {
             let t = self.next();
             self.enter(1)?;
             let o = self.unary();

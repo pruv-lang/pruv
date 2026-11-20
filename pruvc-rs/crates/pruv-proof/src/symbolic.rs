@@ -362,9 +362,10 @@ pub fn assigned(stmts: &[Stmt], out: &mut BTreeSet<String>) {
 }
 
 /// Names of the whole-array inout operands throughout an expression.
-fn inout_ops(e: &Expr, out: &mut BTreeSet<String>) {
+fn inout_ops(e: &Expr, out: &mut BTreeSet<String>, select: &impl Fn(&ast::Call, usize) -> bool) {
     if let Expr::Call(c) = e {
-        for a in &c.args {
+        for (i, a) in c.args.iter().enumerate() {
+            if !select(c, i) { continue; }
             if let Expr::InoutArg(ia) = a {
                 let mut place = ia.expr.as_ref();
                 while let Expr::FieldAccess(f) = place {
@@ -377,37 +378,37 @@ fn inout_ops(e: &Expr, out: &mut BTreeSet<String>) {
         }
     }
     for child in kids(e) {
-        inout_ops(child, out);
+        inout_ops(child, out, select);
     }
 }
 
 /// verify.py `call_writes`: names passed inout in executable expressions, recursively through statement blocks.
-fn call_writes(stmts: &[Stmt], out: &mut BTreeSet<String>) {
+fn call_writes(stmts: &[Stmt], out: &mut BTreeSet<String>, select: &impl Fn(&ast::Call, usize) -> bool) {
     for st in stmts {
         match st {
-            Stmt::Let(x) => inout_ops(&x.value, out),
-            Stmt::Assign(x) => inout_ops(&x.value, out),
+            Stmt::Let(x) => inout_ops(&x.value, out, select),
+            Stmt::Assign(x) => inout_ops(&x.value, out, select),
             Stmt::Return(x) => {
                 if let Some(v) = &x.value {
-                    inout_ops(v, out);
+                    inout_ops(v, out, select);
                 }
             }
             Stmt::Par(x) => {
                 for c in &x.calls {
-                    inout_ops(c, out);
+                    inout_ops(c, out, select);
                 }
             }
-            Stmt::ExprStmt(x) => inout_ops(&x.expr, out),
+            Stmt::ExprStmt(x) => inout_ops(&x.expr, out, select),
             Stmt::If(x) => {
-                inout_ops(&x.cond, out);
-                call_writes(&x.then, out);
-                call_writes(&x.els, out);
+                inout_ops(&x.cond, out, select);
+                call_writes(&x.then, out, select);
+                call_writes(&x.els, out, select);
             }
-            Stmt::While(x) => call_writes(&x.body, out),
+            Stmt::While(x) => call_writes(&x.body, out, select),
             Stmt::Match(m) => {
-                inout_ops(&m.scrutinee, out);
+                inout_ops(&m.scrutinee, out, select);
                 for a in &m.arms {
-                    call_writes(&a.body, out);
+                    call_writes(&a.body, out, select);
                 }
             }
             Stmt::Assert(_) | Stmt::FieldAssign(_) | Stmt::IndexAssign(_) => {}
@@ -828,6 +829,7 @@ pub struct FnVerifier<'a> {
     /// `s.errors`(collected by verify_program in function order).
     pub errors: Vec<PruvError>,
     /// `s.funcs`: name → function (the later one if names repeat).
+    vec_resize_params: HashSet<(String, usize)>,
     pub(crate) funcs: HashMap<String, &'a ast::Function>,
     /// `s.f`: the function being proved (None on the prototype path).
     pub(crate) f: Option<&'a ast::Function>,
@@ -861,6 +863,42 @@ pub struct FnVerifier<'a> {
 }
 
 /// G5 A1: the environment key of a frozen pre-call array (Python `("old", name)`); no identifier can contain the byte 1.
+fn vec_resize_params(prog: &ast::Program) -> HashSet<(String, usize)> {
+    use pruv_core::foreign_shim::{walk_stmts, Node};
+    let mut resizes = HashSet::new();
+    let mut forwarded = HashMap::<_, Vec<_>>::new();
+    for f in &prog.functions {
+        let params: HashMap<_, _> = f.params.iter().enumerate()
+            .filter(|(_, p)| p.mode_pos.is_some() && matches!(Ty::from_name(&p.ty).coll(), Some(Coll::Vec(_))))
+            .map(|(i, p)| (p.name.as_str(), i))
+            .collect();
+        if params.is_empty() { continue; }
+        walk_stmts(&f.body, &mut |node| {
+            let Node::Expr(Expr::Call(call)) = node else { return; };
+            for (i, arg) in call.args.iter().enumerate() {
+                let Expr::InoutArg(arg) = arg else { continue; };
+                let Expr::Var(var) = arg.expr.as_ref() else { continue; };
+                let Some(&index) = params.get(var.name.as_str()) else { continue; };
+                let source = (f.name.clone(), index);
+                if call.name == "vec_clear" {
+                    resizes.insert(source);
+                } else {
+                    forwarded.entry((call.name.clone(), i)).or_default().push(source);
+                }
+            }
+        });
+    }
+    let mut pending: Vec<_> = resizes.iter().cloned().collect();
+    while let Some(target) = pending.pop() {
+        for source in forwarded.get(&target).into_iter().flatten() {
+            if resizes.insert(source.clone()) {
+                pending.push(source.clone());
+            }
+        }
+    }
+    resizes
+}
+
 fn old_key(name: &str) -> String {
     format!("\u{1}old:{}", name)
 }
@@ -906,6 +944,7 @@ impl<'a> FnVerifier<'a> {
             params: Env::default(),
             errors: Vec::new(),
             funcs: HashMap::new(),
+            vec_resize_params: HashSet::new(),
             f: None,
             qcfg: QueryConfig::default(),
             extra: HashMap::new(),
@@ -961,6 +1000,7 @@ impl<'a> FnVerifier<'a> {
         for g in &prog.functions {
             v.funcs.insert(g.name.clone(), g);
         }
+        v.vec_resize_params = vec_resize_params(prog);
         // G9 A1: function SCCs (Program.g9)
         if let Some(meta) = &prog.g9 {
             for (i, names) in meta.fn_sccs.iter().enumerate() {
@@ -2878,7 +2918,8 @@ impl<'a> FnVerifier<'a> {
             };
             let pre = cenv.get(&old_key(pname));
             let ty = Ty::from_name(&f.params[i].ty);
-            if !matches!(pre, Val::Arr(_)) {
+            let ty = Ty::from_gtype(&gtype::substitute(&ty.to_gtype(), &self.theta));
+            if !matches!(pre, Val::Arr(_)) || self.vec_resize_params.contains(&(f.name.clone(), i)) {
                 let nv = self.try_fresh(&name, &ty)?;
                 if let Some(wf) = self.wf_of_val(&ty, &nv)? {
                     self.assume(st, g, wf);
@@ -3614,6 +3655,25 @@ impl<'a> FnVerifier<'a> {
                 }
                 Ok(Val::Arr(v.like(v.a.store(&v.n, &xv), v.n.add_i(1), n)))
             }
+            "vec_clear" => {
+                let v = argv(0)?.try_arr()?;
+                let Expr::InoutArg(place) = &x.args[0] else { return Err("missing inout place".into()); };
+                let empty = v.like(v.a.clone(), z.int(0), &v.name);
+                self.store_collection_place(&place.expr, &mut st.env, Val::Arr(empty))?;
+                Ok(Val::Unit)
+            }
+            "string_eq" => {
+                let a = argv(0)?.try_arr()?;
+                let b = argv(1)?.try_arr()?;
+                let result = self.try_fresh(n, &Ty::Bool)?;
+                let k = z.int_const(&format!("string_eq!q{}", self.k));
+                self.k += 1;
+                let range = z.and(&[k.ge_i(0), k.lt(&a.n)]);
+                let body = range.implies(&a.a.select(&k).eq(&b.a.select(&k)));
+                let equal = z.forall(&[k], &body, &[]);
+                self.assume(st, g, result.try_ast()?.eq(&z.and(&[a.n.eq(&b.n), equal])));
+                Ok(result)
+            }
             "vec_get" | "string_byte" => {
                 let v = argv(0)?.try_arr()?.clone();
                 let i = argv(1)?.try_ast()?.clone();
@@ -3622,6 +3682,16 @@ impl<'a> FnVerifier<'a> {
                     self.prove_core(&st, g, &ob, pos(e), "call_requires", &what, None);
                 }
                 let r = v.a.select(&i);
+                if v.elem_ty() == Ty::User("string".into()) {
+                    let ty = v.elem_ty();
+                    let text = self.field_val(&ty, r, n)?;
+                    if code {
+                        if let Some(wf) = self.wf_of_val(&ty, &text)? {
+                            self.assume(st, g, wf);
+                        }
+                    }
+                    return Ok(text);
+                }
                 match v.elem {
                     Elem::Bool => Ok(Val::Bool(r)),
                     Elem::Abs => {
@@ -4346,7 +4416,7 @@ impl<'a> FnVerifier<'a> {
         // by inout calls keeps the loop-head length only if no whole assignment in the body can replace it.
         // Without inout, calls = {} and snap = {}: names/keep (and the SMT) are exactly the old ones.
         let mut calls: BTreeSet<String> = BTreeSet::new();
-        call_writes(&w.body, &mut calls);
+        call_writes(&w.body, &mut calls, &|_, _| true);
         let mut keep: BTreeSet<String> = BTreeSet::new();
         if !calls.is_empty() || !self.snap.0.is_empty() {
             let mut whole: BTreeSet<String> = BTreeSet::new();
@@ -4354,8 +4424,12 @@ impl<'a> FnVerifier<'a> {
                 whole_assigned(&w.body, &mut whole);
             }
             names.extend(calls.iter().cloned());
+            let mut resizes = BTreeSet::new();
+            call_writes(&w.body, &mut resizes, &|call, i| {
+                call.name == "vec_clear" || self.vec_resize_params.contains(&(call.name.clone(), i))
+            });
             for n in &names {
-                if self.snap.contains(n) || (calls.contains(n) && !whole.contains(n)) {
+                if self.snap.contains(n) || (calls.contains(n) && !whole.contains(n) && !resizes.contains(n)) {
                     keep.insert(n.clone());
                 }
             }
@@ -4505,7 +4579,7 @@ impl<'a> FnVerifier<'a> {
         self.snap = Env(f
             .params
             .iter()
-            .filter(|p| p.mode_pos.is_some())
+            .filter(|p| p.mode_pos.is_some() && GType::from_key(&p.ty).is_array())
             .map(|p| (p.name.clone(), env.get(&p.name).clone()))
             .collect());
         let mut st = State::new(env.clone(), pc);

@@ -156,13 +156,15 @@ def pick_bound_name(names):
     return "k_%d" % i
 
 
-def _inout_operands(e, out):
-    if isinstance(e, InoutArg):
-        root, _ = field_place(e.expr)
-        if isinstance(root, Var):
-            out.add(root.name)
+def _inout_operands(e, out, select):
+    if isinstance(e, Call):
+        for i, arg in enumerate(e.args):
+            if isinstance(arg, InoutArg) and (select is None or select(e, i)):
+                root, _ = field_place(arg.expr)
+                if isinstance(root, Var):
+                    out.add(root.name)
     for k in _kids(e):
-        _inout_operands(k, out)
+        _inout_operands(k, out, select)
 
 
 def _stmt_call_exprs(st):
@@ -180,9 +182,9 @@ def _stmt_call_exprs(st):
         yield from st.calls
 
 
-def _stmt_inout(st, out):
+def _stmt_inout(st, out, *, select=None):
     for e in _stmt_call_exprs(st):
-        _inout_operands(e, out)
+        _inout_operands(e, out, select)
     return out
 
 

@@ -1,0 +1,88 @@
+{
+  "backend": "rust",
+  "catalog": [
+    {
+      "op": "map_get_mut",
+      "type_args": [
+        "String",
+        "crate::Clock"
+      ]
+    },
+    {
+      "op": "map_get_mut",
+      "type_args": [
+        "String",
+        "i64"
+      ]
+    },
+    {
+      "op": "string_new",
+      "type_args": []
+    },
+    {
+      "op": "string_push_str",
+      "type_args": []
+    },
+    {
+      "op": "map_insert",
+      "type_args": [
+        "String",
+        "i64"
+      ]
+    },
+    {
+      "op": "vec_clear",
+      "type_args": [
+        "i64"
+      ]
+    },
+    {
+      "op": "string_eq",
+      "type_args": []
+    },
+    {
+      "op": "map_remove",
+      "type_args": [
+        "String",
+        "i64"
+      ]
+    },
+    {
+      "op": "vec_get",
+      "type_args": [
+        "String"
+      ]
+    },
+    {
+      "op": "vec_push",
+      "type_args": [
+        "i64"
+      ]
+    }
+  ],
+  "check_mode": "requires",
+  "externs": [
+    {
+      "name": "p31n_facts",
+      "path": "/tmp/libp31n_facts.rlib"
+    }
+  ],
+  "rustc_checked": false,
+  "schema": "pruv-foreign-v1",
+  "trusted": [
+    {
+      "col": 1,
+      "effects": [
+        "alloc"
+      ],
+      "ensures": [
+        "(len(result) <= 16)"
+      ],
+      "line": 8,
+      "name": "crate::running_ids",
+      "path": "::p31n_facts::running_ids",
+      "reachable": true,
+      "requires": []
+    }
+  ]
+}

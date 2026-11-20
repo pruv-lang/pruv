@@ -437,7 +437,7 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P31S | Both compilers (pruvc, pruvc-rs), SPEC.md, tests/ | Root package before P31T (main decision 2026-11-20: P31T stopped before any change because the typed session record cannot be expressed with P31L alone; the resident state crosses every entry as `inout st: [i64]`). (1) Owned collections of non-generic structs: `Vec<S>` and `HashMap<i64, S>` where `S` may itself have P31L owned fields (today `type/foreign_owned_type`, §6d nesting ban), with index/length proofs removing bounds checks and moves without clone. (2) Pruv-owned typed resident state across calls: a root entry may take `inout st: S` for a non-generic struct `S` with owned fields (today `type/entry_signature`), held by the host as `PruvStore<S>` under manifest `raw_entries`; C ABI and LLVM may reject with a named error. SPEC rules with positive and negative tests in both compilers; a small example (resident struct holding `HashMap<i64, Record>`, lookup + in-place update) compared line by line with hand Rust (no clone, no bounds check, no re-encoding per call). Done (Appendix P31S): R-6e-3 owned `Vec<S>` / `HashMap<i64, S>` of non-generic, non-zero-sized structs (borrowed reads, `get_mut` in-place updates, moves without clone), R-6e-4 `match map_get_mut` arms, R-6f-2 root `inout st: S` entries held as `PruvStore<S>` under `raw_entries` (C ABI / LLVM reject with a named error), R-6g-2 non-generic struct inout; small example 1.001x hand Rust, no clone, no bounds check, py and rs byte-identical. Full suites rs 4569/4572, py 4557/4560 (only the obsolete `g5_inout_type_struct` sample, rewritten and rerun green); audit 1-8 fixed, no confirm pass (budget). |
 | P31K | Both compilers (pruvc, pruvc-rs), SPEC.md, tests/ | Root package before P31T (main decision 2026-11-20 after P31T attempt 2, Appendix P31T.4). (1) Aggregate maps keyed by text: `HashMap<String, S>` and `HashMap<String, i64>` with a borrowed lookup key (`str`, `String` field view, `[u8]` slice) so one lookup hashes the caller's bytes without an owned key copy; `map_get` / `map_get_mut` / `map_insert` / `map_remove` as in R-6e-3 / R-6e-4. (2) One level of collection nesting inside an owned aggregate: `Vec<String>` and `HashMap<String, bool>` fields in a record held by a state struct. (3) `vec_at_mut` on `Vec<S>` with the R-6e-4 arm rules. SPEC rules with positive and negative tests in both compilers; small example (state struct with `HashMap<String, Record>` whose record holds `Vec<String>` and `HashMap<String, bool>`, lookup by borrowed key + in-place update) compared line by line with hand Rust (one lookup, no clone, no key copy, no bounds check). Done (Appendix P31K): R-6e-5 `HashMap<String, S | i64 | bool>` with borrowed `str` / `String` lookup keys (one hash, no key copy) and owned `String` insert keys, R-6e-6 one level of nesting (`Vec<String>`, `HashMap<String, bool>`, `HashMap<i64, bool>` fields of records held in state maps or vecs, deeper rejected), R-6e-7 `vec_at_mut` on `Vec<S>`; gap repros `gap_str_key`, `gap_map_field`, `gap_vec_string` pass; small example M 0.961x / L 1.015x (noise) hand Rust, RSS equal, py and rs byte-identical. Full suites rs 4572/4572, py 4560/4560; audit 1-5 fixed, recheck clean. `[u8]` slice keys stay rejected (debt). |
 | P31D | Both compilers (pruvc, pruvc-rs), SPEC.md, tests/ | Root package before P31T (main decision 2026-11-20 after P31T attempt 3, Appendix P31T (attempt 3) P31T3.5). (1) Disjoint field borrows of the root state: inside the `Some` arm of `map_get_mut(inout st.f, k)` allow `map_get_mut` / `vec_at_mut` / reads on a different field `st.g` (the arm still rejects `st.f` and `st` as a whole), or equivalently pairwise-distinct `inout st.f` field paths as inout arguments; (2) struct entry results under R-6f-1: a root entry may return a non-generic struct of scalars and `Vec<S>` of P31S element structs. Gate as P31S: positive and negative tests in both, generated Rust byte-identical, a small example against hand Rust (two live `get_mut` on sibling fields, no clone). Done (Appendix P31D): R-6e-8 path-aware `Some`-arm locks (a use of the same root is `type/recursive_borrow` only when its field path overlaps the borrowed one; nested `get_mut` arms on sibling fields, chosen over pairwise `inout` field arguments, which stay `type/inout_argument`), R-6f-3 struct entry results (scalars, `Vec<i64>` / `Vec<bool>`, `Vec<E>` of owned aggregates; LLVM rejects); repros `sibling_map_borrow`, `reply_result` compile, `split_map_fields` stays rejected; small example M 0.976x / L 0.986x hand Rust, RSS equal, two live `get_mut`, no clone, no bounds check, py and rs byte-identical. Full suite rs 4572/4572, py 4560/4560, spec_trace 537/537 both, rows unchanged. |
-| P31N | Both compilers (pruvc, pruvc-rs), SPEC.md, tests/ | Root package before P31T attempt 5 (main decision 2026-11-20 after P31T attempt 4, Appendix P31T (attempt 4) P31T4.4). (1) Scalar-valued map fields in map-held records: `HashMap<String, i64>` and `HashMap<i64, i64>` fields (next to R-6e-6 `HashMap<String, bool>`) in a record held by `HashMap<String, S>` / `Vec<S>` of the root state, with map_get / map_get_mut / map_insert / map_remove through the record. (2) Trusted fn results of `Vec<String>` under R-6d-1 (host returns owned strings, moved, no copy). (3) Builtins `vec_clear` (keeps capacity) and `String` vs `str` / `[u8]` equality without an owned copy, lowered to `clear()` and slice `==`. Positive and negative tests in both compilers, SPEC rules, small example vs hand Rust at M/L. Done when: the three P31T4.4 repros compile and verify on both compilers with generated Rust matching hand Rust (no clone, no extra lookup), full suites green, M/L cells at or below hand Rust or moved to debt per rule 5. |
+| P31N | Both compilers (pruvc, pruvc-rs), SPEC.md, tests/ | Root package before P31T attempt 5 (main decision 2026-11-20 after P31T attempt 4, Appendix P31T (attempt 4) P31T4.4). (1) Scalar-valued map fields in map-held records: `HashMap<String, i64>` and `HashMap<i64, i64>` fields (next to R-6e-6 `HashMap<String, bool>`) in a record held by `HashMap<String, S>` / `Vec<S>` of the root state, with map_get / map_get_mut / map_insert / map_remove through the record. (2) Trusted fn results of `Vec<String>` under R-6d-1 (host returns owned strings, moved, no copy). (3) Builtins `vec_clear` (keeps capacity) and `String` vs `str` / `[u8]` equality without an owned copy, lowered to `clear()` and slice `==`. Positive and negative tests in both compilers, SPEC rules, small example vs hand Rust at M/L. Done when: the three P31T4.4 repros compile and verify on both compilers with generated Rust matching hand Rust (no clone, no extra lookup), full suites green, M/L cells at or below hand Rust or moved to debt per rule 5. Done (Appendix P31N): R-6e-6 `HashMap<String, i64>` / `HashMap<i64, i64>` fields in collection-held records (get / get_mut / insert / remove / len on the nested map with a borrowed `str` key, in place), R-6d-1 trusted `Vec<String>` results (moved, no copy), R-6e-9 borrowed `vec_get::<String>` elements, R-6e-10 `vec_clear` (`.clear()`), R-6e-11 `string_eq` (slice `==`); LLVM rejects. Small example M 0.929x / L 0.992x hand Rust, RSS equal, no clone, py and rs byte-identical. Full suites rs 4572/4572, py 4560/4560, spec_trace 770/770 both, rows unchanged. |
 | P31T | B/bud_map.pruv, bud_store.pruv, bud_lifecycle.pruv, bud_decide.pruv and their consumers (M4-M12, M10b) | After P31L, P31S and P31K (first attempt 2026-11-20 stopped with no change: language gap, see P31S; second attempt 2026-11-20 stopped with no budget change: text-keyed aggregate maps and nested record collections, Appendix P31T, proposed root row P31K; third attempt 2026-11-20 after P31K stopped with no budget change: two sibling root-state map records cannot be borrowed mutably at once, and entries cannot return a struct holding `Vec` effects, Appendix P31T (attempt 3), proposed root row P31D; fourth attempt 2026-11-20 after P31D partly done: step 1 M10b lane on a typed resident state, commits 79862ea / c2c7cb3 / 4adc42e, Q unchanged rs and py, perf_gate FAIL on extend and end M / L (now §7.5 D28 / D29), step 2 (shared modules and M4-M11 consumers, M12) not done, two new language gaps, Appendix P31T (attempt 4)). Typed session record (struct with owned fields) replacing the flat framed `[i64]` record and packed-key double lookups (D14, D25), shrink-in-place record write for extend / close (D28, D29, P31.8), struct replies with `Vec` effects instead of framed `[i64]` (D19-D24). Every consumer's Q unchanged on rs and py; re-measure D14, D19-D25, D28-D29 cells against hand Rust and close the rows that reach <= 1.0x. |
 | P32 | B/host.rs,roots/bindings,bud_test_abi.pruv,m34/m5–m11 shims | P split per operation/narrow family; direct/adapter grid, malformed admission, one decision engine. |
 | P33 | Both codegens/hot contracts: residual L4/L5 only | C inline attribute/size heuristic and local proof gates; P touched families, M11 compile CPU/binary size and parity. Partly done in P13i2a: `#[inline(always)]` and `#[inline]` fn attributes (explicit directive over R-7-3 promotion); size heuristic/local proof gates still open. |
@@ -9249,3 +9249,137 @@ Debt (section 7.5 candidates):
 - Struct entry results with `HashMap` fields or nested-collection elements stay `type/entry_signature`; no C ABI for them.
 - B1 diagnostic priority difference between py and rs on an invalid field move (P31D.4).
 - The M / L cells were measured under load average 9-30 (L hand rounds bimodal 3.4 / 5.3 s); a quiet-machine rerun may tighten the ranges.
+
+## Appendix P31N: scalar map fields, trusted Vec<String>, vec_clear and string_eq (both compilers)
+
+### P31N.1 Rules (SPEC.md)
+
+- R-6e-6 widened: an owned aggregate may also have `HashMap<String, i64>` and `HashMap<i64, i64>` fields (next to
+  the `bool`-valued maps), when the record is used as a collection element or value in the program. Inside a
+  `map_get_mut` `Some` arm on the outer map, `map_get`, `map_get_mut`, `map_insert`, `map_remove` and `len` work
+  on the nested map with a borrowed `str` key. A mutable scalar binder is read with `*v` or `v` and assigned with
+  `*v = x` or `v = x`. Rust emits `c.runs.get_mut(name)`, `*v = ..`, `.insert` / `.remove` in place, no clone.
+- R-6d-1 widened: a trusted fn may return `Vec<String>` with `! alloc` (Rust backend only). The host's owned
+  strings move in without a copy; the wrapper checks the vector length and each element length against 2^40
+  (representation failure, section 7). Its `ensures` may use `len(result)`.
+- R-6e-9: `vec_get::<String>(v, i)` borrows a `str` from a `Vec<String>` place (local, parameter or field) as a
+  direct `str` argument of a user fn, the text key of `map_get` / `map_get_mut` / `map_remove`, or an operand of
+  `string_eq` / `len`; other uses are `type/foreign_owned_type`. The verifier proves `0 <= i < len(v)`.
+- R-6e-10: `vec_clear::<T>(inout P) -> ()` is a whole statement on an owned mutable local, an `inout` parameter
+  or a mutable (nested) field; Rust emits `P.clear();` (capacity kept, no `alloc`). The verifier sets the length
+  to 0 and keeps sibling fields and outer elements. `inout` `Vec<T>` parameters are allowed for non-entry fns; a
+  call to a callee that may clear (directly or by forwarding) havocs the argument length at the call site
+  (`vec_resize_params`), and loops drop such operands from the length-keep set.
+- R-6e-11: `string_eq(a, b) -> bool` on borrowed `String` / `str` / `[u8]` / R-6e-9 operands; Rust compares
+  borrowed byte slices (`a.as_bytes() == b.as_bytes()`), no owned copy. The verifier states equal lengths and
+  equal bytes on `[0, n)` (one bound variable per use). A field or element operand borrows its root place for the
+  call, so moving that root in the same call is `type/foreign_borrow`.
+
+Implementation: py first (`pruvc/check.py`, `typeinfo.py`, `foreign.py`, `foreign_codegen.py`, `codegen.py`,
+`verify.py`, `refine.py`, `vast.py`, `vparser.py`, `llvmgen.py` rejects), then the Rust port of the same 11
+places (`pruv-core` ast / check / codegen / dump / foreign / gtype / llvmgen / mono / parser, `pruv-proof`
+symbolic / sys). The LLVM backend rejects the new features with `codegen/unsupported_type`.
+
+New tests (run by `tests/spec_trace.py` on both compilers): `tests/spec/r6e_6_*` accept `scalar_map_field`,
+`string_map_field`, `i64_map_field`, `deep_map_field` (reject); `r6d_1_vec_string_*` accept `result`, `index`,
+`moved`; `r6e_9_*` accept `borrowed_keys`, reject `element_let`, `temp_vector`, `unproved_element`; `r6e_10_*` accept `vec_clear`,
+`clear_call_soundness`, reject `clear_borrowed`; `r6e_11_*` accept `string_eq`, `eq_different_lengths`, reject
+`eq_non_text`, `eq_moved_root`, `eq_moved_elem`. `tests/must_reject/g5_inout_type_vec.pruv` now uses an inout `HashMap<i64, i64>`
+(an inout `Vec` is legal under R-6e-10; same code `type/inout_type`).
+
+### P31N.2 Small example (bench/l3/p31n/)
+
+`p31n.pruv`: `Clock { owner: String, since_ms, runs: HashMap<String, i64> }` held in
+`St { clocks: HashMap<String, Clock>, out: Vec<i64> }`. `tick(inout st, sid, name, now)` counts a run in place in
+the nested scalar map; `halt(inout st, sid, who)` takes `running_ids(sid) -> Vec<String>` from the trusted crate
+`p31n_facts`, clears `st.out`, checks the owner with `string_eq` and removes each id with a borrowed element key.
+`gen.rs` is the py output (`--rust-extern p31n_facts=...`), the rs output is byte-identical (`cmp`, and
+`gen.rs.foreign.json`); `hand.rs` the hand Rust, `driver.rs` the timing driver (same checksum for hand and gen).
+
+| hand Rust (`hand.rs`) | generated (`gen.rs`) |
+|---|---|
+| `match st.clocks.get_mut(sid) { Some(c) =>` | same |
+| `match c.runs.get_mut(name) { Some(v) => if *v < 1e12 { *v += 1 }` | same, `*v = (*v + 1i64)` |
+| `c.runs.insert(name.to_string(), 1)` | `string_new` + `string_push_str` then `pruv_g6_map_insert__string__i(mem::take(&mut c.runs), k, 1)` (moves the map, one `len < 2^40` check) |
+| `let ids = p31n_facts::running_ids(sid);` | wrapper `pruv_m_f_1_11_running_ids`: same call, moved, plus the 2^40 length checks (vector and each element) |
+| `st.out.clear();` | `st.out.clear();` |
+| `c.owner.as_bytes() == who.as_bytes()` | `(c.owner).as_bytes() == (who).as_bytes()` |
+| `for (i, id) in ids.iter().enumerate() { c.runs.remove(id.as_str())` | `while i < ids.len()`, `c.runs.remove(ids[usize::try_from(i)..].as_str())` (checked index, R-6d-2 under a trusted fn) |
+| `st.out.push(i as i64)` | `pruv_g6_vec_push__i(mem::take(&mut st.out), i)` (moves the vec) |
+| - | wrapper: one `sid.len()` / `name.len()` 2^40 branch |
+
+No clone of a String or map, no extra lookup; the owned ids move in from the host.
+
+Measured with `bench/l3/p31n/driver.rs` (`work/p31n/measure.py`), 7 alternating rounds per cell,
+`/usr/bin/time -l` for RSS, load average about 3.8.
+
+| size | hand median [range] | gen median [range] | gen / hand | RSS hand / gen |
+|---|---|---|---|---|
+| M (n = 1000, 2M calls) | 101.23 ms [98.1-125.9] | 94.05 ms [92.6-94.8] | 0.929x | 4.41 / 4.36 MiB (0.989x) |
+| L (n = 100000, 10M calls) | 2714.54 ms [2700.0-2753.9] | 2693.77 ms [2675.6-2712.3] | 0.992x | 266.8 / 266.8 MiB (1.000x) |
+
+All four cells are data-proportional and gate; all are at or under the 1.0x floor, no fix attempt was needed.
+`python3 tools/perf_gate.py work/p31n/perf_cells.json`: `VERDICT: PASS (4 cell(s), 0 fail, 0 debt)`.
+
+### P31N.3 Gate
+
+| gate | result |
+|---|---|
+| full suite, rs (`tests/run_all.py`) | 4572/4572 (both backends) |
+| full suite, py | 4560/4560 (both backends) |
+| `spec_trace` rs / py | 770/770 / 770/770 |
+| `cargo test --release` | 139 passed, 0 failed |
+| `g8_frontend` rs / py | 39/39 / 27/27 |
+| `diff_rust` fuzz 20 | all same |
+| `m3_all --only trace,trace_infer --quick` | trace ok, trace_infer ok |
+| rows list (`--list-rows`) | same as `tests/run_all_rows.txt` (spec files run under `spec_trace`) |
+| py == rs output | byte-identical on the bench (`gen.rs` `cmp`) and the R-6d-1, R-6e-6/9/10/11 spec files (same accept / stage+code+line) |
+
+The checks after the recheck fixes R1 / R2 (ownership and verifier only, no codegen change): `spec_trace`,
+`cargo test`, `diff_rust`, `m3`, bench `cmp` and rows were rerun; the full suites ran once on the final code.
+
+### P31N.4 Audit (one review, Codex gpt-6.2-astra ultra, read-only)
+
+| id | severity | finding | handling |
+|---|---|---|---|
+| A1 | must-fix | rs verifier: an `inout Vec<T>` callee that may clear built the fresh argument from the unsubstituted `Vec<T>` (internal sort mismatch on `keep::<i64>(inout v)`); py substituted | fixed: `symbolic.rs` substitutes `theta` into the parameter type like py |
+| A2 | must-fix | `vec_get::<String>(one(), 0)` as a borrowed key was accepted (element borrowed from a temporary vector) | fixed in both: the vector must be a place, else `type/foreign_borrow`; test `r6e_9_temp_vector` |
+| A3 | must-fix | `string_eq(r.text, drain(move r))` was accepted: the field borrow did not record its root against the move | fixed in both: a field operand of `string_eq` records its root in the call borrow track, `type/foreign_borrow`; test `r6e_11_eq_moved_root` |
+| A4 | must-fix | unproved (check mode) `vec_get::<String>` emitted plain `v[i]`, a bare panic without the `requires violated` diagnostic | fixed in both: `.get(i).unwrap_or_else(pruv_g6_req("vec_get", ..))` when unverified; proved output unchanged (bench `cmp` OK) |
+| A5 | must-fix | `vec_clear` with a wrong arity in expression position: py `inout_context`, rs `arity` | fixed: rs checks the statement position before the arity |
+| A6 | must-fix | py SMT trace named the `string_eq` bound variable with a context-wide `FreshInt`, rs restarted at `string_eq!0` per function | fixed: py per-function counter `string_eq!N`; traces byte-identical |
+| A7 | advisory | rs recomputes `vec_resize_params(prog)` per verified function (py once per program) | left as debt (not a one-line move) |
+| A8 | advisory | tests lack a same-length / one-byte-different `string_eq` case and a per-element length failure case for a trusted `Vec<String>` | left as debt |
+
+| R1 | must-fix (recheck) | `string_eq(vec_get::<String>(r.words, 0), drain(move r))` was accepted: an element operand did not record the vector's root | fixed in both: a `vec_get` operand of `string_eq` records the root of its vector place; test `r6e_11_eq_moved_elem` |
+| R2 | must-fix (recheck) | the `string_eq!N` bound variable could share its name with a parameter version `string_eq!N` (a parameter named `string_eq`), capturing it in the quantifier (rs `verify/ensures` failure on a valid program) | fixed in both: named `string_eq!qN` from the shared per-function counter `k`, like `eq_range!qN`; the repro verifies on both |
+
+Recheck (Codex gpt-6.2-astra ultra, read-only): A1, A2, A4, A5 closed; A3 partly (field closed, element open, R1)
+and A6 open (R2). Main fixed R1 and R2 without a further audit (budget rule: one audit plus one recheck).
+
+### P31N.5 Budget and debt
+
+Time 12:01-13:53 KST (of 2 h), builds 4 of 3 (rs release after the port, after the py fix, after the audit fix, and one over budget for the recheck fixes R1 / R2),
+audit 1 + recheck 1. Delegations 12 of 24:
+
+| task | engine / model |
+|---|---|
+| repo-wide research of the gap sites | Codex gpt-6.2-astra high |
+| Python implementation (write; candidate applied) | Codex gpt-6.2-sol |
+| Rust port (write; applied) | Codex gpt-6.2-sol |
+| audit must-fix A1-A6 (write; applied by main after diff review) | Codex gpt-6.2-sol |
+| full suite / rs gate runs | command (6; two full suite runs stopped by an app restart, rerun) |
+| audit, recheck | Codex gpt-6.2-astra ultra (2) |
+
+Done by main: the `verify.py` generic-sort regression fix (worker had dropped the `arr_type(pre.elem)` fresh sort),
+the `g5_inout_type_vec` test update, SPEC wording, the bench (`p31n.pruv`, `hand.rs`, `driver.rs`, `p31n_facts.rs`),
+the measurement and perf gate, the proof-encoding review of the verifier diff, and the recheck fixes R1 / R2.
+
+Debt (section 7.5 candidates):
+
+- Under a user trusted fn (R-6d-2 off) the element key read keeps a checked index and nested replacements go through
+  `mem::take` + helper (`pruv_g6_map_insert__..`, `pruv_g6_vec_push__..`) instead of `.insert` / `.push` in place;
+  the M / L cells are still under 1.0x.
+- The LLVM backend rejects the new features (`codegen/unsupported_type`); trusted `Vec<String>` is Rust-backend only.
+- `HashMap<String, i64>` / `HashMap<i64, i64>` fields only in records used as a collection element or value.
+- A7, A8 (P31N.4).

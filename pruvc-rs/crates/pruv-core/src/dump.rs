@@ -302,7 +302,7 @@ pub fn stmt(s: &Stmt) -> Json {
             }
             node("Let", Some((x.line, x.col)), f)
         }
-        Stmt::Assign(x) => node("Assign", Some((x.line, x.col)), vec![("name", js(&x.name)), ("value", expr(&x.value))]),
+        Stmt::Assign(x) => node("Assign", Some((x.line, x.col)), vec![("name", js(&x.name)), ("value", expr(&x.value)), ("deref", Json::Bool(x.deref))]),
         Stmt::IndexAssign(x) => {
             let mut f = vec![("name", js(&x.name)), ("index", expr(&x.index)), ("value", expr(&x.value))];
             if let Some((lo, hi, what)) = &x.elem_refine {

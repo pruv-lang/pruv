@@ -365,11 +365,17 @@ fn push_two(take v: Vec<i64>, x: i64) -> Vec<i64> ! alloc
   `ensures`; the Rust code itself is not proved. A wrong contract can make wrong code "verify", so the Rust backend lists the contracts in
   `<out>.foreign.json` (the LLVM backend does not write this file yet). Signatures use `i64`, `bool`, `Option`/`Result` of those, read-only `[i64]`/`[u8]`/`[bool]`/`str`
   parameters, and `i64`/`bool`/`()`/`Option`/`Result` results; at least one `ensures` (`ensures true` is allowed).
-- R-6d-1 **Owned results.** A trusted function may also return an owned `String` or `Vec<i64>` (the call needs
-  `! alloc`); its `ensures` may speak of `len(result)` and `result[i]`. A result longer than 2^40 is a run-time
-  representation failure (section 7, length bound). Any other result type, such as `[i64]`, is
-  `type/foreign_signature`. The generated call is wrapped in `catch_unwind`. Tests:
-  [accept](tests/spec/r6d_1_owned_results.pruv), [reject](tests/spec/r6d_1_array_result.pruv).
+- R-6d-1 **Owned results.** A trusted function may return `String`, `Vec<i64>` or `Vec<String>` with
+  `! alloc`. The result moves into Pruv without copying. Its `ensures` may use `len(result)`; `result[i]`
+  is allowed for `String` and `Vec<i64>`. A result longer than 2^40 is a run-time representation failure
+  (section 7, length bound). A trusted `Vec<String>` result requires the Rust backend and the same
+  length limit applies to each returned String.
+  Other result types outside the trusted signature, such as `[i64]`, are `type/foreign_signature`.
+  The generated call is wrapped in `catch_unwind`. Tests:
+  [accept](tests/spec/r6d_1_owned_results.pruv), [reject](tests/spec/r6d_1_array_result.pruv),
+  [accept Vec<String>](tests/spec/r6d_1_vec_string_result.pruv),
+  [reject element indexing](tests/spec/r6d_1_vec_string_index.pruv),
+  [reject use after move](tests/spec/r6d_1_vec_string_moved.pruv).
 - R-6d-2 **Proved vector reads.** In a verified build with `--foreign-checks requires` or `off`, the Rust backend
   emits `vec_get::<T>(v, i)` as `(unsafe { *(<v>).get_unchecked((<i>) as usize) })` after proving its bounds
   precondition, provided the program declares no user `trusted rust fn` (whose unchecked `ensures` a bound proof
@@ -380,7 +386,7 @@ fn push_two(take v: Vec<i64>, x: i64) -> Vec<i64> ! alloc
   `String` hold values. Collections cannot be stored in `Option`, `Result` or arrays. R-6e-1, R-6e-3 and R-6e-6
   describe collection fields and the permitted nesting. Operations (`vec_*` and `map_*` take explicit type arguments, `string_*` and `len` take none): `vec_new`, `vec_push`,
   `vec_get`, `map_new`, `map_insert`, `map_get` (returns `Option<V>`), `string_new`, `string_push_str`, `string_byte`,
-  `string_to_str` (copies into a `str`), and `len`. Allocating operations need `! alloc`. In contracts only: `v[i]`, `s[i]`,
+  `string_to_str` (copies into a `str`), `vec_clear`, `string_eq`, and `len`. Allocating operations need `! alloc`. In contracts only: `v[i]`, `s[i]`,
   `map_lookup::<K, V>(m, k)` and `map_updated::<K, V>(after, before, k, v)` (the whole new map: k set, size, others kept).
   A map whose values grow in a loop (counters, histograms) needs either a saturating update (`if c < LIMIT { c + 1 }`)
   (preferred) or an invariant bounding every value (quantifying over all keys is expensive and may time out); an
@@ -501,18 +507,25 @@ fn tree_count(t: Tree) -> i64
   `[u8]` keys are `type/foreign_owned_type` or an argument type mismatch. The verifier uses an integer map index `strkey(n, a)`, where `n`
   is the byte length, `a` is the byte array and `strkey` is one uninterpreted function without axioms.
 - R-6e-6 **One level of nested collections in aggregate records.** An owned aggregate may also have
-  `Vec<String>`, `HashMap<String, bool>` or `HashMap<i64, bool>` fields. It can be an element of
+  `Vec<String>`, `HashMap<String, bool>`, `HashMap<i64, bool>`, `HashMap<String, i64>` or
+  `HashMap<i64, i64>` fields. The i64-valued map fields require the record to be used as a
+  collection element or value in the program. Such an aggregate can be an element of
   `Vec<S>` or a value of `HashMap<i64, S>` or `HashMap<String, S>` in the positions of R-6e-3.
   Deeper collection nesting, direct fields of a record type with nested collections, and using such
   records as `Option` or `Result` payloads are `type/foreign_owned_type`. In a mutable `Some` arm,
   R-6e-2 permits replacing nested fields with `vec_push` or `map_insert`, and R-6e-7 permits
   `map_remove` on a nested map. Under R-6d-2 the replacements emit `.push(x)` and `.insert(k, v)`.
-  `len` reads either field and `map_get` reads nested map values. `vec_get` on `Vec<String>` is
-  unsupported. The verifier stores each nested collection in its own datatype field and preserves
+  `len` reads either collection, and `map_get` and `map_get_mut` access nested map values.
+  A mutable scalar binder is read with `*v` or `v` and assigned with `*v = x` or `v = x`.
+  The verifier stores each nested collection in its own datatype field and preserves
   sibling fields and other collection elements on write-back. A root `pub` function may borrow a
   record with the new collection fields through the Rust ABI. Like R-6f-2 resident state, its collection
   lengths (at most 2^40, section 7 item 6) are not checked per call: the record must come from this
-  program's entries (section 7 caller obligations).
+  program's entries (section 7 caller obligations). Tests:
+  [accept String keys](tests/spec/r6e_6_scalar_map_field.pruv),
+  [accept i64 keys](tests/spec/r6e_6_i64_map_field.pruv),
+  [reject String values](tests/spec/r6e_6_string_map_field.pruv),
+  [reject deeper nesting](tests/spec/r6e_6_deep_map_field.pruv).
 - R-6e-7 **Remove and positional update.** `map_remove::<K, V>(inout P, k) -> bool` removes the
   entry and returns whether it was present. It accepts `i64` or `String` keys, uses the place and
   alias rules of R-6e-4 and the statement rules of R-6g-1, and requires no `alloc` effect. Rust emits
@@ -520,7 +533,8 @@ fn tree_count(t: Tree) -> i64
   the presence bit and subtracts one from the length only when the key was present.
   `vec_at_mut::<S>(inout P, i)` on `Vec<S>` for an owned aggregate uses the direct match and
   arm rules of R-6e-4. Non-entry functions may take `inout` map and vector parameters whose value or
-  element type is an owned aggregate struct; other collection types stay `type/inout_type`. Rust emits `match P.get_mut(<usize as ::std::convert::TryFrom<i64>>::try_from(i).unwrap_or(usize::MAX))`, so no target truncates `i` (the qualified `TryFrom` path compiles in every Rust edition). The verifier selects `Some` when
+  element type is an owned aggregate struct; R-6e-10 extends this to every supported vector element type.
+  Other collection types stay `type/inout_type`. Rust emits `match P.get_mut(<usize as ::std::convert::TryFrom<i64>>::try_from(i).unwrap_or(usize::MAX))`, so no target truncates `i` (the qualified `TryFrom` path compiles in every Rust edition). The verifier selects `Some` when
   `0 <= i < len(P)` and writes the final binder back to that index with unchanged length.
   These operations and the new collection types require the Rust backend.
 - R-6e-8 **Disjoint field borrows.** Inside the `Some` arm of `map_get_mut` or `vec_at_mut` on the field
@@ -536,6 +550,27 @@ fn tree_count(t: Tree) -> i64
   A `match` on an extended field path `Q` of an `inout` parameter or of an element binding holds `Q`
   the same way while its arms run: assigning, moving or passing `inout` a path that overlaps `Q` (or
   the whole root) is `type/recursive_borrow`, and disjoint sibling paths stay usable.
+- R-6e-9 **Borrowing a String vector element.** `vec_get::<String>(v, i)` borrows a `str` from a
+  `Vec<String>` local, parameter or field. It is allowed only as a direct argument to a user
+  function's `str` parameter, as the text key of `map_get`, `map_get_mut` or `map_remove`, or as
+  an operand of `string_eq` or `len`. Other uses are `type/foreign_owned_type`.
+  The verifier proves `0 <= i < len(v)`. Rust borrows the element with checked indexing, or uses
+  `get_unchecked` under R-6d-2, followed by `.as_str()`. Tests:
+  [accept](tests/spec/r6d_1_vec_string_result.pruv), [reject](tests/spec/r6e_9_element_let.pruv).
+- R-6e-10 **Clearing a vector.** `vec_clear::<T>(inout P) -> ()` is a whole statement. The vector place
+  may be an owned mutable local, an inout parameter or a mutable field, including a nested vector
+  field in an arm. It follows the place and alias rules of R-6e-4 and the statement rules of R-6g-1.
+  Rust emits `P.clear();`, which keeps capacity and needs no `alloc`. The verifier sets the length
+  to zero and preserves sibling fields and other elements of outer collections. It requires the
+  Rust backend. Tests:
+  [accept](tests/spec/r6e_10_vec_clear.pruv), [reject](tests/spec/r6e_10_clear_borrowed.pruv).
+- R-6e-11 **Text equality.** `string_eq(a, b) -> bool` is a pure operation in executable code.
+  Each operand may be a borrowed `String`, a `str`, a `[u8]` or an R-6e-9 element.
+  The verifier compares lengths and every byte in the valid range. Rust compares borrowed byte slices.
+  A field or element operand borrows its root place for the call; moving that root in the same call is
+  `type/foreign_borrow`.
+  Tests: [accept](tests/spec/r6e_11_string_eq.pruv), [reject](tests/spec/r6e_11_eq_non_text.pruv),
+  [reject](tests/spec/r6e_11_eq_moved_elem.pruv).
 - **Values, not pointers.** Recursive and buffer-bearing values are independent: copying one deep-copies everything,
   and changing a copy never changes the original. Parameters, field reads and `match` bindings are read-only views
   and do not allocate. Putting an existing value into an owning place (`let`, assignment, constructor field,
@@ -640,7 +675,7 @@ let mut w: [i64] = copy(a);
 set_at(inout w, 0, 7);
 ```
 - **Syntax and types.** `inout name: T` on a parameter, `T` one of `[i64]`, `[u8]`, `[bool]` or `[T]` with `T: Element`
-  (section 6c), a non-generic struct under R-6g-2, or a map or vector under R-6e-7; any other type is `type/inout_type`. The mode is not part of the type. The caller must write `inout`
+  (section 6c), a non-generic struct under R-6g-2, a map under R-6e-7, or a vector under R-6e-10; any other type is `type/inout_type`. The mode is not part of the type. The caller must write `inout`
   at the call (`type/inout_argument` if missing or extra). The marked argument must be a whole `let mut` array local
   or an `inout` parameter of the caller, with exactly the parameter's element type; immutable locals, ordinary
   parameters, `match` binders, fields, elements and calls are rejected. `inout` is contextual, not a keyword;

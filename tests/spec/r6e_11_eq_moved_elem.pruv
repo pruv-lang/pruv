@@ -1,0 +1,8 @@
+// spec: R-6e-11 reject
+struct Rec { words: Vec<String> }
+
+fn drain(take r: Rec) -> String ! alloc { return string_new(); }
+
+fn bad(take r: Rec) -> bool ! alloc requires len(r.words) > 0 {
+    return string_eq(vec_get::<String>(r.words, 0), drain(move r));
+}
