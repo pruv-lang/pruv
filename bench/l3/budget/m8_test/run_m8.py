@@ -35,11 +35,16 @@ ROOT = os.path.abspath(os.path.join(BUD, "..", "..", ".."))
 WORK = os.path.join(BUD, "work", "m8")
 BUILD = WORK
 COMPILER_REPO = "/Users/spica4345/Projects/pruv"
-PRUVC_DEFAULT = os.path.join(COMPILER_REPO, "pruvc-rs", "target", "release", "pruvc")
-PY_COMPILER = [
-    os.path.join(COMPILER_REPO, ".venv", "bin", "python"),
-    os.path.join(COMPILER_REPO, "pruvc", "pruvc.py"),
-]
+
+
+def checkout_file(*parts):
+    local = os.path.join(ROOT, *parts)
+    return local if os.path.isfile(local) else os.path.join(COMPILER_REPO, *parts)
+
+
+PRUVC_DEFAULT = checkout_file("pruvc-rs", "target", "release", "pruvc")
+PYPRUVC_DEFAULT = checkout_file("pruvc", "pruvc.py")
+PYTHON_VENV = checkout_file(".venv", "bin", "python")
 LIBS = ["--lib", "bench/l3/budget", "--lib", "bench/l3/lib"]
 STATE = {"open": 0, "halted": 1, "closed": 2}
 REASONS = ["time", "delegations", "commands", "reviews", "checks"]
@@ -64,7 +69,8 @@ def build(args, typed=False):
         shutil.copyfile(args.gen, gen)
     else:
         root = os.path.relpath(os.path.join(HERE, "root_m8%s.pruv" % ("_typed" if typed else "")), ROOT)
-        cmd = PY_COMPILER if typed and args.py else [args.pruvc]
+        python = PYTHON_VENV if os.path.isfile(PYTHON_VENV) else sys.executable
+        cmd = [python, args.pypruvc] if typed and args.py else [args.pruvc]
         backend = ["--backend", "rust"] if typed and args.py else ["--emit", "rs"] if typed else LIBS
         c = subprocess.run(cmd + [root, "-o", gen] + backend, cwd=ROOT, capture_output=True, text=True)
         if c.returncode != 0:
@@ -941,6 +947,12 @@ def cmd_perf_typed(args):
             if (checksums["flat"].keys() != expected or checksums["typed"] != checksums["flat"]
                     or checksums["hand16w"] != checksums["flat"]):
                 sys.exit("perf checksum mismatch at size %d, round %d: %r" % (size, round_ + 1, checksums))
+    os.makedirs(WORK, exist_ok=True)
+    raw = os.path.join(WORK, "perf_typed_samples.json")
+    with open(raw, "w") as f:
+        json.dump([{"item": item, "size": n, "lane": lane, "ns": values}
+                   for (item, n, lane), values in sorted(samples.items())], f, indent=1)
+    print("raw samples: %s" % raw)
     print("Median ns/call over 5 rounds, %d reps, packed wire input; all checksums matched" % args.reps)
     print("item | size | typed | flat | hand16w")
     for size in sizes:
@@ -962,6 +974,8 @@ def main():
     ap.add_argument("--typed", action="store_true", help="q, perf or churn: use resident typed state")
     ap.add_argument("--py", action="store_true", help="--typed: use the Python compiler Rust backend")
     ap.add_argument("--pruvc", default=PRUVC_DEFAULT)
+    ap.add_argument("--pypruvc", type=os.path.abspath, default=PYPRUVC_DEFAULT,
+                    help="--typed --py: path to pruvc.py")
     ap.add_argument("--gen")
     ap.add_argument("--cases", default=os.path.join(WORK, "cases.jsonl"))
     ap.add_argument("--oracle", default=os.path.join(WORK, "oracle.jsonl"))

@@ -1,5 +1,6 @@
-// M8 resident accounting state. Turn order slots are live when their ordinal matches.
+// M8 resident accounting state. Map entries carry insertion ordinals.
 pub struct Budget {
+  ordinal: i64,
   id: String,
   state: i64,
   unlimited: i64,
@@ -16,20 +17,19 @@ pub struct Budget {
   failures: i64,
   retries: i64,
 }
-pub struct Turn { ordinal: i64, activities: HashMap<String, i64>, activity_order: Vec<String> }
+pub struct Turn { ordinal: i64, activities: HashMap<String, i64>, next_activity: i64 }
 pub struct St {
-  sessions: HashMap<String, Budget>, session_order: Vec<String>,
-  turns: HashMap<String, Turn>, turn_order: Vec<String>
+  sessions: HashMap<String, Budget>, next_session: i64,
+  turns: HashMap<String, Turn>, next_turn: i64
 }
-pub struct Key { s: String, offset: i64, budget_id: bool }
-pub struct Reply { words: Vec<i64>, keys: Vec<Key> }
+pub struct Reply { words: Vec<i64>, keys: Vec<String> }
 
 fn owned_text(key: str) -> String ! alloc {
   return string_push_str(string_new(), key);
 }
 
 fn empty_reply() -> Reply ! alloc {
-  return Reply { words: vec_new::<i64>(), keys: vec_new::<Key>() };
+  return Reply { words: vec_new::<i64>(), keys: vec_new::<String>() };
 }
 
 fn emit(inout reply: Reply, value: i64) -> () ! alloc {
@@ -38,10 +38,9 @@ fn emit(inout reply: Reply, value: i64) -> () ! alloc {
   }
 }
 
-fn emit_key(inout reply: Reply, key: str, budget_id: bool) -> () ! alloc {
+fn emit_key(inout reply: Reply, key: str) -> () ! alloc {
   if len(reply.keys) < 1099511627776 {
-    let offset: i64 = len(reply.words);
-    reply.keys = vec_push::<Key>(move reply.keys, Key { s: owned_text(key), offset: offset, budget_id: budget_id });
+    reply.keys = vec_push::<String>(move reply.keys, owned_text(key));
   }
 }
 
@@ -111,14 +110,16 @@ pub fn t_put(inout st: St, sid: str, bid: str, words: [i64]) -> i64 ! alloc {
   if words[0] < -1 || words[0] > 2 || words[1] < 0 || words[1] > 1 ||
      words[2] < -1 || words[2] > 4 { return 2; }
   if len(st.sessions) >= 1099511627776 { return 5; }
+  let mut ordinal: i64 = st.next_session;
   match map_get::<String, Budget>(st.sessions, sid) {
-    Some(existing) => {}
+    Some(existing) => { ordinal = existing.ordinal; }
     None => {
-      if len(st.session_order) >= 1099511627776 { return 5; }
-      st.session_order = vec_push::<String>(move st.session_order, owned_text(sid));
+      if st.next_session >= 1099511627776 { return 5; }
+      st.next_session = st.next_session + 1;
     }
   }
   st.sessions = map_insert::<String, Budget>(move st.sessions, owned_text(sid), Budget {
+    ordinal: ordinal,
     id: owned_text(bid),
     state: words[0],
     unlimited: words[1],
@@ -139,7 +140,7 @@ pub fn t_put(inout st: St, sid: str, bid: str, words: [i64]) -> i64 ! alloc {
 }
 
 fn emit_budget(inout reply: Reply, b: Budget) -> () ! alloc {
-  emit(inout reply, 0); // The driver fills the wire length when encoding the budget ID.
+  emit(inout reply, b.ordinal);
   emit(inout reply, b.state);
   emit(inout reply, b.unlimited);
   emit(inout reply, b.reason);
@@ -154,7 +155,7 @@ fn emit_budget(inout reply: Reply, b: Budget) -> () ! alloc {
   emit(inout reply, b.tools);
   emit(inout reply, b.failures);
   emit(inout reply, b.retries);
-  emit_key(inout reply, string_to_str(b.id), true);
+  emit_key(inout reply, string_to_str(b.id));
 }
 
 fn current(b: Budget, bid: str) -> bool {
@@ -185,9 +186,9 @@ fn account(inout b: Budget, code: i64, bid: str, what: [i64]) -> i64
 
 // The caller checks deduplication before reaching either insertion path.
 fn insert_activity(inout tool: Turn, key: str) -> i64 ! alloc {
-  let ordinal: i64 = len(tool.activity_order);
+  let ordinal: i64 = tool.next_activity;
   if ordinal >= 1099511627776 || len(tool.activities) >= 1099511627776 { return -1; }
-  tool.activity_order = vec_push::<String>(move tool.activity_order, owned_text(key));
+  tool.next_activity = ordinal + 1;
   tool.activities = map_insert::<String, i64>(move tool.activities, owned_text(key), ordinal);
   return 1;
 }
@@ -201,53 +202,31 @@ fn add_tool(inout st: St, key: str, activity: str) -> i64 ! alloc {
   }
   if value < 0 { return 2; }
   if !fresh { return value; }
-  let ordinal: i64 = len(st.turn_order);
+  let ordinal: i64 = st.next_turn;
   if ordinal >= 1099511627776 || len(st.turns) >= 1099511627776 { return 2; }
   let mut tool: Turn = Turn { ordinal: ordinal, activities: map_new::<String, i64>(),
-                              activity_order: vec_new::<String>() };
+                              next_activity: 0 };
   let added: i64 = insert_activity(inout tool, activity);
   if added != 1 { return 2; }
-  st.turn_order = vec_push::<String>(move st.turn_order, owned_text(key));
+  st.next_turn = ordinal + 1;
   st.turns = map_insert::<String, Turn>(move st.turns, owned_text(key), move tool);
   return added;
 }
 
 fn emit_tools(inout reply: Reply, tool: Turn) -> () ! alloc {
   emit(inout reply, len(tool.activities));
-  let n: i64 = len(tool.activity_order);
-  let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= i && i <= n && n == len(tool.activity_order)
-    decreases n - i
-  {
-    match map_get::<String, i64>(tool.activities, vec_get::<String>(tool.activity_order, i)) {
-      Some(ordinal) => {
-        if ordinal == i { emit_key(inout reply, vec_get::<String>(tool.activity_order, i), false); }
-      }
-      None => {}
-    }
-    i = i + 1;
+  for (key, ordinal) in tool.activities {
+    emit_key(inout reply, key);
+    emit(inout reply, ordinal);
   }
 }
 
 fn emit_turns(inout reply: Reply, st: St) -> () ! alloc {
   emit(inout reply, len(st.turns));
-  let n: i64 = len(st.turn_order);
-  let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= i && i <= n && n == len(st.turn_order)
-    decreases n - i
-  {
-    match map_get::<String, Turn>(st.turns, vec_get::<String>(st.turn_order, i)) {
-      Some(item) => {
-        if item.ordinal == i {
-          emit_key(inout reply, vec_get::<String>(st.turn_order, i), false);
-          emit_tools(inout reply, item);
-        }
-      }
-      None => {}
-    }
-    i = i + 1;
+  for (key, item) in st.turns {
+    emit_key(inout reply, key);
+    emit(inout reply, item.ordinal);
+    emit_tools(inout reply, item);
   }
 }
 
@@ -283,54 +262,16 @@ pub fn t_tool(inout st: St, sid: str, bid: str, key: str, activity: str) -> i64 
   return 0;
 }
 
-fn compact_turn_order(inout st: St) -> () ! alloc {
-  let n: i64 = len(st.turn_order);
-  let mut order: Vec<String> = vec_new::<String>();
-  let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= i && i <= n && n == len(st.turn_order) && len(order) <= i
-    decreases n - i
-  {
-    let key: String = owned_text(vec_get::<String>(st.turn_order, i));
-    match map_get_mut::<String, Turn>(inout st.turns, key) {
-      Some(turn) => {
-        if turn.ordinal == i {
-          turn.ordinal = len(order);
-          order = vec_push::<String>(move order, move key);
-        }
-      }
-      None => {}
-    }
-    i = i + 1;
-  }
-  st.turn_order = move order;
-}
-
 pub fn t_forget(inout st: St, key: str) -> i64 ! alloc {
   let removed: bool = map_remove::<String, Turn>(inout st.turns, key);
-  if removed {
-    let live: i64 = len(st.turns);
-    if live == 0 { vec_clear::<String>(inout st.turn_order); }
-    if len(st.turn_order) > 2 * live + 16 { compact_turn_order(inout st); }
-  }
   return 0;
 }
 
 fn emit_sessions(inout reply: Reply, st: St) -> () ! alloc {
   emit(inout reply, len(st.sessions));
-  let mut i: i64 = 0;
-  while i < len(st.session_order)
-    invariant 0 <= i && i <= len(st.session_order)
-    decreases len(st.session_order) - i
-  {
-    match map_get::<String, Budget>(st.sessions, vec_get::<String>(st.session_order, i)) {
-      Some(b) => {
-        emit_key(inout reply, vec_get::<String>(st.session_order, i), false);
-        emit_budget(inout reply, b);
-      }
-      None => {}
-    }
-    i = i + 1;
+  for (key, budget) in st.sessions {
+    emit_key(inout reply, key);
+    emit_budget(inout reply, budget);
   }
 }
 

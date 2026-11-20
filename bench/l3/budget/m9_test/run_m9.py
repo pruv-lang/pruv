@@ -3,7 +3,7 @@
 
   python3 bench/l3/budget/m9_test/run_m9.py q    [--typed [--py]] [--pruvc PATH | --gen GEN.rs] [--cases F] [--oracle F]
   python3 bench/l3/budget/m9_test/run_m9.py derive [--family q3|q4] [--cases F]
-  python3 bench/l3/budget/m9_test/run_m9.py dc [--count N] [--seed S]
+  python3 bench/l3/budget/m9_test/run_m9.py dc [--typed [--py]] [--count N] [--seed S]
   python3 bench/l3/budget/m9_test/run_m9.py perf [--typed [--py]] [--pruvc PATH | --gen GEN.rs] [--rounds N]
   python3 bench/l3/budget/m9_test/run_m9.py churn --typed [--py]
 
@@ -34,6 +34,7 @@ WORK = os.path.join(BUD, "work", "m9")
 TYPED_WORK = os.path.join(HERE, "target", "m9")
 BUDLIB_WORK = os.path.join(WORK, "budlib")
 PRUVC_DEFAULT = os.path.join(ROOT, "pruvc-rs", "target", "release", "pruvc")
+PRUVC_PY_DEFAULT = os.path.join(ROOT, "pruvc", "pruvc.py")
 STATE = {"open": 0, "halted": 1, "closed": 2}
 RUN_OPS = {"runStarted": 1, "runWaiting": 2, "runEnded": 3}
 HALT_MARK = ("runningDelegationIds", "cancelRecovery", "stopMain")
@@ -51,15 +52,20 @@ def shared_checkout():
     return os.path.dirname(result.stdout.strip()) if result.returncode == 0 else ROOT
 
 
+def compiler_path(explicit, default):
+    if explicit is not None:
+        return explicit
+    if os.path.isfile(default):
+        return default
+    return os.path.join(shared_checkout(), os.path.relpath(default, ROOT))
+
+
 def compiler(args, root, gen, typed):
     if typed and args.py:
-        checkout = shared_checkout()
-        python = os.path.join(checkout, ".venv", "bin", "python")
-        script = os.path.join(checkout, "pruvc", "pruvc.py")
+        python = os.path.join(shared_checkout(), ".venv", "bin", "python")
+        script = compiler_path(args.pruvc, PRUVC_PY_DEFAULT)
         return [python if os.path.isfile(python) else sys.executable, "-B", script, root, "-o", gen, "--backend", "rust"]
-    pruvc = args.pruvc or PRUVC_DEFAULT
-    if args.pruvc is None and not os.path.isfile(pruvc):
-        pruvc = os.path.join(shared_checkout(), os.path.relpath(PRUVC_DEFAULT, ROOT))
+    pruvc = compiler_path(args.pruvc, PRUVC_DEFAULT)
     if typed:
         return [pruvc, root, "-o", gen, "--emit", "rs"]
     return [pruvc, root, "-o", gen, "--lib", args.budlib or "bench/l3/budget", "--lib", "bench/l3/lib"]
@@ -584,6 +590,7 @@ def dc_program(case_id, rng, size, closing=False, cycles=1):
 
 
 def check_dc(args, exe, report=print):
+    typed = getattr(args, "typed", False)
     rng = random.Random(args.seed)
     lines, model = [], {}
     for index in range(args.count + 13):
@@ -635,6 +642,9 @@ def check_dc(args, exe, report=print):
                               f" != {([budget], clocks, timers)!r}")
             if count is not None and (live is None or live[0] != count):
                 errors.append(f"{step} {kind} live entries {live!r}, expected {count}")
+            # The flat entry walk in root_m9.pruv is bounded by c32(entry capacity).
+            if typed and live is not None and max(live) > (1 << 32):
+                errors.append(f"{step} typed store exceeds the flat entry bound: {live!r}")
             if kind == "build":
                 before = live
                 if first_capacity is not None:
@@ -705,7 +715,8 @@ def cmd_perf(args):
         sys.exit("rustc failed (hand):\n" + c.stderr[-3000:])
     env = dict(os.environ)
     if args.typed:
-        flat_args = vars(args) | {"typed": False, "py": False, "gen": None, "out": args.out or TYPED_WORK}
+        flat_args = vars(args) | {"typed": False, "py": False, "gen": None,
+                                  "pruvc": None if args.py else args.pruvc, "out": args.out or TYPED_WORK}
         flat = build(argparse.Namespace(**flat_args))
         sides = {"typed": [exe, "perf"], "flat": [flat, "perf"], "hand": [hand]}
     else:
@@ -731,6 +742,7 @@ def cmd_perf(args):
     want = {(i, s) for i in ("refresh", "drop", "close") for s in (10, 50, 100)}
     want |= {(i, 1) for i in ("cycle", "fire", "stale", "staleu")}
     if args.typed:
+        print(json.dumps({f"{i}/{z}": v for (i, z), v in sorted(res.items())}), file=sys.stderr)
         print("item | size | typed ns | flat ns | hand Rust ns")
         for item, size in sorted(want):
             sample = res.get((item, size), {})
@@ -763,7 +775,7 @@ def cmd_perf(args):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["q", "perf", "derive", "dc", "churn"])
-    ap.add_argument("--pruvc")
+    ap.add_argument("--pruvc", help="compiler executable, or Python compiler script with --py")
     ap.add_argument("--typed", action="store_true", help="use the resident typed state lane")
     ap.add_argument("--py", action="store_true", help="compile the typed lane with the Python Rust backend")
     ap.add_argument("--budlib")
@@ -777,14 +789,14 @@ def main():
     ap.add_argument("--rounds", type=int, default=5)
     ap.add_argument("--reps", type=int, default=200000)
     a = ap.parse_args()
-    if a.typed and (a.cmd not in ("q", "perf", "churn") or a.budlib):
-        ap.error("--typed supports q, perf and churn without --budlib")
+    if a.typed and (a.cmd not in ("q", "perf", "churn", "dc") or a.budlib):
+        ap.error("--typed supports q, perf, churn and dc without --budlib")
     if a.cmd == "churn" and not a.typed:
         ap.error("churn requires --typed")
-    if a.py and (not a.typed or a.pruvc or a.gen):
-        ap.error("--py requires --typed without --pruvc or --gen")
+    if a.py and (not a.typed or a.gen):
+        ap.error("--py requires --typed without --gen")
     fixtures = WORK
-    if a.typed and a.cmd == "q" and not os.path.isdir(fixtures):
+    if a.cmd == "q" and not os.path.isdir(fixtures):
         fixtures = os.path.join(shared_checkout(), os.path.relpath(WORK, ROOT))
     if a.cases is None:
         filename = "cases_q4.jsonl" if a.cmd == "derive" and a.family == "q4" else "cases.jsonl"

@@ -4,11 +4,11 @@ use std::io::{self, BufRead, Write};
 fn empty_state() -> sol::St {
     sol::St {
         sessions: Default::default(),
-        session_order: Vec::new(),
+        next_sessions: 0,
         clocks: Default::default(),
-        clock_order: Vec::new(),
+        next_clocks: 0,
         tools: Default::default(),
-        turn_order: Vec::new(),
+        next_tools: 0,
     }
 }
 
@@ -73,22 +73,88 @@ fn exec(st: &mut sol::St, op: &[i64]) -> Option<(i64, sol::Reply)> {
     Some((code, sol::m4_op(st, code, &key, &other, data)))
 }
 
-fn wire_words(reply: sol::Reply) -> Vec<i64> {
-    let mut keys = reply.keys.into_iter().peekable();
+// Read the internal reply shape and render the public Q wire format.
+struct Wire {
+    words: std::vec::IntoIter<i64>,
+    keys: std::vec::IntoIter<String>,
+}
+
+impl Wire {
+    fn word(&mut self) -> i64 {
+        self.words.next().expect("missing reply word")
+    }
+
+    fn key(&mut self, out: &mut Vec<i64>) {
+        let key = self.keys.next().expect("missing reply key");
+        out.push(key.chars().count() as i64);
+        for c in key.chars() {
+            let scalar = c as u32;
+            let unit = if scalar < 0x10000 { scalar } else { scalar - SURROGATE_OFFSET };
+            out.push(unit as i64);
+        }
+    }
+
+    fn blob(&mut self, out: &mut Vec<i64>) {
+        let len = self.word();
+        out.push(len);
+        out.extend(self.words.by_ref().take(len as usize));
+    }
+
+    fn clock(&mut self, out: &mut Vec<i64>) {
+        self.key(out); // owner
+        out.extend(self.words.by_ref().take(4));
+    }
+
+    fn entries(&mut self, out: &mut Vec<i64>, mut value: impl FnMut(&mut Self, &mut Vec<i64>)) {
+        let count = self.word();
+        out.push(count);
+        let mut entries = Vec::new();
+        for _ in 0..count {
+            let ordinal = self.word();
+            let mut entry = Vec::new();
+            self.key(&mut entry);
+            value(self, &mut entry);
+            entries.push((ordinal, entry));
+        }
+        entries.sort_unstable_by_key(|(ordinal, _)| *ordinal);
+        for (_, entry) in entries {
+            out.extend(entry);
+        }
+    }
+
+    fn runs(&mut self, out: &mut Vec<i64>) {
+        self.entries(out, |wire, entry| entry.push(wire.word()));
+    }
+}
+
+fn wire_words(code: Option<i64>, reply: sol::Reply) -> Vec<i64> {
     let mut out = Vec::with_capacity(reply.words.len());
-    for (i, word) in reply.words.into_iter().map(Some).chain([None]).enumerate() {
-        while keys.peek().is_some_and(|key| key.offset == i as i64) {
-            let key = keys.next().unwrap();
-            out.push(key.s.chars().count() as i64);
-            for c in key.s.chars() {
-                let scalar = c as u32;
-                let unit = if scalar < 0x10000 { scalar } else { scalar - SURROGATE_OFFSET };
-                out.push(unit as i64);
+    let mut wire = Wire { words: reply.words.into_iter(), keys: reply.keys.into_iter() };
+    match code {
+        None => {
+            wire.entries(&mut out, Wire::blob);
+            wire.entries(&mut out, |wire, entry| {
+                wire.clock(entry);
+                wire.runs(entry);
+            });
+            wire.entries(&mut out, |wire, entry| wire.entries(entry, |_, _| {}));
+        }
+        Some(4 | 12 | 16 | 17) => wire.entries(&mut out, |_, _| {}),
+        Some(8 | 11) => {
+            let found = wire.word();
+            out.push(found);
+            if found == 1 {
+                if code == Some(8) {
+                    wire.clock(&mut out);
+                    out.push(wire.word());
+                } else {
+                    wire.runs(&mut out);
+                }
             }
         }
-        out.extend(word);
+        _ => out.extend(wire.words.by_ref()),
     }
-    assert!(keys.next().is_none(), "unordered reply key offsets");
+    assert!(wire.words.next().is_none() && wire.keys.next().is_none(), "extra reply data");
     out
 }
 
@@ -192,19 +258,20 @@ fn churn() {
         assert_eq!(reply.words, [expected]);
     };
     apply(&mut st, &keep, 1);
-    let mut peak = 0;
+    let capacity_bound = st.tools.capacity() + 16;
+    let mut peak = st.tools.capacity();
     for _ in 0..200_000 {
         apply(&mut st, &keep, 0);
         apply(&mut st, &create, 1);
+        peak = peak.max(st.tools.capacity());
         apply(&mut st, &delete, 1);
         assert_eq!(st.tools.len(), 1);
-        assert_eq!(st.turn_order.first().map(String::as_str), Some("t0"));
-        let slots = st.turn_order.len();
-        assert!(slots <= 2 * st.tools.len() + 16);
-        peak = peak.max(slots);
+        assert_eq!(st.tools.get("t0").map(|tool| tool.ordinal), Some(0));
+        assert!(peak <= capacity_bound);
     }
-    println!("m4typed: churn 200000 deletions, live=1 peak={peak} final={} bound=18",
-             st.turn_order.len());
+    assert_eq!(st.next_tools, 200_001);
+    println!("m4typed: churn 200000 deletions, live=1 peak_capacity={peak} final_capacity={} bound={capacity_bound}",
+             st.tools.capacity());
 }
 
 fn main() -> io::Result<()> {
@@ -236,7 +303,7 @@ fn main() -> io::Result<()> {
                 match exec(st, &op) {
                     Some((code, reply)) if reply.status == 0 => {
                         let prefix = if code == 18 { "stats" } else { "ok" };
-                        write_words(&mut out, prefix, &wire_words(reply))?;
+                        write_words(&mut out, prefix, &wire_words(Some(code), reply))?;
                     }
                     _ => writeln!(out, "invalid")?,
                 }
@@ -244,7 +311,7 @@ fn main() -> io::Result<()> {
             Some("observe") => {
                 let reply = sol::m4_observe(state.as_mut().expect("observe before init"));
                 assert_eq!(reply.status, 0);
-                let words = wire_words(reply);
+                let words = wire_words(None, reply);
                 write_words(&mut out, &format!("observe {}", words.len()), &words)?;
             }
             None => {}

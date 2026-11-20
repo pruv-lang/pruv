@@ -491,6 +491,7 @@ def perf(args):
                 for side in sides:
                     samples[side].append(sample(commands[side] + [item, str(d), str(args.reps)]))
             p, h = [tuple(map(statistics.median, zip(*samples[side]))) for side in commands]
+            print(json.dumps({"raw": item, "d": d, "samples": samples}), file=sys.stderr)
             hold = p[0] > h[0] and min(s[0] for s in samples["pruv"]) > max(s[0] for s in samples["hand"])
             if hold:
                 holds.append((item, d))
