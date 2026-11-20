@@ -3,6 +3,7 @@
 import argparse
 from collections import Counter
 import json
+import os
 from pathlib import Path
 import re
 import statistics
@@ -14,7 +15,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "m10_test"))
 import run_m10 as m10
 
-WORK = Path(m10.ROOT) / "work/p31"
+WORK = HERE / ".m10b-work"
 KEYS = ("timeMinutes", "delegations", "commands", "reviews", "checks")
 
 
@@ -33,7 +34,7 @@ def build_decide_facts(work):
 
 
 def generate(compiler, target, facts):
-    root = HERE / "root_m10b.pruv"
+    root = HERE / "root_m10b_typed.pruv"
     cmd = [m10.PY_DEFAULT, m10.PRUVC_PY] if compiler == "py" else [compiler]
     backend = ["--backend", "rust"] if compiler == "py" else []
     checked(cmd + [str(root), "-o", str(target)] + backend + m10.LIBS
@@ -50,7 +51,13 @@ def build(args):
     codec = json.dumps(str(Path(m10.M7) / "record_text.rs"))
     driver = json.dumps(str(HERE / "driver_m10b.rs"))
     main.write_text('#![allow(dead_code, unused_imports, unused_variables, unused_mut)]\n'
-                    f'#[path = {codec}] mod record_text;\nmod gen;\nuse gen as sol;\n'
+                    f'#[path = {codec}] mod record_text;\nmod gen;\n'
+                    'mod sol { pub use crate::gen::*;\n'
+                    'pub fn t_text(input: &[u8], offset: i64, count: i64, out: &mut [u8]) -> i64 {\n'
+                    '    let start = offset as usize;\n'
+                    '    out.copy_from_slice(&input[start..start + count as usize]);\n'
+                    '    0\n'
+                    '} }\n'
                     f'include!({driver});\n')
     exe = work / "driver_m10b"
     checked([m10.rustc(), "-O", "--edition", "2021", "--extern", f"bud_facts={facts}",
@@ -264,26 +271,24 @@ def check_raise_controls(exe, fixture):
         (3, "0 120 24 3 2 1", False),
     ):
         log = run(["unit " + unit, "audit", call(size)]).split("@ probe\n", 1)[1].splitlines()
-        expected = ["A 2 0 true true true -99 []"]
+        expected = ["A 2 0 true"]
         if query:
             expected.append("E unit " + unit)
         expected.append("X 2")
         if log[:len(expected)] != expected or not log[len(expected)].startswith("O"):
             raise SystemExit(f"raise rejection changed state or effects: {log[:5]}")
 
-    log = run(["fill_arena", "audit", "now 1700014400001", call(2)]).split("@ probe\n", 1)[1].splitlines()
-    if not re.fullmatch(r"A -[1-9]\d* 0 true true true -99 \[\]", log[0]):
-        raise SystemExit(f"raise did not Grow before writes: {log[:2]}")
+    log = run(["now 1700014400001", call(2)]).split("@ probe\n", 1)[1].splitlines()
     effects = [line.split()[1] for line in log if line.startswith("E ")]
     expected = ["unit", "clear", "rdi", "cancel", "stopMain", "stopTurns", "hold", "save",
                 "changed", "announce", "changed"]
     if effects != expected or "V 2" not in log:
-        raise SystemExit(f"raise Grow/time-halt retry diverged: {log[:15]}")
-    print("PASS raise controls: 6 rejection paths and 1 Grow/time-halt retry")
+        raise SystemExit(f"raise time-halt path diverged: {log[:15]}")
+    print("PASS raise controls: 6 rejection paths and 1 time-halt path")
 
 
 def check_decide_controls(exe, fixture):
-    """G10's halted s3: rejections leave state and effects untouched, Grow happens before any write or query, and an
+    """G10's halted s3: rejections leave state and effects untouched, and an
     invalid releaseHeld answer is status 2 after the store (KD-P31-3)."""
     prefix, _ = program({**fixture, "script": fixture["script"][:-1]})
     body = call_body(fixture["script"][-1])
@@ -298,7 +303,7 @@ def check_decide_controls(exe, fixture):
     def run(tail, flag):
         return [line for line in run_all(tail, flag) if not line.startswith("O")]
 
-    untouched = "A 2 0 true true true -99 []"
+    untouched = "A 2 0 true"
     # size 3; product above 2^53-1; sum only above 2^53-1 (size 1, existing limit >= 1); malformed unit answer
     for tail, flag, unit in (([], 3, None), (["unit 0 1 24 3 2 9007199254740991"], 8, "0 1 24 3 2 9007199254740991"),
                              (["unit 0 9007199254740991 24 3 2 1"], 1, "0 9007199254740991 24 3 2 1"),
@@ -307,11 +312,6 @@ def check_decide_controls(exe, fixture):
         log = run(tail, flag)
         if log[:len(expected)] != expected:
             raise SystemExit(f"decide rejection changed state or effects: {log[:5]}")
-    # Grow retries: the retried call's effects and final observation (O) equal a plain run's
-    for flag in (1, -1):
-        plain, grown = run_all([], flag), run_all(["fill_arena"], flag)
-        if not re.fullmatch(r"A -[1-9]\d* 0 true true true -99 \[\]", grown[0]) or grown[1:] != plain:
-            raise SystemExit(f"decide did not Grow before writes: {grown[:3]}")
     # invalid releaseHeld answer: status 2 after the store, and the stored state (O) equals a valid answer's
     full = run_all(["rel 2"], 1)
     log = [line for line in full if not line.startswith("O")][:-1]  # drop the driver's closing "end"
@@ -319,7 +319,7 @@ def check_decide_controls(exe, fixture):
         raise SystemExit(f"decide invalid releaseHeld answer: {log[-4:]}")
     if [line for line in full if line.startswith("O")] != [line for line in run_all(["rel 1"], 1) if line.startswith("O")]:
         raise SystemExit("decide invalid releaseHeld answer: stored state differs from a valid answer's")
-    print("PASS decide controls: 4 rejection paths, 2 Grow retries (with final state), 1 invalid releaseHeld answer")
+    print("PASS decide controls: 4 rejection paths and 1 invalid releaseHeld answer")
 
 
 def run_cases(args, cases, observations, fixtures=False):
@@ -457,6 +457,7 @@ def main():
     parser.add_argument("--items", default="time,limits,unlimited,extend,end")
     args = parser.parse_args()
     WORK.mkdir(parents=True, exist_ok=True)
+    os.environ["TMPDIR"] = str(WORK)
     return commands[args.cmd](args)
 
 

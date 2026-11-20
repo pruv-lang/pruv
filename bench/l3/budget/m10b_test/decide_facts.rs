@@ -9,6 +9,7 @@ pub struct Release {
     pub sid: Vec<i64>,
     pub bid: Vec<i64>,
     pub answer: i64,
+    pub text: Option<(String, String)>,
 }
 
 thread_local! {
@@ -56,7 +57,17 @@ pub fn release_held(k: &[i64], ks: i64, kn: i64, bk: &[i64], bs: i64, bn: i64, f
     let answer = ANSWERS.with(|a| a.borrow().get(i).copied().unwrap_or(0));
     LOG.with(|l| {
         if let Some(l) = l.borrow_mut().as_mut() {
-            l.push(Release { fxn, sid: framed(k, ks, kn), bid: framed(bk, bs, bn), answer });
+            l.push(Release { fxn, sid: framed(k, ks, kn), bid: framed(bk, bs, bn), answer, text: None });
+        }
+    });
+    answer
+}
+
+pub fn release_held_text(sid: &str, bid: &str, position: i64) -> i64 {
+    let answer = release_held(&[], 0, 0, &[], 0, 0, position);
+    LOG.with(|l| {
+        if let Some(last) = l.borrow_mut().as_mut().and_then(|log| log.last_mut()) {
+            last.text = Some((sid.to_owned(), bid.to_owned()));
         }
     });
     answer
