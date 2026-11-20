@@ -84,7 +84,8 @@ go through it), under trust_callers the pub entry is unchecked and `<entry>__pru
 """
 from collections import namedtuple
 from vast import *
-from typeinfo import TypeTable, is_user_type, is_array, uses_array_type, uses_str, is_collection, dependencies, is_owned_field_type
+from typeinfo import (TypeTable, is_user_type, is_array, uses_array_type, uses_str, is_collection,
+                      dependencies, is_owned_field_type, is_nested_collection_field)
 from foreign import CATALOG
 from inline_policy import PIN_INLINE, PIN_ALWAYS, inline_policy
 from check import BIT_BUILTINS
@@ -253,8 +254,9 @@ def is_str(t):
 
 
 def len_params(f):
-    """T0: the parameters whose length the public entry checks against 2^40 (arrays, including inout arrays, and str)"""
-    return [p for p in f.params if p.type is not None and (is_array(p.type) or is_str(p.type))]
+    """T0: arrays, str and borrowed String parameters checked against 2^40 at public entries."""
+    return [p for p in f.params if p.type is not None
+            and (is_array(p.type) or is_str(p.type) or f.host_entry and p.type.name == "string")]
 
 
 def len_guard(f):
@@ -270,7 +272,7 @@ def len_guard(f):
         return []
     names = [p.name for p in ps]
     checks = " ".join('if (%s as u64) > (1u64 << 40) { panic!("pruv: invalid representation: {} (%s)", %s) }'
-                      % (p.name, "str length" if is_str(p.type) else "array length", p.name) for p in ps)
+                      % (p.name, "str length" if p.type.name in ("str", "string") else "array length", p.name) for p in ps)
     big = " | ".join("((%s.len() as u64) > (1u64 << 40))" % n for n in names)
     return ['#[cold] #[inline(never)] fn pruv_len_slow(%s) -> ! { %s unreachable!() }'
             % (", ".join("%s: usize" % n for n in names), checks),
@@ -2066,6 +2068,11 @@ class Gen:
             msg = "variant_field expected %s::%s.%s" % (getattr(e, "src_name", e.enum_name), e.variant, e.field)
             return ("({ let %s: &%s = %s; match %s { %s::%s(%s) => { let pruv_r: &%s = pruv_f; pruv_r } _ => pruv_ud(%s) } })" % (
                 tmp, e.enum_name, s.cx(e.value), tmp, e.enum_name, e.variant, pats, rty(vf.fields[idx].type), rstr(msg)))
+        if isinstance(e, Call) and e.name == "some_val" and isinstance(e.args[0], Call):
+            lookup = e.args[0]
+            if (s.is_ext(e.ty) and lookup.name == "map_lookup" and lookup.name not in s.fmap
+                    and lookup.args[0].ty.args[0].name == "string"):
+                return s.c(e)
         if isinstance(e, (EnumCtor, StructLit)):
             # a constructor (with or without payload) is a REAL temporary value of the type; a reference to it lives
             # through the enclosing statement. Contract integers are i128: every i64 field is converted with a checked
@@ -2388,9 +2395,16 @@ class Gen:
                 return "((%s).port as i128)" % s.c(a[0])
             if n == "map_lookup":   # G6: finite-map lookup, Option mirror of the stored value
                 kt, vt = a[0].ty.args[0], a[0].ty.args[1]
-                key = s.c(a[1])
+                key = s.carr(a[1]) if kt.name == "string" else s.c(a[1])
                 if kt == I64:
                     look = "i64::try_from(%s).ok().and_then(|pruv_k| %s.get(&pruv_k).copied())" % (key, s.carr(a[0]))
+                elif kt.name == "string":
+                    if a[1].ty.name == "string" or isinstance(a[1], (FieldAccess, VariantField)):
+                        key += ".as_str()"
+                    look = "%s.get(%s)" % (s.carr(a[0]), key)
+                    if s.is_ext(vt):
+                        return look
+                    look += ".copied()"
                 else:
                     look = "%s.get(&%s).copied()" % (s.carr(a[0]), key)
                 return "(%s)" % conv(mk_option(vt), "(%s)" % look)
@@ -2811,11 +2825,18 @@ class Gen:
         elif isinstance(st, FieldAssign):
             vty = st.value.ty
             call = st.value
-            if (isinstance(call, Call) and call.name == "vec_push" and isinstance(call.args[0], Move)
+            if (isinstance(call, Call) and (call.name == "vec_push"
+                    or call.name == "map_insert" and is_nested_collection_field(vty))
+                    and call.name not in s.fmap and isinstance(call.args[0], Move)
                     and call.args[0].fields and s.unchecked_catalog()):
                 args = tuple(call.inst.get("src_args", call.inst["args"]))
+                if call.name == "vec_push":
+                    s.fg.record_inline_catalog(call.name, args)
+                    s.emit(ind, "%s.%s.push(%s);" % (st.name, ".".join(st.fields), s.e(call.args[1])))
+                    return
                 s.fg.record_inline_catalog(call.name, args)
-                s.emit(ind, "%s.%s.push(%s);" % (st.name, ".".join(st.fields), s.e(call.args[1])))
+                s.emit(ind, "%s.%s.insert(%s, %s);" %
+                       (st.name, ".".join(st.fields), s.e(call.args[1]), s.e(call.args[2])))
                 return
             if (vty is not None and is_collection(vty)) or (st.name in s.inouts and not (s.boxed and s.path_boxed(st.name, st.fields))):
                 s.emit(ind, "%s.%s = %s;" % (st.name, ".".join(st.fields), s.own_e(st.value) if vty is None or not is_collection(vty) else s.e(st.value)))
@@ -2887,11 +2908,13 @@ class Gen:
             s.match_ext(st, ind)
         elif isinstance(st, Match):
             sc = st.scrutinee
-            map_call = isinstance(sc, Call) and sc.name not in s.fmap and sc.name in ("map_get", "map_get_mut")
-            ty = sc.inst["args"][1] if map_call else None
-            mutable_map = map_call and sc.name == "map_get_mut"
+            from foreign import MUTABLE_COLLECTION_MATCH
+            collection_call = (isinstance(sc, Call) and sc.name not in s.fmap
+                               and sc.name in MUTABLE_COLLECTION_MATCH + ("map_get",))
+            ty = sc.inst["args"][-1] if collection_call else None
+            mutable_map = collection_call and sc.name in MUTABLE_COLLECTION_MATCH
             scoped = False
-            if mutable_map or map_call and s.is_ext(ty):
+            if mutable_map or collection_call and s.is_ext(ty):
                 from foreign_shim import inst_types
                 s.fg.record_inline_catalog(sc.name, inst_types(sc)[1])
                 place, key = sc.args
@@ -2900,14 +2923,20 @@ class Gen:
                 receiver = s.e(place)
                 if not isinstance(place, (Var, FieldAccess)):
                     receiver = "(%s)" % receiver
-                key_text = s.e(key)
-                scoped = mutable_map and not isinstance(key, (Var, IntLit, BoolLit))
+                text_key = sc.name != "vec_at_mut" and sc.inst["args"][0].name == "string"
+                key_text = s.borrowed_map_key(key) if text_key else s.e(key)
+                simple_key = (Var, FieldAccess, StrLit) if text_key else (Var, IntLit, BoolLit)
+                scoped = mutable_map and not isinstance(key, simple_key)
                 if scoped:
                     s.emit(ind, "{")
                     ind += 1
                     s.emit(ind, "let pruv_key = %s;" % key_text)
                     key_text = "pruv_key"
-                scrutinee = "%s.%s(&%s)" % (receiver, "get_mut" if mutable_map else "get", key_text)
+                if sc.name == "vec_at_mut":
+                    key_text = "<usize as ::std::convert::TryFrom<i64>>::try_from(%s).unwrap_or(usize::MAX)" % key_text
+                elif not text_key:
+                    key_text = "&" + key_text
+                scrutinee = "%s.%s(%s)" % (receiver, "get_mut" if mutable_map else "get", key_text)
             else:
                 scrutinee = s.e(sc)
             s.emit(ind, "match %s {" % scrutinee)
@@ -2916,7 +2945,7 @@ class Gen:
                 pat = name if not a.binders else "%s(%s)" % (name, ", ".join(a.binders))
                 s.emit(ind + 1, "%s => {" % pat)
                 saved_inouts, saved_refs, saved_vt = set(s.inouts), set(s.refs), dict(s.vt)
-                if map_call and a.binders:
+                if collection_call and a.binders:
                     b = a.binders[0]
                     s.vt[b] = ty
                     if mutable_map:
@@ -3083,12 +3112,24 @@ class Gen:
     def unchecked_catalog(s):
         return s.verified and s.fmode != "all" and not any(f.foreign is not None for f in s.prog.functions)
 
+    def borrowed_map_key(s, key):
+        if isinstance(key, StrLit):
+            return str_lit(key.value)
+        if key.ty.name == "string":
+            return "%s.as_str()" % s.e(key)
+        return s.arr_ref(key)
+
     def catalog_call(s, e):
         """executable catalog operation -> call of its private boundary helper"""
         from foreign import CATALOG
         cat = CATALOG[e.name]
         low = tuple(e.inst["args"]) if e.inst else ()
         src = tuple(e.inst.get("src_args", low)) if e.inst else ()
+        if e.name == "map_remove":
+            s.fg.record_inline_catalog(e.name, src)
+            place, key = e.args
+            k = s.borrowed_map_key(key) if low[0].name == "string" else "&" + s.e(key)
+            return "%s.remove(%s).is_some()" % (s.e(place.expr), k)
         # A bound proof can depend on an unchecked user foreign postcondition.
         if e.name == "vec_get" and s.is_ext(low[-1]):
             s.fg.record_inline_catalog(e.name, src)
@@ -3106,7 +3147,9 @@ class Gen:
             return s.e(e.args[0])
         args = []
         for p, x in zip(cat.params, e.args):
-            if is_collection(p.type):
+            if e.name == "map_get" and p.name == "k" and low[0].name == "string":
+                args.append(s.borrowed_map_key(x))
+            elif is_collection(p.type):
                 args.append(s.e(x) if p.take else s.cref(x))
             elif p.type == STR or (e.name in ("file_write_bytes", "proc_write_bytes", "net_write_bytes", "ev_write", "ev_proc_write", "ev_proc_write_for") and p.type == ARRAY_U8):
                 args.append(s.arr_ref(x))
@@ -3122,7 +3165,7 @@ class Gen:
         if isinstance(e, BoolLit):
             return "true" if e.value else "false"
         if isinstance(e, Var):
-            if e.name in s.inouts and not (is_array(e.ty) or s.is_ext(e.ty)):
+            if e.name in s.inouts and not (is_array(e.ty) or is_collection(e.ty) or s.is_ext(e.ty)):
                 return "(*%s)" % e.name
             return e.name
         if isinstance(e, Move):   # G6: Rust moves
@@ -3608,10 +3651,17 @@ def gen_rust_ex(prog, verified=True, trust_callers=False, budget=1 << 30, plan=N
     if foreign_checks not in ("requires", "all", "off"):
         raise ValueError("foreign_checks must be requires, all or off")
     if getattr(prog, "raw_entries", None) == "c":
+        ext, _ = g9_sets(prog)
         for f in prog.functions:
-            if f.host_entry and any(p.mode == "inout" and not is_array(p.type) for p in f.params):
+            if not f.host_entry:
+                continue
+            if any(p.mode == "inout" and not is_array(p.type) for p in f.params):
                 raise PruvError("codegen", f.line, f.col, "unsupported_type",
                                 "host entry %s takes an inout struct, which has no C ABI" % f.name,
+                                "use Rust raw_entries crate or unsafe", file=getattr(f, "file", None))
+            if any(is_collection(p.type) or p.type.name in ext for p in f.params):
+                raise PruvError("codegen", f.line, f.col, "unsupported_type",
+                                "host entry %s takes a collection-bearing parameter, which has no C ABI" % f.name,
                                 "use Rust raw_entries crate or unsafe", file=getattr(f, "file", None))
     from check import opaque_inline
     opaque_inline(prog)     # P13o: contract applications of opaque functions become their bodies

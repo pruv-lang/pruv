@@ -6,7 +6,7 @@ passes through unchanged."""
 import re
 
 from vast import *
-from typeinfo import TypeTable, fn_owner, is_collection, contains_collection, is_owned_field_type, type_name, is_nongeneric_struct
+from typeinfo import TypeTable, fn_owner, is_collection, contains_collection, is_owned_field_type, is_nested_collection_field, type_name, is_nongeneric_struct
 from refine import _kids as expr_kids
 
 
@@ -60,6 +60,11 @@ _add("map_new", _KV, lambda K, V: ([], _map(K, V)), ["alloc"])
 _add("map_get", _KV, lambda K, V: ([_p("m", _map(K, V)), _p("k", K)], mk_option(V)))
 _add("map_get_mut", _KV, lambda K, V: ([_p("m", _map(K, V)), _p("k", K)], mk_option(V)))
 CATALOG["map_get_mut"].params[0].mode = "inout"
+_add("map_remove", _KV, lambda K, V: ([_p("m", _map(K, V)), _p("k", K)], BOOL))
+CATALOG["map_remove"].params[0].mode = "inout"
+_add("vec_at_mut", _T, lambda T: ([_p("v", _vec(T)), _p("i", I64)], mk_option(T)))
+CATALOG["vec_at_mut"].params[0].mode = "inout"
+
 _add("map_insert", _KV, lambda K, V: ([_p("m", _map(K, V), True), _p("k", K), _p("v", V)], _map(K, V)), ["alloc"])
 _add("string_new", [], lambda: ([], STRING), ["alloc"])
 _add("string_push_str", [], lambda: ([_p("s", STRING, True), _p("text", STR)], STRING), ["alloc"])
@@ -168,6 +173,8 @@ _add("map_lookup", _KV, lambda K, V: ([_p("m", _map(K, V)), _p("k", K)], mk_opti
 _add("map_updated", _KV, lambda K, V: ([_p("after", _map(K, V)), _p("before", _map(K, V)), _p("k", K), _p("v", V)],
                                        BOOL))
 CATALOG_NAMES = tuple(CATALOG)
+MUTABLE_COLLECTION_MATCH = ("map_get_mut", "vec_at_mut")
+BORROWED_MAP_KEY = ("map_get", "map_get_mut", "map_remove", "map_lookup")
 CATALOG_CONTRACT_ONLY = ("map_lookup", "map_updated")
 FILE_OBSERVERS = ("file_ok", "file_readable", "file_writable", "file_size", "file_byte")
 # G10 proc A0: the observers allowed in contracts; every other proc_* operation (effects, allocating proc_bytes)
@@ -572,9 +579,15 @@ class _Ownership:
 
     def takes(s, e):
         f = s.funcs.get(e.name) or CATALOG.get(e.name)
-        if e.name in ("vec_push", "map_insert") and is_nongeneric_struct(e.args[-1].ty, s.types):
-            return [bool(p.take) for p in f.params[:-1]] + [True]
-        return [bool(p.take) for p in f.params] if f is not None else [False] * len(e.args)
+        takes = [bool(p.take) for p in f.params] if f is not None else [False] * len(e.args)
+        if e.name in ("vec_push", "map_insert") and e.args:
+            if is_nongeneric_struct(e.args[-1].ty, s.types):
+                takes[-1] = True
+            if e.name not in s.funcs:
+                takes[-1] |= e.args[-1].ty == STRING
+                if e.name == "map_insert":
+                    takes[1] = e.args[1].ty == STRING
+        return takes
 
     def call(s, e, st):
         outer = s.track
@@ -628,6 +641,8 @@ def _g6_candidates(node, out):
         return
     if isinstance(node, Let) and contains_collection(node.type):
         out.append((node.line, node.col, "a collection local"))
+    elif isinstance(node, InoutArg) and node.ty is not None and is_collection(node.ty):
+        out.append((node.line, node.col, "a mutable collection place"))
     elif isinstance(node, Move):
         out.append((node.line, node.col, "move"))
     elif isinstance(node, Call) and node.ty is not None and contains_collection(node.ty):
@@ -653,7 +668,8 @@ def first_g6_use(prog):
             return min(cands, key=lambda c: (c[0], c[1]))
     for d in prog.types:
         for fd in TypeTable._all_fields(d):
-            if is_owned_field_type(fd.type):
+            if (is_owned_field_type(fd.type) or is_nested_collection_field(fd.type)
+                    or fd.type.name == "hashmap" and fd.type.args[0] == STRING):
                 return (fd.line, fd.col, "an owned collection field")
     return None
 

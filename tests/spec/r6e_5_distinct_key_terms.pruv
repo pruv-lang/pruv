@@ -1,0 +1,6 @@
+// spec: R-6e-5 reject
+fn f(take k: String, other: String) -> HashMap<String, bool> ! alloc
+  ensures is_some(map_lookup::<String, bool>(result, other))
+{
+  return map_insert::<String, bool>(map_new::<String, bool>(), move k, true);
+}

@@ -1,0 +1,7 @@
+// spec: R-6e-5 accept
+fn f(take k: String) -> HashMap<String, i64> ! alloc
+  ensures is_some(map_lookup::<String, i64>(result, k))
+  ensures some_val(map_lookup::<String, i64>(result, k)) == 7
+{
+  return map_insert::<String, i64>(map_new::<String, i64>(), move k, 7);
+}

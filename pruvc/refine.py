@@ -23,6 +23,7 @@ nodes are typed by the ordinary checker and consumed unchanged by verify/codegen
 Without a refinement annotation nothing is changed at all."""
 import copy
 from vast import *
+from typeinfo import field_place
 
 I64_MIN, I64_MAX = -2 ** 63, 2 ** 63 - 1
 MAX_LEN = 2 ** 40
@@ -156,8 +157,10 @@ def pick_bound_name(names):
 
 
 def _inout_operands(e, out):
-    if isinstance(e, InoutArg) and isinstance(e.expr, Var):
-        out.add(e.expr.name)
+    if isinstance(e, InoutArg):
+        root, _ = field_place(e.expr)
+        if isinstance(root, Var):
+            out.add(root.name)
     for k in _kids(e):
         _inout_operands(k, out)
 

@@ -187,9 +187,13 @@ pub(crate) fn key_is_scalar_vec(key: &str) -> bool {
     matches!(key, "vec<i64>" | "vec<bool>")
 }
 
+pub(crate) fn key_is_nested_collection_field(key: &str) -> bool {
+    matches!(key, "vec<string>" | "hashmap<string,bool>" | "hashmap<i64,bool>")
+}
+
 /// Collection types permitted as owned fields of non-generic declarations.
 pub(crate) fn key_is_owned_field(key: &str) -> bool {
-    key_is_scalar_vec(key) || key == "string"
+    key_is_scalar_vec(key) || key == "string" || key_is_nested_collection_field(key)
 }
 
 // ---------- keys: the string form carried in the AST (ast.rs `Type = String`) ----------

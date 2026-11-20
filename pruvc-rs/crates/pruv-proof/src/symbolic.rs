@@ -1050,7 +1050,7 @@ impl<'a> FnVerifier<'a> {
                 }
                 Coll::Map(k, v) => {
                     // ks, vs = sort_of(K), sort_of(V) in this order (instance numbering of generic datatypes)
-                    let ks = self.model.try_sort_of(&Ty::from_gtype(&k))?;
+                    let ks = self.model.map_key_sort(&k)?;
                     let vs = self.model.try_sort_of(&Ty::from_gtype(&v))?;
                     let d_sort = z.array_sort(&ks, &z.bool_sort());
                     let a_sort = z.array_sort(&ks, &vs);
@@ -2877,8 +2877,8 @@ impl<'a> FnVerifier<'a> {
                 _ => return Err("inout_finals: missing inout argument".to_string()),
             };
             let pre = cenv.get(&old_key(pname));
-            let Val::Arr(pre) = pre else {
-                let ty = Ty::from_name(&f.params[i].ty);
+            let ty = Ty::from_name(&f.params[i].ty);
+            if !matches!(pre, Val::Arr(_)) {
                 let nv = self.try_fresh(&name, &ty)?;
                 if let Some(wf) = self.wf_of_val(&ty, &nv)? {
                     self.assume(st, g, wf);
@@ -2886,8 +2886,10 @@ impl<'a> FnVerifier<'a> {
                 cenv.set(pname, nv.clone());
                 st.env.set(&name, nv);
                 continue;
-            };
-            let fv = self.try_fresh(&name, &pre.array_ty())?;
+            }
+            let Val::Arr(pre) = pre else { unreachable!() };
+            let fresh_ty = if matches!(ty.coll(), Some(Coll::Vec(_))) { ty } else { pre.array_ty() };
+            let fv = self.try_fresh(&name, &fresh_ty)?;
             let fa = fv.try_arr()?.clone();
             let nv = pre.like(fa.a.clone(), pre.n.clone(), &name);
             if nv.elem == Elem::U8 {
@@ -3596,7 +3598,7 @@ impl<'a> FnVerifier<'a> {
                 let r = self.try_fresh(n, &rt)?;
                 if n == "map_new" {
                     let r = r.try_map()?.clone();
-                    let ksort = self.model.try_sort_of(&Ty::from_gtype(&r.kty))?;
+                    let ksort = self.model.map_key_sort(&r.kty)?;
                     let kt = z.const_array(&ksort, &z.bool_val(false));
                     return Ok(Val::Map(MapV { d: kt, a: r.a.clone(), n: z.int(0), name: n.to_string(), kty: r.kty.clone(), vty: r.vty.clone() }));
                 }
@@ -3605,7 +3607,7 @@ impl<'a> FnVerifier<'a> {
             }
             "vec_push" => {
                 let v = argv(0)?.try_arr()?.clone();
-                let xv = argv(1)?.try_ast()?.clone();
+                let xv = self.field_put(&v.elem_ty(), argv(1)?)?;
                 if code {
                     let ob = v.n.lt_i(MAX_LEN);
                     self.prove_core(&st, g, &ob, pos(e), "call_requires", &what, None);
@@ -3641,13 +3643,13 @@ impl<'a> FnVerifier<'a> {
             }
             "map_get" | "map_lookup" => {
                 let m = argv(0)?.try_map()?.clone();
-                let k = argv(1)?.try_ast()?.clone();
+                let k = self.map_key(&m.kty, argv(1)?)?;
                 self.map_lookup(&m, &k, rty.as_ref())
             }
             "map_insert" => {
                 let m = argv(0)?.try_map()?.clone();
-                let k = argv(1)?.try_ast()?.clone();
-                let xv = argv(2)?.try_ast()?.clone();
+                let k = self.map_key(&m.kty, argv(1)?)?;
+                let xv = self.field_put(&Ty::from_gtype(&m.vty), argv(2)?)?;
                 let has = m.d.select(&k);
                 if code {
                     let ob = z.or(&[has.clone(), m.n.lt_i(MAX_LEN)]);
@@ -3663,12 +3665,23 @@ impl<'a> FnVerifier<'a> {
                     vty: m.vty.clone(),
                 }))
             }
+            "map_remove" => {
+                let mut m = argv(0)?.try_map()?.clone();
+                let k = self.map_key(&m.kty, argv(1)?)?;
+                let has = m.d.select(&k);
+                self.assume(st, g, has.implies(&m.n.gt_i(0)));
+                m.d = m.d.store(&k, &z.bool_val(false));
+                m.n = m.n.sub(&z.ite(&has, &z.int(1), &z.int(0)));
+                let Expr::InoutArg(place) = &x.args[0] else { return Err("missing inout place".into()) };
+                self.store_collection_place(&place.expr, &mut st.env, Val::Map(m))?;
+                Ok(Val::Bool(has))
+            }
             "map_updated" => {
                 let aft = argv(0)?.try_map()?.clone();
                 let bef = argv(1)?.try_map()?.clone();
-                let k = argv(2)?.try_ast()?.clone();
-                let xv = argv(3)?.try_ast()?.clone();
-                let jsort = self.model.try_sort_of(&Ty::from_gtype(&aft.kty))?;
+                let k = self.map_key(&aft.kty, argv(2)?)?;
+                let xv = self.field_put(&Ty::from_gtype(&aft.vty), argv(3)?)?;
+                let jsort = self.model.map_key_sort(&aft.kty)?;
                 let j = z.constant("map!j", &jsort);
                 let c1 = aft.d.eq(&bef.d.store(&k, &z.bool_val(true)));
                 let c2 = aft.n.eq(&bef.n.add(&z.ite(&bef.d.select(&k), &z.int(0), &z.int(1))));
@@ -3703,6 +3716,33 @@ impl<'a> FnVerifier<'a> {
                 Ok(Val::Arr(Arr::new(a.a.clone(), a.n.clone(), n.to_string(), Elem::U8)))
             }
             other => Err(format!("catalog: {}", other)),
+        }
+    }
+
+    fn store_collection_place(&self, mut place: &Expr, env: &mut Env, value: Val) -> R<()> {
+        let mut path = Vec::new();
+        while let Expr::FieldAccess(f) = place {
+            path.push(f.field.as_str());
+            place = &f.base;
+        }
+        let Expr::Var(root) = place else { return Err("invalid collection place".into()) };
+        if path.is_empty() {
+            env.set(&root.name, value);
+        } else {
+            path.reverse();
+            let Val::Dt(term, ty) = env.get(&root.name) else { return Err("invalid collection root".into()) };
+            let rebuilt = self.try_rebuild_v(ty, term, &path, &value)?;
+            env.set(&root.name, Val::Dt(rebuilt, ty.clone()));
+        }
+        Ok(())
+    }
+
+    fn map_key(&self, ty: &GType, value: &Val) -> R<Ast> {
+        if ty.to_key() == "string" {
+            let key = value.try_arr()?;
+            Ok(self.model.text_map_key(&key.n, &key.a))
+        } else {
+            Ok(value.try_ast()?.clone())
         }
     }
 
@@ -4085,16 +4125,27 @@ impl<'a> FnVerifier<'a> {
             }
             Stmt::Match(s) => {
                 let mut st = st.fork(None);
-                let mut map_update = None;
+                let mut collection_update = None;
                 let sv = if let Expr::Call(call) = &s.scrutinee {
-                    if call.name == "map_get_mut" && !self.funcs.contains_key(&call.name) {
+                    if matches!(call.name.as_str(), "map_get_mut" | "vec_at_mut") && !self.funcs.contains_key(&call.name) {
                         let Expr::InoutArg(arg) = &call.args[0] else { return Err("missing inout place".into()) };
-                        let k = self.ev0_ast(&call.args[1], &mut st, &[], true)?;
-                        let m = self.ev0(&arg.expr, &mut st, &[], true)?.try_map()?.clone();
-                        let ty = Ty::from_name(call.ty.as_deref().ok_or("missing map result type")?);
-                        let v = self.map_lookup(&m, &k, Some(&ty))?;
-                        map_update = Some((arg.expr.as_ref(), m, k));
-                        v
+                        let collection = self.ev0(&arg.expr, &mut st, &[], true)?;
+                        let index = self.ev0(&call.args[1], &mut st, &[], true)?;
+                        let ty = Ty::from_name(call.ty.as_deref().ok_or("missing match result type")?);
+                        let (key, value) = if call.name == "vec_at_mut" {
+                            let v = collection.try_arr()?;
+                            let i = index.try_ast()?;
+                            let opt = self.model.opt(Some(&ty))?;
+                            let has = self.z.and(&[i.ge_i(0), i.lt(&v.n)]);
+                            (i.clone(), Val::Dt(self.z.ite(&has, &opt.some.apply1(&v.a.select(i)), &opt.none), ty))
+                        } else {
+                            let m = collection.try_map()?;
+                            let k = self.map_key(&m.kty, &index)?;
+                            let value = self.map_lookup(m, &k, Some(&ty))?;
+                            (k, value)
+                        };
+                        collection_update = Some((arg.expr.as_ref(), collection, key));
+                        value
                     } else {
                         self.ev0(&s.scrutinee, &mut st, &[], true)?
                     }
@@ -4172,25 +4223,18 @@ impl<'a> FnVerifier<'a> {
                         }
                     }
                     for mut end in self.exec_block(&a.body, b)? {
-                        if let (Some((place, before, key)), Some(name)) = (&map_update, a.binders.first()) {
-                            let mut after = before.clone();
-                            after.a = before.a.store(key, end.env.get(name).try_ast()?);
-                            let mut root = *place;
-                            let mut path = Vec::new();
-                            while let Expr::FieldAccess(f) = root {
-                                path.push(f.field.as_str());
-                                root = &f.base;
-                            }
-                            let Expr::Var(root) = root else { return Err("invalid map place".into()) };
-                            let value = Val::Map(after);
-                            if path.is_empty() {
-                                end.env.set(&root.name, value);
-                            } else {
-                                path.reverse();
-                                let Val::Dt(term, ty) = end.env.get(&root.name) else { return Err("invalid map root".into()) };
-                                let rebuilt = self.try_rebuild_v(ty, term, &path, &value)?;
-                                end.env.set(&root.name, Val::Dt(rebuilt, ty.clone()));
-                            }
+                        if let (Some((place, before, key)), Some(name)) = (&collection_update, a.binders.first()) {
+                            let value = end.env.get(name).try_ast()?;
+                            let after = match before {
+                                Val::Map(m) => {
+                                    let mut m = m.clone();
+                                    m.a = m.a.store(key, value);
+                                    Val::Map(m)
+                                }
+                                Val::Arr(v) => Val::Arr(v.like(v.a.store(key, value), v.n.clone(), &v.name)),
+                                _ => return Err("invalid mutable collection".into()),
+                            };
+                            self.store_collection_place(place, &mut end.env, after)?;
                         }
                         // The binder and the arm's local variables end with the arm; only updates to outer variables remain
                         let drop_keys: Vec<String> =

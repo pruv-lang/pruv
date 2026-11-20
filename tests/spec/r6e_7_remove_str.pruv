@@ -1,0 +1,12 @@
+// spec: R-6e-7 accept
+struct Rec { log: Vec<String> }
+struct St { recs: HashMap<String, Rec> }
+fn f(inout st: St, sid: String) -> bool
+  ensures !is_some(map_lookup::<String, Rec>(st.recs, sid))
+{
+  let before: i64 = len(st.recs);
+  let removed: bool = map_remove::<String, Rec>(inout st.recs, sid);
+  assert removed ==> len(st.recs) + 1 == before;
+  assert !removed ==> len(st.recs) == before;
+  return removed;
+}

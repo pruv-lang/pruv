@@ -318,7 +318,11 @@ impl ForeignGen {
         let mut name = format!("pruv_g6_{}", op);
         for t in src {
             name.push_str("__");
-            name.push_str(&encode(&safe_type_cow(t))?); // G4: nominal identities use their [0-9A-Za-z_] encoding
+            if t.to_key() == "string" {
+                name.push_str("string");
+            } else {
+                name.push_str(&encode(&safe_type_cow(t))?);
+            }
         }
         self.record_pkg_catalog(op, src.iter().map(format_type).collect());
         if !self.has_item(&name) {
@@ -422,7 +426,7 @@ impl ForeignGen {
                 if self.ens {
                     body.push("pruv_g6_charge(&mut pruv_budget, 1);".to_string()); // one visited element (G6_SPEC 12.3)
                 }
-                if self.ens && owned_payload {
+                if self.ens && (owned_payload || g(0)?.to_key() == "string") {
                     body.extend(self.ens_line("v.get(pruv_snap.len()).is_some()", "result contains the pushed value"));
                 } else {
                     body.extend(self.ens_line("v[pruv_snap.len()] == x", "result[len(v)] == x"));
@@ -459,21 +463,56 @@ impl ForeignGen {
                 let k = rty_g(g(0)?, false);
                 let m = rty_g(&GType::new("hashmap", vec![g(0)?.clone(), g(1)?.clone()]), false);
                 let opt = rty_g(&mk_option(g(1)?.clone()), false);
-                let mut body = vec![format!("let pruv_r: {} = m.get(&k).copied();", opt)];
+                let (key, key_type) = if g(0)?.to_key() == "string" { ("k", "&str") } else { ("&k", k.as_str()) };
+                let mut body = vec![format!("let pruv_r: {} = m.get({key}).copied();", opt)];
                 if self.ens {
                     body.push("pruv_g6_charge(&mut pruv_budget, 1);".to_string()); // one visited element (G6_SPEC 12.3)
                 }
                 body.extend(self.ens_line(
-                    "m.contains_key(&k) == pruv_r.is_some() && m.get(&k).copied() == pruv_r",
+                    &format!("m.contains_key({key}) == pruv_r.is_some() && m.get({key}).copied() == pruv_r"),
                     "result == map_lookup(m, k)",
                 ));
                 body.push("pruv_r".to_string());
-                Ok(self.fn_text(name, &format!("m: &{}, k: {}", m, k), Some(opt.as_str()), &body))
+                Ok(self.fn_text(name, &format!("m: &{}, k: {}", m, key_type), Some(opt.as_str()), &body))
             }
             "map_insert" => {
                 let k = rty_g(g(0)?, false);
                 let t = rty_g(g(1)?, false);
                 let m = rty_g(&GType::new("hashmap", vec![g(0)?.clone(), g(1)?.clone()]), false);
+                if g(0)?.to_key() == "string" {
+                    let mut body = self.req_line("(m.len() as u64) < (1u64 << 40) || m.contains_key(k.as_str())", "k in m || len(m) < 2^40");
+                    if self.ens {
+                        body.extend(self.snap(&m, "m"));
+                        body.extend([
+                            "let mut pruv_snap = pruv_snap;",
+                            "let pruv_len = pruv_snap.len();",
+                            "let pruv_present = pruv_snap.remove(k.as_str()).is_some();",
+                        ].map(str::to_string));
+                        if !owned_payload {
+                            body.push("let pruv_expected = v;".into());
+                        }
+                        body.extend([
+                            "let pruv_slot = match m.entry(k) {",
+                            "    ::std::collections::hash_map::Entry::Occupied(e) => { let slot = e.into_mut(); *slot = v; slot }",
+                            "    ::std::collections::hash_map::Entry::Vacant(e) => e.insert(v),",
+                            "};",
+                            "pruv_g6_charge(&mut pruv_budget, 1);",
+                        ].map(str::to_string));
+                        if !owned_payload {
+                            body.extend(self.ens_line("*pruv_slot == pruv_expected", "result[k] == v"));
+                        }
+                        body.extend(self.ens_line("m.len() == pruv_len + (if pruv_present { 0 } else { 1 })", "len(result) == len(m) + (k absent ? 1 : 0)"));
+                        body.push("for (key, value) in pruv_snap.iter() {".into());
+                        body.push("    pruv_g6_charge(&mut pruv_budget, 1);".into());
+                        let condition = if owned_payload { "m.contains_key(key.as_str())" } else { "m.get(key.as_str()) == Some(value)" };
+                        body.extend(self.ens_line(condition, "entries other than k are unchanged").into_iter().map(|line| format!("    {line}")));
+                        body.push("}".into());
+                    } else {
+                        body.push("let _ = m.insert(k, v);".into());
+                    }
+                    body.push("m".into());
+                    return Ok(self.fn_text(name, &format!("mut m: {}, k: {}, v: {}", m, k, t), Some(m.as_str()), &body));
+                }
                 let mut body = self.req_line("m.contains_key(&k) || (m.len() as u64) < (1u64 << 40)", "k in m || len(m) < 2^40");
                 body.extend(self.snap(&m, "m"));
                 body.push("let _ = m.insert(k, v);".to_string());

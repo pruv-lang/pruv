@@ -1,0 +1,1 @@
+{"gen_contains": ["sid.as_str()", "let owned: ::std::string::String = sid;"], "gen_absent": [".clone()", "mem::take", "to_string", "String::from"]}

@@ -1,0 +1,9 @@
+// spec: R-6e-7 reject
+struct Rec { count: i64 }
+fn f(inout v: Vec<Rec>) -> i64 {
+  match vec_at_mut::<Rec>(inout v, 0) {
+    Some(r) => { r.count = len(v); }
+    None => { }
+  }
+  return 0;
+}

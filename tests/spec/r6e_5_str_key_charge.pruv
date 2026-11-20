@@ -1,0 +1,12 @@
+// spec: R-6e-5 accept
+pub struct Budget { limit: i64, used: i64 }
+pub struct St { sessions: HashMap<String, Budget> }
+pub fn charge(inout st: St, sid: String, x: i64) -> i64 ! alloc
+{
+  let mut res: i64 = 1;
+  match map_get_mut::<String, Budget>(inout st.sessions, sid) {
+    Some(b) => { if b.used <= 1000000 && x >= 0 && x <= 1000000 { b.used = b.used + x; res = 0; } }
+    None => { }
+  }
+  return res;
+}

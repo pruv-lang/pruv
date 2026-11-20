@@ -1,0 +1,4 @@
+// spec: R-6e-6 accept
+pub struct Halt { reason: i64, stopped: Vec<String> }
+pub struct St { halts: HashMap<i64, Halt> }
+pub fn n(st: St) -> i64 { return 0; }

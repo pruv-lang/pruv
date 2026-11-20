@@ -1,0 +1,16 @@
+// spec: R-6e-6 accept
+struct Rec { stopped: Vec<String> }
+struct St { recs: HashMap<String, Rec> }
+fn f(inout st: St, k: str, take name: String) -> i64 ! alloc {
+  let mut n: i64 = 0;
+  match map_get_mut::<String, Rec>(inout st.recs, k) {
+    Some(r) => {
+      if len(r.stopped) < 1099511627776 {
+        r.stopped = vec_push::<String>(move r.stopped, move name);
+        n = len(r.stopped);
+      }
+    }
+    None => { }
+  }
+  return n;
+}

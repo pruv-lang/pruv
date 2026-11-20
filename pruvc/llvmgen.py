@@ -2793,9 +2793,9 @@ class FnGen:
 
     def catalog_call(s, e, owned):
         n = e.name
-        if n == "map_get_mut":
+        if n in ("map_get_mut", "map_remove", "vec_at_mut"):
             raise PruvError("codegen", e.line, e.col, "unsupported_type",
-                            "map_get_mut in %s needs the Rust backend" % getattr(s.f, "disp", s.f.name),
+                            "%s in %s needs the Rust backend" % (n, getattr(s.f, "disp", s.f.name)),
                             "use the Rust backend", file=getattr(e, "file", None))
         cat = CATALOG[n]
         low, src = foreign_shim.inst_types(e)
@@ -5376,8 +5376,15 @@ def g6_llvm_error(prog):
     if first_g6_use(prog) is None:
         return None
 
-    def err(line, col):
-        e = PruvError("codegen", line, col, "unsupported_type", G6_UNSUPPORTED_MSG, G6_UNSUPPORTED_FIX)
+    def needs_rust(t):
+        return (t.name == "hashmap" and t.args[0].name == "string"
+                or t.name == "vec" and t.args[0].name == "string"
+                or any(needs_rust(a) for a in t.args))
+
+    def err(line, col, what=None):
+        msg = G6_UNSUPPORTED_MSG if what is None else "%s needs the Rust backend" % what
+        fix = G6_UNSUPPORTED_FIX if what is None else "use the Rust backend"
+        e = PruvError("codegen", line, col, "unsupported_type", msg, fix)
         e.file = getattr(f, "file", None)   # explicit mode: the function's source file (Rust: the tagged line)
         return e
 
@@ -5388,21 +5395,30 @@ def g6_llvm_error(prog):
             if not ok:
                 return err(f.line, f.col)
             continue
+        if any(needs_rust(t) for t in [f.ret] + [p.type for p in f.params]):
+            return err(f.line, f.col, "this collection type")
         if any(not _g6_type_ok(p.type) for p in f.params) or not _g6_type_ok(f.ret):
             return err(f.line, f.col)
         bad = []
+        rust_only = []
 
         def visit(n):
             if isinstance(n, Let) and not _g6_type_ok(n.type):
                 bad.append((n.line, n.col))
             ty = getattr(n, "ty", None)
+            if ty is not None and needs_rust(ty):
+                rust_only.append((n.line, n.col, "this collection type"))
             if ty is not None and not _g6_type_ok(ty):
                 bad.append((n.line, n.col))
             if isinstance(n, Call) and n.name in CATALOG and n.name not in CATALOG_CONTRACT_ONLY and n.inst:
+                if n.name in ("map_remove", "vec_at_mut"):
+                    rust_only.append((n.line, n.col, n.name))
                 if not all(_g6_scalar(a) for a in n.inst["args"]):
                     bad.append((n.line, n.col))
 
         foreign_shim._walk(f.body, visit)
+        if rust_only:
+            return err(*min(rust_only))
         if bad:
             line, col = min(bad)
             return err(line, col)
@@ -5426,7 +5442,9 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
     for f in prog.functions:
         if any(p.mode == "inout" and not is_array(p.type) for p in f.params):
             raise PruvError("codegen", f.line, f.col, "unsupported_type",
-                            "%s has an inout struct parameter, which needs the Rust backend" % getattr(f, "disp", f.name),
+                            "%s has an inout %s parameter, which needs the Rust backend" %
+                            (getattr(f, "disp", f.name), "collection" if any(
+                                p.mode == "inout" and is_collection(p.type) for p in f.params) else "struct"),
                             "use the Rust backend", file=getattr(f, "file", None))
     for d in prog.types:
         if any(is_collection(fd.type) for fd in TypeTable._all_fields(d)):

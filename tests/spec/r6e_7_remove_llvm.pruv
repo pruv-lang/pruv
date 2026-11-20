@@ -1,0 +1,5 @@
+// spec: R-6e-7 reject
+fn f(k: i64) -> bool ! alloc {
+  let mut m: HashMap<i64, bool> = map_new::<i64, bool>();
+  return map_remove::<i64, bool>(inout m, k);
+}

@@ -1,0 +1,9 @@
+// spec: R-6e-5 accept
+fn f() -> i64 ! alloc
+  ensures result == 1
+{
+  let k: String = string_push_str(string_new(), "title");
+  let m: HashMap<String, bool> = map_new::<String, bool>();
+  let m2: HashMap<String, bool> = map_insert::<String, bool>(move m, move k, true);
+  return len(m2);
+}

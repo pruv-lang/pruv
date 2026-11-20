@@ -6192,6 +6192,16 @@ pub fn g6_llvm_error(prog: &Program) -> Option<crate::diagnostic::PruvError> {
     let err = |line: i64, col: i64| {
         crate::diagnostic::PruvError::new("codegen", line, col, "unsupported_type", G6_UNSUPPORTED_MSG, G6_UNSUPPORTED_FIX)
     };
+    let rust_error = |line, col, what| {
+        crate::diagnostic::PruvError::new("codegen", line, col, "unsupported_type",
+            format!("{what} needs the Rust backend"), "use the Rust backend")
+    };
+    fn needs_rust(ty: &crate::gtype::GType) -> bool {
+        matches!(ty.name.as_str(), "vec" | "hashmap")
+            && ty.args.first().is_some_and(|k| k.to_key() == "string")
+            || ty.args.iter().any(needs_rust)
+    }
+    let rust_type = |key: &str| needs_rust(&crate::gtype::GType::from_key(key));
     for f in &prog.functions {
         if f.foreign.is_some() {
             // G6b: catalog String or exactly Vec<i64> results are boxed handles
@@ -6205,10 +6215,14 @@ pub fn g6_llvm_error(prog: &Program) -> Option<crate::diagnostic::PruvError> {
             }
             continue;
         }
+        if f.params.iter().any(|p| rust_type(&p.ty)) || rust_type(&f.ret) {
+            return Some(rust_error(f.line, f.col, "this collection type"));
+        }
         if f.params.iter().any(|p| !g6_type_ok(&p.ty)) || !g6_type_ok(&f.ret) {
             return Some(err(f.line, f.col));
         }
         let mut bad: Vec<(i64, i64)> = Vec::new();
+        let mut rust_only = Vec::new();
         walk_stmts(&f.body, &mut |n: Node<'_>| match n {
             Node::Let(l) => {
                 if !g6_type_ok(&l.ty) {
@@ -6217,13 +6231,17 @@ pub fn g6_llvm_error(prog: &Program) -> Option<crate::diagnostic::PruvError> {
             }
             Node::Expr(e) => {
                 if let Some(t) = expr_ty(e) {
+                    if rust_type(t) { rust_only.push((e.line(), e.col(), "this collection type")); }
                     if !g6_type_ok(t) {
                         bad.push((e.line(), e.col()));
                     }
                 }
                 if let Expr::Call(c) = e {
-                    if c.name == "map_get_mut" {
-                        bad.push((c.line, c.col));
+                    match c.name.as_str() {
+                        "map_remove" => rust_only.push((c.line, c.col, "map_remove")),
+                        "vec_at_mut" => rust_only.push((c.line, c.col, "vec_at_mut")),
+                        "map_get_mut" => bad.push((c.line, c.col)),
+                        _ => {}
                     }
                     if crate::foreign::is_catalog(&c.name) && !crate::foreign::is_catalog_contract_only(&c.name) {
                         if let Some(inst) = &c.inst {
@@ -6235,6 +6253,9 @@ pub fn g6_llvm_error(prog: &Program) -> Option<crate::diagnostic::PruvError> {
                 }
             }
         });
+        if let Some(&(line, col, what)) = rust_only.iter().min() {
+            return Some(rust_error(line, col, what));
+        }
         if let Some(&(line, col)) = bad.iter().min() {
             return Some(err(line, col));
         }

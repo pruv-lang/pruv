@@ -1384,7 +1384,7 @@ impl<'a> Gen<'a> {
                 g.raw.as_deref() != Some("crate")
                     && f.foreign.is_none()
                     && f.requires.is_empty()
-                    && !len_params(f).is_empty()
+                    && !len_params(f, g.entries.contains(&f.name)).is_empty()
                     && (if g.explicit { g.entries.contains(&f.name) } else { !g.private(f) })
             })
             .map(|f| f.name.clone())
@@ -2044,7 +2044,7 @@ impl<'a> Gen<'a> {
             ));
         }
         // T0 also applies under trust_callers. The same-crate adapter owns it in raw_entries = "crate".
-        let guard = if is_pub && self.raw.as_deref() != Some("crate") { len_guard(f) } else { Vec::new() };
+        let guard = if is_pub && self.raw.as_deref() != Some("crate") { len_guard(f, self.fmarks.get(&f.name).is_some_and(|m| m.host_entry)) } else { Vec::new() };
         for line in &guard {
             self.emit(1, line);
         }
@@ -2281,6 +2281,11 @@ impl<'a> Gen<'a> {
             }
             // a constructor (with or without payload) is a REAL temporary value of the type; a reference to it lives
             // through the enclosing statement. Every i64 field is converted from the i128 contract value (checked).
+            Expr::Call(x) if x.name == "some_val" && self.is_ext(x.ty.as_deref())
+                && matches!(x.args.first(), Some(Expr::Call(lookup)) if lookup.name == "map_lookup"
+                    && !self.fmap.contains_key(&lookup.name)
+                    && lookup.args.first().and_then(|m| map_type_args(m).ok()).is_some_and(|(k, _)| k.to_key() == "string"))
+                => self.c(e),
             Expr::EnumCtor(_) | Expr::StructLit(_) => Ok(format!("(&{})", self.g9_real(e, None)?)),
             _ => Err(self.g9_unsupported(e, "this expression as an aggregate operand")),
         }
@@ -2777,10 +2782,20 @@ impl<'a> Gen<'a> {
                 if n == "map_lookup" {
                     // G6: finite-map lookup, Option mirror of the stored value
                     let (kt, vt) = map_type_args(arg(a, 0)?)?;
-                    let key = self.c(arg(a, 1)?)?;
+                    let key_arg = arg(a, 1)?;
+                    let text_key = kt.to_key() == "string";
+                    let key = if text_key { self.carr(key_arg)? } else { self.c(key_arg)? };
                     let m0 = self.carr(arg(a, 0)?)?;
                     let look = if kt == GType::i64() {
                         format!("i64::try_from({}).ok().and_then(|pruv_k| {}.get(&pruv_k).copied())", key, m0)
+                    } else if text_key {
+                        let borrowed = if expr_ty(key_arg).as_deref() == Some("string")
+                            || matches!(key_arg, Expr::FieldAccess(_) | Expr::VariantField(_)) {
+                            format!("{key}.as_str()")
+                        } else { key };
+                        let lookup = format!("{m0}.get({borrowed})");
+                        if self.is_ext(Some(&vt.to_key())) { return Ok(lookup); }
+                        format!("{lookup}.copied()")
                     } else {
                         format!("{}.get(&{}).copied()", m0, key)
                     };
@@ -3451,22 +3466,29 @@ impl<'a> Gen<'a> {
             return None;
         }
         let (types, _) = crate::foreign_shim::inst_types(call);
-        (call.name == "map_get_mut" || (call.name == "map_get"
+        (matches!(call.name.as_str(), "map_get_mut" | "vec_at_mut") || (call.name == "map_get"
             && types.get(1).is_some_and(|t| self.is_ext(Some(&t.to_key()))))).then_some(call)
     }
 
     fn match_map(&mut self, stmt: &Match, ind: usize) -> R<()> {
         let call = self.map_match_call(stmt).unwrap();
-        let mutable = call.name == "map_get_mut";
+        let vector = call.name == "vec_at_mut";
+        let mutable = vector || call.name == "map_get_mut";
         let place = match &call.args[0] {
             Expr::InoutArg(arg) => arg.expr.as_ref(),
             expr => expr,
         };
         let receiver = self.e(place)?;
-        let mut key = self.e(&call.args[1])?;
         let (types, src) = crate::foreign_shim::inst_types(call);
+        let text_key = !vector && types[0].to_key() == "string";
+        let mut key = if text_key { self.borrowed_map_key(&call.args[1])? } else { self.e(&call.args[1])? };
         self.fg_mut()?.record_inline_catalog(&call.name, &src);
-        let scoped = mutable && !matches!(&call.args[1], Expr::Var(_) | Expr::IntLit(_) | Expr::BoolLit(_));
+        let simple = if text_key {
+            matches!(&call.args[1], Expr::Var(_) | Expr::FieldAccess(_) | Expr::StrLit(_))
+        } else {
+            matches!(&call.args[1], Expr::Var(_) | Expr::IntLit(_) | Expr::BoolLit(_))
+        };
+        let scoped = mutable && !simple;
         if scoped {
             self.emit(ind, "{");
             self.emit(ind + 1, &format!("let pruv_key = {};", key));
@@ -3475,8 +3497,9 @@ impl<'a> Gen<'a> {
         let depth = ind + usize::from(scoped);
         let method = if mutable { "get_mut" } else { "get" };
         let receiver = if matches!(place, Expr::Var(_) | Expr::FieldAccess(_)) { receiver } else { format!("({})", receiver) };
-        self.emit(depth, &format!("match {}.{}(&{}) {{", receiver, method, key));
-        let ty = types[1].to_key();
+        let key = if vector { format!("<usize as ::std::convert::TryFrom<i64>>::try_from({key}).unwrap_or(usize::MAX)") } else if text_key { key } else { format!("&{key}") };
+        self.emit(depth, &format!("match {}.{}({}) {{", receiver, method, key));
+        let ty = types[usize::from(!vector)].to_key();
         for arm in &stmt.arms {
             let pattern = if let Some(name) = arm.binders.first() {
                 self.vars.insert(name.clone(), ty.clone());
@@ -3677,14 +3700,21 @@ impl<'a> Gen<'a> {
             }
             Stmt::FieldAssign(x) => {
                 if let Expr::Call(call) = &x.value {
-                    if call.name == "vec_push" && !self.fmap.contains_key(&call.name)
+                    let nested_insert = call.name == "map_insert"
+                        && expr_ty(&x.value).as_deref().is_some_and(crate::gtype::key_is_nested_collection_field);
+                    if (call.name == "vec_push" || nested_insert) && !self.fmap.contains_key(&call.name)
                         && matches!(call.args.first(), Some(Expr::Move(m)) if m.name == x.name && m.fields == x.fields)
                         && self.unchecked_collections()
                     {
                         let (_, src) = crate::foreign_shim::inst_types(call);
                         self.fg_mut()?.record_inline_catalog(&call.name, &src);
                         let value = self.e(&call.args[1])?;
-                        self.emit(ind, &format!("{}.{}.push({});", x.name, x.fields.join("."), value));
+                        if nested_insert {
+                            let payload = self.e(&call.args[2])?;
+                            self.emit(ind, &format!("{}.{}.insert({}, {});", x.name, x.fields.join("."), value, payload));
+                        } else {
+                            self.emit(ind, &format!("{}.{}.push({});", x.name, x.fields.join("."), value));
+                        }
                         return Ok(());
                     }
                 }
@@ -3975,10 +4005,29 @@ impl<'a> Gen<'a> {
             && !self.prog.functions.iter().any(|f| f.foreign.is_some())
     }
 
+    fn borrowed_map_key(&mut self, key: &Expr) -> R<String> {
+        if expr_ty(key).as_deref() == Some("string") {
+            Ok(format!("{}.as_str()", self.e(key)?))
+        } else {
+            self.arr_ref(key)
+        }
+    }
+
     /// executable catalog operation -> call of its private boundary helper
     fn catalog_call(&mut self, x: &Call) -> R<String> {
         let cat = catalog_fn(&x.name).ok_or_else(|| repr_str(&x.name))?;
         let (low, src) = crate::foreign_shim::inst_types(x);
+        if x.name == "map_remove" {
+            self.fg_mut()?.record_inline_catalog(&x.name, &src);
+            if let Expr::InoutArg(place) = &x.args[0] {
+                let key = if low[0].to_key() == "string" {
+                    self.borrowed_map_key(&x.args[1])?
+                } else {
+                    format!("&{}", self.e(&x.args[1])?)
+                };
+                return Ok(format!("{}.remove({}).is_some()", self.e(&place.expr)?, key));
+            }
+        }
         // A bound proof can depend on an unchecked user foreign postcondition.
         if x.name == "vec_get" && self.unchecked_collections() {
             self.fg_mut()?.record_inline_catalog(&x.name, &src);
@@ -4004,7 +4053,9 @@ impl<'a> Gen<'a> {
         }
         let mut args: Vec<String> = Vec::new();
         for (p, xa) in cat.params.iter().zip(x.args.iter()) {
-            if p.ty.is_collection() {
+            if x.name == "map_get" && p.name == "k" && low[0].to_key() == "string" {
+                args.push(self.borrowed_map_key(xa)?);
+            } else if p.ty.is_collection() {
                 if p.take {
                     args.push(self.e(xa)?);
                 } else {
@@ -4122,7 +4173,7 @@ impl<'a> Gen<'a> {
             Expr::StrLit(x) => Ok(format!("::std::string::String::from({})", lit_str(&x.value))), // G2 B2
             Expr::Var(x) if self.map_views.contains(&x.name)
                 || (self.inouts.contains(&x.name) && x.ty.as_deref().is_some_and(|t|
-                    !GType::from_key(t).is_array() && !self.is_ext(Some(t)))) =>
+                    !GType::from_key(t).is_array() && !key_is_collection(t) && !self.is_ext(Some(t)))) =>
             {
                 Ok(format!("(*{})", x.name))
             }
@@ -4809,6 +4860,18 @@ fn gen_rust_concrete_core(
         if let Some(e) = crate::bindings::struct_inout_abi_error(prog, true) {
             return Err(GenError::Diag(e));
         }
+        if let Some(explicit) = &prog.explicit {
+            for (f, mark) in prog.functions.iter().zip(&explicit.fns).filter(|(_, m)| m.host_entry) {
+                if f.params.iter().any(|p| key_is_collection(&p.ty)
+                    || prog.g9.as_ref().is_some_and(|g| g.extended.contains(&p.ty))) {
+                    return Err(GenError::Diag(PruvError::new(
+                        "codegen", f.line, f.col, "unsupported_type",
+                        format!("host entry {} takes a collection-bearing parameter, which has no C ABI", mark.disp),
+                        "use Rust raw_entries crate or unsafe",
+                    )));
+                }
+            }
+        }
     }
     if proven_entries {
         let names = prog.types.iter().map(|d| d.name()).chain(prog.functions.iter().map(|f| f.name.as_str()));
@@ -5006,7 +5069,7 @@ struct ProvenEntry {
 
 impl ProvenEntry {
     fn new(f: &Function, param_types: &[String], vis: &str, name: &str, ret: &str, header: String) -> Option<Self> {
-        let checked = len_params(f);
+        let checked = len_params(f, false);
         let mut params = Vec::new();
         let mut body = Vec::new();
         let mut has_str = false;
@@ -5266,8 +5329,8 @@ pub fn raw_module_with(mode: &str, items: &[(String, String, String, Vec<String>
 }
 
 /// T0: the parameters whose length the public entry checks against 2^40 (arrays, including inout arrays, and str)
-fn len_params(f: &Function) -> Vec<&Param> {
-    f.params.iter().filter(|p| is_array_name(&p.ty) || p.ty == "str").collect()
+fn len_params(f: &Function, host_entry: bool) -> Vec<&Param> {
+    f.params.iter().filter(|p| is_array_name(&p.ty) || p.ty == "str" || host_entry && p.ty == "string").collect()
 }
 
 /// T0: the length guard lines of a public entry (SPEC section 7 item 6). The fast path is one branch on the
@@ -5277,8 +5340,8 @@ fn len_params(f: &Function) -> Vec<&Param> {
 /// slow fn must diverge: a returning one leaves the optimizer no length bound after the guard and measured +9-18% on the
 /// budget M4 default lane (an OR of the lengths, whose false positives such as 2^40 and 1 force a returning slow fn).
 /// Manifest raw_entries = "crate" leaves the check to the same-crate adapter.
-fn len_guard(f: &Function) -> Vec<String> {
-    let ps = len_params(f);
+fn len_guard(f: &Function, host_entry: bool) -> Vec<String> {
+    let ps = len_params(f, host_entry);
     if ps.is_empty() {
         return Vec::new();
     }
@@ -5288,7 +5351,7 @@ fn len_guard(f: &Function) -> Vec<String> {
             format!(
                 "if ({n} as u64) > (1u64 << 40) {{ panic!(\"pruv: invalid representation: {{}} ({k})\", {n}) }}",
                 n = p.name,
-                k = if p.ty == "str" { "str length" } else { "array length" }
+                k = if matches!(p.ty.as_str(), "str" | "string") { "str length" } else { "array length" }
             )
         })
         .collect();

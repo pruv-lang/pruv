@@ -1,0 +1,2 @@
+// spec: R-6e-5 reject
+fn f(m: HashMap<[u8], bool>) -> i64 { return len(m); }

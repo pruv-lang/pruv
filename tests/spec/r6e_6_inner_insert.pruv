@@ -1,0 +1,19 @@
+// spec: R-6e-6 accept
+struct Rec { runs: HashMap<String, bool> }
+struct St { recs: HashMap<i64, Rec> }
+fn f(inout st: St, k: i64, take name: String, query: str) -> bool ! alloc {
+  let mut found: bool = false;
+  match map_get_mut::<i64, Rec>(inout st.recs, k) {
+    Some(r) => {
+      if len(r.runs) < 1099511627776 {
+        r.runs = map_insert::<String, bool>(move r.runs, move name, true);
+      }
+      match map_get::<String, bool>(r.runs, query) {
+        Some(b) => { found = b; }
+        None => { }
+      }
+    }
+    None => { }
+  }
+  return found;
+}

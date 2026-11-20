@@ -5,7 +5,7 @@ import proof_cache
 from vast import *
 from typeinfo import (TypeTable, is_array, array_elem, array_of, bind_args, substitute, decl_owner, format_type,
                       is_collection, field_place)
-from foreign import CATALOG, CATALOG_NAMES, FILE, FILE_OBSERVERS, PROCESS, PROCESS_ARGS, SOCKET, LISTENER, LOOP
+from foreign import CATALOG, CATALOG_NAMES, FILE, FILE_OBSERVERS, PROCESS, PROCESS_ARGS, SOCKET, LISTENER, LOOP, MUTABLE_COLLECTION_MATCH
 from refine import _stmt_inout
 
 I64_MIN, I64_MAX = -2 ** 63, 2 ** 63 - 1
@@ -176,6 +176,12 @@ class Model:
         s.bufs = {}         # "int" | "bool" -> (sort, constructor, length accessor, array accessor)
         s.buf_names = set()
         s.maps = {}
+        # Every concrete execution is one interpretation of this function: map each
+        # (length, byte array) to an ID for its prefix of that length. Congruence
+        # covers equal terms; different terms may have equal or distinct IDs.
+        # No injectivity or byte-content axioms are assumed. When the same bytes
+        # are built differently the resulting loss is in proof completeness.
+        s.strkey = None     # declared on first String-key use so other programs keep their solver input
         s.size_f, s.wf_f, s.fixed_memo = {}, {}, {}
         if meta is not None:
             pindex = {}
@@ -281,9 +287,20 @@ class Model:
             s.buf_names.add(srt.name())
         return ent[0]
 
+    def map_key_sort(s, ty):
+        return z3.IntSort() if ty == _STRING else s.sort_of(ty)
+
+    def map_key(s, ty, key):
+        if ty != _STRING:
+            return key
+        if s.strkey is None:
+            s.strkey = z3.Function("strkey", z3.IntSort(),
+                                   z3.ArraySort(z3.IntSort(), z3.IntSort()), z3.IntSort())
+        return s.strkey(key.n, key.a)
+
     def map_fields(s, ty):
         if ty not in s.maps:
-            key, value = map(s.sort_of, ty.args)
+            key, value = s.map_key_sort(ty.args[0]), s.sort_of(ty.args[1])
             tag = "%smap!%d" % (s.pre, len(s.maps))
             dt = z3.Datatype(tag)
             dt.declare(tag + ".mk", (tag + ".d", z3.ArraySort(key, z3.BoolSort())),
@@ -1129,7 +1146,7 @@ class FnVerifier:
             if ty.name == "vec":
                 return mk_arr(z3.Array(n, z3.IntSort(), s.model.sort_of(ty.args[0])), z3.Int(n + ".len"), base,
                               ty.args[0])
-            ks, vs = s.model.sort_of(ty.args[0]), s.model.sort_of(ty.args[1])
+            ks, vs = s.model.map_key_sort(ty.args[0]), s.model.sort_of(ty.args[1])
             return Map(z3.Array(n + ".d", ks, z3.BoolSort()), z3.Array(n + ".a", ks, vs), z3.Int(n + ".len"), base,
                        ty.args[0], ty.args[1])
         if ty.owner is not None or ty.name in ("option", "result") or s.model.is_user(ty):
@@ -2110,13 +2127,13 @@ class FnVerifier:
         for i in ios:
             pre = args[i]
             name = e.args[i].expr.name
+            ty = substitute(f.params[i].type, s.theta)
             if isinstance(pre, Arr):
-                fv = s.fresh(name, arr_type(pre.elem))
+                fv = s.fresh(name, ty if ty.name == "vec" else arr_type(pre.elem))
                 nv = mk_arr(fv.a, pre.n, name, pre.elem)
                 if nv.elem == U8:
                     s.assume(st, g, u8_dom(nv))
             else:
-                ty = substitute(f.params[i].type, s.theta)
                 nv = s.fresh(name, ty)
                 wf = s.wf(ty, nv)
                 if wf is not None:
@@ -2271,13 +2288,13 @@ class FnVerifier:
         if n in ("vec_new", "string_new", "map_new"):
             r = s.fresh(n, rty)
             if n == "map_new":
-                kt = z3.K(s.model.sort_of(r.kty), z3.BoolVal(False))
+                kt = z3.K(s.model.map_key_sort(r.kty), z3.BoolVal(False))
                 return Map(kt, r.a, z3.IntVal(0), n, r.kty, r.vty)
             return mk_arr(r.a, z3.IntVal(0), n, r.elem)
         if n == "vec_push":
             v, x = args
             need(v.n < MAX_LEN)
-            return mk_arr(z3.Store(v.a, v.n, x), v.n + 1, n, v.elem)
+            return mk_arr(z3.Store(v.a, v.n, s.model.field_put(v.elem, x)), v.n + 1, n, v.elem)
         if n in ("vec_get", "string_byte"):
             v, i = args
             need(z3.And(i >= 0, i < v.n))
@@ -2289,11 +2306,24 @@ class FnVerifier:
                 if wf is not None:
                     s.assume(st, g, wf)
             return r
-        if n in ("map_get", "map_lookup", "map_get_mut"):
+        if n in ("map_get", "map_lookup"):
             m, k = args
-            return s.map_lookup(m, k, rty)
+            return s.map_lookup(m, s.model.map_key(m.kty, k), rty)
+        if n == "map_remove":
+            m, k = args
+            k = s.model.map_key(m.kty, k)
+            has = z3.Select(m.d, k)
+            s.assume(st, g, z3.Implies(has, m.n > 0))
+            # A present entry witnesses a nonempty map; the abstract length is
+            # otherwise independent of the presence array.
+            new = Map(z3.Store(m.d, k, z3.BoolVal(False)), m.a, m.n - z3.If(has, 1, 0),
+                      m.name, m.kty, m.vty)
+            root, path = field_place(e.args[0].expr)
+            st.env[root.name] = s.rebuild(root.ty, st.env[root.name], path, new)
+            return has
         if n == "map_insert":
             m, k, x = args
+            k = s.model.map_key(m.kty, k)
             has = z3.Select(m.d, k)
             need(z3.Or(has, m.n < MAX_LEN))
             return Map(z3.Store(m.d, k, z3.BoolVal(True)), z3.Store(m.a, k, x), m.n + z3.If(has, 0, 1), n, m.kty,
@@ -2700,7 +2730,7 @@ class FnVerifier:
                 s.assigned(st.body, out)
             elif isinstance(st, Match):
                 sc = st.scrutinee
-                if isinstance(sc, Call) and sc.name == "map_get_mut":
+                if isinstance(sc, Call) and sc.name not in s.funcs and sc.name in MUTABLE_COLLECTION_MATCH:
                     root, _ = field_place(sc.args[0].expr)
                     out.add(root.name)
                 for a in st.arms:
@@ -2832,13 +2862,20 @@ class FnVerifier:
         if isinstance(stmt, Match):
             st = st.fork()
             scrutinee = stmt.scrutinee
-            update = isinstance(scrutinee, Call) and scrutinee.name == "map_get_mut"
+            update = (isinstance(scrutinee, Call) and scrutinee.name not in s.funcs
+                      and scrutinee.name in MUTABLE_COLLECTION_MATCH)
             if update:
                 place = scrutinee.args[0].expr
                 root, path = field_place(place)
-                m = s.ev(place, st, [], True)
+                collection = s.ev(place, st, [], True)
                 key = s.ev(scrutinee.args[1], st, [], True)
-                v = s.map_lookup(m, key, scrutinee.ty)
+                if isinstance(collection, Map):
+                    key = s.model.map_key(collection.kty, key)
+                    v = s.map_lookup(collection, key, scrutinee.ty)
+                else:
+                    o = s.model.opt(scrutinee.ty)
+                    v = z3.If(z3.And(key >= 0, key < collection.n),
+                              o.some(z3.Select(collection.a, key)), o.none)
             else:
                 v = s.ev(scrutinee, st, [], True)
             outer = set(st.env)
@@ -2877,7 +2914,12 @@ class FnVerifier:
                 for end in s.exec_block(a.body, b):
                     if update and a.ctor == "Some":
                         final = end.env[a.binders[0]]
-                        new = Map(m.d, z3.Store(m.a, key, final), m.n, m.name, m.kty, m.vty)
+                        array = z3.Store(collection.a, key, final)
+                        if isinstance(collection, Map):
+                            new = Map(collection.d, array, collection.n, collection.name,
+                                      collection.kty, collection.vty)
+                        else:
+                            new = mk_arr(array, collection.n, collection.name, collection.elem)
                         end.env[root.name] = s.rebuild(root.ty, end.env[root.name], path, new)
                     # binders and arm locals end with the arm; only updates to outer variables remain
                     for k in [k for k in end.env if k not in outer]:

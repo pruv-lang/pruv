@@ -152,7 +152,8 @@ class ForeignGen:
         if not src and low:
             src = low
         s._note_catalog(op, src)
-        name = "pruv_g6_" + op + "".join("__" + encode(safe_type(t)) for t in src)
+        name = "pruv_g6_" + op + "".join(
+            "__string" if t.name == "string" and t.owner is None else "__" + encode(safe_type(t)) for t in src)
         if name not in s.items:
             s.op = op
             s.items[name] = s._catalog_text(op, name, low)
@@ -188,13 +189,14 @@ class ForeignGen:
             body += s._ens("v.len() == pruv_snap.len() + 1", "len(result) == len(v) + 1")
             if s.ens:
                 body += ["pruv_g6_charge(&mut pruv_budget, pruv_snap.len());"]
+            moved = s.g.is_ext(low[0]) or low[0].name == "string"
             if not s.g.is_ext(low[0]):
                 body += s._ens("v[..pruv_snap.len()] == pruv_snap[..]", "result[..len(v)] == v")
             if s.ens:
                 body += ["pruv_g6_charge(&mut pruv_budget, 1);"]   # one visited element (G6_SPEC 12.3)
-            if s.ens and s.g.is_ext(low[0]):
+            if s.ens and moved:
                 body += s._ens("v.get(pruv_snap.len()).is_some()", "result contains the pushed value")
-            elif not s.g.is_ext(low[0]):
+            elif not moved:
                 body += s._ens("v[pruv_snap.len()] == x", "result[len(v)] == x")
             body += ["v"]
             return s._fn(name, "mut v: %s, x: %s" % (V, T), V, body)
@@ -214,14 +216,17 @@ class ForeignGen:
             body += ["pruv_r"]
             return s._fn(name, "", M, body)
         if op == "map_get":
-            body = ["let pruv_r: %s = m.get(&k).copied();" % OPT]
+            key, key_type = ("k", "&str") if low[0].name == "string" else ("&k", K)
+            body = ["let pruv_r: %s = m.get(%s).copied();" % (OPT, key)]
             if s.ens:
                 body += ["pruv_g6_charge(&mut pruv_budget, 1);"]   # one visited element (G6_SPEC 12.3)
-            body += s._ens("m.contains_key(&k) == pruv_r.is_some() && m.get(&k).copied() == pruv_r",
+            body += s._ens("m.contains_key(%s) == pruv_r.is_some() && m.get(%s).copied() == pruv_r" % (key, key),
                            "result == map_lookup(m, k)")
             body += ["pruv_r"]
-            return s._fn(name, "m: &%s, k: %s" % (M, K), OPT, body)
+            return s._fn(name, "m: &%s, k: %s" % (M, key_type), OPT, body)
         if op == "map_insert":
+            if low[0].name == "string":
+                return s._text_map_insert(name, M, K, T, low[1])
             body = s._req("m.contains_key(&k) || (m.len() as u64) < (1u64 << 40)", "k in m || len(m) < 2^40")
             body += s._snap(M, "m")
             body += ["let _ = m.insert(k, v);"]
@@ -590,6 +595,38 @@ class ForeignGen:
         return s._fn(name, args, ret, body)
 
     # ------------------------------------------------------------------ contract-only scan (requires)
+    def _text_map_insert(s, name, map_type, key_type, value_type, value_ty):
+        body = s._req("(m.len() as u64) < (1u64 << 40) || m.contains_key(k.as_str())",
+                      "k in m || len(m) < 2^40")
+        if s.ens:
+            # The entry API keeps the inserted value accessible after consuming k.
+            # Snapshot only for the all-checks mode, as for the scalar-key helper.
+            body += s._snap(map_type, "m")
+            body += ["let mut pruv_snap = pruv_snap;",
+                     "let pruv_len = pruv_snap.len();",
+                     "let pruv_present = pruv_snap.remove(k.as_str()).is_some();"]
+            check_value = not s.g.is_ext(value_ty)
+            if check_value:
+                body += ["let pruv_expected = v;"]
+            body += ["let pruv_slot = match m.entry(k) {",
+                     "    ::std::collections::hash_map::Entry::Occupied(e) => { let slot = e.into_mut(); *slot = v; slot }",
+                     "    ::std::collections::hash_map::Entry::Vacant(e) => e.insert(v),",
+                     "};",
+                     "pruv_g6_charge(&mut pruv_budget, 1);"]
+            if check_value:
+                body += s._ens("*pruv_slot == pruv_expected", "result[k] == v")
+            body += s._ens("m.len() == pruv_len + (if pruv_present { 0 } else { 1 })",
+                           "len(result) == len(m) + (k absent ? 1 : 0)")
+            body += ["for (key, value) in pruv_snap.iter() {",
+                     "    pruv_g6_charge(&mut pruv_budget, 1);"]
+            condition = "m.get(key.as_str()) == Some(value)" if check_value else "m.contains_key(key.as_str())"
+            body += ["    " + line for line in s._ens(condition, "entries other than k are unchanged")]
+            body += ["}"]
+        else:
+            body += ["let _ = m.insert(k, v);"]
+        params = "mut m: %s, k: %s, v: %s" % (map_type, key_type, value_type)
+        return s._fn(name, params, map_type, body + ["m"])
+
     def map_updated_helper(s, kt, vt, src):
         s._note_catalog("map_updated", src)
         name = "pruv_g6_map_updated" + "".join("__" + encode(safe_type(t)) for t in src)

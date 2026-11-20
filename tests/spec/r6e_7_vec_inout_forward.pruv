@@ -1,0 +1,20 @@
+// spec: R-6e-7 accept
+struct Rec { hits: i64 }
+
+fn touch(inout v: Vec<Rec>, i: i64) -> bool
+  ensures result == (0 <= i && i < len(v))
+{
+  let mut changed: bool = false;
+  match vec_at_mut::<Rec>(inout v, i) {
+    Some(r) => { r.hits = 1; changed = true; }
+    None => { }
+  }
+  return changed;
+}
+
+fn f(inout v: Vec<Rec>, i: i64) -> bool {
+  let before: i64 = len(v);
+  let changed: bool = touch(inout v, i);
+  assert changed == (0 <= i && i < before);
+  return changed;
+}

@@ -28,6 +28,11 @@ def is_scalar_vec(ty: Type) -> bool:
     return ty.owner is None and ty.name == "vec" and ty.args in ((I64,), (BOOL,))
 
 
+def is_nested_collection_field(ty: Type) -> bool:
+    return ty in (Type("vec", (Type("string"),)), Type("hashmap", (I64, BOOL)),
+                  Type("hashmap", (Type("string"), BOOL)))
+
+
 def is_owned_field_type(ty: Type) -> bool:
     return ty == Type("string") or is_scalar_vec(ty)
 
@@ -477,7 +482,7 @@ def first_g9_use(prog):
             cands.append((d.line, d.col, "recursive type %s" % d.name))
         fields = d.fields if isinstance(d, StructDecl) else [x for v in d.variants for x in v.fields]
         for fd in fields:
-            if is_array(fd.type) or fd.type == STR or is_owned_field_type(fd.type):
+            if is_array(fd.type) or fd.type == STR or is_owned_field_type(fd.type) or is_nested_collection_field(fd.type):
                 cands.append((fd.line, fd.col, "buffer field %s" % fd.name))
     for fn in prog.functions:
         if fn.decreases is not None:

@@ -40,13 +40,15 @@ pub struct CatFn {
 }
 
 /// CATALOG_NAMES of foreign.py (insertion order).
-pub const CATALOG_NAMES: [&str; 96] = [
+pub const CATALOG_NAMES: [&str; 98] = [
     "vec_new",
     "vec_push",
     "vec_get",
     "map_new",
     "map_get",
     "map_get_mut",
+    "map_remove",
+    "vec_at_mut",
     "map_insert",
     "string_new",
     "string_push_str",
@@ -272,6 +274,14 @@ pub fn catalog_fn(name: &str) -> Option<CatFn> {
             ret: mk_option(v()),
             effects: vec![],
             tparams: tp_kv(),
+        },
+        "map_remove" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("m", map_of(k(), v()), false), p("k", k(), false)],
+            ret: GType::bool(), effects: vec![], tparams: tp_kv(),
+        },
+        "vec_at_mut" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("v", vec_of(t()), false), p("i", GType::i64(), false)],
+            ret: mk_option(t()), effects: vec![], tparams: tp_t(),
         },
         "map_insert" => CatFn { requires: vec![], ensures: vec![],
             params: vec![p("m", map_of(k(), v()), true), p("k", k(), false), p("v", v(), false)],
@@ -999,7 +1009,7 @@ impl<'a> Ownership<'a> {
                 let mut out: Option<St> = None;
                 let mut first = true;
                 let mutable_map = matches!(&m.scrutinee, Expr::Call(c)
-                    if c.name == "map_get_mut" && !self.funcs.contains_key(&c.name));
+                    if matches!(c.name.as_str(), "map_get_mut" | "vec_at_mut") && !self.funcs.contains_key(&c.name));
                 for a in &m.arms {
                     let n = self.push_arm(a);
                     let saved = self.map_binders.len();
@@ -1207,7 +1217,7 @@ impl<'a> Ownership<'a> {
         match e {
             Expr::Move(m) => self.mv(m, st, true, pos == "field"),
             Expr::Var(v) if self.map_binders.contains(&v.name) => Err(err(
-                v.line, v.col, "foreign_move", "a mutable map view cannot escape its arm", "read a field of the view",
+                v.line, v.col, "foreign_move", "a mutable collection binder cannot be used as an owned value", "",
             )),
             Expr::Var(v) if is_coll(&v.ty) => {
                 self.use_(&v.name, v.line, v.col, st)?;
@@ -1314,8 +1324,8 @@ impl<'a> Ownership<'a> {
     fn takes(&self, e: &Call) -> Vec<bool> {
         match if self.funcs.contains_key(&e.name) { None } else { catalog_fn(&e.name) } {
             Some(f) => f.params.iter().enumerate().map(|(i, p)| {
-                p.take || (i + 1 == e.args.len() && matches!(e.name.as_str(), "vec_push" | "map_insert")
-                    && crate::llvmgen::expr_ty(&e.args[i]).as_ref().is_some_and(|t| self.aggregates.contains(t)))
+                p.take || (e.name == "map_insert" && i == 1 && crate::llvmgen::expr_ty(&e.args[i]).as_deref() == Some("string")) || (i + 1 == e.args.len() && matches!(e.name.as_str(), "vec_push" | "map_insert")
+                    && crate::llvmgen::expr_ty(&e.args[i]).as_ref().is_some_and(|t| t == "string" || self.aggregates.contains(t)))
             }).collect(),
             None => match self.funcs.get(&e.name) {
                 Some(t) => t.clone(),
@@ -1451,7 +1461,10 @@ fn g6_expr(e: &Expr, out: &mut Cands) {
         Expr::FieldAccess(x) => g6_expr(&x.base, out),
         Expr::IsVariant(x) => g6_expr(&x.value, out),
         Expr::VariantField(x) => g6_expr(&x.value, out),
-        Expr::InoutArg(x) => g6_expr(&x.expr, out), // G5 A0
+        Expr::InoutArg(x) => {
+            if x.ty.as_deref().is_some_and(key_is_collection) { out.push((x.line, x.col)); }
+            g6_expr(&x.expr, out);
+        }
         Expr::Spent(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StrLit(_) | Expr::Var(_) => {}
     }
 }
@@ -1889,7 +1902,7 @@ mod tests {
 
     #[test]
     fn catalog_shapes() {
-        assert_eq!(CATALOG_NAMES.len(), 96);
+        assert_eq!(CATALOG_NAMES.len(), 98);
         for n in CATALOG_NAMES.iter() {
             assert!(catalog_fn(n).is_some());
         }
