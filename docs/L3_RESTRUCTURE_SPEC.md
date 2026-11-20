@@ -9769,16 +9769,16 @@ Peak RSS: M10b fixed cells 2.10-2.24 vs 1.64-1.75 MB (1.27-1.31x, D45); other la
 
 ### Audit
 
-One audit (Codex gpt-6.2-astra, read-only over the diff). The one allowed recheck of the must-fix items was handed to Codex gpt-6.2-astra; its verdict arrives after this commit, so the fixes below are backed by the reruns listed here.
+One audit (Codex gpt-6.2-astra, read-only over the diff). One recheck of the must-fix items (Codex gpt-6.2-astra, check mode, on be99610): both fixed.
 
-- Must-fix 1, M12 `attach` lost the stored budget when `origin` was a 30-deep array sent through the raw V interface (typed dump 0 words, hand 316): `replace_wire` deleted the old root first and `attach_fresh` took root 0 as success (root_m12_typed.pruv:298, :1296). Fixed as listed above. The 30-deep origin now sits at wire depth 33 of the 64 bound, and Q / hdiff stay exact on rs and py.
-- Must-fix 2, the M10b driver logged `E unit` before walking the effects, so the unit-before-clear order check (run_m10b.py:337) could not catch a reorder: fixed as listed above. M10b stays 300 / 300 on both sets and H 10 / 10 on rs and py.
+- Must-fix 1, M12 `attach` lost the stored budget when `origin` was a 30-deep array sent through the raw V interface (typed dump 0 words, hand 316): `replace_wire` deleted the old root first and `attach_fresh` took root 0 as success (root_m12_typed.pruv:298, :1296). Fixed as listed above. Recheck: fixed; a closed budget re-attached over raw V with a 30-deep array `origin` gives the same 284-word dump on rs typed and hand.
+- Must-fix 2, the M10b driver logged `E unit` before walking the effects, so the unit-before-clear order check (run_m10b.py:337) could not catch a reorder: fixed as listed above. Recheck: fixed by reading; a clear emitted before the consumption now logs before `E unit` and fails the order check. M10b stays 300 / 300 on both sets and H 10 / 10 on rs and py.
 - Must-fix 3, the worker notes for D51 described the reverted change: annotated in `work/p31t9/P31T9_W3_NOTES.md` (not committed).
 - Advisory: the M9 `perf --typed` table measures typed and hand on pre-decoded input, while the flat lane's time includes parsing (driver_m9.rs:709, run_m9.py:746). The flat and typed M9 tables are therefore not comparable with each other; typed vs hand is.
 
 ### Budget
 
-Delegations: 6 calls of 20. W1 M12 (Codex gpt-6.2-sol high, write), W2 M10 / M7 / M9 (Codex gpt-6.2-sol high, write), W3 M11 / M10b (Codex gpt-6.2-sol high, write), one audit call rejected on its input before running, the audit (Codex gpt-6.2-astra), the recheck (Codex gpt-6.2-astra). Ended before the 01:06 KST deadline.
+Delegations: 8 calls of 20. W1 M12 (Codex gpt-6.2-sol high, write), W2 M10 / M7 / M9 (Codex gpt-6.2-sol high, write), W3 M11 / M10b (Codex gpt-6.2-sol high, write), one audit call rejected on its input before running, the audit (Codex gpt-6.2-astra), the recheck (Codex gpt-6.2-astra; the first call could not read its brief, the continuation inlined it). Ended before the 01:06 KST deadline.
 
 ### Gaps
 
