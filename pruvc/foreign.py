@@ -6,7 +6,7 @@ passes through unchanged."""
 import re
 
 from vast import *
-from typeinfo import TypeTable, fn_owner, is_collection, contains_collection, is_owned_field_type, is_nested_collection_field, type_name, is_nongeneric_struct, field_place
+from typeinfo import TypeTable, fn_owner, is_array, is_collection, contains_collection, is_owned_field_type, is_nested_collection_field, type_name, is_nongeneric_struct, field_place
 from refine import _kids as expr_kids
 
 
@@ -309,7 +309,7 @@ def check_foreign_decl(f, externs):
 
 # ---------------------------------------------------------------------------
 # ownership / liveness (section 10.4)
-# State: dict name -> "live" | "dead" | "maybe" for owned collection bindings; None = unreachable path.
+# State: dict name -> "live" | "dead" | "maybe" for owned bindings; None = unreachable path.
 # Borrowed (unmarked collection) parameters are kept in self.bor and never change.
 # ---------------------------------------------------------------------------
 def _join(a, b):
@@ -380,7 +380,7 @@ class _Ownership:
     def stmt(s, x, st, declared):
         if isinstance(x, Let):
             s.consume(x.value, st, "let")
-            if is_collection(x.type) or is_nongeneric_struct(x.type, s.types):
+            if is_array(x.type) or is_collection(x.type) or is_nongeneric_struct(x.type, s.types):
                 st[x.name] = "live"
                 declared.append(x.name)
                 kind = _must_kind(x.type)
@@ -401,6 +401,7 @@ class _Ownership:
         if isinstance(x, IndexAssign):
             s.expr(x.index, st)
             s.expr(x.value, st)
+            s.use(x, st)
             return st
         if isinstance(x, FieldAssign):
             s.use(x, st)
@@ -411,7 +412,10 @@ class _Ownership:
             return _join(s.block(x.then, dict(st)), s.block(x.els, dict(st)))
         if isinstance(x, While):
             entry = dict(st)
+            for clause in x.invariants:    # R03L: an invariant holds before the condition runs
+                s.array_reads(clause, st)
             s.expr(x.cond, st)
+            s.array_reads(x.decreases, st)
             end = s.block(x.body, dict(st))
             if end is not None:
                 for n, v in entry.items():
@@ -446,7 +450,18 @@ class _Ownership:
                 out = r if first else _join(out, r)
                 first = False
             return out
-        return st   # Assert: contract, not subject to liveness
+        if isinstance(x, Assert):
+            s.array_reads(x.cond, st)
+        return st
+
+    def array_reads(s, e, st):
+        """Check array reads in proof clauses without applying executable call rules."""
+        if e is None:
+            return
+        if isinstance(e, Var) and is_array(e.ty):
+            s.use(e, st)
+        for k in expr_kids(e):
+            s.array_reads(k, st)
 
     def dead_stmt(s, x):
         """Check owning positions in unreachable code without tracking liveness."""
@@ -476,6 +491,9 @@ class _Ownership:
                     s.dead_stmt(stmt)
 
     def dead_expr(s, e, owned=False):
+        if isinstance(e, Move) and not owned:   # R03L: unreachable code keeps the consuming-position rule
+            _err(e, "foreign_move", "move only where ownership is consumed",
+                 "use move for a take argument, a let initializer, an assignment or return")
         if owned:
             s.check_field_alias(e)
             if isinstance(e, Var) and is_collection(e.ty) and e.name in s.bor:
@@ -514,7 +532,7 @@ class _Ownership:
         if e.fields:
             s.use(e, st)
             return       # The checker permits only a take argument immediately stored back into this field.
-        if not is_collection(e.ty) and not (is_nongeneric_struct(e.ty, s.types) and e.name in st):
+        if not (is_array(e.ty) or is_collection(e.ty) or (is_nongeneric_struct(e.ty, s.types) and e.name in st)):
             _err(e, "foreign_move", "move of a non-collection value",
                  "move applies to Vec, HashMap and String bindings only; use the value directly")
         n = e.name
@@ -560,6 +578,9 @@ class _Ownership:
             s.use(e, st)
         elif isinstance(e, Move):
             s.move(e, st, False, None)
+        elif isinstance(e, Index) and isinstance(e.array, Var) and is_array(e.array.ty):
+            s.expr(e.index, st)
+            s.use(e.array, st)
         elif isinstance(e, Call):
             kind = _must_kind(e.ty)
             if not owned and kind is not None:    # a handle temporary that is borrowed or dropped keeps its duty
@@ -575,7 +596,8 @@ class _Ownership:
             st.update(joined)
         else:
             for k in expr_kids(e):
-                if isinstance(e, (StructLit, EnumCtor)) and is_collection(k.ty):
+                if isinstance(e, (StructLit, EnumCtor)) and (
+                        is_collection(k.ty) or isinstance(k, Move) and is_array(k.ty)):
                     s.consume(k, st, "let")
                 else:
                     s.expr(k, st)
@@ -651,7 +673,7 @@ def _g6_candidates(node, out):
         out.append((node.line, node.col, "a collection local"))
     elif isinstance(node, InoutArg) and node.ty is not None and is_collection(node.ty):
         out.append((node.line, node.col, "a mutable collection place"))
-    elif isinstance(node, Move):
+    elif isinstance(node, Move) and not is_array(node.ty):
         out.append((node.line, node.col, "move"))
     elif isinstance(node, Call) and node.ty is not None and (contains_collection(node.ty) or node.name == "string_eq"):
         out.append((node.line, node.col, "a collection value"))
@@ -666,7 +688,7 @@ def first_g6_use(prog):
         if f.foreign is not None:
             return (f.line, f.col, "trusted rust fn %s" % f.name)
         for p in f.params:
-            if p.take or contains_collection(p.type):
+            if (p.take and not is_array(p.type)) or contains_collection(p.type):
                 return (f.line, f.col, "parameter %s" % p.name)
         if contains_collection(f.ret):
             return (f.line, f.col, "result type of %s" % f.name)

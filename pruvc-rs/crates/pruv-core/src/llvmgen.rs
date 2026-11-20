@@ -2712,6 +2712,12 @@ impl<'a> FnGen<'a> {
         out
     }
 
+    fn empty_array_slot(&mut self, x: &V) -> R<()> {
+        self.ins(format!("store ptr null, ptr {}", x.a))?;
+        self.ins(format!("store i64 0, ptr {}", x.b))?;
+        self.ins(format!("store i64 0, ptr {}", need_c(&x.c)?))
+    }
+
     /// P3: the value of copy(x) when x moves instead (a return candidate or a move_src name), else None
     pub fn copy_move(&mut self, e: &Expr) -> R<Option<V>> {
         if let Expr::FieldAccess(fa) = e {
@@ -2741,9 +2747,7 @@ impl<'a> FnGen<'a> {
                 if rc {
                     self.ret_moved.insert(x.a.clone(), None); // the return's cleanup skips the slot
                 } else {
-                    self.ins(format!("store ptr null, ptr {}", x.a))?;
-                    self.ins(format!("store i64 0, ptr {}", x.b))?;
-                    self.ins(format!("store i64 0, ptr {}", need_c(&x.c)?))?; // P3: the emptied owner also forgets its cap
+                    self.empty_array_slot(&x)?;
                 }
                 Ok(Some(v))
             }
@@ -3502,7 +3506,11 @@ impl<'a> FnGen<'a> {
                 // G6 A3: load the owner slot, then null it
                 let sl = self.lookup(&x.name)?.val().clone();
                 let v = self.load(&sl)?;
-                self.ins(format!("store ptr null, ptr {}", sl.a))?;
+                if x.ty.as_deref().is_some_and(is_array_name) {
+                    self.empty_array_slot(&sl)?;
+                } else {
+                    self.ins(format!("store ptr null, ptr {}", sl.a))?;
+                }
                 Ok(v)
             }
             // G5 A0: never reaches the generator (the driver's A0 guard stops the program earlier)
@@ -5610,7 +5618,7 @@ fn dummy_fn() -> Function {
         ret_refine: None,
         tparams: vec![],
         foreign: None,
-        cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, attribute: None,
+        cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, pred: false, attribute: None,
     }
 }
 
@@ -6393,6 +6401,9 @@ pub fn gen_llvm_any_ex_g4(
             crate::mono::MonoError::Limit(p) => GenError::Diag(p),
             crate::mono::MonoError::Internal(m) => GenError::Msg(m),
         })?;
+        if let Some(e) = crate::bindings::take_array_abi_error(prog, g4) {
+            return Err(GenError::Diag(e));
+        }
         return gen_llvm_concrete_ex(&plan.program, verified, trust_callers, budget, target, foreign_checks);
     }
     gen_llvm_concrete_ex(prog, verified, trust_callers, budget, target, foreign_checks)
@@ -6766,7 +6777,7 @@ mod tests {
             ret_refine: None,
             tparams: vec![],
             foreign: None,
-            cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, attribute: None,
+            cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, pred: false, attribute: None,
         };
         let mut m = Mod::new();
         let mut g = FnGen::new(&mut m, &tt, &funcs, &f, false);
@@ -6793,7 +6804,7 @@ mod tests {
                 ret_refine: None,
                 tparams: vec![],
                 foreign: None,
-                cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, attribute: None,
+                cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, pred: false, attribute: None,
             }],
             refined: false,
             g9: None,

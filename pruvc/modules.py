@@ -776,7 +776,7 @@ class _Resolver:
                 if f.ret != UNIT:
                     _err(f, "entry_main", "the root main must return ()", "write `pub fn main() -> ()`")
                 prog.main = f.name
-            if f.pub and not f.tparams and f.foreign is None:
+            if f.pub and not f.tparams and f.foreign is None and not f.pred:   # R03L: a pred is never a host entry
                 f.host_entry = True
                 out.append(f.name)
         prog.entries = out

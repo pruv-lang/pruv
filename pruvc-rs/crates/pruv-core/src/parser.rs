@@ -294,6 +294,13 @@ impl Parser {
                 self.fn_pub.push(is_pub);
                 p.functions.push(f);
                 self.items.push(Item::Fn(p.functions.len() - 1));
+            } else if self.peek(0).kind == Kind::Id && self.peek(0).val == "pred" && self.at("fn", 1) {
+                self.bump();
+                let mut f = self.function(None)?;
+                f.pred = true;
+                self.fn_pub.push(is_pub);
+                p.functions.push(f);
+                self.items.push(Item::Fn(p.functions.len() - 1));
             } else if self.peek(0).kind == Kind::Id && self.peek(0).val == "rust" && self.at("fn", 1) {
                 let t = self.peek(0).clone();
                 return Err(self.foreign_syntax(&t, "missing `trusted`", "write `trusted rust fn ...`"));
@@ -1106,7 +1113,7 @@ impl Parser {
             foreign: info,
             decreases,
             cost,
-            small_bound: None, x_auto: None, opaque: false, attribute: None,
+            small_bound: None, x_auto: None, opaque: false, pred: false, attribute: None,
         })
     }
 

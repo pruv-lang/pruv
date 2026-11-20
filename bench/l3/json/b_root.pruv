@@ -13,10 +13,10 @@ fn one(v: i64) -> [i64] ! alloc { let mut a: [i64] = alloc(1, 0); a[0] = v; retu
 // (next > j, next <= stop, j < m) and the kind range. Kept: "parent(j) == id" and "child is not a key", which need the
 // nested subtree facts the solver times out on (gap G3).
 fn array_at(doc: crate::json::JsonDocument, id: i64, index: i64) -> i64
-  requires len(doc.tape) % 6 == 0 && len(doc.tape) >= 6 && len(doc.tape) <= 6291456 && len(doc.source) <= 16777216
-  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t] && doc.tape[6 * t] <= 7)
-  requires forall t in 0..len(doc.tape) / 6: (t < doc.tape[6 * t + 3] && doc.tape[6 * t + 3] <= len(doc.tape) / 6)
-  requires forall t in 0..len(doc.tape) / 6: (t > 0 ==> (0 <= doc.tape[6 * t + 4] && doc.tape[6 * t + 4] < t && (doc.tape[6 * doc.tape[6 * t + 4]] == 5 || doc.tape[6 * doc.tape[6 * t + 4]] == 6) && t < doc.tape[6 * doc.tape[6 * t + 4] + 3] && doc.tape[6 * t + 3] <= doc.tape[6 * doc.tape[6 * t + 4] + 3] && doc.tape[6 * doc.tape[6 * t + 4] + 1] <= doc.tape[6 * t + 1] && doc.tape[6 * t + 2] <= doc.tape[6 * doc.tape[6 * t + 4] + 2]))
+  requires crate::json::doc_shape(doc)
+  requires crate::json::doc_kinds(doc)
+  requires crate::json::doc_skips(doc)
+  requires crate::json::doc_parents(doc)
   ensures result >= 0 ==> (result < len(doc.tape) / 6 && doc.tape[6 * result + 4] == id && doc.tape[6 * result] <= 6)
 {
   if id < 0 || id >= len(doc.tape) / 6 || doc.tape[6 * id] == 7 { return -3; }
@@ -37,9 +37,9 @@ fn array_at(doc: crate::json::JsonDocument, id: i64, index: i64) -> i64
 }
 
 fn raw_span(doc: crate::json::JsonDocument, id: i64) -> crate::access::Span
-  requires len(doc.tape) % 6 == 0 && len(doc.tape) >= 6 && len(doc.tape) <= 6291456 && len(doc.source) <= 16777216
-  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t] && doc.tape[6 * t] <= 7)
-  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t + 1] && doc.tape[6 * t + 1] < doc.tape[6 * t + 2] && doc.tape[6 * t + 2] <= len(doc.source))
+  requires crate::json::doc_shape(doc)
+  requires crate::json::doc_kinds(doc)
+  requires crate::json::doc_spans(doc)
   ensures result.status == 0 || result.status == -3
   ensures result.status == 0 ==> (0 <= result.start && result.start <= result.end && result.end <= len(doc.source) && result.end <= 16777216)
 {
@@ -47,10 +47,10 @@ fn raw_span(doc: crate::json::JsonDocument, id: i64) -> crate::access::Span
   return crate::access::Span { status: 0, start: doc.tape[6 * id + 1], end: doc.tape[6 * id + 2] };
 }
 fn array_length(doc: crate::json::JsonDocument, id: i64) -> i64
-  requires len(doc.tape) % 6 == 0 && len(doc.tape) >= 6 && len(doc.tape) <= 6291456 && len(doc.source) <= 16777216
-  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t] && doc.tape[6 * t] <= 7)
-  requires forall t in 0..len(doc.tape) / 6: (t < doc.tape[6 * t + 3] && doc.tape[6 * t + 3] <= len(doc.tape) / 6)
-  requires forall t in 0..len(doc.tape) / 6: (doc.tape[6 * t] == 5 ==> doc.tape[6 * t + 5] == count(k in t + 1..doc.tape[6 * t + 3]: doc.tape[6 * k + 4] == t))
+  requires crate::json::doc_shape(doc)
+  requires crate::json::doc_kinds(doc)
+  requires crate::json::doc_skips(doc)
+  requires crate::json::doc_array_counts(doc)
 {
   if id < 0 || id >= len(doc.tape) / 6 || doc.tape[6 * id] == 7 { return -3; }
   if doc.tape[6 * id] != 5 { return -2; }
@@ -59,10 +59,10 @@ fn array_length(doc: crate::json::JsonDocument, id: i64) -> i64
 // skip(v) for a node with an opaque index: the caller's v = j + 1 does not match the tape-fact trigger 6 * t + 3,
 // so the fact is instantiated here where v is a parameter. Compiles to one load.
 fn skip_of(doc: crate::json::JsonDocument, v: i64) -> i64
-  requires len(doc.tape) % 6 == 0 && len(doc.tape) >= 6 && len(doc.tape) <= 6291456 && len(doc.source) <= 16777216
-  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t] && doc.tape[6 * t] <= 7)
-  requires forall t in 0..len(doc.tape) / 6: (t < doc.tape[6 * t + 3] && doc.tape[6 * t + 3] <= len(doc.tape) / 6)
-  requires forall t in 0..len(doc.tape) / 6: (t > 0 ==> (0 <= doc.tape[6 * t + 4] && doc.tape[6 * t + 4] < t && (doc.tape[6 * doc.tape[6 * t + 4]] == 5 || doc.tape[6 * doc.tape[6 * t + 4]] == 6) && t < doc.tape[6 * doc.tape[6 * t + 4] + 3] && doc.tape[6 * t + 3] <= doc.tape[6 * doc.tape[6 * t + 4] + 3] && doc.tape[6 * doc.tape[6 * t + 4] + 1] <= doc.tape[6 * t + 1] && doc.tape[6 * t + 2] <= doc.tape[6 * doc.tape[6 * t + 4] + 2]))
+  requires crate::json::doc_shape(doc)
+  requires crate::json::doc_kinds(doc)
+  requires crate::json::doc_skips(doc)
+  requires crate::json::doc_parents(doc)
   requires 0 < v && v < len(doc.tape) / 6
   ensures result == doc.tape[6 * v + 3] && result > v && result <= doc.tape[6 * doc.tape[6 * v + 4] + 3]
 { return doc.tape[6 * v + 3]; }
@@ -71,11 +71,11 @@ fn skip_of(doc: crate::json::JsonDocument, v: i64) -> i64
 // follows inside the object" — key/value alternation and parent identity need the nested subtree and count facts (gaps G2, G3).
 fn find(doc: crate::json::JsonDocument, id: i64, key: [i64], klen: i64) -> i64
   requires 0 <= klen && klen <= len(key)
-  requires len(doc.tape) % 6 == 0 && len(doc.tape) >= 6 && len(doc.tape) <= 6291456 && len(doc.source) <= 16777216
-  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t] && doc.tape[6 * t] <= 7)
-  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t + 1] && doc.tape[6 * t + 1] < doc.tape[6 * t + 2] && doc.tape[6 * t + 2] <= len(doc.source))
-  requires forall t in 0..len(doc.tape) / 6: (t < doc.tape[6 * t + 3] && doc.tape[6 * t + 3] <= len(doc.tape) / 6)
-  requires forall t in 0..len(doc.tape) / 6: (t > 0 ==> (0 <= doc.tape[6 * t + 4] && doc.tape[6 * t + 4] < t && (doc.tape[6 * doc.tape[6 * t + 4]] == 5 || doc.tape[6 * doc.tape[6 * t + 4]] == 6) && t < doc.tape[6 * doc.tape[6 * t + 4] + 3] && doc.tape[6 * t + 3] <= doc.tape[6 * doc.tape[6 * t + 4] + 3] && doc.tape[6 * doc.tape[6 * t + 4] + 1] <= doc.tape[6 * t + 1] && doc.tape[6 * t + 2] <= doc.tape[6 * doc.tape[6 * t + 4] + 2]))
+  requires crate::json::doc_shape(doc)
+  requires crate::json::doc_kinds(doc)
+  requires crate::json::doc_spans(doc)
+  requires crate::json::doc_skips(doc)
+  requires crate::json::doc_parents(doc)
   ensures result >= 0 ==> (result < len(doc.tape) / 6 && doc.tape[6 * result + 4] == id)
 {
   if id < 0 || id >= len(doc.tape) / 6 || doc.tape[6 * id] == 7 { return -3; }
@@ -99,11 +99,11 @@ fn find(doc: crate::json::JsonDocument, id: i64, key: [i64], klen: i64) -> i64
 // bounds, the kind range. Kept: "member j is a single-record key, its parent is id" and "a non-key value with parent id
 // follows inside the object" — key/value alternation and parent identity need the nested subtree and count facts (gaps G2, G3).
 fn find_ascii(doc: crate::json::JsonDocument, id: i64, key: str) -> i64
-  requires len(doc.tape) % 6 == 0 && len(doc.tape) >= 6 && len(doc.tape) <= 6291456 && len(doc.source) <= 16777216
-  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t] && doc.tape[6 * t] <= 7)
-  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t + 1] && doc.tape[6 * t + 1] < doc.tape[6 * t + 2] && doc.tape[6 * t + 2] <= len(doc.source))
-  requires forall t in 0..len(doc.tape) / 6: (t < doc.tape[6 * t + 3] && doc.tape[6 * t + 3] <= len(doc.tape) / 6)
-  requires forall t in 0..len(doc.tape) / 6: (t > 0 ==> (0 <= doc.tape[6 * t + 4] && doc.tape[6 * t + 4] < t && (doc.tape[6 * doc.tape[6 * t + 4]] == 5 || doc.tape[6 * doc.tape[6 * t + 4]] == 6) && t < doc.tape[6 * doc.tape[6 * t + 4] + 3] && doc.tape[6 * t + 3] <= doc.tape[6 * doc.tape[6 * t + 4] + 3] && doc.tape[6 * doc.tape[6 * t + 4] + 1] <= doc.tape[6 * t + 1] && doc.tape[6 * t + 2] <= doc.tape[6 * doc.tape[6 * t + 4] + 2]))
+  requires crate::json::doc_shape(doc)
+  requires crate::json::doc_kinds(doc)
+  requires crate::json::doc_spans(doc)
+  requires crate::json::doc_skips(doc)
+  requires crate::json::doc_parents(doc)
   ensures result >= 0 ==> (result < len(doc.tape) / 6 && doc.tape[6 * result + 4] == id)
 {
   if id < 0 || id >= len(doc.tape) / 6 || doc.tape[6 * id] == 7 { return -3; }
@@ -133,11 +133,11 @@ fn is_ascii(key: str) -> bool
   return true;
 }
 fn field(doc: crate::json::JsonDocument, id: i64, key: str) -> i64 ! alloc
-  requires len(doc.tape) % 6 == 0 && len(doc.tape) >= 6 && len(doc.tape) <= 6291456 && len(doc.source) <= 16777216
-  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t] && doc.tape[6 * t] <= 7)
-  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t + 1] && doc.tape[6 * t + 1] < doc.tape[6 * t + 2] && doc.tape[6 * t + 2] <= len(doc.source))
-  requires forall t in 0..len(doc.tape) / 6: (t < doc.tape[6 * t + 3] && doc.tape[6 * t + 3] <= len(doc.tape) / 6)
-  requires forall t in 0..len(doc.tape) / 6: (t > 0 ==> (0 <= doc.tape[6 * t + 4] && doc.tape[6 * t + 4] < t && (doc.tape[6 * doc.tape[6 * t + 4]] == 5 || doc.tape[6 * doc.tape[6 * t + 4]] == 6) && t < doc.tape[6 * doc.tape[6 * t + 4] + 3] && doc.tape[6 * t + 3] <= doc.tape[6 * doc.tape[6 * t + 4] + 3] && doc.tape[6 * doc.tape[6 * t + 4] + 1] <= doc.tape[6 * t + 1] && doc.tape[6 * t + 2] <= doc.tape[6 * doc.tape[6 * t + 4] + 2]))
+  requires crate::json::doc_shape(doc)
+  requires crate::json::doc_kinds(doc)
+  requires crate::json::doc_spans(doc)
+  requires crate::json::doc_skips(doc)
+  requires crate::json::doc_parents(doc)
   ensures result >= 0 ==> (result < len(doc.tape) / 6 && doc.tape[6 * result + 4] == id)
 {
   if len(key) > 16777216 { return -1; }
@@ -173,11 +173,11 @@ fn field(doc: crate::json::JsonDocument, id: i64, key: str) -> i64 ! alloc
   return find(doc, id, units, used);
 }
 fn field_units(doc: crate::json::JsonDocument, id: i64, key: [i64]) -> i64
-  requires len(doc.tape) % 6 == 0 && len(doc.tape) >= 6 && len(doc.tape) <= 6291456 && len(doc.source) <= 16777216
-  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t] && doc.tape[6 * t] <= 7)
-  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t + 1] && doc.tape[6 * t + 1] < doc.tape[6 * t + 2] && doc.tape[6 * t + 2] <= len(doc.source))
-  requires forall t in 0..len(doc.tape) / 6: (t < doc.tape[6 * t + 3] && doc.tape[6 * t + 3] <= len(doc.tape) / 6)
-  requires forall t in 0..len(doc.tape) / 6: (t > 0 ==> (0 <= doc.tape[6 * t + 4] && doc.tape[6 * t + 4] < t && (doc.tape[6 * doc.tape[6 * t + 4]] == 5 || doc.tape[6 * doc.tape[6 * t + 4]] == 6) && t < doc.tape[6 * doc.tape[6 * t + 4] + 3] && doc.tape[6 * t + 3] <= doc.tape[6 * doc.tape[6 * t + 4] + 3] && doc.tape[6 * doc.tape[6 * t + 4] + 1] <= doc.tape[6 * t + 1] && doc.tape[6 * t + 2] <= doc.tape[6 * doc.tape[6 * t + 4] + 2]))
+  requires crate::json::doc_shape(doc)
+  requires crate::json::doc_kinds(doc)
+  requires crate::json::doc_spans(doc)
+  requires crate::json::doc_skips(doc)
+  requires crate::json::doc_parents(doc)
   ensures result >= 0 ==> (result < len(doc.tape) / 6 && doc.tape[6 * result + 4] == id)
 { return find(doc, id, key, len(key)); }
 // Path pairs: 0 absolute ID, 1 array index, 2 field units, 3 field str.

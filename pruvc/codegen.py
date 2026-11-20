@@ -1537,6 +1537,7 @@ class Gen:
         s.tmp = 0
         s.table = make_type_table(prog)
         s.params = set()
+        s.take_arrays = set()
         s.inouts = set()     # G5 A2: inout parameters of the function being generated (`&mut [T]` bindings)
         # G5 A2: the inout code paths only run for a program that uses inout (unchecked program: assume it may)
         s.g5 = getattr(prog, "uses_inout", None) is not False
@@ -1791,6 +1792,7 @@ class Gen:
         if f.foreign is not None:
             return   # G6: a trusted rust fn has no body; its boundary helper is emitted on first use
         s.params = {p.name for p in f.params}
+        s.take_arrays = {p.name for p in f.params if p.take and is_array(p.type)}
         if s.g5:
             s.inouts = {p.name for p in f.params if p.mode == "inout"}
         s.vt = {p.name: p.type for p in f.params}
@@ -1822,7 +1824,8 @@ class Gen:
         s.emit(0, "%sfn %s(%s)%s {" % (vis, body_name, ps, ret))
         s.cost = not s.verified and f.cost is not None
         if s.cost:
-            s.emit(1, "let pruv_cost: i128 = %s__pruv_cost(%s);" % (f.name, ", ".join(p.name for p in f.params)))
+            args = ["&" + p.name if p.name in s.take_arrays else p.name for p in f.params]
+            s.emit(1, "let pruv_cost: i128 = %s__pruv_cost(%s);" % (f.name, ", ".join(args)))
             s.emit(1, "let mut pruv_spent: u128 = 0;")
         s.block(f.body, 1)
         if s.cost and f.ret == UNIT:
@@ -1895,6 +1898,7 @@ class Gen:
 
     def cost_call(s, name, args):
         # A negative modular bound cannot be met by a nonnegative callee counter.
+        args = ["&" + arg if p.take and is_array(p.type) else arg for p, arg in zip(s.fmap[name].params, args)]
         return ('let pruv_units = %s__pruv_cost(%s); '
                 'if pruv_units < 0 { panic!("pruv: cost exceeded"); } %s' %
                 (name, ", ".join(args), s.cost_add('(pruv_units as u128).checked_add(1).unwrap_or_else(|| panic!("pruv: cost exceeded"))')))
@@ -2028,8 +2032,8 @@ class Gen:
 
     # ---------- contract evaluation (requires), i128 ----------
     def carr(s, e):
-        if isinstance(e, Var):
-            return e.name
+        if isinstance(e, Var):   # R03L: an owned take array is read through a borrow
+            return "(&%s)" % e.name if e.name in s.take_arrays else e.name
         if isinstance(e, StrLit):  # G2 B2: &'static str
             return str_lit(e.value)
         if s.g9 and isinstance(e, (FieldAccess, VariantField)):   # G9: a buffer field of a real (extended) value
@@ -2720,10 +2724,11 @@ class Gen:
         for i in range(len(stmts) - 1, -1, -1):
             later[i] = set(later[i + 1])
             _stmt_names([stmts[i]], later[i])
-        frame = [set(decls), set(), loop]
+        frame = [set(decls), set(), loop, False]
         s.frames.append(frame)
         for i, st in enumerate(stmts):
             frame[1] = later[i + 1]
+            frame[3] = i + 1 < len(stmts) and isinstance(stmts[i + 1], Return)
             s.stmt(st, ind)
             if isinstance(st, Let):
                 frame[0].add(st.name)
@@ -2736,7 +2741,7 @@ class Gen:
         the one declaring it names it, and no loop body lies between (a parameter or binder view is never dead here)."""
         if name in s.refs or name in s.params or name in s.pinned:
             return False
-        for decls, later, loop in reversed(s.frames):
+        for decls, later, loop, _ in reversed(s.frames):
             if name in later:
                 return False
             if name in decls:
@@ -2745,11 +2750,20 @@ class Gen:
                 return False
         return False
 
+    def return_next(s, name):
+        """R03L: the statement after the one being emitted is a return of the same block that does not name local
+        `name`, so `name` is dead even inside a loop body (control leaves the function before any later iteration)."""
+        if name in s.refs or name in s.params or name in s.pinned or not s.frames:
+            return False
+        return s.frames[-1][3] and name not in s.frames[-1][1]
+
     def last_copy(s, st):
         """a let / assignment whose value is copy(v) of an owned local v at its last use moves v (see dead_after)"""
         e = st.value
-        if (s.ext and not s.cost and isinstance(e, Call) and e.name == "truncate" and len(e.args) == 2
-                and isinstance(e.args[0], Var) and e.args[0].name != st.name and s.dead_after(e.args[0].name)):
+        # R03L: truncate of a dead owned local moves in every program (the tape handed to a take parameter)
+        if (not s.cost and isinstance(e, Call) and e.name == "truncate" and len(e.args) == 2
+                and isinstance(e.args[0], Var) and e.args[0].name in s.vt and e.args[0].name != st.name
+                and (s.dead_after(e.args[0].name) or s.return_next(e.args[0].name))):
             # the length argument naming the array again (e.g. len(truncate(a, 1))) keeps it borrowed: no move
             m_names = set()
             _expr_names(e.args[1], m_names)
@@ -3098,7 +3112,7 @@ class Gen:
             return e.name          # G9: a buffer payload view is already a reference
         if isinstance(e, Var) and e.name in s.inouts:
             return "&*" + e.name   # G5: a shared reborrow of an inout parameter
-        if isinstance(e, Var) and e.name not in s.params:
+        if isinstance(e, Var) and (e.name not in s.params or e.name in s.take_arrays):
             return "&" + e.name
         if isinstance(e, Var):
             return e.name
@@ -3298,11 +3312,13 @@ class Gen:
                     return "%s.to_owned()" % s.e(a[0])
                 return "%s.to_vec()" % s.e(a[0])
             if n == "truncate":
-                # truncate of an owned local at its last use shortens the local in place; otherwise copy the prefix
+                # truncate of an owned local at its last use shortens the local in place; otherwise copy the prefix (R03L: a shortened
+                # vector with over half its capacity unused releases the rest)
                 if not s.cost and isinstance(a[0], Var) and a[0].name in s.moving:
                     chk = ("" if s.verified else "if pruv_m < 0 || (pruv_m as u64) > (pruv_t.len() as u64) "
                            "{ pruv_oob(pruv_m, pruv_t.len()) } ")
-                    return ("{ let pruv_m: i64 = %s; let mut pruv_t = %s; %spruv_t.truncate(pruv_m as usize); pruv_t }"
+                    return ("{ let pruv_m: i64 = %s; let mut pruv_t = %s; %spruv_t.truncate(pruv_m as usize); "
+                            "if pruv_t.capacity() / 2 > pruv_t.len() { pruv_t.shrink_to_fit(); } pruv_t }"
                             % (s.e(a[1]), s.e(a[0]), chk))
                 if not s.verified:
                     return ("{ let pruv_a = %s; let pruv_m: i64 = %s; if pruv_m < 0 || (pruv_m as u64) > (pruv_a.len() as u64) "
@@ -3408,6 +3424,8 @@ class Gen:
                     args.append(s.mut_ref(x.expr.name))
                 elif n in s.struct_inouts and isinstance(x, IntLit) and x.value >= 0:
                     args.append(str(x.value))
+                elif isinstance(x, Move) and is_array(x.ty):
+                    args.append(s.e(x))
                 elif s.g6 and (isinstance(x, Move) or (x.ty is not None and is_collection(x.ty))):
                     take = isinstance(x, Move) or (callee is not None and callee.params[i].take)
                     args.append(s.e(x) if take else s.cref(x))

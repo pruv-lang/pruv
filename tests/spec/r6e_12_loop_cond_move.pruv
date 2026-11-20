@@ -1,0 +1,12 @@
+// spec: R-6e-12 accept
+// loop invariants are checked at the loop head, before a condition that consumes the array
+fn sum(take a: [i64]) -> i64 { return len(a); }
+pub fn main() -> () ! alloc {
+  let mut a: [i64] = alloc(3, 1);
+  let mut i: i64 = 0;
+  while i < 1 && sum(move a) == 3 invariant 0 <= i && i <= 1 && len(a) == 3 decreases 1 - i {
+    a = alloc(3, 1);
+    i = i + 1;
+  }
+  return;
+}

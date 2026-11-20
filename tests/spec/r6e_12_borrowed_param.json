@@ -1,0 +1,1 @@
+{"stage":"type","code":"array_alias","out_contains":["parameter a is a borrowed array","take a: [i64]","copy(a)"]}

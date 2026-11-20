@@ -1,0 +1,4 @@
+// spec: R-6e-12 accept
+// a contract check that indexes a take parameter reads it through a borrow and does not move it
+fn head(take a: [i64]) -> i64 requires len(a) > 0 requires a[0] == 7 { return a[0]; }
+pub fn main() -> () ! alloc { let a: [i64] = alloc(1, 7); let r: i64 = head(move a); return; }

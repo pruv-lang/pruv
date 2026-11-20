@@ -1,0 +1,4 @@
+// spec: R-6-2 accept
+// a pub predicate exists only in contracts: it is not exported and no code is generated for it
+pub pred fn pos(x: i64) -> bool { return x > 0; }
+pub fn twice(x: i64) -> i64 requires pos(x) && x < 1000 ensures pos(result) { return 2 * x; }

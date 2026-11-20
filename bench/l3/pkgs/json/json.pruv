@@ -52,6 +52,26 @@ pub struct JsonDocument { source: [u8], tape: [i64] }
 // Dedicated non-generic result: a buffer-bearing type cannot be a Result<T> payload.
 pub enum JsonParse { Parsed(document: JsonDocument), Failed(error: JsonError) }
 
+// ---- tape facts (R03L, rule R-6-2): named contract predicates, expanded where used and proved by `parse` ----
+pub pred fn doc_shape(d: JsonDocument) -> bool {
+  return len(d.tape) % 6 == 0 && len(d.tape) >= 6 && len(d.tape) <= 6291456 && len(d.source) <= 16777216;
+}
+pub pred fn doc_kinds(d: JsonDocument) -> bool {
+  return forall t in 0..len(d.tape) / 6: (0 <= d.tape[6 * t] && d.tape[6 * t] <= 7);
+}
+pub pred fn doc_spans(d: JsonDocument) -> bool {
+  return forall t in 0..len(d.tape) / 6: (0 <= d.tape[6 * t + 1] && d.tape[6 * t + 1] < d.tape[6 * t + 2] && d.tape[6 * t + 2] <= len(d.source));
+}
+pub pred fn doc_skips(d: JsonDocument) -> bool {
+  return forall t in 0..len(d.tape) / 6: (t < d.tape[6 * t + 3] && d.tape[6 * t + 3] <= len(d.tape) / 6);
+}
+pub pred fn doc_parents(d: JsonDocument) -> bool {
+  return forall t in 0..len(d.tape) / 6: (t > 0 ==> (0 <= d.tape[6 * t + 4] && d.tape[6 * t + 4] < t && (d.tape[6 * d.tape[6 * t + 4]] == 5 || d.tape[6 * d.tape[6 * t + 4]] == 6) && t < d.tape[6 * d.tape[6 * t + 4] + 3] && d.tape[6 * t + 3] <= d.tape[6 * d.tape[6 * t + 4] + 3] && d.tape[6 * d.tape[6 * t + 4] + 1] <= d.tape[6 * t + 1] && d.tape[6 * t + 2] <= d.tape[6 * d.tape[6 * t + 4] + 2]));
+}
+pub pred fn doc_array_counts(d: JsonDocument) -> bool {
+  return forall t in 0..len(d.tape) / 6: (d.tape[6 * t] == 5 ==> d.tape[6 * t + 5] == count(k in t + 1..d.tape[6 * t + 3]: d.tape[6 * k + 4] == t));
+}
+
 pub fn make_error(position: i64, kind: i64) -> JsonError
   ensures result.position == position && result.kind == kind
 {
@@ -64,17 +84,9 @@ pub fn parse_failed(position: i64, kind: i64) -> JsonParse
   return JsonParse::Failed(JsonError { position: position, kind: kind });
 }
 
-// Ownership boundary: wraps (copies of) completed buffers. The caller must have run check_tape.
-pub fn wrap_document(source: [u8], tape: [i64]) -> JsonParse ! alloc
-  ensures is_variant(result, JsonParse::Parsed)
-  ensures len(variant_field(result, JsonParse::Parsed, document).source) == len(source)
-  ensures forall i in 0..len(source): variant_field(result, JsonParse::Parsed, document).source[i] == source[i]
-  ensures len(variant_field(result, JsonParse::Parsed, document).tape) == len(tape)
-  ensures forall i in 0..len(tape): variant_field(result, JsonParse::Parsed, document).tape[i] == tape[i]
-{
-  let d: JsonDocument = JsonDocument { source: copy(source), tape: copy(tape) };
-  return JsonParse::Parsed(d);
-}
+// Ownership boundary (R03L, R-6e-12): parse::scan_document builds the JsonDocument itself. The finished tape local
+// moves into the field (no copy); the source is borrowed by parse, so it is copied once (handing it over is R03 C).
+// The old wrap_document copied both buffers and is gone.
 
 // ---- structural publication check ----
 

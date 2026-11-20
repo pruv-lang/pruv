@@ -298,6 +298,8 @@ pub struct Function {
     pub x_auto: Option<Expr>,
     /// P13o: `opaque fn` (Python `Function.opaque`). Not emitted in the dump.
     pub opaque: bool,
+    /// R-6-2: a named predicate, expanded in contracts and omitted after checking.
+    pub pred: bool,
     /// Source attribute, kept by specialization and omitted from the AST dump.
     pub attribute: Option<FnAttribute>,
 }

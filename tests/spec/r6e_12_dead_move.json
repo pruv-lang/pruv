@@ -1,0 +1,1 @@
+{"stage": "type", "code": "foreign_move", "line": 7, "out_contains": ["move only where ownership is consumed"]}

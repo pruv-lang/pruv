@@ -1,0 +1,36 @@
+// spec: R-6-2 accept
+// a named predicate over a record: established once by an ensures, used by requires, expanded (not trusted)
+struct Doc { tape: [i64], n: i64 }
+
+pred fn tape_ok(d: Doc) -> bool {
+  return len(d.tape) == 2 * d.n && (forall t in 0..d.n: d.tape[2 * t] >= 0 && d.tape[2 * t + 1] <= t);
+}
+
+fn build(n: i64) -> Doc ! alloc
+  requires 0 <= n && n < 1000
+  ensures tape_ok(result) && result.n == n
+{
+  let tape: [i64] = alloc(2 * n, 0);
+  return Doc { tape: copy(tape), n: n };
+}
+
+fn first(d: Doc, t: i64) -> i64
+  requires tape_ok(d)
+  requires 0 <= t && t < d.n
+  ensures result >= 0
+{
+  return d.tape[2 * t];
+}
+
+fn second(d: Doc) -> i64
+  requires tape_ok(d)
+  requires d.n > 0
+  ensures result >= 0
+{
+  return first(d, 0);
+}
+
+fn main() -> i64 ! alloc {
+  let d: Doc = build(3);
+  return second(d);
+}

@@ -1,1 +1,1 @@
-{"stage": "type", "code": "call_in_contract", "line": 4, "col": 28, "message": "function p cannot be expanded in a contract: its parameters are not all i64, bool or arrays of i64, u8 or bool"}
+{"stage": "type", "code": "call_in_contract", "line": 4, "col": 33, "message": "function p cannot be expanded in a contract: its parameters are not all i64, bool, arrays of i64, u8 or bool, or structs"}

@@ -1,0 +1,16 @@
+// spec: R-6e-12 accept
+struct D { a: [i64] }
+
+fn wrap(take a: [i64]) -> D
+  ensures len(result.a) == len(a)
+  cost 0
+{
+  return D { a: move a };
+}
+
+fn caller() -> D ! alloc
+  ensures len(result.a) == 4
+{
+  let x: [i64] = alloc(4, 0);
+  return wrap(move x);
+}

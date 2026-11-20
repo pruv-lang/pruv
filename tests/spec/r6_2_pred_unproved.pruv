@@ -1,0 +1,23 @@
+// spec: R-6-2 reject
+// a requires that names a pred must be proved at each call: the expansion is checked, not assumed
+struct Doc { tape: [i64], n: i64 }
+
+pred fn tape_ok(d: Doc) -> bool {
+  return len(d.tape) == 2 * d.n && (forall t in 0..d.n: d.tape[2 * t] >= 0);
+}
+
+fn first(d: Doc, t: i64) -> i64
+  requires tape_ok(d)
+  requires 0 <= t && t < d.n
+  ensures result >= 0
+{
+  return d.tape[2 * t];
+}
+
+fn second(d: Doc) -> i64
+  requires d.n > 0
+{
+  return first(d, 0);
+}
+
+fn main() -> i64 { return 0; }

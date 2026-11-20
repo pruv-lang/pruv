@@ -1,0 +1,1 @@
+{"gen_contains":["wrap(a: ::std::vec::Vec<i64>)","wrap(x)"],"gen_absent":[".to_vec()",".clone()"]}
