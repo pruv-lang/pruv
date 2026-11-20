@@ -13,7 +13,7 @@ pub struct Budget {
   stopped: Vec<String>
 }
 pub struct Clock {
-  owner: String, since: i64, armed: bool, active: i64, ordinal: i64,
+  owner: String, since: i64, has_since: bool, armed: bool, active: i64, ordinal: i64,
   runs: HashMap<String, bool>, run_order: Vec<String>
 }
 pub struct St {
@@ -80,10 +80,11 @@ fn settle(inout b: Budget, inout c: Clock, sid: str, now: i64, inout reply: Repl
 {
   if !equal(c.owner, sid) { return; }
   disarm(inout c, inout reply);
-  if c.since == -1 { return; }
+  if !c.has_since { return; }
   let elapsed: i64 = bounded(now) - bounded(c.since);
   if elapsed > 0 { b.active_ms = bounded(bounded(b.active_ms) + elapsed); }
-  c.since = -1;
+  c.since = 0;
+  c.has_since = false;
   b.active_since = -1;
   b.since_kind = 0;
   b.since_text = string_new();
@@ -121,11 +122,13 @@ fn halt(inout b: Budget, sid: str, bid: str, now: i64, reason: i64,
   return 0;
 }
 
-fn begin(inout b: Budget, inout c: Clock, now: i64) -> ()
+fn begin(inout b: Budget, inout c: Clock, now: i64) -> () ! alloc
 {
+  c.has_since = true;
   c.since = bounded(now);
   b.active_since = bounded(now);
   b.since_kind = 2;
+  b.since_text = string_new();
 }
 
 fn arm(inout b: Budget, inout c: Clock, sid: str, bid: str, now: i64,
@@ -148,7 +151,7 @@ fn refresh(inout b: Budget, inout c: Clock, sid: str, bid: str, now: i64,
            inout reply: Reply) -> i64 ! alloc, io
 {
   let consuming: bool = b.state == 0 && c.active > 0;
-  if consuming == (c.since != -1) { return 0; }
+  if consuming == c.has_since { return 0; }
   if !consuming {
     settle(inout b, inout c, sid, now, inout reply);
     return 0;
@@ -164,7 +167,7 @@ fn fire(inout b: Budget, inout c: Clock, sid: str, bid: str, now: i64,
   c.armed = false;
   if b.state != 0 || b.unlimited { return 0; }
   settle(inout b, inout c, sid, now, inout reply);
-  if time_left(b) > 0 && c.active > 0 {
+  if time_left(b) > 0 && len(c.runs) > 0 {
     begin(inout b, inout c, now);
     return arm(inout b, inout c, sid, bid, now, inout reply);
   }
@@ -246,20 +249,37 @@ fn bumped(old: i64, amount: i64) -> i64
 fn charge(inout b: Budget, what: [i64]) -> i64
   requires len(what) == 10
 {
-  let delegations: i64 = bumped(b.delegations, amount(what, 0));
-  if delegations == -9223372036854775807 { return -1; }
-  if !b.unlimited && amount(what, 0) > 0 && delegations > b.limits.delegations { return 1; }
-  let commands: i64 = bumped(b.commands, amount(what, 1));
-  if commands == -9223372036854775807 { return -1; }
-  if !b.unlimited && amount(what, 1) > 0 && commands > b.limits.commands { return 2; }
-  let reviews: i64 = bumped(b.reviews, amount(what, 2));
-  if reviews == -9223372036854775807 { return -1; }
-  if !b.unlimited && amount(what, 2) > 0 && reviews > b.limits.reviews { return 3; }
-  let checks: i64 = bumped(b.checks, amount(what, 3));
-  if checks == -9223372036854775807 { return -1; }
-  if !b.unlimited && amount(what, 3) > 0 && checks > b.limits.checks { return 4; }
-  let retries: i64 = bumped(b.retries, amount(what, 4));
-  if retries == -9223372036854775807 { return -1; }
+  let a0: i64 = amount(what, 0);
+  let a1: i64 = amount(what, 1);
+  let a2: i64 = amount(what, 2);
+  let a3: i64 = amount(what, 3);
+  let a4: i64 = amount(what, 4);
+  let delegations: i64 = bumped(b.delegations, a0);
+  let commands: i64 = bumped(b.commands, a1);
+  let reviews: i64 = bumped(b.reviews, a2);
+  let checks: i64 = bumped(b.checks, a3);
+  let retries: i64 = bumped(b.retries, a4);
+  if !b.unlimited {
+    if a0 > 0 {
+      if delegations == -9223372036854775807 { return -1; }
+      if delegations > b.limits.delegations { return 1; }
+    }
+    if a1 > 0 {
+      if commands == -9223372036854775807 { return -1; }
+      if commands > b.limits.commands { return 2; }
+    }
+    if a2 > 0 {
+      if reviews == -9223372036854775807 { return -1; }
+      if reviews > b.limits.reviews { return 3; }
+    }
+    if a3 > 0 {
+      if checks == -9223372036854775807 { return -1; }
+      if checks > b.limits.checks { return 4; }
+    }
+  }
+  if delegations == -9223372036854775807 || commands == -9223372036854775807 ||
+     reviews == -9223372036854775807 || checks == -9223372036854775807 ||
+     retries == -9223372036854775807 { return -1; }
   b.delegations = delegations;
   b.commands = commands;
   b.reviews = reviews;
@@ -430,7 +450,7 @@ fn run_event(inout st: St, sid: str, bid: str, run: str, code: i64, now: i64, fl
         }
         if new_clock {
           let mut c: Clock = Clock {
-            owner: string_push_str(string_new(), sid), since: -1, armed: false, active: 1,
+            owner: string_push_str(string_new(), sid), since: 0, has_since: false, armed: false, active: 1,
             ordinal: st.next_clock,
             runs: map_insert::<String, bool>(map_new::<String, bool>(), string_push_str(string_new(), run), false),
             run_order: vec_push::<String>(vec_new::<String>(), string_push_str(string_new(), run))
@@ -490,7 +510,7 @@ fn raise(inout st: St, sid: str, bid: str, now: i64, flag: i64) -> Reply ! alloc
           match map_get_mut::<String, Clock>(inout st.clocks, bid) {
             Some(c) => {
               if flag == 0 { disarm(inout c, inout reply); }
-              else if changed == 2 && !b.unlimited && c.since != -1 {
+              else if changed == 2 && !b.unlimited && c.has_since {
                 settle(inout b, inout c, sid, now, inout reply);
                 let status: i64 = refresh(inout b, inout c, sid, bid, now, inout reply); reply.status = status;
               }

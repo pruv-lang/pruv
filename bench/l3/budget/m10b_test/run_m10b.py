@@ -33,8 +33,8 @@ def build_decide_facts(work, facts):
     return rlib
 
 
-def generate(compiler, target, facts):
-    root = HERE / "root_m10b_typed.pruv"
+def generate(compiler, target, facts, root="root_m10b_typed.pruv"):
+    root = HERE / root
     cmd = [m10.PY_DEFAULT, m10.PRUVC_PY] if compiler == "py" else [compiler]
     backend = ["--backend", "rust"] if compiler == "py" else []
     checked(cmd + [str(root), "-o", str(target)] + backend + m10.LIBS
@@ -249,6 +249,62 @@ def derive(args):
     return 0
 
 
+def check_audit_controls(args, exe, facts, fixture):
+    # Reuse the flat M10 host for these operations. The malformed frame is in the
+    # run key, so the host can still read the first two keys after t_call rejects it.
+    work = exe.parent
+    generate("py" if args.py else args.pruvc, work / "flat.rs", facts, "root_m10b.pruv")
+    main = work / "flat_main.rs"
+    codec = json.dumps(str(Path(m10.M7) / "record_text.rs"))
+    driver = json.dumps(str(Path(m10.HERE) / "driver_m10.rs"))
+    main.write_text('#![allow(dead_code, unused_imports, unused_variables, unused_mut)]\n'
+                    '#[path = "flat.rs"] mod sol;\n'
+                    f'#[path = {codec}] mod record_text;\ninclude!({driver});\n')
+    flat = work / "driver_flat"
+    checked([m10.rustc(), "-O", "--edition", "2021", "--extern", f"bud_facts={facts}",
+             "--extern", f"decide_facts={build_decide_facts(work, facts)}", "-o", flat, main])
+
+    ref, run = fixture["script"][0]["args"]
+
+    def wire(req, body):
+        return f"call {req} " + " ".join(map(str, body))
+
+    def call(req, op, *values):
+        return wire(req, m10.call_body(op, [ref, *values]))
+
+    started = call("start", "runStarted", run)
+    waiting = call("wait", "runWaiting", run, True)
+    fire = [11] + [0] * 11 + m10.key(ref["sessionId"]) + m10.key(ref["budgetId"]) + [0]
+    probe = m10.call_body("runStarted", [ref, "x"])
+    session = fixture["world"]["sessions"][0]
+    budget = session["budget"]
+    charge_session = {**session, "budget": {**budget, "used": {**budget["used"], "delegations": -9007199254740991}}}
+    cases = (
+        ("audit-1-waiting-timer", session, [started, "now 1700000000005", waiting, wire("fire", fire)]),
+        ("audit-2-negative-start", session, ["now -1", started, "now 4", waiting, "now -1",
+                                             call("resume", "runWaiting", run, False)]),
+        ("audit-3-charge-order", charge_session, ["rdi 0", call("charge", "charge", {"delegations": -1, "commands": 4})]),
+        ("audit-4-key-frames", session, [wire("padding", probe[:-1] + [probe[-1] | 1]),
+                                         wire("truncated", probe[:-1]), wire("trailing", probe + [0])]),
+    )
+
+    def observed(driver, source):
+        log = checked([driver, "q"], input=source).stdout.splitlines(keepends=True)
+        # Decode state observations so inactive wire fields and the flat tool count
+        # do not affect comparison. Compare call results and effects verbatim.
+        return [f"O {m10.parse_obs(line)!r}\n" if line.startswith("O ") else line for line in log]
+
+    for name, put, calls in cases:
+        source = "\n".join([f"case {name}", m10.put_line(put), *calls, "end"]) + "\n"
+        expected = observed(flat, source)
+        actual = observed(exe, source)
+        if actual != expected:
+            import difflib
+            diff = "".join(difflib.unified_diff(expected, actual, fromfile="flat", tofile="typed"))
+            raise SystemExit(f"{name}:\n{diff}")
+        print(f"{name} exact (flat)")
+
+
 def check_raise_controls(exe, fixture):
     setup = {**fixture, "script": fixture["script"][:1]}
     prefix, _ = program(setup)
@@ -323,9 +379,11 @@ def check_decide_controls(exe, fixture):
 
 
 def run_cases(args, cases, observations, fixtures=False):
-    exe, _ = build(args)
+    exe, facts = build(args)
     if fixtures and any(case["id"] == "H10" for case in cases):
-        check_raise_controls(exe, next(case for case in cases if case["id"] == "H10"))
+        fixture = next(case for case in cases if case["id"] == "H10")
+        check_raise_controls(exe, fixture)
+        check_audit_controls(args, exe, facts, fixture)
     if fixtures and any(case["id"] == "G10" for case in cases):
         check_decide_controls(exe, next(case for case in cases if case["id"] == "G10"))
     inputs, cuts = [], {}

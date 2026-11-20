@@ -23,12 +23,19 @@ struct World {
     audit: bool,
 }
 
-fn take_key(words: &mut &[i64]) -> String {
-    let n = usize::try_from(words[0]).unwrap();
-    let end = 1 + n.div_ceil(4);
-    let units: Vec<_> = (0..n).map(|i| (words[1 + i / 4] >> (48 - 16 * (i % 4))) as u16).collect();
-    *words = &words[end..];
-    bud_facts::encode_js_text(units)
+fn take_key(words: &mut &[i64]) -> Option<String> {
+    let (&n, packed) = words.split_first()?;
+    if !(0..=1 << 30).contains(&n) { return None; }
+    let n = n as usize;
+    let count = n.div_ceil(4);
+    let data = packed.get(..count)?;
+    let remainder = n % 4;
+    if remainder != 0 && (data[count - 1] as u64) & (u64::MAX >> (16 * remainder)) != 0 {
+        return None;
+    }
+    let units = (0..n).map(|i| (data[i / 4] >> (48 - 16 * (i % 4))) as u16);
+    *words = &packed[count..];
+    Some(bud_facts::encode_js_text(units))
 }
 
 fn unit_list(text: &str) -> String {
@@ -52,11 +59,11 @@ fn read_budget(words: &[i64]) -> sol::Budget {
     let absent = words == [-1];
     let words = if absent { &empty[..] } else { words };
     let mut tail = &words[24..];
-    let id = take_key(&mut tail);
+    let id = take_key(&mut tail).unwrap();
     let opened_at = take_text(&mut tail);
     let since_text = take_text(&mut tail);
     let ended_at = take_text(&mut tail);
-    let follows = take_key(&mut tail);
+    let follows = take_key(&mut tail).unwrap();
     let mut halt_reason = -1;
     let mut halt_kind = 0;
     let mut halt_ms = 0;
@@ -72,7 +79,7 @@ fn read_budget(words: &[i64]) -> sol::Budget {
         let count = rest[0];
         rest = &rest[1..];
         for _ in 0..count {
-            stopped.push(take_key(&mut rest));
+            stopped.push(take_key(&mut rest).unwrap());
         }
     }
     let rest = bud_facts::encode_js_text(rest.iter().map(|&u| u as u16));
@@ -126,7 +133,7 @@ impl World {
 
     fn put(&mut self, put: &Put) {
         let mut record = put.words.as_slice();
-        let sid = take_key(&mut record);
+        let sid = take_key(&mut record).unwrap();
         self.st.sessions.insert(sid, read_budget(&unit_record(&put.text, &record[1..])));
     }
 
@@ -135,10 +142,17 @@ impl World {
     }
 
     fn call(&mut self, body: &[i64]) -> i64 {
-        let mut keys = &body[12..];
-        let sid = take_key(&mut keys);
-        let bid = take_key(&mut keys);
-        let run = take_key(&mut keys);
+        let keys = body.get(12..).and_then(|mut keys| {
+            let sid = take_key(&mut keys)?;
+            let bid = take_key(&mut keys)?;
+            let run = take_key(&mut keys)?;
+            keys.is_empty().then_some((sid, bid, run))
+        });
+        let Some((sid, bid, run)) = keys else {
+            if std::mem::take(&mut self.audit) { self.note("A 2 0 true".to_owned()); }
+            self.note("X 2".to_owned());
+            return 2;
+        };
         self.call_typed(body[0], body[11], &sid, &bid, &run, &body[1..11])
     }
 
@@ -156,36 +170,78 @@ impl World {
         let mut units = bud_facts::take_unit_log().into_iter().peekable();
         let mut releases = decide_facts::take_log().into_iter().peekable();
         let mut running = running_before;
+        let close_bid = (code == 6 && reply.effects.iter().any(|e| matches!(e.tag, 12..=14)))
+            .then(|| self.st.sessions[sid].id.clone());
+        let timer_bid = close_bid.as_deref().unwrap_or(bid);
+        let mut stopped = None;
         for i in 0..=reply.effects.len() {
             let i = i as i64;
             while units.peek().is_some_and(|(position, _)| *position == i) {
                 let (_, words) = units.next().unwrap();
-                self.note(format!("E unit {}", words.iter().map(i64::to_string).collect::<Vec<_>>().join(" ")));
+                if !self.silent {
+                    self.log.push(format!("E unit {}", words.iter().map(i64::to_string).collect::<Vec<_>>().join(" ")));
+                }
             }
             while releases.peek().is_some_and(|q| q.fxn == i) {
                 let q = releases.next().unwrap();
                 let (sid, bid) = q.text.unwrap();
-                self.note(format!("E rel s:{} b:{} {}", unit_list(&sid), unit_list(&bid), q.answer));
+                if !self.silent {
+                    self.log.push(format!("E rel s:{} b:{} {}", unit_list(&sid), unit_list(&bid), q.answer));
+                }
             }
             if !self.silent && running < bud_facts::running_calls() {
                 let q = bud_facts::running_query(running);
                 if q.fxn == i {
-                    if self.by_bid.contains_key(bid) { self.note("X armed".to_owned()); }
-                    let queried_sid = take_key(&mut q.sid.as_slice());
-                    let queried_bid = take_key(&mut q.bid.as_slice());
-                    self.note(format!("E rdi s:{} b:{}", unit_list(&queried_sid), unit_list(&queried_bid)));
+                    if self.by_bid.contains_key(bid) { self.log.push("X armed".to_owned()); }
+                    let queried_sid = take_key(&mut q.sid.as_slice()).unwrap();
+                    let queried_bid = take_key(&mut q.bid.as_slice()).unwrap();
+                    self.log.push(format!("E rdi s:{} b:{}", unit_list(&queried_sid), unit_list(&queried_bid)));
                     running += 1;
                 }
             }
             if i == 0 && !self.silent {
-                for q in quiet_before..bud_facts::calls() { self.note(bud_facts::quiet_log(q)); }
+                for q in quiet_before..bud_facts::calls() { self.log.push(bud_facts::quiet_log(q)); }
             }
             if let Some(effect) = reply.effects.get(i as usize) {
-                let timer_bid = if code == 6 { self.st.sessions[sid].id.clone() } else { bid.to_owned() };
-                self.perform(effect, sid, &timer_bid);
+                let line = match effect.tag {
+                    12 => {
+                        self.seq += 1;
+                        self.active.push(Timer { token: self.seq, due: self.now + effect.b,
+                            sid: sid.to_owned(), bid: timer_bid.to_owned() });
+                        self.by_bid.insert(timer_bid.to_owned(), self.seq);
+                        (!self.silent).then(|| format!("E set t{} {} {}", self.seq, effect.a, effect.b))
+                    }
+                    13 => {
+                        let token = self.by_bid.remove(timer_bid);
+                        if let Some(token) = token { self.active.retain(|t| t.token != token); }
+                        (!self.silent).then(|| match token {
+                            Some(token) => format!("E clear t{token}"),
+                            None => "E clear -".to_owned(),
+                        })
+                    }
+                    14 => { self.by_bid.remove(timer_bid); None }
+                    _ if self.silent => None,
+                    20 => Some("E changed".to_owned()),
+                    31 => Some("E cancel".to_owned()),
+                    32 => Some("E stopMain".to_owned()),
+                    33 => {
+                        let ids = stopped.get_or_insert_with(|| &self.st.sessions[sid].stopped);
+                        Some(format!("E stopDel {}", unit_list(&ids[effect.a as usize])))
+                    }
+                    34 => Some("E stopTurns".to_owned()),
+                    35 => Some("E hold".to_owned()),
+                    36 => Some("E save".to_owned()),
+                    37 => Some("E announce".to_owned()),
+                    38 => Some(format!("E qc {} {}", effect.a, effect.b)),
+                    39 => Some("E drop".to_owned()),
+                    tag => panic!("unexpected effect {tag}"),
+                };
+                if let Some(line) = line { self.log.push(line); }
             }
         }
-        if reply.status != 0 { self.note(format!("X {}", reply.status)); }
+        if reply.status != 0 {
+            if !self.silent { self.log.push(format!("X {}", reply.status)); }
+        }
         else if !self.silent {
             let value = match reply.value {
                 4 => {
@@ -201,39 +257,9 @@ impl World {
         reply.status
     }
 
-    fn perform(&mut self, effect: &sol::Effect, sid: &str, bid: &str) {
-        let line = match effect.tag {
-            12 => {
-                self.seq += 1;
-                self.active.push(Timer { token: self.seq, due: self.now + effect.b, sid: sid.to_owned(), bid: bid.to_owned() });
-                self.by_bid.insert(bid.to_owned(), self.seq);
-                format!("E set t{} {} {}", self.seq, effect.a, effect.b)
-            }
-            13 => {
-                if let Some(token) = self.by_bid.remove(bid) {
-                    self.active.retain(|t| t.token != token);
-                    format!("E clear t{token}")
-                } else { "E clear -".to_owned() }
-            }
-            14 => { self.by_bid.remove(bid); return; }
-            20 => "E changed".to_owned(),
-            31 => "E cancel".to_owned(),
-            32 => "E stopMain".to_owned(),
-            33 => format!("E stopDel {}", unit_list(&self.st.sessions[sid].stopped[effect.a as usize])),
-            34 => "E stopTurns".to_owned(),
-            35 => "E hold".to_owned(),
-            36 => "E save".to_owned(),
-            37 => "E announce".to_owned(),
-            38 => format!("E qc {} {}", effect.a, effect.b),
-            39 => "E drop".to_owned(),
-            tag => panic!("unexpected effect {tag}"),
-        };
-        self.note(line);
-    }
-
     fn fire(&mut self, index: usize) {
         let timer = self.active.remove(index);
-        self.note(format!("F t{}", timer.token));
+        if !self.silent { self.log.push(format!("F t{}", timer.token)); }
         self.call_typed(11, 0, &timer.sid, &timer.bid, "", &[0; 10]);
         if self.log.last().is_some_and(|line| line.starts_with("V ")) { self.log.pop(); }
     }
@@ -254,7 +280,7 @@ impl World {
         for (bid, clock) in clocks {
             append_text(&mut words, bid);
             append_text(&mut words, &clock.owner);
-            words.extend([i64::from(clock.since != -1), clock.since.max(0), i64::from(clock.armed), clock.active]);
+            words.extend([i64::from(clock.has_since), clock.since, i64::from(clock.armed), clock.active]);
             words.push(clock.runs.len() as i64);
             let mut seen = HashSet::new();
             let runs: Vec<_> = clock.run_order.iter().rev()
@@ -403,11 +429,15 @@ fn body(code: i64, flag: i64, run: &str) -> Vec<i64> {
 
 fn perform_perf(world: &mut World, code: i64, size: i64, timer: &mut Option<i64>) -> sol::Reply {
     let reply = sol::t_call(&mut world.st, SID, BID, "", code, world.now, size, &[0; 10]);
+    let mut stopped = None;
     for effect in &reply.effects {
         match effect.tag {
             12 => *timer = Some(world.now + effect.b),
             13 => *timer = None,
-            33 => { black_box(&world.st.sessions[SID].stopped[effect.a as usize]); }
+            33 => {
+                let ids = stopped.get_or_insert_with(|| &world.st.sessions[SID].stopped);
+                black_box(&ids[effect.a as usize]);
+            }
             37 => { black_box(world.st.sessions[SID].halt_ms); }
             _ => { black_box(effect); }
         }
