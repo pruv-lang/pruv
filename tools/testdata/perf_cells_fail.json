@@ -1,0 +1,32 @@
+{
+ "source": "Failing example: the P31 end time cells marked proportional (not the \u00a77.5 judgment)",
+ "cells": [
+  {
+   "name": "m10b decide end D=10",
+   "axis": "time",
+   "size": "S",
+   "kind": "proportional",
+   "pruv": 258.7,
+   "hand": 147.1,
+   "unit": "ns/op"
+  },
+  {
+   "name": "m10b decide end D=50",
+   "axis": "time",
+   "size": "M",
+   "kind": "proportional",
+   "pruv": 503.1,
+   "hand": 454.1,
+   "unit": "ns/op"
+  },
+  {
+   "name": "m10b decide end D=100",
+   "axis": "time",
+   "size": "L",
+   "kind": "proportional",
+   "pruv": 743.9,
+   "hand": 815.3,
+   "unit": "ns/op"
+  }
+ ]
+}
