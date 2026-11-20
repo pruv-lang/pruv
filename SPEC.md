@@ -541,8 +541,21 @@ fn tree_count(t: Tree) -> i64
   `String` fields. The i64-valued map fields likewise require the record to be used as a
   collection element or value in the program. Such an aggregate can be an element of
   `Vec<S>` or a value of `HashMap<i64, S>` or `HashMap<String, S>` in the positions of R-6e-3.
-  Deeper collection nesting, direct fields of a record type with nested collections, and using such
-  records as `Option` or `Result` payloads are `type/foreign_owned_type`, with the direct
+  A non-generic *holder record* may have direct fields of such a nested-collection record type
+  besides scalar, plain-value, R-6e-1 owned and `[u8]` fields. A holder record is itself an owned
+  aggregate with nested collections: it may be an element or value in the positions above, a
+  `HashMap<String, H>` value of a root state field, a local, a `take` parameter or a result. It is
+  constructed without a copy from a call result or `move x` per field (R-6e-12); a plain binding as a
+  constructor field deep-copies it (Rust `Clone::clone`). It may move whole fields in and out
+  under R-6e-16, reads `e.b.f` as a borrowed view, assigns and pushes to `e.b.f` in place, including in a
+  `map_get_mut` arm, and passes `inout e.b` to a user function (R-6g-3). Rust emits a plain nested struct
+  with no `Box` or flattening. A copy of a holder value without `move` deep-copies it, as for every
+  aggregate. A `HashMap` whose values are holder records needs `i64` or `String` keys. An element read
+  `vec_get::<H>(v, i).b.f` reads the field in place without moving the element. One call cannot both
+  borrow a binding and move it inside another argument, including inside a nested constructor or call
+  (`type/foreign_borrow`).
+  Deeper collection nesting, a holder record as a direct field, and using a nested-collection or holder
+  record as an `Option` or `Result` payload are `type/foreign_owned_type`, with the direct
   scrutinee exception for `map_take` under R-6e-14. In a mutable `Some` arm,
   R-6e-2 permits replacing nested fields with `vec_push` or `map_insert`, and R-6e-7 permits
   `map_remove` on a nested map. R-6e-14 permits taking its value with `map_take`.
@@ -564,7 +577,15 @@ fn tree_count(t: Tree) -> i64
   [accept i64 keys](tests/spec/r6e_6_i64_map_field.pruv),
   [accept nested record values](tests/spec/r6e_6_record_map_field.pruv),
   [reject String values](tests/spec/r6e_6_string_map_field.pruv),
-  [reject deeper nesting](tests/spec/r6e_6_deep_map_field.pruv).
+  [reject deeper nesting](tests/spec/r6e_6_deep_map_field.pruv),
+  [accept holder records](tests/spec/r6e_6_holder_record.pruv),
+  [reject holder in holder](tests/spec/r6e_6_record_field.pruv),
+  [reject holder payload](tests/spec/r6e_6_holder_option.pruv),
+  [reject use after move](tests/spec/r6e_6_holder_use_after_move.pruv),
+  [accept element field read](tests/spec/r6e_6_holder_vec_get_field.pruv),
+  [reject non-text map key](tests/spec/r6e_6_holder_map_key.pruv),
+  [reject borrow and move in one call](tests/spec/r6e_6_holder_borrow_and_move.pruv),
+  [reject a move inside a nested call](tests/spec/r6e_6_holder_borrow_through_call.pruv).
 - R-6e-7 **Remove and positional update.** `map_remove::<K, V>(inout P, k) -> bool` removes the
   entry and returns whether it was present. It accepts `i64` or `String` keys, uses the place and
   alias rules of R-6e-4 and the statement rules of R-6g-1, and requires no `alloc` effect. Rust emits
@@ -612,7 +633,14 @@ fn tree_count(t: Tree) -> i64
   [reject](tests/spec/r6e_11_eq_moved_elem.pruv).
 - R-6e-12 **Moving an array.** `move x` transfers an owned array local or a `take` array
   parameter into a struct field, enum payload, local initializer, assignment, return, or
-  `take` argument. Array fields and indexed elements cannot be moved. Moving a plain or
+  `take` argument. The same holds for an owned local or `take` parameter of a non-generic struct
+  type (an R-6e-1 aggregate or an R-6e-6 record) moved into a struct field or enum payload, as in
+  `return St { s: move s };`; Rust stores it directly without cloning. A struct with an array field
+  other than `[u8]` (for example `S { xs: [i64] }`) is not an owned aggregate, so `move` of it is
+  `type/foreign_move`; a struct of scalar and value fields only is a value aggregate and may be moved.
+  Tests: [accept](tests/spec/r6e_12_take_aggregate.pruv),
+  [reject](tests/spec/r6e_12_take_aggregate_after_move.pruv),
+  [reject plain record](tests/spec/r6e_12_move_plain_record.pruv). Array fields and indexed elements cannot be moved. Moving a plain or
   `inout` array parameter is `type/array_alias`; declare it `take` or make a copy.
   A `take x: [T]` parameter requires an explicit `move` argument.
   The source is dead until reassigned. A read after a definite or possible move is
@@ -711,6 +739,17 @@ fn tree_count(t: Tree) -> i64
   Rust passes `place.as_slice()` without allocating or copying. The verifier uses the vector's existing
   length and contents. A call that borrows a field of a vector-bearing binding cannot also move
   that binding (`type/foreign_move`). This conversion requires the Rust backend even in contracts (`codegen/unsupported_type`).
+- R-6e-18 **Appending a slice to a vector.** `vec_extend_from_slice::<T>(inout P, s: [T]) -> ()` for `T`
+  `i64` or `bool` is a whole statement and needs `! alloc`. The place `P` follows R-6e-10; other
+  element types are `type/foreign_owned_type`. Rust emits `P.extend_from_slice(&(s)[..]);` with no
+  per-element loop. Unless the catalog runs unchecked (verified, foreign checks not `all`, no foreign
+  functions), Rust first checks `len(P) + len(s) <= 2^40` and otherwise fails as a foreign `requires`
+  violation. The verifier proves the new length is at most 2^40 and sets it to
+  `len(old P) + len(s)`, keeps the old prefix and makes the suffix equal to `s`, preserving sibling
+  fields. LLVM rejects it as `codegen/unsupported_type`. Tests:
+  [accept](tests/spec/r6e_18_vec_extend.pruv), [reject element type](tests/spec/r6e_18_extend_string.pruv),
+  [reject borrowed vector](tests/spec/r6e_18_extend_borrowed.pruv),
+  [run-time length check](tests/spec/r6e_18_extend_guard.pruv).
 - **Values, not pointers.** Recursive and buffer-bearing values are independent: copying one deep-copies everything,
   and changing a copy never changes the original. Parameters, field reads and `match` bindings are read-only views
   and do not allocate. Putting an existing value into an owning place (`let`, assignment, constructor field,

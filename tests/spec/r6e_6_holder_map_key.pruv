@@ -1,0 +1,7 @@
+// spec: R-6e-6 reject
+pub struct Rec { xs: Vec<String>, n: i64 }
+pub struct Hold { r: Rec }
+
+fn f(m: HashMap<bool, Hold>) -> i64 {
+  return len(m);
+}

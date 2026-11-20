@@ -6,7 +6,7 @@
 
 use crate::ast::*;
 use crate::diagnostic::PruvError;
-use crate::gtype::{fn_owner, format_type, key_is_collection, mk_option, mk_param, GType};
+use crate::gtype::{fn_owner, format_type, key_is_collection, mk_array, mk_option, mk_param, GType};
 use crate::refine::kids as expr_kids;
 use std::collections::{HashMap, HashSet};
 
@@ -40,7 +40,7 @@ pub struct CatFn {
 }
 
 /// CATALOG_NAMES of foreign.py (insertion order).
-pub const CATALOG_NAMES: [&str; 102] = [
+pub const CATALOG_NAMES: [&str; 103] = [
     "vec_new",
     "vec_push",
     "vec_get",
@@ -50,6 +50,7 @@ pub const CATALOG_NAMES: [&str; 102] = [
     "map_remove",
     "map_take",
     "vec_clear",
+    "vec_extend_from_slice",
     "string_eq",
     "vec_at_mut",
     "map_insert",
@@ -286,6 +287,10 @@ pub fn catalog_fn(name: &str) -> Option<CatFn> {
         "vec_clear" => CatFn { requires: vec![], ensures: vec![],
             params: vec![p("v", vec_of(t()), false)], ret: GType::unit(),
             effects: vec![], tparams: tp_t(),
+        },
+        "vec_extend_from_slice" => CatFn { requires: vec![], ensures: vec![],
+            params: vec![p("v", vec_of(t()), false), p("s", mk_array(t()), false)],
+            ret: GType::unit(), effects: alloc(), tparams: tp_t(),
         },
         "string_eq" => CatFn { requires: vec![], ensures: vec![],
             params: vec![p("a", GType::str(), false), p("b", GType::str(), false)],
@@ -1442,6 +1447,18 @@ impl<'a> Ownership<'a> {
 
     fn check_call_move_alias(e: &Call) -> Res<()> {
         for (i, arg) in e.args.iter().enumerate() {
+            // D85: a move inside a constructor argument conflicts with any other mention
+            let mut moves = Vec::new();
+            ctor_moves(arg, &mut moves);
+            for m in moves {
+                for (j, other) in e.args.iter().enumerate() {
+                    if i != j && crate::check::mentions(other, &m.name) {
+                        let node = &e.args[i.max(j)];
+                        return Err(err(node.line(), node.col(), "foreign_borrow", "borrowed and moved in one call",
+                            format!("do not pass {} both read-only and with move in one call", m.name)));
+                    }
+                }
+            }
             if let Expr::Move(m) = arg {
                 if m.fields.is_empty() {
                     for (j, other) in e.args.iter().enumerate() {
@@ -1527,6 +1544,16 @@ impl<'a> Ownership<'a> {
             }
         }
         Ok(())
+    }
+}
+
+/// whole-binding moves nested inside an argument, through constructors and calls (D85)
+fn ctor_moves<'e>(e: &'e Expr, out: &mut Vec<&'e Move>) {
+    for k in expr_kids(e) {
+        match k {
+            Expr::Move(m) if m.fields.is_empty() => out.push(m),
+            _ => ctor_moves(k, out),
+        }
     }
 }
 
@@ -2058,7 +2085,7 @@ mod tests {
 
     #[test]
     fn catalog_shapes() {
-        assert_eq!(CATALOG_NAMES.len(), 102);
+        assert_eq!(CATALOG_NAMES.len(), 103);
         for n in CATALOG_NAMES.iter() {
             assert!(catalog_fn(n).is_some());
         }

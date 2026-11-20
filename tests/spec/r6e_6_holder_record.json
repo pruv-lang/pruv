@@ -1,0 +1,1 @@
+{"gen_contains": ["pub struct Entry { pub ordinal: i64, pub b: Budget }", "(&mut e.b, why)", "r.b.stopped.push(", "Entry { ordinal: n, b: b }"], "gen_absent": ["Box<", ".clone()", "Clone::clone("]}

@@ -1,0 +1,7 @@
+// spec: R-6e-6 reject
+struct Budget { id: String, stopped: Vec<String> }
+struct Entry { ordinal: i64, b: Budget }
+fn f(take e: Entry) -> Entry ! alloc {
+  let x: Entry = move e;
+  return move e;
+}

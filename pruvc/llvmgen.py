@@ -5425,7 +5425,7 @@ def g6_llvm_error(prog):
                     is_vec_slice_arg(a.ty, p.type) for a, p in zip(n.args, funcs[n.name].params)):
                 rust_only.append((n.line, n.col, "a borrowed vector slice argument"))
             if isinstance(n, Call) and n.name in CATALOG and n.name not in CATALOG_CONTRACT_ONLY:
-                if n.name in ("map_remove", "map_take", "vec_at_mut", "vec_clear", "string_eq"):
+                if n.name in ("map_remove", "map_take", "vec_at_mut", "vec_clear", "vec_extend_from_slice", "string_eq"):
                     rust_only.append((n.line, n.col, n.name))
                 if n.inst and not all(_g6_scalar(a) for a in n.inst["args"]):
                     bad.append((n.line, n.col))

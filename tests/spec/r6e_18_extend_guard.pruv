@@ -1,0 +1,6 @@
+// spec: R-6e-18 accept
+fn f(inout v: Vec<i64>, s: [i64]) -> () ! alloc
+  requires len(v) + len(s) <= 1099511627776
+{
+  vec_extend_from_slice::<i64>(inout v, s);
+}

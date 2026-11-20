@@ -1,0 +1,8 @@
+// spec: R-6e-12 reject
+struct S { words: Vec<i64>, n: i64 }
+struct St { s: S, k: i64 }
+
+fn wrap(take s: S) -> i64 {
+  let st: St = St { s: move s, k: 0 };
+  return s.n;
+}

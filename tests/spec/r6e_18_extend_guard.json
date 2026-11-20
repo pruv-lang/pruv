@@ -1,0 +1,1 @@
+{"flags": ["--foreign-checks", "all"], "gen_contains": ["pruv_g6_req(\"vec_extend_from_slice\", \"len(v) + len(s) <= 2^40\")"]}

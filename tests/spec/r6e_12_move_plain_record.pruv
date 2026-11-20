@@ -1,0 +1,8 @@
+// spec: R-6e-12 reject
+struct S { xs: [i64] }
+struct H { s: S }
+
+fn wrap(xs: [i64]) -> H ! alloc {
+  let s: S = S { xs: copy(xs) };
+  return H { s: move s };
+}

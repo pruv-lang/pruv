@@ -41,6 +41,11 @@ TYPE_NAME_RE = re.compile(r"[A-Z][A-Za-z0-9_]*\Z")
 FIELD_NAME_RE = re.compile(r"[a-z][A-Za-z0-9_]*\Z")
 
 
+def nested_child_type(s, ty):
+    """D90: a direct field type that is an R-6e-6 record (owned aggregate with nested collection fields)"""
+    return is_nongeneric_struct(ty, s.decls) and ty.name in s.nested_records and ty.name in s.aggregates
+
+
 def terr(node, code, msg, fix="", stage="type"):
     raise PruvError(stage, node.line, node.col, code, msg, fix, file=getattr(node, "file", None))   # G4: file only in explicit mode
 
@@ -247,6 +252,15 @@ class Checker:
                             and any(is_nested_collection_field(f.type)
                                     or n in s.collection_records and record_map_field(f.type)
                                     for f in d.fields)}
+        # D90: one level of record nesting. A holder is a non-generic struct with a direct field of an R-6e-6
+        # record (an owned aggregate with nested collection fields); its other fields follow the aggregate rules.
+        s.holder_records = {n for n, d in s.decls.items() if is_nongeneric_struct(Type(n), s.decls)
+                            and n not in s.nested_records
+                            and any(nested_child_type(s, f.type) for f in d.fields)
+                            and all(nested_child_type(s, f.type) or is_owned_field_type(f.type) or f.type == ARRAY_U8
+                                    or is_value(f.type, value_decls, (n,)) for f in d.fields)}
+        s.aggregates |= s.holder_records
+        s.nested_records |= s.holder_records
         s.resolve_types()      # every type reference
         s.type_graph()         # G9 A0: type SCCs, generic/recursive field rules
         s.inhabitance()        # G9 A0: every declaration needs a finite value
@@ -493,8 +507,8 @@ class Checker:
                 s.collection_payload(node, v, "a HashMap value")
                 if k == STRING and v not in (I64, BOOL) and v.name not in s.aggregates:
                     terr(node, "foreign_owned_type", "String-keyed maps require i64, bool or owned aggregate values")
-                if k not in (I64, STRING) and v.name in s.aggregates and any(
-                        is_collection(f.type) or f.type == ARRAY_U8 for f in s.decls[v.name].fields):
+                if k not in (I64, STRING) and v.name in s.aggregates and (v.name in s.holder_records or any(   # D90
+                        is_collection(f.type) or f.type == ARRAY_U8 for f in s.decls[v.name].fields)):
                     terr(node, "foreign_owned_type", "aggregate HashMap values with owned fields require i64 or String keys")
             return
         if ty.name == "array":
@@ -566,7 +580,7 @@ class Checker:
             terr(e, "type_arity", "%s expects %d type argument(s), got %d" % (what, len(tparams), len(targs)),
                  "give exactly one type argument per type parameter")
         catalog_collection = (isinstance(e, Call) and e.name not in s.funcs and (
-            e.name in ("vec_new", "vec_push", "vec_get", "vec_at_mut", "vec_clear",
+            e.name in ("vec_new", "vec_push", "vec_get", "vec_at_mut", "vec_clear", "vec_extend_from_slice",
                        "map_new", "map_get", "map_get_mut", "map_insert", "map_remove", "map_take")
             or e.name == "map_lookup" and targs[0] == STRING))
         if catalog_collection:
@@ -576,6 +590,8 @@ class Checker:
                     terr(e, "foreign_owned_type", "map_take requires i64 or String keys")
                 if v not in (I64, BOOL) and (v.owner is not None or v.args or v.name not in s.aggregates):
                     terr(e, "foreign_owned_type", "map_take requires i64, bool or owned aggregate values")
+            if e.name == "vec_extend_from_slice" and targs[0] not in (I64, BOOL):   # D95
+                terr(e, "foreign_owned_type", "vec_extend_from_slice requires i64 or bool elements")
             s.check_type(e, Type("vec" if e.name.startswith("vec_") else "hashmap", tuple(targs)))
         for a, tp in zip(targs, tparams):
             s.check_type(e, a)
@@ -605,7 +621,9 @@ class Checker:
                     nested_field = isinstance(d, StructDecl) and is_nested_collection_field(f.type)
                     if nested_field and f.type.name == "hashmap" and f.type.args[-1] == I64:
                         nested_field = d.name in s.collection_records
-                    if not state_field and any(n in s.nested_records for n in dependencies(f.type)):
+                    holder_field = (d.name in s.holder_records and f.type.name not in s.holder_records
+                                    and nested_child_type(s, f.type))
+                    if not state_field and not holder_field and any(n in s.nested_records for n in dependencies(f.type)):
                         terr(f, "foreign_owned_type", "a record with nested collection fields cannot be a direct field")
                     if contains_collection(f.type) and (
                             d.tparams or not (is_owned_field_type(f.type) or state_field or nested_field)):
@@ -1006,7 +1024,7 @@ class Checker:
                 terr(f, "missing_effect", "function %s uses effect `%s` but does not declare it" % (f.name, e),
                      "add `! %s` after the return type" % ", ".join(sorted(set(f.effects) | s.used_effects)),
                      stage="effect")
-        check_ownership(f, s.funcs, s.decls)      # Check ownership and liveness after typing.
+        check_ownership(f, s.funcs, s.decls, s.aggregates)      # Check ownership and liveness after typing.
 
     def ends_in_return(s, stmts):
         if not stmts:
@@ -1048,7 +1066,7 @@ class Checker:
         for e, conditional in calls:
             f = s.funcs.get(e.name)
             marked = ([arg for arg in e.args if isinstance(arg, InoutArg)]
-                      if f is not None or e.name in ("map_remove", "map_take", "vec_clear") else [])
+                      if f is not None or e.name in ("map_remove", "map_take", "vec_clear", "vec_extend_from_slice") else [])
             if marked:
                 for arg in marked:
                     root, path = field_place(arg.expr)
@@ -2094,7 +2112,7 @@ class Checker:
                      "write `inout name` with a `let mut` local array or an inout parameter")
             op = arg.expr
             user_call = f is not CATALOG.get(n)
-            allow_path = user_call or n in MUTABLE_COLLECTION_MATCH + ("map_remove", "map_take", "vec_clear")
+            allow_path = user_call or n in MUTABLE_COLLECTION_MATCH + ("map_remove", "map_take", "vec_clear", "vec_extend_from_slice")
             place, path = field_place(op)
             if isinstance(place, Var):
                 s.check_iteration_borrow(arg, place.name, path)
@@ -2433,8 +2451,8 @@ class Checker:
             return rt
         catalog = n in CATALOG and n not in s.funcs       # G6: fixed standard catalog (G6_SPEC 10.3)
         if catalog:
-            if n == "vec_clear" and e is not s.statement_call and not c:
-                terr(e, "inout_context", "vec_clear must be a whole expression statement")
+            if n in ("vec_clear", "vec_extend_from_slice") and e is not s.statement_call and not c:
+                terr(e, "inout_context", "%s must be a whole expression statement" % n)
             if n in MUTABLE_COLLECTION_MATCH + ("map_take",) and e is not s.match_call:
                 terr(e, "foreign_contract", "%s is only allowed as a direct match scrutinee" % n)
             if n in CATALOG_CONTRACT_ONLY:

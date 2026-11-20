@@ -1,0 +1,9 @@
+// spec: R-6e-6 accept
+pub struct Rec { xs: Vec<String>, n: i64 }
+pub struct Hold { r: Rec }
+
+fn f(h: Vec<Hold>) -> i64
+  requires len(h) > 0
+{
+  return vec_get::<Hold>(h, 0).r.n;
+}

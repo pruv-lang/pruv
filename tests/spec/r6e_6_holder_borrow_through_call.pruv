@@ -1,0 +1,16 @@
+// spec: R-6e-6 reject
+struct S { nums: Vec<i64>, n: i64 }
+struct St { s: S, k: i64 }
+struct Arg { k: i64 }
+
+fn val(x: St) -> i64 {
+  return x.k;
+}
+
+fn sink(a: [i64], g: Arg) -> i64 {
+  return g.k;
+}
+
+fn caller(take s: S) -> i64 {
+  return sink(s.nums, Arg { k: val(St { s: move s, k: 1 }) });
+}

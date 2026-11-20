@@ -892,7 +892,7 @@ fn vec_resize_params(prog: &ast::Program) -> HashSet<(String, usize)> {
                 let Expr::Var(var) = arg.expr.as_ref() else { continue; };
                 let Some(&index) = params.get(var.name.as_str()) else { continue; };
                 let source = (f.name.clone(), index);
-                if call.name == "vec_clear" {
+                if matches!(call.name.as_str(), "vec_clear" | "vec_extend_from_slice") {
                     resizes.insert(source);
                 } else {
                     forwarded.entry((call.name.clone(), i)).or_default().push(source);
@@ -3695,6 +3695,29 @@ impl<'a> FnVerifier<'a> {
                 self.store_collection_place(&place.expr, &mut st.env, Val::Arr(empty))?;
                 Ok(Val::Unit)
             }
+            "vec_extend_from_slice" => {
+                let v = argv(0)?.try_arr()?;
+                let src = argv(1)?.try_arr()?;
+                let len = v.n.add(&src.n);
+                if code {
+                    self.prove_core(&st, g, &len.le_i(MAX_LEN), pos(e), "call_requires", &what, None);
+                }
+                let Expr::InoutArg(place) = &x.args[0] else { return Err("missing inout place".into()); };
+                let ty = self.t(place.ty.as_deref()).ok_or("missing collection place type")?;
+                let fresh = self.try_fresh(n, &ty)?;
+                let a = &fresh.try_arr()?.a;
+                let k = z.int_const(&format!("vec_extend!q{}", self.k));
+                self.k += 1;
+                let prefix = z.and(&[k.ge_i(0), k.lt(&v.n)])
+                    .implies(&a.select(&k).eq(&v.a.select(&k)));
+                let suffix = z.and(&[k.ge_i(0), k.lt(&src.n)])
+                    .implies(&a.select(&v.n.add(&k)).eq(&src.a.select(&k)));
+                self.assume(st, g, z.forall(&[k.clone()], &prefix, &[]));
+                self.assume(st, g, z.forall(&[k], &suffix, &[]));
+                let out = v.like(a.clone(), len, &v.name);
+                self.store_collection_place(&place.expr, &mut st.env, Val::Arr(out))?;
+                Ok(Val::Unit)
+            }
             "string_eq" => {
                 let a = argv(0)?.try_arr()?;
                 let b = argv(1)?.try_arr()?;
@@ -4485,7 +4508,7 @@ impl<'a> FnVerifier<'a> {
             names.extend(calls.iter().cloned());
             let mut resizes = BTreeSet::new();
             call_writes(body, &mut resizes, &|call, i| {
-                call.name == "vec_clear" || self.vec_resize_params.contains(&(call.name.clone(), i))
+                matches!(call.name.as_str(), "vec_clear" | "vec_extend_from_slice") || self.vec_resize_params.contains(&(call.name.clone(), i))
             });
             for n in &names {
                 if self.snap.contains(n) || (calls.contains(n) && !whole.contains(n) && !resizes.contains(n)) {

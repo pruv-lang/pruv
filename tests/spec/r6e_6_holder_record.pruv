@@ -1,0 +1,44 @@
+// spec: R-6e-6 accept
+pub struct Budget { id: String, state: i64, stopped: Vec<String> }
+pub struct Entry { ordinal: i64, b: Budget }
+pub struct St { entries: HashMap<String, Entry> }
+
+fn stop_one(inout b: Budget, take why: String) -> () ! alloc
+  requires len(b.stopped) < 1099511627776
+{
+  b.stopped = vec_push::<String>(move b.stopped, move why);
+}
+
+fn fresh(take id: String, n: i64) -> Entry ! alloc {
+  let b: Budget = Budget { id: move id, state: 0, stopped: vec_new::<String>() };
+  return Entry { ordinal: n, b: move b };
+}
+
+pub fn put(inout st: St, k: str, take key: String, take id: String, take why: String) -> i64 ! alloc {
+  let mut e: Entry = fresh(move id, 7);
+  e.b.state = 3;
+  if len(e.b.stopped) < 10 {
+    stop_one(inout e.b, move why);
+  }
+  let n: i64 = len(e.b.stopped);
+  if len(st.entries) < 1099511627776 {
+    st.entries = map_insert::<String, Entry>(move st.entries, move key, move e);
+  }
+  let mut got: i64 = 0;
+  match map_get_mut::<String, Entry>(inout st.entries, k) {
+    Some(r) => {
+      r.ordinal = r.ordinal + 0;
+      r.b.state = 5;
+      if len(r.b.stopped) < 10 {
+        r.b.stopped = vec_push::<String>(move r.b.stopped, string_from("x"));
+      }
+      got = len(r.b.stopped);
+    }
+    None => { }
+  }
+  match map_get::<String, Entry>(st.entries, k) {
+    Some(r) => { got = got + r.b.state + len(r.b.id); }
+    None => { }
+  }
+  return n + got;
+}

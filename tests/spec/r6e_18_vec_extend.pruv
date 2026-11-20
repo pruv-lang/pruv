@@ -1,0 +1,23 @@
+// spec: R-6e-18 accept
+struct Buffer { words: Vec<i64> }
+
+fn refill(inout dst: Buffer, src: [i64]) -> () ! alloc
+  requires len(src) < 1000
+{
+  vec_clear::<i64>(inout dst.words);
+  vec_extend_from_slice::<i64>(inout dst.words, src);
+  assert len(dst.words) == len(src);
+}
+
+fn append(a: [i64], b: [bool]) -> i64 ! alloc
+  requires len(a) >= 2 && len(a) < 1000 && len(b) < 1000
+{
+  let mut v: Vec<i64> = vec_new::<i64>();
+  v = vec_push::<i64>(move v, 41);
+  vec_extend_from_slice::<i64>(inout v, a);
+  assert len(v) == len(a) + 1 && v[0] == 41 && v[1] == a[0] && v[2] == a[1];
+  let mut w: Vec<bool> = vec_new::<bool>();
+  vec_extend_from_slice::<bool>(inout w, b);
+  assert len(w) == len(b);
+  return vec_get::<i64>(v, 1);
+}

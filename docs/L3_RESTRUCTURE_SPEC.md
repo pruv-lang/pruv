@@ -444,6 +444,7 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P31T | B/bud_map.pruv, bud_store.pruv, bud_lifecycle.pruv, bud_decide.pruv and their consumers (M4-M12, M10b) | After P31L, P31S and P31K (first attempt 2026-11-20 stopped with no change: language gap, see P31S; second attempt 2026-11-20 stopped with no budget change: text-keyed aggregate maps and nested record collections, Appendix P31T, proposed root row P31K; third attempt 2026-11-20 after P31K stopped with no budget change: two sibling root-state map records cannot be borrowed mutably at once, and entries cannot return a struct holding `Vec` effects, Appendix P31T (attempt 3), proposed root row P31D; fourth attempt 2026-11-20 after P31D partly done: step 1 M10b lane on a typed resident state, commits 79862ea / c2c7cb3 / 4adc42e, Q unchanged rs and py, perf_gate FAIL on extend and end M / L (now §7.5 D28 / D29), step 2 (shared modules and M4-M11 consumers, M12) not done, two new language gaps, Appendix P31T (attempt 4); fifth attempt 2026-11-20 after P31N partly done: step 1 M10b on vec_clear / string_eq / trusted `Vec<String>` / nested runs map, ce4fc30, Q unchanged rs and py, perf_gate still FAIL on extend and end M / L (D28 / D29, gap 1: an inout parameter's field cannot be an inout argument, SPEC.md:679); step 2 typed lanes for M4 (b687b89) and M8 / M9 (458bb89), Q unchanged rs and py, M4 fixed debt D35, M8 / M9 perf_gate FAIL on toolforget and drop / close M / L (D36 / D37, gap 3: String-keyed maps have no iteration, SPEC.md:497-503); gap 2 (`Vec<String>` in entry result structs, SPEC.md:640) and gap 4 (record values in nested String-keyed maps, SPEC.md:509-514) worked around; audit must-fix (order vectors grow under churn) fixed by compaction in the M4 / M8 / M9 typed lanes and rechecked; shared modules and M5-M7, M10-M12 not moved, Appendix P31T (attempt 5); sixth attempt 2026-11-20 after P31F partly done: step 1 M10b effects in resident `St.out` (R-6g-3, R-6e-10), extend passes (D28 closed), end still 1.06-1.10x at M / L (D29, two lookups, proposed root row P31R `map_take`); step 2 M4 / M8 / M9 typed order vectors dropped for insertion ordinals and read-only map iteration (R-6e-13, R-6f-3, R-6e-6), M8 toolforget passes (D36 gating part closed), M9 drop / close still 1.10-1.22x at M / L after one fix attempt (D37); step 3 four SHOULD-FIX items done; Q unchanged rs and py on all four lanes; perf_gate FAIL (6 of 68 cells, all moved to debt); step 4 (shared modules and M5-M7, M10-M12) queued, Appendix P31T (attempt 6); attempt 7 (2026-11-20): attempt-6 SHOULD-FIX items done, typed shared modules `bud_tstate` / `bud_tlife` / `bud_tdecide` with M10b moved onto them, M7 / M10 / M11 typed resident lanes (M5 / M6 hold no resident state, M12 queued), Q unchanged rs and py on all lanes, perf_gate FAIL (3 of 79 cells: M10 halt M 1.185x after one fix attempt, M10b end M / L 1.10x / 1.07x = D29; all moved to debt D41-D45), seven language gaps with repros (gap 7 = P31R `map_take`), Appendix P31T (attempt 7); attempt 8 (2026-11-20) after P31R: M10b end and M9 drop / close as one `map_take` (D42 / D37 still 1.08-1.14x at M / L after one fix attempt each), the six attempt-7 SHOULD-FIX rows with fair harnesses, D41 / D43-D45 re-measured, M12 typed lane (all ten lifecycle ops and auto-continue), Q unchanged rs and py on all lanes, perf_gate FAIL with every failing cell in debt, Appendix P31T (attempt 8); ninth and closing attempt 2026-11-20: M12 typed lane in place on typed `Budget` fields with clock order / tool state / one `dispose` in Pruv (D49 down from 168-14243x to 2.1-2.9x, D50 audit items fixed), P31G rules on M10 / M7 / M9 / M10b / M11 (D47 closed, M11 D44 / D52 closed at 0.50-0.95x), shared fair M9 harness (D37), D51 closed as a hand divergence from the TS reference, new gap row D63 (inout map whole reassignment), Q unchanged rs and py on all lanes, perf_gate FAIL (103 cells, 16 fail, 45 debt) with every failing cell in debt, Appendix P31T (attempt 9)). Typed session record (struct with owned fields) replacing the flat framed `[i64]` record and packed-key double lookups (D14, D25), shrink-in-place record write for extend / close (D28, D29, P31.8), struct replies with `Vec` effects instead of framed `[i64]` (D19-D24). Every consumer's Q unchanged on rs and py; re-measure D14, D19-D25, D28-D29 cells against hand Rust and close the rows that reach <= 1.0x. |
 | P32 | B/host.rs,roots/bindings,bud_test_abi.pruv,m34/m5–m11 shims | P split per operation/narrow family; direct/adapter grid, malformed admission, one decision engine. Partly done 2026-11-21 (Appendix P32): M10b family moved (typed direct entries `t_view/t_close/t_charge(Charge)/t_run/t_halt/t_raise(UnitAnswer)/t_decide(UnitAnswer)`, test-only adapter `t_call` decodes once; flat `bud_decide.pruv` and `root_m10b.pruv` retired; `bud_tstate::charge_typed` + `bud_tdecide` the single raise/decide/charge engine; Q exact rs/py on both lanes; malformed admission in Pruv). T10 family moved too (D64 closed). T7 entries moved (D65 entry part closed, P32.9; view cells now D72). T8 account entries moved (D66 status part closed, P32.10). Remaining families queued as D65 (running answer), D66 (engine merge, put record), D67-D71. Attempt 2 2026-11-21 (Appendix P32 (attempt 2)): D67 T11, D68 T12, D69 T4 m4_op, D70 one settle, D71 key admission moved (Q exact rs/py on both lanes, malformed tests at the typed constructors); D65 running answer and D66 rest not moved; one audit (10 must-fix): 9 fixed with regression tests, M11 byte storage left as gap D81; compiler gaps D73-D75, D81, perf debts D76-D80; perf_gate FAIL (93 cells, 13 fail, 71 debt); Attempt 3 2026-11-21 (Appendix P32 (attempt 3)): must-fix #5 (M12 native/packed SID identity), #8 (M4 SessionPut length word admitted in Pruv, malformed tests), #10 (M4 churn honors `--lane adapter`) done; D82 closed (typed M12 verified: `life` split into helpers), D65 closed (`bud_tlife::running_valid` admits the running wire), D75 closed (`bud_delay::delay_bits`); D66 rest blocked by gap D90; D79 not attempted; perf_gate FAIL (72 cells, 17 fail, 52 debt) recorded as D77/D91, M10 halt after the D65 change as D92 |
 | P32L | Both compilers (pruvc, pruvc-rs), SPEC.md, tests/ | Language rules for the P32b compiler gaps, in order D81, D73, D74. Done 2026-11-21 (Appendix P32L): R-6e-3 / R-6f-3 `[u8]` owned aggregates (D81), R-6f-6 struct host entries (D73), R-6f-3 enum results and the `vec![x]` sentence (D74); 20 tests/spec tests, full suite py 4566/4566 and rs 4578/4578, perf gate PASS (0.939x to 0.975x). LLVM and `raw_entries` "c" reject the new forms (D83); the bench switch is D84; the pre-existing `move` field split is D85. |
+| P32M | Both compilers (pruvc, pruvc-rs), SPEC.md, tests/ | Language rules for D90, D95 and D85. Done 2026-11-21 (Appendix P32M): R-6e-6 holder records (a record with a nested-collection record field as a direct field, a map value and a state value; D90), R-6e-18 `vec_extend_from_slice` for `i64` / `bool` (D95), R-6e-12 `move` of a `take` or local aggregate into a struct field or enum payload (D85, both compilers now accept); 14 new tests/spec tests (5 audit fixes included, Appendix P32M.5). Generated Rust is a plain nested struct and `extend_from_slice` with no clone. Perf gate FAIL at 1.000x to 1.026x from the language-required map capacity guard and entry string-length checks (D100, D101). LLVM rejects the new forms (D83). |
 | P33 | Both codegens/hot contracts: residual L4/L5 only | C inline attribute/size heuristic and local proof gates; P touched families, M11 compile CPU/binary size and parity. Partly done in P13i2a: `#[inline(always)]` and `#[inline]` fn attributes (explicit directive over R-7-3 promotion); size heuristic/local proof gates still open. |
 | P34 | One measured §4 opportunity per subpackage | P touched families/collisions and raw/admitted complete operations; saving ledger, same-structure hand (ii), assembly evidence for any proof win. |
 | P35 | B/compare.py,check_oracle.py,future judge,notes | P focused KD/final-observation checks; missing/unsupported paths remain open; full grid inventory ready. |
@@ -612,10 +613,12 @@ fixed in one package before R12.
 | D82 | P32b proof gap (D68): the typed M12 build (`m12_test/root_m12_typed.pruv`) does not finish Z3 verification, so its Q and perf runs used a `--no-verify` build (Appendix P32 (attempt 2)); its bounds and overflow checks stay in the generated code and its contracts are not proved | Find the slow obligations (per-function timing), split or restate them so the default verified build finishes, then rerun the M12 typed Q and the D77 cells on the verified build. Closed 2026-11-21 (Appendix P32 (attempt 3)): the cause was path count, not one hard query: `life` held every op branch inline. Split into `life_charge` / `life_step` / `life_settle` / `life_timers` / `life_halted` (calls are modular); default Z3 build pruvc-rs 221 s -> 26 s, pruvc.py killed at `crate::life` -> 72.4 s summed (`life` 1.16 s, 512 obligations). Q and D77 cells rerun on the verified build. Closed |
 | D83 | P32L LLVM gap: the LLVM backend and `raw_entries` "c" reject the P32L forms with `codegen/unsupported_type`: an entry parameter struct with a `[u8]` field (R-6f-6), an entry returning an enum with owned payloads (R-6f-3), and a struct with owned fields in general | Needs a C ABI layout for owned buffers (pointer, length, capacity handed over) before LLVM can take or return them. Open |
 | D84 | P32L follow-up: the bench L3 sources still use the P32b workarounds: M11 `Sess` card / by widened to `Vec<i64>` (D81), M4 `Reply` struct with a value-only `Outcome` (D74), V-word / scalar wrappers where an entry takes a `[u8]`-field or `take` struct (D73) | Next P32 attempt: switch them to the R-6e-3 `[u8]` field, the R-6f-3 enum result and R-6f-6 parameters, then rerun Q and the D76 / D79 cells. P32L measured the small forms: `[u8]` storage is 0.96-0.97x hand time and 1.00x RSS, the widened `Vec<i64>` form about 2.4x time and 2.2x RSS at L (Appendix P32L.4). Open |
-| D85 | P32L audit (D73-3), pre-existing py / rs divergence: moving a `take` owned-aggregate parameter into a struct literal field (`fn park(take s: S) -> St { return St { s: move s }; }`) is `type/foreign_move` ("move only where ownership is consumed") in pruvc and accepted by pruvc-rs; the baseline (812592c) has the same split for `S { v: Vec<i64> }`, and P32L extends it to `[u8]` fields | Decide the rule (R-6e-12 allows a move into a fresh aggregate field or not), then make both compilers agree and add tests. Open |
-| D90 | P32c gap (D66): a record with an owned collection field cannot be a direct field of another record: `pub struct Entry { ordinal: i64, b: crate::bud_tstate::Budget }` fails `type/foreign_owned_type` ("a record with nested collection fields cannot be a direct field") on both compilers, because `Budget.stopped: Vec<String>`; repro `work/p32c/d66_gap/repro.pruv` | Proposed root row: allow a record with owned collection fields as a direct (owned, moved) field of another record, or as a tuple-map value. Open |
+| D85 | P32L audit (D73-3), pre-existing py / rs divergence: moving a `take` owned-aggregate parameter into a struct literal field (`fn park(take s: S) -> St { return St { s: move s }; }`) is `type/foreign_move` ("move only where ownership is consumed") in pruvc and accepted by pruvc-rs; the baseline (812592c) has the same split for `S { v: Vec<i64> }`, and P32L extends it to `[u8]` fields | Decide the rule (R-6e-12 allows a move into a fresh aggregate field or not), then make both compilers agree and add tests. Closed 2026-11-21 (Appendix P32M): R-6e-12 allows `move` of an owned local or `take` parameter of a non-generic struct type into a struct field or enum payload; both compilers accept it, a later read is `type/foreign_move`. |
+| D90 | P32c gap (D66): a record with an owned collection field cannot be a direct field of another record: `pub struct Entry { ordinal: i64, b: crate::bud_tstate::Budget }` fails `type/foreign_owned_type` ("a record with nested collection fields cannot be a direct field") on both compilers, because `Budget.stopped: Vec<String>`; repro `work/p32c/d66_gap/repro.pruv` | Proposed root row: allow a record with owned collection fields as a direct (owned, moved) field of another record, or as a tuple-map value. Closed 2026-11-21 (Appendix P32M): R-6e-6 holder records; `Entry { ordinal: i64, b: Budget }` compiles on both compilers to a plain nested struct, as a `HashMap<String, Entry>` state value, a local, a `take` parameter and a result. A holder inside a holder and holder `Option` / `Result` payloads stay `type/foreign_owned_type`. The bench M12 switch is not done here (bench/l3 untouched). |
 | D91 | P32c perf (D77 caveat): M12 typed B/A/H/U time cells re-classified proportional now gate and FAIL: B M 2.70x / L 2.39x, A M 5.80x / L 6.57x, H M 14.0x / L 11.3x, U M 11.6x / L 11.5x (`work/p32c/perf_gate.txt`). Cause from the alloc axis (constant per op, so the gap is per-op work, not n): allocs/op pruv vs hand B 13 vs 6, A 190 vs 82, H 128 vs 8, U 222 vs 40; the typed path rebuilds IDs, JB field keys and snapshot text per op where hand borrows. No fix attempt in P32c (budget spent on D82/D75/D65). | Next: one fix attempt per cell (borrow IDs as `str`, reuse field keys, avoid snapshot String copies in `life_halted`), then line-by-line cause. Open |
 | D92 | P32c perf (D65): M10 typed halt after the running answer moved into Pruv: D10 790.2 vs 347.2 (2.28x), D50 2426.5 vs 1271.1 (1.91x), D100 4386.9 vs 2414.7 ns/op (1.82x), 7 rounds, `work/p32c/m10_perf2.txt`; gating M / L FAIL (was D41 1.19-1.22x) | One fix attempt used (perf lane stages the wire, single-String decode; 7x -> 1.8-2.3x). Remaining cause by line: hand moves the cloned `Vec<String>` answer in (hand_m10.rs, one pass, no decode); Pruv walks the wire twice (`bud_tlife::running_valid` per-frame bounds and padding via `running_word`, then `halt` re-reads each frame header), and `unit_text` builds each ID from packed words through `encode_js_text` (per-unit push, one String per ID), each facts call re-borrowing the thread-local words. Next: one walk that admits and decodes per frame, or a facts call that returns the admitted frame's `String` without a thread-local borrow per word. Open |
+| D100 | P32M perf (D90): holder put, `HashMap<String, Entry>` insert plus `map_get_mut` update, M 1.3989 vs 1.3978 ms (1.001x), L 54.27 vs 52.89 ms (1.026x), 101 ABBA runs, `work/p32m/perf_gate.txt`; gating M / L FAIL | One fix attempt (bisect): the generated body is the hand body plus the source `map_insert` capacity guard `len(st.entries) < 2^40` and the R-6f-2 entry string-length checks (4 strings per call); with both removed the cell is 0.995x. Both are required by the language today. Next: let the verifier discharge the capacity guard from a state invariant, or fold the entry length checks into one compare. Open |
+| D101 | P32M perf (D95, D85): M cells at 1.000x (d95 refill 2.2028 vs 2.2021 ms, d85 take aggregate 41.268 vs 41.261 ms; L 0.991x and 0.999x), 101 ABBA runs; gating M FAIL by under 0.05% | d95 differs from hand only by the per-call entry length check on `src` (asm compare); d85 emits the same `St { s: s, k: k }` as hand and the residue is within run noise. Next: the same entry-check fold as D100, then remeasure. Open |
 
 Queued with the debt list (not product perf):
 
@@ -11274,3 +11277,124 @@ performance measurement were done in the main session.
 |---|---|---|
 | P32L-Q1 | LLVM / `raw_entries` "c" for the P32L forms (owned buffers across a C ABI) | D83 |
 | P32L-Q2 | switch the bench L3 sources (M11 bytes, T11/T12/M4 entries) from the P32b workarounds to the new forms | D84 |
+
+## Appendix P32M: holder records, vec_extend_from_slice and moving a take aggregate (both compilers)
+
+Branch `lair/read-and-follow-the-brief-e5a7`, not merged. Goal: land D90, D95 and D85 as SPEC rules with positive
+and negative tests in both compilers, Python first and the Rust port in the same commit, generated Rust
+byte-identical, no `Box`, clone or per-element loop that hand Rust lacks. The bench L3 sources are not touched.
+
+### P32M.1 Rules landed
+
+| Rule | Gap | Surface | Rust | LLVM |
+|---|---|---|---|---|
+| R-6e-6 (holder records) | D90 | a non-generic record may have direct fields of a nested-collection record type (with `Vec<String>` or nested map fields) besides scalar, plain-value, R-6e-1 owned and `[u8]` fields; the holder is itself an owned aggregate: a `Vec` element, a `HashMap<i64, H>` / `HashMap<String, H>` value including a root state field, a local, a `take` parameter and a result; built per field from a call result or `move x`; `e.b.f` reads borrow, `e.b.f` assignment and push work in place, also in a `map_get_mut` arm; `inout e.b` passes to a user function. A holder inside a holder and holder `Option` / `Result` payloads stay `type/foreign_owned_type` | plain nested struct `Entry { ordinal: i64, b: Budget }`, fields moved | rejected (`codegen/unsupported_type`, D83) |
+| R-6e-18 | D95 | `vec_extend_from_slice::<T>(inout P, s: [T]) -> ()` for `T` `i64` or `bool`, a whole statement under `! alloc`, place rules of R-6e-10; other `T` is `type/foreign_owned_type`, a borrowed vector is `type/inout_argument`. The verifier proves `len(old P) + len(s) <= 2^40`, then sets the length, keeps the prefix, makes the suffix equal to `s` and keeps sibling fields | `P.extend_from_slice(&(s)[..]);` | rejected (D83) |
+| R-6e-12 (extended) | D85 | `move x` of an owned local or `take` parameter of a non-generic struct type (R-6e-1 aggregate or R-6e-6 record) into a struct field or enum payload, as in `return St { s: move s };`; a later read is `type/foreign_move` | `St { s: s, k: k }`, no clone | unchanged |
+
+The brief listed `u8` for D95; `Vec<u8>` is not a type in the language (`parse/element_storage_type`, "u8 is only an
+array element type"), so R-6e-18 has no `u8` place to extend and covers `i64` and `bool`.
+
+### P32M.2 Tests
+
+28 new `tests/spec` files (14 tests, 5 accept and 9 reject) and one changed test, run on both compilers by
+`spec_trace`:
+
+- R-6e-6 (D90): `r6e_6_holder_record` (accept: a `HashMap<String, Entry>` state value with `Entry { ordinal, b:
+  Budget }`, put, `map_get_mut` update of `r.b.state` and `r.b.stopped`, borrowed reads); `r6e_6_holder_option`
+  (`foreign_owned_type`, a holder as an `Option` payload); `r6e_6_holder_use_after_move` (`foreign_move`, moving a
+  `take e: Entry` twice); `r6e_6_holder_vec_get_field` (accept, `vec_get::<H>(v, i).b.f` read in place);
+  `r6e_6_holder_map_key` (`foreign_owned_type`, a holder map value with a `bool` key);
+  `r6e_6_holder_borrow_and_move` (`foreign_borrow`, one call borrows a binding and moves it into a constructor
+  argument); `r6e_6_holder_borrow_through_call` (`foreign_borrow`, the move sits in a constructor inside a call
+  inside another argument); `r6e_6_record_field` changed to reject a holder inside a holder (`Outer { p: Parent }`),
+  since `Parent { child: Rec }` is now accepted.
+- R-6e-12 (D85): `r6e_12_take_aggregate` (accept, `return St { s: move s, k: k }` for `take s: S`);
+  `r6e_12_take_aggregate_after_move` (`foreign_move`); `r6e_12_move_plain_record` (`foreign_move`, `S { xs: [i64] }` is not
+  an owned aggregate).
+- R-6e-18 (D95): `r6e_18_vec_extend` (accept, a struct-field place and `Vec<i64>` / `Vec<bool>` locals, verified length,
+  prefix and suffix);
+  `r6e_18_extend_guard` (accept, `--foreign-checks all` emits the run-time length check);
+  `r6e_18_extend_string` (`foreign_owned_type` at the `::<String>` call, with a valid `[i64]` parameter);
+  `r6e_18_extend_borrowed` (`inout_argument`).
+
+The D90 repro (`work/p32c/d66_gap/repro.pruv` with `bud_tstate.pruv`) compiles on both compilers, byte-identical.
+`tests/run_all.py --list-rows` with `--backend both` matches `tests/run_all_rows.txt` (4578 rows, unchanged).
+
+### P32M.3 Generated vs hand Rust
+
+| Rule | Generated (py and rs identical) | Hand |
+|---|---|---|
+| D90 | `pub struct Entry { pub ordinal: i64, pub b: Budget }`; `Entry { ordinal: n, b: b }`; `st.entries.insert(key, e)` under the `len < 2^40` guard; `match st.entries.get_mut(k) { Some(r) => { r.b.state = 5i64; r.b.stopped.push(..) } .. }` | same struct, `st.entries.insert(key, e)`, `if let Some(r) = st.entries.get_mut(k) { .. }` |
+| D95 | `dst.words.extend_from_slice(&(src)[..]);` when the catalog runs unchecked (verified, no foreign functions, `--foreign-checks` not `all`); otherwise first `if len(P) + len(s) > 2^40 { pruv_g6_req(..) }` | `dst.words.extend_from_slice(src);` |
+| D85 | `return (St { s: s, k: k });` | `St { s, k }` |
+
+No `Box`, clone, flattening or element loop. The extra lines are the source `map_insert` capacity guard and the
+entry string-length checks hand Rust does not have.
+
+### P32M.4 Performance (M / L, 101 ABBA-interleaved runs, median, `work/p32m/perf_cells.json`)
+
+| Example | time M | time L |
+|---|---|---|
+| D90 holder put (`HashMap<String, Entry>` insert + `map_get_mut` update + read) | 1.001x | 1.026x (54.27 vs 52.89 ms) |
+| D95 refill (`clear` + `vec_extend_from_slice`) | 1.000x | 0.991x |
+| D85 take aggregate (`St { s: move s }` per call) | 1.000x | 0.999x |
+
+`python3 tools/perf_gate.py work/p32m/perf_cells.json`: VERDICT FAIL (6 cells, 4 fail, 0 debt). A/A runs of the D90
+L cell confirm the gap is real. One fix attempt (bisect of the D90 body): the generated loop is the hand loop plus the
+`map_insert` capacity guard `len(st.entries) < 2^40` written in the source and the R-6f-2 entry string-length checks
+on four `String` / `str` parameters; with both removed the cell is 0.995x. Both are language-required, so the gap is
+debt D100. The M cells at 1.000x are within 0.05%; d95 differs from hand only by the entry length check on `src` in
+the asm, d85 emits the same constructor as hand (D101). The hand D85 builds its vector with `Vec::new()` and `push`
+like the generated code; a hand `vec![i]` let rustc elide the allocation and measured 53-70x faster, which compares
+different programs.
+
+### P32M.5 Audit
+
+One audit (Codex gpt-6.2-astra, ultra, `work/p32m/audit_47decfcc.txt`) found five must-fix items, all fixed in
+both compilers with a test:
+
+| # | Finding | Fix | Test |
+|---|---|---|---|
+| 1 | one call could borrow a field and move its root into a constructor argument (`sink(s.nums, St { s: move s })`, rustc `E0505`) | `check_call_move_alias` collects every whole-binding move nested in an argument (`_ctor_moves` / `ctor_moves`), through constructors and calls | `r6e_6_holder_borrow_and_move`, `r6e_6_holder_borrow_through_call` (`foreign_borrow`) |
+| 2 | `vec_get::<Hold>(h, 0).r.n` moved the whole `Rec` out of a shared reference (rustc `E0507`) | both codegens read the field chain in place on the `get_unchecked` element | `r6e_6_holder_vec_get_field` (accept, `gen_contains`) |
+| 3 | `HashMap<bool, Hold>` was accepted (and with a `String` field in `Hold` only pruvc rejected it) | holder map key check in `check.py` / `check.rs` | `r6e_6_holder_map_key` (`foreign_owned_type`) |
+| 4 | `move` of `S { xs: [i64] }` into a struct field: pruvc accepted, pruvc-rs `foreign_move` | pruvc uses the pruvc-rs owned-aggregate set (`_Ownership.aggregate`) | `r6e_12_move_plain_record` (`foreign_move`) |
+| 5 | `vec_extend_from_slice` had no run-time `2^40` length check under `--no-verify` / foreign checks | the guard `len(P) + len(s) > 2^40` -> `pruv_g6_req` unless the catalog runs unchecked; SPEC R-6e-18 states it | `r6e_18_extend_guard` (`gen_contains`) |
+
+Should-consider items: the D95 reject test now rejects at the `::<String>` call with a valid parameter
+(`r6e_18_extend_string`); SPEC R-6e-6 now says a plain binding as a constructor field deep-copies (`Clone::clone`),
+while a call result or `move x` does not copy.
+
+Recheck (one, Codex gpt-6.2-astra): items 2, 3 and 5 fixed. Item 1 still accepted a move behind a call inside the
+constructor (`sink(s.nums, Arg { k: val(St { s: move s }) })`); the move scan now walks every child, and the new
+test rejects it on both compilers. Item 4 flagged `S { n: i64 }` being movable against the first SPEC wording; the
+compilers keep the pruvc-rs aggregate set (a scalar-only struct is a value aggregate) and SPEC R-6e-12 now names the
+array-field case instead.
+
+### P32M.6 Design note
+
+D90 reuses the R-6e-6 nested-record machinery one level up: a holder is a record whose fields are scalars, owned
+buffers or nested-collection records, and it inherits their move and borrow rules, so no new ownership state was
+needed. Both compilers compute the holder set once after type parameters are checked (`holder_records`), the
+direct-field reject now looks at the nested set instead of "any record with collection fields", and the owned
+aggregate positions accept holders. Holders are not nested further and are not `Option` / `Result` payloads, which
+keeps the map-arm update and the verifier's field havoc at one level, matching the M12 shape that needed it. D95 is
+a catalog entry with an `inout` vector and a borrowed slice; the verifier treats it as a resize with a fresh array
+whose prefix and suffix are fixed by two quantifiers, as `vec_resize` does. D85 makes pruvc consume the `Move` child
+of a struct literal or enum constructor the way pruvc-rs already did, so the rule is the rs behaviour, written in
+R-6e-12, with the existing use-after-move check. pruvc now uses the pruvc-rs owned-aggregate set for `move`, so a
+struct with an array field other than `[u8]` is not an owned aggregate and `move` of it is `type/foreign_move` in
+both compilers; a struct of scalar fields only stays a (value) aggregate and may be moved, as in pruvc-rs before.
+
+### P32M.7 Budget, queue and debt
+
+Started 04:19 KST 2026-11-21 with a 3 h budget; used 2 h 7 min. Delegations: 15 of 20 (research, write,
+command runs for the suites, one astra ultra audit and one recheck of the five must-fix items). Proof and perf
+measurement were done in this sub. No change to bench/l3, routing, models or accounts.
+
+| Item | Content | Next |
+|---|---|---|
+| P32M-Q1 | LLVM / `raw_entries` "c" for holder records and `vec_extend_from_slice` | D83 |
+| P32M-Q2 | switch bench M12 `Entry` to a holder record (bench/l3 untouched here) | next P32 attempt |
+| P32M-Q3 | D90 L 1.026x and the 1.000x M cells from the capacity guard and entry length checks | D100, D101 |
