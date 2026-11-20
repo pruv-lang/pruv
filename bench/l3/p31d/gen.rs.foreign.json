@@ -1,0 +1,36 @@
+{
+  "backend": "rust",
+  "catalog": [
+    {
+      "op": "map_get_mut",
+      "type_args": [
+        "String",
+        "crate::Budget"
+      ]
+    },
+    {
+      "op": "map_get_mut",
+      "type_args": [
+        "String",
+        "crate::Clock"
+      ]
+    },
+    {
+      "op": "vec_new",
+      "type_args": [
+        "crate::Effect"
+      ]
+    },
+    {
+      "op": "vec_push",
+      "type_args": [
+        "crate::Effect"
+      ]
+    }
+  ],
+  "check_mode": "requires",
+  "externs": [],
+  "rustc_checked": false,
+  "schema": "pruv-foreign-v1",
+  "trusted": []
+}

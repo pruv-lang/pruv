@@ -1,0 +1,12 @@
+// spec: R-6f-3 accept
+pub struct Effect { tag: i64, argument: i64 }
+pub struct Reply { status: i64, effects: Vec<Effect> }
+pub struct St { seen: bool }
+
+pub fn call(inout st: St, n: i64) -> Reply ! alloc
+  ensures len(result.effects) == 1
+{
+  st.seen = true;
+  let effects: Vec<Effect> = vec_push::<Effect>(vec_new::<Effect>(), Effect { tag: 1, argument: n });
+  return Reply { status: 0, effects: move effects };
+}

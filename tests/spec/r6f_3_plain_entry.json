@@ -1,0 +1,1 @@
+{"gen_regex": ["pub fn make\\(n: i64\\) -> Batch"], "gen_absent": [".clone()"]}

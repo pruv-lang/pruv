@@ -1,0 +1,8 @@
+// spec: R-6f-3 reject
+pub struct Effect { tag: i64, names: Vec<String> }
+pub struct Reply { status: i64, effects: Vec<Effect> }
+
+pub fn call(n: i64) -> Reply ! alloc
+{
+  return Reply { status: n, effects: vec_new::<Effect>() };
+}

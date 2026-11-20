@@ -1,0 +1,1 @@
+{"gen_contains": ["match st.sessions.get_mut(sid)", "match st.clocks.get_mut(bid)"], "gen_absent": [".clone()", "mem::take", "to_string"]}

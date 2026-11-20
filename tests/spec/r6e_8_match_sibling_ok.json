@@ -1,0 +1,1 @@
+{"gen_contains": ["st.c = (items.len() as i64)"], "gen_absent": [".clone()"]}

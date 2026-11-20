@@ -1,0 +1,11 @@
+// spec: R-6e-8 reject
+struct Rec { count: i64 }
+struct Inner { recs: Vec<Rec>, other: Vec<Rec> }
+struct St { n: i64, inner: Inner }
+fn f(inout st: St) -> i64 {
+  match vec_at_mut::<Rec>(inout st.inner.recs, 0) {
+    Some(r) => { r.count = len(st.inner.recs); }
+    None => { }
+  }
+  return 0;
+}

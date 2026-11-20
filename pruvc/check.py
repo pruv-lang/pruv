@@ -66,6 +66,12 @@ def _field_moves(e):
         yield from _field_moves(child)
 
 
+def _paths_overlap(p, q):
+    """one field path is a prefix of the other (the whole root is the empty path)"""
+    n = min(len(p), len(q))
+    return tuple(p[:n]) == tuple(q[:n])
+
+
 def _field_move_error(e):
     terr(e, "foreign_move", "a field can be moved only into a call whose result is assigned back to the same field",
          "move a Vec or String field of a mutable local directly into a take parameter and use the local only there")
@@ -185,8 +191,10 @@ class Checker:
         s.fn_sccs = []            # recursive function SCCs (lists of names in function order)
         s.call_log = []           # (caller Function, Call node, callee Function) of every checked user call
         s.match_call = s.field_receiver = None
-        s.map_borrows = []
+        s.map_borrows = []        # (root, field path) of the enclosing mutable collection Some arms
+        s.field_paths = {}        # id(root Var) -> field path of the outermost field read over it
         s.active_roots = []       # root variable names of the enclosing match arms on extended scrutinees
+        s.match_paths = []        # (root, field path) of enclosing matches on extended places of inout roots
         s.s5_errors = []
         s.par_groups = []         # G7 A0: (enclosing Function, Par statement, [branch Function]) of every checked group
         s.x_raw = {}              # P06: function name -> reason it cannot be expanded (str) or its raw body
@@ -753,6 +761,23 @@ class Checker:
                          (p.name, type_name(p.type)),
                          "use an array, a non-generic struct, or a map or vector of aggregate records, or remove inout")
 
+    def is_result_record(s, ty):
+        """R-6f-3: a non-generic struct whose fields are plain values, Vec<i64>/Vec<bool> or Vec<E> of an owned
+        aggregate E without nested collection fields (R-6e-6)"""
+        if not is_nongeneric_struct(ty, s.decls):
+            return False
+        def ok(ft):
+            if is_scalar_vec(ft):
+                return True
+            if ft.owner is None and ft.name == "vec" and len(ft.args) == 1:
+                e = ft.args[0]
+                return (e.owner is None and not e.args and e.name in s.aggregates
+                        and e.name not in s.nested_records)
+            return (not contains_collection(ft) and not is_array(ft) and ft != STR
+                    and not any(n in s.extended for n in dependencies(ft)))
+        return any(is_collection(fd.type) for fd in s.decls[ty.name].fields) and \
+            all(ok(fd.type) for fd in s.decls[ty.name].fields)
+
     def check_entries(s):
         """Host entry signatures admit plain values, array/str parameters and scalar Vec results."""
         def new_collection(ty):
@@ -783,7 +808,7 @@ class Checker:
                 if not p.take and p.mode is None and (p.type.name in rust_records or rust_state and p.type == STRING):
                     continue
                 positions.append(("parameter %s" % p.name, p.type))
-            if not is_scalar_vec(f.ret):
+            if not is_scalar_vec(f.ret) and not s.is_result_record(f.ret):
                 positions.append(("the result", f.ret))
             for what, ty in positions:
                 if contains_collection(ty) or any(n in s.extended for n in dependencies(ty)):
@@ -1014,7 +1039,7 @@ class Checker:
             s.expect(st.value, s.elem_type(v[0]), scope)
             s.check_inout_context(st, st.index, st.value)
         elif isinstance(st, FieldAssign):
-            v = s.lookup(st, st.name, scope)
+            v = s.lookup(st, st.name, scope, tuple(st.fields))
             s.check_borrow(st, st.name, st.fields)
             cur = v[0]
             for fname in st.fields:
@@ -1109,6 +1134,7 @@ class Checker:
             s.check_inout_context(st, st.scrutinee)
             user = s.tt.is_enum(t)
             root = s.match_root(st.scrutinee, t, scope)   # G9 A0: root variable of an extended scrutinee path
+            mpath = s.match_inout_path(st.scrutinee, t, scope)
             if t.owner is not None:
                 terr(st, "generic_operation", "cannot match a value of the abstract type %s" % t.name,
                      "a type parameter has no variants; match on an Option, Result or enum that contains it")
@@ -1160,6 +1186,8 @@ class Checker:
                     sc[b] = (bt, False, "param" if (is_array(bt) or bt == STR) else "local")
                 if root is not None:
                     s.active_roots.append(root)
+                if mpath is not None:
+                    s.match_paths.append(mpath)
                 if a.ctor == "Some" and (mutable_map or map_view):
                     operand = st.scrutinee.args[0]
                     base, _ = field_place(operand.expr if mutable_map else operand)
@@ -1167,7 +1195,7 @@ class Checker:
                     for b, bt in zip(a.binders, ftypes):
                         sc[b] = (bt, False, "map_mut" if mutable_map else "param")
                     if isinstance(base, Var):
-                        borrows.append(base.name)
+                        borrows.append((base.name, field_place(operand.expr)[1]) if mutable_map else base.name)
                     s.block(a.body, sc)
                     if isinstance(base, Var):
                         borrows.pop()
@@ -1175,6 +1203,8 @@ class Checker:
                     s.block(a.body, sc)
                 if root is not None:
                     s.active_roots.pop()
+                if mpath is not None:
+                    s.match_paths.pop()
         else:
             terr(st, "internal", "unknown statement")
 
@@ -1421,8 +1451,24 @@ class Checker:
             return e.name
         return None
 
+    def match_inout_path(s, scrut, t, scope):
+        """R-6e-8: (root, field path) of a match scrutinee place over an extended type rooted at an inout or
+        element binding, else None"""
+        if not s.is_extended(t):
+            return None
+        e, fields = scrut, []
+        while isinstance(e, FieldAccess):
+            fields.insert(0, e.field)
+            e = e.base
+        if isinstance(e, Var) and e.name in scope and scope[e.name][2] in ("inout", "map_mut"):
+            return (e.name, tuple(fields))
+        return None
+
+    def match_path_held(s, name, path):
+        return any(root == name and _paths_overlap(path, held) for root, held in s.match_paths)
+
     def check_borrow(s, st, name, fields):
-        if name in s.active_roots:
+        if name in s.active_roots or s.match_path_held(name, tuple(fields)):
             terr(st, "recursive_borrow", "cannot assign to %s while a match on it is active" % ".".join([name] + list(fields)),
                  "copy the needed payload into a local, finish the match, then assign")
 
@@ -1466,8 +1512,12 @@ class Checker:
             return at.args[0]
         return BOOL if at == ARRAY_BOOL else I64
 
-    def lookup(s, node, name, scope):
-        if name in s.map_borrows:
+    def lookup(s, node, name, scope, path=None):
+        """path: the field path of the place read through `name`; a mutable collection Some arm admits a path of
+        its root that is disjoint from every borrowed path of that root (R-6e-8)"""
+        if path is None:
+            path = s.field_paths.get(id(node))
+        if any(root == name and (path is None or _paths_overlap(path, held)) for root, held in s.map_borrows):
             terr(node, "recursive_borrow", "cannot use %s inside a mutable collection Some arm" % name)
         if name not in scope:
             terr(node, "unknown_name", "unknown variable %s" % name)
@@ -1562,17 +1612,17 @@ class Checker:
                 s.expect(e.left, BOOL, scope, c, op="a boolean operation")
                 s.expect(e.right, BOOL, scope, c, op="a boolean operation"); return BOOL
         if isinstance(e, Move):   # G6: liveness and position rules are checked by foreign.check_ownership
+            s.check_borrow(e, e.name, tuple(e.fields))
             if e.fields:
                 if e is not s.field_move:
                     _field_move_error(e)
-                ty = s.lookup(e, e.name, scope)[0]
+                ty = s.lookup(e, e.name, scope, tuple(e.fields))[0]
                 for field in e.fields:
                     ty = s.field_type(e, ty, field)
                 return ty
             if c:
                 terr(e, "foreign_move", "move only where ownership is consumed",
                      "contracts read parameters and locals directly; remove `move`")
-            s.check_borrow(e, e.name, ())
             return s.lookup(e, e.name, scope)[0]
         if isinstance(e, Index):
             at = s.expect_array(e.array, scope, c, coll=True)
@@ -1624,6 +1674,9 @@ class Checker:
             s.ctor_allocs(e.enum_name, e.variant, c)
             return ety
         if isinstance(e, FieldAccess):
+            froot, fpath = field_place(e)
+            if isinstance(froot, Var):
+                s.field_paths.setdefault(id(froot), fpath)
             saved, s.field_receiver = s.field_receiver, e.base
             bt = s.expr(e.base, scope, c)
             s.field_receiver = saved
@@ -1820,7 +1873,7 @@ class Checker:
                         else "a call" if isinstance(op, Call) else "an expression")
                 terr(arg, "inout_argument", "an inout argument must be the whole name of a local array or an inout "
                      "parameter, not %s" % what, "name a `let mut` local array or an inout parameter of this function")
-            v = s.lookup(place, place.name, scope)
+            v = s.lookup(place, place.name, scope, path)
             if v[2] == "local" and not v[1]:
                 terr(arg, "inout_argument", "%s is not mutable: it cannot be passed inout" % place.name,
                      "declare it with `let mut`")
@@ -1833,7 +1886,7 @@ class Checker:
                 terr(arg, "inout_argument", "inout argument %s has type %s but parameter %s of %s expects %s" % (
                     place.name, type_name(actual), p.name, n, type_name(want)),
                      "pass an array of exactly the parameter's element type")
-            if place.name in s.active_roots:     # G9: mutable access while a match view of the root is active
+            if place.name in s.active_roots or s.match_path_held(place.name, tuple(path)):     # G9, R-6e-8
                 terr(arg, "recursive_borrow", "cannot pass %s inout while a match on it is active" % place.name,
                      "finish the match before the call")
             op.ty = actual
@@ -1876,7 +1929,7 @@ class Checker:
                      "declare the parameter `inout %s: ...`, or copy into a `let mut` local" % op.name)
             if v[0] != ARRAY_U8:
                 terr(arg, "type_mismatch", "expected %s, found %s" % (type_name(ARRAY_U8), type_name(v[0])))
-            if op.name in s.active_roots:
+            if op.name in s.active_roots or s.match_path_held(op.name, ()):
                 terr(arg, "recursive_borrow", "cannot pass %s inout while a match on it is active" % op.name,
                      "finish the match before the call")
             op.ty = v[0]
@@ -1925,7 +1978,7 @@ class Checker:
         if v[0] not in (ARRAY, ARRAY_U8):
             terr(arg, "type_mismatch", "expected %s or %s, found %s" % (
                 type_name(ARRAY), type_name(ARRAY_U8), type_name(v[0])))
-        if op.name in s.active_roots:
+        if op.name in s.active_roots or s.match_path_held(op.name, ()):
             terr(arg, "recursive_borrow", "cannot pass %s inout while a match on it is active" % op.name,
                  "finish the match before the call")
         op.ty = v[0]

@@ -1,0 +1,1 @@
+{"gen_regex": ["pub fn call\\(st: &mut St, n: i64\\) -> Reply"], "gen_contains": ["pub struct Reply { pub status: i64, pub effects: ::std::vec::Vec<Effect> }"], "gen_absent": [".clone()", "mem::take"]}

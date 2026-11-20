@@ -1,0 +1,9 @@
+// spec: R-6e-8 accept
+enum Blob { Empty, Ints(items: [i64]) }
+struct St { a: i64, b: Blob, c: i64 }
+fn f(inout st: St) -> () {
+  match st.b {
+    Blob::Ints(items) => { st.c = len(items); }
+    Blob::Empty => { }
+  }
+}
