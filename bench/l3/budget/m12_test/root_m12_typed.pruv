@@ -27,8 +27,33 @@ pub struct St {
   tools: HashMap<String, ToolTurn>
 }
 
-trusted rust fn decode_key(words: [i64]) -> String ! alloc
-  ensures true = "::m12_facts::decode_key";
+trusted rust fn decode_admitted_key(words: [i64]) -> String ! alloc
+  ensures true = "::m12_facts::decode_admitted_key";
+trusted rust fn native_key(value: str) -> String ! alloc
+  ensures true = "::m12_facts::native_key";
+
+pub struct PackedKey { value: String }
+
+fn packed_key_ok(words: [i64]) -> bool
+{ return crate::bud_keys::rec_end(words, 0) == len(words); }
+
+pub fn admit_packed_key(inout key: PackedKey, words: [i64], optional: bool) -> i64 ! alloc
+{
+  if len(words) == 0 {
+    if !optional { return 2; }
+    key.value = string_new();
+    return 0;
+  }
+  if !packed_key_ok(words) { return 2; }
+  key.value = decode_admitted_key(words);
+  return 0;
+}
+
+fn decode_key(words: [i64]) -> String ! alloc
+{
+  if !packed_key_ok(words) { return string_new(); }
+  return decode_admitted_key(words);
+}
 
 fn text(s: str) -> String ! alloc
 { return string_push_str(string_new(), s); }
@@ -56,7 +81,7 @@ pub struct WireNode {
   children: i64, count: i64, next: i64
 }
 pub struct Wire {
-  nodes: HashMap<i64, WireNode>, next: i64
+  nodes: HashMap<i64, WireNode>, next: i64, prepared_budget: i64, prepared_ticket: i64
 }
 
 trusted rust fn v_units(words: [i64], at: i64, count: i64) -> String ! alloc
@@ -305,46 +330,87 @@ fn replace_wire(inout wire: Wire, old: i64, blob: [i64]) -> i64 ! alloc
   let ignored: i64 = delete_node(inout wire, old, 64);
   return fresh;
 }
-fn make_budget(blob: [i64], root: i64) -> crate::bud_tstate::Budget ! alloc
+fn make_budget(wire: Wire, root: i64) -> crate::bud_tstate::Budget ! alloc
 {
-  let id: [i64] = crate::bud_vwords::packed(blob, crate::bud_vwords::get(blob, 0, "id"));
-  let pos: i64 = crate::bud_vwords::get(blob, 0, "state");
+  let id: String = node_string(wire, find_field(wire, root, "id").id);
+  let pos: i64 = find_field(wire, root, "state").id;
   let mut state: i64 = 2;
-  if len(blob) == 0 { state = -1; }
-  if str_is(blob, pos, "open") { state = 0; }
-  if str_is(blob, pos, "halted") { state = 1; }
-  let limits: i64 = get(blob, 0, "limits");
-  let used: i64 = get(blob, 0, "used");
+  if root == 0 { state = -1; }
+  if node_text_is(wire, pos, "open") { state = 0; }
+  if node_text_is(wire, pos, "halted") { state = 1; }
+  let limits: i64 = find_field(wire, root, "limits").id;
+  let used: i64 = find_field(wire, root, "used").id;
+  let halt: i64 = find_field(wire, root, "halt").id;
+  let reason: i64 = find_field(wire, halt, "reason").id;
+  let mut code: i64 = 0;
+  while code < 5 && !node_text_is(wire, reason, named(code))
+    invariant 0 <= code && code <= 5
+    decreases 5 - code
+  { code = code + 1; }
+  if code == 5 { code = -1; }
   return crate::bud_tstate::Budget {
-    id: decode_key(id), state: state, unlimited: crate::bud_card::truthy(blob, get(blob, 0, "unlimited")), unlimited_kind: 0,
-    limits: crate::bud_tstate::Limits { time: num(blob, get(blob, limits, "timeMinutes")),
-      delegations: num(blob, get(blob, limits, "delegations")), commands: num(blob, get(blob, limits, "commands")),
-      reviews: num(blob, get(blob, limits, "reviews")), checks: num(blob, get(blob, limits, "checks")) },
-    active_ms: num(blob, get(blob, used, "activeMs")), active_since: -1, since_kind: -1,
-    delegations: num(blob, get(blob, used, "delegations")), commands: num(blob, get(blob, used, "commands")),
-    reviews: num(blob, get(blob, used, "reviews")), checks: num(blob, get(blob, used, "checks")),
-    tools: num(blob, get(blob, used, "tools")), failures: num(blob, get(blob, used, "failures")),
-    retries: num(blob, get(blob, used, "retries")), metadata: root, origin: 0,
+    id: move id, state: state, unlimited: node_truthy(wire, find_field(wire, root, "unlimited").id), unlimited_kind: 0,
+    limits: crate::bud_tstate::Limits { time: node_num(wire, find_field(wire, limits, "timeMinutes").id),
+      delegations: node_num(wire, find_field(wire, limits, "delegations").id), commands: node_num(wire, find_field(wire, limits, "commands").id),
+      reviews: node_num(wire, find_field(wire, limits, "reviews").id), checks: node_num(wire, find_field(wire, limits, "checks").id) },
+    active_ms: node_num(wire, find_field(wire, used, "activeMs").id), active_since: -1, since_kind: -1,
+    delegations: node_num(wire, find_field(wire, used, "delegations").id), commands: node_num(wire, find_field(wire, used, "commands").id),
+    reviews: node_num(wire, find_field(wire, used, "reviews").id), checks: node_num(wire, find_field(wire, used, "checks").id),
+    tools: node_num(wire, find_field(wire, used, "tools").id), failures: node_num(wire, find_field(wire, used, "failures").id),
+    retries: node_num(wire, find_field(wire, used, "retries").id), metadata: root, origin: 0,
     opened_at: string_new(), since_text: string_new(), ended_at: string_new(), follows: string_new(),
     ended_how: 0, ended_kind: 0, ended_ms: 0, opened_ms: 0, follows_kind: 0,
-    rest: string_new(), halt_reason: reason_code(blob, get(blob, get(blob, 0, "halt"), "reason")),
+    rest: string_new(), halt_reason: code,
     halt_kind: 0, halt_ms: 0,
     halt_text: string_new(), stopped: vec_new::<String>()
   };
 }
 
-pub fn load(inout st: St, sid: str, blob: [i64], inout out: [i64]) -> i64 ! alloc
+pub struct Loaded { status: i64, fresh: bool }
+pub struct BudgetInput { root: i64, ticket: i64, valid: bool }
+
+trusted rust fn next_budget_ticket() -> i64 ! io
+  ensures true = "::m12_facts::next_budget_ticket";
+
+fn prepared(inout st: St, root: i64) -> BudgetInput ! alloc, io
 {
-  if len(blob) > 0 && crate::bud_card::v_stored_end(blob, 0) != len(blob) { return 2; }
-  if len(out) < 2 { return 3; }
-  if len(st.sessions) >= 1099511627776 { return 2; }
+  if root == 0 { return BudgetInput { root: 0, ticket: 0, valid: false }; }
+  let ticket: i64 = next_budget_ticket();
+  let previous: i64 = st.wire.prepared_budget;
+  let ignored: i64 = delete_node(inout st.wire, previous, 64);
+  st.wire.prepared_budget = root;
+  st.wire.prepared_ticket = ticket;
+  return BudgetInput { root: root, ticket: ticket, valid: true };
+}
+
+pub fn decode_budget(inout st: St, blob: [i64]) -> BudgetInput ! alloc, io
+{
+  if len(blob) == 0 { return BudgetInput { root: 0, ticket: 0, valid: true }; }
+  if crate::bud_card::v_stored_end(blob, 0) != len(blob) { return BudgetInput { root: 0, ticket: 0, valid: false }; }
+  let root: i64 = replace_wire(inout st.wire, 0, blob);
+  return prepared(inout st, root);
+}
+
+pub fn prepare_budget(inout st: St, packet: [u8]) -> BudgetInput ! alloc, io
+{
+  if len(packet) == 0 { return BudgetInput { root: 0, ticket: 0, valid: true }; }
+  if !crate::bud_card::j_ok_at(packet, 2) { return BudgetInput { root: 0, ticket: 0, valid: false }; }
+  let root: i64 = read_node(inout st.wire, crate::ent_u16::empty(), packet, true, 0, string_new(), 2);
+  return prepared(inout st, root);
+}
+
+pub fn load(inout st: St, sid: str, take input: BudgetInput) -> Loaded ! alloc
+{
+  let bad: Loaded = Loaded { status: 2, fresh: false };
+  if !input.valid || (input.root != 0 && (input.ticket != st.wire.prepared_ticket || input.root != st.wire.prepared_budget)) { return bad; }
+  if len(st.sessions) >= 1099511627776 { return bad; }
   let mut fresh: i64 = 1;
   match map_get::<String, Ordinal>(st.ordinals, sid) {
     Some(o) => { fresh = 0; }
     None => {}
   }
   if fresh == 1 {
-    if len(st.ordinals) >= 1099511627776 || st.next_session < 0 || st.next_session >= 1099511627775 { return 2; }
+    if len(st.ordinals) >= 1099511627776 || st.next_session < 0 || st.next_session >= 1099511627775 { return bad; }
     let seq: i64 = st.next_session;
     st.next_session = seq + 1;
     st.ordinals = map_insert::<String, Ordinal>(move st.ordinals, text(sid), Ordinal { value: seq });
@@ -354,15 +420,17 @@ pub fn load(inout st: St, sid: str, blob: [i64], inout out: [i64]) -> i64 ! allo
     Some(b) => { old = b.metadata; }
     None => {}
   }
-  let root: i64 = replace_wire(inout st.wire, old, blob);
-  let b: crate::bud_tstate::Budget = make_budget(blob, root);
+  if input.root != 0 {
+    st.wire.prepared_budget = 0;
+    st.wire.prepared_ticket = 0;
+  }
+  let ignored: i64 = delete_node(inout st.wire, old, 64);
+  let b: crate::bud_tstate::Budget = make_budget(st.wire, input.root);
   st.sessions = map_insert::<String, crate::bud_tstate::Budget>(move st.sessions, text(sid), move b);
-  crate::ent_u16::wr(inout out, 0, 1);
-  crate::ent_u16::wr(inout out, 1, fresh);
-  return 0;
+  return Loaded { status: 0, fresh: fresh == 1 };
 }
 
-pub fn session(st: St, sid: str) -> [i64] ! alloc
+fn session_words(st: St, sid: str) -> [i64] ! alloc
 {
   match map_get::<String, crate::bud_tstate::Budget>(st.sessions, sid) {
     Some(b) => { return crate::bud_vwords::cat(crate::ent_u16::one(1), budget_words(st.wire, b)); }
@@ -372,101 +440,6 @@ pub fn session(st: St, sid: str) -> [i64] ! alloc
 }
 fn rd(v: [i64], i: i64) -> i64
 { return crate::ent_u16::rd(v, i); }
-
-fn emit(inout out: [i64], pos: i64, v: i64) -> i64
-  requires 0 <= pos && pos <= 1099511627776
-  ensures 0 <= result && result <= 1099511627776 && len(out) == len(old(out))
-{
-  if pos >= 1099511627776 { return 1099511627776; }
-  crate::ent_u16::wr(inout out, pos, v);
-  return pos + 1;
-}
-
-fn emit_lit(inout out: [i64], pos: i64, s: str) -> i64
-  requires 0 <= pos && pos <= 1099511627776
-  ensures 0 <= result && result <= 1099511627776 && len(out) == len(old(out))
-{
-  let m: i64 = len(s);
-  let mut p: i64 = emit(inout out, pos, m);
-  let mut j: i64 = 0;
-  while j < m
-    invariant 0 <= j && j <= m && m == len(s) && 0 <= p && p <= 1099511627776 && len(out) == len(old(out))
-    decreases m - j
-  {
-    p = emit(inout out, p, s[j]);
-    j = j + 1;
-  }
-  return p;
-}
-
-fn emit_range(inout out: [i64], pos: i64, src: [i64], s: i64, e: i64) -> i64
-  requires 0 <= pos && pos <= 1099511627776
-  requires 0 <= s && s <= e && e <= len(src)
-  ensures 0 <= result && result <= 1099511627776 && len(out) == len(old(out))
-{
-  let n: i64 = e - s;
-  let mut p: i64 = pos;
-  let mut j: i64 = 0;
-  if n <= 1099511627776 - pos && pos + n <= len(out) {
-    // the whole range is in bounds: one check for the loop (same writes as the per-word path below)
-    while j < n
-      invariant 0 <= j && j <= n && 0 <= s && s + n <= len(src) && 0 <= pos && pos + n <= len(out) && pos + n <= 1099511627776 && len(out) == len(old(out))
-      decreases n - j
-    {
-      out[pos + j] = src[s + j];
-      j = j + 1;
-    }
-    return pos + n;
-  }
-  while j < n
-    invariant 0 <= j && j <= n && 0 <= s && s + n <= len(src) && 0 <= p && p <= 1099511627776 && len(out) == len(old(out))
-    decreases n - j
-  {
-    p = emit(inout out, p, src[s + j]);
-    j = j + 1;
-  }
-  return p;
-}
-
-fn emit_all(inout out: [i64], pos: i64, w: [i64]) -> i64
-  requires 0 <= pos && pos <= 1099511627776
-  ensures 0 <= result && result <= 1099511627776 && len(out) == len(old(out))
-{
-  return emit_range(inout out, pos, w, 0, len(w));
-}
-
-// `u, units` of the UTF-8 text b (a bud_text output, valid UTF-8; u = its UTF-16 unit count): a short decode loop, so the
-// error branch of m11_set_card stays small (the WTF-8 put_units loop inlined there cost the success path ~48
-// instructions per call, P27)
-fn emit_utf8(inout out: [i64], pos: i64, b: [u8], u: i64) -> i64
-  requires 0 <= pos && pos <= 1099511627776
-  ensures 0 <= result && result <= 1099511627776 && len(out) == len(old(out))
-{
-  let n: i64 = len(b);
-  let mut p: i64 = emit(inout out, pos, u);
-  let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= i && i <= n && n == len(b) && 0 <= p && p <= 1099511627776 && len(out) == len(old(out))
-    decreases n - i
-  {
-    // one unit per lead byte (two emits only for a 4-byte lead), so the loop has two emit sites
-    let c: i64 = b[i];
-    let mut v: i64 = c;
-    let mut k: i64 = 1;
-    if c >= 192 && i + 1 < n { v = (c % 32) * 64 + b[i + 1] % 64; k = 2; }
-    if c >= 224 && i + 2 < n { v = (c % 16) * 4096 + (b[i + 1] % 64) * 64 + b[i + 2] % 64; k = 3; }
-    if c >= 240 && i + 3 < n {
-      let mut x: i64 = (c % 8) * 262144 + (b[i + 1] % 64) * 4096 + (b[i + 2] % 64) * 64 + b[i + 3] % 64 - 65536;
-      if x < 0 { x = 0; }
-      p = emit(inout out, p, 55296 + x / 1024 % 1024);
-      v = 56320 + x % 1024;
-      k = 4;
-    }
-    p = emit(inout out, p, v);
-    i = i + k;
-  }
-  return p;
-}
 
 // the value at `at` is the string equal to the ASCII literal s
 fn str_is(v: [i64], at: i64, s: str) -> bool
@@ -484,14 +457,6 @@ fn str_is(v: [i64], at: i64, s: str) -> bool
     j = j + 1;
   }
   return true;
-}
-
-// Compare the state tags without allocating string literals.
-fn is_halted(v: [i64], at: i64) -> bool
-{
-  if at < 0 || at > len(v) - 8 { return false; }
-  return v[at] == 6 && v[at + 1] == 6 && v[at + 2] == 104 && v[at + 3] == 97 &&
-    v[at + 4] == 108 && v[at + 5] == 116 && v[at + 6] == 101 && v[at + 7] == 100;
 }
 
 // Last budgetId value in the admitted ref, without a string literal.
@@ -520,42 +485,6 @@ fn ref_budget_id(rf: [i64]) -> i64
     i = i + 1;
   }
   return found;
-}
-
-// both values are strings with the same units
-fn str_eq(a: [i64], pa: i64, b: [i64], pb: i64) -> bool
-{
-  if pa < 0 || pb < 0 || pa > 1099511627776 || pb > 1099511627776 { return false; }
-  if rd(a, pa) != 6 || rd(b, pb) != 6 { return false; }
-  let n: i64 = rd(a, pa + 1);
-  if n != rd(b, pb + 1) || n < 0 || n > 1099511627776 { return false; }
-  let mut j: i64 = 0;
-  while j < n
-    invariant 0 <= j && j <= n && n <= 1099511627776 && 0 <= pa && pa <= 1099511627776 && 0 <= pb && pb <= 1099511627776
-    decreases n - j
-  {
-    if rd(a, pa + 2 + j) != rd(b, pb + 2 + j) { return false; }
-    j = j + 1;
-  }
-  return true;
-}
-
-struct Cur { e: i64, o: i64, n: i64, state: i64, card: i64, card_end: i64 }
-
-fn no_cur() -> Cur
-  ensures result.e == -1
-{
-  return Cur { e: -1, o: 0, n: 0, state: -1, card: -1, card_end: -1 };
-}
-
-fn cur(blob: [i64], rf: [i64]) -> Cur
-  ensures result.e < 0 || (result.o == 0 && 2 <= result.n && result.n == len(blob))
-  ensures result.e < 0 || (result.card == -1 || (result.o <= result.card && result.card < result.card_end && result.card_end <= result.n))
-{
-  let n: i64 = len(blob);
-  let p: crate::bud_card::BudgetPos = crate::bud_card::budget_pos(blob, 0, n);
-  if !p.ok || !str_eq(blob, p.id, rf, ref_budget_id(rf)) { return no_cur(); }
-  return Cur { e: 0, o: 0, n: n, state: p.state, card: p.card, card_end: p.card_end };
 }
 
 // value position of a JB packet (empty = absent)
@@ -605,144 +534,311 @@ fn timer_budget_first(rf: [i64]) -> bool
 }
 
 // Build the wire reply before replacing the stored budget.
-fn set_reply(blob: [i64], rf: [i64], card: [u8], lang: [u8], by: [u8], now_ms: i64, inout out: [i64]) -> i64 ! alloc
-  requires -8640000000000000 <= now_ms && now_ms <= 8640000000000000
+pub struct RefInput { valid: bool, ids: Vec<String>, has_id: bool, truthy: bool }
+
+pub fn decode_ref(rf: [i64]) -> RefInput ! alloc
 {
-  let c: Cur = cur(blob, rf);
-  let found: bool = c.e >= 0;
-  let closed: bool = found && str_is(blob, c.state, "closed");
-  let lc: i64 = crate::bud_card::lang_code(lang);
-  let r: crate::bud_card::Judged = crate::bud_card::judge(found, closed, card, at_b(card), lc);
-  if r.kind >= 0 {
-    // {ok: false, error}
-    // the error text is a bud_text card error: its unit count is a generated constant (a count loop here was inlined
-    // into every m11_set_card caller and pushed the m11 harness one 16 KiB code page over hand, P27)
-    let eu: i64 = crate::bud_text::card_error_units(r.kind, lc);
-    let need: i64 = 19 + eu;
-    if len(out) < need { return 3; }
-    let mut p: i64 = emit(inout out, 0, need - 1);
-    p = emit(inout out, p, b01(r.used_now));
-    p = emit(inout out, p, 0);
-    p = emit(inout out, p, 0);
-    p = emit(inout out, p, 2);
-    p = emit(inout out, p, 9);
-    p = emit(inout out, p, 2);
-    p = emit_lit(inout out, p, "ok");
-    p = emit(inout out, p, 3);
-    p = emit_lit(inout out, p, "error");
-    p = emit(inout out, p, 6);
-    p = emit_utf8(inout out, p, r.error, eu);
-    return 0;
+  let mut result: RefInput = RefInput { valid: false, ids: vec_new::<String>(), has_id: false, truthy: false };
+  if len(rf) == 0 || crate::bud_card::v_end(rf, 0) != len(rf) { return result; }
+  result.valid = true;
+  result.truthy = crate::bud_card::truthy(rf, 0);
+  let at: i64 = ref_budget_id(rf);
+  if at >= 0 && at <= len(rf) - 2 && rf[at] == 6 && crate::bud_card::v_stored_end(rf, at) > at {
+    result.has_id = true;
+    result.ids = vec_push::<String>(move result.ids, v_units(rf, at + 2, rd(rf, at + 1)));
   }
-  if c.e < 0 { return 2; }
-  let iso: crate::bud_date::IsoParts = crate::bud_date::iso_parts(now_ms);
-  let mut dry: [i64] = crate::ent_u16::empty();
-  let by_at: i64 = at_b(by);
-  let cs: i64 = crate::bud_card::put_card_words(inout dry, 0, card, r.f, by, by_at, iso);
-  let mut nbn: i64 = c.n + 5 + cs;
-  if c.card >= 0 { nbn = c.n - (c.card_end - c.card) + cs; }
-  let need2: i64 = 18 + nbn;
-  if len(out) < need2 { return 3; }
-  if nbn > 4294967296 { return 2; }
-  let end: i64 = c.o + c.n;
-  let mut q: i64 = emit(inout out, 0, need2 - 1);
-  q = emit(inout out, q, 1);
-  q = emit(inout out, q, 1);
-  q = emit(inout out, q, 1);
-  q = emit(inout out, q, 2);
-  q = emit(inout out, q, 9);
-  q = emit(inout out, q, 2);
-  q = emit_lit(inout out, q, "ok");
-  q = emit(inout out, q, 4);
-  q = emit_lit(inout out, q, "budget");
-  if c.card >= 0 {
-    q = emit_range(inout out, q, blob, c.o, c.card);
-    q = crate::bud_card::put_card_words(inout out, q, card, r.f, by, by_at, iso);
-    q = emit_range(inout out, q, blob, c.card_end, end);
+  return result;
+}
+
+fn ref_id(ids: Vec<String>) -> String ! alloc
+{
+  if len(ids) > 0 { return text(vec_get::<String>(ids, 0)); }
+  return string_new();
+}
+
+pub struct Session { present: bool, root: i64 }
+
+pub fn session(st: St, sid: str) -> Session
+{
+  match map_get::<String, crate::bud_tstate::Budget>(st.sessions, sid) {
+    Some(b) => { return Session { present: true, root: b.metadata }; }
+    None => {}
+  }
+  return Session { present: false, root: 0 };
+}
+
+pub fn encode_budget(st: St, root: i64) -> [i64] ! alloc
+{ return words_array(write_node(st.wire, root, false, 64, vec_new::<i64>())); }
+
+fn current_root(st: St, sid: str, has_sid: bool, bid: str, has_bid: bool) -> i64 ! alloc
+{
+  if !has_sid || !has_bid { return 0; }
+  let view: Session = session(st, sid);
+  if node_text_is(st.wire, find_field(st.wire, view.root, "id").id, bid) { return view.root; }
+  return 0;
+}
+
+fn ws_at(b: [u8], i: i64, e: i64) -> i64
+  requires 0 <= i && i < e && e <= len(b)
+  ensures 0 <= result && result <= e - i
+{
+  let c: i64 = b[i];
+  if c == 32 || (c >= 9 && c <= 13) { return 1; }
+  if c < 194 { return 0; }
+  if i + 1 < e && c == 194 && b[i + 1] == 160 { return 2; }
+  if i + 2 < e {
+    let c1: i64 = b[i + 1];
+    let c2: i64 = b[i + 2];
+    if c == 225 && c1 == 154 && c2 == 128 { return 3; }
+    if c == 226 && c1 == 128 && ((c2 >= 128 && c2 <= 138) || c2 == 168 || c2 == 169 || c2 == 175) { return 3; }
+    if c == 226 && c1 == 129 && c2 == 159 { return 3; }
+    if c == 227 && c1 == 128 && c2 == 128 { return 3; }
+    if c == 239 && c1 == 187 && c2 == 191 { return 3; }
+  }
+  return 0;
+}
+
+// byte length of the trim unit ending at e inside [s, e), 0 if none. The lead bytes C2/E1/E2/E3/EF are never
+// continuation bytes, so a match is a whole sequence.
+fn ws_before(b: [u8], s: i64, e: i64) -> i64
+  requires 0 <= s && s < e && e <= len(b)
+  ensures 0 <= result && result <= e - s
+{
+  let c: i64 = b[e - 1];
+  if c == 32 || (c >= 9 && c <= 13) { return 1; }
+  if c < 128 { return 0; }
+  if e - s >= 2 && c == 160 && b[e - 2] == 194 { return 2; }
+  if e - s >= 3 && ws_at(b, e - 3, e) == 3 { return 3; }
+  return 0;
+}
+
+fn tr_s(b: [u8], s: i64, e: i64) -> i64
+  requires 0 <= s && s <= e && e <= len(b)
+  ensures s <= result && result <= e
+{
+  let mut i: i64 = s;
+  while i < e
+    invariant s <= i && i <= e && e <= len(b)
+    decreases e - i
+  {
+    let w: i64 = ws_at(b, i, e);
+    if w == 0 { return i; }
+    i = i + w;
+  }
+  return i;
+}
+
+fn tr_e(b: [u8], s: i64, e: i64) -> i64
+  requires 0 <= s && s <= e && e <= len(b)
+  ensures s <= result && result <= e
+{
+  let mut j: i64 = e;
+  while j > s
+    invariant s <= j && j <= e && e <= len(b) && 0 <= s
+    decreases j - s
+  {
+    let w: i64 = ws_before(b, s, j);
+    if w == 0 { return j; }
+    j = j - w;
+  }
+  return j;
+}
+
+fn packet_tag(packet: [u8], at: i64) -> i64
+{
+  if at < 0 || at >= len(packet) { return 0; }
+  return packet[at];
+}
+
+fn packet_field(packet: [u8], at: i64, key: str) -> i64 ! alloc
+{
+  if at < 0 || at > len(packet) - 5 || packet[at] != 9 { return -1; }
+  let mut left: i64 = j_count(packet, at + 1);
+  let mut pos: i64 = at + 5;
+  let mut found: i64 = -1;
+  while left > 0
+    invariant 0 <= pos && pos <= len(packet)
+    decreases left
+  {
+    if pos > len(packet) - 4 { return -1; }
+    let n: i64 = j_count(packet, pos);
+    if n > len(packet) - pos - 4 { return -1; }
+    let value: i64 = pos + 4 + n;
+    let name: String = j_units(packet, pos + 4, n);
+    if string_eq(name, key) { found = value; }
+    let end: i64 = crate::bud_card::j_end(packet, value);
+    if end <= pos || end > len(packet) { return -1; }
+    pos = end;
+    left = left - 1;
+  }
+  return found;
+}
+
+fn packet_value(inout wire: Wire, packet: [u8], at: i64, key: str) -> i64 ! alloc
+{
+  if at < 0 { return atom(inout wire, key, 1, "", 0); }
+  return read_node(inout wire, crate::ent_u16::empty(), packet, true, at, text(key), 4);
+}
+
+fn trimmed(inout wire: Wire, key: str, packet: [u8], at: i64) -> i64 ! alloc
+{
+  if at < 0 || at > len(packet) - 5 || packet[at] != 6 { return 0; }
+  let n: i64 = j_count(packet, at + 1);
+  let start: i64 = at + 5;
+  if n > len(packet) - start { return 0; }
+  let end: i64 = start + n;
+  let first: i64 = tr_s(packet, start, end);
+  let last: i64 = tr_e(packet, first, end);
+  let value: String = j_units(packet, first, last - first);
+  return atom(inout wire, key, 6, string_to_str(value), 0);
+}
+
+// Append normalized children in the order used by the reference card.
+fn card_field(inout wire: Wire, parent: i64, key: str, child: i64) -> ()
+{
+  let slot: FieldLink = find_field(wire, parent, key);
+  replace_field(inout wire, parent, slot, child);
+}
+
+fn card_list(inout wire: Wire, key: str, packet: [u8], at: i64, verify: bool) -> i64 ! alloc
+{
+  if at < 0 || at > len(packet) - 5 || packet[at] != 8 { return 0; }
+  let list: i64 = atom(inout wire, key, 8, "", 0);
+  let mut left: i64 = j_count(packet, at + 1);
+  let mut pos: i64 = at + 5;
+  let mut tail: i64 = 0;
+  while left > 0
+    invariant 0 <= pos && pos <= len(packet)
+    decreases left
+  {
+    let mut item: i64 = 0;
+    if verify {
+      item = atom(inout wire, "", 9, "", 0);
+      let label: i64 = trimmed(inout wire, "label", packet, packet_field(packet, pos, "label"));
+      let status: i64 = packet_value(inout wire, packet, packet_field(packet, pos, "status"), "status");
+      card_field(inout wire, item, "label", label);
+      card_field(inout wire, item, "status", status);
+    } else {
+      item = trimmed(inout wire, "", packet, pos);
+    }
+    if item == 0 { return 0; }
+    if tail != 0 { link(inout wire, tail, item); }
+    match map_get_mut::<i64, WireNode>(inout wire.nodes, list) {
+      Some(n) => {
+        if tail == 0 { n.children = item; }
+        if n.count < 4294967296 { n.count = n.count + 1; }
+      }
+      None => { return 0; }
+    }
+    tail = item;
+    let end: i64 = crate::bud_card::j_end(packet, pos);
+    if end <= pos || end > len(packet) { return 0; }
+    pos = end;
+    left = left - 1;
+  }
+  return list;
+}
+
+fn card_object(inout wire: Wire, packet: [u8], at: i64, key: str) -> i64 ! alloc
+{
+  let value: i64 = atom(inout wire, key, 9, "", 0);
+  if string_eq(key, "targets") {
+    let confirmed: i64 = packet_value(inout wire, packet, packet_field(packet, at, "confirmed"), "confirmed");
+    let candidate: i64 = packet_value(inout wire, packet, packet_field(packet, at, "candidate"), "candidate");
+    let unknown: i64 = packet_value(inout wire, packet, packet_field(packet, at, "unknown"), "unknown");
+    card_field(inout wire, value, "confirmed", confirmed);
+    card_field(inout wire, value, "candidate", candidate);
+    card_field(inout wire, value, "unknown", unknown);
+    let note: i64 = packet_field(packet, at, "note");
+    if note >= 0 && note <= len(packet) - 5 && packet[note] == 6 && j_count(packet, note + 1) > 0 {
+      let text_note: i64 = packet_value(inout wire, packet, note, "note");
+      card_field(inout wire, value, "note", text_note);
+    }
   } else {
-    q = emit_range(inout out, q, blob, c.o, end);
-    let cnt: i64 = rd(blob, c.o + 1);
-    if cnt < 0 || cnt > c.n - 2 { return 2; }
-    crate::ent_u16::wr(inout out, 19, cnt + 1);
-    q = emit_lit(inout out, q, "card");
-    q = crate::bud_card::put_card_words(inout out, q, card, r.f, by, by_at, iso);
+    let session: i64 = packet_value(inout wire, packet, packet_field(packet, at, "sessionId"), "sessionId");
+    let turn: i64 = packet_value(inout wire, packet, packet_field(packet, at, "turnId"), "turnId");
+    card_field(inout wire, value, "sessionId", session);
+    card_field(inout wire, value, "turnId", turn);
   }
-  return 0;
+  return value;
 }
 
-pub fn set_card(inout st: St, rf: [i64], sid: str, has_sid: bool, card: [u8], lang: [u8], by: [u8], now_ms: i64, inout out: [i64]) -> i64 ! alloc {
-  if now_ms < -8640000000000000 || now_ms > 8640000000000000 { return 2; }
-  if len(rf) == 0 || crate::bud_card::v_end(rf, 0) != len(rf) { return 2; }
-  // card, lang, by: JB packets (empty = absent), admitted whole before any judgment
-  if len(card) > 0 && !crate::bud_card::j_ok(card) { return 2; }
-  if len(lang) > 0 && !crate::bud_card::j_ok(lang) { return 2; }
-  // by is stored at budget.card.by (depth 3) and returned one level deeper: its top value sits at depth 4 of the result
-  if len(by) > 0 && !crate::bud_card::j_ok_at(by, 4) { return 2; }
-  if has_sid {
-    let mut status: i64 = -1;
-    match map_get_mut::<String, crate::bud_tstate::Budget>(inout st.sessions, sid) {
-      Some(session) => {
-        let blob: [i64] = budget_words(st.wire, session);
-        status = set_reply(blob, rf, card, lang, by, now_ms, inout out);
-        if status == 0 && rd(out, 2) == 1 {
-          let end: i64 = rd(out, 0);
-          if end < 18 || end >= len(out) { status = 2; }
-          else {
-            let updated: i64 = replace_wire(inout st.wire, session.metadata, crate::ent_u16::slice(out, 18, end + 1));
-            session.metadata = updated;
-          }
-        }
-      }
-      None => {}
-    }
-    if status >= 0 { return status; }
+fn stored_card(inout wire: Wire, card: [u8], f: crate::bud_card::Keys, by: [u8], now: i64) -> i64 ! alloc
+  requires -8640000000000000 <= now && now <= 8640000000000000
+{
+  let root: i64 = atom(inout wire, "card", 9, "", 0);
+  let deliverable: i64 = trimmed(inout wire, "deliverable", card, f.p0);
+  let done: i64 = card_list(inout wire, "done", card, f.p1, false);
+  let iso: [u8] = crate::bud_date::iso(now);
+  let date: String = j_units(iso, 0, len(iso));
+  let updated: i64 = atom(inout wire, "updatedAt", 6, string_to_str(date), 0);
+  card_field(inout wire, root, "deliverable", deliverable);
+  card_field(inout wire, root, "done", done);
+  card_field(inout wire, root, "updatedAt", updated);
+  if packet_tag(card, f.p2) == 9 {
+    let targets: i64 = card_object(inout wire, card, f.p2, "targets");
+    card_field(inout wire, root, "targets", targets);
   }
-  return set_reply(crate::ent_u16::empty(), rf, card, lang, by, now_ms, inout out);
+  if packet_tag(card, f.p3) == 8 {
+    let verify: i64 = card_list(inout wire, "verify", card, f.p3, true);
+    card_field(inout wire, root, "verify", verify);
+  }
+  if packet_tag(card, f.p4) == 8 {
+    let conflicts: i64 = card_list(inout wire, "conflicts", card, f.p4, false);
+    card_field(inout wire, root, "conflicts", conflicts);
+  }
+  if packet_tag(card, f.p5) == 6 {
+    let state: i64 = packet_value(inout wire, card, f.p5, "state");
+    card_field(inout wire, root, "state", state);
+  }
+  if jb_truthy(by) {
+    let owner: i64 = card_object(inout wire, by, at_b(by), "by");
+    card_field(inout wire, root, "by", owner);
+  }
+  return root;
 }
 
-fn query_blob(blob: [i64], op: i64, rf: [i64], inout out: [i64]) -> i64 {
-  let c: Cur = cur(blob, rf);
-  if op == 1 && c.e >= 0 {
-    let need: i64 = 2 + c.n;
-    if len(out) < need { return 3; }
-    crate::ent_u16::wr(inout out, 0, need - 1);
-    crate::ent_u16::wr(inout out, 1, 1);
-    let p: i64 = emit_range(inout out, 2, blob, c.o, c.o + c.n);
-    return 0;
+pub struct CardResult { status: i64, used_now: bool, root: i64, kind: i64, lang: i64 }
+
+pub fn set_card_decoded(inout st: St, sid: str, has_sid: bool, bid: str, has_bid: bool,
+                card: [u8], lang: [u8], by: [u8], now_ms: i64) -> CardResult ! alloc
+{
+  let bad: CardResult = CardResult { status: 2, used_now: false, root: 0, kind: 0, lang: 0 };
+  if now_ms < -8640000000000000 || now_ms > 8640000000000000 { return bad; }
+  if len(card) > 0 && !crate::bud_card::j_ok(card) { return bad; }
+  if len(lang) > 0 && !crate::bud_card::j_ok(lang) { return bad; }
+  if len(by) > 0 && !crate::bud_card::j_ok_at(by, 4) { return bad; }
+  let root: i64 = current_root(st, sid, has_sid, bid, has_bid);
+  let closed: bool = node_text_is(st.wire, find_field(st.wire, root, "state").id, "closed");
+  let lc: i64 = crate::bud_card::lang_code(lang);
+  let r: crate::bud_card::Judged = crate::bud_card::judge(root != 0, closed, card, at_b(card), lc);
+  if r.kind >= 0 {
+    return CardResult { status: 0, used_now: r.used_now, root: 0, kind: r.kind, lang: lc };
   }
-  if len(out) < 3 { return 3; }
-  let mut v: i64 = 1;
-  if op != 1 {
-    let mut t: bool = false;
-    if c.e >= 0 {
-      if op == 2 { t = is_halted(blob, c.state); }
-      else { t = c.card >= 0 && crate::bud_card::truthy(blob, c.card); }
-    }
-    v = 3;
-    if t { v = 4; }
-  }
-  crate::ent_u16::wr(inout out, 0, 2);
-  crate::ent_u16::wr(inout out, 1, 1);
-  crate::ent_u16::wr(inout out, 2, v);
-  return 0;
+  let slot: FieldLink = find_field(st.wire, root, "card");
+  let fresh: i64 = stored_card(inout st.wire, card, r.f, by, now_ms);
+  if fresh == 0 { return bad; }
+  replace_field(inout st.wire, root, slot, fresh);
+  return CardResult { status: 0, used_now: true, root: root, kind: 0, lang: 0 };
 }
 
-pub fn query(st: St, op: i64, rf: [i64], sid: str, has_sid: bool, inout out: [i64]) -> i64 ! alloc {
-  if op < 1 || op > 3 { return 2; }
-  if len(rf) == 0 || crate::bud_card::v_end(rf, 0) != len(rf) { return 2; }
-  if has_sid {
-    match map_get::<String, crate::bud_tstate::Budget>(st.sessions, sid) {
-      Some(session) => {
-        let blob: [i64] = budget_words(st.wire, session);
-        return query_blob(blob, op, rf, inout out);
-      }
-      None => {}
-    }
-  }
-  return query_blob(crate::ent_u16::empty(), op, rf, inout out);
+pub fn card_error(kind: i64, lang: i64) -> [u8] ! alloc
+{
+  if kind < 0 || kind > 6 || lang < 0 || lang > 1 { return alloc(0, 0); }
+  return crate::bud_text::card_error(kind, lang);
 }
 
+pub struct QueryResult { status: i64, root: i64, value: bool }
 
+pub fn query_decoded(st: St, op: i64, sid: str, has_sid: bool, bid: str, has_bid: bool) -> QueryResult ! alloc
+{
+  if op < 1 || op > 3 { return QueryResult { status: 2, root: 0, value: false }; }
+  let root: i64 = current_root(st, sid, has_sid, bid, has_bid);
+  let mut value: bool = false;
+  if op == 2 { value = node_text_is(st.wire, find_field(st.wire, root, "state").id, "halted"); }
+  if op == 3 { value = node_truthy(st.wire, find_field(st.wire, root, "card").id); }
+  return QueryResult { status: 0, root: root, value: value };
+}
 
 struct FieldLink { id: i64, prev: i64, next: i64, tail: i64, hits: i64 }
 
@@ -807,6 +903,26 @@ fn node_text_is(wire: Wire, id: i64, text: str) -> bool
   return false;
 }
 
+fn node_string(wire: Wire, at: i64) -> String ! alloc
+{
+  match map_get::<i64, WireNode>(wire.nodes, at) {
+    Some(n) => { if n.tag == 6 { return text(string_to_str(n.text)); } }
+    None => {}
+  }
+  return string_new();
+}
+
+fn node_num(wire: Wire, at: i64) -> i64
+{
+  match map_get::<i64, WireNode>(wire.nodes, at) {
+    Some(n) => {
+      if n.tag == 5 && n.scalar >= -9007199254740991 && n.scalar <= 9007199254740991 { return n.scalar; }
+    }
+    None => {}
+  }
+  return 0;
+}
+
 fn replace_field(inout wire: Wire, parent: i64, slot: FieldLink, fresh: i64) -> ()
 {
   if fresh == 0 { return; }
@@ -859,80 +975,12 @@ fn jb_truthy(packet: [u8]) -> bool
   return band(bits, 9223372036854775807) != 0 && crate::bud_num::count_class(bits) != 3;
 }
 
-fn auto_reply(inout out: [i64], finds: i64, value: i64, owner: [i64]) -> i64
-{
-  let n: i64 = len(owner);
-  if len(out) < 5 || n > len(out) - 5 || n > 1073741824 { return 3; }
-  let saved: i64 = b01(n != 0);
-  out[0] = 4 + n;
-  out[1] = finds;
-  out[2] = saved;
-  out[3] = saved;
-  out[4] = value;
-  let mut i: i64 = 0;
-  while i < n
-    invariant 0 <= i && i <= n && n == len(owner) && n <= len(out) - 5
-    decreases n - i
-  {
-    out[5 + i] = owner[i];
-    i = i + 1;
-  }
-  return 0;
-}
+pub enum AutoOwner { NoOwner, Reference, Caller }
+pub struct AutoResult { status: i64, finds: i64, value: i64, saved: bool, owner: AutoOwner }
 
-// The key codec maps each UTF-16 unit to one Rust character, using U+10000
-// through U+107FF for surrogate units. Compare without cloning the String.
-fn id_matches(rf: [i64], at: i64, id: String) -> bool
+fn auto_result(status: i64, finds: i64, value: i64, saved: bool, owner: AutoOwner) -> AutoResult
 {
-  if at < 0 || at > len(rf) - 2 || rf[at] != 6 { return false; }
-  let count: i64 = rf[at + 1];
-  if count < 0 || count > len(rf) - at - 2 { return false; }
-  let n: i64 = len(id);
-  let mut i: i64 = 0;
-  let mut used: i64 = 0;
-  while i < n && used < count
-    invariant 0 <= i && i <= n && n == len(id) && 0 <= used && used <= count
-    invariant 0 <= at && count <= len(rf) - at - 2
-    decreases n - i
-  {
-    let lead: i64 = string_byte(id, i);
-    let mut cp: i64 = lead;
-    let mut width: i64 = 1;
-    if lead >= 240 {
-      if n - i < 4 { return false; }
-      cp = band(lead, 7) * 262144 + band(string_byte(id, i + 1), 63) * 4096 +
-        band(string_byte(id, i + 2), 63) * 64 + band(string_byte(id, i + 3), 63) - 10240;
-      width = 4;
-    } else if lead >= 224 {
-      if n - i < 3 { return false; }
-      cp = band(lead, 15) * 4096 + band(string_byte(id, i + 1), 63) * 64 + band(string_byte(id, i + 2), 63);
-      width = 3;
-    } else if lead >= 192 {
-      if n - i < 2 { return false; }
-      cp = band(lead, 31) * 64 + band(string_byte(id, i + 1), 63);
-      width = 2;
-    }
-    if cp != rf[at + 2 + used] { return false; }
-    used = used + 1;
-    i = i + width;
-  }
-  return i == n && used == count;
-}
-
-fn matches_auto(wire: Wire, b: crate::bud_tstate::Budget, rf: [i64], id: i64) -> bool ! alloc
-{
-  if b.metadata == 0 || id < 0 || id > 1099511627776 || rd(rf, id) != 6 { return false; }
-  if len(b.id) == 0 && !node_text_is(wire, find_field(wire, b.metadata, "id").id, "") { return false; }
-  return id_matches(rf, id, b.id);
-}
-
-fn current_auto(st: St, sid: str, rf: [i64], id: i64) -> bool ! alloc
-{
-  match map_get::<String, crate::bud_tstate::Budget>(st.sessions, sid) {
-    Some(b) => { return matches_auto(st.wire, b, rf, id); }
-    None => {}
-  }
-  return false;
+  return AutoResult { status: status, finds: finds, value: value, saved: saved, owner: owner };
 }
 
 fn atom(inout wire: Wire, key: str, tag: i64, text_value: str, next: i64) -> i64 ! alloc
@@ -943,16 +991,13 @@ fn atom(inout wire: Wire, key: str, tag: i64, text_value: str, next: i64) -> i64
   });
 }
 
-fn stop_auto(inout wire: Wire, root: i64, caller_sid: str, finds: i64, owner: [i64],
-             inout out: [i64]) -> i64 ! alloc
+fn stop_auto(inout wire: Wire, root: i64, caller_sid: str, finds: i64, owner: AutoOwner) -> AutoResult ! alloc
 {
   let record: FieldLink = find_field(wire, root, "autoContinue");
   let record_sid: FieldLink = find_field(wire, record.id, "sessionId");
   if node_text_is(wire, record_sid.id, caller_sid) {
     let stopped: FieldLink = find_field(wire, record.id, "stopped");
-    if node_truthy(wire, stopped.id) { return 0; }
-    let reply: i64 = auto_reply(inout out, finds, 1, owner);
-    if reply != 0 { return reply; }
+    if node_truthy(wire, stopped.id) { return auto_result(0, finds, 1, false, owner); }
     if stopped.id == 0 {
       let fresh: i64 = atom(inout wire, "stopped", 4, "", 0);
       replace_field(inout wire, record.id, stopped, fresh);
@@ -966,26 +1011,23 @@ fn stop_auto(inout wire: Wire, root: i64, caller_sid: str, finds: i64, owner: [i
         None => {}
       }
     }
-    return 0;
+    return auto_result(0, finds, 1, true, owner);
   }
-  if node_truthy(wire, record.id) { return 0; }
+  if node_truthy(wire, record.id) { return auto_result(0, finds, 1, false, owner); }
   let card: FieldLink = find_field(wire, root, "card");
-  if !node_text_is(wire, find_field(wire, card.id, "state").id, "working") { return 0; }
+  if !node_text_is(wire, find_field(wire, card.id, "state").id, "working") { return auto_result(0, finds, 1, false, owner); }
   let by: FieldLink = find_field(wire, card.id, "by");
-  if !node_text_is(wire, find_field(wire, by.id, "sessionId").id, caller_sid) { return 0; }
-  let reply2: i64 = auto_reply(inout out, finds, 1, owner);
-  if reply2 != 0 { return reply2; }
+  if !node_text_is(wire, find_field(wire, by.id, "sessionId").id, caller_sid) { return auto_result(0, finds, 1, false, owner); }
   let fresh: i64 = append_node(inout wire, WireNode {
     key: string_new(), text: text(caller_sid), tag: synthetic_tag(), scalar: 0,
     children: 0, count: 0, next: 0
   });
-  if fresh == 0 { return 2; }
+  if fresh == 0 { return auto_result(2, finds, 1, false, AutoOwner::NoOwner); }
   replace_field(inout wire, root, record, fresh);
-  return 0;
+  return auto_result(0, finds, 1, true, owner);
 }
 
-fn stop_owner(inout st: St, sid: str, owner: [i64], caller_sid: str, finds: i64,
-              inout out: [i64]) -> i64 ! alloc
+fn stop_owner(inout st: St, sid: str, owner: AutoOwner, caller_sid: str, finds: i64) -> AutoResult ! alloc
 {
   let mut root: i64 = 0;
   match map_get::<String, crate::bud_tstate::Budget>(st.sessions, sid) {
@@ -994,57 +1036,43 @@ fn stop_owner(inout st: St, sid: str, owner: [i64], caller_sid: str, finds: i64,
     }
     None => {}
   }
-  if root == 0 { return 0; }
-  return stop_auto(inout st.wire, root, caller_sid, finds, owner, inout out);
+  if root == 0 { return auto_result(0, finds, 1, false, owner); }
+  return stop_auto(inout st.wire, root, caller_sid, finds, owner);
 }
 
-pub fn auto(inout st: St, op: i64, rf: [i64], key: [i64], sid: str,
-            caller: [i64], caller_sid: str, packet: [u8], inout out: [i64]) -> i64 ! alloc
+pub fn auto_decoded(inout st: St, op: i64, sid: str, has_sid: bool, bid: str, has_bid: bool,
+            has_ref: bool, caller: str, has_caller: bool, packet: [u8]) -> AutoResult ! alloc
 {
-  if op < 1 || op > 3 || len(rf) == 0 || crate::bud_card::v_end(rf, 0) != len(rf) { return 2; }
-  if op == 2 && len(packet) > 0 && !crate::bud_card::j_ok_at(packet, 3) { return 2; }
-  let id: i64 = ref_budget_id(rf);
-  let empty: [i64] = crate::ent_u16::empty();
-  if op == 3 {
-    if len(caller) == 0 { return 2; }
-    let has_ref: bool = crate::bud_card::truthy(rf, 0);
-    let finds: i64 = 1 + b01(has_ref);
-    let status: i64 = auto_reply(inout out, finds, 1, empty);
-    if status != 0 { return status; }
-    if has_ref && len(key) > 0 && current_auto(st, sid, rf, id) {
-      return stop_owner(inout st, sid, key, caller_sid, finds, inout out);
-    }
-    return stop_owner(inout st, caller_sid, caller, caller_sid, finds, inout out);
+  if op < 1 || op > 3 { return auto_result(2, 0, 1, false, AutoOwner::NoOwner); }
+  if op == 2 && len(packet) > 0 && !crate::bud_card::j_ok_at(packet, 3) {
+    return auto_result(2, 0, 1, false, AutoOwner::NoOwner);
   }
-
+  let root: i64 = current_root(st, sid, has_sid, bid, has_bid);
+  if op == 3 {
+    if !has_caller { return auto_result(2, 0, 1, false, AutoOwner::NoOwner); }
+    let finds: i64 = 1 + b01(has_ref);
+    if has_ref && root != 0 { return stop_owner(inout st, sid, AutoOwner::Reference, caller, finds); }
+    return stop_owner(inout st, caller, AutoOwner::Caller, caller, finds);
+  }
   let mut value: i64 = 1;
   if op == 2 { value = 3; }
-  let reply: i64 = auto_reply(inout out, 1, value, empty);
-  if reply != 0 || len(key) == 0 { return reply; }
-  let mut root: i64 = 0;
-  match map_get::<String, crate::bud_tstate::Budget>(st.sessions, sid) {
-    Some(b) => {
-      if matches_auto(st.wire, b, rf, id) { root = b.metadata; }
-    }
-    None => {}
-  }
-  if root == 0 { return 0; }
+  if root == 0 { return auto_result(0, 1, value, false, AutoOwner::NoOwner); }
   let slot: FieldLink = find_field(st.wire, root, "autoContinue");
   if op == 1 {
     if node_truthy(st.wire, slot.id) { delete_fields(inout st.wire, root, "autoContinue", slot); }
   } else {
-    let written: i64 = auto_reply(inout out, 1, 4, empty);
-    if written != 0 { return written; }
+    value = 4;
     if jb_truthy(packet) {
-      if len(packet) > 4294967296 - 13 { return 2; }
-      let fresh: i64 = read_node(inout st.wire, empty, packet, true, 0, text("autoContinue"), 3);
-      if fresh == 0 { return 2; }
+      if len(packet) > 4294967296 - 13 { return auto_result(2, 0, 1, false, AutoOwner::NoOwner); }
+      let fresh: i64 = read_node(inout st.wire, crate::ent_u16::empty(), packet, true, 0, text("autoContinue"), 3);
+      if fresh == 0 { return auto_result(2, 0, 1, false, AutoOwner::NoOwner); }
       replace_field(inout st.wire, root, slot, fresh);
     } else { delete_fields(inout st.wire, root, "autoContinue", slot); }
   }
-  return 0;
+  return auto_result(0, 1, value, false, AutoOwner::NoOwner);
 }
-pub fn legacy_effects(st: St, kind: i64, op: i64, rf: [i64], sid: [i64], sid_text: str, caller: [i64], now: i64, w: [i64]) -> [i64] ! alloc
+
+pub fn legacy_effects(kind: i64, op: i64, rf: [i64], sid: [i64], selected: [i64], now: i64, w: [i64]) -> [i64] ! alloc
 {
   let mut effects: Vec<i64> = vec_new::<i64>();
   let id: [i64] = crate::bud_vwords::part(rf, crate::bud_card::obj_get(rf, 0, "sessionId"));
@@ -1056,13 +1084,8 @@ pub fn legacy_effects(st: St, kind: i64, op: i64, rf: [i64], sid: [i64], sid_tex
       if rd(w, 0) == 2 {
         effects = crate::bud_effect::value(move effects, 1, id);
       }
-      if rd(w, 0) == 1 || len(sid) == 0 || !current_auto(st, sid_text, rf, ref_budget_id(rf)) {
-        owner = crate::bud_vwords::unpack(caller);
-      }
+      owner = crate::bud_vwords::unpack(selected);
       effects = crate::bud_effect::value(move effects, 1, owner);
-      if rd(w, 1) == 1 {
-        owner = crate::bud_vwords::unpack(crate::ent_u16::slice(w, 4, len(w)));
-      }
     } else {
       if rd(w, 0) == 1 { effects = crate::bud_effect::value(move effects, 1, id); }
     }
@@ -1299,7 +1322,7 @@ fn attach_fresh(inout st: St,
     None => {}
   }
   let root: i64 = replace_wire(inout st.wire, old, blob);
-  let replacement: crate::bud_tstate::Budget = make_budget(blob, root);
+  let replacement: crate::bud_tstate::Budget = make_budget(st.wire, root);
   st.sessions = map_insert::<String, crate::bud_tstate::Budget>(move st.sessions, text(sid_text), move replacement);
   effects = crate::bud_effect::mark(move effects, 4);
   return crate::bud_effect::reply(0, false, ref_value(sid, bid, false), move effects);
@@ -1307,7 +1330,7 @@ fn attach_fresh(inout st: St,
 
 fn attach(inout st: St, sid: [i64], sid_text: str, arg: [i64], now: i64) -> Vec<i64> ! alloc, io
 {
-  let snapshot: [i64] = session(st, sid_text);
+  let snapshot: [i64] = session_words(st, sid_text);
   let old_budget: [i64] = crate::ent_u16::slice(snapshot, 1, len(snapshot));
   let stale: [i64] = crate::bud_vwords::packed(old_budget, get(old_budget, 0, "id"));
   let mut effects: Vec<i64> = vec_new::<i64>();
@@ -1750,12 +1773,12 @@ pub fn life(inout st: St, op: i64, rf: [i64], sid: [i64], sid_text: str, arg: [i
     if !explicit {
       reason = 0;
       if observing() {
-        let snapshot: [i64] = session(st, sid_text);
+        let snapshot: [i64] = session_words(st, sid_text);
         observe_find(len(effects), crate::ent_u16::slice(snapshot, 1, len(snapshot)));
       }
       effects = crate::bud_effect::value(move effects, 1, owner);
       if observing() {
-        let snapshot: [i64] = session(st, sid_text);
+        let snapshot: [i64] = session_words(st, sid_text);
         observe_find(len(effects), crate::ent_u16::slice(snapshot, 1, len(snapshot)));
       }
       effects = crate::bud_effect::value(move effects, 1, owner);
@@ -1770,4 +1793,53 @@ pub fn fire_timer(inout st: St, sid: [i64], sid_text: str, bid: [i64], budget_fi
   let rf: [i64] = ref_value(sid, bid, budget_first);
   let key: String = decode_key(bid);
   return life(inout st, 7, rf, sid, sid_text, crate::ent_u16::empty(), now, bid, string_to_str(key), "", false);
+}
+
+
+// Native budget IDs and V/JB IDs share the same lossless key encoding.
+pub fn query(st: St, op: i64, sid: str, has_sid: bool, bid: str, has_bid: bool) -> QueryResult ! alloc
+{
+  return query_decoded(st, op, sid, has_sid, string_to_str(native_key(bid)), has_bid);
+}
+
+pub fn set_card(inout st: St, sid: str, has_sid: bool, bid: str, has_bid: bool,
+                card: [u8], lang: [u8], by: [u8], now: i64) -> CardResult ! alloc
+{
+  return set_card_decoded(inout st, sid, has_sid, string_to_str(native_key(bid)), has_bid, card, lang, by, now);
+}
+
+pub fn auto(inout st: St, op: i64, sid: str, has_sid: bool, bid: str, has_bid: bool,
+            has_ref: bool, caller: str, has_caller: bool, packet: [u8]) -> AutoResult ! alloc
+{
+  return auto_decoded(inout st, op, sid, has_sid, string_to_str(native_key(bid)), has_bid, has_ref, caller, has_caller, packet);
+}
+
+// Compatibility calls for the word protocol used by the M12 fixture driver.
+pub fn load_packet(inout st: St, sid: str, blob: [i64]) -> Loaded ! alloc, io
+{
+  let input: BudgetInput = decode_budget(inout st, blob);
+  return load(inout st, sid, move input);
+}
+
+pub fn query_packet(st: St, op: i64, rf: [i64], sid: str, has_sid: bool) -> QueryResult ! alloc
+{
+  let r: RefInput = decode_ref(rf);
+  if !r.valid { return QueryResult { status: 2, root: 0, value: false }; }
+  return query_decoded(st, op, sid, has_sid, string_to_str(ref_id(r.ids)), r.has_id);
+}
+
+pub fn set_card_packet(inout st: St, rf: [i64], sid: str, has_sid: bool,
+                      card: [u8], lang: [u8], by: [u8], now: i64) -> CardResult ! alloc
+{
+  let r: RefInput = decode_ref(rf);
+  if !r.valid { return CardResult { status: 2, used_now: false, root: 0, kind: 0, lang: 0 }; }
+  return set_card_decoded(inout st, sid, has_sid, string_to_str(ref_id(r.ids)), r.has_id, card, lang, by, now);
+}
+
+pub fn auto_packet(inout st: St, op: i64, rf: [i64], sid: str, has_sid: bool,
+                   caller: str, has_caller: bool, packet: [u8]) -> AutoResult ! alloc
+{
+  let r: RefInput = decode_ref(rf);
+  if !r.valid { return auto_result(2, 0, 1, false, AutoOwner::NoOwner); }
+  return auto_decoded(inout st, op, sid, has_sid, string_to_str(ref_id(r.ids)), r.has_id, r.truthy, caller, has_caller, packet);
 }

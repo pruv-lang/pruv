@@ -1,3 +1,6 @@
+mod ent_u16;
+mod bud_keys;
+
 // M8 resident accounting state. Map entries carry insertion ordinals.
 pub struct Budget {
   ordinal: i64,
@@ -125,6 +128,12 @@ pub fn t_invalid() -> Answer {
   return Answer { status: 2, result: 0 };
 }
 
+pub fn t_admit_put(words: [i64]) -> i64 {
+  // After the SID: declared length, fourteen counters and a packed budget ID.
+  if len(words) < 16 || words[0] != len(words) - 1 { return 2; }
+  return 0;
+}
+
 pub fn t_put(inout st: St, sid: str, bid: str, words: [i64]) -> i64 ! alloc {
   if len(words) != 14 { return 2; }
   if words[0] < -1 || words[0] > 2 || words[1] < 0 || words[1] > 1 ||
@@ -213,6 +222,11 @@ pub fn t_fail(inout st: St, sid: str, bid: str) -> i64 {
   return status;
 }
 
+pub fn t_fail_words(inout st: St, sid: str, bid: str, what: [i64]) -> Answer {
+  if len(what) != 0 { return t_invalid(); }
+  return Answer { status: t_fail(inout st, sid, bid), result: 0 };
+}
+
 // Test-only adapter for the account codes: decodes the words once and calls the direct entry; no budget decision.
 pub fn t_call(inout st: St, code: i64, sid: str, bid: str, what: [i64]) -> Answer {
   if code == 1 {
@@ -221,7 +235,7 @@ pub fn t_call(inout st: St, code: i64, sid: str, bid: str, what: [i64]) -> Answe
       None => { return t_invalid(); }
     }
   }
-  if code == 2 && len(what) == 0 { return Answer { status: t_fail(inout st, sid, bid), result: 0 }; }
+  if code == 2 { return t_fail_words(inout st, sid, bid, what); }
   return t_invalid();
 }
 
@@ -322,4 +336,8 @@ pub fn t_observe(inout st: St) -> Reply ! alloc {
   emit(inout reply, 0); // No clocks in M8.
   emit_turns(inout reply, st);
   return reply;
+}
+
+pub fn t_admit_key(inout key: crate::bud_keys::KeyAdmission, words: [i64], last: bool) -> i64 ! alloc {
+  return crate::bud_keys::admit_key(inout key, words, last, false);
 }

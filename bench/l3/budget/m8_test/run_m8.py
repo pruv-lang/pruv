@@ -80,6 +80,8 @@ def build(args, typed=False):
         python = PYTHON_VENV if os.path.isfile(PYTHON_VENV) else sys.executable
         cmd = [python, args.pypruvc] if typed and args.py else [args.pruvc]
         backend = ["--backend", "rust"] if typed and args.py else ["--emit", "rs"] if typed else LIBS
+        if typed:
+            backend += LIBS
         c = subprocess.run(cmd + [root, "-o", gen] + backend, cwd=ROOT, capture_output=True, text=True)
         if c.returncode != 0:
             sys.exit("pruvc failed:\n" + c.stdout[-2000:] + c.stderr[-2000:])
@@ -686,6 +688,22 @@ def mem_pass(sizes, reps, runs, items=("charge", "failure")):
     return res
 
 
+def check_malformed_keys(exe):
+    # Every payload is the final packed key of a forgetTurn call.
+    keys = {"length": "-1", "padding": "1 1", "truncated": "5 0", "extra": "0 0"}
+    source = "".join(f"case {name}\ncall 4 {words}\nend\n" for name, words in keys.items())
+    expected = "".join(f"case {name}\nX 2\nO 0 0 0\nend\n" for name in keys)
+    # The payload contains fourteen counters and an empty budget key (15 words).
+    source += "case put-length\nput 0 14" + " 0" * 15 + "\nend\n"
+    expected += "case put-length\nP X 2\nO 0 0 0\nend\n"
+    source += "case failure-extra\ncall 2 0 0 0\nend\n"
+    expected += "case failure-extra\nX 2\nO 0 0 0\nend\n"
+    result = subprocess.run([exe, "q"], input=source, capture_output=True, text=True, check=True)
+    if result.stdout != expected:
+        sys.exit("packed key admission mismatch:\n" + result.stdout)
+    print("packed key and frame admission PASS (6 cases)")
+
+
 def cmd_q(args):
     # --hand16: run the hand-written UTF-16 Rust baseline (hand_m8_u16.rs q mode) instead of the Pruv driver; the
     # comparison / classification below is the same, so mismatches vs the oracle are counted the same way.
@@ -693,6 +711,8 @@ def cmd_q(args):
         args.cases, args.oracle = fixture_cases(args.fixtures)
     hand = "hand_m8_u16" if args.hand16 else args.hand
     exe = build_hand(hand) if hand else build(args, typed=args.typed)
+    if args.typed:
+        check_malformed_keys(exe)
     cases = [json.loads(l) for l in open(args.cases)]
     oracle = {}
     for l in open(args.oracle):

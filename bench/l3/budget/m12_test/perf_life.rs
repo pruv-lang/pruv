@@ -68,7 +68,7 @@ impl Request {
         }
         Self {
             #[cfg(m12_typed)]
-            typed_sid: m12_facts::decode_key(&pkey(sid)),
+            typed_sid: m12_facts::native_key(sid),
             #[cfg(m12_typed)]
             typed_keys: sol::decode_life(&rf, &arg),
             op, hand_rf: hand::life::Value::decode(&rf), hand_arg: hand::life::Value::decode(&arg),

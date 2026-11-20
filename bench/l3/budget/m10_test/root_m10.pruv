@@ -4,6 +4,7 @@ mod bud_store;
 mod bud_map;
 mod bud_world;
 mod bud_clock;
+mod bud_tstate;
 mod bud_lifecycle;
 mod bud_charge;
 mod bud_halt;

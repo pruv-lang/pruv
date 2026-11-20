@@ -1,3 +1,6 @@
+mod ent_u16;
+mod bud_keys;
+
 mod bud_tstate;
 mod bud_tlife;
 mod bud_tdecide;
@@ -135,4 +138,89 @@ pub fn t_call(inout st: St, sid: str, bid: str, run: str, code: i64,
   if code == 13 { return t_raise(inout st, sid, bid, now, flag, t_unit_answer(unit)); }
   if code == 14 { return t_decide(inout st, sid, bid, now, flag, t_unit_answer(unit)); }
   return t_invalid(inout st);
+}
+
+pub fn t_admit_key(inout key: crate::bud_keys::KeyAdmission, words: [i64], last: bool) -> i64 ! alloc {
+  return crate::bud_keys::admit_key(inout key, words, last, true);
+}
+
+fn text_bytes_ok(text: [u8], start: i64, count: i64) -> bool {
+  if start < 0 || start > len(text) || count <= 0 || count > len(text) - start { return false; }
+  let end: i64 = start + count;
+  let mut i: i64 = start;
+  // UTF-8 with surrogate code points, as used by the Q text wire.
+  while i < end
+    invariant start <= i && i <= end && end <= len(text)
+    decreases end - i
+  {
+    let lead: i64 = text[i];
+    if lead < 128 { i = i + 1; }
+    else {
+      if lead < 194 || lead >= 245 || end - i < 2 { return false; }
+      let second: i64 = text[i + 1];
+      if second < 128 || second >= 192 { return false; }
+      if lead < 224 { i = i + 2; }
+      else {
+        if end - i < 3 || text[i + 2] < 128 || text[i + 2] >= 192 { return false; }
+        if lead < 240 {
+          if lead == 224 && second < 160 { return false; }
+          i = i + 3;
+        } else {
+          if end - i < 4 || text[i + 3] < 128 || text[i + 3] >= 192 { return false; }
+          if (lead == 240 && second < 144) || (lead == 244 && second >= 144) { return false; }
+          i = i + 4;
+        }
+      }
+    }
+  }
+  return true;
+}
+
+fn text_end(words: [i64], text: [u8], at: i64, end: i64) -> i64
+  ensures result == -1 || (at < result && result <= end)
+{
+  if end > len(words) || at < 0 || at >= end { return -1; }
+  if words[at] == 0 { return at + 1; }
+  if words[at] != 2 || end - at < 3 { return -1; }
+  if !text_bytes_ok(text, words[at + 2], words[at + 1]) { return -1; }
+  return at + 3;
+}
+
+// The SID has already been admitted. The next word declares the remaining
+// record length. Validate all text handles before the host codec dereferences them.
+pub fn t_admit_put(words: [i64], text: [u8]) -> i64 {
+  let end: i64 = len(words);
+  if end < 2 || words[0] != end - 1 { return 2; }
+  if end == 2 && words[1] == -1 { return 0; }
+  if end < 31 || words[1] < 0 || words[1] > 2 { return 2; }
+  let mut at: i64 = crate::bud_keys::rec_end(words, 25);
+  at = text_end(words, text, at, end);
+  at = text_end(words, text, at, end);
+  at = text_end(words, text, at, end);
+  if at < 0 { return 2; }
+  at = crate::bud_keys::rec_end(words, at);
+  if at < 0 || at >= end || words[at] != end - at - 1 { return 2; }
+  if words[at] == 0 { return 0; }
+  if words[at + 1] != -2 {
+    if text_end(words, text, at, end) == end { return 0; }
+    return 2;
+  }
+  if end - at < 7 { return 2; }
+  if words[at + 2] < 0 || words[at + 2] > 4 || (words[at + 3] != 1 && words[at + 3] != 2) { return 2; }
+  at = text_end(words, text, at + 5, end);
+  if at < 0 || at >= end { return 2; }
+  let mut count: i64 = words[at];
+  if count < 0 || count > end - at - 1 { return 2; }
+  at = at + 1;
+  while count > 0
+    invariant 0 <= count && 0 <= at && at <= end
+    decreases count
+  {
+    at = crate::bud_keys::rec_end(words, at);
+    if at < 0 { return 2; }
+    count = count - 1;
+  }
+  if at == end { return 0; }
+  if end - at != 2 || !text_bytes_ok(text, words[at + 1], words[at]) { return 2; }
+  return 0;
 }

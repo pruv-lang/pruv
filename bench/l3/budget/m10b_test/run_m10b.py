@@ -385,8 +385,38 @@ def check_decide_controls(exe, fixture):
     print("PASS decide controls: 4 rejection paths and 1 invalid releaseHeld answer")
 
 
+def check_malformed_keys(exe):
+    # Keep the op, what, flag, session, and budget fields valid. Corrupt the final run key.
+    keys = {"length": "-1", "padding": "1 1", "truncated": "5 0", "extra": "0 0"}
+    body = "8 " + "0 " * 13
+    source, expected = [], []
+    for name, words in keys.items():
+        source.append(f"case {name}")
+        expected.append(f"case {name}")
+        if name != "extra":
+            source.append(f"put {words}")
+            expected.append("X 2")
+        source.extend(("audit", f"call probe {body}{words}", "end"))
+        expected.extend(("@ probe", "X 2", "O 0 0 | T", "end"))
+    records = (
+        ("put-length", "0 2 -1"),
+        ("short-budget", "0 25" + " 0" * 25),
+        ("truncated-text", "0 30" + " 0" * 25 + " 6 0 0 0 0 |"),
+        ("text-outside-buffer", "0 32" + " 0" * 25 + " 2 2 0 0 0 0 0 | 97"),
+        ("truncated-halt", "0 35" + " 0" * 29 + " 5 -2 0 1 0 0 |"),
+    )
+    for name, words in records:
+        source.extend((f"case {name}", f"put {words}", "put 0 1 -1", f"call probe {body}0", "end"))
+        expected.extend((f"case {name}", "X 2", "@ probe", "V 0", "O 1 0 1 -1 0 | T", "end"))
+    log = checked([exe, "q"], input="\n".join(source) + "\n").stdout.splitlines()
+    if log != expected:
+        raise SystemExit(f"packed key admission mismatch: {log}")
+    print("packed key and frame admission PASS (4 malformed calls, 8 malformed puts, 5 recovery calls)")
+
+
 def run_cases(args, cases, observations, fixtures=False):
     exe, _ = build(args)
+    check_malformed_keys(exe)
     if fixtures and any(case["id"] == "H10" for case in cases):
         fixture = next(case for case in cases if case["id"] == "H10")
         check_raise_controls(exe, fixture)

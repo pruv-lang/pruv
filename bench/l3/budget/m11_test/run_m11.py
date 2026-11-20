@@ -21,6 +21,7 @@ Report: work/m11/report.json. Exit 1 on any fail, 2 on a build or driver failure
 import sys
 sys.dont_write_bytecode = True
 import argparse
+import hashlib
 import json
 import os
 import random
@@ -91,7 +92,7 @@ def build_pair(key, root, work, typed):
     main = (HERE / 'harness.rs').read_text().replace('@SOL@', str(sol)).replace('@HAND@', str(HERE / 'hand.rs'))
     main = main.replace('@TYPED@', str(HERE / 'harness_typed.rs'))
     if typed:
-        # Validate both SID representations during setup for the typed timings.
+        # Stage the direct ID and validate both SID representations before timing.
         start = main.index('fn perf_resident(')
         end = main.index('fn diff_ref(', start)
         perf_code = main[start:end]
@@ -99,15 +100,16 @@ def build_pair(key, root, work, typed):
             setup = f'\n{indent}let sid = pkey("s1");'
             perf_code = perf_code.replace(
                 setup, setup + f'\n{indent}assert!(hand::packed_framed_ok(&sid));'
-                             + f'\n{indent}let (sid_text, sid_present) = sol::decode_sid(&sid).unwrap();')
+                             + f'\n{indent}let sid_text = Some("s1");'
+                             + f'\n{indent}let id = Some("b1");')
         for method in ('set_card', 'has_card', 'current'):
             perf_code = perf_code.replace(f's.{method}(', f's.{method}_with_valid_sid(')
         perf_code = perf_code.replace(
-            'sol::m11_set_card(st, &rf, &sid,', 'generated::m11_set_card(st, &rf, &sid_text, sid_present,')
+            'sol::m11_set_card(st, &rf, &sid,', 'sol::set_text(st, id, sid_text,')
         for op in (1, 3):
             perf_code = perf_code.replace(
                 f'sol::m11_query(st, {op}, &rf, &sid,',
-                f'generated::m11_query(st, {op}, &rf, &sid_text, sid_present,')
+                f'sol::query_text(st, {op}, id, sid_text,')
         main = main[:start] + perf_code + main[end:]
     (out / 'main.rs').write_text(main)
     cfg = ['--cfg', 'm11_typed'] if typed else []
@@ -336,8 +338,12 @@ def sid_of(ref):
     return pkey(s) if isinstance(s, str) else []
 
 
+def budget_id_words(bid):
+    return pkey(bid) if isinstance(bid, str) else []
+
+
 # ---- one case ----------------------------------------------------------------------------------------------------------
-def case_lines(case):
+def case_lines(case, direct=False):
     """Harness input lines for one case, and per call the bookkeeping to read the answers back."""
     world = case['world']
     lines = ['init']
@@ -358,21 +364,26 @@ def case_lines(case):
         if ev['op'] == 'halt':
             halted = True
             break
+        if ev['op'] != 'setCard' and ev['op'] not in QUERY:
+            calls.append({'req': ev['req'], 'op': ev['op'], 'unsupported': True})
+            continue
         args = [jv_decode(a) for a in ev['args']]
+        ref = args[0]
+        if direct:
+            bid = ref.get('budgetId') if isinstance(ref, dict) else None
+            ref_input = budget_id_words(bid)
+        else:
+            ref_input = V(ref)
         if ev['op'] == 'setCard':
             pad = args + [None] * 4
             card = to_b(args[1]) if len(args) > 1 else []
             lang = [] if len(args) < 3 else to_b(args[2])
             by = [] if len(args) < 4 else to_b(args[3])
-            lines.append('set ' + wline([now], V(args[0]), sid_of(args[0]), card, lang, by))
+            lines.append(('set-id ' if direct else 'set ') + wline([now], ref_input, sid_of(ref), card, lang, by))
             lines.append('dump')  # read-only; answers the store right after this set (identity oracle)
             calls.append({'req': ev['req'], 'op': ev['op'], 'ref': args[0], 'dump_after': True})
             continue
-        elif ev['op'] in QUERY:
-            lines.append('q ' + wline([QUERY[ev['op']]], V(args[0]), sid_of(args[0])))
-        else:
-            calls.append({'req': ev['req'], 'op': ev['op'], 'unsupported': True})
-            continue
+        lines.append(('q-id ' if direct else 'q ') + wline([QUERY[ev['op']]], ref_input, sid_of(ref)))
         calls.append({'req': ev['req'], 'op': ev['op'], 'ref': args[0]})
     lines.append('dump')
     return lines, calls, halted
@@ -507,10 +518,10 @@ def judge(case, exp, answers, calls, halted):
     return 'exact', []
 
 
-def run_pair(harness, cases, obs):
+def run_pair(harness, cases, obs, direct=False):
     allin, meta = [], []
     for case in cases:
-        lines, calls, halted = case_lines(case)
+        lines, calls, halted = case_lines(case, direct)
         allin += lines
         meta.append((len(lines), calls, halted))
     r = sh([harness], data='\n'.join(allin) + '\n')
@@ -528,12 +539,95 @@ def run_pair(harness, cases, obs):
     return res
 
 
+def test_budget_ids(harness, direct):
+    sid = pkey('reuse')
+    def query(bid):
+        if direct:
+            return 'q-id ' + wline([1], budget_id_words(bid), sid)
+        return 'q ' + wline([1], V({'budgetId': bid}), sid)
+
+    old = {'id': 'old', 'state': 'open'}
+    new = {'id': '', 'state': 'open'}
+    lines = ['init', 'load ' + wline(sid, V(old)), query('old'),
+             'load ' + wline(sid, V(new)), query('old'), query(''), query(7)]
+    expected = ['ok', 'ok 1', 'ok 1 ' + ' '.join(map(str, V(old))),
+                'ok 0', 'ok 1 1', 'ok 1 ' + ' '.join(map(str, V(new))), 'ok 1 1']
+    lines.append(('q-id ' + wline([1], [1], sid)) if direct
+                 else ('q ' + wline([1], [9, 1, 8], sid)))
+    expected.append('err 2')
+    for columns in ([8, 1, 2, 1, 1, 0], [8, 0, 2, 2, 1, 0],
+                    [8, 1, 2, 2, 0, 0], [1, 1, 2, 2, 0, 0]):
+        lines.extend(['malformed-load ' + wline(sid, columns), query('')])
+        expected.extend(['err 2', 'ok 1 ' + ' '.join(map(str, V(new)))])
+    dump = [1, *V('reuse')[1:], len(V(new)), *V(new)]
+    lines.extend(['dump', 'load ' + wline([1], V(old)), query('old')])
+    expected.extend(['ok ' + ' '.join(map(str, dump)), 'err 2', 'ok 1 1'])
+    ref = budget_id_words('') if direct else V({'budgetId': ''})
+    cmd = 'set-id ' if direct else 'set '
+    malformed = [1] if direct else [9, 1, 8]
+    lines.append(cmd + wline([0], malformed, sid, [], [], []))
+    expected.append('err 2')
+    for packets in (([6, 0, 0, 0, 1], [], []), ([], [9, 0], []), ([], [], [8])):
+        lines.append(cmd + wline([0], ref, sid, *packets))
+        expected.append('err 2')
+    lines.append(query(''))
+    expected.append('ok 1 ' + ' '.join(map(str, V(new))))
+    if not direct:
+        for rf in ([6, 1, 65536], [9, 1, 8, *units('budgetId'), 6, 1, 65536]):
+            lines.append('q ' + wline([1], rf, sid))
+            expected.append('ok 1 1')
+        lines.append('load ' + wline(sid, [6, 1, 65536]))
+        expected.append('err 2')
+    for bid in ('😀', '\ud800', '\ue000'):
+        budget = {'id': bid}
+        lines.extend(['load ' + wline(sid, V(budget)), query(bid)])
+        expected.extend(['ok 0', 'ok 1 ' + ' '.join(map(str, V(budget)))])
+        if bid != '\ud800':
+            lines.extend([f'native-id {bid} reuse',
+                          ('q-id ' if direct else 'q ') +
+                          wline([3], budget_id_words(bid) if direct else V({'budgetId': bid}), sid)])
+            expected.extend(['same', 'ok 1 4'])
+    r = subprocess.run([harness], input='\n'.join(lines) + '\n', text=True,
+                       capture_output=True, env=tool_env(), timeout=10)
+    if r.returncode or r.stdout.splitlines() != expected:
+        actual = r.stdout.splitlines()
+        diff = [(i, line, got, want) for i, (line, got, want) in enumerate(zip(lines, actual, expected))
+                if got != want]
+        raise RuntimeError(f'typed constructor cases failed: {diff or actual!r} {r.stderr!r}')
+
+
 # ---- perf --------------------------------------------------------------------------------------------------------------
 def ns_of(line):
     p = line.split()
     if p[0] != 'ns':
         raise RuntimeError(line)
     return float(p[1])
+
+
+def perf_cells(harness, runs, dest):
+    check = sh([harness], data='handcheck\n')
+    if check.returncode or check.stdout.strip() != 'same':
+        raise RuntimeError(f'handcheck: {check.stdout} {check.stderr}')
+    cells = []
+    for size, calls in (('M', 500), ('L', 1000)):
+        reps = 40000 // calls
+        pruv, hand = [], []
+        for i in range(runs):
+            order = ('perfB', 'handB') if i % 2 == 0 else ('handB', 'perfB')
+            run = sh([harness], data=''.join(f'{op} {calls} {reps}\n' for op in order))
+            lines = run.stdout.splitlines()
+            samples = dict(zip(order, lines))
+            if run.returncode or len(lines) != 2:
+                raise RuntimeError(f'perfB failed: {run.stdout} {run.stderr}')
+            pruv.append(ns_of(samples['perfB']))
+            hand.append(ns_of(samples['handB']))
+            if samples['perfB'].split()[2] != samples['handB'].split()[2]:
+                raise RuntimeError(f'perfB checksum differs: {lines}')
+        cells.append(dict(name='D67 T11 setCard chain', axis='time', size=size,
+                          kind='proportional', pruv=statistics.median(pruv),
+                          hand=statistics.median(hand), unit='ns/call', runs=runs,
+                          calls=calls, repetitions=reps, samples={'pruv': pruv, 'hand': hand}))
+    dest.write_text(json.dumps({'source': 'M11 typed direct vs hand Rust (B)', 'cells': cells}, indent=2) + '\n')
 
 
 def perf(harness, runs):
@@ -780,16 +874,22 @@ def main():
     ap.add_argument('--count', type=int, default=300)
     ap.add_argument('--seed', type=int, default=q_gen.SEED if hasattr(q_gen, 'SEED') else 20261117)
     ap.add_argument('--perf', action='store_true')
+    ap.add_argument('--perf-cells', type=Path)
     ap.add_argument('--typed', action='store_true', help='use the typed resident session map')
+    ap.add_argument('--work-dir', type=Path)
+    ap.add_argument('--lane', choices=('direct', 'adapter'), default=os.environ.get('M11_LANE', 'direct'))
     ap.add_argument('--runs', type=int, default=5)
     ap.add_argument('--no-build', action='store_true')
     ap.add_argument('--hdiff', action='store_true', help='hand vs Pruv setCard on generated cards x scenarios (no oracle replay)')
     ap.add_argument('--selftest-b', action='store_true', help='check the to_b codec and exit')
     a = ap.parse_args()
+    if a.lane not in ('direct', 'adapter'):
+        ap.error('M11_LANE must be direct or adapter')
     if a.selftest_b:
         selftest_b()
         return
-    work = WORK.with_name('m11_typed') if a.typed else WORK
+    work = a.work_dir or (HERE / 'work' / 'm11_typed' if a.typed else WORK)
+    work = work.resolve()
     work.mkdir(parents=True, exist_ok=True)
     pairs = [p.strip() for p in a.pairs.split(',') if p.strip()]
     root = prepare_sources(work, a.typed)
@@ -797,6 +897,11 @@ def main():
     for k in pairs:
         h = work / k / 'harness'
         harness[k] = h if (a.no_build and h.exists()) else build_pair(k, root, work, a.typed)
+    if a.perf_cells:
+        if not a.typed or len(pairs) != 1 or a.runs < 2:
+            ap.error('--perf-cells needs --typed, one pair and at least two runs')
+        perf_cells(harness[pairs[0]], a.runs, a.perf_cells)
+        return
     if a.hdiff:
         bad = False
         for k in pairs:
@@ -808,7 +913,9 @@ def main():
     raws = {}
     bad = False
     for k in pairs:
-        res = run_pair(harness[k], cases, obs)
+        if a.typed:
+            test_budget_ids(harness[k], a.lane == 'direct')
+        res = run_pair(harness[k], cases, obs, a.typed and a.lane == 'direct')
         tally = {}
         for r in res:
             tally[r['class']] = tally.get(r['class'], 0) + 1
@@ -819,7 +926,8 @@ def main():
             print(f"  {r['class']} {r['id']}:")
             for p in r['problems'][:4]:
                 print('   ', p)
-        report['pairs'][k] = {'tally': tally,
+        raw = '\n'.join(line for result in res for line in result['raw']) + '\n'
+        report['pairs'][k] = {'tally': tally, 'sha256': hashlib.sha256(raw.encode()).hexdigest(),
                               'cases': [{'id': r['id'], 'class': r['class'], 'problems': r['problems']} for r in res]}
         raws[k] = [r['raw'] for r in res]
     if len(raws) > 1:

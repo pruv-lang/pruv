@@ -22,6 +22,7 @@ struct Timer {
 
 struct World {
     st: sol::St,
+    keys: [KeyAdmission; 3],
     unit: Vec<i64>,
     // The unit words decoded once by Pruv when they are staged (direct lane).
     answer: UnitAnswer,
@@ -35,19 +36,27 @@ struct World {
     audit: bool,
 }
 
-fn take_key(words: &mut &[i64]) -> Option<String> {
-    let (&n, packed) = words.split_first()?;
-    if !(0..=1 << 30).contains(&n) { return None; }
-    let n = n as usize;
-    let count = n.div_ceil(4);
-    let data = packed.get(..count)?;
-    let remainder = n % 4;
-    if remainder != 0 && (data[count - 1] as u64) & (u64::MAX >> (16 * remainder)) != 0 {
-        return None;
+use sol::pruv_m_t_2_8_bud_keys_12_KeyAdmission as KeyAdmission;
+
+fn empty_key() -> KeyAdmission {
+    KeyAdmission { end: 0, used: 0, bytes: Vec::new() }
+}
+
+#[inline]
+fn take_key<'a>(words: &mut &[i64], key: &'a mut KeyAdmission, last: bool) -> Result<&'a str, i64> {
+    let status = sol::t_admit_key(key, words, last);
+    if status != 0 {
+        return Err(status);
     }
-    let units = (0..n).map(|i| (data[i / 4] >> (48 - 16 * (i % 4))) as u16);
-    *words = &packed[count..];
-    Some(bud_facts::encode_js_text(units))
+    *words = &words[key.end as usize..];
+    Ok(std::str::from_utf8(&key.bytes[..key.used as usize]).expect("Pruv key UTF-8"))
+}
+
+fn take_owned_key(words: &mut &[i64], last: bool) -> Result<String, i64> {
+    let mut key = empty_key();
+    take_key(words, &mut key, last)?;
+    key.bytes.truncate(key.used as usize);
+    Ok(String::from_utf8(key.bytes).expect("Pruv key UTF-8"))
 }
 
 fn unit_list(text: &str) -> String {
@@ -66,16 +75,16 @@ fn take_text(words: &mut &[i64]) -> String {
     bud_facts::encode_js_text(units)
 }
 
-fn read_budget(words: &[i64]) -> Budget {
+fn read_budget(words: &[i64]) -> Result<Budget, i64> {
     let empty = [0; 30];
     let absent = words == [-1];
     let words = if absent { &empty[..] } else { words };
-    let mut tail = &words[24..];
-    let id = take_key(&mut tail).unwrap();
+    let mut tail = words.get(24..).ok_or(2)?;
+    let id = take_owned_key(&mut tail, false)?;
     let opened_at = take_text(&mut tail);
     let since_text = take_text(&mut tail);
     let ended_at = take_text(&mut tail);
-    let follows = take_key(&mut tail).unwrap();
+    let follows = take_owned_key(&mut tail, false)?;
     let mut halt_reason = -1;
     let mut halt_kind = 0;
     let mut halt_ms = 0;
@@ -91,11 +100,11 @@ fn read_budget(words: &[i64]) -> Budget {
         let count = rest[0];
         rest = &rest[1..];
         for _ in 0..count {
-            stopped.push(take_key(&mut rest).unwrap());
+            stopped.push(take_owned_key(&mut rest, false)?);
         }
     }
     let rest = bud_facts::encode_js_text(rest.iter().map(|&u| u as u16));
-    Budget {
+    Ok(Budget {
         id, state: if absent { -1 } else { words[0] }, origin: words[1],
         unlimited: words[2] == 1, unlimited_kind: words[2],
         limits: Limits { time: words[3], delegations: words[4], commands: words[5], reviews: words[6], checks: words[7] },
@@ -105,7 +114,7 @@ fn read_budget(words: &[i64]) -> Budget {
         ended_how: words[18], ended_kind: words[19], metadata: words[20],
         opened_ms: words[21], ended_ms: words[22], follows_kind: words[23],
         opened_at, since_text, ended_at, follows, rest, halt_reason, halt_kind, halt_ms, halt_text, stopped,
-    }
+    })
 }
 
 fn budget_words(b: &Budget) -> Vec<i64> {
@@ -144,6 +153,7 @@ impl World {
                 clock_state: ClockState { clocks: HashMap::new(), next_clock: 0 },
                 out: Out { fx: Vec::new() },
             },
+            keys: std::array::from_fn(|_| empty_key()),
             unit: Vec::new(),
             answer: sol::t_unit_answer(&[]),
             direct: std::env::var("M10B_LANE").as_deref() == Ok("direct"),
@@ -153,13 +163,21 @@ impl World {
     }
 
     fn put(&mut self, put: &Put) {
-        let mut record = put.words.as_slice();
-        let sid = take_key(&mut record).unwrap();
-        let budget = read_budget(&unit_record(&put.text, &record[1..]));
-        let status = sol::t_put(&mut self.st, &sid, &budget);
+        let status = self.put_checked(put).unwrap_or_else(|status| status);
         if status != 0 {
             self.log.push(format!("X {status}"));
         }
+    }
+
+    fn put_checked(&mut self, put: &Put) -> Result<i64, i64> {
+        let mut record = put.words.as_slice();
+        let sid = take_key(&mut record, &mut self.keys[0], false)?;
+        let status = sol::t_admit_put(record, &put.text);
+        if status != 0 {
+            return Err(status);
+        }
+        let budget = read_budget(&unit_record(&put.text, &record[1..]))?;
+        Ok(sol::t_put(&mut self.st, sid, &budget))
     }
 
     fn note(&mut self, line: String) {
@@ -173,19 +191,24 @@ impl World {
 
     fn call(&mut self, body: &[i64], what_len: usize) -> i64 {
         let flag_at = 1 + what_len;
-        let keys = body.get(flag_at + 1..).and_then(|mut keys| {
-            let sid = take_key(&mut keys)?;
-            let bid = take_key(&mut keys)?;
-            let run = take_key(&mut keys)?;
-            keys.is_empty().then_some((sid, bid, run))
-        });
-        let Some((sid, bid, run)) = keys else {
-            // No Pruv call happened, so no audit line: tests can tell this from a Pruv rejection.
-            self.audit = false;
-            self.note("X 2".to_owned());
-            return 2;
-        };
-        self.call_typed(body[0], body[flag_at], &sid, &bid, &run, &body[1..flag_at])
+        let mut buffers = std::mem::replace(&mut self.keys, std::array::from_fn(|_| empty_key()));
+        let [sid_buf, bid_buf, run_buf] = &mut buffers;
+        let status = (|| {
+            let mut keys = body.get(flag_at + 1..).ok_or(2)?;
+            let sid = take_key(&mut keys, sid_buf, false)?;
+            let bid = take_key(&mut keys, bid_buf, false)?;
+            let run = take_key(&mut keys, run_buf, true)?;
+            Ok(self.call_typed(body[0], body[flag_at], sid, bid, run, &body[1..flag_at]))
+        })();
+        self.keys = buffers;
+        match status {
+            Ok(status) => status,
+            Err(status) => {
+                self.audit = false;
+                self.note(format!("X {status}"));
+                status
+            }
+        }
     }
 
     // Inlined so the measured call sees its constant code, as the single `t_call` did before the lane switch.
@@ -254,8 +277,8 @@ impl World {
                 let q = bud_facts::running_query(running);
                 if q.fxn == i {
                     if self.by_bid.contains_key(bid) { self.log.push("X armed".to_owned()); }
-                    let queried_sid = take_key(&mut q.sid.as_slice()).unwrap();
-                    let queried_bid = take_key(&mut q.bid.as_slice()).unwrap();
+                    let queried_sid = take_owned_key(&mut q.sid.as_slice(), true).unwrap();
+                    let queried_bid = take_owned_key(&mut q.bid.as_slice(), true).unwrap();
                     self.log.push(format!("E rdi s:{} b:{}", unit_list(&queried_sid), unit_list(&queried_bid)));
                     running += 1;
                 }

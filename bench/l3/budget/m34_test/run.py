@@ -2,7 +2,7 @@
 """Harness for the L3-10 M3/M4 milestones.
 
   python3 bench/l3/budget/m34_test/run.py m3|m4|m4raw|m4typed|perf|keys|admit [--pruvc PATH] [--seed N] [--count N]
-  python3 bench/l3/budget/m34_test/run.py m4typed --py
+  python3 bench/l3/budget/m34_test/run.py m4typed [--py] [--lane direct|adapter]
   python3 bench/l3/budget/m34_test/run.py m4 --only m4llvm|m4llvmraw|m4c|m4cb|m4nv|m4llvmnv   (or the lane name as the mode;
                                                   mode `lanes` runs every lane; see M4_LANES for what each builds)
 
@@ -51,9 +51,9 @@ def tail(c):
     return ((c.stdout or "") + (c.stderr or ""))[-1500:]
 
 
-def run(cmd, cwd=None, inp=None, timeout=600):
+def run(cmd, cwd=None, inp=None, timeout=600, env=None):
     try:
-        return subprocess.run(cmd, cwd=cwd, input=inp, capture_output=True, text=True, timeout=timeout)
+        return subprocess.run(cmd, cwd=cwd, input=inp, capture_output=True, text=True, timeout=timeout, env=env)
     except OSError as e:
         raise ToolError("cannot execute %s: %s" % (cmd[0], e))
     except subprocess.TimeoutExpired:
@@ -291,6 +291,17 @@ def build(pruvc, tag, use_py=False):
             fh.write("type Store<T> = %s;\n" % ("sol::pruv_raw::PruvStore<T>" if lane["raw"] == "crate" else "Plain<T>"))
         fh.write(driver)
     exe = os.path.join(WORK, "driver_%s_bin" % artifact + (".exe" if os.name == "nt" else ""))
+    if base == "m4_typed":
+        cargo = shutil.which("cargo") or os.path.join(os.path.dirname(rustc), "cargo")
+        target = os.path.join(WORK, "typed_host")
+        manifest = os.path.join(os.path.dirname(HERE), "host", "Cargo.toml")
+        c = run([cargo, "build", "--offline", "--locked", "--release", "--manifest-path", manifest,
+                 "--target-dir", target], cwd=ROOT)
+        if c.returncode != 0:
+            raise ToolError("typed resident host build failed:\n%s" % tail(c))
+        release = os.path.join(target, "release")
+        link += ["--extern", "budget_host=" + os.path.join(release, "libbudget_host.rlib"),
+                 "-L", "dependency=" + os.path.join(release, "deps")]
     c = run([rustc, "-C", "opt-level=3", "--edition", "2021", "-o", exe, main] + link)
     if c.returncode != 0:
         raise ToolError("rustc failed (%s):\n%s" % (tag, tail(c)))
@@ -402,6 +413,7 @@ def cmd_m4(args, tag="m4"):
     typed = tag == "m4typed"
     pruvc = os.path.join(ROOT, "pruvc", "pruvc.py") if args.py else (args.pruvc or default_pruvc())
     exe = build(pruvc, "m4_typed" if typed else tag, use_py=args.py)
+    env = dict(os.environ, M4_LANE=args.lane) if typed else None
     progs = gen_m4.gen_programs(args.seed, args.count)
     bad = []
     if not typed:
@@ -416,7 +428,7 @@ def cmd_m4(args, tag="m4"):
     stats_bad = 0
     import_checks = 0
     for pi, pr in enumerate(progs):
-        c = run([exe, "q"], inp="\n".join(pr["lines"]) + "\n", timeout=300)
+        c = run([exe, "q"], inp="\n".join(pr["lines"]) + "\n", timeout=300, env=env)
         if c.returncode != 0:
             bad.append((pi, 0, "(driver)", "exit 0", "exit %d: %s" % (c.returncode, tail(c))))
             continue
@@ -464,10 +476,14 @@ def cmd_m4(args, tag="m4"):
     print("%s: %d/%d pass (seed %d)" % (tag, ok_progs, len(progs), args.seed))
     if typed:
         print("%s: live entry checks on stats lines: %d/%d ok" % (tag, stats_checks - stats_bad, stats_checks))
-        churn = run([exe, "churn"])
+        churn = run([exe, "churn"], env=env)
         if churn.returncode != 0:
             raise ToolError("typed churn failed:\n%s" % tail(churn))
         print(churn.stdout.strip())
+        malformed = run([exe, "malformed"], env=env)
+        if malformed.returncode != 0:
+            raise ToolError("typed admission failed:\n%s" % tail(malformed))
+        print(malformed.stdout.strip())
     else:
         print("%s: grows total %d across %d/%d programs" % (tag, grows_total, with_grow, len(progs)))
         print("%s: size formula / header-bound checks on stats lines: %d/%d ok" % (tag, stats_checks - stats_bad, stats_checks))
@@ -690,11 +706,18 @@ def main():
                     help="m4 mode: run only this lane (same as giving the lane name as the mode); mode `lanes` runs all")
     ap.add_argument("--pruvc", default=None)
     ap.add_argument("--py", action="store_true", help="m4typed: compile with the Python compiler's Rust backend")
+    ap.add_argument("--lane", choices=("direct", "adapter"), help="m4typed: defaults to M4_LANE or direct")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--count", type=int, default=300)
     ap.add_argument("--runs", type=int, default=5, help="perf: runs per measurement, median is used")
     ap.add_argument("--axes", default="sessions,tools", help="perf: comma list of sessions,tools,clocks")
     args = ap.parse_args()
+    if args.mode == "m4typed":
+        args.lane = args.lane or os.environ.get("M4_LANE", "direct")
+        if args.lane not in ("direct", "adapter"):
+            ap.error("M4_LANE must be direct or adapter")
+    elif args.lane is not None:
+        ap.error("--lane requires m4typed")
     if args.py and (args.mode != "m4typed" or args.pruvc is not None):
         ap.error("--py requires m4typed without --pruvc")
     if not args.py and args.pruvc is None:

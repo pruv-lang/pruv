@@ -15,28 +15,20 @@ fn direct_lane() -> bool {
 // for surrogates. This also preserves unpaired surrogates.
 const SURROGATE_OFFSET: u32 = 0x10000 - 0xd800;
 
-fn take_key(words: &mut &[i64], key: &mut String) -> Option<()> {
-    let (&len, rest) = words.split_first()?;
-    if !(0..=1 << 30).contains(&len) {
-        return None;
+use sol::pruv_m_t_2_8_bud_keys_12_KeyAdmission as KeyAdmission;
+
+fn empty_key() -> KeyAdmission {
+    KeyAdmission { end: 0, used: 0, bytes: Vec::new() }
+}
+
+#[inline]
+fn take_key<'a>(words: &mut &[i64], key: &'a mut KeyAdmission, last: bool) -> Result<&'a str, i64> {
+    let status = sol::t_admit_key(key, words, last);
+    if status != 0 {
+        return Err(status);
     }
-    let len = len as usize;
-    let count = len.div_ceil(4);
-    let packed = rest.get(..count)?;
-    let padding = (4 - len % 4) % 4;
-    if padding != 0 && (*packed.last()? as u64 & ((1 << (padding * 16)) - 1)) != 0 {
-        return None;
-    }
-    *words = &rest[count..];
-    key.clear();
-    key.reserve(len);
-    for i in 0..len {
-        let unit = ((packed[i / 4] as u64 >> (16 * (3 - i % 4))) & 0xffff) as u32;
-        let scalar = char::from_u32(unit)
-            .unwrap_or_else(|| char::from_u32(unit + SURROGATE_OFFSET).unwrap());
-        key.push(scalar);
-    }
-    Some(())
+    *words = &words[key.end as usize..];
+    Ok(std::str::from_utf8(&key.bytes[..key.used as usize]).expect("Pruv key UTF-8"))
 }
 
 fn utf16_units(key: &str) -> impl Iterator<Item = u16> + '_ {
@@ -103,7 +95,7 @@ fn observe_words(st: &mut sol::St) -> Vec<i64> {
 
 struct World {
     st: sol::St,
-    keys: [String; 4],
+    keys: [KeyAdmission; 4],
 }
 
 impl World {
@@ -115,60 +107,57 @@ impl World {
                 turns: Default::default(),
                 next_turn: 0,
             },
-            keys: Default::default(),
+            keys: std::array::from_fn(|_| empty_key()),
         }
     }
 
     fn put(&mut self, op: &[i64]) -> i64 {
-        self.put_checked(op).unwrap_or(2)
+        self.put_checked(op).unwrap_or_else(|status| status)
     }
 
-    fn put_checked(&mut self, mut op: &[i64]) -> Option<i64> {
-        let [sid, bid, ..] = &mut self.keys;
-        take_key(&mut op, sid)?;
-        let (&length, record) = op.split_first()?;
-        if usize::try_from(length).ok()? != record.len() {
-            return None;
+    fn put_checked(&mut self, mut op: &[i64]) -> Result<i64, i64> {
+        let [sid_buf, bid_buf, ..] = &mut self.keys;
+        let sid = take_key(&mut op, sid_buf, false)?;
+        let status = sol::t_admit_put(op);
+        if status != 0 {
+            return Err(status);
         }
-        let (counters, mut id) = record.split_at_checked(14)?;
-        take_key(&mut id, bid)?;
-        if !id.is_empty() {
-            return None;
-        }
-        Some(sol::t_put(&mut self.st, sid, bid, counters))
+        let (counters, mut id) = op[1..].split_at(14);
+        let bid = take_key(&mut id, bid_buf, true)?;
+        Ok(sol::t_put(&mut self.st, sid, bid, counters))
     }
 
     // Return the wire status and the charge result (when present).
     #[inline]
     fn call(&mut self, op: &[i64]) -> (i64, i64) {
-        self.call_checked(op).unwrap_or((2, 0))
+        self.call_checked(op).unwrap_or_else(|status| (status, 0))
     }
 
-    fn call_checked(&mut self, op: &[i64]) -> Option<(i64, i64)> {
-        let (&code, mut rest) = op.split_first()?;
-        let [sid, bid, turn, activity] = &mut self.keys;
+    fn call_checked(&mut self, op: &[i64]) -> Result<(i64, i64), i64> {
+        let (&code, mut rest) = op.split_first().ok_or(2)?;
+        let [sid_buf, bid_buf, turn_buf, activity_buf] = &mut self.keys;
         if code == 4 {
-            take_key(&mut rest, turn)?;
-            return rest.is_empty().then(|| (sol::t_forget(&mut self.st, turn), 0));
+            let turn = take_key(&mut rest, turn_buf, true)?;
+            return Ok((sol::t_forget(&mut self.st, turn), 0));
         }
-        take_key(&mut rest, sid)?;
-        take_key(&mut rest, bid)?;
-        // Pruv chooses every status (P32 D66); Rust only decodes keys and picks the entry.
+        let sid = take_key(&mut rest, sid_buf, false)?;
+        let bid = take_key(&mut rest, bid_buf, false)?;
+        // Pruv chooses every status (P32 D66); Rust selects the entry.
         let answer = match code {
             3 => {
-                take_key(&mut rest, turn)?;
-                take_key(&mut rest, activity)?;
-                return rest.is_empty().then(|| (sol::t_tool(&mut self.st, sid, bid, turn, activity), 0));
+                let turn = take_key(&mut rest, turn_buf, false)?;
+                let activity = take_key(&mut rest, activity_buf, true)?;
+                return Ok((sol::t_tool(&mut self.st, sid, bid, turn, activity), 0));
             }
             _ if !direct_lane() => sol::t_call(&mut self.st, code, sid, bid, rest),
             1 => match sol::t_charge_words(rest) {
                 Some(charge) => sol::t_charge(&mut self.st, sid, bid, charge),
                 None => sol::t_invalid(),
             },
-            2 if rest.is_empty() => return Some((sol::t_fail(&mut self.st, sid, bid), 0)),
+            2 => sol::t_fail_words(&mut self.st, sid, bid, rest),
             _ => sol::t_invalid(),
         };
-        Some((answer.status, answer.result))
+        Ok((answer.status, answer.result))
     }
 
     fn checksum(&mut self) -> u64 {

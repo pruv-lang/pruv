@@ -59,6 +59,13 @@ def typed_harness(main):
     main = main.replace(
         '#[path = "@SOL@"] mod sol;',
         f'#[path = "@SOL@"] mod generated;\n#[path = "{adapter}"] mod sol;')
+    main = main.replace('        "load" => res(lane.load(&a[0], &a[1])),',
+                        '        "typed-malformed" => if sol::malformed_typed() { "ok".into() } else { "err 2".into() },\n'
+                        '        "load" => res(lane.load(&a[0], &a[1])),')
+    main = main.replace('w.call(&|st, out| sol::m12_auto(st, op, rf, sid, caller, packet, out))',
+                        'w.auto(op, rf, sid, caller, packet)')
+    main = main.replace('sol::m12_legacy_effects(&sessions.st, kind, op, &a[1], &a[2], caller,',
+                        'sol::m12_legacy_effects(kind, op, &a[1], &a[2], &sessions.trace_owner,')
     main = main.replace('    Pruv(World),', '    Pruv(sol::World),', 1)
     main = main.replace('Self::Pruv(World::new())', 'Self::Pruv(sol::World::new())', 1)
     main = main.replace(
@@ -93,9 +100,8 @@ def build(pair, variant='base', source=None, *, typed=False):
     root = out / 'root.pruv'
     shutil.copy(HERE / ('root_m12_typed.pruv' if typed else 'root.pruv'), root)
     if typed:
-        for name in ('bud_tstate.pruv', 'bud_tlife.pruv'):
-            shutil.copy(BUDGET / name, out)
-    for name in (*MODULES, 'bud_clock.pruv', 'bud_charge.pruv', 'bud_vwords.pruv',
+        shutil.copy(BUDGET / 'bud_tlife.pruv', out)
+    for name in (*MODULES, 'bud_clock.pruv', 'bud_tstate.pruv', 'bud_charge.pruv', 'bud_vwords.pruv',
                  'bud_effect.pruv', 'bud_cleanup.pruv', 'bud_vlife.pruv'):
         shutil.copy(BUDGET / name, out / name)
     auto = BUDGET / 'bud_auto.pruv'
@@ -206,6 +212,8 @@ def fixed_checks(harness, *, typed=False):
             if raw[2][:2] != 'ok' or blobs.get(sid) != V(base):
                 problems.append(f'dup op {op} {lane[1:]}: {raw[2][:60]} left {blobs.get(sid)}')
     if typed:
+        if run([harness], data='init\ntyped-malformed\n').splitlines() != ['ok', 'ok']:
+            problems.append('typed constructor admission or stale/reused ID')
         # The first budgetId controls the timer's reference order, but the
         # last duplicate is still the value resolved by runStarted.
         base = budget_fixture('b1')
@@ -221,7 +229,7 @@ def fixed_checks(harness, *, typed=False):
         pruv, hand = (run([harness, *lane], data=data).splitlines() for lane in ([], ['--hand']))
         if pruv != hand or len(pruv) != 8 or any(not row.startswith('ok') for row in hand):
             problems.append('duplicate budgetId: timer fire differs from hand')
-        print(f'fixed checks: dup auto 4 runs, timer 1, {len(problems)} problems', flush=True)
+        print(f'fixed checks: dup auto 4 runs, timer 1, typed admission 1, {len(problems)} problems', flush=True)
         return problems
     lines, worlds = [], 0
     for pad in range(0, 4000, 7):
@@ -939,12 +947,17 @@ def main():
     parser.add_argument('--seed', type=int, default=20261117)
     parser.add_argument('--no-build', action='store_true')
     parser.add_argument('--typed', action='store_true')
+    parser.add_argument('--lane', choices=('direct', 'adapter'),
+                        default=os.environ.get('M12_LANE', 'direct'))
     action = parser.add_mutually_exclusive_group()
     action.add_argument('--mutants', action='store_true')
     action.add_argument('--hdiff', action='store_true')
     action.add_argument('--cleanup-checks', action='store_true')
     action.add_argument('--perf', type=int, metavar='ROUNDS')
     args = parser.parse_args()
+    if args.lane not in ('direct', 'adapter'):
+        parser.error('M12_LANE must be direct or adapter')
+    os.environ['M12_LANE'] = args.lane
     pairs = args.pairs.split(',')
     if any(p not in PAIRS for p in pairs) or args.count <= 0 or (args.perf is not None and args.perf <= 0):
         parser.error('use py,rs pairs and positive counts')

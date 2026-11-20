@@ -124,7 +124,7 @@ pub fn text_units(text: &str) -> impl Iterator<Item = u16> + '_ {
     })
 }
 
-pub fn packed_text(words: &[i64]) -> Option<String> {
+fn packed_text(words: &[i64]) -> Option<String> {
     let (&count, packed) = words.split_first()?;
     let count = usize::try_from(count).ok()?;
     if count > 1 << 30 || packed.len() != count.div_ceil(4) {
@@ -134,11 +134,27 @@ pub fn packed_text(words: &[i64]) -> Option<String> {
     if padding != 0 && (*packed.last()? as u64 & ((1 << (padding * 16)) - 1)) != 0 {
         return None;
     }
-    Some((0..count).map(|i| unit_char((packed[i / 4] >> (16 * (3 - i % 4))) as u16)).collect())
+    Some(decode_admitted_key(words))
 }
 
-pub fn decode_key(words: &[i64]) -> String {
-    packed_text(words).unwrap_or_default()
+// Admission of fixture keys is done in Pruv before this wire conversion.
+pub fn decode_admitted_key(words: &[i64]) -> String {
+    let count = words[0] as usize;
+    (0..count)
+        .map(|i| unit_char((words[1 + i / 4] >> (16 * (3 - i % 4))) as u16))
+        .collect()
+}
+
+pub fn native_key(value: &str) -> String {
+    value.encode_utf16().map(unit_char).collect()
+}
+
+// Arena node IDs are local. A ticket identifies a single prepared budget.
+pub fn next_budget_ticket() -> i64 {
+    use std::sync::atomic::{AtomicI64, Ordering};
+    static NEXT: AtomicI64 = AtomicI64::new(1);
+    NEXT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .expect("M12 budget tickets exhausted")
 }
 
 pub fn v_units(words: &[i64], at: i64, count: i64) -> String {

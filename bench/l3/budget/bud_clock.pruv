@@ -40,7 +40,7 @@
 // room check) before any write and returns 0 with nothing changed on a shorter frame. The active count (field 17, I2) is only a number here: no
 // access depends on it, and I2 is checked by the functional model test of m9_test (t_i2), never assumed by a proof.
 
-// x clamped into -2^53..2^53 (every clock number is a JS safe integer in the domain)
+// Legacy word-clock range for BEGIN and timer decisions. SETTLE uses the shared safe-integer arithmetic.
 fn sc(x: i64) -> i64
   ensures -9007199254740992 <= result && result <= 9007199254740992
 {
@@ -203,14 +203,13 @@ fn settle_in(inout st: [i64], ca: i64, sk: [i64], ss: i64, sn: i64, now: i64, in
   if st[ca + 5] == 1 { push(inout fx, 13); }
   st[ca + 5] = 0;
   if st[ca + 3] != 1 { return 0; }
-  let mut added: i64 = sc(now) - sc(st[ca + 4]);
-  if added < 0 { added = 0; }
+  let time: crate::bud_tstate::SettledTime = crate::bud_tstate::settle_time(bv[4], st[ca + 4], now);
   st[ca + 3] = 0;
   st[ca + 4] = 0;
   bv[5] = 0;
   bv[6] = 0;
-  bv[4] = sc(sc(bv[4]) + added);
-  return added;
+  bv[4] = time.active_ms;
+  return time.added_ms;
 }
 
 // BEGIN (§5.2): opens a consuming interval at now.

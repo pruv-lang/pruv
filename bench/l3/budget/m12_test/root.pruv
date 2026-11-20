@@ -9,6 +9,7 @@ mod bud_world;
 mod bud_card;
 mod bud_auto;
 mod bud_clock;
+mod bud_tstate;
 mod bud_charge;
 mod bud_vwords;
 mod bud_effect;

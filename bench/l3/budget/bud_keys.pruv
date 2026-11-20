@@ -365,3 +365,87 @@ pub fn unpack_units(inout dst: [i64], d: i64, k: [i64], ks: i64, n: i64) -> i64
   }
   return 0;
 }
+
+// Packed key admission for the typed wire adapters.
+pub struct KeyAdmission { end: i64, used: i64, bytes: [u8] }
+
+fn emit_scalar(inout dst: [u8], at: i64, c: i64) -> i64
+  requires 0 <= at && at + 4 <= len(dst) && 0 <= c && c <= 1114111
+  ensures at + 1 <= result && result <= at + 4 && len(dst) == len(old(dst))
+{
+  if c < 128 { dst[at] = c; return at + 1; }
+  if c < 2048 {
+    dst[at] = 192 + c / 64;
+    dst[at + 1] = 128 + c % 64;
+    return at + 2;
+  }
+  if c < 65536 {
+    dst[at] = 224 + c / 4096;
+    dst[at + 1] = 128 + (c / 64) % 64;
+    dst[at + 2] = 128 + c % 64;
+    return at + 3;
+  }
+  dst[at] = 240 + c / 262144;
+  dst[at + 1] = 128 + (c / 4096) % 64;
+  dst[at + 2] = 128 + (c / 64) % 64;
+  dst[at + 3] = 128 + c % 64;
+  return at + 4;
+}
+
+fn decode_key(inout dst: [u8], k: [i64], n: i64, js_text: bool) -> i64
+  requires 0 <= n && n <= 1073741824 && len(dst) >= 6 * n
+  ensures 0 <= result && result <= len(dst) && len(dst) == len(old(dst))
+{
+  let mut j: i64 = 0;
+  let mut at: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && 0 <= at && at <= 6 * j && len(dst) >= 6 * n
+    decreases n - j
+  {
+    let u: i64 = unit(k, 1, n, j);
+    let mut c: i64 = u;
+    let mut paired: bool = false;
+    if js_text && u >= 55296 && u < 56320 && j + 1 < n {
+      let v: i64 = unit(k, 1, n, j + 1);
+      if v >= 56320 && v < 57344 {
+        c = 65536 + 1024 * (u - 55296) + (v - 56320);
+        paired = true;
+      }
+    }
+    if js_text && !paired && (u == 57344 || (u >= 55296 && u < 57344)) {
+      if u != 57344 { c = 57600 + u - 55296; }
+      dst[at] = 238;
+      dst[at + 1] = 128;
+      dst[at + 2] = 128;
+      dst[at + 3] = 224 + c / 4096;
+      dst[at + 4] = 128 + (c / 64) % 64;
+      dst[at + 5] = 128 + c % 64;
+      at = at + 6;
+    } else {
+      if !js_text && u >= 55296 && u < 57344 { c = u + 10240; }
+      at = emit_scalar(inout dst, at, c);
+    }
+    if paired { assert j + 1 < n; j = j + 2; }
+    else { j = j + 1; }
+  }
+  return at;
+}
+
+// M8 maps each unit to a distinct scalar. M10b pairs surrogates, escapes
+// lone surrogates, and doubles its U+E000 escape marker.
+pub fn admit_key(inout key: KeyAdmission, k: [i64], last: bool, js_text: bool) -> i64 ! alloc
+{
+  let end: i64 = rec_end(k, 0);
+  if end < 1 || (last && end != len(k)) { return 2; }
+  let n: i64 = k[0];
+  if n < 0 || n > 1073741824 { return 2; }
+  if len(key.bytes) < 6 * n {
+    let bytes: [u8] = alloc(6 * n, 0);
+    key.bytes = move bytes;
+  }
+  let at: i64 = decode_key(inout key.bytes, k, n, js_text);
+
+  key.end = end;
+  key.used = at;
+  return 0;
+}

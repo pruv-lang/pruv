@@ -112,6 +112,9 @@ The M7 key and record rows above apply. The halt call adds its own query, effect
   query).
 - fx is valid on every status >= 0. On 2 or 6 after SETTLE, fx holds SETTLE's effects (a timerClear) and the store
   holds SETTLE's record change (activeMs, activeSince dropped); the host applies the effects as on status 0.
+- Word and typed clocks share SETTLE arithmetic. Clamp the time inputs and the previous activeMs to
+  ±(2^53 − 1), add nonnegative elapsed time, and saturate the new activeMs at the same bounds.
+  This also normalizes activeMs when a consuming interval settles with zero elapsed time.
 - A Grow (-N) carries no effects and writes nothing; the host grows `st` and calls again. The query is asked only on
   the call that gets past the first reserve.
 - Status 6 is terminal: the query was observed, so the call cannot Grow and retry. Its store bound is QUERY_ROOM
