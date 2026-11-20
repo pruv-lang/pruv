@@ -96,7 +96,7 @@ NODE_FIELDS = {
     "Program": ("functions", "types"),
     # statements
     "Let": ("name", "mutable", "type", "value"),
-    "Assign": ("name", "value"),
+    "Assign": ("name", "value", "deref"),   # P31N: `*v = e` (always written, as the Rust dump)
     "IndexAssign": ("name", "index", "value"),
     "If": ("cond", "then", "els"),
     "While": ("cond", "invariants", "decreases", "body"),
