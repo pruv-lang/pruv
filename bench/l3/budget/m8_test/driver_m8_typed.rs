@@ -2,7 +2,14 @@
 // same results as driver_m8. Pruv owns accounting and supplies insertion ordinals.
 use std::hint::black_box;
 use std::io::{self, BufRead, Write};
+use std::sync::OnceLock;
 use std::time::Instant;
+
+// M8_LANE=adapter routes the account codes through the test-only `t_call`; anything else is the direct lane.
+fn direct_lane() -> bool {
+    static DIRECT: OnceLock<bool> = OnceLock::new();
+    *DIRECT.get_or_init(|| std::env::var("M8_LANE").as_deref() != Ok("adapter"))
+}
 
 // Encode each UTF-16 unit as a distinct scalar, using a supplementary range
 // for surrogates. This also preserves unpaired surrogates.
@@ -146,24 +153,22 @@ impl World {
         }
         take_key(&mut rest, sid)?;
         take_key(&mut rest, bid)?;
-        match code {
-            1 if rest.len() == 10 => {
-                let result = sol::t_account(&mut self.st, code, sid, bid, rest);
-                let status = match result {
-                    2 | 5 => result,
-                    33..=36 => 6,
-                    _ => 0,
-                };
-                Some((status, result))
-            }
-            2 if rest.is_empty() => Some((sol::t_account(&mut self.st, code, sid, bid, rest), 0)),
+        // Pruv chooses every status (P32 D66); Rust only decodes keys and picks the entry.
+        let answer = match code {
             3 => {
                 take_key(&mut rest, turn)?;
                 take_key(&mut rest, activity)?;
-                rest.is_empty().then(|| (sol::t_tool(&mut self.st, sid, bid, turn, activity), 0))
+                return rest.is_empty().then(|| (sol::t_tool(&mut self.st, sid, bid, turn, activity), 0));
             }
-            _ => None,
-        }
+            _ if !direct_lane() => sol::t_call(&mut self.st, code, sid, bid, rest),
+            1 => match sol::t_charge_words(rest) {
+                Some(charge) => sol::t_charge(&mut self.st, sid, bid, charge),
+                None => sol::t_invalid(),
+            },
+            2 if rest.is_empty() => return Some((sol::t_fail(&mut self.st, sid, bid), 0)),
+            _ => sol::t_invalid(),
+        };
+        Some((answer.status, answer.result))
     }
 
     fn checksum(&mut self) -> u64 {

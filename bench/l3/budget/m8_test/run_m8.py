@@ -2,7 +2,7 @@
 """L3-10 M8 runner: activity accounting of the request budget (bud_charge.pruv, bud_tools.pruv) against the TS oracle.
 
   python3 bench/l3/budget/m8_test/run_m8.py q    [--pruvc PATH | --gen GEN.rs] [--cases F] [--oracle F] [--hand16 | --hand NAME]
-  python3 bench/l3/budget/m8_test/run_m8.py q --typed [--py] [--cases F] [--oracle F]
+  python3 bench/l3/budget/m8_test/run_m8.py q --typed [--py] [--lane direct|adapter] [--cases F] [--oracle F]
   python3 bench/l3/budget/m8_test/run_m8.py perf --typed [--py] [--sizes 100,500 | --profile S|M|SM] [--reps N]
   python3 bench/l3/budget/m8_test/run_m8.py churn --typed [--py]
   python3 bench/l3/budget/m8_test/run_m8.py derive  (writes work/m8/cases_acct.jsonl + oracle_acct.jsonl)
@@ -981,6 +981,8 @@ def main():
     ap.add_argument("--fixtures", help="q: run these fixture groups (e.g. C,D) through the oracle instead of --cases")
     ap.add_argument("--typed", action="store_true", help="q, perf or churn: use resident typed state")
     ap.add_argument("--py", action="store_true", help="--typed: use the Python compiler Rust backend")
+    ap.add_argument("--lane", choices=["direct", "adapter"], default="direct",
+                    help="--typed: account codes through the direct entries or the test-only t_call adapter")
     ap.add_argument("--pruvc", default=PRUVC_DEFAULT)
     ap.add_argument("--pypruvc", type=os.path.abspath, default=PYPRUVC_DEFAULT,
                     help="--typed --py: path to pruvc.py")
@@ -1009,6 +1011,7 @@ def main():
         ap.error("--typed requires q, perf or churn and cannot use --hand or --hand16")
     dispatch = {"q": cmd_q, "perf": cmd_perf, "derive": cmd_derive, "controls": cmd_controls}
     if a.typed:
+        os.environ["M8_LANE"] = a.lane
         global BUILD
         with tempfile.TemporaryDirectory(prefix=".m8-typed-", dir=HERE) as build_dir:
             BUILD = build_dir
