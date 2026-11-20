@@ -9651,7 +9651,7 @@ verdict "fix and recheck". Seven MUST-FIX rows:
 
 | # | finding | done here |
 |---|---|---|
-| 1 | M9 close with a stale ref took and cleared the live clock before the `valid` check (hand `close` checks `current` first) | fixed: code 6 returns on `!valid` before the take, the unreachable code-5 test removed; M9 Q rerun exact on rs and py; one recheck (Codex gpt-6.2-astra ultra) sent |
+| 1 | M9 close with a stale ref took and cleared the live clock before the `valid` check (hand `close` checks `current` first) | fixed: code 6 returns on `!valid` before the take, the unreachable code-5 test removed; M9 Q rerun exact on rs and py; one recheck (Codex gpt-6.2-astra ultra, static read): fixed for code 6 and code 5 unchanged, effect order equal to `hand_m9.rs:198-228` |
 | 2 | typed `decide(end)` leaves `activeSince` on a halted budget restored without a clock | older than attempt 8, no Q case; debt D51 |
 | 4 | M12 adapter decides the `toolSeen` reset after `dispose` and sorts clocks for `forgetSession` / `dispose` | open, debt D50 (a) |
 | 5 | M12 `fire` takes the last duplicate `budgetId` key, hand the first | open, debt D50 (b) |
