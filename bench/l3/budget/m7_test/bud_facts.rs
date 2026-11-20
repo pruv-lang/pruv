@@ -324,3 +324,21 @@ pub fn unit(fxn: i64) -> Vec<i64> {
     });
     answer
 }
+
+// Reading status records the complete answer once, even if it is malformed.
+pub fn unit_at(fxn: i64, i: i64) -> i64 {
+    UNIT.with(|u| {
+        let answer = u.borrow();
+        if i == 0 {
+            UNIT_LOG.with(|log| {
+                if let Some(log) = log.borrow_mut().as_mut() {
+                    log.push((fxn, answer.clone()));
+                }
+            });
+        }
+        if answer.len() != 6 {
+            return -1;
+        }
+        answer.get(i as usize).copied().unwrap_or(-1)
+    })
+}

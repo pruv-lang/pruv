@@ -26,10 +26,10 @@ def checked(cmd, **kwargs):
     return result
 
 
-def build_decide_facts(work):
+def build_decide_facts(work, facts):
     rlib = work / "libdecide_facts.rlib"
     checked([m10.rustc(), "-O", "--edition", "2021", "--crate-type", "rlib", "--crate-name", "decide_facts",
-             HERE / "decide_facts.rs", "-o", rlib])
+             "--extern", f"bud_facts={facts}", HERE / "decide_facts.rs", "-o", rlib])
     return rlib
 
 
@@ -39,7 +39,7 @@ def generate(compiler, target, facts):
     backend = ["--backend", "rust"] if compiler == "py" else []
     checked(cmd + [str(root), "-o", str(target)] + backend + m10.LIBS
             + ["--rust-extern", f"bud_facts={facts}",
-               "--rust-extern", f"decide_facts={build_decide_facts(target.parent)}", "--proof-cache",
+               "--rust-extern", f"decide_facts={build_decide_facts(target.parent, facts)}", "--proof-cache",
                str(WORK / ("proof-py" if compiler == "py" else "proof-rs"))], cwd=m10.ROOT)
 
 
@@ -61,7 +61,7 @@ def build(args):
                     f'include!({driver});\n')
     exe = work / "driver_m10b"
     checked([m10.rustc(), "-O", "--edition", "2021", "--extern", f"bud_facts={facts}",
-             "--extern", f"decide_facts={build_decide_facts(work)}", "-o", exe, main])
+             "--extern", f"decide_facts={build_decide_facts(work, facts)}", "-o", exe, main])
     return exe, facts
 
 
@@ -417,7 +417,7 @@ def perf(args):
     exe, facts = build(args)
     hand = exe.with_name("hand_m10b")
     checked([m10.rustc(), "-O", "--edition", "2021", "--extern", f"bud_facts={facts}",
-             "--extern", f"decide_facts={build_decide_facts(exe.parent)}", "-o", hand, HERE / "hand_m10b.rs"])
+             "--extern", f"decide_facts={build_decide_facts(exe.parent, facts)}", "-o", hand, HERE / "hand_m10b.rs"])
     commands = {"pruv": [exe, "perf"], "hand": [hand]}
     sample = rss_runner()
     holds = []

@@ -72,3 +72,8 @@ pub fn release_held_text(sid: &str, bid: &str, position: i64) -> i64 {
     });
     answer
 }
+
+#[inline]
+pub fn unit_at(position: i64, i: i64) -> i64 {
+    bud_facts::unit_at(position, i)
+}
