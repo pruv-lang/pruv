@@ -1,0 +1,38 @@
+// spec: R-6e-4 accept
+struct Row { value: String, hits: i64 }
+struct St { rows: HashMap<String, Row> }
+
+fn put(inout st: St, key: str, value: str) -> () ! alloc {
+  match map_get_mut::<String, Row>(inout st.rows, key) {
+    Some(row) => { *row = Row { value: string_push_str(string_new(), value), hits: 6 }; }
+    None => {}
+  }
+}
+
+fn check() -> i64 ! alloc
+  ensures result == 6
+{
+  let m: HashMap<i64, Row> = map_new::<i64, Row>();
+  let mut rows: HashMap<i64, Row> = map_insert::<i64, Row>(move m, 3, Row { value: string_new(), hits: 5 });
+  match map_get_mut::<i64, Row>(inout rows, 3) {
+    Some(row) => { row = Row { value: string_new(), hits: 6 }; }
+    None => {}
+  }
+  match map_get::<i64, Row>(rows, 3) {
+    Some(row) => { return row.hits; }
+    None => { return 0; }
+  }
+}
+
+fn check_vec() -> i64 ! alloc
+  ensures result == 7
+{
+  let mut rows: Vec<Row> = vec_push::<Row>(vec_new::<Row>(), Row { value: string_new(), hits: 5 });
+  let next: Row = Row { value: string_new(), hits: 7 };
+  match vec_at_mut::<Row>(inout rows, 0) {
+    Some(row) => { *row = move next; }
+    None => {}
+  }
+  assert len(rows) == 1;
+  return vec_get::<Row>(rows, 0).hits;
+}

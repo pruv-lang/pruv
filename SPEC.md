@@ -507,7 +507,10 @@ fn tree_count(t: Tree) -> i64
   an `inout` parameter or a field path of either, of type `HashMap<K, V>` (`type/inout_argument`). `k` is
   evaluated once and may not mention the root of `P` (`type/inout_alias`). In the `Some(r)` arm `r` is an
   inout view of the element. The arm may read and assign its fields, use R-6e-2 on `r.f` and pass `inout r`.
-  It may not return, reassign, move or store `r`. The root of `P` may not be mentioned in the arm
+  It may not return, move or store `r`. For a record element of a map or vector, `r = e` and `*r = e`
+  replace the whole record and emit `*r = e;` in Rust; the right-hand side must be a constructor,
+  call result or move of an owned binding (`type/foreign_move`) and may not mention `r` or the root
+  of `P` (`type/recursive_borrow`). The root of `P` may not be mentioned in the arm
   (`type/recursive_borrow`), except through a field path disjoint from `P` (R-6e-8). The arm may not contain `return`, `break` or `continue` (`type/foreign_contract`).
   The `None` arm is unrestricted. Rust emits `match P.get_mut(&k)` with one lookup. The verifier gives `r`
   the stored element when `k` is present and writes the final `r` back at arm exit. The `None` arm leaves `P`
@@ -694,6 +697,12 @@ fn tree_count(t: Tree) -> i64
   Tests cover [field transfer](tests/spec/r6e_16_move_field.pruv),
   [swapping](tests/spec/r6e_16_swap.pruv), [mutable collection views](tests/spec/r6e_16_in_get_mut.pruv),
   [missing restoration](tests/spec/r6e_16_not_restored.pruv) and [held paths](tests/spec/r6e_16_held_borrow.pruv).
+- R-6e-17 **Borrowing a vector as an array argument.** A read of a `Vec<i64>` or `Vec<bool>` place
+  may be passed to an unmarked parameter of type `[i64]` or `[bool]`, respectively, of a Pruv
+  function. The place may be a local, parameter, binder or field path. This conversion is unavailable
+  for `take` or `inout` parameters, trusted Rust calls and positions other than call arguments.
+  Rust passes `place.as_slice()` without allocating or copying. The verifier uses the vector's existing
+  length and contents. This conversion requires the Rust backend (`codegen/unsupported_type`).
 - **Values, not pointers.** Recursive and buffer-bearing values are independent: copying one deep-copies everything,
   and changing a copy never changes the original. Parameters, field reads and `match` bindings are read-only views
   and do not allocate. Putting an existing value into an owning place (`let`, assignment, constructor field,
@@ -744,7 +753,7 @@ pub fn bounded(x: i64) -> i64                requires 0 <= x && x <= 10
   end of the file, and any `#[` inside a body, is `parse/attribute_position`.
 - **Host entries.** In explicit mode only root `pub` non-generic functions are host entries. A parameter of
   collection, recursive or buffer-field type, or an `inout` parameter (section 6g, Host limits), is
-  `type/entry_signature`, subject to R-6e-5, R-6e-6 and R-6f-2. The same restriction applies to results, subject to R-6f-1 and R-6f-3. Ordinary entries can be
+  `type/entry_signature`, subject to R-6e-5, R-6e-6, R-6f-2 and R-6f-4. The same restriction applies to results, subject to R-6f-1 and R-6f-3. Ordinary entries can be
   exported through `--rust-bindings` and the LLVM
   `pruv_abi_<name>` interface. Child `pub` functions are for Pruv callers only. An optional root `main`
   must be `pub fn main() -> ()`. A child `main` is an ordinary function.
@@ -771,6 +780,10 @@ pub fn bounded(x: i64) -> i64                requires 0 <= x && x <= 10
   A `HashMap` field, a nested-collection element and deeper nesting remain
   `type/entry_signature`. Like R-6f-1 it has no C ABI: the LLVM backend rejects `R`
   with `codegen/unsupported_type`. Legacy mode is unchanged.
+- R-6f-4 **Owned String entry parameters.** A Rust host entry, with or without a state
+  parameter, may take an owned `String` using `take key: String`; the wrapper passes ownership
+  to the body without a copy, and LLVM and the C ABI reject the signature with
+  `codegen/unsupported_type`.
 - **Proof.** Every function is verified, including private and unused ones; a caller sees the callee's contract and,
   for a function that can be expanded (section 6, L3 P07, R-6-1), the fact `result == <body>` at its call, from any
   module. It sees no other part of the body. Recursion and recursive types may span modules. Host entries check `requires` at run
@@ -801,7 +814,7 @@ let mut w: [i64] = copy(a);
 set_at(inout w, 0, 7);
 ```
 - **Syntax and types.** `inout name: T` on a parameter, `T` one of `[i64]`, `[u8]`, `[bool]` or `[T]` with `T: Element`
-  (section 6c), a non-generic struct under R-6g-2, a map under R-6e-7 and R-6e-14, or a vector under R-6e-10; any other type is `type/inout_type`. The mode is not part of the type. The caller must write `inout`
+  (section 6c), `i64` or `bool` under R-6g-4, a non-generic struct under R-6g-2, a map under R-6e-7 and R-6e-14, or a vector under R-6e-10; any other type is `type/inout_type`. The mode is not part of the type. The caller must write `inout`
   at the call (`type/inout_argument` if missing or extra). The marked argument must name a mutable place of
   exactly the parameter's type (see R-6g-3 for field paths). Immutable locals, ordinary parameters,
   read-only `match` binders, elements and calls are rejected. `inout` is contextual, not a keyword;
@@ -860,6 +873,14 @@ set_at(inout w, 0, 7);
   by the callee's `ensures` back along that path only. Where `old` is supported it refers to the pre-call
   value. Sibling fields and other elements of enclosing collections retain their values.
   Rust passes `&mut x.f1...fn` directly, including when `x` is already a mutable reference.
+- R-6g-4 **Scalar inout parameters.** Non-entry Pruv functions may declare `inout n: i64`
+  or `inout n: bool`, read `n` and assign it with `n = e`. The caller marks an exactly
+  matching mutable local, inout parameter, field path or mutable scalar collection binder
+  with `inout`; the exclusivity rules of R-6g-1 and R-6g-3 apply. In `ensures` the name
+  denotes the final value. The caller learns only what those clauses guarantee about it.
+  `old(n)` is `type/old_argument` and a scalar inout root entry is `type/entry_signature`.
+  Rust uses `n: &mut T`, reads `(*n)`, writes `*n = e;` and passes a mutable borrow.
+  Scalar inout requires the Rust backend (`codegen/unsupported_type`).
 - **Generics.** `fn swap<T: Element>(inout a: [T], ...)` works like any G3 function; `swap::<i64>(inout w, i, j)`
   (`examples/g5_generic_swap.pruv`). It is specialized per element type, also across modules.
 - **Loops.** A loop that passes an array as `inout` treats it as changed: an `inout` parameter keeps its length, a
@@ -879,7 +900,7 @@ set_at(inout w, 0, 7);
   except the R-6f-2 typed state entry; a
   `trusted rust fn` with `inout` is `type/foreign_signature`. Give the host an ordinary function that owns a
   `copy` of its input, calls the `inout` helpers on it and returns it.
-- **Not supported.** Elements as `inout` places, scalar,
+- **Not supported.** Elements as `inout` places,
   `str`, collection types outside R-6e-7, or generic struct `inout` parameters (non-generic structs are R-6g-2), `old` of anything but an array `inout` parameter, mutable host entries other than R-6f-2.
 - **New error codes:** `inout_syntax`, `inout_type`, `inout_argument`, `inout_alias`, `inout_context`, `old_context`,
   `old_argument`; reused: `immutable`, `array_alias`, `recursive_borrow`, `entry_signature`, `foreign_signature`,

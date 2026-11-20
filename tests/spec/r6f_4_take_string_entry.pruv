@@ -1,0 +1,12 @@
+// spec: R-6f-4 accept
+pub struct State { size: i64 }
+
+pub fn put(take key: String) -> i64 ensures result == len(key) {
+  return len(key);
+}
+
+pub fn store(inout state: State, take key: String) -> ()
+  ensures state.size == len(key)
+{
+  state.size = len(key);
+}

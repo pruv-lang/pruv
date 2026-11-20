@@ -1,0 +1,6 @@
+// spec: R-6e-17 reject
+fn update(inout a: [i64]) -> () {}
+fn check() -> () ! alloc {
+  let mut v: Vec<i64> = vec_new::<i64>();
+  update(inout v);
+}

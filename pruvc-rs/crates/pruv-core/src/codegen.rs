@@ -13,7 +13,7 @@ use crate::emit_common::{
 };
 use crate::foreign::{catalog_fn, is_catalog};
 use crate::foreign_codegen::ForeignGen;
-use crate::gtype::{is_g3_key, key_is_collection, mk_option, GType};
+use crate::gtype::{is_g3_key, key_is_collection, key_is_vec_slice_arg, mk_option, GType};
 use crate::inline_policy::{inline_policy, PIN_ALWAYS, PIN_INLINE};
 use crate::pyrepr::repr_str;
 use crate::typeinfo::{array_elem_name, is_array_name, uses_array_type, uses_str, TypeTable};
@@ -3968,7 +3968,10 @@ impl<'a> Gen<'a> {
                         Expr::Var(v) => &v.name,
                         _ => return Err("codegen: inout operand is not a variable".into()),
                     };
-                    (format!("&mut {}", &rty(&self.vars[name], true)[1..]), self.mut_ref(name))
+                    let actual = &self.vars[name];
+                    let rust_ty = rty(actual, is_array_name(actual));
+                    let pointee = if is_array_name(actual) { &rust_ty[1..] } else { &rust_ty };
+                    (format!("&mut {}", pointee), self.mut_ref(name))
                 } else {
                     let ty = expr_ty(x).as_deref().ok_or("codegen: par argument has no type")?;
                     if is_array_name(&ty) {
@@ -4744,6 +4747,10 @@ impl<'a> Gen<'a> {
                     } else if callee.is_some_and(|c| c.params.get(i).is_some_and(|p| p.ty == "str"))
                         && expr_ty(xa).as_deref() == Some("string") {
                         args.push(self.borrowed_map_key(xa)?);
+                    } else if callee.and_then(|c| c.params.get(i)).is_some_and(|p| {
+                        expr_ty(xa).as_deref().is_some_and(|ty| key_is_vec_slice_arg(ty, &p.ty))
+                    }) {
+                        args.push(format!("{}.as_slice()", self.e(xa)?));
                     } else if self.g6 && (is_move || coll) {
                         let take = is_move || callee.map_or(false, |c| c.params.get(i).map_or(false, |p| p.take));
                         if take {

@@ -85,7 +85,8 @@ go through it), under trust_callers the pub entry is unchecked and `<entry>__pru
 from collections import namedtuple
 from vast import *
 from typeinfo import (TypeTable, is_user_type, is_array, uses_array_type, uses_str, is_collection,
-                      dependencies, is_owned_field_type, is_nested_collection_field, is_string_record_map, field_place)
+                      dependencies, is_owned_field_type, is_nested_collection_field, is_string_record_map,
+                      field_place, is_vec_slice_arg)
 from foreign import CATALOG
 from inline_policy import PIN_INLINE, PIN_ALWAYS, inline_policy
 from check import BIT_BUILTINS
@@ -3071,8 +3072,10 @@ class Gen:
             for j, x in enumerate(call.args):
                 n = "pruv_arg_%d_%d" % (i, j)
                 if isinstance(x, InoutArg):
-                    ty = "&mut " + rty(s.vt[x.expr.name], True)[1:]
-                    val = s.mut_ref(x.expr.name)
+                    name = x.expr.name
+                    actual = s.vt[name]
+                    ty = "&mut " + (rty(actual, True)[1:] if is_array(actual) else rty(actual))
+                    val = "&mut *" + name if name in s.inouts else s.mut_ref(name)
                 elif is_array(x.ty):
                     ty, val = s.rt(x.ty, True, x), s.arr_ref(x)
                 else:
@@ -3457,6 +3460,8 @@ class Gen:
                     args.append(s.e(x))
                 elif callee is not None and callee.params[i].type == STR and x.ty is not None and x.ty.name == "string":
                     args.append(s.borrowed_map_key(x))
+                elif callee is not None and is_vec_slice_arg(x.ty, callee.params[i].type):
+                    args.append(s.e(x) + ".as_slice()")
                 elif s.g6 and (isinstance(x, Move) or (x.ty is not None and is_collection(x.ty))):
                     take = isinstance(x, Move) or (callee is not None and callee.params[i].take)
                     args.append(s.e(x) if take else s.cref(x))

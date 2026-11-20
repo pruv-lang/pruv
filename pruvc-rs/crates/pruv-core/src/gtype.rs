@@ -195,6 +195,10 @@ pub(crate) fn key_is_scalar_vec(key: &str) -> bool {
     matches!(key, "vec<i64>" | "vec<bool>")
 }
 
+pub(crate) fn key_is_vec_slice_arg(actual: &str, expected: &str) -> bool {
+    matches!((actual, expected), ("vec<i64>", "array") | ("vec<bool>", "array_bool"))
+}
+
 pub(crate) fn key_is_nested_collection_field(key: &str) -> bool {
     matches!(key, "vec<string>" | "hashmap<string,bool>" | "hashmap<i64,bool>" | "hashmap<string,i64>" | "hashmap<i64,i64>")
 }

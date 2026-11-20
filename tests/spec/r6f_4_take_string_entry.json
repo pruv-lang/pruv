@@ -1,0 +1,1 @@
+{"gen_contains":["pub fn put(key: ::std::string::String)", "put__pruv_body(key)", "store__pruv_body(state, key)"],"gen_absent":[".clone()","to_string"]}

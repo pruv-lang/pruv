@@ -6212,6 +6212,7 @@ pub fn g6_llvm_error(prog: &Program) -> Option<crate::diagnostic::PruvError> {
             || ty.args.iter().any(needs_rust)
     }
     let rust_type = |key: &str| needs_rust(&crate::gtype::GType::from_key(key));
+    let funcs: HashMap<_, _> = prog.functions.iter().map(|f| (f.name.as_str(), f)).collect();
     for f in &prog.functions {
         if f.foreign.is_some() {
             if rust_type(&f.ret) {
@@ -6251,6 +6252,13 @@ pub fn g6_llvm_error(prog: &Program) -> Option<crate::diagnostic::PruvError> {
                     }
                 }
                 if let Expr::Call(c) = e {
+                    if funcs.get(c.name.as_str()).is_some_and(|callee| {
+                        c.args.iter().zip(&callee.params).any(|(arg, p)| {
+                            expr_ty(arg).as_deref().is_some_and(|ty| crate::gtype::key_is_vec_slice_arg(ty, &p.ty))
+                        })
+                    }) {
+                        rust_only.push((c.line, c.col, "a borrowed vector slice argument"));
+                    }
                     match c.name.as_str() {
                         "map_remove" => rust_only.push((c.line, c.col, "map_remove")),
                         "map_take" => rust_only.push((c.line, c.col, "map_take")),

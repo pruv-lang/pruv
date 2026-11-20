@@ -257,7 +257,7 @@ fn rs_de(tt: &TypeTable, ty: &str, arr: &str, off: i64) -> Result<String, String
     }
 }
 
-/// Mutable struct parameters have a Rust-only calling convention.
+/// Non-array inout parameters have a Rust-only calling convention.
 pub(crate) fn struct_inout_abi_error(
     prog: &Program, entries_only: bool,
 ) -> Option<crate::diagnostic::PruvError> {
@@ -273,6 +273,8 @@ pub(crate) fn struct_inout_abi_error(
             } else {
                 let kind = if f.params.iter().any(|p| p.mode_pos.is_some() && crate::gtype::key_is_collection(&p.ty)) {
                     "collection"
+                } else if f.params.iter().any(|p| p.mode_pos.is_some() && matches!(p.ty.as_str(), "i64" | "bool")) {
+                    "scalar"
                 } else {
                     "struct"
                 };
@@ -324,16 +326,18 @@ pub fn owned_collection_abi_error(
         }
     }
     for (i, f) in prog.functions.iter().enumerate() {
-        if !crate::gtype::key_is_scalar_vec(&f.ret) {
-            continue;
-        }
         let name = if let Some(g4) = g4 {
             g4.fn_meta.get(i).filter(|m| m.host_entry).map(|m| m.src_name.as_str())
         } else {
             prog.explicit.as_ref().and_then(|e| e.fns.get(i)).filter(|m| m.host_entry).map(|m| m.disp.as_str())
         };
         if let Some(name) = name {
-            return Some(err(f.line, f.col, format!("host entry {} returns a Vec, which has no C ABI", name)));
+            if f.params.iter().any(|p| p.take && p.ty == "string") {
+                return Some(err(f.line, f.col, format!("host entry {name} takes an owned String, which has no C ABI")));
+            }
+            if crate::gtype::key_is_scalar_vec(&f.ret) {
+                return Some(err(f.line, f.col, format!("host entry {} returns a Vec, which has no C ABI", name)));
+            }
         }
     }
     None

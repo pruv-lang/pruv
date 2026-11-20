@@ -45,7 +45,7 @@ from vast import *
 import codegen
 from codegen import show
 from typeinfo import TypeTable, is_user_type, is_array, uses_array_type, uses_str  # G2 B2: uses_str
-from typeinfo import is_collection, contains_collection, encode, is_scalar_vec
+from typeinfo import is_collection, contains_collection, encode, is_scalar_vec, is_vec_slice_arg
 from foreign import CATALOG, CATALOG_CONTRACT_ONLY, first_g6_use, _owned_result, NET_OBSERVERS, ASYNC_OBSERVERS  # G6 A3, G6b, G10 net A3
 import foreign_shim  # G6 A3
 import parallel_shim
@@ -5394,6 +5394,7 @@ def g6_llvm_error(prog):
         e.file = getattr(f, "file", None)   # explicit mode: the function's source file (Rust: the tagged line)
         return e
 
+    funcs = {f.name: f for f in prog.functions}
     for f in prog.functions:
         if f.foreign is not None:
             if needs_rust(f.ret):
@@ -5420,6 +5421,9 @@ def g6_llvm_error(prog):
                 rust_only.append((n.line, n.col, "this collection type"))
             if ty is not None and not _g6_type_ok(ty):
                 bad.append((n.line, n.col))
+            if isinstance(n, Call) and n.name in funcs and any(
+                    is_vec_slice_arg(a.ty, p.type) for a, p in zip(n.args, funcs[n.name].params)):
+                rust_only.append((n.line, n.col, "a borrowed vector slice argument"))
             if isinstance(n, Call) and n.name in CATALOG and n.name not in CATALOG_CONTRACT_ONLY:
                 if n.name in ("map_remove", "map_take", "vec_at_mut", "vec_clear", "string_eq"):
                     rust_only.append((n.line, n.col, n.name))
@@ -5455,10 +5459,14 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
                             "%s has a take array parameter, which needs the Rust backend" % getattr(f, "disp", f.name),
                             "use the Rust backend", file=getattr(f, "file", None))
         if any(p.mode == "inout" and not is_array(p.type) for p in f.params):
+            kind = "struct"
+            if any(p.mode == "inout" and is_collection(p.type) for p in f.params):
+                kind = "collection"
+            elif any(p.mode == "inout" and p.type in (I64, BOOL) for p in f.params):
+                kind = "scalar"
             raise PruvError("codegen", f.line, f.col, "unsupported_type",
                             "%s has an inout %s parameter, which needs the Rust backend" %
-                            (getattr(f, "disp", f.name), "collection" if any(
-                                p.mode == "inout" and is_collection(p.type) for p in f.params) else "struct"),
+                            (getattr(f, "disp", f.name), kind),
                             "use the Rust backend", file=getattr(f, "file", None))
     for d in prog.types:
         if any(is_collection(fd.type) for fd in TypeTable._all_fields(d)):
@@ -5467,6 +5475,10 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
                             "use the Rust backend",
                             file=getattr(d, "file", None))
     for f in prog.functions:
+        if f.host_entry and any(p.take and p.type == Type("string") for p in f.params):
+            raise PruvError("codegen", f.line, f.col, "unsupported_type",
+                            "host entry %s takes an owned String, which has no C ABI" % getattr(f, "disp", f.name),
+                            "use the Rust backend", file=getattr(f, "file", None))
         if f.host_entry and is_scalar_vec(f.ret):
             raise PruvError("codegen", f.line, f.col, "unsupported_type",
                             "host entry %s returns a Vec, which has no C ABI" % getattr(f, "disp", f.name),

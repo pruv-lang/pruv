@@ -13,7 +13,7 @@ use crate::foreign::{
 };
 use crate::gtype::{
     bind_args, check_arity, collection_arity, decl_owner, dependencies, fn_owner, format_type, is_element, is_value,
-    key_is_collection, mk_array, mk_nominal, mk_option, mk_result, substitute, GType, Mapping, ParamId,
+    key_is_collection, key_is_vec_slice_arg, mk_array, mk_nominal, mk_option, mk_result, substitute, GType, Mapping, ParamId,
 };
 use crate::typeinfo::{program_uses_inout, TypeTable, BUILTIN_TYPE_NAMES};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -324,7 +324,7 @@ struct Checker {
     read_context: Option<usize>,
     statement_call: Option<usize>,
     borrowed_text: Option<usize>,
-    map_roots: Vec<(String, Vec<String>)>,
+    map_roots: Vec<(String, Vec<String>, Vec<String>)>,
     map_iterations: Vec<(String, Vec<String>)>,
     // ---- G9 A0 metadata ----
     /// recursive type SCCs (names in declaration order), SCC-number order
@@ -1863,7 +1863,7 @@ impl Checker {
         Ok(())
     }
 
-    /// G5 A0: an inout parameter must be a primitive or Element-generic array ([i64], [u8], [bool], [T: Element]).
+    /// Inout parameters are scalars, arrays, non-generic structs or supported collections.
     fn check_modes(&self, prog: &Program) -> Res<()> {
         for f in &prog.functions {
             for p in &f.params {
@@ -1871,7 +1871,8 @@ impl Checker {
                     let pt = GType::from_key(&p.ty);
                     let aggregate_collection = pt.owner.is_none() && pt.name == "hashmap"
                         && pt.args.last().is_some_and(|payload| self.owned_aggregate(payload));
-                    if !pt.is_array() && !(pt.owner.is_none() && pt.name == "vec") && !aggregate_collection
+                    if pt != i64t() && pt != boolt() && !pt.is_array()
+                        && !(pt.owner.is_none() && pt.name == "vec") && !aggregate_collection
                         && !(pt.args.is_empty() && matches!(self.decls.get(&pt.name), Some(TypeDecl::Struct(_)))) {
                         return Err(terr(
                             ml,
@@ -1882,7 +1883,7 @@ impl Checker {
                                 p.name,
                                 tn(&pt)
                             ),
-                            "use an array, a non-generic struct, or a vector or a map of aggregate records, or remove inout",
+                            "use a scalar, an array, a non-generic struct, or a vector or a map of aggregate records, or remove inout",
                         ));
                     }
                 }
@@ -1942,10 +1943,15 @@ impl Checker {
             if !self.host_entry.get(i).copied().unwrap_or(false) {
                 continue;
             }
+            if let Some(p) = f.params.iter().find(|p| p.mode_pos.is_some() && matches!(p.ty.as_str(), "i64" | "bool")) {
+                return Err(terr(f.line, f.col, "entry_signature",
+                    format!("host entry {} cannot take scalar inout parameter {}", f.name, p.name), ""));
+            }
             let rust_state = f.params.first().is_some_and(|p| p.mode_pos.is_some() && rust_records.contains(&p.ty));
             let mut sig: Vec<(String, &str)> = f.params.iter().enumerate().filter(|(i, p)| {
                 !(*i == 0 && self.explicit && p.mode_pos.is_some()
                     && matches!(self.decls.get(&p.ty), Some(TypeDecl::Struct(_)))
+                    || p.take && p.ty == "string"
                     || !p.take && p.mode_pos.is_none() && (rust_records.contains(&p.ty) || rust_state && p.ty == "string"))
             }).map(|(_, p)| (format!("parameter {}", p.name), p.ty.as_str())).collect();
             if let Some(p) = f.params.iter().skip(if self.explicit { 1 } else { 0 })
@@ -2260,7 +2266,7 @@ impl Checker {
     }
 
     fn lookup(&self, line: i64, col: i64, name: &str, scope: &Scope, path: &[String]) -> Res<Entry> {
-        if self.map_roots.iter().any(|(root, held)| {
+        if self.map_roots.iter().any(|(root, held, _)| {
             root == name && paths_overlap(path, held)
         }) {
             return Err(terr(line, col, "recursive_borrow", format!("cannot use {name} inside a mutable collection Some arm"), ""));
@@ -2402,11 +2408,13 @@ impl Checker {
                 let v = self.lookup(s.line, s.col, &s.name, scope, &[])?;
                 self.check_borrow(s.line, s.col, &s.name, &[])?; // G9 A0
                 let scalar_binder = v.kind == "map_inout" && (v.ty == i64t() || v.ty == boolt());
-                if s.deref && !scalar_binder {
+                let record_binder = v.kind == "map_inout" && self.owned_aggregate(&v.ty);
+                let scalar_inout = v.kind == "inout" && (v.ty == i64t() || v.ty == boolt());
+                if s.deref && !(scalar_binder || record_binder) {
                     return Err(terr(s.line, s.col, "type_mismatch",
-                        "dereference requires a mutable scalar collection binder", ""));
+                        "dereference requires a mutable scalar or record collection binder", ""));
                 }
-                if !v.mutable && !scalar_binder {
+                if !(v.mutable || scalar_binder || record_binder || scalar_inout) {
                     if matches!(v.kind, "inout" | "map_inout") {
                         // G5 A0: element stores are allowed, replacing the binding is not
                         return Err(terr(
@@ -2419,9 +2427,24 @@ impl Checker {
                     }
                     return Err(terr(s.line, s.col, "immutable", format!("{} is not mutable", s.name), Self::immutable_fix(v.kind)));
                 }
+                if record_binder && (mentions(&s.value, &s.name)
+                    || self.map_roots.iter().any(|(root, _, binders)| {
+                        binders.contains(&s.name) && mentions(&s.value, root)
+                    }))
+                {
+                    return Err(terr(s.value.line(), s.value.col(), "recursive_borrow",
+                        "a record replacement cannot mention its binder or a borrowed root", ""));
+                }
                 self.boundary = boundary_of(&s.value);
                 self.want_alloc(&s.value, &v.ty);
                 self.expect(&mut s.value, &v.ty, scope, false, None)?;
+                if record_binder && !matches!(&s.value, Expr::StructLit(_) | Expr::Call(_))
+                    && !matches!(&s.value, Expr::Move(m) if m.fields.is_empty()
+                        && scope.get(&m.name).is_some_and(|entry| matches!(entry.kind, "local" | "take")))
+                {
+                    return Err(terr(s.value.line(), s.value.col(), "foreign_move",
+                        "a record replacement needs a constructor, call result or move", ""));
+                }
                 self.check_inout_context(&[&s.value], InoutContext::Assign(&s.name))?;
                 if v.ty.is_array() || v.ty == strt() {
                     self.array_source(s.line, s.col, &s.value, scope, false, &v.ty)?;
@@ -2984,8 +3007,8 @@ impl Checker {
             if let Some(r) = active {
                 self.active_roots.push((r.clone(), map_read_path.is_some()));
             }
-            if let Some(place) = borrowed {
-                self.map_roots.push(place.clone());
+            if let Some((root, path)) = borrowed {
+                self.map_roots.push((root.clone(), path.clone(), a.binders.clone()));
             }
             if let Some(mp) = arm_path {
                 self.match_paths.push(mp.clone());
@@ -3129,6 +3152,18 @@ impl Checker {
             return Ok(());
         }
         self.check_expected_type(e, &strt(), None, got)?;
+        Ok(())
+    }
+
+    fn expect_user_arg(&mut self, e: &mut Expr, ty: &GType, scope: &Scope, c: bool, borrow_vector: bool) -> Res<()> {
+        if *ty == strt() {
+            return self.expect_str_arg(e, scope, c);
+        }
+        let got = self.expr(e, scope, c)?;
+        if borrow_vector && place_root(e).is_some() && key_is_vec_slice_arg(&got.to_key(), &ty.to_key()) {
+            return Ok(());
+        }
+        self.check_expected_type(e, ty, None, got)?;
         Ok(())
     }
 
@@ -3916,12 +3951,10 @@ impl Checker {
                 }
                 if collection_place && want.to_key() == "string" {
                     self.check_text_key(&mut e.args[i], scope, c, None)?;
+                } else if user_call {
+                    self.expect_user_arg(&mut e.args[i], &want, scope, c, !f.foreign && !self.takes[&n][i])?;
                 } else {
-                    if self.funcs.contains_key(&n) && want == strt() {
-                        self.expect_str_arg(&mut e.args[i], scope, c)?;
-                    } else {
-                        self.expect(&mut e.args[i], &want, scope, c, None)?;
-                    }
+                    self.expect(&mut e.args[i], &want, scope, c, None)?;
                 }
                 continue;
             }
@@ -4763,12 +4796,12 @@ impl Checker {
                 self.inout_args(e, &f, &m, scope, c)?
             }
             _ => {
-                for (arg, p) in e.args.iter_mut().zip(f.params.iter()) {
+                for (i, (arg, p)) in e.args.iter_mut().zip(f.params.iter()).enumerate() {
                     let want = substitute(p, &m);
                     if cat.is_some() && n == "map_get" && want.to_key() == "string" {
                         self.check_text_key(arg, scope, c, None)?;
-                    } else if cat.is_none() && want == strt() {
-                        self.expect_str_arg(arg, scope, c)?;
+                    } else if cat.is_none() {
+                        self.expect_user_arg(arg, &want, scope, c, !f.foreign && !self.takes[&n][i])?;
                     } else {
                         self.expect(arg, &want, scope, c, None)?;
                     }

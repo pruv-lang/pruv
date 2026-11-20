@@ -1,0 +1,28 @@
+// spec: R-6g-4 accept
+struct State { count: i64, flag: bool }
+
+fn bump(inout n: i64) -> ()
+  ensures n == 1
+{
+  n = 1;
+}
+
+fn flip(inout b: bool) -> ()
+  requires !b
+  ensures b
+{
+  b = !b;
+}
+
+fn forward(inout n: i64) -> () ensures n == 1 {
+  bump(inout n);
+}
+
+pub fn run() -> i64 ensures result == 1 {
+  let mut n: i64 = 0;
+  forward(inout n);
+  let mut state: State = State { count: n, flag: false };
+  flip(inout state.flag);
+  assert state.flag;
+  return state.count;
+}

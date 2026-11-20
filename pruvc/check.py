@@ -7,7 +7,7 @@ from typeinfo import (TypeTable, BUILTIN_TYPE_NAMES, type_name, is_user_type, is
                       dependencies, decl_owner, fn_owner,  # G3 A1
                       COLLECTION_ARITY, COLLECTION_SPELLING, is_collection, contains_collection,  # G6 A0
                       program_uses_inout, is_owned_field_type, is_scalar_vec, is_nongeneric_struct,
-                      field_place, is_nested_collection_field, is_string_record_map)
+                      field_place, is_nested_collection_field, is_string_record_map, is_vec_slice_arg)
 from refine import expand as refine_expand
 from refine import _kids as expr_kids
 from foreign import (CATALOG, CATALOG_NAMES, CATALOG_CONTRACT_ONLY, FILE_OBSERVERS, PROC_OBSERVERS, NET_OBSERVERS, ASYNC_OBSERVERS, ASYNC_OPS,
@@ -210,7 +210,7 @@ class Checker:
         s.call_log = []           # (caller Function, Call node, callee Function) of every checked user call
         s.match_call = s.field_receiver = None
         s.map_iterations = []     # read-only (root, field path) of enclosing map loops
-        s.map_borrows = []        # (root, field path) of the enclosing mutable collection Some arms
+        s.map_borrows = []        # (root, field path, binders) of the enclosing mutable collection Some arms
         s.field_paths = {}        # id(root Var) -> field path of the outermost field read over it
         s.active_roots = []       # root variable names of the enclosing match arms on extended scrutinees
         s.map_read_roots = []     # the active_roots entries pushed by map_get Some arms
@@ -802,17 +802,18 @@ class Checker:
             s.ext_misuse(f, f.ret)
 
     def check_modes(s):
-        """An inout parameter is an array, a non-generic struct or a map/vector place."""
+        """An inout parameter is a scalar, array, non-generic struct or map/vector place."""
         for f in s.prog.functions:
             for p in f.params:
-                if p.mode is not None and not (is_array(p.type) or is_nongeneric_struct(p.type, s.decls)
+                if p.mode is not None and not (p.type in (I64, BOOL) or is_array(p.type)
+                                               or is_nongeneric_struct(p.type, s.decls)
                                                or p.type.name == "vec" and p.type.owner is None
                                                or p.type.name == "hashmap" and p.type.owner is None
                                                and p.type.args[-1].name in s.aggregates
                                                and not p.type.args[-1].args):
                     terr(_mode_at(f, p), "inout_type", "inout parameter %s cannot have the type %s" %
                          (p.name, type_name(p.type)),
-                         "use an array, a non-generic struct, or a vector or a map of aggregate records, or remove inout")
+                         "use a scalar, an array, a non-generic struct, or a vector or a map of aggregate records, or remove inout")
 
     def is_result_record(s, ty):
         """R-6f-3: plain fields, Vec<i64>/Vec<bool>/Vec<String>, or Vec<E> of an owned aggregate
@@ -854,10 +855,14 @@ class Checker:
             rust_state = bool(f.params and f.params[0].mode == "inout" and f.params[0].type.name in rust_records)
             positions = []
             for i, p in enumerate(f.params):
+                if p.mode == "inout" and p.type in (I64, BOOL):
+                    terr(f, "entry_signature", "host entry %s cannot take scalar inout parameter %s" % (f.name, p.name))
                 if p.mode == "inout" and is_nongeneric_struct(p.type, s.decls):
                     if i == 0:
                         continue
                     terr(f, "entry_signature", "host entry %s must take its inout struct first" % f.name)
+                if p.take and p.type == STRING:
+                    continue
                 if not p.take and p.mode is None and (p.type.name in rust_records or rust_state and p.type == STRING):
                     continue
                 positions.append(("parameter %s" % p.name, p.type))
@@ -1085,17 +1090,29 @@ class Checker:
             v = s.lookup(st, st.name, scope)
             s.check_borrow(st, st.name, [])
             scalar_binder = v[2] == "map_mut" and v[0] in (I64, BOOL)
-            if st.deref and not scalar_binder:
-                terr(st, "type_mismatch", "dereference requires a mutable scalar collection binder")
-            if not (v[1] or scalar_binder):
+            record_binder = (v[2] == "map_mut" and v[0].owner is None and not v[0].args
+                             and v[0].name in s.aggregates)
+            scalar_inout = v[2] == "inout" and v[0] in (I64, BOOL)
+            if st.deref and not (scalar_binder or record_binder):
+                terr(st, "type_mismatch", "dereference requires a mutable scalar or record collection binder")
+            if not (v[1] or scalar_binder or record_binder or scalar_inout):
                 if v[2] == "inout":      # G5 A0: element stores are allowed, replacing the binding is not
                     terr(st, "immutable", "inout parameter %s cannot be reassigned as a whole" % st.name,
                          "store elements with %s[i] = v, or copy into a `let mut` local" % st.name)
                 terr(st, "immutable", "%s is not mutable" % st.name,
                      "declare it with `let mut`" if v[2] == "local" else "parameters are immutable; copy into a `let mut` local")
+            if record_binder and (_mentions(st.value, st.name)
+                                  or any(st.name in binders and _mentions(st.value, root)
+                                         for root, _, binders in s.map_borrows)):
+                terr(st.value, "recursive_borrow", "a record replacement cannot mention its binder or a borrowed root")
             s.boundary = st.value
             s.alloc_hint_for(st.value, v[0])
             s.expect(st.value, v[0], scope)
+            if record_binder and not (
+                    isinstance(st.value, (StructLit, Call))
+                    or isinstance(st.value, Move) and not st.value.fields
+                    and scope[st.value.name][2] in ("local", "take")):
+                terr(st.value, "foreign_move", "a record replacement needs a constructor, call result or move")
             s.check_inout_context(st, st.value)
             if is_array(v[0]) or v[0] == STR:
                 s.array_source(st, st.value, scope)
@@ -1284,13 +1301,13 @@ class Checker:
                         s.map_read_paths.append(read_path)
                 if a.ctor == "Some" and (mutable_map or map_view):
                     operand = st.scrutinee.args[0]
-                    base, _ = field_place(operand.expr if mutable_map else operand)
+                    base, path = field_place(operand.expr if mutable_map else operand)
                     borrows = s.map_borrows if mutable_map else s.match_paths if nested_map_path else s.active_roots
                     for b, bt in zip(a.binders, ftypes):
                         sc[b] = (bt, False, "map_mut" if mutable_map else "param")
                     read_root = not mutable_map and not nested_map_path and isinstance(base, Var)
                     if isinstance(base, Var):
-                        borrows.append((base.name, field_place(operand.expr)[1]) if mutable_map
+                        borrows.append((base.name, path, a.binders) if mutable_map
                                        else nested_map_path or base.name)
                     if read_root:
                         s.map_read_roots.append(base.name)
@@ -1676,18 +1693,20 @@ class Checker:
         its root that is disjoint from every borrowed path of that root (R-6e-8)"""
         if path is None:
             path = s.field_paths.get(id(node))
-        if any(root == name and (path is None or _paths_overlap(path, held)) for root, held in s.map_borrows):
+        if any(root == name and (path is None or _paths_overlap(path, held)) for root, held, _ in s.map_borrows):
             terr(node, "recursive_borrow", "cannot use %s inside a mutable collection Some arm" % name)
         if name not in scope:
             terr(node, "unknown_name", "unknown variable %s" % name)
         return scope[name]
 
     # ---- expressions ----
-    def expect(s, e, ty, scope, contract=False, op=None, *, borrow_element=False):
+    def expect(s, e, ty, scope, contract=False, op=None, *, borrow_element=False, borrow_vector=False):
         """op: what the operand is used for (arithmetic, comparison, ...) when the operation needs a concrete
         type: an abstract type parameter there is a generic_operation error rather than a plain mismatch"""
         t = s.expr(e, scope, contract, borrow_element=borrow_element)
         if ty == STR and t == STRING and borrow_element and getattr(e, "map_iter_view", False):
+            return t
+        if borrow_vector and isinstance(field_place(e)[0], Var) and is_vec_slice_arg(t, ty):
             return t
         if t != ty:
             if op is not None and t.owner is not None:
@@ -2048,7 +2067,9 @@ class Checker:
                 if f is CATALOG.get(n) and n in BORROWED_MAP_KEY and want == STRING:
                     s.check_text_key(arg, scope, c)
                 else:
-                    s.expect(arg, want, scope, c, borrow_element=f is not CATALOG.get(n) and want == STR)
+                    user_call = f is not CATALOG.get(n)
+                    s.expect(arg, want, scope, c, borrow_element=user_call and want == STR,
+                             borrow_vector=user_call and f.foreign is None and not p.take)
                 if p.take and getattr(arg, "map_iter_view", False):
                     s.own(arg)
                 continue
@@ -2443,7 +2464,8 @@ class Checker:
                 if catalog and n in BORROWED_MAP_KEY and want == STRING:
                     s.check_text_key(arg, scope, c)
                 else:
-                    s.expect(arg, want, scope, c, borrow_element=not catalog and want == STR)
+                    s.expect(arg, want, scope, c, borrow_element=not catalog and want == STR,
+                             borrow_vector=not catalog and f.foreign is None and not p.take)
                 if p.take and getattr(arg, "map_iter_view", False):
                     s.own(arg)
         if catalog:
