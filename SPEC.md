@@ -1629,9 +1629,12 @@ the hint keep none. The Python and Rust compilers use the same pass, so their ou
   nothing.
 - Call sites are counted textually over the whole output: a fn name followed by `(`, not after `.` and not in its own
   `fn name(` header.
-- A non-recursive fn gets `#[inline(always)]` when `incl <= 8`, when it has at most one call site, or when
-  `incl * (call sites - 1) <= 1500` (the extra copies inlining adds). Every other fn keeps `#[inline]` and is left to
-  rustc's heuristics.
+- A non-recursive fn gets `#[inline(always)]` when `incl <= 8`, when it has exactly one call site, or when it has at
+  least two call sites and `incl * (call sites - 1) <= 1500` (the extra copies inlining adds). A fn with zero call
+  sites in the output (any visibility; in practice a host entry such as `pub fn m11_load`, called only from the
+  harness, whose calls the pass does not see) is therefore promoted only by `incl <= 8`. Every other fn keeps `#[inline]` and is left to rustc's heuristics. Why: host entries called from
+  harness closures would otherwise be copied into every closure; measured on M11 in `docs/L3_RESTRUCTURE_SPEC.md`
+  Appendix P33: `__text` -16%, rustc CPU 4.05-4.08 -> 2.84-2.85 s (about -30%); some cells 3-6% slower than base, recorded as debt D110 and D113.
 
 Measured on the request-budget milestones (`bench/l3/budget/M8_NOTES.md`, "Inline policy"). This policy kept the M8
 gains of `#[inline(always)]` on every fn and improved M7, M9, M4 and M11 too. Always-on-every-fn grew rustc time 3-4x
@@ -1639,7 +1642,10 @@ and binaries by up to 38%. Size thresholds and single-call-site rules alone did 
 backend is unchanged.
 
 Tests: [accept](tests/spec/r7_3_inline.pruv) (a small fn called once gets `#[inline(always)]`),
-[reject](tests/spec/r7_3_inline_recursive.pruv) (a recursive fn keeps `#[inline]`).
+[reject](tests/spec/r7_3_inline_recursive.pruv) (a recursive fn keeps `#[inline]`),
+[accept](tests/spec/r7_3_inline_entry.pruv) (a large uncalled `pub fn` keeps `#[inline]`, a small one gets
+`#[inline(always)]`),
+[reject](tests/spec/r7_3_inline_entry_called.pruv) (calling the same large `pub fn` from `main` goes to its `__pruv_body`, so the wrapper keeps `#[inline]` and the body, with two sites, gets always).
 
 A source function attribute (section 6f) takes precedence over the automatic R-7-3 rule. The Rust body and checked
 wrapper use the explicit `#[inline]` or `#[inline(always)]` directive, or `#[cold]` followed by `#[inline(never)]`

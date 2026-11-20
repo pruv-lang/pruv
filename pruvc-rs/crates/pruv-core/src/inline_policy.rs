@@ -1,8 +1,10 @@
 // Inline policy (SPEC "Inline policy"; Python `inline_policy`): a pass over the finished Rust text, so the Python and Rust
 // compilers decide the same way by construction. A non-recursive `#[inline]` fn (one that cannot reach itself through
 // calls) gets `#[inline(always)]` when its inclusive size (own body lines plus, once per call, the inclusive size of
-// each callee that gets always) is at most INLINE_SMALL, when it has at most one call site, or when the copies it adds
-// beyond one, incl * (call sites - 1), fit INLINE_BUDGET. The rest keep `#[inline]` and rustc's own heuristics.
+// each callee that gets always) is at most INLINE_SMALL, when it has exactly one call site, or when it has two or more and
+// the copies it adds beyond one, incl * (call sites - 1), fit INLINE_BUDGET. A fn with zero call sites (a host entry
+// called only from the harness closures) is not promoted by the call-site rules, so it gets always only at
+// incl <= INLINE_SMALL. The rest keep `#[inline]` and rustc's own heuristics.
 use crate::shared_tables::inline_policy::{INLINE_BUDGET, INLINE_SMALL}; // shared with pruvc (pruvc/data/inline_policy.json, tools/gen_shared.py)
 use std::collections::{BTreeMap, HashMap};
 
@@ -156,7 +158,7 @@ pub(crate) fn inline_policy(text: String) -> String {
                     _ => nm,
                 };
                 let calls = index.get(nm).and_then(|k| sites.get(k)).copied().unwrap_or(0);
-                always[v] = tot <= INLINE_SMALL || calls <= 1 || tot.saturating_mul(calls - 1) <= INLINE_BUDGET;
+                always[v] = tot <= INLINE_SMALL || calls == 1 || (calls >= 2 && tot.saturating_mul(calls - 1) <= INLINE_BUDGET);
             }
         }
     }
@@ -224,5 +226,8 @@ mod tests {
         assert!(!inline_case(9, 300), "9 lines reject");
         assert!(inline_case(1500, 2), "INLINE_BUDGET 1500 accepts");
         assert!(!inline_case(1501, 2), "1501 rejects");
+        assert!(inline_case(8, 0), "0 sites, 8 lines accepts (INLINE_SMALL)");
+        assert!(!inline_case(9, 0), "0 sites, 9 lines rejects (host entry)");
+        assert!(inline_case(9, 1), "1 site still accepts");
     }
 }

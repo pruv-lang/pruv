@@ -1,0 +1,19 @@
+// spec: R-7-3 accept
+// A host entry that nothing in the program calls has zero call sites: a large one keeps #[inline], a small one gets always.
+pub fn big_entry(x: i64) -> i64
+  requires 0 <= x
+{
+  let a0: i64 = 0; let a1: i64 = 1; let a2: i64 = 2; let a3: i64 = 3;
+  let a4: i64 = 4; let a5: i64 = 5; let a6: i64 = 6; let a7: i64 = 7;
+  let a8: i64 = 8; let a9: i64 = 9; let a10: i64 = 10; let a11: i64 = 11;
+  let a12: i64 = 12; let a13: i64 = 13; let a14: i64 = 14; let a15: i64 = 15;
+  return x;
+}
+
+pub fn tiny_entry(x: i64) -> i64 {
+  return x;
+}
+
+pub fn main() -> () ! io {
+  print(1);
+}

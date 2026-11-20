@@ -4,8 +4,10 @@ from shared_data import load
 # Inline policy (SPEC "Inline policy"): a pass over the finished Rust text, so the Python and Rust
 # compilers decide the same way by construction. A non-recursive `#[inline]` fn (one that cannot reach itself through
 # calls) gets `#[inline(always)]` when its inclusive size (own body lines plus, once per call, the inclusive size of
-# each callee that gets always) is at most INLINE_SMALL, when it has at most one call site, or when the copies it adds
-# beyond one, incl * (call sites - 1), fit INLINE_BUDGET. The rest keep `#[inline]` and rustc's own heuristics.
+# each callee that gets always) is at most INLINE_SMALL, when it has exactly one call site, or when it has two or more and
+# the copies it adds beyond one, incl * (call sites - 1), fit INLINE_BUDGET. A fn with zero call sites (a host entry
+# called only from the harness closures) is not promoted by the call-site rules, so it gets always only at
+# incl <= INLINE_SMALL. The rest keep `#[inline]` and rustc's own heuristics.
 _INLINE = load("inline_policy")   # shared with pruvc-rs (pruvc/data/inline_policy.json, tools/gen_shared.py)
 INLINE_SMALL = _INLINE["INLINE_SMALL"]
 INLINE_BUDGET = _INLINE["INLINE_BUDGET"]
@@ -130,7 +132,7 @@ def inline_policy(text):
                 if nm.endswith("__pruv_fp") and nm[:-len("__pruv_fp")] in index and nm + "b" in index:
                     nm = nm[:-len("__pruv_fp")]
                 calls = sites.get(nm, 0)
-                always[v] = tot <= INLINE_SMALL or calls <= 1 or tot * (calls - 1) <= INLINE_BUDGET
+                always[v] = tot <= INLINE_SMALL or calls == 1 or (calls >= 2 and tot * (calls - 1) <= INLINE_BUDGET)
     for v, f in enumerate(fns):
         if always[v]:
             lines[f[0]] = "#[inline(always)]"
