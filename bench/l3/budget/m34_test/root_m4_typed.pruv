@@ -314,6 +314,33 @@ fn run_set(inout clock: Clock, key: str, waiting: i64) -> i64 ! alloc
   return 1;
 }
 
+fn compact_runs(inout clock: Clock) -> () ! alloc {
+  if len(clock.runs) == 0 {
+    vec_clear::<String>(inout clock.run_order);
+  }
+  let n: i64 = len(clock.run_order);
+  if n <= 2 * len(clock.runs) + 16 { return; }
+  let mut compacted: Vec<String> = vec_new::<String>();
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(clock.run_order) && len(compacted) <= i
+    decreases n - i
+  {
+    let key: String = owned_text(vec_get::<String>(clock.run_order, i));
+    match map_get_mut::<String, i64>(inout clock.runs, key) {
+      Some(entry) => {
+        if *entry >= 0 && *entry / 2 == i {
+          *entry = 2 * len(compacted) + *entry % 2;
+          compacted = vec_push::<String>(move compacted, move key);
+        }
+      }
+      None => {}
+    }
+    i = i + 1;
+  }
+  clock.run_order = move compacted;
+}
+
 fn run_change(inout st: St, code: i64, key: str, run: str, waiting: i64) -> Reply ! alloc {
   if code == 9 && waiting != 0 && waiting != 1 { return empty_reply(2); }
   let mut value: i64 = 0;
@@ -322,7 +349,10 @@ fn run_change(inout st: St, code: i64, key: str, run: str, waiting: i64) -> Repl
       if code == 9 {
         value = run_set(inout clock, run, waiting);
       } else {
-        if map_remove::<String, i64>(inout clock.runs, run) { value = 1; }
+        if map_remove::<String, i64>(inout clock.runs, run) {
+          compact_runs(inout clock);
+          value = 1;
+        }
       }
     }
     None => { if code == 9 { value = 2; } }
@@ -331,6 +361,7 @@ fn run_change(inout st: St, code: i64, key: str, run: str, waiting: i64) -> Repl
   return one(value);
 }
 
+// Activities are append-only until their entire turn is removed.
 fn activity_note(inout tool: Tool, key: str) -> i64 ! alloc {
   let mut seen: bool = false;
   match map_get::<String, i64>(tool.activities, key) {
@@ -381,12 +412,101 @@ fn removed(value: bool) -> Reply ! alloc {
   return one(0);
 }
 
+fn compact_sessions(inout st: St) -> () ! alloc {
+  if len(st.sessions) == 0 {
+    vec_clear::<String>(inout st.session_order);
+  }
+  let n: i64 = len(st.session_order);
+  if n <= 2 * len(st.sessions) + 16 { return; }
+  let mut compacted: Vec<String> = vec_new::<String>();
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(st.session_order) && len(compacted) <= i
+    decreases n - i
+  {
+    let key: String = owned_text(vec_get::<String>(st.session_order, i));
+    match map_get_mut::<String, Sess>(inout st.sessions, key) {
+      Some(entry) => {
+        if entry.ordinal == i {
+          entry.ordinal = len(compacted);
+          compacted = vec_push::<String>(move compacted, move key);
+        }
+      }
+      None => {}
+    }
+    i = i + 1;
+  }
+  st.session_order = move compacted;
+}
+
+fn compact_clocks(inout st: St) -> () ! alloc {
+  if len(st.clocks) == 0 {
+    vec_clear::<String>(inout st.clock_order);
+  }
+  let n: i64 = len(st.clock_order);
+  if n <= 2 * len(st.clocks) + 16 { return; }
+  let mut compacted: Vec<String> = vec_new::<String>();
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(st.clock_order) && len(compacted) <= i
+    decreases n - i
+  {
+    let key: String = owned_text(vec_get::<String>(st.clock_order, i));
+    match map_get_mut::<String, Clock>(inout st.clocks, key) {
+      Some(entry) => {
+        if entry.ordinal == i {
+          entry.ordinal = len(compacted);
+          compacted = vec_push::<String>(move compacted, move key);
+        }
+      }
+      None => {}
+    }
+    i = i + 1;
+  }
+  st.clock_order = move compacted;
+}
+
+fn compact_turns(inout st: St) -> () ! alloc {
+  if len(st.tools) == 0 {
+    vec_clear::<String>(inout st.turn_order);
+  }
+  let n: i64 = len(st.turn_order);
+  if n <= 2 * len(st.tools) + 16 { return; }
+  let mut compacted: Vec<String> = vec_new::<String>();
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(st.turn_order) && len(compacted) <= i
+    decreases n - i
+  {
+    let key: String = owned_text(vec_get::<String>(st.turn_order, i));
+    match map_get_mut::<String, Tool>(inout st.tools, key) {
+      Some(entry) => {
+        if entry.ordinal == i {
+          entry.ordinal = len(compacted);
+          compacted = vec_push::<String>(move compacted, move key);
+        }
+      }
+      None => {}
+    }
+    i = i + 1;
+  }
+  st.turn_order = move compacted;
+}
+
 pub fn m4_op(inout st: St, code: i64, key: str, other: str, data: [i64]) -> Reply ! alloc {
   if code == 1 { return session_put(inout st, key, data); }
   if code == 2 { return session_get(st, key); }
-  if code == 3 { return removed(map_remove::<String, Sess>(inout st.sessions, key)); }
+  if code == 3 {
+    let found: bool = map_remove::<String, Sess>(inout st.sessions, key);
+    if found { compact_sessions(inout st); }
+    return removed(found);
+  }
   if code == 5 { return clock_put(inout st, key, other); }
-  if code == 6 { return removed(map_remove::<String, Clock>(inout st.clocks, key)); }
+  if code == 6 {
+    let found: bool = map_remove::<String, Clock>(inout st.clocks, key);
+    if found { compact_clocks(inout st); }
+    return removed(found);
+  }
   if code == 7 && len(data) == 4 {
     return clock_set(inout st, key, data[0], data[1], data[2], data[3]);
   }
@@ -394,7 +514,11 @@ pub fn m4_op(inout st: St, code: i64, key: str, other: str, data: [i64]) -> Repl
   if code == 9 && len(data) == 1 { return run_change(inout st, code, key, other, data[0]); }
   if code == 10 { return run_change(inout st, code, key, other, 0); }
   if code == 13 { return tool_note(inout st, key, other); }
-  if code == 14 { return removed(map_remove::<String, Tool>(inout st.tools, key)); }
+  if code == 14 {
+    let found: bool = map_remove::<String, Tool>(inout st.tools, key);
+    if found { compact_turns(inout st); }
+    return removed(found);
+  }
   if code == 15 || code == 16 { return tool_read(st, code, key); }
   let mut reply: Reply = empty_reply(0);
   if code == 4 { emit_sessions(inout reply, st, false); }

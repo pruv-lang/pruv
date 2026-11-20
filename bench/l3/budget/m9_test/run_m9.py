@@ -5,6 +5,7 @@
   python3 bench/l3/budget/m9_test/run_m9.py derive [--family q3|q4] [--cases F]
   python3 bench/l3/budget/m9_test/run_m9.py dc [--count N] [--seed S]
   python3 bench/l3/budget/m9_test/run_m9.py perf [--typed [--py]] [--pruvc PATH | --gen GEN.rs] [--rounds N]
+  python3 bench/l3/budget/m9_test/run_m9.py churn --typed [--py]
 
 q: converts each Q3 case (work/m9/cases.jsonl) into the driver program, runs it, and compares with the oracle output
 (work/m9/oracle.jsonl). Compared: the timer event sequence (set token + requested delay, clear token, fire token,
@@ -94,8 +95,11 @@ def build(args):
         f.write('#![allow(dead_code, unused_imports, unused_variables, unused_mut)]\n#[path = "gen.rs"] mod sol;\n')
         driver = json.dumps(os.path.join(HERE, f"driver_m9{suffix}.rs"), ensure_ascii=False)
         f.write(f"include!({driver});\n")
-    exe = os.path.join(work, "driver_m9")
+    churn = typed and getattr(args, "cmd", None) == "churn"
+    exe = os.path.join(work, "churn_m9" if churn else "driver_m9")
     cfg = ["--cfg", "m9_typed"] if typed else []
+    if churn:
+        cfg.append("--test")
     c = subprocess.run([rustc(), *cfg, "-C", "opt-level=3", "--edition", "2021", "-o", exe, main], capture_output=True,
                        text=True)
     if c.returncode != 0:
@@ -439,6 +443,10 @@ def cmd_q(args):
     return check_q(args, build(args))
 
 
+def cmd_churn(args):
+    return subprocess.run([build(args), "--exact", "churn_order"]).returncode
+
+
 def check_q(args, exe, report=print):
     cases = [json.loads(l) for l in open(args.cases)]
     oracle = {}
@@ -754,7 +762,7 @@ def cmd_perf(args):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["q", "perf", "derive", "dc"])
+    ap.add_argument("cmd", choices=["q", "perf", "derive", "dc", "churn"])
     ap.add_argument("--pruvc")
     ap.add_argument("--typed", action="store_true", help="use the resident typed state lane")
     ap.add_argument("--py", action="store_true", help="compile the typed lane with the Python Rust backend")
@@ -769,8 +777,10 @@ def main():
     ap.add_argument("--rounds", type=int, default=5)
     ap.add_argument("--reps", type=int, default=200000)
     a = ap.parse_args()
-    if a.typed and (a.cmd not in ("q", "perf") or a.budlib):
-        ap.error("--typed supports q and perf without --budlib")
+    if a.typed and (a.cmd not in ("q", "perf", "churn") or a.budlib):
+        ap.error("--typed supports q, perf and churn without --budlib")
+    if a.cmd == "churn" and not a.typed:
+        ap.error("churn requires --typed")
     if a.py and (not a.typed or a.pruvc or a.gen):
         ap.error("--py requires --typed without --pruvc or --gen")
     fixtures = WORK
@@ -781,7 +791,7 @@ def main():
         a.cases = os.path.join(fixtures, filename)
     if a.oracle is None:
         a.oracle = os.path.join(fixtures, "oracle.jsonl")
-    sys.exit({"q": cmd_q, "perf": cmd_perf, "derive": cmd_derive, "dc": cmd_dc}[a.cmd](a))
+    sys.exit({"q": cmd_q, "perf": cmd_perf, "derive": cmd_derive, "dc": cmd_dc, "churn": cmd_churn}[a.cmd](a))
 
 
 if __name__ == "__main__":

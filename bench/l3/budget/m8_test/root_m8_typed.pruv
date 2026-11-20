@@ -283,8 +283,36 @@ pub fn t_tool(inout st: St, sid: str, bid: str, key: str, activity: str) -> i64 
   return 0;
 }
 
-pub fn t_forget(inout st: St, key: str) -> i64 {
+fn compact_turn_order(inout st: St) -> () ! alloc {
+  let n: i64 = len(st.turn_order);
+  let mut order: Vec<String> = vec_new::<String>();
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(st.turn_order) && len(order) <= i
+    decreases n - i
+  {
+    let key: String = owned_text(vec_get::<String>(st.turn_order, i));
+    match map_get_mut::<String, Turn>(inout st.turns, key) {
+      Some(turn) => {
+        if turn.ordinal == i {
+          turn.ordinal = len(order);
+          order = vec_push::<String>(move order, move key);
+        }
+      }
+      None => {}
+    }
+    i = i + 1;
+  }
+  st.turn_order = move order;
+}
+
+pub fn t_forget(inout st: St, key: str) -> i64 ! alloc {
   let removed: bool = map_remove::<String, Turn>(inout st.turns, key);
+  if removed {
+    let live: i64 = len(st.turns);
+    if live == 0 { vec_clear::<String>(inout st.turn_order); }
+    if len(st.turn_order) > 2 * live + 16 { compact_turn_order(inout st); }
+  }
   return 0;
 }
 

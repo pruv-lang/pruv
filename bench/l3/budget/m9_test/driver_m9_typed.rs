@@ -4,6 +4,37 @@ include!("driver_m9.rs");
 // Encode each UTF-16 code unit independently, including lone surrogates.
 const SURROGATE_OFFSET: u32 = 0x10000 - 0xd800;
 
+#[test]
+fn churn_order() {
+    let mut st = World::<false>::new_state();
+    assert_eq!(sol::t_put(&mut st, "main", "keep", 0, true, 0, 0, 0, 0), 0);
+    assert_eq!(sol::t_put(&mut st, "other", "drop", 0, true, 0, 0, 0, 0), 0);
+    let call = |st: &mut sol::St, code, sid, bid, run, waiting| {
+        assert_eq!(sol::t_call(st, code, sid, bid, run, waiting, 0).status, 0);
+    };
+    // Leave a hole before both surviving ordinals so compaction must rewrite them.
+    call(&mut st, 1, "other", "drop", "b", false);
+    call(&mut st, 1, "main", "keep", "b", false);
+    call(&mut st, 1, "main", "keep", "a", false);
+    call(&mut st, 2, "main", "keep", "a", true);
+    for _ in 0..1_000 {
+        call(&mut st, 3, "main", "keep", "b", false);
+        call(&mut st, 5, "other", "drop", "", false);
+        let clock = &st.clocks["keep"];
+        assert!(clock.order.len() <= 2 * clock.runs.len() + 16);
+        assert!(st.clock_order.len() <= 2 * st.clocks.len() + 16);
+        assert_eq!(clock.runs["a"] % 2, 1);
+        assert_eq!(clock.order[(clock.runs["a"] / 2) as usize], "a");
+        assert_eq!(st.clock_order[clock.ordinal as usize], "keep");
+        assert_eq!(sol::t_i2(&mut st), 0);
+        call(&mut st, 1, "main", "keep", "b", false);
+        call(&mut st, 1, "other", "drop", "b", false);
+    }
+    let mut obs = sol::t_observe(&mut st);
+    assert_eq!(obs.keys.drain(4..).map(|key| key.s).collect::<Vec<_>>(),
+               ["keep", "main", "a", "b", "drop", "other", "b"]);
+}
+
 fn take_typed_key(input: &mut &[i64], key: &mut String) -> Option<()> {
     let (&n, rest) = input.split_first()?;
     if !(0..=1 << 30).contains(&n) {

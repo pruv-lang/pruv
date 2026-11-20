@@ -181,13 +181,44 @@ fn perf(axis: &str, n: usize, reps: usize) {
     println!("axis={axis} n={n} core_ns_per_op={:.1} ops={nops}", total as f64 / nops as f64);
 }
 
+fn churn() {
+    let mut st = empty_state();
+    let keep = op_kk(13, "t0", "a0");
+    let create = op_kk(13, "x", "y");
+    let delete = op_k(14, "x");
+    let apply = |st: &mut sol::St, op: &[i64], expected| {
+        let (_, reply) = exec(st, op).expect("churn: invalid op");
+        assert_eq!(reply.status, 0);
+        assert_eq!(reply.words, [expected]);
+    };
+    apply(&mut st, &keep, 1);
+    let mut peak = 0;
+    for _ in 0..200_000 {
+        apply(&mut st, &keep, 0);
+        apply(&mut st, &create, 1);
+        apply(&mut st, &delete, 1);
+        assert_eq!(st.tools.len(), 1);
+        assert_eq!(st.turn_order.first().map(String::as_str), Some("t0"));
+        let slots = st.turn_order.len();
+        assert!(slots <= 2 * st.tools.len() + 16);
+        peak = peak.max(slots);
+    }
+    println!("m4typed: churn 200000 deletions, live=1 peak={peak} final={} bound=18",
+             st.turn_order.len());
+}
+
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("perf") {
         perf(&args[2], args[3].parse().unwrap(), args[4].parse().unwrap());
         return Ok(());
     }
-    assert_eq!(args.get(1).map(String::as_str), Some("q"), "usage: driver_m4_typed q | perf AXIS N REPS");
+    if args.get(1).map(String::as_str) == Some("churn") {
+        churn();
+        return Ok(());
+    }
+    assert_eq!(args.get(1).map(String::as_str), Some("q"),
+               "usage: driver_m4_typed q | churn | perf AXIS N REPS");
     let mut out = io::BufWriter::new(io::stdout().lock());
     let mut state = None;
     for line in io::stdin().lock().lines() {

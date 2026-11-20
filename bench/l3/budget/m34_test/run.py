@@ -464,6 +464,10 @@ def cmd_m4(args, tag="m4"):
     print("%s: %d/%d pass (seed %d)" % (tag, ok_progs, len(progs), args.seed))
     if typed:
         print("%s: live entry checks on stats lines: %d/%d ok" % (tag, stats_checks - stats_bad, stats_checks))
+        churn = run([exe, "churn"])
+        if churn.returncode != 0:
+            raise ToolError("typed churn failed:\n%s" % tail(churn))
+        print(churn.stdout.strip())
     else:
         print("%s: grows total %d across %d/%d programs" % (tag, grows_total, with_grow, len(progs)))
         print("%s: size formula / header-bound checks on stats lines: %d/%d ok" % (tag, stats_checks - stats_bad, stats_checks))

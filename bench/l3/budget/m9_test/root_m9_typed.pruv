@@ -117,6 +117,30 @@ fn bump(inout c: Clock, delta: i64) -> () {
   }
 }
 
+fn compact_runs(inout c: Clock) -> () ! alloc {
+  let n: i64 = len(c.order);
+  if n <= 2 * len(c.runs) + 16 { return; }
+  let mut order: Vec<String> = vec_new::<String>();
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(c.order) && len(order) <= i && n <= 1099511627776
+    decreases n - i
+  {
+    let key: String = owned(vec_get::<String>(c.order, i));
+    match map_get_mut::<String, i64>(inout c.runs, key) {
+      Some(entry) => {
+        if *entry >= 0 && *entry / 2 == i {
+          *entry = 2 * len(order) + (*entry % 2);
+          order = vec_push::<String>(move order, move key);
+        }
+      }
+      None => {}
+    }
+    i = i + 1;
+  }
+  c.order = move order;
+}
+
 fn change_run(inout c: Clock, code: i64, key: str, waiting: bool) -> bool ! alloc {
   let mut delta: i64 = 0;
   let mut changed: bool = false;
@@ -145,6 +169,7 @@ fn change_run(inout c: Clock, code: i64, key: str, waiting: bool) -> bool ! allo
   if code == 3 && found {
     let removed: bool = map_remove::<String, i64>(inout c.runs, key);
     if len(c.runs) == 0 { vec_clear::<String>(inout c.order); }
+    if removed { compact_runs(inout c); }
   }
   if code == 1 && !found {
     let ordinal: i64 = len(c.order);
@@ -162,6 +187,30 @@ fn current(st: St, sid: str, bid: str) -> bool {
     Some(b) => { return b.state >= 0 && string_eq(b.id, bid); }
     None => { return false; }
   }
+}
+
+fn compact_clocks(inout st: St) -> () ! alloc {
+  let n: i64 = len(st.clock_order);
+  if n <= 2 * len(st.clocks) + 16 { return; }
+  let mut order: Vec<String> = vec_new::<String>();
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(st.clock_order) && len(order) <= i && n <= 1099511627776
+    decreases n - i
+  {
+    let key: String = owned(vec_get::<String>(st.clock_order, i));
+    match map_get_mut::<String, Clock>(inout st.clocks, key) {
+      Some(entry) => {
+        if entry.ordinal == i {
+          entry.ordinal = len(order);
+          order = vec_push::<String>(move order, move key);
+        }
+      }
+      None => {}
+    }
+    i = i + 1;
+  }
+  st.clock_order = move order;
 }
 
 pub fn t_call(inout st: St, code: i64, sid: str, bid: str, run: str,
@@ -228,6 +277,7 @@ pub fn t_call(inout st: St, code: i64, sid: str, bid: str, run: str,
   if code == 5 || code == 6 {
     let removed: bool = map_remove::<String, Clock>(inout st.clocks, bid);
     if len(st.clocks) == 0 { vec_clear::<String>(inout st.clock_order); }
+    if removed { compact_clocks(inout st); }
   }
   return r;
 }

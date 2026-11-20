@@ -4,6 +4,7 @@
   python3 bench/l3/budget/m8_test/run_m8.py q    [--pruvc PATH | --gen GEN.rs] [--cases F] [--oracle F] [--hand16 | --hand NAME]
   python3 bench/l3/budget/m8_test/run_m8.py q --typed [--py] [--cases F] [--oracle F]
   python3 bench/l3/budget/m8_test/run_m8.py perf --typed [--py] [--sizes 100,500 | --profile S|M|SM] [--reps N]
+  python3 bench/l3/budget/m8_test/run_m8.py churn --typed [--py]
   python3 bench/l3/budget/m8_test/run_m8.py derive  (writes work/m8/cases_acct.jsonl + oracle_acct.jsonl)
   python3 bench/l3/budget/m8_test/run_m8.py perf [--pruvc PATH | --gen GEN.rs] [--rounds N] [--reps N] [--no-instr]
                                                  [--sizes 100,500 | --profile S|M|SM]
@@ -949,11 +950,16 @@ def cmd_perf_typed(args):
     return 0
 
 
+def cmd_churn_typed(args):
+    exe = build(args, typed=True)
+    return subprocess.run([exe, "churn"], cwd=HERE).returncode
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["q", "perf", "derive", "controls"])
+    ap.add_argument("cmd", choices=["q", "perf", "churn", "derive", "controls"])
     ap.add_argument("--fixtures", help="q: run these fixture groups (e.g. C,D) through the oracle instead of --cases")
-    ap.add_argument("--typed", action="store_true", help="q or perf: use resident typed state")
+    ap.add_argument("--typed", action="store_true", help="q, perf or churn: use resident typed state")
     ap.add_argument("--py", action="store_true", help="--typed: use the Python compiler Rust backend")
     ap.add_argument("--pruvc", default=PRUVC_DEFAULT)
     ap.add_argument("--gen")
@@ -974,8 +980,11 @@ def main():
     a = ap.parse_args()
     if a.py and not a.typed:
         ap.error("--py requires --typed")
-    if a.typed and (a.cmd not in ("q", "perf") or a.hand16 or a.hand):
-        ap.error("--typed requires q or perf and cannot use --hand or --hand16")
+    typed_dispatch = {"q": cmd_q, "perf": cmd_perf_typed, "churn": cmd_churn_typed}
+    if a.cmd == "churn" and not a.typed:
+        ap.error("churn requires --typed")
+    if a.typed and (a.cmd not in typed_dispatch or a.hand16 or a.hand):
+        ap.error("--typed requires q, perf or churn and cannot use --hand or --hand16")
     dispatch = {"q": cmd_q, "perf": cmd_perf, "derive": cmd_derive, "controls": cmd_controls}
     if a.typed:
         global BUILD
@@ -984,7 +993,7 @@ def main():
             env_tmp = os.environ.get("TMPDIR")
             os.environ["TMPDIR"] = build_dir
             try:
-                rc = (cmd_perf_typed if a.cmd == "perf" else cmd_q)(a)
+                rc = typed_dispatch[a.cmd](a)
             finally:
                 if env_tmp is None:
                     os.environ.pop("TMPDIR")

@@ -428,10 +428,54 @@ fn run_perf(args: &[String]) {
     }
 }
 
+fn run_churn() {
+    let mut w = World::new();
+    let st = &mut w.st;
+    assert_eq!(sol::t_put(st, "session", "budget", &[0; 14]), 0);
+    // Leave a stale slot before the retained turn so compaction must renumber it.
+    assert_eq!(sol::t_tool(st, "session", "budget", "temp", "first"), 0);
+    assert_eq!(sol::t_tool(st, "session", "budget", "keep", "first"), 0);
+    assert_eq!(sol::t_tool(st, "session", "budget", "keep", "second"), 0);
+    assert_eq!(sol::t_forget(st, "temp"), 0);
+
+    let mut max_turn_order = 0;
+    let mut max_activity_order = 0;
+    for _ in 0..10_000 {
+        for activity in ["first", "second", "third"] {
+            assert_eq!(sol::t_tool(st, "session", "budget", "temp", activity), 0);
+        }
+        let temp = &st.turns["temp"];
+        assert_eq!(temp.activity_order, ["first", "second", "third"]);
+        assert!(temp.activity_order.len() <= 2 * temp.activities.len() + 16);
+        max_activity_order = max_activity_order.max(temp.activity_order.len());
+        assert_eq!(sol::t_forget(st, "temp"), 0);
+
+        assert_eq!(st.turns.len(), 1);
+        assert!(st.turn_order.len() <= 2 * st.turns.len() + 16);
+        max_turn_order = max_turn_order.max(st.turn_order.len());
+        let keep = &st.turns["keep"];
+        assert!(keep.activity_order.len() <= 2 * keep.activities.len() + 16);
+        assert!(st.session_order.len() <= 2 * st.sessions.len() + 16);
+    }
+
+    assert_eq!(st.turns["keep"].ordinal, 0);
+    // A reinserted key must appear at the end even when its stale slots survive.
+    assert_eq!(sol::t_tool(st, "session", "budget", "temp", "third"), 0);
+    let reply = sol::t_observe(st);
+    let keys: Vec<_> = reply.keys.iter().map(|key| key.s.as_str()).collect();
+    assert_eq!(keys, ["session", "budget", "keep", "first", "second", "temp", "third"]);
+    assert_eq!(sol::t_forget(st, "keep"), 0);
+    assert_eq!(sol::t_forget(st, "temp"), 0);
+    assert!(st.turn_order.is_empty());
+    println!("churn: 10000 cycles, max turn slots {max_turn_order}/18 after forget, max activity slots {max_activity_order}, session slots {}", st.session_order.len());
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 && args[1] == "perf" {
         run_perf(&args[2..]);
+    } else if args.get(1).map(String::as_str) == Some("churn") {
+        run_churn();
     } else {
         run_q();
     }
