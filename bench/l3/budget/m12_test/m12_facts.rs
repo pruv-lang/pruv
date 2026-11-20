@@ -141,17 +141,49 @@ pub fn decode_key(words: &[i64]) -> String {
     packed_text(words).unwrap_or_default()
 }
 
-pub fn encode_words(words: &[i64]) -> String {
-    words.iter().flat_map(|&word| [48, 32, 16, 0].map(move |shift| unit_char((word >> shift) as u16))).collect()
+pub fn v_units(words: &[i64], at: i64, count: i64) -> String {
+    let (at, count) = (at as usize, count as usize);
+    words.get(at..at.saturating_add(count)).unwrap_or_default()
+        .iter().map(|&unit| unit_char(unit as u16)).collect()
 }
 
-pub fn decode_words(text: &str) -> Vec<i64> {
-    let mut units = text_units(text);
-    std::iter::from_fn(|| {
-        let word = units.next()? as i64;
-        Some([units.next()?, units.next()?, units.next()?]
-            .into_iter().fold(word, |word, unit| (word << 16) | i64::from(unit)))
-    }).collect()
+// The Pruv JB admission check has already validated the WTF-8 text span.
+pub fn j_units(packet: &[u8], at: i64, count: i64) -> String {
+    let (at, count) = (at as usize, count as usize);
+    let bytes = packet.get(at..at.saturating_add(count)).unwrap_or_default();
+    if bytes.is_ascii() {
+        return String::from_utf8(bytes.to_vec()).expect("ASCII");
+    }
+    let mut text = String::with_capacity(count);
+    let mut i = 0;
+    while i < bytes.len() {
+        let lead = bytes[i];
+        let (width, mask) = match lead {
+            0..=127 => (1, 127),
+            192..=223 => (2, 31),
+            224..=239 => (3, 15),
+            _ => (4, 7),
+        };
+        let Some(seq) = bytes.get(i..i + width) else { break; };
+        let cp = seq[1..].iter().fold(u32::from(lead & mask), |cp, &b| (cp << 6) | u32::from(b & 63));
+        if cp < 0x10000 {
+            text.push(unit_char(cp as u16));
+        } else {
+            let cp = cp - 0x10000;
+            text.push(unit_char((0xd800 + (cp >> 10)) as u16));
+            text.push(unit_char((0xdc00 + (cp & 1023)) as u16));
+        }
+        i += width;
+    }
+    text
+}
+
+pub fn wire_units(text: &str) -> Vec<i64> {
+    let mut words = Vec::with_capacity(text.len() + 1);
+    words.push(0);
+    words.extend(text_units(text).map(i64::from));
+    words[0] = (words.len() - 1) as i64;
+    words
 }
 
 pub fn encode_key(text: &str) -> Vec<i64> {

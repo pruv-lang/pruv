@@ -50,13 +50,15 @@ fn open_budget(inout b: crate::bud_tstate::Budget, origin: i64, size: i64,
                unit: [i64], uuid: str, now: i64, carry: bool) -> () ! alloc
   requires len(unit) == 6
 {
-  b.follows = string_new();
-  b.follows_kind = 0;
   if carry {
-    b.follows = string_push_str(string_new(), string_to_str(b.id));
+    b.follows = move b.id;
+    b.id = string_from(uuid);
     b.follows_kind = 1;
+  } else {
+    b.follows = string_new();
+    b.id = string_from(uuid);
+    b.follows_kind = 0;
   }
-  b.id = string_push_str(string_new(), uuid);
   b.state = 0;
   b.origin = origin;
   b.unlimited = size == 0 || (size == -1 && unit[5] == 1);

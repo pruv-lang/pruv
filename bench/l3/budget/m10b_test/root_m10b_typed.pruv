@@ -7,7 +7,7 @@ pub struct Ordinal { value: i64 }
 pub struct St {
   sessions: HashMap<String, crate::bud_tstate::Budget>,
   ordinals: HashMap<String, Ordinal>, next_session: i64,
-  clock_state: crate::bud_tstate::ClockState, out: crate::bud_tstate::Out
+  clock_state: crate::bud_tstate::ClockState, out: crate::bud_tstate::Out, unit: Vec<i64>
 }
 
 fn take_budget(budget: crate::bud_tstate::Budget) -> crate::bud_tstate::Budget ! alloc
@@ -72,7 +72,7 @@ pub fn t_call(inout st: St, sid: str, bid: str, run: str, code: i64,
   if code == 7 { return apply_charge(inout st, sid, bid, now, what); }
   if code >= 8 && code <= 11 { return crate::bud_tlife::run_event(inout st.sessions, inout st.clock_state, inout st.out, sid, bid, run, code, now, flag); }
   if code == 12 { return crate::bud_tlife::explicit_halt(inout st.sessions, inout st.clock_state.clocks, inout st.out, sid, bid, now, flag); }
-  if code == 13 { return crate::bud_tdecide::raise(inout st.sessions, inout st.clock_state.clocks, inout st.out, sid, bid, now, flag); }
-  if code == 14 { return crate::bud_tdecide::decide(inout st.sessions, inout st.clock_state.clocks, inout st.out, sid, bid, now, flag); }
+  if code == 13 { return crate::bud_tdecide::raise(inout st.sessions, inout st.clock_state.clocks, inout st.out, sid, bid, now, flag, st.unit); }
+  if code == 14 { return crate::bud_tdecide::decide(inout st.sessions, inout st.clock_state.clocks, inout st.out, sid, bid, now, flag, st.unit); }
   return crate::bud_tstate::Reply { status: 2, value: 0, a: 0, b: 0 };
 }

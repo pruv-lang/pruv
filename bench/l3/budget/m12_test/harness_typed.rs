@@ -2,7 +2,7 @@
 use crate::generated;
 pub use crate::generated::St;
 
-pub use generated::{m12_observe, m12_seed_tool, m12_grow, m12_init, m12_reset_tools};
+pub use generated::{decode_life, LifeKeys};
 
 #[derive(Clone)]
 pub struct World {
@@ -72,9 +72,9 @@ pub fn m12_dump(st: &St, out: &mut [i64]) -> i64 {
     for (sid, _) in rows {
         words.push(sid.chars().count() as i64);
         words.extend(m12_facts::text_units(sid).map(i64::from));
-        let budget = m12_facts::decode_words(&st.sessions[sid].rest);
-        words.push(budget.len() as i64);
-        words.extend(budget);
+        let budget = generated::session(st, sid);
+        words.push((budget.len() - 1) as i64);
+        words.extend_from_slice(&budget[1..]);
     }
     words[0] = (words.len() - 1) as i64;
     let Some(dest) = out.get_mut(..words.len()) else { return 3; };
@@ -89,7 +89,11 @@ pub fn new_state() -> St {
         sessions: Default::default(),
         ordinals: Default::default(),
         next_session: 0,
+        wire: generated::Wire { nodes: Default::default(), next: 1 },
         clock_state: ClockState { clocks: Default::default(), next_clock: 0 },
+        clock_order: Vec::new(),
+        clock_ordinals: Vec::new(),
+        tools: Default::default(),
     }
 }
 
@@ -101,16 +105,24 @@ fn lifecycle_reply(packet: Vec<i64>) -> Result<Vec<i64>, i64> {
 pub fn m12_life(shared: &mut St, instance: &mut St, op: i64, rf: &[i64], sid: &[i64],
                 arg: &[i64], now: i64) -> Result<Vec<i64>, i64> {
     let key = optional_key(sid).ok_or(2)?;
-    let keys = if matches!(op, 2 | 3) {
-        let mut rows: Vec<_> = instance.clock_state.clocks.iter().collect();
-        rows.sort_unstable_by_key(|(_, clock)| clock.ordinal);
-        rows.into_iter().flat_map(|(id, clock)| {
-            m12_facts::encode_key(id).into_iter().chain(m12_facts::encode_key(&clock.owner))
-        }).collect()
-    } else {
-        Vec::new()
-    };
-    with_sessions(shared, instance, |st| generated::life(st, op, rf, sid, &key, arg, now, &keys))
+    let keys = decode_life(rf, arg);
+    life_decoded(shared, instance, op, rf, sid, &key, arg, now, &keys)
+}
+
+pub fn life_decoded(shared: &mut St, instance: &mut St, op: i64, rf: &[i64], sid: &[i64],
+                    key: &str, arg: &[i64], now: i64, keys: &LifeKeys) -> Result<Vec<i64>, i64> {
+    with_sessions(shared, instance, |st| {
+        generated::life(st, op, rf, sid, key, arg, now, &keys.bid, &keys.text[0], &keys.text[1], keys.has_run)
+    })
+}
+
+pub fn seed_tool(instance: &mut St, turn: &[i64], activity: &[i64]) -> Result<i64, i64> {
+    let turn = m12_facts::packed_text(turn).ok_or(2)?;
+    let activity = m12_facts::packed_text(activity).ok_or(2)?;
+    match generated::seed_tool(instance, &turn, &activity) {
+        n if n < 0 => Err(-n),
+        fresh => Ok(fresh),
+    }
 }
 
 pub fn m12_fire(shared: &mut St, instance: &mut St, sid: &[i64], bid: &[i64],
@@ -123,21 +135,23 @@ pub fn m12_fire(shared: &mut St, instance: &mut St, sid: &[i64], bid: &[i64],
 fn with_sessions(shared: &mut St, instance: &mut St,
                  run: impl FnOnce(&mut St) -> Vec<i64>) -> Result<Vec<i64>, i64> {
     std::mem::swap(&mut shared.sessions, &mut instance.sessions);
+    std::mem::swap(&mut shared.wire, &mut instance.wire);
     let packet = run(instance);
     std::mem::swap(&mut shared.sessions, &mut instance.sessions);
+    std::mem::swap(&mut shared.wire, &mut instance.wire);
     lifecycle_reply(packet)
 }
 
-pub fn observe_clocks(instance: &St, aux: &[i64]) -> Vec<i64> {
+pub fn observe_clocks(instance: &St) -> Vec<i64> {
     fn key(out: &mut Vec<i64>, text: &str) {
         out.push(text.chars().count() as i64);
         out.extend(m12_facts::text_units(text).map(i64::from));
     }
 
-    let mut rows: Vec<_> = instance.clock_state.clocks.iter().collect();
-    rows.sort_unstable_by_key(|(_, clock)| clock.ordinal);
-    let mut out = vec![0, rows.len() as i64];
-    for (id, clock) in rows {
+    let mut out = vec![0, instance.clock_state.clocks.len() as i64];
+    for (id, &ordinal) in instance.clock_order.iter().zip(&instance.clock_ordinals) {
+        let Some(clock) = instance.clock_state.clocks.get(id) else { continue; };
+        if clock.ordinal != ordinal { continue; }
         key(&mut out, id);
         key(&mut out, &clock.owner);
         out.extend([i64::from(clock.has_since), clock.since, i64::from(clock.armed), clock.active]);
@@ -149,6 +163,15 @@ pub fn observe_clocks(instance: &St, aux: &[i64]) -> Vec<i64> {
             out.push(i64::from(*ordinal < 0));
         }
     }
-    out.extend_from_slice(&aux[2..]);
+    let mut turns: Vec<_> = instance.tools.iter().collect();
+    turns.sort_unstable_by_key(|(_, turn)| turn.ordinal);
+    out.push(turns.len() as i64);
+    for (id, turn) in turns {
+        key(&mut out, id);
+        let mut activities: Vec<_> = turn.activities.iter().collect();
+        activities.sort_unstable_by_key(|(_, ordinal)| **ordinal);
+        out.push(activities.len() as i64);
+        for (activity, _) in activities { key(&mut out, activity); }
+    }
     out
 }

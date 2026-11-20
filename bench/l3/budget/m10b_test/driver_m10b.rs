@@ -138,6 +138,7 @@ impl World {
                 next_session: 0,
                 clock_state: ClockState { clocks: HashMap::new(), next_clock: 0 },
                 out: Out { fx: Vec::new() },
+                unit: Vec::new(),
             },
             now: 1700000000000, seq: 0, active: Vec::new(), by_bid: HashMap::new(),
             log: Vec::new(), silent: false, audit: false,
@@ -184,7 +185,8 @@ impl World {
                 reply.status, self.st.out.fx.len(), unchanged));
             self.audit = false;
         }
-        let mut units = bud_facts::take_unit_log().into_iter().peekable();
+        // Pruv reports the effect index at which a finite raise/extend consumed its staged answer.
+        let unit_at = (matches!(code, 13 | 14) && reply.b > 0).then(|| reply.b - 1);
         let mut releases = decide_facts::take_log().into_iter().peekable();
         let mut running = running_before;
         let effects = &self.st.out.fx;
@@ -194,11 +196,9 @@ impl World {
         let mut stopped = None;
         for i in 0..=effects.len() {
             let i = i as i64;
-            while units.peek().is_some_and(|(position, _)| *position == i) {
-                let (_, words) = units.next().unwrap();
-                if !self.silent {
-                    self.log.push(format!("E unit {}", words.iter().map(i64::to_string).collect::<Vec<_>>().join(" ")));
-                }
+            if !self.silent && unit_at == Some(i) {
+                let words = self.st.unit.iter().map(i64::to_string).collect::<Vec<_>>().join(" ");
+                self.log.push(format!("E unit {words}"));
             }
             while releases.peek().is_some_and(|q| q.fxn == i) {
                 let q = releases.next().unwrap();
@@ -364,8 +364,6 @@ fn run_q() {
         match p[0] {
             "case" => {
                 w = World::new();
-                bud_facts::record_unit();
-                bud_facts::set_unit(&[]);
                 bud_facts::record_queries();
                 bud_facts::set_answers(&[], 0);
                 bud_facts::set_calls(0);
@@ -380,7 +378,7 @@ fn run_q() {
                 w.audit = true;
             }
             "quiet" => bud_facts::set_answers(&nums(&p[1..]), 0),
-            "unit" => bud_facts::set_unit(&nums(&p[1..])),
+            "unit" => w.st.unit = nums(&p[1..]),
             "rel" => decide_facts::push(&nums(&p[1..])),
             "rdi" => {
                 let a = nums(&p[1..]);
@@ -471,7 +469,7 @@ fn run_perf_decide(setup: &Setup) {
     for i in 0..setup.d {
         ids.extend(key(&format!("d{i:04}")));
     }
-    bud_facts::set_unit(&setup.unit);
+    world.st.unit = setup.unit.to_vec();
     let halt = body(12, 2, "");
     let mut timer = None;
     let mut runs = false;
@@ -537,7 +535,7 @@ fn run_perf(args: &[String]) {
         ids.extend(key(&format!("d{i:04}")));
     }
     bud_facts::set_running(vec![ids]);
-    bud_facts::set_unit(&setup.unit);
+    world.st.unit = setup.unit.to_vec();
     let mut op = Vec::with_capacity(raise.len() + 2);
     op.push(raise[0]);
     op.push(0);

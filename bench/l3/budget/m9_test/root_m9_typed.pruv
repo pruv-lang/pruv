@@ -120,16 +120,22 @@ fn bump(inout c: Clock, delta: i64) -> () {
 
 // -1 means capacity exhausted, 1 requests a refresh.
 fn change_run(inout c: Clock, code: i64, key: str, waiting: bool) -> i64 ! alloc {
+  if code == 3 {
+    match map_take::<String, Run>(inout c.runs, key) {
+      Some(run) => {
+        if !run.waiting { bump(inout c, -1); }
+        return 1;
+      }
+      None => { return 0; }
+    }
+  }
   let mut delta: i64 = 0;
   let mut changed: bool = false;
   let mut found: bool = false;
   match map_get_mut::<String, Run>(inout c.runs, key) {
     Some(run) => {
       found = true;
-      if code == 3 {
-        if !run.waiting { delta = -1; }
-        changed = true;
-      } else if run.waiting != waiting {
+      if run.waiting != waiting {
         run.waiting = waiting;
         delta = 1;
         if waiting { delta = -1; }
@@ -137,9 +143,6 @@ fn change_run(inout c: Clock, code: i64, key: str, waiting: bool) -> i64 ! alloc
       }
     }
     None => {}
-  }
-  if code == 3 && found {
-    let removed: bool = map_remove::<String, Run>(inout c.runs, key);
   }
   if code == 1 && !found {
     let ordinal: i64 = c.next_run;
