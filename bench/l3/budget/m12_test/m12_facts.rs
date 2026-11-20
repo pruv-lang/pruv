@@ -215,28 +215,33 @@ pub fn encode_key(text: &str) -> Vec<i64> {
 // The typed effect index is replaced by the M12 wire offset in running_wire.
 pub fn running_position(_: i64) {}
 
-pub fn running_count(_: &str, _: &str) -> i64 {
-    FACTS.with(|slot| {
-        let f = slot.borrow();
-        f.running.get(f.running_pos).and_then(|row| row.first()).copied().unwrap_or(0)
-    })
-}
-
-pub fn running_take(_: &str, _: &str) -> Vec<String> {
+/// Consume one host answer and keep its raw wire words ([0, row...] with row = [count, frames...]) for
+/// `running_word` / `unit_text`; returns the word count. Pruv validates the words.
+pub fn running_fetch(_: &str, _: &str) -> i64 {
     FACTS.with(|slot| {
         let mut f = slot.borrow_mut();
         let row = f.running.get(f.running_pos).cloned().unwrap_or_else(|| vec![0]);
         f.running_pos += 1;
-        let mut ids = Vec::new();
-        let mut rest = row.get(1..).unwrap_or_default();
-        while let Some(&count) = rest.first() {
-            let words = 1 + (count as usize).div_ceil(4);
-            let Some(key) = rest.get(..words).and_then(packed_text) else { break; };
-            ids.push(key);
-            rest = &rest[words..];
-        }
+        let n = row.len() as i64 + 1;
         f.typed_running = row;
-        ids
+        n
+    })
+}
+
+/// Word `i` of the current answer (word 0 is the status 0; 0 past the end, Pruv checks bounds first).
+pub fn running_word(i: i64) -> i64 {
+    if i <= 0 {
+        return 0;
+    }
+    FACTS.with(|slot| slot.borrow().typed_running.get(i as usize - 1).copied().unwrap_or(0))
+}
+
+/// Decode the UTF-16 units of a frame of the current answer already validated by Pruv (`pos` = first packed word).
+pub fn unit_text(pos: i64, units: i64) -> String {
+    FACTS.with(|slot| {
+        let f = slot.borrow();
+        let words = &f.typed_running[pos as usize - 1..];
+        (0..units as usize).map(|i| unit_char((words[i / 4] >> (16 * (3 - i % 4))) as u16)).collect()
     })
 }
 

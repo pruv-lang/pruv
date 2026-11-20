@@ -458,7 +458,7 @@ fn run_perf(args: &[String]) {
     };
     putback(&mut w);
     let go = |w: &mut World| {
-        bud_facts::set_running_text(names.clone());
+        bud_facts::set_running(vec![ids.clone()]);
         bud_facts::set_running_calls(0);
         assert_eq!(black_box(w.call_typed(12, 1, &sid, bid, "", &[0; 10])), 0);
         putback(w);
@@ -486,10 +486,52 @@ fn run_perf(args: &[String]) {
     println!("putback {} {:.1}", d, t.elapsed().as_nanos() as f64 / reps as f64);
 }
 
+/// D65: malformed runningDelegationIds answers are refused by bud_tlife (Pruv), before any change; a valid answer
+/// still halts afterwards. Wire: [0 status, count, frames(units, packed words)...].
+fn run_running_admission() {
+    bud_facts::set_answers(&[], 1);
+    bud_facts::set_calls(0);
+    let bid = "99b568f7-0000-4000-8000-000000000001";
+    let (sid, budget) = decode_put(&perf_put(key("session-rdi"), key(bid), 0, PERF_REST));
+    let a = 0x61i64 << 48;
+    let bad: Vec<(&str, Vec<i64>)> = vec![
+        ("short answer", vec![0]),
+        ("status not 0", vec![1, 0]),
+        ("negative count", vec![0, -1]),
+        ("count past the rest", vec![0, 2, 1, a]),
+        ("truncated frame", vec![0, 1, 5, a]),
+        ("negative units", vec![0, 1, -1]),
+        ("units past 2^30", vec![0, 1, 1073741825, a]),
+        ("non-zero padding", vec![0, 1, 1, a | 1]),
+        ("trailing words", vec![0, 1, 1, a, 7]),
+    ];
+    let mut w = World::new();
+    w.silent = true;
+    for (name, words) in &bad {
+        assert_eq!(sol::t_put(&mut w.st, &sid, &budget), 0);
+        bud_facts::set_running(vec![words.clone()]);
+        bud_facts::set_running_calls(0);
+        let reply = w.call_typed(12, 1, &sid, bid, "", &[0; 10]);
+        let s = &w.st.sessions[&sid];
+        assert!(reply != 0, "{name}: halt admitted, reply {reply}");
+        assert_eq!(s.state, 0, "{name}: state changed");
+        assert!(s.stopped.is_empty(), "{name}: stopped changed");
+        assert!(!w.st.out.fx.iter().any(|e| (31..=35).contains(&e.tag)), "{name}: halt effects emitted");
+        assert_eq!(bud_facts::running_calls(), 1, "{name}: query count");
+    }
+    bud_facts::set_running(vec![vec![0, 1, 1, a]]);
+    bud_facts::set_running_calls(0);
+    assert_eq!(w.call_typed(12, 1, &sid, bid, "", &[0; 10]), 0);
+    assert_eq!(w.st.sessions[&sid].stopped, vec!["a".to_string()]);
+    println!("running answer admission PASS ({} malformed answers refused, 1 valid answer halts)", bad.len());
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 && args[1] == "perf" {
         run_perf(&args[2..]);
+    } else if args.len() > 1 && args[1] == "running" {
+        run_running_admission();
     } else {
         run_q();
     }

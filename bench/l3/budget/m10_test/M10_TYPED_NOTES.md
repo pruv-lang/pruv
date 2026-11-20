@@ -21,8 +21,9 @@ Run from `bench/l3/budget`:
 
 To compare generated Rust, give each typed Q run its own `--out` and diff the two `gen.rs`. Both lanes use the same Q
 cases and oracle. Flat Q also checks arena Grow. Typed perf measures putback on a prepared Budget; halt timing includes
-preparing the fact answers, running the effects and the putback. The running-ids fact is staged as pre-decoded
-`Vec<String>` (`bud_facts::set_running_text`), as the hand lane receives it; the Q run still decodes the wire. Raw logs are in `work/p31t7/w4/` (not committed).
+preparing the fact answers, running the effects and the putback. The running-ids fact is staged as its wire words,
+cloned per call as the hand lane clones its `Vec<String>`; Pruv (`bud_tlife::running_valid`) admits the wire and the
+facts decode each admitted frame (`unit_text`), as in the Q run. Raw logs are in `work/p31t7/w4/` (not committed).
 
 Language gaps: a Rust host entry cannot take an owned String parameter, and a record borrowed with `map_get_mut` cannot
 be assigned as a whole through the dereference. Typed putback therefore refills the borrowed Budget field by field, keeping

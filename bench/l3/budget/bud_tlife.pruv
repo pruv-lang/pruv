@@ -1,8 +1,11 @@
-trusted rust fn running_count(sid: str, bid: str) -> i64 ! io
-  ensures true = "::bud_facts::running_count";
+trusted rust fn running_fetch(sid: str, bid: str) -> i64 ! alloc, io
+  ensures true = "::bud_facts::running_fetch";
 
-trusted rust fn running_take(sid: str, bid: str) -> Vec<String> ! alloc, io
-  ensures true = "::bud_facts::running_take";
+trusted rust fn running_word(i: i64) -> i64 ! io
+  ensures true = "::bud_facts::running_word";
+
+trusted rust fn unit_text(pos: i64, units: i64) -> String ! alloc, io
+  ensures true = "::bud_facts::unit_text";
 
 trusted rust fn running_position(position: i64) -> () ! io
   ensures true = "::bud_facts::running_position";
@@ -10,16 +13,75 @@ trusted rust fn running_position(position: i64) -> () ! io
 trusted rust fn is_quiet(sid: str, position: i64) -> i64 ! io
   ensures true = "::bud_facts::is_quiet_text";
 
+fn running_frame_words(units: i64) -> i64
+  requires units >= 0
+  ensures 0 <= result && (units > 0 ==> result > 0)
+{
+  let whole: i64 = units / 4;
+  if units % 4 == 0 { return whole; }
+  return whole + 1;
+}
+
+// The facts hold the raw answer `[0 status, count, frames(units, packed words)...]` in host storage;
+// Pruv reads it word by word and decides whether it is well formed.
+pub fn running_valid(n: i64) -> i64 ! io
+{
+  if n < 2 { return -1; }
+  if running_word(0) != 0 { return -1; }
+  let count: i64 = running_word(1);
+  if count < 0 || count > n - 2 { return -1; }
+  let mut pos: i64 = 2;
+  let mut i: i64 = 0;
+  while i < count
+    invariant 0 <= i && i <= count && 2 <= pos && pos <= n
+    decreases count - i
+  {
+    if pos == n { return -1; }
+    let units: i64 = running_word(pos);
+    pos = pos + 1;
+    if units < 0 || units > 1073741824 { return -1; }
+    let words: i64 = running_frame_words(units);
+    if words > n - pos { return -1; }
+    let tail: i64 = units % 4;
+    if tail != 0 && words > 0 {
+      if band(running_word(pos + words - 1), ushr(-1, 16 * tail)) != 0 { return -1; }
+    }
+    pos = pos + words;
+    i = i + 1;
+  }
+  if pos != n { return -1; }
+  return count;
+}
+
 pub fn halt(inout b: crate::bud_tstate::Budget, sid: str, bid: str, now: i64, reason: i64,
         inout o: crate::bud_tstate::Out) -> i64 ! alloc, io
 {
   if b.state != 0 { return 0; }
   running_position(len(o.fx));
-  let count: i64 = running_count(sid, bid);
+  let n: i64 = running_fetch(sid, bid);
+  let count: i64 = running_valid(n);
   if count < 0 || count > 1099511627776 { return 2; }
   // All or nothing: refuse before any change when the halt effects would not fit in Out.
   if len(o.fx) > 1099511627776 - 7 - count { return 2; }
-  b.stopped = running_take(sid, bid);
+  let mut stopped: Vec<String> = vec_new::<String>();
+  let mut pos: i64 = 2;
+  let mut frame: i64 = 0;
+  while frame < count
+    invariant 0 <= frame && frame <= count && 2 <= pos && len(stopped) == frame
+    decreases count - frame
+  {
+    // The validated framing guarantees these bounds on the second traversal.
+    if pos >= n { return 2; }
+    let units: i64 = running_word(pos);
+    pos = pos + 1;
+    if units < 0 || units > 1073741824 { return 2; }
+    let words: i64 = running_frame_words(units);
+    if words > n - pos { return 2; }
+    stopped = vec_push::<String>(move stopped, unit_text(pos, units));
+    pos = pos + words;
+    frame = frame + 1;
+  }
+  b.stopped = move stopped;
   b.state = 1;
   b.halt_reason = reason;
   b.halt_kind = 2;

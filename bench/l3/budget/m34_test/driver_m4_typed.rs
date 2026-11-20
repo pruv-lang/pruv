@@ -70,8 +70,7 @@ fn decode(op: &[i64]) -> Option<Op<'_>> {
     let decoded = match code {
         1 => {
             let key = take_key(k, &mut rest)?;
-            let (&declared, blob) = rest.split_first()?;
-            return sol::blob_input(declared, blob).then_some(Op::SessionPut(key, blob));
+            return sol::blob_frame(rest).then(|| Op::SessionPut(key, &rest[1..]));
         }
         2 => Op::SessionGet(take_key(k, &mut rest)?),
         3 => Op::SessionRemove(take_key(k, &mut rest)?),
@@ -390,29 +389,62 @@ fn perf(lane: Lane, axis: &str, n: usize, reps: usize) {
     println!("lane={label} axis={axis} n={n} core_ns_per_op={:.1} ops={nops}", total as f64 / nops as f64);
 }
 
-fn churn() {
-    let mut st = empty_state();
-    let apply = |st: &mut sol::St, op: &Op<'_>, expected| {
-        assert!(matches!(M4.apply(st, op).outcome, sol::Outcome::Changed(value) if value == expected));
-    };
-    let keep = Op::ToolNote("t0".into(), "a0".into());
-    let create = Op::ToolNote("x".into(), "y".into());
-    let delete = Op::ToolRemove("x".into());
-    apply(&mut st, &keep, true);
-    let capacity_bound = st.tools.capacity() + 16;
-    let mut peak = st.tools.capacity();
-    for _ in 0..200_000 {
-        apply(&mut st, &keep, false);
-        apply(&mut st, &create, true);
-        peak = peak.max(st.tools.capacity());
-        apply(&mut st, &delete, true);
-        assert_eq!(st.tools.len(), 1);
-        assert_eq!(st.tools.get("t0").map(|tool| tool.ordinal), Some(0));
-        assert!(peak <= capacity_bound);
+fn churn(lane: Lane) {
+    fn run<S, T>(
+        label: &str,
+        mut state: S,
+        [keep, create, delete]: [T; 3],
+        inspect: impl Fn(&S) -> &sol::St,
+        mut apply: impl FnMut(&mut S, &T, bool),
+    ) {
+        const DELETIONS: usize = 200_000;
+        apply(&mut state, &keep, true);
+        let mut peak = inspect(&state).tools.capacity();
+        let capacity_bound = peak + 16;
+        let start = std::time::Instant::now();
+        for _ in 0..DELETIONS {
+            apply(&mut state, &keep, false);
+            apply(&mut state, &create, true);
+            peak = peak.max(inspect(&state).tools.capacity());
+            apply(&mut state, &delete, true);
+            let st = inspect(&state);
+            assert_eq!(st.tools.len(), 1);
+            assert_eq!(st.tools.get("t0").map(|tool| tool.ordinal), Some(0));
+            assert!(peak <= capacity_bound);
+        }
+        let ns_per_op = start.elapsed().as_nanos() as f64 / (3 * DELETIONS) as f64;
+        let st = inspect(&state);
+        assert_eq!(st.next_tools, 200_001);
+        println!("m4typed: churn lane={label} {DELETIONS} deletions, live=1 peak_capacity={peak} final_capacity={} bound={capacity_bound} ns/op={ns_per_op:.1}",
+                 st.tools.capacity());
     }
-    assert_eq!(st.next_tools, 200_001);
-    println!("m4typed: churn 200000 deletions, live=1 peak_capacity={peak} final_capacity={} bound={capacity_bound}",
-             st.tools.capacity());
+
+    match lane {
+        Lane::Direct => run(
+            "direct",
+            empty_state(),
+            [
+                Op::ToolNote("t0".into(), "a0".into()),
+                Op::ToolNote("x".into(), "y".into()),
+                Op::ToolRemove("x".into()),
+            ],
+            |st| st,
+            |st, op, expected| {
+                assert!(matches!(M4.apply(st, op).outcome, sol::Outcome::Changed(value) if value == expected));
+            },
+        ),
+        Lane::Adapter => run(
+            "adapter",
+            Resident::from_typed(M4, empty_state()),
+            [op_kk(13, "t0", "a0"), op_kk(13, "x", "y"), op_k(14, "x")],
+            Resident::typed_state,
+            |st, packet, expected| {
+                let (status, words) = adapter(st, packet).expect("churn: operation rejected");
+                assert_eq!(status, "ok");
+                assert_eq!(words, [i64::from(expected)]);
+            },
+        ),
+    }
 }
 
 fn malformed(lane: Lane) {
@@ -423,14 +455,15 @@ fn malformed(lane: Lane) {
     assert!(matches!(sol::clock_input(&[1, 0, -1, 0]), ClockInput::Invalid));
     assert!(matches!(sol::waiting_input(&[0, 1]), WaitingInput::Invalid));
     assert!(matches!(sol::waiting_input(&[-1]), WaitingInput::Invalid));
-    assert!(!sol::blob_input(-1, &[]));
-    assert!(!sol::blob_input(2, &[0]));
-    assert!(sol::blob_input(1, &[0]));
+    assert!(!sol::blob_frame(&[-1]));
+    assert!(!sol::blob_frame(&[2, 0]));
+    assert!(sol::blob_frame(&[1, 0]));
 
     // Packed keys: Pruv admission rejects a negative or over-2^30 count, a count past the
     // remaining words, and nonzero padding; a lone surrogate maps to its own scalar.
     let mut key = KeyAdmission { end: 0, used: 0, bytes: Vec::new() };
     let mut at = |words: &[i64]| { let mut w = words; take_key(&mut key, &mut w).map(|s| (s, w.len())) };
+    assert_eq!(at(&[0]), Some((String::new(), 0)));
     assert_eq!(at(&[-1]), None);
     assert_eq!(at(&[(1 << 30) + 1, 0]), None);
     assert_eq!(at(&[5, 0]), None);
@@ -474,6 +507,12 @@ fn malformed(lane: Lane) {
     assert_eq!(wire_step(lane, &mut resident, &[4, 9]), None);
     assert_eq!(wire_step(lane, &mut resident, &op_k(2, "😀")), Some(("ok", vec![1, 1, 43])));
     assert_eq!(wire_step(lane, &mut resident, &op_k(15, "tool")), Some(("ok", vec![0])));
+    let key_word = 0x0061_0000_0000_0000;
+    assert_eq!(wire_step(lane, &mut resident, &[1, 1, key_word]), None);
+    assert_eq!(wire_step(lane, &mut resident, &[1, 0]), None);
+    assert_eq!(wire_step(lane, &mut resident, &[1, 1, key_word, 2, 7]), None);
+    assert_eq!(wire_step(lane, &mut resident, &[1, 1, key_word, -1]), None);
+    assert_eq!(wire_step(lane, &mut resident, &[1, 1, key_word, 1, 7]), Some(("ok", vec![1])));
     println!("m4typed: typed admission and stale/reused keys passed");
 }
 
@@ -485,7 +524,7 @@ fn main() -> io::Result<()> {
         return Ok(());
     }
     if args.get(1).map(String::as_str) == Some("churn") {
-        churn();
+        churn(lane);
         return Ok(());
     }
     if args.get(1).map(String::as_str) == Some("malformed") {

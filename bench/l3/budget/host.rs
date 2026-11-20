@@ -864,9 +864,10 @@ impl World {
 
     fn tset_v(&mut self, key: String, delay: V, unref: bool) {
         let tok = self.timers.len() as u64 + 1;
+        // The delay rule is decided in Pruv (bud_delay.pruv); the host only passes the f64 bits.
         let effective = match &delay {
-            V::Num(d) if *d >= 1.0 && *d <= 2147483647.0 => *d,
-            _ => 1.0,
+            V::Num(d) => f64::from_bits(bud_delay::delay_bits(true, d.to_bits() as i64) as u64),
+            _ => f64::from_bits(bud_delay::delay_bits(false, 0) as u64),
         };
         let due = self.now_f() + effective;
         if self.tracing {

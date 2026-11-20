@@ -295,8 +295,12 @@ def build(pruvc, tag, use_py=False):
         cargo = shutil.which("cargo") or os.path.join(os.path.dirname(rustc), "cargo")
         target = os.path.join(WORK, "typed_host")
         manifest = os.path.join(os.path.dirname(HERE), "host", "Cargo.toml")
+        # host/build.rs compiles bud_delay.pruv with the same compiler as this lane
+        host_env = dict(os.environ, PRUVC=os.path.abspath(pruvc))
+        if use_py:
+            host_env["PRUVC_PYTHON"] = typed_python()
         c = run([cargo, "build", "--offline", "--locked", "--release", "--manifest-path", manifest,
-                 "--target-dir", target], cwd=ROOT)
+                 "--target-dir", target], cwd=ROOT, env=host_env)
         if c.returncode != 0:
             raise ToolError("typed resident host build failed:\n%s" % tail(c))
         release = os.path.join(target, "release")

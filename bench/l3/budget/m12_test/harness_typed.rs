@@ -60,7 +60,7 @@ pub fn m12_load(st: &mut St, key: &[i64], blob: &[i64], out: &mut Vec<i64>) -> i
         generated::load_packet(st, &key, blob)
     } else {
         let input = generated::decode_budget(st, blob);
-        generated::load(st, &key, input)
+        generated::load_key(st, &key, input)
     };
     reply(out, [i64::from(loaded.fresh)]);
     loaded.status
@@ -148,7 +148,7 @@ pub fn m12_legacy_effects(kind: i64, op: i64, rf: &[i64], key: &[i64],
 
 pub fn m12_session(st: &St, key: &[i64]) -> Vec<i64> {
     let Some(sid) = packed_key(key, true) else { return Vec::new(); };
-    let view = generated::session(st, &sid);
+    let view = generated::session_key(st, &sid);
     if view.present {
         [1].into_iter().chain(generated::encode_budget(st, view.root)).collect()
     } else {
@@ -163,7 +163,7 @@ pub fn m12_dump(st: &St, out: &mut Vec<i64>) -> i64 {
     for (sid, _) in rows {
         words.push(sid.chars().count() as i64);
         words.extend(m12_facts::text_units(sid).map(i64::from));
-        let view = generated::session(st, sid);
+        let view = generated::session_key(st, sid);
         let budget = generated::encode_budget(st, view.root);
         words.push(budget.len() as i64);
         words.extend(budget);
@@ -294,6 +294,28 @@ pub fn malformed_typed() -> bool {
         && generated::set_card(&mut st, "s", true, "b", true, &[0], &[], &[], 0).status == 2
         && prepared_budget_checks()
         && packed_key_checks()
+        && session_key_checks(&budget)
+}
+
+fn session_key_checks(budget: &[u8]) -> bool {
+    let (mut native, mut packed) = (new_state(), new_state());
+    let sid = [2, ((0xd83d_u64 << 48) | (0xde00_u64 << 32)) as i64];
+    let rf = [9, 1, 8, 98, 117, 100, 103, 101, 116, 73, 100, 6, 1, 98];
+    let packed_budget = [9, 1, 2, 105, 100, 6, 1, 98];
+    let (mut expected, mut actual) = (Vec::new(), Vec::new());
+    let input = generated::prepare_budget(&mut native, budget);
+    if generated::load(&mut native, "😀", input).status != 0
+        || m12_load(&mut packed, &sid, &packed_budget, &mut expected) != 0
+        || m12_query(&packed, 1, &rf, &sid, &mut expected) != 0
+        || expected.get(2..) != Some(packed_budget.as_slice())
+        || m12_query(&native, 1, &rf, &sid, &mut actual) != 0
+        || actual != expected
+    {
+        return false;
+    }
+    let result = generated::query(&packed, 1, "😀", true, "b", true);
+    result.status == 0 && result.root != 0
+        && generated::encode_budget(&packed, result.root).as_slice() == packed_budget.as_slice()
 }
 
 fn prepared_budget_checks() -> bool {
