@@ -513,7 +513,7 @@ fn tree_count(t: Tree) -> i64
   unchanged. When the R-6d-2 condition holds (verified build, foreign checks not `all`, no trusted Rust
   function), R-6e-2's `P.f = vec_push::<T>(move P.f, x)` emits `P.f.push(x);` without `mem::take`.
 - R-6e-5 **Text-keyed maps.** `HashMap<String, V>` supports `i64`, `bool` and owned aggregate values
-  wherever the corresponding `HashMap<i64, V>` is allowed. `map_get`, `map_get_mut`, `map_remove`
+  wherever the corresponding `HashMap<i64, V>` is allowed. `map_get`, `map_get_mut`, `map_remove`, `map_take`
   and contract-only `map_lookup` borrow a key of type `str` or a read of a `String` binding or field.
   Rust passes the `&str` directly or uses `.as_str()` for a `String` read. A borrowed literal allocates
   no buffer. Read-only iteration is specified by R-6e-13. `map_insert` takes an
@@ -531,9 +531,11 @@ fn tree_count(t: Tree) -> i64
   collection element or value in the program. Such an aggregate can be an element of
   `Vec<S>` or a value of `HashMap<i64, S>` or `HashMap<String, S>` in the positions of R-6e-3.
   Deeper collection nesting, direct fields of a record type with nested collections, and using such
-  records as `Option` or `Result` payloads are `type/foreign_owned_type`. In a mutable `Some` arm,
+  records as `Option` or `Result` payloads are `type/foreign_owned_type`, with the direct
+  scrutinee exception for `map_take` under R-6e-14. In a mutable `Some` arm,
   R-6e-2 permits replacing nested fields with `vec_push` or `map_insert`, and R-6e-7 permits
-  `map_remove` on a nested map. Under R-6d-2 the replacements emit `.push(x)` and `.insert(k, v)`.
+  `map_remove` on a nested map. R-6e-14 permits taking its value with `map_take`.
+  Under R-6d-2 the replacements emit `.push(x)` and `.insert(k, v)`.
   `len` reads either collection, and `map_get` and `map_get_mut` access nested map values.
   For a nested `HashMap<String, R>` field `r.sub`, the insertion form is
   `r.sub = map_insert::<String, R>(move r.sub, key, value)`, and the removal form is
@@ -578,7 +580,7 @@ fn tree_count(t: Tree) -> i64
   the whole root) is `type/recursive_borrow`, and disjoint sibling paths stay usable.
 - R-6e-9 **Borrowing a String vector element.** `vec_get::<String>(v, i)` borrows a `str` from a
   `Vec<String>` local, parameter or field. It is allowed only as a direct argument to a user
-  function's `str` parameter, as the text key of `map_get`, `map_get_mut` or `map_remove`, or as
+  function's `str` parameter, as the text key of `map_get`, `map_get_mut`, `map_remove` or `map_take`, or as
   an operand of `string_eq` or `len`. Other uses are `type/foreign_owned_type`.
   The verifier proves `0 <= i < len(v)`. Rust borrows the element with checked indexing, or uses
   `get_unchecked` under R-6d-2, followed by `.as_str()`. Tests:
@@ -639,6 +641,31 @@ fn tree_count(t: Tree) -> i64
   Rust emits `for (k, &v) in P.iter()` for scalar values and `for (k, v) in P.iter()` for aggregates.
   The key is a `&String` and Rust uses `k.as_str()` where a `&str` is required.
   LLVM rejects map iteration with `codegen/unsupported_type`.
+- R-6e-14 **Taking a map entry.** `map_take::<K, V>(inout P, k) -> Option<V>` removes the
+  entry at `k` and supplies its former value in `Some(v)`, or supplies `None` if the key was absent.
+  `K` is `i64` or `String`, and `V` is `i64`, `bool` or an owned aggregate struct, including
+  R-6e-6 records with nested collections. Unsupported types are `type/foreign_owned_type`.
+  The mutable place `P` follows R-6e-4 and R-6e-7, including a nested map field of a mutable
+  collection binder. The key is evaluated once and borrows text under R-6e-5 and R-6e-9.
+  Mentioning the root of `P` in the key is `type/inout_alias`. Taking from a place that
+  overlaps an active collection borrow or map iteration is `type/recursive_borrow`.
+  The call is allowed only as the direct scrutinee of a `match` statement (`type/foreign_contract`
+  elsewhere), so its result cannot be discarded. The call needs no `alloc` effect.
+  `Some(v)` binds an owned mutable local. It can be assigned or passed `inout`; an aggregate
+  binder can be moved, and a scalar binder is copied (an explicit `move` of it is `type/foreign_move`).
+  A read view of a different map field does not overlap `P`; a read view of `P` itself does.
+  Both arms can use the map again and can return, break or continue where the surrounding
+  context allows. The verifier binds the old value, clears the key's presence, and decreases the
+  map length by one exactly when the key was present. Changes to the binder stay local to the arm.
+  Rust emits a single `match P.remove(key)` with `Some(mut v)`, borrowing the key as for
+  `map_remove`. LLVM rejects the call with `codegen/unsupported_type`.
+  Tests cover [record](tests/spec/r6e_14_take_record.pruv), [scalars](tests/spec/r6e_14_take_scalar.pruv),
+  [mutable binder](tests/spec/r6e_14_take_mut_binder.pruv), [nested map](tests/spec/r6e_14_take_nested.pruv),
+  [mutable view](tests/spec/r6e_14_take_in_get_mut.pruv), [read view](tests/spec/r6e_14_take_in_get_arm.pruv),
+  [iteration](tests/spec/r6e_14_take_in_iter.pruv), [let binding](tests/spec/r6e_14_take_let.pruv),
+  [key type](tests/spec/r6e_14_take_key.pruv), [LLVM](tests/spec/r6e_14_take_llvm.pruv),
+  [other field](tests/spec/r6e_14_take_other_field.pruv), [scalar read view](tests/spec/r6e_14_take_in_scalar_get.pruv)
+  and [binder name reuse](tests/spec/r6e_14_take_proc_binder.pruv).
 - **Values, not pointers.** Recursive and buffer-bearing values are independent: copying one deep-copies everything,
   and changing a copy never changes the original. Parameters, field reads and `match` bindings are read-only views
   and do not allocate. Putting an existing value into an owning place (`let`, assignment, constructor field,
@@ -746,7 +773,7 @@ let mut w: [i64] = copy(a);
 set_at(inout w, 0, 7);
 ```
 - **Syntax and types.** `inout name: T` on a parameter, `T` one of `[i64]`, `[u8]`, `[bool]` or `[T]` with `T: Element`
-  (section 6c), a non-generic struct under R-6g-2, a map under R-6e-7, or a vector under R-6e-10; any other type is `type/inout_type`. The mode is not part of the type. The caller must write `inout`
+  (section 6c), a non-generic struct under R-6g-2, a map under R-6e-7 and R-6e-14, or a vector under R-6e-10; any other type is `type/inout_type`. The mode is not part of the type. The caller must write `inout`
   at the call (`type/inout_argument` if missing or extra). The marked argument must name a mutable place of
   exactly the parameter's type (see R-6g-3 for field paths). Immutable locals, ordinary parameters,
   read-only `match` binders, elements and calls are rejected. `inout` is contextual, not a keyword;

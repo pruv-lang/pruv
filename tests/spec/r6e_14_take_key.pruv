@@ -1,0 +1,8 @@
+// spec: R-6e-14 reject
+fn bad(take source: HashMap<bool, i64>) -> i64 {
+  let mut m: HashMap<bool, i64> = move source;
+  match map_take::<bool, i64>(inout m, true) {
+    Some(v) => { return v; }
+    None => { return 0; }
+  }
+}

@@ -1,0 +1,32 @@
+// P31R small example: a clock record is taken out of the map with map_take (R-6e-14), one
+// lookup and no copy. end returns the used time of the removed clock; rekey moves the owned
+// record to another key, bumping its counter in the mutable Some binding.
+pub struct Clock { armed: bool, used: i64, note: String }
+pub struct St { clocks: HashMap<String, Clock> }
+
+// End clock bid: -1 unknown, 0 not armed, else its used time.
+pub fn end(inout st: St, bid: str) -> i64
+{
+  match map_take::<String, Clock>(inout st.clocks, bid) {
+    Some(c) => { if c.armed { return c.used; } return 0; }
+    None => { return -1; }
+  }
+}
+
+// Move clock `from` to key `to`. 0 = moved, 1 = unknown clock, 4 = full (clock dropped).
+pub fn rekey(inout st: St, from: str, to: str) -> i64 ! alloc
+{
+  match map_take::<String, Clock>(inout st.clocks, from) {
+    Some(c) => {
+      if c.used < 1000000000000 { c.used = c.used + 1; }
+      if len(st.clocks) < 1000000 {
+        let mut k: String = string_new();
+        k = string_push_str(move k, to);
+        st.clocks = map_insert::<String, Clock>(move st.clocks, move k, move c);
+        return 0;
+      }
+      return 4;
+    }
+    None => { return 1; }
+  }
+}

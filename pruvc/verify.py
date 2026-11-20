@@ -2366,7 +2366,7 @@ class FnVerifier:
         if n in ("map_get", "map_lookup"):
             m, k = args
             return s.map_lookup(m, s.model.map_key(m.kty, k), rty)
-        if n == "map_remove":
+        if n in ("map_remove", "map_take"):
             m, k = args
             k = s.model.map_key(m.kty, k)
             has = z3.Select(m.d, k)
@@ -2377,7 +2377,7 @@ class FnVerifier:
                       m.name, m.kty, m.vty)
             root, path = field_place(e.args[0].expr)
             st.env[root.name] = s.rebuild(root.ty, st.env[root.name], path, new)
-            return has
+            return s.map_lookup(m, k, rty) if n == "map_take" else has
         if n == "map_insert":
             m, k, x = args
             k = s.model.map_key(m.kty, k)
@@ -2787,7 +2787,7 @@ class FnVerifier:
                 s.assigned(st.body, out)
             elif isinstance(st, Match):
                 sc = st.scrutinee
-                if isinstance(sc, Call) and sc.name not in s.funcs and sc.name in MUTABLE_COLLECTION_MATCH:
+                if isinstance(sc, Call) and sc.name not in s.funcs and sc.name in MUTABLE_COLLECTION_MATCH + ("map_take",):
                     root, _ = field_place(sc.args[0].expr)
                     out.add(root.name)
                 for a in st.arms:

@@ -1,0 +1,22 @@
+// spec: R-6e-14 accept
+fn take_int(take source: HashMap<i64, i64>, k: i64) -> i64 {
+  let mut m: HashMap<i64, i64> = move source;
+  match map_take::<i64, i64>(inout m, k) {
+    Some(v) => {
+      v = 7;
+      match map_take::<i64, i64>(inout m, k) {
+        Some(again) => { assert false; return again; }
+        None => { return v; }
+      }
+    }
+    None => { return 0; }
+  }
+}
+
+fn take_bool(take source: HashMap<String, bool>, k: str) -> bool {
+  let mut m: HashMap<String, bool> = move source;
+  match map_take::<String, bool>(inout m, k) {
+    Some(v) => { return v; }
+    None => { return false; }
+  }
+}

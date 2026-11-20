@@ -6253,6 +6253,7 @@ pub fn g6_llvm_error(prog: &Program) -> Option<crate::diagnostic::PruvError> {
                 if let Expr::Call(c) = e {
                     match c.name.as_str() {
                         "map_remove" => rust_only.push((c.line, c.col, "map_remove")),
+                        "map_take" => rust_only.push((c.line, c.col, "map_take")),
                         "vec_at_mut" => rust_only.push((c.line, c.col, "vec_at_mut")),
                         "vec_clear" => rust_only.push((c.line, c.col, "vec_clear")),
                         "string_eq" => rust_only.push((c.line, c.col, "string_eq")),

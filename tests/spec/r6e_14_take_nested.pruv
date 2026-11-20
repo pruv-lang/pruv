@@ -1,0 +1,28 @@
+// spec: R-6e-14 accept
+struct Run { since: i64 }
+struct Clock { sub: HashMap<String, Run> }
+struct St { clocks: HashMap<String, Clock> }
+fn end(inout st: St, bid: str, k: str) -> i64 {
+  let mut result_code: i64 = -1;
+  match map_get_mut::<String, Clock>(inout st.clocks, bid) {
+    Some(r) => {
+      let before: i64 = len(r.sub);
+      match map_take::<String, Run>(inout r.sub, k) {
+        Some(v) => {
+          assert len(r.sub) == before - 1;
+          result_code = v.since;
+        }
+        None => { assert len(r.sub) == before; }
+      }
+    }
+    None => {}
+  }
+  return result_code;
+}
+
+fn take_clock(inout st: St, bid: str) -> i64 {
+  match map_take::<String, Clock>(inout st.clocks, bid) {
+    Some(c) => { return len(c.sub); }
+    None => { return -1; }
+  }
+}

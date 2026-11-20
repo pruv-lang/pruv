@@ -40,7 +40,7 @@ pub struct CatFn {
 }
 
 /// CATALOG_NAMES of foreign.py (insertion order).
-pub const CATALOG_NAMES: [&str; 100] = [
+pub const CATALOG_NAMES: [&str; 101] = [
     "vec_new",
     "vec_push",
     "vec_get",
@@ -48,6 +48,7 @@ pub const CATALOG_NAMES: [&str; 100] = [
     "map_get",
     "map_get_mut",
     "map_remove",
+    "map_take",
     "vec_clear",
     "string_eq",
     "vec_at_mut",
@@ -271,7 +272,7 @@ pub fn catalog_fn(name: &str) -> Option<CatFn> {
             tparams: tp_t(),
         },
         "map_new" => CatFn { requires: vec![], ensures: vec![], params: vec![], ret: map_of(k(), v()), effects: alloc(), tparams: tp_kv() },
-        "map_get" | "map_get_mut" => CatFn { requires: vec![], ensures: vec![],
+        "map_get" | "map_get_mut" | "map_take" => CatFn { requires: vec![], ensures: vec![],
             params: vec![p("m", map_of(k(), v()), false), p("k", k(), false)],
             ret: mk_option(v()),
             effects: vec![],
@@ -1034,16 +1035,30 @@ impl<'a> Ownership<'a> {
                 let mut first = true;
                 let mutable_map = matches!(&m.scrutinee, Expr::Call(c)
                     if matches!(c.name.as_str(), "map_get_mut" | "vec_at_mut") && !self.funcs.contains_key(&c.name));
+                let take = matches!(&m.scrutinee, Expr::Call(c)
+                    if c.name == "map_take" && !self.funcs.contains_key(&c.name));
                 for a in &m.arms {
                     let n = self.push_arm(a);
                     let saved = self.map_binders.len();
                     if mutable_map {
                         self.map_binders.extend(a.binders.iter().cloned());
                     }
-                    let r = self.block(&a.body, st.clone());
+                    let mut arm_state = st.clone();
+                    if take {
+                        for binder in &a.binders {
+                            arm_state.set(binder, V::Live);
+                            self.proc.remove(binder);
+                        }
+                    }
+                    let r = self.block(&a.body, arm_state);
                     self.map_binders.truncate(saved);
                     self.arm_bor.truncate(self.arm_bor.len() - n);
-                    let r = r?;
+                    let mut r = r?;
+                    if let (true, Some(state)) = (take, &mut r) {
+                        for binder in &a.binders {
+                            state.pop(binder);
+                        }
+                    }
                     out = if first { r } else { join(out, r) };
                     first = false;
                 }
@@ -2006,7 +2021,7 @@ mod tests {
 
     #[test]
     fn catalog_shapes() {
-        assert_eq!(CATALOG_NAMES.len(), 100);
+        assert_eq!(CATALOG_NAMES.len(), 101);
         for n in CATALOG_NAMES.iter() {
             assert!(catalog_fn(n).is_some());
         }

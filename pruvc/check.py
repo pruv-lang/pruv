@@ -213,6 +213,8 @@ class Checker:
         s.map_borrows = []        # (root, field path) of the enclosing mutable collection Some arms
         s.field_paths = {}        # id(root Var) -> field path of the outermost field read over it
         s.active_roots = []       # root variable names of the enclosing match arms on extended scrutinees
+        s.map_read_roots = []     # the active_roots entries pushed by map_get Some arms
+        s.map_read_paths = []     # (root, path) places held by map_get Some arms (R-6e-14 overlap check)
         s.match_paths = []        # (root, field path) of enclosing matches on extended places of inout roots
         s.s5_errors = []
         s.par_groups = []         # G7 A0: (enclosing Function, Par statement, [branch Function]) of every checked group
@@ -565,9 +567,15 @@ class Checker:
                  "give exactly one type argument per type parameter")
         catalog_collection = (isinstance(e, Call) and e.name not in s.funcs and (
             e.name in ("vec_new", "vec_push", "vec_get", "vec_at_mut", "vec_clear",
-                       "map_new", "map_get", "map_get_mut", "map_insert", "map_remove")
+                       "map_new", "map_get", "map_get_mut", "map_insert", "map_remove", "map_take")
             or e.name == "map_lookup" and targs[0] == STRING))
         if catalog_collection:
+            if e.name == "map_take":
+                k, v = targs
+                if k not in (I64, STRING):
+                    terr(e, "foreign_owned_type", "map_take requires i64 or String keys")
+                if v not in (I64, BOOL) and (v.owner is not None or v.args or v.name not in s.aggregates):
+                    terr(e, "foreign_owned_type", "map_take requires i64, bool or owned aggregate values")
             s.check_type(e, Type("vec" if e.name.startswith("vec_") else "hashmap", tuple(targs)))
         for a, tp in zip(targs, tparams):
             s.check_type(e, a)
@@ -1019,7 +1027,7 @@ class Checker:
         for e, conditional in calls:
             f = s.funcs.get(e.name)
             marked = ([arg for arg in e.args if isinstance(arg, InoutArg)]
-                      if f is not None or e.name in ("map_remove", "vec_clear") else [])
+                      if f is not None or e.name in ("map_remove", "map_take", "vec_clear") else [])
             if marked:
                 for arg in marked:
                     root, path = field_place(arg.expr)
@@ -1197,6 +1205,7 @@ class Checker:
             call = st.scrutinee
             catalog_match = isinstance(call, Call) and call.name not in s.funcs
             mutable_map = catalog_match and call.name in MUTABLE_COLLECTION_MATCH
+            map_take = catalog_match and call.name == "map_take"
             map_read = catalog_match and call.name == "map_get"
             nested_map_path = None
             if map_read and is_string_record_map(call.args[0].ty):
@@ -1256,25 +1265,38 @@ class Checker:
                     if b in sc:
                         terr(node, "shadow", "%s is already defined" % b, "use a new name")
                     # G9 A0: a buffer payload is a read view (like a parameter): returning it needs copy()
-                    sc[b] = (bt, False, "param" if (is_array(bt) or bt == STR) else "local")
+                    sc[b] = (bt, map_take and a.ctor == "Some", "param" if (is_array(bt) or bt == STR) else "local")
                 if root is not None:
                     s.active_roots.append(root)
                 if mpath is not None:
                     s.match_paths.append(mpath)
+                read_path = None
+                if a.ctor == "Some" and map_read:
+                    rbase, rpath = field_place(call.args[0])
+                    if isinstance(rbase, Var):
+                        read_path = (rbase.name, tuple(rpath))
+                        s.map_read_paths.append(read_path)
                 if a.ctor == "Some" and (mutable_map or map_view):
                     operand = st.scrutinee.args[0]
                     base, _ = field_place(operand.expr if mutable_map else operand)
                     borrows = s.map_borrows if mutable_map else s.match_paths if nested_map_path else s.active_roots
                     for b, bt in zip(a.binders, ftypes):
                         sc[b] = (bt, False, "map_mut" if mutable_map else "param")
+                    read_root = not mutable_map and not nested_map_path and isinstance(base, Var)
                     if isinstance(base, Var):
                         borrows.append((base.name, field_place(operand.expr)[1]) if mutable_map
                                        else nested_map_path or base.name)
+                    if read_root:
+                        s.map_read_roots.append(base.name)
                     s.block(a.body, sc)
+                    if read_root:
+                        s.map_read_roots.pop()
                     if isinstance(base, Var):
                         borrows.pop()
                 else:
                     s.block(a.body, sc)
+                if read_path is not None:
+                    s.map_read_paths.pop()
                 if root is not None:
                     s.active_roots.pop()
                 if mpath is not None:
@@ -2007,7 +2029,7 @@ class Checker:
                      "write `inout name` with a `let mut` local array or an inout parameter")
             op = arg.expr
             user_call = f is not CATALOG.get(n)
-            allow_path = user_call or n in MUTABLE_COLLECTION_MATCH + ("map_remove", "vec_clear")
+            allow_path = user_call or n in MUTABLE_COLLECTION_MATCH + ("map_remove", "map_take", "vec_clear")
             place, path = field_place(op)
             if isinstance(place, Var):
                 s.check_iteration_borrow(arg, place.name, path)
@@ -2029,7 +2051,13 @@ class Checker:
                 terr(arg, "inout_argument", "inout argument %s has type %s but parameter %s of %s expects %s" % (
                     place.name, type_name(actual), p.name, n, type_name(want)),
                      "pass an array of exactly the parameter's element type")
-            if place.name in s.active_roots or s.match_path_held(place.name, tuple(path)):     # G9, R-6e-8
+            take = not user_call and n == "map_take"
+            # R-6e-14: a take checks map_get arms by place overlap instead of by root
+            root_held = (s.active_roots.count(place.name) > s.map_read_roots.count(place.name) if take
+                         else place.name in s.active_roots)
+            read_held = take and any(r == place.name and _paths_overlap(tuple(path), held)
+                                     for r, held in s.map_read_paths)
+            if root_held or read_held or s.match_path_held(place.name, tuple(path)):     # G9, R-6e-8
                 terr(arg, "recursive_borrow", "cannot pass %s inout while a match on it is active" % place.name,
                      "finish the match before the call")
             op.ty = actual
@@ -2342,7 +2370,7 @@ class Checker:
         if catalog:
             if n == "vec_clear" and e is not s.statement_call and not c:
                 terr(e, "inout_context", "vec_clear must be a whole expression statement")
-            if n in MUTABLE_COLLECTION_MATCH and e is not s.match_call:
+            if n in MUTABLE_COLLECTION_MATCH + ("map_take",) and e is not s.match_call:
                 terr(e, "foreign_contract", "%s is only allowed as a direct match scrutinee" % n)
             if n in CATALOG_CONTRACT_ONLY:
                 if not c:

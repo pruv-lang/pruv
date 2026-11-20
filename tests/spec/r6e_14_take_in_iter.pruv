@@ -1,0 +1,11 @@
+// spec: R-6e-14 reject
+struct Clock { used: i64 }
+struct St { clocks: HashMap<String, Clock> }
+fn bad(inout st: St) -> () {
+  for (k, v) in st.clocks {
+    match map_take::<String, Clock>(inout st.clocks, k) {
+      Some(c) => {}
+      None => {}
+    }
+  }
+}

@@ -341,8 +341,10 @@ struct Checker {
     fn_sccs: Vec<Vec<String>>,
     /// (caller name, call line, call col, call targs, callee name) of every checked user call
     call_log: Vec<(String, i64, i64, Option<Vec<GType>>, String)>,
-    /// root variable names of the enclosing match arms on extended scrutinees
-    active_roots: Vec<String>,
+    /// Roots of enclosing extended matches, with a flag for map_get scrutinees.
+    active_roots: Vec<(String, bool)>,
+    /// Places held by map_get Some arms, checked for overlap when taking an entry.
+    map_read_paths: Vec<(String, Vec<String>)>,
     /// R-6e-8: (root, field path) of enclosing matches on extended places of inout roots
     match_paths: Vec<(String, Vec<String>)>,
     cur_cost: bool,
@@ -441,7 +443,7 @@ fn set_ty(e: &mut Expr, t: &GType) {
 /// G5: does the full syntax of e (every operand, reachable or not) mention the binding `name`?
 fn collection_catalog(name: &str) -> bool {
     matches!(name, "vec_new" | "vec_push" | "vec_get" | "map_new" | "map_insert"
-        | "map_get" | "map_get_mut" | "map_remove" | "vec_at_mut" | "vec_clear")
+        | "map_get" | "map_get_mut" | "map_remove" | "map_take" | "vec_at_mut" | "vec_clear")
 }
 
 pub(crate) fn place_root(e: &Expr) -> Option<&str> {
@@ -643,6 +645,7 @@ impl Checker {
             fn_sccs: Vec::new(),
             call_log: Vec::new(),
             active_roots: Vec::new(),
+            map_read_paths: Vec::new(),
             match_paths: Vec::new(),
             cur_cost: false,
             s5_errors: Vec::new(),
@@ -2268,7 +2271,7 @@ impl Checker {
         let mut effect_before = false;
         for (call, conditional) in calls {
             let f = self.funcs.get(&call.name);
-            if f.is_some() || matches!(call.name.as_str(), "map_remove" | "vec_clear") {
+            if f.is_some() || matches!(call.name.as_str(), "map_remove" | "map_take" | "vec_clear") {
                 let marked: Vec<&crate::ast::InoutArg> = call
                     .args
                     .iter()
@@ -2802,13 +2805,19 @@ impl Checker {
 
     fn match_stmt(&mut self, m: &mut Match, scope: &mut Scope) -> Res<()> {
         let (line, col) = (m.line, m.col);
-        let t = self.read_expr(&mut m.scrutinee, scope, false, &["map_get", "map_get_mut", "vec_at_mut"])?;
+        let t = self.read_expr(&mut m.scrutinee, scope, false, &["map_get", "map_get_mut", "map_take", "vec_at_mut"])?;
         let map_call = match &m.scrutinee {
             Expr::Call(call) if !self.funcs.contains_key(&call.name) => Some(call),
             _ => None,
         };
         let map_mut = map_call.is_some_and(|call| matches!(call.name.as_str(), "map_get_mut" | "vec_at_mut"));
+        let map_take = map_call.is_some_and(|call| call.name == "map_take");
         let map_read = map_call.filter(|call| call.name == "map_get");
+        let map_read_path = map_read.and_then(|call| {
+            let (root, path) = field_place(&call.args[0]);
+            let Expr::Var(v) = root else { return None };
+            Some((v.name.clone(), path))
+        });
         let nested_map_path = map_read.and_then(|call| {
             GType::from_key(expr_ty(&call.args[0]).as_deref()?).string_record_map_value()?;
             let (root, path) = field_place(&call.args[0]);
@@ -2920,13 +2929,13 @@ impl Checker {
                 // G9 A0: a buffer payload is a read view (like a parameter): returning it needs copy()
                 let kind = if map_mut { "map_inout" } else if map_borrow { "map_view" }
                     else if bt.is_array() || *bt == strt() { "param" } else { "local" };
-                sc.insert(b.clone(), Entry { ty: bt.clone(), mutable: false, kind });
+                sc.insert(b.clone(), Entry { ty: bt.clone(), mutable: map_take, kind });
             }
             let active = root.as_ref().filter(|_| !map_borrow || a.ctor == "Some");
             let borrowed = mutable_place.as_ref().filter(|_| a.ctor == "Some");
             let arm_path = mpath.as_ref().or(nested_map_path.as_ref().filter(|_| a.ctor == "Some"));
             if let Some(r) = active {
-                self.active_roots.push(r.clone());
+                self.active_roots.push((r.clone(), map_read_path.is_some()));
             }
             if let Some(place) = borrowed {
                 self.map_roots.push(place.clone());
@@ -2934,7 +2943,14 @@ impl Checker {
             if let Some(mp) = arm_path {
                 self.match_paths.push(mp.clone());
             }
+            let read_path = map_read_path.as_ref().filter(|_| a.ctor == "Some");
+            if let Some(place) = read_path {
+                self.map_read_paths.push(place.clone());
+            }
             self.block(&mut a.body, &mut sc)?;
+            if read_path.is_some() {
+                self.map_read_paths.pop();
+            }
             if arm_path.is_some() {
                 self.match_paths.pop();
             }
@@ -3085,7 +3101,7 @@ impl Checker {
 
     fn check_borrow(&self, line: i64, col: i64, name: &str, fields: &[String]) -> Res<()> {
         self.check_iteration_borrow(line, col, name, fields)?;
-        if self.active_roots.iter().any(|r| r == name) || self.match_path_held(name, fields) {
+        if self.active_roots.iter().any(|(root, _)| root == name) || self.match_path_held(name, fields) {
             let mut parts: Vec<&str> = vec![name];
             parts.extend(fields.iter().map(|f| f.as_str()));
             return Err(terr(
@@ -3836,7 +3852,7 @@ impl Checker {
     fn inout_args(&mut self, e: &mut Call, f: &FuncInfo, m: &Mapping, scope: &Scope, c: bool) -> Res<()> {
         let n = e.name.clone();
         let user_call = self.funcs.contains_key(&n);
-        let collection_place = !user_call && matches!(n.as_str(), "map_get_mut" | "vec_at_mut" | "map_remove" | "vec_clear");
+        let collection_place = !user_call && matches!(n.as_str(), "map_get_mut" | "vec_at_mut" | "map_remove" | "map_take" | "vec_clear");
         let mut marked = Vec::new();
         for i in 0..e.args.len().min(f.params.len()) {
             let want = substitute(&f.params[i], m);
@@ -3938,7 +3954,14 @@ impl Checker {
                     "pass an array of exactly the parameter's element type",
                 ));
             }
-            if self.active_roots.iter().any(|r| *r == name) || self.match_path_held(&name, &path) {
+            let take = !user_call && n == "map_take";
+            let root_held = self.active_roots.iter().any(|(root, map_read)| {
+                *root == name && (!take || !map_read)
+            });
+            let read_held = take && self.map_read_paths.iter().any(|(root, held)| {
+                *root == name && paths_overlap(&path, held)
+            });
+            if root_held || read_held || self.match_path_held(&name, &path) {
                 // G9: mutable access while a match view of the root is active
                 return Err(terr(
                     aline,
@@ -4054,7 +4077,7 @@ impl Checker {
                         "",
                     ));
                 }
-                if self.active_roots.iter().any(|r| *r == op.name) || self.match_path_held(&op.name, &[]) {
+                if self.active_roots.iter().any(|(root, _)| *root == op.name) || self.match_path_held(&op.name, &[]) {
                     return Err(terr(
                         aline,
                         acol,
@@ -4179,7 +4202,7 @@ impl Checker {
                     "",
                 ));
             }
-            if self.active_roots.iter().any(|r| *r == op.name) || self.match_path_held(&op.name, &[]) {
+            if self.active_roots.iter().any(|(root, _)| *root == op.name) || self.match_path_held(&op.name, &[]) {
                 return Err(terr(
                     aline,
                     acol,
@@ -4579,6 +4602,9 @@ impl Checker {
         // G6: fixed standard catalog (G6_SPEC 10.3)
         let cat: Option<CatFn> = if self.funcs.contains_key(&n) { None } else { catalog_fn(&n) };
         let call_site = Some(e as *const Call as usize);
+        if cat.is_some() && n == "map_take" && self.read_context != call_site {
+            return Err(terr(line, col, "foreign_contract", "map_take is only allowed as a direct match scrutinee", ""));
+        }
         if cat.is_some() && n == "vec_clear" && !c && self.statement_call != call_site {
             return Err(terr(line, col, "inout_context", "vec_clear must be a whole expression statement", ""));
         }
@@ -4608,7 +4634,7 @@ impl Checker {
                 col: 0,
                 params: cf.params.iter().map(|p| p.ty.clone()).collect(),
                 pnames: cf.params.iter().map(|p| p.name.to_string()).collect(),
-                inout: (0..cf.params.len()).map(|i| i == 0 && matches!(n.as_str(), "map_get_mut" | "vec_at_mut" | "map_remove" | "vec_clear")).collect(),
+                inout: (0..cf.params.len()).map(|i| i == 0 && matches!(n.as_str(), "map_get_mut" | "vec_at_mut" | "map_remove" | "map_take" | "vec_clear")).collect(),
                 ret: cf.ret.clone(),
                 effects: cf.effects.clone(),
                 tparams: cf.tparams.clone(),
@@ -4641,6 +4667,16 @@ impl Checker {
             }
         };
         // G3_SPEC 3.4: resolve + arity + admissibility + bounds, substitute the signature, check the arguments
+        if cat.is_some() && n == "map_take" {
+            if let Some([key, value]) = targs.as_deref() {
+                if *key != i64t() && key.to_key() != "string" {
+                    return Err(terr(line, col, "foreign_owned_type", "map_take requires i64 or String keys", ""));
+                }
+                if *value != i64t() && *value != boolt() && !self.owned_aggregate(value) {
+                    return Err(terr(line, col, "foreign_owned_type", "map_take requires i64, bool or owned aggregate values", ""));
+                }
+            }
+        }
         let m = self.instantiate(line, col, &format!("function {}", n), &fn_owner(&n), &f.tparams, &targs)?;
         if let Some(m) = &m {
             e.inst = Some(inst_of(fn_owner(&n), targs.as_deref().unwrap_or(&[]), m));
