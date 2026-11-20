@@ -4,6 +4,9 @@ mod bud_tdecide;
 
 pub struct Ordinal { value: i64 }
 
+// Typed attach unit: the five limit units and the unlimited flag (unit[5] == 1).
+pub struct AttachUnit { limits: crate::bud_tstate::Limits, unlimited: bool }
+
 pub struct St {
   sessions: HashMap<String, crate::bud_tstate::Budget>,
   ordinals: HashMap<String, Ordinal>, next_session: i64,
@@ -47,8 +50,7 @@ fn unit_floor(x: i64) -> i64
 }
 
 fn open_budget(inout b: crate::bud_tstate::Budget, origin: i64, size: i64,
-               unit: [i64], uuid: str, now: i64, carry: bool) -> () ! alloc
-  requires len(unit) == 6
+               unit: AttachUnit, uuid: str, now: i64, carry: bool) -> () ! alloc
 {
   if carry {
     b.follows = move b.id;
@@ -61,7 +63,7 @@ fn open_budget(inout b: crate::bud_tstate::Budget, origin: i64, size: i64,
   }
   b.state = 0;
   b.origin = origin;
-  b.unlimited = size == 0 || (size == -1 && unit[5] == 1);
+  b.unlimited = size == 0 || (size == -1 && unit.unlimited);
   b.unlimited_kind = 0;
   if b.unlimited { b.unlimited_kind = 1; }
   let mut scale: i64 = size;
@@ -69,11 +71,11 @@ fn open_budget(inout b: crate::bud_tstate::Budget, origin: i64, size: i64,
   if scale > 8 { scale = 8; }
   // Units clamp to 0..2^53-1 before scaling, as in the flat lane and the hand baseline.
   b.limits = crate::bud_tstate::Limits {
-    time: unit_floor(unit[0]) * scale,
-    delegations: unit_floor(unit[1]) * scale,
-    commands: unit_floor(unit[2]) * scale,
-    reviews: unit_floor(unit[3]) * scale,
-    checks: unit_floor(unit[4]) * scale
+    time: unit_floor(unit.limits.time) * scale,
+    delegations: unit_floor(unit.limits.delegations) * scale,
+    commands: unit_floor(unit.limits.commands) * scale,
+    reviews: unit_floor(unit.limits.reviews) * scale,
+    checks: unit_floor(unit.limits.checks) * scale
   };
   b.active_ms = 0;
   b.active_since = 0;
@@ -102,12 +104,12 @@ fn open_budget(inout b: crate::bud_tstate::Budget, origin: i64, size: i64,
 }
 
 fn attach_or_replace(inout st: St, sid: str, uuid: str, code: i64, now: i64,
-                     origin: i64, size: i64, unit: [i64]) -> crate::bud_tstate::Reply ! alloc
+                     origin: i64, size: i64, unit: AttachUnit) -> crate::bud_tstate::Reply ! alloc
 {
   let mut reply: crate::bud_tstate::Reply = crate::bud_tstate::Reply { status: 2, value: 0, a: 0, b: 0 };
   let mut source: i64 = origin;
   if code == 4 && source < 0 { source = 0; }
-  if source < 0 || source > 3 || len(unit) != 6 { return reply; }
+  if source < 0 || source > 3 { return reply; }
   if size != -1 && size != 0 && size != 1 && size != 2 && size != 4 && size != 8 { return reply; }
   match map_get_mut::<String, crate::bud_tstate::Budget>(inout st.sessions, sid) {
     Some(b) => {
@@ -140,12 +142,60 @@ fn attach_or_replace(inout st: St, sid: str, uuid: str, code: i64, now: i64,
   return reply;
 }
 
+pub fn t_view(inout st: St, sid: str, bid: str, code: i64) -> crate::bud_tstate::Reply ! alloc
+{
+  vec_clear::<crate::bud_tstate::Effect>(inout st.out.fx);
+  return crate::bud_tlife::view(inout st.sessions, inout st.out, sid, bid, code);
+}
+
+pub fn t_close(inout st: St, sid: str, now: i64) -> crate::bud_tstate::Reply ! alloc, io
+{
+  vec_clear::<crate::bud_tstate::Effect>(inout st.out.fx);
+  return crate::bud_tlife::maybe_close(inout st.sessions, inout st.clock_state.clocks, inout st.out, sid, now);
+}
+
+pub fn t_attach(inout st: St, sid: str, uuid: str, now: i64, origin: i64, size: i64, unit: AttachUnit) -> crate::bud_tstate::Reply ! alloc
+{
+  vec_clear::<crate::bud_tstate::Effect>(inout st.out.fx);
+  return attach_or_replace(inout st, sid, uuid, 3, now, origin, size, unit);
+}
+
+pub fn t_replace(inout st: St, sid: str, uuid: str, now: i64, origin: i64, size: i64, unit: AttachUnit) -> crate::bud_tstate::Reply ! alloc
+{
+  vec_clear::<crate::bud_tstate::Effect>(inout st.out.fx);
+  return attach_or_replace(inout st, sid, uuid, 4, now, origin, size, unit);
+}
+
+// Test-only packet decoding and rejection, shared with the direct-entry test lane.
+pub fn t_attach_unit(unit: [i64]) -> Option<AttachUnit>
+{
+  if len(unit) != 6 { return None::<AttachUnit>; }
+  return Some::<AttachUnit>(AttachUnit {
+    limits: crate::bud_tstate::Limits { time: unit[0], delegations: unit[1], commands: unit[2], reviews: unit[3], checks: unit[4] },
+    unlimited: unit[5] == 1
+  });
+}
+
+pub fn t_invalid(inout st: St) -> crate::bud_tstate::Reply ! alloc
+{
+  vec_clear::<crate::bud_tstate::Effect>(inout st.out.fx);
+  return crate::bud_tstate::Reply { status: 2, value: 0, a: 0, b: 0 };
+}
+
+// Test-only adapter for the packet driver: decodes the unit words once and calls the direct entry.
 pub fn t_call(inout st: St, sid: str, bid: str, uuid: str, code: i64,
               now: i64, origin: i64, size: i64, unit: [i64]) -> crate::bud_tstate::Reply ! alloc, io
 {
-  vec_clear::<crate::bud_tstate::Effect>(inout st.out.fx);
-  if code == 1 || code == 2 || code == 5 { return crate::bud_tlife::view(inout st.sessions, inout st.out, sid, bid, code); }
-  if code == 6 { return crate::bud_tlife::maybe_close(inout st.sessions, inout st.clock_state.clocks, inout st.out, sid, now); }
-  if code == 3 || code == 4 { return attach_or_replace(inout st, sid, uuid, code, now, origin, size, unit); }
-  return crate::bud_tstate::Reply { status: 2, value: 0, a: 0, b: 0 };
+  if code == 1 || code == 2 || code == 5 { return t_view(inout st, sid, bid, code); }
+  if code == 6 { return t_close(inout st, sid, now); }
+  if code == 3 || code == 4 {
+    match t_attach_unit(unit) {
+      Some(u) => {
+        if code == 3 { return t_attach(inout st, sid, uuid, now, origin, size, u); }
+        return t_replace(inout st, sid, uuid, now, origin, size, u);
+      }
+      None => { return t_invalid(inout st); }
+    }
+  }
+  return t_invalid(inout st);
 }
