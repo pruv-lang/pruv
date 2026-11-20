@@ -17,6 +17,8 @@ pub fn halt(inout b: crate::bud_tstate::Budget, sid: str, bid: str, now: i64, re
   running_position(len(o.fx));
   let count: i64 = running_count(sid, bid);
   if count < 0 || count > 1099511627776 { return 2; }
+  // All or nothing: refuse before any change when the halt effects would not fit in Out.
+  if len(o.fx) > 1099511627776 - 7 - count { return 2; }
   b.stopped = running_take(sid, bid);
   b.state = 1;
   b.halt_reason = reason;

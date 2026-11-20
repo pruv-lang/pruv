@@ -90,6 +90,22 @@ def build_pair(key, root, work, typed):
         sys.exit(2)
     main = (HERE / 'harness.rs').read_text().replace('@SOL@', str(sol)).replace('@HAND@', str(HERE / 'hand.rs'))
     main = main.replace('@TYPED@', str(HERE / 'harness_typed.rs'))
+    if typed:
+        # The shared harness uses wire IDs. Decode once during setup for the typed timings.
+        start = main.index('fn perf_resident(')
+        end = main.index('fn diff_ref(', start)
+        perf_code = main[start:end]
+        for indent in ('    ', '            '):
+            setup = f'\n{indent}let sid = pkey("s1");'
+            perf_code = perf_code.replace(
+                setup, setup + f'\n{indent}let (sid_text, sid_present) = sol::decode_sid(&sid).unwrap();')
+        perf_code = perf_code.replace(
+            'sol::m11_set_card(st, &rf, &sid,', 'generated::m11_set_card(st, &rf, &sid_text, sid_present,')
+        for op in (1, 3):
+            perf_code = perf_code.replace(
+                f'sol::m11_query(st, {op}, &rf, &sid,',
+                f'generated::m11_query(st, {op}, &rf, &sid_text, sid_present,')
+        main = main[:start] + perf_code + main[end:]
     (out / 'main.rs').write_text(main)
     cfg = ['--cfg', 'm11_typed'] if typed else []
     r = sh(['rustc', '-O', '--edition', '2021', '-A', 'warnings', *cfg, out / 'main.rs', '-o', out / 'harness'])
@@ -710,7 +726,7 @@ def hdiff_items():
     return items
 
 
-def hdiff_pair(k, harness):
+def hdiff_pair(k, harness, work):
     items = hdiff_items()
     data = ''.join('hdiff ' + wline(c, l, b, [s]) + '\n' for (c, l, b, s, _) in items)
     r = sh([harness], data=data)
@@ -748,7 +764,7 @@ def hdiff_pair(k, harness):
             if not cell:
                 bad = True
             print(f'  {kind}    {en}  | {sum(cell.values()):5} | {dict(sorted(cell.items()))}')
-    (WORK / f'hdiff_{k}.json').write_text(json.dumps(
+    (work / f'hdiff_{k}.json').write_text(json.dumps(
         {'items': len(items), 'lines': len(outs), 'differ': len(differ), 'tally': tally,
          'errors': {f'{kd}|{en}': v for (kd, en), v in sorted(errs.items())}}, indent=1, ensure_ascii=False))
     return bad
@@ -780,7 +796,7 @@ def main():
     if a.hdiff:
         bad = False
         for k in pairs:
-            bad = hdiff_pair(k, harness[k]) or bad
+            bad = hdiff_pair(k, harness[k], work) or bad
         sys.exit(1 if bad else 0)
     cases = q_gen.gen(a.seed, ['Q6'], count=a.count)
     obs = oracle.run_oracle(cases)

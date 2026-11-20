@@ -115,14 +115,14 @@ fn attach_or_replace(inout st: St, sid: str, uuid: str, code: i64, now: i64,
       if replace || b.state == 2 || b.state < 0 {
         let carry: bool = replace && source != 1;
         if b.state >= 0 {
-          match map_get_mut::<String, crate::bud_tstate::Clock>(inout st.clock_state.clocks, b.id) {
+          // One lookup: take the clock out, settle and disarm the owned value, drop it.
+          match map_take::<String, crate::bud_tstate::Clock>(inout st.clock_state.clocks, b.id) {
             Some(c) => {
               if replace { crate::bud_tstate::settle(inout b, inout c, sid, now, inout st.out); }
               crate::bud_tstate::disarm(inout c, inout st.out);
             }
             None => { }
           }
-          let removed: bool = map_remove::<String, crate::bud_tstate::Clock>(inout st.clock_state.clocks, b.id);
         }
         open_budget(inout b, source, size, unit, uuid, now, carry);
         crate::bud_tstate::emit(inout st.out, 22, 0, 0);

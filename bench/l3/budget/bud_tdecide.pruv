@@ -88,13 +88,13 @@ pub fn decide(inout sessions: HashMap<String, crate::bud_tstate::Budget>,
         sid: str, bid: str, now: i64, flag: i64) -> crate::bud_tstate::Reply ! alloc, io
 {
   let mut reply: crate::bud_tstate::Reply = crate::bud_tstate::Reply { status: 0, value: 6, a: 1, b: 0 };
-  let mut drop_clock: bool = false;
   match map_get_mut::<String, crate::bud_tstate::Budget>(inout sessions, sid) {
     Some(b) => {
       if b.state >= 0 && string_eq(b.id, bid) {
         reply.a = 2;
         if b.state == 1 && flag == -1 {
-          match map_get_mut::<String, crate::bud_tstate::Clock>(inout clocks, bid) {
+          // One lookup: take the clock out, settle and disarm the owned value, drop it.
+          match map_take::<String, crate::bud_tstate::Clock>(inout clocks, bid) {
             Some(c) => {
               crate::bud_tstate::settle(inout b, inout c, sid, now, inout out);
               crate::bud_tstate::disarm(inout c, inout out);
@@ -102,7 +102,6 @@ pub fn decide(inout sessions: HashMap<String, crate::bud_tstate::Budget>,
             None => { }
           }
           crate::bud_tstate::closed(inout b, 2, now);
-          drop_clock = true;
           crate::bud_tstate::emit(inout out, 39, 0, 0);
           crate::bud_tstate::emit(inout out, 36, 0, 0);
           crate::bud_tstate::emit(inout out, 20, 0, 0);
@@ -137,6 +136,5 @@ pub fn decide(inout sessions: HashMap<String, crate::bud_tstate::Budget>,
     }
     None => { }
   }
-  if drop_clock { let removed: bool = map_remove::<String, crate::bud_tstate::Clock>(inout clocks, bid); }
   return reply;
 }

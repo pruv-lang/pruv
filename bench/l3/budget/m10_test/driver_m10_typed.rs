@@ -153,7 +153,10 @@ impl World {
 
     fn put(&mut self, put: &Put) {
         let (sid, budget) = decode_put(put);
-        assert_eq!(sol::t_put(&mut self.st, &sid, &budget), 0);
+        let status = sol::t_put(&mut self.st, &sid, &budget);
+        if status != 0 {
+            self.note(format!("X {status}"));
+        }
     }
 
     fn note(&mut self, line: String) {
@@ -222,7 +225,10 @@ impl World {
                         black_box(&ids[effect.a as usize]);
                         None
                     }
-                    _ if self.silent => None,
+                    _ if self.silent => {
+                        black_box(effect);
+                        None
+                    }
                     20 => Some("E changed".to_owned()),
                     31 => Some("E cancel".to_owned()),
                     32 => Some("E stopMain".to_owned()),

@@ -30,7 +30,7 @@ fn decode_key(words: &[i64]) -> Option<String> {
     Some(key)
 }
 
-fn decode_sid(words: &[i64]) -> Option<(String, bool)> {
+pub fn decode_sid(words: &[i64]) -> Option<(String, bool)> {
     if words.is_empty() {
         return Some((String::new(), false));
     }

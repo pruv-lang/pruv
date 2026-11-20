@@ -52,11 +52,52 @@ def run(cmd, *, data=None, env=None, cwd=BUDGET):
     return p.stdout
 
 
-def build(pair, variant='base', source=None):
+def typed_harness(main):
+    # Reuse the flat protocol, scheduler and hand lane in the generated harness.
+    adapter = HERE / 'harness_typed.rs'
+    main = main.replace(
+        '#[path = "@SOL@"] mod sol;',
+        f'#[path = "@SOL@"] mod generated;\n#[path = "{adapter}"] mod sol;')
+    main = main.replace('    Pruv(World),', '    Pruv(sol::World),', 1)
+    main = main.replace('Self::Pruv(World::new())', 'Self::Pruv(sol::World::new())', 1)
+    main = main.replace(
+        'Lane::Pruv(w) => format!("ok {} {}", w.grows, (w.st.len() as i64).min(w.st[11]) - w.st[10]),',
+        'Lane::Pruv(_) => String::from("err 2"),')
+    start = main.index('// Pruv reserves space')
+    end = main.index('#[derive(Clone)]', start)
+    main = main[:start] + main[end:]
+    main = main.replace('    Pruv(World),', '    Pruv(World, sol::St),', 1)
+    main = main.replace('Clocks::Pruv(World::new())', 'Clocks::Pruv(World::new(), sol::new_state())')
+    main = main.replace(
+        'Self::Pruv(w) => w.call(&|st, out| sol::m12_observe(st, out)).map(<[_]>::to_vec),',
+        'Self::Pruv(w, clocks) => w.call(&|st, out| sol::m12_observe(st, out))'
+        '.map(|aux| sol::observe_clocks(clocks, aux)),')
+    main = main.replace('Self::Pruv(w) => w.call(&|st, out| sol::m12_seed_tool',
+                        'Self::Pruv(w, _) => w.call(&|st, out| sol::m12_seed_tool')
+    for operation in ('life', 'fire'):
+        start = main.index('(Self::Pruv(clocks), lane) => lifecycle(')
+        end = main.index('(Self::Hand(clocks)', start)
+        invoke = ('sol::m12_life(&mut w.st, clocks, op, rf, sid, arg, now)' if operation == 'life'
+                  else 'sol::m12_fire(&mut w.st, clocks, sid, bid, budget_first, now)')
+        clear = ('if op == 3 && result.is_ok() { sol::m12_reset_tools(&mut aux.st); }'
+                 if operation == 'life' else '')
+        main = main[:start] + f'''(Self::Pruv(aux, clocks), Lane::Pruv(w)) => {{
+                let result = {invoke};
+                {clear}
+                result
+            }},
+            ''' + main[end:]
+    return main
+
+
+def build(pair, variant='base', source=None, *, typed=False):
     out = WORK / variant / pair
     out.mkdir(parents=True, exist_ok=True)
     root = out / 'root.pruv'
-    shutil.copy(HERE / 'root.pruv', root)
+    shutil.copy(HERE / ('root_m12_typed.pruv' if typed else 'root.pruv'), root)
+    if typed:
+        for name in ('bud_tstate.pruv', 'bud_tlife.pruv'):
+            shutil.copy(BUDGET / name, out)
     for name in (*MODULES, 'bud_clock.pruv', 'bud_charge.pruv', 'bud_vwords.pruv',
                  'bud_effect.pruv', 'bud_cleanup.pruv', 'bud_vlife.pruv'):
         shutil.copy(BUDGET / name, out / name)
@@ -72,13 +113,24 @@ def build(pair, variant='base', source=None):
     rlib = out / 'libm12_facts.rlib'
     run(['rustc', '--crate-type', 'rlib', '--edition', '2021',
          HERE / 'm12_facts.rs', '-o', rlib])
-    run([*cmd, '--rust-extern', f'm12_facts={rlib}'], cwd=REPO)
+    externs = ['--rust-extern', f'm12_facts={rlib}']
+    if typed:
+        externs += ['--rust-extern', f'bud_facts={rlib}']
+    run([*cmd, *externs], cwd=REPO)
     main = out / 'main.rs'
-    main.write_text((HERE / 'harness.rs').read_text()
+    harness = (HERE / 'harness.rs').read_text()
+    if typed:
+        perf_source = out / 'perf_life.rs'
+        perf_source.write_text((HERE / 'perf_life.rs').read_text().replace(
+            'Clocks::Pruv(World::new())', 'Clocks::Pruv(World::new(), sol::new_state())'))
+        harness = typed_harness(harness)
+    else:
+        perf_source = HERE / 'perf_life.rs'
+    main.write_text(harness
                     .replace('@SOL@', str(sol)).replace('@HAND@', str(HERE / 'hand.rs'))
-                    .replace('@PERF_LIFE@', str(HERE / 'perf_life.rs')))
+                    .replace('@PERF_LIFE@', str(perf_source)))
     run(['rustc', '-O', '--edition', '2021', '-A', 'warnings', '--extern',
-         f'm12_facts={rlib}', main, '-o', out / 'harness'])
+         f'm12_facts={rlib}', *(['--extern', f'bud_facts={rlib}'] if typed else []), main, '-o', out / 'harness'])
     return out / 'harness'
 
 
@@ -141,7 +193,7 @@ def crafted(big=False):
     return out
 
 
-def fixed_checks(harness):
+def fixed_checks(harness, *, typed=False):
     """Direct checks the Node oracle cannot express. Returns a list of problems.
 
     dup: a loaded V object that repeats autoContinue (JSON.parse would collapse it). clear and a falsy record must
@@ -160,6 +212,9 @@ def fixed_checks(harness):
             blobs = dict(parse_dump(parse_ok(raw[-1])))
             if raw[2][:2] != 'ok' or blobs.get(sid) != V(base):
                 problems.append(f'dup op {op} {lane[1:]}: {raw[2][:60]} left {blobs.get(sid)}')
+    if typed:
+        print(f'fixed checks: dup 4 runs, {len(problems)} problems', flush=True)
+        return problems
     lines, worlds = [], 0
     for pad in range(0, 4000, 7):
         lines += ['init', 'load ' + wline(pkey('n1'), V({'id': 'x', 'pad': 'a' * pad})),
@@ -848,7 +903,10 @@ def lifecycle_perf(harness, rounds, reps=64):
             for round_no in range(rounds):
                 order = ('perf', 'hand') if round_no % 2 == 0 else ('hand', 'perf')
                 data = ''.join(f'{lane}{item} {size} {reps}\n' for lane in order)
-                for lane, line in zip(order, run([harness], data=data).splitlines(), strict=True):
+                lines = run([harness], data=data).splitlines()
+                if len(lines) != len(order):
+                    raise ValueError(f'{item} {size}: expected {len(order)} result lines, got {len(lines)}')
+                for lane, line in zip(order, lines):
                     ns, allocs, checksum = perf_result(line)
                     results[lane].append((ns, allocs / reps))
                     checksums.add(checksum)
@@ -865,6 +923,7 @@ def main():
     parser.add_argument('--count', type=int, default=300)
     parser.add_argument('--seed', type=int, default=20261117)
     parser.add_argument('--no-build', action='store_true')
+    parser.add_argument('--typed', action='store_true')
     action = parser.add_mutually_exclusive_group()
     action.add_argument('--mutants', action='store_true')
     action.add_argument('--hdiff', action='store_true')
@@ -874,6 +933,8 @@ def main():
     pairs = args.pairs.split(',')
     if any(p not in PAIRS for p in pairs) or args.count <= 0 or (args.perf is not None and args.perf <= 0):
         parser.error('use py,rs pairs and positive counts')
+    if args.typed and (args.mutants or args.cleanup_checks):
+        parser.error('typed mode does not support flat store probes')
     (WORK / 'tmp').mkdir(parents=True, exist_ok=True)
     fixtures = [common.strip_case(x) for x in common.load_group('L')]
     generated = q7p(args.seed, args.count)
@@ -890,8 +951,9 @@ def main():
         return 0 if good else 1
     harnesses = {}
     for pair in pairs:
-        h = WORK / 'base' / pair / 'harness'
-        harnesses[pair] = h if args.no_build and h.exists() else build(pair)
+        variant = 'typed' if args.typed else 'base'
+        h = WORK / variant / pair / 'harness'
+        harnesses[pair] = h if args.no_build and h.exists() else build(pair, variant, typed=args.typed)
         print(f'[{PAIRS[pair]}] built', flush=True)
     if args.hdiff:
         corpus = generated + fixtures + crafted() + crafted(big=True)
@@ -914,7 +976,7 @@ def main():
         return 0
     good = True
     for pair, h in harnesses.items():
-        problems = fixed_checks(h)
+        problems = fixed_checks(h, typed=args.typed)
         for msg in problems[:5]:
             print(f'  [{PAIRS[pair]}] {msg}', flush=True)
         good &= not problems

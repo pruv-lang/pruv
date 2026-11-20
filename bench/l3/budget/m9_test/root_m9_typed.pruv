@@ -165,6 +165,14 @@ pub fn t_call(inout st: St, code: i64, sid: str, bid: str, run: str,
   vec_clear::<Effect>(inout st.out.fx);
   let mut status: i64 = 0;
   if code < 1 || code > 7 { return 2; }
+  if code == 5 {
+    // Drop needs no session lookup: take the clock out, disarm the owned value, drop it.
+    match map_take::<String, Clock>(inout st.clocks, bid) {
+      Some(c) => { disarm(inout c, inout st.out, 13); }
+      None => {}
+    }
+    return status;
+  }
   let valid: bool = current(st, sid, bid);
   if code == 1 && !valid { return 0; }
   if code == 1 {
@@ -181,6 +189,30 @@ pub fn t_call(inout st: St, code: i64, sid: str, bid: str, run: str,
         Clock { owner: owned(sid), ordinal: ordinal, has_since: false, since: 0, armed: false,
           active: 0, runs: map_new::<String, Run>(), next_run: 0 });
     }
+  }
+  if code == 6 {
+    // A stale ref closes nothing (hand `close` checks `current` first).
+    if !valid { return status; }
+    // One lookup: take the clock out, settle and disarm the owned value, drop it.
+    match map_take::<String, Clock>(inout st.clocks, bid) {
+      Some(c) => {
+        match map_get_mut::<String, Budget>(inout st.sessions, sid) {
+          Some(b) => {
+            settle(inout b, inout c, sid, now, inout st.out);
+            b.state = 2;
+          }
+          None => {}
+        }
+        disarm(inout c, inout st.out, 13);
+      }
+      None => {
+        match map_get_mut::<String, Budget>(inout st.sessions, sid) {
+          Some(b) => { b.state = 2; }
+          None => {}
+        }
+      }
+    }
+    return status;
   }
   match map_get_mut::<String, Clock>(inout st.clocks, bid) {
     Some(c) => {
@@ -202,30 +234,21 @@ pub fn t_call(inout st: St, code: i64, sid: str, bid: str, run: str,
                 status = arm(inout b, inout c, sid, now, inout st.out);
               } else { status = 4; }
             }
-            if code == 6 {
-              settle(inout b, inout c, sid, now, inout st.out);
-              b.state = 2;
-            }
           }
           None => {}
         }
       }
-      if code == 5 || code == 6 { disarm(inout c, inout st.out, 13); }
     }
     None => {
-      if valid && (code == 4 || code == 6) {
+      if valid && code == 4 {
         match map_get_mut::<String, Budget>(inout st.sessions, sid) {
           Some(b) => {
-            if code == 6 { b.state = 2; }
-            else if b.state == 0 && !b.unlimited { status = 4; }
+            if b.state == 0 && !b.unlimited { status = 4; }
           }
           None => {}
         }
       }
     }
-  }
-  if code == 5 || code == 6 {
-    let removed: bool = map_remove::<String, Clock>(inout st.clocks, bid);
   }
   return status;
 }
