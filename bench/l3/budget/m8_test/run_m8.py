@@ -34,12 +34,20 @@ BUD = os.path.dirname(HERE)
 ROOT = os.path.abspath(os.path.join(BUD, "..", "..", ".."))
 WORK = os.path.join(BUD, "work", "m8")
 BUILD = WORK
-COMPILER_REPO = "/Users/spica4345/Projects/pruv"
+
+
+def shared_checkout():
+    """Main checkout of this repository (the worktree's git common dir parent), or ROOT."""
+    if not os.path.exists(os.path.join(ROOT, ".git")) or not shutil.which("git"):
+        return ROOT
+    result = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                            cwd=ROOT, capture_output=True, text=True)
+    return os.path.dirname(result.stdout.strip()) if result.returncode == 0 else ROOT
 
 
 def checkout_file(*parts):
     local = os.path.join(ROOT, *parts)
-    return local if os.path.isfile(local) else os.path.join(COMPILER_REPO, *parts)
+    return local if os.path.isfile(local) else os.path.join(shared_checkout(), *parts)
 
 
 PRUVC_DEFAULT = checkout_file("pruvc-rs", "target", "release", "pruvc")
