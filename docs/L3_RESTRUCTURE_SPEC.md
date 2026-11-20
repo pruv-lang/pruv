@@ -445,7 +445,7 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P32 | B/host.rs,roots/bindings,bud_test_abi.pruv,m34/m5–m11 shims | P split per operation/narrow family; direct/adapter grid, malformed admission, one decision engine. Partly done 2026-11-21 (Appendix P32): M10b family moved (typed direct entries `t_view/t_close/t_charge(Charge)/t_run/t_halt/t_raise(UnitAnswer)/t_decide(UnitAnswer)`, test-only adapter `t_call` decodes once; flat `bud_decide.pruv` and `root_m10b.pruv` retired; `bud_tstate::charge_typed` + `bud_tdecide` the single raise/decide/charge engine; Q exact rs/py on both lanes; malformed admission in Pruv). T10 family moved too (D64 closed). T7 entries moved (D65 entry part closed, P32.9; view cells now D72). T8 account entries moved (D66 status part closed, P32.10). Remaining families queued as D65 (running answer), D66 (engine merge, put record), D67-D71. Attempt 2 2026-11-21 (Appendix P32 (attempt 2)): D67 T11, D68 T12, D69 T4 m4_op, D70 one settle, D71 key admission moved (Q exact rs/py on both lanes, malformed tests at the typed constructors); D65 running answer and D66 rest not moved; one audit (10 must-fix): 9 fixed with regression tests, M11 byte storage left as gap D81; compiler gaps D73-D75, D81, perf debts D76-D80; perf_gate FAIL (93 cells, 13 fail, 71 debt); Attempt 3 2026-11-21 (Appendix P32 (attempt 3)): must-fix #5 (M12 native/packed SID identity), #8 (M4 SessionPut length word admitted in Pruv, malformed tests), #10 (M4 churn honors `--lane adapter`) done; D82 closed (typed M12 verified: `life` split into helpers), D65 closed (`bud_tlife::running_valid` admits the running wire), D75 closed (`bud_delay::delay_bits`); D66 rest blocked by gap D90; D79 not attempted; perf_gate FAIL (72 cells, 17 fail, 52 debt) recorded as D77/D91, M10 halt after the D65 change as D92 |
 | P32L | Both compilers (pruvc, pruvc-rs), SPEC.md, tests/ | Language rules for the P32b compiler gaps, in order D81, D73, D74. Done 2026-11-21 (Appendix P32L): R-6e-3 / R-6f-3 `[u8]` owned aggregates (D81), R-6f-6 struct host entries (D73), R-6f-3 enum results and the `vec![x]` sentence (D74); 20 tests/spec tests, full suite py 4566/4566 and rs 4578/4578, perf gate PASS (0.939x to 0.975x). LLVM and `raw_entries` "c" reject the new forms (D83); the bench switch is D84; the pre-existing `move` field split is D85. |
 | P32M | Both compilers (pruvc, pruvc-rs), SPEC.md, tests/ | Language rules for D90, D95 and D85. Done 2026-11-21 (Appendix P32M): R-6e-6 holder records (a record with a nested-collection record field as a direct field, a map value and a state value; D90), R-6e-18 `vec_extend_from_slice` for `i64` / `bool` (D95), R-6e-12 `move` of a `take` or local aggregate into a struct field or enum payload (D85, both compilers now accept); 14 new tests/spec tests (5 audit fixes included, Appendix P32M.5). Generated Rust is a plain nested struct and `extend_from_slice` with no clone. Perf gate FAIL at 1.000x to 1.026x from the language-required map capacity guard and entry string-length checks (D100, D101). LLVM rejects the new forms (D83). |
-| P33 | Both codegens/hot contracts: residual L4/L5 only | C inline attribute/size heuristic and local proof gates; P touched families, M11 compile CPU/binary size and parity. Partly done in P13i2a: `#[inline(always)]` and `#[inline]` fn attributes (explicit directive over R-7-3 promotion); size heuristic/local proof gates still open. |
+| P33 | Both codegens/hot contracts: residual L4/L5 only | C inline attribute/size heuristic and local proof gates; P touched families, M11 compile CPU/binary size and parity. Partly done in P13i2a: `#[inline(always)]` and `#[inline]` fn attributes (explicit directive over R-7-3 promotion). 2026-11-21 (Appendix P33): L4 zero-site rule tried and rejected (time regression vs base, rule 3); L5 survey: no removable guard. The rule (no R-7-3 promotion of a fn with zero textual call sites unless `incl <= 8`) cut M11 `__text` 15.8% and rustc CPU about 30%, but M10 putback was +5% (D110) and M11 R/B cells +3-6% (D113) vs base, giving back time already won; `__text` and rustc CPU are not gate axes, and H RSS moved only 16 KiB, so P26c stays open. The compilers, SPEC.md and tests are back at d7c2240. L5: the two `load_be` conversions fold at opt-level 3 to a load and `rev`; text residue D111, cold refusal path D112. RSS debt cells D114. |
 | P34 | One measured §4 opportunity per subpackage | P touched families/collisions and raw/admitted complete operations; saving ledger, same-structure hand (ii), assembly evidence for any proof win. |
 | P35 | B/compare.py,check_oracle.py,future judge,notes | P focused KD/final-observation checks; missing/unsupported paths remain open; full grid inventory ready. |
 | P36 | Whole-batch results after §7 | Full Q four pairs ×2000 where generated, existing fixture suites, all final grids and selected stage-two targets; every cell <=1.0, req gate and LLVM complete. |
@@ -619,6 +619,11 @@ fixed in one package before R12.
 | D92 | P32c perf (D65): M10 typed halt after the running answer moved into Pruv: D10 790.2 vs 347.2 (2.28x), D50 2426.5 vs 1271.1 (1.91x), D100 4386.9 vs 2414.7 ns/op (1.82x), 7 rounds, `work/p32c/m10_perf2.txt`; gating M / L FAIL (was D41 1.19-1.22x) | One fix attempt used (perf lane stages the wire, single-String decode; 7x -> 1.8-2.3x). Remaining cause by line: hand moves the cloned `Vec<String>` answer in (hand_m10.rs, one pass, no decode); Pruv walks the wire twice (`bud_tlife::running_valid` per-frame bounds and padding via `running_word`, then `halt` re-reads each frame header), and `unit_text` builds each ID from packed words through `encode_js_text` (per-unit push, one String per ID), each facts call re-borrowing the thread-local words. Next: one walk that admits and decodes per frame, or a facts call that returns the admitted frame's `String` without a thread-local borrow per word. Open |
 | D100 | P32M perf (D90): holder put, `HashMap<String, Entry>` insert plus `map_get_mut` update, M 1.3989 vs 1.3978 ms (1.001x), L 54.27 vs 52.89 ms (1.026x), 101 ABBA runs, `work/p32m/perf_gate.txt`; gating M / L FAIL | One fix attempt (bisect): the generated body is the hand body plus the source `map_insert` capacity guard `len(st.entries) < 2^40` and the R-6f-2 entry string-length checks (4 strings per call); with both removed the cell is 0.995x. Both are required by the language today. Next: let the verifier discharge the capacity guard from a state invariant, or fold the entry length checks into one compare. Open |
 | D101 | P32M perf (D95, D85): M cells at 1.000x (d95 refill 2.2028 vs 2.2021 ms, d85 take aggregate 41.268 vs 41.261 ms; L 0.991x and 0.999x), 101 ABBA runs; gating M FAIL by under 0.05% | d95 differs from hand only by the per-call entry length check on `src` (asm compare); d85 emits the same `St { s: s, k: k }` as hand and the residue is within run noise. Next: the same entry-check fold as D100, then remeasure. Open |
+| D110 | Rejected attempt (P33, R-7-3 zero-site rule): M10 putback (fixed share) went 32.1-32.5 -> 33.8-34.3 ns/call (D10 32.1 -> 34.2, D50 32.1 -> 33.8, D100 32.5 -> 34.3), D50 distributions apart (base 31.8-33.3, new 33.6-35.0, 7 rounds, `work/p33/m10_cmp.json`). This gives back time already won (rule 3), so the rule was reverted; compilers are at d7c2240 | Likely cause (not bisected): the harness calls `sol::t_put` (incl 1761) inside the same crate (`main_m10.rs` includes `gen.rs` as `mod sol`), and a policy blind to harness calls drops the `#[inline(always)]` it needs. No size cut-off separates `t_put` from the M11 entries (`m11_load` 1160 .. `m11_set_card` 3309). Next means: decide inline per entry from host call-site information (harness call sites, P26c, or a per-entry source attribute, section 6f), then remeasure M10 and M11 against base. Closed (rejected); the entry copy work stays in P26c |
+| D111 | P33 L5: proof-covered conversions left in the Rust text: `load_be` width 8 `<[u8; 8]>::try_from(get_unchecked(i..i+8)).unwrap()` (6 in M11 `sol.rs`), width 4 `pruv_w[4..].copy_from_slice(get_unchecked(i..i+4))` (8); `__pruv_small` `&mut pruv_sb[..n]` under the proven bound `K` (6 definitions, 0 calls in M11) is not probed | In verified builds source and target lengths are equal, so the length-mismatch panic is unreachable. An opt-level 3 probe of the two `load_be` patterns alone (`work/p33` asm probe) gives an 8-byte load and `rev` for width 8, a 4-byte load, `rev` and zero extension for width 4, with no panic call; no change made. Not shown: the absence of these calls in every M10 / M11 entry, or a time / size effect. Next: only if a family shows `unwrap_failed` / `len_mismatch` from these sites in its asm. Open (low) |
+| D112 | P33 L5: the cold `pruv_len_slow` path re-compares its last argument after every earlier one passed (8 in M11, also M10 `t_init` / `t_grow`) | Generated control flow, not a verifier fact; the path runs only on a refusal, so no gated cell moves. Removing the compare keeps the refusal order and message (panic on the last argument). Next: fold with the D100 / D101 entry-length-check work. Open (low) |
+| D113 | Rejected attempt (P33, R-7-3 zero-site rule), M11 time vs base: interleaved pairs (15 rounds, `work/p33/m11ab.json`) were slower with the rule in R/100 15/15 (275.8 -> 288.9 ns/op, +4.7%), R/1000 14/15 (+5.8%), B/100 14/15 (+3.3%), B/1000 14/15 (+3.8%); H/100, H/1000, I/1000 +3.7-4.3% median. This gives back time already won (rule 3; `__text` -15.8% and rustc CPU -30% are not gate axes), so the rule was reverted | Same cause as D110: the M11 entries lose `#[inline(always)]` and are no longer copied into the harness closures. Next means: per-entry inline decision from host call-site information (P26c), measured against base on M10 and M11 time and H RSS. Closed (rejected); H code pages stay in P26c |
+| D114 | Gate RSS debt cells at d7c2240: M11 A/1000 (+16 KiB vs hand), H/1000 (+32 KiB, P26b.4), C/100 (run spread); M10 perf D10 / D50 / D100 fixed share above hand | M11 C/100 moves -32 / -32 KiB vs hand over base1 / base2 and spreads by up to three pages between runs. M10 fixed-share RSS is the open P13 debt. Next: P26c (M11) and the M10 fixed-share work. Open |
 
 Queued with the debt list (not product perf):
 
@@ -11398,3 +11403,154 @@ measurement were done in this sub. No change to bench/l3, routing, models or acc
 | P32M-Q1 | LLVM / `raw_entries` "c" for holder records and `vec_extend_from_slice` | D83 |
 | P32M-Q2 | switch bench M12 `Entry` to a holder record (bench/l3 untouched here) | next P32 attempt |
 | P32M-Q3 | D90 L 1.026x and the 1.000x M cells from the capacity guard and entry length checks | D100, D101 |
+
+## Appendix P33: the zero-site inline rule (L4, rejected) and local proof gates (L5), both compilers
+
+Conclusion: the L4 zero-site rule was tried and rejected (time regression vs base, rule 3: no trade that gives back
+time already won; `__text` and rustc CPU are not gate axes, and H/1000 RSS moved only 16 KiB, so P26c stays open).
+The compilers, SPEC.md and tests are reverted to d7c2240. The L5 survey found no removable guard. The measurements
+below are kept as the record of the attempt.
+
+### P33.1 Rule tried (L4, reverted)
+
+The tried R-7-3 inline policy pass (`pruvc/inline_policy.py`, `pruvc-rs/crates/pruv-core/src/inline_policy.rs`, the
+same rule in both) promoted a non-pinned, non-recursive `#[inline]` fn with
+
+`always = incl <= INLINE_SMALL or calls == 1 or (calls >= 2 and incl * (calls - 1) <= INLINE_BUDGET)`
+
+instead of `calls <= 1`. The pass does not look at visibility: any fn with zero textual call sites in the output
+was covered, which in the gated families means the host entries (`pub fn m11_load`, ...) that the harness calls
+through closures; the pass does not see harness calls. Under the old (current) rule such a fn gets `#[inline(always)]`, forcing
+it into every harness call. The tried rule gave always only when `incl <= 8` and kept `#[inline]` otherwise. When codegen
+emits a wrapper and `X__pruv_body` for a `pub fn`, in-crate calls go to the body, so a large `pub fn` that `main`
+calls keeps `#[inline]` on the wrapper and its body (two call sites, wrapper and `main`) is decided by the usual
+budget. A small `pub fn` may be emitted without a separate body (`tiny_entry` in the new test). Pinned / explicit attributes (section 6f),
+recursion, the P18d `__pruv_fp` triple and the thresholds are unchanged. Both compilers emitted byte-identical Rust
+(`tests/diff_rust.py --fuzz-count 20`).
+
+### P33.2 Tests (removed with the revert)
+
+- `pruvc-rs` `inline_policy` unit tests and `tests/check_generated.py` `INLINE_PAIRS`: (8 lines, 0 sites) always,
+  (9, 0) not always, (9, 1) always; the existing pairs are unchanged.
+- `tests/spec/r7_3_inline_entry.pruv` (accept): a large uncalled `pub fn` keeps `#[inline]`, its `__pruv_body` and a
+  small uncalled `pub fn` get `#[inline(always)]`.
+- `tests/spec/r7_3_inline_entry_called.pruv` (reject): a call from `main` does not promote the large wrapper.
+- SPEC.md "Inline policy (generated Rust)": the promotion bullet and the Tests line. `tests/run_all_rows.txt` is
+  unchanged (`--list-rows` diff empty). No checked-in golden of generated Rust changed. The revert removes the two
+  fixtures, the unit asserts, the `INLINE_PAIRS` rows and the SPEC.md text; `git diff d7c2240 -- pruvc pruvc-rs
+  SPEC.md tests` is empty.
+
+### P33.3 M11 (`bench/l3/budget/m11_test`, unchanged)
+
+Compile and size: two builds each, `work/p33/{base1,base2,new1,new2}/result.json`.
+
+| Measure | Base (d7c2240) | P33 |
+|---|---:|---:|
+| `__text` bytes | 487,932 | 410,748 (-15.8%) |
+| rustc CPU | 4.05-4.08 s | 2.84-2.85 s (about -30%) |
+
+Time: base and P33 interleaved per round, 15 rounds, median ns/op (`work/p33/m11ab.json`). The min-max ranges overlap
+in every cell, but the pairs show a shift: P33 is slower in R/100 in 15 of 15 pairs (+4.7%), in R/1000, B/100 and
+B/1000 in 14 of 15 (+3.3-5.8%), and H/100, H/1000, I/1000 are +3.7-4.3% by median. This is D113 (rejected attempt).
+Against hand, pruv/hand is 0.47-0.69x in `new1` (the gate run) and 0.46-0.66x in `new2`.
+
+| Cell | Base | P33 | Cell | Base | P33 |
+|---|---:|---:|---|---:|---:|
+| A/100 | 417.2 | 417.3 | R/100 | 275.8 | 288.9 |
+| A/300 | 765.2 | 759.3 | R/1000 | 269.9 | 285.5 |
+| A/1000 | 125.8 | 123.2 | H/100 | 44.1 | 46.0 |
+| B/100 | 341.9 | 353.3 | H/1000 | 45.1 | 46.8 |
+| B/500 | 343.9 | 349.0 | I/100 | 208.3 | 212.2 |
+| B/1000 | 337.5 | 350.2 | I/1000 | 205.3 | 212.9 |
+| C/100 | 327.4 | 332.9 | | | |
+| C/1000 | 324.1 | 324.6 | | | |
+
+RSS vs hand, median of 3 per run:
+- H/1000 is +32 KiB in both base runs and +16 KiB in both P33 runs.
+- A/1000 is +16 KiB before and after.
+- C/100 is -32, -32, +16, -16 KiB over base1, base2, new1, new2 (48 KiB spread, three pages); the gate run new1
+  puts it in the RSS debt cells.
+- The six gate RSS debt cells of the P33 build (M11 A/1000, C/100, H/1000; M10 D10, D50, D100) are open at base too
+  (D114).
+
+### P33.4 M10 (`bench/l3/budget/m10_test`, unchanged)
+
+Seven interleaved rounds of base, P33 and hand, median ns/call (`work/p33/m10_cmp.json`, script
+`work/p33/m10bench.py`). Base / P33: `__text` 468,540 / 467,900 bytes; rustc CPU 4.35 / 3.89 s.
+
+| Cell | Base | P33 | Hand |
+|---|---:|---:|---:|
+| halt D10 | 302.0 | 299.1 | 320.5 |
+| halt D50 | 678.5 | 664.9 | 1130.5 |
+| halt D100 | 1028.0 | 1020.6 | 2098.6 |
+| putback D10 | 32.1 | 34.2 | 73.3 |
+| putback D50 | 32.1 | 33.8 | 74.8 |
+| putback D100 | 32.5 | 34.3 | 73.8 |
+
+- halt is equal or better.
+- putback rose about 5%, and at D50 the base and P33 distributions do not overlap. It is still 0.45-0.47x hand.
+- Likely cause (not bisected): the harness calls `sol::t_put` (incl 1761) inside the same crate (`main_m10.rs`
+  includes `gen.rs` as `mod sol`), and the pass does not count harness calls. The old rule forced it with always; the
+  new rule leaves it to rustc.
+- One fix attempt, a size cut-off: no threshold separates `t_put` from the M11 entries whose copies the rule removes
+  (incl 1160 to 3309). This is D110 (rejected attempt).
+- RSS is +16 KiB over base (P33 1.13-1.16x hand). The fixed-share RSS debt was already open from P13.
+
+Perf gate on the P33 build: `tools/perf_gate.py work/p33/perf_cells.json` gave VERDICT PASS (37 cells, 0 fail, 6 debt
+RSS cells, `work/p33/perf_gate.txt`). The gate compares to hand, not to base; the base comparison above is what
+rejected the rule.
+
+### P33.5 L5: local proof gates
+
+A read-only survey of M11 `sol.rs` and the codegen sites in both compilers found four kinds of guard left in the
+text:
+
+1. `load_be` width 8: `<[u8; 8]>::try_from(get_unchecked(i..i+8)).unwrap()`, at `pruvc/codegen.py:3435` and
+   `codegen.rs:4671`.
+2. `load_be` width 4: `copy_from_slice`, at `pruvc/codegen.py:3439` and `codegen.rs:4675`.
+3. `__pruv_small` `[..n]` (`pruvc/codegen.py:2819`, `codegen.rs:3701`), which has no calls in M11.
+4. The last re-compare in the cold `pruv_len_slow` path, at `pruvc/codegen.py:275` and `codegen.rs:5533`.
+
+In verified builds the source and target lengths of both conversions are equal, so the length-mismatch panic is
+unreachable. An opt-level 3 asm probe of the two `load_be` patterns alone gives an 8-byte load and `rev` for width 8
+and a 4-byte load, `rev` and zero extension for width 4, with no `unwrap_failed` or `len_mismatch` call. The
+`unwrap_failed` calls found in the M11 binary are in `main`, the perf loop, closures and std.
+
+The probe covers these two conversions only; it does not show that no such call remains in every M10 / M11 entry,
+or that removing the text has no time or size effect. No guard was removed:
+- The result checks and the refusal order are unchanged.
+- No verification machinery was added.
+
+The text residue is D111. The cold refusal-path compare is D112, to fold with the D100 / D101 entry-check work.
+
+### P33.6 Audit
+
+One Codex gpt-6.2-astra ultra audit: the two compilers decide identically on the same Rust text and the new
+fixtures fail under the old rule. Seven must-fix items were doc fixes (rustc CPU range, the M11 time shift now in
+D113, the C/100 RSS spread and the RSS debt cells now in D114, the D110 baseline and same-crate cause, the zero-site
+wording, the width-4 codegen site, the asm description); all are applied in this appendix and the debt rows.
+
+### P33.7 Note for P26c
+
+Dropping the forced `#[inline(always)]` on every zero-site entry cut M11 `__text` 16% and H/1000 RSS by one page
+(+32 -> +16 KiB over hand), but cost M10 putback and M11 R/B time. The M11 host entries keep the forced attribute at
+d7c2240. Next means: decide inline per entry from host call-site information (harness call sites from P26c, or a
+per-entry source attribute, section 6f), and gate it against base time on M10 and M11 as well as H RSS.
+
+### P33.8 Budget, delegations and debt
+
+Started 2026-11-21 about 06:30 KST with a 3 h budget. Proof judgment and perf measurement were done in this sub.
+Delegations:
+- write: Claude sonnet, `0fe56283`;
+- L5 research: Codex gpt-6.2-astra, `8510c0a9`;
+- audit: Codex gpt-6.2-astra ultra.
+
+No change to bench/l3, routing, models or accounts.
+
+| Item | Content | Next |
+|---|---|---|
+| D110 | rejected attempt: M10 putback +5% fixed share from the zero-site rule | per-entry decision from host call-site info (P26c) |
+| D111 | proof-covered conversion checks in text only, folded by rustc | only if a family shows them in asm |
+| D112 | cold `pruv_len_slow` last re-compare | with D100 / D101 |
+| D113 | rejected attempt: M11 R/B cells 3-6% slower than base in interleaved pairs | with D110 |
+| D114 | existing gate RSS debt cells (M11 three, M10 three) | P26c, M10 fixed share |
