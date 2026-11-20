@@ -65,17 +65,18 @@ def sh(cmd, data=None, cwd=None, env=None):
 
 
 # ---- build -------------------------------------------------------------------------------------------------------------
-def prepare_sources():
-    src = WORK / 'src'
+def prepare_sources(work, typed):
+    src = work / 'src'
     src.mkdir(parents=True, exist_ok=True)
-    shutil.copy(HERE / 'root.pruv', src / 'root.pruv')
+    name = 'root_m11_typed.pruv' if typed else 'root.pruv'
+    shutil.copy(HERE / name, src / name)
     for m in MODULES:
         shutil.copy(BUDGET / m, src / m)
-    return src / 'root.pruv'
+    return src / name
 
 
-def build_pair(key, root):
-    out = WORK / key
+def build_pair(key, root, work, typed):
+    out = work / key
     out.mkdir(parents=True, exist_ok=True)
     sol = out / 'sol.rs'
     if key == 'rs':
@@ -88,8 +89,10 @@ def build_pair(key, root):
         sys.stderr.write(f'[{key}] compile failed:\n{r.stdout[-3000:]}\n{r.stderr[-3000:]}\n')
         sys.exit(2)
     main = (HERE / 'harness.rs').read_text().replace('@SOL@', str(sol)).replace('@HAND@', str(HERE / 'hand.rs'))
+    main = main.replace('@TYPED@', str(HERE / 'harness_typed.rs'))
     (out / 'main.rs').write_text(main)
-    r = sh(['rustc', '-O', '--edition', '2021', '-A', 'warnings', out / 'main.rs', '-o', out / 'harness'])
+    cfg = ['--cfg', 'm11_typed'] if typed else []
+    r = sh(['rustc', '-O', '--edition', '2021', '-A', 'warnings', *cfg, out / 'main.rs', '-o', out / 'harness'])
     if r.returncode != 0:
         sys.stderr.write(f'[{key}] rustc failed:\n{r.stderr[-3000:]}\n')
         sys.exit(2)
@@ -757,6 +760,7 @@ def main():
     ap.add_argument('--count', type=int, default=300)
     ap.add_argument('--seed', type=int, default=q_gen.SEED if hasattr(q_gen, 'SEED') else 20261117)
     ap.add_argument('--perf', action='store_true')
+    ap.add_argument('--typed', action='store_true', help='use the typed resident session map')
     ap.add_argument('--runs', type=int, default=5)
     ap.add_argument('--no-build', action='store_true')
     ap.add_argument('--hdiff', action='store_true', help='hand vs Pruv setCard on generated cards x scenarios (no oracle replay)')
@@ -765,13 +769,14 @@ def main():
     if a.selftest_b:
         selftest_b()
         return
-    WORK.mkdir(parents=True, exist_ok=True)
+    work = WORK.with_name('m11_typed') if a.typed else WORK
+    work.mkdir(parents=True, exist_ok=True)
     pairs = [p.strip() for p in a.pairs.split(',') if p.strip()]
-    root = prepare_sources()
+    root = prepare_sources(work, a.typed)
     harness = {}
     for k in pairs:
-        h = WORK / k / 'harness'
-        harness[k] = h if (a.no_build and h.exists()) else build_pair(k, root)
+        h = work / k / 'harness'
+        harness[k] = h if (a.no_build and h.exists()) else build_pair(k, root, work, a.typed)
     if a.hdiff:
         bad = False
         for k in pairs:
@@ -806,7 +811,7 @@ def main():
     if a.perf:
         print('  item | size | Pruv ns | hand Rust ns | TS ns | Pruv/hand')
         report['perf'] = perf(harness[pairs[-1]], a.runs)
-    (WORK / 'report.json').write_text(json.dumps(report, indent=1, ensure_ascii=False))
+    (work / 'report.json').write_text(json.dumps(report, indent=1, ensure_ascii=False))
     sys.exit(1 if bad else 0)
 
 
