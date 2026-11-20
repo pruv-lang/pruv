@@ -301,9 +301,40 @@ pub fn running_take(_sid: &str, _bid: &str) -> Vec<String> {
     CURRENT_RUNNING.with(|current| std::mem::take(&mut *current.borrow_mut()))
 }
 
+// Packs the session key on the stack, as hand_m7_u16 does (pack_u16_into); keys past 64 words take the heap path.
 pub fn is_quiet_text(sid: &str, position: i64) -> i64 {
-    let key = packed_key(sid);
-    is_quiet(&key, 1, key[0], position)
+    let mut kbuf = [0i64; 65];
+    let mut count: usize = 0;
+    let mut long = false;
+    let mut chars = sid.chars();
+    while let Some(ch) = chars.next() {
+        let mut pair = [0u16; 2];
+        let units: &[u16] = if ch == '\u{e000}' {
+            let escaped = chars.next().expect("missing JavaScript text escape");
+            pair[0] = if escaped == '\u{e000}' { 0xe000 } else { 0xd800 + (escaped as u16 - 0xe100) };
+            &pair[..1]
+        } else {
+            ch.encode_utf16(&mut pair)
+        };
+        for &unit in units {
+            let word = 1 + count / 4;
+            if word >= kbuf.len() {
+                long = true;
+                break;
+            }
+            kbuf[word] |= i64::from(unit) << (48 - 16 * (count % 4));
+            count += 1;
+        }
+        if long {
+            break;
+        }
+    }
+    if long {
+        let key = packed_key(sid);
+        return is_quiet(&key, 1, key[0], position);
+    }
+    kbuf[0] = count as i64;
+    is_quiet(&kbuf, 1, count as i64, position)
 }
 
 // P30 synchronous unit fact. The comparison lane enables logging.
