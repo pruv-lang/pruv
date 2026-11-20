@@ -420,6 +420,7 @@ fn run_perf(args: &[String]) {
     for i in 0..d {
         ids.extend(key(&format!("d{:04}", i)));
     }
+    let names: Vec<String> = (0..d).map(|i| format!("d{:04}", i)).collect();
     let mut w = World::new();
     w.silent = true;
     let putback = |w: &mut World| {
@@ -427,7 +428,7 @@ fn run_perf(args: &[String]) {
     };
     putback(&mut w);
     let go = |w: &mut World| {
-        bud_facts::set_running(vec![ids.clone()]);
+        bud_facts::set_running_text(names.clone());
         bud_facts::set_running_calls(0);
         assert_eq!(black_box(w.call_typed(12, 1, &sid, bid, "", &[0; 10])), 0);
         putback(w);
