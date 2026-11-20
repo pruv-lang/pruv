@@ -60,20 +60,34 @@ def typed_harness(main):
         f'#[path = "@SOL@"] mod generated;\n#[path = "{adapter}"] mod sol;')
     main = main.replace('    Pruv(World),', '    Pruv(sol::World),', 1)
     main = main.replace('Self::Pruv(World::new())', 'Self::Pruv(sol::World::new())', 1)
-    main = main.replace('#[derive(Clone)]\nenum Lane', 'enum Lane', 1)
     main = main.replace(
         'Lane::Pruv(w) => format!("ok {} {}", w.grows, (w.st.len() as i64).min(w.st[11]) - w.st[10]),',
         'Lane::Pruv(_) => String::from("err 2"),')
     start = main.index('// Pruv reserves space')
     end = main.index('#[derive(Clone)]', start)
     main = main[:start] + main[end:]
-    for _ in range(2):  # call and fire
+    main = main.replace('    Pruv(World),', '    Pruv(World, sol::St),', 1)
+    main = main.replace('Clocks::Pruv(World::new())', 'Clocks::Pruv(World::new(), sol::new_state())')
+    main = main.replace(
+        'Self::Pruv(w) => w.call(&|st, out| sol::m12_observe(st, out)).map(<[_]>::to_vec),',
+        'Self::Pruv(w, clocks) => w.call(&|st, out| sol::m12_observe(st, out))'
+        '.map(|aux| sol::observe_clocks(clocks, aux)),')
+    main = main.replace('Self::Pruv(w) => w.call(&|st, out| sol::m12_seed_tool',
+                        'Self::Pruv(w, _) => w.call(&|st, out| sol::m12_seed_tool')
+    for operation in ('life', 'fire'):
         start = main.index('(Self::Pruv(clocks), lane) => lifecycle(')
         end = main.index('(Self::Hand(clocks)', start)
-        main = main[:start] + '(Self::Pruv(_), _) => Err(2),\n            ' + main[end:]
-    return main.replace(
-        'perf_life::measure(hand, item, size, reps)',
-        'String::from("err 2")')
+        invoke = ('sol::m12_life(&mut w.st, clocks, op, rf, sid, arg, now)' if operation == 'life'
+                  else 'sol::m12_fire(&mut w.st, clocks, sid, bid, budget_first, now)')
+        clear = ('if op == 3 && result.is_ok() { sol::m12_reset_tools(&mut aux.st); }'
+                 if operation == 'life' else '')
+        main = main[:start] + f'''(Self::Pruv(aux, clocks), Lane::Pruv(w)) => {{
+                let result = {invoke};
+                {clear}
+                result
+            }},
+            ''' + main[end:]
+    return main
 
 
 def build(pair, variant='base', source=None, *, typed=False):
@@ -82,7 +96,8 @@ def build(pair, variant='base', source=None, *, typed=False):
     root = out / 'root.pruv'
     shutil.copy(HERE / ('root_m12_typed.pruv' if typed else 'root.pruv'), root)
     if typed:
-        shutil.copy(BUDGET / 'bud_tstate.pruv', out)
+        for name in ('bud_tstate.pruv', 'bud_tlife.pruv'):
+            shutil.copy(BUDGET / name, out)
     for name in (*MODULES, 'bud_clock.pruv', 'bud_charge.pruv', 'bud_vwords.pruv',
                  'bud_effect.pruv', 'bud_cleanup.pruv', 'bud_vlife.pruv'):
         shutil.copy(BUDGET / name, out / name)
@@ -98,16 +113,24 @@ def build(pair, variant='base', source=None, *, typed=False):
     rlib = out / 'libm12_facts.rlib'
     run(['rustc', '--crate-type', 'rlib', '--edition', '2021',
          HERE / 'm12_facts.rs', '-o', rlib])
-    run([*cmd, '--rust-extern', f'm12_facts={rlib}'], cwd=REPO)
+    externs = ['--rust-extern', f'm12_facts={rlib}']
+    if typed:
+        externs += ['--rust-extern', f'bud_facts={rlib}']
+    run([*cmd, *externs], cwd=REPO)
     main = out / 'main.rs'
     harness = (HERE / 'harness.rs').read_text()
     if typed:
-        harness = typed_harness(harness).replace('#[path = "@PERF_LIFE@"] mod perf_life;\n', '')
+        perf_source = out / 'perf_life.rs'
+        perf_source.write_text((HERE / 'perf_life.rs').read_text().replace(
+            'Clocks::Pruv(World::new())', 'Clocks::Pruv(World::new(), sol::new_state())'))
+        harness = typed_harness(harness)
+    else:
+        perf_source = HERE / 'perf_life.rs'
     main.write_text(harness
                     .replace('@SOL@', str(sol)).replace('@HAND@', str(HERE / 'hand.rs'))
-                    .replace('@PERF_LIFE@', str(HERE / 'perf_life.rs')))
+                    .replace('@PERF_LIFE@', str(perf_source)))
     run(['rustc', '-O', '--edition', '2021', '-A', 'warnings', '--extern',
-         f'm12_facts={rlib}', main, '-o', out / 'harness'])
+         f'm12_facts={rlib}', *(['--extern', f'bud_facts={rlib}'] if typed else []), main, '-o', out / 'harness'])
     return out / 'harness'
 
 
@@ -880,7 +903,10 @@ def lifecycle_perf(harness, rounds, reps=64):
             for round_no in range(rounds):
                 order = ('perf', 'hand') if round_no % 2 == 0 else ('hand', 'perf')
                 data = ''.join(f'{lane}{item} {size} {reps}\n' for lane in order)
-                for lane, line in zip(order, run([harness], data=data).splitlines(), strict=True):
+                lines = run([harness], data=data).splitlines()
+                if len(lines) != len(order):
+                    raise ValueError(f'{item} {size}: expected {len(order)} result lines, got {len(lines)}')
+                for lane, line in zip(order, lines):
                     ns, allocs, checksum = perf_result(line)
                     results[lane].append((ns, allocs / reps))
                     checksums.add(checksum)
@@ -944,9 +970,6 @@ def main():
         return 0 if cleanup_checks(harnesses) else 1
     if args.perf:
         perf(harnesses[pairs[-1]], args.perf)
-        if args.typed:
-            print('typed lifecycle perf unavailable')
-            return 1
         print('item size Pruv-ns/op hand-ns/op Pruv-alloc/op hand-alloc/op checksum')
         for item, size, p, h, pa, ha, checksum in lifecycle_perf(harnesses[pairs[-1]], args.perf):
             print(f'{item} {size} {p:.1f} {h:.1f} {pa:.3f} {ha:.3f} {checksum}', flush=True)

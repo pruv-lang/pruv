@@ -11,6 +11,7 @@ struct Facts {
     reads: Vec<Read>,
     observing: bool,
     finds: Vec<(usize, Vec<i64>)>,
+    typed_running: Vec<i64>,
 }
 
 pub struct Read {
@@ -151,4 +152,54 @@ pub fn decode_words(text: &str) -> Vec<i64> {
         Some([units.next()?, units.next()?, units.next()?]
             .into_iter().fold(word, |word, unit| (word << 16) | i64::from(unit)))
     }).collect()
+}
+
+pub fn encode_key(text: &str) -> Vec<i64> {
+    let n = text.chars().count();
+    let mut packed = vec![0; 1 + n.div_ceil(4)];
+    packed[0] = n as i64;
+    for (i, unit) in text_units(text).enumerate() {
+        packed[1 + i / 4] |= i64::from(unit) << (48 - 16 * (i % 4));
+    }
+    packed
+}
+
+// The typed effect index is replaced by the M12 wire offset in running_wire.
+pub fn running_position(_: i64) {}
+
+pub fn running_count(_: &str, _: &str) -> i64 {
+    FACTS.with(|slot| {
+        let f = slot.borrow();
+        f.running.get(f.running_pos).and_then(|row| row.first()).copied().unwrap_or(0)
+    })
+}
+
+pub fn running_take(_: &str, _: &str) -> Vec<String> {
+    FACTS.with(|slot| {
+        let mut f = slot.borrow_mut();
+        let row = f.running.get(f.running_pos).cloned().unwrap_or_else(|| vec![0]);
+        f.running_pos += 1;
+        let mut ids = Vec::new();
+        let mut rest = row.get(1..).unwrap_or_default();
+        while let Some(&count) = rest.first() {
+            let words = 1 + (count as usize).div_ceil(4);
+            let Some(key) = rest.get(..words).and_then(packed_text) else { break; };
+            ids.push(key);
+            rest = &rest[words..];
+        }
+        f.typed_running = row;
+        ids
+    })
+}
+
+pub fn running_wire(reference: &[i64], offset: i64) -> Vec<i64> {
+    FACTS.with(|slot| {
+        let mut f = slot.borrow_mut();
+        f.reads.push(Read { offset: offset as usize, code: 7, reference: reference.to_vec() });
+        std::mem::take(&mut f.typed_running)
+    })
+}
+
+pub fn is_quiet_text(_: &str, _: i64) -> i64 {
+    unreachable!("M12 does not expose maybeClose")
 }

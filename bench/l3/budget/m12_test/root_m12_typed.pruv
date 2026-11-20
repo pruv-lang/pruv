@@ -8,6 +8,9 @@ mod bud_store;
 mod bud_map;
 mod bud_world;
 mod bud_tstate;
+mod bud_tlife;
+mod bud_clock;
+mod bud_cleanup;
 mod bud_vwords;
 mod bud_auto;
 mod bud_effect;
@@ -16,7 +19,8 @@ pub struct Ordinal { value: i64 }
 pub struct St {
   sessions: HashMap<String, crate::bud_tstate::Budget>,
   ordinals: HashMap<String, Ordinal>,
-  next_session: i64
+  next_session: i64,
+  clock_state: crate::bud_tstate::ClockState
 }
 
 trusted rust fn encode_words(words: [i64]) -> String ! alloc
@@ -51,19 +55,26 @@ fn make_budget(blob: [i64]) -> crate::bud_tstate::Budget ! alloc
 {
   let id: [i64] = crate::bud_vwords::packed(blob, crate::bud_vwords::get(blob, 0, "id"));
   let pos: i64 = crate::bud_vwords::get(blob, 0, "state");
-  let mut state: i64 = 3;
+  let mut state: i64 = 2;
   if len(blob) == 0 { state = -1; }
   if str_is(blob, pos, "open") { state = 0; }
   if str_is(blob, pos, "halted") { state = 1; }
-  if str_is(blob, pos, "closed") { state = 2; }
+  let limits: i64 = get(blob, 0, "limits");
+  let used: i64 = get(blob, 0, "used");
   return crate::bud_tstate::Budget {
-    id: decode_key(id), state: state, unlimited: false, unlimited_kind: 0,
-    limits: crate::bud_tstate::Limits { time: 0, delegations: 0, commands: 0, reviews: 0, checks: 0 },
-    active_ms: 0, active_since: -1, since_kind: 0, delegations: 0, commands: 0,
-    reviews: 0, checks: 0, tools: 0, failures: 0, retries: 0, metadata: 0, origin: 0,
+    id: decode_key(id), state: state, unlimited: crate::bud_card::truthy(blob, get(blob, 0, "unlimited")), unlimited_kind: 0,
+    limits: crate::bud_tstate::Limits { time: num(blob, get(blob, limits, "timeMinutes")),
+      delegations: num(blob, get(blob, limits, "delegations")), commands: num(blob, get(blob, limits, "commands")),
+      reviews: num(blob, get(blob, limits, "reviews")), checks: num(blob, get(blob, limits, "checks")) },
+    active_ms: num(blob, get(blob, used, "activeMs")), active_since: -1, since_kind: -1,
+    delegations: num(blob, get(blob, used, "delegations")), commands: num(blob, get(blob, used, "commands")),
+    reviews: num(blob, get(blob, used, "reviews")), checks: num(blob, get(blob, used, "checks")),
+    tools: num(blob, get(blob, used, "tools")), failures: num(blob, get(blob, used, "failures")),
+    retries: num(blob, get(blob, used, "retries")), metadata: 0, origin: 0,
     opened_at: string_new(), since_text: string_new(), ended_at: string_new(), follows: string_new(),
     ended_how: 0, ended_kind: 0, ended_ms: 0, opened_ms: 0, follows_kind: 0,
-    rest: encode_words(blob), halt_reason: -1, halt_kind: 0, halt_ms: 0,
+    rest: encode_words(blob), halt_reason: reason_code(blob, get(blob, get(blob, 0, "halt"), "reason")),
+    halt_kind: 0, halt_ms: 0,
     halt_text: string_new(), stopped: vec_new::<String>()
   };
 }
@@ -569,3 +580,574 @@ pub fn m12_grow(prev: [i64], inout next: [i64]) -> i64
   return 0;
 }
 
+
+trusted rust fn unit(fxn: i64) -> Vec<i64> ! alloc, io
+  ensures true
+  = "::m12_facts::unit";
+
+trusted rust fn uuid(fxn: i64) -> Vec<i64> ! alloc, io
+  ensures true
+  = "::m12_facts::uuid";
+
+trusted rust fn observing() -> bool ! io
+  ensures true
+  = "::m12_facts::observing";
+
+trusted rust fn observe_find(offset: i64, budget: [i64]) -> () ! io
+  ensures true
+  = "::m12_facts::observe_find";
+
+fn get(a: [i64], p: i64, k: str) -> i64 { return crate::bud_vwords::get(a, p, k); }
+
+fn part(a: [i64], p: i64) -> [i64] ! alloc { return crate::bud_vwords::part(a, p); }
+
+fn cat(a: [i64], b: [i64]) -> [i64] ! alloc { return crate::bud_vwords::cat(a, b); }
+
+fn num(a: [i64], p: i64) -> i64
+  ensures -9007199254740991 <= result && result <= 9007199254740991
+{
+  if p < 0 || p > len(a) - 2 || rd(a, p) != 5 { return 0; }
+  let x: i64 = rd(a, p + 1);
+  if x < -9007199254740991 || x > 9007199254740991 { return 0; }
+  return x;
+}
+
+fn number(n: i64) -> [i64] ! alloc { return crate::bud_vwords::pair(5, n); }
+
+fn numeric(k: str, n: i64) -> [i64] ! alloc { return crate::bud_vwords::field(k, number(n)); }
+
+fn named(i: i64) -> str ! alloc
+{
+  if i == 0 { return "time"; }
+  if i == 1 { return "delegations"; }
+  if i == 2 { return "commands"; }
+  if i == 3 { return "reviews"; }
+  if i == 4 { return "checks"; }
+  if i == 5 { return "retries"; }
+  if i == 6 { return "tools"; }
+  return "failures";
+}
+
+fn reason_code(a: [i64], p: i64) -> i64 ! alloc
+{
+  let mut i: i64 = 0;
+  while i <= 4
+    invariant 0 <= i && i <= 5
+    decreases 5 - i
+  {
+    if str_is(a, p, named(i)) { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn ref_value(sid: [i64], bid: [i64], budget_first: bool) -> [i64] ! alloc
+{
+  let s: [i64] = crate::bud_vwords::field("sessionId", crate::bud_vwords::unpack(sid));
+  let b: [i64] = crate::bud_vwords::field("budgetId", crate::bud_vwords::unpack(bid));
+  if budget_first { return crate::bud_vwords::object(2, cat(b, s)); }
+  return crate::bud_vwords::object(2, cat(s, b));
+}
+
+fn tick(take effects: Vec<i64>, now: i64) -> Vec<i64> ! alloc
+{ return crate::bud_effect::value(move effects, 2, number(now)); }
+
+fn no_active_since(a: [i64]) -> [i64] ! alloc
+{
+  let mut p: crate::bud_auto::Pair = crate::bud_auto::find_pair(a, 0, "activeSince");
+  if p.k < 0 { return crate::ent_u16::slice(a, 0, len(a)); }
+  let mut out: [i64] = cat(crate::ent_u16::slice(a, 0, p.k), crate::ent_u16::slice(a, p.end, len(a)));
+  let mut left: i64 = crate::bud_store::c40(p.n) - 1;
+  let count: i64 = crate::bud_store::c40(rd(a, 1));
+  crate::bud_vwords::wr(inout out, 1, count - 1);
+  while left > 0
+    decreases left
+  {
+    p = crate::bud_auto::find_pair(out, 0, "activeSince");
+    let remaining: i64 = crate::bud_store::c40(rd(out, 1));
+    out = cat(crate::ent_u16::slice(out, 0, p.k), crate::ent_u16::slice(out, p.end, len(out)));
+    left = left - 1;
+    crate::bud_vwords::wr(inout out, 1, remaining - 1);
+  }
+  return out;
+}
+
+fn charged(ok: bool, reason: i64) -> [i64] ! alloc
+{
+  if ok { return crate::bud_vwords::object(1, crate::bud_vwords::field("ok", crate::ent_u16::one(4))); }
+  let body: [i64] = crate::bud_vwords::field("ok", crate::ent_u16::one(3));
+  return crate::bud_vwords::object(2, cat(body, crate::bud_vwords::field("reason", crate::bud_vwords::text(named(reason)))));
+}
+
+struct AttachOutcome { status: i64 }
+
+fn attach_fresh(inout st: St,
+                sid: [i64], sid_text: str, stale: [i64], arg: [i64], now: i64,
+                inout outcome: AttachOutcome, take incoming: Vec<i64>) -> Vec<i64> ! alloc, io
+{
+  let mut effects: Vec<i64> = move incoming;
+  let u: [i64] = words_array(unit(len(effects)));
+  effects = crate::bud_effect::value(move effects, 5, u);
+  let s: i64 = get(arg, 0, "size");
+  let mut unlimited: bool = str_is(arg, s, "unlimited");
+  let mut times: i64 = 1;
+  if s < 0 || rd(arg, s) == 1 || rd(arg, s) == 2 {
+    unlimited = crate::bud_card::truthy(u, get(u, 0, "defaultUnlimited"));
+  } else if !unlimited {
+    times = num(arg, s);
+    if times != 1 && times != 2 && times != 4 && times != 8 {
+      outcome.status = 2;
+      return crate::bud_effect::reply(2, false, crate::ent_u16::one(1), move effects);
+    }
+  }
+  let bid: [i64] = words_array(uuid(len(effects)));
+  effects = crate::bud_effect::value(move effects, 6, crate::bud_vwords::unpack(bid));
+  effects = tick(move effects, now);
+
+  let bid_text: String = decode_key(bid);
+  let mut duplicate: bool = crate::ent_u16::eq(stale, bid);
+  if !duplicate {
+    match map_get::<String, crate::bud_tstate::Clock>(st.clock_state.clocks, string_to_str(bid_text)) {
+      Some(c) => { duplicate = true; }
+      None => {}
+    }
+  }
+  if duplicate {
+    outcome.status = 2;
+    return crate::bud_effect::reply(2, false, crate::ent_u16::one(1), move effects);
+  }
+  let minutes: i64 = num(u, get(u, 0, "timeMinutes")) * times;
+  if minutes < -9007199254740991 || minutes > 9007199254740991 {
+    outcome.status = 5;
+    return crate::bud_effect::reply(5, false, crate::ent_u16::one(1), move effects);
+  }
+  let mut limits: [i64] = numeric("timeMinutes", minutes);
+  let mut used: [i64] = numeric("activeMs", 0);
+  let mut i: i64 = 1;
+  while i <= 4
+    invariant 1 <= i && i <= 5
+    decreases 5 - i
+  {
+    let k: str = named(i);
+    let limit: i64 = num(u, get(u, 0, k)) * times;
+    if limit < -9007199254740991 || limit > 9007199254740991 {
+      outcome.status = 5;
+      return crate::bud_effect::reply(5, false, crate::ent_u16::one(1), move effects);
+    }
+    limits = cat(limits, numeric(k, limit));
+    used = cat(used, numeric(k, 0));
+    i = i + 1;
+  }
+  used = cat(used, numeric("tools", 0));
+  used = cat(used, numeric("failures", 0));
+  used = cat(used, numeric("retries", 0));
+  let mut body: [i64] = crate::bud_vwords::field("id", crate::bud_vwords::unpack(bid));
+  body = cat(body, crate::bud_vwords::field("openedAt", crate::bud_vwords::iso(now)));
+  body = cat(body, crate::bud_vwords::field("origin", part(arg, get(arg, 0, "origin"))));
+  body = cat(body, crate::bud_vwords::field("state", crate::bud_vwords::text("open")));
+  body = cat(body, crate::bud_vwords::field("limits", crate::bud_vwords::object(5, limits)));
+  let mut fields: i64 = 6;
+  if unlimited {
+    body = cat(body, crate::bud_vwords::field("unlimited", crate::ent_u16::one(4)));
+    fields = 7;
+  }
+  body = cat(body, crate::bud_vwords::field("used", crate::bud_vwords::object(8, used)));
+  let blob: [i64] = crate::bud_vwords::object(fields, body);
+  let replacement: crate::bud_tstate::Budget = make_budget(blob);
+  if len(st.sessions) >= 1099511627776 {
+    outcome.status = 2;
+    return crate::bud_effect::reply(2, false, crate::ent_u16::one(1), move effects);
+  }
+  st.sessions = map_insert::<String, crate::bud_tstate::Budget>(move st.sessions, text(sid_text), move replacement);
+  effects = crate::bud_effect::mark(move effects, 4);
+  return crate::bud_effect::reply(0, false, ref_value(sid, bid, false), move effects);
+}
+
+fn attach(inout st: St, sid: [i64], sid_text: str, arg: [i64], now: i64) -> Vec<i64> ! alloc, io
+{
+  let snapshot: [i64] = session(st, sid_text);
+  let old_budget: [i64] = crate::ent_u16::slice(snapshot, 1, len(snapshot));
+  let stale: [i64] = crate::bud_vwords::packed(old_budget, get(old_budget, 0, "id"));
+  let mut effects: Vec<i64> = vec_new::<i64>();
+  if len(snapshot) == 0 { return crate::bud_effect::reply(2, false, crate::ent_u16::one(1), move effects); }
+  if len(old_budget) > 0 && !str_is(old_budget, get(old_budget, 0, "state"), "closed") {
+    return crate::bud_effect::reply(0, false, ref_value(sid, stale, false), move effects);
+  }
+
+  // An armed clock precedes unit/UUID reads in the effect stream. Restore it
+  // on a rejected replacement so the host keeps its existing timer.
+  let mut outcome: AttachOutcome = AttachOutcome { status: 0 };
+  if len(stale) > 0 {
+    let key: String = decode_key(stale);
+    match map_take::<String, crate::bud_tstate::Clock>(inout st.clock_state.clocks, string_to_str(key)) {
+      Some(c) => {
+        if c.armed { effects = crate::bud_effect::value(move effects, 13, stale); }
+        let packet: Vec<i64> = attach_fresh(inout st, sid, sid_text,
+                                           stale, arg, now, inout outcome, move effects);
+        if outcome.status != 0 && len(st.clock_state.clocks) < 1099511627776 {
+          st.clock_state.clocks = map_insert::<String, crate::bud_tstate::Clock>(move st.clock_state.clocks, move key, move c);
+        }
+        return move packet;
+      }
+      None => {}
+    }
+  }
+  return attach_fresh(inout st, sid, sid_text,
+                      stale, arg, now, inout outcome, move effects);
+}
+
+trusted rust fn encode_key(key: str) -> Vec<i64> ! alloc
+  ensures true = "::m12_facts::encode_key";
+trusted rust fn running_wire(rf: [i64], offset: i64) -> Vec<i64> ! alloc, io
+  ensures true = "::m12_facts::running_wire";
+
+fn drop_clock(inout st: St, key: str, take incoming: Vec<i64>) -> Vec<i64> ! alloc
+{
+  let mut effects: Vec<i64> = move incoming;
+  match map_take::<String, crate::bud_tstate::Clock>(inout st.clock_state.clocks, key) {
+    Some(c) => {
+      if c.armed { effects = crate::bud_effect::value(move effects, 13, words_array(encode_key(key))); }
+    }
+    None => {}
+  }
+  return move effects;
+}
+
+fn cleanup(inout st: St, op: i64, sid: str, keys: [i64]) -> Vec<i64> ! alloc
+{
+  let mut effects: Vec<i64> = vec_new::<i64>();
+  if op == 1 {
+    let mut id: String = string_new();
+    let mut found: bool = false;
+    match map_get_mut::<String, crate::bud_tstate::Budget>(inout st.sessions, sid) {
+      Some(b) => {
+        if b.state >= 0 {
+          found = true;
+          id = text(string_to_str(b.id));
+          b.rest = encode_words(no_active_since(budget_words(b)));
+          b.active_since = -1;
+          b.since_kind = -1;
+        }
+      }
+      None => {}
+    }
+    if found { effects = drop_clock(inout st, string_to_str(id), move effects); }
+  } else {
+    let mut i: i64 = 0;
+    while i < len(keys)
+      invariant 0 <= i && i <= len(keys)
+      decreases len(keys) - i
+    {
+      let key_end: i64 = crate::bud_keys::rec_end(keys, i);
+      if key_end <= i { return crate::bud_effect::reply(2, false, crate::ent_u16::one(1), move effects); }
+      let owner_end: i64 = crate::bud_keys::rec_end(keys, key_end);
+      if owner_end <= key_end { return crate::bud_effect::reply(2, false, crate::ent_u16::one(1), move effects); }
+      let owner: String = decode_key(crate::ent_u16::slice(keys, key_end, owner_end));
+      if op == 3 || string_eq(owner, sid) {
+        let key: String = decode_key(crate::ent_u16::slice(keys, i, key_end));
+        effects = drop_clock(inout st, string_to_str(key), move effects);
+      }
+      i = owner_end;
+    }
+    if op == 3 { st.clock_state.next_clock = 0; }
+  }
+  return crate::bud_effect::reply(0, false, crate::ent_u16::one(1), move effects);
+}
+
+fn charge_budget(inout b: crate::bud_tstate::Budget, what: [i64]) -> i64 ! alloc
+{
+  if b.state == 2 { return 1; }
+  if b.state == 1 {
+    if b.halt_reason < 0 { return 17; }
+    if b.halt_reason > 4 { return 2; }
+    return 16 + b.halt_reason;
+  }
+  if b.state != 0 { return 2; }
+  let mut amounts: [i64] = alloc(10, 0);
+  let mut i: i64 = 0;
+  while i < 5
+    invariant 0 <= i && i <= 5 && len(amounts) == 10
+    decreases 5 - i
+  {
+    let p: i64 = get(what, 0, named(i + 1));
+    if rd(what, p) == 5 {
+      amounts[2 * i] = 2;
+      amounts[2 * i + 1] = num(what, p);
+    }
+    i = i + 1;
+  }
+  let charged: i64 = crate::bud_tstate::charge(inout b, amounts);
+  if charged < 0 { return 5; }
+  if charged > 0 { return 32 + crate::bud_store::c32(charged); }
+
+  let a: [i64] = budget_words(b);
+  let mut used: [i64] = part(a, get(a, 0, "used"));
+  used = crate::bud_vwords::put(used, "delegations", number(b.delegations));
+  used = crate::bud_vwords::put(used, "commands", number(b.commands));
+  used = crate::bud_vwords::put(used, "reviews", number(b.reviews));
+  used = crate::bud_vwords::put(used, "checks", number(b.checks));
+  used = crate::bud_vwords::put(used, "retries", number(b.retries));
+  b.rest = encode_words(crate::bud_vwords::put(a, "used", used));
+  return 0;
+}
+
+fn running_list(ids: [i64]) -> [i64] ! alloc
+{
+  let n: i64 = crate::bud_store::c32(rd(ids, 0));
+  if n > len(ids) || len(ids) > 274877906943 { return crate::ent_u16::empty(); }
+  let mut list: [i64] = alloc(2 + 4 * len(ids), 0);
+  crate::bud_vwords::wr(inout list, 0, 8);
+  crate::bud_vwords::wr(inout list, 1, n);
+  let mut used: i64 = 2;
+  let mut p: i64 = 1;
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && 1 <= p && 0 <= used && used <= 1099511627776
+    decreases n - i
+  {
+    let end: i64 = crate::bud_keys::rec_end(ids, p);
+    if end < p || used > 4294967296 { return crate::ent_u16::empty(); }
+    used = crate::ent_u16::put_all(inout list, used, crate::bud_vwords::unpack(crate::ent_u16::slice(ids, p, end)));
+    p = end;
+    i = i + 1;
+  }
+  return crate::ent_u16::slice(list, 0, used);
+}
+
+struct RunView { changed: bool, since: bool }
+
+fn run_view(st: St, bid: str, sid: str, run: str, op: i64, waiting: bool) -> RunView
+{
+  let mut v: RunView = RunView { changed: op != 5 && op != 6, since: false };
+  match map_get::<String, crate::bud_tstate::Clock>(st.clock_state.clocks, bid) {
+    Some(c) => {
+      v.since = c.has_since && string_eq(c.owner, sid);
+      if op == 5 || op == 6 {
+        match map_get::<String, i64>(c.runs, run) {
+          Some(r) => { v.changed = op == 6 || (r < 0) != waiting; }
+          None => {}
+        }
+      }
+    }
+    None => {}
+  }
+  return v;
+}
+
+fn after_clock(inout b: crate::bud_tstate::Budget, settled: bool, began: bool, now: i64) -> [i64] ! alloc
+{
+  let mut a: [i64] = budget_words(b);
+  if settled {
+    a = no_active_since(a);
+    let used: [i64] = part(a, get(a, 0, "used"));
+    a = crate::bud_vwords::put(a, "used", crate::bud_vwords::put(used, "activeMs", number(b.active_ms)));
+  }
+  if began { a = crate::bud_vwords::put(a, "activeSince", crate::bud_vwords::iso(now)); }
+  return a;
+}
+
+fn halt_wire(inout st: St, sid_text: str, sid: [i64], bid: [i64], rf: [i64], now: i64,
+             reason: i64, take incoming: Vec<i64>) -> Vec<i64> ! alloc, io
+{
+  let owner: [i64] = crate::bud_vwords::unpack(sid);
+  let ids: [i64] = words_array(running_wire(rf, len(incoming)));
+  let list: [i64] = running_list(ids);
+  let mut effects: Vec<i64> = crate::bud_effect::value(move incoming, 7, cat(crate::bud_vwords::pair(8, 2), cat(rf, list)));
+  effects = tick(move effects, now);
+  let mut h: [i64] = crate::bud_vwords::field("reason", crate::bud_vwords::text(named(reason)));
+  h = cat(h, crate::bud_vwords::field("at", crate::bud_vwords::iso(now)));
+  h = cat(h, crate::bud_vwords::field("stoppedDelegationIds", list));
+  match map_get_mut::<String, crate::bud_tstate::Budget>(inout st.sessions, sid_text) {
+    Some(b) => {
+      let a: [i64] = crate::bud_vwords::put(budget_words(b), "state", crate::bud_vwords::text("halted"));
+      b.rest = encode_words(crate::bud_vwords::put(a, "halt", crate::bud_vwords::object(3, h)));
+    }
+    None => {}
+  }
+  effects = crate::bud_effect::value(move effects, 8, owner);
+  effects = crate::bud_effect::value(move effects, 9, owner);
+  let n: i64 = crate::bud_store::c32(rd(ids, 0));
+  let mut p: i64 = 1;
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && n <= 4294967296 && 1 <= p
+    decreases n - j
+  {
+    let end: i64 = crate::bud_keys::rec_end(ids, p);
+    if end < p { return move effects; }
+    let id: [i64] = crate::bud_vwords::unpack(crate::ent_u16::slice(ids, p, end));
+    effects = crate::bud_effect::value(move effects, 10, cat(crate::bud_vwords::pair(8, 2), cat(owner, id)));
+    p = end;
+    j = j + 1;
+  }
+  effects = crate::bud_effect::value(move effects, 11, rf);
+  effects = crate::bud_effect::value(move effects, 15, cat(crate::bud_vwords::pair(8, 2), cat(owner, crate::bud_vwords::unpack(bid))));
+  effects = crate::bud_effect::value(move effects, 3, owner);
+  effects = crate::bud_effect::mark(move effects, 4);
+  return crate::bud_effect::value(move effects, 16, owner);
+}
+
+
+pub fn life(inout st: St, op: i64, rf: [i64], sid: [i64], sid_text: str, arg: [i64], now: i64,
+            cleanup_keys: [i64]) -> [i64] ! alloc, io
+{
+  let undef: [i64] = crate::ent_u16::one(1);
+  let mut effects: Vec<i64> = vec_new::<i64>();
+  if op < 1 || op > 10 { return words_array(crate::bud_effect::reply(2, false, undef, move effects)); }
+  if op <= 3 { return words_array(cleanup(inout st, op, sid_text, cleanup_keys)); }
+  if op == 8 { return words_array(attach(inout st, sid, sid_text, arg, now)); }
+
+  let bid: [i64] = crate::bud_vwords::packed(rf, get(rf, 0, "budgetId"));
+  let bid_text: String = decode_key(bid);
+  let rk: [i64] = crate::bud_vwords::packed(arg, get(arg, 0, "run"));
+  let run: String = decode_key(rk);
+  let waiting: bool = crate::bud_card::truthy(arg, get(arg, 0, "waiting"));
+  let v: RunView = run_view(st, string_to_str(bid_text), sid_text, string_to_str(run), op, waiting);
+  if !v.changed { return words_array(crate::bud_effect::reply(0, false, undef, move effects)); }
+
+  let id: [i64] = part(rf, get(rf, 0, "sessionId"));
+  let owner: [i64] = crate::bud_vwords::unpack(sid);
+  let mut found: bool = false;
+  let mut open: bool = false;
+  match map_get_mut::<String, crate::bud_tstate::Budget>(inout st.sessions, sid_text) {
+    Some(b) => {
+      found = len(bid) > 0 && b.state >= 0 && string_eq(b.id, bid_text);
+      open = found && b.state == 0;
+      b.since_kind = -1;
+    }
+    None => {}
+  }
+  let mut reason: i64 = -1;
+  let mut result: [i64] = crate::ent_u16::one(1);
+  if op == 10 {
+    reason = reason_code(arg, 0);
+    if reason < 0 { return words_array(crate::bud_effect::reply(2, false, undef, move effects)); }
+  } else {
+    effects = crate::bud_effect::value(move effects, 1, id);
+  }
+  if op == 4 {
+    if !found { return words_array(crate::bud_effect::reply(0, false, undef, move effects)); }
+    if len(rk) == 0 { return words_array(crate::bud_effect::reply(2, false, undef, move effects)); }
+    effects = crate::bud_effect::value(move effects, 1, id);
+  }
+
+  let mut status: i64 = 0;
+  if op == 9 {
+    status = 1;
+    if found {
+      match map_get_mut::<String, crate::bud_tstate::Budget>(inout st.sessions, sid_text) {
+        Some(b) => { status = charge_budget(inout b, arg); }
+        None => {}
+      }
+    }
+    if status >= 33 && status <= 36 {
+      reason = status - 32;
+      result = charged(false, reason);
+    } else {
+      if status <= 1 { return words_array(crate::bud_effect::reply(0, false, charged(true, 0), move effects)); }
+      if status >= 16 && status <= 20 {
+        return words_array(crate::bud_effect::reply(0, false, charged(false, status - 16), move effects));
+      }
+      return words_array(crate::bud_effect::reply(status, false, charged(false, 1), move effects));
+    }
+  }
+
+  let mut out: crate::bud_tstate::Out = crate::bud_tstate::Out { fx: vec_new::<crate::bud_tstate::Effect>() };
+  let explicit: bool = op == 9 || op == 10;
+  if explicit {
+    effects = crate::bud_effect::value(move effects, 1, owner);
+    effects = crate::bud_effect::value(move effects, 1, owner);
+    if open {
+      let reply: crate::bud_tstate::Reply = crate::bud_tlife::explicit_halt(inout st.sessions, inout st.clock_state.clocks, inout out, sid_text, string_to_str(bid_text), now, reason);
+      status = reply.status;
+    } else { status = 0; }
+  } else {
+    let mut flag: i64 = 0;
+    if waiting { flag = 1; }
+    let reply: crate::bud_tstate::Reply = crate::bud_tlife::run_event(inout st.sessions, inout st.clock_state, inout out, sid_text, string_to_str(bid_text), string_to_str(run), op + 4, now, flag);
+    status = reply.status;
+  }
+
+  let mut halted: bool = false;
+  let mut settled: bool = false;
+  let mut began: bool = false;
+  // Expand typed timer and halt effects to the existing M12 trace ABI.
+  let mut i: i64 = 0;
+  while i < len(out.fx)
+    invariant 0 <= i && i <= len(out.fx)
+    decreases len(out.fx) - i
+  {
+    let e: crate::bud_tstate::Effect = vec_get::<crate::bud_tstate::Effect>(out.fx, i);
+    if e.tag == 31 { halted = true; }
+    if e.tag == 13 || e.tag == 14 { effects = crate::bud_effect::value(move effects, e.tag, bid); }
+    i = i + 1;
+  }
+  let mut sync_fire: bool = false;
+  let mut sync_start: [i64] = crate::ent_u16::empty();
+  if found {
+    match map_get_mut::<String, crate::bud_tstate::Budget>(inout st.sessions, sid_text) {
+      Some(b) => {
+        began = b.since_kind == 2;
+        settled = v.since && b.since_kind != -1 && (!began || op == 7);
+        sync_fire = halted && !explicit && op != 7 && !v.since;
+        if sync_fire && observing() {
+          sync_start = crate::bud_vwords::put(budget_words(b), "activeSince", crate::bud_vwords::iso(now));
+        }
+        if settled || began || sync_fire {
+          let a: [i64] = after_clock(inout b, settled || sync_fire, began, now);
+          b.rest = encode_words(a);
+        }
+      }
+      None => {}
+    }
+  }
+  if settled { effects = tick(move effects, now); }
+  if began { effects = tick(move effects, now); }
+  if sync_fire {
+    effects = tick(move effects, now);
+    if len(sync_start) > 0 { observe_find(len(effects), sync_start); }
+    effects = crate::bud_effect::value(move effects, 1, id);
+    effects = tick(move effects, now);
+  }
+  i = 0;
+  while i < len(out.fx)
+    invariant 0 <= i && i <= len(out.fx)
+    decreases len(out.fx) - i
+  {
+    let e: crate::bud_tstate::Effect = vec_get::<crate::bud_tstate::Effect>(out.fx, i);
+    if e.tag == 12 {
+      let mut budget_first: i64 = 0;
+      if get(rf, 0, "budgetId") < get(rf, 0, "sessionId") { budget_first = 1; }
+      effects = crate::bud_effect::push(move effects, 12, cat(bid, crate::ent_u16::one(budget_first)), e.a, e.b);
+    }
+    i = i + 1;
+  }
+  if halted {
+    if !explicit {
+      reason = 0;
+      if observing() {
+        let snapshot: [i64] = session(st, sid_text);
+        observe_find(len(effects), crate::ent_u16::slice(snapshot, 1, len(snapshot)));
+      }
+      effects = crate::bud_effect::value(move effects, 1, owner);
+      if observing() {
+        let snapshot: [i64] = session(st, sid_text);
+        observe_find(len(effects), crate::ent_u16::slice(snapshot, 1, len(snapshot)));
+      }
+      effects = crate::bud_effect::value(move effects, 1, owner);
+    }
+    effects = halt_wire(inout st, sid_text, sid, bid, rf, now, reason, move effects);
+  }
+  return words_array(crate::bud_effect::reply(status, false, result, move effects));
+}
+
+pub fn fire_timer(inout st: St, sid: [i64], sid_text: str, bid: [i64], budget_first: bool, now: i64) -> [i64] ! alloc, io
+{
+  let rf: [i64] = ref_value(sid, bid, budget_first);
+  return life(inout st, 7, rf, sid, sid_text, crate::ent_u16::empty(), now, crate::ent_u16::empty());
+}
+
+pub fn m12_reset_tools(inout aux: [i64]) -> () ! alloc
+{
+  let discarded: Vec<i64> = crate::bud_cleanup::dispose(inout aux);
+}

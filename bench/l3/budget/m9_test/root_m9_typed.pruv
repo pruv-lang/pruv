@@ -190,27 +190,25 @@ pub fn t_call(inout st: St, code: i64, sid: str, bid: str, run: str,
           active: 0, runs: map_new::<String, Run>(), next_run: 0 });
     }
   }
-  if code == 5 || code == 6 {
-    // One lookup: take the clock out, settle (close) and disarm the owned value, drop it.
+  if code == 6 {
+    // A stale ref closes nothing (hand `close` checks `current` first).
+    if !valid { return status; }
+    // One lookup: take the clock out, settle and disarm the owned value, drop it.
     match map_take::<String, Clock>(inout st.clocks, bid) {
       Some(c) => {
-        if valid && code == 6 {
-          match map_get_mut::<String, Budget>(inout st.sessions, sid) {
-            Some(b) => {
-              settle(inout b, inout c, sid, now, inout st.out);
-              b.state = 2;
-            }
-            None => {}
+        match map_get_mut::<String, Budget>(inout st.sessions, sid) {
+          Some(b) => {
+            settle(inout b, inout c, sid, now, inout st.out);
+            b.state = 2;
           }
+          None => {}
         }
         disarm(inout c, inout st.out, 13);
       }
       None => {
-        if valid && code == 6 {
-          match map_get_mut::<String, Budget>(inout st.sessions, sid) {
-            Some(b) => { b.state = 2; }
-            None => {}
-          }
+        match map_get_mut::<String, Budget>(inout st.sessions, sid) {
+          Some(b) => { b.state = 2; }
+          None => {}
         }
       }
     }

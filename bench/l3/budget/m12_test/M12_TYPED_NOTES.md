@@ -1,11 +1,12 @@
-# M12 typed lane (partial)
+# M12 typed lane
 
-The lane keeps sessions in `HashMap<String, Budget>` from `bud_tstate`. Pruv assigns session ordinals
-with the M10 cap. The V-word codec preserves field order, duplicate keys, UTF-16 units and numeric
-payloads. Queries and setCard use the stored Budget. Auto-continue stages the referenced sessions
-in a temporary Pruv arena for the shared `bud_auto` editor and commits edits back to the typed map.
+Sessions live in `HashMap<String, Budget>` and the per-instance run clocks in `ClockState`.
+Lifecycle decisions go through `bud_tlife` and `bud_tstate`; a clock is removed with one
+`map_take`. Insertion ordinals use the same 2^40 cap as M10.
+The V-word codec keeps field order, duplicate keys and UTF-16 units. Auto-continue loads the
+referenced sessions into a temporary Pruv arena, calls `bud_auto`, and writes the edit back to
+the typed map. `maybeClose`, `raise` and `decide` are not in the M12 protocol's op list.
 
-`run_m12.py --typed` uses `work/p29/m12/typed` and runs the existing Q corpus. Typed
-lifecycle and timer firing still need a resident clock map wired to `bud_tlife` and `bud_tdecide`.
-The typed perf path covers the auto-continue rows with the existing timer boundaries.
-Lifecycle perf remains unavailable.
+`run_m12.py --typed` runs the existing Q corpus in `work/p29/m12/typed`.
+`--typed --perf` uses the same lifecycle timing loop as the flat lane: setup, cloning,
+observation and checksums run outside the timer; the call and the scheduler apply run inside it.
