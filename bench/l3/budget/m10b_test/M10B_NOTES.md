@@ -34,3 +34,12 @@ R-6g-3 lets helpers borrow `inout st.out` alongside a live session or clock
 borrow. This reuses the buffer's capacity across calls (D25, D28, D29).
 New runs and clocks return status 2 when insertion would advance their
 ordinal counter to 2^40. Updates to existing runs remain available at the cap.
+
+## Shared typed modules (P31T attempt 7)
+
+`bud_tstate`는 레코드와 상태 갱신을, `bud_tlife`는 타이머와 수명주기를,
+`bud_tdecide`는 한도 상향과 중단 후 결정을 제공한다. M10b의 `t_call`은
+세션, 클록, 출력 필드를 빌려 공유 함수에 넘긴다. 클록 추가 경로의
+`ClockState`는 맵과 순번을 함께 보관한다. 두 컴파일러는 스칼라
+`inout`과 빌린 맵 전체 재대입을 거부한다. 최소 재현과 변경 전후 성능
+로그는 `work/p31t7/w1/`에 있다.

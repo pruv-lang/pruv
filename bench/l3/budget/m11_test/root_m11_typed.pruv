@@ -1,0 +1,464 @@
+mod ent_u16;
+mod bud_num;
+mod bud_text;
+mod bud_date;
+mod bud_card;
+
+pub struct Sess { ordinal: i64, blob: Vec<i64> }
+pub struct St { sessions: HashMap<String, Sess>, next_sessions: i64 }
+pub struct Dump { words: Vec<i64>, keys: Vec<String> }
+
+fn owned_text(key: str) -> String ! alloc {
+  return string_push_str(string_new(), key);
+}
+
+fn blob_copy(blob: [i64], start: i64, end: i64) -> Vec<i64> ! alloc
+  requires 0 <= start && start <= end && end <= len(blob)
+{
+  let mut result: Vec<i64> = vec_new::<i64>();
+  let mut i: i64 = start;
+  while i < end
+    invariant start <= i && i <= end && len(result) == i - start
+    decreases end - i
+  {
+    result = vec_push::<i64>(move result, blob[i]);
+    i = i + 1;
+  }
+  return move result;
+}
+
+// bud_card consumes array parameters. Copy the typed field into that representation.
+fn budget_words(session: Sess) -> [i64] ! alloc {
+  let n: i64 = len(session.blob);
+  let mut words: [i64] = alloc(n, 0);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(session.blob) && len(words) == n
+    decreases n - i
+  {
+    words[i] = vec_get::<i64>(session.blob, i);
+    i = i + 1;
+  }
+  return words;
+}
+
+pub fn m11_load(inout st: St, key: str, blob: [i64], inout out: [i64]) -> i64 ! alloc {
+  if len(blob) > 0 && crate::bud_card::v_stored_end(blob, 0) != len(blob) { return 2; }
+  if len(out) < 2 { return 3; }
+  let mut fresh: i64 = 0;
+  match map_get_mut::<String, Sess>(inout st.sessions, key) {
+    Some(session) => { session.blob = blob_copy(blob, 0, len(blob)); }
+    None => { fresh = 1; }
+  }
+  if fresh == 1 {
+    let ordinal: i64 = st.next_sessions;
+    if ordinal < 0 || ordinal >= 1099511627775 || len(st.sessions) >= 1099511627776 { return 2; }
+    st.next_sessions = ordinal + 1;
+    st.sessions = map_insert::<String, Sess>(move st.sessions, owned_text(key),
+      Sess { ordinal: ordinal, blob: blob_copy(blob, 0, len(blob)) });
+  }
+  crate::ent_u16::wr(inout out, 0, 1);
+  crate::ent_u16::wr(inout out, 1, fresh);
+  return 0;
+}
+
+fn rd(v: [i64], i: i64) -> i64
+{ return crate::ent_u16::rd(v, i); }
+
+fn emit(inout out: [i64], pos: i64, v: i64) -> i64
+  requires 0 <= pos && pos <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776 && len(out) == len(old(out))
+{
+  if pos >= 1099511627776 { return 1099511627776; }
+  crate::ent_u16::wr(inout out, pos, v);
+  return pos + 1;
+}
+
+fn emit_lit(inout out: [i64], pos: i64, s: str) -> i64
+  requires 0 <= pos && pos <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776 && len(out) == len(old(out))
+{
+  let m: i64 = len(s);
+  let mut p: i64 = emit(inout out, pos, m);
+  let mut j: i64 = 0;
+  while j < m
+    invariant 0 <= j && j <= m && m == len(s) && 0 <= p && p <= 1099511627776 && len(out) == len(old(out))
+    decreases m - j
+  {
+    p = emit(inout out, p, s[j]);
+    j = j + 1;
+  }
+  return p;
+}
+
+fn emit_range(inout out: [i64], pos: i64, src: [i64], s: i64, e: i64) -> i64
+  requires 0 <= pos && pos <= 1099511627776
+  requires 0 <= s && s <= e && e <= len(src)
+  ensures 0 <= result && result <= 1099511627776 && len(out) == len(old(out))
+{
+  let n: i64 = e - s;
+  let mut p: i64 = pos;
+  let mut j: i64 = 0;
+  if n <= 1099511627776 - pos && pos + n <= len(out) {
+    // the whole range is in bounds: one check for the loop (same writes as the per-word path below)
+    while j < n
+      invariant 0 <= j && j <= n && 0 <= s && s + n <= len(src) && 0 <= pos && pos + n <= len(out) && pos + n <= 1099511627776 && len(out) == len(old(out))
+      decreases n - j
+    {
+      out[pos + j] = src[s + j];
+      j = j + 1;
+    }
+    return pos + n;
+  }
+  while j < n
+    invariant 0 <= j && j <= n && 0 <= s && s + n <= len(src) && 0 <= p && p <= 1099511627776 && len(out) == len(old(out))
+    decreases n - j
+  {
+    p = emit(inout out, p, src[s + j]);
+    j = j + 1;
+  }
+  return p;
+}
+
+fn emit_all(inout out: [i64], pos: i64, w: [i64]) -> i64
+  requires 0 <= pos && pos <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776 && len(out) == len(old(out))
+{
+  return emit_range(inout out, pos, w, 0, len(w));
+}
+
+// `u, units` of the UTF-8 text b (a bud_text output, valid UTF-8; u = its UTF-16 unit count): a short decode loop, so the
+// error branch of m11_set_card stays small (the WTF-8 put_units loop inlined there cost the success path ~48
+// instructions per call, P27)
+fn emit_utf8(inout out: [i64], pos: i64, b: [u8], u: i64) -> i64
+  requires 0 <= pos && pos <= 1099511627776
+  ensures 0 <= result && result <= 1099511627776 && len(out) == len(old(out))
+{
+  let n: i64 = len(b);
+  let mut p: i64 = emit(inout out, pos, u);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n == len(b) && 0 <= p && p <= 1099511627776 && len(out) == len(old(out))
+    decreases n - i
+  {
+    // one unit per lead byte (two emits only for a 4-byte lead), so the loop has two emit sites
+    let c: i64 = b[i];
+    let mut v: i64 = c;
+    let mut k: i64 = 1;
+    if c >= 192 && i + 1 < n { v = (c % 32) * 64 + b[i + 1] % 64; k = 2; }
+    if c >= 224 && i + 2 < n { v = (c % 16) * 4096 + (b[i + 1] % 64) * 64 + b[i + 2] % 64; k = 3; }
+    if c >= 240 && i + 3 < n {
+      let mut x: i64 = (c % 8) * 262144 + (b[i + 1] % 64) * 4096 + (b[i + 2] % 64) * 64 + b[i + 3] % 64 - 65536;
+      if x < 0 { x = 0; }
+      p = emit(inout out, p, 55296 + x / 1024 % 1024);
+      v = 56320 + x % 1024;
+      k = 4;
+    }
+    p = emit(inout out, p, v);
+    i = i + k;
+  }
+  return p;
+}
+
+// the value at `at` is the string equal to the ASCII literal s
+fn str_is(v: [i64], at: i64, s: str) -> bool
+{
+  if at < 0 || at > 1099511627776 { return false; }
+  if rd(v, at) != 6 { return false; }
+  let m: i64 = len(s);
+  if rd(v, at + 1) != m { return false; }
+  let mut j: i64 = 0;
+  while j < m
+    invariant 0 <= j && j <= m && m == len(s) && 0 <= at && at <= 1099511627776
+    decreases m - j
+  {
+    if rd(v, at + 2 + j) != s[j] { return false; }
+    j = j + 1;
+  }
+  return true;
+}
+
+// Compare the state tags without allocating string literals.
+fn is_halted(v: [i64], at: i64) -> bool
+{
+  if at < 0 || at > len(v) - 8 { return false; }
+  return v[at] == 6 && v[at + 1] == 6 && v[at + 2] == 104 && v[at + 3] == 97 &&
+    v[at + 4] == 108 && v[at + 5] == 116 && v[at + 6] == 101 && v[at + 7] == 100;
+}
+
+// Last budgetId value in the admitted ref, without a string literal.
+fn ref_budget_id(rf: [i64]) -> i64
+{
+  let n: i64 = len(rf);
+  if n < 2 || rf[0] != 9 { return -1; }
+  let cnt: i64 = rf[1];
+  if cnt < 0 || cnt > n - 2 { return -1; }
+  let mut pos: i64 = 2;
+  let mut i: i64 = 0;
+  let mut found: i64 = -1;
+  while i < cnt
+    invariant 0 <= i && i <= cnt && 2 <= pos && pos <= n && n == len(rf)
+    decreases cnt - i
+  {
+    if pos >= n { return -1; }
+    let kn: i64 = rf[pos];
+    if kn < 0 || kn > n - pos - 1 { return -1; }
+    let vs: i64 = pos + 1 + kn;
+    let end: i64 = crate::bud_card::v_end(rf, vs);
+    if end < 0 { return -1; }
+    if kn == 8 && rf[pos + 1] == 98 && rf[pos + 2] == 117 && rf[pos + 3] == 100 && rf[pos + 4] == 103 &&
+      rf[pos + 5] == 101 && rf[pos + 6] == 116 && rf[pos + 7] == 73 && rf[pos + 8] == 100 { found = vs; }
+    pos = end;
+    i = i + 1;
+  }
+  return found;
+}
+
+// both values are strings with the same units
+fn str_eq(a: [i64], pa: i64, b: [i64], pb: i64) -> bool
+{
+  if pa < 0 || pb < 0 || pa > 1099511627776 || pb > 1099511627776 { return false; }
+  if rd(a, pa) != 6 || rd(b, pb) != 6 { return false; }
+  let n: i64 = rd(a, pa + 1);
+  if n != rd(b, pb + 1) || n < 0 || n > 1099511627776 { return false; }
+  let mut j: i64 = 0;
+  while j < n
+    invariant 0 <= j && j <= n && n <= 1099511627776 && 0 <= pa && pa <= 1099511627776 && 0 <= pb && pb <= 1099511627776
+    decreases n - j
+  {
+    if rd(a, pa + 2 + j) != rd(b, pb + 2 + j) { return false; }
+    j = j + 1;
+  }
+  return true;
+}
+
+struct Cur { e: i64, o: i64, n: i64, state: i64, card: i64, card_end: i64 }
+
+fn no_cur() -> Cur
+  ensures result.e == -1
+{
+  return Cur { e: -1, o: 0, n: 0, state: -1, card: -1, card_end: -1 };
+}
+
+fn cur(blob: [i64], rf: [i64]) -> Cur
+  ensures result.e < 0 || (result.o == 0 && 2 <= result.n && result.n == len(blob))
+  ensures result.e < 0 || (result.card == -1 || (result.o <= result.card && result.card < result.card_end && result.card_end <= result.n))
+{
+  let n: i64 = len(blob);
+  let p: crate::bud_card::BudgetPos = crate::bud_card::budget_pos(blob, 0, n);
+  if !p.ok || !str_eq(blob, p.id, rf, ref_budget_id(rf)) { return no_cur(); }
+  return Cur { e: 0, o: 0, n: n, state: p.state, card: p.card, card_end: p.card_end };
+}
+
+// value position of a JB packet (empty = absent)
+fn at_b(b: [u8]) -> i64
+{
+  if len(b) == 0 { return -1; }
+  return 0;
+}
+
+fn b01(b: bool) -> i64
+{
+  if b { return 1; }
+  return 0;
+}
+
+// Build the wire reply before replacing the stored budget.
+fn set_reply(blob: [i64], rf: [i64], card: [u8], lang: [u8], by: [u8], now_ms: i64, inout out: [i64]) -> i64 ! alloc
+  requires -8640000000000000 <= now_ms && now_ms <= 8640000000000000
+{
+  let c: Cur = cur(blob, rf);
+  let found: bool = c.e >= 0;
+  let closed: bool = found && str_is(blob, c.state, "closed");
+  let lc: i64 = crate::bud_card::lang_code(lang);
+  let r: crate::bud_card::Judged = crate::bud_card::judge(found, closed, card, at_b(card), lc);
+  if r.kind >= 0 {
+    // {ok: false, error}
+    // the error text is a bud_text card error: its unit count is a generated constant (a count loop here was inlined
+    // into every m11_set_card caller and pushed the m11 harness one 16 KiB code page over hand, P27)
+    let eu: i64 = crate::bud_text::card_error_units(r.kind, lc);
+    let need: i64 = 19 + eu;
+    if len(out) < need { return 3; }
+    let mut p: i64 = emit(inout out, 0, need - 1);
+    p = emit(inout out, p, b01(r.used_now));
+    p = emit(inout out, p, 0);
+    p = emit(inout out, p, 0);
+    p = emit(inout out, p, 2);
+    p = emit(inout out, p, 9);
+    p = emit(inout out, p, 2);
+    p = emit_lit(inout out, p, "ok");
+    p = emit(inout out, p, 3);
+    p = emit_lit(inout out, p, "error");
+    p = emit(inout out, p, 6);
+    p = emit_utf8(inout out, p, r.error, eu);
+    return 0;
+  }
+  if c.e < 0 { return 2; }
+  let iso: crate::bud_date::IsoParts = crate::bud_date::iso_parts(now_ms);
+  let mut dry: [i64] = crate::ent_u16::empty();
+  let by_at: i64 = at_b(by);
+  let cs: i64 = crate::bud_card::put_card_words(inout dry, 0, card, r.f, by, by_at, iso);
+  let mut nbn: i64 = c.n + 5 + cs;
+  if c.card >= 0 { nbn = c.n - (c.card_end - c.card) + cs; }
+  let need2: i64 = 18 + nbn;
+  if len(out) < need2 { return 3; }
+  if nbn > 4294967296 { return 2; }
+  let end: i64 = c.o + c.n;
+  let mut q: i64 = emit(inout out, 0, need2 - 1);
+  q = emit(inout out, q, 1);
+  q = emit(inout out, q, 1);
+  q = emit(inout out, q, 1);
+  q = emit(inout out, q, 2);
+  q = emit(inout out, q, 9);
+  q = emit(inout out, q, 2);
+  q = emit_lit(inout out, q, "ok");
+  q = emit(inout out, q, 4);
+  q = emit_lit(inout out, q, "budget");
+  if c.card >= 0 {
+    q = emit_range(inout out, q, blob, c.o, c.card);
+    q = crate::bud_card::put_card_words(inout out, q, card, r.f, by, by_at, iso);
+    q = emit_range(inout out, q, blob, c.card_end, end);
+  } else {
+    q = emit_range(inout out, q, blob, c.o, end);
+    let cnt: i64 = rd(blob, c.o + 1);
+    if cnt < 0 || cnt > c.n - 2 { return 2; }
+    crate::ent_u16::wr(inout out, 19, cnt + 1);
+    q = emit_lit(inout out, q, "card");
+    q = crate::bud_card::put_card_words(inout out, q, card, r.f, by, by_at, iso);
+  }
+  return 0;
+}
+
+pub fn m11_set_card(inout st: St, rf: [i64], sid: str, has_sid: bool, card: [u8], lang: [u8], by: [u8], now_ms: i64, inout out: [i64]) -> i64 ! alloc {
+  if now_ms < -8640000000000000 || now_ms > 8640000000000000 { return 2; }
+  if len(rf) == 0 || crate::bud_card::v_end(rf, 0) != len(rf) { return 2; }
+  // card, lang, by: JB packets (empty = absent), admitted whole before any judgment
+  if len(card) > 0 && !crate::bud_card::j_ok(card) { return 2; }
+  if len(lang) > 0 && !crate::bud_card::j_ok(lang) { return 2; }
+  // by is stored at budget.card.by (depth 3) and returned one level deeper: its top value sits at depth 4 of the result
+  if len(by) > 0 && !crate::bud_card::j_ok_at(by, 4) { return 2; }
+  if has_sid {
+    let mut status: i64 = -1;
+    match map_get_mut::<String, Sess>(inout st.sessions, sid) {
+      Some(session) => {
+        let blob: [i64] = budget_words(session);
+        status = set_reply(blob, rf, card, lang, by, now_ms, inout out);
+        if status == 0 && rd(out, 2) == 1 {
+          let end: i64 = rd(out, 0);
+          if end < 18 || end >= len(out) { status = 2; }
+          else { session.blob = blob_copy(out, 18, end + 1); }
+        }
+      }
+      None => {}
+    }
+    if status >= 0 { return status; }
+  }
+  return set_reply(crate::ent_u16::empty(), rf, card, lang, by, now_ms, inout out);
+}
+
+fn query_blob(blob: [i64], op: i64, rf: [i64], inout out: [i64]) -> i64 {
+  let c: Cur = cur(blob, rf);
+  if op == 1 && c.e >= 0 {
+    let need: i64 = 2 + c.n;
+    if len(out) < need { return 3; }
+    crate::ent_u16::wr(inout out, 0, need - 1);
+    crate::ent_u16::wr(inout out, 1, 1);
+    let p: i64 = emit_range(inout out, 2, blob, c.o, c.o + c.n);
+    return 0;
+  }
+  if len(out) < 3 { return 3; }
+  let mut v: i64 = 1;
+  if op != 1 {
+    let mut t: bool = false;
+    if c.e >= 0 {
+      if op == 2 { t = is_halted(blob, c.state); }
+      else { t = c.card >= 0 && crate::bud_card::truthy(blob, c.card); }
+    }
+    v = 3;
+    if t { v = 4; }
+  }
+  crate::ent_u16::wr(inout out, 0, 2);
+  crate::ent_u16::wr(inout out, 1, 1);
+  crate::ent_u16::wr(inout out, 2, v);
+  return 0;
+}
+
+pub fn m11_query(st: St, op: i64, rf: [i64], sid: str, has_sid: bool, inout out: [i64]) -> i64 ! alloc {
+  if op < 1 || op > 3 { return 2; }
+  if len(rf) == 0 || crate::bud_card::v_end(rf, 0) != len(rf) { return 2; }
+  if has_sid {
+    match map_get::<String, Sess>(st.sessions, sid) {
+      Some(session) => {
+        let blob: [i64] = budget_words(session);
+        return query_blob(blob, op, rf, inout out);
+      }
+      None => {}
+    }
+  }
+  return query_blob(crate::ent_u16::empty(), op, rf, inout out);
+}
+
+fn dump_word(inout result: Dump, word: i64) -> () ! alloc {
+  if len(result.words) < 1099511627776 {
+    result.words = vec_push::<i64>(move result.words, word);
+  }
+}
+
+// Each key has one ordinal and one length-prefixed blob in words.
+pub fn m11_dump(st: St) -> Dump ! alloc {
+  let mut result: Dump = Dump { words: vec_new::<i64>(), keys: vec_new::<String>() };
+  for (key, session) in st.sessions {
+    if len(result.keys) < 1099511627776 {
+      result.keys = vec_push::<String>(move result.keys, owned_text(key));
+      dump_word(inout result, session.ordinal);
+      let n: i64 = len(session.blob);
+      dump_word(inout result, n);
+      let mut i: i64 = 0;
+      while i < n
+        invariant 0 <= i && i <= n && n == len(session.blob)
+        decreases n - i
+      {
+        dump_word(inout result, vec_get::<i64>(session.blob, i));
+        i = i + 1;
+      }
+    }
+  }
+  return result;
+}
+
+// perf item A: admit + validate + build one card (JB packet); returns a checksum of the stored card (or -kind on a
+// validation error, -102 if the packet is not admitted).
+pub fn m11_perf_card(card: [u8], now_ms: i64) -> i64 ! alloc
+{
+  if now_ms < -8640000000000000 || now_ms > 8640000000000000 { return -100; }
+  if !crate::bud_card::j_ok(card) { return -102; }
+  let f: crate::bud_card::Keys = crate::bud_card::card_at(card, 0);
+  let k: i64 = crate::bud_card::validate(card, f);
+  if k != 0 { return 0 - k; }
+  let none: [u8] = alloc(0, 0);
+  let w: [i64] = crate::bud_card::build(card, f, none, -1, now_ms);
+  let n: i64 = len(w);
+  if n > 1099511627776 { return -101; }
+  return n + band(rd(w, n - 1), 1023) + band(rd(w, n / 2), 1023);
+}
+
+// perf item C (diagnostic split of B): n successive setCard judgments on one in-memory budget, no store and no out:
+// set_card + put_card only, i.e. the bud_card part of B. Returns the final budget length (or < 0 on an error).
+pub fn m11_perf_chain(budget: [i64], card: [u8], n: i64, now0: i64) -> i64 ! alloc
+{
+  if now0 < 0 || now0 > 8000000000000000 || n < 0 || n > 1000000 { return -100; }
+  let none: [u8] = alloc(0, 0);
+  let mut b: [i64] = copy(budget);
+  let mut i: i64 = 0;
+  while i < n
+    invariant 0 <= i && i <= n && n <= 1000000
+    decreases n - i
+  {
+    let r: crate::bud_card::SetCard = crate::bud_card::set_card(true, false, card, 0, 0, none, -1, now0 + i);
+    if r.kind >= 0 { return -1; }
+    b = crate::bud_card::put_card(b, 0, r.card);
+    if len(b) == 0 { return -2; }
+    i = i + 1;
+  }
+  return len(b);
+}

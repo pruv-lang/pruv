@@ -1,0 +1,163 @@
+mod bud_tstate;
+mod bud_tlife;
+mod bud_tdecide;
+
+pub struct SessionOrdinal { seq: i64 }
+
+pub struct St {
+  sessions: HashMap<String, crate::bud_tstate::Budget>,
+  session_ordinals: HashMap<String, SessionOrdinal>, next_session: i64,
+  clock_state: crate::bud_tstate::ClockState, out: crate::bud_tstate::Out,
+  charge_reason: String
+}
+
+fn reason_text(reason: i64) -> String ! alloc
+{
+  if reason == 0 { return string_push_str(string_new(), "time"); }
+  if reason == 1 { return string_push_str(string_new(), "delegations"); }
+  if reason == 2 { return string_push_str(string_new(), "commands"); }
+  if reason == 3 { return string_push_str(string_new(), "reviews"); }
+  if reason == 4 { return string_push_str(string_new(), "checks"); }
+  return string_new();
+}
+
+fn apply_charge(inout st: St, sid: str, bid: str, now: i64, what: [i64]) -> crate::bud_tstate::Reply ! alloc, io
+{
+  let mut reply: crate::bud_tstate::Reply = crate::bud_tstate::Reply { status: 0, value: 5, a: 2, b: 0 };
+  match map_get_mut::<String, crate::bud_tstate::Budget>(inout st.sessions, sid) {
+    Some(b) => {
+      if b.state >= 0 && string_eq(b.id, bid) {
+        let mut reason: i64 = -1;
+        if b.state == 1 {
+          reason = b.halt_reason;
+          if reason < 0 { reason = 1; }
+        }
+        if b.state == 0 && len(what) == 10 {
+          let charged: i64 = crate::bud_tstate::charge(inout b, what);
+          if charged < 0 { reply.status = 2; }
+          if charged > 0 {
+            reason = charged;
+            match map_get_mut::<String, crate::bud_tstate::Clock>(inout st.clock_state.clocks, bid) {
+              Some(c) => { crate::bud_tstate::settle(inout b, inout c, sid, now, inout st.out); }
+              None => { }
+            }
+            let status: i64 = crate::bud_tlife::halt(inout b, sid, bid, now, reason, inout st.out); reply.status = status;
+          }
+        }
+        if reason >= 0 { reply.a = 1; reply.b = reason; }
+      }
+    }
+    None => { }
+  }
+  return reply;
+}
+
+pub fn t_call(inout st: St, sid: str, bid: str, run: str, code: i64,
+              now: i64, flag: i64, what: [i64]) -> crate::bud_tstate::Reply ! alloc, io
+{
+  vec_clear::<crate::bud_tstate::Effect>(inout st.out.fx);
+  if code == 1 || code == 2 || code == 5 { return crate::bud_tlife::view(inout st.sessions, inout st.out, sid, bid, code); }
+  if code == 6 { return crate::bud_tlife::maybe_close(inout st.sessions, inout st.clock_state.clocks, inout st.out, sid, now); }
+  if code == 7 && len(what) != 10 { return crate::bud_tstate::Reply { status: 2, value: 0, a: 0, b: 0 }; }
+  if code == 7 {
+    let reply: crate::bud_tstate::Reply = apply_charge(inout st, sid, bid, now, what);
+    st.charge_reason = string_new();
+    if reply.a == 1 { st.charge_reason = reason_text(reply.b); }
+    return reply;
+  }
+  if code >= 8 && code <= 11 { return crate::bud_tlife::run_event(inout st.sessions, inout st.clock_state, inout st.out, sid, bid, run, code, now, flag); }
+  if code == 12 { return crate::bud_tlife::explicit_halt(inout st.sessions, inout st.clock_state.clocks, inout st.out, sid, bid, now, flag); }
+  return crate::bud_tstate::Reply { status: 2, value: 0, a: 0, b: 0 };
+}
+
+// Replacement preserves the insertion ordinal.
+pub fn t_put(inout st: St, sid: str, budget: crate::bud_tstate::Budget) -> i64 ! alloc
+{
+  if len(st.sessions) >= 1099511627776 { return 2; }
+  match map_get::<String, SessionOrdinal>(st.session_ordinals, sid) {
+    Some(entry) => {}
+    None => {
+      if st.next_session < 0 || st.next_session >= 1099511627775 ||
+         len(st.session_ordinals) >= 1099511627776 { return 2; }
+      let seq: i64 = st.next_session;
+      st.next_session = seq + 1;
+      st.session_ordinals = map_insert::<String, SessionOrdinal>(move st.session_ordinals,
+        string_push_str(string_new(), sid), SessionOrdinal { seq: seq });
+    }
+  }
+  // An existing record with no stopped ids is refilled in place: no key String and no rehash.
+  let mut done: bool = false;
+  if len(budget.stopped) == 0 {
+    match map_get_mut::<String, crate::bud_tstate::Budget>(inout st.sessions, sid) {
+      Some(b) => { refill(inout b, budget); done = true; }
+      None => {}
+    }
+  }
+  if !done {
+    let copy: crate::bud_tstate::Budget = budget;
+    st.sessions = map_insert::<String, crate::bud_tstate::Budget>(move st.sessions, string_push_str(string_new(), sid), move copy);
+  }
+  return 0;
+}
+
+fn text(s: str) -> String ! alloc
+{ return string_push_str(string_new(), s); }
+
+// Field-wise copy of a Budget whose `stopped` list is empty; equal String fields are kept.
+fn refill(inout b: crate::bud_tstate::Budget, src: crate::bud_tstate::Budget) -> () ! alloc
+{
+  if !string_eq(b.id, src.id) { b.id = text(string_to_str(src.id)); }
+  b.state = src.state; b.unlimited = src.unlimited; b.unlimited_kind = src.unlimited_kind;
+  b.limits.time = src.limits.time; b.limits.delegations = src.limits.delegations;
+  b.limits.commands = src.limits.commands; b.limits.reviews = src.limits.reviews; b.limits.checks = src.limits.checks;
+  b.active_ms = src.active_ms; b.active_since = src.active_since; b.since_kind = src.since_kind;
+  b.delegations = src.delegations; b.commands = src.commands; b.reviews = src.reviews; b.checks = src.checks;
+  b.tools = src.tools; b.failures = src.failures; b.retries = src.retries; b.metadata = src.metadata;
+  b.origin = src.origin;
+  if !string_eq(b.opened_at, src.opened_at) { b.opened_at = text(string_to_str(src.opened_at)); }
+  if !string_eq(b.since_text, src.since_text) { b.since_text = text(string_to_str(src.since_text)); }
+  if !string_eq(b.ended_at, src.ended_at) { b.ended_at = text(string_to_str(src.ended_at)); }
+  if !string_eq(b.follows, src.follows) { b.follows = text(string_to_str(src.follows)); }
+  b.ended_how = src.ended_how; b.ended_kind = src.ended_kind; b.ended_ms = src.ended_ms;
+  b.opened_ms = src.opened_ms; b.follows_kind = src.follows_kind;
+  if !string_eq(b.rest, src.rest) { b.rest = text(string_to_str(src.rest)); }
+  b.halt_reason = src.halt_reason; b.halt_kind = src.halt_kind; b.halt_ms = src.halt_ms;
+  if !string_eq(b.halt_text, src.halt_text) { b.halt_text = text(string_to_str(src.halt_text)); }
+  b.stopped = vec_new::<String>();
+}
+
+pub fn t_del(inout st: St, sid: str) -> bool
+{
+  let removed: bool = map_remove::<String, SessionOrdinal>(inout st.session_ordinals, sid);
+  return map_remove::<String, crate::bud_tstate::Budget>(inout st.sessions, sid);
+}
+
+// Identifies the resident record to serialize without cloning the Budget.
+pub fn t_get(inout st: St, sid: str) -> i64
+{
+  match map_get::<String, SessionOrdinal>(st.session_ordinals, sid) {
+    Some(entry) => { return entry.seq; }
+    None => { return -1; }
+  }
+}
+
+pub struct Observation {
+  sessions: Vec<String>, clocks: Vec<String>
+}
+
+pub fn t_observe(inout st: St) -> Observation ! alloc
+{
+  let mut sessions: Vec<String> = vec_new::<String>();
+  let mut clocks: Vec<String> = vec_new::<String>();
+  for (sid, entry) in st.session_ordinals {
+    if len(sessions) < 1099511627776 {
+      sessions = vec_push::<String>(move sessions, string_push_str(string_new(), string_to_str(sid)));
+    }
+  }
+  for (bid, clock) in st.clock_state.clocks {
+    if len(clocks) < 1099511627776 {
+      clocks = vec_push::<String>(move clocks, string_push_str(string_new(), string_to_str(bid)));
+    }
+  }
+  return Observation { sessions: move sessions, clocks: move clocks };
+}

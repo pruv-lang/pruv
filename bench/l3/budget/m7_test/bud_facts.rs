@@ -112,6 +112,12 @@ thread_local! {
     static RCALLS: Cell<usize> = const { Cell::new(0) };
     static CURRENT_RUNNING: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static RUNNING_POSITION: Cell<i64> = const { Cell::new(0) };
+    static RUNNING_TEXT: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+}
+
+/// Perf only: the next `running_count` answer as already decoded ids (the hand lane gets `Vec<String>` the same way).
+pub fn set_running_text(v: Vec<String>) {
+    RUNNING_TEXT.with(|t| *t.borrow_mut() = Some(v));
 }
 
 /// Replaces the runningDelegationIds answer stream.
@@ -252,6 +258,12 @@ pub fn running_position(position: i64) {
 
 /// Consume one host answer and retain its individual IDs for the indexed reads.
 pub fn running_count(sid: &str, bid: &str) -> i64 {
+    if let Some(ids) = RUNNING_TEXT.with(|t| t.borrow_mut().take()) {
+        RCALLS.with(|c| c.set(c.get() + 1));
+        let n = ids.len() as i64;
+        CURRENT_RUNNING.with(|current| *current.borrow_mut() = ids);
+        return n;
+    }
     let index = running_calls();
     RCALLS.with(|c| c.set(index + 1));
     let answer = RUNNING.with(|r| r.borrow_mut().get_mut(index).map(std::mem::take));

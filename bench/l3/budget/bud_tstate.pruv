@@ -1,0 +1,200 @@
+// Typed budget, clock, and effect records shared by budget lanes.
+pub struct Limits {
+  time: i64, delegations: i64, commands: i64, reviews: i64, checks: i64
+}
+
+pub struct Budget {
+  id: String, state: i64, unlimited: bool, unlimited_kind: i64,
+  limits: Limits, active_ms: i64, active_since: i64, since_kind: i64,
+  delegations: i64, commands: i64, reviews: i64, checks: i64,
+  tools: i64, failures: i64, retries: i64, metadata: i64, origin: i64,
+  opened_at: String, since_text: String, ended_at: String, follows: String,
+  ended_how: i64, ended_kind: i64, ended_ms: i64, opened_ms: i64, follows_kind: i64,
+  rest: String, halt_reason: i64, halt_kind: i64, halt_ms: i64, halt_text: String,
+  stopped: Vec<String>
+}
+
+pub struct Clock {
+  owner: String, since: i64, has_since: bool, armed: bool, active: i64, ordinal: i64,
+  runs: HashMap<String, i64>, next_run: i64
+}
+
+pub struct ClockState { clocks: HashMap<String, Clock>, next_clock: i64 }
+
+pub struct Effect { tag: i64, a: i64, b: i64 }
+
+pub struct Out { fx: Vec<Effect> }
+
+pub struct Reply { status: i64, value: i64, a: i64, b: i64 }
+
+pub fn emit(inout o: Out, tag: i64, a: i64, b: i64) -> () ! alloc
+{
+  if len(o.fx) < 1099511627776 {
+    o.fx = vec_push::<Effect>(move o.fx, Effect { tag: tag, a: a, b: b });
+  }
+}
+
+pub fn bounded(x: i64) -> i64
+  ensures -9007199254740991 <= result && result <= 9007199254740991
+{
+  if x < -9007199254740991 { return -9007199254740991; }
+  if x > 9007199254740991 { return 9007199254740991; }
+  return x;
+}
+
+pub fn time_left(b: Budget) -> i64
+{
+  let mut limit: i64 = b.limits.time;
+  if limit < -150000000000000 { limit = -150000000000000; }
+  if limit > 150000000000000 { limit = 150000000000000; }
+  return limit * 60000 - bounded(b.active_ms);
+}
+
+pub fn disarm(inout c: Clock, inout o: Out) -> () ! alloc
+{
+  if c.armed { emit(inout o, 13, 0, 0); }
+  c.armed = false;
+}
+
+pub fn settle(inout b: Budget, inout c: Clock, sid: str, now: i64, inout o: Out) -> () ! alloc
+{
+  if !string_eq(c.owner, sid) { return; }
+  disarm(inout c, inout o);
+  if !c.has_since { return; }
+  let elapsed: i64 = bounded(now) - bounded(c.since);
+  if elapsed > 0 { b.active_ms = bounded(bounded(b.active_ms) + elapsed); }
+  c.since = 0;
+  c.has_since = false;
+  b.active_since = -1;
+  b.since_kind = 0;
+  b.since_text = string_new();
+}
+
+pub fn begin(inout b: Budget, inout c: Clock, now: i64) -> () ! alloc
+{
+  c.has_since = true;
+  c.since = bounded(now);
+  b.active_since = bounded(now);
+  b.since_kind = 2;
+  b.since_text = string_new();
+}
+
+pub fn amount(what: [i64], i: i64) -> i64
+  requires len(what) == 10 && 0 <= i && i <= 4
+{
+  let value: i64 = what[2 * i + 1];
+  if what[2 * i] != 2 { return 0; }
+  return value;
+}
+
+pub fn bumped(old: i64, amount: i64) -> i64
+{
+  if amount < -9007199254740991 || amount > 9007199254740991 ||
+     old < -9007199254740991 || old > 9007199254740991 {
+    return -9223372036854775807;
+  }
+  let total: i64 = old + amount;
+  if total < -9007199254740991 || total > 9007199254740991 {
+    return -9223372036854775807;
+  }
+  return total;
+}
+
+// 0 means charged, 1..4 name the first over-limit counter, and -1 means invalid.
+pub fn charge(inout b: Budget, what: [i64]) -> i64
+  requires len(what) == 10
+{
+  let a0: i64 = amount(what, 0);
+  let a1: i64 = amount(what, 1);
+  let a2: i64 = amount(what, 2);
+  let a3: i64 = amount(what, 3);
+  let a4: i64 = amount(what, 4);
+  let delegations: i64 = bumped(b.delegations, a0);
+  let commands: i64 = bumped(b.commands, a1);
+  let reviews: i64 = bumped(b.reviews, a2);
+  let checks: i64 = bumped(b.checks, a3);
+  let retries: i64 = bumped(b.retries, a4);
+  if !b.unlimited {
+    if a0 > 0 {
+      if delegations == -9223372036854775807 { return -1; }
+      if delegations > b.limits.delegations { return 1; }
+    }
+    if a1 > 0 {
+      if commands == -9223372036854775807 { return -1; }
+      if commands > b.limits.commands { return 2; }
+    }
+    if a2 > 0 {
+      if reviews == -9223372036854775807 { return -1; }
+      if reviews > b.limits.reviews { return 3; }
+    }
+    if a3 > 0 {
+      if checks == -9223372036854775807 { return -1; }
+      if checks > b.limits.checks { return 4; }
+    }
+  }
+  if delegations == -9223372036854775807 || commands == -9223372036854775807 ||
+     reviews == -9223372036854775807 || checks == -9223372036854775807 ||
+     retries == -9223372036854775807 { return -1; }
+  b.delegations = delegations;
+  b.commands = commands;
+  b.reviews = reviews;
+  b.checks = checks;
+  b.retries = retries;
+  return 0;
+}
+
+pub fn active_change(inout c: Clock, delta: i64) -> ()
+{
+  if 0 <= c.active && c.active < 1099511627776 && -1 <= delta && delta <= 1 {
+    c.active = c.active + delta;
+  }
+}
+
+pub fn update_run(inout c: Clock, code: i64, run: str, waiting: bool) -> i64 ! alloc
+{
+  // Return 0 for no change, 1 for a change, or 2 when a fresh run exceeds capacity.
+  // A run's value is its insertion ordinal, negated while it waits (observation keeps JS Map order).
+  let mut delta: i64 = 0;
+  let mut changed: bool = false;
+  let mut gone: bool = false;
+  let mut fresh: bool = false;
+  match map_get_mut::<String, i64>(inout c.runs, run) {
+    Some(v) => {
+      let was: bool = *v < 0;
+      if code == 10 {
+        gone = true;
+        if !was { delta = -1; }
+        changed = true;
+      } else if was != waiting {
+        if -1099511627776 < *v && *v < 1099511627776 { *v = 0 - *v; }
+        if waiting { delta = -1; } else { delta = 1; }
+        changed = true;
+      } else { changed = code == 8; }
+    }
+    None => { fresh = code == 8; }
+  }
+  if fresh {
+    // Reserve the step that would advance the counter to 2^40.
+    if len(c.runs) >= 1099511627776 || c.next_run <= 0 || c.next_run >= 1099511627775 { return 2; }
+    let mut k: String = string_new();
+    k = string_push_str(move k, run);
+    let seq: i64 = c.next_run;
+    c.next_run = seq + 1;
+    c.runs = map_insert::<String, i64>(move c.runs, move k, seq);
+    delta = 1;
+    changed = true;
+  }
+  if gone { let removed: bool = map_remove::<String, i64>(inout c.runs, run); }
+  active_change(inout c, delta);
+  if changed { return 1; }
+  return 0;
+}
+
+pub fn closed(inout b: Budget, how: i64, now: i64) -> () ! alloc
+{
+  b.state = 2;
+  b.ended_how = how;
+  b.ended_kind = 2;
+  b.ended_ms = now;
+  b.ended_at = string_new();
+}

@@ -5,6 +5,13 @@ use std::hint::black_box;
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
 
+use sol::pruv_m_t_2_10_bud_tstate_6_Budget as Budget;
+use sol::pruv_m_t_2_10_bud_tstate_10_ClockState as ClockState;
+use sol::pruv_m_t_2_10_bud_tstate_6_Effect as Effect;
+use sol::pruv_m_t_2_10_bud_tstate_6_Limits as Limits;
+use sol::pruv_m_t_2_10_bud_tstate_3_Out as Out;
+use sol::pruv_m_t_2_10_bud_tstate_5_Reply as Reply;
+
 struct Timer {
     token: u64,
     due: i64,
@@ -54,7 +61,7 @@ fn take_text(words: &mut &[i64]) -> String {
     bud_facts::encode_js_text(units)
 }
 
-fn read_budget(words: &[i64]) -> sol::Budget {
+fn read_budget(words: &[i64]) -> Budget {
     let empty = [0; 30];
     let absent = words == [-1];
     let words = if absent { &empty[..] } else { words };
@@ -83,10 +90,10 @@ fn read_budget(words: &[i64]) -> sol::Budget {
         }
     }
     let rest = bud_facts::encode_js_text(rest.iter().map(|&u| u as u16));
-    sol::Budget {
+    Budget {
         id, state: if absent { -1 } else { words[0] }, origin: words[1],
         unlimited: words[2] == 1, unlimited_kind: words[2],
-        limits: sol::Limits { time: words[3], delegations: words[4], commands: words[5], reviews: words[6], checks: words[7] },
+        limits: Limits { time: words[3], delegations: words[4], commands: words[5], reviews: words[6], checks: words[7] },
         active_ms: words[8], delegations: words[9], commands: words[10], reviews: words[11], checks: words[12],
         tools: words[13], failures: words[14], retries: words[15], since_kind: words[16],
         active_since: if words[16] == 2 { words[17] } else { -1 },
@@ -96,7 +103,7 @@ fn read_budget(words: &[i64]) -> sol::Budget {
     }
 }
 
-fn budget_words(b: &sol::Budget) -> Vec<i64> {
+fn budget_words(b: &Budget) -> Vec<i64> {
     if b.state == -1 { return vec![-1]; }
     let mut words = vec![
         b.state, b.origin, b.unlimited_kind, b.limits.time, b.limits.delegations, b.limits.commands,
@@ -126,8 +133,11 @@ impl World {
     fn new() -> Self {
         Self {
             st: sol::St {
-                sessions: HashMap::new(), clocks: HashMap::new(), next_clock: 0,
-                out: sol::Out { fx: Vec::new() },
+                sessions: HashMap::new(),
+                ordinals: HashMap::new(),
+                next_session: 0,
+                clock_state: ClockState { clocks: HashMap::new(), next_clock: 0 },
+                out: Out { fx: Vec::new() },
             },
             now: 1700000000000, seq: 0, active: Vec::new(), by_bid: HashMap::new(),
             log: Vec::new(), silent: false, audit: false,
@@ -137,7 +147,11 @@ impl World {
     fn put(&mut self, put: &Put) {
         let mut record = put.words.as_slice();
         let sid = take_key(&mut record).unwrap();
-        self.st.sessions.insert(sid, read_budget(&unit_record(&put.text, &record[1..])));
+        let budget = read_budget(&unit_record(&put.text, &record[1..]));
+        let status = sol::t_put(&mut self.st, &sid, &budget);
+        if status != 0 {
+            self.log.push(format!("X {status}"));
+        }
     }
 
     fn note(&mut self, line: String) {
@@ -271,15 +285,15 @@ impl World {
     fn observe(&self) -> String {
         let mut words = vec![self.st.sessions.len() as i64];
         let mut sessions: Vec<_> = self.st.sessions.iter().collect();
-        sessions.sort_unstable_by_key(|(sid, _)| *sid);
+        sessions.sort_unstable_by_key(|(sid, _)| self.st.ordinals[sid.as_str()].value);
         for (sid, budget) in sessions {
             append_text(&mut words, sid);
             let budget = budget_words(budget);
             words.push(budget.len() as i64);
             words.extend(budget);
         }
-        words.push(self.st.clocks.len() as i64);
-        let mut clocks: Vec<_> = self.st.clocks.iter().collect();
+        words.push(self.st.clock_state.clocks.len() as i64);
+        let mut clocks: Vec<_> = self.st.clock_state.clocks.iter().collect();
         clocks.sort_unstable_by_key(|(_, clock)| clock.ordinal);
         for (bid, clock) in clocks {
             append_text(&mut words, bid);
@@ -427,7 +441,7 @@ fn body(code: i64, flag: i64, run: &str) -> Vec<i64> {
     op
 }
 
-fn perform_perf(world: &mut World, code: i64, size: i64, timer: &mut Option<i64>) -> sol::Reply {
+fn perform_perf(world: &mut World, code: i64, size: i64, timer: &mut Option<i64>) -> Reply {
     let reply = sol::t_call(&mut world.st, SID, BID, "", code, world.now, size, &[0; 10]);
     let mut stopped = None;
     for effect in &world.st.out.fx {
@@ -445,7 +459,7 @@ fn perform_perf(world: &mut World, code: i64, size: i64, timer: &mut Option<i64>
     reply
 }
 
-fn effect_words(effects: &[sol::Effect]) -> i64 {
+fn effect_words(effects: &[Effect]) -> i64 {
     effects.iter().map(|e| match e.tag { 12 | 38 => 3, 33 => 2, _ => 1 }).sum()
 }
 

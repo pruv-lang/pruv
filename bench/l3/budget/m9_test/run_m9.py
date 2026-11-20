@@ -45,7 +45,7 @@ def rustc():
 
 
 def shared_checkout():
-    if not os.path.isfile(os.path.join(ROOT, ".git")) or not shutil.which("git"):
+    if not os.path.exists(os.path.join(ROOT, ".git")) or not shutil.which("git"):
         return ROOT
     result = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
                             cwd=ROOT, capture_output=True, text=True)
@@ -795,14 +795,15 @@ def main():
         ap.error("churn requires --typed")
     if a.py and (not a.typed or a.gen):
         ap.error("--py requires --typed without --gen")
-    fixtures = WORK
-    if a.cmd == "q" and not os.path.isdir(fixtures):
-        fixtures = os.path.join(shared_checkout(), os.path.relpath(WORK, ROOT))
+    def fixture(filename):
+        local = os.path.join(WORK, filename)
+        if a.cmd != "q" or os.path.isfile(local):
+            return local
+        return os.path.join(shared_checkout(), os.path.relpath(local, ROOT))
     if a.cases is None:
-        filename = "cases_q4.jsonl" if a.cmd == "derive" and a.family == "q4" else "cases.jsonl"
-        a.cases = os.path.join(fixtures, filename)
+        a.cases = fixture("cases_q4.jsonl" if a.cmd == "derive" and a.family == "q4" else "cases.jsonl")
     if a.oracle is None:
-        a.oracle = os.path.join(fixtures, "oracle.jsonl")
+        a.oracle = fixture("oracle.jsonl")
     sys.exit({"q": cmd_q, "perf": cmd_perf, "derive": cmd_derive, "dc": cmd_dc, "churn": cmd_churn}[a.cmd](a))
 
 

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """L3-10 M10a runner: halt (bud_halt.pruv) and the calls that reach it, against the TS oracle.
 
-  python3 bench/l3/budget/m10_test/run_m10.py q      [--pruvc PATH | --py] [--cases F] [--oracle F]
+  python3 bench/l3/budget/m10_test/run_m10.py q      [--typed] [--pruvc PATH | --py] [--cases F] [--oracle F]
     Passing cases_halt.exact.json selects the verified cases_halt.jsonl and its oracle.
   python3 bench/l3/budget/m10_test/run_m10.py derive (writes work/m10/cases_halt.jsonl + oracle_halt.jsonl)
   python3 bench/l3/budget/m10_test/run_m10.py same   (Python pruvc vs Rust pruvc: byte-identical Rust)
-  python3 bench/l3/budget/m10_test/run_m10.py perf   [--rounds N] [--reps N]   (Pruv vs hand_m10.rs, interleaved; no TS lane)
+  python3 bench/l3/budget/m10_test/run_m10.py perf   [--typed] [--rounds N] [--reps N]   (Pruv vs hand_m10.rs, interleaved; no TS lane)
 
 q: each case becomes a driver program over the M7 record (bud_lifecycle.pruv) with the halt section codec in `rest`
 (bud_halt.pruv header) and the M9 clock (driver_m10.rs runs the timer scheduler). Compared with the oracle per request:
@@ -82,16 +82,19 @@ def build_facts(work=WORK):
     return rlib
 
 
-def compile_gen(which, gen, rlib=None, budlib=None):
+def compile_gen(which, gen, rlib=None, budlib=None, typed=False, decide=None):
     if rlib is None:
         rlib = build_facts()
-    root = "bench/l3/budget/m10_test/root_m10.pruv"
+    root = "bench/l3/budget/m10_test/" + ("root_m10_typed.pruv" if typed else "root_m10.pruv")
     libs = LIBS if budlib is None else ["--lib", budlib, "--lib", "bench/l3/lib", "--lib", M7]
     if which == "py":
         cmd = [PY_DEFAULT, PRUVC_PY, root, "-o", gen, "--backend", "rust"] + libs
     else:
         cmd = [which, root, "-o", gen] + libs
-    c = subprocess.run(cmd + ["--rust-extern", f"bud_facts={rlib}"], cwd=ROOT, capture_output=True, text=True)
+    cmd += ["--rust-extern", f"bud_facts={rlib}"]
+    if decide:
+        cmd += ["--rust-extern", f"decide_facts={decide}"]
+    c = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
     if c.returncode != 0 or not os.path.exists(gen):
         sys.exit("pruvc failed:\n" + c.stdout + c.stderr)
 
@@ -99,21 +102,44 @@ def compile_gen(which, gen, rlib=None, budlib=None):
 def build(args):
     # --budlib / --out: a mutant library and its own build directory (mutant_halt.py), never the shared work/m10
     budlib = getattr(args, "budlib", None)
-    work = os.path.abspath(getattr(args, "out", None) or WORK)
+    typed = getattr(args, "typed", False)
+    work = os.path.abspath(getattr(args, "out", None) or (WORK + "_typed" if typed else WORK))
     rlib = build_facts(work)
+    decide = None
+    if typed:
+        # The imported bud_tdecide module declares these Rust facts.
+        decide = os.path.join(work, "libdecide_facts.rlib")
+        src = os.path.join(BUD, "m10b_test", "decide_facts.rs")
+        c = subprocess.run([rustc(), "-O", "--edition", "2021", "--crate-type", "rlib",
+                            "--crate-name", "decide_facts", "--extern", f"bud_facts={rlib}",
+                            src, "-o", decide], capture_output=True, text=True)
+        if c.returncode != 0:
+            sys.exit("rustc failed (decide_facts):\n" + c.stderr)
     gen = os.path.join(work, "gen.rs")
     if os.path.exists(gen):
         os.remove(gen)
-    compile_gen("py" if args.py else args.pruvc, gen, rlib, budlib)
+    compile_gen("py" if args.py else args.pruvc, gen, rlib, budlib, typed, decide)
     main = os.path.join(work, "main_m10.rs")
     with open(main, "w") as f:
-        f.write('#![allow(dead_code, unused_imports, unused_variables, unused_mut)]\n#[path = "gen.rs"] mod sol;\n')
+        f.write('#![allow(dead_code, unused_imports, unused_variables, unused_mut)]\n')
+        if typed:
+            # The Q codec reads staged text bytes directly before building the typed record.
+            f.write('mod gen;\nmod sol {\n    pub use crate::gen::*;\n'
+                    '    pub fn t_text(bytes: &[u8], off: i64, len: i64, out: &mut [u8]) -> i64 {\n'
+                    '        out.copy_from_slice(&bytes[off as usize..(off + len) as usize]);\n'
+                    '        0\n    }\n}\n')
+        else:
+            f.write('#[path = "gen.rs"] mod sol;\n')
         codec = json.dumps(os.path.join(M7, "record_text.rs"))
         f.write(f"#[path = {codec}] mod record_text;\n")
-        f.write(open(os.path.join(HERE, "driver_m10.rs")).read())
+        driver = "driver_m10_typed.rs" if typed else "driver_m10.rs"
+        with open(os.path.join(HERE, driver)) as source:
+            f.write(source.read())
     exe = os.path.join(work, "driver_m10")
-    c = subprocess.run([rustc(), "-C", "opt-level=3", "--edition", "2021", "--extern", f"bud_facts={rlib}",
-                        "-o", exe, main], capture_output=True, text=True)
+    cmd = [rustc(), "-C", "opt-level=3", "--edition", "2021", "--extern", f"bud_facts={rlib}"]
+    if decide:
+        cmd += ["--extern", f"decide_facts={decide}"]
+    c = subprocess.run(cmd + ["-o", exe, main], capture_output=True, text=True)
     if c.returncode != 0:
         sys.exit("rustc failed:\n" + c.stderr[-4000:])
     return exe
@@ -693,8 +719,9 @@ def classify(case, o, run, cut):
 def run_q(args, cases_f, oracle_f):
     required = required_exact(HERE, cases_f)
     exe = build(args)
-    from lifecycle_controls import check_grow
-    check_grow(exe, m10=True)
+    if not getattr(args, "typed", False):
+        from lifecycle_controls import check_grow
+        check_grow(exe, m10=True)
     cases = [json.loads(l) for l in open(cases_f)]
     oracle = {}
     for l in open(oracle_f):
@@ -852,6 +879,7 @@ def main():
     ap.add_argument("cmd", choices=["q", "perf", "derive", "same", "replay"])
     ap.add_argument("--pruvc", default=PRUVC_DEFAULT)
     ap.add_argument("--py", action="store_true")
+    ap.add_argument("--typed", action="store_true", help="use the resident typed lane (q or perf)")
     ap.add_argument("--budlib", help="budget library directory to compile against (mutants)")
     ap.add_argument("--out", help="build directory for gen.rs and the driver (default work/m10)")
     ap.add_argument("--cases", default=None)
@@ -859,6 +887,8 @@ def main():
     ap.add_argument("--rounds", type=int, default=5)
     ap.add_argument("--reps", type=int, default=100000)
     a = ap.parse_args()
+    if a.typed and (a.cmd not in ("q", "perf") or a.budlib):
+        ap.error("--typed supports q and perf without --budlib")
     if a.cases and os.path.abspath(a.cases) == os.path.join(HERE, "cases_halt.exact.json"):
         a.cases = input_path("cases_halt.jsonl")
     a.cases = a.cases or input_path("cases.jsonl")

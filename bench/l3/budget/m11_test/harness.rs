@@ -16,19 +16,30 @@
 //   R alternates card sizes, H queries hasCard, I pairs setCard with current.
 //   handcheck | hdiff <card> | <lang> | <by> [| <scen 0..4>]  compare hand and Pruv result words
 // Output: `ok <words>` (the entry's out[1..1+out[0]]), `err <status>`, or `PANIC <msg>`.
+#[cfg(not(m11_typed))]
 #[path = "@SOL@"] mod sol;
+#[cfg(m11_typed)]
+#[path = "@SOL@"] mod generated;
+#[cfg(m11_typed)]
+#[path = "@TYPED@"] mod sol;
 #[path = "@HAND@"] mod hand;
 use std::io::{self, BufRead, Write};
 use std::panic::{self, AssertUnwindSafe};
 use std::time::Instant;
 use std::hint::black_box;
 
+#[cfg(not(m11_typed))]
+type State = Vec<i64>;
+#[cfg(m11_typed)]
+type State = generated::St;
+
 struct World {
-    st: Vec<i64>,
+    st: State,
     out: Vec<i64>,
 }
 
 impl World {
+    #[cfg(not(m11_typed))]
     fn new() -> World {
         let mut st = vec![0i64; 4096];
         let r = sol::m11_init(&mut st);
@@ -38,6 +49,11 @@ impl World {
         }
         World { st, out: vec![0; 4096] }
     }
+    #[cfg(m11_typed)]
+    fn new() -> World {
+        World { st: sol::new_state(), out: vec![0; 4096] }
+    }
+    #[cfg(not(m11_typed))]
     fn grow(&mut self) -> bool {
         let n = self.out[0].max(0) as usize;
         let mut fresh = vec![0i64; n]; // N from Pruv (bud_store::need, N >= 2*len), L3 P13b
@@ -48,7 +64,7 @@ impl World {
         true
     }
     // runs f with retries on Grow (1) and out too small (3)
-    fn call(&mut self, f: &dyn Fn(&mut Vec<i64>, &mut Vec<i64>) -> i64) -> Result<&[i64], i64> {
+    fn call(&mut self, f: &dyn Fn(&mut State, &mut Vec<i64>) -> i64) -> Result<&[i64], i64> {
         for _ in 0..6 {
             let s = f(&mut self.st, &mut self.out);
             match s {
@@ -57,6 +73,9 @@ impl World {
                     return Ok(&self.out[1..1 + k]);
                 }
                 1 => {
+                    #[cfg(m11_typed)]
+                    return Err(1);
+                    #[cfg(not(m11_typed))]
                     if !self.grow() {
                         return Err(1);
                     }

@@ -6,6 +6,7 @@
   python3 bench/l3/budget/m7_test/run_m7.py same   (Python pruvc vs Rust pruvc: byte-identical Rust)
   python3 bench/l3/budget/m7_test/run_m7.py perf   [--rounds N] [--reps N] [--profile S|M|SM | --sizes 100,500,1000] [--no-instr]
 
+q, same and perf accept --typed to use String-keyed resident budgets. M7_WORK overrides the artifact directory.
 q --hand16 runs hand_m7_u16.rs (typed UTF-16 hand Rust, q mode) on the same program instead of the Pruv driver, through the
 same classification. perf lanes: pruv (driver_m7), hand16 (hand_m7_u16), hand (hand_m7, UTF-8 String, informational), ts.
 perf also writes work/m7/perf.json with run_meta.run_meta(...) and the rows (ns, retired instructions, ratios).
@@ -34,7 +35,8 @@ sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
 BUD = os.path.dirname(HERE)
 ROOT = os.path.abspath(os.path.join(BUD, "..", "..", ".."))
-WORK = os.path.join(BUD, "work", "m7")
+LOCAL_WORK = os.path.join(BUD, "work", "m7")
+WORK = os.path.abspath(os.environ.get("M7_WORK", LOCAL_WORK))
 PRUVC_DEFAULT = os.path.join(ROOT, "pruvc-rs", "target", "release", "pruvc")
 if not os.path.isfile(PRUVC_DEFAULT):
     PRUVC_DEFAULT = "/Users/spica4345/Projects/pruv/pruvc-rs/target/release/pruvc"
@@ -50,7 +52,7 @@ from q_gate import failures as gate_failures, required_exact  # noqa: E402
 
 def input_path(name):
     """work/m7/<name> when present, else the read-only source copy."""
-    p = os.path.join(WORK, name)
+    p = os.path.join(LOCAL_WORK, name)
     return p if os.path.exists(p) else os.path.join(SRC_WORK, name)
 
 STATE = {"open": 0, "halted": 1, "closed": 2}
@@ -81,17 +83,21 @@ def build_facts():
     return rlib
 
 
-def compile_gen(which, gen, rlib=None):
+def compile_gen(which, gen, rlib=None, typed=False, externs=None):
     if rlib is None:
         rlib = build_facts()
-    root = "bench/l3/budget/m7_test/root.pruv"
+    root = "bench/l3/budget/m7_test/" + ("root_m7_typed.pruv" if typed else "root.pruv")
     if which == "py":
         cmd = [PY_DEFAULT, PRUVC_PY, root, "-o", gen, "--backend", "rust"] + LIBS
     else:
         cmd = [which, root, "-o", gen] + LIBS
     # P18b: --proven-entries adds the pruv_proven twins (PruvArr arguments, length checked once by the host) that
     # driver_m7.rs's fair lane calls; the guarded c_* entries are unchanged.
-    c = subprocess.run(cmd + ["--rust-extern", f"bud_facts={rlib}", "--proven-entries"], cwd=ROOT,
+    flags = ["--rust-extern", f"bud_facts={rlib}", "--proven-entries"]
+    if typed:
+        flags = ["--rust-extern", f"bud_facts={rlib}", "--rust-extern",
+                 f"decide_facts={externs or build_decide_facts(rlib)}"]
+    c = subprocess.run(cmd + flags, cwd=ROOT,
                        capture_output=True, text=True)
     if c.returncode != 0 or not os.path.exists(gen):
         sys.exit("pruvc failed:\n" + c.stdout + c.stderr)
@@ -102,7 +108,37 @@ def driver_source(here=HERE):
     return f"#[path = {codec}] mod record_text;\n" + open(os.path.join(here, "driver_m7.rs")).read()
 
 
+def build_decide_facts(facts):
+    decide = os.path.join(os.path.dirname(facts), "libdecide_facts.rlib")
+    src = os.path.join(BUD, "m10b_test", "decide_facts.rs")
+    subprocess.run([rustc(), "-O", "--edition", "2021", "--crate-type", "rlib",
+                    "--crate-name", "decide_facts", "--extern", f"bud_facts={facts}", src,
+                    "-o", decide], check=True)
+    return decide
+
+
+def build_typed(args):
+    facts = build_facts()
+    decide = build_decide_facts(facts)
+    compiler = "py" if args.py else args.pruvc
+    gen = os.path.join(WORK, "gen_m7_typed_" + ("py" if args.py else "rs") + ".rs")
+    compile_gen(compiler, gen, facts, typed=True, externs=decide)
+    main = os.path.join(WORK, "main_m7_typed.rs")
+    codec = json.dumps(os.path.join(HERE, "record_text.rs"))
+    driver = json.dumps(os.path.join(HERE, "driver_m7_typed.rs"))
+    with open(main, "w") as f:
+        f.write('#![allow(dead_code, unused_imports, unused_variables, unused_mut)]\n')
+        f.write(f'#[path = {json.dumps(gen)}] mod generated;\n')
+        f.write(f'#[path = {codec}] mod record_text;\ninclude!({driver});\n')
+    exe = os.path.join(WORK, "driver_m7_typed")
+    subprocess.run([rustc()] + RUSTC_FLAGS + ["--extern", f"bud_facts={facts}", "--extern",
+                                            f"decide_facts={decide}", "-o", exe, main], check=True)
+    return exe
+
+
 def build(args):
+    if getattr(args, "typed", False):
+        return build_typed(args)
     rlib = build_facts()
     gen = os.path.join(WORK, "gen.rs")
     compile_gen("py" if args.py else args.pruvc, gen, rlib)
@@ -598,9 +634,10 @@ def cmd_derive(args):
 
 
 def cmd_same(args):
-    a, b = os.path.join(WORK, "gen_rs.rs"), os.path.join(WORK, "gen_py.rs")
-    compile_gen(args.pruvc, a)
-    compile_gen("py", b)
+    prefix = "gen_m7_typed_" if args.typed else "gen_"
+    a, b = (os.path.join(WORK, prefix + side + ".rs") for side in ("rs", "py"))
+    compile_gen(args.pruvc, a, typed=args.typed)
+    compile_gen("py", b, typed=args.typed)
     x, y = open(a, "rb").read(), open(b, "rb").read()
     print(json.dumps({"rs_bytes": len(x), "py_bytes": len(y), "identical": x == y}))
     return 0 if x == y else 1
@@ -670,6 +707,7 @@ def cmd_perf(args):
     Pruv fair ns, Pruv fair/hand16 (typed), Pruv fair instr, instr Pruv fair/hand16.
     No retired-instruction counter (no /usr/bin/time -l line) -> 'unavailable', never 0."""
     from common import NODE, TS_ENV
+    typed = getattr(args, "typed", False)
     exe = build(args)
     hand16 = build_hand16()
     hand = build_hand("hand_m7.rs", "hand_m7")
@@ -719,7 +757,8 @@ def cmd_perf(args):
         r = rchk.get((item, sz), {})
         # every listed lane must print exactly one value in every round, all identical: pruv rchk, pruv typed rchk_t,
         # hand16 rchk, hand16 wire rchk_w, plus the fair typed lane rchk_f (pruv_f) for FAIR_ITEMS
-        lane_keys = ("pruv", "pruv_t", "hand16", "hand16w") + (("pruv_f",) if item in FAIR_ITEMS else ())
+        lane_keys = ("pruv", "hand16", "hand16w") if typed else (
+            ("pruv", "pruv_t", "hand16", "hand16w") + (("pruv_f",) if item in FAIR_ITEMS else ()))
         lanes = [r.get(k, {}) for k in lane_keys]
         if any(len(ln.get(rd, [])) != 1 for ln in lanes for rd in range(args.rounds)):
             cell_status[(item, sz)] = "RCHK MISSING"
@@ -728,7 +767,7 @@ def cmd_perf(args):
         if (item, sz) in cell_status:
             n_bad += 1
     instr = {}
-    if not args.no_instr:
+    if not args.no_instr and not typed:
         for size in sizes:
             for item in PERF_ITEMS:
                 if item in NO_INSTR_ITEMS:
@@ -752,10 +791,15 @@ def cmd_perf(args):
                         lambda r: [exe, "perf", str(size), str(r), item, "f"], args.reps, calls)
     fi = lambda x: "unavailable" if x is None else "%.0f" % x
     print("rounds %d, reps %d, sizes %s; ns and instructions per call" % (args.rounds, args.reps, sizes))
-    print("Matched pairs: Pruv/hand16w (wire vs wire), Pruv typed/hand16 (typed vs typed). Pruv/hand16 is UNMATCHED "
-          "(Pruv wire vs hand16 typed).")
+    if typed:
+        print("Pruv ns = typed resident lane with predecoded String inputs.")
+    else:
+        print("Matched pairs: Pruv/hand16w (wire vs wire), Pruv typed/hand16 (typed vs typed). Pruv/hand16 is UNMATCHED "
+              "(Pruv wire vs hand16 typed).")
+    comparison = "Pruv/hand16 (predecoded)" if typed else "Pruv/hand16 (unmatched: wire vs typed)"
+    wire_comparison = "Pruv/hand16w" if typed else "Pruv/hand16w (wire)"
     print("item | S | Pruv ns | hand16 ns | hand(old UTF-8) ns | TS ns | Pruv typed ns | hand16w ns"
-          " | Pruv/hand16 (unmatched: wire vs typed) | Pruv/hand16w (wire) | Pruv typed/hand16 (typed) | Pruv/hand(old)"
+          f" | {comparison} | {wire_comparison} | Pruv typed/hand16 (typed) | Pruv/hand(old)"
           " | Pruv instr | hand16 instr | instr Pruv/hand16 (unmatched) | Pruv typed instr | hand16w instr"
           " | instr Pruv/hand16w | instr Pruv typed/hand16"
           " | Pruv fair ns | Pruv fair/hand16 (typed) | Pruv fair instr | instr Pruv fair/hand16")
@@ -776,7 +820,7 @@ def cmd_perf(args):
         if fail:  # no ratio of a cell whose per-op results are unchecked or differ
             rt = lambda a, b: None
             ir = irw = irt = irf = None
-        ci = item in PERF_ITEMS and not args.no_instr
+        ci = item in PERF_ITEMS and not args.no_instr and not typed
         print("%s | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s"
               " | %s | %s | %s | %s%s" % (
             item, sz, f("pruv"), f("hand16"), f("hand"), f("ts"), f("pruv_t"), f("hand16w"),
@@ -793,7 +837,7 @@ def cmd_perf(args):
             "rchk_status": fail or ("ok" if item in PERF_ITEMS else "not compared (pruv only)"),
             "pruv_over_hand16": num(rt("pruv", "hand16")), "pruv_over_hand_old": num(rt("pruv", "hand")),
             "pruv_over_hand16w": num(rt("pruv", "hand16w")), "pruv_typed_over_hand16": num(rt("pruv_t", "hand16")),
-            "pruv_over_hand16_matched": False,  # Pruv wire vs hand16 typed: unmatched boundaries
+            "pruv_over_hand16_matched": typed,
             "instr_pruv": num(ip), "instr_hand16": num(ih), "instr_pruv_over_hand16": num(ir),
             "instr_pruv_typed": num(ipt), "instr_hand16w": num(ihw),
             "instr_pruv_over_hand16w": num(irw), "instr_pruv_typed_over_hand16": num(irt),
@@ -806,11 +850,13 @@ def cmd_perf(args):
     os.makedirs(WORK, exist_ok=True)
     meta = run_meta(pruvc=PRUVC_PY if args.py else args.pruvc, backend="rust", rustc=rustc(), flags=RUSTC_FLAGS,
                     seed=SEED, profile=args.profile or "custom:" + ",".join(map(str, sizes)),
-                    lanes=[s for s, _ in sides] + ["pruv_t", "hand16w", "pruv_f"],
-                    extra={"rounds": args.rounds, "reps": args.reps, "sizes": sizes, "instr_enabled": not args.no_instr,
-                           "pruv_checksum": "rchk + rchk_t (+ rchk_f for FAIR_ITEMS) per op (driver_m7), compared with "
-                                            "hand16 rchk + rchk_w per cell"})
-    with open(os.path.join(WORK, "perf.json"), "w") as f:
+                    lanes=[s for s, _ in sides] + (["hand16w"] if typed else ["pruv_t", "hand16w", "pruv_f"]),
+                    extra={"rounds": args.rounds, "reps": args.reps, "sizes": sizes,
+                           "typed_resident": typed, "instr_enabled": not args.no_instr and not typed,
+                           "pruv_checksum": ("rchk (driver_m7_typed)" if typed else
+                                             "rchk + rchk_t (+ rchk_f for FAIR_ITEMS) per op (driver_m7)") +
+                                            ", compared with hand16 rchk + rchk_w per cell"})
+    with open(os.path.join(WORK, "perf_typed.json" if typed else "perf.json"), "w") as f:
         json.dump({"meta": meta, "rows": rows, "checksum_problems": bad,
                    "result_checks": {"compared": n_cmp, "mismatches": n_bad,
                                      "failed_cells": ["%s %d: %s" % (i, s_, t) for (i, s_), t in sorted(cell_status.items())]}},
@@ -940,11 +986,14 @@ def main():
     ap.add_argument("--hand16", action="store_true", help="q: run hand_m7_u16 instead of the Pruv driver")
     ap.add_argument("--pruvc", default=PRUVC_DEFAULT)
     ap.add_argument("--py", action="store_true")
+    ap.add_argument("--typed", action="store_true", help="use the typed resident lane for q, same or perf")
     ap.add_argument("--cases", default=None)  # default work/m7/cases.jsonl, else SRC_WORK
     ap.add_argument("--oracle", default=None)
     ap.add_argument("--rounds", type=int, default=None)  # perf 5, boundary 7
     ap.add_argument("--reps", type=int, default=200000)
     a = ap.parse_args()
+    if a.typed and (a.hand16 or a.cmd not in ("q", "same", "perf")):
+        ap.error("--typed requires q, same or perf and cannot be combined with --hand16")
     a.cases = a.cases or input_path("cases.jsonl")
     a.oracle = a.oracle or input_path("oracle.jsonl")
     if a.rounds is None:

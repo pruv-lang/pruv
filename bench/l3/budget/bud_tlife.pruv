@@ -1,0 +1,235 @@
+trusted rust fn running_count(sid: str, bid: str) -> i64 ! io
+  ensures true = "::bud_facts::running_count";
+
+trusted rust fn running_take(sid: str, bid: str) -> Vec<String> ! alloc, io
+  ensures true = "::bud_facts::running_take";
+
+trusted rust fn running_position(position: i64) -> () ! io
+  ensures true = "::bud_facts::running_position";
+
+trusted rust fn is_quiet(sid: str, position: i64) -> i64 ! io
+  ensures true = "::bud_facts::is_quiet_text";
+
+pub fn halt(inout b: crate::bud_tstate::Budget, sid: str, bid: str, now: i64, reason: i64,
+        inout o: crate::bud_tstate::Out) -> i64 ! alloc, io
+{
+  if b.state != 0 { return 0; }
+  running_position(len(o.fx));
+  let count: i64 = running_count(sid, bid);
+  if count < 0 || count > 1099511627776 { return 2; }
+  b.stopped = running_take(sid, bid);
+  b.state = 1;
+  b.halt_reason = reason;
+  b.halt_kind = 2;
+  b.halt_ms = now;
+  b.halt_text = string_new();
+  crate::bud_tstate::emit(inout o, 31, 0, 0);
+  crate::bud_tstate::emit(inout o, 32, 0, 0);
+  let mut i: i64 = 0;
+  while i < len(b.stopped)
+    invariant 0 <= i && i <= len(b.stopped)
+    decreases len(b.stopped) - i
+  {
+    crate::bud_tstate::emit(inout o, 33, i, 0);
+    i = i + 1;
+  }
+  crate::bud_tstate::emit(inout o, 34, 0, 0);
+  crate::bud_tstate::emit(inout o, 35, 0, 0);
+  crate::bud_tstate::emit(inout o, 36, 0, 0);
+  crate::bud_tstate::emit(inout o, 20, 0, 0);
+  crate::bud_tstate::emit(inout o, 37, 0, 0);
+  return 0;
+}
+
+pub fn arm(inout b: crate::bud_tstate::Budget, inout c: crate::bud_tstate::Clock, sid: str, bid: str, now: i64,
+       inout o: crate::bud_tstate::Out) -> i64 ! alloc, io
+{
+  if b.unlimited { return 0; }
+  let left: i64 = crate::bud_tstate::time_left(b);
+  if left <= 0 {
+    crate::bud_tstate::settle(inout b, inout c, sid, now, inout o);
+    return halt(inout b, sid, bid, now, 0, inout o);
+  }
+  let mut delay: i64 = left;
+  if left > 2147483647 { delay = 1; }
+  c.armed = true;
+  crate::bud_tstate::emit(inout o, 12, left, delay);
+  return 0;
+}
+
+pub fn refresh(inout b: crate::bud_tstate::Budget, inout c: crate::bud_tstate::Clock, sid: str, bid: str, now: i64,
+           inout o: crate::bud_tstate::Out) -> i64 ! alloc, io
+{
+  let consuming: bool = b.state == 0 && c.active > 0;
+  if consuming == c.has_since { return 0; }
+  if !consuming {
+    crate::bud_tstate::settle(inout b, inout c, sid, now, inout o);
+    return 0;
+  }
+  crate::bud_tstate::begin(inout b, inout c, now);
+  return arm(inout b, inout c, sid, bid, now, inout o);
+}
+
+pub fn fire(inout b: crate::bud_tstate::Budget, inout c: crate::bud_tstate::Clock, sid: str, bid: str, now: i64,
+        inout o: crate::bud_tstate::Out) -> i64 ! alloc, io
+{
+  if c.armed { crate::bud_tstate::emit(inout o, 14, 0, 0); }
+  c.armed = false;
+  if b.state != 0 || b.unlimited { return 0; }
+  crate::bud_tstate::settle(inout b, inout c, sid, now, inout o);
+  if crate::bud_tstate::time_left(b) > 0 && len(c.runs) > 0 {
+    crate::bud_tstate::begin(inout b, inout c, now);
+    return arm(inout b, inout c, sid, bid, now, inout o);
+  }
+  return halt(inout b, sid, bid, now, 0, inout o);
+}
+
+pub fn view(inout sessions: HashMap<String, crate::bud_tstate::Budget>,
+        inout out: crate::bud_tstate::Out,
+        sid: str, bid: str, code: i64) -> crate::bud_tstate::Reply ! alloc
+{
+  let mut reply: crate::bud_tstate::Reply = crate::bud_tstate::Reply { status: 0, value: 1, a: 0, b: 0 };
+  if code == 1 { reply.value = 0; }
+  match map_get_mut::<String, crate::bud_tstate::Budget>(inout sessions, sid) {
+    Some(b) => {
+      if b.state >= 0 && string_eq(b.id, bid) {
+        if code == 1 { reply.value = 4; }
+        if code == 2 && b.state == 1 { reply.value = 2; }
+        if code == 5 && b.state == 2 && b.ended_how == 1 {
+          b.state = 0;
+          b.ended_how = 0;
+          b.ended_kind = 0;
+          b.ended_ms = 0;
+          b.ended_at = string_new();
+          crate::bud_tstate::emit(inout out, 20, 0, 0);
+          reply.value = 2;
+        }
+      }
+    }
+    None => { }
+  }
+  return reply;
+}
+
+pub fn maybe_close(inout sessions: HashMap<String, crate::bud_tstate::Budget>,
+        inout clocks: HashMap<String, crate::bud_tstate::Clock>,
+        inout out: crate::bud_tstate::Out,
+        sid: str, now: i64) -> crate::bud_tstate::Reply ! alloc, io
+{
+  let mut reply: crate::bud_tstate::Reply = crate::bud_tstate::Reply { status: 0, value: 1, a: 0, b: 0 };
+  reply.status = 2;
+  match map_get_mut::<String, crate::bud_tstate::Budget>(inout sessions, sid) {
+    Some(b) => {
+      reply.status = 0;
+      if b.state == 0 {
+        let mut answer: i64 = 0;
+        match map_get_mut::<String, crate::bud_tstate::Clock>(inout clocks, b.id) {
+          Some(c) => {
+            if len(c.runs) == 0 {
+              answer = is_quiet(sid, len(out.fx));
+              if answer == 1 {
+                crate::bud_tstate::settle(inout b, inout c, sid, now, inout out);
+                crate::bud_tstate::disarm(inout c, inout out);
+              }
+            }
+          }
+          None => { answer = is_quiet(sid, len(out.fx)); }
+        }
+        if answer == 1 {
+          let removed: bool = map_remove::<String, crate::bud_tstate::Clock>(inout clocks, b.id);
+          crate::bud_tstate::closed(inout b, 1, now);
+          reply.value = 2;
+          crate::bud_tstate::emit(inout out, 20, 0, 0);
+        }
+        if answer != 0 && answer != 1 { reply.status = 2; }
+      }
+    }
+    None => { }
+  }
+  return reply;
+}
+
+pub fn run_event(inout sessions: HashMap<String, crate::bud_tstate::Budget>,
+        inout clock_state: crate::bud_tstate::ClockState,
+        inout out: crate::bud_tstate::Out,
+        sid: str, bid: str, run: str, code: i64, now: i64, flag: i64) -> crate::bud_tstate::Reply ! alloc, io
+{
+  let mut reply: crate::bud_tstate::Reply = crate::bud_tstate::Reply { status: 0, value: 0, a: 0, b: 0 };
+  let mut new_clock: bool = false;
+  let mut no_current: bool = true;
+  match map_get_mut::<String, crate::bud_tstate::Budget>(inout sessions, sid) {
+    Some(b) => {
+      if b.state >= 0 && string_eq(b.id, bid) {
+        no_current = false;
+        match map_get_mut::<String, crate::bud_tstate::Clock>(inout clock_state.clocks, bid) {
+          Some(c) => {
+            if code == 11 { let status: i64 = fire(inout b, inout c, sid, bid, now, inout out); reply.status = status; }
+            else {
+              let updated: i64 = crate::bud_tstate::update_run(inout c, code, run, code == 9 && flag == 1);
+              if updated == 2 { reply.status = 2; }
+              else if updated == 1 {
+                let status: i64 = refresh(inout b, inout c, sid, bid, now, inout out); reply.status = status;
+              }
+            }
+          }
+          None => {
+            if code == 8 { new_clock = true; }
+            if code == 11 && !b.unlimited {
+              let status: i64 = halt(inout b, sid, bid, now, 0, inout out); reply.status = status;
+            }
+          }
+        }
+        if new_clock {
+          if len(clock_state.clocks) >= 1099511627776 || clock_state.next_clock < 0 || clock_state.next_clock >= 1099511627775 {
+            reply.status = 2;
+          } else {
+            let mut c: crate::bud_tstate::Clock = crate::bud_tstate::Clock {
+              owner: string_push_str(string_new(), sid), since: 0, has_since: false, armed: false, active: 1,
+              ordinal: clock_state.next_clock,
+              runs: map_insert::<String, i64>(map_new::<String, i64>(), string_push_str(string_new(), run), 1),
+              next_run: 2
+            };
+            let status: i64 = refresh(inout b, inout c, sid, bid, now, inout out); reply.status = status;
+            clock_state.next_clock = clock_state.next_clock + 1;
+            clock_state.clocks = map_insert::<String, crate::bud_tstate::Clock>(move clock_state.clocks, string_push_str(string_new(), bid), move c);
+          }
+        }
+      }
+    }
+    None => { }
+  }
+  if no_current && code >= 9 && code <= 11 {
+    match map_get_mut::<String, crate::bud_tstate::Clock>(inout clock_state.clocks, bid) {
+      Some(c) => {
+        if code == 11 {
+          if c.armed { crate::bud_tstate::emit(inout out, 14, 0, 0); }
+          c.armed = false;
+        } else { let updated: i64 = crate::bud_tstate::update_run(inout c, code, run, flag == 1); }
+      }
+      None => { }
+    }
+  }
+  return reply;
+}
+
+pub fn explicit_halt(inout sessions: HashMap<String, crate::bud_tstate::Budget>,
+        inout clocks: HashMap<String, crate::bud_tstate::Clock>,
+        inout out: crate::bud_tstate::Out,
+        sid: str, bid: str, now: i64, flag: i64) -> crate::bud_tstate::Reply ! alloc, io
+{
+  let mut reply: crate::bud_tstate::Reply = crate::bud_tstate::Reply { status: 0, value: 0, a: 0, b: 0 };
+  if flag < 0 || flag > 4 { reply.status = 2; return reply; }
+  match map_get_mut::<String, crate::bud_tstate::Budget>(inout sessions, sid) {
+    Some(b) => {
+      if b.state == 0 && string_eq(b.id, bid) {
+        match map_get_mut::<String, crate::bud_tstate::Clock>(inout clocks, bid) {
+          Some(c) => { crate::bud_tstate::settle(inout b, inout c, sid, now, inout out); }
+          None => { }
+        }
+        let status: i64 = halt(inout b, sid, bid, now, flag, inout out); reply.status = status;
+      }
+    }
+    None => { }
+  }
+  return reply;
+}

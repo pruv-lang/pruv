@@ -1,0 +1,149 @@
+mod bud_tstate;
+mod bud_tlife;
+mod bud_tdecide;
+
+pub struct Ordinal { value: i64 }
+
+pub struct St {
+  sessions: HashMap<String, crate::bud_tstate::Budget>,
+  ordinals: HashMap<String, Ordinal>, next_session: i64,
+  clock_state: crate::bud_tstate::ClockState, out: crate::bud_tstate::Out
+}
+
+fn take_budget(budget: crate::bud_tstate::Budget) -> crate::bud_tstate::Budget ! alloc
+{ return budget; }
+
+pub fn t_put(inout st: St, sid: str, budget: crate::bud_tstate::Budget) -> i64 ! alloc
+{
+  if len(st.sessions) >= 1099511627776 { return 2; }
+
+  let mut new_session: bool = true;
+  match map_get_mut::<String, Ordinal>(inout st.ordinals, sid) {
+    Some(ordinal) => { new_session = false; }
+    None => { }
+  }
+  if new_session {
+    let ordinal: i64 = st.next_session;
+    if len(st.ordinals) >= 1099511627776 || ordinal < 0 || ordinal >= 1099511627775 { return 2; }
+    st.next_session = ordinal + 1;
+    st.ordinals = map_insert::<String, Ordinal>(move st.ordinals, string_push_str(string_new(), sid), Ordinal { value: ordinal });
+  }
+  st.sessions = map_insert::<String, crate::bud_tstate::Budget>(move st.sessions, string_push_str(string_new(), sid), take_budget(budget));
+  return 0;
+}
+
+pub fn t_del(inout st: St, sid: str) -> ()
+{
+  let removed_budget: bool = map_remove::<String, crate::bud_tstate::Budget>(inout st.sessions, sid);
+  let removed_ordinal: bool = map_remove::<String, Ordinal>(inout st.ordinals, sid);
+}
+
+fn unit_floor(x: i64) -> i64
+  ensures 0 <= result && result <= 9007199254740991
+{
+  if x < 0 { return 0; }
+  if x > 9007199254740991 { return 9007199254740991; }
+  return x;
+}
+
+fn open_budget(inout b: crate::bud_tstate::Budget, origin: i64, size: i64,
+               unit: [i64], uuid: str, now: i64, carry: bool) -> () ! alloc
+  requires len(unit) == 6
+{
+  b.follows = string_new();
+  b.follows_kind = 0;
+  if carry {
+    b.follows = string_push_str(string_new(), string_to_str(b.id));
+    b.follows_kind = 1;
+  }
+  b.id = string_push_str(string_new(), uuid);
+  b.state = 0;
+  b.origin = origin;
+  b.unlimited = size == 0 || (size == -1 && unit[5] == 1);
+  b.unlimited_kind = 0;
+  if b.unlimited { b.unlimited_kind = 1; }
+  let mut scale: i64 = size;
+  if scale < 1 { scale = 1; }
+  if scale > 8 { scale = 8; }
+  // Units clamp to 0..2^53-1 before scaling, as in the flat lane and the hand baseline.
+  b.limits = crate::bud_tstate::Limits {
+    time: unit_floor(unit[0]) * scale,
+    delegations: unit_floor(unit[1]) * scale,
+    commands: unit_floor(unit[2]) * scale,
+    reviews: unit_floor(unit[3]) * scale,
+    checks: unit_floor(unit[4]) * scale
+  };
+  b.active_ms = 0;
+  b.active_since = 0;
+  b.since_kind = 0;
+  b.delegations = 0;
+  b.commands = 0;
+  b.reviews = 0;
+  b.checks = 0;
+  b.tools = 0;
+  b.failures = 0;
+  b.retries = 0;
+  b.metadata = 2;
+  b.opened_at = string_new();
+  b.opened_ms = now;
+  b.since_text = string_new();
+  b.ended_at = string_new();
+  b.ended_how = 0;
+  b.ended_kind = 0;
+  b.ended_ms = 0;
+  b.rest = string_new();
+  b.halt_reason = -1;
+  b.halt_kind = 0;
+  b.halt_ms = 0;
+  b.halt_text = string_new();
+  vec_clear::<String>(inout b.stopped);
+}
+
+fn attach_or_replace(inout st: St, sid: str, uuid: str, code: i64, now: i64,
+                     origin: i64, size: i64, unit: [i64]) -> crate::bud_tstate::Reply ! alloc
+{
+  let mut reply: crate::bud_tstate::Reply = crate::bud_tstate::Reply { status: 2, value: 0, a: 0, b: 0 };
+  let mut source: i64 = origin;
+  if code == 4 && source < 0 { source = 0; }
+  if source < 0 || source > 3 || len(unit) != 6 { return reply; }
+  if size != -1 && size != 0 && size != 1 && size != 2 && size != 4 && size != 8 { return reply; }
+  match map_get_mut::<String, crate::bud_tstate::Budget>(inout st.sessions, sid) {
+    Some(b) => {
+      reply.status = 0;
+      reply.value = 3;
+      let replace: bool = code == 4 && b.state == 1;
+      if replace || b.state == 2 || b.state < 0 {
+        let carry: bool = replace && source != 1;
+        if b.state >= 0 {
+          match map_get_mut::<String, crate::bud_tstate::Clock>(inout st.clock_state.clocks, b.id) {
+            Some(c) => {
+              if replace { crate::bud_tstate::settle(inout b, inout c, sid, now, inout st.out); }
+              crate::bud_tstate::disarm(inout c, inout st.out);
+            }
+            None => { }
+          }
+          let removed: bool = map_remove::<String, crate::bud_tstate::Clock>(inout st.clock_state.clocks, b.id);
+        }
+        open_budget(inout b, source, size, unit, uuid, now, carry);
+        crate::bud_tstate::emit(inout st.out, 22, 0, 0);
+        crate::bud_tstate::emit(inout st.out, 20, 0, 0);
+        if carry {
+          crate::bud_tstate::emit(inout st.out, 21, 0, 0);
+          reply.a = 1;
+        }
+      }
+    }
+    None => { }
+  }
+  return reply;
+}
+
+pub fn t_call(inout st: St, sid: str, bid: str, uuid: str, code: i64,
+              now: i64, origin: i64, size: i64, unit: [i64]) -> crate::bud_tstate::Reply ! alloc, io
+{
+  vec_clear::<crate::bud_tstate::Effect>(inout st.out.fx);
+  if code == 1 || code == 2 || code == 5 { return crate::bud_tlife::view(inout st.sessions, inout st.out, sid, bid, code); }
+  if code == 6 { return crate::bud_tlife::maybe_close(inout st.sessions, inout st.clock_state.clocks, inout st.out, sid, now); }
+  if code == 3 || code == 4 { return attach_or_replace(inout st, sid, uuid, code, now, origin, size, unit); }
+  return crate::bud_tstate::Reply { status: 2, value: 0, a: 0, b: 0 };
+}
