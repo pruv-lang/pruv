@@ -436,7 +436,7 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P31L | Both compilers (pruvc, pruvc-rs), SPEC.md, tests/ | Root package before P32 (main decision 2026-11-20: the debt list D14, D19-D25, D28-D29 keeps pointing at the same representation cause, so close the language gaps instead of working around them). Owned collection fields in structs (`[i64]` / `[u8]` / `Vec` / `String` fields, `foreign_owned_type`) and `Vec` root entry results (`entry_signature`), plus `inout` calls in expression position where the evaluation order is unambiguous (`inout_context`), Appendix P29.9. Positive and negative tests on both backends, SPEC.md section, proofs still erase bounds checks on field-held collections, generated Rust moves (no clone) where the source moves. Gate: g8_frontend both, cargo test, diff_rust fuzz, full suite of each changed compiler once. Done (Appendix P31L): R-6e-1/2 owned `Vec<i64>` / `Vec<bool>` / `String` fields in non-generic structs and enum payloads (field read = borrowed view, `move p.f` only into a take call assigned back), R-6d-2 proved `vec_get` as `get_unchecked` when no user `trusted rust fn` exists, R-6f-1 `Vec` root entry results, R-6g-1 inout calls in expressions with `inout_context` reasons; small example `--trust-callers` 0.99-1.00x hand Rust, no bounds check, no clone, py and rs byte-identical. Full suites rs 4572/4572, py 4560/4560 with `--compare-rows`; audit A1-A9 fixed (P31L.3). |
 | P31S | Both compilers (pruvc, pruvc-rs), SPEC.md, tests/ | Root package before P31T (main decision 2026-11-20: P31T stopped before any change because the typed session record cannot be expressed with P31L alone; the resident state crosses every entry as `inout st: [i64]`). (1) Owned collections of non-generic structs: `Vec<S>` and `HashMap<i64, S>` where `S` may itself have P31L owned fields (today `type/foreign_owned_type`, §6d nesting ban), with index/length proofs removing bounds checks and moves without clone. (2) Pruv-owned typed resident state across calls: a root entry may take `inout st: S` for a non-generic struct `S` with owned fields (today `type/entry_signature`), held by the host as `PruvStore<S>` under manifest `raw_entries`; C ABI and LLVM may reject with a named error. SPEC rules with positive and negative tests in both compilers; a small example (resident struct holding `HashMap<i64, Record>`, lookup + in-place update) compared line by line with hand Rust (no clone, no bounds check, no re-encoding per call). Done (Appendix P31S): R-6e-3 owned `Vec<S>` / `HashMap<i64, S>` of non-generic, non-zero-sized structs (borrowed reads, `get_mut` in-place updates, moves without clone), R-6e-4 `match map_get_mut` arms, R-6f-2 root `inout st: S` entries held as `PruvStore<S>` under `raw_entries` (C ABI / LLVM reject with a named error), R-6g-2 non-generic struct inout; small example 1.001x hand Rust, no clone, no bounds check, py and rs byte-identical. Full suites rs 4569/4572, py 4557/4560 (only the obsolete `g5_inout_type_struct` sample, rewritten and rerun green); audit 1-8 fixed, no confirm pass (budget). |
 | P31K | Both compilers (pruvc, pruvc-rs), SPEC.md, tests/ | Root package before P31T (main decision 2026-11-20 after P31T attempt 2, Appendix P31T.4). (1) Aggregate maps keyed by text: `HashMap<String, S>` and `HashMap<String, i64>` with a borrowed lookup key (`str`, `String` field view, `[u8]` slice) so one lookup hashes the caller's bytes without an owned key copy; `map_get` / `map_get_mut` / `map_insert` / `map_remove` as in R-6e-3 / R-6e-4. (2) One level of collection nesting inside an owned aggregate: `Vec<String>` and `HashMap<String, bool>` fields in a record held by a state struct. (3) `vec_at_mut` on `Vec<S>` with the R-6e-4 arm rules. SPEC rules with positive and negative tests in both compilers; small example (state struct with `HashMap<String, Record>` whose record holds `Vec<String>` and `HashMap<String, bool>`, lookup by borrowed key + in-place update) compared line by line with hand Rust (one lookup, no clone, no key copy, no bounds check). Done (Appendix P31K): R-6e-5 `HashMap<String, S | i64 | bool>` with borrowed `str` / `String` lookup keys (one hash, no key copy) and owned `String` insert keys, R-6e-6 one level of nesting (`Vec<String>`, `HashMap<String, bool>`, `HashMap<i64, bool>` fields of records held in state maps or vecs, deeper rejected), R-6e-7 `vec_at_mut` on `Vec<S>`; gap repros `gap_str_key`, `gap_map_field`, `gap_vec_string` pass; small example M 0.961x / L 1.015x (noise) hand Rust, RSS equal, py and rs byte-identical. Full suites rs 4572/4572, py 4560/4560; audit 1-5 fixed, recheck clean. `[u8]` slice keys stay rejected (debt). |
-| P31T | B/bud_map.pruv, bud_store.pruv, bud_lifecycle.pruv, bud_decide.pruv and their consumers (M4-M12, M10b) | After P31L, P31S and P31K (first attempt 2026-11-20 stopped with no change: language gap, see P31S; second attempt 2026-11-20 stopped with no budget change: text-keyed aggregate maps and nested record collections, Appendix P31T, proposed root row P31K). Typed session record (struct with owned fields) replacing the flat framed `[i64]` record and packed-key double lookups (D14, D25), shrink-in-place record write for extend / close (D28, D29, P31.8), struct replies with `Vec` effects instead of framed `[i64]` (D19-D24). Every consumer's Q unchanged on rs and py; re-measure D14, D19-D25, D28-D29 cells against hand Rust and close the rows that reach <= 1.0x. |
+| P31T | B/bud_map.pruv, bud_store.pruv, bud_lifecycle.pruv, bud_decide.pruv and their consumers (M4-M12, M10b) | After P31L, P31S and P31K (first attempt 2026-11-20 stopped with no change: language gap, see P31S; second attempt 2026-11-20 stopped with no budget change: text-keyed aggregate maps and nested record collections, Appendix P31T, proposed root row P31K; third attempt 2026-11-20 after P31K stopped with no budget change: two sibling root-state map records cannot be borrowed mutably at once, and entries cannot return a struct holding `Vec` effects, Appendix P31T (attempt 3), proposed root row P31D). Typed session record (struct with owned fields) replacing the flat framed `[i64]` record and packed-key double lookups (D14, D25), shrink-in-place record write for extend / close (D28, D29, P31.8), struct replies with `Vec` effects instead of framed `[i64]` (D19-D24). Every consumer's Q unchanged on rs and py; re-measure D14, D19-D25, D28-D29 cells against hand Rust and close the rows that reach <= 1.0x. |
 | P32 | B/host.rs,roots/bindings,bud_test_abi.pruv,m34/m5–m11 shims | P split per operation/narrow family; direct/adapter grid, malformed admission, one decision engine. |
 | P33 | Both codegens/hot contracts: residual L4/L5 only | C inline attribute/size heuristic and local proof gates; P touched families, M11 compile CPU/binary size and parity. Partly done in P13i2a: `#[inline(always)]` and `#[inline]` fn attributes (explicit directive over R-7-3 promotion); size heuristic/local proof gates still open. |
 | P34 | One measured §4 opportunity per subpackage | P touched families/collisions and raw/admitted complete operations; saving ledger, same-structure hand (ii), assembly evidence for any proof win. |
@@ -8810,6 +8810,77 @@ P31T restarts with the M10b lane first (it owns D25, D26, D28, D29) and moves th
 
 About 20 minutes of the 2 hours, 0 of 24 delegations (the gap was found while reading the hand lanes and the two
 repros took one compiler call each), 0 builds, no audit (no change to audit).
+
+## Appendix P31T (attempt 3): stopped on disjoint root-field borrows (no budget change)
+
+### P31T3.1 Rules used
+
+Brief of 2026-11-20 (after P31K, main 4b075fd): M10b lane first (it owns D25, D26, D28, D29) with root `inout st: St`,
+`sessions: HashMap<String, Budget>`, `clocks: HashMap<String, Clock>` shaped like `m10b_test/hand_m10b.rs:115-185`,
+one lookup by borrowed key per record, in-place update through `map_get_mut` / `vec_at_mut`, struct replies with `Vec`
+effects. Building a struct per call from a flat buffer and writing it back is forbidden; a new language gap stops the
+step. The P31K rules in force: R-6e-4 (SPEC.md:481), R-6e-5 (text-keyed maps), R-6e-6 (one level of nesting), R-6e-7,
+R-6f-1 (SPEC.md:580), R-6f-2 (root state entry), R-6g-2 (SPEC.md:662) and the inout argument rule (SPEC.md:621-625).
+
+### P31T3.2 What the M10b transitions need
+
+The numeric raise with a time-limit change settles the running interval and then re-arms the timer
+(B/bud_decide.pruv:60, B/bud_clock.pruv:198): settle reads the clock's owner and interval start and adds to the
+budget's used time; the re-arm reads the budget's new limit and settled used time and writes the clock's deadline and
+re-halt flag. Decide extend / end apply the same transition. Hand Rust holds both records at once
+(`sessions.get_mut(sid)` and `clocks.get_mut(bid)` on two fields of the same state). Two sequential single lookups do
+not suffice: whichever record is looked up first is finished before the second is read, and mutating the clock first
+breaks the paths that must leave the clock untouched (a bad `unit` answer, no matching budget).
+
+### P31T3.3 Gap (both compilers, same diagnostics)
+
+Repros in `work/p31t/` (not repository files), checked by this conversation with pruvc-rs (release build of 4b075fd)
+and pruvc (`pruvc/pruvc.py --backend rust`):
+
+| repro | source | result | SPEC line |
+|---|---|---|---|
+| `sibling_map_borrow.pruv` | in `refresh(inout st: St, sid: str, bid: str, now: i64)`, `match map_get_mut::<String, Budget>(inout st.sessions, sid) { Some(budget) => { match map_get_mut::<String, Clock>(inout st.clocks, bid) { Some(clock) => { budget.active_ms = ..clock.since_ms..; clock.armed = budget.active_ms < budget.limit_ms; } .. } } .. }` | 9:48 `type/recursive_borrow` "cannot use st inside a mutable collection Some arm" | SPEC.md:481 (R-6e-4: the root of `P` may not be mentioned in the arm) |
+| `split_map_fields.pruv` | `fn refresh_maps(inout sessions: HashMap<String, Budget>, inout clocks: HashMap<String, Clock>, ..)` called as `refresh_maps(inout st.sessions, inout st.clocks, sid, bid, now)` | 26:16 `type/inout_argument` "an inout argument must be the whole name of a local array or an inout parameter, not a field" | SPEC.md:621-625 (fields are rejected as inout arguments), SPEC.md:662 (R-6g-2) |
+| `reply_result.pruv` | `pub struct Reply { status: i64, effects: Vec<Effect> }`, `pub fn call(inout st: St) -> Reply ! alloc` | 5:5 `type/entry_signature` "host entry crate::call cannot have the type crate::Reply in the result" | SPEC.md:580 (R-6f-1: `Vec<i64>` / `Vec<bool>` / scalar results only) |
+
+Positive control `single_map_controls.pruv` (two sequential `map_get_mut`, sessions then clocks, plus
+`st.effects = vec_push::<Effect>(move st.effects, Effect { .. })` on a `St.effects: Vec<Effect>` field) is accepted by
+both; the generated Rust is 7,018 bytes and byte-identical. So effects can be kept as a `Vec<Effect>` field of the
+resident state (the host drains it after the call), but the reply struct itself cannot cross the entry; the first two
+repros are the blocking gap.
+
+### P31T3.4 Why no change was made
+
+Every legal encoding is a workaround the brief rules out or keeps the debt cause:
+
+- three lookups (read the clock scalars, mutate the budget, look the clock up again to write it): one more SipHash
+  probe and compare per time-path call than hand, the D25 / D26 cause in another form;
+- copy the clock out, mutate both, write it back with `map_insert`: the per-call copy workaround (and an owned key
+  and `runs` map clone);
+- merge the clock fields into the session's `Budget`: not the hand shape, and the shared clock-owner rule (one clock
+  per budget id, owner tracked across sessions, `forgetSession`) is keyed by budget id, not session id;
+- move settle / re-arm into the host: a budget decision on the host.
+
+The worker (Codex gpt-6.2-sol, account Codex 2) stopped before porting: no file under bench/l3/budget/ changed, so
+every consumer's Q and every debt cell (D14, D19-D30) stays as recorded in Appendix P29-P31 and §7.5. The worker
+reran the current flat `q --set raise --py`: 300 exact / 0 cut / 0 fail (428 raise calls). The typed Q, `h`, `same` and
+perf were not run (no typed entry exists).
+
+### P31T3.5 Proposed root row (P31D, before P31T)
+
+Both compilers, SPEC.md, tests/: (1) disjoint field borrows of the root state: inside the `Some` arm of
+`map_get_mut(inout st.f, k)` allow `map_get_mut` / `vec_at_mut` / reads on a different field `st.g` (the arm still
+rejects `st.f` and `st` as a whole), or equivalently allow `inout st.f` field paths as inout arguments when the
+fields of one call are pairwise distinct; (2) struct entry results under R-6f-1: a root entry may return a non-generic
+struct whose fields are scalars and `Vec<S>` of P31S element structs (`Reply { status, effects: Vec<Effect> }`).
+Gate as P31S (positive and negative tests in both, generated Rust byte-identical, a small example against hand Rust:
+two live `get_mut` on sibling fields, no clone). Then P31T restarts with the M10b lane.
+
+### P31T3.6 Budget
+
+About 60 minutes of the 2 hours; 1 of 24 delegations (write, Codex gpt-6.2-sol on Codex 2: typed port attempt, found
+the gap and wrote the repros); 1 release build of pruvc-rs; repros re-checked here on both compilers; no audit (no
+change to audit).
 
 ## Appendix P31K: text-keyed aggregate maps, one-level nesting, map_remove and vec_at_mut (both compilers)
 
