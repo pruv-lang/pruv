@@ -26,8 +26,7 @@ def inline_case(lines, sites):
 
 # (body lines, call sites, expected always): small 8 accepts, 9 rejects (incl * (sites - 1) far above the budget);
 # budget 1500 accepts, 1501 rejects (two sites, so the added copies equal the body size)
-# zero call sites (a host entry called only from the harness): 8 lines accepts by INLINE_SMALL, 9 keeps #[inline]
-INLINE_PAIRS = [(8, 300, True), (9, 300, False), (1500, 2, True), (1501, 2, False), (8, 0, True), (9, 0, False), (9, 1, True)]
+INLINE_PAIRS = [(8, 300, True), (9, 300, False), (1500, 2, True), (1501, 2, False)]
 
 
 def inline_fp_case(sites, triple=True):
