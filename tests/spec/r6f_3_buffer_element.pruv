@@ -1,0 +1,8 @@
+// spec: R-6f-3 reject
+pub struct Sess { card: [u8], n: i64 }
+pub struct Out { items: Vec<Sess>, k: i64 }
+
+pub fn mk() -> Out ! alloc {
+  let v: Vec<Sess> = vec_new::<Sess>();
+  return Out { items: v, k: 0 };
+}

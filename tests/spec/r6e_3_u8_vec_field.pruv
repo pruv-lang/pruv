@@ -1,0 +1,5 @@
+// spec: R-6e-3 accept
+// a Vec of [u8] structs as a struct field
+struct S { b: [u8] }
+struct St { v: Vec<S> }
+fn f(st: St) -> i64 requires len(st.v) > 0 { return len(vec_get::<S>(st.v, 0).b); }

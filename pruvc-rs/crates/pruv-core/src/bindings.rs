@@ -333,6 +333,15 @@ pub fn owned_collection_abi_error(
             prog.explicit.as_ref().and_then(|e| e.fns.get(i)).filter(|m| m.host_entry).map(|m| m.disp.as_str())
         };
         if let Some(name) = name {
+            if f.params.iter().any(|p| {
+                let ty = GType::from_key(&p.ty);
+                ty.owner.is_none() && prog.types.iter().any(|d| {
+                    matches!(d, TypeDecl::Struct(d)
+                        if d.name == ty.name && d.fields.iter().any(|f| f.ty == "array_u8"))
+                })
+            }) {
+                return Some(err(f.line, f.col, format!("host entry {name} takes a struct with a [u8] field, which has no C ABI")));
+            }
             if f.params.iter().any(|p| p.take && p.ty == "string") {
                 return Some(err(f.line, f.col, format!("host entry {name} takes an owned String, which has no C ABI")));
             }

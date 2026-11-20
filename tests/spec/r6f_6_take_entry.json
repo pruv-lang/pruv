@@ -1,0 +1,1 @@
+{"gen_contains":["pub fn own(r: Req)","pub fn ownb(id: BudgetId)"],"gen_absent":[".clone()","Vec<i64> = r.log"]}

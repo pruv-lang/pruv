@@ -1,0 +1,6 @@
+// spec: R-6f-6 reject
+pub struct Req { id: i64, log: Vec<i64> }
+pub fn own(take r: Req) -> i64 {
+  let q: Req = move r;
+  return len(r.log) + len(q.log);
+}

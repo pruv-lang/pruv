@@ -1,0 +1,16 @@
+// spec: R-6e-3 reject
+struct Sess { card: [u8], n: i64 }
+struct St { cur: Sess, k: i64 }
+
+fn reset(inout st: St, data: [u8]) -> i64 ! alloc
+  requires len(data) <= 1000
+{
+  st.cur = Sess { card: copy(data), n: 0 };
+  return 0;
+}
+
+fn again(inout st: St) -> i64 ! alloc
+  requires len(st.cur.card) <= 1000
+{
+  return reset(inout st, st.cur.card);
+}

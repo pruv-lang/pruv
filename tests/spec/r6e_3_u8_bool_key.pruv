@@ -1,0 +1,4 @@
+// spec: R-6e-3 reject
+// a map whose value holds [u8] needs an i64 or String key
+struct S { b: [u8] }
+fn f(m: HashMap<bool, S>) -> i64 { return len(m); }

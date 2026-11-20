@@ -1211,6 +1211,7 @@ struct Gen<'a> {
     /// enclosing blocks being emitted: (names declared so far, names named later, loop body)
     frames: Vec<(HashSet<String>, HashSet<String>, bool, bool)>,
     take_arrays: HashSet<String>,
+    take_ext: HashSet<String>,
     /// G9 A2: types whose runtime contract helpers (size / equality) are needed
     need_size: HashSet<String>,
     need_eq: HashSet<String>,
@@ -1365,6 +1366,7 @@ impl<'a> Gen<'a> {
             pinned: HashSet::new(),
             frames: Vec::new(),
             take_arrays: HashSet::new(),
+            take_ext: HashSet::new(),
             need_size: HashSet::new(),
             need_eq: HashSet::new(),
             need_bits: HashSet::new(),
@@ -1776,6 +1778,7 @@ impl<'a> Gen<'a> {
         }
         self.params = f.params.iter().map(|p| p.name.clone()).collect();
         self.take_arrays = f.params.iter().filter(|p| p.take && is_array_name(&p.ty)).map(|p| p.name.clone()).collect();
+        self.take_ext = f.params.iter().filter(|p| p.take && self.is_ext(Some(&p.ty))).map(|p| p.name.clone()).collect();
         if self.g5 {
             self.inouts = f.params.iter().filter(|p| p.mode_pos.is_some()).map(|p| p.name.clone()).collect();
         }
@@ -1845,7 +1848,11 @@ impl<'a> Gen<'a> {
         self.cost = !self.verified && f.cost.is_some();
         if self.cost {
             let args = join_map(&f.params, ", ", |p| {
-                if self.take_arrays.contains(&p.name) || p.take && p.ty == "string" { format!("&{}", p.name) } else { p.name.clone() }
+                if self.take_arrays.contains(&p.name) || self.take_ext.contains(&p.name) || p.take && p.ty == "string" {
+                    format!("&{}", p.name)
+                } else {
+                    p.name.clone()
+                }
             });
             self.emit(1, &format!("let pruv_cost: i128 = {}__pruv_cost({});", f.name, args));
             self.emit(1, "let mut pruv_spent: u128 = 0;");
@@ -1860,6 +1867,7 @@ impl<'a> Gen<'a> {
             self.small_fn(f, &ps, k, &o, elem)?;
         }
         if self.cost {
+            let take_ext = std::mem::take(&mut self.take_ext); // the cost helper takes every extended parameter as `&Name`
             let cps = join_map(&f.params, ", ", |p| {
                 if p.mode_pos.is_some() && !GType::from_key(&p.ty).is_array() {
                     format!("{}: &{}", p.name, self.rt(&p.ty, false))
@@ -1883,6 +1891,7 @@ impl<'a> Gen<'a> {
             self.emit(1, &code);
             self.emit(0, "}");
             self.emit(0, "");
+            self.take_ext = take_ext;
         }
         if has && named {
             if !self.explicit {
@@ -1951,7 +1960,7 @@ impl<'a> Gen<'a> {
 
     fn cost_call(&self, name: &str, args: &[String]) -> String {
         let args: Vec<_> = self.fmap[name].params.iter().zip(args).map(|(p, arg)| {
-            if p.take && (is_array_name(&p.ty) || p.ty == "string") { format!("&{arg}") } else { arg.clone() }
+            if p.take && (is_array_name(&p.ty) || p.ty == "string" || self.is_ext(Some(&p.ty))) { format!("&{arg}") } else { arg.clone() }
         }).collect();
         format!("let pruv_units = {}__pruv_cost({}); if pruv_units < 0 {{ panic!(\"pruv: cost exceeded\"); }} {}",
             name, args.join(", "), Self::cost_add("(pruv_units as u128).checked_add(1).unwrap_or_else(|| panic!(\"pruv: cost exceeded\"))"))
@@ -2251,7 +2260,7 @@ impl<'a> Gen<'a> {
                 if self.bound.iter().any(|b| b == &x.name) || !self.params.contains(&x.name) {
                     return Err(self.g9_unsupported(e, &format!("the variable {} as an aggregate operand", x.name)));
                 }
-                if self.is_ext(x.ty.as_deref()) {
+                if self.is_ext(x.ty.as_deref()) && !self.take_ext.contains(&x.name) {
                     Ok(x.name.clone())
                 } else {
                     Ok(format!("(&{})", x.name))
@@ -4165,6 +4174,14 @@ impl<'a> Gen<'a> {
             let i = self.e(arg(&x.args, 1)?)?;
             return Ok(format!("({})[({}) as usize]", v, i));
         }
+        if x.name == "vec_push"
+            && matches!(x.args.first(), Some(Expr::Call(call)) if call.name == "vec_new")
+            && self.unchecked_collections()
+        {
+            self.fg_mut()?.record_inline_catalog("vec_new", &src[..1]);
+            self.fg_mut()?.record_inline_catalog(&x.name, &src);
+            return Ok(format!("::std::vec![{}]", self.e(arg(&x.args, 1)?)?));
+        }
         let owned_payload = low.last().is_some_and(|t| self.is_ext(Some(&t.to_key())));
         let name = self.fg_mut()?.catalog_helper(&x.name, &low, &src, owned_payload)?;
         // string_to_str of an owned local that the enclosing return moves: the String itself is the copy.
@@ -4435,7 +4452,9 @@ impl<'a> Gen<'a> {
                         let v = self.e(&call.args[0])?;
                         let i = self.e(&call.args[1])?;
                         let field = format!("(*({}).get_unchecked(({}) as usize)).{}", v, i, x.field);
-                        return Ok(if expr_ty(e).as_deref().is_some_and(key_is_collection) {
+                        return Ok(if expr_ty(e).as_deref().is_some_and(|ty| {
+                            key_is_collection(ty) || GType::from_key(ty).is_array()
+                        }) {
                             format!("(unsafe {{ &{} }})", field)
                         } else {
                             format!("(unsafe {{ {} }})", field)
