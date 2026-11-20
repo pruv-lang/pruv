@@ -1,0 +1,243 @@
+mod json;
+mod parse;
+mod jstr;
+mod access;
+
+// R03-B: the same query ABI as a4_root, but navigation runs on a document whose tape facts come from
+// parse::parse's ensures. The local Document/NodeId facts below are the verified handle: accessors that
+// require them drop the per-access re-validation (-4 corrupt tape) that the proof covers. Host-given IDs
+// (op 0) are still checked (-3), and every result equals a4_root.query on the same input.
+fn one(v: i64) -> [i64] ! alloc { let mut a: [i64] = alloc(1, 0); a[0] = v; return a; }
+
+// Navigation: the i-th direct child of an array. Proved from flat (one-quantifier) tape facts: skip bounds
+// (next > j, next <= stop, j < m) and the kind range. Kept: "parent(j) == id" and "child is not a key", which need the
+// nested subtree facts the solver times out on (gap G3).
+fn array_at(doc: crate::json::JsonDocument, id: i64, index: i64) -> i64
+  requires len(doc.tape) % 6 == 0 && len(doc.tape) >= 6 && len(doc.tape) <= 6291456 && len(doc.source) <= 16777216
+  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t] && doc.tape[6 * t] <= 7)
+  requires forall t in 0..len(doc.tape) / 6: (t < doc.tape[6 * t + 3] && doc.tape[6 * t + 3] <= len(doc.tape) / 6)
+  requires forall t in 0..len(doc.tape) / 6: (t > 0 ==> (0 <= doc.tape[6 * t + 4] && doc.tape[6 * t + 4] < t && (doc.tape[6 * doc.tape[6 * t + 4]] == 5 || doc.tape[6 * doc.tape[6 * t + 4]] == 6) && t < doc.tape[6 * doc.tape[6 * t + 4] + 3] && doc.tape[6 * t + 3] <= doc.tape[6 * doc.tape[6 * t + 4] + 3] && doc.tape[6 * doc.tape[6 * t + 4] + 1] <= doc.tape[6 * t + 1] && doc.tape[6 * t + 2] <= doc.tape[6 * doc.tape[6 * t + 4] + 2]))
+  ensures result >= 0 ==> (result < len(doc.tape) / 6 && doc.tape[6 * result + 4] == id && doc.tape[6 * result] <= 6)
+{
+  if id < 0 || id >= len(doc.tape) / 6 || doc.tape[6 * id] == 7 { return -3; }
+  if doc.tape[6 * id] != 5 { return -2; }
+  if index < 0 { return -1; }
+  let stop: i64 = doc.tape[6 * id + 3];
+  let mut j: i64 = id + 1; let mut n: i64 = 0;
+  while j < stop
+    invariant 0 <= id && id < j && j <= stop && stop == doc.tape[6 * id + 3] && id < len(doc.tape) / 6 && len(doc.tape) <= 6291456
+    invariant 0 <= n && n <= j
+    decreases stop - j
+  {
+    if doc.tape[6 * j + 4] != id || doc.tape[6 * j] == 7 { return -4; }
+    if n == index { return j; }
+    n = n + 1; j = doc.tape[6 * j + 3];
+  }
+  return -1;
+}
+
+fn raw_span(doc: crate::json::JsonDocument, id: i64) -> crate::access::Span
+  requires len(doc.tape) % 6 == 0 && len(doc.tape) >= 6 && len(doc.tape) <= 6291456 && len(doc.source) <= 16777216
+  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t] && doc.tape[6 * t] <= 7)
+  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t + 1] && doc.tape[6 * t + 1] < doc.tape[6 * t + 2] && doc.tape[6 * t + 2] <= len(doc.source))
+  ensures result.status == 0 || result.status == -3
+  ensures result.status == 0 ==> (0 <= result.start && result.start <= result.end && result.end <= len(doc.source) && result.end <= 16777216)
+{
+  if id < 0 || id >= len(doc.tape) / 6 || doc.tape[6 * id] == 7 { return crate::access::Span { status: -3, start: 0, end: 0 }; }
+  return crate::access::Span { status: 0, start: doc.tape[6 * id + 1], end: doc.tape[6 * id + 2] };
+}
+fn array_length(doc: crate::json::JsonDocument, id: i64) -> i64
+  requires len(doc.tape) % 6 == 0 && len(doc.tape) >= 6 && len(doc.tape) <= 6291456 && len(doc.source) <= 16777216
+  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t] && doc.tape[6 * t] <= 7)
+  requires forall t in 0..len(doc.tape) / 6: (t < doc.tape[6 * t + 3] && doc.tape[6 * t + 3] <= len(doc.tape) / 6)
+  requires forall t in 0..len(doc.tape) / 6: (doc.tape[6 * t] == 5 ==> doc.tape[6 * t + 5] == count(k in t + 1..doc.tape[6 * t + 3]: doc.tape[6 * k + 4] == t))
+{
+  if id < 0 || id >= len(doc.tape) / 6 || doc.tape[6 * id] == 7 { return -3; }
+  if doc.tape[6 * id] != 5 { return -2; }
+  return doc.tape[6 * id + 5];
+}
+// skip(v) for a node with an opaque index: the caller's v = j + 1 does not match the tape-fact trigger 6 * t + 3,
+// so the fact is instantiated here where v is a parameter. Compiles to one load.
+fn skip_of(doc: crate::json::JsonDocument, v: i64) -> i64
+  requires len(doc.tape) % 6 == 0 && len(doc.tape) >= 6 && len(doc.tape) <= 6291456 && len(doc.source) <= 16777216
+  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t] && doc.tape[6 * t] <= 7)
+  requires forall t in 0..len(doc.tape) / 6: (t < doc.tape[6 * t + 3] && doc.tape[6 * t + 3] <= len(doc.tape) / 6)
+  requires forall t in 0..len(doc.tape) / 6: (t > 0 ==> (0 <= doc.tape[6 * t + 4] && doc.tape[6 * t + 4] < t && (doc.tape[6 * doc.tape[6 * t + 4]] == 5 || doc.tape[6 * doc.tape[6 * t + 4]] == 6) && t < doc.tape[6 * doc.tape[6 * t + 4] + 3] && doc.tape[6 * t + 3] <= doc.tape[6 * doc.tape[6 * t + 4] + 3] && doc.tape[6 * doc.tape[6 * t + 4] + 1] <= doc.tape[6 * t + 1] && doc.tape[6 * t + 2] <= doc.tape[6 * doc.tape[6 * t + 4] + 2]))
+  requires 0 < v && v < len(doc.tape) / 6
+  ensures result == doc.tape[6 * v + 3] && result > v && result <= doc.tape[6 * doc.tape[6 * v + 4] + 3]
+{ return doc.tape[6 * v + 3]; }
+// Member lookup. Proved from flat tape facts: object/value skip bounds (next > v, next <= stop), the key span
+// bounds, the kind range. Kept: "member j is a single-record key, its parent is id" and "a non-key value with parent id
+// follows inside the object" — key/value alternation and parent identity need the nested subtree and count facts (gaps G2, G3).
+fn find(doc: crate::json::JsonDocument, id: i64, key: [i64], klen: i64) -> i64
+  requires 0 <= klen && klen <= len(key)
+  requires len(doc.tape) % 6 == 0 && len(doc.tape) >= 6 && len(doc.tape) <= 6291456 && len(doc.source) <= 16777216
+  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t] && doc.tape[6 * t] <= 7)
+  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t + 1] && doc.tape[6 * t + 1] < doc.tape[6 * t + 2] && doc.tape[6 * t + 2] <= len(doc.source))
+  requires forall t in 0..len(doc.tape) / 6: (t < doc.tape[6 * t + 3] && doc.tape[6 * t + 3] <= len(doc.tape) / 6)
+  requires forall t in 0..len(doc.tape) / 6: (t > 0 ==> (0 <= doc.tape[6 * t + 4] && doc.tape[6 * t + 4] < t && (doc.tape[6 * doc.tape[6 * t + 4]] == 5 || doc.tape[6 * doc.tape[6 * t + 4]] == 6) && t < doc.tape[6 * doc.tape[6 * t + 4] + 3] && doc.tape[6 * t + 3] <= doc.tape[6 * doc.tape[6 * t + 4] + 3] && doc.tape[6 * doc.tape[6 * t + 4] + 1] <= doc.tape[6 * t + 1] && doc.tape[6 * t + 2] <= doc.tape[6 * doc.tape[6 * t + 4] + 2]))
+  ensures result >= 0 ==> (result < len(doc.tape) / 6 && doc.tape[6 * result + 4] == id)
+{
+  if id < 0 || id >= len(doc.tape) / 6 || doc.tape[6 * id] == 7 { return -3; }
+  if doc.tape[6 * id] != 6 { return -2; }
+  let stop: i64 = doc.tape[6 * id + 3];
+  let mut j: i64 = id + 1; let mut found: i64 = -1;
+  while j < stop
+    invariant 0 <= id && id < j && j <= stop && stop == doc.tape[6 * id + 3] && id < len(doc.tape) / 6 && len(doc.tape) <= 6291456
+    invariant found == -1 || (0 <= found && found < len(doc.tape) / 6 && doc.tape[6 * found + 4] == id)
+    decreases stop - j
+  {
+    if doc.tape[6 * j] != 7 || doc.tape[6 * j + 4] != id || doc.tape[6 * j + 3] != j + 1 { return -4; }
+    let v: i64 = j + 1; if v >= stop || doc.tape[6 * v] == 7 || doc.tape[6 * v + 4] != id { return -4; }
+    let next: i64 = skip_of(doc, v);
+    let s: i64 = doc.tape[6 * j + 1]; let e: i64 = doc.tape[6 * j + 2];
+    if crate::jstr::units_equal(doc.source, s, e, key, klen) { found = v; } j = next;
+  }
+  return found;
+}
+// Member lookup. Proved from flat tape facts: object/value skip bounds (next > v, next <= stop), the key span
+// bounds, the kind range. Kept: "member j is a single-record key, its parent is id" and "a non-key value with parent id
+// follows inside the object" — key/value alternation and parent identity need the nested subtree and count facts (gaps G2, G3).
+fn find_ascii(doc: crate::json::JsonDocument, id: i64, key: str) -> i64
+  requires len(doc.tape) % 6 == 0 && len(doc.tape) >= 6 && len(doc.tape) <= 6291456 && len(doc.source) <= 16777216
+  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t] && doc.tape[6 * t] <= 7)
+  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t + 1] && doc.tape[6 * t + 1] < doc.tape[6 * t + 2] && doc.tape[6 * t + 2] <= len(doc.source))
+  requires forall t in 0..len(doc.tape) / 6: (t < doc.tape[6 * t + 3] && doc.tape[6 * t + 3] <= len(doc.tape) / 6)
+  requires forall t in 0..len(doc.tape) / 6: (t > 0 ==> (0 <= doc.tape[6 * t + 4] && doc.tape[6 * t + 4] < t && (doc.tape[6 * doc.tape[6 * t + 4]] == 5 || doc.tape[6 * doc.tape[6 * t + 4]] == 6) && t < doc.tape[6 * doc.tape[6 * t + 4] + 3] && doc.tape[6 * t + 3] <= doc.tape[6 * doc.tape[6 * t + 4] + 3] && doc.tape[6 * doc.tape[6 * t + 4] + 1] <= doc.tape[6 * t + 1] && doc.tape[6 * t + 2] <= doc.tape[6 * doc.tape[6 * t + 4] + 2]))
+  ensures result >= 0 ==> (result < len(doc.tape) / 6 && doc.tape[6 * result + 4] == id)
+{
+  if id < 0 || id >= len(doc.tape) / 6 || doc.tape[6 * id] == 7 { return -3; }
+  if doc.tape[6 * id] != 6 { return -2; }
+  let stop: i64 = doc.tape[6 * id + 3];
+  let mut j: i64 = id + 1; let mut found: i64 = -1;
+  while j < stop
+    invariant 0 <= id && id < j && j <= stop && stop == doc.tape[6 * id + 3] && id < len(doc.tape) / 6 && len(doc.tape) <= 6291456
+    invariant found == -1 || (0 <= found && found < len(doc.tape) / 6 && doc.tape[6 * found + 4] == id)
+    decreases stop - j
+  {
+    if doc.tape[6 * j] != 7 || doc.tape[6 * j + 4] != id || doc.tape[6 * j + 3] != j + 1 { return -4; }
+    let v: i64 = j + 1; if v >= stop || doc.tape[6 * v] == 7 || doc.tape[6 * v + 4] != id { return -4; }
+    let next: i64 = skip_of(doc, v);
+    let s: i64 = doc.tape[6 * j + 1]; let e: i64 = doc.tape[6 * j + 2];
+    if crate::jstr::ascii_equal(doc.source, s, e, key) { found = v; } j = next;
+  }
+  return found;
+}
+fn is_ascii(key: str) -> bool
+{
+  let mut i: i64 = 0;
+  while i < len(key)
+    invariant 0 <= i && i <= len(key)
+    decreases len(key) - i
+  { if key[i] >= 128 { return false; } i = i + 1; }
+  return true;
+}
+fn field(doc: crate::json::JsonDocument, id: i64, key: str) -> i64 ! alloc
+  requires len(doc.tape) % 6 == 0 && len(doc.tape) >= 6 && len(doc.tape) <= 6291456 && len(doc.source) <= 16777216
+  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t] && doc.tape[6 * t] <= 7)
+  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t + 1] && doc.tape[6 * t + 1] < doc.tape[6 * t + 2] && doc.tape[6 * t + 2] <= len(doc.source))
+  requires forall t in 0..len(doc.tape) / 6: (t < doc.tape[6 * t + 3] && doc.tape[6 * t + 3] <= len(doc.tape) / 6)
+  requires forall t in 0..len(doc.tape) / 6: (t > 0 ==> (0 <= doc.tape[6 * t + 4] && doc.tape[6 * t + 4] < t && (doc.tape[6 * doc.tape[6 * t + 4]] == 5 || doc.tape[6 * doc.tape[6 * t + 4]] == 6) && t < doc.tape[6 * doc.tape[6 * t + 4] + 3] && doc.tape[6 * t + 3] <= doc.tape[6 * doc.tape[6 * t + 4] + 3] && doc.tape[6 * doc.tape[6 * t + 4] + 1] <= doc.tape[6 * t + 1] && doc.tape[6 * t + 2] <= doc.tape[6 * doc.tape[6 * t + 4] + 2]))
+  ensures result >= 0 ==> (result < len(doc.tape) / 6 && doc.tape[6 * result + 4] == id)
+{
+  if len(key) > 16777216 { return -1; }
+  if is_ascii(key) { return find_ascii(doc, id, key); }
+  let mut units: [i64] = alloc(len(key), 0); let mut p: i64 = 0; let mut used: i64 = 0;
+  while p < len(key)
+    invariant 0 <= used && used <= p && p <= len(key) && len(key) <= 16777216 && len(units) == len(key)
+    decreases len(key) - p
+  {
+    let c: i64 = key[p]; let mut n: i64 = 1; let mut v: i64 = c;
+    if 194 <= c && c <= 223 { n = 2; v = c - 192; }
+    if 224 <= c && c <= 239 { n = 3; v = c - 224; }
+    if 240 <= c && c <= 244 { n = 4; v = c - 240; }
+    if v < 0 || v > 255 || len(key) - p < n { return -4; }
+    let mut k: i64 = 1;
+    while k < n
+      invariant 1 <= k && k <= n && n <= 4 && n <= len(key) - p && 0 <= p
+      invariant 0 <= v && v <= 16777215
+      decreases n - k
+    {
+      v = v * 64 + key[p + k] % 64;
+      if v < 0 || v > 16777215 { return -4; } k = k + 1;
+    }
+    if v > 1114111 { return -4; }
+    if v <= 65535 { units[used] = v; used = used + 1; }
+    else {
+      if n < 2 { return -4; }
+      units[used] = 55296 + (v - 65536) / 1024;
+      units[used + 1] = 56320 + (v - 65536) % 1024; used = used + 2;
+    }
+    p = p + n;
+  }
+  return find(doc, id, units, used);
+}
+fn field_units(doc: crate::json::JsonDocument, id: i64, key: [i64]) -> i64
+  requires len(doc.tape) % 6 == 0 && len(doc.tape) >= 6 && len(doc.tape) <= 6291456 && len(doc.source) <= 16777216
+  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t] && doc.tape[6 * t] <= 7)
+  requires forall t in 0..len(doc.tape) / 6: (0 <= doc.tape[6 * t + 1] && doc.tape[6 * t + 1] < doc.tape[6 * t + 2] && doc.tape[6 * t + 2] <= len(doc.source))
+  requires forall t in 0..len(doc.tape) / 6: (t < doc.tape[6 * t + 3] && doc.tape[6 * t + 3] <= len(doc.tape) / 6)
+  requires forall t in 0..len(doc.tape) / 6: (t > 0 ==> (0 <= doc.tape[6 * t + 4] && doc.tape[6 * t + 4] < t && (doc.tape[6 * doc.tape[6 * t + 4]] == 5 || doc.tape[6 * doc.tape[6 * t + 4]] == 6) && t < doc.tape[6 * doc.tape[6 * t + 4] + 3] && doc.tape[6 * t + 3] <= doc.tape[6 * doc.tape[6 * t + 4] + 3] && doc.tape[6 * doc.tape[6 * t + 4] + 1] <= doc.tape[6 * t + 1] && doc.tape[6 * t + 2] <= doc.tape[6 * doc.tape[6 * t + 4] + 2]))
+  ensures result >= 0 ==> (result < len(doc.tape) / 6 && doc.tape[6 * result + 4] == id)
+{ return find(doc, id, key, len(key)); }
+// Path pairs: 0 absolute ID, 1 array index, 2 field units, 3 field str.
+// Modes: kind, raw bytes, length, boolean, number, units, text UTF-8 bytes.
+pub fn query(input: [u8], ops: [i64], key: [i64], text: str, mode: i64) -> [i64] ! alloc
+{
+  let parsed: crate::json::JsonParse = crate::parse::parse(input);
+  match parsed {
+    crate::json::JsonParse::Failed(error) => { return one(-10); }
+    crate::json::JsonParse::Parsed(d) => {
+      let mut id: i64 = crate::access::root(d); let mut p: i64 = 0;
+      while len(ops) - p >= 2
+        invariant 0 <= p && p <= len(ops)
+        decreases len(ops) - p
+      {
+        let op: i64 = ops[p]; let arg: i64 = ops[p + 1];
+        if op == 0 { id = arg; }
+        if op == 1 { id = array_at(d, id, arg); }
+        if op == 2 { id = field_units(d, id, key); }
+        if op == 3 { id = field(d, id, text); }
+        if id < 0 && op != 0 { return one(id); } p = p + 2;
+      }
+      if mode == 0 { return one(crate::access::kind(d, id)); }
+      if mode == 2 { return one(array_length(d, id)); }
+      if mode == 3 { return one(crate::access::boolean(d, id)); }
+      if mode == 5 {
+        let u: crate::access::Units = crate::access::string_units(d, id);
+        if u.status != 0 { return one(u.status); } return copy(u.units);
+      }
+      if mode == 6 {
+        let t: crate::jstr::Text = crate::access::string_text(d, id);
+        match t {
+          crate::jstr::Text::InternalInvariant(k) => { return one(k); }
+          crate::jstr::Text::Decoded(s) => {
+            if len(s) > 50331648 { return one(-4); }
+            let mut out: [i64] = alloc(len(s), 0); let mut i: i64 = 0;
+            while i < len(s)
+              invariant 0 <= i && i <= len(s) && len(out) == len(s)
+              decreases len(s) - i
+            { out[i] = s[i]; i = i + 1; } return out;
+          }
+        }
+      }
+      let span: crate::access::Span = raw_span(d, id);
+      if span.status != 0 { return one(span.status); }
+      let mut prefix: i64 = 0;
+      if mode == 4 { prefix = 4; }
+      let mut out: [i64] = alloc(prefix + span.end - span.start, 0);
+      if mode == 4 {
+        let n: crate::access::Number = crate::access::number(d, id);
+        if n.status != 0 { return one(n.status); }
+        out[0] = 0; if n.has_integer { out[1] = 1; } out[2] = n.integer; if n.negative_zero { out[3] = 1; }
+      }
+      let mut i: i64 = span.start;
+      while i < span.end
+        invariant span.start <= i && i <= span.end && 0 <= span.start && span.end <= len(d.source)
+        invariant 0 <= prefix && prefix <= 4 && len(out) == prefix + span.end - span.start
+        decreases span.end - i
+      { out[prefix + i - span.start] = d.source[i]; i = i + 1; }
+      return out;
+    }
+  }
+}
