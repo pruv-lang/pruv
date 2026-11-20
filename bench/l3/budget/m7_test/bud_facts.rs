@@ -110,6 +110,8 @@ thread_local! {
     static RUNNING: RefCell<Vec<Vec<i64>>> = const { RefCell::new(Vec::new()) };
     static RQUERIES: RefCell<Option<Vec<RunningQuery>>> = const { RefCell::new(None) };
     static RCALLS: Cell<usize> = const { Cell::new(0) };
+    static CURRENT_RUNNING: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    static RUNNING_POSITION: Cell<i64> = const { Cell::new(0) };
 }
 
 /// Replaces the runningDelegationIds answer stream.
@@ -172,6 +174,125 @@ pub fn running_ids(k: &[i64], ks: i64, kn: i64, bk: &[i64], bs: i64, bn: i64, fx
     a
 }
 
+// Encode JavaScript UTF-16 losslessly inside a Rust String. Escape the escape
+// character itself so isolated surrogates and ordinary text remain distinct.
+pub fn encode_js_text(units: impl IntoIterator<Item = u16>) -> String {
+    let mut text = String::new();
+    for ch in char::decode_utf16(units) {
+        match ch {
+            Ok('\u{e000}') => text.push_str("\u{e000}\u{e000}"),
+            Ok(ch) => text.push(ch),
+            Err(err) => {
+                text.push('\u{e000}');
+                text.push(char::from_u32(0xe100 + u32::from(err.unpaired_surrogate() - 0xd800)).unwrap());
+            }
+        }
+    }
+    text
+}
+
+pub fn decode_js_text(text: &str) -> Vec<u16> {
+    let mut chars = text.chars();
+    let mut units = Vec::new();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{e000}' {
+            let escaped = chars.next().expect("missing JavaScript text escape");
+            units.push(if escaped == '\u{e000}' { 0xe000 } else { 0xd800 + (escaped as u16 - 0xe100) });
+        } else {
+            units.extend_from_slice(ch.encode_utf16(&mut [0; 2]));
+        }
+    }
+    units
+}
+
+fn packed_key(key: &str) -> Vec<i64> {
+    let mut words = Vec::new();
+    let mut count = 0;
+    for unit in decode_js_text(key) {
+        if count % 4 == 0 {
+            words.push(0);
+        }
+        *words.last_mut().unwrap() |= i64::from(unit) << (48 - 16 * (count % 4));
+        count += 1;
+    }
+    words.insert(0, count);
+    words
+}
+
+fn read_running_answer(answer: &[i64]) -> Option<Vec<String>> {
+    let [0, count, tail @ ..] = answer else { return None };
+    let mut rest = tail;
+    let count = usize::try_from(*count).ok()?;
+    if count > rest.len() {
+        return None;
+    }
+    let mut ids = Vec::with_capacity(count);
+    for _ in 0..count {
+        let (&units, words) = rest.split_first()?;
+        let units = usize::try_from(units).ok()?;
+        let length = units.div_ceil(4);
+        let words = words.get(..length)?;
+        let mut text = Vec::with_capacity(units);
+        for i in 0..units {
+            text.push((words[i / 4] >> (48 - 16 * (i % 4))) as u16);
+        }
+        if units % 4 != 0 && (words[length - 1] as u64) << (16 * (units % 4)) != 0 {
+            return None;
+        }
+        ids.push(encode_js_text(text));
+        rest = &rest[1 + length..];
+    }
+    rest.is_empty().then_some(ids)
+}
+
+/// Set the effect position recorded by the next typed running-delegations query.
+pub fn running_position(position: i64) {
+    RUNNING_POSITION.with(|p| p.set(position));
+}
+
+/// Consume one host answer and retain its individual IDs for the indexed reads.
+pub fn running_count(sid: &str, bid: &str) -> i64 {
+    let index = running_calls();
+    RCALLS.with(|c| c.set(index + 1));
+    let answer = RUNNING.with(|r| r.borrow_mut().get_mut(index).map(std::mem::take));
+    RQUERIES.with(|q| {
+        if let Some(log) = q.borrow_mut().as_mut() {
+            log.push(RunningQuery {
+                sid: packed_key(sid),
+                bid: packed_key(bid),
+                fxn: RUNNING_POSITION.with(Cell::get),
+                answer: answer.clone().unwrap_or_else(|| vec![0, 0]),
+            });
+        }
+    });
+    CURRENT_RUNNING.with(|current| {
+        let mut current = current.borrow_mut();
+        *current = Vec::new();
+        match answer.as_deref().map(read_running_answer) {
+            None => 0,
+            Some(None) => -1,
+            Some(Some(ids)) => {
+                *current = ids;
+                current.len() as i64
+            }
+        }
+    })
+}
+
+/// Move an ID from the synchronous answer into the Pruv budget record.
+pub fn running_id(_sid: &str, _bid: &str, i: i64) -> String {
+    CURRENT_RUNNING.with(|current| std::mem::take(&mut current.borrow_mut()[i as usize]))
+}
+
+pub fn is_quiet_text(sid: &str, position: i64) -> i64 {
+    if QUERIES.with(|q| q.borrow().is_some()) {
+        let key = packed_key(sid);
+        is_quiet(&key, 1, key[0], position)
+    } else {
+        is_quiet(&[], 0, 0, position)
+    }
+}
+
 // P30 synchronous unit fact. The comparison lane enables logging.
 thread_local! {
     static UNIT: RefCell<Vec<i64>> = const { RefCell::new(Vec::new()) };
@@ -202,4 +323,22 @@ pub fn unit(fxn: i64) -> Vec<i64> {
         }
     });
     answer
+}
+
+// Reading status records the complete answer once, even if it is malformed.
+pub fn unit_at(fxn: i64, i: i64) -> i64 {
+    UNIT.with(|u| {
+        let answer = u.borrow();
+        if i == 0 {
+            UNIT_LOG.with(|log| {
+                if let Some(log) = log.borrow_mut().as_mut() {
+                    log.push((fxn, answer.clone()));
+                }
+            });
+        }
+        if answer.len() != 6 {
+            return -1;
+        }
+        answer.get(i as usize).copied().unwrap_or(-1)
+    })
 }

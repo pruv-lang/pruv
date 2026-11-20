@@ -1,422 +1,307 @@
-// M10b driver (appended to a main file that already declares `mod sol;`, see run_m10b.py).
-//
-//   driver_m10b q        program on stdin, one case after another:
-//                         case <id> | now <ms> | uuids <key>... | quiet <0/1>... | rdi <n> <key>... (one line per
-//                         queued runningDelegationIds answer, in order) | unit <status and values> | put <words...> | <text bytes...> | adv <ms>
-//                         | call <req> <body words> | end
-//   driver_m10b perf <path> <D> <reps>   perf program, see run_m10b.py (`perf`)
-//
-// Boundary rule (M7 + M9): the host owns the state buffer and the scratch frames, supplies the inputs of a call (now)
-// and the synchronous host facts' answers, and performs the effects in order; it never reads state words and decides
-// nothing. Body = [code, what x10, flag, sessionId key, budgetId key, runKey key]; the host inserts now and a reserved
-// zero word after the code.
-// runningDelegationIds (P24): halt asks it synchronously after SETTLE (bud_facts::running_ids, answers queued by the
-// `rdi` lines and taken one per query). The query is logged as `E rdi s:<sessionId units> b:<budgetId units>` at the effect
-// position it was asked at (the effect count the host fact recorded), so the trace shows it after SETTLE's timerClear.
-// Effects: [31] cancelRecovery, [32] stopMain,
-// [33, i] stopDelegation of the i-th id of that query's answer, [34] stopAttachedTurns, [35] holdQueued, [36] save,
-// [20] changed, [37] announce, [21] carryHeld, [22] uuid, [12, req, eff] timerSet, [13] timerClear, [14] timerForget.
-// decide (P31): [38, reason (-1 none, else REASONS index), wake 0/1] queueContinue, [39] dropHeld. releaseHeld is a
-// synchronous fact (decide_facts::release_held, answers queued by `rel <0/1>...` lines, default 0) logged as
-// `E rel s:<sessionId units> b:<budgetId units> <answer>` at the effect position it was asked at.
-// Timers (M9): timerSet registers token t<n> due at now + eff with the call's ref (the callback's captured ref) and
-// makes it the budget's timer; timerClear cancels the budget's timer; timerForget drops the budget's handle. adv fires
-// due timers in (due, token) order through FIRE (code 11) with now = due.
-// isQuiet takes the next answer synchronously (default false).
-// Grow -N: buffer of exactly N (Pruv sizes it, N >= 2*len), t_grow, retry.
-// Keys on the wire (op keys, the runningDelegationIds answers `n, (len, words(len))*`) are packed u16 keys
-// `n, words(n) packed words` (bud_keys layout), packed once by the encoder (run_m10b.py; key() below for perf). The
-// scheduler keeps a timer's captured ref as those framed packed keys (passed back verbatim to FIRE); the log and the
-// observation print ids in units (unpacked here).
-use std::collections::HashMap;
+use record_text::{parse_put, perf_put, unit_record, Put};
+use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::hint::black_box;
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
 
-// sid / bid: framed packed keys `n, words(n)` of the captured ref
 struct Timer {
     token: u64,
     due: i64,
-    sid: Vec<i64>,
-    bid: Vec<i64>,
+    sid: String,
+    bid: String,
 }
-
-// Host-side counts for M10 replay controls (printed to stderr at the end of q): grows (all, puts included), public
-// t_call attempts, public calls, and grown calls: public calls that hit Grow at least once, then finished with status
-// 0 and carried effects or consumed query answers (the calls a replay would duplicate).
-static GROWS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static ATTEMPTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static GROWN_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-use record_text::{observation, parse_put, perf_put, unit_record, Put};
 
 struct World {
-    st: Vec<i64>,
-    out: Vec<i64>,
-    bv: Vec<i64>,
-    fx: Vec<i64>,
-    op: Vec<i64>,
+    st: sol::St,
     now: i64,
-    rdi: Vec<Vec<i64>>,
     seq: u64,
     active: Vec<Timer>,
-    by_bid: HashMap<Vec<i64>, u64>,
+    by_bid: HashMap<String, u64>,
     log: Vec<String>,
     silent: bool,
-    // perf: the answer the host gives (wire form `n, keys`) and the id starts of the current call's answer
-    host_ids: Vec<i64>,
-    pos: Vec<usize>,
     audit: bool,
-    tx: Vec<u8>,
 }
 
-// Data words of a packed key of n units: ceil(n / 4).
-fn words(n: i64) -> usize {
-    (n.max(0) as usize + 3) / 4
+fn take_key(words: &mut &[i64]) -> Option<String> {
+    let (&n, packed) = words.split_first()?;
+    if !(0..=1 << 30).contains(&n) { return None; }
+    let n = n as usize;
+    let count = n.div_ceil(4);
+    let data = packed.get(..count)?;
+    let remainder = n % 4;
+    if remainder != 0 && (data[count - 1] as u64) & (u64::MAX >> (16 * remainder)) != 0 {
+        return None;
+    }
+    let units = (0..n).map(|i| (data[i / 4] >> (48 - 16 * (i % 4))) as u16);
+    *words = &packed[count..];
+    Some(bud_facts::encode_js_text(units))
 }
 
-// End of the framed packed key record `n, words(n)` at op[p].
-fn rec_end(op: &[i64], p: usize) -> usize {
-    p + 1 + words(op[p])
+fn unit_list(text: &str) -> String {
+    bud_facts::decode_js_text(text).into_iter().map(|u| u.to_string()).collect::<Vec<_>>().join(",")
 }
 
-// The units of the framed packed key k = `n, words(n)...`, comma separated.
-fn key_units_str(k: &[i64]) -> String {
-    let n = k[0].max(0) as usize;
-    let v: Vec<String> = (0..n).map(|j| ((((k[1 + j / 4] as u64) >> (48 - 16 * (j % 4))) & 0xffff) as i64).to_string()).collect();
-    v.join(",")
+fn append_text(words: &mut Vec<i64>, text: &str) {
+    words.push(bud_facts::decode_js_text(text).into_iter().count() as i64);
+    words.extend(bud_facts::decode_js_text(text).into_iter().map(i64::from));
+}
+
+fn take_text(words: &mut &[i64]) -> String {
+    let n = usize::try_from(words[0]).unwrap();
+    let units: Vec<_> = words[1..1 + n].iter().map(|&u| u16::try_from(u).unwrap()).collect();
+    *words = &words[1 + n..];
+    bud_facts::encode_js_text(units)
+}
+
+fn read_budget(words: &[i64]) -> sol::Budget {
+    let empty = [0; 30];
+    let absent = words == [-1];
+    let words = if absent { &empty[..] } else { words };
+    let mut tail = &words[24..];
+    let id = take_key(&mut tail).unwrap();
+    let opened_at = take_text(&mut tail);
+    let since_text = take_text(&mut tail);
+    let ended_at = take_text(&mut tail);
+    let follows = take_key(&mut tail).unwrap();
+    let mut halt_reason = -1;
+    let mut halt_kind = 0;
+    let mut halt_ms = 0;
+    let mut halt_text = String::new();
+    let mut stopped = Vec::new();
+    let mut rest = &tail[1..];
+    if rest.first() == Some(&-2) {
+        halt_reason = rest[1];
+        halt_kind = rest[2];
+        halt_ms = rest[3];
+        rest = &rest[4..];
+        halt_text = take_text(&mut rest);
+        let count = rest[0];
+        rest = &rest[1..];
+        for _ in 0..count {
+            stopped.push(take_key(&mut rest).unwrap());
+        }
+    }
+    let rest = bud_facts::encode_js_text(rest.iter().map(|&u| u as u16));
+    sol::Budget {
+        id, state: if absent { -1 } else { words[0] }, origin: words[1],
+        unlimited: words[2] == 1, unlimited_kind: words[2],
+        limits: sol::Limits { time: words[3], delegations: words[4], commands: words[5], reviews: words[6], checks: words[7] },
+        active_ms: words[8], delegations: words[9], commands: words[10], reviews: words[11], checks: words[12],
+        tools: words[13], failures: words[14], retries: words[15], since_kind: words[16],
+        active_since: if words[16] == 2 { words[17] } else { -1 },
+        ended_how: words[18], ended_kind: words[19], metadata: words[20],
+        opened_ms: words[21], ended_ms: words[22], follows_kind: words[23],
+        opened_at, since_text, ended_at, follows, rest, halt_reason, halt_kind, halt_ms, halt_text, stopped,
+    }
+}
+
+fn budget_words(b: &sol::Budget) -> Vec<i64> {
+    if b.state == -1 { return vec![-1]; }
+    let mut words = vec![
+        b.state, b.origin, b.unlimited_kind, b.limits.time, b.limits.delegations, b.limits.commands,
+        b.limits.reviews, b.limits.checks, b.active_ms, b.delegations, b.commands, b.reviews,
+        b.checks, b.tools, b.failures, b.retries, b.since_kind, b.active_since, b.ended_how,
+        b.ended_kind, b.metadata, b.opened_ms, b.ended_ms, b.follows_kind,
+    ];
+    words.extend(key(&b.id));
+    append_text(&mut words, &b.opened_at);
+    append_text(&mut words, &b.since_text);
+    append_text(&mut words, &b.ended_at);
+    words.extend(key(&b.follows));
+    let start = words.len();
+    words.push(0);
+    if b.halt_kind != 0 {
+        words.extend([-2, b.halt_reason, b.halt_kind, b.halt_ms]);
+        append_text(&mut words, &b.halt_text);
+        words.push(b.stopped.len() as i64);
+        for id in &b.stopped { words.extend(key(id)); }
+    }
+    words.extend(bud_facts::decode_js_text(&b.rest).into_iter().map(i64::from));
+    words[start] = (words.len() - start - 1) as i64;
+    words
 }
 
 impl World {
-    fn new() -> World {
-        // M10_INIT_LEN: start length of the state buffer (M10 replay controls runs the same program from a small and a
-        // big start: Grow retries must not change any effect, answer or observation, L3 P13b)
-        let init: usize = std::env::var("M10_INIT_LEN").ok().and_then(|s| s.parse().ok()).unwrap_or(256);
-        let mut st = vec![0i64; init];
-        let r = sol::t_init(&mut st);
-        if r > 0 {
-            st = vec![0i64; r as usize];
-            if sol::t_init(&mut st) != 0 {
-                eprintln!("t_init failed");
-                std::process::exit(2);
-            }
+    fn new() -> Self {
+        Self {
+            st: sol::St { sessions: HashMap::new(), clocks: HashMap::new(), next_clock: 0 },
+            now: 1700000000000, seq: 0, active: Vec::new(), by_bid: HashMap::new(),
+            log: Vec::new(), silent: false, audit: false,
         }
-        // The first nonempty put sizes the arena from its actual text payload.
-        let mut tx = vec![0; 8];
-        assert_eq!(sol::t_tinit(&mut tx), 0);
-        World {
-            st,
-            tx,
-            out: vec![0; 4096],
-            bv: vec![0; 8],
-            fx: vec![0; 4096],
-            op: Vec::with_capacity(256),
-            now: 1700000000000,
-            rdi: Vec::new(),
-            seq: 0,
-            active: Vec::new(),
-            by_bid: HashMap::new(),
-            log: Vec::new(),
-            silent: false,
-            host_ids: vec![0],
-            pos: Vec::new(),
-            audit: false,
-        }
-    }
-
-    fn grow(&mut self, n: usize) {
-        let want = n; // N from Pruv (bud_store::need, N >= 2*len): the host makes no sizing choice (L3 P13b)
-        GROWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let mut fresh = vec![0i64; want];
-        if sol::t_grow(&self.st, &mut fresh) != 0 {
-            eprintln!("t_grow failed");
-            std::process::exit(2);
-        }
-        self.st = fresh;
     }
 
     fn put(&mut self, put: &Put) {
-        for _ in 0..4 {
-            let r = sol::t_put(&mut self.st, &mut self.tx, &put.words, &put.text, &mut self.out);
-            if r == 0 {
-                return;
-            }
-            if r == 1 {
-                let n = self.out[0].max(0) as usize;
-                self.grow(n);
-                continue;
-            }
-            if r == 4 {
-                let mut next = vec![0; self.out[0] as usize];
-                assert_eq!(sol::t_tgrow(&mut self.st, &self.tx, &mut next), 0);
-                self.tx = next;
-                continue;
-            }
-            eprintln!("t_put status {}", r);
-            std::process::exit(2);
-        }
-        panic!("t_put exhausted Grow retries");
+        let mut record = put.words.as_slice();
+        let sid = take_key(&mut record).unwrap();
+        self.st.sessions.insert(sid, read_budget(&unit_record(&put.text, &record[1..])));
     }
 
-    fn note(&mut self, s: String) {
-        if !self.silent {
-            self.log.push(s);
-        }
+    fn note(&mut self, line: String) {
+        if !self.silent { self.log.push(line); }
     }
 
-    // One public call (or FIRE); returns the status after the Grow retries, then performs the effects.
     fn call(&mut self, body: &[i64]) -> i64 {
-        let mut r = 0;
-        let mut op = std::mem::take(&mut self.op);
-        op.clear();
-        op.push(body[0]);
-        op.push(self.now);
-        op.push(0);
-        op.extend_from_slice(&body[1..]);
-        CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let mut grew = false;
-        let before = bud_facts::calls();
-        let rbefore = bud_facts::running_calls();
-        for _ in 0..8 {
-            self.fx[0] = 0;
-            ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let snapshot = self.audit.then(|| (self.st.clone(), self.fx.clone(), self.out.clone(),
-                bud_facts::calls() + bud_facts::running_calls() + decide_facts::calls()));
-            r = sol::t_call(&mut self.st, &op, &mut self.bv, &mut self.fx, &mut self.out);
-            if let Some((st, fx, out, before)) = snapshot {
-                self.log.push(format!("A {} {} {} {} {} {} {:?}",
-                    r, bud_facts::calls() + bud_facts::running_calls() + decide_facts::calls() - before,
-                    self.st == st, self.fx == fx,
-                    self.out == out, self.out[0], &self.fx[1..1 + self.fx[0] as usize]));
-            }
-            if r < 0 {
-                assert!(self.fx[0] == 0, "Grow with effects");
-                assert!(bud_facts::take_unit_log().is_empty(), "Grow after unit");
-                assert!(decide_facts::take_log().is_empty(), "Grow after releaseHeld");
-                self.grow((-r) as usize);
-                grew = true;
-                continue;
-            }
-            break;
+        let keys = body.get(12..).and_then(|mut keys| {
+            let sid = take_key(&mut keys)?;
+            let bid = take_key(&mut keys)?;
+            let run = take_key(&mut keys)?;
+            keys.is_empty().then_some((sid, bid, run))
+        });
+        let Some((sid, bid, run)) = keys else {
+            if std::mem::take(&mut self.audit) { self.note("A 2 0 true".to_owned()); }
+            self.note("X 2".to_owned());
+            return 2;
+        };
+        self.call_typed(body[0], body[11], &sid, &bid, &run, &body[1..11])
+    }
+
+    fn call_typed(&mut self, code: i64, flag: i64, sid: &str, bid: &str, run: &str, what: &[i64]) -> i64 {
+        let quiet_before = bud_facts::calls();
+        let running_before = bud_facts::running_calls();
+        let before = self.audit.then(|| self.observe());
+        let reply = sol::t_call(&mut self.st, sid, bid, run, code, self.now, flag, what);
+        if let Some(before) = before {
+            let unchanged = before == self.observe();
+            self.note(format!("A {} {} {}",
+                reply.status, reply.effects.len(), unchanged));
+            self.audit = false;
         }
-        let unit_log = bud_facts::take_unit_log();
-        let mut units = unit_log.into_iter().peekable();
-        // releaseHeld queries (P31): placed after the effects emitted before the query
-        let mut rels = decide_facts::take_log().into_iter().peekable();
-        let after = bud_facts::calls();
-        let rafter = bud_facts::running_calls();
-        if !self.silent {
-            for i in before..after {
-                self.log.push(bud_facts::quiet_log(i));
-            }
-        }
-        // runningDelegationIds queries of this call: (effect position, log line, wire answer `n, keys`)
-        let mut rq: Vec<(usize, String, Vec<i64>)> = Vec::new();
-        if !self.silent {
-            for i in rbefore..rafter {
-                let q = bud_facts::running_query(i);
-                // the answer the query actually returned, in the wire form `n, keys` (an answer without one: no ids)
-                let a = if q.answer.len() >= 2 { q.answer[1..].to_vec() } else { vec![0] };
-                let line = format!("E rdi s:{} b:{}", key_units_str(&q.sid), key_units_str(&q.bid));
-                rq.push((q.fxn.max(0) as usize, line, a));
-            }
-        }
-        // the answer the stops name: the logged one in q mode, the host's own copy in a silent (perf) run
-        let mut ids: Vec<i64> = if self.silent { std::mem::take(&mut self.host_ids) } else { vec![0] };
-        let mut pos = std::mem::take(&mut self.pos);
-        pos.clear();
-        let mut nq = 0;
-        if grew && r == 0 && self.fx[0] > 0 {
-            GROWN_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        }
-        // fx[1..fx[0]] is valid on every status >= 0: a rejection before any write leaves it empty, and halt's
-        // terminal 2 / 6 after SETTLE (bud_halt.pruv header) carries the timerClear SETTLE applied, which the host
-        // must apply too. A Grow never carries effects (every reserve precedes the first write).
-        if r < 0 {
-            self.op = op;
-            if self.silent {
-                self.host_ids = ids;
-            }
-            self.pos = pos;
-            for (_, line, _) in rq.drain(..) {
-                self.note(line);
-            }
-            self.note(format!("X {}", r));
-            return r;
-        }
-        // the call's ref (framed packed keys): scheduler key and captured ref
-        let se = rec_end(&op, 14);
-        let be = rec_end(&op, se);
-        // borrowed: the perf lane's effects (31..37) touch neither, so only a timer set copies them
-        let sid = &op[14..se];
-        let bid = &op[se..be];
-        let used = self.fx[0].max(0) as usize;
-        let mut i = 1;
-        while i <= used + 1 {
-            while units.peek().is_some_and(|(position, _)| *position < i as i64) {
-                let (position, answer) = units.next().unwrap();
-                assert_eq!(position, i as i64 - 1);
-                let words: Vec<_> = answer.iter().map(i64::to_string).collect();
-                self.note(format!("E unit {}", words.join(" ")));
-            }
-            while rels.peek().is_some_and(|q| q.fxn < i as i64) {
-                let q = rels.next().unwrap();
-                assert_eq!(q.fxn, i as i64 - 1);
-                self.note(format!("E rel s:{} b:{} {}", key_units_str(&q.sid), key_units_str(&q.bid), q.answer));
-            }
-            while nq < rq.len() && rq[nq].0 + 1 <= i {
-                let line = rq[nq].1.clone();
-                ids = rq[nq].2.clone();
-                pos.clear();
-                // the host performs fx[1..fxn] before it answers (timerClear included): a timer of this budget still
-                // armed when the query is answered means the query came before SETTLE's clear. The effects are replayed
-                // after the call up to the query's fxn, so this checks the host-visible order (fx[1..fxn) vs the query),
-                // not the order of Pruv's store writes inside the call, which the host cannot observe
-                if self.by_bid.contains_key(bid) {
-                    self.note("X armed".to_string());
+        let mut units = bud_facts::take_unit_log().into_iter().peekable();
+        let mut releases = decide_facts::take_log().into_iter().peekable();
+        let mut running = running_before;
+        let close_bid = (code == 6 && reply.effects.iter().any(|e| matches!(e.tag, 12..=14)))
+            .then(|| self.st.sessions[sid].id.clone());
+        let timer_bid = close_bid.as_deref().unwrap_or(bid);
+        let mut stopped = None;
+        for i in 0..=reply.effects.len() {
+            let i = i as i64;
+            while units.peek().is_some_and(|(position, _)| *position == i) {
+                let (_, words) = units.next().unwrap();
+                if !self.silent {
+                    self.log.push(format!("E unit {}", words.iter().map(i64::to_string).collect::<Vec<_>>().join(" ")));
                 }
-                self.note(line);
-                nq += 1;
             }
-            if i > used { break; }
-            let e = self.fx[i];
-            match e {
-                12 => {
-                    let req = self.fx[i + 1];
-                    let eff = self.fx[i + 2];
-                    self.seq += 1;
-                    self.active.push(Timer { token: self.seq, due: self.now + eff, sid: sid.to_vec(), bid: bid.to_vec() });
-                    self.by_bid.insert(bid.to_vec(), self.seq);
-                    if !self.silent { self.note(format!("E set t{} {} {}", self.seq, req, eff)); }
-                    i += 3;
-                    continue;
+            while releases.peek().is_some_and(|q| q.fxn == i) {
+                let q = releases.next().unwrap();
+                let (sid, bid) = q.text.unwrap();
+                if !self.silent {
+                    self.log.push(format!("E rel s:{} b:{} {}", unit_list(&sid), unit_list(&bid), q.answer));
                 }
-                13 => {
-                    let s = match self.by_bid.remove(bid) {
-                        Some(tok) => {
-                            self.active.retain(|t| t.token != tok);
-                            if self.silent { String::new() } else { format!("E clear t{}", tok) }
-                        }
-                        None => "E clear -".to_string(),
-                    };
-                    self.note(s);
+            }
+            if !self.silent && running < bud_facts::running_calls() {
+                let q = bud_facts::running_query(running);
+                if q.fxn == i {
+                    if self.by_bid.contains_key(bid) { self.log.push("X armed".to_owned()); }
+                    let queried_sid = take_key(&mut q.sid.as_slice()).unwrap();
+                    let queried_bid = take_key(&mut q.bid.as_slice()).unwrap();
+                    self.log.push(format!("E rdi s:{} b:{}", unit_list(&queried_sid), unit_list(&queried_bid)));
+                    running += 1;
                 }
-                14 => {
-                    self.by_bid.remove(bid);
-                }
-                38 => {
-                    if !self.silent {
-                        self.note(format!("E qc {} {}", self.fx[i + 1], self.fx[i + 2]));
+            }
+            if i == 0 && !self.silent {
+                for q in quiet_before..bud_facts::calls() { self.log.push(bud_facts::quiet_log(q)); }
+            }
+            if let Some(effect) = reply.effects.get(i as usize) {
+                let line = match effect.tag {
+                    12 => {
+                        self.seq += 1;
+                        self.active.push(Timer { token: self.seq, due: self.now + effect.b,
+                            sid: sid.to_owned(), bid: timer_bid.to_owned() });
+                        self.by_bid.insert(timer_bid.to_owned(), self.seq);
+                        (!self.silent).then(|| format!("E set t{} {} {}", self.seq, effect.a, effect.b))
                     }
-                    i += 3;
-                    continue;
-                }
-                33 => {
-                    // the k-th id of the answer (`n, (len, words(len))*`): the id starts are found in one pass on the
-                    // first stop (O(id words) per call); q mode prints it in units, a silent (perf) run names it
-                    // (black_box) as the hand baseline does
-                    if pos.is_empty() {
-                        let n = ids[0].max(0) as usize;
-                        let mut p = 1;
-                        pos.push(p);
-                        for _ in 0..n {
-                            p = rec_end(&ids, p);
-                            pos.push(p);
-                        }
+                    13 => {
+                        let token = self.by_bid.remove(timer_bid);
+                        if let Some(token) = token { self.active.retain(|t| t.token != token); }
+                        (!self.silent).then(|| match token {
+                            Some(token) => format!("E clear t{token}"),
+                            None => "E clear -".to_owned(),
+                        })
                     }
-                    let k = self.fx[i + 1].max(0) as usize;
-                    let id = &ids[pos[k]..pos[k + 1]];
-                    if self.silent {
-                        black_box(id);
-                    } else {
-                        let s = format!("E stopDel {}", key_units_str(id));
-                        self.note(s);
+                    14 => { self.by_bid.remove(timer_bid); None }
+                    _ if self.silent => None,
+                    20 => Some("E changed".to_owned()),
+                    31 => Some("E cancel".to_owned()),
+                    32 => Some("E stopMain".to_owned()),
+                    33 => {
+                        let ids = stopped.get_or_insert_with(|| &self.st.sessions[sid].stopped);
+                        Some(format!("E stopDel {}", unit_list(&ids[effect.a as usize])))
                     }
-                    i += 2;
-                    continue;
-                }
-                _ if self.silent => {}
-                _ => {
-                    let s = match e {
-                        20 => "E changed".to_string(),
-                        21 => "E carry".to_string(),
-                        22 => "E uuid".to_string(),
-                        31 => "E cancel".to_string(),
-                        32 => "E stopMain".to_string(),
-                        34 => "E stopTurns".to_string(),
-                        35 => "E hold".to_string(),
-                        36 => "E save".to_string(),
-                        37 => "E announce".to_string(),
-                        39 => "E drop".to_string(),
-                        x => format!("X fx{}", x),
-                    };
-                    self.note(s);
-                }
+                    34 => Some("E stopTurns".to_owned()),
+                    35 => Some("E hold".to_owned()),
+                    36 => Some("E save".to_owned()),
+                    37 => Some("E announce".to_owned()),
+                    38 => Some(format!("E qc {} {}", effect.a, effect.b)),
+                    39 => Some("E drop".to_owned()),
+                    tag => panic!("unexpected effect {tag}"),
+                };
+                if let Some(line) = line { self.log.push(line); }
             }
-            i += 1;
         }
-        assert!(units.next().is_none(), "unit position outside effect stream");
-        assert!(rels.next().is_none(), "releaseHeld position outside effect stream");
-        while nq < rq.len() {
-            let line = rq[nq].1.clone();
-            if self.by_bid.contains_key(bid) {
-                self.note("X armed".to_string());
-            }
-            self.note(line);
-            nq += 1;
+        if reply.status != 0 {
+            if !self.silent { self.log.push(format!("X {}", reply.status)); }
         }
-        self.op = op;
-        if self.silent {
-            self.host_ids = ids;
-        }
-        self.pos = pos;
-        if r != 0 {
-            self.note(format!("X {}", r));
-            return r;
-        }
-        if !self.silent {
-            let w: Vec<String> = match self.out[0] {
+        else if !self.silent {
+            let value = match reply.value {
                 4 => {
-                    // budget view: the record is st[off..off+n)
-                    let n = self.out[1].max(0) as usize;
-                    let off = self.out[2].max(0) as usize;
-                    let units = unit_record(&self.tx, &self.st[off..off + n]);
-                    let mut v = vec!["4".to_string(), units.len().to_string()];
-                    v.extend(units.iter().map(|x| x.to_string()));
-                    v
+                    let words = budget_words(&self.st.sessions[sid]);
+                    format!("V 4 {} {}", words.len(), words.iter().map(i64::to_string).collect::<Vec<_>>().join(" "))
                 }
-                5 => self.out[..3].iter().map(|x| x.to_string()).collect(),
-                6 => self.out[..2].iter().map(|x| x.to_string()).collect(),
-                _ => vec![self.out[0].to_string()],
+                5 => format!("V 5 {} {}", reply.a, reply.b),
+                6 => format!("V 6 {}", reply.a),
+                x => format!("V {x}"),
             };
-            self.log.push(format!("V {}", w.join(" ")));
+            self.log.push(value);
         }
-        0
+        reply.status
     }
 
-    // The timer callback `() => this.fire(ref)` with its captured ref (FIRE, code 11).
-    fn fire(&mut self, idx: usize) -> i64 {
-        let t = self.active.remove(idx);
-        self.note(format!("F t{}", t.token));
-        let mut body = vec![11i64];
-        body.extend(std::iter::repeat(0).take(11));
-        body.extend_from_slice(&t.sid);
-        body.extend_from_slice(&t.bid);
-        body.push(0);
-        let silent = self.silent;
-        // the fire's own result word is not a request value
-        let r = self.call(&body);
-        if !silent {
-            if let Some(l) = self.log.last() {
-                if l.starts_with("V ") {
-                    self.log.pop();
-                }
+    fn fire(&mut self, index: usize) {
+        let timer = self.active.remove(index);
+        if !self.silent { self.log.push(format!("F t{}", timer.token)); }
+        self.call_typed(11, 0, &timer.sid, &timer.bid, "", &[0; 10]);
+        if self.log.last().is_some_and(|line| line.starts_with("V ")) { self.log.pop(); }
+    }
+
+    fn observe(&self) -> String {
+        let mut words = vec![self.st.sessions.len() as i64];
+        let mut sessions: Vec<_> = self.st.sessions.iter().collect();
+        sessions.sort_unstable_by_key(|(sid, _)| *sid);
+        for (sid, budget) in sessions {
+            append_text(&mut words, sid);
+            let budget = budget_words(budget);
+            words.push(budget.len() as i64);
+            words.extend(budget);
+        }
+        words.push(self.st.clocks.len() as i64);
+        let mut clocks: Vec<_> = self.st.clocks.iter().collect();
+        clocks.sort_unstable_by_key(|(_, clock)| clock.ordinal);
+        for (bid, clock) in clocks {
+            append_text(&mut words, bid);
+            append_text(&mut words, &clock.owner);
+            words.extend([i64::from(clock.has_since), clock.since, i64::from(clock.armed), clock.active]);
+            words.push(clock.runs.len() as i64);
+            let mut seen = HashSet::new();
+            let runs: Vec<_> = clock.run_order.iter().rev()
+                .filter_map(|run| {
+                    let waiting = clock.runs.get(run)?;
+                    seen.insert(run).then_some((run, waiting))
+                }).collect();
+            for (run, waiting) in runs.into_iter().rev() {
+                append_text(&mut words, run);
+                words.push(i64::from(*waiting));
             }
         }
-        r
+        let mut line = String::from("O");
+        for word in words { write!(&mut line, " {word}").unwrap(); }
+        line.push_str(" | T");
+        for t in &self.active {
+            let own = self.by_bid.get(&t.bid) == Some(&t.token);
+            write!(&mut line, " t{}:{}:{}:{}", t.token, t.due, unit_list(&t.bid), i32::from(own)).unwrap();
+        }
+        line
     }
-
     fn advance(&mut self, ms: i64) {
         let target = self.now + ms;
         loop {
@@ -445,25 +330,6 @@ impl World {
         self.now = target;
     }
 
-    fn observe(&mut self) -> String {
-        let need = std::cmp::max(4096, 2 * self.st.len());
-        if self.out.len() < need {
-            self.out.resize(need, 0);
-        }
-        let r = sol::t_observe(&self.st, &mut self.out);
-        if r != 0 {
-            return format!("O X {}", r);
-        }
-        let n = self.out[0].max(0) as usize;
-        let mut s = observation(&self.tx, &self.out[1..1 + n]);
-        // active timers: t<token>:<due>:<budgetId units>:<1 when it is the budget's timer>
-        s.push_str(" | T");
-        for t in &self.active {
-            let own = self.by_bid.get(&t.bid) == Some(&t.token);
-            s.push_str(&format!(" t{}:{}:{}:{}", t.token, t.due, key_units_str(&t.bid), own as i32));
-        }
-        s
-    }
 }
 
 fn nums(it: &[&str]) -> Vec<i64> {
@@ -498,11 +364,7 @@ fn run_q() {
             "now" => w.now = p[1].parse().unwrap(),
             "audit" => {
                 w.audit = true;
-                w.out.fill(-99);
-                w.fx[1..].fill(-99);
             }
-            // Test-only: consume the remaining arena with unreferenced padding.
-            "fill_arena" => w.st[10] = w.st[11],
             "quiet" => bud_facts::set_answers(&nums(&p[1..]), 0),
             "unit" => bud_facts::set_unit(&nums(&p[1..])),
             "rel" => decide_facts::push(&nums(&p[1..])),
@@ -511,7 +373,6 @@ fn run_q() {
                 let mut v = vec![0i64];
                 v.extend_from_slice(&a);
                 bud_facts::push_running(v);
-                w.rdi.push(a);
             }
             "put" => w.put(&parse_put(&p[1..])),
             "adv" => {
@@ -530,26 +391,13 @@ fn run_q() {
                 writeln!(o, "{}", ob).unwrap();
                 writeln!(o, "end").unwrap();
             }
-            other => {
-                eprintln!("bad line {}", other);
-                std::process::exit(2);
-            }
+            other => panic!("bad line {other}"),
         }
     }
-    drop(o);
-    eprintln!(
-        "m10 host grows {} attempts {} calls {} grown_calls {}",
-        GROWS.load(std::sync::atomic::Ordering::Relaxed),
-        ATTEMPTS.load(std::sync::atomic::Ordering::Relaxed),
-        CALLS.load(std::sync::atomic::Ordering::Relaxed),
-        GROWN_CALLS.load(std::sync::atomic::Ordering::Relaxed)
-    );
 }
 
-// The performance workload keeps D clock runs. Each sample times one raise and its host effects.
-// Wire key: `n, packed words(n)` (bud_keys layout: four big-endian lanes per word, tail lanes zero).
 fn key(s: &str) -> Vec<i64> {
-    let u: Vec<u16> = s.encode_utf16().collect();
+    let u: Vec<u16> = bud_facts::decode_js_text(s);
     let mut v = vec![u.len() as i64];
     for c in u.chunks(4) {
         let mut x: u64 = 0;
@@ -579,45 +427,28 @@ fn body(code: i64, flag: i64, run: &str) -> Vec<i64> {
     op
 }
 
-// The measured raise with the hand lane's host work: one Grow-retrying public call and a single timer slot.
-// q mode and the setup calls keep the M10 scheduler (World::call), whose logging, audit and per-budget timer index
-// the hand lane has no counterpart for.
-fn perf_raise(world: &mut World, op: &mut Vec<i64>, timer: &mut Option<i64>) -> i64 {
-    // The frame is built once outside the sample (as the hand lane's prepared keys); only the time word changes.
-    op[1] = world.now;
-    let mut r;
-    loop {
-        world.fx[0] = 0;
-        r = sol::t_call(&mut world.st, op, &mut world.bv, &mut world.fx, &mut world.out);
-        if r >= 0 { break; }
-        world.grow((-r) as usize);
-    }
-    let used = world.fx[0].max(0) as usize;
-    let mut i = 1;
-    while i <= used {
-        match world.fx[i] {
-            12 => {
-                *timer = Some(world.now + world.fx[i + 2]);
-                i += 3;
-                continue;
-            }
+fn perform_perf(world: &mut World, code: i64, size: i64, timer: &mut Option<i64>) -> sol::Reply {
+    let reply = sol::t_call(&mut world.st, SID, BID, "", code, world.now, size, &[0; 10]);
+    let mut stopped = None;
+    for effect in &reply.effects {
+        match effect.tag {
+            12 => *timer = Some(world.now + effect.b),
             13 => *timer = None,
-            // decide's queueContinue record (P31): reason and wake words
-            38 => {
-                black_box(&world.fx[i + 1..i + 3]);
-                i += 3;
-                continue;
+            33 => {
+                let ids = stopped.get_or_insert_with(|| &world.st.sessions[SID].stopped);
+                black_box(&ids[effect.a as usize]);
             }
-            e => { black_box(e); }
+            37 => { black_box(world.st.sessions[SID].halt_ms); }
+            _ => { black_box(effect); }
         }
-        i += 1;
     }
-    r
+    reply
 }
 
-// decide perf (P31): each sample builds, outside the measurement, a budget halted for commands with D stopped
-// delegations (put, the D clock runs, halt through the scheduler), then times one decide extend / end and its host
-// effects. end drops the clock, so its runs are started again before the next sample.
+fn effect_words(reply: &sol::Reply) -> i64 {
+    reply.effects.iter().map(|e| match e.tag { 12 | 38 => 3, 33 => 2, _ => 1 }).sum()
+}
+
 fn run_perf_decide(setup: &Setup) {
     let mut world = World::new();
     world.silent = true;
@@ -626,15 +457,8 @@ fn run_perf_decide(setup: &Setup) {
     for i in 0..setup.d {
         ids.extend(key(&format!("d{i:04}")));
     }
-    world.host_ids = ids[1..].to_vec();
     bud_facts::set_unit(&setup.unit);
     let halt = body(12, 2, "");
-    let decide = body(14, setup.size, "");
-    let mut op = Vec::with_capacity(decide.len() + 2);
-    op.push(decide[0]);
-    op.push(0);
-    op.push(0);
-    op.extend_from_slice(&decide[1..]);
     let mut timer = None;
     let mut runs = false;
     benchmark::measure(setup.reps, || {
@@ -664,13 +488,13 @@ fn run_perf_decide(setup: &Setup) {
 
         let before = allocations();
         let start = Instant::now();
-        let status = black_box(perf_raise(&mut world, black_box(&mut op), &mut timer));
+        let reply = black_box(perform_perf(&mut world, 14, setup.size, &mut timer));
         black_box(timer);
         let elapsed = start.elapsed();
         let allocs = allocations() - before;
-        assert_eq!(status, 0);
-        assert_eq!((world.out[0], world.out[1]), (6, 0));
-        assert_eq!(world.fx[0], setup.effect_words);
+        assert_eq!(reply.status, 0);
+        assert_eq!((reply.value, reply.a), (6, 0));
+        assert_eq!(effect_words(&reply), setup.effect_words);
         (elapsed, allocs)
     });
 }
@@ -698,7 +522,6 @@ fn run_perf(args: &[String]) {
     for i in 0..setup.d {
         ids.extend(key(&format!("d{i:04}")));
     }
-    world.host_ids = ids[1..].to_vec();
     bud_facts::set_running(vec![ids]);
     bud_facts::set_unit(&setup.unit);
     let mut op = Vec::with_capacity(raise.len() + 2);
@@ -718,7 +541,7 @@ fn run_perf(args: &[String]) {
 
         let before = allocations();
         let start = Instant::now();
-        let status = black_box(perf_raise(&mut world, black_box(&mut op), &mut timer));
+        let reply = black_box(perform_perf(&mut world, 13, setup.size, &mut timer));
         black_box(timer);
         let elapsed = start.elapsed();
         let allocs = allocations() - before;
@@ -726,9 +549,9 @@ fn run_perf(args: &[String]) {
         // next pause does not see a stale entry and timers do not accumulate across samples.
         world.by_bid.clear();
         world.active.clear();
-        assert_eq!(status, 0);
-        assert_eq!(world.out[0], 2);
-        assert_eq!(world.fx[0], setup.effect_words);
+        assert_eq!(reply.status, 0);
+        assert_eq!(reply.value, 2);
+        assert_eq!(effect_words(&reply), setup.effect_words);
         (elapsed, allocs)
     });
 }

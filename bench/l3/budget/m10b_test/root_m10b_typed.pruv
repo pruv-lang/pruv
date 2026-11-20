@@ -1,0 +1,596 @@
+// Typed records held by the Rust caller across operations.
+pub struct Limits {
+  time: i64, delegations: i64, commands: i64, reviews: i64, checks: i64
+}
+pub struct Budget {
+  id: String, state: i64, unlimited: bool, unlimited_kind: i64,
+  limits: Limits, active_ms: i64, active_since: i64, since_kind: i64,
+  delegations: i64, commands: i64, reviews: i64, checks: i64,
+  tools: i64, failures: i64, retries: i64, metadata: i64, origin: i64,
+  opened_at: String, since_text: String, ended_at: String, follows: String,
+  ended_how: i64, ended_kind: i64, ended_ms: i64, opened_ms: i64, follows_kind: i64,
+  rest: String, halt_reason: i64, halt_kind: i64, halt_ms: i64, halt_text: String,
+  stopped: Vec<String>
+}
+pub struct Clock {
+  owner: String, since: i64, has_since: bool, armed: bool, active: i64, ordinal: i64,
+  runs: HashMap<String, bool>, run_order: Vec<String>
+}
+pub struct St {
+  sessions: HashMap<String, Budget>, clocks: HashMap<String, Clock>, next_clock: i64
+}
+pub struct Effect { tag: i64, a: i64, b: i64 }
+pub struct Reply { status: i64, value: i64, a: i64, b: i64, effects: Vec<Effect> }
+
+trusted rust fn running_count(sid: str, bid: str) -> i64 ! io
+  ensures true = "::bud_facts::running_count";
+trusted rust fn running_id(sid: str, bid: str, i: i64) -> String ! alloc, io
+  ensures true = "::bud_facts::running_id";
+trusted rust fn running_position(position: i64) -> () ! io
+  ensures true = "::bud_facts::running_position";
+trusted rust fn is_quiet(sid: str, position: i64) -> i64 ! io
+  ensures true = "::bud_facts::is_quiet_text";
+trusted rust fn unit_at(position: i64, i: i64) -> i64 ! io
+  ensures true = "::decide_facts::unit_at";
+
+fn equal(a: String, b: str) -> bool
+{
+  if len(a) != len(b) { return false; }
+  let mut i: i64 = 0;
+  while i < len(a)
+    invariant 0 <= i && i <= len(a) && len(a) == len(b)
+    decreases len(a) - i
+  {
+    if string_byte(a, i) != b[i] { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+fn emit(inout reply: Reply, tag: i64, a: i64, b: i64) -> () ! alloc
+{
+  if len(reply.effects) < 1099511627776 {
+    reply.effects = vec_push::<Effect>(move reply.effects, Effect { tag: tag, a: a, b: b });
+  }
+}
+
+fn bounded(x: i64) -> i64
+  ensures -9007199254740991 <= result && result <= 9007199254740991
+{
+  if x < -9007199254740991 { return -9007199254740991; }
+  if x > 9007199254740991 { return 9007199254740991; }
+  return x;
+}
+
+fn time_left(b: Budget) -> i64
+{
+  let mut limit: i64 = b.limits.time;
+  if limit < -150000000000000 { limit = -150000000000000; }
+  if limit > 150000000000000 { limit = 150000000000000; }
+  return limit * 60000 - bounded(b.active_ms);
+}
+
+fn disarm(inout c: Clock, inout reply: Reply) -> () ! alloc
+{
+  if c.armed { emit(inout reply, 13, 0, 0); }
+  c.armed = false;
+}
+
+fn settle(inout b: Budget, inout c: Clock, sid: str, now: i64, inout reply: Reply) -> () ! alloc
+{
+  if !equal(c.owner, sid) { return; }
+  disarm(inout c, inout reply);
+  if !c.has_since { return; }
+  let elapsed: i64 = bounded(now) - bounded(c.since);
+  if elapsed > 0 { b.active_ms = bounded(bounded(b.active_ms) + elapsed); }
+  c.since = 0;
+  c.has_since = false;
+  b.active_since = -1;
+  b.since_kind = 0;
+  b.since_text = string_new();
+}
+
+fn halt(inout b: Budget, sid: str, bid: str, now: i64, reason: i64,
+        inout reply: Reply) -> i64 ! alloc, io
+{
+  if b.state != 0 { return 0; }
+  running_position(len(reply.effects));
+  let count: i64 = running_count(sid, bid);
+  if count < 0 || count > 1099511627776 { return 2; }
+  b.stopped = vec_new::<String>();
+  b.state = 1;
+  b.halt_reason = reason;
+  b.halt_kind = 2;
+  b.halt_ms = now;
+  b.halt_text = string_new();
+  emit(inout reply, 31, 0, 0);
+  emit(inout reply, 32, 0, 0);
+  let mut i: i64 = 0;
+  while i < count
+    invariant 0 <= i && i <= count && len(b.stopped) == i
+    decreases count - i
+  {
+    b.stopped = vec_push::<String>(move b.stopped, running_id(sid, bid, i));
+    emit(inout reply, 33, i, 0);
+    i = i + 1;
+  }
+  emit(inout reply, 34, 0, 0);
+  emit(inout reply, 35, 0, 0);
+  emit(inout reply, 36, 0, 0);
+  emit(inout reply, 20, 0, 0);
+  emit(inout reply, 37, 0, 0);
+  return 0;
+}
+
+fn begin(inout b: Budget, inout c: Clock, now: i64) -> () ! alloc
+{
+  c.has_since = true;
+  c.since = bounded(now);
+  b.active_since = bounded(now);
+  b.since_kind = 2;
+  b.since_text = string_new();
+}
+
+fn arm(inout b: Budget, inout c: Clock, sid: str, bid: str, now: i64,
+       inout reply: Reply) -> i64 ! alloc, io
+{
+  if b.unlimited { return 0; }
+  let left: i64 = time_left(b);
+  if left <= 0 {
+    settle(inout b, inout c, sid, now, inout reply);
+    return halt(inout b, sid, bid, now, 0, inout reply);
+  }
+  let mut delay: i64 = left;
+  if left > 2147483647 { delay = 1; }
+  c.armed = true;
+  emit(inout reply, 12, left, delay);
+  return 0;
+}
+
+fn refresh(inout b: Budget, inout c: Clock, sid: str, bid: str, now: i64,
+           inout reply: Reply) -> i64 ! alloc, io
+{
+  let consuming: bool = b.state == 0 && c.active > 0;
+  if consuming == c.has_since { return 0; }
+  if !consuming {
+    settle(inout b, inout c, sid, now, inout reply);
+    return 0;
+  }
+  begin(inout b, inout c, now);
+  return arm(inout b, inout c, sid, bid, now, inout reply);
+}
+
+fn fire(inout b: Budget, inout c: Clock, sid: str, bid: str, now: i64,
+        inout reply: Reply) -> i64 ! alloc, io
+{
+  if c.armed { emit(inout reply, 14, 0, 0); }
+  c.armed = false;
+  if b.state != 0 || b.unlimited { return 0; }
+  settle(inout b, inout c, sid, now, inout reply);
+  if time_left(b) > 0 && len(c.runs) > 0 {
+    begin(inout b, inout c, now);
+    return arm(inout b, inout c, sid, bid, now, inout reply);
+  }
+  return halt(inout b, sid, bid, now, 0, inout reply);
+}
+
+trusted rust fn release_held(sid: str, bid: str, position: i64) -> i64 ! io
+  ensures true = "::decide_facts::release_held_text";
+
+fn scaled(value: i64, size: i64) -> i64
+  requires 1 <= size && size <= 8
+  ensures result == -1 || (0 <= result && result <= 9007199254740991)
+{
+  if value < 0 || value > 9007199254740991 / size { return -1; }
+  if value > 9007199254740991 { return -1; }
+  let total: i64 = value * size;
+  if total > 9007199254740991 { return -1; }
+  return total;
+}
+
+fn next_limit(current: i64, amount: i64, extend: bool) -> i64
+{
+  if amount < 0 || amount > 9007199254740991 { return -1; }
+  if !extend {
+    if current > amount { return current; }
+    return amount;
+  }
+  if current < 0 || current > 9007199254740991 - amount { return -1; }
+  return current + amount;
+}
+
+// Limit changes are validated in full before any field is updated.
+fn apply_limits(inout b: Budget, size: i64, extend: bool, position: i64) -> i64 ! io
+{
+  if size == 0 {
+    if b.unlimited && !extend { return 0; }
+    b.unlimited = true;
+    b.unlimited_kind = 1;
+    return 1;
+  }
+  if size != 1 && size != 2 && size != 4 && size != 8 { return -1; }
+  if !extend && size == 1 { return 0; }
+  if unit_at(position, 0) != 0 { return -1; }
+  let time: i64 = next_limit(b.limits.time, scaled(unit_at(position, 1), size), extend);
+  let delegations: i64 = next_limit(b.limits.delegations, scaled(unit_at(position, 2), size), extend);
+  let commands: i64 = next_limit(b.limits.commands, scaled(unit_at(position, 3), size), extend);
+  let reviews: i64 = next_limit(b.limits.reviews, scaled(unit_at(position, 4), size), extend);
+  let checks: i64 = next_limit(b.limits.checks, scaled(unit_at(position, 5), size), extend);
+  if time < 0 || delegations < 0 || commands < 0 || reviews < 0 || checks < 0 { return -1; }
+  if !extend && time == b.limits.time && delegations == b.limits.delegations && commands == b.limits.commands && reviews == b.limits.reviews && checks == b.limits.checks { return 0; }
+  let grew_time: bool = time > b.limits.time;
+  b.limits = Limits { time: time, delegations: delegations, commands: commands, reviews: reviews, checks: checks };
+  if grew_time { return 2; }
+  return 1;
+}
+
+fn amount(what: [i64], i: i64) -> i64
+  requires len(what) == 10 && 0 <= i && i <= 4
+{
+  let value: i64 = what[2 * i + 1];
+  if what[2 * i] != 2 { return 0; }
+  return value;
+}
+
+fn bumped(old: i64, amount: i64) -> i64
+{
+  if amount < -9007199254740991 || amount > 9007199254740991 ||
+     old < -9007199254740991 || old > 9007199254740991 {
+    return -9223372036854775807;
+  }
+  let total: i64 = old + amount;
+  if total < -9007199254740991 || total > 9007199254740991 {
+    return -9223372036854775807;
+  }
+  return total;
+}
+
+// 0 means charged, 1..4 name the first over-limit counter, and -1 means invalid.
+fn charge(inout b: Budget, what: [i64]) -> i64
+  requires len(what) == 10
+{
+  let a0: i64 = amount(what, 0);
+  let a1: i64 = amount(what, 1);
+  let a2: i64 = amount(what, 2);
+  let a3: i64 = amount(what, 3);
+  let a4: i64 = amount(what, 4);
+  let delegations: i64 = bumped(b.delegations, a0);
+  let commands: i64 = bumped(b.commands, a1);
+  let reviews: i64 = bumped(b.reviews, a2);
+  let checks: i64 = bumped(b.checks, a3);
+  let retries: i64 = bumped(b.retries, a4);
+  if !b.unlimited {
+    if a0 > 0 {
+      if delegations == -9223372036854775807 { return -1; }
+      if delegations > b.limits.delegations { return 1; }
+    }
+    if a1 > 0 {
+      if commands == -9223372036854775807 { return -1; }
+      if commands > b.limits.commands { return 2; }
+    }
+    if a2 > 0 {
+      if reviews == -9223372036854775807 { return -1; }
+      if reviews > b.limits.reviews { return 3; }
+    }
+    if a3 > 0 {
+      if checks == -9223372036854775807 { return -1; }
+      if checks > b.limits.checks { return 4; }
+    }
+  }
+  if delegations == -9223372036854775807 || commands == -9223372036854775807 ||
+     reviews == -9223372036854775807 || checks == -9223372036854775807 ||
+     retries == -9223372036854775807 { return -1; }
+  b.delegations = delegations;
+  b.commands = commands;
+  b.reviews = reviews;
+  b.checks = checks;
+  b.retries = retries;
+  return 0;
+}
+
+fn active_change(inout c: Clock, delta: i64) -> ()
+{
+  if 0 <= c.active && c.active < 1099511627776 && -1 <= delta && delta <= 1 {
+    c.active = c.active + delta;
+  }
+}
+
+fn update_run(inout c: Clock, code: i64, run: str, waiting: bool) -> bool ! alloc
+{
+  match map_get::<String, bool>(c.runs, run) {
+    Some(was) => {
+      if code == 10 {
+        let removed: bool = map_remove::<String, bool>(inout c.runs, run);
+        if !was { active_change(inout c, -1); }
+        return true;
+      }
+      if was != waiting && len(c.runs) < 1099511627776 {
+        c.runs = map_insert::<String, bool>(move c.runs, string_push_str(string_new(), run), waiting);
+        if waiting { active_change(inout c, -1); }
+        else { active_change(inout c, 1); }
+        return true;
+      }
+      return code == 8;
+    }
+    None => {
+      if code == 8 && len(c.runs) < 1099511627776 && len(c.run_order) < 1099511627776 {
+        c.runs = map_insert::<String, bool>(move c.runs, string_push_str(string_new(), run), false);
+        c.run_order = vec_push::<String>(move c.run_order, string_push_str(string_new(), run));
+        active_change(inout c, 1);
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+fn closed(inout b: Budget, how: i64, now: i64) -> () ! alloc
+{
+  b.state = 2;
+  b.ended_how = how;
+  b.ended_kind = 2;
+  b.ended_ms = now;
+  b.ended_at = string_new();
+}
+
+
+fn view(inout st: St, sid: str, bid: str, code: i64) -> Reply ! alloc
+{
+  let mut reply: Reply = Reply { status: 0, value: 1, a: 0, b: 0, effects: vec_new::<Effect>() };
+  if code == 1 { reply.value = 0; }
+  match map_get_mut::<String, Budget>(inout st.sessions, sid) {
+    Some(b) => {
+      if b.state >= 0 && equal(b.id, bid) {
+        if code == 1 { reply.value = 4; }
+        if code == 2 && b.state == 1 { reply.value = 2; }
+        if code == 5 && b.state == 2 && b.ended_how == 1 {
+          b.state = 0;
+          b.ended_how = 0;
+          b.ended_kind = 0;
+          b.ended_ms = 0;
+          b.ended_at = string_new();
+          emit(inout reply, 20, 0, 0);
+          reply.value = 2;
+        }
+      }
+    }
+    None => { }
+  }
+  return reply;
+}
+
+fn maybe_close(inout st: St, sid: str, now: i64) -> Reply ! alloc, io
+{
+  let mut reply: Reply = Reply { status: 0, value: 1, a: 0, b: 0, effects: vec_new::<Effect>() };
+  reply.status = 2;
+  match map_get_mut::<String, Budget>(inout st.sessions, sid) {
+    Some(b) => {
+      reply.status = 0;
+      if b.state == 0 {
+        let mut answer: i64 = 0;
+        match map_get_mut::<String, Clock>(inout st.clocks, b.id) {
+          Some(c) => {
+            if len(c.runs) == 0 {
+              answer = is_quiet(sid, len(reply.effects));
+              if answer == 1 {
+                settle(inout b, inout c, sid, now, inout reply);
+                disarm(inout c, inout reply);
+              }
+            }
+          }
+          None => { answer = is_quiet(sid, len(reply.effects)); }
+        }
+        if answer == 1 {
+          let removed: bool = map_remove::<String, Clock>(inout st.clocks, b.id);
+          closed(inout b, 1, now);
+          reply.value = 2;
+          emit(inout reply, 20, 0, 0);
+        }
+        if answer != 0 && answer != 1 { reply.status = 2; }
+      }
+    }
+    None => { }
+  }
+  return reply;
+}
+
+fn apply_charge(inout st: St, sid: str, bid: str, now: i64, what: [i64]) -> Reply ! alloc, io
+{
+  let mut reply: Reply = Reply { status: 0, value: 5, a: 2, b: 0, effects: vec_new::<Effect>() };
+  match map_get_mut::<String, Budget>(inout st.sessions, sid) {
+    Some(b) => {
+      if b.state >= 0 && equal(b.id, bid) {
+        let mut reason: i64 = -1;
+        if b.state == 1 {
+          reason = b.halt_reason;
+          if reason < 0 { reason = 1; }
+        }
+        if b.state == 0 && len(what) == 10 {
+          let charged: i64 = charge(inout b, what);
+          if charged < 0 { reply.status = 2; }
+          if charged > 0 {
+            reason = charged;
+            match map_get_mut::<String, Clock>(inout st.clocks, bid) {
+              Some(c) => { settle(inout b, inout c, sid, now, inout reply); }
+              None => { }
+            }
+            let status: i64 = halt(inout b, sid, bid, now, reason, inout reply); reply.status = status;
+          }
+        }
+        if reason >= 0 { reply.a = 1; reply.b = reason; }
+      }
+    }
+    None => { }
+  }
+  return reply;
+}
+
+fn run_event(inout st: St, sid: str, bid: str, run: str, code: i64, now: i64, flag: i64) -> Reply ! alloc, io
+{
+  let mut reply: Reply = Reply { status: 0, value: 0, a: 0, b: 0, effects: vec_new::<Effect>() };
+  let mut new_clock: bool = false;
+  let mut no_current: bool = true;
+  match map_get_mut::<String, Budget>(inout st.sessions, sid) {
+    Some(b) => {
+      if b.state >= 0 && equal(b.id, bid) {
+        no_current = false;
+        match map_get_mut::<String, Clock>(inout st.clocks, bid) {
+          Some(c) => {
+            if code == 11 { let status: i64 = fire(inout b, inout c, sid, bid, now, inout reply); reply.status = status; }
+            else if update_run(inout c, code, run, code == 9 && flag == 1) {
+              let status: i64 = refresh(inout b, inout c, sid, bid, now, inout reply); reply.status = status;
+            }
+          }
+          None => {
+            if code == 8 { new_clock = true; }
+            if code == 11 && !b.unlimited {
+              let status: i64 = halt(inout b, sid, bid, now, 0, inout reply); reply.status = status;
+            }
+          }
+        }
+        if new_clock {
+          let mut c: Clock = Clock {
+            owner: string_push_str(string_new(), sid), since: 0, has_since: false, armed: false, active: 1,
+            ordinal: st.next_clock,
+            runs: map_insert::<String, bool>(map_new::<String, bool>(), string_push_str(string_new(), run), false),
+            run_order: vec_push::<String>(vec_new::<String>(), string_push_str(string_new(), run))
+          };
+          let status: i64 = refresh(inout b, inout c, sid, bid, now, inout reply); reply.status = status;
+          if len(st.clocks) < 1099511627776 {
+            st.clocks = map_insert::<String, Clock>(move st.clocks, string_push_str(string_new(), bid), move c);
+            if st.next_clock < 9223372036854775807 { st.next_clock = st.next_clock + 1; }
+          }
+        }
+      }
+    }
+    None => { }
+  }
+  if no_current && code >= 9 && code <= 11 {
+    match map_get_mut::<String, Clock>(inout st.clocks, bid) {
+      Some(c) => {
+        if code == 11 {
+          if c.armed { emit(inout reply, 14, 0, 0); }
+          c.armed = false;
+        } else { let changed: bool = update_run(inout c, code, run, flag == 1); }
+      }
+      None => { }
+    }
+  }
+  return reply;
+}
+
+fn explicit_halt(inout st: St, sid: str, bid: str, now: i64, flag: i64) -> Reply ! alloc, io
+{
+  let mut reply: Reply = Reply { status: 0, value: 0, a: 0, b: 0, effects: vec_new::<Effect>() };
+  if flag < 0 || flag > 4 { reply.status = 2; return reply; }
+  match map_get_mut::<String, Budget>(inout st.sessions, sid) {
+    Some(b) => {
+      if b.state == 0 && equal(b.id, bid) {
+        match map_get_mut::<String, Clock>(inout st.clocks, bid) {
+          Some(c) => { settle(inout b, inout c, sid, now, inout reply); }
+          None => { }
+        }
+        let status: i64 = halt(inout b, sid, bid, now, flag, inout reply); reply.status = status;
+      }
+    }
+    None => { }
+  }
+  return reply;
+}
+
+fn raise(inout st: St, sid: str, bid: str, now: i64, flag: i64) -> Reply ! alloc, io
+{
+  let mut reply: Reply = Reply { status: 0, value: 1, a: 0, b: 0, effects: vec_new::<Effect>() };
+  match map_get_mut::<String, Budget>(inout st.sessions, sid) {
+    Some(b) => {
+      if b.state >= 0 && b.state != 2 && equal(b.id, bid) {
+        let changed: i64 = apply_limits(inout b, flag, false, len(reply.effects));
+        if changed < 0 { reply.status = 2; }
+        if changed > 0 {
+          match map_get_mut::<String, Clock>(inout st.clocks, bid) {
+            Some(c) => {
+              if flag == 0 { disarm(inout c, inout reply); }
+              else if changed == 2 && !b.unlimited && c.has_since {
+                settle(inout b, inout c, sid, now, inout reply);
+                let status: i64 = refresh(inout b, inout c, sid, bid, now, inout reply); reply.status = status;
+              }
+            }
+            None => { }
+          }
+          if reply.status == 0 { emit(inout reply, 20, 0, 0); reply.value = 2; }
+        }
+      }
+    }
+    None => { }
+  }
+  return reply;
+}
+
+fn decide(inout st: St, sid: str, bid: str, now: i64, flag: i64) -> Reply ! alloc, io
+{
+  let mut reply: Reply = Reply { status: 0, value: 6, a: 1, b: 0, effects: vec_new::<Effect>() };
+  let mut drop_clock: bool = false;
+  match map_get_mut::<String, Budget>(inout st.sessions, sid) {
+    Some(b) => {
+      if b.state >= 0 && equal(b.id, bid) {
+        reply.a = 2;
+        if b.state == 1 && flag == -1 {
+          match map_get_mut::<String, Clock>(inout st.clocks, bid) {
+            Some(c) => {
+              settle(inout b, inout c, sid, now, inout reply);
+              disarm(inout c, inout reply);
+            }
+            None => { }
+          }
+          closed(inout b, 2, now);
+          drop_clock = true;
+          emit(inout reply, 39, 0, 0);
+          emit(inout reply, 36, 0, 0);
+          emit(inout reply, 20, 0, 0);
+          reply.a = 0;
+        } else if b.state == 1 {
+          let changed: i64 = apply_limits(inout b, flag, true, len(reply.effects));
+          if changed < 0 { reply.status = 2; }
+          else {
+            let reason: i64 = b.halt_reason;
+            b.state = 0;
+            b.halt_reason = -1;
+            b.halt_kind = 0;
+            b.halt_ms = 0;
+            b.halt_text = string_new();
+            b.stopped = vec_new::<String>();
+            emit(inout reply, 36, 0, 0);
+            emit(inout reply, 20, 0, 0);
+            match map_get_mut::<String, Clock>(inout st.clocks, bid) {
+              Some(c) => { let status: i64 = refresh(inout b, inout c, sid, bid, now, inout reply); reply.status = status; }
+              None => { }
+            }
+            if reply.status == 0 {
+              if reason >= 0 { emit(inout reply, 38, reason, 0); }
+              let held: i64 = release_held(sid, bid, len(reply.effects));
+              if held == 0 { emit(inout reply, 38, -1, 1); }
+              else if held != 1 { reply.status = 2; }
+              reply.a = 0;
+            }
+          }
+        }
+      }
+    }
+    None => { }
+  }
+  if drop_clock { let removed: bool = map_remove::<String, Clock>(inout st.clocks, bid); }
+  return reply;
+}
+
+pub fn t_call(inout st: St, sid: str, bid: str, run: str, code: i64,
+              now: i64, flag: i64, what: [i64]) -> Reply ! alloc, io
+{
+  if code == 1 || code == 2 || code == 5 { return view(inout st, sid, bid, code); }
+  if code == 6 { return maybe_close(inout st, sid, now); }
+  if code == 7 { return apply_charge(inout st, sid, bid, now, what); }
+  if code >= 8 && code <= 11 { return run_event(inout st, sid, bid, run, code, now, flag); }
+  if code == 12 { return explicit_halt(inout st, sid, bid, now, flag); }
+  if code == 13 { return raise(inout st, sid, bid, now, flag); }
+  if code == 14 { return decide(inout st, sid, bid, now, flag); }
+  return Reply { status: 2, value: 0, a: 0, b: 0, effects: vec_new::<Effect>() };
+}

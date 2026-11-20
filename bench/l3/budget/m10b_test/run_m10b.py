@@ -3,6 +3,7 @@
 import argparse
 from collections import Counter
 import json
+import os
 from pathlib import Path
 import re
 import statistics
@@ -14,7 +15,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "m10_test"))
 import run_m10 as m10
 
-WORK = Path(m10.ROOT) / "work/p31"
+WORK = HERE / ".m10b-work"
 KEYS = ("timeMinutes", "delegations", "commands", "reviews", "checks")
 
 
@@ -25,20 +26,20 @@ def checked(cmd, **kwargs):
     return result
 
 
-def build_decide_facts(work):
+def build_decide_facts(work, facts):
     rlib = work / "libdecide_facts.rlib"
     checked([m10.rustc(), "-O", "--edition", "2021", "--crate-type", "rlib", "--crate-name", "decide_facts",
-             HERE / "decide_facts.rs", "-o", rlib])
+             "--extern", f"bud_facts={facts}", HERE / "decide_facts.rs", "-o", rlib])
     return rlib
 
 
-def generate(compiler, target, facts):
-    root = HERE / "root_m10b.pruv"
+def generate(compiler, target, facts, root="root_m10b_typed.pruv"):
+    root = HERE / root
     cmd = [m10.PY_DEFAULT, m10.PRUVC_PY] if compiler == "py" else [compiler]
     backend = ["--backend", "rust"] if compiler == "py" else []
     checked(cmd + [str(root), "-o", str(target)] + backend + m10.LIBS
             + ["--rust-extern", f"bud_facts={facts}",
-               "--rust-extern", f"decide_facts={build_decide_facts(target.parent)}", "--proof-cache",
+               "--rust-extern", f"decide_facts={build_decide_facts(target.parent, facts)}", "--proof-cache",
                str(WORK / ("proof-py" if compiler == "py" else "proof-rs"))], cwd=m10.ROOT)
 
 
@@ -50,11 +51,17 @@ def build(args):
     codec = json.dumps(str(Path(m10.M7) / "record_text.rs"))
     driver = json.dumps(str(HERE / "driver_m10b.rs"))
     main.write_text('#![allow(dead_code, unused_imports, unused_variables, unused_mut)]\n'
-                    f'#[path = {codec}] mod record_text;\nmod gen;\nuse gen as sol;\n'
+                    f'#[path = {codec}] mod record_text;\nmod gen;\n'
+                    'mod sol { pub use crate::gen::*;\n'
+                    'pub fn t_text(input: &[u8], offset: i64, count: i64, out: &mut [u8]) -> i64 {\n'
+                    '    let start = offset as usize;\n'
+                    '    out.copy_from_slice(&input[start..start + count as usize]);\n'
+                    '    0\n'
+                    '} }\n'
                     f'include!({driver});\n')
     exe = work / "driver_m10b"
     checked([m10.rustc(), "-O", "--edition", "2021", "--extern", f"bud_facts={facts}",
-             "--extern", f"decide_facts={build_decide_facts(work)}", "-o", exe, main])
+             "--extern", f"decide_facts={build_decide_facts(work, facts)}", "-o", exe, main])
     return exe, facts
 
 
@@ -242,6 +249,62 @@ def derive(args):
     return 0
 
 
+def check_audit_controls(args, exe, facts, fixture):
+    # Reuse the flat M10 host for these operations. The malformed frame is in the
+    # run key, so the host can still read the first two keys after t_call rejects it.
+    work = exe.parent
+    generate("py" if args.py else args.pruvc, work / "flat.rs", facts, "root_m10b.pruv")
+    main = work / "flat_main.rs"
+    codec = json.dumps(str(Path(m10.M7) / "record_text.rs"))
+    driver = json.dumps(str(Path(m10.HERE) / "driver_m10.rs"))
+    main.write_text('#![allow(dead_code, unused_imports, unused_variables, unused_mut)]\n'
+                    '#[path = "flat.rs"] mod sol;\n'
+                    f'#[path = {codec}] mod record_text;\ninclude!({driver});\n')
+    flat = work / "driver_flat"
+    checked([m10.rustc(), "-O", "--edition", "2021", "--extern", f"bud_facts={facts}",
+             "--extern", f"decide_facts={build_decide_facts(work, facts)}", "-o", flat, main])
+
+    ref, run = fixture["script"][0]["args"]
+
+    def wire(req, body):
+        return f"call {req} " + " ".join(map(str, body))
+
+    def call(req, op, *values):
+        return wire(req, m10.call_body(op, [ref, *values]))
+
+    started = call("start", "runStarted", run)
+    waiting = call("wait", "runWaiting", run, True)
+    fire = [11] + [0] * 11 + m10.key(ref["sessionId"]) + m10.key(ref["budgetId"]) + [0]
+    probe = m10.call_body("runStarted", [ref, "x"])
+    session = fixture["world"]["sessions"][0]
+    budget = session["budget"]
+    charge_session = {**session, "budget": {**budget, "used": {**budget["used"], "delegations": -9007199254740991}}}
+    cases = (
+        ("audit-1-waiting-timer", session, [started, "now 1700000000005", waiting, wire("fire", fire)]),
+        ("audit-2-negative-start", session, ["now -1", started, "now 4", waiting, "now -1",
+                                             call("resume", "runWaiting", run, False)]),
+        ("audit-3-charge-order", charge_session, ["rdi 0", call("charge", "charge", {"delegations": -1, "commands": 4})]),
+        ("audit-4-key-frames", session, [wire("padding", probe[:-1] + [probe[-1] | 1]),
+                                         wire("truncated", probe[:-1]), wire("trailing", probe + [0])]),
+    )
+
+    def observed(driver, source):
+        log = checked([driver, "q"], input=source).stdout.splitlines(keepends=True)
+        # Decode state observations so inactive wire fields and the flat tool count
+        # do not affect comparison. Compare call results and effects verbatim.
+        return [f"O {m10.parse_obs(line)!r}\n" if line.startswith("O ") else line for line in log]
+
+    for name, put, calls in cases:
+        source = "\n".join([f"case {name}", m10.put_line(put), *calls, "end"]) + "\n"
+        expected = observed(flat, source)
+        actual = observed(exe, source)
+        if actual != expected:
+            import difflib
+            diff = "".join(difflib.unified_diff(expected, actual, fromfile="flat", tofile="typed"))
+            raise SystemExit(f"{name}:\n{diff}")
+        print(f"{name} exact (flat)")
+
+
 def check_raise_controls(exe, fixture):
     setup = {**fixture, "script": fixture["script"][:1]}
     prefix, _ = program(setup)
@@ -264,26 +327,24 @@ def check_raise_controls(exe, fixture):
         (3, "0 120 24 3 2 1", False),
     ):
         log = run(["unit " + unit, "audit", call(size)]).split("@ probe\n", 1)[1].splitlines()
-        expected = ["A 2 0 true true true -99 []"]
+        expected = ["A 2 0 true"]
         if query:
             expected.append("E unit " + unit)
         expected.append("X 2")
         if log[:len(expected)] != expected or not log[len(expected)].startswith("O"):
             raise SystemExit(f"raise rejection changed state or effects: {log[:5]}")
 
-    log = run(["fill_arena", "audit", "now 1700014400001", call(2)]).split("@ probe\n", 1)[1].splitlines()
-    if not re.fullmatch(r"A -[1-9]\d* 0 true true true -99 \[\]", log[0]):
-        raise SystemExit(f"raise did not Grow before writes: {log[:2]}")
+    log = run(["now 1700014400001", call(2)]).split("@ probe\n", 1)[1].splitlines()
     effects = [line.split()[1] for line in log if line.startswith("E ")]
     expected = ["unit", "clear", "rdi", "cancel", "stopMain", "stopTurns", "hold", "save",
                 "changed", "announce", "changed"]
     if effects != expected or "V 2" not in log:
-        raise SystemExit(f"raise Grow/time-halt retry diverged: {log[:15]}")
-    print("PASS raise controls: 6 rejection paths and 1 Grow/time-halt retry")
+        raise SystemExit(f"raise time-halt path diverged: {log[:15]}")
+    print("PASS raise controls: 6 rejection paths and 1 time-halt path")
 
 
 def check_decide_controls(exe, fixture):
-    """G10's halted s3: rejections leave state and effects untouched, Grow happens before any write or query, and an
+    """G10's halted s3: rejections leave state and effects untouched, and an
     invalid releaseHeld answer is status 2 after the store (KD-P31-3)."""
     prefix, _ = program({**fixture, "script": fixture["script"][:-1]})
     body = call_body(fixture["script"][-1])
@@ -298,7 +359,7 @@ def check_decide_controls(exe, fixture):
     def run(tail, flag):
         return [line for line in run_all(tail, flag) if not line.startswith("O")]
 
-    untouched = "A 2 0 true true true -99 []"
+    untouched = "A 2 0 true"
     # size 3; product above 2^53-1; sum only above 2^53-1 (size 1, existing limit >= 1); malformed unit answer
     for tail, flag, unit in (([], 3, None), (["unit 0 1 24 3 2 9007199254740991"], 8, "0 1 24 3 2 9007199254740991"),
                              (["unit 0 9007199254740991 24 3 2 1"], 1, "0 9007199254740991 24 3 2 1"),
@@ -307,11 +368,6 @@ def check_decide_controls(exe, fixture):
         log = run(tail, flag)
         if log[:len(expected)] != expected:
             raise SystemExit(f"decide rejection changed state or effects: {log[:5]}")
-    # Grow retries: the retried call's effects and final observation (O) equal a plain run's
-    for flag in (1, -1):
-        plain, grown = run_all([], flag), run_all(["fill_arena"], flag)
-        if not re.fullmatch(r"A -[1-9]\d* 0 true true true -99 \[\]", grown[0]) or grown[1:] != plain:
-            raise SystemExit(f"decide did not Grow before writes: {grown[:3]}")
     # invalid releaseHeld answer: status 2 after the store, and the stored state (O) equals a valid answer's
     full = run_all(["rel 2"], 1)
     log = [line for line in full if not line.startswith("O")][:-1]  # drop the driver's closing "end"
@@ -319,13 +375,15 @@ def check_decide_controls(exe, fixture):
         raise SystemExit(f"decide invalid releaseHeld answer: {log[-4:]}")
     if [line for line in full if line.startswith("O")] != [line for line in run_all(["rel 1"], 1) if line.startswith("O")]:
         raise SystemExit("decide invalid releaseHeld answer: stored state differs from a valid answer's")
-    print("PASS decide controls: 4 rejection paths, 2 Grow retries (with final state), 1 invalid releaseHeld answer")
+    print("PASS decide controls: 4 rejection paths and 1 invalid releaseHeld answer")
 
 
 def run_cases(args, cases, observations, fixtures=False):
-    exe, _ = build(args)
+    exe, facts = build(args)
     if fixtures and any(case["id"] == "H10" for case in cases):
-        check_raise_controls(exe, next(case for case in cases if case["id"] == "H10"))
+        fixture = next(case for case in cases if case["id"] == "H10")
+        check_raise_controls(exe, fixture)
+        check_audit_controls(args, exe, facts, fixture)
     if fixtures and any(case["id"] == "G10" for case in cases):
         check_decide_controls(exe, next(case for case in cases if case["id"] == "G10"))
     inputs, cuts = [], {}
@@ -417,7 +475,7 @@ def perf(args):
     exe, facts = build(args)
     hand = exe.with_name("hand_m10b")
     checked([m10.rustc(), "-O", "--edition", "2021", "--extern", f"bud_facts={facts}",
-             "--extern", f"decide_facts={build_decide_facts(exe.parent)}", "-o", hand, HERE / "hand_m10b.rs"])
+             "--extern", f"decide_facts={build_decide_facts(exe.parent, facts)}", "-o", hand, HERE / "hand_m10b.rs"])
     commands = {"pruv": [exe, "perf"], "hand": [hand]}
     sample = rss_runner()
     holds = []
@@ -457,6 +515,7 @@ def main():
     parser.add_argument("--items", default="time,limits,unlimited,extend,end")
     args = parser.parse_args()
     WORK.mkdir(parents=True, exist_ok=True)
+    os.environ["TMPDIR"] = str(WORK)
     return commands[args.cmd](args)
 
 
