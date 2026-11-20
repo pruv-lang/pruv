@@ -207,7 +207,8 @@ fn raise(
         if !matches!(size, 2 | 4 | 8) {
             return Err(());
         }
-        let unit = bud_facts::unit(0);
+        // Read the unit fact in place, as the Pruv side does (unit_at), without cloning the answer Vec.
+        let unit: [i64; 6] = std::array::from_fn(|i| bud_facts::unit_at(0, i as i64));
         let [0, t, d, c, r, ch] = unit.as_slice() else { return Err(()) };
         let values = [*t, *d, *c, *r, *ch];
         if values.iter().any(|v| !(0..=MAX_SAFE / size).contains(v)) {
@@ -335,7 +336,8 @@ fn decide(
     if size == 0 {
         budget.unlimited = true;
     } else {
-        let unit = bud_facts::unit(0);
+        // Read the unit fact in place, as the Pruv side does (unit_at), without cloning the answer Vec.
+        let unit: [i64; 6] = std::array::from_fn(|i| bud_facts::unit_at(0, i as i64));
         let [0, t, d, c, r, ch] = unit.as_slice() else { return Err(()) };
         let values = [*t, *d, *c, *r, *ch];
         let mut next = budget.limits;

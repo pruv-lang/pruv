@@ -373,7 +373,7 @@ fn run_perf(args: &[String]) {
                 let timer = Instant::now();
                 for call in &calls[..size.min(reps - start)] {
                     let reply = black_box(call).dispatch(&mut st, UUID, NOW);
-                    black_box((reply.status, reply.value));
+                    black_box(reply);
                 }
                 time += timer.elapsed();
             }
@@ -397,7 +397,7 @@ fn run_perf(args: &[String]) {
             for _ in 0..reps {
                 for call in &calls {
                     let reply = black_box(call).dispatch(&mut st, UUID, NOW);
-                    black_box((reply.status, reply.value));
+                    black_box(reply);
                 }
                 restore(&mut st);
             }

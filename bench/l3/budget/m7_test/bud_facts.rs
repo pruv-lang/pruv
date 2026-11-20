@@ -302,12 +302,8 @@ pub fn running_take(_sid: &str, _bid: &str) -> Vec<String> {
 }
 
 pub fn is_quiet_text(sid: &str, position: i64) -> i64 {
-    if QUERIES.with(|q| q.borrow().is_some()) {
-        let key = packed_key(sid);
-        is_quiet(&key, 1, key[0], position)
-    } else {
-        is_quiet(&[], 0, 0, position)
-    }
+    let key = packed_key(sid);
+    is_quiet(&key, 1, key[0], position)
 }
 
 // P30 synchronous unit fact. The comparison lane enables logging.
