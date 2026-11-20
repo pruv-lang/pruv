@@ -610,6 +610,10 @@ class _Resolver:
                 st.invariants = [s.rexpr(e) for e in st.invariants]
                 st.decreases = s.rexpr(st.decreases)
                 s.rstmts(st.body)
+            elif isinstance(st, ForMap):
+                st.place = s.rexpr(st.place)
+                st.invariants = [s.rexpr(e) for e in st.invariants]
+                s.rstmts(st.body)
             elif isinstance(st, Return):
                 if st.value is not None:
                     st.value = s.rexpr(st.value)

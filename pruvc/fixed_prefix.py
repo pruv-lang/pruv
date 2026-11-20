@@ -121,6 +121,8 @@ def _stmts(stmts, o, fmap, acc):
             ok = ok and _expr(st.value, o, fmap, acc)
         elif isinstance(st, If):
             ok = (_expr(st.cond, o, fmap, acc) and _stmts(st.then, o, fmap, acc) and _stmts(st.els, o, fmap, acc))
+        elif isinstance(st, ForMap):
+            ok = _expr(st.place, o, fmap, acc) and _stmts(st.body, o, fmap, acc)
         elif isinstance(st, While):
             ok = _expr(st.cond, o, fmap, acc) and _stmts(st.body, o, fmap, acc)
         elif isinstance(st, Return):

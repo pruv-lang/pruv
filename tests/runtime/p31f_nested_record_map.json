@@ -1,0 +1,1 @@
+{"backends": ["rust"], "flags_matrix": [[], ["--no-verify"]], "exit": 0, "stdout_lines": ["1", "42", "4", "true", "0", "7"], "gen_contains": [".get_mut(", ".insert(", ".remove("], "gen_absent": [".clone()"]}

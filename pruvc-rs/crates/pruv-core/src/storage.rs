@@ -129,6 +129,11 @@ impl Analysis {
                 }
                 Stmt::If(x) => { self.expr(&x.cond, &scope); self.block(&x.then, &scope); self.block(&x.els, &scope); }
                 Stmt::While(x) => { self.expr(&x.cond, &scope); for inv in &x.invariants { self.expr(inv, &scope); } self.expr(&x.decreases, &scope); self.block(&x.body, &scope); }
+                Stmt::ForMap(x) => {
+                    self.expr(&x.place, &scope);
+                    for inv in &x.invariants { self.expr(inv, &scope); }
+                    self.block(&x.body, &scope);
+                }
                 Stmt::Assert(x) => { self.expr(&x.cond, &scope); }
                 Stmt::ExprStmt(x) => { self.expr(&x.expr, &scope); }
                 Stmt::FieldAssign(x) => { let v = self.expr(&x.value, &scope); self.pin(v); }

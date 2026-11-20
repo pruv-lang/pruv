@@ -1,14 +1,13 @@
 """Pruv type / effect / structure checker. Fills Expr.ty."""
 import copy
 import re
-from collections import Counter
 from vast import *
 from typeinfo import (TypeTable, BUILTIN_TYPE_NAMES, type_name, is_user_type, is_array, array_elem,  # G2 A5: array_elem
                       TypeArityError, check_arity, bind_args, substitute, is_value, is_element,
                       dependencies, decl_owner, fn_owner,  # G3 A1
                       COLLECTION_ARITY, COLLECTION_SPELLING, is_collection, contains_collection,  # G6 A0
                       program_uses_inout, is_owned_field_type, is_scalar_vec, is_nongeneric_struct,
-                      field_place, is_nested_collection_field)
+                      field_place, is_nested_collection_field, is_string_record_map)
 from refine import expand as refine_expand
 from refine import _kids as expr_kids
 from foreign import (CATALOG, CATALOG_NAMES, CATALOG_CONTRACT_ONLY, FILE_OBSERVERS, PROC_OBSERVERS, NET_OBSERVERS, ASYNC_OBSERVERS, ASYNC_OPS,
@@ -75,6 +74,19 @@ def _paths_overlap(p, q):
     """one field path is a prefix of the other (the whole root is the empty path)"""
     n = min(len(p), len(q))
     return tuple(p[:n]) == tuple(q[:n])
+
+
+def _place_mentions(e):
+    """Yield each mentioned place once, using the full field path for a field read."""
+    if isinstance(e, Move):
+        yield e.name, e.fields
+        return
+    root, path = field_place(e)
+    if isinstance(root, Var):
+        yield root.name, path
+        return
+    for k in expr_kids(e):
+        yield from _place_mentions(k)
 
 
 def _field_move_error(e):
@@ -197,6 +209,7 @@ class Checker:
         s.fn_sccs = []            # recursive function SCCs (lists of names in function order)
         s.call_log = []           # (caller Function, Call node, callee Function) of every checked user call
         s.match_call = s.field_receiver = None
+        s.map_iterations = []     # read-only (root, field path) of enclosing map loops
         s.map_borrows = []        # (root, field path) of the enclosing mutable collection Some arms
         s.field_paths = {}        # id(root Var) -> field path of the outermost field read over it
         s.active_roots = []       # root variable names of the enclosing match arms on extended scrutinees
@@ -217,12 +230,21 @@ class Checker:
         s.check_tparams()      # G3: type-parameter lists (type_parameter, generic_bound, generic_main)
         value_decls = {n: (len(d.tparams), [fd.type for _, fd in s.decl_fields(d)])
                        for n, d in s.decls.items()}
+        record_map_values = {n for n, d in s.decls.items() if is_nongeneric_struct(Type(n), s.decls)
+                             and all(f.type == STRING or is_value(f.type, value_decls, (n,))
+                                     for f in d.fields)}
+        def record_map_field(ty):
+            return is_string_record_map(ty) and ty.args[-1].name in record_map_values
+
         s.aggregates = {n for n, d in s.decls.items() if is_nongeneric_struct(Type(n), s.decls)
                         and all(is_owned_field_type(f.type) or is_nested_collection_field(f.type)
+                                or n in s.collection_records and record_map_field(f.type)
                                 or is_value(f.type, value_decls, (n,))
                                 for f in d.fields)}
         s.nested_records = {n for n, d in s.decls.items() if isinstance(d, StructDecl)
-                            and any(is_nested_collection_field(f.type) for f in d.fields)}
+                            and any(is_nested_collection_field(f.type)
+                                    or n in s.collection_records and record_map_field(f.type)
+                                    for f in d.fields)}
         s.resolve_types()      # every type reference
         s.type_graph()         # G9 A0: type SCCs, generic/recursive field rules
         s.inhabitance()        # G9 A0: every declaration needs a finite value
@@ -367,6 +389,11 @@ class Checker:
                     s.norm_expr(i)
                 s.norm_expr(st.decreases)
                 s.norm_stmts(st.body)
+            elif isinstance(st, ForMap):
+                s.norm_expr(st.place)
+                for i in st.invariants:
+                    s.norm_expr(i)
+                s.norm_stmts(st.body)
             elif isinstance(st, Assert):
                 s.norm_expr(st.cond)
             elif isinstance(st, ExprStmt):
@@ -465,8 +492,7 @@ class Checker:
                 if k == STRING and v not in (I64, BOOL) and v.name not in s.aggregates:
                     terr(node, "foreign_owned_type", "String-keyed maps require i64, bool or owned aggregate values")
                 if k not in (I64, STRING) and v.name in s.aggregates and any(
-                        is_owned_field_type(f.type) or is_nested_collection_field(f.type)
-                        for f in s.decls[v.name].fields):
+                        is_collection(f.type) for f in s.decls[v.name].fields):
                     terr(node, "foreign_owned_type", "aggregate HashMap values with owned fields require i64 or String keys")
             return
         if ty.name == "array":
@@ -781,12 +807,12 @@ class Checker:
                          "use an array, a non-generic struct, or a vector or a map of aggregate records, or remove inout")
 
     def is_result_record(s, ty):
-        """R-6f-3: a non-generic struct whose fields are plain values, Vec<i64>/Vec<bool> or Vec<E> of an owned
-        aggregate E without nested collection fields (R-6e-6)"""
+        """R-6f-3: plain fields, Vec<i64>/Vec<bool>/Vec<String>, or Vec<E> of an owned aggregate
+        E without nested collection fields (R-6e-6)"""
         if not is_nongeneric_struct(ty, s.decls):
             return False
         def ok(ft):
-            if is_scalar_vec(ft):
+            if is_scalar_vec(ft) or ft == Type("vec", (STRING,)):
                 return True
             if ft.owner is None and ft.name == "vec" and len(ft.args) == 1:
                 e = ft.args[0]
@@ -974,14 +1000,12 @@ class Checker:
         """R-6g-1: check the typed expressions of one statement, without entering its blocks."""
         if not s.uses_inout:
             return
-        mentions = Counter()
+        mentions = []
         if isinstance(st, (Assign, IndexAssign, FieldAssign)):
-            mentions[st.name] += 1
+            mentions.append((st.name, tuple(st.fields) if isinstance(st, FieldAssign) else ()))
         calls = []
 
         def visit(e, conditional):
-            if isinstance(e, (Var, Move)):
-                mentions[e.name] += 1
             short_circuit = isinstance(e, Binary) and e.op in ("&&", "||")
             for k in expr_kids(e):
                 visit(k, conditional or (short_circuit and k is e.right))
@@ -989,6 +1013,7 @@ class Checker:
                 calls.append((e, conditional))
 
         for e in exprs:
+            mentions.extend(_place_mentions(e))
             visit(e, isinstance(st, While))
         effect_before = False
         for e, conditional in calls:
@@ -997,8 +1022,9 @@ class Checker:
                       if f is not None or e.name in ("map_remove", "vec_clear") else [])
             if marked:
                 for arg in marked:
-                    root, _ = field_place(arg.expr)
-                    if mentions[root.name] > 1:
+                    root, path = field_place(arg.expr)
+                    if sum(name == root.name and _paths_overlap(path, other)
+                           for name, other in mentions) > 1:
                         terr(arg, "inout_context",
                              "%s is passed inout and also mentioned elsewhere in this statement" % root.name,
                              "use a separate statement for the inout call")
@@ -1021,6 +1047,8 @@ class Checker:
         s.boundary = None
         s.statement_call = st.expr if isinstance(st, ExprStmt) else None
         s.field_move = None
+        if s.map_iterations and isinstance(st, Return):
+            terr(st, "foreign_contract", "cannot return inside a map iteration")
         if s.map_borrows and isinstance(st, Return):
             terr(st, "foreign_contract", "cannot return inside a mutable collection Some arm")
         if isinstance(st, Let):
@@ -1059,6 +1087,7 @@ class Checker:
                 s.array_source(st, st.value, scope)
             s.own(st.value)
         elif isinstance(st, IndexAssign):
+            s.check_iteration_borrow(st, st.name, ())
             v = s.lookup(st, st.name, scope)
             if v[0] == STR:
                 terr(st, "immutable_string", "%s is a str; its bytes cannot be changed" % st.name,
@@ -1071,6 +1100,8 @@ class Checker:
             s.expect(st.index, I64, scope)
             # G2 A5: stored value is bool for a bool array; G3: exactly T for a [T]
             s.expect(st.value, s.elem_type(v[0]), scope)
+            if getattr(st.value, "map_iter_view", False):
+                s.own(st.value)
             s.check_inout_context(st, st.index, st.value)
         elif isinstance(st, FieldAssign):
             v = s.lookup(st, st.name, scope, tuple(st.fields))
@@ -1108,6 +1139,8 @@ class Checker:
             s.expect(st.decreases, I64, scope, contract=True)
             s.ckind = "code"
             s.block(st.body, dict(scope))
+        elif isinstance(st, ForMap):
+            s.for_map(st, scope)
         elif isinstance(st, Return):
             if st.value is None:
                 if f.ret != UNIT:
@@ -1164,11 +1197,17 @@ class Checker:
             call = st.scrutinee
             catalog_match = isinstance(call, Call) and call.name not in s.funcs
             mutable_map = catalog_match and call.name in MUTABLE_COLLECTION_MATCH
-            map_view = catalog_match and call.name == "map_get" and s.is_extended(call.targs[-1])
+            map_read = catalog_match and call.name == "map_get"
+            nested_map_path = None
+            if map_read and is_string_record_map(call.args[0].ty):
+                base, path = field_place(call.args[0])
+                if path and isinstance(base, Var) and scope[base.name][2] == "map_mut":
+                    nested_map_path = (base.name, path)
+            map_view = map_read and (s.is_extended(call.targs[-1]) or nested_map_path is not None)
             s.check_inout_context(st, st.scrutinee)
             user = s.tt.is_enum(t)
-            root = s.match_root(st.scrutinee, t, scope)   # G9 A0: root variable of an extended scrutinee path
             mpath = s.match_inout_path(st.scrutinee, t, scope)
+            root = None if mpath is not None else s.match_root(st.scrutinee, t, scope)
             if t.owner is not None:
                 terr(st, "generic_operation", "cannot match a value of the abstract type %s" % t.name,
                      "a type parameter has no variants; match on an Option, Result or enum that contains it")
@@ -1225,11 +1264,12 @@ class Checker:
                 if a.ctor == "Some" and (mutable_map or map_view):
                     operand = st.scrutinee.args[0]
                     base, _ = field_place(operand.expr if mutable_map else operand)
-                    borrows = s.map_borrows if mutable_map else s.active_roots
+                    borrows = s.map_borrows if mutable_map else s.match_paths if nested_map_path else s.active_roots
                     for b, bt in zip(a.binders, ftypes):
                         sc[b] = (bt, False, "map_mut" if mutable_map else "param")
                     if isinstance(base, Var):
-                        borrows.append((base.name, field_place(operand.expr)[1]) if mutable_map else base.name)
+                        borrows.append((base.name, field_place(operand.expr)[1]) if mutable_map
+                                       else nested_map_path or base.name)
                     s.block(a.body, sc)
                     if isinstance(base, Var):
                         borrows.pop()
@@ -1241,6 +1281,30 @@ class Checker:
                     s.match_paths.pop()
         else:
             terr(st, "internal", "unknown statement")
+
+    def for_map(s, st, scope):
+        if s.f.cost is not None:
+            terr(st, "foreign_contract", "map iteration is not allowed in a function with a cost clause")
+        root, path = field_place(st.place)
+        if not isinstance(root, Var):
+            terr(st.place, "foreign_contract", "map iteration requires a binding or field path")
+        ty = s.expr(st.place, scope)
+        if (ty.owner is not None or ty.name != "hashmap" or ty.args[0] != STRING
+                or (ty.args[1] not in (I64, BOOL) and
+                    (ty.args[1].owner is not None or ty.args[1].args or ty.args[1].name not in s.aggregates))):
+            terr(st.place, "foreign_owned_type", "map iteration requires HashMap<String, V> with scalar or owned aggregate values")
+        s.ckind = "invariant"
+        for inv in st.invariants:
+            s.expect(inv, BOOL, scope, contract=True)
+        s.ckind = "code"
+        inner = dict(scope)
+        for name, t in ((st.key, STRING), (st.val, ty.args[1])):
+            if name in inner:
+                terr(st, "shadow", "%s is already defined" % name, "use a new name")
+            inner[name] = (t, False, "map_iter")
+        s.map_iterations.append((root.name, path))
+        s.block(st.body, inner)
+        s.map_iterations.pop()
 
     # ---- G7 A0: par groups (G7_SPEC 3, 4, 7) ----
     def par(s, st, scope):
@@ -1297,7 +1361,8 @@ class Checker:
 
     def par_args(s, c):
         for arg in c.args:
-            if not isinstance(arg, (InoutArg, Var, IntLit, BoolLit)):
+            if (not isinstance(arg, (InoutArg, Var, IntLit, BoolLit))
+                    or isinstance(arg, InoutArg) and not isinstance(arg.expr, Var)):
                 terr(arg, "parallel_argument", "a par branch argument must be a binding name, an integer or bool "
                      "literal, or `inout name`",
                      "bind the value before the group, e.g. `let n: i64 = len(a);`, and pass n")
@@ -1370,6 +1435,8 @@ class Checker:
                 ex(st.cond); s.par_items(st.then, out); s.par_items(st.els, out)
             elif isinstance(st, While):
                 ex(st.cond); s.par_items(st.body, out)
+            elif isinstance(st, ForMap):
+                s.par_items(st.body, out)
             elif isinstance(st, Return):
                 if st.value is not None:
                     ex(st.value)
@@ -1456,6 +1523,8 @@ class Checker:
         """`value` (already typed) is moved into an owning position (let, assignment, constructor field, return):
         a non-fresh extended value is cloned, which needs `alloc`; constructors, literals and calls are fresh"""
         t = value.ty
+        if getattr(value, "map_iter_view", False):
+            terr(value, "foreign_move", "a map iteration binder cannot be used as an owned value")
         if getattr(value, "map_mut_view", False):
             terr(value, "foreign_move", "a mutable collection binder cannot be used as an owned value")
         if t is not None and s.is_extended(t) and not isinstance(value, (EnumCtor, StructLit, Call, Move)):
@@ -1486,22 +1555,28 @@ class Checker:
         return None
 
     def match_inout_path(s, scrut, t, scope):
-        """R-6e-8: (root, field path) of a match scrutinee place over an extended type rooted at an inout or
-        element binding, else None"""
+        """R-6e-8: the held path of an extended match on an inout, element binding or mutable local field."""
         if not s.is_extended(t):
             return None
         e, fields = scrut, []
         while isinstance(e, FieldAccess):
             fields.insert(0, e.field)
             e = e.base
-        if isinstance(e, Var) and e.name in scope and scope[e.name][2] in ("inout", "map_mut"):
-            return (e.name, tuple(fields))
+        if isinstance(e, Var) and e.name in scope:
+            _, mutable, kind = scope[e.name]
+            if kind in ("inout", "map_mut") or fields and kind == "local" and mutable:
+                return (e.name, tuple(fields))
         return None
 
     def match_path_held(s, name, path):
         return any(root == name and _paths_overlap(path, held) for root, held in s.match_paths)
 
+    def check_iteration_borrow(s, node, name, path):
+        if any(root == name and _paths_overlap(path, held) for root, held in s.map_iterations):
+            terr(node, "recursive_borrow", "cannot mutate or move %s during map iteration" % ".".join([name] + list(path)))
+
     def check_borrow(s, st, name, fields):
+        s.check_iteration_borrow(st, name, fields)
         if name in s.active_roots or s.match_path_held(name, tuple(fields)):
             terr(st, "recursive_borrow", "cannot assign to %s while a match on it is active" % ".".join([name] + list(fields)),
                  "copy the needed payload into a local, finish the match, then assign")
@@ -1562,6 +1637,8 @@ class Checker:
         """op: what the operand is used for (arithmetic, comparison, ...) when the operation needs a concrete
         type: an abstract type parameter there is a generic_operation error rather than a plain mismatch"""
         t = s.expr(e, scope, contract, borrow_element=borrow_element)
+        if ty == STR and t == STRING and borrow_element and getattr(e, "map_iter_view", False):
+            return t
         if t != ty:
             if op is not None and t.owner is not None:
                 terr(e, "generic_operation", "%s is not allowed on the abstract type %s" % (op, t.name),
@@ -1603,6 +1680,8 @@ class Checker:
             binding = s.lookup(e, e.name, scope)
             if binding[2] == "map_mut" and binding[0] not in (I64, BOOL):
                 e.map_mut_view = True
+            if binding[2] == "map_iter":
+                e.map_iter_view = True
             return binding[0]
         if isinstance(e, Unary):
             if e.op == "*":
@@ -1658,6 +1737,8 @@ class Checker:
                 s.expect(e.right, BOOL, scope, c, op="a boolean operation"); return BOOL
         if isinstance(e, Move):   # G6: liveness and position rules are checked by foreign.check_ownership
             s.check_borrow(e, e.name, tuple(e.fields))
+            if scope.get(e.name, (None, None, None))[2] == "map_iter":
+                terr(e, "foreign_move", "a map iteration binder cannot be moved")
             if e.fields:
                 ty = s.lookup(e, e.name, scope, tuple(e.fields))[0]
                 for field in e.fields:
@@ -1918,14 +1999,19 @@ class Checker:
                     s.check_text_key(arg, scope, c)
                 else:
                     s.expect(arg, want, scope, c, borrow_element=f is not CATALOG.get(n) and want == STR)
+                if p.take and getattr(arg, "map_iter_view", False):
+                    s.own(arg)
                 continue
             if not isinstance(arg, InoutArg):
                 terr(arg, "inout_argument", "parameter %s of %s is inout: the argument needs the `inout` marker" % (p.name, n),
                      "write `inout name` with a `let mut` local array or an inout parameter")
             op = arg.expr
-            collection_place = f is CATALOG.get(n) and n in MUTABLE_COLLECTION_MATCH + ("map_remove", "vec_clear")
-            place, path = field_place(op) if collection_place else (op, ())
-            if not isinstance(place, Var):
+            user_call = f is not CATALOG.get(n)
+            allow_path = user_call or n in MUTABLE_COLLECTION_MATCH + ("map_remove", "vec_clear")
+            place, path = field_place(op)
+            if isinstance(place, Var):
+                s.check_iteration_borrow(arg, place.name, path)
+            if not isinstance(place, Var) or (path and not allow_path):
                 what = ("a field" if isinstance(op, FieldAccess) else "an element" if isinstance(op, Index)
                         else "a call" if isinstance(op, Call) else "an expression")
                 terr(arg, "inout_argument", "an inout argument must be the whole name of a local array or an inout "
@@ -1948,9 +2034,11 @@ class Checker:
                      "finish the match before the call")
             op.ty = actual
             arg.ty = actual
-            marked.append((arg, place.name))
-        for arg, name in marked:
-            if any(x is not arg and _mentions(x, name) for x in e.args):
+            marked.append((arg, place.name, path if user_call else ()))
+        for arg, name, path in marked:
+            if any(other == name and _paths_overlap(path, other_path)
+                   for x in e.args if x is not arg
+                   for other, other_path in _place_mentions(x)):
                 terr(arg, "inout_alias", "%s is passed inout and also used elsewhere in the arguments of this call" % name,
                      "compute the other value first, e.g. `let n: i64 = len(%s);`, then pass n" % name)
         if not c and s.in_par and e is not s.boundary:
@@ -2300,6 +2388,8 @@ class Checker:
                     s.check_text_key(arg, scope, c)
                 else:
                     s.expect(arg, want, scope, c, borrow_element=not catalog and want == STR)
+                if p.take and getattr(arg, "map_iter_view", False):
+                    s.own(arg)
         if catalog:
             if n == "vec_get" and e.targs[0] == STRING:
                 if not borrow_element:
@@ -2320,6 +2410,8 @@ class Checker:
                     terr(e, "foreign_owned_type", "%s cannot copy %s" % (n, type_name(e.targs[-1])))
             if n in ("vec_push", "map_insert"):
                 x = a[-1]
+                if getattr(x, "map_iter_view", False):
+                    s.own(x)
                 payload = e.targs[-1]
                 if getattr(x, "map_mut_view", False) or (
                         payload.owner is None and payload.name in s.aggregates

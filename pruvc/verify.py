@@ -107,6 +107,8 @@ def walk_loops(stmts):
             yield st, stmts, i
             for x in walk_loops(st.body):
                 yield x
+        elif isinstance(st, ForMap):
+            yield from walk_loops(st.body)
         elif isinstance(st, If):
             for x in walk_loops(st.then):
                 yield x
@@ -1119,6 +1121,7 @@ class FnVerifier:
         # G5 A1: immutable entry snapshots {inout parameter name: entry array}; separate from the current environment.
         # Empty for a function without inout parameters.
         s.snap = {}
+        s.iter_places = []
 
     def T(s, ty):
         """type of a checked node under the current contract-instantiation substitution"""
@@ -2159,7 +2162,8 @@ class FnVerifier:
         before any ensures clause is assumed, so relational ensures may connect several of them."""
         for i in ios:
             pre = args[i]
-            name = e.args[i].expr.name
+            root, path = field_place(e.args[i].expr)
+            name = root.name
             ty = substitute(f.params[i].type, s.theta)
             if isinstance(pre, Arr) and (is_array(ty) or (f.name, i) not in s.model.vec_resize_params):
                 fv = s.fresh(name, ty if ty.name == "vec" else arr_type(pre.elem))
@@ -2172,7 +2176,7 @@ class FnVerifier:
                 if wf is not None:
                     s.assume(st, g, wf)
             cenv[f.params[i].name] = nv
-            st.env[name] = nv
+            st.env[name] = s.rebuild(root.ty, st.env[name], path, nv) if path else nv
 
     def post_refine(s, e, ios, st, g):
         """G5 A1 (G5_SPEC 5.2 step 8): the refinement of every marked refined local must hold right after the call
@@ -2779,7 +2783,7 @@ class FnVerifier:
                 out.add(st.name)
             elif isinstance(st, If):
                 s.assigned(st.then, out); s.assigned(st.els, out)
-            elif isinstance(st, While):
+            elif isinstance(st, (While, ForMap)):
                 s.assigned(st.body, out)
             elif isinstance(st, Match):
                 sc = st.scrutinee
@@ -2798,7 +2802,7 @@ class FnVerifier:
             if isinstance(st, If):
                 s.call_writes(st.then, out, select=select)
                 s.call_writes(st.els, out, select=select)
-            elif isinstance(st, While):
+            elif isinstance(st, (While, ForMap)):
                 s.call_writes(st.body, out, select=select)
             elif isinstance(st, Match):
                 for a in st.arms:
@@ -2812,7 +2816,7 @@ class FnVerifier:
                 out.add(st.name)
             elif isinstance(st, If):
                 s.whole_assigned(st.then, out); s.whole_assigned(st.els, out)
-            elif isinstance(st, While):
+            elif isinstance(st, (While, ForMap)):
                 s.whole_assigned(st.body, out)
             elif isinstance(st, Match):
                 for a in st.arms:
@@ -2871,6 +2875,12 @@ class FnVerifier:
                     w = s.wf(ty, nv)
                     if w is not None:
                         h.pc.append(w)
+        # A disjoint sibling write can havoc the root of a read-only iteration place.
+        for place in s.iter_places:
+            root, path = field_place(place)
+            if root.name in names:
+                saved = s.ev(place, st.fork(), [], False)
+                h.env[root.name] = s.rebuild(root.ty, h.env[root.name], path, saved)
         return h
 
     def check_assert(s, stmt, st):
@@ -3003,6 +3013,11 @@ class FnVerifier:
             return [st]
         if isinstance(stmt, While):
             return s.loop(stmt, st)
+        if isinstance(stmt, ForMap):
+            s.iter_places.append(stmt.place)
+            ends = s.loop(stmt, st)
+            s.iter_places.pop()
+            return ends
         if isinstance(stmt, Par):       # G7 A1
             return [s.par(stmt, st)]
         raise Exception("exec: %r" % stmt)
@@ -3011,7 +3026,7 @@ class FnVerifier:
         # (cand id | None, expr, text): the written invariants (required refinement first, then user), then the
         # STAGE1 B2 inferred candidates of this loop in their sorted order
         invs = [(None, inv, None) for inv in w.invariants]
-        if s.extra:
+        if s.extra and isinstance(w, While):
             invs = invs + list(s.extra.get(s.loop_no[id(w)], []))
         prev = []   # invariants run in order: an earlier one (proven here) may justify a later one's lookups
         for cid, inv, text in invs:
@@ -3044,11 +3059,24 @@ class FnVerifier:
             if d is not None:
                 b.pc.append(d)
             b.pc.append(s.ev(inv, b, [], False))
-        c = s.ev(w.cond, b, [], True)
-        b.pc.append(c)
-        s.check_dom(b, [], w.decreases, w.decreases, "variant_field lookups in decreases are defined")
-        d0 = s.ev(w.decreases, b, [], False)
-        s.prove(b, [], d0 >= 0, w.decreases, "decreases_nonneg", "decreases >= 0")
+        if isinstance(w, ForMap):
+            m = s.ev(w.place, b, [], True)
+            key = s.fresh(w.key, m.kty)
+            index = s.model.map_key(m.kty, key)
+            value = z3.Select(m.a, index)
+            b.env[w.key], b.env[w.val] = key, value
+            b.pc.append(z3.Select(m.d, index))
+            for ty, term in ((m.kty, key), (m.vty, value)):
+                s.observe(b, term, ty)
+                wf = s.wf(ty, term)
+                if wf is not None:
+                    b.pc.append(wf)
+        else:
+            c = s.ev(w.cond, b, [], True)
+            b.pc.append(c)
+            s.check_dom(b, [], w.decreases, w.decreases, "variant_field lookups in decreases are defined")
+            d0 = s.ev(w.decreases, b, [], False)
+            s.prove(b, [], d0 >= 0, w.decreases, "decreases_nonneg", "decreases >= 0")
         s.spend(b, [], z3.IntVal(1))
         for end in s.exec_block(w.body, b):
             prev = []
@@ -3063,6 +3091,8 @@ class FnVerifier:
                 ob = s.ev(inv, end, [], False)
                 s.prove(end, [], ob, inv, "invariant_preserved", w_ob, cid, cid)
                 prev.append(ob)
+            if isinstance(w, ForMap):
+                continue
             if _has_vf(w.decreases):
                 # decreases is read at the end of the body: the invariants just proved may justify its lookups
                 extra = []
@@ -3081,8 +3111,9 @@ class FnVerifier:
             if d is not None:
                 a.pc.append(d)
             a.pc.append(s.ev(inv, a, [], False))
-        c = s.ev(w.cond, a, [], True)
-        a.pc.append(z3.Not(c))
+        if isinstance(w, While):
+            c = s.ev(w.cond, a, [], True)
+            a.pc.append(z3.Not(c))
         return [a]
 
     def run_foreign(s, st):

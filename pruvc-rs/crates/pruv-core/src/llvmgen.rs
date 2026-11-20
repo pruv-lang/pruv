@@ -1720,6 +1720,7 @@ impl<'a> FnGen<'a> {
                         && Self::unbox_uses(name, &x.decreases, true)
                         && Self::unbox_block(name, &x.body)
                 }
+                Stmt::ForMap(_) => false,
                 Stmt::Return(x) => x.value.as_ref().map_or(true, |v| Self::unbox_uses(name, v, false)),
                 Stmt::Assert(x) => Self::unbox_uses(name, &x.cond, true),
                 Stmt::ExprStmt(x) => Self::unbox_uses(name, &x.expr, false),
@@ -3040,6 +3041,7 @@ impl<'a> FnGen<'a> {
                 self.place(&el);
                 Ok(())
             }
+            Stmt::ForMap(_) => Err("map iteration needs the Rust backend".into()),
             Stmt::Return(x) => {
                 self.begin_temps();
                 let mut v = V::unit();
@@ -6235,6 +6237,7 @@ pub fn g6_llvm_error(prog: &Program) -> Option<crate::diagnostic::PruvError> {
         let mut bad: Vec<(i64, i64)> = Vec::new();
         let mut rust_only = Vec::new();
         walk_stmts(&f.body, &mut |n: Node<'_>| match n {
+            Node::ForMap(w) => rust_only.push((w.line, w.col, "map iteration")),
             Node::Let(l) => {
                 if !g6_type_ok(&l.ty) {
                     bad.push((l.line, l.col));
@@ -6517,6 +6520,7 @@ fn gen_llvm_body(
                 },
                 Stmt::If(x) => { collect_par(&x.then, names); collect_par(&x.els, names); }
                 Stmt::While(x) => collect_par(&x.body, names),
+                Stmt::ForMap(x) => collect_par(&x.body, names),
                 Stmt::Match(x) => for arm in &x.arms { collect_par(&arm.body, names); },
                 _ => {}
             }

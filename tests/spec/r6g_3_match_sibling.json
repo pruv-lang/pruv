@@ -1,0 +1,1 @@
+{"gen_contains":["set(&mut s.b, (items.len() as i64))","set(&mut s.b, 0)"],"gen_absent":[".clone()"]}

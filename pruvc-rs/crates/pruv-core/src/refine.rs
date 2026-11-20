@@ -207,6 +207,15 @@ pub(crate) fn stmt_names(stmts: &[Stmt], out: &mut HashSet<String>) {
                 expr_names(&x.decreases, out);
                 stmt_names(&x.body, out);
             }
+            Stmt::ForMap(x) => {
+                out.insert(x.key.clone());
+                out.insert(x.val.clone());
+                expr_names(&x.place, out);
+                for i in &x.invariants {
+                    expr_names(i, out);
+                }
+                stmt_names(&x.body, out);
+            }
             Stmt::Return(x) => {
                 if let Some(v) = &x.value {
                     expr_names(v, out);
@@ -308,6 +317,7 @@ fn assigned(stmts: &[Stmt], out: &mut HashSet<String>) {
                 assigned(&x.els, out);
             }
             Stmt::While(x) => assigned(&x.body, out),
+            Stmt::ForMap(x) => assigned(&x.body, out),
             Stmt::Match(x) => {
                 for a in &x.arms {
                     assigned(&a.body, out);
@@ -533,24 +543,8 @@ impl Expander {
                     let els = std::mem::take(&mut i.els);
                     i.els = self.block(els, &mut scope.clone());
                 }
-                Stmt::While(w) => {
-                    let mut changed = HashSet::new();
-                    assigned(&w.body, &mut changed);
-                    let mut pre: Vec<Expr> = Vec::new();
-                    for (name, r) in scope.iter() {
-                        // In declaration order, only those alive at the loop head
-                        if changed.contains(name) {
-                            pre.extend(parts(r, name, &self.k).into_iter().map(|(_, e)| e));
-                        }
-                    }
-                    if !pre.is_empty() {
-                        let old = std::mem::take(&mut w.invariants);
-                        pre.extend(old);
-                        w.invariants = pre;
-                    }
-                    let body = std::mem::take(&mut w.body);
-                    w.body = self.block(body, &mut scope.clone());
-                }
+                Stmt::While(w) => self.loop_body(&mut w.invariants, &mut w.body, scope),
+                Stmt::ForMap(w) => self.loop_body(&mut w.invariants, &mut w.body, scope),
                 Stmt::Match(m) => {
                     for a in m.arms.iter_mut() {
                         let body = std::mem::take(&mut a.body);
@@ -563,6 +557,23 @@ impl Expander {
             out.extend(after);
         }
         out
+    }
+
+    fn loop_body(&self, invariants: &mut Vec<Expr>, body: &mut Vec<Stmt>, scope: &Scope) {
+        let mut changed = HashSet::new();
+        assigned(body, &mut changed);
+        let mut pre = Vec::new();
+        for (name, r) in scope {
+            // In declaration order, only those alive at the loop head
+            if changed.contains(name) {
+                pre.extend(parts(r, name, &self.k).into_iter().map(|(_, e)| e));
+            }
+        }
+        if !pre.is_empty() {
+            pre.append(invariants);
+            *invariants = pre;
+        }
+        *body = self.block(std::mem::take(body), &mut scope.clone());
     }
 
     fn run(&self, f: &mut Function) {
@@ -601,6 +612,7 @@ fn validate_block(stmts: &[Stmt], user: &HashSet<String>) -> Res<()> {
                 validate_block(&i.els, user)?;
             }
             Stmt::While(w) => validate_block(&w.body, user)?,
+            Stmt::ForMap(w) => validate_block(&w.body, user)?,
             Stmt::Match(m) => {
                 for a in &m.arms {
                     validate_block(&a.body, user)?;
@@ -617,6 +629,7 @@ fn any_let_refine(stmts: &[Stmt]) -> bool {
         Stmt::Let(l) => l.refine.is_some(),
         Stmt::If(i) => any_let_refine(&i.then) || any_let_refine(&i.els),
         Stmt::While(w) => any_let_refine(&w.body),
+        Stmt::ForMap(w) => any_let_refine(&w.body),
         Stmt::Match(m) => m.arms.iter().any(|a| any_let_refine(&a.body)),
         _ => false,
     })

@@ -1,0 +1,1 @@
+{"gen_contains":["clear(&mut x.data, &mut x.keys, key)"],"gen_absent":[".clone()"]}

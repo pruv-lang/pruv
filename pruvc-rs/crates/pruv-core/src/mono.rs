@@ -773,6 +773,15 @@ impl<'a> Mono<'a> {
                 let body = self.cp_stmts(&x.body)?;
                 Stmt::While(While { line: x.line, col: x.col, cond, invariants, decreases, body })
             }
+            Stmt::ForMap(x) => Stmt::ForMap(ForMap {
+                line: x.line,
+                col: x.col,
+                key: x.key.clone(),
+                val: x.val.clone(),
+                place: self.cp_e(&x.place)?,
+                invariants: self.cp_es(&x.invariants)?,
+                body: self.cp_stmts(&x.body)?,
+            }),
             Stmt::Return(x) => {
                 let value = match &x.value {
                     Some(v) => Some(self.cp_e(v)?),

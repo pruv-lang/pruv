@@ -1,0 +1,1 @@
+{"gen_contains":["for (key, &flag) in flags.iter()","key_len__pruv_body(key.as_str())","key.as_str()","(key).as_bytes()"],"gen_absent":[".clone()"]}

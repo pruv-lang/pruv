@@ -1,0 +1,20 @@
+// spec: R-6g-3 accept
+struct Rec { n: i64 }
+struct St { a: Rec, b: Rec, c: i64 }
+fn set(inout a: Rec, inout b: Rec, n: i64) -> i64
+  requires n < 100
+  ensures a.n == n
+  ensures b.n == n + 1
+  ensures result == 1
+{ a.n = n; b.n = n + 1; return 1; }
+fn update(inout s: St) -> i64
+  requires s.c < 100
+  ensures s.a.n == s.c
+  ensures s.b.n == s.c + 1
+  ensures result == s.c
+{ let before: i64 = s.c;
+  let count: i64 = set(inout s.a, inout s.b, s.c) + (s.c - before);
+  assert s.c == before;
+  assert count == 1;
+  return before;
+}

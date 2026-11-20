@@ -1,0 +1,38 @@
+// spec: R-6e-6 accept
+struct Run { since: i64, label: String }
+struct Clock { owner: String, runs: HashMap<String, Run> }
+struct St { clocks: Vec<Clock> }
+
+pub fn run() -> () ! alloc, io {
+  let mut st: St = St { clocks: vec_push::<Clock>(vec_new::<Clock>(), Clock {
+    owner: string_push_str(string_new(), "owner"), runs: map_new::<String, Run>()
+  }) };
+  match vec_at_mut::<Clock>(inout st.clocks, 0) {
+    Some(r) => {
+      let key: String = string_push_str(string_new(), "job");
+      r.runs = map_insert::<String, Run>(move r.runs, move key, Run {
+        since: 1, label: string_push_str(string_new(), "task")
+      });
+      print(len(r.runs));
+      match map_get_mut::<String, Run>(inout r.runs, "job") {
+        Some(x) => {
+          x.since = 42;
+          r.owner = string_push_str(string_new(), "changed");
+        }
+        None => { }
+      }
+      match map_get::<String, Run>(r.runs, "job") {
+        Some(x) => {
+          print(x.since);
+          print(len(x.label));
+        }
+        None => { }
+      }
+      let removed: bool = map_remove::<String, Run>(inout r.runs, "job");
+      print(removed);
+      print(len(r.runs));
+    }
+    None => { }
+  }
+  print(len(vec_get::<Clock>(st.clocks, 0).owner));
+}

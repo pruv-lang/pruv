@@ -1,0 +1,1 @@
+{"gen_contains":["for (k, v) in st.recs.iter()","st.total = v.n;"],"gen_absent":[".clone()"]}

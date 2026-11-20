@@ -1,0 +1,11 @@
+// spec: R-6g-3 reject
+enum Blob { Empty, Ints(items: [i64]) }
+struct Part { a: Blob }
+struct St { x: Part }
+fn touch(inout p: Part) -> () {}
+fn update(inout s: St) -> () {
+  match s.x.a {
+    Blob::Ints(items) => { touch(inout s.x); }
+    Blob::Empty => {}
+  }
+}

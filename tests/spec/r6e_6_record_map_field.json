@@ -1,0 +1,1 @@
+{"gen_contains": ["HashMap<::std::string::String, Run>", "st.clocks.get_mut(k)", "r.runs.insert(", "r.runs.get_mut(query)", "match r.runs.get(query) {", "r.runs.remove(query)"], "gen_absent": [".clone()", "mem::take"]}

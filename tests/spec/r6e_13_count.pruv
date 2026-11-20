@@ -1,0 +1,11 @@
+// spec: R-6e-13 reject
+fn count_entries(m: HashMap<String, i64>) -> i64 {
+  let mut count: i64 = 0;
+  for (k, v) in m
+    invariant 0 <= count
+  {
+    if count < 9223372036854775807 { count = count + 1; }
+  }
+  assert count == len(m);
+  return count;
+}

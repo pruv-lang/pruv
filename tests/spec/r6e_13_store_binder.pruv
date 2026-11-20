@@ -1,0 +1,8 @@
+// spec: R-6e-13 reject
+struct Rec { n: i64 }
+
+fn bad(m: HashMap<String, Rec>) -> () {
+  for (k, v) in m {
+    let stored: Rec = v;
+  }
+}

@@ -1,0 +1,20 @@
+// spec: R-6e-13 accept
+fn key_len(key: str) -> i64 ensures result == len(key) { return len(key); }
+
+fn count_flags(flags: HashMap<String, bool>) -> i64
+  ensures 0 <= result && result <= 100
+{
+  let mut count: i64 = 0;
+  for (key, flag) in flags
+    invariant 0 <= count && count <= 100
+  {
+    let n: i64 = key_len(key);
+    if flag && count < 100 && n > 0 && !string_eq(key, "skip") {
+      match map_get::<String, bool>(flags, key) {
+        Some(present) => { if present { count = count + 1; } }
+        None => {}
+      }
+    }
+  }
+  return count;
+}

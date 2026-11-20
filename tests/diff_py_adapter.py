@@ -99,6 +99,7 @@ NODE_FIELDS = {
     "Assign": ("name", "value", "deref"),   # P31N: `*v = e` (always written, as the Rust dump)
     "IndexAssign": ("name", "index", "value"),
     "If": ("cond", "then", "els"),
+    "ForMap": ("key", "val", "place", "invariants", "body"),
     "While": ("cond", "invariants", "decreases", "body"),
     "Return": ("value",),
     "Assert": ("cond",),

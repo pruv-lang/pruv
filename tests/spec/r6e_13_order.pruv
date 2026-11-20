@@ -1,0 +1,15 @@
+// spec: R-6e-13 reject
+fn first_value(m: HashMap<String, i64>) -> i64
+  requires is_some(map_lookup::<String, i64>(m, "first"))
+{
+  let mut first: bool = true;
+  let mut seen: i64 = 0;
+  for (k, v) in m {
+    if first {
+      seen = v + 0;
+      first = false;
+    }
+  }
+  assert seen == some_val(map_lookup::<String, i64>(m, "first"));
+  return seen;
+}

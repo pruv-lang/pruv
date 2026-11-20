@@ -175,6 +175,10 @@ def plan_storage(program_after_mono, verified=True):
                     expr(st.index, scope); expr(st.value, scope)
                 elif isinstance(st, If):
                     expr(st.cond, scope); block(st.then, scope); block(st.els, scope)
+                elif isinstance(st, ForMap):
+                    expr(st.place, scope)
+                    for inv in st.invariants: expr(inv, scope)
+                    block(st.body, scope)
                 elif isinstance(st, While):
                     expr(st.cond, scope)
                     for inv in st.invariants: expr(inv, scope)

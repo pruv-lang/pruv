@@ -1,0 +1,14 @@
+// spec: R-6g-3 accept
+struct Inner { b: [i64], c: i64 }
+struct Outer { a: Inner }
+fn bump(inout b: [i64]) -> ()
+  requires len(b) == 1 && b[0] < 100
+  ensures b[0] == old(b)[0] + 1
+{ b[0] = b[0] + 1; }
+fn run() -> i64 ! alloc
+  ensures result == 42
+{ let mut x: Outer = Outer { a: Inner { b: alloc(1, 41), c: 7 } };
+  bump(inout x.a.b);
+  assert x.a.c == 7;
+  return x.a.b[0];
+}

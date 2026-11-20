@@ -1,0 +1,1 @@
+{"gen_contains":["for (k, &v) in m.iter()", "for (k, &v) in Map.iter()"],"gen_absent":[".clone()"]}

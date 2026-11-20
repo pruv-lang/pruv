@@ -321,7 +321,10 @@ pub fn lex_into(src: &[char], tag: usize, toks: &mut Vec<Tok>) -> Result<(), Pru
                 toks.push(Tok { kind: Kind::Kw, val: v, line, col, end });
                 continue;
             }
-            let is_kw = KEYWORDS.contains(&v.as_str());
+            let map_for = v == "for" && brace_depth > 0
+                && toks.last().is_some_and(|t| t.kind == Kind::Op && matches!(t.val.as_str(), "{" | "}" | ";"))
+                && src.get(g4_skip(src, pos)) == Some(&'(');
+            let is_kw = map_for || KEYWORDS.contains(&v.as_str());
             if !is_kw && (v.starts_with("pruv_") || v.contains("__") || RUST_KEYWORDS.contains(&v.as_str())) {
                 return Err(PruvError::new(
                     "parse",

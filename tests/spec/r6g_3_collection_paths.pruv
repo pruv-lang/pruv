@@ -1,0 +1,16 @@
+// spec: R-6g-3 accept
+struct Rec { n: i64 }
+struct State { data: HashMap<String, Rec>, keys: Vec<String>, keep: i64 }
+fn clear(inout data: HashMap<String, Rec>, inout keys: Vec<String>, key: str) -> ()
+  ensures !is_some(map_lookup::<String, Rec>(data, key))
+  ensures len(keys) == 0
+{ let removed: bool = map_remove::<String, Rec>(inout data, key);
+  vec_clear::<String>(inout keys);
+}
+fn run(inout x: State, key: str) -> ()
+  ensures !is_some(map_lookup::<String, Rec>(x.data, key))
+  ensures len(x.keys) == 0
+{ let keep: i64 = x.keep;
+  clear(inout x.data, inout x.keys, key);
+  assert x.keep == keep;
+}

@@ -238,6 +238,11 @@ pub struct If { pub line: i64, pub col: i64, pub cond: Expr, pub then: Vec<Stmt>
 #[derive(Debug, Clone, PartialEq)]
 pub struct While { pub line: i64, pub col: i64, pub cond: Expr, pub invariants: Vec<Expr>, pub decreases: Expr, pub body: Vec<Stmt> }
 #[derive(Debug, Clone, PartialEq)]
+pub struct ForMap {
+    pub line: i64, pub col: i64, pub key: String, pub val: String, pub place: Expr,
+    pub invariants: Vec<Expr>, pub body: Vec<Stmt>,
+}
+#[derive(Debug, Clone, PartialEq)]
 pub struct Return { pub line: i64, pub col: i64, pub value: Option<Expr> }
 #[derive(Debug, Clone, PartialEq)]
 /// origin_code/origin_what: present only on asserts synthesized by refine.rs (verification error code and a description of the origin).
@@ -265,6 +270,7 @@ pub enum Stmt {
     IndexAssign(IndexAssign),
     If(If),
     While(While),
+    ForMap(ForMap),
     Return(Return),
     Assert(Assert),
     ExprStmt(ExprStmt),

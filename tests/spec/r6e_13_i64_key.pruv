@@ -1,0 +1,4 @@
+// spec: R-6e-13 reject
+fn bad(m: HashMap<i64, i64>) -> () {
+  for (k, v) in m {}
+}

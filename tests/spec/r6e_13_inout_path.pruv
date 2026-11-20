@@ -1,0 +1,11 @@
+// spec: R-6e-13 reject
+struct Rec { n: i64 }
+struct State { recs: HashMap<String, Rec> }
+
+fn update_map(inout m: HashMap<String, Rec>) -> () {}
+
+fn bad(inout st: State) -> () {
+  for (k, v) in st.recs {
+    update_map(inout st.recs);
+  }
+}

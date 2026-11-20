@@ -85,7 +85,7 @@ go through it), under trust_callers the pub entry is unchecked and `<entry>__pru
 from collections import namedtuple
 from vast import *
 from typeinfo import (TypeTable, is_user_type, is_array, uses_array_type, uses_str, is_collection,
-                      dependencies, is_owned_field_type, is_nested_collection_field)
+                      dependencies, is_owned_field_type, is_nested_collection_field, is_string_record_map, field_place)
 from foreign import CATALOG
 from inline_policy import PIN_INLINE, PIN_ALWAYS, inline_policy
 from check import BIT_BUILTINS
@@ -2841,7 +2841,7 @@ class Gen:
             vty = st.value.ty
             call = st.value
             if (isinstance(call, Call) and (call.name == "vec_push"
-                    or call.name == "map_insert" and is_nested_collection_field(vty))
+                    or call.name == "map_insert" and (is_nested_collection_field(vty) or is_string_record_map(vty)))
                     and call.name not in s.fmap and isinstance(call.args[0], Move)
                     and call.args[0].fields and s.unchecked_catalog()):
                 args = tuple(call.inst.get("src_args", call.inst["args"]))
@@ -2900,6 +2900,19 @@ class Gen:
                 s.emit(ind + 1, s.cost_add("1"))
             s.block(st.body, ind + 1, loop=True)
             s.emit(ind, "}")
+        elif isinstance(st, ForMap):
+            key_ty, val_ty = st.place.ty.args
+            scalar = val_ty in (I64, BOOL)
+            s.emit(ind, "for (%s, %s%s) in %s.iter() {" %
+                   (st.key, "&" if scalar else "", st.val, s.e(st.place)))
+            saved_refs, saved_vt = set(s.refs), dict(s.vt)
+            s.vt.update({st.key: key_ty, st.val: val_ty})
+            s.refs.add(st.key)
+            if not scalar:
+                s.refs.add(st.val)
+            s.block(st.body, ind + 1, loop=True)
+            s.refs, s.vt = saved_refs, saved_vt
+            s.emit(ind, "}")
         elif isinstance(st, Return) and s.small_o is not None and isinstance(st.value, Var) and st.value.name == s.small_o:
             s.emit(ind, "return %s.len();" % s.small_o)
         elif isinstance(st, Return):
@@ -2928,8 +2941,12 @@ class Gen:
                                and sc.name in MUTABLE_COLLECTION_MATCH + ("map_get",))
             ty = sc.inst["args"][-1] if collection_call else None
             mutable_map = collection_call and sc.name in MUTABLE_COLLECTION_MATCH
+            map_view = collection_call and s.is_ext(ty)
+            if collection_call and sc.name == "map_get" and is_string_record_map(sc.args[0].ty):
+                root, path = field_place(sc.args[0])
+                map_view |= bool(path and isinstance(root, Var) and root.name in s.inouts and root.name not in s.params)
             scoped = False
-            if mutable_map or collection_call and s.is_ext(ty):
+            if mutable_map or map_view:
                 from foreign_shim import inst_types
                 s.fg.record_inline_catalog(sc.name, inst_types(sc)[1])
                 place, key = sc.args
@@ -2965,7 +2982,7 @@ class Gen:
                     s.vt[b] = ty
                     if mutable_map:
                         s.inouts.add(b)
-                    if mutable_map or s.is_ext(ty):
+                    if mutable_map or map_view:
                         s.refs.add(b)
                 s.block(a.body, ind + 2)
                 s.inouts, s.refs, s.vt = saved_inouts, saved_refs, saved_vt
@@ -3206,6 +3223,9 @@ class Gen:
         if isinstance(e, BoolLit):
             return "true" if e.value else "false"
         if isinstance(e, Var):
+            if (e.name in s.refs and e.name not in s.inouts and e.ty is not None and is_user_type(e.ty)
+                    and not s.is_ext(e.ty)):
+                return "(*%s)" % e.name
             if e.name in s.inouts and not (is_array(e.ty) or is_collection(e.ty) or s.is_ext(e.ty)):
                 return "(*%s)" % e.name
             return e.name
@@ -3421,11 +3441,14 @@ class Gen:
             args = []
             for i, x in enumerate(a):
                 if isinstance(x, InoutArg):   # G5: mutable borrow / reborrow
-                    args.append(s.mut_ref(x.expr.name))
+                    root, path = field_place(x.expr)
+                    args.append("&mut " + ".".join((root.name,) + path) if path else s.mut_ref(root.name))
                 elif n in s.struct_inouts and isinstance(x, IntLit) and x.value >= 0:
                     args.append(str(x.value))
                 elif isinstance(x, Move) and is_array(x.ty):
                     args.append(s.e(x))
+                elif callee is not None and callee.params[i].type == STR and x.ty is not None and x.ty.name == "string":
+                    args.append(s.borrowed_map_key(x))
                 elif s.g6 and (isinstance(x, Move) or (x.ty is not None and is_collection(x.ty))):
                     take = isinstance(x, Move) or (callee is not None and callee.params[i].take)
                     args.append(s.e(x) if take else s.cref(x))

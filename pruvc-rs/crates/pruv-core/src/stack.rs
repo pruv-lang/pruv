@@ -54,6 +54,11 @@ fn calls_stmts(stmts: &[Stmt], out: &mut HashSet<String>) {
                 calls_expr(&x.decreases, out);
                 calls_stmts(&x.body, out);
             }
+            Stmt::ForMap(x) => {
+                calls_expr(&x.place, out);
+                for inv in &x.invariants { calls_expr(inv, out); }
+                calls_stmts(&x.body, out);
+            }
             Stmt::Assert(x) => calls_expr(&x.cond, out),
             Stmt::ExprStmt(x) => calls_expr(&x.expr, out),
             Stmt::Par(x) => { for c in &x.calls { calls_expr(c, out); } }
@@ -254,6 +259,11 @@ impl<'a> Uses<'a> {
                 self.expr(&x.cond, scope, false);
                 for inv in &x.invariants { self.expr(inv, scope, false); }
                 self.expr(&x.decreases, scope, false);
+                self.block(&x.body, scope);
+            }
+            Stmt::ForMap(x) => {
+                self.expr(&x.place, scope, false);
+                for inv in &x.invariants { self.expr(inv, scope, false); }
                 self.block(&x.body, scope);
             }
             Stmt::Assert(x) => self.expr(&x.cond, scope, false),

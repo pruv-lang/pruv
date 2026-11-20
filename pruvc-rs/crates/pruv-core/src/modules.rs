@@ -1262,6 +1262,13 @@ impl<'a> Rs<'a> {
                     self.rexpr(&mut w.decreases)?;
                     self.rstmts(&mut w.body)?;
                 }
+                Stmt::ForMap(w) => {
+                    self.rexpr(&mut w.place)?;
+                    for inv in &mut w.invariants {
+                        self.rexpr(inv)?;
+                    }
+                    self.rstmts(&mut w.body)?;
+                }
                 Stmt::Return(r) => {
                     if let Some(v) = r.value.as_mut() {
                         self.rexpr(v)?;

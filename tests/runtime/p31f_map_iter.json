@@ -1,0 +1,1 @@
+{"backends": ["rust"], "exit": 0, "flags_matrix": [[], ["--no-verify"]], "stdout_lines": ["14", "3"], "gen_contains": ["for (k, v) in st.values.iter()"], "gen_absent": [".clone()"]}

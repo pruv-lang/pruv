@@ -142,6 +142,7 @@ fn stmts_ok(stmts: &[Stmt], name: &str, write_ok: bool, fmap: &Fmap) -> bool {
                     && stmts_ok(&x.els, name, write_ok, fmap)
             }
             Stmt::While(x) => expr_ok(&x.cond, name, write_ok, fmap) && stmts_ok(&x.body, name, write_ok, fmap),
+            Stmt::ForMap(x) => expr_ok(&x.place, name, write_ok, fmap) && stmts_ok(&x.body, name, write_ok, fmap),
             Stmt::Return(x) => x.value.as_ref().map_or(true, |v| expr_ok(v, name, write_ok, fmap)),
             Stmt::ExprStmt(x) => expr_ok(&x.expr, name, write_ok, fmap),
             Stmt::Par(x) => !x.calls.iter().any(|c| mentions(c, name)),
@@ -186,6 +187,10 @@ fn code_calls(stmts: &[Stmt], out: &mut HashSet<String>) {
                 ex(&x.cond, out);
                 code_calls(&x.body, out);
             }
+            Stmt::ForMap(x) => {
+                ex(&x.place, out);
+                code_calls(&x.body, out);
+            }
             Stmt::Return(x) => {
                 if let Some(v) = &x.value {
                     ex(v, out);
@@ -212,6 +217,7 @@ fn children(st: &Stmt) -> Vec<&[Stmt]> {
     match st {
         Stmt::If(x) => vec![x.then.as_slice(), x.els.as_slice()],
         Stmt::While(x) => vec![x.body.as_slice()],
+        Stmt::ForMap(x) => vec![x.body.as_slice()],
         Stmt::Match(x) => x.arms.iter().map(|a| a.body.as_slice()).collect(),
         _ => Vec::new(),
     }
