@@ -110,14 +110,8 @@ thread_local! {
     static RUNNING: RefCell<Vec<Vec<i64>>> = const { RefCell::new(Vec::new()) };
     static RQUERIES: RefCell<Option<Vec<RunningQuery>>> = const { RefCell::new(None) };
     static RCALLS: Cell<usize> = const { Cell::new(0) };
-    static CURRENT_RUNNING: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static RUNNING_POSITION: Cell<i64> = const { Cell::new(0) };
-    static RUNNING_TEXT: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
-}
-
-/// Perf only: the next `running_count` answer as already decoded ids (the hand lane gets `Vec<String>` the same way).
-pub fn set_running_text(v: Vec<String>) {
-    RUNNING_TEXT.with(|t| *t.borrow_mut() = Some(v));
+    static CURRENT_WORDS: RefCell<Vec<i64>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Replaces the runningDelegationIds answer stream.
@@ -183,7 +177,8 @@ pub fn running_ids(k: &[i64], ks: i64, kn: i64, bk: &[i64], bs: i64, bn: i64, fx
 // Encode JavaScript UTF-16 losslessly inside a Rust String. Escape the escape
 // character itself so isolated surrogates and ordinary text remain distinct.
 pub fn encode_js_text(units: impl IntoIterator<Item = u16>) -> String {
-    let mut text = String::new();
+    let units = units.into_iter();
+    let mut text = String::with_capacity(units.size_hint().0);
     for ch in char::decode_utf16(units) {
         match ch {
             Ok('\u{e000}') => text.push_str("\u{e000}\u{e000}"),
@@ -225,30 +220,18 @@ fn packed_key(key: &str) -> Vec<i64> {
     words
 }
 
-fn read_running_answer(answer: &[i64]) -> Option<Vec<String>> {
-    let [0, count, tail @ ..] = answer else { return None };
-    let mut rest = tail;
-    let count = usize::try_from(*count).ok()?;
-    if count > rest.len() {
-        return None;
-    }
-    let mut ids = Vec::with_capacity(count);
-    for _ in 0..count {
-        let (&units, words) = rest.split_first()?;
-        let units = usize::try_from(units).ok()?;
-        let length = units.div_ceil(4);
-        let words = words.get(..length)?;
-        let mut text = Vec::with_capacity(units);
-        for i in 0..units {
-            text.push((words[i / 4] >> (48 - 16 * (i % 4))) as u16);
-        }
-        if units % 4 != 0 && (words[length - 1] as u64) << (16 * (units % 4)) != 0 {
-            return None;
-        }
-        ids.push(encode_js_text(text));
-        rest = &rest[1 + length..];
-    }
-    rest.is_empty().then_some(ids)
+/// Decode the UTF-16 units of a frame of the current answer already validated by Pruv (`pos` = first packed word).
+pub fn unit_text(pos: i64, units: i64) -> String {
+    let (pos, units) = (pos as usize, units as usize);
+    CURRENT_WORDS.with(|w| {
+        let words = &w.borrow()[pos..];
+        encode_js_text((0..units).map(|i| (words[i / 4] >> (48 - 16 * (i % 4))) as u16))
+    })
+}
+
+/// Word `i` of the current answer (0 past the end; Pruv checks bounds first).
+pub fn running_word(i: i64) -> i64 {
+    CURRENT_WORDS.with(|w| usize::try_from(i).ok().and_then(|i| w.borrow().get(i).copied()).unwrap_or(0))
 }
 
 /// Set the effect position recorded by the next typed running-delegations query.
@@ -256,49 +239,25 @@ pub fn running_position(position: i64) {
     RUNNING_POSITION.with(|p| p.set(position));
 }
 
-/// Consume one host answer and retain its individual IDs for the indexed reads.
-pub fn running_count(sid: &str, bid: &str) -> i64 {
-    if let Some(ids) = RUNNING_TEXT.with(|t| t.borrow_mut().take()) {
-        RCALLS.with(|c| c.set(c.get() + 1));
-        let n = ids.len() as i64;
-        CURRENT_RUNNING.with(|current| *current.borrow_mut() = ids);
-        return n;
-    }
+/// Consume one host answer, keep its wire words for `running_word` / `unit_text` and return their count.
+pub fn running_fetch(sid: &str, bid: &str) -> i64 {
     let index = running_calls();
     RCALLS.with(|c| c.set(index + 1));
-    let answer = RUNNING.with(|r| r.borrow_mut().get_mut(index).map(std::mem::take));
+    let answer = RUNNING.with(|r| r.borrow_mut().get_mut(index).map(std::mem::take))
+        .unwrap_or_else(|| vec![0, 0]);
     RQUERIES.with(|q| {
         if let Some(log) = q.borrow_mut().as_mut() {
             log.push(RunningQuery {
                 sid: packed_key(sid),
                 bid: packed_key(bid),
                 fxn: RUNNING_POSITION.with(Cell::get),
-                answer: answer.clone().unwrap_or_else(|| vec![0, 0]),
+                answer: answer.clone(),
             });
         }
     });
-    CURRENT_RUNNING.with(|current| {
-        let mut current = current.borrow_mut();
-        *current = Vec::new();
-        match answer.as_deref().map(read_running_answer) {
-            None => 0,
-            Some(None) => -1,
-            Some(Some(ids)) => {
-                *current = ids;
-                current.len() as i64
-            }
-        }
-    })
-}
-
-/// Move an ID from the synchronous answer into the Pruv budget record.
-pub fn running_id(_sid: &str, _bid: &str, i: i64) -> String {
-    CURRENT_RUNNING.with(|current| std::mem::take(&mut current.borrow_mut()[i as usize]))
-}
-
-// The whole id list stored by the last `running_count` call, moved out in one call (M10b typed lane).
-pub fn running_take(_sid: &str, _bid: &str) -> Vec<String> {
-    CURRENT_RUNNING.with(|current| std::mem::take(&mut *current.borrow_mut()))
+    let n = answer.len() as i64;
+    CURRENT_WORDS.with(|w| *w.borrow_mut() = answer);
+    n
 }
 
 // Packs the session key on the stack, as hand_m7_u16 does (pack_u16_into); keys past 64 words take the heap path.

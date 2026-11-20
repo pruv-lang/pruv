@@ -401,6 +401,11 @@ pub fn prepare_budget(inout st: St, packet: [u8]) -> BudgetInput ! alloc, io
 
 pub fn load(inout st: St, sid: str, take input: BudgetInput) -> Loaded ! alloc
 {
+  return load_key(inout st, string_to_str(native_key(sid)), move input);
+}
+
+pub fn load_key(inout st: St, sid: str, take input: BudgetInput) -> Loaded ! alloc
+{
   let bad: Loaded = Loaded { status: 2, fresh: false };
   if !input.valid || (input.root != 0 && (input.ticket != st.wire.prepared_ticket || input.root != st.wire.prepared_budget)) { return bad; }
   if len(st.sessions) >= 1099511627776 { return bad; }
@@ -558,7 +563,12 @@ fn ref_id(ids: Vec<String>) -> String ! alloc
 
 pub struct Session { present: bool, root: i64 }
 
-pub fn session(st: St, sid: str) -> Session
+pub fn session(st: St, sid: str) -> Session ! alloc
+{
+  return session_key(st, string_to_str(native_key(sid)));
+}
+
+pub fn session_key(st: St, sid: str) -> Session
 {
   match map_get::<String, crate::bud_tstate::Budget>(st.sessions, sid) {
     Some(b) => { return Session { present: true, root: b.metadata }; }
@@ -573,7 +583,7 @@ pub fn encode_budget(st: St, root: i64) -> [i64] ! alloc
 fn current_root(st: St, sid: str, has_sid: bool, bid: str, has_bid: bool) -> i64 ! alloc
 {
   if !has_sid || !has_bid { return 0; }
-  let view: Session = session(st, sid);
+  let view: Session = session_key(st, sid);
   if node_text_is(st.wire, find_field(st.wire, view.root, "id").id, bid) { return view.root; }
   return 0;
 }
@@ -1628,6 +1638,128 @@ pub fn decode_life(rf: [i64], arg: [i64]) -> LifeKeys ! alloc
   return LifeKeys { text: move text, bid: move packed, has_run: len(run) != 0 };
 }
 
+struct LifeCharge { done: bool, status: i64, reason: i64, ok: bool, code: i64 }
+
+// op 9 charge step. done=true means the caller returns the reply built from status/result now.
+fn life_charge(inout st: St, found: bool, sid_text: str, arg: [i64]) -> LifeCharge ! alloc, io
+{
+  let mut status: i64 = 1;
+  if found {
+    match map_get_mut::<String, crate::bud_tstate::Budget>(inout st.sessions, sid_text) {
+      Some(b) => { status = charge_budget(inout st.wire, inout b, arg); }
+      None => {}
+    }
+  }
+  if status >= 33 && status <= 36 {
+    return LifeCharge { done: false, status: status, reason: status - 32, ok: false, code: status - 32 };
+  }
+  if status <= 1 { return LifeCharge { done: true, status: 0, reason: -1, ok: true, code: 0 }; }
+  if status >= 16 && status <= 20 {
+    return LifeCharge { done: true, status: 0, reason: -1, ok: false, code: status - 16 };
+  }
+  return LifeCharge { done: true, status: status, reason: -1, ok: false, code: 1 };
+}
+
+// Explicit halt (op 9, 10) or a run event (op 4..7). Returns the reply status.
+fn life_step(inout st: St, inout out: crate::bud_tstate::Out, kind: i64, explicit: bool, open: bool,
+             sid_text: str, bid_text: str, run: str, now: i64, reason: i64, waiting: bool) -> i64 ! alloc, io
+{
+  if explicit {
+    if open {
+      let reply: crate::bud_tstate::Reply = crate::bud_tlife::explicit_halt(inout st.sessions, inout st.clock_state.clocks, inout out, sid_text, bid_text, now, reason);
+      return reply.status;
+    }
+    return 0;
+  }
+  let mut flag: i64 = 0;
+  if waiting { flag = 1; }
+  let ordinal: i64 = st.clock_state.next_clock;
+  let reply: crate::bud_tstate::Reply = crate::bud_tlife::run_event(inout st.sessions, inout st.clock_state, inout out, sid_text, bid_text, run, kind, now, flag);
+  if st.clock_state.next_clock != ordinal && len(st.clock_order) < 1099511627776 && len(st.clock_ordinals) < 1099511627776 {
+    st.clock_order = vec_push::<String>(move st.clock_order, text(bid_text));
+    st.clock_ordinals = vec_push::<i64>(move st.clock_ordinals, ordinal);
+  }
+  return reply.status;
+}
+
+// Clock wire update after the step, and its trace ticks.
+fn life_settle(inout st: St, take effects: Vec<i64>, found: bool, since: bool, halted: bool, explicit: bool,
+               op: i64, sid_text: str, id: [i64], now: i64) -> Vec<i64> ! alloc, io
+{
+  let mut settled: bool = false;
+  let mut began: bool = false;
+  let mut sync_fire: bool = false;
+  let mut sync_start: [i64] = crate::ent_u16::empty();
+  if found {
+    match map_get_mut::<String, crate::bud_tstate::Budget>(inout st.sessions, sid_text) {
+      Some(b) => {
+        began = b.since_kind == 2;
+        settled = since && b.since_kind != -1 && (!began || op == 7);
+        sync_fire = halted && !explicit && op != 7 && !since;
+        if sync_fire && observing() {
+          sync_start = crate::bud_vwords::put(budget_words(st.wire, b), "activeSince", crate::bud_vwords::iso(now));
+        }
+        if settled || began || sync_fire {
+          let a: [i64] = after_clock(st.wire, b, settled || sync_fire, began, now);
+          let updated: i64 = replace_wire(inout st.wire, b.metadata, a);
+          b.metadata = updated;
+        }
+      }
+      None => {}
+    }
+  }
+  let mut fx: Vec<i64> = move effects;
+  if settled { fx = tick(move fx, now); }
+  if began { fx = tick(move fx, now); }
+  if sync_fire {
+    fx = tick(move fx, now);
+    if len(sync_start) > 0 { observe_find(len(fx), sync_start); }
+    fx = crate::bud_effect::value(move fx, 1, id);
+    fx = tick(move fx, now);
+  }
+  return move fx;
+}
+
+// Timer effects (tag 12) of the typed Out in the M12 trace ABI.
+fn life_timers(take effects: Vec<i64>, out: crate::bud_tstate::Out, bid: [i64], rf: [i64]) -> Vec<i64> ! alloc
+{
+  let mut fx: Vec<i64> = move effects;
+  let mut i: i64 = 0;
+  while i < len(out.fx)
+    invariant 0 <= i && i <= len(out.fx)
+    decreases len(out.fx) - i
+  {
+    let e: crate::bud_tstate::Effect = vec_get::<crate::bud_tstate::Effect>(out.fx, i);
+    if e.tag == 12 {
+      fx = crate::bud_effect::push(move fx, 12, cat(bid, crate::ent_u16::one(b01(timer_budget_first(rf)))), e.a, e.b);
+    }
+    i = i + 1;
+  }
+  return move fx;
+}
+
+// Halt trace: the implicit halt snapshots, then the halt wire.
+fn life_halted(inout st: St, take effects: Vec<i64>, explicit: bool, sid_text: str, sid: [i64], owner: [i64],
+               bid: [i64], rf: [i64], now: i64, reason: i64) -> Vec<i64> ! alloc, io
+{
+  let mut fx: Vec<i64> = move effects;
+  let mut r: i64 = reason;
+  if !explicit {
+    r = 0;
+    if observing() {
+      let snapshot: [i64] = session_words(st, sid_text);
+      observe_find(len(fx), crate::ent_u16::slice(snapshot, 1, len(snapshot)));
+    }
+    fx = crate::bud_effect::value(move fx, 1, owner);
+    if observing() {
+      let snapshot: [i64] = session_words(st, sid_text);
+      observe_find(len(fx), crate::ent_u16::slice(snapshot, 1, len(snapshot)));
+    }
+    fx = crate::bud_effect::value(move fx, 1, owner);
+  }
+  return halt_wire(inout st, sid_text, sid, bid, rf, now, r, move fx);
+}
+
 pub fn life(inout st: St, op: i64, rf: [i64], sid: [i64], sid_text: str, arg: [i64], now: i64,
             bid: [i64], bid_text: str, run: str, has_run: bool) -> [i64] ! alloc, io
 {
@@ -1670,55 +1802,26 @@ pub fn life(inout st: St, op: i64, rf: [i64], sid: [i64], sid_text: str, arg: [i
     if !has_run { return words_array(crate::bud_effect::reply(2, false, undef, move effects)); }
     effects = crate::bud_effect::value(move effects, 1, id);
   }
-
-  let mut status: i64 = 0;
   if op == 9 {
-    status = 1;
-    if found {
-      match map_get_mut::<String, crate::bud_tstate::Budget>(inout st.sessions, sid_text) {
-        Some(b) => { status = charge_budget(inout st.wire, inout b, arg); }
-        None => {}
-      }
-    }
-    if status >= 33 && status <= 36 {
-      reason = status - 32;
-      result = charged(false, reason);
-    } else {
-      if status <= 1 { return words_array(crate::bud_effect::reply(0, false, charged(true, 0), move effects)); }
-      if status >= 16 && status <= 20 {
-        return words_array(crate::bud_effect::reply(0, false, charged(false, status - 16), move effects));
-      }
-      return words_array(crate::bud_effect::reply(status, false, charged(false, 1), move effects));
-    }
+    let c: LifeCharge = life_charge(inout st, found, sid_text, arg);
+    if c.done { return words_array(crate::bud_effect::reply(c.status, false, charged(c.ok, c.code), move effects)); }
+    reason = c.reason;
+    result = charged(c.ok, c.code);
   }
 
-  let mut out: crate::bud_tstate::Out = crate::bud_tstate::Out { fx: vec_new::<crate::bud_tstate::Effect>() };
   let explicit: bool = op == 9 || op == 10;
   if explicit {
     effects = crate::bud_effect::value(move effects, 1, owner);
     effects = crate::bud_effect::value(move effects, 1, owner);
-    if open {
-      let reply: crate::bud_tstate::Reply = crate::bud_tlife::explicit_halt(inout st.sessions, inout st.clock_state.clocks, inout out, sid_text, bid_text, now, reason);
-      status = reply.status;
-    } else { status = 0; }
   } else {
-    let mut flag: i64 = 0;
-    if waiting { flag = 1; }
-    let ordinal: i64 = st.clock_state.next_clock;
     if op == 4 && (len(st.clock_order) >= 1099511627776 || len(st.clock_ordinals) >= 1099511627776) {
       return words_array(crate::bud_effect::reply(2, false, undef, move effects));
     }
-    let reply: crate::bud_tstate::Reply = crate::bud_tlife::run_event(inout st.sessions, inout st.clock_state, inout out, sid_text, bid_text, run, op + 4, now, flag);
-    if st.clock_state.next_clock != ordinal && len(st.clock_order) < 1099511627776 && len(st.clock_ordinals) < 1099511627776 {
-      st.clock_order = vec_push::<String>(move st.clock_order, text(bid_text));
-      st.clock_ordinals = vec_push::<i64>(move st.clock_ordinals, ordinal);
-    }
-    status = reply.status;
   }
+  let mut out: crate::bud_tstate::Out = crate::bud_tstate::Out { fx: vec_new::<crate::bud_tstate::Effect>() };
+  let status: i64 = life_step(inout st, inout out, op + 4, explicit, open, sid_text, bid_text, run, now, reason, waiting);
 
   let mut halted: bool = false;
-  let mut settled: bool = false;
-  let mut began: bool = false;
   // Expand typed timer and halt effects to the existing M12 trace ABI.
   let mut i: i64 = 0;
   while i < len(out.fx)
@@ -1730,60 +1833,10 @@ pub fn life(inout st: St, op: i64, rf: [i64], sid: [i64], sid_text: str, arg: [i
     if e.tag == 13 || e.tag == 14 { effects = crate::bud_effect::value(move effects, e.tag, bid); }
     i = i + 1;
   }
-  let mut sync_fire: bool = false;
-  let mut sync_start: [i64] = crate::ent_u16::empty();
-  if found {
-    match map_get_mut::<String, crate::bud_tstate::Budget>(inout st.sessions, sid_text) {
-      Some(b) => {
-        began = b.since_kind == 2;
-        settled = v.since && b.since_kind != -1 && (!began || op == 7);
-        sync_fire = halted && !explicit && op != 7 && !v.since;
-        if sync_fire && observing() {
-          sync_start = crate::bud_vwords::put(budget_words(st.wire, b), "activeSince", crate::bud_vwords::iso(now));
-        }
-        if settled || began || sync_fire {
-          let a: [i64] = after_clock(st.wire, b, settled || sync_fire, began, now);
-          let updated: i64 = replace_wire(inout st.wire, b.metadata, a);
-          b.metadata = updated;
-        }
-      }
-      None => {}
-    }
-  }
-  if settled { effects = tick(move effects, now); }
-  if began { effects = tick(move effects, now); }
-  if sync_fire {
-    effects = tick(move effects, now);
-    if len(sync_start) > 0 { observe_find(len(effects), sync_start); }
-    effects = crate::bud_effect::value(move effects, 1, id);
-    effects = tick(move effects, now);
-  }
-  i = 0;
-  while i < len(out.fx)
-    invariant 0 <= i && i <= len(out.fx)
-    decreases len(out.fx) - i
-  {
-    let e: crate::bud_tstate::Effect = vec_get::<crate::bud_tstate::Effect>(out.fx, i);
-    if e.tag == 12 {
-      effects = crate::bud_effect::push(move effects, 12, cat(bid, crate::ent_u16::one(b01(timer_budget_first(rf)))), e.a, e.b);
-    }
-    i = i + 1;
-  }
+  effects = life_settle(inout st, move effects, found, v.since, halted, explicit, op, sid_text, id, now);
+  effects = life_timers(move effects, out, bid, rf);
   if halted {
-    if !explicit {
-      reason = 0;
-      if observing() {
-        let snapshot: [i64] = session_words(st, sid_text);
-        observe_find(len(effects), crate::ent_u16::slice(snapshot, 1, len(snapshot)));
-      }
-      effects = crate::bud_effect::value(move effects, 1, owner);
-      if observing() {
-        let snapshot: [i64] = session_words(st, sid_text);
-        observe_find(len(effects), crate::ent_u16::slice(snapshot, 1, len(snapshot)));
-      }
-      effects = crate::bud_effect::value(move effects, 1, owner);
-    }
-    effects = halt_wire(inout st, sid_text, sid, bid, rf, now, reason, move effects);
+    effects = life_halted(inout st, move effects, explicit, sid_text, sid, owner, bid, rf, now, reason);
   }
   return words_array(crate::bud_effect::reply(status, false, result, move effects));
 }
@@ -1796,29 +1849,30 @@ pub fn fire_timer(inout st: St, sid: [i64], sid_text: str, bid: [i64], budget_fi
 }
 
 
-// Native budget IDs and V/JB IDs share the same lossless key encoding.
+// Native session and budget IDs use the same unit encoding as V/JB IDs.
 pub fn query(st: St, op: i64, sid: str, has_sid: bool, bid: str, has_bid: bool) -> QueryResult ! alloc
 {
-  return query_decoded(st, op, sid, has_sid, string_to_str(native_key(bid)), has_bid);
+  return query_decoded(st, op, string_to_str(native_key(sid)), has_sid, string_to_str(native_key(bid)), has_bid);
 }
 
 pub fn set_card(inout st: St, sid: str, has_sid: bool, bid: str, has_bid: bool,
                 card: [u8], lang: [u8], by: [u8], now: i64) -> CardResult ! alloc
 {
-  return set_card_decoded(inout st, sid, has_sid, string_to_str(native_key(bid)), has_bid, card, lang, by, now);
+  return set_card_decoded(inout st, string_to_str(native_key(sid)), has_sid, string_to_str(native_key(bid)), has_bid, card, lang, by, now);
 }
 
 pub fn auto(inout st: St, op: i64, sid: str, has_sid: bool, bid: str, has_bid: bool,
             has_ref: bool, caller: str, has_caller: bool, packet: [u8]) -> AutoResult ! alloc
 {
-  return auto_decoded(inout st, op, sid, has_sid, string_to_str(native_key(bid)), has_bid, has_ref, caller, has_caller, packet);
+  return auto_decoded(inout st, op, string_to_str(native_key(sid)), has_sid, string_to_str(native_key(bid)), has_bid,
+                      has_ref, string_to_str(native_key(caller)), has_caller, packet);
 }
 
-// Compatibility calls for the word protocol used by the M12 fixture driver.
+// The M12 fixture driver passes decoded session keys with its word packets.
 pub fn load_packet(inout st: St, sid: str, blob: [i64]) -> Loaded ! alloc, io
 {
   let input: BudgetInput = decode_budget(inout st, blob);
-  return load(inout st, sid, move input);
+  return load_key(inout st, sid, move input);
 }
 
 pub fn query_packet(st: St, op: i64, rf: [i64], sid: str, has_sid: bool) -> QueryResult ! alloc

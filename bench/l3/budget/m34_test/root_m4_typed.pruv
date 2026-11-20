@@ -379,8 +379,9 @@ pub fn waiting_input(fields: [i64]) -> WaitingInput {
   return WaitingInput::Valid(fields[0] == 1);
 }
 
-pub fn blob_input(declared: i64, blob: [i64]) -> bool {
-  return declared == len(blob);
+pub fn blob_frame(rest: [i64]) -> bool {
+  if len(rest) < 1 { return false; }
+  return rest[0] == len(rest) - 1;
 }
 
 pub fn run_remove(inout st: St, key: str, run: str) -> Reply ! alloc {

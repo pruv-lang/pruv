@@ -1,0 +1,12 @@
+// Timer delay rule of the budget host (D75). The host passes the delay as raw IEEE 754 bits of an f64 (num = false
+// when the delay is not a number). A delay in [1, 2147483647] is kept, anything else (below 1, NaN, -0, too large,
+// non-number) becomes 1. For non-negative doubles the bit order is the numeric order; negative doubles have negative
+// bits and fall below the lower bound.
+pub fn delay_bits(num: bool, bits: i64) -> i64
+  ensures result == bits || result == 4607182418800017408
+{
+  if num && bits >= 4607182418800017408 && bits <= 4746794007244308480 {
+    return bits;
+  }
+  return 4607182418800017408;
+}

@@ -722,6 +722,11 @@ def run_q(args, cases_f, oracle_f):
     if not getattr(args, "typed", False):
         from lifecycle_controls import check_grow
         check_grow(exe, m10=True)
+    else:
+        r = subprocess.run([exe, "running"], capture_output=True, text=True)
+        if r.returncode != 0:
+            sys.exit("running answer admission failed:\n" + r.stderr[-3000:])
+        print(r.stdout.strip())
     cases = [json.loads(l) for l in open(cases_f)]
     oracle = {}
     for l in open(oracle_f):
