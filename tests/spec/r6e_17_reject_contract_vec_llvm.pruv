@@ -1,0 +1,4 @@
+// spec: R-6e-17 reject
+fn empty(a: [i64]) -> bool { return len(a) == 0; }
+
+fn exam(v: Vec<i64>) -> () requires empty(v) {}

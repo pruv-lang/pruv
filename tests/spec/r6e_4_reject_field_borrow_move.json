@@ -1,0 +1,1 @@
+{"stage": "type", "code": "foreign_borrow", "out_contains": ["borrowed and moved in one call"]}

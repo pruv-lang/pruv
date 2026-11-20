@@ -1,0 +1,1 @@
+{"flags":["--no-verify"],"gen_contains": ["fn ext(n: i64) -> i64", "*n = ext((*n));"], "gen_absent": ["((*n) as i128) >= 0i128)) { pruv_g6_req"]}

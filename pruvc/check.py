@@ -1424,7 +1424,7 @@ class Checker:
             for arg in c.args:
                 if isinstance(arg, InoutArg) and isinstance(arg.expr, Var):
                     w.setdefault(arg.expr.name, arg)
-                elif isinstance(arg, Var) and arg.ty is not None and is_array(arg.ty):
+                elif isinstance(arg, Var):
                     r.setdefault(arg.name, arg)
             sets.append((w, r))
         for j in range(1, len(calls)):
@@ -1442,7 +1442,7 @@ class Checker:
 
     def par_alias(s, node, name, j, i, mine, theirs):
         terr(node, "parallel_alias", "branch %d %s `%s`, which branch %d %s" % (j + 1, mine, name, i + 1, theirs),
-             "use separate arrays for the two branches, or call the helpers one after another")
+             "use separate bindings for the two branches, or call the helpers one after another")
 
     # transitive eligibility summary (G7_SPEC 4.2): per function, from the typed bodies; foreign and catalog leaves kept
     def par_info(s, f, cache):
@@ -2513,6 +2513,10 @@ class Checker:
         if c and f.effects:
             terr(e, "effect_in_contract", "function %s has effects; not allowed in contracts" % n)
         if c:
+            # Contract expansion can erase the call before backend validation.
+            if getattr(s.prog, "contract_vec_slice", None) is None and any(
+                    is_vec_slice_arg(arg.ty, substitute(p.type, m)) for arg, p in zip(a, f.params)):
+                s.prog.contract_vec_slice = (e.line, e.col, getattr(s.f, "file", None))
             if s.ckind == "cost":
                 terr(e, "call_in_contract", "calling functions in contracts is not supported in v0.1",
                      "inline the property")

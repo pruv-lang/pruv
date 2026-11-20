@@ -676,7 +676,8 @@ class ForeignGen:
         g = s.g
         s.op = name
         disp = getattr(f, "disp", name)     # G4 A2: messages name the source identity, the helper keeps its stem
-        saved = (g.params, g.vt, g.cp, g.bound, g.tmp, g.borrowed)
+        saved = (g.params, g.vt, g.cp, g.bound, g.tmp, g.borrowed, g.inouts)
+        g.inouts = {p.name for p in f.params if p.mode == "inout"}     # not the caller's (R-6g-4 deref)
         g.params = set(p.name for p in f.params) | {"result"}
         g.vt = dict((p.name, p.type) for p in f.params)
         g.cp, g.bound, g.tmp, g.borrowed = None, [], 0, set()
@@ -719,7 +720,7 @@ class ForeignGen:
             ps = ", ".join("%s: %s" % (p.name, rty(p.type, True)) for p in f.params)
             text = s._fn_trusted(name, ps, None if f.ret == UNIT else rt, body, disp, checks > 0)
         finally:
-            g.params, g.vt, g.cp, g.bound, g.tmp, g.borrowed = saved
+            g.params, g.vt, g.cp, g.bound, g.tmp, g.borrowed, g.inouts = saved
         s.items[name] = text
         return name
 

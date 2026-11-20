@@ -1037,6 +1037,7 @@ impl<'a> Mono<'a> {
             g9: prog.g9.as_ref().map(|m| self.g9_meta(m)),
             explicit,
             uses_inout: prog.uses_inout,
+            contract_vec_slice: prog.contract_vec_slice,
             // P06: raw entry visibility of the manifest (applied by codegen in P09)
             raw_entries: prog.raw_entries.clone(),
             // P10H: program package name (prefix of every global C symbol)

@@ -702,7 +702,8 @@ fn tree_count(t: Tree) -> i64
   function. The place may be a local, parameter, binder or field path. This conversion is unavailable
   for `take` or `inout` parameters, trusted Rust calls and positions other than call arguments.
   Rust passes `place.as_slice()` without allocating or copying. The verifier uses the vector's existing
-  length and contents. This conversion requires the Rust backend (`codegen/unsupported_type`).
+  length and contents. A call that borrows a field of a vector-bearing binding cannot also move
+  that binding (`type/foreign_move`). This conversion requires the Rust backend even in contracts (`codegen/unsupported_type`).
 - **Values, not pointers.** Recursive and buffer-bearing values are independent: copying one deep-copies everything,
   and changing a copy never changes the original. Parameters, field reads and `match` bindings are read-only views
   and do not allocate. Putting an existing value into an owning place (`let`, assignment, constructor field,
@@ -986,8 +987,8 @@ Each branch must call an ordinary Pruv function returning `()`. Arguments are
 binding names, integer/bool literals, or `inout name`; bind calculations first.
 Boundary types are `i64`, `bool`, primitive arrays (`[i64]`, `[u8]`, `[bool]`),
 and supported concrete `Element` specializations. Arrays are borrowed, never
-moved or copied. Every written array must be disjoint from every other branch's
-read or write arrays; immutable inputs may repeat. These rules apply even with
+moved or copied. A binding passed `inout` by one branch may not be read or written by another
+branch; read-only inputs may repeat. These rules apply even with
 `--no-verify --trust-callers`.
 
 The entire reachable branch call graph may use only the `alloc` effect, with no
@@ -1811,7 +1812,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/old_argument` | type | `old` applied to anything but one `inout` parameter |
 | `type/old_context` | type | `old` outside `ensures`, invariants and asserts |
 | `type/opaque_signature` | type | an `opaque fn` that is not a bool-valued function (R-6o-1) |
-| `type/parallel_alias` | type | two `par` branches share an array |
+| `type/parallel_alias` | type | one `par` branch writes a binding that another reads or writes |
 | `type/parallel_argument` | type | a `par` branch argument of a form or type that cannot cross the branch |
 | `type/parallel_arity` | type | a `par` group with fewer than two calls |
 | `type/parallel_call` | type | a `par` branch that is not a call to a Pruv function |

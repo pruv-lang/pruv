@@ -370,6 +370,8 @@ pub struct Program {
     pub g9: Option<G9Meta>,
     pub explicit: Option<Explicit>,
     pub uses_inout: Option<bool>,
+    /// Source position of a vector-to-slice call in a contract.
+    pub contract_vec_slice: Option<(i64, i64)>,
     /// P06: the manifest's `raw_entries` ("crate" or "unsafe"; None = host entries stay `pub fn`), applied in P09
     pub raw_entries: Option<String>,
     /// P10H: the manifest's program package name (Python `Program.pkg_name`); prefix `<pkg>__` of every global C symbol

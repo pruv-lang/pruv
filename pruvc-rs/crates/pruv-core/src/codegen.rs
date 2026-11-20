@@ -1845,7 +1845,7 @@ impl<'a> Gen<'a> {
         self.cost = !self.verified && f.cost.is_some();
         if self.cost {
             let args = join_map(&f.params, ", ", |p| {
-                if self.take_arrays.contains(&p.name) { format!("&{}", p.name) } else { p.name.clone() }
+                if self.take_arrays.contains(&p.name) || p.take && p.ty == "string" { format!("&{}", p.name) } else { p.name.clone() }
             });
             self.emit(1, &format!("let pruv_cost: i128 = {}__pruv_cost({});", f.name, args));
             self.emit(1, "let mut pruv_spent: u128 = 0;");
@@ -1951,7 +1951,7 @@ impl<'a> Gen<'a> {
 
     fn cost_call(&self, name: &str, args: &[String]) -> String {
         let args: Vec<_> = self.fmap[name].params.iter().zip(args).map(|(p, arg)| {
-            if p.take && is_array_name(&p.ty) { format!("&{arg}") } else { arg.clone() }
+            if p.take && (is_array_name(&p.ty) || p.ty == "string") { format!("&{arg}") } else { arg.clone() }
         }).collect();
         format!("let pruv_units = {}__pruv_cost({}); if pruv_units < 0 {{ panic!(\"pruv: cost exceeded\"); }} {}",
             name, args.join(", "), Self::cost_add("(pruv_units as u128).checked_add(1).unwrap_or_else(|| panic!(\"pruv: cost exceeded\"))"))
@@ -2054,7 +2054,8 @@ impl<'a> Gen<'a> {
             ));
         }
         // T0 also applies under trust_callers. The same-crate adapter owns it in raw_entries = "crate".
-        let guard = if is_pub && self.raw.as_deref() != Some("crate") { len_guard(f, self.fmarks.get(&f.name).is_some_and(|m| m.host_entry)) } else { Vec::new() };
+        let host_entry = self.fmarks.get(&f.name).is_some_and(|m| m.host_entry);
+        let guard = if is_pub && self.raw.as_deref() != Some("crate") { len_guard(f, host_entry) } else { Vec::new() };
         for line in &guard {
             self.emit(1, line);
         }
@@ -2096,7 +2097,7 @@ impl<'a> Gen<'a> {
         });
         self.emit(1, &format!("{}({})", body_name, args));
         if self.proven_entries && !guard.is_empty() {
-            if let Some(mut twin) = ProvenEntry::new(f, param_types, vis, name, ret, header) {
+            if let Some(mut twin) = ProvenEntry::new(f, param_types, vis, name, ret, header, host_entry) {
                 twin.body.extend_from_slice(&self.out[body_start..]);
                 self.proven_items.push(twin);
             }
@@ -2498,10 +2499,15 @@ impl<'a> Gen<'a> {
                 }
                 let t = x.ty.as_deref().unwrap_or("i64");
                 let tn = key_name(t);
+                let name = if self.inouts.contains(&x.name) && matches!(tn, "i64" | "bool") {
+                    format!("(*{})", x.name)
+                } else {
+                    x.name.clone()
+                };
                 if tn == "i64" || tn == "option" || tn == "result" || is_user_key(t) {
-                    return try_conv(t, &x.name);
+                    return try_conv(t, &name);
                 }
-                Ok(x.name.clone())
+                Ok(name)
             }
             Expr::Unary(x) => {
                 if x.op == "!" {
@@ -4204,7 +4210,11 @@ impl<'a> Gen<'a> {
         let saved_bound = std::mem::take(&mut self.bound);
         let saved_tmp = std::mem::replace(&mut self.tmp, 0);
         let saved_borrowed = std::mem::take(&mut self.borrowed);
+        // not the caller's inout names (R-6g-4 deref)
+        let new_inouts: HashSet<String> = f.params.iter().filter(|p| p.mode_pos.is_some()).map(|p| p.name.clone()).collect();
+        let saved_inouts = std::mem::replace(&mut self.inouts, new_inouts);
         let res = self.trusted_text(f);
+        self.inouts = saved_inouts;
         self.params = saved_params;
         self.vars = saved_vars;
         self.cp = saved_cp;
@@ -4737,7 +4747,7 @@ impl<'a> Gen<'a> {
                         let ty = v.ty.as_deref().unwrap_or("");
                         args.push(if !path.is_empty() {
                             format!("&mut {}.{}", v.name, path.join("."))
-                        } else if !GType::from_key(ty).is_array() && self.inouts.contains(&v.name) {
+                        } else if !self.cost && !GType::from_key(ty).is_array() && self.inouts.contains(&v.name) {
                             v.name.clone()
                         } else {
                             self.mut_ref(&v.name)
@@ -4993,7 +5003,7 @@ fn gen_rust_concrete_core(
         return Err(GenError::Msg(format!("unsupported_type: {}", e.message)));
     }
     if prog.raw_entries.as_deref() == Some("c") {
-        if let Some(e) = crate::bindings::struct_inout_abi_error(prog, true) {
+        if let Some(e) = crate::bindings::struct_inout_abi_error(prog, true, None) {
             return Err(GenError::Diag(e));
         }
         if let Some(explicit) = &prog.explicit {
@@ -5204,8 +5214,8 @@ struct ProvenEntry {
 }
 
 impl ProvenEntry {
-    fn new(f: &Function, param_types: &[String], vis: &str, name: &str, ret: &str, header: String) -> Option<Self> {
-        let checked = len_params(f, false);
+    fn new(f: &Function, param_types: &[String], vis: &str, name: &str, ret: &str, header: String, host_entry: bool) -> Option<Self> {
+        let checked = len_params(f, host_entry);
         let mut params = Vec::new();
         let mut body = Vec::new();
         let mut has_str = false;
@@ -5585,7 +5595,7 @@ mod tests {
             foreign: None,
             cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, pred: false, attribute: None,
         };
-        Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None, pkg_name: None }
+        Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None }
     }
 
     #[test]
@@ -5636,7 +5646,7 @@ mod tests {
             foreign: None,
             cost: None, decreases: None, small_bound: None, x_auto: None, opaque: false, pred: false, attribute: None,
         };
-        Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None, pkg_name: None }
+        Program { functions: vec![f], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None }
     }
 
     // L3-10: eq_range
@@ -5755,7 +5765,7 @@ mod tests {
                 Stmt::Return(Return { line: 1, col: 1, value: Some(call("len", vec![var("r", "array")], "i64")) }),
             ],
         );
-        Program { functions: vec![mk, g], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, raw_entries: None, pkg_name: None }
+        Program { functions: vec![mk, g], types: vec![], refined: false, g9: None, explicit: None, uses_inout: None, contract_vec_slice: None, raw_entries: None, pkg_name: None }
     }
 
     #[test]

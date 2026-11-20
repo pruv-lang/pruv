@@ -367,6 +367,7 @@ struct Checker {
     x_busy: HashSet<String>,
     /// set by `call` on a contract call: the expansion that replaces the Call node
     x_pending: Option<Expr>,
+    contract_vec_slice: Option<(i64, i64)>,
     /// G5: identity of the call allowed at the statement boundary of the statement being checked
     boundary: Option<usize>,
     /// G5 A0: parameter names of the function being checked
@@ -387,6 +388,7 @@ pub fn check_explicit(
     c.explicit = true;
     c.host_entry = g4.fn_meta.iter().map(|m| m.host_entry).collect();
     c.run(prog)?;
+    prog.contract_vec_slice = c.contract_vec_slice;
     g4.remove_preds(&prog.functions);
     prog.functions.retain(|f| !f.pred);
     Ok(c.tt)
@@ -402,6 +404,7 @@ pub fn check_with_externs(prog: &mut Program, externs: &[String]) -> Result<Type
     let mut c = Checker::new(prog, externs, &[])?;
     prog.uses_inout = Some(c.uses_inout); // G5 A0: lets the staging guard skip its walk for inout-free programs
     c.run(prog)?;
+    prog.contract_vec_slice = c.contract_vec_slice;
     prog.functions.retain(|f| !f.pred);
     Ok(c.tt)
 }
@@ -464,7 +467,7 @@ pub(crate) fn field_place(mut e: &Expr) -> (&Expr, Vec<String>) {
     (e, path)
 }
 
-fn mentions(e: &Expr, name: &str) -> bool {
+pub(crate) fn mentions(e: &Expr, name: &str) -> bool {
     match e {
         Expr::Var(x) if x.name == name => return true,
         Expr::Move(x) if x.name == name => return true,
@@ -660,6 +663,7 @@ impl Checker {
             x_memo: HashMap::new(),
             x_busy: HashSet::new(),
             x_pending: None,
+            contract_vec_slice: None,
         })
     }
 
@@ -2793,7 +2797,7 @@ impl Checker {
                                 w.push((&v.name, a));
                             }
                         },
-                        Expr::Var(v) if v.ty.as_ref().map_or(false, |k| GType::from_key(k).is_array()) => {
+                        Expr::Var(v) => {
                             if !r.iter().any(|(n, _)| *n == v.name) {
                                 r.push((&v.name, a));
                             }
@@ -2826,7 +2830,7 @@ impl Checker {
     fn par_alias(node: &Expr, name: &str, j: usize, i: usize, mine: &str, theirs: &str) -> PruvError {
         terr(node.line(), node.col(), "parallel_alias",
             format!("branch {} {} `{}`, which branch {} {}", j + 1, mine, name, i + 1, theirs),
-            "use separate arrays for the two branches, or call the helpers one after another")
+            "use separate bindings for the two branches, or call the helpers one after another")
     }
 
     fn check_par_eligibility(&self, functions: &[Function]) -> Res<()> {
@@ -4900,6 +4904,12 @@ impl Checker {
             ));
         }
         if c {
+            // Contract expansion can erase the call before backend validation.
+            if self.contract_vec_slice.is_none() && e.args.iter().zip(&f.params).any(|(arg, p)| {
+                expr_ty(arg).as_deref().is_some_and(|ty| key_is_vec_slice_arg(ty, &substitute(p, &m).to_key()))
+            }) {
+                self.contract_vec_slice = Some((line, col));
+            }
             if self.ckind == "cost" {
                 return Err(terr(
                     line,

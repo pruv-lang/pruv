@@ -1,0 +1,10 @@
+// spec: R-6g-4 accept
+fn f(inout n: i64) -> () requires n >= 0 {
+  n = 1;
+}
+
+fn check() -> i64 {
+  let mut n: i64 = 0;
+  f(inout n);
+  return n;
+}

@@ -1,0 +1,11 @@
+// spec: R-6g-4 reject
+fn set_n(inout n: i64) -> () { n = 1; }
+fn read_n(n: i64) -> () {}
+
+fn check() -> () {
+  let mut n: i64 = 0;
+  par {
+    set_n(inout n);
+    read_n(n);
+  }
+}

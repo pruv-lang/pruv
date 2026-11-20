@@ -5484,6 +5484,10 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
                             "host entry %s returns a Vec, which has no C ABI" % getattr(f, "disp", f.name),
                             "use the Rust backend",
                             file=getattr(f, "file", None))
+    if getattr(prog, "contract_vec_slice", None) is not None:
+        line, col, file = prog.contract_vec_slice
+        raise PruvError("codegen", line, col, "unsupported_type",
+                        "a borrowed vector slice argument needs the Rust backend", "use the Rust backend", file=file)
     if plan is None and (first_g3_use(prog) is not None or prog.explicit):   # G4 A3: explicit mode names via mono
         from mono import specialize
         plan = specialize(prog)

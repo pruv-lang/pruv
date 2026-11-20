@@ -1,0 +1,9 @@
+// spec: R-6e-4 reject
+struct Row { n: i64, v: Vec<i64> }
+
+fn both(a: [i64], take row: Row) -> i64 { return len(a) + row.n; }
+
+fn check() -> i64 ! alloc {
+  let row: Row = Row { n: 0, v: vec_new::<i64>() };
+  return both(row.v, move row);
+}

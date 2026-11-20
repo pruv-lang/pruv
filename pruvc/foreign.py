@@ -352,12 +352,14 @@ class _Ownership:
         s.funcs = funcs
         s.types = types
         s.bor = set()
+        s.arm_bor = []   # binders of the enclosing user-enum arms (Rust port arm_bor)
         s.track = None   # name -> "move" | "borrow" of the outermost call being checked (shared by nested calls)
         s.proc = {}      # G10 A0: must-consume bindings, name -> "Process" | "Socket" | "Listener"; never File etc.
         s.decl = {}      # name -> the Let that declared it (location of a scope-end proc_unconsumed / net_unconsumed)
 
     def run(s, f):
-        s.bor = set(p.name for p in f.params if is_collection(p.type) and not p.take)
+        s.bor = {p.name for p in f.params
+                 if not p.take and (is_collection(p.type) or is_nongeneric_struct(p.type, s.types))}
         s.proc = dict((p.name, _must_kind(p.type)) for p in f.params if p.take and _must_kind(p.type) is not None)
         st = s.block(f.body, dict((p.name, "live") for p in f.params if p.take))
         if st is not None:     # fallthrough: a live take must-consume parameter is a lost duty
@@ -453,6 +455,8 @@ class _Ownership:
             for a in x.arms:
                 borrowed = s.arm_borrowed(a)
                 s.bor.update(borrowed)
+                views = s.arm_views(a)
+                s.arm_bor.extend(views)
                 inner = dict(st)
                 if map_take:
                     for b in a.binders:
@@ -463,6 +467,7 @@ class _Ownership:
                     for b in a.binders:
                         r.pop(b)
                 s.bor.difference_update(borrowed)
+                del s.arm_bor[len(s.arm_bor) - len(views):]
                 out = r if first else _join(out, r)
                 first = False
             return out
@@ -502,9 +507,12 @@ class _Ownership:
                 for a in x.arms:
                     borrowed = s.arm_borrowed(a)
                     s.bor.update(borrowed)
+                    views = s.arm_views(a)
+                    s.arm_bor.extend(views)
                     for stmt in a.body:
                         s.dead_stmt(stmt)
                     s.bor.difference_update(borrowed)
+                    del s.arm_bor[len(s.arm_bor) - len(views):]
                 return
             for body in ((x.then, x.els) if isinstance(x, If) else (x.body,)):
                 for stmt in body:
@@ -514,11 +522,16 @@ class _Ownership:
         if isinstance(e, Move) and not owned:   # R03L: unreachable code keeps the consuming-position rule
             _err(e, "foreign_move", "move only where ownership is consumed",
                  "use move for a take argument, a let initializer, an assignment or return")
+        if isinstance(e, Move):
+            # Check the operand without carrying liveness across unreachable statements.
+            live = {} if e.name in s.bor or e.name in s.arm_bor else {e.name: "live"}
+            s.move(e, live, True, None)
         if owned:
             s.check_field_alias(e)
-            if isinstance(e, Var) and is_collection(e.ty) and e.name in s.bor:
+            if isinstance(e, Var) and is_collection(e.ty) and (e.name in s.bor or e.name in s.arm_bor):
                 _err(e, "foreign_borrow", "borrowed alias", "%s is a read parameter and cannot be aliased" % e.name)
         if isinstance(e, Call):
+            s.check_call_move_alias(e)
             for arg, take in zip(e.args, s.takes(e)):
                 s.dead_expr(arg, take)
         else:
@@ -529,6 +542,10 @@ class _Ownership:
     def check_field_alias(e):
         if isinstance(e, (FieldAccess, VariantField)) and is_collection(e.ty):
             _err(e, "foreign_borrow", "borrowed alias", "the field is a read view and cannot be aliased")
+
+    def arm_views(s, a):
+        """every binder of a user enum arm views the scrutinee (Rust port arm_bor): unreachable code cannot move it"""
+        return list(a.binders) if a.enum_name is not None else []
 
     def arm_borrowed(s, a):
         """binders of a user enum arm that view an owned collection field"""
@@ -643,7 +660,19 @@ class _Ownership:
         finally:
             s.track = outer
 
+    @staticmethod
+    def check_call_move_alias(e):
+        from check import _mentions
+        for i, arg in enumerate(e.args):
+            if isinstance(arg, Move) and not arg.fields:
+                for j, other in enumerate(e.args):
+                    if (i != j and not (isinstance(other, Move) and not other.fields)
+                            and _mentions(other, arg.name)):
+                        _err(e.args[max(i, j)], "foreign_borrow", "borrowed and moved in one call",
+                             "do not pass %s both read-only and with move in one call" % arg.name)
+
     def call_args(s, e, st, takes, track):
+        s.check_call_move_alias(e)
         for arg, take in zip(e.args, takes):
             root = arg
             if e.name == "string_eq":   # R-6e-11: a field or a vec_get element of a place borrows the place's root

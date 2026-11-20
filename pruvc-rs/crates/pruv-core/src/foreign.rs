@@ -891,7 +891,8 @@ fn handle_lost(kind: &str, line: i64, col: i64, msg: String) -> PruvError {
 
 impl<'a> Ownership<'a> {
     fn run(&mut self, f: &Function) -> Res<()> {
-        self.bor = f.params.iter().filter(|p| key_is_collection(&p.ty) && !p.take).map(|p| p.name.clone()).collect();
+        self.bor = f.params.iter().filter(|p| !p.take && (key_is_collection(&p.ty) || self.aggregates.contains(&p.ty)))
+            .map(|p| p.name.clone()).collect();
         self.proc = f
             .params
             .iter()
@@ -1144,7 +1145,7 @@ impl<'a> Ownership<'a> {
         Ok(())
     }
 
-    fn dead_expr(&self, e: &Expr, owned: bool) -> Res<()> {
+    fn dead_expr(&mut self, e: &Expr, owned: bool) -> Res<()> {
         if matches!(e, Expr::Move(_)) && !owned {
             // R03L: unreachable code keeps the consuming-position rule
             return Err(err(
@@ -1154,6 +1155,14 @@ impl<'a> Ownership<'a> {
                 "move only where ownership is consumed",
                 "use move for a take argument, a let initializer, an assignment or return",
             ));
+        }
+        if let Expr::Move(m) = e {
+            let mut st = St::default();
+            // Check the operand without carrying liveness across unreachable statements.
+            if !self.bor.contains(&m.name) && !self.arm_bor.contains(&m.name) {
+                st.set(&m.name, V::Live);
+            }
+            self.mv(m, &mut st, true, false)?;
         }
         if owned {
             Self::check_field_alias(e)?;
@@ -1170,6 +1179,7 @@ impl<'a> Ownership<'a> {
             }
         }
         if let Expr::Call(c) = e {
+            Self::check_call_move_alias(c)?;
             for (arg, take) in c.args.iter().zip(self.takes(c)) {
                 self.dead_expr(arg, take)?;
             }
@@ -1430,7 +1440,27 @@ impl<'a> Ownership<'a> {
         r
     }
 
+    fn check_call_move_alias(e: &Call) -> Res<()> {
+        for (i, arg) in e.args.iter().enumerate() {
+            if let Expr::Move(m) = arg {
+                if m.fields.is_empty() {
+                    for (j, other) in e.args.iter().enumerate() {
+                        if i != j && !matches!(other, Expr::Move(x) if x.fields.is_empty())
+                            && crate::check::mentions(other, &m.name)
+                        {
+                            let node = &e.args[i.max(j)];
+                            return Err(err(node.line(), node.col(), "foreign_borrow", "borrowed and moved in one call",
+                                format!("do not pass {} both read-only and with move in one call", m.name)));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn call_args(&mut self, e: &Call, st: &mut St, takes: &[bool]) -> Res<()> {
+        Self::check_call_move_alias(e)?;
         for (arg, take) in e.args.iter().zip(takes.iter()) {
             if *take {
                 match arg {
