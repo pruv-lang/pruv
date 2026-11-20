@@ -1,0 +1,12 @@
+// spec: R-6e-5 accept
+struct Rec { hits: i64 }
+struct St { entries: HashMap<String, Rec> }
+
+fn f(inout st: St) -> i64 {
+  let mut hit: i64 = 0;
+  match map_get_mut::<String, Rec>(inout st.entries, "fixed") {
+    Some(r) => { r.hits = 1; hit = r.hits; }
+    None => { }
+  }
+  return hit;
+}

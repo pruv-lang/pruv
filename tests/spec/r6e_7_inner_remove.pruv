@@ -1,0 +1,13 @@
+// spec: R-6e-7 accept
+struct Rec { count: i64, runs: HashMap<String, bool> }
+fn f(inout m: HashMap<i64, Rec>, k: i64, name: str) -> bool {
+  let mut hit: bool = false;
+  match map_get_mut::<i64, Rec>(inout m, k) {
+    Some(r) => {
+      hit = map_remove::<String, bool>(inout r.runs, name);
+      assert !is_some(map_lookup::<String, bool>(r.runs, name));
+    }
+    None => { }
+  }
+  return hit;
+}

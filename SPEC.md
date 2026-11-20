@@ -376,9 +376,9 @@ fn push_two(take v: Vec<i64>, x: i64) -> Vec<i64> ! alloc
   could rest on). A field operand reads the field directly, without a clone. With `--no-verify`,
   `--foreign-checks all` or a user `trusted rust fn`, Rust uses the checked catalog helper. The inlined read is
   still listed in `.foreign.json` and `--trust-report` as a `vec_get` use. This rule does not change LLVM lowering.
-- **Collections.** `Vec<T>`, `HashMap<K, V>` (`K` is `i64` or `bool`) and `String` hold values. Collections
-  cannot be nested or stored in `Option`, `Result` or arrays. R-6e-1 specifies the exception for struct and enum
-  fields. Operations (`vec_*` and `map_*` take explicit type arguments, `string_*` and `len` take none): `vec_new`, `vec_push`,
+- **Collections.** `Vec<T>`, `HashMap<K, V>` (`K` is `i64`, `bool` or `String` under R-6e-5) and
+  `String` hold values. Collections cannot be stored in `Option`, `Result` or arrays. R-6e-1, R-6e-3 and R-6e-6
+  describe collection fields and the permitted nesting. Operations (`vec_*` and `map_*` take explicit type arguments, `string_*` and `len` take none): `vec_new`, `vec_push`,
   `vec_get`, `map_new`, `map_insert`, `map_get` (returns `Option<V>`), `string_new`, `string_push_str`, `string_byte`,
   `string_to_str` (copies into a `str`), and `len`. Allocating operations need `! alloc`. In contracts only: `v[i]`, `s[i]`,
   `map_lookup::<K, V>(m, k)` and `map_updated::<K, V>(after, before, k, v)` (the whole new map: k set, size, others kept).
@@ -440,8 +440,8 @@ fn tree_count(t: Tree) -> i64
   or replace them with a fresh buffer (`alloc`, a literal string) or `copy(view)`; return a field buffer with `copy`.
   `p.bytes[i] = v` is not allowed: copy the field into a mutable local, change it, and assign the field back.
 - R-6e-1 **Owned collection fields.** Non-generic structs and enum payloads may have `Vec<i64>`, `Vec<bool>`
-  and `String` fields. Other collection field types, including `HashMap`, other `Vec` element types and nested
-  collections, are `type/foreign_owned_type`. Generic structs and enums cannot have collection fields.
+  and `String` fields. Other collection fields are `type/foreign_owned_type` except as provided in
+  R-6e-3, R-6e-5 and R-6e-6. Generic structs and enums cannot have collection fields.
   These aggregates are extended types and follow the buffer-field rules for copying and type positions.
   An owned collection field initializer or replacement (`p.f = e` for a `let mut` local `p`) requires a call
   result or `move x` of an owned collection local or `take` parameter. The move consumes `x`. A plain binding,
@@ -489,6 +489,40 @@ fn tree_count(t: Tree) -> i64
   the stored element when `k` is present and writes the final `r` back at arm exit. The `None` arm leaves `P`
   unchanged. When the R-6d-2 condition holds (verified build, foreign checks not `all`, no trusted Rust
   function), R-6e-2's `P.f = vec_push::<T>(move P.f, x)` emits `P.f.push(x);` without `mem::take`.
+- R-6e-5 **Text-keyed maps.** `HashMap<String, V>` supports `i64`, `bool` and owned aggregate values
+  wherever the corresponding `HashMap<i64, V>` is allowed. `map_get`, `map_get_mut`, `map_remove`
+  and contract-only `map_lookup` borrow a key of type `str` or a read of a `String` binding or field.
+  Rust passes the `&str` directly or uses `.as_str()` for a `String` read. A borrowed literal allocates
+  no buffer. `map_insert` takes an
+  owned `String` from a call or `move`; a `str` value there is an argument type mismatch and a borrowed
+  `String` read is `type/foreign_move`.
+  A Rust state entry under R-6f-2 with the new collection fields may also borrow `String` parameters
+  under the same length conditions as `str`.
+  `[u8]` keys are `type/foreign_owned_type` or an argument type mismatch. The verifier uses an integer map index `strkey(n, a)`, where `n`
+  is the byte length, `a` is the byte array and `strkey` is one uninterpreted function without axioms.
+- R-6e-6 **One level of nested collections in aggregate records.** An owned aggregate may also have
+  `Vec<String>`, `HashMap<String, bool>` or `HashMap<i64, bool>` fields. It can be an element of
+  `Vec<S>` or a value of `HashMap<i64, S>` or `HashMap<String, S>` in the positions of R-6e-3.
+  Deeper collection nesting, direct fields of a record type with nested collections, and using such
+  records as `Option` or `Result` payloads are `type/foreign_owned_type`. In a mutable `Some` arm,
+  R-6e-2 permits replacing nested fields with `vec_push` or `map_insert`, and R-6e-7 permits
+  `map_remove` on a nested map. Under R-6d-2 the replacements emit `.push(x)` and `.insert(k, v)`.
+  `len` reads either field and `map_get` reads nested map values. `vec_get` on `Vec<String>` is
+  unsupported. The verifier stores each nested collection in its own datatype field and preserves
+  sibling fields and other collection elements on write-back. A root `pub` function may borrow a
+  record with the new collection fields through the Rust ABI. Like R-6f-2 resident state, its collection
+  lengths (at most 2^40, section 7 item 6) are not checked per call: the record must come from this
+  program's entries (section 7 caller obligations).
+- R-6e-7 **Remove and positional update.** `map_remove::<K, V>(inout P, k) -> bool` removes the
+  entry and returns whether it was present. It accepts `i64` or `String` keys, uses the place and
+  alias rules of R-6e-4 and the statement rules of R-6g-1, and requires no `alloc` effect. Rust emits
+  `.remove(&k).is_some()` for `i64` and uses the borrowed key of R-6e-5 for `String`. The verifier clears
+  the presence bit and subtracts one from the length only when the key was present.
+  `vec_at_mut::<S>(inout P, i)` on `Vec<S>` for an owned aggregate uses the direct match and
+  arm rules of R-6e-4. Non-entry functions may take `inout` map and vector parameters whose value or
+  element type is an owned aggregate struct; other collection types stay `type/inout_type`. Rust emits `match P.get_mut(<usize as ::std::convert::TryFrom<i64>>::try_from(i).unwrap_or(usize::MAX))`, so no target truncates `i` (the qualified `TryFrom` path compiles in every Rust edition). The verifier selects `Some` when
+  `0 <= i < len(P)` and writes the final binder back to that index with unchanged length.
+  These operations and the new collection types require the Rust backend.
 - **Values, not pointers.** Recursive and buffer-bearing values are independent: copying one deep-copies everything,
   and changing a copy never changes the original. Parameters, field reads and `match` bindings are read-only views
   and do not allocate. Putting an existing value into an owning place (`let`, assignment, constructor field,
@@ -498,8 +532,8 @@ fn tree_count(t: Tree) -> i64
   (`type/eq_type`); compare tags, lengths and elements instead.
 - **Limits.** Recursive and buffer-field types cannot be generic arguments, `Option`/`Result` payloads or G6
   collection elements, except the owned aggregates of R-6e-3. Functions whose signatures use these types are internal, except
-  the R-6f-2 state entry. In explicit mode a host entry
-  with such a type in its signature is `type/entry_signature`. A property such as "x is somewhere in the tree"
+  the Rust entries in R-6e-5, R-6e-6 and R-6f-2. In explicit mode other host entry signatures
+  with such types are `type/entry_signature`. A property such as "x is somewhere in the tree"
   must be stated with the existing contract operations, and not every recursive property is
   expressible. Proofs about deeply nested or very wide types can be slow. Native stack depth is not checked: very
   deep recursion, copying or freeing can overflow the stack (a resource failure, never a successful result).
@@ -539,7 +573,7 @@ pub fn bounded(x: i64) -> i64                requires 0 <= x && x <= 10
   end of the file, and any `#[` inside a body, is `parse/attribute_position`.
 - **Host entries.** In explicit mode only root `pub` non-generic functions are host entries. A parameter of
   collection, recursive or buffer-field type, or an `inout` parameter (section 6g, Host limits), is
-  `type/entry_signature`. The same restriction applies to results, subject to R-6f-1. Ordinary entries can be
+  `type/entry_signature`, subject to R-6e-5, R-6e-6 and R-6f-2. The same restriction applies to results, subject to R-6f-1. Ordinary entries can be
   exported through `--rust-bindings` and the LLVM
   `pruv_abi_<name>` interface. Child `pub` functions are for Pruv callers only. An optional root `main`
   must be `pub fn main() -> ()`. A child `main` is an ordinary function.
@@ -585,7 +619,7 @@ let mut w: [i64] = copy(a);
 set_at(inout w, 0, 7);
 ```
 - **Syntax and types.** `inout name: T` on a parameter, `T` one of `[i64]`, `[u8]`, `[bool]` or `[T]` with `T: Element`
-  (section 6c), or a non-generic struct under R-6g-2; any other type is `type/inout_type`. The mode is not part of the type. The caller must write `inout`
+  (section 6c), a non-generic struct under R-6g-2, or a map or vector under R-6e-7; any other type is `type/inout_type`. The mode is not part of the type. The caller must write `inout`
   at the call (`type/inout_argument` if missing or extra). The marked argument must be a whole `let mut` array local
   or an `inout` parameter of the caller, with exactly the parameter's element type; immutable locals, ordinary
   parameters, `match` binders, fields, elements and calls are rejected. `inout` is contextual, not a keyword;
@@ -651,7 +685,7 @@ set_at(inout w, 0, 7);
   `trusted rust fn` with `inout` is `type/foreign_signature`. Give the host an ordinary function that owns a
   `copy` of its input, calls the `inout` helpers on it and returns it.
 - **Not supported.** Fields or elements as `inout` places, scalar,
-  `str`, collection or generic struct `inout` parameters (non-generic structs are R-6g-2), `old` of anything but an array `inout` parameter, mutable host entries other than R-6f-2.
+  `str`, collection types outside R-6e-7, or generic struct `inout` parameters (non-generic structs are R-6g-2), `old` of anything but an array `inout` parameter, mutable host entries other than R-6f-2.
 - **New error codes:** `inout_syntax`, `inout_type`, `inout_argument`, `inout_alias`, `inout_context`, `old_context`,
   `old_argument`; reused: `immutable`, `array_alias`, `recursive_borrow`, `entry_signature`, `foreign_signature`,
   `reserved`, `refinement_assign`.
@@ -1122,7 +1156,10 @@ It never skips the length bound below.
 The verifier assumes every array (and `Map`) parameter, every buffer field and every `str` has a length (byte length
 for `str`) in `0..=2^40` (item 6 above). Every place where a host buffer first enters proved code checks that bound
 before the representation checks, the `requires` and the body, in both compilers and in every mode, including
-`--trust-callers` and `--no-verify`. The one exception is manifest `raw_entries = "crate"` on the Rust backend (below):
+`--trust-callers` and `--no-verify`. The exceptions are manifest `raw_entries = "crate"` on the Rust backend (below)
+and collection fields of a record the entry does not own (R-6f-2 resident state, an R-6e-6 borrowed record): those
+lengths are not walked per call, so the caller keeps them at most 2^40 from the last entry call on (section 7 caller
+obligations):
 - Generated Rust (every output form): every public function that takes an array or `str` (including an `inout` array)
   starts with one check per such parameter, `pruv: invalid representation: n (array length)` / `(str length)`, exit
   101 when not caught. A public function without `requires` that has such a parameter is emitted like one with
@@ -1216,7 +1253,7 @@ An adapter that cannot do this must not use `"crate"`; `"unsafe"`, `"c"` and def
 The generated `pruv_raw` module of a `"crate"` program repeats this obligation in its header comment.
 Caller obligations that no check can cover remain the host's: a buffer passed as a Rust slice / `&str` is a valid Rust
 value; a raw (pointer, length) pair with length > 0 names that many initialized elements in one live allocation that
-nobody else touches during the call; resident state passed to an entry came from this program's entries. Apart from
+nobody else touches during the call; resident state passed to an entry, and a record borrowed under R-6e-6, came from this program's entries, and the host did not grow its collection fields past 2^40 since the last entry call. Apart from
 the `raw_entries = "crate"` adapter obligation above, no trusted path (`--trust-callers`, `raw_entries = "unsafe"` /
 `"c"`, the `pruv_raw` forwarders, the C adapter) waives the length bound.
 

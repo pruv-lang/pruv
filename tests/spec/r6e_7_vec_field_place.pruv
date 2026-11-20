@@ -1,0 +1,14 @@
+// spec: R-6e-7 accept
+struct Rec { count: i64 }
+struct St { records: Vec<Rec> }
+
+fn f(inout st: St, i: i64) -> bool
+  ensures result == (0 <= i && i < len(st.records))
+{
+  let mut hit: bool = false;
+  match vec_at_mut::<Rec>(inout st.records, i) {
+    Some(r) => { r.count = 1; hit = true; }
+    None => { }
+  }
+  return hit;
+}

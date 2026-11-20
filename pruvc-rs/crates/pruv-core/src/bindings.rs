@@ -268,10 +268,18 @@ pub(crate) fn struct_inout_abi_error(
         }
         if f.params.iter().any(|p| p.mode_pos.is_some() && !GType::from_key(&p.ty).is_array()) {
             let name = meta.map_or(f.name.as_str(), |m| m.disp.as_str());
+            let (message, fix) = if entries_only {
+                (format!("host entry {name} takes an inout struct, which has no C ABI"), "use Rust raw_entries crate or unsafe")
+            } else {
+                let kind = if f.params.iter().any(|p| p.mode_pos.is_some() && crate::gtype::key_is_collection(&p.ty)) {
+                    "collection"
+                } else {
+                    "struct"
+                };
+                (format!("{name} has an inout {kind} parameter, which needs the Rust backend"), "use the Rust backend")
+            };
             return Some(crate::diagnostic::PruvError::new(
-                "codegen", f.line, f.col, "unsupported_type",
-                format!("{} has a non-array inout parameter, which needs the Rust backend", name),
-                "use the Rust backend with Rust entries",
+                "codegen", f.line, f.col, "unsupported_type", message, fix,
             ));
         }
     }

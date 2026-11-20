@@ -1,0 +1,38 @@
+{
+  "backend": "rust",
+  "catalog": [
+    {
+      "op": "map_get_mut",
+      "type_args": [
+        "String",
+        "crate::Session"
+      ]
+    },
+    {
+      "op": "map_remove",
+      "type_args": [
+        "String",
+        "bool"
+      ]
+    },
+    {
+      "op": "string_new",
+      "type_args": []
+    },
+    {
+      "op": "string_push_str",
+      "type_args": []
+    },
+    {
+      "op": "vec_push",
+      "type_args": [
+        "String"
+      ]
+    }
+  ],
+  "check_mode": "requires",
+  "externs": [],
+  "rustc_checked": false,
+  "schema": "pruv-foreign-v1",
+  "trusted": []
+}

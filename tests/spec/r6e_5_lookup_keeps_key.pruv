@@ -1,0 +1,6 @@
+// spec: R-6e-5 accept
+fn f(m: HashMap<String, bool>, take sid: String) -> i64 {
+  let found: Option<bool> = map_get::<String, bool>(m, sid);
+  let owned: String = move sid;
+  return len(owned);
+}

@@ -1,0 +1,11 @@
+// spec: R-6e-5 accept
+pub struct Rec { log: Vec<String> }
+pub struct St { entries: HashMap<String, Rec>, key: String, label: str }
+
+pub fn check(st: St) -> i64
+  requires is_some(map_lookup::<String, Rec>(st.entries, st.key))
+  requires is_some(map_lookup::<String, Rec>(st.entries, st.label))
+  requires len(some_val(map_lookup::<String, Rec>(st.entries, st.key)).log) >= 1
+{
+  return 1;
+}

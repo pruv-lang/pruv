@@ -1,0 +1,4 @@
+// spec: R-6e-5 reject
+fn f(m: HashMap<String, bool>, k: str) -> Option<bool> {
+  return map_get::<String, bool>(m, k);
+}

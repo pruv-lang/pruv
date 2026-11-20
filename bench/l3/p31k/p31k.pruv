@@ -1,0 +1,45 @@
+// P31K small example: a state struct keyed by session id text.
+// Each record holds a scalar, a Vec<String> and a HashMap<String, bool>.
+// Lookups borrow the caller's key bytes (one hash, no key copy); updates happen in place.
+pub struct Session { used: i64, stopped: Vec<String>, runs: HashMap<String, bool> }
+pub struct St { sessions: HashMap<String, Session> }
+
+// Charge x to the session sid. 0 = charged, 1 = unknown session, 2 = budget exhausted.
+pub fn charge(inout st: St, sid: str, x: i64) -> i64 ! alloc
+  requires x >= 0 && x <= 1000000
+{
+  let mut res: i64 = 1;
+  match map_get_mut::<String, Session>(inout st.sessions, sid) {
+    Some(r) => {
+      if r.used <= 1000000000000 {
+        r.used = r.used + x;
+        res = 0;
+      } else {
+        res = 2;
+      }
+    }
+    None => { }
+  }
+  return res;
+}
+
+// Record that run `name` stopped in session sid and clear its running flag.
+pub fn halt(inout st: St, sid: str, name: str) -> i64 ! alloc
+{
+  let mut res: i64 = 1;
+  match map_get_mut::<String, Session>(inout st.sessions, sid) {
+    Some(r) => {
+      if len(r.stopped) < 1000000 {
+        let gone: bool = map_remove::<String, bool>(inout r.runs, name);
+        let mut owned: String = string_new();
+        owned = string_push_str(move owned, name);
+        r.stopped = vec_push::<String>(move r.stopped, move owned);
+        if gone { res = 0; } else { res = 3; }
+      } else {
+        res = 2;
+      }
+    }
+    None => { }
+  }
+  return res;
+}

@@ -431,7 +431,7 @@ fn set_ty(e: &mut Expr, t: &GType) {
 /// G5: does the full syntax of e (every operand, reachable or not) mention the binding `name`?
 fn collection_catalog(name: &str) -> bool {
     matches!(name, "vec_new" | "vec_push" | "vec_get" | "map_new" | "map_insert"
-        | "map_get" | "map_get_mut")
+        | "map_get" | "map_get_mut" | "map_remove" | "vec_at_mut")
 }
 
 fn place_root(e: &Expr) -> Option<&str> {
@@ -440,16 +440,6 @@ fn place_root(e: &Expr) -> Option<&str> {
         Expr::FieldAccess(f) => place_root(&f.base),
         _ => None,
     }
-}
-
-fn has_arm_exit(body: &[Stmt]) -> bool {
-    body.iter().any(|stmt| match stmt {
-        Stmt::Return(_) => true,
-        Stmt::If(s) => has_arm_exit(&s.then) || has_arm_exit(&s.els),
-        Stmt::While(s) => has_arm_exit(&s.body),
-        Stmt::Match(s) => s.arms.iter().any(|a| has_arm_exit(&a.body)),
-        _ => false,
-    })
 }
 
 fn mentions(e: &Expr, name: &str) -> bool {
@@ -1143,28 +1133,34 @@ impl Checker {
                 self.check_type_rec(line, col, a)?;
             }
             if ty.name == "vec" && ty.args.len() == 1 {
-                self.collection_payload(line, col, &ty.args[0], "a Vec element")?;
+                if ty.args[0].to_key() != "string" {
+                    self.collection_payload(line, col, &ty.args[0], "a Vec element")?;
+                }
             } else if ty.name == "hashmap" && ty.args.len() == 2 {
                 let k = &ty.args[0];
-                if k.contains_collection() || !is_element(k, &self.elem_params) {
+                let text_key = k.to_key() == "string";
+                if !text_key && !is_element(k, &self.elem_params) {
                     return Err(terr(
                         line,
                         col,
                         "foreign_owned_type",
-                        format!("{} cannot be a HashMap key: only i64, bool and Element type parameters can", tn(k)),
-                        "use i64 or bool keys, or declare the parameter `: Element`",
+                        format!("{} cannot be a HashMap key: only i64, bool, String and Element type parameters can", tn(k)),
+                        "use i64, bool or String keys, or declare the parameter `: Element`",
                     ));
                 }
                 let v = &ty.args[1];
                 self.collection_payload(line, col, v, "a HashMap value")?;
-                if *k != i64t() && v.owner.is_none() {
+                if text_key && *v != i64t() && *v != boolt() && !self.owned_aggregate(v) {
+                    return Err(terr(line, col, "foreign_owned_type", "String-keyed maps require i64, bool or owned aggregate values", ""));
+                }
+                if !text_key && *k != i64t() && v.owner.is_none() {
                     if let Some(TypeDecl::Struct(d)) = self.decls.get(&v.name) {
                         if d.tparams.is_empty()
                             && d.fields.iter().any(|f| crate::gtype::key_is_owned_field(&f.ty))
                             && d.fields.iter().all(|f| crate::gtype::key_is_owned_field(&f.ty)
                                 || is_value(&GType::from_key(&f.ty), &|n| self.value_decl(n)))
                         {
-                            return Err(terr(line, col, "foreign_owned_type", "aggregate HashMap values require i64 keys", ""));
+                            return Err(terr(line, col, "foreign_owned_type", "aggregate HashMap values with owned fields require i64 or String keys", ""));
                         }
                     }
                 }
@@ -1286,7 +1282,7 @@ impl Checker {
     /// a: a type argument; tp: the TypeParam it instantiates (None for Option/Result).
     fn check_arg(&self, line: i64, col: i64, a: &GType, tp: Option<&TParam>) -> Res<()> {
         self.check_type_rec(line, col, a)?;
-        if a.contains_collection() {
+        if a.contains_collection() || self.depends_on_nested_record(a) {
             // G6: collections are never type arguments of Option/Result/user declarations
             return Err(terr(
                 line,
@@ -1364,11 +1360,19 @@ impl Checker {
                 "give exactly one type argument per type parameter",
             ));
         }
+        let catalog_collection = what.strip_prefix("function ").filter(|n|
+            !self.funcs.contains_key(*n) && (collection_catalog(n)
+                || *n == "map_lookup" && targs[0].to_key() == "string"));
+        if let Some(name) = catalog_collection {
+            let ty = if name.starts_with("vec_") { "vec" } else { "hashmap" };
+            self.check_type(line, col, &GType::new(ty, targs.clone()))?;
+        }
         for (a, tp) in targs.iter().zip(tparams.iter()) {
             self.check_type(line, col, a)?;
-            self.check_arg(line, col, a, Some(tp))?;
-            let catalog_collection = what.strip_prefix("function ").is_some_and(|n|
-                !self.funcs.contains_key(n) && collection_catalog(n));
+            if catalog_collection.is_none() {
+                self.check_arg(line, col, a, Some(tp))?;
+            }
+            let catalog_collection = catalog_collection.is_some();
             self.ext_misuse(line, col, a, Some(if catalog_collection { "coll" } else { "arg" }))?;
         }
         match bind_args(owner, tparams.len(), targs) {
@@ -1409,8 +1413,12 @@ impl Checker {
                         ));
                     }
                     self.check_type(f.line, f.col, &ft)?;
+                    if !self.state_collection(&ft) && self.depends_on_nested_record(&ft) {
+                        return Err(terr(f.line, f.col, "foreign_owned_type", "a record with nested collection fields cannot be a direct field", ""));
+                    }
                     if ft.contains_collection()
                         && !(d.tparams().is_empty() && (crate::gtype::key_is_owned_field(&f.ty)
+                            && (!crate::gtype::key_is_nested_collection_field(&f.ty) || matches!(d, TypeDecl::Struct(_)))
                             || matches!(d, TypeDecl::Struct(_)) && self.state_collection(&ft)))
                     {
                         if matches!(ft.name.as_str(), "vec" | "hashmap") {
@@ -1654,10 +1662,15 @@ impl Checker {
                     }))
     }
 
+    fn depends_on_nested_record(&self, ty: &GType) -> bool {
+        dependencies(ty).iter().any(|name| matches!(self.decls.get(name), Some(TypeDecl::Struct(d))
+            if d.fields.iter().any(|f| crate::gtype::key_is_nested_collection_field(&f.ty))))
+    }
+
     fn state_collection(&self, ty: &GType) -> bool {
         match (ty.name.as_str(), ty.args.as_slice()) {
             ("vec", [v]) => self.owned_aggregate(v),
-            ("hashmap", [k, v]) => *k == i64t() && self.owned_aggregate(v),
+            ("hashmap", [k, v]) => (*k == i64t() || k.to_key() == "string") && self.owned_aggregate(v),
             _ => false,
         }
     }
@@ -1769,17 +1782,20 @@ impl Checker {
             for p in &f.params {
                 if let Some((ml, mc)) = p.mode_pos {
                     let pt = GType::from_key(&p.ty);
-                    if !pt.is_array() && !(pt.args.is_empty() && matches!(self.decls.get(&pt.name), Some(TypeDecl::Struct(_)))) {
+                    let aggregate_collection = matches!(pt.name.as_str(), "vec" | "hashmap")
+                        && pt.args.last().is_some_and(|payload| self.owned_aggregate(payload));
+                    if !pt.is_array() && !aggregate_collection
+                        && !(pt.args.is_empty() && matches!(self.decls.get(&pt.name), Some(TypeDecl::Struct(_)))) {
                         return Err(terr(
                             ml,
                             mc,
                             "inout_type",
                             format!(
-                                "inout parameter {} cannot have the type {}: only [i64], [u8], [bool] and [T] with T: Element can be inout",
+                                "inout parameter {} cannot have the type {}",
                                 p.name,
                                 tn(&pt)
                             ),
-                            format!("declare {} without inout, or give it one of those array types", p.name),
+                            "use an array, a non-generic struct, or a map or vector of aggregate records, or remove inout",
                         ));
                     }
                 }
@@ -1790,13 +1806,33 @@ impl Checker {
 
     /// Host entries allow plain signatures and concrete Vec<i64>/Vec<bool> results.
     fn check_entries(&self, prog: &Program) -> Res<()> {
+        fn new_collection(ty: &GType) -> bool {
+            matches!(ty.to_key().as_str(), "vec<string>" | "hashmap<i64,bool>")
+                || ty.name == "hashmap" && ty.args.first().is_some_and(|k| k.to_key() == "string")
+                || ty.args.iter().any(new_collection)
+        }
+        let mut rust_records = HashSet::new();
+        loop {
+            let mut changed = false;
+            for d in &prog.types {
+                if decl_fields(d).iter().any(|(_, f)| {
+                    let ty = GType::from_key(&f.ty);
+                    new_collection(&ty) || dependencies(&ty).iter().any(|name| rust_records.contains(name))
+                }) {
+                    changed |= rust_records.insert(d.name().to_string());
+                }
+            }
+            if !changed { break; }
+        }
         for (i, f) in prog.functions.iter().enumerate() {
             if !self.host_entry.get(i).copied().unwrap_or(false) {
                 continue;
             }
+            let rust_state = f.params.first().is_some_and(|p| p.mode_pos.is_some() && rust_records.contains(&p.ty));
             let mut sig: Vec<(String, &str)> = f.params.iter().enumerate().filter(|(i, p)| {
                 !(*i == 0 && self.explicit && p.mode_pos.is_some()
-                    && matches!(self.decls.get(&p.ty), Some(TypeDecl::Struct(_))))
+                    && matches!(self.decls.get(&p.ty), Some(TypeDecl::Struct(_)))
+                    || !p.take && p.mode_pos.is_none() && (rust_records.contains(&p.ty) || rust_state && p.ty == "string"))
             }).map(|(_, p)| (format!("parameter {}", p.name), p.ty.as_str())).collect();
             if let Some(p) = f.params.iter().skip(if self.explicit { 1 } else { 0 })
                 .find(|p| p.mode_pos.is_some() && matches!(self.decls.get(&p.ty), Some(TypeDecl::Struct(_))))
@@ -2058,7 +2094,7 @@ impl Checker {
 
     fn lookup(&self, line: i64, col: i64, name: &str, scope: &Scope) -> Res<Entry> {
         if self.map_roots.iter().any(|root| root == name) {
-            self.check_borrow(line, col, name, &[])?;
+            return Err(terr(line, col, "recursive_borrow", format!("cannot use {name} inside a mutable collection Some arm"), ""));
         }
         match scope.get(name) {
             Some(v) => Ok(v.clone()),
@@ -2098,7 +2134,8 @@ impl Checker {
         }
         let mut effect_before = false;
         for (call, conditional) in calls {
-            if let Some(f) = self.funcs.get(&call.name) {
+            let f = self.funcs.get(&call.name);
+            if f.is_some() || call.name == "map_remove" {
                 let marked: Vec<&crate::ast::InoutArg> = call
                     .args
                     .iter()
@@ -2106,11 +2143,7 @@ impl Checker {
                     .collect();
                 if !marked.is_empty() {
                     for arg in &marked {
-                        let name = match arg.expr.as_ref() {
-                            Expr::Var(v) => v.name.as_str(),
-                            Expr::Move(v) => v.name.as_str(),
-                            _ => continue,
-                        };
+                        let Some(name) = place_root(&arg.expr) else { continue };
                         if mentions.get(name).copied().unwrap_or(0) > 1 {
                             return Err(terr(
                                 arg.line,
@@ -2149,7 +2182,7 @@ impl Checker {
                         ));
                     }
                 }
-                effect_before |= f.effects.iter().any(|effect| effect != "alloc");
+                effect_before |= f.is_some_and(|f| f.effects.iter().any(|effect| effect != "alloc"));
             } else if !effect_before {
                 effect_before = call.name == "print"
                     || catalog_fn(&call.name).is_some_and(|f| f.effects.iter().any(|effect| effect != "alloc"));
@@ -2185,7 +2218,7 @@ impl Checker {
                 if sty.is_array() || sty == strt() {
                     self.array_source(s.line, s.col, &s.value, scope, false, &sty)?;
                 }
-                self.own(&s.value);
+                self.own(&s.value, scope)?;
                 scope.insert(s.name.clone(), Entry { ty: sty, mutable: s.mutable, kind: "local" });
             }
             Stmt::Assign(s) => {
@@ -2211,7 +2244,7 @@ impl Checker {
                 if v.ty.is_array() || v.ty == strt() {
                     self.array_source(s.line, s.col, &s.value, scope, false, &v.ty)?;
                 }
-                self.own(&s.value);
+                self.own(&s.value, scope)?;
             }
             Stmt::IndexAssign(s) => {
                 let v = self.lookup(s.line, s.col, &s.name, scope)?;
@@ -2302,7 +2335,7 @@ impl Checker {
                     // G9 A0: G2 explicit ownership for a buffer field
                     self.array_source(s.line, s.col, &s.value, scope, false, &cur)?;
                 }
-                self.own(&s.value);
+                self.own(&s.value, scope)?;
             }
             Stmt::If(s) => {
                 self.expect(&mut s.cond, &boolt(), scope, false, Some("a condition"))?;
@@ -2326,6 +2359,9 @@ impl Checker {
                 self.block(&mut s.body, &mut sc)?;
             }
             Stmt::Return(s) => {
+                if !self.map_roots.is_empty() {
+                    return Err(terr(s.line, s.col, "foreign_contract", "cannot return inside a mutable collection Some arm", ""));
+                }
                 let ret = self.cur_ret.clone();
                 match &mut s.value {
                     None => {
@@ -2350,7 +2386,7 @@ impl Checker {
                         if ret.is_array() || ret == strt() {
                             self.array_source(s.line, s.col, v, scope, true, &ret)?;
                         }
-                        self.own(v);
+                        self.own(v, scope)?;
                     }
                 }
             }
@@ -2611,12 +2647,12 @@ impl Checker {
 
     fn match_stmt(&mut self, m: &mut Match, scope: &mut Scope) -> Res<()> {
         let (line, col) = (m.line, m.col);
-        let t = self.read_expr(&mut m.scrutinee, scope, false, &["map_get", "map_get_mut"])?;
+        let t = self.read_expr(&mut m.scrutinee, scope, false, &["map_get", "map_get_mut", "vec_at_mut"])?;
         let map_call = match &m.scrutinee {
             Expr::Call(call) if !self.funcs.contains_key(&call.name) => Some(call),
             _ => None,
         };
-        let map_mut = map_call.is_some_and(|call| call.name == "map_get_mut");
+        let map_mut = map_call.is_some_and(|call| matches!(call.name.as_str(), "map_get_mut" | "vec_at_mut"));
         let map_borrow = map_call.is_some_and(|call| call.name == "map_get")
             && t.args.first().is_some_and(|ty| self.is_extended(ty));
         self.check_inout_context(&[&m.scrutinee], InoutContext::Value)?;
@@ -2659,7 +2695,7 @@ impl Checker {
             if got_set != need_set || got.len() != 2 || m.arms.iter().any(|a| a.enum_name.is_some()) {
                 let sorted: Vec<&String> = need_set.into_iter().collect();
                 let joined = sorted.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" and ");
-                return Err(terr(line, col, "match_arms", format!("match needs exactly arms {}", joined), ""));
+                return Err(terr(line, col, if map_mut { "foreign_contract" } else { "match_arms" }, format!("match needs exactly arms {}", joined), ""));
             }
         } else {
             let mut seen: Vec<&str> = Vec::new();
@@ -2721,9 +2757,6 @@ impl Checker {
             }
             let active = root.as_ref().filter(|_| !(map_mut || map_borrow) || a.ctor == "Some");
             if let Some(r) = active {
-                if map_mut && has_arm_exit(&a.body) {
-                    return Err(terr(a.line, a.col, "foreign_contract", "the Some arm of map_get_mut must reach its end", ""));
-                }
                 self.active_roots.push(r.clone());
                 if map_mut {
                     self.map_roots.push(r.clone());
@@ -2743,13 +2776,18 @@ impl Checker {
     // ---- G9 A0: ownership of extended values, active-match borrows ----
     /// `value` (already typed) is moved into an owning position (let, assignment, constructor field, return):
     /// a non-fresh extended value is cloned, which needs `alloc`; constructors, literals and calls are fresh.
-    fn own(&mut self, value: &Expr) {
+    fn own(&mut self, value: &Expr, scope: &Scope) -> Res<()> {
+        if matches!(value, Expr::Var(v) if scope.get(&v.name).is_some_and(|e| e.kind == "map_inout")) {
+            return Err(terr(value.line(), value.col(), "foreign_move",
+                "a mutable collection binder cannot be used as an owned value", ""));
+        }
         if let Some(k) = expr_ty(value) {
             let t = GType::from_key(k);
             if self.is_extended(&t) && !matches!(value, Expr::EnumCtor(_) | Expr::StructLit(_) | Expr::Call(_)) {
                 self.used_effects.insert("alloc".to_string());
             }
         }
+        Ok(())
     }
 
     /// A constructor / struct-literal field argument: owning position, G2 explicit ownership for buffers.
@@ -2760,8 +2798,7 @@ impl Checker {
         if ftype.is_array() || *ftype == strt() {
             self.array_source(value.line(), value.col(), value, scope, false, ftype)?;
         }
-        self.own(value);
-        Ok(())
+        self.own(value, scope)
     }
 
     /// A constructor that initializes a boxed field allocates.
@@ -3089,6 +3126,9 @@ impl Checker {
                             if at.name == "vec" { "use vec_get in code" } else { "use string_byte in code" },
                         ));
                     }
+                    if at.name == "vec" && at.args.first().is_some_and(|a| a.to_key() == "string") {
+                        return Err(terr(x.line, x.col, "foreign_owned_type", "Vec<String> elements cannot be read", ""));
+                    }
                     return Ok(if at.name == "vec" { at.args.first().cloned().unwrap_or_else(i64t) } else { i64t() });
                 }
                 // G2 A5: a bool array reads bool; G3: [T] reads T
@@ -3403,6 +3443,22 @@ impl Checker {
 
     /// map_lookup / map_updated arguments: a key whose type differs from a map argument's key type is a
     /// foreign_contract error; any other mismatch is the ordinary type_mismatch.
+    fn check_text_key(&mut self, arg: &mut Expr, scope: &Scope, c: bool, actual: Option<GType>) -> Res<()> {
+        if let Expr::StrLit(lit) = arg {
+            lit.ty = Some("str".into());
+            return Ok(());
+        }
+        let actual = match actual {
+            Some(ty) => ty,
+            None => self.expr(arg, scope, c)?,
+        };
+        if actual == strt() || actual.to_key() == "string" && matches!(arg, Expr::Var(_) | Expr::FieldAccess(_) | Expr::VariantField(_)) {
+            return Ok(());
+        }
+        Err(terr(arg.line(), arg.col(), "type_mismatch",
+            format!("expected str or a borrowed String read, found {}", tn(&actual)), ""))
+    }
+
     fn observer_args(&mut self, e: &mut Call, cf: &CatFn, m: &Mapping, scope: &Scope, c: bool) -> Res<()> {
         let mut got: Vec<GType> = Vec::new();
         for arg in e.args.iter_mut() {
@@ -3412,7 +3468,7 @@ impl Checker {
         for g in &got {
             if g.name == "hashmap" && g.owner.is_none() {
                 if let (Some(k0), Some(kt)) = (g.args.first(), got.get(kidx)) {
-                    if k0 != kt {
+                    if k0 != kt && !(e.name == "map_lookup" && k0.to_key() == "string") {
                         return Err(terr(
                             e.args[kidx].line(),
                             e.args[kidx].col(),
@@ -3424,9 +3480,11 @@ impl Checker {
                 }
             }
         }
-        for ((arg, g), prm) in e.args.iter().zip(got.iter()).zip(cf.params.iter()) {
+        for ((arg, g), prm) in e.args.iter_mut().zip(got.iter()).zip(cf.params.iter()) {
             let want = substitute(&prm.ty, m);
-            if *g != want {
+            if e.name == "map_lookup" && prm.name == "k" && want.to_key() == "string" {
+                self.check_text_key(arg, scope, c, Some(g.clone()))?;
+            } else if *g != want {
                 return Err(terr(
                     arg.line(),
                     arg.col(),
@@ -3445,6 +3503,7 @@ impl Checker {
     /// whole argument list.
     fn inout_args(&mut self, e: &mut Call, f: &FuncInfo, m: &Mapping, scope: &Scope, c: bool) -> Res<()> {
         let n = e.name.clone();
+        let collection_place = !self.funcs.contains_key(&n) && matches!(n.as_str(), "map_get_mut" | "vec_at_mut" | "map_remove");
         let mut marked: Vec<(usize, String)> = Vec::new();
         for i in 0..e.args.len().min(f.params.len()) {
             let want = substitute(&f.params[i], m);
@@ -3459,7 +3518,11 @@ impl Checker {
                         format!("remove `inout`, or declare the parameter `inout {}: ...`", pname),
                     ));
                 }
-                self.expect(&mut e.args[i], &want, scope, c, None)?;
+                if collection_place && want.to_key() == "string" {
+                    self.check_text_key(&mut e.args[i], scope, c, None)?;
+                } else {
+                    self.expect(&mut e.args[i], &want, scope, c, None)?;
+                }
                 continue;
             }
             let (aline, acol) = (e.args[i].line(), e.args[i].col());
@@ -3477,6 +3540,7 @@ impl Checker {
             };
             let what: Option<&str> = match &*arg.expr {
                 Expr::Var(_) => None,
+                Expr::FieldAccess(_) if collection_place && place_root(&arg.expr).is_some() => None,
                 Expr::FieldAccess(_) => Some("a field"),
                 Expr::Index(_) => Some("an element"),
                 Expr::Call(_) => Some("a call"),
@@ -3491,11 +3555,11 @@ impl Checker {
                     "name a `let mut` local array or an inout parameter of this function",
                 ));
             }
-            let op: &mut Var = match &mut *arg.expr {
-                Expr::Var(v) => v,
-                _ => return Err(terr(aline, acol, "internal", "unknown expression", "")),
-            };
-            let v = self.lookup(op.line, op.col, &op.name, scope)?;
+            let mut place = arg.expr.as_ref();
+            while let Expr::FieldAccess(f) = place { place = &f.base; }
+            let Expr::Var(op) = place else { return Err(terr(aline, acol, "internal", "unknown expression", "")) };
+            let name = op.name.clone();
+            let v = self.lookup(op.line, op.col, &name, scope)?;
             if v.kind == "local" && !v.mutable {
                 return Err(terr(
                     aline,
@@ -3518,15 +3582,16 @@ impl Checker {
                     format!("declare the parameter `inout {}: ...`, or copy into a `let mut` local", op.name),
                 ));
             }
-            if v.ty != want {
+            let actual = if matches!(&*arg.expr, Expr::Var(_)) { v.ty } else { self.expr(&mut arg.expr, scope, c)? };
+            if actual != want {
                 return Err(terr(
                     aline,
                     acol,
                     "inout_argument",
                     format!(
                         "inout argument {} has type {} but parameter {} of {} expects {}",
-                        op.name,
-                        tn(&v.ty),
+                        name,
+                        tn(&actual),
                         pname,
                         n,
                         tn(&want)
@@ -3534,19 +3599,19 @@ impl Checker {
                     "pass an array of exactly the parameter's element type",
                 ));
             }
-            if self.active_roots.iter().any(|r| *r == op.name) {
+            if self.active_roots.iter().any(|r| *r == name) {
                 // G9: mutable access while a match view of the root is active
                 return Err(terr(
                     aline,
                     acol,
                     "recursive_borrow",
-                    format!("cannot pass {} inout while a match on it is active", op.name),
+                    format!("cannot pass {} inout while a match on it is active", name),
                     "finish the match before the call",
                 ));
             }
-            op.ty = Some(v.ty.to_key());
-            arg.ty = Some(v.ty.to_key());
-            marked.push((i, op.name.clone()));
+            if let Expr::Var(op) = &mut *arg.expr { op.ty = Some(actual.to_key()); }
+            arg.ty = Some(actual.to_key());
+            marked.push((i, name));
         }
         for (i, name) in &marked {
             if e.args.iter().enumerate().any(|(j, x)| j != *i && mentions(x, name)) {
@@ -4187,7 +4252,7 @@ impl Checker {
                 col: 0,
                 params: cf.params.iter().map(|p| p.ty.clone()).collect(),
                 pnames: cf.params.iter().map(|p| p.name.to_string()).collect(),
-                inout: vec![false; cf.params.len()],
+                inout: (0..cf.params.len()).map(|i| i == 0 && matches!(n.as_str(), "map_get_mut" | "vec_at_mut" | "map_remove")).collect(),
                 ret: cf.ret.clone(),
                 effects: cf.effects.clone(),
                 tparams: cf.tparams.clone(),
@@ -4226,32 +4291,11 @@ impl Checker {
         let m = m.unwrap_or_default();
         arity(f.params.len())?;
         let direct = self.read_context == Some(e as *const Call as usize);
-        if n == "map_get_mut" && cat.is_some() {
-            if !direct {
-                return Err(terr(line, col, "foreign_contract", "map_get_mut is only allowed as a direct match scrutinee", ""));
-            }
-            let (place, key) = e.args.split_at_mut(1);
-            let Expr::InoutArg(arg) = &mut place[0] else {
-                return Err(terr(line, col, "inout_argument", "map_get_mut requires an inout place", ""));
-            };
-            let root = place_root(&arg.expr).ok_or_else(|| terr(line, col, "inout_argument", "map_get_mut requires an inout place", ""))?.to_string();
-            let entry = self.lookup(line, col, &root, scope)?;
-            self.check_borrow(line, col, &root, &[])?;
-            if !(entry.mutable || matches!(entry.kind, "inout" | "map_inout")) {
-                return Err(terr(line, col, "inout_argument", "map_get_mut requires a mutable map place", ""));
-            }
-            let ty = self.expr(&mut arg.expr, scope, c)?;
-            if ty != substitute(&f.params[0], &m) {
-                return Err(terr(line, col, "inout_argument", "map_get_mut requires a map of the declared type", ""));
-            }
-            if mentions(&key[0], &root) {
-                return Err(terr(line, col, "inout_alias", format!("{} is passed inout and also used in the key", root), ""));
-            }
-            arg.ty = Some(ty.to_key());
-            self.expect(&mut key[0], &substitute(&f.params[1], &m), scope, c, None)?;
-            return Ok(substitute(&f.ret, &m));
+        if cat.is_some() && matches!(n.as_str(), "map_get_mut" | "vec_at_mut") && !direct {
+            return Err(terr(line, col, "foreign_contract", format!("{n} is only allowed as a direct match scrutinee"), ""));
         }
-        if cat.is_some() && matches!(n.as_str(), "vec_get" | "map_get" | "map_lookup") && !direct {
+        if cat.is_some() && !direct && (matches!(n.as_str(), "vec_get" | "map_get")
+            || n == "map_lookup" && targs.as_ref().unwrap()[0].to_key() != "string") {
             let payload = targs.as_ref().and_then(|a| a.last()).unwrap();
             if self.is_extended(payload) {
                 return Err(terr(line, col, "foreign_owned_type", format!("{} cannot copy {}", n, tn(payload)), ""));
@@ -4260,16 +4304,39 @@ impl Checker {
         match &cat {
             Some(cf) if is_catalog_contract_only(&n) => self.observer_args(e, cf, &m, scope, c)?,
             // G5 A0: marker, place, type and same-call exclusivity
-            None if f.inout.iter().any(|b| *b) || e.args.iter().any(|x| matches!(x, Expr::InoutArg(_))) => {
+            _ if f.inout.iter().any(|b| *b) || cat.is_none() && e.args.iter().any(|x| matches!(x, Expr::InoutArg(_))) => {
                 self.inout_args(e, &f, &m, scope, c)?
             }
             _ => {
                 for (arg, p) in e.args.iter_mut().zip(f.params.iter()) {
-                    self.expect(arg, &substitute(p, &m), scope, c, None)?;
+                    let want = substitute(p, &m);
+                    if cat.is_some() && n == "map_get" && want.to_key() == "string" {
+                        self.check_text_key(arg, scope, c, None)?;
+                    } else {
+                        self.expect(arg, &want, scope, c, None)?;
+                    }
                 }
             }
         }
+        if cat.is_some() && n == "vec_at_mut" && !self.owned_aggregate(&targs.as_ref().unwrap()[0]) {
+            return Err(terr(line, col, "foreign_owned_type", "vec_at_mut requires an owned aggregate element", ""));
+        }
+        if cat.is_some() && n == "map_remove" {
+            let key = &targs.as_ref().unwrap()[0];
+            if *key != i64t() && key.to_key() != "string" {
+                return Err(terr(line, col, "foreign_owned_type", "map_remove requires i64 or String keys", ""));
+            }
+        }
+        if cat.is_some() && n == "vec_get" && targs.as_ref().unwrap()[0].to_key() == "string" {
+            return Err(terr(line, col, "foreign_owned_type", "Vec<String> elements cannot be read with vec_get", ""));
+        }
         if cat.is_some() && matches!(n.as_str(), "vec_push" | "map_insert") {
+            if targs.as_ref().unwrap()[0].to_key() == "string" {
+                let arg = &e.args[1];
+                if !matches!(arg, Expr::Call(_)) && !matches!(arg, Expr::Move(v) if v.fields.is_empty()) {
+                    return Err(terr(arg.line(), arg.col(), "foreign_move", "an owned String argument needs a call result or move", ""));
+                }
+            }
             let arg = e.args.last().unwrap();
             if matches!(arg, Expr::Var(v) if scope.get(&v.name).is_some_and(|entry| entry.kind == "map_inout")) {
                 return Err(terr(arg.line(), arg.col(), "foreign_move",
@@ -4277,7 +4344,7 @@ impl Checker {
             }
             let payload = targs.as_ref().and_then(|a| a.last()).unwrap();
             if self.owned_aggregate(payload) && !matches!(arg, Expr::StructLit(_) | Expr::Call(_) | Expr::Move(_)) {
-                return Err(terr(arg.line(), arg.col(), "foreign_move", "an aggregate collection element must be moved in", "use a constructor, call result, or move a local binding"));
+                return Err(terr(arg.line(), arg.col(), "foreign_move", "an aggregate collection payload needs a constructor, call result or move", ""));
             }
         }
         if cat.is_some() {

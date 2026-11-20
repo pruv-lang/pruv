@@ -1,0 +1,4 @@
+// spec: R-6e-5 reject
+fn f(k: String) -> HashMap<String, bool> ! alloc {
+  return map_insert::<String, bool>(map_new::<String, bool>(), k, true);
+}

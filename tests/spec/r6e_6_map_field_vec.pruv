@@ -1,0 +1,2 @@
+// spec: R-6e-6 reject
+struct Rec { items: HashMap<String, Vec<i64>> }

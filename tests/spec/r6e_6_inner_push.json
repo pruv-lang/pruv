@@ -1,0 +1,1 @@
+{"gen_contains": ["r.stopped.push(name)"], "gen_absent": [".clone()", "mem::take", "to_string", "String::from"]}

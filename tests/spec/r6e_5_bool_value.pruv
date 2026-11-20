@@ -1,0 +1,8 @@
+// spec: R-6e-5 accept
+struct Key { value: String }
+fn f(m: HashMap<String, bool>, k: Key) -> bool {
+  match map_get::<String, bool>(m, k.value) {
+    Some(v) => { return v; }
+    None => { return false; }
+  }
+}

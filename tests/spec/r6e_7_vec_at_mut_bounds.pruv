@@ -1,0 +1,14 @@
+// spec: R-6e-7 accept
+struct Rec { count: i64 }
+fn f(inout v: Vec<Rec>, i: i64) -> bool
+  ensures result == (0 <= i && i < len(v))
+{
+  let before: i64 = len(v);
+  let mut hit: bool = false;
+  match vec_at_mut::<Rec>(inout v, i) {
+    Some(r) => { r.count = 4; hit = true; }
+    None => { }
+  }
+  assert len(v) == before;
+  return hit;
+}

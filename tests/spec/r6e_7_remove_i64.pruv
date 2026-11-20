@@ -1,0 +1,10 @@
+// spec: R-6e-7 accept
+fn f(k: i64) -> bool ! alloc
+  ensures result
+{
+  let mut m: HashMap<i64, i64> = map_insert::<i64, i64>(map_new::<i64, i64>(), k, 42);
+  let hit: bool = map_remove::<i64, i64>(inout m, k);
+  assert len(m) == 0;
+  let again: bool = map_remove::<i64, i64>(inout m, k);
+  return hit && !again;
+}

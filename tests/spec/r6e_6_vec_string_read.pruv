@@ -1,0 +1,2 @@
+// spec: R-6e-6 reject
+fn f(v: Vec<String>) -> String { return vec_get::<String>(v, 0); }

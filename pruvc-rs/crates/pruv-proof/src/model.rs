@@ -500,6 +500,7 @@ pub struct Model {
     /// `false` = "int" (i64/u8/str elements), `true` = "bool": buffer datatypes built lazily
     bufs: RefCell<HashMap<String, BufFns>>,
     maps: RefCell<HashMap<String, (Sort, StructFns)>>,
+    strkey: RefCell<Option<FuncDecl>>,
     buf_names: RefCell<HashSet<String>>,
     /// lazily declared uninterpreted `size!<Name>` / `wf!<Name>` functions
     size_f: RefCell<HashMap<String, FuncDecl>>,
@@ -661,6 +662,7 @@ impl Model {
             recrel: HashSet::new(),
             bufs: RefCell::new(HashMap::new()),
             maps: RefCell::new(HashMap::new()),
+            strkey: RefCell::new(None),
             buf_names: RefCell::new(HashSet::new()),
             size_f: RefCell::new(HashMap::new()),
             wf_f: RefCell::new(HashMap::new()),
@@ -853,7 +855,12 @@ impl Model {
             Elem::Bool => ("bool".to_string(), self.bool_sort.clone()),
             Elem::Abs => {
                 let elem = &ty.args()[0];
-                (elem.to_key(), self.try_sort_of(&Ty::from_gtype(elem))?)
+                let tag = if elem.owner.is_none() && elem.args.is_empty() {
+                    format!("Type(name='{}', args=(), owner=None, index=-1)", elem.name)
+                } else {
+                    elem.to_key()
+                };
+                (tag, self.try_sort_of(&Ty::from_gtype(elem))?)
             }
             _ => ("int".to_string(), self.int_sort.clone()),
         };
@@ -1379,14 +1386,26 @@ impl Model {
     }
 
     /// `Model.try_sort_of` (Python `sort_of` raises `KeyError(name)` when there is no sort).
+    pub fn map_key_sort(&self, ty: &GType) -> Result<Sort, String> {
+        if ty.to_key() == "string" { Ok(self.int_sort.clone()) } else { self.try_sort_of(&Ty::from_gtype(ty)) }
+    }
+
+    pub fn text_map_key(&self, len: &Ast, bytes: &Ast) -> Ast {
+        let mut decl = self.strkey.borrow_mut();
+        decl.get_or_insert_with(|| {
+            let array = self.z.array_sort(&self.int_sort, &self.int_sort);
+            self.z.func_decl("strkey", &[self.int_sort.clone(), array], &self.int_sort)
+        }).apply(&[len.clone(), bytes.clone()])
+    }
+
     pub fn map_field(&self, ty: &Ty) -> Result<(Sort, StructFns), String> {
         let key = ty.to_gtype().to_key();
-        let tag = format!("{}map!{}", self.pre_tag, key);
+        let tag = format!("{}map!{}", self.pre_tag, self.maps.borrow().len());
         if let Some(f) = self.maps.borrow().get(&key) {
             return Ok(f.clone());
         }
         let Some(Coll::Map(k, v)) = ty.coll() else { return Err(nokey(ty.name())) };
-        let ks = self.try_sort_of(&Ty::from_gtype(&k))?;
+        let ks = self.map_key_sort(&k)?;
         let vs = self.try_sort_of(&Ty::from_gtype(&v))?;
         let spec = DtSpec {
             name: tag.clone(),
@@ -1395,7 +1414,7 @@ impl Model {
                 fields: vec![
                     (format!("{}.d", tag), self.z.array_sort(&ks, &self.bool_sort)),
                     (format!("{}.a", tag), self.z.array_sort(&ks, &vs)),
-                    (format!("{}.len", tag), self.int_sort.clone()),
+                    (format!("{}.n", tag), self.int_sort.clone()),
                 ],
             }],
         };
@@ -1415,6 +1434,7 @@ impl Model {
             Ty::Opt => Ok(self.opt_sort.clone()),
             Ty::Res => Ok(self.res_sort.clone()),
             Ty::Param(g) => Ok(self.abstract_sort(g)),
+            Ty::User(n) if n == "string" => self.bufsort(ty),
             Ty::User(n) => self.sorts.get(n).cloned().ok_or_else(|| nokey(n)),
             Ty::Inst(g) => self.instance(g),
             Ty::Unit | Ty::GArray(_) => Err(nokey(ty.name())),

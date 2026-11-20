@@ -1,0 +1,4 @@
+// spec: R-6e-6 accept
+pub struct Clock { active: i64, runs: HashMap<i64, bool> }
+pub struct St { clocks: HashMap<i64, Clock> }
+pub fn n(st: St) -> i64 { return 0; }

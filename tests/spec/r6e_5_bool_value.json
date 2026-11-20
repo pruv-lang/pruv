@@ -1,0 +1,1 @@
+{"gen_contains": ["k.value.as_str()", "m.get(k).copied()"], "gen_absent": [".clone()", "mem::take", "to_string", "String::from"]}

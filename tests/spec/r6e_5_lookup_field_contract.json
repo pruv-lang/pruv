@@ -1,0 +1,1 @@
+{"gen_contains": [".as_str())", "some_val of None"], "gen_absent": [".clone()", "mem::take", "to_string", "String::from"]}

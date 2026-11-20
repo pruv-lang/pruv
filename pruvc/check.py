@@ -7,11 +7,12 @@ from typeinfo import (TypeTable, BUILTIN_TYPE_NAMES, type_name, is_user_type, is
                       TypeArityError, check_arity, bind_args, substitute, is_value, is_element,
                       dependencies, decl_owner, fn_owner,  # G3 A1
                       COLLECTION_ARITY, COLLECTION_SPELLING, is_collection, contains_collection,  # G6 A0
-                      program_uses_inout, is_owned_field_type, is_scalar_vec, is_nongeneric_struct, field_place)
+                      program_uses_inout, is_owned_field_type, is_scalar_vec, is_nongeneric_struct,
+                      field_place, is_nested_collection_field)
 from refine import expand as refine_expand
 from refine import _kids as expr_kids
 from foreign import (CATALOG, CATALOG_NAMES, CATALOG_CONTRACT_ONLY, FILE_OBSERVERS, PROC_OBSERVERS, NET_OBSERVERS, ASYNC_OBSERVERS, ASYNC_OPS,
-                     check_foreign_decl, check_ownership)  # G6 A0 / G10 A0
+                     check_foreign_decl, check_ownership, STRING, MUTABLE_COLLECTION_MATCH, BORROWED_MAP_KEY)  # G6 A0 / G10 A0
 
 # name -> (argument kind, result: BOOL | I64 | "payload" = the Option/Result payload type)
 CONTRACT_ONLY = {"is_some": ("option", BOOL), "some_val": ("option", "payload"), "is_ok": ("result", BOOL),
@@ -202,8 +203,11 @@ class Checker:
         value_decls = {n: (len(d.tparams), [fd.type for _, fd in s.decl_fields(d)])
                        for n, d in s.decls.items()}
         s.aggregates = {n for n, d in s.decls.items() if is_nongeneric_struct(Type(n), s.decls)
-                        and all(is_owned_field_type(f.type) or is_value(f.type, value_decls, (n,))
+                        and all(is_owned_field_type(f.type) or is_nested_collection_field(f.type)
+                                or is_value(f.type, value_decls, (n,))
                                 for f in d.fields)}
+        s.nested_records = {n for n, d in s.decls.items() if isinstance(d, StructDecl)
+                            and any(is_nested_collection_field(f.type) for f in d.fields)}
         s.resolve_types()      # every type reference
         s.type_graph()         # G9 A0: type SCCs, generic/recursive field rules
         s.inhabitance()        # G9 A0: every declaration needs a finite value
@@ -424,18 +428,22 @@ class Checker:
             for a in ty.args:
                 s.check_type_rec(node, a)
             if ty.name == "vec":
-                s.collection_payload(node, ty.args[0], "a Vec element")
+                if ty.args[0] != STRING:
+                    s.collection_payload(node, ty.args[0], "a Vec element")
             elif ty.name == "hashmap":
                 k = ty.args[0]
-                if contains_collection(k) or not is_element(k, s.elem_params):
-                    terr(node, "foreign_owned_type", "%s cannot be a HashMap key: only i64, bool and Element type "
+                if k != STRING and not is_element(k, s.elem_params):
+                    terr(node, "foreign_owned_type", "%s cannot be a HashMap key: only i64, bool, String and Element type "
                          "parameters can" % type_name(k),
-                         "use i64 or bool keys, or declare the parameter `: Element`")
+                         "use i64, bool or String keys, or declare the parameter `: Element`")
                 v = ty.args[1]
                 s.collection_payload(node, v, "a HashMap value")
-                if k != I64 and v.name in s.aggregates and any(
-                        is_owned_field_type(f.type) for f in s.decls[v.name].fields):
-                    terr(node, "foreign_owned_type", "aggregate HashMap values require i64 keys")
+                if k == STRING and v not in (I64, BOOL) and v.name not in s.aggregates:
+                    terr(node, "foreign_owned_type", "String-keyed maps require i64, bool or owned aggregate values")
+                if k not in (I64, STRING) and v.name in s.aggregates and any(
+                        is_owned_field_type(f.type) or is_nested_collection_field(f.type)
+                        for f in s.decls[v.name].fields):
+                    terr(node, "foreign_owned_type", "aggregate HashMap values with owned fields require i64 or String keys")
             return
         if ty.name == "array":
             if ty.args:                      # [X] for X other than i64/u8/bool
@@ -480,7 +488,8 @@ class Checker:
     def check_arg(s, node, a, tp):
         """a: a type argument; tp: the TypeParam it instantiates (None for Option/Result)"""
         s.check_type_rec(node, a)
-        if contains_collection(a):     # G6: collections are never type arguments of Option/Result/user declarations
+        # Option, Result and user declarations cannot take collections or records with nested fields.
+        if contains_collection(a) or any(n in s.nested_records for n in dependencies(a)):
             terr(node, "foreign_owned_type", "%s cannot be a type argument" % type_name(a),
                  "keep collections in their own bindings; Vec<T> and HashMap<K, V> are the only places they appear")
         if not is_value(a, s.arg_decls):
@@ -504,12 +513,15 @@ class Checker:
         if len(targs) != len(tparams):
             terr(e, "type_arity", "%s expects %d type argument(s), got %d" % (what, len(tparams), len(targs)),
                  "give exactly one type argument per type parameter")
+        catalog_collection = (isinstance(e, Call) and e.name not in s.funcs and (
+            e.name in ("vec_new", "vec_push", "vec_get", "vec_at_mut",
+                       "map_new", "map_get", "map_get_mut", "map_insert", "map_remove")
+            or e.name == "map_lookup" and targs[0] == STRING))
+        if catalog_collection:
+            s.check_type(e, Type("vec" if e.name.startswith("vec_") else "hashmap", tuple(targs)))
         for a, tp in zip(targs, tparams):
             s.check_type(e, a)
-            if (isinstance(e, Call) and e.name in
-                    ("vec_new", "vec_push", "vec_get", "map_new", "map_get", "map_get_mut", "map_insert")
-                    and tp.bound is None):
-                s.check_type(e, Type("vec" if e.name.startswith("vec_") else "hashmap", tuple(targs)))
+            if catalog_collection:
                 s.ext_misuse(e, a, "coll")
             else:
                 s.check_arg(e, a, tp)
@@ -530,9 +542,13 @@ class Checker:
                              "fields are i64, bool, Option<i64>, Result<i64> or a user struct/enum")
                     s.check_type(f, f.type)
                     state_field = isinstance(d, StructDecl) and (
-                        f.type.name == "vec" or f.type.name == "hashmap" and f.type.args[0] == I64
+                        f.type.name == "vec" or f.type.name == "hashmap" and f.type.args[0] in (I64, STRING)
                     ) and not f.type.args[-1].args and f.type.args[-1].name in s.aggregates
-                    if contains_collection(f.type) and (d.tparams or not (is_owned_field_type(f.type) or state_field)):
+                    nested_field = isinstance(d, StructDecl) and is_nested_collection_field(f.type)
+                    if not state_field and any(n in s.nested_records for n in dependencies(f.type)):
+                        terr(f, "foreign_owned_type", "a record with nested collection fields cannot be a direct field")
+                    if contains_collection(f.type) and (
+                            d.tparams or not (is_owned_field_type(f.type) or state_field or nested_field)):
                         terr(f, "foreign_owned_type", "field %s cannot have the collection type %s" % (
                             f.name, type_name(f.type)),
                              "only non-generic declarations may have Vec<i64>, Vec<bool> or String fields")
@@ -726,25 +742,46 @@ class Checker:
             s.ext_misuse(f, f.ret)
 
     def check_modes(s):
-        """An inout parameter is an array or a non-generic struct."""
+        """An inout parameter is an array, a non-generic struct or a map/vector place."""
         for f in s.prog.functions:
             for p in f.params:
-                if p.mode is not None and not (is_array(p.type) or is_nongeneric_struct(p.type, s.decls)):
-                    terr(_mode_at(f, p), "inout_type", "inout parameter %s cannot have the type %s: only [i64], [u8], "
-                         "[bool] and [T] with T: Element can be inout" % (p.name, type_name(p.type)),
-                         "declare %s without inout, or give it one of those array types" % p.name)
+                if p.mode is not None and not (is_array(p.type) or is_nongeneric_struct(p.type, s.decls)
+                                               or p.type.name in ("vec", "hashmap") and p.type.owner is None
+                                               and p.type.args[-1].name in s.aggregates
+                                               and not p.type.args[-1].args):
+                    terr(_mode_at(f, p), "inout_type", "inout parameter %s cannot have the type %s" %
+                         (p.name, type_name(p.type)),
+                         "use an array, a non-generic struct, or a map or vector of aggregate records, or remove inout")
 
     def check_entries(s):
         """Host entry signatures admit plain values, array/str parameters and scalar Vec results."""
+        def new_collection(ty):
+            return (is_nested_collection_field(ty)
+                    or ty.name == "hashmap" and ty.args[0] == STRING
+                    or any(new_collection(a) for a in ty.args))
+
+        rust_records = {d.name for d in s.decls.values()
+                        if any(new_collection(fd.type) for _, fd in s.decl_fields(d))}
+        while True:
+            dependent = {d.name for d in s.decls.values()
+                         if any(n in rust_records for _, fd in s.decl_fields(d) for n in dependencies(fd.type))}
+            if dependent <= rust_records:
+                break
+            rust_records.update(dependent)
+        # A Rust entry can borrow a record with the new collection fields, and a
+        # typed resident state entry can also borrow its String key parameters.
         for f in s.prog.functions:
             if not f.host_entry:
                 continue
+            rust_state = bool(f.params and f.params[0].mode == "inout" and f.params[0].type.name in rust_records)
             positions = []
             for i, p in enumerate(f.params):
                 if p.mode == "inout" and is_nongeneric_struct(p.type, s.decls):
                     if i == 0:
                         continue
                     terr(f, "entry_signature", "host entry %s must take its inout struct first" % f.name)
+                if not p.take and p.mode is None and (p.type.name in rust_records or rust_state and p.type == STRING):
+                    continue
                 positions.append(("parameter %s" % p.name, p.type))
             if not is_scalar_vec(f.ret):
                 positions.append(("the result", f.ret))
@@ -901,12 +938,14 @@ class Checker:
         effect_before = False
         for e, conditional in calls:
             f = s.funcs.get(e.name)
-            marked = [arg for arg in e.args if isinstance(arg, InoutArg)] if f is not None else []
+            marked = ([arg for arg in e.args if isinstance(arg, InoutArg)]
+                      if f is not None or e.name == "map_remove" else [])
             if marked:
                 for arg in marked:
-                    if mentions[arg.expr.name] > 1:
+                    root, _ = field_place(arg.expr)
+                    if mentions[root.name] > 1:
                         terr(arg, "inout_context",
-                             "%s is passed inout and also mentioned elsewhere in this statement" % arg.expr.name,
+                             "%s is passed inout and also mentioned elsewhere in this statement" % root.name,
                              "use a separate statement for the inout call")
                 if conditional:
                     terr(e, "inout_context", "the inout call may be skipped or repeated",
@@ -927,7 +966,7 @@ class Checker:
         s.boundary = None
         s.field_move = None
         if s.map_borrows and isinstance(st, Return):
-            terr(st, "foreign_contract", "cannot return inside a map_get_mut Some arm")
+            terr(st, "foreign_contract", "cannot return inside a mutable collection Some arm")
         if isinstance(st, Let):
             if st.name in scope:
                 terr(st, "shadow", "%s is already defined; shadowing is not allowed" % st.name,
@@ -1064,9 +1103,9 @@ class Checker:
             t = s.expr(st.scrutinee, scope)
             s.match_call = None
             call = st.scrutinee
-            map_lookup = isinstance(call, Call) and call.name not in s.funcs and call.name in ("map_get", "map_get_mut")
-            mutable_map = map_lookup and call.name == "map_get_mut"
-            map_view = map_lookup and not mutable_map and s.is_extended(call.targs[1])
+            catalog_match = isinstance(call, Call) and call.name not in s.funcs
+            mutable_map = catalog_match and call.name in MUTABLE_COLLECTION_MATCH
+            map_view = catalog_match and call.name == "map_get" and s.is_extended(call.targs[-1])
             s.check_inout_context(st, st.scrutinee)
             user = s.tt.is_enum(t)
             root = s.match_root(st.scrutinee, t, scope)   # G9 A0: root variable of an extended scrutinee path
@@ -1112,8 +1151,7 @@ class Checker:
                              "bind every field, in declaration order")
                 else:
                     # G3: the Some/Ok binder has the payload type of Option<X> / Result<X>; Err binds the i64 code
-                    payload = (call.targs[1] if map_lookup else
-                               t.args[0] if t.args and a.ctor != "Err" else I64)
+                    payload = t.args[0] if t.args and a.ctor != "Err" else I64
                     ftypes = [payload] * len(a.binders)
                 for b, bt in zip(a.binders, ftypes):
                     if b in sc:
@@ -1355,7 +1393,7 @@ class Checker:
         a non-fresh extended value is cloned, which needs `alloc`; constructors, literals and calls are fresh"""
         t = value.ty
         if getattr(value, "map_mut_view", False):
-            terr(value, "foreign_move", "a map_get_mut binder cannot be used as an owned value")
+            terr(value, "foreign_move", "a mutable collection binder cannot be used as an owned value")
         if t is not None and s.is_extended(t) and not isinstance(value, (EnumCtor, StructLit, Call, Move)):
             s.used_effects.add("alloc")
 
@@ -1430,7 +1468,7 @@ class Checker:
 
     def lookup(s, node, name, scope):
         if name in s.map_borrows:
-            terr(node, "recursive_borrow", "cannot use %s inside the map_get_mut Some arm" % name)
+            terr(node, "recursive_borrow", "cannot use %s inside a mutable collection Some arm" % name)
         if name not in scope:
             terr(node, "unknown_name", "unknown variable %s" % name)
         return scope[name]
@@ -1545,6 +1583,8 @@ class Checker:
                 if not c:
                     terr(e, "contract_only", "indexing a %s is only allowed in contracts" % type_name(at),
                          "use vec_get in code" if at.name == "vec" else "use string_byte in code")
+                if at.name == "vec" and at.args[0] == STRING:
+                    terr(e, "foreign_owned_type", "Vec<String> elements cannot be read")
                 return at.args[0] if at.name == "vec" else I64
             return s.elem_type(at)  # G2 A5: bool array reads bool; G3: [T] reads T
         if isinstance(e, Ctor):
@@ -1729,14 +1769,27 @@ class Checker:
         got = [s.expr(arg, scope, c) for arg in e.args]
         kidx = [p.name for p in f.params].index("k")
         for g in got:
-            if g.name == "hashmap" and g.owner is None and g.args[0] != got[kidx]:
+            if (g.name == "hashmap" and g.owner is None and g.args[0] != got[kidx]
+                    and not (e.name == "map_lookup" and g.args[0] == STRING)):
                 terr(e.args[kidx], "foreign_contract", "key of type %s does not match the map key type %s" % (
                     type_name(got[kidx]), type_name(g.args[0])),
                      "pass a key of the map's key type")
         for arg, g, p in zip(e.args, got, f.params):
             want = substitute(p.type, m)
-            if g != want:
+            if e.name == "map_lookup" and p.name == "k" and want == STRING:
+                s.check_text_key(arg, scope, c, g)
+            elif g != want:
                 terr(arg, "type_mismatch", "expected %s, found %s" % (type_name(want), type_name(g)))
+
+    def check_text_key(s, arg, scope, c, actual=None):
+        if isinstance(arg, StrLit):
+            arg.ty = STR
+            return
+        if actual is None:
+            actual = s.expr(arg, scope, c)
+        if actual == STR or actual == STRING and isinstance(arg, (Var, FieldAccess, VariantField)):
+            return
+        terr(arg, "type_mismatch", "expected str or a borrowed String read, found %s" % type_name(actual))
 
     # ---- G5 A0: inout call arguments and old(..) ----
     def inout_args(s, e, f, m, scope, c):
@@ -1751,13 +1804,17 @@ class Checker:
                 if isinstance(arg, InoutArg):
                     terr(arg, "inout_argument", "parameter %s of %s is not inout: the `inout` marker is not allowed here" % (
                         p.name, n), "remove `inout`, or declare the parameter `inout %s: ...`" % p.name)
-                s.expect(arg, want, scope, c)
+                if f is CATALOG.get(n) and n in BORROWED_MAP_KEY and want == STRING:
+                    s.check_text_key(arg, scope, c)
+                else:
+                    s.expect(arg, want, scope, c)
                 continue
             if not isinstance(arg, InoutArg):
                 terr(arg, "inout_argument", "parameter %s of %s is inout: the argument needs the `inout` marker" % (p.name, n),
                      "write `inout name` with a `let mut` local array or an inout parameter")
             op = arg.expr
-            place, path = field_place(op) if n == "map_get_mut" else (op, ())
+            collection_place = f is CATALOG.get(n) and n in MUTABLE_COLLECTION_MATCH + ("map_remove",)
+            place, path = field_place(op) if collection_place else (op, ())
             if not isinstance(place, Var):
                 what = ("a field" if isinstance(op, FieldAccess) else "an element" if isinstance(op, Index)
                         else "a call" if isinstance(op, Call) else "an expression")
@@ -2081,8 +2138,8 @@ class Checker:
             return rt
         catalog = n in CATALOG and n not in s.funcs       # G6: fixed standard catalog (G6_SPEC 10.3)
         if catalog:
-            if n == "map_get_mut" and e is not s.match_call:
-                terr(e, "foreign_contract", "map_get_mut is only allowed as a direct match scrutinee")
+            if n in MUTABLE_COLLECTION_MATCH and e is not s.match_call:
+                terr(e, "foreign_contract", "%s is only allowed as a direct match scrutinee" % n)
             if n in CATALOG_CONTRACT_ONLY:
                 if not c:
                     terr(e, "foreign_contract", "%s is only allowed in contracts" % n,
@@ -2114,8 +2171,22 @@ class Checker:
             s.inout_args(e, f, m, scope, c)     # G5 A0: marker, place, type and same-call exclusivity
         else:
             for arg, p in zip(a, f.params):
-                s.expect(arg, substitute(p.type, m), scope, c)
+                want = substitute(p.type, m)
+                if catalog and n in BORROWED_MAP_KEY and want == STRING:
+                    s.check_text_key(arg, scope, c)
+                else:
+                    s.expect(arg, want, scope, c)
         if catalog:
+            if n == "vec_get" and e.targs[0] == STRING:
+                terr(e, "foreign_owned_type", "Vec<String> elements cannot be read with vec_get")
+            if n == "vec_at_mut" and e.targs[0].name not in s.aggregates:
+                terr(e, "foreign_owned_type", "vec_at_mut requires an owned aggregate element")
+            if n == "map_remove" and e.targs[0] not in (I64, STRING):
+                terr(e, "foreign_owned_type", "map_remove requires i64 or String keys")
+            if n in ("vec_push", "map_insert") and e.targs[0] == STRING:
+                arg = a[1]
+                if not (isinstance(arg, Call) or isinstance(arg, Move) and not arg.fields):
+                    terr(arg, "foreign_move", "an owned String argument needs a call result or move")
             if n in ("vec_get", "map_get") and s.is_extended(e.targs[-1]):
                 if e is not (s.field_receiver if n == "vec_get" else s.match_call):
                     terr(e, "foreign_owned_type", "%s cannot copy %s" % (n, type_name(e.targs[-1])))

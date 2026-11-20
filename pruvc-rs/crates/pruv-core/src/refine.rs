@@ -258,7 +258,9 @@ fn inout_operands(e: &Expr, out: &mut HashSet<String>) {
     if let Expr::Call(c) = e {
         for a in &c.args {
             if let Expr::InoutArg(ia) = a {
-                if let Expr::Var(v) = &*ia.expr {
+                let mut place = ia.expr.as_ref();
+                while let Expr::FieldAccess(f) = place { place = &f.base; }
+                if let Expr::Var(v) = place {
                     out.insert(v.name.clone());
                 }
             }

@@ -1,0 +1,1 @@
+{"gen_contains": [".remove(sid.as_str()).is_some()"], "gen_absent": [".clone()", "mem::take", "to_string", "String::from"]}
