@@ -399,6 +399,8 @@ fn push_two(take v: Vec<i64>, x: i64) -> Vec<i64> ! alloc
   could rest on). A field operand reads the field directly, without a clone. With `--no-verify`,
   `--foreign-checks all` or a user `trusted rust fn`, Rust uses the checked catalog helper. The inlined read is
   still listed in `.foreign.json` and `--trust-report` as a `vec_get` use. This rule does not change LLVM lowering.
+  Under the same conditions `vec_push::<T>(vec_new::<T>(), x)` is emitted as `::std::vec![x]` (one element at
+  exact capacity, no length check, since an empty vector meets `len(v) < 2^40`); both uses stay listed.
 - **Collections.** `Vec<T>`, `HashMap<K, V>` (`K` is `i64`, `bool` or `String` under R-6e-5) and
   `String` hold values. Collections cannot be stored in `Option`, `Result` or arrays. R-6e-1, R-6e-3 and R-6e-6
   describe collection fields and the permitted nesting. Operations (`vec_*` and `map_*` take explicit type arguments, `string_*` and `len` take none): `vec_new`, `vec_push`,
@@ -490,7 +492,12 @@ fn tree_count(t: Tree) -> i64
   Rust passes it with `::std::mem::take(&mut p.f)` without cloning. An active
   match borrow of `p` still makes the assignment `type/recursive_borrow`.
 - R-6e-3 **Collections of owned aggregates.** An owned aggregate is a non-generic, non-recursive struct whose
-  fields are scalars, plain value types or R-6e-1 owned fields. `Vec<S>` and `HashMap<i64, S>` with an owned
+  fields are scalars, plain value types, R-6e-1 owned fields or `[u8]` buffer fields. A `[u8]` field keeps the
+  §6e buffer rules (a fresh buffer or `copy(view)` to build it, reads by index and `len`, no element store) and is
+  `Vec<u8>` in Rust, so session bytes stay bytes and are not widened to `Vec<i64>`. Other buffer fields (`[i64]`,
+  `[bool]`, `str`) do not make an owned aggregate; they keep their `Vec<i64>`, `Vec<bool>` and `String` spellings.
+  A `vec_get::<S>(v, i).f` read of a collection or `[u8]` field borrows it (Rust `&v[i].f`).
+  `Vec<S>` and `HashMap<i64, S>` with an owned
   aggregate `S` are allowed wherever a collection type is allowed, including catalog type arguments. A state
   struct is a non-generic struct that may also have fields of these two types. Nesting stops there: an owned
   aggregate may not hold such fields and a state struct is not a payload (`type/foreign_owned_type`).
@@ -754,7 +761,7 @@ pub fn bounded(x: i64) -> i64                requires 0 <= x && x <= 10
   end of the file, and any `#[` inside a body, is `parse/attribute_position`.
 - **Host entries.** In explicit mode only root `pub` non-generic functions are host entries. A parameter of
   collection, recursive or buffer-field type, or an `inout` parameter (section 6g, Host limits), is
-  `type/entry_signature`, subject to R-6e-5, R-6e-6, R-6f-2 and R-6f-4. The same restriction applies to results, subject to R-6f-1 and R-6f-3. Ordinary entries can be
+  `type/entry_signature`, subject to R-6e-5, R-6e-6, R-6f-2, R-6f-4 and R-6f-6. The same restriction applies to results, subject to R-6f-1 and R-6f-3. Ordinary entries can be
   exported through `--rust-bindings` and the LLVM
   `pruv_abi_<name>` interface. Child `pub` functions are for Pruv callers only. An optional root `main`
   must be `pub fn main() -> ()`. A child `main` is an ordinary function.
@@ -774,17 +781,31 @@ pub fn bounded(x: i64) -> i64                requires 0 <= x && x <= 10
   non-generic struct `R` that has at least one collection field, whose fields are plain values (no
   `[T]` or `str` buffer anywhere),
   `Vec<i64>`, `Vec<bool>`, `Vec<String>` or `Vec<E>` for an owned aggregate `E` (R-6e-3) without R-6e-6 nested
-  collection fields. The Rust entry returns `R` by value (`pub fn e(..) -> R`, fields `pub`), so the host
+  collection fields or `[u8]` buffer fields. The Rust entry returns `R` by value (`pub fn e(..) -> R`, fields `pub`), so the host
   owns the moved-out result without a copy. A `Vec<String>` field is exposed as
   `::std::vec::Vec<::std::string::String>`. Its length and the length of each string must be at most
   2^40, as in R-6d-1. The entry trusts those length bounds for the returned field.
   A `HashMap` field, a nested-collection element and deeper nesting remain
   `type/entry_signature`. Like R-6f-1 it has no C ABI: the LLVM backend rejects `R`
   with `codegen/unsupported_type`. Legacy mode is unchanged.
+  The entry may also return a non-generic enum `E` whose payload fields are plain values, `Vec<i64>`,
+  `Vec<bool>` or such a struct `R` without a `Vec<String>` field, with at least one of the owned kinds
+  (`Vec<String>` payloads stay `type/foreign_owned_type` at the enum declaration). The Rust entry returns `E` by value
+  (`pub fn e(..) -> E`, a `pub enum`), so a variant's collections move to the host without a copy. Other
+  payloads stay `type/entry_signature` and the LLVM backend rejects `E` with `codegen/unsupported_type`.
 - R-6f-4 **Owned String entry parameters.** A Rust host entry, with or without a state
   parameter, may take an owned `String` using `take key: String`; the wrapper passes ownership
   to the body without a copy, and LLVM and the C ABI reject the signature with
   `codegen/unsupported_type`.
+- R-6f-6 **Owned aggregate entry parameters.** In explicit mode a Rust host entry may take a parameter
+  `x: S` or `take x: S` of an owned aggregate `S` (R-6e-3), including one with `Vec<i64>`, `Vec<bool>`,
+  `String` or `[u8]` fields. A borrowed `x: S` is `x: &S` in Rust and a `take x: S` is `x: S`, moved into the
+  body without a copy; a `[u8]` field is `Vec<u8>`. As for R-6f-2 state, field lengths (at most 2^40, section 7
+  item 6) are trusted, not checked per call, for both the borrowed and the `take` form; the host caller must keep them. `requires` on `x` are checked at entry unless `--trust-callers`.
+  A `take` parameter follows R-6e-12 in the body (`type/foreign_move` after a move). A struct that is not an
+  owned aggregate (an `[i64]`, `[bool]` or `str` field, a generic struct) is not covered by this rule; it keeps
+  the plain-value and R-6e-6 entry rules and is otherwise `type/entry_signature`.
+  `raw_entries` "c" and the LLVM backend reject it with `codegen/unsupported_type`.
 - **Proof.** Every function is verified, including private and unused ones; a caller sees the callee's contract and,
   for a function that can be expanded (section 6, L3 P07, R-6-1), the fact `result == <body>` at its call, from any
   module. It sees no other part of the body. Recursion and recursive types may span modules. Host entries check `requires` at run

@@ -747,7 +747,7 @@ def first_g6_use(prog):
             return min(cands, key=lambda c: (c[0], c[1]))
     for d in prog.types:
         for fd in TypeTable._all_fields(d):
-            if (is_owned_field_type(fd.type) or is_nested_collection_field(fd.type)
+            if (is_owned_field_type(fd.type) or is_nested_collection_field(fd.type) or contains_collection(fd.type)
                     or fd.type.name == "hashmap" and fd.type.args[0] == STRING):
                 return (fd.line, fd.col, "an owned collection field")
     return None

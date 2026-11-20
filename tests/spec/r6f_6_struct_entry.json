@@ -1,0 +1,1 @@
+{"gen_contains":["pub fn test(id: &BudgetId)","pub fn n(r: &Req)","pub units: ::std::vec::Vec<u8>"],"gen_absent":[".clone()"]}

@@ -1539,6 +1539,7 @@ class Gen:
         s.table = make_type_table(prog)
         s.params = set()
         s.take_arrays = set()
+        s.take_ext = set()   # P32L: `take` parameters of an extended struct type (owned, borrowed with & in contracts)
         s.inouts = set()     # G5 A2: inout parameters of the function being generated (`&mut [T]` bindings)
         # G5 A2: the inout code paths only run for a program that uses inout (unchecked program: assume it may)
         s.g5 = getattr(prog, "uses_inout", None) is not False
@@ -1794,6 +1795,7 @@ class Gen:
             return   # G6: a trusted rust fn has no body; its boundary helper is emitted on first use
         s.params = {p.name for p in f.params}
         s.take_arrays = {p.name for p in f.params if p.take and is_array(p.type)}
+        s.take_ext = {p.name for p in f.params if p.take and s.is_ext(p.type)}
         if s.g5:
             s.inouts = {p.name for p in f.params if p.mode == "inout"}
         s.vt = {p.name: p.type for p in f.params}
@@ -1825,7 +1827,8 @@ class Gen:
         s.emit(0, "%sfn %s(%s)%s {" % (vis, body_name, ps, ret))
         s.cost = not s.verified and f.cost is not None
         if s.cost:
-            args = ["&" + p.name if p.name in s.take_arrays or p.take and p.type.name == "string" else p.name for p in f.params]
+            args = ["&" + p.name if p.name in s.take_arrays or p.name in s.take_ext or p.take and p.type.name == "string"
+                    else p.name for p in f.params]
             s.emit(1, "let pruv_cost: i128 = %s__pruv_cost(%s);" % (f.name, ", ".join(args)))
             s.emit(1, "let mut pruv_spent: u128 = 0;")
         s.block(f.body, 1)
@@ -1836,6 +1839,7 @@ class Gen:
         if f.name in s.small:
             s.small_fn(f, ps)
         if s.cost:
+            take_ext, s.take_ext = s.take_ext, set()   # the cost helper takes every extended parameter as `&Name`
             # Use the requires evaluator on parameter views, including immutable views of inout.
             cps = ", ".join("%s: %s" % (p.name, "&" + rty(p.type)
                                         if p.mode == "inout" and not is_array(p.type) else s.rt(p.type, True))
@@ -1852,6 +1856,7 @@ class Gen:
             s.emit(1, s.c(f.cost))
             s.emit(0, "}")
             s.emit(0, "")
+            s.take_ext = take_ext
         if f.requires and f.name in s.body_named:
             if not s.explicit:
                 # G5: a wrapper of an inout function always checks (trust_callers does not waive it)
@@ -1899,7 +1904,8 @@ class Gen:
 
     def cost_call(s, name, args):
         # A negative modular bound cannot be met by a nonnegative callee counter.
-        args = ["&" + arg if p.take and (is_array(p.type) or p.type.name == "string") else arg for p, arg in zip(s.fmap[name].params, args)]
+        args = ["&" + arg if p.take and (is_array(p.type) or p.type.name == "string" or s.is_ext(p.type)) else arg
+                for p, arg in zip(s.fmap[name].params, args)]
         return ('let pruv_units = %s__pruv_cost(%s); '
                 'if pruv_units < 0 { panic!("pruv: cost exceeded"); } %s' %
                 (name, ", ".join(args), s.cost_add('(pruv_units as u128).checked_add(1).unwrap_or_else(|| panic!("pruv: cost exceeded"))')))
@@ -2055,7 +2061,7 @@ class Gen:
         if isinstance(e, Var):
             if e.name in s.bound or e.name not in s.params:
                 raise s.g9_unsupported(e, "the variable %s as an aggregate operand" % e.name)
-            return e.name if s.is_ext(e.ty) else "(&%s)" % e.name
+            return e.name if s.is_ext(e.ty) and e.name not in s.take_ext else "(&%s)" % e.name
         if isinstance(e, FieldAccess):
             deref = "*" if s.field_boxed(e.base.ty, e.field) else ""
             return "(&%s(%s).%s)" % (deref, s.cx(e.base), e.field)
@@ -3211,6 +3217,12 @@ class Gen:
             s.fg.record_inline_catalog(e.name, src)
             v, i = e.args
             return "(unsafe { *(%s).get_unchecked((%s) as usize) })" % (s.e(v), s.e(i))
+        # vec_push onto a fresh vec_new: one element at exact capacity, the hand Rust `vec![x]` (P32L, R-6d-2)
+        if (e.name == "vec_push" and isinstance(e.args[0], Call) and e.args[0].name == "vec_new"
+                and s.unchecked_catalog()):
+            s.fg.record_inline_catalog("vec_new", src[:1])
+            s.fg.record_inline_catalog(e.name, src)
+            return "::std::vec![%s]" % s.e(e.args[1])
         name = s.fg.catalog_helper(e.name, low, src)
         # string_to_str of an owned local that the enclosing return moves: the String itself is the copy.
         if e.name == "string_to_str" and not s.cost and isinstance(e.args[0], Var) and e.args[0].name in s.moving:
@@ -3305,7 +3317,7 @@ class Gen:
                     and s.unchecked_catalog()):
                 s.fg.record_inline_catalog(b.name, tuple(b.inst.get("src_args", b.inst["args"])))
                 f = "(*(%s).get_unchecked((%s) as usize)).%s" % (s.e(b.args[0]), s.e(b.args[1]), e.field)
-                return "(unsafe { &%s })" % f if e.ty is not None and is_collection(e.ty) else "(unsafe { %s })" % f
+                return "(unsafe { &%s })" % f if e.ty is not None and (is_collection(e.ty) or is_array(e.ty)) else "(unsafe { %s })" % f
             return "%s.%s" % (s.e(e.base), e.field)
         if isinstance(e, Call):
             n, a = e.name, e.args

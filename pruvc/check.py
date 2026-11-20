@@ -239,7 +239,7 @@ class Checker:
             return is_string_record_map(ty) and ty.args[-1].name in record_map_values
 
         s.aggregates = {n for n, d in s.decls.items() if is_nongeneric_struct(Type(n), s.decls)
-                        and all(is_owned_field_type(f.type) or is_nested_collection_field(f.type)
+                        and all(is_owned_field_type(f.type) or f.type == ARRAY_U8 or is_nested_collection_field(f.type)
                                 or n in s.collection_records and record_map_field(f.type)
                                 or is_value(f.type, value_decls, (n,))
                                 for f in d.fields)}
@@ -494,7 +494,7 @@ class Checker:
                 if k == STRING and v not in (I64, BOOL) and v.name not in s.aggregates:
                     terr(node, "foreign_owned_type", "String-keyed maps require i64, bool or owned aggregate values")
                 if k not in (I64, STRING) and v.name in s.aggregates and any(
-                        is_collection(f.type) for f in s.decls[v.name].fields):
+                        is_collection(f.type) or f.type == ARRAY_U8 for f in s.decls[v.name].fields):
                     terr(node, "foreign_owned_type", "aggregate HashMap values with owned fields require i64 or String keys")
             return
         if ty.name == "array":
@@ -826,11 +826,25 @@ class Checker:
             if ft.owner is None and ft.name == "vec" and len(ft.args) == 1:
                 e = ft.args[0]
                 return (e.owner is None and not e.args and e.name in s.aggregates
-                        and e.name not in s.nested_records)
+                        and e.name not in s.nested_records
+                        and not any(fd.type == ARRAY_U8 for fd in s.decls[e.name].fields))
             return (not contains_collection(ft) and not is_array(ft) and ft != STR
                     and not any(n in s.extended for n in dependencies(ft)))
         return any(is_collection(fd.type) for fd in s.decls[ty.name].fields) and \
             all(ok(fd.type) for fd in s.decls[ty.name].fields)
+
+    def is_result_enum(s, ty):
+        """R-6f-3: a non-generic enum whose payload fields are plain values, Vec<i64>/Vec<bool>/Vec<String> or R-6f-3 result records"""
+        d = s.decls.get(ty.name)
+        if ty.owner is not None or ty.args or not isinstance(d, EnumDecl) or d.tparams:
+            return False
+        fields = [fd.type for v in d.variants for fd in v.fields]
+        def owned(ft):
+            return is_scalar_vec(ft) or ft == Type("vec", (STRING,)) or s.is_result_record(ft)
+        def ok(ft):
+            return owned(ft) or (not contains_collection(ft) and not is_array(ft) and ft != STR
+                                              and not any(n in s.extended for n in dependencies(ft)))
+        return any(owned(ft) for ft in fields) and all(ok(ft) for ft in fields)
 
     def check_entries(s):
         """Host entry signatures admit plain values, array/str parameters and scalar Vec results."""
@@ -865,8 +879,10 @@ class Checker:
                     continue
                 if not p.take and p.mode is None and (p.type.name in rust_records or rust_state and p.type == STRING):
                     continue
+                if p.mode is None and p.type.owner is None and not p.type.args and p.type.name in s.aggregates:
+                    continue
                 positions.append(("parameter %s" % p.name, p.type))
-            if not is_scalar_vec(f.ret) and not s.is_result_record(f.ret):
+            if not is_scalar_vec(f.ret) and not s.is_result_record(f.ret) and not s.is_result_enum(f.ret):
                 positions.append(("the result", f.ret))
             for what, ty in positions:
                 if contains_collection(ty) or any(n in s.extended for n in dependencies(ty)):

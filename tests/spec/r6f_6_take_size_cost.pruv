@@ -1,0 +1,7 @@
+// spec: R-6f-6 accept
+// take structs in requires size(...) and cost clauses, also through a move call
+pub struct S { b: [u8] }
+pub struct T { v: Vec<i64> }
+pub fn f(take s: S) -> i64 requires size(s) > 0 { return len(s.b); }
+fn g(take t: T) -> i64 requires size(t) > 0 cost len(t.v) { return len(t.v); }
+pub fn h(take t: T) -> i64 requires size(t) > 0 cost len(t.v) + 1 { return g(move t); }

@@ -272,8 +272,9 @@ fn collect<'a>(prog: &'a Program) -> R<(Cats, Colls, HashMap<String, &'a Functio
                                         || PROC_OBSERVERS.contains(&c.name.as_str())
                                         || ASYNC_OBSERVERS.contains(&c.name.as_str()) || NET_OBSERVERS.contains(&c.name.as_str())
                                         // vec_get: a verified Rust body inlines a proved read (R-6d-2), but the
-                                        // LLVM entries still call the helper
-                                        || c.name == "vec_get")
+                                        // LLVM entries still call the helper; vec_new/vec_push: the same for
+                                        // `vec_push(vec_new(), x)` inlined as `vec![x]` (P32L)
+                                        || matches!(c.name.as_str(), "vec_get" | "vec_new" | "vec_push"))
                                 {
                                     observers.push((c.name.clone(), low.clone()));
                                 }

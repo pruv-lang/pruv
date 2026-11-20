@@ -1,0 +1,5 @@
+// spec: R-6f-6 accept
+pub struct BudgetId { units: [u8], k: i64 }
+pub struct Req { id: i64, log: Vec<i64> }
+pub fn test(id: BudgetId) -> bool { return len(id.units) % 2 == 0; }
+pub fn n(r: Req) -> i64 { return len(r.log); }

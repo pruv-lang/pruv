@@ -1228,10 +1228,11 @@ impl Checker {
                 if !text_key && *k != i64t() && v.owner.is_none() {
                     if let Some(TypeDecl::Struct(d)) = self.decls.get(&v.name) {
                         if d.tparams.is_empty()
-                            && d.fields.iter().any(|f| crate::gtype::key_is_collection(&f.ty))
+                            && d.fields.iter().any(|f| crate::gtype::key_is_collection(&f.ty) || f.ty == "array_u8")
                             && d.fields.iter().all(|f| {
                                 let ft = GType::from_key(&f.ty);
                                 crate::gtype::key_is_owned_field(&f.ty)
+                                    || f.ty == "array_u8"
                                     || self.record_map_field(&ft)
                                     || is_value(&ft, &|n| self.value_decl(n))
                             })
@@ -1737,6 +1738,7 @@ impl Checker {
                     && d.fields.iter().all(|f| {
                         let t = GType::from_key(&f.ty);
                         crate::gtype::key_is_owned_field(&f.ty)
+                            || f.ty == "array_u8"
                             || self.collection_records.borrow().contains(&ty.name) && self.record_map_field(&t)
                             || (!t.contains_collection() && !t.is_array() && t != strt()
                                 && dependencies(&t).iter().all(|n| !self.extended.contains(n)))
@@ -1923,7 +1925,25 @@ impl Checker {
             })
     }
 
-    /// Host entries allow plain signatures, scalar vectors and eligible record results.
+    fn is_result_enum(&self, ty: &GType) -> bool {
+        let Some(TypeDecl::Enum(d)) = self.decls.get(&ty.name) else { return false };
+        if ty.owner.is_some() || !ty.args.is_empty() || !d.tparams.is_empty() {
+            return false;
+        }
+        let fields = d.variants.iter().flat_map(|v| &v.fields);
+        let owned = |key: &str, ft: &GType| {
+            crate::gtype::key_is_scalar_vec(key) || key == "vec<string>" || self.is_result_record(ft)
+        };
+        fields.clone().any(|f| owned(&f.ty, &GType::from_key(&f.ty)))
+            && fields.into_iter().all(|f| {
+                let ft = GType::from_key(&f.ty);
+                owned(&f.ty, &ft)
+                    || (!ft.contains_collection() && !ft.is_array() && ft != strt()
+                        && dependencies(&ft).iter().all(|n| !self.extended.contains(n)))
+            })
+    }
+
+    /// Host entries allow plain signatures, scalar vectors and eligible record and enum results.
     fn check_entries(&self, prog: &Program) -> Res<()> {
         fn new_collection(ty: &GType) -> bool {
             matches!(ty.to_key().as_str(), "vec<string>" | "hashmap<i64,bool>" | "hashmap<i64,i64>")
@@ -1956,14 +1976,16 @@ impl Checker {
                 !(*i == 0 && self.explicit && p.mode_pos.is_some()
                     && matches!(self.decls.get(&p.ty), Some(TypeDecl::Struct(_)))
                     || p.take && p.ty == "string"
-                    || !p.take && p.mode_pos.is_none() && (rust_records.contains(&p.ty) || rust_state && p.ty == "string"))
+                    || !p.take && p.mode_pos.is_none() && (rust_records.contains(&p.ty) || rust_state && p.ty == "string")
+                    || p.mode_pos.is_none() && self.owned_aggregate(&GType::from_key(&p.ty)))
             }).map(|(_, p)| (format!("parameter {}", p.name), p.ty.as_str())).collect();
             if let Some(p) = f.params.iter().skip(if self.explicit { 1 } else { 0 })
                 .find(|p| p.mode_pos.is_some() && matches!(self.decls.get(&p.ty), Some(TypeDecl::Struct(_))))
             {
                 return Err(terr(f.line, f.col, "entry_signature", format!("host entry {} must take inout state {} first", f.name, p.name), ""));
             }
-            if !crate::gtype::key_is_scalar_vec(&f.ret) && !self.is_result_record(&GType::from_key(&f.ret)) {
+            let ret = GType::from_key(&f.ret);
+            if !crate::gtype::key_is_scalar_vec(&f.ret) && !self.is_result_record(&ret) && !self.is_result_enum(&ret) {
                 sig.push(("the result".to_string(), f.ret.as_str()));
             }
             for (what, key) in sig {

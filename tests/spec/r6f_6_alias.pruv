@@ -1,0 +1,7 @@
+// spec: R-6f-6 reject
+pub struct Req { id: i64, log: Vec<i64> }
+fn bump(inout q: Req, xs: Vec<i64>) -> i64 { q.id = 1; return len(xs); }
+pub fn own(take r: Req) -> i64 {
+  let mut q: Req = move r;
+  return bump(inout q, q.log);
+}

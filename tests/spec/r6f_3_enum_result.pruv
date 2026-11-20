@@ -1,0 +1,8 @@
+// spec: R-6f-3 accept
+pub struct Payload { blob: Vec<i64>, k: i64 }
+pub enum Reply { Empty, Ids(ids: Vec<i64>), Rec(p: Payload, n: i64) }
+pub fn pick(n: i64) -> Reply ! alloc {
+  if n == 0 { return Reply::Empty; }
+  if n == 1 { return Reply::Ids(vec_push::<i64>(vec_new::<i64>(), 3)); }
+  return Reply::Rec(Payload { blob: vec_new::<i64>(), k: n }, n);
+}

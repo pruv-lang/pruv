@@ -1,0 +1,1 @@
+{"gen_contains":["pub fn pick(n: i64) -> Reply","Ids(::std::vec::Vec<i64>)","Reply::Ids(::std::vec![3i64])"],"gen_absent":[".clone()","pruv_g6_vec_push"]}

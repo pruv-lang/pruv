@@ -5474,7 +5474,12 @@ def gen_llvm(prog, verified=True, trust_callers=False, budget=1 << 30, plan=None
                             "%s has owned collection fields, which need the Rust backend" % getattr(d, "disp", d.name),
                             "use the Rust backend",
                             file=getattr(d, "file", None))
+    u8_structs = {d.name for d in prog.types if isinstance(d, StructDecl) and any(fd.type == ARRAY_U8 for fd in d.fields)}
     for f in prog.functions:
+        if f.host_entry and any(p.type.owner is None and p.type.name in u8_structs for p in f.params):
+            raise PruvError("codegen", f.line, f.col, "unsupported_type",     # R-6f-6
+                            "host entry %s takes a struct with a [u8] field, which has no C ABI" % getattr(f, "disp", f.name),
+                            "use the Rust backend", file=getattr(f, "file", None))
         if f.host_entry and any(p.take and p.type == Type("string") for p in f.params):
             raise PruvError("codegen", f.line, f.col, "unsupported_type",
                             "host entry %s takes an owned String, which has no C ABI" % getattr(f, "disp", f.name),
