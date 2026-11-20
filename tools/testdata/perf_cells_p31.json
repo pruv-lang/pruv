@@ -1,0 +1,95 @@
+{
+ "source": "P31 M10b decide, docs/L3_RESTRUCTURE_SPEC.md \u00a77.5 D28-D30 (Appendix P31.5); D = 10 / 50 / 100 as S / M / L",
+ "cells": [
+  {
+   "name": "m10b decide extend D=10",
+   "axis": "time",
+   "size": "S",
+   "kind": "proportional",
+   "pruv": 211.6,
+   "hand": 147.3,
+   "unit": "ns/op"
+  },
+  {
+   "name": "m10b decide extend D=50",
+   "axis": "time",
+   "size": "M",
+   "kind": "proportional",
+   "pruv": 250.7,
+   "hand": 392.1,
+   "unit": "ns/op"
+  },
+  {
+   "name": "m10b decide extend D=100",
+   "axis": "time",
+   "size": "L",
+   "kind": "proportional",
+   "pruv": 296.9,
+   "hand": 727.0,
+   "unit": "ns/op"
+  },
+  {
+   "name": "m10b decide end D=10",
+   "axis": "time",
+   "size": "S",
+   "kind": "fixed",
+   "pruv": 258.7,
+   "hand": 147.1,
+   "unit": "ns/op"
+  },
+  {
+   "name": "m10b decide end D=50",
+   "axis": "time",
+   "size": "M",
+   "kind": "fixed",
+   "pruv": 503.1,
+   "hand": 454.1,
+   "unit": "ns/op"
+  },
+  {
+   "name": "m10b decide end D=100",
+   "axis": "time",
+   "size": "L",
+   "kind": "fixed",
+   "pruv": 743.9,
+   "hand": 815.3,
+   "unit": "ns/op"
+  },
+  {
+   "name": "m10b decide extend allocations",
+   "axis": "allocs",
+   "size": "M",
+   "kind": "fixed",
+   "pruv": 2,
+   "hand": 1,
+   "unit": "per op"
+  },
+  {
+   "name": "m10b decide end allocations",
+   "axis": "allocs",
+   "size": "M",
+   "kind": "fixed",
+   "pruv": 3,
+   "hand": 0,
+   "unit": "per op"
+  },
+  {
+   "name": "m10b decide extend peak RSS",
+   "axis": "rss",
+   "size": "M",
+   "kind": "fixed",
+   "pruv": 2.44,
+   "hand": 1.7,
+   "unit": "MB"
+  },
+  {
+   "name": "m10b decide end peak RSS",
+   "axis": "rss",
+   "size": "M",
+   "kind": "fixed",
+   "pruv": 2.42,
+   "hand": 1.72,
+   "unit": "MB"
+  }
+ ]
+}

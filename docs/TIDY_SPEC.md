@@ -118,6 +118,19 @@ Status (2026-11-19, on 148de2b):
   (Python by AST; Rust by a token count inside the fn braces, closures included). No invariant notes yet.
 - Open: the invariant notes on those 15 functions.
 
+**Merge gates (§4 item 15).** Two standard-library scripts turn merge rules into checks that exit 1.
+`python3 tools/merge_check.py <branch>`, run on the main checkout before a merge: fails if the newest completed
+push CI run on main failed (schedule runs are printed only), prints `git diff --stat main...<branch>`, and if the
+branch touches `tests/` rebuilds the row list from the branch tree in a temporary worktree
+(`tests/run_all.py --backend both --list-rows`) and fails if it differs from the branch's
+`tests/run_all_rows.txt`; for code generation or `pruvc-rs/` changes it prints the g8_frontend, `cargo test`
+and `diff_rust` reminders without running them. `python3 tools/perf_gate.py <perf_cells.json>...` applies the
+perf rule: hand Rust 1.0x is the floor, only proportional cells at sizes M and L above 1.0x fail; fixed-share
+and S cells above 1.0x are listed as debt for L3_RESTRUCTURE_SPEC §7.5; there is no noise band. New packages
+write their measurements as `perf_cells.json` (a list of cells `name`, `axis` time|rss|allocs, `size` S|M|L,
+`kind` proportional|fixed, `pruv`, `hand`, `unit`, optional `runs`); old slices are not converted. Example:
+`tools/testdata/perf_cells_p31.json` (P31 M10b decide, §7.5 D28-D30).
+
 ### Not in this package
 
 - Freezing the Python compiler. Criteria (from TypeScript 7 and rustc NLL practice): every required case
@@ -341,5 +354,10 @@ by byte-identical output and run by group, with the full test suite once before 
       the shared `pruvc/data/` tables were touched by 4 commits, 1 line each. Spot checks by hand: ca6cba2 is
       8 files / 190 lines Python vs 19 / 563 Rust, 0aaf6b6 6 / 218 vs 8 / 311. Option ① therefore costs about
       1.4–1.7x the Python work again on every change; this is the number the (c) gate weighs.
+
+15. **Merge gates as scripts (TIDY 4.15).** Done: `tools/merge_check.py` (merge preflight: CI on main, diff
+    stat, run_all row list rebuilt from the branch tree, code generation reminders) and `tools/perf_gate.py`
+    (exit 1 on a proportional M/L cell above hand 1.0x, debt list for the rest) with the `perf_cells.json`
+    format and examples in `tools/testdata/`; described under T6 "Merge gates". No test rows changed.
 
 Order after the review: T0①–⑥ → T3 → T1 → T2 → T4 → P16, P17a → T5 (inline policy) → T6.
