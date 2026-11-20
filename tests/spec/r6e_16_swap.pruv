@@ -1,0 +1,26 @@
+// spec: R-6e-16 accept
+struct TextPair { first: String, second: String }
+struct Nested { text: TextPair }
+struct VecPair { first: Vec<i64>, second: Vec<i64> }
+
+fn swap_text() -> () ! alloc {
+  let mut p: Nested = Nested { text: TextPair { first: string_from("left"), second: string_from("r") } };
+  let t: String = move p.text.first;
+  p.text.first = move p.text.second;
+  p.text.second = move t;
+  assert len(p.text.first) == 1 && p.text.first[0] == "r"[0];
+  assert len(p.text.second) == 4;
+  assert forall i in 0..len(p.text.second): p.text.second[i] == "left"[i];
+}
+
+fn swap_vec() -> () ! alloc {
+  let mut p: VecPair = VecPair {
+    first: vec_push::<i64>(vec_new::<i64>(), 3),
+    second: vec_push::<i64>(vec_new::<i64>(), 7)
+  };
+  let t: Vec<i64> = move p.first;
+  p.first = move p.second;
+  p.second = move t;
+  assert len(p.first) == 1 && p.first[0] == 7;
+  assert len(p.second) == 1 && p.second[0] == 3;
+}

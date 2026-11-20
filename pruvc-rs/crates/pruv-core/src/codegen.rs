@@ -3724,8 +3724,12 @@ impl<'a> Gen<'a> {
                 let v = self.own_e(&x.value);
                 self.moving.clear();
                 let v = v?;
-                let line = format!("let {}{}: {} = {};", if x.mutable { "mut " } else { "" }, x.name, self.rt_width(&x.ty, false, self.storage.layout_of(x)), v);
-                self.emit(ind, &line);
+                let mut binding = format!("{}{}", if x.mutable { "mut " } else { "" }, x.name);
+                if !matches!(&x.value, Expr::Move(m) if !m.fields.is_empty()) {
+                    binding.push_str(": ");
+                    binding.push_str(&self.rt_width(&x.ty, false, self.storage.layout_of(x)));
+                }
+                self.emit(ind, &format!("let {binding} = {v};"));
                 self.vars.insert(x.name.clone(), x.ty.clone());
                 self.refs.remove(&x.name); // G9: a local is an owned value, never a reference
             }

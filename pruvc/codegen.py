@@ -2828,7 +2828,10 @@ class Gen:
             s.refs.discard(st.name)
         elif isinstance(st, Let):
             s.moving = s.last_copy(st)
-            s.emit(ind, "let %s%s: %s = %s;" % ("mut " if st.mutable else "", st.name, s.rt(st.type, site=st), s.own_e(st.value)))
+            binding = ("mut " if st.mutable else "") + st.name
+            if not (isinstance(st.value, Move) and st.value.fields):
+                binding += ": " + s.rt(st.type, site=st)
+            s.emit(ind, "let %s = %s;" % (binding, s.own_e(st.value)))
             s.moving = set()
             s.vt[st.name] = st.type
             s.refs.discard(st.name)    # G9: a local is an owned value, never a reference

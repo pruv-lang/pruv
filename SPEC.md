@@ -481,13 +481,13 @@ fn tree_count(t: Tree) -> i64
   Initializers that move a binding or use a call result store it directly without cloning.
   LLVM rejects a struct or enum with such a field as `codegen/unsupported_type`. The diagnostic names the
   aggregate and says owned collection fields need the Rust backend.
-- R-6e-2 **Moving a field into its replacement.** `move p.f` is permitted only as a direct `take` argument
+- R-6e-2 **Moving a field into its replacement.** This rule permits `move p.f` as a direct `take` argument
   of a call whose result is assigned back to the same field, as in
   `p.f = vec_push::<i64>(move p.f, 5);`. The receiver `p` must be a `let mut` local, a struct `inout` parameter (R-6g-2) or
   the `Some` binder of R-6e-4, and `f` an owned collection field. Apart from the assignment target and the move, `p` may not occur anywhere in the
-  statement. Other field moves are `type/foreign_move`, with a diagnostic saying a field can be moved only
-  into a call whose result is assigned back to the same field. The callee takes the old field value and the
-  assignment stores its result. Rust passes it with `::std::mem::take(&mut p.f)` without cloning. An active
+  statement. R-6e-16 also permits moving a field out and restoring it in the next statement.
+  The callee takes the old field value and the assignment stores its result.
+  Rust passes it with `::std::mem::take(&mut p.f)` without cloning. An active
   match borrow of `p` still makes the assignment `type/recursive_borrow`.
 - R-6e-3 **Collections of owned aggregates.** An owned aggregate is a non-generic, non-recursive struct whose
   fields are scalars, plain value types or R-6e-1 owned fields. `Vec<S>` and `HashMap<i64, S>` with an owned
@@ -675,6 +675,25 @@ fn tree_count(t: Tree) -> i64
   Tests cover [copying text](tests/spec/r6e_15_string_from.pruv),
   [missing effect](tests/spec/r6e_15_from_no_alloc.pruv), [non-text argument](tests/spec/r6e_15_from_non_text.pruv),
   [false postcondition](tests/spec/r6e_15_from_wrong_ensures.pruv), and [LLVM lowering](tests/spec/r6e_15_from_llvm.pruv).
+- R-6e-16 **Moving a field out.** For a receiver `p` mutable under R-6e-2, `p.g = move p.f;`
+  moves an owned `String`, `Vec<i64>` or `Vec<bool>` field to a disjoint field path of the same
+  root and type. `let t: T = move p.f;` moves the field into an ordinary owned local of its type.
+  Both forms support nested struct field paths. The immediately next statement in the same block
+  must assign to exactly the moved path `p.f`. Its right-hand side may be an owning expression
+  allowed for field replacement and may not mention `p`. It may also be a move from a disjoint
+  same-typed field of `p`, in which case the following statement must restore that field in turn.
+  For example, `let t: String = move p.f; p.f = move p.g; p.g = move t;` swaps two fields.
+  Outside R-6e-2 and these two forms, field moves are `type/foreign_move`. A missing or invalid
+  restore, or a move between overlapping paths, has the same code and the message
+  "a field moved out must be reassigned by the next statement". Moving a path held by an active
+  match, collection borrow or map iteration is `type/recursive_borrow` under the overlap rules
+  of R-6e-8 and R-6e-13.
+  Rust emits `::std::mem::take(&mut p.f)` without cloning. The verifier reads the old field into
+  the destination at zero cost and retains its symbolic source value until the restore.
+  Owned collection fields require the Rust backend.
+  Tests cover [field transfer](tests/spec/r6e_16_move_field.pruv),
+  [swapping](tests/spec/r6e_16_swap.pruv), [mutable collection views](tests/spec/r6e_16_in_get_mut.pruv),
+  [missing restoration](tests/spec/r6e_16_not_restored.pruv) and [held paths](tests/spec/r6e_16_held_borrow.pruv).
 - **Values, not pointers.** Recursive and buffer-bearing values are independent: copying one deep-copies everything,
   and changing a copy never changes the original. Parameters, field reads and `match` bindings are read-only views
   and do not allocate. Putting an existing value into an owning place (`let`, assignment, constructor field,

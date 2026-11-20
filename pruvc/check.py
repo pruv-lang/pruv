@@ -90,8 +90,8 @@ def _place_mentions(e):
 
 
 def _field_move_error(e):
-    terr(e, "foreign_move", "a field can be moved only into a call whose result is assigned back to the same field",
-         "move a Vec or String field of a mutable local directly into a take parameter and use the local only there")
+    terr(e, "foreign_move", "a field moved out must be reassigned by the next statement",
+         "restore the field immediately, or pass the move to a take call assigned back to the same field")
 
 
 def _sccs(n, adj):
@@ -1001,8 +1001,8 @@ class Checker:
 
     # ---- statements ----
     def block(s, stmts, scope):
-        for st in stmts:
-            s.stmt(st, scope)
+        for i, st in enumerate(stmts):
+            s.stmt(st, scope, stmts[i + 1] if i + 1 < len(stmts) else None)
 
     def check_inout_context(s, st, *exprs):
         """R-6g-1: check the typed expressions of one statement, without entering its blocks."""
@@ -1049,12 +1049,17 @@ class Checker:
             if e.name == "print" or (callee is not None and any(effect != "alloc" for effect in callee.effects)):
                 effect_before = True
 
-    def stmt(s, st, scope):
+    def stmt(s, st, scope, next_stmt):
         f = s.f
         s.ckind = "code"
         s.boundary = None
         s.statement_call = st.expr if isinstance(st, ExprStmt) else None
         s.field_move = None
+        if isinstance(st, Return) and st.value is not None:
+            for e in _field_moves(st.value):
+                s.check_borrow(e, e.name, e.fields)
+                s.lookup(e, e.name, scope, e.fields)
+                _field_move_error(e)
         if s.map_iterations and isinstance(st, Return):
             terr(st, "foreign_contract", "cannot return inside a map iteration")
         if s.map_borrows and isinstance(st, Return):
@@ -1069,6 +1074,7 @@ class Checker:
             s.ext_misuse(st, st.type)
             s.boundary = st.value
             s.alloc_hint_for(st.value, st.type)
+            s.field_move = s.field_move_out(st, st.type, scope, next_stmt)
             s.expect(st.value, st.type, scope)
             s.check_inout_context(st, st.value)
             if is_array(st.type) or st.type == STR:
@@ -1123,7 +1129,7 @@ class Checker:
                     terr(st, "not_struct", "cannot assign field %s: %s is not a struct" % (fname, type_name(cur)),
                          "field assignment paths run through structs only; assign the whole enum value instead")
                 cur = s.field_type(st, cur, fname)
-            s.field_move = s.field_update_move(st, cur, v)
+            s.field_move = s.field_move_out(st, cur, scope, next_stmt) or s.field_update_move(st, cur, v, scope)
             if not v[1] and v[2] not in ("inout", "map_mut"):
                 terr(st, "immutable", "%s is not mutable" % st.name,
                      "declare it with `let mut`" if v[2] == "local" else "parameters are immutable; copy into a `let mut` local")
@@ -1603,11 +1609,33 @@ class Checker:
             terr(st, "recursive_borrow", "cannot assign to %s while a match on it is active" % ".".join([name] + list(fields)),
                  "copy the needed payload into a local, finish the match, then assign")
 
-    def field_update_move(s, st, ty, binding):
-        """Select the only field move allowed in the right-hand side of a field assignment."""
+    def field_move_out(s, st, ty, scope, next_stmt):
+        e = st.value
+        if not isinstance(e, Move) or not e.fields:
+            return None
+        s.check_borrow(e, e.name, e.fields)
+        _, mutable, kind = s.lookup(e, e.name, scope, e.fields)
+        if not (mutable or kind in ("inout", "map_mut")) or not (ty == STRING or is_scalar_vec(ty)):
+            _field_move_error(e)
+        if isinstance(st, FieldAssign) and (st.name != e.name or _paths_overlap(st.fields, e.fields)):
+            _field_move_error(e)
+        if (not isinstance(next_stmt, FieldAssign) or next_stmt.name != e.name
+                or tuple(next_stmt.fields) != tuple(e.fields)):
+            _field_move_error(e)
+        restore = next_stmt.value
+        chained = isinstance(restore, Move) and restore.name == e.name and restore.fields
+        if not isinstance(restore, (Call, Move)) or (not chained and _mentions(restore, e.name)):
+            _field_move_error(e)
+        return e
+
+    def field_update_move(s, st, ty, binding, scope):
+        """Select a take argument consumed by the call that replaces its field."""
         moves = list(_field_moves(st.value))
         if not moves:
             return None
+        for move in moves:
+            s.check_borrow(move, move.name, move.fields)
+            s.lookup(move, move.name, scope, move.fields)
         e = moves[0]
         if (len(moves) != 1 or e.fields != tuple(st.fields) or e.name != st.name
                 or not (binding[1] or binding[2] in ("inout", "map_mut")) or not is_collection(ty) or not isinstance(st.value, Call)):

@@ -1,0 +1,1 @@
+{"gen_contains":["r.follows = ::std::mem::take(&mut r.id);"],"gen_absent":[".clone()"]}

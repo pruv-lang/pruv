@@ -1,0 +1,6 @@
+// spec: R-6e-16 reject
+struct B { id: String }
+fn bad(inout b: B) -> () ! alloc {
+  b.id = move b.id;
+  b.id = string_new();
+}

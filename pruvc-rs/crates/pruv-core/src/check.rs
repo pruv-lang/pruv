@@ -507,8 +507,8 @@ fn field_move_error(m: &Move) -> PruvError {
         m.line,
         m.col,
         "foreign_move",
-        "a field can be moved only into a call whose result is assigned back to the same field",
-        "move a Vec or String field of a mutable local directly into a take parameter and use the local only there",
+        "a field moved out must be reassigned by the next statement",
+        "restore the field immediately, or pass the move to a take call assigned back to the same field",
     )
 }
 
@@ -2217,10 +2217,46 @@ impl Checker {
 
     // ---- statements ----
     fn block(&mut self, stmts: &mut [Stmt], scope: &mut Scope) -> Res<()> {
-        for st in stmts.iter_mut() {
-            self.stmt(st, scope)?;
+        let mut rest = stmts;
+        while let Some((st, tail)) = rest.split_first_mut() {
+            self.stmt(st, scope, tail.first())?;
+            rest = tail;
         }
         Ok(())
+    }
+
+    fn field_move_out(
+        &self,
+        value: &Expr,
+        ty: &GType,
+        target: Option<(&str, &[String])>,
+        scope: &Scope,
+        next: Option<&Stmt>,
+    ) -> Res<Option<(i64, i64)>> {
+        let Expr::Move(m) = value else { return Ok(None) };
+        if m.fields.is_empty() {
+            return Ok(None);
+        }
+        self.check_borrow(m.line, m.col, &m.name, &m.fields)?;
+        let source = self.lookup(m.line, m.col, &m.name, scope, &m.fields)?;
+        if !(source.mutable || matches!(source.kind, "inout" | "map_inout"))
+            || !matches!(ty.to_key().as_str(), "string" | "vec<i64>" | "vec<bool>")
+            || target.is_some_and(|(name, fields)| name != m.name || paths_overlap(fields, &m.fields))
+        {
+            return Err(field_move_error(m));
+        }
+        let Some(Stmt::FieldAssign(restore)) = next else { return Err(field_move_error(m)) };
+        if restore.name != m.name || restore.fields != m.fields {
+            return Err(field_move_error(m));
+        }
+        let chained = matches!(&restore.value, Expr::Move(other)
+            if other.name == m.name && !other.fields.is_empty());
+        if !matches!(&restore.value, Expr::Call(_) | Expr::Move(_))
+            || (!chained && mentions(&restore.value, &m.name))
+        {
+            return Err(field_move_error(m));
+        }
+        Ok(Some((m.line, m.col)))
     }
 
     fn lookup(&self, line: i64, col: i64, name: &str, scope: &Scope, path: &[String]) -> Res<Entry> {
@@ -2329,7 +2365,7 @@ impl Checker {
         Ok(())
     }
 
-    fn stmt(&mut self, st: &mut Stmt, scope: &mut Scope) -> Res<()> {
+    fn stmt(&mut self, st: &mut Stmt, scope: &mut Scope, next: Option<&Stmt>) -> Res<()> {
         self.ckind = "code";
         self.boundary = None; // G5: only the statements below that allow a mutating call set it
         match st {
@@ -2351,7 +2387,10 @@ impl Checker {
                 self.ext_misuse(s.line, s.col, &sty, None)?; // G9 A0
                 self.boundary = boundary_of(&s.value);
                 self.want_alloc(&s.value, &sty);
-                self.expect(&mut s.value, &sty, scope, false, None)?;
+                self.field_move = self.field_move_out(&s.value, &sty, None, scope, next)?;
+                let checked = self.expect(&mut s.value, &sty, scope, false, None);
+                self.field_move = None;
+                checked?;
                 self.check_inout_context(&[&s.value], InoutContext::Value)?;
                 if sty.is_array() || sty == strt() {
                     self.array_source(s.line, s.col, &s.value, scope, false, &sty)?;
@@ -2448,13 +2487,16 @@ impl Checker {
                     }
                     cur = self.field_type(s.line, s.col, &cur, fname)?;
                 }
+                let moved = self.field_move_out(&s.value, &cur, Some((&s.name, &s.fields)), scope, next)?;
                 if !v.mutable && !matches!(v.kind, "inout" | "map_inout") {
                     if let Some(m) = first_field_move(&s.value) {
+                        self.check_borrow(m.line, m.col, &m.name, &m.fields)?;
+                        self.lookup(m.line, m.col, &m.name, scope, &m.fields)?;
                         return Err(field_move_error(m));
                     }
                     return Err(terr(s.line, s.col, "immutable", format!("{} is not mutable", s.name), Self::immutable_fix(v.kind)));
                 }
-                let saved = self.field_move.take();
+                let saved = std::mem::replace(&mut self.field_move, moved);
                 if matches!(v.kind, "local" | "inout" | "map_inout")
                     && (crate::gtype::key_is_owned_field(&cur.to_key()) || self.state_collection(&cur))
                 {
@@ -2507,6 +2549,11 @@ impl Checker {
             }
             Stmt::ForMap(s) => self.for_map(s, scope)?,
             Stmt::Return(s) => {
+                if let Some(m) = s.value.as_ref().and_then(first_field_move) {
+                    self.check_borrow(m.line, m.col, &m.name, &m.fields)?;
+                    self.lookup(m.line, m.col, &m.name, scope, &m.fields)?;
+                    return Err(field_move_error(m));
+                }
                 if !self.map_iterations.is_empty() {
                     return Err(terr(s.line, s.col, "foreign_contract", "cannot return inside a map iteration", ""));
                 }

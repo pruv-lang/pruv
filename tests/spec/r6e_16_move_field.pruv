@@ -1,0 +1,17 @@
+// spec: R-6e-16 accept
+pub struct B { id: String, follows: String }
+pub fn carry(inout b: B, uuid: str) -> () ! alloc {
+  b.follows = move b.id;
+  b.id = string_push_str(string_new(), uuid);
+}
+pub fn carry_from(inout b: B, uuid: str) -> () ! alloc {
+  b.follows = move b.id;
+  b.id = string_from(uuid);
+}
+fn prove_carry(id: str, uuid: str) -> () ! alloc {
+  let mut b: B = B { id: string_from(id), follows: string_new() };
+  b.follows = move b.id;
+  b.id = string_from(uuid);
+  assert len(b.follows) == len(id);
+  assert forall i in 0..len(id): b.follows[i] == id[i];
+}

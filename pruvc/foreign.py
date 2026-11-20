@@ -551,7 +551,7 @@ class _Ownership:
     def move(s, e, st, consuming, track):
         if e.fields:
             s.use(e, st)
-            return       # The checker permits only a take argument immediately stored back into this field.
+            return       # The type checker enforces restoration. The root stays live.
         if not (is_array(e.ty) or is_collection(e.ty) or (is_nongeneric_struct(e.ty, s.types) and e.name in st)):
             _err(e, "foreign_move", "move of a non-collection value",
                  "move applies to Vec, HashMap and String bindings only; use the value directly")

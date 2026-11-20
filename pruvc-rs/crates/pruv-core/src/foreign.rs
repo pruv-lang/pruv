@@ -1227,7 +1227,7 @@ impl<'a> Ownership<'a> {
 
     fn mv(&mut self, e: &Move, st: &mut St, consuming: bool, tracked: bool) -> Res<()> {
         if !e.fields.is_empty() {
-            // The type checker allows this move only when the call replaces the same field.
+            // The type checker enforces restoration. The root stays live.
             return self.use_(&e.name, e.line, e.col, st);
         }
         let (line, col) = (e.line, e.col);
