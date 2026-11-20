@@ -91,7 +91,14 @@ def check_rows(branch, names):
             report("FAIL", "rows", "git worktree add failed: %s" % p.stderr.strip())
             return
         out = os.path.join(tmp, "rows.txt")
-        p = subprocess.run([sys.executable, "tests/run_all.py", "--backend", "both", "--list-rows", out],
+        # --list-rows runs nothing but checks that the Rust compiler file exists; the fresh tree has no
+        # build, so point it at this checkout's binary (only its existence is used).
+        rs_bin = os.path.abspath(os.path.join("pruvc-rs", "target", "release", "pruvc"))
+        if not os.path.isfile(rs_bin):
+            report("FAIL", "rows", "%s missing (cargo build --release --locked in pruvc-rs)" % rs_bin)
+            return
+        p = subprocess.run([sys.executable, "tests/run_all.py", "--backend", "both",
+                            "--compiler-path", rs_bin, "--list-rows", out],
                            cwd=tree, capture_output=True, text=True, timeout=300)
         if p.returncode != 0:
             report("FAIL", "rows", "--list-rows exit %d: %s" % (p.returncode, (p.stderr or p.stdout).strip()[-300:]))
